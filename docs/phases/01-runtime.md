@@ -25,7 +25,7 @@
 
 **范围**：Electron、Vue 3、TypeScript、Vite、Tailwind CSS、Pinia 的最小配置；主进程入口、sandboxed preload 与统一前端服务入口。明确 contextIsolation 和 sandbox 开启、nodeIntegration 关闭、webSecurity 保持开启；建立固定业务 IPC 入口、调用者校验和本地页面/CSP 边界，不暴露原始 ipcRenderer 或通用系统能力。只建立立即使用的结构，不创建 Session、认证或插件空模块。
 
-**当前实现**：单页展示桌面桥接连接状态与应用信息；桥接连接成功不表示 Pi 就绪。页面输入不持久化，项目目录在启动 Runtime 时由主进程校验。Runtime 启动与状态展示见 P1-03；关闭见 P1-04，发送见 P1-05；Stop 控件仍禁用；文本与 Thinking 区域展示主进程投影的消息（见 P1-06），工具与 Runtime 诊断区域仍为空状态，不模拟 Pi 输出。
+**当前实现**：单页展示桌面桥接连接状态与应用信息；桥接连接成功不表示 Pi 就绪。页面输入不持久化，项目目录在启动 Runtime 时由主进程校验。Runtime 启动与状态展示见 P1-03；关闭见 P1-04，发送见 P1-05；文本与 Thinking 区域展示主进程投影的消息（见 P1-06），工具执行与 Stop 见 P1-07，Runtime 诊断区域仍为空状态，不模拟 Pi 输出。
 
 **构建与页面**：配置见根目录 `electron.vite.config.ts`，依赖版本以 `package.json` 为准。
 
@@ -121,7 +121,7 @@
 
 **状态与边界**：状态为 `idle`、`starting`、`ready`、`stopping`、`failed`（`stopping` 与关闭链见 P1-04），就绪快照只投影模型、Thinking 级别、Session 标识、消息数与 streaming 标志。`get_state` 等待期限为 10 秒；单条 stdout 记录上限 8 MiB（按解码后字符数计），超限按协议错误处理；stderr 只保留最近 40 行、单行截断到 400 字符。本项不开放事件订阅、Prompt、Stop 与重启；关闭唯一窗口时先关闭 Pi 的 stdin 请求其自行有序退出，等待退出期限与平台定向进程树终止见 P1-04。
 
-**当前状态**：主进程、受限 preload 方法与最小页面已按上述参数与契约接入启动链；Tool 与 Stop 仍为禁用空状态。
+**当前状态**：主进程、受限 preload 方法与最小页面已按上述参数与契约接入启动链；Tool 与 Stop 见 P1-07。
 
 ### P1-04 Runtime 生命周期
 
@@ -131,7 +131,7 @@
 
 Windows 采用系统 taskkill 定向终止当前受管 Pi 进程树；macOS 建立独立进程组并在必要时终止该组，不通过 unref 解除应用管理。只处理主进程自身管理对象，不接受任意 PID 或按进程名批量终止。根进程已退出、主进程崩溃或派生进程脱离后的清理不作完整保证，不为此引入 Job Objects 原生绑定或专用 helper。
 
-本项先完善无 Agent 操作时的关闭链；有活动操作时的取消由 P1-07 补齐。不自动重放 prompt，不将关闭 Pi 主进程宣传为已经解决所有派生进程回收。
+本项先完善无 Agent 操作时的关闭链；有活动操作时的取消已在 P1-07 补齐（仅在事件流显示运行中时先 abort，见本文 P1-07 段）。不自动重放 prompt，不将关闭 Pi 主进程宣传为已经解决所有派生进程回收。
 
 **关闭链**：`window.desktop.stopRuntime()` 对应 `desktop:runtime-stop`，是幂等动作。关闭时先置 `stopping` 停止接受新请求，再关闭 stdin 请求 Pi 自行退出，继续消费管道并等待有限期限；超时后按平台兜底——Windows 直接用 `%SystemRoot%\System32\taskkill.exe /F /T /PID` 定向终止受管进程树（不先只杀根进程），macOS 向独立进程组先发 `SIGTERM`、必要时再发 `SIGKILL`（期限与平台兜底见开发总览第 6.2 节）。期限内确认退出则回 `idle` 并保留本次 `runtimeId`；未能确认退出则落 `failed` 并显示原因，不声称已经清理干净。
 
@@ -185,7 +185,7 @@ Windows 采用系统 taskkill 定向终止当前受管 Pi 进程树；macOS 建�
 
 **落点**：投影状态机在 `src/main/message-projection.ts`，批次订阅与状态提示合并在 `src/main/runtime-manager.ts`，IPC 注册与校验在 `src/main/index.ts`，受限方法由 `src/preload/index.ts` 暴露，前端入口在 `src/renderer/src/services/runtime.ts` 与 `src/renderer/src/stores/runtime.ts`，页面在 `src/renderer/src/App.vue`。
 
-**当前状态**：页面、preload 方法、主进程投影与批次、渲染端同步与截断标示已按上述契约接入；工具与诊断面板仍为空状态。
+**当前状态**：页面、preload 方法、主进程投影与批次、渲染端同步与截断标示已按上述契约接入；工具面板见 P1-07，诊断面板仍为空状态。
 
 **依赖**：P1-05。
 
@@ -196,6 +196,25 @@ Windows 采用系统 taskkill 定向终止当前受管 Pi 进程树；macOS 建�
 **范围**：主进程投影按 `toolCallId` 关联工具名称、参数、更新、结果、错误；不将所有 partialResult 一律追加，最终以结束结果校正。前端采用简单结构化展示，保留非文本结果，不将模型或工具输出作为可执行 HTML。加入受限 abort 操作、停止中状态与终态收敛，补齐运行中关闭 Runtime 的取消路径；停止接收新业务请求后仍保留内部取消路径，不无限等待 abort 才进入退出兜底。并发查询与取消不能被长时间持锁阻塞。
 
 不开放 steering / follow-up 排队输入；不把 `abort` 当作自动清空队列。完整 Tool Card、专属工具 UI 和 Diff 留在后续阶段。
+
+**接口与错误码**：`window.desktop.abortRuntime()` 对应 `desktop:runtime-abort`，零参数，成功数据是当前 Runtime 快照（表示 Pi 已确认取消），失败为 `{ ok: false, error }`；投影新增按 `toolCallId` 索引的工具条目与 `{ kind: 'tool' }` 更新，快照新增 `tools` 与 `droppedTools`，契约与响应校验见 `src/shared/runtime-api.ts`；工具条目的状态取值、批次与上限见开发总览第 6.2 节。
+
+| 错误码 | 含义 |
+| --- | --- |
+| `FORBIDDEN` | 调用者不是已登记窗口的可信顶层页面 |
+| `INVALID_REQUEST` | 参数量或形状不符合接口约定 |
+| `RUNTIME_NOT_READY` | Runtime 不是 `ready` 的状态冲突 |
+| `RUNTIME_TIMEOUT` | 中止等待期限已过，结果未知且不重发 |
+| `RUNTIME_EXITED` | 中止期间管道关闭或进程结束 |
+| `RUNTIME_PROTOCOL_ERROR` | 记录无法解析、契约不符或 Pi 拒绝该命令 |
+| `INTERNAL_ERROR` | 其他内部失败 |
+| `INVALID_RESPONSE`、`BRIDGE_UNAVAILABLE`、`BRIDGE_CALL_FAILED` | Preload 与前端侧的桥接校验失败 |
+
+**决策**：工具执行以按 `toolCallId` 索引的独立条目进入投影，与消息块解耦，不把执行状态挂在 assistant 消息的 toolcall 块上；`partialResult` 只保留最近一次、结束事件用 `result` 校正；`abort` 只校验可用的 Runtime，不在主进程做 streaming 预检，停止中状态由页面按中止请求与事件流 `isStreaming` 共同表达，终态以 `agent_settled` 收敛；关闭 Runtime 时仅在事件流显示运行中才先 abort，等待上限明显短于退出预算，取消失败不阻断既有关闭链；不新增错误码；工具参数与输出一律按纯文本展示，非文本内容只标示数量。
+
+**落点**：工具条目状态机在 `src/main/tool-projection.ts`，批次与聚合在 `src/main/message-projection.ts`，中止编排与关闭链中的取消在 `src/main/runtime-manager.ts`，IPC 注册与校验在 `src/main/index.ts`，受限方法由 `src/preload/index.ts` 暴露，前端入口在 `src/renderer/src/services/runtime.ts` 与 `src/renderer/src/stores/runtime.ts`，页面在 `src/renderer/src/App.vue`。
+
+**当前状态**：页面、preload 方法、主进程工具投影与中止编排已按上述契约接入；Runtime 诊断面板仍为空状态。
 
 **依赖**：P1-06。
 
