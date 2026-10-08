@@ -60,7 +60,7 @@ Desktop 仅维护自己的数据：最近项目、窗口尺寸、Sidebar 状态�
 
 项目根目录：`H:\code\pi-desk`。
 
-仓库包含开发文档、Electron/Vue 最小骨架、三端构建与 TypeScript 配置、统一前端服务入口和展示状态 Store。当前页面通过受限 preload API 读取应用信息；Pi 尚未接入，Runtime 控件保持禁用，不读取项目或持久化消息。
+仓库包含开发文档、Electron/Vue 最小骨架、三端构建与 TypeScript 配置、统一前端服务入口、展示状态 Store，以及 Pi Runtime 的准备脚本与固定版本清单。当前页面可经受限 preload API 读取应用信息并启动 Pi RPC sidecar；Prompt、Streaming、Tool 与关闭仍在后续任务接入，不读取项目内容、不持久化消息。
 
 开发使用 npm，工具版本由 `package.json` 的 `packageManager` 字段声明，直接依赖使用精确版本。`package.json` 是依赖声明的维护位置，完整依赖树由安装生成的 `package-lock.json` 固定，不手写锁文件。依赖安装属于独立授权操作。
 
@@ -113,6 +113,18 @@ https://github.com/earendil-works/pi/releases/download/v1.0.4/<发布包名>
 
 官方提供 `SHA256SUMS`，发布 API 也提供资产摘要。准备 binary 的脚本需要固定版本、目标平台映射和预期 SHA-256，校验原始归档后再解压，并保留官方文件名与相对目录结构；不能把执行 `pi --version` 当作完整性或协议兼容性的唯一依据。签名可能改变可执行文件字节，不能将签名后的文件摘要与原始归档摘要混用。
 
+P1-02 已核实的 1.0.4 资产：
+
+| 目标平台与架构 | 官方资产 | 字节数 |
+| --- | --- | --- |
+| Windows x64 | `pi-windows-x64.zip` | 45 055 959 |
+| macOS arm64 | `pi-darwin-arm64.tar.gz` | 31 016 950 |
+| macOS x64 | `pi-darwin-x64.tar.gz` | 33 474 471 |
+
+预期 SHA-256 不写在本文，统一固定于 `runtime/pi-runtime.json`，由 `scripts/prepare-pi-runtime.mjs` 读取；升级版本必须同时更新二者并重新核对。官方 `SHA256SUMS` 是 `<sha256>  <文件名>` 两空格格式，只列发布资产；发布 API 的资产 `digest` 与它逐条一致，两种来源已交叉核对。同一版本还提供 `pi-windows-arm64.zip` 与 `pi-linux-*.tar.gz`，不属于当前确认的三目标分发范围。
+
+已下载核对的 Windows 归档为平铺根目录：根下同时存在 `pi.exe`、`package.json`、`README.md`、`CHANGELOG.md`、`photon_rs_bg.wasm`、`theme/`、`assets/`、`export-html/`、`docs/`、`examples/`、`native/win32/prebuilds/win32-x64/win32-platform.node`，没有包裹目录；归档内另有一个带 BOM 前缀的 `examples/` 空目录条目（官方构建产物副作用），PowerShell 解压后未在 staging 中生成该目录，未做额外处理。
+
 ### 4.2 standalone 仍有配套资源
 
 官方 binary 构建脚本除可执行文件外，还复制：
@@ -131,7 +143,7 @@ https://github.com/earendil-works/pi/releases/download/v1.0.4/<发布包名>
 - Photon WASM 的 fallback 包含可执行文件邻接路径，并不统一使用 `PI_PACKAGE_DIR`。
 - TUI native helper 也包含可执行文件邻接路径，不能仅靠 `PI_PACKAGE_DIR` 迁移。
 
-Pi 与官方配套资源作为整体保留，不压平目录、不只迁移 package 资源。`PI_PACKAGE_DIR` 指向实际 package 资源根；WASM 与 native helper 同时保持相对于 Pi executable 的官方邻接关系。Pi native helper 由 Pi 使用，不导入 Electron 主进程，不将其作为 Electron Node.js 原生模块加载。
+Pi 与官方配套资源作为整体保留，不压平目录、不只迁移 package 资源。`PI_PACKAGE_DIR` 只在可执行文件与 package 资源根被拆开时才需要指向资源根；本项目保持两者同层，因此不设置该变量（见 4.3），WASM 与 native helper 同时保持相对于 Pi executable 的官方邻接关系。Pi native helper 由 Pi 使用，不导入 Electron 主进程，不将其作为 Electron Node.js 原生模块加载。
 
 ### 4.3 ASAR 与 Runtime 资源布局
 
@@ -143,11 +155,22 @@ Electron 应用代码进入 `app.asar`；Pi executable 和全部配套资源通�
 
 | 场景 | Runtime 根目录 |
 | --- | --- |
-| 本地开发 | `<开发 staging 根>/pi/<目标平台与架构>/` |
+| 本地开发 | `<项目根>/runtime/pi/<目标平台与架构>/` |
 | Windows 安装后 | `<安装目录>/resources/runtime/pi/<目标平台与架构>/` |
 | macOS 安装后 | `Pi Desktop.app/Contents/Resources/runtime/pi/<目标平台与架构>/` |
 
-每个 Runtime 根目录保留对应官方归档的解压内容与相对位置。开发和正式包采用相同的内部布局，仅资源根定位不同；主进程在正式包中通过 `process.resourcesPath` 定位，不从 PATH 查找全局 Pi。具体 staging 路径与 package 根落点在 P1-02 确定。
+每个 Runtime 根目录保留对应官方归档的解压内容与相对位置。开发和正式包采用相同的内部布局，仅资源根定位不同；主进程在正式包中通过 `process.resourcesPath` 定位，不从 PATH 查找全局 Pi。
+
+P1-02 已确定开发 staging 根为仓库内 `runtime/`：Runtime 位于 `runtime/pi/<目标平台与架构>/`，`runtime/pi-runtime.json` 保存固定版本与预期摘要，`runtime/pi/` 不入库。归档的可执行文件与全部 package 资源处于同一层，因此不需要设置 `PI_PACKAGE_DIR`：Pi 的 `getPackageDir()` 在 Bun binary 下默认返回 `dirname(process.execPath)`，与 package 资源根以及 WASM、native helper 的可执行文件邻接查找同时成立；只有当可执行文件与资源根被拆开时才必须显式设置该变量。
+
+主进程沿用同一相对子路径定位 Runtime：
+
+| 运行形态 | 基址 | Runtime 根 |
+| --- | --- | --- |
+| 开发 | 项目根（由构建产物的 `out/main` 上溯） | `<项目根>/runtime/pi/<目标平台与架构>` |
+| 打包后 | `process.resourcesPath` | `<process.resourcesPath>/runtime/pi/<目标平台与架构>` |
+
+正式包通过 electron-builder `extraResources` 把 `runtime/pi/` 复制到资源目录的同一相对位置；开发期不能使用 `process.resourcesPath`，因为该值在开发时指向 Electron 自身的 `resources` 目录。可执行文件名由平台决定：Windows 为 `pi.exe`，macOS 为 `pi`。
 
 macOS Desktop 主可执行文件位于 `Contents/MacOS`，不要求 Pi 跟随搬入该目录。Pi 与其资源整体放在独立目录，分别满足 package 根和 executable 邻接 loader 的要求，不通过仅设置 `PI_PACKAGE_DIR` 修补拆散布局。
 
@@ -169,13 +192,15 @@ Desktop、固定 Pi 和配套资源作为一致发行版本更新，不在运行
 pi --mode rpc --no-session
 ```
 
+第一阶段由主进程固定完整启动参数，页面不能覆盖：`--mode rpc`、`--no-session`、`--no-approve`、`--no-extensions`、`--no-skills`、`--no-prompt-templates`、`--no-mcp`，以及按平台选择的 `--tools`（Windows `read,powershell,edit,write`；macOS `read,bash,edit,write`）。环境继承父进程并追加 `PI_SKIP_VERSION_CHECK=1`；不设置 `PI_OFFLINE`，因为 RPC 启动会在后台刷新模型目录；也不设置 `PI_PACKAGE_DIR`，因为包资源与可执行文件同层。
+
 Electron 主进程设置 `cwd` 为用户选择的项目根目录，并分别建立 stdin、stdout、stderr 管道。不启动 HTTP 或 localhost TCP RPC 服务，不将协议暴露到网络。
 
 `--no-session` 表示内存 Session，仅用于第一阶段的临时 Runtime 页面。正式 Desktop 继续使用 Pi 自己的持久化 Session。
 
 RPC 启动并不自动发送 ready 事件，也不输出 JSON mode 的 Session header；使用 `get_state` 的成功响应确认协议可用，不依赖固定等待。
 
-Pi CLI 在非交互模式下未能选出模型时会退出。真实 prompt 需要有效模型凭据；第一阶段复用现有 Pi 配置、认证或 provider 环境变量，不开发 Authentication UI，不把密钥放进 Vue 或命令行参数。
+Pi CLI 在非交互模式下未能选出模型时会向 stderr 输出错误并以退出码 1 结束，因此 RPC 启动失败不能只看 stdout；真实 prompt 需要有效模型凭据。第一阶段复用现有 Pi 配置、认证或 provider 环境变量，不开发 Authentication UI，不把密钥放进 Vue 或命令行参数。
 
 ### 5.2 JSONL framing
 
@@ -393,7 +418,7 @@ Windows 使用系统 `taskkill` 对当前受管 Pi 进程树定向终止，不�
 
 RPC 无法展示 Pi 内建的 TUI trust prompt。没有显式覆盖、Extension 决定或已保存决定时，`defaultProjectTrust` 的 `always` 会加载项目资源，`ask` / `never` 会跳过。
 
-第一阶段显式采用 `--no-approve`，并关闭 Extensions、Skills、Prompt Templates、MCP；避免依赖全局 trust 默认值，不自动信任项目，不直接修改 `trust.json`。
+第一阶段显式采用 `--no-approve`，并关闭 Extensions、Skills、Prompt Templates、MCP（对应 `--no-extensions`、`--no-skills`、`--no-prompt-templates`、`--no-mcp`）；避免依赖全局 trust 默认值，不自动信任项目，不直接修改 `trust.json`。
 
 Trust 不完全覆盖启动行为：官方代码在 trust 决定前会读取项目 `sessionDir`；AGENTS/CLAUDE 上下文文件也不因拒绝 trust 自动禁用。关闭项目资源加载不等于内容安全或工具权限受限。
 
@@ -432,9 +457,9 @@ Project 的基础属性为 `id`、`name`、`path`、`lastOpenedAt`。采用轻�
 
 1. 完整依赖树锁定、Windows build 18363 约束，以及 Electron、固定 Pi 与 helper 共同约束下的 macOS 最低版本；后续依赖调整继续考虑 Electron 的维护状态。
 2. 避免需要本地编译的原生依赖；Pi/helper 的运行库需求、挂起重启与延迟清理对开发环境的影响。需要新增工具链时单独取得授权。
-3. P1-02 的准确 staging 路径、官方资源根映射与目标平台文件选择；分别满足 `PI_PACKAGE_DIR` 和 executable 邻接 loader。正式签名、公证与安装包配置按发行步骤确定。
+3. 正式签名、公证与安装包配置，按发行步骤确定；staging 路径、三目标文件选择与 package 根/executable 邻接映射已在 P1-02 确定（见第 4 节）。
 4. Runtime 操作的 IPC 业务结果、Runtime 代际、临时投影和通知确认的具体契约，以及管道边界、缓存预算和请求期限；不建立平行 Session 数据库。
-5. 启动参数、已有模型配置和凭据的可用性；只读取必要配置，不输出秘密。
+5. 不同启动 profile 下现有模型与凭据的可用性（启动参数已在 P1-03 确定）；只读取必要配置，不输出秘密。
 6. Windows 定向进程树终止与 macOS 进程组的实现细节；保留尽力回收边界，不以关闭主 Pi 进程等同于完整进程树回收。
 7. 第二阶段 Session 列表的接入方式，以及跨项目 Session 切换对 cwd 与资源重建的影响。
 

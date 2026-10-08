@@ -25,7 +25,7 @@
 
 **范围**：Electron、Vue 3、TypeScript、Vite、Tailwind CSS、Pinia 的最小配置；主进程入口、sandboxed preload 与统一前端服务入口。明确 contextIsolation 和 sandbox 开启、nodeIntegration 关闭、webSecurity 保持开启；建立固定业务 IPC 入口、调用者校验和本地页面/CSP 边界，不暴露原始 ipcRenderer 或通用系统能力。只建立立即使用的结构，不创建 Session、认证或插件空模块。
 
-**当前实现**：单页展示桌面桥接连接状态与应用信息；桥接连接成功不表示 Pi 就绪。项目目录与 Prompt 只保留本页输入，不检查目录、不持久化。启动、关闭、发送和 Stop 控件禁用；文本、Thinking、工具与 Runtime 诊断区域仅展示空状态，不模拟 Pi 输出。
+**当前实现**：单页展示桌面桥接连接状态与应用信息；桥接连接成功不表示 Pi 就绪。页面输入不持久化，项目目录在启动 Runtime 时由主进程校验。Runtime 启动与状态展示见 P1-03；关闭、发送和 Stop 控件仍禁用，文本、Thinking、工具与 Runtime 诊断区域仅展示空状态，不模拟 Pi 输出。
 
 **构建与页面**：配置见根目录 `electron.vite.config.ts`，依赖版本以 `package.json` 为准。
 
@@ -61,6 +61,7 @@
 | `npm run typecheck:node` | `tsc --noEmit -p tsconfig.node.json` |
 | `npm run typecheck:web` | `vue-tsc --noEmit -p tsconfig.web.json` |
 | `npm run typecheck` | `npm run typecheck:node && npm run typecheck:web` |
+| `npm run pi:prepare` | `node scripts/prepare-pi-runtime.mjs` |
 | `scripts/start-dev.cmd` | 定位项目根后执行 `npm run dev`；前置条件缺失时提示并退出，不自动安装或下载 |
 
 脚本说明不构成执行授权；依赖安装、检查、测试、构建、启动和重启仍需单独明确授权。
@@ -75,6 +76,24 @@
 
 **依赖**：P1-01 的项目配置位置。本项确定启动所需准确路径，不擅自完成签名、公证、自动更新或全部平台安装包配置。
 
+**固定清单**：`runtime/pi-runtime.json` 记录基线版本、tag、源码 commit 与三目标资产的预期字节数和 SHA-256，是完整性校验的唯一依据；不在运行时获取 `latest`，也不用执行 `pi --version` 代替摘要校验。已核实的 1.0.4 资产：
+
+| 目标 | 官方资产 | 字节数 |
+| --- | --- | --- |
+| `win32-x64` | `pi-windows-x64.zip` | 45 055 959 |
+| `darwin-arm64` | `pi-darwin-arm64.tar.gz` | 31 016 950 |
+| `darwin-x64` | `pi-darwin-x64.tar.gz` | 33 474 471 |
+
+官方 `SHA256SUMS` 是 `<sha256>  <文件名>` 两空格格式，发布 API 的资产 `digest` 与它逐条一致；两者已交叉核对。同一版本还提供 `pi-windows-arm64.zip` 与 `pi-linux-*.tar.gz`，不属于确认的三目标范围，未纳入清单。
+
+**staging 与资源定位**：开发 staging 根是仓库内 `runtime/`，Runtime 落在 `runtime/pi/<目标平台与架构>/`，`runtime/pi/` 不入库。归档是平铺根目录，可执行文件与 `package.json`、`README.md`、`CHANGELOG.md`、`theme/`、`assets/`、`export-html/`、`docs/`、`examples/`、`photon_rs_bg.wasm`、`native/<平台>/prebuilds/<平台>-<架构>/<平台>-platform.node` 同层，因此不设置 `PI_PACKAGE_DIR`：`getPackageDir()` 默认值即 `dirname(process.execPath)`，与 package 资源根、以及 WASM 与 native helper 的可执行文件邻接查找同时一致。开发与正式包保持相同内部布局，主进程解析契约见开发总览第 4.3 节；P1-03 实现，P1-02 不改 `src/main`。
+
+**校验顺序与失败处理**：解析 host 目标（只支持清单内的当前主机平台，不支持指定其他平台，也不默认下载全部平台）→ 幂等检查（必需条目齐备且 `package.json` 版本一致则跳过，`--force` 才重建）→ 流式下载并同时计算 SHA-256 → 字节数或摘要不符即删除归档并失败，不解压 → 解压到 `runtime/pi/` 下的临时目录（Windows 用 PowerShell，macOS 用系统 tar；PATH 中的 GNU tar 不支持 zip）→ 校验必需条目与固定版本，`README.md`、`CHANGELOG.md`、`docs/`、`examples/` 缺失只告警 → 全部通过后才替换到 `runtime/pi/<目标平台与架构>/`。任何失败都不得留下半成品目标目录，也不回退到 PATH 中的全局 Pi。
+
+**项目脚本实现**：`scripts/prepare-pi-runtime.mjs` 只使用 Node 内建模块，不新增依赖，不写成安装依赖时的生命周期脚本。
+
+**当前状态**：`runtime/pi/win32-x64/` 已按固定清单准备，`package.json` 版本为 `1.0.4`；macOS 两目标需要在 macOS 主机上准备。
+
 ### P1-03 RPC 启动与就绪
 
 **目标**：Electron 主进程以项目目录为 cwd 启动官方 Pi sidecar，并取得真实 RPC 状态。
@@ -82,6 +101,35 @@
 **范围**：直接使用 child_process.spawn 启动固定 executable，不经过 shell，也不增加 utilityProcess 管理层。建立独立 stdin/stdout/stderr、增量 UTF-8 解码和 LF 分帧；stdout/stderr 持续消费，stdin 由单一 writer 串行写入完整记录并处理背压。主进程生成 Pi request id 并匹配 pending 响应，与 Electron invoke 的响应关联分开；区分协议与诊断错误。发送 `get_state` 并据响应进入就绪状态。最小页面经受限 preload 方法启动 Runtime 并显示状态。
 
 **依赖**：P1-01、P1-02。
+
+**启动参数与环境**：argv 与 cwd 全部由主进程固定，页面只能提供项目目录：
+
+```text
+--mode rpc --no-session --no-approve --no-extensions --no-skills --no-prompt-templates --no-mcp --tools <平台工具集>
+```
+
+工具集在 Windows 为 `read,powershell,edit,write`，macOS 为 `read,bash,edit,write`（`--tools` 替换默认集合）。cwd 是主进程校验过的绝对目录；环境继承父进程并追加 `PI_SKIP_VERSION_CHECK=1`，不设置 `PI_OFFLINE` 与 `PI_PACKAGE_DIR`；可执行文件只从 staging 根定位，不查 PATH。RPC 模式没有可用模型时 Pi 不进入协议就直接以退出码 1 结束，错误只在 stderr，因此就绪判定必须同时消费 stderr 与退出事件。
+
+**接口与错误码**：`window.desktop.startRuntime(projectPath)` 对应 `desktop:runtime-start`，`window.desktop.getRuntimeStatus()` 对应 `desktop:runtime-status`；两者都返回 `{ ok: true, data }` 或 `{ ok: false, error }`，`data` 是 Runtime 快照。契约与响应校验见 `src/shared/runtime-api.ts`。
+
+| 错误码 | 含义 |
+| --- | --- |
+| `FORBIDDEN` | 调用者不是已登记窗口的可信顶层页面 |
+| `INVALID_REQUEST` | 参数量或形状不符合接口约定 |
+| `INVALID_PROJECT_PATH` | 项目目录不是存在的绝对目录 |
+| `RUNTIME_ALREADY_RUNNING` | 已有 Runtime 在运行，不做隐式重启 |
+| `RUNTIME_SPAWN_FAILED` | 可执行文件缺失或进程无法启动 |
+| `RUNTIME_EXITED` | Pi 在就绪前退出，消息含退出码与最近诊断 |
+| `RUNTIME_TIMEOUT` | 期限内没有收到 `get_state` 响应 |
+| `RUNTIME_PROTOCOL_ERROR` | 记录无法解析、契约不符或 `get_state` 被拒绝 |
+| `INTERNAL_ERROR` | 其他内部失败 |
+| `INVALID_RESPONSE`、`BRIDGE_UNAVAILABLE`、`BRIDGE_CALL_FAILED` | Preload 与前端侧的桥接校验失败 |
+
+**主进程落点**：三类职责分别落在 `src/main/pi-process.ts`、`src/main/pi-protocol.ts`、`src/main/runtime-manager.ts`；IPC 注册与调用者校验在 `src/main/index.ts` 接线，受限方法由 `src/preload/index.ts` 暴露。
+
+**状态与边界**：状态为 `idle`、`starting`、`ready`、`failed`，就绪快照只投影模型、Thinking 级别、Session 标识、消息数与 streaming 标志。`get_state` 等待期限为 10 秒；单条 stdout 记录上限 8 MiB（按解码后字符数计），超限按协议错误处理；stderr 只保留最近 40 行、单行截断到 400 字符。本项不开放事件订阅、Prompt、Stop 与重启；关闭唯一窗口时先关闭 Pi 的 stdin 请求其自行有序退出，等待退出期限与平台定向进程树终止在 P1-04 补齐。
+
+**当前状态**：主进程、受限 preload 方法与最小页面已按上述参数与契约接入启动链；Prompt、Streaming、Tool 与 Stop 仍为禁用空状态。
 
 ### P1-04 Runtime 生命周期
 
@@ -143,8 +191,8 @@ P1-01 → P1-02 → P1-03 → P1-04 → P1-05 → P1-06 → P1-07
 ## 待决策事项
 
 - 完整依赖树锁定、Electron 与固定 Pi/helper 的共同系统要求，以及原生组件的预编译资源、运行库或编译前置条件。
-- Pi 配套资源的准确 staging 路径、package 根与 executable 邻接映射；正式安装包沿用 ASAR 外整体资源方向，发行配置在相应步骤确定。
-- Runtime 操作的 IPC 业务结果、临时投影、订阅序列基点、通知批次与应用确认的具体契约，以及缓存预算和请求期限。
+- Pi 配套资源的 staging 路径、目标文件选择与 package 根/executable 邻接映射已在 P1-02 确定（见本文 P1-02 段与开发总览第 4 节）；正式安装包沿用 ASAR 外整体资源方向，发行配置在相应步骤确定。
+- Runtime 操作的临时投影、订阅序列基点、通知批次与应用确认的具体契约，以及缓存预算和请求期限；Runtime 启动与状态查询的 IPC 业务结果已在 P1-03 确定。
 - 正常关闭期限、Windows 定向进程树终止与 macOS 进程组的实现细节，保持尽力回收边界。
 - Pi/helper 的运行库需求，以及挂起重启与延迟清理对本机环境的影响。
 - 现有模型是否可选；缺少凭据时如何给出清晰提示，不能转为提前开发登录功能。
