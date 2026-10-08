@@ -1,4 +1,4 @@
-/** 管理唯一桌面窗口、本地资产边界，以及应用信息与 Runtime 启停、Prompt 提交 IPC、状态事件广播与退出编排。 */
+/** 管理唯一桌面窗口、本地资产边界，以及应用信息与 Runtime 启停、Prompt 提交、消息投影 IPC、事件广播与退出编排。 */
 import { realpath } from 'node:fs/promises'
 import { extname, isAbsolute, relative, resolve, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -8,12 +8,22 @@ import { APP_INFO_CHANNEL } from '../shared/desktop-api'
 import type { AppInfoResult } from '../shared/desktop-api'
 import {
   RUNTIME_PROMPT_CHANNEL,
+  RUNTIME_PROJECTION_ACK_CHANNEL,
+  RUNTIME_PROJECTION_CHANNEL,
+  RUNTIME_PROJECTION_EVENT,
   RUNTIME_START_CHANNEL,
   RUNTIME_STATUS_CHANNEL,
   RUNTIME_STOP_CHANNEL,
   RUNTIME_STATUS_EVENT
 } from '../shared/runtime-api'
-import type { PromptResult, RuntimeErrorCode, RuntimeResult, RuntimeStatus } from '../shared/runtime-api'
+import type {
+  ProjectionBatch,
+  ProjectionResult,
+  PromptResult,
+  RuntimeErrorCode,
+  RuntimeResult,
+  RuntimeStatus
+} from '../shared/runtime-api'
 import { RuntimeManager } from './runtime-manager'
 
 const DEVELOPMENT_PAGE_URL = 'http://127.0.0.1:5173/'
@@ -177,6 +187,10 @@ function promptFailure(code: RuntimeErrorCode, message: string): PromptResult {
   return { ok: false, error: { code, message } }
 }
 
+function projectionFailure(code: RuntimeErrorCode, message: string): ProjectionResult {
+  return { ok: false, error: { code, message } }
+}
+
 /** 只接受项目目录；不接受可执行文件路径、启动参数或任意 RPC 内容。 */
 function registerRuntimeHandlers(pageUrl: string): void {
   ipcMain.handle(
@@ -252,6 +266,36 @@ function registerRuntimeHandlers(pageUrl: string): void {
       return runtimeManager.prompt(message)
     }
   )
+
+  /** 投影快照只读取当前 Runtime 代际的投影，不接受任何参数。 */
+  ipcMain.handle(
+    RUNTIME_PROJECTION_CHANNEL,
+    (event: IpcMainInvokeEvent, ...args: unknown[]): ProjectionResult => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return projectionFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 0) {
+        return projectionFailure('INVALID_REQUEST', '投影快照接口不接受参数。')
+      }
+      return runtimeManager.getProjection()
+    }
+  )
+
+  /** 应用确认只控制未确认通知窗口；参数不合法时忽略，不回传结果。 */
+  ipcMain.handle(
+    RUNTIME_PROJECTION_ACK_CHANNEL,
+    (event: IpcMainInvokeEvent, ...args: unknown[]): void => {
+      if (!isTrustedCaller(event, pageUrl) || args.length !== 1) return
+      const request = args[0]
+      if (typeof request !== 'object' || request === null || Array.isArray(request)) return
+      const fields = request as Record<string, unknown>
+      if (Object.keys(fields).some((key) => key !== 'runtimeId' && key !== 'seq')) return
+      const { runtimeId, seq } = fields
+      if (typeof runtimeId !== 'number' || typeof seq !== 'number') return
+      if (!Number.isInteger(runtimeId) || !Number.isInteger(seq) || runtimeId <= 0 || seq < 0) return
+      runtimeManager.ackProjection(runtimeId, seq)
+    }
+  )
 }
 
 /** 状态变化只发给当前唯一可信窗口，不广播到其他 webContents。 */
@@ -261,6 +305,15 @@ function broadcastRuntimeStatus(status: RuntimeStatus): void {
   const contents = target.webContents
   if (contents.isDestroyed()) return
   contents.send(RUNTIME_STATUS_EVENT, status)
+}
+
+/** 投影批次同样只发给当前唯一可信窗口，不广播到其他 webContents。 */
+function broadcastRuntimeProjection(batch: ProjectionBatch): void {
+  const target = mainWindow
+  if (target === null || target.isDestroyed()) return
+  const contents = target.webContents
+  if (contents.isDestroyed()) return
+  contents.send(RUNTIME_PROJECTION_EVENT, batch)
 }
 
 function restrictSession(): void {
@@ -334,6 +387,7 @@ app.whenReady().then(async () => {
   registerAppInfoHandler(pageUrl)
   registerRuntimeHandlers(pageUrl)
   runtimeManager.onStatusChanged(broadcastRuntimeStatus)
+  runtimeManager.onProjectionBatch(broadcastRuntimeProjection)
   await createWindow(pageUrl)
 }).catch(() => {
   console.error('Pi Desktop 无法加载桌面页面。')

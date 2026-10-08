@@ -1,14 +1,22 @@
-<!-- 展示桌面连接与 Runtime 状态，并提交 Prompt 请求；项目目录与 Prompt 内容只在本页输入，不持久化。 -->
+<!-- 展示桌面连接、Runtime 状态与消息投影，并提交 Prompt 请求；输入内容只在本页使用，不持久化。 -->
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
 import { computed, onMounted, onUnmounted, ref } from 'vue'
+import type { ProjectionBlockKind } from '../../shared/runtime-api'
 import { useDesktopStore } from './stores/desktop'
 import { useRuntimeStore } from './stores/runtime'
 
 const desktopStore = useDesktopStore()
 const runtimeStore = useRuntimeStore()
 const { connection } = storeToRefs(desktopStore)
-const { view: runtimeView, promptView } = storeToRefs(runtimeStore)
+const {
+  view: runtimeView,
+  promptView,
+  messages,
+  projectionSync,
+  projectionTruncated,
+  droppedMessages
+} = storeToRefs(runtimeStore)
 const projectPath = ref('')
 const prompt = ref('')
 const connectionLabel = computed(() => {
@@ -47,10 +55,40 @@ const promptResult = computed(() => {
   const current = promptView.value
   if (current.phase === 'sending') return '正在提交 Prompt，等待 Pi 回应。'
   if (current.phase !== 'accepted') return null
-  if (current.disposition === 'started') return 'Pi 已接受并开始执行；消息内容在后续任务展示。'
+  if (current.disposition === 'started') return 'Pi 已接受并开始执行，本轮内容会显示在输出区域。'
   if (current.disposition === 'queued') return 'Pi 已将本次输入排队。'
   return '本次输入已被处理，未发起新的 Agent run。'
 })
+const projectionSyncing = computed(() => projectionSync.value !== 'synced')
+const runtimeStreaming = computed(() => runtimeInfo.value?.isStreaming === true)
+const textBlocks = computed(() => collectBlocks('text'))
+const thinkingBlocks = computed(() => collectBlocks('thinking'))
+const messageError = computed(() => {
+  const failed = messages.value.find((message) => (
+    message.errorMessage !== null || message.stopReason === 'error' || message.stopReason === 'aborted'
+  ))
+  if (failed === undefined) return null
+  return failed.errorMessage ?? `Agent 响应以 ${failed.stopReason} 结束。`
+})
+
+/** 按内容块收集展示项；工具调用块与空块不在本阶段展示。 */
+function collectBlocks(
+  kind: ProjectionBlockKind
+): { key: string; role: string; text: string; truncated: boolean }[] {
+  const collected: { key: string; role: string; text: string; truncated: boolean }[] = []
+  for (const message of messages.value) {
+    for (const block of message.blocks) {
+      if (block.kind !== kind || block.text === '') continue
+      collected.push({
+        key: `${message.id}-${block.contentIndex}`,
+        role: message.role === 'user' ? '你' : 'Assistant',
+        text: block.text,
+        truncated: block.truncated
+      })
+    }
+  }
+  return collected
+}
 
 function launchRuntime(): void {
   void runtimeStore.launch(projectPath.value)
@@ -87,7 +125,7 @@ onUnmounted(() => {
     </header>
 
     <p id="runtime-notice" class="mb-6 border-l-2 border-desk-accent pl-3 text-sm text-desk-muted">
-      当前可以启停 Runtime 并提交 Prompt。提交结果只表示接受或拒绝，不展示消息内容、不读取项目文件、不持久化项目。
+      当前可以启停 Runtime、提交 Prompt，并查看本轮文本与 Thinking。消息只在本页展示、不持久化，工具、诊断与 Stop 仍在后续任务接入。
     </p>
 
     <section
@@ -210,13 +248,13 @@ onUnmounted(() => {
             {{ promptError.message }}
           </p>
           <p v-else id="prompt-status" class="mt-2 text-xs text-desk-muted">
-            {{ promptResult ?? '提交结果会显示在这里；本阶段不展示消息内容。' }}
+            {{ promptResult ?? '提交结果会显示在这里。' }}
           </p>
           <div class="mt-4 flex flex-wrap gap-2">
             <button
               type="button"
               class="control-button"
-              :disabled="!runtimeReady || prompt.trim() === '' || promptSending"
+              :disabled="!runtimeReady || prompt.trim() === '' || promptSending || projectionSyncing || runtimeStreaming"
               aria-describedby="prompt-status"
               @click="submitPrompt"
             >
@@ -224,20 +262,43 @@ onUnmounted(() => {
             </button>
             <button type="button" class="control-button" disabled aria-describedby="runtime-notice">Stop</button>
           </div>
-          <p class="mt-2 text-xs text-desk-muted">Stop 与运行中状态在后续任务接入。</p>
+          <p class="mt-2 text-xs text-desk-muted">
+            {{ runtimeStreaming ? 'Agent 正在运行，需等本轮结束；Stop 在后续任务接入。' : 'Stop 在后续任务接入。' }}
+          </p>
         </section>
       </div>
 
       <div class="space-y-6">
         <section class="panel" aria-labelledby="output-heading">
           <h2 id="output-heading" class="section-heading mb-4">输出</h2>
+          <p v-if="projectionSyncing" role="status" class="mb-3 text-sm text-desk-muted">
+            正在与主进程同步消息，暂不显示增量内容。
+          </p>
+          <p v-else-if="projectionTruncated" role="status" class="mb-3 text-sm text-desk-muted">
+            投影已截断：省略较早消息 {{ droppedMessages }} 条，超长内容已标记截断。
+          </p>
+          <p v-if="messageError" role="alert" class="mb-3 text-sm">{{ messageError }}</p>
           <div class="empty-output mb-4">
             <h3 class="mb-2 text-sm font-medium">文本</h3>
-            <p class="text-sm text-desk-muted">尚无消息。</p>
+            <p v-if="textBlocks.length === 0" class="text-sm text-desk-muted">尚无消息。</p>
+            <div v-else class="space-y-3">
+              <div v-for="block in textBlocks" :key="block.key">
+                <p class="mb-1 text-xs text-desk-muted">{{ block.role }}</p>
+                <p class="whitespace-pre-wrap break-words text-sm">{{ block.text }}</p>
+                <p v-if="block.truncated" class="mt-1 text-xs text-desk-muted">此内容超出展示上限，已截断。</p>
+              </div>
+            </div>
           </div>
           <div class="empty-output">
             <h3 class="mb-2 text-sm font-medium">Thinking</h3>
-            <p class="text-sm text-desk-muted">尚无 Thinking 内容。</p>
+            <p v-if="thinkingBlocks.length === 0" class="text-sm text-desk-muted">尚无 Thinking 内容。</p>
+            <div v-else class="space-y-3">
+              <div v-for="block in thinkingBlocks" :key="block.key">
+                <p class="mb-1 text-xs text-desk-muted">{{ block.role }}</p>
+                <p class="whitespace-pre-wrap break-words text-sm">{{ block.text }}</p>
+                <p v-if="block.truncated" class="mt-1 text-xs text-desk-muted">此内容超出展示上限，已截断。</p>
+              </div>
+            </div>
           </div>
         </section>
 

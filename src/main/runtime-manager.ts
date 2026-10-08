@@ -1,20 +1,24 @@
 /**
  * 唯一 Runtime 的所有者：状态机、启停编排、受限业务操作与状态快照。
  *
- * 不管理 Pi Session 或消息；进程与管道操作交给 pi-process，IPC 契约与校验在
- * shared/runtime-api.ts。不接受页面传入的可执行文件路径或启动参数，旧 Runtime
- * 的异步结果不得覆盖新状态。
+ * 不直接管理 Pi Session 与消息内容；进程与管道操作交给 pi-process，展示投影交给
+ * message-projection，IPC 契约与校验在 shared/runtime-api.ts。不接受页面传入的可执行
+ * 文件路径或启动参数，旧 Runtime 的异步结果不得覆盖新状态。
  */
 import { stat } from 'node:fs/promises'
 import type { Stats } from 'node:fs'
 import { isAbsolute, resolve } from 'node:path'
 import type {
+  ProjectionBatch,
+  ProjectionResult,
   PromptDisposition,
   PromptResult,
   RuntimeErrorCode,
   RuntimeResult,
   RuntimeStatus
 } from '../shared/runtime-api'
+import { MessageProjection } from './message-projection'
+import type { ProjectionStatusHint } from './message-projection'
 import { PiProcess, PiProcessError } from './pi-process'
 import type { PiExitEvent } from './pi-process'
 import { PiProtocol, toPromptDisposition, toRuntimeInfo } from './pi-protocol'
@@ -34,11 +38,15 @@ const DIAGNOSTIC_TAIL_LINES = 6
 /** 状态变化订阅者；只在主进程内使用，不进 IPC 契约。 */
 export type RuntimeStatusListener = (status: RuntimeStatus) => void
 
+/** 投影批次订阅者；只在主进程内使用，不进 IPC 契约。 */
+export type RuntimeProjectionListener = (batch: ProjectionBatch) => void
+
 interface ActiveRuntime {
   readonly runtimeId: number
   readonly projectPath: string
   readonly process: PiProcess
   readonly protocol: PiProtocol
+  readonly projection: MessageProjection
 }
 
 /** 可分类的 Runtime 操作失败，由 start 统一转换为结果对象。 */
@@ -62,6 +70,7 @@ export class RuntimeManager {
   private active: ActiveRuntime | null = null
   private snapshot: RuntimeStatus = { state: 'idle', runtimeId: null, info: null, lastError: null }
   private readonly listeners = new Set<RuntimeStatusListener>()
+  private readonly projectionListeners = new Set<RuntimeProjectionListener>()
   /** 是否由主动关闭触发：用于区分正常关闭与异常退出。 */
   private stopRequested = false
 
@@ -70,6 +79,14 @@ export class RuntimeManager {
     this.listeners.add(listener)
     return () => {
       this.listeners.delete(listener)
+    }
+  }
+
+  /** 订阅投影批次；返回释放函数。单个订阅者异常不影响投影。 */
+  onProjectionBatch(listener: RuntimeProjectionListener): () => void {
+    this.projectionListeners.add(listener)
+    return () => {
+      this.projectionListeners.delete(listener)
     }
   }
 
@@ -92,6 +109,20 @@ export class RuntimeManager {
   /** 状态快照查询只读，不触发进程操作。 */
   getStatus(): RuntimeResult {
     return { ok: true, data: { ...this.snapshot } }
+  }
+
+  /** 投影快照只读；没有活动 Runtime 时返回空基准。 */
+  getProjection(): ProjectionResult {
+    const runtime = this.active
+    if (runtime === null) {
+      return { ok: true, data: { runtimeId: null, seq: 0, messages: [], truncated: false, droppedMessages: 0 } }
+    }
+    return { ok: true, data: runtime.projection.snapshot() }
+  }
+
+  /** 记录渲染端已应用到的最高序号；只影响未确认通知窗口。 */
+  ackProjection(runtimeId: number, seq: number): void {
+    this.active?.projection.ack(runtimeId, seq)
   }
 
   /**
@@ -126,6 +157,7 @@ export class RuntimeManager {
 
     if (this.active !== null && this.active.runtimeId === runtime.runtimeId) {
       // 进程未在期限内确认退出：按失败收敛，并解除归属以免留下无主 Runtime。
+      runtime.projection.dispose()
       this.active = null
       this.publish({
         state: 'failed',
@@ -157,6 +189,12 @@ export class RuntimeManager {
     const runtimeId = (this.runtimeIdSeed += 1)
     this.publish({ state: 'starting', runtimeId, info: null, lastError: null })
 
+    // 投影随 Runtime 代际存在；批次与状态提示都只在该代际内生效。
+    const projection = new MessageProjection(runtimeId, {
+      onBatch: (batch) => this.emitProjection(batch),
+      onStatusHint: (hint) => this.applyStatusHint(runtimeId, hint)
+    })
+
     let exitEvent: PiExitEvent | null = null
     let spawnFailure: string | null = null
     let protocolError: string | null = null
@@ -165,8 +203,9 @@ export class RuntimeManager {
       onProtocolError: (message) => {
         protocolError ??= message
       },
-      onRecord: () => {
-        // 第一阶段只消费 response；会话事件与 Extension UI 由后续任务接入。
+      onRecord: (kind, payload) => {
+        // 会话事件进入展示投影；Extension UI 与未知记录不进入本阶段范围。
+        if (kind === 'session-event') projection.applySessionEvent(payload)
       },
       onUnmatchedResponse: () => {
         // 无 pending 可匹配的 response 不致命，例如 Pi 自行回报的解析错误。
@@ -198,7 +237,8 @@ export class RuntimeManager {
         runtimeId,
         projectPath: projectDirectory,
         process: piProcess,
-        protocol
+        protocol,
+        projection
       }
       this.active = runtime
 
@@ -235,7 +275,8 @@ export class RuntimeManager {
       this.publish({ state: 'ready', runtimeId, info, lastError: null })
       return { ...this.snapshot }
     } catch (error) {
-      // 只回收本次启动创建的进程，不触碰既有 Runtime。
+      // 只回收本次启动创建的进程与投影，不触碰既有 Runtime。
+      projection.dispose()
       if (piProcess !== null) {
         if (this.active?.runtimeId === runtimeId) {
           this.active = null
@@ -303,6 +344,7 @@ export class RuntimeManager {
   private handleExit(runtimeId: number, event: PiExitEvent): void {
     const runtime = this.active
     if (runtime === null || runtime.runtimeId !== runtimeId) return
+    runtime.projection.dispose()
     this.active = null
     if (this.stopRequested) {
       // 主动关闭：进程按请求结束，回到 idle 并保留本次运行时标识。
@@ -315,6 +357,36 @@ export class RuntimeManager {
       info: null,
       lastError: this.describeFailure(event, runtime.process, null)
     })
+  }
+
+  /** 把投影上报的运行提示合入就绪快照；只接受当前代际与就绪状态。 */
+  private applyStatusHint(runtimeId: number, hint: ProjectionStatusHint): void {
+    const runtime = this.active
+    const info = this.snapshot.info
+    if (runtime === null || runtime.runtimeId !== runtimeId) return
+    if (this.snapshot.state !== 'ready' || info === null) return
+
+    this.publish({
+      state: 'ready',
+      runtimeId,
+      info: {
+        ...info,
+        isStreaming: hint.isStreaming ?? info.isStreaming,
+        messageCount: hint.messageCount ?? info.messageCount
+      },
+      lastError: null
+    })
+  }
+
+  /** 批次只发给订阅者；单个订阅者异常不影响投影状态。 */
+  private emitProjection(batch: ProjectionBatch): void {
+    for (const listener of [...this.projectionListeners]) {
+      try {
+        listener(batch)
+      } catch {
+        // 通知失败不改变投影状态。
+      }
+    }
   }
 
   /** 写入快照并通知订阅者；所有状态变化都必须经过这里。 */
