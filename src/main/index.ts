@@ -1,11 +1,17 @@
-/** 管理唯一桌面窗口、本地资产边界，以及应用信息与 Runtime 启停、Prompt 提交、中止、消息/工具投影 IPC、事件广播与退出编排。 */
+/** 管理唯一桌面窗口、本地资产边界，以及应用信息、Project 选择与列表、Runtime 启停、Prompt 提交、中止、消息/工具投影 IPC、事件广播与退出编排。 */
 import { realpath } from 'node:fs/promises'
 import { extname, isAbsolute, relative, resolve, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { app, BrowserWindow, ipcMain, net, protocol, session } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, net, protocol, session } from 'electron'
 import type { IpcMainInvokeEvent } from 'electron'
 import { APP_INFO_CHANNEL } from '../shared/desktop-api'
 import type { AppInfoResult } from '../shared/desktop-api'
+import {
+  PROJECT_CHOOSE_DIRECTORY_CHANNEL,
+  PROJECT_LIST_CHANNEL,
+  PROJECT_SET_CURRENT_CHANNEL
+} from '../shared/project-api'
+import type { ProjectErrorCode, ProjectListResult, ProjectPathResult } from '../shared/project-api'
 import {
   RUNTIME_ABORT_CHANNEL,
   RUNTIME_PROMPT_CHANNEL,
@@ -25,6 +31,7 @@ import type {
   RuntimeResult,
   RuntimeStatus
 } from '../shared/runtime-api'
+import { ProjectManager } from './project-manager'
 import { RuntimeManager } from './runtime-manager'
 
 const DEVELOPMENT_PAGE_URL = 'http://127.0.0.1:5173/'
@@ -54,6 +61,10 @@ const contentTypes: Readonly<Record<string, string>> = {
 let mainWindow: BrowserWindow | null = null
 let quittingAfterShutdown = false
 const runtimeManager = new RuntimeManager()
+const projectManager = new ProjectManager({
+  chooseDirectory: chooseDirectoryWithDialog,
+  runtime: runtimeManager
+})
 
 // 必须在 ready 前注册；不赋予绕过 CSP 或运行 Service Worker 的权限。
 protocol.registerSchemesAsPrivileged([
@@ -190,6 +201,90 @@ function promptFailure(code: RuntimeErrorCode, message: string): PromptResult {
 
 function projectionFailure(code: RuntimeErrorCode, message: string): ProjectionResult {
   return { ok: false, error: { code, message } }
+}
+
+function projectPathFailure(code: ProjectErrorCode, message: string): ProjectPathResult {
+  return { ok: false, error: { code, message } }
+}
+
+function projectListFailure(code: ProjectErrorCode, message: string): ProjectListResult {
+  return { ok: false, error: { code, message } }
+}
+
+/** 打开系统目录选择器；绑定唯一业务窗口，用户取消返回 `null`。 */
+async function chooseDirectoryWithDialog(defaultPath: string): Promise<string | null> {
+  const target = mainWindow
+  if (target === null || target.isDestroyed()) {
+    throw new Error('没有可用的桌面窗口。')
+  }
+
+  const result = await dialog.showOpenDialog(target, {
+    title: '选择项目目录',
+    buttonLabel: '选择此目录',
+    defaultPath,
+    properties: ['openDirectory']
+  })
+  if (result.canceled) return null
+
+  const selected = result.filePaths[0]
+  return typeof selected === 'string' && selected.trim() !== '' ? selected : null
+}
+
+/** 只接受项目路径与显式中断确认；不接受任意 channel、任意路径或其他 RPC 内容。 */
+function registerProjectHandlers(pageUrl: string): void {
+  ipcMain.handle(
+    PROJECT_CHOOSE_DIRECTORY_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<ProjectPathResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return projectPathFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 0) {
+        return projectPathFailure('INVALID_REQUEST', '目录选择接口不接受参数。')
+      }
+      return projectManager.chooseDirectory()
+    }
+  )
+
+  ipcMain.handle(
+    PROJECT_LIST_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<ProjectListResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return projectListFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 0) {
+        return projectListFailure('INVALID_REQUEST', '项目列表接口不接受参数。')
+      }
+      return projectManager.list()
+    }
+  )
+
+  ipcMain.handle(
+    PROJECT_SET_CURRENT_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<ProjectListResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return projectListFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 1) {
+        return projectListFailure('INVALID_REQUEST', '切换项目接口只接受一个请求对象。')
+      }
+      const request = args[0]
+      if (typeof request !== 'object' || request === null || Array.isArray(request)) {
+        return projectListFailure('INVALID_REQUEST', '切换项目参数格式不正确。')
+      }
+      const fields = request as Record<string, unknown>
+      if (Object.keys(fields).some((key) => key !== 'path' && key !== 'allowInterrupt')) {
+        return projectListFailure('INVALID_REQUEST', '切换项目参数包含未支持的字段。')
+      }
+      const { path, allowInterrupt } = fields
+      if (typeof path !== 'string') {
+        return projectListFailure('INVALID_PROJECT_PATH', '项目目录必须是非空的绝对路径。')
+      }
+      if (typeof allowInterrupt !== 'boolean') {
+        return projectListFailure('INVALID_REQUEST', '切换项目必须显式说明是否允许中断当前操作。')
+      }
+      return projectManager.setCurrent({ path, allowInterrupt })
+    }
+  )
 }
 
 /** 只接受项目目录；不接受可执行文件路径、启动参数或任意 RPC 内容。 */
@@ -401,6 +496,7 @@ app.whenReady().then(async () => {
   registerAssetProtocol()
   registerAppInfoHandler(pageUrl)
   registerRuntimeHandlers(pageUrl)
+  registerProjectHandlers(pageUrl)
   runtimeManager.onStatusChanged(broadcastRuntimeStatus)
   runtimeManager.onProjectionBatch(broadcastRuntimeProjection)
   await createWindow(pageUrl)

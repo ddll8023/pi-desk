@@ -1,9 +1,10 @@
-<!-- 展示桌面连接、Runtime 状态、消息投影与工具执行，并提交 Prompt、中止当前操作；输入内容只在本页使用，不持久化。 -->
+<!-- 展示桌面连接、项目选择、Runtime 状态、消息投影与工具执行，并提交 Prompt、中止当前操作；项目选择保存在主进程配置中，消息与输入内容不在本页持久化。 -->
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import type { ProjectionBlockKind, ToolExecutionPhase } from '../../shared/runtime-api'
 import { useDesktopStore } from './stores/desktop'
+import { useProjectStore } from './stores/project'
 import { useRuntimeStore } from './stores/runtime'
 
 /** 工具状态只做文案映射，不推断工具是否真的成功结束。 */
@@ -15,8 +16,19 @@ const TOOL_PHASE_LABELS: Readonly<Record<ToolExecutionPhase, string>> = {
 }
 
 const desktopStore = useDesktopStore()
+const projectStore = useProjectStore()
 const runtimeStore = useRuntimeStore()
 const { connection } = storeToRefs(desktopStore)
+const {
+  projects,
+  currentProject,
+  currentProjectId,
+  storageNotice: projectStorageNotice,
+  actionError: projectActionError,
+  choosing: projectChoosing,
+  switching: projectSwitching,
+  pendingPath: pendingProjectPath
+} = storeToRefs(projectStore)
 const {
   view: runtimeView,
   promptView,
@@ -28,7 +40,7 @@ const {
   droppedMessages,
   droppedTools
 } = storeToRefs(runtimeStore)
-const projectPath = ref('')
+const manualPath = ref('')
 const prompt = ref('')
 const connectionLabel = computed(() => {
   switch (connection.value.status) {
@@ -58,6 +70,17 @@ const runtimeInfo = computed(() => (
 const runtimeError = computed(() => (
   runtimeView.value.phase === 'failed' ? runtimeView.value.error : null
 ))
+const projectListLoading = computed(() => projectStore.view.phase === 'loading')
+const projectListError = computed(() => (
+  projectStore.view.phase === 'error' ? projectStore.view.error : null
+))
+const projectStatusLabel = computed(() => {
+  if (projectChoosing.value) return '正在选择目录'
+  if (projectSwitching.value) return '正在切换项目'
+  if (projectListLoading.value) return '正在读取项目列表'
+  if (projectListError.value !== null) return '项目列表读取失败'
+  return currentProject.value === null ? '尚未选择项目' : '已选择项目'
+})
 const promptSending = computed(() => promptView.value.phase === 'sending')
 const promptError = computed(() => (
   promptView.value.phase === 'error' ? promptView.value.error : null
@@ -117,7 +140,32 @@ function collectBlocks(
 }
 
 function launchRuntime(): void {
-  void runtimeStore.launch(projectPath.value)
+  const project = currentProject.value
+  if (project === null) return
+  void runtimeStore.launch(project.path)
+}
+
+function pickProjectDirectory(): void {
+  void projectStore.choose()
+}
+
+/** 手输路径同样交给主进程归一化与校验，不在页面内判断路径形式。 */
+function useManualPath(): void {
+  const path = manualPath.value.trim()
+  if (path === '') return
+  void projectStore.select(path, false)
+}
+
+function selectSavedProject(path: string): void {
+  if (path === currentProject.value?.path) return
+  void projectStore.select(path, false)
+}
+
+/** 用户确认可以停止正在运行的操作后，才带 allowInterrupt 重试切换。 */
+function confirmProjectSwitch(): void {
+  const path = pendingProjectPath.value
+  if (path === null) return
+  void projectStore.select(path, true)
 }
 
 function shutdownRuntime(): void {
@@ -134,6 +182,7 @@ function stopOperation(): void {
 
 onMounted(() => {
   void desktopStore.initialize()
+  void projectStore.initialize()
   void runtimeStore.initialize()
 })
 
@@ -155,7 +204,7 @@ onUnmounted(() => {
     </header>
 
     <p id="runtime-notice" class="mb-6 border-l-2 border-desk-accent pl-3 text-sm text-desk-muted">
-      当前可以启停 Runtime、提交 Prompt，查看本轮文本、Thinking 与工具执行，并停止当前操作。消息只在本页展示、不持久化，Runtime 诊断仍在后续任务接入。
+      当前可以管理本地项目、启停 Runtime、提交 Prompt，查看本轮文本、Thinking 与工具执行，并停止当前操作。项目选择保存在本机配置中；消息只在本页展示、不持久化，Runtime 诊断仍在后续任务接入。
     </p>
 
     <section
@@ -229,12 +278,65 @@ onUnmounted(() => {
 
     <div class="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.25fr)]">
       <div class="space-y-6">
-        <section class="panel" aria-labelledby="project-heading">
-          <h2 id="project-heading" class="section-heading mb-4">项目</h2>
-          <label for="project-path" class="mb-2 block text-sm font-medium">项目目录</label>
+        <section class="panel" aria-labelledby="project-heading" :aria-busy="projectChoosing || projectSwitching">
+          <div class="mb-3 flex flex-wrap items-center justify-between gap-3">
+            <h2 id="project-heading" class="section-heading">项目</h2>
+            <p role="status" class="text-sm text-desk-accent">{{ projectStatusLabel }}</p>
+          </div>
+
+          <p v-if="projectStorageNotice" role="status" class="mb-3 text-sm text-desk-muted">
+            {{ projectStorageNotice }}
+          </p>
+
+          <dl v-if="currentProject" class="mb-4 grid gap-2 text-sm">
+            <div>
+              <dt class="text-desk-muted">当前项目</dt>
+              <dd class="font-medium">{{ currentProject.name }}</dd>
+            </div>
+            <div>
+              <dt class="text-desk-muted">工作目录</dt>
+              <dd class="break-words font-mono text-xs">{{ currentProject.path }}</dd>
+            </div>
+          </dl>
+          <p v-else class="mb-4 text-sm text-desk-muted">
+            尚未选择项目；Runtime 以当前项目目录作为工作目录。
+          </p>
+
+          <p v-if="projectActionError" role="alert" class="mb-3 text-sm">
+            {{ projectActionError.message }}
+          </p>
+
+          <div v-if="pendingProjectPath" class="mb-4 rounded-md border border-desk-line bg-desk-canvas p-3">
+            <p class="mb-2 text-sm">当前有正在运行的操作；切换项目会先停止它，已提交的内容不会重放。</p>
+            <p class="mb-3 break-words font-mono text-xs text-desk-muted">{{ pendingProjectPath }}</p>
+            <div class="flex flex-wrap gap-2">
+              <button
+                type="button"
+                class="control-button"
+                :disabled="projectSwitching"
+                @click="confirmProjectSwitch"
+              >
+                停止并切换
+              </button>
+              <button type="button" class="control-button" @click="projectStore.cancelPending()">
+                取消
+              </button>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            class="control-button"
+            :disabled="projectChoosing || projectSwitching"
+            @click="pickProjectDirectory"
+          >
+            {{ projectChoosing ? '正在打开选择器' : '选择目录…' }}
+          </button>
+
+          <label for="project-path" class="mt-5 mb-2 block text-sm font-medium">手动输入绝对路径</label>
           <input
             id="project-path"
-            v-model="projectPath"
+            v-model="manualPath"
             type="text"
             class="text-control font-mono"
             placeholder="输入项目的绝对路径"
@@ -242,12 +344,52 @@ onUnmounted(() => {
             spellcheck="false"
             aria-describedby="runtime-notice project-note"
           />
-          <p id="project-note" class="mt-2 text-xs text-desk-muted">作为 Pi 的工作目录，主进程会校验是否为绝对目录；不持久化。</p>
-          <div class="mt-4 flex flex-wrap gap-2">
+          <div class="mt-2 flex flex-wrap items-center gap-3">
             <button
               type="button"
               class="control-button"
-              :disabled="runtimeStarting || runtimeReady || runtimeStopping || projectPath.trim() === ''"
+              :disabled="manualPath.trim() === '' || projectSwitching"
+              @click="useManualPath"
+            >
+              使用此路径
+            </button>
+            <p id="project-note" class="text-xs text-desk-muted">
+              主进程会解析符号链接并校验为存在的绝对目录。
+            </p>
+          </div>
+
+          <h3 class="mt-6 mb-2 text-sm font-medium">最近项目</h3>
+          <p v-if="projectListLoading" class="text-sm text-desk-muted">正在读取项目列表。</p>
+          <div v-else-if="projectListError" class="flex flex-wrap items-center gap-3">
+            <p role="alert" class="text-sm">{{ projectListError.message }}</p>
+            <button type="button" class="control-button" @click="projectStore.initialize()">
+              重试
+            </button>
+          </div>
+          <p v-else-if="projects.length === 0" class="text-sm text-desk-muted">尚无已保存的项目。</p>
+          <ul v-else class="space-y-2">
+            <li v-for="project in projects" :key="project.id">
+              <button
+                type="button"
+                class="w-full rounded-md border px-3 py-2 text-left"
+                :class="project.id === currentProjectId
+                  ? 'border-desk-accent bg-desk-canvas'
+                  : 'border-desk-line bg-desk-surface'"
+                :aria-current="project.id === currentProjectId ? 'true' : 'false'"
+                :disabled="projectSwitching"
+                @click="selectSavedProject(project.path)"
+              >
+                <span class="block text-sm font-medium">{{ project.name }}</span>
+                <span class="block break-words font-mono text-xs text-desk-muted">{{ project.path }}</span>
+              </button>
+            </li>
+          </ul>
+
+          <div class="mt-6 flex flex-wrap gap-2">
+            <button
+              type="button"
+              class="control-button"
+              :disabled="runtimeStarting || runtimeReady || runtimeStopping || currentProject === null"
               @click="launchRuntime"
             >
               启动 Runtime
@@ -261,6 +403,9 @@ onUnmounted(() => {
               关闭 Runtime
             </button>
           </div>
+          <p class="mt-2 text-xs text-desk-muted">
+            切换项目会先结束当前 Runtime；保存的项目不会自动启动。
+          </p>
         </section>
 
         <section class="panel" aria-labelledby="prompt-heading">

@@ -5,9 +5,6 @@
  * message-projection，IPC 契约与校验在 shared/runtime-api.ts。不接受页面传入的可执行
  * 文件路径或启动参数，旧 Runtime 的异步结果不得覆盖新状态。
  */
-import { stat } from 'node:fs/promises'
-import type { Stats } from 'node:fs'
-import { isAbsolute, resolve } from 'node:path'
 import type {
   ProjectionBatch,
   ProjectionResult,
@@ -22,6 +19,7 @@ import type { ProjectionStatusHint } from './message-projection'
 import { PiProcess, PiProcessError } from './pi-process'
 import type { PiExitEvent } from './pi-process'
 import { PiProtocol, toPromptDisposition, toRuntimeInfo } from './pi-protocol'
+import { ProjectPathError, normalizeProjectPath } from './project-path'
 
 /** get_state 就绪等待期限；超时只结束等待，不证明 Pi 没有响应。 */
 const READY_TIMEOUT_MS = 10_000
@@ -501,26 +499,18 @@ export class RuntimeManager {
     return parts.join(' ')
   }
 
-  /** 项目目录必须是存在的绝对目录，主进程不接受相对路径或其他启动参数。 */
+  /**
+   * 项目目录必须是存在的绝对目录，主进程不接受相对路径或其他启动参数。
+   * 归一化（含符号链接与平台短名解析）统一在 project-path.ts，这里只做错误码归类。
+   */
   private async checkProjectPath(projectPath: unknown): Promise<string> {
-    if (typeof projectPath !== 'string' || projectPath.trim() === '' || projectPath.includes('\u0000')) {
-      throw new RuntimeFailure('INVALID_PROJECT_PATH', '项目目录必须是非空的绝对路径。')
-    }
-    const trimmed = projectPath.trim()
-    if (!isAbsolute(trimmed)) {
-      throw new RuntimeFailure('INVALID_PROJECT_PATH', '项目目录必须是绝对路径。')
-    }
-    const absolute = resolve(trimmed)
-
-    let stats: Stats
     try {
-      stats = await stat(absolute)
-    } catch {
-      throw new RuntimeFailure('INVALID_PROJECT_PATH', `项目目录不存在：${absolute}`)
+      return await normalizeProjectPath(projectPath)
+    } catch (error) {
+      if (error instanceof ProjectPathError) {
+        throw new RuntimeFailure('INVALID_PROJECT_PATH', error.message)
+      }
+      throw error
     }
-    if (!stats.isDirectory()) {
-      throw new RuntimeFailure('INVALID_PROJECT_PATH', `项目路径不是目录：${absolute}`)
-    }
-    return absolute
   }
 }
