@@ -1,4 +1,4 @@
-<!-- 展示桌面连接与 Runtime 状态；项目目录只在本页输入，不持久化。 -->
+<!-- 展示桌面连接与 Runtime 状态，并提交 Prompt 请求；项目目录与 Prompt 内容只在本页输入，不持久化。 -->
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
 import { computed, onMounted, onUnmounted, ref } from 'vue'
@@ -8,7 +8,7 @@ import { useRuntimeStore } from './stores/runtime'
 const desktopStore = useDesktopStore()
 const runtimeStore = useRuntimeStore()
 const { connection } = storeToRefs(desktopStore)
-const { view: runtimeView } = storeToRefs(runtimeStore)
+const { view: runtimeView, promptView } = storeToRefs(runtimeStore)
 const projectPath = ref('')
 const prompt = ref('')
 const connectionLabel = computed(() => {
@@ -39,6 +39,18 @@ const runtimeInfo = computed(() => (
 const runtimeError = computed(() => (
   runtimeView.value.phase === 'failed' ? runtimeView.value.error : null
 ))
+const promptSending = computed(() => promptView.value.phase === 'sending')
+const promptError = computed(() => (
+  promptView.value.phase === 'error' ? promptView.value.error : null
+))
+const promptResult = computed(() => {
+  const current = promptView.value
+  if (current.phase === 'sending') return '正在提交 Prompt，等待 Pi 回应。'
+  if (current.phase !== 'accepted') return null
+  if (current.disposition === 'started') return 'Pi 已接受并开始执行；消息内容在后续任务展示。'
+  if (current.disposition === 'queued') return 'Pi 已将本次输入排队。'
+  return '本次输入已被处理，未发起新的 Agent run。'
+})
 
 function launchRuntime(): void {
   void runtimeStore.launch(projectPath.value)
@@ -46,6 +58,10 @@ function launchRuntime(): void {
 
 function shutdownRuntime(): void {
   void runtimeStore.shutdown()
+}
+
+function submitPrompt(): void {
+  void runtimeStore.send(prompt.value)
 }
 
 onMounted(() => {
@@ -71,7 +87,7 @@ onUnmounted(() => {
     </header>
 
     <p id="runtime-notice" class="mb-6 border-l-2 border-desk-accent pl-3 text-sm text-desk-muted">
-      当前只有桌面页面、只读应用信息接口与 Runtime 启停。不会发送 Prompt、不读取消息、不持久化项目。
+      当前可以启停 Runtime 并提交 Prompt。提交结果只表示接受或拒绝，不展示消息内容、不读取项目文件、不持久化项目。
     </p>
 
     <section
@@ -140,7 +156,7 @@ onUnmounted(() => {
       <p v-else-if="runtimeStopping" class="text-sm text-desk-muted">正在关闭 Pi 并等待进程退出。</p>
       <p v-else-if="runtimeClosed" class="text-sm text-desk-muted">Runtime 已正常关闭，可以重新启动。</p>
       <p v-else-if="runtimeStarting" class="text-sm text-desk-muted">正在启动 Pi 并等待 get_state 响应。</p>
-      <p v-else class="text-sm text-desk-muted">填写项目目录后启动 Runtime；发送 Prompt 在后续阶段接入。</p>
+      <p v-else class="text-sm text-desk-muted">填写项目目录后启动 Runtime，再提交 Prompt。</p>
     </section>
 
     <div class="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.25fr)]">
@@ -187,13 +203,28 @@ onUnmounted(() => {
             v-model="prompt"
             rows="6"
             class="text-control resize-y"
-            placeholder="发送 Prompt 在后续阶段接入。"
-            aria-describedby="runtime-notice"
+            placeholder="输入要发送给 Pi 的内容"
+            aria-describedby="runtime-notice prompt-status"
           ></textarea>
+          <p v-if="promptError" id="prompt-status" role="alert" class="mt-2 text-xs">
+            {{ promptError.message }}
+          </p>
+          <p v-else id="prompt-status" class="mt-2 text-xs text-desk-muted">
+            {{ promptResult ?? '提交结果会显示在这里；本阶段不展示消息内容。' }}
+          </p>
           <div class="mt-4 flex flex-wrap gap-2">
-            <button type="button" class="control-button" disabled aria-describedby="runtime-notice">发送</button>
+            <button
+              type="button"
+              class="control-button"
+              :disabled="!runtimeReady || prompt.trim() === '' || promptSending"
+              aria-describedby="prompt-status"
+              @click="submitPrompt"
+            >
+              发送
+            </button>
             <button type="button" class="control-button" disabled aria-describedby="runtime-notice">Stop</button>
           </div>
+          <p class="mt-2 text-xs text-desk-muted">Stop 与运行中状态在后续任务接入。</p>
         </section>
       </div>
 

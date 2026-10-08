@@ -4,7 +4,7 @@
  * 只处理记录分类与请求关联，不持有子进程、不知道 Runtime 业务状态、不缓存消息。
  * 超时只结束等待，不主张 Pi 没有执行该请求；进程退出或写入失败时收敛 pending。
  */
-import type { RuntimeInfo } from '../shared/runtime-api'
+import type { PromptDisposition, RuntimeInfo } from '../shared/runtime-api'
 
 export type PiRecordKind = 'response' | 'session-event' | 'extension-ui' | 'unknown'
 
@@ -66,6 +66,16 @@ function readModelLabel(value: unknown): string | null {
   if (provider !== null && modelId !== null) return `${provider}/${modelId}`
   if (modelId !== null) return modelId
   return typeof value.name === 'string' ? value.name : null
+}
+
+/** prompt 接受响应只承认三个合法 disposition；其他取值按响应契约不符处理。 */
+export function toPromptDisposition(data: unknown): PromptDisposition | null {
+  if (!isRecord(data)) return null
+  const { disposition } = data
+  if (disposition === 'started' || disposition === 'queued' || disposition === 'handled') {
+    return disposition
+  }
+  return null
 }
 
 /** 把 get_state 的 data 投影为页面需要的少量字段；缺少约定字段时返回 null。 */

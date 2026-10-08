@@ -1,4 +1,4 @@
-/** 管理唯一桌面窗口、本地资产边界，以及应用信息与 Runtime 启停 IPC、状态事件广播与退出编排。 */
+/** 管理唯一桌面窗口、本地资产边界，以及应用信息与 Runtime 启停、Prompt 提交 IPC、状态事件广播与退出编排。 */
 import { realpath } from 'node:fs/promises'
 import { extname, isAbsolute, relative, resolve, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -7,12 +7,13 @@ import type { IpcMainInvokeEvent } from 'electron'
 import { APP_INFO_CHANNEL } from '../shared/desktop-api'
 import type { AppInfoResult } from '../shared/desktop-api'
 import {
+  RUNTIME_PROMPT_CHANNEL,
   RUNTIME_START_CHANNEL,
   RUNTIME_STATUS_CHANNEL,
   RUNTIME_STOP_CHANNEL,
   RUNTIME_STATUS_EVENT
 } from '../shared/runtime-api'
-import type { RuntimeErrorCode, RuntimeResult, RuntimeStatus } from '../shared/runtime-api'
+import type { PromptResult, RuntimeErrorCode, RuntimeResult, RuntimeStatus } from '../shared/runtime-api'
 import { RuntimeManager } from './runtime-manager'
 
 const DEVELOPMENT_PAGE_URL = 'http://127.0.0.1:5173/'
@@ -172,6 +173,10 @@ function runtimeFailure(code: RuntimeErrorCode, message: string): RuntimeResult 
   return { ok: false, error: { code, message } }
 }
 
+function promptFailure(code: RuntimeErrorCode, message: string): PromptResult {
+  return { ok: false, error: { code, message } }
+}
+
 /** 只接受项目目录；不接受可执行文件路径、启动参数或任意 RPC 内容。 */
 function registerRuntimeHandlers(pageUrl: string): void {
   ipcMain.handle(
@@ -219,6 +224,32 @@ function registerRuntimeHandlers(pageUrl: string): void {
         return runtimeFailure('INVALID_REQUEST', '关闭 Runtime 接口不接受参数。')
       }
       return runtimeManager.stop()
+    }
+  )
+
+  /** 只接受 Prompt 文本；不接受可执行文件路径、启动参数、图片或排队选项。 */
+  ipcMain.handle(
+    RUNTIME_PROMPT_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<PromptResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return promptFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 1) {
+        return promptFailure('INVALID_REQUEST', '提交 Prompt 接口只接受一个消息对象。')
+      }
+      const request = args[0]
+      if (typeof request !== 'object' || request === null || Array.isArray(request)) {
+        return promptFailure('INVALID_REQUEST', '提交 Prompt 参数格式不正确。')
+      }
+      const fields = request as Record<string, unknown>
+      if (Object.keys(fields).some((key) => key !== 'message')) {
+        return promptFailure('INVALID_REQUEST', '提交 Prompt 参数包含未支持的字段。')
+      }
+      const message = fields.message
+      if (typeof message !== 'string') {
+        return promptFailure('INVALID_REQUEST', 'Prompt 内容必须是字符串。')
+      }
+      return runtimeManager.prompt(message)
     }
   )
 }

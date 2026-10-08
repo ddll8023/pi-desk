@@ -1,22 +1,35 @@
-/** 为沙箱页面提供应用信息、Runtime 启停方法与状态事件订阅，不暴露 Electron、任意 channel 或系统能力。 */
+/** 为沙箱页面提供应用信息、Runtime 启停方法、Prompt 提交与状态事件订阅，不暴露 Electron、任意 channel 或系统能力。 */
 import { contextBridge, ipcRenderer } from 'electron'
 import type { IpcRendererEvent } from 'electron'
 import { APP_INFO_CHANNEL, isAppInfoResult } from '../shared/desktop-api'
 import type { DesktopApi } from '../shared/desktop-api'
 import {
+  RUNTIME_PROMPT_CHANNEL,
   RUNTIME_START_CHANNEL,
   RUNTIME_STATUS_CHANNEL,
   RUNTIME_STOP_CHANNEL,
   RUNTIME_STATUS_EVENT,
+  isPromptResult,
   isRuntimeResult,
   isRuntimeStatus
 } from '../shared/runtime-api'
-import type { RuntimeApi, RuntimeResult, RuntimeStartRequest, RuntimeStatus } from '../shared/runtime-api'
+import type {
+  PromptResult,
+  RuntimeApi,
+  RuntimeResult,
+  RuntimeStartRequest,
+  RuntimeStatus
+} from '../shared/runtime-api'
 
 const INVALID_RUNTIME_RESPONSE = '桌面接口返回了无法识别的 Runtime 结果。'
+const INVALID_PROMPT_RESPONSE = '桌面接口返回了无法识别的 Prompt 结果。'
 
 function invalidRuntimeResponse(): RuntimeResult {
   return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_RUNTIME_RESPONSE } }
+}
+
+function invalidPromptResponse(): PromptResult {
+  return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_PROMPT_RESPONSE } }
 }
 
 const desktop: DesktopApi & RuntimeApi = {
@@ -45,6 +58,11 @@ const desktop: DesktopApi & RuntimeApi = {
   async stopRuntime() {
     const response: unknown = await ipcRenderer.invoke(RUNTIME_STOP_CHANNEL)
     return isRuntimeResult(response) ? response : invalidRuntimeResponse()
+  },
+
+  async sendPrompt(message: string) {
+    const response: unknown = await ipcRenderer.invoke(RUNTIME_PROMPT_CHANNEL, { message })
+    return isPromptResult(response) ? response : invalidPromptResponse()
   },
 
   onRuntimeStatusChanged(listener: (status: RuntimeStatus) => void) {

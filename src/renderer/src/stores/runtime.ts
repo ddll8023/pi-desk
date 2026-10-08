@@ -1,9 +1,10 @@
-/** 保存 Runtime 页面的展示状态、订阅与启停动作，不持有 Runtime 所有权或消息投影。 */
+/** 保存 Runtime 页面的展示状态、订阅与启停、Prompt 提交动作，不持有 Runtime 所有权或消息投影。 */
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import type { RuntimeError, RuntimeStatus } from '../../../shared/runtime-api'
+import type { PromptDisposition, RuntimeError, RuntimeStatus } from '../../../shared/runtime-api'
 import {
   getRuntimeStatus,
+  sendPrompt,
   startRuntime,
   stopRuntime,
   subscribeRuntimeStatus
@@ -17,8 +18,15 @@ type RuntimeViewState =
   | { phase: 'closed' }
   | { phase: 'failed'; error: RuntimeError }
 
+type PromptViewState =
+  | { phase: 'idle' }
+  | { phase: 'sending' }
+  | { phase: 'accepted'; disposition: PromptDisposition }
+  | { phase: 'error'; error: RuntimeError }
+
 export const useRuntimeStore = defineStore('runtime', () => {
   const view = ref<RuntimeViewState>({ phase: 'idle' })
+  const promptView = ref<PromptViewState>({ phase: 'idle' })
   let releaseSubscription: (() => void) | null = null
 
   /** 先订阅再取当前快照，避免初始化期间漏掉状态变化。 */
@@ -72,6 +80,17 @@ export const useRuntimeStore = defineStore('runtime', () => {
     applyStatus(result.data)
   }
 
+  /** 提交 Prompt；只有就绪状态才发起，发送中不重复提交。 */
+  async function send(message: string): Promise<void> {
+    if (view.value.phase !== 'ready' || promptView.value.phase === 'sending') return
+
+    promptView.value = { phase: 'sending' }
+    const result = await sendPrompt(message)
+    promptView.value = result.ok
+      ? { phase: 'accepted', disposition: result.data.disposition }
+      : { phase: 'error', error: result.error }
+  }
+
   /** 主进程快照是唯一真相：事件通知与查询结果都经这里映射为展示状态。 */
   function applyStatus(status: RuntimeStatus): void {
     if (status.state === 'failed') {
@@ -100,5 +119,5 @@ export const useRuntimeStore = defineStore('runtime', () => {
     view.value = status.runtimeId === null ? { phase: 'idle' } : { phase: 'closed' }
   }
 
-  return { view, initialize, dispose, launch, shutdown }
+  return { view, promptView, initialize, dispose, launch, shutdown, send }
 })

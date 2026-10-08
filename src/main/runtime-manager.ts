@@ -1,5 +1,5 @@
 /**
- * 唯一 Runtime 的所有者：状态机、启停编排与状态快照。
+ * 唯一 Runtime 的所有者：状态机、启停编排、受限业务操作与状态快照。
  *
  * 不管理 Pi Session 或消息；进程与管道操作交给 pi-process，IPC 契约与校验在
  * shared/runtime-api.ts。不接受页面传入的可执行文件路径或启动参数，旧 Runtime
@@ -8,13 +8,25 @@
 import { stat } from 'node:fs/promises'
 import type { Stats } from 'node:fs'
 import { isAbsolute, resolve } from 'node:path'
-import type { RuntimeErrorCode, RuntimeResult, RuntimeStatus } from '../shared/runtime-api'
+import type {
+  PromptDisposition,
+  PromptResult,
+  RuntimeErrorCode,
+  RuntimeResult,
+  RuntimeStatus
+} from '../shared/runtime-api'
 import { PiProcess, PiProcessError } from './pi-process'
 import type { PiExitEvent } from './pi-process'
-import { PiProtocol, toRuntimeInfo } from './pi-protocol'
+import { PiProtocol, toPromptDisposition, toRuntimeInfo } from './pi-protocol'
 
 /** get_state 就绪等待期限；超时只结束等待，不证明 Pi 没有响应。 */
 const READY_TIMEOUT_MS = 10_000
+
+/** prompt 只等待 preflight 的期限；超时只结束等待，结果未知且不自动重发。 */
+const PROMPT_TIMEOUT_MS = 30_000
+
+/** prompt 文本上限，按 UTF-8 字节计。 */
+const PROMPT_MAX_BYTES = 1_048_576
 
 /** 失败时回传给页面的诊断行数上限。 */
 const DIAGNOSTIC_TAIL_LINES = 6
@@ -80,6 +92,22 @@ export class RuntimeManager {
   /** 状态快照查询只读，不触发进程操作。 */
   getStatus(): RuntimeResult {
     return { ok: true, data: { ...this.snapshot } }
+  }
+
+  /**
+   * 提交 prompt 并返回请求接受或拒绝结果；不等待 Agent 执行结束。
+   * busy、无模型与凭据问题一律由 Pi 的拒绝表达，主进程不做本地 streaming 预检。
+   */
+  async prompt(message: string): Promise<PromptResult> {
+    try {
+      return { ok: true, data: { disposition: await this.submitPrompt(message) } }
+    } catch (error) {
+      const failure = error instanceof RuntimeFailure
+        ? error
+        : new RuntimeFailure('INTERNAL_ERROR', '提交 Prompt 时发生未预期的内部错误。')
+      // 请求失败不改写 Runtime 快照；进程真的退出时由退出路径负责收敛状态。
+      return { ok: false, error: { code: failure.code, message: failure.message } }
+    }
   }
 
   /**
@@ -221,6 +249,56 @@ export class RuntimeManager {
     }
   }
 
+  /** 校验 prompt 文本并发送；只返回 disposition，不做本地 busy 判定。 */
+  private async submitPrompt(message: string): Promise<PromptDisposition> {
+    const runtime = this.active
+    if (runtime === null || this.snapshot.state !== 'ready') {
+      throw new RuntimeFailure('RUNTIME_NOT_READY', 'Runtime 尚未就绪，无法提交 Prompt；请先启动 Runtime。')
+    }
+    if (message.trim() === '') {
+      throw new RuntimeFailure('INVALID_REQUEST', 'Prompt 内容不能为空。')
+    }
+    if (Buffer.byteLength(message, 'utf8') > PROMPT_MAX_BYTES) {
+      throw new RuntimeFailure('INVALID_REQUEST', `Prompt 内容超过 ${PROMPT_MAX_BYTES} 字节上限。`)
+    }
+
+    const outcome = await runtime.protocol.request(
+      { type: 'prompt', message },
+      (line) => runtime.process.write(line),
+      PROMPT_TIMEOUT_MS
+    )
+
+    if (outcome.status === 'timeout') {
+      throw new RuntimeFailure(
+        'RUNTIME_TIMEOUT',
+        `Pi 在 ${PROMPT_TIMEOUT_MS} 毫秒内没有回应本次 Prompt；结果未知，不会自动重发。`
+      )
+    }
+    if (outcome.status === 'closed') {
+      throw new RuntimeFailure(
+        'RUNTIME_EXITED',
+        this.describeFailure(
+          runtime.process.exitEvent,
+          runtime.process,
+          outcome.reason,
+          'Pi 进程在本次 Prompt 期间结束了标准输入。'
+        )
+      )
+    }
+    if (!outcome.response.success) {
+      throw new RuntimeFailure(
+        'PROMPT_REJECTED',
+        `Pi 拒绝了本次 Prompt：${outcome.response.error ?? '未提供错误信息'}`
+      )
+    }
+
+    const disposition = toPromptDisposition(outcome.response.data)
+    if (disposition === null) {
+      throw new RuntimeFailure('RUNTIME_PROTOCOL_ERROR', 'prompt 响应缺少约定的 disposition 字段。')
+    }
+    return disposition
+  }
+
   /** 退出结果只在该 Runtime 仍是当前代际时生效。 */
   private handleExit(runtimeId: number, event: PiExitEvent): void {
     const runtime = this.active
@@ -255,10 +333,11 @@ export class RuntimeManager {
   private describeFailure(
     event: PiExitEvent | null,
     piProcess: PiProcess | null,
-    reason: string | null
+    reason: string | null,
+    missingExitMessage = 'Pi 进程在就绪前结束。'
   ): string {
     const parts: string[] = []
-    parts.push(event === null ? 'Pi 进程在就绪前结束。' : describeExit(event))
+    parts.push(event === null ? missingExitMessage : describeExit(event))
     if (reason !== null && reason.trim() !== '') parts.push(reason)
     const diagnostics = (piProcess?.readDiagnostics() ?? []).slice(-DIAGNOSTIC_TAIL_LINES)
     if (diagnostics.length > 0) parts.push(`最近诊断：${diagnostics.join(' | ')}`)
