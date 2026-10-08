@@ -25,7 +25,7 @@
 
 **范围**：Electron、Vue 3、TypeScript、Vite、Tailwind CSS、Pinia 的最小配置；主进程入口、sandboxed preload 与统一前端服务入口。明确 contextIsolation 和 sandbox 开启、nodeIntegration 关闭、webSecurity 保持开启；建立固定业务 IPC 入口、调用者校验和本地页面/CSP 边界，不暴露原始 ipcRenderer 或通用系统能力。只建立立即使用的结构，不创建 Session、认证或插件空模块。
 
-**当前实现**：单页展示桌面桥接连接状态与应用信息；桥接连接成功不表示 Pi 就绪。页面输入不持久化，项目目录在启动 Runtime 时由主进程校验。Runtime 启动与状态展示见 P1-03；关闭见 P1-04，发送见 P1-05；Stop 控件仍禁用，文本、Thinking、工具与 Runtime 诊断区域仅展示空状态，不模拟 Pi 输出。
+**当前实现**：单页展示桌面桥接连接状态与应用信息；桥接连接成功不表示 Pi 就绪。页面输入不持久化，项目目录在启动 Runtime 时由主进程校验。Runtime 启动与状态展示见 P1-03；关闭见 P1-04，发送见 P1-05；Stop 控件仍禁用；文本与 Thinking 区域展示主进程投影的消息（见 P1-06），工具与 Runtime 诊断区域仍为空状态，不模拟 Pi 输出。
 
 **构建与页面**：配置见根目录 `electron.vite.config.ts`，依赖版本以 `package.json` 为准。
 
@@ -117,11 +117,11 @@
 | `INTERNAL_ERROR` | 其他内部失败 |
 | `INVALID_RESPONSE`、`BRIDGE_UNAVAILABLE`、`BRIDGE_CALL_FAILED` | Preload 与前端侧的桥接校验失败 |
 
-**主进程落点**：三类职责分别落在 `src/main/pi-process.ts`、`src/main/pi-protocol.ts`、`src/main/runtime-manager.ts`；IPC 注册与调用者校验在 `src/main/index.ts` 接线，受限方法由 `src/preload/index.ts` 暴露。
+**主进程落点**：三类职责分别落在 `src/main/pi-process.ts`、`src/main/pi-protocol.ts`、`src/main/runtime-manager.ts`（消息投影在 P1-06 拆到 `src/main/message-projection.ts`）；IPC 注册与调用者校验在 `src/main/index.ts` 接线，受限方法由 `src/preload/index.ts` 暴露。
 
 **状态与边界**：状态为 `idle`、`starting`、`ready`、`stopping`、`failed`（`stopping` 与关闭链见 P1-04），就绪快照只投影模型、Thinking 级别、Session 标识、消息数与 streaming 标志。`get_state` 等待期限为 10 秒；单条 stdout 记录上限 8 MiB（按解码后字符数计），超限按协议错误处理；stderr 只保留最近 40 行、单行截断到 400 字符。本项不开放事件订阅、Prompt、Stop 与重启；关闭唯一窗口时先关闭 Pi 的 stdin 请求其自行有序退出，等待退出期限与平台定向进程树终止见 P1-04。
 
-**当前状态**：主进程、受限 preload 方法与最小页面已按上述参数与契约接入启动链；Streaming、Tool 与 Stop 仍为禁用空状态。
+**当前状态**：主进程、受限 preload 方法与最小页面已按上述参数与契约接入启动链；Tool 与 Stop 仍为禁用空状态。
 
 ### P1-04 Runtime 生命周期
 
@@ -178,6 +178,14 @@ Windows 采用系统 taskkill 定向终止当前受管 Pi 进程树；macOS 建�
 **范围**：在发送前完成事件订阅；主进程按内容块重建临时投影，以块结束内容与完整 `message_end.message` 校正，处理用户消息、执行错误和最终消息，使用 `agent_settled` 收敛 busy 状态。渲染进程展示定向更新、释放监听并隔离旧 Runtime 事件；重新订阅时取得投影与序列基点。
 
 采用有界批次和渲染端应用确认控制未确认通知，落后时从投影重新同步，不无限缓存原始事件，也不为等 UI 暂停消费 Pi stdout。展示更新按语义合并，不丢弃最终消息、错误和运行终态；展示超限明确标示截断，协议超限或失同步明确报错，不能伪装为完整内容。第一阶段不增加 MessagePort 通道。
+
+**接口与事件**：`window.desktop.getRuntimeProjection()` 对应 `desktop:runtime-projection`，返回投影快照；`window.desktop.ackRuntimeProjection(runtimeId, seq)` 对应 `desktop:runtime-projection-ack`，只控制未确认通知窗口；批次经 `desktop:runtime-projection-changed` 单向推送，载荷是带 Runtime 代际标识与序号的投影批次。契约与响应校验见 `src/shared/runtime-api.ts`；投影模型、批次节拍、未确认窗口、重同步与上限常数见开发总览第 6.2 节。
+
+**决策**：投影重建展示片段而不是转发原始事件；批次携带单调序号，渲染端以应用确认控制未确认窗口，遇到序号缺口、长度不变式不符或重同步标记时以快照全量重同步，不猜测补齐；状态变化与投影批次保持两条独立通道；投影只保留当前 Runtime 代际，Runtime 结束即清空；busy 由 `agent_start`/`agent_settled` 收敛，为 `RuntimeInfo.isStreaming` 提供事件来源。非 `user`/`assistant` 角色的消息不进入投影，工具执行结果属 P1-07。
+
+**落点**：投影状态机在 `src/main/message-projection.ts`，批次订阅与状态提示合并在 `src/main/runtime-manager.ts`，IPC 注册与校验在 `src/main/index.ts`，受限方法由 `src/preload/index.ts` 暴露，前端入口在 `src/renderer/src/services/runtime.ts` 与 `src/renderer/src/stores/runtime.ts`，页面在 `src/renderer/src/App.vue`。
+
+**当前状态**：页面、preload 方法、主进程投影与批次、渲染端同步与截断标示已按上述契约接入；工具与诊断面板仍为空状态。
 
 **依赖**：P1-05。
 

@@ -60,7 +60,7 @@ Desktop 仅维护自己的数据：最近项目、窗口尺寸、Sidebar 状态�
 
 项目根目录：`H:\code\pi-desk`。
 
-仓库包含开发文档、Electron/Vue 最小骨架、三端构建与 TypeScript 配置、统一前端服务入口、展示状态 Store，以及 Pi Runtime 的准备脚本与固定版本清单。当前页面可经受限 preload API 读取应用信息、启停 Pi RPC sidecar、接收状态变化并提交 Prompt；Streaming、Tool 与 Stop 仍在后续任务接入，不读取项目内容、不展示消息、不持久化消息。
+仓库包含开发文档、Electron/Vue 最小骨架、三端构建与 TypeScript 配置、统一前端服务入口、展示状态 Store，以及 Pi Runtime 的准备脚本与固定版本清单。当前页面可经受限 preload API 读取应用信息、启停 Pi RPC sidecar、接收状态变化、提交 Prompt 并展示本轮文本与 Thinking；Tool 与 Stop 仍在后续任务接入，不读取项目内容、不持久化消息。
 
 开发使用 npm，工具版本由 `package.json` 的 `packageManager` 字段声明，直接依赖使用精确版本。`package.json` 是依赖声明的维护位置，完整依赖树由安装生成的 `package-lock.json` 固定，不手写锁文件。依赖安装属于独立授权操作。
 
@@ -328,13 +328,14 @@ Runtime 与 Session 不是同一个对象；正式版本的一个 Project 可以
 
 主进程直接使用 `child_process.spawn` 启动应用携带的固定 Pi executable，不经过 shell。`utilityProcess.fork` 面向 Node.js 脚本且自身 stdin 不支持所需管道模式，不能直接替代外部 Pi executable；增加该层还需由辅助进程再次 spawn Pi。第一阶段不增加这层进程，后续仅在处理负载确有需要时重新讨论。
 
-最初保持三类职责，不机械拆出大量空模块：
+最初保持少量职责，不机械拆出大量空模块：
 
 | 职责 | 负责内容 |
 | --- | --- |
 | Manager | 唯一 Runtime、状态转换、请求关联、受限业务操作、窗口归属、退出编排 |
 | Process | 固定 sidecar、cwd、三个管道、进程等待与平台回收 |
-| Protocol | 请求与 response 校验、JSONL framing、事件分类、临时消息投影与通知同步 |
+| Protocol | 请求与 response 校验、JSONL framing、事件分类与请求关联 |
+| Projection | 临时消息重建、批次与序号、应用确认窗口、快照与截断边界 |
 
 #### 管道与请求
 
@@ -346,7 +347,17 @@ Runtime 与 Session 不是同一个对象；正式版本的一个 Project 可以
 - 超时只结束等待，不证明 Pi 没有执行，不自动重发 prompt；进程退出、写入失败和初始化失败时收敛 pending 请求并释放资源。
 - 解析错误产生明确诊断并按 LF 恢复记录边界；无法保持投影一致时不能继续显示为正常完整结果。超长记录和持续异常输出设处理边界，必要时可控关闭 Runtime，不能无限缓存或静默丢弃增量。
 - 对有效但暂不支持的事件分类处理，不因未知事件名直接崩溃，也不把独立 Extension UI 记录当作普通文本。
-- Prompt 提交走固定业务方法，主进程只接受 `message` 字段并重新校验：必须是字符串、去空白后非空、UTF-8 字节数不超过 1 048 576；主进程自行构造 `{type:"prompt",message}`，不接受图片或排队选项。等待期限 30 000 毫秒只覆盖 preflight，超时返回结果未知且不自动重发。Runtime 不是 `ready` 时提交返回 `RUNTIME_NOT_READY`；Pi 以 `success: false` 拒绝时返回 `PROMPT_REJECTED` 并带 Pi 的原因文本，disposition 取值不符契约时按 `RUNTIME_PROTOCOL_ERROR` 处理。busy 判定完全以 Pi 的拒绝为准，主进程不做本地 streaming 预检，也不维护本地运行中标志（`agent_settled` 收敛属 P1-06）。
+- Prompt 提交走固定业务方法，主进程只接受 `message` 字段并重新校验：必须是字符串、去空白后非空、UTF-8 字节数不超过 1 048 576；主进程自行构造 `{type:"prompt",message}`，不接受图片或排队选项。等待期限 30 000 毫秒只覆盖 preflight，超时返回结果未知且不自动重发。Runtime 不是 `ready` 时提交返回 `RUNTIME_NOT_READY`；Pi 以 `success: false` 拒绝时返回 `PROMPT_REJECTED` 并带 Pi 的原因文本，disposition 取值不符契约时按 `RUNTIME_PROTOCOL_ERROR` 处理。busy 判定完全以 Pi 的拒绝为准，主进程不做本地 streaming 预检；运行中状态由事件流的 `agent_start`/`agent_settled` 收敛（见下文临时投影与通知契约），不用于预测性拦截。
+
+#### 临时投影与通知契约
+
+- 投影只重建 `user` 与 `assistant` 角色消息的 text、thinking 与 toolcall 内容块；工具结果、压缩、重试与队列事件不进入展示投影，图片不进入投影。界面展示的是 Pi 会话消息的子集，不是完整历史。
+- Pi 的 wire 消息没有 id，投影为每条消息生成 Desktop 侧的稳定标识，块按 `contentIndex` 对齐：`message_start` 建消息，`text_delta`/`thinking_delta` 累积，`text_end`/`thinking_end`/`toolcall_end` 用权威内容校正，`message_end.message` 整条替换；未知角色、未知子类型与未知事件名一律忽略。
+- 批次：距上次发送满 100 毫秒或积压 64 条更新即发送，消息开始与终态事件立即发送；批次带 Runtime 代际标识与单调序号。
+- 更新形态：流式内容为“追加文本 + 追加后块总长度”，块结束与整条消息为权威内容；渲染端只在长度不变式成立时应用，不符即换取快照，不猜测补齐。
+- 同步：渲染端应用后回应用确认；主进程保留 32 个未确认批次，超出即作废增量并发出重同步标记。渲染端遇到序号缺口、重同步标记或尚未取得基准时调用快照接口全量替换，快照是唯一基准。
+- 上限：单块 256 KiB、投影文本总量 4 MiB、保留 200 条消息；触及上限时从最旧开始丢弃并计数，界面明确标示截断与省略条数，不伪装成完整内容。
+- 主进程始终消费 stdout，不为等待渲染端确认而暂停读取 Pi。
 
 #### IPC 请求响应与事件流
 
@@ -358,7 +369,7 @@ prompt 返回表示接受、排队或处理结果，不等待 Agent 执行结束
 
 Runtime 代际、事件序列和同步元数据放在 Desktop envelope 中，不添加到 Pi 原始记录冒充官方字段。旧 Runtime 的异步结果不得覆盖新状态。展示更新可以按语义合并，最终消息、错误与运行终态不得因合并而丢失。
 
-Pi 管道背压与 UI 通知背压分开处理：采用有界批次与渲染端应用确认，限制未确认通知；渲染端落后时从临时投影重新同步，不为等 UI 而暂停读取 Pi。展示输出超限时明确标示截断，不伪装为完整内容。具体缓存预算、期限和批次契约在开发阶段确定。
+Pi 管道背压与 UI 通知背压分开处理：采用有界批次与渲染端应用确认，限制未确认通知；渲染端落后时从临时投影重新同步，不为等 UI 而暂停读取 Pi。展示输出超限时明确标示截断，不伪装为完整内容。具体批次节拍、未确认窗口与缓存上限见上文“临时投影与通知契约”。
 
 第一阶段使用定向 IPC 事件，不增加 MessagePort 通道；MessagePort 本身也不代替应用层流量控制。
 
@@ -384,7 +395,7 @@ Windows 使用系统 `taskkill` 对当前受管 Pi 进程树定向终止，不�
 - 简单结构化工具参数、输出和错误。
 - 有界的临时诊断展示。
 
-组件通过统一前端服务入口调用受限 preload API，Pinia 管理本页面共享的展示状态。消息重建与 Runtime 所有权归主进程，前端不直接访问 ipcRenderer，不提供任意 RPC JSON 的通用发送入口。Prompt 发送只展示请求接受或拒绝；运行中状态与消息展示在 P1-06 接入事件流后补齐。
+组件通过统一前端服务入口调用受限 preload API，Pinia 管理本页面共享的展示状态。消息重建与 Runtime 所有权归主进程，前端不直接访问 ipcRenderer，不提供任意 RPC JSON 的通用发送入口。Prompt 发送只展示请求接受或拒绝；运行中状态由 `agent_start`/`agent_settled` 收敛，消息展示来自主进程投影批次，页面在失去同步时标示同步中或截断，不自行拼装历史。
 
 ### 6.4 实现顺序
 
@@ -461,7 +472,7 @@ Project 的基础属性为 `id`、`name`、`path`、`lastOpenedAt`。采用轻�
 1. 完整依赖树锁定、Windows build 18363 约束，以及 Electron、固定 Pi 与 helper 共同约束下的 macOS 最低版本；后续依赖调整继续考虑 Electron 的维护状态。
 2. 避免需要本地编译的原生依赖；Pi/helper 的运行库需求、挂起重启与延迟清理对开发环境的影响。需要新增工具链时单独取得授权。
 3. 正式签名、公证与安装包配置，按发行步骤确定；staging 路径、三目标文件选择与 package 根/executable 邻接映射已在 P1-02 确定（见第 4 节）。
-4. 临时消息投影和通知确认的具体契约，以及管道边界、缓存预算和请求期限；Runtime 启停与状态通知的 IPC 业务结果、代际隔离已在 P1-03 与 P1-04 确定，Prompt 请求的入参上限、等待期限与错误分类已在 P1-05 确定（见第 6.2 节）。不建立平行 Session 数据库。
+4. 工具执行结果与 Extension UI 进入展示投影的边界，以及后续阶段的消息历史读取方式；临时消息投影与通知确认契约已在 P1-06 确定（见第 6.2 节），管道边界在 P1-03 确定，请求期限在 P1-05 确定。不建立平行 Session 数据库。
 5. 不同启动 profile 下现有模型与凭据的可用性（启动参数已在 P1-03 确定）；只读取必要配置，不输出秘密。
 6. Windows 与 macOS 的进程树终止已按平台实现（见 6.2 节）；macOS 分支只在 macOS 主机上生效。保留尽力回收边界，不以关闭主 Pi 进程等同于完整进程树回收。
 7. 第二阶段 Session 列表的接入方式，以及跨项目 Session 切换对 cwd 与资源重建的影响。
