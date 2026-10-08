@@ -58,32 +58,20 @@ Desktop 仅维护自己的数据：最近项目、窗口尺寸、Sidebar 状态�
 
 ## 3. 当前项目与环境
 
-项目根目录：`H:\code\pi-desk`。
+开发在 Windows 与 macOS 主机上交替进行，文档不绑定某一平台，也不固定绝对路径；仓库可检出到任意位置，以下路径与命令均以项目根目录为基准。
 
 仓库包含开发文档、Electron/Vue 最小骨架、三端构建与 TypeScript 配置、统一前端服务入口、展示状态 Store，以及 Pi Runtime 的准备脚本与固定版本清单。当前页面可经受限 preload API 读取应用信息、选择并记住本地项目、列出并打开该项目的 Pi 会话、启停 Pi RPC sidecar、接收状态变化、提交 Prompt、展示本轮文本与 Thinking、查看工具执行并中止当前操作；不读取项目内容、不持久化消息。
 
 开发使用 npm，工具版本由 `package.json` 的 `packageManager` 字段声明，直接依赖使用精确版本。`package.json` 是依赖声明的维护位置，完整依赖树由安装生成的 `package-lock.json` 固定，不手写锁文件。依赖安装属于独立授权操作。
 
-已确认的本机环境：
+开发环境与约束：
 
-| 项目 | 状态 |
-| --- | --- |
-| 系统与架构 | Windows 10 专业版（build 18363）、x64 |
-| Node.js | `24.18.0` |
-| npm | `11.16.0` |
-| Git | `2.55.0.windows.3` |
-| winget | 可用 |
-| Rust、Cargo、rustup、Bun | 未安装，不作为本方案前置条件 |
-| C++ 编译链 | Visual Studio Build Tools、MSVC、Windows SDK 已卸载，当前没有该编译链 |
-| VC++ 运行时与重启 | 已执行卸载，部分登记键和 DLL 存在延迟清理；系统有挂起重启操作 |
-| WebView2 Runtime | 已安装，与 Electron 自带 Chromium 无关 |
-| 本机 Pi npm 包 | `@earendil-works/pi-coding-agent`，版本 `1.0.4` |
+- 开发主机可能是 Windows，也可能是 macOS；单一主机的系统版本与已装工具不作为项目前提，文档不记录某一台机器的环境清单。
+- Node.js 与 npm 用于开发与打包，版本以 `package.json` 的 `packageManager` 字段为准。安装后的 Electron 使用自身携带的 Node.js 与 Chromium，Pi standalone 也不依赖全局 Node.js；全局 Node.js 版本不是 Electron 的运行时版本。
+- 不需要 Rust、Cargo、rustup 或 Bun。
+- 第一阶段避免需要本地编译的原生依赖，使用官方预编译 Electron 与 Pi，不自行编译二者。若后续依赖需要 node-gyp 编译，须按主机与目标平台准备对应的本地编译链与 Python（Windows 为 MSVC 与 Windows SDK，macOS 为 Xcode Command Line Tools），并单独取得安装授权。预编译 Pi 与 native helper 的运行库需求在相应开发步骤按目标核实，不将本机残留的运行库文件视为可靠前置条件。
 
-本机 Node.js/npm 用于开发与打包；安装后的 Electron 使用自身携带的 Node.js 与 Chromium，Pi standalone 也不依赖全局 Node.js。全局 Node.js 版本不是 Electron 的运行时版本。
-
-第一阶段避免需要本地编译的原生依赖，使用官方预编译 Electron 与 Pi，不自行编译二者。若后续依赖需要 node-gyp 编译，必须重新准备 MSVC、Windows SDK 和所需 Python，并单独取得安装授权。预编译 Pi 与 native helper 的运行库需求也需在相应开发步骤核实，不能把待清理的 VC++ DLL 作为可靠前置条件。
-
-当前依赖声明采用 Electron 44 系列，其 macOS 下限为 13。Electron 官方 Windows 平台说明列出 Windows 10 及以上，但未细化到 build 18363，不能据此推定该 build 与运行库满足要求。Electron、固定 Pi 与 helper 的共同系统和运行库约束在对应开发任务中核实，不为旧系统退回停止维护的版本。Windows 10 1909 专业版已结束服务；能否启动与操作系统安全支持是不同问题。
+当前依赖声明采用 Electron 44 系列，其 macOS 下限为 13；Electron 官方平台说明列出 Windows 10 及以上。两个平台的系统与运行库约束在对应开发任务中核实，不为兼容旧系统退回停止维护的版本，也不以本机现有状态推定目标平台满足约束。
 
 ## 4. Pi binary 与 Electron 打包
 
@@ -391,7 +379,7 @@ Pi 管道背压与 UI 通知背压分开处理：采用有界批次与渲染端�
 
 - 会话文件由 Pi 管理：根目录是 `<agent-dir>/sessions/`（`agent-dir` 由 `PI_CODING_AGENT_DIR` 指定，默认 `~/.pi/agent`），按工作目录分组为 `--<路径 munged>--/`（去掉路径开头的分隔符后把 `/`、`\`、`:` 换成 `-`），文件名是 `<ISO 时间>_<会话 id>.jsonl`，同名 `.jsonl.timings.json` 侧车不参与列表。主进程显式传 `--session-dir` 指定该根目录，不读取 `PI_CODING_AGENT_SESSION_DIR` 与 `sessionDir` 设置。
 - 列表只读会话文件：每轮 `readdir` 后按文件大小与修改时间命中缓存，未命中时做一次 256 KiB 有界读取，取首行头部（`type`、`id`、`timestamp`、`cwd`）与首条用户消息开头（预览截断为 120 字符，取不到为 null）。条目字段为 `sessionId`、`createdAt`、`updatedAt`、`sizeBytes` 与预览，按最后修改时间降序，最多 100 条；超出的条数与「头部 `cwd` 与当前项目不符或无法解析」的文件数量分别计数，界面如实标示。
-- 分组目录名会歧义（`H:\a-b` 与 `H:\a\b` 相同），因此会话归属以头部 `cwd` 与当前项目规范路径的比较结果为准；Windows 折叠大小写，其他平台严格比较。
+- 分组目录名会歧义（`<根>/a-b` 与 `<根>/a/b` 经 munge 后同名），因此会话归属以头部 `cwd` 与当前项目规范路径的比较结果为准；Windows 折叠大小写，其他平台严格比较。
 - 打开与新建一律重启 Runtime：先校验目标会话存在且属于当前项目，再复用本节关闭链结束旧 Runtime，确认回到 `idle` 后以 `--session-id <id>`（恢复）或不带该参数（新建）启动；请求的会话与已就绪 Runtime 一致时幂等返回。Runtime 处于 `starting`/`stopping`，或 `ready` 且 `isStreaming` 为真而请求未带 `allowInterrupt` 时返回 `SESSION_SWITCH_BLOCKED` 且不中断任何操作；不排队、不重放。不使用 RPC 的 `switch_session` 与 `new_session`，保持一个 Runtime 代际对应一个会话。
 - 恢复会话时在发布就绪前请求 `get_messages`，把历史消息按整条替换规则灌入临时投影作为基准；读取历史消息的等待上限是 15 000 毫秒，超时或失败按启动失败处理，不显示不完整的历史，截断与上限沿用临时投影契约。
 - 通道：`desktop:session-list`（零参数，基于当前项目）与 `desktop:session-open`（只接受 `{ sessionId, allowInterrupt }`，`sessionId` 为 null 表示新建，非 null 时只接受 Pi 允许的字符集：字母、数字、`.`、`_`、`-`）。新增错误码 `SESSION_NOT_FOUND`（目标会话不存在，或 Pi 实际打开的会话与请求不一致）与 `SESSION_SWITCH_BLOCKED`；其余复用 Runtime 错误码族。会话文件路径不跨 IPC 交给页面。
@@ -461,7 +449,7 @@ Trust 不完全覆盖启动行为：官方代码在 trust 决定前会读取项�
 
 后续 Project Trust UI 在 Pi 启动前取得用户决定，通过正式 CLI 参数传递；持久决定的方式在第三阶段另行核实。Extension 对话在未支持时不能被自动肯定；第一阶段直接不启用 Extensions。
 
-### 7.3 Windows Shell
+### 7.3 平台 Shell 与工具集合
 
 Pi 1.0.4 已提供官方 `powershell` 工具：
 
@@ -492,8 +480,8 @@ Project 的基础属性为 `id`、`name`、`path`、`lastOpenedAt`；本地配�
 
 ## 9. 待解决问题
 
-1. 完整依赖树锁定、Windows build 18363 约束，以及 Electron、固定 Pi 与 helper 共同约束下的 macOS 最低版本；后续依赖调整继续考虑 Electron 的维护状态。
-2. 避免需要本地编译的原生依赖；Pi/helper 的运行库需求、挂起重启与延迟清理对开发环境的影响。需要新增工具链时单独取得授权。
+1. 完整依赖树锁定，以及 Electron、固定 Pi 与 helper 在 Windows 与 macOS 上共同约束的系统与运行库最低版本；后续依赖调整继续考虑 Electron 的维护状态。
+2. 避免需要本地编译的原生依赖；Pi/helper 在各目标平台的运行库需求。需要新增工具链时单独取得授权。
 3. 正式签名、公证与安装包配置，按发行步骤确定；staging 路径、三目标文件选择与 package 根/executable 邻接映射已在 P1-02 确定（见第 4 节）。
 4. Extension UI 进入展示投影的边界；消息历史的读取方式已在 P2-02 确定（`get_messages` 初始化投影，见第 6.2 节）。临时消息投影与通知确认契约已在 P1-06 确定，工具执行进入展示投影的边界与中止契约已在 P1-07 确定（均见第 6.2 节），管道边界在 P1-03 确定，请求期限在 P1-05 确定。不建立平行 Session 数据库。
 5. 不同启动 profile 下现有模型与凭据的可用性（启动参数已在 P1-03 确定）；只读取必要配置，不输出秘密。
@@ -541,4 +529,3 @@ Pi 事实以固定 `v1.0.4` 为引用基线；Electron、Node.js 和打包器资
 - [Electron Forge 构建生命周期](https://www.electronforge.io/core-concepts/build-lifecycle)
 - [Windows taskkill](https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/taskkill)
 - [Windows Job Objects](https://learn.microsoft.com/en-us/windows/win32/procthread/job-objects)
-- [Windows 10 1909 专业版服务结束](https://learn.microsoft.com/en-us/lifecycle/announcements/windows-10-1909-end-of-servicing)

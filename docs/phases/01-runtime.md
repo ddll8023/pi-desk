@@ -10,10 +10,10 @@
 
 ## 前置事项
 
-- 本机 Node.js/npm 用于开发；工具版本与直接依赖声明见根目录 `package.json`，系统和运行库约束见开发总览第 3 节。依赖安装不包含 Electron 二进制；本地开发启动前需显式执行 `node node_modules/electron/install.js`。Electron 自带 Node.js 与 Chromium，不要求安装后的用户预装 Node.js 或 WebView2；官方系统家族支持不能代替 Windows build 18363 的具体兼容性判断。
+- Node.js/npm 用于开发；工具版本与直接依赖声明见根目录 `package.json`，系统和运行库约束见开发总览第 3 节。依赖安装不包含 Electron 二进制；本地开发启动前需显式执行 `node node_modules/electron/install.js`。Electron 自带 Node.js 与 Chromium，不要求安装后的用户预装 Node.js 或 WebView2。
 - 不需要 Rust 工具链；Pi 使用固定 standalone 版本，不需要先安装 Bun 或自行编译 Pi。
-- 当前没有 C++ 编译链，第一阶段避免需要本地编译的原生依赖。若出现 node-gyp 编译需求，MSVC、Windows SDK 和所需 Python 属于新增前置条件，安装单独取得授权。
-- Pi/helper 的运行库需求按目标核实，不依赖待清理的 VC++ DLL；本机存在挂起重启与延迟卸载清理，不能将残留文件视为可靠环境条件。
+- 第一阶段避免需要本地编译的原生依赖。若出现 node-gyp 编译需求，按主机与目标平台准备对应的本地编译链与 Python 属于新增前置条件，安装单独取得授权。
+- Pi/helper 的运行库需求按目标核实，不将本机残留的运行库文件视为可靠环境条件。
 - 复用已有模型配置与凭据，不读取并输出认证秘密，不开发 Authentication。
 - 启动显式拒绝项目资源信任，关闭 Extensions、Skills、Prompt Templates、MCP；保留总览中说明的非沙箱边界。
 
@@ -51,7 +51,7 @@
 
 组件通过 `src/renderer/src/services/desktop.ts` 调用接口；底层 `invoke` 仍可能拒绝，前端服务将其转换为 `BRIDGE_CALL_FAILED`，不向展示层传递底层错误对象或堆栈。Pinia 仅保存桥接初始化结果，没有 Runtime 所有权或消息数据库；当前接口没有事件订阅。
 
-**项目脚本**：以下 npm 脚本对应关系以根目录 `package.json` 为准，从项目根目录调用；`scripts/start-dev.cmd` 是对 `npm run dev` 的包装入口。
+**项目脚本**：以下 npm 脚本对应关系以根目录 `package.json` 为准，从项目根目录调用；`scripts/start-dev.cmd`（Windows）与 `scripts/start-dev.sh`（macOS）是 `npm run dev` 的便捷包装入口，日常以 `npm run dev` 为准。
 
 | 调用 | 脚本内容 |
 | --- | --- |
@@ -62,7 +62,7 @@
 | `npm run typecheck:web` | `vue-tsc --noEmit -p tsconfig.web.json` |
 | `npm run typecheck` | `npm run typecheck:node && npm run typecheck:web` |
 | `npm run pi:prepare` | `node scripts/prepare-pi-runtime.mjs` |
-| `scripts/start-dev.cmd` | 定位项目根后执行 `npm run dev`；前置条件缺失时提示并退出，不自动安装或下载 |
+| `scripts/start-dev.cmd`、`scripts/start-dev.sh` | 分别面向 Windows 与 macOS，定位项目根后执行 `npm run dev`；前置条件缺失时提示并退出，不自动安装或下载 |
 
 脚本说明不构成执行授权；依赖安装、检查、测试、构建、启动和重启仍需单独明确授权。
 
@@ -90,7 +90,7 @@
 
 **项目脚本实现**：`scripts/prepare-pi-runtime.mjs` 只使用 Node 内建模块，不新增依赖，不写成安装依赖时的生命周期脚本。
 
-**当前状态**：`runtime/pi/win32-x64/` 已按固定清单准备，`package.json` 版本为 `1.0.4`；macOS 两目标需要在 macOS 主机上准备。
+**当前状态**：Runtime 文件不入库，按当前主机的目标平台用 `npm run pi:prepare` 准备到 `runtime/pi/<目标平台与架构>/`；实际准备情况以该主机上的执行结果为准。
 
 ### P1-03 RPC 启动与就绪
 
@@ -241,5 +241,5 @@ P1-01 → P1-02 → P1-03 → P1-04 → P1-05 → P1-06 → P1-07
 - Pi 配套资源的 staging 路径、目标文件选择与 package 根/executable 邻接映射已在 P1-02 确定（见本文 P1-02 段与开发总览第 4 节）；正式安装包沿用 ASAR 外整体资源方向，发行配置在相应步骤确定。
 - Runtime 操作的临时投影、订阅序列基点、通知批次与应用确认的具体契约，以及缓存预算和请求期限；Runtime 启动与状态查询的 IPC 业务结果已在 P1-03 确定，Prompt 请求的入参上限、等待期限与错误分类已在 P1-05 确定（见开发总览第 5.3、6.2 节）。
 - 关闭期限与平台定向终止方式已在 P1-04 确定（见 P1-04 段与开发总览第 6.2 节）；macOS 进程组分支只在 macOS 主机上生效，保持尽力回收边界。
-- Pi/helper 的运行库需求，以及挂起重启与延迟清理对本机环境的影响。
+- Pi/helper 在各目标平台的运行库需求。
 - 现有模型是否可选；缺少凭据时如何给出清晰提示，不能转为提前开发登录功能。
