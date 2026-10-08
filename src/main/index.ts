@@ -2,7 +2,7 @@
 import { realpath } from 'node:fs/promises'
 import { extname, isAbsolute, relative, resolve, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { app, BrowserWindow, dialog, ipcMain, net, protocol, session } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, nativeTheme, net, protocol, session } from 'electron'
 import type { IpcMainInvokeEvent } from 'electron'
 import { APP_INFO_CHANNEL } from '../shared/desktop-api'
 import type { AppInfoResult } from '../shared/desktop-api'
@@ -11,6 +11,8 @@ import {
   PREFERENCES_SET_UI_CHANNEL
 } from '../shared/preferences-api'
 import type { PreferencesErrorCode, PreferencesResult } from '../shared/preferences-api'
+import { isUiTheme } from '../shared/preferences-api'
+import type { UiTheme } from '../shared/preferences-api'
 import {
   PROJECT_CHOOSE_DIRECTORY_CHANNEL,
   PROJECT_LIST_CHANNEL,
@@ -62,6 +64,9 @@ const WINDOW_STATE_FLUSH_MS = 1_000
 const MAX_MODEL_IDENTIFIER_CHARS = 256
 /** Thinking level 的长度上限；取值合法性由 Pi 判定，不在此白名单。 */
 const MAX_THINKING_LEVEL_CHARS = 32
+/** 窗口背景色的浅色与暗色值；与 main.css 的 canvas 令牌保持一致，避免首帧闪烁。 */
+const LIGHT_WINDOW_BACKGROUND = '#f3f6f8'
+const DARK_WINDOW_BACKGROUND = '#10161c'
 const rendererRoot = resolve(__dirname, '../renderer')
 const productionCsp = [
   "default-src 'none'",
@@ -263,6 +268,16 @@ function preferencesFailure(code: PreferencesErrorCode, message: string): Prefer
 /** 只接受非空且长度受控的标识字符串；空字符串与超长都按参数拒绝。 */
 function isBoundedIdentifier(value: unknown, maxLength: number): value is string {
   return typeof value === 'string' && value.trim() !== '' && value.length <= maxLength
+}
+
+/** 把界面偏好的主题取值应用到 Electron 原生主题；驱动页面内 `prefers-color-scheme` 媒体查询。 */
+function applyNativeTheme(theme: UiTheme): void {
+  nativeTheme.themeSource = theme
+}
+
+/** 按当前生效主题返回窗口背景色；与 main.css 的 `--color-desk-canvas` 同步维护。 */
+function windowBackgroundColor(): string {
+  return nativeTheme.shouldUseDarkColors ? DARK_WINDOW_BACKGROUND : LIGHT_WINDOW_BACKGROUND
 }
 
 /** 打开系统目录选择器；绑定唯一业务窗口，用户取消返回 `null`。 */
@@ -581,7 +596,7 @@ function registerRuntimeHandlers(pageUrl: string): void {
   )
 }
 
-/** 只接受 Sidebar 折叠状态；界面偏好没有其他字段，未知字段一律拒绝。 */
+/** 只接受 Sidebar 折叠状态与主题取值；界面偏好没有其他字段，未知字段一律拒绝。 */
 function registerPreferencesHandlers(pageUrl: string): void {
   ipcMain.handle(
     PREFERENCES_GET_CHANNEL,
@@ -610,14 +625,19 @@ function registerPreferencesHandlers(pageUrl: string): void {
         return preferencesFailure('INVALID_REQUEST', '界面偏好参数格式不正确。')
       }
       const fields = request as Record<string, unknown>
-      if (Object.keys(fields).some((key) => key !== 'sidebarCollapsed')) {
+      if (Object.keys(fields).some((key) => key !== 'sidebarCollapsed' && key !== 'theme')) {
         return preferencesFailure('INVALID_REQUEST', '界面偏好参数包含未支持的字段。')
       }
-      const { sidebarCollapsed } = fields
+      const { sidebarCollapsed, theme } = fields
       if (typeof sidebarCollapsed !== 'boolean') {
         return preferencesFailure('INVALID_REQUEST', 'Sidebar 折叠状态必须是布尔值。')
       }
-      return preferencesManager.setUi({ sidebarCollapsed })
+      if (!isUiTheme(theme)) {
+        return preferencesFailure('INVALID_REQUEST', '主题取值只能是 system、light 或 dark。')
+      }
+      // 主题在参数合法后立即生效：只读降级时同样切换本次运行的主题，与页面本地生效保持一致。
+      applyNativeTheme(theme)
+      return preferencesManager.setUi({ sidebarCollapsed, theme })
     }
   )
 }
@@ -649,6 +669,9 @@ function restrictSession(): void {
 }
 
 async function createWindow(pageUrl: string): Promise<void> {
+  // 先应用存储的主题再创建窗口：让首帧媒体查询与窗口背景色都命中正确主题，避免闪烁。
+  const preferences = await configStore.readUiPreferences()
+  applyNativeTheme(preferences.theme)
   // 位置无效时 window-state 返回 null，交给窗口居中；最大化状态在创建后应用。
   const restored = await windowState.read()
   const window = new BrowserWindow({
@@ -659,7 +682,7 @@ async function createWindow(pageUrl: string): Promise<void> {
     minWidth: MIN_WINDOW_WIDTH,
     minHeight: MIN_WINDOW_HEIGHT,
     show: false,
-    backgroundColor: '#f3f6f8',
+    backgroundColor: windowBackgroundColor(),
     webPreferences: {
       preload: resolve(__dirname, '../preload/index.cjs'),
       sandbox: true,
@@ -689,6 +712,12 @@ async function createWindow(pageUrl: string): Promise<void> {
   window.on('maximize', rememberWindowState)
   window.on('unmaximize', rememberWindowState)
   window.on('close', () => windowState.captureBeforeClose(window))
+  // 跟随系统主题时，OS 切换会让原生窗口背景与页面重绘短暂脱节；这里同步收敛背景色。
+  nativeTheme.on('updated', () => {
+    const target = mainWindow
+    if (target === null || target.isDestroyed()) return
+    target.setBackgroundColor(windowBackgroundColor())
+  })
   window.once('ready-to-show', () => window.show())
   window.once('closed', () => {
     windowState.dispose()

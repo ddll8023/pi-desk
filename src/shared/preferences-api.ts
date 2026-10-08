@@ -4,9 +4,19 @@ import type { DesktopErrorCode } from './desktop-api'
 export const PREFERENCES_GET_CHANNEL = 'desktop:preferences-get'
 export const PREFERENCES_SET_UI_CHANNEL = 'desktop:preferences-set-ui'
 
-/** Desktop 自己的界面偏好；当前只有 Sidebar 折叠状态，主题等仍属后续任务，不复制 Pi settings。 */
+/** 主题三档取值，与 Electron `nativeTheme.themeSource` 状态机一一对应；默认跟随系统。 */
+export type UiTheme = 'system' | 'light' | 'dark'
+
+const UI_THEMES: readonly UiTheme[] = ['system', 'light', 'dark']
+
+export function isUiTheme(value: unknown): value is UiTheme {
+  return typeof value === 'string' && UI_THEMES.includes(value as UiTheme)
+}
+
+/** Desktop 自己的界面偏好；当前只有 Sidebar 折叠状态与主题，不复制 Pi settings。 */
 export interface UiPreferences {
   readonly sidebarCollapsed: boolean
+  readonly theme: UiTheme
 }
 
 /** 偏好读写失败只影响界面偏好本身，界面已本地生效，不阻断其他操作。 */
@@ -43,7 +53,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isUiPreferences(value: unknown): value is UiPreferences {
   if (!isRecord(value)) return false
-  return typeof value.sidebarCollapsed === 'boolean'
+  return typeof value.sidebarCollapsed === 'boolean' && isUiTheme(value.theme)
 }
 
 // TypeScript 声明不能保证 invoke 的实际返回值；沙箱桥接只放行本契约。

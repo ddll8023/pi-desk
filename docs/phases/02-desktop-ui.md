@@ -84,7 +84,7 @@
 
 **依赖**：P2-03，以及 P2-01 采用的本地配置约定。
 
-**当前实现**：Sidebar 折叠状态与窗口尺寸、位置、最大化状态已在 P2-03 完成：与项目列表共用 `<userData>/desktop-config.json` 的 `ui`、`window` 字段，界面偏好走 `desktop:preferences-get` 与 `desktop:preferences-set-ui`，窗口偏好由主进程独占并在创建窗口前校正。主题仍未实现。详见开发总览第 6.2 节。
+**当前实现**：Sidebar 折叠状态、窗口尺寸、位置、最大化状态与主题（跟随系统 / 浅色 / 深色，默认跟随系统）均已实现：与项目列表共用 `<userData>/desktop-config.json` 的 `ui`、`window` 字段，界面偏好走 `desktop:preferences-get` 与 `desktop:preferences-set-ui`，窗口偏好由主进程独占并在创建窗口前校正，主题机制见开发总览第 6.2 节。本阶段任务至此完成。
 
 ## 推进顺序
 

@@ -1,4 +1,4 @@
-/* 提供主界面的本地样式、层级令牌与键盘焦点，不加载外部字体或图标。 */
+/* 提供主界面的本地样式、层级令牌与键盘焦点；暗色主题经 prefers-color-scheme 重定义同名令牌，由主进程 nativeTheme.themeSource 驱动。不加载外部字体或图标。 */
 @import "tailwindcss";
 
 @theme {
@@ -16,6 +16,22 @@
   --color-desk-danger: #a4373a;
   --font-sans: "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
   --font-mono: Consolas, "SFMono-Regular", monospace;
+}
+
+/* 暗色主题：由主进程 nativeTheme.themeSource 驱动 prefers-color-scheme，无需页面脚本参与。
+   仅重定义同名令牌，工具类经 var() 引用即可全局生效；色值与主进程窗口背景色保持同步。 */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-desk-canvas: #10161c;
+    --color-desk-canvas-sunken: #0b1015;
+    --color-desk-surface: #1a222b;
+    --color-desk-surface-raised: #212b36;
+    --color-desk-ink: #dce6ee;
+    --color-desk-muted: #8fa1b0;
+    --color-desk-line: #2c3a47;
+    --color-desk-accent: #4fa3b5;
+    --color-desk-danger: #d47c7f;
+  }
 }
 
 @layer base {

@@ -60,7 +60,7 @@ Desktop 仅维护自己的数据：最近项目、窗口尺寸、Sidebar 状态�
 
 开发在 Windows 与 macOS 主机上交替进行，文档不绑定某一平台，也不固定绝对路径；仓库可检出到任意位置，以下路径与命令均以项目根目录为基准。
 
-仓库包含开发文档、Electron/Vue 桌面骨架、三端构建与 TypeScript 配置、统一前端服务入口、展示状态 Store，以及 Pi Runtime 的准备脚本与固定版本清单。当前主界面由顶栏、可折叠的会话侧栏、消息区与 Prompt 区组成，可经受限 preload API 读取应用信息、选择并记住本地项目、列出并打开该项目的 Pi 会话、启停 Pi RPC sidecar、接收状态变化、提交 Prompt、展示本轮文本与 Thinking、查看工具执行、切换模型与 Thinking 级别并查看上下文占用、中止当前操作，并保存 Sidebar 折叠状态与窗口尺寸位置；不读取项目内容、不持久化消息。
+仓库包含开发文档、Electron/Vue 桌面骨架、三端构建与 TypeScript 配置、统一前端服务入口、展示状态 Store，以及 Pi Runtime 的准备脚本与固定版本清单。当前主界面由顶栏、可折叠的会话侧栏、消息区与 Prompt 区组成，可经受限 preload API 读取应用信息、选择并记住本地项目、列出并打开该项目的 Pi 会话、启停 Pi RPC sidecar、接收状态变化、提交 Prompt、展示本轮文本与 Thinking、查看工具执行、切换模型与 Thinking 级别并查看上下文占用、中止当前操作，并保存 Sidebar 折叠状态、主题与窗口尺寸位置；不读取项目内容、不持久化消息。
 
 开发使用 npm，工具版本由 `package.json` 的 `packageManager` 字段声明，直接依赖使用精确版本。`package.json` 是依赖声明的维护位置，完整依赖树由安装生成的 `package-lock.json` 固定，不手写锁文件。依赖安装属于独立授权操作。
 
@@ -371,8 +371,9 @@ Pi 管道背压与 UI 通知背压分开处理：采用有界批次与渲染端�
 - Project 基础属性为 `id`、`name`、`path`、`lastOpenedAt`：`id` 由主进程用 `crypto.randomUUID()` 生成，`name` 取规范路径末段，`lastOpenedAt` 为纪元毫秒，只在项目被设为当前项目时更新。
 - 路径归一化只有一个入口（`src/main/project-path.ts`）：拒绝空值、NUL 与相对路径后执行 `realpath`（解析符号链接、平台短名与规范大小写，去掉尾部分隔符与 `\\?\` 前缀，保留 UNC 形式），再要求 `stat` 为目录。不做大小写折叠，不主动添加 `\\?\`。
 - 本地配置为单个 JSON 文件 `<userData>/desktop-config.json`，结构为 `{ version: 1, projects: [...], currentProjectId, ui, window }`，UTF-8、两空格缩进、末尾换行；最近项目上限 50 条，超出按 `lastOpenedAt` 最旧淘汰。写入使用同目录临时文件加改名替换，并在主进程内串行执行。项目列表、界面偏好与窗口状态共用同一个文件与同一条写入队列，只有一个读写者。
-- 界面偏好与窗口状态是同一文件里的可选字段：`ui.sidebarCollapsed`（布尔，默认 `false`）与 `window.width/height/x/y/maximized`（尺寸与坐标为整数，位置必须成对有效，默认 1120×820 且不恢复位置）。字段缺失或非法一律按默认值处理，不参与损坏与版本判定，也不改变版本语义。
-- 界面偏好通道：`desktop:preferences-get`（零参数，返回 Sidebar 折叠状态）与 `desktop:preferences-set-ui`（只接受 `{ sidebarCollapsed }`）。复用既有桥接错误码，本阶段不新增；写入失败只提示，界面偏好已在页面本地生效。
+- 界面偏好与窗口状态是同一文件里的可选字段：`ui.sidebarCollapsed`（布尔，默认 `false`）、`ui.theme`（`system`/`light`/`dark`，默认 `system`）与 `window.width/height/x/y/maximized`（尺寸与坐标为整数，位置必须成对有效，默认 1120×820 且不恢复位置）。字段缺失或非法一律按默认值处理，不参与损坏与版本判定，也不改变版本语义。
+- 界面偏好通道：`desktop:preferences-get`（零参数，返回 Sidebar 折叠状态与主题）与 `desktop:preferences-set-ui`（只接受 `{ sidebarCollapsed, theme }`）。复用既有桥接错误码，本阶段不新增；写入失败只提示，界面偏好已在页面本地生效。
+- 主题：取值与 Electron `nativeTheme.themeSource` 状态机一一对应；主进程在创建窗口前从配置读取主题并应用，页面内 `prefers-color-scheme` 媒体查询切换 CSS 令牌，窗口背景色按 `shouldUseDarkColors` 选择并与 `--color-desk-canvas` 同步维护，系统主题变化时同步收敛背景色；`system` 时跟随 OS 实时切换，不增加事件通道。保存偏好时在参数校验通过后立即应用本次请求的主题，只读降级时同样对本次运行生效。
 - 窗口偏好不经 IPC，由主进程独占：创建窗口前读取，位置必须与某显示器工作区有足够交集，否则丢弃位置交给窗口居中；尺寸按窗口下限（720×600）与目标显示器工作区收敛；保存使用 `getNormalBounds` 与最大化状态，不把最大化尺寸写成常态尺寸；变更防抖写入，并在退出关闭链前强制落盘。
 - 配置降级：文件不存在按空配置处理且不创建文件；JSON 无法解析或顶层结构不符时把原文件改名为 `desktop-config.corrupt-<时间戳>.json` 后重新开始；版本号不是 1 或读取失败（非「文件不存在」）时进入只读降级，保留原文件并拒绝一切写入；单条记录不合法只丢弃该条。
 - 通道：`desktop:project-choose-directory`（零参数，返回归一化后的 `{ path, name }`，用户取消时 `data` 为 `null`）、`desktop:project-list`（返回项目列表、当前项目与配置提示）、`desktop:project-set-current`（只接受 `{ path, allowInterrupt }`）。本阶段不新增单向事件通道。
@@ -418,7 +419,7 @@ Windows 使用系统 `taskkill` 对当前受管 Pi 进程树定向终止，不�
 - 消息区：按消息分组并按内容块顺序渲染，用户与 Assistant 区分，Thinking 可折叠，工具调用内联为通用工具卡片（名称、状态、Desktop 计算的耗时与参数摘要，展开后显示参数、结果或错误输出、非文本内容描述与截断提示；运行中的卡片自动展开一次，之后由用户开合），并表达同步、截断、失败与运行中状态。
 - Prompt 区：输入与发送、Agent 运行期间原位的停止入口，以及请求接受、拒绝与中止的提示。
 
-组件通过统一前端服务入口调用受限 preload API，Pinia 管理共享的展示状态。消息重建与 Runtime 所有权归主进程，前端不直接访问 ipcRenderer，不提供任意 RPC JSON 的通用发送入口。打开、新建与恢复会话都由主进程重启式切换，页面的当前会话以 Runtime 快照为准。Prompt 发送只展示请求接受或拒绝；运行中状态由 `agent_start`/`agent_settled` 收敛，消息与工具展示来自主进程投影批次，页面在失去同步时标示同步中或截断，不自行拼装历史。打开或新建会话即启动 Runtime，页面不单独提供启动入口。Stop 只在 Runtime 就绪且事件流显示运行中时可用，界面把“中止请求中且仍在运行”表达为停止中，是否真的停止以 `agent_settled` 收敛，不以请求响应为依据。输入提交处理输入法组合态、Enter 发送与 Shift+Enter 换行、发送后焦点回归、成功后清空与发送中不重复提交；消息区在用户已上滚时不强制拉到底部。模型文本、工具参数与工具输出一律按纯文本插值展示，不使用 `v-html`，不当作 HTML 或外部资源渲染；主题切换尚未实现，界面偏好目前只有 Sidebar 折叠状态。
+组件通过统一前端服务入口调用受限 preload API，Pinia 管理共享的展示状态。消息重建与 Runtime 所有权归主进程，前端不直接访问 ipcRenderer，不提供任意 RPC JSON 的通用发送入口。打开、新建与恢复会话都由主进程重启式切换，页面的当前会话以 Runtime 快照为准。Prompt 发送只展示请求接受或拒绝；运行中状态由 `agent_start`/`agent_settled` 收敛，消息与工具展示来自主进程投影批次，页面在失去同步时标示同步中或截断，不自行拼装历史。打开或新建会话即启动 Runtime，页面不单独提供启动入口。Stop 只在 Runtime 就绪且事件流显示运行中时可用，界面把“中止请求中且仍在运行”表达为停止中，是否真的停止以 `agent_settled` 收敛，不以请求响应为依据。输入提交处理输入法组合态、Enter 发送与 Shift+Enter 换行、发送后焦点回归、成功后清空与发送中不重复提交；消息区在用户已上滚时不强制拉到底部。模型文本、工具参数与工具输出一律按纯文本插值展示，不使用 `v-html`，不当作 HTML 或外部资源渲染。主题切换在顶栏提供跟随系统、浅色与深色的循环入口，取值与切换机制见第 6.2 节。
 
 ### 6.4 实现顺序
 

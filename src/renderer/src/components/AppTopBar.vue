@@ -1,8 +1,9 @@
-<!-- 顶栏：Sidebar 折叠开关、项目切换入口、当前会话与 Runtime 状态，并在详情弹层里提供模型、Thinking、上下文占用等 Agent 控制与关闭 Runtime；不承载消息与 Prompt 提交。 -->
+<!-- 顶栏：Sidebar 折叠开关、主题循环切换、项目切换入口、当前会话与 Runtime 状态，并在详情弹层里提供模型、Thinking、上下文占用等 Agent 控制与关闭 Runtime；不承载消息与 Prompt 提交。 -->
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useDesktopStore } from '../stores/desktop'
+import { usePreferencesStore } from '../stores/preferences'
 import { useProjectStore } from '../stores/project'
 import { useRuntimeStore } from '../stores/runtime'
 import AgentControls from './AgentControls.vue'
@@ -19,9 +20,11 @@ const emit = defineEmits<{
 }>()
 
 const desktopStore = useDesktopStore()
+const preferencesStore = usePreferencesStore()
 const projectStore = useProjectStore()
 const runtimeStore = useRuntimeStore()
 const { connection } = storeToRefs(desktopStore)
+const { theme } = storeToRefs(preferencesStore)
 const { currentProject } = storeToRefs(projectStore)
 const { view: runtimeView } = storeToRefs(runtimeStore)
 
@@ -58,6 +61,14 @@ const sessionLabel = computed(() => {
   const sessionId = runtimeInfo.value?.sessionId
   if (typeof sessionId === 'string' && sessionId !== '') return `会话 ${sessionId.slice(0, 8)}`
   return currentProject.value === null ? '未选择项目' : '未打开会话'
+})
+
+const themeLabel = computed(() => {
+  switch (theme.value) {
+    case 'system': return '主题：跟随系统'
+    case 'light': return '主题：浅色'
+    case 'dark': return '主题：深色'
+  }
 })
 
 function togglePanel(panel: 'project' | 'runtime'): void {
@@ -109,6 +120,15 @@ onUnmounted(() => {
       @click="emit('toggleSidebar')"
     >
       {{ sidebarCollapsed ? '显示会话' : '隐藏会话' }}
+    </button>
+
+    <button
+      type="button"
+      class="icon-button"
+      :disabled="!preferencesStore.ready"
+      @click="preferencesStore.cycleTheme()"
+    >
+      {{ themeLabel }}
     </button>
 
     <div class="relative">

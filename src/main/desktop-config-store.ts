@@ -11,7 +11,7 @@ import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join } from 'node:path'
 import { app } from 'electron'
-import type { UiPreferences } from '../shared/preferences-api'
+import type { UiPreferences, UiTheme } from '../shared/preferences-api'
 import { isProject } from '../shared/project-api'
 import type { Project, ProjectList } from '../shared/project-api'
 import { projectNameFromPath } from './project-path'
@@ -27,7 +27,7 @@ const MIN_STORED_WINDOW = 320
 const MAX_STORED_WINDOW = 20_000
 
 /** 界面偏好默认值；只在字段缺失或非法时使用。 */
-export const DEFAULT_UI_PREFERENCES: UiPreferences = { sidebarCollapsed: false }
+export const DEFAULT_UI_PREFERENCES: UiPreferences = { sidebarCollapsed: false, theme: 'system' }
 
 /** 窗口状态默认值；位置为 null 表示交给窗口自行居中。 */
 export const DEFAULT_WINDOW_STATE: WindowState = {
@@ -75,11 +75,16 @@ function isMissingFile(error: unknown): boolean {
   return (error as NodeJS.ErrnoException).code === 'ENOENT'
 }
 
+/** 主题字段单独回退：`sidebarCollapsed` 缺失时整体用默认值，主题字段非法时只回退主题。 */
+function sanitizeTheme(value: unknown): UiTheme {
+  return value === 'light' || value === 'dark' || value === 'system' ? value : 'system'
+}
+
 function sanitizeUiPreferences(value: unknown): UiPreferences {
   if (!isRecord(value) || typeof value.sidebarCollapsed !== 'boolean') {
     return DEFAULT_UI_PREFERENCES
   }
-  return { sidebarCollapsed: value.sidebarCollapsed }
+  return { sidebarCollapsed: value.sidebarCollapsed, theme: sanitizeTheme(value.theme) }
 }
 
 /** 尺寸非法回落到默认值；位置缺失或非法一律丢弃，不猜测部分坐标。 */
