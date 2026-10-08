@@ -16,11 +16,19 @@
 
 ## 任务拆分
 
-### P3-01 Project Trust
+### P3-01 Project Trust（已完成实现，决策记录）
 
 **目标**：在加载项目级 Pi 资源前取得明确的用户信任决定。
 
 **范围**：识别需要信任的项目资源、解释安全影响、启动前信任 / 不信任选择、通过官方启动能力传递。核实持久决定的正式方式，不直接写 `trust.json`，不默认 always trust。需要改变加载范围时明确重建 Runtime。
+
+**已定决策**（事实与数值见[开发总览](../development.md)第 5、6.2、7.2 节）：
+
+- 持久决定存入 Desktop 自己的 `desktop-config.json`（`projectTrust` 字段）；官方唯一持久方式是 TUI `/trust` 写 `~/.pi/agent/trust.json`，Desktop 不读写该文件。
+- 官方优先级中 CLI 覆盖最优先：有受保护资源时 Desktop 总是显式传 `--approve` / `--no-approve`，因此覆盖 Pi 已保存的信任记录；无受保护资源时不传，不依赖 `defaultProjectTrust`。
+- 探测按官方受保护资源清单在主进程内完成，含祖先目录的 `.agents/skills`；探测失败按不存在处理。
+- 拦截点为 `desktop:runtime-start` 与 `desktop:session-open`，无决定时返回 `TRUST_REQUIRED`；决定后由页面重试原操作，Runtime 启动链本身不变。
+- 重置入口在 Runtime 详情弹层；重置后下次启动重新询问。
 
 **依赖**：第二阶段 Project 生命周期。Trust 不是 OS 沙箱，也不能取消启动前读取 `sessionDir` 与上下文文件的官方行为。
 
@@ -83,7 +91,6 @@ Trust 与 Extension UI 先建立安全交互边界，再启用相应资源；后
 
 ## 待决策事项
 
-- 官方持久 Trust 操作方式，以及既有 Pi 信任与 Desktop 一次性决定的关系。
 - 目标 Pi 版本下 Extension UI 支持范围、取消与窗口关闭时的收敛行为。
 - Session Fork 与恢复操作的具体 GUI 入口。
 - 文件引用的数据语义、图片能力与敏感数据提示。

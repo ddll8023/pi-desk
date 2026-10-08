@@ -1,4 +1,4 @@
-/** 为沙箱页面提供应用信息、Project 选择与列表、Session 列表与打开、界面偏好、Runtime 启停与 Agent 能力控制、Prompt 提交、中止、消息/工具投影与事件订阅，不暴露 Electron、任意 channel 或系统能力。 */
+/** 为沙箱页面提供应用信息、Project 选择与列表、Session 列表与打开、Project Trust 查询与决定、界面偏好、Runtime 启停与 Agent 能力控制、Prompt 提交、中止、消息/工具投影与事件订阅，不暴露 Electron、任意 channel 或系统能力。 */
 import { contextBridge, ipcRenderer } from 'electron'
 import type { IpcRendererEvent } from 'electron'
 import { APP_INFO_CHANNEL, isAppInfoResult } from '../shared/desktop-api'
@@ -28,6 +28,18 @@ import {
   isSessionListResult
 } from '../shared/session-api'
 import type { SessionApi, SessionListResult, SessionOpenRequest } from '../shared/session-api'
+import {
+  TRUST_DECIDE_CHANNEL,
+  TRUST_STATUS_CHANNEL,
+  isTrustDecisionResult,
+  isTrustStatusResult
+} from '../shared/trust-api'
+import type {
+  TrustApi,
+  TrustDecisionInput,
+  TrustDecisionResult,
+  TrustStatusResult
+} from '../shared/trust-api'
 import {
   RUNTIME_ABORT_CHANNEL,
   RUNTIME_CAPABILITIES_CHANNEL,
@@ -69,6 +81,7 @@ const INVALID_PROJECT_PATH_RESPONSE = '桌面接口返回了无法识别的目�
 const INVALID_PROJECT_LIST_RESPONSE = '桌面接口返回了无法识别的项目列表。'
 const INVALID_SESSION_LIST_RESPONSE = '桌面接口返回了无法识别的会话列表。'
 const INVALID_PREFERENCES_RESPONSE = '桌面接口返回了无法识别的界面偏好。'
+const INVALID_TRUST_RESPONSE = '桌面接口返回了无法识别的信任状态。'
 
 function invalidRuntimeResponse(): RuntimeResult {
   return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_RUNTIME_RESPONSE } }
@@ -102,7 +115,11 @@ function invalidPreferencesResponse(): PreferencesResult {
   return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_PREFERENCES_RESPONSE } }
 }
 
-const desktop: DesktopApi & RuntimeApi & ProjectApi & SessionApi & PreferencesApi = {
+function invalidTrustResponse(): TrustStatusResult {
+  return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_TRUST_RESPONSE } }
+}
+
+const desktop: DesktopApi & RuntimeApi & ProjectApi & SessionApi & PreferencesApi & TrustApi = {
   async getAppInfo() {
     const response: unknown = await ipcRenderer.invoke(APP_INFO_CHANNEL)
     if (!isAppInfoResult(response)) {
@@ -139,6 +156,18 @@ const desktop: DesktopApi & RuntimeApi & ProjectApi & SessionApi & PreferencesAp
     const request: SessionOpenRequest = { sessionId, allowInterrupt }
     const response: unknown = await ipcRenderer.invoke(SESSION_OPEN_CHANNEL, request)
     return isSessionListResult(response) ? response : invalidSessionResponse()
+  },
+
+  async getTrustStatus() {
+    const response: unknown = await ipcRenderer.invoke(TRUST_STATUS_CHANNEL)
+    return isTrustStatusResult(response) ? response : invalidTrustResponse()
+  },
+
+  async decideTrust(projectPath: string, decision: TrustDecisionInput) {
+    // 只搬运已声明的字段，不把页面传入的整个对象转交给主进程。
+    const request = { projectPath, decision }
+    const response: unknown = await ipcRenderer.invoke(TRUST_DECIDE_CHANNEL, request)
+    return isTrustDecisionResult(response) ? response : invalidTrustResponse()
   },
 
   async getPreferences() {

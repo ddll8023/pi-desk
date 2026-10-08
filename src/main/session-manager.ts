@@ -51,10 +51,13 @@ export class SessionManager {
     }
   }
 
-  /** 打开或新建会话；成功时返回更新后的列表。 */
-  async open(request: SessionOpenRequest): Promise<SessionOpenResult> {
+  /** 打开或新建会话；成功时返回更新后的列表。`trustDecision` 来自主进程的信任探测。 */
+  async open(
+    request: SessionOpenRequest,
+    trustDecision: 'trusted' | 'untrusted' | null
+  ): Promise<SessionOpenResult> {
     try {
-      return { ok: true, data: await this.applyOpen(request) }
+      return { ok: true, data: await this.applyOpen(request, trustDecision) }
     } catch (error) {
       return this.failure(error, {
         code: 'INTERNAL_ERROR',
@@ -67,7 +70,10 @@ export class SessionManager {
    * 先校验目标会话属于当前项目，再结束旧 Runtime，最后带会话参数启动新的 Runtime。
    * 请求的会话与已就绪 Runtime 一致时幂等返回，不做无谓重启。
    */
-  private async applyOpen(request: SessionOpenRequest): Promise<SessionList> {
+  private async applyOpen(
+    request: SessionOpenRequest,
+    trustDecision: 'trusted' | 'untrusted' | null
+  ): Promise<SessionList> {
     const projectPath = this.requireProjectPath()
     const status = this.runtimeStatus()
 
@@ -99,7 +105,7 @@ export class SessionManager {
       }
     }
 
-    const started = await this.options.runtime.start(projectPath, request.sessionId)
+    const started = await this.options.runtime.start(projectPath, request.sessionId, trustDecision)
     if (!started.ok) throw new SessionFailure(started.error.code, started.error.message)
     if (request.sessionId !== null && started.data.info?.sessionId !== request.sessionId) {
       // `--session-id` 在会话缺失时会新建，因此必须复核实际打开的会话；不删除任何文件。

@@ -51,6 +51,11 @@ export interface PiProcessOptions {
   readonly sessionDir: string
   /** 要恢复的会话 id；为 null 表示新建会话。 */
   readonly sessionId: string | null
+  /**
+   * Project Trust 决定：有受保护资源时为用户决定（`--approve`/`--no-approve`），
+   * 无受保护资源时为 null（不传，交给官方默认）；决定由主进程探测与记录，不由页面指定。
+   */
+  readonly trustDecision: 'trusted' | 'untrusted' | null
 }
 
 /** Runtime 目录由平台与架构决定，页面无法指定。 */
@@ -69,8 +74,10 @@ export function getPiExecutablePath(): string {
 }
 
 /**
- * 启动参数固定：RPC 模式、拒绝项目资源、关闭四类资源、显式工具集、会话目录与可选恢复会话。
- * 会话由 Pi 持久化，不再使用 `--no-session`；页面不能覆盖其中任何一项。
+ * 启动参数固定：RPC 模式、按信任决定传递项目资源覆盖、关闭四类资源、显式工具集、
+ * 会话目录与可选恢复会话。有受保护资源时决定必须显式传递（Desktop 的决定优先于 Pi 已保存的
+ * 信任记录）；无受保护资源时不传，避免无意义的覆盖。会话由 Pi 持久化，不再使用 `--no-session`；
+ * 页面不能覆盖其中任何一项。
  */
 export function getPiLaunchArguments(options: PiProcessOptions): string[] {
   const tools = process.platform === 'win32'
@@ -78,7 +85,6 @@ export function getPiLaunchArguments(options: PiProcessOptions): string[] {
     : 'read,bash,edit,write'
   const args = [
     '--mode', 'rpc',
-    '--no-approve',
     '--no-extensions',
     '--no-skills',
     '--no-prompt-templates',
@@ -86,6 +92,8 @@ export function getPiLaunchArguments(options: PiProcessOptions): string[] {
     '--tools', tools,
     '--session-dir', options.sessionDir
   ]
+  if (options.trustDecision === 'trusted') args.push('--approve')
+  else if (options.trustDecision === 'untrusted') args.push('--no-approve')
   if (options.sessionId !== null) args.push('--session-id', options.sessionId)
   return args
 }

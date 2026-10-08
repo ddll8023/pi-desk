@@ -2,6 +2,7 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import type { SessionError, SessionList, SessionSummary } from '../../../shared/session-api'
+import { useTrustStore } from './trust'
 import { listSessions, openSession } from '../services/session'
 
 /** `idle` 表示尚无当前项目、未读取列表；单次动作失败放在 `actionError`，不影响已加载的列表。 */
@@ -21,6 +22,8 @@ export const useSessionStore = defineStore('session', () => {
   /** 待确认的切换目标（null 表示新建会话）与是否需要用户确认中断。 */
   const pendingSessionId = ref<string | null>(null)
   const awaitingInterrupt = ref(false)
+  /** 是否存在等待信任决定后重试的打开请求；与 `pendingSessionId`（可能为 null）配合使用。 */
+  const awaitingTrust = ref(false)
 
   /** 主进程返回的列表是唯一真相；展示状态只做副本，跳过的文件数如实保留。 */
   function applyList(list: SessionList): void {
@@ -78,10 +81,26 @@ export const useSessionStore = defineStore('session', () => {
         awaitingInterrupt.value = true
         return
       }
+      if (result.error.code === 'TRUST_REQUIRED') {
+        // 记住待打开目标（null 表示新建），由信任对话框决定后重试；取消则清空。
+        pendingSessionId.value = sessionId
+        awaitingTrust.value = true
+        await useTrustStore().openPrompt()
+        return
+      }
       actionError.value = result.error
     } finally {
       opening.value = false
     }
+  }
+
+  /** 信任决定后重试待打开的会话（含新建）；取消时清空待确认目标。 */
+  async function retryPendingAfterTrust(): Promise<void> {
+    if (!awaitingTrust.value) return
+    awaitingTrust.value = false
+    const target = pendingSessionId.value
+    pendingSessionId.value = null
+    await open(target, false)
   }
 
   /** 用户确认中断后带 `allowInterrupt` 重试待确认的切换。 */
@@ -94,8 +113,8 @@ export const useSessionStore = defineStore('session', () => {
   function cancelPending(): void {
     pendingSessionId.value = null
     awaitingInterrupt.value = false
+    awaitingTrust.value = false
   }
-
   return {
     view,
     sessions,
@@ -105,9 +124,11 @@ export const useSessionStore = defineStore('session', () => {
     opening,
     pendingSessionId,
     awaitingInterrupt,
+    awaitingTrust,
     initialize,
     refresh,
     open,
+    retryPendingAfterTrust,
     confirmPending,
     cancelPending
   }

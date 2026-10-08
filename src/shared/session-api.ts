@@ -33,6 +33,9 @@ export interface SessionOpenRequest {
 /** 复用 Runtime 错误码族，只追加 Session 专有错误码。 */
 export type SessionErrorCode = RuntimeErrorCode | 'SESSION_NOT_FOUND' | 'SESSION_SWITCH_BLOCKED'
 
+/** 打开会话可能被 Project Trust 拦截，错误码集合与 Runtime 族同步维护。 */
+const SESSION_EXTRA_ERROR_CODES: readonly string[] = ['SESSION_NOT_FOUND', 'SESSION_SWITCH_BLOCKED']
+
 export interface SessionError {
   readonly code: SessionErrorCode
   readonly message: string
@@ -69,8 +72,9 @@ const SESSION_ERROR_CODES: readonly string[] = [
   'RUNTIME_TIMEOUT',
   'RUNTIME_PROTOCOL_ERROR',
   'PROMPT_REJECTED',
-  'SESSION_NOT_FOUND',
-  'SESSION_SWITCH_BLOCKED'
+  'RUNTIME_COMMAND_REJECTED',
+  'TRUST_REQUIRED',
+  ...SESSION_EXTRA_ERROR_CODES
 ]
 
 function isRecord(value: unknown): value is Record<string, unknown> {

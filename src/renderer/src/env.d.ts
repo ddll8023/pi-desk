@@ -6,10 +6,11 @@ import type { PreferencesApi } from '../../shared/preferences-api'
 import type { ProjectApi } from '../../shared/project-api'
 import type { RuntimeApi } from '../../shared/runtime-api'
 import type { SessionApi } from '../../shared/session-api'
+import type { TrustApi } from '../../shared/trust-api'
 
 declare global {
   interface Window {
-    readonly desktop?: DesktopApi & RuntimeApi & ProjectApi & SessionApi & PreferencesApi
+    readonly desktop?: DesktopApi & RuntimeApi & ProjectApi & SessionApi & PreferencesApi & TrustApi
   }
 }
 

@@ -12,6 +12,7 @@ import type {
   RuntimeStatus,
   ToolExecution
 } from '../../../shared/runtime-api'
+import { useTrustStore } from './trust'
 import {
   abortRuntime,
   ackRuntimeProjection,
@@ -190,6 +191,12 @@ export const useRuntimeStore = defineStore('runtime', () => {
     view.value = { phase: 'starting' }
     const result = await startRuntime(projectPath)
     if (!result.ok) {
+      if (result.error.code === 'TRUST_REQUIRED') {
+        // 与会话切换共用同一条信任决定流程；用户取消后回到当前状态。
+        view.value = { phase: 'idle' }
+        await useTrustStore().openPrompt()
+        return
+      }
       view.value = { phase: 'failed', error: result.error }
       return
     }

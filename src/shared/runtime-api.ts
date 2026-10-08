@@ -61,6 +61,8 @@ export type RuntimeErrorCode =
   | 'PROMPT_REJECTED'
   /** Pi 以 `success: false` 拒绝了模型或 Thinking 设置；消息带 Pi 的原因文本。 */
   | 'RUNTIME_COMMAND_REJECTED'
+  /** 项目存在受保护资源且尚无信任决定；先完成信任决定再重试。 */
+  | 'TRUST_REQUIRED'
 
 export interface RuntimeError {
   readonly code: RuntimeErrorCode
@@ -277,7 +279,8 @@ const RUNTIME_ERROR_CODES: readonly string[] = [
   'RUNTIME_TIMEOUT',
   'RUNTIME_PROTOCOL_ERROR',
   'PROMPT_REJECTED',
-  'RUNTIME_COMMAND_REJECTED'
+  'RUNTIME_COMMAND_REJECTED',
+  'TRUST_REQUIRED'
 ]
 
 function isRecord(value: unknown): value is Record<string, unknown> {

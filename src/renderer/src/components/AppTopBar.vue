@@ -1,4 +1,4 @@
-<!-- 顶栏：Sidebar 折叠开关、主题循环切换、项目切换入口、当前会话与 Runtime 状态，并在详情弹层里提供模型、Thinking、上下文占用等 Agent 控制与关闭 Runtime；不承载消息与 Prompt 提交。 -->
+<!-- 顶栏：Sidebar 折叠开关、主题循环切换、项目切换入口、当前会话与 Runtime 状态，并在详情弹层里提供模型、Thinking、上下文占用等 Agent 控制、重置本项目信任决定与关闭 Runtime；不承载消息与 Prompt 提交。 -->
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
 import { computed, onMounted, onUnmounted, ref } from 'vue'
@@ -6,7 +6,10 @@ import { useDesktopStore } from '../stores/desktop'
 import { usePreferencesStore } from '../stores/preferences'
 import { useProjectStore } from '../stores/project'
 import { useRuntimeStore } from '../stores/runtime'
+import { useTrustStore } from '../stores/trust'
+import type { TrustStatus } from '../../../shared/trust-api'
 import AgentControls from './AgentControls.vue'
+import ConfirmDialog from './ConfirmDialog.vue'
 import ProjectSwitcher from './ProjectSwitcher.vue'
 
 defineProps<{
@@ -23,6 +26,7 @@ const desktopStore = useDesktopStore()
 const preferencesStore = usePreferencesStore()
 const projectStore = useProjectStore()
 const runtimeStore = useRuntimeStore()
+const trustStore = useTrustStore()
 const { connection } = storeToRefs(desktopStore)
 const { theme } = storeToRefs(preferencesStore)
 const { currentProject } = storeToRefs(projectStore)
@@ -31,6 +35,18 @@ const { view: runtimeView } = storeToRefs(runtimeStore)
 /** 弹层互斥：同一时刻只展开一个，点外或 Esc 关闭。 */
 const openPanel = ref<'project' | 'runtime' | null>(null)
 const root = ref<HTMLElement | null>(null)
+/** 当前项目的信任状态；详情弹层展开时读取，用于重置入口的展示。 */
+const trustStatus = ref<TrustStatus | { error: string } | null>(null)
+const hasTrustDecision = computed(() => {
+  const status = trustStatus.value
+  return status !== null && !('error' in status) && status.decision !== null
+})
+const trustStatusDetail = computed(() => {
+  const status = trustStatus.value
+  return status !== null && !('error' in status) ? (status.projectPath ?? '') : ''
+})
+const confirmingTrustReset = ref(false)
+const trustResetBusy = ref(false)
 
 const runtimeInfo = computed(() => (
   runtimeView.value.phase === 'ready' ? runtimeView.value.snapshot.info : null
@@ -63,6 +79,17 @@ const sessionLabel = computed(() => {
   return currentProject.value === null ? '未选择项目' : '未打开会话'
 })
 
+/** 详情弹层展开时读取当前项目的信任状态，决定是否显示重置入口。 */
+function togglePanel(panel: 'project' | 'runtime'): void {
+  const next = openPanel.value === panel ? null : panel
+  openPanel.value = next
+  if (next === 'runtime') {
+    void trustStore.queryStatus().then((status) => {
+      trustStatus.value = status
+    })
+  }
+}
+
 const themeLabel = computed(() => {
   switch (theme.value) {
     case 'system': return '主题：跟随系统'
@@ -70,10 +97,6 @@ const themeLabel = computed(() => {
     case 'dark': return '主题：深色'
   }
 })
-
-function togglePanel(panel: 'project' | 'runtime'): void {
-  openPanel.value = openPanel.value === panel ? null : panel
-}
 
 function closePanel(): void {
   openPanel.value = null
@@ -94,6 +117,28 @@ function onKeydown(event: KeyboardEvent): void {
 function shutdownRuntime(): void {
   closePanel()
   void runtimeStore.shutdown()
+}
+
+/** 重置当前项目的信任决定；下次启动该项目时重新询问。 */
+function resetTrustDecision(): void {
+  confirmingTrustReset.value = true
+}
+
+async function confirmTrustReset(): Promise<void> {
+  if (trustResetBusy.value) return
+  trustResetBusy.value = true
+  try {
+    const failure = await trustStore.resetCurrentProject()
+    if (failure !== null) return
+    trustStatus.value = await trustStore.queryStatus()
+    confirmingTrustReset.value = false
+  } finally {
+    trustResetBusy.value = false
+  }
+}
+
+function cancelTrustReset(): void {
+  confirmingTrustReset.value = false
 }
 
 onMounted(() => {
@@ -218,7 +263,26 @@ onUnmounted(() => {
         >
           关闭 Runtime
         </button>
+
+        <button
+          v-if="hasTrustDecision"
+          type="button"
+          class="control-button mt-2"
+          @click="resetTrustDecision"
+        >
+          重置本项目信任决定
+        </button>
       </div>
     </div>
+
+    <ConfirmDialog
+      v-if="confirmingTrustReset"
+      title="重置本项目信任决定？"
+      description="重置后下次打开或新建该项目的会话时，会重新询问是否信任项目资源；本次正在运行的 Runtime 不受影响。"
+      :detail="trustStatusDetail"
+      confirm-label="重置决定"
+      @confirm="confirmTrustReset"
+      @cancel="cancelTrustReset"
+    />
   </header>
 </template>

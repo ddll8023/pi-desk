@@ -1,4 +1,4 @@
-<!-- 主界面外壳：组合顶栏、可折叠会话栏、消息区与 Prompt 区，负责各展示 Store 的初始化、项目变化后的会话列表刷新，以及运行中切换的确认对话框。 -->
+<!-- 主界面外壳：组合顶栏、可折叠会话栏、消息区与 Prompt 区，负责各展示 Store 的初始化、项目变化后的会话列表刷新，以及运行中切换与项目信任决定的对话框。 -->
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
 import { computed, onMounted, onUnmounted, watch } from 'vue'
@@ -7,11 +7,13 @@ import { usePreferencesStore } from './stores/preferences'
 import { useProjectStore } from './stores/project'
 import { useRuntimeStore } from './stores/runtime'
 import { useSessionStore } from './stores/session'
+import { useTrustStore } from './stores/trust'
 import AppTopBar from './components/AppTopBar.vue'
 import ChatMessageList from './components/ChatMessageList.vue'
 import ConfirmDialog from './components/ConfirmDialog.vue'
 import PromptComposer from './components/PromptComposer.vue'
 import SessionSidebar from './components/SessionSidebar.vue'
+import TrustDialog from './components/TrustDialog.vue'
 
 const desktopStore = useDesktopStore()
 const preferencesStore = usePreferencesStore()
@@ -21,6 +23,7 @@ const sessionStore = useSessionStore()
 const { currentProject, pendingPath } = storeToRefs(projectStore)
 const { awaitingInterrupt, pendingSessionId } = storeToRefs(sessionStore)
 const { sidebarCollapsed, ready: preferencesReady } = storeToRefs(preferencesStore)
+const trustStore = useTrustStore()
 
 /** 主进程拒绝未确认的切换后，由用户在这里确认可以中断正在运行的操作。 */
 const projectConfirmDetail = computed(() => pendingPath.value ?? '')
@@ -43,6 +46,16 @@ function confirmSessionSwitch(): void {
 }
 
 function cancelSessionSwitch(): void {
+  sessionStore.cancelPending()
+}
+
+/** 信任决定保存后重试被拦截的会话打开；取消则清空待确认目标。 */
+function onTrustResolved(): void {
+  if (!sessionStore.awaitingTrust) return
+  void sessionStore.retryPendingAfterTrust()
+}
+
+function onTrustCancelled(): void {
   sessionStore.cancelPending()
 }
 
@@ -102,5 +115,7 @@ onUnmounted(() => {
       @confirm="confirmSessionSwitch"
       @cancel="cancelSessionSwitch"
     />
+
+    <TrustDialog @decided="onTrustResolved" @cancelled="onTrustCancelled" />
   </div>
 </template>

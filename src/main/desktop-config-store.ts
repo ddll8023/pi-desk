@@ -1,17 +1,21 @@
 /**
- * 本地 Desktop 配置的唯一读写者：最近项目、当前项目、界面偏好与窗口状态的加载、保存与降级处理。
+ * 本地 Desktop 配置的唯一读写者：最近项目、当前项目、界面偏好、窗口状态与各项目信任决定（Project Trust）
+ * 的加载、保存与降级处理。
  *
  * 配置位于 Electron userData 目录下的 desktop-config.json。写入采用同目录临时文件加改名替换，
  * 所有读写串行执行；结构损坏先备份再重新开始，暂时读不到时进入只读降级，避免用空配置覆盖
- * 仍然存在的记录。界面偏好与窗口状态是同一文件里的可选字段，缺失或非法一律按默认值处理，
- * 不参与结构判定，也不改变版本语义；路径归一化在 project-path.ts，切换编排在 project-manager.ts，
- * 偏好读取在 preferences-manager.ts，窗口状态校正与保存时机在 window-state.ts。
+ * 仍然存在的记录。界面偏好、窗口状态与各项目的信任决定是同一文件里的可选字段，缺失或非法一律
+ * 按默认值处理，不参与结构判定，也不改变版本语义；路径归一化在 project-path.ts，切换编排在
+ * project-manager.ts，偏好读取在 preferences-manager.ts，窗口状态校正与保存时机在 window-state.ts，
+ * 信任决定的探测与启动参数映射在 trust-manager.ts。
  */
 import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join } from 'node:path'
 import { app } from 'electron'
 import type { UiPreferences, UiTheme } from '../shared/preferences-api'
+import type { TrustDecision } from '../shared/trust-api'
+import { isTrustDecision } from '../shared/trust-api'
 import { isProject } from '../shared/project-api'
 import type { Project, ProjectList } from '../shared/project-api'
 import { projectNameFromPath } from './project-path'
@@ -53,6 +57,8 @@ interface StoredConfig {
   readonly currentProjectId: string | null
   readonly ui: UiPreferences
   readonly window: WindowState
+  /** 可选字段：键是项目规范路径，值是 Desktop 侧保存的信任决定；缺失或非法按无决定处理。 */
+  readonly projectTrust: Record<string, TrustDecision>
 }
 
 /** 需要落盘的完整配置内容；调用方显式给出，避免部分更新丢掉其他字段。 */
@@ -61,6 +67,7 @@ interface PersistPayload {
   readonly currentProjectId: string | null
   readonly ui: UiPreferences
   readonly windowState: WindowState
+  readonly projectTrust: Record<string, TrustDecision>
 }
 
 /** 配置写入失败；由调用方映射为 `PROJECT_STORAGE_FAILED` 或通用内部错误。 */
@@ -85,6 +92,17 @@ function sanitizeUiPreferences(value: unknown): UiPreferences {
     return DEFAULT_UI_PREFERENCES
   }
   return { sidebarCollapsed: value.sidebarCollapsed, theme: sanitizeTheme(value.theme) }
+}
+
+/** 只接受绝对路径键与合法决定值；单个非法条目丢弃，不影响其他记录。 */
+function sanitizeProjectTrust(value: unknown): Record<string, TrustDecision> {
+  if (!isRecord(value)) return {}
+  const decisions: Record<string, TrustDecision> = {}
+  for (const [key, entry] of Object.entries(value)) {
+    if (!isAbsolute(key) || !isTrustDecision(entry)) continue
+    decisions[key] = entry
+  }
+  return decisions
 }
 
 /** 尺寸非法回落到默认值；位置缺失或非法一律丢弃，不猜测部分坐标。 */
@@ -151,6 +169,7 @@ export class DesktopConfigStore {
   private currentProjectId: string | null = null
   private ui: UiPreferences = DEFAULT_UI_PREFERENCES
   private windowState: WindowState = DEFAULT_WINDOW_STATE
+  private projectTrust: Record<string, TrustDecision> = {}
 
   /** 读取列表与当前项目；首次调用从磁盘加载，之后返回内存状态。 */
   list(): Promise<ProjectList> {
@@ -184,7 +203,8 @@ export class DesktopConfigStore {
           projects,
           currentProjectId: record.id,
           ui: this.ui,
-          windowState: this.windowState
+          windowState: this.windowState,
+          projectTrust: this.projectTrust
         })
       }
 
@@ -211,7 +231,8 @@ export class DesktopConfigStore {
           projects: this.projects,
           currentProjectId: this.currentProjectId,
           ui,
-          windowState: this.windowState
+          windowState: this.windowState,
+          projectTrust: this.projectTrust
         })
       }
       this.ui = ui
@@ -236,10 +257,42 @@ export class DesktopConfigStore {
           projects: this.projects,
           currentProjectId: this.currentProjectId,
           ui: this.ui,
-          windowState
+          windowState,
+          projectTrust: this.projectTrust
         })
       }
       this.windowState = windowState
+    })
+  }
+
+  /** 读取项目的信任决定；首次调用从磁盘加载。项目路径规范化由调用方负责。 */
+  readTrustDecision(projectPath: string): Promise<TrustDecision | null> {
+    return this.enqueue(async () => {
+      await this.loadFromDisk()
+      return this.projectTrust[projectPath] ?? null
+    })
+  }
+
+  /**
+   * 保存、更新或清除（decision 为 null）项目的信任决定；只读降级时只更新内存状态，不写文件。
+   * 键使用调用方传入的规范化路径，与其他字段共用同一份文件与写入队列。
+   */
+  saveTrustDecision(projectPath: string, decision: TrustDecision | null): Promise<void> {
+    return this.enqueue(async () => {
+      await this.loadFromDisk()
+      const next: Record<string, TrustDecision> = { ...this.projectTrust }
+      if (decision === null) delete next[projectPath]
+      else next[projectPath] = decision
+      if (!this.readOnly) {
+        await this.persist({
+          projects: this.projects,
+          currentProjectId: this.currentProjectId,
+          ui: this.ui,
+          windowState: this.windowState,
+          projectTrust: next
+        })
+      }
+      this.projectTrust = next
     })
   }
 
@@ -298,6 +351,7 @@ export class DesktopConfigStore {
       this.currentProjectId = parsed.currentProjectId
       this.ui = parsed.ui
       this.windowState = parsed.window
+      this.projectTrust = parsed.projectTrust
       this.notice = `本地项目配置版本 ${parsed.version} 不受支持，本次运行不会保存项目选择。`
       return
     }
@@ -305,6 +359,7 @@ export class DesktopConfigStore {
     this.currentProjectId = parsed.currentProjectId
     this.ui = parsed.ui
     this.windowState = parsed.window
+    this.projectTrust = parsed.projectTrust
   }
 
   /** 解析并逐条过滤；只有顶层结构无法识别时返回 null（按损坏处理）。 */
@@ -326,7 +381,8 @@ export class DesktopConfigStore {
       projects,
       currentProjectId,
       ui: sanitizeUiPreferences(value.ui),
-      window: sanitizeWindowState(value.window)
+      window: sanitizeWindowState(value.window),
+      projectTrust: sanitizeProjectTrust(value.projectTrust)
     }
   }
 
@@ -370,7 +426,8 @@ export class DesktopConfigStore {
       projects: next.projects,
       currentProjectId: next.currentProjectId,
       ui: next.ui,
-      window: next.windowState
+      window: next.windowState,
+      projectTrust: next.projectTrust
     }
     try {
       await mkdir(dirname(file), { recursive: true })

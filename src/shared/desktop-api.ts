@@ -1,4 +1,4 @@
-/** 只定义当前应用信息 IPC 的固定通道、结果类型与跨进程响应校验。 */
+/** 只定义当前应用信息 IPC 与跨域共享错误码族的固定通道、结果类型与跨进程响应校验。 */
 export const APP_INFO_CHANNEL = 'desktop:get-app-info'
 
 export interface DesktopAppInfo {
@@ -15,6 +15,8 @@ export type DesktopErrorCode =
   | 'INVALID_RESPONSE'
   | 'BRIDGE_UNAVAILABLE'
   | 'BRIDGE_CALL_FAILED'
+  /** 项目存在受保护资源且尚无信任决定；先完成信任决定再重试。 */
+  | 'TRUST_REQUIRED'
 
 export interface DesktopError {
   readonly code: DesktopErrorCode
@@ -55,5 +57,6 @@ export function isAppInfoResult(value: unknown): value is AppInfoResult {
       || code === 'INTERNAL_ERROR'
       || code === 'INVALID_RESPONSE'
       || code === 'BRIDGE_UNAVAILABLE'
-      || code === 'BRIDGE_CALL_FAILED')
+      || code === 'BRIDGE_CALL_FAILED'
+      || code === 'TRUST_REQUIRED')
 }

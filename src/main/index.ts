@@ -1,11 +1,11 @@
-/** 管理唯一桌面窗口及其尺寸位置偏好、本地资产边界，以及应用信息、Project 选择与列表、Session 列表与打开、界面偏好、Runtime 启停、Prompt 提交、中止、Agent 能力查询与设置、消息/工具投影 IPC、事件广播与退出编排。 */
+/** 管理唯一桌面窗口及其尺寸位置偏好、本地资产边界，以及应用信息、Project 选择与列表、Session 列表与打开、Project Trust 查询与决定、界面偏好、Runtime 启停、Prompt 提交、中止、Agent 能力查询与设置、消息/工具投影 IPC、事件广播与退出编排。 */
 import { realpath } from 'node:fs/promises'
 import { extname, isAbsolute, relative, resolve, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { app, BrowserWindow, dialog, ipcMain, nativeTheme, net, protocol, session } from 'electron'
 import type { IpcMainInvokeEvent } from 'electron'
 import { APP_INFO_CHANNEL } from '../shared/desktop-api'
-import type { AppInfoResult } from '../shared/desktop-api'
+import type { AppInfoResult, DesktopErrorCode } from '../shared/desktop-api'
 import {
   PREFERENCES_GET_CHANNEL,
   PREFERENCES_SET_UI_CHANNEL
@@ -24,6 +24,15 @@ import {
   SESSION_OPEN_CHANNEL
 } from '../shared/session-api'
 import type { SessionErrorCode, SessionListResult, SessionOpenResult } from '../shared/session-api'
+import {
+  TRUST_DECIDE_CHANNEL,
+  TRUST_STATUS_CHANNEL,
+  isTrustDecisionInput
+} from '../shared/trust-api'
+import type {
+  TrustDecisionResult,
+  TrustStatusResult
+} from '../shared/trust-api'
 import {
   RUNTIME_ABORT_CHANNEL,
   RUNTIME_CAPABILITIES_CHANNEL,
@@ -52,6 +61,7 @@ import { PreferencesManager } from './preferences-manager'
 import { ProjectManager } from './project-manager'
 import { RuntimeManager } from './runtime-manager'
 import { SessionManager } from './session-manager'
+import { TrustManager, TrustManagerError } from './trust-manager'
 import { MIN_WINDOW_HEIGHT, MIN_WINDOW_WIDTH, WindowState } from './window-state'
 
 const DEVELOPMENT_PAGE_URL = 'http://127.0.0.1:5173/'
@@ -98,6 +108,8 @@ const projectManager = new ProjectManager({
   store: configStore
 })
 const sessionManager = new SessionManager({ projects: projectManager, runtime: runtimeManager })
+/** Project Trust 的探测与决定管理；决定存入 desktop-config.json，不读写 Pi 的 trust.json。 */
+const trustManager = new TrustManager({ store: configStore })
 const preferencesManager = new PreferencesManager({ store: configStore })
 const windowState = new WindowState({ store: configStore })
 
@@ -401,9 +413,121 @@ function registerSessionHandlers(pageUrl: string): void {
       if (typeof allowInterrupt !== 'boolean') {
         return sessionFailure('INVALID_REQUEST', '打开会话必须显式说明是否允许中断当前操作。')
       }
-      return sessionManager.open({ sessionId: targetSessionId, allowInterrupt })
+      const trust = await resolveTrustForCurrentProject()
+      if (trust.requiresPrompt) {
+        return sessionFailure('TRUST_REQUIRED', trust.message ?? '项目包含需要信任决定的资源。')
+      }
+      return sessionManager.open({ sessionId: targetSessionId, allowInterrupt }, trust.decision)
     }
   )
+}
+
+/**
+ * Project Trust 拦截点（基于当前项目）：有受保护资源且无已保存决定时返回 `requiresPrompt`，
+ * 由调用方按 `TRUST_REQUIRED` 拒绝；有决定或无资源时返回应传给启动链的决定。
+ */
+async function resolveTrustForCurrentProject(): Promise<{
+  readonly requiresPrompt: boolean
+  readonly decision: 'trusted' | 'untrusted' | null
+  readonly message: string | null
+}> {
+  const outcome = await trustManager.resolveLaunchDecision(projectManager.currentProjectPath())
+  if (!outcome.requiresPrompt) {
+    return { requiresPrompt: false, decision: outcome.decision, message: null }
+  }
+  const status = await trustManager.statusOf(projectManager.currentProjectPath())
+  const summary = status.resources.map((resource) => resource.path).join('、')
+  return {
+    requiresPrompt: true,
+    decision: null,
+    message: `项目包含需要信任决定的资源：${summary}`
+  }
+}
+
+/** runtime-start 的带信任启动链：拦截无决定的项目，其余与原启动入口一致。 */
+async function startTrustedRuntime(projectPath: string): Promise<RuntimeResult> {
+  const outcome = await trustManager.resolveLaunchDecision(projectPath)
+  if (outcome.requiresPrompt) {
+    const status = await trustManager.statusOf(projectPath)
+    const summary = status.resources.map((resource) => resource.path).join('、')
+    return {
+      ok: false,
+      error: {
+        code: 'TRUST_REQUIRED',
+        message: `项目包含需要信任决定的资源：${summary}`
+      }
+    }
+  }
+  return runtimeManager.start(projectPath, null, outcome.decision)
+}
+
+/** Trust 查询与决定接口；决定只接受当前项目，防止页面改写其他项目的记录。 */
+function registerTrustHandlers(pageUrl: string): void {  ipcMain.handle(
+    TRUST_STATUS_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<TrustStatusResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return trustFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 0) {
+        return trustFailure('INVALID_REQUEST', '信任状态接口不接受参数。')
+      }
+      try {
+        return { ok: true, data: await trustManager.statusOf(projectManager.currentProjectPath()) }
+      } catch (error) {
+        return trustFailureFromError(error)
+      }
+    }
+  )
+
+  ipcMain.handle(
+    TRUST_DECIDE_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<TrustDecisionResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return trustFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 1) {
+        return trustFailure('INVALID_REQUEST', '信任决定接口只接受一个请求对象。')
+      }
+      const request = args[0]
+      if (typeof request !== 'object' || request === null || Array.isArray(request)) {
+        return trustFailure('INVALID_REQUEST', '信任决定参数格式不正确。')
+      }
+      const fields = request as Record<string, unknown>
+      if (Object.keys(fields).some((key) => key !== 'projectPath' && key !== 'decision')) {
+        return trustFailure('INVALID_REQUEST', '信任决定参数包含未支持的字段。')
+      }
+      const { projectPath, decision } = fields
+      if (typeof projectPath !== 'string') {
+        return trustFailure('INVALID_REQUEST', '项目目录必须是非空的绝对路径。')
+      }
+      if (!isTrustDecisionInput(decision)) {
+        return trustFailure('INVALID_REQUEST', '信任决定取值只能是 trusted、untrusted 或 unset。')
+      }
+      try {
+        const normalizedDecision: 'trusted' | 'untrusted' | null = decision === 'unset' ? null : decision
+        const status = await trustManager.decide(
+          projectPath,
+          normalizedDecision,
+          projectManager.currentProjectPath()
+        )
+        return { ok: true, data: status }
+      } catch (error) {
+        return trustFailureFromError(error)
+      }
+    }
+  )
+}
+
+function trustFailure(code: DesktopErrorCode, message: string): TrustStatusResult {
+  return { ok: false, error: { code, message } }
+}
+
+/** 探测与决定的内部失败按可展示错误返回；不确定的异常收敛为内部错误。 */
+function trustFailureFromError(error: unknown): TrustStatusResult {
+  if (error instanceof TrustManagerError) {
+    return trustFailure('INVALID_REQUEST', error.message)
+  }
+  return trustFailure('INTERNAL_ERROR', '读取或保存信任决定时发生未预期的内部错误。')
 }
 
 /** 只接受项目目录；不接受可执行文件路径、启动参数或任意 RPC 内容。 */
@@ -429,7 +553,7 @@ function registerRuntimeHandlers(pageUrl: string): void {
       if (typeof projectPath !== 'string') {
         return runtimeFailure('INVALID_PROJECT_PATH', '项目目录必须是非空的绝对路径。')
       }
-      return runtimeManager.start(projectPath, null)
+      return startTrustedRuntime(projectPath)
     }
   )
 
@@ -750,6 +874,7 @@ app.whenReady().then(async () => {
   registerRuntimeHandlers(pageUrl)
   registerProjectHandlers(pageUrl)
   registerSessionHandlers(pageUrl)
+  registerTrustHandlers(pageUrl)
   registerPreferencesHandlers(pageUrl)
   runtimeManager.onStatusChanged(broadcastRuntimeStatus)
   runtimeManager.onProjectionBatch(broadcastRuntimeProjection)

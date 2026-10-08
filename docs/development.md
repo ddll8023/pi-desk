@@ -60,7 +60,7 @@ Desktop 仅维护自己的数据：最近项目、窗口尺寸、Sidebar 状态�
 
 开发在 Windows 与 macOS 主机上交替进行，文档不绑定某一平台，也不固定绝对路径；仓库可检出到任意位置，以下路径与命令均以项目根目录为基准。
 
-仓库包含开发文档、Electron/Vue 桌面骨架、三端构建与 TypeScript 配置、统一前端服务入口、展示状态 Store，以及 Pi Runtime 的准备脚本与固定版本清单。当前主界面由顶栏、可折叠的会话侧栏、消息区与 Prompt 区组成，可经受限 preload API 读取应用信息、选择并记住本地项目、列出并打开该项目的 Pi 会话、启停 Pi RPC sidecar、接收状态变化、提交 Prompt、展示本轮文本与 Thinking、查看工具执行、切换模型与 Thinking 级别并查看上下文占用、中止当前操作，并保存 Sidebar 折叠状态、主题与窗口尺寸位置；不读取项目内容、不持久化消息。
+仓库包含开发文档、Electron/Vue 桌面骨架、三端构建与 TypeScript 配置、统一前端服务入口、展示状态 Store，以及 Pi Runtime 的准备脚本与固定版本清单。当前主界面由顶栏、可折叠的会话侧栏、消息区与 Prompt 区组成，可经受限 preload API 读取应用信息、选择并记住本地项目、列出并打开该项目的 Pi 会话、启停 Pi RPC sidecar、接收状态变化、提交 Prompt、展示本轮文本与 Thinking、查看工具执行、切换模型与 Thinking 级别并查看上下文占用、中止当前操作、对项目信任做出与重置决定，并保存 Sidebar 折叠状态、主题与窗口尺寸位置；不读取项目内容、不持久化消息。
 
 开发使用 npm，工具版本由 `package.json` 的 `packageManager` 字段声明，直接依赖使用精确版本。`package.json` 是依赖声明的维护位置，完整依赖树由安装生成的 `package-lock.json` 固定，不手写锁文件。依赖安装属于独立授权操作。
 
@@ -180,7 +180,7 @@ Desktop、固定 Pi 和配套资源作为一致发行版本更新，不在运行
 pi --mode rpc --no-session
 ```
 
-主进程固定完整启动参数，页面不能覆盖：`--mode rpc`、`--no-approve`、`--no-extensions`、`--no-skills`、`--no-prompt-templates`、`--no-mcp`、按平台选择的 `--tools`（Windows `read,powershell,edit,write`；macOS `read,bash,edit,write`）、会话目录 `--session-dir <dir>`，以及恢复已有会话时的 `--session-id <id>`。环境继承父进程并追加 `PI_SKIP_VERSION_CHECK=1`；不设置 `PI_OFFLINE`，因为 RPC 启动会在后台刷新模型目录；也不设置 `PI_PACKAGE_DIR`，因为包资源与可执行文件同层。
+主进程固定完整启动参数，页面不能覆盖：`--mode rpc`、`--no-extensions`、`--no-skills`、`--no-prompt-templates`、`--no-mcp`、按平台选择的 `--tools`（Windows `read,powershell,edit,write`；macOS `read,bash,edit,write`）、会话目录 `--session-dir <dir>`，以及恢复已有会话时的 `--session-id <id>`；项目信任覆盖 `--approve` / `--no-approve` 按第 6.2 节 Project Trust 的探测结果条件传递，无受保护资源时不传。环境继承父进程并追加 `PI_SKIP_VERSION_CHECK=1`；不设置 `PI_OFFLINE`，因为 RPC 启动会在后台刷新模型目录；也不设置 `PI_PACKAGE_DIR`，因为包资源与可执行文件同层。
 
 Electron 主进程设置 `cwd` 为用户选择的项目根目录，并分别建立 stdin、stdout、stderr 管道。不启动 HTTP 或 localhost TCP RPC 服务，不将协议暴露到网络。
 
@@ -370,8 +370,8 @@ Pi 管道背压与 UI 通知背压分开处理：采用有界批次与渲染端�
 
 - Project 基础属性为 `id`、`name`、`path`、`lastOpenedAt`：`id` 由主进程用 `crypto.randomUUID()` 生成，`name` 取规范路径末段，`lastOpenedAt` 为纪元毫秒，只在项目被设为当前项目时更新。
 - 路径归一化只有一个入口（`src/main/project-path.ts`）：拒绝空值、NUL 与相对路径后执行 `realpath`（解析符号链接、平台短名与规范大小写，去掉尾部分隔符与 `\\?\` 前缀，保留 UNC 形式），再要求 `stat` 为目录。不做大小写折叠，不主动添加 `\\?\`。
-- 本地配置为单个 JSON 文件 `<userData>/desktop-config.json`，结构为 `{ version: 1, projects: [...], currentProjectId, ui, window }`，UTF-8、两空格缩进、末尾换行；最近项目上限 50 条，超出按 `lastOpenedAt` 最旧淘汰。写入使用同目录临时文件加改名替换，并在主进程内串行执行。项目列表、界面偏好与窗口状态共用同一个文件与同一条写入队列，只有一个读写者。
-- 界面偏好与窗口状态是同一文件里的可选字段：`ui.sidebarCollapsed`（布尔，默认 `false`）、`ui.theme`（`system`/`light`/`dark`，默认 `system`）与 `window.width/height/x/y/maximized`（尺寸与坐标为整数，位置必须成对有效，默认 1120×820 且不恢复位置）。字段缺失或非法一律按默认值处理，不参与损坏与版本判定，也不改变版本语义。
+- 本地配置为单个 JSON 文件 `<userData>/desktop-config.json`，结构为 `{ version: 1, projects: [...], currentProjectId, ui, window, projectTrust }`，UTF-8、两空格缩进、末尾换行；最近项目上限 50 条，超出按 `lastOpenedAt` 最旧淘汰。写入使用同目录临时文件加改名替换，并在主进程内串行执行。项目列表、界面偏好、窗口状态与各项目的信任决定共用同一个文件与同一条写入队列，只有一个读写者；`projectTrust` 的取值与语义见本节 Project Trust 小节。
+- 界面偏好与窗口状态是同一文件里的可选字段：`ui.sidebarCollapsed`（布尔，默认 `false`）、`ui.theme`（`system`/`light`/`dark`，默认 `system`）与 `window.width/height/x/y/maximized`（尺寸与坐标为整数，位置必须成对有效，默认 1120×820 且不恢复位置）；各项目的信任决定同为可选字段，见 Project Trust 小节。字段缺失或非法一律按默认值处理，不参与损坏与版本判定，也不改变版本语义。
 - 界面偏好通道：`desktop:preferences-get`（零参数，返回 Sidebar 折叠状态与主题）与 `desktop:preferences-set-ui`（只接受 `{ sidebarCollapsed, theme }`）。复用既有桥接错误码，本阶段不新增；写入失败只提示，界面偏好已在页面本地生效。
 - 主题：取值与 Electron `nativeTheme.themeSource` 状态机一一对应；主进程在创建窗口前从配置读取主题并应用，页面内 `prefers-color-scheme` 媒体查询切换 CSS 令牌，窗口背景色按 `shouldUseDarkColors` 选择并与 `--color-desk-canvas` 同步维护，系统主题变化时同步收敛背景色；`system` 时跟随 OS 实时切换，不增加事件通道。保存偏好时在参数校验通过后立即应用本次请求的主题，只读降级时同样对本次运行生效。
 - 窗口偏好不经 IPC，由主进程独占：创建窗口前读取，位置必须与某显示器工作区有足够交集，否则丢弃位置交给窗口居中；尺寸按窗口下限（720×600）与目标显示器工作区收敛；保存使用 `getNormalBounds` 与最大化状态，不把最大化尺寸写成常态尺寸；变更防抖写入，并在退出关闭链前强制落盘。
@@ -381,6 +381,15 @@ Pi 管道背压与 UI 通知背压分开处理：采用有界批次与渲染端�
 - 错误码：本阶段新增 `INVALID_PROJECT_PATH`、`PROJECT_SWITCH_BLOCKED`、`PROJECT_STORAGE_FAILED`，与既有桥接错误码共用结果结构。
 - 页面只保存展示副本，选择项目不会自动启动 Runtime；主进程读取项目列表时不检查项目目录是否仍然存在。
 
+#### Project Trust
+
+- 触发信任要求的资源清单以 Pi v1.0.4 官方文档为准：项目目录下 `.pi/settings.json`、`.pi/mcp.json`、`.pi/extensions|skills|prompts|themes`、`.pi/SYSTEM.md`、`.pi/APPEND_SYSTEM.md`，以及当前目录与全部祖先目录的 `.agents/skills`；裸 `.pi` 目录不触发。探测在主进程内只读 `stat` 完成，祖先遍历到文件系统根为止，单路径失败按不存在处理，结果按项目规范路径缓存，不监听文件变化。
+- 决定存入 Desktop 自己的配置：`desktop-config.json` 顶层可选字段 `projectTrust`（键为项目规范路径，值为 `"trusted"` 或 `"untrusted"`），缺失或非法按无决定处理，不改变配置版本语义；不读写 Pi 的 `~/.pi/agent/trust.json`，也不处理 `project_trust` extension 事件。
+- 官方优先级中 CLI 覆盖最优先：有受保护资源时 Desktop 总是显式传 `--approve`（信任）或 `--no-approve`（不信任），因此会覆盖用户在 Pi TUI 中已保存的信任记录；无受保护资源时不传该参数，交给官方默认。信任≠沙箱，上下文文件（AGENTS/CLAUDE）不受决定影响，官方在 trust 决定前读取 `sessionDir` 的行为不改变。
+- 拦截点只有两个：`desktop:runtime-start` 与 `desktop:session-open`。有受保护资源且无决定时返回 `TRUST_REQUIRED`（消息带资源路径摘要），不启动 Runtime；用户经 `desktop:trust-decide` 保存决定后，界面自动重试被拦截的会话打开或新建，取消则不重试。
+- 通道：`desktop:trust-status`（零参数，返回当前项目的决定与探测到的资源列表）与 `desktop:trust-decide`（只接受 `{ projectPath, decision }`，`decision` 为 `"trusted"`/`"untrusted"`/`"unset"`；`projectPath` 必须与当前项目归一化路径一致，防止页面改写其他项目的决定，`unset` 表示清除决定）。错误码新增 `TRUST_REQUIRED`（定义在共享桥接错误码族，`desktop:runtime-start` 与 `desktop:session-open` 都可能返回）。
+- 界面入口：会话打开或 Runtime 启动被拦截时弹信任对话框（资源列表 + 安全影响说明 + 信任/不信任），决定后自动重试被拦截的会话打开或新建，取消不保存任何状态；Runtime 详情弹层提供「重置本项目信任决定」，下次启动该项目时重新询问。
+
 #### Session 与恢复
 
 - 会话文件由 Pi 管理：根目录是 `<agent-dir>/sessions/`（`agent-dir` 由 `PI_CODING_AGENT_DIR` 指定，默认 `~/.pi/agent`），按工作目录分组为 `--<路径 munged>--/`（去掉路径开头的分隔符后把 `/`、`\`、`:` 换成 `-`），文件名是 `<ISO 时间>_<会话 id>.jsonl`，同名 `.jsonl.timings.json` 侧车不参与列表。主进程显式传 `--session-dir` 指定该根目录，不读取 `PI_CODING_AGENT_SESSION_DIR` 与 `sessionDir` 设置。
@@ -388,7 +397,7 @@ Pi 管道背压与 UI 通知背压分开处理：采用有界批次与渲染端�
 - 分组目录名会歧义（`<根>/a-b` 与 `<根>/a/b` 经 munge 后同名），因此会话归属以头部 `cwd` 与当前项目规范路径的比较结果为准；Windows 折叠大小写，其他平台严格比较。
 - 打开与新建一律重启 Runtime：先校验目标会话存在且属于当前项目，再复用本节关闭链结束旧 Runtime，确认回到 `idle` 后以 `--session-id <id>`（恢复）或不带该参数（新建）启动；请求的会话与已就绪 Runtime 一致时幂等返回。Runtime 处于 `starting`/`stopping`，或 `ready` 且 `isStreaming` 为真而请求未带 `allowInterrupt` 时返回 `SESSION_SWITCH_BLOCKED` 且不中断任何操作；不排队、不重放。不使用 RPC 的 `switch_session` 与 `new_session`，保持一个 Runtime 代际对应一个会话。
 - 恢复会话时在发布就绪前请求 `get_messages`，把历史消息按整条替换规则灌入临时投影作为基准；读取历史消息的等待上限是 15 000 毫秒，超时或失败按启动失败处理，不显示不完整的历史，截断与上限沿用临时投影契约。
-- 通道：`desktop:session-list`（零参数，基于当前项目）与 `desktop:session-open`（只接受 `{ sessionId, allowInterrupt }`，`sessionId` 为 null 表示新建，非 null 时只接受 Pi 允许的字符集：字母、数字、`.`、`_`、`-`）。新增错误码 `SESSION_NOT_FOUND`（目标会话不存在，或 Pi 实际打开的会话与请求不一致）与 `SESSION_SWITCH_BLOCKED`；其余复用 Runtime 错误码族。会话文件路径不跨 IPC 交给页面。
+- 通道：`desktop:session-list`（零参数，基于当前项目）与 `desktop:session-open`（只接受 `{ sessionId, allowInterrupt }`，`sessionId` 为 null 表示新建，非 null 时只接受 Pi 允许的字符集：字母、数字、`.`、`_`、`-`）。新增错误码 `SESSION_NOT_FOUND`（目标会话不存在，或 Pi 实际打开的会话与请求不一致）与 `SESSION_SWITCH_BLOCKED`；有受保护资源且无信任决定时返回 `TRUST_REQUIRED`（见本节 Project Trust 小节）；其余复用 Runtime 错误码族。会话文件路径不跨 IPC 交给页面。
 
 #### Agent 控制（模型、Thinking、上下文占用）
 
@@ -414,7 +423,7 @@ Windows 使用系统 `taskkill` 对当前受管 Pi 进程树定向终止，不�
 
 主界面替换第一阶段的最小 Runtime 页面，提供：
 
-- 顶栏：Sidebar 折叠开关、项目切换入口（目录选择、最近项目、手动路径、配置提示）、当前会话、Runtime 状态，以及详情弹层里的 Agent 控制（模型与 Thinking 选择、上下文占用、压缩中提示）与应用信息、关闭 Runtime。
+- 顶栏：Sidebar 折叠开关、项目切换入口（目录选择、最近项目、手动路径、配置提示）、当前会话、Runtime 状态，以及详情弹层里的 Agent 控制（模型与 Thinking 选择、上下文占用、压缩中提示）、重置本项目信任决定与应用信息、关闭 Runtime。
 - 会话侧栏：当前项目的 Pi 会话列表、新建与刷新、当前会话高亮、跳过与截断提示。
 - 消息区：按消息分组并按内容块顺序渲染，用户与 Assistant 区分，Thinking 可折叠，工具调用内联为通用工具卡片（名称、状态、Desktop 计算的耗时与参数摘要，展开后显示参数、结果或错误输出、非文本内容描述与截断提示；运行中的卡片自动展开一次，之后由用户开合），并表达同步、截断、失败与运行中状态。
 - Prompt 区：输入与发送、Agent 运行期间原位的停止入口，以及请求接受、拒绝与中止的提示。
@@ -458,9 +467,9 @@ RPC 无法展示 Pi 内建的 TUI trust prompt。没有显式覆盖、Extension 
 
 第一阶段显式采用 `--no-approve`，并关闭 Extensions、Skills、Prompt Templates、MCP（对应 `--no-extensions`、`--no-skills`、`--no-prompt-templates`、`--no-mcp`）；避免依赖全局 trust 默认值，不自动信任项目，不直接修改 `trust.json`。
 
-Trust 不完全覆盖启动行为：官方代码在 trust 决定前会读取项目 `sessionDir`；AGENTS/CLAUDE 上下文文件也不因拒绝 trust 自动禁用。关闭项目资源加载不等于内容安全或工具权限受限。
+P3-01 已实现 Desktop 侧的信任流程：启动前探测受保护资源，无决定时经 `TRUST_REQUIRED` 拦截并由用户决定，决定存入 `desktop-config.json` 的 `projectTrust` 字段，启动时按决定条件传递 `--approve` / `--no-approve`（细节见第 6.2 节 Project Trust）。Desktop 的显式覆盖优先于 Pi 已保存的信任记录，这是官方 CLI 覆盖优先级的直接结果；Extensions 等四类资源仍以 `--no-*` 关闭，启用与否属 P3-02 / P3-06 范围。
 
-后续 Project Trust UI 在 Pi 启动前取得用户决定，通过正式 CLI 参数传递；持久决定的方式在第三阶段另行核实。Extension 对话在未支持时不能被自动肯定；第一阶段直接不启用 Extensions。
+Trust 不完全覆盖启动行为：官方代码在 trust 决定前会读取项目 `sessionDir`；AGENTS/CLAUDE 上下文文件也不因拒绝 trust 自动禁用。关闭项目资源加载不等于内容安全或工具权限受限，信任决定也不是 OS 沙箱。
 
 ### 7.3 平台 Shell 与工具集合
 

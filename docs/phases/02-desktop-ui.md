@@ -12,7 +12,7 @@
 
 - 第一阶段提供 Runtime、Prompt、Streaming、工具事件和取消能力。
 - 基础会话恢复属于本阶段，第三阶段只深化体验与能力，不重复实现。
-- 正式 Trust UI 尚未接入时继续显式拒绝项目资源加载，不因新增 Project 选择器自动信任目录。
+- Project Trust 属第三阶段范围（见 03-pi-capabilities.md）；接入前本阶段显式拒绝项目资源加载，不因新增 Project 选择器自动信任目录。
 
 ## 任务拆分
 

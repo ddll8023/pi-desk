@@ -128,10 +128,16 @@ export class RuntimeManager {
     }
   }
 
-  /** 启动唯一 Runtime；重复启动被拒绝，不做隐式重启。`sessionId` 为 null 时新建会话。 */
-  async start(projectPath: string, sessionId: string | null): Promise<RuntimeResult> {
+  /** 启动唯一 Runtime；重复启动被拒绝，不做隐式重启。`sessionId` 为 null 时新建会话。
+   * `trustDecision` 是主进程探测并记录的 Project Trust 决定，不由页面指定。
+   */
+  async start(
+    projectPath: string,
+    sessionId: string | null,
+    trustDecision: 'trusted' | 'untrusted' | null
+  ): Promise<RuntimeResult> {
     try {
-      return { ok: true, data: await this.launch(projectPath, sessionId) }
+      return { ok: true, data: await this.launch(projectPath, sessionId, trustDecision) }
     } catch (error) {
       const failure = error instanceof RuntimeFailure
         ? error
@@ -292,7 +298,11 @@ export class RuntimeManager {
     await this.stop()
   }
 
-  private async launch(projectPath: string, sessionId: string | null): Promise<RuntimeStatus> {
+  private async launch(
+    projectPath: string,
+    sessionId: string | null,
+    trustDecision: 'trusted' | 'untrusted' | null
+  ): Promise<RuntimeStatus> {
     if (this.active !== null) {
       throw new RuntimeFailure(
         'RUNTIME_ALREADY_RUNNING',
@@ -338,6 +348,7 @@ export class RuntimeManager {
         projectPath: projectDirectory,
         sessionDir: getSessionRoot(),
         sessionId,
+        trustDecision,
         handlers: {
           onStdoutLine: (line) => protocol.handleLine(line),
           onProtocolError: (message) => {

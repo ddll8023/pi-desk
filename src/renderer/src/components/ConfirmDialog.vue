@@ -1,4 +1,4 @@
-<!-- 运行中切换的确认对话框：只有用户确认后才由调用方带 allowInterrupt 重试，取消不做任何改动，也不中断正在运行的操作。 -->
+<!-- 需要用户确认的操作对话框：运行中切换带 allowInterrupt 重试，信任决定重置由调用方执行对应动作，取消不做任何改动。 -->
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref, useId } from 'vue'
 
