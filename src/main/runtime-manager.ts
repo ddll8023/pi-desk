@@ -1,5 +1,5 @@
 /**
- * 唯一 Runtime 的所有者：状态机、启停编排、受限业务操作与状态快照。
+ * 唯一 Runtime 的所有者：状态机、启停编排（含恢复会话时的历史基准）、受限业务操作与状态快照。
  *
  * 不直接管理 Pi Session 与消息内容；进程与管道操作交给 pi-process，展示投影交给
  * message-projection，IPC 契约与校验在 shared/runtime-api.ts。不接受页面传入的可执行
@@ -20,6 +20,7 @@ import { PiProcess, PiProcessError } from './pi-process'
 import type { PiExitEvent } from './pi-process'
 import { PiProtocol, toPromptDisposition, toRuntimeInfo } from './pi-protocol'
 import { ProjectPathError, normalizeProjectPath } from './project-path'
+import { getSessionRoot } from './session-store'
 
 /** get_state 就绪等待期限；超时只结束等待，不证明 Pi 没有响应。 */
 const READY_TIMEOUT_MS = 10_000
@@ -32,6 +33,9 @@ const ABORT_TIMEOUT_MS = 30_000
 
 /** 关闭链里的取消等待上限；明显短于退出总预算，超时就直接进入兜底。 */
 const ABORT_SHUTDOWN_WAIT_MS = 3_000
+
+/** 恢复会话时读取历史消息的等待上限；超时按启动失败处理，不显示不完整的历史。 */
+const HISTORY_TIMEOUT_MS = 15_000
 
 /** prompt 文本上限，按 UTF-8 字节计。 */
 const PROMPT_MAX_BYTES = 1_048_576
@@ -94,10 +98,10 @@ export class RuntimeManager {
     }
   }
 
-  /** 启动唯一 Runtime；重复启动被拒绝，不做隐式重启。 */
-  async start(projectPath: string): Promise<RuntimeResult> {
+  /** 启动唯一 Runtime；重复启动被拒绝，不做隐式重启。`sessionId` 为 null 时新建会话。 */
+  async start(projectPath: string, sessionId: string | null): Promise<RuntimeResult> {
     try {
-      return { ok: true, data: await this.launch(projectPath) }
+      return { ok: true, data: await this.launch(projectPath, sessionId) }
     } catch (error) {
       const failure = error instanceof RuntimeFailure
         ? error
@@ -221,7 +225,7 @@ export class RuntimeManager {
     await this.stop()
   }
 
-  private async launch(projectPath: string): Promise<RuntimeStatus> {
+  private async launch(projectPath: string, sessionId: string | null): Promise<RuntimeStatus> {
     if (this.active !== null) {
       throw new RuntimeFailure(
         'RUNTIME_ALREADY_RUNNING',
@@ -263,6 +267,8 @@ export class RuntimeManager {
     try {
       piProcess = PiProcess.start({
         projectPath: projectDirectory,
+        sessionDir: getSessionRoot(),
+        sessionId,
         handlers: {
           onStdoutLine: (line) => protocol.handleLine(line),
           onProtocolError: (message) => {
@@ -318,6 +324,10 @@ export class RuntimeManager {
       if (info === null) {
         throw new RuntimeFailure('RUNTIME_PROTOCOL_ERROR', 'get_state 响应缺少约定的会话字段。')
       }
+      if (info.messageCount > 0) {
+        // 恢复会话：先取得历史消息作为投影基准，再对外声明就绪。
+        await this.loadHistory(runtime, projection)
+      }
 
       this.publish({ state: 'ready', runtimeId, info, lastError: null })
       return { ...this.snapshot }
@@ -334,6 +344,45 @@ export class RuntimeManager {
         throw new RuntimeFailure('RUNTIME_SPAWN_FAILED', error.message)
       }
       throw error
+    }
+  }
+
+  /**
+   * 以 `get_messages` 的历史消息初始化展示投影。失败即按启动失败处理，
+   * 不把空投影冒充成完整会话；历史超上限时的截断由投影自行计数。
+   */
+  private async loadHistory(runtime: ActiveRuntime, projection: MessageProjection): Promise<void> {
+    const outcome = await runtime.protocol.request(
+      { type: 'get_messages' },
+      (line) => runtime.process.write(line),
+      HISTORY_TIMEOUT_MS
+    )
+
+    if (outcome.status === 'timeout') {
+      throw new RuntimeFailure(
+        'RUNTIME_TIMEOUT',
+        `Pi 在 ${HISTORY_TIMEOUT_MS} 毫秒内没有返回会话消息。`
+      )
+    }
+    if (outcome.status === 'closed') {
+      throw new RuntimeFailure(
+        'RUNTIME_EXITED',
+        this.describeFailure(
+          runtime.process.exitEvent,
+          runtime.process,
+          outcome.reason,
+          'Pi 进程在读取会话消息期间结束了标准输入。'
+        )
+      )
+    }
+    if (!outcome.response.success) {
+      throw new RuntimeFailure(
+        'RUNTIME_PROTOCOL_ERROR',
+        `Pi 无法取出会话消息：${outcome.response.error ?? '未提供错误信息'}`
+      )
+    }
+    if (!projection.seedHistory(outcome.response.data)) {
+      throw new RuntimeFailure('RUNTIME_PROTOCOL_ERROR', 'get_messages 响应缺少约定的消息数组。')
     }
   }
 

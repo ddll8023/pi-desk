@@ -113,6 +113,11 @@ export class ProjectStore {
     return run
   }
 
+  /** 内存快照；不触发磁盘读取，供同一进程内的其他主进程模块读取当前项目。 */
+  getState(): ProjectList {
+    return this.snapshot()
+  }
+
   private snapshot(): ProjectList {
     return {
       projects: [...this.projects],

@@ -153,6 +153,24 @@ export class MessageProjection {
     }
   }
 
+  /**
+   * 以 `get_messages` 响应里的会话消息重建投影基准：每条消息按权威整条替换语义收录，
+   * 用于恢复会话后的第一次同步。载荷缺少消息数组时返回 false（响应契约不符）。
+   */
+  seedHistory(payload: unknown): boolean {
+    if (this.disposed) return false
+    const messages = isRecord(payload) ? payload.messages : null
+    if (!Array.isArray(messages)) return false
+
+    // 历史消息与流式事件之间没有配对关系，每条各自成条。
+    this.active = null
+    for (const message of messages) this.applyAuthoritativeMessage(message, null)
+    this.enforceLimits()
+    this.callbacks.onStatusHint({ messageCount: this.messages.length })
+    this.flush()
+    return true
+  }
+
   /** 快照是渲染端重新同步的唯一基准。 */
   snapshot(): ProjectionSnapshot {
     const tools = this.toolProjection.snapshot()
@@ -198,13 +216,25 @@ export class MessageProjection {
   }
 
   private endMessage(value: unknown): void {
-    if (!isRecord(value)) return
-    const role = readRole(value.role)
-    if (role === null) return
-
     const active = this.active
     this.active = null
-    // 以权威消息整条替换；缺少开始事件时仍然收录，避免丢失最终消息。
+    const target = this.applyAuthoritativeMessage(value, active)
+    if (target === null) return
+    this.callbacks.onStatusHint({ messageCount: this.messages.length })
+  }
+
+  /**
+   * 用权威完整消息整条替换目标消息；没有配对开始事件时仍然收录。
+   * 缺省参数是配对中的活动消息，恢复会话时传入 null 表示每条历史消息各自成条。
+   */
+  private applyAuthoritativeMessage(
+    value: unknown,
+    active: MutableMessage | null
+  ): MutableMessage | null {
+    if (!isRecord(value)) return null
+    const role = readRole(value.role)
+    if (role === null) return null
+
     const target = active !== null && active.role === role ? active : this.createMessage(role, value)
     if (target !== active) {
       this.messages.push(target)
@@ -215,7 +245,7 @@ export class MessageProjection {
     target.stopReason = typeof value.stopReason === 'string' ? value.stopReason : null
     target.errorMessage = typeof value.errorMessage === 'string' ? value.errorMessage : null
     this.queueUpdate({ kind: 'message', message: this.toPublicMessage(target) })
-    this.callbacks.onStatusHint({ messageCount: this.messages.length })
+    return target
   }
 
   private updateMessage(payload: Record<string, unknown>): void {

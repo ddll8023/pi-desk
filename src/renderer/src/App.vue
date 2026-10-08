@@ -1,11 +1,13 @@
-<!-- 展示桌面连接、项目选择、Runtime 状态、消息投影与工具执行，并提交 Prompt、中止当前操作；项目选择保存在主进程配置中，消息与输入内容不在本页持久化。 -->
+<!-- 展示桌面连接、项目选择、会话列表、Runtime 状态、消息投影与工具执行，并提交 Prompt、中止当前操作；项目选择保存在主进程配置中，消息与输入内容不在本页持久化。 -->
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import type { ProjectionBlockKind, ToolExecutionPhase } from '../../shared/runtime-api'
+import type { SessionSummary } from '../../shared/session-api'
 import { useDesktopStore } from './stores/desktop'
 import { useProjectStore } from './stores/project'
 import { useRuntimeStore } from './stores/runtime'
+import { useSessionStore } from './stores/session'
 
 /** 工具状态只做文案映射，不推断工具是否真的成功结束。 */
 const TOOL_PHASE_LABELS: Readonly<Record<ToolExecutionPhase, string>> = {
@@ -18,6 +20,7 @@ const TOOL_PHASE_LABELS: Readonly<Record<ToolExecutionPhase, string>> = {
 const desktopStore = useDesktopStore()
 const projectStore = useProjectStore()
 const runtimeStore = useRuntimeStore()
+const sessionStore = useSessionStore()
 const { connection } = storeToRefs(desktopStore)
 const {
   projects,
@@ -29,6 +32,16 @@ const {
   switching: projectSwitching,
   pendingPath: pendingProjectPath
 } = storeToRefs(projectStore)
+const {
+  view: sessionView,
+  sessions,
+  skipped: sessionSkipped,
+  truncated: sessionTruncated,
+  actionError: sessionActionError,
+  opening: sessionOpening,
+  awaitingInterrupt: sessionAwaitingInterrupt,
+  pendingSessionId: sessionPendingId
+} = storeToRefs(sessionStore)
 const {
   view: runtimeView,
   promptView,
@@ -81,6 +94,23 @@ const projectStatusLabel = computed(() => {
   if (projectListError.value !== null) return '项目列表读取失败'
   return currentProject.value === null ? '尚未选择项目' : '已选择项目'
 })
+const sessionListLoading = computed(() => sessionView.value.phase === 'loading')
+const sessionListError = computed(() => (
+  sessionView.value.phase === 'error' ? sessionView.value.error : null
+))
+const sessionStatusLabel = computed(() => {
+  if (sessionOpening.value) return '正在打开会话'
+  if (sessionListLoading.value) return '正在读取会话列表'
+  if (sessionListError.value !== null) return '会话列表读取失败'
+  if (currentProject.value === null) return '尚未选择项目'
+  return sessions.value.length === 0 ? '该项目还没有会话' : `共 ${sessions.value.length} 个会话`
+})
+/** 待确认的切换目标：null 表示新建会话。 */
+const sessionPendingLabel = computed(() => (
+  sessionPendingId.value === null ? '新建会话' : `会话 ${sessionPendingId.value.slice(0, 8)}`
+))
+/** 当前会话标识以 Runtime 快照为准；未启动时为 null。 */
+const activeSessionId = computed(() => runtimeInfo.value?.sessionId ?? null)
 const promptSending = computed(() => promptView.value.phase === 'sending')
 const promptError = computed(() => (
   promptView.value.phase === 'error' ? promptView.value.error : null
@@ -168,6 +198,30 @@ function confirmProjectSwitch(): void {
   void projectStore.select(path, true)
 }
 
+function startNewSession(): void {
+  void sessionStore.open(null, false)
+}
+
+function openSavedSession(sessionId: string): void {
+  void sessionStore.open(sessionId, false)
+}
+
+function confirmSessionSwitch(): void {
+  sessionStore.confirmPending()
+}
+
+/** 会话列表只做时间与体积的可读化，不推断会话内容。 */
+function formatSessionTime(session: SessionSummary): string {
+  const updated = new Date(session.updatedAt)
+  return Number.isNaN(updated.getTime()) ? session.createdAt : updated.toLocaleString('zh-CN', { hour12: false })
+}
+
+function formatSessionSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
 function shutdownRuntime(): void {
   void runtimeStore.shutdown()
 }
@@ -180,10 +234,17 @@ function stopOperation(): void {
   void runtimeStore.stopOperation()
 }
 
+// 会话归属随项目变化；切换项目已由主进程结束旧 Runtime，这里只更新列表。
+watch(currentProject, (project, previous) => {
+  if (project?.path === previous?.path) return
+  void sessionStore.refresh()
+})
+
 onMounted(() => {
   void desktopStore.initialize()
   void projectStore.initialize()
   void runtimeStore.initialize()
+  void sessionStore.initialize()
 })
 
 onUnmounted(() => {
@@ -204,7 +265,7 @@ onUnmounted(() => {
     </header>
 
     <p id="runtime-notice" class="mb-6 border-l-2 border-desk-accent pl-3 text-sm text-desk-muted">
-      当前可以管理本地项目、启停 Runtime、提交 Prompt，查看本轮文本、Thinking 与工具执行，并停止当前操作。项目选择保存在本机配置中；消息只在本页展示、不持久化，Runtime 诊断仍在后续任务接入。
+      当前可以管理本地项目与 Pi 会话、启停 Runtime、提交 Prompt，查看本轮文本、Thinking 与工具执行，并停止当前操作。项目选择保存在本机配置中；消息只在本页展示、不持久化，Runtime 诊断仍在后续任务接入。
     </p>
 
     <section
@@ -406,6 +467,100 @@ onUnmounted(() => {
           <p class="mt-2 text-xs text-desk-muted">
             切换项目会先结束当前 Runtime；保存的项目不会自动启动。
           </p>
+        </section>
+
+        <section class="panel" aria-labelledby="session-heading" :aria-busy="sessionOpening || sessionListLoading">
+          <div class="mb-3 flex flex-wrap items-center justify-between gap-3">
+            <h2 id="session-heading" class="section-heading">会话</h2>
+            <p role="status" class="text-sm text-desk-accent">{{ sessionStatusLabel }}</p>
+          </div>
+
+          <p v-if="currentProject === null" class="text-sm text-desk-muted">
+            先选择项目，再查看该项目的 Pi 会话。
+          </p>
+          <template v-else>
+            <p class="mb-3 break-words text-xs text-desk-muted">
+              当前会话：<span class="font-mono">{{ activeSessionId ?? '未启动' }}</span>
+            </p>
+
+            <p v-if="sessionActionError" role="alert" class="mb-3 text-sm">
+              {{ sessionActionError.message }}
+            </p>
+
+            <div
+              v-if="sessionAwaitingInterrupt"
+              class="mb-4 rounded-md border border-desk-line bg-desk-canvas p-3"
+            >
+              <p class="mb-2 text-sm">当前有正在运行的操作；切换会话会先停止它，已提交的内容不会重放。</p>
+              <p class="mb-3 break-words font-mono text-xs text-desk-muted">{{ sessionPendingLabel }}</p>
+              <div class="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  class="control-button"
+                  :disabled="sessionOpening"
+                  @click="confirmSessionSwitch"
+                >
+                  停止并切换
+                </button>
+                <button type="button" class="control-button" @click="sessionStore.cancelPending()">
+                  取消
+                </button>
+              </div>
+            </div>
+
+            <div class="flex flex-wrap gap-2">
+              <button
+                type="button"
+                class="control-button"
+                :disabled="sessionOpening || sessionListLoading"
+                @click="startNewSession"
+              >
+                新建会话
+              </button>
+              <button
+                type="button"
+                class="control-button"
+                :disabled="sessionOpening || sessionListLoading"
+                @click="sessionStore.refresh()"
+              >
+                刷新列表
+              </button>
+            </div>
+
+            <h3 class="mt-6 mb-2 text-sm font-medium">最近会话</h3>
+            <p v-if="sessionListLoading" class="text-sm text-desk-muted">正在读取会话列表。</p>
+            <div v-else-if="sessionListError" class="flex flex-wrap items-center gap-3">
+              <p role="alert" class="text-sm">{{ sessionListError.message }}</p>
+              <button type="button" class="control-button" @click="sessionStore.refresh()">
+                重试
+              </button>
+            </div>
+            <p v-else-if="sessions.length === 0" class="text-sm text-desk-muted">
+              该项目还没有 Pi 会话；新建会话后会在本机会话目录里出现。
+            </p>
+            <ul v-else class="space-y-2">
+              <li v-for="session in sessions" :key="session.sessionId">
+                <button
+                  type="button"
+                  class="w-full rounded-md border px-3 py-2 text-left"
+                  :class="session.sessionId === activeSessionId
+                    ? 'border-desk-accent bg-desk-canvas'
+                    : 'border-desk-line bg-desk-surface'"
+                  :aria-current="session.sessionId === activeSessionId ? 'true' : 'false'"
+                  :disabled="sessionOpening"
+                  @click="openSavedSession(session.sessionId)"
+                >
+                  <span class="block text-sm">{{ session.preview ?? '未读取到用户消息' }}</span>
+                  <span class="mt-1 block font-mono text-xs text-desk-muted">
+                    {{ formatSessionTime(session) }} · {{ session.sessionId.slice(0, 8) }} · {{ formatSessionSize(session.sizeBytes) }}
+                  </span>
+                </button>
+              </li>
+            </ul>
+            <p v-if="sessionSkipped > 0 || sessionTruncated > 0" class="mt-3 text-xs text-desk-muted">
+              已跳过 {{ sessionSkipped }} 个不属于此项目的会话文件<span v-if="sessionTruncated > 0">，另有 {{ sessionTruncated }} 条较早会话未列出</span>。
+            </p>
+          </template>
         </section>
 
         <section class="panel" aria-labelledby="prompt-heading">

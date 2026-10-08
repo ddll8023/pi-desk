@@ -4,10 +4,11 @@
 import type { DesktopApi } from '../../shared/desktop-api'
 import type { ProjectApi } from '../../shared/project-api'
 import type { RuntimeApi } from '../../shared/runtime-api'
+import type { SessionApi } from '../../shared/session-api'
 
 declare global {
   interface Window {
-    readonly desktop?: DesktopApi & RuntimeApi & ProjectApi
+    readonly desktop?: DesktopApi & RuntimeApi & ProjectApi & SessionApi
   }
 }
 

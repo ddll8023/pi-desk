@@ -1,4 +1,4 @@
-/** 管理唯一桌面窗口、本地资产边界，以及应用信息、Project 选择与列表、Runtime 启停、Prompt 提交、中止、消息/工具投影 IPC、事件广播与退出编排。 */
+/** 管理唯一桌面窗口、本地资产边界，以及应用信息、Project 选择与列表、Session 列表与打开、Runtime 启停、Prompt 提交、中止、消息/工具投影 IPC、事件广播与退出编排。 */
 import { realpath } from 'node:fs/promises'
 import { extname, isAbsolute, relative, resolve, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -12,6 +12,11 @@ import {
   PROJECT_SET_CURRENT_CHANNEL
 } from '../shared/project-api'
 import type { ProjectErrorCode, ProjectListResult, ProjectPathResult } from '../shared/project-api'
+import {
+  SESSION_LIST_CHANNEL,
+  SESSION_OPEN_CHANNEL
+} from '../shared/session-api'
+import type { SessionErrorCode, SessionListResult, SessionOpenResult } from '../shared/session-api'
 import {
   RUNTIME_ABORT_CHANNEL,
   RUNTIME_PROMPT_CHANNEL,
@@ -33,6 +38,7 @@ import type {
 } from '../shared/runtime-api'
 import { ProjectManager } from './project-manager'
 import { RuntimeManager } from './runtime-manager'
+import { SessionManager } from './session-manager'
 
 const DEVELOPMENT_PAGE_URL = 'http://127.0.0.1:5173/'
 const APPLICATION_PAGE_URL = 'app://desktop/index.html'
@@ -65,6 +71,7 @@ const projectManager = new ProjectManager({
   chooseDirectory: chooseDirectoryWithDialog,
   runtime: runtimeManager
 })
+const sessionManager = new SessionManager({ projects: projectManager, runtime: runtimeManager })
 
 // 必须在 ready 前注册；不赋予绕过 CSP 或运行 Service Worker 的权限。
 protocol.registerSchemesAsPrivileged([
@@ -211,6 +218,10 @@ function projectListFailure(code: ProjectErrorCode, message: string): ProjectLis
   return { ok: false, error: { code, message } }
 }
 
+function sessionFailure(code: SessionErrorCode, message: string): SessionListResult {
+  return { ok: false, error: { code, message } }
+}
+
 /** 打开系统目录选择器；绑定唯一业务窗口，用户取消返回 `null`。 */
 async function chooseDirectoryWithDialog(defaultPath: string): Promise<string | null> {
   const target = mainWindow
@@ -287,6 +298,56 @@ function registerProjectHandlers(pageUrl: string): void {
   )
 }
 
+/** 只接受会话 id 与显式中断确认；会话归属与文件解析都在主进程内部完成。 */
+function registerSessionHandlers(pageUrl: string): void {
+  ipcMain.handle(
+    SESSION_LIST_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<SessionListResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return sessionFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 0) {
+        return sessionFailure('INVALID_REQUEST', '会话列表接口不接受参数。')
+      }
+      return sessionManager.list()
+    }
+  )
+
+  ipcMain.handle(
+    SESSION_OPEN_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<SessionOpenResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return sessionFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 1) {
+        return sessionFailure('INVALID_REQUEST', '打开会话接口只接受一个请求对象。')
+      }
+      const request = args[0]
+      if (typeof request !== 'object' || request === null || Array.isArray(request)) {
+        return sessionFailure('INVALID_REQUEST', '打开会话参数格式不正确。')
+      }
+      const fields = request as Record<string, unknown>
+      if (Object.keys(fields).some((key) => key !== 'sessionId' && key !== 'allowInterrupt')) {
+        return sessionFailure('INVALID_REQUEST', '打开会话参数包含未支持的字段。')
+      }
+      const { sessionId, allowInterrupt } = fields
+      let targetSessionId: string | null = null
+      if (typeof sessionId === 'string') {
+        if (sessionId.trim() === '') {
+          return sessionFailure('INVALID_REQUEST', '会话 id 不能为空字符串。')
+        }
+        targetSessionId = sessionId
+      } else if (sessionId !== null) {
+        return sessionFailure('INVALID_REQUEST', '会话 id 必须是字符串或 null。')
+      }
+      if (typeof allowInterrupt !== 'boolean') {
+        return sessionFailure('INVALID_REQUEST', '打开会话必须显式说明是否允许中断当前操作。')
+      }
+      return sessionManager.open({ sessionId: targetSessionId, allowInterrupt })
+    }
+  )
+}
+
 /** 只接受项目目录；不接受可执行文件路径、启动参数或任意 RPC 内容。 */
 function registerRuntimeHandlers(pageUrl: string): void {
   ipcMain.handle(
@@ -310,7 +371,7 @@ function registerRuntimeHandlers(pageUrl: string): void {
       if (typeof projectPath !== 'string') {
         return runtimeFailure('INVALID_PROJECT_PATH', '项目目录必须是非空的绝对路径。')
       }
-      return runtimeManager.start(projectPath)
+      return runtimeManager.start(projectPath, null)
     }
   )
 
@@ -497,6 +558,7 @@ app.whenReady().then(async () => {
   registerAppInfoHandler(pageUrl)
   registerRuntimeHandlers(pageUrl)
   registerProjectHandlers(pageUrl)
+  registerSessionHandlers(pageUrl)
   runtimeManager.onStatusChanged(broadcastRuntimeStatus)
   runtimeManager.onProjectionBatch(broadcastRuntimeProjection)
   await createWindow(pageUrl)

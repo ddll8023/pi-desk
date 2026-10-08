@@ -56,6 +56,13 @@ export class ProjectManager {
     }
   }
 
+  /** 当前项目路径（内存快照）；未加载或尚未选择时为 null，不触发磁盘访问。 */
+  currentProjectPath(): string | null {
+    const state = this.store.getState()
+    const current = state.projects.find((project) => project.id === state.currentProjectId)
+    return current?.path ?? null
+  }
+
   /** 系统目录选择器；返回归一化后的目录，取消时数据为 `null`。 */
   async chooseDirectory(): Promise<ProjectPathResult> {
     try {

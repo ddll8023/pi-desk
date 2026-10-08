@@ -47,6 +47,10 @@ export interface PiProcessHandlers {
 export interface PiProcessOptions {
   readonly projectPath: string
   readonly handlers: PiProcessHandlers
+  /** 会话根目录：主进程显式指定，作为 `--session-dir`，不依赖 Pi 自己的配置优先级。 */
+  readonly sessionDir: string
+  /** 要恢复的会话 id；为 null 表示新建会话。 */
+  readonly sessionId: string | null
 }
 
 /** Runtime 目录由平台与架构决定，页面无法指定。 */
@@ -64,21 +68,26 @@ export function getPiExecutablePath(): string {
   return join(getPiRuntimeDirectory(), executableName)
 }
 
-/** 启动参数固定：RPC 模式、内存 Session、拒绝项目资源、关闭四类资源、显式工具集。 */
-export function getPiLaunchArguments(): string[] {
+/**
+ * 启动参数固定：RPC 模式、拒绝项目资源、关闭四类资源、显式工具集、会话目录与可选恢复会话。
+ * 会话由 Pi 持久化，不再使用 `--no-session`；页面不能覆盖其中任何一项。
+ */
+export function getPiLaunchArguments(options: PiProcessOptions): string[] {
   const tools = process.platform === 'win32'
     ? 'read,powershell,edit,write'
     : 'read,bash,edit,write'
-  return [
+  const args = [
     '--mode', 'rpc',
-    '--no-session',
     '--no-approve',
     '--no-extensions',
     '--no-skills',
     '--no-prompt-templates',
     '--no-mcp',
-    '--tools', tools
+    '--tools', tools,
+    '--session-dir', options.sessionDir
   ]
+  if (options.sessionId !== null) args.push('--session-id', options.sessionId)
+  return args
 }
 
 export class PiProcess {
@@ -104,7 +113,7 @@ export class PiProcess {
       )
     }
 
-    const child = spawn(executablePath, getPiLaunchArguments(), {
+    const child = spawn(executablePath, getPiLaunchArguments(options), {
       cwd: options.projectPath,
       // 只追加版本检查开关；凭据等仍由 Pi 自己的配置与环境提供。
       env: { ...process.env, PI_SKIP_VERSION_CHECK: '1' },
