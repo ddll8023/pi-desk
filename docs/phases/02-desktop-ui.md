@@ -38,7 +38,7 @@
 
 **当前实现**：列表来自 Pi 管理的会话文件（只读头部元数据与有界预览），主进程提供 `desktop:session-list` 与 `desktop:session-open`；打开与新建一律结束旧 Runtime 后带 `--session-id` 或不带该参数重启，恢复后就绪前用 `get_messages` 初始化投影。存储位置、分组规则、列表上限、切换守门与错误码见开发总览第 6.2 节。
 
-**决策**：核实结果是本版本 RPC 没有列举会话的命令（`Session` 段只有 `get_session_stats`、`switch_session`、`fork`、`clone`、`get_entries`、`get_tree` 等），因此按官方文件布局读会话元数据，不发明 RPC 命令；不在同一进程内使用 `switch_session`，保持一个 Runtime 代际对应一个会话；会话归属以头部 `cwd` 判定，分组目录名歧义只作为初筛。
+**决策**：核实结果是本版本 RPC 没有列举会话的命令（`Session` 段只有 `get_session_stats`、`switch_session`、`fork`、`clone`、`get_entries`、`get_tree` 等），因此按官方文件布局读会话元数据，不发明 RPC 命令；不在同一进程内使用 `switch_session`，保持一个 Runtime 代际对应一个会话；会话归属以头部 `cwd` 判定，分组目录名歧义只作为初筛。本阶段显式关闭 Extensions，且不调用可被 Extension 取消的切换命令，因此不需要处理 Extension 取消切换的结果。
 
 ### P2-03 Chat 布局
 

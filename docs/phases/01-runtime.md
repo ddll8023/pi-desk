@@ -229,7 +229,7 @@ P1-01 → P1-02 → P1-03 → P1-04 → P1-05 → P1-06 → P1-07
 
 ## 不做项
 
-- 完整 TopBar / Sidebar、Project 持久化（已在 P2-01 实现）、Session 列表。
+- 完整 TopBar / Sidebar、Project 持久化（已在 P2-01 实现）、Session 列表（已在 P2-02 实现）。
 - Authentication、Extension UI、正式 Project Trust 对话。
 - Skills、Extensions、Packages、MCP 的产品接入。
 - Git、Terminal、文件管理器、多窗口、多 Agent、复杂调度。

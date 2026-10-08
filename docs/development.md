@@ -60,7 +60,7 @@ Desktop 仅维护自己的数据：最近项目、窗口尺寸、Sidebar 状态�
 
 项目根目录：`H:\code\pi-desk`。
 
-仓库包含开发文档、Electron/Vue 最小骨架、三端构建与 TypeScript 配置、统一前端服务入口、展示状态 Store，以及 Pi Runtime 的准备脚本与固定版本清单。当前页面可经受限 preload API 读取应用信息、选择并记住本地项目、启停 Pi RPC sidecar、接收状态变化、提交 Prompt、展示本轮文本与 Thinking、查看工具执行并中止当前操作；不读取项目内容、不持久化消息。
+仓库包含开发文档、Electron/Vue 最小骨架、三端构建与 TypeScript 配置、统一前端服务入口、展示状态 Store，以及 Pi Runtime 的准备脚本与固定版本清单。当前页面可经受限 preload API 读取应用信息、选择并记住本地项目、列出并打开该项目的 Pi 会话、启停 Pi RPC sidecar、接收状态变化、提交 Prompt、展示本轮文本与 Thinking、查看工具执行并中止当前操作；不读取项目内容、不持久化消息。
 
 开发使用 npm，工具版本由 `package.json` 的 `packageManager` 字段声明，直接依赖使用精确版本。`package.json` 是依赖声明的维护位置，完整依赖树由安装生成的 `package-lock.json` 固定，不手写锁文件。依赖安装属于独立授权操作。
 
@@ -393,8 +393,8 @@ Pi 管道背压与 UI 通知背压分开处理：采用有界批次与渲染端�
 - 列表只读会话文件：每轮 `readdir` 后按文件大小与修改时间命中缓存，未命中时做一次 256 KiB 有界读取，取首行头部（`type`、`id`、`timestamp`、`cwd`）与首条用户消息开头（预览截断为 120 字符，取不到为 null）。条目字段为 `sessionId`、`createdAt`、`updatedAt`、`sizeBytes` 与预览，按最后修改时间降序，最多 100 条；超出的条数与「头部 `cwd` 与当前项目不符或无法解析」的文件数量分别计数，界面如实标示。
 - 分组目录名会歧义（`H:\a-b` 与 `H:\a\b` 相同），因此会话归属以头部 `cwd` 与当前项目规范路径的比较结果为准；Windows 折叠大小写，其他平台严格比较。
 - 打开与新建一律重启 Runtime：先校验目标会话存在且属于当前项目，再复用本节关闭链结束旧 Runtime，确认回到 `idle` 后以 `--session-id <id>`（恢复）或不带该参数（新建）启动；请求的会话与已就绪 Runtime 一致时幂等返回。Runtime 处于 `starting`/`stopping`，或 `ready` 且 `isStreaming` 为真而请求未带 `allowInterrupt` 时返回 `SESSION_SWITCH_BLOCKED` 且不中断任何操作；不排队、不重放。不使用 RPC 的 `switch_session` 与 `new_session`，保持一个 Runtime 代际对应一个会话。
-- 恢复会话时在发布就绪前请求 `get_messages`，把历史消息按整条替换规则灌入临时投影作为基准；读取超时或失败按启动失败处理，不显示不完整的历史，截断与上限沿用临时投影契约。
-- 通道：`desktop:session-list`（零参数，基于当前项目）与 `desktop:session-open`（只接受 `{ sessionId, allowInterrupt }`，`sessionId` 为 null 表示新建）。新增错误码 `SESSION_NOT_FOUND`（目标会话不存在，或 Pi 实际打开的会话与请求不一致）与 `SESSION_SWITCH_BLOCKED`；其余复用 Runtime 错误码族。会话文件路径不跨 IPC 交给页面。
+- 恢复会话时在发布就绪前请求 `get_messages`，把历史消息按整条替换规则灌入临时投影作为基准；读取历史消息的等待上限是 15 000 毫秒，超时或失败按启动失败处理，不显示不完整的历史，截断与上限沿用临时投影契约。
+- 通道：`desktop:session-list`（零参数，基于当前项目）与 `desktop:session-open`（只接受 `{ sessionId, allowInterrupt }`，`sessionId` 为 null 表示新建，非 null 时只接受 Pi 允许的字符集：字母、数字、`.`、`_`、`-`）。新增错误码 `SESSION_NOT_FOUND`（目标会话不存在，或 Pi 实际打开的会话与请求不一致）与 `SESSION_SWITCH_BLOCKED`；其余复用 Runtime 错误码族。会话文件路径不跨 IPC 交给页面。
 
 #### 关闭、异常与进程树
 
@@ -484,18 +484,18 @@ PowerShell 解析优先 `pwsh.exe`，其次 `powershell.exe`；不存在时报�
 
 Project 的基础属性为 `id`、`name`、`path`、`lastOpenedAt`；本地配置位置、路径归一化、列表上限与切换编排见第 6.2 节。Session 和消息仍交给 Pi，不创建平行数据模型与数据库；会话目录、列表与恢复方式也在第 6.2 节。
 
-当前 RPC command union 有 `new_session`、`switch_session`、`get_messages`、`fork` 等能力，但没有 Session 列表命令；第二阶段需单独确定官方 Session 列表能力的接入方式，不能自行假设存在 `list_sessions`。
+当前 RPC command union 有 `new_session`、`switch_session`、`get_messages`、`fork` 等能力，但没有 Session 列表命令；接入方式已在 P2-02 确定为读 Pi 会话文件元数据（见第 6.2 节），不能自行假设存在 `list_sessions`。
 
 当前 Extension UI wire 使用独立 `extension_ui_request` / `extension_ui_response`，设置编辑器文本的 method 为 `set_editor_text`。RPC 不支持任意 TUI 组件，未来兼容范围以官方支持的子协议为边界，不承诺所有 TUI Extension 无损运行。
 
-第一阶段明确不做：完整 Sidebar、Project 持久化（已在 P2-01 实现）、Session 列表、Authentication、Extension UI、Git GUI、Terminal、文件管理器、插件市场、复杂工作流、多 Agent 和任务编排。不得为这些范围提前增加空抽象或依赖。
+第一阶段明确不做：完整 Sidebar、Project 持久化（已在 P2-01 实现）、Session 列表（已在 P2-02 实现）、Authentication、Extension UI、Git GUI、Terminal、文件管理器、插件市场、复杂工作流、多 Agent 和任务编排。不得为这些范围提前增加空抽象或依赖。
 
 ## 9. 待解决问题
 
 1. 完整依赖树锁定、Windows build 18363 约束，以及 Electron、固定 Pi 与 helper 共同约束下的 macOS 最低版本；后续依赖调整继续考虑 Electron 的维护状态。
 2. 避免需要本地编译的原生依赖；Pi/helper 的运行库需求、挂起重启与延迟清理对开发环境的影响。需要新增工具链时单独取得授权。
 3. 正式签名、公证与安装包配置，按发行步骤确定；staging 路径、三目标文件选择与 package 根/executable 邻接映射已在 P1-02 确定（见第 4 节）。
-4. Extension UI 进入展示投影的边界，以及后续阶段的消息历史读取方式；临时消息投影与通知确认契约已在 P1-06 确定，工具执行进入展示投影的边界与中止契约已在 P1-07 确定（均见第 6.2 节），管道边界在 P1-03 确定，请求期限在 P1-05 确定。不建立平行 Session 数据库。
+4. Extension UI 进入展示投影的边界；消息历史的读取方式已在 P2-02 确定（`get_messages` 初始化投影，见第 6.2 节）。临时消息投影与通知确认契约已在 P1-06 确定，工具执行进入展示投影的边界与中止契约已在 P1-07 确定（均见第 6.2 节），管道边界在 P1-03 确定，请求期限在 P1-05 确定。不建立平行 Session 数据库。
 5. 不同启动 profile 下现有模型与凭据的可用性（启动参数已在 P1-03 确定）；只读取必要配置，不输出秘密。
 6. Windows 与 macOS 的进程树终止已按平台实现（见 6.2 节）；macOS 分支只在 macOS 主机上生效。保留尽力回收边界，不以关闭主 Pi 进程等同于完整进程树回收。
 7. 第二阶段 Session 列表的接入方式（读 Pi 会话文件的元数据）与恢复方式（重启式切换）已在 P2-02 确定（见 6.2 节）；跨项目复用同一会话文件（手工移动会话文件或项目目录改名）对 cwd 与资源重建的影响仍待核实。
