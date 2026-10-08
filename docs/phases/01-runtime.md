@@ -25,7 +25,7 @@
 
 **范围**：Electron、Vue 3、TypeScript、Vite、Tailwind CSS、Pinia 的最小配置；主进程入口、sandboxed preload 与统一前端服务入口。明确 contextIsolation 和 sandbox 开启、nodeIntegration 关闭、webSecurity 保持开启；建立固定业务 IPC 入口、调用者校验和本地页面/CSP 边界，不暴露原始 ipcRenderer 或通用系统能力。只建立立即使用的结构，不创建 Session、认证或插件空模块。
 
-**当前实现**：单页展示桌面桥接连接状态与应用信息；桥接连接成功不表示 Pi 就绪。Prompt 输入不在本页保存；项目目录在启动 Runtime 时由主进程重新校验，项目选择与本地持久化见 P2-01。Runtime 启动与状态展示见 P1-03；关闭见 P1-04，发送见 P1-05；文本与 Thinking 区域展示主进程投影的消息（见 P1-06），工具执行与 Stop 见 P1-07，Runtime 诊断区域仍为空状态，不模拟 Pi 输出。
+**当前实现**：单页展示桌面桥接连接状态与应用信息；桥接连接成功不表示 Pi 就绪。Prompt 输入不在本页保存；项目目录在启动 Runtime 时由主进程重新校验，项目选择与本地持久化见 P2-01。Runtime 启动与状态展示见 P1-03；关闭见 P1-04，发送见 P1-05；文本与 Thinking 区域展示主进程投影的消息（见 P1-06），工具执行与 Stop 见 P1-07，Runtime 诊断区域当时为空状态，不模拟 Pi 输出。该页面已在 P2-03 被主界面替换：顶栏、会话侧栏、消息区与 Prompt 区，应用信息与 Runtime 详情在顶栏弹层，原诊断占位区域取消，见开发总览第 6.3 节。
 
 **构建与页面**：配置见根目录 `electron.vite.config.ts`，依赖版本以 `package.json` 为准。
 
@@ -165,7 +165,7 @@ Windows 采用系统 taskkill 定向终止当前受管 Pi 进程树；macOS 建�
 
 **busy 与运行中状态**：busy 判定完全以 Pi 的拒绝为准，主进程不做本地 `get_state.isStreaming` 预检，因而不新增 `RUNTIME_BUSY`；本项也不维护本地运行中标志、不新增 `isStreaming` 刷新点，运行中状态与最终收敛由 P1-06 依据事件流（`agent_settled`）负责。请求失败不改写 Runtime 快照，进程真的退出时由退出路径收敛。
 
-**落点**：response 形状识别在 `src/main/pi-protocol.ts`（`toPromptDisposition`），请求编排在 `src/main/runtime-manager.ts`（`prompt`），IPC 注册与调用者校验在 `src/main/index.ts`，受限方法由 `src/preload/index.ts` 暴露，前端入口在 `src/renderer/src/services/runtime.ts` 与 `src/renderer/src/stores/runtime.ts`，页面在 `src/renderer/src/App.vue`。
+**落点**：response 形状识别在 `src/main/pi-protocol.ts`（`toPromptDisposition`），请求编排在 `src/main/runtime-manager.ts`（`prompt`），IPC 注册与调用者校验在 `src/main/index.ts`，受限方法由 `src/preload/index.ts` 暴露，前端入口在 `src/renderer/src/services/runtime.ts` 与 `src/renderer/src/stores/runtime.ts`，输入区在 `src/renderer/src/components/PromptComposer.vue`，页面外壳在 `src/renderer/src/App.vue`。
 
 **当前状态**：页面、preload 方法、主进程校验与错误分类已按上述契约接入。
 
@@ -183,9 +183,9 @@ Windows 采用系统 taskkill 定向终止当前受管 Pi 进程树；macOS 建�
 
 **决策**：投影重建展示片段而不是转发原始事件；批次携带单调序号，渲染端以应用确认控制未确认窗口，遇到序号缺口、长度不变式不符或重同步标记时以快照全量重同步，不猜测补齐；状态变化与投影批次保持两条独立通道；投影只保留当前 Runtime 代际，Runtime 结束即清空；busy 由 `agent_start`/`agent_settled` 收敛，为 `RuntimeInfo.isStreaming` 提供事件来源。非 `user`/`assistant` 角色的消息不进入投影，工具执行结果属 P1-07。
 
-**落点**：投影状态机在 `src/main/message-projection.ts`（P2-02 起同一状态机也用于以历史消息初始化投影），批次订阅与状态提示合并在 `src/main/runtime-manager.ts`，IPC 注册与校验在 `src/main/index.ts`，受限方法由 `src/preload/index.ts` 暴露，前端入口在 `src/renderer/src/services/runtime.ts` 与 `src/renderer/src/stores/runtime.ts`，页面在 `src/renderer/src/App.vue`。
+**落点**：投影状态机在 `src/main/message-projection.ts`（P2-02 起同一状态机也用于以历史消息初始化投影），批次订阅与状态提示合并在 `src/main/runtime-manager.ts`，IPC 注册与校验在 `src/main/index.ts`，受限方法由 `src/preload/index.ts` 暴露，前端入口在 `src/renderer/src/services/runtime.ts` 与 `src/renderer/src/stores/runtime.ts`，消息区在 `src/renderer/src/components/ChatMessageList.vue`，页面外壳在 `src/renderer/src/App.vue`。
 
-**当前状态**：页面、preload 方法、主进程投影与批次、渲染端同步与截断标示已按上述契约接入；工具面板见 P1-07，诊断面板仍为空状态。
+**当前状态**：页面、preload 方法、主进程投影与批次、渲染端同步与截断标示已按上述契约接入；工具展示见 P1-07。该页面的工具面板与诊断占位已在 P2-03 移除，工具调用改为消息流内联行，见开发总览第 6.3 节。
 
 **依赖**：P1-05。
 
@@ -210,11 +210,11 @@ Windows 采用系统 taskkill 定向终止当前受管 Pi 进程树；macOS 建�
 | `INTERNAL_ERROR` | 其他内部失败 |
 | `INVALID_RESPONSE`、`BRIDGE_UNAVAILABLE`、`BRIDGE_CALL_FAILED` | Preload 与前端侧的桥接校验失败 |
 
-**决策**：工具执行以按 `toolCallId` 索引的独立条目进入投影，与消息块解耦，不把执行状态挂在 assistant 消息的 toolcall 块上；`partialResult` 只保留最近一次、结束事件用 `result` 校正；`abort` 只校验可用的 Runtime，不在主进程做 streaming 预检，停止中状态由页面按中止请求与事件流 `isStreaming` 共同表达，终态以 `agent_settled` 收敛；关闭 Runtime 时仅在事件流显示运行中才先 abort，等待上限明显短于退出预算，取消失败不阻断既有关闭链；不新增错误码；工具参数与输出一律按纯文本展示，非文本内容只标示数量。
+**决策**：工具执行以按 `toolCallId` 索引的独立条目进入投影，与消息块解耦，不把执行状态挂在 assistant 消息的 toolcall 块上；`partialResult` 只保留最近一次、结束事件用 `result` 校正；`abort` 只校验可用的 Runtime，不在主进程做 streaming 预检，停止中状态由页面按中止请求与事件流 `isStreaming` 共同表达，终态以 `agent_settled` 收敛；关闭 Runtime 时仅在事件流显示运行中才先 abort，等待上限明显短于退出预算，取消失败不阻断既有关闭链；不新增错误码；工具参数与输出一律按纯文本展示；当时非文本内容只标示数量，完整工具卡片呈现已在 P2-04 确定（见开发总览第 6.2、6.3 节）。
 
-**落点**：工具条目状态机在 `src/main/tool-projection.ts`，批次与聚合在 `src/main/message-projection.ts`，中止编排与关闭链中的取消在 `src/main/runtime-manager.ts`，IPC 注册与校验在 `src/main/index.ts`，受限方法由 `src/preload/index.ts` 暴露，前端入口在 `src/renderer/src/services/runtime.ts` 与 `src/renderer/src/stores/runtime.ts`，页面在 `src/renderer/src/App.vue`。
+**落点**：工具条目状态机在 `src/main/tool-projection.ts`，批次与聚合在 `src/main/message-projection.ts`，中止编排与关闭链中的取消在 `src/main/runtime-manager.ts`，IPC 注册与校验在 `src/main/index.ts`，受限方法由 `src/preload/index.ts` 暴露，前端入口在 `src/renderer/src/services/runtime.ts` 与 `src/renderer/src/stores/runtime.ts`，工具卡片在 `src/renderer/src/components/ToolCard.vue`，页面外壳在 `src/renderer/src/App.vue`。
 
-**当前状态**：页面、preload 方法、主进程工具投影与中止编排已按上述契约接入；Runtime 诊断面板仍为空状态。
+**当前状态**：页面、preload 方法、主进程工具投影与中止编排已按上述契约接入；该页面的工具面板与诊断占位已在 P2-03 移除，工具调用改为消息流内联行，见开发总览第 6.3 节。
 
 **依赖**：P1-06。
 
@@ -229,7 +229,7 @@ P1-01 → P1-02 → P1-03 → P1-04 → P1-05 → P1-06 → P1-07
 
 ## 不做项
 
-- 完整 TopBar / Sidebar、Project 持久化（已在 P2-01 实现）、Session 列表（已在 P2-02 实现）。
+- 完整 TopBar / Sidebar（已在 P2-03 实现）、Project 持久化（已在 P2-01 实现）、Session 列表（已在 P2-02 实现）。
 - Authentication、Extension UI、正式 Project Trust 对话。
 - Skills、Extensions、Packages、MCP 的产品接入。
 - Git、Terminal、文件管理器、多窗口、多 Agent、复杂调度。

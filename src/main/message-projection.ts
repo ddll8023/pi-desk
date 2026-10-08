@@ -70,7 +70,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-/** 只有这两类角色的消息进入展示投影；工具结果与其他角色由后续任务按需扩展。 */
+/** 只有这两类角色的消息进入内容块投影；`toolResult` 消息只在恢复会话时用于补种工具条目，其他角色忽略。 */
 function readRole(value: unknown): ProjectedRole | null {
   return value === 'user' || value === 'assistant' ? value : null
 }
@@ -155,7 +155,8 @@ export class MessageProjection {
 
   /**
    * 以 `get_messages` 响应里的会话消息重建投影基准：每条消息按权威整条替换语义收录，
-   * 用于恢复会话后的第一次同步。载荷缺少消息数组时返回 false（响应契约不符）。
+   * 并按 `toolResult` 消息补种工具条目，用于恢复会话后的第一次同步。
+   * 载荷缺少消息数组时返回 false（响应契约不符）。
    */
   seedHistory(payload: unknown): boolean {
     if (this.disposed) return false
@@ -165,10 +166,43 @@ export class MessageProjection {
     // 历史消息与流式事件之间没有配对关系，每条各自成条。
     this.active = null
     for (const message of messages) this.applyAuthoritativeMessage(message, null)
+    this.seedHistoryTools(messages)
     this.enforceLimits()
     this.callbacks.onStatusHint({ messageCount: this.messages.length })
     this.flush()
     return true
+  }
+
+  /**
+   * 用 `get_messages` 里的 `toolResult` 消息补种工具条目：参数取自同一 `toolCallId` 的
+   * `toolcall` 块，结果与错误状态取自该条消息；`toolResult` 本身不进入消息块投影。
+   */
+  private seedHistoryTools(messages: readonly unknown[]): void {
+    // 参数文本已由消息块承载，先按 toolCallId 收集，不重复解析消息结构。
+    const argsByToolCallId = new Map<string, string>()
+    for (const message of this.messages) {
+      for (const block of message.blocks) {
+        if (block.kind === 'toolcall' && block.toolCallId !== null && block.text !== '') {
+          argsByToolCallId.set(block.toolCallId, block.text)
+        }
+      }
+    }
+
+    for (const message of messages) {
+      if (!isRecord(message) || message.role !== 'toolResult') continue
+      const toolCallId = readString(message.toolCallId)
+      if (toolCallId === null || toolCallId === '') continue
+
+      this.toolProjection.seedResult({
+        toolCallId,
+        toolName: readString(message.toolName),
+        isError: message.isError === true,
+        argsText: argsByToolCallId.get(toolCallId) ?? null,
+        result: message,
+        // 历史只留下结束时刻；开始时刻不编造，界面因此不显示耗时。
+        endedAt: typeof message.timestamp === 'number' ? message.timestamp : null
+      })
+    }
   }
 
   /** 快照是渲染端重新同步的唯一基准。 */

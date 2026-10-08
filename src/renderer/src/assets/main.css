@@ -1,13 +1,19 @@
-/* 提供单页骨架的本地样式、输入状态与键盘焦点，不加载外部字体或图标。 */
+/* 提供主界面的本地样式、层级令牌与键盘焦点，不加载外部字体或图标。 */
 @import "tailwindcss";
 
 @theme {
   --color-desk-canvas: #f3f6f8;
+  /* 消息区底色：比 canvas 略深，用于区分消息流与侧栏、输入区。 */
+  --color-desk-canvas-sunken: #e9eef2;
   --color-desk-surface: #ffffff;
+  /* Assistant 消息与弹层的表面色；与页面底色保持层次差。 */
+  --color-desk-surface-raised: #ffffff;
   --color-desk-ink: #172b3a;
   --color-desk-muted: #536675;
   --color-desk-line: #d7e1e8;
   --color-desk-accent: #236978;
+  /* 错误、失败与中止提示；只用于语义提示，不做强调色。 */
+  --color-desk-danger: #a4373a;
   --font-sans: "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
   --font-mono: Consolas, "SFMono-Regular", monospace;
 }
@@ -63,5 +69,71 @@
 
   .empty-output {
     @apply min-h-24 rounded-md border border-desk-line bg-desk-canvas p-3;
+  }
+
+  /* 消息气泡：只定义共用形状，用户与 Assistant 的配色由模板决定。 */
+  .chat-bubble {
+    @apply whitespace-pre-wrap break-words rounded-lg px-3.5 py-2.5 text-sm;
+    max-width: 46rem;
+  }
+
+  /* 通用工具卡片：头部摘要由模板排版，展开后的参数与输出统一使用等宽可滚动块。 */
+  .tool-card {
+    @apply rounded-md border border-desk-line bg-desk-surface px-3 py-2;
+  }
+
+  .tool-output {
+    @apply max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-md border border-desk-line bg-desk-canvas px-2.5 py-2 font-mono text-xs;
+  }
+
+  .tool-note {
+    @apply text-xs text-desk-muted;
+  }
+
+  .icon-button {
+    @apply inline-flex items-center gap-1.5 rounded-md border border-desk-line bg-desk-surface px-2 py-1 text-xs font-medium text-desk-accent;
+  }
+
+  .icon-button:not(:disabled):hover {
+    @apply border-desk-accent bg-desk-canvas;
+  }
+
+  .icon-button:disabled {
+    @apply cursor-not-allowed bg-desk-canvas text-desk-muted;
+  }
+
+  .control-button-danger {
+    @apply rounded-md border border-desk-danger bg-desk-surface px-3 py-2 text-sm font-medium text-desk-danger;
+  }
+
+  .control-button-danger:not(:disabled):hover {
+    @apply bg-desk-canvas;
+  }
+
+  /* 状态指示点：颜色由模板按 Runtime 状态给出。 */
+  .status-dot {
+    @apply inline-block h-2 w-2 shrink-0 rounded-full;
+  }
+
+  /* 细滚动条；不改变滚动行为，只避免默认滚动条压住内容。 */
+  .scroll-area {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-desk-line) transparent;
+  }
+
+  .scroll-area::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  .scroll-area::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .scroll-area::-webkit-scrollbar-thumb {
+    background-color: var(--color-desk-line);
+    background-clip: content-box;
+    border: 3px solid transparent;
+    border-radius: 999px;
   }
 }

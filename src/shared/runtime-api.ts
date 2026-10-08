@@ -68,7 +68,7 @@ export type PromptResult =
   | { readonly ok: true; readonly data: { readonly disposition: PromptDisposition } }
   | { readonly ok: false; readonly error: RuntimeError }
 
-/** 投影只重建页面要展示的内容块；图片、工具结果与诊断不进入展示投影。 */
+/** 投影只重建页面要展示的内容块；图片与诊断不进入内容块投影，工具结果以独立工具条目表达。 */
 export type ProjectionBlockKind = 'text' | 'thinking' | 'toolcall'
 
 /** 块的 `text` 是当前完整内容；`truncated` 表示已按展示上限截断。 */
@@ -87,21 +87,37 @@ export type ToolExecutionPhase = 'running' | 'succeeded' | 'failed' | 'unknown'
 /** 工具输出的来源：`partial` 只是最近一次报告，`result` 才是结束事件的权威结果。 */
 export type ToolExecutionTextKind = 'none' | 'partial' | 'result'
 
+/** 非文本内容块的描述；只带类型与估算大小，不携带图片数据等载荷。 */
+export interface ToolNonTextPart {
+  readonly type: string
+  readonly mimeType: string | null
+  /** 估算的字节数；无法估算时为 null，界面不猜造大小。 */
+  readonly bytes: number | null
+}
+
 /**
  * 工具执行条目按 `toolCallId` 与消息块解耦：参数与输出各有独立上限，
- * 非文本内容只计数、不进入投影，图片不渲染。
+ * 非文本内容只有描述、不进入投影，图片不渲染。
+ *
+ * `startedAt`、`endedAt` 是 Desktop 收到开始与结束事件的时刻（纪元毫秒），不是 Pi 字段：
+ * Pi 的工具事件没有时间字段，因此它只用于界面展示耗时，不代表工具的真实执行时间。
+ * 未确认结束的条目与恢复会话补种的历史条目缺少开始或结束时刻，界面不显示耗时。
  */
 export interface ToolExecution {
   readonly toolCallId: string
   readonly toolName: string
   readonly phase: ToolExecutionPhase
+  readonly startedAt: number | null
+  readonly endedAt: number | null
   readonly argsText: string | null
   readonly argsTruncated: boolean
   readonly text: string
   readonly textKind: ToolExecutionTextKind
   readonly textTruncated: boolean
-  /** 结束结果中的非文本内容块数量；界面只标示数量，不渲染内容。 */
+  /** 结束结果中的非文本内容块总数；与 `nonTextParts` 的条数可能不同。 */
   readonly nonTextBlocks: number
+  /** 非文本内容块描述，条数有上限；界面按描述标示类型与大小。 */
+  readonly nonTextParts: readonly ToolNonTextPart[]
 }
 
 /** `id` 由 Desktop 生成，不冒充 Pi 消息字段。 */
@@ -269,12 +285,29 @@ function isToolExecutionTextKind(value: unknown): value is ToolExecutionTextKind
   return value === 'none' || value === 'partial' || value === 'result'
 }
 
+/** 时间字段只接受纪元毫秒整数或 null；其他取值按契约不符处理。 */
+function isTimestamp(value: unknown): boolean {
+  return value === null
+    || (typeof value === 'number' && Number.isInteger(value) && value >= 0)
+}
+
+function isToolNonTextPart(value: unknown): value is ToolNonTextPart {
+  if (!isRecord(value)) return false
+  return typeof value.type === 'string'
+    && value.type !== ''
+    && (value.mimeType === null || typeof value.mimeType === 'string')
+    && (value.bytes === null
+      || (typeof value.bytes === 'number' && Number.isInteger(value.bytes) && value.bytes >= 0))
+}
+
 function isToolExecution(value: unknown): value is ToolExecution {
   if (!isRecord(value)) return false
   return typeof value.toolCallId === 'string'
     && value.toolCallId !== ''
     && typeof value.toolName === 'string'
     && isToolExecutionPhase(value.phase)
+    && isTimestamp(value.startedAt)
+    && isTimestamp(value.endedAt)
     && (value.argsText === null || typeof value.argsText === 'string')
     && typeof value.argsTruncated === 'boolean'
     && typeof value.text === 'string'
@@ -283,6 +316,8 @@ function isToolExecution(value: unknown): value is ToolExecution {
     && typeof value.nonTextBlocks === 'number'
     && Number.isInteger(value.nonTextBlocks)
     && value.nonTextBlocks >= 0
+    && Array.isArray(value.nonTextParts)
+    && value.nonTextParts.every(isToolNonTextPart)
 }
 
 function isProjectionUpdate(value: unknown): value is ProjectionUpdate {

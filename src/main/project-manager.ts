@@ -2,7 +2,7 @@
  * 当前项目与最近项目列表的所有者：目录选择、切换编排与配置读写调用。
  *
  * 切换项目复用 RuntimeManager 的关闭链：有活动操作而请求未确认时直接拒绝，不自动中断、不排队、
- * 不重放；归一化交给 project-path，持久化交给 project-store。IPC 契约与校验在
+ * 不重放；归一化交给 project-path，持久化交给 desktop-config-store。IPC 契约与校验在
  * shared/project-api.ts，调用者与参数校验在 main/index.ts。
  */
 import { app } from 'electron'
@@ -16,8 +16,8 @@ import type {
   ProjectSetCurrentRequest
 } from '../shared/project-api'
 import type { RuntimeStatus } from '../shared/runtime-api'
+import { DesktopConfigStorageError, DesktopConfigStore } from './desktop-config-store'
 import { ProjectPathError, normalizeProjectPath, projectNameFromPath } from './project-path'
-import { ProjectStorageError, ProjectStore } from './project-store'
 import type { RuntimeManager } from './runtime-manager'
 
 /** 可分类的项目操作失败；由公共方法统一转换为结果对象。 */
@@ -35,10 +35,11 @@ export interface ProjectManagerOptions {
   readonly chooseDirectory: (defaultPath: string) => Promise<string | null>
   /** Runtime 的所有者；只使用状态查询与既有关闭链。 */
   readonly runtime: RuntimeManager
+  /** 配置文件的唯一读写者；项目列表与界面偏好、窗口状态共用同一份文件。 */
+  readonly store: DesktopConfigStore
 }
 
 export class ProjectManager {
-  private readonly store = new ProjectStore()
   /** 目录选择单飞：连续点击或重复请求复用同一次原生对话框。 */
   private pendingChoice: Promise<ProjectPathSelection | null> | null = null
 
@@ -47,7 +48,7 @@ export class ProjectManager {
   /** 项目列表与当前项目；不检查项目目录是否仍然存在。 */
   async list(): Promise<ProjectListResult> {
     try {
-      return { ok: true, data: await this.store.list() }
+      return { ok: true, data: await this.options.store.list() }
     } catch (error) {
       return this.failure(error, {
         code: 'INTERNAL_ERROR',
@@ -58,7 +59,7 @@ export class ProjectManager {
 
   /** 当前项目路径（内存快照）；未加载或尚未选择时为 null，不触发磁盘访问。 */
   currentProjectPath(): string | null {
-    const state = this.store.getState()
+    const state = this.options.store.getState()
     const current = state.projects.find((project) => project.id === state.currentProjectId)
     return current?.path ?? null
   }
@@ -114,7 +115,7 @@ export class ProjectManager {
       }
     }
 
-    return this.store.selectProject(projectPath, projectNameFromPath(projectPath))
+    return this.options.store.selectProject(projectPath, projectNameFromPath(projectPath))
   }
 
   private requestChoice(): Promise<ProjectPathSelection | null> {
@@ -129,7 +130,7 @@ export class ProjectManager {
   }
 
   private async openDirectoryDialog(): Promise<ProjectPathSelection | null> {
-    const current = await this.store.list()
+    const current = await this.options.store.list()
     const selected = current.projects.find((project) => project.id === current.currentProjectId)
     const chosen = await this.options.chooseDirectory(selected?.path ?? app.getPath('home'))
     if (chosen === null) return null
@@ -162,7 +163,7 @@ export class ProjectManager {
     if (error instanceof ProjectFailure) {
       return { ok: false, error: { code: error.code, message: error.message } }
     }
-    if (error instanceof ProjectStorageError) {
+    if (error instanceof DesktopConfigStorageError) {
       return { ok: false, error: { code: 'PROJECT_STORAGE_FAILED', message: error.message } }
     }
     return { ok: false, error: fallback }

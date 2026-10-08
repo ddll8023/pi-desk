@@ -1,4 +1,4 @@
-/** 管理唯一桌面窗口、本地资产边界，以及应用信息、Project 选择与列表、Session 列表与打开、Runtime 启停、Prompt 提交、中止、消息/工具投影 IPC、事件广播与退出编排。 */
+/** 管理唯一桌面窗口及其尺寸位置偏好、本地资产边界，以及应用信息、Project 选择与列表、Session 列表与打开、界面偏好、Runtime 启停、Prompt 提交、中止、消息/工具投影 IPC、事件广播与退出编排。 */
 import { realpath } from 'node:fs/promises'
 import { extname, isAbsolute, relative, resolve, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -6,6 +6,11 @@ import { app, BrowserWindow, dialog, ipcMain, net, protocol, session } from 'ele
 import type { IpcMainInvokeEvent } from 'electron'
 import { APP_INFO_CHANNEL } from '../shared/desktop-api'
 import type { AppInfoResult } from '../shared/desktop-api'
+import {
+  PREFERENCES_GET_CHANNEL,
+  PREFERENCES_SET_UI_CHANNEL
+} from '../shared/preferences-api'
+import type { PreferencesErrorCode, PreferencesResult } from '../shared/preferences-api'
 import {
   PROJECT_CHOOSE_DIRECTORY_CHANNEL,
   PROJECT_LIST_CHANNEL,
@@ -36,14 +41,19 @@ import type {
   RuntimeResult,
   RuntimeStatus
 } from '../shared/runtime-api'
+import { DesktopConfigStore } from './desktop-config-store'
+import { PreferencesManager } from './preferences-manager'
 import { ProjectManager } from './project-manager'
 import { RuntimeManager } from './runtime-manager'
 import { SessionManager } from './session-manager'
+import { MIN_WINDOW_HEIGHT, MIN_WINDOW_WIDTH, WindowState } from './window-state'
 
 const DEVELOPMENT_PAGE_URL = 'http://127.0.0.1:5173/'
 const APPLICATION_PAGE_URL = 'app://desktop/index.html'
 /** 应用退出时等待关闭链的总预算；覆盖各平台兜底阶段后强制退出。 */
 const QUIT_DEADLINE_MS = 10_000
+/** 窗口状态落盘的等待上限；超过就继续关闭链，不让小文件写入拖住退出。 */
+const WINDOW_STATE_FLUSH_MS = 1_000
 const rendererRoot = resolve(__dirname, '../renderer')
 const productionCsp = [
   "default-src 'none'",
@@ -67,11 +77,23 @@ const contentTypes: Readonly<Record<string, string>> = {
 let mainWindow: BrowserWindow | null = null
 let quittingAfterShutdown = false
 const runtimeManager = new RuntimeManager()
+/** 配置文件的唯一读写者；项目列表、界面偏好与窗口状态共用同一份文件。 */
+const configStore = new DesktopConfigStore()
 const projectManager = new ProjectManager({
   chooseDirectory: chooseDirectoryWithDialog,
-  runtime: runtimeManager
+  runtime: runtimeManager,
+  store: configStore
 })
 const sessionManager = new SessionManager({ projects: projectManager, runtime: runtimeManager })
+const preferencesManager = new PreferencesManager({ store: configStore })
+const windowState = new WindowState({ store: configStore })
+
+/** 有限等待；只用于退出编排，不证明被等待的操作已完成。 */
+function wait(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, milliseconds)
+  })
+}
 
 // 必须在 ready 前注册；不赋予绕过 CSP 或运行 Service Worker 的权限。
 protocol.registerSchemesAsPrivileged([
@@ -219,6 +241,10 @@ function projectListFailure(code: ProjectErrorCode, message: string): ProjectLis
 }
 
 function sessionFailure(code: SessionErrorCode, message: string): SessionListResult {
+  return { ok: false, error: { code, message } }
+}
+
+function preferencesFailure(code: PreferencesErrorCode, message: string): PreferencesResult {
   return { ok: false, error: { code, message } }
 }
 
@@ -469,6 +495,47 @@ function registerRuntimeHandlers(pageUrl: string): void {
   )
 }
 
+/** 只接受 Sidebar 折叠状态；界面偏好没有其他字段，未知字段一律拒绝。 */
+function registerPreferencesHandlers(pageUrl: string): void {
+  ipcMain.handle(
+    PREFERENCES_GET_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<PreferencesResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return preferencesFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 0) {
+        return preferencesFailure('INVALID_REQUEST', '界面偏好读取接口不接受参数。')
+      }
+      return preferencesManager.get()
+    }
+  )
+
+  ipcMain.handle(
+    PREFERENCES_SET_UI_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<PreferencesResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return preferencesFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 1) {
+        return preferencesFailure('INVALID_REQUEST', '保存界面偏好接口只接受一个请求对象。')
+      }
+      const request = args[0]
+      if (typeof request !== 'object' || request === null || Array.isArray(request)) {
+        return preferencesFailure('INVALID_REQUEST', '界面偏好参数格式不正确。')
+      }
+      const fields = request as Record<string, unknown>
+      if (Object.keys(fields).some((key) => key !== 'sidebarCollapsed')) {
+        return preferencesFailure('INVALID_REQUEST', '界面偏好参数包含未支持的字段。')
+      }
+      const { sidebarCollapsed } = fields
+      if (typeof sidebarCollapsed !== 'boolean') {
+        return preferencesFailure('INVALID_REQUEST', 'Sidebar 折叠状态必须是布尔值。')
+      }
+      return preferencesManager.setUi({ sidebarCollapsed })
+    }
+  )
+}
+
 /** 状态变化只发给当前唯一可信窗口，不广播到其他 webContents。 */
 function broadcastRuntimeStatus(status: RuntimeStatus): void {
   const target = mainWindow
@@ -496,12 +563,15 @@ function restrictSession(): void {
 }
 
 async function createWindow(pageUrl: string): Promise<void> {
+  // 位置无效时 window-state 返回 null，交给窗口居中；最大化状态在创建后应用。
+  const restored = await windowState.read()
   const window = new BrowserWindow({
     title: 'Pi Desktop',
-    width: 1120,
-    height: 820,
-    minWidth: 720,
-    minHeight: 600,
+    ...(restored.x !== null && restored.y !== null ? { x: restored.x, y: restored.y } : {}),
+    width: restored.width,
+    height: restored.height,
+    minWidth: MIN_WINDOW_WIDTH,
+    minHeight: MIN_WINDOW_HEIGHT,
     show: false,
     backgroundColor: '#f3f6f8',
     webPreferences: {
@@ -513,8 +583,10 @@ async function createWindow(pageUrl: string): Promise<void> {
       webviewTag: false
     }
   })
+  if (restored.maximized) window.maximize()
   mainWindow = window
   const contents = window.webContents
+  const rememberWindowState = (): void => windowState.notifyChanged(window)
   contents.setWindowOpenHandler(() => ({ action: 'deny' }))
   contents.on('will-attach-webview', (event) => event.preventDefault())
   contents.on('will-frame-navigate', (event) => {
@@ -525,8 +597,15 @@ async function createWindow(pageUrl: string): Promise<void> {
   contents.on('will-redirect', (event) => {
     if (!event.isMainFrame || event.url !== pageUrl) event.preventDefault()
   })
+  // 尺寸、位置与最大化状态的变化经防抖写回配置；close 时先记录，销毁后无法再读取 bounds。
+  window.on('resize', rememberWindowState)
+  window.on('move', rememberWindowState)
+  window.on('maximize', rememberWindowState)
+  window.on('unmaximize', rememberWindowState)
+  window.on('close', () => windowState.captureBeforeClose(window))
   window.once('ready-to-show', () => window.show())
   window.once('closed', () => {
+    windowState.dispose()
     mainWindow = null
   })
   await window.loadURL(pageUrl)
@@ -541,12 +620,9 @@ app.on('before-quit', (event) => {
   event.preventDefault()
   quittingAfterShutdown = true
   void (async () => {
-    await Promise.race([
-      runtimeManager.shutdown(),
-      new Promise<void>((resolve) => {
-        setTimeout(resolve, QUIT_DEADLINE_MS)
-      })
-    ])
+    // 先落盘窗口状态：写入很小，避免被关闭链的兜底等待挤掉。
+    await Promise.race([windowState.flush(), wait(WINDOW_STATE_FLUSH_MS)])
+    await Promise.race([runtimeManager.shutdown(), wait(QUIT_DEADLINE_MS)])
     app.exit(0)
   })()
 })
@@ -559,6 +635,7 @@ app.whenReady().then(async () => {
   registerRuntimeHandlers(pageUrl)
   registerProjectHandlers(pageUrl)
   registerSessionHandlers(pageUrl)
+  registerPreferencesHandlers(pageUrl)
   runtimeManager.onStatusChanged(broadcastRuntimeStatus)
   runtimeManager.onProjectionBatch(broadcastRuntimeProjection)
   await createWindow(pageUrl)

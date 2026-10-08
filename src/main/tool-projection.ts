@@ -3,12 +3,24 @@
  *
  * 只把 `tool_execution_*` 会话事件重建为有界展示条目：不持有子进程、不管理批次与序号、
  * 不做请求关联，也不进入消息块。`partialResult` 的追加或替换语义由具体工具决定，因此这里
- * 只保留最近一次报告、结束事件再用 `result` 校正，不做内容级累加；非文本内容只计数，不渲染。
+ * 只保留最近一次报告、结束事件再用 `result` 校正，不做内容级累加；非文本内容只保留类型与
+ * 估算大小的描述，不携带载荷也不渲染。
+ *
+ * 条目的开始与结束时刻是 Desktop 收到对应事件的时刻，供界面计算耗时；Pi 的工具事件没有
+ * 时间字段，该耗时不代表工具的真实执行时间。恢复会话时补种的历史条目没有开始时刻。
  */
-import type { ToolExecution, ToolExecutionPhase, ToolExecutionTextKind } from '../shared/runtime-api'
+import type {
+  ToolExecution,
+  ToolExecutionPhase,
+  ToolExecutionTextKind,
+  ToolNonTextPart
+} from '../shared/runtime-api'
 
 /** 工具参数摘要上限；超限截断并在条目上标记，不伪装成完整参数。 */
 const MAX_TOOL_ARGS_CHARS = 4096
+
+/** 单条工具结果的非文本描述条数上限；超出只计数，不再追加描述。 */
+const MAX_NON_TEXT_PARTS = 32
 
 /** 工具条目数量上限；超出丢弃最旧条目并计数。 */
 const MAX_TOOL_ENTRIES = 100
@@ -20,20 +32,24 @@ export type ToolEventKind = 'start' | 'update' | 'end' | 'none'
 interface ExtractedText {
   readonly text: string
   readonly nonTextBlocks: number
+  readonly nonTextParts: ToolNonTextPart[]
 }
 
-const EMPTY_TEXT: ExtractedText = { text: '', nonTextBlocks: 0 }
+const EMPTY_TEXT: ExtractedText = { text: '', nonTextBlocks: 0, nonTextParts: [] }
 
 interface MutableToolExecution {
   readonly toolCallId: string
   toolName: string
   phase: ToolExecutionPhase
+  startedAt: number | null
+  endedAt: number | null
   argsText: string | null
   argsTruncated: boolean
   text: string
   textKind: ToolExecutionTextKind
   textTruncated: boolean
   nonTextBlocks: number
+  nonTextParts: ToolNonTextPart[]
 }
 
 export interface ToolProjectionCallbacks {
@@ -45,6 +61,17 @@ export interface ToolProjectionSnapshot {
   readonly tools: readonly ToolExecution[]
   readonly truncated: boolean
   readonly droppedTools: number
+}
+
+/** 恢复会话时补种的一条历史工具结果；开始时刻与事件流都不存在。 */
+export interface SeededToolResult {
+  readonly toolCallId: string
+  readonly toolName: string | null
+  readonly isError: boolean
+  readonly argsText: string | null
+  /** 历史 `toolResult` 消息本身；其中 `content` 的文本与非文本块由本模块提取。 */
+  readonly result: unknown
+  readonly endedAt: number | null
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -67,25 +94,46 @@ export function serializeToolArguments(value: unknown): string | null {
   }
 }
 
+/** 由 base64 字符数估算解码后字节数；不解析内容，也不保留数据本身。 */
+function estimateBase64Bytes(data: string): number {
+  if (data === '') return 0
+  const padding = data.endsWith('==') ? 2 : data.endsWith('=') ? 1 : 0
+  return Math.max(0, Math.floor((data.length * 3) / 4) - padding)
+}
+
+/** 非文本内容块只描述类型与估算大小；未知形状如实标为未知，不猜造字段。 */
+function describeNonTextBlock(block: Record<string, unknown>): ToolNonTextPart {
+  const type = readString(block.type) ?? 'unknown'
+  const mimeType = readString(block.mimeType)
+  if (type !== 'image') return { type, mimeType, bytes: null }
+
+  const data = readString(block.data)
+  return { type, mimeType, bytes: data === null ? null : estimateBase64Bytes(data) }
+}
+
 function extractResultText(value: unknown): ExtractedText {
-  if (typeof value === 'string') return { text: value, nonTextBlocks: 0 }
+  if (typeof value === 'string') return { text: value, nonTextBlocks: 0, nonTextParts: [] }
   if (!isRecord(value)) return EMPTY_TEXT
 
   const content = value.content
-  if (typeof content === 'string') return { text: content, nonTextBlocks: 0 }
+  if (typeof content === 'string') return { text: content, nonTextBlocks: 0, nonTextParts: [] }
   if (!Array.isArray(content)) return EMPTY_TEXT
 
   const parts: string[] = []
+  const nonTextParts: ToolNonTextPart[] = []
   let nonTextBlocks = 0
   for (const block of content) {
     if (isRecord(block) && block.type === 'text' && typeof block.text === 'string') {
       parts.push(block.text)
       continue
     }
-    // 图片与其他内容块只计数：图片不进入展示投影。
+    // 图片与其他内容块只保留描述：图片数据不进入展示投影。
     nonTextBlocks += 1
+    if (isRecord(block) && nonTextParts.length < MAX_NON_TEXT_PARTS) {
+      nonTextParts.push(describeNonTextBlock(block))
+    }
   }
-  return { text: parts.join('\n'), nonTextBlocks }
+  return { text: parts.join('\n'), nonTextBlocks, nonTextParts }
 }
 
 function toPublicTool(entry: MutableToolExecution): ToolExecution {
@@ -93,12 +141,15 @@ function toPublicTool(entry: MutableToolExecution): ToolExecution {
     toolCallId: entry.toolCallId,
     toolName: entry.toolName,
     phase: entry.phase,
+    startedAt: entry.startedAt,
+    endedAt: entry.endedAt,
     argsText: entry.argsText,
     argsTruncated: entry.argsTruncated,
     text: entry.text,
     textKind: entry.textKind,
     textTruncated: entry.textTruncated,
-    nonTextBlocks: entry.nonTextBlocks
+    nonTextBlocks: entry.nonTextBlocks,
+    nonTextParts: entry.nonTextParts
   }
 }
 
@@ -153,8 +204,39 @@ export class ToolProjection {
     this.index.clear()
   }
 
+  /**
+   * 补种一条历史工具结果；已有实时条目时不覆盖，开始时刻保持缺失。
+   * 结果文本、错误状态与结束时刻都来自历史消息，不冒充本轮执行。
+   */
+  seedResult(seed: SeededToolResult): void {
+    if (this.disposed || seed.toolCallId === '' || this.index.has(seed.toolCallId)) return
+
+    const extracted = extractResultText(seed.result)
+    const entry: MutableToolExecution = {
+      toolCallId: seed.toolCallId,
+      toolName: seed.toolName ?? '',
+      phase: seed.isError ? 'failed' : 'succeeded',
+      startedAt: null,
+      endedAt: seed.endedAt,
+      argsText: null,
+      argsTruncated: false,
+      text: '',
+      textKind: 'none',
+      textTruncated: false,
+      nonTextBlocks: 0,
+      nonTextParts: []
+    }
+    this.entries.push(entry)
+    this.index.set(seed.toolCallId, entry)
+    this.enforceLimit()
+    this.applyArgs(entry, seed.argsText)
+    this.setText(entry, extracted, 'result')
+    this.applyNonText(entry, extracted)
+    this.emit(entry)
+  }
+
   private startExecution(payload: Record<string, unknown>): ToolEventKind {
-    const entry = this.ensureEntry(payload, 'running')
+    const entry = this.ensureEntry(payload, 'running', Date.now())
     if (entry === null) return 'none'
     this.applyArgs(entry, serializeToolArguments(payload.args))
     this.emit(entry)
@@ -162,26 +244,28 @@ export class ToolProjection {
   }
 
   private updateExecution(payload: Record<string, unknown>): ToolEventKind {
-    const entry = this.ensureEntry(payload, 'running')
+    const entry = this.ensureEntry(payload, 'running', Date.now())
     if (entry === null) return 'none'
     this.applyArgs(entry, serializeToolArguments(payload.args))
     const partial = extractResultText(payload.partialResult)
     this.setText(entry, partial, 'partial')
-    entry.nonTextBlocks = partial.nonTextBlocks
+    this.applyNonText(entry, partial)
     this.emit(entry)
     return 'update'
   }
 
   private endExecution(payload: Record<string, unknown>): ToolEventKind {
     const phase: ToolExecutionPhase = payload.isError === true ? 'failed' : 'succeeded'
-    const entry = this.ensureEntry(payload, phase)
+    // 只见过结束事件的条目没有开始时刻，因此不编造耗时。
+    const entry = this.ensureEntry(payload, phase, null)
     if (entry === null) return 'none'
     entry.phase = phase
+    entry.endedAt = Date.now()
     this.applyArgs(entry, serializeToolArguments(payload.args))
     // 最终结果覆盖 partial 报告，避免继续累加造成重复内容。
     const result = extractResultText(payload.result)
     this.setText(entry, result, 'result')
-    entry.nonTextBlocks = result.nonTextBlocks
+    this.applyNonText(entry, result)
     this.emit(entry)
     return 'end'
   }
@@ -189,7 +273,8 @@ export class ToolProjection {
   /** 按 `toolCallId` 取或建条目；重复的开始事件只刷新字段，不重置已有输出。 */
   private ensureEntry(
     payload: Record<string, unknown>,
-    initialPhase: ToolExecutionPhase
+    initialPhase: ToolExecutionPhase,
+    startedAt: number | null
   ): MutableToolExecution | null {
     const toolCallId = readString(payload.toolCallId)
     if (toolCallId === null || toolCallId === '') return null
@@ -205,12 +290,15 @@ export class ToolProjection {
       toolCallId,
       toolName: toolName ?? '',
       phase: initialPhase,
+      startedAt,
+      endedAt: null,
       argsText: null,
       argsTruncated: false,
       text: '',
       textKind: 'none',
       textTruncated: false,
-      nonTextBlocks: 0
+      nonTextBlocks: 0,
+      nonTextParts: []
     }
     this.entries.push(entry)
     this.index.set(toolCallId, entry)
@@ -228,6 +316,12 @@ export class ToolProjection {
     }
     entry.argsText = argsText
     entry.argsTruncated = false
+  }
+
+  /** 非文本内容只更新描述与总数；描述条数上限在提取阶段已生效。 */
+  private applyNonText(entry: MutableToolExecution, extracted: ExtractedText): void {
+    entry.nonTextBlocks = extracted.nonTextBlocks
+    entry.nonTextParts = extracted.nonTextParts
   }
 
   /** 整块替换条目文本；空文本不标来源，截断只在本次替换超限时标记。 */

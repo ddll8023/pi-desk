@@ -1,4 +1,4 @@
-/** 保存 Runtime 页面的展示状态、投影消息与工具条目副本、订阅与启停、Prompt 提交与中止动作，不持有 Runtime 所有权，也不承担消息重建与通知窗口。 */
+/** 保存聊天区与 Runtime 状态的展示状态、投影消息与工具条目副本、订阅与启停、Prompt 提交与中止动作，不持有 Runtime 所有权，也不承担消息重建与通知窗口。 */
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import type {
@@ -154,7 +154,7 @@ export const useRuntimeStore = defineStore('runtime', () => {
     releaseProjection = null
   }
 
-  /** 启动唯一 Runtime；启动、就绪或关闭中都不重复发起。 */
+  /** 启动唯一 Runtime；启动、就绪或关闭中都不重复发起。当前界面不调用它，启动统一走打开或新建会话。 */
   async function launch(projectPath: string): Promise<void> {
     if (view.value.phase === 'starting' || view.value.phase === 'ready' || view.value.phase === 'stopping') {
       return
