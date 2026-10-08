@@ -1,4 +1,4 @@
-/** 保存 Runtime 页面的展示状态、投影消息副本、订阅与启停、Prompt 提交动作，不持有 Runtime 所有权，也不承担消息重建与通知窗口。 */
+/** 保存 Runtime 页面的展示状态、投影消息与工具条目副本、订阅与启停、Prompt 提交与中止动作，不持有 Runtime 所有权，也不承担消息重建与通知窗口。 */
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import type {
@@ -8,9 +8,11 @@ import type {
   ProjectionUpdate,
   PromptDisposition,
   RuntimeError,
-  RuntimeStatus
+  RuntimeStatus,
+  ToolExecution
 } from '../../../shared/runtime-api'
 import {
+  abortRuntime,
   ackRuntimeProjection,
   getRuntimeProjection,
   getRuntimeStatus,
@@ -33,6 +35,12 @@ type PromptViewState =
   | { phase: 'idle' }
   | { phase: 'sending' }
   | { phase: 'accepted'; disposition: PromptDisposition }
+  | { phase: 'error'; error: RuntimeError }
+
+/** 中止请求的展示状态；运行中状态本身仍由事件流收敛。 */
+type AbortViewState =
+  | { phase: 'idle' }
+  | { phase: 'requesting' }
   | { phase: 'error'; error: RuntimeError }
 
 /** `syncing` 表示未取得基准或正在重同步，`stale` 表示失去同步且尚未取得快照。 */
@@ -70,38 +78,54 @@ function appendBlock(
 /** 应用一批更新；遇到未知消息或长度不符时返回 null，表示必须整表重同步。 */
 function applyUpdates(
   messages: readonly ProjectionMessage[],
+  tools: readonly ToolExecution[],
   updates: readonly ProjectionUpdate[]
-): ProjectionMessage[] | null {
-  let next = [...messages]
+): { messages: ProjectionMessage[]; tools: ToolExecution[] } | null {
+  let nextMessages = [...messages]
+  let nextTools = [...tools]
   for (const update of updates) {
+    if (update.kind === 'tool') {
+      const incoming = update.tool
+      // 工具条目本身是权威内容：未知 toolCallId 也直接收录，不做猜测。
+      const known = nextTools.some((tool) => tool.toolCallId === incoming.toolCallId)
+      nextTools = known
+        ? nextTools.map((tool) => (tool.toolCallId === incoming.toolCallId ? incoming : tool))
+        : [...nextTools, incoming]
+      continue
+    }
     if (update.kind === 'message') {
-      const index = next.findIndex((message) => message.id === update.message.id)
-      next = index < 0
-        ? [...next, update.message]
-        : next.map((message) => (message.id === update.message.id ? update.message : message))
+      const incoming = update.message
+      const messageIndex = nextMessages.findIndex((message) => message.id === incoming.id)
+      nextMessages = messageIndex < 0
+        ? [...nextMessages, incoming]
+        : nextMessages.map((message) => (message.id === incoming.id ? incoming : message))
       continue
     }
 
-    const index = next.findIndex((message) => message.id === update.messageId)
-    const target = index < 0 ? undefined : next[index]
+    const messageId = update.messageId
+    const index = nextMessages.findIndex((message) => message.id === messageId)
+    const target = index < 0 ? undefined : nextMessages[index]
     if (target === undefined) return null
 
     const blocks = update.kind === 'block'
       ? replaceBlock(target.blocks, update.block)
       : appendBlock(target.blocks, update.contentIndex, update.text, update.length)
     if (blocks === null) return null
-    next[index] = { ...target, blocks }
+    nextMessages[index] = { ...target, blocks }
   }
-  return next
+  return { messages: nextMessages, tools: nextTools }
 }
 
 export const useRuntimeStore = defineStore('runtime', () => {
   const view = ref<RuntimeViewState>({ phase: 'idle' })
   const promptView = ref<PromptViewState>({ phase: 'idle' })
+  const abortView = ref<AbortViewState>({ phase: 'idle' })
   const messages = ref<readonly ProjectionMessage[]>([])
+  const tools = ref<readonly ToolExecution[]>([])
   const projectionSync = ref<ProjectionSyncState>('syncing')
   const projectionTruncated = ref(false)
   const droppedMessages = ref(0)
+  const droppedTools = ref(0)
   let releaseSubscription: (() => void) | null = null
   let releaseProjection: (() => void) | null = null
   /** 已取得基准快照的 Runtime 代际；为空表示尚无基准。 */
@@ -177,6 +201,22 @@ export const useRuntimeStore = defineStore('runtime', () => {
       : { phase: 'error', error: result.error }
   }
 
+  /**
+   * 请求中止当前操作；只在就绪且事件流显示运行中时发起，发送中不重复提交。
+   * 成功只表示 Pi 已确认取消，运行中状态的最终收敛仍由事件流负责。
+   */
+  async function stopOperation(): Promise<void> {
+    if (view.value.phase !== 'ready') return
+    if (view.value.snapshot.info?.isStreaming !== true) return
+    if (abortView.value.phase === 'requesting') return
+
+    abortView.value = { phase: 'requesting' }
+    const result = await abortRuntime()
+    abortView.value = result.ok
+      ? { phase: 'idle' }
+      : { phase: 'error', error: result.error }
+  }
+
   /** 全量重同步：快照是唯一基准，期间到达的增量由序号守卫丢弃。 */
   async function syncProjection(expectedRuntimeId?: number): Promise<void> {
     if (syncInFlight) return
@@ -200,8 +240,10 @@ export const useRuntimeStore = defineStore('runtime', () => {
     appliedRuntimeId = snapshot.runtimeId
     appliedSeq = snapshot.seq
     messages.value = snapshot.messages
+    tools.value = snapshot.tools
     projectionTruncated.value = snapshot.truncated
     droppedMessages.value = snapshot.droppedMessages
+    droppedTools.value = snapshot.droppedTools
     projectionSync.value = 'synced'
     if (snapshot.runtimeId !== null) ackRuntimeProjection(snapshot.runtimeId, snapshot.seq)
   }
@@ -227,13 +269,14 @@ export const useRuntimeStore = defineStore('runtime', () => {
       return
     }
 
-    const applied = applyUpdates(messages.value, batch.updates)
+    const applied = applyUpdates(messages.value, tools.value, batch.updates)
     if (applied === null) {
       projectionSync.value = 'stale'
       void syncProjection(batch.runtimeId)
       return
     }
-    messages.value = applied
+    messages.value = applied.messages
+    tools.value = applied.tools
     appliedSeq = batch.seq
     projectionSync.value = 'synced'
     ackRuntimeProjection(batch.runtimeId, appliedSeq)
@@ -242,16 +285,22 @@ export const useRuntimeStore = defineStore('runtime', () => {
   /** 投影随 Runtime 代际存在：离开就绪即清空展示消息与同步基准。 */
   function resetProjection(): void {
     messages.value = []
+    tools.value = []
     projectionSync.value = 'syncing'
     projectionTruncated.value = false
     droppedMessages.value = 0
+    droppedTools.value = 0
     appliedRuntimeId = null
     appliedSeq = 0
   }
 
   /** 主进程快照是唯一真相：事件通知与查询结果都经这里映射为展示状态。 */
   function applyStatus(status: RuntimeStatus): void {
-    if (status.state !== 'ready') resetProjection()
+    if (status.state !== 'ready') {
+      resetProjection()
+      // Runtime 离开就绪后，上一次中止请求的展示状态不再有意义。
+      abortView.value = { phase: 'idle' }
+    }
     if (status.state === 'failed') {
       view.value = {
         phase: 'failed',
@@ -282,14 +331,18 @@ export const useRuntimeStore = defineStore('runtime', () => {
   return {
     view,
     promptView,
+    abortView,
     messages,
+    tools,
     projectionSync,
     projectionTruncated,
     droppedMessages,
+    droppedTools,
     initialize,
     dispose,
     launch,
     shutdown,
-    send
+    send,
+    stopOperation
   }
 })

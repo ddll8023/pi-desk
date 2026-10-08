@@ -29,6 +29,12 @@ const READY_TIMEOUT_MS = 10_000
 /** prompt 只等待 preflight 的期限；超时只结束等待，结果未知且不自动重发。 */
 const PROMPT_TIMEOUT_MS = 30_000
 
+/** 中止当前操作的等待期限；超时只结束等待，结果未知且不自动重发。 */
+const ABORT_TIMEOUT_MS = 30_000
+
+/** 关闭链里的取消等待上限；明显短于退出总预算，超时就直接进入兜底。 */
+const ABORT_SHUTDOWN_WAIT_MS = 3_000
+
 /** prompt 文本上限，按 UTF-8 字节计。 */
 const PROMPT_MAX_BYTES = 1_048_576
 
@@ -115,7 +121,18 @@ export class RuntimeManager {
   getProjection(): ProjectionResult {
     const runtime = this.active
     if (runtime === null) {
-      return { ok: true, data: { runtimeId: null, seq: 0, messages: [], truncated: false, droppedMessages: 0 } }
+      return {
+        ok: true,
+        data: {
+          runtimeId: null,
+          seq: 0,
+          messages: [],
+          tools: [],
+          truncated: false,
+          droppedMessages: 0,
+          droppedTools: 0
+        }
+      }
     }
     return { ok: true, data: runtime.projection.snapshot() }
   }
@@ -142,8 +159,29 @@ export class RuntimeManager {
   }
 
   /**
-   * 关闭当前 Runtime：停止接受新请求、关闭 stdin、等待退出，超时后按平台定向终止。
-   * 关闭是幂等动作，没有 Runtime 时直接返回当前快照。
+   * 请求中止当前 Agent 操作：只要求 Runtime 就绪，不做本地 streaming 预检。
+   * 成功只表示 Pi 已确认取消，运行状态仍由事件流收敛；超时结果未知且不自动重发。
+   */
+  async abort(): Promise<RuntimeResult> {
+    try {
+      const runtime = this.active
+      if (runtime === null || this.snapshot.state !== 'ready') {
+        throw new RuntimeFailure('RUNTIME_NOT_READY', 'Runtime 尚未就绪，无法中止当前操作。')
+      }
+      await this.requestAbort(runtime, ABORT_TIMEOUT_MS)
+      return { ok: true, data: { ...this.snapshot } }
+    } catch (error) {
+      const failure = error instanceof RuntimeFailure
+        ? error
+        : new RuntimeFailure('INTERNAL_ERROR', '中止当前操作时发生未预期的内部错误。')
+      // 请求失败不改写 Runtime 快照；进程真的退出时由退出路径负责收敛状态。
+      return { ok: false, error: { code: failure.code, message: failure.message } }
+    }
+  }
+
+  /**
+   * 关闭当前 Runtime：先停止接受新请求，有活动操作时先请求取消，再关闭 stdin、
+   * 等待退出，超时后按平台定向终止。关闭是幂等动作，没有 Runtime 时直接返回当前快照。
    */
   async stop(): Promise<RuntimeResult> {
     const runtime = this.active
@@ -151,8 +189,19 @@ export class RuntimeManager {
       return { ok: true, data: { ...this.snapshot } }
     }
 
+    // 运行中状态必须在置 stopping 前读取：stopping 快照不保留 info。
+    const hadActiveRun = this.snapshot.state === 'ready' && this.snapshot.info?.isStreaming === true
+
     this.stopRequested = true
     this.publish({ state: 'stopping', runtimeId: runtime.runtimeId, info: null, lastError: null })
+    if (hadActiveRun) {
+      // 取消只尽力而为：超时或拒绝都不阻断后续 stdin 关闭与平台兜底。
+      try {
+        await this.requestAbort(runtime, ABORT_SHUTDOWN_WAIT_MS)
+      } catch {
+        // 取消失败由后续关闭链兜底。
+      }
+    }
     await runtime.process.stop()
 
     if (this.active !== null && this.active.runtimeId === runtime.runtimeId) {
@@ -338,6 +387,42 @@ export class RuntimeManager {
       throw new RuntimeFailure('RUNTIME_PROTOCOL_ERROR', 'prompt 响应缺少约定的 disposition 字段。')
     }
     return disposition
+  }
+
+  /**
+   * 向指定 Runtime 发送 abort 并等待有限期限；成功只表示 Pi 已确认取消。
+   * 调用方决定超时与拒绝是否可以忽略（关闭链会忽略，用户请求则如实返回失败）。
+   */
+  private async requestAbort(runtime: ActiveRuntime, timeoutMs: number): Promise<void> {
+    const outcome = await runtime.protocol.request(
+      { type: 'abort' },
+      (line) => runtime.process.write(line),
+      timeoutMs
+    )
+
+    if (outcome.status === 'timeout') {
+      throw new RuntimeFailure(
+        'RUNTIME_TIMEOUT',
+        `Pi 在 ${timeoutMs} 毫秒内没有确认中止当前操作；结果未知，不会自动重发。`
+      )
+    }
+    if (outcome.status === 'closed') {
+      throw new RuntimeFailure(
+        'RUNTIME_EXITED',
+        this.describeFailure(
+          runtime.process.exitEvent,
+          runtime.process,
+          outcome.reason,
+          'Pi 进程在本次中止请求期间结束了标准输入。'
+        )
+      )
+    }
+    if (!outcome.response.success) {
+      throw new RuntimeFailure(
+        'RUNTIME_PROTOCOL_ERROR',
+        `Pi 拒绝了本次中止请求：${outcome.response.error ?? '未提供错误信息'}`
+      )
+    }
   }
 
   /** 退出结果只在该 Runtime 仍是当前代际时生效。 */

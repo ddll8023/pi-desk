@@ -1,4 +1,4 @@
-/** 作为渲染端 Runtime 启停、Prompt 提交与投影同步的调用入口，把桥接缺失与通信异常转换为安全的展示结果。 */
+/** 作为渲染端 Runtime 启停、Prompt 提交、中止与投影同步的调用入口，把桥接缺失与通信异常转换为安全的展示结果。 */
 import type {
   ProjectionBatch,
   ProjectionResult,
@@ -47,6 +47,17 @@ export async function stopRuntime(): Promise<RuntimeResult> {
   if (!bridge || typeof bridge.stopRuntime !== 'function') return unavailable()
   try {
     return await bridge.stopRuntime()
+  } catch {
+    return callFailed()
+  }
+}
+
+/** 请求中止当前 Agent 操作；结果只表示 Pi 是否确认取消，运行状态仍看事件流。 */
+export async function abortRuntime(): Promise<RuntimeResult> {
+  const bridge = window.desktop
+  if (!bridge || typeof bridge.abortRuntime !== 'function') return unavailable()
+  try {
+    return await bridge.abortRuntime()
   } catch {
     return callFailed()
   }

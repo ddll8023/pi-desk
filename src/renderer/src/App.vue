@@ -1,10 +1,18 @@
-<!-- 展示桌面连接、Runtime 状态与消息投影，并提交 Prompt 请求；输入内容只在本页使用，不持久化。 -->
+<!-- 展示桌面连接、Runtime 状态、消息投影与工具执行，并提交 Prompt、中止当前操作；输入内容只在本页使用，不持久化。 -->
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-import type { ProjectionBlockKind } from '../../shared/runtime-api'
+import type { ProjectionBlockKind, ToolExecutionPhase } from '../../shared/runtime-api'
 import { useDesktopStore } from './stores/desktop'
 import { useRuntimeStore } from './stores/runtime'
+
+/** 工具状态只做文案映射，不推断工具是否真的成功结束。 */
+const TOOL_PHASE_LABELS: Readonly<Record<ToolExecutionPhase, string>> = {
+  running: '运行中',
+  succeeded: '已完成',
+  failed: '失败',
+  unknown: '未确认结束'
+}
 
 const desktopStore = useDesktopStore()
 const runtimeStore = useRuntimeStore()
@@ -12,10 +20,13 @@ const { connection } = storeToRefs(desktopStore)
 const {
   view: runtimeView,
   promptView,
+  abortView,
   messages,
+  tools,
   projectionSync,
   projectionTruncated,
-  droppedMessages
+  droppedMessages,
+  droppedTools
 } = storeToRefs(runtimeStore)
 const projectPath = ref('')
 const prompt = ref('')
@@ -61,8 +72,23 @@ const promptResult = computed(() => {
 })
 const projectionSyncing = computed(() => projectionSync.value !== 'synced')
 const runtimeStreaming = computed(() => runtimeInfo.value?.isStreaming === true)
+const abortPending = computed(() => abortView.value.phase === 'requesting' && runtimeStreaming.value)
+const abortError = computed(() => (abortView.value.phase === 'error' ? abortView.value.error : null))
 const textBlocks = computed(() => collectBlocks('text'))
 const thinkingBlocks = computed(() => collectBlocks('thinking'))
+/** 工具面板只展示投影已给字段，不推断耗时或成功与否。 */
+const toolExecutions = computed(() => tools.value.map((tool) => ({
+  key: tool.toolCallId,
+  name: tool.toolName === '' ? '未知工具' : tool.toolName,
+  phaseLabel: TOOL_PHASE_LABELS[tool.phase],
+  isError: tool.phase === 'failed',
+  argsText: tool.argsText,
+  argsTruncated: tool.argsTruncated,
+  text: tool.text,
+  textLabel: tool.textKind === 'partial' ? '部分输出' : '结果',
+  textTruncated: tool.textTruncated,
+  nonTextBlocks: tool.nonTextBlocks
+})))
 const messageError = computed(() => {
   const failed = messages.value.find((message) => (
     message.errorMessage !== null || message.stopReason === 'error' || message.stopReason === 'aborted'
@@ -102,6 +128,10 @@ function submitPrompt(): void {
   void runtimeStore.send(prompt.value)
 }
 
+function stopOperation(): void {
+  void runtimeStore.stopOperation()
+}
+
 onMounted(() => {
   void desktopStore.initialize()
   void runtimeStore.initialize()
@@ -125,7 +155,7 @@ onUnmounted(() => {
     </header>
 
     <p id="runtime-notice" class="mb-6 border-l-2 border-desk-accent pl-3 text-sm text-desk-muted">
-      当前可以启停 Runtime、提交 Prompt，并查看本轮文本与 Thinking。消息只在本页展示、不持久化，工具、诊断与 Stop 仍在后续任务接入。
+      当前可以启停 Runtime、提交 Prompt，查看本轮文本、Thinking 与工具执行，并停止当前操作。消息只在本页展示、不持久化，Runtime 诊断仍在后续任务接入。
     </p>
 
     <section
@@ -260,10 +290,24 @@ onUnmounted(() => {
             >
               发送
             </button>
-            <button type="button" class="control-button" disabled aria-describedby="runtime-notice">Stop</button>
+            <button
+              type="button"
+              class="control-button"
+              :disabled="!runtimeReady || !runtimeStreaming || abortPending"
+              aria-describedby="stop-status"
+              @click="stopOperation"
+            >
+              Stop
+            </button>
           </div>
-          <p class="mt-2 text-xs text-desk-muted">
-            {{ runtimeStreaming ? 'Agent 正在运行，需等本轮结束；Stop 在后续任务接入。' : 'Stop 在后续任务接入。' }}
+          <p v-if="abortError" id="stop-status" role="alert" class="mt-2 text-xs">
+            {{ abortError.message }}
+          </p>
+          <p v-else-if="abortPending" id="stop-status" role="status" class="mt-2 text-xs text-desk-muted">
+            正在停止当前操作，等待本轮结束。
+          </p>
+          <p v-else id="stop-status" class="mt-2 text-xs text-desk-muted">
+            {{ runtimeStreaming ? 'Agent 正在运行；停止后仍保留 Runtime。' : 'Stop 在 Agent 运行期间可用。' }}
           </p>
         </section>
       </div>
@@ -304,7 +348,36 @@ onUnmounted(() => {
 
         <section class="panel" aria-labelledby="tools-heading">
           <h2 id="tools-heading" class="section-heading mb-3">工具</h2>
-          <p class="text-sm text-desk-muted">尚无工具执行记录。</p>
+          <p v-if="droppedTools > 0" role="status" class="mb-3 text-sm text-desk-muted">
+            省略较早工具记录 {{ droppedTools }} 条。
+          </p>
+          <p v-if="toolExecutions.length === 0" class="text-sm text-desk-muted">尚无工具执行记录。</p>
+          <div v-else class="space-y-3">
+            <article
+              v-for="tool in toolExecutions"
+              :key="tool.key"
+              class="rounded border border-desk-line bg-desk-surface p-3"
+            >
+              <div class="mb-1 flex flex-wrap items-center justify-between gap-2">
+                <p class="font-mono text-sm">{{ tool.name }}</p>
+                <p class="text-xs" :class="tool.isError ? 'text-desk-accent' : 'text-desk-muted'">
+                  {{ tool.phaseLabel }}
+                </p>
+              </div>
+              <p v-if="tool.argsText !== null" class="mb-2 break-words font-mono text-xs text-desk-muted">
+                参数：{{ tool.argsText }}<span v-if="tool.argsTruncated">（已截断）</span>
+              </p>
+              <template v-if="tool.text !== ''">
+                <p class="mb-1 text-xs text-desk-muted">{{ tool.textLabel }}</p>
+                <p class="whitespace-pre-wrap break-words text-sm">{{ tool.text }}</p>
+                <p v-if="tool.textTruncated" class="mt-1 text-xs text-desk-muted">此输出超出展示上限，已截断。</p>
+              </template>
+              <p v-else class="text-xs text-desk-muted">无文本输出。</p>
+              <p v-if="tool.nonTextBlocks > 0" class="mt-1 text-xs text-desk-muted">
+                含 {{ tool.nonTextBlocks }} 个非文本内容块，不在本页渲染。
+              </p>
+            </article>
+          </div>
         </section>
 
         <section class="panel" aria-labelledby="diagnostics-heading">

@@ -1,9 +1,10 @@
-/** 为沙箱页面提供应用信息、Runtime 启停方法、Prompt 提交、消息投影与事件订阅，不暴露 Electron、任意 channel 或系统能力。 */
+/** 为沙箱页面提供应用信息、Runtime 启停方法、Prompt 提交、中止、消息/工具投影与事件订阅，不暴露 Electron、任意 channel 或系统能力。 */
 import { contextBridge, ipcRenderer } from 'electron'
 import type { IpcRendererEvent } from 'electron'
 import { APP_INFO_CHANNEL, isAppInfoResult } from '../shared/desktop-api'
 import type { DesktopApi } from '../shared/desktop-api'
 import {
+  RUNTIME_ABORT_CHANNEL,
   RUNTIME_PROMPT_CHANNEL,
   RUNTIME_PROJECTION_ACK_CHANNEL,
   RUNTIME_PROJECTION_CHANNEL,
@@ -69,6 +70,11 @@ const desktop: DesktopApi & RuntimeApi = {
 
   async stopRuntime() {
     const response: unknown = await ipcRenderer.invoke(RUNTIME_STOP_CHANNEL)
+    return isRuntimeResult(response) ? response : invalidRuntimeResponse()
+  },
+
+  async abortRuntime() {
+    const response: unknown = await ipcRenderer.invoke(RUNTIME_ABORT_CHANNEL)
     return isRuntimeResult(response) ? response : invalidRuntimeResponse()
   },
 

@@ -1,10 +1,11 @@
-/** 只定义 Runtime 启停、状态、Prompt 提交与消息投影 IPC 的固定通道、事件名、结果类型与跨进程响应校验。 */
+/** 只定义 Runtime 启停、状态、Prompt 提交、中止与消息/工具投影 IPC 的固定通道、事件名、结果类型与跨进程响应校验。 */
 import type { DesktopErrorCode } from './desktop-api'
 
 export const RUNTIME_START_CHANNEL = 'desktop:runtime-start'
 export const RUNTIME_STOP_CHANNEL = 'desktop:runtime-stop'
 export const RUNTIME_STATUS_CHANNEL = 'desktop:runtime-status'
 export const RUNTIME_PROMPT_CHANNEL = 'desktop:runtime-prompt'
+export const RUNTIME_ABORT_CHANNEL = 'desktop:runtime-abort'
 export const RUNTIME_PROJECTION_CHANNEL = 'desktop:runtime-projection'
 export const RUNTIME_PROJECTION_ACK_CHANNEL = 'desktop:runtime-projection-ack'
 /** 主进程到渲染进程的单向状态通知，payload 是 RuntimeStatus。 */
@@ -80,6 +81,29 @@ export interface ProjectionBlock {
   readonly toolName: string | null
 }
 
+/** 工具执行的终态；`unknown` 表示代际收敛时仍未收到结束事件，不冒充成功。 */
+export type ToolExecutionPhase = 'running' | 'succeeded' | 'failed' | 'unknown'
+
+/** 工具输出的来源：`partial` 只是最近一次报告，`result` 才是结束事件的权威结果。 */
+export type ToolExecutionTextKind = 'none' | 'partial' | 'result'
+
+/**
+ * 工具执行条目按 `toolCallId` 与消息块解耦：参数与输出各有独立上限，
+ * 非文本内容只计数、不进入投影，图片不渲染。
+ */
+export interface ToolExecution {
+  readonly toolCallId: string
+  readonly toolName: string
+  readonly phase: ToolExecutionPhase
+  readonly argsText: string | null
+  readonly argsTruncated: boolean
+  readonly text: string
+  readonly textKind: ToolExecutionTextKind
+  readonly textTruncated: boolean
+  /** 结束结果中的非文本内容块数量；界面只标示数量，不渲染内容。 */
+  readonly nonTextBlocks: number
+}
+
 /** `id` 由 Desktop 生成，不冒充 Pi 消息字段。 */
 export interface ProjectionMessage {
   readonly id: string
@@ -92,7 +116,7 @@ export interface ProjectionMessage {
 
 /**
  * `append` 携带追加后的块总长度；渲染端长度不符时必须换取快照，不能猜测补齐。
- * `block` 是权威块内容，`message` 是新消息或整条替换。
+ * `block` 是权威块内容，`message` 是新消息或整条替换，`tool` 是按 `toolCallId` 整条替换的工具条目。
  */
 export type ProjectionUpdate =
   | {
@@ -104,14 +128,17 @@ export type ProjectionUpdate =
   }
   | { readonly kind: 'block'; readonly messageId: string; readonly block: ProjectionBlock }
   | { readonly kind: 'message'; readonly message: ProjectionMessage }
+  | { readonly kind: 'tool'; readonly tool: ToolExecution }
 
-/** 重新订阅或失去同步时的唯一基准；没有活动 Runtime 时消息列表为空。 */
+/** 重新订阅或失去同步时的唯一基准；没有活动 Runtime 时消息与工具列表为空。 */
 export interface ProjectionSnapshot {
   readonly runtimeId: number | null
   readonly seq: number
   readonly messages: readonly ProjectionMessage[]
+  readonly tools: readonly ToolExecution[]
   readonly truncated: boolean
   readonly droppedMessages: number
+  readonly droppedTools: number
 }
 
 /** `resyncRequired` 表示增量已作废，渲染端应换取快照而不是继续应用本批更新。 */
@@ -137,6 +164,8 @@ export interface RuntimeApi {
   readonly stopRuntime: () => Promise<RuntimeResult>
   readonly getRuntimeStatus: () => Promise<RuntimeResult>
   readonly sendPrompt: (message: string) => Promise<PromptResult>
+  /** 请求中止当前 Agent 操作；成功只表示 Pi 已确认取消，运行状态仍以事件流为准。 */
+  readonly abortRuntime: () => Promise<RuntimeResult>
   readonly getRuntimeProjection: () => Promise<ProjectionResult>
   /** 确认已应用到的最高序号；即发即忘，结果不影响页面。 */
   readonly ackRuntimeProjection: (runtimeId: number, seq: number) => void
@@ -232,8 +261,33 @@ function isProjectionMessage(value: unknown): value is ProjectionMessage {
     && (value.errorMessage === null || typeof value.errorMessage === 'string')
 }
 
+function isToolExecutionPhase(value: unknown): value is ToolExecutionPhase {
+  return value === 'running' || value === 'succeeded' || value === 'failed' || value === 'unknown'
+}
+
+function isToolExecutionTextKind(value: unknown): value is ToolExecutionTextKind {
+  return value === 'none' || value === 'partial' || value === 'result'
+}
+
+function isToolExecution(value: unknown): value is ToolExecution {
+  if (!isRecord(value)) return false
+  return typeof value.toolCallId === 'string'
+    && value.toolCallId !== ''
+    && typeof value.toolName === 'string'
+    && isToolExecutionPhase(value.phase)
+    && (value.argsText === null || typeof value.argsText === 'string')
+    && typeof value.argsTruncated === 'boolean'
+    && typeof value.text === 'string'
+    && isToolExecutionTextKind(value.textKind)
+    && typeof value.textTruncated === 'boolean'
+    && typeof value.nonTextBlocks === 'number'
+    && Number.isInteger(value.nonTextBlocks)
+    && value.nonTextBlocks >= 0
+}
+
 function isProjectionUpdate(value: unknown): value is ProjectionUpdate {
   if (!isRecord(value)) return false
+  if (value.kind === 'tool') return isToolExecution(value.tool)
   if (value.kind === 'message') return isProjectionMessage(value.message)
   if (typeof value.messageId !== 'string') return false
   if (value.kind === 'block') return isProjectionBlock(value.block)
@@ -251,10 +305,14 @@ function isProjectionSnapshot(value: unknown): value is ProjectionSnapshot {
   if (value.runtimeId !== null && typeof value.runtimeId !== 'number') return false
   if (typeof value.seq !== 'number' || !Number.isInteger(value.seq) || value.seq < 0) return false
   if (!Array.isArray(value.messages) || !value.messages.every(isProjectionMessage)) return false
+  if (!Array.isArray(value.tools) || !value.tools.every(isToolExecution)) return false
   return typeof value.truncated === 'boolean'
     && typeof value.droppedMessages === 'number'
     && Number.isInteger(value.droppedMessages)
     && value.droppedMessages >= 0
+    && typeof value.droppedTools === 'number'
+    && Number.isInteger(value.droppedTools)
+    && value.droppedTools >= 0
 }
 
 /** 批次校验失败时渲染端直接丢弃；序号缺口由快照重同步收敛。 */

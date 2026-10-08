@@ -1,4 +1,4 @@
-/** 管理唯一桌面窗口、本地资产边界，以及应用信息与 Runtime 启停、Prompt 提交、消息投影 IPC、事件广播与退出编排。 */
+/** 管理唯一桌面窗口、本地资产边界，以及应用信息与 Runtime 启停、Prompt 提交、中止、消息/工具投影 IPC、事件广播与退出编排。 */
 import { realpath } from 'node:fs/promises'
 import { extname, isAbsolute, relative, resolve, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -7,6 +7,7 @@ import type { IpcMainInvokeEvent } from 'electron'
 import { APP_INFO_CHANNEL } from '../shared/desktop-api'
 import type { AppInfoResult } from '../shared/desktop-api'
 import {
+  RUNTIME_ABORT_CHANNEL,
   RUNTIME_PROMPT_CHANNEL,
   RUNTIME_PROJECTION_ACK_CHANNEL,
   RUNTIME_PROJECTION_CHANNEL,
@@ -238,6 +239,20 @@ function registerRuntimeHandlers(pageUrl: string): void {
         return runtimeFailure('INVALID_REQUEST', '关闭 Runtime 接口不接受参数。')
       }
       return runtimeManager.stop()
+    }
+  )
+
+  /** 中止当前 Agent 操作；只接受零参数，运行状态仍以事件流为准。 */
+  ipcMain.handle(
+    RUNTIME_ABORT_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<RuntimeResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return runtimeFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 0) {
+        return runtimeFailure('INVALID_REQUEST', '中止操作接口不接受参数。')
+      }
+      return runtimeManager.abort()
     }
   )
 

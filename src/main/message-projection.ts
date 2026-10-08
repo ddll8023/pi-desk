@@ -1,8 +1,9 @@
 /**
- * 维护当前 Runtime 代际的临时消息投影，并按有界批次推送给渲染端。
+ * 维护当前 Runtime 代际的临时消息与工具投影，并按有界批次推送给渲染端。
  *
- * 只把 Pi 的会话事件重建为页面要展示的消息与内容块，不保存原始事件、不持久化、不管理 Session、
- * 不解析 response 与退出。渲染端长度校验失败、序号缺口或未确认窗口超限都收敛到快照重同步，
+ * 只把 Pi 的会话事件重建为页面要展示的消息内容块与工具执行条目，不保存原始事件、不持久化、
+ * 不管理 Session、不解析 response 与退出；工具条目的生命周期交给 tool-projection，本模块负责
+ * 聚合、批次、序号与确认。渲染端长度校验失败、序号缺口或未确认窗口超限都收敛到快照重同步，
  * 投影不猜测渲染端缺少的内容；触及展示上限时显式截断并计数，不伪装成完整内容。
  */
 import type {
@@ -11,8 +12,10 @@ import type {
   ProjectionBlockKind,
   ProjectionMessage,
   ProjectionSnapshot,
-  ProjectionUpdate
+  ProjectionUpdate,
+  ToolExecution
 } from '../shared/runtime-api'
+import { ToolProjection, serializeToolArguments } from './tool-projection'
 
 /** 批次刷新节拍；消息开始与终态事件立即刷新，不受此限制。 */
 const FLUSH_INTERVAL_MS = 100
@@ -76,17 +79,6 @@ function readString(value: unknown): string | null {
   return typeof value === 'string' ? value : null
 }
 
-function serializeArguments(value: unknown): string | null {
-  if (value === undefined) return null
-  try {
-    const serialized = JSON.stringify(value)
-    return typeof serialized === 'string' ? serialized : null
-  } catch {
-    // 工具参数无法序列化不应导致消息丢失。
-    return null
-  }
-}
-
 export class MessageProjection {
   private readonly messages: MutableMessage[] = []
   private pending: ProjectionUpdate[] = []
@@ -101,11 +93,19 @@ export class MessageProjection {
   private truncated = false
   private needsResync = false
   private disposed = false
+  private readonly toolProjection: ToolProjection
 
   constructor(
     private readonly runtimeId: number,
     private readonly callbacks: ProjectionCallbacks
-  ) {}
+  ) {
+    // 工具条目与消息块解耦，但复用同一批次、序号与确认信封。
+    this.toolProjection = new ToolProjection(MAX_BLOCK_CHARS, {
+      onUpdate: (tool: ToolExecution) => {
+        this.queueUpdate({ kind: 'tool', tool })
+      }
+    })
+  }
 
   /** 应用一条已分类为会话事件的 Pi 记录；未知事件名与不展示的事件一律忽略。 */
   applySessionEvent(payload: Record<string, unknown>): void {
@@ -118,8 +118,9 @@ export class MessageProjection {
         this.callbacks.onStatusHint({ isStreaming: false })
         return
       case 'agent_settled':
-        // 会话级忙碌状态以此收敛；同时把剩余增量立即送出。
+        // 会话级忙碌状态以此收敛；仍未结束的工具条目标为未确认，同时把剩余增量立即送出。
         this.callbacks.onStatusHint({ isStreaming: false })
+        this.toolProjection.settleRunning()
         this.flush()
         return
       case 'message_start':
@@ -134,20 +135,35 @@ export class MessageProjection {
         this.endMessage(payload.message)
         this.flush()
         return
+      case 'tool_execution_start':
+      case 'tool_execution_update':
+      case 'tool_execution_end': {
+        const toolEvent = this.toolProjection.apply(payload)
+        // 工具开始与结束是低频终态事件，立即刷新；partial 更新只走批次节拍。
+        if (toolEvent === 'start' || toolEvent === 'end') {
+          this.flush()
+        } else {
+          this.scheduleFlush()
+        }
+        return
+      }
       default:
-        // 工具执行、队列、压缩、重试与其他事件不进入展示投影。
+        // 队列、压缩、重试与 Extension UI 事件不进入展示投影。
         return
     }
   }
 
   /** 快照是渲染端重新同步的唯一基准。 */
   snapshot(): ProjectionSnapshot {
+    const tools = this.toolProjection.snapshot()
     return {
       runtimeId: this.runtimeId,
       seq: this.seq,
       messages: this.messages.map((message) => this.toPublicMessage(message)),
-      truncated: this.truncated,
-      droppedMessages: this.droppedMessages
+      tools: tools.tools,
+      truncated: this.truncated || tools.truncated,
+      droppedMessages: this.droppedMessages,
+      droppedTools: tools.droppedTools
     }
   }
 
@@ -165,6 +181,7 @@ export class MessageProjection {
     this.outstanding = []
     this.messages.length = 0
     this.active = null
+    this.toolProjection.dispose()
   }
 
   private startMessage(value: unknown): void {
@@ -319,7 +336,7 @@ export class MessageProjection {
       const name = readString(toolCall.name)
       if (id !== null) block.toolCallId = id
       if (name !== null) block.toolName = name
-      this.publishBlock(message, block, serializeArguments(toolCall.arguments))
+      this.publishBlock(message, block, serializeToolArguments(toolCall.arguments))
       return
     }
     this.publishBlock(message, block, null)
@@ -358,7 +375,7 @@ export class MessageProjection {
         blocks.push(this.createBlock(
           index,
           'toolcall',
-          serializeArguments(entry.arguments) ?? '',
+          serializeToolArguments(entry.arguments) ?? '',
           readString(entry.id),
           readString(entry.name)
         ))
@@ -387,20 +404,33 @@ export class MessageProjection {
     }
   }
 
-  /** 只合并相邻的同一块追加，保证块校正与整条替换的相对顺序不被越过。 */
+  /** 相邻的同一块追加合并为一条；同一 `toolCallId` 的未发出条目更新只保留最新一份。 */
   private queueUpdate(update: ProjectionUpdate): void {
-    const last = this.pending[this.pending.length - 1]
-    if (update.kind === 'append' && last !== undefined && last.kind === 'append'
-      && last.messageId === update.messageId && last.contentIndex === update.contentIndex) {
-      this.pending[this.pending.length - 1] = {
-        kind: 'append',
-        messageId: update.messageId,
-        contentIndex: update.contentIndex,
-        text: last.text + update.text,
-        length: update.length
+    if (update.kind === 'tool') {
+      const incoming = update.tool
+      const index = this.pending.findIndex((candidate) => (
+        candidate.kind === 'tool' && candidate.tool.toolCallId === incoming.toolCallId
+      ))
+      if (index >= 0) {
+        this.pending[index] = update
+      } else {
+        this.pending.push(update)
       }
     } else {
-      this.pending.push(update)
+      // 块校正与整条替换的相对顺序不能被追加合并越过。
+      const last = this.pending[this.pending.length - 1]
+      if (update.kind === 'append' && last !== undefined && last.kind === 'append'
+        && last.messageId === update.messageId && last.contentIndex === update.contentIndex) {
+        this.pending[this.pending.length - 1] = {
+          kind: 'append',
+          messageId: update.messageId,
+          contentIndex: update.contentIndex,
+          text: last.text + update.text,
+          length: update.length
+        }
+      } else {
+        this.pending.push(update)
+      }
     }
     if (this.pending.length >= MAX_UPDATES_PER_BATCH) this.flush()
   }
