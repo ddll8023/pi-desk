@@ -60,7 +60,7 @@ Desktop 仅维护自己的数据：最近项目、窗口尺寸、Sidebar 状态�
 
 项目根目录：`H:\code\pi-desk`。
 
-仓库包含开发文档、Electron/Vue 最小骨架、三端构建与 TypeScript 配置、统一前端服务入口、展示状态 Store，以及 Pi Runtime 的准备脚本与固定版本清单。当前页面可经受限 preload API 读取应用信息并启动 Pi RPC sidecar；Prompt、Streaming、Tool 与关闭仍在后续任务接入，不读取项目内容、不持久化消息。
+仓库包含开发文档、Electron/Vue 最小骨架、三端构建与 TypeScript 配置、统一前端服务入口、展示状态 Store，以及 Pi Runtime 的准备脚本与固定版本清单。当前页面可经受限 preload API 读取应用信息、启停 Pi RPC sidecar 并接收状态变化；Prompt、Streaming 与 Tool 仍在后续任务接入，不读取项目内容、不持久化消息。
 
 开发使用 npm，工具版本由 `package.json` 的 `packageManager` 字段声明，直接依赖使用精确版本。`package.json` 是依赖声明的维护位置，完整依赖树由安装生成的 `package-lock.json` 固定，不手写锁文件。依赖安装属于独立授权操作。
 
@@ -363,11 +363,11 @@ Pi 管道背压与 UI 通知背压分开处理：采用有界批次与渲染端�
 
 正常关闭停止接收新业务请求，保留内部取消路径；对活动操作发起 abort，不无限等待，然后关闭 stdin、继续消费管道并等待退出，超时后执行平台兜底。异常退出显示原因和结果不确定性，由用户显式重新启动，不自动重放 prompt。
 
-Windows 使用系统 `taskkill` 对当前受管 Pi 进程树定向终止，不先只杀根进程再假定能够找到所有子进程；macOS 为 Pi 建立独立进程组，必要时终止该组，不调用 unref 将其解除应用管理。终止对象只能来自主进程自身的 Runtime 记录，不接受页面传入任意 PID，也不按进程名批量终止。
+Windows 使用系统 `taskkill` 对当前受管 Pi 进程树定向终止，不先只杀根进程再假定能够找到所有子进程；macOS 为 Pi 建立独立进程组，必要时终止该组，不调用 unref 将其解除应用管理。实现上 Windows 调用 `%SystemRoot%\System32\taskkill.exe /F /T /PID`（与 Pi 自身的 `killProcessTree` 同法），macOS 向进程组先发 `SIGTERM`、再发 `SIGKILL`；关闭 stdin 后等待 5 秒，每级兜底再等 2 秒。终止对象只能来自主进程自身的 Runtime 记录，不接受页面传入任意 PID，也不按进程名批量终止。
 
-这些都是尽力回收：根进程已退出、主进程崩溃或派生进程脱离后，不能保证完整清理。Windows Job Objects 可提供更强控制，但 Node.js 内建 spawn 不直接提供该能力；第一阶段不为此引入原生绑定或专用 helper。
+这些都是尽力回收：根进程已退出、主进程崩溃或派生进程脱离后，不能保证完整清理。Windows 在系统关机或注销时不触发 Electron 的 `before-quit`，该路径不发起关闭链。Windows Job Objects 可提供更强控制，但 Node.js 内建 spawn 不直接提供该能力；第一阶段不为此引入原生绑定或专用 helper。
 
-关闭唯一业务窗口或失去唯一可信控制界面时，主进程发起可控 Runtime 关闭，避免无意留下后台 Agent。托盘、隐藏常驻与多窗口行为在第五阶段另行设计。第一阶段不承诺完整崩溃恢复、完整进程树回收或 OS 沙箱。
+关闭唯一业务窗口或失去唯一可信控制界面时，主进程在 `before-quit` 中发起可控 Runtime 关闭并在预算内等待（预算 10 秒，超时强制退出应用），避免无意留下后台 Agent。托盘、隐藏常驻与多窗口行为在第五阶段另行设计。第一阶段不承诺完整崩溃恢复、完整进程树回收或 OS 沙箱。
 
 ### 6.3 最小前端
 
@@ -458,9 +458,9 @@ Project 的基础属性为 `id`、`name`、`path`、`lastOpenedAt`。采用轻�
 1. 完整依赖树锁定、Windows build 18363 约束，以及 Electron、固定 Pi 与 helper 共同约束下的 macOS 最低版本；后续依赖调整继续考虑 Electron 的维护状态。
 2. 避免需要本地编译的原生依赖；Pi/helper 的运行库需求、挂起重启与延迟清理对开发环境的影响。需要新增工具链时单独取得授权。
 3. 正式签名、公证与安装包配置，按发行步骤确定；staging 路径、三目标文件选择与 package 根/executable 邻接映射已在 P1-02 确定（见第 4 节）。
-4. Runtime 操作的 IPC 业务结果、Runtime 代际、临时投影和通知确认的具体契约，以及管道边界、缓存预算和请求期限；不建立平行 Session 数据库。
+4. 临时消息投影和通知确认的具体契约，以及管道边界、缓存预算和请求期限；Runtime 启停与状态通知的 IPC 业务结果、代际隔离已在 P1-03 与 P1-04 确定。不建立平行 Session 数据库。
 5. 不同启动 profile 下现有模型与凭据的可用性（启动参数已在 P1-03 确定）；只读取必要配置，不输出秘密。
-6. Windows 定向进程树终止与 macOS 进程组的实现细节；保留尽力回收边界，不以关闭主 Pi 进程等同于完整进程树回收。
+6. Windows 与 macOS 的进程树终止已按平台实现（见 6.2 节）；macOS 分支只在 macOS 主机上生效。保留尽力回收边界，不以关闭主 Pi 进程等同于完整进程树回收。
 7. 第二阶段 Session 列表的接入方式，以及跨项目 Session 切换对 cwd 与资源重建的影响。
 
 这些问题按相应阶段解决，不把后续完整能力变成第一阶段的提前实现范围。

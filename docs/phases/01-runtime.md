@@ -76,15 +76,13 @@
 
 **依赖**：P1-01 的项目配置位置。本项确定启动所需准确路径，不擅自完成签名、公证、自动更新或全部平台安装包配置。
 
-**固定清单**：`runtime/pi-runtime.json` 记录基线版本、tag、源码 commit 与三目标资产的预期字节数和 SHA-256，是完整性校验的唯一依据；不在运行时获取 `latest`，也不用执行 `pi --version` 代替摘要校验。已核实的 1.0.4 资产：
+**固定清单**：`runtime/pi-runtime.json` 记录基线版本、tag、源码 commit 与三目标资产的预期字节数和 SHA-256，是完整性校验的唯一依据；不在运行时获取 `latest`，也不用执行 `pi --version` 代替摘要校验。三目标与官方资产的映射：
 
-| 目标 | 官方资产 | 字节数 |
-| --- | --- | --- |
-| `win32-x64` | `pi-windows-x64.zip` | 45 055 959 |
-| `darwin-arm64` | `pi-darwin-arm64.tar.gz` | 31 016 950 |
-| `darwin-x64` | `pi-darwin-x64.tar.gz` | 33 474 471 |
-
-官方 `SHA256SUMS` 是 `<sha256>  <文件名>` 两空格格式，发布 API 的资产 `digest` 与它逐条一致；两者已交叉核对。同一版本还提供 `pi-windows-arm64.zip` 与 `pi-linux-*.tar.gz`，不属于确认的三目标范围，未纳入清单。
+| 目标 | 官方资产 |
+| --- | --- |
+| `win32-x64` | `pi-windows-x64.zip` |
+| `darwin-arm64` | `pi-darwin-arm64.tar.gz` |
+| `darwin-x64` | `pi-darwin-x64.tar.gz` |
 
 **staging 与资源定位**：开发 staging 根是仓库内 `runtime/`，Runtime 落在 `runtime/pi/<目标平台与架构>/`，`runtime/pi/` 不入库。归档是平铺根目录，可执行文件与 `package.json`、`README.md`、`CHANGELOG.md`、`theme/`、`assets/`、`export-html/`、`docs/`、`examples/`、`photon_rs_bg.wasm`、`native/<平台>/prebuilds/<平台>-<架构>/<平台>-platform.node` 同层，因此不设置 `PI_PACKAGE_DIR`：`getPackageDir()` 默认值即 `dirname(process.execPath)`，与 package 资源根、以及 WASM 与 native helper 的可执行文件邻接查找同时一致。开发与正式包保持相同内部布局，主进程解析契约见开发总览第 4.3 节；P1-03 实现，P1-02 不改 `src/main`。
 
@@ -102,13 +100,7 @@
 
 **依赖**：P1-01、P1-02。
 
-**启动参数与环境**：argv 与 cwd 全部由主进程固定，页面只能提供项目目录：
-
-```text
---mode rpc --no-session --no-approve --no-extensions --no-skills --no-prompt-templates --no-mcp --tools <平台工具集>
-```
-
-工具集在 Windows 为 `read,powershell,edit,write`，macOS 为 `read,bash,edit,write`（`--tools` 替换默认集合）。cwd 是主进程校验过的绝对目录；环境继承父进程并追加 `PI_SKIP_VERSION_CHECK=1`，不设置 `PI_OFFLINE` 与 `PI_PACKAGE_DIR`；可执行文件只从 staging 根定位，不查 PATH。RPC 模式没有可用模型时 Pi 不进入协议就直接以退出码 1 结束，错误只在 stderr，因此就绪判定必须同时消费 stderr 与退出事件。
+**启动参数与环境**：argv 与 cwd 全部由主进程固定，页面只能提供项目目录（完整参数与环境变量见开发总览第 5.1 节）。本项确定 `--tools` 按平台选择：Windows `read,powershell,edit,write`，macOS `read,bash,edit,write`（`--tools` 替换默认集合）。cwd 是主进程校验过的绝对目录，可执行文件只从 staging 根定位，不查 PATH。RPC 模式没有可用模型时 Pi 不进入协议就直接以退出码 1 结束，错误只在 stderr，因此就绪判定必须同时消费 stderr 与退出事件。
 
 **接口与错误码**：`window.desktop.startRuntime(projectPath)` 对应 `desktop:runtime-start`，`window.desktop.getRuntimeStatus()` 对应 `desktop:runtime-status`；两者都返回 `{ ok: true, data }` 或 `{ ok: false, error }`，`data` 是 Runtime 快照。契约与响应校验见 `src/shared/runtime-api.ts`。
 
@@ -127,7 +119,7 @@
 
 **主进程落点**：三类职责分别落在 `src/main/pi-process.ts`、`src/main/pi-protocol.ts`、`src/main/runtime-manager.ts`；IPC 注册与调用者校验在 `src/main/index.ts` 接线，受限方法由 `src/preload/index.ts` 暴露。
 
-**状态与边界**：状态为 `idle`、`starting`、`ready`、`failed`，就绪快照只投影模型、Thinking 级别、Session 标识、消息数与 streaming 标志。`get_state` 等待期限为 10 秒；单条 stdout 记录上限 8 MiB（按解码后字符数计），超限按协议错误处理；stderr 只保留最近 40 行、单行截断到 400 字符。本项不开放事件订阅、Prompt、Stop 与重启；关闭唯一窗口时先关闭 Pi 的 stdin 请求其自行有序退出，等待退出期限与平台定向进程树终止在 P1-04 补齐。
+**状态与边界**：状态为 `idle`、`starting`、`ready`、`stopping`、`failed`（`stopping` 与关闭链见 P1-04），就绪快照只投影模型、Thinking 级别、Session 标识、消息数与 streaming 标志。`get_state` 等待期限为 10 秒；单条 stdout 记录上限 8 MiB（按解码后字符数计），超限按协议错误处理；stderr 只保留最近 40 行、单行截断到 400 字符。本项不开放事件订阅、Prompt、Stop 与重启；关闭唯一窗口时先关闭 Pi 的 stdin 请求其自行有序退出，等待退出期限与平台定向进程树终止见 P1-04。
 
 **当前状态**：主进程、受限 preload 方法与最小页面已按上述参数与契约接入启动链；Prompt、Streaming、Tool 与 Stop 仍为禁用空状态。
 
@@ -140,6 +132,14 @@
 Windows 采用系统 taskkill 定向终止当前受管 Pi 进程树；macOS 建立独立进程组并在必要时终止该组，不通过 unref 解除应用管理。只处理主进程自身管理对象，不接受任意 PID 或按进程名批量终止。根进程已退出、主进程崩溃或派生进程脱离后的清理不作完整保证，不为此引入 Job Objects 原生绑定或专用 helper。
 
 本项先完善无 Agent 操作时的关闭链；有活动操作时的取消由 P1-07 补齐。不自动重放 prompt，不将关闭 Pi 主进程宣传为已经解决所有派生进程回收。
+
+**关闭链**：`window.desktop.stopRuntime()` 对应 `desktop:runtime-stop`，是幂等动作。关闭时先置 `stopping` 停止接受新请求，再关闭 stdin 请求 Pi 自行退出，继续消费管道并等待有限期限；超时后按平台兜底——Windows 直接用 `%SystemRoot%\System32\taskkill.exe /F /T /PID` 定向终止受管进程树（不先只杀根进程），macOS 向独立进程组先发 `SIGTERM`、必要时再发 `SIGKILL`（期限与平台兜底见开发总览第 6.2 节）。期限内确认退出则回 `idle` 并保留本次 `runtimeId`；未能确认退出则落 `failed` 并显示原因，不声称已经清理干净。
+
+**状态事件**：主进程状态变化通过 `desktop:runtime-status-changed` 单向推给当前唯一可信窗口，payload 就是 `RuntimeStatus`；preload 暴露 `onRuntimeStatusChanged(listener)` 并返回释放函数，页面先订阅再查询一次当前快照，不引入事件序列号（序列基点属 P1-06）。状态取值与 `idle` 的运行时标识语义见 `src/shared/runtime-api.ts`。
+
+**退出编排**：关闭唯一窗口只触发 `app.quit()`；`before-quit` 里 `preventDefault()` 一次，等待关闭链，预算内未完成则 `app.exit(0)` 强制退出，不让应用挂死（预算见开发总览第 6.2 节）。Windows 的系统关机或注销不触发 `before-quit`，该路径不保证回收。
+
+**启动与关闭的交互**：已有 Runtime（含 `stopping`）时再次启动返回 `RUNTIME_ALREADY_RUNNING`，不做隐式重启；切换目录需先关闭再启动。由主动关闭引起的启动失败不覆盖关闭后的快照。
 
 **依赖**：P1-03。
 
@@ -193,6 +193,6 @@ P1-01 → P1-02 → P1-03 → P1-04 → P1-05 → P1-06 → P1-07
 - 完整依赖树锁定、Electron 与固定 Pi/helper 的共同系统要求，以及原生组件的预编译资源、运行库或编译前置条件。
 - Pi 配套资源的 staging 路径、目标文件选择与 package 根/executable 邻接映射已在 P1-02 确定（见本文 P1-02 段与开发总览第 4 节）；正式安装包沿用 ASAR 外整体资源方向，发行配置在相应步骤确定。
 - Runtime 操作的临时投影、订阅序列基点、通知批次与应用确认的具体契约，以及缓存预算和请求期限；Runtime 启动与状态查询的 IPC 业务结果已在 P1-03 确定。
-- 正常关闭期限、Windows 定向进程树终止与 macOS 进程组的实现细节，保持尽力回收边界。
+- 关闭期限与平台定向终止方式已在 P1-04 确定（见 P1-04 段与开发总览第 6.2 节）；macOS 进程组分支只在 macOS 主机上生效，保持尽力回收边界。
 - Pi/helper 的运行库需求，以及挂起重启与延迟清理对本机环境的影响。
 - 现有模型是否可选；缺少凭据时如何给出清晰提示，不能转为提前开发登录功能。
