@@ -1,7 +1,7 @@
 <!-- 展示桌面连接与 Runtime 状态；项目目录只在本页输入，不持久化。 -->
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useDesktopStore } from './stores/desktop'
 import { useRuntimeStore } from './stores/runtime'
 
@@ -24,11 +24,15 @@ const runtimeLabel = computed(() => {
     case 'idle': return 'Runtime 未启动'
     case 'starting': return '正在启动 Runtime'
     case 'ready': return 'Runtime 已就绪'
-    case 'failed': return 'Runtime 启动失败'
+    case 'stopping': return '正在关闭 Runtime'
+    case 'closed': return 'Runtime 已关闭'
+    case 'failed': return 'Runtime 异常退出'
   }
 })
 const runtimeStarting = computed(() => runtimeView.value.phase === 'starting')
 const runtimeReady = computed(() => runtimeView.value.phase === 'ready')
+const runtimeStopping = computed(() => runtimeView.value.phase === 'stopping')
+const runtimeClosed = computed(() => runtimeView.value.phase === 'closed')
 const runtimeInfo = computed(() => (
   runtimeView.value.phase === 'ready' ? runtimeView.value.snapshot.info : null
 ))
@@ -40,8 +44,17 @@ function launchRuntime(): void {
   void runtimeStore.launch(projectPath.value)
 }
 
+function shutdownRuntime(): void {
+  void runtimeStore.shutdown()
+}
+
 onMounted(() => {
   void desktopStore.initialize()
+  void runtimeStore.initialize()
+})
+
+onUnmounted(() => {
+  runtimeStore.dispose()
 })
 </script>
 
@@ -58,7 +71,7 @@ onMounted(() => {
     </header>
 
     <p id="runtime-notice" class="mb-6 border-l-2 border-desk-accent pl-3 text-sm text-desk-muted">
-      当前只有桌面页面、只读应用信息接口与 Runtime 启动。不会发送 Prompt、不读取消息、不持久化项目。
+      当前只有桌面页面、只读应用信息接口与 Runtime 启停。不会发送 Prompt、不读取消息、不持久化项目。
     </p>
 
     <section
@@ -120,9 +133,14 @@ onMounted(() => {
           <dd class="font-mono">{{ runtimeInfo.messageCount }}</dd>
         </div>
       </dl>
-      <p v-else-if="runtimeError" role="alert" class="text-sm">{{ runtimeError.message }}</p>
+      <p v-else-if="runtimeError" role="alert" class="text-sm">
+        {{ runtimeError.message }}
+        <span class="mt-1 block text-desk-muted">Runtime 异常退出后不会自动重启或重放请求。</span>
+      </p>
+      <p v-else-if="runtimeStopping" class="text-sm text-desk-muted">正在关闭 Pi 并等待进程退出。</p>
+      <p v-else-if="runtimeClosed" class="text-sm text-desk-muted">Runtime 已正常关闭，可以重新启动。</p>
       <p v-else-if="runtimeStarting" class="text-sm text-desk-muted">正在启动 Pi 并等待 get_state 响应。</p>
-      <p v-else class="text-sm text-desk-muted">填写项目目录后启动 Runtime；发送 Prompt、关闭与重启在后续阶段接入。</p>
+      <p v-else class="text-sm text-desk-muted">填写项目目录后启动 Runtime；发送 Prompt 在后续阶段接入。</p>
     </section>
 
     <div class="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.25fr)]">
@@ -145,12 +163,17 @@ onMounted(() => {
             <button
               type="button"
               class="control-button"
-              :disabled="runtimeStarting || runtimeReady || projectPath.trim() === ''"
+              :disabled="runtimeStarting || runtimeReady || runtimeStopping || projectPath.trim() === ''"
               @click="launchRuntime"
             >
               启动 Runtime
             </button>
-            <button type="button" class="control-button" disabled aria-describedby="runtime-notice">
+            <button
+              type="button"
+              class="control-button"
+              :disabled="!runtimeReady"
+              @click="shutdownRuntime"
+            >
               关闭 Runtime
             </button>
           </div>

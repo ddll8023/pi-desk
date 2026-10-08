@@ -1,15 +1,22 @@
-/** 只定义 Runtime 启动与状态 IPC 的固定通道、结果类型与跨进程响应校验。 */
+/** 只定义 Runtime 启停与状态 IPC 的固定通道、状态事件名、结果类型与跨进程响应校验。 */
 import type { DesktopErrorCode } from './desktop-api'
 
 export const RUNTIME_START_CHANNEL = 'desktop:runtime-start'
+export const RUNTIME_STOP_CHANNEL = 'desktop:runtime-stop'
 export const RUNTIME_STATUS_CHANNEL = 'desktop:runtime-status'
+/** 主进程到渲染进程的单向状态通知，payload 是 RuntimeStatus。 */
+export const RUNTIME_STATUS_EVENT = 'desktop:runtime-status-changed'
 
 /** 启动请求只接受项目目录；其他启动参数一律不接受。 */
 export interface RuntimeStartRequest {
   readonly projectPath: string
 }
 
-export type RuntimeState = 'idle' | 'starting' | 'ready' | 'failed'
+/**
+ * `idle` 且 `runtimeId` 非空表示上一次 Runtime 已正常关闭；
+ * `runtimeId` 仍为 null 表示从未启动。`failed` 表示异常退出或启动失败。
+ */
+export type RuntimeState = 'idle' | 'starting' | 'ready' | 'stopping' | 'failed'
 
 /** 只投影页面需要的会话信息，不搬运 Pi 的完整状态或消息。 */
 export interface RuntimeInfo {
@@ -47,7 +54,10 @@ export type RuntimeResult =
 
 export interface RuntimeApi {
   readonly startRuntime: (projectPath: string) => Promise<RuntimeResult>
+  readonly stopRuntime: () => Promise<RuntimeResult>
   readonly getRuntimeStatus: () => Promise<RuntimeResult>
+  /** 订阅状态变化；返回释放函数，页面卸载时必须调用。 */
+  readonly onRuntimeStatusChanged: (listener: (status: RuntimeStatus) => void) => () => void
 }
 
 // 与 desktop-api.ts 的共享错误码保持一致，再追加 Runtime 启动与运行专有错误码。
@@ -71,7 +81,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function isRuntimeState(value: unknown): value is RuntimeState {
-  return value === 'idle' || value === 'starting' || value === 'ready' || value === 'failed'
+  return value === 'idle' || value === 'starting' || value === 'ready'
+    || value === 'stopping' || value === 'failed'
 }
 
 function isRuntimeInfo(value: unknown): value is RuntimeInfo {
@@ -83,7 +94,7 @@ function isRuntimeInfo(value: unknown): value is RuntimeInfo {
     && typeof value.isStreaming === 'boolean'
 }
 
-function isRuntimeStatus(value: unknown): value is RuntimeStatus {
+export function isRuntimeStatus(value: unknown): value is RuntimeStatus {
   if (!isRecord(value) || !isRuntimeState(value.state)) return false
   if (value.runtimeId !== null && typeof value.runtimeId !== 'number') return false
   if (value.lastError !== null && typeof value.lastError !== 'string') return false

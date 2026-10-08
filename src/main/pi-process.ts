@@ -3,6 +3,7 @@
  *
  * 只负责把 staging 根下的固定可执行文件跑起来，并把 stdout 与 stderr 按 LF 分帧成行；
  * 不做 JSON 解析、请求关联或业务状态，也不接受页面传入的可执行文件路径或启动参数。
+ * 关闭只处理本进程启动的子进程，不接受外部 PID 或按进程名批量终止。
  */
 import { spawn } from 'node:child_process'
 import type { ChildProcess } from 'node:child_process'
@@ -21,8 +22,11 @@ const MAX_RECORD_CHARS = 8 * 1024 * 1024
 const MAX_DIAGNOSTIC_LINES = 40
 const MAX_DIAGNOSTIC_LINE_CHARS = 400
 
-/** 等待进程退出的默认期限；完整关闭编排由后续任务补齐。 */
-const DEFAULT_EXIT_GRACE_MS = 3_000
+/** 等待 Pi 自行退出（关闭 stdin 后）的期限。 */
+const STOP_GRACE_MS = 5_000
+
+/** 平台兜底终止后，每个阶段等待退出的期限。 */
+const FORCE_WAIT_MS = 2_000
 
 const ANSI_ESCAPE = /\u001b\[[0-9;]*m/g
 
@@ -105,6 +109,8 @@ export class PiProcess {
       // 只追加版本检查开关；凭据等仍由 Pi 自己的配置与环境提供。
       env: { ...process.env, PI_SKIP_VERSION_CHECK: '1' },
       stdio: ['pipe', 'pipe', 'pipe'],
+      // 独立进程组便于按组终止；不调用 unref，进程仍由应用管理。
+      detached: true,
       windowsHide: true
     })
     const piProcess = new PiProcess(child, options.handlers)
@@ -118,6 +124,11 @@ export class PiProcess {
 
   get exitEvent(): PiExitEvent | null {
     return this.lastExit
+  }
+
+  /** 受管子进程的 pid；进程已退出或未启动时为空。 */
+  get pid(): number | undefined {
+    return this.child.pid
   }
 
   /** 串行写入完整记录，并等待背压排空；写入不等于收到响应。 */
@@ -135,15 +146,27 @@ export class PiProcess {
   }
 
   /**
-   * 最小回收：先关闭 stdin，超时后强制结束。
-   * 平台定向进程树终止与完整关闭编排属于后续任务，这里只保证不留下受管子进程。
+   * 关闭链：先关闭 stdin 请求 Pi 自行退出，超时后按平台定向终止受管进程树。
+   * Windows 不先只杀根进程再假定能找到子进程；macOS 按进程组发送信号。
    */
-  async stop(graceMs = DEFAULT_EXIT_GRACE_MS): Promise<void> {
+  async stop(graceMs = STOP_GRACE_MS, forceWaitMs = FORCE_WAIT_MS): Promise<void> {
     if (this.exited) return
     this.closeStdin()
     if (await this.waitForClose(graceMs)) return
-    this.child.kill()
-    await this.waitForClose(graceMs)
+
+    if (process.platform === 'win32') {
+      this.terminateProcessTree()
+      if (await this.waitForClose(forceWaitMs)) return
+      // taskkill 不可用时的最后手段：至少结束根进程。
+      this.child.kill()
+      await this.waitForClose(forceWaitMs)
+      return
+    }
+
+    this.signalProcessGroup('SIGTERM')
+    if (await this.waitForClose(forceWaitMs)) return
+    this.signalProcessGroup('SIGKILL')
+    await this.waitForClose(forceWaitMs)
   }
 
   /** 返回最近的有界诊断行副本，交给主进程拼接错误信息。 */
@@ -221,6 +244,40 @@ export class PiProcess {
     this.diagnostics.push(trimmed.slice(0, MAX_DIAGNOSTIC_LINE_CHARS))
     if (this.diagnostics.length > MAX_DIAGNOSTIC_LINES) {
       this.diagnostics.shift()
+    }
+  }
+
+  /** Windows：用系统 taskkill 定向终止当前受管进程树，不依赖 PATH。 */
+  private terminateProcessTree(): void {
+    const pid = this.child.pid
+    if (pid === undefined) return
+    const taskkill = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'taskkill.exe')
+    try {
+      const killer = spawn(taskkill, ['/F', '/T', '/PID', String(pid)], {
+        stdio: 'ignore',
+        detached: true,
+        windowsHide: true
+      })
+      // 失败的 spawn 会异步 emit error，必须消费以避免拖垮主进程。
+      killer.once('error', () => {})
+      killer.unref()
+    } catch {
+      // taskkill 无法执行时由调用方回退到单进程终止。
+    }
+  }
+
+  /** macOS：向独立进程组发送信号，失败时只终止根进程。 */
+  private signalProcessGroup(signal: NodeJS.Signals): void {
+    const pid = this.child.pid
+    if (pid === undefined) return
+    try {
+      process.kill(-pid, signal)
+    } catch {
+      try {
+        this.child.kill(signal)
+      } catch {
+        // 进程已退出。
+      }
     }
   }
 

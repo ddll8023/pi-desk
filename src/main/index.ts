@@ -1,4 +1,4 @@
-/** 管理唯一桌面窗口、本地资产边界，以及应用信息与 Runtime 启动 IPC。 */
+/** 管理唯一桌面窗口、本地资产边界，以及应用信息与 Runtime 启停 IPC、状态事件广播与退出编排。 */
 import { realpath } from 'node:fs/promises'
 import { extname, isAbsolute, relative, resolve, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -6,12 +6,19 @@ import { app, BrowserWindow, ipcMain, net, protocol, session } from 'electron'
 import type { IpcMainInvokeEvent } from 'electron'
 import { APP_INFO_CHANNEL } from '../shared/desktop-api'
 import type { AppInfoResult } from '../shared/desktop-api'
-import { RUNTIME_START_CHANNEL, RUNTIME_STATUS_CHANNEL } from '../shared/runtime-api'
-import type { RuntimeErrorCode, RuntimeResult } from '../shared/runtime-api'
+import {
+  RUNTIME_START_CHANNEL,
+  RUNTIME_STATUS_CHANNEL,
+  RUNTIME_STOP_CHANNEL,
+  RUNTIME_STATUS_EVENT
+} from '../shared/runtime-api'
+import type { RuntimeErrorCode, RuntimeResult, RuntimeStatus } from '../shared/runtime-api'
 import { RuntimeManager } from './runtime-manager'
 
 const DEVELOPMENT_PAGE_URL = 'http://127.0.0.1:5173/'
 const APPLICATION_PAGE_URL = 'app://desktop/index.html'
+/** 应用退出时等待关闭链的总预算；覆盖各平台兜底阶段后强制退出。 */
+const QUIT_DEADLINE_MS = 10_000
 const rendererRoot = resolve(__dirname, '../renderer')
 const productionCsp = [
   "default-src 'none'",
@@ -33,6 +40,7 @@ const contentTypes: Readonly<Record<string, string>> = {
 }
 
 let mainWindow: BrowserWindow | null = null
+let quittingAfterShutdown = false
 const runtimeManager = new RuntimeManager()
 
 // 必须在 ready 前注册；不赋予绕过 CSP 或运行 Service Worker 的权限。
@@ -200,6 +208,28 @@ function registerRuntimeHandlers(pageUrl: string): void {
     }
     return runtimeManager.getStatus()
   })
+
+  ipcMain.handle(
+    RUNTIME_STOP_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<RuntimeResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return runtimeFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 0) {
+        return runtimeFailure('INVALID_REQUEST', '关闭 Runtime 接口不接受参数。')
+      }
+      return runtimeManager.stop()
+    }
+  )
+}
+
+/** 状态变化只发给当前唯一可信窗口，不广播到其他 webContents。 */
+function broadcastRuntimeStatus(status: RuntimeStatus): void {
+  const target = mainWindow
+  if (target === null || target.isDestroyed()) return
+  const contents = target.webContents
+  if (contents.isDestroyed()) return
+  contents.send(RUNTIME_STATUS_EVENT, status)
 }
 
 function restrictSession(): void {
@@ -247,11 +277,23 @@ async function createWindow(pageUrl: string): Promise<void> {
   await window.loadURL(pageUrl)
 }
 
-// 第一阶段关闭唯一窗口即退出，不建立托盘或隐藏常驻行为；
-// 先请求 Pi 结束自身，不等待退出的编排由后续任务补齐。
-app.on('window-all-closed', () => {
-  void runtimeManager.shutdown()
-  app.quit()
+// 第一阶段关闭唯一窗口即退出，不建立托盘或隐藏常驻行为。
+app.on('window-all-closed', () => app.quit())
+
+// 退出前走完关闭链：预算内完成即退出，超时强制退出，不把应用挂死。
+app.on('before-quit', (event) => {
+  if (quittingAfterShutdown) return
+  event.preventDefault()
+  quittingAfterShutdown = true
+  void (async () => {
+    await Promise.race([
+      runtimeManager.shutdown(),
+      new Promise<void>((resolve) => {
+        setTimeout(resolve, QUIT_DEADLINE_MS)
+      })
+    ])
+    app.exit(0)
+  })()
 })
 
 app.whenReady().then(async () => {
@@ -260,6 +302,7 @@ app.whenReady().then(async () => {
   registerAssetProtocol()
   registerAppInfoHandler(pageUrl)
   registerRuntimeHandlers(pageUrl)
+  runtimeManager.onStatusChanged(broadcastRuntimeStatus)
   await createWindow(pageUrl)
 }).catch(() => {
   console.error('Pi Desktop 无法加载桌面页面。')

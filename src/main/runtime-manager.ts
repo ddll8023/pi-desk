@@ -1,8 +1,9 @@
 /**
- * 唯一 Runtime 的所有者：状态机、启动与就绪判定、状态快照。
+ * 唯一 Runtime 的所有者：状态机、启停编排与状态快照。
  *
- * 不管理 Pi Session 或消息，不实现平台定向进程树终止与关闭期限编排，也不接受
- * 页面传入的可执行文件路径或启动参数。旧 Runtime 的异步结果不得覆盖新状态。
+ * 不管理 Pi Session 或消息；进程与管道操作交给 pi-process，IPC 契约与校验在
+ * shared/runtime-api.ts。不接受页面传入的可执行文件路径或启动参数，旧 Runtime
+ * 的异步结果不得覆盖新状态。
  */
 import { stat } from 'node:fs/promises'
 import type { Stats } from 'node:fs'
@@ -17,6 +18,9 @@ const READY_TIMEOUT_MS = 10_000
 
 /** 失败时回传给页面的诊断行数上限。 */
 const DIAGNOSTIC_TAIL_LINES = 6
+
+/** 状态变化订阅者；只在主进程内使用，不进 IPC 契约。 */
+export type RuntimeStatusListener = (status: RuntimeStatus) => void
 
 interface ActiveRuntime {
   readonly runtimeId: number
@@ -45,6 +49,17 @@ export class RuntimeManager {
   private runtimeIdSeed = 0
   private active: ActiveRuntime | null = null
   private snapshot: RuntimeStatus = { state: 'idle', runtimeId: null, info: null, lastError: null }
+  private readonly listeners = new Set<RuntimeStatusListener>()
+  /** 是否由主动关闭触发：用于区分正常关闭与异常退出。 */
+  private stopRequested = false
+
+  /** 订阅状态变化；返回释放函数。单个订阅者异常不影响 Runtime 状态。 */
+  onStatusChanged(listener: RuntimeStatusListener): () => void {
+    this.listeners.add(listener)
+    return () => {
+      this.listeners.delete(listener)
+    }
+  }
 
   /** 启动唯一 Runtime；重复启动被拒绝，不做隐式重启。 */
   async start(projectPath: string): Promise<RuntimeResult> {
@@ -54,7 +69,10 @@ export class RuntimeManager {
       const failure = error instanceof RuntimeFailure
         ? error
         : new RuntimeFailure('INTERNAL_ERROR', '启动 Runtime 时发生未预期的内部错误。')
-      this.snapshot = { ...this.snapshot, state: 'failed', info: null, lastError: failure.message }
+      // 由主动关闭引发的启动失败不覆盖关闭后的快照，但仍如实返回本次启动失败。
+      if (!this.stopRequested) {
+        this.publish({ ...this.snapshot, state: 'failed', info: null, lastError: failure.message })
+      }
       return { ok: false, error: { code: failure.code, message: failure.message } }
     }
   }
@@ -64,22 +82,52 @@ export class RuntimeManager {
     return { ok: true, data: { ...this.snapshot } }
   }
 
-  /** 应用退出时的最小回收；完整关闭编排由后续任务补齐。 */
-  async shutdown(): Promise<void> {
+  /**
+   * 关闭当前 Runtime：停止接受新请求、关闭 stdin、等待退出，超时后按平台定向终止。
+   * 关闭是幂等动作，没有 Runtime 时直接返回当前快照。
+   */
+  async stop(): Promise<RuntimeResult> {
     const runtime = this.active
-    this.active = null
-    if (runtime === null) return
+    if (runtime === null) {
+      return { ok: true, data: { ...this.snapshot } }
+    }
+
+    this.stopRequested = true
+    this.publish({ state: 'stopping', runtimeId: runtime.runtimeId, info: null, lastError: null })
     await runtime.process.stop()
+
+    if (this.active !== null && this.active.runtimeId === runtime.runtimeId) {
+      // 进程未在期限内确认退出：按失败收敛，并解除归属以免留下无主 Runtime。
+      this.active = null
+      this.publish({
+        state: 'failed',
+        runtimeId: runtime.runtimeId,
+        info: null,
+        lastError: '关闭 Runtime 超时，未能确认相关 Pi 进程已退出。'
+      })
+    }
+    return { ok: true, data: { ...this.snapshot } }
+  }
+
+  /** 应用退出时使用同一条关闭链；调用方负责在总预算内强制退出应用。 */
+  async shutdown(): Promise<void> {
+    await this.stop()
   }
 
   private async launch(projectPath: string): Promise<RuntimeStatus> {
     if (this.active !== null) {
-      throw new RuntimeFailure('RUNTIME_ALREADY_RUNNING', '已经有 Runtime 在运行；请先结束当前 Runtime。')
+      throw new RuntimeFailure(
+        'RUNTIME_ALREADY_RUNNING',
+        this.snapshot.state === 'stopping'
+          ? 'Runtime 正在关闭，请稍后再启动。'
+          : '已经有 Runtime 在运行；请先结束当前 Runtime。'
+      )
     }
 
+    this.stopRequested = false
     const projectDirectory = await this.checkProjectPath(projectPath)
     const runtimeId = (this.runtimeIdSeed += 1)
-    this.snapshot = { state: 'starting', runtimeId, info: null, lastError: null }
+    this.publish({ state: 'starting', runtimeId, info: null, lastError: null })
 
     let exitEvent: PiExitEvent | null = null
     let spawnFailure: string | null = null
@@ -156,7 +204,7 @@ export class RuntimeManager {
         throw new RuntimeFailure('RUNTIME_PROTOCOL_ERROR', 'get_state 响应缺少约定的会话字段。')
       }
 
-      this.snapshot = { state: 'ready', runtimeId, info, lastError: null }
+      this.publish({ state: 'ready', runtimeId, info, lastError: null })
       return { ...this.snapshot }
     } catch (error) {
       // 只回收本次启动创建的进程，不触碰既有 Runtime。
@@ -178,11 +226,28 @@ export class RuntimeManager {
     const runtime = this.active
     if (runtime === null || runtime.runtimeId !== runtimeId) return
     this.active = null
-    this.snapshot = {
+    if (this.stopRequested) {
+      // 主动关闭：进程按请求结束，回到 idle 并保留本次运行时标识。
+      this.publish({ state: 'idle', runtimeId, info: null, lastError: null })
+      return
+    }
+    this.publish({
       state: 'failed',
       runtimeId,
       info: null,
       lastError: this.describeFailure(event, runtime.process, null)
+    })
+  }
+
+  /** 写入快照并通知订阅者；所有状态变化都必须经过这里。 */
+  private publish(next: RuntimeStatus): void {
+    this.snapshot = next
+    for (const listener of [...this.listeners]) {
+      try {
+        listener({ ...next })
+      } catch {
+        // 通知失败不改变 Runtime 状态。
+      }
     }
   }
 

@@ -1,5 +1,5 @@
 /** 作为渲染端 Runtime 调用入口，把桥接缺失与通信异常转换为安全的展示结果。 */
-import type { RuntimeResult } from '../../../shared/runtime-api'
+import type { RuntimeResult, RuntimeStatus } from '../../../shared/runtime-api'
 
 function unavailable(): RuntimeResult {
   return {
@@ -32,5 +32,26 @@ export async function getRuntimeStatus(): Promise<RuntimeResult> {
     return await bridge.getRuntimeStatus()
   } catch {
     return callFailed()
+  }
+}
+
+export async function stopRuntime(): Promise<RuntimeResult> {
+  const bridge = window.desktop
+  if (!bridge || typeof bridge.stopRuntime !== 'function') return unavailable()
+  try {
+    return await bridge.stopRuntime()
+  } catch {
+    return callFailed()
+  }
+}
+
+/** 订阅状态事件；桥接缺失或订阅失败时返回无操作的释放函数。 */
+export function subscribeRuntimeStatus(listener: (status: RuntimeStatus) => void): () => void {
+  const bridge = window.desktop
+  if (!bridge || typeof bridge.onRuntimeStatusChanged !== 'function') return () => {}
+  try {
+    return bridge.onRuntimeStatusChanged(listener)
+  } catch {
+    return () => {}
   }
 }
