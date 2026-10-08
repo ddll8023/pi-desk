@@ -12,7 +12,8 @@
     "start": "electron-vite preview",
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json",
     "typecheck:web": "vue-tsc --noEmit -p tsconfig.web.json",
-    "typecheck": "npm run typecheck:node && npm run typecheck:web"
+    "typecheck": "npm run typecheck:node && npm run typecheck:web",
+    "pi:prepare": "node scripts/prepare-pi-runtime.mjs"
   },
   "dependencies": {
     "pinia": "4.0.3",
