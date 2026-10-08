@@ -1,0 +1,12 @@
+/** 声明浏览器构建环境与可缺失的受限桌面桥接，不向渲染端引入 Node 全局能力。 */
+/// <reference types="vite/client" />
+
+import type { DesktopApi } from '../../shared/desktop-api'
+
+declare global {
+  interface Window {
+    readonly desktop?: DesktopApi
+  }
+}
+
+export {}

@@ -1,0 +1,67 @@
+/* 提供单页骨架的本地样式、输入状态与键盘焦点，不加载外部字体或图标。 */
+@import "tailwindcss";
+
+@theme {
+  --color-desk-canvas: #f3f6f8;
+  --color-desk-surface: #ffffff;
+  --color-desk-ink: #172b3a;
+  --color-desk-muted: #536675;
+  --color-desk-line: #d7e1e8;
+  --color-desk-accent: #236978;
+  --font-sans: "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+  --font-mono: Consolas, "SFMono-Regular", monospace;
+}
+
+@layer base {
+  body {
+    margin: 0;
+    min-width: 320px;
+    background: var(--color-desk-canvas);
+    color: var(--color-desk-ink);
+    font-family: var(--font-sans);
+    line-height: 1.5;
+  }
+
+  button:not(:disabled),
+  input,
+  textarea {
+    &:focus-visible {
+      outline: 2px solid var(--color-desk-accent);
+      outline-offset: 3px;
+    }
+  }
+}
+
+@layer components {
+  .panel {
+    @apply rounded-lg border border-desk-line bg-desk-surface p-5;
+  }
+
+  .section-heading {
+    @apply text-base font-semibold;
+  }
+
+  .text-control {
+    @apply block w-full rounded-md border border-desk-line bg-desk-surface px-3 py-2 text-sm;
+  }
+
+  .text-control::placeholder {
+    color: var(--color-desk-muted);
+  }
+
+  .control-button {
+    @apply rounded-md border border-desk-line bg-desk-surface px-3 py-2 text-sm font-medium text-desk-accent;
+  }
+
+  .control-button:not(:disabled):hover {
+    @apply border-desk-accent bg-desk-canvas;
+  }
+
+  .control-button:disabled {
+    @apply cursor-not-allowed bg-desk-canvas text-desk-muted;
+  }
+
+  .empty-output {
+    @apply min-h-24 rounded-md border border-desk-line bg-desk-canvas p-3;
+  }
+}
