@@ -376,6 +376,17 @@ Pi 管道背压与 UI 通知背压分开处理：采用有界批次与渲染端�
 
 第一阶段使用定向 IPC 事件，不增加 MessagePort 通道；MessagePort 本身也不代替应用层流量控制。
 
+#### Project 与本地配置
+
+- Project 基础属性为 `id`、`name`、`path`、`lastOpenedAt`：`id` 由主进程用 `crypto.randomUUID()` 生成，`name` 取规范路径末段，`lastOpenedAt` 为纪元毫秒，只在项目被设为当前项目时更新。
+- 路径归一化只有一个入口（`src/main/project-path.ts`）：拒绝空值、NUL 与相对路径后执行 `realpath`（解析符号链接、平台短名与规范大小写，去掉尾部分隔符与 `\\?\` 前缀，保留 UNC 形式），再要求 `stat` 为目录。不做大小写折叠，不主动添加 `\\?\`。
+- 本地配置为单个 JSON 文件 `<userData>/desktop-config.json`，结构为 `{ version: 1, projects: [...], currentProjectId }`，UTF-8、两空格缩进、末尾换行；最近项目上限 50 条，超出按 `lastOpenedAt` 最旧淘汰。写入使用同目录临时文件加改名替换，并在主进程内串行执行。
+- 配置降级：文件不存在按空配置处理且不创建文件；JSON 无法解析或顶层结构不符时把原文件改名为 `desktop-config.corrupt-<时间戳>.json` 后重新开始；版本号不是 1 或读取失败（非「文件不存在」）时进入只读降级，保留原文件并拒绝一切写入；单条记录不合法只丢弃该条。
+- 通道：`desktop:project-choose-directory`（零参数，返回归一化后的 `{ path, name }`，用户取消时 `data` 为 `null`）、`desktop:project-list`（返回项目列表、当前项目与配置提示）、`desktop:project-set-current`（只接受 `{ path, allowInterrupt }`）。本阶段不新增单向事件通道。
+- 切换项目：先归一化目标路径；Runtime 处于 `starting`/`stopping`，或 `ready` 且 `isStreaming` 为真而请求未带 `allowInterrupt` 时返回 `PROJECT_SWITCH_BLOCKED` 且不中断任何操作；否则复用本节关闭链结束旧 Runtime，确认回到 `idle` 后才写入配置并返回新的列表；关闭未确认（`failed`）时返回错误且当前项目不变。不排队、不自动重放。`failed` 状态下不再追加终止尝试，只切换并保存项目选择。
+- 错误码：本阶段新增 `INVALID_PROJECT_PATH`、`PROJECT_SWITCH_BLOCKED`、`PROJECT_STORAGE_FAILED`，与既有桥接错误码共用结果结构。
+- 页面只保存展示副本，选择项目不会自动启动 Runtime；主进程读取项目列表时不检查项目目录是否仍然存在。
+
 #### 关闭、异常与进程树
 
 正常关闭停止接收新业务请求，保留内部取消路径；仅当事件流显示仍在运行（`isStreaming`）时先对活动操作发起 abort，并最多等待 3 000 毫秒——超时或取消被拒都不阻断后续链路——然后关闭 stdin、继续消费管道并等待退出，超时后执行平台兜底。异常退出显示原因和结果不确定性，由用户显式重新启动，不自动重放 prompt。
@@ -462,7 +473,7 @@ PowerShell 解析优先 `pwsh.exe`，其次 `powershell.exe`；不存在时报�
 | [第四阶段：Authentication](phases/04-authentication.md) | Provider、API Key、OAuth、Login/Logout、状态；仅在必要时增加复用官方认证实现的 standalone Helper |
 | [第五阶段：Desktop 产品能力](phases/05-desktop-features.md) | Auto Update、Crash Recovery、Recent Projects 完善、快捷键、托盘、通知、多窗口 |
 
-Project 的基础属性为 `id`、`name`、`path`、`lastOpenedAt`。采用轻量配置存储；Session 和消息仍交给 Pi，不创建平行数据模型与数据库。
+Project 的基础属性为 `id`、`name`、`path`、`lastOpenedAt`；本地配置位置、路径归一化、列表上限与切换编排见第 6.2 节。采用轻量配置存储；Session 和消息仍交给 Pi，不创建平行数据模型与数据库。
 
 当前 RPC command union 有 `new_session`、`switch_session`、`get_messages`、`fork` 等能力，但没有 Session 列表命令；第二阶段需单独确定官方 Session 列表能力的接入方式，不能自行假设存在 `list_sessions`。
 
