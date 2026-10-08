@@ -1,7 +1,8 @@
-/** 保存聊天区与 Runtime 状态的展示状态、投影消息与工具条目副本、订阅与启停、Prompt 提交与中止动作，不持有 Runtime 所有权，也不承担消息重建与通知窗口。 */
+/** 保存聊天区与 Runtime 状态的展示状态、投影消息与工具条目副本、Agent 能力、订阅与启停、Prompt 提交与控制动作，不持有 Runtime 所有权，也不承担消息重建与通知窗口。 */
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import type {
+  AgentCapabilities,
   ProjectionBatch,
   ProjectionBlock,
   ProjectionMessage,
@@ -14,9 +15,12 @@ import type {
 import {
   abortRuntime,
   ackRuntimeProjection,
+  getRuntimeCapabilities,
   getRuntimeProjection,
   getRuntimeStatus,
   sendPrompt,
+  setRuntimeModel,
+  setRuntimeThinkingLevel,
   startRuntime,
   stopRuntime,
   subscribeRuntimeProjection,
@@ -45,6 +49,19 @@ type AbortViewState =
 
 /** `syncing` 表示未取得基准或正在重同步，`stale` 表示失去同步且尚未取得快照。 */
 type ProjectionSyncState = 'syncing' | 'synced' | 'stale'
+
+/** Agent 能力的展示状态；分区失败已在数据内表达，只有整体失败才进 `error`。 */
+type CapabilitiesViewState =
+  | { phase: 'idle' }
+  | { phase: 'loading' }
+  | { phase: 'ready'; data: AgentCapabilities }
+  | { phase: 'error'; error: RuntimeError }
+
+/** 模型或 Thinking 设置动作的展示状态；成功以快照收敛，不在这里保存结果值。 */
+type AgentActionState =
+  | { phase: 'idle' }
+  | { phase: 'applying' }
+  | { phase: 'error'; error: RuntimeError }
 
 /** 块级幂等替换；新块按 contentIndex 顺序插入。 */
 function replaceBlock(blocks: readonly ProjectionBlock[], block: ProjectionBlock): ProjectionBlock[] {
@@ -126,12 +143,22 @@ export const useRuntimeStore = defineStore('runtime', () => {
   const projectionTruncated = ref(false)
   const droppedMessages = ref(0)
   const droppedTools = ref(0)
+  const capabilitiesView = ref<CapabilitiesViewState>({ phase: 'idle' })
+  const modelAction = ref<AgentActionState>({ phase: 'idle' })
+  const thinkingAction = ref<AgentActionState>({ phase: 'idle' })
   let releaseSubscription: (() => void) | null = null
   let releaseProjection: (() => void) | null = null
   /** 已取得基准快照的 Runtime 代际；为空表示尚无基准。 */
   let appliedRuntimeId: number | null = null
   let appliedSeq = 0
   let syncInFlight = false
+  /** 已取得能力结果的 Runtime 代际；代际不符的结果一律丢弃。 */
+  let capabilitiesRuntimeId: number | null = null
+  /**
+   * 已发起过读取的代际：读取失败后不因每次状态广播重复重试，
+   * 只有代际变化或一轮结束（上下文占用会变化）才再次读取。
+   */
+  let capabilitiesAttemptedRuntimeId: number | null = null
 
   /** 先订阅状态与投影、再取快照，避免初始化期间漏掉通知。 */
   async function initialize(): Promise<void> {
@@ -296,10 +323,17 @@ export const useRuntimeStore = defineStore('runtime', () => {
 
   /** 主进程快照是唯一真相：事件通知与查询结果都经这里映射为展示状态。 */
   function applyStatus(status: RuntimeStatus): void {
+    const previousStreaming = view.value.phase === 'ready'
+      && view.value.snapshot.info?.isStreaming === true
     if (status.state !== 'ready') {
       resetProjection()
-      // Runtime 离开就绪后，上一次中止请求的展示状态不再有意义。
+      // Runtime 离开就绪后，上一次中止请求与控制动作的展示状态不再有意义。
       abortView.value = { phase: 'idle' }
+      modelAction.value = { phase: 'idle' }
+      thinkingAction.value = { phase: 'idle' }
+      capabilitiesView.value = { phase: 'idle' }
+      capabilitiesRuntimeId = null
+      capabilitiesAttemptedRuntimeId = null
     }
     if (status.state === 'failed') {
       view.value = {
@@ -314,6 +348,11 @@ export const useRuntimeStore = defineStore('runtime', () => {
     if (status.state === 'ready') {
       view.value = { phase: 'ready', snapshot: status }
       if (status.runtimeId !== appliedRuntimeId) void syncProjection(status.runtimeId ?? undefined)
+      // 新代际，或一轮结束（运行中 → 非运行中）都会改变上下文占用，重新读取能力。
+      if (status.runtimeId !== capabilitiesAttemptedRuntimeId
+        || (previousStreaming && status.info?.isStreaming !== true)) {
+        void refreshCapabilities()
+      }
       return
     }
     if (status.state === 'stopping') {
@@ -328,10 +367,63 @@ export const useRuntimeStore = defineStore('runtime', () => {
     view.value = status.runtimeId === null ? { phase: 'idle' } : { phase: 'closed' }
   }
 
+  /**
+   * 读取 Agent 能力：结果必须属于仍在就绪的同一代际，否则丢弃。
+   * 已有结果时不回到 loading，避免周期刷新让弹层闪烁。
+   */
+  async function refreshCapabilities(): Promise<void> {
+    if (view.value.phase !== 'ready') return
+    const requestedRuntimeId = view.value.snapshot.runtimeId
+    capabilitiesAttemptedRuntimeId = requestedRuntimeId
+    if (capabilitiesView.value.phase !== 'ready') capabilitiesView.value = { phase: 'loading' }
+
+    const result = await getRuntimeCapabilities()
+    if (view.value.phase !== 'ready' || view.value.snapshot.runtimeId !== requestedRuntimeId) return
+    if (!result.ok) {
+      capabilitiesView.value = { phase: 'error', error: result.error }
+      return
+    }
+    if (result.data.runtimeId !== requestedRuntimeId) return
+    capabilitiesRuntimeId = result.data.runtimeId
+    capabilitiesView.value = { phase: 'ready', data: result.data }
+  }
+
+  /** 切换模型；成功后以主进程快照为准，并重新读取能力（Thinking levels 会随模型变化）。 */
+  async function setModel(provider: string, modelId: string): Promise<void> {
+    if (view.value.phase !== 'ready' || modelAction.value.phase === 'applying') return
+
+    modelAction.value = { phase: 'applying' }
+    const result = await setRuntimeModel(provider, modelId)
+    if (!result.ok) {
+      modelAction.value = { phase: 'error', error: result.error }
+      return
+    }
+    modelAction.value = { phase: 'idle' }
+    applyStatus(result.data)
+    await refreshCapabilities()
+  }
+
+  /** 设置 Thinking level；取值是否被接受由 Pi 决定，失败按错误码如实展示。 */
+  async function setThinkingLevel(level: string): Promise<void> {
+    if (view.value.phase !== 'ready' || thinkingAction.value.phase === 'applying') return
+
+    thinkingAction.value = { phase: 'applying' }
+    const result = await setRuntimeThinkingLevel(level)
+    if (!result.ok) {
+      thinkingAction.value = { phase: 'error', error: result.error }
+      return
+    }
+    thinkingAction.value = { phase: 'idle' }
+    applyStatus(result.data)
+  }
+
   return {
     view,
     promptView,
     abortView,
+    capabilitiesView,
+    modelAction,
+    thinkingAction,
     messages,
     tools,
     projectionSync,
@@ -343,6 +435,9 @@ export const useRuntimeStore = defineStore('runtime', () => {
     launch,
     shutdown,
     send,
-    stopOperation
+    stopOperation,
+    refreshCapabilities,
+    setModel,
+    setThinkingLevel
   }
 })

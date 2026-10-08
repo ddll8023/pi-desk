@@ -70,6 +70,10 @@
 
 **范围**：模型选择、按模型能力提供 Thinking Level、Context Usage、Stop 与状态同步。优先官方查询与设置命令，Context 未知或暂不可用时如实展示，不把累计用量当作当前上下文占用。
 
+**当前实现**：TopBar 的 Runtime 弹层内提供模型与 Thinking 选择、上下文占用与压缩中提示；Stop 沿用 P2-03 的 Prompt 区原位入口。能力来自 `desktop:runtime-capabilities`，设置走 `desktop:runtime-set-model` 与 `desktop:runtime-set-thinking-level`，状态仍经既有的 Runtime 状态广播收敛。通道、字段、刷新时机与错误码见开发总览第 6.2 节。
+
+**决策**：模型列表与 Thinking levels 走独立的能力读取通道，不放进每次状态变化都会全量广播的快照；取值合法性交给 Pi 判定，不维护 level 白名单；上下文占用只在就绪、每轮结束与设置成功后重新读取，不做轮询；压缩中只提示不本地拦截；不新增依赖、单向事件通道或 Provider / 凭据能力。
+
 **依赖**：P2-03；依赖已有模型配置，不开发登录或 Provider 凭据管理。
 
 ### P2-06 UI 偏好

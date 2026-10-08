@@ -1,4 +1,4 @@
-/** 管理唯一桌面窗口及其尺寸位置偏好、本地资产边界，以及应用信息、Project 选择与列表、Session 列表与打开、界面偏好、Runtime 启停、Prompt 提交、中止、消息/工具投影 IPC、事件广播与退出编排。 */
+/** 管理唯一桌面窗口及其尺寸位置偏好、本地资产边界，以及应用信息、Project 选择与列表、Session 列表与打开、界面偏好、Runtime 启停、Prompt 提交、中止、Agent 能力查询与设置、消息/工具投影 IPC、事件广播与退出编排。 */
 import { realpath } from 'node:fs/promises'
 import { extname, isAbsolute, relative, resolve, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -24,16 +24,20 @@ import {
 import type { SessionErrorCode, SessionListResult, SessionOpenResult } from '../shared/session-api'
 import {
   RUNTIME_ABORT_CHANNEL,
+  RUNTIME_CAPABILITIES_CHANNEL,
   RUNTIME_PROMPT_CHANNEL,
   RUNTIME_PROJECTION_ACK_CHANNEL,
   RUNTIME_PROJECTION_CHANNEL,
   RUNTIME_PROJECTION_EVENT,
+  RUNTIME_SET_MODEL_CHANNEL,
+  RUNTIME_SET_THINKING_LEVEL_CHANNEL,
   RUNTIME_START_CHANNEL,
   RUNTIME_STATUS_CHANNEL,
   RUNTIME_STOP_CHANNEL,
   RUNTIME_STATUS_EVENT
 } from '../shared/runtime-api'
 import type {
+  CapabilitiesResult,
   ProjectionBatch,
   ProjectionResult,
   PromptResult,
@@ -54,6 +58,10 @@ const APPLICATION_PAGE_URL = 'app://desktop/index.html'
 const QUIT_DEADLINE_MS = 10_000
 /** 窗口状态落盘的等待上限；超过就继续关闭链，不让小文件写入拖住退出。 */
 const WINDOW_STATE_FLUSH_MS = 1_000
+/** 模型 provider/id 的长度上限；只限制形状，模型是否存在由 Pi 判定。 */
+const MAX_MODEL_IDENTIFIER_CHARS = 256
+/** Thinking level 的长度上限；取值合法性由 Pi 判定，不在此白名单。 */
+const MAX_THINKING_LEVEL_CHARS = 32
 const rendererRoot = resolve(__dirname, '../renderer')
 const productionCsp = [
   "default-src 'none'",
@@ -232,6 +240,10 @@ function projectionFailure(code: RuntimeErrorCode, message: string): ProjectionR
   return { ok: false, error: { code, message } }
 }
 
+function capabilitiesFailure(code: RuntimeErrorCode, message: string): CapabilitiesResult {
+  return { ok: false, error: { code, message } }
+}
+
 function projectPathFailure(code: ProjectErrorCode, message: string): ProjectPathResult {
   return { ok: false, error: { code, message } }
 }
@@ -246,6 +258,11 @@ function sessionFailure(code: SessionErrorCode, message: string): SessionListRes
 
 function preferencesFailure(code: PreferencesErrorCode, message: string): PreferencesResult {
   return { ok: false, error: { code, message } }
+}
+
+/** 只接受非空且长度受控的标识字符串；空字符串与超长都按参数拒绝。 */
+function isBoundedIdentifier(value: unknown, maxLength: number): value is string {
+  return typeof value === 'string' && value.trim() !== '' && value.length <= maxLength
 }
 
 /** 打开系统目录选择器；绑定唯一业务窗口，用户取消返回 `null`。 */
@@ -435,6 +452,75 @@ function registerRuntimeHandlers(pageUrl: string): void {
         return runtimeFailure('INVALID_REQUEST', '中止操作接口不接受参数。')
       }
       return runtimeManager.abort()
+    }
+  )
+
+  /** 能力读取只查询当前 Runtime 代际，不接受任何参数；分区失败由结果内的 error 表达。 */
+  ipcMain.handle(
+    RUNTIME_CAPABILITIES_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<CapabilitiesResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return capabilitiesFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 0) {
+        return capabilitiesFailure('INVALID_REQUEST', '能力读取接口不接受参数。')
+      }
+      return runtimeManager.readCapabilities()
+    }
+  )
+
+  /** 只接受 provider 与模型 id；不接受任意模型对象、启动参数或其他 RPC 内容。 */
+  ipcMain.handle(
+    RUNTIME_SET_MODEL_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<RuntimeResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return runtimeFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 1) {
+        return runtimeFailure('INVALID_REQUEST', '切换模型接口只接受一个请求对象。')
+      }
+      const request = args[0]
+      if (typeof request !== 'object' || request === null || Array.isArray(request)) {
+        return runtimeFailure('INVALID_REQUEST', '切换模型参数格式不正确。')
+      }
+      const fields = request as Record<string, unknown>
+      if (Object.keys(fields).some((key) => key !== 'provider' && key !== 'modelId')) {
+        return runtimeFailure('INVALID_REQUEST', '切换模型参数包含未支持的字段。')
+      }
+      const { provider, modelId } = fields
+      if (!isBoundedIdentifier(provider, MAX_MODEL_IDENTIFIER_CHARS)) {
+        return runtimeFailure('INVALID_REQUEST', '模型 provider 必须是非空且长度受控的字符串。')
+      }
+      if (!isBoundedIdentifier(modelId, MAX_MODEL_IDENTIFIER_CHARS)) {
+        return runtimeFailure('INVALID_REQUEST', '模型 id 必须是非空且长度受控的字符串。')
+      }
+      return runtimeManager.setModel({ provider, modelId })
+    }
+  )
+
+  /** 只接受 Thinking level 字符串；是否被当前模型支持由 Pi 判定。 */
+  ipcMain.handle(
+    RUNTIME_SET_THINKING_LEVEL_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<RuntimeResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return runtimeFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 1) {
+        return runtimeFailure('INVALID_REQUEST', '设置 Thinking level 接口只接受一个请求对象。')
+      }
+      const request = args[0]
+      if (typeof request !== 'object' || request === null || Array.isArray(request)) {
+        return runtimeFailure('INVALID_REQUEST', 'Thinking level 参数格式不正确。')
+      }
+      const fields = request as Record<string, unknown>
+      if (Object.keys(fields).some((key) => key !== 'level')) {
+        return runtimeFailure('INVALID_REQUEST', 'Thinking level 参数包含未支持的字段。')
+      }
+      const { level } = fields
+      if (!isBoundedIdentifier(level, MAX_THINKING_LEVEL_CHARS)) {
+        return runtimeFailure('INVALID_REQUEST', 'Thinking level 必须是非空且长度受控的字符串。')
+      }
+      return runtimeManager.setThinkingLevel({ level })
     }
   )
 

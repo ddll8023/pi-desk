@@ -6,19 +6,32 @@
  * 文件路径或启动参数，旧 Runtime 的异步结果不得覆盖新状态。
  */
 import type {
+  AgentCapabilities,
+  CapabilitiesResult,
+  ModelSummary,
   ProjectionBatch,
   ProjectionResult,
   PromptDisposition,
   PromptResult,
   RuntimeErrorCode,
   RuntimeResult,
-  RuntimeStatus
+  RuntimeStatus,
+  SetModelRequest,
+  SetThinkingLevelRequest
 } from '../shared/runtime-api'
 import { MessageProjection } from './message-projection'
 import type { ProjectionStatusHint } from './message-projection'
 import { PiProcess, PiProcessError } from './pi-process'
 import type { PiExitEvent } from './pi-process'
-import { PiProtocol, toPromptDisposition, toRuntimeInfo } from './pi-protocol'
+import {
+  PiProtocol,
+  toContextUsageField,
+  toModelSummaries,
+  toPromptDisposition,
+  toRuntimeInfo,
+  toThinkingLevels
+} from './pi-protocol'
+import type { PiResponseRecord } from './pi-protocol'
 import { ProjectPathError, normalizeProjectPath } from './project-path'
 import { getSessionRoot } from './session-store'
 
@@ -36,6 +49,12 @@ const ABORT_SHUTDOWN_WAIT_MS = 3_000
 
 /** 恢复会话时读取历史消息的等待上限；超时按启动失败处理，不显示不完整的历史。 */
 const HISTORY_TIMEOUT_MS = 15_000
+
+/** 模型与 Thinking 设置的等待上限；超时只结束等待，结果未知且不自动重发。 */
+const COMMAND_TIMEOUT_MS = 15_000
+
+/** 能力查询（可用模型、Thinking levels、上下文占用）的等待上限。 */
+const CAPABILITIES_TIMEOUT_MS = 15_000
 
 /** prompt 文本上限，按 UTF-8 字节计。 */
 const PROMPT_MAX_BYTES = 1_048_576
@@ -81,6 +100,17 @@ export class RuntimeManager {
   private readonly projectionListeners = new Set<RuntimeProjectionListener>()
   /** 是否由主动关闭触发：用于区分正常关闭与异常退出。 */
   private stopRequested = false
+  /**
+   * 能力缓存只保存成功结果：可用模型列表与当前模型无关，Thinking levels 在模型变化后失效；
+   * 上下文占用随对话变化，不进缓存。代际不符时按未命中处理。
+   */
+  private capabilityCache: {
+    readonly runtimeId: number
+    models: ModelSummary[] | null
+    thinkingLevels: string[] | null
+  } | null = null
+  /** 事件触发的状态刷新是否在进行中：避免每轮结束叠加多次 get_state。 */
+  private refreshing = false
 
   /** 订阅状态变化；返回释放函数。单个订阅者异常不影响 Runtime 状态。 */
   onStatusChanged(listener: RuntimeStatusListener): () => void {
@@ -182,6 +212,42 @@ export class RuntimeManager {
   }
 
   /**
+   * 读取当前代际的可用模型、Thinking 能力与上下文占用。
+   * 分区失败只影响本项，只有整体失败（如未就绪）才返回错误结果。
+   */
+  async readCapabilities(): Promise<CapabilitiesResult> {
+    try {
+      const runtime = this.requireReadyRuntime()
+      return { ok: true, data: await this.collectCapabilities(runtime) }
+    } catch (error) {
+      const failure = error instanceof RuntimeFailure
+        ? error
+        : new RuntimeFailure('INTERNAL_ERROR', '读取 Agent 能力时发生未预期的内部错误。')
+      return { ok: false, error: { code: failure.code, message: failure.message } }
+    }
+  }
+
+  /** 切换模型；Pi 的拒绝按 `RUNTIME_COMMAND_REJECTED` 如实返回，成功后用 get_state 收敛快照。 */
+  async setModel(request: SetModelRequest): Promise<RuntimeResult> {
+    return this.applyAgentCommand(
+      { type: 'set_model', provider: request.provider, modelId: request.modelId },
+      '切换模型',
+      () => {
+        // 模型变化后当前模型支持的 Thinking levels 需要重新读取。
+        this.invalidateThinkingLevels()
+      }
+    )
+  }
+
+  /** 设置 Thinking level；取值合法性由 Pi 判定，失败同样按命令拒绝返回。 */
+  async setThinkingLevel(request: SetThinkingLevelRequest): Promise<RuntimeResult> {
+    return this.applyAgentCommand(
+      { type: 'set_thinking_level', level: request.level },
+      '设置 Thinking level'
+    )
+  }
+
+  /**
    * 关闭当前 Runtime：先停止接受新请求，有活动操作时先请求取消，再关闭 stdin、
    * 等待退出，超时后按平台定向终止。关闭是幂等动作，没有 Runtime 时直接返回当前快照。
    */
@@ -210,6 +276,7 @@ export class RuntimeManager {
       // 进程未在期限内确认退出：按失败收敛，并解除归属以免留下无主 Runtime。
       runtime.projection.dispose()
       this.active = null
+      this.capabilityCache = null
       this.publish({
         state: 'failed',
         runtimeId: runtime.runtimeId,
@@ -255,8 +322,10 @@ export class RuntimeManager {
         protocolError ??= message
       },
       onRecord: (kind, payload) => {
-        // 会话事件进入展示投影；Extension UI 与未知记录不进入本阶段范围。
-        if (kind === 'session-event') projection.applySessionEvent(payload)
+        // 会话事件进入展示投影；状态类事件同时用于收敛 Runtime 快照。
+        if (kind !== 'session-event') return
+        projection.applySessionEvent(payload)
+        this.applyRuntimeEvent(runtimeId, payload)
       },
       onUnmatchedResponse: () => {
         // 无 pending 可匹配的 response 不致命，例如 Pi 自行回报的解析错误。
@@ -472,12 +541,229 @@ export class RuntimeManager {
     }
   }
 
+  /** 就绪检查：未就绪统一按 `RUNTIME_NOT_READY` 返回，不做本地 streaming 预检。 */
+  private requireReadyRuntime(): ActiveRuntime {
+    const runtime = this.active
+    if (runtime === null || this.snapshot.state !== 'ready') {
+      throw new RuntimeFailure('RUNTIME_NOT_READY', 'Runtime 尚未就绪，无法执行该操作。')
+    }
+    return runtime
+  }
+
+  /** 发送一条命令并等待响应；超时与管道关闭按其错误码抛出，响应本身交给调用方判定。 */
+  private async requestCommand(
+    runtime: ActiveRuntime,
+    command: Record<string, unknown>,
+    timeoutMs: number,
+    label: string
+  ): Promise<PiResponseRecord> {
+    const outcome = await runtime.protocol.request(
+      command,
+      (line) => runtime.process.write(line),
+      timeoutMs
+    )
+
+    if (outcome.status === 'timeout') {
+      throw new RuntimeFailure(
+        'RUNTIME_TIMEOUT',
+        `Pi 在 ${timeoutMs} 毫秒内没有回应${label}；结果未知，不会自动重发。`
+      )
+    }
+    if (outcome.status === 'closed') {
+      throw new RuntimeFailure(
+        'RUNTIME_EXITED',
+        this.describeFailure(
+          runtime.process.exitEvent,
+          runtime.process,
+          outcome.reason,
+          `Pi 进程在${label}期间结束了标准输入。`
+        )
+      )
+    }
+    return outcome.response
+  }
+
+  /**
+   * 执行一条会改变 Agent 配置的命令：成功后刷新快照并返回权威状态。
+   * 失败一律如实返回，不本地预检、不自动重发。
+   */
+  private async applyAgentCommand(
+    command: Record<string, unknown>,
+    label: string,
+    afterSuccess?: () => void
+  ): Promise<RuntimeResult> {
+    try {
+      const runtime = this.requireReadyRuntime()
+      const response = await this.requestCommand(runtime, command, COMMAND_TIMEOUT_MS, label)
+      if (!response.success) {
+        throw new RuntimeFailure(
+          'RUNTIME_COMMAND_REJECTED',
+          `Pi 拒绝了${label}：${response.error ?? '未提供错误信息'}`
+        )
+      }
+      afterSuccess?.()
+      await this.refreshStatus(runtime)
+      return { ok: true, data: { ...this.snapshot } }
+    } catch (error) {
+      const failure = error instanceof RuntimeFailure
+        ? error
+        : new RuntimeFailure('INTERNAL_ERROR', `${label}时发生未预期的内部错误。`)
+      // 请求失败不改写 Runtime 快照；进程真的退出时由退出路径负责收敛状态。
+      return { ok: false, error: { code: failure.code, message: failure.message } }
+    }
+  }
+
+  /** 只读能力查询：失败与形状不符都收敛为可展示原因，不让单项失败影响其他分区。 */
+  private async readCapability<T>(
+    runtime: ActiveRuntime,
+    command: Record<string, unknown>,
+    label: string,
+    parse: (data: unknown) => T | null
+  ): Promise<{ readonly value: T | null; readonly error: string | null }> {
+    try {
+      const response = await this.requestCommand(runtime, command, CAPABILITIES_TIMEOUT_MS, label)
+      if (!response.success) {
+        return { value: null, error: `Pi 拒绝了${label}：${response.error ?? '未提供错误信息'}` }
+      }
+      const value = parse(response.data)
+      if (value === null) return { value: null, error: `Pi 返回的${label}格式不符合约定。` }
+      return { value, error: null }
+    } catch (error) {
+      return {
+        value: null,
+        error: error instanceof RuntimeFailure ? error.message : `${label}时发生未预期的内部错误。`
+      }
+    }
+  }
+
+  /** 组装能力结果：可用模型与 Thinking levels 按代际缓存，上下文占用每次重新读取。 */
+  private async collectCapabilities(runtime: ActiveRuntime): Promise<AgentCapabilities> {
+    const cached = this.capabilityCache?.runtimeId === runtime.runtimeId ? this.capabilityCache : null
+    const cache = {
+      runtimeId: runtime.runtimeId,
+      models: cached?.models ?? null,
+      thinkingLevels: cached?.thinkingLevels ?? null
+    }
+
+    let models = cache.models
+    let modelsError: string | null = null
+    if (models === null) {
+      const read = await this.readCapability(
+        runtime,
+        { type: 'get_available_models' },
+        '可用模型列表',
+        toModelSummaries
+      )
+      models = read.value
+      modelsError = read.error
+      if (models !== null) cache.models = models
+    }
+
+    let thinkingLevels = cache.thinkingLevels
+    let thinkingLevelsError: string | null = null
+    if (thinkingLevels === null) {
+      const read = await this.readCapability(
+        runtime,
+        { type: 'get_available_thinking_levels' },
+        'Thinking level 列表',
+        toThinkingLevels
+      )
+      thinkingLevels = read.value
+      thinkingLevelsError = read.error
+      if (thinkingLevels !== null) cache.thinkingLevels = thinkingLevels
+    }
+
+    this.capabilityCache = cache
+
+    // 上下文占用字段缺失表示 Pi 没有可用上下文窗口，与格式错误区分开。
+    const usage = await this.readCapability(
+      runtime,
+      { type: 'get_session_stats' },
+      '上下文占用',
+      toContextUsageField
+    )
+
+    return {
+      runtimeId: runtime.runtimeId,
+      models: models ?? [],
+      modelsError,
+      thinkingLevels: thinkingLevels ?? [],
+      thinkingLevelsError,
+      contextUsage: usage.value?.usage ?? null,
+      contextUsageError: usage.error
+    }
+  }
+
+  /** 模型变化后重新读取 Thinking levels；可用模型列表与当前模型无关，继续复用。 */
+  private invalidateThinkingLevels(): void {
+    const cache = this.capabilityCache
+    if (cache === null) return
+    this.capabilityCache = { ...cache, thinkingLevels: null }
+  }
+
+  /**
+   * 用 `get_state` 刷新快照；只在该 Runtime 仍是当前代际且仍就绪时生效。
+   * 刷新失败不改变既有快照，真实退出由退出路径收敛。
+   */
+  private async refreshStatus(runtime: ActiveRuntime): Promise<void> {
+    try {
+      const response = await this.requestCommand(
+        runtime,
+        { type: 'get_state' },
+        READY_TIMEOUT_MS,
+        '刷新 Runtime 状态'
+      )
+      if (!response.success) return
+      const info = toRuntimeInfo(response.data)
+      if (info === null) return
+      if (this.active?.runtimeId !== runtime.runtimeId || this.snapshot.state !== 'ready') return
+      this.publish({ state: 'ready', runtimeId: runtime.runtimeId, info, lastError: null })
+    } catch {
+      // 刷新失败不改变既有快照。
+    }
+  }
+
+  /** 事件触发的刷新：同一时刻只跑一次，避免每轮结束叠加多个 get_state。 */
+  private scheduleStatusRefresh(runtime: ActiveRuntime): void {
+    if (this.refreshing) return
+    this.refreshing = true
+    void this.refreshStatus(runtime).finally(() => {
+      this.refreshing = false
+    })
+  }
+
+  /**
+   * 收敛由事件表达的 Runtime 状态：`thinking_level_changed` 直接更新级别；
+   * `agent_settled` 之后刷新一次快照，让 `isCompacting` 等 get_state 字段回到权威值。
+   */
+  private applyRuntimeEvent(runtimeId: number, payload: Record<string, unknown>): void {
+    const runtime = this.active
+    if (runtime === null || runtime.runtimeId !== runtimeId) return
+
+    if (payload.type === 'thinking_level_changed') {
+      const info = this.snapshot.info
+      if (this.snapshot.state !== 'ready' || info === null) return
+      const level = typeof payload.level === 'string' ? payload.level : null
+      if (level === null) return
+      this.publish({
+        state: 'ready',
+        runtimeId,
+        info: { ...info, thinkingLevel: level },
+        lastError: null
+      })
+      return
+    }
+
+    if (payload.type === 'agent_settled') this.scheduleStatusRefresh(runtime)
+  }
+
   /** 退出结果只在该 Runtime 仍是当前代际时生效。 */
   private handleExit(runtimeId: number, event: PiExitEvent): void {
     const runtime = this.active
     if (runtime === null || runtime.runtimeId !== runtimeId) return
     runtime.projection.dispose()
     this.active = null
+    this.capabilityCache = null
     if (this.stopRequested) {
       // 主动关闭：进程按请求结束，回到 idle 并保留本次运行时标识。
       this.publish({ state: 'idle', runtimeId, info: null, lastError: null })

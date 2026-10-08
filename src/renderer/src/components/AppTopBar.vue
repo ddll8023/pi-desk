@@ -1,10 +1,11 @@
-<!-- 顶栏：Sidebar 折叠开关、项目切换入口、当前会话与 Runtime 状态，并在详情弹层里提供模型等信息与关闭 Runtime；不承载消息与 Prompt 提交。 -->
+<!-- 顶栏：Sidebar 折叠开关、项目切换入口、当前会话与 Runtime 状态，并在详情弹层里提供模型、Thinking、上下文占用等 Agent 控制与关闭 Runtime；不承载消息与 Prompt 提交。 -->
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useDesktopStore } from '../stores/desktop'
 import { useProjectStore } from '../stores/project'
 import { useRuntimeStore } from '../stores/runtime'
+import AgentControls from './AgentControls.vue'
 import ProjectSwitcher from './ProjectSwitcher.vue'
 
 defineProps<{
@@ -154,15 +155,8 @@ onUnmounted(() => {
           {{ runtimeError }}
           <span class="mt-1 block text-xs text-desk-muted">异常退出后不会自动重启或重放请求。</span>
         </p>
-        <dl v-if="runtimeInfo" class="grid grid-cols-2 gap-3 text-xs">
-          <div>
-            <dt class="text-desk-muted">模型</dt>
-            <dd class="break-words font-mono">{{ runtimeInfo.model ?? '未提供' }}</dd>
-          </div>
-          <div>
-            <dt class="text-desk-muted">Thinking</dt>
-            <dd class="font-mono">{{ runtimeInfo.thinkingLevel ?? '未设置' }}</dd>
-          </div>
+        <AgentControls v-if="runtimeInfo" />
+        <dl v-if="runtimeInfo" class="mt-3 grid grid-cols-2 gap-3 text-xs">
           <div>
             <dt class="text-desk-muted">Session</dt>
             <dd class="break-words font-mono">{{ runtimeInfo.sessionId ?? '未提供' }}</dd>

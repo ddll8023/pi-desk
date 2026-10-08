@@ -1,4 +1,4 @@
-/** 为沙箱页面提供应用信息、Project 选择与列表、Session 列表与打开、界面偏好、Runtime 启停方法、Prompt 提交、中止、消息/工具投影与事件订阅，不暴露 Electron、任意 channel 或系统能力。 */
+/** 为沙箱页面提供应用信息、Project 选择与列表、Session 列表与打开、界面偏好、Runtime 启停与 Agent 能力控制、Prompt 提交、中止、消息/工具投影与事件订阅，不暴露 Electron、任意 channel 或系统能力。 */
 import { contextBridge, ipcRenderer } from 'electron'
 import type { IpcRendererEvent } from 'electron'
 import { APP_INFO_CHANNEL, isAppInfoResult } from '../shared/desktop-api'
@@ -30,14 +30,18 @@ import {
 import type { SessionApi, SessionListResult, SessionOpenRequest } from '../shared/session-api'
 import {
   RUNTIME_ABORT_CHANNEL,
+  RUNTIME_CAPABILITIES_CHANNEL,
   RUNTIME_PROMPT_CHANNEL,
   RUNTIME_PROJECTION_ACK_CHANNEL,
   RUNTIME_PROJECTION_CHANNEL,
   RUNTIME_PROJECTION_EVENT,
+  RUNTIME_SET_MODEL_CHANNEL,
+  RUNTIME_SET_THINKING_LEVEL_CHANNEL,
   RUNTIME_START_CHANNEL,
   RUNTIME_STATUS_CHANNEL,
   RUNTIME_STOP_CHANNEL,
   RUNTIME_STATUS_EVENT,
+  isCapabilitiesResult,
   isProjectionBatch,
   isProjectionResult,
   isPromptResult,
@@ -45,18 +49,22 @@ import {
   isRuntimeStatus
 } from '../shared/runtime-api'
 import type {
+  CapabilitiesResult,
   ProjectionBatch,
   ProjectionResult,
   PromptResult,
   RuntimeApi,
   RuntimeResult,
   RuntimeStartRequest,
-  RuntimeStatus
+  RuntimeStatus,
+  SetModelRequest,
+  SetThinkingLevelRequest
 } from '../shared/runtime-api'
 
 const INVALID_RUNTIME_RESPONSE = '桌面接口返回了无法识别的 Runtime 结果。'
 const INVALID_PROMPT_RESPONSE = '桌面接口返回了无法识别的 Prompt 结果。'
 const INVALID_PROJECTION_RESPONSE = '桌面接口返回了无法识别的投影快照。'
+const INVALID_CAPABILITIES_RESPONSE = '桌面接口返回了无法识别的 Agent 能力结果。'
 const INVALID_PROJECT_PATH_RESPONSE = '桌面接口返回了无法识别的目录选择结果。'
 const INVALID_PROJECT_LIST_RESPONSE = '桌面接口返回了无法识别的项目列表。'
 const INVALID_SESSION_LIST_RESPONSE = '桌面接口返回了无法识别的会话列表。'
@@ -72,6 +80,10 @@ function invalidPromptResponse(): PromptResult {
 
 function invalidProjectionResponse(): ProjectionResult {
   return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_PROJECTION_RESPONSE } }
+}
+
+function invalidCapabilitiesResponse(): CapabilitiesResult {
+  return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_CAPABILITIES_RESPONSE } }
 }
 
 function invalidProjectPathResponse(): ProjectPathResult {
@@ -170,6 +182,24 @@ const desktop: DesktopApi & RuntimeApi & ProjectApi & SessionApi & PreferencesAp
   async getRuntimeProjection() {
     const response: unknown = await ipcRenderer.invoke(RUNTIME_PROJECTION_CHANNEL)
     return isProjectionResult(response) ? response : invalidProjectionResponse()
+  },
+
+  async getRuntimeCapabilities() {
+    const response: unknown = await ipcRenderer.invoke(RUNTIME_CAPABILITIES_CHANNEL)
+    return isCapabilitiesResult(response) ? response : invalidCapabilitiesResponse()
+  },
+
+  async setRuntimeModel(request: SetModelRequest) {
+    // 只搬运已声明的字段，不把页面传入的整个对象转交给主进程。
+    const payload: SetModelRequest = { provider: request.provider, modelId: request.modelId }
+    const response: unknown = await ipcRenderer.invoke(RUNTIME_SET_MODEL_CHANNEL, payload)
+    return isRuntimeResult(response) ? response : invalidRuntimeResponse()
+  },
+
+  async setRuntimeThinkingLevel(request: SetThinkingLevelRequest) {
+    const payload: SetThinkingLevelRequest = { level: request.level }
+    const response: unknown = await ipcRenderer.invoke(RUNTIME_SET_THINKING_LEVEL_CHANNEL, payload)
+    return isRuntimeResult(response) ? response : invalidRuntimeResponse()
   },
 
   ackRuntimeProjection(runtimeId: number, seq: number) {

@@ -60,7 +60,7 @@ Desktop 仅维护自己的数据：最近项目、窗口尺寸、Sidebar 状态�
 
 开发在 Windows 与 macOS 主机上交替进行，文档不绑定某一平台，也不固定绝对路径；仓库可检出到任意位置，以下路径与命令均以项目根目录为基准。
 
-仓库包含开发文档、Electron/Vue 桌面骨架、三端构建与 TypeScript 配置、统一前端服务入口、展示状态 Store，以及 Pi Runtime 的准备脚本与固定版本清单。当前主界面由顶栏、可折叠的会话侧栏、消息区与 Prompt 区组成，可经受限 preload API 读取应用信息、选择并记住本地项目、列出并打开该项目的 Pi 会话、启停 Pi RPC sidecar、接收状态变化、提交 Prompt、展示本轮文本与 Thinking、查看工具执行、中止当前操作，并保存 Sidebar 折叠状态与窗口尺寸位置；不读取项目内容、不持久化消息。
+仓库包含开发文档、Electron/Vue 桌面骨架、三端构建与 TypeScript 配置、统一前端服务入口、展示状态 Store，以及 Pi Runtime 的准备脚本与固定版本清单。当前主界面由顶栏、可折叠的会话侧栏、消息区与 Prompt 区组成，可经受限 preload API 读取应用信息、选择并记住本地项目、列出并打开该项目的 Pi 会话、启停 Pi RPC sidecar、接收状态变化、提交 Prompt、展示本轮文本与 Thinking、查看工具执行、切换模型与 Thinking 级别并查看上下文占用、中止当前操作，并保存 Sidebar 折叠状态与窗口尺寸位置；不读取项目内容、不持久化消息。
 
 开发使用 npm，工具版本由 `package.json` 的 `packageManager` 字段声明，直接依赖使用精确版本。`package.json` 是依赖声明的维护位置，完整依赖树由安装生成的 `package-lock.json` 固定，不手写锁文件。依赖安装属于独立授权操作。
 
@@ -389,6 +389,16 @@ Pi 管道背压与 UI 通知背压分开处理：采用有界批次与渲染端�
 - 恢复会话时在发布就绪前请求 `get_messages`，把历史消息按整条替换规则灌入临时投影作为基准；读取历史消息的等待上限是 15 000 毫秒，超时或失败按启动失败处理，不显示不完整的历史，截断与上限沿用临时投影契约。
 - 通道：`desktop:session-list`（零参数，基于当前项目）与 `desktop:session-open`（只接受 `{ sessionId, allowInterrupt }`，`sessionId` 为 null 表示新建，非 null 时只接受 Pi 允许的字符集：字母、数字、`.`、`_`、`-`）。新增错误码 `SESSION_NOT_FOUND`（目标会话不存在，或 Pi 实际打开的会话与请求不一致）与 `SESSION_SWITCH_BLOCKED`；其余复用 Runtime 错误码族。会话文件路径不跨 IPC 交给页面。
 
+#### Agent 控制（模型、Thinking、上下文占用）
+
+- `get_state` 只投影页面需要的子集：`model`（`provider/id` 标签）、`modelProvider`、`modelId`、`thinkingLevel`、`sessionId`、`messageCount`、`isStreaming` 与 `isCompacting`；Pi 的完整 Model 对象、队列与 steering 字段不进入快照。状态变化只经既有的 `desktop:runtime-status-changed` 广播，字段扩展与跨进程校验必须同批更新。
+- 通道：`desktop:runtime-capabilities`（零参数，返回当前代际的可用模型、Thinking levels 与上下文占用）、`desktop:runtime-set-model`（只接受 `{ provider, modelId }`）、`desktop:runtime-set-thinking-level`（只接受 `{ level }`）。参数只校验形状与非空，provider/modelId 上限 256 字符、level 上限 32 字符；取值是否被接受以 Pi 的拒绝为准，不维护 level 白名单。不新增单向事件通道。
+- 能力结果分三区，每区独立表达失败：`models`（精简字段为 `provider`、`id`、`name`、`reasoning`、`contextWindow`；`baseUrl`、`api`、`maxTokens` 与 `cost` 不进页面）、`thinkingLevels`（当前模型支持的范围，不支持推理时为 `["off"]`）、`contextUsage`（`tokens`、`contextWindow`、`percent`）。`contextUsage` 为 null 且对应 error 也为 null 表示 Pi 明确没有可用上下文窗口；压缩刚结束时 `tokens` 与 `percent` 为 null，界面按未知展示，不当 0，也不把全会话累计用量当作当前占用。
+- 刷新时机：Runtime 就绪后、每轮 `agent_settled` 之后由渲染端重新读取，以及模型或 Thinking 设置成功后；不做轮询。可用模型列表与 Thinking levels 在 `runtimeId` 代际内缓存（模型变化后 Thinking levels 失效），上下文占用每次重新读取。
+- 事件收敛：`thinking_level_changed` 直接更新快照中的级别；`agent_settled` 后刷新一次 `get_state`，让 `isCompacting` 等字段回到权威值。协议没有模型变化事件，模型一致性以 `set_model` 成功后的刷新为准。刷新使用 in-flight 守卫，且只在该 Runtime 仍是当前代际且仍就绪时生效。
+- 错误码：新增 `RUNTIME_COMMAND_REJECTED`，用于 Pi 以 `success: false` 拒绝模型或 Thinking 设置（消息带 Pi 的原因文本，如模型未配置凭据）；其余复用 Runtime 错误码族。
+- 压缩中不新增本地拦截：界面如实提示“提交会被 Pi 拒绝”，busy 判定仍完全以 Pi 的拒绝为准。
+
 #### 关闭、异常与进程树
 
 正常关闭停止接收新业务请求，保留内部取消路径；仅当事件流显示仍在运行（`isStreaming`）时先对活动操作发起 abort，并最多等待 3 000 毫秒——超时或取消被拒都不阻断后续链路——然后关闭 stdin、继续消费管道并等待退出，超时后执行平台兜底。异常退出显示原因和结果不确定性，由用户显式重新启动，不自动重放 prompt。
@@ -403,7 +413,7 @@ Windows 使用系统 `taskkill` 对当前受管 Pi 进程树定向终止，不�
 
 主界面替换第一阶段的最小 Runtime 页面，提供：
 
-- 顶栏：Sidebar 折叠开关、项目切换入口（目录选择、最近项目、手动路径、配置提示）、当前会话、Runtime 状态与详情（模型、Thinking、Session、消息数与应用版本），以及关闭 Runtime。
+- 顶栏：Sidebar 折叠开关、项目切换入口（目录选择、最近项目、手动路径、配置提示）、当前会话、Runtime 状态，以及详情弹层里的 Agent 控制（模型与 Thinking 选择、上下文占用、压缩中提示）与应用信息、关闭 Runtime。
 - 会话侧栏：当前项目的 Pi 会话列表、新建与刷新、当前会话高亮、跳过与截断提示。
 - 消息区：按消息分组并按内容块顺序渲染，用户与 Assistant 区分，Thinking 可折叠，工具调用内联为通用工具卡片（名称、状态、Desktop 计算的耗时与参数摘要，展开后显示参数、结果或错误输出、非文本内容描述与截断提示；运行中的卡片自动展开一次，之后由用户开合），并表达同步、截断、失败与运行中状态。
 - Prompt 区：输入与发送、Agent 运行期间原位的停止入口，以及请求接受、拒绝与中止的提示。
