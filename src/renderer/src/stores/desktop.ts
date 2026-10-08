@@ -1,4 +1,4 @@
-/** 保存当前页面的桌面连接展示状态，不持久化项目、消息或 Runtime 数据。 */
+/** 保存当前页面的桌面连接展示状态；项目选择由主进程配置保存，本 Store 不保存消息或 Runtime 数据。 */
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import type { DesktopAppInfo, DesktopError } from '../../../shared/desktop-api'

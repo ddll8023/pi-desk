@@ -60,7 +60,7 @@ Desktop 仅维护自己的数据：最近项目、窗口尺寸、Sidebar 状态�
 
 项目根目录：`H:\code\pi-desk`。
 
-仓库包含开发文档、Electron/Vue 最小骨架、三端构建与 TypeScript 配置、统一前端服务入口、展示状态 Store，以及 Pi Runtime 的准备脚本与固定版本清单。当前页面可经受限 preload API 读取应用信息、启停 Pi RPC sidecar、接收状态变化、提交 Prompt 并展示本轮文本与 Thinking；Tool 与 Stop 仍在后续任务接入，不读取项目内容、不持久化消息。
+仓库包含开发文档、Electron/Vue 最小骨架、三端构建与 TypeScript 配置、统一前端服务入口、展示状态 Store，以及 Pi Runtime 的准备脚本与固定版本清单。当前页面可经受限 preload API 读取应用信息、选择并记住本地项目、启停 Pi RPC sidecar、接收状态变化、提交 Prompt、展示本轮文本与 Thinking、查看工具执行并中止当前操作；不读取项目内容、不持久化消息。
 
 开发使用 npm，工具版本由 `package.json` 的 `packageManager` 字段声明，直接依赖使用精确版本。`package.json` 是依赖声明的维护位置，完整依赖树由安装生成的 `package-lock.json` 固定，不手写锁文件。依赖安装属于独立授权操作。
 
@@ -479,7 +479,7 @@ Project 的基础属性为 `id`、`name`、`path`、`lastOpenedAt`；本地配�
 
 当前 Extension UI wire 使用独立 `extension_ui_request` / `extension_ui_response`，设置编辑器文本的 method 为 `set_editor_text`。RPC 不支持任意 TUI 组件，未来兼容范围以官方支持的子协议为边界，不承诺所有 TUI Extension 无损运行。
 
-第一阶段明确不做：完整 Sidebar、Project 持久化、Session 列表、Authentication、Extension UI、Git GUI、Terminal、文件管理器、插件市场、复杂工作流、多 Agent 和任务编排。不得为这些范围提前增加空抽象或依赖。
+第一阶段明确不做：完整 Sidebar、Project 持久化（已在 P2-01 实现）、Session 列表、Authentication、Extension UI、Git GUI、Terminal、文件管理器、插件市场、复杂工作流、多 Agent 和任务编排。不得为这些范围提前增加空抽象或依赖。
 
 ## 9. 待解决问题
 
