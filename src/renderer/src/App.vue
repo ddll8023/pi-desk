@@ -1,11 +1,14 @@
-<!-- 展示单页 Runtime 骨架与真实桌面连接信息；项目输入仅留在页面，Pi 尚未接入。 -->
+<!-- 展示桌面连接与 Runtime 状态；项目目录只在本页输入，不持久化。 -->
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
 import { computed, onMounted, ref } from 'vue'
 import { useDesktopStore } from './stores/desktop'
+import { useRuntimeStore } from './stores/runtime'
 
 const desktopStore = useDesktopStore()
+const runtimeStore = useRuntimeStore()
 const { connection } = storeToRefs(desktopStore)
+const { view: runtimeView } = storeToRefs(runtimeStore)
 const projectPath = ref('')
 const prompt = ref('')
 const connectionLabel = computed(() => {
@@ -16,6 +19,26 @@ const connectionLabel = computed(() => {
     case 'error': return '桌面桥接连接失败'
   }
 })
+const runtimeLabel = computed(() => {
+  switch (runtimeView.value.phase) {
+    case 'idle': return 'Runtime 未启动'
+    case 'starting': return '正在启动 Runtime'
+    case 'ready': return 'Runtime 已就绪'
+    case 'failed': return 'Runtime 启动失败'
+  }
+})
+const runtimeStarting = computed(() => runtimeView.value.phase === 'starting')
+const runtimeReady = computed(() => runtimeView.value.phase === 'ready')
+const runtimeInfo = computed(() => (
+  runtimeView.value.phase === 'ready' ? runtimeView.value.snapshot.info : null
+))
+const runtimeError = computed(() => (
+  runtimeView.value.phase === 'failed' ? runtimeView.value.error : null
+))
+
+function launchRuntime(): void {
+  void runtimeStore.launch(projectPath.value)
+}
 
 onMounted(() => {
   void desktopStore.initialize()
@@ -30,12 +53,12 @@ onMounted(() => {
         <h1 class="text-3xl font-semibold tracking-tight">Runtime</h1>
       </div>
       <span class="rounded-md border border-desk-line bg-desk-surface px-3 py-2 text-sm">
-        Pi Runtime 尚未接入
+        {{ runtimeLabel }}
       </span>
     </header>
 
     <p id="runtime-notice" class="mb-6 border-l-2 border-desk-accent pl-3 text-sm text-desk-muted">
-      当前只有桌面页面与只读应用信息接口。填写内容不会启动 Pi、读取项目或发送请求。
+      当前只有桌面页面、只读应用信息接口与 Runtime 启动。不会发送 Prompt、不读取消息、不持久化项目。
     </p>
 
     <section
@@ -74,6 +97,34 @@ onMounted(() => {
       <p v-else class="text-sm text-desk-muted">正在获取此桌面应用的版本与平台信息。</p>
     </section>
 
+    <section class="panel mb-6" aria-labelledby="runtime-heading" :aria-busy="runtimeStarting">
+      <div class="mb-3 flex flex-wrap items-center justify-between gap-3">
+        <h2 id="runtime-heading" class="section-heading">Runtime</h2>
+        <p role="status" class="text-sm text-desk-accent">{{ runtimeLabel }}</p>
+      </div>
+      <dl v-if="runtimeInfo" class="grid grid-cols-2 gap-4 text-sm sm:grid-cols-4">
+        <div>
+          <dt class="mb-1 text-desk-muted">模型</dt>
+          <dd class="font-mono">{{ runtimeInfo.model ?? '未提供' }}</dd>
+        </div>
+        <div>
+          <dt class="mb-1 text-desk-muted">Thinking</dt>
+          <dd class="font-mono">{{ runtimeInfo.thinkingLevel ?? '未设置' }}</dd>
+        </div>
+        <div>
+          <dt class="mb-1 text-desk-muted">Session</dt>
+          <dd class="font-mono">{{ runtimeInfo.sessionId ?? '未提供' }}</dd>
+        </div>
+        <div>
+          <dt class="mb-1 text-desk-muted">消息数</dt>
+          <dd class="font-mono">{{ runtimeInfo.messageCount }}</dd>
+        </div>
+      </dl>
+      <p v-else-if="runtimeError" role="alert" class="text-sm">{{ runtimeError.message }}</p>
+      <p v-else-if="runtimeStarting" class="text-sm text-desk-muted">正在启动 Pi 并等待 get_state 响应。</p>
+      <p v-else class="text-sm text-desk-muted">填写项目目录后启动 Runtime；发送 Prompt、关闭与重启在后续阶段接入。</p>
+    </section>
+
     <div class="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.25fr)]">
       <div class="space-y-6">
         <section class="panel" aria-labelledby="project-heading">
@@ -89,9 +140,14 @@ onMounted(() => {
             spellcheck="false"
             aria-describedby="runtime-notice project-note"
           />
-          <p id="project-note" class="mt-2 text-xs text-desk-muted">只保留本页输入，不检查目录，不持久化。</p>
+          <p id="project-note" class="mt-2 text-xs text-desk-muted">作为 Pi 的工作目录，主进程会校验是否为绝对目录；不持久化。</p>
           <div class="mt-4 flex flex-wrap gap-2">
-            <button type="button" class="control-button" disabled aria-describedby="runtime-notice">
+            <button
+              type="button"
+              class="control-button"
+              :disabled="runtimeStarting || runtimeReady || projectPath.trim() === ''"
+              @click="launchRuntime"
+            >
               启动 Runtime
             </button>
             <button type="button" class="control-button" disabled aria-describedby="runtime-notice">
@@ -108,7 +164,7 @@ onMounted(() => {
             v-model="prompt"
             rows="6"
             class="text-control resize-y"
-            placeholder="Pi 接入后，可在此发送 Prompt。"
+            placeholder="发送 Prompt 在后续阶段接入。"
             aria-describedby="runtime-notice"
           ></textarea>
           <div class="mt-4 flex flex-wrap gap-2">
@@ -138,7 +194,7 @@ onMounted(() => {
 
         <section class="panel" aria-labelledby="diagnostics-heading">
           <h2 id="diagnostics-heading" class="section-heading mb-3">诊断</h2>
-          <p class="text-sm text-desk-muted">Pi 未接入，尚无 Runtime 诊断输出。</p>
+          <p class="text-sm text-desk-muted">尚无 Runtime 诊断输出。</p>
         </section>
       </div>
     </div>

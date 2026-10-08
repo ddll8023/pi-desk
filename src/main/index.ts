@@ -1,4 +1,4 @@
-/** 管理唯一桌面窗口、本地资产边界与只读应用信息 IPC；本阶段不启动 Pi。 */
+/** 管理唯一桌面窗口、本地资产边界，以及应用信息与 Runtime 启动 IPC。 */
 import { realpath } from 'node:fs/promises'
 import { extname, isAbsolute, relative, resolve, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -6,6 +6,9 @@ import { app, BrowserWindow, ipcMain, net, protocol, session } from 'electron'
 import type { IpcMainInvokeEvent } from 'electron'
 import { APP_INFO_CHANNEL } from '../shared/desktop-api'
 import type { AppInfoResult } from '../shared/desktop-api'
+import { RUNTIME_START_CHANNEL, RUNTIME_STATUS_CHANNEL } from '../shared/runtime-api'
+import type { RuntimeErrorCode, RuntimeResult } from '../shared/runtime-api'
+import { RuntimeManager } from './runtime-manager'
 
 const DEVELOPMENT_PAGE_URL = 'http://127.0.0.1:5173/'
 const APPLICATION_PAGE_URL = 'app://desktop/index.html'
@@ -30,6 +33,7 @@ const contentTypes: Readonly<Record<string, string>> = {
 }
 
 let mainWindow: BrowserWindow | null = null
+const runtimeManager = new RuntimeManager()
 
 // 必须在 ready 前注册；不赋予绕过 CSP 或运行 Service Worker 的权限。
 protocol.registerSchemesAsPrivileged([
@@ -156,6 +160,48 @@ function registerAppInfoHandler(pageUrl: string): void {
   })
 }
 
+function runtimeFailure(code: RuntimeErrorCode, message: string): RuntimeResult {
+  return { ok: false, error: { code, message } }
+}
+
+/** 只接受项目目录；不接受可执行文件路径、启动参数或任意 RPC 内容。 */
+function registerRuntimeHandlers(pageUrl: string): void {
+  ipcMain.handle(
+    RUNTIME_START_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<RuntimeResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return runtimeFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 1) {
+        return runtimeFailure('INVALID_REQUEST', '启动 Runtime 接口只接受一个项目目录对象。')
+      }
+      const request = args[0]
+      if (typeof request !== 'object' || request === null || Array.isArray(request)) {
+        return runtimeFailure('INVALID_REQUEST', '启动 Runtime 参数格式不正确。')
+      }
+      const fields = request as Record<string, unknown>
+      if (Object.keys(fields).some((key) => key !== 'projectPath')) {
+        return runtimeFailure('INVALID_REQUEST', '启动 Runtime 参数包含未支持的字段。')
+      }
+      const projectPath = fields.projectPath
+      if (typeof projectPath !== 'string') {
+        return runtimeFailure('INVALID_PROJECT_PATH', '项目目录必须是非空的绝对路径。')
+      }
+      return runtimeManager.start(projectPath)
+    }
+  )
+
+  ipcMain.handle(RUNTIME_STATUS_CHANNEL, (event: IpcMainInvokeEvent, ...args: unknown[]): RuntimeResult => {
+    if (!isTrustedCaller(event, pageUrl)) {
+      return runtimeFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+    }
+    if (args.length !== 0) {
+      return runtimeFailure('INVALID_REQUEST', 'Runtime 状态接口不接受参数。')
+    }
+    return runtimeManager.getStatus()
+  })
+}
+
 function restrictSession(): void {
   session.defaultSession.setPermissionCheckHandler(() => false)
   session.defaultSession.setPermissionRequestHandler((_contents, _permission, callback) => {
@@ -201,14 +247,19 @@ async function createWindow(pageUrl: string): Promise<void> {
   await window.loadURL(pageUrl)
 }
 
-// 第一阶段关闭唯一窗口即退出，不建立托盘或隐藏常驻行为。
-app.on('window-all-closed', () => app.quit())
+// 第一阶段关闭唯一窗口即退出，不建立托盘或隐藏常驻行为；
+// 先请求 Pi 结束自身，不等待退出的编排由后续任务补齐。
+app.on('window-all-closed', () => {
+  void runtimeManager.shutdown()
+  app.quit()
+})
 
 app.whenReady().then(async () => {
   const pageUrl = getPageUrl()
   restrictSession()
   registerAssetProtocol()
   registerAppInfoHandler(pageUrl)
+  registerRuntimeHandlers(pageUrl)
   await createWindow(pageUrl)
 }).catch(() => {
   console.error('Pi Desktop 无法加载桌面页面。')

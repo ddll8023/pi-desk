@@ -2,10 +2,11 @@
 /// <reference types="vite/client" />
 
 import type { DesktopApi } from '../../shared/desktop-api'
+import type { RuntimeApi } from '../../shared/runtime-api'
 
 declare global {
   interface Window {
-    readonly desktop?: DesktopApi
+    readonly desktop?: DesktopApi & RuntimeApi
   }
 }
 
