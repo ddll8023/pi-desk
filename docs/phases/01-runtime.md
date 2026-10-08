@@ -25,7 +25,7 @@
 
 **范围**：Electron、Vue 3、TypeScript、Vite、Tailwind CSS、Pinia 的最小配置；主进程入口、sandboxed preload 与统一前端服务入口。明确 contextIsolation 和 sandbox 开启、nodeIntegration 关闭、webSecurity 保持开启；建立固定业务 IPC 入口、调用者校验和本地页面/CSP 边界，不暴露原始 ipcRenderer 或通用系统能力。只建立立即使用的结构，不创建 Session、认证或插件空模块。
 
-**当前实现**：单页展示桌面桥接连接状态与应用信息；桥接连接成功不表示 Pi 就绪。页面输入不持久化，项目目录在启动 Runtime 时由主进程校验。Runtime 启动与状态展示见 P1-03；关闭、发送和 Stop 控件仍禁用，文本、Thinking、工具与 Runtime 诊断区域仅展示空状态，不模拟 Pi 输出。
+**当前实现**：单页展示桌面桥接连接状态与应用信息；桥接连接成功不表示 Pi 就绪。页面输入不持久化，项目目录在启动 Runtime 时由主进程校验。Runtime 启动与状态展示见 P1-03；关闭见 P1-04，发送见 P1-05；Stop 控件仍禁用，文本、Thinking、工具与 Runtime 诊断区域仅展示空状态，不模拟 Pi 输出。
 
 **构建与页面**：配置见根目录 `electron.vite.config.ts`，依赖版本以 `package.json` 为准。
 
@@ -121,7 +121,7 @@
 
 **状态与边界**：状态为 `idle`、`starting`、`ready`、`stopping`、`failed`（`stopping` 与关闭链见 P1-04），就绪快照只投影模型、Thinking 级别、Session 标识、消息数与 streaming 标志。`get_state` 等待期限为 10 秒；单条 stdout 记录上限 8 MiB（按解码后字符数计），超限按协议错误处理；stderr 只保留最近 40 行、单行截断到 400 字符。本项不开放事件订阅、Prompt、Stop 与重启；关闭唯一窗口时先关闭 Pi 的 stdin 请求其自行有序退出，等待退出期限与平台定向进程树终止见 P1-04。
 
-**当前状态**：主进程、受限 preload 方法与最小页面已按上述参数与契约接入启动链；Prompt、Streaming、Tool 与 Stop 仍为禁用空状态。
+**当前状态**：主进程、受限 preload 方法与最小页面已按上述参数与契约接入启动链；Streaming、Tool 与 Stop 仍为禁用空状态。
 
 ### P1-04 Runtime 生命周期
 
@@ -148,6 +148,26 @@ Windows 采用系统 taskkill 定向终止当前受管 Pi 进程树；macOS 建�
 **目标**：从页面提交 prompt，区分接受、拒绝与后续执行状态。
 
 **范围**：输入、受限 preload 方法、主进程参数与调用者校验、结构化请求、`disposition` 处理、请求错误与 busy 状态。invoke 返回请求接受或失败结果，后续运行结果走事件流；区分 Pi 命令失败、通信失败与结果未知，不依赖原样跨 IPC 传递 Error 对象。不把 prompt response 当作完成通知，不自动重发超时请求，不开放任意 RPC JSON 或独立 shell 执行入口。
+
+**接口与错误码**：`window.desktop.sendPrompt(message)` 对应 `desktop:runtime-prompt`，成功数据是 `{ disposition }`，失败为 `{ ok: false, error }`；契约与响应校验见 `src/shared/runtime-api.ts`。入参上限、等待期限与错误分类见开发总览第 5.3、6.2 节。
+
+| 错误码 | 含义 |
+| --- | --- |
+| `FORBIDDEN` | 调用者不是已登记窗口的可信顶层页面 |
+| `INVALID_REQUEST` | 参数量或形状不符合接口约定，或 Prompt 内容为空、超长 |
+| `RUNTIME_NOT_READY` | Runtime 不是 `ready` 的本地状态冲突 |
+| `PROMPT_REJECTED` | Pi 以 `success: false` 拒绝，消息带 Pi 的原因文本 |
+| `RUNTIME_TIMEOUT` | preflight 期限内没有响应，结果未知且不重发 |
+| `RUNTIME_EXITED` | 提交期间管道关闭或进程结束 |
+| `RUNTIME_PROTOCOL_ERROR` | 记录无法解析、契约不符或 disposition 取值非法 |
+| `INTERNAL_ERROR` | 其他内部失败 |
+| `INVALID_RESPONSE`、`BRIDGE_UNAVAILABLE`、`BRIDGE_CALL_FAILED` | Preload 与前端侧的桥接校验失败 |
+
+**busy 与运行中状态**：busy 判定完全以 Pi 的拒绝为准，主进程不做本地 `get_state.isStreaming` 预检，因而不新增 `RUNTIME_BUSY`；本项也不维护本地运行中标志、不新增 `isStreaming` 刷新点，运行中状态与最终收敛由 P1-06 依据事件流（`agent_settled`）负责。请求失败不改写 Runtime 快照，进程真的退出时由退出路径收敛。
+
+**落点**：response 形状识别在 `src/main/pi-protocol.ts`（`toPromptDisposition`），请求编排在 `src/main/runtime-manager.ts`（`prompt`），IPC 注册与调用者校验在 `src/main/index.ts`，受限方法由 `src/preload/index.ts` 暴露，前端入口在 `src/renderer/src/services/runtime.ts` 与 `src/renderer/src/stores/runtime.ts`，页面在 `src/renderer/src/App.vue`。
+
+**当前状态**：页面、preload 方法、主进程校验与错误分类已按上述契约接入。
 
 **依赖**：P1-04。
 
@@ -192,7 +212,7 @@ P1-01 → P1-02 → P1-03 → P1-04 → P1-05 → P1-06 → P1-07
 
 - 完整依赖树锁定、Electron 与固定 Pi/helper 的共同系统要求，以及原生组件的预编译资源、运行库或编译前置条件。
 - Pi 配套资源的 staging 路径、目标文件选择与 package 根/executable 邻接映射已在 P1-02 确定（见本文 P1-02 段与开发总览第 4 节）；正式安装包沿用 ASAR 外整体资源方向，发行配置在相应步骤确定。
-- Runtime 操作的临时投影、订阅序列基点、通知批次与应用确认的具体契约，以及缓存预算和请求期限；Runtime 启动与状态查询的 IPC 业务结果已在 P1-03 确定。
+- Runtime 操作的临时投影、订阅序列基点、通知批次与应用确认的具体契约，以及缓存预算和请求期限；Runtime 启动与状态查询的 IPC 业务结果已在 P1-03 确定，Prompt 请求的入参上限、等待期限与错误分类已在 P1-05 确定（见开发总览第 5.3、6.2 节）。
 - 关闭期限与平台定向终止方式已在 P1-04 确定（见 P1-04 段与开发总览第 6.2 节）；macOS 进程组分支只在 macOS 主机上生效，保持尽力回收边界。
 - Pi/helper 的运行库需求，以及挂起重启与延迟清理对本机环境的影响。
 - 现有模型是否可选；缺少凭据时如何给出清晰提示，不能转为提前开发登录功能。
