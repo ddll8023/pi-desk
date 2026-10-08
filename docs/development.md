@@ -192,11 +192,11 @@ Desktop、固定 Pi 和配套资源作为一致发行版本更新，不在运行
 pi --mode rpc --no-session
 ```
 
-第一阶段由主进程固定完整启动参数，页面不能覆盖：`--mode rpc`、`--no-session`、`--no-approve`、`--no-extensions`、`--no-skills`、`--no-prompt-templates`、`--no-mcp`，以及按平台选择的 `--tools`（Windows `read,powershell,edit,write`；macOS `read,bash,edit,write`）。环境继承父进程并追加 `PI_SKIP_VERSION_CHECK=1`；不设置 `PI_OFFLINE`，因为 RPC 启动会在后台刷新模型目录；也不设置 `PI_PACKAGE_DIR`，因为包资源与可执行文件同层。
+主进程固定完整启动参数，页面不能覆盖：`--mode rpc`、`--no-approve`、`--no-extensions`、`--no-skills`、`--no-prompt-templates`、`--no-mcp`、按平台选择的 `--tools`（Windows `read,powershell,edit,write`；macOS `read,bash,edit,write`）、会话目录 `--session-dir <dir>`，以及恢复已有会话时的 `--session-id <id>`。环境继承父进程并追加 `PI_SKIP_VERSION_CHECK=1`；不设置 `PI_OFFLINE`，因为 RPC 启动会在后台刷新模型目录；也不设置 `PI_PACKAGE_DIR`，因为包资源与可执行文件同层。
 
 Electron 主进程设置 `cwd` 为用户选择的项目根目录，并分别建立 stdin、stdout、stderr 管道。不启动 HTTP 或 localhost TCP RPC 服务，不将协议暴露到网络。
 
-`--no-session` 表示内存 Session，仅用于第一阶段的临时 Runtime 页面。正式 Desktop 继续使用 Pi 自己的持久化 Session。
+第一阶段用 `--no-session` 跑内存 Session；第二阶段起不再传该参数，Runtime 使用 Pi 自己的持久化 Session，会话位置、列表与恢复方式见第 6.2 节。
 
 RPC 启动并不自动发送 ready 事件，也不输出 JSON mode 的 Session header；使用 `get_state` 的成功响应确认协议可用，不依赖固定等待。
 
@@ -387,6 +387,15 @@ Pi 管道背压与 UI 通知背压分开处理：采用有界批次与渲染端�
 - 错误码：本阶段新增 `INVALID_PROJECT_PATH`、`PROJECT_SWITCH_BLOCKED`、`PROJECT_STORAGE_FAILED`，与既有桥接错误码共用结果结构。
 - 页面只保存展示副本，选择项目不会自动启动 Runtime；主进程读取项目列表时不检查项目目录是否仍然存在。
 
+#### Session 与恢复
+
+- 会话文件由 Pi 管理：根目录是 `<agent-dir>/sessions/`（`agent-dir` 由 `PI_CODING_AGENT_DIR` 指定，默认 `~/.pi/agent`），按工作目录分组为 `--<路径 munged>--/`（去掉路径开头的分隔符后把 `/`、`\`、`:` 换成 `-`），文件名是 `<ISO 时间>_<会话 id>.jsonl`，同名 `.jsonl.timings.json` 侧车不参与列表。主进程显式传 `--session-dir` 指定该根目录，不读取 `PI_CODING_AGENT_SESSION_DIR` 与 `sessionDir` 设置。
+- 列表只读会话文件：每轮 `readdir` 后按文件大小与修改时间命中缓存，未命中时做一次 256 KiB 有界读取，取首行头部（`type`、`id`、`timestamp`、`cwd`）与首条用户消息开头（预览截断为 120 字符，取不到为 null）。条目字段为 `sessionId`、`createdAt`、`updatedAt`、`sizeBytes` 与预览，按最后修改时间降序，最多 100 条；超出的条数与「头部 `cwd` 与当前项目不符或无法解析」的文件数量分别计数，界面如实标示。
+- 分组目录名会歧义（`H:\a-b` 与 `H:\a\b` 相同），因此会话归属以头部 `cwd` 与当前项目规范路径的比较结果为准；Windows 折叠大小写，其他平台严格比较。
+- 打开与新建一律重启 Runtime：先校验目标会话存在且属于当前项目，再复用本节关闭链结束旧 Runtime，确认回到 `idle` 后以 `--session-id <id>`（恢复）或不带该参数（新建）启动；请求的会话与已就绪 Runtime 一致时幂等返回。Runtime 处于 `starting`/`stopping`，或 `ready` 且 `isStreaming` 为真而请求未带 `allowInterrupt` 时返回 `SESSION_SWITCH_BLOCKED` 且不中断任何操作；不排队、不重放。不使用 RPC 的 `switch_session` 与 `new_session`，保持一个 Runtime 代际对应一个会话。
+- 恢复会话时在发布就绪前请求 `get_messages`，把历史消息按整条替换规则灌入临时投影作为基准；读取超时或失败按启动失败处理，不显示不完整的历史，截断与上限沿用临时投影契约。
+- 通道：`desktop:session-list`（零参数，基于当前项目）与 `desktop:session-open`（只接受 `{ sessionId, allowInterrupt }`，`sessionId` 为 null 表示新建）。新增错误码 `SESSION_NOT_FOUND`（目标会话不存在，或 Pi 实际打开的会话与请求不一致）与 `SESSION_SWITCH_BLOCKED`；其余复用 Runtime 错误码族。会话文件路径不跨 IPC 交给页面。
+
 #### 关闭、异常与进程树
 
 正常关闭停止接收新业务请求，保留内部取消路径；仅当事件流显示仍在运行（`isStreaming`）时先对活动操作发起 abort，并最多等待 3 000 毫秒——超时或取消被拒都不阻断后续链路——然后关闭 stdin、继续消费管道并等待退出，超时后执行平台兜底。异常退出显示原因和结果不确定性，由用户显式重新启动，不自动重放 prompt。
@@ -473,7 +482,7 @@ PowerShell 解析优先 `pwsh.exe`，其次 `powershell.exe`；不存在时报�
 | [第四阶段：Authentication](phases/04-authentication.md) | Provider、API Key、OAuth、Login/Logout、状态；仅在必要时增加复用官方认证实现的 standalone Helper |
 | [第五阶段：Desktop 产品能力](phases/05-desktop-features.md) | Auto Update、Crash Recovery、Recent Projects 完善、快捷键、托盘、通知、多窗口 |
 
-Project 的基础属性为 `id`、`name`、`path`、`lastOpenedAt`；本地配置位置、路径归一化、列表上限与切换编排见第 6.2 节。采用轻量配置存储；Session 和消息仍交给 Pi，不创建平行数据模型与数据库。
+Project 的基础属性为 `id`、`name`、`path`、`lastOpenedAt`；本地配置位置、路径归一化、列表上限与切换编排见第 6.2 节。Session 和消息仍交给 Pi，不创建平行数据模型与数据库；会话目录、列表与恢复方式也在第 6.2 节。
 
 当前 RPC command union 有 `new_session`、`switch_session`、`get_messages`、`fork` 等能力，但没有 Session 列表命令；第二阶段需单独确定官方 Session 列表能力的接入方式，不能自行假设存在 `list_sessions`。
 
@@ -489,7 +498,7 @@ Project 的基础属性为 `id`、`name`、`path`、`lastOpenedAt`；本地配�
 4. Extension UI 进入展示投影的边界，以及后续阶段的消息历史读取方式；临时消息投影与通知确认契约已在 P1-06 确定，工具执行进入展示投影的边界与中止契约已在 P1-07 确定（均见第 6.2 节），管道边界在 P1-03 确定，请求期限在 P1-05 确定。不建立平行 Session 数据库。
 5. 不同启动 profile 下现有模型与凭据的可用性（启动参数已在 P1-03 确定）；只读取必要配置，不输出秘密。
 6. Windows 与 macOS 的进程树终止已按平台实现（见 6.2 节）；macOS 分支只在 macOS 主机上生效。保留尽力回收边界，不以关闭主 Pi 进程等同于完整进程树回收。
-7. 第二阶段 Session 列表的接入方式，以及跨项目 Session 切换对 cwd 与资源重建的影响。
+7. 第二阶段 Session 列表的接入方式（读 Pi 会话文件的元数据）与恢复方式（重启式切换）已在 P2-02 确定（见 6.2 节）；跨项目复用同一会话文件（手工移动会话文件或项目目录改名）对 cwd 与资源重建的影响仍待核实。
 
 这些问题按相应阶段解决，不把后续完整能力变成第一阶段的提前实现范围。
 

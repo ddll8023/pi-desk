@@ -100,7 +100,7 @@
 
 **依赖**：P1-01、P1-02。
 
-**启动参数与环境**：argv 与 cwd 全部由主进程固定，页面只能提供项目目录（完整参数与环境变量见开发总览第 5.1 节）。本项确定 `--tools` 按平台选择：Windows `read,powershell,edit,write`，macOS `read,bash,edit,write`（`--tools` 替换默认集合）。cwd 是主进程校验过的绝对目录，可执行文件只从 staging 根定位，不查 PATH。RPC 模式没有可用模型时 Pi 不进入协议就直接以退出码 1 结束，错误只在 stderr，因此就绪判定必须同时消费 stderr 与退出事件。
+**启动参数与环境**：argv 与 cwd 全部由主进程固定，页面只能提供项目目录（完整参数与环境变量见开发总览第 5.1 节）。本项确定 `--tools` 按平台选择：Windows `read,powershell,edit,write`，macOS `read,bash,edit,write`（`--tools` 替换默认集合）。P2-02 起不再传 `--no-session`，并追加 `--session-dir` 与恢复会话时的 `--session-id`（见开发总览第 5.1、6.2 节）。cwd 是主进程校验过的绝对目录，可执行文件只从 staging 根定位，不查 PATH。RPC 模式没有可用模型时 Pi 不进入协议就直接以退出码 1 结束，错误只在 stderr，因此就绪判定必须同时消费 stderr 与退出事件。
 
 **接口与错误码**：`window.desktop.startRuntime(projectPath)` 对应 `desktop:runtime-start`，`window.desktop.getRuntimeStatus()` 对应 `desktop:runtime-status`；两者都返回 `{ ok: true, data }` 或 `{ ok: false, error }`，`data` 是 Runtime 快照。契约与响应校验见 `src/shared/runtime-api.ts`。
 
@@ -183,7 +183,7 @@ Windows 采用系统 taskkill 定向终止当前受管 Pi 进程树；macOS 建�
 
 **决策**：投影重建展示片段而不是转发原始事件；批次携带单调序号，渲染端以应用确认控制未确认窗口，遇到序号缺口、长度不变式不符或重同步标记时以快照全量重同步，不猜测补齐；状态变化与投影批次保持两条独立通道；投影只保留当前 Runtime 代际，Runtime 结束即清空；busy 由 `agent_start`/`agent_settled` 收敛，为 `RuntimeInfo.isStreaming` 提供事件来源。非 `user`/`assistant` 角色的消息不进入投影，工具执行结果属 P1-07。
 
-**落点**：投影状态机在 `src/main/message-projection.ts`，批次订阅与状态提示合并在 `src/main/runtime-manager.ts`，IPC 注册与校验在 `src/main/index.ts`，受限方法由 `src/preload/index.ts` 暴露，前端入口在 `src/renderer/src/services/runtime.ts` 与 `src/renderer/src/stores/runtime.ts`，页面在 `src/renderer/src/App.vue`。
+**落点**：投影状态机在 `src/main/message-projection.ts`（P2-02 起同一状态机也用于以历史消息初始化投影），批次订阅与状态提示合并在 `src/main/runtime-manager.ts`，IPC 注册与校验在 `src/main/index.ts`，受限方法由 `src/preload/index.ts` 暴露，前端入口在 `src/renderer/src/services/runtime.ts` 与 `src/renderer/src/stores/runtime.ts`，页面在 `src/renderer/src/App.vue`。
 
 **当前状态**：页面、preload 方法、主进程投影与批次、渲染端同步与截断标示已按上述契约接入；工具面板见 P1-07，诊断面板仍为空状态。
 

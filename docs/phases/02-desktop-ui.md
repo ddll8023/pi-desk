@@ -34,7 +34,11 @@
 
 **范围**：先核实并确定官方 Session 列表能力的接入路径，再接入创建、恢复、读取 Messages 和继续对话。列表与历史来自 Pi 管理的数据，Desktop 不复制持久化消息库。处理被 Extension 取消的切换结果及 Session 的实际 cwd。
 
-**依赖**：P2-01。当前 RPC 没有列表命令，不能自行发明 `list_sessions`；接入方式是本任务的开放设计问题。
+**依赖**：P2-01。
+
+**当前实现**：列表来自 Pi 管理的会话文件（只读头部元数据与有界预览），主进程提供 `desktop:session-list` 与 `desktop:session-open`；打开与新建一律结束旧 Runtime 后带 `--session-id` 或不带该参数重启，恢复后就绪前用 `get_messages` 初始化投影。存储位置、分组规则、列表上限、切换守门与错误码见开发总览第 6.2 节。
+
+**决策**：核实结果是本版本 RPC 没有列举会话的命令（`Session` 段只有 `get_session_stats`、`switch_session`、`fork`、`clone`、`get_entries`、`get_tree` 等），因此按官方文件布局读会话元数据，不发明 RPC 命令；不在同一进程内使用 `switch_session`，保持一个 Runtime 代际对应一个会话；会话归属以头部 `cwd` 判定，分组目录名歧义只作为初筛。
 
 ### P2-03 Chat 布局
 
@@ -85,7 +89,7 @@ P2-01 → P2-02 → P2-03 → P2-04 → P2-05 → P2-06
 
 ## 待决策事项
 
-- Pi Session 列表的官方能力接入方式，以及 Session cwd 与 Project 不匹配时的交互。
+- Session 列表接入方式与 cwd 不匹配的交互已在 P2-02 确定（见开发总览第 6.2 节）；跨项目复用同一会话文件的影响仍待核实。
 - 活动操作期间切换 Pi Session 的用户确认与取消行为（Project 切换已在 P2-01 确定，见开发总览第 6.2 节）。
 - Desktop 配置的窗口尺寸与位置恢复策略（配置文件位置与持久化所有者已在 P2-01 确定，见开发总览第 6.2 节）。
 - 主界面视觉方向、消息排版和 Tool Card 非文本内容的基础呈现方式。
