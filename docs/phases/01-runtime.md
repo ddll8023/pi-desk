@@ -4,14 +4,16 @@
 
 ## 目标与边界
 
-打通 `Tauri → Pi RPC sidecar → prompt → streaming → tool → abort`。仅一个活动项目、一个 Pi Runtime，使用最小页面，不开发完整 Desktop UI。
+打通 `Vue → preload → Electron Main → Pi RPC sidecar → prompt → streaming → tool → abort`。仅一个活动项目、一个 Pi Runtime，使用最小页面，不开发完整 Desktop UI。主进程拥有 Runtime 和临时消息投影，渲染进程只持有展示状态，不建立平行 Session 数据库。
 
 架构与协议依据沿用开发总览。以下是任务范围与依赖，不是一次性实施授权；实际源文件、依赖和操作在每项开发前确定。
 
 ## 前置事项
 
-- 本机尚未发现 Rust 工具链，环境安装单独取得授权，不随创建骨架自动执行。
-- Pi 使用固定 standalone 版本，不需要先安装 Bun 或自行编译 Pi。
+- 本机 Node.js/npm 用于开发；工具版本与直接依赖声明见根目录 `package.json`，系统和运行库约束见开发总览第 3 节。依赖安装不包含 Electron 二进制；本地开发启动前需显式执行 `node node_modules/electron/install.js`。Electron 自带 Node.js 与 Chromium，不要求安装后的用户预装 Node.js 或 WebView2；官方系统家族支持不能代替 Windows build 18363 的具体兼容性判断。
+- 不需要 Rust 工具链；Pi 使用固定 standalone 版本，不需要先安装 Bun 或自行编译 Pi。
+- 当前没有 C++ 编译链，第一阶段避免需要本地编译的原生依赖。若出现 node-gyp 编译需求，MSVC、Windows SDK 和所需 Python 属于新增前置条件，安装单独取得授权。
+- Pi/helper 的运行库需求按目标核实，不依赖待清理的 VC++ DLL；本机存在挂起重启与延迟卸载清理，不能将残留文件视为可靠环境条件。
 - 复用已有模型配置与凭据，不读取并输出认证秘密，不开发 Authentication。
 - 启动显式拒绝项目资源信任，关闭 Extensions、Skills、Prompt Templates、MCP；保留总览中说明的非沙箱边界。
 
@@ -21,7 +23,47 @@
 
 **目标**：建立桌面应用、前端入口与单页 Runtime 界面骨架。
 
-**范围**：Tauri 2、Vue 3、TypeScript、Vite、Tailwind CSS、Pinia 的最小配置；Rust command 注册入口与统一前端 IPC 服务入口。只建立立即使用的结构，不创建 Session、认证或插件空模块。
+**范围**：Electron、Vue 3、TypeScript、Vite、Tailwind CSS、Pinia 的最小配置；主进程入口、sandboxed preload 与统一前端服务入口。明确 contextIsolation 和 sandbox 开启、nodeIntegration 关闭、webSecurity 保持开启；建立固定业务 IPC 入口、调用者校验和本地页面/CSP 边界，不暴露原始 ipcRenderer 或通用系统能力。只建立立即使用的结构，不创建 Session、认证或插件空模块。
+
+**当前实现**：单页展示桌面桥接连接状态与应用信息；桥接连接成功不表示 Pi 就绪。项目目录与 Prompt 只保留本页输入，不检查目录、不持久化。启动、关闭、发送和 Stop 控件禁用；文本、Thinking、工具与 Runtime 诊断区域仅展示空状态，不模拟 Pi 输出。
+
+**构建与页面**：配置见根目录 `electron.vite.config.ts`，依赖版本以 `package.json` 为准。
+
+- Main 输出目标为 `out/main/index.cjs`；Electron 与 Node 内建模块由运行环境提供。
+- Preload 输出目标为单个 `out/preload/index.cjs`，本地桥接代码全部打入该文件，只引用沙箱允许的 Electron API，不拆分本地模块或输出 ESM preload。
+- Renderer 输出目标为 `out/renderer/`；使用浏览器类型环境，不引入 Node 全局能力。
+- 开发服务器固定为 `http://127.0.0.1:5173/`，严格端口；主进程只在非正式包且存在 `ELECTRON_RENDERER_URL` 时接受该精确地址。
+- 本地构建页面使用 `app://desktop/index.html`，协议仅映射 Renderer 产物中的 `index.html` 与 `assets/` 下的 HTML、JavaScript、CSS，拒绝目录穿越及目录外符号链接目标，不提供项目文件入口。
+- 开发 CSP 仅额外允许样式注入与固定 HMR WebSocket 连接；生产 CSP 不允许内联样式、任意网络连接或 `unsafe-eval`。系统权限、下载、新窗口和非可信 frame 导航默认拒绝。
+
+**当前接口**：`window.desktop.getAppInfo()` 无参数，内部使用固定 channel `desktop:get-app-info`。主进程校验已登记窗口、对应 `webContents`、顶层 frame 和精确页面地址，并拒绝额外 IPC 参数；不接受任意 channel、RPC 或系统命令。
+
+成功结果为 `{ ok: true, data }`，`data` 的 `appVersion`、`electronVersion`、`platform`、`arch` 均为字符串。失败结果为 `{ ok: false, error: { code, message } }`。契约定义与响应校验见 `src/shared/desktop-api.ts`。
+
+| 错误码 | 含义 |
+| --- | --- |
+| `FORBIDDEN` | 调用者不是已登记窗口的可信顶层页面 |
+| `INVALID_REQUEST` | 主进程收到额外 IPC 参数 |
+| `INTERNAL_ERROR` | 主进程无法取得应用信息 |
+| `INVALID_RESPONSE` | Preload 收到不符合应用信息契约的响应 |
+| `BRIDGE_UNAVAILABLE` | 前端没有可用的桌面桥接方法 |
+| `BRIDGE_CALL_FAILED` | 前端调用桥接时发生异常或 Promise 拒绝 |
+
+组件通过 `src/renderer/src/services/desktop.ts` 调用接口；底层 `invoke` 仍可能拒绝，前端服务将其转换为 `BRIDGE_CALL_FAILED`，不向展示层传递底层错误对象或堆栈。Pinia 仅保存桥接初始化结果，没有 Runtime 所有权或消息数据库；当前接口没有事件订阅。
+
+**项目脚本**：以下 npm 脚本对应关系以根目录 `package.json` 为准，从项目根目录调用；`scripts/start-dev.cmd` 是对 `npm run dev` 的包装入口。
+
+| 调用 | 脚本内容 |
+| --- | --- |
+| `npm run dev` | `electron-vite dev` |
+| `npm run build` | `electron-vite build` |
+| `npm run start` | `electron-vite preview` |
+| `npm run typecheck:node` | `tsc --noEmit -p tsconfig.node.json` |
+| `npm run typecheck:web` | `vue-tsc --noEmit -p tsconfig.web.json` |
+| `npm run typecheck` | `npm run typecheck:node && npm run typecheck:web` |
+| `scripts/start-dev.cmd` | 定位项目根后执行 `npm run dev`；前置条件缺失时提示并退出，不自动安装或下载 |
+
+脚本说明不构成执行授权；依赖安装、检查、测试、构建、启动和重启仍需单独明确授权。
 
 **依赖**：无其他开发任务依赖；环境准备与依赖安装仍为独立操作。
 
@@ -29,15 +71,15 @@
 
 **目标**：为 sidecar 启动提供固定且匹配目标平台的 Runtime 文件。
 
-**范围**：版本与预期 SHA-256 固定、官方发布包下载校验流程、三目标平台映射、externalBin 命名、配套资源保留与启动所需路径。区分开发 host 与构建 target，按实际目标准备文件，不默认下载全部平台。
+**范围**：版本与预期 SHA-256 固定、官方发布包下载校验流程、三目标平台映射、开发 staging 根与资源定位。完整保留官方文件名和相对目录，分别满足 PI_PACKAGE_DIR 与 executable 邻接 loader，不只复制可执行文件。按总览的 electron-builder 方向设计 ASAR 外整体复制，开发和正式包保持相同内部布局。区分开发 host 与构建 target，按实际目标准备文件，不默认下载全部平台，不从 PATH 调用全局 Pi。
 
-**依赖**：P1-01 的项目配置位置。资源布局先解决本阶段所需路径，不擅自完成所有后续发行配置。
+**依赖**：P1-01 的项目配置位置。本项确定启动所需准确路径，不擅自完成签名、公证、自动更新或全部平台安装包配置。
 
 ### P1-03 RPC 启动与就绪
 
-**目标**：Rust 以项目目录为 cwd 启动官方 Pi sidecar，并取得真实 RPC 状态。
+**目标**：Electron 主进程以项目目录为 cwd 启动官方 Pi sidecar，并取得真实 RPC 状态。
 
-**范围**：固定进程与启动参数、独立 stdin/stdout/stderr、异步 I/O、LF 分帧、唯一 request id、pending 请求匹配、错误记录分类；发送 `get_state` 并据响应进入就绪状态。最小页面可启动 Runtime 并显示状态。
+**范围**：直接使用 child_process.spawn 启动固定 executable，不经过 shell，也不增加 utilityProcess 管理层。建立独立 stdin/stdout/stderr、增量 UTF-8 解码和 LF 分帧；stdout/stderr 持续消费，stdin 由单一 writer 串行写入完整记录并处理背压。主进程生成 Pi request id 并匹配 pending 响应，与 Electron invoke 的响应关联分开；区分协议与诊断错误。发送 `get_state` 并据响应进入就绪状态。最小页面经受限 preload 方法启动 Runtime 并显示状态。
 
 **依赖**：P1-01、P1-02。
 
@@ -45,9 +87,11 @@
 
 **目标**：明确活动进程和管道的所有者，支持可控的关闭与重新启动。
 
-**范围**：重复启动限制、初始化失败清理、持续 stderr 消费、有界诊断、异常退出通知、pending 请求失败收敛、stdin 正常关闭、退出等待与超时终止。切换目录需结束旧 Runtime，旧进程事件不得覆盖新进程状态。
+**范围**：重复启动限制、初始化失败清理、持续 stderr 消费、有界诊断、异常退出通知、pending 请求失败收敛、stdin 正常关闭、退出等待与超时终止。切换目录需结束旧 Runtime；采用 Runtime 代际隔离旧进程事件。关闭唯一业务窗口或失去唯一可信控制界面时，主进程发起可控关闭，不默认留下后台 Agent。
 
-本项先完善无 Agent 操作时的关闭链；有活动操作时的取消由 P1-07 补齐。不自动重放 prompt，不将关闭主进程宣传为已经解决所有派生进程回收。
+Windows 采用系统 taskkill 定向终止当前受管 Pi 进程树；macOS 建立独立进程组并在必要时终止该组，不通过 unref 解除应用管理。只处理主进程自身管理对象，不接受任意 PID 或按进程名批量终止。根进程已退出、主进程崩溃或派生进程脱离后的清理不作完整保证，不为此引入 Job Objects 原生绑定或专用 helper。
+
+本项先完善无 Agent 操作时的关闭链；有活动操作时的取消由 P1-07 补齐。不自动重放 prompt，不将关闭 Pi 主进程宣传为已经解决所有派生进程回收。
 
 **依赖**：P1-03。
 
@@ -55,7 +99,7 @@
 
 **目标**：从页面提交 prompt，区分接受、拒绝与后续执行状态。
 
-**范围**：输入、发送、Rust 参数校验、结构化请求、`disposition` 处理、请求错误与 busy 状态。不把 prompt response 当作完成通知，不自动重发超时请求，不开放任意 RPC JSON 或独立 shell 执行入口。
+**范围**：输入、受限 preload 方法、主进程参数与调用者校验、结构化请求、`disposition` 处理、请求错误与 busy 状态。invoke 返回请求接受或失败结果，后续运行结果走事件流；区分 Pi 命令失败、通信失败与结果未知，不依赖原样跨 IPC 传递 Error 对象。不把 prompt response 当作完成通知，不自动重发超时请求，不开放任意 RPC JSON 或独立 shell 执行入口。
 
 **依赖**：P1-04。
 
@@ -63,7 +107,9 @@
 
 **目标**：实时展示 assistant 文本和 Thinking，保持消息重建一致。
 
-**范围**：在发送前订阅事件；按内容块重建增量，以块结束内容与完整 `message_end.message` 校正；处理用户消息、执行错误和最终消息，使用 `agent_settled` 收敛本轮 busy 状态。Rust 定向转发，前端释放监听并隔离旧 Runtime 事件。
+**范围**：在发送前完成事件订阅；主进程按内容块重建临时投影，以块结束内容与完整 `message_end.message` 校正，处理用户消息、执行错误和最终消息，使用 `agent_settled` 收敛 busy 状态。渲染进程展示定向更新、释放监听并隔离旧 Runtime 事件；重新订阅时取得投影与序列基点。
+
+采用有界批次和渲染端应用确认控制未确认通知，落后时从投影重新同步，不无限缓存原始事件，也不为等 UI 暂停消费 Pi stdout。展示更新按语义合并，不丢弃最终消息、错误和运行终态；展示超限明确标示截断，协议超限或失同步明确报错，不能伪装为完整内容。第一阶段不增加 MessagePort 通道。
 
 **依赖**：P1-05。
 
@@ -71,7 +117,7 @@
 
 **目标**：展示工具执行生命周期，并能停止当前 Agent 操作而保留 Runtime。
 
-**范围**：按 `toolCallId` 关联工具名称、参数、更新、结果、错误；采用简单结构化展示，保留非文本结果。加入 `abort`、停止中状态、终态收敛，并补齐运行中关闭 Runtime 的取消路径。并发查询与取消不能被长时间持锁阻塞。
+**范围**：主进程投影按 `toolCallId` 关联工具名称、参数、更新、结果、错误；不将所有 partialResult 一律追加，最终以结束结果校正。前端采用简单结构化展示，保留非文本结果，不将模型或工具输出作为可执行 HTML。加入受限 abort 操作、停止中状态与终态收敛，补齐运行中关闭 Runtime 的取消路径；停止接收新业务请求后仍保留内部取消路径，不无限等待 abort 才进入退出兜底。并发查询与取消不能被长时间持锁阻塞。
 
 不开放 steering / follow-up 排队输入；不把 `abort` 当作自动清空队列。完整 Tool Card、专属工具 UI 和 Diff 留在后续阶段。
 
@@ -92,12 +138,13 @@ P1-01 → P1-02 → P1-03 → P1-04 → P1-05 → P1-06 → P1-07
 - Authentication、Extension UI、正式 Project Trust 对话。
 - Skills、Extensions、Packages、MCP 的产品接入。
 - Git、Terminal、文件管理器、多窗口、多 Agent、复杂调度。
-- 自动重启重放、完整崩溃恢复、OS 沙箱。
+- 自动重启重放、完整崩溃恢复、完整进程树回收保证、Pi OS 权限沙箱。
 
 ## 待决策事项
 
-- 创建项目时的 package manager 与实际依赖版本。
-- Pi 配套资源的开发目录及正式安装包布局，分别处理 package 根目录与 executable 邻接 loader。
-- 管道与前端通知的有界缓存、请求期限和事件路由细节。
-- 正常关闭超时兜底与 Windows/macOS 派生进程清理机制。
+- 完整依赖树锁定、Electron 与固定 Pi/helper 的共同系统要求，以及原生组件的预编译资源、运行库或编译前置条件。
+- Pi 配套资源的准确 staging 路径、package 根与 executable 邻接映射；正式安装包沿用 ASAR 外整体资源方向，发行配置在相应步骤确定。
+- Runtime 操作的 IPC 业务结果、临时投影、订阅序列基点、通知批次与应用确认的具体契约，以及缓存预算和请求期限。
+- 正常关闭期限、Windows 定向进程树终止与 macOS 进程组的实现细节，保持尽力回收边界。
+- Pi/helper 的运行库需求，以及挂起重启与延迟清理对本机环境的影响。
 - 现有模型是否可选；缺少凭据时如何给出清晰提示，不能转为提前开发登录功能。

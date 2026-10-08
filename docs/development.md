@@ -6,10 +6,12 @@
 
 确定使用：
 
-- 桌面平台：Tauri 2。
+- 桌面平台：Electron。
 - 前端：Vue 3、TypeScript、Vite、Tailwind CSS、Pinia。
 - Agent Runtime：官方 Pi standalone binary，以独立 sidecar 进程运行。
-- 通信：Rust 与 Pi 通过 stdin/stdout 交换 JSONL；Vue 通过 Tauri command/event 与 Rust 通信。
+- 通信：Electron 主进程与 Pi 通过 stdin/stdout 交换 JSONL；Vue 通过受限的 contextBridge preload API 访问主进程，区分 IPC 请求响应与定向事件流。
+
+主进程直接使用 Node.js `child_process.spawn` 管理 Pi。打包采用 electron-builder 的方向，应用代码进入 ASAR，Pi 与配套资源整体放在 ASAR 外；实际依赖版本和发行配置在相应开发阶段确定。
 
 不重新实现 Agent Core，不以 fork Pi 为主要开发方式，不以 Node.js SDK 直接嵌入为主方案。安装后的应用携带匹配平台的 Pi Runtime，不要求用户预装 Node.js、npm、Bun 或 Pi CLI。
 
@@ -18,10 +20,13 @@
 ## 2. 架构与职责
 
 ```text
-Vue 3 Desktop UI
-        │ Tauri command / event
+Vue 3 Desktop UI / Pinia
+        │ 固定业务方法 / 事件订阅
         ▼
-Tauri Rust Core
+Sandboxed preload / contextBridge
+        │ IPC 请求响应 / 定向事件流
+        ▼
+Electron Main
         │ stdin / stdout · JSONL RPC
         ▼
 Pi standalone binary
@@ -29,15 +34,21 @@ Pi standalone binary
 Pi Agent Runtime
 ```
 
-### Vue
+### Vue 渲染进程
 
-负责界面、用户输入、消息展示、交互状态和 Desktop UI 偏好。不得直接启动 Pi，不得直接调用 shell plugin 管理进程。
+负责界面、用户输入、消息展示、交互状态和 Desktop UI 偏好。不得直接启动 Pi，不拥有 Node.js、通用 shell 或全域文件访问能力。
 
-Pinia 保存当前 WebView 所需的状态，不承担 Agent Runtime 生命周期，也不建立平行聊天历史数据库。
+Pinia 保存当前渲染进程所需的展示状态，不承担 Agent Runtime 生命周期，也不建立平行聊天历史数据库。
 
-### Rust
+### Preload
 
-负责 Pi 进程管理、工作目录、管道 I/O、协议解析、请求关联、事件转发、异常退出和资源释放。对来自 Vue 的参数重新校验，不接受任意可执行文件路径、启动参数或 shell 命令作为通用进程控制接口。
+在隔离上下文中通过 contextBridge 暴露固定业务方法与事件订阅。只做 IPC 薄桥接，不持有 Runtime、凭据或文件访问职责，不暴露 ipcRenderer、任意 channel 或 Electron event 对象。事件订阅提供释放能力。
+
+### Electron 主进程
+
+负责窗口和调用者校验、Pi 进程管理、工作目录、管道 I/O、协议解析、请求关联、临时消息投影、定向通知、异常退出和资源释放。对来自 Vue 的参数重新校验，不接受任意可执行文件路径、启动参数、环境变量或 shell 命令作为通用进程控制接口。
+
+临时消息投影仅用于当前运行的增量重建、工具关联、状态收敛与渲染端重新同步，采用有界内存，不保存平行 Session 或聊天数据库。Pi 完整消息与持久化 Session 仍是权威来源。
 
 ### Pi
 
@@ -47,24 +58,34 @@ Desktop 仅维护自己的数据：最近项目、窗口尺寸、Sidebar 状态�
 
 ## 3. 当前项目与环境
 
-项目根目录：`/Users/mima1234/Desktop/code/pi-desk`。
+项目根目录：`H:\code\pi-desk`。
 
-项目从空目录开始，没有既有 `package.json`、Cargo 配置、Tauri 配置、组件、Store 或脚本可复用。业务代码和依赖版本尚未建立。
+仓库包含开发文档、Electron/Vue 最小骨架、三端构建与 TypeScript 配置、统一前端服务入口和展示状态 Store。当前页面通过受限 preload API 读取应用信息；Pi 尚未接入，Runtime 控件保持禁用，不读取项目或持久化消息。
+
+开发使用 npm，工具版本由 `package.json` 的 `packageManager` 字段声明，直接依赖使用精确版本。`package.json` 是依赖声明的维护位置，完整依赖树由安装生成的 `package-lock.json` 固定，不手写锁文件。依赖安装属于独立授权操作。
 
 已确认的本机环境：
 
 | 项目 | 状态 |
 | --- | --- |
-| 系统与架构 | macOS、Apple Silicon / arm64 |
-| Node.js、npm、Git | PATH 中存在 |
-| Xcode Command Line Tools | 已发现安装目录 |
-| Rust、Cargo、rustup | PATH 中未发现，常规 `~/.cargo`、`~/.rustup` 目录不存在 |
-| Bun | PATH 中未发现 |
+| 系统与架构 | Windows 10 专业版（build 18363）、x64 |
+| Node.js | `24.18.0` |
+| npm | `11.16.0` |
+| Git | `2.55.0.windows.3` |
+| winget | 可用 |
+| Rust、Cargo、rustup、Bun | 未安装，不作为本方案前置条件 |
+| C++ 编译链 | Visual Studio Build Tools、MSVC、Windows SDK 已卸载，当前没有该编译链 |
+| VC++ 运行时与重启 | 已执行卸载，部分登记键和 DLL 存在延迟清理；系统有挂起重启操作 |
+| WebView2 Runtime | 已安装，与 Electron 自带 Chromium 无关 |
 | 本机 Pi npm 包 | `@earendil-works/pi-coding-agent`，版本 `1.0.4` |
 
-存在工具路径不等于版本和开发功能已经确认。Rust 工具链是本机 Tauri 开发的环境阻塞；准备环境须另行明确授权。Bun 不阻塞使用官方 standalone 发布包。
+本机 Node.js/npm 用于开发与打包；安装后的 Electron 使用自身携带的 Node.js 与 Chromium，Pi standalone 也不依赖全局 Node.js。全局 Node.js 版本不是 Electron 的运行时版本。
 
-## 4. Pi binary 与 Tauri 打包事实
+第一阶段避免需要本地编译的原生依赖，使用官方预编译 Electron 与 Pi，不自行编译二者。若后续依赖需要 node-gyp 编译，必须重新准备 MSVC、Windows SDK 和所需 Python，并单独取得安装授权。预编译 Pi 与 native helper 的运行库需求也需在相应开发步骤核实，不能把待清理的 VC++ DLL 作为可靠前置条件。
+
+当前依赖声明采用 Electron 44 系列，其 macOS 下限为 13。Electron 官方 Windows 平台说明列出 Windows 10 及以上，但未细化到 build 18363，不能据此推定该 build 与运行库满足要求。Electron、固定 Pi 与 helper 的共同系统和运行库约束在对应开发任务中核实，不为旧系统退回停止维护的版本。Windows 10 1909 专业版已结束服务；能否启动与操作系统安全支持是不同问题。
+
+## 4. Pi binary 与 Electron 打包
 
 ### 4.1 固定基线与获取方式
 
@@ -78,11 +99,11 @@ Desktop 仅维护自己的数据：最近项目、窗口尺寸、Sidebar 状态�
 
 官方已经提供 Bun compile 生成的 standalone 发布包，优先直接获取，无须自行编译 Pi：
 
-| 平台 | 官方发布包 | Tauri externalBin 构建输入名 |
-| --- | --- | --- |
-| macOS Apple Silicon | `pi-darwin-arm64.tar.gz` | `pi-aarch64-apple-darwin` |
-| macOS Intel | `pi-darwin-x64.tar.gz` | `pi-x86_64-apple-darwin` |
-| Windows x64 | `pi-windows-x64.zip` | `pi-x86_64-pc-windows-msvc.exe` |
+| 目标平台与架构 | 官方发布包 |
+| --- | --- |
+| macOS Apple Silicon / arm64 | `pi-darwin-arm64.tar.gz` |
+| macOS Intel / x64 | `pi-darwin-x64.tar.gz` |
+| Windows x64 | `pi-windows-x64.zip` |
 
 下载地址使用固定版本：
 
@@ -90,7 +111,7 @@ Desktop 仅维护自己的数据：最近项目、窗口尺寸、Sidebar 状态�
 https://github.com/earendil-works/pi/releases/download/v1.0.4/<发布包名>
 ```
 
-官方提供 `SHA256SUMS`，发布 API 也提供资产摘要。准备 binary 的脚本需要固定版本、目标平台映射和预期 SHA-256，校验归档后再解压、重命名；不能把执行 `pi --version` 当作完整性或协议兼容性的唯一依据。
+官方提供 `SHA256SUMS`，发布 API 也提供资产摘要。准备 binary 的脚本需要固定版本、目标平台映射和预期 SHA-256，校验原始归档后再解压，并保留官方文件名与相对目录结构；不能把执行 `pi --version` 当作完整性或协议兼容性的唯一依据。签名可能改变可执行文件字节，不能将签名后的文件摘要与原始归档摘要混用。
 
 ### 4.2 standalone 仍有配套资源
 
@@ -110,29 +131,33 @@ https://github.com/earendil-works/pi/releases/download/v1.0.4/<发布包名>
 - Photon WASM 的 fallback 包含可执行文件邻接路径，并不统一使用 `PI_PACKAGE_DIR`。
 - TUI native helper 也包含可执行文件邻接路径，不能仅靠 `PI_PACKAGE_DIR` 迁移。
 
-需要保留官方配套资源，并按实际使用能力处理路径。macOS 的 executable 与 Resources 目录分离，不能直接假定资源放入 Resources 后所有 loader 都能找到。第一阶段解决启动链所需布局；正式安装包的完整资源落点在相应开发步骤确定，不提前承诺一个未经核实的布局。
+Pi 与官方配套资源作为整体保留，不压平目录、不只迁移 package 资源。`PI_PACKAGE_DIR` 指向实际 package 资源根；WASM 与 native helper 同时保持相对于 Pi executable 的官方邻接关系。Pi native helper 由 Pi 使用，不导入 Electron 主进程，不将其作为 Electron Node.js 原生模块加载。
 
-### 4.3 Tauri 2 命名与调用
+### 4.3 ASAR 与 Runtime 资源布局
 
-配置中的 `externalBin` 使用无 target 后缀、无 `.exe` 的基础路径：
+采用 electron-builder 的打包方向。其 `extraResources` 可将外部 CLI 与数据整体复制到应用资源目录，适合本项目固定 Runtime 的分发；Forge 同样可以打包，但当前没有需要其插件或 maker 的既有约束。具体依赖版本、配置与安装包目标在开发阶段确定。
 
-```json
-{
-  "bundle": {
-    "externalBin": ["binaries/pi"]
-  }
-}
-```
+Electron 应用代码进入 `app.asar`；Pi executable 和全部配套资源通过 `extraResources` 放在 ASAR 外。不依赖 ASAR 内执行、临时解包或运行时修改安装目录。
 
-路径相对于 `src-tauri/tauri.conf.json`。对应构建输入放在 `src-tauri/binaries/`，使用上表中的文件名。按实际构建 target 选择文件，不将开发机 host 架构误用为交叉构建 target。
+资源布局方向：
 
-Tauri 构建会移除可执行文件名中的 target 后缀。Rust 官方调用形式为：
+| 场景 | Runtime 根目录 |
+| --- | --- |
+| 本地开发 | `<开发 staging 根>/pi/<目标平台与架构>/` |
+| Windows 安装后 | `<安装目录>/resources/runtime/pi/<目标平台与架构>/` |
+| macOS 安装后 | `Pi Desktop.app/Contents/Resources/runtime/pi/<目标平台与架构>/` |
 
-```rust
-app.shell().sidecar("pi")
-```
+每个 Runtime 根目录保留对应官方归档的解压内容与相对位置。开发和正式包采用相同的内部布局，仅资源根定位不同；主进程在正式包中通过 `process.resourcesPath` 定位，不从 PATH 查找全局 Pi。具体 staging 路径与 package 根落点在 P1-02 确定。
 
-这里传文件名，不传 `binaries/pi` 或带 target 的完整文件名。JavaScript sidecar API 的参数约定不同，本项目不使用它控制 Pi。
+macOS Desktop 主可执行文件位于 `Contents/MacOS`，不要求 Pi 跟随搬入该目录。Pi 与其资源整体放在独立目录，分别满足 package 根和 executable 邻接 loader 的要求，不通过仅设置 `PI_PACKAGE_DIR` 修补拆散布局。
+
+### 4.4 平台分发与签名边界
+
+Windows x64、macOS arm64、macOS x64 分别携带匹配目标的 Electron、Pi 和 helper。构建 host 不等于分发 target，不默认下载全部平台，也不提前承诺 universal 安装包。
+
+推荐按平台准备发行环境；macOS 正式签名、公证需要 macOS 环境及对应凭据。Pi 与附带的 Mach-O helper 必须纳入嵌套代码签名、公证及所需 entitlements 的考虑，不能假定官方归档自然满足 Desktop 分发要求，也不为方便而默认关闭库校验。
+
+Desktop、固定 Pi 和配套资源作为一致发行版本更新，不在运行时独立替换 Pi。回退应用版本只改变 Desktop 与 Runtime，不自动撤销 Agent 已完成的文件修改或外部操作。正式签名和更新工作在相应发行任务中落实。
 
 ## 5. RPC 官方协议事实
 
@@ -144,7 +169,7 @@ app.shell().sidecar("pi")
 pi --mode rpc --no-session
 ```
 
-Rust 设置 `cwd` 为用户选择的项目根目录，并分别建立 stdin、stdout、stderr 管道。不启动 HTTP 或 localhost TCP RPC 服务，不将协议暴露到网络。
+Electron 主进程设置 `cwd` 为用户选择的项目根目录，并分别建立 stdin、stdout、stderr 管道。不启动 HTTP 或 localhost TCP RPC 服务，不将协议暴露到网络。
 
 `--no-session` 表示内存 Session，仅用于第一阶段的临时 Runtime 页面。正式 Desktop 继续使用 Pi 自己的持久化 Session。
 
@@ -219,7 +244,7 @@ turn_end / agent_end / agent_settled
 
 上例为官方字段形状示例，数字不是实测数据。
 
-前端最小重建规则：
+主进程临时消息投影的最小重建规则，渲染进程展示其更新：
 
 - `message_start` 建立消息。
 - 按 `contentIndex` 累加 `text_delta` 和 `thinking_delta`，不要把不同内容块混合。
@@ -265,46 +290,59 @@ Pi 等待 Session idle 后返回：
 只打通：
 
 ```text
-Tauri → Pi RPC sidecar → prompt → streaming → tool → abort
+Vue → preload → Electron Main → Pi RPC sidecar → prompt → streaming → tool → abort
 ```
 
 只允许一个活动项目、一个 Pi Runtime；Runtime 在多次 prompt 之间驻留。切换目录时结束旧 Runtime，再启动新 Runtime，不通过改变 Desktop 状态假装子进程 cwd 已切换。
 
 Runtime 与 Session 不是同一个对象；正式版本的一个 Project 可以有多个 Pi Session，但第一阶段不实现 Session 管理界面。
 
-### 6.2 Rust 管理策略
+### 6.2 主进程管理与 IPC 策略
 
-推荐由 Rust-only shell plugin 解析 sidecar Command，再通过其公开转换得到 `std::process::Command`，交给 Tokio 异步进程管理。
-
-当前 shell plugin 源码提供该转换。直接使用插件 `CommandChild` 时，stdin 写入是同步操作，且没有独立关闭 stdin 的公开方法；转换后便于异步读写、关闭输入、等待退出和强制终止。
-
-此方式仍启动 Tauri 携带的独立 sidecar，不改为 SDK 嵌入。实际插件版本在实现时核实并锁定，不依赖浮动分支作为构建输入。
+主进程直接使用 `child_process.spawn` 启动应用携带的固定 Pi executable，不经过 shell。`utilityProcess.fork` 面向 Node.js 脚本且自身 stdin 不支持所需管道模式，不能直接替代外部 Pi executable；增加该层还需由辅助进程再次 spawn Pi。第一阶段不增加这层进程，后续仅在处理负载确有需要时重新讨论。
 
 最初保持三类职责，不机械拆出大量空模块：
 
 | 职责 | 负责内容 |
 | --- | --- |
-| Manager | 唯一 Runtime、状态转换、请求关联、对外操作、退出编排 |
-| Process | 固定 sidecar、cwd、三个管道、进程等待与回收 |
-| Protocol | 本阶段请求、response 校验、JSONL framing、事件分类 |
+| Manager | 唯一 Runtime、状态转换、请求关联、受限业务操作、窗口归属、退出编排 |
+| Process | 固定 sidecar、cwd、三个管道、进程等待与平台回收 |
+| Protocol | 请求与 response 校验、JSONL framing、事件分类、临时消息投影与通知同步 |
 
-关键管理规则：
+#### 管道与请求
 
-- stdout、stderr 分别持续读取，不因 Vue 等待某个请求而暂停读取。
-- stdin 由单一 writer 串行写入完整记录；串行写入不等于必须等待前一个 response 才处理下一个请求。
-- 使用 pending request 表与各类期限；超时结束等待不等于 Pi 没有执行，不自动重发 prompt。
-- 不持全局锁等待 RPC response；尤其不能让等待 prompt 完成阻塞 abort。
-- 进程退出、写入失败和初始化失败时清理 pending 请求与已创建资源。
-- 解析错误行产生明确诊断，不伪造 Pi 事件；按 LF 恢复下一条记录，对超长、持续异常输出设边界，避免无限缓存。
-- 对有效但暂不支持的事件分类保留，不因未知事件名直接崩溃。
-- Rust 向目标窗口转发事件，Vue 在启动和发送 prompt 前完成订阅，并负责释放监听。
-- Desktop 的 Runtime 标识、事件序号等桥接元数据放在自己的 envelope 中，不添加到 Pi 原始记录冒充官方字段。
-- 旧 Runtime 的异步结果不得覆盖新 Runtime 状态。
-- 正常退出停止新请求、abort、关闭 stdin、继续消费管道并等待退出；超时再终止和回收。
-- 自行拥有进程清理责任，不能依赖 shell plugin 自动回收 Rust 直接启动的子进程。
-- 异常退出后显示原因，由用户显式重新启动，不自动重放 prompt。
+- stdout、stderr 分别持续读取，不因 Vue 等待请求或应用更新而暂停消费。
+- stdout 采用增量 UTF-8 解码，只按 LF 分帧；stderr 使用独立、有界的诊断通道。
+- stdin 由单一 writer 串行写入完整记录并处理写入背压；串行写入不等于等待前一个 response 才处理下一个请求。
+- 主进程生成唯一 Pi request id，使用 pending 表关联 response；Electron invoke 的响应关联与 Pi request id 分开。
+- 不持全局锁等待 RPC response，不让等待 prompt 完成阻塞查询或 abort。
+- 超时只结束等待，不证明 Pi 没有执行，不自动重发 prompt；进程退出、写入失败和初始化失败时收敛 pending 请求并释放资源。
+- 解析错误产生明确诊断并按 LF 恢复记录边界；无法保持投影一致时不能继续显示为正常完整结果。超长记录和持续异常输出设处理边界，必要时可控关闭 Runtime，不能无限缓存或静默丢弃增量。
+- 对有效但暂不支持的事件分类处理，不因未知事件名直接崩溃，也不把独立 Extension UI 记录当作普通文本。
 
-应用强制终止、系统终止及工具派生进程的清理不能仅靠常规退出回调保证。第一阶段实现正常关闭与退出兜底；不宣称已有完整崩溃恢复或 OS 沙箱。
+#### IPC 请求响应与事件流
+
+固定业务操作使用 `ipcRenderer.invoke` / `ipcMain.handle`；preload 只暴露本阶段需要的方法。主进程重新校验参数、运行状态、可信窗口与顶层 frame 来源，以及该窗口对 Runtime 的归属。不提供任意 RPC JSON、channel、启动参数或命令执行接口。
+
+prompt 返回表示接受、排队或处理结果，不等待 Agent 执行结束。错误采用可序列化的业务结果，区分参数拒绝、状态冲突、Pi 命令失败、启动失败、通信失败与结果未知；不依赖原样跨 IPC 传递 Error 对象，不泄露内部堆栈或秘密。
+
+主进程先应用 Pi 记录到临时投影，再通过定向事件通知窗口，不将每个 token 无界转发。Vue 在启动和发送 prompt 前完成订阅；重新订阅时取得投影和序列基点，避免遗漏或重复应用，并在释放页面时取消监听。
+
+Runtime 代际、事件序列和同步元数据放在 Desktop envelope 中，不添加到 Pi 原始记录冒充官方字段。旧 Runtime 的异步结果不得覆盖新状态。展示更新可以按语义合并，最终消息、错误与运行终态不得因合并而丢失。
+
+Pi 管道背压与 UI 通知背压分开处理：采用有界批次与渲染端应用确认，限制未确认通知；渲染端落后时从临时投影重新同步，不为等 UI 而暂停读取 Pi。展示输出超限时明确标示截断，不伪装为完整内容。具体缓存预算、期限和批次契约在开发阶段确定。
+
+第一阶段使用定向 IPC 事件，不增加 MessagePort 通道；MessagePort 本身也不代替应用层流量控制。
+
+#### 关闭、异常与进程树
+
+正常关闭停止接收新业务请求，保留内部取消路径；对活动操作发起 abort，不无限等待，然后关闭 stdin、继续消费管道并等待退出，超时后执行平台兜底。异常退出显示原因和结果不确定性，由用户显式重新启动，不自动重放 prompt。
+
+Windows 使用系统 `taskkill` 对当前受管 Pi 进程树定向终止，不先只杀根进程再假定能够找到所有子进程；macOS 为 Pi 建立独立进程组，必要时终止该组，不调用 unref 将其解除应用管理。终止对象只能来自主进程自身的 Runtime 记录，不接受页面传入任意 PID，也不按进程名批量终止。
+
+这些都是尽力回收：根进程已退出、主进程崩溃或派生进程脱离后，不能保证完整清理。Windows Job Objects 可提供更强控制，但 Node.js 内建 spawn 不直接提供该能力；第一阶段不为此引入原生绑定或专用 helper。
+
+关闭唯一业务窗口或失去唯一可信控制界面时，主进程发起可控 Runtime 关闭，避免无意留下后台 Agent。托盘、隐藏常驻与多窗口行为在第五阶段另行设计。第一阶段不承诺完整崩溃恢复、完整进程树回收或 OS 沙箱。
 
 ### 6.3 最小前端
 
@@ -318,30 +356,36 @@ Runtime 与 Session 不是同一个对象；正式版本的一个 Project 可以
 - 简单结构化工具参数、输出和错误。
 - 有界的临时诊断展示。
 
-组件通过统一 Tauri 服务入口调用 Rust，Pinia 管理本页面共享的 Runtime 状态。不安装 shell JavaScript guest binding，不提供任意 RPC JSON 的通用发送入口。
+组件通过统一前端服务入口调用受限 preload API，Pinia 管理本页面共享的展示状态。消息重建与 Runtime 所有权归主进程，前端不直接访问 ipcRenderer，不提供任意 RPC JSON 的通用发送入口。
 
 ### 6.4 实现顺序
 
 具体任务与依赖见[第一阶段：Runtime](phases/01-runtime.md)。
 
-**第一小步：启动链。** 建立最小 Tauri/Vue 骨架与固定 binary 准备流程；启动 Pi RPC、通过 `get_state` 取得状态、消费 stderr、处理退出与关闭。
+**第一小步：启动链。** 建立最小 Electron/Vue 骨架、sandboxed preload 与固定 binary 准备流程；主进程启动 Pi RPC、通过 `get_state` 取得状态、消费 stderr、处理退出与关闭。
 
-**第二小步：交互链。** 增加 prompt、消息增量重建、工具事件展示和 abort，不跨入第二阶段完整 Desktop UI。
+**第二小步：交互链。** 增加 prompt、主进程临时消息投影、受控流式通知、工具事件展示和 abort，不跨入第二阶段完整 Desktop UI。
 
-具体源文件、依赖版本、资源落点和操作清单在对应小步确定；本文不授权一次性生成完整项目。
+具体源文件、依赖版本、资源布局的准确路径和操作清单在对应小步确定；本文不授权一次性生成完整项目。
 
 ## 7. 安全、Trust 与平台边界
 
-### 7.1 权限不是沙箱
+### 7.1 Electron 安全与非沙箱边界
 
-- Vue 不直接 spawn Pi，不拥有通用 shell 或全域文件权限。
-- Rust 只暴露本阶段需要的 Tauri command；自定义 command 也需要自身参数和窗口边界校验，不能假定未列入 capability 就自然禁止调用。
-- 不授予 `shell:allow-execute`、`shell:allow-spawn` 或 `fs:allow-all` 来简化前端实现。
-- 不向网络开放 Pi RPC。
-- 不把密钥、认证文件、全部环境变量或完整敏感工具输出写入常规日志。
-- 不将模型输出作为可执行 HTML 加载到有本地权限的 WebView。
+渲染进程明确使用 `contextIsolation: true`、`sandbox: true`、`nodeIntegration: false`，保持 `webSecurity` 开启。Sandboxed preload 只使用允许的有限 API，其构建适配沙箱限制，不因模块加载问题而关闭 sandbox。
 
-**Pi 默认以启动用户的 OS 权限运行，不会逐次确认所有工具调用。** cwd 只是默认工作目录，不是文件访问沙箱；Tauri capability 也不会自动约束 Pi 的 OS 权限。产品不能把项目目录权限最小化宣传为已经具有沙箱隔离。
+- Vue 不直接 spawn Pi，不拥有 Node.js、通用 shell 或全域文件权限；preload 不暴露原始 ipcRenderer、任意 channel 或 Electron event 对象。
+- 主进程仅提供明确业务能力，校验参数、当前状态、已登记窗口、顶层 frame 的可信来源及 Runtime 归属；channel 名固定不等于调用者可信。
+- 正式包通过受控本地应用协议加载打包资源，路径映射只允许应用资产，不成为项目文件读取入口。
+- 正式 CSP 限制脚本来源，不启用任意远程脚本或 unsafe-eval；开发服务器所需权限仅在开发配置中开放。
+- 默认拒绝不需要的系统权限、页面导航和新窗口，不向网络开放 Pi RPC。
+- 模型 Markdown、工具结果和 Extension 文本均视为不可信内容；需要 HTML 展示时净化内容，不允许脚本、事件属性或任意嵌入页面。
+- 不自动加载模型生成的远程图片。外链只在用户动作后，经主进程协议检查交由外部浏览器打开，不开放任意 URI scheme。
+- 不把密钥、认证文件、全部环境变量或完整敏感工具输出写入常规日志；已有凭据不回传页面。
+
+三层边界分别是渲染进程 sandbox、主进程的受限业务桥接，以及 Pi 自身的 OS 权限。主进程和 Pi 不因渲染进程 sandbox 而被限制在项目目录；ASAR 是打包格式，不是权限或内容完整性边界。
+
+**Pi 默认以启动用户的 OS 权限运行，不会逐次确认所有工具调用。** cwd 只是默认工作目录，Project Trust 控制资源加载而非文件访问沙箱。产品不能把 Electron 渲染隔离或项目目录选择宣传为已经限制 Pi 的 OS 权限。
 
 ### 7.2 Project Trust
 
@@ -370,7 +414,7 @@ PowerShell 解析优先 `pwsh.exe`，其次 `powershell.exe`；不存在时报�
 
 | 阶段 | 目标与范围 |
 | --- | --- |
-| [第一阶段：Runtime](phases/01-runtime.md) | 当前文档第 6 节定义的启动链和交互链 |
+| [第一阶段：Runtime](phases/01-runtime.md) | 最小桌面骨架、受限应用信息接口，以及当前文档第 6 节定义的启动链和交互链 |
 | [第二阶段：基础 Desktop UI](phases/02-desktop-ui.md) | Project、Pi Session 列表与恢复入口、Chat、Streaming、通用 Tool Card、模型、Thinking Level、Stop、Context Usage |
 | [第三阶段：Pi 深度能力](phases/03-pi-capabilities.md) | Extension UI、正式 Project Trust、完善 Session 恢复与 Fork、Compaction、Diff、图片、文件引用、Skills、Extensions、Packages、MCP |
 | [第四阶段：Authentication](phases/04-authentication.md) | Provider、API Key、OAuth、Login/Logout、状态；仅在必要时增加复用官方认证实现的 standalone Helper |
@@ -386,18 +430,19 @@ Project 的基础属性为 `id`、`name`、`path`、`lastOpenedAt`。采用轻�
 
 ## 9. 待解决问题
 
-1. Rust 工具链的环境准备与授权。
-2. 第一小步的准确源文件清单、前后端依赖锁定与 package manager 约定。
-3. Pi 配套资源在开发环境及 Windows/macOS 安装包中的布局；`PI_PACKAGE_DIR` 与 executable 邻接 loader 分别处理。
-4. 启动参数、已有模型配置和凭据的可用性；只读取必要配置，不输出秘密。
-5. 正常退出兜底与派生进程清理的实际平台机制；不以关闭主 Pi 进程等同于完整进程树回收。
-6. 第二阶段 Session 列表的接入方式，以及跨项目 Session 切换对 cwd 与资源重建的影响。
+1. 完整依赖树锁定、Windows build 18363 约束，以及 Electron、固定 Pi 与 helper 共同约束下的 macOS 最低版本；后续依赖调整继续考虑 Electron 的维护状态。
+2. 避免需要本地编译的原生依赖；Pi/helper 的运行库需求、挂起重启与延迟清理对开发环境的影响。需要新增工具链时单独取得授权。
+3. P1-02 的准确 staging 路径、官方资源根映射与目标平台文件选择；分别满足 `PI_PACKAGE_DIR` 和 executable 邻接 loader。正式签名、公证与安装包配置按发行步骤确定。
+4. Runtime 操作的 IPC 业务结果、Runtime 代际、临时投影和通知确认的具体契约，以及管道边界、缓存预算和请求期限；不建立平行 Session 数据库。
+5. 启动参数、已有模型配置和凭据的可用性；只读取必要配置，不输出秘密。
+6. Windows 定向进程树终止与 macOS 进程组的实现细节；保留尽力回收边界，不以关闭主 Pi 进程等同于完整进程树回收。
+7. 第二阶段 Session 列表的接入方式，以及跨项目 Session 切换对 cwd 与资源重建的影响。
 
 这些问题按相应阶段解决，不把后续完整能力变成第一阶段的提前实现范围。
 
 ## 10. 官方依据
 
-Pi 事实以固定 `v1.0.4` 为引用基线；Tauri 引用为官方 Tauri 2 文档及源码，实际 crate 版本在创建项目时确认。
+Pi 事实以固定 `v1.0.4` 为引用基线；Electron、Node.js 和打包器资料用于说明能力与设计取舍，不代替具体依赖版本锁定。平台支持和签名配置会随版本变化，在相应开发阶段确定。
 
 - [Pi 1.0.4 发布资产](https://github.com/earendil-works/pi/releases/tag/v1.0.4)
 - [Pi binary 构建脚本](https://github.com/earendil-works/pi/blob/v1.0.4/scripts/build-binaries.sh)
@@ -417,7 +462,21 @@ Pi 事实以固定 `v1.0.4` 为引用基线；Tauri 引用为官方 Tauri 2 文�
 - [Pi native helper 路径](https://github.com/earendil-works/pi/blob/v1.0.4/packages/tui/src/native-module-path.ts)
 - [Pi Bash/PowerShell 解析](https://github.com/earendil-works/pi/blob/v1.0.4/packages/coding-agent/src/utils/shell.ts)
 - [Pi 内置工具](https://github.com/earendil-works/pi/blob/v1.0.4/packages/coding-agent/src/core/tools/index.ts)
-- [Tauri 2 externalBin / sidecar](https://v2.tauri.app/develop/sidecar/)
-- [Tauri shell process API](https://github.com/tauri-apps/plugins-workspace/blob/v2/plugins/shell/src/process/mod.rs)
-- [Tauri shell plugin 生命周期](https://github.com/tauri-apps/plugins-workspace/blob/v2/plugins/shell/src/lib.rs)
-- [Tauri externalBin 构建处理](https://github.com/tauri-apps/tauri/blob/dev/crates/tauri-build/src/lib.rs)
+- [Electron 平台支持](https://github.com/electron/electron#platform-support)
+- [Electron IPC](https://www.electronjs.org/docs/latest/tutorial/ipc)
+- [Electron contextBridge](https://www.electronjs.org/docs/latest/api/context-bridge)
+- [Electron Context Isolation](https://www.electronjs.org/docs/latest/tutorial/context-isolation)
+- [Electron Process Sandboxing](https://www.electronjs.org/docs/latest/tutorial/sandbox)
+- [Electron 安全指南](https://www.electronjs.org/docs/latest/tutorial/security)
+- [Electron utilityProcess](https://www.electronjs.org/docs/latest/api/utility-process)
+- [Electron MessagePorts](https://www.electronjs.org/docs/latest/tutorial/message-ports)
+- [Electron ASAR 限制](https://www.electronjs.org/docs/latest/tutorial/asar-archives)
+- [Electron process.resourcesPath](https://www.electronjs.org/docs/latest/api/process)
+- [Electron 原生模块与 ABI](https://www.electronjs.org/docs/latest/tutorial/using-native-node-modules)
+- [Node.js child_process](https://nodejs.org/api/child_process.html)
+- [electron-builder 应用文件与 extraResources](https://www.electron.build/v26/docs/contents/)
+- [electron-builder macOS 签名](https://www.electron.build/v26/docs/features/code-signing/code-signing-mac/)
+- [Electron Forge 构建生命周期](https://www.electronforge.io/core-concepts/build-lifecycle)
+- [Windows taskkill](https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/taskkill)
+- [Windows Job Objects](https://learn.microsoft.com/en-us/windows/win32/procthread/job-objects)
+- [Windows 10 1909 专业版服务结束](https://learn.microsoft.com/en-us/lifecycle/announcements/windows-10-1909-end-of-servicing)
