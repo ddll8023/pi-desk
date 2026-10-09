@@ -2,7 +2,8 @@
  * 维护当前 Runtime 代际的临时消息与工具投影，并按有界批次推送给渲染端。
  *
  * 把 Pi 的会话事件（以及恢复会话时的历史消息）重建为页面要展示的消息内容块与工具执行条目，
- * 不保存原始事件、不持久化、不管理 Session、不解析 response 信封与退出；工具条目的生命周期交给
+ * 用户消息中的图片块以附件描述块（data URL 与估算字节）投影；不保存原始事件、不持久化、不管理
+ * Session、不解析 response 信封与退出；工具条目的生命周期交给
  * tool-projection，本模块负责聚合、批次、序号与确认。渲染端长度校验失败、序号缺口或未确认窗口
  * 超限都收敛到快照重同步，投影不猜测渲染端缺少的内容；触及展示上限时显式截断并计数，不伪装成完整内容。
  */
@@ -29,6 +30,9 @@ const MAX_UNACKED_BATCHES = 32
 /** 单个内容块文本上限；超出按截断处理并在投影与界面标示。 */
 const MAX_BLOCK_CHARS = 262_144
 
+/** 投影保留图片附件的本体大小上限（估算字节）；超出只保留描述。 */
+const MAX_IMAGE_ATTACHMENT_BYTES = 8_388_608
+
 /** 投影保留的消息条数上限；超出丢弃最旧消息并计数。 */
 const MAX_MESSAGES = 200
 
@@ -44,6 +48,8 @@ interface MutableBlock {
   truncated: boolean
   toolCallId: string | null
   toolName: string | null
+  /** 图片附件描述；非图片块为 null。 */
+  image: { readonly dataUrl: string; readonly mimeType: string; readonly bytes: number } | null
 }
 
 interface MutableMessage {
@@ -274,7 +280,7 @@ export class MessageProjection {
       this.messages.push(target)
       this.enforceLimits()
     }
-    target.blocks = this.buildBlocks(value.content)
+    target.blocks = this.buildBlocks(value.content, role)
     target.timestamp = typeof value.timestamp === 'number' ? value.timestamp : target.timestamp
     target.stopReason = typeof value.stopReason === 'string' ? value.stopReason : null
     target.errorMessage = typeof value.errorMessage === 'string' ? value.errorMessage : null
@@ -341,7 +347,8 @@ export class MessageProjection {
         text: '',
         truncated: false,
         toolCallId,
-        toolName
+        toolName,
+        image: null
       }
       message.blocks.push(block)
       message.blocks.sort((left, right) => left.contentIndex - right.contentIndex)
@@ -420,7 +427,7 @@ export class MessageProjection {
     this.queueUpdate({ kind: 'block', messageId: message.id, block: this.toPublicBlock(block) })
   }
 
-  private buildBlocks(content: unknown): MutableBlock[] {
+  private buildBlocks(content: unknown, role: ProjectedRole = 'assistant'): MutableBlock[] {
     if (typeof content === 'string') return [this.createBlock(0, 'text', content, null, null)]
     if (!Array.isArray(content)) return []
 
@@ -443,10 +450,32 @@ export class MessageProjection {
           readString(entry.id),
           readString(entry.name)
         ))
+        return
       }
-      // 图片与其他内容块不进入展示投影。
+      // 图片块只对用户消息投影为附件描述；超过大小上限的附件只保留文字描述，不做其他二次限制。
+      if (entry.type === 'image' && role === 'user'
+        && typeof entry.data === 'string' && entry.data !== ''
+        && typeof entry.mimeType === 'string' && entry.mimeType !== '') {
+        blocks.push(this.createImageBlock(index, entry.data, entry.mimeType))
+      }
+      // 其他内容块不进入展示投影。
     })
     return blocks
+  }
+
+  /** 图片附件块：text 不承载本体，估算字节数按 base64 长度换算；超过大小上限只保留描述、不保留本体。 */
+  private createImageBlock(contentIndex: number, data: string, mimeType: string): MutableBlock {
+    const bytes = Math.floor(data.length * 3 / 4)
+    const tooLarge = bytes > MAX_IMAGE_ATTACHMENT_BYTES
+    return {
+      contentIndex,
+      kind: 'text',
+      text: tooLarge ? `[图片附件 ${mimeType}，约 ${bytes} 字节，超出展示上限]` : '',
+      truncated: false,
+      toolCallId: null,
+      toolName: null,
+      image: tooLarge ? null : { dataUrl: `data:${mimeType};base64,${data}`, mimeType, bytes }
+    }
   }
 
   private createBlock(
@@ -454,7 +483,8 @@ export class MessageProjection {
     kind: ProjectionBlockKind,
     text: string,
     toolCallId: string | null,
-    toolName: string | null
+    toolName: string | null,
+    image: MutableBlock['image'] = null
   ): MutableBlock {
     const truncated = text.length > MAX_BLOCK_CHARS
     if (truncated) this.truncated = true
@@ -464,7 +494,8 @@ export class MessageProjection {
       text: truncated ? text.slice(0, MAX_BLOCK_CHARS) : text,
       truncated,
       toolCallId,
-      toolName
+      toolName,
+      image
     }
   }
 
@@ -577,7 +608,7 @@ export class MessageProjection {
     return {
       id: this.nextMessageId(),
       role,
-      blocks: this.buildBlocks(value.content),
+      blocks: this.buildBlocks(value.content, role),
       timestamp: typeof value.timestamp === 'number' ? value.timestamp : null,
       stopReason: typeof value.stopReason === 'string' ? value.stopReason : null,
       errorMessage: typeof value.errorMessage === 'string' ? value.errorMessage : null
@@ -591,7 +622,8 @@ export class MessageProjection {
       text: block.text,
       truncated: block.truncated,
       toolCallId: block.toolCallId,
-      toolName: block.toolName
+      toolName: block.toolName,
+      image: block.image
     }
   }
 

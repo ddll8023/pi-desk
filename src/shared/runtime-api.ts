@@ -1,4 +1,4 @@
-/** 只定义 Runtime 启停、状态、Prompt 提交、中止、Agent 能力查询与设置、消息/工具投影 IPC 的固定通道、事件名、结果类型与跨进程响应校验。 */
+/** 只定义 Runtime 启停、状态、Prompt 提交、中止、Agent 能力查询与设置、手动压缩、消息/工具投影 IPC 的固定通道、事件名、结果类型与跨进程响应校验。 */
 import type { DesktopErrorCode } from './desktop-api'
 
 export const RUNTIME_START_CHANNEL = 'desktop:runtime-start'
@@ -11,6 +11,7 @@ export const RUNTIME_PROJECTION_ACK_CHANNEL = 'desktop:runtime-projection-ack'
 export const RUNTIME_CAPABILITIES_CHANNEL = 'desktop:runtime-capabilities'
 export const RUNTIME_SET_MODEL_CHANNEL = 'desktop:runtime-set-model'
 export const RUNTIME_SET_THINKING_LEVEL_CHANNEL = 'desktop:runtime-set-thinking-level'
+export const RUNTIME_COMPACT_CHANNEL = 'desktop:runtime-compact'
 /** 主进程到渲染进程的单向状态通知，payload 是 RuntimeStatus。 */
 export const RUNTIME_STATUS_EVENT = 'desktop:runtime-status-changed'
 /** 主进程到渲染进程的单向投影批次通知，payload 是 ProjectionBatch。 */
@@ -76,12 +77,22 @@ export type RuntimeResult =
 /** `handled` 表示被扩展或输入处理器消费，不表示本次一定启动了 Agent run。 */
 export type PromptDisposition = 'started' | 'queued' | 'handled'
 
+/**
+ * 随 Prompt 提交的图片附件：`data` 是 base64 编码的图片本体。
+ * MIME 白名单、大小与条数上限由主进程校验；页面传入的其他字段一律丢弃。
+ */
+export interface PromptImageInput {
+  readonly name: string
+  readonly mimeType: string
+  readonly data: string
+}
+
 /** prompt 结果只表达请求被接受、排队或被处理，不等待 Agent 执行结束。 */
 export type PromptResult =
   | { readonly ok: true; readonly data: { readonly disposition: PromptDisposition } }
   | { readonly ok: false; readonly error: RuntimeError }
 
-/** 投影只重建页面要展示的内容块；图片与诊断不进入内容块投影，工具结果以独立工具条目表达。 */
+/** 投影只重建页面要展示的内容块；诊断不进入内容块投影，用户消息图片以附件描述块表达，工具结果以独立工具条目表达。 */
 export type ProjectionBlockKind = 'text' | 'thinking' | 'toolcall'
 
 /** 块的 `text` 是当前完整内容；`truncated` 表示已按展示上限截断。 */
@@ -92,6 +103,11 @@ export interface ProjectionBlock {
   readonly truncated: boolean
   readonly toolCallId: string | null
   readonly toolName: string | null
+  /**
+   * 图片内容块的附件描述：`dataUrl` 是 base64 本体转成的 data URL（仅限用户消息），
+   * `bytes` 是估算字节数；非图片块为 null。图片本体不进入文本投影。
+   */
+  readonly image: { readonly dataUrl: string; readonly mimeType: string; readonly bytes: number } | null
 }
 
 /** 工具执行的终态；`unknown` 表示代际收敛时仍未收到结束事件，不冒充成功。 */
@@ -108,9 +124,35 @@ export interface ToolNonTextPart {
   readonly bytes: number | null
 }
 
+/** Diff 单行语义：`fold` 为 Pi 折叠省略行的占位，无内容文本。 */
+export type ToolDiffLineKind = 'add' | 'remove' | 'context' | 'fold'
+
+/** Diff 展示行；行号由主进程从 Pi 的 diff 行解析，`args` 推断来源无行号。 */
+export interface ToolDiffLine {
+  readonly kind: ToolDiffLineKind
+  /** 变更前行号；来源没有该信息时为 null。 */
+  readonly oldLine: number | null
+  /** 变更后行号；来源没有该信息时为 null。 */
+  readonly newLine: number | null
+  readonly text: string
+}
+
+/**
+ * Edit / Write 变更的展示数据；只来自 Pi 已有的信息，Desktop 不读文件、不自行计算基线。
+ * `result` 为 Pi 结束结果 `details.diff` 的逐行解析（Pi 执行时刻基于真实文件内容算出，
+ * 天然覆盖重复修改与并发变更）；`args` 为 edit 参数 `edits[]` 的降级推断（无实际文件行号，
+ * 界面必须标注推断性质）。形状不符或非文件变更工具时为 null，不伪造 Diff。
+ */
+export interface ToolDiff {
+  readonly source: 'result' | 'args'
+  readonly lines: readonly ToolDiffLine[]
+  /** 超出展示上限后停止收行；不伪装成完整 Diff。 */
+  readonly truncated: boolean
+}
+
 /**
  * 工具执行条目按 `toolCallId` 与消息块解耦：参数与输出各有独立上限，
- * 非文本内容只有描述、不进入投影，图片不渲染。
+ * 工具结果的非文本内容只保留描述、不进入消息块投影。
  *
  * `startedAt`、`endedAt` 是 Desktop 收到开始与结束事件的时刻（纪元毫秒），不是 Pi 字段：
  * Pi 的工具事件没有时间字段，因此它只用于界面展示耗时，不代表工具的真实执行时间。
@@ -131,6 +173,8 @@ export interface ToolExecution {
   readonly nonTextBlocks: number
   /** 非文本内容块描述，条数有上限；界面按描述标示类型与大小。 */
   readonly nonTextParts: readonly ToolNonTextPart[]
+  /** 文件变更展示数据；null 表示无可信来源，不伪造 Diff。 */
+  readonly diff: ToolDiff | null
 }
 
 /** `id` 由 Desktop 生成，不冒充 Pi 消息字段。 */
@@ -196,6 +240,11 @@ export interface ModelSummary {
   /** 是否支持推理；决定 Thinking 控件是否可用。 */
   readonly reasoning: boolean
   readonly contextWindow: number | null
+  /**
+   * 是否支持图片输入：模型目录 `input` 数组含 `image` 为 true，明确不含为 false，
+   * 字段缺失为 null（未知）。决定图片附件入口是否提示不可用。
+   */
+  readonly imageInput: boolean | null
 }
 
 /**
@@ -230,6 +279,21 @@ export type CapabilitiesResult =
   | { readonly ok: true; readonly data: AgentCapabilities }
   | { readonly ok: false; readonly error: RuntimeError }
 
+/**
+ * 手动压缩的结果投影：摘要文本与压缩前后 token 数。
+ * `usageTotalTokens` 取自响应的 `usage.totalTokens`，自定义压缩处理器可省略 `usage`，为 null。
+ */
+export interface CompactResult {
+  readonly summary: string
+  readonly tokensBefore: number | null
+  readonly estimatedTokensAfter: number | null
+  readonly usageTotalTokens: number | null
+}
+
+export type CompactResultResult =
+  | { readonly ok: true; readonly data: CompactResult }
+  | { readonly ok: false; readonly error: RuntimeError }
+
 /** 只接受 provider 与模型 id；不接受任意模型对象或其他 RPC 字段。 */
 export interface SetModelRequest {
   readonly provider: string
@@ -245,7 +309,7 @@ export interface RuntimeApi {
   readonly startRuntime: (projectPath: string) => Promise<RuntimeResult>
   readonly stopRuntime: () => Promise<RuntimeResult>
   readonly getRuntimeStatus: () => Promise<RuntimeResult>
-  readonly sendPrompt: (message: string) => Promise<PromptResult>
+  readonly sendPrompt: (message: string, images?: readonly PromptImageInput[]) => Promise<PromptResult>
   /** 请求中止当前 Agent 操作；成功只表示 Pi 已确认取消，运行状态仍以事件流为准。 */
   readonly abortRuntime: () => Promise<RuntimeResult>
   readonly getRuntimeProjection: () => Promise<ProjectionResult>
@@ -255,6 +319,8 @@ export interface RuntimeApi {
   readonly setRuntimeModel: (request: SetModelRequest) => Promise<RuntimeResult>
   /** 设置 Thinking level；成功数据是设置后的 Runtime 快照。 */
   readonly setRuntimeThinkingLevel: (request: SetThinkingLevelRequest) => Promise<RuntimeResult>
+  /** 手动压缩上下文；等待压缩完成，成功返回结果投影。 */
+  readonly compactRuntime: () => Promise<CompactResultResult>
   /** 确认已应用到的最高序号；即发即忘，结果不影响页面。 */
   readonly ackRuntimeProjection: (runtimeId: number, seq: number) => void
   /** 订阅状态变化；返回释放函数，页面卸载时必须调用。 */
@@ -334,13 +400,22 @@ function isProjectionBlockKind(value: unknown): value is ProjectionBlockKind {
 
 function isProjectionBlock(value: unknown): value is ProjectionBlock {
   if (!isRecord(value)) return false
-  return typeof value.contentIndex === 'number'
-    && Number.isInteger(value.contentIndex)
-    && isProjectionBlockKind(value.kind)
-    && typeof value.text === 'string'
-    && typeof value.truncated === 'boolean'
-    && (value.toolCallId === null || typeof value.toolCallId === 'string')
-    && (value.toolName === null || typeof value.toolName === 'string')
+  if (typeof value.contentIndex !== 'number'
+    || !Number.isInteger(value.contentIndex)
+    || !isProjectionBlockKind(value.kind)
+    || typeof value.text !== 'string'
+    || typeof value.truncated !== 'boolean'
+    || (value.toolCallId !== null && typeof value.toolCallId !== 'string')
+    || (value.toolName !== null && typeof value.toolName !== 'string')) return false
+  if (value.image === null) return true
+  return isRecord(value.image)
+    && typeof value.image.dataUrl === 'string'
+    && value.image.dataUrl !== ''
+    && typeof value.image.mimeType === 'string'
+    && value.image.mimeType !== ''
+    && typeof value.image.bytes === 'number'
+    && Number.isInteger(value.image.bytes)
+    && value.image.bytes >= 0
 }
 
 function isProjectionMessage(value: unknown): value is ProjectionMessage {
@@ -395,6 +470,32 @@ function isToolExecution(value: unknown): value is ToolExecution {
     && value.nonTextBlocks >= 0
     && Array.isArray(value.nonTextParts)
     && value.nonTextParts.every(isToolNonTextPart)
+    && isToolDiff(value.diff)
+}
+
+function isToolDiffLineKind(value: unknown): value is ToolDiffLineKind {
+  return value === 'add' || value === 'remove' || value === 'context' || value === 'fold'
+}
+
+function isDiffLineNumber(value: unknown): boolean {
+  return value === null || (typeof value === 'number' && Number.isInteger(value) && value >= 0)
+}
+
+function isToolDiffLine(value: unknown): value is ToolDiffLine {
+  if (!isRecord(value)) return false
+  return isToolDiffLineKind(value.kind)
+    && isDiffLineNumber(value.oldLine)
+    && isDiffLineNumber(value.newLine)
+    && typeof value.text === 'string'
+}
+
+function isToolDiff(value: unknown): value is ToolDiff | null {
+  if (value === null) return true
+  if (!isRecord(value)) return false
+  return (value.source === 'result' || value.source === 'args')
+    && Array.isArray(value.lines)
+    && value.lines.every(isToolDiffLine)
+    && typeof value.truncated === 'boolean'
 }
 
 function isProjectionUpdate(value: unknown): value is ProjectionUpdate {
@@ -478,6 +579,7 @@ function isModelSummary(value: unknown): value is ModelSummary {
     && (value.name === null || typeof value.name === 'string')
     && typeof value.reasoning === 'boolean'
     && (value.contextWindow === null || isCount(value.contextWindow))
+    && (value.imageInput === null || typeof value.imageInput === 'boolean')
 }
 
 function isContextUsage(value: unknown): value is ContextUsage {
@@ -510,6 +612,24 @@ export function isCapabilitiesResult(value: unknown): value is CapabilitiesResul
   if (value.ok === true) return isAgentCapabilities(value.data)
   if (value.ok !== false || !isRecord(value.error)) return false
 
+  const { code, message } = value.error
+  return typeof message === 'string'
+    && typeof code === 'string'
+    && RUNTIME_ERROR_CODES.includes(code)
+}
+
+/** 压缩结果跨进程校验；`tokensBefore`、`estimatedTokensAfter` 与 `usageTotalTokens` 都可为 null。 */
+export function isCompactResultResult(value: unknown): value is CompactResultResult {
+  if (!isRecord(value)) return false
+
+  if (value.ok === true) {
+    return isRecord(value.data)
+      && typeof value.data.summary === 'string'
+      && (value.data.tokensBefore === null || isCount(value.data.tokensBefore))
+      && (value.data.estimatedTokensAfter === null || isCount(value.data.estimatedTokensAfter))
+      && (value.data.usageTotalTokens === null || isCount(value.data.usageTotalTokens))
+  }
+  if (value.ok !== false || !isRecord(value.error)) return false
   const { code, message } = value.error
   return typeof message === 'string'
     && typeof code === 'string'

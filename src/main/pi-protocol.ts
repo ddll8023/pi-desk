@@ -4,7 +4,8 @@
  * 只处理记录分类、请求关联与响应字段投影，不持有子进程、不知道 Runtime 业务状态、不缓存消息。
  * 超时只结束等待，不主张 Pi 没有执行该请求；进程退出或写入失败时收敛 pending。
  */
-import type { ContextUsage, ModelSummary, PromptDisposition, RuntimeInfo } from '../shared/runtime-api'
+import type { CompactResult, ContextUsage, ModelSummary, PromptDisposition, RuntimeInfo } from '../shared/runtime-api'
+import type { ForkMessageSummary } from '../shared/session-api'
 
 export type PiRecordKind = 'response' | 'session-event' | 'extension-ui' | 'unknown'
 
@@ -129,10 +130,18 @@ export function toModelSummaries(data: unknown): ModelSummary[] | null {
       id,
       name: typeof entry.name === 'string' && entry.name !== '' ? entry.name : null,
       reasoning: entry.reasoning === true,
-      contextWindow: isNonNegativeInteger(entry.contextWindow) ? entry.contextWindow : null
+      contextWindow: isNonNegativeInteger(entry.contextWindow) ? entry.contextWindow : null,
+      // 模型目录的 input 字段描述支持的输入模态；缺失时不猜造。
+      imageInput: readImageInput(entry.input)
     })
   }
   return models
+}
+
+/** `input` 数组含 `image` 为 true，是数组但不含为 false，缺失或其他形状为 null。 */
+function readImageInput(value: unknown): boolean | null {
+  if (!Array.isArray(value)) return null
+  return value.some((entry) => entry === 'image')
 }
 
 /** 只承认非空字符串并去重；不支持推理的模型由 Pi 返回 `["off"]`，这里不做判断。 */
@@ -180,6 +189,56 @@ export function toContextUsageField(data: unknown): { readonly usage: ContextUsa
   if (raw === undefined || raw === null) return { usage: null }
   const usage = toContextUsage(raw)
   return usage === null ? null : { usage }
+}
+
+/**
+ * 把 `get_fork_messages` 的 data 投影为可分叉消息列表；`messages` 不是数组时返回 null，
+ * 单条形状不符只丢弃该条，不让整个列表不可用。
+ */
+export function toForkMessages(data: unknown): ForkMessageSummary[] | null {
+  if (!isRecord(data) || !Array.isArray(data.messages)) return null
+
+  const messages: ForkMessageSummary[] = []
+  for (const entry of data.messages) {
+    if (!isRecord(entry)) continue
+    const entryId = typeof entry.entryId === 'string' ? entry.entryId : null
+    const text = typeof entry.text === 'string' ? entry.text : null
+    if (entryId === null || entryId === '' || text === null) continue
+    messages.push({ entryId, text })
+  }
+  return messages
+}
+
+/**
+ * 把 `fork` 成功响应的 data 投影为结果：`cancelled` 为真表示被 Extension 取消；
+ * 正常取消不带 `text`，未取消时应带被分叉消息的原文。
+ */
+export function toForkOutcome(
+  data: unknown
+): { cancelled: true } | { cancelled: false; text: string | null } | null {
+  if (!isRecord(data)) return null
+  if (data.cancelled === true) return { cancelled: true }
+  if (data.cancelled === false) {
+    return { cancelled: false, text: typeof data.text === 'string' ? data.text : null }
+  }
+  return null
+}
+
+/**
+ * 把 `compact` 成功响应的 data 投影为结果；字段缺失按 null 处理，
+ * 摘要缺失不算失败（自定义压缩处理器可能省略部分字段）。
+ */
+export function toCompactResult(data: unknown): CompactResult | null {
+  if (!isRecord(data)) return null
+  const usage = isRecord(data.usage) && typeof data.usage.totalTokens === 'number'
+    ? data.usage.totalTokens
+    : null
+  return {
+    summary: typeof data.summary === 'string' ? data.summary : '',
+    tokensBefore: typeof data.tokensBefore === 'number' ? data.tokensBefore : null,
+    estimatedTokensAfter: typeof data.estimatedTokensAfter === 'number' ? data.estimatedTokensAfter : null,
+    usageTotalTokens: usage !== null && Number.isInteger(usage) && usage >= 0 ? usage : null
+  }
 }
 
 export class PiProtocol {

@@ -1,8 +1,10 @@
-/** 作为渲染端 Runtime 启停、Agent 能力读取与设置、Prompt 提交、中止与投影同步的调用入口，把桥接缺失与通信异常转换为安全的展示结果。 */
+/** 作为渲染端 Runtime 启停、Agent 能力读取与设置、手动压缩、Prompt 提交、中止与投影同步的调用入口，把桥接缺失与通信异常转换为安全的展示结果。 */
 import type {
   CapabilitiesResult,
+  CompactResultResult,
   ProjectionBatch,
   ProjectionResult,
+  PromptImageInput,
   PromptResult,
   RuntimeError,
   RuntimeResult,
@@ -66,12 +68,15 @@ export async function abortRuntime(): Promise<RuntimeResult> {
   }
 }
 
-/** 提交 Prompt；返回只表达请求接受或拒绝，不代表 Agent 执行结束。 */
-export async function sendPrompt(message: string): Promise<PromptResult> {
+/** 提交 Prompt；返回只表达请求接受或拒绝，不代表 Agent 执行结束。图片附件经主进程校验后转发。 */
+export async function sendPrompt(
+  message: string,
+  images: readonly PromptImageInput[] = []
+): Promise<PromptResult> {
   const bridge = window.desktop
   if (!bridge || typeof bridge.sendPrompt !== 'function') return unavailable()
   try {
-    return await bridge.sendPrompt(message)
+    return await bridge.sendPrompt(message, images)
   } catch {
     return callFailed()
   }
@@ -118,6 +123,17 @@ export async function setRuntimeThinkingLevel(level: string): Promise<RuntimeRes
   const request: SetThinkingLevelRequest = { level }
   try {
     return await bridge.setRuntimeThinkingLevel(request)
+  } catch {
+    return callFailed()
+  }
+}
+
+/** 手动压缩上下文；等待压缩完成，成功返回结果投影，失败与超时如实返回。 */
+export async function compactRuntime(): Promise<CompactResultResult> {
+  const bridge = window.desktop
+  if (!bridge || typeof bridge.compactRuntime !== 'function') return unavailable()
+  try {
+    return await bridge.compactRuntime()
   } catch {
     return callFailed()
   }

@@ -5,7 +5,8 @@
  * 不重建消息、不猜测缺失内容，也不保存历史；投影快照与批次仍是唯一来源。投影按消息 copy-on-write
  * （只替换被改动的消息与工具条目对象），因此这里缓存上一次的渲染项：消息对象与其工具条目对象都没变
  * 时直接复用，避免每个批次都重建整段历史的块对象；缓存只保留仍在投影里的消息，不持有已丢弃内容。
- * 工具卡片所需的字段原样来自投影，本模块不计算耗时也不整理非文本内容；Diff 与工具专属 UI 留到后续阶段。
+ * 用户消息的图片附件块经 `ChatTextBlock.image` 原样透传；工具卡片所需的字段（含 Diff）原样
+ * 来自投影，本模块不计算耗时、不整理非文本内容，也不解析变更。
  */
 import type { ProjectionBlock, ProjectionMessage, ToolExecution } from '../../shared/runtime-api'
 
@@ -22,6 +23,8 @@ export interface ChatTextBlock {
   readonly key: string
   readonly text: string
   readonly truncated: boolean
+  /** 图片附件描述；非图片块为 null。来自投影的 data URL，直接用于 <img>。 */
+  readonly image: { readonly dataUrl: string; readonly mimeType: string; readonly bytes: number } | null
 }
 
 export interface ChatThinkingBlock {
@@ -141,7 +144,7 @@ function toChatBlock(
 ): ChatBlock {
   const key = `${messageId}-${block.contentIndex}`
   if (block.kind === 'text') {
-    return { kind: 'text', key, text: block.text, truncated: block.truncated }
+    return { kind: 'text', key, text: block.text, truncated: block.truncated, image: block.image }
   }
   if (block.kind === 'thinking') {
     return { kind: 'thinking', key, text: block.text, truncated: block.truncated }

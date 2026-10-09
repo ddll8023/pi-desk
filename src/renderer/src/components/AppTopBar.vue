@@ -1,4 +1,4 @@
-<!-- 顶栏：Sidebar 折叠开关、主题循环切换、项目切换入口、当前会话与 Runtime 状态，并在详情弹层里提供模型、Thinking、上下文占用等 Agent 控制、重置本项目信任决定与关闭 Runtime；不承载消息与 Prompt 提交。 -->
+<!-- 顶栏：Sidebar 折叠开关、主题循环切换、项目切换入口、当前会话与 Runtime 状态，并在详情弹层里提供模型、Thinking、上下文占用等 Agent 控制、从历史消息分叉、重置本项目信任决定与关闭 Runtime；不承载消息与 Prompt 提交。 -->
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
 import { computed, onMounted, onUnmounted, ref } from 'vue'
@@ -6,10 +6,12 @@ import { useDesktopStore } from '../stores/desktop'
 import { usePreferencesStore } from '../stores/preferences'
 import { useProjectStore } from '../stores/project'
 import { useRuntimeStore } from '../stores/runtime'
+import { useSessionStore } from '../stores/session'
 import { useTrustStore } from '../stores/trust'
 import type { TrustStatus } from '../../../shared/trust-api'
 import AgentControls from './AgentControls.vue'
 import ConfirmDialog from './ConfirmDialog.vue'
+import ForkDialog from './ForkDialog.vue'
 import ProjectSwitcher from './ProjectSwitcher.vue'
 
 defineProps<{
@@ -26,6 +28,7 @@ const desktopStore = useDesktopStore()
 const preferencesStore = usePreferencesStore()
 const projectStore = useProjectStore()
 const runtimeStore = useRuntimeStore()
+const sessionStore = useSessionStore()
 const trustStore = useTrustStore()
 const { connection } = storeToRefs(desktopStore)
 const { theme } = storeToRefs(preferencesStore)
@@ -47,6 +50,8 @@ const trustStatusDetail = computed(() => {
 })
 const confirmingTrustReset = ref(false)
 const trustResetBusy = ref(false)
+/** 分叉弹层挂在顶栏组件内：入口在 Runtime 详情弹层里，弹层本身全局展示。 */
+const showingFork = ref(false)
 
 const runtimeInfo = computed(() => (
   runtimeView.value.phase === 'ready' ? runtimeView.value.snapshot.info : null
@@ -122,6 +127,17 @@ function shutdownRuntime(): void {
 /** 重置当前项目的信任决定；下次启动该项目时重新询问。 */
 function resetTrustDecision(): void {
   confirmingTrustReset.value = true
+}
+
+/** 打开分叉弹层并读取可分叉消息；入口只在 Runtime 就绪时展示。 */
+function openForkDialog(): void {
+  closePanel()
+  showingFork.value = true
+  void sessionStore.loadForkMessages()
+}
+
+function closeForkDialog(): void {
+  showingFork.value = false
 }
 
 async function confirmTrustReset(): Promise<void> {
@@ -259,6 +275,15 @@ onUnmounted(() => {
           type="button"
           class="control-button mt-4"
           :disabled="runtimeView.phase !== 'ready'"
+          @click="openForkDialog"
+        >
+          从历史消息分叉
+        </button>
+
+        <button
+          type="button"
+          class="control-button mt-2"
+          :disabled="runtimeView.phase !== 'ready'"
           @click="shutdownRuntime"
         >
           关闭 Runtime
@@ -284,5 +309,7 @@ onUnmounted(() => {
       @confirm="confirmTrustReset"
       @cancel="cancelTrustReset"
     />
+
+    <ForkDialog v-if="showingFork" @close="closeForkDialog" />
   </header>
 </template>

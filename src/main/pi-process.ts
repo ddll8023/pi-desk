@@ -74,10 +74,10 @@ export function getPiExecutablePath(): string {
 }
 
 /**
- * 启动参数固定：RPC 模式、按信任决定传递项目资源覆盖、关闭四类资源、显式工具集、
- * 会话目录与可选恢复会话。有受保护资源时决定必须显式传递（Desktop 的决定优先于 Pi 已保存的
- * 信任记录）；无受保护资源时不传，避免无意义的覆盖。会话由 Pi 持久化，不再使用 `--no-session`；
- * 页面不能覆盖其中任何一项。
+ * 启动参数固定：RPC 模式、按信任决定传递项目资源覆盖、关闭 Skills、Prompt Templates 与 MCP、
+ * 显式工具集、会话目录与可选恢复会话。Extension 由 P3-01 的 Trust 拦截控制加载：有受保护资源
+ * 时决定必须显式传递（Desktop 的决定优先于 Pi 已保存的信任记录），无受保护资源时不传。
+ * 会话由 Pi 持久化，不再使用 `--no-session`；页面不能覆盖其中任何一项。
  */
 export function getPiLaunchArguments(options: PiProcessOptions): string[] {
   const tools = process.platform === 'win32'
@@ -85,7 +85,6 @@ export function getPiLaunchArguments(options: PiProcessOptions): string[] {
     : 'read,bash,edit,write'
   const args = [
     '--mode', 'rpc',
-    '--no-extensions',
     '--no-skills',
     '--no-prompt-templates',
     '--no-mcp',

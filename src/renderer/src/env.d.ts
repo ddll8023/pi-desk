@@ -2,6 +2,7 @@
 /// <reference types="vite/client" />
 
 import type { DesktopApi } from '../../shared/desktop-api'
+import type { ExtensionUiApi } from '../../shared/extension-ui-api'
 import type { PreferencesApi } from '../../shared/preferences-api'
 import type { ProjectApi } from '../../shared/project-api'
 import type { RuntimeApi } from '../../shared/runtime-api'
@@ -10,7 +11,7 @@ import type { TrustApi } from '../../shared/trust-api'
 
 declare global {
   interface Window {
-    readonly desktop?: DesktopApi & RuntimeApi & ProjectApi & SessionApi & PreferencesApi & TrustApi
+    readonly desktop?: DesktopApi & RuntimeApi & ProjectApi & SessionApi & PreferencesApi & TrustApi & ExtensionUiApi
   }
 }
 

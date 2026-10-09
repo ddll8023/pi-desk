@@ -1,13 +1,15 @@
-/** 保存聊天区与 Runtime 状态的展示状态、投影消息与工具条目副本、Agent 能力、订阅与启停、Prompt 提交与控制动作，不持有 Runtime 所有权，也不承担消息重建与通知窗口。 */
+/** 保存聊天区与 Runtime 状态的展示状态、投影消息与工具条目副本、Agent 能力、订阅与启停、Prompt 提交与控制动作（含手动压缩），不持有 Runtime 所有权，也不承担消息重建与通知窗口。 */
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import type {
   AgentCapabilities,
+  CompactResult,
   ProjectionBatch,
   ProjectionBlock,
   ProjectionMessage,
   ProjectionUpdate,
   PromptDisposition,
+  PromptImageInput,
   RuntimeError,
   RuntimeStatus,
   ToolExecution
@@ -16,6 +18,7 @@ import { useTrustStore } from './trust'
 import {
   abortRuntime,
   ackRuntimeProjection,
+  compactRuntime,
   getRuntimeCapabilities,
   getRuntimeProjection,
   getRuntimeStatus,
@@ -62,6 +65,13 @@ type CapabilitiesViewState =
 type AgentActionState =
   | { phase: 'idle' }
   | { phase: 'applying' }
+  | { phase: 'error'; error: RuntimeError }
+
+/** 手动压缩动作的展示状态；成功保留最近一次结果供界面展示。 */
+type CompactActionState =
+  | { phase: 'idle' }
+  | { phase: 'compacting' }
+  | { phase: 'done'; result: CompactResult }
   | { phase: 'error'; error: RuntimeError }
 
 /** 块级幂等替换；新块按 contentIndex 顺序插入。 */
@@ -147,6 +157,7 @@ export const useRuntimeStore = defineStore('runtime', () => {
   const capabilitiesView = ref<CapabilitiesViewState>({ phase: 'idle' })
   const modelAction = ref<AgentActionState>({ phase: 'idle' })
   const thinkingAction = ref<AgentActionState>({ phase: 'idle' })
+  const compactAction = ref<CompactActionState>({ phase: 'idle' })
   let releaseSubscription: (() => void) | null = null
   let releaseProjection: (() => void) | null = null
   /** 已取得基准快照的 Runtime 代际；为空表示尚无基准。 */
@@ -224,12 +235,12 @@ export const useRuntimeStore = defineStore('runtime', () => {
     applyStatus(result.data)
   }
 
-  /** 提交 Prompt；只有就绪状态才发起，发送中不重复提交。 */
-  async function send(message: string): Promise<void> {
+  /** 提交 Prompt（含可选图片附件）；只有就绪状态才发起，发送中不重复提交。 */
+  async function send(message: string, images: readonly PromptImageInput[] = []): Promise<void> {
     if (view.value.phase !== 'ready' || promptView.value.phase === 'sending') return
 
     promptView.value = { phase: 'sending' }
-    const result = await sendPrompt(message)
+    const result = await sendPrompt(message, images)
     promptView.value = result.ok
       ? { phase: 'accepted', disposition: result.data.disposition }
       : { phase: 'error', error: result.error }
@@ -338,6 +349,7 @@ export const useRuntimeStore = defineStore('runtime', () => {
       abortView.value = { phase: 'idle' }
       modelAction.value = { phase: 'idle' }
       thinkingAction.value = { phase: 'idle' }
+      compactAction.value = { phase: 'idle' }
       capabilitiesView.value = { phase: 'idle' }
       capabilitiesRuntimeId = null
       capabilitiesAttemptedRuntimeId = null
@@ -424,6 +436,23 @@ export const useRuntimeStore = defineStore('runtime', () => {
     applyStatus(result.data)
   }
 
+  /**
+   * 手动压缩上下文；等待完成，成功展示结果并重新读取能力（上下文占用会变化）。
+   * 压缩中提交仍以 Pi 的拒绝为准，这里不做本地预检。
+   */
+  async function compact(): Promise<void> {
+    if (view.value.phase !== 'ready' || compactAction.value.phase === 'compacting') return
+
+    compactAction.value = { phase: 'compacting' }
+    const result = await compactRuntime()
+    if (!result.ok) {
+      compactAction.value = { phase: 'error', error: result.error }
+      return
+    }
+    compactAction.value = { phase: 'done', result: result.data }
+    await refreshCapabilities()
+  }
+
   return {
     view,
     promptView,
@@ -431,6 +460,7 @@ export const useRuntimeStore = defineStore('runtime', () => {
     capabilitiesView,
     modelAction,
     thinkingAction,
+    compactAction,
     messages,
     tools,
     projectionSync,
@@ -445,6 +475,7 @@ export const useRuntimeStore = defineStore('runtime', () => {
     stopOperation,
     refreshCapabilities,
     setModel,
-    setThinkingLevel
+    setThinkingLevel,
+    compact
   }
 })

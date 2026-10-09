@@ -1,4 +1,4 @@
-/** 管理唯一桌面窗口及其尺寸位置偏好、本地资产边界，以及应用信息、Project 选择与列表、Session 列表与打开、Project Trust 查询与决定、界面偏好、Runtime 启停、Prompt 提交、中止、Agent 能力查询与设置、消息/工具投影 IPC、事件广播与退出编排。 */
+/** 管理唯一桌面窗口及其尺寸位置偏好、本地资产边界，以及应用信息、Project 选择与列表、Session 列表与打开、分叉消息读取与分叉发起、Project Trust 查询与决定、界面偏好、Runtime 启停、Prompt 提交、中止、Agent 能力查询与设置、手动压缩、消息/工具投影 IPC、Extension UI 状态与对话响应 IPC、事件广播与退出编排。 */
 import { realpath } from 'node:fs/promises'
 import { extname, isAbsolute, relative, resolve, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -20,10 +20,31 @@ import {
 } from '../shared/project-api'
 import type { ProjectErrorCode, ProjectListResult, ProjectPathResult } from '../shared/project-api'
 import {
+  FORK_MESSAGES_CHANNEL,
+  FORK_START_CHANNEL,
   SESSION_LIST_CHANNEL,
   SESSION_OPEN_CHANNEL
 } from '../shared/session-api'
-import type { SessionErrorCode, SessionListResult, SessionOpenResult } from '../shared/session-api'
+import type {
+  ForkMessageListResult,
+  ForkStartResult,
+  SessionErrorCode,
+  SessionListResult,
+  SessionOpenResult
+} from '../shared/session-api'
+import {
+  EXTENSION_UI_RESPOND_CHANNEL,
+  EXTENSION_UI_STATE_CHANNEL,
+  EXTENSION_UI_EVENT,
+  isExtensionDialogResponseInput,
+  isExtensionUiResult
+} from '../shared/extension-ui-api'
+import type {
+  ExtensionDialogResponseInput,
+  ExtensionUiErrorCode,
+  ExtensionUiResult,
+  ExtensionUiSnapshot
+} from '../shared/extension-ui-api'
 import {
   TRUST_DECIDE_CHANNEL,
   TRUST_STATUS_CHANNEL,
@@ -36,6 +57,7 @@ import type {
 import {
   RUNTIME_ABORT_CHANNEL,
   RUNTIME_CAPABILITIES_CHANNEL,
+  RUNTIME_COMPACT_CHANNEL,
   RUNTIME_PROMPT_CHANNEL,
   RUNTIME_PROJECTION_ACK_CHANNEL,
   RUNTIME_PROJECTION_CHANNEL,
@@ -49,8 +71,10 @@ import {
 } from '../shared/runtime-api'
 import type {
   CapabilitiesResult,
+  CompactResultResult,
   ProjectionBatch,
   ProjectionResult,
+  PromptImageInput,
   PromptResult,
   RuntimeErrorCode,
   RuntimeResult,
@@ -83,7 +107,8 @@ const productionCsp = [
   "script-src 'self'",
   "style-src 'self'",
   "connect-src 'none'",
-  "img-src 'self'",
+  // data: 与 blob: 仅用于本地图片附件的缩略图展示；不放开远程图片。
+  "img-src 'self' data: blob:",
   "font-src 'self'",
   "object-src 'none'",
   "frame-src 'none'",
@@ -261,6 +286,10 @@ function capabilitiesFailure(code: RuntimeErrorCode, message: string): Capabilit
   return { ok: false, error: { code, message } }
 }
 
+function compactFailure(code: RuntimeErrorCode, message: string): CompactResultResult {
+  return { ok: false, error: { code, message } }
+}
+
 function projectPathFailure(code: ProjectErrorCode, message: string): ProjectPathResult {
   return { ok: false, error: { code, message } }
 }
@@ -273,7 +302,19 @@ function sessionFailure(code: SessionErrorCode, message: string): SessionListRes
   return { ok: false, error: { code, message } }
 }
 
+function forkMessagesFailure(code: SessionErrorCode, message: string): ForkMessageListResult {
+  return { ok: false, error: { code, message } }
+}
+
+function forkStartFailure(code: SessionErrorCode, message: string): ForkStartResult {
+  return { ok: false, error: { code, message } }
+}
+
 function preferencesFailure(code: PreferencesErrorCode, message: string): PreferencesResult {
+  return { ok: false, error: { code, message } }
+}
+
+function extensionUiFailure(code: ExtensionUiErrorCode, message: string): ExtensionUiResult {
   return { ok: false, error: { code, message } }
 }
 
@@ -418,6 +459,53 @@ function registerSessionHandlers(pageUrl: string): void {
         return sessionFailure('TRUST_REQUIRED', trust.message ?? '项目包含需要信任决定的资源。')
       }
       return sessionManager.open({ sessionId: targetSessionId, allowInterrupt }, trust.decision)
+    }
+  )
+
+  /** 读取可分叉消息；零参数，要求 Runtime 就绪。 */
+  ipcMain.handle(
+    FORK_MESSAGES_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<ForkMessageListResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return forkMessagesFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 0) {
+        return forkMessagesFailure('INVALID_REQUEST', '分叉消息接口不接受参数。')
+      }
+      return sessionManager.forkMessages()
+    }
+  )
+
+  /** 从指定条目分叉；只接受 entryId 与显式中断确认，切换编排与会话打开共用同一条信任拦截。 */
+  ipcMain.handle(
+    FORK_START_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<ForkStartResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return forkStartFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 1) {
+        return forkStartFailure('INVALID_REQUEST', '分叉接口只接受一个请求对象。')
+      }
+      const request = args[0]
+      if (typeof request !== 'object' || request === null || Array.isArray(request)) {
+        return forkStartFailure('INVALID_REQUEST', '分叉参数格式不正确。')
+      }
+      const fields = request as Record<string, unknown>
+      if (Object.keys(fields).some((key) => key !== 'entryId' && key !== 'allowInterrupt')) {
+        return forkStartFailure('INVALID_REQUEST', '分叉参数包含未支持的字段。')
+      }
+      const { entryId, allowInterrupt } = fields
+      if (typeof entryId !== 'string' || entryId.trim() === '' || entryId.length > 256) {
+        return forkStartFailure('FORK_NOT_FOUND', '分叉条目 id 必须是非空且长度受控的字符串。')
+      }
+      if (typeof allowInterrupt !== 'boolean') {
+        return forkStartFailure('INVALID_REQUEST', '分叉必须显式说明是否允许中断当前操作。')
+      }
+      const trust = await resolveTrustForCurrentProject()
+      if (trust.requiresPrompt) {
+        return forkStartFailure('TRUST_REQUIRED', trust.message ?? '项目包含需要信任决定的资源。')
+      }
+      return sessionManager.startFork({ entryId, allowInterrupt }, trust.decision)
     }
   )
 }
@@ -663,7 +751,23 @@ function registerRuntimeHandlers(pageUrl: string): void {
     }
   )
 
-  /** 只接受 Prompt 文本；不接受可执行文件路径、启动参数、图片或排队选项。 */
+  /** 只接受零参数；压缩中状态由 isCompacting 收敛，本地不做 streaming 预检。 */
+  ipcMain.handle(
+    RUNTIME_COMPACT_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<CompactResultResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return compactFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 0) {
+        return compactFailure('INVALID_REQUEST', '压缩接口不接受参数。')
+      }
+      const outcome = await runtimeManager.compact()
+      if (outcome.ok) return { ok: true, data: outcome.result }
+      return compactFailure(outcome.code, outcome.message)
+    }
+  )
+
+  /** 只接受 Prompt 文本与图片附件；不接受可执行文件路径、启动参数或排队选项。 */
   ipcMain.handle(
     RUNTIME_PROMPT_CHANNEL,
     async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<PromptResult> => {
@@ -678,14 +782,40 @@ function registerRuntimeHandlers(pageUrl: string): void {
         return promptFailure('INVALID_REQUEST', '提交 Prompt 参数格式不正确。')
       }
       const fields = request as Record<string, unknown>
-      if (Object.keys(fields).some((key) => key !== 'message')) {
+      if (Object.keys(fields).some((key) => key !== 'message' && key !== 'images')) {
         return promptFailure('INVALID_REQUEST', '提交 Prompt 参数包含未支持的字段。')
       }
       const message = fields.message
       if (typeof message !== 'string') {
         return promptFailure('INVALID_REQUEST', 'Prompt 内容必须是字符串。')
       }
-      return runtimeManager.prompt(message)
+      // 图片附件逐字段校验后重建：name 受控，mimeType 与 data 只接受字符串；其他字段丢弃。
+      const images: PromptImageInput[] = []
+      if (fields.images !== undefined) {
+        if (!Array.isArray(fields.images) || fields.images.length > 4) {
+          return promptFailure('INVALID_REQUEST', '图片附件必须是数量受控的数组。')
+        }
+        for (const entry of fields.images) {
+          if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
+            return promptFailure('INVALID_REQUEST', '图片附件格式不正确。')
+          }
+          const item = entry as Record<string, unknown>
+          if (Object.keys(item).some((key) => key !== 'name' && key !== 'mimeType' && key !== 'data')) {
+            return promptFailure('INVALID_REQUEST', '图片附件包含未支持的字段。')
+          }
+          if (typeof item.name !== 'string' || item.name === '' || item.name.length > 256) {
+            return promptFailure('INVALID_REQUEST', '图片文件名必须是非空且长度受控的字符串。')
+          }
+          if (typeof item.mimeType !== 'string' || item.mimeType === '' || item.mimeType.length > 64) {
+            return promptFailure('INVALID_REQUEST', '图片 MIME 类型必须是长度受控的字符串。')
+          }
+          if (typeof item.data !== 'string' || item.data === '') {
+            return promptFailure('INVALID_REQUEST', '图片数据必须是非空字符串。')
+          }
+          images.push({ name: item.name, mimeType: item.mimeType, data: item.data })
+        }
+      }
+      return runtimeManager.prompt(message, images)
     }
   )
 
@@ -766,6 +896,60 @@ function registerPreferencesHandlers(pageUrl: string): void {
   )
 }
 
+/**
+ * Extension UI 状态查询与 dialog 响应提交；只接受受控的 id 与互斥响应形态。
+ * id 不在队列或形态不符按 EXTENSION_DIALOG_NOT_FOUND / INVALID_REQUEST 拒绝，不猜造。
+ */
+function registerExtensionUiHandlers(pageUrl: string): void {
+  ipcMain.handle(
+    EXTENSION_UI_STATE_CHANNEL,
+    (event: IpcMainInvokeEvent, ...args: unknown[]): ExtensionUiResult => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return extensionUiFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 0) {
+        return extensionUiFailure('INVALID_REQUEST', 'Extension UI 状态接口不接受参数。')
+      }
+      return { ok: true, data: runtimeManager.getExtensionUiSnapshot() }
+    }
+  )
+
+  ipcMain.handle(
+    EXTENSION_UI_RESPOND_CHANNEL,
+    (event: IpcMainInvokeEvent, ...args: unknown[]): ExtensionUiResult => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return extensionUiFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 1) {
+        return extensionUiFailure('INVALID_REQUEST', 'Extension 对话响应接口只接受一个请求对象。')
+      }
+      const request = args[0]
+      if (typeof request !== 'object' || request === null || Array.isArray(request)) {
+        return extensionUiFailure('INVALID_REQUEST', 'Extension 对话响应参数格式不正确。')
+      }
+      const fields = request as Record<string, unknown>
+      if (Object.keys(fields).some((key) => key !== 'dialogId' && key !== 'response')) {
+        return extensionUiFailure('INVALID_REQUEST', 'Extension 对话响应参数包含未支持的字段。')
+      }
+      const { dialogId, response } = fields
+      if (!isBoundedIdentifier(dialogId, 256)) {
+        return extensionUiFailure('INVALID_REQUEST', '对话 id 必须是非空且长度受控的字符串。')
+      }
+      if (!isExtensionDialogResponseInput(response)) {
+        return extensionUiFailure('INVALID_REQUEST', '对话响应形态不符合约定。')
+      }
+      const snapshot = runtimeManager.respondExtensionDialog(
+        dialogId,
+        response as ExtensionDialogResponseInput
+      )
+      if (snapshot === null) {
+        return extensionUiFailure('EXTENSION_DIALOG_NOT_FOUND', '该 Extension 对话已结束或不存在。')
+      }
+      return { ok: true, data: snapshot }
+    }
+  )
+}
+
 /** 状态变化只发给当前唯一可信窗口，不广播到其他 webContents。 */
 function broadcastRuntimeStatus(status: RuntimeStatus): void {
   const target = mainWindow
@@ -782,6 +966,15 @@ function broadcastRuntimeProjection(batch: ProjectionBatch): void {
   const contents = target.webContents
   if (contents.isDestroyed()) return
   contents.send(RUNTIME_PROJECTION_EVENT, batch)
+}
+
+/** Extension UI 快照同样只发给当前唯一可信窗口，不广播到其他 webContents。 */
+function broadcastExtensionUi(snapshot: ExtensionUiSnapshot): void {
+  const target = mainWindow
+  if (target === null || target.isDestroyed()) return
+  const contents = target.webContents
+  if (contents.isDestroyed()) return
+  contents.send(EXTENSION_UI_EVENT, snapshot)
 }
 
 function restrictSession(): void {
@@ -872,12 +1065,14 @@ app.whenReady().then(async () => {
   registerAssetProtocol()
   registerAppInfoHandler(pageUrl)
   registerRuntimeHandlers(pageUrl)
+  registerExtensionUiHandlers(pageUrl)
   registerProjectHandlers(pageUrl)
   registerSessionHandlers(pageUrl)
   registerTrustHandlers(pageUrl)
   registerPreferencesHandlers(pageUrl)
   runtimeManager.onStatusChanged(broadcastRuntimeStatus)
   runtimeManager.onProjectionBatch(broadcastRuntimeProjection)
+  runtimeManager.onExtensionUi(broadcastExtensionUi)
   await createWindow(pageUrl)
 }).catch(() => {
   console.error('Pi Desktop 无法加载桌面页面。')

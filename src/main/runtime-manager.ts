@@ -2,16 +2,19 @@
  * 唯一 Runtime 的所有者：状态机、启停编排（含恢复会话时的历史基准）、受限业务操作与状态快照。
  *
  * 不直接管理 Pi Session 与消息内容；进程与管道操作交给 pi-process，展示投影交给
- * message-projection，IPC 契约与校验在 shared/runtime-api.ts。不接受页面传入的可执行
- * 文件路径或启动参数，旧 Runtime 的异步结果不得覆盖新状态。
+ * message-projection，Extension UI 状态按代际持有交给 extension-ui-manager（快照经订阅者
+ * 广播），IPC 契约与校验在 shared/runtime-api.ts。不接受页面传入的可执行文件路径或启动参数，
+ * 旧 Runtime 的异步结果不得覆盖新状态。
  */
 import type {
   AgentCapabilities,
   CapabilitiesResult,
+  CompactResult,
   ModelSummary,
   ProjectionBatch,
   ProjectionResult,
   PromptDisposition,
+  PromptImageInput,
   PromptResult,
   RuntimeErrorCode,
   RuntimeResult,
@@ -19,13 +22,19 @@ import type {
   SetModelRequest,
   SetThinkingLevelRequest
 } from '../shared/runtime-api'
+import type { ExtensionDialogResponseInput, ExtensionUiSnapshot } from '../shared/extension-ui-api'
+import type { ForkMessageSummary } from '../shared/session-api'
 import { MessageProjection } from './message-projection'
 import type { ProjectionStatusHint } from './message-projection'
+import { ExtensionUiManager } from './extension-ui-manager'
 import { PiProcess, PiProcessError } from './pi-process'
 import type { PiExitEvent } from './pi-process'
 import {
   PiProtocol,
+  toCompactResult,
   toContextUsageField,
+  toForkMessages,
+  toForkOutcome,
   toModelSummaries,
   toPromptDisposition,
   toRuntimeInfo,
@@ -37,6 +46,15 @@ import { getSessionRoot } from './session-store'
 
 /** get_state 就绪等待期限；超时只结束等待，不证明 Pi 没有响应。 */
 const READY_TIMEOUT_MS = 10_000
+
+/** fork 消息列表读取的等待上限。 */
+const FORK_MESSAGES_TIMEOUT_MS = 15_000
+
+/** fork 命令的等待上限；fork 含文件复制与 Extension 处理，等待期限比普通命令长。 */
+const FORK_TIMEOUT_MS = 30_000
+
+/** 手动压缩的等待上限；压缩是一次 LLM 调用，比普通命令长得多。 */
+const COMPACT_TIMEOUT_MS = 120_000
 
 /** prompt 只等待 preflight 的期限；超时只结束等待，结果未知且不自动重发。 */
 const PROMPT_TIMEOUT_MS = 30_000
@@ -59,6 +77,15 @@ const CAPABILITIES_TIMEOUT_MS = 15_000
 /** prompt 文本上限，按 UTF-8 字节计。 */
 const PROMPT_MAX_BYTES = 1_048_576
 
+/** 允许的图片 MIME 类型；与常见图像格式一致，其他类型一律拒绝。 */
+const PROMPT_IMAGE_MIME_TYPES: readonly string[] = ['image/png', 'image/jpeg', 'image/gif', 'image/webp']
+
+/** 单张图片 base64 编码后的字符数上限；约对应 3 MiB 原始数据。 */
+const PROMPT_IMAGE_MAX_CHARS = 4_194_304
+
+/** 单条 Prompt 最多携带的图片数。 */
+const PROMPT_IMAGE_MAX_COUNT = 4
+
 /** 失败时回传给页面的诊断行数上限。 */
 const DIAGNOSTIC_TAIL_LINES = 6
 
@@ -67,6 +94,9 @@ export type RuntimeStatusListener = (status: RuntimeStatus) => void
 
 /** 投影批次订阅者；只在主进程内使用，不进 IPC 契约。 */
 export type RuntimeProjectionListener = (batch: ProjectionBatch) => void
+
+/** Extension UI 快照订阅者；只在主进程内使用，不进 IPC 契约。 */
+export type ExtensionUiListener = (snapshot: ExtensionUiSnapshot) => void
 
 interface ActiveRuntime {
   readonly runtimeId: number
@@ -98,6 +128,20 @@ export class RuntimeManager {
   private snapshot: RuntimeStatus = { state: 'idle', runtimeId: null, info: null, lastError: null }
   private readonly listeners = new Set<RuntimeStatusListener>()
   private readonly projectionListeners = new Set<RuntimeProjectionListener>()
+  private readonly extensionUiListeners = new Set<ExtensionUiListener>()
+  /**
+   * Extension UI 状态按代际持有；写回 Pi 管道时用当时的活动 Runtime，
+   * 代际已切换时写入会按管道关闭收敛，不重发。
+   */
+  private readonly extensionUi = new ExtensionUiManager({
+    onSnapshot: (snapshot) => this.emitExtensionUi(snapshot),
+    onDialogResponse: (response) => {
+      const runtime = this.active
+      if (runtime === null) return
+      // 与 protocol.request 同样按 JSONL 写入：行尾必须有换行符。
+      void runtime.process.write(`${JSON.stringify(response)}\n`).catch(() => undefined)
+    }
+  })
   /** 是否由主动关闭触发：用于区分正常关闭与异常退出。 */
   private stopRequested = false
   /**
@@ -125,6 +169,138 @@ export class RuntimeManager {
     this.projectionListeners.add(listener)
     return () => {
       this.projectionListeners.delete(listener)
+    }
+  }
+
+  /** 订阅 Extension UI 快照；返回释放函数。单个订阅者异常不影响状态。 */
+  onExtensionUi(listener: ExtensionUiListener): () => void {
+    this.extensionUiListeners.add(listener)
+    return () => {
+      this.extensionUiListeners.delete(listener)
+    }
+  }
+
+  /** 当前 Extension UI 快照；无活动 Runtime 时状态为空。 */
+  getExtensionUiSnapshot(): ExtensionUiSnapshot {
+    return this.extensionUi.snapshot()
+  }
+
+  /** 提交 Extension dialog 响应；id 不存在或形态不符时返回 null，由调用方转为错误结果。 */
+  respondExtensionDialog(
+    dialogId: string,
+    response: ExtensionDialogResponseInput
+  ): ExtensionUiSnapshot | null {
+    const outcome = this.extensionUi.respond(dialogId, response)
+    return outcome.ok ? outcome.snapshot : null
+  }
+
+  /**
+   * 读取当前会话里可分叉的用户消息；要求 Runtime 就绪。
+   * 空列表是合法结果（还没有用户消息），与失败相区分。
+   */
+  async readForkMessages(): Promise<
+    { ok: true; messages: ForkMessageSummary[] } | { ok: false; code: RuntimeErrorCode; message: string }
+  > {
+    try {
+      const runtime = this.requireReadyRuntime()
+      const response = await this.requestCommand(
+        runtime,
+        { type: 'get_fork_messages' },
+        FORK_MESSAGES_TIMEOUT_MS,
+        '读取可分叉消息'
+      )
+      if (!response.success) {
+        throw new RuntimeFailure(
+          'RUNTIME_COMMAND_REJECTED',
+          `Pi 拒绝了读取可分叉消息：${response.error ?? '未提供错误信息'}`
+        )
+      }
+      const messages = toForkMessages(response.data)
+      if (messages === null) {
+        throw new RuntimeFailure('RUNTIME_PROTOCOL_ERROR', 'get_fork_messages 响应缺少约定的消息数组。')
+      }
+      return { ok: true, messages }
+    } catch (error) {
+      const failure = error instanceof RuntimeFailure
+        ? error
+        : new RuntimeFailure('INTERNAL_ERROR', '读取可分叉消息时发生未预期的内部错误。')
+      return { ok: false, code: failure.code, message: failure.message }
+    }
+  }
+
+  /**
+   * 向 Pi 发送 fork 命令并等待结果；只负责命令往返，成功后的会话切换由 SessionManager 编排。
+   * Extension 取消（`cancelled: true`）以专属错误码返回，与失败相区分。
+   */
+  async requestFork(entryId: string): Promise<
+    { ok: true; text: string | null } | { ok: false; code: RuntimeErrorCode; message: string; cancelled: boolean }
+  > {
+    try {
+      const runtime = this.requireReadyRuntime()
+      const response = await this.requestCommand(
+        runtime,
+        { type: 'fork', entryId },
+        FORK_TIMEOUT_MS,
+        '分叉会话'
+      )
+      if (!response.success) {
+        throw new RuntimeFailure(
+          'RUNTIME_COMMAND_REJECTED',
+          `Pi 拒绝了分叉：${response.error ?? '未提供错误信息'}`
+        )
+      }
+      const outcome = toForkOutcome(response.data)
+      if (outcome === null) {
+        throw new RuntimeFailure('RUNTIME_PROTOCOL_ERROR', 'fork 响应缺少约定的 cancelled 字段。')
+      }
+      if (outcome.cancelled) {
+        throw new RuntimeFailure('RUNTIME_COMMAND_REJECTED', '分叉已被 Extension 取消。')
+      }
+      return { ok: true, text: outcome.text }
+    } catch (error) {
+      const failure = error instanceof RuntimeFailure
+        ? error
+        : new RuntimeFailure('INTERNAL_ERROR', '分叉会话时发生未预期的内部错误。')
+      return {
+        ok: false,
+        code: failure.code,
+        message: failure.message,
+        cancelled: failure.message.includes('Extension 取消')
+      }
+    }
+  }
+
+  /**
+   * 手动压缩上下文并等待完成；成功返回结果投影，失败与超时如实返回，不自动重发。
+   * 压缩中状态由 `isCompacting` 与事件流收敛，这里不做本地预检。
+   */
+  async compact(): Promise<
+    { ok: true; result: CompactResult } | { ok: false; code: RuntimeErrorCode; message: string }
+  > {
+    try {
+      const runtime = this.requireReadyRuntime()
+      const response = await this.requestCommand(
+        runtime,
+        { type: 'compact' },
+        COMPACT_TIMEOUT_MS,
+        '压缩上下文'
+      )
+      if (!response.success) {
+        throw new RuntimeFailure(
+          'RUNTIME_COMMAND_REJECTED',
+          `Pi 拒绝了压缩：${response.error ?? '未提供错误信息'}`
+        )
+      }
+      const result = toCompactResult(response.data)
+      if (result === null) {
+        throw new RuntimeFailure('RUNTIME_PROTOCOL_ERROR', 'compact 响应缺少约定的结果字段。')
+      }
+      return { ok: true, result }
+    } catch (error) {
+      const failure = error instanceof RuntimeFailure
+        ? error
+        : new RuntimeFailure('INTERNAL_ERROR', '压缩上下文时发生未预期的内部错误。')
+      return { ok: false, code: failure.code, message: failure.message }
     }
   }
 
@@ -184,9 +360,9 @@ export class RuntimeManager {
    * 提交 prompt 并返回请求接受或拒绝结果；不等待 Agent 执行结束。
    * busy、无模型与凭据问题一律由 Pi 的拒绝表达，主进程不做本地 streaming 预检。
    */
-  async prompt(message: string): Promise<PromptResult> {
+  async prompt(message: string, images: readonly PromptImageInput[] = []): Promise<PromptResult> {
     try {
-      return { ok: true, data: { disposition: await this.submitPrompt(message) } }
+      return { ok: true, data: { disposition: await this.submitPrompt(message, images) } }
     } catch (error) {
       const failure = error instanceof RuntimeFailure
         ? error
@@ -281,6 +457,7 @@ export class RuntimeManager {
     if (this.active !== null && this.active.runtimeId === runtime.runtimeId) {
       // 进程未在期限内确认退出：按失败收敛，并解除归属以免留下无主 Runtime。
       runtime.projection.dispose()
+      this.extensionUi.dispose()
       this.active = null
       this.capabilityCache = null
       this.publish({
@@ -316,6 +493,8 @@ export class RuntimeManager {
     const projectDirectory = await this.checkProjectPath(projectPath)
     const runtimeId = (this.runtimeIdSeed += 1)
     this.publish({ state: 'starting', runtimeId, info: null, lastError: null })
+    // Extension UI 状态随代际重建：上一代际的 dialog 队列与展示状态不再有意义。
+    this.extensionUi.beginGeneration(runtimeId)
 
     // 投影随 Runtime 代际存在；批次与状态提示都只在该代际内生效。
     const projection = new MessageProjection(runtimeId, {
@@ -332,7 +511,11 @@ export class RuntimeManager {
         protocolError ??= message
       },
       onRecord: (kind, payload) => {
-        // 会话事件进入展示投影；状态类事件同时用于收敛 Runtime 快照。
+        // Extension UI 请求进入 Extension 状态管理；会话事件进入展示投影与快照收敛。
+        if (kind === 'extension-ui') {
+          this.extensionUi.applyRequest(payload)
+          return
+        }
         if (kind !== 'session-event') return
         projection.applySessionEvent(payload)
         this.applyRuntimeEvent(runtimeId, payload)
@@ -466,8 +649,14 @@ export class RuntimeManager {
     }
   }
 
-  /** 校验 prompt 文本并发送；只返回 disposition，不做本地 busy 判定。 */
-  private async submitPrompt(message: string): Promise<PromptDisposition> {
+  /**
+   * 校验 prompt 文本与图片附件并发送；只返回 disposition，不做本地 busy 判定。
+   * 图片校验 MIME 白名单、单图编码后大小与条数上限，校验失败按参数拒绝，不静默丢弃。
+   */
+  private async submitPrompt(
+    message: string,
+    images: readonly PromptImageInput[]
+  ): Promise<PromptDisposition> {
     const runtime = this.active
     if (runtime === null || this.snapshot.state !== 'ready') {
       throw new RuntimeFailure('RUNTIME_NOT_READY', 'Runtime 尚未就绪，无法提交 Prompt；请先启动 Runtime。')
@@ -478,9 +667,25 @@ export class RuntimeManager {
     if (Buffer.byteLength(message, 'utf8') > PROMPT_MAX_BYTES) {
       throw new RuntimeFailure('INVALID_REQUEST', `Prompt 内容超过 ${PROMPT_MAX_BYTES} 字节上限。`)
     }
+    if (images.length > PROMPT_IMAGE_MAX_COUNT) {
+      throw new RuntimeFailure('INVALID_REQUEST', `单条 Prompt 最多携带 ${PROMPT_IMAGE_MAX_COUNT} 张图片。`)
+    }
+
+    const wireImages = images.map((image) => {
+      if (!PROMPT_IMAGE_MIME_TYPES.includes(image.mimeType)) {
+        throw new RuntimeFailure('INVALID_REQUEST', `不支持的图片类型：${image.mimeType}。`)
+      }
+      if (image.data.length === 0 || image.data.length > PROMPT_IMAGE_MAX_CHARS) {
+        throw new RuntimeFailure('INVALID_REQUEST', `图片「${image.name}」超出编码后大小上限。`)
+      }
+      return { type: 'image', data: image.data, mimeType: image.mimeType }
+    })
+
+    const command: Record<string, unknown> = { type: 'prompt', message }
+    if (wireImages.length > 0) command.images = wireImages
 
     const outcome = await runtime.protocol.request(
-      { type: 'prompt', message },
+      command,
       (line) => runtime.process.write(line),
       PROMPT_TIMEOUT_MS
     )
@@ -773,6 +978,7 @@ export class RuntimeManager {
     const runtime = this.active
     if (runtime === null || runtime.runtimeId !== runtimeId) return
     runtime.projection.dispose()
+    this.extensionUi.dispose()
     this.active = null
     this.capabilityCache = null
     if (this.stopRequested) {
@@ -814,6 +1020,17 @@ export class RuntimeManager {
         listener(batch)
       } catch {
         // 通知失败不改变投影状态。
+      }
+    }
+  }
+
+  /** Extension UI 快照只发给订阅者；单个订阅者异常不影响状态。 */
+  private emitExtensionUi(snapshot: ExtensionUiSnapshot): void {
+    for (const listener of [...this.extensionUiListeners]) {
+      try {
+        listener(snapshot)
+      } catch {
+        // 通知失败不改变 Extension UI 状态。
       }
     }
   }

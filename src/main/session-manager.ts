@@ -1,11 +1,15 @@
 /**
- * 当前项目会话列表与打开编排的所有者：选择、新建与恢复会话。
+ * 当前项目会话列表与打开、分叉编排的所有者：选择、新建、恢复与从历史条目分叉会话。
  *
  * 列表来自 Pi 管理的会话文件（session-store），打开与切换一律复用 RuntimeManager 的关闭链后再
- * 以新参数启动，不在同一进程内切换会话；有活动操作而请求未确认时直接拒绝，不自动中断、不排队、
- * 不重放已提交的内容。IPC 契约与校验在 shared/session-api.ts。
+ * 以新参数启动，不在同一进程内切换会话；分叉先发 fork 命令、复核新会话 id 后复用同一条打开链。
+ * 有活动操作而请求未确认时直接拒绝，不自动中断、不排队、不重放已提交的内容。
+ * IPC 契约与校验在 shared/session-api.ts。
  */
 import type {
+  ForkMessageListResult,
+  ForkStartRequest,
+  ForkStartResult,
   SessionError,
   SessionErrorCode,
   SessionList,
@@ -64,6 +68,87 @@ export class SessionManager {
         message: '打开会话时发生未预期的内部错误。'
       })
     }
+  }
+
+  /**
+   * 读取当前 Runtime 会话里可分叉的用户消息；只要求 Runtime 就绪，不触发切换。
+   */
+  async forkMessages(): Promise<ForkMessageListResult> {
+    const status = this.runtimeStatus()
+    if (status.state !== 'ready') {
+      return {
+        ok: false,
+        error: { code: 'RUNTIME_NOT_READY', message: 'Runtime 尚未就绪，无法分叉会话。' }
+      }
+    }
+    const outcome = await this.options.runtime.readForkMessages()
+    if (outcome.ok) return { ok: true, data: { messages: outcome.messages } }
+    return { ok: false, error: { code: outcome.code, message: outcome.message } }
+  }
+
+  /**
+   * 从指定条目分叉：先向 Pi 发 fork（当前进程内产生新会话），再复用打开链重启式切换到新会话。
+   * Extension 取消以专属错误码如实返回；切换前的中断守门与信任决定语义与会话打开完全一致。
+   */
+  async startFork(
+    request: ForkStartRequest,
+    trustDecision: 'trusted' | 'untrusted' | null
+  ): Promise<ForkStartResult> {
+    try {
+      return { ok: true, data: await this.applyFork(request, trustDecision) }
+    } catch (error) {
+      if (error instanceof SessionFailure && error.code === 'FORK_CANCELLED') {
+        return { ok: false, error: { code: error.code, message: error.message } }
+      }
+      return this.failure(error, {
+        code: 'INTERNAL_ERROR',
+        message: '分叉会话时发生未预期的内部错误。'
+      })
+    }
+  }
+
+  /** fork 编排：中断守门 → fork 命令 → 复核新会话 → 重启式切换 → 返回刷新后的列表。 */
+  private async applyFork(
+    request: ForkStartRequest,
+    trustDecision: 'trusted' | 'untrusted' | null
+  ): Promise<{ sessionId: string; list: SessionList }> {
+    const status = this.runtimeStatus()
+    if (status.state !== 'ready') {
+      throw new SessionFailure('RUNTIME_NOT_READY', 'Runtime 尚未就绪，无法分叉会话。')
+    }
+    if (status.info?.isStreaming === true && !request.allowInterrupt) {
+      throw new SessionFailure(
+        'FORK_BLOCKED',
+        '当前有正在运行的操作；确认后会先停止它再分叉。'
+      )
+    }
+
+    const entryId = request.entryId
+    if (entryId.trim() === '') {
+      throw new SessionFailure('FORK_NOT_FOUND', '分叉条目 id 不能为空。')
+    }
+
+    const forked = await this.options.runtime.requestFork(entryId)
+    if (!forked.ok) {
+      throw new SessionFailure(forked.cancelled ? 'FORK_CANCELLED' : forked.code, forked.message)
+    }
+
+    // fork 后 Pi 已切换到新会话；读取实际会话 id，不再沿用旧快照。
+    const refreshed = this.options.runtime.getStatus()
+    if (!refreshed.ok) {
+      throw new SessionFailure('INTERNAL_ERROR', refreshed.error.message)
+    }
+    const newSessionId = refreshed.data.info?.sessionId
+    if (typeof newSessionId !== 'string' || newSessionId === '') {
+      throw new SessionFailure(
+        'RUNTIME_PROTOCOL_ERROR',
+        '分叉后无法取得新会话 id；会话已切换，请刷新列表后手动打开。'
+      )
+    }
+
+    // 复用打开链完成重启式切换：先结束旧 Runtime，再以新会话 id 启动。
+    const opened = await this.applyOpen({ sessionId: newSessionId, allowInterrupt: true }, trustDecision)
+    return { sessionId: newSessionId, list: opened }
   }
 
   /**

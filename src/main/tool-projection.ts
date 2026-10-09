@@ -6,10 +6,16 @@
  * 只保留最近一次报告、结束事件再用 `result` 校正，不做内容级累加；非文本内容只保留类型与
  * 估算大小的描述，不携带载荷也不渲染。
  *
+ * Edit / Write 变更展示只来自 Pi 已有的信息：优先解析结束结果 `details.diff`（Pi 执行时刻
+ * 基于真实文件内容算出，天然覆盖重复修改与并发变更），缺失时对 edit 工具用参数 `edits[]`
+ * 推断降级片段；其他工具与无法解析的情形不产出 Diff，不读文件、不自行计算基线、不伪造。
+ *
  * 条目的开始与结束时刻是 Desktop 收到对应事件的时刻，供界面计算耗时；Pi 的工具事件没有
  * 时间字段，该耗时不代表工具的真实执行时间。恢复会话时补种的历史条目没有开始时刻。
  */
 import type {
+  ToolDiff,
+  ToolDiffLine,
   ToolExecution,
   ToolExecutionPhase,
   ToolExecutionTextKind,
@@ -18,6 +24,9 @@ import type {
 
 /** 工具参数摘要上限；超限截断并在条目上标记，不伪装成完整参数。 */
 const MAX_TOOL_ARGS_CHARS = 4096
+
+/** Diff 展示文本总量上限；超出停止收行并标 `truncated`，不伪装成完整 Diff。 */
+const MAX_DIFF_CHARS = 16384
 
 /** 单条工具结果的非文本描述条数上限；超出只计数，不再追加描述。 */
 const MAX_NON_TEXT_PARTS = 32
@@ -37,6 +46,14 @@ interface ExtractedText {
 
 const EMPTY_TEXT: ExtractedText = { text: '', nonTextBlocks: 0, nonTextParts: [] }
 
+/** 由 Pi 结果 `details.diff` 行解析出的中间行；不匹配官方格式时行号保持缺失。 */
+interface ParsedDiffLine {
+  readonly kind: ToolDiffLine['kind']
+  readonly oldLine: number | null
+  readonly newLine: number | null
+  readonly text: string
+}
+
 interface MutableToolExecution {
   readonly toolCallId: string
   toolName: string
@@ -50,6 +67,7 @@ interface MutableToolExecution {
   textTruncated: boolean
   nonTextBlocks: number
   nonTextParts: ToolNonTextPart[]
+  diff: ToolDiff | null
 }
 
 export interface ToolProjectionCallbacks {
@@ -101,6 +119,111 @@ function estimateBase64Bytes(data: string): number {
   return Math.max(0, Math.floor((data.length * 3) / 4) - padding)
 }
 
+/** Pi diff 行的首字符语义：`+` 新增、`-` 删除、空格上下文，其余不识别。 */
+function readDiffLineKind(marker: string): ToolDiffLine['kind'] | null {
+  if (marker === '+') return 'add'
+  if (marker === '-') return 'remove'
+  if (marker === ' ') return 'context'
+  return null
+}
+
+/**
+ * 解析 Pi 内置 edit 工具 `details.diff` 的一行：首字符 + 右对齐行号 + 空格 + 内容，
+ * 折叠省略行是 ` ...`（无行号）。行号缺失不拒绝该行，只如实不帧行号。
+ */
+function parseResultDiffLine(line: string): ParsedDiffLine | null {
+  if (line === ' ...' || line.trimEnd() === '...') return { kind: 'fold', oldLine: null, newLine: null, text: ' ...' }
+  const kind = readDiffLineKind(line.charAt(0))
+  if (kind === null) return null
+  const body = line.slice(1)
+  const separator = body.indexOf(' ')
+  if (separator <= 0) return { kind, oldLine: null, newLine: null, text: body }
+  const numberText = body.slice(0, separator)
+  const text = body.slice(separator + 1)
+  if (!/^\d+$/.test(numberText)) return { kind, oldLine: null, newLine: null, text: body }
+  const lineNumber = Number.parseInt(numberText, 10)
+  return {
+    kind,
+    // Pi 对上下文行新旧行号同值；增删行分别只带一个行号。
+    oldLine: kind === 'add' ? null : lineNumber,
+    newLine: kind === 'remove' ? null : lineNumber,
+    text
+  }
+}
+
+/** 由 Pi 的 diff 文本逐行解析展示行；总量超限后停止收行并标 `truncated`。 */
+function toResultDiff(diffText: string): ToolDiff {
+  const lines: ToolDiffLine[] = []
+  let used = 0
+  let truncated = false
+  for (const line of diffText.split('\n')) {
+    if (used + line.length > MAX_DIFF_CHARS && lines.length > 0) {
+      truncated = true
+      break
+    }
+    const parsed = parseResultDiffLine(line)
+    if (parsed !== null) {
+      lines.push(parsed)
+      used += line.length + 1
+    }
+    // 不匹配官方格式的行直接丢弃，不猜造语义。
+  }
+  return { source: 'result', lines, truncated }
+}
+
+/** 把 edit 参数的一对替换文本拆为推断展示行；`oldText` 行在前，`newText` 行在后。 */
+function appendArgsEditLines(lines: ToolDiffLine[], oldText: string, newText: string): void {
+  for (const line of oldText.split('\n')) {
+    lines.push({ kind: 'remove', oldLine: null, newLine: null, text: line })
+  }
+  for (const line of newText.split('\n')) {
+    lines.push({ kind: 'add', oldLine: null, newLine: null, text: line })
+  }
+}
+
+/**
+ * 降级来源：无结果 diff 且工具为 edit 时，用参数 `edits[]` 推断变更片段。
+ * 只接受能解析出 `path` 与至少一对 `oldText`/`newText` 均为字符串的参数；否则返回 null，不伪造。
+ */
+function toArgsDiff(toolName: string, argsText: string | null): ToolDiff | null {
+  if (toolName !== 'edit' || argsText === null) return null
+  let args: unknown
+  try {
+    args = JSON.parse(argsText)
+  } catch {
+    return null
+  }
+  if (!isRecord(args) || !Array.isArray(args.edits) || args.edits.length === 0) return null
+
+  const lines: ToolDiffLine[] = []
+  for (const edit of args.edits) {
+    if (!isRecord(edit)) return null
+    const oldText = edit.oldText
+    const newText = edit.newText
+    if (typeof oldText !== 'string' || typeof newText !== 'string') return null
+    appendArgsEditLines(lines, oldText, newText)
+    if (lines.join('\n').length > MAX_DIFF_CHARS) {
+      return { source: 'args', lines: lines.slice(0, -1), truncated: true }
+    }
+  }
+  return { source: 'args', lines, truncated: false }
+}
+
+/**
+ * 提取条目 diff：优先 Pi 结束结果的 `details.diff`（执行时刻基于真实文件内容算出）；
+ * 缺失或形状不符时按 edit 参数推断降级；两者都不可得时为 null，不伪造 Diff。
+ */
+function extractDiff(toolName: string, argsText: string | null, result: unknown): ToolDiff | null {
+  if (isRecord(result)) {
+    const details = result.details
+    if (isRecord(details) && typeof details.diff === 'string') {
+      const diff = toResultDiff(details.diff)
+      if (diff.lines.length > 0) return diff
+    }
+  }
+  return toArgsDiff(toolName, argsText)
+}
+
 /** 非文本内容块只描述类型与估算大小；未知形状如实标为未知，不猜造字段。 */
 function describeNonTextBlock(block: Record<string, unknown>): ToolNonTextPart {
   const type = readString(block.type) ?? 'unknown'
@@ -149,7 +272,8 @@ function toPublicTool(entry: MutableToolExecution): ToolExecution {
     textKind: entry.textKind,
     textTruncated: entry.textTruncated,
     nonTextBlocks: entry.nonTextBlocks,
-    nonTextParts: entry.nonTextParts
+    nonTextParts: entry.nonTextParts,
+    diff: entry.diff
   }
 }
 
@@ -224,7 +348,8 @@ export class ToolProjection {
       textKind: 'none',
       textTruncated: false,
       nonTextBlocks: 0,
-      nonTextParts: []
+      nonTextParts: [],
+      diff: null
     }
     this.entries.push(entry)
     this.index.set(seed.toolCallId, entry)
@@ -232,12 +357,15 @@ export class ToolProjection {
     this.applyArgs(entry, seed.argsText)
     this.setText(entry, extracted, 'result')
     this.applyNonText(entry, extracted)
+    entry.diff = extractDiff(entry.toolName, entry.argsText, seed.result)
     this.emit(entry)
   }
 
   private startExecution(payload: Record<string, unknown>): ToolEventKind {
     const entry = this.ensureEntry(payload, 'running', Date.now())
     if (entry === null) return 'none'
+    // 重复的开始事件只刷新字段；已有 diff 一并重置，避免残留上一轮结果。
+    entry.diff = null
     this.applyArgs(entry, serializeToolArguments(payload.args))
     this.emit(entry)
     return 'start'
@@ -266,6 +394,7 @@ export class ToolProjection {
     const result = extractResultText(payload.result)
     this.setText(entry, result, 'result')
     this.applyNonText(entry, result)
+    entry.diff = extractDiff(entry.toolName, entry.argsText, payload.result)
     this.emit(entry)
     return 'end'
   }
@@ -298,7 +427,8 @@ export class ToolProjection {
       textKind: 'none',
       textTruncated: false,
       nonTextBlocks: 0,
-      nonTextParts: []
+      nonTextParts: [],
+      diff: null
     }
     this.entries.push(entry)
     this.index.set(toolCallId, entry)

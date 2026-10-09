@@ -14,6 +14,10 @@
   --color-desk-accent: #236978;
   /* 错误、失败与中止提示；只用于语义提示，不做强调色。 */
   --color-desk-danger: #a4373a;
+  /* Extension 警告通知的语义色。 */
+  --color-desk-warning: #8a6116;
+  /* Diff 新增行语义色；删除行复用 desk-danger。 */
+  --color-desk-success: #2f6d3a;
   --font-sans: "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
   --font-mono: Consolas, "SFMono-Regular", monospace;
 }
@@ -31,6 +35,8 @@
     --color-desk-line: #2c3a47;
     --color-desk-accent: #4fa3b5;
     --color-desk-danger: #d47c7f;
+    --color-desk-warning: #d3b06e;
+    --color-desk-success: #7cb98a;
   }
 }
 
@@ -104,6 +110,24 @@
 
   .tool-note {
     @apply text-xs text-desk-muted;
+  }
+
+  /* 工具 Diff 行：只按 Pi 已算出的变更语义着色，不重新计算差异。 */
+  .tool-output p.tool-diff-add {
+    color: var(--color-desk-success);
+  }
+
+  .tool-output p.tool-diff-remove {
+    color: var(--color-desk-danger);
+  }
+
+  .tool-output p.tool-diff-context {
+    color: var(--color-desk-muted);
+  }
+
+  .tool-output p.tool-diff-fold {
+    color: var(--color-desk-muted);
+    opacity: 0.6;
   }
 
   .icon-button {

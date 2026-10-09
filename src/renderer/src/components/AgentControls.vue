@@ -1,4 +1,4 @@
-<!-- Runtime 弹层内的 Agent 控制：模型选择、Thinking level 选择、上下文占用与压缩中状态；只展示快照与能力结果，不在渲染端预检或推算。 -->
+<!-- Runtime 弹层内的 Agent 控制：模型选择、Thinking level 选择、上下文占用与压缩中状态、手动压缩入口与结果展示；只展示快照与能力结果，不在渲染端预检或推算。 -->
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
 import { computed } from 'vue'
@@ -6,7 +6,7 @@ import type { ModelSummary } from '../../../shared/runtime-api'
 import { useRuntimeStore } from '../stores/runtime'
 
 const runtimeStore = useRuntimeStore()
-const { view: runtimeView, capabilitiesView, modelAction, thinkingAction } = storeToRefs(runtimeStore)
+const { view: runtimeView, capabilitiesView, modelAction, thinkingAction, compactAction } = storeToRefs(runtimeStore)
 
 const info = computed(() => (
   runtimeView.value.phase === 'ready' ? runtimeView.value.snapshot.info : null
@@ -84,6 +84,21 @@ const actionError = computed(() => {
 const busy = computed(() => (
   modelAction.value.phase === 'applying' || thinkingAction.value.phase === 'applying'
 ))
+
+/** 压缩入口只在就绪且非压缩中时可用；压缩中提交会被 Pi 拒绝，界面同样禁用。 */
+const compactAvailable = computed(() => (
+  ready.value && info.value?.isCompacting !== true && compactAction.value.phase !== 'compacting'
+))
+const compactResult = computed(() => (
+  compactAction.value.phase === 'done' ? compactAction.value.result : null
+))
+const compactError = computed(() => (
+  compactAction.value.phase === 'error' ? compactAction.value.error.message : null
+))
+
+function compact(): void {
+  void runtimeStore.compact()
+}
 
 /** provider 与 id 用 NUL 连接，避免两者中出现分隔符时产生歧义。 */
 function modelKey(provider: string, id: string): string {
@@ -163,6 +178,23 @@ function onSelectThinking(event: Event): void {
     <p v-if="info?.isCompacting" role="status" class="text-desk-muted">
       Pi 正在压缩上下文；此时提交会被 Pi 拒绝，请等当前轮结束。
     </p>
+
+    <div class="space-y-2">
+      <button
+        type="button"
+        class="control-button"
+        :disabled="!compactAvailable"
+        @click="compact"
+      >
+        {{ compactAction.phase === 'compacting' ? '正在压缩…' : '压缩上下文' }}
+      </button>
+      <p v-if="compactResult" class="text-desk-muted">
+        压缩完成：{{ compactResult.tokensBefore === null ? '未知' : formatTokens(compactResult.tokensBefore) }}
+        → {{ compactResult.estimatedTokensAfter === null ? '未知' : formatTokens(compactResult.estimatedTokensAfter) }} tokens。
+      </p>
+      <p v-if="compactError" role="alert" class="text-desk-danger">{{ compactError }}</p>
+    </div>
+
     <p v-if="busy" role="status" class="text-desk-muted">正在应用设置…</p>
     <p v-if="actionError" role="alert" class="text-desk-danger">{{ actionError }}</p>
   </div>

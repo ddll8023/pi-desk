@@ -1,8 +1,9 @@
-<!-- 主界面外壳：组合顶栏、可折叠会话栏、消息区与 Prompt 区，负责各展示 Store 的初始化、项目变化后的会话列表刷新，以及运行中切换与项目信任决定的对话框。 -->
+<!-- 主界面外壳：组合顶栏、可折叠会话栏、消息区与 Prompt 区，负责各展示 Store 的初始化、项目变化后的会话列表刷新，以及运行中切换与项目信任决定的对话框；同时承载 Extension 的对话、通知与 widget 展示。 -->
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
 import { computed, onMounted, onUnmounted, watch } from 'vue'
 import { useDesktopStore } from './stores/desktop'
+import { useExtensionUiStore } from './stores/extension-ui'
 import { usePreferencesStore } from './stores/preferences'
 import { useProjectStore } from './stores/project'
 import { useRuntimeStore } from './stores/runtime'
@@ -11,11 +12,14 @@ import { useTrustStore } from './stores/trust'
 import AppTopBar from './components/AppTopBar.vue'
 import ChatMessageList from './components/ChatMessageList.vue'
 import ConfirmDialog from './components/ConfirmDialog.vue'
+import ExtensionDialog from './components/ExtensionDialog.vue'
+import ExtensionNotificationBar from './components/ExtensionNotificationBar.vue'
 import PromptComposer from './components/PromptComposer.vue'
 import SessionSidebar from './components/SessionSidebar.vue'
 import TrustDialog from './components/TrustDialog.vue'
 
 const desktopStore = useDesktopStore()
+const extensionStore = useExtensionUiStore()
 const preferencesStore = usePreferencesStore()
 const projectStore = useProjectStore()
 const runtimeStore = useRuntimeStore()
@@ -24,6 +28,10 @@ const { currentProject, pendingPath } = storeToRefs(projectStore)
 const { awaitingInterrupt, pendingSessionId } = storeToRefs(sessionStore)
 const { sidebarCollapsed, ready: preferencesReady } = storeToRefs(preferencesStore)
 const trustStore = useTrustStore()
+
+/** Extension widget 按放置位置拆分；空 lines 的条目不会出现在主进程快照中。 */
+const widgetsAbove = computed(() => extensionStore.widgets.filter((w) => w.placement === 'aboveEditor'))
+const widgetsBelow = computed(() => extensionStore.widgets.filter((w) => w.placement === 'belowEditor'))
 
 /** 主进程拒绝未确认的切换后，由用户在这里确认可以中断正在运行的操作。 */
 const projectConfirmDetail = computed(() => pendingPath.value ?? '')
@@ -67,6 +75,7 @@ watch(currentProject, (project, previous) => {
 
 onMounted(() => {
   void desktopStore.initialize()
+  void extensionStore.initialize()
   void preferencesStore.initialize()
   void projectStore.initialize()
   void runtimeStore.initialize()
@@ -74,6 +83,7 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  extensionStore.dispose()
   runtimeStore.dispose()
 })
 </script>
@@ -91,8 +101,16 @@ onUnmounted(() => {
       <SessionSidebar v-if="preferencesReady && !sidebarCollapsed" />
 
       <main class="flex min-w-0 flex-1 flex-col">
+        <ExtensionNotificationBar />
         <ChatMessageList />
+        <!-- Widget 放置语义与官方子协议一致：aboveEditor 在输入区上方，belowEditor 在下方。 -->
+        <div v-for="widget in widgetsAbove" :key="widget.placement" class="px-4 sm:px-8">
+          <pre class="mx-auto max-w-3xl whitespace-pre-wrap rounded border border-desk-line bg-desk-surface p-2 text-xs text-desk-muted">{{ widget.lines.join('\n') }}</pre>
+        </div>
         <PromptComposer />
+        <div v-for="widget in widgetsBelow" :key="widget.placement" class="px-4 sm:px-8">
+          <pre class="mx-auto max-w-3xl whitespace-pre-wrap rounded border border-desk-line bg-desk-surface p-2 text-xs text-desk-muted">{{ widget.lines.join('\n') }}</pre>
+        </div>
       </main>
     </div>
 
@@ -117,5 +135,8 @@ onUnmounted(() => {
     />
 
     <TrustDialog @decided="onTrustResolved" @cancelled="onTrustCancelled" />
+
+    <!-- Extension 对话一次只展示队首；队列由 store 持有，回应后自动滑到下一条。 -->
+    <ExtensionDialog v-if="extensionStore.dialogs.length > 0" />
   </div>
 </template>

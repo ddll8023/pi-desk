@@ -1,7 +1,12 @@
 <!-- 通用工具卡片：在消息流内联展示工具名称、执行状态、Desktop 计算的耗时与参数摘要，展开后显示参数、结果或错误输出与非文本内容描述。 -->
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import type { ToolExecutionPhase, ToolNonTextPart } from '../../../shared/runtime-api'
+import type {
+  ToolDiff,
+  ToolDiffLine,
+  ToolExecutionPhase,
+  ToolNonTextPart
+} from '../../../shared/runtime-api'
 import type { ChatToolBlock } from '../chat-view'
 import { useTickingNow } from '../clock'
 
@@ -66,6 +71,21 @@ const nonTextNotice = computed(() => {
   return `含 ${current.nonTextBlocks} 个非文本内容块：${described.join('、')}。`
 })
 
+/** 变更展示只来自投影已解析的 diff；来源与标题只描述事实，不推断未提供的语义。 */
+const diff = computed<ToolDiff | null>(() => execution.value?.diff ?? null)
+const diffTitle = computed(() => (
+  diff.value?.source === 'args' ? '变更（根据工具参数推断，非实际文件 Diff）' : '变更'
+))
+
+function diffLineClass(line: ToolDiffLine): string {
+  switch (line.kind) {
+    case 'add': return 'tool-diff-add'
+    case 'remove': return 'tool-diff-remove'
+    case 'fold': return 'tool-diff-fold'
+    default: return 'tool-diff-context'
+  }
+}
+
 /** 运行中的卡片自动展开一次；此后交给用户，不强制收起也不再自动打开。 */
 const expanded = ref(false)
 watch(isRunning, (running) => {
@@ -102,6 +122,13 @@ function formatDuration(milliseconds: number): string {
       <span v-if="argsPreview" class="min-w-0 flex-1 truncate text-desk-muted">{{ argsPreview }}</span>
     </summary>
     <div class="mt-2 space-y-2">
+      <template v-if="diff !== null && diff.lines.length > 0">
+        <p class="tool-note">{{ diffTitle }}</p>
+        <div class="tool-output">
+          <p v-for="(line, index) in diff.lines" :key="index" :class="diffLineClass(line)">{{ line.text }}</p>
+        </div>
+        <p v-if="diff.truncated" class="tool-note">此变更超出展示上限，已截断。</p>
+      </template>
       <template v-if="execution.argsText !== null">
         <p class="tool-note">参数</p>
         <p class="tool-output">{{ execution.argsText }}</p>

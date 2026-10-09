@@ -1,5 +1,11 @@
-/** 作为渲染端会话列表与打开的调用入口，把桥接缺失与通信异常转换为安全的展示结果。 */
-import type { SessionError, SessionListResult, SessionOpenResult } from '../../../shared/session-api'
+/** 作为渲染端会话列表与打开、分叉消息读取与分叉发起的调用入口，把桥接缺失与通信异常转换为安全的展示结果。 */
+import type {
+  ForkMessageListResult,
+  ForkStartResult,
+  SessionError,
+  SessionListResult,
+  SessionOpenResult
+} from '../../../shared/session-api'
 
 function unavailable(): { ok: false; error: SessionError } {
   return {
@@ -35,6 +41,28 @@ export async function openSession(
   if (!bridge || typeof bridge.openSession !== 'function') return unavailable()
   try {
     return await bridge.openSession(sessionId, allowInterrupt)
+  } catch {
+    return callFailed()
+  }
+}
+
+/** 读取当前 Runtime 会话里可分叉的用户消息；要求 Runtime 就绪。 */
+export async function getForkMessages(): Promise<ForkMessageListResult> {
+  const bridge = window.desktop
+  if (!bridge || typeof bridge.getForkMessages !== 'function') return unavailable()
+  try {
+    return await bridge.getForkMessages()
+  } catch {
+    return callFailed()
+  }
+}
+
+/** 从指定条目分叉；成功后主进程重启式切换到新会话并返回刷新后的列表。 */
+export async function startFork(entryId: string, allowInterrupt: boolean): Promise<ForkStartResult> {
+  const bridge = window.desktop
+  if (!bridge || typeof bridge.startFork !== 'function') return unavailable()
+  try {
+    return await bridge.startFork(entryId, allowInterrupt)
   } catch {
     return callFailed()
   }

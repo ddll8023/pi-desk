@@ -32,7 +32,7 @@
 
 **依赖**：第二阶段 Project 生命周期。Trust 不是 OS 沙箱，也不能取消启动前读取 `sessionDir` 与上下文文件的官方行为。
 
-### P3-02 Extension UI
+### P3-02 Extension UI（已完成实现，决策记录）
 
 **目标**：为官方 RPC 支持的 Extension 交互提供独立 GUI 适配层。
 
@@ -40,21 +40,42 @@
 
 只映射当前官方 RPC 子协议；不承诺任意 TUI 组件可在 Vue 无损运行，未知交互不得自动批准。
 
+**已定决策**（细节见[开发总览](../development.md)第 6.2 节 Extension UI）：
+
+- 去掉 `--no-extensions`，Extension 加载由 P3-01 的 Trust 拦截控制；Skills、Prompt Templates 与 MCP 仍关闭（属 P3-06）。
+- Dialog 类请求用模态对话框按队首依次展示，可取消；fire-and-forget 状态（notify/status/widget/编辑器填充）由主进程按代际持有并广播快照。
+- `set_editor_text` 只在输入框为空时填充，不覆盖用户已输入内容；`setTitle` 无桌面等价物，不展示。
+- 未知 method 与形状不符的请求只计数不报错；dialog 响应写回失败按管道关闭收敛，不重发。
+
 **依赖**：第二阶段 IPC 与界面状态；项目级 Extension 加载依赖 P3-01。
 
-### P3-03 Session 深化与 Compaction
+### P3-03 Session 深化与 Compaction（已完成实现，决策记录）
 
 **目标**：扩展已有 Session 恢复体验，支持 Fork 与上下文压缩操作。
 
 **范围**：基于 Pi Session 的 Fork、恢复过程的取消与错误、Compaction 状态和结果展示；尊重官方 Session 生命周期及 Extension 取消结果。复用第二阶段的列表、读取和基础恢复，不另建历史模型。
 
+**已定决策**（细节见[开发总览](../development.md)第 6.2 节 Session Fork 与手动压缩）：
+
+- Fork 用官方 `get_fork_messages` / `fork` 命令接入；fork 后复用重启式切换链以新会话 id 重新启动 Runtime，信任拦截与中断确认全部复用会话打开链路。
+- Extension 取消 fork 以专属错误码 `FORK_CANCELLED` 如实提示；运行中未确认时返回 `FORK_BLOCKED`，不中断操作。
+- 手动压缩用 `compact` 命令同步等待（期限 120 秒）；成功展示前后 token 数，字段缺失按 null 展示；不做 `set_auto_compaction` 开关与 `clone`。
+- 恢复过程的取消与错误由 P2-02 既有链路覆盖（历史读取超时按启动失败处理），本阶段未改。
+
 **依赖**：第二阶段 Session 与 Context 控制；启用相关 Extension 时依赖 P3-02。
 
-### P3-04 输入增强
+### P3-04 输入增强（已完成实现，决策记录）
 
 **目标**：支持图片与文件引用参与对话。
 
 **范围**：用户选择图片、模型能力提示、输入预览与移除、官方消息内容映射；明确文件引用是路径信息还是内容输入，不把 RPC 不支持的 `@file` 启动参数直接套进协议。限制读取范围与输入大小，避免无意上传敏感内容。
+
+**已定决策**（细节见[开发总览](../development.md)第 6.2 节）：
+
+- 只做图片附件：随 `prompt` 的官方 `images` 字段提交（`ImageContent` 格式）；主进程校验 MIME 白名单、单图编码后 4 MiB 与单条 4 张上限。
+- 文件引用不做：RPC 模式官方拒绝 `@file` 参数；路径文本无特殊语义，读文件由 Pi 的 `read` 工具覆盖。
+- 模型图片输入能力来自 Model 对象的 `input` 字段，投影为 `ModelSummary.imageInput`；明确不支持时禁用图片入口。
+- CSP `img-src` 放开 `data:` 与 `blob:` 用于缩略图预览与消息内附件展示；远程图片依旧不渲染。恢复历史中的图片按同一规则投影展示。
 
 **依赖**：第二阶段 Prompt 与模型控制。资源 loader 与图片所需配套文件沿用 Runtime 打包机制。
 
@@ -91,8 +112,8 @@ Trust 与 Extension UI 先建立安全交互边界，再启用相应资源；后
 
 ## 待决策事项
 
-- 目标 Pi 版本下 Extension UI 支持范围、取消与窗口关闭时的收敛行为。
-- Session Fork 与恢复操作的具体 GUI 入口。
+- ~~目标 Pi 版本下 Extension UI 支持范围、取消与窗口关闭时的收敛行为~~ 已在 P3-02 确定：只映射官方 RPC 子协议的九个 method，取消即发送 `cancelled` 响应，状态随 Runtime 代际清空（见[开发总览](../development.md)第 6.2 节 Extension UI）。
+- Session Fork 与恢复操作的具体 GUI 入口~~ 已在 P3-03 确定：入口在 Runtime 详情弹层，fork 后复用重启式切换链，Extension 取消以 `FORK_CANCELLED` 如实提示（见[开发总览](../development.md)第 6.2 节 Session Fork）。
 - 文件引用的数据语义、图片能力与敏感数据提示。
 - Diff 来源与基线维护策略。
 - Packages / MCP 的外部程序依赖、重载与生命周期边界；不能假定 standalone 自动携带所有第三方运行环境。

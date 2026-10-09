@@ -60,7 +60,7 @@ Desktop 仅维护自己的数据：最近项目、窗口尺寸、Sidebar 状态�
 
 开发在 Windows 与 macOS 主机上交替进行，文档不绑定某一平台，也不固定绝对路径；仓库可检出到任意位置，以下路径与命令均以项目根目录为基准。
 
-仓库包含开发文档、Electron/Vue 桌面骨架、三端构建与 TypeScript 配置、统一前端服务入口、展示状态 Store，以及 Pi Runtime 的准备脚本与固定版本清单。当前主界面由顶栏、可折叠的会话侧栏、消息区与 Prompt 区组成，可经受限 preload API 读取应用信息、选择并记住本地项目、列出并打开该项目的 Pi 会话、启停 Pi RPC sidecar、接收状态变化、提交 Prompt、展示本轮文本与 Thinking、查看工具执行、切换模型与 Thinking 级别并查看上下文占用、中止当前操作、对项目信任做出与重置决定，并保存 Sidebar 折叠状态、主题与窗口尺寸位置；不读取项目内容、不持久化消息。
+仓库包含开发文档、Electron/Vue 桌面骨架、三端构建与 TypeScript 配置、统一前端服务入口、展示状态 Store，以及 Pi Runtime 的准备脚本与固定版本清单。当前主界面由顶栏、可折叠的会话侧栏、消息区与 Prompt 区组成，可经受限 preload API 读取应用信息、选择并记住本地项目、列出并打开该项目的 Pi 会话、启停 Pi RPC sidecar、接收状态变化、提交 Prompt 与图片附件、展示本轮文本与 Thinking、查看工具执行、切换模型与 Thinking 级别并查看上下文占用、中止当前操作、对项目信任做出与重置决定，并保存 Sidebar 折叠状态、主题与窗口尺寸位置；不读取项目内容、不持久化消息。
 
 开发使用 npm，工具版本由 `package.json` 的 `packageManager` 字段声明，直接依赖使用精确版本。`package.json` 是依赖声明的维护位置，完整依赖树由安装生成的 `package-lock.json` 固定，不手写锁文件。依赖安装属于独立授权操作。
 
@@ -180,7 +180,7 @@ Desktop、固定 Pi 和配套资源作为一致发行版本更新，不在运行
 pi --mode rpc --no-session
 ```
 
-主进程固定完整启动参数，页面不能覆盖：`--mode rpc`、`--no-extensions`、`--no-skills`、`--no-prompt-templates`、`--no-mcp`、按平台选择的 `--tools`（Windows `read,powershell,edit,write`；macOS `read,bash,edit,write`）、会话目录 `--session-dir <dir>`，以及恢复已有会话时的 `--session-id <id>`；项目信任覆盖 `--approve` / `--no-approve` 按第 6.2 节 Project Trust 的探测结果条件传递，无受保护资源时不传。环境继承父进程并追加 `PI_SKIP_VERSION_CHECK=1`；不设置 `PI_OFFLINE`，因为 RPC 启动会在后台刷新模型目录；也不设置 `PI_PACKAGE_DIR`，因为包资源与可执行文件同层。
+主进程固定完整启动参数，页面不能覆盖：`--mode rpc`、`--no-skills`、`--no-prompt-templates`、`--no-mcp`、按平台选择的 `--tools`（Windows `read,powershell,edit,write`；macOS `read,bash,edit,write`）、会话目录 `--session-dir <dir>`，以及恢复已有会话时的 `--session-id <id>`；项目信任覆盖 `--approve` / `--no-approve` 按第 6.2 节 Project Trust 的探测结果条件传递，无受保护资源时不传。P3-02 起不再传 `--no-extensions`，Extension 加载由 Trust 拦截控制（见第 6.2 节 Extension UI）。环境继承父进程并追加 `PI_SKIP_VERSION_CHECK=1`；不设置 `PI_OFFLINE`，因为 RPC 启动会在后台刷新模型目录；也不设置 `PI_PACKAGE_DIR`，因为包资源与可执行文件同层。
 
 Electron 主进程设置 `cwd` 为用户选择的项目根目录，并分别建立 stdin、stdout、stderr 管道。不启动 HTTP 或 localhost TCP RPC 服务，不将协议暴露到网络。
 
@@ -335,11 +335,14 @@ Runtime 与 Session 不是同一个对象；正式版本的一个 Project 可以
 - 超时只结束等待，不证明 Pi 没有执行，不自动重发 prompt；进程退出、写入失败和初始化失败时收敛 pending 请求并释放资源。
 - 解析错误产生明确诊断并按 LF 恢复记录边界；无法保持投影一致时不能继续显示为正常完整结果。超长记录和持续异常输出设处理边界，必要时可控关闭 Runtime，不能无限缓存或静默丢弃增量。
 - 对有效但暂不支持的事件分类处理，不因未知事件名直接崩溃，也不把独立 Extension UI 记录当作普通文本。
-- Prompt 提交走固定业务方法，主进程只接受 `message` 字段并重新校验：必须是字符串、去空白后非空、UTF-8 字节数不超过 1 048 576；主进程自行构造 `{type:"prompt",message}`，不接受图片或排队选项。等待期限 30 000 毫秒只覆盖 preflight，超时返回结果未知且不自动重发。Runtime 不是 `ready` 时提交返回 `RUNTIME_NOT_READY`；Pi 以 `success: false` 拒绝时返回 `PROMPT_REJECTED` 并带 Pi 的原因文本，disposition 取值不符契约时按 `RUNTIME_PROTOCOL_ERROR` 处理。busy 判定完全以 Pi 的拒绝为准，主进程不做本地 streaming 预检；运行中状态由事件流的 `agent_start`/`agent_settled` 收敛（见下文临时投影与通知契约），不用于预测性拦截。
+- Prompt 提交走固定业务方法，主进程只接受 `message` 与可选 `images` 字段并重新校验：文本必须是字符串、去空白后非空、UTF-8 字节数不超过 1 048 576；图片逐张校验 MIME 白名单（png/jpeg/gif/webp）、base64 编码后不超过 4 MiB，单条 Prompt 最多 4 张，超限按参数拒绝，不静默丢弃。主进程自行构造 `{type:"prompt",message,images}`，`images` 仅在有附件时携带。等待期限 30 000 毫秒只覆盖 preflight，超时返回结果未知且不自动重发。Runtime 不是 `ready` 时提交返回 `RUNTIME_NOT_READY`；Pi 以 `success: false` 拒绝时返回 `PROMPT_REJECTED` 并带 Pi 的原因文本，disposition 取值不符契约时按 `RUNTIME_PROTOCOL_ERROR` 处理。busy 判定完全以 Pi 的拒绝为准，主进程不做本地 streaming 预检；运行中状态由事件流的 `agent_start`/`agent_settled` 收敛（见下文临时投影与通知契约），不用于预测性拦截。文件引用不做：RPC 模式官方拒绝 `@file` 参数，输入框中的路径文本只是普通文本，读文件由 Pi 的 `read` 工具覆盖。
+- 模型的图片输入能力来自 `get_available_models` 返回的完整 Model 对象的 `input` 字段：含 `image` 为 true，明确不含为 false，缺失为 null（未知）。投影在 `ModelSummary.imageInput`；当前模型明确不支持时图片入口禁用并提示，未知时不限制。
+- 消息投影对用户消息中的图片内容块生成附件描述块：`dataUrl`（base64 本体转 data URL，仅用户消息）、`mimeType` 与估算字节数；估算字节超过 8 MiB 的附件只保留文字描述不保留本体。恢复会话历史中的图片按同一规则投影；Assistant 消息中的图片块不进投影。
+- CSP：`img-src` 为 `'self' data: blob:`，仅用于本地图片附件的输入预览（blob: URL）与消息内缩略图（data: URL）；模型 Markdown 与工具输出中的远程图片依旧不渲染，不放开任意远程图片来源。
 
 #### 临时投影与通知契约
 
-- 投影只重建 `user` 与 `assistant` 角色消息的 text、thinking 与 toolcall 内容块；压缩、重试、队列事件与图片不进入展示投影。工具执行改成按 `toolCallId` 索引的独立条目、与消息块解耦，消息块不承载执行状态；界面展示的是 Pi 会话消息与工具执行的子集，不是完整历史。
+- 投影只重建 `user` 与 `assistant` 角色消息的 text、thinking 与 toolcall 内容块，用户消息中的图片块以附件描述块投影（见本节 Prompt 段）；压缩、重试与队列事件不进入展示投影。工具执行改成按 `toolCallId` 索引的独立条目、与消息块解耦，消息块不承载执行状态；界面展示的是 Pi 会话消息与工具执行的子集，不是完整历史。
 - Pi 的 wire 消息没有 id，投影为每条消息生成 Desktop 侧的稳定标识，块按 `contentIndex` 对齐：`message_start` 建消息，`text_delta`/`thinking_delta` 累积，`text_end`/`thinking_end`/`toolcall_end` 用权威内容校正，`message_end.message` 整条替换；未知角色、未知子类型与未知事件名一律忽略。
 - 工具条目关联一次执行的完整生命周期：`tool_execution_start` 建条目并记录 `args`，`tool_execution_update` 只保留最近一次 `partialResult`（追加或替换语义由具体工具决定，不做内容级累加），`tool_execution_end` 用 `result` 校正并按 `isError` 收敛为成功或失败；`agent_settled` 时仍未结束的条目标记为未确认结束，不冒充成功。结果只从 `content` 提取文本块；非文本内容块只保留类型、MIME 类型与估算字节数的描述，总量另行计数，图片数据不进入投影也不渲染。
 - 工具耗时由 Desktop 计算，不使用 Pi 字段：条目的 `startedAt`、`endedAt` 是 Desktop 收到对应事件的时刻（纪元毫秒），未确认结束的条目没有结束时刻，只见过结束事件的条目没有开始时刻；运行中的条目以渲染端当前时刻估算进行中的耗时，缺少开始时刻、或既无结束时刻又非运行中的条目不显示耗时；界面不把它表述为工具的真实执行时间。
@@ -390,6 +393,15 @@ Pi 管道背压与 UI 通知背压分开处理：采用有界批次与渲染端�
 - 通道：`desktop:trust-status`（零参数，返回当前项目的决定与探测到的资源列表）与 `desktop:trust-decide`（只接受 `{ projectPath, decision }`，`decision` 为 `"trusted"`/`"untrusted"`/`"unset"`；`projectPath` 必须与当前项目归一化路径一致，防止页面改写其他项目的决定，`unset` 表示清除决定）。错误码新增 `TRUST_REQUIRED`（定义在共享桥接错误码族，`desktop:runtime-start` 与 `desktop:session-open` 都可能返回）。
 - 界面入口：会话打开或 Runtime 启动被拦截时弹信任对话框（资源列表 + 安全影响说明 + 信任/不信任），决定后自动重试被拦截的会话打开或新建，取消不保存任何状态；Runtime 详情弹层提供「重置本项目信任决定」，下次启动该项目时重新询问。
 
+#### Extension UI（P3-02）
+
+- 启用方式：P3-02 起不再传 `--no-extensions`，项目 Extension 的加载由 Project Trust 决定控制（见上节）；Skills、Prompt Templates 与 MCP 仍以 `--no-*` 关闭，启用与否属 P3-06 范围。
+- 只映射官方 RPC Extension UI 子协议的九个 method。Dialog 类（`select`/`confirm`/`input`/`editor`）需要页面回应；fire-and-forget 类（`notify`/`setStatus`/`setWidget`/`setTitle`/`set_editor_text`）只更新展示状态。未知 method、字段超限或形状不符的请求只计入 `invalidCount`，不报错、不自动批准。
+- Dialog 请求按到达顺序排队（上限 8 条，同 id 重复投递按一次处理），页面模态展示队首；回应经 `desktop:extension-ui-respond` 提交，只接受互斥的三种形态（`value`/`confirm`/`cancelled`），主进程校验 id 在队列中且形态与 method 匹配后才出队并写回 `extension_ui_response`；写回失败按管道关闭收敛，不重发。`timeout` 字段由 Pi 侧自动解析，Desktop 不计时，只在界面展示。
+- fire-and-forget 状态由主进程按代际持有并广播：`notify` 保留最近 10 条（info/warning/error）；`setStatus` 按 key 增删（上限 16 条）；`setWidget` 按 placement 覆盖，空 lines 表示清除；`set_editor_text` 保留最新一条，页面在用户输入框为空时填充，不覆盖已输入内容；`setTitle` 无桌面等价物，不计入展示。
+- 通道：`desktop:extension-ui-state`（零参数，返回当前快照）与 `desktop:extension-ui-respond`（只接受 `{ dialogId, response }`）；变更经 `desktop:extension-ui-changed` 单向广播给当前可信窗口。快照带代际标识与递增序号，渲染端按序丢弃过期快照。错误码新增 `EXTENSION_DIALOG_NOT_FOUND`。
+- 状态随 Runtime 退出、停止或切换清空，不持久化；通知、状态条与 widget 文本一律按不可信纯文本插值展示，不使用 `v-html`。
+
 #### Session 与恢复
 
 - 会话文件由 Pi 管理：根目录是 `<agent-dir>/sessions/`（`agent-dir` 由 `PI_CODING_AGENT_DIR` 指定，默认 `~/.pi/agent`），按工作目录分组为 `--<路径 munged>--/`（去掉路径开头的分隔符后把 `/`、`\`、`:` 换成 `-`），文件名是 `<ISO 时间>_<会话 id>.jsonl`，同名 `.jsonl.timings.json` 侧车不参与列表。主进程显式传 `--session-dir` 指定该根目录，不读取 `PI_CODING_AGENT_SESSION_DIR` 与 `sessionDir` 设置。
@@ -398,6 +410,14 @@ Pi 管道背压与 UI 通知背压分开处理：采用有界批次与渲染端�
 - 打开与新建一律重启 Runtime：先校验目标会话存在且属于当前项目，再复用本节关闭链结束旧 Runtime，确认回到 `idle` 后以 `--session-id <id>`（恢复）或不带该参数（新建）启动；请求的会话与已就绪 Runtime 一致时幂等返回。Runtime 处于 `starting`/`stopping`，或 `ready` 且 `isStreaming` 为真而请求未带 `allowInterrupt` 时返回 `SESSION_SWITCH_BLOCKED` 且不中断任何操作；不排队、不重放。不使用 RPC 的 `switch_session` 与 `new_session`，保持一个 Runtime 代际对应一个会话。
 - 恢复会话时在发布就绪前请求 `get_messages`，把历史消息按整条替换规则灌入临时投影作为基准；读取历史消息的等待上限是 15 000 毫秒，超时或失败按启动失败处理，不显示不完整的历史，截断与上限沿用临时投影契约。
 - 通道：`desktop:session-list`（零参数，基于当前项目）与 `desktop:session-open`（只接受 `{ sessionId, allowInterrupt }`，`sessionId` 为 null 表示新建，非 null 时只接受 Pi 允许的字符集：字母、数字、`.`、`_`、`-`）。新增错误码 `SESSION_NOT_FOUND`（目标会话不存在，或 Pi 实际打开的会话与请求不一致）与 `SESSION_SWITCH_BLOCKED`；有受保护资源且无信任决定时返回 `TRUST_REQUIRED`（见本节 Project Trust 小节）；其余复用 Runtime 错误码族。会话文件路径不跨 IPC 交给页面。
+
+#### Session Fork（P3-03）
+
+- 接入方式：用官方 `get_fork_messages`（当前分支上可分叉的用户消息，`entryId` 为会话条目稳定 id）与 `fork { entryId }` 命令；`fork` 在同一 Pi 进程内产生新会话并切换，Extension 可经 `session_before_fork` 取消（响应 `cancelled: true`，Desktop 以专属错误码 `FORK_CANCELLED` 如实提示，不报错、不切换）。
+- 会话归属复用重启式切换：fork 成功后读取 `get_state` 复核实际新会话 id（不沿用旧快照），再走与会话打开同一条关闭链 + 启动链，以新会话 id 重新启动 Runtime；信任拦截、中断确认、历史灌入与列表刷新全部复用既有链路，维持「一个 Runtime 代际对应一个会话」。
+- 中断守门：Runtime 就绪且 `isStreaming` 为真而请求未带 `allowInterrupt` 时返回 `FORK_BLOCKED`，不中断任何操作；不排队、不重放。
+- 通道：`desktop:fork-messages`（零参数，要求 Runtime 就绪，空列表是合法结果）与 `desktop:fork-start`（只接受 `{ entryId, allowInterrupt }`）；成功数据带新 `sessionId` 与刷新后的列表。新增错误码 `FORK_NOT_FOUND`、`FORK_CANCELLED`、`FORK_BLOCKED`。
+- 入口在 Runtime 详情弹层；只在 Runtime 就绪时可用，运行中分叉会先停止当前操作（与切换会话同语义）。不做 `clone`、`get_entries` / `get_tree`，无 GUI 场景不提前接入。
 
 #### Agent 控制（模型、Thinking、上下文占用）
 
@@ -408,6 +428,12 @@ Pi 管道背压与 UI 通知背压分开处理：采用有界批次与渲染端�
 - 事件收敛：`thinking_level_changed` 直接更新快照中的级别；`agent_settled` 后刷新一次 `get_state`，让 `isCompacting` 等字段回到权威值。协议没有模型变化事件，模型一致性以 `set_model` 成功后的刷新为准。刷新使用 in-flight 守卫，且只在该 Runtime 仍是当前代际且仍就绪时生效。
 - 错误码：新增 `RUNTIME_COMMAND_REJECTED`，用于 Pi 以 `success: false` 拒绝模型或 Thinking 设置（消息带 Pi 的原因文本，如模型未配置凭据）；其余复用 Runtime 错误码族。
 - 压缩中不新增本地拦截：界面如实提示“提交会被 Pi 拒绝”，busy 判定仍完全以 Pi 的拒绝为准。
+
+#### 手动压缩（P3-03）
+
+- 接入方式：官方 `compact` 命令（不带 `customInstructions`），响应同步携带结果；Desktop 投影 `summary`、`tokensBefore`、`estimatedTokensAfter` 与 `usage.totalTokens`（自定义压缩处理器可省略 `usage`，为 null；字段缺失一律按 null 展示，不猜造）。
+- 等待期限单独设为 120 000 毫秒（压缩是一次 LLM 调用）；超时只结束等待，结果未知且不自动重发。压缩中状态由 `get_state.isCompacting` 与 `compaction_start` / `compaction_end` 事件收敛，`agent_settled` 后的既有快照刷新链把字段拉回权威值。
+- 通道：`desktop:runtime-compact`（零参数，要求 Runtime 就绪）。入口在 Runtime 详情弹层，只在就绪且非压缩中时可用；成功展示前后 token 数，失败与中止按错误如实提示，不伪造结果。不做 `set_auto_compaction` 开关，属后续按需接入。
 
 #### 关闭、异常与进程树
 
@@ -425,8 +451,8 @@ Windows 使用系统 `taskkill` 对当前受管 Pi 进程树定向终止，不�
 
 - 顶栏：Sidebar 折叠开关、项目切换入口（目录选择、最近项目、手动路径、配置提示）、当前会话、Runtime 状态，以及详情弹层里的 Agent 控制（模型与 Thinking 选择、上下文占用、压缩中提示）、重置本项目信任决定与应用信息、关闭 Runtime。
 - 会话侧栏：当前项目的 Pi 会话列表、新建与刷新、当前会话高亮、跳过与截断提示。
-- 消息区：按消息分组并按内容块顺序渲染，用户与 Assistant 区分，Thinking 可折叠，工具调用内联为通用工具卡片（名称、状态、Desktop 计算的耗时与参数摘要，展开后显示参数、结果或错误输出、非文本内容描述与截断提示；运行中的卡片自动展开一次，之后由用户开合），并表达同步、截断、失败与运行中状态。
-- Prompt 区：输入与发送、Agent 运行期间原位的停止入口，以及请求接受、拒绝与中止的提示。
+- 消息区：按消息分组并按内容块顺序渲染，用户与 Assistant 区分，用户消息的图片附件渲染为缩略图，Thinking 可折叠，工具调用内联为通用工具卡片（名称、状态、Desktop 计算的耗时与参数摘要，展开后显示参数、结果或错误输出、非文本内容描述与截断提示；运行中的卡片自动展开一次，之后由用户开合），并表达同步、截断、失败与运行中状态。
+- Prompt 区：输入与发送、图片附件选择、预览与移除、Agent 运行期间原位的停止入口，以及请求接受、拒绝与中止的提示；另承载 Extension 的对话、通知与 widget 展示及编辑器填充（取值与边界见第 6.2 节 Extension UI）。
 
 组件通过统一前端服务入口调用受限 preload API，Pinia 管理共享的展示状态。消息重建与 Runtime 所有权归主进程，前端不直接访问 ipcRenderer，不提供任意 RPC JSON 的通用发送入口。打开、新建与恢复会话都由主进程重启式切换，页面的当前会话以 Runtime 快照为准。Prompt 发送只展示请求接受或拒绝；运行中状态由 `agent_start`/`agent_settled` 收敛，消息与工具展示来自主进程投影批次，页面在失去同步时标示同步中或截断，不自行拼装历史。打开或新建会话即启动 Runtime，页面不单独提供启动入口。Stop 只在 Runtime 就绪且事件流显示运行中时可用，界面把“中止请求中且仍在运行”表达为停止中，是否真的停止以 `agent_settled` 收敛，不以请求响应为依据。输入提交处理输入法组合态、Enter 发送与 Shift+Enter 换行、发送后焦点回归、成功后清空与发送中不重复提交；消息区在用户已上滚时不强制拉到底部。模型文本、工具参数与工具输出一律按纯文本插值展示，不使用 `v-html`，不当作 HTML 或外部资源渲染。主题切换在顶栏提供跟随系统、浅色与深色的循环入口，取值与切换机制见第 6.2 节。
 
@@ -467,7 +493,7 @@ RPC 无法展示 Pi 内建的 TUI trust prompt。没有显式覆盖、Extension 
 
 第一阶段显式采用 `--no-approve`，并关闭 Extensions、Skills、Prompt Templates、MCP（对应 `--no-extensions`、`--no-skills`、`--no-prompt-templates`、`--no-mcp`）；避免依赖全局 trust 默认值，不自动信任项目，不直接修改 `trust.json`。
 
-P3-01 已实现 Desktop 侧的信任流程：启动前探测受保护资源，无决定时经 `TRUST_REQUIRED` 拦截并由用户决定，决定存入 `desktop-config.json` 的 `projectTrust` 字段，启动时按决定条件传递 `--approve` / `--no-approve`（细节见第 6.2 节 Project Trust）。Desktop 的显式覆盖优先于 Pi 已保存的信任记录，这是官方 CLI 覆盖优先级的直接结果；Extensions 等四类资源仍以 `--no-*` 关闭，启用与否属 P3-02 / P3-06 范围。
+P3-01 已实现 Desktop 侧的信任流程：启动前探测受保护资源，无决定时经 `TRUST_REQUIRED` 拦截并由用户决定，决定存入 `desktop-config.json` 的 `projectTrust` 字段，启动时按决定条件传递 `--approve` / `--no-approve`（细节见第 6.2 节 Project Trust）。Desktop 的显式覆盖优先于 Pi 已保存的信任记录，这是官方 CLI 覆盖优先级的直接结果；P3-02 起 Extension 随 Trust 决定加载，Skills、Prompt Templates 与 MCP 仍以 `--no-*` 关闭，启用与否属 P3-06 范围。
 
 Trust 不完全覆盖启动行为：官方代码在 trust 决定前会读取项目 `sessionDir`；AGENTS/CLAUDE 上下文文件也不因拒绝 trust 自动禁用。关闭项目资源加载不等于内容安全或工具权限受限，信任决定也不是 OS 沙箱。
 
@@ -505,7 +531,7 @@ Project 的基础属性为 `id`、`name`、`path`、`lastOpenedAt`；本地配�
 1. 完整依赖树锁定，以及 Electron、固定 Pi 与 helper 在 Windows 与 macOS 上共同约束的系统与运行库最低版本；后续依赖调整继续考虑 Electron 的维护状态。
 2. 避免需要本地编译的原生依赖；Pi/helper 在各目标平台的运行库需求。需要新增工具链时单独取得授权。
 3. 正式签名、公证与安装包配置，按发行步骤确定；staging 路径、三目标文件选择与 package 根/executable 邻接映射已在 P1-02 确定（见第 4 节）。
-4. Extension UI 进入展示投影的边界；消息历史的读取方式已在 P2-02 确定（`get_messages` 初始化投影，见第 6.2 节）。临时消息投影与通知确认契约已在 P1-06 确定，工具执行进入展示投影的边界与中止契约已在 P1-07 确定（均见第 6.2 节），管道边界在 P1-03 确定，请求期限在 P1-05 确定。不建立平行 Session 数据库。
+4. Extension UI 进入展示投影的边界已在 P3-02 确定（见第 6.2 节 Extension UI）；消息历史的读取方式已在 P2-02 确定（`get_messages` 初始化投影，见第 6.2 节）。临时消息投影与通知确认契约已在 P1-06 确定，工具执行进入展示投影的边界与中止契约已在 P1-07 确定（均见第 6.2 节），管道边界在 P1-03 确定，请求期限在 P1-05 确定。不建立平行 Session 数据库。
 5. 不同启动 profile 下现有模型与凭据的可用性（启动参数已在 P1-03 确定）；只读取必要配置，不输出秘密。
 6. Windows 与 macOS 的进程树终止已按平台实现（见 6.2 节）；macOS 分支只在 macOS 主机上生效。保留尽力回收边界，不以关闭主 Pi 进程等同于完整进程树回收。
 7. 第二阶段 Session 列表的接入方式（读 Pi 会话文件的元数据）与恢复方式（重启式切换）已在 P2-02 确定（见 6.2 节）；跨项目复用同一会话文件（手工移动会话文件或项目目录改名）对 cwd 与资源重建的影响仍待核实。

@@ -1,4 +1,4 @@
-<!-- 单条消息：按 contentIndex 顺序渲染内容块，用户消息靠右、Assistant 消息在左侧，Thinking 可折叠，失败按错误提示内联展示。 -->
+<!-- 单条消息：按 contentIndex 顺序渲染内容块，用户消息靠右、Assistant 消息在左侧，用户消息的图片附件渲染为缩略图，Thinking 可折叠，失败按错误提示内联展示。 -->
 <script setup lang="ts">
 import { computed, reactive, watch } from 'vue'
 import type { ChatMessageView } from '../chat-view'
@@ -37,8 +37,15 @@ watch(
     </header>
 
     <template v-for="block in message.blocks" :key="block.key">
+      <!-- 图片附件：只来自用户消息的本地附件，data URL 经 CSP 的 img-src data: 放行。 -->
+      <img
+        v-if="block.kind === 'text' && block.image !== null"
+        :src="block.image.dataUrl"
+        :alt="`附件图片（${block.image.mimeType}）`"
+        class="max-h-48 self-end rounded-md border border-desk-line object-contain"
+      />
       <p
-        v-if="block.kind === 'text'"
+        v-if="block.kind === 'text' && (block.text !== '' || block.image === null)"
         class="chat-bubble"
         :class="isUser ? 'self-end bg-desk-accent text-white' : 'self-start border border-desk-line bg-desk-surface-raised'"
       >
@@ -56,7 +63,7 @@ watch(
         <p v-if="block.truncated" class="mt-1 text-xs text-desk-muted">此内容超出展示上限，已截断。</p>
       </details>
 
-      <ToolCard v-else :block="block" class="self-start w-full" />
+      <ToolCard v-else-if="block.kind === 'toolcall'" :block="block" class="self-start w-full" />
     </template>
 
     <p v-if="message.failure" role="alert" class="self-start text-sm text-desk-danger">
