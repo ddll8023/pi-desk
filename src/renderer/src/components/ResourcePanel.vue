@@ -1,4 +1,4 @@
-<!-- Pi 资源面板：展示当前 Runtime 已加载的 Skills、Prompt Templates、扩展命令、MCP 状态与启动诊断，并提供重启式重载与安全模式启动入口；只读展示 Pi 的资源加载结果，不解析也不修改 Pi 的配置文件。 -->
+<!-- Pi 资源面板：展示当前 Runtime 已加载的 Skills、Prompt Templates、扩展命令、MCP 状态与启动诊断，提供 MCP 服务器登录/退出请求，以及重启式重载与安全模式启动入口；资源清单只来自 Pi 的 `get_commands`，MCP 登录/退出只发固定命令，不解析也不修改 Pi 的配置文件。 -->
 <script setup lang="ts">
 import { computed } from 'vue'
 import { storeToRefs } from 'pinia'
@@ -17,6 +17,9 @@ const {
   diagnosticsError,
   diagnosticsLoading,
   mcpView,
+  mcpCommandView,
+  mcpServerName,
+  mcpServerNameValid,
   safeStart,
   runtimeReady,
   resourcesTruncated
@@ -175,6 +178,64 @@ function reload(): void {
         <p v-else-if="mcpView.phase === 'ready'" class="text-sm text-desk-muted">
           本次请求没有捕获到状态文本；命令可能已由其他 Extension 接管。
         </p>
+
+        <div class="mt-3 border-t border-desk-line pt-2">
+          <h4 class="text-xs font-semibold">MCP 服务器登录 / 退出</h4>
+          <p class="mb-1 text-xs text-desk-muted">
+            只对使用 OAuth 的 HTTP 服务器有意义。命令文本由主进程用服务器名拼出；
+            浏览器由 Pi 自己打开，如果回调无法回到本机，Pi 会通过 Extension 对话框索要 redirect URL。
+            服务器名只能包含字母、数字、点、下划线与连字符。
+          </p>
+          <input
+            v-model="mcpServerName"
+            type="text"
+            placeholder="服务器名，例如 radius"
+            autocomplete="off"
+            spellcheck="false"
+            class="mb-2 w-full rounded-md border border-desk-line bg-desk-surface px-3 py-2 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-desk-accent"
+          >
+          <div class="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              class="control-button"
+              :disabled="!runtimeReady || !mcpServerNameValid || mcpCommandView.phase === 'running'"
+              @click="resourceStore.runMcpServerCommand('login')"
+            >
+              {{ mcpCommandView.phase === 'running' && mcpCommandView.action === 'login' ? '登录进行中…' : '登录此服务器' }}
+            </button>
+            <button
+              type="button"
+              class="control-button"
+              :disabled="!runtimeReady || !mcpServerNameValid || mcpCommandView.phase === 'running'"
+              @click="resourceStore.runMcpServerCommand('logout')"
+            >
+              {{ mcpCommandView.phase === 'running' && mcpCommandView.action === 'logout' ? '正在退出…' : '删除已保存凭据' }}
+            </button>
+          </div>
+
+          <p
+            v-if="mcpCommandView.phase === 'running' && mcpCommandView.action === 'login'"
+            role="status"
+            class="mt-1 text-xs text-desk-muted"
+          >
+            登录需要你在浏览器里完成授权，这里会一直等到 Pi 结束该命令；期间的进度与输入请求
+            会出现在通知区与 Extension 对话框里。
+          </p>
+          <p v-if="mcpCommandView.phase === 'error'" role="alert" class="mt-1 text-sm text-desk-danger">
+            {{ mcpCommandView.error.message }}
+          </p>
+          <pre
+            v-else-if="mcpCommandView.phase === 'ready' && mcpCommandView.data.messages.length > 0"
+            class="empty-output mt-1 whitespace-pre-wrap break-words text-xs"
+          >{{ mcpCommandView.data.messages.join('\n') }}</pre>
+          <p
+            v-else-if="mcpCommandView.phase === 'ready'"
+            class="mt-1 text-sm text-desk-muted"
+          >
+            命令已被 Pi 处理（{{ mcpCommandView.data.disposition }}）；本次没有捕获到额外文本，
+            请重新读取 MCP 状态确认结果。
+          </p>
+        </div>
       </section>
 
       <section class="mb-4">

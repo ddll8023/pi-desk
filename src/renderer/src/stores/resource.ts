@@ -1,5 +1,5 @@
 /**
- * 保存 Pi 资源面板的展示状态：`get_commands` 清单、启动诊断、MCP 状态与安全模式启动结果。
+ * 保存 Pi 资源面板的展示状态：`get_commands` 清单、启动诊断、MCP 状态、MCP 登录/退出结果与安全模式启动结果。
  *
  * 只保存主进程投影的副本，不缓存历史、不解析 Pi 配置文件；清单与诊断都只在 Runtime 就绪时读取，
  * 代际变化后自动重读（资源只在进程启动时加载，重载必须重启 Runtime）。
@@ -8,13 +8,15 @@ import { defineStore } from 'pinia'
 import { computed, ref, watch } from 'vue'
 import type {
   ExtensionErrorEntry,
+  McpCommandAction,
+  McpStatus,
   PiResourceEntry,
   PromptDisposition,
   RuntimeError
 } from '../../../shared/runtime-api'
 import { useRuntimeStore } from './runtime'
 import { useSessionStore } from './session'
-import { getDiagnostics, getResources, readMcpStatus, startRuntimeSafely } from '../services/resource'
+import { getDiagnostics, getResources, readMcpStatus, runMcpCommand, startRuntimeSafely } from '../services/resource'
 
 /** 资源清单的展示状态；`error` 表示清单读取失败，与“确实没有资源”区分。 */
 type ResourcesViewState =
@@ -29,6 +31,13 @@ type McpViewState =
   | { phase: 'requesting' }
   | { phase: 'ready'; disposition: PromptDisposition; messages: readonly string[] }
   | { phase: 'error'; error: RuntimeError }
+
+/** MCP 登录/退出的展示状态；登录需要用户在浏览器里完成授权，可能等待较久。 */
+type McpCommandViewState =
+  | { phase: 'idle' }
+  | { phase: 'running'; action: McpCommandAction }
+  | { phase: 'ready'; action: McpCommandAction; data: McpStatus }
+  | { phase: 'error'; action: McpCommandAction; error: RuntimeError }
 
 /** 安全模式启动的展示状态；成功只表示本次启动请求被接受，运行状态由 Runtime 快照收敛。 */
 type SafeStartState =
@@ -47,6 +56,9 @@ export const useResourceStore = defineStore('resource', () => {
   const diagnosticsLoading = ref(false)
   const diagnosticsError = ref<RuntimeError | null>(null)
   const mcpView = ref<McpViewState>({ phase: 'idle' })
+  const mcpCommandView = ref<McpCommandViewState>({ phase: 'idle' })
+  /** MCP 服务器名输入；它会被主进程校验后拼进固定命令文本。 */
+  const mcpServerName = ref('')
   const safeStart = ref<SafeStartState>({ phase: 'idle' })
 
   /** 已读取过的 Runtime 代际；代际变化后重新读取清单与诊断。 */
@@ -62,8 +74,10 @@ export const useResourceStore = defineStore('resource', () => {
   const skills = computed(() => entries.value.filter((entry) => entry.kind === 'skill'))
   const prompts = computed(() => entries.value.filter((entry) => entry.kind === 'prompt'))
   const commands = computed(() => entries.value.filter((entry) => entry.kind === 'extension'))
+  /** 服务器名与主进程一致：只允许字母、数字、点、下划线与连字符，长度上限 64。 */
+  const mcpServerNameValid = computed(() => /^[A-Za-z0-9._-]{1,64}$/.test(mcpServerName.value.trim()))
 
-  /** 清空与 Runtime 代际绑定的展示状态；诊断与 MCP 状态在离开就绪后不再有意义。 */
+  /** 清空与 Runtime 代际绑定的展示状态；诊断与 MCP 相关状态（含登录/退出结果）在离开就绪后不再有意义。 */
   function resetViews(): void {
     resourcesView.value = { phase: 'idle' }
     entries.value = []
@@ -72,6 +86,7 @@ export const useResourceStore = defineStore('resource', () => {
     extensionErrors.value = []
     diagnosticsError.value = null
     mcpView.value = { phase: 'idle' }
+    mcpCommandView.value = { phase: 'idle' }
     loadedRuntimeId = null
   }
 
@@ -161,6 +176,26 @@ export const useResourceStore = defineStore('resource', () => {
   }
 
   /**
+   * MCP 服务器 OAuth 登录或退出：命令文本由主进程用服务器名拼出。
+   * 登录需要用户在浏览器里完成授权，耗时较久；期间的浏览器地址与 redirect URL 输入
+   * 由 Pi 经既有 Extension UI 通道给出，这里只展示本次请求的捕获文本。
+   */
+  async function runMcpServerCommand(action: McpCommandAction): Promise<void> {
+    const serverName = mcpServerName.value.trim()
+    if (!runtimeReady.value || mcpCommandView.value.phase === 'running' || !mcpServerNameValid.value) return
+
+    mcpCommandView.value = { phase: 'running', action }
+    const result = await runMcpCommand(action, serverName)
+    if (!runtimeReady.value) {
+      mcpCommandView.value = { phase: 'idle' }
+      return
+    }
+    mcpCommandView.value = result.ok
+      ? { phase: 'ready', action, data: result.data }
+      : { phase: 'error', action, error: result.error }
+  }
+
+  /**
    * 安全模式启动：不加载 Extension，仅本次生效；目标由主进程决定。
    * 成功后刷新会话列表（可能新建了会话），资源与诊断由代际监听重新读取。
    */
@@ -210,10 +245,14 @@ export const useResourceStore = defineStore('resource', () => {
     diagnosticsLoading,
     diagnosticsError,
     mcpView,
+    mcpCommandView,
+    mcpServerName,
+    mcpServerNameValid,
     safeStart,
     runtimeReady,
     refresh,
     requestMcpStatus,
+    runMcpServerCommand,
     startSafely,
     initialize,
     dispose

@@ -1,4 +1,4 @@
-/** 为沙箱页面提供应用信息、Project 选择与列表、Session 列表与打开与重新加载、分叉消息读取与分叉发起、Project Trust 查询与决定、界面偏好、Runtime 启停与安全启动、Agent 能力控制、手动压缩、Pi 资源与诊断读取、MCP 状态请求、Prompt 提交、中止、消息/工具投影与事件订阅、Extension UI 状态读取、对话响应与快照订阅，不暴露 Electron、任意 channel 或系统能力。 */
+/** 为沙箱页面提供应用信息、Project 选择与列表、Session 列表与打开与重新加载、分叉消息读取与分叉发起、Project Trust 查询与决定、界面偏好、Runtime 启停与安全启动、Agent 能力控制、手动压缩、Pi 资源与诊断读取、MCP 状态与 MCP 登录退出请求、认证状态与 Provider 登录退出、Prompt 提交、中止、消息/工具投影与事件订阅、Extension UI 状态读取、对话响应与快照订阅，不暴露 Electron、任意 channel 或系统能力。 */
 import { contextBridge, ipcRenderer } from 'electron'
 import type { IpcRendererEvent } from 'electron'
 import { APP_INFO_CHANNEL, isAppInfoResult } from '../shared/desktop-api'
@@ -67,10 +67,32 @@ import type {
   TrustStatusResult
 } from '../shared/trust-api'
 import {
+  AUTH_FLOW_EVENT,
+  AUTH_LOGIN_CANCEL_CHANNEL,
+  AUTH_LOGIN_RESPOND_CHANNEL,
+  AUTH_LOGIN_START_CHANNEL,
+  AUTH_LOGOUT_CHANNEL,
+  AUTH_OPEN_URL_CHANNEL,
+  AUTH_STATUS_CHANNEL,
+  isAuthFlowResult,
+  isAuthFlowSnapshot,
+  isAuthLogoutResult,
+  isAuthStatusResult
+} from '../shared/auth-api'
+import type {
+  AuthApi,
+  AuthFlowResult,
+  AuthFlowSnapshot,
+  AuthLogoutResult,
+  AuthMethod,
+  AuthStatusResult
+} from '../shared/auth-api'
+import {
   RUNTIME_ABORT_CHANNEL,
   RUNTIME_CAPABILITIES_CHANNEL,
   RUNTIME_COMPACT_CHANNEL,
   RUNTIME_DIAGNOSTICS_CHANNEL,
+  RUNTIME_MCP_COMMAND_CHANNEL,
   RUNTIME_MCP_STATUS_CHANNEL,
   RUNTIME_PROMPT_CHANNEL,
   RUNTIME_PROJECTION_ACK_CHANNEL,
@@ -86,6 +108,7 @@ import {
   RUNTIME_STATUS_EVENT,
   isCapabilitiesResult,
   isCompactResultResult,
+  isMcpCommandResult,
   isMcpStatusResult,
   isProjectionBatch,
   isProjectionResult,
@@ -98,6 +121,8 @@ import {
 import type {
   CapabilitiesResult,
   CompactResultResult,
+  McpCommandAction,
+  McpCommandResult,
   McpStatusResult,
   ProjectionBatch,
   ProjectionResult,
@@ -126,6 +151,8 @@ const INVALID_EXTENSION_UI_RESPONSE = '桌面接口返回了无法识别的 Exte
 const INVALID_RESOURCES_RESPONSE = '桌面接口返回了无法识别的资源清单。'
 const INVALID_DIAGNOSTICS_RESPONSE = '桌面接口返回了无法识别的诊断结果。'
 const INVALID_MCP_STATUS_RESPONSE = '桌面接口返回了无法识别的 MCP 状态结果。'
+const INVALID_AUTH_STATUS_RESPONSE = '桌面接口返回了无法识别的认证状态。'
+const INVALID_AUTH_FLOW_RESPONSE = '桌面接口返回了无法识别的登录流程状态。'
 
 function invalidExtensionUiResponse(): ExtensionUiResult {
   return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_EXTENSION_UI_RESPONSE } }
@@ -179,7 +206,19 @@ function invalidMcpStatusResponse(): McpStatusResult {
   return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_MCP_STATUS_RESPONSE } }
 }
 
-const desktop: DesktopApi & RuntimeApi & ProjectApi & SessionApi & PreferencesApi & TrustApi & ExtensionUiApi = {
+function invalidAuthStatusResponse(): AuthStatusResult {
+  return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_AUTH_STATUS_RESPONSE } }
+}
+
+function invalidAuthFlowResponse(): AuthFlowResult {
+  return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_AUTH_FLOW_RESPONSE } }
+}
+
+function invalidAuthLogoutResponse(): AuthLogoutResult {
+  return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_AUTH_STATUS_RESPONSE } }
+}
+
+const desktop: DesktopApi & RuntimeApi & ProjectApi & SessionApi & PreferencesApi & TrustApi & ExtensionUiApi & AuthApi = {
   async getAppInfo() {
     const response: unknown = await ipcRenderer.invoke(APP_INFO_CHANNEL)
     if (!isAppInfoResult(response)) {
@@ -349,6 +388,12 @@ const desktop: DesktopApi & RuntimeApi & ProjectApi & SessionApi & PreferencesAp
     return isMcpStatusResult(response) ? response : invalidMcpStatusResponse()
   },
 
+  /** MCP 登录/退出：只搬运已声明的字段；命令文本由主进程拼出。 */
+  async runRuntimeMcpCommand(action: McpCommandAction, serverName: string): Promise<McpCommandResult> {
+    const response: unknown = await ipcRenderer.invoke(RUNTIME_MCP_COMMAND_CHANNEL, { action, serverName })
+    return isMcpCommandResult(response) ? response : invalidMcpStatusResponse()
+  },
+
   async startRuntimeSafely(): Promise<RuntimeResult> {
     const response: unknown = await ipcRenderer.invoke(RUNTIME_START_SAFE_CHANNEL)
     return isRuntimeResult(response) ? response : invalidRuntimeResponse()
@@ -409,6 +454,51 @@ const desktop: DesktopApi & RuntimeApi & ProjectApi & SessionApi & PreferencesAp
     ipcRenderer.on(EXTENSION_UI_EVENT, handler)
     return () => {
       ipcRenderer.off(EXTENSION_UI_EVENT, handler)
+    }
+  },
+
+  async getAuthStatus(): Promise<AuthStatusResult> {
+    const response: unknown = await ipcRenderer.invoke(AUTH_STATUS_CHANNEL)
+    return isAuthStatusResult(response) ? response : invalidAuthStatusResponse()
+  },
+
+  /** 启动登录流程：只搬运 provider 名与登录方式，不传入其他字段。 */
+  async startAuthLogin(providerId: string, method: AuthMethod): Promise<AuthFlowResult> {
+    const response: unknown = await ipcRenderer.invoke(AUTH_LOGIN_START_CHANNEL, { providerId, method })
+    return isAuthFlowResult(response) ? response : invalidAuthFlowResponse()
+  },
+
+  /** 回应登录提示：密钥只经这一个方法单向提交，之后不保留任何副本。 */
+  async respondAuthLogin(flowId: string, promptId: string, value: string): Promise<AuthFlowResult> {
+    const response: unknown = await ipcRenderer.invoke(AUTH_LOGIN_RESPOND_CHANNEL, { flowId, promptId, value })
+    return isAuthFlowResult(response) ? response : invalidAuthFlowResponse()
+  },
+
+  async cancelAuthLogin(flowId: string): Promise<AuthFlowResult> {
+    const response: unknown = await ipcRenderer.invoke(AUTH_LOGIN_CANCEL_CHANNEL, { flowId })
+    return isAuthFlowResult(response) ? response : invalidAuthFlowResponse()
+  },
+
+  /** 打开当前流程记录的授权地址；页面不能传入任意 URL。 */
+  async openAuthFlowUrl(flowId: string): Promise<AuthFlowResult> {
+    const response: unknown = await ipcRenderer.invoke(AUTH_OPEN_URL_CHANNEL, { flowId })
+    return isAuthFlowResult(response) ? response : invalidAuthFlowResponse()
+  },
+
+  async logoutAuthProvider(providerId: string): Promise<AuthLogoutResult> {
+    const response: unknown = await ipcRenderer.invoke(AUTH_LOGOUT_CHANNEL, { providerId })
+    return isAuthLogoutResult(response) ? response : invalidAuthLogoutResponse()
+  },
+
+  onAuthFlowChanged(listener: (snapshot: AuthFlowSnapshot) => void) {
+    const handler = (_event: IpcRendererEvent, payload: unknown): void => {
+      // 流程载荷同样不可信：契约不符时丢弃，由下一次快照收敛。
+      if (!isAuthFlowSnapshot(payload)) return
+      listener(payload)
+    }
+    ipcRenderer.on(AUTH_FLOW_EVENT, handler)
+    return () => {
+      ipcRenderer.off(AUTH_FLOW_EVENT, handler)
     }
   }
 }

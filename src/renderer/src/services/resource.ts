@@ -1,5 +1,7 @@
-/** 作为渲染端 Pi 资源清单、启动诊断、MCP 状态与安全模式启动的调用入口，把桥接缺失与通信异常转换为安全的展示结果。 */
+/** 作为渲染端 Pi 资源清单、启动诊断、MCP 状态与 MCP 登录/退出、安全模式启动的调用入口，把桥接缺失与通信异常转换为安全的展示结果。 */
 import type {
+  McpCommandAction,
+  McpCommandResult,
   McpStatusResult,
   ResourcesResult,
   RuntimeDiagnosticsResult,
@@ -49,6 +51,23 @@ export async function readMcpStatus(): Promise<McpStatusResult> {
   if (!bridge || typeof bridge.readRuntimeMcpStatus !== 'function') return unavailable()
   try {
     return await bridge.readRuntimeMcpStatus()
+  } catch {
+    return callFailed()
+  }
+}
+
+/**
+ * MCP 服务器 OAuth 登录或退出：服务器名由页面给出但由主进程校验，
+ * 命令文本由主进程拼出；页面不能传入任意命令。
+ */
+export async function runMcpCommand(
+  action: McpCommandAction,
+  serverName: string
+): Promise<McpCommandResult> {
+  const bridge = window.desktop
+  if (!bridge || typeof bridge.runRuntimeMcpCommand !== 'function') return unavailable()
+  try {
+    return await bridge.runRuntimeMcpCommand(action, serverName)
   } catch {
     return callFailed()
   }

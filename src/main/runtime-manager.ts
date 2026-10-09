@@ -11,6 +11,8 @@ import type {
   CapabilitiesResult,
   CompactResult,
   ExtensionErrorEntry,
+  McpCommandAction,
+  McpCommandResult,
   McpStatusResult,
   ModelSummary,
   ProjectionBatch,
@@ -103,6 +105,12 @@ const MCP_STATUS_TIMEOUT_MS = 60_000
 
 /** `/mcp` 是读取 MCP 状态的唯一固定命令；不接受页面传入命令文本。 */
 const MCP_STATUS_PROMPT = '/mcp'
+
+/** MCP 登录的等待上限：需要用户在浏览器里完成授权，明显长于状态读取。 */
+const MCP_LOGIN_TIMEOUT_MS = 300_000
+
+/** MCP 退出登录的等待上限；不涉及浏览器交互。 */
+const MCP_LOGOUT_TIMEOUT_MS = 30_000
 
 /** 资源条目上限；超出截断并如实标记，不伪装成完整清单。 */
 const RESOURCE_ENTRY_LIMIT = 500
@@ -426,6 +434,46 @@ export class RuntimeManager {
       const failure = error instanceof RuntimeFailure
         ? error
         : new RuntimeFailure('INTERNAL_ERROR', '读取 MCP 状态时发生未预期的内部错误。')
+      return { ok: false, error: { code: failure.code, message: failure.message } }
+    } finally {
+      // 提前返回与异常路径都要结束捕获，不留下长期存活的捕获数组。
+      endCapture?.()
+    }
+  }
+
+  /**
+   * MCP 服务器 OAuth 登录或退出：主进程用受校验的服务器名拼出固定命令，经既有 prompt 通道发出。
+   * 登录需要用户在浏览器里完成授权，期间浏览器地址、进度与 redirect URL 输入都由 Pi 经既有
+   * Extension UI 通道给出；这里只回传命令被处理时捕获到的 notify 文本。
+   */
+  async runMcpCommand(action: McpCommandAction, serverName: string): Promise<McpCommandResult> {
+    let endCapture: (() => readonly string[]) | null = null
+    const label = action === 'login' ? 'MCP 登录' : 'MCP 退出登录'
+    try {
+      const runtime = this.requireReadyRuntime()
+      const capture = this.extensionUi.beginNotifyCapture()
+      endCapture = capture
+      const response = await this.requestCommand(
+        runtime,
+        { type: 'prompt', message: `/mcp ${action} ${serverName}` },
+        action === 'login' ? MCP_LOGIN_TIMEOUT_MS : MCP_LOGOUT_TIMEOUT_MS,
+        label
+      )
+      if (!response.success) {
+        throw new RuntimeFailure(
+          'RUNTIME_COMMAND_REJECTED',
+          `Pi 拒绝了${label}：${response.error ?? '未提供错误信息'}`
+        )
+      }
+      const disposition = toPromptDisposition(response.data)
+      if (disposition === null) {
+        throw new RuntimeFailure('RUNTIME_PROTOCOL_ERROR', 'prompt 响应缺少约定的 disposition 字段。')
+      }
+      return { ok: true, data: { disposition, messages: capture() } }
+    } catch (error) {
+      const failure = error instanceof RuntimeFailure
+        ? error
+        : new RuntimeFailure('INTERNAL_ERROR', `${label}时发生未预期的内部错误。`)
       return { ok: false, error: { code: failure.code, message: failure.message } }
     } finally {
       // 提前返回与异常路径都要结束捕获，不留下长期存活的捕获数组。

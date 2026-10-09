@@ -97,7 +97,7 @@
 
 - 启用范围：去掉 `--no-skills`、`--no-prompt-templates`、`--no-mcp`，三类资源的加载交给 Pi 自己的规则与 Project Trust；`--no-extensions` 只用于安全模式启动。
 - 发现与展示只读：只消费官方 `get_commands` 的投影（skill/prompt/extension 三类命令与其归属），不解析 Pi 的 settings / mcp / 包配置，不提供安装、卸载或写配置入口。
-- MCP 状态经固定 `/mcp` 命令与 Extension UI 的 notify 捕获读取，期限与失败语义见开发总览第 6.2 节；不提供 `/mcp` 的登录与 enable/disable/exposure 写路径。
+- MCP 状态经固定 `/mcp` 命令与 Extension UI 的 notify 捕获读取，期限与失败语义见开发总览第 6.2 节；MCP 的登录与退出在 P4-04 接入（见[第四阶段：Authentication](04-authentication.md)），enable/disable/exposure 写路径仍不做。
 - 重载只走重启链：RPC 没有重载命令，`/reload` 是 TUI 内建命令；重载重启 Runtime 并保留当前会话，通道与守门见开发总览第 6.2 节。
 - 加载失败的可见边界：扩展加载失败在非交互模式下致命（退出码 1），stderr 诊断尾部与 `extension_error` 进入资源面板；技能与提示词的加载警告 RPC 不提供，面板只展示已加载清单。
 - 安全模式启动只接受零参数，固定传 `--no-extensions`（同时禁用内建扩展，含 `builtin:mcp`），仅本次生效，用于坏扩展导致 Runtime 无法启动时的应用内逃生。

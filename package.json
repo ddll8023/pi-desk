@@ -7,15 +7,17 @@
   "main": "out/main/index.cjs",
   "packageManager": "npm@11.16.0",
   "scripts": {
-    "dev": "electron-vite dev",
-    "build": "electron-vite build",
+    "dev": "npm run auth-helper:build && electron-vite dev",
+    "build": "npm run auth-helper:build && electron-vite build",
     "start": "electron-vite preview",
+    "auth-helper:build": "vite build --config vite.auth-helper.config.ts",
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json",
     "typecheck:web": "vue-tsc --noEmit -p tsconfig.web.json",
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
     "pi:prepare": "node scripts/prepare-pi-runtime.mjs"
   },
   "dependencies": {
+    "@earendil-works/pi-coding-agent": "1.0.4",
     "pinia": "4.0.3",
     "vue": "3.5.43"
   },

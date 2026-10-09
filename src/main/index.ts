@@ -1,4 +1,4 @@
-/** 管理唯一桌面窗口及其尺寸位置偏好、本地资产边界，以及应用信息、Project 选择与列表、Session 列表与打开与重新加载、分叉消息读取与分叉发起、Project Trust 查询与决定、界面偏好、Runtime 启停与安全启动、Prompt 提交、中止、Agent 能力查询与设置、手动压缩、Pi 资源与诊断读取、MCP 状态请求、消息/工具投影 IPC、Extension UI 状态与对话响应 IPC、事件广播与退出编排。 */
+/** 管理唯一桌面窗口及其尺寸位置偏好、本地资产边界，以及应用信息、Project 选择与列表、Session 列表与打开与重新加载、分叉消息读取与分叉发起、Project Trust 查询与决定、界面偏好、Runtime 启停与安全启动、Prompt 提交、中止、Agent 能力查询与设置、手动压缩、Pi 资源与诊断读取、MCP 状态与 MCP 登录退出请求、安全启动、认证状态与 Provider 登录退出、外链打开、消息/工具投影 IPC、Extension UI 状态与对话响应 IPC、事件广播与退出编排。 */
 import { realpath } from 'node:fs/promises'
 import { extname, isAbsolute, relative, resolve, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -56,10 +56,33 @@ import type {
   TrustStatusResult
 } from '../shared/trust-api'
 import {
+  AUTH_FLOW_EVENT,
+  AUTH_LOGIN_CANCEL_CHANNEL,
+  AUTH_LOGIN_RESPOND_CHANNEL,
+  AUTH_LOGIN_START_CHANNEL,
+  AUTH_LOGOUT_CHANNEL,
+  AUTH_MAX_FLOW_ID_CHARS,
+  AUTH_MAX_PROMPT_ID_CHARS,
+  AUTH_MAX_PROVIDER_ID_CHARS,
+  AUTH_MAX_SECRET_CHARS,
+  AUTH_OPEN_URL_CHANNEL,
+  AUTH_STATUS_CHANNEL,
+  isAuthLoginRespondRequest,
+  isAuthLoginStartRequest
+} from '../shared/auth-api'
+import type {
+  AuthErrorCode,
+  AuthFlowResult,
+  AuthFlowSnapshot,
+  AuthLogoutResult,
+  AuthStatusResult
+} from '../shared/auth-api'
+import {
   RUNTIME_ABORT_CHANNEL,
   RUNTIME_CAPABILITIES_CHANNEL,
   RUNTIME_COMPACT_CHANNEL,
   RUNTIME_DIAGNOSTICS_CHANNEL,
+  RUNTIME_MCP_COMMAND_CHANNEL,
   RUNTIME_MCP_STATUS_CHANNEL,
   RUNTIME_PROMPT_CHANNEL,
   RUNTIME_PROJECTION_ACK_CHANNEL,
@@ -77,6 +100,7 @@ import {
 import type {
   CapabilitiesResult,
   CompactResultResult,
+  McpCommandResult,
   McpStatusResult,
   ProjectionBatch,
   ProjectionResult,
@@ -89,6 +113,7 @@ import type {
   RuntimeStatus
 } from '../shared/runtime-api'
 import { DesktopConfigStore } from './desktop-config-store'
+import { AuthManager, AuthManagerError } from './auth-manager'
 import { PreferencesManager } from './preferences-manager'
 import { ProjectManager } from './project-manager'
 import { RuntimeManager } from './runtime-manager'
@@ -143,6 +168,8 @@ const projectManager = new ProjectManager({
 const sessionManager = new SessionManager({ projects: projectManager, runtime: runtimeManager })
 /** Project Trust 的探测与决定管理；决定存入 desktop-config.json，不读写 Pi 的 trust.json。 */
 const trustManager = new TrustManager({ store: configStore })
+/** 认证执行端：管理认证辅助进程，凭据读写全在官方实现内完成。 */
+const authManager = new AuthManager({ store: configStore })
 const preferencesManager = new PreferencesManager({ store: configStore })
 const windowState = new WindowState({ store: configStore })
 
@@ -334,6 +361,24 @@ function preferencesFailure(code: PreferencesErrorCode, message: string): Prefer
   return { ok: false, error: { code, message } }
 }
 
+/** 认证操作失败统一映射为共享契约的错误码；未知异常不向外暴露内部细节。 */
+function authErrorOf(error: unknown): { readonly code: AuthErrorCode; readonly message: string } {
+  if (error instanceof AuthManagerError) return { code: error.code, message: error.message }
+  return { code: 'INTERNAL_ERROR', message: '认证操作失败，请重试。' }
+}
+
+function authStatusFailure(code: AuthErrorCode, message: string): AuthStatusResult {
+  return { ok: false, error: { code, message } }
+}
+
+function authFlowFailure(code: AuthErrorCode, message: string): AuthFlowResult {
+  return { ok: false, error: { code, message } }
+}
+
+function authLogoutFailure(code: AuthErrorCode, message: string): AuthLogoutResult {
+  return { ok: false, error: { code, message } }
+}
+
 function extensionUiFailure(code: ExtensionUiErrorCode, message: string): ExtensionUiResult {
   return { ok: false, error: { code, message } }
 }
@@ -341,6 +386,17 @@ function extensionUiFailure(code: ExtensionUiErrorCode, message: string): Extens
 /** 只接受非空且长度受控的标识字符串；空字符串与超长都按参数拒绝。 */
 function isBoundedIdentifier(value: unknown, maxLength: number): value is string {
   return typeof value === 'string' && value.trim() !== '' && value.length <= maxLength
+}
+
+/** MCP 服务器名长度上限；字符集限制保证它只能作为固定命令的一个普通参数。 */
+const MCP_SERVER_NAME_MAX_CHARS = 64
+
+/** 服务器名只接受字母、数字、点、下划线与连字符；其他字符一律拒绝。 */
+function isMcpServerName(value: unknown): value is string {
+  return typeof value === 'string'
+    && value.length > 0
+    && value.length <= MCP_SERVER_NAME_MAX_CHARS
+    && /^[A-Za-z0-9._-]+$/.test(value)
 }
 
 /** 把界面偏好的主题取值应用到 Electron 原生主题；驱动页面内 `prefers-color-scheme` 媒体查询。 */
@@ -858,6 +914,35 @@ function registerRuntimeHandlers(pageUrl: string): void {
     }
   )
 
+  /** MCP 登录或退出：只接受动作与服务器名；命令文本与等待期限都由主进程决定。 */
+  ipcMain.handle(
+    RUNTIME_MCP_COMMAND_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<McpCommandResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return mcpStatusFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 1) {
+        return mcpStatusFailure('INVALID_REQUEST', 'MCP 登录/退出接口只接受一个请求对象。')
+      }
+      const request = args[0]
+      if (typeof request !== 'object' || request === null || Array.isArray(request)) {
+        return mcpStatusFailure('INVALID_REQUEST', 'MCP 登录/退出参数格式不正确。')
+      }
+      const fields = request as Record<string, unknown>
+      if (Object.keys(fields).some((key) => key !== 'action' && key !== 'serverName')) {
+        return mcpStatusFailure('INVALID_REQUEST', 'MCP 登录/退出参数包含未支持的字段。')
+      }
+      if (fields.action !== 'login' && fields.action !== 'logout') {
+        return mcpStatusFailure('INVALID_REQUEST', 'MCP 动作只能是 login 或 logout。')
+      }
+      // 服务器名会被拼进固定命令文本，因此只允许字母、数字、点、下划线与连字符。
+      if (!isMcpServerName(fields.serverName)) {
+        return mcpStatusFailure('INVALID_REQUEST', 'MCP 服务器名只能包含字母、数字、点、下划线与连字符。')
+      }
+      return runtimeManager.runMcpCommand(fields.action, fields.serverName)
+    }
+  )
+
   /**
    * 安全模式启动：零参数，主进程用最近一次启动目标并固定传 `--no-extensions`，
    * 仅本次生效；信任拦截与常规启动一致。
@@ -1009,6 +1094,185 @@ function registerPreferencesHandlers(pageUrl: string): void {
 }
 
 /**
+ * 认证状态读取、Provider 登录流程（API Key 与 OAuth）、退出登录与外链打开。
+ * 登录流程与密钥只经固定业务方法传递：页面不能指定辅助进程路径、命令文本或要打开的 URL。
+ */
+function registerAuthHandlers(pageUrl: string): void {
+  ipcMain.handle(
+    AUTH_STATUS_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<AuthStatusResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return authStatusFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 0) {
+        return authStatusFailure('INVALID_REQUEST', '认证状态接口不接受参数。')
+      }
+      try {
+        return { ok: true, data: await authManager.readStatus() }
+      } catch (error) {
+        const failure = authErrorOf(error)
+        return authStatusFailure(failure.code, failure.message)
+      }
+    }
+  )
+
+  ipcMain.handle(
+    AUTH_LOGIN_START_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<AuthFlowResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return authFlowFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 1) {
+        return authFlowFailure('INVALID_REQUEST', '启动登录接口只接受一个请求对象。')
+      }
+      const request = args[0]
+      if (typeof request !== 'object' || request === null || Array.isArray(request)) {
+        return authFlowFailure('INVALID_REQUEST', '启动登录参数格式不正确。')
+      }
+      const fields = request as Record<string, unknown>
+      if (Object.keys(fields).some((key) => key !== 'providerId' && key !== 'method')) {
+        return authFlowFailure('INVALID_REQUEST', '启动登录参数包含未支持的字段。')
+      }
+      if (!isAuthLoginStartRequest(request)) {
+        return authFlowFailure('INVALID_REQUEST', '启动登录参数必须包含 providerId 与 method。')
+      }
+      if (!isBoundedIdentifier(request.providerId, AUTH_MAX_PROVIDER_ID_CHARS)) {
+        return authFlowFailure('INVALID_REQUEST', 'Provider 名称必须是非空且长度受控的字符串。')
+      }
+      try {
+        return { ok: true, data: await authManager.beginLogin(request.providerId, request.method) }
+      } catch (error) {
+        const failure = authErrorOf(error)
+        return authFlowFailure(failure.code, failure.message)
+      }
+    }
+  )
+
+  ipcMain.handle(
+    AUTH_LOGIN_RESPOND_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<AuthFlowResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return authFlowFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 1) {
+        return authFlowFailure('INVALID_REQUEST', '回应认证提示接口只接受一个请求对象。')
+      }
+      const request = args[0]
+      if (typeof request !== 'object' || request === null || Array.isArray(request)) {
+        return authFlowFailure('INVALID_REQUEST', '回应认证提示参数格式不正确。')
+      }
+      const fields = request as Record<string, unknown>
+      if (Object.keys(fields).some((key) => key !== 'flowId' && key !== 'promptId' && key !== 'value')) {
+        return authFlowFailure('INVALID_REQUEST', '回应认证提示参数包含未支持的字段。')
+      }
+      if (!isAuthLoginRespondRequest(request)) {
+        return authFlowFailure('INVALID_REQUEST', '回应认证提示参数必须包含 flowId、promptId 与 value。')
+      }
+      // 密钥长度在这里先拦一次；取值合法性（如 select 候选）由主进程的认证管理再次校验。
+      if (request.value.length > AUTH_MAX_SECRET_CHARS) {
+        return authFlowFailure('INVALID_REQUEST', `输入超过 ${AUTH_MAX_SECRET_CHARS} 字符上限。`)
+      }
+      try {
+        return {
+          ok: true,
+          data: await authManager.respondPrompt(request.flowId, request.promptId, request.value)
+        }
+      } catch (error) {
+        const failure = authErrorOf(error)
+        return authFlowFailure(failure.code, failure.message)
+      }
+    }
+  )
+
+  ipcMain.handle(
+    AUTH_LOGIN_CANCEL_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<AuthFlowResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return authFlowFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 1) {
+        return authFlowFailure('INVALID_REQUEST', '取消登录接口只接受一个请求对象。')
+      }
+      const request = args[0]
+      if (typeof request !== 'object' || request === null || Array.isArray(request)) {
+        return authFlowFailure('INVALID_REQUEST', '取消登录参数格式不正确。')
+      }
+      const fields = request as Record<string, unknown>
+      if (Object.keys(fields).some((key) => key !== 'flowId')) {
+        return authFlowFailure('INVALID_REQUEST', '取消登录参数包含未支持的字段。')
+      }
+      if (!isBoundedIdentifier(fields.flowId, AUTH_MAX_FLOW_ID_CHARS)) {
+        return authFlowFailure('INVALID_REQUEST', 'flowId 必须是非空且长度受控的字符串。')
+      }
+      try {
+        return { ok: true, data: await authManager.cancelLogin(fields.flowId) }
+      } catch (error) {
+        const failure = authErrorOf(error)
+        return authFlowFailure(failure.code, failure.message)
+      }
+    }
+  )
+
+  ipcMain.handle(
+    AUTH_OPEN_URL_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<AuthFlowResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return authFlowFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 1) {
+        return authFlowFailure('INVALID_REQUEST', '打开授权地址接口只接受一个请求对象。')
+      }
+      const request = args[0]
+      if (typeof request !== 'object' || request === null || Array.isArray(request)) {
+        return authFlowFailure('INVALID_REQUEST', '打开授权地址参数格式不正确。')
+      }
+      const fields = request as Record<string, unknown>
+      if (Object.keys(fields).some((key) => key !== 'flowId')) {
+        return authFlowFailure('INVALID_REQUEST', '打开授权地址参数包含未支持的字段。')
+      }
+      if (!isBoundedIdentifier(fields.flowId, AUTH_MAX_FLOW_ID_CHARS)) {
+        return authFlowFailure('INVALID_REQUEST', 'flowId 必须是非空且长度受控的字符串。')
+      }
+      try {
+        return { ok: true, data: await authManager.openFlowUrl(fields.flowId) }
+      } catch (error) {
+        const failure = authErrorOf(error)
+        return authFlowFailure(failure.code, failure.message)
+      }
+    }
+  )
+
+  ipcMain.handle(
+    AUTH_LOGOUT_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<AuthLogoutResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return authLogoutFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 1) {
+        return authLogoutFailure('INVALID_REQUEST', '退出登录接口只接受一个请求对象。')
+      }
+      const request = args[0]
+      if (typeof request !== 'object' || request === null || Array.isArray(request)) {
+        return authLogoutFailure('INVALID_REQUEST', '退出登录参数格式不正确。')
+      }
+      const fields = request as Record<string, unknown>
+      if (Object.keys(fields).some((key) => key !== 'providerId')) {
+        return authLogoutFailure('INVALID_REQUEST', '退出登录参数包含未支持的字段。')
+      }
+      if (!isBoundedIdentifier(fields.providerId, AUTH_MAX_PROVIDER_ID_CHARS)) {
+        return authLogoutFailure('INVALID_REQUEST', 'Provider 名称必须是非空且长度受控的字符串。')
+      }
+      try {
+        return { ok: true, data: await authManager.logout(fields.providerId) }
+      } catch (error) {
+        const failure = authErrorOf(error)
+        return authLogoutFailure(failure.code, failure.message)
+      }
+    }
+  )
+}
+
+/**
  * Extension UI 状态查询与 dialog 响应提交；只接受受控的 id 与互斥响应形态。
  * id 不在队列或形态不符按 EXTENSION_DIALOG_NOT_FOUND / INVALID_REQUEST 拒绝，不猜造。
  */
@@ -1089,6 +1353,15 @@ function broadcastExtensionUi(snapshot: ExtensionUiSnapshot): void {
   contents.send(EXTENSION_UI_EVENT, snapshot)
 }
 
+/** 登录流程快照同样只发给当前唯一可信窗口。 */
+function broadcastAuthFlow(snapshot: AuthFlowSnapshot): void {
+  const target = mainWindow
+  if (target === null || target.isDestroyed()) return
+  const contents = target.webContents
+  if (contents.isDestroyed()) return
+  contents.send(AUTH_FLOW_EVENT, snapshot)
+}
+
 function restrictSession(): void {
   session.defaultSession.setPermissionCheckHandler(() => false)
   session.defaultSession.setPermissionRequestHandler((_contents, _permission, callback) => {
@@ -1166,6 +1439,8 @@ app.on('before-quit', (event) => {
   void (async () => {
     // 先落盘窗口状态：写入很小，避免被关闭链的兜底等待挤掉。
     await Promise.race([windowState.flush(), wait(WINDOW_STATE_FLUSH_MS)])
+    // 认证辅助进程没有自己的业务状态，只按关闭链终止；先请它退出再关闭 Pi Runtime。
+    await Promise.race([authManager.stop(), wait(QUIT_DEADLINE_MS)])
     await Promise.race([runtimeManager.shutdown(), wait(QUIT_DEADLINE_MS)])
     app.exit(0)
   })()
@@ -1182,9 +1457,11 @@ app.whenReady().then(async () => {
   registerSessionHandlers(pageUrl)
   registerTrustHandlers(pageUrl)
   registerPreferencesHandlers(pageUrl)
+  registerAuthHandlers(pageUrl)
   runtimeManager.onStatusChanged(broadcastRuntimeStatus)
   runtimeManager.onProjectionBatch(broadcastRuntimeProjection)
   runtimeManager.onExtensionUi(broadcastExtensionUi)
+  authManager.onFlowChanged(broadcastAuthFlow)
   await createWindow(pageUrl)
 }).catch(() => {
   console.error('Pi Desktop 无法加载桌面页面。')

@@ -1,4 +1,4 @@
-<!-- 顶栏：Sidebar 折叠开关、主题循环切换、项目切换入口、当前会话与 Runtime 状态，并在详情弹层里提供模型、Thinking、上下文占用等 Agent 控制、从历史消息分叉、重置本项目信任决定与关闭 Runtime；另提供 Pi 资源面板入口；不承载消息与 Prompt 提交。 -->
+<!-- 顶栏：Sidebar 折叠开关、主题循环切换、项目切换入口、当前会话与 Runtime 状态，并在详情弹层里提供模型、Thinking、上下文占用等 Agent 控制、从历史消息分叉、重置本项目信任决定与关闭 Runtime；另提供 Pi 资源面板与 Provider 认证面板入口；不承载消息与 Prompt 提交。 -->
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
 import { computed, onMounted, onUnmounted, ref } from 'vue'
@@ -10,6 +10,7 @@ import { useSessionStore } from '../stores/session'
 import { useTrustStore } from '../stores/trust'
 import type { TrustStatus } from '../../../shared/trust-api'
 import AgentControls from './AgentControls.vue'
+import AuthPanel from './AuthPanel.vue'
 import ConfirmDialog from './ConfirmDialog.vue'
 import ForkDialog from './ForkDialog.vue'
 import ProjectSwitcher from './ProjectSwitcher.vue'
@@ -55,6 +56,8 @@ const trustResetBusy = ref(false)
 const showingFork = ref(false)
 /** Pi 资源面板挂在顶栏组件内：入口是顶栏按钮，弹层本身全局展示。 */
 const showingResources = ref(false)
+/** Provider 认证面板同样挂在顶栏组件内：入口是顶栏按钮，与资源面板互斥。 */
+const showingAuth = ref(false)
 
 const runtimeInfo = computed(() => (
   runtimeView.value.phase === 'ready' ? runtimeView.value.snapshot.info : null
@@ -146,11 +149,23 @@ function closeForkDialog(): void {
 /** 资源面板与项目、Runtime 弹层互斥：打开前先收起其他弹层。 */
 function openResourcePanel(): void {
   closePanel()
+  showingAuth.value = false
   showingResources.value = true
 }
 
 function closeResourcePanel(): void {
   showingResources.value = false
+}
+
+/** 认证面板同样与项目、Runtime 弹层和资源面板互斥。 */
+function openAuthPanel(): void {
+  closePanel()
+  showingResources.value = false
+  showingAuth.value = true
+}
+
+function closeAuthPanel(): void {
+  showingAuth.value = false
 }
 
 async function confirmTrustReset(): Promise<void> {
@@ -321,6 +336,14 @@ onUnmounted(() => {
       Pi 资源
     </button>
 
+    <button
+      type="button"
+      class="icon-button"
+      @click="openAuthPanel"
+    >
+      Provider 认证
+    </button>
+
     <ConfirmDialog
       v-if="confirmingTrustReset"
       title="重置本项目信任决定？"
@@ -334,5 +357,7 @@ onUnmounted(() => {
     <ForkDialog v-if="showingFork" @close="closeForkDialog" />
 
     <ResourcePanel v-if="showingResources" @close="closeResourcePanel" />
+
+    <AuthPanel v-if="showingAuth" @close="closeAuthPanel" />
   </header>
 </template>

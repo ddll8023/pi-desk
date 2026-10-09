@@ -1,11 +1,11 @@
 /**
- * 本地 Desktop 配置的唯一读写者：最近项目、当前项目、界面偏好、窗口状态与各项目信任决定（Project Trust）
- * 的加载、保存与降级处理。
+ * 本地 Desktop 配置的唯一读写者：最近项目、当前项目、界面偏好、窗口状态、各项目信任决定（Project Trust）
+ * 与安装级 UUID 的加载、保存与降级处理。
  *
  * 配置位于 Electron userData 目录下的 desktop-config.json。写入采用同目录临时文件加改名替换，
  * 所有读写串行执行；结构损坏先备份再重新开始，暂时读不到时进入只读降级，避免用空配置覆盖
- * 仍然存在的记录。界面偏好、窗口状态与各项目的信任决定是同一文件里的可选字段，缺失或非法一律
- * 按默认值处理，不参与结构判定，也不改变版本语义；路径归一化在 project-path.ts，切换编排在
+ * 仍然存在的记录。界面偏好、窗口状态、各项目的信任决定与安装级 UUID 是同一文件里的可选字段，
+ * 缺失或非法一律按默认值处理，不参与结构判定，也不改变版本语义；路径归一化在 project-path.ts，切换编排在
  * project-manager.ts，偏好读取在 preferences-manager.ts，窗口状态校正与保存时机在 window-state.ts，
  * 信任决定的探测与启动参数映射在 trust-manager.ts。
  */
@@ -59,6 +59,11 @@ interface StoredConfig {
   readonly window: WindowState
   /** 可选字段：键是项目规范路径，值是 Desktop 侧保存的信任决定；缺失或非法按无决定处理。 */
   readonly projectTrust: Record<string, TrustDecision>
+  /**
+   * 可选字段：安装级 UUID。只用于需要 device id 的供应商登录（如 ChatGPT 账户登录），
+   * 不是凭据；与 Pi 自己保存在 settings.json 里的值互不影响。缺失或非法按无值处理。
+   */
+  readonly authDeviceId: string | null
 }
 
 /** 需要落盘的完整配置内容；调用方显式给出，避免部分更新丢掉其他字段。 */
@@ -68,6 +73,7 @@ interface PersistPayload {
   readonly ui: UiPreferences
   readonly windowState: WindowState
   readonly projectTrust: Record<string, TrustDecision>
+  readonly authDeviceId: string | null
 }
 
 /** 配置写入失败；由调用方映射为 `PROJECT_STORAGE_FAILED` 或通用内部错误。 */
@@ -103,6 +109,13 @@ function sanitizeProjectTrust(value: unknown): Record<string, TrustDecision> {
     decisions[key] = entry
   }
   return decisions
+}
+
+/** 安装级 UUID 的接受形状；只接受标准 UUID，其他取值一律按无值处理。 */
+const AUTH_DEVICE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu
+
+function sanitizeAuthDeviceId(value: unknown): string | null {
+  return typeof value === 'string' && AUTH_DEVICE_ID_PATTERN.test(value) ? value.toLowerCase() : null
 }
 
 /** 尺寸非法回落到默认值；位置缺失或非法一律丢弃，不猜测部分坐标。 */
@@ -170,6 +183,10 @@ export class DesktopConfigStore {
   private ui: UiPreferences = DEFAULT_UI_PREFERENCES
   private windowState: WindowState = DEFAULT_WINDOW_STATE
   private projectTrust: Record<string, TrustDecision> = {}
+  /** 磁盘上的安装级 UUID；只在配置里保存过一次后才有值。 */
+  private storedAuthDeviceId: string | null = null
+  /** 本次运行使用的安装级 UUID；尚未落盘时也保持同一个值。 */
+  private authDeviceId: string | null = null
 
   /** 读取列表与当前项目；首次调用从磁盘加载，之后返回内存状态。 */
   list(): Promise<ProjectList> {
@@ -204,7 +221,8 @@ export class DesktopConfigStore {
           currentProjectId: record.id,
           ui: this.ui,
           windowState: this.windowState,
-          projectTrust: this.projectTrust
+          projectTrust: this.projectTrust,
+          authDeviceId: this.deviceIdForPersist()
         })
       }
 
@@ -232,7 +250,8 @@ export class DesktopConfigStore {
           currentProjectId: this.currentProjectId,
           ui,
           windowState: this.windowState,
-          projectTrust: this.projectTrust
+          projectTrust: this.projectTrust,
+          authDeviceId: this.deviceIdForPersist()
         })
       }
       this.ui = ui
@@ -258,7 +277,8 @@ export class DesktopConfigStore {
           currentProjectId: this.currentProjectId,
           ui: this.ui,
           windowState,
-          projectTrust: this.projectTrust
+          projectTrust: this.projectTrust,
+          authDeviceId: this.deviceIdForPersist()
         })
       }
       this.windowState = windowState
@@ -289,11 +309,52 @@ export class DesktopConfigStore {
           currentProjectId: this.currentProjectId,
           ui: this.ui,
           windowState: this.windowState,
-          projectTrust: next
+          projectTrust: next,
+          authDeviceId: this.deviceIdForPersist()
         })
       }
       this.projectTrust = next
     })
+  }
+
+  /**
+   * 读取安装级 UUID；首次调用生成一个并尽力落盘。
+   * 配置只读降级时只保存在本次运行内存中（本次运行内保持不变），下次启动会重新生成；
+   * 它不是凭据，也不与 Pi 自己保存在 settings.json 里的 device id 共享。
+   */
+  getOrCreateAuthDeviceId(): Promise<string | null> {
+    return this.enqueue(async () => {
+      await this.loadFromDisk()
+      if (this.authDeviceId !== null) return this.authDeviceId
+      if (this.storedAuthDeviceId !== null) {
+        this.authDeviceId = this.storedAuthDeviceId
+        return this.authDeviceId
+      }
+
+      const generated = randomUUID()
+      this.authDeviceId = generated
+      if (!this.readOnly) {
+        try {
+          await this.persist({
+            projects: this.projects,
+            currentProjectId: this.currentProjectId,
+            ui: this.ui,
+            windowState: this.windowState,
+            projectTrust: this.projectTrust,
+            authDeviceId: generated
+          })
+          this.storedAuthDeviceId = generated
+        } catch {
+          // 落盘失败不影响本次运行使用同一个已生成的值。
+        }
+      }
+      return this.authDeviceId
+    })
+  }
+
+  /** 落盘时使用的安装级 UUID：优先用本次运行的值，其次用磁盘上已有的值。 */
+  private deviceIdForPersist(): string | null {
+    return this.authDeviceId ?? this.storedAuthDeviceId
   }
 
   private enqueue<T>(task: () => Promise<T>): Promise<T> {
@@ -352,6 +413,7 @@ export class DesktopConfigStore {
       this.ui = parsed.ui
       this.windowState = parsed.window
       this.projectTrust = parsed.projectTrust
+      this.storedAuthDeviceId = parsed.authDeviceId
       this.notice = `本地项目配置版本 ${parsed.version} 不受支持，本次运行不会保存项目选择。`
       return
     }
@@ -360,6 +422,7 @@ export class DesktopConfigStore {
     this.ui = parsed.ui
     this.windowState = parsed.window
     this.projectTrust = parsed.projectTrust
+    this.storedAuthDeviceId = parsed.authDeviceId
   }
 
   /** 解析并逐条过滤；只有顶层结构无法识别时返回 null（按损坏处理）。 */
@@ -382,7 +445,8 @@ export class DesktopConfigStore {
       currentProjectId,
       ui: sanitizeUiPreferences(value.ui),
       window: sanitizeWindowState(value.window),
-      projectTrust: sanitizeProjectTrust(value.projectTrust)
+      projectTrust: sanitizeProjectTrust(value.projectTrust),
+      authDeviceId: sanitizeAuthDeviceId(value.authDeviceId)
     }
   }
 
@@ -427,7 +491,8 @@ export class DesktopConfigStore {
       currentProjectId: next.currentProjectId,
       ui: next.ui,
       window: next.windowState,
-      projectTrust: next.projectTrust
+      projectTrust: next.projectTrust,
+      authDeviceId: next.authDeviceId
     }
     try {
       await mkdir(dirname(file), { recursive: true })

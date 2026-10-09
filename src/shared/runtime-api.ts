@@ -1,4 +1,4 @@
-/** 只定义 Runtime 启停、状态、Prompt 提交、中止、Agent 能力查询与设置、手动压缩、Pi 资源与诊断读取、MCP 状态请求、安全启动、消息/工具投影 IPC 的固定通道、事件名、结果类型与跨进程响应校验。 */
+/** 只定义 Runtime 启停、状态、Prompt 提交、中止、Agent 能力查询与设置、手动压缩、Pi 资源与诊断读取、MCP 状态与 MCP 登录/退出命令、安全启动、消息/工具投影 IPC 的固定通道、事件名、结果类型与跨进程响应校验。 */
 import type { DesktopErrorCode } from './desktop-api'
 
 export const RUNTIME_START_CHANNEL = 'desktop:runtime-start'
@@ -18,6 +18,8 @@ export const RUNTIME_RESOURCES_CHANNEL = 'desktop:runtime-resources'
 export const RUNTIME_DIAGNOSTICS_CHANNEL = 'desktop:runtime-diagnostics'
 /** 固定请求 `/mcp` 状态；不接受页面传入命令文本。 */
 export const RUNTIME_MCP_STATUS_CHANNEL = 'desktop:runtime-mcp-status'
+/** MCP 服务器 OAuth 登录与退出；只接受受校验的服务器名，命令文本由主进程拼出。 */
+export const RUNTIME_MCP_COMMAND_CHANNEL = 'desktop:runtime-mcp-command'
 /** 安全模式启动：零参数，主进程用最近一次启动意图并固定传 `--no-extensions`。 */
 export const RUNTIME_START_SAFE_CHANNEL = 'desktop:runtime-start-safe'
 /** 主进程到渲染进程的单向状态通知，payload 是 RuntimeStatus。 */
@@ -358,6 +360,23 @@ export interface McpStatus {
   readonly messages: readonly string[]
 }
 
+/** MCP 服务器 OAuth 的两个受支持动作；enable/disable/exposure 需要改配置，不在此范围。 */
+export type McpCommandAction = 'login' | 'logout'
+
+/** 只接受动作与服务器名；命令文本由主进程拼接，页面不能传入任意命令。 */
+export interface McpCommandRequest {
+  readonly action: McpCommandAction
+  readonly serverName: string
+}
+
+/**
+ * MCP 登录/退出请求的结果。登录需要用户在浏览器里完成授权，期间浏览器地址、进度与
+ * redirect URL 输入都经既有 Extension UI 通道展示；这里只回传命令被处理时的捕获文本。
+ */
+export type McpCommandResult =
+  | { readonly ok: true; readonly data: McpStatus }
+  | { readonly ok: false; readonly error: RuntimeError }
+
 export type ResourcesResult =
   | { readonly ok: true; readonly data: PiResources }
   | { readonly ok: false; readonly error: RuntimeError }
@@ -407,6 +426,8 @@ export interface RuntimeApi {
   readonly getRuntimeDiagnostics: () => Promise<RuntimeDiagnosticsResult>
   /** 固定请求 `/mcp` 状态；状态文本由 notify 捕获后返回，不在页面拼造。 */
   readonly readRuntimeMcpStatus: () => Promise<McpStatusResult>
+  /** MCP 服务器 OAuth 登录或退出；服务器名由页面给出但由主进程校验，命令文本由主进程拼出。 */
+  readonly runRuntimeMcpCommand: (action: McpCommandAction, serverName: string) => Promise<McpCommandResult>
   /**
    * 安全模式启动：不加载 Extension，复用最近一次启动的项目与会话；仅本次生效，不写配置。
    * 与常规启动一样先经过信任拦截（无决定时返回 `TRUST_REQUIRED`）。
@@ -813,4 +834,21 @@ export function isMcpStatusResult(value: unknown): value is McpStatusResult {
       && data.messages.every((message) => typeof message === 'string')
   }
   return isRuntimeErrorResult(value)
+}
+
+function isMcpCommandAction(value: unknown): value is McpCommandAction {
+  return value === 'login' || value === 'logout'
+}
+
+/** 请求只校验形状；服务器名的字符集与长度由主进程校验后再拼接命令。 */
+export function isMcpCommandRequest(value: unknown): value is McpCommandRequest {
+  if (!isRecord(value)) return false
+  return isMcpCommandAction(value.action)
+    && typeof value.serverName === 'string'
+    && value.serverName.length > 0
+}
+
+/** MCP 命令结果与状态结果的形状一致，因此复用同一套校验。 */
+export function isMcpCommandResult(value: unknown): value is McpCommandResult {
+  return isMcpStatusResult(value)
 }

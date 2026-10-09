@@ -27,9 +27,9 @@ Sandboxed preload / contextBridge
         │ IPC 请求响应 / 定向事件流
         ▼
 Electron Main
-        │ stdin / stdout · JSONL RPC
-        ▼
-Pi standalone binary
+        │ stdin / stdout · JSONL RPC        │ ELECTRON_RUN_AS_NODE · JSONL
+        ▼                                    ▼
+Pi standalone binary                Auth helper（官方 SDK 认证 API）
         ▼
 Pi Agent Runtime
 ```
@@ -46,7 +46,7 @@ Pinia 保存当前渲染进程所需的展示状态，不承担 Agent Runtime �
 
 ### Electron 主进程
 
-负责窗口和调用者校验、Pi 进程管理、工作目录、管道 I/O、协议解析、请求关联、临时消息投影、定向通知、异常退出和资源释放。对来自 Vue 的参数重新校验，不接受任意可执行文件路径、启动参数、环境变量或 shell 命令作为通用进程控制接口。
+负责窗口和调用者校验、Pi 进程管理、认证辅助进程管理与认证流程编排、外链打开、工作目录、管道 I/O、协议解析、请求关联、临时消息投影、定向通知、异常退出和资源释放。对来自 Vue 的参数重新校验，不接受任意可执行文件路径、启动参数、环境变量或 shell 命令作为通用进程控制接口。
 
 临时消息投影仅用于当前运行的增量重建、工具关联、状态收敛与渲染端重新同步，采用有界内存，不保存平行 Session 或聊天数据库。Pi 完整消息与持久化 Session 仍是权威来源。
 
@@ -440,13 +440,27 @@ Pi 管道背压与 UI 通知背压分开处理：采用有界批次与渲染端�
 - 启用范围：P3-06 起不再传 `--no-skills`、`--no-prompt-templates` 与 `--no-mcp`。三类资源的加载完全交给 Pi 自己的规则：用户级资源（`<agent-dir>/skills|prompts|mcp.json` 与包资源）始终加载，项目级资源（`.pi/skills|prompts|mcp.json`、祖先 `.agents/skills`）只在信任时加载，仍由 Project Trust 的 `--approve` / `--no-approve` 决定；`--no-extensions` 只用于本节末尾的安全模式启动。主题此前就未关闭（`--no-themes` 从未传递），但 RPC 下与 Desktop 无关。
 - 发现能力只来自官方 RPC：v1.0.4 的全部 33 个 RPC 命令中没有资源管理或重载命令，`get_commands` 是唯一的资源发现入口，返回 extension 命令、prompt templates 与 skills（Skill 名称已规范成 `skill:<名称>`），每项带 `source` 与 `sourceInfo{path, source, scope, origin, baseDir}`。Desktop 不解析 `settings.json`、`mcp.json` 与包配置，不建立平行资源清单，也不调用 `pi install` / `pi mcp add` 等写配置的命令；扩展文件清单与包清单 RPC 不提供，页面只展示能从 `get_commands` 归属到的部分。
 - 通道：`desktop:runtime-resources`（零参数，读取 `get_commands` 并投影为 skill/prompt/extension 三类条目，条目上限 500，超出标记 `truncated`；`error` 非空时条目为空）、`desktop:runtime-diagnostics`（零参数，返回当前代际的 stderr 诊断尾部 20 行与 `extension_error` 事件条目，上限 20 条）、`desktop:runtime-mcp-status`（零参数，主进程固定发送 `/mcp`）、`desktop:runtime-start-safe`（零参数，安全模式启动）与 `desktop:session-reload`（只接受 `{ allowInterrupt }`，重启式重载）。错误码沿用 Runtime 与 Session 族，不新增。
-- MCP 状态：`builtin:mcp` 在非 TUI 模式下执行 `/mcp` 时用 `ctx.ui.notify(formatStatus())` 返回文本，因此 Desktop 只把固定命令 `/mcp` 经 `prompt` 发出，并在 Extension UI 的 notify 通道上做一次性捕获（捕获期间 notify 照常进入通知列表），把捕获到的文本原样作为结果返回；不接受页面传入任何命令文本，也不提供 `/mcp login|logout|reconnect` 的写路径。`/mcp` 会等待所有已启用服务器连接完成，期限单独设为 60 000 毫秒；超时只结束等待，结果未知且不自动重发。
+- MCP 状态：`builtin:mcp` 在非 TUI 模式下执行 `/mcp` 时用 `ctx.ui.notify(formatStatus())` 返回文本，因此 Desktop 只把固定命令 `/mcp` 经 `prompt` 发出，并在 Extension UI 的 notify 通道上做一次性捕获（捕获期间 notify 照常进入通知列表），把捕获到的文本原样作为结果返回；不接受页面传入任何命令文本。MCP 的 OAuth 登录与退出在 P4-04 接入（命令文本仍由主进程拼出，见下文认证与凭据小节），enable/disable/exposure 变更仍不做。`/mcp` 会等待所有已启用服务器连接完成，期限单独设为 60 000 毫秒；超时只结束等待，结果未知且不自动重发。
 - 重载策略：RPC 没有重载命令，`/reload` 是 TUI 内建命令（发送它会被当成普通用户消息送给模型，Desktop 不这样做）；资源只在进程启动时读取，因此唯一的重载方式是重启 Runtime。`desktop:session-reload` 复用会话打开的守门与关闭链，以本代际快照的会话 id 重启（快照取不到时为 null，交给 Pi 新建），只去掉“同会话幂等返回”这一条；中断确认、信任拦截与错误码与会话打开完全一致。
 - 加载失败与外部依赖的可见边界：非交互模式下 Pi 把启动诊断打到 stderr，并且存在 `type: "error"` 诊断（主要是扩展加载失败）时直接以退出码 1 结束、不创建会话；Desktop 已把 stderr 尾部并入启动失败信息，P3-06 起同时经 `desktop:runtime-diagnostics` 在资源面板展示。技能、提示词与主题的加载警告只存在于 Pi 的 TUI 展示路径，RPC 不提供，因此面板只能展示“已加载的清单”，无法解释某个技能为何没有出现。Extension 的 handler 与命令错误经 `extension_error` 事件给出 path、event 与错误文本（无堆栈），按代际有界保存。
 - 外部依赖：`pi.exe` 是 Bun 独立可执行文件，不携带 Node/npm/npx；stdio MCP 服务器若使用 `npx`、`uvx` 等命令，需要用户机器上已有对应运行时，失败原因经 `/mcp` 的状态文本如实展示。MCP 服务器的默认 exposure 是 `codemode`，连上后 `builtin:mcp` 会通过 `pi.setActiveTools` 自动启用 `codemode` 工具；`--tools` 的白名单拦不住它（只拦 MCP 工具名，且未给出 `mcp__` 模式时 MCP 工具反而被放行），因此启用 MCP 会同时改变模型的工具面，界面必须如实披露这一点。
 - 安全模式启动：`desktop:runtime-start-safe` 只接受零参数，用主进程记录的最近一次启动意图（项目与会话 id）固定传 `--no-extensions` 启动一次，仅本次生效、不写任何配置；`--no-extensions` 会同时禁用内建扩展（包含 `builtin:mcp`，因此该次运行没有 MCP 工具与 `/mcp`），但不影响 Skills 与 Prompt Templates。项目必须与主进程当前项目一致，信任拦截与常规启动相同。这是坏扩展让 RPC 启动直接失败时的唯一应用内逃生入口。
 - 界面：顶栏「Pi 资源」面板按三类分组展示命令清单与归属（`scope`、`origin`、`baseDir`、路径），提供「重新读取清单与诊断」「重新加载资源（重启 Runtime）」与安全模式启动；MCP 状态、诊断与 `extension_error` 各自分区表达失败。Prompt 输入区对同一份清单做斜杠补全（名称前缀匹配，另允许用去掉 `skill:` 后的名称前缀找技能），Tab 或点击接受候选并插入完整命令，Enter 仍只用于发送。
-- 不做：插件市场；`pi install/remove/update` 与 `pi mcp add/remove` 等写配置或安装依赖的命令；MCP 的 OAuth 登录与 enable/disable/exposure 变更（前者属第四阶段，后者需要写配置）；Desktop 自行解析或生成 Pi 配置文件；Desktop 自建 reload 扩展、第二个 Pi 进程或任意命令文本通道。
+- 不做：插件市场；`pi install/remove/update` 与 `pi mcp add/remove` 等写配置或安装依赖的命令；MCP 的 enable/disable/exposure 变更（需要写配置，P4-04 只接入登录与退出）；Desktop 自行解析或生成 Pi 配置文件；Desktop 自建 reload 扩展、第二个 Pi 进程或任意命令文本通道。
+
+#### 认证与凭据（P4）
+
+- 执行端：认证由受管认证辅助进程完成，载体是 `out/auth-helper/index.mjs`（由 `vite.auth-helper.config.ts` 单独构建出的 ESM 入口），主进程用 `ELECTRON_RUN_AS_NODE` 启动它，只通过 stdin/stdout 的 JSONL 帧通信；它不启动 Pi、不监听网络、不接受外部路径或参数，退出走与 Pi sidecar 相同的关闭链。认证能力来自官方 SDK `@earendil-works/pi-coding-agent`，版本锁在 `1.0.4`，与 sidecar 严格同版；不把 SDK 当作 Agent 主方案，也不自研 OAuth。
+- 为什么不是 RPC 或 CLI：v1.0.4 的 RPC 命令面（33 条）没有认证命令，`/login`、`/logout` 是交互模式的内建命令，不经 RPC 分发；CLI 的 `pi auth check|print-api-key|print-bearer-token` 只读，没有任何写入凭据的子命令，`pi mcp login|logout` 属于 MCP OAuth。
+- 凭据归属：登录与退出全部由官方 `ModelRuntime.login/logout` 完成，写入 `<agent-dir>/auth.json`（`proper-lockfile` 加锁、`mode 0600`）。Desktop 不建立平行凭据文件，不读也不回传已有凭据；辅助进程建实例时固定 `allowModelNetwork: false`、`refreshOnCreate: false` 并使用内存型模型目录缓存，因此状态读取不发起模型目录的网络请求，也不写 Pi 的模型缓存（环境凭据仍由官方实现按本地规则解析）。
+- 状态语义：`configured` 只表示本地解析到可用凭据（来源为 `stored`、`runtime`、`environment` 或 models.json 配置之一），不代表上游已接受它；`pi auth check` 的 `invalid` 同样只表示本地状态异常（models.json 组合错误或解析抛错），不表示上游拒绝密钥。页面按「未配置 / 已配置（来源）/ 配置异常」如实展示，并对仅依赖环境变量、云凭据或 models.json 的 Provider 不提供录入入口。
+- API Key 与 OAuth 复用同一套官方流程：`login(providerId, 'api_key'|'oauth', { signal, prompt, notify }, { getDeviceId })`。提示（`secret`/`text`/`manual_code`/`select`）由 Desktop 自己的界面回答；通知（`auth_url`/`device_code`/`progress`/`info`）转成页面进度；取消映射为 `AbortController`。`getDeviceId` 用 Desktop 自己保存的安装级 UUID（`desktop-config.json` 可选字段 `authDeviceId`），它只服务于需要 device id 的供应商登录，不是凭据，也不写 Pi 的 `settings.json`。
+- OAuth 回调由 Pi 的官方实现自己启动（Anthropic `127.0.0.1:53692/callback`、OpenAI Codex `127.0.0.1:1455/auth/callback`、Radius `127.0.0.1:1456/oauth/callback`、OpenRouter 随机端口）；Desktop 不设置 `PI_OAUTH_CALLBACK_HOST`。端口占用与回调无法回到本机都是真实失败路径，界面如实展示，不当作成功。
+- 外链：授权地址与设备码验证地址都由主进程校验后交给系统浏览器（`src/main/external-url.ts` 只接受 `https:`、拒绝带用户信息与超长地址），且只接受当前登录流程记录的地址；页面没有传入任意 URL 的通道。
+- 凭据变化后的刷新：`auth.json` 按文件 revision 重新加载，因此运行中的 sidecar 会在下一次解析凭据时看到新凭据；但可用模型来自 sidecar 进程内的 `getAvailableSnapshot()`（`get_available_models` 直接读该快照），外部写入不会刷新它。因此登录/退出成功后 Desktop 只重读认证状态并提示用户执行重启式重载（复用 `desktop:session-reload` 的守门与中断确认），不把 UI 状态变化当作 Pi 已使用新凭据。
+- 通道：`desktop:auth-status`（零参数）、`desktop:auth-login-start`（`{providerId, method}`）、`desktop:auth-login-respond`（`{flowId, promptId, value}`，密钥只经此单向提交）、`desktop:auth-login-cancel`（`{flowId}`）、`desktop:auth-open-url`（`{flowId}`）、`desktop:auth-logout`（`{providerId}`），事件 `desktop:auth-flow-changed`（流程快照）。`providerId`、`flowId`、`promptId` 长度上限 128，密钥输入上限 8192 字符，`select` 取值必须是本次提示的候选 id；同一时刻只允许一个登录流程。错误码新增 `AUTH_UNAVAILABLE`、`AUTH_LOGIN_NOT_FOUND`、`AUTH_LOGIN_CONFLICT`、`AUTH_PROMPT_MISMATCH`、`AUTH_PROVIDER_UNKNOWN`、`AUTH_OPEN_URL_FAILED`。
+- MCP OAuth（P4-04）：`/mcp login <server>` 与 `/mcp logout <server>` 在 RPC 下可用——`builtin:mcp` 在非 TUI 且 `hasUI` 为真时用 `ctx.ui.notify` 给出授权地址并自行 `openBrowser`，再用 `ctx.ui.input` 索要 redirect URL。Desktop 用通道 `desktop:runtime-mcp-command`（只接受 `{action: 'login'|'logout', serverName}`，服务器名限字母、数字、点、下划线与连字符且长度 ≤64）拼出固定命令后走既有 prompt 通道；登录等待上限 300 000 毫秒（与 CLI 的浏览器等待默认值一致），退出 30 000 毫秒。浏览器由 Pi 自己打开，这一点在界面如实披露；不做 enable/disable/exposure 变更。
+- 秘密边界：密钥只在提交窗口内短暂存在于渲染端内存与一次 IPC 过程；不进入 Vue bundle、命令行参数、Desktop 偏好、聊天历史、提示词与常规日志。认证辅助进程不调用 `--credentials`、`print-api-key` 或 `print-bearer-token`；错误文本在返回前按本次流程出现过的敏感输入做脱敏。
 
 #### 关闭、异常与进程树
 
@@ -462,7 +476,7 @@ Windows 使用系统 `taskkill` 对当前受管 Pi 进程树定向终止，不�
 
 主界面替换第一阶段的最小 Runtime 页面，提供：
 
-- 顶栏：Sidebar 折叠开关、项目切换入口（目录选择、最近项目、手动路径、配置提示）、当前会话、Runtime 状态，以及详情弹层里的 Agent 控制（模型与 Thinking 选择、上下文占用、压缩中提示）、重置本项目信任决定与应用信息、关闭 Runtime；另提供「Pi 资源」面板（已加载的命令清单与归属、MCP 状态、启动诊断、重启式重载与安全模式启动，见第 6.2 节 Pi 资源接入）。
+- 顶栏：Sidebar 折叠开关、项目切换入口（目录选择、最近项目、手动路径、配置提示）、当前会话、Runtime 状态，以及详情弹层里的 Agent 控制（模型与 Thinking 选择、上下文占用、压缩中提示）、重置本项目信任决定与应用信息、关闭 Runtime；另提供「Pi 资源」面板（已加载的命令清单与归属、MCP 状态与 MCP 登录退出、启动诊断、重启式重载与安全模式启动，见第 6.2 节 Pi 资源接入）与「Provider 认证」面板（Provider 与认证状态、API Key 录入、官方 OAuth 登录与取消、退出登录、凭据变化后的重载入口，见第 6.2 节认证与凭据）。
 - 会话侧栏：当前项目的 Pi 会话列表、新建与刷新、当前会话高亮、跳过与截断提示。
 - 消息区：按消息分组并按内容块顺序渲染，用户与 Assistant 区分，用户消息的图片附件渲染为缩略图，Thinking 可折叠，工具调用内联为通用工具卡片（名称、状态、Desktop 计算的耗时与参数摘要，展开后显示参数、结果或错误输出、非文本内容描述与截断提示；运行中的卡片自动展开一次，之后由用户开合），并表达同步、截断、失败与运行中状态。
 - Prompt 区：输入与发送、图片附件选择、预览与移除、Agent 运行期间原位的停止入口，以及请求接受、拒绝与中止的提示；另承载 Extension 的对话、通知与 widget 展示及编辑器填充（取值与边界见第 6.2 节 Extension UI），并在输入以 `/` 开头时提供已加载命令的斜杠补全（Tab 或点击接受，Enter 仍为发送）。
@@ -491,7 +505,7 @@ Windows 使用系统 `taskkill` 对当前受管 Pi 进程树定向终止，不�
 - 正式 CSP 限制脚本来源，不启用任意远程脚本或 unsafe-eval；开发服务器所需权限仅在开发配置中开放。
 - 默认拒绝不需要的系统权限、页面导航和新窗口，不向网络开放 Pi RPC。
 - 模型 Markdown、工具结果和 Extension 文本均视为不可信内容；需要 HTML 展示时净化内容，不允许脚本、事件属性或任意嵌入页面。
-- 不自动加载模型生成的远程图片。外链只在用户动作后，经主进程协议检查交由外部浏览器打开，不开放任意 URI scheme。
+- 不自动加载模型生成的远程图片。外链只在用户动作后，经主进程协议检查交由外部浏览器打开，不开放任意 URI scheme；认证流程的授权地址同样只经该入口打开，且只接受当前登录流程由辅助进程给出的地址（只允许 `https:`，见第 6.2 节认证与凭据）。
 - 不把密钥、认证文件、全部环境变量或完整敏感工具输出写入常规日志；已有凭据不回传页面。
 
 三层边界分别是渲染进程 sandbox、主进程的受限业务桥接，以及 Pi 自身的 OS 权限。主进程和 Pi 不因渲染进程 sandbox 而被限制在项目目录；ASAR 是打包格式，不是权限或内容完整性边界。
@@ -528,7 +542,7 @@ PowerShell 解析优先 `pwsh.exe`，其次 `powershell.exe`；不存在时报�
 | [第一阶段：Runtime](phases/01-runtime.md) | 最小桌面骨架、受限应用信息接口，以及当前文档第 6 节定义的启动链和交互链 |
 | [第二阶段：基础 Desktop UI](phases/02-desktop-ui.md) | Project、Pi Session 列表与恢复入口、Chat、Streaming、通用 Tool Card、模型、Thinking Level、Stop、Context Usage |
 | [第三阶段：Pi 深度能力](phases/03-pi-capabilities.md) | Extension UI、正式 Project Trust、完善 Session 恢复与 Fork、Compaction、Diff、图片、文件引用、Skills、Extensions、Packages、MCP |
-| [第四阶段：Authentication](phases/04-authentication.md) | Provider、API Key、OAuth、Login/Logout、状态；仅在必要时增加复用官方认证实现的 standalone Helper |
+| [第四阶段：Authentication](phases/04-authentication.md) | Provider 与认证状态、API Key 录入、官方 OAuth 登录/取消/退出；认证执行端是复用官方认证实现的受管辅助进程，MCP 服务器 OAuth 登录/退出经既有 RPC |
 | [第五阶段：Desktop 产品能力](phases/05-desktop-features.md) | Auto Update、Crash Recovery、Recent Projects 完善、快捷键、托盘、通知、多窗口 |
 
 Project 的基础属性为 `id`、`name`、`path`、`lastOpenedAt`；本地配置位置、路径归一化、列表上限与切换编排见第 6.2 节。Session 和消息仍交给 Pi，不创建平行数据模型与数据库；会话目录、列表与恢复方式也在第 6.2 节。
@@ -545,9 +559,12 @@ Project 的基础属性为 `id`、`name`、`path`、`lastOpenedAt`；本地配�
 2. 避免需要本地编译的原生依赖；Pi/helper 在各目标平台的运行库需求。需要新增工具链时单独取得授权。
 3. 正式签名、公证与安装包配置，按发行步骤确定；staging 路径、三目标文件选择与 package 根/executable 邻接映射已在 P1-02 确定（见第 4 节）。
 4. Extension UI 进入展示投影的边界已在 P3-02 确定（见第 6.2 节 Extension UI）；消息历史的读取方式已在 P2-02 确定（`get_messages` 初始化投影，见第 6.2 节）。临时消息投影与通知确认契约已在 P1-06 确定，工具执行进入展示投影的边界与中止契约已在 P1-07 确定（均见第 6.2 节），管道边界在 P1-03 确定，请求期限在 P1-05 确定。不建立平行 Session 数据库。
-5. 不同启动 profile 下现有模型与凭据的可用性（启动参数已在 P1-03 确定）；只读取必要配置，不输出秘密。
+5. 现有模型与凭据的可用性读取已在 P4 提供（`desktop:auth-status`，见 6.2 节认证与凭据）；只读取必要配置、不输出秘密的约束保持。
 6. Windows 与 macOS 的进程树终止已按平台实现（见 6.2 节）；macOS 分支只在 macOS 主机上生效。保留尽力回收边界，不以关闭主 Pi 进程等同于完整进程树回收。
 7. 第二阶段 Session 列表的接入方式（读 Pi 会话文件的元数据）与恢复方式（重启式切换）已在 P2-02 确定（见 6.2 节）；跨项目复用同一会话文件（手工移动会话文件或项目目录改名）对 cwd 与资源重建的影响仍待核实。
+8. 认证辅助进程与官方 SDK 的打包方式未实现也未验证：`@earendil-works/pi-coding-agent@1.0.4` 是 ESM-only 依赖（依赖树含 WASM，无原生编译），开发期从 `node_modules` 解析，正式包需要让它与依赖树在 `out/auth-helper` 能解析的位置可用（当前入口按 `process.resourcesPath/auth-helper/index.mjs` 读取），并确认 Electron 内置 Node 满足 SDK 的 `engines`（node >= 22.19）。
+9. SDK 与 sidecar 的版本锁步：升级固定 Pi 版本必须同步升级该依赖，否则认证行为可能与实际 sidecar 不一致。
+10. 各 Provider 的 OAuth 回调端口由官方实现固定（如 OpenAI Codex 的 1455）；与 Pi TUI 或其他客户端同时登录同一 Provider 时的端口冲突表现尚未真机验证。
 
 这些问题按相应阶段解决，不把后续完整能力变成第一阶段的提前实现范围。
 
@@ -558,6 +575,8 @@ Pi 事实以固定 `v1.0.4` 为引用基线；Electron、Node.js 和打包器资
 - [Pi 1.0.4 发布资产](https://github.com/earendil-works/pi/releases/tag/v1.0.4)
 - [Pi binary 构建脚本](https://github.com/earendil-works/pi/blob/v1.0.4/scripts/build-binaries.sh)
 - [Pi binary 发布 workflow](https://github.com/earendil-works/pi/blob/v1.0.4/.github/workflows/build-binaries.yml)
+- [Pi SDK 与 ModelRuntime 认证 API](https://github.com/earendil-works/pi/blob/v1.0.4/packages/coding-agent/docs/sdk.md)
+- [Pi 认证与凭据命令](https://github.com/earendil-works/pi/blob/v1.0.4/packages/coding-agent/docs/providers.md)
 - [Pi CLI 参数](https://github.com/earendil-works/pi/blob/v1.0.4/packages/coding-agent/docs/cli.md)
 - [Pi RPC 概览](https://github.com/earendil-works/pi/blob/v1.0.4/packages/coding-agent/docs/rpc.md)
 - [Pi RPC commands](https://github.com/earendil-works/pi/blob/v1.0.4/packages/coding-agent/docs/rpc-commands.md)
