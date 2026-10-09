@@ -1,4 +1,4 @@
-/** 作为渲染端会话列表与打开、分叉消息读取与分叉发起的调用入口，把桥接缺失与通信异常转换为安全的展示结果。 */
+/** 作为渲染端会话列表与打开、重新加载、分叉消息读取与分叉发起的调用入口，把桥接缺失与通信异常转换为安全的展示结果。 */
 import type {
   ForkMessageListResult,
   ForkStartResult,
@@ -41,6 +41,17 @@ export async function openSession(
   if (!bridge || typeof bridge.openSession !== 'function') return unavailable()
   try {
     return await bridge.openSession(sessionId, allowInterrupt)
+  } catch {
+    return callFailed()
+  }
+}
+
+/** 重新加载 Pi 资源：重启 Runtime 并尽量恢复当前会话；`allowInterrupt` 表示用户已确认可以中断。 */
+export async function reloadSession(allowInterrupt: boolean): Promise<SessionOpenResult> {
+  const bridge = window.desktop
+  if (!bridge || typeof bridge.reloadSession !== 'function') return unavailable()
+  try {
+    return await bridge.reloadSession(allowInterrupt)
   } catch {
     return callFailed()
   }

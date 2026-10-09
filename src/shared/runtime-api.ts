@@ -1,4 +1,4 @@
-/** 只定义 Runtime 启停、状态、Prompt 提交、中止、Agent 能力查询与设置、手动压缩、消息/工具投影 IPC 的固定通道、事件名、结果类型与跨进程响应校验。 */
+/** 只定义 Runtime 启停、状态、Prompt 提交、中止、Agent 能力查询与设置、手动压缩、Pi 资源与诊断读取、MCP 状态请求、安全启动、消息/工具投影 IPC 的固定通道、事件名、结果类型与跨进程响应校验。 */
 import type { DesktopErrorCode } from './desktop-api'
 
 export const RUNTIME_START_CHANNEL = 'desktop:runtime-start'
@@ -12,6 +12,14 @@ export const RUNTIME_CAPABILITIES_CHANNEL = 'desktop:runtime-capabilities'
 export const RUNTIME_SET_MODEL_CHANNEL = 'desktop:runtime-set-model'
 export const RUNTIME_SET_THINKING_LEVEL_CHANNEL = 'desktop:runtime-set-thinking-level'
 export const RUNTIME_COMPACT_CHANNEL = 'desktop:runtime-compact'
+/** 只读：读取当前代际已加载的 Pi 资源清单（`get_commands` 投影）。 */
+export const RUNTIME_RESOURCES_CHANNEL = 'desktop:runtime-resources'
+/** 只读：读取当前代际的启动诊断尾部与 Extension 运行时错误。 */
+export const RUNTIME_DIAGNOSTICS_CHANNEL = 'desktop:runtime-diagnostics'
+/** 固定请求 `/mcp` 状态；不接受页面传入命令文本。 */
+export const RUNTIME_MCP_STATUS_CHANNEL = 'desktop:runtime-mcp-status'
+/** 安全模式启动：零参数，主进程用最近一次启动意图并固定传 `--no-extensions`。 */
+export const RUNTIME_START_SAFE_CHANNEL = 'desktop:runtime-start-safe'
 /** 主进程到渲染进程的单向状态通知，payload 是 RuntimeStatus。 */
 export const RUNTIME_STATUS_EVENT = 'desktop:runtime-status-changed'
 /** 主进程到渲染进程的单向投影批次通知，payload 是 ProjectionBatch。 */
@@ -290,6 +298,78 @@ export interface CompactResult {
   readonly usageTotalTokens: number | null
 }
 
+/**
+ * Pi 侧资源的来源分类，与 `get_commands` 的 `source` 字段一一对应；
+ * 其他来源（内置 TUI 命令等）不出现在 `get_commands` 里，也不进入页面。
+ */
+export type PiResourceKind = 'skill' | 'prompt' | 'extension'
+
+/**
+ * 一条已加载的 Pi 资源条目，只来自 `get_commands` 的投影。
+ * `path` 是资源在磁盘上的绝对路径，`scope` 是 `user`/`project`/`temporary`，
+ * `origin` 是 `top-level`/`package`，`baseDir` 只在包资源上有值；字段缺失一律为 null，不猜造。
+ */
+export interface PiResourceEntry {
+  readonly kind: PiResourceKind
+  readonly name: string
+  readonly description: string | null
+  readonly path: string | null
+  readonly scope: string | null
+  readonly origin: string | null
+  readonly baseDir: string | null
+}
+
+/**
+ * 当前代际已加载的 Pi 资源清单。清单只有一个来源，因此只有一个失败区：
+ * `error` 非空时 `entries` 为空且不代表“没有资源”。
+ */
+export interface PiResources {
+  readonly runtimeId: number
+  readonly entries: readonly PiResourceEntry[]
+  /** 超出条目上限被省略；不伪装成完整清单。 */
+  readonly truncated: boolean
+  readonly error: string | null
+}
+
+/** Pi 上报的 Extension 运行时错误（handler 抛错、命令抛错、技能展开失败）；不含堆栈。 */
+export interface ExtensionErrorEntry {
+  readonly path: string | null
+  readonly event: string | null
+  readonly error: string
+}
+
+/**
+ * 当前 Runtime 代际的启动诊断与 Extension 运行时错误。
+ * `stderrLines` 是 Pi 输出的诊断文本（已去 ANSI、按行与长度有界），按不可信纯文本展示。
+ * 技能/提示词等资源加载警告在 RPC 模式下不进入任何通道，这里也无法提供。
+ */
+export interface RuntimeDiagnostics {
+  readonly runtimeId: number | null
+  readonly stderrLines: readonly string[]
+  readonly extensionErrors: readonly ExtensionErrorEntry[]
+}
+
+/**
+ * `/mcp` 在非 TUI 模式下的状态读取结果：命令被 Pi 处理（`handled`），
+ * 状态文本经 Extension UI 的 notify 捕获得到；`messages` 为空表示 Pi 没有输出文本。
+ */
+export interface McpStatus {
+  readonly disposition: PromptDisposition
+  readonly messages: readonly string[]
+}
+
+export type ResourcesResult =
+  | { readonly ok: true; readonly data: PiResources }
+  | { readonly ok: false; readonly error: RuntimeError }
+
+export type RuntimeDiagnosticsResult =
+  | { readonly ok: true; readonly data: RuntimeDiagnostics }
+  | { readonly ok: false; readonly error: RuntimeError }
+
+export type McpStatusResult =
+  | { readonly ok: true; readonly data: McpStatus }
+  | { readonly ok: false; readonly error: RuntimeError }
+
 export type CompactResultResult =
   | { readonly ok: true; readonly data: CompactResult }
   | { readonly ok: false; readonly error: RuntimeError }
@@ -321,6 +401,17 @@ export interface RuntimeApi {
   readonly setRuntimeThinkingLevel: (request: SetThinkingLevelRequest) => Promise<RuntimeResult>
   /** 手动压缩上下文；等待压缩完成，成功返回结果投影。 */
   readonly compactRuntime: () => Promise<CompactResultResult>
+  /** 读取当前代际已加载的 Pi 资源清单；清单来源是 `get_commands`，不解析 Pi 配置文件。 */
+  readonly getRuntimeResources: () => Promise<ResourcesResult>
+  /** 读取当前代际的启动诊断尾部与 Extension 运行时错误；无活动 Runtime 时两项都为空。 */
+  readonly getRuntimeDiagnostics: () => Promise<RuntimeDiagnosticsResult>
+  /** 固定请求 `/mcp` 状态；状态文本由 notify 捕获后返回，不在页面拼造。 */
+  readonly readRuntimeMcpStatus: () => Promise<McpStatusResult>
+  /**
+   * 安全模式启动：不加载 Extension，复用最近一次启动的项目与会话；仅本次生效，不写配置。
+   * 与常规启动一样先经过信任拦截（无决定时返回 `TRUST_REQUIRED`）。
+   */
+  readonly startRuntimeSafely: () => Promise<RuntimeResult>
   /** 确认已应用到的最高序号；即发即忘，结果不影响页面。 */
   readonly ackRuntimeProjection: (runtimeId: number, seq: number) => void
   /** 订阅状态变化；返回释放函数，页面卸载时必须调用。 */
@@ -634,4 +725,92 @@ export function isCompactResultResult(value: unknown): value is CompactResultRes
   return typeof message === 'string'
     && typeof code === 'string'
     && RUNTIME_ERROR_CODES.includes(code)
+}
+
+function isNullableString(value: unknown): boolean {
+  return value === null || typeof value === 'string'
+}
+
+function isPiResourceKind(value: unknown): value is PiResourceKind {
+  return value === 'skill' || value === 'prompt' || value === 'extension'
+}
+
+function isPiResourceEntry(value: unknown): value is PiResourceEntry {
+  if (!isRecord(value)) return false
+  return isPiResourceKind(value.kind)
+    && typeof value.name === 'string'
+    && value.name !== ''
+    && isNullableString(value.description)
+    && isNullableString(value.path)
+    && isNullableString(value.scope)
+    && isNullableString(value.origin)
+    && isNullableString(value.baseDir)
+}
+
+/** 失败结果只校验形状与固定错误码，与其余 Runtime 结果一致。 */
+function isRuntimeErrorResult(value: unknown): value is { ok: false; error: RuntimeError } {
+  if (!isRecord(value) || value.ok !== false || !isRecord(value.error)) return false
+  const { code, message } = value.error
+  return typeof message === 'string'
+    && typeof code === 'string'
+    && RUNTIME_ERROR_CODES.includes(code)
+}
+
+/** 资源清单跨进程校验；`error` 非空时条目必须为空，避免渲染端把失败当成“没有资源”。 */
+export function isResourcesResult(value: unknown): value is ResourcesResult {
+  if (!isRecord(value)) return false
+
+  if (value.ok === true) {
+    const data = value.data
+    if (!isRecord(data)) return false
+    if (typeof data.runtimeId !== 'number' || !Number.isInteger(data.runtimeId) || data.runtimeId <= 0) {
+      return false
+    }
+    if (!Array.isArray(data.entries) || !data.entries.every(isPiResourceEntry)) return false
+    if (typeof data.truncated !== 'boolean') return false
+    if (!isNullableString(data.error)) return false
+    return data.error === null || data.entries.length === 0
+  }
+  return isRuntimeErrorResult(value)
+}
+
+function isExtensionErrorEntry(value: unknown): value is ExtensionErrorEntry {
+  if (!isRecord(value)) return false
+  return isNullableString(value.path)
+    && isNullableString(value.event)
+    && typeof value.error === 'string'
+    && value.error !== ''
+}
+
+/** 诊断结果跨进程校验；无活动 Runtime 时 `runtimeId` 为 null，两项均为空数组。 */
+export function isRuntimeDiagnosticsResult(value: unknown): value is RuntimeDiagnosticsResult {
+  if (!isRecord(value)) return false
+
+  if (value.ok === true) {
+    const data = value.data
+    if (!isRecord(data)) return false
+    if (data.runtimeId !== null
+      && (typeof data.runtimeId !== 'number' || !Number.isInteger(data.runtimeId) || data.runtimeId <= 0)) {
+      return false
+    }
+    if (!Array.isArray(data.stderrLines) || !data.stderrLines.every((line) => typeof line === 'string')) {
+      return false
+    }
+    return Array.isArray(data.extensionErrors) && data.extensionErrors.every(isExtensionErrorEntry)
+  }
+  return isRuntimeErrorResult(value)
+}
+
+/** MCP 状态结果跨进程校验；状态文本只能是已捕获的 notify 文本数组。 */
+export function isMcpStatusResult(value: unknown): value is McpStatusResult {
+  if (!isRecord(value)) return false
+
+  if (value.ok === true) {
+    const data = value.data
+    return isRecord(data)
+      && isPromptDisposition(data.disposition)
+      && Array.isArray(data.messages)
+      && data.messages.every((message) => typeof message === 'string')
+  }
+  return isRuntimeErrorResult(value)
 }

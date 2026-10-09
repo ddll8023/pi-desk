@@ -1,4 +1,4 @@
-/** 保存会话面板的展示状态：当前项目的会话列表、打开动作与分叉弹层状态、分叉动作；会话文件解析与切换编排都在主进程。 */
+/** 保存会话面板的展示状态：当前项目的会话列表、打开与重新加载动作与分叉弹层状态、分叉动作；会话文件解析与切换编排都在主进程。 */
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import type {
@@ -8,7 +8,7 @@ import type {
   SessionSummary
 } from '../../../shared/session-api'
 import { useTrustStore } from './trust'
-import { getForkMessages, listSessions, openSession, startFork } from '../services/session'
+import { getForkMessages, listSessions, openSession, reloadSession, startFork } from '../services/session'
 
 /** `idle` 表示尚无当前项目、未读取列表；单次动作失败放在 `actionError`，不影响已加载的列表。 */
 type SessionViewState =
@@ -29,6 +29,8 @@ export const useSessionStore = defineStore('session', () => {
   const awaitingInterrupt = ref(false)
   /** 是否存在等待信任决定后重试的打开请求；与 `pendingSessionId`（可能为 null）配合使用。 */
   const awaitingTrust = ref(false)
+  /** 待确认的重载请求：与打开共用中断确认弹窗，但目标是重启当前 Runtime。 */
+  const pendingReload = ref(false)
 
   /** 分叉弹层的展示状态：消息加载、进行中的分叉与错误。 */
   const forkMessages = ref<readonly ForkMessageSummary[]>([])
@@ -77,6 +79,7 @@ export const useSessionStore = defineStore('session', () => {
     if (opening.value) return
 
     opening.value = true
+    pendingReload.value = false
     actionError.value = null
     try {
       const result = await openSession(sessionId, allowInterrupt)
@@ -105,24 +108,69 @@ export const useSessionStore = defineStore('session', () => {
     }
   }
 
-  /** 信任决定后重试待打开的会话（含新建）；取消时清空待确认目标。 */
+  /**
+   * 重新加载 Pi 资源：重启 Runtime 并尽量恢复当前会话。
+   * RPC 没有重载命令，资源只在进程启动时读取，因此唯一的重载方式是重启。
+   */
+  async function reloadCurrent(allowInterrupt = false): Promise<void> {
+    if (opening.value) return
+
+    opening.value = true
+    pendingReload.value = false
+    actionError.value = null
+    try {
+      const result = await reloadSession(allowInterrupt)
+      if (result.ok) {
+        applyList(result.data)
+        pendingReload.value = false
+        awaitingInterrupt.value = false
+        view.value = { phase: 'ready' }
+        return
+      }
+      if (result.error.code === 'SESSION_SWITCH_BLOCKED' && !allowInterrupt) {
+        pendingReload.value = true
+        awaitingInterrupt.value = true
+        return
+      }
+      if (result.error.code === 'TRUST_REQUIRED') {
+        pendingReload.value = true
+        awaitingTrust.value = true
+        await useTrustStore().openPrompt()
+        return
+      }
+      actionError.value = result.error
+    } finally {
+      opening.value = false
+    }
+  }
+
+  /** 信任决定后重试待打开的会话（含新建）或待重载的 Runtime；取消时清空待确认目标。 */
   async function retryPendingAfterTrust(): Promise<void> {
     if (!awaitingTrust.value) return
     awaitingTrust.value = false
+    if (pendingReload.value) {
+      await reloadCurrent(false)
+      return
+    }
     const target = pendingSessionId.value
     pendingSessionId.value = null
     await open(target, false)
   }
 
-  /** 用户确认中断后带 `allowInterrupt` 重试待确认的切换。 */
+  /** 用户确认中断后带 `allowInterrupt` 重试待确认的切换或重载。 */
   function confirmPending(): void {
     if (!awaitingInterrupt.value) return
+    if (pendingReload.value) {
+      void reloadCurrent(true)
+      return
+    }
     void open(pendingSessionId.value, true)
   }
 
   /** 放弃待确认的切换；运行中的操作不受影响。 */
   function cancelPending(): void {
     pendingSessionId.value = null
+    pendingReload.value = false
     awaitingInterrupt.value = false
     awaitingTrust.value = false
   }
@@ -191,6 +239,7 @@ export const useSessionStore = defineStore('session', () => {
     pendingSessionId,
     awaitingInterrupt,
     awaitingTrust,
+    pendingReload,
     forkMessages,
     forkLoading,
     forkBusy,
@@ -198,6 +247,7 @@ export const useSessionStore = defineStore('session', () => {
     initialize,
     refresh,
     open,
+    reloadCurrent,
     retryPendingAfterTrust,
     confirmPending,
     cancelPending,

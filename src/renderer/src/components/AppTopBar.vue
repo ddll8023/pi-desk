@@ -1,4 +1,4 @@
-<!-- 顶栏：Sidebar 折叠开关、主题循环切换、项目切换入口、当前会话与 Runtime 状态，并在详情弹层里提供模型、Thinking、上下文占用等 Agent 控制、从历史消息分叉、重置本项目信任决定与关闭 Runtime；不承载消息与 Prompt 提交。 -->
+<!-- 顶栏：Sidebar 折叠开关、主题循环切换、项目切换入口、当前会话与 Runtime 状态，并在详情弹层里提供模型、Thinking、上下文占用等 Agent 控制、从历史消息分叉、重置本项目信任决定与关闭 Runtime；另提供 Pi 资源面板入口；不承载消息与 Prompt 提交。 -->
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
 import { computed, onMounted, onUnmounted, ref } from 'vue'
@@ -13,6 +13,7 @@ import AgentControls from './AgentControls.vue'
 import ConfirmDialog from './ConfirmDialog.vue'
 import ForkDialog from './ForkDialog.vue'
 import ProjectSwitcher from './ProjectSwitcher.vue'
+import ResourcePanel from './ResourcePanel.vue'
 
 defineProps<{
   readonly sidebarCollapsed: boolean
@@ -52,6 +53,8 @@ const confirmingTrustReset = ref(false)
 const trustResetBusy = ref(false)
 /** 分叉弹层挂在顶栏组件内：入口在 Runtime 详情弹层里，弹层本身全局展示。 */
 const showingFork = ref(false)
+/** Pi 资源面板挂在顶栏组件内：入口是顶栏按钮，弹层本身全局展示。 */
+const showingResources = ref(false)
 
 const runtimeInfo = computed(() => (
   runtimeView.value.phase === 'ready' ? runtimeView.value.snapshot.info : null
@@ -138,6 +141,16 @@ function openForkDialog(): void {
 
 function closeForkDialog(): void {
   showingFork.value = false
+}
+
+/** 资源面板与项目、Runtime 弹层互斥：打开前先收起其他弹层。 */
+function openResourcePanel(): void {
+  closePanel()
+  showingResources.value = true
+}
+
+function closeResourcePanel(): void {
+  showingResources.value = false
 }
 
 async function confirmTrustReset(): Promise<void> {
@@ -300,6 +313,14 @@ onUnmounted(() => {
       </div>
     </div>
 
+    <button
+      type="button"
+      class="icon-button"
+      @click="openResourcePanel"
+    >
+      Pi 资源
+    </button>
+
     <ConfirmDialog
       v-if="confirmingTrustReset"
       title="重置本项目信任决定？"
@@ -311,5 +332,7 @@ onUnmounted(() => {
     />
 
     <ForkDialog v-if="showingFork" @close="closeForkDialog" />
+
+    <ResourcePanel v-if="showingResources" @close="closeResourcePanel" />
   </header>
 </template>

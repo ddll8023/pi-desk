@@ -10,12 +10,16 @@ import type {
   AgentCapabilities,
   CapabilitiesResult,
   CompactResult,
+  ExtensionErrorEntry,
+  McpStatusResult,
   ModelSummary,
   ProjectionBatch,
   ProjectionResult,
   PromptDisposition,
   PromptImageInput,
   PromptResult,
+  ResourcesResult,
+  RuntimeDiagnosticsResult,
   RuntimeErrorCode,
   RuntimeResult,
   RuntimeStatus,
@@ -33,10 +37,12 @@ import {
   PiProtocol,
   toCompactResult,
   toContextUsageField,
+  toExtensionError,
   toForkMessages,
   toForkOutcome,
   toModelSummaries,
   toPromptDisposition,
+  toResources,
   toRuntimeInfo,
   toThinkingLevels
 } from './pi-protocol'
@@ -89,6 +95,24 @@ const PROMPT_IMAGE_MAX_COUNT = 4
 /** 失败时回传给页面的诊断行数上限。 */
 const DIAGNOSTIC_TAIL_LINES = 6
 
+/** 资源清单读取的等待上限。 */
+const RESOURCES_TIMEOUT_MS = 15_000
+
+/** MCP 状态读取的等待上限：`/mcp` 会等待所有已启用服务器连接完成，比普通命令长。 */
+const MCP_STATUS_TIMEOUT_MS = 60_000
+
+/** `/mcp` 是读取 MCP 状态的唯一固定命令；不接受页面传入命令文本。 */
+const MCP_STATUS_PROMPT = '/mcp'
+
+/** 资源条目上限；超出截断并如实标记，不伪装成完整清单。 */
+const RESOURCE_ENTRY_LIMIT = 500
+
+/** 面板展示的诊断行数上限；诊断文本本身已由 PiProcess 截断并去 ANSI。 */
+const DIAGNOSTIC_VIEW_LINES = 20
+
+/** Extension 运行时错误的保留条数上限；超出丢弃最旧。 */
+const EXTENSION_ERROR_LIMIT = 20
+
 /** 状态变化订阅者；只在主进程内使用，不进 IPC 契约。 */
 export type RuntimeStatusListener = (status: RuntimeStatus) => void
 
@@ -104,6 +128,8 @@ interface ActiveRuntime {
   readonly process: PiProcess
   readonly protocol: PiProtocol
   readonly projection: MessageProjection
+  /** 本代际收到的 `extension_error` 事件；有界、随代际清空。 */
+  readonly extensionErrors: ExtensionErrorEntry[]
 }
 
 /** 可分类的 Runtime 操作失败，由 start 统一转换为结果对象。 */
@@ -155,6 +181,11 @@ export class RuntimeManager {
   } | null = null
   /** 事件触发的状态刷新是否在进行中：避免每轮结束叠加多次 get_state。 */
   private refreshing = false
+  /**
+   * 最近一次启动意图（项目与会话 id）；只用于安全模式启动与重新加载资源，
+   * 由主进程记录，不接受页面传入；退出后仍保留，以便启动失败时重试。
+   */
+  private lastLaunchIntent: { readonly projectPath: string; readonly sessionId: string | null } | null = null
 
   /** 订阅状态变化；返回释放函数。单个订阅者异常不影响 Runtime 状态。 */
   onStatusChanged(listener: RuntimeStatusListener): () => void {
@@ -304,16 +335,116 @@ export class RuntimeManager {
     }
   }
 
+  /**
+   * 读取当前代际已加载的 Pi 资源清单：只调 `get_commands`，不解析 Pi 配置文件，
+   * 也不建立平行资源模型。清单来源单一，失败时不返回条目。
+   */
+  async readResources(): Promise<ResourcesResult> {
+    try {
+      const runtime = this.requireReadyRuntime()
+      const response = await this.requestCommand(
+        runtime,
+        { type: 'get_commands' },
+        RESOURCES_TIMEOUT_MS,
+        '读取 Pi 资源清单'
+      )
+      if (!response.success) {
+        throw new RuntimeFailure(
+          'RUNTIME_COMMAND_REJECTED',
+          `Pi 拒绝了读取资源清单：${response.error ?? '未提供错误信息'}`
+        )
+      }
+      const entries = toResources(response.data)
+      if (entries === null) {
+        throw new RuntimeFailure('RUNTIME_PROTOCOL_ERROR', 'get_commands 响应缺少约定的 commands 数组。')
+      }
+      const truncated = entries.length > RESOURCE_ENTRY_LIMIT
+      return {
+        ok: true,
+        data: {
+          runtimeId: runtime.runtimeId,
+          entries: truncated ? entries.slice(0, RESOURCE_ENTRY_LIMIT) : entries,
+          truncated,
+          error: null
+        }
+      }
+    } catch (error) {
+      const failure = error instanceof RuntimeFailure
+        ? error
+        : new RuntimeFailure('INTERNAL_ERROR', '读取 Pi 资源清单时发生未预期的内部错误。')
+      return { ok: false, error: { code: failure.code, message: failure.message } }
+    }
+  }
+
+  /**
+   * 当前代际的启动诊断尾部与 Extension 运行时错误；无活动 Runtime 时两项都为空。
+   * stderr 文本是 Pi 输出原文，按不可信纯文本展示；技能/提示词加载警告在 RPC 模式下不可得。
+   */
+  getDiagnostics(): RuntimeDiagnosticsResult {
+    const runtime = this.active
+    if (runtime === null) {
+      return { ok: true, data: { runtimeId: null, stderrLines: [], extensionErrors: [] } }
+    }
+    return {
+      ok: true,
+      data: {
+        runtimeId: runtime.runtimeId,
+        stderrLines: runtime.process.readDiagnostics().slice(-DIAGNOSTIC_VIEW_LINES),
+        extensionErrors: runtime.extensionErrors.map((entry) => ({ ...entry }))
+      }
+    }
+  }
+
+  /**
+   * 读取 MCP 状态：固定发送 `/mcp`（TUI 之外由 Pi 经 notify 返回状态文本），
+   * 把捕获到的 notify 文本作为结果返回。超时只结束等待，结果未知且不自动重发。
+   */
+  async readMcpStatus(): Promise<McpStatusResult> {
+    let endCapture: (() => readonly string[]) | null = null
+    try {
+      const runtime = this.requireReadyRuntime()
+      const capture = this.extensionUi.beginNotifyCapture()
+      endCapture = capture
+      const response = await this.requestCommand(
+        runtime,
+        { type: 'prompt', message: MCP_STATUS_PROMPT },
+        MCP_STATUS_TIMEOUT_MS,
+        '读取 MCP 状态'
+      )
+      if (!response.success) {
+        throw new RuntimeFailure(
+          'RUNTIME_COMMAND_REJECTED',
+          `Pi 拒绝了读取 MCP 状态：${response.error ?? '未提供错误信息'}`
+        )
+      }
+      const disposition = toPromptDisposition(response.data)
+      if (disposition === null) {
+        throw new RuntimeFailure('RUNTIME_PROTOCOL_ERROR', 'prompt 响应缺少约定的 disposition 字段。')
+      }
+      return { ok: true, data: { disposition, messages: capture() } }
+    } catch (error) {
+      const failure = error instanceof RuntimeFailure
+        ? error
+        : new RuntimeFailure('INTERNAL_ERROR', '读取 MCP 状态时发生未预期的内部错误。')
+      return { ok: false, error: { code: failure.code, message: failure.message } }
+    } finally {
+      // 提前返回与异常路径都要结束捕获，不留下长期存活的捕获数组。
+      endCapture?.()
+    }
+  }
+
   /** 启动唯一 Runtime；重复启动被拒绝，不做隐式重启。`sessionId` 为 null 时新建会话。
    * `trustDecision` 是主进程探测并记录的 Project Trust 决定，不由页面指定。
+   * `disableExtensions` 只为安全模式启动（不加载 Extension）使用，常规启动不传。
    */
   async start(
     projectPath: string,
     sessionId: string | null,
-    trustDecision: 'trusted' | 'untrusted' | null
+    trustDecision: 'trusted' | 'untrusted' | null,
+    disableExtensions = false
   ): Promise<RuntimeResult> {
     try {
-      return { ok: true, data: await this.launch(projectPath, sessionId, trustDecision) }
+      return { ok: true, data: await this.launch(projectPath, sessionId, trustDecision, disableExtensions) }
     } catch (error) {
       const failure = error instanceof RuntimeFailure
         ? error
@@ -329,6 +460,28 @@ export class RuntimeManager {
   /** 状态快照查询只读，不触发进程操作。 */
   getStatus(): RuntimeResult {
     return { ok: true, data: { ...this.snapshot } }
+  }
+
+  /**
+   * 安全模式启动：不加载 Extension，复用最近一次启动目标（项目与会话 id）重启一次。
+   * 项目必须与主进程当前项目一致；`trustDecision` 与常规启动一样由主进程解析。
+   * 仅本次生效，不写任何配置，也不改变后续常规启动。
+   */
+  async startSafely(
+    trustDecision: 'trusted' | 'untrusted' | null,
+    currentProjectPath: string | null
+  ): Promise<RuntimeResult> {
+    const intent = this.lastLaunchIntent
+    if (intent === null || currentProjectPath === null || intent.projectPath !== currentProjectPath) {
+      return {
+        ok: false,
+        error: {
+          code: 'INVALID_PROJECT_PATH',
+          message: '没有可复用的启动目标；请先打开或新建会话，再使用安全模式启动。'
+        }
+      }
+    }
+    return this.start(intent.projectPath, intent.sessionId, trustDecision, true)
   }
 
   /** 投影快照只读；没有活动 Runtime 时返回空基准。 */
@@ -478,7 +631,8 @@ export class RuntimeManager {
   private async launch(
     projectPath: string,
     sessionId: string | null,
-    trustDecision: 'trusted' | 'untrusted' | null
+    trustDecision: 'trusted' | 'untrusted' | null,
+    disableExtensions: boolean
   ): Promise<RuntimeStatus> {
     if (this.active !== null) {
       throw new RuntimeFailure(
@@ -491,6 +645,8 @@ export class RuntimeManager {
 
     this.stopRequested = false
     const projectDirectory = await this.checkProjectPath(projectPath)
+    // 启动意图在 spawn 前记录：启动失败时仍能由页面重试安全模式启动。
+    this.lastLaunchIntent = { projectPath: projectDirectory, sessionId }
     const runtimeId = (this.runtimeIdSeed += 1)
     this.publish({ state: 'starting', runtimeId, info: null, lastError: null })
     // Extension UI 状态随代际重建：上一代际的 dialog 队列与展示状态不再有意义。
@@ -532,6 +688,7 @@ export class RuntimeManager {
         sessionDir: getSessionRoot(),
         sessionId,
         trustDecision,
+        ...(disableExtensions ? { disableExtensions: true } : {}),
         handlers: {
           onStdoutLine: (line) => protocol.handleLine(line),
           onProtocolError: (message) => {
@@ -554,7 +711,8 @@ export class RuntimeManager {
         projectPath: projectDirectory,
         process: piProcess,
         protocol,
-        projection
+        projection,
+        extensionErrors: []
       }
       this.active = runtime
 
@@ -955,6 +1113,15 @@ export class RuntimeManager {
   private applyRuntimeEvent(runtimeId: number, payload: Record<string, unknown>): void {
     const runtime = this.active
     if (runtime === null || runtime.runtimeId !== runtimeId) return
+
+    // Extension 运行时错误只进本代际的有界列表，供资源面板如实展示。
+    if (payload.type === 'extension_error') {
+      const entry = toExtensionError(payload)
+      if (entry === null) return
+      runtime.extensionErrors.push(entry)
+      if (runtime.extensionErrors.length > EXTENSION_ERROR_LIMIT) runtime.extensionErrors.shift()
+      return
+    }
 
     if (payload.type === 'thinking_level_changed') {
       const info = this.snapshot.info

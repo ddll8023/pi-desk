@@ -6,6 +6,7 @@ import { useDesktopStore } from './stores/desktop'
 import { useExtensionUiStore } from './stores/extension-ui'
 import { usePreferencesStore } from './stores/preferences'
 import { useProjectStore } from './stores/project'
+import { useResourceStore } from './stores/resource'
 import { useRuntimeStore } from './stores/runtime'
 import { useSessionStore } from './stores/session'
 import { useTrustStore } from './stores/trust'
@@ -22,10 +23,11 @@ const desktopStore = useDesktopStore()
 const extensionStore = useExtensionUiStore()
 const preferencesStore = usePreferencesStore()
 const projectStore = useProjectStore()
+const resourceStore = useResourceStore()
 const runtimeStore = useRuntimeStore()
 const sessionStore = useSessionStore()
 const { currentProject, pendingPath } = storeToRefs(projectStore)
-const { awaitingInterrupt, pendingSessionId } = storeToRefs(sessionStore)
+const { awaitingInterrupt, pendingReload, pendingSessionId } = storeToRefs(sessionStore)
 const { sidebarCollapsed, ready: preferencesReady } = storeToRefs(preferencesStore)
 const trustStore = useTrustStore()
 
@@ -35,9 +37,19 @@ const widgetsBelow = computed(() => extensionStore.widgets.filter((w) => w.place
 
 /** 主进程拒绝未确认的切换后，由用户在这里确认可以中断正在运行的操作。 */
 const projectConfirmDetail = computed(() => pendingPath.value ?? '')
-const sessionConfirmDetail = computed(() => (
-  pendingSessionId.value === null ? '新建会话' : `会话 ${pendingSessionId.value.slice(0, 8)}`
+const sessionConfirmDetail = computed(() => {
+  if (pendingReload.value) return '重新加载 Pi 资源（重启 Runtime，保留当前会话）'
+  return pendingSessionId.value === null ? '新建会话' : `会话 ${pendingSessionId.value.slice(0, 8)}`
+})
+const sessionConfirmTitle = computed(() => (
+  pendingReload.value ? '停止运行中的操作并重新加载资源？' : '停止运行中的操作并切换会话？'
 ))
+const sessionConfirmDescription = computed(() => (
+  pendingReload.value
+    ? 'Pi 只在 Runtime 启动时读取 Skills、Prompt Templates、MCP 配置与 Extension，因此重新加载需要重启；已提交的内容不会重放。'
+    : '切换会话会先停止当前 Agent 操作，已提交的内容不会重放。'
+))
+const sessionConfirmLabel = computed(() => (pendingReload.value ? '停止并重新加载' : '停止并切换'))
 
 function confirmProjectSwitch(): void {
   const path = pendingPath.value
@@ -78,12 +90,14 @@ onMounted(() => {
   void extensionStore.initialize()
   void preferencesStore.initialize()
   void projectStore.initialize()
+  void resourceStore.initialize()
   void runtimeStore.initialize()
   void sessionStore.initialize()
 })
 
 onUnmounted(() => {
   extensionStore.dispose()
+  resourceStore.dispose()
   runtimeStore.dispose()
 })
 </script>
@@ -126,10 +140,10 @@ onUnmounted(() => {
 
     <ConfirmDialog
       v-if="awaitingInterrupt"
-      title="停止运行中的操作并切换会话？"
-      description="切换会话会先停止当前 Agent 操作，已提交的内容不会重放。"
+      :title="sessionConfirmTitle"
+      :description="sessionConfirmDescription"
       :detail="sessionConfirmDetail"
-      confirm-label="停止并切换"
+      :confirm-label="sessionConfirmLabel"
       @confirm="confirmSessionSwitch"
       @cancel="cancelSessionSwitch"
     />

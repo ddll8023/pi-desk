@@ -180,7 +180,7 @@ Desktop、固定 Pi 和配套资源作为一致发行版本更新，不在运行
 pi --mode rpc --no-session
 ```
 
-主进程固定完整启动参数，页面不能覆盖：`--mode rpc`、`--no-skills`、`--no-prompt-templates`、`--no-mcp`、按平台选择的 `--tools`（Windows `read,powershell,edit,write`；macOS `read,bash,edit,write`）、会话目录 `--session-dir <dir>`，以及恢复已有会话时的 `--session-id <id>`；项目信任覆盖 `--approve` / `--no-approve` 按第 6.2 节 Project Trust 的探测结果条件传递，无受保护资源时不传。P3-02 起不再传 `--no-extensions`，Extension 加载由 Trust 拦截控制（见第 6.2 节 Extension UI）。环境继承父进程并追加 `PI_SKIP_VERSION_CHECK=1`；不设置 `PI_OFFLINE`，因为 RPC 启动会在后台刷新模型目录；也不设置 `PI_PACKAGE_DIR`，因为包资源与可执行文件同层。
+主进程固定完整启动参数，页面不能覆盖：`--mode rpc`、按平台选择的 `--tools`（Windows `read,powershell,edit,write`；macOS `read,bash,edit,write`）、会话目录 `--session-dir <dir>`，以及恢复已有会话时的 `--session-id <id>`；项目信任覆盖 `--approve` / `--no-approve` 按第 6.2 节 Project Trust 的探测结果条件传递，无受保护资源时不传。P3-02 起不再传 `--no-extensions`，Extension 加载由 Trust 拦截控制（见第 6.2 节 Extension UI）；P3-06 起不再传 `--no-skills`、`--no-prompt-templates` 与 `--no-mcp`，这三类资源同样交给 Pi 自己的加载规则与 Trust 决定（见第 6.2 节 Pi 资源接入）。`--no-extensions` 只用于安全模式启动这一条逃生路径。环境继承父进程并追加 `PI_SKIP_VERSION_CHECK=1`；不设置 `PI_OFFLINE`，因为 RPC 启动会在后台刷新模型目录；也不设置 `PI_PACKAGE_DIR`，因为包资源与可执行文件同层。
 
 Electron 主进程设置 `cwd` 为用户选择的项目根目录，并分别建立 stdin、stdout、stderr 管道。不启动 HTTP 或 localhost TCP RPC 服务，不将协议暴露到网络。
 
@@ -395,7 +395,7 @@ Pi 管道背压与 UI 通知背压分开处理：采用有界批次与渲染端�
 
 #### Extension UI（P3-02）
 
-- 启用方式：P3-02 起不再传 `--no-extensions`，项目 Extension 的加载由 Project Trust 决定控制（见上节）；Skills、Prompt Templates 与 MCP 仍以 `--no-*` 关闭，启用与否属 P3-06 范围。
+- 启用方式：P3-02 起不再传 `--no-extensions`，项目 Extension 的加载由 Project Trust 决定控制（见上节）；Skills、Prompt Templates 与 MCP 的关闭参数在 P3-06 一并去掉，启用范围见下节 Pi 资源接入。
 - 只映射官方 RPC Extension UI 子协议的九个 method。Dialog 类（`select`/`confirm`/`input`/`editor`）需要页面回应；fire-and-forget 类（`notify`/`setStatus`/`setWidget`/`setTitle`/`set_editor_text`）只更新展示状态。未知 method、字段超限或形状不符的请求只计入 `invalidCount`，不报错、不自动批准。
 - Dialog 请求按到达顺序排队（上限 8 条，同 id 重复投递按一次处理），页面模态展示队首；回应经 `desktop:extension-ui-respond` 提交，只接受互斥的三种形态（`value`/`confirm`/`cancelled`），主进程校验 id 在队列中且形态与 method 匹配后才出队并写回 `extension_ui_response`；写回失败按管道关闭收敛，不重发。`timeout` 字段由 Pi 侧自动解析，Desktop 不计时，只在界面展示。
 - fire-and-forget 状态由主进程按代际持有并广播：`notify` 保留最近 10 条（info/warning/error）；`setStatus` 按 key 增删（上限 16 条）；`setWidget` 按 placement 覆盖，空 lines 表示清除；`set_editor_text` 保留最新一条，页面在用户输入框为空时填充，不覆盖已输入内容；`setTitle` 无桌面等价物，不计入展示。
@@ -435,6 +435,19 @@ Pi 管道背压与 UI 通知背压分开处理：采用有界批次与渲染端�
 - 等待期限单独设为 120 000 毫秒（压缩是一次 LLM 调用）；超时只结束等待，结果未知且不自动重发。压缩中状态由 `get_state.isCompacting` 与 `compaction_start` / `compaction_end` 事件收敛，`agent_settled` 后的既有快照刷新链把字段拉回权威值。
 - 通道：`desktop:runtime-compact`（零参数，要求 Runtime 就绪）。入口在 Runtime 详情弹层，只在就绪且非压缩中时可用；成功展示前后 token 数，失败与中止按错误如实提示，不伪造结果。不做 `set_auto_compaction` 开关，属后续按需接入。
 
+#### Pi 资源接入（P3-06）
+
+- 启用范围：P3-06 起不再传 `--no-skills`、`--no-prompt-templates` 与 `--no-mcp`。三类资源的加载完全交给 Pi 自己的规则：用户级资源（`<agent-dir>/skills|prompts|mcp.json` 与包资源）始终加载，项目级资源（`.pi/skills|prompts|mcp.json`、祖先 `.agents/skills`）只在信任时加载，仍由 Project Trust 的 `--approve` / `--no-approve` 决定；`--no-extensions` 只用于本节末尾的安全模式启动。主题此前就未关闭（`--no-themes` 从未传递），但 RPC 下与 Desktop 无关。
+- 发现能力只来自官方 RPC：v1.0.4 的全部 33 个 RPC 命令中没有资源管理或重载命令，`get_commands` 是唯一的资源发现入口，返回 extension 命令、prompt templates 与 skills（Skill 名称已规范成 `skill:<名称>`），每项带 `source` 与 `sourceInfo{path, source, scope, origin, baseDir}`。Desktop 不解析 `settings.json`、`mcp.json` 与包配置，不建立平行资源清单，也不调用 `pi install` / `pi mcp add` 等写配置的命令；扩展文件清单与包清单 RPC 不提供，页面只展示能从 `get_commands` 归属到的部分。
+- 通道：`desktop:runtime-resources`（零参数，读取 `get_commands` 并投影为 skill/prompt/extension 三类条目，条目上限 500，超出标记 `truncated`；`error` 非空时条目为空）、`desktop:runtime-diagnostics`（零参数，返回当前代际的 stderr 诊断尾部 20 行与 `extension_error` 事件条目，上限 20 条）、`desktop:runtime-mcp-status`（零参数，主进程固定发送 `/mcp`）、`desktop:runtime-start-safe`（零参数，安全模式启动）与 `desktop:session-reload`（只接受 `{ allowInterrupt }`，重启式重载）。错误码沿用 Runtime 与 Session 族，不新增。
+- MCP 状态：`builtin:mcp` 在非 TUI 模式下执行 `/mcp` 时用 `ctx.ui.notify(formatStatus())` 返回文本，因此 Desktop 只把固定命令 `/mcp` 经 `prompt` 发出，并在 Extension UI 的 notify 通道上做一次性捕获（捕获期间 notify 照常进入通知列表），把捕获到的文本原样作为结果返回；不接受页面传入任何命令文本，也不提供 `/mcp login|logout|reconnect` 的写路径。`/mcp` 会等待所有已启用服务器连接完成，期限单独设为 60 000 毫秒；超时只结束等待，结果未知且不自动重发。
+- 重载策略：RPC 没有重载命令，`/reload` 是 TUI 内建命令（发送它会被当成普通用户消息送给模型，Desktop 不这样做）；资源只在进程启动时读取，因此唯一的重载方式是重启 Runtime。`desktop:session-reload` 复用会话打开的守门与关闭链，以本代际快照的会话 id 重启（快照取不到时为 null，交给 Pi 新建），只去掉“同会话幂等返回”这一条；中断确认、信任拦截与错误码与会话打开完全一致。
+- 加载失败与外部依赖的可见边界：非交互模式下 Pi 把启动诊断打到 stderr，并且存在 `type: "error"` 诊断（主要是扩展加载失败）时直接以退出码 1 结束、不创建会话；Desktop 已把 stderr 尾部并入启动失败信息，P3-06 起同时经 `desktop:runtime-diagnostics` 在资源面板展示。技能、提示词与主题的加载警告只存在于 Pi 的 TUI 展示路径，RPC 不提供，因此面板只能展示“已加载的清单”，无法解释某个技能为何没有出现。Extension 的 handler 与命令错误经 `extension_error` 事件给出 path、event 与错误文本（无堆栈），按代际有界保存。
+- 外部依赖：`pi.exe` 是 Bun 独立可执行文件，不携带 Node/npm/npx；stdio MCP 服务器若使用 `npx`、`uvx` 等命令，需要用户机器上已有对应运行时，失败原因经 `/mcp` 的状态文本如实展示。MCP 服务器的默认 exposure 是 `codemode`，连上后 `builtin:mcp` 会通过 `pi.setActiveTools` 自动启用 `codemode` 工具；`--tools` 的白名单拦不住它（只拦 MCP 工具名，且未给出 `mcp__` 模式时 MCP 工具反而被放行），因此启用 MCP 会同时改变模型的工具面，界面必须如实披露这一点。
+- 安全模式启动：`desktop:runtime-start-safe` 只接受零参数，用主进程记录的最近一次启动意图（项目与会话 id）固定传 `--no-extensions` 启动一次，仅本次生效、不写任何配置；`--no-extensions` 会同时禁用内建扩展（包含 `builtin:mcp`，因此该次运行没有 MCP 工具与 `/mcp`），但不影响 Skills 与 Prompt Templates。项目必须与主进程当前项目一致，信任拦截与常规启动相同。这是坏扩展让 RPC 启动直接失败时的唯一应用内逃生入口。
+- 界面：顶栏「Pi 资源」面板按三类分组展示命令清单与归属（`scope`、`origin`、`baseDir`、路径），提供「重新读取清单与诊断」「重新加载资源（重启 Runtime）」与安全模式启动；MCP 状态、诊断与 `extension_error` 各自分区表达失败。Prompt 输入区对同一份清单做斜杠补全（名称前缀匹配，另允许用去掉 `skill:` 后的名称前缀找技能），Tab 或点击接受候选并插入完整命令，Enter 仍只用于发送。
+- 不做：插件市场；`pi install/remove/update` 与 `pi mcp add/remove` 等写配置或安装依赖的命令；MCP 的 OAuth 登录与 enable/disable/exposure 变更（前者属第四阶段，后者需要写配置）；Desktop 自行解析或生成 Pi 配置文件；Desktop 自建 reload 扩展、第二个 Pi 进程或任意命令文本通道。
+
 #### 关闭、异常与进程树
 
 正常关闭停止接收新业务请求，保留内部取消路径；仅当事件流显示仍在运行（`isStreaming`）时先对活动操作发起 abort，并最多等待 3 000 毫秒——超时或取消被拒都不阻断后续链路——然后关闭 stdin、继续消费管道并等待退出，超时后执行平台兜底。异常退出显示原因和结果不确定性，由用户显式重新启动，不自动重放 prompt。
@@ -449,10 +462,10 @@ Windows 使用系统 `taskkill` 对当前受管 Pi 进程树定向终止，不�
 
 主界面替换第一阶段的最小 Runtime 页面，提供：
 
-- 顶栏：Sidebar 折叠开关、项目切换入口（目录选择、最近项目、手动路径、配置提示）、当前会话、Runtime 状态，以及详情弹层里的 Agent 控制（模型与 Thinking 选择、上下文占用、压缩中提示）、重置本项目信任决定与应用信息、关闭 Runtime。
+- 顶栏：Sidebar 折叠开关、项目切换入口（目录选择、最近项目、手动路径、配置提示）、当前会话、Runtime 状态，以及详情弹层里的 Agent 控制（模型与 Thinking 选择、上下文占用、压缩中提示）、重置本项目信任决定与应用信息、关闭 Runtime；另提供「Pi 资源」面板（已加载的命令清单与归属、MCP 状态、启动诊断、重启式重载与安全模式启动，见第 6.2 节 Pi 资源接入）。
 - 会话侧栏：当前项目的 Pi 会话列表、新建与刷新、当前会话高亮、跳过与截断提示。
 - 消息区：按消息分组并按内容块顺序渲染，用户与 Assistant 区分，用户消息的图片附件渲染为缩略图，Thinking 可折叠，工具调用内联为通用工具卡片（名称、状态、Desktop 计算的耗时与参数摘要，展开后显示参数、结果或错误输出、非文本内容描述与截断提示；运行中的卡片自动展开一次，之后由用户开合），并表达同步、截断、失败与运行中状态。
-- Prompt 区：输入与发送、图片附件选择、预览与移除、Agent 运行期间原位的停止入口，以及请求接受、拒绝与中止的提示；另承载 Extension 的对话、通知与 widget 展示及编辑器填充（取值与边界见第 6.2 节 Extension UI）。
+- Prompt 区：输入与发送、图片附件选择、预览与移除、Agent 运行期间原位的停止入口，以及请求接受、拒绝与中止的提示；另承载 Extension 的对话、通知与 widget 展示及编辑器填充（取值与边界见第 6.2 节 Extension UI），并在输入以 `/` 开头时提供已加载命令的斜杠补全（Tab 或点击接受，Enter 仍为发送）。
 
 组件通过统一前端服务入口调用受限 preload API，Pinia 管理共享的展示状态。消息重建与 Runtime 所有权归主进程，前端不直接访问 ipcRenderer，不提供任意 RPC JSON 的通用发送入口。打开、新建与恢复会话都由主进程重启式切换，页面的当前会话以 Runtime 快照为准。Prompt 发送只展示请求接受或拒绝；运行中状态由 `agent_start`/`agent_settled` 收敛，消息与工具展示来自主进程投影批次，页面在失去同步时标示同步中或截断，不自行拼装历史。打开或新建会话即启动 Runtime，页面不单独提供启动入口。Stop 只在 Runtime 就绪且事件流显示运行中时可用，界面把“中止请求中且仍在运行”表达为停止中，是否真的停止以 `agent_settled` 收敛，不以请求响应为依据。输入提交处理输入法组合态、Enter 发送与 Shift+Enter 换行、发送后焦点回归、成功后清空与发送中不重复提交；消息区在用户已上滚时不强制拉到底部。模型文本、工具参数与工具输出一律按纯文本插值展示，不使用 `v-html`，不当作 HTML 或外部资源渲染。主题切换在顶栏提供跟随系统、浅色与深色的循环入口，取值与切换机制见第 6.2 节。
 
@@ -493,7 +506,7 @@ RPC 无法展示 Pi 内建的 TUI trust prompt。没有显式覆盖、Extension 
 
 第一阶段显式采用 `--no-approve`，并关闭 Extensions、Skills、Prompt Templates、MCP（对应 `--no-extensions`、`--no-skills`、`--no-prompt-templates`、`--no-mcp`）；避免依赖全局 trust 默认值，不自动信任项目，不直接修改 `trust.json`。
 
-P3-01 已实现 Desktop 侧的信任流程：启动前探测受保护资源，无决定时经 `TRUST_REQUIRED` 拦截并由用户决定，决定存入 `desktop-config.json` 的 `projectTrust` 字段，启动时按决定条件传递 `--approve` / `--no-approve`（细节见第 6.2 节 Project Trust）。Desktop 的显式覆盖优先于 Pi 已保存的信任记录，这是官方 CLI 覆盖优先级的直接结果；P3-02 起 Extension 随 Trust 决定加载，Skills、Prompt Templates 与 MCP 仍以 `--no-*` 关闭，启用与否属 P3-06 范围。
+P3-01 已实现 Desktop 侧的信任流程：启动前探测受保护资源，无决定时经 `TRUST_REQUIRED` 拦截并由用户决定，决定存入 `desktop-config.json` 的 `projectTrust` 字段，启动时按决定条件传递 `--approve` / `--no-approve`（细节见第 6.2 节 Project Trust）。Desktop 的显式覆盖优先于 Pi 已保存的信任记录，这是官方 CLI 覆盖优先级的直接结果；P3-02 起 Extension 随 Trust 决定加载，P3-06 起 Skills、Prompt Templates 与 MCP 也交给 Pi 自己的加载规则与同一信任决定（详见第 6.2 节 Pi 资源接入）。
 
 Trust 不完全覆盖启动行为：官方代码在 trust 决定前会读取项目 `sessionDir`；AGENTS/CLAUDE 上下文文件也不因拒绝 trust 自动禁用。关闭项目资源加载不等于内容安全或工具权限受限，信任决定也不是 OS 沙箱。
 

@@ -56,6 +56,11 @@ export interface PiProcessOptions {
    * 无受保护资源时为 null（不传，交给官方默认）；决定由主进程探测与记录，不由页面指定。
    */
   readonly trustDecision: 'trusted' | 'untrusted' | null
+  /**
+   * 安全启动：只用于 Extension 加载失败导致 RPC 启动直接失败时的逃生路径，
+   * 固定传 `--no-extensions`（仅本次，不写任何配置）。常规启动不传该字段。
+   */
+  readonly disableExtensions?: boolean
 }
 
 /** Runtime 目录由平台与架构决定，页面无法指定。 */
@@ -74,9 +79,12 @@ export function getPiExecutablePath(): string {
 }
 
 /**
- * 启动参数固定：RPC 模式、按信任决定传递项目资源覆盖、关闭 Skills、Prompt Templates 与 MCP、
- * 显式工具集、会话目录与可选恢复会话。Extension 由 P3-01 的 Trust 拦截控制加载：有受保护资源
- * 时决定必须显式传递（Desktop 的决定优先于 Pi 已保存的信任记录），无受保护资源时不传。
+ * 启动参数固定：RPC 模式、按信任决定传递项目资源覆盖、显式工具集、会话目录与可选恢复会话，
+ * 以及仅用于安全启动的 `--no-extensions`。
+ *
+ * Skills、Prompt Templates 与 MCP 自 P3-06 起不再用 `--no-*` 全量关闭：它们由 Pi 自己的资源
+ * 加载规则与 Project Trust 决定（用户级资源始终加载，项目级资源只在信任时加载）。Extension 自
+ * P3-02 起同样由 Trust 决定控制；`--no-extensions` 不是常规路径。
  * 会话由 Pi 持久化，不再使用 `--no-session`；页面不能覆盖其中任何一项。
  */
 export function getPiLaunchArguments(options: PiProcessOptions): string[] {
@@ -85,12 +93,10 @@ export function getPiLaunchArguments(options: PiProcessOptions): string[] {
     : 'read,bash,edit,write'
   const args = [
     '--mode', 'rpc',
-    '--no-skills',
-    '--no-prompt-templates',
-    '--no-mcp',
     '--tools', tools,
     '--session-dir', options.sessionDir
   ]
+  if (options.disableExtensions === true) args.push('--no-extensions')
   if (options.trustDecision === 'trusted') args.push('--approve')
   else if (options.trustDecision === 'untrusted') args.push('--no-approve')
   if (options.sessionId !== null) args.push('--session-id', options.sessionId)

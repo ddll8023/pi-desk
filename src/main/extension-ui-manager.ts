@@ -2,6 +2,7 @@
  * 维护当前 Runtime 代际的 Extension UI 状态：dialog 请求队列、通知、状态条、widget 与编辑器填充文本。
  *
  * 只消费已分类的 `extension_ui_request` 记录与页面提交的 dialog 响应，按代际持有状态并广播快照；
+ * 并为读取 MCP 状态提供一次性的 notify 文本捕获（捕获期间仍照常进入通知列表）；
  * 不持有进程，不解析其他记录族，dialog 响应写回由 RuntimeManager 借用其串行写入。随 Runtime 退出
  * 或切换清空，不持久化。`setTitle` 无桌面等价物，只计数不展示。
  */
@@ -25,6 +26,8 @@ const MAX_STATUSES = 16
 const MAX_WIDGETS_PER_PLACEMENT = 4
 /** dialog 队列上限：防止异常 Extension 无限叠加请求。 */
 const MAX_DIALOGS = 8
+/** 一次 notify 捕获最多保留的条数；只用于读取 `/mcp` 状态，不影响通知列表。 */
+const MAX_CAPTURED_NOTIFIES = 20
 
 interface MutableDialog {
   readonly id: string
@@ -59,6 +62,8 @@ export class ExtensionUiManager {
   private invalidCount = 0
   private notifySeed = 0
   private disposed = false
+  /** 一次性的 notify 文本捕获；非 null 时收到的 notify 副本也追加到该数组。 */
+  private notifyCapture: string[] | null = null
 
   constructor(private readonly callbacks: ExtensionUiCallbacks) {}
 
@@ -72,7 +77,22 @@ export class ExtensionUiManager {
     this.widgets = new Map()
     this.editorText = null
     this.invalidCount = 0
+    this.notifyCapture = null
     this.publish()
+  }
+
+  /**
+   * 开始一次性捕获 notify 文本，返回结束函数并交出捕获结果。
+   * 捕获期间 notify 照常进入快照与广播（不抑制展示），只额外保留副本供调用方读取；
+   * 代际切换或 dispose 会丢弃未结束的捕获。
+   */
+  beginNotifyCapture(): () => readonly string[] {
+    const capture: string[] = []
+    this.notifyCapture = capture
+    return () => {
+      if (this.notifyCapture === capture) this.notifyCapture = null
+      return [...capture]
+    }
   }
 
   /** Runtime 代际结束：清空状态并发布空快照，之后的请求不再受理。 */
@@ -106,12 +126,16 @@ export class ExtensionUiManager {
 
     if (projected.notify !== null) {
       this.notifySeed += 1
+      const message = truncate(projected.notify.message, MAX_TEXT_CHARS)
       this.notifications.push({
         id: `ext-notify-${this.notifySeed}`,
         notifyType: projected.notify.notifyType,
-        message: truncate(projected.notify.message, MAX_TEXT_CHARS)
+        message
       })
       if (this.notifications.length > MAX_NOTIFICATIONS) this.notifications.shift()
+      if (this.notifyCapture !== null && this.notifyCapture.length < MAX_CAPTURED_NOTIFIES) {
+        this.notifyCapture.push(message)
+      }
       this.publish()
       return
     }

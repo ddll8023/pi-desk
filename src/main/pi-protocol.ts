@@ -4,7 +4,16 @@
  * 只处理记录分类、请求关联与响应字段投影，不持有子进程、不知道 Runtime 业务状态、不缓存消息。
  * 超时只结束等待，不主张 Pi 没有执行该请求；进程退出或写入失败时收敛 pending。
  */
-import type { CompactResult, ContextUsage, ModelSummary, PromptDisposition, RuntimeInfo } from '../shared/runtime-api'
+import type {
+  CompactResult,
+  ContextUsage,
+  ExtensionErrorEntry,
+  ModelSummary,
+  PiResourceEntry,
+  PiResourceKind,
+  PromptDisposition,
+  RuntimeInfo
+} from '../shared/runtime-api'
 import type { ForkMessageSummary } from '../shared/session-api'
 
 export type PiRecordKind = 'response' | 'session-event' | 'extension-ui' | 'unknown'
@@ -238,6 +247,57 @@ export function toCompactResult(data: unknown): CompactResult | null {
     tokensBefore: typeof data.tokensBefore === 'number' ? data.tokensBefore : null,
     estimatedTokensAfter: typeof data.estimatedTokensAfter === 'number' ? data.estimatedTokensAfter : null,
     usageTotalTokens: usage !== null && Number.isInteger(usage) && usage >= 0 ? usage : null
+  }
+}
+
+/** `get_commands` 的 `source` 到页面资源分类的映射；其他来源不进入页面。 */
+const RESOURCE_KIND_BY_SOURCE: Readonly<Record<string, PiResourceKind>> = {
+  skill: 'skill',
+  prompt: 'prompt',
+  extension: 'extension'
+}
+
+/** 非空字符串或 null；其他取值一律视为缺失，不猜造。 */
+function readOptionalText(value: unknown): string | null {
+  return typeof value === 'string' && value !== '' ? value : null
+}
+
+/**
+ * 把 `get_commands` 的 data 投影为资源条目列表：只保留 skill/prompt/extension 三类，
+ * 名称或来源不符的条目丢弃，`commands` 不是数组时返回 null（由调用方按格式错误处理）。
+ * 归属信息只取官方 sourceInfo；缺失字段一律为 null。
+ */
+export function toResources(data: unknown): PiResourceEntry[] | null {
+  if (!isRecord(data) || !Array.isArray(data.commands)) return null
+
+  const entries: PiResourceEntry[] = []
+  for (const entry of data.commands) {
+    if (!isRecord(entry)) continue
+    const kind = typeof entry.source === 'string' ? RESOURCE_KIND_BY_SOURCE[entry.source] : undefined
+    const name = readOptionalText(entry.name)
+    if (kind === undefined || name === null) continue
+    const info = isRecord(entry.sourceInfo) ? entry.sourceInfo : {}
+    entries.push({
+      kind,
+      name,
+      description: readOptionalText(entry.description),
+      path: readOptionalText(info.path),
+      scope: readOptionalText(info.scope),
+      origin: readOptionalText(info.origin),
+      baseDir: readOptionalText(info.baseDir)
+    })
+  }
+  return entries
+}
+
+/** RPC 的 `extension_error` 事件只带 path/event/error；`error` 缺失时不计入展示。 */
+export function toExtensionError(payload: Record<string, unknown>): ExtensionErrorEntry | null {
+  const error = readOptionalText(payload.error)
+  if (error === null) return null
+  return {
+    path: readOptionalText(payload.extensionPath),
+    event: readOptionalText(payload.event),
+    error
   }
 }
 

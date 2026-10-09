@@ -1,4 +1,4 @@
-/** 管理唯一桌面窗口及其尺寸位置偏好、本地资产边界，以及应用信息、Project 选择与列表、Session 列表与打开、分叉消息读取与分叉发起、Project Trust 查询与决定、界面偏好、Runtime 启停、Prompt 提交、中止、Agent 能力查询与设置、手动压缩、消息/工具投影 IPC、Extension UI 状态与对话响应 IPC、事件广播与退出编排。 */
+/** 管理唯一桌面窗口及其尺寸位置偏好、本地资产边界，以及应用信息、Project 选择与列表、Session 列表与打开与重新加载、分叉消息读取与分叉发起、Project Trust 查询与决定、界面偏好、Runtime 启停与安全启动、Prompt 提交、中止、Agent 能力查询与设置、手动压缩、Pi 资源与诊断读取、MCP 状态请求、消息/工具投影 IPC、Extension UI 状态与对话响应 IPC、事件广播与退出编排。 */
 import { realpath } from 'node:fs/promises'
 import { extname, isAbsolute, relative, resolve, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -23,7 +23,8 @@ import {
   FORK_MESSAGES_CHANNEL,
   FORK_START_CHANNEL,
   SESSION_LIST_CHANNEL,
-  SESSION_OPEN_CHANNEL
+  SESSION_OPEN_CHANNEL,
+  SESSION_RELOAD_CHANNEL
 } from '../shared/session-api'
 import type {
   ForkMessageListResult,
@@ -58,13 +59,17 @@ import {
   RUNTIME_ABORT_CHANNEL,
   RUNTIME_CAPABILITIES_CHANNEL,
   RUNTIME_COMPACT_CHANNEL,
+  RUNTIME_DIAGNOSTICS_CHANNEL,
+  RUNTIME_MCP_STATUS_CHANNEL,
   RUNTIME_PROMPT_CHANNEL,
   RUNTIME_PROJECTION_ACK_CHANNEL,
   RUNTIME_PROJECTION_CHANNEL,
   RUNTIME_PROJECTION_EVENT,
+  RUNTIME_RESOURCES_CHANNEL,
   RUNTIME_SET_MODEL_CHANNEL,
   RUNTIME_SET_THINKING_LEVEL_CHANNEL,
   RUNTIME_START_CHANNEL,
+  RUNTIME_START_SAFE_CHANNEL,
   RUNTIME_STATUS_CHANNEL,
   RUNTIME_STOP_CHANNEL,
   RUNTIME_STATUS_EVENT
@@ -72,10 +77,13 @@ import {
 import type {
   CapabilitiesResult,
   CompactResultResult,
+  McpStatusResult,
   ProjectionBatch,
   ProjectionResult,
   PromptImageInput,
   PromptResult,
+  ResourcesResult,
+  RuntimeDiagnosticsResult,
   RuntimeErrorCode,
   RuntimeResult,
   RuntimeStatus
@@ -290,6 +298,18 @@ function compactFailure(code: RuntimeErrorCode, message: string): CompactResultR
   return { ok: false, error: { code, message } }
 }
 
+function resourcesFailure(code: RuntimeErrorCode, message: string): ResourcesResult {
+  return { ok: false, error: { code, message } }
+}
+
+function diagnosticsFailure(code: RuntimeErrorCode, message: string): RuntimeDiagnosticsResult {
+  return { ok: false, error: { code, message } }
+}
+
+function mcpStatusFailure(code: RuntimeErrorCode, message: string): McpStatusResult {
+  return { ok: false, error: { code, message } }
+}
+
 function projectPathFailure(code: ProjectErrorCode, message: string): ProjectPathResult {
   return { ok: false, error: { code, message } }
 }
@@ -459,6 +479,35 @@ function registerSessionHandlers(pageUrl: string): void {
         return sessionFailure('TRUST_REQUIRED', trust.message ?? '项目包含需要信任决定的资源。')
       }
       return sessionManager.open({ sessionId: targetSessionId, allowInterrupt }, trust.decision)
+    }
+  )
+
+  /** 重新加载 Pi 资源：重启 Runtime 并尽量恢复当前会话；只接受显式中断确认，信任拦截与打开一致。 */
+  ipcMain.handle(
+    SESSION_RELOAD_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<SessionOpenResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return sessionFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 1) {
+        return sessionFailure('INVALID_REQUEST', '重新加载资源接口只接受一个请求对象。')
+      }
+      const request = args[0]
+      if (typeof request !== 'object' || request === null || Array.isArray(request)) {
+        return sessionFailure('INVALID_REQUEST', '重新加载资源参数格式不正确。')
+      }
+      const fields = request as Record<string, unknown>
+      if (Object.keys(fields).some((key) => key !== 'allowInterrupt')) {
+        return sessionFailure('INVALID_REQUEST', '重新加载资源参数包含未支持的字段。')
+      }
+      if (typeof fields.allowInterrupt !== 'boolean') {
+        return sessionFailure('INVALID_REQUEST', '重新加载资源必须显式说明是否允许中断当前操作。')
+      }
+      const trust = await resolveTrustForCurrentProject()
+      if (trust.requiresPrompt) {
+        return sessionFailure('TRUST_REQUIRED', trust.message ?? '项目包含需要信任决定的资源。')
+      }
+      return sessionManager.reload(fields.allowInterrupt, trust.decision)
     }
   )
 
@@ -764,6 +813,69 @@ function registerRuntimeHandlers(pageUrl: string): void {
       const outcome = await runtimeManager.compact()
       if (outcome.ok) return { ok: true, data: outcome.result }
       return compactFailure(outcome.code, outcome.message)
+    }
+  )
+
+  /** 资源清单只读取当前 Runtime 代际的 `get_commands` 投影，不接受任何参数。 */
+  ipcMain.handle(
+    RUNTIME_RESOURCES_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<ResourcesResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return resourcesFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 0) {
+        return resourcesFailure('INVALID_REQUEST', '资源清单接口不接受参数。')
+      }
+      return runtimeManager.readResources()
+    }
+  )
+
+  /** 诊断只暴露主进程已持有的有界 stderr 尾部与 extension_error 事件，不接受任何参数。 */
+  ipcMain.handle(
+    RUNTIME_DIAGNOSTICS_CHANNEL,
+    (event: IpcMainInvokeEvent, ...args: unknown[]): RuntimeDiagnosticsResult => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return diagnosticsFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 0) {
+        return diagnosticsFailure('INVALID_REQUEST', '诊断接口不接受参数。')
+      }
+      return runtimeManager.getDiagnostics()
+    }
+  )
+
+  /** MCP 状态使用主进程固定的 `/mcp` 命令，不接受页面传入任何命令文本。 */
+  ipcMain.handle(
+    RUNTIME_MCP_STATUS_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<McpStatusResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return mcpStatusFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 0) {
+        return mcpStatusFailure('INVALID_REQUEST', 'MCP 状态接口不接受参数。')
+      }
+      return runtimeManager.readMcpStatus()
+    }
+  )
+
+  /**
+   * 安全模式启动：零参数，主进程用最近一次启动目标并固定传 `--no-extensions`，
+   * 仅本次生效；信任拦截与常规启动一致。
+   */
+  ipcMain.handle(
+    RUNTIME_START_SAFE_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<RuntimeResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return runtimeFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 0) {
+        return runtimeFailure('INVALID_REQUEST', '安全模式启动接口不接受参数。')
+      }
+      const trust = await resolveTrustForCurrentProject()
+      if (trust.requiresPrompt) {
+        return runtimeFailure('TRUST_REQUIRED', trust.message ?? '项目包含需要信任决定的资源。')
+      }
+      return runtimeManager.startSafely(trust.decision, projectManager.currentProjectPath())
     }
   )
 

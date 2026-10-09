@@ -1,13 +1,15 @@
-<!-- Prompt 输入区：处理输入法组合态、Enter 发送与 Shift+Enter 换行、焦点回归与重复提交，并在 Agent 运行期间原位提供停止入口；同时承接 Extension 的 set_editor_text 填充文本与图片附件选择。 -->
+<!-- Prompt 输入区：处理输入法组合态、Enter 发送与 Shift+Enter 换行、焦点回归与重复提交，并在 Agent 运行期间原位提供停止入口；同时承接 Extension 的 set_editor_text 填充文本、图片附件选择与 Pi 命令的斜杠补全。 -->
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import type { PromptDisposition, PromptImageInput } from '../../../shared/runtime-api'
+import type { PiResourceEntry, PromptDisposition, PromptImageInput } from '../../../shared/runtime-api'
 import { useExtensionUiStore } from '../stores/extension-ui'
+import { useResourceStore } from '../stores/resource'
 import { useRuntimeStore } from '../stores/runtime'
 
 const runtimeStore = useRuntimeStore()
 const extensionStore = useExtensionUiStore()
+const resourceStore = useResourceStore()
 const { view: runtimeView, promptView, abortView, projectionSync, capabilitiesView } = storeToRefs(runtimeStore)
 const { editorText, editorTextVersion } = storeToRefs(extensionStore)
 
@@ -140,9 +142,33 @@ onUnmounted(() => {
 })
 
 function onKeydown(event: KeyboardEvent): void {
-  if (event.key !== 'Enter' || event.shiftKey) return
-  // keyCode 229 是部分输入法在组合态下上报的值，一并排除。
+  // 输入法组合态下方向键与确认键属于候选词操作，不参与补全也不发送。
   if (composing.value || event.isComposing || event.keyCode === 229) return
+
+  if (visibleSuggestions.value.length > 0) {
+    if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      moveSuggestion(1)
+      return
+    }
+    if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      moveSuggestion(-1)
+      return
+    }
+    if (event.key === 'Tab') {
+      event.preventDefault()
+      acceptSuggestion(visibleSuggestions.value[suggestionIndex.value])
+      return
+    }
+    if (event.key === 'Escape') {
+      suggestionsDismissed.value = true
+      return
+    }
+  }
+
+  if (event.key !== 'Enter' || event.shiftKey) return
+  // Enter 始终是发送：补全只用 Tab 或点击确认，避免改变既有发送手感。
   event.preventDefault()
   void submit()
 }
@@ -181,6 +207,53 @@ watch(editorTextVersion, () => {
   }
 })
 
+/** 斜杠补全只在输入以 `/` 开头且尚未输入空格（即仍在命令名内）时生效。 */
+const MAX_SUGGESTIONS = 8
+const slashQuery = computed(() => {
+  const text = draft.value
+  if (!text.startsWith('/') || text.includes(' ')) return null
+  return text.slice(1).toLowerCase()
+})
+const suggestionsDismissed = ref(false)
+const suggestionIndex = ref(0)
+
+/**
+ * 候选来自当前 Runtime 已加载的命令清单（与 Pi 的 `/` 命令同一来源）。
+ * 名称前缀匹配；另外允许用去掉 `skill:` 后的名称前缀找到技能，与 Pi 的调用习惯一致。
+ */
+const matchedSuggestions = computed<readonly PiResourceEntry[]>(() => {
+  const query = slashQuery.value
+  if (query === null) return []
+  return resourceStore.entries.filter((entry) => {
+    const name = entry.name.toLowerCase()
+    if (name.startsWith(query)) return true
+    const skillName = name.startsWith('skill:') ? name.slice('skill:'.length) : null
+    return skillName !== null && !query.startsWith('skill:') && skillName.startsWith(query)
+  }).slice(0, MAX_SUGGESTIONS)
+})
+const visibleSuggestions = computed(() => (suggestionsDismissed.value ? [] : matchedSuggestions.value))
+
+watch(matchedSuggestions, () => {
+  suggestionIndex.value = 0
+})
+
+watch(slashQuery, () => {
+  suggestionsDismissed.value = false
+})
+
+function moveSuggestion(step: number): void {
+  const count = visibleSuggestions.value.length
+  if (count === 0) return
+  suggestionIndex.value = (suggestionIndex.value + step + count) % count
+}
+
+/** 接受候选：写入完整命令并保留一个尾随空格供追加参数，不自动发送。 */
+function acceptSuggestion(entry: PiResourceEntry | undefined): void {
+  if (entry === undefined) return
+  draft.value = `/${entry.name} `
+  textarea.value?.focus()
+}
+
 onMounted(() => {
   textarea.value?.focus()
 })
@@ -210,20 +283,50 @@ onMounted(() => {
       </div>
 
       <label for="prompt-input" class="sr-only">输入要发送给 Pi 的内容</label>
-      <textarea
-        id="prompt-input"
-        ref="textarea"
-        v-model="draft"
-        rows="3"
-        class="text-control resize-none"
-        placeholder="输入要发送给 Pi 的内容"
-        autocomplete="off"
-        spellcheck="false"
-        aria-describedby="prompt-status"
-        @keydown="onKeydown"
-        @compositionstart="composing = true"
-        @compositionend="composing = false"
-      ></textarea>
+      <div class="relative">
+        <!-- 命令补全：候选来自 Pi 已加载的资源清单；Enter 仍然是发送，Tab 或点击接受候选。 -->
+        <ul
+          v-if="visibleSuggestions.length > 0"
+          id="prompt-command-list"
+          role="listbox"
+          aria-label="可用命令"
+          class="panel absolute bottom-full mb-1 max-h-64 w-full overflow-y-auto p-1 shadow-lg"
+        >
+          <li v-for="(entry, index) in visibleSuggestions" :key="`${entry.kind}-${entry.name}`" role="presentation">
+            <button
+              type="button"
+              role="option"
+              :aria-selected="index === suggestionIndex"
+              class="w-full rounded px-2 py-1 text-left"
+              :class="index === suggestionIndex ? 'bg-desk-canvas text-desk-accent' : ''"
+              @mousedown.prevent="acceptSuggestion(entry)"
+            >
+              <span class="font-mono text-sm">/{{ entry.name }}</span>
+              <span v-if="entry.description !== null" class="mt-0.5 block text-xs text-desk-muted">
+                {{ entry.description }}
+              </span>
+            </button>
+          </li>
+        </ul>
+
+        <textarea
+          id="prompt-input"
+          ref="textarea"
+          v-model="draft"
+          rows="3"
+          class="text-control resize-none"
+          placeholder="输入要发送给 Pi 的内容"
+          autocomplete="off"
+          spellcheck="false"
+          aria-describedby="prompt-status"
+          aria-autocomplete="list"
+          aria-controls="prompt-command-list"
+          :aria-expanded="visibleSuggestions.length > 0"
+          @keydown="onKeydown"
+          @compositionstart="composing = true"
+          @compositionend="composing = false"
+        ></textarea>
+      </div>
 
       <div class="mt-2 flex flex-wrap items-center justify-between gap-3">
         <p

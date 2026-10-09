@@ -42,7 +42,7 @@
 
 **已定决策**（细节见[开发总览](../development.md)第 6.2 节 Extension UI）：
 
-- 去掉 `--no-extensions`，Extension 加载由 P3-01 的 Trust 拦截控制；Skills、Prompt Templates 与 MCP 仍关闭（属 P3-06）。
+- 去掉 `--no-extensions`，Extension 加载由 P3-01 的 Trust 拦截控制；Skills、Prompt Templates 与 MCP 仍关闭（P3-06 起改为交给 Pi 的加载规则，见下）。
 - Dialog 类请求用模态对话框按队首依次展示，可取消；fire-and-forget 状态（notify/status/widget/编辑器填充）由主进程按代际持有并广播快照。
 - `set_editor_text` 只在输入框为空时填充，不覆盖用户已输入内容；`setTitle` 无桌面等价物，不展示。
 - 未知 method 与形状不符的请求只计数不报错；dialog 响应写回失败按管道关闭收敛，不重发。
@@ -79,7 +79,7 @@
 
 **依赖**：第二阶段 Prompt 与模型控制。资源 loader 与图片所需配套文件沿用 Runtime 打包机制。
 
-### P3-05 Diff 展示
+### P3-05 Diff 展示（已完成实现，决策记录）
 
 **目标**：让 Edit / Write 的变更更易理解。
 
@@ -87,11 +87,20 @@
 
 **依赖**：第二阶段 Tool Card；不替代通用工具结果，不扩展为 Git GUI。
 
-### P3-06 Pi 资源接入
+### P3-06 Pi 资源接入（已完成实现，决策记录）
 
 **目标**：让 Desktop 发现、使用并展示 Pi 的 Skills、Extensions、Packages 与 MCP 能力。
 
 **范围**：先核实官方发现、管理和重载能力，再决定 GUI 暴露范围；复用 Pi settings 与资源加载，不建立独立插件市场或平行 MCP 配置。准确展示资源归属、加载失败和外部依赖，涉及安装或可执行配置变更保留用户确认。
+
+**已定决策**（事实与通道细节见[开发总览](../development.md)第 5.1、6.2、6.3 节）：
+
+- 启用范围：去掉 `--no-skills`、`--no-prompt-templates`、`--no-mcp`，三类资源的加载交给 Pi 自己的规则与 Project Trust；`--no-extensions` 只用于安全模式启动。
+- 发现与展示只读：只消费官方 `get_commands` 的投影（skill/prompt/extension 三类命令与其归属），不解析 Pi 的 settings / mcp / 包配置，不提供安装、卸载或写配置入口。
+- MCP 状态经固定 `/mcp` 命令与 Extension UI 的 notify 捕获读取，期限与失败语义见开发总览第 6.2 节；不提供 `/mcp` 的登录与 enable/disable/exposure 写路径。
+- 重载只走重启链：RPC 没有重载命令，`/reload` 是 TUI 内建命令；重载重启 Runtime 并保留当前会话，通道与守门见开发总览第 6.2 节。
+- 加载失败的可见边界：扩展加载失败在非交互模式下致命（退出码 1），stderr 诊断尾部与 `extension_error` 进入资源面板；技能与提示词的加载警告 RPC 不提供，面板只展示已加载清单。
+- 安全模式启动只接受零参数，固定传 `--no-extensions`（同时禁用内建扩展，含 `builtin:mcp`），仅本次生效，用于坏扩展导致 Runtime 无法启动时的应用内逃生。
 
 **依赖**：P3-01、P3-02，以及稳定的 Project / Session 与工具界面。不把资源管理作为通用任意 shell 执行入口。
 
@@ -113,7 +122,7 @@ Trust 与 Extension UI 先建立安全交互边界，再启用相应资源；后
 ## 待决策事项
 
 - ~~目标 Pi 版本下 Extension UI 支持范围、取消与窗口关闭时的收敛行为~~ 已在 P3-02 确定：只映射官方 RPC 子协议的九个 method，取消即发送 `cancelled` 响应，状态随 Runtime 代际清空（见[开发总览](../development.md)第 6.2 节 Extension UI）。
-- Session Fork 与恢复操作的具体 GUI 入口~~ 已在 P3-03 确定：入口在 Runtime 详情弹层，fork 后复用重启式切换链，Extension 取消以 `FORK_CANCELLED` 如实提示（见[开发总览](../development.md)第 6.2 节 Session Fork）。
-- 文件引用的数据语义、图片能力与敏感数据提示。
-- Diff 来源与基线维护策略。
-- Packages / MCP 的外部程序依赖、重载与生命周期边界；不能假定 standalone 自动携带所有第三方运行环境。
+- ~~Session Fork 与恢复操作的具体 GUI 入口~~ 已在 P3-03 确定：入口在 Runtime 详情弹层，fork 后复用重启式切换链，Extension 取消以 `FORK_CANCELLED` 如实提示（见[开发总览](../development.md)第 6.2 节 Session Fork）。
+- ~~文件引用的数据语义、图片能力与敏感数据提示。~~ 已在 P3-04 确定：只做图片附件（官方 `images` 字段，MIME 白名单、单图 4 MiB、单条 4 张）；文件引用不做（RPC 拒绝 `@file`，路径文本无特殊语义）。
+- ~~Diff 来源与基线维护策略。~~ 已在 P3-05 确定：只解析 Pi 结束结果的 `details.diff`，edit 参数 `edits[]` 仅作降级来源并标注，无可信来源时不伪造。
+- ~~Packages / MCP 的外部程序依赖、重载与生命周期边界；不能假定 standalone 自动携带所有第三方运行环境。~~ 已在 P3-06 确定：不提供安装与写配置入口，外部依赖（如 `npx`、`uvx`）的失败经 `/mcp` 状态文本如实展示，重载只走 Runtime 重启，MCP 默认 exposure 会连带启用 `codemode` 并在界面披露（见[开发总览](../development.md)第 6.2 节）。

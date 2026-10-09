@@ -1,4 +1,4 @@
-/** 为沙箱页面提供应用信息、Project 选择与列表、Session 列表与打开、分叉消息读取与分叉发起、Project Trust 查询与决定、界面偏好、Runtime 启停与 Agent 能力控制、手动压缩、Prompt 提交、中止、消息/工具投影与事件订阅、Extension UI 状态读取、对话响应与快照订阅，不暴露 Electron、任意 channel 或系统能力。 */
+/** 为沙箱页面提供应用信息、Project 选择与列表、Session 列表与打开与重新加载、分叉消息读取与分叉发起、Project Trust 查询与决定、界面偏好、Runtime 启停与安全启动、Agent 能力控制、手动压缩、Pi 资源与诊断读取、MCP 状态请求、Prompt 提交、中止、消息/工具投影与事件订阅、Extension UI 状态读取、对话响应与快照订阅，不暴露 Electron、任意 channel 或系统能力。 */
 import { contextBridge, ipcRenderer } from 'electron'
 import type { IpcRendererEvent } from 'electron'
 import { APP_INFO_CHANNEL, isAppInfoResult } from '../shared/desktop-api'
@@ -27,6 +27,7 @@ import {
   FORK_START_CHANNEL,
   SESSION_LIST_CHANNEL,
   SESSION_OPEN_CHANNEL,
+  SESSION_RELOAD_CHANNEL,
   isForkMessageListResult,
   isForkStartResult,
   isSessionListResult
@@ -69,32 +70,42 @@ import {
   RUNTIME_ABORT_CHANNEL,
   RUNTIME_CAPABILITIES_CHANNEL,
   RUNTIME_COMPACT_CHANNEL,
+  RUNTIME_DIAGNOSTICS_CHANNEL,
+  RUNTIME_MCP_STATUS_CHANNEL,
   RUNTIME_PROMPT_CHANNEL,
   RUNTIME_PROJECTION_ACK_CHANNEL,
   RUNTIME_PROJECTION_CHANNEL,
   RUNTIME_PROJECTION_EVENT,
+  RUNTIME_RESOURCES_CHANNEL,
   RUNTIME_SET_MODEL_CHANNEL,
   RUNTIME_SET_THINKING_LEVEL_CHANNEL,
   RUNTIME_START_CHANNEL,
+  RUNTIME_START_SAFE_CHANNEL,
   RUNTIME_STATUS_CHANNEL,
   RUNTIME_STOP_CHANNEL,
   RUNTIME_STATUS_EVENT,
   isCapabilitiesResult,
   isCompactResultResult,
+  isMcpStatusResult,
   isProjectionBatch,
   isProjectionResult,
   isPromptResult,
+  isResourcesResult,
+  isRuntimeDiagnosticsResult,
   isRuntimeResult,
   isRuntimeStatus
 } from '../shared/runtime-api'
 import type {
   CapabilitiesResult,
   CompactResultResult,
+  McpStatusResult,
   ProjectionBatch,
   ProjectionResult,
   PromptImageInput,
   PromptResult,
+  ResourcesResult,
   RuntimeApi,
+  RuntimeDiagnosticsResult,
   RuntimeResult,
   RuntimeStartRequest,
   RuntimeStatus,
@@ -112,6 +123,9 @@ const INVALID_SESSION_LIST_RESPONSE = '桌面接口返回了无法识别的会�
 const INVALID_PREFERENCES_RESPONSE = '桌面接口返回了无法识别的界面偏好。'
 const INVALID_TRUST_RESPONSE = '桌面接口返回了无法识别的信任状态。'
 const INVALID_EXTENSION_UI_RESPONSE = '桌面接口返回了无法识别的 Extension UI 状态。'
+const INVALID_RESOURCES_RESPONSE = '桌面接口返回了无法识别的资源清单。'
+const INVALID_DIAGNOSTICS_RESPONSE = '桌面接口返回了无法识别的诊断结果。'
+const INVALID_MCP_STATUS_RESPONSE = '桌面接口返回了无法识别的 MCP 状态结果。'
 
 function invalidExtensionUiResponse(): ExtensionUiResult {
   return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_EXTENSION_UI_RESPONSE } }
@@ -153,6 +167,18 @@ function invalidTrustResponse(): TrustStatusResult {
   return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_TRUST_RESPONSE } }
 }
 
+function invalidResourcesResponse(): ResourcesResult {
+  return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_RESOURCES_RESPONSE } }
+}
+
+function invalidDiagnosticsResponse(): RuntimeDiagnosticsResult {
+  return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_DIAGNOSTICS_RESPONSE } }
+}
+
+function invalidMcpStatusResponse(): McpStatusResult {
+  return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_MCP_STATUS_RESPONSE } }
+}
+
 const desktop: DesktopApi & RuntimeApi & ProjectApi & SessionApi & PreferencesApi & TrustApi & ExtensionUiApi = {
   async getAppInfo() {
     const response: unknown = await ipcRenderer.invoke(APP_INFO_CHANNEL)
@@ -189,6 +215,11 @@ const desktop: DesktopApi & RuntimeApi & ProjectApi & SessionApi & PreferencesAp
   async openSession(sessionId: string | null, allowInterrupt: boolean) {
     const request: SessionOpenRequest = { sessionId, allowInterrupt }
     const response: unknown = await ipcRenderer.invoke(SESSION_OPEN_CHANNEL, request)
+    return isSessionListResult(response) ? response : invalidSessionResponse()
+  },
+
+  async reloadSession(allowInterrupt: boolean) {
+    const response: unknown = await ipcRenderer.invoke(SESSION_RELOAD_CHANNEL, { allowInterrupt })
     return isSessionListResult(response) ? response : invalidSessionResponse()
   },
 
@@ -301,6 +332,26 @@ const desktop: DesktopApi & RuntimeApi & ProjectApi & SessionApi & PreferencesAp
       ok: false,
       error: { code: 'INVALID_RESPONSE', message: '桌面接口返回了无法识别的压缩结果。' }
     }
+  },
+
+  async getRuntimeResources(): Promise<ResourcesResult> {
+    const response: unknown = await ipcRenderer.invoke(RUNTIME_RESOURCES_CHANNEL)
+    return isResourcesResult(response) ? response : invalidResourcesResponse()
+  },
+
+  async getRuntimeDiagnostics(): Promise<RuntimeDiagnosticsResult> {
+    const response: unknown = await ipcRenderer.invoke(RUNTIME_DIAGNOSTICS_CHANNEL)
+    return isRuntimeDiagnosticsResult(response) ? response : invalidDiagnosticsResponse()
+  },
+
+  async readRuntimeMcpStatus(): Promise<McpStatusResult> {
+    const response: unknown = await ipcRenderer.invoke(RUNTIME_MCP_STATUS_CHANNEL)
+    return isMcpStatusResult(response) ? response : invalidMcpStatusResponse()
+  },
+
+  async startRuntimeSafely(): Promise<RuntimeResult> {
+    const response: unknown = await ipcRenderer.invoke(RUNTIME_START_SAFE_CHANNEL)
+    return isRuntimeResult(response) ? response : invalidRuntimeResponse()
   },
 
   ackRuntimeProjection(runtimeId: number, seq: number) {

@@ -1,8 +1,10 @@
-/** 只定义 Pi Session 列表、打开与分叉 IPC 的固定通道、结果类型与跨进程响应校验。 */
+/** 只定义 Pi Session 列表、打开、重新加载与分叉 IPC 的固定通道、结果类型与跨进程响应校验。 */
 import type { RuntimeErrorCode } from './runtime-api'
 
 export const SESSION_LIST_CHANNEL = 'desktop:session-list'
 export const SESSION_OPEN_CHANNEL = 'desktop:session-open'
+/** 重新加载 Pi 资源：重启 Runtime 并尽量恢复当前会话；`allowInterrupt` 与会话打开同义。 */
+export const SESSION_RELOAD_CHANNEL = 'desktop:session-reload'
 export const FORK_MESSAGES_CHANNEL = 'desktop:fork-messages'
 export const FORK_START_CHANNEL = 'desktop:fork-start'
 
@@ -87,6 +89,11 @@ export interface SessionApi {
   readonly listSessions: () => Promise<SessionListResult>
   /** 打开会话；`sessionId` 为 null 表示新建，非空时必须属于当前项目。 */
   readonly openSession: (sessionId: string | null, allowInterrupt: boolean) => Promise<SessionOpenResult>
+  /**
+   * 重新加载 Pi 资源：重启 Runtime 并尽量恢复当前会话；`allowInterrupt` 只有用户已确认时才为真。
+   * RPC 没有重载命令，资源只在进程启动时读取，因此唯一的重载方式是重启。
+   */
+  readonly reloadSession: (allowInterrupt: boolean) => Promise<SessionOpenResult>
   /** 读取当前 Runtime 会话里可分叉的用户消息；要求 Runtime 就绪。 */
   readonly getForkMessages: () => Promise<ForkMessageListResult>
   /** 从指定条目分叉；成功后重启式切换到新会话。 */
