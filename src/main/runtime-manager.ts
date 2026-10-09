@@ -269,7 +269,8 @@ export class RuntimeManager {
 
   /**
    * 向 Pi 发送 fork 命令并等待结果；只负责命令往返，成功后的会话切换由 SessionManager 编排。
-   * Extension 取消（`cancelled: true`）以专属错误码返回，与失败相区分。
+   * Extension 取消是 fork 的正常结果，以 `cancelled: true` 返回，由调用方映射为专属错误码；
+   * 判定只依据响应的 `cancelled` 字段，不从错误文本推断。
    */
   async requestFork(entryId: string): Promise<
     { ok: true; text: string | null } | { ok: false; code: RuntimeErrorCode; message: string; cancelled: boolean }
@@ -293,7 +294,13 @@ export class RuntimeManager {
         throw new RuntimeFailure('RUNTIME_PROTOCOL_ERROR', 'fork 响应缺少约定的 cancelled 字段。')
       }
       if (outcome.cancelled) {
-        throw new RuntimeFailure('RUNTIME_COMMAND_REJECTED', '分叉已被 Extension 取消。')
+        // 取消不是失败：直接返回结果，不用异常与错误文本表达预期分支。
+        return {
+          ok: false,
+          code: 'RUNTIME_COMMAND_REJECTED',
+          message: '分叉已被 Extension 取消。',
+          cancelled: true
+        }
       }
       return { ok: true, text: outcome.text }
     } catch (error) {
@@ -304,7 +311,7 @@ export class RuntimeManager {
         ok: false,
         code: failure.code,
         message: failure.message,
-        cancelled: failure.message.includes('Extension 取消')
+        cancelled: false
       }
     }
   }

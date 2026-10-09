@@ -14,13 +14,13 @@
 import { randomUUID } from 'node:crypto'
 import { StringDecoder } from 'node:string_decoder'
 import type { CreateModelRuntimeOptions, ModelRuntime } from '@earendil-works/pi-coding-agent'
-import type { AuthMethod, AuthPrompt, AuthProviderStatus, AuthStatus } from '../shared/auth-api'
+import type { AuthMethod, AuthPrompt, AuthProviderStatus } from '../shared/auth-api'
 import {
   AUTH_HELPER_MAX_RECORD_CHARS,
   isAuthHelperRequest,
   normalizeAuthSource
 } from './protocol'
-import type { AuthHelperFrame, AuthHelperRequest, AuthNotifyEvent } from './protocol'
+import type { AuthHelperFrame, AuthHelperRequest, AuthNotifyEvent, AuthStatusPayload } from './protocol'
 
 /** 本地凭据与模型可用性检查的等待上限；超时按读取失败上报，不返回未完成的快照。 */
 const STATUS_TIMEOUT_MS = 20_000
@@ -145,7 +145,7 @@ async function ensureStatus(runtime: ModelRuntime): Promise<void> {
 }
 
 /** 把官方的 Provider 与凭据信息投影为页面需要的状态；不含任何凭据内容。 */
-async function readStatus(): Promise<AuthStatus> {
+async function readStatus(): Promise<AuthStatusPayload> {
   const active = await modelRuntime()
   await ensureStatus(active)
   const credentials = await active.listCredentials()
@@ -177,7 +177,7 @@ async function readStatus(): Promise<AuthStatus> {
       modelCount: active.getModels(provider.id).length
     }
   })
-  return { providers, configError: active.getError() ?? null, flow: null }
+  return { providers, configError: active.getError() ?? null }
 }
 
 /** 错误文本脱敏：把本次流程出现过的敏感输入替换掉，避免密钥随错误信息外泄。 */
