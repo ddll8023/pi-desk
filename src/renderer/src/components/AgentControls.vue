@@ -3,6 +3,8 @@
 import { storeToRefs } from 'pinia'
 import { computed } from 'vue'
 import type { ModelSummary } from '../../../shared/runtime-api'
+import AppButton from './ui/AppButton.vue'
+import AppSelect from './ui/AppSelect.vue'
 import { useRuntimeStore } from '../stores/runtime'
 
 const runtimeStore = useRuntimeStore()
@@ -24,7 +26,13 @@ const modelGroups = computed(() => {
     if (group === undefined) groups.set(model.provider, [model])
     else group.push(model)
   }
-  return [...groups].map(([provider, models]) => ({ provider, models }))
+  return [...groups].map(([provider, models]) => ({
+    label: provider,
+    options: models.map((model) => ({
+      value: modelKey(model.provider, model.id),
+      label: model.name ?? model.id
+    }))
+  }))
 })
 
 const currentModelKey = computed(() => {
@@ -32,7 +40,7 @@ const currentModelKey = computed(() => {
   if (current?.modelProvider == null || current.modelId == null) return ''
   return modelKey(current.modelProvider, current.modelId)
 })
-/** 当前模型不在能力列表里时保留一个只读项，避免静默改选到别的模型。 */
+/** 当前模型不在能力列表里时保留当前文案，避免静默改选到别的模型。 */
 const currentModelMissing = computed(() => (
   currentModelKey.value === ''
   || !(capabilities.value?.models ?? []).some(
@@ -42,6 +50,9 @@ const currentModelMissing = computed(() => (
 
 /** 只有单一 `off` 说明当前模型不支持推理，此时禁用控件并说明原因。 */
 const thinkingLevels = computed(() => capabilities.value?.thinkingLevels ?? [])
+const thinkingGroups = computed(() => [{
+  options: thinkingLevels.value.map((level) => ({ value: level, label: level }))
+}])
 const thinkingUnsupported = computed(() => (
   thinkingLevels.value.length === 1 && thinkingLevels.value[0] === 'off'
 ))
@@ -111,8 +122,7 @@ function formatTokens(value: number): string {
   return `${(value / 1_000_000).toFixed(2)}M`
 }
 
-function onSelectModel(event: Event): void {
-  const value = (event.target as HTMLSelectElement).value
+function onSelectModel(value: string): void {
   const separator = value.indexOf('\u0000')
   if (separator < 0) return
   const provider = value.slice(0, separator)
@@ -121,8 +131,7 @@ function onSelectModel(event: Event): void {
   void runtimeStore.setModel(provider, modelId)
 }
 
-function onSelectThinking(event: Event): void {
-  const level = (event.target as HTMLSelectElement).value
+function onSelectThinking(level: string): void {
   if (level === '') return
   void runtimeStore.setThinkingLevel(level)
 }
@@ -132,39 +141,34 @@ function onSelectThinking(event: Event): void {
   <div class="space-y-3 text-xs">
     <div>
       <label class="field-label" for="agent-model">模型</label>
-      <select
+      <AppSelect
         id="agent-model"
-        class="text-control mt-1"
+        label="模型"
+        class="mt-1"
+        :groups="modelGroups"
+        :model-value="currentModelKey"
+        :empty-label="currentModelMissing ? (info?.model ?? '未提供') : '选择模型'"
         :disabled="!ready || busy || (capabilities?.models.length ?? 0) === 0"
-        :value="currentModelKey"
-        @change="onSelectModel"
-      >
-        <option v-if="currentModelMissing" value="" disabled>{{ info?.model ?? '未提供' }}</option>
-        <optgroup v-for="group in modelGroups" :key="group.provider" :label="group.provider">
-          <option
-            v-for="model in group.models"
-            :key="modelKey(model.provider, model.id)"
-            :value="modelKey(model.provider, model.id)"
-          >
-            {{ model.name ?? model.id }}
-          </option>
-        </optgroup>
-      </select>
+        searchable
+        search-placeholder="搜索模型或 Provider"
+        empty-results-label="没有匹配的模型"
+        @update:model-value="onSelectModel"
+      />
       <p v-if="modelNote" class="mt-1 text-desk-muted">{{ modelNote }}</p>
     </div>
 
     <div>
       <label class="field-label" for="agent-thinking">Thinking</label>
-      <select
+      <AppSelect
         id="agent-thinking"
-        class="text-control mt-1"
+        label="Thinking"
+        class="mt-1"
+        :groups="thinkingGroups"
+        :model-value="info?.thinkingLevel ?? ''"
+        :empty-label="info?.thinkingLevel ?? '未设置'"
         :disabled="!ready || busy || thinkingUnsupported || thinkingLevels.length === 0"
-        :value="info?.thinkingLevel ?? ''"
-        @change="onSelectThinking"
-      >
-        <option v-if="(info?.thinkingLevel ?? '') === ''" value="" disabled>未设置</option>
-        <option v-for="level in thinkingLevels" :key="level" :value="level">{{ level }}</option>
-      </select>
+        @update:model-value="onSelectThinking"
+      />
       <p v-if="thinkingUnsupported" class="mt-1 text-desk-muted">当前模型不支持 Thinking。</p>
       <p v-else-if="thinkingNote" class="mt-1 text-desk-muted">{{ thinkingNote }}</p>
     </div>
@@ -180,14 +184,12 @@ function onSelectThinking(event: Event): void {
     </p>
 
     <div class="space-y-2">
-      <button
-        type="button"
-        class="control-button"
+      <AppButton
         :disabled="!compactAvailable"
         @click="compact"
       >
         {{ compactAction.phase === 'compacting' ? '正在压缩…' : '压缩上下文' }}
-      </button>
+      </AppButton>
       <p v-if="compactResult" class="status-notice">
         压缩完成：{{ compactResult.tokensBefore === null ? '未知' : formatTokens(compactResult.tokensBefore) }}
         → {{ compactResult.estimatedTokensAfter === null ? '未知' : formatTokens(compactResult.estimatedTokensAfter) }} tokens。

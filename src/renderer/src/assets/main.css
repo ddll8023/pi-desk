@@ -153,7 +153,39 @@
     color: var(--color-desk-muted);
   }
 
-  /* 按钮四档：次要、主操作、危险、紧凑；悬停只提升底色，强调色留给主按钮。 */
+  .prompt-composer-shell {
+    border: 1px solid var(--color-desk-line-strong);
+    border-radius: var(--radius-desk-md);
+    background: var(--color-desk-surface);
+    transition: border-color var(--default-transition-duration) ease, box-shadow var(--default-transition-duration) ease;
+  }
+
+  .prompt-composer-shell:focus-within {
+    border-color: var(--color-desk-accent);
+    box-shadow: 0 0 0 2px var(--color-desk-accent-soft);
+  }
+
+  .prompt-composer-input {
+    border: 0;
+    border-radius: var(--radius-desk-md);
+    background: transparent;
+  }
+
+  .prompt-composer-input:focus-visible {
+    outline: none;
+  }
+
+  .prompt-composer-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    border-top: 1px solid var(--color-desk-line);
+    padding: 0.5rem 0.75rem;
+  }
+
+  /* 通用按钮样式：次要、主操作、危险、紧凑、轻量与低强调危险；悬停只提升底色，强调色留给主按钮。 */
   .control-button {
     @apply inline-flex items-center justify-center gap-1.5 rounded-desk-sm border border-desk-line-strong bg-desk-surface px-3 py-2 text-sm font-medium whitespace-nowrap text-desk-ink transition-colors;
   }
@@ -203,7 +235,7 @@
     @apply cursor-not-allowed border-desk-line bg-desk-canvas text-desk-muted;
   }
 
-  /* 顶栏与工具条的紧凑按钮；与 icon-button 同尺寸，避免同一行高度不齐。 */
+  /* 顶栏与工具条的紧凑按钮。 */
   .control-button-sm {
     @apply inline-flex h-8 items-center justify-center gap-1.5 rounded-desk-sm border border-desk-line-strong bg-desk-surface px-2.5 text-xs font-medium whitespace-nowrap text-desk-ink transition-colors;
   }

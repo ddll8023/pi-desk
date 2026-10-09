@@ -4,6 +4,7 @@ import { storeToRefs } from 'pinia'
 import { computed, watch } from 'vue'
 import type { SessionSummary } from '../../../shared/session-api'
 import { useSessionStore } from '../stores/session'
+import AppButton from './ui/AppButton.vue'
 
 const emit = defineEmits<{ close: [] }>()
 
@@ -89,7 +90,7 @@ watch(
             选择一条历史会话继续；切换会重启 Runtime 并停止运行中的操作。
           </p>
         </div>
-        <button type="button" class="dialog-close-button" aria-label="关闭" @click="close"></button>
+        <AppButton variant="unstyled" class="dialog-close-button" aria-label="关闭" @click="close" />
       </div>
 
       <div class="scroll-area dialog-body">
@@ -98,7 +99,7 @@ watch(
         </p>
         <div v-else-if="view.phase === 'error'" class="flex flex-wrap items-center gap-2">
           <p role="alert" class="text-xs text-desk-danger">{{ view.error.message }}</p>
-          <button type="button" class="icon-button" @click="sessionStore.refresh()">重试</button>
+          <AppButton variant="unstyled" class="icon-button" @click="sessionStore.refresh()">重试</AppButton>
         </div>
         <p v-else-if="sessions.length === 0" class="empty-state py-10">
           <span class="empty-state-title">当前项目还没有 Pi 会话</span>
@@ -112,8 +113,8 @@ watch(
             <h3 class="panel-section-title">{{ group.label }}</h3>
             <ul class="space-y-1.5">
               <li v-for="session in group.items" :key="session.sessionId">
-                <button
-                  type="button"
+                <AppButton
+                  variant="unstyled"
                   class="list-card"
                   :disabled="busy"
                   @click="openSavedSession(session.sessionId)"
@@ -126,7 +127,7 @@ watch(
                     <span class="font-mono">{{ session.sessionId.slice(0, 8) }}</span>
                     <span>{{ formatSize(session.sizeBytes) }}</span>
                   </span>
-                </button>
+                </AppButton>
               </li>
             </ul>
           </section>

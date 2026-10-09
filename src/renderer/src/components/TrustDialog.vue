@@ -4,6 +4,7 @@ import { storeToRefs } from 'pinia'
 import { onMounted, onUnmounted, useId } from 'vue'
 import { useTrustStore } from '../stores/trust'
 import type { TrustResourceKind } from '../../../shared/trust-api'
+import AppButton from './ui/AppButton.vue'
 
 const trustStore = useTrustStore()
 const { view, actionError, deciding } = storeToRefs(trustStore)
@@ -114,22 +115,19 @@ onUnmounted(() => {
       </div>
 
       <div class="dialog-footer">
-        <button
-          type="button"
-          class="control-button"
+        <AppButton
           :disabled="deciding"
           @click="confirmUntrusted"
         >
           不信任
-        </button>
-        <button
-          type="button"
-          class="control-button-primary"
+        </AppButton>
+        <AppButton
+          variant="primary"
           :disabled="deciding"
           @click="confirmTrusted"
         >
           信任并加载
-        </button>
+        </AppButton>
       </div>
         </div>
       </Transition>

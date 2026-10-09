@@ -2,6 +2,7 @@
 <script setup lang="ts">
 import { useSessionStore } from '../stores/session'
 import { useRuntimeStore } from '../stores/runtime'
+import AppButton from './ui/AppButton.vue'
 
 const sessionStore = useSessionStore()
 const runtimeStore = useRuntimeStore()
@@ -65,14 +66,14 @@ function truncate(text: string, max = 160): string {
 
         <ul v-else class="space-y-1.5">
           <li v-for="message in sessionStore.forkMessages" :key="message.entryId">
-            <button
-              type="button"
+            <AppButton
+              variant="unstyled"
               class="list-card"
               :disabled="sessionStore.forkBusy || runtimeStore.view.phase !== 'ready'"
               @click="onPick(message.entryId)"
             >
               <span class="block break-words text-xs leading-5">{{ truncate(message.text) }}</span>
-            </button>
+            </AppButton>
           </li>
         </ul>
 
@@ -82,9 +83,9 @@ function truncate(text: string, max = 160): string {
       </div>
 
       <div class="dialog-footer">
-        <button type="button" class="control-button" :disabled="sessionStore.forkBusy" @click="close">
+        <AppButton :disabled="sessionStore.forkBusy" @click="close">
           关闭
-        </button>
+        </AppButton>
       </div>
         </div>
       </Transition>

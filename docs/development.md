@@ -476,11 +476,16 @@ Windows 使用系统 `taskkill` 对当前受管 Pi 进程树定向终止，不�
 
 主界面替换第一阶段的最小 Runtime 页面，提供：
 
-- 顶栏：Sidebar 折叠开关、当前会话选择入口（点击会话 chip）、Runtime 状态，以及详情弹层里的 Agent 控制（模型与 Thinking 选择、上下文占用、压缩中提示）、重置本项目信任决定与应用信息、关闭 Runtime；另提供「Pi 资源」面板（已加载的命令清单与归属、MCP 状态与 MCP 登录退出、启动诊断、重启式重载与安全模式启动，见第 6.2 节 Pi 资源接入）与「Provider 认证」面板（Provider 与认证状态、API Key 录入、官方 OAuth 登录与取消、退出登录、凭据变化后的重载入口，见第 6.2 节认证与凭据）。
+- 顶栏：Sidebar 折叠开关、当前会话选择入口（点击会话 chip）、Runtime 状态，以及详情弹层里的 Agent 控制（模型分组搜索与 Thinking 选择、上下文占用、压缩中提示、手动压缩及结果展示）、从历史消息分叉、重置本项目信任决定与应用信息、关闭 Runtime；另提供「Pi 资源」面板（已加载的命令清单与归属、MCP 状态与 MCP 登录退出、启动诊断、重启式重载与安全模式启动，见第 6.2 节 Pi 资源接入）与「Provider 认证」面板（Provider 与认证状态、API Key 录入、官方 OAuth 登录与取消、退出登录、凭据变化后的重载入口，见第 6.2 节认证与凭据）。
 - 项目侧栏：最近项目列表、添加项目入口、当前项目高亮；点击项目切换。
 
 - 消息区：按消息分组并按内容块顺序渲染，用户与 Assistant 区分，用户消息的图片附件渲染为缩略图，Thinking 可折叠，工具调用内联为通用工具卡片（名称、状态、Desktop 计算的耗时与参数摘要，展开后显示参数、结果或错误输出、非文本内容描述与截断提示；运行中的卡片自动展开一次，之后由用户开合），并表达同步、截断、失败与运行中状态。
-- Prompt 区：输入与发送、图片附件选择、预览与移除、Agent 运行期间原位的停止入口，以及请求接受、拒绝与中止的提示；另承载 Extension 的对话、通知与 widget 展示及编辑器填充（取值与边界见第 6.2 节 Extension UI）。Runtime 处于可提交状态时，输入 `/resume` 打开当前项目的会话选择器，输入 `/new` 新建会话；这两个精确命令由 Desktop 拦截，不作为 Prompt 发送给 Pi。其他已加载命令仍提供斜杠补全（Tab 或点击接受，Enter 仍为发送）。
+- Prompt 区：文本输入、状态提示与图片 / 发送 / 停止工具条组成同一张输入卡片，共用外边框，内部控件获得焦点时由整张卡片显示强调边框与柔和焦点环，工具条与文本区之间保留分隔线；图片附件预览与移除位于卡片上方。提供 Agent 运行期间原位的停止入口，以及请求接受、拒绝与中止的提示；另承载 Extension 的对话、通知与 widget 展示及编辑器填充（取值与边界见第 6.2 节 Extension UI）。Runtime 处于可提交状态时，输入 `/resume` 打开当前项目的会话选择器，输入 `/new` 新建会话；这两个精确命令由 Desktop 拦截，不作为 Prompt 发送给 Pi。其他已加载命令仍提供斜杠补全（Tab 或点击接受，Enter 仍为发送）。
+
+公共控件位于 `src/renderer/src/components/ui/`，调用方保留业务状态与请求职责：
+
+- `AppButton.vue`：单一原生 `button` 根节点，`variant` 支持 `default`（默认）、`primary`、`danger`、`compact`、`ghost`、`quiet-danger` 与 `unstyled`；前六种复用通用按钮样式，`unstyled` 不添加变体样式，供列表项、会话 chip 与关闭按钮保留调用方样式。默认 `type="button"`，可由调用方传入 `type="submit"`；原生属性、事件与 class 透传到按钮，默认插槽提供内容。
+- `AppSelect.vue`：必传 `id`、`label`、`groups` 与 `modelValue`；每组为 `{ label?, options: [{ value, label }] }`，选项的 `value` 在整个组件内须唯一。选项与选值由调用方控制，选择不同值时发出 `update:modelValue`，不自行提交业务请求；当前值不在选项中时显示 `emptyLabel`。`disabled` 与 `searchable` 默认均为 false；启用搜索时不区分大小写，匹配组名、选项标签与选项值，支持 `searchPlaceholder`、`emptyLabel` 与 `emptyResultsLabel` 自定义文案。模型按 Provider 分组并启用搜索，Thinking 使用同一组件但不启用搜索。选项面板通过 `Teleport` 渲染到 `body`，按视口定位、限制高度并在内部滚动；未声明的属性与事件透传到触发按钮。
 
 组件通过统一前端服务入口调用受限 preload API，Pinia 管理共享的展示状态。消息重建与 Runtime 所有权归主进程，前端不直接访问 ipcRenderer，不提供任意 RPC JSON 的通用发送入口。打开、新建与恢复会话都由主进程重启式切换，页面的当前会话以 Runtime 快照为准。Prompt 发送只展示请求接受或拒绝；运行中状态由 `agent_start`/`agent_settled` 收敛，消息与工具展示来自主进程投影批次，页面在失去同步时标示同步中或截断，不自行拼装历史。打开或新建会话即启动 Runtime，页面不单独提供启动入口。Stop 只在 Runtime 就绪且事件流显示运行中时可用，界面把“中止请求中且仍在运行”表达为停止中，是否真的停止以 `agent_settled` 收敛，不以请求响应为依据。输入提交处理输入法组合态、Enter 发送与 Shift+Enter 换行、发送后焦点回归、成功后清空与发送中不重复提交；消息区在用户已上滚时不强制拉到底部。模型文本、工具参数与工具输出一律按纯文本插值展示，不使用 `v-html`，不当作 HTML 或外部资源渲染。主题切换在顶栏提供跟随系统、浅色与深色的循环入口，取值与切换机制见第 6.2 节。主界面视觉令牌集中在 `src/renderer/src/assets/main.css`，深浅两主题经同名令牌同步维护，窗口背景色与画布令牌取自同一批色值；窗口创建时隐藏系统菜单栏（Windows/Linux 下按 Alt 临时唤起），不替换菜单对象，其快捷键 role 保持有效。
 

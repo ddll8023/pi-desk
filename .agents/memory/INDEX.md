@@ -8,3 +8,4 @@ Pi Desktop：Electron + Vue 3 + TypeScript 桌面客户端，第一阶段只打�
 - 约定：`topics/conventions/doc-maintenance.md`——在新增或修改 `docs/` 文档、判断某条事实该写在哪里时读取。
 - 坑：`topics/gotchas/npm-lifecycle-scripts.md`——在准备二进制或资源、考虑用 npm 生命周期脚本自动执行时读取。
 - 坑：`topics/gotchas/gui-verification.md`——在做真机 GUI 验证、需要驱动或截取应用窗口、或清理 dev 进程残留时读取。
+- 坑：`topics/gotchas/sidecar-console-windows.md`——在排查对话启动后出现额外控制台窗口时读取。

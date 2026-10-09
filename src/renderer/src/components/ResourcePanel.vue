@@ -5,6 +5,7 @@ import { storeToRefs } from 'pinia'
 import type { PiResourceEntry } from '../../../shared/runtime-api'
 import { useResourceStore } from '../stores/resource'
 import { useSessionStore } from '../stores/session'
+import AppButton from './ui/AppButton.vue'
 
 const emit = defineEmits<{ close: [] }>()
 
@@ -104,7 +105,7 @@ function reload(): void {
             Pi 只在 Runtime 启动时读取资源与 MCP 配置；改动后需重启 Runtime 生效。
           </p>
         </div>
-        <button type="button" class="dialog-close-button" aria-label="关闭" @click="close"></button>
+        <AppButton variant="unstyled" class="dialog-close-button" aria-label="关闭" @click="close" />
       </div>
 
       <div class="scroll-area dialog-body">
@@ -114,22 +115,18 @@ function reload(): void {
         </p>
 
         <div v-else class="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            class="control-button"
+          <AppButton
             :disabled="resourcesView.phase === 'loading' || diagnosticsLoading"
             @click="resourceStore.refresh()"
           >
             {{ resourcesView.phase === 'loading' || diagnosticsLoading ? '正在读取…' : '重新读取清单与诊断' }}
-          </button>
-          <button
-            type="button"
-            class="control-button"
+          </AppButton>
+          <AppButton
             :disabled="sessionStore.opening"
             @click="reload"
           >
             {{ sessionStore.opening ? '正在重新加载…' : '重新加载资源（重启 Runtime）' }}
-          </button>
+          </AppButton>
         </div>
 
         <p v-if="runtimeReady && resourcesView.phase === 'error'" role="alert" class="status-notice status-notice-error">
@@ -173,14 +170,12 @@ function reload(): void {
             状态文本来自 Pi 的 <span class="font-mono">/mcp</span> 命令；读取需等待已启用服务器连接完成，
             可能较慢，超时只表示结果未知。
           </p>
-          <button
-            type="button"
-            class="control-button"
+          <AppButton
             :disabled="!runtimeReady || mcpView.phase === 'requesting'"
             @click="resourceStore.requestMcpStatus()"
           >
             {{ mcpView.phase === 'requesting' ? '正在读取…' : '读取 MCP 状态' }}
-          </button>
+          </AppButton>
           <p v-if="mcpView.phase === 'error'" role="alert" class="status-notice status-notice-error">
             {{ mcpView.error.message }}
           </p>
@@ -210,22 +205,18 @@ function reload(): void {
             class="text-control"
           >
           <div class="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              class="control-button"
+            <AppButton
               :disabled="!runtimeReady || !mcpServerNameValid || mcpCommandView.phase === 'running'"
               @click="resourceStore.runMcpServerCommand('login')"
             >
               {{ mcpCommandView.phase === 'running' && mcpCommandView.action === 'login' ? '登录进行中…' : '登录此服务器' }}
-            </button>
-            <button
-              type="button"
-              class="control-button"
+            </AppButton>
+            <AppButton
               :disabled="!runtimeReady || !mcpServerNameValid || mcpCommandView.phase === 'running'"
               @click="resourceStore.runMcpServerCommand('logout')"
             >
               {{ mcpCommandView.phase === 'running' && mcpCommandView.action === 'logout' ? '正在退出…' : '删除已保存凭据' }}
-            </button>
+            </AppButton>
           </div>
 
           <p
@@ -289,14 +280,12 @@ function reload(): void {
             同时会禁用内建扩展（包括 MCP，因此没有 MCP 工具与 /mcp 命令）。
             目标取最近一次启动的项目与会话，仅本次生效，不修改任何配置。
           </p>
-          <button
-            type="button"
-            class="control-button"
+          <AppButton
             :disabled="safeStart.phase === 'starting'"
             @click="resourceStore.startSafely()"
           >
             {{ safeStart.phase === 'starting' ? '正在启动…' : '以禁用扩展启动（仅本次）' }}
-          </button>
+          </AppButton>
           <p v-if="safeStart.phase === 'error'" role="alert" class="status-notice status-notice-error">
             {{ safeStart.error.message }}
           </p>

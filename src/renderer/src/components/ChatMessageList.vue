@@ -7,6 +7,7 @@ import { useProjectStore } from '../stores/project'
 import { useRuntimeStore } from '../stores/runtime'
 import { useSessionStore } from '../stores/session'
 import ChatMessageItem from './ChatMessageItem.vue'
+import AppButton from './ui/AppButton.vue'
 
 /** 距底部多少像素内仍视为"停在底部"，避免流式更新时与用户上滚互相争夺。 */
 const STICK_THRESHOLD_PX = 24
@@ -127,15 +128,15 @@ onMounted(() => {
         <div v-if="chatMessages.length === 0" class="empty-state">
           <p class="empty-state-title">{{ emptyState.title }}</p>
           <p class="empty-state-text">{{ emptyState.description }}</p>
-          <button
+          <AppButton
             v-if="emptyState.action === 'new-session'"
-            type="button"
-            class="control-button-primary mt-2"
+            variant="primary"
+            class="mt-2"
             :disabled="sessionStore.opening"
             @click="startNewSession"
           >
             新建会话
-          </button>
+          </AppButton>
         </div>
 
         <p v-if="streaming" role="status" class="status-notice status-notice-info flex items-center gap-2">
@@ -146,9 +147,9 @@ onMounted(() => {
     </div>
 
     <div v-if="!stickToBottom" class="pointer-events-none absolute inset-x-0 bottom-3 flex justify-center">
-      <button type="button" class="control-button-sm pointer-events-auto" @click="jumpToBottom">
+      <AppButton variant="compact" class="pointer-events-auto" @click="jumpToBottom">
         回到底部
-      </button>
+      </AppButton>
     </div>
   </section>
 </template>

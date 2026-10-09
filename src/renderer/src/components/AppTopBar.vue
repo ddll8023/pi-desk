@@ -10,6 +10,7 @@ import { useSessionStore } from '../stores/session'
 import { useTrustStore } from '../stores/trust'
 import type { TrustStatus } from '../../../shared/trust-api'
 import AgentControls from './AgentControls.vue'
+import AppButton from './ui/AppButton.vue'
 import AuthPanel from './AuthPanel.vue'
 import ConfirmDialog from './ConfirmDialog.vue'
 import ForkDialog from './ForkDialog.vue'
@@ -130,6 +131,7 @@ function onPointerDown(event: PointerEvent): void {
   const element = root.value
   const target = event.target
   if (element !== null && target instanceof Node && element.contains(target)) return
+  if (target instanceof Element && target.closest('[data-app-select-popup]') !== null) return
   closePanel()
 }
 
@@ -213,28 +215,26 @@ onUnmounted(() => {
     ref="root"
     class="relative z-30 flex h-12 shrink-0 items-center gap-2 border-b border-desk-line bg-desk-surface px-3"
   >
-    <button
-      type="button"
-      class="control-button-sm"
+    <AppButton
+      variant="compact"
       :aria-expanded="!sidebarCollapsed"
       :disabled="sidebarToggleDisabled"
       @click="emit('toggleSidebar')"
     >
       {{ sidebarCollapsed ? '显示侧栏' : '隐藏侧栏' }}
-    </button>
+    </AppButton>
 
-    <button
-      type="button"
-      class="control-button-sm"
+    <AppButton
+      variant="compact"
       :disabled="!preferencesStore.ready"
       @click="preferencesStore.cycleTheme()"
     >
       {{ themeLabel }}
-    </button>
+    </AppButton>
 
     <div class="flex min-w-0 flex-1 items-center justify-center">
-      <button
-        type="button"
+      <AppButton
+        variant="unstyled"
         class="chip max-w-72 cursor-pointer truncate"
         :title="`${sessionLabel}；点击选择其他会话`"
         aria-haspopup="dialog"
@@ -245,20 +245,19 @@ onUnmounted(() => {
           <span class="font-mono text-desk-ink">{{ sessionIdShort }}</span>
         </template>
         <template v-else>{{ sessionLabel }}</template>
-      </button>
+      </AppButton>
     </div>
 
     <div class="relative">
-      <button
-        type="button"
-        class="control-button-sm"
+      <AppButton
+        variant="compact"
         aria-haspopup="dialog"
         :aria-expanded="openPanel === 'runtime'"
         @click="togglePanel('runtime')"
       >
         <span class="status-dot" :class="runtimeDotClass"></span>
         <span :class="runtimeTextClass">{{ runtimeLabel }}</span>
-      </button>
+      </AppButton>
       <Transition name="pop-motion">
         <div
           v-if="openPanel === 'runtime'"
@@ -321,53 +320,49 @@ onUnmounted(() => {
           </p>
 
           <div class="panel-section">
-            <button
-              type="button"
-              class="control-button w-full"
+            <AppButton
+              class="w-full"
               :disabled="runtimeView.phase !== 'ready'"
               @click="openForkDialog"
             >
               从历史消息分叉
-            </button>
+            </AppButton>
 
-            <button
-              type="button"
-              class="control-button w-full"
+            <AppButton
+              class="w-full"
               :disabled="runtimeView.phase !== 'ready'"
               @click="shutdownRuntime"
             >
               关闭 Runtime
-            </button>
+            </AppButton>
 
-            <button
+            <AppButton
               v-if="hasTrustDecision"
-              type="button"
-              class="control-button-quiet-danger w-full"
+              variant="quiet-danger"
+              class="w-full"
               @click="resetTrustDecision"
             >
               重置本项目信任决定
-            </button>
+            </AppButton>
           </div>
         </div>
         </div>
       </Transition>
     </div>
 
-    <button
-      type="button"
-      class="control-button-sm"
+    <AppButton
+      variant="compact"
       @click="openResourcePanel"
     >
       Pi 资源
-    </button>
+    </AppButton>
 
-    <button
-      type="button"
-      class="control-button-sm"
+    <AppButton
+      variant="compact"
       @click="openAuthPanel"
     >
       Provider 认证
-    </button>
+    </AppButton>
 
     <!-- 模态弹层经 Teleport 渲染到 body：遮罩不嵌套在顶栏 z-30 的堆叠上下文里，避免整窗重绘被放大。
          弹层组件常驻挂载，进出由内部 Transition 驱动。 -->

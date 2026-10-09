@@ -4,6 +4,7 @@ import { storeToRefs } from 'pinia'
 import { computed, onMounted, onUnmounted, ref, useId, watch } from 'vue'
 import type { ExtensionDialogRequest, ExtensionDialogResponseInput } from '../../../shared/extension-ui-api'
 import { useExtensionUiStore } from '../stores/extension-ui'
+import AppButton from './ui/AppButton.vue'
 
 const extensionStore = useExtensionUiStore()
 const { respondState } = storeToRefs(extensionStore)
@@ -106,14 +107,14 @@ onUnmounted(() => {
 
         <ul v-if="dialog.method === 'select'" class="space-y-1.5">
           <li v-for="option in dialog.options" :key="option">
-            <button
-              type="button"
+            <AppButton
+              variant="unstyled"
               class="list-card text-xs"
               :disabled="busy"
               @click="choose(option)"
             >
               {{ option }}
-            </button>
+            </AppButton>
           </li>
         </ul>
 
@@ -145,36 +146,32 @@ onUnmounted(() => {
       </div>
 
       <div class="dialog-footer">
-        <button type="button" class="control-button" :disabled="busy" @click="cancel">
+        <AppButton :disabled="busy" @click="cancel">
           取消
-        </button>
-        <button
+        </AppButton>
+        <AppButton
           v-if="dialog.method === 'confirm'"
-          type="button"
-          class="control-button"
           :disabled="busy"
           @click="confirmNo"
         >
           否
-        </button>
-        <button
+        </AppButton>
+        <AppButton
           v-if="dialog.method === 'confirm'"
-          type="button"
-          class="control-button-primary"
+          variant="primary"
           :disabled="busy"
           @click="confirmYes"
         >
           是
-        </button>
-        <button
+        </AppButton>
+        <AppButton
           v-if="dialog.method === 'input' || dialog.method === 'editor'"
-          type="button"
-          class="control-button-primary"
+          variant="primary"
           :disabled="busy || draft.trim() === ''"
           @click="submitValue"
         >
           确定
-        </button>
+        </AppButton>
       </div>
         </div>
       </Transition>

@@ -7,6 +7,7 @@ import { useExtensionUiStore } from '../stores/extension-ui'
 import { useResourceStore } from '../stores/resource'
 import { useRuntimeStore } from '../stores/runtime'
 import { useSessionStore } from '../stores/session'
+import AppButton from './ui/AppButton.vue'
 
 const runtimeStore = useRuntimeStore()
 const extensionStore = useExtensionUiStore()
@@ -286,104 +287,107 @@ onMounted(() => {
           <img :src="entry.objectUrl" :alt="entry.file.name" class="h-16 w-16 object-cover" />
           <div class="flex items-center justify-between gap-1 px-1 py-0.5">
             <p class="max-w-16 truncate text-2xs text-desk-muted">{{ formatBytes(entry.file.size) }}</p>
-            <button
-              type="button"
-              class="control-button-ghost shrink-0 px-1"
+            <AppButton
+              variant="ghost"
+              class="shrink-0 px-1"
               :aria-label="`移除图片 ${entry.file.name}`"
               @click="removeImage(entry.objectUrl)"
             >
               ×
-            </button>
+            </AppButton>
           </div>
         </div>
       </div>
 
       <label for="prompt-input" class="sr-only">输入要发送给 Pi 的内容</label>
-      <div class="relative">
-        <!-- 命令补全：候选来自 Pi 已加载的资源清单；Enter 仍然是发送，Tab 或点击接受候选。 -->
-        <ul
-          v-if="visibleSuggestions.length > 0"
-          id="prompt-command-list"
-          role="listbox"
-          aria-label="可用命令"
-          class="dialog-popover scroll-area bottom-full mb-1.5 max-h-64 w-full overflow-y-auto p-1"
-        >
-          <li v-for="(entry, index) in visibleSuggestions" :key="`${entry.kind}-${entry.name}`" role="presentation">
-            <button
-              type="button"
-              role="option"
-              :aria-selected="index === suggestionIndex"
-              class="list-item"
-              :class="index === suggestionIndex ? 'list-item-active' : ''"
-              @mousedown.prevent="acceptSuggestion(entry)"
+      <div class="prompt-composer-shell">
+        <div class="relative">
+          <!-- 命令补全：候选来自 Pi 已加载的资源清单；Enter 仍然是发送，Tab 或点击接受候选。 -->
+          <ul
+            v-if="visibleSuggestions.length > 0"
+            id="prompt-command-list"
+            role="listbox"
+            aria-label="可用命令"
+            class="dialog-popover scroll-area bottom-full mb-1.5 max-h-64 w-full overflow-y-auto p-1"
+          >
+            <li v-for="(entry, index) in visibleSuggestions" :key="`${entry.kind}-${entry.name}`" role="presentation">
+              <AppButton
+                variant="unstyled"
+                role="option"
+                :aria-selected="index === suggestionIndex"
+                class="list-item"
+                :class="index === suggestionIndex ? 'list-item-active' : ''"
+                @mousedown.prevent="acceptSuggestion(entry)"
+              >
+                <span class="font-mono text-xs">/{{ entry.name }}</span>
+                <span v-if="entry.description !== null" class="mt-0.5 block text-2xs text-desk-muted">
+                  {{ entry.description }}
+                </span>
+              </AppButton>
+            </li>
+          </ul>
+
+          <textarea
+            id="prompt-input"
+            ref="textarea"
+            v-model="draft"
+            rows="3"
+            class="text-control prompt-composer-input resize-none"
+            placeholder="输入要发送给 Pi 的内容"
+            autocomplete="off"
+            spellcheck="false"
+            aria-describedby="prompt-status"
+            aria-autocomplete="list"
+            aria-controls="prompt-command-list"
+            :aria-expanded="visibleSuggestions.length > 0"
+            @keydown="onKeydown"
+            @compositionstart="composing = true"
+            @compositionend="composing = false"
+          ></textarea>
+        </div>
+
+        <div class="prompt-composer-toolbar">
+          <p
+            id="prompt-status"
+            :role="status.kind === 'error' ? 'alert' : 'status'"
+            class="text-xs"
+            :class="status.kind === 'error' ? 'text-desk-danger' : 'text-desk-muted'"
+          >
+            {{ status.text }}
+          </p>
+          <div class="flex items-center gap-2">
+            <!-- 图片选择：运行中禁用与发送按钮一致；当前模型明确不支持时同样禁用并提示。 -->
+            <input
+              ref="imageInput"
+              type="file"
+              accept="image/png,image/jpeg,image/gif,image/webp"
+              multiple
+              class="sr-only"
+              aria-label="选择图片附件"
+              @change="onPickImages"
+            />
+            <AppButton
+              :disabled="!runtimeReady || sending || imageSupported === false || pendingImages.length >= 4"
+              @click="imageInput?.click()"
             >
-              <span class="font-mono text-xs">/{{ entry.name }}</span>
-              <span v-if="entry.description !== null" class="mt-0.5 block text-2xs text-desk-muted">
-                {{ entry.description }}
-              </span>
-            </button>
-          </li>
-        </ul>
-
-        <textarea
-          id="prompt-input"
-          ref="textarea"
-          v-model="draft"
-          rows="3"
-          class="text-control resize-none"
-          placeholder="输入要发送给 Pi 的内容"
-          autocomplete="off"
-          spellcheck="false"
-          aria-describedby="prompt-status"
-          aria-autocomplete="list"
-          aria-controls="prompt-command-list"
-          :aria-expanded="visibleSuggestions.length > 0"
-          @keydown="onKeydown"
-          @compositionstart="composing = true"
-          @compositionend="composing = false"
-        ></textarea>
-      </div>
-
-      <div class="mt-2 flex flex-wrap items-center justify-between gap-3">
-        <p
-          id="prompt-status"
-          :role="status.kind === 'error' ? 'alert' : 'status'"
-          class="text-xs"
-          :class="status.kind === 'error' ? 'text-desk-danger' : 'text-desk-muted'"
-        >
-          {{ status.text }}
-        </p>
-        <div class="flex items-center gap-2">
-          <!-- 图片选择：运行中禁用与发送按钮一致；当前模型明确不支持时同样禁用并提示。 -->
-          <input
-            ref="imageInput"
-            type="file"
-            accept="image/png,image/jpeg,image/gif,image/webp"
-            multiple
-            class="sr-only"
-            aria-label="选择图片附件"
-            @change="onPickImages"
-          />
-          <button
-            type="button"
-            class="control-button"
-            :disabled="!runtimeReady || sending || imageSupported === false || pendingImages.length >= 4"
-            @click="imageInput?.click()"
-          >
-            图片
-          </button>
-          <button
-            v-if="stopVisible"
-            type="button"
-            class="control-button"
-            :disabled="abortView.phase === 'requesting'"
-            @click="stop"
-          >
-            {{ abortView.phase === 'requesting' ? '正在停止…' : '停止' }}
-          </button>
-          <button v-else type="button" class="control-button-primary" :disabled="!canSend" @click="submit">
-            发送
-          </button>
+              图片
+            </AppButton>
+            <AppButton
+              v-if="stopVisible"
+              :disabled="abortView.phase === 'requesting'"
+              @click="stop"
+            >
+              {{ abortView.phase === 'requesting' ? '正在停止…' : '停止' }}
+            </AppButton>
+            <AppButton
+              v-else
+              variant="primary"
+              :disabled="!canSend"
+              @click="submit"
+            >
+              发送
+            </AppButton>
+          </div>
         </div>
       </div>
     </div>

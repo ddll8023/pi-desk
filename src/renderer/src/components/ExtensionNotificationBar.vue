@@ -1,6 +1,7 @@
 <!-- Extension notify 通知条：展示最近的通知（info/warning/error），可关闭；纯文本插值。 -->
 <script setup lang="ts">
 import { useExtensionUiStore } from '../stores/extension-ui'
+import AppButton from './ui/AppButton.vue'
 
 const extensionStore = useExtensionUiStore()
 
@@ -26,14 +27,14 @@ function toneClass(notifyType: string): string {
         :class="toneClass(entry.notifyType)"
       >
         <span class="whitespace-pre-wrap break-words">{{ entry.message }}</span>
-        <button
-          type="button"
-          class="control-button-ghost -mr-1 shrink-0 px-1"
+        <AppButton
+          variant="ghost"
+          class="-mr-1 shrink-0 px-1"
           aria-label="关闭通知"
           @click="extensionStore.dismissNotification(entry.id)"
         >
           ×
-        </button>
+        </AppButton>
       </div>
     </TransitionGroup>
   </div>
