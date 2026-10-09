@@ -118,39 +118,42 @@ onUnmounted(() => {
         <ExtensionNotificationBar />
         <ChatMessageList />
         <!-- Widget 放置语义与官方子协议一致：aboveEditor 在输入区上方，belowEditor 在下方。 -->
-        <div v-for="widget in widgetsAbove" :key="widget.placement" class="px-4 sm:px-8">
-          <pre class="mx-auto max-w-3xl whitespace-pre-wrap rounded border border-desk-line bg-desk-surface p-2 text-xs text-desk-muted">{{ widget.lines.join('\n') }}</pre>
+        <div v-for="widget in widgetsAbove" :key="widget.placement" class="px-4 py-2 sm:px-6">
+          <pre class="widget-block">{{ widget.lines.join('\n') }}</pre>
         </div>
         <PromptComposer />
-        <div v-for="widget in widgetsBelow" :key="widget.placement" class="px-4 sm:px-8">
-          <pre class="mx-auto max-w-3xl whitespace-pre-wrap rounded border border-desk-line bg-desk-surface p-2 text-xs text-desk-muted">{{ widget.lines.join('\n') }}</pre>
+        <div v-for="widget in widgetsBelow" :key="widget.placement" class="px-4 py-2 sm:px-6">
+          <pre class="widget-block">{{ widget.lines.join('\n') }}</pre>
         </div>
       </main>
     </div>
 
-    <ConfirmDialog
-      v-if="pendingPath !== null"
-      title="停止运行中的操作并切换项目？"
-      description="切换项目会先停止当前 Agent 操作，已提交的内容不会重放。"
-      :detail="projectConfirmDetail"
-      confirm-label="停止并切换"
-      @confirm="confirmProjectSwitch"
-      @cancel="cancelProjectSwitch"
-    />
+    <!-- 模态弹层统一经 Teleport 渲染到 body，全部落在根堆叠上下文。 -->
+    <Teleport to="body">
+      <ConfirmDialog
+        v-if="pendingPath !== null"
+        title="停止运行中的操作并切换项目？"
+        description="切换项目会先停止当前 Agent 操作，已提交的内容不会重放。"
+        :detail="projectConfirmDetail"
+        confirm-label="停止并切换"
+        @confirm="confirmProjectSwitch"
+        @cancel="cancelProjectSwitch"
+      />
 
-    <ConfirmDialog
-      v-if="awaitingInterrupt"
-      :title="sessionConfirmTitle"
-      :description="sessionConfirmDescription"
-      :detail="sessionConfirmDetail"
-      :confirm-label="sessionConfirmLabel"
-      @confirm="confirmSessionSwitch"
-      @cancel="cancelSessionSwitch"
-    />
+      <ConfirmDialog
+        v-if="awaitingInterrupt"
+        :title="sessionConfirmTitle"
+        :description="sessionConfirmDescription"
+        :detail="sessionConfirmDetail"
+        :confirm-label="sessionConfirmLabel"
+        @confirm="confirmSessionSwitch"
+        @cancel="cancelSessionSwitch"
+      />
 
-    <TrustDialog @decided="onTrustResolved" @cancelled="onTrustCancelled" />
+      <TrustDialog @decided="onTrustResolved" @cancelled="onTrustCancelled" />
 
-    <!-- Extension 对话一次只展示队首；队列由 store 持有，回应后自动滑到下一条。 -->
-    <ExtensionDialog v-if="extensionStore.dialogs.length > 0" />
+      <!-- Extension 对话一次只展示队首；队列由 store 持有，回应后自动滑到下一条。 -->
+      <ExtensionDialog v-if="extensionStore.dialogs.length > 0" />
+    </Teleport>
   </div>
 </template>

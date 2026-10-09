@@ -83,61 +83,65 @@ onUnmounted(() => {
 <template>
   <div
     v-if="dialog !== null"
-    class="fixed inset-0 z-50 flex items-center justify-center bg-desk-ink/40 p-4"
+    class="dialog-overlay"
     @click.self="cancel"
   >
     <div
       role="dialog"
       aria-modal="true"
       :aria-labelledby="titleId"
-      class="panel w-full max-w-lg shadow-lg"
+      class="dialog-panel max-w-lg"
     >
-      <h2 :id="titleId" class="section-heading mb-3 break-words">{{ dialog.title }}</h2>
+      <div class="dialog-header">
+        <h2 :id="titleId" class="dialog-title break-words">{{ dialog.title }}</h2>
+      </div>
 
-      <p v-if="dialog.message !== null" class="mb-3 whitespace-pre-wrap text-sm">
-        {{ dialog.message }}
-      </p>
+      <div class="dialog-body">
+        <p v-if="dialog.message !== null" class="whitespace-pre-wrap text-sm leading-6">
+          {{ dialog.message }}
+        </p>
 
-      <ul v-if="dialog.method === 'select'" class="mb-4 space-y-1">
-        <li v-for="option in dialog.options" :key="option">
-          <button
-            type="button"
-            class="control-button w-full text-left"
-            :disabled="busy"
-            @click="choose(option)"
-          >
-            {{ option }}
-          </button>
-        </li>
-      </ul>
+        <ul v-if="dialog.method === 'select'" class="space-y-1">
+          <li v-for="option in dialog.options" :key="option">
+            <button
+              type="button"
+              class="list-item border-desk-line text-xs"
+              :disabled="busy"
+              @click="choose(option)"
+            >
+              {{ option }}
+            </button>
+          </li>
+        </ul>
 
-      <textarea
-        v-else-if="dialog.method === 'editor'"
-        v-model="draft"
-        rows="8"
-        class="text-control mb-4 resize-y"
-        autocomplete="off"
-        spellcheck="false"
-        :disabled="busy"
-      ></textarea>
+        <textarea
+          v-else-if="dialog.method === 'editor'"
+          v-model="draft"
+          rows="8"
+          class="text-control resize-y"
+          autocomplete="off"
+          spellcheck="false"
+          :disabled="busy"
+        ></textarea>
 
-      <input
-        v-else-if="dialog.method === 'input'"
-        v-model="draft"
-        type="text"
-        class="text-control mb-4"
-        :placeholder="dialog.placeholder ?? ''"
-        autocomplete="off"
-        spellcheck="false"
-        :disabled="busy"
-        @keydown.enter.prevent="submitValue"
-      />
+        <input
+          v-else-if="dialog.method === 'input'"
+          v-model="draft"
+          type="text"
+          class="text-control"
+          :placeholder="dialog.placeholder ?? ''"
+          autocomplete="off"
+          spellcheck="false"
+          :disabled="busy"
+          @keydown.enter.prevent="submitValue"
+        />
 
-      <p v-if="respondState.phase === 'error'" role="alert" class="mb-3 text-sm text-desk-danger">
-        {{ respondState.message }}
-      </p>
+        <p v-if="respondState.phase === 'error'" role="alert" class="status-notice status-notice-error">
+          {{ respondState.message }}
+        </p>
+      </div>
 
-      <div class="flex flex-wrap justify-end gap-2">
+      <div class="dialog-footer">
         <button type="button" class="control-button" :disabled="busy" @click="cancel">
           取消
         </button>
@@ -153,7 +157,7 @@ onUnmounted(() => {
         <button
           v-if="dialog.method === 'confirm'"
           type="button"
-          class="control-button"
+          class="control-button-primary"
           :disabled="busy"
           @click="confirmYes"
         >
@@ -162,7 +166,7 @@ onUnmounted(() => {
         <button
           v-if="dialog.method === 'input' || dialog.method === 'editor'"
           type="button"
-          class="control-button"
+          class="control-button-primary"
           :disabled="busy || draft.trim() === ''"
           @click="submitValue"
         >

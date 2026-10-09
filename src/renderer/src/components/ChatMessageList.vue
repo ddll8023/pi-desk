@@ -110,12 +110,12 @@ onMounted(() => {
   <section class="relative flex min-h-0 flex-1 flex-col bg-desk-canvas-sunken">
     <div
       ref="scroller"
-      class="scroll-area min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-8"
+      class="scroll-area min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-6"
       @scroll.passive="onScroll"
     >
       <div class="mx-auto flex max-w-3xl flex-col gap-5">
-        <p v-if="syncNotice" role="status" class="text-sm text-desk-muted">{{ syncNotice }}</p>
-        <p v-if="truncationNotice" role="status" class="text-sm text-desk-muted">{{ truncationNotice }}</p>
+        <p v-if="syncNotice" role="status" class="status-notice status-notice-info">{{ syncNotice }}</p>
+        <p v-if="truncationNotice" role="status" class="status-notice">{{ truncationNotice }}</p>
 
         <ChatMessageItem
           v-for="message in chatMessages"
@@ -124,13 +124,13 @@ onMounted(() => {
           :streaming="message.id === streamingMessageId"
         />
 
-        <div v-if="chatMessages.length === 0" class="empty-output">
-          <h2 class="mb-1 text-sm font-medium">{{ emptyState.title }}</h2>
-          <p class="text-sm text-desk-muted">{{ emptyState.description }}</p>
+        <div v-if="chatMessages.length === 0" class="empty-state">
+          <p class="empty-state-title">{{ emptyState.title }}</p>
+          <p class="empty-state-text">{{ emptyState.description }}</p>
           <button
             v-if="emptyState.action === 'new-session'"
             type="button"
-            class="control-button mt-3"
+            class="control-button-primary mt-2"
             :disabled="sessionStore.opening"
             @click="startNewSession"
           >
@@ -138,15 +138,15 @@ onMounted(() => {
           </button>
         </div>
 
-        <p v-if="streaming" role="status" class="flex items-center gap-2 text-sm text-desk-muted">
+        <p v-if="streaming" role="status" class="status-notice status-notice-info flex items-center gap-2">
           <span class="status-dot animate-pulse bg-desk-accent motion-reduce:animate-none"></span>
-          Agent 正在运行；需要中断时在下方停止。
+          <span>Agent 正在运行；需要中断时在下方停止。</span>
         </p>
       </div>
     </div>
 
     <div v-if="!stickToBottom" class="pointer-events-none absolute inset-x-0 bottom-3 flex justify-center">
-      <button type="button" class="control-button pointer-events-auto shadow-sm" @click="jumpToBottom">
+      <button type="button" class="control-button-sm pointer-events-auto" @click="jumpToBottom">
         回到底部
       </button>
     </div>

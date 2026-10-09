@@ -132,7 +132,7 @@ const MAX_MODEL_IDENTIFIER_CHARS = 256
 /** Thinking level 的长度上限；取值合法性由 Pi 判定，不在此白名单。 */
 const MAX_THINKING_LEVEL_CHARS = 32
 /** 窗口背景色的浅色与暗色值；与 main.css 的 canvas 令牌保持一致，避免首帧闪烁。 */
-const LIGHT_WINDOW_BACKGROUND = '#f3f6f8'
+const LIGHT_WINDOW_BACKGROUND = '#f4f6f8'
 const DARK_WINDOW_BACKGROUND = '#10161c'
 const rendererRoot = resolve(__dirname, '../renderer')
 const productionCsp = [
@@ -1384,6 +1384,8 @@ async function createWindow(pageUrl: string): Promise<void> {
     minWidth: MIN_WINDOW_WIDTH,
     minHeight: MIN_WINDOW_HEIGHT,
     show: false,
+    // 默认菜单栏隐藏（Windows/Linux 按 Alt 临时唤起）；不替换菜单对象，保留其快捷键 role。
+    autoHideMenuBar: true,
     backgroundColor: windowBackgroundColor(),
     webPreferences: {
       preload: resolve(__dirname, '../preload/index.cjs'),

@@ -260,25 +260,27 @@ onMounted(() => {
 </script>
 
 <template>
-  <section class="border-t border-desk-line bg-desk-surface px-4 py-3 sm:px-8">
+  <section class="border-t border-desk-line bg-desk-surface px-4 py-3 sm:px-6">
     <div class="mx-auto max-w-3xl">
       <!-- 附件预览条：缩略图经 blob: URL 展示，可逐个移除。 -->
       <div v-if="pendingImages.length > 0" class="mb-2 flex flex-wrap gap-2">
         <div
           v-for="entry in pendingImages"
           :key="entry.objectUrl"
-          class="relative overflow-hidden rounded border border-desk-line"
+          class="overflow-hidden rounded-desk-sm border border-desk-line bg-desk-surface-subtle"
         >
           <img :src="entry.objectUrl" :alt="entry.file.name" class="h-16 w-16 object-cover" />
-          <button
-            type="button"
-            class="absolute right-0 top-0 rounded-bl bg-desk-ink/60 px-1 text-xs text-white"
-            aria-label="`移除图片 ${entry.file.name}`"
-            @click="removeImage(entry.objectUrl)"
-          >
-            ×
-          </button>
-          <p class="max-w-16 truncate px-1 text-[10px] text-desk-muted">{{ formatBytes(entry.file.size) }}</p>
+          <div class="flex items-center justify-between gap-1 px-1 py-0.5">
+            <p class="max-w-16 truncate text-2xs text-desk-muted">{{ formatBytes(entry.file.size) }}</p>
+            <button
+              type="button"
+              class="control-button-ghost shrink-0 px-1"
+              :aria-label="`移除图片 ${entry.file.name}`"
+              @click="removeImage(entry.objectUrl)"
+            >
+              ×
+            </button>
+          </div>
         </div>
       </div>
 
@@ -290,19 +292,19 @@ onMounted(() => {
           id="prompt-command-list"
           role="listbox"
           aria-label="可用命令"
-          class="panel absolute bottom-full mb-1 max-h-64 w-full overflow-y-auto p-1 shadow-lg"
+          class="dialog-popover scroll-area bottom-full mb-1.5 max-h-64 w-full overflow-y-auto p-1"
         >
           <li v-for="(entry, index) in visibleSuggestions" :key="`${entry.kind}-${entry.name}`" role="presentation">
             <button
               type="button"
               role="option"
               :aria-selected="index === suggestionIndex"
-              class="w-full rounded px-2 py-1 text-left"
-              :class="index === suggestionIndex ? 'bg-desk-canvas text-desk-accent' : ''"
+              class="list-item"
+              :class="index === suggestionIndex ? 'list-item-active' : ''"
               @mousedown.prevent="acceptSuggestion(entry)"
             >
-              <span class="font-mono text-sm">/{{ entry.name }}</span>
-              <span v-if="entry.description !== null" class="mt-0.5 block text-xs text-desk-muted">
+              <span class="font-mono text-xs">/{{ entry.name }}</span>
+              <span v-if="entry.description !== null" class="mt-0.5 block text-2xs text-desk-muted">
                 {{ entry.description }}
               </span>
             </button>
@@ -365,7 +367,7 @@ onMounted(() => {
           >
             {{ abortView.phase === 'requesting' ? '正在停止…' : '停止' }}
           </button>
-          <button v-else type="button" class="control-button" :disabled="!canSend" @click="submit">
+          <button v-else type="button" class="control-button-primary" :disabled="!canSend" @click="submit">
             发送
           </button>
         </div>

@@ -67,42 +67,45 @@ onUnmounted(() => {
 <template>
   <div
     v-if="view.phase === 'prompting'"
-    class="fixed inset-0 z-50 flex items-center justify-center bg-desk-ink/40 p-4"
+    class="dialog-overlay"
     @click.self="cancelTrust"
   >
     <div
       role="dialog"
       aria-modal="true"
       :aria-labelledby="titleId"
-      class="panel w-full max-w-lg shadow-lg"
+      class="dialog-panel max-w-lg"
     >
-      <h2 :id="titleId" class="section-heading mb-2">信任此项目？</h2>
-      <p class="mb-3 text-sm">
-        此项目包含 Pi 的受保护资源。信任后，这些资源将在启动 Runtime 时随项目加载。
-      </p>
-
-      <ul class="mb-4 max-h-40 space-y-1 overflow-y-auto rounded border border-desk-line p-2">
-        <li
-          v-for="resource in view.status.resources"
-          :key="`${resource.kind}:${resource.path}`"
-          class="text-xs"
-        >
-          <span class="mr-2 rounded bg-desk-surface px-1.5 py-0.5 text-desk-muted">
-            {{ kindLabel(resource.kind) }}
-          </span>
-          <span class="break-all font-mono">{{ resource.path }}</span>
-        </li>
-      </ul>
-
-      <div class="mb-4 space-y-1 text-xs text-desk-muted">
-        <p>Extension 与 Skill 在 Pi 进程内以当前用户权限运行；信任项目不是沙箱，也不限制工具的文件与命令访问。</p>
-        <p>AGENTS.md、CLAUDE.md 等上下文文件不受信任决定影响，始终会加载。</p>
-        <p>此决定只保存在 Desktop 本地，且会覆盖 Pi 已保存的项目信任记录；可随时在 Runtime 详情中重置。</p>
+      <div class="dialog-header">
+        <h2 :id="titleId" class="dialog-title">信任此项目？</h2>
       </div>
 
-      <p v-if="actionError" role="alert" class="mb-3 text-sm text-desk-danger">{{ actionError }}</p>
+      <div class="dialog-body">
+        <p class="text-sm">
+          此项目包含 Pi 的受保护资源。信任后，这些资源将在启动 Runtime 时随项目加载。
+        </p>
 
-      <div class="flex flex-wrap justify-end gap-2">
+        <ul class="scroll-area max-h-40 space-y-1 overflow-y-auto rounded-desk-sm border border-desk-line bg-desk-canvas p-2">
+          <li
+            v-for="resource in view.status.resources"
+            :key="`${resource.kind}:${resource.path}`"
+            class="flex flex-wrap items-baseline gap-2 text-xs"
+          >
+            <span class="chip">{{ kindLabel(resource.kind) }}</span>
+            <span class="break-all font-mono text-desk-muted">{{ resource.path }}</span>
+          </li>
+        </ul>
+
+        <div class="status-notice space-y-1">
+          <p>Extension 与 Skill 在 Pi 进程内以当前用户权限运行；信任项目不是沙箱，也不限制工具的文件与命令访问。</p>
+          <p>AGENTS.md、CLAUDE.md 等上下文文件不受信任决定影响，始终会加载。</p>
+          <p>此决定只保存在 Desktop 本地，且会覆盖 Pi 已保存的项目信任记录；可随时在 Runtime 详情中重置。</p>
+        </div>
+
+        <p v-if="actionError" role="alert" class="status-notice status-notice-error">{{ actionError }}</p>
+      </div>
+
+      <div class="dialog-footer">
         <button
           type="button"
           class="control-button"
@@ -113,7 +116,7 @@ onUnmounted(() => {
         </button>
         <button
           type="button"
-          class="control-button"
+          class="control-button-primary"
           :disabled="deciding"
           @click="confirmTrusted"
         >

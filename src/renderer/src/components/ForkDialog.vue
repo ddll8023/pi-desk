@@ -26,48 +26,54 @@ function truncate(text: string, max = 160): string {
 
 <template>
   <div
-    class="fixed inset-0 z-50 flex items-center justify-center bg-desk-ink/40 p-4"
+    class="dialog-overlay"
     @click.self="close"
   >
     <div
       role="dialog"
       aria-modal="true"
       aria-label="从历史消息分叉"
-      class="panel flex max-h-[70vh] w-full max-w-lg flex-col shadow-lg"
+      class="dialog-panel max-w-lg"
     >
-      <h2 class="section-heading mb-2">从历史消息分叉</h2>
-      <p class="mb-3 text-xs text-desk-muted">
-        选择一条历史输入，Pi 会从那条消息创建新会话；当前会话保持不变。运行中的操作会被停止。
-      </p>
+      <div class="dialog-header">
+        <div class="min-w-0">
+          <h2 class="dialog-title">从历史消息分叉</h2>
+          <p class="mt-1 text-2xs text-desk-muted">
+            选择一条历史输入，Pi 会从那条消息创建新会话；当前会话保持不变。运行中的操作会被停止。
+          </p>
+        </div>
+      </div>
 
-      <p v-if="sessionStore.forkLoading" role="status" class="py-4 text-center text-sm text-desk-muted">
-        正在读取可分叉的消息…
-      </p>
-      <p v-else-if="sessionStore.forkError" role="alert" class="mb-3 text-sm text-desk-danger">
-        {{ sessionStore.forkError.message }}
-      </p>
-      <p v-else-if="sessionStore.forkMessages.length === 0" class="py-4 text-center text-sm text-desk-muted">
-        当前会话还没有可分叉的历史输入。
-      </p>
+      <div class="dialog-body">
+        <p v-if="sessionStore.forkLoading" role="status" class="py-6 text-center text-xs text-desk-muted">
+          正在读取可分叉的消息…
+        </p>
+        <p v-else-if="sessionStore.forkError" role="alert" class="status-notice status-notice-error">
+          {{ sessionStore.forkError.message }}
+        </p>
+        <p v-else-if="sessionStore.forkMessages.length === 0" class="py-6 text-center text-xs text-desk-muted">
+          当前会话还没有可分叉的历史输入。
+        </p>
 
-      <ul v-else class="mb-3 min-h-0 flex-1 space-y-1 overflow-y-auto">
-        <li v-for="message in sessionStore.forkMessages" :key="message.entryId">
-          <button
-            type="button"
-            class="control-button w-full text-left"
-            :disabled="sessionStore.forkBusy || runtimeStore.view.phase !== 'ready'"
-            @click="onPick(message.entryId)"
-          >
-            <span class="block break-words">{{ truncate(message.text) }}</span>
-          </button>
-        </li>
-      </ul>
+        <ul v-else class="space-y-1">
+          <li v-for="message in sessionStore.forkMessages" :key="message.entryId">
+            <button
+              type="button"
+              class="list-item border-desk-line"
+              :disabled="sessionStore.forkBusy || runtimeStore.view.phase !== 'ready'"
+              @click="onPick(message.entryId)"
+            >
+              <span class="block break-words text-xs leading-5">{{ truncate(message.text) }}</span>
+            </button>
+          </li>
+        </ul>
 
-      <p v-if="sessionStore.forkBusy" role="status" class="mb-2 text-xs text-desk-muted">
-        正在分叉并切换到新会话…
-      </p>
+        <p v-if="sessionStore.forkBusy" role="status" class="text-2xs text-desk-muted">
+          正在分叉并切换到新会话…
+        </p>
+      </div>
 
-      <div class="flex justify-end gap-2">
+      <div class="dialog-footer">
         <button type="button" class="control-button" :disabled="sessionStore.forkBusy" @click="close">
           关闭
         </button>

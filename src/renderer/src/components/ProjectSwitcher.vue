@@ -38,15 +38,15 @@ function selectSavedProject(path: string): void {
       <h2 class="section-heading mb-2">项目</h2>
       <template v-if="currentProject">
         <p class="text-sm font-medium">{{ currentProject.name }}</p>
-        <p class="break-words font-mono text-xs text-desk-muted">{{ currentProject.path }}</p>
+        <p class="break-all font-mono text-xs text-desk-muted">{{ currentProject.path }}</p>
       </template>
       <p v-else class="text-sm text-desk-muted">
         尚未选择项目；Runtime 以当前项目目录作为工作目录。
       </p>
     </div>
 
-    <p v-if="storageNotice" role="status" class="text-xs text-desk-muted">{{ storageNotice }}</p>
-    <p v-if="actionError" role="alert" class="text-xs text-desk-danger">{{ actionError.message }}</p>
+    <p v-if="storageNotice" role="status" class="status-notice">{{ storageNotice }}</p>
+    <p v-if="actionError" role="alert" class="status-notice status-notice-error">{{ actionError.message }}</p>
 
     <button
       type="button"
@@ -58,7 +58,7 @@ function selectSavedProject(path: string): void {
     </button>
 
     <div>
-      <label for="project-path" class="mb-1.5 block text-xs font-medium">手动输入绝对路径</label>
+      <label for="project-path" class="field-label mb-1.5">手动输入绝对路径</label>
       <input
         id="project-path"
         v-model="manualPath"
@@ -83,27 +83,25 @@ function selectSavedProject(path: string): void {
     </div>
 
     <div>
-      <h3 class="mb-2 text-xs font-medium text-desk-muted">最近项目</h3>
+      <h3 class="section-label mb-1.5">最近项目</h3>
       <p v-if="projectView.phase === 'loading'" class="text-sm text-desk-muted">正在读取项目列表。</p>
       <div v-else-if="projectView.phase === 'error'" class="flex flex-wrap items-center gap-2">
         <p role="alert" class="text-xs text-desk-danger">{{ projectView.error.message }}</p>
         <button type="button" class="icon-button" @click="projectStore.initialize()">重试</button>
       </div>
       <p v-else-if="projects.length === 0" class="text-sm text-desk-muted">尚无已保存的项目。</p>
-      <ul v-else class="space-y-1">
+      <ul v-else class="space-y-0.5">
         <li v-for="project in projects" :key="project.id">
           <button
             type="button"
-            class="w-full rounded-md border px-2 py-1.5 text-left"
-            :class="project.id === currentProjectId
-              ? 'border-desk-accent bg-desk-canvas'
-              : 'border-desk-line bg-desk-surface'"
+            class="list-item"
+            :class="project.id === currentProjectId ? 'list-item-active' : ''"
             :aria-current="project.id === currentProjectId ? 'true' : 'false'"
             :disabled="switching"
             @click="selectSavedProject(project.path)"
           >
-            <span class="block text-sm">{{ project.name }}</span>
-            <span class="block break-words font-mono text-xs text-desk-muted">{{ project.path }}</span>
+            <span class="block truncate text-xs font-medium">{{ project.name }}</span>
+            <span class="mt-0.5 block break-all font-mono text-2xs text-desk-muted">{{ project.path }}</span>
           </button>
         </li>
       </ul>

@@ -34,7 +34,7 @@ onUnmounted(() => {
 
 <template>
   <div
-    class="fixed inset-0 z-50 flex items-center justify-center bg-desk-ink/40 p-4"
+    class="dialog-overlay"
     @click.self="emit('cancel')"
   >
     <div
@@ -43,12 +43,16 @@ onUnmounted(() => {
       aria-modal="true"
       :aria-labelledby="titleId"
       tabindex="-1"
-      class="panel w-full max-w-md shadow-lg"
+      class="dialog-panel max-w-md"
     >
-      <h2 :id="titleId" class="section-heading mb-2">{{ title }}</h2>
-      <p class="mb-2 text-sm">{{ description }}</p>
-      <p class="mb-5 break-words font-mono text-xs text-desk-muted">{{ detail }}</p>
-      <div class="flex flex-wrap justify-end gap-2">
+      <div class="dialog-header">
+        <h2 :id="titleId" class="dialog-title">{{ title }}</h2>
+      </div>
+      <div class="dialog-body">
+        <p class="text-sm">{{ description }}</p>
+        <p class="break-words font-mono text-xs text-desk-muted">{{ detail }}</p>
+      </div>
+      <div class="dialog-footer">
         <button type="button" class="control-button" @click="emit('cancel')">取消</button>
         <button type="button" class="control-button-danger" @click="emit('confirm')">
           {{ confirmLabel }}

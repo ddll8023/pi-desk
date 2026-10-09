@@ -31,8 +31,8 @@ watch(
 
 <template>
   <article class="flex flex-col gap-2">
-    <header class="flex flex-wrap items-baseline gap-2 text-xs text-desk-muted">
-      <span class="font-medium">{{ roleLabel }}</span>
+    <header class="chat-meta">
+      <span class="chat-role">{{ roleLabel }}</span>
       <span v-if="message.time">{{ message.time }}</span>
     </header>
 
@@ -42,12 +42,12 @@ watch(
         v-if="block.kind === 'text' && block.image !== null"
         :src="block.image.dataUrl"
         :alt="`附件图片（${block.image.mimeType}）`"
-        class="max-h-48 self-end rounded-md border border-desk-line object-contain"
+        class="max-h-48 self-end rounded-desk-md border border-desk-line object-contain"
       />
       <p
         v-if="block.kind === 'text' && (block.text !== '' || block.image === null)"
         class="chat-bubble"
-        :class="isUser ? 'self-end bg-desk-accent text-white' : 'self-start border border-desk-line bg-desk-surface-raised'"
+        :class="isUser ? 'chat-bubble-user self-end' : 'chat-bubble-assistant self-start'"
       >
         {{ block.text }}
       </p>
@@ -56,17 +56,22 @@ watch(
       <details
         v-else-if="block.kind === 'thinking'"
         :open="expandedThinking.has(block.key)"
-        class="self-start rounded-md border border-desk-line bg-desk-canvas-sunken px-3 py-2"
+        class="tool-card self-start w-full"
       >
-        <summary class="text-xs text-desk-muted">Thinking</summary>
-        <p class="mt-2 whitespace-pre-wrap break-words text-sm">{{ block.text }}</p>
-        <p v-if="block.truncated" class="mt-1 text-xs text-desk-muted">此内容超出展示上限，已截断。</p>
+        <summary class="text-desk-muted">
+          <span class="disclosure"></span>
+          <span>Thinking</span>
+        </summary>
+        <div class="tool-card-body">
+          <p class="whitespace-pre-wrap break-words text-sm leading-6">{{ block.text }}</p>
+          <p v-if="block.truncated" class="tool-note">此内容超出展示上限，已截断。</p>
+        </div>
       </details>
 
       <ToolCard v-else-if="block.kind === 'toolcall'" :block="block" class="self-start w-full" />
     </template>
 
-    <p v-if="message.failure" role="alert" class="self-start text-sm text-desk-danger">
+    <p v-if="message.failure" role="alert" class="status-notice status-notice-error self-start">
       {{ message.failure }}
     </p>
   </article>

@@ -131,7 +131,7 @@ function onSelectThinking(event: Event): void {
 <template>
   <div class="space-y-3 text-xs">
     <div>
-      <label class="text-desk-muted" for="agent-model">模型</label>
+      <label class="field-label" for="agent-model">模型</label>
       <select
         id="agent-model"
         class="text-control mt-1"
@@ -154,7 +154,7 @@ function onSelectThinking(event: Event): void {
     </div>
 
     <div>
-      <label class="text-desk-muted" for="agent-thinking">Thinking</label>
+      <label class="field-label" for="agent-thinking">Thinking</label>
       <select
         id="agent-thinking"
         class="text-control mt-1"
@@ -170,12 +170,12 @@ function onSelectThinking(event: Event): void {
     </div>
 
     <div>
-      <p class="text-desk-muted">上下文占用</p>
+      <p class="field-label">上下文占用</p>
       <p v-if="usageText" class="mt-1 font-mono">{{ usageText }}</p>
       <p v-if="usageNote" class="mt-1 text-desk-muted">{{ usageNote }}</p>
     </div>
 
-    <p v-if="info?.isCompacting" role="status" class="text-desk-muted">
+    <p v-if="info?.isCompacting" role="status" class="status-notice status-notice-warn">
       Pi 正在压缩上下文；此时提交会被 Pi 拒绝，请等当前轮结束。
     </p>
 
@@ -188,14 +188,14 @@ function onSelectThinking(event: Event): void {
       >
         {{ compactAction.phase === 'compacting' ? '正在压缩…' : '压缩上下文' }}
       </button>
-      <p v-if="compactResult" class="text-desk-muted">
+      <p v-if="compactResult" class="status-notice">
         压缩完成：{{ compactResult.tokensBefore === null ? '未知' : formatTokens(compactResult.tokensBefore) }}
         → {{ compactResult.estimatedTokensAfter === null ? '未知' : formatTokens(compactResult.estimatedTokensAfter) }} tokens。
       </p>
-      <p v-if="compactError" role="alert" class="text-desk-danger">{{ compactError }}</p>
+      <p v-if="compactError" role="alert" class="status-notice status-notice-error">{{ compactError }}</p>
     </div>
 
-    <p v-if="busy" role="status" class="text-desk-muted">正在应用设置…</p>
-    <p v-if="actionError" role="alert" class="text-desk-danger">{{ actionError }}</p>
+    <p v-if="busy" role="status" class="status-notice">正在应用设置…</p>
+    <p v-if="actionError" role="alert" class="status-notice status-notice-error">{{ actionError }}</p>
   </div>
 </template>

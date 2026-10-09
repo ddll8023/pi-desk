@@ -2,24 +2,56 @@
 @import "tailwindcss";
 
 @theme {
-  --color-desk-canvas: #f3f6f8;
-  /* 消息区底色：比 canvas 略深，用于区分消息流与侧栏、输入区。 */
-  --color-desk-canvas-sunken: #e9eef2;
+  /* 页面底色与沉陷面：消息区用沉陷面与侧栏、输入区区分层次。 */
+  --color-desk-canvas: #f4f6f8;
+  --color-desk-canvas-sunken: #eceff3;
   --color-desk-surface: #ffffff;
   /* Assistant 消息与弹层的表面色；与页面底色保持层次差。 */
   --color-desk-surface-raised: #ffffff;
-  --color-desk-ink: #172b3a;
-  --color-desk-muted: #536675;
-  --color-desk-line: #d7e1e8;
+  /* 悬停、内嵌块与禁用态底色；与 canvas 分开，避免在白色面板上串色。 */
+  --color-desk-surface-subtle: #f2f6f8;
+  --color-desk-ink: #17252f;
+  --color-desk-muted: #5b6b78;
+  --color-desk-line: #dce3e9;
+  /* 控件描边；比分隔线略深，让可点控件与静态分区分开。 */
+  --color-desk-line-strong: #c5d0d9;
   --color-desk-accent: #236978;
+  --color-desk-accent-hover: #1b5563;
+  /* 选中行与浅强调底色；不用于正文文字。 */
+  --color-desk-accent-soft: #e2eef1;
+  /* 实心强调按钮上的文字色。 */
+  --color-desk-on-accent: #ffffff;
   /* 错误、失败与中止提示；只用于语义提示，不做强调色。 */
   --color-desk-danger: #a4373a;
+  --color-desk-danger-soft: #f8eaea;
   /* Extension 警告通知的语义色。 */
   --color-desk-warning: #8a6116;
+  --color-desk-warning-soft: #f8f0dd;
   /* Diff 新增行语义色；删除行复用 desk-danger。 */
   --color-desk-success: #2f6d3a;
-  --font-sans: "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
-  --font-mono: Consolas, "SFMono-Regular", monospace;
+  --color-desk-success-soft: #e7f1e9;
+  /* 模态遮罩。 */
+  --color-desk-overlay: rgba(16, 27, 36, 0.45);
+
+  --radius-desk-sm: 6px;
+  --radius-desk-md: 8px;
+  --radius-desk-lg: 12px;
+
+  --shadow-desk-raise: 0 1px 2px rgba(23, 37, 47, 0.06);
+  --shadow-desk-pop: 0 10px 28px rgba(23, 37, 47, 0.14), 0 2px 6px rgba(23, 37, 47, 0.08);
+  /* 模态面板用的小半径清晰阴影：大模糊阴影在重绘时反复光栅化，代价远高于它的观感收益。 */
+  --shadow-desk-dialog: 0 2px 10px rgba(23, 37, 47, 0.12);
+
+  --font-sans: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, "Microsoft YaHei UI",
+    "Microsoft YaHei", "PingFang SC", sans-serif;
+  --font-mono: "Cascadia Mono", Consolas, "SFMono-Regular", Menlo, monospace;
+
+  /* 比 text-xs 更小的元信息字号，用于 chip、时间与路径等次要标签。 */
+  --text-2xs: 11px;
+  --text-2xs--line-height: 1.45;
+
+  /* 交互反馈统一时长；transition-colors 等工具类据此生成。 */
+  --default-transition-duration: 120ms;
 }
 
 /* 暗色主题：由主进程 nativeTheme.themeSource 驱动 prefers-color-scheme，无需页面脚本参与。
@@ -30,13 +62,26 @@
     --color-desk-canvas-sunken: #0b1015;
     --color-desk-surface: #1a222b;
     --color-desk-surface-raised: #212b36;
+    --color-desk-surface-subtle: #232d38;
     --color-desk-ink: #dce6ee;
-    --color-desk-muted: #8fa1b0;
+    --color-desk-muted: #91a2b1;
     --color-desk-line: #2c3a47;
+    --color-desk-line-strong: #3d4d5c;
     --color-desk-accent: #4fa3b5;
+    --color-desk-accent-hover: #6ab8c9;
+    --color-desk-accent-soft: #1d3138;
+    --color-desk-on-accent: #07181d;
     --color-desk-danger: #d47c7f;
+    --color-desk-danger-soft: #372225;
     --color-desk-warning: #d3b06e;
+    --color-desk-warning-soft: #33291a;
     --color-desk-success: #7cb98a;
+    --color-desk-success-soft: #1b2c21;
+    --color-desk-overlay: rgba(0, 0, 0, 0.55);
+
+    --shadow-desk-raise: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --shadow-desk-pop: 0 12px 32px rgba(0, 0, 0, 0.55);
+    --shadow-desk-dialog: 0 2px 12px rgba(0, 0, 0, 0.5);
   }
 }
 
@@ -50,75 +95,317 @@
     line-height: 1.5;
   }
 
+  /* 焦点环贴住控件边框，避免大输入框上出现内外双框。 */
   button:not(:disabled),
   input,
-  textarea {
+  textarea,
+  select,
+  summary {
     &:focus-visible {
       outline: 2px solid var(--color-desk-accent);
-      outline-offset: 3px;
+      outline-offset: 0;
     }
+  }
+
+  /* 折叠控件统一用自绘三角，去掉浏览器默认标记。 */
+  summary {
+    cursor: pointer;
+    list-style: none;
+  }
+
+  summary::-webkit-details-marker {
+    display: none;
+  }
+
+  ::selection {
+    background: var(--color-desk-accent-soft);
   }
 }
 
 @layer components {
-  .panel {
-    @apply rounded-lg border border-desk-line bg-desk-surface p-5;
+  .section-heading {
+    @apply text-sm font-semibold;
   }
 
-  .section-heading {
-    @apply text-base font-semibold;
+  .section-label {
+    @apply text-xs font-medium text-desk-muted;
+  }
+
+  .field-label {
+    @apply block text-xs font-medium text-desk-muted;
   }
 
   .text-control {
-    @apply block w-full rounded-md border border-desk-line bg-desk-surface px-3 py-2 text-sm;
+    @apply block w-full rounded-desk-sm border border-desk-line-strong bg-desk-surface px-3 py-2 text-sm text-desk-ink transition-colors;
   }
 
   .text-control::placeholder {
     color: var(--color-desk-muted);
   }
 
+  /* 按钮四档：次要、主操作、危险、紧凑；悬停只提升底色，强调色留给主按钮。 */
   .control-button {
-    @apply rounded-md border border-desk-line bg-desk-surface px-3 py-2 text-sm font-medium text-desk-accent;
+    @apply inline-flex items-center justify-center gap-1.5 rounded-desk-sm border border-desk-line-strong bg-desk-surface px-3 py-2 text-sm font-medium text-desk-ink transition-colors;
   }
 
   .control-button:not(:disabled):hover {
-    @apply border-desk-accent bg-desk-canvas;
+    @apply bg-desk-surface-subtle;
+  }
+
+  .control-button:not(:disabled):active {
+    @apply bg-desk-canvas-sunken;
   }
 
   .control-button:disabled {
-    @apply cursor-not-allowed bg-desk-canvas text-desk-muted;
+    @apply cursor-not-allowed border-desk-line bg-desk-canvas text-desk-muted;
   }
 
-  .empty-output {
-    @apply min-h-24 rounded-md border border-desk-line bg-desk-canvas p-3;
+  /* 主按钮：一个界面只用一次，用于发送、确定、信任并加载这类主操作。 */
+  .control-button-primary {
+    @apply inline-flex items-center justify-center gap-1.5 rounded-desk-sm border border-transparent bg-desk-accent px-3 py-2 text-sm font-medium text-desk-on-accent transition-colors;
+  }
+
+  .control-button-primary:not(:disabled):hover {
+    @apply bg-desk-accent-hover;
+  }
+
+  .control-button-primary:not(:disabled):active {
+    @apply bg-desk-accent-hover opacity-90;
+  }
+
+  .control-button-primary:disabled {
+    @apply cursor-not-allowed border-desk-line bg-desk-canvas text-desk-muted;
+  }
+
+  .control-button-danger {
+    @apply inline-flex items-center justify-center gap-1.5 rounded-desk-sm border border-desk-danger bg-desk-surface px-3 py-2 text-sm font-medium text-desk-danger transition-colors;
+  }
+
+  .control-button-danger:not(:disabled):hover {
+    @apply bg-desk-danger-soft;
+  }
+
+  .control-button-danger:not(:disabled):active {
+    @apply bg-desk-danger-soft opacity-80;
+  }
+
+  .control-button-danger:disabled {
+    @apply cursor-not-allowed border-desk-line bg-desk-canvas text-desk-muted;
+  }
+
+  /* 顶栏与工具条的紧凑按钮；与 icon-button 同尺寸，避免同一行高度不齐。 */
+  .control-button-sm {
+    @apply inline-flex h-8 items-center justify-center gap-1.5 rounded-desk-sm border border-desk-line-strong bg-desk-surface px-2.5 text-xs font-medium text-desk-ink transition-colors;
+  }
+
+  .control-button-sm:not(:disabled):hover {
+    @apply bg-desk-surface-subtle;
+  }
+
+  .control-button-sm:not(:disabled):active {
+    @apply bg-desk-canvas-sunken;
+  }
+
+  .control-button-sm:disabled {
+    @apply cursor-not-allowed border-desk-line bg-desk-canvas text-desk-muted;
+  }
+
+  .icon-button {
+    @apply inline-flex h-7 items-center justify-center gap-1.5 rounded-desk-sm border border-desk-line-strong bg-desk-surface px-2.5 text-xs font-medium text-desk-ink transition-colors;
+  }
+
+  .icon-button:not(:disabled):hover {
+    @apply bg-desk-surface-subtle;
+  }
+
+  .icon-button:not(:disabled):active {
+    @apply bg-desk-canvas-sunken;
+  }
+
+  .icon-button:disabled {
+    @apply cursor-not-allowed border-desk-line bg-desk-canvas text-desk-muted;
+  }
+
+  /* 无边框的轻量按钮：通知关闭与内联动作。 */
+  .control-button-ghost {
+    @apply inline-flex items-center justify-center gap-1 rounded-desk-sm px-1.5 py-0.5 text-xs font-medium text-desk-muted transition-colors;
+  }
+
+  .control-button-ghost:not(:disabled):hover {
+    @apply bg-desk-surface-subtle text-desk-ink;
+  }
+
+  .control-button-ghost:disabled {
+    @apply cursor-not-allowed opacity-60;
+  }
+
+  /* 列表行：会话、项目、Provider、资源与候选共用；选中态由 list-item-active 叠加左侧色条。 */
+  .list-item {
+    @apply block w-full rounded-desk-sm border border-transparent px-2.5 py-2 text-left transition-colors;
+  }
+
+  .list-item:not(:disabled):hover {
+    @apply bg-desk-surface-subtle;
+  }
+
+  .list-item:not(:disabled):active {
+    @apply bg-desk-canvas-sunken;
+  }
+
+  .list-item:disabled {
+    @apply cursor-not-allowed opacity-60;
+  }
+
+  .list-item-active,
+  .list-item-active:not(:disabled):hover {
+    @apply border-desk-line bg-desk-accent-soft;
+    box-shadow: inset 2px 0 0 0 var(--color-desk-accent);
+  }
+
+  /* 中性小标签：会话 ID、路径、来源与占比等元信息。 */
+  .chip {
+    @apply inline-flex max-w-full items-center gap-1 rounded-full border border-desk-line bg-desk-surface-subtle px-2 py-0.5 text-2xs text-desk-muted;
+  }
+
+  /* 状态提示条：左侧色条表达语义，正文仍按纯文本展示。 */
+  .status-notice {
+    @apply rounded-desk-sm border border-desk-line bg-desk-surface px-3 py-2 text-xs text-desk-muted;
+    border-left-width: 3px;
+  }
+
+  .status-notice-info {
+    border-left-color: var(--color-desk-accent);
+  }
+
+  .status-notice-warn {
+    border-left-color: var(--color-desk-warning);
+    color: var(--color-desk-warning);
+  }
+
+  .status-notice-error {
+    border-left-color: var(--color-desk-danger);
+    color: var(--color-desk-danger);
+  }
+
+  /* 空状态：靠留白与排版表达，不用边框。 */
+  .empty-state {
+    @apply flex flex-col items-center gap-2 px-4 py-14 text-center;
+  }
+
+  .empty-state-title {
+    @apply text-sm font-medium;
+  }
+
+  .empty-state-text {
+    @apply max-w-md text-xs text-desk-muted;
+  }
+
+  /* 弹层：遮罩、面板与头/体/脚三段；锚定弹层复用面板外观但不定位。
+     遮罩做 paint 包含，使弹层内部的重绘失效不下传整页；面板不用圆角裁剪包住滚动容器，
+     避免合成滚动降级为逐帧重绘。 */
+  .dialog-overlay {
+    @apply fixed inset-0 z-50 flex items-center justify-center bg-desk-overlay p-4;
+    contain: paint;
+  }
+
+  .dialog-panel {
+    @apply flex w-full flex-col rounded-desk-lg border border-desk-line bg-desk-surface shadow-desk-dialog;
+    max-height: 85vh;
+  }
+
+  .dialog-header {
+    @apply flex shrink-0 items-start justify-between gap-3 border-b border-desk-line px-5 py-3.5;
+  }
+
+  .dialog-title {
+    @apply text-sm font-semibold;
+  }
+
+  .dialog-body {
+    @apply min-h-0 flex-1 space-y-3 overflow-y-auto px-5 py-4;
+  }
+
+  .dialog-footer {
+    @apply flex shrink-0 flex-wrap justify-end gap-2 rounded-b-desk-lg border-t border-desk-line bg-desk-surface-subtle px-5 py-3;
+  }
+
+  .dialog-popover {
+    @apply absolute z-40 flex w-80 flex-col overflow-hidden rounded-desk-lg border border-desk-line bg-desk-surface shadow-desk-pop;
+    max-height: 32rem;
+    contain: paint;
   }
 
   /* 消息气泡：只定义共用形状，用户与 Assistant 的配色由模板决定。 */
   .chat-bubble {
-    @apply whitespace-pre-wrap break-words rounded-lg px-3.5 py-2.5 text-sm;
-    max-width: 46rem;
+    @apply whitespace-pre-wrap break-words rounded-desk-lg px-3.5 py-2.5 text-sm leading-6;
+    max-width: 42rem;
   }
 
-  /* 通用工具卡片：头部摘要由模板排版，展开后的参数与输出统一使用等宽可滚动块。 */
+  .chat-bubble-user {
+    @apply rounded-br-desk-sm border border-transparent bg-desk-accent text-desk-on-accent;
+  }
+
+  .chat-bubble-assistant {
+    @apply rounded-bl-desk-sm border border-desk-line bg-desk-surface-raised shadow-desk-raise;
+  }
+
+  .chat-meta {
+    @apply flex flex-wrap items-baseline gap-2 text-2xs text-desk-muted;
+  }
+
+  .chat-role {
+    @apply text-xs font-semibold text-desk-ink;
+  }
+
+  /* 折叠三角：纯 CSS 绘制，不依赖图标字体。 */
+  .disclosure {
+    @apply inline-block shrink-0 transition-transform;
+    width: 0;
+    height: 0;
+    align-self: center;
+    border-top: 4px solid transparent;
+    border-bottom: 4px solid transparent;
+    border-left: 5px solid currentColor;
+  }
+
+  details[open] > summary .disclosure {
+    transform: rotate(90deg);
+  }
+
+  /* 工具卡片与 Thinking 共用折叠外观；头部摘要由模板排版。 */
   .tool-card {
-    @apply rounded-md border border-desk-line bg-desk-surface px-3 py-2;
+    @apply rounded-desk-sm border border-desk-line bg-desk-surface;
+  }
+
+  .tool-card > summary {
+    @apply flex flex-wrap items-baseline gap-x-2 gap-y-1 px-3 py-2 text-xs transition-colors;
+  }
+
+  .tool-card > summary:hover {
+    @apply bg-desk-surface-subtle;
+  }
+
+  .tool-card-body {
+    @apply space-y-2 border-t border-desk-line px-3 py-2.5;
   }
 
   .tool-output {
-    @apply max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-md border border-desk-line bg-desk-canvas px-2.5 py-2 font-mono text-xs;
+    @apply max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-desk-sm border border-desk-line bg-desk-canvas-sunken px-2.5 py-2 font-mono text-xs leading-5;
   }
 
   .tool-note {
-    @apply text-xs text-desk-muted;
+    @apply text-xs font-medium text-desk-muted;
   }
 
   /* 工具 Diff 行：只按 Pi 已算出的变更语义着色，不重新计算差异。 */
   .tool-output p.tool-diff-add {
     color: var(--color-desk-success);
+    background: var(--color-desk-success-soft);
   }
 
   .tool-output p.tool-diff-remove {
     color: var(--color-desk-danger);
+    background: var(--color-desk-danger-soft);
   }
 
   .tool-output p.tool-diff-context {
@@ -130,24 +417,9 @@
     opacity: 0.6;
   }
 
-  .icon-button {
-    @apply inline-flex items-center gap-1.5 rounded-md border border-desk-line bg-desk-surface px-2 py-1 text-xs font-medium text-desk-accent;
-  }
-
-  .icon-button:not(:disabled):hover {
-    @apply border-desk-accent bg-desk-canvas;
-  }
-
-  .icon-button:disabled {
-    @apply cursor-not-allowed bg-desk-canvas text-desk-muted;
-  }
-
-  .control-button-danger {
-    @apply rounded-md border border-desk-danger bg-desk-surface px-3 py-2 text-sm font-medium text-desk-danger;
-  }
-
-  .control-button-danger:not(:disabled):hover {
-    @apply bg-desk-canvas;
+  /* Extension widget 文本块。 */
+  .widget-block {
+    @apply mx-auto max-w-3xl whitespace-pre-wrap break-words rounded-desk-sm border border-desk-line bg-desk-surface px-3 py-2 font-mono text-xs text-desk-muted;
   }
 
   /* 状态指示点：颜色由模板按 Runtime 状态给出。 */
@@ -158,7 +430,7 @@
   /* 细滚动条；不改变滚动行为，只避免默认滚动条压住内容。 */
   .scroll-area {
     scrollbar-width: thin;
-    scrollbar-color: var(--color-desk-line) transparent;
+    scrollbar-color: var(--color-desk-line-strong) transparent;
   }
 
   .scroll-area::-webkit-scrollbar {
@@ -171,7 +443,7 @@
   }
 
   .scroll-area::-webkit-scrollbar-thumb {
-    background-color: var(--color-desk-line);
+    background-color: var(--color-desk-line-strong);
     background-clip: content-box;
     border: 3px solid transparent;
     border-radius: 999px;

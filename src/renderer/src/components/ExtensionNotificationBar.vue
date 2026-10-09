@@ -6,25 +6,28 @@ const extensionStore = useExtensionUiStore()
 
 /** 通知类型的样式与可访问性等级；error 用 alert 语义。 */
 function toneClass(notifyType: string): string {
-  if (notifyType === 'error') return 'border-desk-danger text-desk-danger'
-  if (notifyType === 'warning') return 'border-desk-warning text-desk-warning'
-  return 'border-desk-line text-desk-muted'
+  if (notifyType === 'error') return 'status-notice-error'
+  if (notifyType === 'warning') return 'status-notice-warn'
+  return 'status-notice-info'
 }
 </script>
 
 <template>
-  <div v-if="extensionStore.notifications.length > 0" class="space-y-1 px-4 sm:px-8">
+  <div
+    v-if="extensionStore.notifications.length > 0"
+    class="mx-auto flex w-full max-w-3xl flex-col gap-1.5 px-4 pt-3 sm:px-6"
+  >
     <div
       v-for="entry in extensionStore.notifications"
       :key="entry.id"
       :role="entry.notifyType === 'error' ? 'alert' : 'status'"
-      class="flex items-start justify-between gap-2 rounded border px-2 py-1 text-xs"
+      class="status-notice flex items-start justify-between gap-2"
       :class="toneClass(entry.notifyType)"
     >
       <span class="whitespace-pre-wrap break-words">{{ entry.message }}</span>
       <button
         type="button"
-        class="shrink-0 text-desk-muted hover:text-desk-ink"
+        class="control-button-ghost -mr-1 shrink-0 px-1"
         aria-label="关闭通知"
         @click="extensionStore.dismissNotification(entry.id)"
       >

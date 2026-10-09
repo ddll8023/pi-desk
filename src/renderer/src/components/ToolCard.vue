@@ -115,13 +115,14 @@ function formatDuration(milliseconds: number): string {
 
 <template>
   <details v-if="execution" :open="expanded" class="tool-card">
-    <summary class="flex flex-wrap items-baseline gap-x-2 gap-y-1 text-xs">
-      <span class="font-mono">{{ block.toolName }}</span>
+    <summary>
+      <span class="disclosure"></span>
+      <span class="font-mono text-desk-ink">{{ block.toolName }}</span>
       <span :class="phaseClass">{{ phaseLabel }}</span>
-      <span v-if="durationText" class="text-desk-muted">{{ durationText }}</span>
+      <span v-if="durationText" class="font-mono text-desk-muted">{{ durationText }}</span>
       <span v-if="argsPreview" class="min-w-0 flex-1 truncate text-desk-muted">{{ argsPreview }}</span>
     </summary>
-    <div class="mt-2 space-y-2">
+    <div class="tool-card-body">
       <template v-if="diff !== null && diff.lines.length > 0">
         <p class="tool-note">{{ diffTitle }}</p>
         <div class="tool-output">
@@ -147,7 +148,7 @@ function formatDuration(milliseconds: number): string {
   </details>
 
   <!-- 没有对应工具条目时的占位：只显示消息块已有的名称与状态，不猜测参数或结果。 -->
-  <p v-else class="flex flex-wrap items-baseline gap-2 text-xs">
+  <p v-else class="flex flex-wrap items-baseline gap-2 px-1 text-xs">
     <span class="font-mono">{{ block.toolName }}</span>
     <span :class="phaseClass">{{ phaseLabel }}</span>
   </p>
