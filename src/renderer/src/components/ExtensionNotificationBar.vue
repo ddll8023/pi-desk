@@ -17,22 +17,24 @@ function toneClass(notifyType: string): string {
     v-if="extensionStore.notifications.length > 0"
     class="mx-auto flex w-full max-w-3xl flex-col gap-1.5 px-4 pt-3 sm:px-6"
   >
-    <div
-      v-for="entry in extensionStore.notifications"
-      :key="entry.id"
-      :role="entry.notifyType === 'error' ? 'alert' : 'status'"
-      class="status-notice flex items-start justify-between gap-2"
-      :class="toneClass(entry.notifyType)"
-    >
-      <span class="whitespace-pre-wrap break-words">{{ entry.message }}</span>
-      <button
-        type="button"
-        class="control-button-ghost -mr-1 shrink-0 px-1"
-        aria-label="关闭通知"
-        @click="extensionStore.dismissNotification(entry.id)"
+    <TransitionGroup name="pop-motion">
+      <div
+        v-for="entry in extensionStore.notifications"
+        :key="entry.id"
+        :role="entry.notifyType === 'error' ? 'alert' : 'status'"
+        class="status-notice flex items-start justify-between gap-2"
+        :class="toneClass(entry.notifyType)"
       >
-        ×
-      </button>
-    </div>
+        <span class="whitespace-pre-wrap break-words">{{ entry.message }}</span>
+        <button
+          type="button"
+          class="control-button-ghost -mr-1 shrink-0 px-1"
+          aria-label="关闭通知"
+          @click="extensionStore.dismissNotification(entry.id)"
+        >
+          ×
+        </button>
+      </div>
+    </TransitionGroup>
   </div>
 </template>

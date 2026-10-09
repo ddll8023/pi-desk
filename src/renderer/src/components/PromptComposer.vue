@@ -6,10 +6,12 @@ import type { PiResourceEntry, PromptDisposition, PromptImageInput } from '../..
 import { useExtensionUiStore } from '../stores/extension-ui'
 import { useResourceStore } from '../stores/resource'
 import { useRuntimeStore } from '../stores/runtime'
+import { useSessionStore } from '../stores/session'
 
 const runtimeStore = useRuntimeStore()
 const extensionStore = useExtensionUiStore()
 const resourceStore = useResourceStore()
+const sessionStore = useSessionStore()
 const { view: runtimeView, promptView, abortView, projectionSync, capabilitiesView } = storeToRefs(runtimeStore)
 const { editorText, editorTextVersion } = storeToRefs(extensionStore)
 
@@ -67,7 +69,7 @@ const status = computed(() => {
     return { kind: 'info' as const, text: acceptedText(promptView.value.disposition) }
   }
   if (!runtimeReady.value) {
-    return { kind: 'info' as const, text: '没有已就绪的 Runtime；先在左侧打开或新建会话。' }
+    return { kind: 'info' as const, text: '没有已就绪的 Runtime；用 /resume 选择会话或 /new 新建。' }
   }
   if (streaming.value) {
     return { kind: 'info' as const, text: 'Agent 正在运行，本轮结束前不能提交新输入。' }
@@ -176,6 +178,18 @@ function onKeydown(event: KeyboardEvent): void {
 /** 提交当前输入与附件；只有本次请求被接受时清空，且不覆盖发送期间新输入的文字。 */
 async function submit(): Promise<void> {
   if (!canSend.value) return
+
+  // Desktop 层拦截的界面命令：Pi RPC 模式没有这两个命令，不能发给模型。
+  if (draft.value === '/resume') {
+    draft.value = ''
+    sessionStore.openSessionPicker()
+    return
+  }
+  if (draft.value === '/new') {
+    draft.value = ''
+    void sessionStore.open(null, false)
+    return
+  }
 
   const message = draft.value
   const images: PromptImageInput[] = []

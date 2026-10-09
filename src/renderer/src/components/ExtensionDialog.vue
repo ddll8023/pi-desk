@@ -65,6 +65,7 @@ async function respondCurrent(response: ExtensionDialogResponseInput): Promise<v
 
 function onKeydown(event: KeyboardEvent): void {
   // Escape 表示取消当前对话；Enter 在 input/editor 中交由表单与多行语义处理。
+  if (dialog.value === null) return
   if (event.key === 'Escape') {
     event.preventDefault()
     cancel()
@@ -81,17 +82,19 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div
-    v-if="dialog !== null"
-    class="dialog-overlay"
-    @click.self="cancel"
-  >
+  <Transition name="dialog-fade">
     <div
-      role="dialog"
-      aria-modal="true"
-      :aria-labelledby="titleId"
-      class="dialog-panel max-w-lg"
+      v-if="dialog !== null"
+      class="dialog-overlay"
+      @click.self="cancel"
     >
+      <Transition name="dialog-panel-motion" appear>
+        <div
+          role="dialog"
+          aria-modal="true"
+          :aria-labelledby="titleId"
+          class="dialog-panel max-w-lg"
+        >
       <div class="dialog-header">
         <h2 :id="titleId" class="dialog-title break-words">{{ dialog.title }}</h2>
       </div>
@@ -101,11 +104,11 @@ onUnmounted(() => {
           {{ dialog.message }}
         </p>
 
-        <ul v-if="dialog.method === 'select'" class="space-y-1">
+        <ul v-if="dialog.method === 'select'" class="space-y-1.5">
           <li v-for="option in dialog.options" :key="option">
             <button
               type="button"
-              class="list-item border-desk-line text-xs"
+              class="list-card text-xs"
               :disabled="busy"
               @click="choose(option)"
             >
@@ -173,6 +176,8 @@ onUnmounted(() => {
           确定
         </button>
       </div>
+        </div>
+      </Transition>
     </div>
-  </div>
+  </Transition>
 </template>

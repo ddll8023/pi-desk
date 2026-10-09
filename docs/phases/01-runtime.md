@@ -25,7 +25,7 @@
 
 **范围**：Electron、Vue 3、TypeScript、Vite、Tailwind CSS、Pinia 的最小配置；主进程入口、sandboxed preload 与统一前端服务入口。明确 contextIsolation 和 sandbox 开启、nodeIntegration 关闭、webSecurity 保持开启；建立固定业务 IPC 入口、调用者校验和本地页面/CSP 边界，不暴露原始 ipcRenderer 或通用系统能力。只建立立即使用的结构，不创建 Session、认证或插件空模块。
 
-**当前实现**：单页展示桌面桥接连接状态与应用信息；桥接连接成功不表示 Pi 就绪。Prompt 输入不在本页保存；项目目录在启动 Runtime 时由主进程重新校验，项目选择与本地持久化见 P2-01。Runtime 启动与状态展示见 P1-03；关闭见 P1-04，发送见 P1-05；文本与 Thinking 区域展示主进程投影的消息（见 P1-06），工具执行与 Stop 见 P1-07，Runtime 诊断区域当时为空状态，不模拟 Pi 输出。该页面已在 P2-03 被主界面替换：顶栏、会话侧栏、消息区与 Prompt 区，应用信息与 Runtime 详情在顶栏弹层，原诊断占位区域取消，见开发总览第 6.3 节。
+**当前实现**：单页展示桌面桥接连接状态与应用信息；桥接连接成功不表示 Pi 就绪。Prompt 输入不在本页保存；项目目录在启动 Runtime 时由主进程重新校验，项目选择与本地持久化见 P2-01。Runtime 启动与状态展示见 P1-03；关闭见 P1-04，发送见 P1-05；文本与 Thinking 区域展示主进程投影的消息（见 P1-06），工具执行与 Stop 见 P1-07，Runtime 诊断区域当时为空状态，不模拟 Pi 输出。该页面已在 P2-03 被主界面替换：顶栏、项目侧栏、消息区与 Prompt 区，应用信息与 Runtime 详情在顶栏弹层，原诊断占位区域取消，见开发总览第 6.3 节。
 
 **构建与页面**：配置见根目录 `electron.vite.config.ts`，依赖版本以 `package.json` 为准。
 

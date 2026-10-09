@@ -1,4 +1,4 @@
-<!-- 主界面外壳：组合顶栏、可折叠会话栏、消息区与 Prompt 区，负责各展示 Store 的初始化、项目变化后的会话列表刷新，以及运行中切换与项目信任决定的对话框；同时承载 Extension 的对话、通知与 widget 展示。 -->
+<!-- 主界面外壳：组合顶栏、项目侧栏、消息区与 Prompt 区，负责各展示 Store 的初始化、项目变化后的会话列表刷新，以及运行中切换与项目信任决定的对话框；同时承载 Extension 的对话、通知与 widget 展示。 -->
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
 import { computed, onMounted, onUnmounted, watch } from 'vue'
@@ -16,7 +16,8 @@ import ConfirmDialog from './components/ConfirmDialog.vue'
 import ExtensionDialog from './components/ExtensionDialog.vue'
 import ExtensionNotificationBar from './components/ExtensionNotificationBar.vue'
 import PromptComposer from './components/PromptComposer.vue'
-import SessionSidebar from './components/SessionSidebar.vue'
+import ProjectSidebar from './components/ProjectSidebar.vue'
+import SessionPickerDialog from './components/SessionPickerDialog.vue'
 import TrustDialog from './components/TrustDialog.vue'
 
 const desktopStore = useDesktopStore()
@@ -111,8 +112,8 @@ onUnmounted(() => {
     />
 
     <div class="flex min-h-0 flex-1">
-      <!-- 偏好读取完成后才按存储状态渲染 Sidebar，避免首帧闪动。 -->
-      <SessionSidebar v-if="preferencesReady && !sidebarCollapsed" />
+      <!-- 偏好读取完成后才挂载项目侧栏，避免首帧闪烁；折叠状态由 class 驱动滑出动画，组件保持挂载。 -->
+      <ProjectSidebar v-if="preferencesReady" />
 
       <main class="flex min-w-0 flex-1 flex-col">
         <ExtensionNotificationBar />
@@ -128,10 +129,10 @@ onUnmounted(() => {
       </main>
     </div>
 
-    <!-- 模态弹层统一经 Teleport 渲染到 body，全部落在根堆叠上下文。 -->
+    <!-- 模态弹层统一经 Teleport 渲染到 body，全部落在根堆叠上下文；组件常驻挂载，进出由内部 Transition 驱动。 -->
     <Teleport to="body">
       <ConfirmDialog
-        v-if="pendingPath !== null"
+        :open="pendingPath !== null"
         title="停止运行中的操作并切换项目？"
         description="切换项目会先停止当前 Agent 操作，已提交的内容不会重放。"
         :detail="projectConfirmDetail"
@@ -141,7 +142,7 @@ onUnmounted(() => {
       />
 
       <ConfirmDialog
-        v-if="awaitingInterrupt"
+        :open="awaitingInterrupt"
         :title="sessionConfirmTitle"
         :description="sessionConfirmDescription"
         :detail="sessionConfirmDetail"
@@ -152,8 +153,11 @@ onUnmounted(() => {
 
       <TrustDialog @decided="onTrustResolved" @cancelled="onTrustCancelled" />
 
+      <!-- /resume 与会话 chip 共用的会话选择弹层。 -->
+      <SessionPickerDialog :open="sessionStore.showSessionPicker" @close="sessionStore.closeSessionPicker()" />
+
       <!-- Extension 对话一次只展示队首；队列由 store 持有，回应后自动滑到下一条。 -->
-      <ExtensionDialog v-if="extensionStore.dialogs.length > 0" />
+      <ExtensionDialog />
     </Teleport>
   </div>
 </template>

@@ -65,17 +65,19 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div
-    v-if="view.phase === 'prompting'"
-    class="dialog-overlay"
-    @click.self="cancelTrust"
-  >
+  <Transition name="dialog-fade">
     <div
-      role="dialog"
-      aria-modal="true"
-      :aria-labelledby="titleId"
-      class="dialog-panel max-w-lg"
+      v-if="view.phase === 'prompting'"
+      class="dialog-overlay"
+      @click.self="cancelTrust"
     >
+      <Transition name="dialog-panel-motion" appear>
+        <div
+          role="dialog"
+          aria-modal="true"
+          :aria-labelledby="titleId"
+          class="dialog-panel max-w-lg"
+        >
       <div class="dialog-header">
         <h2 :id="titleId" class="dialog-title">信任此项目？</h2>
       </div>
@@ -85,22 +87,28 @@ onUnmounted(() => {
           此项目包含 Pi 的受保护资源。信任后，这些资源将在启动 Runtime 时随项目加载。
         </p>
 
-        <ul class="scroll-area max-h-40 space-y-1 overflow-y-auto rounded-desk-sm border border-desk-line bg-desk-canvas p-2">
-          <li
-            v-for="resource in view.status.resources"
-            :key="`${resource.kind}:${resource.path}`"
-            class="flex flex-wrap items-baseline gap-2 text-xs"
-          >
-            <span class="chip">{{ kindLabel(resource.kind) }}</span>
-            <span class="break-all font-mono text-desk-muted">{{ resource.path }}</span>
-          </li>
-        </ul>
+        <section class="panel-section">
+          <h3 class="panel-section-title">受保护资源</h3>
+          <ul class="scroll-area max-h-40 space-y-1 overflow-y-auto">
+            <li
+              v-for="resource in view.status.resources"
+              :key="`${resource.kind}:${resource.path}`"
+              class="flex flex-wrap items-baseline gap-2 text-xs"
+            >
+              <span class="chip">{{ kindLabel(resource.kind) }}</span>
+              <span class="break-all font-mono text-desk-muted">{{ resource.path }}</span>
+            </li>
+          </ul>
+        </section>
 
-        <div class="status-notice space-y-1">
-          <p>Extension 与 Skill 在 Pi 进程内以当前用户权限运行；信任项目不是沙箱，也不限制工具的文件与命令访问。</p>
-          <p>AGENTS.md、CLAUDE.md 等上下文文件不受信任决定影响，始终会加载。</p>
-          <p>此决定只保存在 Desktop 本地，且会覆盖 Pi 已保存的项目信任记录；可随时在 Runtime 详情中重置。</p>
-        </div>
+        <section class="panel-section">
+          <h3 class="panel-section-title">影响与边界</h3>
+          <ul class="list-disc space-y-1 pl-4 text-xs leading-5 text-desk-muted">
+            <li>Extension 与 Skill 在 Pi 进程内以当前用户权限运行；信任项目不是沙箱，也不限制工具的文件与命令访问。</li>
+            <li>AGENTS.md、CLAUDE.md 等上下文文件不受信任决定影响，始终会加载。</li>
+            <li>此决定只保存在 Desktop 本地，且会覆盖 Pi 已保存的项目信任记录；可随时在 Runtime 详情中重置。</li>
+          </ul>
+        </section>
 
         <p v-if="actionError" role="alert" class="status-notice status-notice-error">{{ actionError }}</p>
       </div>
@@ -123,6 +131,8 @@ onUnmounted(() => {
           信任并加载
         </button>
       </div>
+        </div>
+      </Transition>
     </div>
-  </div>
+  </Transition>
 </template>

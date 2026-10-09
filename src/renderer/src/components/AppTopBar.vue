@@ -1,4 +1,4 @@
-<!-- 顶栏：Sidebar 折叠开关、主题循环切换、项目切换入口、当前会话与 Runtime 状态，并在详情弹层里提供模型、Thinking、上下文占用等 Agent 控制、从历史消息分叉、重置本项目信任决定与关闭 Runtime；另提供 Pi 资源面板与 Provider 认证面板入口；不承载消息与 Prompt 提交。 -->
+<!-- 顶栏：Sidebar 折叠开关、主题循环切换、可点击的当前会话 chip（弹会话选择）、Runtime 状态，并在详情弹层里提供模型、Thinking、上下文占用等 Agent 控制、从历史消息分叉、重置本项目信任决定与关闭 Runtime；另提供 Pi 资源面板与 Provider 认证面板入口；不承载消息与 Prompt 提交。 -->
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
 import { computed, onMounted, onUnmounted, ref } from 'vue'
@@ -13,7 +13,6 @@ import AgentControls from './AgentControls.vue'
 import AuthPanel from './AuthPanel.vue'
 import ConfirmDialog from './ConfirmDialog.vue'
 import ForkDialog from './ForkDialog.vue'
-import ProjectSwitcher from './ProjectSwitcher.vue'
 import ResourcePanel from './ResourcePanel.vue'
 
 defineProps<{
@@ -38,7 +37,7 @@ const { currentProject } = storeToRefs(projectStore)
 const { view: runtimeView } = storeToRefs(runtimeStore)
 
 /** 弹层互斥：同一时刻只展开一个，点外或 Esc 关闭。 */
-const openPanel = ref<'project' | 'runtime' | null>(null)
+const openPanel = ref<'runtime' | null>(null)
 const root = ref<HTMLElement | null>(null)
 /** 当前项目的信任状态；详情弹层展开时读取，用于重置入口的展示。 */
 const trustStatus = ref<TrustStatus | { error: string } | null>(null)
@@ -104,7 +103,7 @@ const runtimeTextClass = computed(() => {
 })
 
 /** 详情弹层展开时读取当前项目的信任状态，决定是否显示重置入口。 */
-function togglePanel(panel: 'project' | 'runtime'): void {
+function togglePanel(panel: 'runtime'): void {
   const next = openPanel.value === panel ? null : panel
   openPanel.value = next
   if (next === 'runtime') {
@@ -221,7 +220,7 @@ onUnmounted(() => {
       :disabled="sidebarToggleDisabled"
       @click="emit('toggleSidebar')"
     >
-      {{ sidebarCollapsed ? '显示会话' : '隐藏会话' }}
+      {{ sidebarCollapsed ? '显示侧栏' : '隐藏侧栏' }}
     </button>
 
     <button
@@ -233,36 +232,20 @@ onUnmounted(() => {
       {{ themeLabel }}
     </button>
 
-    <div class="relative">
+    <div class="flex min-w-0 flex-1 items-center justify-center">
       <button
         type="button"
-        class="control-button-sm max-w-56 truncate"
+        class="chip max-w-72 cursor-pointer truncate"
+        :title="`${sessionLabel}；点击选择其他会话`"
         aria-haspopup="dialog"
-        :aria-expanded="openPanel === 'project'"
-        @click="togglePanel('project')"
+        @click="sessionStore.openSessionPicker()"
       >
-        {{ currentProject?.name ?? '选择项目' }}
-      </button>
-      <div
-        v-if="openPanel === 'project'"
-        class="dialog-popover left-0 top-full mt-2"
-        role="dialog"
-        aria-label="项目切换"
-      >
-        <div class="scroll-area min-h-0 flex-1 overflow-y-auto p-4">
-          <ProjectSwitcher @close="closePanel" />
-        </div>
-      </div>
-    </div>
-
-    <div class="flex min-w-0 flex-1 items-center justify-center">
-      <span class="chip truncate" :title="sessionLabel">
         <template v-if="sessionIdShort !== null">
           <span>会话</span>
           <span class="font-mono text-desk-ink">{{ sessionIdShort }}</span>
         </template>
         <template v-else>{{ sessionLabel }}</template>
-      </span>
+      </button>
     </div>
 
     <div class="relative">
@@ -276,12 +259,13 @@ onUnmounted(() => {
         <span class="status-dot" :class="runtimeDotClass"></span>
         <span :class="runtimeTextClass">{{ runtimeLabel }}</span>
       </button>
-      <div
-        v-if="openPanel === 'runtime'"
-        class="dialog-popover right-0 top-full mt-2 w-96"
-        role="dialog"
-        aria-label="Runtime 状态"
-      >
+      <Transition name="pop-motion">
+        <div
+          v-if="openPanel === 'runtime'"
+          class="dialog-popover right-0 top-full mt-2 w-96"
+          role="dialog"
+          aria-label="Runtime 状态"
+        >
         <div class="scroll-area min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
           <div class="flex items-center gap-2">
             <span class="status-dot" :class="runtimeDotClass"></span>
@@ -336,7 +320,7 @@ onUnmounted(() => {
             {{ connection.error.message }}
           </p>
 
-          <div class="space-y-2 border-t border-desk-line pt-3">
+          <div class="panel-section">
             <button
               type="button"
               class="control-button w-full"
@@ -358,14 +342,15 @@ onUnmounted(() => {
             <button
               v-if="hasTrustDecision"
               type="button"
-              class="control-button-danger w-full"
+              class="control-button-quiet-danger w-full"
               @click="resetTrustDecision"
             >
               重置本项目信任决定
             </button>
           </div>
         </div>
-      </div>
+        </div>
+      </Transition>
     </div>
 
     <button
@@ -384,10 +369,11 @@ onUnmounted(() => {
       Provider 认证
     </button>
 
-    <!-- 模态弹层经 Teleport 渲染到 body：遮罩不嵌套在顶栏 z-30 的堆叠上下文里，避免整窗重绘被放大。 -->
+    <!-- 模态弹层经 Teleport 渲染到 body：遮罩不嵌套在顶栏 z-30 的堆叠上下文里，避免整窗重绘被放大。
+         弹层组件常驻挂载，进出由内部 Transition 驱动。 -->
     <Teleport to="body">
       <ConfirmDialog
-        v-if="confirmingTrustReset"
+        :open="confirmingTrustReset"
         title="重置本项目信任决定？"
         description="重置后下次打开或新建该项目的会话时，会重新询问是否信任项目资源；本次正在运行的 Runtime 不受影响。"
         :detail="trustStatusDetail"
@@ -398,15 +384,15 @@ onUnmounted(() => {
     </Teleport>
 
     <Teleport to="body">
-      <ForkDialog v-if="showingFork" @close="closeForkDialog" />
+      <ForkDialog :open="showingFork" @close="closeForkDialog" />
     </Teleport>
 
     <Teleport to="body">
-      <ResourcePanel v-if="showingResources" @close="closeResourcePanel" />
+      <ResourcePanel :open="showingResources" @close="closeResourcePanel" />
     </Teleport>
 
     <Teleport to="body">
-      <AuthPanel v-if="showingAuth" @close="closeAuthPanel" />
+      <AuthPanel :open="showingAuth" @close="closeAuthPanel" />
     </Teleport>
   </header>
 </template>

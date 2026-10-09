@@ -31,7 +31,7 @@
   --color-desk-success: #2f6d3a;
   --color-desk-success-soft: #e7f1e9;
   /* 模态遮罩。 */
-  --color-desk-overlay: rgba(16, 27, 36, 0.45);
+  --color-desk-overlay: rgba(16, 27, 36, 0.52);
 
   --radius-desk-sm: 6px;
   --radius-desk-md: 8px;
@@ -40,7 +40,7 @@
   --shadow-desk-raise: 0 1px 2px rgba(23, 37, 47, 0.06);
   --shadow-desk-pop: 0 10px 28px rgba(23, 37, 47, 0.14), 0 2px 6px rgba(23, 37, 47, 0.08);
   /* 模态面板用的小半径清晰阴影：大模糊阴影在重绘时反复光栅化，代价远高于它的观感收益。 */
-  --shadow-desk-dialog: 0 2px 10px rgba(23, 37, 47, 0.12);
+  --shadow-desk-dialog: 0 4px 16px rgba(23, 37, 47, 0.14);
 
   --font-sans: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, "Microsoft YaHei UI",
     "Microsoft YaHei", "PingFang SC", sans-serif;
@@ -52,6 +52,16 @@
 
   /* 交互反馈统一时长；transition-colors 等工具类据此生成。 */
   --default-transition-duration: 120ms;
+
+  /* 动效令牌：按时程与缓动两类收敛，不再逐处写死。
+     时长按实际移动距离定：弹层面板 ~38px（8px 位移 + 5% 缩放），用 240ms；
+     弹出层 6px，用 140ms；遮罩纯淡入淡出无位移，180ms；退出统一取进场的 ~60%，更利落。
+     缓动分两档：进场「快启动、平稳停下」（前段速度高、末段长尾），退场「加速离场、不拖沓」。 */
+  --motion-duration-fast: 140ms;
+  --motion-duration-base: 180ms;
+  --motion-duration-slow: 240ms;
+  --motion-ease-entrance: cubic-bezier(0.16, 1, 0.3, 1);
+  --motion-ease-exit: cubic-bezier(0.4, 0, 1, 1);
 }
 
 /* 暗色主题：由主进程 nativeTheme.themeSource 驱动 prefers-color-scheme，无需页面脚本参与。
@@ -77,11 +87,11 @@
     --color-desk-warning-soft: #33291a;
     --color-desk-success: #7cb98a;
     --color-desk-success-soft: #1b2c21;
-    --color-desk-overlay: rgba(0, 0, 0, 0.55);
+    --color-desk-overlay: rgba(0, 0, 0, 0.62);
 
     --shadow-desk-raise: 0 1px 2px rgba(0, 0, 0, 0.4);
     --shadow-desk-pop: 0 12px 32px rgba(0, 0, 0, 0.55);
-    --shadow-desk-dialog: 0 2px 12px rgba(0, 0, 0, 0.5);
+    --shadow-desk-dialog: 0 4px 18px rgba(0, 0, 0, 0.55);
   }
 }
 
@@ -145,7 +155,7 @@
 
   /* 按钮四档：次要、主操作、危险、紧凑；悬停只提升底色，强调色留给主按钮。 */
   .control-button {
-    @apply inline-flex items-center justify-center gap-1.5 rounded-desk-sm border border-desk-line-strong bg-desk-surface px-3 py-2 text-sm font-medium text-desk-ink transition-colors;
+    @apply inline-flex items-center justify-center gap-1.5 rounded-desk-sm border border-desk-line-strong bg-desk-surface px-3 py-2 text-sm font-medium whitespace-nowrap text-desk-ink transition-colors;
   }
 
   .control-button:not(:disabled):hover {
@@ -162,7 +172,7 @@
 
   /* 主按钮：一个界面只用一次，用于发送、确定、信任并加载这类主操作。 */
   .control-button-primary {
-    @apply inline-flex items-center justify-center gap-1.5 rounded-desk-sm border border-transparent bg-desk-accent px-3 py-2 text-sm font-medium text-desk-on-accent transition-colors;
+    @apply inline-flex items-center justify-center gap-1.5 rounded-desk-sm border border-transparent bg-desk-accent px-3 py-2 text-sm font-medium whitespace-nowrap text-desk-on-accent transition-colors;
   }
 
   .control-button-primary:not(:disabled):hover {
@@ -178,7 +188,7 @@
   }
 
   .control-button-danger {
-    @apply inline-flex items-center justify-center gap-1.5 rounded-desk-sm border border-desk-danger bg-desk-surface px-3 py-2 text-sm font-medium text-desk-danger transition-colors;
+    @apply inline-flex items-center justify-center gap-1.5 rounded-desk-sm border border-desk-danger bg-desk-surface px-3 py-2 text-sm font-medium whitespace-nowrap text-desk-danger transition-colors;
   }
 
   .control-button-danger:not(:disabled):hover {
@@ -195,7 +205,7 @@
 
   /* 顶栏与工具条的紧凑按钮；与 icon-button 同尺寸，避免同一行高度不齐。 */
   .control-button-sm {
-    @apply inline-flex h-8 items-center justify-center gap-1.5 rounded-desk-sm border border-desk-line-strong bg-desk-surface px-2.5 text-xs font-medium text-desk-ink transition-colors;
+    @apply inline-flex h-8 items-center justify-center gap-1.5 rounded-desk-sm border border-desk-line-strong bg-desk-surface px-2.5 text-xs font-medium whitespace-nowrap text-desk-ink transition-colors;
   }
 
   .control-button-sm:not(:disabled):hover {
@@ -211,7 +221,7 @@
   }
 
   .icon-button {
-    @apply inline-flex h-7 items-center justify-center gap-1.5 rounded-desk-sm border border-desk-line-strong bg-desk-surface px-2.5 text-xs font-medium text-desk-ink transition-colors;
+    @apply inline-flex h-7 items-center justify-center gap-1.5 rounded-desk-sm border border-desk-line-strong bg-desk-surface px-2.5 text-xs font-medium whitespace-nowrap text-desk-ink transition-colors;
   }
 
   .icon-button:not(:disabled):hover {
@@ -239,7 +249,7 @@
     @apply cursor-not-allowed opacity-60;
   }
 
-  /* 列表行：会话、项目、Provider、资源与候选共用；选中态由 list-item-active 叠加左侧色条。 */
+  /* 列表行：会话与输入建议共用；弹层内的列表项改用 list-card。选中态由 list-item-active 叠加左侧色条。 */
   .list-item {
     @apply block w-full rounded-desk-sm border border-transparent px-2.5 py-2 text-left transition-colors;
   }
@@ -309,20 +319,26 @@
   }
 
   .dialog-panel {
-    @apply flex w-full flex-col rounded-desk-lg border border-desk-line bg-desk-surface shadow-desk-dialog;
+    @apply flex w-full flex-col rounded-desk-lg border border-desk-line-strong bg-desk-surface shadow-desk-dialog;
     max-height: 85vh;
   }
 
+  /* 头部用沉陷底色与面板体分层，标题比正文重一级。 */
   .dialog-header {
-    @apply flex shrink-0 items-start justify-between gap-3 border-b border-desk-line px-5 py-3.5;
+    @apply flex shrink-0 items-start justify-between gap-3 border-b border-desk-line bg-desk-surface-subtle px-5 py-4;
   }
 
   .dialog-title {
-    @apply text-sm font-semibold;
+    @apply text-base leading-6 font-semibold tracking-tight;
+  }
+
+  /* 弹层标题下的一句话说明：只交代边界，不承载操作。 */
+  .dialog-subtitle {
+    @apply mt-1 text-xs leading-5 text-desk-muted;
   }
 
   .dialog-body {
-    @apply min-h-0 flex-1 space-y-3 overflow-y-auto px-5 py-4;
+    @apply min-h-0 flex-1 space-y-5 overflow-y-auto px-5 py-5;
   }
 
   .dialog-footer {
@@ -333,6 +349,205 @@
     @apply absolute z-40 flex w-80 flex-col overflow-hidden rounded-desk-lg border border-desk-line bg-desk-surface shadow-desk-pop;
     max-height: 32rem;
     contain: paint;
+  }
+
+  /* 弹层右上角的关闭入口：纯 CSS 绘制的 ×，不引入图标库；不参与收缩，避免被标题挤变形。 */
+  .dialog-close-button {
+    @apply relative inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-desk-sm border border-transparent text-desk-muted transition-colors;
+  }
+
+  .dialog-close-button::before,
+  .dialog-close-button::after {
+    content: "";
+    position: absolute;
+    width: 13px;
+    height: 1.5px;
+    border-radius: 999px;
+    background-color: currentColor;
+  }
+
+  .dialog-close-button::before {
+    transform: rotate(45deg);
+  }
+
+  .dialog-close-button::after {
+    transform: rotate(-45deg);
+  }
+
+  .dialog-close-button:not(:disabled):hover {
+    @apply bg-desk-surface-subtle text-desk-ink;
+  }
+
+  /* 弹层内的语义分区：用沉陷底色形成卡片边界，替代裸标题加分隔线。 */
+  .panel-section {
+    @apply space-y-2 rounded-desk-md border border-desk-line bg-desk-canvas-sunken px-3.5 py-3;
+  }
+
+  .panel-section-title {
+    @apply text-sm font-semibold;
+  }
+
+  /* 说明性段落：限制行宽并压低对比，避免弹层里出现整屏同权重的灰字。 */
+  .hint-text {
+    @apply max-w-prose text-xs leading-5 text-desk-muted;
+  }
+
+  /* 弹层内列表项：浅底卡片，与分区一起构成两级层次。 */
+  .list-card {
+    @apply block w-full rounded-desk-sm border border-desk-line bg-desk-surface px-3 py-2.5 text-left transition-colors;
+  }
+
+  .list-card:not(:disabled):hover {
+    @apply border-desk-line-strong bg-desk-surface-subtle;
+  }
+
+  .list-card:not(:disabled):active {
+    @apply bg-desk-canvas-sunken;
+  }
+
+  .list-card:disabled {
+    @apply cursor-not-allowed opacity-60;
+  }
+
+  /* 选中态必须写在 list-card 之后：两者选择器权重相同，靠顺序决定悬停时保留强调底色与左侧色条。 */
+  .list-card.list-item-active,
+  .list-card.list-item-active:not(:disabled):hover {
+    @apply border-desk-line bg-desk-accent-soft;
+    box-shadow: inset 2px 0 0 0 var(--color-desk-accent);
+  }
+
+  /* 弹层内的细节值：等宽、可换行，与说明文字拉开字体层次。 */
+  .detail-note {
+    @apply break-words rounded-desk-sm border border-desk-line bg-desk-canvas-sunken px-3 py-2 font-mono text-xs leading-5 text-desk-muted;
+  }
+
+  /* 危险操作默认中性，悬停或聚焦才显红；用于列表行内的删除类动作。 */
+  .control-button-quiet-danger {
+    @apply inline-flex items-center justify-center gap-1.5 rounded-desk-sm border border-transparent px-2.5 py-1.5 text-xs font-medium whitespace-nowrap text-desk-muted transition-colors;
+  }
+
+  .control-button-quiet-danger:not(:disabled):hover,
+  .control-button-quiet-danger:not(:disabled):focus-visible {
+    @apply bg-desk-danger-soft text-desk-danger;
+  }
+
+  .control-button-quiet-danger:focus-visible {
+    outline-color: var(--color-desk-danger);
+  }
+
+  .control-button-quiet-danger:disabled {
+    @apply cursor-not-allowed opacity-60;
+  }
+
+  /* 遮罩：纯透明度交叉淡入，无位移，用基准时长。 */
+  .dialog-fade-enter-active {
+    transition: opacity var(--motion-duration-base) var(--motion-ease-entrance);
+  }
+
+  .dialog-fade-leave-active {
+    transition: opacity var(--motion-duration-fast) var(--motion-ease-exit);
+  }
+
+  .dialog-fade-enter-from,
+  .dialog-fade-leave-to {
+    opacity: 0;
+  }
+
+  /* 面板：进场「快启动、平稳停下」——长尾缓动让 8px 位移 + 5% 缩放在末段几乎不可察觉地落位；
+     退场距离更短（4px + 3%），用快档时长与加速曲线，不拖沓。
+     transform 只在动画期间开启，静止时不留合成层。 */
+  .dialog-panel-motion-enter-active {
+    transition:
+      opacity var(--motion-duration-base) var(--motion-ease-entrance),
+      transform var(--motion-duration-slow) var(--motion-ease-entrance);
+  }
+
+  .dialog-panel-motion-leave-active {
+    transition:
+      opacity var(--motion-duration-fast) var(--motion-ease-exit),
+      transform var(--motion-duration-fast) var(--motion-ease-exit);
+  }
+
+  .dialog-panel-motion-enter-from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.95);
+  }
+
+  .dialog-panel-motion-leave-to {
+    opacity: 0;
+    transform: translateY(4px) scale(0.97);
+  }
+
+  /* 弹出层与通知条：6px 位移属于小距离，用快档，进快退更快。 */
+  .pop-motion-enter-active {
+    transition:
+      opacity var(--motion-duration-fast) var(--motion-ease-entrance),
+      transform var(--motion-duration-fast) var(--motion-ease-entrance);
+  }
+
+  .pop-motion-leave-active {
+    transition:
+      opacity var(--motion-duration-fast) var(--motion-ease-exit),
+      transform var(--motion-duration-fast) var(--motion-ease-exit);
+  }
+
+  .pop-motion-enter-from,
+  .pop-motion-leave-to {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+
+  /* 侧栏内容：纯淡入淡出，无位移，用基准时长；不收缩布局宽度，避免整窗重绘。 */
+  .sidebar-fade-enter-active {
+    transition: opacity var(--motion-duration-base) var(--motion-ease-entrance);
+  }
+
+  .sidebar-fade-leave-active {
+    transition: opacity var(--motion-duration-fast) var(--motion-ease-exit);
+  }
+
+  .sidebar-fade-enter-from,
+  .sidebar-fade-leave-to {
+    opacity: 0;
+  }
+
+  /* 项目侧栏：收起时向左滑出并释放占位，展开时滑入；margin 与 transform 同步过渡，
+     内容区在动画期间跟随重排（同 VSCode 侧栏做法）。folded 时加 aria-hidden 与 inert。 */
+  .app-sidebar {
+    @apply flex w-64 shrink-0 flex-col border-r border-desk-line bg-desk-surface;
+    transition:
+      margin-left var(--motion-duration-slow) var(--motion-ease-entrance),
+      transform var(--motion-duration-slow) var(--motion-ease-entrance);
+  }
+
+  .app-sidebar.is-collapsed {
+    margin-left: -16rem;
+    transition-timing-function: var(--motion-ease-exit);
+  }
+
+  /* 用户偏好减少动效：过渡与关键帧动画全关，且不留下半透明起点（enter-from 依旧会被 Vue
+     移除，但加上 opacity:1 保险，避免极端时序下元素停在透明态）。 */
+  @media (prefers-reduced-motion: reduce) {
+    .app-sidebar {
+      transition: none;
+    }
+
+    .dialog-fade-enter-active,
+    .dialog-fade-leave-active,
+    .dialog-panel-motion-enter-active,
+    .dialog-panel-motion-leave-active,
+    .pop-motion-enter-active,
+    .pop-motion-leave-active,
+    .sidebar-fade-enter-active,
+    .sidebar-fade-leave-active {
+      transition: none;
+    }
+
+    .dialog-fade-enter-from,
+    .dialog-panel-motion-enter-from {
+      opacity: 1;
+      transform: none;
+    }
   }
 
   /* 消息气泡：只定义共用形状，用户与 Assistant 的配色由模板决定。 */
@@ -427,25 +642,31 @@
     @apply inline-block h-2 w-2 shrink-0 rounded-full;
   }
 
-  /* 细滚动条；不改变滚动行为，只避免默认滚动条压住内容。 */
-  .scroll-area {
-    scrollbar-width: thin;
-    scrollbar-color: var(--color-desk-line-strong) transparent;
+  /* 细滚动条；不改变滚动行为，只避免默认滚动条压住内容。弹层体一律适用，避免同一处弹层里粗细不一。
+     只用 ::-webkit-scrollbar 定制：Chromium 里 scrollbar-color 与 scrollbar-width 一旦不是 auto，
+     就会覆盖这些伪元素样式，半透明细条会退回成按 scrollbar-color 上色的原生滚动条；本应用只跑 Electron。 */
+  .scroll-area::-webkit-scrollbar,
+  .dialog-body::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
   }
 
-  .scroll-area::-webkit-scrollbar {
-    width: 10px;
-    height: 10px;
-  }
-
-  .scroll-area::-webkit-scrollbar-track {
+  .scroll-area::-webkit-scrollbar-track,
+  .dialog-body::-webkit-scrollbar-track {
     background: transparent;
   }
 
-  .scroll-area::-webkit-scrollbar-thumb {
-    background-color: var(--color-desk-line-strong);
+  /* 静止时半透明，悬停才实色，避免滚动条在弹层里抢走注意力。 */
+  .scroll-area::-webkit-scrollbar-thumb,
+  .dialog-body::-webkit-scrollbar-thumb {
+    background-color: color-mix(in srgb, var(--color-desk-line-strong) 55%, transparent);
     background-clip: content-box;
-    border: 3px solid transparent;
+    border: 2px solid transparent;
     border-radius: 999px;
+  }
+
+  .scroll-area::-webkit-scrollbar-thumb:hover,
+  .dialog-body::-webkit-scrollbar-thumb:hover {
+    background-color: var(--color-desk-line-strong);
   }
 }

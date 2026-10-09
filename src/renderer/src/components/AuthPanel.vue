@@ -1,6 +1,6 @@
 <!-- 认证面板：展示 Provider 与认证状态，提供 API Key 录入、官方 OAuth 登录与取消、退出登录与流程进度展示；只复用 Pi 的认证实现与凭据存储，不读取也不回传已有凭据，密钥不进入聊天、提示词与日志。 -->
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted } from 'vue'
+import { computed, onUnmounted, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import type { AuthFlowSnapshot, AuthMethod, AuthProviderStatus } from '../../../shared/auth-api'
 import { useAuthStore } from '../stores/auth'
@@ -8,6 +8,11 @@ import { useRuntimeStore } from '../stores/runtime'
 import { useSessionStore } from '../stores/session'
 
 const emit = defineEmits<{ close: [] }>()
+
+/** 弹层由父级常驻挂载，`open` 控制进入/退出；订阅只在打开期间存在。 */
+const props = defineProps<{
+  readonly open: boolean
+}>()
 
 const authStore = useAuthStore()
 const runtimeStore = useRuntimeStore()
@@ -102,9 +107,15 @@ function reloadRuntime(): void {
   void sessionStore.reloadCurrent()
 }
 
-onMounted(() => {
-  void authStore.initialize()
-})
+// 打开时才建立认证状态与流程订阅；关闭时释放，避免常驻挂载后订阅永不停止。
+watch(
+  () => props.open,
+  (open) => {
+    if (open) void authStore.initialize()
+    else authStore.dispose()
+  },
+  { immediate: true }
+)
 
 onUnmounted(() => {
   authStore.dispose()
@@ -112,23 +123,24 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="dialog-overlay" @click.self="close">
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-label="Provider 与认证"
-      class="dialog-panel max-w-2xl"
-    >
+  <Transition name="dialog-fade">
+    <div v-if="props.open" class="dialog-overlay" @click.self="close">
+      <Transition name="dialog-panel-motion" appear>
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Provider 与认证"
+          class="dialog-panel max-w-2xl"
+        >
       <div class="dialog-header">
         <div class="min-w-0">
           <h2 class="dialog-title">Provider 与认证</h2>
-          <p class="mt-1 text-xs text-desk-muted">
-            凭据由 Pi 自己的认证实现保存到它的 auth.json；这里只调用同一实现，不建立第二套凭据文件。
-            状态只表示本地是否解析到凭据，不代表上游已接受它。密钥只在提交时经过一次受限通道，
-            不进入聊天、提示词、桌面偏好或常规日志，主进程也不会回传任何已有凭据。
+          <p class="dialog-subtitle">
+            凭据由 Pi 自己的认证实现保存到它的 auth.json；状态只表示本地是否解析到凭据，
+            密钥只在提交时经一次受限通道，不进入聊天、提示词、偏好或日志。
           </p>
         </div>
-        <button type="button" class="control-button-sm" @click="close">关闭</button>
+        <button type="button" class="dialog-close-button" aria-label="关闭" @click="close"></button>
       </div>
 
       <div class="scroll-area dialog-body">
@@ -168,27 +180,28 @@ onUnmounted(() => {
         </div>
 
         <!-- 登录流程：进度、设备码、等待输入与取消都在这里；密钥输入为掩码且提交后立即清空。 -->
-        <section
-          v-if="flow !== null"
-          class="space-y-2 rounded-desk-sm border border-desk-line bg-desk-canvas p-3"
-        >
+        <section v-if="flow !== null" class="panel-section">
           <div class="flex flex-wrap items-center gap-2">
-            <h3 class="section-heading">{{ flow.providerId }}</h3>
+            <h3 class="panel-section-title">{{ flow.providerId }}</h3>
             <span class="chip">{{ flowMethodLabel }} · {{ phaseLabel(flow) }}</span>
           </div>
 
-          <p v-if="flow.prompt === null && activeFlow !== null" class="text-xs text-desk-muted">
+          <p v-if="flow.prompt === null && activeFlow !== null" class="hint-text">
             流程正在进行；如果浏览器已经打开授权页，请在浏览器中完成登录。这里的进度来自 Pi。
           </p>
 
-          <p v-if="flow.message !== null" class="text-xs text-desk-muted">{{ flow.message }}</p>
+          <p v-if="flow.message !== null" class="hint-text">{{ flow.message }}</p>
 
-          <div v-if="flow.deviceCode !== null" class="space-y-0.5 text-xs">
-            <p>设备码：<span class="font-mono">{{ flow.deviceCode.userCode }}</span></p>
-            <p class="break-all">
-              验证地址：<span class="font-mono">{{ flow.deviceCode.verificationUri }}</span>
-            </p>
-          </div>
+          <dl v-if="flow.deviceCode !== null" class="space-y-0.5 text-xs">
+            <div class="flex flex-wrap items-baseline gap-1.5">
+              <dt class="text-desk-muted">设备码</dt>
+              <dd class="font-mono">{{ flow.deviceCode.userCode }}</dd>
+            </div>
+            <div class="flex flex-wrap items-baseline gap-1.5">
+              <dt class="text-desk-muted">验证地址</dt>
+              <dd class="break-all font-mono">{{ flow.deviceCode.verificationUri }}</dd>
+            </div>
+          </dl>
 
           <ul v-if="flow.messages.length > 0" class="space-y-0.5">
             <li
@@ -198,7 +211,7 @@ onUnmounted(() => {
             >{{ message }}</li>
           </ul>
 
-          <div v-if="activeFlow !== null && flow.hasOpenableUrl">
+          <div v-if="activeFlow !== null && flow.hasOpenableUrl" class="space-y-1">
             <button
               type="button"
               class="control-button"
@@ -207,7 +220,7 @@ onUnmounted(() => {
             >
               {{ flow.browserOpened ? '再次在系统浏览器中打开' : '在系统浏览器中打开授权页' }}
             </button>
-            <p v-if="flow.browserOpened" class="mt-1 text-xs text-desk-muted">授权页已交给系统浏览器打开。</p>
+            <p v-if="flow.browserOpened" class="hint-text">授权页已交给系统浏览器打开。</p>
           </div>
 
           <form
@@ -217,11 +230,11 @@ onUnmounted(() => {
           >
             <p class="text-xs">{{ flow.prompt.message }}</p>
 
-            <div v-if="flow.prompt.kind === 'select'" class="space-y-0.5">
+            <div v-if="flow.prompt.kind === 'select'" class="space-y-1.5">
               <label
                 v-for="option in flow.prompt.options"
                 :key="option.id"
-                class="list-item flex items-start gap-2 border-desk-line text-xs"
+                class="list-card flex items-start gap-2 text-xs"
               >
                 <input v-model="selectInput" type="radio" :value="option.id" name="auth-select">
                 <span>
@@ -276,8 +289,8 @@ onUnmounted(() => {
           </p>
         </section>
 
-        <section v-if="statusView.phase === 'ready'" class="space-y-2">
-          <h3 class="section-heading">Provider</h3>
+        <section v-if="statusView.phase === 'ready'" class="panel-section">
+          <h3 class="panel-section-title">Provider</h3>
           <input
             v-model="filter"
             type="search"
@@ -285,30 +298,30 @@ onUnmounted(() => {
             class="text-control"
           >
 
-          <p v-if="visibleProviders.length === 0" class="text-xs text-desk-muted">
-            没有匹配的 Provider。
+          <p v-if="visibleProviders.length === 0" class="empty-state py-10">
+            <span class="empty-state-title">没有匹配的 Provider</span>
           </p>
-          <ul v-else class="space-y-0.5">
+          <ul v-else class="space-y-1.5">
             <li
               v-for="provider in visibleProviders"
               :key="provider.providerId"
-              class="list-item border-desk-line"
+              class="list-card"
             >
-              <div class="flex flex-wrap items-baseline justify-between gap-2">
-                <p class="text-xs font-semibold">
+              <div class="flex flex-wrap items-center justify-between gap-2">
+                <p class="text-sm font-medium">
                   {{ provider.name }}
                   <span class="ml-1 font-mono text-2xs text-desk-muted">{{ provider.providerId }}</span>
                 </p>
-                <p class="text-2xs text-desk-muted">{{ provider.modelCount }} 个已知模型</p>
+                <span class="chip">{{ provider.modelCount }} 个已知模型</span>
               </div>
-              <p class="mt-0.5 text-2xs" :class="provider.configured ? 'text-desk-ink' : 'text-desk-muted'">
+              <p class="mt-1 text-xs" :class="provider.configured ? 'text-desk-ink' : 'text-desk-muted'">
                 {{ statusLabel(provider) }}
                 <span v-if="provider.subscription" class="ml-1">（订阅账户）</span>
               </p>
-              <p v-if="availabilityLabel(provider) !== null" class="text-2xs text-desk-muted">
+              <p v-if="availabilityLabel(provider) !== null" class="mt-0.5 text-xs text-desk-muted">
                 {{ availabilityLabel(provider) }}
               </p>
-              <div v-if="provider.authTypes.length > 0" class="mt-1.5 flex flex-wrap items-center gap-2">
+              <div v-if="provider.authTypes.length > 0" class="mt-2 flex flex-wrap items-center gap-2">
                 <button
                   v-for="method in provider.authTypes"
                   :key="`${provider.providerId}-${method}`"
@@ -322,14 +335,14 @@ onUnmounted(() => {
                 <button
                   v-if="provider.storedType !== null"
                   type="button"
-                  class="control-button-sm border-desk-danger text-desk-danger"
+                  class="control-button-quiet-danger ml-auto"
                   :disabled="logoutAction.phase === 'sending'"
                   @click="authStore.logout(provider.providerId)"
                 >
                   删除已保存凭据
                 </button>
               </div>
-              <p v-else class="mt-1 text-2xs text-desk-muted">
+              <p v-else class="mt-1 text-xs text-desk-muted">
                 这个 Provider 的凭据只能在 Pi 外部配置；这里只展示状态。
               </p>
             </li>
@@ -340,16 +353,18 @@ onUnmounted(() => {
           </p>
         </section>
 
-        <section class="status-notice space-y-1">
-          <h3 class="text-xs font-semibold text-desk-ink">边界说明</h3>
-          <ul class="list-disc space-y-1 pl-4">
-            <li>OAuth 由 Pi 的官方实现完成：回调地址与状态校验都在它自己进程内，Desktop 只把授权页交给系统浏览器。</li>
+        <section class="panel-section">
+          <h3 class="panel-section-title">边界说明</h3>
+          <ul class="list-disc space-y-1 pl-4 text-xs leading-5 text-desk-muted">
+            <li>OAuth 由 Pi 的官方实现完成：回调地址与状态校验都在它自己的进程内，Desktop 只把授权页交给系统浏览器。</li>
             <li>退出登录只删除 Pi 保存的凭据，不影响环境变量与 models.json 里配置的凭据或密钥命令。</li>
             <li>已保存的凭据不会回传到页面；页面只能看到「是否已配置」与来源。</li>
             <li>凭据变化后运行中的 Runtime 仍使用启动时的可用模型快照，需要重新加载才能看到新 Provider 的模型。</li>
           </ul>
         </section>
       </div>
+        </div>
+      </Transition>
     </div>
-  </div>
+  </Transition>
 </template>

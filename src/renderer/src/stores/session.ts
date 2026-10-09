@@ -32,6 +32,17 @@ export const useSessionStore = defineStore('session', () => {
   /** 待确认的重载请求：与打开共用中断确认弹窗，但目标是重启当前 Runtime。 */
   const pendingReload = ref(false)
 
+  /** /resume 与顶栏会话 chip 共用的会话选择弹层。 */
+  const showSessionPicker = ref(false)
+
+  function openSessionPicker(): void {
+    showSessionPicker.value = true
+  }
+
+  function closeSessionPicker(): void {
+    showSessionPicker.value = false
+  }
+
   /** 分叉弹层的展示状态：消息加载、进行中的分叉与错误。 */
   const forkMessages = ref<readonly ForkMessageSummary[]>([])
   const forkLoading = ref(false)
@@ -244,6 +255,7 @@ export const useSessionStore = defineStore('session', () => {
     forkLoading,
     forkBusy,
     forkError,
+    showSessionPicker,
     initialize,
     refresh,
     open,
@@ -251,6 +263,8 @@ export const useSessionStore = defineStore('session', () => {
     retryPendingAfterTrust,
     confirmPending,
     cancelPending,
+    openSessionPicker,
+    closeSessionPicker,
     loadForkMessages,
     fork,
     closeFork
