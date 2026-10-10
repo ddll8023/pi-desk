@@ -923,6 +923,7 @@ export function isMcpInspectionResult(value: unknown): value is McpInspectionRes
 export function isResourcePreviewRequest(value: unknown): value is ResourcePreviewRequest {
   if (!isRecord(value)) return false
   return typeof value.force === 'boolean'
+    && Object.keys(value).every(key => key === 'force')
 }
 
 function isMcpConfigServer(value: unknown): value is McpConfigServer {
