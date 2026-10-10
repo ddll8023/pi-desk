@@ -6,8 +6,6 @@
   --color-desk-canvas: #f4f6f8;
   --color-desk-canvas-sunken: #eceff3;
   --color-desk-surface: #ffffff;
-  /* 浮起表面的配色令牌；当前组件样式未引用。 */
-  --color-desk-surface-raised: #ffffff;
   /* 悬停、内嵌块与禁用态底色；与 canvas 分开，避免在白色面板上串色。 */
   --color-desk-surface-subtle: #f2f6f8;
   --color-desk-ink: #17252f;
@@ -77,7 +75,6 @@
     --color-desk-canvas: #10161c;
     --color-desk-canvas-sunken: #0b1015;
     --color-desk-surface: #1a222b;
-    --color-desk-surface-raised: #212b36;
     --color-desk-surface-subtle: #232d38;
     --color-desk-ink: #dce6ee;
     --color-desk-muted: #91a2b1;
