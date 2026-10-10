@@ -91,6 +91,7 @@ import type {
 import {
   RUNTIME_ABORT_CHANNEL,
   RUNTIME_CAPABILITIES_CHANNEL,
+  RUNTIME_SET_MODEL_CHANNEL,
   RUNTIME_DIAGNOSTICS_CHANNEL,
   RUNTIME_MCP_COMMAND_CHANNEL,
   RUNTIME_MCP_CONFIG_CHANNEL,
@@ -108,7 +109,8 @@ import {
   RUNTIME_STATUS_CHANNEL,
   RUNTIME_STOP_CHANNEL,
   RUNTIME_STATUS_EVENT,
-  isResourcePreviewRequest
+  isResourcePreviewRequest,
+  isRuntimeSetModelRequest
 } from '../shared/runtime-api'
 import type {
   CapabilitiesResult,
@@ -814,7 +816,7 @@ function trustFailureFromError(error: unknown): TrustStatusResult {
   return trustFailure('INTERNAL_ERROR', '读取或保存信任决定时发生未预期的内部错误。')
 }
 
-/** 只接受项目目录；不接受可执行文件路径、启动参数或任意 RPC 内容。 */
+/** 注册固定 Runtime 接口并逐接口校验参数；不向页面开放可执行文件路径、任意启动参数或任意 RPC 内容。 */
 function registerRuntimeHandlers(pageUrl: string): void {
   handle(
     RUNTIME_START_CHANNEL,
@@ -889,6 +891,20 @@ function registerRuntimeHandlers(pageUrl: string): void {
         return capabilitiesFailure('INVALID_REQUEST', '能力读取接口不接受参数。')
       }
       return runtimeManager.readCapabilities()
+    }
+  )
+
+  /** 模型切换只接受明确代际与模型身份；运行条件由 Runtime 所有者再次检查。 */
+  handle(
+    RUNTIME_SET_MODEL_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<RuntimeResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return runtimeFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 1 || !isRuntimeSetModelRequest(args[0])) {
+        return runtimeFailure('INVALID_REQUEST', '模型切换只接受 Runtime 代际、供应商和模型 ID。')
+      }
+      return runtimeManager.setModel(args[0])
     }
   )
 

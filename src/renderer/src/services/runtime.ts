@@ -1,4 +1,4 @@
-/** 作为渲染端 Runtime 启停、可用模型读取、Prompt 提交、中止与投影同步的调用入口，把桥接缺失与通信异常转换为安全的展示结果。 */
+/** 作为渲染端 Runtime 启停、可用模型读取与切换、Prompt 提交、中止与投影同步的调用入口，把桥接缺失与通信异常转换为安全的展示结果。 */
 import type {
   CapabilitiesResult,
   ProjectionBatch,
@@ -98,6 +98,25 @@ export async function getRuntimeCapabilities(): Promise<CapabilitiesResult> {
     return await bridge.getRuntimeCapabilities()
   } catch {
     return callFailed()
+  }
+}
+
+/** 切换当前会话模型；只传原始值，通信失败保留异常文本便于定位。 */
+export async function setRuntimeModel(
+  runtimeId: number,
+  provider: string,
+  modelId: string
+): Promise<RuntimeResult> {
+  const bridge = window.desktop
+  if (!bridge || typeof bridge.setRuntimeModel !== 'function') return unavailable()
+  try {
+    return await bridge.setRuntimeModel(runtimeId, provider, modelId)
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error)
+    return {
+      ok: false,
+      error: { code: 'BRIDGE_CALL_FAILED', message: `模型切换桥接调用失败：${detail}` }
+    }
   }
 }
 

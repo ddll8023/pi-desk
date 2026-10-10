@@ -92,6 +92,7 @@ import type {
 import {
   RUNTIME_ABORT_CHANNEL,
   RUNTIME_CAPABILITIES_CHANNEL,
+  RUNTIME_SET_MODEL_CHANNEL,
   RUNTIME_DIAGNOSTICS_CHANNEL,
   RUNTIME_MCP_COMMAND_CHANNEL,
   RUNTIME_MCP_CONFIG_CHANNEL,
@@ -142,6 +143,7 @@ import type {
   RuntimeApi,
   RuntimeDiagnosticsResult,
   RuntimeResult,
+  RuntimeSetModelRequest,
   RuntimeStartRequest,
   RuntimeStatus
 } from '../shared/runtime-api'
@@ -381,6 +383,13 @@ const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionAp
   async getRuntimeCapabilities() {
     const response: unknown = await ipcRenderer.invoke(RUNTIME_CAPABILITIES_CHANNEL)
     return isCapabilitiesResult(response) ? response : invalidCapabilitiesResponse()
+  },
+
+  /** 只传模型身份与代际；不向页面开放任意 RPC，也不接受持久化选项。 */
+  async setRuntimeModel(runtimeId: number, provider: string, modelId: string): Promise<RuntimeResult> {
+    const request: RuntimeSetModelRequest = { runtimeId, provider, modelId }
+    const response: unknown = await ipcRenderer.invoke(RUNTIME_SET_MODEL_CHANNEL, request)
+    return isRuntimeResult(response) ? response : invalidRuntimeResponse()
   },
 
   async getRuntimeResources(): Promise<ResourcesResult> {

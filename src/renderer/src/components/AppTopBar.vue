@@ -1,4 +1,4 @@
-<!-- 中央工作区顶栏：呈现当前项目、会话摘要与 Runtime 状态，并按窗口模式切换侧栏。 -->
+<!-- 中央工作区顶栏：呈现当前项目、会话摘要、当前模型与 Runtime 状态，并按窗口模式切换侧栏。 -->
 <script setup lang="ts">
 import { computed } from 'vue'
 import { storeToRefs } from 'pinia'
@@ -6,6 +6,7 @@ import { useProjectStore } from '../stores/project'
 import { useRuntimeStore } from '../stores/runtime'
 import { useSessionStore } from '../stores/session'
 import AppButton from './ui/AppButton.vue'
+import RuntimeModelSelect from './RuntimeModelSelect.vue'
 
 defineProps<{
   readonly sidebarCollapsed: boolean
@@ -82,6 +83,8 @@ const sessionTitleText = computed(() => (
       </AppButton>
       <span class="app-topbar-project" :title="projectPath">{{ projectPath }}</span>
     </div>
+
+    <RuntimeModelSelect />
 
     <span class="app-runtime-status" :class="`is-${runtimeStatus.kind}`" role="status">
       <span class="app-runtime-status-dot" aria-hidden="true"></span>

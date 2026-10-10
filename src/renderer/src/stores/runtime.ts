@@ -1,4 +1,4 @@
-/** 保存聊天区与 Runtime 状态的展示状态、投影消息与工具条目副本、可用模型、订阅与启停、Prompt 提交及中止动作，不持有 Runtime 所有权，也不承担消息重建与通知窗口。 */
+/** 保存聊天区与 Runtime 状态的展示状态、投影消息与工具条目副本、可用模型与会话模型切换、订阅与启停、Prompt 提交及中止动作，不持有 Runtime 所有权，也不承担消息重建与通知窗口。 */
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import type {
@@ -21,6 +21,7 @@ import {
   getRuntimeProjection,
   getRuntimeStatus,
   sendPrompt,
+  setRuntimeModel,
   startRuntime,
   stopRuntime,
   subscribeRuntimeProjection,
@@ -45,6 +46,12 @@ type PromptViewState =
 type AbortViewState =
   | { phase: 'idle' }
   | { phase: 'requesting' }
+  | { phase: 'error'; error: RuntimeError }
+
+/** 模型切换只保存动作状态，当前模型始终由 Runtime 快照表达。 */
+type ModelSwitchViewState =
+  | { phase: 'idle' }
+  | { phase: 'switching' }
   | { phase: 'error'; error: RuntimeError }
 
 /** `synced` 表示当前展示就是基准（无 Runtime 时为空基准），`syncing` 表示未取得基准或正在重同步，`stale` 表示失去同步且尚未取得快照。 */
@@ -138,6 +145,9 @@ export const useRuntimeStore = defineStore('runtime', () => {
   const droppedMessages = ref(0)
   const droppedTools = ref(0)
   const capabilitiesView = ref<CapabilitiesViewState>({ phase: 'idle' })
+  const modelSwitchView = ref<ModelSwitchViewState>({ phase: 'idle' })
+  let modelSwitchRequest = 0
+  let capabilitiesRequest = 0
   let releaseSubscription: (() => void) | null = null
   let releaseProjection: (() => void) | null = null
   /** 已取得基准快照的 Runtime 代际；为空表示当前没有 Runtime 代际（空基准或尚未取得快照）。 */
@@ -160,12 +170,15 @@ export const useRuntimeStore = defineStore('runtime', () => {
     await syncProjection()
   }
 
-  /** 页面卸载时释放订阅；重复调用无副作用。 */
+  /** 页面卸载时释放订阅并作废模型切换与模型列表读取的迟到结果；不取消主进程已提交的操作。 */
   function dispose(): void {
     releaseSubscription?.()
     releaseSubscription = null
     releaseProjection?.()
     releaseProjection = null
+    modelSwitchRequest += 1
+    capabilitiesRequest += 1
+    modelSwitchView.value = { phase: 'idle' }
   }
 
   /** 启动唯一 Runtime；启动、就绪或关闭中都不重复发起。当前界面不调用它，启动统一走打开或新建会话。 */
@@ -210,15 +223,46 @@ export const useRuntimeStore = defineStore('runtime', () => {
     applyStatus(result.data)
   }
 
-  /** 提交 Prompt（含可选图片附件）；只有就绪状态才发起，发送中不重复提交。 */
+  /** 提交 Prompt（含可选图片附件）；仅在就绪且未切换模型时发起，发送中不重复提交。 */
   async function send(message: string, images: readonly PromptImageInput[] = []): Promise<void> {
-    if (view.value.phase !== 'ready' || promptView.value.phase === 'sending') return
+    if (view.value.phase !== 'ready' || promptView.value.phase === 'sending'
+      || modelSwitchView.value.phase === 'switching') return
 
     promptView.value = { phase: 'sending' }
     const result = await sendPrompt(message, images)
     promptView.value = result.ok
       ? { phase: 'accepted', disposition: result.data.disposition }
       : { phase: 'error', error: result.error }
+  }
+
+  /** 只在当前代际空闲时切换；不乐观更新模型，也不自动重试写操作。 */
+  async function switchModel(provider: string, modelId: string): Promise<void> {
+    if (view.value.phase !== 'ready' || view.value.snapshot.info?.isStreaming === true
+      || promptView.value.phase === 'sending' || modelSwitchView.value.phase === 'switching') return
+    const status = view.value.snapshot
+    const runtimeId = status.runtimeId
+    if (runtimeId === null) return
+    if (status.info?.modelProvider === provider && status.info.modelId === modelId) return
+
+    const request = ++modelSwitchRequest
+    modelSwitchView.value = { phase: 'switching' }
+    const result = await setRuntimeModel(runtimeId, provider, modelId)
+    if (request !== modelSwitchRequest || view.value.phase !== 'ready'
+      || view.value.snapshot.runtimeId !== runtimeId) return
+    if (!result.ok) {
+      modelSwitchView.value = { phase: 'error', error: result.error }
+      return
+    }
+    if (result.data.runtimeId !== runtimeId || result.data.state !== 'ready') {
+      modelSwitchView.value = {
+        phase: 'error',
+        error: { code: 'INVALID_RESPONSE', message: '模型切换返回了其他会话的状态，未应用该结果。' }
+      }
+      return
+    }
+    applyStatus(result.data)
+    modelSwitchView.value = { phase: 'idle' }
+    void refreshCapabilities()
   }
 
   /**
@@ -325,8 +369,14 @@ export const useRuntimeStore = defineStore('runtime', () => {
 
   /** 主进程快照是唯一真相：事件通知与查询结果都经这里映射为展示状态。 */
   function applyStatus(status: RuntimeStatus): void {
+    const previousRuntimeId = view.value.phase === 'ready' ? view.value.snapshot.runtimeId : null
     const previousStreaming = view.value.phase === 'ready'
       && view.value.snapshot.info?.isStreaming === true
+    if (status.state !== 'ready' || status.runtimeId !== previousRuntimeId) {
+      modelSwitchRequest += 1
+      capabilitiesRequest += 1
+      modelSwitchView.value = { phase: 'idle' }
+    }
     if (status.state !== 'ready') {
       resetProjection()
       // Runtime 离开就绪后，上一次中止请求的展示状态不再有意义。
@@ -369,15 +419,19 @@ export const useRuntimeStore = defineStore('runtime', () => {
     view.value = status.runtimeId === null ? { phase: 'idle' } : { phase: 'closed' }
   }
 
-  /** 读取当前 Runtime 的可用模型；结果必须属于仍在就绪的同一代际，否则丢弃。 */
+  /** 读取当前 Runtime 的可用模型；仅接收仍在就绪的同一代际中最新请求的结果，其余结果丢弃。 */
   async function refreshCapabilities(): Promise<void> {
     if (view.value.phase !== 'ready') return
     const requestedRuntimeId = view.value.snapshot.runtimeId
+    const request = ++capabilitiesRequest
     capabilitiesAttemptedRuntimeId = requestedRuntimeId
-    if (capabilitiesView.value.phase !== 'ready') capabilitiesView.value = { phase: 'loading' }
+    if (capabilitiesView.value.phase !== 'ready' || capabilitiesView.value.data.modelsError !== null) {
+      capabilitiesView.value = { phase: 'loading' }
+    }
 
     const result = await getRuntimeCapabilities()
-    if (view.value.phase !== 'ready' || view.value.snapshot.runtimeId !== requestedRuntimeId) return
+    if (request !== capabilitiesRequest || view.value.phase !== 'ready'
+      || view.value.snapshot.runtimeId !== requestedRuntimeId) return
     if (!result.ok) {
       capabilitiesView.value = { phase: 'error', error: result.error }
       return
@@ -391,6 +445,7 @@ export const useRuntimeStore = defineStore('runtime', () => {
     promptView,
     abortView,
     capabilitiesView,
+    modelSwitchView,
     messages,
     tools,
     projectionSync,
@@ -402,6 +457,7 @@ export const useRuntimeStore = defineStore('runtime', () => {
     launch,
     shutdown,
     send,
+    switchModel,
     stopOperation,
     refreshCapabilities
   }

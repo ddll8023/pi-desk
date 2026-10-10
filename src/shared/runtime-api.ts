@@ -1,4 +1,4 @@
-/** 只定义 Runtime 启停、状态、Prompt 提交、中止、可用模型读取、Pi 资源与资源预读、诊断读取、MCP 状态、MCP 配置列举、MCP 服务器探测与 MCP 登录/退出/重连命令、安全启动、消息/工具投影 IPC 的固定通道、事件名、结果类型与跨进程响应校验。 */
+/** 只定义 Runtime 启停、状态、Prompt 提交、中止、可用模型读取与当前会话模型切换、Pi 资源与资源预读、诊断读取、MCP 状态、MCP 配置列举、MCP 服务器探测与 MCP 登录/退出/重连命令、安全启动、消息/工具投影 IPC 的固定通道、事件名、结果类型与跨进程响应校验。 */
 import type { DesktopErrorCode } from './desktop-api'
 
 export const RUNTIME_START_CHANNEL = 'desktop:runtime-start'
@@ -9,6 +9,7 @@ export const RUNTIME_ABORT_CHANNEL = 'desktop:runtime-abort'
 export const RUNTIME_PROJECTION_CHANNEL = 'desktop:runtime-projection'
 export const RUNTIME_PROJECTION_ACK_CHANNEL = 'desktop:runtime-projection-ack'
 export const RUNTIME_CAPABILITIES_CHANNEL = 'desktop:runtime-capabilities'
+export const RUNTIME_SET_MODEL_CHANNEL = 'desktop:runtime-set-model'
 /** 只读：读取当前代际已加载的 Pi 资源清单（`get_commands` 投影）。 */
 export const RUNTIME_RESOURCES_CHANNEL = 'desktop:runtime-resources'
 /**
@@ -46,6 +47,13 @@ export const RUNTIME_PROJECTION_EVENT = 'desktop:runtime-projection-changed'
 /** 启动请求只接受项目目录；其他启动参数一律不接受。 */
 export interface RuntimeStartRequest {
   readonly projectPath: string
+}
+
+/** 模型切换只针对页面所见的 Runtime 代际，不接受任意 RPC 或全局持久化参数。 */
+export interface RuntimeSetModelRequest {
+  readonly runtimeId: number
+  readonly provider: string
+  readonly modelId: string
 }
 
 /**
@@ -253,7 +261,7 @@ export type ProjectionResult =
   | { readonly ok: true; readonly data: ProjectionSnapshot }
   | { readonly ok: false; readonly error: RuntimeError }
 
-/** 可用模型的精简投影；仅保留 Provider 状态与图片输入判断所需字段。 */
+/** 可用模型的精简投影；仅保留模型选择、Provider 状态与图片输入判断所需字段。 */
 export interface ModelSummary {
   readonly provider: string
   readonly id: string
@@ -472,6 +480,11 @@ export interface RuntimeApi {
   readonly getRuntimeProjection: () => Promise<ProjectionResult>
   /** 读取当前代际的可用模型；失败原因由结果表达。 */
   readonly getRuntimeCapabilities: () => Promise<CapabilitiesResult>
+  /**
+   * 只切换当前会话模型；成功返回 Pi 刷新后的实际状态，不改变全局默认。
+   * 失败或超时不保证模型未改变，不自动重发；实际模型以 Runtime 状态为准。
+   */
+  readonly setRuntimeModel: (runtimeId: number, provider: string, modelId: string) => Promise<RuntimeResult>
   /** 读取当前代际已加载的 Pi 资源清单；清单来源是 `get_commands`，不解析 Pi 配置文件。 */
   readonly getRuntimeResources: () => Promise<ResourcesResult>
   /** 读取 Runtime 未启动时的资源预读结果；项目与信任决定由主进程决定，`force` 绕过其进程内缓存。 */
@@ -526,6 +539,21 @@ const RUNTIME_ERROR_CODES: readonly string[] = [
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+/** 切换参数只放行代际与模型身份；字符串长度有界，保持自定义 Provider/模型名称兼容。 */
+export function isRuntimeSetModelRequest(value: unknown): value is RuntimeSetModelRequest {
+  if (!isRecord(value)) return false
+  return typeof value.runtimeId === 'number'
+    && Number.isSafeInteger(value.runtimeId)
+    && value.runtimeId > 0
+    && typeof value.provider === 'string'
+    && value.provider.trim() !== ''
+    && value.provider.length <= 256
+    && typeof value.modelId === 'string'
+    && value.modelId.trim() !== ''
+    && value.modelId.length <= 1024
+    && Object.keys(value).every(key => key === 'runtimeId' || key === 'provider' || key === 'modelId')
 }
 
 function isRuntimeState(value: unknown): value is RuntimeState {

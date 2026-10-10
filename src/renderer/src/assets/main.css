@@ -1079,13 +1079,13 @@
     z-index: 10;
     display: flex;
     min-width: 0;
-    height: 3.25rem;
+    min-height: 3.25rem;
     flex: none;
     align-items: center;
     gap: 0.75rem;
     border-bottom: 1px solid var(--color-desk-line);
     background: var(--color-desk-surface);
-    padding: 0 1rem;
+    padding: 0.5rem 1rem;
   }
 
   .app-sidebar-toggle {
@@ -1120,6 +1120,12 @@
     line-height: 1.35;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .app-runtime-model {
+    min-width: 0;
+    width: clamp(10rem, 26vw, 24rem);
+    flex: none;
   }
 
   .app-runtime-status {
@@ -1251,8 +1257,15 @@
     }
 
     .app-topbar {
+      flex-wrap: wrap;
       gap: 0.5rem;
-      padding: 0 0.625rem;
+      padding: 0.5rem 0.625rem;
+    }
+
+    .app-runtime-model {
+      width: 100%;
+      flex: 1 0 100%;
+      order: 1;
     }
 
     .app-runtime-status {

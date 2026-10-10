@@ -17,7 +17,7 @@ const extensionStore = useExtensionUiStore()
 const projectStore = useProjectStore()
 const resourceStore = useResourceStore()
 const sessionStore = useSessionStore()
-const { view: runtimeView, promptView, abortView, projectionSync, capabilitiesView } = storeToRefs(runtimeStore)
+const { view: runtimeView, promptView, abortView, projectionSync, capabilitiesView, modelSwitchView } = storeToRefs(runtimeStore)
 const { editorText, editorTextVersion } = storeToRefs(extensionStore)
 
 const draft = ref('')
@@ -69,9 +69,9 @@ const sending = computed(() => promptView.value.phase === 'sending')
 const stopVisible = computed(() => (
   runtimeReady.value && (streaming.value || abortView.value.phase === 'requesting')
 ))
-/** 运行中按 Pi 就绪条件提交；未就绪时仅允许有项目且没有并发启动的首次启动请求。 */
+/** 就绪后仅在 Agent 空闲、投影同步且无提交或模型/会话切换时允许发送；未就绪时仅允许有项目且没有并发启动的首次启动请求。 */
 const canSubmit = computed(() => {
-  if (sending.value || sessionStore.opening
+  if (sending.value || modelSwitchView.value.phase === 'switching' || sessionStore.opening
     || sessionStore.awaitingTrust || sessionStore.awaitingInterrupt) return false
   if (runtimeReady.value) {
     return projectionSync.value === 'synced' && !streaming.value
@@ -94,6 +94,9 @@ const status = computed(() => {
   }
   if (promptView.value.phase === 'error') {
     return { kind: 'error' as const, text: promptView.value.error.message }
+  }
+  if (modelSwitchView.value.phase === 'switching') {
+    return { kind: 'info' as const, text: '正在切换模型；草稿和附件会保留，完成后可发送。' }
   }
   if (sending.value) return { kind: 'info' as const, text: '正在提交 Prompt，等待 Pi 回应。' }
   if (sessionStore.awaitingTrust) {

@@ -34,6 +34,7 @@ import type {
   RuntimeDiagnosticsResult,
   RuntimeErrorCode,
   RuntimeResult,
+  RuntimeSetModelRequest,
   RuntimeStatus
 } from '../shared/runtime-api'
 import type { ExtensionDialogResponseInput, ExtensionUiSnapshot } from '../shared/extension-ui-api'
@@ -71,6 +72,9 @@ const HISTORY_TIMEOUT_MS = 15_000
 
 /** 可用模型列表查询的等待上限。 */
 const CAPABILITIES_TIMEOUT_MS = 15_000
+
+/** 模型切换只等待官方响应；超时结果未知，不自动重发。 */
+const MODEL_SWITCH_TIMEOUT_MS = 30_000
 
 /** prompt 文本上限，按 UTF-8 字节计。 */
 const PROMPT_MAX_BYTES = 1_048_576
@@ -399,6 +403,9 @@ export class RuntimeManager {
   } | null = null
   /** 事件触发的状态刷新是否在进行中：避免每轮结束叠加多次 get_state。 */
   private refreshing = false
+  /** 模型切换与 Prompt 的预提交阶段互斥；标记带代际，旧请求结束不影响新 Runtime。 */
+  private modelChangeRuntimeId: number | null = null
+  private promptRequestRuntimeId: number | null = null
   /** 最近一次启动意图（项目与会话 id）；只用于安全模式启动与重新加载资源，
    * 由主进程记录，不接受页面传入；退出后仍保留，以便启动失败时重试。
    */
@@ -721,10 +728,17 @@ export class RuntimeManager {
 
   /**
    * 提交 prompt 并返回请求接受或拒绝结果；不等待 Agent 执行结束。
-   * busy、无模型与凭据问题一律由 Pi 的拒绝表达，主进程不做本地 streaming 预检。
+   * 与模型切换及重复预提交互斥；Agent busy、无模型与凭据问题仍由 Pi 的拒绝表达，不做 streaming 预检。
    */
   async prompt(message: string, images: readonly PromptImageInput[] = []): Promise<PromptResult> {
+    let requestedRuntimeId: number | null = null
     try {
+      const runtime = this.requireReadyRuntime()
+      if (this.modelChangeRuntimeId === runtime.runtimeId || this.promptRequestRuntimeId === runtime.runtimeId) {
+        throw new RuntimeFailure('RUNTIME_COMMAND_REJECTED', '模型切换或 Prompt 提交仍在进行中，请稍后再发送。')
+      }
+      requestedRuntimeId = runtime.runtimeId
+      this.promptRequestRuntimeId = requestedRuntimeId
       return { ok: true, data: { disposition: await this.submitPrompt(message, images) } }
     } catch (error) {
       const failure = error instanceof RuntimeFailure
@@ -732,6 +746,10 @@ export class RuntimeManager {
         : new RuntimeFailure('INTERNAL_ERROR', '提交 Prompt 时发生未预期的内部错误。')
       // 请求失败不改写 Runtime 快照；进程真的退出时由退出路径负责收敛状态。
       return { ok: false, error: { code: failure.code, message: failure.message } }
+    } finally {
+      if (requestedRuntimeId !== null && this.promptRequestRuntimeId === requestedRuntimeId) {
+        this.promptRequestRuntimeId = null
+      }
     }
   }
 
@@ -769,6 +787,81 @@ export class RuntimeManager {
         : new RuntimeFailure('INTERNAL_ERROR', '读取 Agent 能力时发生未预期的内部错误。')
       return { ok: false, error: { code: failure.code, message: failure.message } }
     }
+  }
+
+  /** 当前会话模型切换：不传持久化参数，不重启 Runtime；成功以 get_state 的实际值为准。 */
+  async setModel(request: RuntimeSetModelRequest): Promise<RuntimeResult> {
+    let runtime: ActiveRuntime | null = null
+    let locked = false
+    try {
+      runtime = this.requireReadyRuntime()
+      if (request.runtimeId !== runtime.runtimeId) {
+        throw new RuntimeFailure('RUNTIME_NOT_READY', '会话已切换，请重新选择当前会话的模型。')
+      }
+      if (this.modelChangeRuntimeId === runtime.runtimeId || this.promptRequestRuntimeId === runtime.runtimeId) {
+        throw new RuntimeFailure('RUNTIME_COMMAND_REJECTED', '已有模型切换或 Prompt 提交，请稍后再切换。')
+      }
+      if (this.snapshot.info?.isStreaming === true) {
+        throw new RuntimeFailure('RUNTIME_COMMAND_REJECTED', 'Agent 正在运行，本轮结束后才能切换模型。')
+      }
+      this.modelChangeRuntimeId = runtime.runtimeId
+      locked = true
+      // 页面状态可能滞后；先询问 Pi，并在读取期间阻止新的 Prompt 提交。
+      const before = await this.synchronizeModelStatus(runtime)
+      if (before.info?.isStreaming === true) {
+        throw new RuntimeFailure('RUNTIME_COMMAND_REJECTED', 'Agent 正在运行，本轮结束后才能切换模型。')
+      }
+      if (this.active !== runtime || this.snapshot.state !== 'ready') {
+        throw new RuntimeFailure('RUNTIME_NOT_READY', 'Runtime 已变更，未向旧会话发送模型切换。')
+      }
+      const response = await this.requestCommand(
+        runtime,
+        { type: 'set_model', provider: request.provider, modelId: request.modelId },
+        MODEL_SWITCH_TIMEOUT_MS,
+        '切换模型'
+      )
+      if (!response.success) {
+        throw new RuntimeFailure(
+          'RUNTIME_COMMAND_REJECTED',
+          `Pi 拒绝了模型切换：${response.error ?? '未提供错误信息'}`
+        )
+      }
+      return { ok: true, data: await this.synchronizeModelStatus(runtime) }
+    } catch (error) {
+      // 即使切换超时，也可能已经生效；只读取实际状态，不重新发送切换命令。
+      if (locked && runtime !== null && this.active === runtime && this.snapshot.state === 'ready') {
+        await this.refreshStatus(runtime)
+      }
+      const failure = error instanceof RuntimeFailure
+        ? error
+        : new RuntimeFailure('INTERNAL_ERROR', `切换模型时发生内部错误：${error instanceof Error ? error.message : String(error)}`)
+      return { ok: false, error: { code: failure.code, message: failure.message } }
+    } finally {
+      if (locked && runtime !== null && this.modelChangeRuntimeId === runtime.runtimeId) {
+        this.modelChangeRuntimeId = null
+      }
+    }
+  }
+
+  /** 切换前后严格读取并广播权威状态；旧代际或关闭中的结果不能回写。 */
+  private async synchronizeModelStatus(runtime: ActiveRuntime): Promise<RuntimeStatus> {
+    if (this.active !== runtime || this.snapshot.state !== 'ready') {
+      throw new RuntimeFailure('RUNTIME_NOT_READY', 'Runtime 已变更，模型切换结果不再属于当前会话。')
+    }
+    const response = await this.requestCommand(runtime, { type: 'get_state' }, READY_TIMEOUT_MS, '同步模型状态')
+    if (!response.success) {
+      throw new RuntimeFailure('RUNTIME_COMMAND_REJECTED', `Pi 拒绝了模型状态读取：${response.error ?? '未提供错误信息'}`)
+    }
+    const info = toRuntimeInfo(response.data)
+    if (info === null) {
+      throw new RuntimeFailure('RUNTIME_PROTOCOL_ERROR', '模型状态读取缺少约定的会话字段；切换结果需以实际状态为准。')
+    }
+    if (this.active !== runtime || this.snapshot.state !== 'ready') {
+      throw new RuntimeFailure('RUNTIME_NOT_READY', 'Runtime 已变更，模型切换结果不再属于当前会话。')
+    }
+    const status: RuntimeStatus = { state: 'ready', runtimeId: runtime.runtimeId, info, lastError: null }
+    this.publish(status)
+    return status
   }
 
   /**
@@ -865,8 +958,12 @@ export class RuntimeManager {
         projection.applySessionEvent(payload)
         this.applyRuntimeEvent(runtimeId, payload)
       },
-      onUnmatchedResponse: () => {
-        // 无 pending 可匹配的 response 不致命，例如 Pi 自行回报的解析错误。
+      onUnmatchedResponse: (response) => {
+        // 超时后的切换响应仍可能成功；补读本代际状态，但绝不重放命令。
+        if (response.command === 'set_model' && response.success
+          && this.active?.runtimeId === runtimeId && this.snapshot.state === 'ready') {
+          this.scheduleStatusRefresh(this.active)
+        }
       }
     })
 
