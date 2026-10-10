@@ -73,12 +73,11 @@ const emptyState = computed(() => {
   if (current.phase === 'ready') {
     return { title: '可以开始对话', description: '在下方输入内容并发送；Enter 发送，Shift+Enter 换行。', action: null }
   }
-  if (current.phase === 'idle' || current.phase === 'closed') {
-    return {
-      title: '准备开始对话',
-      description: '输入内容并发送后才会启动 Pi；首次启动期间会保留输入。',
-      action: null
-    }
+  // idle 与 closed 是同一份提示；放在最后作为兜底返回，计算式不会返回 undefined。
+  return {
+    title: '准备开始对话',
+    description: '输入内容并发送后才会启动 Pi；首次启动期间会保留输入。',
+    action: null
   }
 })
 

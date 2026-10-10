@@ -43,7 +43,7 @@ const runtimeStatus = computed(() => {
   if (runtime.phase === 'starting') return { label: 'Pi 启动中', kind: 'pending' }
   if (runtime.phase === 'stopping') return { label: 'Pi 关闭中', kind: 'pending' }
   if (runtime.phase === 'failed') return { label: 'Pi 异常', kind: 'error' }
-  if (runtime.phase === 'ready' && runtime.snapshot.info.isStreaming) {
+  if (runtime.phase === 'ready' && runtime.snapshot.info?.isStreaming === true) {
     return { label: 'Agent 运行中', kind: 'active' }
   }
   if (runtime.phase === 'ready') return { label: 'Pi 就绪', kind: 'ready' }

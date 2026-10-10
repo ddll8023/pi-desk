@@ -606,10 +606,10 @@ const fileCompletionActive = computed(() => (
   && (fileSearchScheduled.value || projectFileStore.pending || visibleFileEntries.value.length > 0)
 ))
 
-/** 弹层归属：两个列表互斥出现，`aria-controls` 指向当前真正显示的那个。 */
+/** 弹层归属：两个列表互斥出现，`aria-controls` 指向当前真正显示的那个；都没有打开时没有可指向的元素。 */
 const activeListId = computed(() => {
   if (visibleFileEntries.value.length > 0) return 'prompt-file-list'
-  return visibleSuggestions.value.length > 0 ? 'prompt-command-list' : null
+  return visibleSuggestions.value.length > 0 ? 'prompt-command-list' : undefined
 })
 const activeListOpen = computed(() => (
   visibleFileEntries.value.length > 0 || visibleSuggestions.value.length > 0
