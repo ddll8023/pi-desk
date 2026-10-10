@@ -94,6 +94,7 @@ import {
   RUNTIME_CAPABILITIES_CHANNEL,
   RUNTIME_DIAGNOSTICS_CHANNEL,
   RUNTIME_MCP_COMMAND_CHANNEL,
+  RUNTIME_MCP_CONFIG_CHANNEL,
   RUNTIME_MCP_INSPECT_ABORT_CHANNEL,
   RUNTIME_MCP_INSPECT_CHANNEL,
   RUNTIME_MCP_STATUS_CHANNEL,
@@ -110,6 +111,7 @@ import {
   RUNTIME_STATUS_EVENT,
   isCapabilitiesResult,
   isMcpCommandResult,
+  isMcpConfigResult,
   isMcpInspectionResult,
   isMcpInspectAbortResult,
   isMcpStatusResult,
@@ -126,6 +128,7 @@ import type {
   CapabilitiesResult,
   McpCommandAction,
   McpCommandResult,
+  McpConfigResult,
   McpInspectionResult,
   McpInspectAbortResult,
   McpStatusResult,
@@ -158,6 +161,7 @@ const INVALID_RESOURCE_PREVIEW_RESPONSE = '桌面接口返回了无法识别的�
 const INVALID_DIAGNOSTICS_RESPONSE = '桌面接口返回了无法识别的诊断结果。'
 const INVALID_MCP_STATUS_RESPONSE = '桌面接口返回了无法识别的 MCP 状态结果。'
 const INVALID_MCP_INSPECTION_RESPONSE = '桌面接口返回了无法识别的 MCP 探测结果。'
+const INVALID_MCP_CONFIG_RESPONSE = '桌面接口返回了无法识别的 MCP 配置列举结果。'
 const INVALID_MCP_INSPECT_ABORT_RESPONSE = '桌面接口返回了无法识别的中止探测结果。'
 const INVALID_AUTH_STATUS_RESPONSE = '桌面接口返回了无法识别的认证状态。'
 const INVALID_AUTH_FLOW_RESPONSE = '桌面接口返回了无法识别的登录流程状态。'
@@ -224,6 +228,10 @@ function invalidMcpStatusResponse(): McpStatusResult {
 
 function invalidMcpInspectionResponse(): McpInspectionResult {
   return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_MCP_INSPECTION_RESPONSE } }
+}
+
+function invalidMcpConfigResponse(): McpConfigResult {
+  return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_MCP_CONFIG_RESPONSE } }
 }
 
 function invalidMcpInspectAbortResponse(): McpInspectAbortResult {
@@ -399,6 +407,12 @@ const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionAp
   async runRuntimeMcpCommand(action: McpCommandAction, serverName: string): Promise<McpCommandResult> {
     const response: unknown = await ipcRenderer.invoke(RUNTIME_MCP_COMMAND_CHANNEL, { action, serverName })
     return isMcpCommandResult(response) ? response : invalidMcpStatusResponse()
+  },
+
+  /** MCP 配置列举：零参数只读读取 Pi 的 mcp.json；不连接服务器、不写配置文件。 */
+  async getRuntimeMcpConfig(): Promise<McpConfigResult> {
+    const response: unknown = await ipcRenderer.invoke(RUNTIME_MCP_CONFIG_CHANNEL)
+    return isMcpConfigResult(response) ? response : invalidMcpConfigResponse()
   },
 
   /** MCP 服务器探测：零参数，命令与工作目录都由主进程决定。 */

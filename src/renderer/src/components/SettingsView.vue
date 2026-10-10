@@ -71,14 +71,15 @@ function backToAppearance(): void {
           <div class="settings-section-heading">
             <div>
               <h2 id="settings-pi-title" class="settings-section-title">Pi 集成</h2>
-              <p class="mt-1 text-xs text-desk-muted">查看 Pi 提供的 Skills、模板、扩展与 MCP 连接状态。</p>
+              <p class="mt-1 text-xs text-desk-muted">查看 Pi 提供的 Skills、模板、扩展命令与 MCP 连接状态。</p>
             </div>
           </div>
           <div class="settings-row">
             <div class="min-w-0">
               <p class="text-sm font-medium">Pi 资源</p>
               <p class="mt-0.5 text-xs text-desk-muted">
-                资源清单、MCP 连接状态与加载诊断；改动 Pi 的配置后需要重启 Runtime 才会生效。
+                查看 Skills、模板、扩展命令与 MCP 服务器；未启动 Runtime 时用磁盘预读与 mcp.json 列举，
+                改动配置后需要重启 Runtime 才会生效。
               </p>
             </div>
             <AppButton variant="compact" @click="openSection('resources')">打开资源</AppButton>

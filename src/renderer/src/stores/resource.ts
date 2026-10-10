@@ -1,18 +1,20 @@
 /**
  * 保存 Pi 资源视图的展示状态：`get_commands` 清单、Runtime 未启动时的资源预读清单、启动诊断、
- * MCP 状态、MCP 服务器探测结果、MCP 登录/退出/重连结果与安全模式启动结果。
+ * MCP 配置文件列举、MCP 服务器探测结果、MCP 登录/退出/重连结果与安全模式启动结果。
  *
  * 只保存主进程投影的副本，不缓存历史、不解析 Pi 配置文件；清单与诊断都只在 Runtime 就绪时读取，
  * 代际变化后自动重读（资源只在进程启动时加载，重载必须重启 Runtime）。
- * 预读清单只用于 Runtime 未启动时的输入框补全，就绪后丢弃，不与运行中的清单合并。
- * MCP 服务器探测不依赖运行中的 Runtime，但服务器名与工具列表都只来自官方 CLI 的输出。
+ * 预读清单只用于 Runtime 未启动时的展示与输入框补全，就绪后丢弃，不合并成同一份清单。
+ * MCP 列表以配置文件列举为骨架（与 Runtime 无关，未启动也可读），探测结果只按名叠加为连接状态。
  */
 import { defineStore } from 'pinia'
 import { computed, ref, watch } from 'vue'
 import type {
   ExtensionErrorEntry,
   McpCommandAction,
+  McpConfigListing,
   McpInspection,
+  McpServerReport,
   McpStatus,
   PiResourceEntry,
   PromptDisposition,
@@ -24,6 +26,7 @@ import { useProjectStore } from './project'
 import {
   abortMcpInspection,
   getDiagnostics,
+  getMcpConfig,
   getResourcePreview,
   getResources,
   inspectMcpServers,
@@ -60,6 +63,25 @@ type McpInspectViewState =
   | { phase: 'ready'; data: McpInspection }
   | { phase: 'error'; error: RuntimeError }
 
+/** MCP 配置文件列举的展示状态；`error` 与「确实没有配置服务器」区分。 */
+type McpConfigViewState =
+  | { phase: 'idle' }
+  | { phase: 'loading' }
+  | { phase: 'ready'; data: McpConfigListing }
+  | { phase: 'error'; error: RuntimeError }
+
+/** MCP 列表行：以配置文件列举为骨架，按名叠加探测报告。 */
+export interface McpServerRow {
+  readonly name: string
+  readonly scope: string
+  readonly source: string
+  readonly enabled: boolean
+  readonly transport: string | null
+  readonly override: string | null
+  /** 探测报告；null 表示本次没有测到（尚未探测，或探测不覆盖的条目）。 */
+  readonly report: McpServerReport | null
+}
+
 /** 安全模式启动的展示状态；成功只表示本次启动请求被接受，运行状态由 Runtime 快照收敛。 */
 type SafeStartState =
   | { phase: 'idle' }
@@ -81,6 +103,7 @@ export const useResourceStore = defineStore('resource', () => {
   const mcpView = ref<McpViewState>({ phase: 'idle' })
   const mcpCommandView = ref<McpCommandViewState>({ phase: 'idle' })
   const mcpInspectView = ref<McpInspectViewState>({ phase: 'idle' })
+  const mcpConfigView = ref<McpConfigViewState>({ phase: 'idle' })
   const safeStart = ref<SafeStartState>({ phase: 'idle' })
 
   /** 已读取过的 Runtime 代际；代际变化后重新读取清单与诊断。 */
@@ -102,7 +125,8 @@ export const useResourceStore = defineStore('resource', () => {
   const prompts = computed(() => entries.value.filter((entry) => entry.kind === 'prompt'))
   const commands = computed(() => entries.value.filter((entry) => entry.kind === 'extension'))
 
-  /** 清空与 Runtime 代际绑定的展示状态；诊断与 MCP 相关状态（含登录/退出结果）在离开就绪后不再有意义。 */
+  /** 清空与 Runtime 代际绑定的展示状态；诊断与 MCP 相关状态（含登录/退出结果）在离开就绪后不再有意义。
+      MCP 配置文件列举属于项目而不属于代际，因此不在此清空。 */
   function resetViews(): void {
     resourcesView.value = { phase: 'idle' }
     entries.value = []
@@ -212,9 +236,25 @@ export const useResourceStore = defineStore('resource', () => {
     }
   }
 
-  /** 手动刷新清单与诊断；Runtime 未就绪时只清空展示状态。 */
+  /** 手动刷新清单与诊断；旧的 MCP 探测结果不再对应当前配置，一并丢弃；Runtime 未就绪时只清空展示状态。 */
   async function refresh(): Promise<void> {
-    await Promise.all([refreshResources(true), refreshDiagnostics()])
+    mcpInspectView.value = { phase: 'idle' }
+    await Promise.all([refreshResources(true), refreshDiagnostics(), refreshMcpConfig()])
+  }
+
+  /**
+   * 读取 Pi 的 mcp.json 配置列举；与运行中的 Runtime 无关，未启动时也能读。
+   * 期间切换了项目就丢弃本次结果，交给新项目的请求收敛。
+   */
+  async function refreshMcpConfig(): Promise<void> {
+    const projectStore = useProjectStore()
+    const projectId = projectStore.currentProjectId
+    mcpConfigView.value = { phase: 'loading' }
+    const result = await getMcpConfig()
+    if (projectStore.currentProjectId !== projectId) return
+    mcpConfigView.value = result.ok
+      ? { phase: 'ready', data: result.data }
+      : { phase: 'error', error: result.error }
   }
 
   /** 读取 MCP 状态：由主进程固定发送 `/mcp`，状态文本原样展示，不在页面拼造。 */
@@ -263,6 +303,48 @@ export const useResourceStore = defineStore('resource', () => {
     const result = await abortMcpInspection()
     if (!result.ok || !result.data.aborted) inspectionCancelled = false
   }
+
+  /**
+   * MCP 列表：以配置文件列举为骨架，按名叠加探测报告；配置列举不可用时退化为探测结果，
+   * 只出现在探测结果里的条目也照实列出，不因为不在配置文件里就静默隐藏。
+   */
+  const mcpServers = computed<readonly McpServerRow[]>(() => {
+    const reports = new Map<string, McpServerReport>()
+    if (mcpInspectView.value.phase === 'ready') {
+      for (const server of mcpInspectView.value.data.servers) reports.set(server.name, server)
+    }
+    const listing = mcpConfigView.value.phase === 'ready' ? mcpConfigView.value.data : null
+    if (listing === null) {
+      return [...reports.values()].map((report) => ({
+        name: report.name,
+        scope: report.scope,
+        source: report.source,
+        enabled: report.enabled,
+        transport: report.transport === '' ? null : report.transport,
+        override: report.override,
+        report
+      }))
+    }
+
+    const rows: McpServerRow[] = listing.servers.map((server) => ({
+      ...server,
+      report: reports.get(server.name) ?? null
+    }))
+    const configured = new Set(listing.servers.map((server) => server.name))
+    for (const report of reports.values()) {
+      if (configured.has(report.name)) continue
+      rows.push({
+        name: report.name,
+        scope: report.scope,
+        source: report.source,
+        enabled: report.enabled,
+        transport: report.transport === '' ? null : report.transport,
+        override: report.override,
+        report
+      })
+    }
+    return rows
+  })
 
   /**
    * MCP 服务器 OAuth 登录、退出或重连：命令文本由主进程用服务器名拼出。
@@ -321,6 +403,7 @@ export const useResourceStore = defineStore('resource', () => {
         () => {
           mcpInspectView.value = { phase: 'idle' }
           void refreshPreview()
+          void refreshMcpConfig()
         }
       )
     }
@@ -351,10 +434,13 @@ export const useResourceStore = defineStore('resource', () => {
     mcpView,
     mcpCommandView,
     mcpInspectView,
+    mcpConfigView,
+    mcpServers,
     safeStart,
     runtimeReady,
     refresh,
     refreshPreview,
+    refreshMcpConfig,
     requestMcpStatus,
     inspectServers,
     cancelInspection,

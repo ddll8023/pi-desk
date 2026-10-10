@@ -2,7 +2,7 @@
  * Runtime 未启动时的 Pi 资源预读：用固定的 `pi` 可执行文件起一次性 RPC 进程，只发 `get_commands` 后退出。
  *
  * 与运行中 Runtime 同源（同一个可执行文件、同一套资源发现规则），但不常驻、不落会话（`--no-session`）、
- * 不执行 Extension（`--no-extensions`）：仅为一列输入框候选就去执行扩展代码没有依据。
+ * 不执行 Extension（`--no-extensions`）：仅为一列清单候选（补全或展示）就去执行扩展代码没有依据。
  * 因此由扩展在运行时追加的技能不在此清单内；Runtime 就绪后一律以运行中的 `get_commands` 为权威。
  *
  * 只读：不写 Pi 配置、不写 `trust.json`；`--approve`/`--no-approve` 只对本次进程生效。

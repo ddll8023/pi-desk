@@ -1,4 +1,4 @@
-/** 只定义 Runtime 启停、状态、Prompt 提交、中止、可用模型读取、Pi 资源与资源预读、诊断读取、MCP 状态、MCP 服务器探测与 MCP 登录/退出/重连命令、安全启动、消息/工具投影 IPC 的固定通道、事件名、结果类型与跨进程响应校验。 */
+/** 只定义 Runtime 启停、状态、Prompt 提交、中止、可用模型读取、Pi 资源与资源预读、诊断读取、MCP 状态、MCP 配置列举、MCP 服务器探测与 MCP 登录/退出/重连命令、安全启动、消息/工具投影 IPC 的固定通道、事件名、结果类型与跨进程响应校验。 */
 import type { DesktopErrorCode } from './desktop-api'
 
 export const RUNTIME_START_CHANNEL = 'desktop:runtime-start'
@@ -13,7 +13,8 @@ export const RUNTIME_CAPABILITIES_CHANNEL = 'desktop:runtime-capabilities'
 export const RUNTIME_RESOURCES_CHANNEL = 'desktop:runtime-resources'
 /**
  * 只读：Runtime 未启动时用一次性 Pi 进程预读当前项目的资源清单（同样来自 `get_commands`）。
- * 结果只用于输入框补全；Runtime 就绪后一律以运行中的清单为权威，两份数据不合并。
+ * 结果用于输入框补全与设置页在 Runtime 未启动时的只读展示；
+ * Runtime 就绪后一律以运行中的清单为权威，两份数据不合并。
  */
 export const RUNTIME_RESOURCE_PREVIEW_CHANNEL = 'desktop:runtime-resource-preview'
 /** 只读：读取当前代际的启动诊断尾部与 Extension 运行时错误。 */
@@ -29,6 +30,11 @@ export const RUNTIME_MCP_COMMAND_CHANNEL = 'desktop:runtime-mcp-command'
 export const RUNTIME_MCP_INSPECT_CHANNEL = 'desktop:runtime-mcp-inspect'
 /** 零参数：中止一次进行中的 MCP 探测；没有进行中的探测时不做任何事。 */
 export const RUNTIME_MCP_INSPECT_ABORT_CHANNEL = 'desktop:runtime-mcp-inspect-abort'
+/**
+ * 只读：列举 Pi 的 mcp.json 里配置的服务器（全局与项目两处），不连接服务器、不写配置文件。
+ * `pi mcp list` 没有「只列举不连接」的模式，因此列表来源是配置文件本身，连接状态仍由探测补充。
+ */
+export const RUNTIME_MCP_CONFIG_CHANNEL = 'desktop:runtime-mcp-config'
 /** 安全模式启动：零参数，主进程用最近一次启动意图并固定传 `--no-extensions`。 */
 export const RUNTIME_START_SAFE_CHANNEL = 'desktop:runtime-start-safe'
 /** 主进程到渲染进程的单向状态通知，payload 是 RuntimeStatus。 */
@@ -409,6 +415,39 @@ export type McpInspectionResult =
   | { readonly ok: true; readonly data: McpInspection }
   | { readonly ok: false; readonly error: RuntimeError }
 
+/**
+ * Pi 的 mcp.json 里配置的一条 MCP 服务器，只来自配置文件的浅层读取。
+ * `enabled` 缺省视为启用；`transport` 是配置文本的摘要（不解析 `${VAR}`、不推断 exposure 默认值）；
+ * `scope` 为 `global`（`<agent-dir>/mcp.json`）或 `project`（`<项目>/.pi/mcp.json`）。
+ */
+export interface McpConfigServer {
+  readonly name: string
+  readonly scope: string
+  /** 定义该服务器的配置文件路径。 */
+  readonly source: string
+  readonly enabled: boolean
+  /** 启动摘要：stdio 的 command 与 args，或 HTTP 的 url；两者都没有时为 null。 */
+  readonly transport: string | null
+  /** 项目级条目覆盖同名全局条目时的项目文件路径；无覆盖为 null。 */
+  readonly override: string | null
+}
+
+/**
+ * 两处 mcp.json 的列举结果。`errors` 是被跳过的文件或条目的原因文本；
+ * `projectConfigTrusted` 表示项目级配置在当前信任决定下是否会被 Pi 读取（未信任时不生效）。
+ */
+export interface McpConfigListing {
+  readonly servers: readonly McpConfigServer[]
+  readonly errors: readonly string[]
+  readonly globalConfigPath: string
+  readonly projectConfigPath: string | null
+  readonly projectConfigTrusted: boolean
+}
+
+export type McpConfigResult =
+  | { readonly ok: true; readonly data: McpConfigListing }
+  | { readonly ok: false; readonly error: RuntimeError }
+
 /** 中止探测的结果；`aborted` 为 false 表示当时没有进行中的探测。 */
 export type McpInspectAbortResult =
   | { readonly ok: true; readonly data: { readonly aborted: boolean } }
@@ -434,6 +473,11 @@ export interface RuntimeApi {
   readonly readRuntimeMcpStatus: () => Promise<McpStatusResult>
   /** MCP 服务器 OAuth 登录、退出或重连；服务器名由页面给出但由主进程校验，命令文本由主进程拼出。 */
   readonly runRuntimeMcpCommand: (action: McpCommandAction, serverName: string) => Promise<McpCommandResult>
+  /**
+   * 只读列举 Pi 的 mcp.json 配置：零参数，agent 目录与当前项目由主进程决定；
+   * 不连接服务器、不写配置文件，项目级配置是否生效由主进程按信任决定回传。
+   */
+  readonly getRuntimeMcpConfig: () => Promise<McpConfigResult>
   /** MCP 服务器状态探测：零参数，主进程用当前项目与信任决定执行固定的 `pi mcp list --json`。 */
   readonly inspectRuntimeMcpServers: () => Promise<McpInspectionResult>
   /** 中止进行中的 MCP 探测；零参数，没有进行中的探测时返回 `aborted: false`。 */
@@ -859,6 +903,34 @@ export function isMcpInspectionResult(value: unknown): value is McpInspectionRes
       && data.servers.every(isMcpServerReport)
       && isStringArray(data.configErrors)
       && (data.note === null || typeof data.note === 'string')
+  }
+  return isRuntimeErrorResult(value)
+}
+
+function isMcpConfigServer(value: unknown): value is McpConfigServer {
+  if (!isRecord(value)) return false
+  return typeof value.name === 'string'
+    && value.name !== ''
+    && typeof value.scope === 'string'
+    && typeof value.source === 'string'
+    && typeof value.enabled === 'boolean'
+    && (value.transport === null || typeof value.transport === 'string')
+    && (value.override === null || typeof value.override === 'string')
+}
+
+/** MCP 配置列举结果跨进程校验：只放行已声明的浅层字段。 */
+export function isMcpConfigResult(value: unknown): value is McpConfigResult {
+  if (!isRecord(value)) return false
+
+  if (value.ok === true) {
+    const data = value.data
+    return isRecord(data)
+      && Array.isArray(data.servers)
+      && data.servers.every(isMcpConfigServer)
+      && isStringArray(data.errors)
+      && typeof data.globalConfigPath === 'string'
+      && (data.projectConfigPath === null || typeof data.projectConfigPath === 'string')
+      && typeof data.projectConfigTrusted === 'boolean'
   }
   return isRuntimeErrorResult(value)
 }

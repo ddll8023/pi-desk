@@ -93,6 +93,7 @@ import {
   RUNTIME_CAPABILITIES_CHANNEL,
   RUNTIME_DIAGNOSTICS_CHANNEL,
   RUNTIME_MCP_COMMAND_CHANNEL,
+  RUNTIME_MCP_CONFIG_CHANNEL,
   RUNTIME_MCP_INSPECT_ABORT_CHANNEL,
   RUNTIME_MCP_INSPECT_CHANNEL,
   RUNTIME_MCP_STATUS_CHANNEL,
@@ -111,6 +112,7 @@ import {
 import type {
   CapabilitiesResult,
   McpCommandResult,
+  McpConfigResult,
   McpInspectionResult,
   McpInspectAbortResult,
   McpStatusResult,
@@ -127,6 +129,7 @@ import type {
 } from '../shared/runtime-api'
 import { DesktopConfigStore } from './desktop-config-store'
 import { AuthManager, AuthManagerError } from './auth-manager'
+import { readMcpConfigListing } from './mcp-config-reader'
 import { PreferencesManager } from './preferences-manager'
 import { ProjectFileIndex } from './project-file-index'
 import { ProjectManager } from './project-manager'
@@ -357,6 +360,10 @@ function mcpInspectionFailure(code: RuntimeErrorCode, message: string): McpInspe
 }
 
 function mcpInspectionAbortFailure(code: RuntimeErrorCode, message: string): McpInspectAbortResult {
+  return { ok: false, error: { code, message } }
+}
+
+function mcpConfigFailure(code: RuntimeErrorCode, message: string): McpConfigResult {
   return { ok: false, error: { code, message } }
 }
 
@@ -1027,6 +1034,38 @@ function registerRuntimeHandlers(pageUrl: string): void {
         return mcpInspectionAbortFailure('INVALID_REQUEST', '中止探测接口不接受参数。')
       }
       return runtimeManager.abortMcpInspection()
+    }
+  )
+
+  /**
+   * MCP 配置列举：零参数，只读读取 Pi 的 mcp.json（全局与当前项目两处）。
+   * 不连接服务器、不写配置文件；项目级配置是否生效取决于信任决定，因此决定结果一并回传，
+   * 未信任与需要信任决定的项目都按「未生效」如实展示，不在这里触发信任拦截。
+   */
+  handle(
+    RUNTIME_MCP_CONFIG_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<McpConfigResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return mcpConfigFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 0) {
+        return mcpConfigFailure('INVALID_REQUEST', 'MCP 配置列举接口不接受参数。')
+      }
+      try {
+        const trust = await resolveTrustForCurrentProject()
+        return {
+          ok: true,
+          data: await readMcpConfigListing(
+            projectManager.currentProjectPath(),
+            !trust.requiresPrompt && trust.decision === 'trusted'
+          )
+        }
+      } catch (error) {
+        return mcpConfigFailure(
+          'INTERNAL_ERROR',
+          `读取 MCP 配置失败：${error instanceof Error ? error.message : String(error)}`
+        )
+      }
     }
   )
 

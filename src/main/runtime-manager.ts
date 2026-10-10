@@ -8,6 +8,7 @@
  * 有两类操作不以运行中 Runtime 为数据源，都只读、都不常驻：
  * MCP 服务器探测另起一次官方 CLI 进程（`pi mcp list --json`）连接并报告服务器状态；
  * Runtime 未启动时的资源预读由 resource-preview 起一次性 RPC 进程只取 `get_commands`。
+ * 同样只读且不常驻的 MCP 配置列举不归本模块：由 mcp-config-reader 直接读 Pi 的 mcp.json。
  */
 import { spawn } from 'node:child_process'
 import type { ChildProcess } from 'node:child_process'

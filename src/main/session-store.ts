@@ -7,9 +7,9 @@
  */
 import type { Stats } from 'node:fs'
 import { open, readdir, stat } from 'node:fs/promises'
-import { homedir } from 'node:os'
-import { isAbsolute, join } from 'node:path'
+import { join } from 'node:path'
 import type { SessionList, SessionSummary } from '../shared/session-api'
+import { getPiAgentDir } from './pi-paths'
 
 /** 头部行与预览共用的单次读取上限；不为此扫描完整会话文件。 */
 const MAX_HEAD_BYTES = 256 * 1024
@@ -53,15 +53,10 @@ function isMissingPath(error: unknown): boolean {
 
 /**
  * 会话根目录：各项目分组目录的父目录，也是列会话时的起点。
- * `--session-dir` 的取值见 `getProjectSessionDir()`。
- * `PI_CODING_AGENT_DIR` 只在是绝对路径时参与解析，相对值交给 Pi 的默认位置。
+ * `--session-dir` 的取值见 `getProjectSessionDir()`；agent 目录的解析见 pi-paths.ts。
  */
 export function getSessionRoot(): string {
-  const configured = process.env.PI_CODING_AGENT_DIR?.trim()
-  const agentDirectory = configured !== undefined && configured !== '' && isAbsolute(configured)
-    ? configured
-    : join(homedir(), '.pi', 'agent')
-  return join(agentDirectory, 'sessions')
+  return join(getPiAgentDir(), 'sessions')
 }
 
 /**

@@ -1,9 +1,10 @@
-<!-- 消息区：按投影顺序渲染消息，表达同步与截断状态，处理粘底滚动、回到底部与空状态；不自行拼装历史或请求消息内容。 -->
+<!-- 消息区：按投影顺序渲染消息，表达同步与截断状态，处理粘底滚动、回到底部与空状态；异常退出时空状态同时给出重试与安全模式入口；不自行拼装历史或请求消息内容。 -->
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { createChatViewCache } from '../chat-view'
 import { useProjectStore } from '../stores/project'
+import { useResourceStore } from '../stores/resource'
 import { useRuntimeStore } from '../stores/runtime'
 import { useSessionStore } from '../stores/session'
 import ChatMessageItem from './ChatMessageItem.vue'
@@ -15,7 +16,9 @@ const STICK_THRESHOLD_PX = 24
 const projectStore = useProjectStore()
 const runtimeStore = useRuntimeStore()
 const sessionStore = useSessionStore()
+const resourceStore = useResourceStore()
 const { view: runtimeView, messages, tools, projectionSync, projectionTruncated, droppedMessages, droppedTools } = storeToRefs(runtimeStore)
+const { safeStart } = storeToRefs(resourceStore)
 
 const scroller = ref<HTMLElement | null>(null)
 const stickToBottom = ref(true)
@@ -44,7 +47,11 @@ const truncationNotice = computed(() => {
   return `投影已截断：${parts.join('，')}。`
 })
 
-/** 空状态只表达当前可用动作，不替主进程判断会话是否真的存在。 */
+/**
+ * 空状态只表达当前可用动作，不替主进程判断会话是否真的存在。
+ * Runtime 异常退出时同时给出常规重试与安全模式逃生入口：两种恢复路径都在出错的第一现场，
+ * 不需要用户再去设置页找。
+ */
 const emptyState = computed(() => {
   if (projectStore.currentProject === null) {
     return { title: '先选择一个项目', description: '项目决定 Pi 的工作目录；在顶栏选择或新建项目后即可开始。', action: null }
@@ -57,7 +64,11 @@ const emptyState = computed(() => {
     return { title: '正在关闭 Runtime', description: '关闭完成后可以打开或新建会话。', action: null }
   }
   if (current.phase === 'failed') {
-    return { title: 'Runtime 异常退出', description: current.error.message, action: 'new-session' as const }
+    return {
+      title: 'Runtime 异常退出',
+      description: `${current.error.message}；可重试启动，或用安全模式启动以排除坏 Extension。`,
+      action: 'new-session' as const
+    }
   }
   if (current.phase === 'ready') {
     return { title: '可以开始对话', description: '在下方输入内容并发送；Enter 发送，Shift+Enter 换行。', action: null }
@@ -106,6 +117,11 @@ function startNewSession(): void {
   void sessionStore.open(null, false)
 }
 
+/** 安全模式启动：不加载 Extension，仅本次生效；目标由主进程用最近一次启动意图决定。 */
+function startSafely(): void {
+  void resourceStore.startSafely()
+}
+
 watch(contentRevision, () => {
   if (stickToBottom.value) void scrollToBottom()
 })
@@ -136,15 +152,24 @@ onMounted(() => {
         <div v-if="chatMessages.length === 0" class="empty-state">
           <p class="empty-state-title">{{ emptyState.title }}</p>
           <p class="empty-state-text">{{ emptyState.description }}</p>
-          <AppButton
-            v-if="emptyState.action === 'new-session'"
-            variant="primary"
-            class="mt-2"
-            :disabled="sessionStore.opening"
-            @click="startNewSession"
-          >
-            新建会话
-          </AppButton>
+          <div v-if="emptyState.action === 'new-session'" class="mt-2 flex flex-wrap items-center justify-center gap-2">
+            <AppButton
+              variant="primary"
+              :disabled="sessionStore.opening"
+              @click="startNewSession"
+            >
+              新建会话
+            </AppButton>
+            <AppButton
+              :disabled="safeStart.phase === 'starting'"
+              @click="startSafely"
+            >
+              {{ safeStart.phase === 'starting' ? '正在启动…' : '以禁用扩展启动（仅本次）' }}
+            </AppButton>
+          </div>
+          <p v-if="safeStart.phase === 'error'" role="alert" class="mt-1 text-xs text-desk-danger">
+            {{ safeStart.error.message }}
+          </p>
         </div>
 
         <p v-if="streaming" role="status" class="status-notice status-notice-info flex items-center gap-2">
