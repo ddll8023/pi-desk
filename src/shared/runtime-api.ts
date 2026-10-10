@@ -15,6 +15,7 @@ export const RUNTIME_RESOURCES_CHANNEL = 'desktop:runtime-resources'
  * 只读：Runtime 未启动时用一次性 Pi 进程预读当前项目的资源清单（同样来自 `get_commands`）。
  * 结果用于输入框补全与设置页在 Runtime 未启动时的只读展示；
  * Runtime 就绪后一律以运行中的清单为权威，两份数据不合并。
+ * 带 `force` 的请求绕过主进程的进程内缓存，用于用户显式要求重新读取时。
  */
 export const RUNTIME_RESOURCE_PREVIEW_CHANNEL = 'desktop:runtime-resource-preview'
 /** 只读：读取当前代际的启动诊断尾部与 Extension 运行时错误。 */
@@ -366,6 +367,11 @@ export type ResourcePreviewResult =
   | { readonly ok: true; readonly data: PiResourcePreview }
   | { readonly ok: false; readonly error: RuntimeError }
 
+/** 资源预读请求：`force` 为真时绕过主进程的进程内缓存重新探测（用户显式重新读取）。 */
+export interface ResourcePreviewRequest {
+  readonly force: boolean
+}
+
 export type RuntimeDiagnosticsResult =
   | { readonly ok: true; readonly data: RuntimeDiagnostics }
   | { readonly ok: false; readonly error: RuntimeError }
@@ -404,11 +410,14 @@ export interface McpServerReport {
 /**
  * 一次 MCP 服务器探测结果。探测是只读的：官方 CLI 只连接并读取状态，不写任何配置文件。
  * `configErrors` 是被官方跳过条目的原因文本，`note` 是项目未信任等原因的部分忽略说明。
+ * `inspectedAt` 是 Desktop 结束本次探测的时刻（纪元毫秒），不是 Pi 字段：Pi 不报告时间，
+ * 界面只用于说明「这些状态是什么时候测的」。
  */
 export interface McpInspection {
   readonly servers: readonly McpServerReport[]
   readonly configErrors: readonly string[]
   readonly note: string | null
+  readonly inspectedAt: number
 }
 
 export type McpInspectionResult =
@@ -465,8 +474,8 @@ export interface RuntimeApi {
   readonly getRuntimeCapabilities: () => Promise<CapabilitiesResult>
   /** 读取当前代际已加载的 Pi 资源清单；清单来源是 `get_commands`，不解析 Pi 配置文件。 */
   readonly getRuntimeResources: () => Promise<ResourcesResult>
-  /** 读取 Runtime 未启动时的资源预读结果；零参数，项目与信任决定由主进程决定。 */
-  readonly getResourcePreview: () => Promise<ResourcePreviewResult>
+  /** 读取 Runtime 未启动时的资源预读结果；项目与信任决定由主进程决定，`force` 绕过其进程内缓存。 */
+  readonly getResourcePreview: (force: boolean) => Promise<ResourcePreviewResult>
   /** 读取当前代际的启动诊断尾部与 Extension 运行时错误；无活动 Runtime 时两项都为空。 */
   readonly getRuntimeDiagnostics: () => Promise<RuntimeDiagnosticsResult>
   /** 固定请求 `/mcp` 状态；状态文本由 notify 捕获后返回，不在页面拼造。 */
@@ -892,7 +901,7 @@ function isMcpServerReport(value: unknown): value is McpServerReport {
   return value.error === null || typeof value.error === 'string'
 }
 
-/** MCP 探测结果跨进程校验；服务器报告、配置错误与说明文本都只放行已声明的形状。 */
+/** MCP 探测结果跨进程校验；服务器报告、配置错误、说明文本与探测时刻都只放行已声明的形状。 */
 export function isMcpInspectionResult(value: unknown): value is McpInspectionResult {
   if (!isRecord(value)) return false
 
@@ -903,9 +912,17 @@ export function isMcpInspectionResult(value: unknown): value is McpInspectionRes
       && data.servers.every(isMcpServerReport)
       && isStringArray(data.configErrors)
       && (data.note === null || typeof data.note === 'string')
+      && typeof data.inspectedAt === 'number'
+      && Number.isInteger(data.inspectedAt)
+      && data.inspectedAt >= 0
   }
   return isRuntimeErrorResult(value)
 }
+
+/** 预读请求只接受显式的 `force` 布尔值；其他字段与缺字段都按契约不符处理。 */
+export function isResourcePreviewRequest(value: unknown): value is ResourcePreviewRequest {
+  if (!isRecord(value)) return false
+  return typeof value.force === 'boolean'
 
 function isMcpConfigServer(value: unknown): value is McpConfigServer {
   if (!isRecord(value)) return false

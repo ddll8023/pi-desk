@@ -203,8 +203,11 @@ function toMcpServerReport(value: Record<string, unknown>): McpServerReport | nu
   }
 }
 
-/** 解析官方 CLI 的 `--json` 输出；形状不符时返回 null，由调用方按协议错误处理。 */
-function parseMcpInspection(stdout: string): McpInspection | null {
+/**
+ * 解析官方 CLI 的 `--json` 输出；形状不符时返回 null，由调用方按协议错误处理。
+ * 返回的字段不含 `inspectedAt`：那一个时刻由调用方在探测结束时落定，不由 Pi 输出提供。
+ */
+function parseMcpInspection(stdout: string): Omit<McpInspection, 'inspectedAt'> | null {
   let parsed: unknown
   try {
     parsed = JSON.parse(stdout)
@@ -620,7 +623,8 @@ export class RuntimeManager {
       if (inspection === null) {
         throw new RuntimeFailure('RUNTIME_PROTOCOL_ERROR', 'MCP 探测输出不是约定的 JSON 结构。')
       }
-      return { ok: true, data: inspection }
+      // 时刻在这里落定：它描述的是本次探测结束的时刻，不是 Pi 的报告字段。
+      return { ok: true, data: { ...inspection, inspectedAt: Date.now() } }
     } catch (error) {
       const failure = error instanceof RuntimeFailure
         ? error

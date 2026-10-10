@@ -7,7 +7,7 @@
  * 项目级配置是否会被 Pi 读取取决于信任决定，由调用方传入，这里只如实回传。
  * 使用 `pi mcp list --json` 探测连接状态是另一条通道：它没有「只列举不连接」的模式。
  */
-import { readFile } from 'node:fs/promises'
+import { readFile, stat } from 'node:fs/promises'
 import { isAbsolute, join } from 'node:path'
 import type { McpConfigListing, McpConfigServer } from '../shared/runtime-api'
 import { getPiAgentDir } from './pi-paths'
@@ -17,6 +17,8 @@ const PROJECT_CONFIG_DIR = '.pi'
 const CONFIG_FILE_NAME = 'mcp.json'
 /** 启动摘要长度上限；超长截断，不伪装成完整命令。 */
 const MAX_TRANSPORT_CHARS = 300
+/** 单个配置文件的读取上限；与仓库其他有界读取一致，超限不读入内存，按错误文本如实报告。 */
+const MAX_CONFIG_BYTES = 512 * 1024
 
 interface ConfigFile {
   readonly entries: readonly (readonly [string, Record<string, unknown>])[]
@@ -36,11 +38,17 @@ function isMissingPath(error: unknown): boolean {
 /**
  * 读取一个 mcp.json；文件缺失不算错误。
  * `mcpServers` 必须是对象，条目必须是对象，其余情况如实写入错误文本。
+ * 先看文件大小，超限不读入内存。
  */
 async function readConfigFile(filePath: string): Promise<ConfigFile> {
   const errors: string[] = []
   let text: string
   try {
+    const info = await stat(filePath)
+    if (info.size > MAX_CONFIG_BYTES) {
+      errors.push(`${filePath}：文件超过 ${MAX_CONFIG_BYTES} 字节上限，未读取`)
+      return { entries: [], errors }
+    }
     text = await readFile(filePath, 'utf8')
   } catch (error) {
     if (isMissingPath(error)) return { entries: [], errors: [] }

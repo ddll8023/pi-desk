@@ -22,6 +22,7 @@ const projectStore = useProjectStore()
 const {
   resourcesView,
   previewSkills,
+  previewView,
   diagnostics,
   extensionErrors,
   diagnosticsError,
@@ -48,13 +49,59 @@ const copiedBlock = ref<string | null>(null)
 /** 最近一次复制失败的区块标识；失败必须可见，不能停在「复制」。 */
 const failedBlock = ref<string | null>(null)
 
-/** 连接动作都要经运行中的 Runtime；服务器名来自配置列举，由主进程再校验后拼进固定命令。 */
+/** 连接动作都要经运行中的 Runtime；未生效的项目级条目不提供连接动作。 */
 const commandReady = computed(() => runtimeReady.value)
+
+/** 该行现在能否执行连接动作：Runtime 就绪，且不是未信任项目下的项目级条目。 */
+function actionsAvailable(row: McpServerRow): boolean {
+  return commandReady.value && !(row.scope === 'project' && !configListing.value?.projectConfigTrusted)
+}
+
+/** 该行不能执行连接动作的原因；可执行时为 null。 */
+function actionBlockReason(row: McpServerRow): string | null {
+  if (row.scope === 'project' && !configListing.value?.projectConfigTrusted) {
+    return '项目级条目在未信任项目下不会被 Pi 加载，先完成信任决定再操作。'
+  }
+  if (!runtimeReady.value) {
+    return '连接动作要经运行中的 Runtime；先在左侧会话列表打开或新建会话。'
+  }
+  return null
+}
 
 /** 资源清单的来源标签：运行中的清单是权威，磁盘预读只用于未启动时。 */
 const resourceSourceLabel = computed(() => (runtimeReady.value ? '运行中 Runtime' : '磁盘预读'))
 /** 未就绪时展示预读结果；预读只含 Skill，模板与扩展命令仍需启动 Runtime。 */
 const previewing = computed(() => !runtimeReady.value && previewSkills.value.length > 0)
+
+/** 统一的重新读取入口：就绪时读运行中清单与诊断，未就绪时绕过缓存重读磁盘预读。 */
+function refreshList(): void {
+  if (runtimeReady.value) void resourceStore.refresh()
+  else void resourceStore.refreshPreview(true)
+}
+
+const listLoading = computed(() => (
+  runtimeReady.value ? resourcesView.value.phase === 'loading' : previewView.value.phase === 'loading'
+))
+
+/**
+ * 未就绪时的空态提示：区分「还没有选择项目」「读取中」「预读失败」与「确实没有条目」，
+ * 不给出任何会把失败说成「确实没有」的文案。
+ */
+const previewNotice = computed<{ readonly tone: 'info' | 'error'; readonly text: string } | null>(() => {
+  if (runtimeReady.value || previewing.value) return null
+  const view = previewView.value
+  if (view.phase === 'loading' || view.phase === 'idle') return null
+  if (view.phase === 'error') {
+    return { tone: 'error', text: `磁盘预读失败：${view.error.message}` }
+  }
+  if (currentProject.value === null) {
+    return { tone: 'info', text: '先在左侧选择一个项目，再读取资源清单。' }
+  }
+  return {
+    tone: 'info',
+    text: '磁盘预读没有读到 Skill，也没有可显示的其他资源；模板与扩展命令需要启动 Runtime 后读取。'
+  }
+})
 
 /** 资源分组只按 `get_commands` 的来源分类展示，不额外推断归属。 */
 const groups = computed(() => [
@@ -81,16 +128,23 @@ const groups = computed(() => [
   }
 ])
 
-/** 未就绪时把预读到的 Skill 直接当成 Skill 组的内容，只读展示。 */
+/** 当前来源下的三组内容：未就绪时把预读到的 Skill 直接当成 Skill 组的内容，只读展示。 */
+const sourceGroups = computed(() => groups.value.map((group) => (
+  group.key === 'skill' && previewing.value ? { ...group, items: previewSkills.value } : group
+)))
+
+/** 未过滤的条目总数；过滤时用来给出「匹配 N / 共 M」，避免把匹配数当成总数。 */
+const totalResourceCount = computed(() => (
+  sourceGroups.value.reduce((total, group) => total + group.items.length, 0)
+))
+
+/** 过滤只作用于展示，不改变清单来源与总数。 */
 const displayGroups = computed(() => {
-  const group = groups.value.map((item) => (
-    item.key === 'skill' && previewing.value ? { ...item, items: previewSkills.value } : item
-  ))
   const keyword = filter.value.trim().toLowerCase()
-  if (keyword === '') return group
-  return group.map((item) => ({
-    ...item,
-    items: item.items.filter((entry) => (
+  if (keyword === '') return sourceGroups.value
+  return sourceGroups.value.map((group) => ({
+    ...group,
+    items: group.items.filter((entry) => (
       entry.name.toLowerCase().includes(keyword)
       || (entry.description ?? '').toLowerCase().includes(keyword)
     ))
@@ -107,9 +161,28 @@ const inspectedServers = computed(() => (
 ))
 /** 探测过的服务器名集合，用于说明列表里哪些行还没有连接状态。 */
 const probedCount = computed(() => inspectedServers.value?.length ?? 0)
+/**
+ * 最近一次探测的时刻；只来自主进程记录的本次探测，界面不推算；格式与侧栏时间一致。
+ */
+const probedAtLabel = computed(() => {
+  if (mcpInspectView.value.phase !== 'ready') return null
+  const date = new Date(mcpInspectView.value.data.inspectedAt)
+  if (Number.isNaN(date.getTime())) return null
+  return date.toLocaleString('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit'
+  })
+})
 const configListing = computed(() => (
   mcpConfigView.value.phase === 'ready' ? mcpConfigView.value.data : null
 ))
+/** 全局配置文件路径的展示文本；读取中与读不到时如实标注，不用旧值充当当前来源。 */
+const globalConfigLabel = computed(() => {
+  if (configListing.value !== null) return configListing.value.globalConfigPath
+  return mcpConfigView.value.phase === 'loading' ? '读取中…' : '未读取'
+})
 /** 项目级条目在未信任项目下不会被 Pi 读取，必须显式说明，不能让用户以为它在生效。 */
 const projectRowsInactive = computed(() => (
   configListing.value !== null
@@ -265,11 +338,14 @@ function rowError(row: McpServerRow): string | null {
   return row.report?.error ?? null
 }
 
-/** 资源与模板计数；Pi 未报告时为 null，不用 0 冒充。 */
+/** 资源与模板计数：只显示 Pi 报告过的项，未报告的一项不显示，不用 0 冒充。 */
 function resourceSummary(row: McpServerRow): string | null {
-  const resources = row.report?.resources
-  if (resources === null || resources === undefined) return null
-  return `${resources} / ${row.report?.resourceTemplates ?? 0}`
+  const report = row.report
+  if (report === null) return null
+  const parts: string[] = []
+  if (report.resources !== null) parts.push(`${report.resources} 个资源`)
+  if (report.resourceTemplates !== null) parts.push(`${report.resourceTemplates} 个模板`)
+  return parts.length === 0 ? null : parts.join(' / ')
 }
 
 function toolExposureLabel(row: McpServerRow): string | null {
@@ -284,6 +360,19 @@ function enabledLabel(row: McpServerRow): string {
   if (row.scope === 'project' && !configListing.value?.projectConfigTrusted) return '未启用（未信任项目）'
   return '已启用'
 }
+
+/** 资源计数的展示文本：过滤时同时给出匹配数与总数，不用匹配数冒充总数。 */
+const resourceCountLabel = computed(() => (
+  filtered.value
+    ? `匹配 ${resourceCount.value} / 共 ${totalResourceCount.value}`
+    : `${totalResourceCount.value} 项`
+))
+
+/** 重载按钮的文案：就绪时是重启，未就绪时这一步实际是启动 Runtime。 */
+const reloadLabel = computed(() => (runtimeReady.value ? '重启 Runtime 以重新加载' : '启动 Runtime'))
+
+/** 没有项目时两个按钮都无法执行：清单与重载都以当前项目为输入。 */
+const resourceActionsDisabled = computed(() => currentProject.value === null)
 </script>
 
 <template>
@@ -301,7 +390,7 @@ function enabledLabel(row: McpServerRow): string {
         <h2 id="resource-list-title" class="panel-section-title">资源</h2>
         <div class="flex flex-wrap items-center gap-1.5">
           <span class="chip">{{ resourceSourceLabel }}</span>
-          <span class="chip">{{ resourceCount }} 项</span>
+          <span class="chip">{{ resourceCountLabel }}</span>
         </div>
       </div>
       <p class="hint-text">
@@ -315,19 +404,19 @@ function enabledLabel(row: McpServerRow): string {
 
       <div class="flex flex-wrap items-center gap-2">
         <AppButton
-          :disabled="!runtimeReady || resourcesView.phase === 'loading'"
-          @click="resourceStore.refresh()"
+          :disabled="listLoading || resourceActionsDisabled"
+          @click="refreshList"
         >
-          {{ resourcesView.phase === 'loading' ? '正在读取…' : '重新读取' }}
+          {{ listLoading ? '正在读取…' : '重新读取' }}
         </AppButton>
         <AppButton
-          :disabled="sessionStore.opening"
+          :disabled="sessionStore.opening || resourceActionsDisabled"
           @click="reload"
         >
-          {{ sessionStore.opening ? '正在重新加载…' : '重启 Runtime 以重新加载' }}
+          {{ sessionStore.opening ? '正在重新加载…' : reloadLabel }}
         </AppButton>
         <input
-          v-if="resourceCount > 0 || filtered"
+          v-if="totalResourceCount > 0 || filtered"
           v-model="filter"
           type="search"
           placeholder="过滤名称或描述"
@@ -337,9 +426,13 @@ function enabledLabel(row: McpServerRow): string {
         >
       </div>
 
-      <p v-if="!runtimeReady && !previewing" role="status" class="status-notice">
-        没有可显示的清单：磁盘预读也没有读到 Skill。先在左侧会话列表打开或新建会话，
-        上一轮启动失败时可在下方「排障」里用安全模式启动。
+      <p
+        v-if="previewNotice !== null"
+        :role="previewNotice.tone === 'error' ? 'alert' : 'status'"
+        class="status-notice"
+        :class="previewNotice.tone === 'error' ? 'status-notice-error' : ''"
+      >
+        {{ previewNotice.text }}
       </p>
 
       <p
@@ -410,16 +503,16 @@ function enabledLabel(row: McpServerRow): string {
         <h2 id="mcp-list-title" class="panel-section-title">MCP 服务器</h2>
         <div class="flex flex-wrap items-center gap-1.5">
           <span class="chip">{{ mcpServers.length }} 个</span>
-          <span v-if="probedCount > 0" class="chip">已探测 {{ probedCount }} 个</span>
+          <span v-if="probedAtLabel !== null" class="chip">已探测 {{ probedCount }} 个 · {{ probedAtLabel }}</span>
         </div>
       </div>
 
       <p class="hint-text">
-        列表读取自 Pi 的 <span class="font-mono">mcp.json</span>（只读，不修改）：全局
-        <span class="break-all font-mono">{{ configListing?.globalConfigPath ?? '未读取' }}</span><template
+        列表以 Pi 的 <span class="font-mono">mcp.json</span>（只读，不修改）为准：全局
+        <span class="break-all font-mono">{{ globalConfigLabel }}</span><template
           v-if="configListing !== null && configListing.projectConfigPath !== null"
         >，项目 <span class="break-all font-mono">{{ configListing.projectConfigPath }}</span></template>。
-        连接状态由探测补充，未探测的行只表示「配置里有」，不代表连接结果。
+        连接状态由探测补充；只出现在探测结果里的条目也会一并列出，未探测的行只表示「配置里有」而不代表连接结果。
       </p>
 
       <div class="flex flex-wrap items-center gap-2">
@@ -440,6 +533,9 @@ function enabledLabel(row: McpServerRow): string {
         </span>
       </div>
       <p v-if="currentProject === null" class="hint-text">先在左侧选择一个项目，再探测 MCP 服务器。</p>
+      <p v-else-if="!runtimeReady" class="hint-text">
+        连接动作要经运行中的 Runtime；Runtime 未就绪时不可用，先在左侧会话列表打开或新建会话。
+      </p>
       <p v-if="mcpInspectView.phase === 'inspecting'" class="hint-text">
         正在逐个连接，可能较慢；可以随时取消，取消只终止这次探测。stdio 服务器会在 stdin 关闭后自行退出；
         不读 stdin 的服务器在取消或超时后可能继续存在。
@@ -459,7 +555,7 @@ function enabledLabel(row: McpServerRow): string {
       </div>
 
       <p v-if="projectRowsInactive" role="status" class="status-notice status-notice-warn">
-        项目级配置在未信任项目下不会被 Pi 读取；这些条目现在不生效，完成信任决定后才会加载。
+        项目级配置在未信任项目下不会被 Pi 读取；这些条目现在不生效，完成信任决定后才会加载，也不提供连接动作。
       </p>
 
       <p
@@ -481,7 +577,7 @@ function enabledLabel(row: McpServerRow): string {
         </div>
       </template>
 
-      <p v-if="mcpServers.length === 0 && mcpConfigView.phase !== 'loading'" class="hint-text">
+      <p v-if="mcpConfigView.phase === 'ready' && mcpServers.length === 0" class="hint-text">
         两处 <span class="font-mono">mcp.json</span> 都没有配置服务器。添加或删除服务器请用 Pi 自己的命令
         （例如 <span class="font-mono">pi mcp add</span>），这里不修改 Pi 的配置。
       </p>
@@ -518,7 +614,7 @@ function enabledLabel(row: McpServerRow): string {
           <div class="mt-2 flex flex-wrap items-center gap-2">
             <AppButton
               variant="compact"
-              :disabled="!commandReady || mcpCommandView.phase === 'running'"
+              :disabled="!actionsAvailable(row) || mcpCommandView.phase === 'running'"
               @click="runServerCommand('reconnect', row.name)"
             >
               重连
@@ -568,19 +664,20 @@ function enabledLabel(row: McpServerRow): string {
             <div class="flex flex-wrap items-center gap-2">
               <AppButton
                 variant="compact"
-                :disabled="!commandReady || mcpCommandView.phase === 'running'"
+                :disabled="!actionsAvailable(row) || mcpCommandView.phase === 'running'"
                 @click="runServerCommand('login', row.name)"
               >
                 登录（OAuth）
               </AppButton>
               <AppButton
                 variant="quiet-danger"
-                :disabled="!commandReady || mcpCommandView.phase === 'running'"
+                :disabled="!actionsAvailable(row) || mcpCommandView.phase === 'running'"
                 @click="pendingCredentialRemoval = row.name"
               >
                 删除已保存凭据
               </AppButton>
             </div>
+            <p v-if="actionBlockReason(row) !== null" class="hint-text">{{ actionBlockReason(row) }}</p>
             <p class="hint-text">
               登录与删除凭据只对使用 OAuth 的 HTTP 服务器有意义；这些动作要经运行中的 Runtime，
               服务器名由这里选定，不会手动拼进命令。

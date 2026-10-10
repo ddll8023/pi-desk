@@ -107,7 +107,8 @@ import {
   RUNTIME_START_SAFE_CHANNEL,
   RUNTIME_STATUS_CHANNEL,
   RUNTIME_STOP_CHANNEL,
-  RUNTIME_STATUS_EVENT
+  RUNTIME_STATUS_EVENT,
+  isResourcePreviewRequest
 } from '../shared/runtime-api'
 import type {
   CapabilitiesResult,
@@ -906,7 +907,7 @@ function registerRuntimeHandlers(pageUrl: string): void {
   )
 
   /**
-   * 资源预读只接受零参数：项目与信任决定都由主进程决定，页面不能指定工作目录或启动参数。
+   * 资源预读只接受一个请求对象：项目与信任决定都由主进程决定，页面只能要求绕过缓存重新探测。
    * 无决定时按未信任探测：只拿用户级资源，不因探测触发信任提示，也不写任何信任记录。
    */
   handle(
@@ -915,9 +916,10 @@ function registerRuntimeHandlers(pageUrl: string): void {
       if (!isTrustedCaller(event, pageUrl)) {
         return resourcePreviewFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
       }
-      if (args.length !== 0) {
-        return resourcePreviewFailure('INVALID_REQUEST', '资源预读接口不接受参数。')
+      if (args.length !== 1 || !isResourcePreviewRequest(args[0])) {
+        return resourcePreviewFailure('INVALID_REQUEST', '资源预读请求必须显式给出 force 布尔值。')
       }
+      const { force } = args[0]
       const projectPath = projectManager.currentProjectPath()
       if (projectPath === null) {
         return resourcePreviewFailure('INVALID_REQUEST', '尚未选择项目，无法预读资源清单。')
@@ -925,7 +927,7 @@ function registerRuntimeHandlers(pageUrl: string): void {
       try {
         const outcome = await trustManager.resolveLaunchDecision(projectPath)
         const trustDecision = outcome.requiresPrompt ? 'untrusted' : outcome.decision
-        const entries = await previewProjectResources(projectPath, trustDecision)
+        const entries = await previewProjectResources(projectPath, trustDecision, force)
         return { ok: true, data: { projectPath, entries } }
       } catch (error) {
         if (error instanceof ResourcePreviewError) {

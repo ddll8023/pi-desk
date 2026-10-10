@@ -36,20 +36,23 @@ export class ResourcePreviewError extends Error {
   }
 }
 
-/** 「项目路径 + 信任决定」到清单的缓存；只缓存成功结果，失败一律重新探测。 */
+/** 「项目路径 + 信任决定」到清单的缓存；只缓存成功结果，失败一律重新探测；`force` 请求忽略它。 */
 const previewCache = new Map<string, readonly PiResourceEntry[]>()
 
 /**
- * 预读当前项目的资源清单；同一项目与信任决定只探测一次。
+ * 预读当前项目的资源清单；同一项目与信任决定只探测一次，`force` 为真时忽略缓存重新探测。
  * 失败向上抛出 `ResourcePreviewError`，不用空清单冒充成功。
  */
 export async function previewProjectResources(
   projectPath: string,
-  trustDecision: 'trusted' | 'untrusted' | null
+  trustDecision: 'trusted' | 'untrusted' | null,
+  force = false
 ): Promise<readonly PiResourceEntry[]> {
   const key = `${projectPath}\n${trustDecision ?? 'default'}`
-  const cached = previewCache.get(key)
-  if (cached !== undefined) return cached
+  if (!force) {
+    const cached = previewCache.get(key)
+    if (cached !== undefined) return cached
+  }
 
   const entries = await runPreviewProbe(projectPath, trustDecision)
   if (previewCache.size >= PREVIEW_CACHE_LIMIT) previewCache.clear()

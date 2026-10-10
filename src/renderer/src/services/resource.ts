@@ -40,12 +40,12 @@ export async function getResources(): Promise<ResourcesResult> {
   }
 }
 
-/** Runtime 未启动时的资源预读；零参数，项目与信任决定由主进程决定。 */
-export async function getResourcePreview(): Promise<ResourcePreviewResult> {
+/** Runtime 未启动时的资源预读；项目与信任决定由主进程决定，`force` 要求绕过其缓存重新探测。 */
+export async function getResourcePreview(force = false): Promise<ResourcePreviewResult> {
   const bridge = window.desktop
   if (!bridge || typeof bridge.getResourcePreview !== 'function') return unavailable()
   try {
-    return await bridge.getResourcePreview()
+    return await bridge.getResourcePreview(force)
   } catch (error) {
     return callFailed(error)
   }

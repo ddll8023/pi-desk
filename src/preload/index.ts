@@ -119,6 +119,7 @@ import {
   isProjectionResult,
   isPromptResult,
   isResourcesResult,
+  isResourcePreviewRequest,
   isResourcePreviewResult,
   isRuntimeDiagnosticsResult,
   isRuntimeResult,
@@ -387,9 +388,9 @@ const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionAp
     return isResourcesResult(response) ? response : invalidResourcesResponse()
   },
 
-  /** Runtime 未启动时的资源预读：零参数，项目与信任决定都由主进程决定。 */
-  async getResourcePreview(): Promise<ResourcePreviewResult> {
-    const response: unknown = await ipcRenderer.invoke(RUNTIME_RESOURCE_PREVIEW_CHANNEL)
+  /** Runtime 未启动时的资源预读：项目与信任决定由主进程决定，`force` 要求绕过其缓存重新探测。 */
+  async getResourcePreview(force: boolean): Promise<ResourcePreviewResult> {
+    const response: unknown = await ipcRenderer.invoke(RUNTIME_RESOURCE_PREVIEW_CHANNEL, { force })
     return isResourcePreviewResult(response) ? response : invalidResourcePreviewResponse()
   },
 
