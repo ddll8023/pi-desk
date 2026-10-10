@@ -47,7 +47,7 @@ type AbortViewState =
   | { phase: 'requesting' }
   | { phase: 'error'; error: RuntimeError }
 
-/** `syncing` 表示未取得基准或正在重同步，`stale` 表示失去同步且尚未取得快照。 */
+/** `synced` 表示当前展示就是基准（无 Runtime 时为空基准），`syncing` 表示未取得基准或正在重同步，`stale` 表示失去同步且尚未取得快照。 */
 type ProjectionSyncState = 'syncing' | 'synced' | 'stale'
 
 /** 可用模型列表的读取状态。 */
@@ -140,7 +140,7 @@ export const useRuntimeStore = defineStore('runtime', () => {
   const capabilitiesView = ref<CapabilitiesViewState>({ phase: 'idle' })
   let releaseSubscription: (() => void) | null = null
   let releaseProjection: (() => void) | null = null
-  /** 已取得基准快照的 Runtime 代际；为空表示尚无基准。 */
+  /** 已取得基准快照的 Runtime 代际；为空表示当前没有 Runtime 代际（空基准或尚未取得快照）。 */
   let appliedRuntimeId: number | null = null
   let appliedSeq = 0
   let syncInFlight = false
@@ -237,35 +237,44 @@ export const useRuntimeStore = defineStore('runtime', () => {
       : { phase: 'error', error: result.error }
   }
 
-  /** 全量重同步：快照是唯一基准，期间到达的增量由序号守卫丢弃。 */
+  /**
+   * 全量重同步：快照是唯一基准，期间到达的增量由序号守卫丢弃。
+   * 无活动 Runtime 的空快照（`runtimeId` 为 null）本身是有效空基准，不作为换代冲突处理。
+   */
   async function syncProjection(expectedRuntimeId?: number): Promise<void> {
     if (syncInFlight) return
     syncInFlight = true
     projectionSync.value = 'syncing'
 
-    const result = await getRuntimeProjection()
-    syncInFlight = false
-    if (!result.ok) {
-      projectionSync.value = 'stale'
-      return
-    }
+    try {
+      const result = await getRuntimeProjection()
+      if (!result.ok) {
+        projectionSync.value = 'stale'
+        return
+      }
 
-    const snapshot = result.data
-    if (expectedRuntimeId !== undefined && snapshot.runtimeId !== expectedRuntimeId) {
-      // 快照已经换代：等待新代际的基准，不套用旧结果。
-      projectionSync.value = 'syncing'
-      return
-    }
+      const snapshot = result.data
+      if (expectedRuntimeId !== undefined
+        && snapshot.runtimeId !== null
+        && snapshot.runtimeId !== expectedRuntimeId) {
+        // 快照已换代且新代际仍在运行：等待该代际的基准，不套用旧结果。
+        projectionSync.value = 'syncing'
+        return
+      }
 
-    appliedRuntimeId = snapshot.runtimeId
-    appliedSeq = snapshot.seq
-    messages.value = snapshot.messages
-    tools.value = snapshot.tools
-    projectionTruncated.value = snapshot.truncated
-    droppedMessages.value = snapshot.droppedMessages
-    droppedTools.value = snapshot.droppedTools
-    projectionSync.value = 'synced'
-    if (snapshot.runtimeId !== null) ackRuntimeProjection(snapshot.runtimeId, snapshot.seq)
+      appliedRuntimeId = snapshot.runtimeId
+      appliedSeq = snapshot.seq
+      messages.value = snapshot.messages
+      tools.value = snapshot.tools
+      projectionTruncated.value = snapshot.truncated
+      droppedMessages.value = snapshot.droppedMessages
+      droppedTools.value = snapshot.droppedTools
+      projectionSync.value = 'synced'
+      if (snapshot.runtimeId !== null) ackRuntimeProjection(snapshot.runtimeId, snapshot.seq)
+    } finally {
+      // 任何返回路径（含通信异常）都必须释放标记，否则后续重同步会被永久丢弃。
+      syncInFlight = false
+    }
   }
 
   /** 批次按序号连续应用；旧代际、缺口与重同步标记都收敛到快照。 */
@@ -302,11 +311,11 @@ export const useRuntimeStore = defineStore('runtime', () => {
     ackRuntimeProjection(batch.runtimeId, appliedSeq)
   }
 
-  /** 投影随 Runtime 代际存在：离开就绪即清空展示消息与同步基准。 */
+  /** 投影随 Runtime 代际存在：离开就绪即清空展示消息；没有 Runtime 时空投影本身就是基准。 */
   function resetProjection(): void {
     messages.value = []
     tools.value = []
-    projectionSync.value = 'syncing'
+    projectionSync.value = 'synced'
     projectionTruncated.value = false
     droppedMessages.value = 0
     droppedTools.value = 0
@@ -337,7 +346,10 @@ export const useRuntimeStore = defineStore('runtime', () => {
     }
     if (status.state === 'ready') {
       view.value = { phase: 'ready', snapshot: status }
-      if (status.runtimeId !== appliedRuntimeId) void syncProjection(status.runtimeId ?? undefined)
+      // 换代与上一次重同步未收敛（syncing/stale）都重新取基准。
+      if (status.runtimeId !== appliedRuntimeId || projectionSync.value !== 'synced') {
+        void syncProjection(status.runtimeId ?? undefined)
+      }
       // 新 Runtime 或一轮结束后刷新模型列表，维持 Provider 与图片输入能力提示。
       if (status.runtimeId !== capabilitiesAttemptedRuntimeId
         || (previousStreaming && status.info?.isStreaming !== true)) {
