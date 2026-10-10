@@ -33,7 +33,12 @@ export async function setUiPreferences(ui: UiPreferences): Promise<PreferencesRe
   const bridge = window.desktop
   if (!bridge || typeof bridge.setUiPreferences !== 'function') return unavailable()
   try {
-    return await bridge.setUiPreferences(ui)
+    // 服务层重建普通对象，避免响应式代理跨 contextBridge，也只传递协议声明的字段。
+    return await bridge.setUiPreferences({
+      sidebarCollapsed: ui.sidebarCollapsed,
+      theme: ui.theme,
+      thinkingDefaultExpanded: ui.thinkingDefaultExpanded
+    })
   } catch (error) {
     return callFailed(error)
   }

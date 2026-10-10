@@ -335,7 +335,11 @@ const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionAp
 
   async setUiPreferences(ui: UiPreferences) {
     // 只搬运已声明的字段，不把页面传入的整个对象转交给主进程。
-    const request: UiPreferences = { sidebarCollapsed: ui.sidebarCollapsed, theme: ui.theme }
+    const request: UiPreferences = {
+      sidebarCollapsed: ui.sidebarCollapsed,
+      theme: ui.theme,
+      thinkingDefaultExpanded: ui.thinkingDefaultExpanded
+    }
     const response: unknown = await ipcRenderer.invoke(PREFERENCES_SET_UI_CHANNEL, request)
     return isPreferencesResult(response) ? response : invalidPreferencesResponse()
   },

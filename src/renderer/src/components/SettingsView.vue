@@ -1,4 +1,4 @@
-<!-- 设置页：外观常驻首页，Pi 资源与 Provider 认证作为同级子页在同一容器内切换；子页的读写各自由视图与 store 承担。 -->
+<!-- 设置页：外观与 Thinking 默认状态常驻首页，Pi 资源与 Provider 认证作为同级子页切换；偏好统一交给 store 保存，子页读写各自负责。 -->
 <script setup lang="ts">
 import { ref } from 'vue'
 import { storeToRefs } from 'pinia'
@@ -11,13 +11,18 @@ import ResourceView from './ResourceView.vue'
 type SettingsSection = 'appearance' | 'resources' | 'auth'
 
 const preferencesStore = usePreferencesStore()
-const { theme } = storeToRefs(preferencesStore)
+const { theme, thinkingDefaultExpanded } = storeToRefs(preferencesStore)
 const section = ref<SettingsSection>('appearance')
 
 const themeOptions = [
   { value: 'system', label: '跟随系统' },
   { value: 'light', label: '浅色' },
   { value: 'dark', label: '深色' }
+] as const
+
+const thinkingOptions = [
+  { value: false, label: '默认收起' },
+  { value: true, label: '默认展开' }
 ] as const
 
 function openSection(next: SettingsSection): void {
@@ -42,7 +47,7 @@ function backToAppearance(): void {
           <div class="settings-section-heading">
             <div>
               <h2 id="settings-appearance-title" class="settings-section-title">外观</h2>
-              <p class="mt-1 text-xs text-desk-muted">选择应用的颜色主题。</p>
+              <p class="mt-1 text-xs text-desk-muted">选择颜色主题与思考过程的默认展示方式。</p>
             </div>
           </div>
           <div class="settings-row">
@@ -57,6 +62,28 @@ function backToAppearance(): void {
                 :aria-pressed="theme === option.value"
                 :disabled="!preferencesStore.ready"
                 @click="preferencesStore.setTheme(option.value)"
+              >
+                {{ option.label }}
+              </AppButton>
+            </div>
+          </div>
+          <div class="settings-row">
+            <div class="min-w-0 flex-1">
+              <p class="text-sm font-medium">Thinking 默认状态</p>
+              <p class="mt-0.5 text-xs text-desk-muted">
+                每次进入对话时应用，生成期间也遵循此设置；手动开合只影响当前展示，不修改默认值。
+              </p>
+            </div>
+            <div class="segment w-full sm:w-80" role="group" aria-label="Thinking 默认状态">
+              <AppButton
+                v-for="option in thinkingOptions"
+                :key="option.label"
+                variant="unstyled"
+                class="segment-option"
+                :class="thinkingDefaultExpanded === option.value ? 'is-selected' : ''"
+                :aria-pressed="thinkingDefaultExpanded === option.value"
+                :disabled="!preferencesStore.ready"
+                @click="preferencesStore.setThinkingDefaultExpanded(option.value)"
               >
                 {{ option.label }}
               </AppButton>

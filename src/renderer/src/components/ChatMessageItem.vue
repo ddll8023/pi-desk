@@ -1,69 +1,73 @@
-<!-- 单条消息：按 contentIndex 顺序渲染内容块，用户消息靠右、Assistant 消息在左侧，用户消息的图片附件渲染为缩略图，Thinking 可折叠，失败按错误提示内联展示。 -->
+<!-- 单条消息：Assistant 以整条轻卡片承载正文、Thinking 与工具块，按 contentIndex 保持顺序；Thinking 遵循默认偏好与本次展示的手动开合，保留用户内容、截断与失败提示。 -->
 <script setup lang="ts">
-import { computed, reactive, watch } from 'vue'
+import { computed, reactive } from 'vue'
 import type { ChatMessageView } from '../chat-view'
+import { usePreferencesStore } from '../stores/preferences'
+import MarkdownContent from './MarkdownContent.vue'
 import ToolCard from './ToolCard.vue'
 
 const props = defineProps<{
   readonly message: ChatMessageView
-  /** 该消息是否属于正在运行的一轮；用于让 Thinking 在流式期间自动展开。 */
-  readonly streaming: boolean
 }>()
 
-/** 已在流式期间展开过的 Thinking 块；本轮结束后不再自动收起，交给用户决定。 */
-const expandedThinking = reactive(new Set<string>())
+const preferencesStore = usePreferencesStore()
+/** 手动选择只保留在当前消息组件中；重新进入聊天后按已保存的默认值恢复。 */
+const thinkingOverrides = reactive(new Map<string, boolean>())
 
 const roleLabel = computed(() => (props.message.role === 'user' ? '你' : 'Assistant'))
 const isUser = computed(() => props.message.role === 'user')
 
-// 只记录流式期间首次出现的块；用户手动开合不会被后续更新覆盖（`open` 值不变时不会重设 DOM 属性）。
-watch(
-  () => props.message.blocks.map((block) => (block.kind === 'thinking' ? block.key : '')),
-  (keys) => {
-    if (!props.streaming) return
-    for (const key of keys) {
-      if (key !== '') expandedThinking.add(key)
-    }
-  },
-  { immediate: true }
-)
+/** 未手动调整的块跟随默认值；流式更新不改变单个块的手动选择。 */
+function isThinkingExpanded(key: string): boolean {
+  return thinkingOverrides.get(key) ?? preferencesStore.thinkingDefaultExpanded
+}
+
+/** 由 summary 的点击统一控制开合，键盘激活同样生效，避免默认展开被误记成手动操作。 */
+function toggleThinking(key: string): void {
+  thinkingOverrides.set(key, !isThinkingExpanded(key))
+}
 </script>
 
 <template>
-  <article class="flex flex-col gap-2">
+  <article class="chat-message" :class="isUser ? 'chat-message-user' : 'chat-message-assistant'">
     <header class="chat-meta">
+      <span v-if="!isUser" class="chat-role-mark" aria-hidden="true">π</span>
       <span class="chat-role">{{ roleLabel }}</span>
-      <span v-if="message.time">{{ message.time }}</span>
+      <span v-if="message.time" class="chat-time">{{ message.time }}</span>
     </header>
 
     <template v-for="block in message.blocks" :key="block.key">
-      <!-- 图片附件：只来自用户消息的本地附件，data URL 经 CSP 的 img-src data: 放行。 -->
-      <img
-        v-if="block.kind === 'text' && block.image !== null"
-        :src="block.image.dataUrl"
-        :alt="`附件图片（${block.image.mimeType}）`"
-        class="max-h-48 self-end rounded-desk-md border border-desk-line object-contain"
-      />
-      <p
-        v-if="block.kind === 'text' && (block.text !== '' || block.image === null)"
-        class="chat-bubble"
-        :class="isUser ? 'chat-bubble-user self-end' : 'chat-bubble-assistant self-start'"
-      >
-        {{ block.text }}
-      </p>
+      <template v-if="block.kind === 'text'">
+        <!-- 图片附件仍只来自用户消息的本地附件，不交给 Markdown 解析。 -->
+        <img
+          v-if="block.image !== null"
+          :src="block.image.dataUrl"
+          :alt="`附件图片（${block.image.mimeType}）`"
+          class="max-h-48 self-end rounded-desk-md border border-desk-line object-contain"
+        />
+        <div
+          v-if="block.text !== '' || block.image === null"
+          :class="isUser ? 'chat-bubble chat-bubble-user self-end' : 'chat-assistant-content'"
+        >
+          <p v-if="isUser">{{ block.text }}</p>
+          <MarkdownContent v-else :text="block.text" />
+          <p v-if="block.truncated" class="chat-truncation-note">此内容超出展示上限，已截断。</p>
+        </div>
+      </template>
 
-      <!-- 流式期间自动展开，之后保持展开状态；用户手动收起后不再自动打开。 -->
+      <!-- 默认状态对历史与流式内容一致生效；手动开合只覆盖当前块。 -->
       <details
         v-else-if="block.kind === 'thinking'"
-        :open="expandedThinking.has(block.key)"
-        class="tool-card self-start w-full"
+        :open="isThinkingExpanded(block.key)"
+        class="chat-thinking self-start w-full"
       >
-        <summary class="text-desk-muted">
+        <summary @click.prevent="toggleThinking(block.key)">
           <span class="disclosure"></span>
           <span>Thinking</span>
+          <span class="chat-thinking-hint">思考过程</span>
         </summary>
-        <div class="tool-card-body">
-          <p class="whitespace-pre-wrap break-words text-sm leading-6">{{ block.text }}</p>
+        <div class="chat-thinking-body">
+          <MarkdownContent :text="block.text" />
           <p v-if="block.truncated" class="tool-note">此内容超出展示上限，已截断。</p>
         </div>
       </details>

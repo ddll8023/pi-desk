@@ -6,7 +6,7 @@
   --color-desk-canvas: #f4f6f8;
   --color-desk-canvas-sunken: #eceff3;
   --color-desk-surface: #ffffff;
-  /* Assistant 消息与弹层的表面色；与页面底色保持层次差。 */
+  /* 浮起表面的配色令牌；当前组件样式未引用。 */
   --color-desk-surface-raised: #ffffff;
   /* 悬停、内嵌块与禁用态底色；与 canvas 分开，避免在白色面板上串色。 */
   --color-desk-surface-subtle: #f2f6f8;
@@ -1321,26 +1321,420 @@
     }
   }
 
-  /* 消息气泡：只定义共用形状，用户与 Assistant 的配色由模板决定。 */
+  /* Assistant 每条回复使用一张卡片；正文直接排版，工具卡片保留独立展示语义。 */
+  .chat-message {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 0.875rem;
+  }
+
+  .chat-message-user {
+    gap: 0.5rem;
+  }
+
+  .chat-message-assistant {
+    width: 100%;
+    max-width: min(58rem, 100%);
+    align-self: flex-start;
+    padding: 1.5rem 1.75rem;
+    border: 1px solid var(--color-desk-line);
+    border-radius: 18px;
+    background: var(--color-desk-surface);
+    box-shadow: var(--shadow-desk-raise), 0 12px 34px -22px rgba(23, 37, 47, 0.1);
+  }
+
+  /* 用户文字保留原有纯文本换行与强调色，不经过 Markdown 解析。 */
   .chat-bubble {
     @apply whitespace-pre-wrap break-words rounded-desk-lg px-3.5 py-2.5 text-sm leading-6;
-    max-width: 42rem;
+    min-width: 0;
+    max-width: min(42rem, 100%);
   }
 
   .chat-bubble-user {
     @apply rounded-br-desk-sm border border-transparent bg-desk-accent text-desk-on-accent;
   }
 
-  .chat-bubble-assistant {
-    @apply rounded-bl-desk-sm border border-desk-line bg-desk-surface-raised shadow-desk-raise;
+  .chat-assistant-content {
+    width: 100%;
+    min-width: 0;
+  }
+
+  /* Thinking 使用低强调的内嵌折叠区，不借用工具卡片样式，避免调整波及工具输出。 */
+  .chat-thinking {
+    min-width: 0;
+    border: 1px solid var(--color-desk-line);
+    border-radius: var(--radius-desk-md);
+    background: var(--color-desk-surface-subtle);
+    color: var(--color-desk-muted);
+  }
+
+  .chat-thinking > summary {
+    display: flex;
+    align-items: center;
+    gap: 0.5625rem;
+    padding: 0.625rem 0.8125rem;
+    border-radius: var(--radius-desk-md);
+    font-size: 0.75rem;
+    transition: background-color var(--default-transition-duration) ease;
+  }
+
+  .chat-thinking > summary:hover {
+    background: var(--color-desk-canvas);
+  }
+
+  .chat-thinking[open] > summary {
+    border-radius: var(--radius-desk-md) var(--radius-desk-md) 0 0;
+  }
+
+  .chat-thinking-hint {
+    margin-left: auto;
+    font-size: var(--text-2xs);
+  }
+
+  .chat-thinking-body {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 0.625rem;
+    padding: 0.6875rem 0.8125rem 0.8125rem;
+    border-top: 1px solid var(--color-desk-line);
+  }
+
+  .chat-thinking-body .markdown-content {
+    --markdown-flow: 0.75rem;
+    --markdown-section-gap: 1.25rem;
+    color: var(--color-desk-muted);
+    font-size: 0.8125rem;
+  }
+
+  .chat-truncation-note {
+    margin-top: 0.5rem;
+    color: var(--color-desk-muted);
+    font-size: 0.75rem;
+    line-height: 1.5;
+  }
+
+  .chat-bubble-user .chat-truncation-note {
+    color: inherit;
+  }
+
+  /* Markdown 样式只作用于正文与 Thinking；颜色复用主题令牌，不依赖外部样式或字体。 */
+  .markdown-content {
+    --markdown-flow: 1rem;
+    --markdown-section-gap: 1.75rem;
+    width: 100%;
+    min-width: 0;
+    color: var(--color-desk-ink);
+    font-size: 0.875rem;
+    line-height: 1.8;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  /* 块间距由后续块的上边距承担，流式追加保持既有块的间距规则。 */
+  .markdown-body > * {
+    margin: 0;
+  }
+
+  .markdown-body > * + * {
+    margin-top: var(--markdown-flow);
+  }
+
+  .markdown-body :is(h1, h2, h3, h4, h5, h6) {
+    margin: 0;
+    font-weight: 650;
+    line-height: 1.45;
+  }
+
+  .markdown-body > * + :is(h1, h2, h3, h4, h5, h6) {
+    margin-top: var(--markdown-section-gap);
+  }
+
+  .markdown-body h1 { font-size: 1.75em; }
+  .markdown-body h2 { font-size: 1.625em; }
+  .markdown-body h3 { font-size: 1.15em; }
+  .markdown-body :is(h4, h5, h6) { font-size: 1em; }
+
+  .markdown-body strong {
+    font-weight: 650;
+  }
+
+  .markdown-body em {
+    font-style: italic;
+  }
+
+  .markdown-body :is(ul, ol) {
+    padding-left: 1.375rem;
+    list-style-position: outside;
+  }
+
+  .markdown-body ul { list-style-type: disc; }
+  .markdown-body ol { list-style-type: decimal; }
+  .markdown-body ul ul { list-style-type: circle; }
+  .markdown-body ul ul ul { list-style-type: square; }
+
+  .markdown-body li {
+    padding-left: 0.25rem;
+  }
+
+  .markdown-body li::marker {
+    color: var(--color-desk-muted);
+    font-size: 0.85em;
+  }
+
+  .markdown-body li + li {
+    margin-top: 0.4375rem;
+  }
+
+  .markdown-body :is(li, blockquote) > * {
+    margin: 0;
+  }
+
+  .markdown-body :is(li, blockquote) > * + * {
+    margin-top: 0.625rem;
+  }
+
+  .markdown-body li > :is(ul, ol) {
+    margin-top: 0.375rem;
+  }
+
+  .markdown-body li:has(> input[type="checkbox"], > p > input[type="checkbox"]) {
+    list-style-type: none;
+  }
+
+  .markdown-body input[type="checkbox"] {
+    width: 0.875rem;
+    height: 0.875rem;
+    margin-right: 0.25rem;
+    margin-left: -1.25rem;
+    vertical-align: -0.1rem;
+    accent-color: var(--color-desk-accent);
+  }
+
+  .markdown-body blockquote {
+    padding: 0.75rem 1rem;
+    border-left: 3px solid var(--color-desk-accent);
+    border-radius: 0 var(--radius-desk-sm) var(--radius-desk-sm) 0;
+    background: var(--color-desk-surface-subtle);
+    color: var(--color-desk-muted);
+    font-size: 0.93em;
+  }
+
+  .markdown-body hr {
+    height: 0;
+    border: 0;
+    border-top: 1px solid var(--color-desk-line);
+  }
+
+  .markdown-body :not(pre) > code {
+    padding: 0.125rem 0.3rem;
+    border: 1px solid var(--color-desk-line);
+    border-radius: var(--radius-desk-sm);
+    background: var(--color-desk-surface-subtle);
+    color: var(--color-desk-accent);
+    font-family: var(--font-mono);
+    font-size: 0.85em;
+    white-space: break-spaces;
+    box-decoration-break: clone;
+  }
+
+  .markdown-code-block {
+    min-width: 0;
+    overflow: hidden;
+    border: 1px solid var(--color-desk-line);
+    border-radius: var(--radius-desk-md);
+    background: var(--color-desk-surface-subtle);
+  }
+
+  .markdown-code-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding: 0.625rem 0.8125rem;
+    border-bottom: 1px solid var(--color-desk-line);
+    color: var(--color-desk-muted);
+  }
+
+  .markdown-code-language {
+    min-width: 0;
+    padding: 0.0625rem 0.375rem;
+    border: 1px solid var(--color-desk-line);
+    border-radius: var(--radius-desk-sm);
+    font-family: var(--font-mono);
+    font-size: var(--text-2xs);
+  }
+
+  .markdown-code-copy {
+    @apply shrink-0 rounded-desk-sm border border-desk-line bg-desk-surface px-2 py-0.5 text-2xs text-desk-muted transition-colors;
+  }
+
+  .markdown-code-copy:hover {
+    border-color: var(--color-desk-accent);
+    color: var(--color-desk-ink);
+  }
+
+  .markdown-code-block pre {
+    max-width: 100%;
+    margin: 0;
+    padding: 1.0625rem 1.125rem;
+    overflow-x: auto;
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    line-height: 1.9;
+    white-space: pre;
+    overflow-wrap: normal;
+    word-break: normal;
+  }
+
+  .markdown-code-block pre code {
+    padding: 0;
+    border: 0;
+    background: transparent;
+    font: inherit;
+  }
+
+  .markdown-table-scroll {
+    max-width: 100%;
+    overflow-x: auto;
+    border: 1px solid var(--color-desk-line);
+    border-radius: var(--radius-desk-md);
+  }
+
+  .markdown-body table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.75rem;
+    line-height: 1.65;
+  }
+
+  .markdown-body :is(th, td) {
+    min-width: 7rem;
+    padding: 0.6875rem 0.875rem;
+    border: 0;
+    text-align: left;
+    vertical-align: top;
+  }
+
+  .markdown-body th {
+    background: var(--color-desk-surface-subtle);
+    color: var(--color-desk-muted);
+    font-size: var(--text-2xs);
+    font-weight: 500;
+  }
+
+  /* 分隔线挂在新到达的行上，保留轻量横线，不重设上一行边框。 */
+  .markdown-body tbody td {
+    border-top: 1px solid var(--color-desk-line);
+  }
+
+  .markdown-body :is(th, td)[align="center"] { text-align: center; }
+  .markdown-body :is(th, td)[align="right"] { text-align: right; }
+
+  .markdown-link {
+    display: inline;
+    max-width: 100%;
+    padding: 0;
+    border: 0;
+    border-radius: 2px;
+    background: transparent;
+    color: var(--color-desk-accent);
+    font: inherit;
+    text-align: inherit;
+    text-decoration: underline;
+    text-underline-offset: 0.2em;
+    cursor: pointer;
+    overflow-wrap: anywhere;
+  }
+
+  .markdown-link:hover {
+    color: var(--color-desk-accent-hover);
+  }
+
+  .markdown-content :is(button, [tabindex]):focus-visible {
+    outline: 2px solid var(--color-desk-accent);
+    outline-offset: -2px;
+  }
+
+  .markdown-image-placeholder {
+    color: var(--color-desk-muted);
+    font-size: 0.8125rem;
+  }
+
+  .markdown-fallback {
+    white-space: pre-wrap;
+  }
+
+  .markdown-render-note,
+  .markdown-copy-notice {
+    margin-top: 0.5rem;
+    color: var(--color-desk-muted);
+    font-size: 0.75rem;
+    line-height: 1.5;
+  }
+
+  .markdown-copy-notice.is-error {
+    color: var(--color-desk-danger);
   }
 
   .chat-meta {
     @apply flex flex-wrap items-baseline gap-2 text-2xs text-desk-muted;
   }
 
+  .chat-message-user > .chat-meta {
+    justify-content: flex-end;
+  }
+
+  .chat-message-assistant > .chat-meta {
+    align-items: center;
+    gap: 0.625rem;
+    margin-bottom: 0.375rem;
+  }
+
+  .chat-message-assistant .chat-time {
+    margin-left: auto;
+  }
+
+  .chat-role-mark {
+    display: grid;
+    width: 29px;
+    height: 29px;
+    flex-shrink: 0;
+    place-items: center;
+    border-radius: var(--radius-desk-md);
+    background: var(--color-desk-accent-soft);
+    color: var(--color-desk-accent);
+    font-family: var(--font-mono);
+    font-size: 1rem;
+  }
+
   .chat-role {
     @apply text-xs font-semibold text-desk-ink;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    .chat-message-assistant {
+      box-shadow: 0 10px 32px -20px rgba(0, 0, 0, 0.4);
+    }
+  }
+
+  @media (max-width: 799px) {
+    .chat-message-assistant {
+      padding: 1.125rem 1rem;
+      border-radius: var(--radius-desk-lg);
+    }
+
+    .markdown-code-block pre {
+      padding: 0.875rem;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .chat-thinking > summary,
+    .chat-thinking .disclosure {
+      transition: none;
+    }
   }
 
   /* 折叠三角：纯 CSS 绘制，不依赖图标字体。 */
@@ -1358,7 +1752,7 @@
     transform: rotate(90deg);
   }
 
-  /* 工具卡片与 Thinking 共用折叠外观；头部摘要由模板排版。 */
+  /* 工具卡片保持独立的折叠外观；头部摘要由模板排版，不受 Thinking 样式影响。 */
   .tool-card {
     @apply rounded-desk-sm border border-desk-line bg-desk-surface;
   }

@@ -30,9 +30,6 @@ const runtimeInfo = computed(() => (
   runtimeView.value.phase === 'ready' ? runtimeView.value.snapshot.info : null
 ))
 const streaming = computed(() => runtimeInfo.value?.isStreaming === true)
-const streamingMessageId = computed(() => (
-  streaming.value ? chatMessages.value.at(-1)?.id ?? null : null
-))
 const syncNotice = computed(() => {
   if (projectionSync.value === 'synced') return null
   return projectionSync.value === 'stale'
@@ -145,7 +142,6 @@ onMounted(() => {
           v-for="message in chatMessages"
           :key="message.id"
           :message="message"
-          :streaming="message.id === streamingMessageId"
         />
 
         <div v-if="chatMessages.length === 0" class="empty-state">

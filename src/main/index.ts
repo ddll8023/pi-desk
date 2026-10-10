@@ -1191,7 +1191,7 @@ function registerRuntimeHandlers(pageUrl: string): void {
   )
 }
 
-/** 只接受 Sidebar 折叠状态与主题取值；界面偏好没有其他字段，未知字段一律拒绝。 */
+/** 只接受侧栏、主题与 Thinking 默认状态三个界面偏好字段，未知字段一律拒绝。 */
 function registerPreferencesHandlers(pageUrl: string): void {
   handle(
     PREFERENCES_GET_CHANNEL,
@@ -1220,19 +1220,24 @@ function registerPreferencesHandlers(pageUrl: string): void {
         return preferencesFailure('INVALID_REQUEST', '界面偏好参数格式不正确。')
       }
       const fields = request as Record<string, unknown>
-      if (Object.keys(fields).some((key) => key !== 'sidebarCollapsed' && key !== 'theme')) {
+      if (Object.keys(fields).some((key) => (
+        key !== 'sidebarCollapsed' && key !== 'theme' && key !== 'thinkingDefaultExpanded'
+      ))) {
         return preferencesFailure('INVALID_REQUEST', '界面偏好参数包含未支持的字段。')
       }
-      const { sidebarCollapsed, theme } = fields
+      const { sidebarCollapsed, theme, thinkingDefaultExpanded } = fields
       if (typeof sidebarCollapsed !== 'boolean') {
         return preferencesFailure('INVALID_REQUEST', 'Sidebar 折叠状态必须是布尔值。')
       }
       if (!isUiTheme(theme)) {
         return preferencesFailure('INVALID_REQUEST', '主题取值只能是 system、light 或 dark。')
       }
+      if (typeof thinkingDefaultExpanded !== 'boolean') {
+        return preferencesFailure('INVALID_REQUEST', 'Thinking 默认展开状态必须是布尔值。')
+      }
       // 主题在参数合法后立即生效：只读降级时同样切换本次运行的主题，与页面本地生效保持一致。
       applyNativeTheme(theme)
-      return preferencesManager.setUi({ sidebarCollapsed, theme })
+      return preferencesManager.setUi({ sidebarCollapsed, theme, thinkingDefaultExpanded })
     }
   )
 }

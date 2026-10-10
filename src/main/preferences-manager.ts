@@ -1,9 +1,9 @@
 /**
- * 界面偏好（Sidebar 折叠与主题）的读写入口：把配置文件存储的读写转换为页面契约。
+ * 界面偏好（侧栏折叠、主题与 Thinking 默认状态）的读写入口：把配置文件存储的读写转换为页面契约。
  *
  * 不直接访问文件，也不管理窗口状态；窗口尺寸与位置由 window-state.ts 独占。读取失败与写入
  * 失败都只回传错误，界面偏好的改动已在页面本地生效，不阻断其他操作，也不新增错误码。
- * IPC 契约与参数校验在 shared/preferences-api.ts，调用者校验在 main/index.ts。
+ * IPC 契约与响应校验在 shared/preferences-api.ts，请求参数与调用者校验在 main/index.ts。
  */
 import type { PreferencesError, PreferencesResult, UiPreferences } from '../shared/preferences-api'
 import type { DesktopConfigStore } from './desktop-config-store'
