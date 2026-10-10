@@ -1,5 +1,5 @@
 /**
- * Project Trust 的探测与决定管理：识别会触发信任要求的项目资源，读写 Desktop 侧的持久决定，
+ * Project Trust 的探测与决定管理：识别会触发信任要求的项目资源，支持提交前刷新资源清单，读写 Desktop 侧的持久决定，
  * 并把决定映射为 Pi 启动参数。不读写 Pi 的 `~/.pi/agent/trust.json`，不处理 `project_trust`
  * extension 事件，也不做任何 OS 沙箱或工具权限限制；路径归一化复用 project-path.ts。
  *
@@ -55,6 +55,18 @@ export class TrustManager {
       return { projectPath: null, decision: null, resources: [] }
     }
     const projectPath = await this.canonicalize(rawProjectPath)
+    const entry = await this.probe(projectPath)
+    return {
+      projectPath,
+      decision: entry.decision,
+      resources: entry.resources
+    }
+  }
+
+  /** 添加项目提交前绕过进程内缓存，重新读取受保护资源清单与信任决定。 */
+  async refreshStatusOf(rawProjectPath: string): Promise<TrustStatus> {
+    const projectPath = await this.canonicalize(rawProjectPath)
+    this.cache.delete(projectPath)
     const entry = await this.probe(projectPath)
     return {
       projectPath,

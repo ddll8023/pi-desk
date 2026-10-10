@@ -1,9 +1,10 @@
-/** 作为渲染端项目选择、列表与切换的调用入口，把桥接缺失与通信异常转换为安全的展示结果。 */
+/** 作为渲染端项目选择、列表、添加、移除与切换入口，收敛桥接缺失和通信异常。 */
 import type {
   ProjectError,
   ProjectListResult,
   ProjectPathResult
 } from '../../../shared/project-api'
+import type { TrustDecision, TrustStatus } from '../../../shared/trust-api'
 
 function unavailable(): { ok: false; error: ProjectError } {
   return {
@@ -49,6 +50,36 @@ export async function setCurrentProject(
   if (!bridge || typeof bridge.setCurrentProject !== 'function') return unavailable()
   try {
     return await bridge.setCurrentProject(path, allowInterrupt)
+  } catch {
+    return callFailed()
+  }
+}
+
+/** 完成候选项目添加与切换；信任决定随项目状态一起由主进程保存。 */
+export async function addProject(
+  path: string,
+  trustStatus: TrustStatus,
+  trustDecision: TrustDecision | null,
+  allowInterrupt: boolean
+): Promise<ProjectListResult> {
+  const bridge = window.desktop
+  if (!bridge || typeof bridge.addProject !== 'function') return unavailable()
+  try {
+    return await bridge.addProject(path, trustStatus, trustDecision, allowInterrupt)
+  } catch {
+    return callFailed()
+  }
+}
+
+/** 从 Pi Desktop 项目列表移除项目，不删除磁盘目录。 */
+export async function removeProject(
+  projectId: string,
+  allowInterrupt: boolean
+): Promise<ProjectListResult> {
+  const bridge = window.desktop
+  if (!bridge || typeof bridge.removeProject !== 'function') return unavailable()
+  try {
+    return await bridge.removeProject(projectId, allowInterrupt)
   } catch {
     return callFailed()
   }

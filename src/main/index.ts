@@ -1,4 +1,4 @@
-/** 管理唯一桌面窗口及其尺寸位置偏好、本地资产边界，以及应用信息、Project 选择与列表、Session 列表与打开与重新加载、Project Trust 查询与决定、界面偏好、Runtime 启停与安全启动、Prompt 提交、中止、可用模型读取、Pi 资源与诊断读取、MCP 状态与 MCP 登录退出请求、认证状态与 Provider 登录退出、外链打开、消息/工具投影 IPC、Extension UI 状态与对话响应 IPC、事件广播与退出编排。 */
+/** 管理唯一桌面窗口、本地资产边界，以及应用信息、Project 选择/添加/移除、Session 与 Project Trust、Runtime、认证、Extension IPC、事件广播及退出编排。 */
 import { realpath } from 'node:fs/promises'
 import { extname, isAbsolute, relative, resolve, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -14,11 +14,19 @@ import type { PreferencesErrorCode, PreferencesResult } from '../shared/preferen
 import { isUiTheme } from '../shared/preferences-api'
 import type { UiTheme } from '../shared/preferences-api'
 import {
+  PROJECT_ADD_CHANNEL,
   PROJECT_CHOOSE_DIRECTORY_CHANNEL,
   PROJECT_LIST_CHANNEL,
+  PROJECT_REMOVE_CHANNEL,
   PROJECT_SET_CURRENT_CHANNEL
 } from '../shared/project-api'
-import type { ProjectErrorCode, ProjectListResult, ProjectPathResult } from '../shared/project-api'
+import type {
+  ProjectAddRequest,
+  ProjectErrorCode,
+  ProjectListResult,
+  ProjectPathResult,
+  ProjectRemoveRequest
+} from '../shared/project-api'
 import {
   SESSION_LIST_CHANNEL,
   SESSION_OPEN_CHANNEL,
@@ -45,7 +53,9 @@ import type {
 import {
   TRUST_DECIDE_CHANNEL,
   TRUST_STATUS_CHANNEL,
-  isTrustDecisionInput
+  isTrustDecision,
+  isTrustDecisionInput,
+  isTrustStatus
 } from '../shared/trust-api'
 import type {
   TrustDecisionResult,
@@ -148,14 +158,14 @@ let quittingAfterShutdown = false
 const runtimeManager = new RuntimeManager()
 /** 配置文件的唯一读写者；项目列表、界面偏好与窗口状态共用同一份文件。 */
 const configStore = new DesktopConfigStore()
+const trustManager = new TrustManager({ store: configStore })
 const projectManager = new ProjectManager({
   chooseDirectory: chooseDirectoryWithDialog,
   runtime: runtimeManager,
-  store: configStore
+  store: configStore,
+  trust: trustManager
 })
 const sessionManager = new SessionManager({ projects: projectManager, runtime: runtimeManager })
-/** Project Trust 的探测与决定管理；决定存入 desktop-config.json，不读写 Pi 的 trust.json。 */
-const trustManager = new TrustManager({ store: configStore })
 /** 认证执行端：管理认证辅助进程，凭据读写全在官方实现内完成。 */
 const authManager = new AuthManager({ store: configStore })
 const preferencesManager = new PreferencesManager({ store: configStore })
@@ -404,7 +414,7 @@ async function chooseDirectoryWithDialog(defaultPath: string): Promise<string | 
   return typeof selected === 'string' && selected.trim() !== '' ? selected : null
 }
 
-/** 只接受项目路径与显式中断确认；不接受任意 channel、任意路径或其他 RPC 内容。 */
+/** 只接受受限的项目选择/添加/移除请求与显式中断确认；不接受任意 channel 或 RPC 内容。 */
 function registerProjectHandlers(pageUrl: string): void {
   ipcMain.handle(
     PROJECT_CHOOSE_DIRECTORY_CHANNEL,
@@ -429,6 +439,65 @@ function registerProjectHandlers(pageUrl: string): void {
         return projectListFailure('INVALID_REQUEST', '项目列表接口不接受参数。')
       }
       return projectManager.list()
+    }
+  )
+
+  ipcMain.handle(
+    PROJECT_ADD_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<ProjectListResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return projectListFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 1) {
+        return projectListFailure('INVALID_REQUEST', '添加项目接口只接受一个请求对象。')
+      }
+      const request = args[0]
+      if (typeof request !== 'object' || request === null || Array.isArray(request)) {
+        return projectListFailure('INVALID_REQUEST', '添加项目参数格式不正确。')
+      }
+      const fields = request as Record<string, unknown>
+      if (Object.keys(fields).some((key) => !['path', 'trustStatus', 'trustDecision', 'allowInterrupt'].includes(key))) {
+        return projectListFailure('INVALID_REQUEST', '添加项目参数包含未支持的字段。')
+      }
+      const { path, trustStatus, trustDecision, allowInterrupt } = fields
+      if (typeof path !== 'string' || !isTrustStatus(trustStatus) || trustStatus.projectPath !== path) {
+        return projectListFailure('INVALID_REQUEST', '候选项目路径或信任状态无效。')
+      }
+      if (trustDecision !== null && !isTrustDecision(trustDecision)) {
+        return projectListFailure('INVALID_REQUEST', '信任决定必须是 trusted、untrusted 或 null。')
+      }
+      if (typeof allowInterrupt !== 'boolean') {
+        return projectListFailure('INVALID_REQUEST', '添加项目必须显式说明是否允许中断当前操作。')
+      }
+      return projectManager.add(request as ProjectAddRequest)
+    }
+  )
+
+  ipcMain.handle(
+    PROJECT_REMOVE_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<ProjectListResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return projectListFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 1) {
+        return projectListFailure('INVALID_REQUEST', '移除项目接口只接受一个请求对象。')
+      }
+      const request = args[0]
+      if (typeof request !== 'object' || request === null || Array.isArray(request)) {
+        return projectListFailure('INVALID_REQUEST', '移除项目参数格式不正确。')
+      }
+      const fields = request as Record<string, unknown>
+      if (Object.keys(fields).some((key) => key !== 'projectId' && key !== 'allowInterrupt')) {
+        return projectListFailure('INVALID_REQUEST', '移除项目参数包含未支持的字段。')
+      }
+      const { projectId, allowInterrupt } = fields
+      if (typeof projectId !== 'string' || projectId.trim() === '') {
+        return projectListFailure('INVALID_REQUEST', '项目 id 无效。')
+      }
+      if (typeof allowInterrupt !== 'boolean') {
+        return projectListFailure('INVALID_REQUEST', '移除项目必须显式说明是否允许中断当前操作。')
+      }
+      return projectManager.remove(request as ProjectRemoveRequest)
     }
   )
 

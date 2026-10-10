@@ -1,5 +1,5 @@
 /**
- * 本地 Desktop 配置的唯一读写者：最近项目、当前项目、界面偏好、窗口状态、各项目信任决定（Project Trust）
+ * 本地 Desktop 配置的唯一读写者：最近项目的添加/移除、当前项目、界面偏好、窗口状态、各项目信任决定（Project Trust）
  * 与安装级 UUID 的加载、保存与降级处理。
  *
  * 配置位于 Electron userData 目录下的 desktop-config.json。写入采用同目录临时文件加改名替换，
@@ -200,7 +200,11 @@ export class DesktopConfigStore {
    * 把归一化后的目录设为当前项目并保存。
    * 只读降级时只更新本次运行的内存状态；保存失败保持内存状态不变。
    */
-  selectProject(projectPath: string, name: string): Promise<ProjectList> {
+  selectProject(
+    projectPath: string,
+    name: string,
+    trustDecision?: TrustDecision
+  ): Promise<ProjectList> {
     return this.enqueue(async () => {
       await this.loadFromDisk()
 
@@ -215,19 +219,52 @@ export class DesktopConfigStore {
         record,
         ...this.projects.filter((project) => project.path !== projectPath)
       ])
+      const projectTrust = trustDecision === undefined
+        ? this.projectTrust
+        : { ...this.projectTrust, [projectPath]: trustDecision }
       if (!this.readOnly) {
         await this.persist({
           projects,
           currentProjectId: record.id,
           ui: this.ui,
           windowState: this.windowState,
-          projectTrust: this.projectTrust,
+          projectTrust,
           authDeviceId: this.deviceIdForPersist()
         })
       }
 
       this.projects = projects
       this.currentProjectId = record.id
+      this.projectTrust = projectTrust
+      return this.snapshot()
+    })
+  }
+
+  /** 从 Desktop 列表移除项目记录，不访问或删除项目目录；同时清除当前选择与该路径的信任决定。 */
+  removeProject(projectId: string): Promise<ProjectList> {
+    return this.enqueue(async () => {
+      await this.loadFromDisk()
+      const removed = this.projects.find((project) => project.id === projectId)
+      if (removed === undefined) return this.snapshot()
+
+      const projects = this.projects.filter((project) => project.id !== projectId)
+      const currentProjectId = this.currentProjectId === projectId ? null : this.currentProjectId
+      const projectTrust = { ...this.projectTrust }
+      delete projectTrust[removed.path]
+      if (!this.readOnly) {
+        await this.persist({
+          projects,
+          currentProjectId,
+          ui: this.ui,
+          windowState: this.windowState,
+          projectTrust,
+          authDeviceId: this.deviceIdForPersist()
+        })
+      }
+
+      this.projects = projects
+      this.currentProjectId = currentProjectId
+      this.projectTrust = projectTrust
       return this.snapshot()
     })
   }

@@ -62,7 +62,13 @@ const emptyState = computed(() => {
   if (current.phase === 'ready') {
     return { title: '可以开始对话', description: '在下方输入内容并发送；Enter 发送，Shift+Enter 换行。', action: null }
   }
-  return { title: '还没有打开会话', description: '打开或新建一个会话后即可开始对话。', action: 'new-session' as const }
+  if (current.phase === 'idle' || current.phase === 'closed') {
+    return {
+      title: '准备开始对话',
+      description: '输入内容并发送后才会启动 Pi；首次启动期间会保留输入。',
+      action: null
+    }
+  }
 })
 
 /** 内容指纹：只在消息或工具内容变化时重新粘底，避免每次渲染都改滚动位置。 */
@@ -95,6 +101,8 @@ function jumpToBottom(): void {
 }
 
 function startNewSession(): void {
+  // 闲置时空白聊天已经可用，不因点击新建会话启动 Pi；异常退出时保留显式重试入口。
+  if (runtimeView.value.phase === 'idle' || runtimeView.value.phase === 'closed') return
   void sessionStore.open(null, false)
 }
 

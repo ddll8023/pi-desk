@@ -1,4 +1,4 @@
-/** 为沙箱页面提供应用信息、Project 选择与列表、Session 列表与打开与重新加载、Project Trust 查询与决定、界面偏好、Runtime 启停与安全启动、可用模型读取、Pi 资源与诊断读取、MCP 状态与 MCP 登录退出请求、认证状态与 Provider 登录退出、Prompt 提交、中止、消息/工具投影与事件订阅、Extension UI 状态读取、对话响应与快照订阅，不暴露 Electron、任意 channel 或系统能力。 */
+/** 为沙箱页面提供应用信息、Project 选择/添加/移除/列表、Session、Project Trust、偏好、Runtime、Pi 资源、认证与 Extension 等受限接口，不暴露 Electron、任意 channel 或系统能力。 */
 import { contextBridge, ipcRenderer } from 'electron'
 import type { IpcRendererEvent } from 'electron'
 import { APP_INFO_CHANNEL, isAppInfoResult } from '../shared/desktop-api'
@@ -10,16 +10,20 @@ import {
 } from '../shared/preferences-api'
 import type { PreferencesApi, PreferencesResult, UiPreferences } from '../shared/preferences-api'
 import {
+  PROJECT_ADD_CHANNEL,
   PROJECT_CHOOSE_DIRECTORY_CHANNEL,
   PROJECT_LIST_CHANNEL,
+  PROJECT_REMOVE_CHANNEL,
   PROJECT_SET_CURRENT_CHANNEL,
   isProjectListResult,
   isProjectPathResult
 } from '../shared/project-api'
 import type {
+  ProjectAddRequest,
   ProjectApi,
   ProjectListResult,
   ProjectPathResult,
+  ProjectRemoveRequest,
   ProjectSetCurrentRequest
 } from '../shared/project-api'
 import {
@@ -229,6 +233,18 @@ const desktop: DesktopApi & RuntimeApi & ProjectApi & SessionApi & PreferencesAp
   async setCurrentProject(path: string, allowInterrupt: boolean) {
     const request: ProjectSetCurrentRequest = { path, allowInterrupt }
     const response: unknown = await ipcRenderer.invoke(PROJECT_SET_CURRENT_CHANNEL, request)
+    return isProjectListResult(response) ? response : invalidProjectListResponse()
+  },
+
+  async addProject(path, trustStatus, trustDecision, allowInterrupt) {
+    const request: ProjectAddRequest = { path, trustStatus, trustDecision, allowInterrupt }
+    const response: unknown = await ipcRenderer.invoke(PROJECT_ADD_CHANNEL, request)
+    return isProjectListResult(response) ? response : invalidProjectListResponse()
+  },
+
+  async removeProject(projectId, allowInterrupt) {
+    const request: ProjectRemoveRequest = { projectId, allowInterrupt }
+    const response: unknown = await ipcRenderer.invoke(PROJECT_REMOVE_CHANNEL, request)
     return isProjectListResult(response) ? response : invalidProjectListResponse()
   },
 

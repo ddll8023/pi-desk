@@ -1,4 +1,4 @@
-<!-- 顶栏：侧栏折叠开关与当前会话选择入口。 -->
+<!-- 中央工作区顶栏：呈现当前项目、会话摘要与 Runtime 状态，并按窗口模式切换侧栏。 -->
 <script setup lang="ts">
 import { computed } from 'vue'
 import { storeToRefs } from 'pinia'
@@ -22,46 +22,70 @@ const runtimeStore = useRuntimeStore()
 const sessionStore = useSessionStore()
 const { currentProject } = storeToRefs(projectStore)
 const { view: runtimeView } = storeToRefs(runtimeStore)
+const { sessions } = storeToRefs(sessionStore)
 
 const runtimeInfo = computed(() => (
   runtimeView.value.phase === 'ready' ? runtimeView.value.snapshot.info : null
 ))
-const sessionLabel = computed(() => {
-  const sessionId = runtimeInfo.value?.sessionId
-  if (typeof sessionId === 'string' && sessionId !== '') return `会话 ${sessionId.slice(0, 8)}`
-  return currentProject.value === null ? '未选择项目' : '未打开会话'
+const sessionId = computed(() => runtimeInfo.value?.sessionId ?? null)
+const currentSession = computed(() => (
+  sessionId.value === null
+    ? null
+    : sessions.value.find((session) => session.sessionId === sessionId.value) ?? null
+))
+const sessionTitle = computed(() => {
+  if (currentSession.value?.preview) return currentSession.value.preview
+  if (sessionId.value !== null) return `会话 ${sessionId.value.slice(0, 8)}`
+  return currentProject.value === null ? '未选择项目' : '新会话'
 })
-const sessionIdShort = computed(() => {
-  const sessionId = runtimeInfo.value?.sessionId
-  return typeof sessionId === 'string' && sessionId !== '' ? sessionId.slice(0, 8) : null
+const runtimeStatus = computed(() => {
+  const runtime = runtimeView.value
+  if (runtime.phase === 'starting') return { label: 'Pi 启动中', kind: 'pending' }
+  if (runtime.phase === 'stopping') return { label: 'Pi 关闭中', kind: 'pending' }
+  if (runtime.phase === 'failed') return { label: 'Pi 异常', kind: 'error' }
+  if (runtime.phase === 'ready' && runtime.snapshot.info.isStreaming) {
+    return { label: 'Agent 运行中', kind: 'active' }
+  }
+  if (runtime.phase === 'ready') return { label: 'Pi 就绪', kind: 'ready' }
+  return { label: 'Pi 未启动', kind: 'idle' }
 })
+const projectPath = computed(() => currentProject.value?.path ?? '尚未选择项目')
+const sessionTitleText = computed(() => (
+  sessionId.value === null ? sessionTitle.value : `${sessionTitle.value} · ${sessionId.value}`
+))
 </script>
 
 <template>
-  <header class="relative z-30 flex h-12 shrink-0 items-center gap-2 border-b border-desk-line bg-desk-surface px-3">
+  <header class="app-topbar">
     <AppButton
       variant="compact"
+      class="app-sidebar-toggle"
       :aria-expanded="!sidebarCollapsed"
+      :aria-label="sidebarCollapsed ? '展开导航栏' : '收起导航栏'"
       :disabled="sidebarToggleDisabled"
       @click="emit('toggleSidebar')"
     >
-      {{ sidebarCollapsed ? '显示侧栏' : '隐藏侧栏' }}
+      <span aria-hidden="true">{{ sidebarCollapsed ? '☰' : '‹' }}</span>
+      <span>{{ sidebarCollapsed ? '导航' : '收起' }}</span>
     </AppButton>
 
-    <div class="flex min-w-0 flex-1 items-center justify-center">
+    <div class="app-topbar-context">
       <AppButton
         variant="unstyled"
-        class="chip max-w-72 cursor-pointer truncate"
-        :title="`${sessionLabel}；点击选择其他会话`"
+        class="app-topbar-session"
+        :title="`${sessionTitleText}；点击选择其他会话`"
+        :disabled="currentProject === null"
         aria-haspopup="dialog"
         @click="sessionStore.openSessionPicker()"
       >
-        <template v-if="sessionIdShort !== null">
-          <span>会话</span>
-          <span class="font-mono text-desk-ink">{{ sessionIdShort }}</span>
-        </template>
-        <template v-else>{{ sessionLabel }}</template>
+        {{ sessionTitle }}
       </AppButton>
+      <span class="app-topbar-project" :title="projectPath">{{ projectPath }}</span>
     </div>
+
+    <span class="app-runtime-status" :class="`is-${runtimeStatus.kind}`" role="status">
+      <span class="app-runtime-status-dot" aria-hidden="true"></span>
+      {{ runtimeStatus.label }}
+    </span>
   </header>
 </template>

@@ -1,4 +1,4 @@
-<!-- 主界面外壳：组合顶栏、项目侧栏与聊天/设置主内容区，负责视图切换、各展示 Store 初始化、项目变化后的会话列表刷新，以及运行中切换与项目信任对话框；同时承载 Extension 的对话、通知与 widget 展示。 -->
+<!-- 主界面外壳：编排项目两阶段添加/移除确认、信任与中断对话框、视图切换及各展示 Store 生命周期。 -->
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
@@ -10,6 +10,7 @@ import { useResourceStore } from './stores/resource'
 import { useRuntimeStore } from './stores/runtime'
 import { useSessionStore } from './stores/session'
 import { useTrustStore } from './stores/trust'
+import type { Project } from '../../shared/project-api'
 import AppTopBar from './components/AppTopBar.vue'
 import ChatMessageList from './components/ChatMessageList.vue'
 import ConfirmDialog from './components/ConfirmDialog.vue'
@@ -28,11 +29,43 @@ const projectStore = useProjectStore()
 const resourceStore = useResourceStore()
 const runtimeStore = useRuntimeStore()
 const sessionStore = useSessionStore()
-const { currentProject, pendingPath } = storeToRefs(projectStore)
+const { currentProject, pendingPath, pendingAddition, pendingAdditionDecision } = storeToRefs(projectStore)
 const { awaitingInterrupt, pendingReload, pendingSessionId } = storeToRefs(sessionStore)
 const { sidebarCollapsed, ready: preferencesReady } = storeToRefs(preferencesStore)
 const trustStore = useTrustStore()
 const currentView = ref<'chat' | 'settings'>('chat')
+const projectToRemove = ref<Project | null>(null)
+const additionTrustStatus = computed(() => {
+  const candidate = pendingAddition.value
+  if (candidate === null || candidate.trustStatus.resources.length === 0
+    || candidate.trustStatus.decision !== null || pendingAdditionDecision.value !== null) return null
+  return candidate.trustStatus
+})
+const isNarrowWindow = ref(window.matchMedia('(max-width: 799px)').matches)
+const mobileSidebarOpen = ref(false)
+let narrowWindowQuery: MediaQueryList | null = null
+
+/** 窄窗口临时展开侧栏，不覆盖用户保存的桌面端折叠偏好。 */
+function onNarrowWindowChange(event: MediaQueryListEvent): void {
+  isNarrowWindow.value = event.matches
+  if (!event.matches) mobileSidebarOpen.value = false
+}
+
+const sidebarCollapsedForLayout = computed(() => (
+  isNarrowWindow.value ? !mobileSidebarOpen.value : sidebarCollapsed.value
+))
+
+function toggleSidebar(): void {
+  if (isNarrowWindow.value) {
+    mobileSidebarOpen.value = !mobileSidebarOpen.value
+    return
+  }
+  preferencesStore.toggleSidebar()
+}
+
+function closeMobileSidebar(): void {
+  if (isNarrowWindow.value) mobileSidebarOpen.value = false
+}
 
 /** Extension widget 按放置位置拆分；空 lines 的条目不会出现在主进程快照中。 */
 const widgetsAbove = computed(() => extensionStore.widgets.filter((w) => w.placement === 'aboveEditor'))
@@ -55,6 +88,10 @@ const sessionConfirmDescription = computed(() => (
 const sessionConfirmLabel = computed(() => (pendingReload.value ? '停止并重新加载' : '停止并切换'))
 
 function confirmProjectSwitch(): void {
+  if (pendingAddition.value !== null) {
+    void projectStore.commitAddition(true)
+    return
+  }
   const path = pendingPath.value
   if (path === null) return
   void projectStore.select(path, true)
@@ -62,6 +99,21 @@ function confirmProjectSwitch(): void {
 
 function cancelProjectSwitch(): void {
   projectStore.cancelPending()
+}
+
+function requestProjectRemoval(project: Project): void {
+  projectToRemove.value = project
+}
+
+function confirmProjectRemoval(): void {
+  const project = projectToRemove.value
+  projectToRemove.value = null
+  if (project === null) return
+  void projectStore.remove(project.id, true)
+}
+
+function cancelProjectRemoval(): void {
+  projectToRemove.value = null
 }
 
 function confirmSessionSwitch(): void {
@@ -72,13 +124,24 @@ function cancelSessionSwitch(): void {
   sessionStore.cancelPending()
 }
 
-/** 信任决定保存后重试被拦截的会话打开；取消则清空待确认目标。 */
-function onTrustResolved(): void {
-  if (!sessionStore.awaitingTrust) return
-  void sessionStore.retryPendingAfterTrust()
+/** 候选项目的信任决定随添加动作提交；现有 Runtime 流程则重试被拦截的会话打开。 */
+function onTrustResolved(decision?: 'trusted' | 'untrusted'): void {
+  if (pendingAddition.value !== null) {
+    if (decision === undefined) {
+      projectStore.cancelAddition()
+      return
+    }
+    void projectStore.commitAddition(false, decision)
+    return
+  }
+  if (sessionStore.awaitingTrust) void sessionStore.retryPendingAfterTrust()
 }
 
 function onTrustCancelled(): void {
+  if (pendingAddition.value !== null) {
+    projectStore.cancelAddition()
+    return
+  }
   sessionStore.cancelPending()
 }
 
@@ -89,6 +152,9 @@ watch(currentProject, (project, previous) => {
 })
 
 onMounted(() => {
+  narrowWindowQuery = window.matchMedia('(max-width: 799px)')
+  isNarrowWindow.value = narrowWindowQuery.matches
+  narrowWindowQuery.addEventListener('change', onNarrowWindowChange)
   void desktopStore.initialize()
   void extensionStore.initialize()
   void preferencesStore.initialize()
@@ -99,6 +165,7 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  narrowWindowQuery?.removeEventListener('change', onNarrowWindowChange)
   extensionStore.dispose()
   resourceStore.dispose()
   runtimeStore.dispose()
@@ -106,37 +173,46 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="flex h-screen flex-col overflow-hidden">
-    <AppTopBar
-      :sidebar-collapsed="sidebarCollapsed"
-      :sidebar-toggle-disabled="!preferencesReady"
-      @toggle-sidebar="preferencesStore.toggleSidebar()"
+  <div class="app-layout">
+    <button
+      v-if="isNarrowWindow && !sidebarCollapsedForLayout"
+      type="button"
+      class="app-sidebar-backdrop"
+      aria-label="关闭导航栏"
+      @click="closeMobileSidebar"
+    ></button>
+
+    <!-- 侧栏始终挂载；折叠与响应式呈现只改变布局，不触碰 Runtime 生命周期。 -->
+    <ProjectSidebar
+      v-if="preferencesReady"
+      :settings-active="currentView === 'settings'"
+      :sidebar-collapsed="sidebarCollapsedForLayout"
+      :mobile-open="isNarrowWindow && mobileSidebarOpen"
+      @toggle-settings="currentView = currentView === 'settings' ? 'chat' : 'settings'; closeMobileSidebar()"
+      @close-sidebar="closeMobileSidebar"
+      @remove-project="requestProjectRemoval"
     />
 
-    <div class="flex min-h-0 flex-1">
-      <!-- 偏好读取完成后才挂载项目侧栏，避免首帧闪烁；折叠状态由 class 驱动滑出动画，组件保持挂载。 -->
-      <ProjectSidebar
-        v-if="preferencesReady"
-        :settings-active="currentView === 'settings'"
-        @toggle-settings="currentView = currentView === 'settings' ? 'chat' : 'settings'"
+    <main class="app-workspace">
+      <AppTopBar
+        :sidebar-collapsed="sidebarCollapsedForLayout"
+        :sidebar-toggle-disabled="!preferencesReady"
+        @toggle-sidebar="toggleSidebar"
       />
-
-      <main class="flex min-w-0 flex-1 flex-col">
-        <SettingsView v-if="currentView === 'settings'" />
-        <template v-else>
-          <ExtensionNotificationBar />
-          <ChatMessageList />
-          <!-- Widget 放置语义与官方子协议一致：aboveEditor 在输入区上方，belowEditor 在下方。 -->
-          <div v-for="widget in widgetsAbove" :key="widget.placement" class="px-4 py-2 sm:px-6">
-            <pre class="widget-block">{{ widget.lines.join('\n') }}</pre>
-          </div>
-          <PromptComposer />
-          <div v-for="widget in widgetsBelow" :key="widget.placement" class="px-4 py-2 sm:px-6">
-            <pre class="widget-block">{{ widget.lines.join('\n') }}</pre>
-          </div>
-        </template>
-      </main>
-    </div>
+      <SettingsView v-if="currentView === 'settings'" />
+      <template v-else>
+        <ExtensionNotificationBar />
+        <ChatMessageList />
+        <!-- Widget 放置语义与官方子协议一致：aboveEditor 在输入区上方，belowEditor 在下方。 -->
+        <div v-for="widget in widgetsAbove" :key="widget.placement" class="px-4 py-2 sm:px-6">
+          <pre class="widget-block">{{ widget.lines.join('\n') }}</pre>
+        </div>
+        <PromptComposer />
+        <div v-for="widget in widgetsBelow" :key="widget.placement" class="px-4 py-2 sm:px-6">
+          <pre class="widget-block">{{ widget.lines.join('\n') }}</pre>
+        </div>
+      </template>
+    </main>
 
     <!-- 模态弹层统一经 Teleport 渲染到 body，全部落在根堆叠上下文；组件常驻挂载，进出由内部 Transition 驱动。 -->
     <Teleport to="body">
@@ -160,7 +236,21 @@ onUnmounted(() => {
         @cancel="cancelSessionSwitch"
       />
 
-      <TrustDialog @decided="onTrustResolved" @cancelled="onTrustCancelled" />
+      <TrustDialog
+        :addition-status="additionTrustStatus"
+        @decided="onTrustResolved"
+        @cancelled="onTrustCancelled"
+      />
+
+      <ConfirmDialog
+        :open="projectToRemove !== null"
+        title="从项目列表移除？"
+        description="只移除 Pi Desktop 中的项目记录，不删除项目目录、代码或会话文件；该项目的信任决定也会清除。若它是当前项目，确认后会关闭对应 Runtime。"
+        :detail="projectToRemove?.path ?? ''"
+        confirm-label="移除项目"
+        @confirm="confirmProjectRemoval"
+        @cancel="cancelProjectRemoval"
+      />
 
       <!-- /resume 与会话 chip 共用的会话选择弹层。 -->
       <SessionPickerDialog :open="sessionStore.showSessionPicker" @close="sessionStore.closeSessionPicker()" />

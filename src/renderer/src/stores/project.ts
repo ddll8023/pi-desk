@@ -1,8 +1,15 @@
-/** 保存项目面板的展示状态：最近项目、当前项目与本地配置提示；归一化、持久化与切换编排都在主进程。 */
+/** 保存项目列表与候选添加状态；候选信任确认后才提交，项目持久化和 Runtime 切换由主进程编排。 */
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
-import type { Project, ProjectError, ProjectList } from '../../../shared/project-api'
-import { chooseProjectDirectory, listProjects, setCurrentProject } from '../services/project'
+import type { Project, ProjectError, ProjectList, ProjectPathSelection } from '../../../shared/project-api'
+import type { TrustDecision } from '../../../shared/trust-api'
+import {
+  addProject,
+  chooseProjectDirectory,
+  listProjects,
+  removeProject,
+  setCurrentProject
+} from '../services/project'
 
 /** 列表读取状态；单次动作失败放在 `actionError`，不影响已加载的列表。 */
 type ProjectViewState =
@@ -20,6 +27,9 @@ export const useProjectStore = defineStore('project', () => {
   const switching = ref(false)
   /** 主进程拒绝了未确认的切换时保存待确认路径，确认后带 `allowInterrupt` 重试。 */
   const pendingPath = ref<string | null>(null)
+  /** 目录选择后暂存候选；信任确认或取消之前不会切换当前项目或写入列表。 */
+  const pendingAddition = ref<ProjectPathSelection | null>(null)
+  const pendingAdditionDecision = ref<TrustDecision | null>(null)
 
   const currentProject = computed<Project | null>(() => (
     projects.value.find((project) => project.id === currentProjectId.value) ?? null
@@ -46,9 +56,9 @@ export const useProjectStore = defineStore('project', () => {
     view.value = { phase: 'ready' }
   }
 
-  /** 打开系统目录选择器；取消不改变任何状态，也不作为错误提示。 */
+  /** 选择目录后先暂存候选；需要信任确认时等待 UI 决定，否则直接提交添加。 */
   async function choose(): Promise<void> {
-    if (choosing.value || switching.value) return
+    if (choosing.value || switching.value || pendingAddition.value !== null) return
 
     choosing.value = true
     actionError.value = null
@@ -59,9 +69,76 @@ export const useProjectStore = defineStore('project', () => {
         return
       }
       if (result.data === null) return
-      await select(result.data.path, false)
+      pendingAddition.value = result.data
+      pendingAdditionDecision.value = null
     } finally {
       choosing.value = false
+    }
+
+    const candidate = pendingAddition.value
+    if (candidate !== null
+      && (candidate.trustStatus.resources.length === 0 || candidate.trustStatus.decision !== null)) {
+      await commitAddition(false)
+    }
+  }
+
+  /** 信任选择只暂存于内存；主进程确认切换成功时才与项目记录一起持久化。 */
+  async function commitAddition(allowInterrupt: boolean, decision?: TrustDecision): Promise<void> {
+    const candidate = pendingAddition.value
+    if (candidate === null || switching.value) return
+    if (decision !== undefined) pendingAdditionDecision.value = decision
+
+    switching.value = true
+    actionError.value = null
+    try {
+      const result = await addProject(
+        candidate.path,
+        candidate.trustStatus,
+        pendingAdditionDecision.value,
+        allowInterrupt
+      )
+      if (result.ok) {
+        applyList(result.data)
+        pendingPath.value = null
+        pendingAddition.value = null
+        pendingAdditionDecision.value = null
+        return
+      }
+      if (result.error.code === 'PROJECT_SWITCH_BLOCKED' && !allowInterrupt) {
+        pendingPath.value = candidate.path
+        return
+      }
+      actionError.value = result.error
+      pendingPath.value = null
+      pendingAddition.value = null
+      pendingAdditionDecision.value = null
+    } finally {
+      switching.value = false
+    }
+  }
+
+  /** 取消候选项目；尚未提交时不会改变当前项目、列表或信任记录。 */
+  function cancelAddition(): void {
+    if (switching.value) return
+    pendingAddition.value = null
+    pendingAdditionDecision.value = null
+    pendingPath.value = null
+  }
+
+  /** 删除 Desktop 列表项；目录文件不受影响。调用方须在中断确认后传入 allowInterrupt。 */
+  async function remove(projectId: string, allowInterrupt: boolean): Promise<void> {
+    if (switching.value) return
+    switching.value = true
+    actionError.value = null
+    try {
+      const result = await removeProject(projectId, allowInterrupt)
+      if (!result.ok) {
+        actionError.value = result.error
+        return
+      }
+      applyList(result.data)
+    } finally {
+      switching.value = false
     }
   }
 
@@ -94,6 +171,8 @@ export const useProjectStore = defineStore('project', () => {
   /** 放弃待确认的切换；运行中的操作不受影响。 */
   function cancelPending(): void {
     pendingPath.value = null
+    pendingAddition.value = null
+    pendingAdditionDecision.value = null
   }
 
   return {
@@ -106,8 +185,13 @@ export const useProjectStore = defineStore('project', () => {
     choosing,
     switching,
     pendingPath,
+    pendingAddition,
+    pendingAdditionDecision,
     initialize,
     choose,
+    commitAddition,
+    cancelAddition,
+    remove,
     select,
     cancelPending
   }

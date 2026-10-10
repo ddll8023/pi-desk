@@ -5,18 +5,22 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import type { PiResourceEntry, PromptDisposition, PromptImageInput } from '../../../shared/runtime-api'
 import { useExtensionUiStore } from '../stores/extension-ui'
 import { useResourceStore } from '../stores/resource'
+import { useProjectStore } from '../stores/project'
 import { useRuntimeStore } from '../stores/runtime'
 import { useSessionStore } from '../stores/session'
 import AppButton from './ui/AppButton.vue'
 
 const runtimeStore = useRuntimeStore()
 const extensionStore = useExtensionUiStore()
+const projectStore = useProjectStore()
 const resourceStore = useResourceStore()
 const sessionStore = useSessionStore()
 const { view: runtimeView, promptView, abortView, projectionSync, capabilitiesView } = storeToRefs(runtimeStore)
 const { editorText, editorTextVersion } = storeToRefs(extensionStore)
 
 const draft = ref('')
+/** 首次提交只启动 Runtime；就绪后提示用户再次显式发送，不自动重放。 */
+const startupRequested = ref(false)
 /** 输入法组合态：此期间的 Enter 只确认候选词，不能当发送。 */
 const composing = ref(false)
 const textarea = ref<HTMLTextAreaElement | null>(null)
@@ -40,6 +44,11 @@ const imageSupported = computed(() => {
 })
 
 const runtimeReady = computed(() => runtimeView.value.phase === 'ready')
+const canStartRuntime = computed(() => (
+  runtimeView.value.phase === 'idle'
+  || runtimeView.value.phase === 'closed'
+  || runtimeView.value.phase === 'failed'
+))
 const runtimeInfo = computed(() => (
   runtimeView.value.phase === 'ready' ? runtimeView.value.snapshot.info : null
 ))
@@ -48,12 +57,15 @@ const sending = computed(() => promptView.value.phase === 'sending')
 const stopVisible = computed(() => (
   runtimeReady.value && (streaming.value || abortView.value.phase === 'requesting')
 ))
-/** 与主进程的拒绝条件一致：未就绪、发送中、投影未同步或已有运行中的操作都不提交。 */
-const canSend = computed(() => runtimeReady.value
-  && draft.value.trim() !== ''
-  && !sending.value
-  && projectionSync.value === 'synced'
-  && !streaming.value)
+/** 运行中按 Pi 就绪条件提交；未就绪时仅允许有项目且没有并发启动的首次启动请求。 */
+const canSend = computed(() => {
+  if (draft.value.trim() === '' || sending.value || sessionStore.opening
+    || sessionStore.awaitingTrust || sessionStore.awaitingInterrupt) return false
+  if (runtimeReady.value) {
+    return projectionSync.value === 'synced' && !streaming.value
+  }
+  return canStartRuntime.value && projectStore.currentProject !== null
+})
 
 const status = computed(() => {
   if (abortView.value.phase === 'error') {
@@ -66,11 +78,29 @@ const status = computed(() => {
     return { kind: 'error' as const, text: promptView.value.error.message }
   }
   if (sending.value) return { kind: 'info' as const, text: '正在提交 Prompt，等待 Pi 回应。' }
+  if (sessionStore.awaitingTrust) {
+    return { kind: 'info' as const, text: '请先完成项目 Trust 决定；输入会保留，Runtime 就绪后需再次点击发送。' }
+  }
+  if (sessionStore.awaitingInterrupt) {
+    return { kind: 'info' as const, text: '请先处理当前操作；输入会保留。' }
+  }
+  if (runtimeReady.value && startupRequested.value && projectionSync.value === 'synced') {
+    return { kind: 'info' as const, text: 'Runtime 已就绪；输入仍保留，请再次点击发送提交。' }
+  }
   if (promptView.value.phase === 'accepted') {
     return { kind: 'info' as const, text: acceptedText(promptView.value.disposition) }
   }
   if (!runtimeReady.value) {
-    return { kind: 'info' as const, text: '没有已就绪的 Runtime；用 /resume 选择会话或 /new 新建。' }
+    if (projectStore.currentProject === null) {
+      return { kind: 'info' as const, text: '请先选择项目；输入内容会保留。' }
+    }
+    if (runtimeView.value.phase === 'failed') {
+      return { kind: 'error' as const, text: `${runtimeView.value.error.message}；可再次点击发送重试启动。` }
+    }
+    if (canStartRuntime.value) {
+      return { kind: 'info' as const, text: '首次点击发送会启动 Pi 并保留输入；Runtime 就绪后再次点击发送。' }
+    }
+    return { kind: 'info' as const, text: 'Runtime 正在启动或关闭；输入会保留。' }
   }
   if (streaming.value) {
     return { kind: 'info' as const, text: 'Agent 正在运行，本轮结束前不能提交新输入。' }
@@ -176,7 +206,7 @@ function onKeydown(event: KeyboardEvent): void {
   void submit()
 }
 
-/** 提交当前输入与附件；只有本次请求被接受时清空，且不覆盖发送期间新输入的文字。 */
+/** Runtime 未就绪时只启动并保留输入；就绪后提交，只有请求被接受时才清空且不覆盖新输入。 */
 async function submit(): Promise<void> {
   if (!canSend.value) return
 
@@ -188,7 +218,15 @@ async function submit(): Promise<void> {
   }
   if (draft.value === '/new') {
     draft.value = ''
-    void sessionStore.open(null, false)
+    // 闲置时空白聊天已经可用；只有已有 Runtime 时才切换到实际 Pi 会话。
+    if (runtimeReady.value) void sessionStore.open(null, false)
+    return
+  }
+
+  if (!runtimeReady.value) {
+    // 首次发送只触发 Runtime 启动；保留文字与附件，避免启动期间丢失或隐式重放。
+    startupRequested.value = true
+    await sessionStore.open(null, false)
     return
   }
 
@@ -201,6 +239,7 @@ async function submit(): Promise<void> {
   await runtimeStore.send(message, images)
   if (promptView.value === before || promptView.value.phase !== 'accepted') return
 
+  startupRequested.value = false
   if (draft.value === message) draft.value = ''
   for (const entry of pendingImages.value) URL.revokeObjectURL(entry.objectUrl)
   pendingImages.value = []
@@ -367,7 +406,9 @@ onMounted(() => {
               @change="onPickImages"
             />
             <AppButton
-              :disabled="!runtimeReady || sending || imageSupported === false || pendingImages.length >= 4"
+              :disabled="(!runtimeReady && (!canStartRuntime || projectStore.currentProject === null))
+                || sending || sessionStore.opening || sessionStore.awaitingTrust || sessionStore.awaitingInterrupt
+                || imageSupported === false || pendingImages.length >= 4"
               @click="imageInput?.click()"
             >
               图片

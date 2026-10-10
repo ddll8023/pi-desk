@@ -88,7 +88,7 @@ function isTrustResource(value: unknown): value is TrustResource {
     && TRUST_RESOURCE_KINDS.includes(value.kind as TrustResourceKind)
 }
 
-function isTrustStatus(value: unknown): value is TrustStatus {
+export function isTrustStatus(value: unknown): value is TrustStatus {
   if (!isRecord(value)) return false
   return (value.projectPath === null || typeof value.projectPath === 'string')
     && (value.decision === null || isTrustDecision(value.decision))

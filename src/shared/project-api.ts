@@ -1,9 +1,13 @@
-/** 只定义 Project 目录选择、列表与切换 IPC 的固定通道、结果类型与跨进程响应校验。 */
+/** 定义 Project 目录选择、列表、添加、移除与切换 IPC 契约及跨进程响应校验。 */
 import type { DesktopErrorCode } from './desktop-api'
+import { isTrustStatus } from './trust-api'
+import type { TrustDecision, TrustStatus } from './trust-api'
 
 export const PROJECT_CHOOSE_DIRECTORY_CHANNEL = 'desktop:project-choose-directory'
 export const PROJECT_LIST_CHANNEL = 'desktop:project-list'
 export const PROJECT_SET_CURRENT_CHANNEL = 'desktop:project-set-current'
+export const PROJECT_ADD_CHANNEL = 'desktop:project-add'
+export const PROJECT_REMOVE_CHANNEL = 'desktop:project-remove'
 
 /** 项目基础属性；`path` 是主进程归一化后的规范绝对路径，`lastOpenedAt` 是纪元毫秒。 */
 export interface Project {
@@ -13,10 +17,11 @@ export interface Project {
   readonly lastOpenedAt: number
 }
 
-/** 目录选择结果；`null` 表示用户取消，取消不是失败。 */
+/** 候选项目目录及其受保护资源快照；`null` 表示用户取消，取消不是失败。 */
 export interface ProjectPathSelection {
   readonly path: string
   readonly name: string
+  readonly trustStatus: TrustStatus
 }
 
 /** `storageNotice` 非空表示本地配置被降级处理（损坏已备份或暂时不可读），界面应如实提示。 */
@@ -32,10 +37,26 @@ export interface ProjectSetCurrentRequest {
   readonly allowInterrupt: boolean
 }
 
+/** 用户完成候选项目的信任选择后提交；决定与项目选择由主进程一并持久化。 */
+export interface ProjectAddRequest {
+  readonly path: string
+  readonly trustStatus: TrustStatus
+  readonly trustDecision: TrustDecision | null
+  readonly allowInterrupt: boolean
+}
+
+/** 仅移除 Desktop 项目列表记录，不删除目录；当前项目移除前由用户确认中断。 */
+export interface ProjectRemoveRequest {
+  readonly projectId: string
+  readonly allowInterrupt: boolean
+}
+
 export type ProjectErrorCode =
   | DesktopErrorCode
   | 'INVALID_PROJECT_PATH'
   | 'PROJECT_SWITCH_BLOCKED'
+  | 'PROJECT_REMOVE_BLOCKED'
+  | 'PROJECT_TRUST_REQUIRED'
   | 'PROJECT_STORAGE_FAILED'
 
 export interface ProjectError {
@@ -57,6 +78,15 @@ export interface ProjectApi {
   readonly listProjects: () => Promise<ProjectListResult>
   /** 把目录设为当前项目；`allowInterrupt` 为真表示用户已确认可以停止运行中的操作。 */
   readonly setCurrentProject: (path: string, allowInterrupt: boolean) => Promise<ProjectListResult>
+  /** 添加/激活候选项目，并原子保存信任决定；有运行中的操作时必须显式确认中断。 */
+  readonly addProject: (
+    path: string,
+    trustStatus: TrustStatus,
+    trustDecision: TrustDecision | null,
+    allowInterrupt: boolean
+  ) => Promise<ProjectListResult>
+  /** 从 Desktop 列表移除项目，不删除项目目录；当前项目可在显式确认后停止 Runtime 并移除。 */
+  readonly removeProject: (projectId: string, allowInterrupt: boolean) => Promise<ProjectListResult>
 }
 
 // 与 desktop-api.ts 的共享错误码保持一致，再追加 Project 专有错误码。
@@ -69,6 +99,8 @@ const PROJECT_ERROR_CODES: readonly string[] = [
   'BRIDGE_CALL_FAILED',
   'INVALID_PROJECT_PATH',
   'PROJECT_SWITCH_BLOCKED',
+  'PROJECT_REMOVE_BLOCKED',
+  'PROJECT_TRUST_REQUIRED',
   'PROJECT_STORAGE_FAILED'
 ]
 
@@ -94,6 +126,8 @@ function isProjectPathSelection(value: unknown): value is ProjectPathSelection {
     && value.path !== ''
     && typeof value.name === 'string'
     && value.name !== ''
+    && isTrustStatus(value.trustStatus)
+    && value.trustStatus.projectPath === value.path
 }
 
 export function isProjectList(value: unknown): value is ProjectList {

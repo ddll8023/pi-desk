@@ -1,17 +1,28 @@
-<!-- Project Trust 决定对话框：展示探测到的受保护资源与安全影响，决定后由调用方重试被打断的操作；取消不保存任何状态。 -->
+<!-- Project Trust 对话框：展示受保护资源；添加项目模式先暂存选择，取消不保存信任或项目状态。 -->
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
-import { onMounted, onUnmounted, useId } from 'vue'
+import { computed, onMounted, onUnmounted, useId } from 'vue'
 import { useTrustStore } from '../stores/trust'
-import type { TrustResourceKind } from '../../../shared/trust-api'
+import type { TrustDecision, TrustResourceKind, TrustStatus } from '../../../shared/trust-api'
 import AppButton from './ui/AppButton.vue'
+
+const props = defineProps<{
+  /** 非空表示添加项目流程：决定仅返回给添加动作，成功切换时才持久化。 */
+  readonly additionStatus?: TrustStatus | null
+}>()
 
 const trustStore = useTrustStore()
 const { view, actionError, deciding } = storeToRefs(trustStore)
+const additionPrompt = computed(() => props.additionStatus ?? null)
+const currentPromptStatus = computed(() => (
+  view.value.phase === 'prompting' ? view.value.status : null
+))
+const promptStatus = computed(() => additionPrompt.value ?? currentPromptStatus.value)
+const promptOpen = computed(() => promptStatus.value !== null)
 
 const emit = defineEmits<{
   /** 决定已保存（信任或不信任）；由调用方重试被拦截的操作。 */
-  decided: []
+  decided: [decision?: TrustDecision]
   /** 用户取消，未做任何决定。 */
   cancelled: []
 }>()
@@ -35,25 +46,31 @@ function kindLabel(kind: TrustResourceKind): string {
   return KIND_LABELS[kind]
 }
 
-function confirmTrusted(): void {
-  void trustStore.decide('trusted').then(() => {
+function confirmTrustDecision(decision: TrustDecision): void {
+  if (additionPrompt.value !== null) {
+    emit('decided', decision)
+    return
+  }
+  void trustStore.decide(decision).then(() => {
     if (trustStore.view.phase === 'idle') emit('decided')
   })
 }
 
 function cancelTrust(): void {
-  trustStore.cancel()
+  if (additionPrompt.value === null) trustStore.cancel()
   emit('cancelled')
 }
 
+function confirmTrusted(): void {
+  confirmTrustDecision('trusted')
+}
+
 function confirmUntrusted(): void {
-  void trustStore.decide('untrusted').then(() => {
-    if (trustStore.view.phase === 'idle') emit('decided')
-  })
+  confirmTrustDecision('untrusted')
 }
 
 function onKeydown(event: KeyboardEvent): void {
-  if (event.key === 'Escape') cancelTrust()
+  if (event.key === 'Escape' && promptOpen.value) cancelTrust()
 }
 
 onMounted(() => {
@@ -68,7 +85,7 @@ onUnmounted(() => {
 <template>
   <Transition name="dialog-fade">
     <div
-      v-if="view.phase === 'prompting'"
+      v-if="promptOpen"
       class="dialog-overlay"
       @click.self="cancelTrust"
     >
@@ -80,19 +97,22 @@ onUnmounted(() => {
           class="dialog-panel max-w-lg"
         >
       <div class="dialog-header">
-        <h2 :id="titleId" class="dialog-title">信任此项目？</h2>
+        <h2 :id="titleId" class="dialog-title">
+          {{ additionPrompt ? '添加项目并确认信任？' : '信任此项目？' }}
+        </h2>
       </div>
 
       <div class="dialog-body">
         <p class="text-sm">
           此项目包含 Pi 的受保护资源。信任后，这些资源将在启动 Runtime 时随项目加载。
+          <template v-if="additionPrompt">取消将放弃添加项目，且不会切换当前项目。</template>
         </p>
 
         <section class="panel-section">
           <h3 class="panel-section-title">受保护资源</h3>
           <ul class="scroll-area max-h-40 space-y-1 overflow-y-auto">
             <li
-              v-for="resource in view.status.resources"
+              v-for="resource in promptStatus?.resources ?? []"
               :key="`${resource.kind}:${resource.path}`"
               class="flex flex-wrap items-baseline gap-2 text-xs"
             >
@@ -119,14 +139,14 @@ onUnmounted(() => {
           :disabled="deciding"
           @click="confirmUntrusted"
         >
-          不信任
+          {{ additionPrompt ? '不信任并添加' : '不信任' }}
         </AppButton>
         <AppButton
           variant="primary"
           :disabled="deciding"
           @click="confirmTrusted"
         >
-          信任并加载
+          {{ additionPrompt ? '信任并添加' : '信任并加载' }}
         </AppButton>
       </div>
         </div>

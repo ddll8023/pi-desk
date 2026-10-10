@@ -154,18 +154,22 @@
   }
 
   .prompt-composer-shell {
+    padding: 0.5rem 1rem 0;
     border: 1px solid var(--color-desk-line-strong);
-    border-radius: var(--radius-desk-md);
+    border-radius: var(--radius-desk-lg);
     background: var(--color-desk-surface);
+    box-shadow: var(--shadow-desk-raise);
     transition: border-color var(--default-transition-duration) ease, box-shadow var(--default-transition-duration) ease;
   }
 
   .prompt-composer-shell:focus-within {
     border-color: var(--color-desk-accent);
-    box-shadow: 0 0 0 2px var(--color-desk-accent-soft);
+    outline: 2px solid var(--color-desk-accent);
+    outline-offset: 2px;
   }
 
   .prompt-composer-input {
+    padding: 0.25rem 0 0.5rem;
     border: 0;
     border-radius: var(--radius-desk-md);
     background: transparent;
@@ -181,8 +185,11 @@
     align-items: center;
     justify-content: space-between;
     gap: 0.75rem;
+    margin: 0 -1rem;
     border-top: 1px solid var(--color-desk-line);
-    padding: 0.5rem 0.75rem;
+    border-radius: 0 0 var(--radius-desk-lg) var(--radius-desk-lg);
+    background: var(--color-desk-surface-subtle);
+    padding: 0.5rem 1rem;
   }
 
   /* 通用按钮样式：次要、主操作、危险、紧凑、轻量与低强调危险；悬停只提升底色，强调色留给主按钮。 */
@@ -543,13 +550,21 @@
     opacity: 0;
   }
 
-  /* 项目侧栏：以当前项目为视觉锚点，路径作为可截断的次级信息；不复用全局列表行样式。 */
-  .project-sidebar-header {
-    @apply flex h-12 shrink-0 items-center justify-between gap-2 border-b border-desk-line px-4;
+  /* 项目列表采用紧凑行；项目路径保留为次级信息并由 title 提供完整悬停文本。 */
+  .project-sidebar-header,
+  .session-sidebar-header {
+    display: flex;
+    min-height: 2.75rem;
+    flex: none;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    border-bottom: 1px solid var(--color-desk-line);
+    padding: 0 1rem;
   }
 
   .project-sidebar-heading {
-    @apply text-sm font-semibold tracking-tight;
+    @apply text-xs font-semibold tracking-wide text-desk-muted;
   }
 
   .project-sidebar-add {
@@ -560,39 +575,119 @@
     @apply bg-desk-surface-subtle text-desk-ink;
   }
 
-  .project-sidebar-section {
-    @apply mb-2 px-1 text-2xs font-semibold tracking-wide text-desk-muted;
+  .project-sidebar-list,
+  .session-sidebar-list {
+    display: grid;
+    width: 100%;
+    min-width: 0;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
   }
 
-  .project-sidebar-list {
-    @apply space-y-2;
+  .project-sidebar-list > li,
+  .session-sidebar-list > li {
+    min-width: 0;
+  }
+
+  .project-sidebar-row {
+    display: grid;
+    min-width: 0;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 2px;
+  }
+
+  .project-sidebar-actions {
+    display: contents;
+  }
+
+  .project-sidebar-menu-trigger {
+    width: 1.75rem;
+    height: 1.75rem;
+    padding: 0;
+    opacity: 0;
+    pointer-events: none;
+    font-size: 1.125rem;
+    line-height: 1;
+    transition: opacity var(--default-transition-duration) ease;
+  }
+
+  .project-sidebar-row:hover .project-sidebar-menu-trigger,
+  .project-sidebar-row:focus-within .project-sidebar-menu-trigger {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .project-sidebar-menu {
+    grid-column: 1 / -1;
+    justify-self: end;
+    min-width: 9rem;
+    margin: 0 0.25rem 0.25rem 0;
+    padding: 3px;
+    border: 1px solid var(--color-desk-line);
+    border-radius: var(--radius-desk-sm);
+    background: var(--color-desk-surface);
+    box-shadow: var(--shadow-desk-pop);
+  }
+
+  .project-sidebar-menu-item {
+    display: flex;
+    width: 100%;
+    justify-content: flex-start;
+    border-radius: var(--radius-desk-sm);
+    padding: 0.4rem 0.55rem;
+    color: var(--color-desk-muted);
+    font-size: 0.75rem;
+    text-align: left;
+  }
+
+  .project-sidebar-menu-item:not(:disabled):hover {
+    background: var(--color-desk-surface-subtle);
+    color: var(--color-desk-danger);
   }
 
   .project-sidebar-item {
-    @apply flex w-full min-w-0 items-center gap-3 rounded-desk-md border border-desk-line bg-desk-surface px-3 py-2.5 text-left transition-colors;
-    box-shadow: var(--shadow-desk-raise);
+    display: flex;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    align-items: center;
+    gap: 0.5rem;
+    border: 1px solid transparent;
+    border-radius: var(--radius-desk-sm);
+    padding: 0.4rem 0.5rem;
+    text-align: left;
+    transition: background-color var(--default-transition-duration) ease, color var(--default-transition-duration) ease;
   }
 
-  .project-sidebar-item:not(:disabled):hover {
+  .project-sidebar-item:not(:disabled):hover,
+  .session-sidebar-item:not(:disabled):hover {
     @apply bg-desk-surface-subtle;
   }
 
-  .project-sidebar-item:not(:disabled):active {
+  .project-sidebar-item:not(:disabled):active,
+  .session-sidebar-item:not(:disabled):active {
     @apply bg-desk-canvas-sunken;
   }
 
-  .project-sidebar-item:disabled {
+  .project-sidebar-item:disabled,
+  .session-sidebar-item:disabled {
     @apply cursor-not-allowed opacity-60;
   }
 
   .project-sidebar-item.is-active,
-  .project-sidebar-item.is-active:not(:disabled):hover {
-    @apply border-desk-line bg-desk-accent-soft;
+  .project-sidebar-item.is-active:not(:disabled):hover,
+  .session-sidebar-item.is-active,
+  .session-sidebar-item.is-active:not(:disabled):hover {
+    @apply bg-desk-accent-soft;
     box-shadow: inset 2px 0 0 0 var(--color-desk-accent);
   }
 
   .project-sidebar-mark {
-    @apply flex size-9 shrink-0 items-center justify-center rounded-desk-sm text-sm font-semibold;
+    @apply flex size-7 shrink-0 items-center justify-center rounded-desk-sm text-xs font-semibold;
     background-color: color-mix(in srgb, var(--project-mark-color) 14%, var(--color-desk-surface));
     color: var(--project-mark-color);
   }
@@ -609,15 +704,49 @@
   }
 
   .project-sidebar-name {
-    @apply block truncate text-sm font-medium;
+    @apply block truncate text-xs font-medium;
   }
 
   .project-sidebar-path {
-    @apply mt-1 block truncate font-mono text-2xs text-desk-muted;
+    @apply mt-0.5 block truncate font-mono text-2xs text-desk-muted;
+  }
+
+  .session-sidebar-item {
+    display: flex;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.2rem;
+    border: 1px solid transparent;
+    border-radius: var(--radius-desk-sm);
+    padding: 0.45rem 0.55rem;
+    text-align: left;
+    transition: background-color var(--default-transition-duration) ease, color var(--default-transition-duration) ease;
+  }
+
+  .session-sidebar-preview {
+    overflow: hidden;
+    color: var(--color-desk-ink);
+    font-size: 0.75rem;
+    line-height: 1.4;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .session-sidebar-meta {
+    display: flex;
+    min-width: 0;
+    justify-content: space-between;
+    gap: 0.5rem;
+    color: var(--color-desk-muted);
+    font-size: 0.625rem;
+    line-height: 1.4;
   }
 
   .project-sidebar-footer {
-    @apply shrink-0 border-t border-desk-line p-3;
+    @apply shrink-0 border-t border-desk-line p-2;
   }
 
   .project-sidebar-settings {
@@ -675,18 +804,208 @@
     .project-sidebar-mark-5 { --project-mark-color: #91c89a; }
   }
 
-  /* 侧栏收起时向左滑出并释放占位，展开时滑入；margin 与 transform 同步过渡，
-     内容区在动画期间跟随重排（同 VSCode 侧栏做法）。收起时加 aria-hidden 与 inert。 */
+  .app-layout {
+    position: relative;
+    display: flex;
+    width: 100%;
+    height: 100vh;
+    height: 100dvh;
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  .app-workspace {
+    display: flex;
+    min-width: 0;
+    min-height: 0;
+    flex: 1;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .app-topbar {
+    z-index: 10;
+    display: flex;
+    min-width: 0;
+    height: 3.25rem;
+    flex: none;
+    align-items: center;
+    gap: 0.75rem;
+    border-bottom: 1px solid var(--color-desk-line);
+    background: var(--color-desk-surface);
+    padding: 0 1rem;
+  }
+
+  .app-sidebar-toggle {
+    flex: none;
+  }
+
+  .app-topbar-context {
+    display: flex;
+    min-width: 0;
+    flex: 1;
+    flex-direction: column;
+    justify-content: center;
+    gap: 1px;
+  }
+
+  .app-topbar-session {
+    display: block;
+    max-width: 100%;
+    overflow: hidden;
+    text-align: left;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.875rem;
+    font-weight: 600;
+  }
+
+  .app-topbar-project {
+    display: block;
+    overflow: hidden;
+    color: var(--color-desk-muted);
+    font-size: 0.6875rem;
+    line-height: 1.35;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .app-runtime-status {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    gap: 0.4rem;
+    color: var(--color-desk-muted);
+    font-size: 0.75rem;
+    white-space: nowrap;
+  }
+
+  .app-runtime-status-dot {
+    width: 0.45rem;
+    height: 0.45rem;
+    border-radius: 999px;
+    background: currentColor;
+  }
+
+  .app-runtime-status.is-active,
+  .app-runtime-status.is-ready {
+    color: var(--color-desk-accent);
+  }
+
+  .app-runtime-status.is-error {
+    color: var(--color-desk-danger);
+  }
+
+  .app-sidebar-backdrop {
+    display: none;
+  }
+
+  /* 侧栏始终保留组件实例；桌面折叠只释放布局宽度，不触发页面或 Runtime 重建。 */
   .app-sidebar {
-    @apply flex w-64 shrink-0 flex-col border-r border-desk-line bg-desk-surface;
+    @apply flex shrink-0 flex-col border-r border-desk-line bg-desk-surface;
+    width: 17rem;
+    min-height: 0;
     transition:
       margin-left var(--motion-duration-slow) var(--motion-ease-entrance),
       transform var(--motion-duration-slow) var(--motion-ease-entrance);
   }
 
   .app-sidebar.is-collapsed {
-    margin-left: -16rem;
+    margin-left: -17rem;
     transition-timing-function: var(--motion-ease-exit);
+  }
+
+  .project-sidebar-section-panel,
+  .session-sidebar-section {
+    display: flex;
+    min-width: 0;
+    min-height: 0;
+    flex-direction: column;
+  }
+
+  .project-sidebar-section-panel {
+    flex: 0 1 42%;
+  }
+
+  .session-sidebar-section {
+    flex: 1 1 58%;
+    border-top: 1px solid var(--color-desk-line);
+  }
+
+  .project-sidebar-scroll,
+  .session-sidebar-scroll {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    min-height: 0;
+    flex: 1;
+    overflow-x: hidden;
+    overflow-y: auto;
+    padding: 0.5rem 0.75rem;
+  }
+
+  .bg-desk-canvas-sunken > .scroll-area > .mx-auto.max-w-3xl,
+  section:has(> .mx-auto > .prompt-composer-shell) > .mx-auto.max-w-3xl {
+    max-width: min(100%, 62rem);
+  }
+
+  @media (max-width: 999px) {
+    .app-sidebar {
+      width: 14rem;
+    }
+
+    .app-sidebar.is-collapsed {
+      margin-left: -14rem;
+    }
+  }
+
+  @media (hover: none) {
+    .project-sidebar-menu-trigger {
+      opacity: 1;
+      pointer-events: auto;
+    }
+  }
+
+  @media (max-width: 799px) {
+    .app-sidebar {
+      position: absolute;
+      z-index: 30;
+      inset: 0 auto 0 0;
+      width: min(17rem, calc(100vw - 3.5rem));
+      margin-left: 0;
+      transform: translateX(-100%);
+      box-shadow: none;
+      transition: transform var(--motion-duration-slow) var(--motion-ease-entrance);
+    }
+
+    .app-sidebar.is-collapsed {
+      margin-left: 0;
+      transform: translateX(-100%);
+    }
+
+    .app-sidebar.is-mobile-open {
+      transform: translateX(0);
+      box-shadow: var(--shadow-desk-pop);
+    }
+
+    .app-sidebar-backdrop {
+      position: absolute;
+      z-index: 20;
+      inset: 0;
+      display: block;
+      border: 0;
+      background: var(--color-desk-overlay);
+    }
+
+    .app-topbar {
+      gap: 0.5rem;
+      padding: 0 0.625rem;
+    }
+
+    .app-runtime-status {
+      gap: 0.3rem;
+      font-size: 0.6875rem;
+    }
   }
 
   /* 用户偏好减少动效：过渡与关键帧动画全关，且不留下半透明起点（enter-from 依旧会被 Vue

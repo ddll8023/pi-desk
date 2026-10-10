@@ -1,24 +1,27 @@
 /**
- * 当前项目与最近项目列表的所有者：目录选择、切换编排与配置读写调用。
+ * 当前项目与最近项目列表的所有者：目录选择、候选信任复核、项目添加/移除、切换与配置读写。
  *
- * 切换项目复用 RuntimeManager 的关闭链：有活动操作而请求未确认时直接拒绝，不自动中断、不排队、
- * 不重放；归一化交给 project-path，持久化交给 desktop-config-store。IPC 契约与校验在
- * shared/project-api.ts，调用者与参数校验在 main/index.ts。
+ * 添加前复核受保护资源，并在 Runtime 切换成功时一起保存项目与信任决定；移除仅清理 Desktop 配置，
+ * 不删除项目目录。运行中断由显式确认控制；IPC 契约与调用方校验位于 shared/project-api.ts 和 main/index.ts。
  */
 import { app } from 'electron'
 import type {
   ProjectError,
   ProjectErrorCode,
   ProjectList,
+  ProjectAddRequest,
   ProjectListResult,
   ProjectPathResult,
   ProjectPathSelection,
+  ProjectRemoveRequest,
   ProjectSetCurrentRequest
 } from '../shared/project-api'
+import type { TrustDecision } from '../shared/trust-api'
 import type { RuntimeStatus } from '../shared/runtime-api'
 import { DesktopConfigStorageError, DesktopConfigStore } from './desktop-config-store'
 import { ProjectPathError, normalizeProjectPath, projectNameFromPath } from './project-path'
 import type { RuntimeManager } from './runtime-manager'
+import type { TrustManager } from './trust-manager'
 
 /** 可分类的项目操作失败；由公共方法统一转换为结果对象。 */
 class ProjectFailure extends Error {
@@ -30,6 +33,21 @@ class ProjectFailure extends Error {
   }
 }
 
+function sameTrustStatus(
+  preview: ProjectPathSelection['trustStatus'],
+  current: ProjectPathSelection['trustStatus']
+): boolean {
+  return preview.projectPath === current.projectPath
+    && preview.decision === current.decision
+    && preview.resources.length === current.resources.length
+    && preview.resources.every((resource, index) => {
+      const currentResource = current.resources[index]
+      return currentResource !== undefined
+        && resource.kind === currentResource.kind
+        && resource.path === currentResource.path
+    })
+}
+
 export interface ProjectManagerOptions {
   /** 打开系统目录选择器；`defaultPath` 是建议起始目录，返回 null 表示用户取消。 */
   readonly chooseDirectory: (defaultPath: string) => Promise<string | null>
@@ -37,6 +55,8 @@ export interface ProjectManagerOptions {
   readonly runtime: RuntimeManager
   /** 配置文件的唯一读写者；项目列表与界面偏好、窗口状态共用同一份文件。 */
   readonly store: DesktopConfigStore
+  /** 信任状态探测；项目候选在提交前复核资源快照。 */
+  readonly trust: TrustManager
 }
 
 export class ProjectManager {
@@ -76,10 +96,15 @@ export class ProjectManager {
     }
   }
 
-  /** 把请求路径设为当前项目；成功时返回更新后的完整列表。 */
+  /** 把已保存项目设为当前项目；成功时返回更新后的完整列表。 */
   async setCurrent(request: ProjectSetCurrentRequest): Promise<ProjectListResult> {
     try {
-      return { ok: true, data: await this.applySwitch(request) }
+      const projectPath = await this.loadPath(request.path)
+      const list = await this.options.store.list()
+      if (!list.projects.some((project) => project.path === projectPath)) {
+        throw new ProjectFailure('INVALID_PROJECT_PATH', '只能切换到已添加的项目；请通过添加项目流程注册新目录。')
+      }
+      return { ok: true, data: await this.applySwitch({ path: projectPath, allowInterrupt: request.allowInterrupt }) }
     } catch (error) {
       return this.failure(error, {
         code: 'INTERNAL_ERROR',
@@ -88,12 +113,80 @@ export class ProjectManager {
     }
   }
 
+  /** 复核候选资源与信任选择后再切换；项目与信任决定只在切换成功时一并保存。 */
+  async add(request: ProjectAddRequest): Promise<ProjectListResult> {
+    try {
+      const projectPath = await this.loadPath(request.path)
+      const currentTrustStatus = await this.options.trust.refreshStatusOf(projectPath)
+      if (!sameTrustStatus(request.trustStatus, currentTrustStatus)) {
+        throw new ProjectFailure('PROJECT_TRUST_REQUIRED', '项目受保护资源已变化，请重新选择并确认信任决定。')
+      }
+
+      let trustDecisionToSave: TrustDecision | undefined
+      if (currentTrustStatus.resources.length > 0 && currentTrustStatus.decision === null) {
+        if (request.trustDecision === null) {
+          throw new ProjectFailure('PROJECT_TRUST_REQUIRED', '请先确认项目的信任决定。')
+        }
+        trustDecisionToSave = request.trustDecision
+      } else if (request.trustDecision !== null) {
+        throw new ProjectFailure('INVALID_REQUEST', '此项目当前无需提交新的信任决定。')
+      }
+
+      const data = await this.applySwitch(
+        { path: projectPath, allowInterrupt: request.allowInterrupt },
+        trustDecisionToSave
+      )
+      return { ok: true, data }
+    } catch (error) {
+      return this.failure(error, {
+        code: 'INTERNAL_ERROR',
+        message: '添加项目时发生未预期的内部错误。'
+      })
+    }
+  }
+
+  /** 移除 Desktop 项目记录；移除当前项目时复用 Runtime 关闭链，不删除磁盘目录。 */
+  async remove(request: ProjectRemoveRequest): Promise<ProjectListResult> {
+    try {
+      const list = await this.options.store.list()
+      const project = list.projects.find((entry) => entry.id === request.projectId)
+      if (project === undefined) return { ok: true, data: list }
+      if (project.id === list.currentProjectId) {
+        const status = this.runtimeStatus()
+        if (status.state === 'starting' || status.state === 'stopping') {
+          throw new ProjectFailure('PROJECT_REMOVE_BLOCKED', 'Runtime 正在启动或关闭，请稍后再移除项目。')
+        }
+        if (status.state === 'ready' && status.info?.isStreaming === true && !request.allowInterrupt) {
+          throw new ProjectFailure('PROJECT_REMOVE_BLOCKED', '当前 Agent 正在运行；确认后才能停止并移除项目。')
+        }
+        if (status.state === 'ready') {
+          const stopped = await this.options.runtime.stop()
+          if (!stopped.ok || stopped.data.state !== 'idle') {
+            throw new ProjectFailure('PROJECT_REMOVE_BLOCKED', 'Runtime 未确认退出，项目未移除。')
+          }
+        }
+      }
+      return { ok: true, data: await this.options.store.removeProject(project.id) }
+    } catch (error) {
+      return this.failure(error, {
+        code: 'INTERNAL_ERROR',
+        message: '移除项目时发生未预期的内部错误。'
+      })
+    }
+  }
+
   /**
    * 先结束旧 Runtime 再保存新项目：只有确认回到 `idle` 才写入配置，否则项目保持不变。
    * `failed` 状态不再追加终止尝试，只切换并保存项目选择。
    */
-  private async applySwitch(request: ProjectSetCurrentRequest): Promise<ProjectList> {
+  private async applySwitch(
+    request: ProjectSetCurrentRequest,
+    trustDecision?: TrustDecision
+  ): Promise<ProjectList> {
     const projectPath = await this.loadPath(request.path)
+    if (projectPath === this.currentProjectPath()) {
+      return this.options.store.selectProject(projectPath, projectNameFromPath(projectPath), trustDecision)
+    }
     const status = this.runtimeStatus()
 
     if (status.state === 'starting' || status.state === 'stopping') {
@@ -115,7 +208,7 @@ export class ProjectManager {
       }
     }
 
-    return this.options.store.selectProject(projectPath, projectNameFromPath(projectPath))
+    return this.options.store.selectProject(projectPath, projectNameFromPath(projectPath), trustDecision)
   }
 
   private requestChoice(): Promise<ProjectPathSelection | null> {
@@ -136,7 +229,8 @@ export class ProjectManager {
     if (chosen === null) return null
 
     const projectPath = await this.loadPath(chosen)
-    return { path: projectPath, name: projectNameFromPath(projectPath) }
+    const trustStatus = await this.options.trust.refreshStatusOf(projectPath)
+    return { path: projectPath, name: projectNameFromPath(projectPath), trustStatus }
   }
 
   /** 归一化并校验用户提供的目录；失败按 `INVALID_PROJECT_PATH` 归类。 */
