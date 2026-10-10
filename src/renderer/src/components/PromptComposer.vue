@@ -1,9 +1,11 @@
-<!-- Prompt 输入坞：处理输入法组合态、Enter 发送与 Shift+Enter 换行、焦点回归与重复提交，并在 Agent 运行期间原位提供停止入口；同时承接 Extension 的 set_editor_text 填充文本、图片附件的选择/粘贴/拖拽三种入口、输入行按内容自动增高、快捷发送下拉与 Pi 命令的斜杠补全。 -->
+<!-- Prompt 输入坞：处理输入法组合态、Enter 发送与 Shift+Enter 换行、焦点回归与重复提交，并在 Agent 运行期间原位提供停止入口；同时承接 Extension 的 set_editor_text 填充文本、图片附件的选择/粘贴/拖拽三种入口、输入行按内容自动增高、快捷发送下拉、Pi 命令的斜杠补全与 `@` 项目文件引用（只写入相对路径文本，不传文件内容）。 -->
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { PROJECT_FILE_QUERY_MAX_CHARS } from '../../../shared/project-file-api'
 import type { PiResourceEntry, PromptDisposition, PromptImageInput } from '../../../shared/runtime-api'
 import { useExtensionUiStore } from '../stores/extension-ui'
+import { useProjectFileStore } from '../stores/project-file'
 import { useResourceStore } from '../stores/resource'
 import { useProjectStore } from '../stores/project'
 import { useRuntimeStore } from '../stores/runtime'
@@ -278,14 +280,19 @@ function onDocumentPointerDown(event: PointerEvent): void {
 }
 
 onUnmounted(() => {
+  cancelFileSearch()
   for (const entry of pendingImages.value) URL.revokeObjectURL(entry.objectUrl)
   document.removeEventListener('pointerdown', onDocumentPointerDown)
 })
 
-/** 草稿的每一次写入都重算高度：用户输入、Extension 填充、补全写入与命令清空都经这里。 */
+/** 草稿的每一次写入都重算高度与 `@` 引用：用户输入、Extension 填充、补全写入与命令清空都经这里。 */
 watch(draft, () => {
-  void nextTick(autoGrow)
   quickSendOpen.value = false
+  // 延到 DOM 更新之后：自动增高与 `@` 词元都要读更新后的文本与光标位置。
+  void nextTick(() => {
+    autoGrow()
+    refreshFileToken()
+  })
 })
 
 function onKeydown(event: KeyboardEvent): void {
@@ -310,6 +317,31 @@ function onKeydown(event: KeyboardEvent): void {
     }
     if (event.key === 'Escape') {
       suggestionsDismissed.value = true
+      return
+    }
+  }
+
+  // 文件引用补全：Enter 与 Tab 都接受候选；Esc 只收起弹层，之后 Enter 恢复发送。
+  if (fileToken.value !== null) {
+    if ((event.key === 'ArrowDown' || event.key === 'ArrowUp') && visibleFileEntries.value.length > 0) {
+      event.preventDefault()
+      moveFileSuggestion(event.key === 'ArrowDown' ? 1 : -1)
+      return
+    }
+    if (event.key === 'Tab') {
+      // 引用没写完时不让 Tab 把焦点带走；没有候选就只吞掉按键。
+      event.preventDefault()
+      acceptFileSuggestion(visibleFileEntries.value[fileActiveIndex.value])
+      return
+    }
+    if (event.key === 'Enter' && !event.shiftKey && fileCompletionActive.value) {
+      // 补全占着 Enter 期间宁可吞掉按键，也不把半截路径发出去。
+      event.preventDefault()
+      acceptFileSuggestion(visibleFileEntries.value[fileActiveIndex.value])
+      return
+    }
+    if (event.key === 'Escape') {
+      filesDismissed.value = true
       return
     }
   }
@@ -446,6 +478,136 @@ function acceptSuggestion(entry: PiResourceEntry | undefined): void {
   textarea.value?.focus()
 }
 
+/** `@` 文件引用：候选来自主进程按当前项目建的文件索引；插入的是相对路径文本，不传文件内容。 */
+const MAX_FILE_SUGGESTIONS = 8
+const FILE_QUERY_DEBOUNCE_MS = 120
+const projectFileStore = useProjectFileStore()
+
+/** 光标处的 `@` 引用：`start` 是 `@` 在草稿里的下标，`text` 是 `@` 到光标之间的查询串。 */
+interface FileToken {
+  readonly start: number
+  readonly text: string
+}
+const fileToken = ref<FileToken | null>(null)
+const fileActiveIndex = ref(0)
+const filesDismissed = ref(false)
+/** 防抖待发标志：这段时间里候选还是上一轮的，Enter 必须等结果而不是发送半截路径。 */
+const fileSearchScheduled = ref(false)
+let fileSearchTimer = 0
+
+/** 从光标前的文本取 `@` 引用：`@` 必须在行首或空白之后，查询串不含空白且不超长度上限。 */
+function readFileToken(): FileToken | null {
+  const element = textarea.value
+  if (element === null) return null
+
+  const before = element.value.slice(0, element.selectionStart ?? element.value.length)
+  const at = before.lastIndexOf('@')
+  if (at < 0) return null
+  if (at > 0 && !/\s/.test(before.charAt(at - 1))) return null
+
+  const text = before.slice(at + 1)
+  if (text.length > PROJECT_FILE_QUERY_MAX_CHARS) return null
+  if (/\s/.test(text)) return null
+  return { start: at, text }
+}
+
+/** 光标或草稿变化后重算引用；查询串没变时不动计时器，避免连续 keyup 把检索无限推迟。 */
+function refreshFileToken(): void {
+  const token = readFileToken()
+  if (token === null) {
+    cancelFileSearch()
+    fileToken.value = null
+    return
+  }
+
+  const current = fileToken.value
+  if (current !== null && current.start === token.start && current.text === token.text) return
+
+  fileToken.value = token
+  cancelFileSearch()
+  fileSearchScheduled.value = true
+  fileSearchTimer = window.setTimeout(() => {
+    fileSearchTimer = 0
+    fileSearchScheduled.value = false
+    void projectFileStore.search(token.text)
+  }, FILE_QUERY_DEBOUNCE_MS)
+}
+
+function cancelFileSearch(): void {
+  if (fileSearchTimer === 0) return
+  window.clearTimeout(fileSearchTimer)
+  fileSearchTimer = 0
+  fileSearchScheduled.value = false
+}
+
+/** 查询串一变就回到第一条候选，并撤销上一次的 Esc 收起。 */
+const fileQueryText = computed(() => fileToken.value?.text ?? null)
+watch(fileQueryText, () => {
+  fileActiveIndex.value = 0
+  filesDismissed.value = false
+})
+
+/** 可见候选：引用消失、被 Esc 收起或候选为空时都不显示。 */
+const visibleFileEntries = computed<readonly string[]>(() => {
+  if (fileToken.value === null || filesDismissed.value) return []
+  return projectFileStore.entries.slice(0, MAX_FILE_SUGGESTIONS)
+})
+
+/** 补全是否占着 Enter：防抖待发与请求进行中同样算占用，否则快速回车会把半截路径发出去。 */
+const fileCompletionActive = computed(() => (
+  fileToken.value !== null
+  && !filesDismissed.value
+  && (fileSearchScheduled.value || projectFileStore.pending || visibleFileEntries.value.length > 0)
+))
+
+/** 弹层归属：两个列表互斥出现，`aria-controls` 指向当前真正显示的那个。 */
+const activeListId = computed(() => {
+  if (visibleFileEntries.value.length > 0) return 'prompt-file-list'
+  return visibleSuggestions.value.length > 0 ? 'prompt-command-list' : null
+})
+const activeListOpen = computed(() => (
+  visibleFileEntries.value.length > 0 || visibleSuggestions.value.length > 0
+))
+
+function moveFileSuggestion(step: number): void {
+  const count = visibleFileEntries.value.length
+  if (count === 0) return
+  fileActiveIndex.value = (fileActiveIndex.value + step + count) % count
+}
+
+/** 候选行的两列：文件名与所在目录；根目录下的文件没有第二列。 */
+function fileName(path: string): string {
+  const slash = path.lastIndexOf('/')
+  return slash >= 0 ? path.slice(slash + 1) : path
+}
+
+function fileDirectory(path: string): string {
+  const slash = path.lastIndexOf('/')
+  return slash >= 0 ? path.slice(0, slash) : ''
+}
+
+/** 接受候选：把 `@查询串` 换成项目相对路径并补一个空格，光标停在空格之后。 */
+function acceptFileSuggestion(path: string | undefined): void {
+  const element = textarea.value
+  const token = fileToken.value
+  if (element === null || token === null || path === undefined) return
+
+  // 含空白的路径用双引号包起来；含引号的路径（Windows 文件名不允许）原样写入，不删改任何字符。
+  const inserted = /\s/.test(path) && !path.includes('"') ? `"${path}"` : path
+  const caret = element.selectionStart ?? element.value.length
+  draft.value = `${draft.value.slice(0, token.start)}${inserted} ${draft.value.slice(caret)}`
+  fileToken.value = null
+  filesDismissed.value = false
+  cancelFileSearch()
+  element.focus()
+
+  void nextTick(() => {
+    const next = token.start + inserted.length + 1
+    element.setSelectionRange(next, next)
+    autoGrow()
+  })
+}
+
 onMounted(() => {
   textarea.value?.focus()
   autoGrow()
@@ -489,6 +651,29 @@ onMounted(() => {
           </li>
         </ul>
 
+        <!-- 文件引用补全：候选是当前项目的相对路径，Enter 与 Tab 都接受候选，插入的只是路径文本，不读取文件内容。 -->
+        <ul
+          v-if="visibleFileEntries.length > 0"
+          id="prompt-file-list"
+          role="listbox"
+          aria-label="项目文件"
+          class="dialog-popover scroll-area bottom-full mb-1.5 max-h-64 w-full overflow-y-auto p-1"
+        >
+          <li v-for="(path, index) in visibleFileEntries" :key="path" role="presentation">
+            <AppButton
+              variant="unstyled"
+              role="option"
+              :aria-selected="index === fileActiveIndex"
+              class="list-item prompt-composer-option prompt-composer-option-file"
+              :class="index === fileActiveIndex ? 'list-item-active' : ''"
+              @mousedown.prevent="acceptFileSuggestion(path)"
+            >
+              <span class="block truncate font-mono text-xs">{{ fileName(path) }}</span>
+              <span v-if="fileDirectory(path) !== ''" class="prompt-composer-option-detail">{{ fileDirectory(path) }}</span>
+            </AppButton>
+          </li>
+        </ul>
+
         <!-- 附件预览行：缩略图经 blob: URL 展示，可逐个移除。 -->
         <div v-if="pendingImages.length > 0" class="prompt-composer-attachments">
           <div v-for="entry in pendingImages" :key="entry.objectUrl" class="prompt-composer-attachment">
@@ -523,9 +708,11 @@ onMounted(() => {
           spellcheck="false"
           aria-describedby="prompt-status"
           aria-autocomplete="list"
-          aria-controls="prompt-command-list"
-          :aria-expanded="visibleSuggestions.length > 0"
+          :aria-controls="activeListId"
+          :aria-expanded="activeListOpen"
           @keydown="onKeydown"
+          @keyup="refreshFileToken"
+          @click="refreshFileToken"
           @paste="onPaste"
           @compositionstart="composing = true"
           @compositionend="composing = false"

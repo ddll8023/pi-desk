@@ -387,6 +387,11 @@
     @apply truncate text-2xs text-desk-muted;
   }
 
+  /* 文件候选：在补全条目的两列基础上让两列都参与压缩，长文件名与长目录都截断成单行，不溢出浮层。 */
+  .prompt-composer-option-file {
+    @apply grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)];
+  }
+
   .list-item:not(:disabled):hover {
     @apply bg-desk-surface-subtle;
   }

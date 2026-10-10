@@ -1,4 +1,4 @@
-/** 管理唯一桌面窗口、本地资产边界，以及应用信息、Project 选择/添加/移除、Session 与 Project Trust、Runtime、认证、Extension IPC、事件广播及退出编排。 */
+/** 管理唯一桌面窗口、本地资产边界，以及应用信息、Project 选择/添加/移除、项目文件检索、Session 与 Project Trust、Runtime、认证、Extension IPC、事件广播及退出编排。 */
 import { realpath } from 'node:fs/promises'
 import { extname, isAbsolute, relative, resolve, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -27,6 +27,11 @@ import type {
   ProjectPathResult,
   ProjectRemoveRequest
 } from '../shared/project-api'
+import {
+  PROJECT_FILE_QUERY_MAX_CHARS,
+  PROJECT_FILE_SEARCH_CHANNEL
+} from '../shared/project-file-api'
+import type { ProjectFileSearchResult } from '../shared/project-file-api'
 import {
   SESSION_LIST_CHANNEL,
   SESSION_OPEN_CHANNEL,
@@ -117,6 +122,7 @@ import type {
 import { DesktopConfigStore } from './desktop-config-store'
 import { AuthManager, AuthManagerError } from './auth-manager'
 import { PreferencesManager } from './preferences-manager'
+import { ProjectFileIndex } from './project-file-index'
 import { ProjectManager } from './project-manager'
 import { RuntimeManager } from './runtime-manager'
 import { SessionManager } from './session-manager'
@@ -166,6 +172,10 @@ const projectManager = new ProjectManager({
   trust: trustManager
 })
 const sessionManager = new SessionManager({ projects: projectManager, runtime: runtimeManager })
+/** 项目文件索引：根路径只取当前项目，页面无法指定检索目录。 */
+const projectFileIndex = new ProjectFileIndex({
+  currentProjectPath: () => projectManager.currentProjectPath()
+})
 /** 认证执行端：管理认证辅助进程，凭据读写全在官方实现内完成。 */
 const authManager = new AuthManager({ store: configStore })
 const preferencesManager = new PreferencesManager({ store: configStore })
@@ -336,6 +346,10 @@ function projectPathFailure(code: ProjectErrorCode, message: string): ProjectPat
 }
 
 function projectListFailure(code: ProjectErrorCode, message: string): ProjectListResult {
+  return { ok: false, error: { code, message } }
+}
+
+function projectFileFailure(code: DesktopErrorCode, message: string): ProjectFileSearchResult {
   return { ok: false, error: { code, message } }
 }
 
@@ -526,6 +540,34 @@ function registerProjectHandlers(pageUrl: string): void {
         return projectListFailure('INVALID_REQUEST', '切换项目必须显式说明是否允许中断当前操作。')
       }
       return projectManager.setCurrent({ path, allowInterrupt })
+    }
+  )
+}
+
+/** 只接受一个查询串；检索根固定为当前项目，页面不能指定目录，也不返回文件内容。 */
+function registerProjectFileHandlers(pageUrl: string): void {
+  ipcMain.handle(
+    PROJECT_FILE_SEARCH_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<ProjectFileSearchResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return projectFileFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 1) {
+        return projectFileFailure('INVALID_REQUEST', '文件检索接口只接受一个请求对象。')
+      }
+      const request = args[0]
+      if (typeof request !== 'object' || request === null || Array.isArray(request)) {
+        return projectFileFailure('INVALID_REQUEST', '文件检索参数格式不正确。')
+      }
+      const fields = request as Record<string, unknown>
+      if (Object.keys(fields).some((key) => key !== 'query')) {
+        return projectFileFailure('INVALID_REQUEST', '文件检索参数包含未支持的字段。')
+      }
+      const { query } = fields
+      if (typeof query !== 'string' || query.length > PROJECT_FILE_QUERY_MAX_CHARS) {
+        return projectFileFailure('INVALID_REQUEST', '文件检索查询串无效。')
+      }
+      return projectFileIndex.search(query)
     }
   )
 }
@@ -1384,6 +1426,7 @@ app.whenReady().then(async () => {
   registerRuntimeHandlers(pageUrl)
   registerExtensionUiHandlers(pageUrl)
   registerProjectHandlers(pageUrl)
+  registerProjectFileHandlers(pageUrl)
   registerSessionHandlers(pageUrl)
   registerTrustHandlers(pageUrl)
   registerPreferencesHandlers(pageUrl)

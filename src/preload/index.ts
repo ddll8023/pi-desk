@@ -1,4 +1,4 @@
-/** 为沙箱页面提供应用信息、Project 选择/添加/移除/列表、Session、Project Trust、偏好、Runtime、Pi 资源、认证与 Extension 等受限接口，不暴露 Electron、任意 channel 或系统能力。 */
+/** 为沙箱页面提供应用信息、Project 选择/添加/移除/列表、项目文件检索、Session、Project Trust、偏好、Runtime、Pi 资源、认证与 Extension 等受限接口，不暴露 Electron、任意 channel 或系统能力。 */
 import { contextBridge, ipcRenderer } from 'electron'
 import type { IpcRendererEvent } from 'electron'
 import { APP_INFO_CHANNEL, isAppInfoResult } from '../shared/desktop-api'
@@ -26,6 +26,11 @@ import type {
   ProjectRemoveRequest,
   ProjectSetCurrentRequest
 } from '../shared/project-api'
+import {
+  PROJECT_FILE_SEARCH_CHANNEL,
+  isProjectFileSearchResult
+} from '../shared/project-file-api'
+import type { ProjectFileApi, ProjectFileSearchResult } from '../shared/project-file-api'
 import {
   SESSION_LIST_CHANNEL,
   SESSION_OPEN_CHANNEL,
@@ -134,6 +139,7 @@ const INVALID_PROJECTION_RESPONSE = '桌面接口返回了无法识别的投影�
 const INVALID_CAPABILITIES_RESPONSE = '桌面接口返回了无法识别的模型列表结果。'
 const INVALID_PROJECT_PATH_RESPONSE = '桌面接口返回了无法识别的目录选择结果。'
 const INVALID_PROJECT_LIST_RESPONSE = '桌面接口返回了无法识别的项目列表。'
+const INVALID_PROJECT_FILE_RESPONSE = '桌面接口返回了无法识别的文件检索结果。'
 const INVALID_SESSION_LIST_RESPONSE = '桌面接口返回了无法识别的会话列表。'
 const INVALID_PREFERENCES_RESPONSE = '桌面接口返回了无法识别的界面偏好。'
 const INVALID_TRUST_RESPONSE = '桌面接口返回了无法识别的信任状态。'
@@ -172,6 +178,10 @@ function invalidProjectListResponse(): ProjectListResult {
   return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_PROJECT_LIST_RESPONSE } }
 }
 
+function invalidProjectFileResponse(): ProjectFileSearchResult {
+  return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_PROJECT_FILE_RESPONSE } }
+}
+
 function invalidSessionResponse(): SessionListResult {
   return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_SESSION_LIST_RESPONSE } }
 }
@@ -208,7 +218,7 @@ function invalidAuthLogoutResponse(): AuthLogoutResult {
   return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_AUTH_STATUS_RESPONSE } }
 }
 
-const desktop: DesktopApi & RuntimeApi & ProjectApi & SessionApi & PreferencesApi & TrustApi & ExtensionUiApi & AuthApi = {
+const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionApi & PreferencesApi & TrustApi & ExtensionUiApi & AuthApi = {
   async getAppInfo() {
     const response: unknown = await ipcRenderer.invoke(APP_INFO_CHANNEL)
     if (!isAppInfoResult(response)) {
@@ -251,6 +261,13 @@ const desktop: DesktopApi & RuntimeApi & ProjectApi & SessionApi & PreferencesAp
   async listSessions() {
     const response: unknown = await ipcRenderer.invoke(SESSION_LIST_CHANNEL)
     return isSessionListResult(response) ? response : invalidSessionResponse()
+  },
+
+  /** 在当前项目内检索文件候选；只搬运查询串，检索根由主进程决定。 */
+  async searchProjectFiles(query: string) {
+    const request = { query }
+    const response: unknown = await ipcRenderer.invoke(PROJECT_FILE_SEARCH_CHANNEL, request)
+    return isProjectFileSearchResult(response) ? response : invalidProjectFileResponse()
   },
 
   async openSession(sessionId: string | null, allowInterrupt: boolean) {
