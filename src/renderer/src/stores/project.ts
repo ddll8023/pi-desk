@@ -1,6 +1,6 @@
 /** 保存项目列表与候选添加状态；候选信任确认后才提交，项目持久化和 Runtime 切换由主进程编排。 */
 import { defineStore } from 'pinia'
-import { computed, ref } from 'vue'
+import { computed, ref, shallowRef } from 'vue'
 import type { Project, ProjectError, ProjectList, ProjectPathSelection } from '../../../shared/project-api'
 import type { TrustDecision } from '../../../shared/trust-api'
 import {
@@ -28,7 +28,8 @@ export const useProjectStore = defineStore('project', () => {
   /** 主进程拒绝了未确认的切换时保存待确认路径，确认后带 `allowInterrupt` 重试。 */
   const pendingPath = ref<string | null>(null)
   /** 目录选择后暂存候选；信任确认或取消之前不会切换当前项目或写入列表。 */
-  const pendingAddition = ref<ProjectPathSelection | null>(null)
+  /** 候选项目只在流程内只读使用，不需要深度响应式；用 shallowRef 避免把代理存下来并传过桥。 */
+  const pendingAddition = shallowRef<ProjectPathSelection | null>(null)
   const pendingAdditionDecision = ref<TrustDecision | null>(null)
 
   const currentProject = computed<Project | null>(() => (

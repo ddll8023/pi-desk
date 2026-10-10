@@ -42,17 +42,32 @@ const SHUTDOWN_TIMEOUT_MS = 2_000
 /** 流程内进度文本保留条数上限；超出丢弃最旧的一条。 */
 const MAX_FLOW_MESSAGES = 8
 
-/** 认证执行端错误：错误码直接映射到共享契约。 */
+/**
+ * 认证执行端错误：错误码直接映射到共享契约。
+ * `message` 只放面向用户的一句话结论，原始错误文本与诊断放进 `detail`，由页面折叠展示。
+ */
 export class AuthManagerError extends Error {
-  constructor(readonly code: AuthErrorCode, message: string) {
+  readonly detail: string | null
+
+  constructor(
+    readonly code: AuthErrorCode,
+    message: string,
+    detail: string | null = null
+  ) {
     super(message)
+    this.detail = detail
   }
 }
 
 /** 与辅助进程的请求结果；超时统一映射为 `AUTH_UNAVAILABLE`。 */
 type HelperOutcome =
   | { readonly ok: true; readonly data: unknown }
-  | { readonly ok: false; readonly code: AuthErrorCode; readonly message: string }
+  | {
+    readonly ok: false
+    readonly code: AuthErrorCode
+    readonly message: string
+    readonly detail: string | null
+  }
 
 interface PendingRequest {
   readonly settle: (outcome: HelperOutcome) => void
@@ -96,12 +111,48 @@ function describeExit(event: { readonly code: number | null; readonly signal: st
   return '认证辅助进程已退出。'
 }
 
+/** 依赖缺失类失败的签名：官方 SDK 未安装或未构建时，Node 与打包器给出的文本。 */
+const MISSING_DEPENDENCY_PATTERN = /Cannot find package|ERR_MODULE_NOT_FOUND|Cannot find module|Failed to resolve module specifier/
+
+/**
+ * 把辅助进程的失败分类成页面结论与原始细节。
+ * 已识别的依赖/启动类失败给出一句话结论；原始文本与诊断一律进 `detail`，
+ * 既不把 Node 报错直接当文案，也不丢掉定位问题所需的信息。
+ * 依赖缺失的措辞按运行形态分岔：只有开发期才存在「在项目根目录重新构建」这条出路。
+ */
+function classifyHelperFailure(
+  code: AuthHelperErrorCode,
+  rawMessage: string,
+  diagnostics: readonly string[],
+  isPackaged: boolean
+): { code: AuthErrorCode; message: string; detail: string | null } {
+  const detail = [rawMessage, ...diagnostics].filter((text) => text !== '').join('\n')
+  if (MISSING_DEPENDENCY_PATTERN.test(rawMessage)) {
+    return {
+      code: 'AUTH_HELPER_DEPENDENCY_MISSING',
+      message: isPackaged
+        ? '认证组件缺少运行依赖，无法读取 Provider 状态与登录。应用安装可能不完整，请重新安装。'
+        : '认证组件缺少运行依赖，无法读取 Provider 状态与登录。'
+          + '请在项目根目录安装依赖，并重新构建认证辅助进程后重试。',
+      detail
+    }
+  }
+  return {
+    code: mapHelperCode(code),
+    message: truncate(rawMessage, 800),
+    // 没有额外诊断时不重复同一段文本。
+    detail: detail === rawMessage ? null : detail
+  }
+}
+
 function truncate(text: string, maxChars: number): string {
   return text.length <= maxChars ? text : `${text.slice(0, maxChars)}…`
 }
 
 export interface AuthManagerOptions {
   readonly store: DesktopConfigStore
+  /** 运行形态：只用于把开发期才成立的修复指引与正式包区分开。 */
+  readonly isPackaged: boolean
   /** 外链打开入口；便于测试替换，默认交给系统浏览器。 */
   readonly openUrl?: (url: string) => Promise<void>
   /** 是否自动打开授权地址；设备码流程不自动打开。 */
@@ -293,7 +344,15 @@ export class AuthManager {
         this.pending.delete(frame.id)
         pending.settle(frame.ok
           ? { ok: true, data: frame.data }
-          : { ok: false, code: mapHelperCode(frame.code), message: this.withDiagnostics(frame.message) })
+          : {
+            ok: false,
+            ...classifyHelperFailure(
+              frame.code,
+              frame.message,
+              this.helper?.readDiagnostics() ?? [],
+              this.options.isPackaged
+            )
+          })
         return
       }
       case 'prompt': {
@@ -482,7 +541,12 @@ export class AuthManager {
 
   private failAllPending(error: AuthManagerError): void {
     for (const [, pending] of [...this.pending]) {
-      pending.settle({ ok: false, code: error.code, message: error.message })
+      pending.settle({
+        ok: false,
+        code: error.code,
+        message: error.message,
+        detail: error.detail
+      })
     }
     this.pending.clear()
   }
@@ -505,7 +569,8 @@ export class AuthManager {
         resolve({
           ok: false,
           code: 'AUTH_UNAVAILABLE',
-          message: `认证辅助进程在 ${timeoutMs} 毫秒内没有回应本次请求；结果未知，不会自动重发。`
+          message: `认证辅助进程在 ${timeoutMs} 毫秒内没有回应本次请求；结果未知，不会自动重发。`,
+          detail: null
         })
       }, timeoutMs)
 
@@ -523,16 +588,11 @@ export class AuthManager {
         pending.settle({
           ok: false,
           code: 'AUTH_UNAVAILABLE',
-          message: `无法向认证辅助进程写入请求：${error instanceof Error ? error.message : '未知原因'}`
+          message: `无法向认证辅助进程写入请求：${error instanceof Error ? error.message : '未知原因'}`,
+          detail: null
         })
       })
     })
   }
 
-  /** 把辅助进程最近的诊断附加到错误文本后，便于定位启动或打包问题。 */
-  private withDiagnostics(message: string): string {
-    const diagnostics = this.helper?.readDiagnostics() ?? []
-    if (diagnostics.length === 0) return message
-    return truncate(`${message}（最近诊断：${diagnostics.slice(-3).join(' | ')}）`, 800)
-  }
 }

@@ -16,14 +16,26 @@ import type {
 function unavailable(): { ok: false; error: AuthError } {
   return {
     ok: false,
-    error: { code: 'BRIDGE_UNAVAILABLE', message: '桌面桥接不可用，请通过 Electron 打开此页面。' }
+    error: {
+      code: 'BRIDGE_UNAVAILABLE',
+      message: '桌面桥接不可用，请通过 Electron 打开此页面。',
+      detail: null
+    }
   }
 }
 
-function callFailed(): { ok: false; error: AuthError } {
+/**
+ * 桥接调用异常：原始错误文本进 `detail`，与认证错误的分层呈现保持一致，
+ * 既保留一句面向用户的结论，也不丢掉唯一能定位原因的信息。
+ */
+function callFailed(error: unknown): { ok: false; error: AuthError } {
   return {
     ok: false,
-    error: { code: 'BRIDGE_CALL_FAILED', message: '桌面桥接调用失败，可以重试。' }
+    error: {
+      code: 'BRIDGE_CALL_FAILED',
+      message: '桌面桥接调用失败，可以重试。',
+      detail: error instanceof Error ? error.message : String(error)
+    }
   }
 }
 
@@ -33,8 +45,8 @@ export async function getAuthStatus(): Promise<AuthStatusResult> {
   if (!bridge || typeof bridge.getAuthStatus !== 'function') return unavailable()
   try {
     return await bridge.getAuthStatus()
-  } catch {
-    return callFailed()
+  } catch (error) {
+    return callFailed(error)
   }
 }
 
@@ -44,8 +56,8 @@ export async function startAuthLogin(providerId: string, method: AuthMethod): Pr
   if (!bridge || typeof bridge.startAuthLogin !== 'function') return unavailable()
   try {
     return await bridge.startAuthLogin(providerId, method)
-  } catch {
-    return callFailed()
+  } catch (error) {
+    return callFailed(error)
   }
 }
 
@@ -59,8 +71,8 @@ export async function respondAuthLogin(
   if (!bridge || typeof bridge.respondAuthLogin !== 'function') return unavailable()
   try {
     return await bridge.respondAuthLogin(flowId, promptId, value)
-  } catch {
-    return callFailed()
+  } catch (error) {
+    return callFailed(error)
   }
 }
 
@@ -70,8 +82,8 @@ export async function cancelAuthLogin(flowId: string): Promise<AuthFlowResult> {
   if (!bridge || typeof bridge.cancelAuthLogin !== 'function') return unavailable()
   try {
     return await bridge.cancelAuthLogin(flowId)
-  } catch {
-    return callFailed()
+  } catch (error) {
+    return callFailed(error)
   }
 }
 
@@ -81,8 +93,8 @@ export async function openAuthFlowUrl(flowId: string): Promise<AuthFlowResult> {
   if (!bridge || typeof bridge.openAuthFlowUrl !== 'function') return unavailable()
   try {
     return await bridge.openAuthFlowUrl(flowId)
-  } catch {
-    return callFailed()
+  } catch (error) {
+    return callFailed(error)
   }
 }
 
@@ -92,8 +104,8 @@ export async function logoutAuthProvider(providerId: string): Promise<AuthLogout
   if (!bridge || typeof bridge.logoutAuthProvider !== 'function') return unavailable()
   try {
     return await bridge.logoutAuthProvider(providerId)
-  } catch {
-    return callFailed()
+  } catch (error) {
+    return callFailed(error)
   }
 }
 

@@ -52,7 +52,8 @@ function isMissingPath(error: unknown): boolean {
 }
 
 /**
- * 会话根目录：`--session-dir` 的唯一取值来源。
+ * 会话根目录：各项目分组目录的父目录，也是列会话时的起点。
+ * `--session-dir` 的取值见 `getProjectSessionDir()`。
  * `PI_CODING_AGENT_DIR` 只在是绝对路径时参与解析，相对值交给 Pi 的默认位置。
  */
 export function getSessionRoot(): string {
@@ -61,6 +62,17 @@ export function getSessionRoot(): string {
     ? configured
     : join(homedir(), '.pi', 'agent')
   return join(agentDirectory, 'sessions')
+}
+
+/**
+ * 单个项目的会话目录，也是 Pi 的 `--session-dir` 取值。
+ *
+ * 不能把会话根目录传给它：Pi 收到 `--session-dir` 时会**平铺扫描该目录**（`SessionManager.findById`
+ * 只认这一层的 `.jsonl`），从根目录只能看到各项目的分组子目录，于是按 id 找不到会话、
+ * 报 “No project session found” 并用同一个 id 新建空会话，表现为打开历史会话后聊天区空白。
+ */
+export function getProjectSessionDir(projectPath: string): string {
+  return join(getSessionRoot(), getProjectGroupName(projectPath))
 }
 
 /** 分组目录名：去掉开头分隔符后把 `/`、`\`、`:` 换成 `-`，与 Pi 的布局一致。 */

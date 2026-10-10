@@ -134,10 +134,15 @@ export type AuthErrorCode =
   | 'AUTH_PROVIDER_UNKNOWN'
   /** 交给系统浏览器打开授权地址失败。 */
   | 'AUTH_OPEN_URL_FAILED'
+  /** 认证辅助进程缺少运行依赖（官方 SDK 未安装或未构建），无法读取状态与登录。 */
+  | 'AUTH_HELPER_DEPENDENCY_MISSING'
 
 export interface AuthError {
   readonly code: AuthErrorCode
+  /** 面向用户的一句话结论；技术细节放在 `detail` 里。 */
   readonly message: string
+  /** 原始错误文本与辅助进程诊断；没有额外细节时为 null。页面按纯文本展示，可复制。 */
+  readonly detail: string | null
 }
 
 export type AuthStatusResult =
@@ -202,7 +207,8 @@ const AUTH_ERROR_CODES: readonly string[] = [
   'AUTH_LOGIN_CONFLICT',
   'AUTH_PROMPT_MISMATCH',
   'AUTH_PROVIDER_UNKNOWN',
-  'AUTH_OPEN_URL_FAILED'
+  'AUTH_OPEN_URL_FAILED',
+  'AUTH_HELPER_DEPENDENCY_MISSING'
 ]
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -296,10 +302,11 @@ function isAuthStatus(value: unknown): value is AuthStatus {
 /** 只放行契约内的错误码；未列出的取值一律按响应不符处理。 */
 function isAuthErrorResult(value: unknown): value is { ok: false; error: AuthError } {
   if (!isRecord(value) || value.ok !== false || !isRecord(value.error)) return false
-  const { code, message } = value.error
+  const { code, message, detail } = value.error
   return typeof message === 'string'
     && typeof code === 'string'
     && AUTH_ERROR_CODES.includes(code)
+    && (detail === null || typeof detail === 'string')
 }
 
 // TypeScript 声明不能保证 invoke 的实际返回值；沙箱桥接只放行本契约。

@@ -3,14 +3,16 @@
  * 与安装级 UUID 的加载、保存与降级处理。
  *
  * 配置位于 Electron userData 目录下的 desktop-config.json。写入采用同目录临时文件加改名替换，
- * 所有读写串行执行；结构损坏先备份再重新开始，暂时读不到时进入只读降级，避免用空配置覆盖
- * 仍然存在的记录。界面偏好、窗口状态、各项目的信任决定与安装级 UUID 是同一文件里的可选字段，
+ * 所有读写串行执行；加载时记录文件的标识（mtime 与大小），每次写入前比对，磁盘在加载后被其他
+ * 写入者改动过就放弃本次保存，不用过期内容覆盖它。结构损坏先备份再重新开始，暂时读不到时进入
+ * 只读降级，避免用空配置覆盖仍然存在的记录。界面偏好、窗口状态、各项目的信任决定与安装级 UUID
+ * 是同一文件里的可选字段，
  * 缺失或非法一律按默认值处理，不参与结构判定，也不改变版本语义；路径归一化在 project-path.ts，切换编排在
  * project-manager.ts，偏好读取在 preferences-manager.ts，窗口状态校正与保存时机在 window-state.ts，
  * 信任决定的探测与启动参数映射在 trust-manager.ts。
  */
 import { randomUUID } from 'node:crypto'
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join } from 'node:path'
 import { app } from 'electron'
 import type { UiPreferences, UiTheme } from '../shared/preferences-api'
@@ -187,6 +189,11 @@ export class DesktopConfigStore {
   private storedAuthDeviceId: string | null = null
   /** 本次运行使用的安装级 UUID；尚未落盘时也保持同一个值。 */
   private authDeviceId: string | null = null
+  /**
+   * 加载时磁盘上这份配置的标识（mtime 与大小）；null 表示加载时文件不存在。
+   * 写入前用它发现「另一个写入者在我们加载后改过这份配置」，避免用过期内容覆盖磁盘。
+   */
+  private loadedStamp: string | null = null
 
   /** 读取列表与当前项目；首次调用从磁盘加载，之后返回内存状态。 */
   list(): Promise<ProjectList> {
@@ -424,7 +431,10 @@ export class DesktopConfigStore {
     try {
       text = await readFile(file, 'utf8')
     } catch (error) {
-      if (isMissingFile(error)) return
+      if (isMissingFile(error)) {
+        this.loadedStamp = null
+        return
+      }
       // 权限、占用或 IO 故障：保留原文件，本次运行不写任何配置。
       this.readOnly = true
       this.notice = '本地项目配置暂时无法读取，本次运行不会保存项目选择。'
@@ -440,8 +450,11 @@ export class DesktopConfigStore {
         return
       }
       this.notice = `本地项目配置无法解析，已备份为 ${backup} 并重新开始。`
+      // 原文件已被改名，接下来的第一次保存是从空配置重建，不按覆盖处理。
+      this.loadedStamp = null
       return
     }
+    this.loadedStamp = await this.stampOf(file)
     if (parsed.version !== CONFIG_VERSION) {
       // 未来版本的文件不改写、不覆盖，只读使用其中可识别的记录。
       this.readOnly = true
@@ -518,6 +531,16 @@ export class DesktopConfigStore {
     return basename(target)
   }
 
+  /** 文件标识；文件不存在返回 null。只用于发现外部写入，不参与内容校验。 */
+  private async stampOf(file: string): Promise<string | null> {
+    try {
+      const info = await stat(file)
+      return `${info.mtimeMs}:${info.size}`
+    } catch {
+      return null
+    }
+  }
+
   /** 同目录临时文件加改名替换，中断时不会留下半份配置。 */
   private async persist(next: PersistPayload): Promise<void> {
     const file = this.filePath()
@@ -531,6 +554,12 @@ export class DesktopConfigStore {
       projectTrust: next.projectTrust,
       authDeviceId: next.authDeviceId
     }
+    // 这份配置是整文件写入：磁盘在加载后被别的写入者改过时，宁可放弃本次保存，也不用过期内容覆盖。
+    if (await this.stampOf(file) !== this.loadedStamp) {
+      throw new DesktopConfigStorageError(
+        '本地项目配置已被其他进程修改，本次保存已放弃；请关闭多余的实例后重启应用再试。'
+      )
+    }
     try {
       await mkdir(dirname(file), { recursive: true })
       await writeFile(temporary, `${JSON.stringify(payload, null, 2)}\n`, 'utf8')
@@ -543,6 +572,7 @@ export class DesktopConfigStore {
           : '无法保存本地项目配置。'
       )
     }
+    this.loadedStamp = await this.stampOf(file)
   }
 
   private filePath(): string {

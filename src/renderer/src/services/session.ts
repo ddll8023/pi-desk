@@ -8,10 +8,12 @@ function unavailable(): { ok: false; error: SessionError } {
   }
 }
 
-function callFailed(): { ok: false; error: SessionError } {
+/** 桥接调用异常：保留原始错误文本，避免真实原因被固定文案盖掉。 */
+function callFailed(error: unknown): { ok: false; error: SessionError } {
+  const detail = error instanceof Error ? error.message : String(error)
   return {
     ok: false,
-    error: { code: 'BRIDGE_CALL_FAILED', message: '桌面桥接调用失败，可以重试。' }
+    error: { code: 'BRIDGE_CALL_FAILED', message: `桌面桥接调用失败，可以重试：${detail}` }
   }
 }
 
@@ -21,8 +23,8 @@ export async function listSessions(): Promise<SessionListResult> {
   if (!bridge || typeof bridge.listSessions !== 'function') return unavailable()
   try {
     return await bridge.listSessions()
-  } catch {
-    return callFailed()
+  } catch (error) {
+    return callFailed(error)
   }
 }
 
@@ -35,8 +37,8 @@ export async function openSession(
   if (!bridge || typeof bridge.openSession !== 'function') return unavailable()
   try {
     return await bridge.openSession(sessionId, allowInterrupt)
-  } catch {
-    return callFailed()
+  } catch (error) {
+    return callFailed(error)
   }
 }
 
@@ -46,8 +48,8 @@ export async function reloadSession(allowInterrupt: boolean): Promise<SessionOpe
   if (!bridge || typeof bridge.reloadSession !== 'function') return unavailable()
   try {
     return await bridge.reloadSession(allowInterrupt)
-  } catch {
-    return callFailed()
+  } catch (error) {
+    return callFailed(error)
   }
 }
 

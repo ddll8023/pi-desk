@@ -47,7 +47,10 @@ export interface PiProcessHandlers {
 export interface PiProcessOptions {
   readonly projectPath: string
   readonly handlers: PiProcessHandlers
-  /** 会话根目录：主进程显式指定，作为 `--session-dir`，不依赖 Pi 自己的配置优先级。 */
+  /**
+   * 项目会话目录：主进程显式指定，作为 `--session-dir`，不依赖 Pi 自己的配置优先级。
+   * Pi 会平铺扫描这个目录，所以只能传单个项目的会话目录，不能传会话根目录。
+   */
   readonly sessionDir: string
   /** 要恢复的会话 id；为 null 表示新建会话。 */
   readonly sessionId: string | null

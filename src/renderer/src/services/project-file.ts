@@ -9,10 +9,12 @@ function unavailable(): { ok: false; error: DesktopError } {
   }
 }
 
-function callFailed(): { ok: false; error: DesktopError } {
+/** 桥接调用异常：保留原始错误文本，避免真实原因被固定文案盖掉。 */
+function callFailed(error: unknown): { ok: false; error: DesktopError } {
+  const detail = error instanceof Error ? error.message : String(error)
   return {
     ok: false,
-    error: { code: 'BRIDGE_CALL_FAILED', message: '桌面桥接调用失败，可以重试。' }
+    error: { code: 'BRIDGE_CALL_FAILED', message: `桌面桥接调用失败，可以重试：${detail}` }
   }
 }
 
@@ -22,7 +24,7 @@ export async function searchProjectFiles(query: string): Promise<ProjectFileSear
   if (!bridge || typeof bridge.searchProjectFiles !== 'function') return unavailable()
   try {
     return await bridge.searchProjectFiles(query)
-  } catch {
-    return callFailed()
+  } catch (error) {
+    return callFailed(error)
   }
 }

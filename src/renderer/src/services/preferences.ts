@@ -8,10 +8,12 @@ function unavailable(): { ok: false; error: PreferencesError } {
   }
 }
 
-function callFailed(): { ok: false; error: PreferencesError } {
+/** 桥接调用异常：保留原始错误文本，避免真实原因被固定文案盖掉。 */
+function callFailed(error: unknown): { ok: false; error: PreferencesError } {
+  const detail = error instanceof Error ? error.message : String(error)
   return {
     ok: false,
-    error: { code: 'BRIDGE_CALL_FAILED', message: '桌面桥接调用失败，可以重试。' }
+    error: { code: 'BRIDGE_CALL_FAILED', message: `桌面桥接调用失败，可以重试：${detail}` }
   }
 }
 
@@ -21,8 +23,8 @@ export async function getPreferences(): Promise<PreferencesResult> {
   if (!bridge || typeof bridge.getPreferences !== 'function') return unavailable()
   try {
     return await bridge.getPreferences()
-  } catch {
-    return callFailed()
+  } catch (error) {
+    return callFailed(error)
   }
 }
 
@@ -32,7 +34,7 @@ export async function setUiPreferences(ui: UiPreferences): Promise<PreferencesRe
   if (!bridge || typeof bridge.setUiPreferences !== 'function') return unavailable()
   try {
     return await bridge.setUiPreferences(ui)
-  } catch {
-    return callFailed()
+  } catch (error) {
+    return callFailed(error)
   }
 }

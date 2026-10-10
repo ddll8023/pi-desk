@@ -93,6 +93,8 @@ import {
   RUNTIME_CAPABILITIES_CHANNEL,
   RUNTIME_DIAGNOSTICS_CHANNEL,
   RUNTIME_MCP_COMMAND_CHANNEL,
+  RUNTIME_MCP_INSPECT_ABORT_CHANNEL,
+  RUNTIME_MCP_INSPECT_CHANNEL,
   RUNTIME_MCP_STATUS_CHANNEL,
   RUNTIME_PROMPT_CHANNEL,
   RUNTIME_PROJECTION_ACK_CHANNEL,
@@ -108,6 +110,8 @@ import {
 import type {
   CapabilitiesResult,
   McpCommandResult,
+  McpInspectionResult,
+  McpInspectAbortResult,
   McpStatusResult,
   ProjectionBatch,
   ProjectionResult,
@@ -177,7 +181,7 @@ const projectFileIndex = new ProjectFileIndex({
   currentProjectPath: () => projectManager.currentProjectPath()
 })
 /** 认证执行端：管理认证辅助进程，凭据读写全在官方实现内完成。 */
-const authManager = new AuthManager({ store: configStore })
+const authManager = new AuthManager({ store: configStore, isPackaged: app.isPackaged })
 const preferencesManager = new PreferencesManager({ store: configStore })
 const windowState = new WindowState({ store: configStore })
 
@@ -341,6 +345,14 @@ function mcpStatusFailure(code: RuntimeErrorCode, message: string): McpStatusRes
   return { ok: false, error: { code, message } }
 }
 
+function mcpInspectionFailure(code: RuntimeErrorCode, message: string): McpInspectionResult {
+  return { ok: false, error: { code, message } }
+}
+
+function mcpInspectionAbortFailure(code: RuntimeErrorCode, message: string): McpInspectAbortResult {
+  return { ok: false, error: { code, message } }
+}
+
 function projectPathFailure(code: ProjectErrorCode, message: string): ProjectPathResult {
   return { ok: false, error: { code, message } }
 }
@@ -362,21 +374,23 @@ function preferencesFailure(code: PreferencesErrorCode, message: string): Prefer
 }
 
 /** 认证操作失败统一映射为共享契约的错误码；未知异常不向外暴露内部细节。 */
-function authErrorOf(error: unknown): { readonly code: AuthErrorCode; readonly message: string } {
-  if (error instanceof AuthManagerError) return { code: error.code, message: error.message }
-  return { code: 'INTERNAL_ERROR', message: '认证操作失败，请重试。' }
+function authErrorOf(error: unknown): { readonly code: AuthErrorCode; readonly message: string; readonly detail: string | null } {
+  if (error instanceof AuthManagerError) {
+    return { code: error.code, message: error.message, detail: error.detail }
+  }
+  return { code: 'INTERNAL_ERROR', message: '认证操作失败，请重试。', detail: null }
 }
 
-function authStatusFailure(code: AuthErrorCode, message: string): AuthStatusResult {
-  return { ok: false, error: { code, message } }
+function authStatusFailure(code: AuthErrorCode, message: string, detail: string | null = null): AuthStatusResult {
+  return { ok: false, error: { code, message, detail } }
 }
 
-function authFlowFailure(code: AuthErrorCode, message: string): AuthFlowResult {
-  return { ok: false, error: { code, message } }
+function authFlowFailure(code: AuthErrorCode, message: string, detail: string | null = null): AuthFlowResult {
+  return { ok: false, error: { code, message, detail } }
 }
 
-function authLogoutFailure(code: AuthErrorCode, message: string): AuthLogoutResult {
-  return { ok: false, error: { code, message } }
+function authLogoutFailure(code: AuthErrorCode, message: string, detail: string | null = null): AuthLogoutResult {
+  return { ok: false, error: { code, message, detail } }
 }
 
 function extensionUiFailure(code: ExtensionUiErrorCode, message: string): ExtensionUiResult {
@@ -428,9 +442,29 @@ async function chooseDirectoryWithDialog(defaultPath: string): Promise<string | 
   return typeof selected === 'string' && selected.trim() !== '' ? selected : null
 }
 
+/**
+ * 注册 IPC 处理器，并把处理器内部的异常记到主进程 stderr。
+ *
+ * Electron 只把拒绝传给调用方，主进程默认不留任何记录，页面又只看到一句通用文案，
+ * 这类故障就无法从终端或界面定位。异常仍然原样抛出，不改变调用方看到的契约。
+ */
+function handle(
+  channel: string,
+  listener: (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown
+): void {
+  ipcMain.handle(channel, async (event: IpcMainInvokeEvent, ...args: unknown[]) => {
+    try {
+      return await listener(event, ...args)
+    } catch (error) {
+      console.error(`[ipc] ${channel} 处理器抛出异常：`, error)
+      throw error
+    }
+  })
+}
+
 /** 只接受受限的项目选择/添加/移除请求与显式中断确认；不接受任意 channel 或 RPC 内容。 */
 function registerProjectHandlers(pageUrl: string): void {
-  ipcMain.handle(
+  handle(
     PROJECT_CHOOSE_DIRECTORY_CHANNEL,
     async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<ProjectPathResult> => {
       if (!isTrustedCaller(event, pageUrl)) {
@@ -443,7 +477,7 @@ function registerProjectHandlers(pageUrl: string): void {
     }
   )
 
-  ipcMain.handle(
+  handle(
     PROJECT_LIST_CHANNEL,
     async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<ProjectListResult> => {
       if (!isTrustedCaller(event, pageUrl)) {
@@ -456,7 +490,7 @@ function registerProjectHandlers(pageUrl: string): void {
     }
   )
 
-  ipcMain.handle(
+  handle(
     PROJECT_ADD_CHANNEL,
     async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<ProjectListResult> => {
       if (!isTrustedCaller(event, pageUrl)) {
@@ -487,7 +521,7 @@ function registerProjectHandlers(pageUrl: string): void {
     }
   )
 
-  ipcMain.handle(
+  handle(
     PROJECT_REMOVE_CHANNEL,
     async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<ProjectListResult> => {
       if (!isTrustedCaller(event, pageUrl)) {
@@ -515,7 +549,7 @@ function registerProjectHandlers(pageUrl: string): void {
     }
   )
 
-  ipcMain.handle(
+  handle(
     PROJECT_SET_CURRENT_CHANNEL,
     async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<ProjectListResult> => {
       if (!isTrustedCaller(event, pageUrl)) {
@@ -696,7 +730,8 @@ async function startTrustedRuntime(projectPath: string): Promise<RuntimeResult> 
 }
 
 /** Trust 查询与决定接口；决定只接受当前项目，防止页面改写其他项目的记录。 */
-function registerTrustHandlers(pageUrl: string): void {  ipcMain.handle(
+function registerTrustHandlers(pageUrl: string): void {
+  handle(
     TRUST_STATUS_CHANNEL,
     async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<TrustStatusResult> => {
       if (!isTrustedCaller(event, pageUrl)) {
@@ -713,7 +748,7 @@ function registerTrustHandlers(pageUrl: string): void {  ipcMain.handle(
     }
   )
 
-  ipcMain.handle(
+  handle(
     TRUST_DECIDE_CHANNEL,
     async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<TrustDecisionResult> => {
       if (!isTrustedCaller(event, pageUrl)) {
@@ -884,7 +919,7 @@ function registerRuntimeHandlers(pageUrl: string): void {
     }
   )
 
-  /** MCP 登录或退出：只接受动作与服务器名；命令文本与等待期限都由主进程决定。 */
+  /** MCP 登录、退出或重连：只接受动作与服务器名；命令文本与等待期限都由主进程决定。 */
   ipcMain.handle(
     RUNTIME_MCP_COMMAND_CHANNEL,
     async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<McpCommandResult> => {
@@ -902,14 +937,55 @@ function registerRuntimeHandlers(pageUrl: string): void {
       if (Object.keys(fields).some((key) => key !== 'action' && key !== 'serverName')) {
         return mcpStatusFailure('INVALID_REQUEST', 'MCP 登录/退出参数包含未支持的字段。')
       }
-      if (fields.action !== 'login' && fields.action !== 'logout') {
-        return mcpStatusFailure('INVALID_REQUEST', 'MCP 动作只能是 login 或 logout。')
+      if (fields.action !== 'login' && fields.action !== 'logout' && fields.action !== 'reconnect') {
+        return mcpStatusFailure('INVALID_REQUEST', 'MCP 动作只能是 login、logout 或 reconnect。')
       }
       // 服务器名会被拼进固定命令文本，因此只允许字母、数字、点、下划线与连字符。
       if (!isMcpServerName(fields.serverName)) {
         return mcpStatusFailure('INVALID_REQUEST', 'MCP 服务器名只能包含字母、数字、点、下划线与连字符。')
       }
       return runtimeManager.runMcpCommand(fields.action, fields.serverName)
+    }
+  )
+
+  /**
+   * MCP 服务器探测：零参数，主进程用当前项目跑一次固定的 `pi mcp list --json`。
+   * 探测会另起一个 Pi 进程并重新连接所有已启用服务器，不写任何配置文件。
+   * 官方 CLI 不接受信任 flag，探测以未信任项目身份运行，因此这里不做信任拦截。
+   */
+  ipcMain.handle(
+    RUNTIME_MCP_INSPECT_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<McpInspectionResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return mcpInspectionFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 0) {
+        return mcpInspectionFailure('INVALID_REQUEST', 'MCP 探测接口不接受参数。')
+      }
+      const projectPath = projectManager.currentProjectPath()
+      if (projectPath === null) {
+        return mcpInspectionFailure('INVALID_PROJECT_PATH', '请先选择一个项目，再探测 MCP 服务器。')
+      }
+      const result = await runtimeManager.inspectMcpServers(projectPath)
+      // 探测期间项目可能已切换：此时结果属于旧项目，不能当作当前项目的状态交给页面。
+      if (result.ok && projectManager.currentProjectPath() !== projectPath) {
+        return mcpInspectionFailure('INVALID_PROJECT_PATH', '项目已切换，本次探测结果已丢弃。')
+      }
+      return result
+    }
+  )
+
+  /** 中止进行中的 MCP 探测：零参数，只终止主进程自己启动的探测进程。 */
+  ipcMain.handle(
+    RUNTIME_MCP_INSPECT_ABORT_CHANNEL,
+    (event: IpcMainInvokeEvent, ...args: unknown[]): McpInspectAbortResult => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return mcpInspectionAbortFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 0) {
+        return mcpInspectionAbortFailure('INVALID_REQUEST', '中止探测接口不接受参数。')
+      }
+      return runtimeManager.abortMcpInspection()
     }
   )
 
@@ -1340,6 +1416,17 @@ function restrictSession(): void {
   session.defaultSession.on('will-download', (event) => event.preventDefault())
 }
 
+/**
+ * 把已有窗口带到前台；第二个实例启动时调用。窗口已销毁或不存在时什么都不做。
+ */
+function focusMainWindow(): void {
+  const window = mainWindow
+  if (window === null || window.isDestroyed()) return
+  if (window.isMinimized()) window.restore()
+  window.show()
+  window.focus()
+}
+
 async function createWindow(pageUrl: string): Promise<void> {
   // 先应用存储的主题再创建窗口：让首帧媒体查询与窗口背景色都命中正确主题，避免闪烁。
   const preferences = await configStore.readUiPreferences()
@@ -1418,25 +1505,38 @@ app.on('before-quit', (event) => {
   })()
 })
 
-app.whenReady().then(async () => {
-  const pageUrl = getPageUrl()
-  restrictSession()
-  registerAssetProtocol()
-  registerAppInfoHandler(pageUrl)
-  registerRuntimeHandlers(pageUrl)
-  registerExtensionUiHandlers(pageUrl)
-  registerProjectHandlers(pageUrl)
-  registerProjectFileHandlers(pageUrl)
-  registerSessionHandlers(pageUrl)
-  registerTrustHandlers(pageUrl)
-  registerPreferencesHandlers(pageUrl)
-  registerAuthHandlers(pageUrl)
-  runtimeManager.onStatusChanged(broadcastRuntimeStatus)
-  runtimeManager.onProjectionBatch(broadcastRuntimeProjection)
-  runtimeManager.onExtensionUi(broadcastExtensionUi)
-  authManager.onFlowChanged(broadcastAuthFlow)
-  await createWindow(pageUrl)
-}).catch(() => {
-  console.error('Pi Desktop 无法加载桌面页面。')
-  app.exit(1)
-})
+/**
+ * 单实例：同一份 Desktop 配置只能由一个进程写。
+ *
+ * 配置存储是「启动读一次、每次保存写整份文件」，两个进程各自持有内存列表时，后写者会用
+ * 自己过期的列表覆盖磁盘，表现为项目记录被写回或凭空消失。第二个实例直接退出，
+ * 并把已有窗口带到前台（不走 `before-quit`，避免触发关闭链）。
+ */
+if (!app.requestSingleInstanceLock()) {
+  app.exit(0)
+} else {
+  app.on('second-instance', () => focusMainWindow())
+
+  app.whenReady().then(async () => {
+    const pageUrl = getPageUrl()
+    restrictSession()
+    registerAssetProtocol()
+    registerAppInfoHandler(pageUrl)
+    registerRuntimeHandlers(pageUrl)
+    registerExtensionUiHandlers(pageUrl)
+    registerProjectHandlers(pageUrl)
+    registerProjectFileHandlers(pageUrl)
+    registerSessionHandlers(pageUrl)
+    registerTrustHandlers(pageUrl)
+    registerPreferencesHandlers(pageUrl)
+    registerAuthHandlers(pageUrl)
+    runtimeManager.onStatusChanged(broadcastRuntimeStatus)
+    runtimeManager.onProjectionBatch(broadcastRuntimeProjection)
+    runtimeManager.onExtensionUi(broadcastExtensionUi)
+    authManager.onFlowChanged(broadcastAuthFlow)
+    await createWindow(pageUrl)
+  }).catch(() => {
+    console.error('Pi Desktop 无法加载桌面页面。')
+    app.exit(1)
+  })
+}

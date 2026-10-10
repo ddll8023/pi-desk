@@ -1,14 +1,17 @@
 /**
- * 保存 Pi 资源面板的展示状态：`get_commands` 清单、启动诊断、MCP 状态、MCP 登录/退出结果与安全模式启动结果。
+ * 保存 Pi 资源视图的展示状态：`get_commands` 清单、启动诊断、MCP 状态、MCP 服务器探测结果、
+ * MCP 登录/退出/重连结果与安全模式启动结果。
  *
  * 只保存主进程投影的副本，不缓存历史、不解析 Pi 配置文件；清单与诊断都只在 Runtime 就绪时读取，
  * 代际变化后自动重读（资源只在进程启动时加载，重载必须重启 Runtime）。
+ * MCP 服务器探测不依赖运行中的 Runtime，但服务器名与工具列表都只来自官方 CLI 的输出。
  */
 import { defineStore } from 'pinia'
 import { computed, ref, watch } from 'vue'
 import type {
   ExtensionErrorEntry,
   McpCommandAction,
+  McpInspection,
   McpStatus,
   PiResourceEntry,
   PromptDisposition,
@@ -16,7 +19,16 @@ import type {
 } from '../../../shared/runtime-api'
 import { useRuntimeStore } from './runtime'
 import { useSessionStore } from './session'
-import { getDiagnostics, getResources, readMcpStatus, runMcpCommand, startRuntimeSafely } from '../services/resource'
+import { useProjectStore } from './project'
+import {
+  abortMcpInspection,
+  getDiagnostics,
+  getResources,
+  inspectMcpServers,
+  readMcpStatus,
+  runMcpCommand,
+  startRuntimeSafely
+} from '../services/resource'
 
 /** 资源清单的展示状态；`error` 表示清单读取失败，与“确实没有资源”区分。 */
 type ResourcesViewState =
@@ -32,12 +44,19 @@ type McpViewState =
   | { phase: 'ready'; disposition: PromptDisposition; messages: readonly string[] }
   | { phase: 'error'; error: RuntimeError }
 
-/** MCP 登录/退出的展示状态；登录需要用户在浏览器里完成授权，可能等待较久。 */
+/** MCP 登录/退出/重连的展示状态；登录需要用户在浏览器里完成授权，可能等待较久。 */
 type McpCommandViewState =
   | { phase: 'idle' }
-  | { phase: 'running'; action: McpCommandAction }
-  | { phase: 'ready'; action: McpCommandAction; data: McpStatus }
-  | { phase: 'error'; action: McpCommandAction; error: RuntimeError }
+  | { phase: 'running'; action: McpCommandAction; serverName: string }
+  | { phase: 'ready'; action: McpCommandAction; serverName: string; data: McpStatus }
+  | { phase: 'error'; action: McpCommandAction; serverName: string; error: RuntimeError }
+
+/** MCP 服务器探测的展示状态；探测会另起官方 CLI 进程重新连接所有已启用服务器。 */
+type McpInspectViewState =
+  | { phase: 'idle' }
+  | { phase: 'inspecting' }
+  | { phase: 'ready'; data: McpInspection }
+  | { phase: 'error'; error: RuntimeError }
 
 /** 安全模式启动的展示状态；成功只表示本次启动请求被接受，运行状态由 Runtime 快照收敛。 */
 type SafeStartState =
@@ -57,14 +76,16 @@ export const useResourceStore = defineStore('resource', () => {
   const diagnosticsError = ref<RuntimeError | null>(null)
   const mcpView = ref<McpViewState>({ phase: 'idle' })
   const mcpCommandView = ref<McpCommandViewState>({ phase: 'idle' })
-  /** MCP 服务器名输入；它会被主进程校验后拼进固定命令文本。 */
-  const mcpServerName = ref('')
+  const mcpInspectView = ref<McpInspectViewState>({ phase: 'idle' })
   const safeStart = ref<SafeStartState>({ phase: 'idle' })
 
   /** 已读取过的 Runtime 代际；代际变化后重新读取清单与诊断。 */
   let loadedRuntimeId: number | null = null
   let resourcesReading = false
-  let stopWatch: (() => void) | null = null
+  let stopRuntimeWatch: (() => void) | null = null
+  let stopProjectWatch: (() => void) | null = null
+  /** 用户已请求中止本次探测；中止成功后按取消处理，不当作失败展示。 */
+  let inspectionCancelled = false
 
   const runtimeReady = computed(() => runtimeStore.view.phase === 'ready')
   const currentRuntimeId = computed(() => (
@@ -74,8 +95,6 @@ export const useResourceStore = defineStore('resource', () => {
   const skills = computed(() => entries.value.filter((entry) => entry.kind === 'skill'))
   const prompts = computed(() => entries.value.filter((entry) => entry.kind === 'prompt'))
   const commands = computed(() => entries.value.filter((entry) => entry.kind === 'extension'))
-  /** 服务器名与主进程一致：只允许字母、数字、点、下划线与连字符，长度上限 64。 */
-  const mcpServerNameValid = computed(() => /^[A-Za-z0-9._-]{1,64}$/.test(mcpServerName.value.trim()))
 
   /** 清空与 Runtime 代际绑定的展示状态；诊断与 MCP 相关状态（含登录/退出结果）在离开就绪后不再有意义。 */
   function resetViews(): void {
@@ -87,6 +106,7 @@ export const useResourceStore = defineStore('resource', () => {
     diagnosticsError.value = null
     mcpView.value = { phase: 'idle' }
     mcpCommandView.value = { phase: 'idle' }
+    mcpInspectView.value = { phase: 'idle' }
     loadedRuntimeId = null
   }
 
@@ -176,23 +196,50 @@ export const useResourceStore = defineStore('resource', () => {
   }
 
   /**
-   * MCP 服务器 OAuth 登录或退出：命令文本由主进程用服务器名拼出。
+   * 探测 MCP 服务器状态：由主进程另起一次固定的 `pi mcp list --json`，结果只反映探测那一刻。
+   * 正在探测时不重复发起；探测期间切换了项目就丢弃结果，不把旧项目的状态当成当前项目的。
+   */
+  async function inspectServers(): Promise<void> {
+    if (mcpInspectView.value.phase === 'inspecting') return
+
+    const projectStore = useProjectStore()
+    const projectId = projectStore.currentProjectId
+    inspectionCancelled = false
+    mcpInspectView.value = { phase: 'inspecting' }
+    const result = await inspectMcpServers()
+    if (inspectionCancelled || projectStore.currentProjectId !== projectId) {
+      mcpInspectView.value = { phase: 'idle' }
+      return
+    }
+    mcpInspectView.value = result.ok
+      ? { phase: 'ready', data: result.data }
+      : { phase: 'error', error: result.error }
+  }
+
+  /**
+   * 中止进行中的探测；中止请求没有生效时保持等待，
+   * 让原请求的结果或错误自己收敛，不把未确认的中止当成已完成。
+   */
+  async function cancelInspection(): Promise<void> {
+    if (mcpInspectView.value.phase !== 'inspecting') return
+    inspectionCancelled = true
+    const result = await abortMcpInspection()
+    if (!result.ok || !result.data.aborted) inspectionCancelled = false
+  }
+
+  /**
+   * MCP 服务器 OAuth 登录、退出或重连：命令文本由主进程用服务器名拼出。
    * 登录需要用户在浏览器里完成授权，耗时较久；期间的浏览器地址与 redirect URL 输入
    * 由 Pi 经既有 Extension UI 通道给出，这里只展示本次请求的捕获文本。
    */
-  async function runMcpServerCommand(action: McpCommandAction): Promise<void> {
-    const serverName = mcpServerName.value.trim()
-    if (!runtimeReady.value || mcpCommandView.value.phase === 'running' || !mcpServerNameValid.value) return
+  async function runMcpServerCommand(action: McpCommandAction, serverName: string): Promise<void> {
+    if (mcpCommandView.value.phase === 'running' || serverName === '') return
 
-    mcpCommandView.value = { phase: 'running', action }
+    mcpCommandView.value = { phase: 'running', action, serverName }
     const result = await runMcpCommand(action, serverName)
-    if (!runtimeReady.value) {
-      mcpCommandView.value = { phase: 'idle' }
-      return
-    }
     mcpCommandView.value = result.ok
-      ? { phase: 'ready', action, data: result.data }
-      : { phase: 'error', action, error: result.error }
+      ? { phase: 'ready', action, serverName, data: result.data }
+      : { phase: 'error', action, serverName, error: result.error }
   }
 
   /**
@@ -213,10 +260,15 @@ export const useResourceStore = defineStore('resource', () => {
     await useSessionStore().refresh()
   }
 
-  /** 应用启动时读取一次，并监听 Runtime 代际变化自动重读；重复调用无副作用。 */
+  /**
+   * 应用启动时读取一次，并监听 Runtime 代际与当前项目的变化；重复调用无副作用。
+   * 项目监听只丢弃 MCP 探测结果：它与 Runtime 代际无关，但只对发起时的项目成立，
+   * 而 Runtime 未启动时项目切换不会引起代际变化。
+   */
   function initialize(): void {
-    if (stopWatch === null) {
-      stopWatch = watch(currentRuntimeId, (runtimeId) => {
+    const projectStore = useProjectStore()
+    if (stopRuntimeWatch === null) {
+      stopRuntimeWatch = watch(currentRuntimeId, (runtimeId) => {
         if (runtimeId === null) {
           resetViews()
           return
@@ -224,13 +276,23 @@ export const useResourceStore = defineStore('resource', () => {
         void refresh()
       })
     }
+    if (stopProjectWatch === null) {
+      stopProjectWatch = watch(
+        () => projectStore.currentProjectId,
+        () => {
+          mcpInspectView.value = { phase: 'idle' }
+        }
+      )
+    }
     void refresh()
   }
 
   /** 应用卸载时释放监听；重复调用无副作用。 */
   function dispose(): void {
-    stopWatch?.()
-    stopWatch = null
+    stopRuntimeWatch?.()
+    stopRuntimeWatch = null
+    stopProjectWatch?.()
+    stopProjectWatch = null
   }
 
   return {
@@ -246,12 +308,13 @@ export const useResourceStore = defineStore('resource', () => {
     diagnosticsError,
     mcpView,
     mcpCommandView,
-    mcpServerName,
-    mcpServerNameValid,
+    mcpInspectView,
     safeStart,
     runtimeReady,
     refresh,
     requestMcpStatus,
+    inspectServers,
+    cancelInspection,
     runMcpServerCommand,
     startSafely,
     initialize,

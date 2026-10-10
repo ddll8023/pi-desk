@@ -94,6 +94,8 @@ import {
   RUNTIME_CAPABILITIES_CHANNEL,
   RUNTIME_DIAGNOSTICS_CHANNEL,
   RUNTIME_MCP_COMMAND_CHANNEL,
+  RUNTIME_MCP_INSPECT_ABORT_CHANNEL,
+  RUNTIME_MCP_INSPECT_CHANNEL,
   RUNTIME_MCP_STATUS_CHANNEL,
   RUNTIME_PROMPT_CHANNEL,
   RUNTIME_PROJECTION_ACK_CHANNEL,
@@ -107,6 +109,8 @@ import {
   RUNTIME_STATUS_EVENT,
   isCapabilitiesResult,
   isMcpCommandResult,
+  isMcpInspectionResult,
+  isMcpInspectAbortResult,
   isMcpStatusResult,
   isProjectionBatch,
   isProjectionResult,
@@ -120,6 +124,8 @@ import type {
   CapabilitiesResult,
   McpCommandAction,
   McpCommandResult,
+  McpInspectionResult,
+  McpInspectAbortResult,
   McpStatusResult,
   ProjectionBatch,
   ProjectionResult,
@@ -147,6 +153,8 @@ const INVALID_EXTENSION_UI_RESPONSE = '桌面接口返回了无法识别的 Exte
 const INVALID_RESOURCES_RESPONSE = '桌面接口返回了无法识别的资源清单。'
 const INVALID_DIAGNOSTICS_RESPONSE = '桌面接口返回了无法识别的诊断结果。'
 const INVALID_MCP_STATUS_RESPONSE = '桌面接口返回了无法识别的 MCP 状态结果。'
+const INVALID_MCP_INSPECTION_RESPONSE = '桌面接口返回了无法识别的 MCP 探测结果。'
+const INVALID_MCP_INSPECT_ABORT_RESPONSE = '桌面接口返回了无法识别的中止探测结果。'
 const INVALID_AUTH_STATUS_RESPONSE = '桌面接口返回了无法识别的认证状态。'
 const INVALID_AUTH_FLOW_RESPONSE = '桌面接口返回了无法识别的登录流程状态。'
 
@@ -206,16 +214,24 @@ function invalidMcpStatusResponse(): McpStatusResult {
   return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_MCP_STATUS_RESPONSE } }
 }
 
+function invalidMcpInspectionResponse(): McpInspectionResult {
+  return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_MCP_INSPECTION_RESPONSE } }
+}
+
+function invalidMcpInspectAbortResponse(): McpInspectAbortResult {
+  return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_MCP_INSPECT_ABORT_RESPONSE } }
+}
+
 function invalidAuthStatusResponse(): AuthStatusResult {
-  return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_AUTH_STATUS_RESPONSE } }
+  return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_AUTH_STATUS_RESPONSE, detail: null } }
 }
 
 function invalidAuthFlowResponse(): AuthFlowResult {
-  return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_AUTH_FLOW_RESPONSE } }
+  return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_AUTH_FLOW_RESPONSE, detail: null } }
 }
 
 function invalidAuthLogoutResponse(): AuthLogoutResult {
-  return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_AUTH_STATUS_RESPONSE } }
+  return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_AUTH_STATUS_RESPONSE, detail: null } }
 }
 
 const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionApi & PreferencesApi & TrustApi & ExtensionUiApi & AuthApi = {
@@ -365,10 +381,22 @@ const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionAp
     return isMcpStatusResult(response) ? response : invalidMcpStatusResponse()
   },
 
-  /** MCP 登录/退出：只搬运已声明的字段；命令文本由主进程拼出。 */
+  /** MCP 登录/退出/重连：只搬运已声明的字段；命令文本由主进程拼出。 */
   async runRuntimeMcpCommand(action: McpCommandAction, serverName: string): Promise<McpCommandResult> {
     const response: unknown = await ipcRenderer.invoke(RUNTIME_MCP_COMMAND_CHANNEL, { action, serverName })
     return isMcpCommandResult(response) ? response : invalidMcpStatusResponse()
+  },
+
+  /** MCP 服务器探测：零参数，命令与工作目录都由主进程决定。 */
+  async inspectRuntimeMcpServers(): Promise<McpInspectionResult> {
+    const response: unknown = await ipcRenderer.invoke(RUNTIME_MCP_INSPECT_CHANNEL)
+    return isMcpInspectionResult(response) ? response : invalidMcpInspectionResponse()
+  },
+
+  /** 中止进行中的 MCP 探测：零参数。 */
+  async abortRuntimeMcpInspection(): Promise<McpInspectAbortResult> {
+    const response: unknown = await ipcRenderer.invoke(RUNTIME_MCP_INSPECT_ABORT_CHANNEL)
+    return isMcpInspectAbortResult(response) ? response : invalidMcpInspectAbortResponse()
   },
 
   async startRuntimeSafely(): Promise<RuntimeResult> {

@@ -30,6 +30,7 @@ const {
   currentProjectId,
   choosing,
   switching,
+  storageNotice: projectStorageNotice,
   actionError: projectActionError
 } = storeToRefs(projectStore)
 const { view: runtimeView } = storeToRefs(runtimeStore)
@@ -179,6 +180,9 @@ function projectColorIndex(id: string): number {
         </AppButton>
       </header>
       <div class="project-sidebar-scroll scroll-area">
+        <p v-if="projectStorageNotice" role="status" class="status-notice status-notice-warn mx-2 my-2">
+          {{ projectStorageNotice }}
+        </p>
         <p v-if="projectActionError" role="alert" class="px-2 py-2 text-xs text-desk-danger">
           {{ projectActionError.message }}
         </p>

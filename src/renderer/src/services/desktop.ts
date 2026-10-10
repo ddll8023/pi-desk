@@ -14,10 +14,14 @@ export async function getAppInfo(): Promise<AppInfoResult> {
       }
     }
     return await bridge.getAppInfo()
-  } catch {
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error)
     return {
       ok: false,
-      error: { code: 'BRIDGE_CALL_FAILED', message: '桌面桥接调用失败，可以重试连接。' }
+      error: {
+        code: 'BRIDGE_CALL_FAILED',
+        message: `桌面桥接调用失败，可以重试连接：${detail}`
+      }
     }
   }
 }

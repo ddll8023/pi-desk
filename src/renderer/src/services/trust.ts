@@ -15,10 +15,12 @@ function unavailable(): TrustStatusResult {
   }
 }
 
-function callFailed(): TrustStatusResult {
+/** 桥接调用异常：保留原始错误文本，避免真实原因被固定文案盖掉。 */
+function callFailed(error: unknown): TrustStatusResult {
+  const detail = error instanceof Error ? error.message : String(error)
   return {
     ok: false,
-    error: { code: 'BRIDGE_CALL_FAILED', message: '桌面桥接调用失败，可以重试。' }
+    error: { code: 'BRIDGE_CALL_FAILED', message: `桌面桥接调用失败，可以重试：${detail}` }
   }
 }
 
@@ -28,8 +30,8 @@ export async function getTrustStatus(): Promise<TrustStatusResult> {
   if (!bridge || typeof bridge.getTrustStatus !== 'function') return unavailable()
   try {
     return await bridge.getTrustStatus()
-  } catch {
-    return callFailed()
+  } catch (error) {
+    return callFailed(error)
   }
 }
 
@@ -50,7 +52,7 @@ export async function decideTrust(
   }
   try {
     return await bridge.decideTrust(projectPath, decision)
-  } catch {
-    return callFailed()
+  } catch (error) {
+    return callFailed(error)
   }
 }

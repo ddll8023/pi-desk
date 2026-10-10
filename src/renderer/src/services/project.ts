@@ -13,10 +13,15 @@ function unavailable(): { ok: false; error: ProjectError } {
   }
 }
 
-function callFailed(): { ok: false; error: ProjectError } {
+/**
+ * 桥接调用异常：保留原始错误文本。调用被拒的真实原因（处理器未注册、参数无法克隆等）
+ * 只存在于这个异常里，用固定文案盖掉就只能靠猜。
+ */
+function callFailed(error: unknown): { ok: false; error: ProjectError } {
+  const detail = error instanceof Error ? error.message : String(error)
   return {
     ok: false,
-    error: { code: 'BRIDGE_CALL_FAILED', message: '桌面桥接调用失败，可以重试。' }
+    error: { code: 'BRIDGE_CALL_FAILED', message: `桌面桥接调用失败，可以重试：${detail}` }
   }
 }
 
@@ -26,8 +31,8 @@ export async function chooseProjectDirectory(): Promise<ProjectPathResult> {
   if (!bridge || typeof bridge.chooseProjectDirectory !== 'function') return unavailable()
   try {
     return await bridge.chooseProjectDirectory()
-  } catch {
-    return callFailed()
+  } catch (error) {
+    return callFailed(error)
   }
 }
 
@@ -36,8 +41,8 @@ export async function listProjects(): Promise<ProjectListResult> {
   if (!bridge || typeof bridge.listProjects !== 'function') return unavailable()
   try {
     return await bridge.listProjects()
-  } catch {
-    return callFailed()
+  } catch (error) {
+    return callFailed(error)
   }
 }
 
@@ -50,8 +55,23 @@ export async function setCurrentProject(
   if (!bridge || typeof bridge.setCurrentProject !== 'function') return unavailable()
   try {
     return await bridge.setCurrentProject(path, allowInterrupt)
-  } catch {
-    return callFailed()
+  } catch (error) {
+    return callFailed(error)
+  }
+}
+
+/**
+ * 把信任状态重建为普通对象再传过桥。
+ *
+ * contextBridge 无法克隆 Vue 的响应式代理：直接从 `ref` 里取出对象传参，会在渲染层就抛出
+ * "An object could not be cloned."，主进程根本收不到请求，而调用方只能看到一句通用的调用失败。
+ * 在服务层重建载荷，使任何调用方都不会再踩这一点。
+ */
+function toPlainTrustStatus(status: TrustStatus): TrustStatus {
+  return {
+    projectPath: status.projectPath,
+    decision: status.decision,
+    resources: status.resources.map((resource) => ({ path: resource.path, kind: resource.kind }))
   }
 }
 
@@ -65,9 +85,9 @@ export async function addProject(
   const bridge = window.desktop
   if (!bridge || typeof bridge.addProject !== 'function') return unavailable()
   try {
-    return await bridge.addProject(path, trustStatus, trustDecision, allowInterrupt)
-  } catch {
-    return callFailed()
+    return await bridge.addProject(path, toPlainTrustStatus(trustStatus), trustDecision, allowInterrupt)
+  } catch (error) {
+    return callFailed(error)
   }
 }
 
@@ -80,7 +100,7 @@ export async function removeProject(
   if (!bridge || typeof bridge.removeProject !== 'function') return unavailable()
   try {
     return await bridge.removeProject(projectId, allowInterrupt)
-  } catch {
-    return callFailed()
+  } catch (error) {
+    return callFailed(error)
   }
 }

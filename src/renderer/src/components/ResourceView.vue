@@ -1,0 +1,664 @@
+<!-- Pi 资源视图：按「资源 / MCP / 诊断」三段展示 Pi 提供的 Skills、Prompt Templates、扩展命令、MCP 连接状态与加载诊断。
+     资源清单只来自 Pi 的 `get_commands`；MCP 的实时状态来自运行中 Runtime 的 `/mcp` 输出；
+     结构化服务器列表来自官方 CLI 的 `pi mcp list --json`，它会另起一个 Pi 进程重连所有已启用服务器，
+     因此只在用户显式请求时执行。本视图不解析、不生成也不修改 Pi 的任何配置文件。 -->
+<script setup lang="ts">
+import { computed, ref } from 'vue'
+import { storeToRefs } from 'pinia'
+import type { McpCommandAction, PiResourceEntry } from '../../../shared/runtime-api'
+import { useProjectStore } from '../stores/project'
+import { useResourceStore } from '../stores/resource'
+import { useSessionStore } from '../stores/session'
+import { copyText } from '../clipboard'
+import AppButton from './ui/AppButton.vue'
+import ConfirmDialog from './ConfirmDialog.vue'
+
+type ResourceTab = 'resources' | 'mcp' | 'diagnostics'
+
+const resourceStore = useResourceStore()
+const sessionStore = useSessionStore()
+const projectStore = useProjectStore()
+const {
+  resourcesView,
+  diagnostics,
+  extensionErrors,
+  diagnosticsError,
+  diagnosticsLoading,
+  mcpView,
+  mcpCommandView,
+  mcpInspectView,
+  safeStart,
+  runtimeReady,
+  resourcesTruncated
+} = storeToRefs(resourceStore)
+const { currentProject } = storeToRefs(projectStore)
+
+const tab = ref<ResourceTab>('resources')
+/** 展开详情的 MCP 服务器名；一次只展开一个，避免列表被同时撑开。 */
+const expandedServer = ref<string | null>(null)
+/** 待确认的凭据删除目标；确认后才发出 logout 命令。 */
+const pendingCredentialRemoval = ref<string | null>(null)
+/** 最近一次复制成功的区块标识，只用于给出「已复制」反馈。 */
+const copiedBlock = ref<string | null>(null)
+/** 最近一次复制失败的区块标识；失败必须可见，不能停在「复制」。 */
+const failedBlock = ref<string | null>(null)
+/** 探测不可用时的手动回退输入；名字仍由主进程重新校验后才拼进固定命令。 */
+const fallbackServerName = ref('')
+
+/** 连接动作都要经运行中的 Runtime；服务器名与主进程保持一致，只允许字母、数字、点、下划线与连字符。 */
+const commandReady = computed(() => runtimeReady.value)
+const fallbackUsable = computed(() => (
+  runtimeReady.value && /^[A-Za-z0-9._-]{1,64}$/.test(fallbackServerName.value.trim())
+))
+
+/** 资源分组只按 `get_commands` 的来源分类展示，不额外推断归属。 */
+const groups = computed(() => [
+  {
+    key: 'skill',
+    title: 'Skills',
+    hint: '发送 /skill:<名称> 可强制加载某个技能。',
+    empty: '当前 Runtime 没有加载任何 Skill。',
+    items: resourceStore.skills
+  },
+  {
+    key: 'prompt',
+    title: 'Prompt Templates',
+    hint: '发送 /<名称> 展开模板，参数追加在其后。',
+    empty: '当前 Runtime 没有加载任何 Prompt Template。',
+    items: resourceStore.prompts
+  },
+  {
+    key: 'extension',
+    title: '扩展命令',
+    hint: '由 Extensions 注册的命令，发送 /<名称> 执行。',
+    empty: '当前 Runtime 没有注册扩展命令。',
+    items: resourceStore.commands
+  }
+])
+
+/** 默认展开第一个有内容的分组：首屏先给出三组各自的数量，需要时再展开。 */
+const openGroupKey = computed(() => groups.value.find((group) => group.items.length > 0)?.key ?? null)
+const resourceCount = computed(() => groups.value.reduce((total, group) => total + group.items.length, 0))
+const inspectedServers = computed(() => (
+  mcpInspectView.value.phase === 'ready' ? mcpInspectView.value.data.servers : null
+))
+/** 诊断标签上的计数只统计真的出问题的条数，正常时不加噪声。 */
+const diagnosticCount = computed(() => diagnostics.value.length + extensionErrors.value.length)
+
+const tabs = computed(() => [
+  { key: 'resources' as const, label: '资源', count: resourceCount.value > 0 ? resourceCount.value : null },
+  { key: 'mcp' as const, label: 'MCP', count: inspectedServers.value?.length ?? null },
+  { key: 'diagnostics' as const, label: '诊断', count: diagnosticCount.value > 0 ? diagnosticCount.value : null }
+])
+
+/** 官方 CLI 的状态取值到中文标签；未知取值原样展示，不猜测含义。 */
+const SERVER_STATE_LABELS: Readonly<Record<string, string>> = {
+  connected: '已连接',
+  connecting: '连接中',
+  'needs-auth': '需要登录',
+  failed: '连接失败',
+  disconnected: '已断开',
+  closed: '已关闭',
+  disabled: '未启用'
+}
+
+/** exposure 取值到中文标签；未知取值原样展示。 */
+const EXPOSURE_LABELS: Readonly<Record<string, string>> = {
+  direct: '直接可用',
+  codemode: 'codemode',
+  deferred: '按需检索',
+  hidden: '不暴露'
+}
+
+/** 调用方式与 Pi 一致：`get_commands` 已把 Skill 规范成 `skill:<名称>`，三类命令都是 `/<名称>`。 */
+function invocation(entry: PiResourceEntry): string {
+  return `/${entry.name}`
+}
+
+function scopeLabel(scope: string | null): string {
+  switch (scope) {
+    case 'user': return '用户级'
+    case 'project': return '项目级'
+    case 'temporary': return '本次运行'
+    default: return '来源未知'
+  }
+}
+
+/** 包资源带 baseDir；其他情况只如实说明直接加载或归属未知。 */
+function originLabel(entry: PiResourceEntry): string {
+  if (entry.origin === 'package') {
+    return entry.baseDir === null ? '来自包' : `来自包 ${entry.baseDir}`
+  }
+  if (entry.origin === 'top-level') return '直接加载'
+  return '归属未知'
+}
+
+/** 最近一次连接动作的展示信息；没有动作时为 null。模板只用这个对象，不直接读联合类型的成员。 */
+const commandBanner = computed(() => {
+  const view = mcpCommandView.value
+  if (view.phase === 'idle') return null
+  return {
+    title: commandLabel(view.action, view.serverName),
+    running: view.phase === 'running',
+    error: view.phase === 'error' ? view.error.message : null,
+    messages: view.phase === 'ready' ? view.data.messages : [],
+    disposition: view.phase === 'ready' ? view.data.disposition : null
+  }
+})
+
+function stateLabel(state: string): string {
+  return SERVER_STATE_LABELS[state] ?? state
+}
+
+/** 状态点的语义分类；颜色只是辅助，状态标签始终同时出现。 */
+function stateTone(state: string): string {
+  switch (state) {
+    case 'connected': return 'status-dot-ok'
+    case 'failed': return 'status-dot-error'
+    case 'connecting':
+    case 'needs-auth':
+    case 'disconnected': return 'status-dot-warn'
+    default: return 'status-dot-idle'
+  }
+}
+
+function exposureLabel(exposure: string): string {
+  return EXPOSURE_LABELS[exposure] ?? exposure
+}
+
+function serverScopeLabel(scope: string): string {
+  if (scope === 'project') return '项目级'
+  if (scope === 'global') return '用户级'
+  return scope
+}
+
+/** 最近一次连接动作的标题；动作与服务器名都来自本次请求，不重新推断。 */
+function commandLabel(action: McpCommandAction, serverName: string): string {
+  switch (action) {
+    case 'login': return `登录 ${serverName}`
+    case 'logout': return `删除 ${serverName} 的已保存凭据`
+    case 'reconnect': return `重连 ${serverName}`
+  }
+}
+
+function toggleServer(name: string): void {
+  expandedServer.value = expandedServer.value === name ? null : name
+}
+
+function runFallbackCommand(action: McpCommandAction): void {
+  void resourceStore.runMcpServerCommand(action, fallbackServerName.value.trim())
+}
+
+/** 重启式重载：复用既有的中断确认链，让 Pi 重新读取资源与模型快照。 */
+function reload(): void {
+  void sessionStore.reloadCurrent()
+}
+
+/** 复制到剪贴板；成功与失败都就地反馈，不改变页面其他状态。 */
+async function copy(key: string, text: string): Promise<void> {
+  const copied = await copyText(text)
+  copiedBlock.value = copied ? key : null
+  failedBlock.value = copied ? null : key
+}
+
+function copyLabel(key: string): string {
+  if (copiedBlock.value === key) return '已复制'
+  return failedBlock.value === key ? '复制失败' : '复制'
+}
+
+/** 凭据删除不可逆：先经确认对话框，确认后才把命令交给主进程。 */
+function confirmCredentialRemoval(): void {
+  const serverName = pendingCredentialRemoval.value
+  pendingCredentialRemoval.value = null
+  if (serverName === null) return
+  void resourceStore.runMcpServerCommand('logout', serverName)
+}
+</script>
+
+<template>
+  <div class="space-y-4">
+    <header>
+      <h1 class="text-xl font-semibold tracking-tight">Pi 资源</h1>
+      <p class="mt-1 text-sm text-desk-muted">
+        Pi 只在 Runtime 启动时读取资源与 MCP 配置；改动配置后需要重启 Runtime 才会生效。
+      </p>
+    </header>
+
+    <div class="segment" role="tablist" aria-label="Pi 资源分区">
+      <AppButton
+        v-for="option in tabs"
+        :key="option.key"
+        variant="unstyled"
+        class="segment-option"
+        role="tab"
+        :aria-selected="tab === option.key"
+        :class="tab === option.key ? 'is-selected' : ''"
+        @click="tab = option.key"
+      >
+        {{ option.label }}
+        <span v-if="option.count !== null" class="segment-option-meta">{{ option.count }}</span>
+      </AppButton>
+    </div>
+
+    <!-- 资源：清单来自 get_commands，按来源分三组，默认只展开第一个有内容的分组。 -->
+    <template v-if="tab === 'resources'">
+      <p v-if="!runtimeReady" role="status" class="status-notice">
+        Runtime 未就绪，没有可读取的资源清单。先在左侧会话列表打开或新建会话；
+        上一轮启动失败时可在「诊断」里用安全模式启动。
+      </p>
+      <div v-else class="flex flex-wrap items-center gap-2">
+        <AppButton
+          :disabled="resourcesView.phase === 'loading'"
+          @click="resourceStore.refresh()"
+        >
+          {{ resourcesView.phase === 'loading' ? '正在读取…' : '重新读取' }}
+        </AppButton>
+        <AppButton
+          :disabled="sessionStore.opening"
+          @click="reload"
+        >
+          {{ sessionStore.opening ? '正在重新加载…' : '重启 Runtime 以重新加载' }}
+        </AppButton>
+      </div>
+
+      <p
+        v-if="runtimeReady && resourcesView.phase === 'error'"
+        role="alert"
+        class="status-notice status-notice-error"
+      >
+        {{ resourcesView.error.message }}
+      </p>
+
+      <template v-if="runtimeReady && resourcesView.phase === 'ready'">
+        <details
+          v-for="group in groups"
+          :key="group.key"
+          class="fold-group"
+          :open="group.key === openGroupKey"
+        >
+          <summary>
+            <span class="disclosure"></span>
+            <span>{{ group.title }}</span>
+            <span class="chip">{{ group.items.length }}</span>
+          </summary>
+          <div class="fold-group-body">
+            <p class="hint-text">{{ group.hint }}</p>
+            <p v-if="group.items.length === 0" class="hint-text">{{ group.empty }}</p>
+            <ul v-else class="space-y-1.5">
+              <li
+                v-for="entry in group.items"
+                :key="`${group.key}-${entry.name}`"
+                class="list-card"
+              >
+                <p class="font-mono text-xs text-desk-ink">{{ invocation(entry) }}</p>
+                <p v-if="entry.description !== null" class="mt-0.5 break-words text-2xs">
+                  {{ entry.description }}
+                </p>
+                <p class="mt-1 flex flex-wrap items-center gap-1.5 text-2xs text-desk-muted">
+                  <span class="chip">{{ scopeLabel(entry.scope) }}</span>
+                  <span>{{ originLabel(entry) }}</span>
+                </p>
+                <p v-if="entry.path !== null" class="mt-0.5 break-all font-mono text-2xs text-desk-muted">
+                  {{ entry.path }}
+                </p>
+              </li>
+            </ul>
+          </div>
+        </details>
+
+        <p v-if="resourcesTruncated" class="status-notice">
+          清单超过展示上限，这里只显示前一部分；完整的资源加载结果以 Pi 侧为准。
+        </p>
+      </template>
+    </template>
+
+    <!-- MCP：运行中 Runtime 的原始输出与官方 CLI 的结构化探测，两者是两套独立连接。 -->
+    <template v-else-if="tab === 'mcp'">
+      <section class="panel-section">
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <h2 class="panel-section-title">运行中 Runtime 的连接状态</h2>
+          <span class="chip font-mono">/mcp</span>
+        </div>
+        <p class="hint-text">
+          这是 Pi 的 <span class="font-mono">/mcp</span> 原始输出，反映当前 Runtime 实际加载的连接；
+          读取要等已启用服务器连接完成，可能较慢，超时只表示结果未知。
+        </p>
+        <AppButton
+          :disabled="!runtimeReady || mcpView.phase === 'requesting'"
+          @click="resourceStore.requestMcpStatus()"
+        >
+          {{ mcpView.phase === 'requesting' ? '正在读取…' : '读取状态' }}
+        </AppButton>
+        <p v-if="!runtimeReady" class="hint-text">Runtime 未就绪；先打开或新建会话。</p>
+        <p v-if="mcpView.phase === 'error'" role="alert" class="status-notice status-notice-error">
+          {{ mcpView.error.message }}
+        </p>
+        <template v-else-if="mcpView.phase === 'ready'">
+          <div v-if="mcpView.messages.length > 0" class="technical-detail">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <span class="text-2xs text-desk-muted">Pi 的原始输出</span>
+              <AppButton
+                variant="unstyled"
+                class="copy-button"
+                @click="copy('mcp-status', mcpView.messages.join('\n'))"
+              >
+                {{ copyLabel('mcp-status') }}
+              </AppButton>
+            </div>
+            <pre class="technical-detail-text">{{ mcpView.messages.join('\n') }}</pre>
+          </div>
+          <p v-else class="hint-text">
+            本次请求没有捕获到状态文本；命令可能已由其他 Extension 接管。
+          </p>
+        </template>
+      </section>
+
+      <section class="panel-section">
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <h2 class="panel-section-title">服务器列表</h2>
+          <span v-if="inspectedServers !== null" class="chip">{{ inspectedServers.length }} 个</span>
+        </div>
+        <p class="hint-text">
+          用官方 CLI 的 <span class="font-mono">pi mcp list --json</span> 逐个连接已启用服务器并读取状态、工具与错误。
+          它会另起一个 Pi 进程，stdio 服务器会被再启动一次；结果只反映探测那一刻，与运行中 Runtime 的连接可能不同。
+          探测以未信任项目身份运行：项目里的 <span class="font-mono">.pi/mcp.json</span> 不会被读取，Pi 会在下方说明。
+          探测只读，不写任何配置文件。
+        </p>
+        <div class="flex flex-wrap items-center gap-2">
+          <AppButton
+            :disabled="currentProject === null || mcpInspectView.phase === 'inspecting'"
+            @click="resourceStore.inspectServers()"
+          >
+            {{ mcpInspectView.phase === 'inspecting' ? '正在探测…' : '探测连接状态' }}
+          </AppButton>
+          <AppButton
+            v-if="mcpInspectView.phase === 'inspecting'"
+            @click="resourceStore.cancelInspection()"
+          >
+            取消探测
+          </AppButton>
+        </div>
+        <p v-if="mcpInspectView.phase === 'inspecting'" class="hint-text">
+          正在逐个连接已启用服务器，可能较慢；可以随时取消，取消只终止这次探测，不改动任何配置。
+          stdio 服务器会在 stdin 关闭后自行退出；不读 stdin 的服务器在取消或超时后可能继续存在。
+        </p>
+        <p v-if="currentProject === null" class="hint-text">先在左侧选择一个项目，再探测 MCP 服务器。</p>
+
+        <p v-if="!runtimeReady" class="hint-text">
+          登录、退出凭据与重连都要经运行中的 Runtime；Runtime 未就绪时这些动作不可用，
+          但探测服务器列表不受影响。
+        </p>
+
+        <p v-if="mcpInspectView.phase === 'error'" role="alert" class="status-notice status-notice-error">
+          {{ mcpInspectView.error.message }}
+        </p>
+
+        <!-- 探测不可用时的回退：仍可对已知的服务器名执行连接动作，名字由主进程校验。 -->
+        <div v-if="mcpInspectView.phase === 'error'" class="space-y-2">
+          <p class="hint-text">
+            探测不可用时，仍可直接对已知服务器名执行连接动作；
+            名字只能包含字母、数字、点、下划线与连字符。
+          </p>
+          <input
+            v-model="fallbackServerName"
+            type="text"
+            placeholder="服务器名，例如 radius"
+            autocomplete="off"
+            spellcheck="false"
+            class="text-control"
+          >
+          <div class="flex flex-wrap items-center gap-2">
+            <AppButton
+              variant="compact"
+              :disabled="!fallbackUsable || mcpCommandView.phase === 'running'"
+              @click="runFallbackCommand('reconnect')"
+            >
+              重连
+            </AppButton>
+            <AppButton
+              variant="compact"
+              :disabled="!fallbackUsable || mcpCommandView.phase === 'running'"
+              @click="runFallbackCommand('login')"
+            >
+              登录（OAuth）
+            </AppButton>
+            <AppButton
+              variant="quiet-danger"
+              :disabled="!fallbackUsable || mcpCommandView.phase === 'running'"
+              @click="pendingCredentialRemoval = fallbackServerName.trim()"
+            >
+              删除已保存凭据
+            </AppButton>
+          </div>
+        </div>
+
+        <template v-else-if="mcpInspectView.phase === 'ready'">
+          <p v-if="mcpInspectView.data.note !== null" role="status" class="status-notice status-notice-warn">
+            部分配置未参与本次探测，Pi 的说明：{{ mcpInspectView.data.note }}
+          </p>
+
+          <div v-if="mcpInspectView.data.configErrors.length > 0" class="technical-detail">
+            <span class="text-2xs text-desk-muted">Pi 跳过或拒绝的配置条目</span>
+            <pre class="technical-detail-text">{{ mcpInspectView.data.configErrors.join('\n') }}</pre>
+          </div>
+
+          <p v-if="mcpInspectView.data.servers.length === 0" class="hint-text">
+            没有配置任何 MCP 服务器。添加或删除服务器请用 Pi 自己的命令（例如 <span class="font-mono">pi mcp add</span>），
+            这里不修改 Pi 的配置。
+          </p>
+          <ul v-else class="space-y-1.5">
+            <li
+              v-for="server in mcpInspectView.data.servers"
+              :key="server.name"
+              class="list-card"
+            >
+              <div class="flex flex-wrap items-center justify-between gap-2">
+                <p class="flex min-w-0 flex-wrap items-center gap-2 text-sm font-medium">
+                  <span class="status-dot" :class="stateTone(server.state)"></span>
+                  <span>{{ server.name }}</span>
+                  <span class="text-2xs font-normal text-desk-muted">{{ stateLabel(server.state) }}</span>
+                </p>
+                <span class="chip">{{ server.tools.length }} 个工具</span>
+              </div>
+
+              <p class="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-2xs text-desk-muted">
+                <span class="chip">{{ serverScopeLabel(server.scope) }}</span>
+                <span>{{ exposureLabel(server.exposure) }}</span>
+                <span class="min-w-0 truncate font-mono">{{ server.transport }}</span>
+              </p>
+
+              <p
+                v-if="server.error !== null && expandedServer !== server.name"
+                class="mt-1 break-words text-xs text-desk-danger"
+              >
+                {{ server.error }}
+              </p>
+
+              <div class="mt-2 flex flex-wrap items-center gap-2">
+                <AppButton
+                  variant="compact"
+                  :disabled="!commandReady || mcpCommandView.phase === 'running'"
+                  @click="resourceStore.runMcpServerCommand('reconnect', server.name)"
+                >
+                  重连
+                </AppButton>
+                <AppButton
+                  variant="unstyled"
+                  class="copy-button"
+                  @click="toggleServer(server.name)"
+                >
+                  {{ expandedServer === server.name ? '收起详情' : '详情' }}
+                </AppButton>
+              </div>
+
+              <div v-if="expandedServer === server.name" class="mt-2 space-y-2 border-t border-desk-line pt-2">
+                <dl class="grid gap-x-3 gap-y-1 text-2xs sm:grid-cols-[auto_1fr]">
+                  <dt class="text-desk-muted">配置文件</dt>
+                  <dd class="break-all font-mono">{{ server.source === '' ? '未报告' : server.source }}</dd>
+                  <dt class="text-desk-muted">项目覆盖</dt>
+                  <dd class="break-all font-mono">{{ server.override ?? '无' }}</dd>
+                  <dt class="text-desk-muted">启动方式</dt>
+                  <dd class="break-all font-mono">{{ server.transport === '' ? '未报告' : server.transport }}</dd>
+                  <dt class="text-desk-muted">已启用</dt>
+                  <dd>{{ server.enabled ? '是' : '否' }}</dd>
+                  <dt v-if="server.resources !== null" class="text-desk-muted">资源 / 模板</dt>
+                  <dd v-if="server.resources !== null">{{ server.resources }} / {{ server.resourceTemplates ?? 0 }}</dd>
+                </dl>
+
+                <div v-if="server.error !== null" class="technical-detail">
+                  <span class="text-2xs text-desk-muted">连接错误</span>
+                  <pre class="technical-detail-text">{{ server.error }}</pre>
+                </div>
+
+                <div v-if="server.tools.length > 0">
+                  <p class="text-2xs text-desk-muted">工具</p>
+                  <p class="mt-1 flex flex-wrap gap-1">
+                    <span
+                      v-for="tool in server.tools"
+                      :key="tool"
+                      class="chip font-mono"
+                    >{{ tool }}</span>
+                  </p>
+                  <p v-if="server.toolExposure !== null" class="mt-1 text-2xs text-desk-muted">
+                    逐工具 exposure：<span class="font-mono">{{ Object.entries(server.toolExposure).map(([name, mode]) => `${name}=${mode}`).join('、') }}</span>
+                  </p>
+                </div>
+
+                <div class="flex flex-wrap items-center gap-2">
+                  <AppButton
+                    variant="compact"
+                    :disabled="!commandReady || mcpCommandView.phase === 'running'"
+                    @click="resourceStore.runMcpServerCommand('login', server.name)"
+                  >
+                    登录（OAuth）
+                  </AppButton>
+                  <AppButton
+                    variant="quiet-danger"
+                    :disabled="!commandReady || mcpCommandView.phase === 'running'"
+                    @click="pendingCredentialRemoval = server.name"
+                  >
+                    删除已保存凭据
+                  </AppButton>
+                </div>
+                <p class="hint-text">
+                  登录与删除凭据只对使用 OAuth 的 HTTP 服务器有意义；服务器名由这里选定，不会手动拼进命令。
+                </p>
+              </div>
+            </li>
+          </ul>
+        </template>
+
+        <!-- 连接动作的进度与捕获文本：登录需要用户在浏览器里完成授权，可能等待较久。 -->
+        <div v-if="commandBanner !== null" class="technical-detail">
+          <span class="text-2xs text-desk-muted">{{ commandBanner.title }}</span>
+          <p v-if="commandBanner.running" class="mt-1 text-xs">
+            等待 Pi 结束该命令；登录期间的浏览器地址与输入请求会出现在通知区与 Extension 对话框里。
+          </p>
+          <p
+            v-else-if="commandBanner.error !== null"
+            role="alert"
+            class="mt-1 text-xs text-desk-danger"
+          >
+            {{ commandBanner.error }}
+          </p>
+          <template v-else>
+            <pre
+              v-if="commandBanner.messages.length > 0"
+              class="technical-detail-text"
+            >{{ commandBanner.messages.join('\n') }}</pre>
+            <p v-else class="mt-1 text-xs text-desk-muted">
+              命令已被 Pi 处理（{{ commandBanner.disposition }}）；本次没有捕获到额外文本，
+              可重新探测确认结果。
+            </p>
+          </template>
+        </div>
+      </section>
+    </template>
+
+    <!-- 诊断：Pi 的 stderr 尾部、Extension 运行时错误，以及启动失败时的逃生入口。 -->
+    <template v-else>
+      <section class="panel-section">
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <h2 class="panel-section-title">启动诊断</h2>
+          <AppButton
+            variant="compact"
+            :disabled="!runtimeReady || diagnosticsLoading"
+            @click="resourceStore.refresh()"
+          >
+            {{ diagnosticsLoading ? '正在读取…' : '重新读取' }}
+          </AppButton>
+        </div>
+        <p class="hint-text">
+          Pi 非交互模式的 stderr 尾部；Skill 与 Prompt Template 自身的加载警告在 RPC 模式下不对外提供。
+        </p>
+        <p v-if="diagnosticsError !== null" role="alert" class="status-notice status-notice-error">
+          {{ diagnosticsError.message }}
+        </p>
+        <p v-else-if="diagnostics.length === 0" class="hint-text">没有诊断输出。</p>
+        <div v-else class="technical-detail">
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <span class="text-2xs text-desk-muted">Pi 的原始输出</span>
+            <AppButton
+              variant="unstyled"
+              class="copy-button"
+              @click="copy('stderr', diagnostics.join('\n'))"
+            >
+              {{ copyLabel('stderr') }}
+            </AppButton>
+          </div>
+          <pre class="technical-detail-text">{{ diagnostics.join('\n') }}</pre>
+        </div>
+      </section>
+
+      <section class="panel-section">
+        <h2 class="panel-section-title">Extension 运行时错误</h2>
+        <p class="hint-text">本代际收到的 Extension 运行时错误，只保留最近的若干条。</p>
+        <p v-if="extensionErrors.length === 0" class="hint-text">没有 Extension 运行时错误。</p>
+        <ul v-else class="space-y-1.5">
+          <li
+            v-for="(entry, index) in extensionErrors"
+            :key="`ext-error-${index}`"
+            class="list-card"
+          >
+            <p class="break-all font-mono text-2xs">
+              {{ entry.path ?? '来源未知' }} · {{ entry.event ?? '事件未知' }}
+            </p>
+            <p class="mt-0.5 break-words text-xs text-desk-danger">{{ entry.error }}</p>
+          </li>
+        </ul>
+      </section>
+
+      <section class="panel-section">
+        <h2 class="panel-section-title">启动失败时的逃生入口</h2>
+        <p class="hint-text">
+          不加载任何 Extension 启动一次，用于坏扩展让 Runtime 无法启动的情况；
+          同时会禁用内建扩展（包括 MCP，因此没有 MCP 工具与 <span class="font-mono">/mcp</span> 命令）。
+          目标取最近一次启动的项目与会话，仅本次生效，不修改任何配置。
+        </p>
+        <AppButton
+          :disabled="safeStart.phase === 'starting'"
+          @click="resourceStore.startSafely()"
+        >
+          {{ safeStart.phase === 'starting' ? '正在启动…' : '以禁用扩展启动（仅本次）' }}
+        </AppButton>
+        <p v-if="safeStart.phase === 'error'" role="alert" class="status-notice status-notice-error">
+          {{ safeStart.error.message }}
+        </p>
+        <p v-else-if="safeStart.phase === 'done'" role="status" class="status-notice">
+          已请求安全模式启动；Runtime 就绪后这里会重新读取清单与诊断。
+        </p>
+      </section>
+    </template>
+
+    <Teleport to="body">
+      <ConfirmDialog
+        :open="pendingCredentialRemoval !== null"
+        title="删除已保存的凭据？"
+        description="只删除 Pi 为这个 MCP 服务器保存的 OAuth 凭据，不改动 mcp.json、环境变量或其他服务器的凭据。删除后需要重新登录才能使用该服务器。"        :detail="pendingCredentialRemoval ?? ''"
+        confirm-label="删除凭据"
+        @confirm="confirmCredentialRemoval"
+        @cancel="pendingCredentialRemoval = null"
+      />
+    </Teleport>
+  </div>
+</template>

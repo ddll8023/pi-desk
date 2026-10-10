@@ -1,4 +1,4 @@
-/** 只定义 Runtime 启停、状态、Prompt 提交、中止、可用模型读取、Pi 资源与诊断读取、MCP 状态与 MCP 登录/退出命令、安全启动、消息/工具投影 IPC 的固定通道、事件名、结果类型与跨进程响应校验。 */
+/** 只定义 Runtime 启停、状态、Prompt 提交、中止、可用模型读取、Pi 资源与诊断读取、MCP 状态、MCP 服务器探测与 MCP 登录/退出/重连命令、安全启动、消息/工具投影 IPC 的固定通道、事件名、结果类型与跨进程响应校验。 */
 import type { DesktopErrorCode } from './desktop-api'
 
 export const RUNTIME_START_CHANNEL = 'desktop:runtime-start'
@@ -15,8 +15,15 @@ export const RUNTIME_RESOURCES_CHANNEL = 'desktop:runtime-resources'
 export const RUNTIME_DIAGNOSTICS_CHANNEL = 'desktop:runtime-diagnostics'
 /** 固定请求 `/mcp` 状态；不接受页面传入命令文本。 */
 export const RUNTIME_MCP_STATUS_CHANNEL = 'desktop:runtime-mcp-status'
-/** MCP 服务器 OAuth 登录与退出；只接受受校验的服务器名，命令文本由主进程拼出。 */
+/** MCP 服务器 OAuth 登录、退出与重连；只接受受校验的服务器名，命令文本由主进程拼出。 */
 export const RUNTIME_MCP_COMMAND_CHANNEL = 'desktop:runtime-mcp-command'
+/**
+ * 只读：用官方 CLI 的 `pi mcp list --json` 探测每个 MCP 服务器的连接状态、工具与错误。
+ * 它与运行中的 Runtime 是两套独立连接（stdio 服务器会被再启动一次），因此只在用户显式请求时执行。
+ */
+export const RUNTIME_MCP_INSPECT_CHANNEL = 'desktop:runtime-mcp-inspect'
+/** 零参数：中止一次进行中的 MCP 探测；没有进行中的探测时不做任何事。 */
+export const RUNTIME_MCP_INSPECT_ABORT_CHANNEL = 'desktop:runtime-mcp-inspect-abort'
 /** 安全模式启动：零参数，主进程用最近一次启动意图并固定传 `--no-extensions`。 */
 export const RUNTIME_START_SAFE_CHANNEL = 'desktop:runtime-start-safe'
 /** 主进程到渲染进程的单向状态通知，payload 是 RuntimeStatus。 */
@@ -313,8 +320,8 @@ export interface McpStatus {
   readonly messages: readonly string[]
 }
 
-/** MCP 服务器 OAuth 的两个受支持动作；enable/disable/exposure 需要改配置，不在此范围。 */
-export type McpCommandAction = 'login' | 'logout'
+/** MCP 服务器的受支持动作；enable/disable/exposure 需要改配置，不在此范围。 */
+export type McpCommandAction = 'login' | 'logout' | 'reconnect'
 
 /** 只接受动作与服务器名；命令文本由主进程拼接，页面不能传入任意命令。 */
 export interface McpCommandRequest {
@@ -342,6 +349,52 @@ export type McpStatusResult =
   | { readonly ok: true; readonly data: McpStatus }
   | { readonly ok: false; readonly error: RuntimeError }
 
+/**
+ * `pi mcp list --json` 报告的一个 MCP 服务器。
+ *
+ * `scope`、`exposure`、`state` 按纯文本透传：官方可能新增取值，页面只对已知取值给中文标签，
+ * 未知取值原样展示，不猜测含义。`override` 是项目级条目覆盖同名用户级条目时的来源路径。
+ */
+export interface McpServerReport {
+  readonly name: string
+  readonly scope: string
+  /** 定义该服务器的配置文件路径。 */
+  readonly source: string
+  /** 项目级覆盖的来源路径；无覆盖为 null。 */
+  readonly override: string | null
+  readonly enabled: boolean
+  readonly exposure: string
+  /** 启动命令或 URL，由官方 CLI 汇总给出。 */
+  readonly transport: string
+  readonly state: string
+  readonly tools: readonly string[]
+  /** 与服务器默认 exposure 不同的逐工具 exposure；无差异为 null。 */
+  readonly toolExposure: Readonly<Record<string, string>> | null
+  readonly resources: number | null
+  readonly resourceTemplates: number | null
+  /** 非 connected 状态下官方给出的错误文本；无错误为 null。 */
+  readonly error: string | null
+}
+
+/**
+ * 一次 MCP 服务器探测结果。探测是只读的：官方 CLI 只连接并读取状态，不写任何配置文件。
+ * `configErrors` 是被官方跳过条目的原因文本，`note` 是项目未信任等原因的部分忽略说明。
+ */
+export interface McpInspection {
+  readonly servers: readonly McpServerReport[]
+  readonly configErrors: readonly string[]
+  readonly note: string | null
+}
+
+export type McpInspectionResult =
+  | { readonly ok: true; readonly data: McpInspection }
+  | { readonly ok: false; readonly error: RuntimeError }
+
+/** 中止探测的结果；`aborted` 为 false 表示当时没有进行中的探测。 */
+export type McpInspectAbortResult =
+  | { readonly ok: true; readonly data: { readonly aborted: boolean } }
+  | { readonly ok: false; readonly error: RuntimeError }
+
 export interface RuntimeApi {
   readonly startRuntime: (projectPath: string) => Promise<RuntimeResult>
   readonly stopRuntime: () => Promise<RuntimeResult>
@@ -358,8 +411,12 @@ export interface RuntimeApi {
   readonly getRuntimeDiagnostics: () => Promise<RuntimeDiagnosticsResult>
   /** 固定请求 `/mcp` 状态；状态文本由 notify 捕获后返回，不在页面拼造。 */
   readonly readRuntimeMcpStatus: () => Promise<McpStatusResult>
-  /** MCP 服务器 OAuth 登录或退出；服务器名由页面给出但由主进程校验，命令文本由主进程拼出。 */
+  /** MCP 服务器 OAuth 登录、退出或重连；服务器名由页面给出但由主进程校验，命令文本由主进程拼出。 */
   readonly runRuntimeMcpCommand: (action: McpCommandAction, serverName: string) => Promise<McpCommandResult>
+  /** MCP 服务器状态探测：零参数，主进程用当前项目与信任决定执行固定的 `pi mcp list --json`。 */
+  readonly inspectRuntimeMcpServers: () => Promise<McpInspectionResult>
+  /** 中止进行中的 MCP 探测；零参数，没有进行中的探测时返回 `aborted: false`。 */
+  readonly abortRuntimeMcpInspection: () => Promise<McpInspectAbortResult>
   /**
    * 安全模式启动：不加载 Extension，复用最近一次启动的项目与会话；仅本次生效，不写配置。
    * 与常规启动一样先经过信任拦截（无决定时返回 `TRUST_REQUIRED`）。
@@ -727,7 +784,56 @@ export function isMcpStatusResult(value: unknown): value is McpStatusResult {
 }
 
 function isMcpCommandAction(value: unknown): value is McpCommandAction {
-  return value === 'login' || value === 'logout'
+  return value === 'login' || value === 'logout' || value === 'reconnect'
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === 'string')
+}
+
+function isToolExposure(value: unknown): value is Record<string, string> {
+  if (!isRecord(value)) return false
+  return Object.values(value).every((item) => typeof item === 'string')
+}
+
+function isMcpServerReport(value: unknown): value is McpServerReport {
+  if (!isRecord(value)) return false
+  if (typeof value.name !== 'string' || value.name === '') return false
+  if (typeof value.scope !== 'string' || typeof value.source !== 'string') return false
+  if (value.override !== null && typeof value.override !== 'string') return false
+  if (typeof value.enabled !== 'boolean') return false
+  if (typeof value.exposure !== 'string' || typeof value.transport !== 'string') return false
+  if (typeof value.state !== 'string' || value.state === '') return false
+  if (!isStringArray(value.tools)) return false
+  if (value.toolExposure !== null && !isToolExposure(value.toolExposure)) return false
+  if (value.resources !== null && (typeof value.resources !== 'number' || !Number.isInteger(value.resources))) return false
+  if (value.resourceTemplates !== null
+    && (typeof value.resourceTemplates !== 'number' || !Number.isInteger(value.resourceTemplates))) return false
+  return value.error === null || typeof value.error === 'string'
+}
+
+/** MCP 探测结果跨进程校验；服务器报告、配置错误与说明文本都只放行已声明的形状。 */
+export function isMcpInspectionResult(value: unknown): value is McpInspectionResult {
+  if (!isRecord(value)) return false
+
+  if (value.ok === true) {
+    const data = value.data
+    return isRecord(data)
+      && Array.isArray(data.servers)
+      && data.servers.every(isMcpServerReport)
+      && isStringArray(data.configErrors)
+      && (data.note === null || typeof data.note === 'string')
+  }
+  return isRuntimeErrorResult(value)
+}
+
+/** 中止探测结果校验：只允许布尔 `aborted`。 */
+export function isMcpInspectAbortResult(value: unknown): value is McpInspectAbortResult {
+  if (!isRecord(value)) return false
+  if (value.ok === true) {
+    return isRecord(value.data) && typeof value.data.aborted === 'boolean'
+  }
+  return isRuntimeErrorResult(value)
 }
 
 /** 请求只校验形状；服务器名的字符集与长度由主进程校验后再拼接命令。 */

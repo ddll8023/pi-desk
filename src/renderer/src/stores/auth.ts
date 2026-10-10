@@ -48,6 +48,8 @@ export const useAuthStore = defineStore('auth', () => {
   const flowAction = ref<FlowActionState>({ phase: 'idle' })
   const logoutAction = ref<FlowActionState>({ phase: 'idle' })
   const filter = ref('')
+  /** 只看已配置：Provider 数量很多时用于收敛列表。 */
+  const configuredOnly = ref(false)
   /** 密钥与验证码输入；提交或取消后立即清空。 */
   const secretInput = ref('')
   /** select 提示的选中项；与密钥输入分开保存。 */
@@ -58,15 +60,15 @@ export const useAuthStore = defineStore('auth', () => {
     flow.value !== null && !TERMINAL_PHASES.includes(flow.value.phase) ? flow.value : null
   ))
 
-  /** 按「已配置在前、名称升序」排序并应用过滤；过滤只匹配展示名与 provider id。 */
+  /** 按「已配置在前、名称升序」排序；关键词与「只看已配置」都只作用于展示集合。 */
   const visibleProviders = computed(() => {
     const keyword = filter.value.trim().toLowerCase()
-    const matched = keyword === ''
-      ? [...providers.value]
-      : providers.value.filter((provider) => (
-        provider.name.toLowerCase().includes(keyword)
+    const matched = providers.value.filter((provider) => {
+      if (configuredOnly.value && !provider.configured) return false
+      if (keyword === '') return true
+      return provider.name.toLowerCase().includes(keyword)
         || provider.providerId.toLowerCase().includes(keyword)
-      ))
+    })
     return matched.sort((left, right) => {
       if (left.configured !== right.configured) return left.configured ? -1 : 1
       if (left.name === right.name) return left.providerId < right.providerId ? -1 : 1
@@ -207,6 +209,7 @@ export const useAuthStore = defineStore('auth', () => {
     flowAction,
     logoutAction,
     filter,
+    configuredOnly,
     secretInput,
     selectInput,
     visibleProviders,
