@@ -6,4 +6,4 @@
 
 适用：编写或修改 `docs/`、`.agents/memory/`、代码注释与命令示例时；交付的验证与操作说明同样适用。
 
-原因：开发在 Windows 与 macOS 主机之间交替进行，写死单平台的内容在另一台主机上不可用或误导；docs/development.md 第 3 节描述了这一开发模式，本约定约束所有生成内容遵守它。
+原因：开发在 Windows 与 macOS 主机之间交替进行，写死单平台的内容在另一台主机上不可用或误导；代码里的 `process.platform` 分支与 `runtime/pi-runtime.json` 的多平台目标印证了这一开发模式，本约定约束所有生成内容遵守它。

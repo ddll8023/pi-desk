@@ -9,3 +9,6 @@ Pi Desktop：Electron + Vue 3 + TypeScript 桌面客户端，第一阶段只打�
 - 坑：`topics/gotchas/npm-lifecycle-scripts.md`——在准备二进制或资源、考虑用 npm 生命周期脚本自动执行时读取。
 - 坑：`topics/gotchas/gui-verification.md`——在做真机 GUI 验证、需要驱动或截取应用窗口、或清理 dev 进程残留时读取。
 - 坑：`topics/gotchas/sidecar-console-windows.md`——在排查对话启动后出现额外控制台窗口时读取。
+- 约定：`topics/conventions/renderer-bridge-calls.md`——在新增或修改渲染端桥接方法、处理桥接失败文案时读取。
+- 约定：`topics/conventions/desktop-config-storage.md`——在新增配置字段或写配置路径、考虑多实例与多窗口时读取。
+- 坑：`topics/gotchas/project-trust-probe.md`——在添加项目、准备验证用目录或遇到意外信任提示时读取。
