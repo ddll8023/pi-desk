@@ -1,6 +1,7 @@
 <!-- 公共分组选择器：提供可搜索的自绘选项面板；选项与选中值由调用方控制。 -->
 <script setup lang="ts">
-import { computed, nextTick, onUnmounted, ref, useId, watch } from 'vue'
+import { computed, nextTick, ref, useId, watch } from 'vue'
+import { useAnchoredPopup } from '../../anchored-popup'
 
 defineOptions({ inheritAttrs: false })
 
@@ -12,13 +13,6 @@ interface SelectOption {
 interface SelectGroup {
   readonly label?: string
   readonly options: readonly SelectOption[]
-}
-
-interface PopupPosition {
-  readonly left: number
-  readonly top: number
-  readonly width: number
-  readonly maxHeight: number
 }
 
 const props = withDefaults(defineProps<{
@@ -45,15 +39,14 @@ const emit = defineEmits<{
 
 const instanceId = useId()
 const popupId = `app-select-list-${instanceId}`
-const expanded = ref(false)
+// 展开状态与浮层几何由 composable 持有；这里按模板与逻辑里的既有名字接出来。
+const anchoredPopup = useAnchoredPopup({})
+const { trigger, popup, isOpen: expanded, position: popupPosition } = anchoredPopup
 const searchQuery = ref('')
 const activeIndex = ref(0)
-const trigger = ref<HTMLButtonElement | null>(null)
 const searchInput = ref<HTMLInputElement | null>(null)
-const popup = ref<HTMLElement | null>(null)
 const listbox = ref<HTMLElement | null>(null)
 const optionElements = new Map<string, HTMLElement>()
-const popupPosition = ref<PopupPosition>({ left: 0, top: 0, width: 0, maxHeight: 320 })
 
 const filteredGroups = computed(() => {
   const query = searchQuery.value.trim().toLocaleLowerCase()
@@ -119,46 +112,11 @@ watch(() => props.disabled, (disabled) => {
   if (disabled) closePopup()
 })
 
-function updatePopupPosition(): void {
-  const element = trigger.value
-  if (element === null) return
-
-  const rect = element.getBoundingClientRect()
-  const edge = 8
-  const gap = 4
-  const availableBelow = window.innerHeight - rect.bottom - gap - edge
-  const availableAbove = rect.top - gap - edge
-  const placeAbove = availableBelow < 200 && availableAbove > availableBelow
-  const available = placeAbove ? availableAbove : availableBelow
-  const maxHeight = Math.max(96, Math.min(360, available))
-  const width = Math.min(rect.width, window.innerWidth - edge * 2)
-  const left = Math.max(edge, Math.min(rect.left, window.innerWidth - width - edge))
-  const proposedTop = placeAbove ? rect.top - gap - maxHeight : rect.bottom + gap
-  const top = Math.max(edge, Math.min(proposedTop, window.innerHeight - maxHeight - edge))
-
-  popupPosition.value = { left, top, width, maxHeight }
-}
-
-function onWindowPointerDown(event: PointerEvent): void {
-  const target = event.target
-  if (!(target instanceof Node)) return
-  if (trigger.value?.contains(target) || popup.value?.contains(target)) return
-  closePopup()
-}
-
-function onViewportChange(): void {
-  if (expanded.value) updatePopupPosition()
-}
-
 function openPopup(): void {
   if (props.disabled || expanded.value) return
-  expanded.value = true
   searchQuery.value = ''
   resetActiveIndex()
-  updatePopupPosition()
-  window.addEventListener('pointerdown', onWindowPointerDown)
-  window.addEventListener('resize', onViewportChange)
-  window.addEventListener('scroll', onViewportChange, true)
+  anchoredPopup.open()
   void nextTick(() => {
     if (props.searchable) {
       searchInput.value?.focus()
@@ -168,13 +126,10 @@ function openPopup(): void {
   })
 }
 
+/** 收起浮层；需要时把焦点还给触发键。几何与监听都由 composable 负责。 */
 function closePopup(restoreFocus = false): void {
-  if (!expanded.value) return
-  expanded.value = false
-  window.removeEventListener('pointerdown', onWindowPointerDown)
-  window.removeEventListener('resize', onViewportChange)
-  window.removeEventListener('scroll', onViewportChange, true)
-  if (restoreFocus) void nextTick(() => trigger.value?.focus())
+  const wasOpen = anchoredPopup.close()
+  if (restoreFocus && wasOpen) void nextTick(() => trigger.value?.focus())
 }
 
 function togglePopup(): void {
@@ -284,8 +239,6 @@ function onListboxKeydown(event: KeyboardEvent): void {
     trigger.value?.focus()
   }
 }
-
-onUnmounted(() => closePopup())
 </script>
 
 <template>
