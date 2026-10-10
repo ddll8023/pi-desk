@@ -1,4 +1,4 @@
-/** 管理唯一桌面窗口及其尺寸位置偏好、本地资产边界，以及应用信息、Project 选择与列表、Session 列表与打开与重新加载、分叉消息读取与分叉发起、Project Trust 查询与决定、界面偏好、Runtime 启停与安全启动、Prompt 提交、中止、Agent 能力查询与设置、手动压缩、Pi 资源与诊断读取、MCP 状态与 MCP 登录退出请求、安全启动、认证状态与 Provider 登录退出、外链打开、消息/工具投影 IPC、Extension UI 状态与对话响应 IPC、事件广播与退出编排。 */
+/** 管理唯一桌面窗口及其尺寸位置偏好、本地资产边界，以及应用信息、Project 选择与列表、Session 列表与打开与重新加载、Project Trust 查询与决定、界面偏好、Runtime 启停与安全启动、Prompt 提交、中止、可用模型读取、Pi 资源与诊断读取、MCP 状态与 MCP 登录退出请求、认证状态与 Provider 登录退出、外链打开、消息/工具投影 IPC、Extension UI 状态与对话响应 IPC、事件广播与退出编排。 */
 import { realpath } from 'node:fs/promises'
 import { extname, isAbsolute, relative, resolve, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -20,15 +20,11 @@ import {
 } from '../shared/project-api'
 import type { ProjectErrorCode, ProjectListResult, ProjectPathResult } from '../shared/project-api'
 import {
-  FORK_MESSAGES_CHANNEL,
-  FORK_START_CHANNEL,
   SESSION_LIST_CHANNEL,
   SESSION_OPEN_CHANNEL,
   SESSION_RELOAD_CHANNEL
 } from '../shared/session-api'
 import type {
-  ForkMessageListResult,
-  ForkStartResult,
   SessionErrorCode,
   SessionListResult,
   SessionOpenResult
@@ -80,7 +76,6 @@ import type {
 import {
   RUNTIME_ABORT_CHANNEL,
   RUNTIME_CAPABILITIES_CHANNEL,
-  RUNTIME_COMPACT_CHANNEL,
   RUNTIME_DIAGNOSTICS_CHANNEL,
   RUNTIME_MCP_COMMAND_CHANNEL,
   RUNTIME_MCP_STATUS_CHANNEL,
@@ -89,8 +84,6 @@ import {
   RUNTIME_PROJECTION_CHANNEL,
   RUNTIME_PROJECTION_EVENT,
   RUNTIME_RESOURCES_CHANNEL,
-  RUNTIME_SET_MODEL_CHANNEL,
-  RUNTIME_SET_THINKING_LEVEL_CHANNEL,
   RUNTIME_START_CHANNEL,
   RUNTIME_START_SAFE_CHANNEL,
   RUNTIME_STATUS_CHANNEL,
@@ -99,7 +92,6 @@ import {
 } from '../shared/runtime-api'
 import type {
   CapabilitiesResult,
-  CompactResultResult,
   McpCommandResult,
   McpStatusResult,
   ProjectionBatch,
@@ -127,10 +119,6 @@ const APPLICATION_PAGE_URL = 'app://desktop/index.html'
 const QUIT_DEADLINE_MS = 10_000
 /** 窗口状态落盘的等待上限；超过就继续关闭链，不让小文件写入拖住退出。 */
 const WINDOW_STATE_FLUSH_MS = 1_000
-/** 模型 provider/id 的长度上限；只限制形状，模型是否存在由 Pi 判定。 */
-const MAX_MODEL_IDENTIFIER_CHARS = 256
-/** Thinking level 的长度上限；取值合法性由 Pi 判定，不在此白名单。 */
-const MAX_THINKING_LEVEL_CHARS = 32
 /** 窗口背景色的浅色与暗色值；与 main.css 的 canvas 令牌保持一致，避免首帧闪烁。 */
 const LIGHT_WINDOW_BACKGROUND = '#f4f6f8'
 const DARK_WINDOW_BACKGROUND = '#10161c'
@@ -321,10 +309,6 @@ function capabilitiesFailure(code: RuntimeErrorCode, message: string): Capabilit
   return { ok: false, error: { code, message } }
 }
 
-function compactFailure(code: RuntimeErrorCode, message: string): CompactResultResult {
-  return { ok: false, error: { code, message } }
-}
-
 function resourcesFailure(code: RuntimeErrorCode, message: string): ResourcesResult {
   return { ok: false, error: { code, message } }
 }
@@ -346,14 +330,6 @@ function projectListFailure(code: ProjectErrorCode, message: string): ProjectLis
 }
 
 function sessionFailure(code: SessionErrorCode, message: string): SessionListResult {
-  return { ok: false, error: { code, message } }
-}
-
-function forkMessagesFailure(code: SessionErrorCode, message: string): ForkMessageListResult {
-  return { ok: false, error: { code, message } }
-}
-
-function forkStartFailure(code: SessionErrorCode, message: string): ForkStartResult {
   return { ok: false, error: { code, message } }
 }
 
@@ -567,52 +543,6 @@ function registerSessionHandlers(pageUrl: string): void {
     }
   )
 
-  /** 读取可分叉消息；零参数，要求 Runtime 就绪。 */
-  ipcMain.handle(
-    FORK_MESSAGES_CHANNEL,
-    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<ForkMessageListResult> => {
-      if (!isTrustedCaller(event, pageUrl)) {
-        return forkMessagesFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
-      }
-      if (args.length !== 0) {
-        return forkMessagesFailure('INVALID_REQUEST', '分叉消息接口不接受参数。')
-      }
-      return sessionManager.forkMessages()
-    }
-  )
-
-  /** 从指定条目分叉；只接受 entryId 与显式中断确认，切换编排与会话打开共用同一条信任拦截。 */
-  ipcMain.handle(
-    FORK_START_CHANNEL,
-    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<ForkStartResult> => {
-      if (!isTrustedCaller(event, pageUrl)) {
-        return forkStartFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
-      }
-      if (args.length !== 1) {
-        return forkStartFailure('INVALID_REQUEST', '分叉接口只接受一个请求对象。')
-      }
-      const request = args[0]
-      if (typeof request !== 'object' || request === null || Array.isArray(request)) {
-        return forkStartFailure('INVALID_REQUEST', '分叉参数格式不正确。')
-      }
-      const fields = request as Record<string, unknown>
-      if (Object.keys(fields).some((key) => key !== 'entryId' && key !== 'allowInterrupt')) {
-        return forkStartFailure('INVALID_REQUEST', '分叉参数包含未支持的字段。')
-      }
-      const { entryId, allowInterrupt } = fields
-      if (typeof entryId !== 'string' || entryId.trim() === '' || entryId.length > 256) {
-        return forkStartFailure('FORK_NOT_FOUND', '分叉条目 id 必须是非空且长度受控的字符串。')
-      }
-      if (typeof allowInterrupt !== 'boolean') {
-        return forkStartFailure('INVALID_REQUEST', '分叉必须显式说明是否允许中断当前操作。')
-      }
-      const trust = await resolveTrustForCurrentProject()
-      if (trust.requiresPrompt) {
-        return forkStartFailure('TRUST_REQUIRED', trust.message ?? '项目包含需要信任决定的资源。')
-      }
-      return sessionManager.startFork({ entryId, allowInterrupt }, trust.decision)
-    }
-  )
 }
 
 /**
@@ -787,7 +717,7 @@ function registerRuntimeHandlers(pageUrl: string): void {
     }
   )
 
-  /** 能力读取只查询当前 Runtime 代际，不接受任何参数；分区失败由结果内的 error 表达。 */
+  /** 可用模型读取只查询当前 Runtime 代际，不接受任何参数。 */
   ipcMain.handle(
     RUNTIME_CAPABILITIES_CHANNEL,
     async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<CapabilitiesResult> => {
@@ -798,77 +728,6 @@ function registerRuntimeHandlers(pageUrl: string): void {
         return capabilitiesFailure('INVALID_REQUEST', '能力读取接口不接受参数。')
       }
       return runtimeManager.readCapabilities()
-    }
-  )
-
-  /** 只接受 provider 与模型 id；不接受任意模型对象、启动参数或其他 RPC 内容。 */
-  ipcMain.handle(
-    RUNTIME_SET_MODEL_CHANNEL,
-    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<RuntimeResult> => {
-      if (!isTrustedCaller(event, pageUrl)) {
-        return runtimeFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
-      }
-      if (args.length !== 1) {
-        return runtimeFailure('INVALID_REQUEST', '切换模型接口只接受一个请求对象。')
-      }
-      const request = args[0]
-      if (typeof request !== 'object' || request === null || Array.isArray(request)) {
-        return runtimeFailure('INVALID_REQUEST', '切换模型参数格式不正确。')
-      }
-      const fields = request as Record<string, unknown>
-      if (Object.keys(fields).some((key) => key !== 'provider' && key !== 'modelId')) {
-        return runtimeFailure('INVALID_REQUEST', '切换模型参数包含未支持的字段。')
-      }
-      const { provider, modelId } = fields
-      if (!isBoundedIdentifier(provider, MAX_MODEL_IDENTIFIER_CHARS)) {
-        return runtimeFailure('INVALID_REQUEST', '模型 provider 必须是非空且长度受控的字符串。')
-      }
-      if (!isBoundedIdentifier(modelId, MAX_MODEL_IDENTIFIER_CHARS)) {
-        return runtimeFailure('INVALID_REQUEST', '模型 id 必须是非空且长度受控的字符串。')
-      }
-      return runtimeManager.setModel({ provider, modelId })
-    }
-  )
-
-  /** 只接受 Thinking level 字符串；是否被当前模型支持由 Pi 判定。 */
-  ipcMain.handle(
-    RUNTIME_SET_THINKING_LEVEL_CHANNEL,
-    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<RuntimeResult> => {
-      if (!isTrustedCaller(event, pageUrl)) {
-        return runtimeFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
-      }
-      if (args.length !== 1) {
-        return runtimeFailure('INVALID_REQUEST', '设置 Thinking level 接口只接受一个请求对象。')
-      }
-      const request = args[0]
-      if (typeof request !== 'object' || request === null || Array.isArray(request)) {
-        return runtimeFailure('INVALID_REQUEST', 'Thinking level 参数格式不正确。')
-      }
-      const fields = request as Record<string, unknown>
-      if (Object.keys(fields).some((key) => key !== 'level')) {
-        return runtimeFailure('INVALID_REQUEST', 'Thinking level 参数包含未支持的字段。')
-      }
-      const { level } = fields
-      if (!isBoundedIdentifier(level, MAX_THINKING_LEVEL_CHARS)) {
-        return runtimeFailure('INVALID_REQUEST', 'Thinking level 必须是非空且长度受控的字符串。')
-      }
-      return runtimeManager.setThinkingLevel({ level })
-    }
-  )
-
-  /** 只接受零参数；压缩中状态由 isCompacting 收敛，本地不做 streaming 预检。 */
-  ipcMain.handle(
-    RUNTIME_COMPACT_CHANNEL,
-    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<CompactResultResult> => {
-      if (!isTrustedCaller(event, pageUrl)) {
-        return compactFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
-      }
-      if (args.length !== 0) {
-        return compactFailure('INVALID_REQUEST', '压缩接口不接受参数。')
-      }
-      const outcome = await runtimeManager.compact()
-      if (outcome.ok) return { ok: true, data: outcome.result }
-      return compactFailure(outcome.code, outcome.message)
     }
   )
 

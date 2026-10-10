@@ -1,14 +1,9 @@
-/** 保存会话面板的展示状态：当前项目的会话列表、打开与重新加载动作与分叉弹层状态、分叉动作；会话文件解析与切换编排都在主进程。 */
+/** 保存会话面板的展示状态：当前项目的会话列表、打开与重新加载动作；会话文件解析与切换编排都在主进程。 */
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import type {
-  ForkMessageSummary,
-  SessionError,
-  SessionList,
-  SessionSummary
-} from '../../../shared/session-api'
+import type { SessionError, SessionList, SessionSummary } from '../../../shared/session-api'
 import { useTrustStore } from './trust'
-import { getForkMessages, listSessions, openSession, reloadSession, startFork } from '../services/session'
+import { listSessions, openSession, reloadSession } from '../services/session'
 
 /** `idle` 表示尚无当前项目、未读取列表；单次动作失败放在 `actionError`，不影响已加载的列表。 */
 type SessionViewState =
@@ -42,12 +37,6 @@ export const useSessionStore = defineStore('session', () => {
   function closeSessionPicker(): void {
     showSessionPicker.value = false
   }
-
-  /** 分叉弹层的展示状态：消息加载、进行中的分叉与错误。 */
-  const forkMessages = ref<readonly ForkMessageSummary[]>([])
-  const forkLoading = ref(false)
-  const forkBusy = ref(false)
-  const forkError = ref<SessionError | null>(null)
 
   /** 主进程返回的列表是唯一真相；展示状态只做副本，跳过的文件数如实保留。 */
   function applyList(list: SessionList): void {
@@ -186,60 +175,6 @@ export const useSessionStore = defineStore('session', () => {
     awaitingTrust.value = false
   }
 
-  /** 打开分叉弹层时读取可分叉消息；失败记录错误，不缓存旧列表。 */
-  async function loadForkMessages(): Promise<void> {
-    if (forkLoading.value) return
-    forkLoading.value = true
-    forkError.value = null
-    try {
-      const result = await getForkMessages()
-      if (result.ok) {
-        forkMessages.value = result.data.messages
-        return
-      }
-      forkMessages.value = []
-      forkError.value = result.error
-    } finally {
-      forkLoading.value = false
-    }
-  }
-
-  /**
-   * 从指定条目分叉；成功后主进程重启式切换到新会话，本地刷新列表并收起弹层。
-   * Extension 取消与切换被拒等失败只记录错误，不改变既有会话。
-   * 返回是否已完成切换；信任拦截时返回 false 并交给信任对话框流程。
-   */
-  async function fork(entryId: string, allowInterrupt: boolean): Promise<boolean> {
-    if (forkBusy.value) return false
-    forkBusy.value = true
-    forkError.value = null
-    try {
-      const result = await startFork(entryId, allowInterrupt)
-      if (result.ok) {
-        applyList(result.data.list)
-        forkMessages.value = []
-        view.value = { phase: 'ready' }
-        return true
-      }
-      if (result.error.code === 'TRUST_REQUIRED') {
-        // 分叉的信任拦截与打开会话一致：交给信任对话框，取消后回到弹层。
-        awaitingTrust.value = true
-        pendingSessionId.value = null
-        await useTrustStore().openPrompt()
-        return false
-      }
-      forkError.value = result.error
-      return false
-    } finally {
-      forkBusy.value = false
-    }
-  }
-
-  /** 关闭分叉弹层时清空临时状态。 */
-  function closeFork(): void {
-    forkMessages.value = []
-    forkError.value = null
-  }
   return {
     view,
     sessions,
@@ -251,10 +186,6 @@ export const useSessionStore = defineStore('session', () => {
     awaitingInterrupt,
     awaitingTrust,
     pendingReload,
-    forkMessages,
-    forkLoading,
-    forkBusy,
-    forkError,
     showSessionPicker,
     initialize,
     refresh,
@@ -264,9 +195,6 @@ export const useSessionStore = defineStore('session', () => {
     confirmPending,
     cancelPending,
     openSessionPicker,
-    closeSessionPicker,
-    loadForkMessages,
-    fork,
-    closeFork
+    closeSessionPicker
   }
 })

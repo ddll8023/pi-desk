@@ -1,12 +1,10 @@
-/** 只定义 Pi Session 列表、打开、重新加载与分叉 IPC 的固定通道、结果类型与跨进程响应校验。 */
+/** 只定义 Pi Session 列表、打开与重新加载 IPC 的固定通道、结果类型与跨进程响应校验。 */
 import type { RuntimeErrorCode } from './runtime-api'
 
 export const SESSION_LIST_CHANNEL = 'desktop:session-list'
 export const SESSION_OPEN_CHANNEL = 'desktop:session-open'
 /** 重新加载 Pi 资源：重启 Runtime 并尽量恢复当前会话；`allowInterrupt` 与会话打开同义。 */
 export const SESSION_RELOAD_CHANNEL = 'desktop:session-reload'
-export const FORK_MESSAGES_CHANNEL = 'desktop:fork-messages'
-export const FORK_START_CHANNEL = 'desktop:fork-start'
 
 /**
  * 会话摘要只读会话文件的元数据：`createdAt` 来自文件头部的时间戳，`updatedAt` 是文件最后修改
@@ -35,15 +33,12 @@ export interface SessionOpenRequest {
 }
 
 /** 复用 Runtime 错误码族，只追加 Session 专有错误码。 */
-export type SessionErrorCode = RuntimeErrorCode | 'SESSION_NOT_FOUND' | 'SESSION_SWITCH_BLOCKED' | 'FORK_NOT_FOUND' | 'FORK_CANCELLED' | 'FORK_BLOCKED'
+export type SessionErrorCode = RuntimeErrorCode | 'SESSION_NOT_FOUND' | 'SESSION_SWITCH_BLOCKED'
 
 /** 打开会话可能被 Project Trust 拦截，错误码集合与 Runtime 族同步维护。 */
 const SESSION_EXTRA_ERROR_CODES: readonly string[] = [
   'SESSION_NOT_FOUND',
-  'SESSION_SWITCH_BLOCKED',
-  'FORK_NOT_FOUND',
-  'FORK_CANCELLED',
-  'FORK_BLOCKED'
+  'SESSION_SWITCH_BLOCKED'
 ]
 
 export interface SessionError {
@@ -60,31 +55,6 @@ export type SessionOpenResult =
   | { readonly ok: true; readonly data: SessionList }
   | { readonly ok: false; readonly error: SessionError }
 
-/** 可分叉的用户消息：`entryId` 是会话条目的稳定 id，`text` 是消息原文。 */
-export interface ForkMessageSummary {
-  readonly entryId: string
-  readonly text: string
-}
-
-export interface ForkMessageList {
-  readonly messages: readonly ForkMessageSummary[]
-}
-
-export type ForkMessageListResult =
-  | { readonly ok: true; readonly data: ForkMessageList }
-  | { readonly ok: false; readonly error: SessionError }
-
-/** fork 请求只接受条目 id 与显式中断确认；fork 后的重启式切换复用会话打开链。 */
-export interface ForkStartRequest {
-  readonly entryId: string
-  readonly allowInterrupt: boolean
-}
-
-/** 成功数据带 fork 产生的新会话 id 与刷新后的列表。 */
-export type ForkStartResult =
-  | { readonly ok: true; readonly data: { readonly sessionId: string; readonly list: SessionList } }
-  | { readonly ok: false; readonly error: SessionError }
-
 export interface SessionApi {
   readonly listSessions: () => Promise<SessionListResult>
   /** 打开会话；`sessionId` 为 null 表示新建，非空时必须属于当前项目。 */
@@ -94,10 +64,6 @@ export interface SessionApi {
    * RPC 没有重载命令，资源只在进程启动时读取，因此唯一的重载方式是重启。
    */
   readonly reloadSession: (allowInterrupt: boolean) => Promise<SessionOpenResult>
-  /** 读取当前 Runtime 会话里可分叉的用户消息；要求 Runtime 就绪。 */
-  readonly getForkMessages: () => Promise<ForkMessageListResult>
-  /** 从指定条目分叉；成功后重启式切换到新会话。 */
-  readonly startFork: (entryId: string, allowInterrupt: boolean) => Promise<ForkStartResult>
 }
 
 // 与 runtime-api.ts 的共享错误码保持一致，再追加 Session 专有错误码。
@@ -147,46 +113,6 @@ function isSessionList(value: unknown): value is SessionList {
     && typeof value.truncated === 'number'
     && Number.isInteger(value.truncated)
     && value.truncated >= 0
-}
-
-function isForkMessageSummary(value: unknown): value is ForkMessageSummary {
-  if (!isRecord(value)) return false
-  return typeof value.entryId === 'string'
-    && value.entryId !== ''
-    && typeof value.text === 'string'
-}
-
-function isForkMessageList(value: unknown): value is ForkMessageList {
-  return isRecord(value)
-    && Array.isArray(value.messages)
-    && value.messages.every(isForkMessageSummary)
-}
-
-export function isForkMessageListResult(value: unknown): value is ForkMessageListResult {
-  if (!isRecord(value)) return false
-
-  if (value.ok === true) return isForkMessageList(value.data)
-  if (value.ok !== false || !isRecord(value.error)) return false
-  const { code, message } = value.error
-  return typeof message === 'string'
-    && typeof code === 'string'
-    && SESSION_ERROR_CODES.includes(code)
-}
-
-export function isForkStartResult(value: unknown): value is ForkStartResult {
-  if (!isRecord(value)) return false
-
-  if (value.ok === true) {
-    return isRecord(value.data)
-      && typeof value.data.sessionId === 'string'
-      && value.data.sessionId !== ''
-      && isSessionList(value.data.list)
-  }
-  if (value.ok !== false || !isRecord(value.error)) return false
-  const { code, message } = value.error
-  return typeof message === 'string'
-    && typeof code === 'string'
-    && SESSION_ERROR_CODES.includes(code)
 }
 
 // TypeScript 声明不能保证 invoke 的实际返回值；沙箱桥接只放行本契约。

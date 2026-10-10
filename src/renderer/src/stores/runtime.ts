@@ -1,9 +1,8 @@
-/** 保存聊天区与 Runtime 状态的展示状态、投影消息与工具条目副本、Agent 能力、订阅与启停、Prompt 提交与控制动作（含手动压缩），不持有 Runtime 所有权，也不承担消息重建与通知窗口。 */
+/** 保存聊天区与 Runtime 状态的展示状态、投影消息与工具条目副本、可用模型、订阅与启停、Prompt 提交及中止动作，不持有 Runtime 所有权，也不承担消息重建与通知窗口。 */
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import type {
   AgentCapabilities,
-  CompactResult,
   ProjectionBatch,
   ProjectionBlock,
   ProjectionMessage,
@@ -18,13 +17,10 @@ import { useTrustStore } from './trust'
 import {
   abortRuntime,
   ackRuntimeProjection,
-  compactRuntime,
   getRuntimeCapabilities,
   getRuntimeProjection,
   getRuntimeStatus,
   sendPrompt,
-  setRuntimeModel,
-  setRuntimeThinkingLevel,
   startRuntime,
   stopRuntime,
   subscribeRuntimeProjection,
@@ -54,24 +50,11 @@ type AbortViewState =
 /** `syncing` 表示未取得基准或正在重同步，`stale` 表示失去同步且尚未取得快照。 */
 type ProjectionSyncState = 'syncing' | 'synced' | 'stale'
 
-/** Agent 能力的展示状态；分区失败已在数据内表达，只有整体失败才进 `error`。 */
+/** 可用模型列表的读取状态。 */
 type CapabilitiesViewState =
   | { phase: 'idle' }
   | { phase: 'loading' }
   | { phase: 'ready'; data: AgentCapabilities }
-  | { phase: 'error'; error: RuntimeError }
-
-/** 模型或 Thinking 设置动作的展示状态；成功以快照收敛，不在这里保存结果值。 */
-type AgentActionState =
-  | { phase: 'idle' }
-  | { phase: 'applying' }
-  | { phase: 'error'; error: RuntimeError }
-
-/** 手动压缩动作的展示状态；成功保留最近一次结果供界面展示。 */
-type CompactActionState =
-  | { phase: 'idle' }
-  | { phase: 'compacting' }
-  | { phase: 'done'; result: CompactResult }
   | { phase: 'error'; error: RuntimeError }
 
 /** 块级幂等替换；新块按 contentIndex 顺序插入。 */
@@ -155,21 +138,13 @@ export const useRuntimeStore = defineStore('runtime', () => {
   const droppedMessages = ref(0)
   const droppedTools = ref(0)
   const capabilitiesView = ref<CapabilitiesViewState>({ phase: 'idle' })
-  const modelAction = ref<AgentActionState>({ phase: 'idle' })
-  const thinkingAction = ref<AgentActionState>({ phase: 'idle' })
-  const compactAction = ref<CompactActionState>({ phase: 'idle' })
   let releaseSubscription: (() => void) | null = null
   let releaseProjection: (() => void) | null = null
   /** 已取得基准快照的 Runtime 代际；为空表示尚无基准。 */
   let appliedRuntimeId: number | null = null
   let appliedSeq = 0
   let syncInFlight = false
-  /** 已取得能力结果的 Runtime 代际；代际不符的结果一律丢弃。 */
-  let capabilitiesRuntimeId: number | null = null
-  /**
-   * 已发起过读取的代际：读取失败后不因每次状态广播重复重试，
-   * 只有代际变化或一轮结束（上下文占用会变化）才再次读取。
-   */
+  /** 已发起过读取的代际：读取失败后不因每次状态广播重复重试。 */
   let capabilitiesAttemptedRuntimeId: number | null = null
 
   /** 先订阅状态与投影、再取快照，避免初始化期间漏掉通知。 */
@@ -345,13 +320,9 @@ export const useRuntimeStore = defineStore('runtime', () => {
       && view.value.snapshot.info?.isStreaming === true
     if (status.state !== 'ready') {
       resetProjection()
-      // Runtime 离开就绪后，上一次中止请求与控制动作的展示状态不再有意义。
+      // Runtime 离开就绪后，上一次中止请求的展示状态不再有意义。
       abortView.value = { phase: 'idle' }
-      modelAction.value = { phase: 'idle' }
-      thinkingAction.value = { phase: 'idle' }
-      compactAction.value = { phase: 'idle' }
       capabilitiesView.value = { phase: 'idle' }
-      capabilitiesRuntimeId = null
       capabilitiesAttemptedRuntimeId = null
     }
     if (status.state === 'failed') {
@@ -367,7 +338,7 @@ export const useRuntimeStore = defineStore('runtime', () => {
     if (status.state === 'ready') {
       view.value = { phase: 'ready', snapshot: status }
       if (status.runtimeId !== appliedRuntimeId) void syncProjection(status.runtimeId ?? undefined)
-      // 新代际，或一轮结束（运行中 → 非运行中）都会改变上下文占用，重新读取能力。
+      // 新 Runtime 或一轮结束后刷新模型列表，维持 Provider 与图片输入能力提示。
       if (status.runtimeId !== capabilitiesAttemptedRuntimeId
         || (previousStreaming && status.info?.isStreaming !== true)) {
         void refreshCapabilities()
@@ -386,10 +357,7 @@ export const useRuntimeStore = defineStore('runtime', () => {
     view.value = status.runtimeId === null ? { phase: 'idle' } : { phase: 'closed' }
   }
 
-  /**
-   * 读取 Agent 能力：结果必须属于仍在就绪的同一代际，否则丢弃。
-   * 已有结果时不回到 loading，避免周期刷新让弹层闪烁。
-   */
+  /** 读取当前 Runtime 的可用模型；结果必须属于仍在就绪的同一代际，否则丢弃。 */
   async function refreshCapabilities(): Promise<void> {
     if (view.value.phase !== 'ready') return
     const requestedRuntimeId = view.value.snapshot.runtimeId
@@ -403,54 +371,7 @@ export const useRuntimeStore = defineStore('runtime', () => {
       return
     }
     if (result.data.runtimeId !== requestedRuntimeId) return
-    capabilitiesRuntimeId = result.data.runtimeId
     capabilitiesView.value = { phase: 'ready', data: result.data }
-  }
-
-  /** 切换模型；成功后以主进程快照为准，并重新读取能力（Thinking levels 会随模型变化）。 */
-  async function setModel(provider: string, modelId: string): Promise<void> {
-    if (view.value.phase !== 'ready' || modelAction.value.phase === 'applying') return
-
-    modelAction.value = { phase: 'applying' }
-    const result = await setRuntimeModel(provider, modelId)
-    if (!result.ok) {
-      modelAction.value = { phase: 'error', error: result.error }
-      return
-    }
-    modelAction.value = { phase: 'idle' }
-    applyStatus(result.data)
-    await refreshCapabilities()
-  }
-
-  /** 设置 Thinking level；取值是否被接受由 Pi 决定，失败按错误码如实展示。 */
-  async function setThinkingLevel(level: string): Promise<void> {
-    if (view.value.phase !== 'ready' || thinkingAction.value.phase === 'applying') return
-
-    thinkingAction.value = { phase: 'applying' }
-    const result = await setRuntimeThinkingLevel(level)
-    if (!result.ok) {
-      thinkingAction.value = { phase: 'error', error: result.error }
-      return
-    }
-    thinkingAction.value = { phase: 'idle' }
-    applyStatus(result.data)
-  }
-
-  /**
-   * 手动压缩上下文；等待完成，成功展示结果并重新读取能力（上下文占用会变化）。
-   * 压缩中提交仍以 Pi 的拒绝为准，这里不做本地预检。
-   */
-  async function compact(): Promise<void> {
-    if (view.value.phase !== 'ready' || compactAction.value.phase === 'compacting') return
-
-    compactAction.value = { phase: 'compacting' }
-    const result = await compactRuntime()
-    if (!result.ok) {
-      compactAction.value = { phase: 'error', error: result.error }
-      return
-    }
-    compactAction.value = { phase: 'done', result: result.data }
-    await refreshCapabilities()
   }
 
   return {
@@ -458,9 +379,6 @@ export const useRuntimeStore = defineStore('runtime', () => {
     promptView,
     abortView,
     capabilitiesView,
-    modelAction,
-    thinkingAction,
-    compactAction,
     messages,
     tools,
     projectionSync,
@@ -473,9 +391,6 @@ export const useRuntimeStore = defineStore('runtime', () => {
     shutdown,
     send,
     stopOperation,
-    refreshCapabilities,
-    setModel,
-    setThinkingLevel,
-    compact
+    refreshCapabilities
   }
 })

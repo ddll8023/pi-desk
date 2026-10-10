@@ -1,7 +1,7 @@
-<!-- 主界面外壳：组合顶栏、项目侧栏、消息区与 Prompt 区，负责各展示 Store 的初始化、项目变化后的会话列表刷新，以及运行中切换与项目信任决定的对话框；同时承载 Extension 的对话、通知与 widget 展示。 -->
+<!-- 主界面外壳：组合顶栏、项目侧栏与聊天/设置主内容区，负责视图切换、各展示 Store 初始化、项目变化后的会话列表刷新，以及运行中切换与项目信任对话框；同时承载 Extension 的对话、通知与 widget 展示。 -->
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
-import { computed, onMounted, onUnmounted, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useDesktopStore } from './stores/desktop'
 import { useExtensionUiStore } from './stores/extension-ui'
 import { usePreferencesStore } from './stores/preferences'
@@ -18,6 +18,7 @@ import ExtensionNotificationBar from './components/ExtensionNotificationBar.vue'
 import PromptComposer from './components/PromptComposer.vue'
 import ProjectSidebar from './components/ProjectSidebar.vue'
 import SessionPickerDialog from './components/SessionPickerDialog.vue'
+import SettingsView from './components/SettingsView.vue'
 import TrustDialog from './components/TrustDialog.vue'
 
 const desktopStore = useDesktopStore()
@@ -31,6 +32,7 @@ const { currentProject, pendingPath } = storeToRefs(projectStore)
 const { awaitingInterrupt, pendingReload, pendingSessionId } = storeToRefs(sessionStore)
 const { sidebarCollapsed, ready: preferencesReady } = storeToRefs(preferencesStore)
 const trustStore = useTrustStore()
+const currentView = ref<'chat' | 'settings'>('chat')
 
 /** Extension widget 按放置位置拆分；空 lines 的条目不会出现在主进程快照中。 */
 const widgetsAbove = computed(() => extensionStore.widgets.filter((w) => w.placement === 'aboveEditor'))
@@ -113,19 +115,26 @@ onUnmounted(() => {
 
     <div class="flex min-h-0 flex-1">
       <!-- 偏好读取完成后才挂载项目侧栏，避免首帧闪烁；折叠状态由 class 驱动滑出动画，组件保持挂载。 -->
-      <ProjectSidebar v-if="preferencesReady" />
+      <ProjectSidebar
+        v-if="preferencesReady"
+        :settings-active="currentView === 'settings'"
+        @toggle-settings="currentView = currentView === 'settings' ? 'chat' : 'settings'"
+      />
 
       <main class="flex min-w-0 flex-1 flex-col">
-        <ExtensionNotificationBar />
-        <ChatMessageList />
-        <!-- Widget 放置语义与官方子协议一致：aboveEditor 在输入区上方，belowEditor 在下方。 -->
-        <div v-for="widget in widgetsAbove" :key="widget.placement" class="px-4 py-2 sm:px-6">
-          <pre class="widget-block">{{ widget.lines.join('\n') }}</pre>
-        </div>
-        <PromptComposer />
-        <div v-for="widget in widgetsBelow" :key="widget.placement" class="px-4 py-2 sm:px-6">
-          <pre class="widget-block">{{ widget.lines.join('\n') }}</pre>
-        </div>
+        <SettingsView v-if="currentView === 'settings'" />
+        <template v-else>
+          <ExtensionNotificationBar />
+          <ChatMessageList />
+          <!-- Widget 放置语义与官方子协议一致：aboveEditor 在输入区上方，belowEditor 在下方。 -->
+          <div v-for="widget in widgetsAbove" :key="widget.placement" class="px-4 py-2 sm:px-6">
+            <pre class="widget-block">{{ widget.lines.join('\n') }}</pre>
+          </div>
+          <PromptComposer />
+          <div v-for="widget in widgetsBelow" :key="widget.placement" class="px-4 py-2 sm:px-6">
+            <pre class="widget-block">{{ widget.lines.join('\n') }}</pre>
+          </div>
+        </template>
       </main>
     </div>
 

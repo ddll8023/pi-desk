@@ -1,10 +1,18 @@
-<!-- 项目侧栏：最近项目列表与添加项目入口；项目解析、持久化与切换编排都在主进程，会话切换走 /resume 与顶栏会话 chip。 -->
+<!-- 项目侧栏：最近项目列表、添加项目以及设置/返回对话入口；项目解析、持久化与切换编排都在主进程，会话切换走 /resume 与顶栏会话 chip。 -->
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
 import { computed } from 'vue'
 import { usePreferencesStore } from '../stores/preferences'
 import { useProjectStore } from '../stores/project'
 import AppButton from './ui/AppButton.vue'
+
+const props = defineProps<{
+  readonly settingsActive: boolean
+}>()
+
+const emit = defineEmits<{
+  toggleSettings: []
+}>()
 
 const preferencesStore = usePreferencesStore()
 const projectStore = useProjectStore()
@@ -17,6 +25,18 @@ function selectSavedProject(path: string): void {
   if (path === projectStore.currentProject?.path) return
   void projectStore.select(path, false)
 }
+
+function projectInitial(name: string): string {
+  return Array.from(name.trim())[0]?.toLocaleUpperCase() ?? '?'
+}
+
+function projectColorIndex(id: string): number {
+  let hash = 0
+  for (const character of id) {
+    hash = (hash * 31 + (character.codePointAt(0) ?? 0)) >>> 0
+  }
+  return hash % 6
+}
 </script>
 
 <template>
@@ -28,12 +48,12 @@ function selectSavedProject(path: string): void {
     aria-label="项目"
   >
     <Transition name="sidebar-fade" appear>
-      <div class="flex h-12 shrink-0 items-center justify-between gap-2 border-b border-desk-line px-3">
-        <h2 class="text-sm font-semibold">项目</h2>
+      <div class="project-sidebar-header">
+        <h2 class="project-sidebar-heading">项目</h2>
         <div class="flex gap-1">
           <AppButton
             variant="unstyled"
-            class="icon-button"
+            class="project-sidebar-add"
             :disabled="busy"
             @click="projectStore.choose()"
           >
@@ -54,19 +74,28 @@ function selectSavedProject(path: string): void {
         尚无已保存的项目；点击上方「添加项目…」选择目录。
       </p>
       <template v-else>
-        <h3 class="section-label mb-1.5 px-1">最近项目</h3>
-        <ul class="space-y-1.5">
+        <h3 class="project-sidebar-section">最近项目</h3>
+        <ul class="project-sidebar-list">
           <li v-for="project in projects" :key="project.id">
             <AppButton
               variant="unstyled"
-              class="list-item"
-              :class="project.id === currentProjectId ? 'list-item-active' : ''"
+              class="project-sidebar-item"
+              :class="project.id === currentProjectId ? 'is-active' : ''"
               :aria-current="project.id === currentProjectId ? 'true' : 'false'"
               :disabled="busy"
               @click="selectSavedProject(project.path)"
             >
-              <span class="block truncate text-xs font-medium">{{ project.name }}</span>
-              <span class="mt-0.5 block break-all font-mono text-2xs text-desk-muted">{{ project.path }}</span>
+              <span
+                class="project-sidebar-mark"
+                :class="`project-sidebar-mark-${projectColorIndex(project.id)}`"
+                aria-hidden="true"
+              >
+                {{ projectInitial(project.name) }}
+              </span>
+              <span class="project-sidebar-copy">
+                <span class="project-sidebar-name">{{ project.name }}</span>
+                <span class="project-sidebar-path">{{ project.path }}</span>
+              </span>
             </AppButton>
           </li>
         </ul>
@@ -74,5 +103,20 @@ function selectSavedProject(path: string): void {
       </template>
       </div>
     </Transition>
+
+    <div class="project-sidebar-footer">
+      <AppButton
+        variant="unstyled"
+        class="project-sidebar-settings"
+        :class="props.settingsActive ? 'is-active' : ''"
+        :aria-current="props.settingsActive ? 'page' : undefined"
+        @click="emit('toggleSettings')"
+      >
+        <span class="project-sidebar-settings-icon" aria-hidden="true">
+          {{ props.settingsActive ? '←' : '⚙' }}
+        </span>
+        <span>{{ props.settingsActive ? '返回对话' : '设置' }}</span>
+      </AppButton>
+    </div>
   </aside>
 </template>

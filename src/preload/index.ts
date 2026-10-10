@@ -1,4 +1,4 @@
-/** 为沙箱页面提供应用信息、Project 选择与列表、Session 列表与打开与重新加载、分叉消息读取与分叉发起、Project Trust 查询与决定、界面偏好、Runtime 启停与安全启动、Agent 能力控制、手动压缩、Pi 资源与诊断读取、MCP 状态与 MCP 登录退出请求、认证状态与 Provider 登录退出、Prompt 提交、中止、消息/工具投影与事件订阅、Extension UI 状态读取、对话响应与快照订阅，不暴露 Electron、任意 channel 或系统能力。 */
+/** 为沙箱页面提供应用信息、Project 选择与列表、Session 列表与打开与重新加载、Project Trust 查询与决定、界面偏好、Runtime 启停与安全启动、可用模型读取、Pi 资源与诊断读取、MCP 状态与 MCP 登录退出请求、认证状态与 Provider 登录退出、Prompt 提交、中止、消息/工具投影与事件订阅、Extension UI 状态读取、对话响应与快照订阅，不暴露 Electron、任意 channel 或系统能力。 */
 import { contextBridge, ipcRenderer } from 'electron'
 import type { IpcRendererEvent } from 'electron'
 import { APP_INFO_CHANNEL, isAppInfoResult } from '../shared/desktop-api'
@@ -23,19 +23,12 @@ import type {
   ProjectSetCurrentRequest
 } from '../shared/project-api'
 import {
-  FORK_MESSAGES_CHANNEL,
-  FORK_START_CHANNEL,
   SESSION_LIST_CHANNEL,
   SESSION_OPEN_CHANNEL,
   SESSION_RELOAD_CHANNEL,
-  isForkMessageListResult,
-  isForkStartResult,
   isSessionListResult
 } from '../shared/session-api'
 import type {
-  ForkMessageListResult,
-  ForkStartRequest,
-  ForkStartResult,
   SessionApi,
   SessionListResult,
   SessionOpenRequest
@@ -90,7 +83,6 @@ import type {
 import {
   RUNTIME_ABORT_CHANNEL,
   RUNTIME_CAPABILITIES_CHANNEL,
-  RUNTIME_COMPACT_CHANNEL,
   RUNTIME_DIAGNOSTICS_CHANNEL,
   RUNTIME_MCP_COMMAND_CHANNEL,
   RUNTIME_MCP_STATUS_CHANNEL,
@@ -99,15 +91,12 @@ import {
   RUNTIME_PROJECTION_CHANNEL,
   RUNTIME_PROJECTION_EVENT,
   RUNTIME_RESOURCES_CHANNEL,
-  RUNTIME_SET_MODEL_CHANNEL,
-  RUNTIME_SET_THINKING_LEVEL_CHANNEL,
   RUNTIME_START_CHANNEL,
   RUNTIME_START_SAFE_CHANNEL,
   RUNTIME_STATUS_CHANNEL,
   RUNTIME_STOP_CHANNEL,
   RUNTIME_STATUS_EVENT,
   isCapabilitiesResult,
-  isCompactResultResult,
   isMcpCommandResult,
   isMcpStatusResult,
   isProjectionBatch,
@@ -120,7 +109,6 @@ import {
 } from '../shared/runtime-api'
 import type {
   CapabilitiesResult,
-  CompactResultResult,
   McpCommandAction,
   McpCommandResult,
   McpStatusResult,
@@ -133,15 +121,13 @@ import type {
   RuntimeDiagnosticsResult,
   RuntimeResult,
   RuntimeStartRequest,
-  RuntimeStatus,
-  SetModelRequest,
-  SetThinkingLevelRequest
+  RuntimeStatus
 } from '../shared/runtime-api'
 
 const INVALID_RUNTIME_RESPONSE = '桌面接口返回了无法识别的 Runtime 结果。'
 const INVALID_PROMPT_RESPONSE = '桌面接口返回了无法识别的 Prompt 结果。'
 const INVALID_PROJECTION_RESPONSE = '桌面接口返回了无法识别的投影快照。'
-const INVALID_CAPABILITIES_RESPONSE = '桌面接口返回了无法识别的 Agent 能力结果。'
+const INVALID_CAPABILITIES_RESPONSE = '桌面接口返回了无法识别的模型列表结果。'
 const INVALID_PROJECT_PATH_RESPONSE = '桌面接口返回了无法识别的目录选择结果。'
 const INVALID_PROJECT_LIST_RESPONSE = '桌面接口返回了无法识别的项目列表。'
 const INVALID_SESSION_LIST_RESPONSE = '桌面接口返回了无法识别的会话列表。'
@@ -262,25 +248,6 @@ const desktop: DesktopApi & RuntimeApi & ProjectApi & SessionApi & PreferencesAp
     return isSessionListResult(response) ? response : invalidSessionResponse()
   },
 
-  async getForkMessages(): Promise<ForkMessageListResult> {
-    const response: unknown = await ipcRenderer.invoke(FORK_MESSAGES_CHANNEL)
-    if (isForkMessageListResult(response)) return response
-    return {
-      ok: false,
-      error: { code: 'INVALID_RESPONSE', message: '桌面接口返回了无法识别的分叉消息列表。' }
-    }
-  },
-
-  async startFork(entryId: string, allowInterrupt: boolean): Promise<ForkStartResult> {
-    const request: ForkStartRequest = { entryId, allowInterrupt }
-    const response: unknown = await ipcRenderer.invoke(FORK_START_CHANNEL, request)
-    if (isForkStartResult(response)) return response
-    return {
-      ok: false,
-      error: { code: 'INVALID_RESPONSE', message: '桌面接口返回了无法识别的分叉结果。' }
-    }
-  },
-
   async getTrustStatus() {
     const response: unknown = await ipcRenderer.invoke(TRUST_STATUS_CHANNEL)
     return isTrustStatusResult(response) ? response : invalidTrustResponse()
@@ -348,29 +315,6 @@ const desktop: DesktopApi & RuntimeApi & ProjectApi & SessionApi & PreferencesAp
   async getRuntimeCapabilities() {
     const response: unknown = await ipcRenderer.invoke(RUNTIME_CAPABILITIES_CHANNEL)
     return isCapabilitiesResult(response) ? response : invalidCapabilitiesResponse()
-  },
-
-  async setRuntimeModel(request: SetModelRequest) {
-    // 只搬运已声明的字段，不把页面传入的整个对象转交给主进程。
-    const payload: SetModelRequest = { provider: request.provider, modelId: request.modelId }
-    const response: unknown = await ipcRenderer.invoke(RUNTIME_SET_MODEL_CHANNEL, payload)
-    return isRuntimeResult(response) ? response : invalidRuntimeResponse()
-  },
-
-  async setRuntimeThinkingLevel(request: SetThinkingLevelRequest) {
-    const payload: SetThinkingLevelRequest = { level: request.level }
-    const response: unknown = await ipcRenderer.invoke(RUNTIME_SET_THINKING_LEVEL_CHANNEL, payload)
-    return isRuntimeResult(response) ? response : invalidRuntimeResponse()
-  },
-
-  async compactRuntime(): Promise<CompactResultResult> {
-    const response: unknown = await ipcRenderer.invoke(RUNTIME_COMPACT_CHANNEL)
-    // compact 成功数据不是 RuntimeStatus，不能用 invalidRuntimeResponse 作回退。
-    if (isCompactResultResult(response)) return response
-    return {
-      ok: false,
-      error: { code: 'INVALID_RESPONSE', message: '桌面接口返回了无法识别的压缩结果。' }
-    }
   },
 
   async getRuntimeResources(): Promise<ResourcesResult> {

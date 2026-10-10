@@ -9,7 +9,6 @@
 import type {
   AgentCapabilities,
   CapabilitiesResult,
-  CompactResult,
   ExtensionErrorEntry,
   McpCommandAction,
   McpCommandResult,
@@ -24,12 +23,9 @@ import type {
   RuntimeDiagnosticsResult,
   RuntimeErrorCode,
   RuntimeResult,
-  RuntimeStatus,
-  SetModelRequest,
-  SetThinkingLevelRequest
+  RuntimeStatus
 } from '../shared/runtime-api'
 import type { ExtensionDialogResponseInput, ExtensionUiSnapshot } from '../shared/extension-ui-api'
-import type { ForkMessageSummary } from '../shared/session-api'
 import { MessageProjection } from './message-projection'
 import type { ProjectionStatusHint } from './message-projection'
 import { ExtensionUiManager } from './extension-ui-manager'
@@ -37,16 +33,11 @@ import { PiProcess, PiProcessError } from './pi-process'
 import type { PiExitEvent } from './pi-process'
 import {
   PiProtocol,
-  toCompactResult,
-  toContextUsageField,
   toExtensionError,
-  toForkMessages,
-  toForkOutcome,
   toModelSummaries,
   toPromptDisposition,
   toResources,
-  toRuntimeInfo,
-  toThinkingLevels
+  toRuntimeInfo
 } from './pi-protocol'
 import type { PiResponseRecord } from './pi-protocol'
 import { ProjectPathError, normalizeProjectPath } from './project-path'
@@ -54,15 +45,6 @@ import { getSessionRoot } from './session-store'
 
 /** get_state 就绪等待期限；超时只结束等待，不证明 Pi 没有响应。 */
 const READY_TIMEOUT_MS = 10_000
-
-/** fork 消息列表读取的等待上限。 */
-const FORK_MESSAGES_TIMEOUT_MS = 15_000
-
-/** fork 命令的等待上限；fork 含文件复制与 Extension 处理，等待期限比普通命令长。 */
-const FORK_TIMEOUT_MS = 30_000
-
-/** 手动压缩的等待上限；压缩是一次 LLM 调用，比普通命令长得多。 */
-const COMPACT_TIMEOUT_MS = 120_000
 
 /** prompt 只等待 preflight 的期限；超时只结束等待，结果未知且不自动重发。 */
 const PROMPT_TIMEOUT_MS = 30_000
@@ -76,10 +58,7 @@ const ABORT_SHUTDOWN_WAIT_MS = 3_000
 /** 恢复会话时读取历史消息的等待上限；超时按启动失败处理，不显示不完整的历史。 */
 const HISTORY_TIMEOUT_MS = 15_000
 
-/** 模型与 Thinking 设置的等待上限；超时只结束等待，结果未知且不自动重发。 */
-const COMMAND_TIMEOUT_MS = 15_000
-
-/** 能力查询（可用模型、Thinking levels、上下文占用）的等待上限。 */
+/** 可用模型列表查询的等待上限。 */
 const CAPABILITIES_TIMEOUT_MS = 15_000
 
 /** prompt 文本上限，按 UTF-8 字节计。 */
@@ -178,14 +157,10 @@ export class RuntimeManager {
   })
   /** 是否由主动关闭触发：用于区分正常关闭与异常退出。 */
   private stopRequested = false
-  /**
-   * 能力缓存只保存成功结果：可用模型列表与当前模型无关，Thinking levels 在模型变化后失效；
-   * 上下文占用随对话变化，不进缓存。代际不符时按未命中处理。
-   */
+  /** 可用模型列表按 Runtime 代际缓存；代际不符时按未命中处理。 */
   private capabilityCache: {
     readonly runtimeId: number
     models: ModelSummary[] | null
-    thinkingLevels: string[] | null
   } | null = null
   /** 事件触发的状态刷新是否在进行中：避免每轮结束叠加多次 get_state。 */
   private refreshing = false
@@ -231,123 +206,6 @@ export class RuntimeManager {
   ): ExtensionUiSnapshot | null {
     const outcome = this.extensionUi.respond(dialogId, response)
     return outcome.ok ? outcome.snapshot : null
-  }
-
-  /**
-   * 读取当前会话里可分叉的用户消息；要求 Runtime 就绪。
-   * 空列表是合法结果（还没有用户消息），与失败相区分。
-   */
-  async readForkMessages(): Promise<
-    { ok: true; messages: ForkMessageSummary[] } | { ok: false; code: RuntimeErrorCode; message: string }
-  > {
-    try {
-      const runtime = this.requireReadyRuntime()
-      const response = await this.requestCommand(
-        runtime,
-        { type: 'get_fork_messages' },
-        FORK_MESSAGES_TIMEOUT_MS,
-        '读取可分叉消息'
-      )
-      if (!response.success) {
-        throw new RuntimeFailure(
-          'RUNTIME_COMMAND_REJECTED',
-          `Pi 拒绝了读取可分叉消息：${response.error ?? '未提供错误信息'}`
-        )
-      }
-      const messages = toForkMessages(response.data)
-      if (messages === null) {
-        throw new RuntimeFailure('RUNTIME_PROTOCOL_ERROR', 'get_fork_messages 响应缺少约定的消息数组。')
-      }
-      return { ok: true, messages }
-    } catch (error) {
-      const failure = error instanceof RuntimeFailure
-        ? error
-        : new RuntimeFailure('INTERNAL_ERROR', '读取可分叉消息时发生未预期的内部错误。')
-      return { ok: false, code: failure.code, message: failure.message }
-    }
-  }
-
-  /**
-   * 向 Pi 发送 fork 命令并等待结果；只负责命令往返，成功后的会话切换由 SessionManager 编排。
-   * Extension 取消是 fork 的正常结果，以 `cancelled: true` 返回，由调用方映射为专属错误码；
-   * 判定只依据响应的 `cancelled` 字段，不从错误文本推断。
-   */
-  async requestFork(entryId: string): Promise<
-    { ok: true; text: string | null } | { ok: false; code: RuntimeErrorCode; message: string; cancelled: boolean }
-  > {
-    try {
-      const runtime = this.requireReadyRuntime()
-      const response = await this.requestCommand(
-        runtime,
-        { type: 'fork', entryId },
-        FORK_TIMEOUT_MS,
-        '分叉会话'
-      )
-      if (!response.success) {
-        throw new RuntimeFailure(
-          'RUNTIME_COMMAND_REJECTED',
-          `Pi 拒绝了分叉：${response.error ?? '未提供错误信息'}`
-        )
-      }
-      const outcome = toForkOutcome(response.data)
-      if (outcome === null) {
-        throw new RuntimeFailure('RUNTIME_PROTOCOL_ERROR', 'fork 响应缺少约定的 cancelled 字段。')
-      }
-      if (outcome.cancelled) {
-        // 取消不是失败：直接返回结果，不用异常与错误文本表达预期分支。
-        return {
-          ok: false,
-          code: 'RUNTIME_COMMAND_REJECTED',
-          message: '分叉已被 Extension 取消。',
-          cancelled: true
-        }
-      }
-      return { ok: true, text: outcome.text }
-    } catch (error) {
-      const failure = error instanceof RuntimeFailure
-        ? error
-        : new RuntimeFailure('INTERNAL_ERROR', '分叉会话时发生未预期的内部错误。')
-      return {
-        ok: false,
-        code: failure.code,
-        message: failure.message,
-        cancelled: false
-      }
-    }
-  }
-
-  /**
-   * 手动压缩上下文并等待完成；成功返回结果投影，失败与超时如实返回，不自动重发。
-   * 压缩中状态由 `isCompacting` 与事件流收敛，这里不做本地预检。
-   */
-  async compact(): Promise<
-    { ok: true; result: CompactResult } | { ok: false; code: RuntimeErrorCode; message: string }
-  > {
-    try {
-      const runtime = this.requireReadyRuntime()
-      const response = await this.requestCommand(
-        runtime,
-        { type: 'compact' },
-        COMPACT_TIMEOUT_MS,
-        '压缩上下文'
-      )
-      if (!response.success) {
-        throw new RuntimeFailure(
-          'RUNTIME_COMMAND_REJECTED',
-          `Pi 拒绝了压缩：${response.error ?? '未提供错误信息'}`
-        )
-      }
-      const result = toCompactResult(response.data)
-      if (result === null) {
-        throw new RuntimeFailure('RUNTIME_PROTOCOL_ERROR', 'compact 响应缺少约定的结果字段。')
-      }
-      return { ok: true, result }
-    } catch (error) {
-      const failure = error instanceof RuntimeFailure
-        ? error
-        : new RuntimeFailure('INTERNAL_ERROR', '压缩上下文时发生未预期的内部错误。')
-      return { ok: false, code: failure.code, message: failure.message }
-    }
   }
 
   /**
@@ -602,8 +460,7 @@ export class RuntimeManager {
   }
 
   /**
-   * 读取当前代际的可用模型、Thinking 能力与上下文占用。
-   * 分区失败只影响本项，只有整体失败（如未就绪）才返回错误结果。
+   * 读取当前 Runtime 代际的可用模型；模型列表失败作为结果中的错误返回。
    */
   async readCapabilities(): Promise<CapabilitiesResult> {
     try {
@@ -615,26 +472,6 @@ export class RuntimeManager {
         : new RuntimeFailure('INTERNAL_ERROR', '读取 Agent 能力时发生未预期的内部错误。')
       return { ok: false, error: { code: failure.code, message: failure.message } }
     }
-  }
-
-  /** 切换模型；Pi 的拒绝按 `RUNTIME_COMMAND_REJECTED` 如实返回，成功后用 get_state 收敛快照。 */
-  async setModel(request: SetModelRequest): Promise<RuntimeResult> {
-    return this.applyAgentCommand(
-      { type: 'set_model', provider: request.provider, modelId: request.modelId },
-      '切换模型',
-      () => {
-        // 模型变化后当前模型支持的 Thinking levels 需要重新读取。
-        this.invalidateThinkingLevels()
-      }
-    )
-  }
-
-  /** 设置 Thinking level；取值合法性由 Pi 判定，失败同样按命令拒绝返回。 */
-  async setThinkingLevel(request: SetThinkingLevelRequest): Promise<RuntimeResult> {
-    return this.applyAgentCommand(
-      { type: 'set_thinking_level', level: request.level },
-      '设置 Thinking level'
-    )
   }
 
   /**
@@ -1012,36 +849,6 @@ export class RuntimeManager {
     return outcome.response
   }
 
-  /**
-   * 执行一条会改变 Agent 配置的命令：成功后刷新快照并返回权威状态。
-   * 失败一律如实返回，不本地预检、不自动重发。
-   */
-  private async applyAgentCommand(
-    command: Record<string, unknown>,
-    label: string,
-    afterSuccess?: () => void
-  ): Promise<RuntimeResult> {
-    try {
-      const runtime = this.requireReadyRuntime()
-      const response = await this.requestCommand(runtime, command, COMMAND_TIMEOUT_MS, label)
-      if (!response.success) {
-        throw new RuntimeFailure(
-          'RUNTIME_COMMAND_REJECTED',
-          `Pi 拒绝了${label}：${response.error ?? '未提供错误信息'}`
-        )
-      }
-      afterSuccess?.()
-      await this.refreshStatus(runtime)
-      return { ok: true, data: { ...this.snapshot } }
-    } catch (error) {
-      const failure = error instanceof RuntimeFailure
-        ? error
-        : new RuntimeFailure('INTERNAL_ERROR', `${label}时发生未预期的内部错误。`)
-      // 请求失败不改写 Runtime 快照；进程真的退出时由退出路径负责收敛状态。
-      return { ok: false, error: { code: failure.code, message: failure.message } }
-    }
-  }
-
   /** 只读能力查询：失败与形状不符都收敛为可展示原因，不让单项失败影响其他分区。 */
   private async readCapability<T>(
     runtime: ActiveRuntime,
@@ -1065,15 +872,10 @@ export class RuntimeManager {
     }
   }
 
-  /** 组装能力结果：可用模型与 Thinking levels 按代际缓存，上下文占用每次重新读取。 */
+  /** 读取并按代际缓存可用模型列表。 */
   private async collectCapabilities(runtime: ActiveRuntime): Promise<AgentCapabilities> {
     const cached = this.capabilityCache?.runtimeId === runtime.runtimeId ? this.capabilityCache : null
-    const cache = {
-      runtimeId: runtime.runtimeId,
-      models: cached?.models ?? null,
-      thinkingLevels: cached?.thinkingLevels ?? null
-    }
-
+    const cache = { runtimeId: runtime.runtimeId, models: cached?.models ?? null }
     let models = cache.models
     let modelsError: string | null = null
     if (models === null) {
@@ -1087,47 +889,8 @@ export class RuntimeManager {
       modelsError = read.error
       if (models !== null) cache.models = models
     }
-
-    let thinkingLevels = cache.thinkingLevels
-    let thinkingLevelsError: string | null = null
-    if (thinkingLevels === null) {
-      const read = await this.readCapability(
-        runtime,
-        { type: 'get_available_thinking_levels' },
-        'Thinking level 列表',
-        toThinkingLevels
-      )
-      thinkingLevels = read.value
-      thinkingLevelsError = read.error
-      if (thinkingLevels !== null) cache.thinkingLevels = thinkingLevels
-    }
-
     this.capabilityCache = cache
-
-    // 上下文占用字段缺失表示 Pi 没有可用上下文窗口，与格式错误区分开。
-    const usage = await this.readCapability(
-      runtime,
-      { type: 'get_session_stats' },
-      '上下文占用',
-      toContextUsageField
-    )
-
-    return {
-      runtimeId: runtime.runtimeId,
-      models: models ?? [],
-      modelsError,
-      thinkingLevels: thinkingLevels ?? [],
-      thinkingLevelsError,
-      contextUsage: usage.value?.usage ?? null,
-      contextUsageError: usage.error
-    }
-  }
-
-  /** 模型变化后重新读取 Thinking levels；可用模型列表与当前模型无关，继续复用。 */
-  private invalidateThinkingLevels(): void {
-    const cache = this.capabilityCache
-    if (cache === null) return
-    this.capabilityCache = { ...cache, thinkingLevels: null }
+    return { runtimeId: runtime.runtimeId, models: models ?? [], modelsError }
   }
 
   /**
@@ -1161,10 +924,7 @@ export class RuntimeManager {
     })
   }
 
-  /**
-   * 收敛由事件表达的 Runtime 状态：`thinking_level_changed` 直接更新级别；
-   * `agent_settled` 之后刷新一次快照，让 `isCompacting` 等 get_state 字段回到权威值。
-   */
+  /** Agent 一轮结束后刷新状态快照，确保消息计数等字段收敛。 */
   private applyRuntimeEvent(runtimeId: number, payload: Record<string, unknown>): void {
     const runtime = this.active
     if (runtime === null || runtime.runtimeId !== runtimeId) return
@@ -1175,20 +935,6 @@ export class RuntimeManager {
       if (entry === null) return
       runtime.extensionErrors.push(entry)
       if (runtime.extensionErrors.length > EXTENSION_ERROR_LIMIT) runtime.extensionErrors.shift()
-      return
-    }
-
-    if (payload.type === 'thinking_level_changed') {
-      const info = this.snapshot.info
-      if (this.snapshot.state !== 'ready' || info === null) return
-      const level = typeof payload.level === 'string' ? payload.level : null
-      if (level === null) return
-      this.publish({
-        state: 'ready',
-        runtimeId,
-        info: { ...info, thinkingLevel: level },
-        lastError: null
-      })
       return
     }
 

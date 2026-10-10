@@ -1,16 +1,13 @@
-/** 作为渲染端 Runtime 启停、Agent 能力读取与设置、手动压缩、Prompt 提交、中止与投影同步的调用入口，把桥接缺失与通信异常转换为安全的展示结果。 */
+/** 作为渲染端 Runtime 启停、可用模型读取、Prompt 提交、中止与投影同步的调用入口，把桥接缺失与通信异常转换为安全的展示结果。 */
 import type {
   CapabilitiesResult,
-  CompactResultResult,
   ProjectionBatch,
   ProjectionResult,
   PromptImageInput,
   PromptResult,
   RuntimeError,
   RuntimeResult,
-  RuntimeStatus,
-  SetModelRequest,
-  SetThinkingLevelRequest
+  RuntimeStatus
 } from '../../../shared/runtime-api'
 
 function unavailable(): { ok: false; error: RuntimeError } {
@@ -93,47 +90,12 @@ export async function getRuntimeProjection(): Promise<ProjectionResult> {
   }
 }
 
-/** 读取当前代际的可用模型、Thinking 能力与上下文占用；分区失败由结果内的 error 表达。 */
+/** 读取当前代际的可用模型；失败原因由结果表达。 */
 export async function getRuntimeCapabilities(): Promise<CapabilitiesResult> {
   const bridge = window.desktop
   if (!bridge || typeof bridge.getRuntimeCapabilities !== 'function') return unavailable()
   try {
     return await bridge.getRuntimeCapabilities()
-  } catch {
-    return callFailed()
-  }
-}
-
-/** 切换模型；成功数据是切换后的 Runtime 快照，失败按错误码如实返回。 */
-export async function setRuntimeModel(provider: string, modelId: string): Promise<RuntimeResult> {
-  const bridge = window.desktop
-  if (!bridge || typeof bridge.setRuntimeModel !== 'function') return unavailable()
-  const request: SetModelRequest = { provider, modelId }
-  try {
-    return await bridge.setRuntimeModel(request)
-  } catch {
-    return callFailed()
-  }
-}
-
-/** 设置 Thinking level；取值合法性由 Pi 判定，不在渲染端预检。 */
-export async function setRuntimeThinkingLevel(level: string): Promise<RuntimeResult> {
-  const bridge = window.desktop
-  if (!bridge || typeof bridge.setRuntimeThinkingLevel !== 'function') return unavailable()
-  const request: SetThinkingLevelRequest = { level }
-  try {
-    return await bridge.setRuntimeThinkingLevel(request)
-  } catch {
-    return callFailed()
-  }
-}
-
-/** 手动压缩上下文；等待压缩完成，成功返回结果投影，失败与超时如实返回。 */
-export async function compactRuntime(): Promise<CompactResultResult> {
-  const bridge = window.desktop
-  if (!bridge || typeof bridge.compactRuntime !== 'function') return unavailable()
-  try {
-    return await bridge.compactRuntime()
   } catch {
     return callFailed()
   }

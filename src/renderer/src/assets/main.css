@@ -543,8 +543,140 @@
     opacity: 0;
   }
 
-  /* 项目侧栏：收起时向左滑出并释放占位，展开时滑入；margin 与 transform 同步过渡，
-     内容区在动画期间跟随重排（同 VSCode 侧栏做法）。folded 时加 aria-hidden 与 inert。 */
+  /* 项目侧栏：以当前项目为视觉锚点，路径作为可截断的次级信息；不复用全局列表行样式。 */
+  .project-sidebar-header {
+    @apply flex h-12 shrink-0 items-center justify-between gap-2 border-b border-desk-line px-4;
+  }
+
+  .project-sidebar-heading {
+    @apply text-sm font-semibold tracking-tight;
+  }
+
+  .project-sidebar-add {
+    @apply rounded-desk-sm px-2 py-1 text-xs font-medium text-desk-muted transition-colors;
+  }
+
+  .project-sidebar-add:not(:disabled):hover {
+    @apply bg-desk-surface-subtle text-desk-ink;
+  }
+
+  .project-sidebar-section {
+    @apply mb-2 px-1 text-2xs font-semibold tracking-wide text-desk-muted;
+  }
+
+  .project-sidebar-list {
+    @apply space-y-2;
+  }
+
+  .project-sidebar-item {
+    @apply flex w-full min-w-0 items-center gap-3 rounded-desk-md border border-desk-line bg-desk-surface px-3 py-2.5 text-left transition-colors;
+    box-shadow: var(--shadow-desk-raise);
+  }
+
+  .project-sidebar-item:not(:disabled):hover {
+    @apply bg-desk-surface-subtle;
+  }
+
+  .project-sidebar-item:not(:disabled):active {
+    @apply bg-desk-canvas-sunken;
+  }
+
+  .project-sidebar-item:disabled {
+    @apply cursor-not-allowed opacity-60;
+  }
+
+  .project-sidebar-item.is-active,
+  .project-sidebar-item.is-active:not(:disabled):hover {
+    @apply border-desk-line bg-desk-accent-soft;
+    box-shadow: inset 2px 0 0 0 var(--color-desk-accent);
+  }
+
+  .project-sidebar-mark {
+    @apply flex size-9 shrink-0 items-center justify-center rounded-desk-sm text-sm font-semibold;
+    background-color: color-mix(in srgb, var(--project-mark-color) 14%, var(--color-desk-surface));
+    color: var(--project-mark-color);
+  }
+
+  .project-sidebar-mark-0 { --project-mark-color: #236978; }
+  .project-sidebar-mark-1 { --project-mark-color: #3f5f9a; }
+  .project-sidebar-mark-2 { --project-mark-color: #7354a3; }
+  .project-sidebar-mark-3 { --project-mark-color: #9a5c2b; }
+  .project-sidebar-mark-4 { --project-mark-color: #a34d55; }
+  .project-sidebar-mark-5 { --project-mark-color: #3c754e; }
+
+  .project-sidebar-copy {
+    @apply min-w-0 flex-1;
+  }
+
+  .project-sidebar-name {
+    @apply block truncate text-sm font-medium;
+  }
+
+  .project-sidebar-path {
+    @apply mt-1 block truncate font-mono text-2xs text-desk-muted;
+  }
+
+  .project-sidebar-footer {
+    @apply shrink-0 border-t border-desk-line p-3;
+  }
+
+  .project-sidebar-settings {
+    @apply flex w-full items-center gap-3 rounded-desk-md px-3 py-2.5 text-sm font-medium text-desk-muted transition-colors;
+  }
+
+  .project-sidebar-settings:not(:disabled):hover {
+    @apply bg-desk-surface-subtle text-desk-ink;
+  }
+
+  .project-sidebar-settings.is-active,
+  .project-sidebar-settings.is-active:not(:disabled):hover {
+    @apply bg-desk-accent-soft text-desk-ink;
+    box-shadow: inset 2px 0 0 0 var(--color-desk-accent);
+  }
+
+  .project-sidebar-settings-icon {
+    @apply flex size-5 shrink-0 items-center justify-center text-base;
+  }
+
+  .settings-page-content {
+    @apply mx-auto w-full max-w-4xl space-y-4 p-6 sm:p-8;
+  }
+
+  .settings-page-header {
+    @apply border-b border-desk-line pb-5;
+  }
+
+  .settings-section {
+    @apply rounded-desk-lg border border-desk-line bg-desk-surface p-5;
+  }
+
+  .settings-section-heading {
+    @apply flex flex-wrap items-center justify-between gap-4;
+  }
+
+  .settings-section-title {
+    @apply text-sm font-semibold;
+  }
+
+  .settings-row {
+    @apply mt-4 flex flex-wrap items-center justify-between gap-4 border-t border-desk-line pt-4;
+  }
+
+  .settings-theme-option.is-selected {
+    @apply border-desk-accent bg-desk-accent-soft text-desk-ink;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    .project-sidebar-mark-0 { --project-mark-color: #70bdcb; }
+    .project-sidebar-mark-1 { --project-mark-color: #92aee8; }
+    .project-sidebar-mark-2 { --project-mark-color: #b7a0e3; }
+    .project-sidebar-mark-3 { --project-mark-color: #dfa878; }
+    .project-sidebar-mark-4 { --project-mark-color: #e29ca3; }
+    .project-sidebar-mark-5 { --project-mark-color: #91c89a; }
+  }
+
+  /* 侧栏收起时向左滑出并释放占位，展开时滑入；margin 与 transform 同步过渡，
+     内容区在动画期间跟随重排（同 VSCode 侧栏做法）。收起时加 aria-hidden 与 inert。 */
   .app-sidebar {
     @apply flex w-64 shrink-0 flex-col border-r border-desk-line bg-desk-surface;
     transition:

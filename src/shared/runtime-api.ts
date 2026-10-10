@@ -1,4 +1,4 @@
-/** 只定义 Runtime 启停、状态、Prompt 提交、中止、Agent 能力查询与设置、手动压缩、Pi 资源与诊断读取、MCP 状态与 MCP 登录/退出命令、安全启动、消息/工具投影 IPC 的固定通道、事件名、结果类型与跨进程响应校验。 */
+/** 只定义 Runtime 启停、状态、Prompt 提交、中止、可用模型读取、Pi 资源与诊断读取、MCP 状态与 MCP 登录/退出命令、安全启动、消息/工具投影 IPC 的固定通道、事件名、结果类型与跨进程响应校验。 */
 import type { DesktopErrorCode } from './desktop-api'
 
 export const RUNTIME_START_CHANNEL = 'desktop:runtime-start'
@@ -9,9 +9,6 @@ export const RUNTIME_ABORT_CHANNEL = 'desktop:runtime-abort'
 export const RUNTIME_PROJECTION_CHANNEL = 'desktop:runtime-projection'
 export const RUNTIME_PROJECTION_ACK_CHANNEL = 'desktop:runtime-projection-ack'
 export const RUNTIME_CAPABILITIES_CHANNEL = 'desktop:runtime-capabilities'
-export const RUNTIME_SET_MODEL_CHANNEL = 'desktop:runtime-set-model'
-export const RUNTIME_SET_THINKING_LEVEL_CHANNEL = 'desktop:runtime-set-thinking-level'
-export const RUNTIME_COMPACT_CHANNEL = 'desktop:runtime-compact'
 /** 只读：读取当前代际已加载的 Pi 资源清单（`get_commands` 投影）。 */
 export const RUNTIME_RESOURCES_CHANNEL = 'desktop:runtime-resources'
 /** 只读：读取当前代际的启动诊断尾部与 Extension 运行时错误。 */
@@ -40,17 +37,12 @@ export type RuntimeState = 'idle' | 'starting' | 'ready' | 'stopping' | 'failed'
 
 /** 只投影页面需要的会话信息，不搬运 Pi 的完整状态或消息。 */
 export interface RuntimeInfo {
-  /** 展示用标签：`provider/id`，缺少 provider 时退化为 id 或 name。 */
-  readonly model: string | null
-  /** 当前模型的 provider 与 id；用于精确回填选择项，不由展示标签反推。 */
+  /** 当前模型的 provider 与 id；图片附件能力按模型目录精确匹配。 */
   readonly modelProvider: string | null
   readonly modelId: string | null
-  readonly thinkingLevel: string | null
   readonly sessionId: string | null
   readonly messageCount: number
   readonly isStreaming: boolean
-  /** Pi 正在压缩上下文；此时提交会被 Pi 拒绝，界面只如实提示。 */
-  readonly isCompacting: boolean
 }
 
 export interface RuntimeStatus {
@@ -70,7 +62,7 @@ export type RuntimeErrorCode =
   | 'RUNTIME_TIMEOUT'
   | 'RUNTIME_PROTOCOL_ERROR'
   | 'PROMPT_REJECTED'
-  /** Pi 以 `success: false` 拒绝了模型或 Thinking 设置；消息带 Pi 的原因文本。 */
+  /** Pi 以 `success: false` 拒绝了受支持的运行命令；消息带 Pi 的原因文本。 */
   | 'RUNTIME_COMMAND_REJECTED'
   /** 项目存在受保护资源且尚无信任决定；先完成信任决定再重试。 */
   | 'TRUST_REQUIRED'
@@ -242,63 +234,24 @@ export type ProjectionResult =
   | { readonly ok: true; readonly data: ProjectionSnapshot }
   | { readonly ok: false; readonly error: RuntimeError }
 
-/** 可选模型的精简投影；`baseUrl`、`api`、`maxTokens` 与 `cost` 不进页面。 */
+/** 可用模型的精简投影；仅保留 Provider 状态与图片输入判断所需字段。 */
 export interface ModelSummary {
   readonly provider: string
   readonly id: string
-  readonly name: string | null
-  /** 是否支持推理；决定 Thinking 控件是否可用。 */
-  readonly reasoning: boolean
-  readonly contextWindow: number | null
-  /**
-   * 是否支持图片输入：模型目录 `input` 数组含 `image` 为 true，明确不含为 false，
-   * 字段缺失为 null（未知）。决定图片附件入口是否提示不可用。
-   */
+  /** 是否支持图片输入；未知时为 null。 */
   readonly imageInput: boolean | null
 }
 
-/**
- * 当前上下文窗口占用，来自 `get_session_stats` 的 `contextUsage`。
- * 压缩刚结束时 Pi 会给出 `tokens` 与 `percent` 为 null，界面按未知展示，不当 0。
- */
-export interface ContextUsage {
-  readonly tokens: number | null
-  readonly contextWindow: number | null
-  readonly percent: number | null
-}
-
-/**
- * 当前 Runtime 代际的 Agent 能力与上下文占用。
- *
- * 分区失败只影响本项：`models` 与 `thinkingLevels` 取不到时为空数组并带 `error`；
- * `contextUsage` 为 null 且 `contextUsageError` 也为 null 表示 Pi 明确没有可用上下文窗口，
- * 与「读取失败」相区分。
- */
+/** 当前 Runtime 代际的可用模型；模型列表失败与空列表保持区分。 */
 export interface AgentCapabilities {
   readonly runtimeId: number
   readonly models: readonly ModelSummary[]
   readonly modelsError: string | null
-  /** 当前模型支持的 Thinking levels；不支持推理的模型为 `["off"]`。 */
-  readonly thinkingLevels: readonly string[]
-  readonly thinkingLevelsError: string | null
-  readonly contextUsage: ContextUsage | null
-  readonly contextUsageError: string | null
 }
 
 export type CapabilitiesResult =
   | { readonly ok: true; readonly data: AgentCapabilities }
   | { readonly ok: false; readonly error: RuntimeError }
-
-/**
- * 手动压缩的结果投影：摘要文本与压缩前后 token 数。
- * `usageTotalTokens` 取自响应的 `usage.totalTokens`，自定义压缩处理器可省略 `usage`，为 null。
- */
-export interface CompactResult {
-  readonly summary: string
-  readonly tokensBefore: number | null
-  readonly estimatedTokensAfter: number | null
-  readonly usageTotalTokens: number | null
-}
 
 /**
  * Pi 侧资源的来源分类，与 `get_commands` 的 `source` 字段一一对应；
@@ -389,21 +342,6 @@ export type McpStatusResult =
   | { readonly ok: true; readonly data: McpStatus }
   | { readonly ok: false; readonly error: RuntimeError }
 
-export type CompactResultResult =
-  | { readonly ok: true; readonly data: CompactResult }
-  | { readonly ok: false; readonly error: RuntimeError }
-
-/** 只接受 provider 与模型 id；不接受任意模型对象或其他 RPC 字段。 */
-export interface SetModelRequest {
-  readonly provider: string
-  readonly modelId: string
-}
-
-/** Thinking level 的取值范围由 Pi 判定，这里只限制形状。 */
-export interface SetThinkingLevelRequest {
-  readonly level: string
-}
-
 export interface RuntimeApi {
   readonly startRuntime: (projectPath: string) => Promise<RuntimeResult>
   readonly stopRuntime: () => Promise<RuntimeResult>
@@ -412,14 +350,8 @@ export interface RuntimeApi {
   /** 请求中止当前 Agent 操作；成功只表示 Pi 已确认取消，运行状态仍以事件流为准。 */
   readonly abortRuntime: () => Promise<RuntimeResult>
   readonly getRuntimeProjection: () => Promise<ProjectionResult>
-  /** 读取当前代际的可用模型、Thinking 能力与上下文占用；分区失败由结果内的 error 表达。 */
+  /** 读取当前代际的可用模型；失败原因由结果表达。 */
   readonly getRuntimeCapabilities: () => Promise<CapabilitiesResult>
-  /** 切换模型；成功数据是切换后的 Runtime 快照。 */
-  readonly setRuntimeModel: (request: SetModelRequest) => Promise<RuntimeResult>
-  /** 设置 Thinking level；成功数据是设置后的 Runtime 快照。 */
-  readonly setRuntimeThinkingLevel: (request: SetThinkingLevelRequest) => Promise<RuntimeResult>
-  /** 手动压缩上下文；等待压缩完成，成功返回结果投影。 */
-  readonly compactRuntime: () => Promise<CompactResultResult>
   /** 读取当前代际已加载的 Pi 资源清单；清单来源是 `get_commands`，不解析 Pi 配置文件。 */
   readonly getRuntimeResources: () => Promise<ResourcesResult>
   /** 读取当前代际的启动诊断尾部与 Extension 运行时错误；无活动 Runtime 时两项都为空。 */
@@ -472,14 +404,11 @@ function isRuntimeState(value: unknown): value is RuntimeState {
 
 function isRuntimeInfo(value: unknown): value is RuntimeInfo {
   if (!isRecord(value)) return false
-  return (value.model === null || typeof value.model === 'string')
-    && (value.modelProvider === null || typeof value.modelProvider === 'string')
+  return (value.modelProvider === null || typeof value.modelProvider === 'string')
     && (value.modelId === null || typeof value.modelId === 'string')
-    && (value.thinkingLevel === null || typeof value.thinkingLevel === 'string')
     && (value.sessionId === null || typeof value.sessionId === 'string')
     && typeof value.messageCount === 'number'
     && typeof value.isStreaming === 'boolean'
-    && typeof value.isCompacting === 'boolean'
 }
 
 export function isRuntimeStatus(value: unknown): value is RuntimeStatus {
@@ -677,29 +606,13 @@ export function isProjectionResult(value: unknown): value is ProjectionResult {
     && RUNTIME_ERROR_CODES.includes(code)
 }
 
-/** 计数类字段：非负整数或 null；缺失值不猜造。 */
-function isCount(value: unknown): boolean {
-  return typeof value === 'number' && Number.isInteger(value) && value >= 0
-}
-
 function isModelSummary(value: unknown): value is ModelSummary {
   if (!isRecord(value)) return false
   return typeof value.provider === 'string'
     && value.provider !== ''
     && typeof value.id === 'string'
     && value.id !== ''
-    && (value.name === null || typeof value.name === 'string')
-    && typeof value.reasoning === 'boolean'
-    && (value.contextWindow === null || isCount(value.contextWindow))
     && (value.imageInput === null || typeof value.imageInput === 'boolean')
-}
-
-function isContextUsage(value: unknown): value is ContextUsage {
-  if (!isRecord(value)) return false
-  return (value.tokens === null || isCount(value.tokens))
-    && (value.contextWindow === null || isCount(value.contextWindow))
-    && (value.percent === null
-      || (typeof value.percent === 'number' && Number.isFinite(value.percent) && value.percent >= 0))
 }
 
 function isAgentCapabilities(value: unknown): value is AgentCapabilities {
@@ -710,38 +623,15 @@ function isAgentCapabilities(value: unknown): value is AgentCapabilities {
     && Array.isArray(value.models)
     && value.models.every(isModelSummary)
     && (value.modelsError === null || typeof value.modelsError === 'string')
-    && Array.isArray(value.thinkingLevels)
-    && value.thinkingLevels.every((level) => typeof level === 'string')
-    && (value.thinkingLevelsError === null || typeof value.thinkingLevelsError === 'string')
-    && (value.contextUsage === null || isContextUsage(value.contextUsage))
-    && (value.contextUsageError === null || typeof value.contextUsageError === 'string')
 }
 
-/** 能力读取允许多个分区部分失败，因此只校验形状与固定错误码，不要求三者都有值。 */
+/** 模型能力读取只校验可用模型列表与固定错误码。 */
 export function isCapabilitiesResult(value: unknown): value is CapabilitiesResult {
   if (!isRecord(value)) return false
 
   if (value.ok === true) return isAgentCapabilities(value.data)
   if (value.ok !== false || !isRecord(value.error)) return false
 
-  const { code, message } = value.error
-  return typeof message === 'string'
-    && typeof code === 'string'
-    && RUNTIME_ERROR_CODES.includes(code)
-}
-
-/** 压缩结果跨进程校验；`tokensBefore`、`estimatedTokensAfter` 与 `usageTotalTokens` 都可为 null。 */
-export function isCompactResultResult(value: unknown): value is CompactResultResult {
-  if (!isRecord(value)) return false
-
-  if (value.ok === true) {
-    return isRecord(value.data)
-      && typeof value.data.summary === 'string'
-      && (value.data.tokensBefore === null || isCount(value.data.tokensBefore))
-      && (value.data.estimatedTokensAfter === null || isCount(value.data.estimatedTokensAfter))
-      && (value.data.usageTotalTokens === null || isCount(value.data.usageTotalTokens))
-  }
-  if (value.ok !== false || !isRecord(value.error)) return false
   const { code, message } = value.error
   return typeof message === 'string'
     && typeof code === 'string'
