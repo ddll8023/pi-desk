@@ -3,6 +3,7 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import type { TrustDecision, TrustStatus } from '../../../shared/trust-api'
 import { decideTrust, getTrustStatus } from '../services/trust'
+import { useResourceStore } from './resource'
 
 export const useTrustStore = defineStore('trust', () => {
   /** `prompting` 表示正在展示信任对话框；决定或关闭后回到 `idle`。 */
@@ -42,6 +43,8 @@ export const useTrustStore = defineStore('trust', () => {
         return
       }
       view.value = { phase: 'idle' }
+      // 信任决定会改变项目级资源的可见性，重读一次预读清单；Runtime 未启动时才真正探测。
+      void useResourceStore().refreshPreview()
     } finally {
       deciding.value = false
     }

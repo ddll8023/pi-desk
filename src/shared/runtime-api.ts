@@ -1,4 +1,4 @@
-/** 只定义 Runtime 启停、状态、Prompt 提交、中止、可用模型读取、Pi 资源与诊断读取、MCP 状态、MCP 服务器探测与 MCP 登录/退出/重连命令、安全启动、消息/工具投影 IPC 的固定通道、事件名、结果类型与跨进程响应校验。 */
+/** 只定义 Runtime 启停、状态、Prompt 提交、中止、可用模型读取、Pi 资源与资源预读、诊断读取、MCP 状态、MCP 服务器探测与 MCP 登录/退出/重连命令、安全启动、消息/工具投影 IPC 的固定通道、事件名、结果类型与跨进程响应校验。 */
 import type { DesktopErrorCode } from './desktop-api'
 
 export const RUNTIME_START_CHANNEL = 'desktop:runtime-start'
@@ -11,6 +11,11 @@ export const RUNTIME_PROJECTION_ACK_CHANNEL = 'desktop:runtime-projection-ack'
 export const RUNTIME_CAPABILITIES_CHANNEL = 'desktop:runtime-capabilities'
 /** 只读：读取当前代际已加载的 Pi 资源清单（`get_commands` 投影）。 */
 export const RUNTIME_RESOURCES_CHANNEL = 'desktop:runtime-resources'
+/**
+ * 只读：Runtime 未启动时用一次性 Pi 进程预读当前项目的资源清单（同样来自 `get_commands`）。
+ * 结果只用于输入框补全；Runtime 就绪后一律以运行中的清单为权威，两份数据不合并。
+ */
+export const RUNTIME_RESOURCE_PREVIEW_CHANNEL = 'desktop:runtime-resource-preview'
 /** 只读：读取当前代际的启动诊断尾部与 Extension 运行时错误。 */
 export const RUNTIME_DIAGNOSTICS_CHANNEL = 'desktop:runtime-diagnostics'
 /** 固定请求 `/mcp` 状态；不接受页面传入命令文本。 */
@@ -341,6 +346,20 @@ export type ResourcesResult =
   | { readonly ok: true; readonly data: PiResources }
   | { readonly ok: false; readonly error: RuntimeError }
 
+/**
+ * Runtime 未启动时的资源预读结果。`projectPath` 是主进程实际探测的项目，页面据此丢弃已切换项目的结果；
+ * `entries` 与运行中清单同一来源（`get_commands`），但由一次性进程在 `--no-extensions` 下取得，
+ * 不保证与运行中的 Runtime 完全一致。
+ */
+export interface PiResourcePreview {
+  readonly projectPath: string
+  readonly entries: readonly PiResourceEntry[]
+}
+
+export type ResourcePreviewResult =
+  | { readonly ok: true; readonly data: PiResourcePreview }
+  | { readonly ok: false; readonly error: RuntimeError }
+
 export type RuntimeDiagnosticsResult =
   | { readonly ok: true; readonly data: RuntimeDiagnostics }
   | { readonly ok: false; readonly error: RuntimeError }
@@ -407,6 +426,8 @@ export interface RuntimeApi {
   readonly getRuntimeCapabilities: () => Promise<CapabilitiesResult>
   /** 读取当前代际已加载的 Pi 资源清单；清单来源是 `get_commands`，不解析 Pi 配置文件。 */
   readonly getRuntimeResources: () => Promise<ResourcesResult>
+  /** 读取 Runtime 未启动时的资源预读结果；零参数，项目与信任决定由主进程决定。 */
+  readonly getResourcePreview: () => Promise<ResourcePreviewResult>
   /** 读取当前代际的启动诊断尾部与 Extension 运行时错误；无活动 Runtime 时两项都为空。 */
   readonly getRuntimeDiagnostics: () => Promise<RuntimeDiagnosticsResult>
   /** 固定请求 `/mcp` 状态；状态文本由 notify 捕获后返回，不在页面拼造。 */
@@ -738,6 +759,21 @@ export function isResourcesResult(value: unknown): value is ResourcesResult {
     if (typeof data.truncated !== 'boolean') return false
     if (!isNullableString(data.error)) return false
     return data.error === null || data.entries.length === 0
+  }
+  return isRuntimeErrorResult(value)
+}
+
+/** 预读结果跨进程校验：项目路径非空，条目复用资源条目校验，失败形状与其余 Runtime 结果一致。 */
+export function isResourcePreviewResult(value: unknown): value is ResourcePreviewResult {
+  if (!isRecord(value)) return false
+
+  if (value.ok === true) {
+    const data = value.data
+    return isRecord(data)
+      && typeof data.projectPath === 'string'
+      && data.projectPath !== ''
+      && Array.isArray(data.entries)
+      && data.entries.every(isPiResourceEntry)
   }
   return isRuntimeErrorResult(value)
 }

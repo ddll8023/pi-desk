@@ -1,9 +1,9 @@
-<!-- Prompt 输入坞：处理输入法组合态、Enter 发送与 Shift+Enter 换行、焦点回归与重复提交，并在 Agent 运行期间原位提供停止入口；同时承接 Extension 的 set_editor_text 填充文本、图片附件的选择/粘贴/拖拽三种入口、输入行按内容自动增高、快捷发送下拉、Pi 命令的斜杠补全与 `@` 项目文件引用（只写入相对路径文本，不传文件内容）。 -->
+<!-- Prompt 输入坞：处理输入法组合态、Enter 发送与 Shift+Enter 换行、焦点回归与重复提交，并在 Agent 运行期间原位提供停止入口；同时承接 Extension 的 set_editor_text 填充文本、图片附件的选择/粘贴/拖拽三种入口、输入行按内容自动增高、快捷发送下拉、Pi 命令的斜杠补全（Runtime 就绪后用运行中的命令清单，未就绪时用主进程预读的技能清单，按类型分组）与 `@` 项目文件引用（只写入相对路径文本，不传文件内容）。 -->
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { PROJECT_FILE_QUERY_MAX_CHARS } from '../../../shared/project-file-api'
-import type { PiResourceEntry, PromptDisposition, PromptImageInput } from '../../../shared/runtime-api'
+import type { PiResourceEntry, PiResourceKind, PromptDisposition, PromptImageInput } from '../../../shared/runtime-api'
 import { useExtensionUiStore } from '../stores/extension-ui'
 import { useProjectFileStore } from '../stores/project-file'
 import { useResourceStore } from '../stores/resource'
@@ -431,8 +431,15 @@ watch(editorTextVersion, () => {
   }
 })
 
+/** 分组顺序与标题：技能置前，保证输入 `/` 时技能一定出现在候选里，不被其他类型整体挤出。 */
+const SUGGESTION_GROUPS: readonly { readonly kind: PiResourceKind; readonly label: string }[] = [
+  { kind: 'skill', label: '技能' },
+  { kind: 'prompt', label: '模板' },
+  { kind: 'extension', label: '扩展命令' }
+]
+/** 每组各自的条数上限；不用全局上限截断，否则排在后面的技能永远进不了候选。 */
+const MAX_SUGGESTIONS_PER_KIND = 8
 /** 斜杠补全只在输入以 `/` 开头且尚未输入空格（即仍在命令名内）时生效。 */
-const MAX_SUGGESTIONS = 8
 const slashQuery = computed(() => {
   const text = draft.value
   if (!text.startsWith('/') || text.includes(' ')) return null
@@ -441,21 +448,60 @@ const slashQuery = computed(() => {
 const suggestionsDismissed = ref(false)
 const suggestionIndex = ref(0)
 
+/** 候选分组：`index` 是该条在扁平列表中的位置，键盘导航与选中态都按它对应。 */
+interface SuggestionGroup {
+  readonly kind: PiResourceKind
+  readonly label: string
+  readonly items: readonly { readonly entry: PiResourceEntry; readonly index: number }[]
+}
+
 /**
- * 候选来自当前 Runtime 已加载的命令清单（与 Pi 的 `/` 命令同一来源）。
- * 名称前缀匹配；另外允许用去掉 `skill:` 后的名称前缀找到技能，与 Pi 的调用习惯一致。
+ * 匹配规则与 Pi 的调用习惯一致：名称前缀匹配；
+ * 另外允许用去掉 `skill:` 后的名称前缀找到技能。
  */
-const matchedSuggestions = computed<readonly PiResourceEntry[]>(() => {
+function matchesCommandQuery(entry: PiResourceEntry, query: string): boolean {
+  const name = entry.name.toLowerCase()
+  if (name.startsWith(query)) return true
+  const skillName = name.startsWith('skill:') ? name.slice('skill:'.length) : null
+  return skillName !== null && !query.startsWith('skill:') && skillName.startsWith(query)
+}
+
+/**
+ * 候选来源：Runtime 就绪时用运行中的 `get_commands`，未就绪时用主进程一次性预读的技能清单。
+ * 两份数据不合并、不去重：就绪后预读结果立即作废，运行中的清单是唯一权威。
+ */
+const candidateEntries = computed<readonly PiResourceEntry[]>(() => (
+  runtimeReady.value ? resourceStore.entries : resourceStore.previewSkills
+))
+
+/** 候选来自当前 Runtime 已加载的命令清单（与 Pi 的 `/` 命令同一来源），按类型分组且各组独立限量。 */
+const matchedGroups = computed<readonly SuggestionGroup[]>(() => {
   const query = slashQuery.value
   if (query === null) return []
-  return resourceStore.entries.filter((entry) => {
-    const name = entry.name.toLowerCase()
-    if (name.startsWith(query)) return true
-    const skillName = name.startsWith('skill:') ? name.slice('skill:'.length) : null
-    return skillName !== null && !query.startsWith('skill:') && skillName.startsWith(query)
-  }).slice(0, MAX_SUGGESTIONS)
+
+  const groups: SuggestionGroup[] = []
+  let index = 0
+  for (const group of SUGGESTION_GROUPS) {
+    const items: { entry: PiResourceEntry; index: number }[] = []
+    for (const entry of candidateEntries.value) {
+      if (entry.kind !== group.kind || !matchesCommandQuery(entry, query)) continue
+      if (items.length >= MAX_SUGGESTIONS_PER_KIND) break
+      items.push({ entry, index })
+      index += 1
+    }
+    if (items.length > 0) groups.push({ kind: group.kind, label: group.label, items })
+  }
+  return groups
 })
+
+/** 扁平候选：键盘导航与 `activeListId` 判断仍按它工作，顺序与分组渲染一致。 */
+const matchedSuggestions = computed<readonly PiResourceEntry[]>(() => (
+  matchedGroups.value.flatMap((group) => group.items.map((item) => item.entry))
+))
 const visibleSuggestions = computed(() => (suggestionsDismissed.value ? [] : matchedSuggestions.value))
+const visibleSuggestionGroups = computed<readonly SuggestionGroup[]>(() => (
+  suggestionsDismissed.value ? [] : matchedGroups.value
+))
 
 watch(matchedSuggestions, () => {
   suggestionIndex.value = 0
@@ -628,27 +674,30 @@ onMounted(() => {
         @dragleave="onDragLeave"
         @drop="onDrop"
       >
-        <!-- 命令补全：候选来自 Pi 已加载的资源清单；Enter 仍然是发送，Tab 或点击接受候选。 -->
+        <!-- 命令补全：候选在 Runtime 就绪时来自运行中的命令清单、未就绪时来自主进程预读的技能清单，按类型分组展示；Enter 仍然是发送，Tab 或点击接受候选。 -->
         <ul
-          v-if="visibleSuggestions.length > 0"
+          v-if="visibleSuggestionGroups.length > 0"
           id="prompt-command-list"
           role="listbox"
           aria-label="可用命令"
           class="dialog-popover scroll-area bottom-full mb-1.5 max-h-64 w-full overflow-y-auto p-1"
         >
-          <li v-for="(entry, index) in visibleSuggestions" :key="`${entry.kind}-${entry.name}`" role="presentation">
-            <AppButton
-              variant="unstyled"
-              role="option"
-              :aria-selected="index === suggestionIndex"
-              class="list-item prompt-composer-option"
-              :class="index === suggestionIndex ? 'list-item-active' : ''"
-              @mousedown.prevent="acceptSuggestion(entry)"
-            >
-              <span class="font-mono text-xs">/{{ entry.name }}</span>
-              <span v-if="entry.description !== null" class="prompt-composer-option-detail">{{ entry.description }}</span>
-            </AppButton>
-          </li>
+          <template v-for="group in visibleSuggestionGroups" :key="group.kind">
+            <li role="presentation" class="prompt-composer-group-label">{{ group.label }}</li>
+            <li v-for="item in group.items" :key="`${item.entry.kind}-${item.entry.name}`" role="presentation">
+              <AppButton
+                variant="unstyled"
+                role="option"
+                :aria-selected="item.index === suggestionIndex"
+                class="list-item prompt-composer-option"
+                :class="item.index === suggestionIndex ? 'list-item-active' : ''"
+                @mousedown.prevent="acceptSuggestion(item.entry)"
+              >
+                <span class="font-mono text-xs">/{{ item.entry.name }}</span>
+                <span v-if="item.entry.description !== null" class="prompt-composer-option-detail">{{ item.entry.description }}</span>
+              </AppButton>
+            </li>
+          </template>
         </ul>
 
         <!-- 文件引用补全：候选是当前项目的相对路径，Enter 与 Tab 都接受候选，插入的只是路径文本，不读取文件内容。 -->

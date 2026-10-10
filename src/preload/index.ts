@@ -102,6 +102,7 @@ import {
   RUNTIME_PROJECTION_CHANNEL,
   RUNTIME_PROJECTION_EVENT,
   RUNTIME_RESOURCES_CHANNEL,
+  RUNTIME_RESOURCE_PREVIEW_CHANNEL,
   RUNTIME_START_CHANNEL,
   RUNTIME_START_SAFE_CHANNEL,
   RUNTIME_STATUS_CHANNEL,
@@ -116,6 +117,7 @@ import {
   isProjectionResult,
   isPromptResult,
   isResourcesResult,
+  isResourcePreviewResult,
   isRuntimeDiagnosticsResult,
   isRuntimeResult,
   isRuntimeStatus
@@ -132,6 +134,7 @@ import type {
   PromptImageInput,
   PromptResult,
   ResourcesResult,
+  ResourcePreviewResult,
   RuntimeApi,
   RuntimeDiagnosticsResult,
   RuntimeResult,
@@ -151,6 +154,7 @@ const INVALID_PREFERENCES_RESPONSE = '桌面接口返回了无法识别的界面
 const INVALID_TRUST_RESPONSE = '桌面接口返回了无法识别的信任状态。'
 const INVALID_EXTENSION_UI_RESPONSE = '桌面接口返回了无法识别的 Extension UI 状态。'
 const INVALID_RESOURCES_RESPONSE = '桌面接口返回了无法识别的资源清单。'
+const INVALID_RESOURCE_PREVIEW_RESPONSE = '桌面接口返回了无法识别的资源预读结果。'
 const INVALID_DIAGNOSTICS_RESPONSE = '桌面接口返回了无法识别的诊断结果。'
 const INVALID_MCP_STATUS_RESPONSE = '桌面接口返回了无法识别的 MCP 状态结果。'
 const INVALID_MCP_INSPECTION_RESPONSE = '桌面接口返回了无法识别的 MCP 探测结果。'
@@ -204,6 +208,10 @@ function invalidTrustResponse(): TrustStatusResult {
 
 function invalidResourcesResponse(): ResourcesResult {
   return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_RESOURCES_RESPONSE } }
+}
+
+function invalidResourcePreviewResponse(): ResourcePreviewResult {
+  return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_RESOURCE_PREVIEW_RESPONSE } }
 }
 
 function invalidDiagnosticsResponse(): RuntimeDiagnosticsResult {
@@ -369,6 +377,12 @@ const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionAp
   async getRuntimeResources(): Promise<ResourcesResult> {
     const response: unknown = await ipcRenderer.invoke(RUNTIME_RESOURCES_CHANNEL)
     return isResourcesResult(response) ? response : invalidResourcesResponse()
+  },
+
+  /** Runtime 未启动时的资源预读：零参数，项目与信任决定都由主进程决定。 */
+  async getResourcePreview(): Promise<ResourcePreviewResult> {
+    const response: unknown = await ipcRenderer.invoke(RUNTIME_RESOURCE_PREVIEW_CHANNEL)
+    return isResourcePreviewResult(response) ? response : invalidResourcePreviewResponse()
   },
 
   async getRuntimeDiagnostics(): Promise<RuntimeDiagnosticsResult> {

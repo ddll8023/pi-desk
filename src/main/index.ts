@@ -101,6 +101,7 @@ import {
   RUNTIME_PROJECTION_CHANNEL,
   RUNTIME_PROJECTION_EVENT,
   RUNTIME_RESOURCES_CHANNEL,
+  RUNTIME_RESOURCE_PREVIEW_CHANNEL,
   RUNTIME_START_CHANNEL,
   RUNTIME_START_SAFE_CHANNEL,
   RUNTIME_STATUS_CHANNEL,
@@ -118,6 +119,7 @@ import type {
   PromptImageInput,
   PromptResult,
   ResourcesResult,
+  ResourcePreviewResult,
   RuntimeDiagnosticsResult,
   RuntimeErrorCode,
   RuntimeResult,
@@ -128,6 +130,7 @@ import { AuthManager, AuthManagerError } from './auth-manager'
 import { PreferencesManager } from './preferences-manager'
 import { ProjectFileIndex } from './project-file-index'
 import { ProjectManager } from './project-manager'
+import { ResourcePreviewError, previewProjectResources } from './resource-preview'
 import { RuntimeManager } from './runtime-manager'
 import { SessionManager } from './session-manager'
 import { TrustManager, TrustManagerError } from './trust-manager'
@@ -294,7 +297,7 @@ function isTrustedCaller(event: IpcMainInvokeEvent, pageUrl: string): boolean {
 }
 
 function registerAppInfoHandler(pageUrl: string): void {
-  ipcMain.handle(APP_INFO_CHANNEL, (event: IpcMainInvokeEvent, ...args: unknown[]): AppInfoResult => {
+  handle(APP_INFO_CHANNEL, (event: IpcMainInvokeEvent, ...args: unknown[]): AppInfoResult => {
     if (!isTrustedCaller(event, pageUrl)) {
       return { ok: false, error: { code: 'FORBIDDEN', message: '不允许此页面调用桌面接口。' } }
     }
@@ -334,6 +337,10 @@ function capabilitiesFailure(code: RuntimeErrorCode, message: string): Capabilit
 }
 
 function resourcesFailure(code: RuntimeErrorCode, message: string): ResourcesResult {
+  return { ok: false, error: { code, message } }
+}
+
+function resourcePreviewFailure(code: RuntimeErrorCode, message: string): ResourcePreviewResult {
   return { ok: false, error: { code, message } }
 }
 
@@ -580,7 +587,7 @@ function registerProjectHandlers(pageUrl: string): void {
 
 /** 只接受一个查询串；检索根固定为当前项目，页面不能指定目录，也不返回文件内容。 */
 function registerProjectFileHandlers(pageUrl: string): void {
-  ipcMain.handle(
+  handle(
     PROJECT_FILE_SEARCH_CHANNEL,
     async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<ProjectFileSearchResult> => {
       if (!isTrustedCaller(event, pageUrl)) {
@@ -608,7 +615,7 @@ function registerProjectFileHandlers(pageUrl: string): void {
 
 /** 只接受会话 id 与显式中断确认；会话归属与文件解析都在主进程内部完成。 */
 function registerSessionHandlers(pageUrl: string): void {
-  ipcMain.handle(
+  handle(
     SESSION_LIST_CHANNEL,
     async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<SessionListResult> => {
       if (!isTrustedCaller(event, pageUrl)) {
@@ -621,7 +628,7 @@ function registerSessionHandlers(pageUrl: string): void {
     }
   )
 
-  ipcMain.handle(
+  handle(
     SESSION_OPEN_CHANNEL,
     async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<SessionOpenResult> => {
       if (!isTrustedCaller(event, pageUrl)) {
@@ -660,7 +667,7 @@ function registerSessionHandlers(pageUrl: string): void {
   )
 
   /** 重新加载 Pi 资源：重启 Runtime 并尽量恢复当前会话；只接受显式中断确认，信任拦截与打开一致。 */
-  ipcMain.handle(
+  handle(
     SESSION_RELOAD_CHANNEL,
     async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<SessionOpenResult> => {
       if (!isTrustedCaller(event, pageUrl)) {
@@ -801,7 +808,7 @@ function trustFailureFromError(error: unknown): TrustStatusResult {
 
 /** 只接受项目目录；不接受可执行文件路径、启动参数或任意 RPC 内容。 */
 function registerRuntimeHandlers(pageUrl: string): void {
-  ipcMain.handle(
+  handle(
     RUNTIME_START_CHANNEL,
     async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<RuntimeResult> => {
       if (!isTrustedCaller(event, pageUrl)) {
@@ -826,7 +833,7 @@ function registerRuntimeHandlers(pageUrl: string): void {
     }
   )
 
-  ipcMain.handle(RUNTIME_STATUS_CHANNEL, (event: IpcMainInvokeEvent, ...args: unknown[]): RuntimeResult => {
+  handle(RUNTIME_STATUS_CHANNEL, (event: IpcMainInvokeEvent, ...args: unknown[]): RuntimeResult => {
     if (!isTrustedCaller(event, pageUrl)) {
       return runtimeFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
     }
@@ -836,7 +843,7 @@ function registerRuntimeHandlers(pageUrl: string): void {
     return runtimeManager.getStatus()
   })
 
-  ipcMain.handle(
+  handle(
     RUNTIME_STOP_CHANNEL,
     async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<RuntimeResult> => {
       if (!isTrustedCaller(event, pageUrl)) {
@@ -850,7 +857,7 @@ function registerRuntimeHandlers(pageUrl: string): void {
   )
 
   /** 中止当前 Agent 操作；只接受零参数，运行状态仍以事件流为准。 */
-  ipcMain.handle(
+  handle(
     RUNTIME_ABORT_CHANNEL,
     async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<RuntimeResult> => {
       if (!isTrustedCaller(event, pageUrl)) {
@@ -864,7 +871,7 @@ function registerRuntimeHandlers(pageUrl: string): void {
   )
 
   /** 可用模型读取只查询当前 Runtime 代际，不接受任何参数。 */
-  ipcMain.handle(
+  handle(
     RUNTIME_CAPABILITIES_CHANNEL,
     async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<CapabilitiesResult> => {
       if (!isTrustedCaller(event, pageUrl)) {
@@ -878,7 +885,7 @@ function registerRuntimeHandlers(pageUrl: string): void {
   )
 
   /** 资源清单只读取当前 Runtime 代际的 `get_commands` 投影，不接受任何参数。 */
-  ipcMain.handle(
+  handle(
     RUNTIME_RESOURCES_CHANNEL,
     async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<ResourcesResult> => {
       if (!isTrustedCaller(event, pageUrl)) {
@@ -891,8 +898,42 @@ function registerRuntimeHandlers(pageUrl: string): void {
     }
   )
 
+  /**
+   * 资源预读只接受零参数：项目与信任决定都由主进程决定，页面不能指定工作目录或启动参数。
+   * 无决定时按未信任探测：只拿用户级资源，不因探测触发信任提示，也不写任何信任记录。
+   */
+  handle(
+    RUNTIME_RESOURCE_PREVIEW_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<ResourcePreviewResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return resourcePreviewFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 0) {
+        return resourcePreviewFailure('INVALID_REQUEST', '资源预读接口不接受参数。')
+      }
+      const projectPath = projectManager.currentProjectPath()
+      if (projectPath === null) {
+        return resourcePreviewFailure('INVALID_REQUEST', '尚未选择项目，无法预读资源清单。')
+      }
+      try {
+        const outcome = await trustManager.resolveLaunchDecision(projectPath)
+        const trustDecision = outcome.requiresPrompt ? 'untrusted' : outcome.decision
+        const entries = await previewProjectResources(projectPath, trustDecision)
+        return { ok: true, data: { projectPath, entries } }
+      } catch (error) {
+        if (error instanceof ResourcePreviewError) {
+          return resourcePreviewFailure(error.code, error.message)
+        }
+        return resourcePreviewFailure(
+          'INTERNAL_ERROR',
+          `资源预读失败：${error instanceof Error ? error.message : String(error)}`
+        )
+      }
+    }
+  )
+
   /** 诊断只暴露主进程已持有的有界 stderr 尾部与 extension_error 事件，不接受任何参数。 */
-  ipcMain.handle(
+  handle(
     RUNTIME_DIAGNOSTICS_CHANNEL,
     (event: IpcMainInvokeEvent, ...args: unknown[]): RuntimeDiagnosticsResult => {
       if (!isTrustedCaller(event, pageUrl)) {
@@ -906,7 +947,7 @@ function registerRuntimeHandlers(pageUrl: string): void {
   )
 
   /** MCP 状态使用主进程固定的 `/mcp` 命令，不接受页面传入任何命令文本。 */
-  ipcMain.handle(
+  handle(
     RUNTIME_MCP_STATUS_CHANNEL,
     async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<McpStatusResult> => {
       if (!isTrustedCaller(event, pageUrl)) {
@@ -920,7 +961,7 @@ function registerRuntimeHandlers(pageUrl: string): void {
   )
 
   /** MCP 登录、退出或重连：只接受动作与服务器名；命令文本与等待期限都由主进程决定。 */
-  ipcMain.handle(
+  handle(
     RUNTIME_MCP_COMMAND_CHANNEL,
     async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<McpCommandResult> => {
       if (!isTrustedCaller(event, pageUrl)) {
@@ -953,7 +994,7 @@ function registerRuntimeHandlers(pageUrl: string): void {
    * 探测会另起一个 Pi 进程并重新连接所有已启用服务器，不写任何配置文件。
    * 官方 CLI 不接受信任 flag，探测以未信任项目身份运行，因此这里不做信任拦截。
    */
-  ipcMain.handle(
+  handle(
     RUNTIME_MCP_INSPECT_CHANNEL,
     async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<McpInspectionResult> => {
       if (!isTrustedCaller(event, pageUrl)) {
@@ -976,7 +1017,7 @@ function registerRuntimeHandlers(pageUrl: string): void {
   )
 
   /** 中止进行中的 MCP 探测：零参数，只终止主进程自己启动的探测进程。 */
-  ipcMain.handle(
+  handle(
     RUNTIME_MCP_INSPECT_ABORT_CHANNEL,
     (event: IpcMainInvokeEvent, ...args: unknown[]): McpInspectAbortResult => {
       if (!isTrustedCaller(event, pageUrl)) {
@@ -993,7 +1034,7 @@ function registerRuntimeHandlers(pageUrl: string): void {
    * 安全模式启动：零参数，主进程用最近一次启动目标并固定传 `--no-extensions`，
    * 仅本次生效；信任拦截与常规启动一致。
    */
-  ipcMain.handle(
+  handle(
     RUNTIME_START_SAFE_CHANNEL,
     async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<RuntimeResult> => {
       if (!isTrustedCaller(event, pageUrl)) {
@@ -1011,7 +1052,7 @@ function registerRuntimeHandlers(pageUrl: string): void {
   )
 
   /** 只接受 Prompt 文本与图片附件；不接受可执行文件路径、启动参数或排队选项。 */
-  ipcMain.handle(
+  handle(
     RUNTIME_PROMPT_CHANNEL,
     async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<PromptResult> => {
       if (!isTrustedCaller(event, pageUrl)) {
@@ -1063,7 +1104,7 @@ function registerRuntimeHandlers(pageUrl: string): void {
   )
 
   /** 投影快照只读取当前 Runtime 代际的投影，不接受任何参数。 */
-  ipcMain.handle(
+  handle(
     RUNTIME_PROJECTION_CHANNEL,
     (event: IpcMainInvokeEvent, ...args: unknown[]): ProjectionResult => {
       if (!isTrustedCaller(event, pageUrl)) {
@@ -1077,7 +1118,7 @@ function registerRuntimeHandlers(pageUrl: string): void {
   )
 
   /** 应用确认只控制未确认通知窗口；参数不合法时忽略，不回传结果。 */
-  ipcMain.handle(
+  handle(
     RUNTIME_PROJECTION_ACK_CHANNEL,
     (event: IpcMainInvokeEvent, ...args: unknown[]): void => {
       if (!isTrustedCaller(event, pageUrl) || args.length !== 1) return
@@ -1095,7 +1136,7 @@ function registerRuntimeHandlers(pageUrl: string): void {
 
 /** 只接受 Sidebar 折叠状态与主题取值；界面偏好没有其他字段，未知字段一律拒绝。 */
 function registerPreferencesHandlers(pageUrl: string): void {
-  ipcMain.handle(
+  handle(
     PREFERENCES_GET_CHANNEL,
     async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<PreferencesResult> => {
       if (!isTrustedCaller(event, pageUrl)) {
@@ -1108,7 +1149,7 @@ function registerPreferencesHandlers(pageUrl: string): void {
     }
   )
 
-  ipcMain.handle(
+  handle(
     PREFERENCES_SET_UI_CHANNEL,
     async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<PreferencesResult> => {
       if (!isTrustedCaller(event, pageUrl)) {
@@ -1144,7 +1185,7 @@ function registerPreferencesHandlers(pageUrl: string): void {
  * 登录流程与密钥只经固定业务方法传递：页面不能指定辅助进程路径、命令文本或要打开的 URL。
  */
 function registerAuthHandlers(pageUrl: string): void {
-  ipcMain.handle(
+  handle(
     AUTH_STATUS_CHANNEL,
     async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<AuthStatusResult> => {
       if (!isTrustedCaller(event, pageUrl)) {
@@ -1162,7 +1203,7 @@ function registerAuthHandlers(pageUrl: string): void {
     }
   )
 
-  ipcMain.handle(
+  handle(
     AUTH_LOGIN_START_CHANNEL,
     async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<AuthFlowResult> => {
       if (!isTrustedCaller(event, pageUrl)) {
@@ -1194,7 +1235,7 @@ function registerAuthHandlers(pageUrl: string): void {
     }
   )
 
-  ipcMain.handle(
+  handle(
     AUTH_LOGIN_RESPOND_CHANNEL,
     async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<AuthFlowResult> => {
       if (!isTrustedCaller(event, pageUrl)) {
@@ -1230,7 +1271,7 @@ function registerAuthHandlers(pageUrl: string): void {
     }
   )
 
-  ipcMain.handle(
+  handle(
     AUTH_LOGIN_CANCEL_CHANNEL,
     async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<AuthFlowResult> => {
       if (!isTrustedCaller(event, pageUrl)) {
@@ -1259,7 +1300,7 @@ function registerAuthHandlers(pageUrl: string): void {
     }
   )
 
-  ipcMain.handle(
+  handle(
     AUTH_OPEN_URL_CHANNEL,
     async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<AuthFlowResult> => {
       if (!isTrustedCaller(event, pageUrl)) {
@@ -1288,7 +1329,7 @@ function registerAuthHandlers(pageUrl: string): void {
     }
   )
 
-  ipcMain.handle(
+  handle(
     AUTH_LOGOUT_CHANNEL,
     async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<AuthLogoutResult> => {
       if (!isTrustedCaller(event, pageUrl)) {
@@ -1323,7 +1364,7 @@ function registerAuthHandlers(pageUrl: string): void {
  * id 不在队列或形态不符按 EXTENSION_DIALOG_NOT_FOUND / INVALID_REQUEST 拒绝，不猜造。
  */
 function registerExtensionUiHandlers(pageUrl: string): void {
-  ipcMain.handle(
+  handle(
     EXTENSION_UI_STATE_CHANNEL,
     (event: IpcMainInvokeEvent, ...args: unknown[]): ExtensionUiResult => {
       if (!isTrustedCaller(event, pageUrl)) {
@@ -1336,7 +1377,7 @@ function registerExtensionUiHandlers(pageUrl: string): void {
     }
   )
 
-  ipcMain.handle(
+  handle(
     EXTENSION_UI_RESPOND_CHANNEL,
     (event: IpcMainInvokeEvent, ...args: unknown[]): ExtensionUiResult => {
       if (!isTrustedCaller(event, pageUrl)) {

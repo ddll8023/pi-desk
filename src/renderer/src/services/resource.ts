@@ -1,4 +1,4 @@
-/** 作为渲染端 Pi 资源清单、启动诊断、MCP 状态、MCP 服务器探测与 MCP 登录/退出/重连、安全模式启动的调用入口，把桥接缺失与通信异常转换为安全的展示结果。 */
+/** 作为渲染端 Pi 资源清单与未启动时的资源预读、启动诊断、MCP 状态、MCP 服务器探测与 MCP 登录/退出/重连、安全模式启动的调用入口，把桥接缺失与通信异常转换为安全的展示结果。 */
 import type {
   McpCommandAction,
   McpCommandResult,
@@ -6,6 +6,7 @@ import type {
   McpInspectAbortResult,
   McpStatusResult,
   ResourcesResult,
+  ResourcePreviewResult,
   RuntimeDiagnosticsResult,
   RuntimeError,
   RuntimeResult
@@ -33,6 +34,17 @@ export async function getResources(): Promise<ResourcesResult> {
   if (!bridge || typeof bridge.getRuntimeResources !== 'function') return unavailable()
   try {
     return await bridge.getRuntimeResources()
+  } catch (error) {
+    return callFailed(error)
+  }
+}
+
+/** Runtime 未启动时的资源预读；零参数，项目与信任决定由主进程决定。 */
+export async function getResourcePreview(): Promise<ResourcePreviewResult> {
+  const bridge = window.desktop
+  if (!bridge || typeof bridge.getResourcePreview !== 'function') return unavailable()
+  try {
+    return await bridge.getResourcePreview()
   } catch (error) {
     return callFailed(error)
   }
