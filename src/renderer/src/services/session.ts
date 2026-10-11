@@ -1,5 +1,6 @@
 /** 作为渲染端会话列表、打开与重新加载的调用入口，把桥接缺失与通信异常转换为安全的展示结果。 */
 import type { SessionError, SessionListResult, SessionOpenResult } from '../../../shared/session-api'
+import type { ModelIdentity } from '../../../shared/runtime-api'
 
 function unavailable(): { ok: false; error: SessionError } {
   return {
@@ -28,15 +29,24 @@ export async function listSessions(): Promise<SessionListResult> {
   }
 }
 
-/** 打开会话；`sessionId` 为 null 表示新建，`allowInterrupt` 表示用户已确认可以停止运行中的操作。 */
+/**
+ * 打开会话；`sessionId` 为 null 表示新建，`allowInterrupt` 表示用户已确认可以中断当前操作。
+ * 新建时传递 `model`，省略或为 null 时交给 Pi 默认；恢复时不传覆盖参数，本服务不读取桌面模型偏好。
+ */
 export async function openSession(
   sessionId: string | null,
-  allowInterrupt: boolean
+  allowInterrupt: boolean,
+  model?: ModelIdentity | null
 ): Promise<SessionOpenResult> {
   const bridge = window.desktop
   if (!bridge || typeof bridge.openSession !== 'function') return unavailable()
   try {
-    return await bridge.openSession(sessionId, allowInterrupt)
+    // 恢复会话不传覆盖参数，新会话模型逐字段重建为普通对象。
+    if (sessionId !== null) return await bridge.openSession(sessionId, allowInterrupt)
+    return await bridge.openSession(sessionId, allowInterrupt, model === undefined ? undefined : model === null ? null : {
+      provider: model.provider,
+      modelId: model.modelId
+    })
   } catch (error) {
     return callFailed(error)
   }

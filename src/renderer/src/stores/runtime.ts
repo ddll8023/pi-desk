@@ -1,8 +1,12 @@
-/** 保存聊天区与 Runtime 状态的展示状态、投影消息与工具条目副本、可用模型与会话模型切换、订阅与启停、Prompt 提交及中止动作，不持有 Runtime 所有权，也不承担消息重建与通知窗口。 */
+/** 保存 Runtime 与聊天投影展示、就绪后的模型切换，以及启动前模型预读和桌面新会话默认模型；不持有进程所有权或 Pi 配置。 */
 import { defineStore } from 'pinia'
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
+import type { WatchStopHandle } from 'vue'
+import type { ModelPreferenceResult } from '../../../shared/preferences-api'
 import type {
   AgentCapabilities,
+  ModelIdentity,
+  PiResourcePreview,
   ProjectionBatch,
   ProjectionBlock,
   ProjectionMessage,
@@ -14,6 +18,10 @@ import type {
   ToolExecution
 } from '../../../shared/runtime-api'
 import { useTrustStore } from './trust'
+import { useProjectStore } from './project'
+import { useAuthStore } from './auth'
+import { getResourcePreview } from '../services/resource'
+import { getNewSessionModel, setNewSessionModel } from '../services/preferences'
 import {
   abortRuntime,
   ackRuntimeProjection,
@@ -62,6 +70,20 @@ type CapabilitiesViewState =
   | { phase: 'idle' }
   | { phase: 'loading' }
   | { phase: 'ready'; data: AgentCapabilities }
+  | { phase: 'error'; error: RuntimeError }
+
+/** 预读与 Runtime 能力分开保存，不能把不执行扩展的预读列表混进运行中清单。 */
+type ModelPreviewViewState =
+  | { phase: 'idle' }
+  | { phase: 'loading' }
+  | { phase: 'ready'; data: PiResourcePreview }
+  | { phase: 'error'; error: RuntimeError }
+
+type ModelPreferenceViewState =
+  | { phase: 'idle' }
+  | { phase: 'loading' }
+  | { phase: 'ready' }
+  | { phase: 'saving' }
   | { phase: 'error'; error: RuntimeError }
 
 /** 块级幂等替换；新块按 contentIndex 顺序插入。 */
@@ -146,6 +168,18 @@ export const useRuntimeStore = defineStore('runtime', () => {
   const droppedTools = ref(0)
   const capabilitiesView = ref<CapabilitiesViewState>({ phase: 'idle' })
   const modelSwitchView = ref<ModelSwitchViewState>({ phase: 'idle' })
+  const modelPreviewView = ref<ModelPreviewViewState>({ phase: 'idle' })
+  const modelPreferenceView = ref<ModelPreferenceViewState>({ phase: 'idle' })
+  const newSessionModel = ref<ModelIdentity | null>(null)
+  const modelPreferenceLoaded = ref(false)
+  let modelPreferenceRequest = 0
+  let modelLifecycle = 0
+  let modelPreferencePromise: Promise<void> | null = null
+  let modelSavePromise: Promise<void> | null = null
+  let modelPreviewRequest = 0
+  let modelPreviewAttemptedPath: string | null = null
+  let stopProjectWatch: WatchStopHandle | null = null
+  let stopAuthWatch: WatchStopHandle | null = null
   let modelSwitchRequest = 0
   let capabilitiesRequest = 0
   let releaseSubscription: (() => void) | null = null
@@ -165,8 +199,25 @@ export const useRuntimeStore = defineStore('runtime', () => {
     if (releaseProjection === null) {
       releaseProjection = subscribeRuntimeProjection(applyBatch)
     }
+    if (stopProjectWatch === null) {
+      stopProjectWatch = watch(() => useProjectStore().currentProject?.path ?? null, () => {
+        clearModelPreview()
+        void refreshModelPreview()
+      })
+    }
+    if (stopAuthWatch === null) {
+      const auth = useAuthStore()
+      stopAuthWatch = watch(() => [auth.providers, auth.flow?.phase] as const,
+        ([providers, phase], [previousProviders, previousPhase]) => {
+          if (providers !== previousProviders || (phase === 'completed' && previousPhase !== phase)) {
+            void refreshModelPreview(true)
+          }
+        })
+    }
+    void loadModelPreference()
     const result = await getRuntimeStatus()
     if (result.ok) applyStatus(result.data)
+    refreshModelPreviewIfNeeded()
     await syncProjection()
   }
 
@@ -176,9 +227,128 @@ export const useRuntimeStore = defineStore('runtime', () => {
     releaseSubscription = null
     releaseProjection?.()
     releaseProjection = null
+    stopProjectWatch?.()
+    stopProjectWatch = null
+    stopAuthWatch?.()
+    stopAuthWatch = null
+    clearModelPreview()
+    modelLifecycle += 1
+    modelPreferenceRequest += 1
+    modelPreferenceLoaded.value = false
+    modelPreferenceView.value = { phase: 'idle' }
+    modelPreferencePromise = null
+    modelSavePromise = null
     modelSwitchRequest += 1
     capabilitiesRequest += 1
     modelSwitchView.value = { phase: 'idle' }
+  }
+
+  /** 只在没有活动 Runtime 时读取启动前候选，失败状态也允许重新选择。 */
+  function canPreviewModels(): boolean {
+    return view.value.phase === 'idle' || view.value.phase === 'closed' || view.value.phase === 'failed'
+  }
+
+  /** 离开预读阶段或切换项目时使迟到结果失效。 */
+  function clearModelPreview(): void {
+    modelPreviewRequest += 1
+    modelPreviewAttemptedPath = null
+    modelPreviewView.value = { phase: 'idle' }
+  }
+
+  /** 状态广播只为尚未读过的项目发起一次，错误不因广播自动重试。 */
+  function refreshModelPreviewIfNeeded(): void {
+    const path = useProjectStore().currentProject?.path ?? null
+    if (canPreviewModels() && path !== null && path !== modelPreviewAttemptedPath) void refreshModelPreview()
+  }
+
+  /** 资源与模型共用主进程的一次性预读；项目或 Runtime 改变后丢弃结果。 */
+  async function refreshModelPreview(force = false): Promise<void> {
+    if (!canPreviewModels()) return
+    const projectPath = useProjectStore().currentProject?.path ?? null
+    if (projectPath === null) {
+      clearModelPreview()
+      return
+    }
+    if (!force && modelPreviewAttemptedPath === projectPath && modelPreviewView.value.phase === 'loading') return
+    const request = ++modelPreviewRequest
+    modelPreviewAttemptedPath = projectPath
+    modelPreviewView.value = { phase: 'loading' }
+    const result = await getResourcePreview(force)
+    if (request !== modelPreviewRequest || !canPreviewModels()
+      || useProjectStore().currentProject?.path !== projectPath) return
+    if (!result.ok) {
+      modelPreviewView.value = { phase: 'error', error: result.error }
+      return
+    }
+    if (result.data.projectPath !== projectPath) {
+      modelPreviewView.value = {
+        phase: 'error', error: { code: 'INVALID_RESPONSE', message: '模型预读返回了其他项目的结果，未应用。' }
+      }
+      return
+    }
+    modelPreviewView.value = { phase: 'ready', data: result.data }
+  }
+
+  /** 模型偏好只读一次；失败可显式重读，保存中不让读请求覆盖用户的新选择。 */
+  async function loadModelPreference(force = false): Promise<void> {
+    const lifecycle = modelLifecycle
+    if (modelSavePromise !== null) await modelSavePromise
+    if (lifecycle !== modelLifecycle) return
+    if (modelPreferencePromise !== null) return modelPreferencePromise
+    if (modelPreferenceLoaded.value && !force) return
+    const request = ++modelPreferenceRequest
+    modelPreferenceView.value = { phase: 'loading' }
+    const promise = (async () => {
+      const result = await getNewSessionModel()
+      if (request !== modelPreferenceRequest) return
+      if (!result.ok) {
+        modelPreferenceView.value = { phase: 'error', error: result.error }
+        return
+      }
+      newSessionModel.value = result.data
+      modelPreferenceLoaded.value = true
+      modelPreferenceView.value = { phase: 'ready' }
+    })()
+    modelPreferencePromise = promise
+    try { await promise } finally {
+      if (request === modelPreferenceRequest) modelPreferencePromise = null
+    }
+  }
+
+  /** 只保存目录中的真实身份，成功后再更新选择；空值用于恢复跟随 Pi 默认。 */
+  async function chooseNewSessionModel(model: ModelIdentity | null): Promise<void> {
+    if (!canPreviewModels() || !modelPreferenceLoaded.value
+      || modelPreferenceView.value.phase === 'loading' || modelPreferenceView.value.phase === 'saving') return
+    if (model !== null && (modelPreviewView.value.phase !== 'ready'
+      || !modelPreviewView.value.data.models.some(candidate => candidate.provider === model.provider && candidate.id === model.modelId))) return
+    const request = ++modelPreferenceRequest
+    modelPreferenceView.value = { phase: 'saving' }
+    const promise = (async () => {
+      const result = await setNewSessionModel(model)
+      if (request !== modelPreferenceRequest) return
+      if (!result.ok) {
+        modelPreferenceView.value = { phase: 'error', error: result.error }
+        return
+      }
+      newSessionModel.value = result.data
+      modelPreferenceView.value = { phase: 'ready' }
+    })()
+    modelSavePromise = promise
+    try { await promise } finally {
+      if (request === modelPreferenceRequest) modelSavePromise = null
+    }
+  }
+
+  /** 新建会话等待初始读取或正在保存的选择，不能在竞态中错误使用 Pi 默认。 */
+  async function prepareNewSessionModel(): Promise<ModelPreferenceResult> {
+    await loadModelPreference()
+    if (modelPreferenceView.value.phase === 'error') {
+      return { ok: false, error: modelPreferenceView.value.error }
+    }
+    if (!modelPreferenceLoaded.value) {
+      return { ok: false, error: { code: 'INTERNAL_ERROR', message: '新会话默认模型尚未读取完成。' } }
+    }
+    return { ok: true, data: newSessionModel.value === null ? null : { ...newSessionModel.value } }
   }
 
   /** 启动唯一 Runtime；启动、就绪或关闭中都不重复发起。当前界面不调用它，启动统一走打开或新建会话。 */
@@ -377,6 +547,9 @@ export const useRuntimeStore = defineStore('runtime', () => {
       capabilitiesRequest += 1
       modelSwitchView.value = { phase: 'idle' }
     }
+    if (status.state === 'starting' || status.state === 'stopping' || status.state === 'ready') {
+      if (modelPreviewView.value.phase !== 'idle' || modelPreviewAttemptedPath !== null) clearModelPreview()
+    }
     if (status.state !== 'ready') {
       resetProjection()
       // Runtime 离开就绪后，上一次中止请求的展示状态不再有意义。
@@ -392,6 +565,7 @@ export const useRuntimeStore = defineStore('runtime', () => {
           message: status.lastError ?? 'Runtime 已异常退出，结果不确定。'
         }
       }
+      refreshModelPreviewIfNeeded()
       return
     }
     if (status.state === 'ready') {
@@ -417,6 +591,7 @@ export const useRuntimeStore = defineStore('runtime', () => {
     }
     // idle 且带 runtimeId 表示上一次 Runtime 已正常关闭。
     view.value = status.runtimeId === null ? { phase: 'idle' } : { phase: 'closed' }
+    refreshModelPreviewIfNeeded()
   }
 
   /** 读取当前 Runtime 的可用模型；仅接收仍在就绪的同一代际中最新请求的结果，其余结果丢弃。 */
@@ -446,6 +621,10 @@ export const useRuntimeStore = defineStore('runtime', () => {
     abortView,
     capabilitiesView,
     modelSwitchView,
+    modelPreviewView,
+    modelPreferenceView,
+    newSessionModel,
+    modelPreferenceLoaded,
     messages,
     tools,
     projectionSync,
@@ -458,6 +637,10 @@ export const useRuntimeStore = defineStore('runtime', () => {
     shutdown,
     send,
     switchModel,
+    refreshModelPreview,
+    loadModelPreference,
+    chooseNewSessionModel,
+    prepareNewSessionModel,
     stopOperation,
     refreshCapabilities
   }

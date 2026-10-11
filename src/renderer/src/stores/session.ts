@@ -2,7 +2,9 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import type { SessionError, SessionList, SessionSummary } from '../../../shared/session-api'
+import type { ModelIdentity } from '../../../shared/runtime-api'
 import { useTrustStore } from './trust'
+import { useRuntimeStore } from './runtime'
 import { listSessions, openSession, reloadSession } from '../services/session'
 
 /** `idle` 表示尚无当前项目、未读取列表；单次动作失败放在 `actionError`，不影响已加载的列表。 */
@@ -21,6 +23,8 @@ export const useSessionStore = defineStore('session', () => {
   const opening = ref(false)
   /** 待确认的切换目标（null 表示新建会话）与是否需要用户确认中断。 */
   const pendingSessionId = ref<string | null>(null)
+  /** 信任或中断确认时保留发起请求时的新会话模型，不在重试时换成其他选择。 */
+  const pendingNewSessionModel = ref<ModelIdentity | null>(null)
   const awaitingInterrupt = ref(false)
   /** 是否存在等待信任决定后重试的打开请求；与 `pendingSessionId`（可能为 null）配合使用。 */
   const awaitingTrust = ref(false)
@@ -73,31 +77,44 @@ export const useSessionStore = defineStore('session', () => {
 
   /**
    * 打开或新建会话；`allowInterrupt` 表示用户已经确认可以停止运行中的操作。
-   * 主进程拒绝未确认的切换时只记录待确认目标，由界面就地确认。
+   * 新建时省略 `model` 会等待读取桌面偏好，显式 null 表示跟随 Pi；偏好失败记录错误且不启动。
+   * 恢复会话不覆盖模型；信任或中断确认期间保留目标与新会话模型，重试不重新选择默认。
    */
-  async function open(sessionId: string | null, allowInterrupt: boolean): Promise<void> {
+  async function open(sessionId: string | null, allowInterrupt: boolean, model?: ModelIdentity | null): Promise<void> {
     if (opening.value) return
 
     opening.value = true
     pendingReload.value = false
     actionError.value = null
     try {
-      const result = await openSession(sessionId, allowInterrupt)
+      let launchModel = model
+      if (sessionId === null && launchModel === undefined) {
+        const preference = await useRuntimeStore().prepareNewSessionModel()
+        if (!preference.ok) {
+          actionError.value = preference.error
+          return
+        }
+        launchModel = preference.data
+      }
+      const result = await openSession(sessionId, allowInterrupt, launchModel)
       if (result.ok) {
         applyList(result.data)
         pendingSessionId.value = null
+        pendingNewSessionModel.value = null
         awaitingInterrupt.value = false
         view.value = { phase: 'ready' }
         return
       }
       if (result.error.code === 'SESSION_SWITCH_BLOCKED' && !allowInterrupt) {
         pendingSessionId.value = sessionId
+        pendingNewSessionModel.value = launchModel ?? null
         awaitingInterrupt.value = true
         return
       }
       if (result.error.code === 'TRUST_REQUIRED') {
         // 记住待打开目标（null 表示新建），由信任对话框决定后重试；取消则清空。
         pendingSessionId.value = sessionId
+        pendingNewSessionModel.value = launchModel ?? null
         awaitingTrust.value = true
         await useTrustStore().openPrompt()
         return
@@ -153,8 +170,10 @@ export const useSessionStore = defineStore('session', () => {
       return
     }
     const target = pendingSessionId.value
+    const model = pendingNewSessionModel.value
     pendingSessionId.value = null
-    await open(target, false)
+    pendingNewSessionModel.value = null
+    await open(target, false, target === null ? model : undefined)
   }
 
   /** 用户确认中断后带 `allowInterrupt` 重试待确认的切换或重载。 */
@@ -164,12 +183,14 @@ export const useSessionStore = defineStore('session', () => {
       void reloadCurrent(true)
       return
     }
-    void open(pendingSessionId.value, true)
+    void open(pendingSessionId.value, true,
+      pendingSessionId.value === null ? pendingNewSessionModel.value : undefined)
   }
 
   /** 放弃待确认的切换；运行中的操作不受影响。 */
   function cancelPending(): void {
     pendingSessionId.value = null
+    pendingNewSessionModel.value = null
     pendingReload.value = false
     awaitingInterrupt.value = false
     awaitingTrust.value = false
@@ -183,6 +204,7 @@ export const useSessionStore = defineStore('session', () => {
     actionError,
     opening,
     pendingSessionId,
+    pendingNewSessionModel,
     awaitingInterrupt,
     awaitingTrust,
     pendingReload,

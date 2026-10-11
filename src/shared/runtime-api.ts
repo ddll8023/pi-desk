@@ -13,10 +13,10 @@ export const RUNTIME_SET_MODEL_CHANNEL = 'desktop:runtime-set-model'
 /** 只读：读取当前代际已加载的 Pi 资源清单（`get_commands` 投影）。 */
 export const RUNTIME_RESOURCES_CHANNEL = 'desktop:runtime-resources'
 /**
- * 只读：Runtime 未启动时用一次性 Pi 进程预读当前项目的资源清单（同样来自 `get_commands`）。
- * 结果用于输入框补全与设置页在 Runtime 未启动时的只读展示；
+ * 只读：Runtime 未启动时用一次性 Pi 进程预读资源、可用模型与默认模型。
+ * 结果用于输入框补全、设置页与启动前模型选择；
  * Runtime 就绪后一律以运行中的清单为权威，两份数据不合并。
- * 带 `force` 的请求绕过主进程的进程内缓存，用于用户显式要求重新读取时。
+ * 带 `force` 的请求绕过主进程的进程内缓存，用于手动刷新或认证更新后重读。
  */
 export const RUNTIME_RESOURCE_PREVIEW_CHANNEL = 'desktop:runtime-resource-preview'
 /** 只读：读取当前代际的启动诊断尾部与 Extension 运行时错误。 */
@@ -47,6 +47,24 @@ export const RUNTIME_PROJECTION_EVENT = 'desktop:runtime-projection-changed'
 /** 启动请求只接受项目目录；其他启动参数一律不接受。 */
 export interface RuntimeStartRequest {
   readonly projectPath: string
+}
+
+/** 模型的复合身份；只保存供应商和模型 ID，不携带凭据或任意启动参数。 */
+export interface ModelIdentity {
+  readonly provider: string
+  readonly modelId: string
+}
+
+/** 与模型切换入口保持相同长度边界，拒绝多余字段。 */
+export function isModelIdentity(value: unknown): value is ModelIdentity {
+  if (!isRecord(value)) return false
+  return typeof value.provider === 'string'
+    && value.provider.trim() !== ''
+    && value.provider.length <= 256
+    && typeof value.modelId === 'string'
+    && value.modelId.trim() !== ''
+    && value.modelId.length <= 1024
+    && Object.keys(value).every(key => key === 'provider' || key === 'modelId')
 }
 
 /** 模型切换只针对页面所见的 Runtime 代际，不接受任意 RPC 或全局持久化参数。 */
@@ -367,19 +385,27 @@ export type ResourcesResult =
 
 /**
  * Runtime 未启动时的资源预读结果。`projectPath` 是主进程实际探测的项目，页面据此丢弃已切换项目的结果；
- * `entries` 与运行中清单同一来源（`get_commands`），但由一次性进程在 `--no-extensions` 下取得，
- * 不保证与运行中的 Runtime 完全一致。
+ * 资源、模型与默认身份分别来自 `get_commands`、`get_available_models` 和 `get_state`。
+ * 预读不加载 Extension、不连接 MCP，不保证与运行中的 Runtime 完全一致；各项错误独立展示。
  */
 export interface PiResourcePreview {
   readonly projectPath: string
   readonly entries: readonly PiResourceEntry[]
+  /** 资源读取错误；非空时 entries 为空，但不影响其他预读结果。 */
+  readonly entriesError: string | null
+  readonly models: readonly ModelSummary[]
+  /** 模型目录读取错误；非空时 models 为空，与目录确实为空保持区分。 */
+  readonly modelsError: string | null
+  /** Pi 的默认模型身份；没有选中模型时也可能为 null，读取错误单独表达。 */
+  readonly defaultModel: ModelIdentity | null
+  readonly defaultModelError: string | null
 }
 
 export type ResourcePreviewResult =
   | { readonly ok: true; readonly data: PiResourcePreview }
   | { readonly ok: false; readonly error: RuntimeError }
 
-/** 资源预读请求：`force` 为真时绕过主进程的进程内缓存重新探测（用户显式重新读取）。 */
+/** 共享预读请求：`force` 为真时绕过进程内缓存，用于手动刷新或认证更新后重新探测。 */
 export interface ResourcePreviewRequest {
   readonly force: boolean
 }
@@ -491,7 +517,7 @@ export interface RuntimeApi {
   readonly setRuntimeModel: (runtimeId: number, provider: string, modelId: string) => Promise<RuntimeResult>
   /** 读取当前代际已加载的 Pi 资源清单；清单来源是 `get_commands`，不解析 Pi 配置文件。 */
   readonly getRuntimeResources: () => Promise<ResourcesResult>
-  /** 读取 Runtime 未启动时的资源预读结果；项目与信任决定由主进程决定，`force` 绕过其进程内缓存。 */
+  /** 预读资源、可用模型与默认模型及分项错误；项目与信任由主进程决定，`force` 绕过进程内缓存。 */
   readonly getResourcePreview: (force: boolean) => Promise<ResourcePreviewResult>
   /** 读取当前代际的启动诊断尾部与 Extension 运行时错误；无活动 Runtime 时两项都为空。 */
   readonly getRuntimeDiagnostics: () => Promise<RuntimeDiagnosticsResult>
@@ -864,6 +890,15 @@ export function isResourcePreviewResult(value: unknown): value is ResourcePrevie
       && data.projectPath !== ''
       && Array.isArray(data.entries)
       && data.entries.every(isPiResourceEntry)
+      && isNullableString(data.entriesError)
+      && (data.entriesError === null || data.entries.length === 0)
+      && Array.isArray(data.models)
+      && data.models.every(isModelSummary)
+      && isNullableString(data.modelsError)
+      && (data.modelsError === null || data.models.length === 0)
+      && (data.defaultModel === null || isModelIdentity(data.defaultModel))
+      && isNullableString(data.defaultModelError)
+      && (data.defaultModelError === null || data.defaultModel === null)
   }
   return isRuntimeErrorResult(value)
 }

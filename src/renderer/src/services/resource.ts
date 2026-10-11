@@ -1,4 +1,4 @@
-/** 作为渲染端 Pi 资源清单与未启动时的资源预读、启动诊断、MCP 配置列举与服务器探测、MCP 状态与登录/退出/重连、安全模式启动的调用入口，把桥接缺失与通信异常转换为安全的展示结果。 */
+/** 封装 Pi 资源清单、启动前资源与模型共享预读、启动诊断、MCP 配置列举与探测及连接动作、安全启动；把桥接缺失与通信异常转换为展示结果。 */
 import type {
   McpCommandAction,
   McpCommandResult,
@@ -40,7 +40,7 @@ export async function getResources(): Promise<ResourcesResult> {
   }
 }
 
-/** Runtime 未启动时的资源预读；项目与信任决定由主进程决定，`force` 要求绕过其缓存重新探测。 */
+/** 预读资源、可用模型与默认模型及分项错误；项目与信任由主进程决定，`force` 用于手动刷新或认证更新后绕过缓存。 */
 export async function getResourcePreview(force = false): Promise<ResourcePreviewResult> {
   const bridge = window.desktop
   if (!bridge || typeof bridge.getResourcePreview !== 'function') return unavailable()

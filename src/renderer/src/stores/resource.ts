@@ -229,6 +229,12 @@ export const useResourceStore = defineStore('resource', () => {
       previewView.value = { phase: 'idle' }
       return
     }
+    if (result.data.entriesError !== null) {
+      previewView.value = {
+        phase: 'error', error: { code: 'RUNTIME_COMMAND_REJECTED', message: result.data.entriesError }
+      }
+      return
+    }
     previewSkills.value = result.data.entries.filter((entry) => entry.kind === 'skill')
     previewView.value = { phase: 'ready' }
   }

@@ -1,69 +1,72 @@
 /**
- * Runtime 未启动时的 Pi 资源预读：用固定的 `pi` 可执行文件起一次性 RPC 进程，只发 `get_commands` 后退出。
+ * Runtime 未启动时的 Pi 预读：同一个一次性 RPC 进程读取资源、可用模型与默认模型。
  *
- * 与运行中 Runtime 同源（同一个可执行文件、同一套资源发现规则），但不常驻、不落会话（`--no-session`）、
- * 不执行 Extension（`--no-extensions`）：仅为一列清单候选（补全或展示）就去执行扩展代码没有依据。
- * 因此由扩展在运行时追加的技能不在此清单内；Runtime 就绪后一律以运行中的 `get_commands` 为权威。
- *
- * 只读：不写 Pi 配置、不写 `trust.json`；`--approve`/`--no-approve` 只对本次进程生效。
- * 进程定位与终止方式与既有的 MCP 探测保持一致：独立进程组，超时或失败按组终止，不残留子进程。
+ * 不落会话、不加载 Extension、不连接 MCP；模型与资源只作启动前候选，就绪后以 Runtime 为准。
+ * 各命令的拒绝、形状错误与超时分别返回，避免模型读取失败挡住技能，或资源失败挡住模型选择。
+ * 同项目与信任决定的并发读取合并，强制刷新淘汰旧结果；进程按组终止，不残留子进程。
  */
 import { spawn } from 'node:child_process'
 import type { ChildProcess } from 'node:child_process'
 import { join } from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
-import type { PiResourceEntry, RuntimeErrorCode } from '../shared/runtime-api'
+import type { PiResourcePreview, RuntimeErrorCode } from '../shared/runtime-api'
 import { getPiExecutablePath } from './pi-process'
-import { toResources } from './pi-protocol'
+import { toModelSummaries, toResources, toRuntimeInfo } from './pi-protocol'
 
-/** 一次性预读的等待上限；与运行中的资源读取同一量级。 */
 const PREVIEW_TIMEOUT_MS = 15_000
-/** 要求终止后等待进程自行退出的期限。 */
 const PREVIEW_KILL_GRACE_MS = 3_000
-/** stdout 累计字符上限；超限按协议错误处理，不无界缓存。 */
 const PREVIEW_MAX_OUTPUT_CHARS = 1_048_576
-/** stderr 只保留尾部用于诊断文本，不作为结果的一部分。 */
 const PREVIEW_STDERR_TAIL_CHARS = 600
-/** 缓存条目上限；超出后整体清空，避免多项目切换时无界增长。 */
 const PREVIEW_CACHE_LIMIT = 32
-/** 本次请求的固定 id，只认这一条响应。 */
-const PREVIEW_REQUEST_ID = 'resource-preview'
+const PREVIEW_COMMANDS = [
+  { id: 'preview-resources', type: 'get_commands' },
+  { id: 'preview-models', type: 'get_available_models' },
+  { id: 'preview-default-model', type: 'get_state' }
+] as const
 
-/** 预读失败：与 RuntimeFailure 同形，调用方按错误码映射为 IPC 结果。 */
+type PreviewSnapshot = Omit<PiResourcePreview, 'projectPath'>
+
+/** 进程级预读失败；命令级失败由快照中的独立错误字段表达。 */
 export class ResourcePreviewError extends Error {
   constructor(readonly code: RuntimeErrorCode, message: string) {
     super(message)
   }
 }
 
-/** 「项目路径 + 信任决定」到清单的缓存；只缓存成功结果，失败一律重新探测；`force` 请求忽略它。 */
-const previewCache = new Map<string, readonly PiResourceEntry[]>()
+const previewCache = new Map<string, PreviewSnapshot>()
+const inFlight = new Map<string, Promise<PreviewSnapshot>>()
 
-/**
- * 预读当前项目的资源清单；同一项目与信任决定只探测一次，`force` 为真时忽略缓存重新探测。
- * 失败向上抛出 `ResourcePreviewError`，不用空清单冒充成功。
- */
+/** 同一项目与信任决定共用一次读取；只缓存全部成功的结果，强制刷新不能被旧探测覆盖。 */
 export async function previewProjectResources(
   projectPath: string,
   trustDecision: 'trusted' | 'untrusted' | null,
   force = false
-): Promise<readonly PiResourceEntry[]> {
+): Promise<PreviewSnapshot> {
   const key = `${projectPath}\n${trustDecision ?? 'default'}`
-  if (!force) {
+  if (force) previewCache.delete(key)
+  else {
     const cached = previewCache.get(key)
     if (cached !== undefined) return cached
   }
+  const pending = inFlight.get(key)
+  // 强制刷新可能来自刚完成的认证，不能复用认证改变之前已经开始的探测。
+  if (pending !== undefined && !force) return pending
 
-  const entries = await runPreviewProbe(projectPath, trustDecision)
-  if (previewCache.size >= PREVIEW_CACHE_LIMIT) previewCache.clear()
-  previewCache.set(key, entries)
-  return entries
+  const promise: Promise<PreviewSnapshot> = runPreviewProbe(projectPath, trustDecision).then((snapshot) => {
+    if (inFlight.get(key) === promise
+      && snapshot.entriesError === null && snapshot.modelsError === null && snapshot.defaultModelError === null) {
+      if (previewCache.size >= PREVIEW_CACHE_LIMIT) previewCache.clear()
+      previewCache.set(key, snapshot)
+    }
+    return snapshot
+  }).finally(() => {
+    if (inFlight.get(key) === promise) inFlight.delete(key)
+  })
+  inFlight.set(key, promise)
+  return promise
 }
 
-/**
- * 按平台终止探测进程树：先 SIGTERM，宽限期后补 SIGKILL。
- * 与 MCP 探测使用同一条链，但不复用其私有实现，避免把两个功能的生命周期绑在一起。
- */
+/** 只终止本次创建的探测进程树，不按进程名清理其他 Pi。 */
 function terminateProcessTree(child: ChildProcess, signal: NodeJS.Signals): void {
   const pid = child.pid
   if (pid === undefined) return
@@ -71,74 +74,69 @@ function terminateProcessTree(child: ChildProcess, signal: NodeJS.Signals): void
     const taskkill = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'taskkill.exe')
     try {
       const killer = spawn(taskkill, ['/F', '/T', '/PID', String(pid)], {
-        stdio: 'ignore',
-        detached: true,
-        windowsHide: true
+        stdio: 'ignore', detached: true, windowsHide: true
       })
-      // 失败的 spawn 会异步 emit error，必须消费以避免拖垮主进程。
       killer.once('error', () => {})
       killer.unref()
     } catch {
-      // taskkill 无法执行时回退到单进程终止。
+      // taskkill 无法执行时仍允许自然退出与后续终止兜底。
     }
     return
   }
   try {
     process.kill(-pid, signal)
   } catch {
-    try {
-      child.kill(signal)
-    } catch {
-      // 进程已退出时不产生未处理异常。
-    }
+    try { child.kill(signal) } catch { /* 进程已退出。 */ }
   }
 }
 
-/** 启动参数固定：RPC、不落会话、不加载 Extension，信任决定按主进程已取得的结论传递。 */
+/** 模型预读不需要 MCP 连接，也不能为展示候选执行扩展代码或保存会话。 */
 function previewLaunchArguments(trustDecision: 'trusted' | 'untrusted' | null): string[] {
-  const args = ['--mode', 'rpc', '--no-session', '--no-extensions']
+  const args = ['--mode', 'rpc', '--no-session', '--no-extensions', '--no-mcp']
   if (trustDecision === 'trusted') args.push('--approve')
   else if (trustDecision === 'untrusted') args.push('--no-approve')
   return args
 }
 
-/** 起一次性进程取回清单：请求与进程退出分开处理，拿到响应后再关 stdin 让它自行退出。 */
+/** 三个固定请求共享进程；命令级错误不影响其他已取得的结果。 */
 function runPreviewProbe(
   projectPath: string,
   trustDecision: 'trusted' | 'untrusted' | null
-): Promise<readonly PiResourceEntry[]> {
+): Promise<PreviewSnapshot> {
   return new Promise((resolve, reject) => {
     let child: ChildProcess
     try {
       child = spawn(getPiExecutablePath(), previewLaunchArguments(trustDecision), {
         cwd: projectPath,
-        // 只追加版本检查开关；凭据等仍由 Pi 自己的配置与环境提供。
         env: { ...process.env, PI_SKIP_VERSION_CHECK: '1' },
         stdio: ['pipe', 'pipe', 'pipe'],
-        // 独立进程组便于按组终止；不调用 unref，进程仍由应用管理。
         detached: process.platform !== 'win32',
         windowsHide: true
       })
     } catch (error) {
-      reject(new ResourcePreviewError(
-        'RUNTIME_SPAWN_FAILED',
-        `无法启动资源预读进程：${error instanceof Error ? error.message : String(error)}`
-      ))
+      reject(new ResourcePreviewError('RUNTIME_SPAWN_FAILED',
+        `无法启动预读进程：${error instanceof Error ? error.message : String(error)}`))
       return
     }
 
     const stdoutDecoder = new StringDecoder('utf8')
     const stderrDecoder = new StringDecoder('utf8')
-    // 进程提前退出时对 stdin 的写入会异步 emit EPIPE；不消费会拖垮主进程。
     child.stdin?.on('error', () => {})
+    const pending = new Map<string, string>(PREVIEW_COMMANDS.map(command => [command.id, command.type]))
+    let snapshot: PreviewSnapshot = {
+      entries: [], entriesError: null,
+      models: [], modelsError: null,
+      defaultModel: null, defaultModelError: null
+    }
     let buffer = ''
     let stderr = ''
     let outputChars = 0
     let settled = false
     let closeTimer: NodeJS.Timeout | null = null
-
     const timeoutTimer = setTimeout(() => {
-      fail(new ResourcePreviewError('RUNTIME_TIMEOUT', '资源预读超时，未取得清单。'))
+      for (const command of pending.values()) applyResponse(command, null, `${command} 预读超时。`)
+      pending.clear()
+      succeed()
     }, PREVIEW_TIMEOUT_MS)
 
     function clearCloseTimer(): void {
@@ -147,7 +145,7 @@ function runPreviewProbe(
       closeTimer = null
     }
 
-    /** 失败即终止进程树：不再需要结果，也不留下后台进程。 */
+    /** 进程或协议失效时停止探测，保留失败原因，不返回假的空清单。 */
     function fail(error: ResourcePreviewError): void {
       if (settled) return
       settled = true
@@ -158,50 +156,61 @@ function runPreviewProbe(
       reject(error)
     }
 
-    /** 成功即要求进程退出；退出确认交由宽限期兜底，不阻塞结果的返回。 */
-    function succeed(entries: readonly PiResourceEntry[]): void {
+    /** 结果确定后关闭 stdin；宽限期兜底避免一次性进程继续驻留。 */
+    function succeed(): void {
       if (settled) return
       settled = true
       clearTimeout(timeoutTimer)
-      try {
-        child.stdin?.end()
-      } catch {
-        // 进程已退出时写入会失败，此时无需再关 stdin。
-      }
+      try { child.stdin?.end() } catch { /* 进程可能已经退出。 */ }
       closeTimer = setTimeout(() => terminateProcessTree(child, 'SIGKILL'), PREVIEW_KILL_GRACE_MS)
-      resolve(entries)
+      resolve(snapshot)
+    }
+
+    /** 每个固定响应独立解析，默认模型为空与读取失败保持区分。 */
+    function applyResponse(command: string, data: unknown, error: string | null): void {
+      if (command === 'get_commands') {
+        const entries = error === null ? toResources(data) : null
+        snapshot = { ...snapshot, entries: entries ?? [],
+          entriesError: error ?? (entries === null ? 'get_commands 响应缺少约定的 commands 数组。' : null) }
+      } else if (command === 'get_available_models') {
+        const models = error === null ? toModelSummaries(data) : null
+        snapshot = { ...snapshot, models: models ?? [],
+          modelsError: error ?? (models === null ? 'get_available_models 响应缺少约定的 models 数组。' : null) }
+      } else if (command === 'get_state') {
+        const info = error === null ? toRuntimeInfo(data) : null
+        snapshot = { ...snapshot,
+          defaultModel: info?.modelProvider && info.modelId
+            ? { provider: info.modelProvider, modelId: info.modelId } : null,
+          defaultModelError: error ?? (info === null ? 'get_state 响应缺少约定的会话字段。' : null) }
+      }
     }
 
     function handleLine(line: string): void {
       if (settled || line === '') return
       let payload: unknown
-      try {
-        payload = JSON.parse(line)
-      } catch {
-        fail(new ResourcePreviewError('RUNTIME_PROTOCOL_ERROR', '资源预读进程输出了非 JSON 行。'))
+      try { payload = JSON.parse(line) } catch {
+        fail(new ResourcePreviewError('RUNTIME_PROTOCOL_ERROR', '预读进程输出了非 JSON 行。'))
         return
       }
       if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) return
       const record = payload as Record<string, unknown>
-      if (record.type !== 'response' || record.id !== PREVIEW_REQUEST_ID) return
-      if (record.success !== true) {
-        const reason = typeof record.error === 'string' && record.error !== '' ? record.error : '未提供错误信息'
-        fail(new ResourcePreviewError('RUNTIME_COMMAND_REJECTED', `Pi 拒绝了读取资源清单：${reason}`))
-        return
-      }
-      const entries = toResources(record.data)
-      if (entries === null) {
-        fail(new ResourcePreviewError('RUNTIME_PROTOCOL_ERROR', 'get_commands 响应缺少约定的 commands 数组。'))
-        return
-      }
-      succeed(entries)
+      if (record.type !== 'response' || typeof record.id !== 'string') return
+      const command = pending.get(record.id)
+      if (command === undefined) return
+      pending.delete(record.id)
+      const reason = typeof record.error === 'string' && record.error !== '' ? record.error : '未提供错误信息'
+      const error = record.command !== command
+        ? `${command} 预读响应的命令不一致。`
+        : record.success === true ? null : `Pi 拒绝了 ${command}：${reason}`
+      applyResponse(command, record.data, error)
+      if (pending.size === 0) succeed()
     }
 
     child.stdout?.on('data', (chunk: Buffer) => {
       if (settled) return
       outputChars += chunk.length
       if (outputChars > PREVIEW_MAX_OUTPUT_CHARS) {
-        fail(new ResourcePreviewError('RUNTIME_PROTOCOL_ERROR', '资源预读输出超出长度上限。'))
+        fail(new ResourcePreviewError('RUNTIME_PROTOCOL_ERROR', '预读输出超出长度上限。'))
         return
       }
       buffer += stdoutDecoder.write(chunk)
@@ -214,37 +223,27 @@ function runPreviewProbe(
         if (settled) return
       }
     })
-
     child.stderr?.on('data', (chunk: Buffer) => {
       stderr = (stderr + stderrDecoder.write(chunk)).slice(-PREVIEW_STDERR_TAIL_CHARS)
     })
-
-    child.once('error', (error) => {
-      fail(new ResourcePreviewError('RUNTIME_SPAWN_FAILED', `资源预读进程启动失败：${error.message}`))
+    child.once('error', error => {
+      fail(new ResourcePreviewError('RUNTIME_SPAWN_FAILED', `预读进程启动失败：${error.message}`))
     })
-
     child.once('close', (code, signal) => {
       clearCloseTimer()
       if (settled) return
       settled = true
       clearTimeout(timeoutTimer)
       const detail = stderr === '' ? '' : `：${stderr.trim()}`
-      reject(new ResourcePreviewError(
-        'RUNTIME_EXITED',
-        code === null
-          ? `资源预读进程被信号 ${signal ?? '未知'} 结束，未取得清单。`
-          : `资源预读进程提前退出（退出码 ${code}）${detail}`
-      ))
+      reject(new ResourcePreviewError('RUNTIME_EXITED', code === null
+        ? `预读进程被信号 ${signal ?? '未知'} 结束，未取得完整结果${detail}`
+        : `预读进程提前退出（退出码 ${code}）${detail}`))
     })
-
-    // 进程就绪前写入不影响：stdin 是管道，命令行会先在内核缓冲区排队。
     try {
-      child.stdin?.write(`${JSON.stringify({ type: 'get_commands', id: PREVIEW_REQUEST_ID })}\n`)
+      for (const command of PREVIEW_COMMANDS) child.stdin?.write(`${JSON.stringify(command)}\n`)
     } catch (error) {
-      fail(new ResourcePreviewError(
-        'RUNTIME_SPAWN_FAILED',
-        `无法向资源预读进程写入请求：${error instanceof Error ? error.message : String(error)}`
-      ))
+      fail(new ResourcePreviewError('RUNTIME_SPAWN_FAILED',
+        `无法向预读进程写入请求：${error instanceof Error ? error.message : String(error)}`))
     }
   })
 }

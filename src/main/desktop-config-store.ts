@@ -1,6 +1,6 @@
 /**
  * 本地 Desktop 配置的唯一读写者：最近项目的添加/移除、当前项目、界面偏好、窗口状态、各项目信任决定（Project Trust）
- * 与安装级 UUID 的加载、保存与降级处理。
+ * 与安装级 UUID、桌面新会话默认模型的加载、保存与降级处理。
  *
  * 配置位于 Electron userData 目录下的 desktop-config.json。写入采用同目录临时文件加改名替换，
  * 所有读写串行执行；加载时记录文件的标识（mtime 与大小），每次写入前比对，磁盘在加载后被其他
@@ -16,6 +16,8 @@ import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join } from 'node:path'
 import { app } from 'electron'
 import type { UiPreferences, UiTheme } from '../shared/preferences-api'
+import type { ModelIdentity } from '../shared/runtime-api'
+import { isModelIdentity } from '../shared/runtime-api'
 import type { TrustDecision } from '../shared/trust-api'
 import { isTrustDecision } from '../shared/trust-api'
 import { isProject } from '../shared/project-api'
@@ -70,9 +72,11 @@ interface StoredConfig {
    * 不是凭据；与 Pi 自己保存在 settings.json 里的值互不影响。缺失或非法按无值处理。
    */
   readonly authDeviceId: string | null
+  /** 仅用于桌面新会话；缺失或非法时跟随 Pi 默认。 */
+  readonly newSessionModel: ModelIdentity | null
 }
 
-/** 需要落盘的完整配置内容；调用方显式给出，避免部分更新丢掉其他字段。 */
+/** 落盘载荷；模型偏好未显式更新时保留当前值，避免其他配置写入将它清除。 */
 interface PersistPayload {
   readonly projects: readonly Project[]
   readonly currentProjectId: string | null
@@ -80,6 +84,7 @@ interface PersistPayload {
   readonly windowState: WindowState
   readonly projectTrust: Record<string, TrustDecision>
   readonly authDeviceId: string | null
+  readonly newSessionModel?: ModelIdentity | null
 }
 
 /** 配置写入失败；由调用方映射为 `PROJECT_STORAGE_FAILED` 或通用内部错误。 */
@@ -192,6 +197,7 @@ export class DesktopConfigStore {
   private projects: Project[] = []
   private currentProjectId: string | null = null
   private ui: UiPreferences = DEFAULT_UI_PREFERENCES
+  private newSessionModel: ModelIdentity | null = null
   private windowState: WindowState = DEFAULT_WINDOW_STATE
   private projectTrust: Record<string, TrustDecision> = {}
   /** 磁盘上的安装级 UUID；只在配置里保存过一次后才有值。 */
@@ -309,6 +315,36 @@ export class DesktopConfigStore {
       }
       this.ui = ui
       return this.ui
+    })
+  }
+
+  /** 默认模型独立读取，不复制 Pi 配置，也不返回可被外部修改的内存对象。 */
+  readNewSessionModel(): Promise<ModelIdentity | null> {
+    return this.enqueue(async () => {
+      await this.loadFromDisk()
+      return this.newSessionModel === null ? null : { ...this.newSessionModel }
+    })
+  }
+
+  /** 模型选择在保存成功后才提交；只读降级不能假称已为下次启动保存。 */
+  saveNewSessionModel(model: ModelIdentity | null): Promise<ModelIdentity | null> {
+    return this.enqueue(async () => {
+      await this.loadFromDisk()
+      if (this.readOnly) {
+        throw new DesktopConfigStorageError('本地配置处于只读状态，新会话默认模型未保存。')
+      }
+      const next = model === null ? null : { ...model }
+      await this.persist({
+        projects: this.projects,
+        currentProjectId: this.currentProjectId,
+        ui: this.ui,
+        windowState: this.windowState,
+        projectTrust: this.projectTrust,
+        authDeviceId: this.deviceIdForPersist(),
+        newSessionModel: next
+      })
+      this.newSessionModel = next
+      return next === null ? null : { ...next }
     })
   }
 
@@ -470,6 +506,7 @@ export class DesktopConfigStore {
       this.projects = [...parsed.projects]
       this.currentProjectId = parsed.currentProjectId
       this.ui = parsed.ui
+      this.newSessionModel = parsed.newSessionModel
       this.windowState = parsed.window
       this.projectTrust = parsed.projectTrust
       this.storedAuthDeviceId = parsed.authDeviceId
@@ -479,6 +516,7 @@ export class DesktopConfigStore {
     this.projects = [...parsed.projects]
     this.currentProjectId = parsed.currentProjectId
     this.ui = parsed.ui
+    this.newSessionModel = parsed.newSessionModel
     this.windowState = parsed.window
     this.projectTrust = parsed.projectTrust
     this.storedAuthDeviceId = parsed.authDeviceId
@@ -503,6 +541,7 @@ export class DesktopConfigStore {
       projects,
       currentProjectId,
       ui: sanitizeUiPreferences(value.ui),
+      newSessionModel: isModelIdentity(value.newSessionModel) ? value.newSessionModel : null,
       window: sanitizeWindowState(value.window),
       projectTrust: sanitizeProjectTrust(value.projectTrust),
       authDeviceId: sanitizeAuthDeviceId(value.authDeviceId)
@@ -561,7 +600,8 @@ export class DesktopConfigStore {
       ui: next.ui,
       window: next.windowState,
       projectTrust: next.projectTrust,
-      authDeviceId: next.authDeviceId
+      authDeviceId: next.authDeviceId,
+      newSessionModel: next.newSessionModel === undefined ? this.newSessionModel : next.newSessionModel
     }
     // 这份配置是整文件写入：磁盘在加载后被别的写入者改过时，宁可放弃本次保存，也不用过期内容覆盖。
     if (await this.stampOf(file) !== this.loadedStamp) {

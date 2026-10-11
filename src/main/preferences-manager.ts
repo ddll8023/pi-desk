@@ -1,11 +1,13 @@
 /**
- * 界面偏好（侧栏折叠、主题与 Thinking 默认状态）的读写入口：把配置文件存储的读写转换为页面契约。
+ * 界面偏好与桌面新会话默认模型的读写入口：把同一配置存储的独立字段转换为页面契约，不写 Pi 配置。
  *
- * 不直接访问文件，也不管理窗口状态；窗口尺寸与位置由 window-state.ts 独占。读取失败与写入
- * 失败都只回传错误，界面偏好的改动已在页面本地生效，不阻断其他操作，也不新增错误码。
+ * 不直接访问文件，也不管理窗口状态；窗口尺寸与位置由 window-state.ts 独占。读写失败只回传
+ * 错误：界面偏好已在页面本地生效，不阻断其他操作；模型选择则在保存成功后提交，调用方在
+ * 模型偏好失败时阻止新会话启动。两类偏好共用错误码。
  * IPC 契约与响应校验在 shared/preferences-api.ts，请求参数与调用者校验在 main/index.ts。
  */
-import type { PreferencesError, PreferencesResult, UiPreferences } from '../shared/preferences-api'
+import type { ModelPreferenceResult, PreferencesError, PreferencesResult, UiPreferences } from '../shared/preferences-api'
+import type { ModelIdentity } from '../shared/runtime-api'
 import type { DesktopConfigStore } from './desktop-config-store'
 import { DesktopConfigStorageError } from './desktop-config-store'
 
@@ -32,6 +34,24 @@ export class PreferencesManager {
       return { ok: true, data: await this.options.store.saveUiPreferences(ui) }
     } catch (error) {
       return this.failure(error, '保存界面偏好时发生未预期的内部错误。')
+    }
+  }
+
+  /** 读取桌面新会话模型偏好；null 表示跟随 Pi 默认。 */
+  async getNewSessionModel(): Promise<ModelPreferenceResult> {
+    try {
+      return { ok: true, data: await this.options.store.readNewSessionModel() }
+    } catch (error) {
+      return this.failure(error, '读取新会话默认模型时发生未预期的内部错误。')
+    }
+  }
+
+  /** 保存只影响桌面新会话，已有会话与 Pi 全局默认均不改变。 */
+  async setNewSessionModel(model: ModelIdentity | null): Promise<ModelPreferenceResult> {
+    try {
+      return { ok: true, data: await this.options.store.saveNewSessionModel(model) }
+    } catch (error) {
+      return this.failure(error, '保存新会话默认模型时发生未预期的内部错误。')
     }
   }
 

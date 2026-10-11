@@ -1,5 +1,5 @@
 /** 只定义 Pi Session 列表、打开与重新加载 IPC 的固定通道、结果类型与跨进程响应校验。 */
-import type { RuntimeErrorCode } from './runtime-api'
+import type { ModelIdentity, RuntimeErrorCode } from './runtime-api'
 
 export const SESSION_LIST_CHANNEL = 'desktop:session-list'
 export const SESSION_OPEN_CHANNEL = 'desktop:session-open'
@@ -30,6 +30,8 @@ export interface SessionList {
 export interface SessionOpenRequest {
   readonly sessionId: string | null
   readonly allowInterrupt: boolean
+  /** 仅新建会话可指定；null 或缺失表示跟随 Pi 默认，恢复会话不覆盖其模型。 */
+  readonly model?: ModelIdentity | null
 }
 
 /** 复用 Runtime 错误码族，只追加 Session 专有错误码。 */
@@ -57,8 +59,15 @@ export type SessionOpenResult =
 
 export interface SessionApi {
   readonly listSessions: () => Promise<SessionListResult>
-  /** 打开会话；`sessionId` 为 null 表示新建，非空时必须属于当前项目。 */
-  readonly openSession: (sessionId: string | null, allowInterrupt: boolean) => Promise<SessionOpenResult>
+  /**
+   * 打开会话；`sessionId` 为 null 表示新建，非空时必须属于当前项目。
+   * IPC 的 `model` 仅用于新建，省略或为 null 时使用 Pi 默认；恢复会话不得传模型覆盖参数。
+   */
+  readonly openSession: (
+    sessionId: string | null,
+    allowInterrupt: boolean,
+    model?: ModelIdentity | null
+  ) => Promise<SessionOpenResult>
   /**
    * 重新加载 Pi 资源：重启 Runtime 并尽量恢复当前会话；`allowInterrupt` 只有用户已确认时才为真。
    * RPC 没有重载命令，资源只在进程启动时读取，因此唯一的重载方式是重启。

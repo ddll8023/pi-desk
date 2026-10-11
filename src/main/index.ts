@@ -8,9 +8,11 @@ import { APP_INFO_CHANNEL } from '../shared/desktop-api'
 import type { AppInfoResult, DesktopErrorCode } from '../shared/desktop-api'
 import {
   PREFERENCES_GET_CHANNEL,
-  PREFERENCES_SET_UI_CHANNEL
+  PREFERENCES_SET_UI_CHANNEL,
+  PREFERENCES_GET_MODEL_CHANNEL,
+  PREFERENCES_SET_MODEL_CHANNEL
 } from '../shared/preferences-api'
-import type { PreferencesErrorCode, PreferencesResult } from '../shared/preferences-api'
+import type { ModelPreferenceResult, PreferencesErrorCode, PreferencesResult } from '../shared/preferences-api'
 import { isUiTheme } from '../shared/preferences-api'
 import type { UiTheme } from '../shared/preferences-api'
 import {
@@ -110,6 +112,7 @@ import {
   RUNTIME_STOP_CHANNEL,
   RUNTIME_STATUS_EVENT,
   isResourcePreviewRequest,
+  isModelIdentity,
   isRuntimeSetModelRequest
 } from '../shared/runtime-api'
 import type {
@@ -623,7 +626,7 @@ function registerProjectFileHandlers(pageUrl: string): void {
   )
 }
 
-/** 只接受会话 id 与显式中断确认；会话归属与文件解析都在主进程内部完成。 */
+/** 只接受会话 id、显式中断确认和新会话模型；恢复会话禁止覆盖模型，归属与文件解析由主进程完成。 */
 function registerSessionHandlers(pageUrl: string): void {
   handle(
     SESSION_LIST_CHANNEL,
@@ -652,10 +655,10 @@ function registerSessionHandlers(pageUrl: string): void {
         return sessionFailure('INVALID_REQUEST', '打开会话参数格式不正确。')
       }
       const fields = request as Record<string, unknown>
-      if (Object.keys(fields).some((key) => key !== 'sessionId' && key !== 'allowInterrupt')) {
+      if (Object.keys(fields).some((key) => key !== 'sessionId' && key !== 'allowInterrupt' && key !== 'model')) {
         return sessionFailure('INVALID_REQUEST', '打开会话参数包含未支持的字段。')
       }
-      const { sessionId, allowInterrupt } = fields
+      const { sessionId, allowInterrupt, model } = fields
       let targetSessionId: string | null = null
       if (typeof sessionId === 'string') {
         if (sessionId.trim() === '') {
@@ -668,11 +671,18 @@ function registerSessionHandlers(pageUrl: string): void {
       if (typeof allowInterrupt !== 'boolean') {
         return sessionFailure('INVALID_REQUEST', '打开会话必须显式说明是否允许中断当前操作。')
       }
+      if (model !== undefined && (targetSessionId !== null || (model !== null && !isModelIdentity(model)))) {
+        return sessionFailure('INVALID_REQUEST', '模型身份只能用于新建会话，且必须包含合法的供应商与模型 ID。')
+      }
       const trust = await resolveTrustForCurrentProject()
       if (trust.requiresPrompt) {
         return sessionFailure('TRUST_REQUIRED', trust.message ?? '项目包含需要信任决定的资源。')
       }
-      return sessionManager.open({ sessionId: targetSessionId, allowInterrupt }, trust.decision)
+      return sessionManager.open({
+        sessionId: targetSessionId,
+        allowInterrupt,
+        ...(model !== undefined ? { model } : {})
+      }, trust.decision)
     }
   )
 
@@ -743,7 +753,8 @@ async function startTrustedRuntime(projectPath: string): Promise<RuntimeResult> 
       }
     }
   }
-  return runtimeManager.start(projectPath, null, outcome.decision)
+  const model = await configStore.readNewSessionModel()
+  return runtimeManager.start(projectPath, null, outcome.decision, false, model)
 }
 
 /** Trust 查询与决定接口；决定只接受当前项目，防止页面改写其他项目的记录。 */
@@ -923,8 +934,8 @@ function registerRuntimeHandlers(pageUrl: string): void {
   )
 
   /**
-   * 资源预读只接受一个请求对象：项目与信任决定都由主进程决定，页面只能要求绕过缓存重新探测。
-   * 无决定时按未信任探测：只拿用户级资源，不因探测触发信任提示，也不写任何信任记录。
+   * 共享预读只接受一个请求对象：返回资源、可用模型与默认模型及分项错误，单项失败不遮蔽其他结果。
+   * 项目与信任由主进程决定，页面只能要求绕过缓存；无决定时按未信任探测，不触发信任提示或写记录。
    */
   handle(
     RUNTIME_RESOURCE_PREVIEW_CHANNEL,
@@ -943,8 +954,8 @@ function registerRuntimeHandlers(pageUrl: string): void {
       try {
         const outcome = await trustManager.resolveLaunchDecision(projectPath)
         const trustDecision = outcome.requiresPrompt ? 'untrusted' : outcome.decision
-        const entries = await previewProjectResources(projectPath, trustDecision, force)
-        return { ok: true, data: { projectPath, entries } }
+        const preview = await previewProjectResources(projectPath, trustDecision, force)
+        return { ok: true, data: { projectPath, ...preview } }
       } catch (error) {
         if (error instanceof ResourcePreviewError) {
           return resourcePreviewFailure(error.code, error.message)
@@ -1191,8 +1202,32 @@ function registerRuntimeHandlers(pageUrl: string): void {
   )
 }
 
-/** 只接受侧栏、主题与 Thinking 默认状态三个界面偏好字段，未知字段一律拒绝。 */
+/** 界面偏好与新会话模型分开读写；未知字段、任意启动参数一律拒绝。 */
 function registerPreferencesHandlers(pageUrl: string): void {
+  handle(
+    PREFERENCES_GET_MODEL_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<ModelPreferenceResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return { ok: false, error: { code: 'FORBIDDEN', message: '不允许此页面调用桌面接口。' } }
+      }
+      if (args.length !== 0) {
+        return { ok: false, error: { code: 'INVALID_REQUEST', message: '新会话默认模型读取接口不接受参数。' } }
+      }
+      return preferencesManager.getNewSessionModel()
+    }
+  )
+  handle(
+    PREFERENCES_SET_MODEL_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<ModelPreferenceResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return { ok: false, error: { code: 'FORBIDDEN', message: '不允许此页面调用桌面接口。' } }
+      }
+      if (args.length !== 1 || (args[0] !== null && !isModelIdentity(args[0]))) {
+        return { ok: false, error: { code: 'INVALID_REQUEST', message: '新会话默认模型必须是合法模型身份或 null。' } }
+      }
+      return preferencesManager.setNewSessionModel(args[0])
+    }
+  )
   handle(
     PREFERENCES_GET_CHANNEL,
     async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<PreferencesResult> => {

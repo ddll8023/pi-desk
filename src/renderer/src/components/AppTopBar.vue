@@ -86,7 +86,7 @@ const sessionTitleText = computed(() => (
 
     <RuntimeModelSelect />
 
-    <span class="app-runtime-status" :class="`is-${runtimeStatus.kind}`" role="status">
+    <span v-if="runtimeStatus.kind !== 'idle'" class="app-runtime-status" :class="`is-${runtimeStatus.kind}`" role="status">
       <span class="app-runtime-status-dot" aria-hidden="true"></span>
       {{ runtimeStatus.label }}
     </span>

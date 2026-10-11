@@ -1,8 +1,12 @@
-/** 只定义界面偏好 IPC 的固定通道、结果类型与跨进程响应校验；窗口状态由主进程独占，不经过 IPC。 */
+/** 定义界面偏好与桌面新会话默认模型的受限 IPC；窗口状态由主进程独占，不经过 IPC。 */
 import type { DesktopErrorCode } from './desktop-api'
+import type { ModelIdentity } from './runtime-api'
+import { isModelIdentity } from './runtime-api'
 
 export const PREFERENCES_GET_CHANNEL = 'desktop:preferences-get'
 export const PREFERENCES_SET_UI_CHANNEL = 'desktop:preferences-set-ui'
+export const PREFERENCES_GET_MODEL_CHANNEL = 'desktop:preferences-get-model'
+export const PREFERENCES_SET_MODEL_CHANNEL = 'desktop:preferences-set-model'
 
 /** 主题三档取值，与 Electron `nativeTheme.themeSource` 状态机一一对应；默认跟随系统。 */
 export type UiTheme = 'system' | 'light' | 'dark'
@@ -21,7 +25,7 @@ export interface UiPreferences {
   readonly thinkingDefaultExpanded: boolean
 }
 
-/** 偏好读写失败只影响界面偏好本身，界面已本地生效，不阻断其他操作。 */
+/** 复用桌面错误码；界面偏好本地先生效，模型偏好保存成功后才提交，失败由调用方阻止新会话采用新选择。 */
 export type PreferencesErrorCode = DesktopErrorCode
 
 export interface PreferencesError {
@@ -33,7 +37,16 @@ export type PreferencesResult =
   | { readonly ok: true; readonly data: UiPreferences }
   | { readonly ok: false; readonly error: PreferencesError }
 
+/** 桌面新会话默认模型；null 表示跟随 Pi 自己的默认，不修改 Pi 配置。 */
+export type ModelPreferenceResult =
+  | { readonly ok: true; readonly data: ModelIdentity | null }
+  | { readonly ok: false; readonly error: PreferencesError }
+
 export interface PreferencesApi {
+  /** 读取桌面新会话默认模型；null 表示跟随 Pi 默认，不读取或修改 Pi 模型设置。 */
+  readonly getNewSessionModel: () => Promise<ModelPreferenceResult>
+  /** 保存只影响桌面新会话；null 清除覆盖，返回成功后才更新选择，不修改 Pi 配置。 */
+  readonly setNewSessionModel: (model: ModelIdentity | null) => Promise<ModelPreferenceResult>
   readonly getPreferences: () => Promise<PreferencesResult>
   /** 保存界面偏好；非法的请求由主进程重新校验并拒绝。 */
   readonly setUiPreferences: (ui: UiPreferences) => Promise<PreferencesResult>
@@ -58,6 +71,16 @@ function isUiPreferences(value: unknown): value is UiPreferences {
   return typeof value.sidebarCollapsed === 'boolean'
     && isUiTheme(value.theme)
     && typeof value.thinkingDefaultExpanded === 'boolean'
+}
+
+/** 模型偏好独立校验，不与界面偏好整包读写，避免互相覆盖。 */
+export function isModelPreferenceResult(value: unknown): value is ModelPreferenceResult {
+  if (!isRecord(value)) return false
+  if (value.ok === true) return value.data === null || isModelIdentity(value.data)
+  if (value.ok !== false || !isRecord(value.error)) return false
+  return typeof value.error.message === 'string'
+    && typeof value.error.code === 'string'
+    && PREFERENCES_ERROR_CODES.includes(value.error.code)
 }
 
 // TypeScript 声明不能保证 invoke 的实际返回值；沙箱桥接只放行本契约。

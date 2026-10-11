@@ -6,9 +6,12 @@ import type { DesktopApi } from '../shared/desktop-api'
 import {
   PREFERENCES_GET_CHANNEL,
   PREFERENCES_SET_UI_CHANNEL,
+  PREFERENCES_GET_MODEL_CHANNEL,
+  PREFERENCES_SET_MODEL_CHANNEL,
+  isModelPreferenceResult,
   isPreferencesResult
 } from '../shared/preferences-api'
-import type { PreferencesApi, PreferencesResult, UiPreferences } from '../shared/preferences-api'
+import type { ModelPreferenceResult, PreferencesApi, PreferencesResult, UiPreferences } from '../shared/preferences-api'
 import {
   PROJECT_ADD_CHANNEL,
   PROJECT_CHOOSE_DIRECTORY_CHANNEL,
@@ -134,6 +137,7 @@ import type {
   McpInspectionResult,
   McpInspectAbortResult,
   McpStatusResult,
+  ModelIdentity,
   ProjectionBatch,
   ProjectionResult,
   PromptImageInput,
@@ -305,8 +309,11 @@ const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionAp
     return isProjectFileSearchResult(response) ? response : invalidProjectFileResponse()
   },
 
-  async openSession(sessionId: string | null, allowInterrupt: boolean) {
-    const request: SessionOpenRequest = { sessionId, allowInterrupt }
+  async openSession(sessionId: string | null, allowInterrupt: boolean, model?: ModelIdentity | null) {
+    const request: SessionOpenRequest = {
+      sessionId, allowInterrupt,
+      ...(model !== undefined ? { model: model === null ? null : { provider: model.provider, modelId: model.modelId } } : {})
+    }
     const response: unknown = await ipcRenderer.invoke(SESSION_OPEN_CHANNEL, request)
     return isSessionListResult(response) ? response : invalidSessionResponse()
   },
@@ -326,6 +333,21 @@ const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionAp
     const request = { projectPath, decision }
     const response: unknown = await ipcRenderer.invoke(TRUST_DECIDE_CHANNEL, request)
     return isTrustDecisionResult(response) ? response : invalidTrustResponse()
+  },
+
+  async getNewSessionModel(): Promise<ModelPreferenceResult> {
+    const response: unknown = await ipcRenderer.invoke(PREFERENCES_GET_MODEL_CHANNEL)
+    return isModelPreferenceResult(response) ? response : {
+      ok: false, error: { code: 'INVALID_RESPONSE', message: '桌面接口返回了无法识别的新会话默认模型。' }
+    }
+  },
+
+  async setNewSessionModel(model: ModelIdentity | null): Promise<ModelPreferenceResult> {
+    const payload = model === null ? null : { provider: model.provider, modelId: model.modelId }
+    const response: unknown = await ipcRenderer.invoke(PREFERENCES_SET_MODEL_CHANNEL, payload)
+    return isModelPreferenceResult(response) ? response : {
+      ok: false, error: { code: 'INVALID_RESPONSE', message: '桌面接口返回了无法识别的新会话默认模型。' }
+    }
   },
 
   async getPreferences() {
@@ -401,7 +423,7 @@ const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionAp
     return isResourcesResult(response) ? response : invalidResourcesResponse()
   },
 
-  /** Runtime 未启动时的资源预读：项目与信任决定由主进程决定，`force` 要求绕过其缓存重新探测。 */
+  /** 共享预读资源、可用模型与默认模型及分项错误；项目与信任由主进程决定，`force` 绕过缓存。 */
   async getResourcePreview(force: boolean): Promise<ResourcePreviewResult> {
     const response: unknown = await ipcRenderer.invoke(RUNTIME_RESOURCE_PREVIEW_CHANNEL, { force })
     return isResourcePreviewResult(response) ? response : invalidResourcePreviewResponse()
