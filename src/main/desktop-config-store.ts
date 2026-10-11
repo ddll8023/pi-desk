@@ -37,8 +37,7 @@ const MAX_STORED_WINDOW = 20_000
 /** 界面偏好默认值；只在字段缺失或非法时使用。 */
 export const DEFAULT_UI_PREFERENCES: UiPreferences = {
   sidebarCollapsed: false,
-  theme: 'system',
-  thinkingDefaultExpanded: false
+  theme: 'system'
 }
 
 /** 窗口状态默认值；位置为 null 表示交给窗口自行居中。 */
@@ -110,9 +109,7 @@ function sanitizeUiPreferences(value: unknown): UiPreferences {
   }
   return {
     sidebarCollapsed: value.sidebarCollapsed,
-    theme: sanitizeTheme(value.theme),
-    // Thinking 默认展开字段缺失或非法时按收起处理，不影响有效的主题与侧栏状态。
-    thinkingDefaultExpanded: value.thinkingDefaultExpanded === true
+    theme: sanitizeTheme(value.theme)
   }
 }
 

@@ -1,6 +1,6 @@
 /**
  * 把 Runtime 投影映射为聊天区渲染项：块按 contentIndex 排序、工具调用块按 toolCallId 关联执行条目、
- * 失败文案只取投影已给的字段。
+ * 失败文案与 AI 消息生成计时只取投影已给的字段。
  *
  * 不重建消息、不猜测缺失内容，也不保存历史；投影快照与批次仍是唯一来源。投影按消息 copy-on-write
  * （只替换被改动的消息与工具条目对象），因此这里缓存上一次的渲染项：消息对象与其工具条目对象都没变
@@ -43,6 +43,7 @@ export interface ChatMessageView {
   /** 整条消息的失败文案；非 null 时界面按错误提示展示。 */
   readonly failure: string | null
   readonly time: string | null
+  readonly generation: ProjectionMessage['generation']
 }
 
 /** 一条消息引用到的工具条目；复用判定要求工具条目对象也未变化。 */
@@ -130,7 +131,8 @@ function buildMessageView(
       role: message.role,
       blocks,
       failure: messageFailureText(message),
-      time: formatMessageTime(message.timestamp)
+      time: formatMessageTime(message.timestamp),
+      generation: message.generation
     },
     toolRefs
   }

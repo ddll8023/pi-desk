@@ -1,4 +1,4 @@
-/* 提供主界面的本地样式、层级令牌与键盘焦点；暗色主题经 prefers-color-scheme 重定义同名令牌，由主进程 nativeTheme.themeSource 驱动。不加载外部字体或图标。 */
+/* 提供主界面的本地样式、层级令牌、紧凑刻度大纲动效与键盘焦点；暗色主题经 prefers-color-scheme 重定义同名令牌，由主进程 nativeTheme.themeSource 驱动。不加载外部字体或图标。 */
 @import "tailwindcss";
 
 @theme {
@@ -1315,6 +1315,151 @@
     .project-menu-leave-to {
       opacity: 1;
       transform: none;
+    }
+  }
+
+  /* 紧凑刻度只占窄栏，少量条目按内容高度显示；文字浮层独立于滚动列表，并留在正文右侧空白内。 */
+  .chat-outline {
+    position: absolute;
+    z-index: 2;
+    top: 0.75rem;
+    bottom: 0.75rem;
+    display: flex;
+    min-height: 0;
+    pointer-events: none;
+  }
+
+  .chat-outline-list {
+    width: 1.75rem;
+    min-height: 0;
+    max-height: 100%;
+    flex: none;
+    align-self: center;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
+    padding: 0.5rem 0.125rem;
+    scrollbar-width: none;
+    pointer-events: auto;
+  }
+
+  .chat-outline-list::-webkit-scrollbar {
+    display: none;
+  }
+
+  .chat-outline-item {
+    padding: 0;
+  }
+
+  .chat-outline-trigger {
+    position: relative;
+    display: grid;
+    width: 1.5rem;
+    height: 1.5rem;
+    place-items: center;
+    border-radius: var(--radius-desk-sm);
+    background: transparent;
+    cursor: pointer;
+    transition:
+      background-color var(--motion-duration-fast) ease,
+      box-shadow var(--motion-duration-fast) ease;
+  }
+
+  .chat-outline-trigger.is-previewing {
+    background: var(--color-desk-surface);
+    box-shadow: var(--shadow-desk-raise);
+  }
+
+  .chat-outline-mark {
+    width: 0.5rem;
+    height: 2px;
+    border-radius: 999px;
+    background: var(--color-desk-line-strong);
+    transition: background-color var(--motion-duration-fast) ease;
+  }
+
+  .chat-outline-trigger.is-near-preview .chat-outline-mark {
+    background: var(--color-desk-muted);
+  }
+
+  .chat-outline-trigger.is-previewing .chat-outline-mark,
+  .chat-outline-trigger.is-active .chat-outline-mark {
+    background: var(--color-desk-accent);
+  }
+
+  /* Motion 分别控制锚点纵向定位和表面入退场；静态居中独立一层，避免争用 transform。 */
+  .chat-outline-preview-anchor {
+    position: absolute;
+    top: 0;
+    left: 2rem;
+    right: 0.5rem;
+    pointer-events: none;
+  }
+
+  .chat-outline-preview {
+    position: relative;
+    transform: translateY(-50%);
+    pointer-events: none;
+  }
+
+  .chat-outline-preview-surface {
+    transform-origin: left center;
+  }
+
+  /* 透明连接区允许鼠标缓慢从刻度移入摘要，不需要精准跨越间隙。 */
+  .chat-outline-preview::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    right: 100%;
+    width: 0.375rem;
+  }
+
+  .chat-outline-preview.is-visible {
+    pointer-events: auto;
+  }
+
+  .chat-outline-preview-button {
+    display: block;
+    width: 100%;
+    border: 1px solid var(--color-desk-line);
+    border-radius: var(--radius-desk-md);
+    background: var(--color-desk-surface);
+    padding: 0.375rem 0.5rem;
+    color: var(--color-desk-ink);
+    font-size: var(--text-md);
+    line-height: 1.5;
+    text-align: left;
+    box-shadow: var(--shadow-desk-dialog);
+    cursor: pointer;
+    transition: background-color var(--motion-duration-fast) ease, border-color var(--motion-duration-fast) ease;
+  }
+
+  .chat-outline-preview-button:hover {
+    border-color: var(--color-desk-line-strong);
+    background: var(--color-desk-surface-subtle);
+  }
+
+  /* 新旧摘要占同一格，交叉淡化不会并排挤压文字或叠加浮层高度。 */
+  .chat-outline-preview-content {
+    display: grid;
+  }
+
+  .chat-outline-preview-text {
+    grid-area: 1 / 1;
+    display: -webkit-box;
+    overflow: hidden;
+    overflow-wrap: anywhere;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .chat-outline-trigger,
+    .chat-outline-mark,
+    .chat-outline-preview-button {
+      transition: none;
     }
   }
 

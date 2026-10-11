@@ -1,17 +1,27 @@
-<!-- 消息区：按投影顺序渲染消息，表达同步与截断状态，处理粘底滚动、回到底部与空状态；异常退出时空状态同时给出重试与安全模式入口；不自行拼装历史或请求消息内容。 -->
+<!-- 消息区：按投影顺序渲染并持续粘底，主动上滚或大纲跳转时暂停；仅在右侧留白足够时展示用户输入刻度导航，切换会话重置滚动与消息组件；不自行拼装历史或请求消息内容。 -->
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { createChatViewCache } from '../chat-view'
+import type { ChatMessageView } from '../chat-view'
 import { useProjectStore } from '../stores/project'
 import { useResourceStore } from '../stores/resource'
 import { useRuntimeStore } from '../stores/runtime'
 import { useSessionStore } from '../stores/session'
 import ChatMessageItem from './ChatMessageItem.vue'
+import ChatOutline from './ChatOutline.vue'
 import AppButton from './ui/AppButton.vue'
 
 /** 距底部多少像素内仍视为"停在底部"，避免流式更新时与用户上滚互相争夺。 */
 const STICK_THRESHOLD_PX = 24
+/** 大纲预留整个展开区域，而非只判断刻度是否放得下，避免浮层盖住正文。 */
+const OUTLINE_MIN_WIDTH_PX = 160
+const OUTLINE_MAX_WIDTH_PX = 200
+const OUTLINE_GAP_PX = 8
+const OUTLINE_EDGE_PX = 8
+const OUTLINE_MIN_HEIGHT_PX = 128
+const OUTLINE_SUMMARY_CHARS = 160
+const READING_OFFSET_PX = 20
 
 const projectStore = useProjectStore()
 const runtimeStore = useRuntimeStore()
@@ -20,16 +30,38 @@ const resourceStore = useResourceStore()
 const { view: runtimeView, messages, tools, projectionSync, projectionTruncated, droppedMessages, droppedTools } = storeToRefs(runtimeStore)
 const { safeStart } = storeToRefs(resourceStore)
 
+const viewport = ref<HTMLElement | null>(null)
 const scroller = ref<HTMLElement | null>(null)
+const content = ref<HTMLElement | null>(null)
 const stickToBottom = ref(true)
+const activeOutlineId = ref<string | null>(null)
+const outlineLayout = ref<{ left: number; width: number } | null>(null)
+/** 大纲跳转保持阅读位置，不被程序滚动或内容收缩产生的 scroll 事件重新开启粘底。 */
+let outlineTargetId: string | null = null
+let lastScrollTop = 0
+let scrollFrame: number | null = null
+let outlineFrame: number | null = null
+let resizeObserver: ResizeObserver | null = null
 /** 投影映射缓存：流式期间每个批次只重建真正变化的条目，见 chat-view.ts。 */
 const viewCache = createChatViewCache()
 
 const chatMessages = computed(() => viewCache.toMessages(messages.value, tools.value))
+const outlineEntries = computed(() => chatMessages.value
+  .filter(message => message.role === 'user')
+  .map(message => ({ id: message.id, label: outlineLabel(message) })))
+const outlineStyle = computed(() => ({
+  left: `${outlineLayout.value?.left ?? 0}px`,
+  width: `${outlineLayout.value?.width ?? 0}px`
+}))
 const runtimeInfo = computed(() => (
   runtimeView.value.phase === 'ready' ? runtimeView.value.snapshot.info : null
 ))
 const streaming = computed(() => runtimeInfo.value?.isStreaming === true)
+/** 消息 ID 只在单个 Runtime 内唯一；会话切换后不能复用旧消息组件的手动开合状态。 */
+const conversationKey = computed(() => {
+  const runtimeId = runtimeView.value.phase === 'ready' ? runtimeView.value.snapshot.runtimeId : null
+  return `${projectStore.currentProject?.id ?? 'none'}:${runtimeId ?? 'none'}:${runtimeInfo.value?.sessionId ?? 'none'}`
+})
 const syncNotice = computed(() => {
   if (projectionSync.value === 'synced') return null
   return projectionSync.value === 'stale'
@@ -78,33 +110,166 @@ const emptyState = computed(() => {
   }
 })
 
-/** 内容指纹：只在消息或工具内容变化时重新粘底，避免每次渲染都改滚动位置。 */
-const contentRevision = computed(() => {
-  let characters = 0
-  for (const message of chatMessages.value) {
-    for (const block of message.blocks) {
-      if (block.kind !== 'toolcall') characters += block.text.length
+/** 摘要只取用户已有的文本，不解析 Markdown；纯图片与没有可展示文本的消息分别标明。 */
+function outlineLabel(message: ChatMessageView): string {
+  const parts: string[] = []
+  let hasImage = false
+  for (const block of message.blocks) {
+    if (block.kind !== 'text') continue
+    if (block.image !== null) {
+      hasImage = true
+      continue
     }
+    const text = block.text.trim()
+    if (text !== '') parts.push(text)
   }
-  return `${chatMessages.value.length}:${tools.value.length}:${characters}`
-})
+  const text = parts.join(' ').replace(/\s+/g, ' ')
+  if (text === '') return hasImage ? '图片消息' : '用户消息'
+  return text.length > OUTLINE_SUMMARY_CHARS ? `${text.slice(0, OUTLINE_SUMMARY_CHARS)}…` : text
+}
 
+/** 判断滚动位置距底部是否在粘底阈值内。 */
+function isNearBottom(element: HTMLElement): boolean {
+  return element.scrollHeight - element.scrollTop - element.clientHeight <= STICK_THRESHOLD_PX
+}
+
+/** 内容变高造成底部距离增加，不等于用户上滚；只有实际向上移动才暂停跟随。 */
 function onScroll(): void {
   const element = scroller.value
   if (element === null) return
-  stickToBottom.value = element.scrollHeight - element.scrollTop - element.clientHeight <= STICK_THRESHOLD_PX
+  if (outlineTargetId === null) {
+    if (isNearBottom(element)) stickToBottom.value = true
+    else if (element.scrollTop < lastScrollTop) stickToBottom.value = false
+  }
+  lastScrollTop = element.scrollTop
+  scheduleOutlineUpdate()
 }
 
-async function scrollToBottom(): Promise<void> {
-  await nextTick()
-  const element = scroller.value
-  if (element === null) return
-  element.scrollTop = element.scrollHeight
+/** 每帧最多粘底一次；写入前再检查上滚，避免排队中的布局回调抢走用户位置。 */
+function scheduleScrollToBottom(): void {
+  if (!stickToBottom.value || scrollFrame !== null) return
+  scrollFrame = requestAnimationFrame(() => {
+    scrollFrame = null
+    const element = scroller.value
+    if (element === null || !stickToBottom.value) return
+    if (element.scrollTop < lastScrollTop && !isNearBottom(element)) {
+      stickToBottom.value = false
+      lastScrollTop = element.scrollTop
+      return
+    }
+    element.scrollTop = element.scrollHeight
+    // 记录程序滚动后的实际位置，不让随后的 scroll 事件把内容增长误判成离开底部。
+    lastScrollTop = element.scrollTop
+    scheduleOutlineUpdate()
+  })
 }
 
 function jumpToBottom(): void {
+  outlineTargetId = null
   stickToBottom.value = true
-  void scrollToBottom()
+  lastScrollTop = scroller.value?.scrollTop ?? 0
+  scheduleScrollToBottom()
+}
+
+/** 只有明确的手动滚动意图解除跳转保护；单纯布局变化不代表用户要回到底部。 */
+function releaseOutlineJump(): void {
+  outlineTargetId = null
+}
+
+function onWheel(event: WheelEvent): void {
+  if (event.deltaY !== 0) releaseOutlineJump()
+}
+
+function onScrollerPointerDown(event: PointerEvent): void {
+  // 原生滚动条的指针事件落在滚动容器；点击正文或复制按钮不解除阅读保护。
+  if (event.target === event.currentTarget) releaseOutlineJump()
+}
+
+function onReadingKey(event: KeyboardEvent): void {
+  if (event.target instanceof Element && event.target.closest('input, textarea, [contenteditable="true"]')) return
+  if (['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(event.key)) releaseOutlineJump()
+}
+
+/** 定位当前投影里的用户消息；先取消待执行的粘底，再立即跳转，不让平滑滚动与流式更新争夺位置。 */
+function jumpToMessage(messageId: string): void {
+  const element = scroller.value
+  const target = content.value?.querySelector<HTMLElement>(`.chat-message-user[data-message-id="${CSS.escape(messageId)}"]`)
+  if (element === null || target === null || target === undefined) return
+  if (!outlineEntries.value.some(entry => entry.id === messageId)) return
+
+  if (scrollFrame !== null) cancelAnimationFrame(scrollFrame)
+  scrollFrame = null
+  outlineTargetId = messageId
+  stickToBottom.value = false
+  activeOutlineId.value = messageId
+  const top = element.scrollTop + target.getBoundingClientRect().top - element.getBoundingClientRect().top - READING_OFFSET_PX
+  element.scrollTop = Math.max(0, top)
+  lastScrollTop = element.scrollTop
+  scheduleOutlineUpdate()
+}
+
+/** 按实际正文右边界计算留白，扣除滚动条与安全间距；不挤占正文或输入区。 */
+function updateOutlineLayout(): void {
+  const host = viewport.value
+  const element = scroller.value
+  const body = content.value
+  if (host === null || element === null || body === null || outlineEntries.value.length === 0) {
+    outlineLayout.value = null
+    return
+  }
+
+  const hostRect = host.getBoundingClientRect()
+  const scrollRect = element.getBoundingClientRect()
+  const usableRight = scrollRect.left + element.clientWidth
+  const available = usableRight - body.getBoundingClientRect().right
+  const width = Math.min(OUTLINE_MAX_WIDTH_PX, available - OUTLINE_GAP_PX - OUTLINE_EDGE_PX)
+  outlineLayout.value = width >= OUTLINE_MIN_WIDTH_PX && hostRect.height >= OUTLINE_MIN_HEIGHT_PX
+    ? { left: usableRight - OUTLINE_EDGE_PX - width - hostRect.left, width }
+    : null
+}
+
+/** 正常阅读按视口顶部所属的用户输入定位；贴底时标记最新输入，跳转受限时仍保留点击目标。 */
+function updateActiveOutline(): void {
+  const entries = outlineEntries.value
+  if (outlineTargetId !== null && !entries.some(entry => entry.id === outlineTargetId)) outlineTargetId = null
+  if (outlineLayout.value === null || entries.length === 0) {
+    activeOutlineId.value = null
+    return
+  }
+  if (outlineTargetId !== null) {
+    activeOutlineId.value = outlineTargetId
+    return
+  }
+  if (stickToBottom.value) {
+    activeOutlineId.value = entries[entries.length - 1]?.id ?? null
+    return
+  }
+
+  const element = scroller.value
+  const body = content.value
+  if (element === null || body === null) return
+  const readingTop = element.getBoundingClientRect().top + READING_OFFSET_PX + 1
+  let activeId = entries[0]?.id ?? null
+  for (const anchor of body.querySelectorAll<HTMLElement>('.chat-message-user[data-message-id]')) {
+    if (anchor.getBoundingClientRect().top > readingTop) break
+    activeId = anchor.dataset.messageId ?? activeId
+  }
+  activeOutlineId.value = activeId
+}
+
+/** 几何读取与当前位置更新每帧合并一次，避免在每个流式增量或 scroll 事件里重复读布局。 */
+function scheduleOutlineUpdate(): void {
+  if (outlineFrame !== null) return
+  outlineFrame = requestAnimationFrame(() => {
+    outlineFrame = null
+    updateOutlineLayout()
+    updateActiveOutline()
+  })
+}
+
+function onLayoutChange(): void {
+  scheduleScrollToBottom()
+  scheduleOutlineUpdate()
 }
 
 function startNewSession(): void {
@@ -118,30 +283,48 @@ function startSafely(): void {
   void resourceStore.startSafely()
 }
 
-watch(contentRevision, () => {
-  if (stickToBottom.value) void scrollToBottom()
-})
+/** DOM 更新与实际尺寸变化都同步粘底及大纲；会话切换清除上一次阅读目标。 */
+watch([chatMessages, streaming, syncNotice, truncationNotice], onLayoutChange, { flush: 'post' })
+watch(conversationKey, () => {
+  activeOutlineId.value = null
+  jumpToBottom()
+  scheduleOutlineUpdate()
+}, { flush: 'post' })
 
 onMounted(() => {
-  void scrollToBottom()
+  resizeObserver = new ResizeObserver(onLayoutChange)
+  if (scroller.value !== null) resizeObserver.observe(scroller.value)
+  if (content.value !== null) resizeObserver.observe(content.value)
+  onLayoutChange()
+})
+
+onBeforeUnmount(() => {
+  resizeObserver?.disconnect()
+  if (scrollFrame !== null) cancelAnimationFrame(scrollFrame)
+  if (outlineFrame !== null) cancelAnimationFrame(outlineFrame)
 })
 </script>
 
 <template>
-  <section class="relative flex min-h-0 flex-1 flex-col bg-desk-canvas-sunken">
+  <section ref="viewport" class="relative flex min-h-0 flex-1 flex-col bg-desk-canvas-sunken">
     <div
       ref="scroller"
-      class="scroll-area min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-6"
+      class="scroll-area min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-6 [overflow-anchor:none]"
       @scroll.passive="onScroll"
+      @wheel.passive="onWheel"
+      @pointerdown="onScrollerPointerDown"
+      @touchmove.passive="releaseOutlineJump"
+      @keydown="onReadingKey"
     >
-      <div class="mx-auto flex max-w-3xl flex-col gap-5">
+      <div ref="content" class="mx-auto flex max-w-3xl flex-col gap-5">
         <p v-if="syncNotice" role="status" class="status-notice status-notice-info">{{ syncNotice }}</p>
         <p v-if="truncationNotice" role="status" class="status-notice">{{ truncationNotice }}</p>
 
         <ChatMessageItem
           v-for="message in chatMessages"
-          :key="message.id"
+          :key="`${conversationKey}:${message.id}`"
           :message="message"
+          :data-message-id="message.id"
         />
 
         <div v-if="chatMessages.length === 0" class="empty-state">
@@ -173,6 +356,15 @@ onMounted(() => {
         </p>
       </div>
     </div>
+
+    <ChatOutline
+      v-if="outlineLayout !== null && outlineEntries.length > 0"
+      :key="conversationKey"
+      :entries="outlineEntries"
+      :active-id="activeOutlineId"
+      :style="outlineStyle"
+      @navigate="jumpToMessage"
+    />
 
     <div v-if="!stickToBottom" class="pointer-events-none absolute inset-x-0 bottom-3 flex justify-center">
       <AppButton variant="compact" class="pointer-events-auto" @click="jumpToBottom">

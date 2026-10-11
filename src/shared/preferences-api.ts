@@ -21,8 +21,6 @@ export function isUiTheme(value: unknown): value is UiTheme {
 export interface UiPreferences {
   readonly sidebarCollapsed: boolean
   readonly theme: UiTheme
-  /** Thinking 默认是否展开；用户手动开合只影响当前展示。 */
-  readonly thinkingDefaultExpanded: boolean
 }
 
 /** 复用桌面错误码；界面偏好本地先生效，模型偏好保存成功后才提交，失败由调用方阻止新会话采用新选择。 */
@@ -70,7 +68,6 @@ function isUiPreferences(value: unknown): value is UiPreferences {
   if (!isRecord(value)) return false
   return typeof value.sidebarCollapsed === 'boolean'
     && isUiTheme(value.theme)
-    && typeof value.thinkingDefaultExpanded === 'boolean'
 }
 
 /** 模型偏好独立校验，不与界面偏好整包读写，避免互相覆盖。 */

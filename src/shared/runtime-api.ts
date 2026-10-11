@@ -1,4 +1,4 @@
-/** 只定义 Runtime 启停、状态、Prompt 提交、中止、可用模型读取与当前会话模型切换、Pi 资源与资源预读、诊断读取、MCP 状态、MCP 配置列举、MCP 服务器探测与 MCP 登录/退出/重连命令、安全启动、消息/工具投影 IPC 的固定通道、事件名、结果类型与跨进程响应校验。 */
+/** 只定义 Runtime 启停、状态、Prompt 提交、中止、可用模型读取与当前会话模型切换、Pi 资源与资源预读、诊断读取、MCP 状态、MCP 配置列举、MCP 服务器探测与 MCP 登录/退出/重连命令、安全启动、消息/工具投影（含生成计时）IPC 的固定通道、事件名、结果类型与跨进程响应校验。 */
 import type { DesktopErrorCode } from './desktop-api'
 
 export const RUNTIME_START_CHANNEL = 'desktop:runtime-start'
@@ -224,12 +224,22 @@ export interface ToolExecution {
   readonly diff: ToolDiff | null
 }
 
+/** AI 消息生成计时：时刻来自 Desktop 接收事件，不代表模型服务端耗时，也不包含后续工具执行。 */
+export interface MessageGeneration {
+  readonly phase: 'running' | 'completed' | 'interrupted'
+  readonly startedAt: number
+  /** 正常结束或异常收敛时固定结束时刻；仅运行中的消息为 null。 */
+  readonly endedAt: number | null
+}
+
 /** `id` 由 Desktop 生成，不冒充 Pi 消息字段。 */
 export interface ProjectionMessage {
   readonly id: string
   readonly role: 'user' | 'assistant'
   readonly blocks: readonly ProjectionBlock[]
   readonly timestamp: number | null
+  /** 用户消息、历史消息与缺少开始事件的 AI 消息为 null，不推算缺失耗时。 */
+  readonly generation: MessageGeneration | null
   readonly stopReason: string | null
   readonly errorMessage: string | null
 }
@@ -648,6 +658,18 @@ function isProjectionBlock(value: unknown): value is ProjectionBlock {
     && value.image.bytes >= 0
 }
 
+/** 计时终态必须有结束时刻；未知历史用 null 表达，不冒充仍在生成。 */
+function isMessageGeneration(value: unknown): value is MessageGeneration | null {
+  if (value === null) return true
+  if (!isRecord(value) || value.startedAt === null || !isTimestamp(value.startedAt)) return false
+  if (value.phase === 'running') return value.endedAt === null
+  return (value.phase === 'completed' || value.phase === 'interrupted')
+    && typeof value.startedAt === 'number'
+    && typeof value.endedAt === 'number'
+    && isTimestamp(value.endedAt)
+    && value.endedAt >= value.startedAt
+}
+
 function isProjectionMessage(value: unknown): value is ProjectionMessage {
   if (!isRecord(value)) return false
   return typeof value.id === 'string'
@@ -655,6 +677,8 @@ function isProjectionMessage(value: unknown): value is ProjectionMessage {
     && Array.isArray(value.blocks)
     && value.blocks.every(isProjectionBlock)
     && (value.timestamp === null || typeof value.timestamp === 'number')
+    && isMessageGeneration(value.generation)
+    && (value.role === 'assistant' || value.generation === null)
     && (value.stopReason === null || typeof value.stopReason === 'string')
     && (value.errorMessage === null || typeof value.errorMessage === 'string')
 }

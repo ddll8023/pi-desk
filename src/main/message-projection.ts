@@ -2,8 +2,8 @@
  * 维护当前 Runtime 代际的临时消息与工具投影，并按有界批次推送给渲染端。
  *
  * 把 Pi 的会话事件（以及恢复会话时的历史消息）重建为页面要展示的消息内容块与工具执行条目，
- * 用户消息中的图片块以附件描述块（data URL 与估算字节）投影；不保存原始事件、不持久化、不管理
- * Session、不解析 response 信封与退出；工具条目的生命周期交给
+ * 用户消息中的图片块以附件描述块（data URL 与估算字节）投影，AI 消息记录客户端接收事件的生成计时；
+ * 不保存原始事件、不持久化、不管理 Session、不解析 response 信封与退出；工具条目的生命周期交给
  * tool-projection，本模块负责聚合、批次、序号与确认。渲染端长度校验失败、序号缺口或未确认窗口
  * 超限都收敛到快照重同步，投影不猜测渲染端缺少的内容；触及展示上限时显式截断并计数，不伪装成完整内容。
  */
@@ -57,6 +57,7 @@ interface MutableMessage {
   readonly role: ProjectedRole
   blocks: MutableBlock[]
   timestamp: number | null
+  generation: ProjectionMessage['generation']
   stopReason: string | null
   errorMessage: string | null
 }
@@ -122,10 +123,13 @@ export class MessageProjection {
         return
       case 'agent_end':
         this.callbacks.onStatusHint({ isStreaming: false })
+        this.interruptActiveGeneration()
+        this.flush()
         return
       case 'agent_settled':
-        // 会话级忙碌状态以此收敛；仍未结束的工具条目标为未确认，同时把剩余增量立即送出。
+        // 会话级忙碌状态以此收敛；缺少结束事件的消息停止计时，工具条目标为未确认。
         this.callbacks.onStatusHint({ isStreaming: false })
+        this.interruptActiveGeneration()
         this.toolProjection.settleRunning()
         this.flush()
         return
@@ -247,7 +251,12 @@ export class MessageProjection {
     const role = readRole(value.role)
     if (role === null) return
 
+    // 新开始事件不能让上一条未配对的消息一直计时。
+    this.interruptActiveGeneration()
     const message = this.createMessage(role, value)
+    if (role === 'assistant') {
+      message.generation = { phase: 'running', startedAt: Date.now(), endedAt: null }
+    }
     this.messages.push(message)
     this.active = message
     this.enforceLimits()
@@ -259,8 +268,32 @@ export class MessageProjection {
     const active = this.active
     this.active = null
     const target = this.applyAuthoritativeMessage(value, active)
+    if (target !== active && active !== null && this.finishGeneration(active, 'interrupted')) {
+      this.queueUpdate({ kind: 'message', message: this.toPublicMessage(active) })
+    }
     if (target === null) return
     this.callbacks.onStatusHint({ messageCount: this.messages.length })
+  }
+
+  /** 只结束有开始事件的生成计时；系统时钟回拨时不产生负耗时。 */
+  private finishGeneration(message: MutableMessage, phase: 'completed' | 'interrupted'): boolean {
+    const generation = message.generation
+    if (generation?.phase !== 'running') return false
+    message.generation = {
+      phase,
+      startedAt: generation.startedAt,
+      endedAt: Math.max(generation.startedAt, Date.now())
+    }
+    return true
+  }
+
+  /** 事件配对被打断或 Agent 已收敛时，停止活动消息的计时但不编造正文终态。 */
+  private interruptActiveGeneration(): void {
+    const active = this.active
+    this.active = null
+    if (active !== null && this.finishGeneration(active, 'interrupted')) {
+      this.queueUpdate({ kind: 'message', message: this.toPublicMessage(active) })
+    }
   }
 
   /**
@@ -284,6 +317,8 @@ export class MessageProjection {
     target.timestamp = typeof value.timestamp === 'number' ? value.timestamp : target.timestamp
     target.stopReason = typeof value.stopReason === 'string' ? value.stopReason : null
     target.errorMessage = typeof value.errorMessage === 'string' ? value.errorMessage : null
+    const interrupted = target.stopReason === 'aborted' || target.stopReason === 'error'
+    this.finishGeneration(target, interrupted ? 'interrupted' : 'completed')
     this.queueUpdate({ kind: 'message', message: this.toPublicMessage(target) })
     return target
   }
@@ -610,6 +645,7 @@ export class MessageProjection {
       role,
       blocks: this.buildBlocks(value.content, role),
       timestamp: typeof value.timestamp === 'number' ? value.timestamp : null,
+      generation: null,
       stopReason: typeof value.stopReason === 'string' ? value.stopReason : null,
       errorMessage: typeof value.errorMessage === 'string' ? value.errorMessage : null
     }
@@ -633,6 +669,7 @@ export class MessageProjection {
       role: message.role,
       blocks: message.blocks.map((block) => this.toPublicBlock(block)),
       timestamp: message.timestamp,
+      generation: message.generation,
       stopReason: message.stopReason,
       errorMessage: message.errorMessage
     }

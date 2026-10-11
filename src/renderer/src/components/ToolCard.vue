@@ -1,6 +1,6 @@
-<!-- 通用工具卡片：在消息流内联展示工具名称、执行状态、Desktop 计算的耗时与参数摘要，展开后显示参数、结果或错误输出与非文本内容描述。 -->
+<!-- 通用工具卡片：默认折叠且仅手动开合，内联展示工具名称、执行状态、Desktop 计算的耗时与参数摘要，展开后显示参数、结果或错误输出与非文本内容描述。 -->
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, ref } from 'vue'
 import type {
   ToolDiff,
   ToolDiffLine,
@@ -8,7 +8,7 @@ import type {
   ToolNonTextPart
 } from '../../../shared/runtime-api'
 import type { ChatToolBlock } from '../chat-view'
-import { useTickingNow } from '../clock'
+import { formatDuration, useTickingNow } from '../clock'
 
 const props = defineProps<{
   readonly block: ChatToolBlock
@@ -86,11 +86,13 @@ function diffLineClass(line: ToolDiffLine): string {
   }
 }
 
-/** 运行中的卡片自动展开一次；此后交给用户，不强制收起也不再自动打开。 */
+/** 历史与运行中的工具均初始折叠；后续状态更新不覆盖手动选择。 */
 const expanded = ref(false)
-watch(isRunning, (running) => {
-  if (running) expanded.value = true
-}, { immediate: true })
+
+/** 点击与键盘激活共用同一开合状态，避免原生 details 与 Vue 状态不一致。 */
+function toggleExpanded(): void {
+  expanded.value = !expanded.value
+}
 
 function describeNonTextPart(part: ToolNonTextPart): string {
   const size = part.bytes === null ? '大小未知' : formatBytes(part.bytes)
@@ -102,24 +104,19 @@ function formatBytes(bytes: number): string {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
-
-/** 只表达量级：该时长是 Desktop 收到事件的间隔，不是工具的真实执行时间。 */
-function formatDuration(milliseconds: number): string {
-  if (milliseconds < 1000) return `${Math.round(milliseconds)} 毫秒`
-  if (milliseconds < 60_000) return `${(milliseconds / 1000).toFixed(1)} 秒`
-  const minutes = Math.floor(milliseconds / 60_000)
-  const seconds = Math.round((milliseconds % 60_000) / 1000)
-  return `${minutes} 分 ${seconds} 秒`
-}
 </script>
 
 <template>
   <details v-if="execution" :open="expanded" class="tool-card">
-    <summary>
+    <summary @click.prevent="toggleExpanded">
       <span class="disclosure"></span>
       <span class="font-mono text-desk-ink">{{ block.toolName }}</span>
       <span :class="phaseClass">{{ phaseLabel }}</span>
-      <span v-if="durationText" class="font-mono text-desk-muted">{{ durationText }}</span>
+      <span
+        v-if="durationText"
+        class="font-mono text-desk-muted"
+        title="客户端收到工具开始与结束事件的间隔"
+      >{{ durationText }}</span>
       <span v-if="argsPreview" class="min-w-0 flex-1 truncate text-desk-muted">{{ argsPreview }}</span>
     </summary>
     <div class="tool-card-body">

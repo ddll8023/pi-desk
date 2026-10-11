@@ -1,8 +1,8 @@
-<!-- 单条消息：Assistant 以整条轻卡片承载正文、Thinking 与工具块，按 contentIndex 保持顺序；Thinking 遵循默认偏好与本次展示的手动开合，保留用户内容、截断与失败提示。 -->
+<!-- 单条消息：Assistant 卡片展示独立生成耗时，按 contentIndex 承载正文、Thinking 与工具块；Thinking 默认折叠且仅手动开合，保留用户内容、截断与失败提示。 -->
 <script setup lang="ts">
 import { computed, reactive } from 'vue'
 import type { ChatMessageView } from '../chat-view'
-import { usePreferencesStore } from '../stores/preferences'
+import { formatDuration, useTickingNow } from '../clock'
 import MarkdownContent from './MarkdownContent.vue'
 import ToolCard from './ToolCard.vue'
 
@@ -10,19 +10,29 @@ const props = defineProps<{
   readonly message: ChatMessageView
 }>()
 
-const preferencesStore = usePreferencesStore()
-/** 手动选择只保留在当前消息组件中；重新进入聊天后按已保存的默认值恢复。 */
+/** 手动选择只保留在当前消息组件中；重新进入聊天或切换会话后恢复初始折叠。 */
 const thinkingOverrides = reactive(new Map<string, boolean>())
 
 const roleLabel = computed(() => (props.message.role === 'user' ? '你' : 'Assistant'))
 const isUser = computed(() => props.message.role === 'user')
+const generation = computed(() => props.message.generation)
+/** 仅生成中的 AI 消息订阅共享刻度，结束后使用主进程给出的固定时刻。 */
+const now = useTickingNow(() => generation.value?.phase === 'running')
 
-/** 未手动调整的块跟随默认值；流式更新不改变单个块的手动选择。 */
+const generationText = computed(() => {
+  const current = generation.value
+  if (current === null) return '耗时未记录'
+  const duration = formatDuration((current.endedAt ?? now.value) - current.startedAt)
+  if (current.phase === 'running') return `生成中 ${duration}`
+  return current.phase === 'interrupted' ? `已中断 · ${duration}` : `生成耗时 ${duration}`
+})
+
+/** 未手动调整的块一律折叠；流式更新不改变单个块的手动选择。 */
 function isThinkingExpanded(key: string): boolean {
-  return thinkingOverrides.get(key) ?? preferencesStore.thinkingDefaultExpanded
+  return thinkingOverrides.get(key) ?? false
 }
 
-/** 由 summary 的点击统一控制开合，键盘激活同样生效，避免默认展开被误记成手动操作。 */
+/** 由 summary 的点击统一控制开合，键盘激活同样生效。 */
 function toggleThinking(key: string): void {
   thinkingOverrides.set(key, !isThinkingExpanded(key))
 }
@@ -33,7 +43,14 @@ function toggleThinking(key: string): void {
     <header class="chat-meta">
       <span v-if="!isUser" class="chat-role-mark" aria-hidden="true">π</span>
       <span class="chat-role">{{ roleLabel }}</span>
-      <span v-if="message.time" class="chat-time">{{ message.time }}</span>
+      <span v-if="message.time || !isUser" class="chat-time inline-flex flex-wrap items-center gap-x-3 gap-y-1">
+        <span v-if="message.time">{{ message.time }}</span>
+        <span
+          v-if="!isUser"
+          class="font-mono"
+          title="按客户端事件计时；生成中更新，消息结束、事件配对中断或 Agent 收敛时固定；历史无记录不推算。"
+        >{{ generationText }}</span>
+      </span>
     </header>
 
     <template v-for="block in message.blocks" :key="block.key">
@@ -55,7 +72,7 @@ function toggleThinking(key: string): void {
         </div>
       </template>
 
-      <!-- 默认状态对历史与流式内容一致生效；手动开合只覆盖当前块。 -->
+      <!-- 历史与流式内容均初始折叠；手动开合只影响当前块。 -->
       <details
         v-else-if="block.kind === 'thinking'"
         :open="isThinkingExpanded(block.key)"

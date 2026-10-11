@@ -1256,23 +1256,20 @@ function registerPreferencesHandlers(pageUrl: string): void {
       }
       const fields = request as Record<string, unknown>
       if (Object.keys(fields).some((key) => (
-        key !== 'sidebarCollapsed' && key !== 'theme' && key !== 'thinkingDefaultExpanded'
+        key !== 'sidebarCollapsed' && key !== 'theme'
       ))) {
         return preferencesFailure('INVALID_REQUEST', '界面偏好参数包含未支持的字段。')
       }
-      const { sidebarCollapsed, theme, thinkingDefaultExpanded } = fields
+      const { sidebarCollapsed, theme } = fields
       if (typeof sidebarCollapsed !== 'boolean') {
         return preferencesFailure('INVALID_REQUEST', 'Sidebar 折叠状态必须是布尔值。')
       }
       if (!isUiTheme(theme)) {
         return preferencesFailure('INVALID_REQUEST', '主题取值只能是 system、light 或 dark。')
       }
-      if (typeof thinkingDefaultExpanded !== 'boolean') {
-        return preferencesFailure('INVALID_REQUEST', 'Thinking 默认展开状态必须是布尔值。')
-      }
       // 主题在参数合法后立即生效：只读降级时同样切换本次运行的主题，与页面本地生效保持一致。
       applyNativeTheme(theme)
-      return preferencesManager.setUi({ sidebarCollapsed, theme, thinkingDefaultExpanded })
+      return preferencesManager.setUi({ sidebarCollapsed, theme })
     }
   )
 }
