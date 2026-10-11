@@ -1,4 +1,4 @@
-/** 为沙箱页面提供应用信息、Project 选择/添加/移除/列表、项目文件检索、Session、Project Trust、偏好、Runtime、Pi 资源、认证与 Extension 等受限接口，不暴露 Electron、任意 channel 或系统能力。 */
+/** 为沙箱页面提供应用信息、Project 选择/添加/移除/列表、项目文件检索、Session、Project Trust、偏好、Runtime、Pi 资源、自定义供应商、认证与 Extension 等受限接口，不暴露 Electron、任意 channel 或系统能力。 */
 import { contextBridge, ipcRenderer } from 'electron'
 import type { IpcRendererEvent } from 'electron'
 import { APP_INFO_CHANNEL, isAppInfoResult } from '../shared/desktop-api'
@@ -15,6 +15,20 @@ import {
   isModelDisplayResult
 } from '../shared/preferences-api'
 import type { ModelDisplayPreference, ModelDisplayResult, ModelPreferenceResult, PreferencesApi, PreferencesResult, UiPreferences } from '../shared/preferences-api'
+import {
+  MODELS_CONFIG_DELETE_PROVIDER_CHANNEL,
+  MODELS_CONFIG_GET_CHANNEL,
+  MODELS_CONFIG_SAVE_PROVIDER_CHANNEL,
+  isModelsConfigDeleteRequest,
+  isModelsConfigResult,
+  isModelsConfigSaveRequest
+} from '../shared/models-config-api'
+import type {
+  ModelsConfigApi,
+  ModelsConfigDeleteRequest,
+  ModelsConfigResult,
+  ModelsConfigSaveRequest
+} from '../shared/models-config-api'
 import {
   PROJECT_ADD_CHANNEL,
   PROJECT_CHOOSE_DIRECTORY_CHANNEL,
@@ -168,6 +182,7 @@ const INVALID_PROJECT_FILE_RESPONSE = '桌面接口返回了无法识别的文�
 const INVALID_SESSION_LIST_RESPONSE = '桌面接口返回了无法识别的会话列表。'
 const INVALID_PREFERENCES_RESPONSE = '桌面接口返回了无法识别的界面偏好。'
 const INVALID_MODEL_DISPLAY_RESPONSE = '桌面接口返回了无法识别的对话页模型展示偏好。'
+const INVALID_MODELS_CONFIG_RESPONSE = '桌面接口返回了无法识别的自定义供应商配置。'
 const INVALID_TRUST_RESPONSE = '桌面接口返回了无法识别的信任状态。'
 const INVALID_EXTENSION_UI_RESPONSE = '桌面接口返回了无法识别的 Extension UI 状态。'
 const INVALID_RESOURCES_RESPONSE = '桌面接口返回了无法识别的资源清单。'
@@ -224,6 +239,10 @@ function invalidModelDisplayResponse(): ModelDisplayResult {
   return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_MODEL_DISPLAY_RESPONSE } }
 }
 
+function invalidModelsConfigResponse(): ModelsConfigResult {
+  return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_MODELS_CONFIG_RESPONSE } }
+}
+
 function invalidTrustResponse(): TrustStatusResult {
   return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_TRUST_RESPONSE } }
 }
@@ -268,7 +287,7 @@ function invalidAuthLogoutResponse(): AuthLogoutResult {
   return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_AUTH_STATUS_RESPONSE, detail: null } }
 }
 
-const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionApi & PreferencesApi & TrustApi & ExtensionUiApi & AuthApi = {
+const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionApi & PreferencesApi & TrustApi & ExtensionUiApi & AuthApi & ModelsConfigApi = {
   async getAppInfo() {
     const response: unknown = await ipcRenderer.invoke(APP_INFO_CHANNEL)
     if (!isAppInfoResult(response)) {
@@ -388,6 +407,31 @@ const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionAp
     }
     const response: unknown = await ipcRenderer.invoke(PREFERENCES_SET_UI_CHANNEL, request)
     return isPreferencesResult(response) ? response : invalidPreferencesResponse()
+  },
+
+  /** 自定义供应商快照：零参数；这次读取同时刷新主进程后续保存的比对基线。 */
+  async getModelsConfig(): Promise<ModelsConfigResult> {
+    const response: unknown = await ipcRenderer.invoke(MODELS_CONFIG_GET_CHANNEL)
+    return isModelsConfigResult(response) ? response : invalidModelsConfigResponse()
+  },
+
+  /** 新增或替换一个供应商条目：只搬运已声明的两个字段，不把页面对象整体转交。 */
+  async saveModelsConfigProvider(request: ModelsConfigSaveRequest): Promise<ModelsConfigResult> {
+    const payload: ModelsConfigSaveRequest = { providerId: request.providerId, json: request.json }
+    if (!isModelsConfigSaveRequest(payload)) {
+      return { ok: false, error: { code: 'INVALID_REQUEST', message: '供应商配置参数格式不正确。' } }
+    }
+    const response: unknown = await ipcRenderer.invoke(MODELS_CONFIG_SAVE_PROVIDER_CHANNEL, payload)
+    return isModelsConfigResult(response) ? response : invalidModelsConfigResponse()
+  },
+
+  async deleteModelsConfigProvider(request: ModelsConfigDeleteRequest): Promise<ModelsConfigResult> {
+    const payload: ModelsConfigDeleteRequest = { providerId: request.providerId }
+    if (!isModelsConfigDeleteRequest(payload)) {
+      return { ok: false, error: { code: 'INVALID_REQUEST', message: '供应商标识格式不正确。' } }
+    }
+    const response: unknown = await ipcRenderer.invoke(MODELS_CONFIG_DELETE_PROVIDER_CHANNEL, payload)
+    return isModelsConfigResult(response) ? response : invalidModelsConfigResponse()
   },
 
   async startRuntime(projectPath: string) {

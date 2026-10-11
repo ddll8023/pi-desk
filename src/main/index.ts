@@ -1,4 +1,4 @@
-/** 管理唯一桌面窗口、本地资产边界，以及应用信息、Project 选择/添加/移除、项目文件检索、Session 与 Project Trust、Runtime、认证、Extension IPC、事件广播及退出编排。 */
+/** 管理唯一桌面窗口、本地资产边界，以及应用信息、Project 选择/添加/移除、项目文件检索、Session 与 Project Trust、界面偏好、Runtime、自定义供应商配置、认证、Extension IPC、事件广播及退出编排。 */
 import { realpath } from 'node:fs/promises'
 import { extname, isAbsolute, relative, resolve, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -138,9 +138,18 @@ import type {
   RuntimeRewindResult,
   RuntimeStatus
 } from '../shared/runtime-api'
+import {
+  MODELS_CONFIG_DELETE_PROVIDER_CHANNEL,
+  MODELS_CONFIG_GET_CHANNEL,
+  MODELS_CONFIG_SAVE_PROVIDER_CHANNEL,
+  isModelsConfigDeleteRequest,
+  isModelsConfigSaveRequest
+} from '../shared/models-config-api'
+import type { ModelsConfigErrorCode, ModelsConfigResult } from '../shared/models-config-api'
 import { DesktopConfigStore } from './desktop-config-store'
 import { AuthManager, AuthManagerError } from './auth-manager'
 import { readMcpConfigListing } from './mcp-config-reader'
+import { ModelsConfigError, ModelsConfigManager } from './models-config-manager'
 import { PreferencesManager } from './preferences-manager'
 import { ProjectFileIndex } from './project-file-index'
 import { ProjectManager } from './project-manager'
@@ -200,6 +209,8 @@ const projectFileIndex = new ProjectFileIndex({
 /** 认证执行端：管理认证辅助进程，凭据读写全在官方实现内完成。 */
 const authManager = new AuthManager({ store: configStore, isPackaged: app.isPackaged })
 const preferencesManager = new PreferencesManager({ store: configStore })
+/** 自定义供应商配置（Pi 的 models.json）的唯一读写者；与 Desktop 自己的配置互不影响。 */
+const modelsConfigManager = new ModelsConfigManager()
 const windowState = new WindowState({ store: configStore })
 
 /** 有限等待；只用于退出编排，不证明被等待的操作已完成。 */
@@ -376,6 +387,16 @@ function mcpInspectionAbortFailure(code: RuntimeErrorCode, message: string): Mcp
 
 function mcpConfigFailure(code: RuntimeErrorCode, message: string): McpConfigResult {
   return { ok: false, error: { code, message } }
+}
+
+function modelsConfigFailure(code: ModelsConfigErrorCode, message: string): ModelsConfigResult {
+  return { ok: false, error: { code, message } }
+}
+
+/** 读写失败统一映射：已知错误保留自己的错误码与结论文本，其余按内部错误处理。 */
+function modelsConfigFailureOf(error: unknown, fallback: string): ModelsConfigResult {
+  if (error instanceof ModelsConfigError) return modelsConfigFailure(error.code, error.message)
+  return modelsConfigFailure('INTERNAL_ERROR', fallback)
 }
 
 function projectPathFailure(code: ProjectErrorCode, message: string): ProjectPathResult {
@@ -1318,6 +1339,72 @@ function registerPreferencesHandlers(pageUrl: string): void {
 }
 
 /**
+ * 第三方自定义供应商（Pi 的 models.json）：读取快照、按单个条目新增或替换、删除条目。
+ * 页面只能提交一个供应商条目的 JSON 文本，不能指定文件路径、不能整体替换文件；
+ * 真实密钥不回传，页面看到的是哨兵文本，保存时由主进程按位置还原。
+ */
+function registerModelsConfigHandlers(pageUrl: string): void {
+  handle(
+    MODELS_CONFIG_GET_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<ModelsConfigResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return modelsConfigFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 0) {
+        return modelsConfigFailure('INVALID_REQUEST', '自定义供应商读取接口不接受参数。')
+      }
+      try {
+        return { ok: true, data: await modelsConfigManager.getSnapshot() }
+      } catch (error) {
+        return modelsConfigFailureOf(error, '读取自定义供应商配置时发生未预期的内部错误。')
+      }
+    }
+  )
+
+  handle(
+    MODELS_CONFIG_SAVE_PROVIDER_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<ModelsConfigResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return modelsConfigFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 1) {
+        return modelsConfigFailure('INVALID_REQUEST', '保存自定义供应商接口只接受一个请求对象。')
+      }
+      const request = args[0]
+      if (!isModelsConfigSaveRequest(request)) {
+        return modelsConfigFailure('INVALID_REQUEST', '保存自定义供应商需要且只需要 providerId 与 json 两个字段。')
+      }
+      try {
+        return { ok: true, data: await modelsConfigManager.saveProvider(request.providerId, request.json) }
+      } catch (error) {
+        return modelsConfigFailureOf(error, '保存自定义供应商时发生未预期的内部错误。')
+      }
+    }
+  )
+
+  handle(
+    MODELS_CONFIG_DELETE_PROVIDER_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<ModelsConfigResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return modelsConfigFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 1) {
+        return modelsConfigFailure('INVALID_REQUEST', '删除自定义供应商接口只接受一个请求对象。')
+      }
+      const request = args[0]
+      if (!isModelsConfigDeleteRequest(request)) {
+        return modelsConfigFailure('INVALID_REQUEST', '删除自定义供应商需要且只需要 providerId 一个字段。')
+      }
+      try {
+        return { ok: true, data: await modelsConfigManager.deleteProvider(request.providerId) }
+      } catch (error) {
+        return modelsConfigFailureOf(error, '删除自定义供应商时发生未预期的内部错误。')
+      }
+    }
+  )
+}
+
+/**
  * 认证状态读取、Provider 登录流程（API Key 与 OAuth）、退出登录与外链打开。
  * 登录流程与密钥只经固定业务方法传递：页面不能指定辅助进程路径、命令文本或要打开的 URL。
  */
@@ -1707,6 +1794,7 @@ if (!app.requestSingleInstanceLock()) {
     registerSessionHandlers(pageUrl)
     registerTrustHandlers(pageUrl)
     registerPreferencesHandlers(pageUrl)
+    registerModelsConfigHandlers(pageUrl)
     registerAuthHandlers(pageUrl)
     runtimeManager.onStatusChanged(broadcastRuntimeStatus)
     runtimeManager.onProjectionBatch(broadcastRuntimeProjection)

@@ -1103,6 +1103,12 @@
     @apply mt-4 flex flex-wrap items-center justify-between gap-4 border-t border-desk-line pt-4;
   }
 
+  /* 设置入口行：左列是入口说明，右列是动作按钮；两列网格让按钮固定在同一列，说明再长也不会把它挤到下一行。 */
+  .settings-entry {
+    @apply mt-4 grid items-center gap-4 border-t border-desk-line pt-4;
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
   /* 设置子页返回入口：低对比、不抢标题，只承担导航。 */
   .settings-back-button {
     @apply inline-flex items-center gap-1.5 rounded-desk-sm px-2 py-1 text-xs font-medium text-desk-muted transition-colors;
