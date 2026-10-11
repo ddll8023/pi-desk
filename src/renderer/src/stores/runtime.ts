@@ -94,7 +94,7 @@ type ModelPreferenceViewState =
   | { phase: 'loading' }
   | { phase: 'ready' }
   | { phase: 'saving' }
-  | { phase: 'error'; error: RuntimeError }
+  | { phase: 'error'; error: PreferencesError }
 
 /** 对话页模型展示偏好的读取与保存状态；保存成功后才提交选择。 */
 type ModelDisplayViewState =

@@ -8,12 +8,14 @@ defineOptions({ inheritAttrs: false })
 interface SelectOption {
   readonly value: string
   readonly label: string
+  /* 以下三个可选字段允许显式传 undefined：调用方会在无值时直接传 undefined，
+     在 exactOptionalPropertyTypes 下必须写进类型，否则不能赋给可选属性。 */
   /** 选项首字母徽标；缺失时不渲染。 */
-  readonly badge?: string
+  readonly badge?: string | undefined
   /** 次行元信息，如上下文长度；缺失时不渲染。 */
-  readonly description?: string
+  readonly description?: string | undefined
   /** 右侧能力小徽标，如图片输入；缺失时不渲染。 */
-  readonly tag?: string
+  readonly tag?: string | undefined
 }
 
 interface SelectGroup {
@@ -32,9 +34,9 @@ const props = withDefaults(defineProps<{
   readonly emptyLabel?: string
   readonly emptyResultsLabel?: string
   /** 触发键里模型名前的 provider 小字；缺失时不渲染，用于分层展示。 */
-  readonly selectedMeta?: string
+  readonly selectedMeta?: string | undefined
   /** 触发键首字母徽标；缺失时不渲染。 */
-  readonly selectedBadge?: string
+  readonly selectedBadge?: string | undefined
 }>(), {
   disabled: false,
   searchable: false,

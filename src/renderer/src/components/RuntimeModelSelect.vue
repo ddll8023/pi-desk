@@ -83,7 +83,13 @@ const currentLabel = computed(() => {
 const currentIdentity = computed(() => identity.value
   ? `${identity.value.provider} / ${identity.value.modelId}` : currentLabel.value)
 const groups = computed(() => {
-  type Option = { value: string; label: string; badge?: string; description?: string; tag?: string }
+  type Option = {
+    value: string
+    label: string
+    badge?: string | undefined
+    description?: string | undefined
+    tag?: string | undefined
+  }
   const providers = new Map<string, Option[]>()
   for (const model of visibleModels.value) {
     const options = providers.get(model.provider) ?? []

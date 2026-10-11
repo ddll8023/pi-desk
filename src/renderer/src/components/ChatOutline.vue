@@ -57,7 +57,7 @@ const markerEntries = computed(() => props.entries.map((entry, index) => {
   }
 }))
 
-const markerTransition = computed<Options['transition']>(() => (
+const markerTransition = computed<NonNullable<Options['transition']>>(() => (
   prefersReducedMotion.value ? { duration: 0 } : MARKER_SPRING
 ))
 const previewInitial = computed<VariantType>(() => ({
@@ -65,7 +65,7 @@ const previewInitial = computed<VariantType>(() => ({
   x: prefersReducedMotion.value ? 0 : 6,
   scale: prefersReducedMotion.value ? 1 : 0.97
 }))
-const previewTransition = computed<Options['transition']>(() => ({
+const previewTransition = computed<NonNullable<Options['transition']>>(() => ({
   default: prefersReducedMotion.value ? { duration: 0 } : { type: 'spring', ...PREVIEW_SPRING },
   opacity: { type: 'tween', duration: prefersReducedMotion.value ? 0 : 0.14, ease: 'easeOut' }
 }))
@@ -75,7 +75,7 @@ const previewExit = computed<VariantType>(() => ({
   scale: prefersReducedMotion.value ? 1 : 0.985,
   transition: { type: 'tween', duration: prefersReducedMotion.value ? 0 : 0.1, ease: 'easeIn' }
 }))
-const summaryTransition = computed<Options['transition']>(() => ({
+const summaryTransition = computed<NonNullable<Options['transition']>>(() => ({
   type: 'tween', duration: prefersReducedMotion.value ? 0 : 0.12, ease: 'easeOut'
 }))
 
