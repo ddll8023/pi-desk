@@ -4,6 +4,7 @@
  * 只处理记录分类、请求关联与响应字段投影，不持有子进程、不知道 Runtime 业务状态、不缓存消息。
  * 超时只结束等待，不主张 Pi 没有执行该请求；进程退出或写入失败时收敛 pending。
  */
+import { createHash } from 'node:crypto'
 import type {
   ExtensionErrorEntry,
   ModelSummary,
@@ -186,6 +187,76 @@ export function toExtensionError(payload: Record<string, unknown>): ExtensionErr
     event: readOptionalText(payload.event),
     error
   }
+}
+
+/** 只保存摘要与时间戳，不为回退额外保留完整消息或图片。 */
+export interface UserMessageIdentity {
+  readonly timestamp: number | null
+  readonly digest: string
+}
+
+/** 截断展示前建立身份；文本与图片按固定字段规范化，未知内容拒绝猜测。 */
+export function toUserMessageIdentity(value: unknown): UserMessageIdentity | null {
+  if (!isRecord(value) || value.role !== 'user') return null
+  const source = typeof value.content === 'string'
+    ? [{ type: 'text', text: value.content }]
+    : value.content
+  if (!Array.isArray(source)) return null
+  const blocks: Record<string, string>[] = []
+  let hasText = false
+  for (const block of source) {
+    if (!isRecord(block)) return null
+    if (block.type === 'text' && typeof block.text === 'string') {
+      blocks.push({ type: 'text', text: block.text })
+      hasText ||= block.text.trim() !== ''
+    } else if (block.type === 'image' && typeof block.data === 'string' && typeof block.mimeType === 'string') {
+      blocks.push({ type: 'image', data: block.data, mimeType: block.mimeType })
+    } else {
+      return null
+    }
+  }
+  if (!hasText) return null
+  return {
+    timestamp: typeof value.timestamp === 'number' ? value.timestamp : null,
+    digest: createHash('sha256').update(JSON.stringify(blocks)).digest('hex')
+  }
+}
+
+/** get_entries 含废弃分支：只沿当前叶子的父链核对，重复身份或损坏父链一律拒绝。 */
+export function findUserForkEntry(data: unknown, identity: UserMessageIdentity): string | null {
+  if (!isRecord(data) || !Array.isArray(data.entries) || typeof data.leafId !== 'string') return null
+  const entries = new Map<string, Record<string, unknown>>()
+  for (const entry of data.entries) {
+    if (!isRecord(entry) || typeof entry.id !== 'string' || entries.has(entry.id)
+      || (entry.parentId !== null && typeof entry.parentId !== 'string')) return null
+    entries.set(entry.id, entry)
+  }
+  const seen = new Set<string>()
+  const matches: string[] = []
+  let id: string | null = data.leafId
+  while (id !== null) {
+    if (seen.has(id)) return null
+    seen.add(id)
+    const entry = entries.get(id)
+    if (entry === undefined) return null
+    const candidate = entry.type === 'message' ? toUserMessageIdentity(entry.message) : null
+    if (candidate?.digest === identity.digest && candidate.timestamp === identity.timestamp) matches.push(id)
+    id = typeof entry.parentId === 'string' ? entry.parentId : null
+  }
+  return matches.length === 1 ? matches[0] ?? null : null
+}
+
+/** 分支变更必须空闲，压缩中或仍有排队输入都不允许回退。 */
+export function isPiIdle(data: unknown): boolean {
+  return isRecord(data) && data.isStreaming === false && data.isCompacting === false
+    && data.pendingMessageCount === 0
+}
+
+/** fork 被扩展取消时可能没有 text；成功时必须带完整原文。 */
+export function toForkResult(data: unknown): { cancelled: boolean; text: string | null } | null {
+  if (!isRecord(data) || typeof data.cancelled !== 'boolean') return null
+  if (data.cancelled) return { cancelled: true, text: null }
+  return typeof data.text === 'string' ? { cancelled: false, text: data.text } : null
 }
 
 export class PiProtocol {

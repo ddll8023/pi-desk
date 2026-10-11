@@ -1,4 +1,4 @@
-/** 唯一 Runtime 的所有者：状态机、启停编排（含恢复会话时的历史基准）、受限业务操作与状态快照。
+/** 唯一 Runtime 的所有者：状态机、启停、会话回退与投影重建、受限业务操作和状态快照。
  *
  * 不直接管理 Pi Session 与消息内容；进程与管道操作交给 pi-process，展示投影交给
  * message-projection，Extension UI 状态按代际持有交给 extension-ui-manager（快照经订阅者
@@ -36,6 +36,8 @@ import type {
   RuntimeErrorCode,
   RuntimeResult,
   RuntimeSetModelRequest,
+  RuntimeRewindRequest,
+  RuntimeRewindResult,
   RuntimeStatus
 } from '../shared/runtime-api'
 import { isModelIdentity } from '../shared/runtime-api'
@@ -47,6 +49,9 @@ import { PiProcess, PiProcessError, getPiExecutablePath } from './pi-process'
 import type { PiExitEvent } from './pi-process'
 import {
   PiProtocol,
+  findUserForkEntry,
+  isPiIdle,
+  toForkResult,
   toExtensionError,
   toModelSummaries,
   toPromptDisposition,
@@ -77,6 +82,9 @@ const CAPABILITIES_TIMEOUT_MS = 15_000
 
 /** 模型切换只等待官方响应；超时结果未知，不自动重发。 */
 const MODEL_SWITCH_TIMEOUT_MS = 30_000
+
+/** 分支回退可能重建扩展环境；超时不能判定未执行，不自动重复 fork。 */
+const REWIND_TIMEOUT_MS = 30_000
 
 /** prompt 文本上限，按 UTF-8 字节计。 */
 const PROMPT_MAX_BYTES = 1_048_576
@@ -408,6 +416,8 @@ export class RuntimeManager {
   /** 模型切换与 Prompt 的预提交阶段互斥；标记带代际，旧请求结束不影响新 Runtime。 */
   private modelChangeRuntimeId: number | null = null
   private promptRequestRuntimeId: number | null = null
+  /** 回退及权威同步期间禁止写操作；结果未知时保留锁直到迟到响应或重新打开 Runtime。 */
+  private rewindRuntimeId: number | null = null
   /** 最近一次实际启动目标（项目、会话 id 与新会话指定模型）；由主进程记录，退出后仍保留，
    * 供安全模式启动重试复用；资源重载另从当前 Runtime 快照取得目标。
    */
@@ -523,8 +533,12 @@ export class RuntimeManager {
    */
   async readMcpStatus(): Promise<McpStatusResult> {
     let endCapture: (() => readonly string[]) | null = null
+    let requestedRuntimeId: number | null = null
     try {
       const runtime = this.requireReadyRuntime()
+      this.requirePromptSlot(runtime)
+      requestedRuntimeId = runtime.runtimeId
+      this.promptRequestRuntimeId = runtime.runtimeId
       const capture = this.extensionUi.beginNotifyCapture()
       endCapture = capture
       const response = await this.requestCommand(
@@ -552,6 +566,7 @@ export class RuntimeManager {
     } finally {
       // 提前返回与异常路径都要结束捕获，不留下长期存活的捕获数组。
       endCapture?.()
+      if (requestedRuntimeId !== null && this.promptRequestRuntimeId === requestedRuntimeId) this.promptRequestRuntimeId = null
     }
   }
 
@@ -562,11 +577,15 @@ export class RuntimeManager {
    */
   async runMcpCommand(action: McpCommandAction, serverName: string): Promise<McpCommandResult> {
     let endCapture: (() => readonly string[]) | null = null
+    let requestedRuntimeId: number | null = null
     const label = action === 'login'
       ? 'MCP 登录'
       : action === 'reconnect' ? 'MCP 重连' : 'MCP 退出登录'
     try {
       const runtime = this.requireReadyRuntime()
+      this.requirePromptSlot(runtime)
+      requestedRuntimeId = runtime.runtimeId
+      this.promptRequestRuntimeId = runtime.runtimeId
       const capture = this.extensionUi.beginNotifyCapture()
       endCapture = capture
       const response = await this.requestCommand(
@@ -596,6 +615,7 @@ export class RuntimeManager {
     } finally {
       // 提前返回与异常路径都要结束捕获，不留下长期存活的捕获数组。
       endCapture?.()
+      if (requestedRuntimeId !== null && this.promptRequestRuntimeId === requestedRuntimeId) this.promptRequestRuntimeId = null
     }
   }
 
@@ -744,9 +764,7 @@ export class RuntimeManager {
     let requestedRuntimeId: number | null = null
     try {
       const runtime = this.requireReadyRuntime()
-      if (this.modelChangeRuntimeId === runtime.runtimeId || this.promptRequestRuntimeId === runtime.runtimeId) {
-        throw new RuntimeFailure('RUNTIME_COMMAND_REJECTED', '模型切换或 Prompt 提交仍在进行中，请稍后再发送。')
-      }
+      this.requirePromptSlot(runtime)
       requestedRuntimeId = runtime.runtimeId
       this.promptRequestRuntimeId = requestedRuntimeId
       return { ok: true, data: { disposition: await this.submitPrompt(message, images) } }
@@ -761,6 +779,97 @@ export class RuntimeManager {
         this.promptRequestRuntimeId = null
       }
     }
+  }
+
+  /** 回退仅创建对话分支；绝不自行修改 Session 文件或撤销项目文件。 */
+  async rewind(request: RuntimeRewindRequest): Promise<RuntimeRewindResult> {
+    let runtime: ActiveRuntime | null = null
+    let forkSent = false
+    let forkResponded = false
+    let retainLock = false
+    let locked = false
+    try {
+      runtime = this.requireReadyRuntime()
+      this.requirePromptSlot(runtime)
+      this.requireRewindTarget(runtime, request)
+      const identity = runtime.projection.userMessageIdentity(request.messageId)
+      if (identity === null) throw new RuntimeFailure('INVALID_REQUEST', '该消息已失效或无法安全定位，未执行回退。')
+      this.rewindRuntimeId = runtime.runtimeId
+      locked = true
+      const state = await this.requestCommand(runtime, { type: 'get_state' }, READY_TIMEOUT_MS, '读取回退前状态')
+      const before = state.success ? toRuntimeInfo(state.data) : null
+      if (before?.sessionId !== request.sessionId || !isPiIdle(state.data)) {
+        throw new RuntimeFailure('RUNTIME_COMMAND_REJECTED', '会话已变更或仍在运行、压缩或排队，未执行回退。')
+      }
+      const entries = await this.requestCommand(runtime, { type: 'get_entries' }, HISTORY_TIMEOUT_MS, '定位回退消息')
+      const entryId = entries.success ? findUserForkEntry(entries.data, identity) : null
+      if (entryId === null) throw new RuntimeFailure('RUNTIME_COMMAND_REJECTED', '无法在当前分支唯一定位这条消息，未执行回退。')
+      this.requireRewindTarget(runtime, request)
+      // 定位期间可能有扩展活动，再核对权威空闲状态后才发送 fork。
+      const latest = await this.requestCommand(runtime, { type: 'get_state' }, READY_TIMEOUT_MS, '确认回退目标仍空闲')
+      if (!latest.success || toRuntimeInfo(latest.data)?.sessionId !== request.sessionId || !isPiIdle(latest.data)) {
+        throw new RuntimeFailure('RUNTIME_COMMAND_REJECTED', '定位期间会话状态已变更，未执行回退。')
+      }
+      this.requireRewindTarget(runtime, request)
+      forkSent = true
+      const response = await this.requestCommand(runtime, { type: 'fork', entryId }, REWIND_TIMEOUT_MS, '回退对话')
+      forkResponded = true
+      if (!response.success) throw new RuntimeFailure('RUNTIME_COMMAND_REJECTED', `Pi 拒绝了回退：${response.error ?? '未提供错误信息'}`)
+      const outcome = toForkResult(response.data)
+      if (outcome === null) throw new RuntimeFailure('RUNTIME_PROTOCOL_ERROR', 'fork 返回格式不符合约定；回退可能已经生效。')
+      if (outcome.cancelled) return { ok: true, data: { status: { ...this.snapshot }, ...outcome } }
+      const status = await this.synchronizeRewind(runtime)
+      return { ok: true, data: { status, ...outcome } }
+    } catch (error) {
+      const failure = error instanceof RuntimeFailure
+        ? error
+        : new RuntimeFailure('INTERNAL_ERROR', `回退失败：${error instanceof Error ? error.message : String(error)}`)
+      if (locked && runtime !== null && this.active === runtime && forkSent) {
+        // 请求已发但没有响应时保留锁；迟到响应负责收敛，不把旧快照当成未执行的证据。
+        retainLock = !forkResponded
+        if (forkResponded) {
+          try { await this.synchronizeRewind(runtime) } catch { retainLock = true }
+        }
+      }
+      return {
+        ok: false,
+        error: { code: failure.code, message: retainLock ? `${failure.message} 请重新打开会话恢复操作；不会自动重复回退。` : failure.message },
+        blocked: retainLock
+      }
+    } finally {
+      if (locked && runtime !== null && !retainLock && this.rewindRuntimeId === runtime.runtimeId) this.rewindRuntimeId = null
+    }
+  }
+
+  /** 确认弹窗持有的旧目标不能作用于另一个 Runtime 或会话。 */
+  private requireRewindTarget(runtime: ActiveRuntime, request: RuntimeRewindRequest): void {
+    if (this.active !== runtime || this.snapshot.state !== 'ready'
+      || runtime.runtimeId !== request.runtimeId || this.snapshot.info?.sessionId !== request.sessionId) {
+      throw new RuntimeFailure('RUNTIME_NOT_READY', '会话已切换，未向旧目标发送回退。')
+    }
+  }
+
+  /** fork 后取得实际会话与历史，再一次性替换投影；刷新失败不宣称回退成功。 */
+  private async synchronizeRewind(runtime: ActiveRuntime): Promise<RuntimeStatus> {
+    const response = await this.requestCommand(runtime, { type: 'get_state' }, READY_TIMEOUT_MS, '读取回退后的会话')
+    const info = response.success ? toRuntimeInfo(response.data) : null
+    if (info === null) throw new RuntimeFailure('RUNTIME_PROTOCOL_ERROR', '无法读取回退后的实际会话状态。')
+    const history = await this.requestCommand(runtime, { type: 'get_messages' }, HISTORY_TIMEOUT_MS, '读取回退后的历史')
+    const final = await this.requestCommand(runtime, { type: 'get_state' }, READY_TIMEOUT_MS, '确认历史所属会话')
+    const finalInfo = final.success ? toRuntimeInfo(final.data) : null
+    if (this.active !== runtime || this.snapshot.state !== 'ready' || finalInfo === null || finalInfo.sessionId !== info.sessionId) {
+      throw new RuntimeFailure('RUNTIME_NOT_READY', '同步期间会话已变更，未应用旧历史。')
+    }
+    if (!history.success || !runtime.projection.replaceHistory(history.data)) {
+      throw new RuntimeFailure('RUNTIME_PROTOCOL_ERROR', '无法重建回退后的消息投影，请重新打开会话。')
+    }
+    this.capabilityCache = null
+    if (this.lastLaunchIntent?.projectPath === runtime.projectPath) {
+      this.lastLaunchIntent = { ...this.lastLaunchIntent, sessionId: finalInfo.sessionId, model: null }
+    }
+    const status: RuntimeStatus = { state: 'ready', runtimeId: runtime.runtimeId, info: finalInfo, lastError: null }
+    this.publish(status)
+    return status
   }
 
   /**
@@ -808,9 +917,7 @@ export class RuntimeManager {
       if (request.runtimeId !== runtime.runtimeId) {
         throw new RuntimeFailure('RUNTIME_NOT_READY', '会话已切换，请重新选择当前会话的模型。')
       }
-      if (this.modelChangeRuntimeId === runtime.runtimeId || this.promptRequestRuntimeId === runtime.runtimeId) {
-        throw new RuntimeFailure('RUNTIME_COMMAND_REJECTED', '已有模型切换或 Prompt 提交，请稍后再切换。')
-      }
+      this.requirePromptSlot(runtime)
       if (this.snapshot.info?.isStreaming === true) {
         throw new RuntimeFailure('RUNTIME_COMMAND_REJECTED', 'Agent 正在运行，本轮结束后才能切换模型。')
       }
@@ -971,6 +1078,15 @@ export class RuntimeManager {
       },
       onUnmatchedResponse: (response) => {
         // 超时后的切换响应仍可能成功；补读本代际状态，但绝不重放命令。
+        if (response.command === 'fork' && this.rewindRuntimeId === runtimeId
+          && this.active?.runtimeId === runtimeId && this.snapshot.state === 'ready') {
+          const current = this.active
+          void this.synchronizeRewind(current).then(() => {
+            if (this.rewindRuntimeId === runtimeId) this.rewindRuntimeId = null
+          }).catch((error: unknown) => {
+            console.error('[runtime] 迟到回退响应同步失败：', error)
+          })
+        }
         if (response.command === 'set_model' && response.success
           && this.active?.runtimeId === runtimeId && this.snapshot.state === 'ready') {
           this.scheduleStatusRefresh(this.active)
@@ -1224,6 +1340,14 @@ export class RuntimeManager {
     }
   }
 
+  /** 所有写入入口共用互斥条件，包含走 Prompt 的 MCP 操作。 */
+  private requirePromptSlot(runtime: ActiveRuntime): void {
+    if (this.rewindRuntimeId === runtime.runtimeId || this.modelChangeRuntimeId === runtime.runtimeId
+      || this.promptRequestRuntimeId === runtime.runtimeId) {
+      throw new RuntimeFailure('RUNTIME_COMMAND_REJECTED', '回退、模型切换或 Prompt 提交仍在进行中，请稍后操作；回退结果未知时请重新打开会话。')
+    }
+  }
+
   /** 就绪检查：未就绪统一按 `RUNTIME_NOT_READY` 返回，不做本地 streaming 预检。 */
   private requireReadyRuntime(): ActiveRuntime {
     const runtime = this.active
@@ -1325,7 +1449,8 @@ export class RuntimeManager {
       if (!response.success) return
       const info = toRuntimeInfo(response.data)
       if (info === null) return
-      if (this.active?.runtimeId !== runtime.runtimeId || this.snapshot.state !== 'ready') return
+      if (this.active?.runtimeId !== runtime.runtimeId || this.snapshot.state !== 'ready'
+        || this.rewindRuntimeId === runtime.runtimeId) return
       this.publish({ state: 'ready', runtimeId: runtime.runtimeId, info, lastError: null })
     } catch {
       // 刷新失败不改变既有快照。
@@ -1334,7 +1459,7 @@ export class RuntimeManager {
 
   /** 事件触发的刷新：同一时刻只跑一次，避免每轮结束叠加多个 get_state。 */
   private scheduleStatusRefresh(runtime: ActiveRuntime): void {
-    if (this.refreshing) return
+    if (this.refreshing || this.rewindRuntimeId === runtime.runtimeId) return
     this.refreshing = true
     void this.refreshStatus(runtime).finally(() => {
       this.refreshing = false

@@ -1,10 +1,12 @@
-/** 只定义 Runtime 启停、状态、Prompt 提交、中止、可用模型读取与当前会话模型切换、Pi 资源与资源预读、诊断读取、MCP 状态、MCP 配置列举、MCP 服务器探测与 MCP 登录/退出/重连命令、安全启动、消息/工具投影（含生成计时）IPC 的固定通道、事件名、结果类型与跨进程响应校验。 */
+/** 只定义 Runtime 启停、状态、Prompt 提交、对话回退、中止、可用模型读取与当前会话模型切换、Pi 资源与资源预读、诊断读取、MCP 状态、MCP 配置列举、MCP 服务器探测与 MCP 登录/退出/重连命令、安全启动、消息/工具投影（含生成计时）IPC 的固定通道、事件名、结果类型与跨进程响应校验。 */
 import type { DesktopErrorCode } from './desktop-api'
 
 export const RUNTIME_START_CHANNEL = 'desktop:runtime-start'
 export const RUNTIME_STOP_CHANNEL = 'desktop:runtime-stop'
 export const RUNTIME_STATUS_CHANNEL = 'desktop:runtime-status'
 export const RUNTIME_PROMPT_CHANNEL = 'desktop:runtime-prompt'
+/** 仅回退对话；目标由主进程核对，页面不能指定任意会话文件或 Pi 条目。 */
+export const RUNTIME_REWIND_CHANNEL = 'desktop:runtime-rewind'
 export const RUNTIME_ABORT_CHANNEL = 'desktop:runtime-abort'
 export const RUNTIME_PROJECTION_CHANNEL = 'desktop:runtime-projection'
 export const RUNTIME_PROJECTION_ACK_CHANNEL = 'desktop:runtime-projection-ack'
@@ -120,6 +122,18 @@ export interface RuntimeError {
 export type RuntimeResult =
   | { readonly ok: true; readonly data: RuntimeStatus }
   | { readonly ok: false; readonly error: RuntimeError }
+
+/** 消息 ID 仅在 Runtime 投影内有效；会话身份防止确认弹窗的旧目标作用于新会话。 */
+export interface RuntimeRewindRequest {
+  readonly runtimeId: number
+  readonly sessionId: string
+  readonly messageId: string
+}
+
+/** text 是 Pi 返回的完整原文；渲染端当前不消费该字段，回退与重新发送均使用页面编辑框内的文本。 */
+export type RuntimeRewindResult =
+  | { readonly ok: true; readonly data: { readonly status: RuntimeStatus; readonly cancelled: boolean; readonly text: string | null } }
+  | { readonly ok: false; readonly error: RuntimeError; readonly blocked?: boolean }
 
 /** `handled` 表示被扩展或输入处理器消费，不表示本次一定启动了 Agent run。 */
 export type PromptDisposition = 'started' | 'queued' | 'handled'
@@ -517,6 +531,8 @@ export interface RuntimeApi {
   readonly sendPrompt: (message: string, images?: readonly PromptImageInput[]) => Promise<PromptResult>
   /** 请求中止当前 Agent 操作；成功只表示 Pi 已确认取消，运行状态仍以事件流为准。 */
   readonly abortRuntime: () => Promise<RuntimeResult>
+  /** 分支到指定用户消息之前，原会话保留；不撤销项目文件改动。 */
+  readonly rewindRuntime: (request: RuntimeRewindRequest) => Promise<RuntimeRewindResult>
   readonly getRuntimeProjection: () => Promise<ProjectionResult>
   /** 读取当前代际的可用模型；失败原因由结果表达。 */
   readonly getRuntimeCapabilities: () => Promise<CapabilitiesResult>
@@ -594,6 +610,27 @@ export function isRuntimeSetModelRequest(value: unknown): value is RuntimeSetMod
     && value.modelId.trim() !== ''
     && value.modelId.length <= 1024
     && Object.keys(value).every(key => key === 'runtimeId' || key === 'provider' || key === 'modelId')
+}
+
+/** 回退只接受明确的 Runtime、会话和投影消息身份。 */
+export function isRuntimeRewindRequest(value: unknown): value is RuntimeRewindRequest {
+  if (!isRecord(value)) return false
+  return typeof value.runtimeId === 'number' && Number.isSafeInteger(value.runtimeId) && value.runtimeId > 0
+    && typeof value.sessionId === 'string' && value.sessionId.trim() !== '' && value.sessionId.length <= 256
+    && typeof value.messageId === 'string' && value.messageId.trim() !== '' && value.messageId.length <= 128
+    && Object.keys(value).every(key => key === 'runtimeId' || key === 'sessionId' || key === 'messageId')
+}
+
+/** 成功、扩展取消与结果不确定分开表达，不能把取消当成修改成功。 */
+export function isRuntimeRewindResult(value: unknown): value is RuntimeRewindResult {
+  if (!isRecord(value)) return false
+  if (value.ok === true) {
+    return isRecord(value.data) && isRuntimeStatus(value.data.status)
+      && typeof value.data.cancelled === 'boolean'
+      && (value.data.cancelled ? value.data.text === null : typeof value.data.text === 'string')
+  }
+  return (value.blocked === undefined || typeof value.blocked === 'boolean')
+    && isRuntimeResult(value) && value.ok === false
 }
 
 function isRuntimeState(value: unknown): value is RuntimeState {

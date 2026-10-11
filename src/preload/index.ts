@@ -103,6 +103,7 @@ import {
   RUNTIME_MCP_INSPECT_CHANNEL,
   RUNTIME_MCP_STATUS_CHANNEL,
   RUNTIME_PROMPT_CHANNEL,
+  RUNTIME_REWIND_CHANNEL,
   RUNTIME_PROJECTION_ACK_CHANNEL,
   RUNTIME_PROJECTION_CHANNEL,
   RUNTIME_PROJECTION_EVENT,
@@ -127,6 +128,7 @@ import {
   isResourcePreviewResult,
   isRuntimeDiagnosticsResult,
   isRuntimeResult,
+  isRuntimeRewindResult,
   isRuntimeStatus
 } from '../shared/runtime-api'
 import type {
@@ -148,6 +150,7 @@ import type {
   RuntimeDiagnosticsResult,
   RuntimeResult,
   RuntimeSetModelRequest,
+  RuntimeRewindRequest,
   RuntimeStartRequest,
   RuntimeStatus
 } from '../shared/runtime-api'
@@ -398,6 +401,17 @@ const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionAp
       ...(payloadImages.length > 0 ? { images: payloadImages } : {})
     })
     return isPromptResult(response) ? response : invalidPromptResponse()
+  },
+
+  async rewindRuntime(request: RuntimeRewindRequest) {
+    const response: unknown = await ipcRenderer.invoke(RUNTIME_REWIND_CHANNEL, {
+      runtimeId: request.runtimeId,
+      sessionId: request.sessionId,
+      messageId: request.messageId
+    })
+    return isRuntimeRewindResult(response)
+      ? response
+      : { ok: false as const, error: { code: 'INVALID_RESPONSE' as const, message: '桌面接口返回了无法识别的回退结果。' }, blocked: true }
   },
 
   async getRuntimeProjection() {

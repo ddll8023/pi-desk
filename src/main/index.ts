@@ -101,6 +101,7 @@ import {
   RUNTIME_MCP_INSPECT_CHANNEL,
   RUNTIME_MCP_STATUS_CHANNEL,
   RUNTIME_PROMPT_CHANNEL,
+  RUNTIME_REWIND_CHANNEL,
   RUNTIME_PROJECTION_ACK_CHANNEL,
   RUNTIME_PROJECTION_CHANNEL,
   RUNTIME_PROJECTION_EVENT,
@@ -113,7 +114,8 @@ import {
   RUNTIME_STATUS_EVENT,
   isResourcePreviewRequest,
   isModelIdentity,
-  isRuntimeSetModelRequest
+  isRuntimeSetModelRequest,
+  isRuntimeRewindRequest
 } from '../shared/runtime-api'
 import type {
   CapabilitiesResult,
@@ -131,6 +133,7 @@ import type {
   RuntimeDiagnosticsResult,
   RuntimeErrorCode,
   RuntimeResult,
+  RuntimeRewindResult,
   RuntimeStatus
 } from '../shared/runtime-api'
 import { DesktopConfigStore } from './desktop-config-store'
@@ -888,6 +891,20 @@ function registerRuntimeHandlers(pageUrl: string): void {
         return runtimeFailure('INVALID_REQUEST', '中止操作接口不接受参数。')
       }
       return runtimeManager.abort()
+    }
+  )
+
+  /** 回退目标只接受受校验的身份，不接受文件路径或任意 Pi 命令。 */
+  handle(
+    RUNTIME_REWIND_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<RuntimeRewindResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return { ok: false, error: { code: 'FORBIDDEN', message: '不允许此页面调用桌面接口。' } }
+      }
+      if (args.length !== 1 || !isRuntimeRewindRequest(args[0])) {
+        return { ok: false, error: { code: 'INVALID_REQUEST', message: '回退只接受 Runtime、会话与消息身份。' } }
+      }
+      return runtimeManager.rewind(args[0])
     }
   )
 

@@ -1,9 +1,10 @@
-<!-- 消息区：按投影顺序渲染并持续粘底，主动上滚或大纲跳转时暂停；仅在右侧留白足够时展示用户输入刻度导航，切换会话重置滚动与消息组件；不自行拼装历史或请求消息内容。 -->
+<!-- 消息区：按投影渲染、粘底与大纲导航；承接用户消息回退确认与修改提交，原会话保留，项目文件不回退。 -->
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { createChatViewCache } from '../chat-view'
 import type { ChatMessageView } from '../chat-view'
+import type { RuntimeRewindRequest } from '../../../shared/runtime-api'
 import { useProjectStore } from '../stores/project'
 import { useResourceStore } from '../stores/resource'
 import { useRuntimeStore } from '../stores/runtime'
@@ -11,6 +12,7 @@ import { useSessionStore } from '../stores/session'
 import ChatMessageItem from './ChatMessageItem.vue'
 import ChatOutline from './ChatOutline.vue'
 import AppButton from './ui/AppButton.vue'
+import ConfirmDialog from './ConfirmDialog.vue'
 
 /** 距底部多少像素内仍视为"停在底部"，避免流式更新时与用户上滚互相争夺。 */
 const STICK_THRESHOLD_PX = 24
@@ -27,7 +29,8 @@ const projectStore = useProjectStore()
 const runtimeStore = useRuntimeStore()
 const sessionStore = useSessionStore()
 const resourceStore = useResourceStore()
-const { view: runtimeView, messages, tools, projectionSync, projectionTruncated, droppedMessages, droppedTools } = storeToRefs(runtimeStore)
+const { view: runtimeView, messages, tools, projectionSync, projectionTruncated, droppedMessages, droppedTools,
+  promptView, preparingPrompt, modelSwitchView, rewindView } = storeToRefs(runtimeStore)
 const { safeStart } = storeToRefs(resourceStore)
 
 const viewport = ref<HTMLElement | null>(null)
@@ -57,6 +60,51 @@ const runtimeInfo = computed(() => (
   runtimeView.value.phase === 'ready' ? runtimeView.value.snapshot.info : null
 ))
 const streaming = computed(() => runtimeInfo.value?.isStreaming === true)
+const pendingRewind = ref<{ request: RuntimeRewindRequest } | null>(null)
+const pendingEdit = ref<{ messageId: string; text: string } | null>(null)
+const canRewind = computed(() => runtimeView.value.phase === 'ready' && runtimeInfo.value?.sessionId != null
+  && !streaming.value && projectionSync.value === 'synced' && !preparingPrompt.value
+  && promptView.value.phase !== 'sending' && modelSwitchView.value.phase !== 'switching'
+  && rewindView.value.phase !== 'requesting' && !(rewindView.value.phase === 'error' && rewindView.value.blocked)
+  && !sessionStore.opening && !sessionStore.awaitingTrust && !sessionStore.awaitingInterrupt)
+const rewindDetail = computed(() => '原会话保留，可从会话列表重新打开。仅回退对话，不撤销项目文件改动。')
+
+/** 发起确认时固定目标；用户确认前不会改变历史。 */
+function requestRewind(messageId: string): void {
+  if (!canRewind.value || runtimeView.value.phase !== 'ready') return
+  const runtimeId = runtimeView.value.snapshot.runtimeId
+  const sessionId = runtimeInfo.value?.sessionId
+  if (runtimeId === null || sessionId == null) return
+  pendingRewind.value = { request: { runtimeId, sessionId, messageId } }
+}
+
+/** 直接回退：仅权威成功才刷新会话列表。 */
+async function confirmRewind(): Promise<void> {
+  const pending = pendingRewind.value
+  pendingRewind.value = null
+  if (pending === null || !canRewind.value) return
+  if (await runtimeStore.rewind(pending.request)) await sessionStore.refresh()
+}
+
+/** 修改提交：回退成功后立即发送修改文本，再刷新会话列表。 */
+async function handleSubmitEdit(messageId: string, text: string): Promise<void> {
+  if (!canRewind.value || runtimeView.value.phase !== 'ready') return
+  const runtimeId = runtimeView.value.snapshot.runtimeId
+  const sessionId = runtimeInfo.value?.sessionId
+  if (runtimeId === null || sessionId == null) return
+  const request: RuntimeRewindRequest = { runtimeId, sessionId, messageId }
+  pendingEdit.value = { messageId, text }
+  const success = await runtimeStore.rewind(request)
+  if (!success) {
+    // 回退失败，保持编辑态，用户可再次尝试
+    pendingEdit.value = null
+    return
+  }
+  // 回退成功，发送修改文本
+  await runtimeStore.send(text, [])
+  await sessionStore.refresh()
+  pendingEdit.value = null
+}
 /** 消息 ID 只在单个 Runtime 内唯一；会话切换后不能复用旧消息组件的手动开合状态。 */
 const conversationKey = computed(() => {
   const runtimeId = runtimeView.value.phase === 'ready' ? runtimeView.value.snapshot.runtimeId : null
@@ -286,6 +334,7 @@ function startSafely(): void {
 /** DOM 更新与实际尺寸变化都同步粘底及大纲；会话切换清除上一次阅读目标。 */
 watch([chatMessages, streaming, syncNotice, truncationNotice], onLayoutChange, { flush: 'post' })
 watch(conversationKey, () => {
+  pendingRewind.value = null
   activeOutlineId.value = null
   jumpToBottom()
   scheduleOutlineUpdate()
@@ -319,12 +368,18 @@ onBeforeUnmount(() => {
       <div ref="content" class="mx-auto flex max-w-3xl flex-col gap-5">
         <p v-if="syncNotice" role="status" class="status-notice status-notice-info">{{ syncNotice }}</p>
         <p v-if="truncationNotice" role="status" class="status-notice">{{ truncationNotice }}</p>
+        <p v-if="rewindView.phase === 'requesting'" role="status" class="status-notice status-notice-info">正在回退对话并同步历史…</p>
+        <p v-else-if="rewindView.phase === 'error'" role="alert" class="status-notice status-notice-error">{{ rewindView.error.message }}</p>
+        <p v-else-if="rewindView.phase === 'done' && rewindView.cancelled" role="status" class="status-notice">Pi 扩展取消了回退；草稿未被替换。</p>
 
         <ChatMessageItem
           v-for="message in chatMessages"
           :key="`${conversationKey}:${message.id}`"
           :message="message"
+          :actions-disabled="!canRewind"
           :data-message-id="message.id"
+          @rewind="requestRewind"
+          @submit-edit="handleSubmitEdit"
         />
 
         <div v-if="chatMessages.length === 0" class="empty-state">
@@ -356,6 +411,16 @@ onBeforeUnmount(() => {
         </p>
       </div>
     </div>
+
+    <ConfirmDialog
+      :open="pendingRewind !== null"
+      title="回退到这条消息之前？"
+      description="当前对话将回到这条用户消息发送之前；该消息及后续内容不再显示在新分支中。"
+      :detail="rewindDetail"
+      confirm-label="确认回退"
+      @confirm="confirmRewind"
+      @cancel="pendingRewind = null"
+    />
 
     <ChatOutline
       v-if="outlineLayout !== null && outlineEntries.length > 0"

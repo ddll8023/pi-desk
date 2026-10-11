@@ -637,47 +637,85 @@
     transform: translateY(-6px);
   }
 
-  /* 侧栏内容：纯淡入淡出，无位移，用基准时长；不收缩布局宽度，避免整窗重绘。 */
-  .sidebar-fade-enter-active {
-    transition: opacity var(--motion-duration-base) var(--motion-ease-entrance);
+  /* 令牌只作用于侧栏与其 Teleport 浮层，不改变聊天区或其他控件的主题。 */
+  .app-sidebar,
+  .project-sidebar-menu {
+    --sidebar-surface: #fafaf9;
+    --sidebar-hover: #f0f1f0;
+    --sidebar-selected: #e5eceb;
+    --sidebar-ink: #24282b;
+    --sidebar-muted: #737b83;
+    --sidebar-line: #e6e8e7;
+    --sidebar-focus: var(--color-desk-accent);
+    --sidebar-duration-hover: 140ms;
+    --sidebar-duration-collapse: 290ms;
+    --sidebar-ease: cubic-bezier(0.22, 1, 0.36, 1);
   }
 
-  .sidebar-fade-leave-active {
-    transition: opacity var(--motion-duration-fast) var(--motion-ease-exit);
+  @media (prefers-color-scheme: dark) {
+    .app-sidebar,
+    .project-sidebar-menu {
+      --sidebar-surface: color-mix(in srgb, var(--color-desk-surface) 85%, var(--color-desk-canvas));
+      --sidebar-hover: var(--color-desk-surface-subtle);
+      --sidebar-selected: var(--color-desk-accent-soft);
+      --sidebar-ink: var(--color-desk-ink);
+      --sidebar-muted: var(--color-desk-muted);
+      --sidebar-line: color-mix(in srgb, var(--color-desk-line) 70%, transparent);
+    }
   }
 
-  .sidebar-fade-enter-from,
-  .sidebar-fade-leave-to {
-    opacity: 0;
-  }
-
-  /* 项目列表采用紧凑行；项目路径保留为次级信息，可见部分只保留末尾两段，完整路径由 title 提供。 */
   .project-sidebar-header,
   .session-sidebar-header {
     display: flex;
-    min-height: 2.75rem;
+    height: 36px;
     flex: none;
     align-items: center;
     justify-content: space-between;
-    gap: 0.5rem;
-    border-bottom: 1px solid var(--color-desk-line);
-    padding: 0 1rem;
+    gap: 8px;
+    padding: 0 14px 0 16px;
   }
 
   .project-sidebar-heading {
-    @apply text-xs font-semibold tracking-wide text-desk-muted;
+    color: var(--sidebar-muted);
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 16px;
   }
 
   .project-sidebar-add {
-    @apply rounded-desk-sm px-2 py-1 text-xs font-medium text-desk-muted transition-colors;
+    display: inline-flex;
+    min-height: 26px;
+    align-items: center;
+    gap: 4px;
+    border-radius: var(--radius-desk-sm);
+    padding: 3px 6px;
+    color: var(--sidebar-muted);
+    font-size: 11px;
+    font-weight: 500;
+    white-space: nowrap;
+    transition: background-color var(--sidebar-duration-hover) ease, color var(--sidebar-duration-hover) ease;
   }
 
   .project-sidebar-add:not(:disabled):hover {
-    @apply bg-desk-surface-subtle text-desk-ink;
+    background: var(--sidebar-hover);
+    color: var(--sidebar-ink);
+  }
+
+  .sidebar-icon {
+    display: block;
+    width: 16px;
+    height: 16px;
+    flex: none;
+  }
+
+  .project-sidebar-add .sidebar-icon {
+    width: 14px;
+    height: 14px;
   }
 
   .project-sidebar-list,
   .session-sidebar-list {
+    position: relative;
     display: grid;
     width: 100%;
     min-width: 0;
@@ -693,248 +731,352 @@
     min-width: 0;
   }
 
-  /* 列表增删过渡：离开项脱离文档流，其余行用 move 平滑回到新位置。 */
-  .project-sidebar-list {
-    position: relative;
+  /* 只有小规模变化接通这些过渡；离开项脱离布局，其他项用 transform 填补空间。 */
+  .sidebar-list-enter-active,
+  .sidebar-list-leave-active {
+    transition: opacity 160ms ease, transform 180ms var(--sidebar-ease);
   }
 
-  .project-list-enter-active,
-  .project-list-leave-active {
-    transition: opacity var(--motion-duration-base) var(--motion-ease-entrance), transform var(--motion-duration-base) var(--motion-ease-entrance);
-  }
-
-  .project-list-enter-from,
-  .project-list-leave-to {
+  .sidebar-list-enter-from,
+  .sidebar-list-leave-to {
     opacity: 0;
-    transform: translateY(-4px);
+    transform: translateY(-3px);
   }
 
-  .project-list-leave-active {
+  .sidebar-list-leave-active {
     position: absolute;
     right: 0;
     left: 0;
+    pointer-events: none;
   }
 
-  .project-list-move {
-    transition: transform var(--motion-duration-base) var(--motion-ease-entrance);
+  .sidebar-list-move {
+    transition: transform 220ms var(--sidebar-ease);
   }
 
-  /* 项目行：底色、圆角与左侧强调条都由行容器承担，条目与 ⋯ 按钮是无底内部元素，高亮因此覆盖整行。 */
-  .project-sidebar-row {
+  .project-sidebar-row,
+  .session-sidebar-row {
+    position: relative;
+    isolation: isolate;
     display: grid;
     min-width: 0;
-    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-columns: minmax(0, 1fr) 24px;
     align-items: center;
-    gap: 0.25rem;
-    border: 1px solid transparent;
     border-radius: var(--radius-desk-sm);
-    padding: 0.45rem 0.5rem;
-    transition: background-color var(--default-transition-duration) ease, box-shadow var(--default-transition-duration) ease;
+    padding-right: 4px;
+    transition: background-color var(--sidebar-duration-hover) ease;
   }
 
-  .project-sidebar-row:hover {
-    @apply bg-desk-surface-subtle;
+  .project-sidebar-row:is(:hover, :focus-within, .is-menu-open),
+  .session-sidebar-row:is(:hover, :focus-within, .is-menu-open) {
+    background: var(--sidebar-hover);
   }
 
-  /* 按下反馈挂在行上：条目本身已无底色，只给它上色会露出半截。 */
-  .project-sidebar-row:has(.project-sidebar-item:not(:disabled):active) {
-    @apply bg-desk-canvas-sunken;
-  }
-
+  /* 选中底色仅由共享背景承担，避免瞬时底色与移动背景同时出现。 */
   .project-sidebar-row.is-active,
-  .project-sidebar-row.is-active:hover {
-    @apply bg-desk-accent-soft;
-    box-shadow: inset 2px 0 0 0 var(--color-desk-accent);
+  .session-sidebar-row.is-active {
+    background: transparent;
   }
 
-  .project-sidebar-actions {
-    display: flex;
-    align-items: center;
-  }
-
-  /* ⋯ 按钮平时不可见也不响应指针，悬停、聚焦或菜单已打开时才出现。 */
-  .project-sidebar-menu-trigger {
-    width: 1.75rem;
-    height: 1.75rem;
-    padding: 0;
-    opacity: 0;
+  .sidebar-selection {
+    position: absolute;
+    z-index: -1;
+    inset: 0;
+    background: var(--sidebar-selected);
     pointer-events: none;
-    transform: translateX(2px);
-    font-size: 1.125rem;
-    line-height: 1;
-    transition: opacity var(--motion-duration-fast) ease, transform var(--motion-duration-fast) var(--motion-ease-entrance);
+    transition: opacity var(--sidebar-duration-hover) ease;
   }
 
-  /* 菜单浮到 body 之后指针已不在行内，打开期间必须用 is-menu-open 保住按钮。 */
-  .project-sidebar-row:hover .project-sidebar-menu-trigger,
-  .project-sidebar-row:focus-within .project-sidebar-menu-trigger,
-  .project-sidebar-row.is-menu-open .project-sidebar-menu-trigger {
-    opacity: 1;
-    pointer-events: auto;
-    transform: none;
+  .project-sidebar-row:has(.project-sidebar-item:not(:disabled):active),
+  .session-sidebar-row:has(.session-sidebar-item:not(:disabled):active) {
+    background: var(--sidebar-selected);
   }
 
-  /* 菜单由 Teleport 渲染到 body：落点与尺寸由脚本按 ⋯ 按钮量算后内联写入。 */
-  .project-sidebar-menu {
-    position: fixed;
-    z-index: 40;
-    overflow-y: auto;
-    padding: 3px;
-    border: 1px solid var(--color-desk-line);
-    border-radius: var(--radius-desk-md);
-    background: var(--color-desk-surface);
-    box-shadow: var(--shadow-desk-pop);
+  .project-sidebar-row:has(.project-sidebar-item:not(:disabled):active) .sidebar-selection,
+  .session-sidebar-row:has(.session-sidebar-item:not(:disabled):active) .sidebar-selection {
+    opacity: 0.8;
   }
 
-  /* 菜单浮层：与既有弹出层同一档时程，进场快启动、离场不拖沓。 */
-  .project-menu-enter-active {
-    transition: opacity var(--motion-duration-fast) ease-out, transform var(--motion-duration-fast) var(--motion-ease-entrance);
-  }
-
-  .project-menu-leave-active {
-    transition: opacity var(--motion-duration-fast) var(--motion-ease-exit), transform var(--motion-duration-fast) var(--motion-ease-exit);
-  }
-
-  .project-menu-enter-from,
-  .project-menu-leave-to {
-    opacity: 0;
-    transform: scale(0.98) translateY(-2px);
-  }
-
-  .project-sidebar-menu-item {
-    display: flex;
-    width: 100%;
-    justify-content: flex-start;
-    border-radius: var(--radius-desk-sm);
-    padding: 0.4rem 0.55rem;
-    color: var(--color-desk-muted);
-    font-size: 0.75rem;
-    text-align: left;
-  }
-
-  .project-sidebar-menu-item:not(:disabled):hover {
-    background: var(--color-desk-surface-subtle);
-    color: var(--color-desk-danger);
-  }
-
-  /* 条目只剩布局：底色、圆角与间距都在行容器上，避免高亮只盖住左半段。 */
-  .project-sidebar-item {
-    display: flex;
-    width: 100%;
-    max-width: 100%;
-    min-width: 0;
-    align-items: center;
-    gap: 0.5rem;
-    border: 0;
-    border-radius: var(--radius-desk-sm);
-    padding: 0;
-    text-align: left;
-  }
-
-  .project-sidebar-item:disabled,
-  .session-sidebar-item:disabled {
-    @apply cursor-not-allowed opacity-60;
-  }
-
-  .session-sidebar-item:not(:disabled):hover {
-    @apply bg-desk-surface-subtle;
-  }
-
-  .session-sidebar-item:not(:disabled):active {
-    @apply bg-desk-canvas-sunken;
-  }
-
-  .session-sidebar-item.is-active,
-  .session-sidebar-item.is-active:not(:disabled):hover {
-    @apply bg-desk-accent-soft;
-    box-shadow: inset 2px 0 0 0 var(--color-desk-accent);
-  }
-
-  .project-sidebar-mark {
-    @apply flex size-7 shrink-0 items-center justify-center rounded-desk-sm text-xs font-semibold;
-    background-color: color-mix(in srgb, var(--project-mark-color) 14%, var(--color-desk-surface));
-    color: var(--project-mark-color);
-    transition: background-color var(--default-transition-duration) ease;
-  }
-
-  /* 悬停时头像底色加深一档；不给整行加位移，列表里位移看起来会抖。 */
-  .project-sidebar-row:hover .project-sidebar-mark {
-    background-color: color-mix(in srgb, var(--project-mark-color) 22%, var(--color-desk-surface));
-  }
-
-  .project-sidebar-mark-0 { --project-mark-color: #236978; }
-  .project-sidebar-mark-1 { --project-mark-color: #3f5f9a; }
-  .project-sidebar-mark-2 { --project-mark-color: #7354a3; }
-  .project-sidebar-mark-3 { --project-mark-color: #9a5c2b; }
-  .project-sidebar-mark-4 { --project-mark-color: #a34d55; }
-  .project-sidebar-mark-5 { --project-mark-color: #3c754e; }
-
-  .project-sidebar-copy {
-    @apply min-w-0 flex-1;
-  }
-
-  .project-sidebar-name {
-    @apply block truncate text-md font-semibold;
-  }
-
-  .project-sidebar-path {
-    @apply mt-0.5 block truncate font-mono text-2xs text-desk-muted;
-  }
-
+  .project-sidebar-item,
   .session-sidebar-item {
     display: flex;
     width: 100%;
     max-width: 100%;
     min-width: 0;
-    flex-direction: column;
-    align-items: stretch;
-    gap: 0.2rem;
-    border: 1px solid transparent;
+    align-items: center;
+    gap: 8px;
+    border: 0;
     border-radius: var(--radius-desk-sm);
-    padding: 0.45rem 0.55rem;
+    color: var(--sidebar-ink);
     text-align: left;
-    transition: background-color var(--default-transition-duration) ease, color var(--default-transition-duration) ease;
   }
 
+  .project-sidebar-item {
+    height: 44px;
+    padding: 6px 8px;
+  }
+
+  .session-sidebar-item {
+    height: 42px;
+    padding: 5px 8px;
+  }
+
+  .project-sidebar-mark {
+    color: var(--sidebar-muted);
+    transition: color var(--sidebar-duration-hover) ease;
+  }
+
+  .project-sidebar-row.is-active .project-sidebar-mark {
+    color: var(--sidebar-focus);
+  }
+
+  .project-sidebar-copy,
+  .session-sidebar-copy {
+    display: block;
+    min-width: 0;
+    flex: 1;
+  }
+
+  .project-sidebar-name,
   .session-sidebar-preview {
+    display: block;
     overflow: hidden;
-    color: var(--color-desk-ink);
-    font-size: 0.75rem;
-    line-height: 1.4;
+    font-size: 13px;
+    font-weight: 500;
+    line-height: 18px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .project-sidebar-row.is-active .project-sidebar-name,
+  .session-sidebar-row.is-active .session-sidebar-preview {
+    font-weight: 600;
+  }
+
+  .project-sidebar-path,
+  .session-sidebar-meta {
+    display: block;
+    overflow: hidden;
+    color: var(--sidebar-muted);
+    font-size: 11px;
+    line-height: 14px;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
   .session-sidebar-meta {
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* 按钮槽始终占据同样宽度；不可见时不抢指针，键盘聚焦和浮层打开时仍可见。 */
+  .sidebar-menu-trigger {
     display: flex;
-    min-width: 0;
-    justify-content: space-between;
-    gap: 0.5rem;
-    color: var(--color-desk-muted);
-    font-size: 0.625rem;
-    line-height: 1.4;
+    width: 24px;
+    height: 24px;
+    align-items: center;
+    justify-content: center;
+    border-radius: 5px;
+    padding: 0;
+    color: var(--sidebar-muted);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity var(--sidebar-duration-hover) ease, background-color var(--sidebar-duration-hover) ease, color var(--sidebar-duration-hover) ease;
+  }
+
+  .project-sidebar-row:is(:hover, :focus-within, .is-menu-open) .sidebar-menu-trigger,
+  .session-sidebar-row:is(:hover, :focus-within, .is-menu-open) .sidebar-menu-trigger {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .sidebar-menu-trigger:not(:disabled):hover {
+    background: color-mix(in srgb, var(--sidebar-ink) 8%, transparent);
+    color: var(--sidebar-ink);
+  }
+
+  .app-sidebar button:disabled,
+  .project-sidebar-menu button:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+  }
+
+  .app-sidebar button:focus-visible,
+  .project-sidebar-menu:focus-visible,
+  .project-sidebar-menu button:focus-visible {
+    outline: 2px solid var(--sidebar-focus);
+    outline-offset: -2px;
+  }
+
+  .sidebar-empty,
+  .sidebar-notice,
+  .sidebar-list-notice {
+    margin: 0;
+    padding: 6px 8px;
+    color: var(--sidebar-muted);
+    font-size: 11px;
+    line-height: 18px;
+    overflow-wrap: anywhere;
+  }
+
+  .sidebar-error,
+  .sidebar-notice.is-error {
+    color: var(--color-desk-danger);
+  }
+
+  .sidebar-notice.is-warning {
+    color: var(--color-desk-warning);
+  }
+
+  .sidebar-list-notice {
+    padding-top: 10px;
+  }
+
+  .sidebar-list-notice > span {
+    display: block;
   }
 
   .project-sidebar-footer {
-    @apply shrink-0 border-t border-desk-line p-2;
+    flex: none;
+    margin: 0 8px;
+    border-top: 1px solid var(--sidebar-line);
+    padding: 6px 0 8px;
   }
 
   .project-sidebar-settings {
-    @apply flex w-full items-center gap-3 rounded-desk-md px-3 py-2.5 text-sm font-medium text-desk-muted transition-colors;
+    display: flex;
+    width: 100%;
+    height: 34px;
+    align-items: center;
+    gap: 8px;
+    border-radius: var(--radius-desk-sm);
+    padding: 0 8px;
+    color: var(--sidebar-muted);
+    font-size: 12px;
+    font-weight: 500;
+    transition: background-color var(--sidebar-duration-hover) ease, color var(--sidebar-duration-hover) ease;
   }
 
   .project-sidebar-settings:not(:disabled):hover {
-    @apply bg-desk-surface-subtle text-desk-ink;
+    background: var(--sidebar-hover);
+    color: var(--sidebar-ink);
   }
 
   .project-sidebar-settings.is-active,
   .project-sidebar-settings.is-active:not(:disabled):hover {
-    @apply bg-desk-accent-soft text-desk-ink;
-    box-shadow: inset 2px 0 0 0 var(--color-desk-accent);
+    background: var(--sidebar-selected);
+    color: var(--sidebar-ink);
   }
 
-  .project-sidebar-settings-icon {
-    @apply flex size-5 shrink-0 items-center justify-center text-base;
+  /* 文字单独淡出；固定内层保住图标位置和列表行高，不在折叠期间重排内容。 */
+  .project-sidebar-copy,
+  .session-sidebar-copy,
+  .project-sidebar-heading,
+  .project-sidebar-add,
+  .sidebar-footer-label,
+  .sidebar-empty,
+  .sidebar-notice,
+  .sidebar-list-notice {
+    transition: opacity var(--sidebar-duration-hover) ease, transform var(--sidebar-duration-collapse) var(--sidebar-ease), background-color var(--sidebar-duration-hover) ease, color var(--sidebar-duration-hover) ease;
+  }
+
+  .app-sidebar.is-collapsed :is(.project-sidebar-copy, .session-sidebar-copy, .project-sidebar-heading, .project-sidebar-add, .sidebar-footer-label, .sidebar-empty, .sidebar-notice, .sidebar-list-notice) {
+    opacity: 0;
+    transform: translateX(-4px);
+  }
+
+  /* 浮层沿用锚定工具与现有阴影，边界只用于表达前后层级，不用于普通列表行。 */
+  .project-sidebar-menu {
+    position: fixed;
+    z-index: 40;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 4px;
+    border: 1px solid var(--sidebar-line);
+    border-radius: 9px;
+    background: var(--sidebar-surface);
+    color: var(--sidebar-ink);
+    box-shadow: var(--shadow-desk-pop);
+  }
+
+  .sidebar-menu-details {
+    margin: 0 4px 4px;
+    border-bottom: 1px solid var(--sidebar-line);
+    padding: 6px 4px 10px;
+    user-select: text;
+  }
+
+  .sidebar-menu-title {
+    display: -webkit-box;
+    overflow: hidden;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow-wrap: anywhere;
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 18px;
+  }
+
+  .sidebar-menu-path,
+  .sidebar-menu-metadata {
+    margin-top: 5px;
+    color: var(--sidebar-muted);
+    font-size: 11px;
+    line-height: 16px;
+    overflow-wrap: anywhere;
+  }
+
+  .sidebar-menu-metadata {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 5px 10px;
+  }
+
+  .sidebar-menu-metadata dd {
+    min-width: 0;
+    color: var(--sidebar-ink);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .sidebar-session-id {
+    font-family: var(--font-mono);
+    font-size: 10px;
+  }
+
+  .project-sidebar-menu-item {
+    display: flex;
+    width: 100%;
+    min-height: 30px;
+    align-items: center;
+    justify-content: flex-start;
+    border-radius: var(--radius-desk-sm);
+    padding: 5px 8px;
+    color: var(--sidebar-ink);
+    font-size: 12px;
+    text-align: left;
+    transition: background-color var(--sidebar-duration-hover) ease;
+  }
+
+  .project-sidebar-menu-item.is-danger {
+    color: var(--color-desk-danger);
+  }
+
+  .project-sidebar-menu-item:not(:disabled):hover {
+    background: var(--sidebar-hover);
+  }
+
+  .sidebar-menu-enter-active,
+  .sidebar-menu-leave-active {
+    transition: opacity 140ms ease, transform 140ms var(--sidebar-ease);
+  }
+
+  .sidebar-menu-enter-from,
+  .sidebar-menu-leave-to {
+    opacity: 0;
+    transform: translateY(-2px);
+  }
+
+  .sidebar-menu-leave-active {
+    pointer-events: none;
   }
 
   .settings-page-content {
@@ -1044,15 +1186,6 @@
     @apply border-desk-line-strong bg-desk-surface-subtle text-desk-ink;
   }
 
-  @media (prefers-color-scheme: dark) {
-    .project-sidebar-mark-0 { --project-mark-color: #70bdcb; }
-    .project-sidebar-mark-1 { --project-mark-color: #92aee8; }
-    .project-sidebar-mark-2 { --project-mark-color: #b7a0e3; }
-    .project-sidebar-mark-3 { --project-mark-color: #dfa878; }
-    .project-sidebar-mark-4 { --project-mark-color: #e29ca3; }
-    .project-sidebar-mark-5 { --project-mark-color: #91c89a; }
-  }
-
   .app-layout {
     position: relative;
     display: flex;
@@ -1155,19 +1288,34 @@
     display: none;
   }
 
-  /* 侧栏始终保留组件实例；桌面折叠只释放布局宽度，不触发页面或 Runtime 重建。 */
+  /* 侧栏常驻；外层宽度释放工作区空间，内层固定宽度防止折叠时文字与滚动布局抖动。 */
   .app-sidebar {
-    @apply flex shrink-0 flex-col border-r border-desk-line bg-desk-surface;
-    width: 17rem;
+    --sidebar-width: 260px;
+    display: flex;
+    width: var(--sidebar-width);
+    min-width: 0;
     min-height: 0;
-    transition:
-      margin-left var(--motion-duration-slow) var(--motion-ease-entrance),
-      transform var(--motion-duration-slow) var(--motion-ease-entrance);
+    flex: none;
+    overflow: hidden;
+    border-right: 1px solid var(--sidebar-line);
+    background: var(--sidebar-surface);
+    color: var(--sidebar-ink);
+    transition: width var(--sidebar-duration-collapse) var(--sidebar-ease), border-right-width var(--sidebar-duration-collapse) var(--sidebar-ease);
   }
 
   .app-sidebar.is-collapsed {
-    margin-left: -17rem;
-    transition-timing-function: var(--motion-ease-exit);
+    width: 0;
+    border-right-width: 0;
+  }
+
+  .sidebar-content {
+    display: flex;
+    width: calc(var(--sidebar-width) - 1px);
+    min-height: 0;
+    height: 100%;
+    flex: none;
+    flex-direction: column;
+    padding-top: 6px;
   }
 
   .project-sidebar-section-panel,
@@ -1179,12 +1327,28 @@
   }
 
   .project-sidebar-section-panel {
-    flex: 0 1 42%;
+    max-height: 40%;
+    flex: 0 1 auto;
   }
 
   .session-sidebar-section {
-    flex: 1 1 58%;
-    border-top: 1px solid var(--color-desk-line);
+    flex: 1 1 0;
+    margin-top: 6px;
+  }
+
+  /* 分隔只出现一次，且缩进与行内文本对齐；不再为每个标题加整宽边界。 */
+  .session-sidebar-header {
+    position: relative;
+  }
+
+  .session-sidebar-header::before {
+    position: absolute;
+    top: -3px;
+    right: 16px;
+    left: 16px;
+    height: 1px;
+    background: var(--sidebar-line);
+    content: '';
   }
 
   .project-sidebar-scroll,
@@ -1193,10 +1357,31 @@
     max-width: 100%;
     min-width: 0;
     min-height: 0;
-    flex: 1;
     overflow-x: hidden;
     overflow-y: auto;
-    padding: 0.5rem 0.75rem;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
+    padding: 0 4px 4px 8px;
+  }
+
+  .project-sidebar-scroll {
+    flex: 0 1 auto;
+  }
+
+  .session-sidebar-scroll {
+    flex: 1 1 0;
+  }
+
+  .app-sidebar .scroll-area::-webkit-scrollbar {
+    width: 4px;
+  }
+
+  .app-sidebar .scroll-area::-webkit-scrollbar-thumb {
+    background: color-mix(in srgb, var(--sidebar-muted) 25%, transparent);
+  }
+
+  .app-sidebar .scroll-area::-webkit-scrollbar-thumb:hover {
+    background: color-mix(in srgb, var(--sidebar-muted) 45%, transparent);
   }
 
   .bg-desk-canvas-sunken > .scroll-area > .mx-auto.max-w-3xl,
@@ -1204,38 +1389,28 @@
     max-width: min(100%, 62rem);
   }
 
-  @media (max-width: 999px) {
-    .app-sidebar {
-      width: 14rem;
-    }
-
-    .app-sidebar.is-collapsed {
-      margin-left: -14rem;
-    }
-  }
-
   @media (hover: none) {
-    .project-sidebar-menu-trigger {
+    .sidebar-menu-trigger {
       opacity: 1;
       pointer-events: auto;
-      transform: none;
     }
   }
 
   @media (max-width: 799px) {
     .app-sidebar {
+      --sidebar-width: min(260px, calc(100vw - 3.5rem));
       position: absolute;
       z-index: 30;
       inset: 0 auto 0 0;
-      width: min(17rem, calc(100vw - 3.5rem));
-      margin-left: 0;
+      width: var(--sidebar-width);
       transform: translateX(-100%);
       box-shadow: none;
-      transition: transform var(--motion-duration-slow) var(--motion-ease-entrance);
+      transition: transform var(--sidebar-duration-collapse) var(--sidebar-ease);
     }
 
     .app-sidebar.is-collapsed {
-      margin-left: 0;
+      width: var(--sidebar-width);
+      border-right-width: 1px;
       transform: translateX(-100%);
     }
 
@@ -1283,9 +1458,7 @@
     .dialog-panel-motion-enter-active,
     .dialog-panel-motion-leave-active,
     .pop-motion-enter-active,
-    .pop-motion-leave-active,
-    .sidebar-fade-enter-active,
-    .sidebar-fade-leave-active {
+    .pop-motion-leave-active {
       transition: none;
     }
 
@@ -1295,24 +1468,21 @@
       transform: none;
     }
 
-    /* 侧栏项目列表与操作菜单：关掉位移与过渡，行仍能正常出现与消失。 */
-    .project-sidebar-menu-trigger {
-      transition: none;
+    /* 侧栏 CSS 动画全部关闭；共享背景由 useReducedMotion 同时关闭 Motion 过渡。 */
+    .app-sidebar *,
+    .project-sidebar-menu,
+    .project-sidebar-menu * {
+      transition: none !important;
+    }
+
+    .app-sidebar.is-collapsed :is(.project-sidebar-copy, .session-sidebar-copy, .project-sidebar-heading, .project-sidebar-add, .sidebar-footer-label, .sidebar-empty, .sidebar-notice, .sidebar-list-notice) {
       transform: none;
     }
 
-    .project-list-enter-active,
-    .project-list-leave-active,
-    .project-list-move,
-    .project-menu-enter-active,
-    .project-menu-leave-active {
-      transition: none;
-    }
-
-    .project-list-enter-from,
-    .project-list-leave-to,
-    .project-menu-enter-from,
-    .project-menu-leave-to {
+    .sidebar-list-enter-from,
+    .sidebar-list-leave-to,
+    .sidebar-menu-enter-from,
+    .sidebar-menu-leave-to {
       opacity: 1;
       transform: none;
     }

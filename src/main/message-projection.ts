@@ -17,6 +17,8 @@ import type {
   ToolExecution
 } from '../shared/runtime-api'
 import { ToolProjection, serializeToolArguments } from './tool-projection'
+import { toUserMessageIdentity } from './pi-protocol'
+import type { UserMessageIdentity } from './pi-protocol'
 
 /** 批次刷新节拍；消息开始与终态事件立即刷新，不受此限制。 */
 const FLUSH_INTERVAL_MS = 100
@@ -53,6 +55,8 @@ interface MutableBlock {
 }
 
 interface MutableMessage {
+  /** 来源身份只在主进程核对，不跨 IPC 暴露摘要。 */
+  sourceIdentity: UserMessageIdentity | null
   readonly id: string
   readonly role: ProjectedRole
   blocks: MutableBlock[]
@@ -100,6 +104,7 @@ export class MessageProjection {
   private truncated = false
   private needsResync = false
   private disposed = false
+  private rebuilding = false
   private readonly toolProjection: ToolProjection
 
   constructor(
@@ -178,6 +183,36 @@ export class MessageProjection {
     for (const message of messages) this.applyAuthoritativeMessage(message, null)
     this.seedHistoryTools(messages)
     this.enforceLimits()
+    this.callbacks.onStatusHint({ messageCount: this.messages.length })
+    this.flush()
+    return true
+  }
+
+  /** 在仍存在的投影内定位用户消息；被裁剪或未知内容不能作为回退目标。 */
+  userMessageIdentity(messageId: string): UserMessageIdentity | null {
+    return this.messages.find(message => message.id === messageId && message.role === 'user')?.sourceIdentity ?? null
+  }
+
+  /** 回退后整表替换，序号和消息 ID 种子保持递增；旧增量不能泄漏到新历史。 */
+  replaceHistory(payload: unknown): boolean {
+    if (this.disposed || !isRecord(payload) || !Array.isArray(payload.messages)) return false
+    this.clearTimer()
+    this.pending = []
+    this.outstanding = []
+    this.messages.length = 0
+    this.active = null
+    this.droppedMessages = 0
+    this.truncated = false
+    this.toolProjection.reset()
+    this.rebuilding = true
+    try {
+      for (const message of payload.messages) this.applyAuthoritativeMessage(message, null)
+      this.seedHistoryTools(payload.messages)
+      this.enforceLimits()
+    } finally {
+      this.rebuilding = false
+    }
+    this.needsResync = true
     this.callbacks.onStatusHint({ messageCount: this.messages.length })
     this.flush()
     return true
@@ -313,6 +348,7 @@ export class MessageProjection {
       this.messages.push(target)
       this.enforceLimits()
     }
+    target.sourceIdentity = toUserMessageIdentity(value)
     target.blocks = this.buildBlocks(value.content, role)
     target.timestamp = typeof value.timestamp === 'number' ? value.timestamp : target.timestamp
     target.stopReason = typeof value.stopReason === 'string' ? value.stopReason : null
@@ -562,7 +598,7 @@ export class MessageProjection {
         this.pending.push(update)
       }
     }
-    if (this.pending.length >= MAX_UPDATES_PER_BATCH) this.flush()
+    if (!this.rebuilding && this.pending.length >= MAX_UPDATES_PER_BATCH) this.flush()
   }
 
   private scheduleFlush(): void {
@@ -641,6 +677,7 @@ export class MessageProjection {
 
   private createMessage(role: ProjectedRole, value: Record<string, unknown>): MutableMessage {
     return {
+      sourceIdentity: toUserMessageIdentity(value),
       id: this.nextMessageId(),
       role,
       blocks: this.buildBlocks(value.content, role),

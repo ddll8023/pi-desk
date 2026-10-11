@@ -322,10 +322,17 @@ export class ToolProjection {
     }
   }
 
-  dispose(): void {
-    this.disposed = true
+  /** 回退后清空旧工具及截断计数；投影仍可承接新分支的事件。 */
+  reset(): void {
     this.entries.length = 0
     this.index.clear()
+    this.droppedTools = 0
+    this.truncated = false
+  }
+
+  dispose(): void {
+    this.disposed = true
+    this.reset()
   }
 
   /**

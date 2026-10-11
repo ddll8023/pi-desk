@@ -1,14 +1,70 @@
-<!-- 单条消息：Assistant 卡片展示独立生成耗时，按 contentIndex 承载正文、Thinking 与工具块；Thinking 默认折叠且仅手动开合，保留用户内容、截断与失败提示。 -->
+<!-- 单条消息：按块展示正文、Thinking、工具与计时；用户消息下方使用细线图标操作栏，回退与修改后的重新发送由父级执行。 -->
 <script setup lang="ts">
-import { computed, reactive } from 'vue'
+import { computed, onUnmounted, reactive, ref, useId } from 'vue'
+import { copyText } from '../clipboard'
 import type { ChatMessageView } from '../chat-view'
 import { formatDuration, useTickingNow } from '../clock'
 import MarkdownContent from './MarkdownContent.vue'
 import ToolCard from './ToolCard.vue'
+import AppButton from './ui/AppButton.vue'
 
 const props = defineProps<{
   readonly message: ChatMessageView
+  readonly actionsDisabled?: boolean
 }>()
+
+const emit = defineEmits<{
+  rewind: [messageId: string]
+  submitEdit: [messageId: string, editedText: string]
+}>()
+const copyFeedback = ref('')
+const copying = ref(false)
+const copySucceeded = computed(() => copyFeedback.value.startsWith('已复制'))
+const tooltipId = useId()
+let copyFeedbackTimer: number | null = null
+let mounted = true
+
+const editing = ref(false)
+const editDraft = ref('')
+const editTextarea = ref<HTMLTextAreaElement | null>(null)
+
+/** 切换会话后清理反馈计时器，迟到的剪贴板结果不再写入旧消息组件。 */
+onUnmounted(() => {
+  mounted = false
+  if (copyFeedbackTimer !== null) window.clearTimeout(copyFeedbackTimer)
+})
+
+/** 复制仅取显示的文本；不复制图片本体，也不把图片交给剪贴板工具。 */
+const messageText = computed(() => props.message.blocks
+  .filter(block => block.kind === 'text' && block.image === null)
+  .map(block => block.kind === 'text' ? block.text : '')
+  .join('\n'))
+const hasText = computed(() => messageText.value.trim() !== '')
+
+/** 成功短暂切换为勾选图标；失败保留可见反馈，截断消息仍明确说明复制范围。 */
+async function copyMessage(): Promise<void> {
+  if (copying.value) return
+  if (copyFeedbackTimer !== null) window.clearTimeout(copyFeedbackTimer)
+  copyFeedbackTimer = null
+  copying.value = true
+  copyFeedback.value = ''
+  let copied = false
+  try {
+    copied = await copyText(messageText.value)
+  } catch {
+    // 剪贴板回退路径也可能受环境限制，不能留下永久的复制中状态。
+  }
+  if (!mounted) return
+  const truncated = props.message.blocks.some(block => block.kind === 'text' && block.truncated)
+  copyFeedback.value = copied ? (truncated ? '已复制可见文本（已截断）' : '已复制') : '复制失败'
+  copying.value = false
+  if (copied) {
+    copyFeedbackTimer = window.setTimeout(() => {
+      copyFeedback.value = ''
+      copyFeedbackTimer = null
+    }, 1800)
+  }
+}
 
 /** 手动选择只保留在当前消息组件中；重新进入聊天或切换会话后恢复初始折叠。 */
 const thinkingOverrides = reactive(new Map<string, boolean>())
@@ -35,6 +91,40 @@ function isThinkingExpanded(key: string): boolean {
 /** 由 summary 的点击统一控制开合，键盘激活同样生效。 */
 function toggleThinking(key: string): void {
   thinkingOverrides.set(key, !isThinkingExpanded(key))
+}
+
+/** 进入编辑态：预填消息可见文本，聚焦输入框，禁用其他操作。 */
+function startEdit(): void {
+  if (editing.value || props.actionsDisabled || !hasText.value) return
+  editDraft.value = messageText.value
+  editing.value = true
+  // 下一帧聚焦，确保 textarea 已挂载
+  requestAnimationFrame(() => editTextarea.value?.focus())
+}
+
+/** 取消编辑：恢复原气泡，不发起回退。 */
+function cancelEdit(): void {
+  editing.value = false
+  editDraft.value = ''
+}
+
+/** 提交编辑：通知父级执行回退+发送。 */
+function submitEdit(): void {
+  const text = editDraft.value.trim()
+  if (text === '') return
+  emit('submitEdit', props.message.id, text)
+  // 父级负责回退与重新发送；回退成功后本条消息离开历史，组件随之卸载，失败时保持编辑态供重试
+}
+
+/** Esc 取消，Enter 提交（非 Shift+Enter）。 */
+function onEditKeydown(event: KeyboardEvent): void {
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    cancelEdit()
+  } else if (event.key === 'Enter' && !event.shiftKey) {
+    event.preventDefault()
+    submitEdit()
+  }
 }
 </script>
 
@@ -92,8 +182,276 @@ function toggleThinking(key: string): void {
       <ToolCard v-else-if="block.kind === 'toolcall'" :block="block" class="self-start w-full" />
     </template>
 
+    <div v-if="isUser && hasText && !editing" class="chat-message-actions" role="group" aria-label="用户消息操作">
+      <span
+        v-if="copyFeedback"
+        role="status"
+        :class="copySucceeded ? 'sr-only' : 'chat-message-action-feedback'"
+      >{{ copyFeedback }}</span>
+      <div class="chat-message-action-toolbar">
+        <AppButton
+          variant="unstyled"
+          class="chat-message-action chat-message-action-rewind"
+          :disabled="actionsDisabled"
+          aria-label="回退"
+          :aria-describedby="`${tooltipId}-rewind`"
+          @click="emit('rewind', message.id)"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M4 10a8 8 0 1 1 1.8 7.1" />
+            <path d="M4 4v6h6M12 7v5l3 2" />
+          </svg>
+          <span :id="`${tooltipId}-rewind`" role="tooltip" class="chat-message-action-tooltip">回到这条消息之前</span>
+        </AppButton>
+        <AppButton
+          variant="unstyled"
+          class="chat-message-action"
+          :class="{ 'chat-message-action-copied': copySucceeded }"
+          :disabled="copying"
+          aria-label="复制"
+          :aria-describedby="`${tooltipId}-copy`"
+          @click="copyMessage"
+        >
+          <svg v-if="copySucceeded" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="m5 12 4 4L19 6" />
+          </svg>
+          <svg v-else viewBox="0 0 24 24" aria-hidden="true">
+            <rect x="8" y="8" width="12" height="12" rx="2" />
+            <path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3" />
+          </svg>
+          <span :id="`${tooltipId}-copy`" role="tooltip" class="chat-message-action-tooltip">{{ copySucceeded ? '已复制' : '复制消息' }}</span>
+        </AppButton>
+        <AppButton
+          variant="unstyled"
+          class="chat-message-action"
+          :disabled="actionsDisabled"
+          aria-label="修改"
+          :aria-describedby="`${tooltipId}-edit`"
+          @click="startEdit"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="m15 5 4 4M4 20l4.5-1 11-11a2.8 2.8 0 0 0-4-4l-11 11L4 20Z" />
+          </svg>
+          <span :id="`${tooltipId}-edit`" role="tooltip" class="chat-message-action-tooltip">修改消息</span>
+        </AppButton>
+      </div>
+    </div>
+
+    <div v-if="isUser && editing" class="chat-message-edit" role="group" aria-label="编辑消息">
+      <textarea
+        ref="editTextarea"
+        v-model="editDraft"
+        class="chat-message-edit-textarea"
+        rows="3"
+        :disabled="actionsDisabled"
+        @keydown="onEditKeydown"
+      />
+      <div class="chat-message-edit-actions">
+        <p class="chat-message-edit-hint">提交将回退到该消息之前并用修改后的文本重新发送。原消息中的图片附件无法恢复。</p>
+        <div class="chat-message-edit-buttons">
+          <AppButton variant="default" :disabled="actionsDisabled" @click="cancelEdit">取消</AppButton>
+          <AppButton variant="primary" :disabled="actionsDisabled || editDraft.trim() === ''" @click="submitEdit">提交</AppButton>
+        </div>
+      </div>
+    </div>
+
     <p v-if="message.failure" role="alert" class="status-notice status-notice-error self-start">
       {{ message.failure }}
     </p>
   </article>
 </template>
+
+<style scoped>
+/* 样式只作用于本消息的操作栏，沿用现有主题色，不调整全局按钮或消息气泡。 */
+.chat-message-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  align-self: flex-end;
+  justify-content: flex-end;
+  gap: 8px;
+  min-height: 29px;
+}
+
+.chat-message-action-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.chat-message-action {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 29px;
+  height: 29px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-desk-sm);
+  background: transparent;
+  color: var(--color-desk-muted);
+  cursor: pointer;
+  transition: color var(--motion-duration-fast), background-color var(--motion-duration-fast);
+}
+
+.chat-message-action:not(:disabled):hover {
+  background: var(--color-desk-surface-subtle);
+  color: var(--color-desk-ink);
+}
+
+.chat-message-action-rewind:not(:disabled):hover {
+  background: var(--color-desk-danger-soft);
+  color: var(--color-desk-danger);
+}
+
+.chat-message-action-copied,
+.chat-message-action-copied:not(:disabled):hover {
+  color: var(--color-desk-accent);
+}
+
+.chat-message-action:focus-visible {
+  outline: 2px solid var(--color-desk-accent);
+  outline-offset: 2px;
+}
+
+.chat-message-action:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.chat-message-action svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.65;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.chat-message-action-tooltip {
+  position: absolute;
+  z-index: 5;
+  bottom: calc(100% + 7px);
+  left: 50%;
+  padding: 5px 8px;
+  border-radius: var(--radius-desk-sm);
+  background: var(--color-desk-ink);
+  color: var(--color-desk-surface);
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.5;
+  white-space: nowrap;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: translate(-50%, 3px);
+  transition: opacity var(--motion-duration-fast), transform var(--motion-duration-fast);
+}
+
+.chat-message-action-tooltip::after {
+  position: absolute;
+  top: 100%;
+  left: calc(50% - 4px);
+  border: 4px solid transparent;
+  border-top-color: var(--color-desk-ink);
+  content: '';
+}
+
+.chat-message-action:not(:disabled):hover .chat-message-action-tooltip,
+.chat-message-action:focus-visible .chat-message-action-tooltip {
+  opacity: 1;
+  visibility: visible;
+  transform: translate(-50%, 0);
+}
+
+/* 最右侧提示向左展开，避免越过聊天正文的右边界。 */
+.chat-message-action:last-child .chat-message-action-tooltip {
+  right: 0;
+  left: auto;
+  transform: translate(0, 3px);
+}
+
+.chat-message-action:last-child:not(:disabled):hover .chat-message-action-tooltip,
+.chat-message-action:last-child:focus-visible .chat-message-action-tooltip {
+  transform: translate(0, 0);
+}
+
+.chat-message-action:last-child .chat-message-action-tooltip::after {
+  right: 10px;
+  left: auto;
+}
+
+.chat-message-action-feedback {
+  color: var(--color-desk-danger);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+/* 编辑态：气泡替换为输入框，下方提示 + 按钮。 */
+.chat-message-edit {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 10px;
+  align-self: flex-end;
+}
+
+.chat-message-edit-textarea {
+  display: block;
+  width: 100%;
+  max-width: 86%;
+  min-height: 70px;
+  max-height: 200px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-desk-line);
+  border-radius: var(--radius-desk-lg);
+  background: var(--color-desk-surface);
+  color: var(--color-desk-ink);
+  font: 13px/1.7 var(--font-sans);
+  resize: vertical;
+  font-family: var(--font-sans);
+}
+
+.chat-message-edit-textarea:focus-visible {
+  outline: 2px solid var(--color-desk-accent);
+  outline-offset: 1px;
+}
+
+.chat-message-edit-textarea:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.chat-message-edit-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  width: 100%;
+  max-width: 86%;
+}
+
+.chat-message-edit-hint {
+  margin: 0;
+  color: var(--color-desk-muted);
+  font-size: 11px;
+  line-height: 1.5;
+  text-align: right;
+}
+
+.chat-message-edit-buttons {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-message-action,
+  .chat-message-action-tooltip {
+    transition: none;
+  }
+}
+</style>

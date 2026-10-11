@@ -1,4 +1,4 @@
-<!-- Prompt 输入坞：处理输入法组合态、Enter 发送与 Shift+Enter 换行、焦点回归与重复提交，并在 Agent 运行期间原位提供停止入口；同时承接 Extension 的 set_editor_text 填充文本、图片附件的选择/粘贴/拖拽三种入口、输入行按内容自动增高、快捷发送下拉、Pi 命令的斜杠补全（Runtime 就绪后用运行中的命令清单，未就绪时用主进程预读的技能清单，按类型分组）与 `@` 项目文件引用（只写入相对路径文本，不传文件内容）。 -->
+<!-- Prompt 输入坞：处理输入法组合态、Enter 发送与 Shift+Enter 换行、焦点回归与重复提交，并在 Agent 运行期间原位提供停止入口；同时承接 Extension 的 set_editor_text 填充文本、图片附件的选择/粘贴/拖拽三种入口、输入行按内容自动增高、快捷发送下拉、Pi 命令的斜杠模糊补全（Runtime 就绪后用运行中的命令清单，未就绪时用主进程预读的技能清单，按类型分组并按匹配优先级排序）与 `@` 项目文件引用（只写入相对路径文本，不传文件内容）。 -->
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
@@ -17,12 +17,15 @@ const extensionStore = useExtensionUiStore()
 const projectStore = useProjectStore()
 const resourceStore = useResourceStore()
 const sessionStore = useSessionStore()
-const { view: runtimeView, promptView, abortView, projectionSync, capabilitiesView, modelSwitchView } = storeToRefs(runtimeStore)
+const { view: runtimeView, promptView, abortView, projectionSync, capabilitiesView, modelSwitchView,
+  preparingPrompt, rewindView } = storeToRefs(runtimeStore)
 const { editorText, editorTextVersion } = storeToRefs(extensionStore)
 
 const draft = ref('')
-/** 首次提交只启动 Runtime；就绪后提示用户再次显式发送，不自动重放。 */
+/** 首次提交只启动 Runtime；就绪且投影同步后自动补发输入，启动期间用户仍可继续编辑。 */
 const startupRequested = ref(false)
+let startupProjectPath: string | null = null
+const submitting = ref(false)
 /** 输入法组合态：此期间的 Enter 只确认候选词，不能当发送。 */
 const composing = ref(false)
 const textarea = ref<HTMLTextAreaElement | null>(null)
@@ -71,8 +74,9 @@ const stopVisible = computed(() => (
 ))
 /** 就绪后仅在 Agent 空闲、投影同步且无提交或模型/会话切换时允许发送；未就绪时仅允许有项目且没有并发启动的首次启动请求。 */
 const canSubmit = computed(() => {
-  if (sending.value || modelSwitchView.value.phase === 'switching' || sessionStore.opening
-    || sessionStore.awaitingTrust || sessionStore.awaitingInterrupt) return false
+  if (sending.value || submitting.value || preparingPrompt.value || modelSwitchView.value.phase === 'switching' || sessionStore.opening
+    || sessionStore.awaitingTrust || sessionStore.awaitingInterrupt || rewindView.value.phase === 'requesting'
+    || (rewindView.value.phase === 'error' && rewindView.value.blocked)) return false
   if (runtimeReady.value) {
     return projectionSync.value === 'synced' && !streaming.value
   }
@@ -86,6 +90,9 @@ const attachDisabled = computed(() => (
 ))
 
 const status = computed(() => {
+  if (rewindView.value.phase === 'requesting') return { kind: 'info' as const, text: '正在回退对话；草稿保留，完成后才能发送。' }
+  if (rewindView.value.phase === 'error' && rewindView.value.blocked) return { kind: 'error' as const, text: rewindView.value.error.message }
+  if (preparingPrompt.value) return { kind: 'info' as const, text: '正在读取附件并提交输入。' }
   if (abortView.value.phase === 'error') {
     return { kind: 'error' as const, text: abortView.value.error.message }
   }
@@ -100,16 +107,13 @@ const status = computed(() => {
   }
   if (sending.value) return { kind: 'info' as const, text: '正在提交 Prompt，等待 Pi 回应。' }
   if (sessionStore.awaitingTrust) {
-    return { kind: 'info' as const, text: '请先完成项目 Trust 决定；输入会保留，Runtime 就绪后需再次点击发送。' }
-  }
-  if (sessionStore.awaitingInterrupt) {
-    return { kind: 'info' as const, text: '请先处理当前操作；输入会保留。' }
-  }
-  if (runtimeReady.value && startupRequested.value && projectionSync.value === 'synced') {
-    return { kind: 'info' as const, text: 'Runtime 已就绪；输入仍保留，请再次点击发送提交。' }
+    return { kind: 'info' as const, text: '请先完成项目 Trust 决定；输入会保留，Runtime 就绪后自动发送。' }
   }
   if (promptView.value.phase === 'accepted') {
     return { kind: 'info' as const, text: acceptedText(promptView.value.disposition) }
+  }
+  if (sessionStore.awaitingInterrupt) {
+    return { kind: 'info' as const, text: '请先处理当前操作；输入会保留。' }
   }
   if (!runtimeReady.value) {
     if (projectStore.currentProject === null) {
@@ -118,10 +122,13 @@ const status = computed(() => {
     if (runtimeView.value.phase === 'failed') {
       return { kind: 'error' as const, text: `${runtimeView.value.error.message}；可再次点击发送重试启动。` }
     }
-    if (canStartRuntime.value) {
-      return { kind: 'info' as const, text: '首次点击发送会启动 Pi 并保留输入；Runtime 就绪后再次点击发送。' }
+    if (runtimeView.value.phase === 'starting') {
+      return { kind: 'info' as const, text: '正在启动 Pi；输入已保留，就绪后自动发送。' }
     }
-    return { kind: 'info' as const, text: 'Runtime 正在启动或关闭；输入会保留。' }
+    if (canStartRuntime.value) {
+      return { kind: 'info' as const, text: '首次发送会先启动 Pi；输入会保留，就绪后自动发送。' }
+    }
+    return { kind: 'info' as const, text: 'Runtime 正在关闭；输入会保留。' }
   }
   if (streaming.value) {
     return { kind: 'info' as const, text: 'Agent 正在运行，本轮结束前不能提交新输入。' }
@@ -397,31 +404,75 @@ async function submit(): Promise<void> {
   }
 
   if (!runtimeReady.value) {
-    // 首次发送只触发 Runtime 启动；保留文字与附件，避免启动期间丢失或隐式重放。
+    // 首次发送只触发 Runtime 启动；保留文字与附件，就绪且同步完成后由下方 watch 自动补发。
+    startupProjectPath = projectStore.currentProject?.path ?? null
     startupRequested.value = true
     await sessionStore.open(null, false)
+    if (sessionStore.actionError !== null) startupRequested.value = false
     return
   }
 
+  if (runtimeView.value.phase !== 'ready') return
+  const target = runtimeView.value.snapshot
   const message = draft.value
-  const images: PromptImageInput[] = []
-  for (const entry of pendingImages.value) {
-    images.push({ name: entry.file.name, mimeType: entry.file.type, data: await readAsBase64(entry.file) })
-  }
-  const before = promptView.value
-  await runtimeStore.send(message, images)
-  if (promptView.value === before || promptView.value.phase !== 'accepted') return
+  const attachments = [...pendingImages.value]
+  submitting.value = true
+  preparingPrompt.value = true
+  try {
+    const images: PromptImageInput[] = []
+    for (const entry of attachments) {
+      images.push({ name: entry.file.name, mimeType: entry.file.type, data: await readAsBase64(entry.file) })
+    }
+    // 附件读取期间允许继续编辑草稿，但不允许把旧提交送入已切换的会话。
+    if (runtimeView.value.phase !== 'ready' || runtimeView.value.snapshot.runtimeId !== target.runtimeId
+      || runtimeView.value.snapshot.info?.sessionId !== target.info?.sessionId || sessionStore.opening) return
+    const before = promptView.value
+    await runtimeStore.send(message, images)
+    if (promptView.value === before || promptView.value.phase !== 'accepted') return
 
-  startupRequested.value = false
-  if (draft.value === message) draft.value = ''
-  for (const entry of pendingImages.value) URL.revokeObjectURL(entry.objectUrl)
-  pendingImages.value = []
-  textarea.value?.focus()
+    startupRequested.value = false
+    if (draft.value === message) draft.value = ''
+    const sent = new Set(attachments.map(entry => entry.objectUrl))
+    for (const entry of attachments) URL.revokeObjectURL(entry.objectUrl)
+    pendingImages.value = pendingImages.value.filter(entry => !sent.has(entry.objectUrl))
+    textarea.value?.focus()
+  } catch (error) {
+    if (runtimeView.value.phase === 'ready' && runtimeView.value.snapshot.runtimeId === target.runtimeId
+      && runtimeView.value.snapshot.info?.sessionId === target.info?.sessionId) {
+      promptView.value = { phase: 'error', error: { code: 'INVALID_REQUEST', message: error instanceof Error ? error.message : '读取图片失败；草稿和附件已保留。' } }
+    }
+  } finally {
+    submitting.value = false
+    preparingPrompt.value = false
+  }
 }
 
 function stop(): void {
   void runtimeStore.stopOperation()
 }
+
+/** 全部发送条件满足才消费首次提交意图；不能在会话还处于 opening 时提前丢弃。 */
+watch(
+  () => startupRequested.value && runtimeReady.value && projectionSync.value === 'synced'
+    && !sessionStore.opening && !sessionStore.awaitingTrust && !sessionStore.awaitingInterrupt
+    && (draft.value.trim() === '' || canSend.value),
+  (pending) => {
+    if (!pending) return
+    startupRequested.value = false
+    void submit()
+  }
+)
+
+/** 换项目、启动失败或取消信任确认时作废自动发送意图，不让它泄漏到其他会话。 */
+watch(() => projectStore.currentProject?.path ?? null, (path) => {
+  if (path !== startupProjectPath) startupRequested.value = false
+})
+watch(() => runtimeView.value.phase, (phase) => {
+  if (phase === 'failed' || phase === 'closed' || phase === 'stopping') startupRequested.value = false
+})
+watch(() => sessionStore.awaitingTrust || sessionStore.awaitingInterrupt, (awaiting, previous) => {
+  if (previous && !awaiting && !sessionStore.opening && !runtimeReady.value) startupRequested.value = false
+})
 
 /** Extension 填充文本到达时写入：只在用户未输入时覆盖，否则保留用户内容并提示。 */
 watch(editorTextVersion, () => {
@@ -442,10 +493,10 @@ const SUGGESTION_GROUPS: readonly { readonly kind: PiResourceKind; readonly labe
 ]
 /** 每组各自的条数上限；不用全局上限截断，否则排在后面的技能永远进不了候选。 */
 const MAX_SUGGESTIONS_PER_KIND = 8
-/** 斜杠补全只在输入以 `/` 开头且尚未输入空格（即仍在命令名内）时生效。 */
+/** 斜杠补全只在输入以 `/` 开头且尚未输入空白字符（即仍在命令名内）时生效。 */
 const slashQuery = computed(() => {
   const text = draft.value
-  if (!text.startsWith('/') || text.includes(' ')) return null
+  if (!text.startsWith('/') || /\s/.test(text)) return null
   return text.slice(1).toLowerCase()
 })
 const suggestionsDismissed = ref(false)
@@ -458,15 +509,37 @@ interface SuggestionGroup {
   readonly items: readonly { readonly entry: PiResourceEntry; readonly index: number }[]
 }
 
-/**
- * 匹配规则与 Pi 的调用习惯一致：名称前缀匹配；
- * 另外允许用去掉 `skill:` 后的名称前缀找到技能。
- */
-function matchesCommandQuery(entry: PiResourceEntry, query: string): boolean {
+/** 名称完全匹配 > 前缀 > 包含 > 按顺序的非连续字符 > 描述包含；显式 `skill:` 只搜索技能。 */
+function commandMatchRank(entry: PiResourceEntry, query: string): number | null {
+  const skillOnly = query.startsWith('skill:')
+  if (skillOnly && entry.kind !== 'skill') return null
+  const needle = skillOnly ? query.slice('skill:'.length) : query
+  // 空查询保留资源清单的原始顺序；`/skill:` 则列举技能。
+  if (needle === '') return 0
+
   const name = entry.name.toLowerCase()
-  if (name.startsWith(query)) return true
-  const skillName = name.startsWith('skill:') ? name.slice('skill:'.length) : null
-  return skillName !== null && !query.startsWith('skill:') && skillName.startsWith(query)
+  const skillName = entry.kind === 'skill' && name.startsWith('skill:')
+    ? name.slice('skill:'.length)
+    : name
+  const names = skillOnly ? [skillName] : [skillName, name]
+  if (names.some((candidate) => candidate === needle)) return 0
+  if (names.some((candidate) => candidate.startsWith(needle))) return 1
+  if (names.some((candidate) => candidate.includes(needle))) return 2
+
+  for (const candidate of names) {
+    let position = 0
+    let matched = true
+    for (const character of needle) {
+      const found = candidate.indexOf(character, position)
+      if (found < 0) {
+        matched = false
+        break
+      }
+      position = found + character.length
+    }
+    if (matched) return 3
+  }
+  return entry.description?.toLowerCase().includes(needle) ? 4 : null
 }
 
 /**
@@ -477,7 +550,7 @@ const candidateEntries = computed<readonly PiResourceEntry[]>(() => (
   runtimeReady.value ? resourceStore.entries : resourceStore.previewSkills
 ))
 
-/** 候选来自当前 Runtime 已加载的命令清单（与 Pi 的 `/` 命令同一来源），按类型分组且各组独立限量。 */
+/** 按类型分组后，各组先按匹配优先级排序再限量，同级保持资源清单的原始顺序。 */
 const matchedGroups = computed<readonly SuggestionGroup[]>(() => {
   const query = slashQuery.value
   if (query === null) return []
@@ -485,13 +558,14 @@ const matchedGroups = computed<readonly SuggestionGroup[]>(() => {
   const groups: SuggestionGroup[] = []
   let index = 0
   for (const group of SUGGESTION_GROUPS) {
-    const items: { entry: PiResourceEntry; index: number }[] = []
+    const ranked: { entry: PiResourceEntry; rank: number }[] = []
     for (const entry of candidateEntries.value) {
-      if (entry.kind !== group.kind || !matchesCommandQuery(entry, query)) continue
-      if (items.length >= MAX_SUGGESTIONS_PER_KIND) break
-      items.push({ entry, index })
-      index += 1
+      if (entry.kind !== group.kind) continue
+      const rank = commandMatchRank(entry, query)
+      if (rank !== null) ranked.push({ entry, rank })
     }
+    ranked.sort((left, right) => left.rank - right.rank)
+    const items = ranked.slice(0, MAX_SUGGESTIONS_PER_KIND).map(({ entry }) => ({ entry, index: index++ }))
     if (items.length > 0) groups.push({ kind: group.kind, label: group.label, items })
   }
   return groups

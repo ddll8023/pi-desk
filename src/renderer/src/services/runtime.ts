@@ -1,4 +1,4 @@
-/** 作为渲染端 Runtime 启停、可用模型读取与切换、Prompt 提交、中止与投影同步的调用入口，把桥接缺失与通信异常转换为安全的展示结果。 */
+/** 渲染端 Runtime 启停、模型选择、Prompt、回退与投影同步的受限桥接入口；通信异常转换为安全的展示结果。 */
 import type {
   CapabilitiesResult,
   ProjectionBatch,
@@ -7,6 +7,8 @@ import type {
   PromptResult,
   RuntimeError,
   RuntimeResult,
+  RuntimeRewindRequest,
+  RuntimeRewindResult,
   RuntimeStatus
 } from '../../../shared/runtime-api'
 
@@ -76,6 +78,26 @@ export async function sendPrompt(
     return await bridge.sendPrompt(message, images)
   } catch {
     return callFailed()
+  }
+}
+
+/** 回退属于非幂等操作；普通对象跨桥接，通信中断时不自动重发。 */
+export async function rewindRuntime(request: RuntimeRewindRequest): Promise<RuntimeRewindResult> {
+  const bridge = window.desktop
+  if (!bridge || typeof bridge.rewindRuntime !== 'function') return unavailable()
+  try {
+    return await bridge.rewindRuntime({
+      runtimeId: request.runtimeId,
+      sessionId: request.sessionId,
+      messageId: request.messageId
+    })
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error)
+    return {
+      ok: false,
+      error: { code: 'BRIDGE_CALL_FAILED', message: `回退桥接调用失败：${detail}；结果未知，请重新打开会话，不会自动重发。` },
+      blocked: true
+    }
   }
 }
 

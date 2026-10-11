@@ -59,6 +59,9 @@ function formatContextWindow(value: number | null): string | undefined {
 
 const currentKey = computed(() => {
   if (canPrepare.value) {
+    // 读取中或读取失败时不匹配任何选项，让触发键直接显示进度或错误文案。
+    if (modelPreviewView.value.phase === 'loading'
+      || (error.value !== null && error.value !== unavailableChoice.value)) return ''
     if (!modelPreferenceLoaded.value) return ''
     if (newSessionModel.value === null) return FOLLOW_PI_DEFAULT
   }
@@ -70,7 +73,15 @@ const currentModel = computed(() => models.value.find(model => (
 const currentLabel = computed(() => {
   if (view.value.phase === 'starting') return 'Pi 启动中'
   if (view.value.phase === 'stopping') return 'Pi 关闭中'
+  if (error.value !== null) {
+    // 已保存选择只是不可用时不改写触发键文案，仍展示当前选择，错误由 title 与读屏提示传达。
+    if (error.value !== unavailableChoice.value) {
+      return view.value.phase === 'ready' && modelSwitchView.value.phase === 'error'
+        ? '模型切换失败' : '模型读取失败'
+    }
+  }
   if (canPrepare.value && !modelPreferenceLoaded.value) return '正在读取模型偏好…'
+  if (canPrepare.value && modelPreviewView.value.phase === 'loading') return '正在读取模型…'
   return currentModel.value?.name ?? identity.value?.modelId ?? '未选择模型'
 })
 const currentIdentity = computed(() => identity.value
@@ -190,7 +201,7 @@ function refreshModels(): void {
 </script>
 
 <template>
-  <div class="app-runtime-model" :aria-busy="busy">
+  <div class="app-runtime-model" :class="{ 'is-error': error !== null }" :aria-busy="busy">
     <div class="runtime-model-control">
       <label for="runtime-model-select" class="runtime-model-label">模型</label>
       <AppSelect
@@ -199,10 +210,10 @@ function refreshModels(): void {
         :groups="groups"
         :model-value="currentKey"
         :empty-label="currentLabel"
-        :selected-meta="identity?.provider"
-        :selected-badge="identity ? providerBadge(identity.provider) : undefined"
+        :selected-meta="currentKey ? identity?.provider : undefined"
+        :selected-badge="currentKey && identity ? providerBadge(identity.provider) : undefined"
         :disabled="disabledReason !== null"
-        :title="disabledReason ? `${currentIdentity}；${disabledReason}` : `${ready ? '当前会话模型' : '桌面新会话默认模型'}：${currentIdentity}；点击选择`"
+        :title="error ? `${currentIdentity}；${error}` : disabledReason ? `${currentIdentity}；${disabledReason}` : `${ready ? '当前会话模型' : '桌面新会话默认模型'}：${currentIdentity}；点击选择`"
         :aria-label="`${ready ? '当前会话模型' : '新会话默认模型'}：${currentIdentity}`"
         :aria-describedby="error ? 'runtime-model-error' : progress ? 'runtime-model-progress' : undefined"
         searchable
@@ -214,8 +225,13 @@ function refreshModels(): void {
         {{ canPrepare ? '刷新' : '重试读取' }}
       </AppButton>
     </div>
-    <p v-if="error" id="runtime-model-error" class="runtime-model-error" role="alert" :title="error">{{ error }}</p>
-    <p v-else-if="progress" id="runtime-model-progress" class="runtime-model-progress" role="status">{{ progress }}</p>
+    <!-- 进度与错误并入触发键文案与 title；此处仅保留读屏用的隐藏区域，顶栏高度保持恒定。 -->
+    <p
+      v-if="error || progress"
+      :id="error ? 'runtime-model-error' : 'runtime-model-progress'"
+      class="sr-only"
+      :role="error ? 'alert' : 'status'"
+    >{{ error ?? progress }}</p>
   </div>
 </template>
 
@@ -248,17 +264,8 @@ function refreshModels(): void {
 .runtime-model-control :deep(.app-select-trigger:disabled) {
   background: transparent;
 }
-.runtime-model-error,
-.runtime-model-progress {
-  margin: 0.25rem 0 0;
-  font-size: 0.6875rem;
-  line-height: 1.4;
-  overflow-wrap: anywhere;
-}
-.runtime-model-error {
+/* 读取进度与错误并入触发键文案，不设独立状态行，顶栏高度保持恒定。 */
+.app-runtime-model.is-error :deep(.app-select-name) {
   color: var(--color-desk-danger);
-}
-.runtime-model-progress {
-  color: var(--color-desk-muted);
 }
 </style>
