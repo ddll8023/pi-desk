@@ -1,16 +1,14 @@
-<!-- 设置页：外观常驻首页，Pi 与模型的四个入口作为同级子页切换；偏好统一交给 store 保存，子页读写各自负责。 -->
+<!-- 设置页：外观常驻首页，模型与 Pi 资源作为同级子页切换；偏好统一交给 store 保存，子页读写各自负责。 -->
 <script setup lang="ts">
 import { ref } from 'vue'
 import { storeToRefs } from 'pinia'
 import { usePreferencesStore } from '../stores/preferences'
 import AppButton from './ui/AppButton.vue'
-import AuthView from './AuthView.vue'
-import CustomProviderView from './CustomProviderView.vue'
-import ModelDisplayView from './ModelDisplayView.vue'
+import ModelSettingsView from './ModelSettingsView.vue'
 import ResourceView from './ResourceView.vue'
 
-/** 设置页的五个平级区域；外观是首页，其他四个是全宽子页。 */
-type SettingsSection = 'appearance' | 'resources' | 'auth' | 'models' | 'providers'
+/** 设置页的三个平级区域；外观是首页，其他两个是全宽子页。 */
+type SettingsSection = 'appearance' | 'resources' | 'model'
 
 const preferencesStore = usePreferencesStore()
 const { theme } = storeToRefs(preferencesStore)
@@ -73,29 +71,15 @@ function backToAppearance(): void {
           <div class="settings-section-heading">
             <div>
               <h2 id="settings-pi-models-title" class="settings-section-title">Pi 与模型</h2>
-              <p class="mt-1 text-xs text-desk-muted">Pi 的模型、认证与资源，以及对话页显示哪些模型。</p>
+              <p class="mt-1 text-xs text-desk-muted">Pi 的供应商、凭据、模型与资源。</p>
             </div>
           </div>
           <div class="settings-entry">
             <div class="min-w-0">
-              <p class="text-sm font-medium">自定义供应商</p>
-              <p class="mt-0.5 text-xs text-desk-muted">编辑 models.json 的第三方与兼容端点供应商及其模型。</p>
+              <p class="text-sm font-medium">模型</p>
+              <p class="mt-0.5 text-xs text-desk-muted">供应商与凭据、models.json 里的自定义供应商，以及对话页显示哪些模型。</p>
             </div>
-            <AppButton variant="compact" aria-label="管理自定义供应商" @click="openSection('providers')">管理</AppButton>
-          </div>
-          <div class="settings-entry">
-            <div class="min-w-0">
-              <p class="text-sm font-medium">Provider 认证</p>
-              <p class="mt-0.5 text-xs text-desk-muted">查看凭据来源，录入 API Key 或完成账户登录。</p>
-            </div>
-            <AppButton variant="compact" aria-label="管理 Provider 认证" @click="openSection('auth')">管理</AppButton>
-          </div>
-          <div class="settings-entry">
-            <div class="min-w-0">
-              <p class="text-sm font-medium">对话页模型</p>
-              <p class="mt-0.5 text-xs text-desk-muted">选择顶栏模型切换器里显示的模型。</p>
-            </div>
-            <AppButton variant="compact" aria-label="管理对话页模型" @click="openSection('models')">管理</AppButton>
+            <AppButton variant="compact" aria-label="管理模型" @click="openSection('model')">管理</AppButton>
           </div>
           <div class="settings-entry">
             <div class="min-w-0">
@@ -113,9 +97,7 @@ function backToAppearance(): void {
           ← 返回设置
         </AppButton>
         <ResourceView v-if="section === 'resources'" />
-        <AuthView v-else-if="section === 'auth'" />
-        <CustomProviderView v-else-if="section === 'providers'" />
-        <ModelDisplayView v-else />
+        <ModelSettingsView v-else />
       </template>
     </div>
   </section>
