@@ -8,10 +8,13 @@ import {
   PREFERENCES_SET_UI_CHANNEL,
   PREFERENCES_GET_MODEL_CHANNEL,
   PREFERENCES_SET_MODEL_CHANNEL,
+  PREFERENCES_GET_MODEL_DISPLAY_CHANNEL,
+  PREFERENCES_SET_MODEL_DISPLAY_CHANNEL,
   isModelPreferenceResult,
-  isPreferencesResult
+  isPreferencesResult,
+  isModelDisplayResult
 } from '../shared/preferences-api'
-import type { ModelPreferenceResult, PreferencesApi, PreferencesResult, UiPreferences } from '../shared/preferences-api'
+import type { ModelDisplayPreference, ModelDisplayResult, ModelPreferenceResult, PreferencesApi, PreferencesResult, UiPreferences } from '../shared/preferences-api'
 import {
   PROJECT_ADD_CHANNEL,
   PROJECT_CHOOSE_DIRECTORY_CHANNEL,
@@ -164,6 +167,7 @@ const INVALID_PROJECT_LIST_RESPONSE = '桌面接口返回了无法识别的项�
 const INVALID_PROJECT_FILE_RESPONSE = '桌面接口返回了无法识别的文件检索结果。'
 const INVALID_SESSION_LIST_RESPONSE = '桌面接口返回了无法识别的会话列表。'
 const INVALID_PREFERENCES_RESPONSE = '桌面接口返回了无法识别的界面偏好。'
+const INVALID_MODEL_DISPLAY_RESPONSE = '桌面接口返回了无法识别的对话页模型展示偏好。'
 const INVALID_TRUST_RESPONSE = '桌面接口返回了无法识别的信任状态。'
 const INVALID_EXTENSION_UI_RESPONSE = '桌面接口返回了无法识别的 Extension UI 状态。'
 const INVALID_RESOURCES_RESPONSE = '桌面接口返回了无法识别的资源清单。'
@@ -214,6 +218,10 @@ function invalidSessionResponse(): SessionListResult {
 
 function invalidPreferencesResponse(): PreferencesResult {
   return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_PREFERENCES_RESPONSE } }
+}
+
+function invalidModelDisplayResponse(): ModelDisplayResult {
+  return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_MODEL_DISPLAY_RESPONSE } }
 }
 
 function invalidTrustResponse(): TrustStatusResult {
@@ -356,6 +364,20 @@ const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionAp
   async getPreferences() {
     const response: unknown = await ipcRenderer.invoke(PREFERENCES_GET_CHANNEL)
     return isPreferencesResult(response) ? response : invalidPreferencesResponse()
+  },
+
+  async getModelDisplay(): Promise<ModelDisplayResult> {
+    const response: unknown = await ipcRenderer.invoke(PREFERENCES_GET_MODEL_DISPLAY_CHANNEL)
+    return isModelDisplayResult(response) ? response : invalidModelDisplayResponse()
+  },
+
+  async setModelDisplay(preference: ModelDisplayPreference): Promise<ModelDisplayResult> {
+    // 只搬运已声明的字段，并重建普通对象与数组，避免响应式代理跨 contextBridge。
+    const payload: ModelDisplayPreference = {
+      hiddenModels: preference.hiddenModels.map((model) => ({ provider: model.provider, modelId: model.modelId }))
+    }
+    const response: unknown = await ipcRenderer.invoke(PREFERENCES_SET_MODEL_DISPLAY_CHANNEL, payload)
+    return isModelDisplayResult(response) ? response : invalidModelDisplayResponse()
   },
 
   async setUiPreferences(ui: UiPreferences) {

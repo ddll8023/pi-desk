@@ -1,4 +1,4 @@
-<!-- 顶栏模型选择器：启动前选择并保存桌面新会话默认模型；就绪后只切换当前会话，以 Runtime 状态为准。 -->
+<!-- 顶栏模型选择器：启动前选择并保存桌面新会话默认模型；就绪后只切换当前会话，以 Runtime 状态为准；候选项排除设置中隐藏的模型。 -->
 <script setup lang="ts">
 import { computed } from 'vue'
 import { storeToRefs } from 'pinia'
@@ -13,7 +13,8 @@ const sessionStore = useSessionStore()
 const projectStore = useProjectStore()
 const {
   view, capabilitiesView, modelSwitchView, promptView,
-  modelPreviewView, modelPreferenceView, modelPreferenceLoaded, newSessionModel
+  modelPreviewView, modelPreferenceView, modelPreferenceLoaded, newSessionModel,
+  availableModels, visibleModels
 } = storeToRefs(runtimeStore)
 const FOLLOW_PI_DEFAULT = 'pi-default'
 const ready = computed(() => view.value.phase === 'ready')
@@ -24,14 +25,9 @@ const info = computed(() => view.value.phase === 'ready' ? view.value.snapshot.i
 const preview = computed(() => canPrepare.value && modelPreviewView.value.phase === 'ready'
   && modelPreviewView.value.data.projectPath === projectStore.currentProject?.path
   ? modelPreviewView.value.data : null)
-const models = computed(() => {
-  if (view.value.phase === 'ready') {
-    return capabilitiesView.value.phase === 'ready'
-      && capabilitiesView.value.data.runtimeId === view.value.snapshot.runtimeId
-      ? capabilitiesView.value.data.models : []
-  }
-  return preview.value?.models ?? []
-})
+const models = availableModels
+/** 全部候选都被隐藏；用于区分空态文案。 */
+const allModelsHidden = computed(() => models.value.length > 0 && visibleModels.value.length === 0)
 const identity = computed(() => {
   if (ready.value) {
     return info.value?.modelProvider && info.value.modelId
@@ -89,7 +85,7 @@ const currentIdentity = computed(() => identity.value
 const groups = computed(() => {
   type Option = { value: string; label: string; badge?: string; description?: string; tag?: string }
   const providers = new Map<string, Option[]>()
-  for (const model of models.value) {
+  for (const model of visibleModels.value) {
     const options = providers.get(model.provider) ?? []
     options.push({
       value: modelKey(model.provider, model.id),
@@ -152,7 +148,9 @@ const disabledReason = computed(() => {
   if (promptView.value.phase === 'sending') return 'Prompt 正在提交'
   if (capabilitiesView.value.phase === 'loading' || capabilitiesView.value.phase === 'idle') return '正在读取可用模型…'
   if (capabilitiesError.value !== null) return '模型列表读取失败'
-  if (models.value.length === 0) return '无可用模型，请在设置中配置供应商认证'
+  if (visibleModels.value.length === 0) {
+    return allModelsHidden.value ? '所有模型已在设置中隐藏' : '无可用模型，请在设置中配置供应商认证'
+  }
   return null
 })
 const progress = computed(() => {
@@ -161,12 +159,16 @@ const progress = computed(() => {
     if (modelPreferenceView.value.phase === 'saving') return '正在保存新会话默认模型…'
     if (modelPreferenceView.value.phase === 'loading') return '正在读取模型偏好…'
     if (modelPreviewView.value.phase === 'loading') return '正在读取模型…'
-    if (preview.value !== null && models.value.length === 0) return '无可用模型，请在设置中配置供应商认证'
+    if (preview.value !== null && visibleModels.value.length === 0) {
+      return allModelsHidden.value ? '所有模型已在设置中隐藏' : '无可用模型，请在设置中配置供应商认证'
+    }
     return null
   }
   if (ready.value && capabilitiesView.value.phase === 'loading') return '正在读取模型…'
-  if (ready.value && capabilitiesError.value === null && models.value.length === 0
-    && capabilitiesView.value.phase === 'ready') return '无可用模型，请在设置中配置供应商认证'
+  if (ready.value && capabilitiesError.value === null && visibleModels.value.length === 0
+    && capabilitiesView.value.phase === 'ready') {
+    return allModelsHidden.value ? '所有模型已在设置中隐藏' : '无可用模型，请在设置中配置供应商认证'
+  }
   return null
 })
 const canRetry = computed(() => ready.value && capabilitiesError.value !== null

@@ -10,10 +10,12 @@ import {
   PREFERENCES_GET_CHANNEL,
   PREFERENCES_SET_UI_CHANNEL,
   PREFERENCES_GET_MODEL_CHANNEL,
-  PREFERENCES_SET_MODEL_CHANNEL
+  PREFERENCES_SET_MODEL_CHANNEL,
+  PREFERENCES_GET_MODEL_DISPLAY_CHANNEL,
+  PREFERENCES_SET_MODEL_DISPLAY_CHANNEL
 } from '../shared/preferences-api'
-import type { ModelPreferenceResult, PreferencesErrorCode, PreferencesResult } from '../shared/preferences-api'
-import { isUiTheme } from '../shared/preferences-api'
+import type { ModelDisplayResult, ModelPreferenceResult, PreferencesErrorCode, PreferencesResult } from '../shared/preferences-api'
+import { isModelDisplayPreference, isUiTheme } from '../shared/preferences-api'
 import type { UiTheme } from '../shared/preferences-api'
 import {
   PROJECT_ADD_CHANNEL,
@@ -1219,7 +1221,7 @@ function registerRuntimeHandlers(pageUrl: string): void {
   )
 }
 
-/** 界面偏好与新会话模型分开读写；未知字段、任意启动参数一律拒绝。 */
+/** 界面偏好、新会话模型与对话页模型展示偏好分开读写；未知字段、任意启动参数一律拒绝。 */
 function registerPreferencesHandlers(pageUrl: string): void {
   handle(
     PREFERENCES_GET_MODEL_CHANNEL,
@@ -1243,6 +1245,30 @@ function registerPreferencesHandlers(pageUrl: string): void {
         return { ok: false, error: { code: 'INVALID_REQUEST', message: '新会话默认模型必须是合法模型身份或 null。' } }
       }
       return preferencesManager.setNewSessionModel(args[0])
+    }
+  )
+  handle(
+    PREFERENCES_GET_MODEL_DISPLAY_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<ModelDisplayResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return { ok: false, error: { code: 'FORBIDDEN', message: '不允许此页面调用桌面接口。' } }
+      }
+      if (args.length !== 0) {
+        return { ok: false, error: { code: 'INVALID_REQUEST', message: '对话页模型展示偏好读取接口不接受参数。' } }
+      }
+      return preferencesManager.getModelDisplay()
+    }
+  )
+  handle(
+    PREFERENCES_SET_MODEL_DISPLAY_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<ModelDisplayResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return { ok: false, error: { code: 'FORBIDDEN', message: '不允许此页面调用桌面接口。' } }
+      }
+      if (args.length !== 1 || !isModelDisplayPreference(args[0])) {
+        return { ok: false, error: { code: 'INVALID_REQUEST', message: '对话页模型展示偏好必须是隐藏模型的列表。' } }
+      }
+      return preferencesManager.setModelDisplay(args[0])
     }
   )
   handle(

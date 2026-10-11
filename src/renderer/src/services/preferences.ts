@@ -1,5 +1,5 @@
-/** 封装界面偏好与桌面新会话默认模型读写，重建普通载荷并保留桥接失败原因。 */
-import type { ModelPreferenceResult, PreferencesError, PreferencesResult, UiPreferences } from '../../../shared/preferences-api'
+/** 封装界面偏好、桌面新会话默认模型与对话页模型展示偏好读写，重建普通载荷并保留桥接失败原因。 */
+import type { ModelDisplayPreference, ModelDisplayResult, ModelPreferenceResult, PreferencesError, PreferencesResult, UiPreferences } from '../../../shared/preferences-api'
 import type { ModelIdentity } from '../../../shared/runtime-api'
 
 function unavailable(): { ok: false; error: PreferencesError } {
@@ -63,6 +63,30 @@ export async function setUiPreferences(ui: UiPreferences): Promise<PreferencesRe
     return await bridge.setUiPreferences({
       sidebarCollapsed: ui.sidebarCollapsed,
       theme: ui.theme
+    })
+  } catch (error) {
+    return callFailed(error)
+  }
+}
+
+/** 读取对话页模型展示偏好；失败时不应用任何过滤。 */
+export async function getModelDisplay(): Promise<ModelDisplayResult> {
+  const bridge = window.desktop
+  if (!bridge || typeof bridge.getModelDisplay !== 'function') return unavailable()
+  try {
+    return await bridge.getModelDisplay()
+  } catch (error) {
+    return callFailed(error)
+  }
+}
+
+/** 保存对话页模型展示偏好；只搬运已声明的字段。 */
+export async function setModelDisplay(preference: ModelDisplayPreference): Promise<ModelDisplayResult> {
+  const bridge = window.desktop
+  if (!bridge || typeof bridge.setModelDisplay !== 'function') return unavailable()
+  try {
+    return await bridge.setModelDisplay({
+      hiddenModels: preference.hiddenModels.map((model) => ({ provider: model.provider, modelId: model.modelId }))
     })
   } catch (error) {
     return callFailed(error)

@@ -1,14 +1,15 @@
-<!-- 设置页：外观常驻首页，Pi 资源与 Provider 认证作为同级子页切换；偏好统一交给 store 保存，子页读写各自负责。 -->
+<!-- 设置页：外观常驻首页，对话页模型、Pi 资源与 Provider 认证作为同级子页切换；偏好统一交给 store 保存，子页读写各自负责。 -->
 <script setup lang="ts">
 import { ref } from 'vue'
 import { storeToRefs } from 'pinia'
 import { usePreferencesStore } from '../stores/preferences'
 import AppButton from './ui/AppButton.vue'
 import AuthView from './AuthView.vue'
+import ModelDisplayView from './ModelDisplayView.vue'
 import ResourceView from './ResourceView.vue'
 
-/** 设置页的三个平级区域；外观是首页，另外两个是全宽子页。 */
-type SettingsSection = 'appearance' | 'resources' | 'auth'
+/** 设置页的四个平级区域；外观是首页，其他三个是全宽子页。 */
+type SettingsSection = 'appearance' | 'resources' | 'auth' | 'models'
 
 const preferencesStore = usePreferencesStore()
 const { theme } = storeToRefs(preferencesStore)
@@ -35,7 +36,7 @@ function backToAppearance(): void {
       <template v-if="section === 'appearance'">
         <header class="settings-page-header">
           <h1 class="text-xl font-semibold tracking-tight">设置</h1>
-          <p class="mt-1 text-sm text-desk-muted">管理外观、Pi 资源与 Provider 认证。</p>
+          <p class="mt-1 text-sm text-desk-muted">管理外观、对话页模型、Pi 资源与 Provider 认证。</p>
         </header>
 
         <section class="settings-section" aria-labelledby="settings-appearance-title">
@@ -65,6 +66,24 @@ function backToAppearance(): void {
           <p v-if="preferencesStore.actionError" role="alert" class="mt-3 text-xs text-desk-danger">
             {{ preferencesStore.actionError.message }}
           </p>
+        </section>
+
+        <section class="settings-section" aria-labelledby="settings-models-title">
+          <div class="settings-section-heading">
+            <div>
+              <h2 id="settings-models-title" class="settings-section-title">对话页模型</h2>
+              <p class="mt-1 text-xs text-desk-muted">选择哪些供应商的模型出现在顶栏的模型切换器里。</p>
+            </div>
+          </div>
+          <div class="settings-row">
+            <div class="min-w-0">
+              <p class="text-sm font-medium">供应商展示</p>
+              <p class="mt-0.5 text-xs text-desk-muted">
+                默认显示全部供应商；隐藏只影响顶栏切换器，不改变 Pi 的认证与模型配置。
+              </p>
+            </div>
+            <AppButton variant="compact" @click="openSection('models')">管理展示</AppButton>
+          </div>
         </section>
 
         <section class="settings-section" aria-labelledby="settings-pi-title">
@@ -101,7 +120,8 @@ function backToAppearance(): void {
           ← 返回设置
         </AppButton>
         <ResourceView v-if="section === 'resources'" />
-        <AuthView v-else />
+        <AuthView v-else-if="section === 'auth'" />
+        <ModelDisplayView v-else />
       </template>
     </div>
   </section>

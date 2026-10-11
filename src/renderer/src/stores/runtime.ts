@@ -1,11 +1,12 @@
-/** 保存 Runtime、聊天投影、对话回退、模型选择状态；不持有进程所有权，不写 Pi 配置或项目文件。 */
+/** 保存 Runtime、聊天投影、对话回退、模型选择与展示偏好状态；不持有进程所有权，不写 Pi 配置或项目文件。 */
 import { defineStore } from 'pinia'
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import type { WatchStopHandle } from 'vue'
-import type { ModelPreferenceResult } from '../../../shared/preferences-api'
+import type { ModelDisplayPreference, ModelPreferenceResult, PreferencesError } from '../../../shared/preferences-api'
 import type {
   AgentCapabilities,
   ModelIdentity,
+  ModelSummary,
   PiResourcePreview,
   ProjectionBatch,
   ProjectionBlock,
@@ -22,7 +23,7 @@ import { useTrustStore } from './trust'
 import { useProjectStore } from './project'
 import { useAuthStore } from './auth'
 import { getResourcePreview } from '../services/resource'
-import { getNewSessionModel, setNewSessionModel } from '../services/preferences'
+import { getModelDisplay, getNewSessionModel, setModelDisplay, setNewSessionModel } from '../services/preferences'
 import {
   abortRuntime,
   ackRuntimeProjection,
@@ -94,6 +95,14 @@ type ModelPreferenceViewState =
   | { phase: 'ready' }
   | { phase: 'saving' }
   | { phase: 'error'; error: RuntimeError }
+
+/** 对话页模型展示偏好的读取与保存状态；保存成功后才提交选择。 */
+type ModelDisplayViewState =
+  | { phase: 'idle' }
+  | { phase: 'loading' }
+  | { phase: 'ready' }
+  | { phase: 'saving' }
+  | { phase: 'error'; error: PreferencesError }
 
 /** 块级幂等替换；新块按 contentIndex 顺序插入。 */
 function replaceBlock(blocks: readonly ProjectionBlock[], block: ProjectionBlock): ProjectionBlock[] {
@@ -189,6 +198,12 @@ export const useRuntimeStore = defineStore('runtime', () => {
   let modelLifecycle = 0
   let modelPreferencePromise: Promise<void> | null = null
   let modelSavePromise: Promise<void> | null = null
+  const hiddenModels = ref<readonly ModelIdentity[]>([])
+  const modelDisplayLoaded = ref(false)
+  const modelDisplayView = ref<ModelDisplayViewState>({ phase: 'idle' })
+  let modelDisplayRequest = 0
+  let modelDisplayPromise: Promise<void> | null = null
+  let modelDisplaySavePromise: Promise<void> | null = null
   let modelPreviewRequest = 0
   let modelPreviewAttemptedPath: string | null = null
   let stopProjectWatch: WatchStopHandle | null = null
@@ -228,6 +243,7 @@ export const useRuntimeStore = defineStore('runtime', () => {
         })
     }
     void loadModelPreference()
+    void loadModelDisplay()
     const result = await getRuntimeStatus()
     if (result.ok) applyStatus(result.data)
     refreshModelPreviewIfNeeded()
@@ -255,6 +271,12 @@ export const useRuntimeStore = defineStore('runtime', () => {
     modelPreferenceView.value = { phase: 'idle' }
     modelPreferencePromise = null
     modelSavePromise = null
+    modelDisplayRequest += 1
+    hiddenModels.value = []
+    modelDisplayLoaded.value = false
+    modelDisplayView.value = { phase: 'idle' }
+    modelDisplayPromise = null
+    modelDisplaySavePromise = null
     modelSwitchRequest += 1
     capabilitiesRequest += 1
     modelSwitchView.value = { phase: 'idle' }
@@ -264,6 +286,29 @@ export const useRuntimeStore = defineStore('runtime', () => {
   function canPreviewModels(): boolean {
     return view.value.phase === 'idle' || view.value.phase === 'closed' || view.value.phase === 'failed'
   }
+
+  /**
+   * 当前可见的模型来源：就绪时取 Runtime 能力，未启动时取主进程预读；
+   * 两处都会按 Runtime 代际或项目路径丢弃过期结果。模型选择器与设置子页共用这一份。
+   */
+  const availableModels = computed<readonly ModelSummary[]>(() => {
+    if (view.value.phase === 'ready') {
+      return capabilitiesView.value.phase === 'ready'
+        && capabilitiesView.value.data.runtimeId === view.value.snapshot.runtimeId
+        ? capabilitiesView.value.data.models : []
+    }
+    if (!canPreviewModels()) return []
+    return modelPreviewView.value.phase === 'ready'
+      && modelPreviewView.value.data.projectPath === useProjectStore().currentProject?.path
+      ? modelPreviewView.value.data.models : []
+  })
+
+  /** 顶栏切换器的候选项：排除在设置中隐藏的模型。 */
+  const visibleModels = computed<readonly ModelSummary[]>(() => (
+    availableModels.value.filter((model) => !hiddenModels.value.some((hidden) => (
+      hidden.provider === model.provider && hidden.modelId === model.id
+    )))
+  ))
 
   /** 离开预读阶段或切换项目时使迟到结果失效。 */
   function clearModelPreview(): void {
@@ -366,6 +411,72 @@ export const useRuntimeStore = defineStore('runtime', () => {
       return { ok: false, error: { code: 'INTERNAL_ERROR', message: '新会话默认模型尚未读取完成。' } }
     }
     return { ok: true, data: newSessionModel.value === null ? null : { ...newSessionModel.value } }
+  }
+
+  /** 展示偏好只读一次；失败可显式重读，保存中不让读请求覆盖用户的新选择。 */
+  async function loadModelDisplay(force = false): Promise<void> {
+    const lifecycle = modelLifecycle
+    if (modelDisplaySavePromise !== null) await modelDisplaySavePromise
+    if (lifecycle !== modelLifecycle) return
+    if (modelDisplayPromise !== null) return modelDisplayPromise
+    if (modelDisplayLoaded.value && !force) return
+    const request = ++modelDisplayRequest
+    modelDisplayView.value = { phase: 'loading' }
+    const promise = (async () => {
+      const result = await getModelDisplay()
+      if (request !== modelDisplayRequest) return
+      if (!result.ok) {
+        modelDisplayView.value = { phase: 'error', error: result.error }
+        return
+      }
+      hiddenModels.value = result.data.hiddenModels.map((model) => ({ provider: model.provider, modelId: model.modelId }))
+      modelDisplayLoaded.value = true
+      modelDisplayView.value = { phase: 'ready' }
+    })()
+    modelDisplayPromise = promise
+    try { await promise } finally {
+      if (request === modelDisplayRequest) modelDisplayPromise = null
+    }
+  }
+
+  /** 保存成功后才更新展示偏好；失败保留原值并暴露错误，不乐观改写。 */
+  async function saveModelDisplay(preference: ModelDisplayPreference): Promise<void> {
+    if (!modelDisplayLoaded.value || modelDisplayView.value.phase === 'loading'
+      || modelDisplayView.value.phase === 'saving') return
+    const request = ++modelDisplayRequest
+    modelDisplayView.value = { phase: 'saving' }
+    const promise = (async () => {
+      const result = await setModelDisplay(preference)
+      if (request !== modelDisplayRequest) return
+      if (!result.ok) {
+        modelDisplayView.value = { phase: 'error', error: result.error }
+        return
+      }
+      hiddenModels.value = result.data.hiddenModels.map((model) => ({ provider: model.provider, modelId: model.modelId }))
+      modelDisplayView.value = { phase: 'ready' }
+    })()
+    modelDisplaySavePromise = promise
+    try { await promise } finally {
+      if (request === modelDisplayRequest) modelDisplaySavePromise = null
+    }
+  }
+
+  /**
+   * 批量设置一组模型在对话页的可见性：`visible` 为真时从隐藏列表移除，为假时全部加入。
+   * 单个模型开关与供应商级的全选/全不选共用这一入口。
+   */
+  function setModelsVisibility(models: readonly ModelIdentity[], visible: boolean): void {
+    const target = new Set(models.map((model) => `${model.provider}\u0000${model.modelId}`))
+    const kept = hiddenModels.value.filter((hidden) => !target.has(`${hidden.provider}\u0000${hidden.modelId}`))
+    const next = visible
+      ? kept
+      : [...kept, ...models.map((model) => ({ provider: model.provider, modelId: model.modelId }))]
+    void saveModelDisplay({ hiddenModels: next })
+  }
+
+  /** 恢复为全部显示；清空隐藏列表并保存。 */
+  function showAllModels(): void {
+    void saveModelDisplay({ hiddenModels: [] })
   }
 
   /** 启动唯一 Runtime；启动、就绪或关闭中都不重复发起。当前界面不调用它，启动统一走打开或新建会话。 */
@@ -713,6 +824,11 @@ export const useRuntimeStore = defineStore('runtime', () => {
     modelPreferenceView,
     newSessionModel,
     modelPreferenceLoaded,
+    hiddenModels,
+    modelDisplayLoaded,
+    modelDisplayView,
+    availableModels,
+    visibleModels,
     messages,
     tools,
     projectionSync,
@@ -730,6 +846,10 @@ export const useRuntimeStore = defineStore('runtime', () => {
     loadModelPreference,
     chooseNewSessionModel,
     prepareNewSessionModel,
+    loadModelDisplay,
+    saveModelDisplay,
+    setModelsVisibility,
+    showAllModels,
     stopOperation,
     refreshCapabilities
   }
