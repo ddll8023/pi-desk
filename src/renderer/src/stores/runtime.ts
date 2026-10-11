@@ -205,7 +205,8 @@ export const useRuntimeStore = defineStore('runtime', () => {
   let modelDisplayPromise: Promise<void> | null = null
   let modelDisplaySavePromise: Promise<void> | null = null
   let modelPreviewRequest = 0
-  let modelPreviewAttemptedPath: string | null = null
+  /** 已发起过预读的范围；undefined 表示尚未发起。 */
+  let modelPreviewAttemptedScope: string | undefined
   let stopProjectWatch: WatchStopHandle | null = null
   let stopAuthWatch: WatchStopHandle | null = null
   let modelSwitchRequest = 0
@@ -228,10 +229,14 @@ export const useRuntimeStore = defineStore('runtime', () => {
       releaseProjection = subscribeRuntimeProjection(applyBatch)
     }
     if (stopProjectWatch === null) {
-      stopProjectWatch = watch(() => useProjectStore().currentProject?.path ?? null, () => {
-        clearModelPreview()
-        void refreshModelPreview()
-      })
+      // 项目列表读完但没有当前项目时也要探测一次全局目录，因此把列表状态一并作为触发条件。
+      stopProjectWatch = watch(
+        () => [useProjectStore().currentProject?.path ?? null, useProjectStore().view.phase] as const,
+        () => {
+          clearModelPreview()
+          void refreshModelPreview()
+        }
+      )
     }
     if (stopAuthWatch === null) {
       const auth = useAuthStore()
@@ -288,8 +293,16 @@ export const useRuntimeStore = defineStore('runtime', () => {
   }
 
   /**
+   * 预读范围标记：已选项目用项目路径，未选项目统一用全局标记（项目路径均为绝对路径，不会与之相同）。
+   * 结果与“是否已发起过预读”的判重都按这个标记，避免未选项目时反复探测。
+   */
+  function modelPreviewScope(projectPath: string | null): string {
+    return projectPath ?? '__global__'
+  }
+
+  /**
    * 当前可见的模型来源：就绪时取 Runtime 能力，未启动时取主进程预读；
-   * 两处都会按 Runtime 代际或项目路径丢弃过期结果。模型选择器与设置子页共用这一份。
+   * 两处都会按 Runtime 代际或预读范围丢弃过期结果。模型选择器与设置子页共用这一份。
    */
   const availableModels = computed<readonly ModelSummary[]>(() => {
     if (view.value.phase === 'ready') {
@@ -299,7 +312,7 @@ export const useRuntimeStore = defineStore('runtime', () => {
     }
     if (!canPreviewModels()) return []
     return modelPreviewView.value.phase === 'ready'
-      && modelPreviewView.value.data.projectPath === useProjectStore().currentProject?.path
+      && modelPreviewView.value.data.projectPath === (useProjectStore().currentProject?.path ?? null)
       ? modelPreviewView.value.data.models : []
   })
 
@@ -313,38 +326,38 @@ export const useRuntimeStore = defineStore('runtime', () => {
   /** 离开预读阶段或切换项目时使迟到结果失效。 */
   function clearModelPreview(): void {
     modelPreviewRequest += 1
-    modelPreviewAttemptedPath = null
+    modelPreviewAttemptedScope = undefined
     modelPreviewView.value = { phase: 'idle' }
   }
 
-  /** 状态广播只为尚未读过的项目发起一次，错误不因广播自动重试。 */
+  /** 状态广播只为尚未读过的范围发起一次，错误不因广播自动重试。 */
   function refreshModelPreviewIfNeeded(): void {
     const path = useProjectStore().currentProject?.path ?? null
-    if (canPreviewModels() && path !== null && path !== modelPreviewAttemptedPath) void refreshModelPreview()
+    if (canPreviewModels() && modelPreviewScope(path) !== modelPreviewAttemptedScope) void refreshModelPreview()
   }
 
-  /** 资源与模型共用主进程的一次性预读；项目或 Runtime 改变后丢弃结果。 */
+  /** 资源与模型共用主进程的一次性预读；项目或 Runtime 改变后丢弃结果。未选项目时读全局模型目录。 */
   async function refreshModelPreview(force = false): Promise<void> {
     if (!canPreviewModels()) return
-    const projectPath = useProjectStore().currentProject?.path ?? null
-    if (projectPath === null) {
-      clearModelPreview()
-      return
-    }
-    if (!force && modelPreviewAttemptedPath === projectPath && modelPreviewView.value.phase === 'loading') return
+    const projectStore = useProjectStore()
+    const projectPath = projectStore.currentProject?.path ?? null
+    // 项目列表还没读完时先不探测：否则会先做一次全局探测，随后又为真实项目重做一次。
+    if (projectPath === null && projectStore.view.phase === 'loading') return
+    const scope = modelPreviewScope(projectPath)
+    if (!force && modelPreviewAttemptedScope === scope && modelPreviewView.value.phase === 'loading') return
     const request = ++modelPreviewRequest
-    modelPreviewAttemptedPath = projectPath
+    modelPreviewAttemptedScope = scope
     modelPreviewView.value = { phase: 'loading' }
     const result = await getResourcePreview(force)
     if (request !== modelPreviewRequest || !canPreviewModels()
-      || useProjectStore().currentProject?.path !== projectPath) return
+      || (projectStore.currentProject?.path ?? null) !== projectPath) return
     if (!result.ok) {
       modelPreviewView.value = { phase: 'error', error: result.error }
       return
     }
     if (result.data.projectPath !== projectPath) {
       modelPreviewView.value = {
-        phase: 'error', error: { code: 'INVALID_RESPONSE', message: '模型预读返回了其他项目的结果，未应用。' }
+        phase: 'error', error: { code: 'INVALID_RESPONSE', message: '模型预读返回了其他范围的结果，未应用。' }
       }
       return
     }
@@ -377,12 +390,16 @@ export const useRuntimeStore = defineStore('runtime', () => {
     }
   }
 
-  /** 只保存目录中的真实身份，成功后再更新选择；空值用于恢复跟随 Pi 默认。 */
+  /**
+   * 只保存候选目录中的真实身份，成功后再更新选择；空值用于恢复跟随 Pi 默认。
+   * Runtime 就绪时也能调用：此时候选来自 Runtime 能力，设置默认与当前会话模型互不影响。
+   */
   async function chooseNewSessionModel(model: ModelIdentity | null): Promise<void> {
-    if (!canPreviewModels() || !modelPreferenceLoaded.value
+    if ((!canPreviewModels() && view.value.phase !== 'ready') || !modelPreferenceLoaded.value
       || modelPreferenceView.value.phase === 'loading' || modelPreferenceView.value.phase === 'saving') return
-    if (model !== null && (modelPreviewView.value.phase !== 'ready'
-      || !modelPreviewView.value.data.models.some(candidate => candidate.provider === model.provider && candidate.id === model.modelId))) return
+    if (model !== null && !availableModels.value.some(candidate => (
+      candidate.provider === model.provider && candidate.id === model.modelId
+    ))) return
     const request = ++modelPreferenceRequest
     modelPreferenceView.value = { phase: 'saving' }
     const promise = (async () => {
@@ -745,7 +762,7 @@ export const useRuntimeStore = defineStore('runtime', () => {
       modelSwitchView.value = { phase: 'idle' }
     }
     if (status.state === 'starting' || status.state === 'stopping' || status.state === 'ready') {
-      if (modelPreviewView.value.phase !== 'idle' || modelPreviewAttemptedPath !== null) clearModelPreview()
+      if (modelPreviewView.value.phase !== 'idle' || modelPreviewAttemptedScope !== undefined) clearModelPreview()
     }
     if (status.state !== 'ready') {
       resetProjection()

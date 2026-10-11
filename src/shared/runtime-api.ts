@@ -409,11 +409,12 @@ export type ResourcesResult =
 
 /**
  * Runtime 未启动时的资源预读结果。`projectPath` 是主进程实际探测的项目，页面据此丢弃已切换项目的结果；
+ * 未选项目时为 null，表示按全局范围只预读了模型与默认身份（此时 `entries` 恒为空）。
  * 资源、模型与默认身份分别来自 `get_commands`、`get_available_models` 和 `get_state`。
  * 预读不加载 Extension、不连接 MCP，不保证与运行中的 Runtime 完全一致；各项错误独立展示。
  */
 export interface PiResourcePreview {
-  readonly projectPath: string
+  readonly projectPath: string | null
   readonly entries: readonly PiResourceEntry[]
   /** 资源读取错误；非空时 entries 为空，但不影响其他预读结果。 */
   readonly entriesError: string | null
@@ -940,16 +941,17 @@ export function isResourcesResult(value: unknown): value is ResourcesResult {
   return isRuntimeErrorResult(value)
 }
 
-/** 预读结果跨进程校验：项目路径非空，条目复用资源条目校验，失败形状与其余 Runtime 结果一致。 */
+/** 预读结果跨进程校验：项目路径非空或为 null（全局范围），条目复用资源条目校验，失败形状与其余 Runtime 结果一致。 */
 export function isResourcePreviewResult(value: unknown): value is ResourcePreviewResult {
   if (!isRecord(value)) return false
 
   if (value.ok === true) {
     const data = value.data
     return isRecord(data)
-      && typeof data.projectPath === 'string'
-      && data.projectPath !== ''
+      && (data.projectPath === null || (typeof data.projectPath === 'string' && data.projectPath !== ''))
       && Array.isArray(data.entries)
+      // 全局范围不返回项目资源，避免把中立目录下的清单当成某个项目的资源。
+      && (data.projectPath !== null || (data.entries.length === 0 && data.entriesError === null))
       && data.entries.every(isPiResourceEntry)
       && isNullableString(data.entriesError)
       && (data.entriesError === null || data.entries.length === 0)

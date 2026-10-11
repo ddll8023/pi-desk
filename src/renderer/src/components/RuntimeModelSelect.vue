@@ -1,4 +1,4 @@
-<!-- 顶栏模型选择器：启动前选择并保存桌面新会话默认模型；就绪后只切换当前会话，以 Runtime 状态为准；候选项排除设置中隐藏的模型。 -->
+<!-- 顶栏模型选择器：未选项目时也读全局模型目录；选中即记为桌面新会话默认，Pi 就绪时同时切换当前会话；候选项排除设置中隐藏的模型。 -->
 <script setup lang="ts">
 import { computed } from 'vue'
 import { storeToRefs } from 'pinia'
@@ -23,7 +23,7 @@ const canPrepare = computed(() => (
 ))
 const info = computed(() => view.value.phase === 'ready' ? view.value.snapshot.info : null)
 const preview = computed(() => canPrepare.value && modelPreviewView.value.phase === 'ready'
-  && modelPreviewView.value.data.projectPath === projectStore.currentProject?.path
+  && modelPreviewView.value.data.projectPath === (projectStore.currentProject?.path ?? null)
   ? modelPreviewView.value.data : null)
 const models = availableModels
 /** 全部候选都被隐藏；用于区分空态文案。 */
@@ -102,18 +102,21 @@ const groups = computed(() => {
     })
     providers.set(model.provider, options)
   }
-  const modelGroups = [...providers].map(([label, options]) => ({ label, options }))
-  if (!canPrepare.value) return modelGroups
   const defaultModel = preview.value?.defaultModel
   const defaultName = models.value.find(model => (
     model.provider === defaultModel?.provider && model.id === defaultModel?.modelId
   ))?.name ?? defaultModel?.modelId
+  // 没有桌面覆盖时这一行就是当前选中项，直接显示 Pi 的默认模型名；有覆盖时它表示「回到 Pi 默认」。
+  const overridden = newSessionModel.value !== null
   return [{
-    label: '新会话默认',
-    options: [{ value: FOLLOW_PI_DEFAULT,
-      label: defaultName ? `${defaultName}（Pi 默认）` : '跟随 Pi 默认',
-      description: '使用 Pi 自己的默认模型，不修改 Pi 配置' }]
-  }, ...modelGroups]
+    options: [{
+      value: FOLLOW_PI_DEFAULT,
+      label: !overridden && defaultName !== undefined ? `${defaultName}（Pi 默认）` : '跟随 Pi 默认',
+      description: overridden && defaultName !== undefined
+        ? `Pi 自身默认：${defaultName}`
+        : '使用 Pi 自己的默认模型，不修改 Pi 配置'
+    }]
+  }, ...[...providers].map(([label, options]) => ({ label, options }))]
 })
 const capabilitiesError = computed(() => {
   if (capabilitiesView.value.phase === 'error') return capabilitiesView.value.error.message
@@ -126,7 +129,11 @@ const unavailableChoice = computed(() => canPrepare.value && preview.value !== n
   ? '保存的模型当前不可用；请重新选择，或跟随 Pi 默认。' : null)
 const error = computed(() => {
   if (ready.value) {
-    return modelSwitchView.value.phase === 'error' ? modelSwitchView.value.error.message : capabilitiesError.value
+    if (modelSwitchView.value.phase === 'error') return modelSwitchView.value.error.message
+    // 模型列表读不出来时优先报它；新会话默认保存失败放在其后，避免被能力错误盖掉。
+    if (capabilitiesError.value !== null) return capabilitiesError.value
+    if (modelPreferenceView.value.phase === 'error') return modelPreferenceView.value.error.message
+    return null
   }
   if (!canPrepare.value) return null
   if (modelPreferenceView.value.phase === 'error') return modelPreferenceView.value.error.message
@@ -137,7 +144,6 @@ const error = computed(() => {
 })
 const sessionChanging = computed(() => sessionStore.opening || sessionStore.awaitingTrust || sessionStore.awaitingInterrupt)
 const disabledReason = computed(() => {
-  if (projectStore.currentProject === null) return '请先选择项目'
   if (sessionChanging.value) return '正在处理会话切换'
   if (!ready.value) {
     if (!canPrepare.value) return 'Pi 正在启动或关闭'
@@ -161,8 +167,8 @@ const disabledReason = computed(() => {
 })
 const progress = computed(() => {
   if (modelSwitchView.value.phase === 'switching') return '正在切换模型…'
+  if (modelPreferenceView.value.phase === 'saving') return '正在保存新会话默认模型…'
   if (canPrepare.value) {
-    if (modelPreferenceView.value.phase === 'saving') return '正在保存新会话默认模型…'
     if (modelPreferenceView.value.phase === 'loading') return '正在读取模型偏好…'
     if (modelPreviewView.value.phase === 'loading') return '正在读取模型…'
     if (preview.value !== null && visibleModels.value.length === 0) {
@@ -183,20 +189,21 @@ const refreshDisabled = computed(() => sessionChanging.value
   || modelPreviewView.value.phase === 'loading'
   || modelPreferenceView.value.phase === 'loading' || modelPreferenceView.value.phase === 'saving')
 const busy = computed(() => modelSwitchView.value.phase === 'switching'
-  || (canPrepare.value && (modelPreviewView.value.phase === 'loading'
-    || modelPreferenceView.value.phase === 'loading' || modelPreferenceView.value.phase === 'saving')))
+  || modelPreferenceView.value.phase === 'loading' || modelPreferenceView.value.phase === 'saving'
+  || (canPrepare.value && modelPreviewView.value.phase === 'loading'))
 
-/** 启动前保存默认选择，就绪后提交会话切换；两者都不乐观伪造当前模型。 */
+/** 选中即生效：记为桌面新会话默认；Pi 就绪时同时切换当前会话，两者都不乐观伪造结果。 */
 function chooseModel(value: string): void {
   if (disabledReason.value !== null) return
-  if (canPrepare.value && value === FOLLOW_PI_DEFAULT) {
-    void runtimeStore.chooseNewSessionModel(null)
+  if (value === FOLLOW_PI_DEFAULT) {
+    // 没有桌面覆盖时无需写回；就绪时这一行与当前会话模型无关。
+    if (newSessionModel.value !== null) void runtimeStore.chooseNewSessionModel(null)
     return
   }
   const model = models.value.find(candidate => modelKey(candidate.provider, candidate.id) === value)
   if (model === undefined) return
-  if (canPrepare.value) void runtimeStore.chooseNewSessionModel({ provider: model.provider, modelId: model.id })
-  else void runtimeStore.switchModel(model.provider, model.id)
+  if (ready.value) void runtimeStore.switchModel(model.provider, model.id)
+  void runtimeStore.chooseNewSessionModel({ provider: model.provider, modelId: model.id })
 }
 
 /** 手动刷新绕过预读缓存，并重新读取模型偏好以解除读写失败状态。 */
@@ -221,7 +228,7 @@ function refreshModels(): void {
         :selected-meta="currentKey ? identity?.provider : undefined"
         :selected-badge="currentKey && identity ? providerBadge(identity.provider) : undefined"
         :disabled="disabledReason !== null"
-        :title="error ? `${currentIdentity}；${error}` : disabledReason ? `${currentIdentity}；${disabledReason}` : `${ready ? '当前会话模型' : '桌面新会话默认模型'}：${currentIdentity}；点击选择`"
+        :title="error ? `${currentIdentity}；${error}` : disabledReason ? `${currentIdentity}；${disabledReason}` : `${ready ? '当前会话模型' : '桌面新会话默认模型'}：${currentIdentity}；点击选择，选中即设为新会话默认`"
         :aria-label="`${ready ? '当前会话模型' : '新会话默认模型'}：${currentIdentity}`"
         :aria-describedby="error ? 'runtime-model-error' : progress ? 'runtime-model-progress' : undefined"
         searchable

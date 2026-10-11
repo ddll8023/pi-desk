@@ -153,7 +153,7 @@ import { ModelsConfigError, ModelsConfigManager } from './models-config-manager'
 import { PreferencesManager } from './preferences-manager'
 import { ProjectFileIndex } from './project-file-index'
 import { ProjectManager } from './project-manager'
-import { ResourcePreviewError, previewProjectResources } from './resource-preview'
+import { ResourcePreviewError, previewGlobalModels, previewProjectResources } from './resource-preview'
 import { RuntimeManager } from './runtime-manager'
 import { SessionManager } from './session-manager'
 import { TrustManager, TrustManagerError } from './trust-manager'
@@ -975,6 +975,7 @@ function registerRuntimeHandlers(pageUrl: string): void {
 
   /**
    * 共享预读只接受一个请求对象：返回资源、可用模型与默认模型及分项错误，单项失败不遮蔽其他结果。
+   * 未选项目时改用中立目录做全局预读，只回模型与默认身份，`projectPath` 为 null，供首页设置默认模型。
    * 项目与信任由主进程决定，页面只能要求绕过缓存；无决定时按未信任探测，不触发信任提示或写记录。
    */
   handle(
@@ -988,10 +989,12 @@ function registerRuntimeHandlers(pageUrl: string): void {
       }
       const { force } = args[0]
       const projectPath = projectManager.currentProjectPath()
-      if (projectPath === null) {
-        return resourcePreviewFailure('INVALID_REQUEST', '尚未选择项目，无法预读资源清单。')
-      }
       try {
+        if (projectPath === null) {
+          // userData 属于桌面应用自己，没有 .pi 项目配置，适合作为无关项目的探测目录。
+          const preview = await previewGlobalModels(app.getPath('userData'), force)
+          return { ok: true, data: { projectPath: null, ...preview } }
+        }
         const outcome = await trustManager.resolveLaunchDecision(projectPath)
         const trustDecision = outcome.requiresPrompt ? 'untrusted' : outcome.decision
         const preview = await previewProjectResources(projectPath, trustDecision, force)

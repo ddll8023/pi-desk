@@ -4,6 +4,7 @@
  * 不落会话、不加载 Extension、不连接 MCP；模型与资源只作启动前候选，就绪后以 Runtime 为准。
  * 各命令的拒绝、形状错误与超时分别返回，避免模型读取失败挡住技能，或资源失败挡住模型选择。
  * 同项目与信任决定的并发读取合并，强制刷新淘汰旧结果；进程按组终止，不残留子进程。
+ * 未选项目时另有全局预读：用中立目录作 cwd，只取模型与默认身份，不读项目资源。
  */
 import { spawn } from 'node:child_process'
 import type { ChildProcess } from 'node:child_process'
@@ -18,11 +19,22 @@ const PREVIEW_KILL_GRACE_MS = 3_000
 const PREVIEW_MAX_OUTPUT_CHARS = 1_048_576
 const PREVIEW_STDERR_TAIL_CHARS = 600
 const PREVIEW_CACHE_LIMIT = 32
-const PREVIEW_COMMANDS = [
+
+/** 预读命令：id 用于匹配响应，type 是发给 Pi 的 RPC 命令。 */
+type PreviewCommand = { readonly id: string; readonly type: string }
+
+const PREVIEW_COMMANDS: readonly PreviewCommand[] = [
   { id: 'preview-resources', type: 'get_commands' },
   { id: 'preview-models', type: 'get_available_models' },
   { id: 'preview-default-model', type: 'get_state' }
-] as const
+]
+/** 全局范围（未选项目）只需要模型与默认身份，不读项目资源。 */
+const MODEL_PREVIEW_COMMANDS: readonly PreviewCommand[] = [
+  { id: 'preview-models', type: 'get_available_models' },
+  { id: 'preview-default-model', type: 'get_state' }
+]
+/** 全局范围的缓存键；项目路径均为绝对路径，不会与这个字面值相同。 */
+const GLOBAL_PREVIEW_KEY = '__global__'
 
 type PreviewSnapshot = Omit<PiResourcePreview, 'projectPath'>
 
@@ -36,23 +48,22 @@ export class ResourcePreviewError extends Error {
 const previewCache = new Map<string, PreviewSnapshot>()
 const inFlight = new Map<string, Promise<PreviewSnapshot>>()
 
-/** 同一项目与信任决定共用一次读取；只缓存全部成功的结果，强制刷新不能被旧探测覆盖。 */
-export async function previewProjectResources(
-  projectPath: string,
-  trustDecision: 'trusted' | 'untrusted' | null,
-  force = false
+/** 两种范围共用同一份缓存与并发合并；只有全部命令成功的结果才进缓存。 */
+function runCachedPreview(
+  key: string,
+  probe: () => Promise<PreviewSnapshot>,
+  force: boolean
 ): Promise<PreviewSnapshot> {
-  const key = `${projectPath}\n${trustDecision ?? 'default'}`
   if (force) previewCache.delete(key)
   else {
     const cached = previewCache.get(key)
-    if (cached !== undefined) return cached
+    if (cached !== undefined) return Promise.resolve(cached)
   }
   const pending = inFlight.get(key)
   // 强制刷新可能来自刚完成的认证，不能复用认证改变之前已经开始的探测。
   if (pending !== undefined && !force) return pending
 
-  const promise: Promise<PreviewSnapshot> = runPreviewProbe(projectPath, trustDecision).then((snapshot) => {
+  const promise: Promise<PreviewSnapshot> = probe().then((snapshot) => {
     if (inFlight.get(key) === promise
       && snapshot.entriesError === null && snapshot.modelsError === null && snapshot.defaultModelError === null) {
       if (previewCache.size >= PREVIEW_CACHE_LIMIT) previewCache.clear()
@@ -64,6 +75,31 @@ export async function previewProjectResources(
   })
   inFlight.set(key, promise)
   return promise
+}
+
+/** 同一项目与信任决定共用一次读取；只缓存全部成功的结果，强制刷新不能被旧探测覆盖。 */
+export async function previewProjectResources(
+  projectPath: string,
+  trustDecision: 'trusted' | 'untrusted' | null,
+  force = false
+): Promise<PreviewSnapshot> {
+  return runCachedPreview(
+    `${projectPath}\n${trustDecision ?? 'default'}`,
+    () => runPreviewProbe(projectPath, trustDecision, PREVIEW_COMMANDS),
+    force
+  )
+}
+
+/**
+ * 未选项目时的全局预读：模型目录来自 Pi 的 agent 目录，与工作目录无关，
+ * 因此用调用方给的中立目录作 cwd，并固定按未信任探测，不触发信任提示。
+ */
+export async function previewGlobalModels(neutralDir: string, force = false): Promise<PreviewSnapshot> {
+  return runCachedPreview(
+    GLOBAL_PREVIEW_KEY,
+    () => runPreviewProbe(neutralDir, 'untrusted', MODEL_PREVIEW_COMMANDS),
+    force
+  )
 }
 
 /** 只终止本次创建的探测进程树，不按进程名清理其他 Pi。 */
@@ -98,16 +134,17 @@ function previewLaunchArguments(trustDecision: 'trusted' | 'untrusted' | null): 
   return args
 }
 
-/** 三个固定请求共享进程；命令级错误不影响其他已取得的结果。 */
+/** 一组固定请求共享进程；命令级错误不影响其他已取得的结果。 */
 function runPreviewProbe(
-  projectPath: string,
-  trustDecision: 'trusted' | 'untrusted' | null
+  workingDirectory: string,
+  trustDecision: 'trusted' | 'untrusted' | null,
+  commands: readonly PreviewCommand[]
 ): Promise<PreviewSnapshot> {
   return new Promise((resolve, reject) => {
     let child: ChildProcess
     try {
       child = spawn(getPiExecutablePath(), previewLaunchArguments(trustDecision), {
-        cwd: projectPath,
+        cwd: workingDirectory,
         env: { ...process.env, PI_SKIP_VERSION_CHECK: '1' },
         stdio: ['pipe', 'pipe', 'pipe'],
         detached: process.platform !== 'win32',
@@ -122,7 +159,7 @@ function runPreviewProbe(
     const stdoutDecoder = new StringDecoder('utf8')
     const stderrDecoder = new StringDecoder('utf8')
     child.stdin?.on('error', () => {})
-    const pending = new Map<string, string>(PREVIEW_COMMANDS.map(command => [command.id, command.type]))
+    const pending = new Map<string, string>(commands.map(command => [command.id, command.type]))
     let snapshot: PreviewSnapshot = {
       entries: [], entriesError: null,
       models: [], modelsError: null,
@@ -240,7 +277,7 @@ function runPreviewProbe(
         : `预读进程提前退出（退出码 ${code}）${detail}`))
     })
     try {
-      for (const command of PREVIEW_COMMANDS) child.stdin?.write(`${JSON.stringify(command)}\n`)
+      for (const command of commands) child.stdin?.write(`${JSON.stringify(command)}\n`)
     } catch (error) {
       fail(new ResourcePreviewError('RUNTIME_SPAWN_FAILED',
         `无法向预读进程写入请求：${error instanceof Error ? error.message : String(error)}`))
