@@ -29,6 +29,8 @@ export interface AnchoredPopupOptions {
   readonly maxHeightCap?: number
   /** 浮层宽度；不传时与触发元素等宽。 */
   readonly width?: number
+  /** 浮层最小宽度；与触发元素等宽但内容更长时取该值，仍受视窗宽度约束。 */
+  readonly minWidth?: number
   /** 横向对齐：`start` 与触发元素左对齐，`end` 与触发元素右对齐。 */
   readonly align?: 'start' | 'end'
   /** 收起时的回调（含点击外部收起），用于让调用方清掉自己的「当前项」。 */
@@ -63,7 +65,10 @@ export function useAnchoredPopup(options: AnchoredPopupOptions = {}) {
     if (element === null) return
 
     const rect = element.getBoundingClientRect()
-    const width = Math.min(options.width ?? rect.width, window.innerWidth - edge * 2)
+    const width = Math.min(
+      Math.max(options.width ?? rect.width, options.minWidth ?? 0),
+      window.innerWidth - edge * 2
+    )
     const availableBelow = window.innerHeight - rect.bottom - gap - edge
     const availableAbove = rect.top - gap - edge
     const placeAbove = availableBelow < flipThreshold && availableAbove > availableBelow

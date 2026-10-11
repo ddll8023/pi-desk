@@ -21,19 +21,51 @@ function modelKey(provider: string, id: string): string {
   return JSON.stringify([provider, id])
 }
 
+/** provider 首字母大写作徽标；空串由调用方保证不出现。 */
+function providerBadge(provider: string): string {
+  const first = [...provider.trim()][0] ?? ''
+  return first.toLocaleUpperCase()
+}
+
+/** 上下文窗口格式化为「200K 上下文」短文案；缺失或过小不显示。 */
+function formatContextWindow(value: number | null): string | undefined {
+  if (value === null || value < 1000) return undefined
+  if (value % 1_000_000 === 0) return `${value / 1_000_000}M 上下文`
+  return `${Math.round(value / 1000)}K 上下文`
+}
+
 const currentKey = computed(() => info.value?.modelProvider && info.value.modelId
   ? modelKey(info.value.modelProvider, info.value.modelId)
   : '')
+const currentModel = computed(() => {
+  if (info.value?.modelProvider == null || info.value.modelId == null) return null
+  return models.value.find(
+    (model) => model.provider === info.value?.modelProvider && model.id === info.value?.modelId
+  ) ?? null
+})
+/** 触发键上的模型名：优先目录显示名，目录未命中时回退模型 ID。 */
 const currentLabel = computed(() => {
+  if (view.value.phase !== 'ready') return 'Pi 未就绪'
+  if (!info.value?.modelId) return '未选择模型'
+  return currentModel.value?.name ?? info.value.modelId
+})
+/** 完整身份串，用于 title 与 aria；页面展示用 currentLabel + provider 分层。 */
+const currentIdentity = computed(() => {
   if (view.value.phase !== 'ready') return 'Pi 未就绪'
   if (!info.value?.modelId) return '未选择模型'
   return info.value.modelProvider ? `${info.value.modelProvider} / ${info.value.modelId}` : info.value.modelId
 })
 const groups = computed(() => {
-  const providers = new Map<string, { value: string; label: string }[]>()
+  const providers = new Map<string, { value: string; label: string; badge: string; description?: string; tag?: string }[]>()
   for (const model of models.value) {
     const options = providers.get(model.provider) ?? []
-    options.push({ value: modelKey(model.provider, model.id), label: `${model.provider} / ${model.id}` })
+    options.push({
+      value: modelKey(model.provider, model.id),
+      label: model.name ?? model.id,
+      badge: providerBadge(model.provider),
+      description: formatContextWindow(model.contextWindow),
+      tag: model.imageInput === true ? '图片' : undefined
+    })
     providers.set(model.provider, options)
   }
   return [...providers].map(([label, options]) => ({ label, options }))
@@ -85,9 +117,11 @@ function chooseModel(value: string): void {
         :groups="groups"
         :model-value="currentKey"
         :empty-label="currentLabel"
+        :selected-meta="info?.modelProvider ?? undefined"
+        :selected-badge="info?.modelProvider ? providerBadge(info.modelProvider) : undefined"
         :disabled="disabledReason !== null"
-        :title="disabledReason ? `${currentLabel}；${disabledReason}` : `当前模型：${currentLabel}；点击切换`"
-        :aria-label="`当前模型：${currentLabel}`"
+        :title="disabledReason ? `${currentIdentity}；${disabledReason}` : `当前模型：${currentIdentity}；点击切换`"
+        :aria-label="`当前模型：${currentIdentity}`"
         :aria-describedby="error ? 'runtime-model-error' : progress ? 'runtime-model-progress' : undefined"
         searchable
         search-placeholder="搜索供应商或模型…"
@@ -115,12 +149,24 @@ function chooseModel(value: string): void {
   font-size: 0.6875rem;
 }
 
+/* 顶栏胶囊触发键：透明底、无描边，悬浮才显形；模型身份与状态由右侧 Runtime 状态 chip 表达。 */
 .runtime-model-control :deep(.app-select-trigger) {
   min-width: 0;
   width: 0;
   flex: 1;
-  padding: 0.35rem 0.55rem;
+  border-color: transparent;
+  border-radius: 999px;
+  background: transparent;
+  padding: 0.3rem 0.7rem;
   font-size: 0.75rem;
+}
+
+.runtime-model-control :deep(.app-select-trigger:not(:disabled):hover) {
+  background: var(--color-desk-surface-subtle);
+}
+
+.runtime-model-control :deep(.app-select-trigger:disabled) {
+  background: transparent;
 }
 
 .runtime-model-error,

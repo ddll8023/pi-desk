@@ -400,7 +400,7 @@ export const useRuntimeStore = defineStore('runtime', () => {
       if (status.runtimeId !== appliedRuntimeId || projectionSync.value !== 'synced') {
         void syncProjection(status.runtimeId ?? undefined)
       }
-      // 新 Runtime 或一轮结束后刷新模型列表，维持 Provider 与图片输入能力提示。
+      // 新 Runtime 或一轮结束后刷新模型列表，维持 Provider、模型显示名与图片输入能力提示。
       if (status.runtimeId !== capabilitiesAttemptedRuntimeId
         || (previousStreaming && status.info?.isStreaming !== true)) {
         void refreshCapabilities()

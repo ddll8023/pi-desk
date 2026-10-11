@@ -261,10 +261,14 @@ export type ProjectionResult =
   | { readonly ok: true; readonly data: ProjectionSnapshot }
   | { readonly ok: false; readonly error: RuntimeError }
 
-/** 可用模型的精简投影；仅保留模型选择、Provider 状态与图片输入判断所需字段。 */
+/** 可用模型的精简投影；仅保留模型选择与展示、Provider 状态与图片输入判断所需字段。 */
 export interface ModelSummary {
   readonly provider: string
   readonly id: string
+  /** 模型显示名；目录未提供时为 null。 */
+  readonly name: string | null
+  /** 上下文窗口大小（token）；目录未提供或形状不符时为 null。 */
+  readonly contextWindow: number | null
   /** 是否支持图片输入；未知时为 null。 */
   readonly imageInput: boolean | null
 }
@@ -771,6 +775,11 @@ function isModelSummary(value: unknown): value is ModelSummary {
     && value.provider !== ''
     && typeof value.id === 'string'
     && value.id !== ''
+    && (value.name === null || (typeof value.name === 'string' && value.name !== ''))
+    && (value.contextWindow === null
+      || (typeof value.contextWindow === 'number'
+        && Number.isFinite(value.contextWindow)
+        && value.contextWindow > 0))
     && (value.imageInput === null || typeof value.imageInput === 'boolean')
 }
 

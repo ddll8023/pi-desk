@@ -116,11 +116,19 @@ export function toModelSummaries(data: unknown): ModelSummary[] | null {
     models.push({
       provider,
       id,
+      // 显示名与上下文窗口来自模型目录；缺失或形状不符时为 null，不猜造。
+      name: readOptionalText(entry.name),
+      contextWindow: readContextWindow(entry.contextWindow),
       // 模型目录的 input 字段描述支持的输入模态；缺失时不猜造。
       imageInput: readImageInput(entry.input)
     })
   }
   return models
+}
+
+/** 正有限数为有效上下文窗口，其余（含缺失）一律 null。 */
+function readContextWindow(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null
 }
 
 /** `input` 数组含 `image` 为 true，是数组但不含为 false，缺失或其他形状为 null。 */

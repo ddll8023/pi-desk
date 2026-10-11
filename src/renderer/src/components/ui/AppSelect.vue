@@ -8,6 +8,12 @@ defineOptions({ inheritAttrs: false })
 interface SelectOption {
   readonly value: string
   readonly label: string
+  /** 选项首字母徽标；缺失时不渲染。 */
+  readonly badge?: string
+  /** 次行元信息，如上下文长度；缺失时不渲染。 */
+  readonly description?: string
+  /** 右侧能力小徽标，如图片输入；缺失时不渲染。 */
+  readonly tag?: string
 }
 
 interface SelectGroup {
@@ -25,6 +31,10 @@ const props = withDefaults(defineProps<{
   readonly searchPlaceholder?: string
   readonly emptyLabel?: string
   readonly emptyResultsLabel?: string
+  /** 触发键里模型名前的 provider 小字；缺失时不渲染，用于分层展示。 */
+  readonly selectedMeta?: string
+  /** 触发键首字母徽标；缺失时不渲染。 */
+  readonly selectedBadge?: string
 }>(), {
   disabled: false,
   searchable: false,
@@ -40,7 +50,8 @@ const emit = defineEmits<{
 const instanceId = useId()
 const popupId = `app-select-list-${instanceId}`
 // 展开状态与浮层几何由 composable 持有；这里按模板与逻辑里的既有名字接出来。
-const anchoredPopup = useAnchoredPopup({})
+// 浮层最小宽度 320px：模型名较长时选项不换行截断，仍受视窗约束。
+const anchoredPopup = useAnchoredPopup({ minWidth: 320 })
 const { trigger, popup, isOpen: expanded, position: popupPosition } = anchoredPopup
 const searchQuery = ref('')
 const activeIndex = ref(0)
@@ -255,8 +266,26 @@ function onListboxKeydown(event: KeyboardEvent): void {
     @click="togglePopup"
     @keydown="onTriggerKeydown"
   >
-    <span class="app-select-value">{{ selectedLabel }}</span>
-    <span class="app-select-chevron" :class="{ 'is-expanded': expanded }" aria-hidden="true"></span>
+    <span class="app-select-value">
+      <span
+        v-if="props.selectedBadge"
+        class="app-select-badge"
+        aria-hidden="true"
+      >{{ props.selectedBadge }}</span>
+      <span v-if="props.selectedMeta" class="app-select-meta">{{ props.selectedMeta }}</span>
+      <span class="app-select-name">{{ selectedLabel }}</span>
+    </span>
+    <svg
+      class="app-select-chevron"
+      :class="{ 'is-expanded': expanded }"
+      width="10"
+      height="10"
+      viewBox="0 0 10 10"
+      fill="none"
+      aria-hidden="true"
+    >
+      <path d="M2 3.5L5 6.5L8 3.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+    </svg>
   </button>
 
   <Teleport to="body">
@@ -315,7 +344,15 @@ function onListboxKeydown(event: KeyboardEvent): void {
             @mousedown.prevent
             @click="chooseOption(option)"
           >
-            {{ option.label }}
+            <span v-if="option.badge" class="app-select-badge" aria-hidden="true">{{ option.badge }}</span>
+            <span class="app-select-option-main">
+              <span class="app-select-option-label">{{ option.label }}</span>
+              <span v-if="option.description" class="app-select-option-desc">{{ option.description }}</span>
+            </span>
+            <span v-if="option.tag" class="app-select-option-tag" aria-hidden="true">{{ option.tag }}</span>
+            <svg class="app-select-check" width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+              <path d="M2 6.5L4.8 9L10 3.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
           </div>
         </div>
         <div
@@ -349,23 +386,55 @@ function onListboxKeydown(event: KeyboardEvent): void {
 
 .app-select-value {
   min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  overflow: hidden;
+}
+
+/* provider 小字与模型名分层；模型名用等宽字体，与路径、代码的呈现一致。 */
+.app-select-meta {
+  flex: none;
+  color: var(--color-desk-muted);
+  font-size: 0.6875rem;
+}
+
+.app-select-meta::after {
+  content: "/";
+  margin-left: 0.35rem;
+  color: var(--color-desk-line-strong);
+}
+
+.app-select-name {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 0.71875rem;
+}
+
+.app-select-badge {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 1.125rem;
+  height: 1.125rem;
+  border-radius: 5px;
+  background: var(--color-desk-accent-soft);
+  color: var(--color-desk-accent);
+  font-size: 0.625rem;
+  font-weight: 700;
 }
 
 .app-select-chevron {
-  width: 0.45rem;
-  height: 0.45rem;
   flex: none;
-  transform: translateY(-0.12rem) rotate(45deg);
-  border-right: 2px solid currentColor;
-  border-bottom: 2px solid currentColor;
-  transition: transform 120ms ease;
+  transition: transform var(--motion-duration-fast) var(--motion-ease-entrance);
 }
 
 .app-select-chevron.is-expanded {
-  transform: translateY(0.12rem) rotate(225deg);
+  transform: rotate(180deg);
 }
 
 .app-select-popup {
@@ -379,6 +448,20 @@ function onListboxKeydown(event: KeyboardEvent): void {
   background: var(--color-desk-surface);
   box-shadow: var(--shadow-desk-pop);
   color: var(--color-desk-ink);
+  transform-origin: top;
+  animation: app-select-popup-in var(--motion-duration-base) var(--motion-ease-entrance) both;
+}
+
+@keyframes app-select-popup-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .app-select-search {
@@ -412,24 +495,62 @@ function onListboxKeydown(event: KeyboardEvent): void {
   z-index: 1;
   margin: 0;
   background: var(--color-desk-surface);
-  padding: 0.4rem 0.65rem 0.25rem;
+  padding: 0.45rem 0.65rem 0.25rem;
   color: var(--color-desk-muted);
-  font-size: 0.7rem;
+  font-size: 0.625rem;
   font-weight: 600;
-  letter-spacing: 0.025em;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .app-select-option {
   position: relative;
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
   width: 100%;
   border-radius: var(--radius-desk-sm);
-  padding: 0.45rem 0.65rem 0.45rem 0.8rem;
+  padding: 0.4rem 0.65rem 0.4rem 0.65rem;
   color: var(--color-desk-ink);
   cursor: pointer;
   font-size: 0.875rem;
   line-height: 1.4;
+  transition: background var(--motion-duration-fast) ease;
+}
+
+.app-select-option-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.app-select-option-label {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 0.78125rem;
   overflow-wrap: anywhere;
+}
+
+.app-select-option-desc {
+  display: block;
+  margin-top: 0.1rem;
+  color: var(--color-desk-muted);
+  font-size: 0.6875rem;
+}
+
+.app-select-option-tag {
+  flex: none;
+  border: 1px solid var(--color-desk-line);
+  border-radius: 4px;
+  padding: 0 0.3rem;
+  color: var(--color-desk-muted);
+  font-size: 0.625rem;
+  line-height: 1.6;
+}
+
+.app-select-check {
+  flex: none;
+  display: none;
+  color: var(--color-desk-accent);
 }
 
 .app-select-option:hover,
@@ -439,8 +560,15 @@ function onListboxKeydown(event: KeyboardEvent): void {
 
 .app-select-option.is-selected {
   background: var(--color-desk-accent-soft);
-  color: var(--color-desk-ink);
-  box-shadow: inset 2px 0 0 var(--color-desk-accent);
+  color: var(--color-desk-accent);
+}
+
+.app-select-option.is-selected .app-select-option-label {
+  font-weight: 600;
+}
+
+.app-select-option.is-selected .app-select-check {
+  display: inline-flex;
 }
 
 .app-select-option.is-selected.is-active,
@@ -458,6 +586,10 @@ function onListboxKeydown(event: KeyboardEvent): void {
 @media (prefers-reduced-motion: reduce) {
   .app-select-chevron {
     transition: none;
+  }
+
+  .app-select-popup {
+    animation: none;
   }
 }
 </style>
