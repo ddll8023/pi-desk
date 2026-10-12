@@ -16,6 +16,7 @@ import type {
   CapabilitiesResult,
   ProjectionBatch,
   ProjectionResult,
+  ProjectionSnapshot,
   PromptImageInput,
   PromptResult,
   RuntimeError,
@@ -108,6 +109,20 @@ function mapState(host: SdkHostStatus['state'], session: SdkSessionStatus): Runt
   return 'starting'
 }
 
+/**
+ * 无活动绑定时页面期望的空基准：与旧后端 `RuntimeManager.getProjection` 保持同一形状，
+ * 页面把 `runtimeId: null` 当作有效空基准（不触发换代冲突）。
+ */
+const EMPTY_PROJECTION: ProjectionSnapshot = {
+  runtimeId: null,
+  seq: 0,
+  messages: [],
+  tools: [],
+  truncated: false,
+  droppedMessages: 0,
+  droppedTools: 0
+}
+
 /** SDK 会话状态不提供模型身份、用量与消息条数；这些字段留空由页面按未知展示。 */
 function mapInfo(session: SdkSessionStatus): RuntimeInfo {
   return {
@@ -124,7 +139,8 @@ function mapInfo(session: SdkSessionStatus): RuntimeInfo {
 /** 页面状态映射；故障码只用于可读提示，不代表可执行入口仍然有效。 */
 function mapStatus(host: SdkHostStatus, session: SdkSessionStatus): RuntimeStatus {
   const state = mapState(host.state, session)
-  const failure = session.lastError ?? host.lastError
+  // 宿主级失败码更接近根因；宿主健康时它为空，仍回落到会话级原因。
+  const failure = host.lastError ?? session.lastError
   return {
     state,
     runtimeId: session.bindingId,
@@ -282,8 +298,12 @@ export class SdkRuntimeBridge {
     }
   }
 
-  /** 向宿主现取基准快照；未绑定时返回错误，不伪造空投影。 */
+  /**
+   * 向宿主现取基准快照；未绑定时返回空基准（无会话不等于读取失败），
+   * 绑定后仍由宿主回答，不伪造内容。
+   */
   async getProjection(): Promise<ProjectionResult> {
+    if (this.host.getSessionStatus().bindingId === null) return { ok: true, data: EMPTY_PROJECTION }
     try {
       return { ok: true, data: await this.host.refreshProjection() }
     } catch (error) {

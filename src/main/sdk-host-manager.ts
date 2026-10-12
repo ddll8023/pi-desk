@@ -29,9 +29,87 @@ const SESSION_TIMEOUT_MS = 60_000
 const EXIT_GRACE_MS = 2_000
 const KILL_WAIT_MS = 3_000
 const RECOVERY_DELAY_MS = 750
+/** 会话状态字段与协议同序；被拒时只记录类型，便于对照校验失败的原因。 */
+const STATUS_FIELDS = ['phase', 'bindingId', 'activityVersion', 'operationId', 'projectPath',
+  'sessionId', 'sessionFile', 'isIdle', 'pendingMessages', 'isBashRunning', 'waitingDialogs',
+  'needsHostRebuild', 'lastError'] as const
+
+/**
+ * 请求与其结果帧的固定对应；表是穷尽 Record，新增请求类型会在编译期暴露，
+ * 避免把正常回复误判成协议失配（值 `null` 表示该类请求没有结果帧：
+ * 反向授权由 authorizeTarget 直接 postMessage，不经 request() 等待）。
+ */
+const EXPECTED_REPLIES: Record<SdkHostRequest['type'], SdkHostFrame['type'] | null> = {
+  initialize: 'ready',
+  shutdown: 'closed',
+  session: 'session-result',
+  'session-status': 'session-result',
+  'session-abort': 'session-result',
+  prompt: 'prompt-result',
+  'set-model': 'session-result',
+  rewind: 'rewind-result',
+  capabilities: 'capabilities-result',
+  'projection-snapshot': 'projection-result',
+  'projection-ack': 'ack-result',
+  'ui-response': 'ui-result',
+  'authorization-result': null
+}
+
+/**
+ * 被拒消息只暴露可对照的结构线索：身份、键名与状态字段的实际类型，
+ * 不搬运消息正文、会话路径或凭据，因此可以直接进主进程日志。
+ */
+function describeRejectedFrame(value: unknown): string {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return `非对象消息（${typeof value}）`
+  const frame = value as Record<string, unknown>
+  const requestId = frame.requestId === undefined ? '-' : String(frame.requestId).slice(0, 8)
+  const identity = `type=${String(frame.type)} hostId=${String(frame.hostId)} seq=${String(frame.seq)} requestId=${requestId}`
+  const keys = `keys=[${Object.keys(frame).join(',')}]`
+  const status = frame.status
+  if (typeof status !== 'object' || status === null || Array.isArray(status)) return `${identity} ${keys}`
+  const fields = status as Record<string, unknown>
+  const described = STATUS_FIELDS.map(field => {
+    const item = fields[field]
+    const kind = item === undefined ? 'undefined' : item === null ? 'null' : Array.isArray(item) ? 'array' : typeof item
+    return `${field}:${kind}`
+  }).join(' ')
+  return `${identity} ${keys} status{${described}}`
+}
+
 /** 展示消息到条目 ID 的镜像上限；超出丢弃最旧映射。 */
 const MAX_ENTRY_MAPPINGS = 512
 const MAX_AUTOMATIC_REBUILDS = 2
+/** 宿主自身输出的诊断保留上限；只用于主进程日志，不进入 IPC 契约或页面。 */
+const HOST_OUTPUT_TAIL_BYTES = 8 * 1024
+
+/**
+ * 宿主 stdout/stderr 的有界尾部缓冲：始终读空管道避免子进程阻塞，只保留最近一段用于失败诊断。
+ * 内容可能包含宿主自身的堆栈或路径，因此只在主进程日志可见，不随结果帧上报。
+ */
+class HostOutputTail {
+  private readonly chunks: Buffer[] = []
+  private length = 0
+
+  /** 追加并丢弃最旧的部分，保证缓冲不随运行时长增长。 */
+  append(chunk: Buffer): void {
+    this.chunks.push(chunk)
+    this.length += chunk.length
+    while (this.length > HOST_OUTPUT_TAIL_BYTES && this.chunks.length > 1) {
+      const oldest = this.chunks[0]
+      if (oldest === undefined) break
+      this.length -= oldest.length
+      this.chunks.shift()
+    }
+  }
+
+  /** 单块超出上限时只取尾部；没有输出时返回空串。 */
+  tail(): string {
+    if (this.chunks.length === 0) return ''
+    const joined = Buffer.concat(this.chunks)
+    const start = Math.max(0, joined.length - HOST_OUTPUT_TAIL_BYTES)
+    return joined.subarray(start).toString('utf8')
+  }
+}
 
 export type SdkHostErrorCode = SdkHostFailureCode
   | 'HOST_ENTRY_MISSING' | 'HOST_START_FAILED' | 'HOST_PROTOCOL_ERROR'
@@ -70,6 +148,7 @@ interface HostRecord {
   readonly exitPromise: Promise<void>
   readonly resolveExit: () => void
   readonly authorizations: Set<string>
+  readonly output: HostOutputTail
   eventSeq: number
   ready: boolean
   established: boolean
@@ -469,14 +548,15 @@ export class SdkHostManager {
       const child = utilityProcess.fork(entryPath, [], {
         env,
         cwd: app.isPackaged ? process.resourcesPath : dirname(entryPath),
-        stdio: 'ignore',
+        // 管道而不是 ignore：宿主崩溃原因只能从它自身的输出取得，且必须持续读空。
+        stdio: 'pipe',
         serviceName: 'Pi SDK Host'
       })
       let resolveExit: () => void = () => {}
       const exitPromise = new Promise<void>(resolvePromise => { resolveExit = resolvePromise })
       record = {
         child, hostId: ++this.hostIdSeed, agentDir, pending: new Map(),
-        exitPromise, resolveExit, authorizations: new Set(), eventSeq: 0,
+        exitPromise, resolveExit, authorizations: new Set(), output: new HostOutputTail(), eventSeq: 0,
         ready: false, established: false, exited: false,
         intentionalExit: false, closing: false, closePromise: null
       }
@@ -487,10 +567,13 @@ export class SdkHostManager {
       this.ui.beginGeneration(null)
       child.on('message', (value: unknown) => this.handleFrame(current, value))
       child.once('exit', () => this.handleExit(current))
+      child.stdout?.on('data', (chunk: Buffer) => current.output.append(chunk))
+      child.stderr?.on('data', (chunk: Buffer) => current.output.append(chunk))
       // Electron 的 error 是 V8 fatal 报告，不是 child_process 的通用启动异常。
       child.on('error', () => {
         if (this.active !== current || current.exited || current.closing) return
         current.ready = false
+        this.reportHostFailure(current, 'HOST_EXITED', '宿主发生不可恢复错误')
         this.invalidateSession()
         this.failPending(current, new SdkHostError('HOST_EXITED', 'SDK 宿主发生不可恢复错误。'))
         this.publish({ state: 'failed', hostId: current.hostId, sdkVersion: null,
@@ -522,6 +605,7 @@ export class SdkHostManager {
       let failure = error instanceof SdkHostError ? error
         : new SdkHostError('HOST_START_FAILED', '无法建立 SDK 宿主。')
       if (record !== null) {
+        this.reportHostFailure(record, failure.code, '宿主建立或握手失败')
         try { await this.closeHost(record) } catch {
           failure = new SdkHostError('HOST_STOP_TIMEOUT', '旧 SDK 宿主未确认退出，已阻止新宿主建立。')
         }
@@ -562,21 +646,20 @@ export class SdkHostManager {
   private handleFrame(record: HostRecord, value: unknown): void {
     if (this.active !== record || record.exited) return
     if (isSdkHostEvent(value)) {
-      if (value.hostId !== record.hostId) this.failTransport(record)
+      if (value.hostId !== record.hostId) this.failTransport(record, `事件身份不符：${describeRejectedFrame(value)}`)
       else this.handleEvent(record, value)
       return
     }
     if (!isSdkHostFrame(value) || value.hostId !== record.hostId) {
-      this.failTransport(record)
+      this.failTransport(record, `不是已声明的宿主帧：${describeRejectedFrame(value)}`)
       return
     }
     const pending = record.pending.get(value.requestId)
     if (pending === undefined && value.requestId !== this.uncertainOperationId) return
     if (pending !== undefined) {
-      const expected = pending.type === 'initialize' ? 'ready' : pending.type === 'shutdown' ? 'closed'
-        : pending.type === 'ui-response' ? 'ui-result' : 'session-result'
-      if (value.type !== 'failed' && value.type !== expected) {
-        this.failTransport(record)
+      const expected = EXPECTED_REPLIES[pending.type]
+      if (expected !== null && value.type !== 'failed' && value.type !== expected) {
+        this.failTransport(record, `请求 ${pending.type} 期望 ${expected}，收到：${describeRejectedFrame(value)}`)
         return
       }
     }
@@ -638,7 +721,7 @@ export class SdkHostManager {
   /** 反向请求只做主进程授权；异步期间换代或关闭就丢弃，不重发目标操作。 */
   private async authorizeTarget(record: HostRecord, event: Extract<SdkHostEvent, { type: 'authorize-target' }>): Promise<void> {
     if (record.authorizations.has(event.requestId) || record.authorizations.size >= 8) {
-      this.failTransport(record)
+      this.failTransport(record, `反向授权请求重复或超出上限：${describeRejectedFrame(event)}`)
       return
     }
     record.authorizations.add(event.requestId)
@@ -657,7 +740,7 @@ export class SdkHostManager {
     try {
       record.child.postMessage({ version: SDK_HOST_PROTOCOL_VERSION, hostId: record.hostId,
         requestId: event.requestId, type: 'authorization-result', bindingId: event.bindingId, target, error } satisfies SdkHostRequest)
-    } catch { this.failTransport(record) }
+    } catch { this.failTransport(record, '无法向宿主发送授权结果') }
   }
 
   /** 只保留已声明分类，不把主进程文件系统异常文本发给扩展或页面。 */
@@ -666,10 +749,14 @@ export class SdkHostManager {
     return 'AUTHORIZATION_FAILED'
   }
 
-  /** 宿主失效保留只读身份线索，实际执行入口和所有交互立即失效。 */
+  /**
+   * 宿主失效保留只读身份线索，实际执行入口和所有交互立即失效。
+   * 失败原因由宿主状态的 `lastError` 携带（同一次失败已经发布）：会话侧不复制、
+   * 也不用“未就绪”顶替崩溃，避免页面把真实原因读成 HOST_NOT_READY。
+   */
   private invalidateSession(): void {
     this.sessionSnapshot = { ...this.sessionSnapshot, phase: 'invalid', operationId: null,
-      isIdle: false, waitingDialogs: 0, needsHostRebuild: true, lastError: 'HOST_NOT_READY' }
+      isIdle: false, waitingDialogs: 0, needsHostRebuild: true, lastError: null }
     this.projection = null
     this.entryIds.clear()
     this.ui.beginGeneration(null)
@@ -692,7 +779,8 @@ export class SdkHostManager {
   }
 
   /** 协议失效先限制能力，再收回该宿主；不能继续信任一个仍存活的错误通道。 */
-  private failTransport(record: HostRecord): void {
+  private failTransport(record: HostRecord, detail: string): void {
+    this.reportHostFailure(record, 'HOST_PROTOCOL_ERROR', detail)
     this.invalidateSession()
     record.ready = false
     record.intentionalExit = true
@@ -714,6 +802,9 @@ export class SdkHostManager {
     if (this.active !== record) return
     this.active = null
     record.authorizations.clear()
+    if (!record.intentionalExit && !this.shuttingDown) {
+      this.reportHostFailure(record, 'HOST_EXITED', '宿主进程已退出但未确认关闭')
+    }
     this.invalidateSession()
     if (record.intentionalExit || this.shuttingDown) return
     this.publish({ state: 'failed', hostId: record.hostId, sdkVersion: null, lastError: 'HOST_EXITED' })
@@ -783,6 +874,16 @@ export class SdkHostManager {
         resolvePromise(true)
       })
     })
+  }
+
+  /**
+   * 宿主级失败只在主进程日志留一条可对照的记录：原因码沿用既定分类，原始输出只有有界尾部。
+   * 页面与 IPC 结果仍只拿到分类与固定文案，不搬运宿主输出。
+   */
+  private reportHostFailure(record: HostRecord, code: SdkHostErrorCode, detail: string): void {
+    const tail = record.output.tail().trimEnd()
+    const output = tail === '' ? '（宿主没有输出）' : `\n${tail}`
+    console.error(`[sdk-host] hostId=${record.hostId} agentDir=${record.agentDir} ${code}：${detail}${output}`)
   }
 
   /** 逐项清理定时器与等待者，不把原请求移交给新宿主。 */
