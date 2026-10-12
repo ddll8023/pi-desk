@@ -5,6 +5,7 @@ import type { DesktopApi } from '../../shared/desktop-api'
 import type { AuthApi } from '../../shared/auth-api'
 import type { ExtensionUiApi } from '../../shared/extension-ui-api'
 import type { ModelsConfigApi } from '../../shared/models-config-api'
+import type { PiSettingsApi } from '../../shared/pi-settings-api'
 import type { PreferencesApi } from '../../shared/preferences-api'
 import type { ProjectApi } from '../../shared/project-api'
 import type { ProjectFileApi } from '../../shared/project-file-api'
@@ -14,7 +15,7 @@ import type { TrustApi } from '../../shared/trust-api'
 
 declare global {
   interface Window {
-    readonly desktop?: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionApi & PreferencesApi & TrustApi & ExtensionUiApi & AuthApi & ModelsConfigApi
+    readonly desktop?: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionApi & PreferencesApi & PiSettingsApi & TrustApi & ExtensionUiApi & AuthApi & ModelsConfigApi
   }
 }
 

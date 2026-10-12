@@ -1,6 +1,6 @@
-<!-- 顶栏模型选择器：未选项目时也读全局模型目录；选中即记为桌面新会话默认，Pi 就绪时同时切换当前会话；候选项排除设置中隐藏的模型。 -->
+<!-- 顶栏模型选择器：未选项目时也读全局模型目录；选中即写为 Pi 自身默认模型（settings.json），Pi 就绪时同时切换当前会话；候选项排除设置中隐藏的模型。 -->
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onUnmounted, ref } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useProjectStore } from '../stores/project'
 import { useRuntimeStore } from '../stores/runtime'
@@ -13,10 +13,9 @@ const sessionStore = useSessionStore()
 const projectStore = useProjectStore()
 const {
   view, capabilitiesView, modelSwitchView, promptView,
-  modelPreviewView, modelPreferenceView, modelPreferenceLoaded, newSessionModel,
+  modelPreviewView, piDefaultModelView, piDefaultModelLoaded, piDefaultModel,
   availableModels, visibleModels
 } = storeToRefs(runtimeStore)
-const FOLLOW_PI_DEFAULT = 'pi-default'
 const ready = computed(() => view.value.phase === 'ready')
 const canPrepare = computed(() => (
   view.value.phase === 'idle' || view.value.phase === 'closed' || view.value.phase === 'failed'
@@ -33,7 +32,8 @@ const identity = computed(() => {
     return info.value?.modelProvider && info.value.modelId
       ? { provider: info.value.modelProvider, modelId: info.value.modelId } : null
   }
-  return canPrepare.value ? newSessionModel.value ?? preview.value?.defaultModel ?? null : null
+  // 未就绪时优先展示已设置的 Pi 默认；未设置时退回 Pi 自动选择的结果，仅作展示。
+  return canPrepare.value ? piDefaultModel.value ?? preview.value?.defaultModel ?? null : null
 })
 
 /** 用元组编码复合身份，避免供应商和模型名称含分隔符时串选。 */
@@ -58,8 +58,7 @@ const currentKey = computed(() => {
     // 读取中或读取失败时不匹配任何选项，让触发键直接显示进度或错误文案。
     if (modelPreviewView.value.phase === 'loading'
       || (error.value !== null && error.value !== unavailableChoice.value)) return ''
-    if (!modelPreferenceLoaded.value) return ''
-    if (newSessionModel.value === null) return FOLLOW_PI_DEFAULT
+    if (!piDefaultModelLoaded.value) return ''
   }
   return identity.value ? modelKey(identity.value.provider, identity.value.modelId) : ''
 })
@@ -76,7 +75,7 @@ const currentLabel = computed(() => {
         ? '模型切换失败' : '模型读取失败'
     }
   }
-  if (canPrepare.value && !modelPreferenceLoaded.value) return '正在读取模型偏好…'
+  if (canPrepare.value && !piDefaultModelLoaded.value) return '正在读取默认模型…'
   if (canPrepare.value && modelPreviewView.value.phase === 'loading') return '正在读取模型…'
   return currentModel.value?.name ?? identity.value?.modelId ?? '未选择模型'
 })
@@ -91,32 +90,25 @@ const groups = computed(() => {
     tag?: string | undefined
   }
   const providers = new Map<string, Option[]>()
+  const piDefault = piDefaultModel.value
   for (const model of visibleModels.value) {
     const options = providers.get(model.provider) ?? []
+    // 标出当前 Pi 默认：Runtime 就绪时勾选的是当前会话模型，第二行仍能区分出默认项。
+    const isDefault = piDefault !== null
+      && piDefault.provider === model.provider && piDefault.modelId === model.id
+    const context = formatContextWindow(model.contextWindow)
     options.push({
       value: modelKey(model.provider, model.id),
       label: model.name ?? model.id,
       badge: providerBadge(model.provider),
-      description: formatContextWindow(model.contextWindow),
+      description: isDefault
+        ? (context === undefined ? 'Pi 默认' : `${context} · Pi 默认`)
+        : context,
       tag: model.imageInput === true ? '图片' : undefined
     })
     providers.set(model.provider, options)
   }
-  const defaultModel = preview.value?.defaultModel
-  const defaultName = models.value.find(model => (
-    model.provider === defaultModel?.provider && model.id === defaultModel?.modelId
-  ))?.name ?? defaultModel?.modelId
-  // 没有桌面覆盖时这一行就是当前选中项，直接显示 Pi 的默认模型名；有覆盖时它表示「回到 Pi 默认」。
-  const overridden = newSessionModel.value !== null
-  return [{
-    options: [{
-      value: FOLLOW_PI_DEFAULT,
-      label: !overridden && defaultName !== undefined ? `${defaultName}（Pi 默认）` : '跟随 Pi 默认',
-      description: overridden && defaultName !== undefined
-        ? `Pi 自身默认：${defaultName}`
-        : '使用 Pi 自己的默认模型，不修改 Pi 配置'
-    }]
-  }, ...[...providers].map(([label, options]) => ({ label, options }))]
+  return [...providers].map(([label, options]) => ({ label, options }))
 })
 const capabilitiesError = computed(() => {
   if (capabilitiesView.value.phase === 'error') return capabilitiesView.value.error.message
@@ -124,22 +116,24 @@ const capabilitiesError = computed(() => {
   return null
 })
 const unavailableChoice = computed(() => canPrepare.value && preview.value !== null
-  && preview.value.modelsError === null && newSessionModel.value !== null
-  && !models.value.some(model => model.provider === newSessionModel.value?.provider && model.id === newSessionModel.value?.modelId)
-  ? '保存的模型当前不可用；请重新选择，或跟随 Pi 默认。' : null)
+  && preview.value.modelsError === null && piDefaultModel.value !== null
+  && !models.value.some(model => (
+    model.provider === piDefaultModel.value?.provider && model.id === piDefaultModel.value?.modelId
+  ))
+  ? '设置的 Pi 默认模型当前不可用；请重新选择。' : null)
 const error = computed(() => {
   if (ready.value) {
     if (modelSwitchView.value.phase === 'error') return modelSwitchView.value.error.message
-    // 模型列表读不出来时优先报它；新会话默认保存失败放在其后，避免被能力错误盖掉。
+    // 模型列表读不出来时优先报它；Pi 默认模型保存失败放在其后，避免被能力错误盖掉。
     if (capabilitiesError.value !== null) return capabilitiesError.value
-    if (modelPreferenceView.value.phase === 'error') return modelPreferenceView.value.error.message
+    if (piDefaultModelView.value.phase === 'error') return piDefaultModelView.value.error.message
     return null
   }
   if (!canPrepare.value) return null
-  if (modelPreferenceView.value.phase === 'error') return modelPreferenceView.value.error.message
+  if (piDefaultModelView.value.phase === 'error') return piDefaultModelView.value.error.message
   if (modelPreviewView.value.phase === 'error') return modelPreviewView.value.error.message
   return preview.value?.modelsError
-    ?? (newSessionModel.value === null ? preview.value?.defaultModelError : null)
+    ?? (piDefaultModel.value === null ? preview.value?.defaultModelError : null)
     ?? unavailableChoice.value
 })
 const sessionChanging = computed(() => sessionStore.opening || sessionStore.awaitingTrust || sessionStore.awaitingInterrupt)
@@ -147,12 +141,12 @@ const disabledReason = computed(() => {
   if (sessionChanging.value) return '正在处理会话切换'
   if (!ready.value) {
     if (!canPrepare.value) return 'Pi 正在启动或关闭'
-    if (modelPreferenceView.value.phase === 'saving') return '正在保存新会话默认模型…'
-    if (!modelPreferenceLoaded.value) return modelPreferenceView.value.phase === 'error'
-      ? '模型偏好读取失败，请重试' : '正在读取模型偏好…'
-    if (modelPreferenceView.value.phase === 'loading') return '正在读取模型偏好…'
+    if (piDefaultModelView.value.phase === 'saving') return '正在保存 Pi 默认模型…'
+    if (!piDefaultModelLoaded.value) return piDefaultModelView.value.phase === 'error'
+      ? '默认模型读取失败，请重试' : '正在读取默认模型…'
+    if (piDefaultModelView.value.phase === 'loading') return '正在读取默认模型…'
     if (modelPreviewView.value.phase === 'loading' || modelPreviewView.value.phase === 'idle') return '正在读取可用模型…'
-    // 读取失败时仍允许清除已保存的失效选择，回到跟随 Pi 默认。
+    // 读取失败时仍允许重新选择，覆盖已保存的失效选择。
     return null
   }
   if (modelSwitchView.value.phase === 'switching') return '正在切换模型…'
@@ -167,9 +161,9 @@ const disabledReason = computed(() => {
 })
 const progress = computed(() => {
   if (modelSwitchView.value.phase === 'switching') return '正在切换模型…'
-  if (modelPreferenceView.value.phase === 'saving') return '正在保存新会话默认模型…'
+  if (piDefaultModelView.value.phase === 'saving') return '正在保存 Pi 默认模型…'
   if (canPrepare.value) {
-    if (modelPreferenceView.value.phase === 'loading') return '正在读取模型偏好…'
+    if (piDefaultModelView.value.phase === 'loading') return '正在读取默认模型…'
     if (modelPreviewView.value.phase === 'loading') return '正在读取模型…'
     if (preview.value !== null && visibleModels.value.length === 0) {
       return allModelsHidden.value ? '所有模型已在设置中隐藏' : '无可用模型，请在设置中配置供应商认证'
@@ -187,30 +181,45 @@ const canRetry = computed(() => ready.value && capabilitiesError.value !== null
   && modelSwitchView.value.phase !== 'switching')
 const refreshDisabled = computed(() => sessionChanging.value
   || modelPreviewView.value.phase === 'loading'
-  || modelPreferenceView.value.phase === 'loading' || modelPreferenceView.value.phase === 'saving')
+  || piDefaultModelView.value.phase === 'loading' || piDefaultModelView.value.phase === 'saving')
 const busy = computed(() => modelSwitchView.value.phase === 'switching'
-  || modelPreferenceView.value.phase === 'loading' || modelPreferenceView.value.phase === 'saving'
+  || piDefaultModelView.value.phase === 'loading' || piDefaultModelView.value.phase === 'saving'
   || (canPrepare.value && modelPreviewView.value.phase === 'loading'))
 
-/** 选中即生效：记为桌面新会话默认；Pi 就绪时同时切换当前会话，两者都不乐观伪造结果。 */
-function chooseModel(value: string): void {
+/** 选中即生效：写为 Pi 自身默认模型；Pi 就绪时同时切换当前会话，两者都不乐观伪造结果。 */
+async function chooseModel(value: string): Promise<void> {
   if (disabledReason.value !== null) return
-  if (value === FOLLOW_PI_DEFAULT) {
-    // 没有桌面覆盖时无需写回；就绪时这一行与当前会话模型无关。
-    if (newSessionModel.value !== null) void runtimeStore.chooseNewSessionModel(null)
-    return
-  }
   const model = models.value.find(candidate => modelKey(candidate.provider, candidate.id) === value)
   if (model === undefined) return
   if (ready.value) void runtimeStore.switchModel(model.provider, model.id)
-  void runtimeStore.chooseNewSessionModel({ provider: model.provider, modelId: model.id })
+  const result = await runtimeStore.setPiDefaultModel({ provider: model.provider, modelId: model.id })
+  if (result.ok) showNotice('success', `已设为 Pi 默认模型：${model.name ?? model.id}`)
+  else showNotice('error', result.message)
 }
 
-/** 手动刷新绕过预读缓存，并重新读取模型偏好以解除读写失败状态。 */
+/** 设置默认的可见反馈：成功短暂提示，失败显示原因；不占布局，靠浮层呈现。 */
+const notice = ref<{ readonly kind: 'success' | 'error'; readonly text: string } | null>(null)
+let noticeTimer: ReturnType<typeof setTimeout> | null = null
+
+/** 取消上一条提示的计时并重新计时；成功与失败停留时长不同。 */
+function showNotice(kind: 'success' | 'error', text: string): void {
+  if (noticeTimer !== null) clearTimeout(noticeTimer)
+  notice.value = { kind, text }
+  noticeTimer = setTimeout(() => {
+    notice.value = null
+    noticeTimer = null
+  }, kind === 'success' ? 2500 : 6000)
+}
+
+onUnmounted(() => {
+  if (noticeTimer !== null) clearTimeout(noticeTimer)
+})
+
+/** 手动刷新绕过预读缓存，并重新读取 Pi 默认模型以解除读写失败状态。 */
 function refreshModels(): void {
   if (sessionChanging.value || refreshDisabled.value) return
   if (canPrepare.value) {
-    void Promise.all([runtimeStore.refreshModelPreview(true), runtimeStore.loadModelPreference(true)])
+    void Promise.all([runtimeStore.refreshModelPreview(true), runtimeStore.loadPiDefaultModel(true)])
   } else if (canRetry.value) void runtimeStore.refreshCapabilities()
 }
 </script>
@@ -221,15 +230,15 @@ function refreshModels(): void {
       <label for="runtime-model-select" class="runtime-model-label">模型</label>
       <AppSelect
         id="runtime-model-select"
-        :label="ready ? '当前会话模型' : '新会话默认模型'"
+        :label="ready ? '当前会话模型' : 'Pi 默认模型'"
         :groups="groups"
         :model-value="currentKey"
         :empty-label="currentLabel"
         :selected-meta="currentKey ? identity?.provider : undefined"
         :selected-badge="currentKey && identity ? providerBadge(identity.provider) : undefined"
         :disabled="disabledReason !== null"
-        :title="error ? `${currentIdentity}；${error}` : disabledReason ? `${currentIdentity}；${disabledReason}` : `${ready ? '当前会话模型' : '桌面新会话默认模型'}：${currentIdentity}；点击选择，选中即设为新会话默认`"
-        :aria-label="`${ready ? '当前会话模型' : '新会话默认模型'}：${currentIdentity}`"
+        :title="error ? `${currentIdentity}；${error}` : disabledReason ? `${currentIdentity}；${disabledReason}` : `${ready ? '当前会话模型' : 'Pi 默认模型'}：${currentIdentity}；点击选择，选中即设为 Pi 默认模型`"
+        :aria-label="`${ready ? '当前会话模型' : 'Pi 默认模型'}：${currentIdentity}`"
         :aria-describedby="error ? 'runtime-model-error' : progress ? 'runtime-model-progress' : undefined"
         searchable
         search-placeholder="搜索供应商或模型…"
@@ -247,10 +256,20 @@ function refreshModels(): void {
       class="sr-only"
       :role="error ? 'alert' : 'status'"
     >{{ error ?? progress }}</p>
+    <!-- 设置默认的可见反馈：绝对定位在选择器下方，不改变顶栏布局。 -->
+    <p
+      v-if="notice"
+      class="runtime-model-notice"
+      :class="`is-${notice.kind}`"
+      :role="notice.kind === 'error' ? 'alert' : 'status'"
+    >{{ notice.text }}</p>
   </div>
 </template>
 
 <style scoped>
+.app-runtime-model {
+  position: relative;
+}
 .runtime-model-control {
   display: flex;
   min-width: 0;
@@ -281,6 +300,27 @@ function refreshModels(): void {
 }
 /* 读取进度与错误并入触发键文案，不设独立状态行，顶栏高度保持恒定。 */
 .app-runtime-model.is-error :deep(.app-select-name) {
+  color: var(--color-desk-danger);
+}
+/* 设置默认的反馈浮层贴在选择器下方，不占布局、不改变顶栏高度。 */
+.runtime-model-notice {
+  position: absolute;
+  z-index: 30;
+  top: 100%;
+  left: 0;
+  max-width: 20rem;
+  margin-top: 0.35rem;
+  border: 1px solid var(--color-desk-line);
+  border-radius: 8px;
+  background: var(--color-desk-surface);
+  box-shadow: var(--shadow-desk-pop);
+  padding: 0.35rem 0.6rem;
+  color: var(--color-desk-muted);
+  font-size: 0.6875rem;
+  line-height: 1.4;
+}
+.runtime-model-notice.is-error {
+  border-color: var(--color-desk-danger);
   color: var(--color-desk-danger);
 }
 </style>

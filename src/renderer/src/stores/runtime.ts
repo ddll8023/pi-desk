@@ -1,8 +1,8 @@
-/** 保存 Runtime、聊天投影、对话回退、模型选择与展示偏好状态；不持有进程所有权，不写 Pi 配置或项目文件。 */
+/** 保存 Runtime、聊天投影、对话回退、模型选择与展示偏好状态；不持有进程所有权，也不直接访问文件系统。 */
 import { defineStore } from 'pinia'
 import { computed, ref, watch } from 'vue'
 import type { WatchStopHandle } from 'vue'
-import type { ModelDisplayPreference, ModelPreferenceResult, PreferencesError } from '../../../shared/preferences-api'
+import type { ModelDisplayPreference, PreferencesError } from '../../../shared/preferences-api'
 import type {
   AgentCapabilities,
   ModelIdentity,
@@ -23,7 +23,8 @@ import { useTrustStore } from './trust'
 import { useProjectStore } from './project'
 import { useAuthStore } from './auth'
 import { getResourcePreview } from '../services/resource'
-import { getModelDisplay, getNewSessionModel, setModelDisplay, setNewSessionModel } from '../services/preferences'
+import { getModelDisplay, setModelDisplay } from '../services/preferences'
+import { getPiDefaultModel, setPiDefaultModel as savePiDefaultModel } from '../services/pi-settings'
 import {
   abortRuntime,
   ackRuntimeProjection,
@@ -89,12 +90,18 @@ type ModelPreviewViewState =
   | { phase: 'ready'; data: PiResourcePreview }
   | { phase: 'error'; error: RuntimeError }
 
-type ModelPreferenceViewState =
+/** Pi 默认模型的读取与保存状态；保存成功后才提交选择。 */
+type PiDefaultModelViewState =
   | { phase: 'idle' }
   | { phase: 'loading' }
   | { phase: 'ready' }
   | { phase: 'saving' }
   | { phase: 'error'; error: PreferencesError }
+
+/** Pi 默认模型的保存结果；失败原因直接交给选择器做可见反馈。 */
+type PiDefaultModelSaveResult =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly message: string }
 
 /** 对话页模型展示偏好的读取与保存状态；保存成功后才提交选择。 */
 type ModelDisplayViewState =
@@ -191,13 +198,13 @@ export const useRuntimeStore = defineStore('runtime', () => {
   const capabilitiesView = ref<CapabilitiesViewState>({ phase: 'idle' })
   const modelSwitchView = ref<ModelSwitchViewState>({ phase: 'idle' })
   const modelPreviewView = ref<ModelPreviewViewState>({ phase: 'idle' })
-  const modelPreferenceView = ref<ModelPreferenceViewState>({ phase: 'idle' })
-  const newSessionModel = ref<ModelIdentity | null>(null)
-  const modelPreferenceLoaded = ref(false)
-  let modelPreferenceRequest = 0
+  const piDefaultModelView = ref<PiDefaultModelViewState>({ phase: 'idle' })
+  const piDefaultModel = ref<ModelIdentity | null>(null)
+  const piDefaultModelLoaded = ref(false)
+  let piDefaultModelRequest = 0
   let modelLifecycle = 0
-  let modelPreferencePromise: Promise<void> | null = null
-  let modelSavePromise: Promise<void> | null = null
+  let piDefaultModelPromise: Promise<void> | null = null
+  let piDefaultModelSavePromise: Promise<void> | null = null
   const hiddenModels = ref<readonly ModelIdentity[]>([])
   const modelDisplayLoaded = ref(false)
   const modelDisplayView = ref<ModelDisplayViewState>({ phase: 'idle' })
@@ -247,7 +254,7 @@ export const useRuntimeStore = defineStore('runtime', () => {
           }
         })
     }
-    void loadModelPreference()
+    void loadPiDefaultModel()
     void loadModelDisplay()
     const result = await getRuntimeStatus()
     if (result.ok) applyStatus(result.data)
@@ -271,11 +278,11 @@ export const useRuntimeStore = defineStore('runtime', () => {
     rewindRequest += 1
     rewindView.value = { phase: 'idle' }
     preparingPrompt.value = false
-    modelPreferenceRequest += 1
-    modelPreferenceLoaded.value = false
-    modelPreferenceView.value = { phase: 'idle' }
-    modelPreferencePromise = null
-    modelSavePromise = null
+    piDefaultModelRequest += 1
+    piDefaultModelLoaded.value = false
+    piDefaultModelView.value = { phase: 'idle' }
+    piDefaultModelPromise = null
+    piDefaultModelSavePromise = null
     modelDisplayRequest += 1
     hiddenModels.value = []
     modelDisplayLoaded.value = false
@@ -364,70 +371,63 @@ export const useRuntimeStore = defineStore('runtime', () => {
     modelPreviewView.value = { phase: 'ready', data: result.data }
   }
 
-  /** 模型偏好只读一次；失败可显式重读，保存中不让读请求覆盖用户的新选择。 */
-  async function loadModelPreference(force = false): Promise<void> {
+  /** Pi 默认模型只读一次；失败可显式重读，保存中不让读请求覆盖用户的新选择。 */
+  async function loadPiDefaultModel(force = false): Promise<void> {
     const lifecycle = modelLifecycle
-    if (modelSavePromise !== null) await modelSavePromise
+    if (piDefaultModelSavePromise !== null) await piDefaultModelSavePromise
     if (lifecycle !== modelLifecycle) return
-    if (modelPreferencePromise !== null) return modelPreferencePromise
-    if (modelPreferenceLoaded.value && !force) return
-    const request = ++modelPreferenceRequest
-    modelPreferenceView.value = { phase: 'loading' }
+    if (piDefaultModelPromise !== null) return piDefaultModelPromise
+    if (piDefaultModelLoaded.value && !force) return
+    const request = ++piDefaultModelRequest
+    piDefaultModelView.value = { phase: 'loading' }
     const promise = (async () => {
-      const result = await getNewSessionModel()
-      if (request !== modelPreferenceRequest) return
+      const result = await getPiDefaultModel()
+      if (request !== piDefaultModelRequest) return
       if (!result.ok) {
-        modelPreferenceView.value = { phase: 'error', error: result.error }
+        piDefaultModelView.value = { phase: 'error', error: result.error }
         return
       }
-      newSessionModel.value = result.data
-      modelPreferenceLoaded.value = true
-      modelPreferenceView.value = { phase: 'ready' }
+      piDefaultModel.value = result.data
+      piDefaultModelLoaded.value = true
+      piDefaultModelView.value = { phase: 'ready' }
     })()
-    modelPreferencePromise = promise
+    piDefaultModelPromise = promise
     try { await promise } finally {
-      if (request === modelPreferenceRequest) modelPreferencePromise = null
+      if (request === piDefaultModelRequest) piDefaultModelPromise = null
     }
   }
 
   /**
-   * 只保存候选目录中的真实身份，成功后再更新选择；空值用于恢复跟随 Pi 默认。
+   * 只保存候选目录中的真实身份，成功后再更新选择。
    * Runtime 就绪时也能调用：此时候选来自 Runtime 能力，设置默认与当前会话模型互不影响。
    */
-  async function chooseNewSessionModel(model: ModelIdentity | null): Promise<void> {
-    if ((!canPreviewModels() && view.value.phase !== 'ready') || !modelPreferenceLoaded.value
-      || modelPreferenceView.value.phase === 'loading' || modelPreferenceView.value.phase === 'saving') return
-    if (model !== null && !availableModels.value.some(candidate => (
+  async function setPiDefaultModel(model: ModelIdentity): Promise<PiDefaultModelSaveResult> {
+    if ((!canPreviewModels() && view.value.phase !== 'ready') || !piDefaultModelLoaded.value
+      || piDefaultModelView.value.phase === 'loading' || piDefaultModelView.value.phase === 'saving') {
+      return { ok: false, message: 'Pi 默认模型尚未读取完成，请稍后再试。' }
+    }
+    if (!availableModels.value.some(candidate => (
       candidate.provider === model.provider && candidate.id === model.modelId
-    ))) return
-    const request = ++modelPreferenceRequest
-    modelPreferenceView.value = { phase: 'saving' }
-    const promise = (async () => {
-      const result = await setNewSessionModel(model)
-      if (request !== modelPreferenceRequest) return
+    ))) {
+      return { ok: false, message: '该模型当前不可用，未保存为 Pi 默认模型。' }
+    }
+    const request = ++piDefaultModelRequest
+    piDefaultModelView.value = { phase: 'saving' }
+    const promise = (async (): Promise<PiDefaultModelSaveResult> => {
+      const result = await savePiDefaultModel(model)
+      if (request !== piDefaultModelRequest) return { ok: false, message: '本次保存已被新的选择取代。' }
       if (!result.ok) {
-        modelPreferenceView.value = { phase: 'error', error: result.error }
-        return
+        piDefaultModelView.value = { phase: 'error', error: result.error }
+        return { ok: false, message: result.error.message }
       }
-      newSessionModel.value = result.data
-      modelPreferenceView.value = { phase: 'ready' }
+      piDefaultModel.value = result.data
+      piDefaultModelView.value = { phase: 'ready' }
+      return { ok: true }
     })()
-    modelSavePromise = promise
-    try { await promise } finally {
-      if (request === modelPreferenceRequest) modelSavePromise = null
+    piDefaultModelSavePromise = promise.then(() => undefined)
+    try { return await promise } finally {
+      if (request === piDefaultModelRequest) piDefaultModelSavePromise = null
     }
-  }
-
-  /** 新建会话等待初始读取或正在保存的选择，不能在竞态中错误使用 Pi 默认。 */
-  async function prepareNewSessionModel(): Promise<ModelPreferenceResult> {
-    await loadModelPreference()
-    if (modelPreferenceView.value.phase === 'error') {
-      return { ok: false, error: modelPreferenceView.value.error }
-    }
-    if (!modelPreferenceLoaded.value) {
-      return { ok: false, error: { code: 'INTERNAL_ERROR', message: '新会话默认模型尚未读取完成。' } }
-    }
-    return { ok: true, data: newSessionModel.value === null ? null : { ...newSessionModel.value } }
   }
 
   /** 展示偏好只读一次；失败可显式重读，保存中不让读请求覆盖用户的新选择。 */
@@ -838,9 +838,9 @@ export const useRuntimeStore = defineStore('runtime', () => {
     capabilitiesView,
     modelSwitchView,
     modelPreviewView,
-    modelPreferenceView,
-    newSessionModel,
-    modelPreferenceLoaded,
+    piDefaultModelView,
+    piDefaultModel,
+    piDefaultModelLoaded,
     hiddenModels,
     modelDisplayLoaded,
     modelDisplayView,
@@ -860,9 +860,8 @@ export const useRuntimeStore = defineStore('runtime', () => {
     rewind,
     switchModel,
     refreshModelPreview,
-    loadModelPreference,
-    chooseNewSessionModel,
-    prepareNewSessionModel,
+    loadPiDefaultModel,
+    setPiDefaultModel,
     loadModelDisplay,
     saveModelDisplay,
     setModelsVisibility,

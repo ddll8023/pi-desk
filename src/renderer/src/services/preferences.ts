@@ -1,6 +1,5 @@
-/** 封装界面偏好、桌面新会话默认模型与对话页模型展示偏好读写，重建普通载荷并保留桥接失败原因。 */
-import type { ModelDisplayPreference, ModelDisplayResult, ModelPreferenceResult, PreferencesError, PreferencesResult, UiPreferences } from '../../../shared/preferences-api'
-import type { ModelIdentity } from '../../../shared/runtime-api'
+/** 封装界面偏好与对话页模型展示偏好读写，重建普通载荷并保留桥接失败原因。 */
+import type { ModelDisplayPreference, ModelDisplayResult, PreferencesError, PreferencesResult, UiPreferences } from '../../../shared/preferences-api'
 
 function unavailable(): { ok: false; error: PreferencesError } {
   return {
@@ -15,31 +14,6 @@ function callFailed(error: unknown): { ok: false; error: PreferencesError } {
   return {
     ok: false,
     error: { code: 'BRIDGE_CALL_FAILED', message: `桌面桥接调用失败，可以重试：${detail}` }
-  }
-}
-
-/** 桌面默认模型与 Pi 配置分离；空值表示跟随 Pi 默认。 */
-export async function getNewSessionModel(): Promise<ModelPreferenceResult> {
-  const bridge = window.desktop
-  if (!bridge || typeof bridge.getNewSessionModel !== 'function') return unavailable()
-  try {
-    return await bridge.getNewSessionModel()
-  } catch (error) {
-    return callFailed(error)
-  }
-}
-
-/** 服务层逐字段重建，响应式模型对象不能直接跨 contextBridge。 */
-export async function setNewSessionModel(model: ModelIdentity | null): Promise<ModelPreferenceResult> {
-  const bridge = window.desktop
-  if (!bridge || typeof bridge.setNewSessionModel !== 'function') return unavailable()
-  try {
-    return await bridge.setNewSessionModel(model === null ? null : {
-      provider: model.provider,
-      modelId: model.modelId
-    })
-  } catch (error) {
-    return callFailed(error)
   }
 }
 

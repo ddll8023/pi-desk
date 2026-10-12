@@ -107,10 +107,7 @@ export class SessionManager {
       }
     }
 
-    const started = await this.options.runtime.start(
-      projectPath, request.sessionId, trustDecision, false,
-      request.sessionId === null ? request.model ?? null : null
-    )
+    const started = await this.options.runtime.start(projectPath, request.sessionId, trustDecision, false)
     if (!started.ok) throw new SessionFailure(started.error.code, started.error.message)
     if (request.sessionId !== null && started.data.info?.sessionId !== request.sessionId) {
       // `--session-id` 在会话缺失时会新建，因此必须复核实际打开的会话；不删除任何文件。

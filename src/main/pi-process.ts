@@ -11,7 +11,6 @@ import { existsSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
 import { app } from 'electron'
-import type { ModelIdentity } from '../shared/runtime-api'
 
 /** 开发和正式包使用同一 Runtime 相对子路径，基目录按运行环境选择。 */
 const RUNTIME_RELATIVE_SEGMENTS = ['runtime', 'pi'] as const
@@ -55,8 +54,6 @@ export interface PiProcessOptions {
   readonly sessionDir: string
   /** 要恢复的会话 id；为 null 表示新建会话。 */
   readonly sessionId: string | null
-  /** 仅新建会话使用的明确模型身份；恢复会话不传，避免覆盖其保存的模型。 */
-  readonly model?: ModelIdentity | null
   /**
    * Project Trust 决定：有受保护资源时为用户决定（`--approve`/`--no-approve`），
    * 无受保护资源时为 null（不传，交给官方默认）；决定由主进程探测与记录，不由页面指定。
@@ -86,12 +83,12 @@ export function getPiExecutablePath(): string {
 
 /**
  * 启动参数固定：RPC 模式、按信任决定传递项目资源覆盖、显式工具集、会话目录与可选恢复会话，
- * 以及新会话指定模型与仅用于安全启动的 `--no-extensions`。
+ * 以及仅用于安全启动的 `--no-extensions`。
  *
  * Skills、Prompt Templates、MCP 与 Extension 按 Pi 资源加载规则和 Project Trust 决定加载；
  * 用户级资源不受项目信任决定限制，项目级资源只在信任时加载。常规启动不全量关闭资源，
  * `--no-extensions` 仅用于安全启动。
- * 会话由 Pi 持久化，不使用 `--no-session`；页面不能直接指定这些开关，模型只接受受校验的身份。
+ * 会话由 Pi 持久化，不使用 `--no-session`；默认模型由 Pi 自己的 settings.json 决定，不在这里覆盖。
  */
 export function getPiLaunchArguments(options: PiProcessOptions): string[] {
   const tools = process.platform === 'win32'
@@ -106,9 +103,6 @@ export function getPiLaunchArguments(options: PiProcessOptions): string[] {
   if (options.trustDecision === 'trusted') args.push('--approve')
   else if (options.trustDecision === 'untrusted') args.push('--no-approve')
   if (options.sessionId !== null) args.push('--session-id', options.sessionId)
-  else if (options.model != null) {
-    args.push('--provider', options.model.provider, '--model', options.model.modelId)
-  }
   return args
 }
 

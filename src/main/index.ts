@@ -1,4 +1,4 @@
-/** 管理唯一桌面窗口、本地资产边界，以及应用信息、Project 选择/添加/移除、项目文件检索、Session 与 Project Trust、界面偏好、Runtime、自定义供应商配置、认证、Extension IPC、事件广播及退出编排。 */
+/** 管理唯一桌面窗口、本地资产边界，以及应用信息、Project 选择/添加/移除、项目文件检索、Session 与 Project Trust、界面偏好、Runtime、Pi 默认模型、自定义供应商配置、认证、Extension IPC、事件广播及退出编排。 */
 import { realpath } from 'node:fs/promises'
 import { extname, isAbsolute, relative, resolve, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -9,12 +9,10 @@ import type { AppInfoResult, DesktopErrorCode } from '../shared/desktop-api'
 import {
   PREFERENCES_GET_CHANNEL,
   PREFERENCES_SET_UI_CHANNEL,
-  PREFERENCES_GET_MODEL_CHANNEL,
-  PREFERENCES_SET_MODEL_CHANNEL,
   PREFERENCES_GET_MODEL_DISPLAY_CHANNEL,
   PREFERENCES_SET_MODEL_DISPLAY_CHANNEL
 } from '../shared/preferences-api'
-import type { ModelDisplayResult, ModelPreferenceResult, PreferencesErrorCode, PreferencesResult } from '../shared/preferences-api'
+import type { ModelDisplayResult, PreferencesErrorCode, PreferencesResult } from '../shared/preferences-api'
 import { isModelDisplayPreference, isUiTheme } from '../shared/preferences-api'
 import type { UiTheme } from '../shared/preferences-api'
 import {
@@ -115,7 +113,6 @@ import {
   RUNTIME_STOP_CHANNEL,
   RUNTIME_STATUS_EVENT,
   isResourcePreviewRequest,
-  isModelIdentity,
   isRuntimeSetModelRequest,
   isRuntimeRewindRequest
 } from '../shared/runtime-api'
@@ -146,10 +143,17 @@ import {
   isModelsConfigSaveRequest
 } from '../shared/models-config-api'
 import type { ModelsConfigErrorCode, ModelsConfigResult } from '../shared/models-config-api'
+import {
+  PI_SETTINGS_GET_DEFAULT_MODEL_CHANNEL,
+  PI_SETTINGS_SET_DEFAULT_MODEL_CHANNEL,
+  isPiDefaultModelSetRequest
+} from '../shared/pi-settings-api'
+import type { PiDefaultModelResult } from '../shared/pi-settings-api'
 import { DesktopConfigStore } from './desktop-config-store'
 import { AuthManager, AuthManagerError } from './auth-manager'
 import { readMcpConfigListing } from './mcp-config-reader'
 import { ModelsConfigError, ModelsConfigManager } from './models-config-manager'
+import { PiSettingsError, PiSettingsManager } from './pi-settings-manager'
 import { PreferencesManager } from './preferences-manager'
 import { ProjectFileIndex } from './project-file-index'
 import { ProjectManager } from './project-manager'
@@ -211,6 +215,8 @@ const authManager = new AuthManager({ store: configStore, isPackaged: app.isPack
 const preferencesManager = new PreferencesManager({ store: configStore })
 /** 自定义供应商配置（Pi 的 models.json）的唯一读写者；与 Desktop 自己的配置互不影响。 */
 const modelsConfigManager = new ModelsConfigManager()
+/** Pi 默认模型（Pi 的 settings.json）的唯一读写者；只改 defaultProvider 与 defaultModel。 */
+const piSettingsManager = new PiSettingsManager()
 const windowState = new WindowState({ store: configStore })
 
 /** 有限等待；只用于退出编排，不证明被等待的操作已完成。 */
@@ -397,6 +403,16 @@ function modelsConfigFailure(code: ModelsConfigErrorCode, message: string): Mode
 function modelsConfigFailureOf(error: unknown, fallback: string): ModelsConfigResult {
   if (error instanceof ModelsConfigError) return modelsConfigFailure(error.code, error.message)
   return modelsConfigFailure('INTERNAL_ERROR', fallback)
+}
+
+function piDefaultModelFailure(code: DesktopErrorCode, message: string): PiDefaultModelResult {
+  return { ok: false, error: { code, message } }
+}
+
+/** 读写失败统一映射：已知错误保留自己的错误码与结论文本，其余按内部错误处理。 */
+function piDefaultModelFailureOf(error: unknown, fallback: string): PiDefaultModelResult {
+  if (error instanceof PiSettingsError) return piDefaultModelFailure(error.code, error.message)
+  return piDefaultModelFailure('INTERNAL_ERROR', fallback)
 }
 
 function projectPathFailure(code: ProjectErrorCode, message: string): ProjectPathResult {
@@ -681,10 +697,10 @@ function registerSessionHandlers(pageUrl: string): void {
         return sessionFailure('INVALID_REQUEST', '打开会话参数格式不正确。')
       }
       const fields = request as Record<string, unknown>
-      if (Object.keys(fields).some((key) => key !== 'sessionId' && key !== 'allowInterrupt' && key !== 'model')) {
+      if (Object.keys(fields).some((key) => key !== 'sessionId' && key !== 'allowInterrupt')) {
         return sessionFailure('INVALID_REQUEST', '打开会话参数包含未支持的字段。')
       }
-      const { sessionId, allowInterrupt, model } = fields
+      const { sessionId, allowInterrupt } = fields
       let targetSessionId: string | null = null
       if (typeof sessionId === 'string') {
         if (sessionId.trim() === '') {
@@ -697,17 +713,13 @@ function registerSessionHandlers(pageUrl: string): void {
       if (typeof allowInterrupt !== 'boolean') {
         return sessionFailure('INVALID_REQUEST', '打开会话必须显式说明是否允许中断当前操作。')
       }
-      if (model !== undefined && (targetSessionId !== null || (model !== null && !isModelIdentity(model)))) {
-        return sessionFailure('INVALID_REQUEST', '模型身份只能用于新建会话，且必须包含合法的供应商与模型 ID。')
-      }
       const trust = await resolveTrustForCurrentProject()
       if (trust.requiresPrompt) {
         return sessionFailure('TRUST_REQUIRED', trust.message ?? '项目包含需要信任决定的资源。')
       }
       return sessionManager.open({
         sessionId: targetSessionId,
-        allowInterrupt,
-        ...(model !== undefined ? { model } : {})
+        allowInterrupt
       }, trust.decision)
     }
   )
@@ -779,8 +791,7 @@ async function startTrustedRuntime(projectPath: string): Promise<RuntimeResult> 
       }
     }
   }
-  const model = await configStore.readNewSessionModel()
-  return runtimeManager.start(projectPath, null, outcome.decision, false, model)
+  return runtimeManager.start(projectPath, null, outcome.decision, false)
 }
 
 /** Trust 查询与决定接口；决定只接受当前项目，防止页面改写其他项目的记录。 */
@@ -1245,32 +1256,45 @@ function registerRuntimeHandlers(pageUrl: string): void {
   )
 }
 
-/** 界面偏好、新会话模型与对话页模型展示偏好分开读写；未知字段、任意启动参数一律拒绝。 */
-function registerPreferencesHandlers(pageUrl: string): void {
+/** Pi 默认模型（settings.json）的读写；零参读取，写入只接受一个合法模型身份。 */
+function registerPiSettingsHandlers(pageUrl: string): void {
   handle(
-    PREFERENCES_GET_MODEL_CHANNEL,
-    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<ModelPreferenceResult> => {
+    PI_SETTINGS_GET_DEFAULT_MODEL_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<PiDefaultModelResult> => {
       if (!isTrustedCaller(event, pageUrl)) {
-        return { ok: false, error: { code: 'FORBIDDEN', message: '不允许此页面调用桌面接口。' } }
+        return piDefaultModelFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
       }
       if (args.length !== 0) {
-        return { ok: false, error: { code: 'INVALID_REQUEST', message: '新会话默认模型读取接口不接受参数。' } }
+        return piDefaultModelFailure('INVALID_REQUEST', 'Pi 默认模型读取接口不接受参数。')
       }
-      return preferencesManager.getNewSessionModel()
+      try {
+        return { ok: true, data: await piSettingsManager.getDefaultModel() }
+      } catch (error) {
+        return piDefaultModelFailureOf(error, '读取 Pi 默认模型时发生未预期的内部错误。')
+      }
     }
   )
   handle(
-    PREFERENCES_SET_MODEL_CHANNEL,
-    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<ModelPreferenceResult> => {
+    PI_SETTINGS_SET_DEFAULT_MODEL_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<PiDefaultModelResult> => {
       if (!isTrustedCaller(event, pageUrl)) {
-        return { ok: false, error: { code: 'FORBIDDEN', message: '不允许此页面调用桌面接口。' } }
+        return piDefaultModelFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
       }
-      if (args.length !== 1 || (args[0] !== null && !isModelIdentity(args[0]))) {
-        return { ok: false, error: { code: 'INVALID_REQUEST', message: '新会话默认模型必须是合法模型身份或 null。' } }
+      if (args.length !== 1 || !isPiDefaultModelSetRequest(args[0])) {
+        return piDefaultModelFailure('INVALID_REQUEST', 'Pi 默认模型必须是包含供应商与模型 ID 的合法身份。')
       }
-      return preferencesManager.setNewSessionModel(args[0])
+      const model = args[0]
+      try {
+        return { ok: true, data: await piSettingsManager.setDefaultModel(model) }
+      } catch (error) {
+        return piDefaultModelFailureOf(error, '保存 Pi 默认模型时发生未预期的内部错误。')
+      }
     }
   )
+}
+
+/** 界面偏好与对话页模型展示偏好分开读写；未知字段、任意启动参数一律拒绝。 */
+function registerPreferencesHandlers(pageUrl: string): void {
   handle(
     PREFERENCES_GET_MODEL_DISPLAY_CHANNEL,
     async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<ModelDisplayResult> => {
@@ -1797,6 +1821,7 @@ if (!app.requestSingleInstanceLock()) {
     registerSessionHandlers(pageUrl)
     registerTrustHandlers(pageUrl)
     registerPreferencesHandlers(pageUrl)
+    registerPiSettingsHandlers(pageUrl)
     registerModelsConfigHandlers(pageUrl)
     registerAuthHandlers(pageUrl)
     runtimeManager.onStatusChanged(broadcastRuntimeStatus)

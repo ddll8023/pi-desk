@@ -1,12 +1,12 @@
 /**
  * 本地 Desktop 配置的唯一读写者：最近项目的添加/移除、当前项目、界面偏好、窗口状态、各项目信任决定（Project Trust）
- * 与安装级 UUID、桌面新会话默认模型、对话页模型展示偏好的加载、保存与降级处理。
+ * 与安装级 UUID、对话页模型展示偏好的加载、保存与降级处理。
  *
  * 配置位于 Electron userData 目录下的 desktop-config.json。写入采用同目录临时文件加改名替换，
  * 所有读写串行执行；加载时记录文件的标识（mtime 与大小），每次写入前比对，磁盘在加载后被其他
  * 写入者改动过就放弃本次保存，不用过期内容覆盖它。结构损坏先备份再重新开始，暂时读不到时进入
- * 只读降级，避免用空配置覆盖仍然存在的记录。界面偏好、窗口状态、各项目的信任决定与安装级 UUID
- * 是同一文件里的可选字段，
+ * 只读降级，避免用空配置覆盖仍然存在的记录。界面偏好、窗口状态、各项目的信任决定、安装级 UUID
+ * 与对话页模型展示偏好是同一文件里的可选字段，
  * 缺失或非法一律按默认值处理，不参与结构判定，也不改变版本语义；路径归一化在 project-path.ts，切换编排在
  * project-manager.ts，偏好读取在 preferences-manager.ts，窗口状态校正与保存时机在 window-state.ts，
  * 信任决定的探测与启动参数映射在 trust-manager.ts。
@@ -71,8 +71,6 @@ interface StoredConfig {
    * 不是凭据；与 Pi 自己保存在 settings.json 里的值互不影响。缺失或非法按无值处理。
    */
   readonly authDeviceId: string | null
-  /** 仅用于桌面新会话；缺失或非法时跟随 Pi 默认。 */
-  readonly newSessionModel: ModelIdentity | null
   /** 对话页模型切换器里要隐藏的模型；缺失或非法时不做过滤。 */
   readonly hiddenModels: readonly ModelIdentity[]
 }
@@ -85,7 +83,6 @@ interface PersistPayload {
   readonly windowState: WindowState
   readonly projectTrust: Record<string, TrustDecision>
   readonly authDeviceId: string | null
-  readonly newSessionModel?: ModelIdentity | null
   /** 未显式更新时保留当前值，避免其他配置写入将展示偏好清除。 */
   readonly hiddenModels?: readonly ModelIdentity[]
 }
@@ -216,7 +213,6 @@ export class DesktopConfigStore {
   private projects: Project[] = []
   private currentProjectId: string | null = null
   private ui: UiPreferences = DEFAULT_UI_PREFERENCES
-  private newSessionModel: ModelIdentity | null = null
   private hiddenModels: ModelIdentity[] = []
   private windowState: WindowState = DEFAULT_WINDOW_STATE
   private projectTrust: Record<string, TrustDecision> = {}
@@ -335,36 +331,6 @@ export class DesktopConfigStore {
       }
       this.ui = ui
       return this.ui
-    })
-  }
-
-  /** 默认模型独立读取，不复制 Pi 配置，也不返回可被外部修改的内存对象。 */
-  readNewSessionModel(): Promise<ModelIdentity | null> {
-    return this.enqueue(async () => {
-      await this.loadFromDisk()
-      return this.newSessionModel === null ? null : { ...this.newSessionModel }
-    })
-  }
-
-  /** 模型选择在保存成功后才提交；只读降级不能假称已为下次启动保存。 */
-  saveNewSessionModel(model: ModelIdentity | null): Promise<ModelIdentity | null> {
-    return this.enqueue(async () => {
-      await this.loadFromDisk()
-      if (this.readOnly) {
-        throw new DesktopConfigStorageError('本地配置处于只读状态，新会话默认模型未保存。')
-      }
-      const next = model === null ? null : { ...model }
-      await this.persist({
-        projects: this.projects,
-        currentProjectId: this.currentProjectId,
-        ui: this.ui,
-        windowState: this.windowState,
-        projectTrust: this.projectTrust,
-        authDeviceId: this.deviceIdForPersist(),
-        newSessionModel: next
-      })
-      this.newSessionModel = next
-      return next === null ? null : { ...next }
     })
   }
 
@@ -556,7 +522,6 @@ export class DesktopConfigStore {
       this.projects = [...parsed.projects]
       this.currentProjectId = parsed.currentProjectId
       this.ui = parsed.ui
-      this.newSessionModel = parsed.newSessionModel
       this.hiddenModels = [...parsed.hiddenModels]
       this.windowState = parsed.window
       this.projectTrust = parsed.projectTrust
@@ -567,7 +532,6 @@ export class DesktopConfigStore {
     this.projects = [...parsed.projects]
     this.currentProjectId = parsed.currentProjectId
     this.ui = parsed.ui
-    this.newSessionModel = parsed.newSessionModel
     this.hiddenModels = [...parsed.hiddenModels]
     this.windowState = parsed.window
     this.projectTrust = parsed.projectTrust
@@ -593,7 +557,6 @@ export class DesktopConfigStore {
       projects,
       currentProjectId,
       ui: sanitizeUiPreferences(value.ui),
-      newSessionModel: isModelIdentity(value.newSessionModel) ? value.newSessionModel : null,
       hiddenModels: sanitizeHiddenModels(value.hiddenModels),
       window: sanitizeWindowState(value.window),
       projectTrust: sanitizeProjectTrust(value.projectTrust),
@@ -654,7 +617,6 @@ export class DesktopConfigStore {
       window: next.windowState,
       projectTrust: next.projectTrust,
       authDeviceId: next.authDeviceId,
-      newSessionModel: next.newSessionModel === undefined ? this.newSessionModel : next.newSessionModel,
       hiddenModels: next.hiddenModels === undefined ? this.hiddenModels : [...next.hiddenModels]
     }
     // 这份配置是整文件写入：磁盘在加载后被别的写入者改过时，宁可放弃本次保存，也不用过期内容覆盖。

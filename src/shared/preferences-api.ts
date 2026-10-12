@@ -1,12 +1,10 @@
-/** 定义界面偏好、桌面新会话默认模型与对话页模型展示偏好的受限 IPC；窗口状态由主进程独占，不经过 IPC。 */
+/** 定义界面偏好与对话页模型展示偏好的受限 IPC；窗口状态由主进程独占，不经过 IPC。 */
 import type { DesktopErrorCode } from './desktop-api'
 import type { ModelIdentity } from './runtime-api'
 import { isModelIdentity } from './runtime-api'
 
 export const PREFERENCES_GET_CHANNEL = 'desktop:preferences-get'
 export const PREFERENCES_SET_UI_CHANNEL = 'desktop:preferences-set-ui'
-export const PREFERENCES_GET_MODEL_CHANNEL = 'desktop:preferences-get-model'
-export const PREFERENCES_SET_MODEL_CHANNEL = 'desktop:preferences-set-model'
 export const PREFERENCES_GET_MODEL_DISPLAY_CHANNEL = 'desktop:preferences-get-model-display'
 export const PREFERENCES_SET_MODEL_DISPLAY_CHANNEL = 'desktop:preferences-set-model-display'
 
@@ -25,7 +23,7 @@ export interface UiPreferences {
   readonly theme: UiTheme
 }
 
-/** 复用桌面错误码；界面偏好本地先生效，模型偏好保存成功后才提交，失败由调用方阻止新会话采用新选择。 */
+/** 复用桌面错误码；界面偏好本地先生效，模型展示偏好保存成功后才提交。 */
 export type PreferencesErrorCode = DesktopErrorCode
 
 export interface PreferencesError {
@@ -35,11 +33,6 @@ export interface PreferencesError {
 
 export type PreferencesResult =
   | { readonly ok: true; readonly data: UiPreferences }
-  | { readonly ok: false; readonly error: PreferencesError }
-
-/** 桌面新会话默认模型；null 表示跟随 Pi 自己的默认，不修改 Pi 配置。 */
-export type ModelPreferenceResult =
-  | { readonly ok: true; readonly data: ModelIdentity | null }
   | { readonly ok: false; readonly error: PreferencesError }
 
 /** 对话页模型切换器的展示偏好：要隐藏的模型；为空表示全部显示。 */
@@ -52,10 +45,6 @@ export type ModelDisplayResult =
   | { readonly ok: false; readonly error: PreferencesError }
 
 export interface PreferencesApi {
-  /** 读取桌面新会话默认模型；null 表示跟随 Pi 默认，不读取或修改 Pi 模型设置。 */
-  readonly getNewSessionModel: () => Promise<ModelPreferenceResult>
-  /** 保存只影响桌面新会话；null 清除覆盖，返回成功后才更新选择，不修改 Pi 配置。 */
-  readonly setNewSessionModel: (model: ModelIdentity | null) => Promise<ModelPreferenceResult>
   /** 读取对话页模型展示偏好；隐藏列表为空表示全部显示，不读取或修改 Pi 配置。 */
   readonly getModelDisplay: () => Promise<ModelDisplayResult>
   /** 保存对话页模型展示偏好；返回主进程确认后的结果，不修改 Pi 配置。 */
@@ -83,16 +72,6 @@ function isUiPreferences(value: unknown): value is UiPreferences {
   if (!isRecord(value)) return false
   return typeof value.sidebarCollapsed === 'boolean'
     && isUiTheme(value.theme)
-}
-
-/** 模型偏好独立校验，不与界面偏好整包读写，避免互相覆盖。 */
-export function isModelPreferenceResult(value: unknown): value is ModelPreferenceResult {
-  if (!isRecord(value)) return false
-  if (value.ok === true) return value.data === null || isModelIdentity(value.data)
-  if (value.ok !== false || !isRecord(value.error)) return false
-  return typeof value.error.message === 'string'
-    && typeof value.error.code === 'string'
-    && PREFERENCES_ERROR_CODES.includes(value.error.code)
 }
 
 /** 隐藏模型的数量上限；只用于展示过滤，与模型身份的边界保持一致。 */

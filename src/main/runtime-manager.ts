@@ -24,7 +24,6 @@ import type {
   McpInspectAbortResult,
   McpServerReport,
   McpStatusResult,
-  ModelIdentity,
   ModelSummary,
   ProjectionBatch,
   ProjectionResult,
@@ -40,7 +39,6 @@ import type {
   RuntimeRewindResult,
   RuntimeStatus
 } from '../shared/runtime-api'
-import { isModelIdentity } from '../shared/runtime-api'
 import type { ExtensionDialogResponseInput, ExtensionUiSnapshot } from '../shared/extension-ui-api'
 import { MessageProjection } from './message-projection'
 import type { ProjectionStatusHint } from './message-projection'
@@ -418,13 +416,12 @@ export class RuntimeManager {
   private promptRequestRuntimeId: number | null = null
   /** 回退及权威同步期间禁止写操作；结果未知时保留锁直到迟到响应或重新打开 Runtime。 */
   private rewindRuntimeId: number | null = null
-  /** 最近一次实际启动目标（项目、会话 id 与新会话指定模型）；由主进程记录，退出后仍保留，
+  /** 最近一次实际启动目标（项目与会话 id）；由主进程记录，退出后仍保留，
    * 供安全模式启动重试复用；资源重载另从当前 Runtime 快照取得目标。
    */
   private lastLaunchIntent: {
     readonly projectPath: string
     readonly sessionId: string | null
-    readonly model: ModelIdentity | null
   } | null = null
   /** 进行中的 MCP 探测；同一时刻只允许一个，句柄用于超时与用户取消。 */
   private activeProbe: { readonly projectPath: string; readonly abort: (message: string) => void } | null = null
@@ -678,20 +675,16 @@ export class RuntimeManager {
 
   /** 启动唯一 Runtime；重复启动被拒绝，不做隐式重启。`sessionId` 为 null 时新建会话。
    * `trustDecision` 是主进程探测并记录的 Project Trust 决定，不由页面指定。
-   * `disableExtensions` 只为安全模式启动使用；`model` 只允许新建会话指定，恢复不覆盖模型。
+   * `disableExtensions` 只为安全模式启动使用；新建会话的默认模型由 Pi 自己的 settings.json 决定。
    */
   async start(
     projectPath: string,
     sessionId: string | null,
     trustDecision: 'trusted' | 'untrusted' | null,
-    disableExtensions = false,
-    model: ModelIdentity | null = null
+    disableExtensions = false
   ): Promise<RuntimeResult> {
-    if (model !== null && (sessionId !== null || !isModelIdentity(model))) {
-      return { ok: false, error: { code: 'INVALID_REQUEST', message: '只有新建会话可以指定合法的模型身份。' } }
-    }
     try {
-      return { ok: true, data: await this.launch(projectPath, sessionId, trustDecision, disableExtensions, model) }
+      return { ok: true, data: await this.launch(projectPath, sessionId, trustDecision, disableExtensions) }
     } catch (error) {
       const failure = error instanceof RuntimeFailure
         ? error
@@ -728,7 +721,7 @@ export class RuntimeManager {
         }
       }
     }
-    return this.start(intent.projectPath, intent.sessionId, trustDecision, true, intent.model)
+    return this.start(intent.projectPath, intent.sessionId, trustDecision, true)
   }
 
   /** 投影快照只读；没有活动 Runtime 时返回空基准。 */
@@ -865,7 +858,7 @@ export class RuntimeManager {
     }
     this.capabilityCache = null
     if (this.lastLaunchIntent?.projectPath === runtime.projectPath) {
-      this.lastLaunchIntent = { ...this.lastLaunchIntent, sessionId: finalInfo.sessionId, model: null }
+      this.lastLaunchIntent = { ...this.lastLaunchIntent, sessionId: finalInfo.sessionId }
     }
     const status: RuntimeStatus = { state: 'ready', runtimeId: runtime.runtimeId, info: finalInfo, lastError: null }
     this.publish(status)
@@ -1031,8 +1024,7 @@ export class RuntimeManager {
     projectPath: string,
     sessionId: string | null,
     trustDecision: 'trusted' | 'untrusted' | null,
-    disableExtensions: boolean,
-    model: ModelIdentity | null
+    disableExtensions: boolean
   ): Promise<RuntimeStatus> {
     if (this.active !== null) {
       throw new RuntimeFailure(
@@ -1046,7 +1038,7 @@ export class RuntimeManager {
     this.stopRequested = false
     const projectDirectory = await this.checkProjectPath(projectPath)
     // 启动意图在 spawn 前记录：启动失败时仍能由页面重试安全模式启动。
-    this.lastLaunchIntent = { projectPath: projectDirectory, sessionId, model: model === null ? null : { ...model } }
+    this.lastLaunchIntent = { projectPath: projectDirectory, sessionId }
     const runtimeId = (this.runtimeIdSeed += 1)
     this.publish({ state: 'starting', runtimeId, info: null, lastError: null })
     // Extension UI 状态随代际重建：上一代际的 dialog 队列与展示状态不再有意义。
@@ -1100,7 +1092,6 @@ export class RuntimeManager {
         projectPath: projectDirectory,
         sessionDir: getProjectSessionDir(projectDirectory),
         sessionId,
-        model,
         trustDecision,
         ...(disableExtensions ? { disableExtensions: true } : {}),
         handlers: {
@@ -1158,11 +1149,6 @@ export class RuntimeManager {
       const info = toRuntimeInfo(outcome.response.data)
       if (info === null) {
         throw new RuntimeFailure('RUNTIME_PROTOCOL_ERROR', 'get_state 响应缺少约定的会话字段。')
-      }
-      if (model !== null && (info.modelProvider !== model.provider || info.modelId !== model.modelId)) {
-        const actual = info.modelProvider && info.modelId ? `${info.modelProvider}/${info.modelId}` : '未选择模型'
-        throw new RuntimeFailure('RUNTIME_COMMAND_REJECTED',
-          `Pi 未使用指定模型 ${model.provider}/${model.modelId}（实际：${actual}）；启动已停止，请重新选择模型。`)
       }
       if (info.messageCount > 0) {
         // 恢复会话：先取得历史消息作为投影基准，再对外声明就绪。

@@ -1,4 +1,4 @@
-/** 为沙箱页面提供应用信息、Project 选择/添加/移除/列表、项目文件检索、Session、Project Trust、偏好、Runtime、Pi 资源、自定义供应商、认证与 Extension 等受限接口，不暴露 Electron、任意 channel 或系统能力。 */
+/** 为沙箱页面提供应用信息、Project 选择/添加/移除/列表、项目文件检索、Session、Project Trust、偏好、Runtime、Pi 资源、Pi 默认模型、自定义供应商、认证与 Extension 等受限接口，不暴露 Electron、任意 channel 或系统能力。 */
 import { contextBridge, ipcRenderer } from 'electron'
 import type { IpcRendererEvent } from 'electron'
 import { APP_INFO_CHANNEL, isAppInfoResult } from '../shared/desktop-api'
@@ -6,15 +6,18 @@ import type { DesktopApi } from '../shared/desktop-api'
 import {
   PREFERENCES_GET_CHANNEL,
   PREFERENCES_SET_UI_CHANNEL,
-  PREFERENCES_GET_MODEL_CHANNEL,
-  PREFERENCES_SET_MODEL_CHANNEL,
   PREFERENCES_GET_MODEL_DISPLAY_CHANNEL,
   PREFERENCES_SET_MODEL_DISPLAY_CHANNEL,
-  isModelPreferenceResult,
   isPreferencesResult,
   isModelDisplayResult
 } from '../shared/preferences-api'
-import type { ModelDisplayPreference, ModelDisplayResult, ModelPreferenceResult, PreferencesApi, PreferencesResult, UiPreferences } from '../shared/preferences-api'
+import type { ModelDisplayPreference, ModelDisplayResult, PreferencesApi, PreferencesResult, UiPreferences } from '../shared/preferences-api'
+import {
+  PI_SETTINGS_GET_DEFAULT_MODEL_CHANNEL,
+  PI_SETTINGS_SET_DEFAULT_MODEL_CHANNEL,
+  isPiDefaultModelResult
+} from '../shared/pi-settings-api'
+import type { PiDefaultModelResult, PiSettingsApi } from '../shared/pi-settings-api'
 import {
   MODELS_CONFIG_DELETE_PROVIDER_CHANNEL,
   MODELS_CONFIG_GET_CHANNEL,
@@ -287,7 +290,7 @@ function invalidAuthLogoutResponse(): AuthLogoutResult {
   return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_AUTH_STATUS_RESPONSE, detail: null } }
 }
 
-const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionApi & PreferencesApi & TrustApi & ExtensionUiApi & AuthApi & ModelsConfigApi = {
+const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionApi & PreferencesApi & PiSettingsApi & TrustApi & ExtensionUiApi & AuthApi & ModelsConfigApi = {
   async getAppInfo() {
     const response: unknown = await ipcRenderer.invoke(APP_INFO_CHANNEL)
     if (!isAppInfoResult(response)) {
@@ -339,11 +342,8 @@ const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionAp
     return isProjectFileSearchResult(response) ? response : invalidProjectFileResponse()
   },
 
-  async openSession(sessionId: string | null, allowInterrupt: boolean, model?: ModelIdentity | null) {
-    const request: SessionOpenRequest = {
-      sessionId, allowInterrupt,
-      ...(model !== undefined ? { model: model === null ? null : { provider: model.provider, modelId: model.modelId } } : {})
-    }
+  async openSession(sessionId: string | null, allowInterrupt: boolean) {
+    const request: SessionOpenRequest = { sessionId, allowInterrupt }
     const response: unknown = await ipcRenderer.invoke(SESSION_OPEN_CHANNEL, request)
     return isSessionListResult(response) ? response : invalidSessionResponse()
   },
@@ -365,18 +365,18 @@ const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionAp
     return isTrustDecisionResult(response) ? response : invalidTrustResponse()
   },
 
-  async getNewSessionModel(): Promise<ModelPreferenceResult> {
-    const response: unknown = await ipcRenderer.invoke(PREFERENCES_GET_MODEL_CHANNEL)
-    return isModelPreferenceResult(response) ? response : {
-      ok: false, error: { code: 'INVALID_RESPONSE', message: '桌面接口返回了无法识别的新会话默认模型。' }
+  async getPiDefaultModel(): Promise<PiDefaultModelResult> {
+    const response: unknown = await ipcRenderer.invoke(PI_SETTINGS_GET_DEFAULT_MODEL_CHANNEL)
+    return isPiDefaultModelResult(response) ? response : {
+      ok: false, error: { code: 'INVALID_RESPONSE', message: '桌面接口返回了无法识别的 Pi 默认模型。' }
     }
   },
 
-  async setNewSessionModel(model: ModelIdentity | null): Promise<ModelPreferenceResult> {
-    const payload = model === null ? null : { provider: model.provider, modelId: model.modelId }
-    const response: unknown = await ipcRenderer.invoke(PREFERENCES_SET_MODEL_CHANNEL, payload)
-    return isModelPreferenceResult(response) ? response : {
-      ok: false, error: { code: 'INVALID_RESPONSE', message: '桌面接口返回了无法识别的新会话默认模型。' }
+  async setPiDefaultModel(model: ModelIdentity): Promise<PiDefaultModelResult> {
+    const request = { provider: model.provider, modelId: model.modelId }
+    const response: unknown = await ipcRenderer.invoke(PI_SETTINGS_SET_DEFAULT_MODEL_CHANNEL, request)
+    return isPiDefaultModelResult(response) ? response : {
+      ok: false, error: { code: 'INVALID_RESPONSE', message: '桌面接口返回了无法识别的 Pi 默认模型。' }
     }
   },
 
