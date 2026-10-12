@@ -144,7 +144,7 @@ Pi 原生的项目信任确认是起点；桌面端在此之上普遍叠加"模�
 
 ### 可直接借鉴
 
-- **Pi 数据与桌面偏好分开持有**：Pi 持有其会话与认证配置，桌面端不另存副本；仅作用于桌面端的新会话模型选择属于桌面偏好，不回写 Pi 设置，也不覆盖恢复会话的模型。配置归属见 [Desktop 配置存储](../src/main/desktop-config-store.ts)，偏好契约见 [Preferences API](../src/shared/preferences-api.ts)，新建与恢复边界见 [会话 Store](../src/renderer/src/stores/session.ts)。
+- **Pi 数据与桌面偏好分开持有**：Pi 持有其会话与认证配置，桌面端不另存副本；默认模型由桌面端写入 Pi 的 `settings.json`；恢复会话不覆盖其模型。配置归属见 [Pi settings 管理](../src/main/pi-settings-manager.ts)，契约见 [Pi settings API](../src/shared/pi-settings-api.ts)，新建与恢复边界见 [会话 Store](../src/renderer/src/stores/session.ts)。
 - **契约单点定义 + 载荷校验**：我们已有按领域拆分的桥接契约与渲染端服务层，可以再进一步把"契约只在 shared 层定义、主进程入口校验载荷"写成硬规则，并借鉴第 10 项用一个兜底扩展守住跨进程标识状态的做法。
 - **错误与重试集中处理**：借鉴第 5 项的对话内错误卡片 + 一键重试 + 自动重试状态行，把桥接失败、进程退出、渲染崩溃三类问题收敛到同一套 UI 语义。
 - **扩展 UI 桥的覆盖面清单**：第 7 项的确认/选择/输入/编辑器/通知清单和第 6 项的声明式适配器思路，可以直接作为我们扩展 UI 能力的对照表。
