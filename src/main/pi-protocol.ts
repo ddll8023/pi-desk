@@ -6,12 +6,14 @@
  */
 import { createHash } from 'node:crypto'
 import type {
+  ContextUsage,
   ExtensionErrorEntry,
   ModelSummary,
   PiResourceEntry,
   PiResourceKind,
   PromptDisposition,
-  RuntimeInfo
+  RuntimeInfo,
+  SessionUsage
 } from '../shared/runtime-api'
 
 export type PiRecordKind = 'response' | 'session-event' | 'extension-ui' | 'unknown'
@@ -97,7 +99,47 @@ export function toRuntimeInfo(data: unknown): RuntimeInfo | null {
     modelId: identity.id,
     sessionId: typeof sessionId === 'string' ? sessionId : null,
     messageCount,
-    isStreaming
+    isStreaming,
+    // 用量与速率不来自 get_state；由 get_session_stats 与会话事件单独补上。
+    usage: null,
+    rate: { live: null, average: null }
+  }
+}
+
+/** 累计统计中的有限数有效，其余（含缺失、NaN）按 0 处理。 */
+function readUsageNumber(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0
+}
+
+/** 上下文占用的未知值必须保持 null：压缩后与模型目录缺窗口都是合法未知。 */
+function readOptionalUsageNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+/** `contextUsage` 缺失或形状不符时为 null，不做任何推算。 */
+function readContextUsage(value: unknown): ContextUsage | null {
+  if (!isRecord(value)) return null
+  return {
+    tokens: readOptionalUsageNumber(value.tokens),
+    contextWindow: readOptionalUsageNumber(value.contextWindow),
+    percent: readOptionalUsageNumber(value.percent)
+  }
+}
+
+/**
+ * 把 `get_session_stats` 的 data 投影为会话用量：`tokens` 不是对象时返回 null（视为未取到），
+ * 单个累计字段缺失按 0，上下文占用按未知保持 null。
+ */
+export function toSessionUsage(data: unknown): SessionUsage | null {
+  if (!isRecord(data) || !isRecord(data.tokens)) return null
+  const tokens = data.tokens
+  return {
+    input: readUsageNumber(tokens.input),
+    output: readUsageNumber(tokens.output),
+    cacheRead: readUsageNumber(tokens.cacheRead),
+    cacheWrite: readUsageNumber(tokens.cacheWrite),
+    cost: readUsageNumber(data.cost),
+    context: readContextUsage(data.contextUsage)
   }
 }
 

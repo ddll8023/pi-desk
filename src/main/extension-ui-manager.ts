@@ -5,6 +5,8 @@
  * 并为读取 MCP 状态提供一次性的 notify 文本捕获（捕获期间仍照常进入通知列表）；
  * 不持有进程，不解析其他记录族，dialog 响应写回由 RuntimeManager 借用其串行写入。随 Runtime 退出
  * 或切换清空，不持久化。`setTitle` 无桌面等价物，只计数不展示。
+ * 所有进入状态的展示文本都在这里先剥 ANSI 转义序列再截断：Extension 常给文本上色，
+ * 页面按纯文本插值，否则转义序列会变成可见字符，截断也会切出半截序列。
  */
 import type {
   ExtensionDialogRequest,
@@ -18,7 +20,7 @@ import { projectExtensionUiRequest } from '../shared/extension-ui-api'
 
 /** 通知列表条数上限；超出丢弃最旧条目。 */
 const MAX_NOTIFICATIONS = 10
-/** 单条通知与状态、widget 行文本的上限；超出截断并如实使用截断文本。 */
+/** 单条 Extension 展示文本（通知、状态、widget 行、对话框字段与编辑器填充）的上限；超出截断并如实使用截断文本。 */
 const MAX_TEXT_CHARS = 4_000
 /** status 条目数上限；超出丢弃最旧 key。 */
 const MAX_STATUSES = 16
@@ -28,6 +30,9 @@ const MAX_WIDGETS_PER_PLACEMENT = 4
 const MAX_DIALOGS = 8
 /** 一次 notify 捕获最多保留的条数；只用于读取 `/mcp` 状态，不影响通知列表。 */
 const MAX_CAPTURED_NOTIFIES = 20
+
+/** ANSI SGR 颜色序列；与 pi-process 对 stderr 诊断行的处理保持一致。 */
+const ANSI_ESCAPE = /\u001b\[[0-9;]*m/g
 
 interface MutableDialog {
   readonly id: string
@@ -49,6 +54,23 @@ interface ExtensionUiCallbacks {
 
 function truncate(text: string, maxLength: number): string {
   return text.length > maxLength ? text.slice(0, maxLength) : text
+}
+
+/** 展示文本的统一预处理：先去 ANSI 再截断，长度上限按清洗后的文本计。 */
+function sanitizeText(text: string): string {
+  return truncate(text.replace(ANSI_ESCAPE, ''), MAX_TEXT_CHARS)
+}
+
+/** dialog 的展示字段逐项清洗；id、method 与 timeoutMs 是协议字段，原样保留。 */
+function sanitizeDialog(dialog: ExtensionDialogRequest): ExtensionDialogRequest {
+  return {
+    ...dialog,
+    title: sanitizeText(dialog.title),
+    options: dialog.options.map((option) => sanitizeText(option)),
+    message: dialog.message === null ? null : sanitizeText(dialog.message),
+    placeholder: dialog.placeholder === null ? null : sanitizeText(dialog.placeholder),
+    prefill: dialog.prefill === null ? null : sanitizeText(dialog.prefill)
+  }
 }
 
 export class ExtensionUiManager {
@@ -119,14 +141,14 @@ export class ExtensionUiManager {
       }
       // 同 id 重复投递按一次处理。
       if (this.dialogs.some((dialog) => dialog.id === projected.id)) return
-      this.dialogs.push(projected.dialog)
+      this.dialogs.push(sanitizeDialog(projected.dialog))
       this.publish()
       return
     }
 
     if (projected.notify !== null) {
       this.notifySeed += 1
-      const message = truncate(projected.notify.message, MAX_TEXT_CHARS)
+      const message = sanitizeText(projected.notify.message)
       this.notifications.push({
         id: `ext-notify-${this.notifySeed}`,
         notifyType: projected.notify.notifyType,
@@ -146,7 +168,7 @@ export class ExtensionUiManager {
         this.statuses.delete(key)
       } else {
         this.statuses.delete(key)
-        this.statuses.set(key, truncate(text, MAX_TEXT_CHARS))
+        this.statuses.set(key, sanitizeText(text))
         while (this.statuses.size > MAX_STATUSES) {
           const oldest = this.statuses.keys().next().value
           if (oldest === undefined) break
@@ -166,7 +188,7 @@ export class ExtensionUiManager {
       } else {
         const widget: ExtensionWidget = {
           placement,
-          lines: lines.map((line) => truncate(line, MAX_TEXT_CHARS))
+          lines: lines.map((line) => sanitizeText(line))
         }
         this.widgets.delete(key)
         this.widgets.set(key, widget)
@@ -182,7 +204,7 @@ export class ExtensionUiManager {
     }
 
     if (projected.editorText !== null) {
-      this.editorText = truncate(projected.editorText, MAX_TEXT_CHARS)
+      this.editorText = sanitizeText(projected.editorText)
       this.publish()
       return
     }

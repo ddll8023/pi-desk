@@ -1,4 +1,4 @@
-<!-- Extension dialog 模态对话框：按 method 呈现 select / confirm / input / editor 四种形态，一次只展示队首请求；取消发送 cancelled 响应。 -->
+<!-- Extension dialog 模态对话框：按 method 呈现 select / confirm / input / editor 四种形态，一次只展示队首请求；取消发送 cancelled 响应，收起只隐藏弹窗、请求仍等回应。 -->
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
 import { computed, onMounted, onUnmounted, ref, useId, watch } from 'vue'
@@ -17,8 +17,11 @@ const emit = defineEmits<{
 const titleId = useId()
 const draft = ref('')
 
-/** 当前展示的队首请求；由 App.vue 保证只在有请求时挂载。 */
+/** 当前队首请求；没有请求或已收起时不渲染弹窗。 */
 const dialog = computed<ExtensionDialogRequest | null>(() => extensionStore.dialogs[0] ?? null)
+
+/** 被收起的对话不渲染弹窗，但请求仍在队列里等回应；底部入口负责恢复。 */
+const minimized = computed(() => dialog.value !== null && extensionStore.minimizedDialogId === dialog.value.id)
 
 watch(
   dialog,
@@ -57,6 +60,13 @@ function cancel(): void {
   void respondCurrent({ kind: 'cancelled' })
 }
 
+/** 收起当前对话：不提交响应，Pi 侧继续等待，可从输入区底部恢复。 */
+function minimize(): void {
+  const current = dialog.value
+  if (current === null) return
+  extensionStore.minimizeDialog(current.id)
+}
+
 async function respondCurrent(response: ExtensionDialogResponseInput): Promise<void> {
   const current = dialog.value
   if (current === null || busy.value) return
@@ -65,8 +75,8 @@ async function respondCurrent(response: ExtensionDialogResponseInput): Promise<v
 }
 
 function onKeydown(event: KeyboardEvent): void {
-  // Escape 表示取消当前对话；Enter 在 input/editor 中交由表单与多行语义处理。
-  if (dialog.value === null) return
+  // Escape 表示取消当前对话；收起状态下弹窗不在眼前，不能代替用户取消。
+  if (dialog.value === null || minimized.value) return
   if (event.key === 'Escape') {
     event.preventDefault()
     cancel()
@@ -85,7 +95,7 @@ onUnmounted(() => {
 <template>
   <Transition name="dialog-fade">
     <div
-      v-if="dialog !== null"
+      v-if="dialog !== null && !minimized"
       class="dialog-overlay"
       @click.self="cancel"
     >
@@ -146,6 +156,9 @@ onUnmounted(() => {
       </div>
 
       <div class="dialog-footer">
+        <AppButton :disabled="busy" @click="minimize">
+          收起
+        </AppButton>
         <AppButton :disabled="busy" @click="cancel">
           取消
         </AppButton>

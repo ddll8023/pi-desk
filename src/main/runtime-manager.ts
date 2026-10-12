@@ -37,7 +37,10 @@ import type {
   RuntimeSetModelRequest,
   RuntimeRewindRequest,
   RuntimeRewindResult,
-  RuntimeStatus
+  RuntimeInfo,
+  RuntimeStatus,
+  OutputRate,
+  SessionUsage
 } from '../shared/runtime-api'
 import type { ExtensionDialogResponseInput, ExtensionUiSnapshot } from '../shared/extension-ui-api'
 import { MessageProjection } from './message-projection'
@@ -54,9 +57,11 @@ import {
   toModelSummaries,
   toPromptDisposition,
   toResources,
-  toRuntimeInfo
+  toRuntimeInfo,
+  toSessionUsage
 } from './pi-protocol'
 import type { PiResponseRecord } from './pi-protocol'
+import { OutputRateTracker } from './output-rate'
 import { ProjectPathError, normalizeProjectPath } from './project-path'
 import { getProjectSessionDir } from './session-store'
 
@@ -108,6 +113,15 @@ const MCP_STATUS_TIMEOUT_MS = 60_000
 /** `/mcp` 是读取 MCP 状态的唯一固定命令；不接受页面传入命令文本。 */
 const MCP_STATUS_PROMPT = '/mcp'
 
+/**
+ * 会话用量的最小刷新间隔：流式期间一个回合会有大量输出事件，
+ * 每个事件都取一次统计会让 RPC 往返盖过真实工作，因此只按节拍补读。
+ */
+const USAGE_REFRESH_MS = 1_000
+
+/** 会话统计读取的等待上限；超时视为未取到，不影响状态刷新。 */
+const USAGE_TIMEOUT_MS = 10_000
+
 /** MCP 登录的等待上限：需要用户在浏览器里完成授权，明显长于状态读取。 */
 const MCP_LOGIN_TIMEOUT_MS = 300_000
 
@@ -156,8 +170,32 @@ interface ActiveRuntime {
   readonly process: PiProcess
   readonly protocol: PiProtocol
   readonly projection: MessageProjection
+  /** 本代际的输出速率采样；随代际创建，退出时停表。 */
+  readonly rate: OutputRateTracker
   /** 本代际收到的 `extension_error` 事件；有界、随代际清空。 */
   readonly extensionErrors: ExtensionErrorEntry[]
+}
+
+/** 仅接受普通对象：数组与 null 不进入事件字段读取。 */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+/** `message_start` / `message_end` 只有助手消息参与速率与用量统计。 */
+function isAssistantMessage(value: unknown): boolean {
+  return isRecord(value) && value.role === 'assistant'
+}
+
+/** 累计输出 token：缺失、非有限数或负数一律按未知处理，不猜造。 */
+function readUsageOutput(value: unknown): number | null {
+  if (!isRecord(value)) return null
+  const output = value.output
+  return typeof output === 'number' && Number.isFinite(output) && output >= 0 ? output : null
+}
+
+/** 已完成助手消息自带的 `usage.output`；消息形状不符时为 null。 */
+function readMessageOutputTokens(value: unknown): number | null {
+  return isRecord(value) ? readUsageOutput(value.usage) : null
 }
 
 /** 可分类的 Runtime 操作失败，由 start 统一转换为结果对象。 */
@@ -411,6 +449,10 @@ export class RuntimeManager {
   } | null = null
   /** 事件触发的状态刷新是否在进行中：避免每轮结束叠加多次 get_state。 */
   private refreshing = false
+  /** 会话统计的节拍句柄；非空表示已排一次补读，随代际清除。 */
+  private usageTimer: NodeJS.Timeout | null = null
+  /** 上一次会话统计的读取时刻；节拍按它计算等待间隔。 */
+  private usageReadAt = 0
   /** 模型切换与 Prompt 的预提交阶段互斥；标记带代际，旧请求结束不影响新 Runtime。 */
   private modelChangeRuntimeId: number | null = null
   private promptRequestRuntimeId: number | null = null
@@ -860,7 +902,13 @@ export class RuntimeManager {
     if (this.lastLaunchIntent?.projectPath === runtime.projectPath) {
       this.lastLaunchIntent = { ...this.lastLaunchIntent, sessionId: finalInfo.sessionId }
     }
-    const status: RuntimeStatus = { state: 'ready', runtimeId: runtime.runtimeId, info: finalInfo, lastError: null }
+    // 回退会改变会话累计统计，重新读一次；读不到时保留旧值，由下一次状态刷新收敛。
+    const status: RuntimeStatus = {
+      state: 'ready',
+      runtimeId: runtime.runtimeId,
+      info: this.withUsage(finalInfo, runtime, await this.readSessionUsage(runtime)),
+      lastError: null
+    }
     this.publish(status)
     return status
   }
@@ -969,7 +1017,12 @@ export class RuntimeManager {
     if (this.active !== runtime || this.snapshot.state !== 'ready') {
       throw new RuntimeFailure('RUNTIME_NOT_READY', 'Runtime 已变更，模型切换结果不再属于当前会话。')
     }
-    const status: RuntimeStatus = { state: 'ready', runtimeId: runtime.runtimeId, info, lastError: null }
+    const status: RuntimeStatus = {
+      state: 'ready',
+      runtimeId: runtime.runtimeId,
+      info: this.withUsage(info, runtime, await this.readSessionUsage(runtime)),
+      lastError: null
+    }
     this.publish(status)
     return status
   }
@@ -1002,7 +1055,9 @@ export class RuntimeManager {
     if (this.active !== null && this.active.runtimeId === runtime.runtimeId) {
       // 进程未在期限内确认退出：按失败收敛，并解除归属以免留下无主 Runtime。
       runtime.projection.dispose()
+      runtime.rate.reset()
       this.extensionUi.dispose()
+      this.clearUsageTimer()
       this.active = null
       this.capabilityCache = null
       this.publish({
@@ -1049,6 +1104,8 @@ export class RuntimeManager {
       onBatch: (batch) => this.emitProjection(batch),
       onStatusHint: (hint) => this.applyStatusHint(runtimeId, hint)
     })
+    // 速率采样器随代际创建；启动失败时在 catch 里停表。
+    const rate = this.createRateTracker(runtimeId)
 
     let exitEvent: PiExitEvent | null = null
     let spawnFailure: string | null = null
@@ -1117,6 +1174,7 @@ export class RuntimeManager {
         process: piProcess,
         protocol,
         projection,
+        rate,
         extensionErrors: []
       }
       this.active = runtime
@@ -1162,10 +1220,13 @@ export class RuntimeManager {
       }
 
       this.publish({ state: 'ready', runtimeId, info, lastError: null })
+      // 首屏用量按节拍补读一次：不阻塞就绪，也不因为统计失败而让启动失败。
+      this.scheduleUsageRefresh(runtime)
       return { ...this.snapshot }
     } catch (error) {
       // 只回收本次启动创建的进程与投影，不触碰既有 Runtime。
       projection.dispose()
+      rate.reset()
       if (piProcess !== null) {
         if (this.active?.runtimeId === runtimeId) {
           this.active = null
@@ -1421,29 +1482,33 @@ export class RuntimeManager {
   }
 
   /**
-   * 用 `get_state` 刷新快照；只在该 Runtime 仍是当前代际且仍就绪时生效。
+   * 用 `get_state` 与会话统计刷新快照；只在该 Runtime 仍是当前代际且仍就绪时生效。
    * 刷新失败不改变既有快照，真实退出由退出路径收敛。
    */
   private async refreshStatus(runtime: ActiveRuntime): Promise<void> {
     try {
-      const response = await this.requestCommand(
-        runtime,
-        { type: 'get_state' },
-        READY_TIMEOUT_MS,
-        '刷新 Runtime 状态'
-      )
-      if (!response.success) return
-      const info = toRuntimeInfo(response.data)
+      // 状态与用量互不依赖，并行读取；任一失败都不改变既有快照。
+      const [status, usage] = await Promise.all([
+        this.requestCommand(runtime, { type: 'get_state' }, READY_TIMEOUT_MS, '刷新 Runtime 状态'),
+        this.readSessionUsage(runtime)
+      ])
+      if (!status.success) return
+      const info = toRuntimeInfo(status.data)
       if (info === null) return
       if (this.active?.runtimeId !== runtime.runtimeId || this.snapshot.state !== 'ready'
         || this.rewindRuntimeId === runtime.runtimeId) return
-      this.publish({ state: 'ready', runtimeId: runtime.runtimeId, info, lastError: null })
+      this.publish({
+        state: 'ready',
+        runtimeId: runtime.runtimeId,
+        info: this.withUsage(info, runtime, usage),
+        lastError: null
+      })
     } catch {
       // 刷新失败不改变既有快照。
     }
   }
 
-  /** 事件触发的刷新：同一时刻只跑一次，避免每轮结束叠加多个 get_state。 */
+  /** 事件触发的刷新：同一时刻只跑一次，避免每轮结束叠加多个 get_state；用量也只在这里补读。 */
   private scheduleStatusRefresh(runtime: ActiveRuntime): void {
     if (this.refreshing || this.rewindRuntimeId === runtime.runtimeId) return
     this.refreshing = true
@@ -1452,7 +1517,82 @@ export class RuntimeManager {
     })
   }
 
-  /** Agent 一轮结束后刷新状态快照，确保消息计数等字段收敛。 */
+  /**
+   * 会话用量与速率不由 `get_state` 提供：用量取本次读取结果（失败时保留旧值），
+   * 速率始终以本代际采样器为准。
+   */
+  private withUsage(info: RuntimeInfo, runtime: ActiveRuntime, usage: SessionUsage | null): RuntimeInfo {
+    return {
+      ...info,
+      usage: usage ?? this.snapshot.info?.usage ?? null,
+      rate: runtime.rate.snapshot()
+    }
+  }
+
+  /** 速率变化只更新当前代际的就绪快照；静默收敛为 null 时也走这里。 */
+  private createRateTracker(runtimeId: number): OutputRateTracker {
+    return new OutputRateTracker((rate) => this.publishRate(runtimeId, rate))
+  }
+
+  private publishRate(runtimeId: number, rate: OutputRate): void {
+    const info = this.snapshot.info
+    if (this.active?.runtimeId !== runtimeId || this.snapshot.state !== 'ready' || info === null) return
+    if (info.rate.live === rate.live && info.rate.average === rate.average) return
+    this.publish({ state: 'ready', runtimeId, info: { ...info, rate }, lastError: null })
+  }
+
+  /** 读取会话累计用量；未就绪、失败或形状不符时返回 null，调用方保留已有统计。 */
+  private async readSessionUsage(runtime: ActiveRuntime): Promise<SessionUsage | null> {
+    try {
+      const response = await this.requestCommand(
+        runtime,
+        { type: 'get_session_stats' },
+        USAGE_TIMEOUT_MS,
+        '读取会话用量'
+      )
+      return response.success ? toSessionUsage(response.data) : null
+    } catch {
+      return null
+    }
+  }
+
+  /** 按最小刷新间隔排一次会话统计补读；同一时刻只排一次，回退期间不排。 */
+  private scheduleUsageRefresh(runtime: ActiveRuntime): void {
+    if (this.usageTimer !== null || this.rewindRuntimeId === runtime.runtimeId) return
+    const wait = Math.max(0, USAGE_REFRESH_MS - (Date.now() - this.usageReadAt))
+    this.usageTimer = setTimeout(() => {
+      this.usageTimer = null
+      this.usageReadAt = Date.now()
+      void this.refreshUsage(runtime)
+    }, wait)
+  }
+
+  /** 只补读会话统计并合入当前快照；代际、就绪状态或回退状态不符时丢弃结果。 */
+  private async refreshUsage(runtime: ActiveRuntime): Promise<void> {
+    const usage = await this.readSessionUsage(runtime)
+    if (usage === null) return
+    const info = this.snapshot.info
+    if (this.active?.runtimeId !== runtime.runtimeId || this.snapshot.state !== 'ready'
+      || info === null || this.rewindRuntimeId === runtime.runtimeId) return
+    this.publish({
+      state: 'ready',
+      runtimeId: runtime.runtimeId,
+      info: { ...info, usage, rate: runtime.rate.snapshot() },
+      lastError: null
+    })
+  }
+
+  /** 清除统计节拍；退出、关闭与换代际时调用，避免向已结束的代际补读。 */
+  private clearUsageTimer(): void {
+    if (this.usageTimer === null) return
+    clearTimeout(this.usageTimer)
+    this.usageTimer = null
+  }
+
+  /**
+   * Agent 一轮结束后刷新状态快照，确保消息计数等字段收敛；
+   * 同时用助手消息的流式事件维护输出速率采样与会话统计节拍。
+   */
   private applyRuntimeEvent(runtimeId: number, payload: Record<string, unknown>): void {
     const runtime = this.active
     if (runtime === null || runtime.runtimeId !== runtimeId) return
@@ -1466,6 +1606,25 @@ export class RuntimeManager {
       return
     }
 
+    if (payload.type === 'message_start') {
+      if (!isAssistantMessage(payload.message)) return
+      runtime.rate.begin(Date.now())
+      return
+    }
+    if (payload.type === 'message_update') {
+      // 顶层 usage 是 provider 上报的本轮累计输出；不上报时不采样，速率保持未知。
+      const output = readUsageOutput(payload.usage)
+      if (output !== null) runtime.rate.push(output, Date.now())
+      this.scheduleUsageRefresh(runtime)
+      return
+    }
+    if (payload.type === 'message_end') {
+      if (!isAssistantMessage(payload.message)) return
+      runtime.rate.settle(readMessageOutputTokens(payload.message), Date.now())
+      this.scheduleUsageRefresh(runtime)
+      return
+    }
+
     if (payload.type === 'agent_settled') this.scheduleStatusRefresh(runtime)
   }
 
@@ -1474,7 +1633,9 @@ export class RuntimeManager {
     const runtime = this.active
     if (runtime === null || runtime.runtimeId !== runtimeId) return
     runtime.projection.dispose()
+    runtime.rate.reset()
     this.extensionUi.dispose()
+    this.clearUsageTimer()
     this.active = null
     this.capabilityCache = null
     if (this.stopRequested) {

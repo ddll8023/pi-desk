@@ -1,6 +1,6 @@
 /**
- * 保存 Extension UI 的展示状态：dialog 队列、通知、状态条、widget 与编辑器填充文本。
- * 只做状态映射与响应提交，不持有 Runtime 所有权；过期快照按序号丢弃，契约不符时换取快照。
+ * 保存 Extension UI 的展示状态：dialog 队列与收起态、通知、状态条、widget 与编辑器填充文本。
+ * 只做状态映射、收起/恢复与响应提交，不持有 Runtime 所有权；过期快照按序号丢弃，契约不符时换取快照。
  */
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
@@ -29,6 +29,11 @@ export const useExtensionUiStore = defineStore('extension-ui', () => {
   const widgets = ref<ExtensionUiSnapshot['state']['widgets']>([])
   const editorText = ref<string | null>(null)
   const invalidCount = ref(0)
+  /**
+   * 被收起的队首 dialog id：收起只隐藏弹窗，不提交响应，Pi 侧仍在等待；
+   * 队首变化或队列清空时自动作废，避免恢复到已结束的请求。
+   */
+  const minimizedDialogId = ref<string | null>(null)
   const respondState = ref<RespondState>({ phase: 'idle' })
   /** 已被页面消费的编辑器填充文本；PromptComposer 消费后调用 markEditorTextConsumed。 */
   let editorTextSeq = 0
@@ -49,6 +54,18 @@ export const useExtensionUiStore = defineStore('extension-ui', () => {
   function dispose(): void {
     releaseSubscription?.()
     releaseSubscription = null
+    minimizedDialogId.value = null
+  }
+
+  /** 收起当前对话：只影响展示，不代替取消；底部入口据此恢复。 */
+  function minimizeDialog(dialogId: string): void {
+    if (!dialogs.value.some((entry) => entry.id === dialogId)) return
+    minimizedDialogId.value = dialogId
+  }
+
+  /** 恢复被收起的对话；没有收起态时无副作用。 */
+  function restoreDialog(): void {
+    minimizedDialogId.value = null
   }
 
   /** 提交 dialog 响应；只有 sending 之外的空闲状态才发起，避免重复提交。 */
@@ -89,6 +106,11 @@ export const useExtensionUiStore = defineStore('extension-ui', () => {
     statuses.value = snapshot.state.statuses
     widgets.value = snapshot.state.widgets
     invalidCount.value = snapshot.state.invalidCount
+    // 收起的目标已经回应或被新请求取代：清除收起态，不把入口指向旧请求。
+    if (minimizedDialogId.value !== null
+      && !snapshot.state.dialogs.some((entry) => entry.id === minimizedDialogId.value)) {
+      minimizedDialogId.value = null
+    }
     if (snapshot.state.editorText !== editorText.value) {
       editorText.value = snapshot.state.editorText
       editorTextSeq += 1
@@ -105,10 +127,13 @@ export const useExtensionUiStore = defineStore('extension-ui', () => {
     editorText,
     editorTextVersion,
     invalidCount,
+    minimizedDialogId,
     respondState,
     initialize,
     dispose,
     respond,
+    minimizeDialog,
+    restoreDialog,
     clearRespondError,
     dismissNotification,
     markEditorTextConsumed

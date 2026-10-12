@@ -82,6 +82,35 @@ export interface RuntimeSetModelRequest {
  */
 export type RuntimeState = 'idle' | 'starting' | 'ready' | 'stopping' | 'failed'
 
+/**
+ * 当前上下文占用；`tokens`/`percent` 在压缩后到下一次响应前为 null，
+ * `contextWindow` 在模型目录未提供时也为 null，都按未知展示，不伪装成 0。
+ */
+export interface ContextUsage {
+  readonly tokens: number | null
+  readonly contextWindow: number | null
+  readonly percent: number | null
+}
+
+/**
+ * `get_session_stats` 的用量投影：累计数值缺失按 0，未知的上下文占用保持 null。
+ * 主进程尚未读到统计时为 null，与“读到全零”区分。
+ */
+export interface SessionUsage {
+  readonly input: number
+  readonly output: number
+  readonly cacheRead: number
+  readonly cacheWrite: number
+  readonly cost: number
+  readonly context: ContextUsage | null
+}
+
+/** 输出速率（tokens/秒）：`live` 是 2000ms 滑动窗口的实时值，`average` 是上一轮的平均值。 */
+export interface OutputRate {
+  readonly live: number | null
+  readonly average: number | null
+}
+
 /** 只投影页面需要的会话信息，不搬运 Pi 的完整状态或消息。 */
 export interface RuntimeInfo {
   /** 当前模型的 provider 与 id；图片附件能力按模型目录精确匹配。 */
@@ -90,6 +119,10 @@ export interface RuntimeInfo {
   readonly sessionId: string | null
   readonly messageCount: number
   readonly isStreaming: boolean
+  /** 会话累计用量与上下文占用；统计未取到或形状不符时为 null。 */
+  readonly usage: SessionUsage | null
+  /** 输出速率；无有效样本时两个字段各为 null。 */
+  readonly rate: OutputRate
 }
 
 export interface RuntimeStatus {
@@ -639,6 +672,37 @@ function isRuntimeState(value: unknown): value is RuntimeState {
     || value === 'stopping' || value === 'failed'
 }
 
+/** 累计统计允收任意有限数（包含 0）；未知值必须是 null。 */
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value)
+}
+
+function isNullableFiniteNumber(value: unknown): value is number | null {
+  return value === null || isFiniteNumber(value)
+}
+
+function isContextUsage(value: unknown): value is ContextUsage {
+  if (!isRecord(value)) return false
+  return isNullableFiniteNumber(value.tokens)
+    && isNullableFiniteNumber(value.contextWindow)
+    && isNullableFiniteNumber(value.percent)
+}
+
+function isSessionUsage(value: unknown): value is SessionUsage {
+  if (!isRecord(value)) return false
+  return isFiniteNumber(value.input)
+    && isFiniteNumber(value.output)
+    && isFiniteNumber(value.cacheRead)
+    && isFiniteNumber(value.cacheWrite)
+    && isFiniteNumber(value.cost)
+    && (value.context === null || isContextUsage(value.context))
+}
+
+function isOutputRate(value: unknown): value is OutputRate {
+  if (!isRecord(value)) return false
+  return isNullableFiniteNumber(value.live) && isNullableFiniteNumber(value.average)
+}
+
 function isRuntimeInfo(value: unknown): value is RuntimeInfo {
   if (!isRecord(value)) return false
   return (value.modelProvider === null || typeof value.modelProvider === 'string')
@@ -646,6 +710,8 @@ function isRuntimeInfo(value: unknown): value is RuntimeInfo {
     && (value.sessionId === null || typeof value.sessionId === 'string')
     && typeof value.messageCount === 'number'
     && typeof value.isStreaming === 'boolean'
+    && (value.usage === null || isSessionUsage(value.usage))
+    && isOutputRate(value.rate)
 }
 
 export function isRuntimeStatus(value: unknown): value is RuntimeStatus {

@@ -1,9 +1,9 @@
-<!-- Prompt 输入坞：处理输入法组合态、Enter 发送与 Shift+Enter 换行、焦点回归与重复提交，并在 Agent 运行期间原位提供停止入口；同时承接 Extension 的 set_editor_text 填充文本、图片附件的选择/粘贴/拖拽三种入口、输入行按内容自动增高、快捷发送下拉、Pi 命令的斜杠模糊补全（Runtime 就绪后用运行中的命令清单，未就绪时用主进程预读的技能清单，按类型分组并按匹配优先级排序）与 `@` 项目文件引用（只写入相对路径文本，不传文件内容）。 -->
+<!-- Prompt 输入坞：处理输入法组合态、Enter 发送与 Shift+Enter 换行、焦点回归与重复提交，并在 Agent 运行期间原位提供停止入口；同时承接 Extension 的 set_editor_text 填充文本、图片附件的选择/粘贴/拖拽三种入口、输入行按内容自动增高、快捷发送下拉、Pi 命令的斜杠模糊补全（Runtime 就绪后用运行中的命令清单，未就绪时用主进程预读的技能清单，按类型分组并按匹配优先级排序）与 `@` 项目文件引用（只写入相对路径文本，不传文件内容）。底部工具条左侧是信息行：异常与进行中的状态文本、被收起的 Extension 对话入口、Extension status 项与会话用量（点击开明细）；右侧是附件、快捷发送与发送/停止按钮。 -->
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { PROJECT_FILE_QUERY_MAX_CHARS } from '../../../shared/project-file-api'
-import type { PiResourceEntry, PiResourceKind, PromptDisposition, PromptImageInput } from '../../../shared/runtime-api'
+import type { OutputRate, PiResourceEntry, PiResourceKind, PromptDisposition, PromptImageInput } from '../../../shared/runtime-api'
 import { useExtensionUiStore } from '../stores/extension-ui'
 import { useProjectFileStore } from '../stores/project-file'
 import { useResourceStore } from '../stores/resource'
@@ -11,6 +11,7 @@ import { useProjectStore } from '../stores/project'
 import { useRuntimeStore } from '../stores/runtime'
 import { useSessionStore } from '../stores/session'
 import AppButton from './ui/AppButton.vue'
+import UsageDetailDialog from './UsageDetailDialog.vue'
 
 const runtimeStore = useRuntimeStore()
 const extensionStore = useExtensionUiStore()
@@ -39,7 +40,7 @@ const pendingImages = ref<PendingImage[]>([])
 const imageInput = ref<HTMLInputElement | null>(null)
 
 /** 快捷发送候选：与草稿内容无关，选中即用该短语发起一次提交。 */
-const QUICK_SEND_MESSAGES: readonly string[] = ['继续', '确认', '提交']
+const QUICK_SEND_MESSAGES: readonly string[] = ['继续', '确认', '提交', '推送']
 const quickSendOpen = ref(false)
 const quickSendIndex = ref(0)
 /** 下拉外层引用：用于判断一次点击是否落在下拉之外。 */
@@ -89,54 +90,50 @@ const attachDisabled = computed(() => (
   !canSubmit.value || imageSupported.value === false || pendingImages.value.length >= MAX_IMAGE_COUNT
 ))
 
-const status = computed(() => {
-  if (rewindView.value.phase === 'requesting') return { kind: 'info' as const, text: '正在回退对话；草稿保留，完成后才能发送。' }
-  if (rewindView.value.phase === 'error' && rewindView.value.blocked) return { kind: 'error' as const, text: rewindView.value.error.message }
-  if (preparingPrompt.value) return { kind: 'info' as const, text: '正在读取附件并提交输入。' }
+const status = computed<{ readonly kind: 'info' | 'error'; readonly text: string } | null>(() => {
+  if (rewindView.value.phase === 'requesting') return { kind: 'info', text: '正在回退对话；草稿保留，完成后才能发送。' }
+  if (rewindView.value.phase === 'error' && rewindView.value.blocked) return { kind: 'error', text: rewindView.value.error.message }
+  if (preparingPrompt.value) return { kind: 'info', text: '正在读取附件并提交输入。' }
   if (abortView.value.phase === 'error') {
-    return { kind: 'error' as const, text: abortView.value.error.message }
+    return { kind: 'error', text: abortView.value.error.message }
   }
   if (abortView.value.phase === 'requesting') {
-    return { kind: 'info' as const, text: '正在停止当前操作，等待本轮结束。' }
+    return { kind: 'info', text: '正在停止当前操作，等待本轮结束。' }
   }
   if (promptView.value.phase === 'error') {
-    return { kind: 'error' as const, text: promptView.value.error.message }
+    return { kind: 'error', text: promptView.value.error.message }
   }
   if (modelSwitchView.value.phase === 'switching') {
-    return { kind: 'info' as const, text: '正在切换模型；草稿和附件会保留，完成后可发送。' }
+    return { kind: 'info', text: '正在切换模型；草稿和附件会保留，完成后可发送。' }
   }
-  if (sending.value) return { kind: 'info' as const, text: '正在提交 Prompt，等待 Pi 回应。' }
+  if (sending.value) return { kind: 'info', text: '正在提交 Prompt，等待 Pi 回应。' }
   if (sessionStore.awaitingTrust) {
-    return { kind: 'info' as const, text: '请先完成项目 Trust 决定；输入会保留，Runtime 就绪后自动发送。' }
+    return { kind: 'info', text: '请先完成项目 Trust 决定；输入会保留，Runtime 就绪后自动发送。' }
   }
   if (promptView.value.phase === 'accepted') {
-    return { kind: 'info' as const, text: acceptedText(promptView.value.disposition) }
+    return { kind: 'info', text: acceptedText(promptView.value.disposition) }
   }
   if (sessionStore.awaitingInterrupt) {
-    return { kind: 'info' as const, text: '请先处理当前操作；输入会保留。' }
+    return { kind: 'info', text: '请先处理当前操作；输入会保留。' }
   }
   if (!runtimeReady.value) {
-    if (projectStore.currentProject === null) {
-      return { kind: 'info' as const, text: '请先选择项目；输入内容会保留。' }
-    }
     if (runtimeView.value.phase === 'failed') {
-      return { kind: 'error' as const, text: `${runtimeView.value.error.message}；可再次点击发送重试启动。` }
+      return { kind: 'error', text: `${runtimeView.value.error.message}；可再次点击发送重试启动。` }
     }
     if (runtimeView.value.phase === 'starting') {
-      return { kind: 'info' as const, text: '正在启动 Pi；输入已保留，就绪后自动发送。' }
+      return { kind: 'info', text: '正在启动 Pi；输入已保留，就绪后自动发送。' }
     }
-    if (canStartRuntime.value) {
-      return { kind: 'info' as const, text: '首次发送会先启动 Pi；输入会保留，就绪后自动发送。' }
-    }
-    return { kind: 'info' as const, text: 'Runtime 正在关闭；输入会保留。' }
+    // 未选项目与首次启动属于纯引导，按钮的禁用态已经表达，不再占信息行。
+    if (canStartRuntime.value || projectStore.currentProject === null) return null
+    return { kind: 'info', text: 'Runtime 正在关闭；输入会保留。' }
   }
   if (streaming.value) {
-    return { kind: 'info' as const, text: 'Agent 正在运行，本轮结束前不能提交新输入。' }
+    return { kind: 'info', text: 'Agent 正在运行，本轮结束前不能提交新输入。' }
   }
   if (projectionSync.value !== 'synced') {
-    return { kind: 'info' as const, text: '消息仍在同步，稍后才能提交输入。' }
+    return { kind: 'info', text: '消息仍在同步，稍后才能提交输入。' }
   }
-  return { kind: 'info' as const, text: 'Enter 发送，Shift+Enter 换行。' }
+  return null
 })
 
 function acceptedText(disposition: PromptDisposition): string {
@@ -144,6 +141,64 @@ function acceptedText(disposition: PromptDisposition): string {
   if (disposition === 'queued') return 'Pi 已将本次输入排队。'
   return '本次输入已被处理，未发起新的 Agent run。'
 }
+
+/** 本会话累计用量；主进程未取到统计时为 null。 */
+const usage = computed(() => runtimeInfo.value?.usage ?? null)
+/** 输出速率；未采样到有效值时两个字段各为 null。 */
+const rate = computed<OutputRate>(() => runtimeInfo.value?.rate ?? { live: null, average: null })
+const usageOpen = ref(false)
+
+/** 累计数值短格式：1234 → 1.2K、1234567 → 1.2M；未知值保持 `?`。 */
+function formatTokens(value: number | null): string {
+  if (value === null || !Number.isFinite(value)) return '?'
+  if (value >= 1e6) return `${(value / 1e6).toFixed(1).replace(/\.0$/, '')}M`
+  if (value >= 1000) return `${(value / 1000).toFixed(1).replace(/\.0$/, '')}K`
+  return String(value)
+}
+
+/** 用量行分项：累计用量与费用、上下文占用、实时与平均速率；未取到统计时为空。 */
+const usageParts = computed<readonly { readonly text: string; readonly tone: string; readonly title: string }[]>(() => {
+  const current = usage.value
+  if (current === null) return []
+  const context = current.context
+  const percent = context?.percent ?? null
+  const contextTone = percent === null
+    ? ''
+    : percent >= 90 ? 'text-desk-danger' : percent >= 70 ? 'text-desk-warning' : ''
+  const parts: { text: string; tone: string; title: string }[] = [
+    {
+      text: `↑${formatTokens(current.input)} ↓${formatTokens(current.output)} R${formatTokens(current.cacheRead)} W${formatTokens(current.cacheWrite)} $${current.cost.toFixed(3)}`,
+      tone: '',
+      title: '本会话累计用量与费用'
+    },
+    {
+      text: `上下文 ${percent === null ? '?' : `${percent.toFixed(1)}%`}/${formatTokens(context?.contextWindow ?? null)}`,
+      tone: contextTone,
+      title: '当前上下文占用与窗口大小'
+    }
+  ]
+  if (rate.value.live !== null) {
+    parts.push({ text: `实 ${rate.value.live.toFixed(1)} t/s`, tone: 'text-desk-accent', title: '实时输出速率（2 秒窗口）' })
+  }
+  if (rate.value.average !== null) {
+    parts.push({ text: `均 ${rate.value.average.toFixed(1)} t/s`, tone: 'text-desk-accent', title: '上一轮模型调用的平均速率' })
+  }
+  return parts
+})
+
+/** 被收起的队首 Extension 对话：只在收起时占据信息行，点击恢复到弹窗。 */
+const pendingDialog = computed(() => {
+  const first = extensionStore.dialogs[0] ?? null
+  if (first === null || extensionStore.minimizedDialogId !== first.id) return null
+  return first
+})
+
+/** 状态行的展示字段；`statusText` 为空表示当前没有需要占位的状态。 */
+const statusText = computed(() => status.value?.text ?? null)
+const statusRole = computed(() => (status.value?.kind === 'error' ? 'alert' : 'status'))
+const statusTone = computed(() => (status.value?.kind === 'error' ? 'text-desk-danger' : 'text-desk-muted'))
+/** 被收起对话的标题；没有收起态时为空。 */
+const pendingTitle = computed(() => pendingDialog.value?.title ?? null)
 
 /** 与主进程一致的图片 MIME 白名单；选择器另加 accept，双保险。 */
 const IMAGE_MIME_TYPES: readonly string[] = ['image/png', 'image/jpeg', 'image/gif', 'image/webp']
@@ -832,7 +887,7 @@ onMounted(() => {
           placeholder="输入要发送给 Pi 的内容（可粘贴或拖入图片）"
           autocomplete="off"
           spellcheck="false"
-          aria-describedby="prompt-status"
+          aria-describedby="statusText !== null ? 'prompt-status' : undefined"
           aria-autocomplete="list"
           :aria-controls="activeListId"
           :aria-expanded="activeListOpen"
@@ -845,14 +900,55 @@ onMounted(() => {
         ></textarea>
 
         <div class="prompt-composer-toolbar">
-          <p
-            id="prompt-status"
-            :role="status.kind === 'error' ? 'alert' : 'status'"
-            class="prompt-composer-meta"
-            :class="status.kind === 'error' ? 'text-desk-danger' : 'text-desk-muted'"
-          >
-            {{ status.text }}
-          </p>
+          <div class="prompt-composer-meta">
+            <!-- 状态文本只在异常与进行中出现；正常态让位给用量与插件状态。 -->
+            <p
+              v-if="statusText !== null"
+              id="prompt-status"
+              :role="statusRole"
+              class="prompt-composer-status"
+              :class="statusTone"
+            >
+              {{ statusText }}
+            </p>
+            <!-- 被收起的插件请求：点击恢复到对话弹窗，不代替用户取消。 -->
+            <button
+              v-if="pendingTitle !== null"
+              type="button"
+              class="prompt-pending"
+              title="展开被收起的插件请求"
+              @click="extensionStore.restoreDialog()"
+            >
+              <span aria-hidden="true">❓</span>
+              <span class="prompt-pending-text">{{ pendingTitle }}</span>
+            </button>
+            <!-- Extension setStatus 项：纯文本展示，过长时截断。 -->
+            <span
+              v-for="entry in extensionStore.statuses"
+              :key="entry.key"
+              class="prompt-status-entry"
+              :title="entry.text"
+            >{{ entry.text }}</span>
+            <!-- 会话用量：点击开明细浮层；统计未取到时显示占位。 -->
+            <button
+              type="button"
+              class="prompt-usage"
+              aria-haspopup="dialog"
+              :aria-expanded="usageOpen"
+              title="点击查看本会话用量明细"
+              @click="usageOpen = true"
+            >
+              <template v-if="usageParts.length > 0">
+                <span
+                  v-for="part in usageParts"
+                  :key="part.text"
+                  :class="part.tone"
+                  :title="part.title"
+                >{{ part.text }}</span>
+              </template>
+              <span v-else>用量 —</span>
+            </button>
+          </div>
           <div class="flex flex-none items-center gap-1.5">
             <!-- 图片选择：与粘贴、拖拽共用同一套禁用条件；当前模型明确不支持时同样禁用。 -->
             <input
@@ -866,14 +962,13 @@ onMounted(() => {
             />
             <AppButton
               variant="icon"
+              class="prompt-composer-char"
               :disabled="attachDisabled"
               aria-label="添加图片"
               title="添加图片（也可粘贴或拖入）"
               @click="imageInput?.click()"
             >
-              <svg viewBox="0 0 16 16" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true">
-                <path d="M8 3.5v9M3.5 8h9" />
-              </svg>
+              ＋
             </AppButton>
 
             <!-- 快捷发送：按钮上直接显示当前选中短语，点一下就用它提交。 -->
@@ -889,9 +984,7 @@ onMounted(() => {
                 @click="toggleQuickSend"
               >
                 <span class="text-xs">{{ QUICK_SEND_MESSAGES[quickSendIndex] }}</span>
-                <svg viewBox="0 0 16 16" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                  <path d="M4.5 6.5 8 10l3.5-3.5" />
-                </svg>
+                <span aria-hidden="true">▾</span>
               </AppButton>
               <div v-if="quickSendOpen" id="prompt-quick-send" role="listbox" aria-label="常用消息" class="prompt-composer-menu">
                 <AppButton
@@ -909,34 +1002,42 @@ onMounted(() => {
               </div>
             </div>
 
-            <!-- 发送与停止共用同一位置与同一档强调色，运行中靠图标形状区分。 -->
+            <!-- 发送与停止共用一个位置与一档强调色，运行中靠字符形状区分。 -->
             <AppButton
               v-if="stopVisible"
               variant="icon-primary"
+              class="prompt-composer-send"
               :disabled="abortView.phase === 'requesting'"
               aria-label="停止当前操作"
               title="停止当前操作"
               @click="stop"
             >
-              <svg viewBox="0 0 16 16" class="h-4 w-4" aria-hidden="true">
-                <rect x="4.5" y="4.5" width="7" height="7" rx="1.2" fill="currentColor" />
-              </svg>
+              ■
             </AppButton>
             <AppButton
               v-else
               variant="icon-primary"
+              class="prompt-composer-send"
               :disabled="!canSend"
               aria-label="发送"
               title="发送（Enter 发送，Shift+Enter 换行）"
               @click="submit"
             >
-              <svg viewBox="0 0 16 16" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <path d="M8 13V3.5M4.2 7.3 8 3.5l3.8 3.8" />
-              </svg>
+              ↑
             </AppButton>
           </div>
         </div>
       </div>
     </div>
+
+    <!-- 用量明细与其它弹层一致：Teleport 到 body，不受输入坞的层叠上下文限制。 -->
+    <Teleport to="body">
+      <UsageDetailDialog
+        :open="usageOpen"
+        :usage="usage"
+        :rate="rate"
+        @close="usageOpen = false"
+      />
+    </Teleport>
   </section>
 </template>

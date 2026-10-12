@@ -211,9 +211,103 @@
     padding: 0.5rem 1rem;
   }
 
-  /* 状态行占据工具条左侧剩余宽度；动作组固定在右端，不被长文案压缩。 */
+  /* 信息行：状态文本、插件状态、待回答入口与用量同处左侧，占满剩余宽度并允许换行。 */
   .prompt-composer-meta {
-    @apply min-w-0 flex-1 text-xs;
+    @apply flex min-w-0 flex-1 flex-wrap items-baseline gap-x-3 gap-y-1;
+  }
+
+  /* 状态文本只在异常与进行中出现；不加重字重，避免与用量数据抢注意力。 */
+  .prompt-composer-status {
+    @apply min-w-0 text-xs;
+  }
+
+  /* 被收起的插件请求入口：强调色描边表示仍在等待回应，点击恢复弹窗。 */
+  .prompt-pending {
+    @apply inline-flex max-w-[min(42vw,20rem)] min-w-0 items-baseline gap-1.5 rounded-full border px-2 py-0.5 text-2xs whitespace-nowrap transition-colors;
+    border-color: color-mix(in srgb, var(--color-desk-accent) 35%, transparent);
+    background: var(--color-desk-accent-soft);
+    color: var(--color-desk-accent);
+  }
+
+  .prompt-pending:hover {
+    border-color: var(--color-desk-accent);
+  }
+
+  .prompt-pending-text {
+    @apply min-w-0 truncate;
+  }
+
+  /* Extension setStatus 项：与用量同档等宽字，过长时截断。 */
+  .prompt-status-entry {
+    @apply max-w-[min(42vw,20rem)] truncate font-mono text-2xs text-desk-muted;
+  }
+
+  /* 用量行：等宽小字、整行可点击；分项之间靠 gap 分隔，换行时不拆开单项。 */
+  .prompt-usage {
+    @apply flex min-w-0 flex-wrap items-baseline gap-x-2.5 font-mono text-2xs text-desk-muted transition-colors;
+  }
+
+  .prompt-usage:hover {
+    @apply text-desk-ink;
+  }
+
+  /* 附件按钮的字符：与 pigui 输入坞的工具栏一致，用符号而不用图标。 */
+  .prompt-composer-char {
+    @apply text-lg leading-none;
+  }
+
+  /* 发送与停止按钮的字符：比附件略小，避免实心块显得过重。 */
+  .prompt-composer-send {
+    @apply text-[15px] leading-none font-semibold;
+  }
+
+  /* 用量明细浮层：指标行、上下文进度条与未取到统计时的占位说明。 */
+  .usage-metrics {
+    @apply flex flex-wrap items-baseline gap-x-4 gap-y-1 font-mono text-2xs text-desk-muted;
+  }
+
+  .usage-metric {
+    @apply inline-flex items-baseline gap-1;
+  }
+
+  .usage-metric b {
+    @apply font-semibold text-desk-ink;
+  }
+
+  .usage-metric-rate b {
+    @apply text-desk-accent;
+  }
+
+  .usage-row {
+    @apply flex items-center gap-2 font-mono text-2xs text-desk-muted;
+  }
+
+  .usage-label {
+    @apply w-10 shrink-0;
+  }
+
+  .usage-bar {
+    @apply h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-desk-canvas-sunken;
+  }
+
+  .usage-fill {
+    @apply block h-full rounded-full bg-desk-accent transition-[width];
+  }
+
+  .usage-fill-warn {
+    @apply bg-desk-warning;
+  }
+
+  .usage-fill-danger {
+    @apply bg-desk-danger;
+  }
+
+  .usage-value {
+    @apply shrink-0 tabular-nums;
+  }
+
+  .usage-note {
+    @apply font-mono text-2xs text-desk-muted;
   }
 
   /* 坞内附件 chip：缩略图 + 文件名，横排不换行，宽度由文件名截断控制。 */
