@@ -1,8 +1,6 @@
-/** 只定义 Runtime 启停、状态、Prompt 提交、对话回退、中止、可用模型读取与当前会话模型切换、Pi 资源与资源预读、诊断读取、MCP 状态、MCP 配置列举、MCP 服务器探测与 MCP 登录/退出/重连命令、安全启动、消息/工具投影（含生成计时）IPC 的固定通道、事件名、结果类型与跨进程响应校验。 */
+/** 只定义 Runtime 状态、Prompt 提交、对话回退、中止、可用模型读取与当前会话模型切换、Pi 资源与资源预读、诊断读取、MCP 状态、MCP 配置列举、MCP 服务器探测与 MCP 登录/退出/重连命令、消息/工具投影（含生成计时）IPC 的固定通道、事件名、结果类型与跨进程响应校验。 */
 import type { DesktopErrorCode } from './desktop-api'
 
-export const RUNTIME_START_CHANNEL = 'desktop:runtime-start'
-export const RUNTIME_STOP_CHANNEL = 'desktop:runtime-stop'
 export const RUNTIME_STATUS_CHANNEL = 'desktop:runtime-status'
 export const RUNTIME_PROMPT_CHANNEL = 'desktop:runtime-prompt'
 /** 仅回退对话；目标由主进程核对，页面不能指定任意会话文件或 Pi 条目。 */
@@ -12,7 +10,7 @@ export const RUNTIME_PROJECTION_CHANNEL = 'desktop:runtime-projection'
 export const RUNTIME_PROJECTION_ACK_CHANNEL = 'desktop:runtime-projection-ack'
 export const RUNTIME_CAPABILITIES_CHANNEL = 'desktop:runtime-capabilities'
 export const RUNTIME_SET_MODEL_CHANNEL = 'desktop:runtime-set-model'
-/** 只读：读取当前代际已加载的 Pi 资源清单（`get_commands` 投影）。 */
+/** 只读：读取当前代际已加载的 Pi 资源清单（扩展命令、提示词与技能）。 */
 export const RUNTIME_RESOURCES_CHANNEL = 'desktop:runtime-resources'
 /**
  * 只读：Runtime 未启动时用一次性 Pi 进程预读资源、可用模型与默认模型。
@@ -39,17 +37,10 @@ export const RUNTIME_MCP_INSPECT_ABORT_CHANNEL = 'desktop:runtime-mcp-inspect-ab
  * `pi mcp list` 没有「只列举不连接」的模式，因此列表来源是配置文件本身，连接状态仍由探测补充。
  */
 export const RUNTIME_MCP_CONFIG_CHANNEL = 'desktop:runtime-mcp-config'
-/** 安全模式启动：零参数，主进程用最近一次启动意图并固定传 `--no-extensions`。 */
-export const RUNTIME_START_SAFE_CHANNEL = 'desktop:runtime-start-safe'
 /** 主进程到渲染进程的单向状态通知，payload 是 RuntimeStatus。 */
 export const RUNTIME_STATUS_EVENT = 'desktop:runtime-status-changed'
 /** 主进程到渲染进程的单向投影批次通知，payload 是 ProjectionBatch。 */
 export const RUNTIME_PROJECTION_EVENT = 'desktop:runtime-projection-changed'
-
-/** 启动请求只接受项目目录；其他启动参数一律不接受。 */
-export interface RuntimeStartRequest {
-  readonly projectPath: string
-}
 
 /** 模型的复合身份；只保存供应商和模型 ID，不携带凭据或任意启动参数。 */
 export interface ModelIdentity {
@@ -135,13 +126,11 @@ export interface RuntimeStatus {
 export type RuntimeErrorCode =
   | DesktopErrorCode
   | 'INVALID_PROJECT_PATH'
-  | 'RUNTIME_ALREADY_RUNNING'
   | 'RUNTIME_NOT_READY'
   | 'RUNTIME_SPAWN_FAILED'
   | 'RUNTIME_EXITED'
   | 'RUNTIME_TIMEOUT'
   | 'RUNTIME_PROTOCOL_ERROR'
-  | 'PROMPT_REJECTED'
   /** Pi 以 `success: false` 拒绝了受支持的运行命令；消息带 Pi 的原因文本。 */
   | 'RUNTIME_COMMAND_REJECTED'
   /** 项目存在受保护资源且尚无信任决定；先完成信任决定再重试。 */
@@ -326,12 +315,6 @@ export interface ProjectionBatch {
   readonly resyncRequired: boolean
 }
 
-/** 应用确认只带已应用到的最高序号；确认失败只影响通知窗口。 */
-export interface ProjectionAckRequest {
-  readonly runtimeId: number
-  readonly seq: number
-}
-
 export type ProjectionResult =
   | { readonly ok: true; readonly data: ProjectionSnapshot }
   | { readonly ok: false; readonly error: RuntimeError }
@@ -360,13 +343,13 @@ export type CapabilitiesResult =
   | { readonly ok: false; readonly error: RuntimeError }
 
 /**
- * Pi 侧资源的来源分类，与 `get_commands` 的 `source` 字段一一对应；
- * 其他来源（内置 TUI 命令等）不出现在 `get_commands` 里，也不进入页面。
+ * Pi 侧资源的来源分类；三类分别对应当前会话已注册的扩展命令、提示词模板与技能。
+ * 其他来源（内置 TUI 命令等）不进入页面。
  */
 export type PiResourceKind = 'skill' | 'prompt' | 'extension'
 
 /**
- * 一条已加载的 Pi 资源条目，只来自 `get_commands` 的投影。
+ * 一条已加载的 Pi 资源条目，只来自当前会话已加载的扩展、提示词与技能投影。
  * `path` 是资源在磁盘上的绝对路径，`scope` 是 `user`/`project`/`temporary`，
  * `origin` 是 `top-level`/`package`，`baseDir` 只在包资源上有值；字段缺失一律为 null，不猜造。
  */
@@ -401,8 +384,8 @@ export interface ExtensionErrorEntry {
 
 /**
  * 当前 Runtime 代际的启动诊断与 Extension 运行时错误。
- * `stderrLines` 是 Pi 输出的诊断文本（已去 ANSI、按行与长度有界），按不可信纯文本展示。
- * 技能/提示词等资源加载警告在 RPC 模式下不进入任何通道，这里也无法提供。
+ * `stderrLines` 是宿主内 SDK 会话的创建期诊断文本（settings 与资源加载告警，按行有界），
+ * 按不可信纯文本展示；宿主进程自身的输出不进入本通道。
  */
 export interface RuntimeDiagnostics {
   readonly runtimeId: number | null
@@ -421,12 +404,6 @@ export interface McpStatus {
 
 /** MCP 服务器的受支持动作；enable/disable/exposure 需要改配置，不在此范围。 */
 export type McpCommandAction = 'login' | 'logout' | 'reconnect'
-
-/** 只接受动作与服务器名；命令文本由主进程拼接，页面不能传入任意命令。 */
-export interface McpCommandRequest {
-  readonly action: McpCommandAction
-  readonly serverName: string
-}
 
 /**
  * MCP 登录/退出请求的结果。登录需要用户在浏览器里完成授权，期间浏览器地址、进度与
@@ -559,8 +536,6 @@ export type McpInspectAbortResult =
   | { readonly ok: false; readonly error: RuntimeError }
 
 export interface RuntimeApi {
-  readonly startRuntime: (projectPath: string) => Promise<RuntimeResult>
-  readonly stopRuntime: () => Promise<RuntimeResult>
   readonly getRuntimeStatus: () => Promise<RuntimeResult>
   readonly sendPrompt: (message: string, images?: readonly PromptImageInput[]) => Promise<PromptResult>
   /** 请求中止当前 Agent 操作；成功只表示 Pi 已确认取消，运行状态仍以事件流为准。 */
@@ -575,11 +550,11 @@ export interface RuntimeApi {
    * 失败或超时不保证模型未改变，不自动重发；实际模型以 Runtime 状态为准。
    */
   readonly setRuntimeModel: (runtimeId: number, provider: string, modelId: string) => Promise<RuntimeResult>
-  /** 读取当前代际已加载的 Pi 资源清单；清单来源是 `get_commands`，不解析 Pi 配置文件。 */
+  /** 读取当前代际已加载的 Pi 资源清单；来源是会话内已加载的扩展、提示词与技能，不解析 Pi 配置文件。 */
   readonly getRuntimeResources: () => Promise<ResourcesResult>
   /** 预读资源、可用模型与默认模型及分项错误；项目与信任由主进程决定，`force` 绕过进程内缓存。 */
   readonly getResourcePreview: (force: boolean) => Promise<ResourcePreviewResult>
-  /** 读取当前代际的启动诊断尾部与 Extension 运行时错误；无活动 Runtime 时两项都为空。 */
+  /** 读取当前代际的 SDK 会话创建期诊断与 Extension 运行时错误；无活动代际时两项为空。 */
   readonly getRuntimeDiagnostics: () => Promise<RuntimeDiagnosticsResult>
   /** 固定请求 `/mcp` 状态；状态文本由 notify 捕获后返回，不在页面拼造。 */
   readonly readRuntimeMcpStatus: () => Promise<McpStatusResult>
@@ -594,11 +569,6 @@ export interface RuntimeApi {
   readonly inspectRuntimeMcpServers: () => Promise<McpInspectionResult>
   /** 中止进行中的 MCP 探测；零参数，没有进行中的探测时返回 `aborted: false`。 */
   readonly abortRuntimeMcpInspection: () => Promise<McpInspectAbortResult>
-  /**
-   * 安全模式启动：不加载 Extension，复用最近一次启动的项目与会话；仅本次生效，不写配置。
-   * 与常规启动一样先经过信任拦截（无决定时返回 `TRUST_REQUIRED`）。
-   */
-  readonly startRuntimeSafely: () => Promise<RuntimeResult>
   /** 确认已应用到的最高序号；即发即忘，结果不影响页面。 */
   readonly ackRuntimeProjection: (runtimeId: number, seq: number) => void
   /** 订阅状态变化；返回释放函数，页面卸载时必须调用。 */
@@ -616,13 +586,11 @@ const RUNTIME_ERROR_CODES: readonly string[] = [
   'BRIDGE_UNAVAILABLE',
   'BRIDGE_CALL_FAILED',
   'INVALID_PROJECT_PATH',
-  'RUNTIME_ALREADY_RUNNING',
   'RUNTIME_NOT_READY',
   'RUNTIME_SPAWN_FAILED',
   'RUNTIME_EXITED',
   'RUNTIME_TIMEOUT',
   'RUNTIME_PROTOCOL_ERROR',
-  'PROMPT_REJECTED',
   'RUNTIME_COMMAND_REJECTED',
   'TRUST_REQUIRED'
 ]
@@ -1075,10 +1043,6 @@ export function isMcpStatusResult(value: unknown): value is McpStatusResult {
   return isRuntimeErrorResult(value)
 }
 
-function isMcpCommandAction(value: unknown): value is McpCommandAction {
-  return value === 'login' || value === 'logout' || value === 'reconnect'
-}
-
 function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((item) => typeof item === 'string')
 }
@@ -1164,14 +1128,6 @@ export function isMcpInspectAbortResult(value: unknown): value is McpInspectAbor
     return isRecord(value.data) && typeof value.data.aborted === 'boolean'
   }
   return isRuntimeErrorResult(value)
-}
-
-/** 请求只校验形状；服务器名的字符集与长度由主进程校验后再拼接命令。 */
-export function isMcpCommandRequest(value: unknown): value is McpCommandRequest {
-  if (!isRecord(value)) return false
-  return isMcpCommandAction(value.action)
-    && typeof value.serverName === 'string'
-    && value.serverName.length > 0
 }
 
 /** MCP 命令结果与状态结果的形状一致，因此复用同一套校验。 */

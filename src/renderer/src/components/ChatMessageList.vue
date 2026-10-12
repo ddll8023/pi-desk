@@ -6,7 +6,6 @@ import { createChatViewCache } from '../chat-view'
 import type { ChatMessageView } from '../chat-view'
 import type { RuntimeRewindRequest } from '../../../shared/runtime-api'
 import { useProjectStore } from '../stores/project'
-import { useResourceStore } from '../stores/resource'
 import { useRuntimeStore } from '../stores/runtime'
 import { useSessionStore } from '../stores/session'
 import ChatMessageItem from './ChatMessageItem.vue'
@@ -28,10 +27,8 @@ const READING_OFFSET_PX = 20
 const projectStore = useProjectStore()
 const runtimeStore = useRuntimeStore()
 const sessionStore = useSessionStore()
-const resourceStore = useResourceStore()
 const { view: runtimeView, messages, tools, projectionSync, projectionTruncated, droppedMessages, droppedTools,
   promptView, preparingPrompt, modelSwitchView, rewindView } = storeToRefs(runtimeStore)
-const { safeStart } = storeToRefs(resourceStore)
 
 const viewport = ref<HTMLElement | null>(null)
 const scroller = ref<HTMLElement | null>(null)
@@ -126,8 +123,7 @@ const truncationNotice = computed(() => {
 
 /**
  * 空状态只表达当前可用动作，不替主进程判断会话是否真的存在。
- * Runtime 异常退出时同时给出常规重试与安全模式逃生入口：两种恢复路径都在出错的第一现场，
- * 不需要用户再去设置页找。
+ * Runtime 异常退出时给出常规重试入口：恢复路径就在出错的第一现场，不需要用户再去设置页找。
  */
 const emptyState = computed(() => {
   if (projectStore.currentProject === null) {
@@ -143,7 +139,7 @@ const emptyState = computed(() => {
   if (current.phase === 'failed') {
     return {
       title: 'Runtime 异常退出',
-      description: `${current.error.message}；可重试启动，或用安全模式启动以排除坏 Extension。`,
+      description: `${current.error.message}；可再次点击发送重试启动；若怀疑是某个 Extension 导致启动失败，请先停用该扩展。`,
       action: 'new-session' as const
     }
   }
@@ -326,11 +322,6 @@ function startNewSession(): void {
   void sessionStore.open(null, false)
 }
 
-/** 安全模式启动：不加载 Extension，仅本次生效；目标由主进程用最近一次启动意图决定。 */
-function startSafely(): void {
-  void resourceStore.startSafely()
-}
-
 /** DOM 更新与实际尺寸变化都同步粘底及大纲；会话切换清除上一次阅读目标。 */
 watch([chatMessages, streaming, syncNotice, truncationNotice], onLayoutChange, { flush: 'post' })
 watch(conversationKey, () => {
@@ -393,16 +384,7 @@ onBeforeUnmount(() => {
             >
               新建会话
             </AppButton>
-            <AppButton
-              :disabled="safeStart.phase === 'starting'"
-              @click="startSafely"
-            >
-              {{ safeStart.phase === 'starting' ? '正在启动…' : '以禁用扩展启动（仅本次）' }}
-            </AppButton>
           </div>
-          <p v-if="safeStart.phase === 'error'" role="alert" class="mt-1 text-xs text-desk-danger">
-            {{ safeStart.error.message }}
-          </p>
         </div>
 
         <p v-if="streaming" role="status" class="status-notice status-notice-info flex items-center gap-2">

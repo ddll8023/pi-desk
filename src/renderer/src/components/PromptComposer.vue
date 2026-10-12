@@ -1,4 +1,4 @@
-<!-- Prompt 输入坞：处理输入法组合态、Enter 发送与 Shift+Enter 换行、焦点回归与重复提交，并在 Agent 运行期间原位提供停止入口；同时承接 Extension 的 set_editor_text 填充文本、图片附件的选择/粘贴/拖拽三种入口、输入行按内容自动增高、快捷发送下拉、Pi 命令的斜杠模糊补全（Runtime 就绪后用运行中的命令清单，未就绪时用主进程预读的技能清单，按类型分组并按匹配优先级排序）与 `@` 项目文件引用（只写入相对路径文本，不传文件内容）。底部工具条左侧是信息行：异常与进行中的状态文本、被收起的 Extension 对话入口、Extension status 项与会话用量（点击开明细）；右侧是附件、快捷发送与发送/停止按钮。 -->
+<!-- Prompt 输入坞：处理输入法组合态、Enter 发送与 Shift+Enter 换行、焦点回归与重复提交、响应侧栏「新建」的聚焦请求并给出一次性提示，并在 Agent 运行期间原位提供停止入口；同时承接 Extension 的 set_editor_text 填充文本、图片附件的选择/粘贴/拖拽三种入口、输入行按内容自动增高、快捷发送下拉、Pi 命令的斜杠模糊补全（Runtime 就绪后用运行中的命令清单，未就绪时用主进程预读的技能清单，按类型分组并按匹配优先级排序）与 `@` 项目文件引用（只写入相对路径文本，不传文件内容）。底部工具条左侧是信息行：异常与进行中的状态文本、被收起的 Extension 对话入口、Extension status 项与会话用量（点击开明细）；右侧是附件、快捷发送与发送/停止按钮。 -->
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
@@ -22,6 +22,9 @@ const { view: runtimeView, promptView, abortView, projectionSync, capabilitiesVi
   preparingPrompt, rewindView } = storeToRefs(runtimeStore)
 const { editorText, editorTextVersion } = storeToRefs(extensionStore)
 
+/** 侧栏「新建」在闲置态的聚焦请求；父组件只传这个自增计数。 */
+const props = defineProps<{ readonly focusToken: number }>()
+
 const draft = ref('')
 /** 首次提交只启动 Runtime；就绪且投影同步后自动补发输入，启动期间用户仍可继续编辑。 */
 const startupRequested = ref(false)
@@ -30,6 +33,20 @@ const submitting = ref(false)
 /** 输入法组合态：此期间的 Enter 只确认候选词，不能当发送。 */
 const composing = ref(false)
 const textarea = ref<HTMLTextAreaElement | null>(null)
+/** 闲置态点击「新建」后的一次性提示：说明会话由首次发送创建。 */
+const newSessionHint = ref(false)
+let newSessionHintTimer: ReturnType<typeof setTimeout> | null = null
+
+/** 聚焦请求只在闲置态发出：聚焦输入框并短暂提示，不改动启动语义。 */
+watch(() => props.focusToken, () => {
+  textarea.value?.focus()
+  newSessionHint.value = true
+  if (newSessionHintTimer !== null) clearTimeout(newSessionHintTimer)
+  newSessionHintTimer = setTimeout(() => {
+    newSessionHint.value = false
+    newSessionHintTimer = null
+  }, 4_000)
+})
 
 /** 待发送的图片附件：objectUrl 仅用于本地预览，发送时读取 base64 并释放。 */
 interface PendingImage {
@@ -123,6 +140,8 @@ const status = computed<{ readonly kind: 'info' | 'error'; readonly text: string
     if (runtimeView.value.phase === 'starting') {
       return { kind: 'info', text: '正在启动 Pi；输入已保留，就绪后自动发送。' }
     }
+    // 侧栏「新建」只聚焦输入框：用一次性提示说明要发送才会开始会话。
+    if (newSessionHint.value && canStartRuntime.value) return { kind: 'info', text: '发送后开始新会话。' }
     // 未选项目与首次启动属于纯引导，按钮的禁用态已经表达，不再占信息行。
     if (canStartRuntime.value || projectStore.currentProject === null) return null
     return { kind: 'info', text: 'Runtime 正在关闭；输入会保留。' }
@@ -346,6 +365,7 @@ function onDocumentPointerDown(event: PointerEvent): void {
 
 onUnmounted(() => {
   cancelFileSearch()
+  if (newSessionHintTimer !== null) clearTimeout(newSessionHintTimer)
   for (const entry of pendingImages.value) URL.revokeObjectURL(entry.objectUrl)
   document.removeEventListener('pointerdown', onDocumentPointerDown)
 })
@@ -598,7 +618,7 @@ function commandMatchRank(entry: PiResourceEntry, query: string): number | null 
 }
 
 /**
- * 候选来源：Runtime 就绪时用运行中的 `get_commands`，未就绪时用主进程一次性预读的技能清单。
+ * 候选来源：Runtime 就绪时用当前会话已加载的资源，未就绪时用主进程一次性预读的技能清单。
  * 两份数据不合并、不去重：就绪后预读结果立即作废，运行中的清单是唯一权威。
  */
 const candidateEntries = computed<readonly PiResourceEntry[]>(() => (

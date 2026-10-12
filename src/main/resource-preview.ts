@@ -11,9 +11,8 @@ import type { ChildProcess } from 'node:child_process'
 import { join } from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
 import type { PiResourcePreview, RuntimeErrorCode } from '../shared/runtime-api'
-import { getPiExecutablePath } from './pi-process'
-import { getPiProcessEnvironment } from './pi-paths'
-import { toModelSummaries, toResources, toRuntimeInfo } from './pi-protocol'
+import { spawnPiCli } from './pi-cli-process'
+import { toModelSummaries, toResources, toRuntimeInfo } from './pi-response-projection'
 
 const PREVIEW_TIMEOUT_MS = 15_000
 const PREVIEW_KILL_GRACE_MS = 3_000
@@ -144,12 +143,10 @@ function runPreviewProbe(
   return new Promise((resolve, reject) => {
     let child: ChildProcess
     try {
-      child = spawn(getPiExecutablePath(), previewLaunchArguments(trustDecision), {
+      child = spawnPiCli(previewLaunchArguments(trustDecision), {
         cwd: workingDirectory,
-        env: getPiProcessEnvironment({ PI_SKIP_VERSION_CHECK: '1' }),
-        stdio: ['pipe', 'pipe', 'pipe'],
-        detached: process.platform !== 'win32',
-        windowsHide: true
+        stdin: true,
+        env: { PI_SKIP_VERSION_CHECK: '1' }
       })
     } catch (error) {
       reject(new ResourcePreviewError('RUNTIME_SPAWN_FAILED',

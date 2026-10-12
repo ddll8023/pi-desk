@@ -1,4 +1,4 @@
-/** 渲染端 Runtime 启停、模型选择、Prompt、回退与投影同步的受限桥接入口；通信异常转换为安全的展示结果。 */
+/** 渲染端 Runtime 状态、模型选择、Prompt、回退与投影同步的受限桥接入口；通信异常转换为安全的展示结果。 */
 import type {
   CapabilitiesResult,
   ProjectionBatch,
@@ -26,31 +26,11 @@ function callFailed(): { ok: false; error: RuntimeError } {
   }
 }
 
-export async function startRuntime(projectPath: string): Promise<RuntimeResult> {
-  const bridge = window.desktop
-  if (!bridge || typeof bridge.startRuntime !== 'function') return unavailable()
-  try {
-    return await bridge.startRuntime(projectPath)
-  } catch {
-    return callFailed()
-  }
-}
-
 export async function getRuntimeStatus(): Promise<RuntimeResult> {
   const bridge = window.desktop
   if (!bridge || typeof bridge.getRuntimeStatus !== 'function') return unavailable()
   try {
     return await bridge.getRuntimeStatus()
-  } catch {
-    return callFailed()
-  }
-}
-
-export async function stopRuntime(): Promise<RuntimeResult> {
-  const bridge = window.desktop
-  if (!bridge || typeof bridge.stopRuntime !== 'function') return unavailable()
-  try {
-    return await bridge.stopRuntime()
   } catch {
     return callFailed()
   }

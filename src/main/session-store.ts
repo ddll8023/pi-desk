@@ -58,7 +58,7 @@ function isMissingPath(error: unknown): boolean {
  * 会话根目录：各项目分组目录的父目录，也是列会话时的起点。
  * `--session-dir` 的取值见 `getProjectSessionDir()`；agent 目录的解析见 pi-paths.ts。
  */
-export function getSessionRoot(): string {
+function getSessionRoot(): string {
   return join(getPiAgentDir(), 'sessions')
 }
 
@@ -79,7 +79,7 @@ function getProjectGroupName(projectPath: string): string {
 }
 
 /** SDK 接管前读取的文件身份；只在应用内部传递，不替代 JSONL 真相。 */
-export interface SdkSessionFileIdentity {
+interface SdkSessionFileIdentity {
   readonly sessionFile: string
   readonly sessionId: string
   readonly fileStamp: string

@@ -2,8 +2,7 @@
  * SDK 宿主到既有页面契约的适配层：把宿主与会话状态映射为 RuntimeStatus，把宿主失败分类映射为
  * Runtime/Session 错误码，并转发投影批次与 Extension UI 快照。
  *
- * 页面继续消费既有形状与错误码，因此这里不新增来源标识，也不改共享契约；旧 RuntimeManager 只作为
- * 开发期显式退路保留，运行中不落回。
+ * 页面继续消费既有形状与错误码，因此这里不新增来源标识，也不改共享契约。
  *
  * 状态映射要点：页面 `runtimeId` 与宿主绑定代际同义（能力清单、投影快照与投影批次都按绑定编号对齐）；
  * 宿主就绪只代表 SDK 已加载，只有会话绑定完成才对页面表示 `ready`。
@@ -14,12 +13,17 @@ import { isSdkHostFailureCode } from '../sdk-host/protocol'
 import type { SdkInterruptConfirmation, SdkSessionReference, SdkSessionStatus } from '../sdk-host/protocol'
 import type {
   CapabilitiesResult,
+  McpCommandAction,
+  McpCommandResult,
+  McpStatusResult,
   OutputRate,
   ProjectionBatch,
   ProjectionResult,
   ProjectionSnapshot,
   PromptImageInput,
   PromptResult,
+  ResourcesResult,
+  RuntimeDiagnosticsResult,
   RuntimeError,
   RuntimeErrorCode,
   RuntimeInfo,
@@ -112,7 +116,7 @@ function mapState(host: SdkHostStatus['state'], session: SdkSessionStatus): Runt
 }
 
 /**
- * 无活动绑定时页面期望的空基准：与旧后端 `RuntimeManager.getProjection` 保持同一形状，
+ * 无活动绑定时页面期望的空基准：与页面既有空投影形状一致，
  * 页面把 `runtimeId: null` 当作有效空基准（不触发换代冲突）。
  */
 const EMPTY_PROJECTION: ProjectionSnapshot = {
@@ -224,19 +228,6 @@ export class SdkRuntimeBridge {
     return this.host.onExtensionUi(listener)
   }
 
-  /** 建立宿主并新建会话；目标项目与信任由主进程校验后进入宿主授权回路。 */
-  async start(): Promise<RuntimeResult> {
-    try {
-      const switched = await this.switchSession('new', { kind: 'new' }, false)
-      if (switched.cancelled) {
-        return { ok: false, error: { code: 'RUNTIME_COMMAND_REJECTED', message: '新建会话被取消，当前会话保持不变。' } }
-      }
-      return this.getStatus()
-    } catch (error) {
-      return { ok: false, error: runtimeErrorOf(error) }
-    }
-  }
-
   /** 只释放活动会话并保留宿主；宿主未建立或已失败时幂等返回当前状态，不新建宿主。 */
   async stop(): Promise<RuntimeResult> {
     const host = this.host.getStatus()
@@ -284,6 +275,56 @@ export class SdkRuntimeBridge {
     }
   }
 
+  /** 资源清单只读当前绑定；未绑定时按未就绪返回，不向宿主发请求，也不伪造空清单。 */
+  async readResources(): Promise<ResourcesResult> {
+    if (this.host.getSessionStatus().bindingId === null) {
+      return { ok: false, error: { code: 'RUNTIME_NOT_READY', message: '会话尚未就绪，无法读取资源清单。' } }
+    }
+    try {
+      return { ok: true, data: await this.host.readResources() }
+    } catch (error) {
+      return { ok: false, error: runtimeErrorOf(error) }
+    }
+  }
+
+  /** 诊断只读当前绑定已持有的创建期诊断与 Extension 错误；
+   * 无活动绑定时返回空结果（`runtimeId: null`），不用错误冒充「没有诊断」。
+   */
+  async readDiagnostics(): Promise<RuntimeDiagnosticsResult> {
+    if (this.host.getSessionStatus().bindingId === null) {
+      return { ok: true, data: { runtimeId: null, stderrLines: [], extensionErrors: [] } }
+    }
+    try {
+      return { ok: true, data: await this.host.readDiagnostics() }
+    } catch (error) {
+      return { ok: false, error: runtimeErrorOf(error) }
+    }
+  }
+
+  /** MCP 状态只读当前绑定内的固定 `/mcp` 命令；未绑定时按未就绪返回。 */
+  async readMcpStatus(): Promise<McpStatusResult> {
+    if (this.host.getSessionStatus().bindingId === null) {
+      return { ok: false, error: { code: 'RUNTIME_NOT_READY', message: '会话尚未就绪，无法读取 MCP 状态。' } }
+    }
+    try {
+      return { ok: true, data: await this.host.readMcpStatus() }
+    } catch (error) {
+      return { ok: false, error: runtimeErrorOf(error) }
+    }
+  }
+
+  /** MCP 登录/退出/重连只提交受校验的动作与服务器名；命令文本与等待期限由宿主与主进程决定。 */
+  async runMcpCommand(action: McpCommandAction, serverName: string): Promise<McpCommandResult> {
+    if (this.host.getSessionStatus().bindingId === null) {
+      return { ok: false, error: { code: 'RUNTIME_NOT_READY', message: '会话尚未就绪，无法执行 MCP 操作。' } }
+    }
+    try {
+      return { ok: true, data: await this.host.runMcpCommand(action, serverName) }
+    } catch (error) {
+      return { ok: false, error: runtimeErrorOf(error) }
+    }
+  }
+
   /** 模型切换只针对页面所见的绑定代际；身份不符时不发宿主请求。 */
   async setModel(request: RuntimeSetModelRequest): Promise<RuntimeResult> {
     if (this.host.getSessionStatus().bindingId !== request.runtimeId) {
@@ -299,7 +340,8 @@ export class SdkRuntimeBridge {
 
   /**
    * 回退只回退对话分支：目标消息由宿主按投影身份定位，结果未知时标记 `blocked`，
-   * 页面据此停止后续写操作，不自动重发。`text` 在未取消时按页面契约补空串（页面不消费该字段）。
+   * 页面据此停止后续写操作，不自动重发；宿主侧追加窗口内到达的结果帧仍按真实结果返回。
+   * `text` 在未取消时按页面契约补空串（页面不消费该字段）。
    */
   async rewind(request: RuntimeRewindRequest): Promise<RuntimeRewindResult> {
     const session = this.host.getSessionStatus()
@@ -321,7 +363,16 @@ export class SdkRuntimeBridge {
     } catch (error) {
       const blocked = error instanceof SdkHostError
         && (error.code === 'HOST_TIMEOUT' || error.code === 'HOST_EXITED' || error.code === 'HOST_CLOSED')
-      return { ok: false, error: runtimeErrorOf(error), blocked }
+      const failure = runtimeErrorOf(error)
+      // 结果未知会停止页面后续写入，文案必须给出唯一的恢复动作。
+      return {
+        ok: false,
+        error: blocked
+          ? { code: failure.code,
+              message: `${failure.message} 回退结果未知；请重新打开会话恢复操作，不会自动重复回退。` }
+          : failure,
+        blocked
+      }
     }
   }
 

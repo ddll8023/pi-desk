@@ -3,13 +3,14 @@ import { resolve } from 'node:path'
 import tailwindcss from '@tailwindcss/vite'
 import vue from '@vitejs/plugin-vue'
 import { defineConfig } from 'electron-vite'
+import { DEV_SERVER_PORT } from './src/shared/dev-server'
 
 const developmentCsp = [
   "default-src 'none'",
   "script-src 'self'",
   // Vite 开发期通过样式节点更新 CSS；正式页面不保留此权限。
   "style-src 'self' 'unsafe-inline'",
-  "connect-src 'self' ws://127.0.0.1:5173",
+  `connect-src 'self' ws://127.0.0.1:${DEV_SERVER_PORT}`,
   "img-src 'self'",
   "font-src 'self'",
   "object-src 'none'",
@@ -59,7 +60,7 @@ export default defineConfig({
     plugins: [vue(), tailwindcss()],
     server: {
       host: '127.0.0.1',
-      port: 5173,
+      port: DEV_SERVER_PORT,
       strictPort: true,
       allowedHosts: ['127.0.0.1'],
       cors: false,

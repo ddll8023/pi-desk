@@ -8,9 +8,12 @@ import { ExtensionUiBridge } from './extension-ui-bridge'
 import { MessageProjection } from '../projection/message-projection'
 import { OutputRateTracker } from '../projection/output-rate'
 import { SDK_HOST_PROTOCOL_VERSION } from './protocol'
-import type { SdkHostFailureCode, SdkSessionReference, SdkSessionRequest, SdkSessionStatus, SdkSessionTarget } from './protocol'
 import type {
-  AgentCapabilities, ModelSummary, OutputRate, ProjectionBatch, ProjectionSnapshot, SessionUsage
+  SdkHostFailureCode, SdkMcpCommandAction, SdkSessionReference, SdkSessionRequest, SdkSessionStatus, SdkSessionTarget
+} from './protocol'
+import type {
+  AgentCapabilities, ExtensionErrorEntry, McpStatus, ModelSummary, OutputRate, PiResourceEntry, PiResources,
+  ProjectionBatch, ProjectionSnapshot, PromptDisposition, RuntimeDiagnostics, SessionUsage
 } from '../shared/runtime-api'
 import type { ExtensionDialogResponseInput } from '../shared/extension-ui-api'
 
@@ -29,6 +32,14 @@ interface RuntimeOptions {
 const SETTLE_TIMEOUT_MS = 5_000
 /** 会话统计补读的最小间隔：状态推送频繁，不能每次取状态都遍历会话条目。 */
 const USAGE_REFRESH_MS = 1_000
+/**
+ * 等待官方接受回执的兜底上限。
+ *
+ * 官方在扩展 input handler、凭据校验与 before_agent_start 钩子之后才回报接受结果，
+ * 冷启动或首次连接供应商时可能明显超过一秒，因此这里的到期不是失败判定：
+ * 只有到期且会话确实没有进入运行态，才可以按冲突收敛。
+ */
+const PROMPT_ACCEPT_TIMEOUT_MS = 30_000
 
 /** 助手消息的事件身份；只有它的输出推进速率与统计。 */
 function isAssistantMessage(message: unknown): boolean {
@@ -112,6 +123,78 @@ function bounded<T>(task: Promise<T>): Promise<T> {
   })
 }
 
+/** 资源清单条目上限；超出截断并如实标记，不伪装成完整清单。 */
+const RESOURCE_ENTRY_LIMIT = 500
+
+/** 诊断展示行数与 Extension 错误条数上限；超出只保留最近的部分。 */
+const DIAGNOSTIC_VIEW_LINES = 20
+const EXTENSION_ERROR_LIMIT = 20
+/** 单条 Extension 错误文本上限：旧路径没有上限，这里收紧以免超长文本进入 IPC。 */
+const EXTENSION_ERROR_MESSAGE_LIMIT = 2_000
+/** SDK 诊断级别到展示前缀；级别是穷尽联合。 */
+const DIAGNOSTIC_PREFIXES: Readonly<Record<'info' | 'warning' | 'error', string>> = {
+  info: '提示', warning: '警告', error: '错误'
+}
+
+/** `/mcp` 是读取 MCP 状态的唯一固定命令；命令文本不接受页面传入。 */
+const MCP_STATUS_PROMPT = '/mcp'
+
+/** MCP 命令文本由宿主拼出；动作与服务器名都已由主进程校验。 */
+function mcpCommandPrompt(action: SdkMcpCommandAction, serverName: string): string {
+  return `/mcp ${action} ${serverName}`
+}
+
+/** 资源条目的来源字段；非字符串或空串一律为 null，不用空串冒充来源信息。 */
+interface ResourceSourceFields {
+  readonly path?: unknown
+  readonly scope?: unknown
+  readonly origin?: unknown
+  readonly baseDir?: unknown
+}
+
+/** 资源条目的来源信息取自官方 `sourceInfo`；缺失字段保持 null。 */
+function sourceFields(info: ResourceSourceFields): Pick<PiResourceEntry, 'path' | 'scope' | 'origin' | 'baseDir'> {
+  return {
+    path: optionalText(info.path),
+    scope: optionalText(info.scope),
+    origin: optionalText(info.origin),
+    baseDir: optionalText(info.baseDir)
+  }
+}
+
+/** 只接受非空字符串；其余取值按未知处理。 */
+function optionalText(value: unknown): string | null {
+  return typeof value === 'string' && value !== '' ? value : null
+}
+
+/**
+ * 会话已加载资源到页面清单的映射：扩展命令、提示词与技能三类，
+ * 技能名补齐 `skill:` 前缀（页面按该前缀把技能与斜杠命令分开搜索）。
+ * 名称为空的条目直接丢弃：页面契约要求非空名称，不用空名冒充一条资源。
+ */
+function sessionResources(session: AgentSession): PiResourceEntry[] {
+  const entries: PiResourceEntry[] = []
+  for (const command of session.extensionRunner.getRegisteredCommands()) {
+    const name = optionalText(command.invocationName)
+    if (name === null) continue
+    entries.push({ kind: 'extension', name,
+      description: optionalText(command.description), ...sourceFields(command.sourceInfo) })
+  }
+  for (const template of session.promptTemplates) {
+    const name = optionalText(template.name)
+    if (name === null) continue
+    entries.push({ kind: 'prompt', name,
+      description: optionalText(template.description), ...sourceFields(template.sourceInfo) })
+  }
+  for (const skill of session.resourceLoader.getSkills().skills) {
+    const name = optionalText(skill.name)
+    if (name === null) continue
+    entries.push({ kind: 'skill', name: `skill:${name}`,
+      description: optionalText(skill.description), ...sourceFields(skill.sourceInfo) })
+  }
+  return entries
+}
+
 export class SdkSessionRuntime {
   private runtime: AgentSessionRuntime | null = null
   private session: AgentSession | null = null
@@ -148,6 +231,10 @@ export class SdkSessionRuntime {
   private usageTimer: ReturnType<typeof setTimeout> | null = null
   /** 投影上报的展示消息条数；未绑定时为 0。 */
   private projectedMessageCount = 0
+  /** 当前代际收到的 Extension 运行时错误；绑定换代时清空。 */
+  private extensionErrors: ExtensionErrorEntry[] = []
+  /** Prompt 提交与 MCP 调用互斥：同一时刻只允许一个 prompt 请求。 */
+  private promptInFlight = false
 
   constructor(private readonly sdk: Sdk, private readonly options: RuntimeOptions) {}
 
@@ -267,24 +354,45 @@ export class SdkSessionRuntime {
   /**
    * 提交只返回接受、排队或已处理：本轮完成由官方事件表达，不把回答结束当作提交成功。
    * 运行中不排队，保持桌面既有语义；图片只按线格式转交官方输入。
+   *
+   * 接受回执可能晚于扩展钩子与凭据校验，因此等待期限只是兜底：
+   * 到期时若会话已在运行，说明 Prompt 已被接受，只按已开始回报，不误报冲突。
    */
   async submit(bindingId: number, message: string, images: readonly { readonly data: string; readonly mimeType: string }[]): Promise<'started' | 'queued' | 'handled'> {
     const session = this.requireBoundSession(bindingId)
     if (this.needsHostRebuild || this.operationId !== null) throw new SdkSessionFailure('SESSION_BUSY')
-    if (this.isBusy()) throw new SdkSessionFailure('SESSION_BUSY')
+    if (this.promptInFlight || this.isBusy()) throw new SdkSessionFailure('SESSION_BUSY')
     let disposition: 'started' | 'queued' | 'handled' | null = null
-    const prompt = session.prompt(message, {
-      images: images.map(image => ({ type: 'image' as const, data: image.data, mimeType: image.mimeType })),
-      source: 'rpc',
-      preflightResult: value => { disposition = value }
-    })
-    // 接受结果以 preflight 为准；执行失败与结果未知都不重发，由状态与事件收敛。
-    await Promise.race([prompt.then(() => undefined, () => undefined),
-      new Promise<void>(resolvePromise => setTimeout(resolvePromise, 1_000))])
-    if (disposition === null) throw new SdkSessionFailure('SESSION_OPERATION_CONFLICT')
-    void prompt.catch(() => {})
-    this.publish()
-    return disposition
+    let rejection: unknown = null
+    let reportAccepted: () => void = () => {}
+    const accepted = new Promise<void>(resolvePromise => { reportAccepted = resolvePromise })
+    this.promptInFlight = true
+    try {
+      const prompt = session.prompt(message, {
+        images: images.map(image => ({ type: 'image' as const, data: image.data, mimeType: image.mimeType })),
+        source: 'rpc',
+        // 接受结果与拒绝都以官方回调为准；原始错误不外传，只映射到既有分类。
+        preflightResult: value => { disposition = value; reportAccepted() }
+      })
+      // 执行失败与结果未知都不重发，由状态与事件收敛。
+      await Promise.race([accepted, prompt.then(() => undefined, (error: unknown) => { rejection = error }),
+        new Promise<void>(resolvePromise => setTimeout(resolvePromise, PROMPT_ACCEPT_TIMEOUT_MS))])
+      void prompt.catch(() => {})
+    } finally {
+      this.promptInFlight = false
+    }
+    if (disposition !== null) {
+      this.publish()
+      return disposition
+    }
+    // 官方明确拒绝：不等满窗口、不重发，分类保持在既有集合内。
+    if (rejection !== null) throw new SdkSessionFailure('SESSION_OPERATION_CONFLICT')
+    // 兜底到期但会话已在运行：回执只是晚到，按已开始回报，避免误报冲突并保留草稿。
+    if (this.isBusy()) {
+      this.publish()
+      return 'started'
+    }
+    throw new SdkSessionFailure('SESSION_OPERATION_CONFLICT')
   }
 
   /** 模型切换以官方实际状态为准；凭据不足由官方拒绝，不在宿主内旁路校验。 */
@@ -363,6 +471,78 @@ export class SdkSessionRuntime {
       modelsError = '无法读取当前会话的模型目录。'
     }
     return { runtimeId: bindingId, models, modelsError }
+  }
+
+  /**
+   * 当前绑定会话已加载的资源清单：只读内存中的扩展命令、提示词与技能，
+   * 不重新扫描磁盘、不建立第二份资源模型；读取失败以 `error` 表达，不返回伪造的空清单。
+   */
+  readResources(bindingId: number): PiResources {
+    const session = this.requireBoundSession(bindingId)
+    try {
+      const entries = sessionResources(session)
+      const truncated = entries.length > RESOURCE_ENTRY_LIMIT
+      return { runtimeId: bindingId, entries: truncated ? entries.slice(0, RESOURCE_ENTRY_LIMIT) : entries,
+        truncated, error: null }
+    } catch {
+      return { runtimeId: bindingId, entries: [], truncated: false,
+        error: '无法读取当前会话已加载的资源清单。' }
+    }
+  }
+
+  /**
+   * 当前绑定会话的诊断：SDK 创建期诊断（settings 与资源加载告警）与已收集的 Extension 运行时错误。
+   * 只读已持有数据，不为查询新建执行上下文；宿主进程自身的输出不进入本通道。
+   */
+  readDiagnostics(bindingId: number): RuntimeDiagnostics {
+    this.requireBoundSession(bindingId)
+    const lines: string[] = []
+    for (const entry of this.runtime?.diagnostics ?? []) {
+      const message = optionalText(entry.message)
+      if (message === null) continue
+      lines.push(`${DIAGNOSTIC_PREFIXES[entry.type]}：${message}`)
+    }
+    return { runtimeId: bindingId, stderrLines: lines.slice(-DIAGNOSTIC_VIEW_LINES),
+      extensionErrors: this.extensionErrors.map(entry => ({ ...entry })) }
+  }
+
+  /** MCP 状态读取：固定命令 `/mcp` 的 notify 文本就是状态清单。 */
+  async readMcpStatus(bindingId: number): Promise<McpStatus> {
+    return this.runMcpPrompt(bindingId, MCP_STATUS_PROMPT)
+  }
+
+  /** MCP 登录/退出/重连：命令文本固定；浏览器授权与回调地址输入仍走既有 Extension UI 通道。 */
+  async runMcpCommand(bindingId: number, action: SdkMcpCommandAction, serverName: string): Promise<McpStatus> {
+    return this.runMcpPrompt(bindingId, mcpCommandPrompt(action, serverName))
+  }
+
+  /**
+   * MCP 调用与页面提交共用同一条路径：官方 mcp 扩展在非 TUI 模式下用 notify 输出结果，
+   * 而扩展命令是在 preflight 之前完成的，因此捕获窗口结束时文本已齐。
+   * 期限由主进程的请求等待负责，这里不设第二套超时；超时后命令仍在运行、结果未知且不重发。
+   */
+  private async runMcpPrompt(bindingId: number, message: string): Promise<McpStatus> {
+    const session = this.requireBoundSession(bindingId)
+    if (this.needsHostRebuild) throw new SdkSessionFailure('SESSION_RECOVERY_REQUIRED')
+    if (this.operationId !== null || this.promptInFlight || this.isBusy()) {
+      throw new SdkSessionFailure('SESSION_BUSY')
+    }
+    const bridge = this.bridge
+    if (bridge === null) throw new SdkSessionFailure('SESSION_BIND_FAILED')
+    let disposition: PromptDisposition | null = null
+    let messages: readonly string[] = []
+    const endCapture = bridge.beginNotifyCapture()
+    this.promptInFlight = true
+    try {
+      await session.prompt(message, { source: 'rpc', preflightResult: value => { disposition = value } })
+    } catch {
+      throw new SdkSessionFailure('SESSION_OPERATION_CONFLICT')
+    } finally {
+      this.promptInFlight = false
+      messages = endCapture()
+    }
+    if (disposition === null) throw new SdkSessionFailure('SESSION_OPERATION_CONFLICT')
+    return { disposition, messages }
   }
 
   /** 解析不到条目时保持未映射，不用摘要或位置猜测回退目标。 */
@@ -522,6 +702,7 @@ export class SdkSessionRuntime {
     this.currentCreation = this.creations.get(session) ?? null
     this.phase = 'preparing'
     this.lastError = null
+    this.extensionErrors = []
     this.bindingId = ++this.bindingSeed
     this.activityVersion += 1
     const bindingId = this.bindingId
@@ -603,6 +784,12 @@ export class SdkSessionRuntime {
           // tool_call 失败意味着必要交互无法表达；其他扩展错误不静默当作已获批准。
           if (error.event === 'tool_call' || !this.valid) this.blockUnavailableInteraction()
           else { this.lastError = 'SESSION_BIND_FAILED'; this.publish() }
+          // 只留来源、事件与截断后的消息；堆栈可能带路径与凭据，不进入页面。
+          const message = optionalText(error.error)
+          if (message === null) return
+          this.extensionErrors.push({ path: optionalText(error.extensionPath), event: optionalText(error.event),
+            error: message.slice(0, EXTENSION_ERROR_MESSAGE_LIMIT) })
+          if (this.extensionErrors.length > EXTENSION_ERROR_LIMIT) this.extensionErrors.shift()
         } })
       if (this.closing || this.session !== session || this.needsHostRebuild) throw new SdkSessionFailure('STALE_SESSION')
       this.valid = true

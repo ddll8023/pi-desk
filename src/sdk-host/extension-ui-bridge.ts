@@ -18,6 +18,8 @@ export interface ExtensionUiBridgeOptions {
 }
 const MAX_DIALOGS = 8
 const MAX_DISPLAY_CHARS = 4_000
+/** 一次 notify 捕获最多保留的条数；只用于读取 MCP 状态，不影响通知列表。 */
+const MAX_CAPTURED_NOTIFIES = 20
 
 /** 展示文本只去除 ANSI 并截断；原始 select 值留在当前交互映射内。 */
 function displayText(text: string): string {
@@ -30,6 +32,8 @@ export class ExtensionUiBridge {
   private active = true
   private suspended = false
   private editorText = ''
+  /** 一次性的 notify 文本捕获；非 null 时收到的 notify 副本也追加到该数组。 */
+  private notifyCapture: string[] | null = null
 
   constructor(base: ExtensionUIContext, private readonly options: ExtensionUiBridgeOptions) {
     // 官方默认上下文保留 theme 和 TUI-only 的现有降级行为，不导入未公开的 SDK 深路径。
@@ -76,6 +80,19 @@ export class ExtensionUiBridge {
   /** 等待数供生命周期守门，不把没有 streaming 当成没有用户等待。 */
   get waitingCount(): number { return this.pending.size }
 
+  /**
+   * 开始一次性捕获 notify 文本，返回结束函数并交出捕获结果。
+   * 捕获期间 notify 照常转发给页面（不抑制展示），只额外保留副本供调用方读取。
+   */
+  beginNotifyCapture(): () => readonly string[] {
+    const capture: string[] = []
+    this.notifyCapture = capture
+    return () => {
+      if (this.notifyCapture === capture) this.notifyCapture = null
+      return capture
+    }
+  }
+
   /** 只允许对应绑定的回应解除原 Promise；选择值必须属于当前候选。 */
   respond(bindingId: number, dialogId: string, response: ExtensionDialogResponseInput): boolean {
     if (!this.active || bindingId !== this.options.bindingId) return false
@@ -97,6 +114,7 @@ export class ExtensionUiBridge {
   /** 会话失效后旧 UI 引用既不能新发请求，也不能回应新绑定。 */
   invalidate(): void {
     this.active = false
+    this.notifyCapture = null
     this.cancelPending(true)
     this.editorText = ''
   }
@@ -112,6 +130,10 @@ export class ExtensionUiBridge {
     if (!this.active || this.suspended) return
     const message = { ...payload, id: randomUUID() }
     if (projectExtensionUiRequest(message) === null) return
+    if (this.notifyCapture !== null && payload.method === 'notify' && typeof payload.message === 'string'
+      && this.notifyCapture.length < MAX_CAPTURED_NOTIFIES) {
+      this.notifyCapture.push(payload.message)
+    }
     this.options.onRequest(this.options.bindingId, message)
   }
 

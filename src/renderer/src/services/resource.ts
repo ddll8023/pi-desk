@@ -1,4 +1,4 @@
-/** 封装 Pi 资源清单、启动前资源与模型共享预读、启动诊断、MCP 配置列举与探测及连接动作、安全启动；把桥接缺失与通信异常转换为展示结果。 */
+/** 封装 Pi 资源清单、启动前资源与模型共享预读、启动诊断、MCP 配置列举与探测及连接动作；把桥接缺失与通信异常转换为展示结果。 */
 import type {
   McpCommandAction,
   McpCommandResult,
@@ -9,8 +9,7 @@ import type {
   ResourcesResult,
   ResourcePreviewResult,
   RuntimeDiagnosticsResult,
-  RuntimeError,
-  RuntimeResult
+  RuntimeError
 } from '../../../shared/runtime-api'
 
 function unavailable(): { ok: false; error: RuntimeError } {
@@ -29,7 +28,7 @@ function callFailed(error: unknown): { ok: false; error: RuntimeError } {
   }
 }
 
-/** 读取当前代际已加载的 Pi 资源清单；清单来源是 Pi 自己的 `get_commands`。 */
+/** 读取当前代际已加载的 Pi 资源清单；来源是当前会话已注册的扩展命令、提示词与技能。 */
 export async function getResources(): Promise<ResourcesResult> {
   const bridge = window.desktop
   if (!bridge || typeof bridge.getRuntimeResources !== 'function') return unavailable()
@@ -51,7 +50,7 @@ export async function getResourcePreview(force = false): Promise<ResourcePreview
   }
 }
 
-/** 读取当前代际的启动诊断尾部与 Extension 运行时错误；无活动 Runtime 时两项都为空。 */
+/** 读取当前代际的 SDK 会话创建期诊断与 Extension 运行时错误；无活动代际时两项为空。 */
 export async function getDiagnostics(): Promise<RuntimeDiagnosticsResult> {
   const bridge = window.desktop
   if (!bridge || typeof bridge.getRuntimeDiagnostics !== 'function') return unavailable()
@@ -118,17 +117,6 @@ export async function abortMcpInspection(): Promise<McpInspectAbortResult> {
   if (!bridge || typeof bridge.abortRuntimeMcpInspection !== 'function') return unavailable()
   try {
     return await bridge.abortRuntimeMcpInspection()
-  } catch (error) {
-    return callFailed(error)
-  }
-}
-
-/** 安全模式启动：不加载 Extension，仅本次生效；目标由主进程用最近一次启动意图决定。 */
-export async function startRuntimeSafely(): Promise<RuntimeResult> {
-  const bridge = window.desktop
-  if (!bridge || typeof bridge.startRuntimeSafely !== 'function') return unavailable()
-  try {
-    return await bridge.startRuntimeSafely()
   } catch (error) {
     return callFailed(error)
   }

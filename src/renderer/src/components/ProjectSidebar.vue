@@ -22,6 +22,7 @@ const emit = defineEmits<{
   toggleSettings: []
   closeSidebar: []
   removeProject: [project: Project]
+  requestNewSession: []
 }>()
 
 const projectStore = useProjectStore()
@@ -141,9 +142,11 @@ function openSavedSession(sessionId: string): void {
 
 function createSession(): void {
   closeMenu()
-  // 闲置或已关闭时空白聊天已可用；不要仅因点击入口而启动 Pi。
+  // 闲置或已关闭时空白聊天已可用：不因点击入口启动 Pi，只请外层把焦点交给输入框。
   if (runtimeView.value.phase !== 'idle' && runtimeView.value.phase !== 'closed') {
     void sessionStore.open(null, false)
+  } else {
+    emit('requestNewSession')
   }
   emit('closeSidebar')
 }

@@ -6,6 +6,7 @@ import { app, BrowserWindow, dialog, ipcMain, nativeTheme, net, protocol, sessio
 import type { IpcMainInvokeEvent } from 'electron'
 import { APP_INFO_CHANNEL } from '../shared/desktop-api'
 import type { AppInfoResult, DesktopErrorCode } from '../shared/desktop-api'
+import { DEV_SERVER_PORT } from '../shared/dev-server'
 import {
   PREFERENCES_GET_CHANNEL,
   PREFERENCES_SET_UI_CHANNEL,
@@ -107,10 +108,7 @@ import {
   RUNTIME_PROJECTION_EVENT,
   RUNTIME_RESOURCES_CHANNEL,
   RUNTIME_RESOURCE_PREVIEW_CHANNEL,
-  RUNTIME_START_CHANNEL,
-  RUNTIME_START_SAFE_CHANNEL,
   RUNTIME_STATUS_CHANNEL,
-  RUNTIME_STOP_CHANNEL,
   RUNTIME_STATUS_EVENT,
   isResourcePreviewRequest,
   isRuntimeSetModelRequest,
@@ -157,15 +155,15 @@ import { PiSettingsError, PiSettingsManager } from './pi-settings-manager'
 import { PreferencesManager } from './preferences-manager'
 import { ProjectFileIndex } from './project-file-index'
 import { ProjectManager } from './project-manager'
+import { McpInspectionManager } from './mcp-inspection'
 import { ResourcePreviewError, previewGlobalModels, previewProjectResources } from './resource-preview'
-import { RuntimeManager } from './runtime-manager'
 import { SdkHostManager } from './sdk-host-manager'
 import { SdkRuntimeBridge } from './sdk-runtime-bridge'
 import { SessionManager } from './session-manager'
 import { TrustManager, TrustManagerError } from './trust-manager'
 import { MIN_WINDOW_HEIGHT, MIN_WINDOW_WIDTH, WindowState } from './window-state'
 
-const DEVELOPMENT_PAGE_URL = 'http://127.0.0.1:5173/'
+const DEVELOPMENT_PAGE_URL = `http://127.0.0.1:${DEV_SERVER_PORT}/`
 const APPLICATION_PAGE_URL = 'app://desktop/index.html'
 /** 应用退出时等待关闭链的总预算；覆盖各平台兜底阶段后强制退出。 */
 const QUIT_DEADLINE_MS = 10_000
@@ -197,31 +195,25 @@ const contentTypes: Readonly<Record<string, string>> = {
 
 let mainWindow: BrowserWindow | null = null
 let quittingAfterShutdown = false
-const runtimeManager = new RuntimeManager()
 const sdkHostManager = new SdkHostManager()
 /** 页面会话主链后端：宿主与会话状态、失败分类在此映射回既有 Runtime 契约。 */
 const sdkRuntime = new SdkRuntimeBridge(sdkHostManager)
-/** 开发期显式退路：仅本地排查旧 RPC 链路时置为 true；运行中不自动落回。 */
-const legacyRpcFallback = false
-/** 会话后端：项目切换与会话切换都只作用于当前后端，不让两个后端同时持有会话。 */
-const sessionBackend: { getStatus(): RuntimeResult; stop(): Promise<RuntimeResult> } =
-  legacyRpcFallback ? runtimeManager : sdkRuntime
 /** 配置文件的唯一读写者；项目列表、界面偏好与窗口状态共用同一份文件。 */
 const configStore = new DesktopConfigStore()
 const trustManager = new TrustManager({ store: configStore })
 const projectManager = new ProjectManager({
   chooseDirectory: chooseDirectoryWithDialog,
-  runtime: sessionBackend,
+  runtime: sdkRuntime,
   store: configStore,
   trust: trustManager
 })
 const sessionManager = new SessionManager({
   projects: projectManager,
-  runtime: runtimeManager,
   sdk: sdkRuntime,
-  legacyRpc: legacyRpcFallback,
   projectsTrust: trustManager
 })
+/** MCP 服务器探测与取消：与当前会话无关，只按项目跑一次性官方 CLI 进程。 */
+const mcpInspection = new McpInspectionManager()
 /** SDK 内部授权回路接主进程会话编排；宿主不能自行授权项目或任意会话路径。 */
 sdkHostManager.setSessionAuthority((reference, projectPath) => sessionManager.prepareSdkTarget(reference, projectPath))
 /** 项目文件索引：根路径只取当前项目，页面无法指定检索目录。 */
@@ -738,7 +730,7 @@ function registerSessionHandlers(pageUrl: string): void {
       return sessionManager.open({
         sessionId: targetSessionId,
         allowInterrupt
-      }, trust.decision)
+      })
     }
   )
 
@@ -767,7 +759,7 @@ function registerSessionHandlers(pageUrl: string): void {
       if (trust.requiresPrompt) {
         return sessionFailure('TRUST_REQUIRED', trust.message ?? '项目包含需要信任决定的资源。')
       }
-      return sessionManager.reload(fields.allowInterrupt, trust.decision)
+      return sessionManager.reload(fields.allowInterrupt)
     }
   )
 
@@ -775,7 +767,8 @@ function registerSessionHandlers(pageUrl: string): void {
 
 /**
  * Project Trust 拦截点（基于当前项目）：有受保护资源且无已保存决定时返回 `requiresPrompt`，
- * 由调用方按 `TRUST_REQUIRED` 拒绝；有决定或无资源时返回应传给启动链的决定。
+ * 由调用方按 `TRUST_REQUIRED` 拒绝；有决定或无资源时一并返回已保存的决定，
+ * 供只读列举（MCP 配置）判断项目级配置是否生效。
  */
 async function resolveTrustForCurrentProject(): Promise<{
   readonly requiresPrompt: boolean
@@ -793,32 +786,6 @@ async function resolveTrustForCurrentProject(): Promise<{
     decision: null,
     message: `项目包含需要信任决定的资源：${summary}`
   }
-}
-
-/**
- * runtime-start 的带信任启动链：目标必须是当前项目（宿主只认主进程当前项目），
- * 信任前置后建立宿主并新建会话。
- */
-async function startTrustedRuntime(projectPath: string): Promise<RuntimeResult> {
-  if (projectPath !== projectManager.currentProjectPath()) {
-    return {
-      ok: false,
-      error: { code: 'INVALID_PROJECT_PATH', message: '启动目标不是当前项目；请先切换项目再启动会话。' }
-    }
-  }
-  const outcome = await trustManager.resolveLaunchDecision(projectPath)
-  if (outcome.requiresPrompt) {
-    const status = await trustManager.statusOf(projectPath)
-    const summary = status.resources.map((resource) => resource.path).join('、')
-    return {
-      ok: false,
-      error: {
-        code: 'TRUST_REQUIRED',
-        message: `项目包含需要信任决定的资源：${summary}`
-      }
-    }
-  }
-  return sdkRuntime.start()
 }
 
 /** Trust 查询与决定接口；决定只接受当前项目，防止页面改写其他项目的记录。 */
@@ -893,31 +860,6 @@ function trustFailureFromError(error: unknown): TrustStatusResult {
 
 /** 注册固定 Runtime 接口并逐接口校验参数；不向页面开放可执行文件路径、任意启动参数或任意 RPC 内容。 */
 function registerRuntimeHandlers(pageUrl: string): void {
-  handle(
-    RUNTIME_START_CHANNEL,
-    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<RuntimeResult> => {
-      if (!isTrustedCaller(event, pageUrl)) {
-        return runtimeFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
-      }
-      if (args.length !== 1) {
-        return runtimeFailure('INVALID_REQUEST', '启动 Runtime 接口只接受一个项目目录对象。')
-      }
-      const request = args[0]
-      if (typeof request !== 'object' || request === null || Array.isArray(request)) {
-        return runtimeFailure('INVALID_REQUEST', '启动 Runtime 参数格式不正确。')
-      }
-      const fields = request as Record<string, unknown>
-      if (Object.keys(fields).some((key) => key !== 'projectPath')) {
-        return runtimeFailure('INVALID_REQUEST', '启动 Runtime 参数包含未支持的字段。')
-      }
-      const projectPath = fields.projectPath
-      if (typeof projectPath !== 'string') {
-        return runtimeFailure('INVALID_PROJECT_PATH', '项目目录必须是非空的绝对路径。')
-      }
-      return startTrustedRuntime(projectPath)
-    }
-  )
-
   handle(RUNTIME_STATUS_CHANNEL, (event: IpcMainInvokeEvent, ...args: unknown[]): RuntimeResult => {
     if (!isTrustedCaller(event, pageUrl)) {
       return runtimeFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
@@ -927,19 +869,6 @@ function registerRuntimeHandlers(pageUrl: string): void {
     }
     return sdkRuntime.getStatus()
   })
-
-  handle(
-    RUNTIME_STOP_CHANNEL,
-    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<RuntimeResult> => {
-      if (!isTrustedCaller(event, pageUrl)) {
-        return runtimeFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
-      }
-      if (args.length !== 0) {
-        return runtimeFailure('INVALID_REQUEST', '关闭 Runtime 接口不接受参数。')
-      }
-      return sdkRuntime.stop()
-    }
-  )
 
   /** 中止当前 Agent 操作；只接受零参数，运行状态仍以事件流为准。 */
   handle(
@@ -997,7 +926,7 @@ function registerRuntimeHandlers(pageUrl: string): void {
     }
   )
 
-  /** 资源清单只读取旧 RPC 后端当前代际的 `get_commands` 投影，不接受任何参数。 */
+  /** 资源清单只读当前绑定代际已加载的扩展命令、提示词与技能，不接受任何参数。 */
   handle(
     RUNTIME_RESOURCES_CHANNEL,
     async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<ResourcesResult> => {
@@ -1007,7 +936,7 @@ function registerRuntimeHandlers(pageUrl: string): void {
       if (args.length !== 0) {
         return resourcesFailure('INVALID_REQUEST', '资源清单接口不接受参数。')
       }
-      return runtimeManager.readResources()
+      return sdkRuntime.readResources()
     }
   )
 
@@ -1049,21 +978,21 @@ function registerRuntimeHandlers(pageUrl: string): void {
     }
   )
 
-  /** 诊断只暴露旧 RPC 后端已持有的有界 stderr 尾部与 extension_error 事件，不接受任何参数。 */
+  /** 诊断只暴露当前绑定代际已持有的 SDK 创建期诊断与 Extension 运行时错误，不接受任何参数。 */
   handle(
     RUNTIME_DIAGNOSTICS_CHANNEL,
-    (event: IpcMainInvokeEvent, ...args: unknown[]): RuntimeDiagnosticsResult => {
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<RuntimeDiagnosticsResult> => {
       if (!isTrustedCaller(event, pageUrl)) {
         return diagnosticsFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
       }
       if (args.length !== 0) {
         return diagnosticsFailure('INVALID_REQUEST', '诊断接口不接受参数。')
       }
-      return runtimeManager.getDiagnostics()
+      return sdkRuntime.readDiagnostics()
     }
   )
 
-  /** MCP 状态在旧 RPC 后端使用主进程固定的 `/mcp` 命令，不接受页面传入任何命令文本。 */
+  /** MCP 状态使用宿主内固定的 `/mcp` 命令，不接受页面传入任何命令文本。 */
   handle(
     RUNTIME_MCP_STATUS_CHANNEL,
     async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<McpStatusResult> => {
@@ -1073,7 +1002,7 @@ function registerRuntimeHandlers(pageUrl: string): void {
       if (args.length !== 0) {
         return mcpStatusFailure('INVALID_REQUEST', 'MCP 状态接口不接受参数。')
       }
-      return runtimeManager.readMcpStatus()
+      return sdkRuntime.readMcpStatus()
     }
   )
 
@@ -1102,7 +1031,7 @@ function registerRuntimeHandlers(pageUrl: string): void {
       if (!isMcpServerName(fields.serverName)) {
         return mcpStatusFailure('INVALID_REQUEST', 'MCP 服务器名只能包含字母、数字、点、下划线与连字符。')
       }
-      return runtimeManager.runMcpCommand(fields.action, fields.serverName)
+      return sdkRuntime.runMcpCommand(fields.action, fields.serverName)
     }
   )
 
@@ -1124,7 +1053,7 @@ function registerRuntimeHandlers(pageUrl: string): void {
       if (projectPath === null) {
         return mcpInspectionFailure('INVALID_PROJECT_PATH', '请先选择一个项目，再探测 MCP 服务器。')
       }
-      const result = await runtimeManager.inspectMcpServers(projectPath)
+      const result = await mcpInspection.inspect(projectPath)
       // 探测期间项目可能已切换：此时结果属于旧项目，不能当作当前项目的状态交给页面。
       if (result.ok && projectManager.currentProjectPath() !== projectPath) {
         return mcpInspectionFailure('INVALID_PROJECT_PATH', '项目已切换，本次探测结果已丢弃。')
@@ -1143,7 +1072,7 @@ function registerRuntimeHandlers(pageUrl: string): void {
       if (args.length !== 0) {
         return mcpInspectionAbortFailure('INVALID_REQUEST', '中止探测接口不接受参数。')
       }
-      return runtimeManager.abortMcpInspection()
+      return mcpInspection.abort()
     }
   )
 
@@ -1176,26 +1105,6 @@ function registerRuntimeHandlers(pageUrl: string): void {
           `读取 MCP 配置失败：${error instanceof Error ? error.message : String(error)}`
         )
       }
-    }
-  )
-
-  /**
-   * 安全模式启动：零参数。SDK 宿主尚未提供“不加载 Extension”的等价启动方式，
-   * 因此该入口暂不提供旧 RPC 启动入口，避免同时存在两个会话后端。
-   */
-  handle(
-    RUNTIME_START_SAFE_CHANNEL,
-    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<RuntimeResult> => {
-      if (!isTrustedCaller(event, pageUrl)) {
-        return runtimeFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
-      }
-      if (args.length !== 0) {
-        return runtimeFailure('INVALID_REQUEST', '安全模式启动接口不接受参数。')
-      }
-      return runtimeFailure(
-        'RUNTIME_NOT_READY',
-        '安全模式启动尚未接入 SDK 宿主，暂不可用。'
-      )
     }
   )
 
@@ -1820,16 +1729,15 @@ app.on('before-quit', (event) => {
   quittingAfterShutdown = true
   // 退出意图立即阻止恢复，不等其他关闭链结束后才停止重建。
   sdkHostManager.beginShutdown()
-  // 宿主关闭立即开始，不能因旧后端关闭失败而遗留一个仍受管的 SDK 进程。
+  // 宿主关闭与其他关闭链并行开始，不因其它链的失败而遗留一个仍受管的 SDK 进程。
   const sdkShutdown = sdkHostManager.shutdown().catch(() => {
     console.error('SDK 宿主未确认退出，应用按关闭预算退出。')
   })
   void (async () => {
     // 先落盘窗口状态：写入很小，避免被关闭链的兜底等待挤掉。
     await Promise.race([windowState.flush(), wait(WINDOW_STATE_FLUSH_MS)])
-    // 认证辅助进程没有自己的业务状态，只按关闭链终止；先请它退出再关闭 Pi Runtime。
+    // 认证辅助进程没有自己的业务状态，只按关闭链终止。
     await Promise.race([authManager.stop(), wait(QUIT_DEADLINE_MS)])
-    await Promise.race([runtimeManager.shutdown(), wait(QUIT_DEADLINE_MS)])
     await Promise.race([sdkShutdown, wait(QUIT_DEADLINE_MS)])
     app.exit(0)
   })()

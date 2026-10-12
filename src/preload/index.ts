@@ -129,10 +129,7 @@ import {
   RUNTIME_PROJECTION_EVENT,
   RUNTIME_RESOURCES_CHANNEL,
   RUNTIME_RESOURCE_PREVIEW_CHANNEL,
-  RUNTIME_START_CHANNEL,
-  RUNTIME_START_SAFE_CHANNEL,
   RUNTIME_STATUS_CHANNEL,
-  RUNTIME_STOP_CHANNEL,
   RUNTIME_STATUS_EVENT,
   isCapabilitiesResult,
   isMcpCommandResult,
@@ -171,7 +168,6 @@ import type {
   RuntimeResult,
   RuntimeSetModelRequest,
   RuntimeRewindRequest,
-  RuntimeStartRequest,
   RuntimeStatus
 } from '../shared/runtime-api'
 
@@ -434,19 +430,8 @@ const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionAp
     return isModelsConfigResult(response) ? response : invalidModelsConfigResponse()
   },
 
-  async startRuntime(projectPath: string) {
-    const request: RuntimeStartRequest = { projectPath }
-    const response: unknown = await ipcRenderer.invoke(RUNTIME_START_CHANNEL, request)
-    return isRuntimeResult(response) ? response : invalidRuntimeResponse()
-  },
-
   async getRuntimeStatus() {
     const response: unknown = await ipcRenderer.invoke(RUNTIME_STATUS_CHANNEL)
-    return isRuntimeResult(response) ? response : invalidRuntimeResponse()
-  },
-
-  async stopRuntime() {
-    const response: unknown = await ipcRenderer.invoke(RUNTIME_STOP_CHANNEL)
     return isRuntimeResult(response) ? response : invalidRuntimeResponse()
   },
 
@@ -540,11 +525,6 @@ const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionAp
   async abortRuntimeMcpInspection(): Promise<McpInspectAbortResult> {
     const response: unknown = await ipcRenderer.invoke(RUNTIME_MCP_INSPECT_ABORT_CHANNEL)
     return isMcpInspectAbortResult(response) ? response : invalidMcpInspectAbortResponse()
-  },
-
-  async startRuntimeSafely(): Promise<RuntimeResult> {
-    const response: unknown = await ipcRenderer.invoke(RUNTIME_START_SAFE_CHANNEL)
-    return isRuntimeResult(response) ? response : invalidRuntimeResponse()
   },
 
   ackRuntimeProjection(runtimeId: number, seq: number) {

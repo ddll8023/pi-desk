@@ -52,7 +52,7 @@ export interface ProjectManagerOptions {
   readonly chooseDirectory: (defaultPath: string) => Promise<string | null>
   /**
    * 会话后端的最小端口：只使用状态查询与既有关闭链。
-   * 具体实现由主进程组合根选择（SDK 适配层或旧 Runtime 退路），项目切换不区分后端。
+   * 具体实现由主进程组合根注入，项目切换不感知实现。
    */
   readonly runtime: { getStatus(): RuntimeResult; stop(): Promise<RuntimeResult> }
   /** 配置文件的唯一读写者；项目列表与界面偏好、窗口状态共用同一份文件。 */

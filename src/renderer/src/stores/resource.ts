@@ -1,6 +1,6 @@
 /**
- * 保存 Pi 资源视图的展示状态：`get_commands` 清单、Runtime 未启动时的资源预读清单、启动诊断、
- * MCP 配置文件列举、MCP 服务器探测结果、MCP 登录/退出/重连结果与安全模式启动结果。
+ * 保存 Pi 资源视图的展示状态：运行中会话已加载的资源清单、Runtime 未启动时的资源预读清单、启动诊断、
+ * MCP 配置文件列举、MCP 服务器探测结果与 MCP 登录/退出/重连结果。
  *
  * 只保存主进程投影的副本，不缓存历史、不解析 Pi 配置文件；清单与诊断都只在 Runtime 就绪时读取，
  * 代际变化后自动重读（资源只在进程启动时加载，重载必须重启 Runtime）。
@@ -21,7 +21,6 @@ import type {
   RuntimeError
 } from '../../../shared/runtime-api'
 import { useRuntimeStore } from './runtime'
-import { useSessionStore } from './session'
 import { useProjectStore } from './project'
 import {
   abortMcpInspection,
@@ -31,8 +30,7 @@ import {
   getResources,
   inspectMcpServers,
   readMcpStatus,
-  runMcpCommand,
-  startRuntimeSafely
+  runMcpCommand
 } from '../services/resource'
 
 /** 资源清单的展示状态；`error` 表示清单读取失败，与“确实没有资源”区分。 */
@@ -89,13 +87,6 @@ export interface McpServerRow {
   readonly report: McpServerReport | null
 }
 
-/** 安全模式启动的展示状态；成功只表示本次启动请求被接受，运行状态由 Runtime 快照收敛。 */
-type SafeStartState =
-  | { phase: 'idle' }
-  | { phase: 'starting' }
-  | { phase: 'done' }
-  | { phase: 'error'; error: RuntimeError }
-
 export const useResourceStore = defineStore('resource', () => {
   const runtimeStore = useRuntimeStore()
   const resourcesView = ref<ResourcesViewState>({ phase: 'idle' })
@@ -112,7 +103,6 @@ export const useResourceStore = defineStore('resource', () => {
   const mcpCommandView = ref<McpCommandViewState>({ phase: 'idle' })
   const mcpInspectView = ref<McpInspectViewState>({ phase: 'idle' })
   const mcpConfigView = ref<McpConfigViewState>({ phase: 'idle' })
-  const safeStart = ref<SafeStartState>({ phase: 'idle' })
 
   /** 已读取过的 Runtime 代际；代际变化后重新读取清单与诊断。 */
   let loadedRuntimeId: number | null = null
@@ -192,7 +182,7 @@ export const useResourceStore = defineStore('resource', () => {
 
   /**
    * 读取 Runtime 未启动时的预读技能清单。就绪时立即清空且不探测；只保留技能：
-   * 模板与扩展命令仍以运行中的 `get_commands` 为准，这里不给出第二份来源。
+   * 模板与扩展命令仍以运行中会话已加载的资源为准，这里不给出第二份来源。
    * 项目切换、期间 Runtime 就绪或有更新的请求时丢弃响应；失败只记在展示状态里，
    * 不清空失败前的清单、不弹错，页面据此区分「预读失败」与「确实没有 Skill」。
    * `force` 为真时要求主进程绕过它的进程内缓存重新探测，供用户显式重新读取。
@@ -239,7 +229,7 @@ export const useResourceStore = defineStore('resource', () => {
     previewView.value = { phase: 'ready' }
   }
 
-  /** 读取启动诊断与 Extension 运行时错误；诊断是 Pi 的 stderr 原文，按纯文本展示。 */
+  /** 读取启动诊断与 Extension 运行时错误；诊断是宿主内 SDK 会话的创建期诊断，按纯文本展示。 */
   async function refreshDiagnostics(): Promise<void> {
     if (diagnosticsLoading.value) return
     const runtimeId = currentRuntimeId.value
@@ -390,24 +380,6 @@ export const useResourceStore = defineStore('resource', () => {
   }
 
   /**
-   * 安全模式启动：不加载 Extension，仅本次生效；目标由主进程决定。
-   * 成功后刷新会话列表（可能新建了会话），资源与诊断由代际监听重新读取。
-   */
-  async function startSafely(): Promise<void> {
-    if (safeStart.value.phase === 'starting') return
-
-    safeStart.value = { phase: 'starting' }
-    const result = await startRuntimeSafely()
-    if (!result.ok) {
-      safeStart.value = { phase: 'error', error: result.error }
-      return
-    }
-    safeStart.value = { phase: 'done' }
-    resetViews()
-    await useSessionStore().refresh()
-  }
-
-  /**
    * 应用启动时读取一次，并监听 Runtime 代际与当前项目的变化；重复调用无副作用。
    * 项目监听丢弃 MCP 探测结果并重读预读清单：两者都只对发起时的项目成立，
    * 而 Runtime 未启动时项目切换不会引起代际变化。
@@ -465,7 +437,6 @@ export const useResourceStore = defineStore('resource', () => {
     mcpInspectView,
     mcpConfigView,
     mcpServers,
-    safeStart,
     runtimeReady,
     refresh,
     refreshPreview,
@@ -474,7 +445,6 @@ export const useResourceStore = defineStore('resource', () => {
     inspectServers,
     cancelInspection,
     runMcpServerCommand,
-    startSafely,
     initialize,
     dispose
   }

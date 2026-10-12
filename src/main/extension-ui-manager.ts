@@ -2,9 +2,8 @@
  * 维护当前会话代际（`runtimeId`）的 Extension UI 状态：dialog 请求队列、通知、状态条、widget 与编辑器填充文本。
  *
  * 只消费已分类的 `extension_ui_request` 记录与页面提交的 dialog 响应，按代际持有状态并广播快照；
- * 并为读取 MCP 状态提供一次性的 notify 文本捕获（捕获期间仍照常进入通知列表）；
- * 不持有进程，不解析其他记录族，dialog 响应写回由持有者负责（旧 RPC 串行写入或 SDK 宿主的
- * respondDialog）。随会话代际退出或切换清空，不持久化。`setTitle` 无桌面等价物，只计数不展示。
+ * 不持有进程，不解析其他记录族，dialog 响应写回由持有者负责（SDK 宿主的 `respondDialog`）。
+ * 随会话代际退出或切换清空，不持久化。`setTitle` 无桌面等价物，只计数不展示。
  * 所有进入状态的展示文本都在这里先剥 ANSI 转义序列再截断：Extension 常给文本上色，
  * 页面按纯文本插值，否则转义序列会变成可见字符，截断也会切出半截序列。
  */
@@ -28,10 +27,8 @@ const MAX_STATUSES = 16
 const MAX_WIDGETS_PER_PLACEMENT = 4
 /** dialog 队列上限：防止异常 Extension 无限叠加请求。 */
 const MAX_DIALOGS = 8
-/** 一次 notify 捕获最多保留的条数；只用于读取 `/mcp` 状态，不影响通知列表。 */
-const MAX_CAPTURED_NOTIFIES = 20
 
-/** ANSI SGR 颜色序列；与 pi-process 对 stderr 诊断行的处理保持一致。 */
+/** ANSI SGR 颜色序列；与 auth-helper-process 对 stderr 诊断行的处理保持一致。 */
 const ANSI_ESCAPE = /\u001b\[[0-9;]*m/g
 
 interface MutableDialog {
@@ -46,9 +43,9 @@ interface MutableDialog {
 }
 
 interface ExtensionUiCallbacks {
-  /** 状态变化后的快照广播；由 RuntimeManager 接线到窗口。 */
+  /** 状态变化后的快照广播；由 SDK 宿主接线到窗口。 */
   readonly onSnapshot: (snapshot: ExtensionUiSnapshot) => void
-  /** dialog 响应写回；由 RuntimeManager 提供 Pi 管道写入。 */
+  /** dialog 响应写回；由 SDK 宿主提供回应写回。 */
   readonly onDialogResponse: (response: Record<string, unknown>) => void
 }
 
@@ -84,8 +81,6 @@ export class ExtensionUiManager {
   private invalidCount = 0
   private notifySeed = 0
   private disposed = false
-  /** 一次性的 notify 文本捕获；非 null 时收到的 notify 副本也追加到该数组。 */
-  private notifyCapture: string[] | null = null
 
   constructor(private readonly callbacks: ExtensionUiCallbacks) {}
 
@@ -99,22 +94,7 @@ export class ExtensionUiManager {
     this.widgets = new Map()
     this.editorText = null
     this.invalidCount = 0
-    this.notifyCapture = null
     this.publish()
-  }
-
-  /**
-   * 开始一次性捕获 notify 文本，返回结束函数并交出捕获结果。
-   * 捕获期间 notify 照常进入快照与广播（不抑制展示），只额外保留副本供调用方读取；
-   * 代际切换或 dispose 会丢弃未结束的捕获。
-   */
-  beginNotifyCapture(): () => readonly string[] {
-    const capture: string[] = []
-    this.notifyCapture = capture
-    return () => {
-      if (this.notifyCapture === capture) this.notifyCapture = null
-      return [...capture]
-    }
   }
 
   /** Runtime 代际结束：清空状态并发布空快照，之后的请求不再受理。 */
@@ -155,9 +135,6 @@ export class ExtensionUiManager {
         message
       })
       if (this.notifications.length > MAX_NOTIFICATIONS) this.notifications.shift()
-      if (this.notifyCapture !== null && this.notifyCapture.length < MAX_CAPTURED_NOTIFIES) {
-        this.notifyCapture.push(message)
-      }
       this.publish()
       return
     }

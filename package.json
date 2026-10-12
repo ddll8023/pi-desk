@@ -14,8 +14,7 @@
     "sdk-host:build": "vite build --config vite.sdk-host.config.ts",
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json",
     "typecheck:web": "vue-tsc --noEmit -p tsconfig.web.json",
-    "typecheck": "npm run typecheck:node && npm run typecheck:web",
-    "pi:prepare": "node scripts/prepare-pi-runtime.mjs"
+    "typecheck": "npm run typecheck:node && npm run typecheck:web"
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "1.0.4",

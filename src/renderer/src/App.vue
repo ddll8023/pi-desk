@@ -1,4 +1,4 @@
-<!-- 主界面外壳：编排项目两阶段添加/移除确认、信任与中断对话框、视图切换及各展示 Store 生命周期。 -->
+<!-- 主界面外壳：编排项目两阶段添加/移除确认、信任与中断对话框、视图切换、侧栏「新建」到输入坞的聚焦请求及各展示 Store 生命周期。 -->
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
@@ -43,6 +43,8 @@ const additionTrustStatus = computed(() => {
 })
 const isNarrowWindow = ref(window.matchMedia('(max-width: 799px)').matches)
 const mobileSidebarOpen = ref(false)
+/** 侧栏「新建」在闲置态的聚焦请求；自增一次即一次请求，输入坞只看这个值。 */
+const composerFocusToken = ref(0)
 let narrowWindowQuery: MediaQueryList | null = null
 
 /** 窄窗口临时展开侧栏，不覆盖用户保存的桌面端折叠偏好。 */
@@ -54,6 +56,11 @@ function onNarrowWindowChange(event: MediaQueryListEvent): void {
 const sidebarCollapsedForLayout = computed(() => (
   isNarrowWindow.value ? !mobileSidebarOpen.value : sidebarCollapsed.value
 ))
+
+/** 侧栏「新建」在闲置态只聚焦输入框，不启动 Pi；会话由首次发送创建。 */
+function onRequestNewSession(): void {
+  composerFocusToken.value += 1
+}
 
 function toggleSidebar(): void {
   if (isNarrowWindow.value) {
@@ -191,6 +198,7 @@ onUnmounted(() => {
       @toggle-settings="currentView = currentView === 'settings' ? 'chat' : 'settings'; closeMobileSidebar()"
       @close-sidebar="closeMobileSidebar"
       @remove-project="requestProjectRemoval"
+      @request-new-session="onRequestNewSession"
     />
 
     <main class="app-workspace">
@@ -207,7 +215,7 @@ onUnmounted(() => {
         <div v-for="widget in widgetsAbove" :key="widget.placement" class="px-4 py-2 sm:px-6">
           <pre class="widget-block">{{ widget.lines.join('\n') }}</pre>
         </div>
-        <PromptComposer />
+        <PromptComposer :focus-token="composerFocusToken" />
         <div v-for="widget in widgetsBelow" :key="widget.placement" class="px-4 py-2 sm:px-6">
           <pre class="widget-block">{{ widget.lines.join('\n') }}</pre>
         </div>

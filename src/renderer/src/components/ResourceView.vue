@@ -1,8 +1,8 @@
 <!-- Pi 资源视图：一页三区——资源清单、MCP 服务器、默认折叠的排障区。
-     资源清单在 Runtime 就绪时来自 Pi 的 `get_commands`；未就绪时用一次性 Pi 进程的磁盘预读（只含 Skill），
+     资源清单在 Runtime 就绪时来自当前会话已加载的扩展、提示词与技能；未就绪时用一次性 Pi 进程的磁盘预读（只含 Skill），
      并如实标注来源。MCP 列表的骨架来自 Pi 的 mcp.json（只读浅层读取，不连接服务器、未启动也可读），
      连接状态与工具由官方 CLI 的 `pi mcp list --json` 探测按名叠加；探测会另起一个 Pi 进程重连服务器，
-     因此只在用户显式请求时执行。`/mcp` 原始输出、启动诊断与安全模式启动收在排障区。
+     因此只在用户显式请求时执行。`/mcp` 原始输出、启动诊断与逃生入口说明收在排障区。
      本视图不解析、不生成也不修改 Pi 的任何配置文件。 -->
 <script setup lang="ts">
 import { computed, ref } from 'vue'
@@ -32,7 +32,6 @@ const {
   mcpInspectView,
   mcpConfigView,
   mcpServers,
-  safeStart,
   runtimeReady,
   resourcesTruncated
 } = storeToRefs(resourceStore)
@@ -103,7 +102,7 @@ const previewNotice = computed<{ readonly tone: 'info' | 'error'; readonly text:
   }
 })
 
-/** 资源分组只按 `get_commands` 的来源分类展示，不额外推断归属。 */
+/** 资源分组只按条目自身的来源分类展示，不额外推断归属。 */
 const groups = computed(() => [
   {
     key: 'skill',
@@ -211,7 +210,7 @@ const EXPOSURE_LABELS: Readonly<Record<string, string>> = {
   hidden: '不暴露'
 }
 
-/** 调用方式与 Pi 一致：`get_commands` 已把 Skill 规范成 `skill:<名称>`，三类命令都是 `/<名称>`。 */
+/** 调用方式与 Pi 一致：Skill 名带 `skill:<名称>` 前缀，三类命令都是 `/<名称>`。 */
 function invocation(entry: PiResourceEntry): string {
   return `/${entry.name}`
 }
@@ -395,7 +394,7 @@ const resourceActionsDisabled = computed(() => currentProject.value === null)
       </div>
       <p class="hint-text">
         <template v-if="runtimeReady">
-          清单来自运行中 Runtime 的 <span class="font-mono">get_commands</span>，与 Pi 当前实际加载的一致。
+          清单来自运行中会话已加载的扩展、提示词与技能，与 Pi 当前实际加载的一致。
         </template>
         <template v-else>
           磁盘预读只含 Skill，且不含扩展在运行时注册的项；模板与扩展命令需要启动 Runtime 后读取。
@@ -775,7 +774,7 @@ const resourceActionsDisabled = computed(() => currentProject.value === null)
           </AppButton>
         </div>
         <p class="hint-text">
-          Pi 非交互模式的 stderr 尾部；Skill 与 Prompt Template 自身的加载警告在 RPC 模式下不对外提供。
+          宿主内 SDK 会话的创建期诊断；Skill 与 Prompt Template 的加载警告也在这里展示。
         </p>
         <p v-if="diagnosticsError !== null" role="alert" class="status-notice status-notice-error">
           {{ diagnosticsError.message }}
@@ -783,7 +782,7 @@ const resourceActionsDisabled = computed(() => currentProject.value === null)
         <p v-else-if="diagnostics.length === 0" class="hint-text">没有诊断输出。</p>
         <div v-else class="technical-detail">
           <div class="flex flex-wrap items-center justify-between gap-2">
-            <span class="text-2xs text-desk-muted">Pi 的原始输出</span>
+            <span class="text-2xs text-desk-muted">SDK 会话诊断</span>
             <AppButton
               variant="unstyled"
               class="copy-button"
@@ -813,21 +812,9 @@ const resourceActionsDisabled = computed(() => currentProject.value === null)
 
         <h3 class="panel-section-title">启动失败时的逃生入口</h3>
         <p class="hint-text">
-          不加载任何 Extension 启动一次，用于坏扩展让 Runtime 无法启动的情况；
-          同时会禁用内建扩展（包括 MCP，因此没有 MCP 工具与 <span class="font-mono">/mcp</span> 命令）。
-          目标取最近一次启动的项目与会话，仅本次生效，不修改任何配置。
-        </p>
-        <AppButton
-          :disabled="safeStart.phase === 'starting'"
-          @click="resourceStore.startSafely()"
-        >
-          {{ safeStart.phase === 'starting' ? '正在启动…' : '以禁用扩展启动（仅本次）' }}
-        </AppButton>
-        <p v-if="safeStart.phase === 'error'" role="alert" class="status-notice status-notice-error">
-          {{ safeStart.error.message }}
-        </p>
-        <p v-else-if="safeStart.phase === 'done'" role="status" class="status-notice">
-          已请求安全模式启动；Runtime 就绪后这里会重新读取清单与诊断。
+          该逃生入口已随旧的 Runtime 启停一并退役，不再提供。扩展导致会话无法建立时，
+          先移除项目 <span class="font-mono">.pi/extensions</span> 或 Pi agent 目录
+          <span class="font-mono">extensions</span> 里出错的扩展，再重新打开或新建会话。
         </p>
       </div>
     </details>

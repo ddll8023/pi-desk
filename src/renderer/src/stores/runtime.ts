@@ -19,7 +19,6 @@ import type {
   RuntimeStatus,
   ToolExecution
 } from '../../../shared/runtime-api'
-import { useTrustStore } from './trust'
 import { useProjectStore } from './project'
 import { useAuthStore } from './auth'
 import { getResourcePreview } from '../services/resource'
@@ -34,8 +33,6 @@ import {
   sendPrompt,
   rewindRuntime,
   setRuntimeModel,
-  startRuntime,
-  stopRuntime,
   subscribeRuntimeProjection,
   subscribeRuntimeStatus
 } from '../services/runtime'
@@ -496,48 +493,6 @@ export const useRuntimeStore = defineStore('runtime', () => {
     void saveModelDisplay({ hiddenModels: [] })
   }
 
-  /** 启动唯一 Runtime；启动、就绪或关闭中都不重复发起。当前界面不调用它，启动统一走打开或新建会话。 */
-  async function launch(projectPath: string): Promise<void> {
-    if (view.value.phase === 'starting' || view.value.phase === 'ready' || view.value.phase === 'stopping') {
-      return
-    }
-
-    view.value = { phase: 'starting' }
-    const result = await startRuntime(projectPath)
-    if (!result.ok) {
-      if (result.error.code === 'TRUST_REQUIRED') {
-        // 与会话切换共用同一条信任决定流程；用户取消后回到当前状态。
-        view.value = { phase: 'idle' }
-        await useTrustStore().openPrompt()
-        return
-      }
-      view.value = { phase: 'failed', error: result.error }
-      return
-    }
-    // 主进程只在就绪时返回成功；其他状态按失败展示，不把进程存在当作可用。
-    if (result.data.state !== 'ready') {
-      view.value = {
-        phase: 'failed',
-        error: { code: 'INTERNAL_ERROR', message: 'Runtime 没有进入就绪状态。' }
-      }
-      return
-    }
-    applyStatus(result.data)
-  }
-
-  /** 关闭当前 Runtime；只有就绪状态才发起关闭。 */
-  async function shutdown(): Promise<void> {
-    if (view.value.phase !== 'ready') return
-
-    view.value = { phase: 'stopping' }
-    const result = await stopRuntime()
-    if (!result.ok) {
-      view.value = { phase: 'failed', error: result.error }
-      return
-    }
-    applyStatus(result.data)
-  }
-
   /** 回退处理中或结果未知时，禁止发送和切换模型。 */
   function rewindBlocksWrites(): boolean {
     return rewindView.value.phase === 'requesting'
@@ -854,8 +809,6 @@ export const useRuntimeStore = defineStore('runtime', () => {
     droppedTools,
     initialize,
     dispose,
-    launch,
-    shutdown,
     send,
     rewind,
     switchModel,

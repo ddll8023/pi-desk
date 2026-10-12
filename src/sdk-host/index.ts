@@ -144,7 +144,6 @@ async function dispatch(request: SdkHostRequest): Promise<void> {
       send({ ...envelope, type: 'session-result', seq, status: runtime.getStatus(), cancelled: result.cancelled })
       return
     }
-    case 'session-status': send({ ...envelope, type: 'session-result', seq, status: runtime.getStatus(), cancelled: false }); return
     case 'session-abort':
       await runtime.abort(request.bindingId)
       send({ ...envelope, type: 'session-result', seq, status: runtime.getStatus(), cancelled: false })
@@ -164,6 +163,19 @@ async function dispatch(request: SdkHostRequest): Promise<void> {
     }
     case 'capabilities':
       send({ ...envelope, type: 'capabilities-result', capabilities: runtime.capabilities(request.bindingId) })
+      return
+    case 'resources':
+      send({ ...envelope, type: 'resources-result', resources: runtime.readResources(request.bindingId) })
+      return
+    case 'diagnostics':
+      send({ ...envelope, type: 'diagnostics-result', diagnostics: runtime.readDiagnostics(request.bindingId) })
+      return
+    case 'mcp-status':
+      send({ ...envelope, type: 'mcp-status-result', status: await runtime.readMcpStatus(request.bindingId) })
+      return
+    case 'mcp-command':
+      send({ ...envelope, type: 'mcp-command-result',
+        status: await runtime.runMcpCommand(request.bindingId, request.action, request.serverName) })
       return
     case 'projection-snapshot': {
       const projection = runtime.getProjection(request.bindingId)

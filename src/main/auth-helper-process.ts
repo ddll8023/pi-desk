@@ -5,7 +5,7 @@
  * 不做认证状态机、不解析业务载荷。辅助进程不是 Pi sidecar：它由 `ELECTRON_RUN_AS_NODE` 启动、
  * 只加载官方 SDK，因此不涉及 Pi 的启动参数、项目目录或会话。
  *
- * 退出策略与 pi-process.ts 一致：先关闭 stdin，超时后按平台定向终止进程树，不接受外部 PID。
+ * 退出策略：先关闭 stdin，超时后按平台定向终止进程树，不接受外部 PID。
  */
 import { spawn } from 'node:child_process'
 import type { ChildProcess } from 'node:child_process'

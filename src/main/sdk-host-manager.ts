@@ -14,21 +14,35 @@ import {
   emptySdkSessionStatus
 } from '../sdk-host/protocol'
 import type {
-  SdkHostFrame, SdkHostRequest, SdkHostFailureCode, SdkHostEvent, SdkSessionStatus,
+  SdkHostFrame, SdkHostRequest, SdkHostFailureCode, SdkHostEvent, SdkMcpCommandAction, SdkSessionStatus,
   SdkSessionReference, SdkSessionTarget, SdkSessionAction, SdkInterruptConfirmation, SdkSessionIdentity
 } from '../sdk-host/protocol'
-import type { AgentCapabilities, ProjectionBatch, ProjectionSnapshot, PromptImageInput } from '../shared/runtime-api'
+import type {
+  AgentCapabilities, McpStatus, PiResources, ProjectionBatch, ProjectionSnapshot, PromptImageInput,
+  RuntimeDiagnostics
+} from '../shared/runtime-api'
 import { ExtensionUiManager } from './extension-ui-manager'
 import type { ExtensionDialogResponseInput, ExtensionUiSnapshot } from '../shared/extension-ui-api'
 import { getPiAgentDir, getPiProcessEnvironment } from './pi-paths'
-import { validatePromptInput } from './runtime-manager'
+import { validatePromptInput } from './prompt-input'
 
 const READY_TIMEOUT_MS = 30_000
 const SHUTDOWN_RESPONSE_MS = 6_000
 const SESSION_TIMEOUT_MS = 60_000
+/**
+ * 非幂等写（回退、会话生命周期）在首个等待期限后继续等待结果帧的追加窗口：
+ * 结果帧是唯一权威结果，迟到回复仍能按真实状态收敛，不把慢操作提前判成结果未知。
+ */
+const WRITE_SETTLE_TIMEOUT_MS = 120_000
 const EXIT_GRACE_MS = 2_000
 const KILL_WAIT_MS = 3_000
 const RECOVERY_DELAY_MS = 750
+/** MCP 状态读取等待上限：`/mcp` 会等所有已启用服务器连接完成，比普通命令长。 */
+const MCP_STATUS_TIMEOUT_MS = 60_000
+/** MCP 登录需在浏览器完成授权；退出与重连不涉及浏览器交互。 */
+const MCP_LOGIN_TIMEOUT_MS = 300_000
+const MCP_LOGOUT_TIMEOUT_MS = 30_000
+const MCP_RECONNECT_TIMEOUT_MS = 60_000
 /** 会话状态字段与协议同序；被拒时只记录类型，便于对照校验失败的原因。 */
 const STATUS_FIELDS = ['phase', 'bindingId', 'activityVersion', 'operationId', 'projectPath',
   'sessionId', 'sessionFile', 'isIdle', 'pendingMessages', 'isBashRunning', 'waitingDialogs',
@@ -43,12 +57,15 @@ const EXPECTED_REPLIES: Record<SdkHostRequest['type'], SdkHostFrame['type'] | nu
   initialize: 'ready',
   shutdown: 'closed',
   session: 'session-result',
-  'session-status': 'session-result',
   'session-abort': 'session-result',
   prompt: 'prompt-result',
   'set-model': 'session-result',
   rewind: 'rewind-result',
   capabilities: 'capabilities-result',
+  resources: 'resources-result',
+  diagnostics: 'diagnostics-result',
+  'mcp-status': 'mcp-status-result',
+  'mcp-command': 'mcp-command-result',
   'projection-snapshot': 'projection-result',
   'projection-ack': 'ack-result',
   'ui-response': 'ui-result',
@@ -135,7 +152,8 @@ export type SdkSessionAuthority = (
 
 interface PendingRequest {
   readonly type: SdkHostRequest['type']
-  readonly timer: ReturnType<typeof setTimeout>
+  /** 首个期限到期后换成追加窗口定时器，因此不是只读。 */
+  timer: ReturnType<typeof setTimeout>
   readonly resolve: (frame: SdkHostFrame) => void
   readonly reject: (error: SdkHostError) => void
 }
@@ -167,7 +185,7 @@ const FAILURE_MESSAGES: Record<SdkHostFailureCode, string> = {
   SESSION_NOT_FOUND: '当前项目下找不到可接管的会话。',
   SESSION_BUSY: '当前操作尚未收敛，需要对应执行的中断确认。',
   STALE_SESSION: '该请求所属会话绑定已经失效。',
-  SESSION_OPERATION_CONFLICT: '生命周期操作冲突，或旧 RPC 尚未释放会话所有权。',
+  SESSION_OPERATION_CONFLICT: '生命周期操作冲突，或该会话上已有未收敛的执行操作；请等它结束后重试，必要时重开会话或重启应用。',
   SESSION_CREATE_FAILED: 'SDK 会话创建失败；请以实际会话状态为准。',
   SESSION_BIND_FAILED: 'SDK 会话或必要交互绑定失败。',
   SESSION_CLOSE_FAILED: 'SDK 会话关闭未收敛。',
@@ -212,7 +230,7 @@ export class SdkHostManager {
         try { listener(snapshot) } catch { /* 消费者异常不影响交互 Promise。 */ }
       }
     },
-    // SDK 回应由 respondDialog 直接发送；此镜像不复用旧 RPC 管道。
+    // SDK 回应由 respondDialog 直接发送；此镜像不代替对话回应通道。
     onDialogResponse: () => {}
   })
   private snapshot: SdkHostStatus = {
@@ -233,8 +251,16 @@ export class SdkHostManager {
   /** 主进程提供唯一目标授权；不让宿主自行决定项目、信任或任意路径。 */
   setSessionAuthority(authority: SdkSessionAuthority): void { this.authority = authority }
 
-  /** SDK 内部会话状态；页面可提交与否由映射层按 phase 判定。 */
-  getSessionStatus(): SdkSessionStatus { return { ...this.sessionSnapshot } }
+  /**
+   * SDK 内部会话状态；页面可提交与否由映射层按 phase 判定。
+   * 结果未知的写操作必须对页面收敛：不确定态非空期间按「需要显式恢复」覆盖宿主当前值；
+   * 覆盖不可被宿主事件冲掉，随不确定态清除自动消失（下一次广播回到宿主真实状态）。
+   */
+  getSessionStatus(): SdkSessionStatus {
+    if (this.uncertainOperationId === null) return { ...this.sessionSnapshot }
+    return { ...this.sessionSnapshot, phase: 'blocked', needsHostRebuild: true,
+      lastError: 'SESSION_RECOVERY_REQUIRED' }
+  }
 
   /** 写操作调用方在用户确认前固定此身份，不能只传可能在新进程重用的绑定编号。 */
   getSessionIdentity(): SdkSessionIdentity {
@@ -250,7 +276,7 @@ export class SdkHostManager {
   /** SDK 交互镜像查询不创建宿主或会话。 */
   getExtensionUiSnapshot(): ExtensionUiSnapshot { return this.ui.snapshot() }
 
-  /** 交互订阅供页面广播；不能与旧 RPC 广播混用。 */
+  /** 交互订阅供页面广播；不与其他来源的广播混用。 */
   onExtensionUi(listener: (snapshot: ExtensionUiSnapshot) => void): () => void {
     this.uiListeners.add(listener)
     return () => this.uiListeners.delete(listener)
@@ -264,7 +290,7 @@ export class SdkHostManager {
 
   /**
    * 提交 Prompt：只表达接受、排队或已处理，不等待本轮结束；运行中不排队也不重发。
-   * 文本与图片在进入宿主前已完成与旧链路相同的校验。
+   * 文本与图片在进入宿主前完成校验，页面传入的其他字段一律丢弃。
    */
   async prompt(message: string, images: readonly PromptImageInput[]): Promise<'started' | 'queued' | 'handled'> {
     const validated = validatePromptInput(message, images)
@@ -290,7 +316,8 @@ export class SdkHostManager {
   }
 
   /**
-   * 回退对话分支：非幂等写操作，单飞且结果未知时保留限制，不自动重发。
+   * 回退对话分支：非幂等写操作，单飞且结果未知时保留限制，不自动重发；
+   * 首个等待期限后仍保留结果帧等待，追加窗口内到达即按真实结果返回。
    * 目标消息必须属于当前绑定，主进程不接受页面提交任意条目或会话路径。
    */
   async rewind(messageId: string): Promise<{ cancelled: boolean; text: string | null }> {
@@ -309,12 +336,16 @@ export class SdkHostManager {
       }
       submitted = true
       const frame = await this.request(record, { version: SDK_HOST_PROTOCOL_VERSION, hostId: record.hostId,
-        requestId, type: 'rewind', bindingId, messageId }, SESSION_TIMEOUT_MS)
+        requestId, type: 'rewind', bindingId, messageId }, SESSION_TIMEOUT_MS, WRITE_SETTLE_TIMEOUT_MS)
       if (frame.type !== 'rewind-result') throw new SdkHostError('HOST_PROTOCOL_ERROR', 'SDK 回退结果不符合契约。')
       return { cancelled: frame.cancelled, text: frame.text }
     } catch (error) {
       if (submitted && error instanceof SdkHostError && (error.code === 'HOST_TIMEOUT'
-        || error.code === 'HOST_EXITED' || error.code === 'HOST_CLOSED')) this.uncertainOperationId = requestId
+        || error.code === 'HOST_EXITED' || error.code === 'HOST_CLOSED')) {
+        this.uncertainOperationId = requestId
+        // 未知态必须立刻对页面可见，不等宿主下一次状态事件。
+        this.publishSession()
+      }
       if (error instanceof SdkHostError) throw error
       throw new SdkHostError('SESSION_OPERATION_CONFLICT', FAILURE_MESSAGES.SESSION_OPERATION_CONFLICT)
     } finally {
@@ -331,6 +362,53 @@ export class SdkHostManager {
       requestId: randomUUID(), type: 'capabilities', bindingId }, SESSION_TIMEOUT_MS)
     if (frame.type !== 'capabilities-result') throw new SdkHostError('HOST_PROTOCOL_ERROR', 'SDK 能力清单不符合契约。')
     return frame.capabilities
+  }
+
+  /** 只读当前绑定会话已加载的资源清单；读取失败由结果的 `error` 表达，超时或失效时不返回伪造空清单。 */
+  async readResources(): Promise<PiResources> {
+    const record = this.requireHost(true)
+    const bindingId = this.sessionSnapshot.bindingId
+    if (bindingId === null) throw new SdkHostError('STALE_SESSION', FAILURE_MESSAGES.STALE_SESSION)
+    const frame = await this.request(record, { version: SDK_HOST_PROTOCOL_VERSION, hostId: record.hostId,
+      requestId: randomUUID(), type: 'resources', bindingId }, SESSION_TIMEOUT_MS)
+    if (frame.type !== 'resources-result') throw new SdkHostError('HOST_PROTOCOL_ERROR', 'SDK 资源清单不符合契约。')
+    return frame.resources
+  }
+
+  /** 只读当前绑定会话的创建期诊断与已收集的 Extension 错误；超时或失效时不返回伪造空诊断。 */
+  async readDiagnostics(): Promise<RuntimeDiagnostics> {
+    const record = this.requireHost(true)
+    const bindingId = this.sessionSnapshot.bindingId
+    if (bindingId === null) throw new SdkHostError('STALE_SESSION', FAILURE_MESSAGES.STALE_SESSION)
+    const frame = await this.request(record, { version: SDK_HOST_PROTOCOL_VERSION, hostId: record.hostId,
+      requestId: randomUUID(), type: 'diagnostics', bindingId }, SESSION_TIMEOUT_MS)
+    if (frame.type !== 'diagnostics-result') throw new SdkHostError('HOST_PROTOCOL_ERROR', 'SDK 诊断结果不符合契约。')
+    return frame.diagnostics
+  }
+
+  /** 固定命令 `/mcp` 的状态读取；通知文本在宿主内捕获，超时不重发。 */
+  async readMcpStatus(): Promise<McpStatus> {
+    const record = this.requireHost(true)
+    const bindingId = this.sessionSnapshot.bindingId
+    if (bindingId === null) throw new SdkHostError('STALE_SESSION', FAILURE_MESSAGES.STALE_SESSION)
+    const frame = await this.request(record, { version: SDK_HOST_PROTOCOL_VERSION, hostId: record.hostId,
+      requestId: randomUUID(), type: 'mcp-status', bindingId }, MCP_STATUS_TIMEOUT_MS)
+    if (frame.type !== 'mcp-status-result') throw new SdkHostError('HOST_PROTOCOL_ERROR', 'MCP 状态结果不符合契约。')
+    return frame.status
+  }
+
+  /** MCP 登录/退出/重连：命令文本由宿主拼出，等待期限按动作区分。 */
+  async runMcpCommand(action: SdkMcpCommandAction, serverName: string): Promise<McpStatus> {
+    const record = this.requireHost(true)
+    const bindingId = this.sessionSnapshot.bindingId
+    if (bindingId === null) throw new SdkHostError('STALE_SESSION', FAILURE_MESSAGES.STALE_SESSION)
+    const timeout = action === 'login'
+      ? MCP_LOGIN_TIMEOUT_MS
+      : action === 'reconnect' ? MCP_RECONNECT_TIMEOUT_MS : MCP_LOGOUT_TIMEOUT_MS
+    const frame = await this.request(record, { version: SDK_HOST_PROTOCOL_VERSION, hostId: record.hostId,
+      requestId: randomUUID(), type: 'mcp-command', bindingId, action, serverName }, timeout)
+    if (frame.type !== 'mcp-command-result') throw new SdkHostError('HOST_PROTOCOL_ERROR', 'MCP 命令结果不符合契约。')
+    return frame.status
   }
 
   /** 展示消息到官方条目 ID 的镜像：只在同一绑定代际内保留，宿主失效时清空。 */
@@ -361,7 +439,10 @@ export class SdkHostManager {
     if (frame.type !== 'ack-result') throw new SdkHostError('HOST_PROTOCOL_ERROR', 'SDK 投影确认不符合契约。')
   }
 
-  /** 内部生命周期入口；目标校验与发送期间单飞，结果未知时不允许冲突写入。 */
+  /**
+   * 内部生命周期入口；目标校验与发送期间单飞，结果未知时不允许冲突写入。
+   * 与回退同用追加等待窗口：迟到结果帧仍返回真实状态，不提前判未知。
+   */
   async runSessionAction(
     action: SdkSessionAction, reference: SdkSessionReference,
     expected: SdkSessionIdentity, interrupt: SdkInterruptConfirmation | null = null
@@ -392,28 +473,22 @@ export class SdkHostManager {
       }
       submitted = true
       const frame = await this.request(record, { version: SDK_HOST_PROTOCOL_VERSION, hostId: record.hostId,
-        requestId, type: 'session', action, expectedBindingId: expected.bindingId, interrupt, target }, SESSION_TIMEOUT_MS)
+        requestId, type: 'session', action, expectedBindingId: expected.bindingId, interrupt, target }, SESSION_TIMEOUT_MS, WRITE_SETTLE_TIMEOUT_MS)
       if (frame.type !== 'session-result') throw new SdkHostError('HOST_PROTOCOL_ERROR', 'SDK 会话结果不符合契约。')
       return { status: this.getSessionStatus(), cancelled: frame.cancelled }
     } catch (error) {
       if (submitted && error instanceof SdkHostError && (error.code === 'HOST_TIMEOUT'
-        || error.code === 'HOST_EXITED' || error.code === 'HOST_CLOSED')) this.uncertainOperationId = requestId
+        || error.code === 'HOST_EXITED' || error.code === 'HOST_CLOSED')) {
+        this.uncertainOperationId = requestId
+        // 未知态必须立刻对页面可见，不等宿主下一次状态事件。
+        this.publishSession()
+      }
       if (error instanceof SdkHostError) throw error
       const code = this.authorizationFailure(error)
       throw new SdkHostError(code, FAILURE_MESSAGES[code])
     } finally {
       if (this.sessionSubmission === requestId) this.sessionSubmission = null
     }
-  }
-
-  /** 只读协调实际状态；不会为了补齐展示重新执行原操作。 */
-  async refreshSessionStatus(): Promise<SdkSessionStatus> {
-    const record = this.requireHost()
-    const frame = await this.request(record, { version: SDK_HOST_PROTOCOL_VERSION, hostId: record.hostId,
-      requestId: randomUUID(), type: 'session-status' }, SESSION_TIMEOUT_MS)
-    if (frame.type !== 'session-result') throw new SdkHostError('HOST_PROTOCOL_ERROR', 'SDK 会话状态不符合契约。')
-    if (this.sessionSnapshot.operationId === null) this.uncertainOperationId = null
-    return this.getSessionStatus()
   }
 
   /** 中止绕过生命周期提交锁，且只能作用于指定绑定。 */
@@ -618,24 +693,35 @@ export class SdkHostManager {
     }
   }
 
-  /** 请求只发送一次；超时结束等待，不证明操作未发生，也不解除进程所有权。 */
-  private request(record: HostRecord, request: SdkHostRequest, timeoutMs: number): Promise<SdkHostFrame> {
+  /**
+   * 请求只发送一次；超时结束等待，不证明操作未发生，也不解除进程所有权。
+   * `settleMs > 0` 时首个期限到期不判未知，而是保留等待者继续等迟到结果帧，
+   * 只有追加窗口也到期才拒绝；`settleMs = 0` 保持单期限语义。
+   */
+  private request(record: HostRecord, request: SdkHostRequest, timeoutMs: number, settleMs = 0): Promise<SdkHostFrame> {
     if (record.exited || this.active !== record || !isSdkHostRequest(request)
       || ((request.type === 'initialize' || request.type === 'session') && (record.closing || this.shuttingDown))) {
       return Promise.reject(new SdkHostError('HOST_CLOSED', 'SDK 宿主或请求已失效。'))
     }
     return new Promise((resolvePromise, reject) => {
-      const timer = setTimeout(() => {
+      const failTimeout = (): void => {
         record.pending.delete(request.requestId)
         reject(new SdkHostError('HOST_TIMEOUT', 'SDK 宿主请求超时；未自动重发。'))
-      }, timeoutMs)
-      record.pending.set(request.requestId, {
-        type: request.type, timer, resolve: resolvePromise, reject
-      })
+      }
+      const firstDeadline = (): void => {
+        if (settleMs <= 0) { failTimeout(); return }
+        const pending = record.pending.get(request.requestId)
+        if (pending === undefined) return
+        pending.timer = setTimeout(failTimeout, settleMs)
+      }
+      const pending: PendingRequest = {
+        type: request.type, timer: setTimeout(firstDeadline, timeoutMs), resolve: resolvePromise, reject
+      }
+      record.pending.set(request.requestId, pending)
       try {
         record.child.postMessage(request)
       } catch {
-        clearTimeout(timer)
+        clearTimeout(pending.timer)
         record.pending.delete(request.requestId)
         reject(new SdkHostError('HOST_EXITED', '无法向 SDK 宿主发送请求；未自动重发。'))
       }
@@ -713,8 +799,9 @@ export class SdkHostManager {
       this.ui.beginGeneration(status.phase === 'invalid' || status.phase === 'empty'
         || status.phase === 'failed' || status.phase === 'blocked' ? null : status.bindingId)
     }
-    if (this.uncertainOperationId !== null && previous.operationId === this.uncertainOperationId
-      && status.operationId !== previous.operationId) this.uncertainOperationId = null
+    // 宿主当前不再报告该操作在执行即视为已收敛，不依赖中间是否见过开始事件。
+    if (this.uncertainOperationId !== null
+      && status.operationId !== this.uncertainOperationId) this.uncertainOperationId = null
     this.publishSession()
   }
 

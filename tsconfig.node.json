@@ -17,6 +17,7 @@
     "src/shared/**/*.ts",
     "src/auth-helper/**/*.ts",
     "src/sdk-host/**/*.ts",
+    "src/pi-cli/**/*.ts",
     "src/projection/**/*.ts"
   ]
 }
