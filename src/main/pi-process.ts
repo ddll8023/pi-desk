@@ -11,6 +11,7 @@ import { existsSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
 import { app } from 'electron'
+import { getPiProcessEnvironment } from './pi-paths'
 
 /** 开发和正式包使用同一 Runtime 相对子路径，基目录按运行环境选择。 */
 const RUNTIME_RELATIVE_SEGMENTS = ['runtime', 'pi'] as const
@@ -131,8 +132,8 @@ export class PiProcess {
 
     const child = spawn(executablePath, getPiLaunchArguments(options), {
       cwd: options.projectPath,
-      // 只追加版本检查开关；凭据等仍由 Pi 自己的配置与环境提供。
-      env: { ...process.env, PI_SKIP_VERSION_CHECK: '1' },
+      // 固定与桌面读取者相同的 agent 目录；凭据仍由 Pi 自己的配置与环境提供。
+      env: getPiProcessEnvironment({ PI_SKIP_VERSION_CHECK: '1' }),
       stdio: ['pipe', 'pipe', 'pipe'],
       // 独立进程组便于按组终止；不调用 unref，进程仍由应用管理。
       detached: true,

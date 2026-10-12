@@ -1,6 +1,6 @@
 /**
  * Project Trust 的探测与决定管理：识别会触发信任要求的项目资源，支持提交前刷新资源清单，读写 Desktop 侧的持久决定，
- * 并把决定映射为 Pi 启动参数。不读写 Pi 的 `~/.pi/agent/trust.json`，不处理 `project_trust`
+ * 并为 Pi 启动与 SDK 目标授权提供决定。不读写 Pi 的 `~/.pi/agent/trust.json`，不处理 `project_trust`
  * extension 事件，也不做任何 OS 沙箱或工具权限限制；路径归一化复用 project-path.ts。
  *
  * 资源清单与决定优先级来自 Pi v1.0.4 官方文档（security.md）：CLI 覆盖最优先，因此有受保护
@@ -47,8 +47,8 @@ export class TrustManager {
   }
 
   /**
-   * 当前项目的信任状态：探测受保护资源并附带已保存决定。探测失败按资源不存在处理，
-   * 不让单个路径的 stat 错误演变成状态读取失败。
+   * 当前项目的信任状态：探测受保护资源并附带已保存决定。
+   * 只有路径不存在才视为无资源；权限或 I/O 错误不能被解释成无需信任。
    */
   async statusOf(rawProjectPath: string | null): Promise<TrustStatus> {
     if (rawProjectPath === null) {
@@ -63,7 +63,7 @@ export class TrustManager {
     }
   }
 
-  /** 添加项目提交前绕过进程内缓存，重新读取受保护资源清单与信任决定。 */
+  /** 绕过进程内缓存重新探测受保护资源与已保存决定；添加项目提交与 SDK 目标授权都使用它。 */
   async refreshStatusOf(rawProjectPath: string): Promise<TrustStatus> {
     const projectPath = await this.canonicalize(rawProjectPath)
     this.cache.delete(projectPath)
@@ -136,7 +136,7 @@ export class TrustManager {
     return entry
   }
 
-  /** 按官方清单逐项探测；单路径失败按不存在处理，不影响其他条目。 */
+  /** 按官方清单逐项探测；无法确认受保护资源时整次探测失败，避免错误授权。 */
   private async probeResources(projectPath: string): Promise<readonly ProbedResource[]> {
     const found: ProbedResource[] = []
     const piDir = join(projectPath, '.pi')
@@ -168,13 +168,16 @@ export class TrustManager {
     return directories
   }
 
-  /** 存在性探测：目录与文件统一按可达即存在；失败一律视为不存在。 */
+  /** 存在性探测：只忽略缺失路径，其他错误明确阻断信任判定。 */
   private async pathExists(path: string): Promise<boolean> {
     try {
       await stat(path)
       return true
-    } catch {
-      return false
+    } catch (error) {
+      const code = typeof error === 'object' && error !== null
+        ? (error as NodeJS.ErrnoException).code : undefined
+      if (code === 'ENOENT' || code === 'ENOTDIR') return false
+      throw new TrustManagerError('无法确认项目受保护资源，已停止信任判定。')
     }
   }
 }

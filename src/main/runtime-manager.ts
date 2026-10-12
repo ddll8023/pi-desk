@@ -1,7 +1,7 @@
-/** 唯一 Runtime 的所有者：状态机、启停、会话回退与投影重建、受限业务操作和状态快照。
+/** 旧 RPC Runtime 的所有者：状态机、启停、会话回退与投影重建、受限业务操作和状态快照。
  *
  * 不直接管理 Pi Session 与消息内容；进程与管道操作交给 pi-process，展示投影交给
- * message-projection，Extension UI 状态按代际持有交给 extension-ui-manager（快照经订阅者
+ * projection/message-projection，Extension UI 状态按代际持有交给 extension-ui-manager（快照经订阅者
  * 广播），IPC 契约与校验在 shared/runtime-api.ts。不接受页面传入的可执行文件路径或启动参数，
  * 旧 Runtime 的异步结果不得覆盖新状态。
  *
@@ -43,11 +43,12 @@ import type {
   SessionUsage
 } from '../shared/runtime-api'
 import type { ExtensionDialogResponseInput, ExtensionUiSnapshot } from '../shared/extension-ui-api'
-import { MessageProjection } from './message-projection'
-import type { ProjectionStatusHint } from './message-projection'
+import { MessageProjection } from '../projection/message-projection'
+import type { ProjectionStatusHint } from '../projection/message-projection'
 import { ExtensionUiManager } from './extension-ui-manager'
 import { PiProcess, PiProcessError, getPiExecutablePath } from './pi-process'
 import type { PiExitEvent } from './pi-process'
+import { getPiProcessEnvironment } from './pi-paths'
 import {
   PiProtocol,
   findUserForkEntry,
@@ -90,6 +91,35 @@ const MODEL_SWITCH_TIMEOUT_MS = 30_000
 const REWIND_TIMEOUT_MS = 30_000
 
 /** prompt 文本上限，按 UTF-8 字节计。 */
+/**
+ * Prompt 文本与图片附件的统一校验：旧 RPC 与 SDK 会话链路共用同一套规则。
+ * 返回固定的线格式图片，不修改调用方输入，也不就地把错误包装成结果对象。
+ */
+export function validatePromptInput(
+  message: string,
+  images: readonly PromptImageInput[]
+): { readonly ok: true; readonly images: readonly { readonly type: 'image'; readonly data: string; readonly mimeType: string }[] }
+  | { readonly ok: false; readonly message: string } {
+  if (message.trim() === '') return { ok: false, message: 'Prompt 内容不能为空。' }
+  if (Buffer.byteLength(message, 'utf8') > PROMPT_MAX_BYTES) {
+    return { ok: false, message: `Prompt 内容超过 ${PROMPT_MAX_BYTES} 字节上限。` }
+  }
+  if (images.length > PROMPT_IMAGE_MAX_COUNT) {
+    return { ok: false, message: `单条 Prompt 最多携带 ${PROMPT_IMAGE_MAX_COUNT} 张图片。` }
+  }
+  const wireImages: { type: 'image'; data: string; mimeType: string }[] = []
+  for (const image of images) {
+    if (!PROMPT_IMAGE_MIME_TYPES.includes(image.mimeType)) {
+      return { ok: false, message: `不支持的图片类型：${image.mimeType}。` }
+    }
+    if (image.data.length === 0 || image.data.length > PROMPT_IMAGE_MAX_CHARS) {
+      return { ok: false, message: `图片「${image.name}」超出编码后大小上限。` }
+    }
+    wireImages.push({ type: 'image', data: image.data, mimeType: image.mimeType })
+  }
+  return { ok: true, images: wireImages }
+}
+
 const PROMPT_MAX_BYTES = 1_048_576
 
 /** 允许的图片 MIME 类型；与常见图像格式一致，其他类型一律拒绝。 */
@@ -337,7 +367,7 @@ function runMcpListProbe(
     try {
       child = spawn(getPiExecutablePath(), args, {
         cwd: projectPath,
-        env: process.env,
+        env: getPiProcessEnvironment(),
         stdio: ['ignore', 'pipe', 'pipe'],
         // 独立进程组：超时后可以连同它启动的 stdio MCP 服务器一起终止。
         detached: process.platform !== 'win32',
@@ -1291,25 +1321,9 @@ export class RuntimeManager {
     if (runtime === null || this.snapshot.state !== 'ready') {
       throw new RuntimeFailure('RUNTIME_NOT_READY', 'Runtime 尚未就绪，无法提交 Prompt；请先启动 Runtime。')
     }
-    if (message.trim() === '') {
-      throw new RuntimeFailure('INVALID_REQUEST', 'Prompt 内容不能为空。')
-    }
-    if (Buffer.byteLength(message, 'utf8') > PROMPT_MAX_BYTES) {
-      throw new RuntimeFailure('INVALID_REQUEST', `Prompt 内容超过 ${PROMPT_MAX_BYTES} 字节上限。`)
-    }
-    if (images.length > PROMPT_IMAGE_MAX_COUNT) {
-      throw new RuntimeFailure('INVALID_REQUEST', `单条 Prompt 最多携带 ${PROMPT_IMAGE_MAX_COUNT} 张图片。`)
-    }
-
-    const wireImages = images.map((image) => {
-      if (!PROMPT_IMAGE_MIME_TYPES.includes(image.mimeType)) {
-        throw new RuntimeFailure('INVALID_REQUEST', `不支持的图片类型：${image.mimeType}。`)
-      }
-      if (image.data.length === 0 || image.data.length > PROMPT_IMAGE_MAX_CHARS) {
-        throw new RuntimeFailure('INVALID_REQUEST', `图片「${image.name}」超出编码后大小上限。`)
-      }
-      return { type: 'image', data: image.data, mimeType: image.mimeType }
-    })
+    const validated = validatePromptInput(message, images)
+    if (!validated.ok) throw new RuntimeFailure('INVALID_REQUEST', validated.message)
+    const wireImages = validated.images
 
     const command: Record<string, unknown> = { type: 'prompt', message }
     if (wireImages.length > 0) command.images = wireImages

@@ -255,6 +255,14 @@ export class ExtensionUiManager {
     return { ok: true, snapshot: this.snapshot() }
   }
 
+  /** 宿主已解除交互或已确认回应时只移除展示；不伪造一次发送到 Pi 的取消响应。 */
+  dismissDialog(dialogId: string): void {
+    const index = this.dialogs.findIndex(dialog => dialog.id === dialogId)
+    if (index < 0) return
+    this.dialogs.splice(index, 1)
+    this.publish()
+  }
+
   /** 当前快照；无代际时 runtimeId 为 null 且状态为空。 */
   snapshot(): ExtensionUiSnapshot {
     const state: ExtensionUiState = {

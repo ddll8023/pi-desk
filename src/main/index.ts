@@ -159,6 +159,7 @@ import { ProjectFileIndex } from './project-file-index'
 import { ProjectManager } from './project-manager'
 import { ResourcePreviewError, previewGlobalModels, previewProjectResources } from './resource-preview'
 import { RuntimeManager } from './runtime-manager'
+import { SdkHostManager } from './sdk-host-manager'
 import { SessionManager } from './session-manager'
 import { TrustManager, TrustManagerError } from './trust-manager'
 import { MIN_WINDOW_HEIGHT, MIN_WINDOW_WIDTH, WindowState } from './window-state'
@@ -196,6 +197,8 @@ const contentTypes: Readonly<Record<string, string>> = {
 let mainWindow: BrowserWindow | null = null
 let quittingAfterShutdown = false
 const runtimeManager = new RuntimeManager()
+/** 只持有监督对象；后续会话主链接入前不调用 ensureStarted，不建立第二个会话后端。 */
+const sdkHostManager = new SdkHostManager()
 /** 配置文件的唯一读写者；项目列表、界面偏好与窗口状态共用同一份文件。 */
 const configStore = new DesktopConfigStore()
 const trustManager = new TrustManager({ store: configStore })
@@ -205,7 +208,9 @@ const projectManager = new ProjectManager({
   store: configStore,
   trust: trustManager
 })
-const sessionManager = new SessionManager({ projects: projectManager, runtime: runtimeManager })
+const sessionManager = new SessionManager({ projects: projectManager, runtime: runtimeManager, projectsTrust: trustManager })
+/** 内部授权回路尚不接入旧 IPC；宿主不能自行授权项目或任意会话路径。 */
+sdkHostManager.setSessionAuthority((reference, projectPath) => sessionManager.prepareSdkTarget(reference, projectPath))
 /** 项目文件索引：根路径只取当前项目，页面无法指定检索目录。 */
 const projectFileIndex = new ProjectFileIndex({
   currentProjectPath: () => projectManager.currentProjectPath()
@@ -1787,12 +1792,19 @@ app.on('before-quit', (event) => {
   if (quittingAfterShutdown) return
   event.preventDefault()
   quittingAfterShutdown = true
+  // 退出意图立即阻止恢复，不等其他关闭链结束后才停止重建。
+  sdkHostManager.beginShutdown()
+  // 宿主关闭立即开始，不能因旧后端关闭失败而遗留一个仍受管的 SDK 进程。
+  const sdkShutdown = sdkHostManager.shutdown().catch(() => {
+    console.error('SDK 宿主未确认退出，应用按关闭预算退出。')
+  })
   void (async () => {
     // 先落盘窗口状态：写入很小，避免被关闭链的兜底等待挤掉。
     await Promise.race([windowState.flush(), wait(WINDOW_STATE_FLUSH_MS)])
     // 认证辅助进程没有自己的业务状态，只按关闭链终止；先请它退出再关闭 Pi Runtime。
     await Promise.race([authManager.stop(), wait(QUIT_DEADLINE_MS)])
     await Promise.race([runtimeManager.shutdown(), wait(QUIT_DEADLINE_MS)])
+    await Promise.race([sdkShutdown, wait(QUIT_DEADLINE_MS)])
     app.exit(0)
   })()
 })

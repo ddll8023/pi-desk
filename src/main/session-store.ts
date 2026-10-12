@@ -3,12 +3,15 @@
  *
  * 会话文件由 Pi 管理（`<agent-dir>/sessions/--<cwd munged>--/<时间>_<会话 id>.jsonl`），本模块只按
  * 有界读取拿到首部元数据与首条用户消息开头，不解析消息模型、不写入也不删除任何会话数据；
+ * 并为 SDK 接管提供只读的目标身份复核（目录归属、头部身份与读取期间是否变化），
+ * 该复核不接受越过当前项目会话目录的路径引用。
  * 路径归一化在 project-path.ts，启动与切换编排在 session-manager.ts。
  */
 import type { Stats } from 'node:fs'
-import { open, readdir, stat } from 'node:fs/promises'
-import { join } from 'node:path'
+import { open, readdir, realpath, stat } from 'node:fs/promises'
+import { dirname, isAbsolute, join } from 'node:path'
 import type { SessionList, SessionSummary } from '../shared/session-api'
+import type { SdkSessionReference } from '../sdk-host/protocol'
 import { getPiAgentDir } from './pi-paths'
 
 /** 头部行与预览共用的单次读取上限；不为此扫描完整会话文件。 */
@@ -73,6 +76,13 @@ export function getProjectSessionDir(projectPath: string): string {
 /** 分组目录名：去掉开头分隔符后把 `/`、`\`、`:` 换成 `-`，与 Pi 的布局一致。 */
 function getProjectGroupName(projectPath: string): string {
   return `--${projectPath.replace(/^[\\/]/, '').replace(/[\\/:]/g, '-')}--`
+}
+
+/** SDK 接管前读取的文件身份；只在应用内部传递，不替代 JSONL 真相。 */
+export interface SdkSessionFileIdentity {
+  readonly sessionFile: string
+  readonly sessionId: string
+  readonly fileStamp: string
 }
 
 /** 项目路径比较在 Windows 上折叠大小写；其他平台保持严格比较。 */
@@ -226,6 +236,46 @@ export async function listSessions(projectPath: string): Promise<SessionList> {
     sessions: accepted.slice(0, MAX_SESSIONS),
     skipped,
     truncated: Math.max(0, accepted.length - MAX_SESSIONS)
+  }
+}
+
+/**
+ * SDK 目标授权：只读复核规范目录、文件、头部身份及读取期间是否变化。
+ * 路径引用不能越过当前项目会话目录；不使用持久化 SessionManager 做预检。
+ */
+export async function resolveSdkSessionFile(
+  projectPath: string,
+  reference: Exclude<SdkSessionReference, { readonly kind: 'new' }>
+): Promise<SdkSessionFileIdentity> {
+  try {
+    const requested = reference.kind === 'id'
+      ? await resolveSessionFile(projectPath, reference.sessionId) : reference.sessionFile
+    if (requested === null || !isAbsolute(requested)) throw new SessionStorageError('当前项目下找不到目标会话。')
+    const [directory, filePath] = await Promise.all([
+      realpath(getProjectSessionDir(projectPath)), realpath(requested)
+    ])
+    if (!isSamePath(dirname(filePath), directory)) {
+      throw new SessionStorageError('目标会话不属于当前项目的会话目录。')
+    }
+    const before = await stat(filePath, { bigint: true })
+    if (!before.isFile() || !filePath.endsWith('.jsonl')) throw new SessionStorageError('目标不是会话文件。')
+    const { header } = await readHead(filePath)
+    if (header?.type !== 'session' || typeof header.id !== 'string'
+      || !SESSION_ID_PATTERN.test(header.id) || typeof header.cwd !== 'string'
+      || !isAbsolute(header.cwd)) throw new SessionStorageError('目标会话头部无效。')
+    const cwd = await realpath(header.cwd)
+    if (!isSamePath(cwd, projectPath)
+      || (reference.kind === 'id' && header.id !== reference.sessionId)) {
+      throw new SessionStorageError('目标会话身份或项目归属已变化。')
+    }
+    const after = await stat(filePath, { bigint: true })
+    const stamp = (info: typeof before): string =>
+      `${info.dev}:${info.ino}:${info.size}:${info.mtimeNs}:${info.ctimeNs}`
+    if (stamp(before) !== stamp(after)) throw new SessionStorageError('目标会话在读取期间发生变化。')
+    return { sessionFile: filePath, sessionId: header.id, fileStamp: stamp(after) }
+  } catch (error) {
+    if (error instanceof SessionStorageError) throw error
+    throw new SessionStorageError('目标会话不存在、无法访问或无法安全确认归属。')
   }
 }
 

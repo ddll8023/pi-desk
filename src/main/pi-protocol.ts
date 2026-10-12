@@ -4,7 +4,6 @@
  * 只处理记录分类、请求关联与响应字段投影，不持有子进程、不知道 Runtime 业务状态、不缓存消息。
  * 超时只结束等待，不主张 Pi 没有执行该请求；进程退出或写入失败时收敛 pending。
  */
-import { createHash } from 'node:crypto'
 import type {
   ContextUsage,
   ExtensionErrorEntry,
@@ -231,38 +230,9 @@ export function toExtensionError(payload: Record<string, unknown>): ExtensionErr
   }
 }
 
-/** 只保存摘要与时间戳，不为回退额外保留完整消息或图片。 */
-export interface UserMessageIdentity {
-  readonly timestamp: number | null
-  readonly digest: string
-}
-
-/** 截断展示前建立身份；文本与图片按固定字段规范化，未知内容拒绝猜测。 */
-export function toUserMessageIdentity(value: unknown): UserMessageIdentity | null {
-  if (!isRecord(value) || value.role !== 'user') return null
-  const source = typeof value.content === 'string'
-    ? [{ type: 'text', text: value.content }]
-    : value.content
-  if (!Array.isArray(source)) return null
-  const blocks: Record<string, string>[] = []
-  let hasText = false
-  for (const block of source) {
-    if (!isRecord(block)) return null
-    if (block.type === 'text' && typeof block.text === 'string') {
-      blocks.push({ type: 'text', text: block.text })
-      hasText ||= block.text.trim() !== ''
-    } else if (block.type === 'image' && typeof block.data === 'string' && typeof block.mimeType === 'string') {
-      blocks.push({ type: 'image', data: block.data, mimeType: block.mimeType })
-    } else {
-      return null
-    }
-  }
-  if (!hasText) return null
-  return {
-    timestamp: typeof value.timestamp === 'number' ? value.timestamp : null,
-    digest: createHash('sha256').update(JSON.stringify(blocks)).digest('hex')
-  }
-}
+/** 用户消息身份由投影模块维护，本文件只再导出以保留既有调用点。 */
+export { toUserMessageIdentity }
+export type { UserMessageIdentity } from '../projection/identity'
 
 /** get_entries 含废弃分支：只沿当前叶子的父链核对，重复身份或损坏父链一律拒绝。 */
 export function findUserForkEntry(data: unknown, identity: UserMessageIdentity): string | null {

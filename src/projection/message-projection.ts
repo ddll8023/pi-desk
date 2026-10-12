@@ -1,5 +1,7 @@
 /**
- * 维护当前 Runtime 代际的临时消息与工具投影，并按有界批次推送给渲染端。
+ * 维护当前会话代际的临时消息与工具投影，并按有界批次推送给渲染端；由主进程的旧 RPC
+ * 链路与 SDK 宿主共用。用户消息的来源身份有两种：旧链路用摘要身份定位回退目标，
+ * SDK 链路用官方会话条目 ID，两者互不替代。
  *
  * 把 Pi 的会话事件（以及恢复会话时的历史消息）重建为页面要展示的消息内容块与工具执行条目，
  * 用户消息中的图片块以附件描述块（data URL 与估算字节）投影，AI 消息记录客户端接收事件的生成计时；
@@ -17,8 +19,8 @@ import type {
   ToolExecution
 } from '../shared/runtime-api'
 import { ToolProjection, serializeToolArguments } from './tool-projection'
-import { toUserMessageIdentity } from './pi-protocol'
-import type { UserMessageIdentity } from './pi-protocol'
+import { toUserMessageIdentity } from './identity'
+import type { UserMessageIdentity } from './identity'
 
 /** 批次刷新节拍；消息开始与终态事件立即刷新，不受此限制。 */
 const FLUSH_INTERVAL_MS = 100
@@ -57,6 +59,8 @@ interface MutableBlock {
 interface MutableMessage {
   /** 来源身份只在主进程核对，不跨 IPC 暴露摘要。 */
   sourceIdentity: UserMessageIdentity | null
+  /** 官方会话条目 ID；解析不到时为空，不用摘要或位置猜测。 */
+  entryId?: string | null
   readonly id: string
   readonly role: ProjectedRole
   blocks: MutableBlock[]
@@ -75,6 +79,8 @@ export interface ProjectionStatusHint {
 export interface ProjectionCallbacks {
   readonly onBatch: (batch: ProjectionBatch) => void
   readonly onStatusHint: (hint: ProjectionStatusHint) => void
+  /** 交出刚结束的展示消息；条目 ID 由调用方在官方持久化边界之后回填。 */
+  readonly onMessageEnded?: (messageId: string, role: ProjectedRole) => void
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -169,18 +175,21 @@ export class MessageProjection {
   }
 
   /**
-   * 以 `get_messages` 响应里的会话消息重建投影基准：每条消息按权威整条替换语义收录，
+   * 以权威会话消息重建投影基准：每条消息按权威整条替换语义收录，
    * 并按 `toolResult` 消息补种工具条目，用于恢复会话后的第一次同步。
-   * 载荷缺少消息数组时返回 false（响应契约不符）。
+   * `entryIds` 与消息一一对应，给出官方会话条目 ID；缺省或对应项为空时保持未映射，
+   * 不用摘要或位置猜测。载荷缺少消息数组时返回 false（响应契约不符）。
    */
-  seedHistory(payload: unknown): boolean {
+  seedHistory(payload: unknown, entryIds: readonly (string | null)[] = []): boolean {
     if (this.disposed) return false
     const messages = isRecord(payload) ? payload.messages : null
     if (!Array.isArray(messages)) return false
 
     // 历史消息与流式事件之间没有配对关系，每条各自成条。
     this.active = null
-    for (const message of messages) this.applyAuthoritativeMessage(message, null)
+    for (let index = 0; index < messages.length; index += 1) {
+      this.applyAuthoritativeMessage(messages[index], null, entryIds[index] ?? null)
+    }
     this.seedHistoryTools(messages)
     this.enforceLimits()
     this.callbacks.onStatusHint({ messageCount: this.messages.length })
@@ -188,13 +197,29 @@ export class MessageProjection {
     return true
   }
 
+  /** 官方条目 ID 只在解析成功后回填；同一展示消息以首次确认为准。 */
+  assignEntryId(messageId: string, entryId: string): boolean {
+    const message = this.messages.find(candidate => candidate.id === messageId)
+    if (message === undefined || message.entryId !== undefined) return false
+    message.entryId = entryId
+    return true
+  }
+
+  /** 取出某条展示消息的官方条目 ID；未映射或已裁剪时为空。 */
+  entryIdOf(messageId: string): string | null {
+    return this.messages.find(message => message.id === messageId)?.entryId ?? null
+  }
+
   /** 在仍存在的投影内定位用户消息；被裁剪或未知内容不能作为回退目标。 */
   userMessageIdentity(messageId: string): UserMessageIdentity | null {
     return this.messages.find(message => message.id === messageId && message.role === 'user')?.sourceIdentity ?? null
   }
 
-  /** 回退后整表替换，序号和消息 ID 种子保持递增；旧增量不能泄漏到新历史。 */
-  replaceHistory(payload: unknown): boolean {
+  /**
+   * 回退后整表替换，序号和消息 ID 种子保持递增；旧增量不能泄漏到新历史。
+   * `entryIds` 语义与 `seedHistory` 一致。
+   */
+  replaceHistory(payload: unknown, entryIds: readonly (string | null)[] = []): boolean {
     if (this.disposed || !isRecord(payload) || !Array.isArray(payload.messages)) return false
     this.clearTimer()
     this.pending = []
@@ -206,7 +231,9 @@ export class MessageProjection {
     this.toolProjection.reset()
     this.rebuilding = true
     try {
-      for (const message of payload.messages) this.applyAuthoritativeMessage(message, null)
+      for (let index = 0; index < payload.messages.length; index += 1) {
+        this.applyAuthoritativeMessage(payload.messages[index], null, entryIds[index] ?? null)
+      }
       this.seedHistoryTools(payload.messages)
       this.enforceLimits()
     } finally {
@@ -307,6 +334,7 @@ export class MessageProjection {
       this.queueUpdate({ kind: 'message', message: this.toPublicMessage(active) })
     }
     if (target === null) return
+    this.callbacks.onMessageEnded?.(target.id, target.role)
     this.callbacks.onStatusHint({ messageCount: this.messages.length })
   }
 
@@ -337,13 +365,15 @@ export class MessageProjection {
    */
   private applyAuthoritativeMessage(
     value: unknown,
-    active: MutableMessage | null
+    active: MutableMessage | null,
+    entryId: string | null = null
   ): MutableMessage | null {
     if (!isRecord(value)) return null
     const role = readRole(value.role)
     if (role === null) return null
 
     const target = active !== null && active.role === role ? active : this.createMessage(role, value)
+    if (entryId !== null) target.entryId = entryId
     if (target !== active) {
       this.messages.push(target)
       this.enforceLimits()

@@ -13,6 +13,7 @@ import { existsSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
 import { app } from 'electron'
+import { getPiProcessEnvironment } from './pi-paths'
 import { AUTH_HELPER_MAX_RECORD_CHARS, isAuthHelperFrame } from '../auth-helper/protocol'
 import type { AuthHelperFrame, AuthHelperRequest } from '../auth-helper/protocol'
 
@@ -77,7 +78,7 @@ export class AuthHelperProcess {
 
     const child = spawn(process.execPath, [entryPath], {
       // 用 Electron 自带的 Node 运行普通 ESM 入口，不创建窗口、不加载页面。
-      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+      env: getPiProcessEnvironment({ ELECTRON_RUN_AS_NODE: '1' }),
       stdio: ['pipe', 'pipe', 'pipe'],
       detached: true,
       windowsHide: true

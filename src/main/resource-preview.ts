@@ -12,6 +12,7 @@ import { join } from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
 import type { PiResourcePreview, RuntimeErrorCode } from '../shared/runtime-api'
 import { getPiExecutablePath } from './pi-process'
+import { getPiProcessEnvironment } from './pi-paths'
 import { toModelSummaries, toResources, toRuntimeInfo } from './pi-protocol'
 
 const PREVIEW_TIMEOUT_MS = 15_000
@@ -145,7 +146,7 @@ function runPreviewProbe(
     try {
       child = spawn(getPiExecutablePath(), previewLaunchArguments(trustDecision), {
         cwd: workingDirectory,
-        env: { ...process.env, PI_SKIP_VERSION_CHECK: '1' },
+        env: getPiProcessEnvironment({ PI_SKIP_VERSION_CHECK: '1' }),
         stdio: ['pipe', 'pipe', 'pipe'],
         detached: process.platform !== 'win32',
         windowsHide: true

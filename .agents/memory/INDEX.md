@@ -1,7 +1,7 @@
 # 项目记忆
 
 ## 项目范围
-Pi Desktop：Electron + Vue 3 + TypeScript 桌面客户端，以固定版本的 Pi standalone sidecar（RPC）为唯一 Runtime；已覆盖项目与会话、消息投影、Project Trust、Provider 认证、Pi 资源（Skill、模板、扩展命令、MCP 配置与连接状态）、自定义供应商（models.json 的读写）与 Pi 默认模型（settings.json 的读写）。
+Pi Desktop：Electron + Vue 3 + TypeScript 桌面客户端，会话后端处于迁移期：固定版本的 Pi standalone sidecar（RPC）继续服务页面，官方 SDK 宿主为迁移目标；已覆盖项目与会话、消息投影、Project Trust、Provider 认证、Pi 资源（Skill、模板、扩展命令、MCP 配置与连接状态）、自定义供应商（models.json 的读写）与 Pi 默认模型（settings.json 的读写）。
 
 ## 主题导航
 - 约定：`topics/conventions/platform-neutral.md`——在编写文档、命令示例、记忆或任何生成内容，需要提及平台、路径或命令时读取。

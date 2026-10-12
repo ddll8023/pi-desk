@@ -4,6 +4,7 @@
  * 列表来自 Pi 管理的会话文件（session-store），打开与切换一律复用 RuntimeManager 的关闭链后再
  * 以新参数启动，不在同一进程内切换会话；
  * 重新加载资源只是“允许同会话重启”的同一条链（RPC 没有重载命令）。
+ * SDK 目标准备与授权在本模块内只读完成，尚未替换旧打开入口。
  * 有活动操作而请求未确认时直接拒绝，不自动中断、不排队、不重放已提交的内容。
  * IPC 契约与校验在 shared/session-api.ts。
  */
@@ -18,7 +19,15 @@ import type {
 import type { RuntimeStatus } from '../shared/runtime-api'
 import type { ProjectManager } from './project-manager'
 import type { RuntimeManager } from './runtime-manager'
-import { SessionStorageError, listSessions, resolveSessionFile } from './session-store'
+import { SessionStorageError, listSessions, resolveSessionFile, resolveSdkSessionFile, getProjectSessionDir } from './session-store'
+import { normalizeProjectPath } from './project-path'
+import { isSdkSessionReference } from '../sdk-host/protocol'
+import type { SdkHostFailureCode, SdkSessionReference, SdkSessionTarget } from '../sdk-host/protocol'
+
+/** SDK 目标授权失败只返回分类，底层路径与配置异常不作为宿主通信载荷。 */
+export class SdkTargetFailure extends Error {
+  constructor(readonly code: SdkHostFailureCode) { super(code) }
+}
 
 /** 可分类的会话操作失败；由公共方法统一转换为结果对象。 */
 class SessionFailure extends Error {
@@ -35,10 +44,46 @@ export interface SessionManagerOptions {
   readonly projects: ProjectManager
   /** Runtime 的所有者；切换会话只使用既有关闭链与启动入口。 */
   readonly runtime: RuntimeManager
+  /** SDK 授权使用新鲜信任结果；既有 RPC 打开入口仍沿用调用方传入的决定。 */
+  readonly projectsTrust: import('./trust-manager').TrustManager
 }
 
 export class SessionManager {
   constructor(private readonly options: SessionManagerOptions) {}
+
+  /**
+   * SDK 内部目标授权：当前项目与旧后端所有权在所有异步读取前后复核。
+   * 无受保护资源但没有显式信任时按未信任建立，避免新出现的资源被隐式加载。
+   */
+  async prepareSdkTarget(reference: SdkSessionReference, expectedProjectPath: string | null): Promise<SdkSessionTarget> {
+    if (!isSdkSessionReference(reference)) throw new SdkTargetFailure('INVALID_SESSION_TARGET')
+    const projectPath = this.options.projects.currentProjectPath()
+    if (projectPath === null || (expectedProjectPath !== null && expectedProjectPath !== projectPath)) {
+      throw new SdkTargetFailure('INVALID_SESSION_TARGET')
+    }
+    this.requireLegacyReleased()
+    try {
+      if (await normalizeProjectPath(projectPath) !== projectPath) throw new SdkTargetFailure('INVALID_SESSION_TARGET')
+      const trust = await this.options.projectsTrust.refreshStatusOf(projectPath)
+      if (trust.resources.length > 0 && trust.decision === null) throw new SdkTargetFailure('TRUST_REQUIRED')
+      const identity = reference.kind === 'new' ? null : await resolveSdkSessionFile(projectPath, reference)
+      if (this.options.projects.currentProjectPath() !== projectPath) throw new SdkTargetFailure('STALE_SESSION')
+      this.requireLegacyReleased()
+      return { projectPath, sessionDir: getProjectSessionDir(projectPath), trusted: trust.decision === 'trusted',
+        sessionId: identity?.sessionId ?? null, sessionFile: identity?.sessionFile ?? null,
+        fileStamp: identity?.fileStamp ?? null }
+    } catch (error) {
+      if (error instanceof SdkTargetFailure) throw error
+      if (error instanceof SessionStorageError) throw new SdkTargetFailure('SESSION_NOT_FOUND')
+      throw new SdkTargetFailure('AUTHORIZATION_FAILED')
+    }
+  }
+
+  /** failed 不证明旧进程已退出；本批只允许明确 idle 后的内部 SDK 接管。 */
+  private requireLegacyReleased(): void {
+    const status = this.options.runtime.getStatus()
+    if (!status.ok || status.data.state !== 'idle') throw new SdkTargetFailure('SESSION_OPERATION_CONFLICT')
+  }
 
   /** 当前项目的会话列表；不要求项目目录仍然存在。 */
   async list(): Promise<SessionListResult> {

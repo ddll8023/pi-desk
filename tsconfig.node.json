@@ -11,9 +11,12 @@
   "include": [
     "electron.vite.config.ts",
     "vite.auth-helper.config.ts",
+    "vite.sdk-host.config.ts",
     "src/main/**/*.ts",
     "src/preload/**/*.ts",
     "src/shared/**/*.ts",
-    "src/auth-helper/**/*.ts"
+    "src/auth-helper/**/*.ts",
+    "src/sdk-host/**/*.ts",
+    "src/projection/**/*.ts"
   ]
 }
