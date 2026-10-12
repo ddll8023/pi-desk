@@ -3,12 +3,15 @@ import { randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { readFile, realpath, stat } from 'node:fs/promises'
 import { dirname, isAbsolute, resolve } from 'node:path'
-import type { AgentSession, AgentSessionEvent, AgentSessionRuntime, ExtensionCommandContextActions, ExtensionFactory } from '@earendil-works/pi-coding-agent'
+import type { AgentSession, AgentSessionEvent, AgentSessionRuntime, ExtensionCommandContextActions, ExtensionFactory, SessionStats } from '@earendil-works/pi-coding-agent'
 import { ExtensionUiBridge } from './extension-ui-bridge'
 import { MessageProjection } from '../projection/message-projection'
+import { OutputRateTracker } from '../projection/output-rate'
 import { SDK_HOST_PROTOCOL_VERSION } from './protocol'
 import type { SdkHostFailureCode, SdkSessionReference, SdkSessionRequest, SdkSessionStatus, SdkSessionTarget } from './protocol'
-import type { AgentCapabilities, ModelSummary, ProjectionBatch, ProjectionSnapshot } from '../shared/runtime-api'
+import type {
+  AgentCapabilities, ModelSummary, OutputRate, ProjectionBatch, ProjectionSnapshot, SessionUsage
+} from '../shared/runtime-api'
 import type { ExtensionDialogResponseInput } from '../shared/extension-ui-api'
 
 type Sdk = typeof import('@earendil-works/pi-coding-agent')
@@ -24,6 +27,48 @@ interface RuntimeOptions {
   readonly onEntryMap: (bindingId: number, messageId: string, entryId: string) => void
 }
 const SETTLE_TIMEOUT_MS = 5_000
+/** 会话统计补读的最小间隔：状态推送频繁，不能每次取状态都遍历会话条目。 */
+const USAGE_REFRESH_MS = 1_000
+
+/** 助手消息的事件身份；只有它的输出推进速率与统计。 */
+function isAssistantMessage(message: unknown): boolean {
+  return typeof message === 'object' && message !== null
+    && (message as { readonly role?: unknown }).role === 'assistant'
+}
+
+/** 助手消息的累计输出 token；未上报或形状不符时按未知处理，不猜造。 */
+function readAssistantOutput(message: unknown): number | null {
+  if (typeof message !== 'object' || message === null) return null
+  const usage = (message as { readonly usage?: unknown }).usage
+  if (typeof usage !== 'object' || usage === null) return null
+  const output = (usage as { readonly output?: unknown }).output
+  return typeof output === 'number' && Number.isFinite(output) && output >= 0 ? output : null
+}
+
+/** 模型身份只在有非空取值时投影；官方尚未选定模型时保持 null。 */
+function readModelIdentity(model: { readonly provider?: unknown; readonly id?: unknown } | undefined): {
+  readonly provider: string | null
+  readonly id: string | null
+} {
+  const provider = typeof model?.provider === 'string' && model.provider !== '' ? model.provider : null
+  const id = typeof model?.id === 'string' && model.id !== '' ? model.id : null
+  return { provider, id }
+}
+
+/** 官方统计到页面用量的投影：缺失的累计值按 0，未知的上下文占用保持 null。 */
+function toSessionUsage(stats: SessionStats): SessionUsage {
+  const context = stats.contextUsage
+  return {
+    input: stats.tokens.input,
+    output: stats.tokens.output,
+    cacheRead: stats.tokens.cacheRead,
+    cacheWrite: stats.tokens.cacheWrite,
+    cost: stats.cost,
+    context: context === undefined ? null : {
+      tokens: context.tokens, contextWindow: context.contextWindow, percent: context.percent
+    }
+  }
+}
 
 /** 只用固定分类跨出宿主，原始 SDK 异常可能带敏感配置。 */
 export class SdkSessionFailure extends Error {
@@ -95,19 +140,30 @@ export class SdkSessionRuntime {
   private lastError: SdkHostFailureCode | null = null
   private needsHostRebuild = false
   private valid = false
+  /** 速率采样与用量缓存都只属于当前绑定；换代或失效时一并清空。 */
+  private rate: OutputRateTracker | null = null
+  private rateSnapshot: OutputRate = { live: null, average: null }
+  private usage: SessionUsage | null = null
+  private usageReadAt = 0
+  private usageTimer: ReturnType<typeof setTimeout> | null = null
+  /** 投影上报的展示消息条数；未绑定时为 0。 */
+  private projectedMessageCount = 0
 
   constructor(private readonly sdk: Sdk, private readonly options: RuntimeOptions) {}
 
   /** 实际对象与绑定状态分别表达；未取得历史基准时仍不会生成可提交状态。 */
   getStatus(): SdkSessionStatus {
     const session = this.session
+    const model = readModelIdentity(session?.model)
     return {
       phase: this.phase, bindingId: this.bindingId, activityVersion: this.activityVersion,
       operationId: this.operationId, projectPath: this.target?.projectPath ?? null,
       sessionId: session?.sessionId ?? null, sessionFile: session?.sessionFile ?? null,
       isIdle: this.operationId === null && !this.isBusy(), pendingMessages: session?.pendingMessageCount ?? 0,
       isBashRunning: session?.isBashRunning ?? false, waitingDialogs: this.bridge?.waitingCount ?? 0,
-      needsHostRebuild: this.needsHostRebuild, lastError: this.lastError
+      needsHostRebuild: this.needsHostRebuild, lastError: this.lastError,
+      modelProvider: model.provider, modelId: model.id, messageCount: this.projectedMessageCount,
+      usage: this.usage, rate: this.rateSnapshot
     }
   }
 
@@ -474,8 +530,11 @@ export class SdkSessionRuntime {
       this.sdk.initTheme(session.settingsManager.getTheme(), false)
       const projection = new MessageProjection(bindingId, {
         onBatch: batch => this.options.onProjectionBatch(bindingId, batch),
-        // SDK 会话状态是执行态的权威来源，不再由展示事件反推 isStreaming。
-        onStatusHint: () => {},
+        // SDK 会话状态是执行态的权威来源，不再由展示事件反推 isStreaming；消息条数仍取投影。
+        onStatusHint: hint => {
+          if (hint.messageCount === undefined) return
+          this.projectedMessageCount = hint.messageCount
+        },
         onMessageEnded: messageId => {
           const message = this.lastEndedMessage
           if (message !== null) this.pendingEntryLookup = { messageId, message }
@@ -490,6 +549,15 @@ export class SdkSessionRuntime {
         throw new SdkSessionFailure('SESSION_BIND_FAILED')
       }
       this.projection = projection
+      // 速率采样随绑定建立：订阅方只在仍是当前绑定时改写快照。
+      const rate = new OutputRateTracker(snapshot => {
+        if (this.rate !== rate) return
+        this.rateSnapshot = snapshot
+        this.publish()
+      })
+      this.rate = rate
+      this.rateSnapshot = { live: null, average: null }
+      this.usage = null
       this.bridge = new ExtensionUiBridge(session.extensionRunner.getUIContext(), {
         bindingId, onRequest: this.options.onUiRequest, onCancel: this.options.onUiCancel,
         onWaitingChanged: () => this.publish(), onUnavailable: () => this.blockUnavailableInteraction()
@@ -540,6 +608,8 @@ export class SdkSessionRuntime {
       this.valid = true
       this.phase = 'bound'
       this.publish()
+      // 绑定完成即补读一次会话统计：恢复历史时页面同样需要已有用量，不能等下一次输出。
+      this.scheduleUsageRefresh()
     } catch {
       this.valid = false
       this.needsHostRebuild = true
@@ -624,7 +694,45 @@ export class SdkSessionRuntime {
     this.lastEndedMessage = null
     if (event.type === 'agent_start' || event.type === 'compaction_start'
       || event.type === 'summarization_retry_attempt_start') this.activityVersion += 1
+    // 速率与统计都只依据官方事件：累计输出取助手消息自身的 usage，不从展示增量反推。
+    if (event.type === 'message_start') {
+      if (isAssistantMessage(event.message)) this.rate?.begin(Date.now())
+    } else if (event.type === 'message_update') {
+      const output = readAssistantOutput(event.message)
+      if (output !== null) this.rate?.push(output, Date.now())
+      this.scheduleUsageRefresh()
+    } else if (event.type === 'message_end') {
+      if (isAssistantMessage(event.message)) this.rate?.settle(readAssistantOutput(event.message), Date.now())
+      this.scheduleUsageRefresh()
+    }
     if (event.type !== 'message_update' && event.type !== 'tool_execution_update') this.publish()
+  }
+
+  /**
+   * 会话累计用量按最小间隔补读一次：官方统计可能遍历条目，读一次缓存一次；
+   * 读取失败保留上一次已确认的统计，不用空值或全零覆盖展示。
+   */
+  private scheduleUsageRefresh(): void {
+    if (this.session === null || this.usageTimer !== null) return
+    const wait = Math.max(0, USAGE_REFRESH_MS - (Date.now() - this.usageReadAt))
+    this.usageTimer = setTimeout(() => {
+      this.usageTimer = null
+      this.usageReadAt = Date.now()
+      const session = this.session
+      if (session === null || !this.valid) return
+      try {
+        this.usage = toSessionUsage(session.getSessionStats())
+      } catch {
+        return
+      }
+      this.publish()
+    }, wait)
+  }
+
+  /** 统计与速率定时器只属于当前绑定；换代或关闭时必须停掉。 */
+  private clearUsageTimer(): void {
+    if (this.usageTimer !== null) clearTimeout(this.usageTimer)
+    this.usageTimer = null
   }
 
   /** 审批或必要交互不可用时先限制执行，再由 SDK 中止；不伪造工具成功或重放请求。 */
@@ -644,9 +752,15 @@ export class SdkSessionRuntime {
     this.unsubscribe = null
     this.bridge?.invalidate()
     this.bridge = null
-    // 投影随绑定代际失效：旧批次不得升到新会话。
+    // 投影随绑定代际失效：旧批次不得升到新会话；展示统计同样不能跨代际残留。
     this.projection?.dispose()
     this.projection = null
+    this.rate?.reset()
+    this.rate = null
+    this.rateSnapshot = { live: null, average: null }
+    this.clearUsageTimer()
+    this.usage = null
+    this.projectedMessageCount = 0
     this.session = null
     this.currentCreation = null
     this.phase = 'invalid'

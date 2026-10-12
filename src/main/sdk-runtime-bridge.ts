@@ -14,6 +14,7 @@ import { isSdkHostFailureCode } from '../sdk-host/protocol'
 import type { SdkInterruptConfirmation, SdkSessionReference, SdkSessionStatus } from '../sdk-host/protocol'
 import type {
   CapabilitiesResult,
+  OutputRate,
   ProjectionBatch,
   ProjectionResult,
   ProjectionSnapshot,
@@ -27,7 +28,8 @@ import type {
   RuntimeRewindResult,
   RuntimeSetModelRequest,
   RuntimeState,
-  RuntimeStatus
+  RuntimeStatus,
+  SessionUsage
 } from '../shared/runtime-api'
 import type { ExtensionDialogResponseInput, ExtensionUiSnapshot } from '../shared/extension-ui-api'
 import type { SessionError, SessionErrorCode } from '../shared/session-api'
@@ -123,16 +125,16 @@ const EMPTY_PROJECTION: ProjectionSnapshot = {
   droppedTools: 0
 }
 
-/** SDK 会话状态不提供模型身份、用量与消息条数；这些字段留空由页面按未知展示。 */
+/** 会话状态直接提供模型身份、用量与速率；消息条数沿用投影的展示口径。 */
 function mapInfo(session: SdkSessionStatus): RuntimeInfo {
   return {
-    modelProvider: null,
-    modelId: null,
+    modelProvider: session.modelProvider,
+    modelId: session.modelId,
     sessionId: session.sessionId,
-    messageCount: 0,
+    messageCount: session.messageCount,
     isStreaming: !session.isIdle,
-    usage: null,
-    rate: { live: null, average: null }
+    usage: session.usage,
+    rate: session.rate
   }
 }
 
@@ -156,6 +158,31 @@ function sameStatus(left: RuntimeStatus, right: RuntimeStatus): boolean {
     && left.lastError === right.lastError
     && left.info?.sessionId === right.info?.sessionId
     && left.info?.isStreaming === right.info?.isStreaming
+    && left.info?.modelProvider === right.info?.modelProvider
+    && left.info?.modelId === right.info?.modelId
+    && left.info?.messageCount === right.info?.messageCount
+    // 用量与速率是对象：按值比较，否则每次统计刷新都会被当成新状态广播。
+    && sameUsage(left.info?.usage ?? null, right.info?.usage ?? null)
+    && sameRate(left.info?.rate, right.info?.rate)
+}
+
+/** 用量按每个数值字段比较；未知与全零必须区分。 */
+function sameUsage(left: SessionUsage | null, right: SessionUsage | null): boolean {
+  if (left === null || right === null) return left === right
+  return left.input === right.input
+    && left.output === right.output
+    && left.cacheRead === right.cacheRead
+    && left.cacheWrite === right.cacheWrite
+    && left.cost === right.cost
+    && left.context?.tokens === right.context?.tokens
+    && left.context?.contextWindow === right.context?.contextWindow
+    && left.context?.percent === right.context?.percent
+}
+
+/** 速率按实时值与上一轮平均值比较。 */
+function sameRate(left: OutputRate | undefined, right: OutputRate | undefined): boolean {
+  if (left === undefined || right === undefined) return left === right
+  return left.live === right.live && left.average === right.average
 }
 
 /** 会话切换只表达目标与是否允许中断；身份与中断确认在提交前一刻由本层固定。 */

@@ -65,7 +65,7 @@ import {
   toSessionUsage
 } from './pi-protocol'
 import type { PiResponseRecord } from './pi-protocol'
-import { OutputRateTracker } from './output-rate'
+import { OutputRateTracker } from '../projection/output-rate'
 import { ProjectPathError, normalizeProjectPath } from './project-path'
 import { getProjectSessionDir } from './session-store'
 

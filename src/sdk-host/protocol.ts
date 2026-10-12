@@ -1,8 +1,12 @@
 /** SDK 宿主内部生命周期、目标授权与交互契约；不引入 SDK，不开放任意调用或凭据快照。 */
 import { isExtensionDialogResponseInput, projectExtensionUiRequest } from '../shared/extension-ui-api'
-import { isCapabilitiesResult, isProjectionBatch, isProjectionResult } from '../shared/runtime-api'
+import {
+  isCapabilitiesResult, isOutputRate, isProjectionBatch, isProjectionResult, isSessionUsage
+} from '../shared/runtime-api'
 import type { ExtensionDialogResponseInput } from '../shared/extension-ui-api'
-import type { AgentCapabilities, ProjectionBatch, ProjectionSnapshot } from '../shared/runtime-api'
+import type {
+  AgentCapabilities, OutputRate, ProjectionBatch, ProjectionSnapshot, SessionUsage
+} from '../shared/runtime-api'
 
 export const SDK_HOST_PROTOCOL_VERSION = 2
 interface HostEnvelope { readonly version: typeof SDK_HOST_PROTOCOL_VERSION; readonly hostId: number }
@@ -46,13 +50,23 @@ export interface SdkSessionStatus {
   readonly waitingDialogs: number
   readonly needsHostRebuild: boolean
   readonly lastError: SdkHostFailureCode | null
+  /** 活动会话的模型身份；未绑定或官方尚未选定模型时为 null。 */
+  readonly modelProvider: string | null
+  readonly modelId: string | null
+  /** 投影中当前展示的消息条数；未绑定时为 0。 */
+  readonly messageCount: number
+  /** 会话累计用量；官方统计未取到时为 null，不用全零冒充。 */
+  readonly usage: SessionUsage | null
+  /** 输出速率；无有效样本时两个字段各为 null。 */
+  readonly rate: OutputRate
 }
 
 /** 无活动会话的初始副本，不意味着宿主或模型服务已经建立。 */
 export function emptySdkSessionStatus(): SdkSessionStatus {
   return { phase: 'empty', bindingId: null, activityVersion: 0, operationId: null,
     projectPath: null, sessionId: null, sessionFile: null, isIdle: true,
-    pendingMessages: 0, isBashRunning: false, waitingDialogs: 0, needsHostRebuild: false, lastError: null }
+    pendingMessages: 0, isBashRunning: false, waitingDialogs: 0, needsHostRebuild: false, lastError: null,
+    modelProvider: null, modelId: null, messageCount: 0, usage: null, rate: { live: null, average: null } }
 }
 
 /** 调用方固定的宿主与绑定身份，防止进程重建后编号重用导致旧动作穿透。 */
@@ -203,9 +217,14 @@ export function isSdkSessionStatus(value: unknown): value is SdkSessionStatus {
     && typeof value.isBashRunning === 'boolean' && isCount(value.waitingDialogs)
     && typeof value.needsHostRebuild === 'boolean'
     && (value.lastError === null || isSdkHostFailureCode(value.lastError))
+    && (value.modelProvider === null || isIdentifier(value.modelProvider))
+    && (value.modelId === null || isIdentifier(value.modelId))
+    && isCount(value.messageCount)
+    && (value.usage === null || isSessionUsage(value.usage))
+    && isOutputRate(value.rate)
     && hasKeys(value, ['phase', 'bindingId', 'activityVersion', 'operationId', 'projectPath',
       'sessionId', 'sessionFile', 'isIdle', 'pendingMessages', 'isBashRunning', 'waitingDialogs',
-      'needsHostRebuild', 'lastError'])
+      'needsHostRebuild', 'lastError', 'modelProvider', 'modelId', 'messageCount', 'usage', 'rate'])
 }
 /** 中断确认只属于一个具体绑定及执行版本。 */
 function isConfirmation(value: unknown): value is SdkInterruptConfirmation | null {

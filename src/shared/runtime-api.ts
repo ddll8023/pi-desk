@@ -681,14 +681,15 @@ function isNullableFiniteNumber(value: unknown): value is number | null {
   return value === null || isFiniteNumber(value)
 }
 
-function isContextUsage(value: unknown): value is ContextUsage {
+export function isContextUsage(value: unknown): value is ContextUsage {
   if (!isRecord(value)) return false
   return isNullableFiniteNumber(value.tokens)
     && isNullableFiniteNumber(value.contextWindow)
     && isNullableFiniteNumber(value.percent)
 }
 
-function isSessionUsage(value: unknown): value is SessionUsage {
+/** 会话用量形状校验；宿主协议与页面契约共用同一判定，避免两套形状。 */
+export function isSessionUsage(value: unknown): value is SessionUsage {
   if (!isRecord(value)) return false
   return isFiniteNumber(value.input)
     && isFiniteNumber(value.output)
@@ -698,7 +699,8 @@ function isSessionUsage(value: unknown): value is SessionUsage {
     && (value.context === null || isContextUsage(value.context))
 }
 
-function isOutputRate(value: unknown): value is OutputRate {
+/** 输出速率形状校验；同上，宿主上报与页面消费共用。 */
+export function isOutputRate(value: unknown): value is OutputRate {
   if (!isRecord(value)) return false
   return isNullableFiniteNumber(value.live) && isNullableFiniteNumber(value.average)
 }
