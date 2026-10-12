@@ -1,8 +1,8 @@
 /** SDK 宿主内部生命周期、目标授权与交互契约；不引入 SDK，不开放任意调用或凭据快照。 */
 import { isExtensionDialogResponseInput, projectExtensionUiRequest } from '../shared/extension-ui-api'
-import { isProjectionBatch, isProjectionResult } from '../shared/runtime-api'
+import { isCapabilitiesResult, isProjectionBatch, isProjectionResult } from '../shared/runtime-api'
 import type { ExtensionDialogResponseInput } from '../shared/extension-ui-api'
-import type { ProjectionBatch, ProjectionSnapshot } from '../shared/runtime-api'
+import type { AgentCapabilities, ProjectionBatch, ProjectionSnapshot } from '../shared/runtime-api'
 
 export const SDK_HOST_PROTOCOL_VERSION = 2
 interface HostEnvelope { readonly version: typeof SDK_HOST_PROTOCOL_VERSION; readonly hostId: number }
@@ -88,6 +88,8 @@ export type SdkHostRequest =
       readonly modelId: string })
   /** 回退只回退对话分支；目标由官方条目 ID 定位，不接受任意条目或会话路径。 */
   | (RequestEnvelope & { readonly type: 'rewind'; readonly bindingId: number; readonly messageId: string })
+  /** 能力清单只读当前绑定会话的模型目录；不创建会话，也不建立第二个模型容器。 */
+  | (RequestEnvelope & { readonly type: 'capabilities'; readonly bindingId: number })
   | (RequestEnvelope & { readonly type: 'projection-snapshot'; readonly bindingId: number })
   | (RequestEnvelope & { readonly type: 'projection-ack'; readonly bindingId: number; readonly seq: number })
   | (RequestEnvelope & { readonly type: 'ui-response'; readonly bindingId: number;
@@ -105,6 +107,7 @@ export type SdkHostFrame =
   | (RequestEnvelope & { readonly type: 'prompt-result'; readonly disposition: 'started' | 'queued' | 'handled' })
   | (RequestEnvelope & { readonly type: 'rewind-result'; readonly cancelled: boolean;
       readonly text: string | null })
+  | (RequestEnvelope & { readonly type: 'capabilities-result'; readonly capabilities: AgentCapabilities })
   | (RequestEnvelope & { readonly type: 'ack-result' })
   | (RequestEnvelope & { readonly type: 'ui-result' })
 
@@ -233,6 +236,7 @@ export function isSdkHostRequest(value: unknown): value is SdkHostRequest {
       && isIdentifier(value.modelId) && requestKeys(value, ['bindingId', 'provider', 'modelId'])
     case 'rewind': return isIdentity(value.bindingId) && isIdentifier(value.messageId)
       && requestKeys(value, ['bindingId', 'messageId'])
+    case 'capabilities': return isIdentity(value.bindingId) && requestKeys(value, ['bindingId'])
     case 'projection-snapshot': return isIdentity(value.bindingId) && requestKeys(value, ['bindingId'])
     case 'projection-ack': return isIdentity(value.bindingId) && isCount(value.seq)
       && requestKeys(value, ['bindingId', 'seq'])
@@ -255,6 +259,8 @@ export function isSdkHostFrame(value: unknown): value is SdkHostFrame {
     case 'ack-result':
     case 'ui-result': return requestKeys(value, [])
     case 'failed': return isSdkHostFailureCode(value.code) && requestKeys(value, ['code'])
+    case 'capabilities-result': return isCapabilitiesResult({ ok: true, data: value.capabilities })
+      && requestKeys(value, ['capabilities'])
     case 'rewind-result': return typeof value.cancelled === 'boolean'
       && (value.text === null || typeof value.text === 'string')
       && requestKeys(value, ['cancelled', 'text'])

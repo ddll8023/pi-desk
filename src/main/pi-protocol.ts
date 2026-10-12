@@ -4,6 +4,8 @@
  * 只处理记录分类、请求关联与响应字段投影，不持有子进程、不知道 Runtime 业务状态、不缓存消息。
  * 超时只结束等待，不主张 Pi 没有执行该请求；进程退出或写入失败时收敛 pending。
  */
+import { toUserMessageIdentity } from '../projection/identity'
+import type { UserMessageIdentity } from '../projection/identity'
 import type {
   ContextUsage,
   ExtensionErrorEntry,
@@ -230,7 +232,7 @@ export function toExtensionError(payload: Record<string, unknown>): ExtensionErr
   }
 }
 
-/** 用户消息身份由投影模块维护，本文件只再导出以保留既有调用点。 */
+/** 用户消息身份由投影模块维护，本文件只引入并再导出以保留既有调用点。 */
 export { toUserMessageIdentity }
 export type { UserMessageIdentity } from '../projection/identity'
 

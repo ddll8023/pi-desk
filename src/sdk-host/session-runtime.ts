@@ -8,7 +8,7 @@ import { ExtensionUiBridge } from './extension-ui-bridge'
 import { MessageProjection } from '../projection/message-projection'
 import { SDK_HOST_PROTOCOL_VERSION } from './protocol'
 import type { SdkHostFailureCode, SdkSessionReference, SdkSessionRequest, SdkSessionStatus, SdkSessionTarget } from './protocol'
-import type { ProjectionBatch, ProjectionSnapshot } from '../shared/runtime-api'
+import type { AgentCapabilities, ModelSummary, ProjectionBatch, ProjectionSnapshot } from '../shared/runtime-api'
 import type { ExtensionDialogResponseInput } from '../shared/extension-ui-api'
 
 type Sdk = typeof import('@earendil-works/pi-coding-agent')
@@ -44,6 +44,8 @@ function samePath(left: string, right: string): boolean {
 function toProjectionEvent(event: AgentSessionEvent): Record<string, unknown> | null {
   if (event.type !== 'message_update') return event as unknown as Record<string, unknown>
   const raw = event.assistantMessageEvent as Record<string, unknown>
+  // 事件联合不保证 message 为助手消息；用量缺失时不伪造字段。
+  const usage = 'usage' in event.message ? event.message.usage : undefined
   const { partial: _partial, ...rest } = raw
   if (raw.type === 'toolcall_start') {
     const partial = raw.partial as { content?: { type?: string; id?: string; name?: string }[] } | undefined
@@ -51,10 +53,10 @@ function toProjectionEvent(event: AgentSessionEvent): Record<string, unknown> | 
     if (toolCall?.type !== 'toolCall' || typeof toolCall.id !== 'string' || typeof toolCall.name !== 'string') {
       return null
     }
-    return { type: 'message_update', usage: event.message.usage,
+    return { type: 'message_update', usage,
       assistantMessageEvent: { ...rest, id: toolCall.id, toolName: toolCall.name } }
   }
-  return { type: 'message_update', usage: event.message.usage, assistantMessageEvent: rest }
+  return { type: 'message_update', usage, assistantMessageEvent: rest }
 }
 
 /** 有限等待不取消底层任务；调用方必须保留受阻状态，不能据此重复操作。 */
@@ -280,6 +282,31 @@ export class SdkSessionRuntime {
       finish()
       this.publish()
     }
+  }
+
+  /**
+   * 当前绑定的可用模型清单：只读该会话的模型目录，失败以 `modelsError` 表达，
+   * 不返回伪造的空清单。展示名、上下文窗口与图片输入能力缺失时保持 null。
+   */
+  capabilities(bindingId: number): AgentCapabilities {
+    const session = this.requireBoundSession(bindingId)
+    const models: ModelSummary[] = []
+    let modelsError: string | null = null
+    try {
+      for (const model of session.modelRuntime.getAvailableSnapshot()) {
+        models.push({
+          provider: model.provider,
+          id: model.id,
+          name: typeof model.name === 'string' && model.name !== '' ? model.name : null,
+          contextWindow: typeof model.contextWindow === 'number'
+            && Number.isFinite(model.contextWindow) && model.contextWindow > 0 ? model.contextWindow : null,
+          imageInput: Array.isArray(model.input) ? model.input.includes('image') : null
+        })
+      }
+    } catch {
+      modelsError = '无法读取当前会话的模型目录。'
+    }
+    return { runtimeId: bindingId, models, modelsError }
   }
 
   /** 解析不到条目时保持未映射，不用摘要或位置猜测回退目标。 */

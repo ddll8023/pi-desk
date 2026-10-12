@@ -162,6 +162,9 @@ async function dispatch(request: SdkHostRequest): Promise<void> {
       send({ ...envelope, type: 'rewind-result', ...result })
       return
     }
+    case 'capabilities':
+      send({ ...envelope, type: 'capabilities-result', capabilities: runtime.capabilities(request.bindingId) })
+      return
     case 'projection-snapshot': {
       const projection = runtime.getProjection(request.bindingId)
       if (projection === null) { fail(request, 'STALE_SESSION'); return }

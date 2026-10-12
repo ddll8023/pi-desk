@@ -17,7 +17,7 @@ import type {
   SdkHostFrame, SdkHostRequest, SdkHostFailureCode, SdkHostEvent, SdkSessionStatus,
   SdkSessionReference, SdkSessionTarget, SdkSessionAction, SdkInterruptConfirmation, SdkSessionIdentity
 } from '../sdk-host/protocol'
-import type { ProjectionBatch, ProjectionSnapshot, PromptImageInput } from '../shared/runtime-api'
+import type { AgentCapabilities, ProjectionBatch, ProjectionSnapshot, PromptImageInput } from '../shared/runtime-api'
 import { ExtensionUiManager } from './extension-ui-manager'
 import type { ExtensionDialogResponseInput, ExtensionUiSnapshot } from '../shared/extension-ui-api'
 import { getPiAgentDir, getPiProcessEnvironment } from './pi-paths'
@@ -241,6 +241,17 @@ export class SdkHostManager {
     } finally {
       if (this.sessionSubmission === requestId) this.sessionSubmission = null
     }
+  }
+
+  /** 只读当前绑定的模型清单；失败原因由结果表达，超时或失效时不返回伪造空清单。 */
+  async readCapabilities(): Promise<AgentCapabilities> {
+    const record = this.requireHost(true)
+    const bindingId = this.sessionSnapshot.bindingId
+    if (bindingId === null) throw new SdkHostError('STALE_SESSION', FAILURE_MESSAGES.STALE_SESSION)
+    const frame = await this.request(record, { version: SDK_HOST_PROTOCOL_VERSION, hostId: record.hostId,
+      requestId: randomUUID(), type: 'capabilities', bindingId }, SESSION_TIMEOUT_MS)
+    if (frame.type !== 'capabilities-result') throw new SdkHostError('HOST_PROTOCOL_ERROR', 'SDK 能力清单不符合契约。')
+    return frame.capabilities
   }
 
   /** 展示消息到官方条目 ID 的镜像：只在同一绑定代际内保留，宿主失效时清空。 */
