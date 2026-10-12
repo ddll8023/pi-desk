@@ -1,10 +1,9 @@
 /**
- * 当前项目会话列表、打开与重新加载编排的所有者：选择、新建、恢复与重启式重载会话。
+ * 当前项目会话列表、打开与重新加载编排的所有者：选择、新建、恢复与重载会话。
  *
- * 列表来自 Pi 管理的会话文件（session-store），打开与切换一律复用 RuntimeManager 的关闭链后再
- * 以新参数启动，不在同一进程内切换会话；
- * 重新加载资源只是“允许同会话重启”的同一条链（RPC 没有重载命令）。
- * SDK 目标准备与授权在本模块内只读完成，尚未替换旧打开入口。
+ * 列表来自 Pi 管理的会话文件（session-store）；新建、打开与切换默认交给 SDK 宿主，
+ * 由宿主在同一进程内替换会话，目标、归属与信任经本模块的 SDK 授权回路复核。
+ * 旧 RPC 链路只作为开发期显式退路（`legacyRpc`）：关闭旧进程后带参数重启，运行中不自动落回。
  * 有活动操作而请求未确认时直接拒绝，不自动中断、不排队、不重放已提交的内容。
  * IPC 契约与校验在 shared/session-api.ts。
  */
@@ -19,6 +18,9 @@ import type {
 import type { RuntimeStatus } from '../shared/runtime-api'
 import type { ProjectManager } from './project-manager'
 import type { RuntimeManager } from './runtime-manager'
+import { SdkHostError } from './sdk-host-manager'
+import { sessionErrorOf } from './sdk-runtime-bridge'
+import type { SdkRuntimeBridge } from './sdk-runtime-bridge'
 import { SessionStorageError, listSessions, resolveSessionFile, resolveSdkSessionFile, getProjectSessionDir } from './session-store'
 import { normalizeProjectPath } from './project-path'
 import { isSdkSessionReference } from '../sdk-host/protocol'
@@ -42,8 +44,12 @@ class SessionFailure extends Error {
 export interface SessionManagerOptions {
   /** 当前项目来源；会话归属与 cwd 复核都以它为准。 */
   readonly projects: ProjectManager
-  /** Runtime 的所有者；切换会话只使用既有关闭链与启动入口。 */
+  /** 旧 RPC 后端；只在开发期退路下承担会话主链。 */
   readonly runtime: RuntimeManager
+  /** SDK 会话后端；默认的会话主链。 */
+  readonly sdk: SdkRuntimeBridge
+  /** 开发期显式退路：为真时仍走旧 RPC 关闭重启链，为假时一律走 SDK 宿主。 */
+  readonly legacyRpc: boolean
   /** SDK 授权使用新鲜信任结果；既有 RPC 打开入口仍沿用调用方传入的决定。 */
   readonly projectsTrust: import('./trust-manager').TrustManager
 }
@@ -79,7 +85,7 @@ export class SessionManager {
     }
   }
 
-  /** failed 不证明旧进程已退出；本批只允许明确 idle 后的内部 SDK 接管。 */
+  /** failed 不证明旧进程已退出；只允许明确 idle 后才由 SDK 接管。 */
   private requireLegacyReleased(): void {
     const status = this.options.runtime.getStatus()
     if (!status.ok || status.data.state !== 'idle') throw new SdkTargetFailure('SESSION_OPERATION_CONFLICT')
@@ -114,15 +120,15 @@ export class SessionManager {
   }
 
   /**
-   * 先校验目标会话属于当前项目，再结束旧 Runtime，最后带会话参数启动新的 Runtime。
-   * 请求的会话与已就绪 Runtime 一致时幂等返回，不做无谓重启。
+   * 新建与打开的公共门禁：按当前后端状态判断忙碌与幂等，再按后端分派实际切换。
+   * 请求的会话与已就绪会话一致时幂等返回，不做无谓替换。
    */
   private async applyOpen(
     request: SessionOpenRequest,
     trustDecision: 'trusted' | 'untrusted' | null
   ): Promise<SessionList> {
     const projectPath = this.requireProjectPath()
-    const status = this.runtimeStatus()
+    const status = this.backendStatus()
 
     if (status.state === 'starting' || status.state === 'stopping') {
       throw new SessionFailure('SESSION_SWITCH_BLOCKED', 'Runtime 正在启动或关闭，请稍后再切换会话。')
@@ -142,7 +148,38 @@ export class SessionManager {
       throw new SessionFailure('SESSION_NOT_FOUND', '当前项目下找不到该会话；列表可能已过期。')
     }
 
-    if (status.state === 'ready') {
+    return this.options.legacyRpc
+      ? this.openWithLegacyRpc(projectPath, request, trustDecision)
+      : this.openWithSdk(projectPath, request)
+  }
+
+  /**
+   * SDK 主链：目标预检、信任判定与旧会话收敛都由宿主在替换前完成，
+   * 这里只复核实际打开的会话；成功后的状态经事件收敛。
+   */
+  private async openWithSdk(projectPath: string, request: SessionOpenRequest): Promise<SessionList> {
+    const switched = await this.options.sdk.switchSession(
+      request.sessionId === null ? 'new' : 'open',
+      request.sessionId === null ? { kind: 'new' } : { kind: 'id', sessionId: request.sessionId },
+      request.allowInterrupt
+    )
+    if (switched.cancelled) {
+      throw new SessionFailure('RUNTIME_COMMAND_REJECTED', '会话切换被取消，当前会话保持不变。')
+    }
+    if (request.sessionId !== null && this.options.sdk.getSessionStatus().sessionId !== request.sessionId) {
+      // 目标一致性由宿主预检保证；这里只复核实际打开的会话，不删除任何文件。
+      throw new SessionFailure('SESSION_NOT_FOUND', '实际打开的会话与请求不一致；未改动任何已有文件。')
+    }
+    return listSessions(projectPath)
+  }
+
+  /** 开发期退路：结束旧 Runtime 后带会话参数重启一次。 */
+  private async openWithLegacyRpc(
+    projectPath: string,
+    request: SessionOpenRequest,
+    trustDecision: 'trusted' | 'untrusted' | null
+  ): Promise<SessionList> {
+    if (this.backendStatus().state === 'ready') {
       const stopped = await this.options.runtime.stop()
       if (!stopped.ok || stopped.data.state !== 'idle') {
         throw new SessionFailure(
@@ -166,9 +203,9 @@ export class SessionManager {
   }
 
   /**
-   * 重新加载 Pi 资源：以当前会话重启 Runtime。RPC 没有重载命令（`/reload` 只在 TUI 内建），
-   * 资源只在进程启动时读取，因此唯一的重载方式就是重启；守门与打开链完全复用，
-   * 但不做“同会话幂等返回”，因为目的正是重建进程。
+   * 重新加载 Pi 资源：SDK 主链在同一宿主内重建会话 services，
+   * 开发期退路则以当前会话重启旧 Runtime；守门与打开链复用，
+   * 但不做“同会话幂等返回”，因为目的正是重建进程/服务。
    */
   async reload(
     allowInterrupt: boolean,
@@ -184,13 +221,13 @@ export class SessionManager {
     }
   }
 
-  /** 重载编排：守门 → 结束旧 Runtime → 以同一会话 id 启动 → 返回刷新后的列表。 */
+  /** 重载编排：守门后按当前后端重新绑定同一会话的能力。 */
   private async applyReload(
     allowInterrupt: boolean,
     trustDecision: 'trusted' | 'untrusted' | null
   ): Promise<SessionList> {
     const projectPath = this.requireProjectPath()
-    const status = this.runtimeStatus()
+    const status = this.backendStatus()
     if (status.state === 'starting' || status.state === 'stopping') {
       throw new SessionFailure('SESSION_SWITCH_BLOCKED', 'Runtime 正在启动或关闭，请稍后再重新加载资源。')
     }
@@ -200,6 +237,23 @@ export class SessionManager {
         '当前有正在运行的操作；确认后会先停止它再重新加载资源。'
       )
     }
+
+    if (this.options.legacyRpc) return this.reloadWithLegacyRpc(projectPath, allowInterrupt, trustDecision)
+    // 宿主按当前会话重建 services；会话已有消息但文件缺失时由宿主拒绝。
+    const switched = await this.options.sdk.switchSession('reload', { kind: 'new' }, allowInterrupt)
+    if (switched.cancelled) {
+      throw new SessionFailure('RUNTIME_COMMAND_REJECTED', '重新加载资源被取消，当前会话保持不变。')
+    }
+    return listSessions(projectPath)
+  }
+
+  /** 开发期退路：以当前会话 id 结束旧 Runtime 再启动（RPC 没有重载命令）。 */
+  private async reloadWithLegacyRpc(
+    projectPath: string,
+    allowInterrupt: boolean,
+    trustDecision: 'trusted' | 'untrusted' | null
+  ): Promise<SessionList> {
+    const status = this.backendStatus()
     // 会话 id 只来自本代际快照；取不到时交给 Pi 新建，不猜造其他会话。
     const sessionId = status.info?.sessionId ?? null
     if (status.state === 'ready') {
@@ -233,8 +287,11 @@ export class SessionManager {
     return projectPath
   }
 
-  private runtimeStatus(): RuntimeStatus {
-    const result = this.options.runtime.getStatus()
+  /** 门禁与幂等判断都读当前后端的实际状态，两个后端不共用一份快照。 */
+  private backendStatus(): RuntimeStatus {
+    const result = this.options.legacyRpc
+      ? this.options.runtime.getStatus()
+      : this.options.sdk.getStatus()
     if (!result.ok) {
       throw new SessionFailure('INTERNAL_ERROR', '无法读取 Runtime 状态。')
     }
@@ -247,6 +304,10 @@ export class SessionManager {
     }
     if (error instanceof SessionStorageError) {
       return { ok: false, error: { code: 'INTERNAL_ERROR', message: error.message } }
+    }
+    // 宿主与会话授权失败按固定分类映射；未知异常仍收敛为调用方的兜底错误。
+    if (error instanceof SdkHostError || error instanceof SdkTargetFailure) {
+      return { ok: false, error: sessionErrorOf(error) }
     }
     return { ok: false, error: fallback }
   }

@@ -1,7 +1,7 @@
 /**
  * 当前项目与最近项目列表的所有者：目录选择、候选信任复核、项目添加/移除、切换与配置读写。
  *
- * 添加前复核受保护资源，并在 Runtime 切换成功时一起保存项目与信任决定；移除仅清理 Desktop 配置，
+ * 添加前复核受保护资源，并在会话切换成功时一起保存项目与信任决定；移除仅清理 Desktop 配置，
  * 不删除项目目录。运行中断由显式确认控制；IPC 契约与调用方校验位于 shared/project-api.ts 和 main/index.ts。
  */
 import { app } from 'electron'
@@ -17,10 +17,9 @@ import type {
   ProjectSetCurrentRequest
 } from '../shared/project-api'
 import type { TrustDecision } from '../shared/trust-api'
-import type { RuntimeStatus } from '../shared/runtime-api'
+import type { RuntimeResult, RuntimeStatus } from '../shared/runtime-api'
 import { DesktopConfigStorageError, DesktopConfigStore } from './desktop-config-store'
 import { ProjectPathError, normalizeProjectPath, projectNameFromPath } from './project-path'
-import type { RuntimeManager } from './runtime-manager'
 import type { TrustManager } from './trust-manager'
 
 /** 可分类的项目操作失败；由公共方法统一转换为结果对象。 */
@@ -51,8 +50,11 @@ function sameTrustStatus(
 export interface ProjectManagerOptions {
   /** 打开系统目录选择器；`defaultPath` 是建议起始目录，返回 null 表示用户取消。 */
   readonly chooseDirectory: (defaultPath: string) => Promise<string | null>
-  /** Runtime 的所有者；只使用状态查询与既有关闭链。 */
-  readonly runtime: RuntimeManager
+  /**
+   * 会话后端的最小端口：只使用状态查询与既有关闭链。
+   * 具体实现由主进程组合根选择（SDK 适配层或旧 Runtime 退路），项目切换不区分后端。
+   */
+  readonly runtime: { getStatus(): RuntimeResult; stop(): Promise<RuntimeResult> }
   /** 配置文件的唯一读写者；项目列表与界面偏好、窗口状态共用同一份文件。 */
   readonly store: DesktopConfigStore
   /** 信任状态探测；项目候选在提交前复核资源快照。 */
@@ -145,7 +147,7 @@ export class ProjectManager {
     }
   }
 
-  /** 移除 Desktop 项目记录；移除当前项目时复用 Runtime 关闭链，不删除磁盘目录。 */
+  /** 移除 Desktop 项目记录；移除当前项目时复用当前会话后端的关闭链，不删除磁盘目录。 */
   async remove(request: ProjectRemoveRequest): Promise<ProjectListResult> {
     try {
       const list = await this.options.store.list()
@@ -176,7 +178,7 @@ export class ProjectManager {
   }
 
   /**
-   * 先结束旧 Runtime 再保存新项目：只有确认回到 `idle` 才写入配置，否则项目保持不变。
+   * 先释放当前会话再保存新项目：只有确认回到 `idle` 才写入配置，否则项目保持不变。
    * `failed` 状态不再追加终止尝试，只切换并保存项目选择。
    */
   private async applySwitch(
@@ -203,7 +205,7 @@ export class ProjectManager {
       if (!stopped.ok || stopped.data.state !== 'idle') {
         throw new ProjectFailure(
           'PROJECT_SWITCH_BLOCKED',
-          '旧 Runtime 未确认退出，项目未切换；请先关闭 Runtime 后重试。'
+          '当前会话未确认释放，项目未切换；请先关闭会话后重试。'
         )
       }
     }

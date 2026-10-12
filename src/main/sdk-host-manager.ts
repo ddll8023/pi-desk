@@ -1,4 +1,4 @@
-/** 监督单个 SDK 宿主与内部会话请求，持有安全状态和交互镜像；尚未切换页面主链，不重放操作。 */
+/** 监督单个 SDK 宿主与内部会话请求，持有安全状态和交互镜像；不重放操作，页面契约映射在 sdk-runtime-bridge。 */
 import { randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { dirname, isAbsolute, resolve } from 'node:path'
@@ -145,7 +145,7 @@ export class SdkHostManager {
     return { ...this.snapshot }
   }
 
-  /** 订阅生命周期结果；会话与页面契约将在主链接入时单独适配。 */
+  /** 订阅生命周期结果；页面状态映射由 sdk-runtime-bridge 完成。 */
   onStatusChanged(listener: (status: SdkHostStatus) => void): () => void {
     this.listeners.add(listener)
     return () => this.listeners.delete(listener)
@@ -154,7 +154,7 @@ export class SdkHostManager {
   /** 主进程提供唯一目标授权；不让宿主自行决定项目、信任或任意路径。 */
   setSessionAuthority(authority: SdkSessionAuthority): void { this.authority = authority }
 
-  /** SDK 内部状态尚未映射到旧 Runtime 或页面 ready。 */
+  /** SDK 内部会话状态；页面可提交与否由映射层按 phase 判定。 */
   getSessionStatus(): SdkSessionStatus { return { ...this.sessionSnapshot } }
 
   /** 写操作调用方在用户确认前固定此身份，不能只传可能在新进程重用的绑定编号。 */
@@ -162,7 +162,7 @@ export class SdkHostManager {
     return { hostId: this.active?.hostId ?? null, bindingId: this.sessionSnapshot.bindingId }
   }
 
-  /** 仅订阅 SDK 绑定状态，不发送既有 Runtime 事件。 */
+  /** 仅订阅 SDK 绑定状态；页面 Runtime 状态由映射层合成。 */
   onSessionChanged(listener: (status: SdkSessionStatus) => void): () => void {
     this.sessionListeners.add(listener)
     return () => this.sessionListeners.delete(listener)
@@ -171,13 +171,13 @@ export class SdkHostManager {
   /** SDK 交互镜像查询不创建宿主或会话。 */
   getExtensionUiSnapshot(): ExtensionUiSnapshot { return this.ui.snapshot() }
 
-  /** 交互订阅留给主链接入，不能与旧 RPC 广播混用。 */
+  /** 交互订阅供页面广播；不能与旧 RPC 广播混用。 */
   onExtensionUi(listener: (snapshot: ExtensionUiSnapshot) => void): () => void {
     this.uiListeners.add(listener)
     return () => this.uiListeners.delete(listener)
   }
 
-  /** 投影批次订阅留给主链接入；宿主失效后不再广播旧代际批次。 */
+  /** 投影批次订阅供页面广播；宿主失效后不再广播旧代际批次。 */
   onProjectionBatch(listener: (batch: ProjectionBatch) => void): () => void {
     this.projectionListeners.add(listener)
     return () => this.projectionListeners.delete(listener)
@@ -676,14 +676,14 @@ export class SdkHostManager {
     this.publishSession()
   }
 
-  /** 批次只转发给主链接入方；主进程不重算投影，也不重发旧代际批次。 */
+  /** 批次只转发给订阅方；主进程不重算投影，也不重发旧代际批次。 */
   private publishProjection(batch: ProjectionBatch): void {
     for (const listener of [...this.projectionListeners]) {
       try { listener(batch) } catch { /* 展示消费者不能改变会话所有权。 */ }
     }
   }
 
-  /** SDK 状态订阅尚不接入页面 Runtime 广播。 */
+  /** SDK 状态先广播给订阅方，再由映射层决定页面状态。 */
   private publishSession(): void {
     const status = this.getSessionStatus()
     for (const listener of [...this.sessionListeners]) {

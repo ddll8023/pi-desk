@@ -160,6 +160,7 @@ import { ProjectManager } from './project-manager'
 import { ResourcePreviewError, previewGlobalModels, previewProjectResources } from './resource-preview'
 import { RuntimeManager } from './runtime-manager'
 import { SdkHostManager } from './sdk-host-manager'
+import { SdkRuntimeBridge } from './sdk-runtime-bridge'
 import { SessionManager } from './session-manager'
 import { TrustManager, TrustManagerError } from './trust-manager'
 import { MIN_WINDOW_HEIGHT, MIN_WINDOW_WIDTH, WindowState } from './window-state'
@@ -197,19 +198,31 @@ const contentTypes: Readonly<Record<string, string>> = {
 let mainWindow: BrowserWindow | null = null
 let quittingAfterShutdown = false
 const runtimeManager = new RuntimeManager()
-/** 只持有监督对象；后续会话主链接入前不调用 ensureStarted，不建立第二个会话后端。 */
 const sdkHostManager = new SdkHostManager()
+/** 页面会话主链后端：宿主与会话状态、失败分类在此映射回既有 Runtime 契约。 */
+const sdkRuntime = new SdkRuntimeBridge(sdkHostManager)
+/** 开发期显式退路：仅本地排查旧 RPC 链路时置为 true；运行中不自动落回。 */
+const legacyRpcFallback = false
+/** 会话后端：项目切换与会话切换都只作用于当前后端，不让两个后端同时持有会话。 */
+const sessionBackend: { getStatus(): RuntimeResult; stop(): Promise<RuntimeResult> } =
+  legacyRpcFallback ? runtimeManager : sdkRuntime
 /** 配置文件的唯一读写者；项目列表、界面偏好与窗口状态共用同一份文件。 */
 const configStore = new DesktopConfigStore()
 const trustManager = new TrustManager({ store: configStore })
 const projectManager = new ProjectManager({
   chooseDirectory: chooseDirectoryWithDialog,
-  runtime: runtimeManager,
+  runtime: sessionBackend,
   store: configStore,
   trust: trustManager
 })
-const sessionManager = new SessionManager({ projects: projectManager, runtime: runtimeManager, projectsTrust: trustManager })
-/** 内部授权回路尚不接入旧 IPC；宿主不能自行授权项目或任意会话路径。 */
+const sessionManager = new SessionManager({
+  projects: projectManager,
+  runtime: runtimeManager,
+  sdk: sdkRuntime,
+  legacyRpc: legacyRpcFallback,
+  projectsTrust: trustManager
+})
+/** SDK 内部授权回路接主进程会话编排；宿主不能自行授权项目或任意会话路径。 */
 sdkHostManager.setSessionAuthority((reference, projectPath) => sessionManager.prepareSdkTarget(reference, projectPath))
 /** 项目文件索引：根路径只取当前项目，页面无法指定检索目录。 */
 const projectFileIndex = new ProjectFileIndex({
@@ -782,8 +795,17 @@ async function resolveTrustForCurrentProject(): Promise<{
   }
 }
 
-/** runtime-start 的带信任启动链：拦截无决定的项目，其余与原启动入口一致。 */
+/**
+ * runtime-start 的带信任启动链：目标必须是当前项目（宿主只认主进程当前项目），
+ * 信任前置后建立宿主并新建会话。
+ */
 async function startTrustedRuntime(projectPath: string): Promise<RuntimeResult> {
+  if (projectPath !== projectManager.currentProjectPath()) {
+    return {
+      ok: false,
+      error: { code: 'INVALID_PROJECT_PATH', message: '启动目标不是当前项目；请先切换项目再启动会话。' }
+    }
+  }
   const outcome = await trustManager.resolveLaunchDecision(projectPath)
   if (outcome.requiresPrompt) {
     const status = await trustManager.statusOf(projectPath)
@@ -796,7 +818,7 @@ async function startTrustedRuntime(projectPath: string): Promise<RuntimeResult> 
       }
     }
   }
-  return runtimeManager.start(projectPath, null, outcome.decision, false)
+  return sdkRuntime.start()
 }
 
 /** Trust 查询与决定接口；决定只接受当前项目，防止页面改写其他项目的记录。 */
@@ -903,7 +925,7 @@ function registerRuntimeHandlers(pageUrl: string): void {
     if (args.length !== 0) {
       return runtimeFailure('INVALID_REQUEST', 'Runtime 状态接口不接受参数。')
     }
-    return runtimeManager.getStatus()
+    return sdkRuntime.getStatus()
   })
 
   handle(
@@ -915,7 +937,7 @@ function registerRuntimeHandlers(pageUrl: string): void {
       if (args.length !== 0) {
         return runtimeFailure('INVALID_REQUEST', '关闭 Runtime 接口不接受参数。')
       }
-      return runtimeManager.stop()
+      return sdkRuntime.stop()
     }
   )
 
@@ -929,7 +951,7 @@ function registerRuntimeHandlers(pageUrl: string): void {
       if (args.length !== 0) {
         return runtimeFailure('INVALID_REQUEST', '中止操作接口不接受参数。')
       }
-      return runtimeManager.abort()
+      return sdkRuntime.abort()
     }
   )
 
@@ -943,7 +965,7 @@ function registerRuntimeHandlers(pageUrl: string): void {
       if (args.length !== 1 || !isRuntimeRewindRequest(args[0])) {
         return { ok: false, error: { code: 'INVALID_REQUEST', message: '回退只接受 Runtime、会话与消息身份。' } }
       }
-      return runtimeManager.rewind(args[0])
+      return sdkRuntime.rewind(args[0])
     }
   )
 
@@ -957,7 +979,7 @@ function registerRuntimeHandlers(pageUrl: string): void {
       if (args.length !== 0) {
         return capabilitiesFailure('INVALID_REQUEST', '能力读取接口不接受参数。')
       }
-      return runtimeManager.readCapabilities()
+      return sdkRuntime.readCapabilities()
     }
   )
 
@@ -971,11 +993,11 @@ function registerRuntimeHandlers(pageUrl: string): void {
       if (args.length !== 1 || !isRuntimeSetModelRequest(args[0])) {
         return runtimeFailure('INVALID_REQUEST', '模型切换只接受 Runtime 代际、供应商和模型 ID。')
       }
-      return runtimeManager.setModel(args[0])
+      return sdkRuntime.setModel(args[0])
     }
   )
 
-  /** 资源清单只读取当前 Runtime 代际的 `get_commands` 投影，不接受任何参数。 */
+  /** 资源清单只读取旧 RPC 后端当前代际的 `get_commands` 投影，不接受任何参数。 */
   handle(
     RUNTIME_RESOURCES_CHANNEL,
     async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<ResourcesResult> => {
@@ -1027,7 +1049,7 @@ function registerRuntimeHandlers(pageUrl: string): void {
     }
   )
 
-  /** 诊断只暴露主进程已持有的有界 stderr 尾部与 extension_error 事件，不接受任何参数。 */
+  /** 诊断只暴露旧 RPC 后端已持有的有界 stderr 尾部与 extension_error 事件，不接受任何参数。 */
   handle(
     RUNTIME_DIAGNOSTICS_CHANNEL,
     (event: IpcMainInvokeEvent, ...args: unknown[]): RuntimeDiagnosticsResult => {
@@ -1041,7 +1063,7 @@ function registerRuntimeHandlers(pageUrl: string): void {
     }
   )
 
-  /** MCP 状态使用主进程固定的 `/mcp` 命令，不接受页面传入任何命令文本。 */
+  /** MCP 状态在旧 RPC 后端使用主进程固定的 `/mcp` 命令，不接受页面传入任何命令文本。 */
   handle(
     RUNTIME_MCP_STATUS_CHANNEL,
     async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<McpStatusResult> => {
@@ -1158,8 +1180,8 @@ function registerRuntimeHandlers(pageUrl: string): void {
   )
 
   /**
-   * 安全模式启动：零参数，主进程用最近一次启动目标并固定传 `--no-extensions`，
-   * 仅本次生效；信任拦截与常规启动一致。
+   * 安全模式启动：零参数。SDK 宿主尚未提供“不加载 Extension”的等价启动方式，
+   * 因此该入口暂不提供旧 RPC 启动入口，避免同时存在两个会话后端。
    */
   handle(
     RUNTIME_START_SAFE_CHANNEL,
@@ -1170,11 +1192,10 @@ function registerRuntimeHandlers(pageUrl: string): void {
       if (args.length !== 0) {
         return runtimeFailure('INVALID_REQUEST', '安全模式启动接口不接受参数。')
       }
-      const trust = await resolveTrustForCurrentProject()
-      if (trust.requiresPrompt) {
-        return runtimeFailure('TRUST_REQUIRED', trust.message ?? '项目包含需要信任决定的资源。')
-      }
-      return runtimeManager.startSafely(trust.decision, projectManager.currentProjectPath())
+      return runtimeFailure(
+        'RUNTIME_NOT_READY',
+        '安全模式启动尚未接入 SDK 宿主，暂不可用。'
+      )
     }
   )
 
@@ -1226,21 +1247,21 @@ function registerRuntimeHandlers(pageUrl: string): void {
           images.push({ name: item.name, mimeType: item.mimeType, data: item.data })
         }
       }
-      return runtimeManager.prompt(message, images)
+      return sdkRuntime.prompt(message, images)
     }
   )
 
-  /** 投影快照只读取当前 Runtime 代际的投影，不接受任何参数。 */
+  /** 投影快照只读取当前绑定代际的投影，不接受任何参数；未就绪时返回错误而非空投影。 */
   handle(
     RUNTIME_PROJECTION_CHANNEL,
-    (event: IpcMainInvokeEvent, ...args: unknown[]): ProjectionResult => {
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<ProjectionResult> => {
       if (!isTrustedCaller(event, pageUrl)) {
         return projectionFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
       }
       if (args.length !== 0) {
         return projectionFailure('INVALID_REQUEST', '投影快照接口不接受参数。')
       }
-      return runtimeManager.getProjection()
+      return sdkRuntime.getProjection()
     }
   )
 
@@ -1256,7 +1277,7 @@ function registerRuntimeHandlers(pageUrl: string): void {
       const { runtimeId, seq } = fields
       if (typeof runtimeId !== 'number' || typeof seq !== 'number') return
       if (!Number.isInteger(runtimeId) || !Number.isInteger(seq) || runtimeId <= 0 || seq < 0) return
-      runtimeManager.ackProjection(runtimeId, seq)
+      sdkRuntime.ackProjection(runtimeId, seq)
     }
   )
 }
@@ -1629,13 +1650,13 @@ function registerExtensionUiHandlers(pageUrl: string): void {
       if (args.length !== 0) {
         return extensionUiFailure('INVALID_REQUEST', 'Extension UI 状态接口不接受参数。')
       }
-      return { ok: true, data: runtimeManager.getExtensionUiSnapshot() }
+      return { ok: true, data: sdkRuntime.getExtensionUiSnapshot() }
     }
   )
 
   handle(
     EXTENSION_UI_RESPOND_CHANNEL,
-    (event: IpcMainInvokeEvent, ...args: unknown[]): ExtensionUiResult => {
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<ExtensionUiResult> => {
       if (!isTrustedCaller(event, pageUrl)) {
         return extensionUiFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
       }
@@ -1657,10 +1678,15 @@ function registerExtensionUiHandlers(pageUrl: string): void {
       if (!isExtensionDialogResponseInput(response)) {
         return extensionUiFailure('INVALID_REQUEST', '对话响应形态不符合约定。')
       }
-      const snapshot = runtimeManager.respondExtensionDialog(
-        dialogId,
-        response as ExtensionDialogResponseInput
-      )
+      let snapshot: ExtensionUiSnapshot | null = null
+      try {
+        snapshot = await sdkRuntime.respondExtensionDialog(
+          dialogId,
+          response as ExtensionDialogResponseInput
+        )
+      } catch {
+        return extensionUiFailure('INTERNAL_ERROR', '提交 Extension 对话响应时发生未预期的内部错误。')
+      }
       if (snapshot === null) {
         return extensionUiFailure('EXTENSION_DIALOG_NOT_FOUND', '该 Extension 对话已结束或不存在。')
       }
@@ -1836,9 +1862,9 @@ if (!app.requestSingleInstanceLock()) {
     registerPiSettingsHandlers(pageUrl)
     registerModelsConfigHandlers(pageUrl)
     registerAuthHandlers(pageUrl)
-    runtimeManager.onStatusChanged(broadcastRuntimeStatus)
-    runtimeManager.onProjectionBatch(broadcastRuntimeProjection)
-    runtimeManager.onExtensionUi(broadcastExtensionUi)
+    sdkRuntime.onStatusChanged(broadcastRuntimeStatus)
+    sdkRuntime.onProjectionBatch(broadcastRuntimeProjection)
+    sdkRuntime.onExtensionUi(broadcastExtensionUi)
     authManager.onFlowChanged(broadcastAuthFlow)
     await createWindow(pageUrl)
   }).catch(() => {

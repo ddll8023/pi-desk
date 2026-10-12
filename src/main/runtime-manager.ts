@@ -1,5 +1,8 @@
 /** 旧 RPC Runtime 的所有者：状态机、启停、会话回退与投影重建、受限业务操作和状态快照。
  *
+ * 会话主链已经由 SDK 宿主承担（见 sdk-host-manager 与 sdk-runtime-bridge）：本模块降为查询后端（资源、
+ * MCP、诊断）与开发期显式退路，不再随页面启动拉起会话进程，运行中也不自动落回。
+ *
  * 不直接管理 Pi Session 与消息内容；进程与管道操作交给 pi-process，展示投影交给
  * projection/message-projection，Extension UI 状态按代际持有交给 extension-ui-manager（快照经订阅者
  * 广播），IPC 契约与校验在 shared/runtime-api.ts。不接受页面传入的可执行文件路径或启动参数，

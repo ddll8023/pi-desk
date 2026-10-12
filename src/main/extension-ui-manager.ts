@@ -1,10 +1,10 @@
 /**
- * 维护当前 Runtime 代际的 Extension UI 状态：dialog 请求队列、通知、状态条、widget 与编辑器填充文本。
+ * 维护当前会话代际（`runtimeId`）的 Extension UI 状态：dialog 请求队列、通知、状态条、widget 与编辑器填充文本。
  *
  * 只消费已分类的 `extension_ui_request` 记录与页面提交的 dialog 响应，按代际持有状态并广播快照；
  * 并为读取 MCP 状态提供一次性的 notify 文本捕获（捕获期间仍照常进入通知列表）；
- * 不持有进程，不解析其他记录族，dialog 响应写回由 RuntimeManager 借用其串行写入。随 Runtime 退出
- * 或切换清空，不持久化。`setTitle` 无桌面等价物，只计数不展示。
+ * 不持有进程，不解析其他记录族，dialog 响应写回由持有者负责（旧 RPC 串行写入或 SDK 宿主的
+ * respondDialog）。随会话代际退出或切换清空，不持久化。`setTitle` 无桌面等价物，只计数不展示。
  * 所有进入状态的展示文本都在这里先剥 ANSI 转义序列再截断：Extension 常给文本上色，
  * 页面按纯文本插值，否则转义序列会变成可见字符，截断也会切出半截序列。
  */
