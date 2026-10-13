@@ -2219,6 +2219,18 @@
     @apply inline-block h-2 w-2 shrink-0 rounded-full;
   }
 
+  /*
+   * 预留滚动条槽位：经典滚动条会占掉内容宽度，同一容器内容一长一短就出现横向跳动
+   * （设置页在子页之间切换、消息列从无滚动条变为有滚动条时最明显）。
+   * 固定预留后，居中内容在有无滚动条时位置一致；侧栏的滚动容器已有同样处理。
+   * 只为需要纵向滚动的容器预留；带滚动条但条目左对齐的浮层列表（侧栏菜单、AppSelect）不加，
+   * 避免白占 8px。
+   */
+  .scroll-area,
+  .dialog-body {
+    scrollbar-gutter: stable;
+  }
+
   /* 细滚动条；不改变滚动行为，只避免默认滚动条压住内容。弹层体一律适用，避免同一处弹层里粗细不一。
      只用 ::-webkit-scrollbar 定制：Chromium 里 scrollbar-color 与 scrollbar-width 一旦不是 auto，
      就会覆盖这些伪元素样式，半透明细条会退回成按 scrollbar-color 上色的原生滚动条；本应用只跑 Electron。 */
