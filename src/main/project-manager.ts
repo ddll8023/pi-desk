@@ -2,7 +2,8 @@
  * 当前项目与最近项目列表的所有者：目录选择、候选信任复核、项目添加/移除、切换与配置读写。
  *
  * 添加前复核受保护资源，并在会话切换成功时一起保存项目与信任决定；移除仅清理 Desktop 配置，
- * 不删除项目目录。运行中断由显式确认控制；IPC 契约与调用方校验位于 shared/project-api.ts 和 main/index.ts。
+ * 不删除项目目录。运行实例是否存在以注册表登记为准，不以单份 Runtime 状态代替；
+ * 运行中断由显式确认控制。IPC 契约与调用方校验位于 shared/project-api.ts 和 main/index.ts。
  */
 import { app } from 'electron'
 import type {
@@ -21,6 +22,7 @@ import type { RuntimeResult, RuntimeStatus } from '../shared/runtime-api'
 import { DesktopConfigStorageError, DesktopConfigStore } from './desktop-config-store'
 import { ProjectPathError, normalizeProjectPath, projectNameFromPath } from './project-path'
 import type { TrustManager } from './trust-manager'
+import type { SessionRunQuery } from './session-run-registry'
 
 /** 可分类的项目操作失败；由公共方法统一转换为结果对象。 */
 class ProjectFailure extends Error {
@@ -59,6 +61,8 @@ export interface ProjectManagerOptions {
   readonly store: DesktopConfigStore
   /** 信任状态探测；项目候选在提交前复核资源快照。 */
   readonly trust: TrustManager
+  /** 运行实例归属查询：项目范围收敛只依据登记结果。 */
+  readonly runs: SessionRunQuery
 }
 
 export class ProjectManager {
@@ -147,13 +151,17 @@ export class ProjectManager {
     }
   }
 
-  /** 移除 Desktop 项目记录；移除当前项目时复用当前会话后端的关闭链，不删除磁盘目录。 */
+  /**
+   * 移除 Desktop 项目记录；移除前先收敛该项目范围内的运行实例，不删除磁盘目录。
+   * 是否收敛只看注册表登记，不看项目是否是当前项目；当前项目仍保留原有守门行为。
+   */
   async remove(request: ProjectRemoveRequest): Promise<ProjectListResult> {
     try {
       const list = await this.options.store.list()
       const project = list.projects.find((entry) => entry.id === request.projectId)
       if (project === undefined) return { ok: true, data: list }
-      if (project.id === list.currentProjectId) {
+      const runs = this.options.runs.runsOfProject(project.path)
+      if (runs.length > 0 || project.id === list.currentProjectId) {
         const status = this.runtimeStatus()
         if (status.state === 'starting' || status.state === 'stopping') {
           throw new ProjectFailure('PROJECT_REMOVE_BLOCKED', 'Runtime 正在启动或关闭，请稍后再移除项目。')
@@ -178,8 +186,11 @@ export class ProjectManager {
   }
 
   /**
-   * 先释放当前会话再保存新项目：只有确认回到 `idle` 才写入配置，否则项目保持不变。
+   * 先释放离开项目的运行实例再保存新项目：只有确认回到 `idle` 才写入配置，否则项目保持不变。
    * `failed` 状态不再追加终止尝试，只切换并保存项目选择。
+   *
+   * 需要收敛的运行实例只取“离开项目”范围内的登记结果：多项目并行后，其他项目的后台实例不应
+   * 因为前台切换被停止；同一会话跟随前台上下文的部分留待多运行实例阶段细化。
    */
   private async applySwitch(
     request: ProjectSetCurrentRequest,
@@ -189,6 +200,8 @@ export class ProjectManager {
     if (projectPath === this.currentProjectPath()) {
       return this.options.store.selectProject(projectPath, projectNameFromPath(projectPath), trustDecision)
     }
+    const outgoingProjectPath = this.currentProjectPath()
+    const outgoingRuns = outgoingProjectPath === null ? [] : this.options.runs.runsOfProject(outgoingProjectPath)
     const status = this.runtimeStatus()
 
     if (status.state === 'starting' || status.state === 'stopping') {
@@ -200,7 +213,7 @@ export class ProjectManager {
         '当前有正在运行的操作；确认后会先停止它再切换项目。'
       )
     }
-    if (status.state === 'ready') {
+    if (status.state === 'ready' && outgoingRuns.length > 0) {
       const stopped = await this.options.runtime.stop()
       if (!stopped.ok || stopped.data.state !== 'idle') {
         throw new ProjectFailure(

@@ -35,6 +35,8 @@ const SESSION_ID_PATTERN = /^[A-Za-z0-9._-]+$/
 export class SessionStorageError extends Error {}
 
 interface CachedSummary {
+  /** 项目令牌：分组目录名可能碰撞，缓存必须按项目区分，不能复用其他项目的过滤结果。 */
+  readonly projectPath: string
   readonly size: number
   readonly mtimeMs: number
   /** 无法解析或不属于当前项目的文件缓存为 null，避免每次列表重复读取。 */
@@ -46,8 +48,13 @@ interface HeadContent {
   readonly preview: string | null
 }
 
-/** 运行期缓存；键是会话文件绝对路径，每轮列表只保留仍然存在的文件。 */
+/** 运行期缓存；键是项目令牌与会话文件绝对路径，每轮列表只保留仍然存在的文件。 */
 const summaryCache = new Map<string, CachedSummary>()
+
+/** 缓存键：项目路径与会话文件路径都可能包含任意字符，用 NUL 分隔避免拼接歧义。 */
+function summaryCacheKey(projectPath: string, filePath: string): string {
+  return `${projectPath}\u0000${filePath}`
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -249,9 +256,10 @@ export async function listSessions(projectPath: string): Promise<SessionList> {
       continue
     }
 
-    const cached = summaryCache.get(filePath)
+    const cacheKey = summaryCacheKey(projectPath, filePath)
+    const cached = summaryCache.get(cacheKey)
     if (cached !== undefined && cached.size === info.size && cached.mtimeMs === info.mtimeMs) {
-      nextCache.set(filePath, cached)
+      nextCache.set(cacheKey, cached)
       if (cached.summary === null) skipped += 1
       else accepted.push(cached.summary)
       continue
@@ -264,7 +272,7 @@ export async function listSessions(projectPath: string): Promise<SessionList> {
       // 文件在读取期间被删除或被占用：按无法解析处理。
       summary = null
     }
-    nextCache.set(filePath, { size: info.size, mtimeMs: info.mtimeMs, summary })
+    nextCache.set(cacheKey, { projectPath, size: info.size, mtimeMs: info.mtimeMs, summary })
     if (summary === null) skipped += 1
     else accepted.push(summary)
   }

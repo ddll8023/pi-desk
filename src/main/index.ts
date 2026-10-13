@@ -163,6 +163,7 @@ import { ResourcePreviewError, previewGlobalModels, previewProjectResources } fr
 import { SdkHostManager } from './sdk-host-manager'
 import { SdkRuntimeBridge } from './sdk-runtime-bridge'
 import { SessionManager } from './session-manager'
+import { SessionRunRegistry } from './session-run-registry'
 import { TrustManager, TrustManagerError } from './trust-manager'
 import { MIN_WINDOW_HEIGHT, MIN_WINDOW_WIDTH, WindowState } from './window-state'
 
@@ -198,9 +199,18 @@ const contentTypes: Readonly<Record<string, string>> = {
 
 let mainWindow: BrowserWindow | null = null
 let quittingAfterShutdown = false
-const sdkHostManager = new SdkHostManager()
-/** 页面会话主链后端：宿主与会话状态、失败分类在此映射回既有 Runtime 契约。 */
-const sdkRuntime = new SdkRuntimeBridge(sdkHostManager)
+/** 会话运行注册表：应用级运行身份、绑定代际与会话占用的唯一登记处。 */
+const sessionRuns = new SessionRunRegistry<SdkHostManager>()
+/** 页面会话主链后端：按注册表定位运行实例，宿主按需建立，失败分类在此映射回既有 Runtime 契约。 */
+const sdkRuntime = new SdkRuntimeBridge({
+  runs: sessionRuns,
+  // 授权回路接主进程会话编排：宿主不能自行授权项目或任意会话路径。
+  createHost: (runId) => {
+    const host = new SdkHostManager({ runId, runs: sessionRuns })
+    host.setSessionAuthority((reference, ownerProjectPath) => sessionManager.prepareSdkTarget(reference, ownerProjectPath))
+    return host
+  }
+})
 /** 本地配置文件的唯一读写者；本文件的所有字段共用同一份配置与写入队列。 */
 const configStore = new DesktopConfigStore()
 const trustManager = new TrustManager({ store: configStore })
@@ -208,17 +218,17 @@ const projectManager = new ProjectManager({
   chooseDirectory: chooseDirectoryWithDialog,
   runtime: sdkRuntime,
   store: configStore,
-  trust: trustManager
+  trust: trustManager,
+  runs: sessionRuns
 })
 const sessionManager = new SessionManager({
   projects: projectManager,
   sdk: sdkRuntime,
-  projectsTrust: trustManager
+  projectsTrust: trustManager,
+  ownership: sessionRuns
 })
 /** MCP 服务器探测与取消：与当前会话无关，只按项目跑一次性官方 CLI 进程。 */
 const mcpInspection = new McpInspectionManager()
-/** SDK 内部授权回路接主进程会话编排；宿主不能自行授权项目或任意会话路径。 */
-sdkHostManager.setSessionAuthority((reference, projectPath) => sessionManager.prepareSdkTarget(reference, projectPath))
 /** 项目文件索引：根路径只取当前项目，页面无法指定检索目录。 */
 const projectFileIndex = new ProjectFileIndex({
   currentProjectPath: () => projectManager.currentProjectPath()
@@ -737,7 +747,7 @@ function registerSessionHandlers(pageUrl: string): void {
     }
   )
 
-  /** 重新加载 Pi 资源：重启 Runtime 并尽量恢复当前会话；只接受显式中断确认，信任拦截与打开一致。 */
+  /** 重新加载 Pi 资源：在同一 SDK 宿主进程内重建该会话的 services，并尽量恢复当前会话；只接受显式中断确认，信任拦截与打开一致。 */
   handle(
     SESSION_RELOAD_CHANNEL,
     async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<SessionOpenResult> => {
@@ -1759,9 +1769,9 @@ app.on('before-quit', (event) => {
   event.preventDefault()
   quittingAfterShutdown = true
   // 退出意图立即阻止恢复，不等其他关闭链结束后才停止重建。
-  sdkHostManager.beginShutdown()
-  // 宿主关闭与其他关闭链并行开始，不因其它链的失败而遗留一个仍受管的 SDK 进程。
-  const sdkShutdown = sdkHostManager.shutdown().catch(() => {
+  sdkRuntime.beginShutdown()
+  // 全部宿主关闭与其他关闭链并行开始，不因其它链的失败而遗留仍受管的 SDK 进程。
+  const sdkShutdown = sdkRuntime.shutdown().catch(() => {
     console.error('SDK 宿主未确认退出，应用按关闭预算退出。')
   })
   void (async () => {

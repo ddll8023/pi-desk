@@ -45,7 +45,7 @@ export async function openSession(
   }
 }
 
-/** 重新加载 Pi 资源：重启 Runtime 并尽量恢复当前会话；`allowInterrupt` 表示用户已确认可以中断。 */
+/** 重新加载 Pi 资源：在同一 SDK 宿主进程内重建该会话的 services，并尽量恢复当前会话；`allowInterrupt` 表示用户已确认可以中断。 */
 export async function reloadSession(allowInterrupt: boolean): Promise<SessionOpenResult> {
   const bridge = window.desktop
   if (!bridge || typeof bridge.reloadSession !== 'function') return unavailable()

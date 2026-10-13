@@ -129,8 +129,8 @@ export const useSessionStore = defineStore('session', () => {
   }
 
   /**
-   * 重新加载 Pi 资源：重启 Runtime 并尽量恢复当前会话。
-   * RPC 没有重载命令，资源只在进程启动时读取，因此唯一的重载方式是重启。
+   * 重新加载 Pi 资源：在同一 SDK 宿主进程内重建该会话的 services（重新读取 Skills、Prompt Templates、
+   * MCP 配置与 Extension），并尽量恢复当前会话。
    */
   async function reloadCurrent(allowInterrupt = false): Promise<void> {
     if (opening.value) return

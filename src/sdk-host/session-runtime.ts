@@ -9,7 +9,8 @@ import { MessageProjection } from '../projection/message-projection'
 import { OutputRateTracker } from '../projection/output-rate'
 import { SDK_HOST_PROTOCOL_VERSION } from './protocol'
 import type {
-  SdkHostFailureCode, SdkMcpCommandAction, SdkSessionReference, SdkSessionRequest, SdkSessionStatus, SdkSessionTarget
+  SdkHostFailureCode, SdkMcpCommandAction, SdkSessionAuthorization, SdkSessionReference, SdkSessionRequest,
+  SdkSessionStatus, SdkSessionTarget
 } from './protocol'
 import type {
   AgentCapabilities, ExtensionErrorEntry, McpStatus, ModelSummary, OutputRate, PiResourceEntry, PiResources,
@@ -22,7 +23,7 @@ type RuntimeFactory = Parameters<Sdk['createAgentSessionRuntime']>[0]
 interface RuntimeOptions {
   readonly hostId: number
   readonly agentDir: string
-  readonly authorize: (reference: SdkSessionReference, bindingId: number | null, projectPath: string | null) => Promise<SdkSessionTarget>
+  readonly authorize: (reference: SdkSessionReference, bindingId: number | null, projectPath: string | null) => Promise<SdkSessionAuthorization>
   readonly onState: (status: SdkSessionStatus) => void
   readonly onUiRequest: (bindingId: number, payload: Record<string, unknown>) => void
   readonly onUiCancel: (bindingId: number, dialogId: string) => void
@@ -204,7 +205,8 @@ export class SdkSessionRuntime {
   private target: SdkSessionTarget | null = null
   /** 准备目标与实际活动项目分开，前置钩子取消时不能把旧对象改称新目标。 */
   private factoryTarget: SdkSessionTarget | null = null
-  private bindingSeed = 0
+  /** 主进程注册表为该次重绑分配的应用级绑定代际；绑定成功前为空。 */
+  private pendingGeneration: number | null = null
   private creationSeed = 0
   private currentCreation: number | null = null
   private readonly creations = new WeakMap<AgentSession, number>()
@@ -276,7 +278,8 @@ export class SdkSessionRuntime {
         if (request.target === null) throw new SdkSessionFailure('INVALID_SESSION_TARGET')
         const reference: SdkSessionReference = request.action === 'open' && request.target.sessionFile !== null
           ? { kind: 'file', sessionFile: request.target.sessionFile } : { kind: 'new' }
-        const fresh = await this.options.authorize(reference, this.bindingId, request.target.projectPath)
+        const authorized = await this.options.authorize(reference, this.bindingId, request.target.projectPath)
+        const fresh = authorized.target
         if (!samePath(fresh.projectPath, request.target.projectPath)
           || fresh.trusted !== request.target.trusted
           || (request.action === 'open' && (fresh.sessionId !== request.target.sessionId
@@ -289,6 +292,8 @@ export class SdkSessionRuntime {
           await this.settleCurrent()
         }
         if (this.closing) throw new SdkSessionFailure('HOST_NOT_READY')
+        // 代际紧邻实际重绑前固定；取消确认或前置检查失败时不会建立绑定。
+        this.pendingGeneration = authorized.generation
         if (request.action === 'reload') await this.reload(fresh)
         else {
           this.factoryTarget = fresh
@@ -433,6 +438,10 @@ export class SdkSessionRuntime {
     this.operationDone = new Promise<void>(resolvePromise => { finish = resolvePromise })
     this.publish()
     try {
+      // 分叉会替换当前绑定，因此同样要先经注册表授权并取得新的绑定代际。
+      const authorized = await this.options.authorize({ kind: 'new' }, this.bindingId, this.target?.projectPath ?? null)
+      this.factoryTarget = authorized.target
+      this.pendingGeneration = authorized.generation
       const result = await this.runtimeRequired().fork(entry.id, { position: 'before' })
       return { cancelled: result.cancelled, text: result.selectedText ?? null }
     } catch (error) {
@@ -703,7 +712,17 @@ export class SdkSessionRuntime {
     this.phase = 'preparing'
     this.lastError = null
     this.extensionErrors = []
-    this.bindingId = ++this.bindingSeed
+    // 绑定代际只能来自主进程注册表；缺失时不自行编号，按绑定失败收敛。
+    const generation = this.pendingGeneration
+    this.pendingGeneration = null
+    if (generation === null) {
+      this.needsHostRebuild = true
+      this.phase = 'blocked'
+      this.lastError = 'SESSION_BIND_FAILED'
+      this.publish()
+      throw new SdkSessionFailure('SESSION_BIND_FAILED')
+    }
+    this.bindingId = generation
     this.activityVersion += 1
     const bindingId = this.bindingId
     try {
@@ -756,10 +775,11 @@ export class SdkSessionRuntime {
       waitForIdle: () => session.waitForIdle(),
       newSession: options => this.extensionAction(async () => this.runtimeRequired().newSession(options)),
       switchSession: (path, options) => this.extensionAction(async () => {
-        const target = await this.options.authorize({ kind: 'file', sessionFile: path }, this.bindingId, this.target?.projectPath ?? null)
-        await this.precheck(target)
-        this.factoryTarget = target
-        return this.runtimeRequired().switchSession(target.sessionFile ?? path, { ...options, cwdOverride: target.projectPath })
+        const authorized = await this.options.authorize({ kind: 'file', sessionFile: path }, this.bindingId, this.target?.projectPath ?? null)
+        await this.precheck(authorized.target)
+        this.factoryTarget = authorized.target
+        this.pendingGeneration = authorized.generation
+        return this.runtimeRequired().switchSession(authorized.target.sessionFile ?? path, { ...options, cwdOverride: authorized.target.projectPath })
       }),
       fork: (entryId, options) => this.extensionAction(async () => this.runtimeRequired().fork(entryId, options)),
       navigateTree: (entryId, options) => this.extensionAction(async () => {
@@ -768,8 +788,9 @@ export class SdkSessionRuntime {
       }),
       reload: async () => {
         const result = await this.extensionAction(async () => {
-          const target = await this.options.authorize({ kind: 'new' }, this.bindingId, this.target?.projectPath ?? null)
-          await this.reload(target)
+          const authorized = await this.options.authorize({ kind: 'new' }, this.bindingId, this.target?.projectPath ?? null)
+          this.pendingGeneration = authorized.generation
+          await this.reload(authorized.target)
           return { cancelled: false }
         })
         if (result.cancelled) throw new SdkSessionFailure('SESSION_BUSY')
@@ -826,10 +847,11 @@ export class SdkSessionRuntime {
     this.operationDone = new Promise<void>(resolvePromise => { finish = resolvePromise })
     this.publish()
     try {
-      const target = await this.options.authorize({ kind: 'new' }, this.bindingId, this.target?.projectPath ?? null)
+      const authorized = await this.options.authorize({ kind: 'new' }, this.bindingId, this.target?.projectPath ?? null)
       if (bindingId !== this.bindingId || this.closing || this.needsHostRebuild
         || (this.isBusy() && activityVersion !== this.activityVersion)) throw new SdkSessionFailure('STALE_SESSION')
-      this.factoryTarget = target
+      this.factoryTarget = authorized.target
+      this.pendingGeneration = authorized.generation
       await this.settleCurrent()
       return await action()
     } catch (error) {
@@ -982,7 +1004,9 @@ export class SdkSessionRuntime {
     if (session === null || !this.valid) throw new SdkSessionFailure('STALE_SESSION')
     let manager = session.sessionManager
     if (session.sessionFile !== undefined && existsSync(session.sessionFile)) {
-      fresh = await this.options.authorize({ kind: 'file', sessionFile: session.sessionFile }, this.bindingId, fresh.projectPath)
+      const authorized = await this.options.authorize({ kind: 'file', sessionFile: session.sessionFile }, this.bindingId, fresh.projectPath)
+      fresh = authorized.target
+      this.pendingGeneration = authorized.generation
       await this.precheck(fresh)
       manager = this.sdk.SessionManager.open(fresh.sessionFile ?? session.sessionFile, fresh.sessionDir, fresh.projectPath)
     } else if (session.messages.some(message => message.role === 'user' || message.role === 'assistant')) {

@@ -2,7 +2,7 @@
 import { randomUUID } from 'node:crypto'
 import { isAbsolute, resolve } from 'node:path'
 import { SDK_HOST_PROTOCOL_VERSION, isSdkHostRequest } from './protocol'
-import type { SdkHostFrame, SdkHostEvent, SdkHostRequest, SdkHostFailureCode, SdkSessionReference, SdkSessionTarget } from './protocol'
+import type { SdkHostFrame, SdkHostEvent, SdkHostRequest, SdkHostFailureCode, SdkSessionAuthorization, SdkSessionReference } from './protocol'
 import { SdkSessionFailure, SdkSessionRuntime } from './session-runtime'
 
 const parentPort = process.parentPort
@@ -18,7 +18,7 @@ let shutdownTask: Promise<void> | null = null
 const authorizations = new Map<string, {
   readonly bindingId: number | null
   readonly timer: ReturnType<typeof setTimeout>
-  readonly resolve: (target: SdkSessionTarget) => void
+  readonly resolve: (authorization: SdkSessionAuthorization) => void
   readonly reject: (error: SdkSessionFailure) => void
 }>()
 
@@ -35,8 +35,11 @@ function samePath(left: string, right: string): boolean {
   return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b
 }
 
-/** 反向授权只是只读目标准备；回应直接解除 Promise，不进入会话操作队列。 */
-function authorize(reference: SdkSessionReference, bindingId: number | null, projectPath: string | null): Promise<SdkSessionTarget> {
+/**
+ * 反向授权只是只读目标准备；回应直接解除 Promise，不进入会话操作队列。
+ * 绑定代际只能来自主进程，因此与目标一起返回，宿主不另行编号。
+ */
+function authorize(reference: SdkSessionReference, bindingId: number | null, projectPath: string | null): Promise<SdkSessionAuthorization> {
   const currentHostId = hostId
   if (currentHostId === null || closing || authorizations.size >= 8) return Promise.reject(new SdkSessionFailure('AUTHORIZATION_FAILED'))
   const requestId = randomUUID()
@@ -127,8 +130,11 @@ async function dispatch(request: SdkHostRequest): Promise<void> {
     if (pending === undefined || pending.bindingId !== request.bindingId) return
     authorizations.delete(request.requestId)
     clearTimeout(pending.timer)
-    if (request.target !== null && request.error === null) pending.resolve(request.target)
-    else pending.reject(new SdkSessionFailure(request.error ?? 'AUTHORIZATION_FAILED'))
+    if (request.target !== null && request.error === null && request.generation !== null) {
+      pending.resolve({ target: request.target, generation: request.generation })
+    } else {
+      pending.reject(new SdkSessionFailure(request.error ?? 'AUTHORIZATION_FAILED'))
+    }
     return
   }
   const runtime = sessions

@@ -77,8 +77,10 @@ export interface ExtensionUiState {
   readonly invalidCount: number
 }
 
-/** 状态快照带代际与递增序号；渲染端按序丢弃过期快照。 */
+/** 状态快照带来源运行实例、代际与递增序号；渲染端按运行实例与序号丢弃过期快照。 */
 export interface ExtensionUiSnapshot {
+  /** 来源运行实例；没有前台运行实例时为 null，桥接层补充，宿主协议载荷不带。 */
+  readonly runId?: number | null
   readonly runtimeId: number | null
   readonly seq: number
   readonly state: ExtensionUiState
@@ -101,8 +103,9 @@ export type ExtensionUiResult =
 
 /** 渲染端可用的受限 Extension UI 桥接；订阅返回释放函数，页面卸载时必须调用。 */
 export interface ExtensionUiApi {
-  readonly getExtensionUiState: () => Promise<ExtensionUiResult>
+  readonly getExtensionUiState: (runId: number) => Promise<ExtensionUiResult>
   readonly respondExtensionDialog: (
+    target: { readonly runId: number; readonly runtimeId: number },
     dialogId: string,
     response: ExtensionDialogResponseInput
   ) => Promise<ExtensionUiResult>
@@ -327,9 +330,24 @@ function isExtensionUiState(value: unknown): value is ExtensionUiState {
 /** 快照校验；跨进程返回与事件载荷都只放行本契约。 */
 export function isExtensionUiSnapshot(value: unknown): value is ExtensionUiSnapshot {
   if (!isRecord(value)) return false
+  // runId 是桥接层补充字段：缺失（宿主协议载荷）或为数字都放行，由页面按前台过滤。
+  if (value.runId !== undefined && value.runId !== null
+    && (typeof value.runId !== 'number' || !Number.isSafeInteger(value.runId))) return false
   if (value.runtimeId !== null && typeof value.runtimeId !== 'number') return false
   if (!isCount(value.seq)) return false
   return isExtensionUiState(value.state)
+}
+
+/** 响应提交目标只放行运行实例与代际身份。 */
+export function isExtensionDialogTarget(value: unknown): value is { readonly runId: number; readonly runtimeId: number } {
+  if (!isRecord(value)) return false
+  return typeof value.runId === 'number'
+    && Number.isSafeInteger(value.runId)
+    && value.runId > 0
+    && typeof value.runtimeId === 'number'
+    && Number.isSafeInteger(value.runtimeId)
+    && value.runtimeId > 0
+    && Object.keys(value).every(key => key === 'runId' || key === 'runtimeId')
 }
 
 /** 事件载荷校验；契约不符时渲染端丢弃，由快照重同步。 */

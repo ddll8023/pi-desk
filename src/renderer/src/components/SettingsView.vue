@@ -91,7 +91,7 @@ function backToAppearance(): void {
             </div>
             <AppButton variant="compact" aria-label="管理 Pi 资源" @click="openSection('resources')">管理</AppButton>
           </div>
-          <p class="mt-3 text-xs text-desk-muted">其中 Pi 配置的改动需要重启 Runtime 才会生效。</p>
+          <p class="mt-3 text-xs text-desk-muted">其中 Pi 配置的改动需要在重新加载会话后才会生效。</p>
         </section>
       </template>
 

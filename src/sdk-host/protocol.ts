@@ -10,7 +10,10 @@ import type {
   RuntimeDiagnostics, SessionUsage
 } from '../shared/runtime-api'
 
-export const SDK_HOST_PROTOCOL_VERSION = 2
+export const SDK_HOST_PROTOCOL_VERSION = 3
+/**
+ * `hostId` 是主进程注册表分配的应用级运行身份；宿主不能自行编号，重启后也不会复用旧值。
+ */
 interface HostEnvelope { readonly version: typeof SDK_HOST_PROTOCOL_VERSION; readonly hostId: number }
 interface RequestEnvelope extends HostEnvelope { readonly requestId: string }
 
@@ -19,6 +22,15 @@ export type SdkSessionReference =
   | { readonly kind: 'new' }
   | { readonly kind: 'id'; readonly sessionId: string }
   | { readonly kind: 'file'; readonly sessionFile: string }
+
+/**
+ * 主进程授权结果：目标，以及主进程注册表为该次绑定分配的应用级绑定代际。
+ * 代际只在主进程分配，宿主不得自行编号，旧代际的动作与事件都不允许命中新绑定。
+ */
+export interface SdkSessionAuthorization {
+  readonly target: SdkSessionTarget
+  readonly generation: number
+}
 
 /** 主进程授权的目标；fileStamp 是只读身份线索，不是持久化配置或跨应用写锁。 */
 export interface SdkSessionTarget {
@@ -43,6 +55,7 @@ export type SdkHostFailureCode =
 /** bound 只表示内部绑定完成，绝不代表历史已同步或页面可提交。 */
 export interface SdkSessionStatus {
   readonly phase: 'empty' | 'preparing' | 'bound' | 'invalid' | 'blocked' | 'failed'
+  /** 主进程注册表分配的应用级绑定代际；未绑定时为 null。 */
   readonly bindingId: number | null
   readonly activityVersion: number
   readonly operationId: string | null
@@ -122,7 +135,8 @@ export type SdkHostRequest =
   | (RequestEnvelope & { readonly type: 'ui-response'; readonly bindingId: number;
       readonly dialogId: string; readonly response: ExtensionDialogResponseInput })
   | (RequestEnvelope & { readonly type: 'authorization-result'; readonly bindingId: number | null;
-      readonly target: SdkSessionTarget | null; readonly error: SdkHostFailureCode | null })
+      readonly target: SdkSessionTarget | null; readonly error: SdkHostFailureCode | null;
+      readonly generation: number | null })
 
 export type SdkHostFrame =
   | (RequestEnvelope & { readonly type: 'ready'; readonly agentDir: string; readonly sdkVersion: string })
@@ -287,9 +301,9 @@ export function isSdkHostRequest(value: unknown): value is SdkHostRequest {
     case 'ui-response': return isIdentity(value.bindingId) && isIdentifier(value.dialogId)
       && isExtensionDialogResponseInput(value.response) && requestKeys(value, ['bindingId', 'dialogId', 'response'])
     case 'authorization-result': return (value.bindingId === null || isIdentity(value.bindingId))
-      && ((isSdkSessionTarget(value.target) && value.error === null)
-        || (value.target === null && isSdkHostFailureCode(value.error)))
-      && requestKeys(value, ['bindingId', 'target', 'error'])
+      && ((isSdkSessionTarget(value.target) && value.error === null && isIdentity(value.generation))
+        || (value.target === null && isSdkHostFailureCode(value.error) && value.generation === null))
+      && requestKeys(value, ['bindingId', 'target', 'error', 'generation'])
     default: return false
   }
 }

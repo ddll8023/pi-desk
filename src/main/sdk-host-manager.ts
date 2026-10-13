@@ -25,6 +25,7 @@ import { ExtensionUiManager } from './extension-ui-manager'
 import type { ExtensionDialogResponseInput, ExtensionUiSnapshot } from '../shared/extension-ui-api'
 import { getPiAgentDir, getPiProcessEnvironment } from './pi-paths'
 import { validatePromptInput } from './prompt-input'
+import type { SdkHostRunRegistry } from './session-run-registry'
 
 const READY_TIMEOUT_MS = 30_000
 const SHUTDOWN_RESPONSE_MS = 6_000
@@ -147,7 +148,7 @@ export interface SdkHostStatus {
 }
 
 export type SdkSessionAuthority = (
-  reference: SdkSessionReference, expectedProjectPath: string | null
+  reference: SdkSessionReference, ownerProjectPath: string
 ) => Promise<SdkSessionTarget>
 
 interface PendingRequest {
@@ -194,6 +195,9 @@ const FAILURE_MESSAGES: Record<SdkHostFailureCode, string> = {
   INTERACTION_INVALID: '扩展交互已失效或回应无效。'
 }
 
+/** 宿主失败分类的固定文案；映射层与运行实例调用点复用同一份字面量，不重复硬编码。 */
+export const SDK_HOST_FAILURE_MESSAGES = FAILURE_MESSAGES
+
 /** 入口与主进程产物保持固定相邻布局；页面不能指定脚本、参数或替代 SDK。 */
 function getSdkHostEntryPath(): string {
   return resolve(__dirname, '..', 'sdk-host', 'index.mjs')
@@ -206,10 +210,16 @@ function samePath(left: string, right: string): boolean {
   return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b
 }
 
+export interface SdkHostManagerOptions {
+  /** 应用级运行身份；由主进程注册表分配，宿主不自行编号。 */
+  readonly runId: number
+  /** 运行实例登记与绑定代际分配；归属项目只以登记结果为准。 */
+  readonly runs: SdkHostRunRegistry
+}
+
 export class SdkHostManager {
   private active: HostRecord | null = null
   private starting: Promise<SdkHostStatus> | null = null
-  private hostIdSeed = 0
   private wanted = false
   private shuttingDown = false
   private automaticRebuilds = 0
@@ -237,11 +247,12 @@ export class SdkHostManager {
     state: 'idle', hostId: null, sdkVersion: null, lastError: null
   }
 
+  constructor(private readonly options: SdkHostManagerOptions) {}
+
   /** 查询仅返回已持有状态，绝不为了展示建立宿主。 */
   getStatus(): SdkHostStatus {
     return { ...this.snapshot }
   }
-
   /** 订阅生命周期结果；页面状态映射由 sdk-runtime-bridge 完成。 */
   onStatusChanged(listener: (status: SdkHostStatus) => void): () => void {
     this.listeners.add(listener)
@@ -465,7 +476,8 @@ export class SdkHostManager {
         if (this.authority === null || (action === 'open' && reference.kind === 'new')) {
           throw new SdkHostError('INVALID_SESSION_TARGET', FAILURE_MESSAGES.INVALID_SESSION_TARGET)
         }
-        target = await this.authority(action === 'open' ? reference : { kind: 'new' }, null)
+        target = await this.authority(action === 'open' ? reference : { kind: 'new' },
+          this.requireOwnerProject())
         if (!isSdkSessionTarget(target)) throw new SdkHostError('INVALID_SESSION_TARGET', FAILURE_MESSAGES.INVALID_SESSION_TARGET)
       }
       if (this.active !== record || record.closing || expected.bindingId !== this.sessionSnapshot.bindingId) {
@@ -537,6 +549,13 @@ export class SdkHostManager {
       throw new SdkHostError('HOST_NOT_READY', FAILURE_MESSAGES.HOST_NOT_READY)
     }
     return record
+  }
+
+  /** 归属项目只来自注册表登记结果；未登记时不允许授权任何目标。 */
+  private requireOwnerProject(): string {
+    const ownerProjectPath = this.options.runs.projectOfRun(this.options.runId)
+    if (ownerProjectPath === null) throw new SdkHostError('INVALID_SESSION_TARGET', FAILURE_MESSAGES.INVALID_SESSION_TARGET)
+    return ownerProjectPath
   }
 
   /** 控制请求同样需要固定宿主与绑定，关闭协商期间仍可解除原上下文等待。 */
@@ -630,7 +649,7 @@ export class SdkHostManager {
       let resolveExit: () => void = () => {}
       const exitPromise = new Promise<void>(resolvePromise => { resolveExit = resolvePromise })
       record = {
-        child, hostId: ++this.hostIdSeed, agentDir, pending: new Map(),
+        child, hostId: this.options.runId, agentDir, pending: new Map(),
         exitPromise, resolveExit, authorizations: new Set(), output: new HostOutputTail(), eventSeq: 0,
         ready: false, established: false, exited: false,
         intentionalExit: false, closing: false, closePromise: null
@@ -794,6 +813,8 @@ export class SdkHostManager {
     const previous = this.sessionSnapshot
     record.eventSeq = seq
     this.sessionSnapshot = { ...status }
+    // 绑定代际由注册表分配，这里只记录宿主实际报告的代际，供后续来源校验对照。
+    this.options.runs.recordBinding(this.options.runId, status.bindingId)
     if (previous.bindingId !== status.bindingId || status.phase === 'invalid'
       || status.phase === 'empty' || status.phase === 'failed' || status.phase === 'blocked') {
       this.ui.beginGeneration(status.phase === 'invalid' || status.phase === 'empty'
@@ -814,19 +835,28 @@ export class SdkHostManager {
     record.authorizations.add(event.requestId)
     let target: SdkSessionTarget | null = null
     let error: SdkHostFailureCode | null = null
+    let generation: number | null = null
     try {
       if (this.authority === null || record.closing || event.bindingId !== this.sessionSnapshot.bindingId) {
         throw new SdkHostError('STALE_SESSION', FAILURE_MESSAGES.STALE_SESSION)
       }
-      target = await this.authority(event.reference, event.projectPath)
+      // 归属项目只取注册表登记值；宿主自报的项目仅做一致性复核，不作为授权依据。
+      const ownerProjectPath = this.requireOwnerProject()
+      if (event.projectPath !== null && !samePath(event.projectPath, ownerProjectPath)) {
+        throw new SdkHostError('STALE_SESSION', FAILURE_MESSAGES.STALE_SESSION)
+      }
+      target = await this.authority(event.reference, ownerProjectPath)
       if (!isSdkSessionTarget(target)) throw new SdkHostError('INVALID_SESSION_TARGET', FAILURE_MESSAGES.INVALID_SESSION_TARGET)
-    } catch (failure) { error = this.authorizationFailure(failure); target = null }
+      // 代际紧邻实际重绑前分配；授权失败不分配，编号缺口不影响唯一性。
+      generation = this.options.runs.allocateGeneration(this.options.runId)
+    } catch (failure) { error = this.authorizationFailure(failure); target = null; generation = null }
     finally { record.authorizations.delete(event.requestId) }
     if (this.active !== record || record.exited || record.closing
       || event.bindingId !== this.sessionSnapshot.bindingId) return
     try {
       record.child.postMessage({ version: SDK_HOST_PROTOCOL_VERSION, hostId: record.hostId,
-        requestId: event.requestId, type: 'authorization-result', bindingId: event.bindingId, target, error } satisfies SdkHostRequest)
+        requestId: event.requestId, type: 'authorization-result', bindingId: event.bindingId,
+        target, error, generation } satisfies SdkHostRequest)
     } catch { this.failTransport(record, '无法向宿主发送授权结果') }
   }
 
@@ -868,6 +898,7 @@ export class SdkHostManager {
   /** 协议失效先限制能力，再收回该宿主；不能继续信任一个仍存活的错误通道。 */
   private failTransport(record: HostRecord, detail: string): void {
     this.reportHostFailure(record, 'HOST_PROTOCOL_ERROR', detail)
+    this.options.runs.markUnconfirmed(this.options.runId)
     this.invalidateSession()
     record.ready = false
     record.intentionalExit = true
@@ -890,6 +921,8 @@ export class SdkHostManager {
     this.active = null
     record.authorizations.clear()
     if (!record.intentionalExit && !this.shuttingDown) {
+      // 未确认退出的运行实例保留占用，未确认前不建立替代实例。
+      this.options.runs.markUnconfirmed(this.options.runId)
       this.reportHostFailure(record, 'HOST_EXITED', '宿主进程已退出但未确认关闭')
     }
     this.invalidateSession()

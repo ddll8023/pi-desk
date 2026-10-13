@@ -285,7 +285,7 @@ function cancelDefinition(): void {
 
 /** 保存成功：给出提示、关掉弹窗并让刚保存的供应商就地展开。 */
 function onSaved(id: string): void {
-  notice.value = `已保存供应商 ${id}；改动需要重启 Runtime 后才会反映到顶栏的模型列表。`
+  notice.value = `已保存供应商 ${id}；改动需要重新加载会话后才会反映到顶栏的模型列表。`
   creating.value = false
   expandedId.value = id
   void revealExpanded(id)
@@ -313,7 +313,7 @@ async function confirmDelete(): Promise<void> {
   const removed = await modelsConfigStore.remove(id)
   pendingDelete.value = null
   if (!removed) return
-  notice.value = `已删除供应商 ${id}；改动需要重启 Runtime 后才会生效。`
+  notice.value = `已删除供应商 ${id}；改动需要重新加载会话后才会生效。`
   if (expandedId.value === id) expandedId.value = null
 }
 
@@ -710,7 +710,7 @@ onUnmounted(() => {
       :open="pendingDelete !== null"
       title="删除自定义供应商"
       :description="`将从 models.json 中移除供应商 ${pendingDelete ?? ''} 的条目。`"
-      detail="只删除这一个条目；其他供应商与 Pi 的其他配置都不受影响。删除后需要重启 Runtime 才会生效。"
+      detail="只删除这一个条目；其他供应商与 Pi 的其他配置都不受影响。删除后需要重新加载会话才会生效。"
       confirm-label="删除"
       @confirm="confirmDelete"
       @cancel="pendingDelete = null"

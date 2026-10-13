@@ -367,8 +367,8 @@ const resourceCountLabel = computed(() => (
     : `${totalResourceCount.value} 项`
 ))
 
-/** 重载按钮的文案：就绪时是重启，未就绪时这一步实际是启动 Runtime。 */
-const reloadLabel = computed(() => (runtimeReady.value ? '重启 Runtime 以重新加载' : '启动 Runtime'))
+/** 重载按钮的文案：就绪时重建当前会话的 SDK services；未就绪时这一步实际是启动 Runtime。 */
+const reloadLabel = computed(() => (runtimeReady.value ? '重新加载资源' : '启动 Runtime'))
 
 /** 没有项目时两个按钮都无法执行：清单与重载都以当前项目为输入。 */
 const resourceActionsDisabled = computed(() => currentProject.value === null)
@@ -379,7 +379,7 @@ const resourceActionsDisabled = computed(() => currentProject.value === null)
     <header>
       <h1 class="text-xl font-semibold tracking-tight">Pi 资源</h1>
       <p class="mt-1 text-sm text-desk-muted">
-        资源与 MCP 配置只在 Pi 启动时读取；改动配置后需要重启 Runtime 才会生效。
+        资源与 MCP 配置在会话建立或重载时读取；改动配置后需要重新加载会话才会生效。
       </p>
     </header>
 

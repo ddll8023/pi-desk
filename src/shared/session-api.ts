@@ -3,7 +3,7 @@ import type { RuntimeErrorCode } from './runtime-api'
 
 export const SESSION_LIST_CHANNEL = 'desktop:session-list'
 export const SESSION_OPEN_CHANNEL = 'desktop:session-open'
-/** 重新加载 Pi 资源：重启 Runtime 并尽量恢复当前会话；`allowInterrupt` 与会话打开同义。 */
+/** 重新加载 Pi 资源：在同一 SDK 宿主进程内重建该会话的 services，并尽量恢复当前会话；`allowInterrupt` 与会话打开同义。 */
 export const SESSION_RELOAD_CHANNEL = 'desktop:session-reload'
 
 /**
@@ -67,8 +67,8 @@ export interface SessionApi {
     allowInterrupt: boolean
   ) => Promise<SessionOpenResult>
   /**
-   * 重新加载 Pi 资源：重启 Runtime 并尽量恢复当前会话；`allowInterrupt` 只有用户已确认时才为真。
-   * RPC 没有重载命令，资源只在进程启动时读取，因此唯一的重载方式是重启。
+   * 重新加载 Pi 资源：在同一 SDK 宿主进程内重建该会话的 services（重新读取 Skills、Prompt Templates、
+   * MCP 配置与 Extension），并尽量恢复当前会话；`allowInterrupt` 只有用户已确认时才为真。
    */
   readonly reloadSession: (allowInterrupt: boolean) => Promise<SessionOpenResult>
 }
