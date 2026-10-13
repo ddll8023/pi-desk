@@ -12,7 +12,6 @@ import type { ChildProcess } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
-import { app } from 'electron'
 import { getPiProcessEnvironment } from './pi-paths'
 import { AUTH_HELPER_MAX_RECORD_CHARS, isAuthHelperFrame } from '../auth-helper/protocol'
 import type { AuthHelperFrame, AuthHelperRequest } from '../auth-helper/protocol'
@@ -46,11 +45,9 @@ export interface AuthHelperHandlers {
   readonly onExit: (event: AuthHelperExitEvent) => void
 }
 
-/** 入口路径固定：开发期是构建产物目录，正式包从资源目录读取同一相对子路径。 */
+/** 入口与主进程产物保持固定相邻布局：开发态与打包态读取同一相对子路径，页面不能指定路径。 */
 export function getAuthHelperEntryPath(): string {
-  return app.isPackaged
-    ? join(process.resourcesPath, 'auth-helper', HELPER_ENTRY_NAME)
-    : resolve(__dirname, '..', 'auth-helper', HELPER_ENTRY_NAME)
+  return resolve(__dirname, '..', 'auth-helper', HELPER_ENTRY_NAME)
 }
 
 export class AuthHelperProcess {

@@ -1,6 +1,7 @@
 /** 管理唯一桌面窗口、本地资产边界，以及应用信息、Project 选择/添加/移除、项目文件检索、Session 与 Project Trust、界面偏好、Runtime、Pi 默认模型、自定义供应商配置、认证、Extension IPC、事件广播及退出编排。 */
+import { mkdirSync } from 'node:fs'
 import { realpath } from 'node:fs/promises'
-import { extname, isAbsolute, relative, resolve, sep } from 'node:path'
+import { dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { app, BrowserWindow, dialog, ipcMain, nativeTheme, net, protocol, session } from 'electron'
 import type { IpcMainInvokeEvent } from 'electron'
@@ -1772,6 +1773,29 @@ app.on('before-quit', (event) => {
     app.exit(0)
   })()
 })
+
+/**
+ * 便携版把 Desktop 自己的配置数据放在可执行文件同级目录，整个文件夹可整体搬移。
+ * macOS 的可执行文件在 `.app` 包体内，同级目录取包体所在的文件夹，避免往包体内写数据。
+ * 只在打包态生效：开发态继续留在系统默认位置，两边数据互不覆盖。
+ * 目录不可写时保留系统默认位置，让应用仍能启动，而不是带着空配置直接失败。
+ */
+function applyPortableDataDirectory(): void {
+  if (!app.isPackaged) return
+  const executable = app.getPath('exe')
+  const root = process.platform === 'darwin'
+    ? resolve(dirname(executable), '..', '..', '..')
+    : dirname(executable)
+  const directory = join(root, 'data')
+  try {
+    mkdirSync(directory, { recursive: true })
+    app.setPath('userData', directory)
+  } catch {
+    console.error('便携数据目录不可用，改用系统默认位置。')
+  }
+}
+
+applyPortableDataDirectory()
 
 /**
  * 单实例：同一份 Desktop 配置只能由一个进程写。

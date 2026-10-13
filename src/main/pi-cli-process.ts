@@ -7,19 +7,16 @@
  */
 import { spawn } from 'node:child_process'
 import type { ChildProcess } from 'node:child_process'
-import { join, resolve } from 'node:path'
-import { app } from 'electron'
+import { resolve } from 'node:path'
 import { getPiProcessEnvironment } from './pi-paths'
 
 /** 运行器入口的固定文件名与所在产物目录；页面不能指定路径。 */
 const CLI_ENTRY_NAME = 'pi-cli.mjs'
 const CLI_OUTPUT_DIRECTORY = 'sdk-host'
 
-/** 入口路径固定：开发期是构建产物目录，正式包从资源目录读取同一相对子路径。 */
+/** 入口与主进程产物保持固定相邻布局：开发态与打包态读取同一相对子路径，页面不能指定路径。 */
 export function getPiCliEntryPath(): string {
-  return app.isPackaged
-    ? join(process.resourcesPath, CLI_OUTPUT_DIRECTORY, CLI_ENTRY_NAME)
-    : resolve(__dirname, '..', CLI_OUTPUT_DIRECTORY, CLI_ENTRY_NAME)
+  return resolve(__dirname, '..', CLI_OUTPUT_DIRECTORY, CLI_ENTRY_NAME)
 }
 
 export interface PiCliSpawnOptions {

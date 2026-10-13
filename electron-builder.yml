@@ -1,0 +1,33 @@
+# 便携出包配置：按平台产出免安装目录与 zip 压缩包，不产出安装器。
+#
+# asar 必须关闭：渲染资源由自定义协议从磁盘读取，处理里对真实路径做 realpath 与 file:// 读取，
+# 归档内的文件对这两条路径都不可用。
+#
+# 架构不在这里声明：目标架构由 scripts/package-portable.mjs 按当前主机架构传入，
+# 原生依赖（含 pi-tui 的平台预编译产物）只保证与安装时的架构一致。
+appId: io.pidesk.desktop
+asar: false
+directories:
+  output: release
+  buildResources: build
+# 只收构建产物；package.json 与生产依赖的 node_modules 由 electron-builder 固定纳入。
+# 三个受管入口（SDK 宿主、CLI 运行器、认证辅助进程）以裸模块名解析官方 SDK，
+# 因此生产依赖必须落在应用目录的 node_modules 下。
+files:
+  - package.json
+  - out/**
+win:
+  # 由 build/icon.svg 自动光栅化并转换；不提供图标时回退 Electron 默认图标。
+  icon: build/icon.svg
+  target:
+    - zip
+  artifactName: pi-desk-${version}-win-${arch}.${ext}
+mac:
+  icon: build/icon.svg
+  target:
+    - zip
+  category: public.app-category.developer-tools
+  # ad-hoc 签名：无证书也能在本机直接运行；electron-builder 会带上内置的
+  # allow-jit 与 disable-library-validation entitlements。换正式证书时改用 CSC_* 环境变量。
+  identity: "-"
+  artifactName: pi-desk-${version}-mac-${arch}.${ext}
