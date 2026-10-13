@@ -134,7 +134,11 @@ const status = computed<{ readonly kind: 'info' | 'error'; readonly text: string
     return { kind: 'info', text: '请先完成项目 Trust 决定；输入会保留，Runtime 就绪后自动发送。' }
   }
   if (promptView.value.phase === 'accepted') {
-    return { kind: 'info', text: acceptedText(promptView.value.disposition) }
+    // 「已开始执行」由消息列表与运行中的停止键表达，不在这里重复播报；
+    // 排队与「已处理但未发起 run」需要解释为什么没开始或没反应，保留文案。
+    return promptView.value.disposition === 'started'
+      ? null
+      : { kind: 'info', text: acceptedText(promptView.value.disposition) }
   }
   if (sessionStore.awaitingInterrupt) {
     return { kind: 'info', text: '请先处理当前操作；输入会保留。' }
@@ -161,10 +165,11 @@ const status = computed<{ readonly kind: 'info' | 'error'; readonly text: string
   return null
 })
 
+/** 排队与「已处理但未发起 run」的结果文案；已开始执行不在信息行重复播报。 */
 function acceptedText(disposition: PromptDisposition): string {
-  if (disposition === 'started') return 'Pi 已接受并开始执行。'
-  if (disposition === 'queued') return 'Pi 已将本次输入排队。'
-  return '本次输入已被处理，未发起新的 Agent run。'
+  return disposition === 'queued'
+    ? 'Pi 已将本次输入排队。'
+    : '本次输入已被处理，未发起新的 Agent run。'
 }
 
 /** 本会话累计用量；主进程未取到统计时为 null。 */
