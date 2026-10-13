@@ -45,12 +45,12 @@ export const useSessionStore = defineStore('session', () => {
     truncated.value = list.truncated
   }
 
-  /** 首次挂载读取列表；重复调用不产生并行请求。 */
+  /** 首次挂载读取列表；这里不去重，重复调用会各自读取一次。 */
   async function initialize(): Promise<void> {
     await refresh()
   }
 
-  /** 重新读取当前项目的会话列表；项目变化或用户手动刷新时调用。 */
+  /** 重新读取当前项目的会话列表；项目变化、用户手动刷新与新建会话落盘后的补读都走这里。 */
   async function refresh(): Promise<void> {
     if (view.value.phase !== 'ready') view.value = { phase: 'loading' }
 
@@ -69,6 +69,26 @@ export const useSessionStore = defineStore('session', () => {
     }
     applyList(result.data)
     view.value = { phase: 'ready' }
+  }
+
+  /** 已经核过列表的会话 id；同一会话不再补读。 */
+  let reconciledSessionId: string | null = null
+
+  /**
+   * 当前会话不在列表里时补读一次列表：Pi 新建会话只分配身份，会话文件到首次写入才创建，
+   * 因此「新建」返回的列表快照可能不含它；调用方应在确有消息落盘后触发。
+   */
+  async function reconcileCurrentSession(sessionId: string | null): Promise<void> {
+    if (sessionId === null || reconciledSessionId === sessionId) return
+    if (sessions.value.some((session) => session.sessionId === sessionId)) {
+      reconciledSessionId = sessionId
+      return
+    }
+
+    reconciledSessionId = sessionId
+    await refresh()
+    // 补读后仍未列出（读取失败等）时清空记账，下一轮结束再试一次。
+    if (!sessions.value.some((session) => session.sessionId === sessionId)) reconciledSessionId = null
   }
 
   /**
@@ -189,6 +209,7 @@ export const useSessionStore = defineStore('session', () => {
     showSessionPicker,
     initialize,
     refresh,
+    reconcileCurrentSession,
     open,
     reloadCurrent,
     retryPendingAfterTrust,

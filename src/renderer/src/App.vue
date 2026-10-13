@@ -1,4 +1,4 @@
-<!-- 主界面外壳：编排项目两阶段添加/移除确认、信任与中断对话框、视图切换、侧栏「新建」到输入坞的聚焦请求及各展示 Store 生命周期。 -->
+<!-- 主界面外壳：编排项目两阶段添加/移除确认、信任与中断对话框、视图切换、侧栏「新建」到输入坞的聚焦请求、新建会话落盘后的会话列表补读及各展示 Store 生命周期。 -->
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
@@ -157,6 +157,25 @@ watch(currentProject, (project, previous) => {
   if (project?.path === previous?.path) return
   void sessionStore.refresh()
 })
+
+/**
+ * Pi 新建会话只分配身份，会话文件到首次写入才创建，「新建」返回的列表快照可能不含当前会话。
+ * 运行时报告这一轮已有消息落盘（不再流式）时补读一次列表，让侧栏用真实文件条目替换占位条目。
+ */
+watch(
+  () => {
+    const info = runtimeStore.view.phase === 'ready' ? runtimeStore.view.snapshot.info : null
+    return {
+      sessionId: info?.sessionId ?? null,
+      messageCount: info?.messageCount ?? 0,
+      streaming: info?.isStreaming ?? false
+    }
+  },
+  (info) => {
+    if (info.streaming || info.messageCount === 0) return
+    void sessionStore.reconcileCurrentSession(info.sessionId)
+  }
+)
 
 onMounted(() => {
   narrowWindowQuery = window.matchMedia('(max-width: 799px)')

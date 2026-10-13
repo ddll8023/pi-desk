@@ -47,6 +47,27 @@ const runtimeInfo = computed(() => (
   runtimeView.value.phase === 'ready' ? runtimeView.value.snapshot.info : null
 ))
 const currentSessionId = computed(() => runtimeInfo.value?.sessionId ?? null)
+/**
+ * 当前会话尚未出现在磁盘列表里（Pi 新建会话的会话文件到首次写入才创建）时，用运行时身份造一条占位条目，
+ * 保证正在对话的会话在侧栏可见；文件出现后由真实摘要接管。
+ */
+const unsavedCurrentSession = computed<SessionSummary | null>(() => {
+  const sessionId = currentSessionId.value
+  if (sessionId === null || sessions.value.some((session) => session.sessionId === sessionId)) return null
+  return {
+    sessionId,
+    createdAt: new Date().toISOString(),
+    updatedAt: Date.now(),
+    sizeBytes: 0,
+    preview: null
+  }
+})
+const visibleSessions = computed<readonly SessionSummary[]>(() => (
+  unsavedCurrentSession.value === null ? sessions.value : [unsavedCurrentSession.value, ...sessions.value]
+))
+function isUnsavedCurrent(session: SessionSummary): boolean {
+  return session.sessionId === currentSessionId.value && unsavedCurrentSession.value !== null
+}
 const sessionBusy = computed(() => opening.value || sessionView.value.phase === 'loading')
 const prefersReducedMotion = useReducedMotion()
 const selectionTransition = computed<NonNullable<Options['transition']>>(() => ({
@@ -71,7 +92,7 @@ function isSmallListChange(previous: readonly string[], next: readonly string[])
 watch(projects, (next, previous) => {
   projectListMotion.value = isSmallListChange(previous.map(p => p.id), next.map(p => p.id))
 }, { flush: 'sync' })
-watch(sessions, (next, previous) => {
+watch(visibleSessions, (next, previous) => {
   sessionListMotion.value = sessionListProjectId === currentProjectId.value
     && isSmallListChange(previous.map(s => s.sessionId), next.map(s => s.sessionId))
   sessionListProjectId = currentProjectId.value
@@ -152,7 +173,12 @@ function createSession(): void {
 }
 
 function sessionTitle(session: SessionSummary): string {
-  return session.preview?.trim() || '未命名会话'
+  return session.preview?.trim() || (isUnsavedCurrent(session) ? '当前会话' : '未命名会话')
+}
+
+/** 尚未落盘的当前会话没有文件时间，显示进行中而不是伪造时间。 */
+function sessionMeta(session: SessionSummary): string {
+  return isUnsavedCurrent(session) ? '进行中' : formatUpdatedAt(session.updatedAt)
 }
 
 function formatUpdatedAt(timestamp: number, full = false): string {
@@ -358,9 +384,9 @@ watch([projects, sessions], () => {
               <p role="alert" class="sidebar-error">{{ sessionView.error.message }}</p>
               <AppButton variant="unstyled" class="project-sidebar-add" @click="sessionStore.refresh()">重试</AppButton>
             </div>
-            <p v-else-if="sessions.length === 0" class="sidebar-empty">还没有保存的会话，开始对话后会显示在这里。</p>
+            <p v-else-if="visibleSessions.length === 0" class="sidebar-empty">还没有保存的会话，开始对话后会显示在这里。</p>
             <TransitionGroup v-else name="sidebar-list" tag="ul" class="session-sidebar-list" :css="sessionListMotion">
-              <li v-for="session in sessions" :key="session.sessionId">
+              <li v-for="session in visibleSessions" :key="session.sessionId">
                 <div
                   class="session-sidebar-row"
                   :class="{ 'is-active': session.sessionId === currentSessionId, 'is-menu-open': isSessionMenuOpen(session.sessionId) }"
@@ -376,10 +402,11 @@ watch([projects, sessions], () => {
                   >
                     <span class="session-sidebar-copy">
                       <span class="session-sidebar-preview">{{ sessionTitle(session) }}</span>
-                      <span class="session-sidebar-meta">{{ formatUpdatedAt(session.updatedAt) }}</span>
+                      <span class="session-sidebar-meta">{{ sessionMeta(session) }}</span>
                     </span>
                   </AppButton>
                   <AppButton
+                    v-if="!isUnsavedCurrent(session)"
                     variant="unstyled" class="sidebar-menu-trigger" data-sidebar-menu-trigger
                     :disabled="sessionBusy" :aria-label="`会话 ${sessionTitle(session)} 的更多操作`"
                     aria-haspopup="dialog" :aria-expanded="isSessionMenuOpen(session.sessionId)"

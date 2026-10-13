@@ -14,14 +14,20 @@ import type { SessionList, SessionSummary } from '../shared/session-api'
 import type { SdkSessionReference } from '../sdk-host/protocol'
 import { getPiAgentDir } from './pi-paths'
 
-/** 头部行与预览共用的单次读取上限；不为此扫描完整会话文件。 */
-const MAX_HEAD_BYTES = 256 * 1024
+/**
+ * 头部行与预览共用的单次读取上限；不为此扫描完整会话文件。
+ * 首条用户消息内嵌图片时单行可达数百 KB，上限取不到就会被截断成「未命名会话」。
+ */
+const MAX_HEAD_BYTES = 1024 * 1024
 
 /** 会话列表上限；超出只保留最近修改的若干条并计数。 */
 const MAX_SESSIONS = 100
 
 /** 预览长度上限；只取首条用户消息的开头。 */
 const MAX_PREVIEW_CHARS = 120
+
+/** Pi 为图片附件注入的坐标说明行，属于重建信息而不是用户输入，不进标题。 */
+const IMAGE_MARKER_PREFIX = '[Image:'
 
 /** Pi 的会话 id 只允许字母、数字、点、下划线与短横线。 */
 const SESSION_ID_PATTERN = /^[A-Za-z0-9._-]+$/
@@ -111,6 +117,20 @@ function readMessageText(content: unknown): string | null {
   return null
 }
 
+/**
+ * 预览文本归一化：丢弃 Pi 注入的 `[Image: …]` 标记行，把剩余空白折叠为单个空格，
+ * 再去掉首尾空白并按上限截断；切成空串时返回 null，由调用方回退为「未命名会话」。
+ */
+function normalizePreviewText(text: string): string | null {
+  const stripped = text
+    .split('\n')
+    .filter((line) => !line.trimStart().startsWith(IMAGE_MARKER_PREFIX))
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  return stripped === '' ? null : stripped.slice(0, MAX_PREVIEW_CHARS)
+}
+
 /** 只识别 message 条目里的首条用户消息文本；其他条目一律忽略。 */
 function previewFromLine(line: string): string | null {
   if (!line.includes('"user"')) return null
@@ -121,12 +141,29 @@ function previewFromLine(line: string): string | null {
   if (!isRecord(message) || message.role !== 'user') return null
 
   const text = readMessageText(message.content)
-  if (text === null) return null
-  const trimmed = text.trim()
-  return trimmed === '' ? null : trimmed.slice(0, MAX_PREVIEW_CHARS)
+  return text === null ? null : normalizePreviewText(text)
 }
 
-/** 单次有界读取：首行是会话头，其余行里找首条用户消息；截断的末行不可信，直接丢弃。 */
+/**
+ * 末行被读取上限截断时的容错预览：不再依赖 JSON 结构，只从这段前缀里取首个文本片段。
+ * 要求用户角色标记出现在文本之前；取不到或转义不完整时返回 null，宁可显示未命名也不猜内容。
+ */
+function previewFromTruncatedLine(line: string): string | null {
+  const roleIndex = line.indexOf('"user"')
+  const match = /"text"\s*:\s*"((?:[^"\\]|\\.)*)"/.exec(line)
+  if (roleIndex < 0 || match === null || match.index < roleIndex) return null
+
+  let text: unknown
+  try {
+    text = JSON.parse(`"${match[1]}"`)
+  } catch {
+    return null
+  }
+  if (typeof text !== 'string') return null
+  return normalizePreviewText(text)
+}
+
+/** 单次有界读取：首行是会话头，其余行里找首条用户消息；截断的末行只做容错解析。 */
 async function readHead(filePath: string): Promise<HeadContent> {
   const handle = await open(filePath, 'r')
   try {
@@ -134,8 +171,8 @@ async function readHead(filePath: string): Promise<HeadContent> {
     const { bytesRead } = await handle.read(buffer, 0, MAX_HEAD_BYTES, 0)
     const text = buffer.subarray(0, bytesRead).toString('utf8')
     const lines = text.split('\n')
-    // 只有读满上限时最后一行才可能被截断，直接丢弃。
-    if (bytesRead === MAX_HEAD_BYTES) lines.pop()
+    // 只有读满上限时最后一行才可能被截断：完整行照常解析，截断的末行留给容错解析。
+    const truncatedTail = bytesRead === MAX_HEAD_BYTES ? lines.pop() ?? null : null
 
     const header = parseJsonRecord(lines.shift())
     let preview: string | null = null
@@ -143,6 +180,7 @@ async function readHead(filePath: string): Promise<HeadContent> {
       preview = previewFromLine(line)
       if (preview !== null) break
     }
+    if (preview === null && truncatedTail !== null) preview = previewFromTruncatedLine(truncatedTail)
     return { header, preview }
   } finally {
     await handle.close()
