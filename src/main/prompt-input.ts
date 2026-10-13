@@ -1,5 +1,6 @@
 /**
  * Prompt 文本与图片附件的校验：宿主提交前的唯一入口。
+ * 文本与图片至少有一项：只发图片不带文字是合法输入，两者都为空才拒绝。
  * 返回固定的线格式图片，不修改调用方输入，也不就地把错误包装成结果对象。
  */
 import type { PromptImageInput } from '../shared/runtime-api'
@@ -21,7 +22,9 @@ export function validatePromptInput(
   images: readonly PromptImageInput[]
 ): { readonly ok: true; readonly images: readonly { readonly type: 'image'; readonly data: string; readonly mimeType: string }[] }
   | { readonly ok: false; readonly message: string } {
-  if (message.trim() === '') return { ok: false, message: 'Prompt 内容不能为空。' }
+  if (message.trim() === '' && images.length === 0) {
+    return { ok: false, message: 'Prompt 内容与图片不能同时为空。' }
+  }
   if (Buffer.byteLength(message, 'utf8') > PROMPT_MAX_BYTES) {
     return { ok: false, message: `Prompt 内容超过 ${PROMPT_MAX_BYTES} 字节上限。` }
   }

@@ -104,8 +104,10 @@ const canSubmit = computed(() => {
   }
   return canStartRuntime.value && projectStore.currentProject !== null
 })
-/** 提交还要求草稿非空；快捷发送直接用预设短语，因此不看这一条。 */
-const canSend = computed(() => draft.value.trim() !== '' && canSubmit.value)
+/** 提交要求文本与附件至少有一项：只发图片不带文字也是合法输入；快捷发送直接用偏好里的短语，因此不看这一条。 */
+const canSend = computed(() => (
+  (draft.value.trim() !== '' || pendingImages.value.length > 0) && canSubmit.value
+))
 /** 图片入口（选择、粘贴、拖拽）共用同一套禁用条件，避免三条路径行为不一致。 */
 const attachDisabled = computed(() => (
   !canSubmit.value || imageSupported.value === false || pendingImages.value.length >= MAX_IMAGE_COUNT

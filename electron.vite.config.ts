@@ -11,7 +11,8 @@ const developmentCsp = [
   // Vite 开发期通过样式节点更新 CSS；正式页面不保留此权限。
   "style-src 'self' 'unsafe-inline'",
   `connect-src 'self' ws://127.0.0.1:${DEV_SERVER_PORT}`,
-  "img-src 'self'",
+  // data: 与 blob: 仅用于本地图片附件的缩略图展示，与生产 CSP 保持一致；不放开远程图片。
+  "img-src 'self' data: blob:",
   "font-src 'self'",
   "object-src 'none'",
   "frame-src 'none'",

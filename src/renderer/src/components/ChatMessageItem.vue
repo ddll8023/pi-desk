@@ -152,8 +152,9 @@ function onEditKeydown(event: KeyboardEvent): void {
           :alt="`附件图片（${block.image.mimeType}）`"
           class="max-h-48 self-end rounded-desk-md border border-desk-line object-contain"
         />
+        <!-- 图片块只渲染图片；空文本块（仅图片消息的文本部分）不渲染容器，避免多出一个空气泡。 -->
         <div
-          v-if="block.text !== '' || block.image === null"
+          v-if="block.text !== ''"
           :class="isUser ? 'chat-bubble chat-bubble-user self-end' : 'chat-assistant-content'"
         >
           <p v-if="isUser">{{ block.text }}</p>
