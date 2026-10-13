@@ -11,10 +11,12 @@ import {
   PREFERENCES_GET_CHANNEL,
   PREFERENCES_SET_UI_CHANNEL,
   PREFERENCES_GET_MODEL_DISPLAY_CHANNEL,
-  PREFERENCES_SET_MODEL_DISPLAY_CHANNEL
+  PREFERENCES_SET_MODEL_DISPLAY_CHANNEL,
+  PREFERENCES_GET_QUICK_SEND_CHANNEL,
+  PREFERENCES_SET_QUICK_SEND_CHANNEL
 } from '../shared/preferences-api'
-import type { ModelDisplayResult, PreferencesErrorCode, PreferencesResult } from '../shared/preferences-api'
-import { isModelDisplayPreference, isUiTheme } from '../shared/preferences-api'
+import type { ModelDisplayResult, PreferencesErrorCode, PreferencesResult, QuickSendResult } from '../shared/preferences-api'
+import { isModelDisplayPreference, isQuickSendPreference, isUiTheme } from '../shared/preferences-api'
 import type { UiTheme } from '../shared/preferences-api'
 import {
   PROJECT_ADD_CHANNEL,
@@ -198,7 +200,7 @@ let quittingAfterShutdown = false
 const sdkHostManager = new SdkHostManager()
 /** 页面会话主链后端：宿主与会话状态、失败分类在此映射回既有 Runtime 契约。 */
 const sdkRuntime = new SdkRuntimeBridge(sdkHostManager)
-/** 配置文件的唯一读写者；项目列表、界面偏好与窗口状态共用同一份文件。 */
+/** 本地配置文件的唯一读写者；本文件的所有字段共用同一份配置与写入队列。 */
 const configStore = new DesktopConfigStore()
 const trustManager = new TrustManager({ store: configStore })
 const projectManager = new ProjectManager({
@@ -1228,8 +1230,32 @@ function registerPiSettingsHandlers(pageUrl: string): void {
   )
 }
 
-/** 界面偏好与对话页模型展示偏好分开读写；未知字段、任意启动参数一律拒绝。 */
+/** 界面偏好、对话页模型展示偏好与快捷发送短语分开读写；未知字段、任意启动参数一律拒绝。 */
 function registerPreferencesHandlers(pageUrl: string): void {
+  handle(
+    PREFERENCES_GET_QUICK_SEND_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<QuickSendResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return { ok: false, error: { code: 'FORBIDDEN', message: '不允许此页面调用桌面接口。' } }
+      }
+      if (args.length !== 0) {
+        return { ok: false, error: { code: 'INVALID_REQUEST', message: '快捷发送短语读取接口不接受参数。' } }
+      }
+      return preferencesManager.getQuickSend()
+    }
+  )
+  handle(
+    PREFERENCES_SET_QUICK_SEND_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<QuickSendResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return { ok: false, error: { code: 'FORBIDDEN', message: '不允许此页面调用桌面接口。' } }
+      }
+      if (args.length !== 1 || !isQuickSendPreference(args[0])) {
+        return { ok: false, error: { code: 'INVALID_REQUEST', message: '快捷发送短语必须是不超过上限的文本列表。' } }
+      }
+      return preferencesManager.setQuickSend(args[0])
+    }
+  )
   handle(
     PREFERENCES_GET_MODEL_DISPLAY_CHANNEL,
     async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<ModelDisplayResult> => {

@@ -1,10 +1,11 @@
-<!-- 设置页：外观常驻首页，模型与 Pi 资源作为同级子页切换；偏好统一交给 store 保存，子页读写各自负责。 -->
+<!-- 设置页：首页常驻「外观」与「快捷输入」两块直接控件卡片，模型与 Pi 资源作为同级子页切换；偏好统一交给 store 保存，子页读写各自负责。 -->
 <script setup lang="ts">
 import { ref } from 'vue'
 import { storeToRefs } from 'pinia'
 import { usePreferencesStore } from '../stores/preferences'
 import AppButton from './ui/AppButton.vue'
 import ModelSettingsView from './ModelSettingsView.vue'
+import QuickSendSection from './QuickSendSection.vue'
 import ResourceView from './ResourceView.vue'
 
 /** 设置页的三个平级区域；外观是首页，其他两个是全宽子页。 */
@@ -35,7 +36,7 @@ function backToAppearance(): void {
       <template v-if="section === 'appearance'">
         <header class="settings-page-header">
           <h1 class="text-xl font-semibold tracking-tight">设置</h1>
-          <p class="mt-1 text-sm text-desk-muted">管理界面外观、Pi 配置与对话页模型显示。</p>
+          <p class="mt-1 text-sm text-desk-muted">管理界面外观、快捷输入、Pi 配置与对话页模型显示。</p>
         </header>
 
         <section class="settings-section" aria-labelledby="settings-appearance-title">
@@ -66,6 +67,8 @@ function backToAppearance(): void {
             {{ preferencesStore.actionError.message }}
           </p>
         </section>
+
+        <QuickSendSection />
 
         <section class="settings-section" aria-labelledby="settings-pi-models-title">
           <div class="settings-section-heading">

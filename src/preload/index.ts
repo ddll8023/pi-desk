@@ -8,10 +8,21 @@ import {
   PREFERENCES_SET_UI_CHANNEL,
   PREFERENCES_GET_MODEL_DISPLAY_CHANNEL,
   PREFERENCES_SET_MODEL_DISPLAY_CHANNEL,
+  PREFERENCES_GET_QUICK_SEND_CHANNEL,
+  PREFERENCES_SET_QUICK_SEND_CHANNEL,
   isPreferencesResult,
-  isModelDisplayResult
+  isModelDisplayResult,
+  isQuickSendResult
 } from '../shared/preferences-api'
-import type { ModelDisplayPreference, ModelDisplayResult, PreferencesApi, PreferencesResult, UiPreferences } from '../shared/preferences-api'
+import type {
+  ModelDisplayPreference,
+  ModelDisplayResult,
+  PreferencesApi,
+  PreferencesResult,
+  QuickSendPreference,
+  QuickSendResult,
+  UiPreferences
+} from '../shared/preferences-api'
 import {
   PI_SETTINGS_GET_DEFAULT_MODEL_CHANNEL,
   PI_SETTINGS_SET_DEFAULT_MODEL_CHANNEL,
@@ -181,6 +192,7 @@ const INVALID_PROJECT_FILE_RESPONSE = '桌面接口返回了无法识别的文�
 const INVALID_SESSION_LIST_RESPONSE = '桌面接口返回了无法识别的会话列表。'
 const INVALID_PREFERENCES_RESPONSE = '桌面接口返回了无法识别的界面偏好。'
 const INVALID_MODEL_DISPLAY_RESPONSE = '桌面接口返回了无法识别的对话页模型展示偏好。'
+const INVALID_QUICK_SEND_RESPONSE = '桌面接口返回了无法识别的快捷发送短语。'
 const INVALID_MODELS_CONFIG_RESPONSE = '桌面接口返回了无法识别的自定义供应商配置。'
 const INVALID_TRUST_RESPONSE = '桌面接口返回了无法识别的信任状态。'
 const INVALID_EXTENSION_UI_RESPONSE = '桌面接口返回了无法识别的 Extension UI 状态。'
@@ -236,6 +248,10 @@ function invalidPreferencesResponse(): PreferencesResult {
 
 function invalidModelDisplayResponse(): ModelDisplayResult {
   return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_MODEL_DISPLAY_RESPONSE } }
+}
+
+function invalidQuickSendResponse(): QuickSendResult {
+  return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_QUICK_SEND_RESPONSE } }
 }
 
 function invalidModelsConfigResponse(): ModelsConfigResult {
@@ -393,6 +409,18 @@ const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionAp
     }
     const response: unknown = await ipcRenderer.invoke(PREFERENCES_SET_MODEL_DISPLAY_CHANNEL, payload)
     return isModelDisplayResult(response) ? response : invalidModelDisplayResponse()
+  },
+
+  async getQuickSend(): Promise<QuickSendResult> {
+    const response: unknown = await ipcRenderer.invoke(PREFERENCES_GET_QUICK_SEND_CHANNEL)
+    return isQuickSendResult(response) ? response : invalidQuickSendResponse()
+  },
+
+  async setQuickSend(preference: QuickSendPreference): Promise<QuickSendResult> {
+    // 只搬运已声明的字段，并重建普通数组，避免响应式代理跨 contextBridge。
+    const payload: QuickSendPreference = { messages: [...preference.messages] }
+    const response: unknown = await ipcRenderer.invoke(PREFERENCES_SET_QUICK_SEND_CHANNEL, payload)
+    return isQuickSendResult(response) ? response : invalidQuickSendResponse()
   },
 
   async setUiPreferences(ui: UiPreferences) {

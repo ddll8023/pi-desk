@@ -1,10 +1,11 @@
-<!-- Prompt 输入坞：处理输入法组合态、Enter 发送与 Shift+Enter 换行、焦点回归与重复提交、响应侧栏「新建」的聚焦请求并给出一次性提示，并在 Agent 运行期间原位提供停止入口；同时承接 Extension 的 set_editor_text 填充文本、图片附件的选择/粘贴/拖拽三种入口、输入行按内容自动增高、快捷发送下拉、Pi 命令的斜杠模糊补全（Runtime 就绪后用运行中的命令清单，未就绪时用主进程预读的技能清单，按类型分组并按匹配优先级排序）与 `@` 项目文件引用（只写入相对路径文本，不传文件内容）。底部工具条左侧是信息行：异常与进行中的状态文本、被收起的 Extension 对话入口、Extension status 项与会话用量（点击开明细）；右侧是附件、快捷发送与发送/停止按钮。 -->
+<!-- Prompt 输入坞：处理输入法组合态、Enter 发送与 Shift+Enter 换行、焦点回归与重复提交、响应侧栏「新建」的聚焦请求并给出一次性提示，并在 Agent 运行期间原位提供停止入口；同时承接 Extension 的 set_editor_text 填充文本、图片附件的选择/粘贴/拖拽三种入口、输入行按内容自动增高、快捷发送下拉（短语取自界面偏好，可在设置里增删改与排序）、Pi 命令的斜杠模糊补全（Runtime 就绪后用运行中的命令清单，未就绪时用主进程预读的技能清单，按类型分组并按匹配优先级排序）与 `@` 项目文件引用（只写入相对路径文本，不传文件内容）。底部工具条左侧是信息行：异常与进行中的状态文本、被收起的 Extension 对话入口、Extension status 项与会话用量（点击开明细）；右侧是附件、快捷发送与发送/停止按钮。 -->
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { PROJECT_FILE_QUERY_MAX_CHARS } from '../../../shared/project-file-api'
 import type { OutputRate, PiResourceEntry, PiResourceKind, PromptDisposition, PromptImageInput } from '../../../shared/runtime-api'
 import { useExtensionUiStore } from '../stores/extension-ui'
+import { usePreferencesStore } from '../stores/preferences'
 import { useProjectFileStore } from '../stores/project-file'
 import { useResourceStore } from '../stores/resource'
 import { useProjectStore } from '../stores/project'
@@ -18,6 +19,7 @@ const extensionStore = useExtensionUiStore()
 const projectStore = useProjectStore()
 const resourceStore = useResourceStore()
 const sessionStore = useSessionStore()
+const preferencesStore = usePreferencesStore()
 const { view: runtimeView, promptView, abortView, projectionSync, capabilitiesView, modelSwitchView,
   preparingPrompt, rewindView } = storeToRefs(runtimeStore)
 const { editorText, editorTextVersion } = storeToRefs(extensionStore)
@@ -56,10 +58,12 @@ interface PendingImage {
 const pendingImages = ref<PendingImage[]>([])
 const imageInput = ref<HTMLInputElement | null>(null)
 
-/** 快捷发送候选：与草稿内容无关，选中即用该短语发起一次提交。 */
-const QUICK_SEND_MESSAGES: readonly string[] = ['继续', '确认', '提交', '推送']
+/** 快捷发送候选：与草稿内容无关，选中即用该短语发起一次提交；短语来自界面偏好，可在设置里编辑。 */
+const quickSendMessages = computed(() => preferencesStore.quickSendMessages)
 const quickSendOpen = ref(false)
 const quickSendIndex = ref(0)
+/** 触发按钮上显示的当前短语；列表为空时为 undefined，此时按钮也是禁用的。 */
+const quickSendCurrent = computed(() => quickSendMessages.value[quickSendIndex.value])
 /** 下拉外层引用：用于判断一次点击是否落在下拉之外。 */
 const quickSend = ref<HTMLElement | null>(null)
 /** 拖拽计数：dragenter/dragleave 会在子元素间反复触发，用计数而不是布尔避免高亮抖动。 */
@@ -339,13 +343,14 @@ function toggleQuickSend(): void {
 }
 
 function moveQuickSend(step: number): void {
-  const count = QUICK_SEND_MESSAGES.length
+  const count = quickSendMessages.value.length
+  if (count === 0) return
   quickSendIndex.value = (quickSendIndex.value + step + count) % count
 }
 
-/** 快捷发送：把预设短语写进草稿后走与手动发送同一条提交路径，不改发送契约。 */
+/** 快捷发送：把候选短语写进草稿后走与手动发送同一条提交路径，不改发送契约。 */
 function sendQuickMessage(index: number): void {
-  const message = QUICK_SEND_MESSAGES[index]
+  const message = quickSendMessages.value[index]
   if (message === undefined) return
   quickSendIndex.value = index
   quickSendOpen.value = false
@@ -378,6 +383,11 @@ watch(draft, () => {
     autoGrow()
     refreshFileToken()
   })
+})
+
+/** 短语在设置里被增删改后，当前选中项可能越界；夹取到合法范围，按钮不会渲染出空文本。 */
+watch(quickSendMessages, (messages) => {
+  if (quickSendIndex.value >= messages.length) quickSendIndex.value = 0
 })
 
 function onKeydown(event: KeyboardEvent): void {
@@ -995,26 +1005,29 @@ onMounted(() => {
             <div ref="quickSend" class="relative">
               <AppButton
                 variant="icon"
-                class="w-auto gap-1 px-2.5"
-                :disabled="!canSubmit"
+                class="w-auto max-w-[min(12rem,40vw)] gap-1 px-2.5"
+                :disabled="!canSubmit || quickSendMessages.length === 0"
                 aria-haspopup="listbox"
                 :aria-expanded="quickSendOpen"
                 aria-controls="prompt-quick-send"
-                title="选择并直接发送常用消息"
+                :title="quickSendCurrent === undefined
+                  ? '选择并直接发送常用消息'
+                  : `当前：${quickSendCurrent}；点击选择并直接发送`"
                 @click="toggleQuickSend"
               >
-                <span class="text-xs">{{ QUICK_SEND_MESSAGES[quickSendIndex] }}</span>
+                <span class="min-w-0 truncate text-xs">{{ quickSendCurrent }}</span>
                 <span aria-hidden="true">▾</span>
               </AppButton>
               <div v-if="quickSendOpen" id="prompt-quick-send" role="listbox" aria-label="常用消息" class="prompt-composer-menu">
                 <AppButton
-                  v-for="(message, index) in QUICK_SEND_MESSAGES"
-                  :key="message"
+                  v-for="(message, index) in quickSendMessages"
+                  :key="index"
                   variant="unstyled"
                   role="option"
                   :aria-selected="index === quickSendIndex"
-                  class="list-item"
+                  class="list-item truncate"
                   :class="index === quickSendIndex ? 'list-item-active' : ''"
+                  :title="message"
                   @click="sendQuickMessage(index)"
                 >
                   {{ message }}

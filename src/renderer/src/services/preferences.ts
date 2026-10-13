@@ -1,5 +1,13 @@
-/** 封装界面偏好与对话页模型展示偏好读写，重建普通载荷并保留桥接失败原因。 */
-import type { ModelDisplayPreference, ModelDisplayResult, PreferencesError, PreferencesResult, UiPreferences } from '../../../shared/preferences-api'
+/** 封装界面偏好、对话页模型展示偏好与快捷发送短语读写，重建普通载荷并保留桥接失败原因。 */
+import type {
+  ModelDisplayPreference,
+  ModelDisplayResult,
+  PreferencesError,
+  PreferencesResult,
+  QuickSendPreference,
+  QuickSendResult,
+  UiPreferences
+} from '../../../shared/preferences-api'
 
 function unavailable(): { ok: false; error: PreferencesError } {
   return {
@@ -62,6 +70,29 @@ export async function setModelDisplay(preference: ModelDisplayPreference): Promi
     return await bridge.setModelDisplay({
       hiddenModels: preference.hiddenModels.map((model) => ({ provider: model.provider, modelId: model.modelId }))
     })
+  } catch (error) {
+    return callFailed(error)
+  }
+}
+
+/** 读取快捷发送短语；失败时页面回落到默认列表。 */
+export async function getQuickSend(): Promise<QuickSendResult> {
+  const bridge = window.desktop
+  if (!bridge || typeof bridge.getQuickSend !== 'function') return unavailable()
+  try {
+    return await bridge.getQuickSend()
+  } catch (error) {
+    return callFailed(error)
+  }
+}
+
+/** 保存快捷发送短语；返回值是主进程规范化后的列表。 */
+export async function setQuickSend(preference: QuickSendPreference): Promise<QuickSendResult> {
+  const bridge = window.desktop
+  if (!bridge || typeof bridge.setQuickSend !== 'function') return unavailable()
+  try {
+    // 服务层重建普通数组，避免响应式代理跨 contextBridge。
+    return await bridge.setQuickSend({ messages: [...preference.messages] })
   } catch (error) {
     return callFailed(error)
   }

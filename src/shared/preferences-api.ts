@@ -1,4 +1,4 @@
-/** 定义界面偏好与对话页模型展示偏好的受限 IPC；窗口状态由主进程独占，不经过 IPC。 */
+/** 定义界面偏好、对话页模型展示偏好与快捷发送短语的受限 IPC；窗口状态由主进程独占，不经过 IPC。 */
 import type { DesktopErrorCode } from './desktop-api'
 import type { ModelIdentity } from './runtime-api'
 import { isModelIdentity } from './runtime-api'
@@ -7,6 +7,8 @@ export const PREFERENCES_GET_CHANNEL = 'desktop:preferences-get'
 export const PREFERENCES_SET_UI_CHANNEL = 'desktop:preferences-set-ui'
 export const PREFERENCES_GET_MODEL_DISPLAY_CHANNEL = 'desktop:preferences-get-model-display'
 export const PREFERENCES_SET_MODEL_DISPLAY_CHANNEL = 'desktop:preferences-set-model-display'
+export const PREFERENCES_GET_QUICK_SEND_CHANNEL = 'desktop:preferences-get-quick-send'
+export const PREFERENCES_SET_QUICK_SEND_CHANNEL = 'desktop:preferences-set-quick-send'
 
 /** 主题三档取值，与 Electron `nativeTheme.themeSource` 状态机一一对应；默认跟随系统。 */
 export type UiTheme = 'system' | 'light' | 'dark'
@@ -44,12 +46,32 @@ export type ModelDisplayResult =
   | { readonly ok: true; readonly data: ModelDisplayPreference }
   | { readonly ok: false; readonly error: PreferencesError }
 
+/** 快捷发送下拉里的短语；数组顺序即下拉展示顺序。 */
+export interface QuickSendPreference {
+  readonly messages: readonly string[]
+}
+
+export type QuickSendResult =
+  | { readonly ok: true; readonly data: QuickSendPreference }
+  | { readonly ok: false; readonly error: PreferencesError }
+
+/** 快捷发送短语的默认值；配置缺失或规范化后为空时使用，主进程与页面共用同一份。 */
+export const DEFAULT_QUICK_SEND_MESSAGES: readonly string[] = ['继续', '确认', '提交', '推送']
+
+/** 快捷发送短语的数量与单条长度上限；页面编辑器与主进程校验共用。 */
+export const MAX_QUICK_SEND_MESSAGES = 20
+export const MAX_QUICK_SEND_MESSAGE_LENGTH = 50
+
 export interface PreferencesApi {
   /** 读取对话页模型展示偏好；隐藏列表为空表示全部显示，不读取或修改 Pi 配置。 */
   readonly getModelDisplay: () => Promise<ModelDisplayResult>
   /** 保存对话页模型展示偏好；返回主进程确认后的结果，不修改 Pi 配置。 */
   readonly setModelDisplay: (preference: ModelDisplayPreference) => Promise<ModelDisplayResult>
   readonly getPreferences: () => Promise<PreferencesResult>
+  /** 读取快捷发送短语；配置缺失或非法时主进程返回默认列表。 */
+  readonly getQuickSend: () => Promise<QuickSendResult>
+  /** 保存快捷发送短语；返回主进程规范化后的列表，不修改 Pi 配置。 */
+  readonly setQuickSend: (preference: QuickSendPreference) => Promise<QuickSendResult>
   /** 保存界面偏好；非法的请求由主进程重新校验并拒绝。 */
   readonly setUiPreferences: (ui: UiPreferences) => Promise<PreferencesResult>
 }
@@ -84,6 +106,30 @@ export function isModelDisplayPreference(value: unknown): value is ModelDisplayP
   return Array.isArray(value.hiddenModels)
     && value.hiddenModels.length <= MAX_HIDDEN_MODELS
     && value.hiddenModels.every((model) => isModelIdentity(model))
+}
+
+/**
+ * 快捷发送短语的请求形状校验：只允许 `messages` 字段，数量与单条长度不超过上限。
+ * trim、空白折叠、去重与空列表兜底由主进程存储层完成；页面提交前已做同样规范化，
+ * 因此这里的长度按原文判断，不在这里改写用户输入。
+ */
+export function isQuickSendPreference(value: unknown): value is QuickSendPreference {
+  if (!isRecord(value)) return false
+  if (!Object.keys(value).every((key) => key === 'messages')) return false
+  return Array.isArray(value.messages)
+    && value.messages.length <= MAX_QUICK_SEND_MESSAGES
+    && value.messages.every((message) => typeof message === 'string'
+      && message.length <= MAX_QUICK_SEND_MESSAGE_LENGTH)
+}
+
+/** 与模型偏好同一形状：成功返回已确认的短语列表，失败保留主进程错误。 */
+export function isQuickSendResult(value: unknown): value is QuickSendResult {
+  if (!isRecord(value)) return false
+  if (value.ok === true) return isQuickSendPreference(value.data)
+  if (value.ok !== false || !isRecord(value.error)) return false
+  return typeof value.error.message === 'string'
+    && typeof value.error.code === 'string'
+    && PREFERENCES_ERROR_CODES.includes(value.error.code)
 }
 
 /** 与模型偏好同一形状：成功返回已确认的展示偏好，失败保留主进程错误。 */

@@ -325,9 +325,9 @@
     @apply flex flex-wrap gap-2;
   }
 
-  /* 快捷发送下拉：贴着触发键浮在工具条上方。 */
+  /* 快捷发送下拉：贴着触发键浮在工具条上方。按最长条目取宽但不超过上限，条目保持单行不折行。 */
   .prompt-composer-menu {
-    @apply absolute right-0 bottom-full z-40 mb-2 min-w-[7rem] rounded-desk-md border border-desk-line bg-desk-surface p-1 shadow-desk-pop;
+    @apply absolute right-0 bottom-full z-40 mb-2 w-max min-w-[7rem] max-w-[min(20rem,55vw)] rounded-desk-md border border-desk-line bg-desk-surface p-1 shadow-desk-pop;
   }
 
   /* 通用按钮样式：次要、主操作、危险、紧凑、轻量与低强调危险；悬停只提升底色，强调色留给主按钮。 */
@@ -460,7 +460,7 @@
     @apply cursor-not-allowed opacity-60;
   }
 
-  /* 列表行：会话与输入建议共用；弹层内的列表项改用 list-card。选中态由 list-item-active 叠加左侧色条。 */
+  /* 输入坞弹层里的列表行：命令/文件补全与快捷发送下拉共用；对话框与页面内的清单行改用 list-card。选中态由 list-item-active 叠加左侧色条。 */
   .list-item {
     @apply block w-full rounded-desk-sm border border-transparent px-2.5 py-2 text-left transition-colors;
   }
