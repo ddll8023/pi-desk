@@ -1,4 +1,4 @@
-/** 管理唯一桌面窗口、本地资产边界，以及应用信息、Project 选择/添加/移除、项目文件检索、Session 与 Project Trust、界面偏好、Runtime、Pi 默认模型、自定义供应商配置、认证、Extension IPC、事件广播及退出编排。 */
+/** 管理唯一桌面窗口、本地资产边界，以及应用信息、Project 选择/添加/移除、项目文件检索、Session 与 Project Trust、会话运行状态（查询）、界面偏好、Runtime、Pi 默认模型、自定义供应商配置、认证、Extension IPC、事件广播及退出编排。 */
 import { mkdirSync } from 'node:fs'
 import { realpath } from 'node:fs/promises'
 import { dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
@@ -49,10 +49,16 @@ import type {
   SessionOpenResult
 } from '../shared/session-api'
 import {
+  SESSION_RUNS_STATE_CHANNEL,
+  SESSION_RUNS_EVENT
+} from '../shared/session-run-api'
+import type { SessionRunsResult, SessionRunsSnapshot } from '../shared/session-run-api'
+import {
   EXTENSION_UI_RESPOND_CHANNEL,
   EXTENSION_UI_STATE_CHANNEL,
   EXTENSION_UI_EVENT,
   isExtensionDialogResponseInput,
+  isExtensionDialogTarget,
   isExtensionUiResult
 } from '../shared/extension-ui-api'
 import type {
@@ -115,7 +121,8 @@ import {
   RUNTIME_STATUS_EVENT,
   isResourcePreviewRequest,
   isRuntimeSetModelRequest,
-  isRuntimeRewindRequest
+  isRuntimeRewindRequest,
+  isRuntimeTarget
 } from '../shared/runtime-api'
 import type {
   CapabilitiesResult,
@@ -454,6 +461,11 @@ function sessionFailure(code: SessionErrorCode, message: string): SessionListRes
   return { ok: false, error: { code, message } }
 }
 
+/** 运行状态查询失败只回到通用分类：不把实例内部结构暴露给页面。 */
+function sessionRunsFailure(code: 'FORBIDDEN' | 'INVALID_REQUEST' | 'INTERNAL_ERROR', message: string): SessionRunsResult {
+  return { ok: false, error: { code, message } }
+}
+
 function preferencesFailure(code: PreferencesErrorCode, message: string): PreferencesResult {
   return { ok: false, error: { code, message } }
 }
@@ -600,7 +612,7 @@ function registerProjectHandlers(pageUrl: string): void {
         return projectListFailure('INVALID_REQUEST', '信任决定必须是 trusted、untrusted 或 null。')
       }
       if (typeof allowInterrupt !== 'boolean') {
-        return projectListFailure('INVALID_REQUEST', '添加项目必须显式说明是否允许中断当前操作。')
+        return projectListFailure('INVALID_REQUEST', '添加项目必须显式给出 allowInterrupt 布尔值。')
       }
       return projectManager.add(request as ProjectAddRequest)
     }
@@ -656,7 +668,7 @@ function registerProjectHandlers(pageUrl: string): void {
         return projectListFailure('INVALID_PROJECT_PATH', '项目目录必须是非空的绝对路径。')
       }
       if (typeof allowInterrupt !== 'boolean') {
-        return projectListFailure('INVALID_REQUEST', '切换项目必须显式说明是否允许中断当前操作。')
+        return projectListFailure('INVALID_REQUEST', '切换项目必须显式给出 allowInterrupt 布尔值。')
       }
       return projectManager.setCurrent({ path, allowInterrupt })
     }
@@ -734,7 +746,7 @@ function registerSessionHandlers(pageUrl: string): void {
         return sessionFailure('INVALID_REQUEST', '会话 id 必须是字符串或 null。')
       }
       if (typeof allowInterrupt !== 'boolean') {
-        return sessionFailure('INVALID_REQUEST', '打开会话必须显式说明是否允许中断当前操作。')
+        return sessionFailure('INVALID_REQUEST', '打开会话必须显式给出 allowInterrupt 布尔值。')
       }
       const trust = await resolveTrustForCurrentProject()
       if (trust.requiresPrompt) {
@@ -747,7 +759,8 @@ function registerSessionHandlers(pageUrl: string): void {
     }
   )
 
-  /** 重新加载 Pi 资源：在同一 SDK 宿主进程内重建该会话的 services，并尽量恢复当前会话；只接受显式中断确认，信任拦截与打开一致。 */
+  /** 重新加载 Pi 资源：在目标会话所属实例内重建该会话的 services，并尽量恢复当前会话；
+   * 只接受显式中断确认；打开方式仍按前台项目拦截信任，重载按被重载会话的归属项目在编排层复核。 */
   handle(
     SESSION_RELOAD_CHANNEL,
     async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<SessionOpenResult> => {
@@ -768,14 +781,25 @@ function registerSessionHandlers(pageUrl: string): void {
       if (typeof fields.allowInterrupt !== 'boolean') {
         return sessionFailure('INVALID_REQUEST', '重新加载资源必须显式说明是否允许中断当前操作。')
       }
-      const trust = await resolveTrustForCurrentProject()
-      if (trust.requiresPrompt) {
-        return sessionFailure('TRUST_REQUIRED', trust.message ?? '项目包含需要信任决定的资源。')
-      }
       return sessionManager.reload(fields.allowInterrupt)
     }
   )
+}
 
+/** 运行实例状态查询：零参数、只读注册表与宿主已持有状态。 */
+function registerSessionRunHandlers(pageUrl: string): void {
+  handle(
+    SESSION_RUNS_STATE_CHANNEL,
+    (event: IpcMainInvokeEvent, ...args: unknown[]): SessionRunsResult => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return sessionRunsFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 0) {
+        return sessionRunsFailure('INVALID_REQUEST', '运行状态接口不接受参数。')
+      }
+      return { ok: true, data: { runs: sdkRuntime.listRunStates() } }
+    }
+  )
 }
 
 /**
@@ -883,17 +907,17 @@ function registerRuntimeHandlers(pageUrl: string): void {
     return sdkRuntime.getStatus()
   })
 
-  /** 中止当前 Agent 操作；只接受零参数，运行状态仍以事件流为准。 */
+  /** 中止目标运行实例的当前操作；只接受受校验的二维目标，运行状态仍以事件流为准。 */
   handle(
     RUNTIME_ABORT_CHANNEL,
     async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<RuntimeResult> => {
       if (!isTrustedCaller(event, pageUrl)) {
         return runtimeFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
       }
-      if (args.length !== 0) {
-        return runtimeFailure('INVALID_REQUEST', '中止操作接口不接受参数。')
+      if (args.length !== 1 || !isRuntimeTarget(args[0])) {
+        return runtimeFailure('INVALID_REQUEST', '中止操作只接受运行实例与绑定代际。')
       }
-      return sdkRuntime.abort()
+      return sdkRuntime.abort(args[0])
     }
   )
 
@@ -905,27 +929,27 @@ function registerRuntimeHandlers(pageUrl: string): void {
         return { ok: false, error: { code: 'FORBIDDEN', message: '不允许此页面调用桌面接口。' } }
       }
       if (args.length !== 1 || !isRuntimeRewindRequest(args[0])) {
-        return { ok: false, error: { code: 'INVALID_REQUEST', message: '回退只接受 Runtime、会话与消息身份。' } }
+        return { ok: false, error: { code: 'INVALID_REQUEST', message: '回退只接受运行实例、Runtime、会话与消息身份。' } }
       }
       return sdkRuntime.rewind(args[0])
     }
   )
 
-  /** 可用模型读取只查询当前 Runtime 代际，不接受任何参数。 */
+  /** 可用模型读取只查询目标运行实例的当前绑定代际，不接受其他参数。 */
   handle(
     RUNTIME_CAPABILITIES_CHANNEL,
     async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<CapabilitiesResult> => {
       if (!isTrustedCaller(event, pageUrl)) {
         return capabilitiesFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
       }
-      if (args.length !== 0) {
-        return capabilitiesFailure('INVALID_REQUEST', '能力读取接口不接受参数。')
+      if (args.length !== 1 || !isRuntimeTarget(args[0])) {
+        return capabilitiesFailure('INVALID_REQUEST', '能力读取只接受运行实例与绑定代际。')
       }
-      return sdkRuntime.readCapabilities()
+      return sdkRuntime.readCapabilities(args[0])
     }
   )
 
-  /** 模型切换只接受明确代际与模型身份；运行条件由 Runtime 所有者再次检查。 */
+  /** 模型切换只接受明确运行实例、代际与模型身份；运行条件由 Runtime 所有者再次检查。 */
   handle(
     RUNTIME_SET_MODEL_CHANNEL,
     async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<RuntimeResult> => {
@@ -933,23 +957,23 @@ function registerRuntimeHandlers(pageUrl: string): void {
         return runtimeFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
       }
       if (args.length !== 1 || !isRuntimeSetModelRequest(args[0])) {
-        return runtimeFailure('INVALID_REQUEST', '模型切换只接受 Runtime 代际、供应商和模型 ID。')
+        return runtimeFailure('INVALID_REQUEST', '模型切换只接受运行实例、Runtime 代际、供应商和模型 ID。')
       }
       return sdkRuntime.setModel(args[0])
     }
   )
 
-  /** 资源清单只读当前绑定代际已加载的扩展命令、提示词与技能，不接受任何参数。 */
+  /** 资源清单只读目标实例的绑定代际已加载的扩展命令、提示词与技能。 */
   handle(
     RUNTIME_RESOURCES_CHANNEL,
     async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<ResourcesResult> => {
       if (!isTrustedCaller(event, pageUrl)) {
         return resourcesFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
       }
-      if (args.length !== 0) {
-        return resourcesFailure('INVALID_REQUEST', '资源清单接口不接受参数。')
+      if (args.length !== 1 || !isRuntimeTarget(args[0])) {
+        return resourcesFailure('INVALID_REQUEST', '资源清单只接受运行实例与绑定代际。')
       }
-      return sdkRuntime.readResources()
+      return sdkRuntime.readResources(args[0])
     }
   )
 
@@ -991,31 +1015,31 @@ function registerRuntimeHandlers(pageUrl: string): void {
     }
   )
 
-  /** 诊断只暴露当前绑定代际已持有的 SDK 创建期诊断与 Extension 运行时错误，不接受任何参数。 */
+  /** 诊断只暴露目标实例绑定代际已持有的 SDK 创建期诊断与 Extension 运行时错误。 */
   handle(
     RUNTIME_DIAGNOSTICS_CHANNEL,
     async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<RuntimeDiagnosticsResult> => {
       if (!isTrustedCaller(event, pageUrl)) {
         return diagnosticsFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
       }
-      if (args.length !== 0) {
-        return diagnosticsFailure('INVALID_REQUEST', '诊断接口不接受参数。')
+      if (args.length !== 1 || !isRuntimeTarget(args[0])) {
+        return diagnosticsFailure('INVALID_REQUEST', '诊断接口只接受运行实例与绑定代际。')
       }
-      return sdkRuntime.readDiagnostics()
+      return sdkRuntime.readDiagnostics(args[0])
     }
   )
 
-  /** MCP 状态使用宿主内固定的 `/mcp` 命令，不接受页面传入任何命令文本。 */
+  /** MCP 状态使用目标实例绑定内固定的 `/mcp` 命令，不接受页面传入任何命令文本。 */
   handle(
     RUNTIME_MCP_STATUS_CHANNEL,
     async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<McpStatusResult> => {
       if (!isTrustedCaller(event, pageUrl)) {
         return mcpStatusFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
       }
-      if (args.length !== 0) {
-        return mcpStatusFailure('INVALID_REQUEST', 'MCP 状态接口不接受参数。')
+      if (args.length !== 1 || !isRuntimeTarget(args[0])) {
+        return mcpStatusFailure('INVALID_REQUEST', 'MCP 状态接口只接受运行实例与绑定代际。')
       }
-      return sdkRuntime.readMcpStatus()
+      return sdkRuntime.readMcpStatus(args[0])
     }
   )
 
@@ -1034,8 +1058,12 @@ function registerRuntimeHandlers(pageUrl: string): void {
         return mcpStatusFailure('INVALID_REQUEST', 'MCP 登录/退出参数格式不正确。')
       }
       const fields = request as Record<string, unknown>
-      if (Object.keys(fields).some((key) => key !== 'action' && key !== 'serverName')) {
+      if (Object.keys(fields).some((key) => key !== 'target' && key !== 'action' && key !== 'serverName')) {
         return mcpStatusFailure('INVALID_REQUEST', 'MCP 登录/退出参数包含未支持的字段。')
+      }
+      const target = fields.target
+      if (!isRuntimeTarget(target)) {
+        return mcpStatusFailure('INVALID_REQUEST', 'MCP 操作必须给出运行实例与绑定代际。')
       }
       if (fields.action !== 'login' && fields.action !== 'logout' && fields.action !== 'reconnect') {
         return mcpStatusFailure('INVALID_REQUEST', 'MCP 动作只能是 login、logout 或 reconnect。')
@@ -1044,7 +1072,7 @@ function registerRuntimeHandlers(pageUrl: string): void {
       if (!isMcpServerName(fields.serverName)) {
         return mcpStatusFailure('INVALID_REQUEST', 'MCP 服务器名只能包含字母、数字、点、下划线与连字符。')
       }
-      return sdkRuntime.runMcpCommand(fields.action, fields.serverName)
+      return sdkRuntime.runMcpCommand(target, fields.action, fields.serverName)
     }
   )
 
@@ -1121,7 +1149,7 @@ function registerRuntimeHandlers(pageUrl: string): void {
     }
   )
 
-  /** 只接受 Prompt 文本与图片附件；不接受可执行文件路径、启动参数或排队选项。 */
+  /** 只接受运行目标、Prompt 文本与图片附件；不接受可执行文件路径、启动参数或排队选项。 */
   handle(
     RUNTIME_PROMPT_CHANNEL,
     async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<PromptResult> => {
@@ -1136,8 +1164,12 @@ function registerRuntimeHandlers(pageUrl: string): void {
         return promptFailure('INVALID_REQUEST', '提交 Prompt 参数格式不正确。')
       }
       const fields = request as Record<string, unknown>
-      if (Object.keys(fields).some((key) => key !== 'message' && key !== 'images')) {
+      if (Object.keys(fields).some((key) => key !== 'target' && key !== 'message' && key !== 'images')) {
         return promptFailure('INVALID_REQUEST', '提交 Prompt 参数包含未支持的字段。')
+      }
+      const target = fields.target
+      if (!isRuntimeTarget(target)) {
+        return promptFailure('INVALID_REQUEST', '提交 Prompt 必须给出运行实例与绑定代际。')
       }
       const message = fields.message
       if (typeof message !== 'string') {
@@ -1169,21 +1201,21 @@ function registerRuntimeHandlers(pageUrl: string): void {
           images.push({ name: item.name, mimeType: item.mimeType, data: item.data })
         }
       }
-      return sdkRuntime.prompt(message, images)
+      return sdkRuntime.prompt(target, message, images)
     }
   )
 
-  /** 投影快照只读取当前绑定代际的投影，不接受任何参数；未就绪时返回错误而非空投影。 */
+  /** 投影快照只读取目标实例绑定代际的投影；目标不成立或未绑定时由后端给出结果，不伪造空投影。 */
   handle(
     RUNTIME_PROJECTION_CHANNEL,
     async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<ProjectionResult> => {
       if (!isTrustedCaller(event, pageUrl)) {
         return projectionFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
       }
-      if (args.length !== 0) {
-        return projectionFailure('INVALID_REQUEST', '投影快照接口不接受参数。')
+      if (args.length !== 1 || !isRuntimeTarget(args[0])) {
+        return projectionFailure('INVALID_REQUEST', '投影快照接口只接受运行实例与绑定代际。')
       }
-      return sdkRuntime.getProjection()
+      return sdkRuntime.getProjection(args[0])
     }
   )
 
@@ -1195,11 +1227,12 @@ function registerRuntimeHandlers(pageUrl: string): void {
       const request = args[0]
       if (typeof request !== 'object' || request === null || Array.isArray(request)) return
       const fields = request as Record<string, unknown>
-      if (Object.keys(fields).some((key) => key !== 'runtimeId' && key !== 'seq')) return
-      const { runtimeId, seq } = fields
-      if (typeof runtimeId !== 'number' || typeof seq !== 'number') return
-      if (!Number.isInteger(runtimeId) || !Number.isInteger(seq) || runtimeId <= 0 || seq < 0) return
-      sdkRuntime.ackProjection(runtimeId, seq)
+      if (Object.keys(fields).some((key) => key !== 'target' && key !== 'seq')) return
+      const target = fields.target
+      const { seq } = fields
+      if (!isRuntimeTarget(target)) return
+      if (typeof seq !== 'number' || !Number.isInteger(seq) || seq < 0) return
+      sdkRuntime.ackProjection(target, seq)
     }
   )
 }
@@ -1582,9 +1615,9 @@ function registerAuthHandlers(pageUrl: string): void {
   )
 }
 
-/**
- * Extension UI 状态查询与 dialog 响应提交；只接受受控的 id 与互斥响应形态。
- * id 不在队列或形态不符按 EXTENSION_DIALOG_NOT_FOUND / INVALID_REQUEST 拒绝，不猜造。
+/** Extension UI 状态查询与 dialog 响应提交；只接受受控的运行身份、id 与互斥响应形态。
+ * 运行实例不存在时状态接口返回空交互；id 不在队列或形态不符按 EXTENSION_DIALOG_NOT_FOUND /
+ * INVALID_REQUEST 拒绝，不猜造。
  */
 function registerExtensionUiHandlers(pageUrl: string): void {
   handle(
@@ -1593,10 +1626,14 @@ function registerExtensionUiHandlers(pageUrl: string): void {
       if (!isTrustedCaller(event, pageUrl)) {
         return extensionUiFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
       }
-      if (args.length !== 0) {
-        return extensionUiFailure('INVALID_REQUEST', 'Extension UI 状态接口不接受参数。')
+      if (args.length !== 1) {
+        return extensionUiFailure('INVALID_REQUEST', 'Extension UI 状态接口只接受一个运行实例身份。')
       }
-      return { ok: true, data: sdkRuntime.getExtensionUiSnapshot() }
+      const runId = args[0]
+      if (typeof runId !== 'number' || !Number.isSafeInteger(runId) || runId <= 0) {
+        return extensionUiFailure('INVALID_REQUEST', 'Extension UI 状态接口只接受正整数运行实例身份。')
+      }
+      return { ok: true, data: sdkRuntime.getExtensionUiSnapshot(runId) }
     }
   )
 
@@ -1614,10 +1651,14 @@ function registerExtensionUiHandlers(pageUrl: string): void {
         return extensionUiFailure('INVALID_REQUEST', 'Extension 对话响应参数格式不正确。')
       }
       const fields = request as Record<string, unknown>
-      if (Object.keys(fields).some((key) => key !== 'dialogId' && key !== 'response')) {
+      if (Object.keys(fields).some((key) => key !== 'target' && key !== 'dialogId' && key !== 'response')) {
         return extensionUiFailure('INVALID_REQUEST', 'Extension 对话响应参数包含未支持的字段。')
       }
+      const target = fields.target
       const { dialogId, response } = fields
+      if (!isExtensionDialogTarget(target)) {
+        return extensionUiFailure('INVALID_REQUEST', '对话响应必须给出运行实例与绑定代际。')
+      }
       if (!isBoundedIdentifier(dialogId, 256)) {
         return extensionUiFailure('INVALID_REQUEST', '对话 id 必须是非空且长度受控的字符串。')
       }
@@ -1627,6 +1668,7 @@ function registerExtensionUiHandlers(pageUrl: string): void {
       let snapshot: ExtensionUiSnapshot | null = null
       try {
         snapshot = await sdkRuntime.respondExtensionDialog(
+          target,
           dialogId,
           response as ExtensionDialogResponseInput
         )
@@ -1666,6 +1708,15 @@ function broadcastExtensionUi(snapshot: ExtensionUiSnapshot): void {
   const contents = target.webContents
   if (contents.isDestroyed()) return
   contents.send(EXTENSION_UI_EVENT, snapshot)
+}
+
+/** 运行实例状态列表只发给当前唯一可信窗口；列表只含粗粒度字段。 */
+function broadcastSessionRuns(snapshot: SessionRunsSnapshot): void {
+  const target = mainWindow
+  if (target === null || target.isDestroyed()) return
+  const contents = target.webContents
+  if (contents.isDestroyed()) return
+  contents.send(SESSION_RUNS_EVENT, snapshot)
 }
 
 /** 登录流程快照同样只发给当前唯一可信窗口。 */
@@ -1829,6 +1880,7 @@ if (!app.requestSingleInstanceLock()) {
     registerProjectHandlers(pageUrl)
     registerProjectFileHandlers(pageUrl)
     registerSessionHandlers(pageUrl)
+    registerSessionRunHandlers(pageUrl)
     registerTrustHandlers(pageUrl)
     registerPreferencesHandlers(pageUrl)
     registerPiSettingsHandlers(pageUrl)
@@ -1837,6 +1889,7 @@ if (!app.requestSingleInstanceLock()) {
     sdkRuntime.onStatusChanged(broadcastRuntimeStatus)
     sdkRuntime.onProjectionBatch(broadcastRuntimeProjection)
     sdkRuntime.onExtensionUi(broadcastExtensionUi)
+    sdkRuntime.onRunsChanged(broadcastSessionRuns)
     authManager.onFlowChanged(broadcastAuthFlow)
     await createWindow(pageUrl)
   }).catch(() => {

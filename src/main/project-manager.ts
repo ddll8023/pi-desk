@@ -3,7 +3,8 @@
  *
  * 添加前复核受保护资源，并在会话切换成功时一起保存项目与信任决定；移除仅清理 Desktop 配置，
  * 不删除项目目录。运行实例是否存在以注册表登记为准，不以单份 Runtime 状态代替；
- * 运行中断由显式确认控制。IPC 契约与调用方校验位于 shared/project-api.ts 和 main/index.ts。
+ * 前台切换不再收敛任何后台会话，运行中断只在项目移除时由显式确认控制。
+ * IPC 契约与调用方校验位于 shared/project-api.ts 和 main/index.ts。
  */
 import { app } from 'electron'
 import type {
@@ -18,7 +19,7 @@ import type {
   ProjectSetCurrentRequest
 } from '../shared/project-api'
 import type { TrustDecision } from '../shared/trust-api'
-import type { RuntimeResult, RuntimeStatus } from '../shared/runtime-api'
+import type { RuntimeResult } from '../shared/runtime-api'
 import { DesktopConfigStorageError, DesktopConfigStore } from './desktop-config-store'
 import { ProjectPathError, normalizeProjectPath, projectNameFromPath } from './project-path'
 import type { TrustManager } from './trust-manager'
@@ -53,10 +54,13 @@ export interface ProjectManagerOptions {
   /** 打开系统目录选择器；`defaultPath` 是建议起始目录，返回 null 表示用户取消。 */
   readonly chooseDirectory: (defaultPath: string) => Promise<string | null>
   /**
-   * 会话后端的最小端口：只使用状态查询与既有关闭链。
-   * 具体实现由主进程组合根注入，项目切换不感知实现。
+   * 会话后端的按实例端口：项目范围收敛只问单实例的在途工作与释放结果，
+   * 不再以单份 Runtime 状态或全局停止代替。
    */
-  readonly runtime: { getStatus(): RuntimeResult; stop(): Promise<RuntimeResult> }
+  readonly runtime: {
+    runHasPendingWork(runId: number): boolean
+    releaseRun(runId: number, allowInterrupt: boolean): Promise<RuntimeResult>
+  }
   /** 配置文件的唯一读写者；项目列表与界面偏好、窗口状态共用同一份文件。 */
   readonly store: DesktopConfigStore
   /** 信任状态探测；项目候选在提交前复核资源快照。 */
@@ -153,7 +157,7 @@ export class ProjectManager {
 
   /**
    * 移除 Desktop 项目记录；移除前先收敛该项目范围内的运行实例，不删除磁盘目录。
-   * 是否收敛只看注册表登记，不看项目是否是当前项目；当前项目仍保留原有守门行为。
+   * 有未完成工作且在用户确认前不移除；任一实例释放未确认时项目保持不变，占用保留。
    */
   async remove(request: ProjectRemoveRequest): Promise<ProjectListResult> {
     try {
@@ -161,19 +165,17 @@ export class ProjectManager {
       const project = list.projects.find((entry) => entry.id === request.projectId)
       if (project === undefined) return { ok: true, data: list }
       const runs = this.options.runs.runsOfProject(project.path)
-      if (runs.length > 0 || project.id === list.currentProjectId) {
-        const status = this.runtimeStatus()
-        if (status.state === 'starting' || status.state === 'stopping') {
-          throw new ProjectFailure('PROJECT_REMOVE_BLOCKED', 'Runtime 正在启动或关闭，请稍后再移除项目。')
-        }
-        if (status.state === 'ready' && status.info?.isStreaming === true && !request.allowInterrupt) {
-          throw new ProjectFailure('PROJECT_REMOVE_BLOCKED', '当前 Agent 正在运行；确认后才能停止并移除项目。')
-        }
-        if (status.state === 'ready') {
-          const stopped = await this.options.runtime.stop()
-          if (!stopped.ok || stopped.data.state !== 'idle') {
-            throw new ProjectFailure('PROJECT_REMOVE_BLOCKED', 'Runtime 未确认退出，项目未移除。')
-          }
+      if (runs.some((run) => run.phase === 'opening' || run.phase === 'closing')) {
+        throw new ProjectFailure('PROJECT_REMOVE_BLOCKED', '该项目的会话正在打开或关闭，请稍后再移除项目。')
+      }
+      if (!request.allowInterrupt
+        && runs.some((run) => this.options.runtime.runHasPendingWork(run.runId))) {
+        throw new ProjectFailure('PROJECT_REMOVE_BLOCKED', '该项目有正在运行的操作；确认后才能停止并移除项目。')
+      }
+      for (const run of runs) {
+        const released = await this.options.runtime.releaseRun(run.runId, request.allowInterrupt)
+        if (!released.ok) {
+          throw new ProjectFailure('PROJECT_REMOVE_BLOCKED', '运行实例未确认释放，项目未移除。')
         }
       }
       return { ok: true, data: await this.options.store.removeProject(project.id) }
@@ -186,43 +188,14 @@ export class ProjectManager {
   }
 
   /**
-   * 先释放离开项目的运行实例再保存新项目：只有确认回到 `idle` 才写入配置，否则项目保持不变。
-   * `failed` 状态不再追加终止尝试，只切换并保存项目选择。
-   *
-   * 需要收敛的运行实例只取“离开项目”范围内的登记结果：多项目并行后，其他项目的后台实例不应
-   * 因为前台切换被停止；同一会话跟随前台上下文的部分留待多运行实例阶段细化。
+   * 保存前台项目选择：只写配置，不停止任何后台会话。多运行实例下前台切换与执行无关，
+   * 离开项目的会话继续运行；它们的释放由项目移除、应用退出与后续的空闲回收负责。
    */
   private async applySwitch(
     request: ProjectSetCurrentRequest,
     trustDecision?: TrustDecision
   ): Promise<ProjectList> {
     const projectPath = await this.loadPath(request.path)
-    if (projectPath === this.currentProjectPath()) {
-      return this.options.store.selectProject(projectPath, projectNameFromPath(projectPath), trustDecision)
-    }
-    const outgoingProjectPath = this.currentProjectPath()
-    const outgoingRuns = outgoingProjectPath === null ? [] : this.options.runs.runsOfProject(outgoingProjectPath)
-    const status = this.runtimeStatus()
-
-    if (status.state === 'starting' || status.state === 'stopping') {
-      throw new ProjectFailure('PROJECT_SWITCH_BLOCKED', 'Runtime 正在启动或关闭，请稍后再切换项目。')
-    }
-    if (status.state === 'ready' && status.info?.isStreaming === true && !request.allowInterrupt) {
-      throw new ProjectFailure(
-        'PROJECT_SWITCH_BLOCKED',
-        '当前有正在运行的操作；确认后会先停止它再切换项目。'
-      )
-    }
-    if (status.state === 'ready' && outgoingRuns.length > 0) {
-      const stopped = await this.options.runtime.stop()
-      if (!stopped.ok || stopped.data.state !== 'idle') {
-        throw new ProjectFailure(
-          'PROJECT_SWITCH_BLOCKED',
-          '当前会话未确认释放，项目未切换；请先关闭会话后重试。'
-        )
-      }
-    }
-
     return this.options.store.selectProject(projectPath, projectNameFromPath(projectPath), trustDecision)
   }
 
@@ -258,14 +231,6 @@ export class ProjectManager {
       }
       throw error
     }
-  }
-
-  private runtimeStatus(): RuntimeStatus {
-    const result = this.options.runtime.getStatus()
-    if (!result.ok) {
-      throw new ProjectFailure('INTERNAL_ERROR', '无法读取 Runtime 状态。')
-    }
-    return result.data
   }
 
   private failure(error: unknown, fallback: ProjectError): { ok: false; error: ProjectError } {

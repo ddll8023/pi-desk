@@ -1,4 +1,4 @@
-/** 为沙箱页面提供应用信息、Project 选择/添加/移除/列表、项目文件检索、Session、Project Trust、偏好、Runtime、Pi 资源、Pi 默认模型、自定义供应商、认证与 Extension 等受限接口，不暴露 Electron、任意 channel 或系统能力。 */
+/** 为沙箱页面提供应用信息、Project 选择/添加/移除/列表、项目文件检索、Session、会话运行状态、Project Trust、偏好、Runtime、Pi 资源、Pi 默认模型、自定义供应商、认证与 Extension 等受限接口，不暴露 Electron、任意 channel 或系统能力。 */
 import { contextBridge, ipcRenderer } from 'electron'
 import type { IpcRendererEvent } from 'electron'
 import { APP_INFO_CHANNEL, isAppInfoResult } from '../shared/desktop-api'
@@ -76,6 +76,13 @@ import type {
   SessionListResult,
   SessionOpenRequest
 } from '../shared/session-api'
+import {
+  SESSION_RUNS_STATE_CHANNEL,
+  SESSION_RUNS_EVENT,
+  isSessionRunsEvent,
+  isSessionRunsResult
+} from '../shared/session-run-api'
+import type { SessionRunApi, SessionRunsResult, SessionRunsSnapshot } from '../shared/session-run-api'
 import {
   EXTENSION_UI_RESPOND_CHANNEL,
   EXTENSION_UI_STATE_CHANNEL,
@@ -179,7 +186,8 @@ import type {
   RuntimeResult,
   RuntimeSetModelRequest,
   RuntimeRewindRequest,
-  RuntimeStatus
+  RuntimeStatus,
+  RuntimeTarget
 } from '../shared/runtime-api'
 
 const INVALID_RUNTIME_RESPONSE = '桌面接口返回了无法识别的 Runtime 结果。'
@@ -190,6 +198,7 @@ const INVALID_PROJECT_PATH_RESPONSE = '桌面接口返回了无法识别的目�
 const INVALID_PROJECT_LIST_RESPONSE = '桌面接口返回了无法识别的项目列表。'
 const INVALID_PROJECT_FILE_RESPONSE = '桌面接口返回了无法识别的文件检索结果。'
 const INVALID_SESSION_LIST_RESPONSE = '桌面接口返回了无法识别的会话列表。'
+const INVALID_SESSION_RUNS_RESPONSE = '桌面接口返回了无法识别的会话运行状态。'
 const INVALID_PREFERENCES_RESPONSE = '桌面接口返回了无法识别的界面偏好。'
 const INVALID_MODEL_DISPLAY_RESPONSE = '桌面接口返回了无法识别的对话页模型展示偏好。'
 const INVALID_QUICK_SEND_RESPONSE = '桌面接口返回了无法识别的快捷发送短语。'
@@ -240,6 +249,10 @@ function invalidProjectFileResponse(): ProjectFileSearchResult {
 
 function invalidSessionResponse(): SessionListResult {
   return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_SESSION_LIST_RESPONSE } }
+}
+
+function invalidSessionRunsResponse(): SessionRunsResult {
+  return { ok: false, error: { code: 'INTERNAL_ERROR', message: INVALID_SESSION_RUNS_RESPONSE } }
 }
 
 function invalidPreferencesResponse(): PreferencesResult {
@@ -302,7 +315,7 @@ function invalidAuthLogoutResponse(): AuthLogoutResult {
   return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_AUTH_STATUS_RESPONSE, detail: null } }
 }
 
-const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionApi & PreferencesApi & PiSettingsApi & TrustApi & ExtensionUiApi & AuthApi & ModelsConfigApi = {
+const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionApi & SessionRunApi & PreferencesApi & PiSettingsApi & TrustApi & ExtensionUiApi & AuthApi & ModelsConfigApi = {
   async getAppInfo() {
     const response: unknown = await ipcRenderer.invoke(APP_INFO_CHANNEL)
     if (!isAppInfoResult(response)) {
@@ -363,6 +376,24 @@ const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionAp
   async reloadSession(allowInterrupt: boolean) {
     const response: unknown = await ipcRenderer.invoke(SESSION_RELOAD_CHANNEL, { allowInterrupt })
     return isSessionListResult(response) ? response : invalidSessionResponse()
+  },
+
+  /** 读取应用内全部运行实例的粗粒度状态；零参数，不建立宿主。 */
+  async getSessionRuns() {
+    const response: unknown = await ipcRenderer.invoke(SESSION_RUNS_STATE_CHANNEL)
+    return isSessionRunsResult(response) ? response : invalidSessionRunsResponse()
+  },
+
+  onSessionRunsChanged(listener: (snapshot: SessionRunsSnapshot) => void) {
+    const handler = (_event: IpcRendererEvent, payload: unknown): void => {
+      // 事件载荷同样不可信：契约不符时丢弃，由下一次查询或事件收敛。
+      if (!isSessionRunsEvent(payload)) return
+      listener(payload)
+    }
+    ipcRenderer.on(SESSION_RUNS_EVENT, handler)
+    return () => {
+      ipcRenderer.off(SESSION_RUNS_EVENT, handler)
+    }
   },
 
   async getTrustStatus() {
@@ -463,19 +494,23 @@ const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionAp
     return isRuntimeResult(response) ? response : invalidRuntimeResponse()
   },
 
-  async abortRuntime() {
-    const response: unknown = await ipcRenderer.invoke(RUNTIME_ABORT_CHANNEL)
+  async abortRuntime(target: RuntimeTarget) {
+    const response: unknown = await ipcRenderer.invoke(RUNTIME_ABORT_CHANNEL, {
+      runId: target.runId,
+      runtimeId: target.runtimeId
+    })
     return isRuntimeResult(response) ? response : invalidRuntimeResponse()
   },
 
-  async sendPrompt(message: string, images?: readonly PromptImageInput[]) {
-    // 只搬运已声明的字段；图片附件逐字段重建，不带页面传入的其他内容。
+  async sendPrompt(target: RuntimeTarget, message: string, images?: readonly PromptImageInput[]) {
+    // 只搬运已声明的字段：目标逐字段重建，图片附件逐条重建，不带页面传入的其他内容。
     const payloadImages = (images ?? []).map((image) => ({
       name: image.name,
       mimeType: image.mimeType,
       data: image.data
     }))
     const response: unknown = await ipcRenderer.invoke(RUNTIME_PROMPT_CHANNEL, {
+      target: { runId: target.runId, runtimeId: target.runtimeId },
       message,
       ...(payloadImages.length > 0 ? { images: payloadImages } : {})
     })
@@ -484,6 +519,7 @@ const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionAp
 
   async rewindRuntime(request: RuntimeRewindRequest) {
     const response: unknown = await ipcRenderer.invoke(RUNTIME_REWIND_CHANNEL, {
+      runId: request.runId,
       runtimeId: request.runtimeId,
       sessionId: request.sessionId,
       messageId: request.messageId
@@ -493,25 +529,39 @@ const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionAp
       : { ok: false as const, error: { code: 'INVALID_RESPONSE' as const, message: '桌面接口返回了无法识别的回退结果。' }, blocked: true }
   },
 
-  async getRuntimeProjection() {
-    const response: unknown = await ipcRenderer.invoke(RUNTIME_PROJECTION_CHANNEL)
+  async getRuntimeProjection(target: RuntimeTarget) {
+    const response: unknown = await ipcRenderer.invoke(RUNTIME_PROJECTION_CHANNEL, {
+      runId: target.runId,
+      runtimeId: target.runtimeId
+    })
     return isProjectionResult(response) ? response : invalidProjectionResponse()
   },
 
-  async getRuntimeCapabilities() {
-    const response: unknown = await ipcRenderer.invoke(RUNTIME_CAPABILITIES_CHANNEL)
+  async getRuntimeCapabilities(target: RuntimeTarget) {
+    const response: unknown = await ipcRenderer.invoke(RUNTIME_CAPABILITIES_CHANNEL, {
+      runId: target.runId,
+      runtimeId: target.runtimeId
+    })
     return isCapabilitiesResult(response) ? response : invalidCapabilitiesResponse()
   },
 
-  /** 只传模型身份与代际；不向页面开放任意 RPC，也不接受持久化选项。 */
-  async setRuntimeModel(runtimeId: number, provider: string, modelId: string): Promise<RuntimeResult> {
-    const request: RuntimeSetModelRequest = { runtimeId, provider, modelId }
-    const response: unknown = await ipcRenderer.invoke(RUNTIME_SET_MODEL_CHANNEL, request)
+  /** 只传运行身份、代际与模型身份；不向页面开放任意 RPC，也不接受持久化选项。 */
+  async setRuntimeModel(request: RuntimeSetModelRequest): Promise<RuntimeResult> {
+    const payload: RuntimeSetModelRequest = {
+      runId: request.runId,
+      runtimeId: request.runtimeId,
+      provider: request.provider,
+      modelId: request.modelId
+    }
+    const response: unknown = await ipcRenderer.invoke(RUNTIME_SET_MODEL_CHANNEL, payload)
     return isRuntimeResult(response) ? response : invalidRuntimeResponse()
   },
 
-  async getRuntimeResources(): Promise<ResourcesResult> {
-    const response: unknown = await ipcRenderer.invoke(RUNTIME_RESOURCES_CHANNEL)
+  async getRuntimeResources(target: RuntimeTarget): Promise<ResourcesResult> {
+    const response: unknown = await ipcRenderer.invoke(RUNTIME_RESOURCES_CHANNEL, {
+      runId: target.runId,
+      runtimeId: target.runtimeId
+    })
     return isResourcesResult(response) ? response : invalidResourcesResponse()
   },
 
@@ -521,19 +571,33 @@ const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionAp
     return isResourcePreviewResult(response) ? response : invalidResourcePreviewResponse()
   },
 
-  async getRuntimeDiagnostics(): Promise<RuntimeDiagnosticsResult> {
-    const response: unknown = await ipcRenderer.invoke(RUNTIME_DIAGNOSTICS_CHANNEL)
+  async getRuntimeDiagnostics(target: RuntimeTarget): Promise<RuntimeDiagnosticsResult> {
+    const response: unknown = await ipcRenderer.invoke(RUNTIME_DIAGNOSTICS_CHANNEL, {
+      runId: target.runId,
+      runtimeId: target.runtimeId
+    })
     return isRuntimeDiagnosticsResult(response) ? response : invalidDiagnosticsResponse()
   },
 
-  async readRuntimeMcpStatus(): Promise<McpStatusResult> {
-    const response: unknown = await ipcRenderer.invoke(RUNTIME_MCP_STATUS_CHANNEL)
+  async readRuntimeMcpStatus(target: RuntimeTarget): Promise<McpStatusResult> {
+    const response: unknown = await ipcRenderer.invoke(RUNTIME_MCP_STATUS_CHANNEL, {
+      runId: target.runId,
+      runtimeId: target.runtimeId
+    })
     return isMcpStatusResult(response) ? response : invalidMcpStatusResponse()
   },
 
-  /** MCP 登录/退出/重连：只搬运已声明的字段；命令文本由主进程拼出。 */
-  async runRuntimeMcpCommand(action: McpCommandAction, serverName: string): Promise<McpCommandResult> {
-    const response: unknown = await ipcRenderer.invoke(RUNTIME_MCP_COMMAND_CHANNEL, { action, serverName })
+  /** MCP 登录/退出/重连：只搬运目标与已声明的字段；命令文本由主进程拼出。 */
+  async runRuntimeMcpCommand(
+    target: RuntimeTarget,
+    action: McpCommandAction,
+    serverName: string
+  ): Promise<McpCommandResult> {
+    const response: unknown = await ipcRenderer.invoke(RUNTIME_MCP_COMMAND_CHANNEL, {
+      target: { runId: target.runId, runtimeId: target.runtimeId },
+      action,
+      serverName
+    })
     return isMcpCommandResult(response) ? response : invalidMcpStatusResponse()
   },
 
@@ -555,10 +619,13 @@ const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionAp
     return isMcpInspectAbortResult(response) ? response : invalidMcpInspectAbortResponse()
   },
 
-  ackRuntimeProjection(runtimeId: number, seq: number) {
+  ackRuntimeProjection(target: RuntimeTarget, seq: number) {
     // 应用确认失败只影响通知窗口，不应产生未处理的拒绝。
     void ipcRenderer
-      .invoke(RUNTIME_PROJECTION_ACK_CHANNEL, { runtimeId, seq })
+      .invoke(RUNTIME_PROJECTION_ACK_CHANNEL, {
+        target: { runId: target.runId, runtimeId: target.runtimeId },
+        seq
+      })
       .catch(() => undefined)
   },
 
@@ -586,17 +653,25 @@ const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionAp
     }
   },
 
-  async getExtensionUiState() {
-    const response: unknown = await ipcRenderer.invoke(EXTENSION_UI_STATE_CHANNEL)
+  async getExtensionUiState(runId: number) {
+    const response: unknown = await ipcRenderer.invoke(EXTENSION_UI_STATE_CHANNEL, runId)
     return isExtensionUiResult(response) ? response : invalidExtensionUiResponse()
   },
 
-  async respondExtensionDialog(dialogId: string, response: ExtensionDialogResponseInput) {
+  async respondExtensionDialog(
+    target: { readonly runId: number; readonly runtimeId: number },
+    dialogId: string,
+    response: ExtensionDialogResponseInput
+  ) {
     // 只搬运已声明的字段；形态已在调用侧由 shared 校验函数保证。
     if (!isExtensionDialogResponseInput(response)) {
       return invalidExtensionUiResponse()
     }
-    const request = { dialogId, response }
+    const request = {
+      target: { runId: target.runId, runtimeId: target.runtimeId },
+      dialogId,
+      response
+    }
     const wire: unknown = await ipcRenderer.invoke(EXTENSION_UI_RESPOND_CHANNEL, request)
     return isExtensionUiResult(wire) ? wire : invalidExtensionUiResponse()
   },

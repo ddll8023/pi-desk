@@ -18,7 +18,8 @@ import type {
   McpStatus,
   PiResourceEntry,
   PromptDisposition,
-  RuntimeError
+  RuntimeError,
+  RuntimeTarget
 } from '../../../shared/runtime-api'
 import { useRuntimeStore } from './runtime'
 import { useProjectStore } from './project'
@@ -118,6 +119,13 @@ export const useResourceStore = defineStore('resource', () => {
   const currentRuntimeId = computed(() => (
     runtimeStore.view.phase === 'ready' ? runtimeStore.view.snapshot.runtimeId : null
   ))
+  /** 读取目标：当前前台实例与它的绑定代际；未就绪或缺少运行身份时为 null，调用方据此不发起请求。 */
+  const currentTarget = computed<RuntimeTarget | null>(() => {
+    if (runtimeStore.view.phase !== 'ready') return null
+    const status = runtimeStore.view.snapshot
+    if (status.runId === null) return null
+    return { runId: status.runId, runtimeId: status.runtimeId }
+  })
 
   const skills = computed(() => entries.value.filter((entry) => entry.kind === 'skill'))
   const prompts = computed(() => entries.value.filter((entry) => entry.kind === 'prompt'))
@@ -140,11 +148,12 @@ export const useResourceStore = defineStore('resource', () => {
 
   /** 读取资源清单；已读过同一代际时直接复用，`force` 用于用户手动刷新。 */
   async function refreshResources(force = false): Promise<void> {
-    if (!runtimeReady.value) {
+    const target = currentTarget.value
+    if (target === null) {
       resetViews()
       return
     }
-    const runtimeId = currentRuntimeId.value
+    const runtimeId = target.runtimeId
     if (runtimeId === null) return
     if (!force && loadedRuntimeId === runtimeId && resourcesView.value.phase === 'ready') return
     if (resourcesReading) return
@@ -152,9 +161,9 @@ export const useResourceStore = defineStore('resource', () => {
     resourcesReading = true
     if (resourcesView.value.phase !== 'ready') resourcesView.value = { phase: 'loading' }
     try {
-      const result = await getResources()
-      // 结果必须属于同一仍就绪的代际，否则丢弃，等待新代际的读取。
-      if (!runtimeReady.value || currentRuntimeId.value !== runtimeId) return
+      const result = await getResources(target)
+      // 结果必须属于同一仍就绪的实例与代际，否则丢弃，等待新目标的读取。
+      if (currentTarget.value?.runId !== target.runId || currentRuntimeId.value !== runtimeId) return
       if (!result.ok) {
         entries.value = []
         resourcesTruncated.value = false
@@ -232,12 +241,14 @@ export const useResourceStore = defineStore('resource', () => {
   /** 读取启动诊断与 Extension 运行时错误；诊断是宿主内 SDK 会话的创建期诊断，按纯文本展示。 */
   async function refreshDiagnostics(): Promise<void> {
     if (diagnosticsLoading.value) return
-    const runtimeId = currentRuntimeId.value
+    const target = currentTarget.value
+    if (target === null) return
+    const runtimeId = target.runtimeId
     diagnosticsLoading.value = true
     diagnosticsError.value = null
     try {
-      const result = await getDiagnostics()
-      if (currentRuntimeId.value !== runtimeId) return
+      const result = await getDiagnostics(target)
+      if (currentTarget.value?.runId !== target.runId || currentRuntimeId.value !== runtimeId) return
       if (!result.ok) {
         diagnostics.value = []
         extensionErrors.value = []
@@ -275,13 +286,15 @@ export const useResourceStore = defineStore('resource', () => {
       : { phase: 'error', error: result.error }
   }
 
-  /** 读取 MCP 状态：由主进程固定发送 `/mcp`，状态文本原样展示，不在页面拼造。 */
+  /** 读取 MCP 状态：由目标实例固定发送 `/mcp`，状态文本原样展示，不在页面拼造。 */
   async function requestMcpStatus(): Promise<void> {
-    if (!runtimeReady.value || mcpView.value.phase === 'requesting') return
+    const target = currentTarget.value
+    if (target === null || mcpView.value.phase === 'requesting') return
 
     mcpView.value = { phase: 'requesting' }
-    const result = await readMcpStatus()
-    if (!runtimeReady.value) {
+    const result = await readMcpStatus(target)
+    // 期间切走前台实例或换代：结果不再属于展示目标，按空闲收敛。
+    if (currentTarget.value?.runId !== target.runId || currentRuntimeId.value !== target.runtimeId) {
       mcpView.value = { phase: 'idle' }
       return
     }
@@ -371,9 +384,11 @@ export const useResourceStore = defineStore('resource', () => {
    */
   async function runMcpServerCommand(action: McpCommandAction, serverName: string): Promise<void> {
     if (mcpCommandView.value.phase === 'running' || serverName === '') return
+    const target = currentTarget.value
+    if (target === null) return
 
     mcpCommandView.value = { phase: 'running', action, serverName }
-    const result = await runMcpCommand(action, serverName)
+    const result = await runMcpCommand(target, action, serverName)
     mcpCommandView.value = result.ok
       ? { phase: 'ready', action, serverName, data: result.data }
       : { phase: 'error', action, serverName, error: result.error }

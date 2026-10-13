@@ -9,7 +9,9 @@ import type {
   RuntimeResult,
   RuntimeRewindRequest,
   RuntimeRewindResult,
-  RuntimeStatus
+  RuntimeSetModelRequest,
+  RuntimeStatus,
+  RuntimeTarget
 } from '../../../shared/runtime-api'
 
 function unavailable(): { ok: false; error: RuntimeError } {
@@ -36,26 +38,31 @@ export async function getRuntimeStatus(): Promise<RuntimeResult> {
   }
 }
 
-/** 请求中止当前 Agent 操作；结果只表示 Pi 是否确认取消，运行状态仍看事件流。 */
-export async function abortRuntime(): Promise<RuntimeResult> {
+/** 请求中止目标运行实例的当前操作；结果只表示 Pi 是否确认取消，运行状态仍看事件流。 */
+export async function abortRuntime(target: RuntimeTarget): Promise<RuntimeResult> {
   const bridge = window.desktop
   if (!bridge || typeof bridge.abortRuntime !== 'function') return unavailable()
   try {
-    return await bridge.abortRuntime()
+    return await bridge.abortRuntime({ runId: target.runId, runtimeId: target.runtimeId })
   } catch {
     return callFailed()
   }
 }
 
-/** 提交 Prompt；返回只表达请求接受或拒绝，不代表 Agent 执行结束。图片附件经主进程校验后转发。 */
+/** 提交 Prompt 到目标实例的当前绑定；返回只表达请求接受或拒绝，不代表 Agent 执行结束。 */
 export async function sendPrompt(
+  target: RuntimeTarget,
   message: string,
   images: readonly PromptImageInput[] = []
 ): Promise<PromptResult> {
   const bridge = window.desktop
   if (!bridge || typeof bridge.sendPrompt !== 'function') return unavailable()
   try {
-    return await bridge.sendPrompt(message, images)
+    return await bridge.sendPrompt(
+      { runId: target.runId, runtimeId: target.runtimeId },
+      message,
+      images.map((image) => ({ name: image.name, mimeType: image.mimeType, data: image.data }))
+    )
   } catch {
     return callFailed()
   }
@@ -67,6 +74,7 @@ export async function rewindRuntime(request: RuntimeRewindRequest): Promise<Runt
   if (!bridge || typeof bridge.rewindRuntime !== 'function') return unavailable()
   try {
     return await bridge.rewindRuntime({
+      runId: request.runId,
       runtimeId: request.runtimeId,
       sessionId: request.sessionId,
       messageId: request.messageId
@@ -81,38 +89,39 @@ export async function rewindRuntime(request: RuntimeRewindRequest): Promise<Runt
   }
 }
 
-/** 取得投影快照；这是渲染端重新同步的唯一基准。 */
-export async function getRuntimeProjection(): Promise<ProjectionResult> {
+/** 取得目标实例的投影快照；这是渲染端重新同步的唯一基准。 */
+export async function getRuntimeProjection(target: RuntimeTarget): Promise<ProjectionResult> {
   const bridge = window.desktop
   if (!bridge || typeof bridge.getRuntimeProjection !== 'function') return unavailable()
   try {
-    return await bridge.getRuntimeProjection()
+    return await bridge.getRuntimeProjection({ runId: target.runId, runtimeId: target.runtimeId })
   } catch {
     return callFailed()
   }
 }
 
-/** 读取当前代际的可用模型；失败原因由结果表达。 */
-export async function getRuntimeCapabilities(): Promise<CapabilitiesResult> {
+/** 读取目标实例当前绑定的可用模型；失败原因由结果表达。 */
+export async function getRuntimeCapabilities(target: RuntimeTarget): Promise<CapabilitiesResult> {
   const bridge = window.desktop
   if (!bridge || typeof bridge.getRuntimeCapabilities !== 'function') return unavailable()
   try {
-    return await bridge.getRuntimeCapabilities()
+    return await bridge.getRuntimeCapabilities({ runId: target.runId, runtimeId: target.runtimeId })
   } catch {
     return callFailed()
   }
 }
 
-/** 切换当前会话模型；只传原始值，通信失败保留异常文本便于定位。 */
-export async function setRuntimeModel(
-  runtimeId: number,
-  provider: string,
-  modelId: string
-): Promise<RuntimeResult> {
+/** 切换目标实例的当前会话模型；只传原始值，通信失败保留异常文本便于定位。 */
+export async function setRuntimeModel(request: RuntimeSetModelRequest): Promise<RuntimeResult> {
   const bridge = window.desktop
   if (!bridge || typeof bridge.setRuntimeModel !== 'function') return unavailable()
   try {
-    return await bridge.setRuntimeModel(runtimeId, provider, modelId)
+    return await bridge.setRuntimeModel({
+      runId: request.runId,
+      runtimeId: request.runtimeId,
+      provider: request.provider,
+      modelId: request.modelId
+    })
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error)
     return {
@@ -122,12 +131,12 @@ export async function setRuntimeModel(
   }
 }
 
-/** 确认已应用到的最高序号；确认失败只影响通知窗口，不打断展示。 */
-export function ackRuntimeProjection(runtimeId: number, seq: number): void {
+/** 确认目标实例已应用到的最高序号；确认失败只影响通知窗口，不打断展示。 */
+export function ackRuntimeProjection(target: RuntimeTarget, seq: number): void {
   const bridge = window.desktop
   if (!bridge || typeof bridge.ackRuntimeProjection !== 'function') return
   try {
-    bridge.ackRuntimeProjection(runtimeId, seq)
+    bridge.ackRuntimeProjection({ runId: target.runId, runtimeId: target.runtimeId }, seq)
   } catch {
     // 应用确认失败由主进程的未确认窗口收敛。
   }

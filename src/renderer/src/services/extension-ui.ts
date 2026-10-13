@@ -19,26 +19,31 @@ function callFailed(): ExtensionUiResult {
   }
 }
 
-/** 取得 Extension UI 状态快照；无活动 Runtime 时状态为空。 */
-export async function getExtensionUiState(): Promise<ExtensionUiResult> {
+/** 取得目标运行实例的 Extension UI 状态快照；未知实例按空交互返回。 */
+export async function getExtensionUiState(runId: number): Promise<ExtensionUiResult> {
   const bridge = window.desktop
   if (!bridge || typeof bridge.getExtensionUiState !== 'function') return unavailable()
   try {
-    return await bridge.getExtensionUiState()
+    return await bridge.getExtensionUiState(runId)
   } catch {
     return callFailed()
   }
 }
 
-/** 提交 Extension dialog 响应；id 不存在或已结束时按错误结果返回。 */
+/** 提交 Extension dialog 响应；目标实例或 id 已失效时按错误结果返回。 */
 export async function respondExtensionDialog(
+  target: { readonly runId: number; readonly runtimeId: number },
   dialogId: string,
   response: ExtensionDialogResponseInput
 ): Promise<ExtensionUiResult> {
   const bridge = window.desktop
   if (!bridge || typeof bridge.respondExtensionDialog !== 'function') return unavailable()
   try {
-    return await bridge.respondExtensionDialog(dialogId, response)
+    return await bridge.respondExtensionDialog(
+      { runId: target.runId, runtimeId: target.runtimeId },
+      dialogId,
+      response
+    )
   } catch {
     return callFailed()
   }

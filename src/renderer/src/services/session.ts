@@ -29,7 +29,8 @@ export async function listSessions(): Promise<SessionListResult> {
 }
 
 /**
- * 打开会话；`sessionId` 为 null 表示新建，`allowInterrupt` 表示用户已确认可以中断当前操作。
+ * 打开会话；`sessionId` 为 null 表示新建。打开其他会话不中断任何正在运行的会话，
+ * `allowInterrupt` 仅在用户已确认必须改变现有绑定时为真。
  * 新建会话的默认模型由 Pi 自己的 settings.json 决定，本服务不读取或传递模型覆盖。
  */
 export async function openSession(

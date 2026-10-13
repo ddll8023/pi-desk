@@ -9,7 +9,8 @@ import type {
   ResourcesResult,
   ResourcePreviewResult,
   RuntimeDiagnosticsResult,
-  RuntimeError
+  RuntimeError,
+  RuntimeTarget
 } from '../../../shared/runtime-api'
 
 function unavailable(): { ok: false; error: RuntimeError } {
@@ -28,12 +29,12 @@ function callFailed(error: unknown): { ok: false; error: RuntimeError } {
   }
 }
 
-/** 读取当前代际已加载的 Pi 资源清单；来源是当前会话已注册的扩展命令、提示词与技能。 */
-export async function getResources(): Promise<ResourcesResult> {
+/** 读取目标实例绑定代际已加载的 Pi 资源清单；来源是它的会话已注册的扩展命令、提示词与技能。 */
+export async function getResources(target: RuntimeTarget): Promise<ResourcesResult> {
   const bridge = window.desktop
   if (!bridge || typeof bridge.getRuntimeResources !== 'function') return unavailable()
   try {
-    return await bridge.getRuntimeResources()
+    return await bridge.getRuntimeResources({ runId: target.runId, runtimeId: target.runtimeId })
   } catch (error) {
     return callFailed(error)
   }
@@ -50,23 +51,23 @@ export async function getResourcePreview(force = false): Promise<ResourcePreview
   }
 }
 
-/** 读取当前代际的 SDK 会话创建期诊断与 Extension 运行时错误；无活动代际时两项为空。 */
-export async function getDiagnostics(): Promise<RuntimeDiagnosticsResult> {
+/** 读取目标实例绑定代际的 SDK 会话创建期诊断与 Extension 运行时错误；未绑定时两项为空。 */
+export async function getDiagnostics(target: RuntimeTarget): Promise<RuntimeDiagnosticsResult> {
   const bridge = window.desktop
   if (!bridge || typeof bridge.getRuntimeDiagnostics !== 'function') return unavailable()
   try {
-    return await bridge.getRuntimeDiagnostics()
+    return await bridge.getRuntimeDiagnostics({ runId: target.runId, runtimeId: target.runtimeId })
   } catch (error) {
     return callFailed(error)
   }
 }
 
-/** 请求固定的 `/mcp` 状态；命令文本由主进程决定，页面不传入任何命令。 */
-export async function readMcpStatus(): Promise<McpStatusResult> {
+/** 请求目标实例内固定的 `/mcp` 状态；命令文本由主进程决定，页面不传入任何命令。 */
+export async function readMcpStatus(target: RuntimeTarget): Promise<McpStatusResult> {
   const bridge = window.desktop
   if (!bridge || typeof bridge.readRuntimeMcpStatus !== 'function') return unavailable()
   try {
-    return await bridge.readRuntimeMcpStatus()
+    return await bridge.readRuntimeMcpStatus({ runId: target.runId, runtimeId: target.runtimeId })
   } catch (error) {
     return callFailed(error)
   }
@@ -74,16 +75,21 @@ export async function readMcpStatus(): Promise<McpStatusResult> {
 
 /**
  * MCP 服务器 OAuth 登录、退出或重连：服务器名由页面给出但由主进程校验，
- * 命令文本由主进程拼出；页面不能传入任意命令。
+ * 命令文本由主进程拼出；页面不能传入任意命令，动作只作用于目标实例。
  */
 export async function runMcpCommand(
+  target: RuntimeTarget,
   action: McpCommandAction,
   serverName: string
 ): Promise<McpCommandResult> {
   const bridge = window.desktop
   if (!bridge || typeof bridge.runRuntimeMcpCommand !== 'function') return unavailable()
   try {
-    return await bridge.runRuntimeMcpCommand(action, serverName)
+    return await bridge.runRuntimeMcpCommand(
+      { runId: target.runId, runtimeId: target.runtimeId },
+      action,
+      serverName
+    )
   } catch (error) {
     return callFailed(error)
   }

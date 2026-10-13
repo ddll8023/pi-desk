@@ -46,7 +46,7 @@ export async function listProjects(): Promise<ProjectListResult> {
   }
 }
 
-/** 把目录设为当前项目；`allowInterrupt` 表示用户已确认可以停止运行中的操作。 */
+/** 把目录设为当前项目；前台切换不停止任何后台会话，`allowInterrupt` 只为契约保留。 */
 export async function setCurrentProject(
   path: string,
   allowInterrupt: boolean
@@ -91,7 +91,7 @@ export async function addProject(
   }
 }
 
-/** 从 Pi Desktop 项目列表移除项目，不删除磁盘目录。 */
+/** 从 Pi Desktop 项目列表移除项目，不删除磁盘目录；`allowInterrupt` 表示用户已确认可以停止该项目范围内的运行实例。 */
 export async function removeProject(
   projectId: string,
   allowInterrupt: boolean

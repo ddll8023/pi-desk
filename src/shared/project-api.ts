@@ -31,7 +31,7 @@ export interface ProjectList {
   readonly storageNotice: string | null
 }
 
-/** 只有渲染端已取得用户确认时才允许 `allowInterrupt`；主进程不接受隐式中断。 */
+/** 前台项目选择；切换只改变项目上下文，不中断任何后台会话，`allowInterrupt` 仅为契约保留。 */
 export interface ProjectSetCurrentRequest {
   readonly path: string
   readonly allowInterrupt: boolean
@@ -45,7 +45,7 @@ export interface ProjectAddRequest {
   readonly allowInterrupt: boolean
 }
 
-/** 仅移除 Desktop 项目列表记录，不删除目录；当前项目移除前由用户确认中断。 */
+/** 仅移除 Desktop 项目列表记录，不删除目录；该项目范围内有在途工作时需用户确认中断。 */
 export interface ProjectRemoveRequest {
   readonly projectId: string
   readonly allowInterrupt: boolean
@@ -54,7 +54,6 @@ export interface ProjectRemoveRequest {
 export type ProjectErrorCode =
   | DesktopErrorCode
   | 'INVALID_PROJECT_PATH'
-  | 'PROJECT_SWITCH_BLOCKED'
   | 'PROJECT_REMOVE_BLOCKED'
   | 'PROJECT_TRUST_REQUIRED'
   | 'PROJECT_STORAGE_FAILED'
@@ -76,16 +75,16 @@ export interface ProjectApi {
   /** 打开系统目录选择器；返回归一化后的目录，取消时为 `null`。 */
   readonly chooseProjectDirectory: () => Promise<ProjectPathResult>
   readonly listProjects: () => Promise<ProjectListResult>
-  /** 把目录设为当前项目；`allowInterrupt` 为真表示用户已确认可以停止运行中的操作。 */
+  /** 把目录设为当前项目；前台切换不停止任何后台会话。 */
   readonly setCurrentProject: (path: string, allowInterrupt: boolean) => Promise<ProjectListResult>
-  /** 添加/激活候选项目，并原子保存信任决定；有运行中的操作时必须显式确认中断。 */
+  /** 添加/激活候选项目，并原子保存信任决定；添加会顺带切换前台项目，但不停止后台会话。 */
   readonly addProject: (
     path: string,
     trustStatus: TrustStatus,
     trustDecision: TrustDecision | null,
     allowInterrupt: boolean
   ) => Promise<ProjectListResult>
-  /** 从 Desktop 列表移除项目，不删除项目目录；当前项目可在显式确认后停止 Runtime 并移除。 */
+  /** 从 Desktop 列表移除项目，不删除项目目录；`allowInterrupt` 为真表示用户已确认可以停止该项目范围内的运行实例。 */
   readonly removeProject: (projectId: string, allowInterrupt: boolean) => Promise<ProjectListResult>
 }
 
@@ -98,7 +97,6 @@ const PROJECT_ERROR_CODES: readonly string[] = [
   'BRIDGE_UNAVAILABLE',
   'BRIDGE_CALL_FAILED',
   'INVALID_PROJECT_PATH',
-  'PROJECT_SWITCH_BLOCKED',
   'PROJECT_REMOVE_BLOCKED',
   'PROJECT_TRUST_REQUIRED',
   'PROJECT_STORAGE_FAILED'

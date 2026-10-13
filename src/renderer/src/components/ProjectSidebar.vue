@@ -8,6 +8,8 @@ import { useAnchoredPopup } from '../anchored-popup'
 import { useProjectStore } from '../stores/project'
 import { useRuntimeStore } from '../stores/runtime'
 import { useSessionStore } from '../stores/session'
+import { useSessionRunsStore } from '../stores/session-runs'
+import type { SessionRunBadge } from '../stores/session-runs'
 import type { Project } from '../../../shared/project-api'
 import type { SessionSummary } from '../../../shared/session-api'
 import AppButton from './ui/AppButton.vue'
@@ -28,6 +30,7 @@ const emit = defineEmits<{
 const projectStore = useProjectStore()
 const runtimeStore = useRuntimeStore()
 const sessionStore = useSessionStore()
+const sessionRunsStore = useSessionRunsStore()
 const {
   view: projectView,
   projects,
@@ -62,11 +65,50 @@ const unsavedCurrentSession = computed<SessionSummary | null>(() => {
     preview: null
   }
 })
-const visibleSessions = computed<readonly SessionSummary[]>(() => (
-  unsavedCurrentSession.value === null ? sessions.value : [unsavedCurrentSession.value, ...sessions.value]
-))
+/**
+ * 已登记运行实例但还没有文件条目的会话（包括已切到后台的那个）：同样用占位条目表示，
+ * 否则它们在侧栏不可见，用户无法回到它们。文件落盘后由真实摘要接管。
+ */
+const pendingRunSessions = computed<readonly SessionSummary[]>(() => {
+  const projectPath = projectStore.currentProject?.path ?? null
+  const listed = new Set(sessions.value.map((session) => session.sessionId))
+  const pending: SessionSummary[] = []
+  for (const run of sessionRunsStore.runs) {
+    const sessionId = run.sessionId
+    if (run.phase === 'idle' || run.projectPath !== projectPath || sessionId === null) continue
+    if (listed.has(sessionId)) continue
+    pending.push({
+      sessionId,
+      createdAt: new Date().toISOString(),
+      updatedAt: Date.now(),
+      sizeBytes: 0,
+      preview: null
+    })
+  }
+  return pending
+})
+const visibleSessions = computed<readonly SessionSummary[]>(() => {
+  const extras: SessionSummary[] = []
+  const seen = new Set<string>()
+  const current = unsavedCurrentSession.value
+  if (current !== null) {
+    extras.push(current)
+    seen.add(current.sessionId)
+  }
+  for (const entry of pendingRunSessions.value) {
+    if (seen.has(entry.sessionId)) continue
+    extras.push(entry)
+    seen.add(entry.sessionId)
+  }
+  return extras.length === 0 ? sessions.value : [...extras, ...sessions.value]
+})
 function isUnsavedCurrent(session: SessionSummary): boolean {
   return session.sessionId === currentSessionId.value && unsavedCurrentSession.value !== null
+}
+
+/** 还没有文件条目的会话：没有可展示的文件元数据，也不提供基于文件的操作。 */
+function isPendingRunSession(session: SessionSummary): boolean {
+  return pendingRunSessions.value.some((entry) => entry.sessionId === session.sessionId)
 }
 const sessionBusy = computed(() => opening.value || sessionView.value.phase === 'loading')
 const prefersReducedMotion = useReducedMotion()
@@ -173,12 +215,47 @@ function createSession(): void {
 }
 
 function sessionTitle(session: SessionSummary): string {
-  return session.preview?.trim() || (isUnsavedCurrent(session) ? '当前会话' : '未命名会话')
+  return session.preview?.trim()
+    || (session.sessionId === currentSessionId.value ? '当前会话' : '未命名会话')
 }
 
 /** 尚未落盘的当前会话没有文件时间，显示进行中而不是伪造时间。 */
 function sessionMeta(session: SessionSummary): string {
+  const badge = sessionRunState(session)
+  // 需要动作或正在工作的状态优先于时间；已就绪的驻留实例保持安静，仍显示时间。
+  if (badge !== null && badge !== 'ready') return SESSION_RUN_LABELS[badge]
   return isUnsavedCurrent(session) ? '进行中' : formatUpdatedAt(session.updatedAt)
+}
+
+/** 各会话的运行状态文案；等待回应与未确认退出必须与普通空闲区分开。 */
+const SESSION_RUN_LABELS: Record<SessionRunBadge, string> = {
+  unconfirmed: '上次退出未确认',
+  failed: '宿主已失败',
+  waiting: '等待回应',
+  running: '正在执行',
+  ready: '已就绪',
+  transitioning: '正在切换'
+}
+
+/** 运行状态点颜色；只用设计令牌，与通知/危险/强调语义一致。 */
+const SESSION_RUN_DOT_CLASSES: Record<SessionRunBadge, string> = {
+  unconfirmed: 'bg-desk-danger',
+  failed: 'bg-desk-danger',
+  waiting: 'bg-desk-warning',
+  running: 'bg-desk-accent',
+  ready: 'bg-desk-line-strong',
+  transitioning: 'bg-desk-line-strong'
+}
+
+/** 按会话 id 取运行状态展示；未登记的会话返回 null，界面按普通历史条目展示。 */
+function sessionRunState(session: SessionSummary): SessionRunBadge | null {
+  return sessionRunsStore.viewOfSession(projectStore.currentProject?.path ?? null, session.sessionId)?.badge ?? null
+}
+
+/** 状态点颜色；未登记的会话不渲染状态点，调用方已用 `v-if` 保证。 */
+function sessionRunDotClass(session: SessionSummary): string {
+  const badge = sessionRunState(session)
+  return badge === null ? '' : SESSION_RUN_DOT_CLASSES[badge]
 }
 
 function formatUpdatedAt(timestamp: number, full = false): string {
@@ -402,11 +479,18 @@ watch([projects, sessions], () => {
                   >
                     <span class="session-sidebar-copy">
                       <span class="session-sidebar-preview">{{ sessionTitle(session) }}</span>
-                      <span class="session-sidebar-meta">{{ sessionMeta(session) }}</span>
+                      <span class="session-sidebar-meta">
+                        <span
+                          v-if="sessionRunState(session) !== null"
+                          class="mr-1 inline-block size-1.5 shrink-0 rounded-full align-middle"
+                          :class="sessionRunDotClass(session)"
+                          aria-hidden="true"
+                        />{{ sessionMeta(session) }}
+                      </span>
                     </span>
                   </AppButton>
                   <AppButton
-                    v-if="!isUnsavedCurrent(session)"
+                    v-if="!isPendingRunSession(session) && !isUnsavedCurrent(session)"
                     variant="unstyled" class="sidebar-menu-trigger" data-sidebar-menu-trigger
                     :disabled="sessionBusy" :aria-label="`会话 ${sessionTitle(session)} 的更多操作`"
                     aria-haspopup="dialog" :aria-expanded="isSessionMenuOpen(session.sessionId)"

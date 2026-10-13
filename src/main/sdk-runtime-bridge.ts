@@ -1,17 +1,21 @@
 /**
- * SDK 宿主到既有页面契约的适配层：按会话运行注册表定位当前运行实例，把宿主与会话状态映射为
- * RuntimeStatus，把宿主失败分类映射为 Runtime/Session 错误码，并转发投影批次与 Extension UI 快照。
+ * SDK 宿主到既有页面契约的适配层：按会话运行注册表定位目标运行实例，把宿主与会话状态映射为
+ * RuntimeStatus，把宿主失败分类映射为 Runtime/Session 错误码，转发投影批次与 Extension UI 快照，
+ * 并向页面提供全部运行实例的粗粒度状态列表。
  *
- * 页面继续消费既有形状与错误码，因此这里不新增来源标识，也不改共享契约。
+ * 页面用二维身份寻址：`runId` 定位运行实例，`runtimeId` 固定发起时所见绑定代际；动作只在两者都
+ * 与该实例当前状态一致时才发给宿主，不向旧目标转发。投影批次与 Extension UI 快照只从前台实例进入
+ * 页面，后台实例的这两类事件不覆盖前台（完整分片留待后续阶段）；运行状态列表覆盖全部实例，只含
+ * 低频字段。
  *
  * 状态映射要点：页面 `runtimeId` 是注册表分配的应用级绑定代际（能力清单、投影快照与投影批次都按
  * 绑定代际对齐）；宿主就绪只代表 SDK 已加载，只有会话绑定完成才对页面表示 `ready`。
  */
-import { SdkHostError, SDK_HOST_FAILURE_MESSAGES } from './sdk-host-manager'
+import { SdkHostError } from './sdk-host-manager'
 import type { SdkHostErrorCode, SdkHostManager, SdkHostStatus } from './sdk-host-manager'
 import { isSdkHostFailureCode, emptySdkSessionStatus } from '../sdk-host/protocol'
 import type {
-  SdkInterruptConfirmation, SdkSessionIdentity, SdkSessionReference, SdkSessionStatus
+  SdkInterruptConfirmation, SdkSessionReference, SdkSessionStatus
 } from '../sdk-host/protocol'
 import { SessionRunConflict } from './session-run-registry'
 import type { SessionRunRecord, SessionRunRegistry } from './session-run-registry'
@@ -37,10 +41,12 @@ import type {
   RuntimeSetModelRequest,
   RuntimeState,
   RuntimeStatus,
+  RuntimeTarget,
   SessionUsage
 } from '../shared/runtime-api'
 import type { ExtensionDialogResponseInput, ExtensionUiSnapshot } from '../shared/extension-ui-api'
 import type { SessionError, SessionErrorCode } from '../shared/session-api'
+import type { SessionRunState, SessionRunsSnapshot } from '../shared/session-run-api'
 
 /** 页面 Runtime 通道可见的宿主失败分类；表是穷尽 Record，新增分类会在编译期暴露。 */
 const RUNTIME_ERROR_CODES: Record<SdkHostErrorCode, RuntimeErrorCode> = {
@@ -83,6 +89,21 @@ const SESSION_ERROR_CODES: Record<SdkHostErrorCode, SessionErrorCode> = {
 /** 未携带管理器文案的分类（如目标授权失败）只给安全默认文案。 */
 const BARE_FAILURE_TEXT = '会话后端拒绝了该目标或授权。'
 
+/**
+ * 目标不成立：实例不存在或退出未确认。动作一律不发送，
+ * 也不用本地猜测的目标替代页面所指的运行实例。
+ */
+const TARGET_CHANGED_ERROR: RuntimeError = {
+  code: 'RUNTIME_NOT_READY',
+  message: '目标运行实例已变化或尚未就绪，未发送该操作。'
+}
+
+/** 目标实例存在但没有活动绑定；读取资源、提交与交互都要求已绑定会话。 */
+const UNBOUND_ERROR: RuntimeError = {
+  code: 'RUNTIME_NOT_READY',
+  message: '目标运行实例尚未绑定会话，未发送该操作。'
+}
+
 /** 只接受已声明的失败分类；未声明分类的异常按内部错误收敛，不向页面搬运原始文本。 */
 function hostFailure(error: unknown): { readonly code: SdkHostErrorCode; readonly message: string } | null {
   if (error instanceof SdkHostError) return { code: error.code, message: error.message }
@@ -106,6 +127,11 @@ export function sessionErrorOf(error: unknown): SessionError {
   return { code: SESSION_ERROR_CODES[failure.code], message: failure.message }
 }
 
+/** 路径比较与注册表一致：Windows 折叠大小写，其他平台严格比较；用于实例能否跨项目复用。 */
+function sameProjectPath(left: string, right: string): boolean {
+  return process.platform === 'win32' ? left.toLowerCase() === right.toLowerCase() : left === right
+}
+
 /** 宿主状态与会话阶段共同决定页面状态：绑定的会话才表示可提交。 */
 function mapState(host: SdkHostStatus['state'], session: SdkSessionStatus): RuntimeState {
   if (host === 'starting' || host === 'recovering') return 'starting'
@@ -124,6 +150,7 @@ function mapState(host: SdkHostStatus['state'], session: SdkSessionStatus): Runt
  * 页面把 `runtimeId: null` 当作有效空基准（不触发换代冲突）。
  */
 const EMPTY_PROJECTION: ProjectionSnapshot = {
+  runId: null,
   runtimeId: null,
   seq: 0,
   messages: [],
@@ -147,21 +174,23 @@ function mapInfo(session: SdkSessionStatus): RuntimeInfo {
 }
 
 /** 页面状态映射；故障码只用于可读提示，不代表可执行入口仍然有效。 */
-function mapStatus(host: SdkHostStatus, session: SdkSessionStatus): RuntimeStatus {
+function mapStatus(host: SdkHostStatus, session: SdkSessionStatus, runId: number): RuntimeStatus {
   const state = mapState(host.state, session)
   // 宿主级失败码更接近根因；宿主健康时它为空，仍回落到会话级原因。
   const failure = host.lastError ?? session.lastError
   return {
     state,
+    runId,
     runtimeId: session.bindingId,
     info: state === 'ready' ? mapInfo(session) : null,
     lastError: failure === null ? null : `会话后端故障（${failure}）：请重新打开会话或重启应用。`
   }
 }
 
-/** 状态订阅去重：消息推送期间频繁变化的会话状态不需要重复广播给页面。 */
+/** 状态订阅去重：消息推送期间频繁变化的会话状态不需要重复广播给页面，运行实例变化必须广播。 */
 function sameStatus(left: RuntimeStatus, right: RuntimeStatus): boolean {
   return left.state === right.state
+    && left.runId === right.runId
     && left.runtimeId === right.runtimeId
     && left.lastError === right.lastError
     && left.info?.sessionId === right.info?.sessionId
@@ -193,17 +222,38 @@ function sameRate(left: OutputRate | undefined, right: OutputRate | undefined): 
   return left.live === right.live && left.average === right.average
 }
 
+/** 运行状态列表去重：只比较展示字段，顺序由注册表登记顺序决定。 */
+function sameRuns(left: readonly SessionRunState[], right: readonly SessionRunState[]): boolean {
+  if (left.length !== right.length) return false
+  return left.every((run, index) => {
+    const other = right[index]
+    return other !== undefined
+      && run.runId === other.runId
+      && run.projectPath === other.projectPath
+      && run.sessionId === other.sessionId
+      && run.phase === other.phase
+      && run.isForeground === other.isForeground
+      && run.isStreaming === other.isStreaming
+      && run.waitingDialogs === other.waitingDialogs
+      && run.hostState === other.hostState
+  })
+}
+
 /** 会话切换只表达目标与是否允许中断；身份与中断确认在提交前一刻由本层固定。 */
 type SessionSwitchAction = 'new' | 'open' | 'reload'
 
-/** 无运行实例时的页面状态：与宿主已建立但会话为空时一致。 */
-const IDLE_STATUS: RuntimeStatus = { state: 'idle', runtimeId: null, info: null, lastError: null }
+/** 会话归属：调用方按来源会话给出项目与会话身份，本层只按它寻址运行实例。 */
+interface SessionOwner {
+  readonly projectPath: string
+  readonly sessionId: string | null
+}
 
-/** 宿主状态未建立时的空基线；与宿主初始快照一致。 */
-const IDLE_HOST_STATUS: SdkHostStatus = { state: 'idle', hostId: null, sdkVersion: null, lastError: null }
+/** 无前台运行实例时的页面状态：与宿主已建立但会话为空时一致。 */
+const IDLE_STATUS: RuntimeStatus = { state: 'idle', runId: null, runtimeId: null, info: null, lastError: null }
 
-/** 无运行实例时的 Extension UI 快照：没有代际也没有状态。 */
+/** 无运行实例时的 Extension UI 快照：没有来源、没有代际也没有状态。 */
 const EMPTY_EXTENSION_UI: ExtensionUiSnapshot = {
+  runId: null,
   runtimeId: null,
   seq: 0,
   state: { runtimeId: null, dialogs: [], notifications: [], statuses: [], widgets: [], editorText: null, invalidCount: 0 }
@@ -217,226 +267,368 @@ export interface SdkRuntimeBridgeOptions {
 }
 
 /**
- * 页面会话后端：按注册表定位当前运行实例；查询只读已持有状态，写操作只提交一次且不自动重发。
- * 没有运行实例时按未就绪收敛，不建立宿主也不伪造空结果。
+ * 页面会话后端：按运行实例寻址；查询只读已持有状态，写操作只提交一次且不自动重发。
+ * 目标不成立时按未就绪拒绝，不建立宿主也不伪造空结果。
  */
 export class SdkRuntimeBridge {
   private readonly statusListeners = new Set<(status: RuntimeStatus) => void>()
   private readonly projectionListeners = new Set<(batch: ProjectionBatch) => void>()
   private readonly uiListeners = new Set<(snapshot: ExtensionUiSnapshot) => void>()
+  private readonly runsListeners = new Set<(snapshot: SessionRunsSnapshot) => void>()
   private status: RuntimeStatus = IDLE_STATUS
-  /** 无运行实例时对外仍报告空交互状态，不保留上一位运行实例的交互。 */
-  private lastUi: ExtensionUiSnapshot = EMPTY_EXTENSION_UI
-  private detachRun: (() => void) | null = null
+  /** 上一次广播的运行实例状态列表；只比较展示字段。 */
+  private runs: readonly SessionRunState[] = []
+  /** 运行实例到事件订阅的映射：每个实例只在建立时挂接一次，停止时逐个释放。 */
+  private readonly detachers = new Map<number, () => void>()
   private shuttingDown = false
 
   constructor(private readonly options: SdkRuntimeBridgeOptions) {}
 
-  /** 当前唯一运行实例的宿主；宿主可跨项目复用，因此按实例数而不是项目判定。 */
-  private hostOf(): SdkHostManager | null {
-    return this.options.runs.activeRun()?.owner ?? null
+  /** 前台运行实例的运行身份；没有前台实例时为 null。页面据此过滤事件来源。 */
+  foregroundRunId(): number | null {
+    return this.options.runs.foreground()?.runId ?? null
+  }
+
+  /** 指定身份的运行实例；未知身份返回 null，查询不建立宿主。 */
+  private runOf(runId: number): SessionRunRecord<SdkHostManager> | null {
+    return this.options.runs.allRuns().find(run => run.runId === runId) ?? null
   }
 
   /**
-   * 宿主动作入口：没有运行实例时按未就绪抛出，与旧实现中「宿主未建立」的行为一致。
-   * 只读状态与身份查询不走这里，避免在 IPC 层产生未捕获异常。
+   * 目标实例与绑定代际复核：实例必须存在且不是未确认退出，`runtimeId` 非空时必须与当前绑定一致。
+   * 返回当前绑定编号（未绑定时为 null），让调用方区分「实例存在但尚未绑定」与「目标不成立」。
    */
-  private get host(): SdkHostManager {
-    const host = this.hostOf()
-    if (host === null) throw new SdkHostError('HOST_NOT_READY', SDK_HOST_FAILURE_MESSAGES.HOST_NOT_READY)
-    return host
+  private matchedRun(target: RuntimeTarget): {
+    readonly run: SessionRunRecord<SdkHostManager>
+    readonly bindingId: number | null
+  } | null {
+    const run = this.runOf(target.runId)
+    if (run === null || run.phase === 'unconfirmed') return null
+    const bindingId = run.owner.getSessionStatus().bindingId
+    if (target.runtimeId !== null && bindingId !== target.runtimeId) return null
+    return { run, bindingId }
   }
 
-  /** 宿主状态；没有运行实例时返回空闲基线。 */
-  private currentHostStatus(): SdkHostStatus {
-    return this.hostOf()?.getStatus() ?? IDLE_HOST_STATUS
+  /** 宿主尚未建立或已失败：不再等待它的结果，也不再向它提交动作。 */
+  private hostUnavailable(run: SessionRunRecord<SdkHostManager>): boolean {
+    const host = run.owner.getStatus()
+    return host.hostId === null || host.state === 'failed'
   }
 
-  /** 会话状态；没有运行实例时返回空会话状态，保持既有就绪判定不变。 */
-  private currentSessionStatus(): SdkSessionStatus {
-    return this.hostOf()?.getSessionStatus() ?? emptySdkSessionStatus()
+  /** 前台实例的状态映射；没有前台实例时是空闲空基准。 */
+  private foregroundStatus(): RuntimeStatus {
+    const run = this.options.runs.foreground()
+    if (run === null) return IDLE_STATUS
+    return mapStatus(run.owner.getStatus(), run.owner.getSessionStatus(), run.runId)
   }
 
-  /** 调用方固定的宿主与绑定身份；没有运行实例时两者都是 null。 */
-  private currentSessionIdentity(): SdkSessionIdentity {
-    return this.hostOf()?.getSessionIdentity() ?? { hostId: null, bindingId: null }
-  }
-
-  /** 宿主在启动、重绑与投影换代时都会经这里重新发布页面状态。 */
+  /** 每个运行实例只挂接一次：状态、会话、投影与交互都按实例订阅，便于按实例释放。 */
   private attachRun(runId: number, host: SdkHostManager): void {
-    this.detachRun?.()
+    this.detachers.get(runId)?.()
     const offStatus = host.onStatusChanged(status => {
       // 未确认退出的运行实例保留占用，未确认前不建立替代实例。
       if (status.state === 'failed') this.options.runs.markUnconfirmed(runId)
       this.publishStatus()
     })
-    const offSession = host.onSessionChanged(() => this.publishStatus())
-    const offProjection = host.onProjectionBatch(batch => {
-      for (const listener of [...this.projectionListeners]) {
-        try { listener(batch) } catch { /* 展示消费者不能改变会话所有权。 */ }
-      }
-    })
-    const offUi = host.onExtensionUi(snapshot => {
-      this.lastUi = snapshot
-      for (const listener of [...this.uiListeners]) {
-        try { listener(snapshot) } catch { /* 展示消费者不能改变会话所有权。 */ }
-      }
-    })
-    this.detachRun = () => { offStatus(); offSession(); offProjection(); offUi() }
-    this.publishStatus()
+    const offSession = host.onSessionChanged(() => this.publishState())
+    const offProjection = host.onProjectionBatch(batch => this.forwardBatch(runId, batch))
+    const offUi = host.onExtensionUi(snapshot => this.forwardUi(runId, snapshot))
+    this.detachers.set(runId, () => { offStatus(); offSession(); offProjection(); offUi() })
+    this.publishState()
   }
 
-  /** 运行实例按需建立：宿主可跨项目复用，且在退出编排开始后不再建立。 */
-  private ensureRun(): SessionRunRecord<SdkHostManager> {
+  /** 投影批次只进入前台实例；后台批次在完整分片落地前直接丢弃，不覆盖前台展示。 */
+  private forwardBatch(runId: number, batch: ProjectionBatch): void {
+    if (this.foregroundRunId() !== runId) return
+    const payload: ProjectionBatch = { ...batch, runId }
+    for (const listener of [...this.projectionListeners]) {
+      try { listener(payload) } catch { /* 展示消费者不能改变会话所有权。 */ }
+    }
+  }
+
+  /** Extension UI 快照同样只进入前台实例；后台交互不抢占前台展示。 */
+  private forwardUi(runId: number, snapshot: ExtensionUiSnapshot): void {
+    if (this.foregroundRunId() !== runId) return
+    const payload: ExtensionUiSnapshot = { ...snapshot, runId }
+    for (const listener of [...this.uiListeners]) {
+      try { listener(payload) } catch { /* 展示消费者不能改变会话所有权。 */ }
+    }
+  }
+
+  /**
+   * 前台切换：先发布状态再补发该实例的交互快照，页面才能把这两类事件归到同一来源；
+   * 顺序反过来时页面会因尚未得知新前台而丢弃快照。
+   */
+  focusRun(runId: number): void {
+    this.options.runs.setForeground(runId)
+    this.publishState()
+    const run = this.runOf(runId)
+    if (run !== null) this.forwardUi(runId, run.owner.getExtensionUiSnapshot())
+  }
+
+  /**
+   * 全部运行实例的粗粒度状态：只读注册表与各宿主已持有的状态，不建立宿主。
+   * 页面据此展示后台会话的运行、等待与未确认状态。
+   */
+  listRunStates(): readonly SessionRunState[] {
+    const foreground = this.foregroundRunId()
+    return this.options.runs.allRuns().map(run => {
+      const host = run.owner.getStatus()
+      // 未建立或已失败的宿主没有可展示的会话活动，不把 failed 当作空闲执行。
+      const usable = host.hostId !== null && host.state !== 'failed'
+      const session = usable ? run.owner.getSessionStatus() : null
+      return {
+        runId: run.runId,
+        projectPath: run.projectPath,
+        sessionId: run.sessionId,
+        phase: run.phase,
+        isForeground: run.runId === foreground,
+        isStreaming: session === null ? false : !session.isIdle,
+        waitingDialogs: session === null ? 0 : session.waitingDialogs,
+        hostState: host.hostId === null || host.state === 'idle' ? 'none' : host.state
+      }
+    })
+  }
+
+  /** 运行状态订阅：列表内容变化时整体下发，页面自行按会话归集。 */
+  onRunsChanged(listener: (snapshot: SessionRunsSnapshot) => void): () => void {
+    this.runsListeners.add(listener)
+    return () => this.runsListeners.delete(listener)
+  }
+
+  /**
+   * 已占用会话的宿主：命中时由调用方转前台复用。退出未确认的实例仍保留占用，
+   * 既不转前台也不允许重复接管，直到确认收敛。
+   */
+  private reuseOccupied(owner: SessionOwner): SessionRunRecord<SdkHostManager> | null {
+    if (owner.sessionId === null) return null
+    const occupied = this.options.runs.runOfSession(owner.projectPath, owner.sessionId)
+    if (occupied === null) return null
+    if (occupied.phase === 'unconfirmed') {
+      throw new SdkHostError('SESSION_OPERATION_CONFLICT',
+        '该会话的上一运行实例尚未确认退出，未重复接管；请等它收敛后重试。')
+    }
+    return occupied
+  }
+
+  /**
+   * 运行实例选择与建立：已被占用或可承接的实例直接复用，都不命中才建立新宿主并切前台。
+   * 应用退出编排开始后不再建立宿主。
+   */
+  private ensureRun(owner: SessionOwner): SessionRunRecord<SdkHostManager> {
     if (this.shuttingDown) throw new SdkHostError('HOST_CLOSED', '应用正在退出，不能建立 SDK 宿主。')
-    const existing = this.options.runs.activeRun()
-    if (existing !== null) return existing
+    const occupied = this.reuseOccupied(owner)
+    if (occupied !== null) {
+      this.focusRun(occupied.runId)
+      return occupied
+    }
+    const reusable = this.options.runs.allRuns().find(run => this.canReuse(run, owner.projectPath))
+    if (reusable !== undefined) {
+      this.focusRun(reusable.runId)
+      return reusable
+    }
     const runId = this.options.runs.allocateRunId()
     const host = this.options.createHost(runId)
     const record = this.options.runs.registerRun(runId, host)
-    this.options.runs.setForeground(runId)
     this.attachRun(runId, host)
+    this.focusRun(runId)
     return record
   }
 
-  /** 状态查询不建立宿主，也不触发任何会话操作；按当前运行实例即时映射，不返回缓存。 */
-  getStatus(): RuntimeResult {
-    return { ok: true, data: mapStatus(this.currentHostStatus(), this.currentSessionStatus()) }
+  /**
+   * 可复用判定：实例没有未收敛的生命周期操作、宿主已就绪或空闲、且当前没有绑定会话。
+   * 仍承载其他项目会话的空绑定实例不复用，避免把闲宿主跨项目改绑。
+   */
+  private canReuse(run: SessionRunRecord<SdkHostManager>, projectPath: string): boolean {
+    if (run.phase !== 'idle' && run.phase !== 'running') return false
+    if (run.projectPath !== null && !sameProjectPath(run.projectPath, projectPath)) return false
+    const host = run.owner.getStatus()
+    if (host.state !== 'idle' && host.state !== 'ready') return false
+    return run.owner.getSessionStatus().bindingId === null
   }
 
-  /** 状态广播只在映射结果变化时发给页面。 */
+  /** 状态查询不建立宿主，也不触发任何会话操作；只映射前台实例的当前状态。 */
+  getStatus(): RuntimeResult {
+    return { ok: true, data: this.foregroundStatus() }
+  }
+
+  /** 状态广播只在映射结果变化时发给页面；前台实例变化一定触发。 */
   onStatusChanged(listener: (status: RuntimeStatus) => void): () => void {
     this.statusListeners.add(listener)
     return () => this.statusListeners.delete(listener)
   }
 
-  /** 投影批次按运行实例转发；主进程不重算投影。 */
+  /** 投影批次按前台实例转发；主进程不重算投影。 */
   onProjectionBatch(listener: (batch: ProjectionBatch) => void): () => void {
     this.projectionListeners.add(listener)
     return () => this.projectionListeners.delete(listener)
   }
 
-  /** Extension UI 快照按运行实例转发，与宿主镜像同源，不需要第二份状态机。 */
+  /** Extension UI 快照按前台实例转发，与宿主镜像同源，不需要第二份状态机。 */
   onExtensionUi(listener: (snapshot: ExtensionUiSnapshot) => void): () => void {
     this.uiListeners.add(listener)
     return () => this.uiListeners.delete(listener)
   }
 
   /**
-   * 只释放活动会话并保留宿主；没有运行实例或宿主已失败时幂等返回当前状态，不新建宿主。
-   * 释放前登记关闭中，释放未确认时保留占用，不用乐观成功掩盖未知结果。
+   * 释放一个运行实例的活动会话并保留宿主：宿主未建立或已失败时只解除占用，
+   * 其余情况经 SDK 释放后再解除；释放未确认时保留占用并如实返回错误。
    */
-  async stop(): Promise<RuntimeResult> {
-    const run = this.options.runs.activeRun()
-    if (run === null) return this.getStatus()
-    const hostStatus = run.owner.getStatus()
-    if (hostStatus.hostId === null || hostStatus.state === 'failed') return this.getStatus()
+  async releaseRun(runId: number, allowInterrupt: boolean): Promise<RuntimeResult> {
+    const run = this.runOf(runId)
+    if (run === null) return { ok: false, error: TARGET_CHANGED_ERROR }
+    if (this.hostUnavailable(run)) {
+      // 没有存活宿主可等待，占用可以安全解除。
+      this.options.runs.release(runId)
+      this.publishRuns()
+      return { ok: true, data: this.foregroundStatus() }
+    }
     try {
       const current = run.owner.getSessionStatus()
-      const interrupt = current.bindingId === null
-        ? null : { bindingId: current.bindingId, activityVersion: current.activityVersion }
-      this.options.runs.beginClose(run.runId)
+      const interrupt: SdkInterruptConfirmation | null = allowInterrupt && current.bindingId !== null
+        ? { bindingId: current.bindingId, activityVersion: current.activityVersion }
+        : null
+      this.options.runs.beginClose(runId)
       const result = await run.owner.runSessionAction('release', { kind: 'new' }, run.owner.getSessionIdentity(), interrupt)
-      this.options.runs.release(run.runId)
-      return { ok: true, data: mapStatus(run.owner.getStatus(), result.status) }
+      this.options.runs.release(runId)
+      this.publishRuns()
+      return { ok: true, data: mapStatus(run.owner.getStatus(), result.status, runId) }
     } catch (error) {
-      this.options.runs.markUnconfirmed(run.runId)
+      this.options.runs.markUnconfirmed(runId)
+      this.publishRuns()
       return { ok: false, error: runtimeErrorOf(error) }
     }
   }
 
-  /** 中止只作用于当前绑定；未绑定时按未就绪返回，不做本地预检。 */
-  async abort(): Promise<RuntimeResult> {
-    const session = this.currentSessionStatus()
-    if (session.bindingId === null || session.phase !== 'bound') {
-      return { ok: false, error: { code: 'RUNTIME_NOT_READY', message: 'Runtime 尚未就绪，无法中止当前操作。' } }
-    }
+  /**
+   * 该实例是否有在途工作：排队消息、独立 Bash、等待中的审批或扩展输入都算；
+   * 宿主已失败时按无在途工作处理，因为已无法确认它是否仍在工作。
+   */
+  runHasPendingWork(runId: number): boolean {
+    const run = this.runOf(runId)
+    if (run === null || this.hostUnavailable(run)) return false
+    const session = run.owner.getSessionStatus()
+    return !session.isIdle
+      || session.pendingMessages > 0
+      || session.isBashRunning
+      || session.waitingDialogs > 0
+  }
+
+  /** 前台实例的会话状态；没有前台实例时是空会话状态，与宿主未建立时一致。 */
+  getSessionStatus(): SdkSessionStatus {
+    return this.options.runs.foreground()?.owner.getSessionStatus() ?? emptySdkSessionStatus()
+  }
+
+  /** 指定实例的会话状态；未知实例返回 null，供编排层按实例复核绑定结果。 */
+  sessionStatusOfRun(runId: number): SdkSessionStatus | null {
+    return this.runOf(runId)?.owner.getSessionStatus() ?? null
+  }
+
+  /** 中止只作用于目标实例的当前绑定；目标不成立或未绑定时不做本地预检之外的动作。 */
+  async abort(target: RuntimeTarget): Promise<RuntimeResult> {
+    const matched = this.matchedRun(target)
+    if (matched === null) return { ok: false, error: TARGET_CHANGED_ERROR }
+    if (matched.bindingId === null) return { ok: false, error: UNBOUND_ERROR }
+    const host = matched.run.owner
     try {
-      const host = this.host
-      const status = await host.abortSession({ hostId: host.getSessionIdentity().hostId, bindingId: session.bindingId })
-      return { ok: true, data: mapStatus(host.getStatus(), status) }
+      const status = await host.abortSession({ hostId: host.getSessionIdentity().hostId, bindingId: matched.bindingId })
+      return { ok: true, data: mapStatus(host.getStatus(), status, matched.run.runId) }
     } catch (error) {
       return { ok: false, error: runtimeErrorOf(error) }
     }
   }
 
   /** 提交只表达接受、排队或已处理；文本与图片仍由宿主再次校验。 */
-  async prompt(message: string, images: readonly PromptImageInput[]): Promise<PromptResult> {
+  async prompt(
+    target: RuntimeTarget,
+    message: string,
+    images: readonly PromptImageInput[]
+  ): Promise<PromptResult> {
+    const matched = this.matchedRun(target)
+    if (matched === null) return { ok: false, error: TARGET_CHANGED_ERROR }
+    if (matched.bindingId === null) return { ok: false, error: UNBOUND_ERROR }
     try {
-      return { ok: true, data: { disposition: await this.host.prompt(message, images) } }
+      return { ok: true, data: { disposition: await matched.run.owner.prompt(message, images) } }
     } catch (error) {
       return { ok: false, error: runtimeErrorOf(error) }
     }
   }
 
-  /** 可用模型清单直接来自当前绑定；runtimeId 即绑定编号。 */
-  async readCapabilities(): Promise<CapabilitiesResult> {
+  /** 可用模型清单直接来自目标实例的当前绑定；runtimeId 即绑定编号。 */
+  async readCapabilities(target: RuntimeTarget): Promise<CapabilitiesResult> {
+    const matched = this.matchedRun(target)
+    if (matched === null) return { ok: false, error: TARGET_CHANGED_ERROR }
     try {
-      return { ok: true, data: await this.host.readCapabilities() }
+      return { ok: true, data: await matched.run.owner.readCapabilities() }
     } catch (error) {
       return { ok: false, error: runtimeErrorOf(error) }
     }
   }
 
-  /** 资源清单只读当前绑定；未绑定时按未就绪返回，不向宿主发请求，也不伪造空清单。 */
-  async readResources(): Promise<ResourcesResult> {
-    if (this.currentSessionStatus().bindingId === null) {
-      return { ok: false, error: { code: 'RUNTIME_NOT_READY', message: '会话尚未就绪，无法读取资源清单。' } }
-    }
+  /** 资源清单只读目标实例的当前绑定；未绑定时按未就绪返回，不向宿主发请求，也不伪造空清单。 */
+  async readResources(target: RuntimeTarget): Promise<ResourcesResult> {
+    const matched = this.matchedRun(target)
+    if (matched === null) return { ok: false, error: TARGET_CHANGED_ERROR }
+    if (matched.bindingId === null) return { ok: false, error: UNBOUND_ERROR }
     try {
-      return { ok: true, data: await this.host.readResources() }
+      return { ok: true, data: await matched.run.owner.readResources() }
     } catch (error) {
       return { ok: false, error: runtimeErrorOf(error) }
     }
   }
 
-  /** 诊断只读当前绑定已持有的创建期诊断与 Extension 错误；
-   * 无活动绑定时返回空结果（`runtimeId: null`），不用错误冒充「没有诊断」。
+  /** 诊断只读目标实例当前绑定已持有的创建期诊断与 Extension 错误；
+   * 实例存在但未绑定时返回空结果（`runtimeId: null`），不用错误冒充「没有诊断」。
    */
-  async readDiagnostics(): Promise<RuntimeDiagnosticsResult> {
-    if (this.currentSessionStatus().bindingId === null) {
+  async readDiagnostics(target: RuntimeTarget): Promise<RuntimeDiagnosticsResult> {
+    const matched = this.matchedRun(target)
+    if (matched === null) return { ok: false, error: TARGET_CHANGED_ERROR }
+    if (matched.bindingId === null) {
       return { ok: true, data: { runtimeId: null, stderrLines: [], extensionErrors: [] } }
     }
     try {
-      return { ok: true, data: await this.host.readDiagnostics() }
+      return { ok: true, data: await matched.run.owner.readDiagnostics() }
     } catch (error) {
       return { ok: false, error: runtimeErrorOf(error) }
     }
   }
 
-  /** MCP 状态只读当前绑定内的固定 `/mcp` 命令；未绑定时按未就绪返回。 */
-  async readMcpStatus(): Promise<McpStatusResult> {
-    if (this.currentSessionStatus().bindingId === null) {
-      return { ok: false, error: { code: 'RUNTIME_NOT_READY', message: '会话尚未就绪，无法读取 MCP 状态。' } }
-    }
+  /** MCP 状态只读目标实例当前绑定内的固定 `/mcp` 命令；未绑定时按未就绪返回。 */
+  async readMcpStatus(target: RuntimeTarget): Promise<McpStatusResult> {
+    const matched = this.matchedRun(target)
+    if (matched === null) return { ok: false, error: TARGET_CHANGED_ERROR }
+    if (matched.bindingId === null) return { ok: false, error: UNBOUND_ERROR }
     try {
-      return { ok: true, data: await this.host.readMcpStatus() }
+      return { ok: true, data: await matched.run.owner.readMcpStatus() }
     } catch (error) {
       return { ok: false, error: runtimeErrorOf(error) }
     }
   }
 
   /** MCP 登录/退出/重连只提交受校验的动作与服务器名；命令文本与等待期限由宿主与主进程决定。 */
-  async runMcpCommand(action: McpCommandAction, serverName: string): Promise<McpCommandResult> {
-    if (this.currentSessionStatus().bindingId === null) {
-      return { ok: false, error: { code: 'RUNTIME_NOT_READY', message: '会话尚未就绪，无法执行 MCP 操作。' } }
-    }
+  async runMcpCommand(
+    target: RuntimeTarget,
+    action: McpCommandAction,
+    serverName: string
+  ): Promise<McpCommandResult> {
+    const matched = this.matchedRun(target)
+    if (matched === null) return { ok: false, error: TARGET_CHANGED_ERROR }
+    if (matched.bindingId === null) return { ok: false, error: UNBOUND_ERROR }
     try {
-      return { ok: true, data: await this.host.runMcpCommand(action, serverName) }
+      return { ok: true, data: await matched.run.owner.runMcpCommand(action, serverName) }
     } catch (error) {
       return { ok: false, error: runtimeErrorOf(error) }
     }
   }
 
-  /** 模型切换只针对页面所见的绑定代际；身份不符时不发宿主请求。 */
+  /** 模型切换只针对请求所固定的运行实例与绑定代际；身份不符时不发宿主请求。 */
   async setModel(request: RuntimeSetModelRequest): Promise<RuntimeResult> {
-    if (this.currentSessionStatus().bindingId !== request.runtimeId) {
-      return { ok: false, error: { code: 'RUNTIME_NOT_READY', message: '会话已切换，未向旧目标发送该操作。' } }
-    }
+    const matched = this.matchedRun({ runId: request.runId, runtimeId: request.runtimeId })
+    if (matched === null) return { ok: false, error: TARGET_CHANGED_ERROR }
+    const host = matched.run.owner
     try {
-      const host = this.host
       const status = await host.setSessionModel(request.provider, request.modelId)
-      return { ok: true, data: mapStatus(host.getStatus(), status) }
+      return { ok: true, data: mapStatus(host.getStatus(), status, matched.run.runId) }
     } catch (error) {
       return { ok: false, error: runtimeErrorOf(error) }
     }
@@ -448,15 +640,15 @@ export class SdkRuntimeBridge {
    * `text` 在未取消时按页面契约补空串（页面不消费该字段）。
    */
   async rewind(request: RuntimeRewindRequest): Promise<RuntimeRewindResult> {
-    const session = this.currentSessionStatus()
-    if (session.bindingId !== request.runtimeId || session.sessionId !== request.sessionId) {
-      return { ok: false, error: { code: 'RUNTIME_NOT_READY', message: '会话已切换，未向旧目标发送回退。' } }
+    const matched = this.matchedRun({ runId: request.runId, runtimeId: request.runtimeId })
+    if (matched === null || matched.run.owner.getSessionStatus().sessionId !== request.sessionId) {
+      return { ok: false, error: TARGET_CHANGED_ERROR }
     }
+    const host = matched.run.owner
     try {
-      const host = this.host
       const result = await host.rewind(request.messageId)
       // 宿主在结果帧之前已发布回退后的会话状态，因此这里读到的是权威实际状态。
-      const status = mapStatus(host.getStatus(), host.getSessionStatus())
+      const status = mapStatus(host.getStatus(), host.getSessionStatus(), matched.run.runId)
       return {
         ok: true,
         data: {
@@ -482,61 +674,75 @@ export class SdkRuntimeBridge {
   }
 
   /**
-   * 向宿主现取基准快照；未绑定时返回空基准（无会话不等于读取失败），
+   * 向目标实例现取基准快照；目标未绑定时返回该实例的空基准（无会话不等于读取失败），
    * 绑定后仍由宿主回答，不伪造内容。
    */
-  async getProjection(): Promise<ProjectionResult> {
-    if (this.currentSessionStatus().bindingId === null) return { ok: true, data: EMPTY_PROJECTION }
+  async getProjection(target: RuntimeTarget): Promise<ProjectionResult> {
+    const matched = this.matchedRun(target)
+    if (matched === null) return { ok: false, error: TARGET_CHANGED_ERROR }
+    if (matched.bindingId === null) {
+      return { ok: true, data: { ...EMPTY_PROJECTION, runId: matched.run.runId } }
+    }
     try {
-      return { ok: true, data: await this.host.refreshProjection() }
+      const snapshot = await matched.run.owner.refreshProjection()
+      return { ok: true, data: { ...snapshot, runId: matched.run.runId } }
     } catch (error) {
       return { ok: false, error: runtimeErrorOf(error) }
     }
   }
 
-  /** 确认只影响未确认窗口；不属于当前绑定的确认直接忽略。 */
-  ackProjection(runtimeId: number, seq: number): void {
-    if (this.currentSessionStatus().bindingId !== runtimeId) return
-    void this.host.ackProjection(seq).catch(() => {})
+  /** 确认只影响目标实例的未确认窗口；目标不成立或不属于该绑定的确认直接忽略。 */
+  ackProjection(target: RuntimeTarget, seq: number): void {
+    const matched = this.matchedRun(target)
+    if (matched === null || matched.bindingId === null) return
+    void matched.run.owner.ackProjection(seq).catch(() => {})
   }
 
-  /** Extension UI 镜像查询不建立宿主或会话；没有运行实例时是空交互。 */
-  getExtensionUiSnapshot(): ExtensionUiSnapshot {
-    return this.lastUi
+  /** Extension UI 镜像查询不建立宿主或会话；未知实例返回空交互。 */
+  getExtensionUiSnapshot(runId: number): ExtensionUiSnapshot {
+    const run = this.runOf(runId)
+    if (run === null) return EMPTY_EXTENSION_UI
+    return { ...run.owner.getExtensionUiSnapshot(), runId }
   }
 
-  /** 回应只在当前绑定内提交；已失效或不存在的对话返回 null，其余失败由调用方转成错误结果。 */
+  /** 回应只在目标实例的当前绑定内提交；已失效或不存在的对话返回 null，其余失败由调用方转成错误结果。 */
   async respondExtensionDialog(
+    target: { readonly runId: number; readonly runtimeId: number },
     dialogId: string,
     response: ExtensionDialogResponseInput
   ): Promise<ExtensionUiSnapshot | null> {
-    const identity = this.currentSessionIdentity()
-    if (identity.bindingId === null) return null
+    const matched = this.matchedRun(target)
+    if (matched === null || matched.bindingId === null) return null
+    const host = matched.run.owner
     try {
-      await this.host.respondDialog({ hostId: identity.hostId, bindingId: identity.bindingId }, dialogId, response)
+      await host.respondDialog({ hostId: host.getSessionIdentity().hostId, bindingId: matched.bindingId }, dialogId, response)
     } catch (error) {
       if (error instanceof SdkHostError && (error.code === 'INTERACTION_INVALID' || error.code === 'STALE_SESSION')) return null
       throw error
     }
-    return this.host.getExtensionUiSnapshot()
-  }
-
-  /** 会话切换后的实际绑定状态；会话编排用它复核打开结果。 */
-  getSessionStatus(): SdkSessionStatus {
-    return this.currentSessionStatus()
+    return { ...host.getExtensionUiSnapshot(), runId: matched.run.runId }
   }
 
   /**
    * 会话切换提交：目标、归属项目与会话身份在提交前固定，调用方只表达目标与是否允许中断。
-   * 打开前先在注册表登记占位，宿主侧实际重绑前的代际由主进程在授权应答中分配。
+   * 已由某实例承载的命名会话只转前台复用，不重绑；其余情况先在选定的实例上登记占位，
+   * 宿主侧实际重绑前的代际由主进程在授权应答中分配。
    */
   async switchSession(
     action: SessionSwitchAction,
     reference: SdkSessionReference,
     allowInterrupt: boolean,
-    owner: { readonly projectPath: string; readonly sessionId: string | null }
+    owner: SessionOwner
   ): Promise<{ readonly cancelled: boolean }> {
-    const run = this.ensureRun()
+    if (action !== 'reload') {
+      const occupied = this.reuseOccupied(owner)
+      if (occupied !== null) {
+        this.focusRun(occupied.runId)
+        return { cancelled: false }
+      }
+    }
+
+    const run = this.ensureRun(owner)
     try {
       this.options.runs.beginOpen(run.runId, owner.projectPath, owner.sessionId)
     } catch (error) {
@@ -555,9 +761,11 @@ export class SdkRuntimeBridge {
         : null
       const result = await host.runSessionAction(action, reference, host.getSessionIdentity(), interrupt)
       this.options.runs.settleOpen(run.runId, host.getSessionStatus().sessionId)
+      this.publishState()
       return { cancelled: result.cancelled }
     } catch (error) {
       this.options.runs.failOpen(run.runId)
+      this.publishRuns()
       throw error
     }
   }
@@ -566,6 +774,7 @@ export class SdkRuntimeBridge {
   beginShutdown(): void {
     this.shuttingDown = true
     for (const run of this.options.runs.allRuns()) run.owner.beginShutdown()
+    this.publishRuns()
   }
 
   /** 关闭全部宿主；任一未确认退出时如实抛出，不把关闭失败当作成功。 */
@@ -583,9 +792,15 @@ export class SdkRuntimeBridge {
     if (failure !== undefined) throw failure
   }
 
+  /** 任一实例状态变化后的统一广播入口：前台状态与运行实例列表各自去重。 */
+  private publishState(): void {
+    this.publishStatus()
+    this.publishRuns()
+  }
+
   /** 映射结果变化时广播副本；订阅者异常不能改变宿主生命周期。 */
   private publishStatus(): void {
-    const next = mapStatus(this.currentHostStatus(), this.currentSessionStatus())
+    const next = this.foregroundStatus()
     if (sameStatus(next, this.status)) return
     this.status = next
     for (const listener of [...this.statusListeners]) {
@@ -593,6 +808,21 @@ export class SdkRuntimeBridge {
         listener({ ...next })
       } catch {
         /* 消费者故障不影响宿主监督。 */
+      }
+    }
+  }
+
+  /** 运行实例列表变化时广播副本；列表只含粗粒度字段，流式期间不会逐条消息触发。 */
+  private publishRuns(): void {
+    const next = this.listRunStates()
+    if (sameRuns(this.runs, next)) return
+    this.runs = next
+    const snapshot: SessionRunsSnapshot = { runs: next }
+    for (const listener of [...this.runsListeners]) {
+      try {
+        listener(snapshot)
+      } catch {
+        /* 展示消费者故障不影响宿主监督。 */
       }
     }
   }

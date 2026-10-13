@@ -515,8 +515,9 @@ async function submit(): Promise<void> {
     for (const entry of attachments) {
       images.push({ name: entry.file.name, mimeType: entry.file.type, data: await readAsBase64(entry.file) })
     }
-    // 附件读取期间允许继续编辑草稿，但不允许把旧提交送入已切换的会话。
-    if (runtimeView.value.phase !== 'ready' || runtimeView.value.snapshot.runtimeId !== target.runtimeId
+    // 附件读取期间允许继续编辑草稿，但不允许把旧提交送入已切换的实例或会话。
+    if (runtimeView.value.phase !== 'ready' || runtimeView.value.snapshot.runId !== target.runId
+      || runtimeView.value.snapshot.runtimeId !== target.runtimeId
       || runtimeView.value.snapshot.info?.sessionId !== target.info?.sessionId || sessionStore.opening) return
     const before = promptView.value
     await runtimeStore.send(message, images)
@@ -529,7 +530,8 @@ async function submit(): Promise<void> {
     pendingImages.value = pendingImages.value.filter(entry => !sent.has(entry.objectUrl))
     textarea.value?.focus()
   } catch (error) {
-    if (runtimeView.value.phase === 'ready' && runtimeView.value.snapshot.runtimeId === target.runtimeId
+    if (runtimeView.value.phase === 'ready' && runtimeView.value.snapshot.runId === target.runId
+      && runtimeView.value.snapshot.runtimeId === target.runtimeId
       && runtimeView.value.snapshot.info?.sessionId === target.info?.sessionId) {
       promptView.value = { phase: 'error', error: { code: 'INVALID_REQUEST', message: error instanceof Error ? error.message : '读取图片失败；草稿和附件已保留。' } }
     }

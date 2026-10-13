@@ -4,7 +4,8 @@
  * 列表来自 Pi 管理的会话文件（session-store）；新建、打开、切换与重载都交给 SDK 宿主，
  * 由宿主在同一进程内替换会话，目标、归属与信任经本模块的 SDK 授权回路复核，
  * 授权依据是来源运行实例登记的归属项目，不是前台项目。
- * 有活动操作而请求未确认时直接拒绝，不自动中断、不排队、不重放已提交的内容。
+ * 多运行实例下打开其他会话不中断任何正在运行的会话；重载以目标会话自己的项目做信任复核。
+ * 有活动操作而重载请求未确认时直接拒绝，不自动中断、不排队、不重放已提交的内容。
  * IPC 契约与校验在 shared/session-api.ts。
  */
 import type {
@@ -22,8 +23,9 @@ import { sessionErrorOf } from './sdk-runtime-bridge'
 import type { SdkRuntimeBridge } from './sdk-runtime-bridge'
 import { SessionStorageError, listSessions, resolveSessionFile, resolveSdkSessionFile, getProjectSessionDir } from './session-store'
 import { normalizeProjectPath } from './project-path'
+import type { SessionRunSummary } from './session-run-registry'
 import { isSdkSessionReference } from '../sdk-host/protocol'
-import type { SdkHostFailureCode, SdkSessionReference, SdkSessionTarget } from '../sdk-host/protocol'
+import type { SdkHostFailureCode, SdkSessionReference, SdkSessionStatus, SdkSessionTarget } from '../sdk-host/protocol'
 
 /** SDK 目标授权失败只返回分类，底层路径与配置异常不作为宿主通信载荷。 */
 export class SdkTargetFailure extends Error {
@@ -47,8 +49,14 @@ export interface SessionManagerOptions {
   readonly sdk: SdkRuntimeBridge
   /** SDK 授权使用新鲜信任结果，不复用调用方传入的旧决定。 */
   readonly projectsTrust: import('./trust-manager').TrustManager
-  /** 运行实例归属查询：授权只认注册表登记的项目，不读前台选择。 */
-  readonly ownership: { isProjectActive(projectPath: string): boolean }
+  /**
+   * 运行实例归属查询：授权只认注册表登记的项目，不读前台选择；
+   * 占用查询用于区分「会话由其他实例承载」与「列表已过期」。
+   */
+  readonly ownership: {
+    isProjectActive(projectPath: string): boolean
+    runOfSession(projectPath: string, sessionId: string): SessionRunSummary | null
+  }
 }
 
 export class SessionManager {
@@ -104,32 +112,30 @@ export class SessionManager {
   }
 
   /**
-   * 新建与打开的公共门禁：按会话后端状态判断忙碌与幂等，再做实际切换。
-   * 请求的会话与已就绪会话一致时幂等返回，不做无谓替换。
+   * 新建与打开的公共门禁：请求的会话与前台实例已就绪会话一致时幂等返回，其余交给会话后端。
+   * 多运行实例下打开其他会话不会中断任何正在运行的会话，因此这里不再要求中断确认；
+   * `allowInterrupt` 仍在契约中保留，供后端在必须改变现有绑定且用户已确认时使用。
    */
   private async applyOpen(request: SessionOpenRequest): Promise<SessionList> {
     const projectPath = this.requireProjectPath()
     const status = this.backendStatus()
 
-    if (status.state === 'starting' || status.state === 'stopping') {
-      throw new SessionFailure('SESSION_SWITCH_BLOCKED', 'Runtime 正在启动或关闭，请稍后再切换会话。')
-    }
-    if (status.state === 'ready' && status.info?.isStreaming === true && !request.allowInterrupt) {
-      throw new SessionFailure(
-        'SESSION_SWITCH_BLOCKED',
-        '当前有正在运行的操作；确认后会先停止它再切换会话。'
-      )
-    }
     if (request.sessionId !== null && status.state === 'ready'
       && status.info?.sessionId === request.sessionId) {
       return listSessions(projectPath)
     }
-    if (request.sessionId !== null
+    // 已由某个运行实例承载的会话交给后端转前台复用：此时会话文件可能尚未落盘，不能当作列表过期。
+    if (request.sessionId !== null && !this.isSessionOccupied(projectPath, request.sessionId)
       && await resolveSessionFile(projectPath, request.sessionId) === null) {
       throw new SessionFailure('SESSION_NOT_FOUND', '当前项目下找不到该会话；列表可能已过期。')
     }
 
     return this.openWithSdk(projectPath, request)
+  }
+
+  /** 该会话是否已由某个运行实例占用；占用覆盖打开中与未确认退出，与会话文件是否已落盘无关。 */
+  private isSessionOccupied(projectPath: string, sessionId: string): boolean {
+    return this.options.ownership.runOfSession(projectPath, sessionId) !== null
   }
 
   /**
@@ -168,7 +174,10 @@ export class SessionManager {
     }
   }
 
-  /** 重载编排：守门后让宿主重新绑定同一会话的能力。 */
+  /**
+   * 重载编排：目标是前台运行实例当前绑定的会话，目标与会话身份在提交前固定。
+   * 信任按被重载会话的归属项目复核，避免用前台项目代替它的授权范围。
+   */
   private async applyReload(allowInterrupt: boolean): Promise<SessionList> {
     const projectPath = this.requireProjectPath()
     const status = this.backendStatus()
@@ -182,11 +191,14 @@ export class SessionManager {
       )
     }
 
-    // 宿主按当前会话重建 services；会话已有消息但文件缺失时由宿主拒绝。
-    // 重载只针对已绑定会话的归属项目，不用前台项目代替。
-    const bound = this.options.sdk.getSessionStatus()
-    if (bound.projectPath === null) {
+    // 宿主按目标会话重建 services；会话已有消息但文件缺失时由宿主拒绝。
+    const bound = this.boundSessionOfForeground()
+    if (bound === null) {
       throw new SessionFailure('RUNTIME_NOT_READY', '当前没有可重新加载的会话。')
+    }
+    const trust = await this.options.projectsTrust.refreshStatusOf(bound.projectPath)
+    if (trust.resources.length > 0 && trust.decision === null) {
+      throw new SessionFailure('TRUST_REQUIRED', '该会话所属项目包含需要信任决定的资源。')
     }
     const switched = await this.options.sdk.switchSession('reload', { kind: 'new' }, allowInterrupt,
       { projectPath: bound.projectPath, sessionId: bound.sessionId })
@@ -194,6 +206,21 @@ export class SessionManager {
       throw new SessionFailure('RUNTIME_COMMAND_REJECTED', '重新加载资源被取消，当前会话保持不变。')
     }
     return listSessions(projectPath)
+  }
+
+  /**
+   * 前台运行实例当前绑定的会话；没有前台实例、尚未绑定或未登记归属项目时返回 null，
+   * 调用方据此按未就绪拒绝，不用前台项目或本地缓存代替目标。
+   */
+  private boundSessionOfForeground(): {
+    readonly projectPath: string
+    readonly sessionId: string | null
+  } | null {
+    const runId = this.options.sdk.foregroundRunId()
+    if (runId === null) return null
+    const status: SdkSessionStatus | null = this.options.sdk.sessionStatusOfRun(runId)
+    if (status === null || status.bindingId === null || status.projectPath === null) return null
+    return { projectPath: status.projectPath, sessionId: status.sessionId }
   }
 
   private requireProjectPath(): string {

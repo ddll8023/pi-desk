@@ -92,7 +92,8 @@ export const useSessionStore = defineStore('session', () => {
   }
 
   /**
-   * 打开或新建会话；`allowInterrupt` 表示用户已经确认可以停止运行中的操作。
+   * 打开或新建会话；打开其他会话不中断任何正在运行的会话，`allowInterrupt` 仅在用户已确认
+   * 必须改变现有绑定时为真。
    * 新会话的默认模型由 Pi 自己的 settings.json 决定；信任或中断确认期间只保留目标，重试不重新选择。
    */
   async function open(sessionId: string | null, allowInterrupt: boolean): Promise<void> {

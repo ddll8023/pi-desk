@@ -66,13 +66,14 @@ const canRewind = computed(() => runtimeView.value.phase === 'ready' && runtimeI
   && !sessionStore.opening && !sessionStore.awaitingTrust && !sessionStore.awaitingInterrupt)
 const rewindDetail = computed(() => '原会话保留，可从会话列表重新打开。仅回退对话，不撤销项目文件改动。')
 
-/** 发起确认时固定目标；用户确认前不会改变历史。 */
+/** 发起确认时固定目标（运行实例、代际与会话）；用户确认前不会改变历史。 */
 function requestRewind(messageId: string): void {
   if (!canRewind.value || runtimeView.value.phase !== 'ready') return
+  const runId = runtimeView.value.snapshot.runId
   const runtimeId = runtimeView.value.snapshot.runtimeId
   const sessionId = runtimeInfo.value?.sessionId
-  if (runtimeId === null || sessionId == null) return
-  pendingRewind.value = { request: { runtimeId, sessionId, messageId } }
+  if (runId === null || runtimeId === null || sessionId == null) return
+  pendingRewind.value = { request: { runId, runtimeId, sessionId, messageId } }
 }
 
 /** 直接回退：仅权威成功才刷新会话列表。 */
@@ -86,10 +87,11 @@ async function confirmRewind(): Promise<void> {
 /** 修改提交：回退成功后立即发送修改文本，再刷新会话列表。 */
 async function handleSubmitEdit(messageId: string, text: string): Promise<void> {
   if (!canRewind.value || runtimeView.value.phase !== 'ready') return
+  const runId = runtimeView.value.snapshot.runId
   const runtimeId = runtimeView.value.snapshot.runtimeId
   const sessionId = runtimeInfo.value?.sessionId
-  if (runtimeId === null || sessionId == null) return
-  const request: RuntimeRewindRequest = { runtimeId, sessionId, messageId }
+  if (runId === null || runtimeId === null || sessionId == null) return
+  const request: RuntimeRewindRequest = { runId, runtimeId, sessionId, messageId }
   pendingEdit.value = { messageId, text }
   const success = await runtimeStore.rewind(request)
   if (!success) {
@@ -102,10 +104,12 @@ async function handleSubmitEdit(messageId: string, text: string): Promise<void> 
   await sessionStore.refresh()
   pendingEdit.value = null
 }
-/** 消息 ID 只在单个 Runtime 内唯一；会话切换后不能复用旧消息组件的手动开合状态。 */
+/** 消息 ID 只在单个运行实例内唯一；实例或会话切换后不能复用旧消息组件的手动开合状态。 */
 const conversationKey = computed(() => {
-  const runtimeId = runtimeView.value.phase === 'ready' ? runtimeView.value.snapshot.runtimeId : null
-  return `${projectStore.currentProject?.id ?? 'none'}:${runtimeId ?? 'none'}:${runtimeInfo.value?.sessionId ?? 'none'}`
+  const snapshot = runtimeView.value.phase === 'ready' ? runtimeView.value.snapshot : null
+  const runId = snapshot?.runId ?? null
+  const runtimeId = snapshot?.runtimeId ?? null
+  return `${projectStore.currentProject?.id ?? 'none'}:${runId ?? 'none'}:${runtimeId ?? 'none'}:${runtimeInfo.value?.sessionId ?? 'none'}`
 })
 const syncNotice = computed(() => {
   if (projectionSync.value === 'synced') return null

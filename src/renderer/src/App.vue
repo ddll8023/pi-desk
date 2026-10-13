@@ -9,6 +9,7 @@ import { useProjectStore } from './stores/project'
 import { useResourceStore } from './stores/resource'
 import { useRuntimeStore } from './stores/runtime'
 import { useSessionStore } from './stores/session'
+import { useSessionRunsStore } from './stores/session-runs'
 import { useTrustStore } from './stores/trust'
 import type { Project } from '../../shared/project-api'
 import AppTopBar from './components/AppTopBar.vue'
@@ -29,7 +30,8 @@ const projectStore = useProjectStore()
 const resourceStore = useResourceStore()
 const runtimeStore = useRuntimeStore()
 const sessionStore = useSessionStore()
-const { currentProject, pendingPath, pendingAddition, pendingAdditionDecision } = storeToRefs(projectStore)
+const sessionRunsStore = useSessionRunsStore()
+const { currentProject, pendingAddition, pendingAdditionDecision } = storeToRefs(projectStore)
 const { awaitingInterrupt, pendingReload, pendingSessionId } = storeToRefs(sessionStore)
 const { sidebarCollapsed, ready: preferencesReady } = storeToRefs(preferencesStore)
 const trustStore = useTrustStore()
@@ -78,8 +80,6 @@ function closeMobileSidebar(): void {
 const widgetsAbove = computed(() => extensionStore.widgets.filter((w) => w.placement === 'aboveEditor'))
 const widgetsBelow = computed(() => extensionStore.widgets.filter((w) => w.placement === 'belowEditor'))
 
-/** 主进程拒绝未确认的切换后，由用户在这里确认可以中断正在运行的操作。 */
-const projectConfirmDetail = computed(() => pendingPath.value ?? '')
 const sessionConfirmDetail = computed(() => {
   if (pendingReload.value) return '重新加载 Pi 资源（重建会话服务，保留当前会话）'
   return pendingSessionId.value === null ? '新建会话' : `会话 ${pendingSessionId.value.slice(0, 8)}`
@@ -93,20 +93,6 @@ const sessionConfirmDescription = computed(() => (
     : '切换会话会先停止当前 Agent 操作，已提交的内容不会重放。'
 ))
 const sessionConfirmLabel = computed(() => (pendingReload.value ? '停止并重新加载' : '停止并切换'))
-
-function confirmProjectSwitch(): void {
-  if (pendingAddition.value !== null) {
-    void projectStore.commitAddition(true)
-    return
-  }
-  const path = pendingPath.value
-  if (path === null) return
-  void projectStore.select(path, true)
-}
-
-function cancelProjectSwitch(): void {
-  projectStore.cancelPending()
-}
 
 function requestProjectRemoval(project: Project): void {
   projectToRemove.value = project
@@ -152,7 +138,7 @@ function onTrustCancelled(): void {
   sessionStore.cancelPending()
 }
 
-/** 切换项目已由主进程结束旧 Runtime，这里只刷新会话列表。 */
+/** 前台切换不再结束任何运行实例，这里只在项目上下文变化后刷新会话列表。 */
 watch(currentProject, (project, previous) => {
   if (project?.path === previous?.path) return
   void sessionStore.refresh()
@@ -188,6 +174,7 @@ onMounted(() => {
   void resourceStore.initialize()
   void runtimeStore.initialize()
   void sessionStore.initialize()
+  void sessionRunsStore.initialize()
 })
 
 onUnmounted(() => {
@@ -195,6 +182,7 @@ onUnmounted(() => {
   extensionStore.dispose()
   resourceStore.dispose()
   runtimeStore.dispose()
+  sessionRunsStore.dispose()
 })
 </script>
 
@@ -243,16 +231,6 @@ onUnmounted(() => {
 
     <!-- 模态弹层统一经 Teleport 渲染到 body，全部落在根堆叠上下文；组件常驻挂载，进出由内部 Transition 驱动。 -->
     <Teleport to="body">
-      <ConfirmDialog
-        :open="pendingPath !== null"
-        title="停止运行中的操作并切换项目？"
-        description="切换项目会先停止当前 Agent 操作，已提交的内容不会重放。"
-        :detail="projectConfirmDetail"
-        confirm-label="停止并切换"
-        @confirm="confirmProjectSwitch"
-        @cancel="cancelProjectSwitch"
-      />
-
       <ConfirmDialog
         :open="awaitingInterrupt"
         :title="sessionConfirmTitle"

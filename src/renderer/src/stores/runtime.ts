@@ -17,6 +17,7 @@ import type {
   RuntimeError,
   RuntimeRewindRequest,
   RuntimeStatus,
+  RuntimeTarget,
   ToolExecution
 } from '../../../shared/runtime-api'
 import { useProjectStore } from './project'
@@ -180,6 +181,8 @@ function applyUpdates(
 
 export const useRuntimeStore = defineStore('runtime', () => {
   const view = ref<RuntimeViewState>({ phase: 'idle' })
+  /** 前台运行实例身份；事件与请求的目标都按它校验，切换时同步重置展示基准。 */
+  const foregroundRunId = ref<number | null>(null)
   const promptView = ref<PromptViewState>({ phase: 'idle' })
   /** 附件读取也属于提交阶段，回退和切换模型不能穿插其间。 */
   const preparingPrompt = ref(false)
@@ -217,7 +220,8 @@ export const useRuntimeStore = defineStore('runtime', () => {
   let capabilitiesRequest = 0
   let releaseSubscription: (() => void) | null = null
   let releaseProjection: (() => void) | null = null
-  /** 已取得基准快照的 Runtime 代际；为空表示当前没有 Runtime 代际（空基准或尚未取得快照）。 */
+  /** 已取得基准快照的运行实例与 Runtime 代际；两者一起判定当前展示是否仍是权威基准。 */
+  let appliedRunId: number | null = null
   let appliedRuntimeId: number | null = null
   let appliedSeq = 0
   let projectionSyncPromise: Promise<void> | null = null
@@ -266,6 +270,8 @@ export const useRuntimeStore = defineStore('runtime', () => {
     releaseProjection?.()
     releaseProjection = null
     projectionSyncPromise = null
+    foregroundRunId.value = null
+    appliedRunId = null
     stopProjectWatch?.()
     stopProjectWatch = null
     stopAuthWatch?.()
@@ -499,15 +505,26 @@ export const useRuntimeStore = defineStore('runtime', () => {
       || (rewindView.value.phase === 'error' && rewindView.value.blocked)
   }
 
-  /** 提交 Prompt；旧会话的迟到结果不能清空或改写新会话输入。 */
+  /** 当前就绪快照的二维目标；未就绪或缺少运行身份时返回 null，调用方据此不发起请求。 */
+  function currentTarget(): RuntimeTarget | null {
+    if (view.value.phase !== 'ready') return null
+    const status = view.value.snapshot
+    if (status.runId === null) return null
+    return { runId: status.runId, runtimeId: status.runtimeId }
+  }
+
+  /** 提交 Prompt；旧实例或旧会话的迟到结果不能清空或改写当前输入。 */
   async function send(message: string, images: readonly PromptImageInput[] = []): Promise<void> {
     if (view.value.phase !== 'ready' || promptView.value.phase === 'sending'
       || modelSwitchView.value.phase === 'switching' || rewindBlocksWrites()) return
-    const target = view.value.snapshot
+    const target = currentTarget()
+    if (target === null) return
+    const sessionId = view.value.snapshot.info?.sessionId ?? null
     promptView.value = { phase: 'sending' }
-    const result = await sendPrompt(message, images)
-    if (view.value.phase !== 'ready' || view.value.snapshot.runtimeId !== target.runtimeId
-      || view.value.snapshot.info?.sessionId !== target.info?.sessionId) return
+    const result = await sendPrompt(target, message, images)
+    if (view.value.phase !== 'ready' || view.value.snapshot.runId !== target.runId
+      || view.value.snapshot.runtimeId !== target.runtimeId
+      || (view.value.snapshot.info?.sessionId ?? null) !== sessionId) return
     promptView.value = result.ok
       ? { phase: 'accepted', disposition: result.data.disposition }
       : { phase: 'error', error: result.error }
@@ -518,12 +535,14 @@ export const useRuntimeStore = defineStore('runtime', () => {
     if (view.value.phase !== 'ready' || rewindBlocksWrites() || preparingPrompt.value
       || promptView.value.phase === 'sending' || modelSwitchView.value.phase === 'switching'
       || view.value.snapshot.info?.isStreaming === true || projectionSync.value !== 'synced'
-      || view.value.snapshot.runtimeId !== request.runtimeId || view.value.snapshot.info?.sessionId !== request.sessionId) return false
+      || view.value.snapshot.runId !== request.runId || view.value.snapshot.runtimeId !== request.runtimeId
+      || view.value.snapshot.info?.sessionId !== request.sessionId) return false
     const sequence = ++rewindRequest
     rewindView.value = { phase: 'requesting' }
     try {
       const result = await rewindRuntime(request)
       if (sequence !== rewindRequest || view.value.phase !== 'ready'
+        || view.value.snapshot.runId !== request.runId
         || view.value.snapshot.runtimeId !== request.runtimeId) return false
       if (!result.ok) {
         rewindView.value = { phase: 'error', error: result.error, blocked: result.blocked === true }
@@ -532,7 +551,8 @@ export const useRuntimeStore = defineStore('runtime', () => {
       const status = result.data.status
       const sessionId = status.info?.sessionId
       const currentSessionId = view.value.snapshot.info?.sessionId
-      if (status.state !== 'ready' || status.runtimeId !== request.runtimeId
+      if (status.state !== 'ready' || status.runId !== request.runId
+        || status.runtimeId !== request.runtimeId
         || (currentSessionId !== request.sessionId && currentSessionId !== sessionId)) return false
       if (result.data.cancelled) {
         rewindView.value = { phase: 'done', cancelled: true }
@@ -541,7 +561,8 @@ export const useRuntimeStore = defineStore('runtime', () => {
       applyStatus(status)
       await syncProjection(status.runtimeId ?? undefined)
       if (sequence !== rewindRequest || view.value.phase !== 'ready'
-        || view.value.snapshot.runtimeId !== status.runtimeId || view.value.snapshot.info?.sessionId !== sessionId) return false
+        || view.value.snapshot.runId !== status.runId || view.value.snapshot.runtimeId !== status.runtimeId
+        || view.value.snapshot.info?.sessionId !== sessionId) return false
       if (projectionSync.value !== 'synced') {
         rewindView.value = { phase: 'error', error: { code: 'INVALID_RESPONSE', message: '对话已回退，但消息同步失败；请重新打开会话。' }, blocked: true }
         return false
@@ -553,26 +574,27 @@ export const useRuntimeStore = defineStore('runtime', () => {
     }
   }
 
-  /** 只在当前代际空闲时切换；不乐观更新模型，也不自动重试写操作。 */
+  /** 只在当前实例的当前绑定空闲时切换；不乐观更新模型，也不自动重试写操作。 */
   async function switchModel(provider: string, modelId: string): Promise<void> {
     if (view.value.phase !== 'ready' || view.value.snapshot.info?.isStreaming === true
       || promptView.value.phase === 'sending' || preparingPrompt.value
       || modelSwitchView.value.phase === 'switching' || rewindBlocksWrites()) return
     const status = view.value.snapshot
     const runtimeId = status.runtimeId
-    if (runtimeId === null) return
+    if (runtimeId === null || status.runId === null) return
     if (status.info?.modelProvider === provider && status.info.modelId === modelId) return
 
     const request = ++modelSwitchRequest
+    const runId = status.runId
     modelSwitchView.value = { phase: 'switching' }
-    const result = await setRuntimeModel(runtimeId, provider, modelId)
+    const result = await setRuntimeModel({ runId, runtimeId, provider, modelId })
     if (request !== modelSwitchRequest || view.value.phase !== 'ready'
-      || view.value.snapshot.runtimeId !== runtimeId) return
+      || view.value.snapshot.runId !== runId || view.value.snapshot.runtimeId !== runtimeId) return
     if (!result.ok) {
       modelSwitchView.value = { phase: 'error', error: result.error }
       return
     }
-    if (result.data.runtimeId !== runtimeId || result.data.state !== 'ready') {
+    if (result.data.runId !== runId || result.data.runtimeId !== runtimeId || result.data.state !== 'ready') {
       modelSwitchView.value = {
         phase: 'error',
         error: { code: 'INVALID_RESPONSE', message: '模型切换返回了其他会话的状态，未应用该结果。' }
@@ -585,24 +607,26 @@ export const useRuntimeStore = defineStore('runtime', () => {
   }
 
   /**
-   * 请求中止当前操作；只在就绪且事件流显示运行中时发起，发送中不重复提交。
+   * 请求中止目标实例的当前操作；只在就绪且事件流显示运行中时发起，发送中不重复提交。
    * 成功只表示 Pi 已确认取消，运行中状态的最终收敛仍由事件流负责。
    */
   async function stopOperation(): Promise<void> {
     if (view.value.phase !== 'ready') return
     if (view.value.snapshot.info?.isStreaming !== true) return
     if (abortView.value.phase === 'requesting') return
+    const target = currentTarget()
+    if (target === null) return
 
     abortView.value = { phase: 'requesting' }
-    const result = await abortRuntime()
+    const result = await abortRuntime(target)
     abortView.value = result.ok
       ? { phase: 'idle' }
       : { phase: 'error', error: result.error }
   }
 
   /**
-   * 全量重同步：快照是唯一基准，期间到达的增量由序号守卫丢弃。
-   * 无活动 Runtime 的空快照（`runtimeId` 为 null）本身是有效空基准，不作为换代冲突处理。
+   * 全量重同步：快照是唯一基准，期间到达的增量由序号守卫丢弃；只向当前前台实例取基准。
+   * 没有前台实例时空基准就是真实状态，不向任何目标发请求。
    */
   function syncProjection(expectedRuntimeId?: number): Promise<void> {
     if (projectionSyncPromise !== null) return projectionSyncPromise
@@ -614,16 +638,23 @@ export const useRuntimeStore = defineStore('runtime', () => {
     return pending
   }
 
-  /** 读取期间换会话就丢弃旧响应，并在同一等待链中取得新会话的快照。 */
+  /** 读取期间换实例、换代或换会话就丢弃旧响应，并在同一等待链中取得新目标的快照。 */
   async function readProjection(expectedRuntimeId?: number): Promise<void> {
     projectionSync.value = 'syncing'
     const lifecycle = modelLifecycle
     while (lifecycle === modelLifecycle) {
-      const target = view.value.phase === 'ready' ? view.value.snapshot : null
-      const result = await getRuntimeProjection()
-      const current = view.value.phase === 'ready' ? view.value.snapshot : null
+      const target = currentTarget()
+      if (target === null) {
+        resetProjection()
+        return
+      }
+      const sessionId = view.value.phase === 'ready' ? view.value.snapshot.info?.sessionId ?? null : null
+      const result = await getRuntimeProjection(target)
+      const current = currentTarget()
+      const currentSessionId = view.value.phase === 'ready' ? view.value.snapshot.info?.sessionId ?? null : null
       if (lifecycle !== modelLifecycle) return
-      if (target?.runtimeId !== current?.runtimeId || target?.info?.sessionId !== current?.info?.sessionId) {
+      if (target.runId !== current?.runId || target.runtimeId !== current?.runtimeId
+        || sessionId !== currentSessionId) {
         expectedRuntimeId = current?.runtimeId ?? undefined
         continue
       }
@@ -636,6 +667,7 @@ export const useRuntimeStore = defineStore('runtime', () => {
         projectionSync.value = 'stale'
         return
       }
+      appliedRunId = target.runId
       appliedRuntimeId = snapshot.runtimeId
       appliedSeq = snapshot.seq
       messages.value = snapshot.messages
@@ -644,15 +676,21 @@ export const useRuntimeStore = defineStore('runtime', () => {
       droppedMessages.value = snapshot.droppedMessages
       droppedTools.value = snapshot.droppedTools
       projectionSync.value = 'synced'
-      if (snapshot.runtimeId !== null) ackRuntimeProjection(snapshot.runtimeId, snapshot.seq)
+      if (snapshot.runtimeId !== null) ackRuntimeProjection(target, snapshot.seq)
       return
     }
   }
 
-  /** 批次按序号连续应用；旧代际、缺口与重同步标记都收敛到快照。 */
+  /** 批次只接受当前前台实例的来源；后台实例的事件在 1b 直接丢弃，不覆盖前台展示。 */
   function applyBatch(batch: ProjectionBatch): void {
-    if (appliedRuntimeId === null || batch.runtimeId !== appliedRuntimeId) {
-      // 尚无基准快照或批次来自旧代际：不能无基准地应用增量。
+    if (batch.runId !== undefined && batch.runId !== null && batch.runId !== foregroundRunId.value) {
+      return
+    }
+    const origin = batch.runId ?? foregroundRunId.value
+    if (origin === null) return
+    const target: RuntimeTarget = { runId: origin, runtimeId: batch.runtimeId }
+    if (appliedRunId !== origin || batch.runtimeId !== appliedRuntimeId) {
+      // 尚无基准快照，或批次属于其他实例/代际：不能无基准地应用增量。
       void syncProjection(batch.runtimeId)
       return
     }
@@ -662,7 +700,7 @@ export const useRuntimeStore = defineStore('runtime', () => {
     }
     if (batch.seq <= appliedSeq) {
       // 快照已经覆盖的迟到批次，只需补一次确认。
-      ackRuntimeProjection(batch.runtimeId, appliedSeq)
+      ackRuntimeProjection(target, appliedSeq)
       return
     }
     if (batch.seq !== appliedSeq + 1) {
@@ -680,10 +718,10 @@ export const useRuntimeStore = defineStore('runtime', () => {
     tools.value = applied.tools
     appliedSeq = batch.seq
     projectionSync.value = 'synced'
-    ackRuntimeProjection(batch.runtimeId, appliedSeq)
+    ackRuntimeProjection(target, appliedSeq)
   }
 
-  /** 投影随 Runtime 代际存在：离开就绪即清空展示消息；没有 Runtime 时空投影本身就是基准。 */
+  /** 投影随运行实例与绑定代际存在：离开就绪即清空展示消息；没有目标时空投影本身就是基准。 */
   function resetProjection(): void {
     messages.value = []
     tools.value = []
@@ -691,27 +729,30 @@ export const useRuntimeStore = defineStore('runtime', () => {
     projectionTruncated.value = false
     droppedMessages.value = 0
     droppedTools.value = 0
+    appliedRunId = null
     appliedRuntimeId = null
     appliedSeq = 0
   }
 
   /** 主进程快照是唯一真相：事件通知与查询结果都经这里映射为展示状态。 */
   function applyStatus(status: RuntimeStatus): void {
-    const previousRuntimeId = view.value.phase === 'ready' ? view.value.snapshot.runtimeId : null
-    const previousSessionId = view.value.phase === 'ready' ? view.value.snapshot.info?.sessionId : null
-    const sessionChanged = status.state === 'ready' && status.info?.sessionId !== previousSessionId
-    if (status.state !== 'ready' || status.runtimeId !== previousRuntimeId) {
+    const previous = view.value.phase === 'ready' ? view.value.snapshot : null
+    // 运行实例与绑定代际一起决定目标：任一维度变化都重置瞬态并重取基准。
+    const targetChanged = status.state !== 'ready'
+      || status.runId !== previous?.runId
+      || status.runtimeId !== previous?.runtimeId
+    const sessionChanged = status.state === 'ready'
+      && (status.info?.sessionId ?? null) !== (previous?.info?.sessionId ?? null)
+    const previousStreaming = previous?.info?.isStreaming === true
+    foregroundRunId.value = status.runId
+    if (targetChanged) {
       rewindRequest += 1
       rewindView.value = { phase: 'idle' }
       preparingPrompt.value = false
     }
-    if (status.state !== 'ready' || status.runtimeId !== previousRuntimeId || sessionChanged) {
+    if (targetChanged || sessionChanged) {
       promptView.value = { phase: 'idle' }
       abortView.value = { phase: 'idle' }
-    }
-    const previousStreaming = view.value.phase === 'ready'
-      && view.value.snapshot.info?.isStreaming === true
-    if (status.state !== 'ready' || status.runtimeId !== previousRuntimeId || sessionChanged) {
       modelSwitchRequest += 1
       capabilitiesRequest += 1
       modelSwitchView.value = { phase: 'idle' }
@@ -721,7 +762,7 @@ export const useRuntimeStore = defineStore('runtime', () => {
     }
     if (status.state !== 'ready') {
       resetProjection()
-      // Runtime 离开就绪后，上一次中止请求的展示状态不再有意义。
+      // 离开就绪后，上一次中止请求的展示状态不再有意义。
       abortView.value = { phase: 'idle' }
       capabilitiesView.value = { phase: 'idle' }
       capabilitiesAttemptedRuntimeId = null
@@ -739,12 +780,13 @@ export const useRuntimeStore = defineStore('runtime', () => {
     }
     if (status.state === 'ready') {
       view.value = { phase: 'ready', snapshot: status }
-      // 换代与上一次重同步未收敛（syncing/stale）都重新取基准。
-      if (sessionChanged || status.runtimeId !== appliedRuntimeId || projectionSync.value !== 'synced') {
+      // 换实例、换代、换会话与上一次重同步未收敛（syncing/stale）都重新取基准。
+      if (targetChanged || sessionChanged || status.runtimeId !== appliedRuntimeId
+        || projectionSync.value !== 'synced') {
         void syncProjection(status.runtimeId ?? undefined)
       }
-      // 新 Runtime 或一轮结束后刷新模型列表，维持 Provider、模型显示名与图片输入能力提示。
-      if (sessionChanged || status.runtimeId !== capabilitiesAttemptedRuntimeId
+      // 新实例、新会话或一轮结束后刷新模型列表，维持 Provider、模型显示名与图片输入能力提示。
+      if (targetChanged || sessionChanged || status.runtimeId !== capabilitiesAttemptedRuntimeId
         || (previousStreaming && status.info?.isStreaming !== true)) {
         void refreshCapabilities()
       }
@@ -763,29 +805,31 @@ export const useRuntimeStore = defineStore('runtime', () => {
     refreshModelPreviewIfNeeded()
   }
 
-  /** 读取当前 Runtime 的可用模型；仅接收仍在就绪的同一代际中最新请求的结果，其余结果丢弃。 */
+  /** 读取当前前台实例的可用模型；只接收同一实例同一代际中最新请求的结果，其余结果丢弃。 */
   async function refreshCapabilities(): Promise<void> {
-    if (view.value.phase !== 'ready') return
-    const requestedRuntimeId = view.value.snapshot.runtimeId
+    const target = currentTarget()
+    if (target === null) return
     const request = ++capabilitiesRequest
-    capabilitiesAttemptedRuntimeId = requestedRuntimeId
+    capabilitiesAttemptedRuntimeId = target.runtimeId
     if (capabilitiesView.value.phase !== 'ready' || capabilitiesView.value.data.modelsError !== null) {
       capabilitiesView.value = { phase: 'loading' }
     }
 
-    const result = await getRuntimeCapabilities()
-    if (request !== capabilitiesRequest || view.value.phase !== 'ready'
-      || view.value.snapshot.runtimeId !== requestedRuntimeId) return
+    const result = await getRuntimeCapabilities(target)
+    const current = currentTarget()
+    if (request !== capabilitiesRequest || current === null
+      || current.runId !== target.runId || current.runtimeId !== target.runtimeId) return
     if (!result.ok) {
       capabilitiesView.value = { phase: 'error', error: result.error }
       return
     }
-    if (result.data.runtimeId !== requestedRuntimeId) return
+    if (result.data.runtimeId !== target.runtimeId) return
     capabilitiesView.value = { phase: 'ready', data: result.data }
   }
 
   return {
     view,
+    foregroundRunId,
     promptView,
     preparingPrompt,
     rewindView,

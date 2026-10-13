@@ -87,7 +87,7 @@ watch(
         <div class="min-w-0">
           <h2 class="dialog-title">选择会话</h2>
           <p class="dialog-subtitle">
-            选择一条历史会话继续；切换会替换当前会话的 SDK 绑定并停止运行中的操作。
+            选择一条历史会话继续；已在运行的会话会切到前台，不会中断它。
           </p>
         </div>
         <AppButton variant="unstyled" class="dialog-close-button" aria-label="关闭" @click="close" />

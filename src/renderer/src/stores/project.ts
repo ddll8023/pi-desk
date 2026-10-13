@@ -25,8 +25,6 @@ export const useProjectStore = defineStore('project', () => {
   const actionError = ref<ProjectError | null>(null)
   const choosing = ref(false)
   const switching = ref(false)
-  /** 主进程拒绝了未确认的切换时保存待确认路径，确认后带 `allowInterrupt` 重试。 */
-  const pendingPath = ref<string | null>(null)
   /** 目录选择后暂存候选；信任确认或取消之前不会切换当前项目或写入列表。 */
   /** 候选项目只在流程内只读使用，不需要深度响应式；用 shallowRef 避免把代理存下来并传过桥。 */
   const pendingAddition = shallowRef<ProjectPathSelection | null>(null)
@@ -83,7 +81,10 @@ export const useProjectStore = defineStore('project', () => {
     }
   }
 
-  /** 信任选择只暂存于内存；主进程确认切换成功时才与项目记录一起持久化。 */
+  /**
+   * 信任选择只暂存于内存；主进程确认添加成功时才与项目记录一起持久化。
+   * `allowInterrupt` 仍随请求提交：添加项目会顺带切换前台项目，但前台切换不中断任何后台会话。
+   */
   async function commitAddition(allowInterrupt: boolean, decision?: TrustDecision): Promise<void> {
     const candidate = pendingAddition.value
     if (candidate === null || switching.value) return
@@ -98,19 +99,12 @@ export const useProjectStore = defineStore('project', () => {
         pendingAdditionDecision.value,
         allowInterrupt
       )
-      if (result.ok) {
+      if (!result.ok) {
+        actionError.value = result.error
+      } else {
         applyList(result.data)
-        pendingPath.value = null
-        pendingAddition.value = null
-        pendingAdditionDecision.value = null
-        return
       }
-      if (result.error.code === 'PROJECT_SWITCH_BLOCKED' && !allowInterrupt) {
-        pendingPath.value = candidate.path
-        return
-      }
-      actionError.value = result.error
-      pendingPath.value = null
+      // 无论成功还是失败，候选都不再保留：失败原因已在 actionError 中展示。
       pendingAddition.value = null
       pendingAdditionDecision.value = null
     } finally {
@@ -123,7 +117,6 @@ export const useProjectStore = defineStore('project', () => {
     if (switching.value) return
     pendingAddition.value = null
     pendingAdditionDecision.value = null
-    pendingPath.value = null
   }
 
   /** 删除 Desktop 列表项；目录文件不受影响。调用方须在中断确认后传入 allowInterrupt。 */
@@ -144,8 +137,8 @@ export const useProjectStore = defineStore('project', () => {
   }
 
   /**
-   * 把路径设为当前项目；`allowInterrupt` 为真表示用户已确认可以停止正在运行的操作。
-   * 主进程拒绝未确认的切换时只记录待确认路径，由界面就地确认。
+   * 把路径设为当前项目。前台切换只改变项目上下文，不停止任何后台会话，因此不再需要中断确认；
+   * `allowInterrupt` 只为 IPC 契约保留。
    */
   async function select(path: string, allowInterrupt: boolean): Promise<void> {
     if (switching.value) return
@@ -154,26 +147,14 @@ export const useProjectStore = defineStore('project', () => {
     actionError.value = null
     try {
       const result = await setCurrentProject(path, allowInterrupt)
-      if (result.ok) {
-        applyList(result.data)
-        pendingPath.value = null
+      if (!result.ok) {
+        actionError.value = result.error
         return
       }
-      if (result.error.code === 'PROJECT_SWITCH_BLOCKED' && !allowInterrupt) {
-        pendingPath.value = path
-        return
-      }
-      actionError.value = result.error
+      applyList(result.data)
     } finally {
       switching.value = false
     }
-  }
-
-  /** 放弃待确认的切换；运行中的操作不受影响。 */
-  function cancelPending(): void {
-    pendingPath.value = null
-    pendingAddition.value = null
-    pendingAdditionDecision.value = null
   }
 
   return {
@@ -185,7 +166,6 @@ export const useProjectStore = defineStore('project', () => {
     actionError,
     choosing,
     switching,
-    pendingPath,
     pendingAddition,
     pendingAdditionDecision,
     initialize,
@@ -193,7 +173,6 @@ export const useProjectStore = defineStore('project', () => {
     commitAddition,
     cancelAddition,
     remove,
-    select,
-    cancelPending
+    select
   }
 })
