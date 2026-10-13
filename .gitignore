@@ -3,3 +3,5 @@ out/
 release/
 *.tsbuildinfo
 runtime
+# macOS Finder 在每个目录生成的元数据文件，与项目内容无关。
+.DS_Store
