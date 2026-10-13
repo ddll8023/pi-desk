@@ -2264,6 +2264,25 @@
     @apply text-xs font-medium text-desk-muted;
   }
 
+  /* 参数摘要：键与值两列，值过长时换行而不撑宽卡片。 */
+  .tool-args-summary {
+    @apply grid gap-x-3 gap-y-1 text-xs;
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .tool-arg-key {
+    @apply font-mono text-desk-muted;
+  }
+
+  .tool-arg-value {
+    @apply min-w-0 font-mono break-words text-desk-ink;
+  }
+
+  /* 区块标题与复制、二级折叠入口同一行；按钮靠右，不与标题抢视线。 */
+  .tool-fold-row {
+    @apply flex flex-wrap items-center justify-between gap-x-2 gap-y-1;
+  }
+
   /* 工具 Diff 行：只按 Pi 已算出的变更语义着色，不重新计算差异。 */
   .tool-output p.tool-diff-add {
     color: var(--color-desk-success);

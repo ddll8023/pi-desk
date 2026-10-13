@@ -1,21 +1,33 @@
-<!-- 通用工具卡片：默认折叠且仅手动开合，内联展示工具名称、执行状态、Desktop 计算的耗时与参数摘要，展开后显示参数、结果或错误输出与非文本内容描述。 -->
+<!-- 通用工具卡片：默认折叠且仅手动开合，内联展示工具名称、执行状态、Desktop 计算的耗时与参数摘要；展开后先给参数键值摘要、变更 Diff 与结果预览，参数原文与完整结果各自二级折叠并可一键复制，结果被 Pi 截断时给出完整输出路径。 -->
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import type {
+  ToolArgSummaryEntry,
   ToolDiff,
   ToolDiffLine,
   ToolExecutionPhase,
   ToolNonTextPart
 } from '../../../shared/runtime-api'
 import type { ChatToolBlock } from '../chat-view'
+import { copyText } from '../clipboard'
 import { formatDuration, useTickingNow } from '../clock'
+import {
+  RESULT_PREVIEW_CHARS,
+  RESULT_PREVIEW_LINES,
+  formatBytes,
+  formatToolArgValue,
+  previewTextLines,
+  summarizeResultText,
+  toolCallPreview
+} from '../tool-summary'
+import AppButton from './ui/AppButton.vue'
 
 const props = defineProps<{
   readonly block: ChatToolBlock
 }>()
 
-/** 参数首行预览的长度上限；只用于摘要，不代替展开后的完整参数。 */
-const ARGS_PREVIEW_CHARS = 120
+/** 可复制的原文区块；参数与结果各自独立反馈。 */
+type CopyTarget = 'args' | 'text'
 
 /** 工具状态只做文案映射，不推断工具是否真的成功结束。 */
 const PHASE_LABELS: Readonly<Record<ToolExecutionPhase, string>> = {
@@ -52,16 +64,25 @@ const durationText = computed(() => {
   return formatDuration(Math.max(0, endedAt - current.startedAt))
 })
 
-/** 折叠时只看参数首行，保持一行可扫读；完整参数在展开后显示。 */
-const argsPreview = computed(() => {
-  const argsText = execution.value?.argsText
-  if (argsText === null || argsText === undefined) return null
-  const firstLine = (argsText.split('\n', 1)[0] ?? '').trim()
-  if (firstLine === '') return null
-  return firstLine.length > ARGS_PREVIEW_CHARS
-    ? `${firstLine.slice(0, ARGS_PREVIEW_CHARS)}…`
-    : firstLine
-})
+/** 折叠时只看关键参数（路径、命令、pattern 等），保持一行可扫读；完整参数在展开后显示。 */
+const argsSummary = computed<readonly ToolArgSummaryEntry[] | null>(() => execution.value?.argsSummary ?? null)
+const argsPreview = computed(() => toolCallPreview(props.block.toolName, argsSummary.value, execution.value?.argsText ?? null))
+
+/** 结果文本与它的预览；JSON 结果只给结构摘要，长文本只给前几行。 */
+const resultText = computed(() => execution.value?.text ?? '')
+const resultPreview = computed(() => previewTextLines(resultText.value, RESULT_PREVIEW_LINES, RESULT_PREVIEW_CHARS))
+const isFailure = computed(() => execution.value?.phase === 'failed')
+const resultJsonLabel = computed(() => (isFailure.value ? null : summarizeResultText(resultText.value)))
+
+/** 参数与结果的二级折叠：默认只看摘要，展开后才渲染原文。 */
+const argsExpanded = ref(false)
+const textExpanded = ref(false)
+/** 失败输出与手动展开都显示全文，其余情况只显示预览。 */
+const showFullResult = computed(() => textExpanded.value || isFailure.value)
+
+/** 复制反馈与资源页一致：用最近一次复制目标标记，成功后保留可见结果。 */
+const copiedTarget = ref<CopyTarget | null>(null)
+const failedTarget = ref<CopyTarget | null>(null)
 
 const nonTextNotice = computed(() => {
   const current = execution.value
@@ -99,10 +120,16 @@ function describeNonTextPart(part: ToolNonTextPart): string {
   return part.mimeType === null ? `${part.type} ${size}` : `${part.mimeType} ${size}`
 }
 
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+/** 复制完整原文；成功与失败都就地反馈，不改动其他状态。 */
+async function copyTarget(target: CopyTarget, text: string): Promise<void> {
+  const copied = await copyText(text)
+  copiedTarget.value = copied ? target : null
+  failedTarget.value = copied ? null : target
+}
+
+function copyLabel(target: CopyTarget): string {
+  if (copiedTarget.value === target) return '已复制'
+  return failedTarget.value === target ? '复制失败' : '复制'
 }
 </script>
 
@@ -128,16 +155,44 @@ function formatBytes(bytes: number): string {
         <p v-if="diff.truncated" class="tool-note">此变更超出展示上限，已截断。</p>
       </template>
       <template v-if="execution.argsText !== null">
-        <p class="tool-note">参数</p>
-        <p class="tool-output">{{ execution.argsText }}</p>
+        <div class="tool-fold-row">
+          <p class="tool-note">参数</p>
+          <AppButton variant="compact" @click="copyTarget('args', execution.argsText)">{{ copyLabel('args') }}</AppButton>
+        </div>
+        <!-- 默认只看键值摘要，源码不进界面；摘要不可得（参数不是对象）时退回原文。 -->
+        <template v-if="argsSummary !== null && !argsExpanded">
+          <dl class="tool-args-summary">
+            <template v-for="entry in argsSummary" :key="entry.key">
+              <dt class="tool-arg-key">{{ entry.key }}</dt>
+              <dd class="tool-arg-value">{{ formatToolArgValue(entry.value) }}</dd>
+            </template>
+          </dl>
+          <AppButton variant="compact" @click="argsExpanded = true">显示原始参数</AppButton>
+        </template>
+        <p v-else class="tool-output">{{ execution.argsText }}</p>
         <p v-if="execution.argsTruncated" class="tool-note">此参数超出展示上限，已截断。</p>
       </template>
       <template v-if="execution.text !== ''">
-        <p class="tool-note">{{ textLabel }}</p>
-        <p class="tool-output" :class="execution.phase === 'failed' ? 'text-desk-danger' : ''">
-          {{ execution.text }}
-        </p>
+        <div class="tool-fold-row">
+          <p class="tool-note">{{ textLabel }}</p>
+          <AppButton variant="compact" @click="copyTarget('text', execution.text)">{{ copyLabel('text') }}</AppButton>
+        </div>
+        <!-- JSON 结果只给结构摘要，避免把单行 JSON 原文铺进界面；展开后才看原文。 -->
+        <template v-if="resultJsonLabel !== null && !textExpanded">
+          <p class="tool-note">{{ resultJsonLabel }}</p>
+          <AppButton variant="compact" @click="textExpanded = true">显示原文</AppButton>
+        </template>
+        <template v-else>
+          <p class="tool-output" :class="isFailure ? 'text-desk-danger' : ''">
+            {{ showFullResult ? execution.text : resultPreview.preview }}
+          </p>
+          <div v-if="!showFullResult && resultPreview.clipped" class="tool-fold-row">
+            <p class="tool-note">共 {{ resultPreview.totalLines }} 行，已显示前 {{ RESULT_PREVIEW_LINES }} 行</p>
+            <AppButton variant="compact" @click="textExpanded = true">显示全部</AppButton>
+          </div>
+        </template>
         <p v-if="execution.textTruncated" class="tool-note">此输出超出展示上限，已截断。</p>
+        <p v-if="execution.outputPath !== null" class="tool-note">完整输出：{{ execution.outputPath }}</p>
       </template>
       <p v-else class="tool-note">无文本输出。</p>
       <p v-if="nonTextNotice" class="tool-note">{{ nonTextNotice }}</p>

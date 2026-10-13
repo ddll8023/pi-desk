@@ -212,6 +212,23 @@ export interface ToolNonTextPart {
   readonly bytes: number | null
 }
 
+/**
+ * 工具参数的单个值摘要：源码、长文本与嵌套结构都只给规模，不携带原文。
+ * `inline` 可直接显示；`text` 是长文本，只给行数与字节数；`items` 是数组项数；
+ * `object` 是嵌套对象的字段数。
+ */
+export type ToolArgValue =
+  | { readonly kind: 'inline'; readonly text: string }
+  | { readonly kind: 'text'; readonly lines: number; readonly bytes: number }
+  | { readonly kind: 'items'; readonly count: number }
+  | { readonly kind: 'object'; readonly fields: number }
+
+/** 参数摘要的一个键值对；值摘要由投影层按完整参数对象算出，不受参数文本截断影响。 */
+export interface ToolArgSummaryEntry {
+  readonly key: string
+  readonly value: ToolArgValue
+}
+
 /** Diff 单行语义：`fold` 为 Pi 折叠省略行的占位，无内容文本。 */
 export type ToolDiffLineKind = 'add' | 'remove' | 'context' | 'fold'
 
@@ -254,6 +271,10 @@ export interface ToolExecution {
   readonly endedAt: number | null
   readonly argsText: string | null
   readonly argsTruncated: boolean
+  /** 参数摘要；无法解析时 null，界面回退到 `argsText` 原文。 */
+  readonly argsSummary: readonly ToolArgSummaryEntry[] | null
+  /** 结果里 Pi 保存完整输出的文件路径；没有保存或形状不符时为 null。 */
+  readonly outputPath: string | null
   readonly text: string
   readonly textKind: ToolExecutionTextKind
   readonly textTruncated: boolean
@@ -819,6 +840,9 @@ function isToolExecution(value: unknown): value is ToolExecution {
     && isTimestamp(value.endedAt)
     && (value.argsText === null || typeof value.argsText === 'string')
     && typeof value.argsTruncated === 'boolean'
+    && (value.argsSummary === null
+      || (Array.isArray(value.argsSummary) && value.argsSummary.every(isToolArgSummaryEntry)))
+    && (value.outputPath === null || typeof value.outputPath === 'string')
     && typeof value.text === 'string'
     && isToolExecutionTextKind(value.textKind)
     && typeof value.textTruncated === 'boolean'
@@ -828,6 +852,22 @@ function isToolExecution(value: unknown): value is ToolExecution {
     && Array.isArray(value.nonTextParts)
     && value.nonTextParts.every(isToolNonTextPart)
     && isToolDiff(value.diff)
+}
+
+function isToolArgSummaryEntry(value: unknown): value is ToolArgSummaryEntry {
+  if (!isRecord(value) || typeof value.key !== 'string') return false
+  const summaryValue = value.value
+  if (!isRecord(summaryValue)) return false
+  if (summaryValue.kind === 'inline') return typeof summaryValue.text === 'string'
+  if (summaryValue.kind === 'text') return isCount(summaryValue.lines) && isCount(summaryValue.bytes)
+  if (summaryValue.kind === 'items') return isCount(summaryValue.count)
+  if (summaryValue.kind === 'object') return isCount(summaryValue.fields)
+  return false
+}
+
+/** 摘要里的计数都是非负整数。 */
+function isCount(value: unknown): boolean {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0
 }
 
 function isToolDiffLineKind(value: unknown): value is ToolDiffLineKind {

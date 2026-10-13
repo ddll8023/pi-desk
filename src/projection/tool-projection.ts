@@ -12,8 +12,14 @@
  *
  * 条目的开始与结束时刻是 Desktop 收到对应事件的时刻，供界面计算耗时；Pi 的工具事件没有
  * 时间字段，该耗时不代表工具的真实执行时间。恢复会话时补种的历史条目没有开始时刻。
+ *
+ * 参数除了原始 JSON 文本，还产出值级摘要（`argsSummary`）：长文本、数组与嵌套对象只给规模，
+ * 源码不进入展示层；摘要由完整参数算出，因此不受 `argsText` 截断影响。结果里 Pi 保存完整
+ * 输出的路径原样带到 `outputPath`，界面据此指路，不自己推测文件位置。
  */
 import type {
+  ToolArgSummaryEntry,
+  ToolArgValue,
   ToolDiff,
   ToolDiffLine,
   ToolExecution,
@@ -24,6 +30,12 @@ import type {
 
 /** 工具参数摘要上限；超限截断并在条目上标记，不伪装成完整参数。 */
 const MAX_TOOL_ARGS_CHARS = 4096
+
+/** 参数摘要的键值对条数上限；超出部分不再列出。 */
+const MAX_ARG_SUMMARY_ENTRIES = 16
+
+/** 超过该长度的字符串值只给规模，不再当成可直接显示的短值。 */
+const ARG_SUMMARY_INLINE_CHARS = 80
 
 /** Diff 展示文本总量上限；超出停止收行并标 `truncated`，不伪装成完整 Diff。 */
 const MAX_DIFF_CHARS = 16384
@@ -62,6 +74,8 @@ interface MutableToolExecution {
   endedAt: number | null
   argsText: string | null
   argsTruncated: boolean
+  argsSummary: readonly ToolArgSummaryEntry[] | null
+  outputPath: string | null
   text: string
   textKind: ToolExecutionTextKind
   textTruncated: boolean
@@ -110,6 +124,63 @@ export function serializeToolArguments(value: unknown): string | null {
     // 参数无法序列化不应导致工具条目丢失。
     return null
   }
+}
+
+/** 统计 UTF-8 字节数；只用于给界面报规模，不做编码转换。 */
+function utf8Bytes(text: string): number {
+  return Buffer.byteLength(text, 'utf8')
+}
+
+/** 统计行数；空字符串算 0 行，长文本参数只用它报规模。 */
+function countLines(text: string): number {
+  if (text === '') return 0
+  let lines = 1
+  for (let index = text.indexOf('\n'); index !== -1; index = text.indexOf('\n', index + 1)) lines += 1
+  return lines
+}
+
+/** 单值摘要：只有短且单行的字符串才直接显示，其余只给规模。 */
+function summarizeArgValue(value: unknown): ToolArgValue {
+  if (typeof value === 'string') {
+    if (value.length <= ARG_SUMMARY_INLINE_CHARS && !value.includes('\n')) {
+      return { kind: 'inline', text: value }
+    }
+    return { kind: 'text', lines: countLines(value), bytes: utf8Bytes(value) }
+  }
+  if (Array.isArray(value)) return { kind: 'items', count: value.length }
+  if (isRecord(value)) return { kind: 'object', fields: Object.keys(value).length }
+  return { kind: 'inline', text: value === null || value === undefined ? '未知' : String(value) }
+}
+
+/**
+ * 参数摘要：按参数对象自己的键顺序取值摘要，最多 `MAX_ARG_SUMMARY_ENTRIES` 个键。
+ * 非对象参数（如字符串或数组形式）保持为不可摘要，界面回退到 `argsText` 原文。
+ */
+export function summarizeToolArguments(value: unknown): readonly ToolArgSummaryEntry[] | null {
+  if (!isRecord(value)) return null
+  const entries: ToolArgSummaryEntry[] = []
+  for (const key of Object.keys(value)) {
+    if (entries.length >= MAX_ARG_SUMMARY_ENTRIES) break
+    entries.push({ key, value: summarizeArgValue(value[key]) })
+  }
+  return entries
+}
+
+/** 历史补种只有参数文本时解析出摘要；解析失败返回 null，不猜造键值。 */
+function summarizeArgsText(argsText: string | null): readonly ToolArgSummaryEntry[] | null {
+  if (argsText === null) return null
+  try {
+    return summarizeToolArguments(JSON.parse(argsText))
+  } catch {
+    return null
+  }
+}
+
+/** 结束结果里 Pi 保存的完整输出路径；没有或形状不符时为 null。 */
+function readOutputPath(result: unknown): string | null {
+  if (!isRecord(result) || !isRecord(result.details)) return null
+  const path = result.details.fullOutputPath
+  return typeof path === 'string' && path !== '' ? path : null
 }
 
 /** 由 base64 字符数估算解码后字节数；不解析内容，也不保留数据本身。 */
@@ -268,6 +339,8 @@ function toPublicTool(entry: MutableToolExecution): ToolExecution {
     endedAt: entry.endedAt,
     argsText: entry.argsText,
     argsTruncated: entry.argsTruncated,
+    argsSummary: entry.argsSummary,
+    outputPath: entry.outputPath,
     text: entry.text,
     textKind: entry.textKind,
     textTruncated: entry.textTruncated,
@@ -351,6 +424,8 @@ export class ToolProjection {
       endedAt: seed.endedAt,
       argsText: null,
       argsTruncated: false,
+      argsSummary: null,
+      outputPath: null,
       text: '',
       textKind: 'none',
       textTruncated: false,
@@ -361,9 +436,10 @@ export class ToolProjection {
     this.entries.push(entry)
     this.index.set(seed.toolCallId, entry)
     this.enforceLimit()
-    this.applyArgs(entry, seed.argsText)
+    this.applyArgsText(entry, seed.argsText)
     this.setText(entry, extracted, 'result')
     this.applyNonText(entry, extracted)
+    entry.outputPath = readOutputPath(seed.result)
     entry.diff = extractDiff(entry.toolName, entry.argsText, seed.result)
     this.emit(entry)
   }
@@ -373,7 +449,8 @@ export class ToolProjection {
     if (entry === null) return 'none'
     // 重复的开始事件只刷新字段；已有 diff 一并重置，避免残留上一轮结果。
     entry.diff = null
-    this.applyArgs(entry, serializeToolArguments(payload.args))
+    entry.outputPath = null
+    this.applyArgs(entry, payload.args)
     this.emit(entry)
     return 'start'
   }
@@ -381,7 +458,7 @@ export class ToolProjection {
   private updateExecution(payload: Record<string, unknown>): ToolEventKind {
     const entry = this.ensureEntry(payload, 'running', Date.now())
     if (entry === null) return 'none'
-    this.applyArgs(entry, serializeToolArguments(payload.args))
+    this.applyArgs(entry, payload.args)
     const partial = extractResultText(payload.partialResult)
     this.setText(entry, partial, 'partial')
     this.applyNonText(entry, partial)
@@ -396,7 +473,8 @@ export class ToolProjection {
     if (entry === null) return 'none'
     entry.phase = phase
     entry.endedAt = Date.now()
-    this.applyArgs(entry, serializeToolArguments(payload.args))
+    this.applyArgs(entry, payload.args)
+    entry.outputPath = readOutputPath(payload.result)
     // 最终结果覆盖 partial 报告，避免继续累加造成重复内容。
     const result = extractResultText(payload.result)
     this.setText(entry, result, 'result')
@@ -430,6 +508,8 @@ export class ToolProjection {
       endedAt: null,
       argsText: null,
       argsTruncated: false,
+      argsSummary: null,
+      outputPath: null,
       text: '',
       textKind: 'none',
       textTruncated: false,
@@ -443,8 +523,23 @@ export class ToolProjection {
     return entry
   }
 
-  private applyArgs(entry: MutableToolExecution, argsText: string | null): void {
+  /** 事件参数：先算值级摘要（不受截断影响），再存可能被截断的参数文本。 */
+  private applyArgs(entry: MutableToolExecution, rawArgs: unknown): void {
+    const argsText = serializeToolArguments(rawArgs)
     if (argsText === null) return
+    entry.argsSummary = summarizeToolArguments(rawArgs)
+    this.storeArgsText(entry, argsText)
+  }
+
+  /** 历史补种只有参数文本：先解析摘要，再存可能被截断的文本。 */
+  private applyArgsText(entry: MutableToolExecution, argsText: string | null): void {
+    if (argsText === null) return
+    entry.argsSummary = summarizeArgsText(argsText)
+    this.storeArgsText(entry, argsText)
+  }
+
+  /** 参数文本超限时截断并标记；不伪装成完整参数。 */
+  private storeArgsText(entry: MutableToolExecution, argsText: string): void {
     if (argsText.length > MAX_TOOL_ARGS_CHARS) {
       entry.argsText = argsText.slice(0, MAX_TOOL_ARGS_CHARS)
       entry.argsTruncated = true
