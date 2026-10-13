@@ -154,9 +154,10 @@ const emptyState = computed(() => {
   }
 })
 
-/** 摘要只取用户已有的文本，不解析 Markdown；纯图片与没有可展示文本的消息分别标明。 */
+/** 摘要只取用户已有的文本，不解析 Markdown；技能调用、纯图片与没有可展示文本的消息分别标明。 */
 function outlineLabel(message: ChatMessageView): string {
   const parts: string[] = []
+  const skillNames: string[] = []
   let hasImage = false
   for (const block of message.blocks) {
     if (block.kind !== 'text') continue
@@ -164,11 +165,21 @@ function outlineLabel(message: ChatMessageView): string {
       hasImage = true
       continue
     }
+    // 投影生成的附件说明不是用户输入；它出现说明这条消息带了图片，按图片消息处理。
+    if (block.notice) {
+      hasImage = true
+      continue
+    }
+    // 技能消息的 `text` 只含用户追加文本，技能调用本身只用名称占位，不把正文当摘要。
+    if (block.skill !== null) skillNames.push(block.skill.name)
     const text = block.text.trim()
     if (text !== '') parts.push(text)
   }
   const text = parts.join(' ').replace(/\s+/g, ' ')
-  if (text === '') return hasImage ? '图片消息' : '用户消息'
+  if (text === '') {
+    if (skillNames.length > 0) return `技能：${skillNames.join('、')}`
+    return hasImage ? '图片消息' : '用户消息'
+  }
   return text.length > OUTLINE_SUMMARY_CHARS ? `${text.slice(0, OUTLINE_SUMMARY_CHARS)}…` : text
 }
 

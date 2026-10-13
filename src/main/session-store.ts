@@ -3,6 +3,7 @@
  *
  * 会话文件由 Pi 管理（`<agent-dir>/sessions/--<cwd munged>--/<时间>_<会话 id>.jsonl`），本模块只按
  * 有界读取拿到首部元数据与首条用户消息开头，不解析消息模型、不写入也不删除任何会话数据；
+ * 首条用户消息若是 `/skill:` 展开的技能调用，预览只取技能名与追加文本，不把技能正文当会话标题；
  * 并为 SDK 接管提供只读的目标身份复核（目录归属、头部身份与读取期间是否变化），
  * 该复核不接受越过当前项目会话目录的路径引用。
  * 路径归一化在 project-path.ts，启动与切换编排在 session-manager.ts。
@@ -12,6 +13,7 @@ import { open, readdir, realpath, stat } from 'node:fs/promises'
 import { dirname, isAbsolute, join } from 'node:path'
 import type { SessionList, SessionSummary } from '../shared/session-api'
 import type { SdkSessionReference } from '../sdk-host/protocol'
+import { parseSkillBlock, stripImageMarkerLines } from '../shared/user-message-text'
 import { getPiAgentDir } from './pi-paths'
 
 /**
@@ -25,9 +27,6 @@ const MAX_SESSIONS = 100
 
 /** 预览长度上限；只取首条用户消息的开头。 */
 const MAX_PREVIEW_CHARS = 120
-
-/** Pi 为图片附件注入的坐标说明行，属于重建信息而不是用户输入，不进标题。 */
-const IMAGE_MARKER_PREFIX = '[Image:'
 
 /** Pi 的会话 id 只允许字母、数字、点、下划线与短横线。 */
 const SESSION_ID_PATTERN = /^[A-Za-z0-9._-]+$/
@@ -118,20 +117,20 @@ function readMessageText(content: unknown): string | null {
 }
 
 /**
- * 预览文本归一化：丢弃 Pi 注入的 `[Image: …]` 标记行，把剩余空白折叠为单个空格，
- * 再去掉首尾空白并按上限截断；切成空串时返回 null，由调用方回退为「未命名会话」。
+ * 预览文本归一化：先按共用判定丢弃 Pi 注入的 `[Image: …]` 标记行，再把剩余空白折叠为单个空格，
+ * 去掉首尾空白并按上限截断；切成空串时返回 null，由调用方回退为「未命名会话」。
  */
 function normalizePreviewText(text: string): string | null {
-  const stripped = text
-    .split('\n')
-    .filter((line) => !line.trimStart().startsWith(IMAGE_MARKER_PREFIX))
-    .join(' ')
+  const stripped = stripImageMarkerLines(text)
     .replace(/\s+/g, ' ')
     .trim()
   return stripped === '' ? null : stripped.slice(0, MAX_PREVIEW_CHARS)
 }
 
-/** 只识别 message 条目里的首条用户消息文本；其他条目一律忽略。 */
+/**
+ * 只识别 message 条目里的首条用户消息文本；其他条目一律忽略。
+ * 技能调用消息的正文是被 Pi 展开的机器内容，预览只取用户追加文本，没有追加文本时才用技能名占位。
+ */
 function previewFromLine(line: string): string | null {
   if (!line.includes('"user"')) return null
   const entry = parseJsonRecord(line)
@@ -141,7 +140,10 @@ function previewFromLine(line: string): string | null {
   if (!isRecord(message) || message.role !== 'user') return null
 
   const text = readMessageText(message.content)
-  return text === null ? null : normalizePreviewText(text)
+  if (text === null) return null
+  const skill = parseSkillBlock(text)
+  if (skill !== null) return normalizePreviewText(skill.userMessage ?? `技能：${skill.name}`)
+  return normalizePreviewText(text)
 }
 
 /**
@@ -160,6 +162,8 @@ function previewFromTruncatedLine(line: string): string | null {
     return null
   }
   if (typeof text !== 'string') return null
+  // 技能块被读上限截断时无法完整解析：宁可报未读取到，也不把技能正文当预览。
+  if (text.trimStart().startsWith('<skill name="')) return null
   return normalizePreviewText(text)
 }
 

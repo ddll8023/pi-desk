@@ -8,8 +8,8 @@ export const SESSION_RELOAD_CHANNEL = 'desktop:session-reload'
 
 /**
  * 会话摘要只读会话文件的元数据：`createdAt` 来自文件头部的时间戳，`updatedAt` 是文件最后修改
- * 时间（纪元毫秒），`preview` 是有界读取得到的首条用户消息文本（已剔除 Pi 注入的 `[Image: …]` 标记行、
- * 空白折叠为单个空格），取不到时为 null。
+ * 时间（纪元毫秒），`preview` 是有界读取得到的首条用户消息文本（已剔除 Pi 注入的 `[Image: …]` 标记行与
+ * `/skill:` 展开的技能块，空白折叠为单个空格），取不到时为 null。
  */
 export interface SessionSummary {
   readonly sessionId: string

@@ -3,7 +3,10 @@
  * 用户消息的来源身份由投影自己维护：展示用摘要身份，回退目标用官方会话条目 ID。
  *
  * 把 Pi 的会话事件（以及恢复会话时的历史消息）重建为页面要展示的消息内容块与工具执行条目，
- * 用户消息中的图片块以附件描述块（data URL 与估算字节）投影，AI 消息记录客户端接收事件的生成计时；
+ * 用户消息中的图片块以附件描述块（data URL 与估算字节）投影，超限附件降级为投影自己生成的说明块
+ * （块上标 `notice`，界面可见但不计入用户输入），AI 消息记录客户端接收事件的生成计时；
+ * 本轮响应计时挂在触发本轮的用户消息上：以该消息自带的时间戳起表（提交时刻），到 Agent 收敛
+ * （`agent_settled`）收口，因此包含工具执行与等待；恢复的历史轮次没有结束时刻，一律留空不推算；
  * 不保存原始事件、不持久化、不管理 Session、不解析 response 信封与退出；工具条目的生命周期交给
  * tool-projection，本模块负责聚合、批次、序号与确认。渲染端长度校验失败、序号缺口或未确认窗口
  * 超限都收敛到快照重同步，投影不猜测渲染端缺少的内容；触及展示上限时显式截断并计数，不伪装成完整内容。
@@ -15,7 +18,8 @@ import type {
   ProjectionMessage,
   ProjectionSnapshot,
   ProjectionUpdate,
-  ToolExecution
+  ToolExecution,
+  TurnTiming
 } from '../shared/runtime-api'
 import { ToolProjection, serializeToolArguments } from './tool-projection'
 import { toUserMessageIdentity } from './identity'
@@ -53,6 +57,8 @@ interface MutableBlock {
   toolName: string | null
   /** 图片附件描述；非图片块为 null。 */
   image: { readonly dataUrl: string; readonly mimeType: string; readonly bytes: number } | null
+  /** 文本由投影自己生成（超限附件说明）时为 true；不是用户或模型的正文。 */
+  notice: boolean
 }
 
 interface MutableMessage {
@@ -65,6 +71,8 @@ interface MutableMessage {
   blocks: MutableBlock[]
   timestamp: number | null
   generation: ProjectionMessage['generation']
+  /** 本轮响应计时；仅当前实时轮次的用户消息有值。 */
+  turn: TurnTiming | null
   stopReason: string | null
   errorMessage: string | null
 }
@@ -104,6 +112,8 @@ export class MessageProjection {
   private messageSeed = 0
   /** 当前打开的消息；wire 消息没有 id，只能按开始/结束事件配对。 */
   private active: MutableMessage | null = null
+  /** 当前正在计时的本轮所属用户消息；一轮收口或消息被丢弃后清空。 */
+  private activeTurn: MutableMessage | null = null
   private flushTimer: NodeJS.Timeout | null = null
   private droppedMessages = 0
   private truncated = false
@@ -141,6 +151,8 @@ export class MessageProjection {
         this.callbacks.onStatusHint({ isStreaming: false })
         this.interruptActiveGeneration()
         this.toolProjection.settleRunning()
+        // 一轮到这里才真正结束：这时才收口本轮响应计时，包含全部工具执行。
+        this.finishTurn()
         this.flush()
         return
       case 'message_start':
@@ -184,8 +196,9 @@ export class MessageProjection {
     const messages = isRecord(payload) ? payload.messages : null
     if (!Array.isArray(messages)) return false
 
-    // 历史消息与流式事件之间没有配对关系，每条各自成条。
+    // 历史消息与流式事件之间没有配对关系，每条各自成条，进行中的轮次一并作废。
     this.active = null
+    this.activeTurn = null
     for (let index = 0; index < messages.length; index += 1) {
       this.applyAuthoritativeMessage(messages[index], null, entryIds[index] ?? null)
     }
@@ -225,6 +238,7 @@ export class MessageProjection {
     this.outstanding = []
     this.messages.length = 0
     this.active = null
+    this.activeTurn = null
     this.droppedMessages = 0
     this.truncated = false
     this.toolProjection.reset()
@@ -304,6 +318,7 @@ export class MessageProjection {
     this.outstanding = []
     this.messages.length = 0
     this.active = null
+    this.activeTurn = null
     this.toolProjection.dispose()
   }
 
@@ -314,9 +329,15 @@ export class MessageProjection {
 
     // 新开始事件不能让上一条未配对的消息一直计时。
     this.interruptActiveGeneration()
+    // 第二个用户消息到来时旧轮必须收口，不能让两个气泡同时显示还在响应。
+    if (role === 'user') this.finishTurn()
     const message = this.createMessage(role, value)
     if (role === 'assistant') {
       message.generation = { phase: 'running', startedAt: Date.now(), endedAt: null }
+    } else {
+      // 起点用消息自带的时间戳（Pi 在提交时写入）；缺失时才用当前时刻，不编造时间戳。
+      message.turn = { startedAt: message.timestamp ?? Date.now(), endedAt: null }
+      this.activeTurn = message
     }
     this.messages.push(message)
     this.active = message
@@ -335,6 +356,20 @@ export class MessageProjection {
     if (target === null) return
     this.callbacks.onMessageEnded?.(target.id, target.role)
     this.callbacks.onStatusHint({ messageCount: this.messages.length })
+  }
+
+  /**
+   * 收口本轮响应计时。消息已被展示上限丢弃时不再发增量：渲染端的快照里已经没有它，
+   * 补发增量反而会让它重新出现在末尾。
+   */
+  private finishTurn(): void {
+    const message = this.activeTurn
+    this.activeTurn = null
+    const timing = message?.turn ?? null
+    if (message === null || timing === null || timing.endedAt !== null) return
+    if (!this.messages.includes(message)) return
+    message.turn = { startedAt: timing.startedAt, endedAt: Math.max(timing.startedAt, Date.now()) }
+    this.queueUpdate({ kind: 'message', message: this.toPublicMessage(message) })
   }
 
   /** 只结束有开始事件的生成计时；系统时钟回拨时不产生负耗时。 */
@@ -448,7 +483,8 @@ export class MessageProjection {
         truncated: false,
         toolCallId,
         toolName,
-        image: null
+        image: null,
+        notice: false
       }
       message.blocks.push(block)
       message.blocks.sort((left, right) => left.contentIndex - right.contentIndex)
@@ -563,7 +599,10 @@ export class MessageProjection {
     return blocks
   }
 
-  /** 图片附件块：text 不承载本体，估算字节数按 base64 长度换算；超过大小上限只保留描述、不保留本体。 */
+  /**
+   * 图片附件块：text 不承载本体，估算字节数按 base64 长度换算；超过大小上限只保留说明文案、
+   * 不保留本体，并把该块标为投影自己生成的说明（`notice`），供界面区分开用户文本。
+   */
   private createImageBlock(contentIndex: number, data: string, mimeType: string): MutableBlock {
     const bytes = Math.floor(data.length * 3 / 4)
     const tooLarge = bytes > MAX_IMAGE_ATTACHMENT_BYTES
@@ -574,7 +613,8 @@ export class MessageProjection {
       truncated: false,
       toolCallId: null,
       toolName: null,
-      image: tooLarge ? null : { dataUrl: `data:${mimeType};base64,${data}`, mimeType, bytes }
+      image: tooLarge ? null : { dataUrl: `data:${mimeType};base64,${data}`, mimeType, bytes },
+      notice: tooLarge
     }
   }
 
@@ -595,7 +635,9 @@ export class MessageProjection {
       truncated,
       toolCallId,
       toolName,
-      image
+      image,
+      // 消息内容里的文本都来自用户或模型，只有附件占位走 createImageBlock。
+      notice: false
     }
   }
 
@@ -712,6 +754,7 @@ export class MessageProjection {
       blocks: this.buildBlocks(value.content, role),
       timestamp: typeof value.timestamp === 'number' ? value.timestamp : null,
       generation: null,
+      turn: null,
       stopReason: typeof value.stopReason === 'string' ? value.stopReason : null,
       errorMessage: typeof value.errorMessage === 'string' ? value.errorMessage : null
     }
@@ -725,7 +768,8 @@ export class MessageProjection {
       truncated: block.truncated,
       toolCallId: block.toolCallId,
       toolName: block.toolName,
-      image: block.image
+      image: block.image,
+      notice: block.notice
     }
   }
 
@@ -736,6 +780,7 @@ export class MessageProjection {
       blocks: message.blocks.map((block) => this.toPublicBlock(block)),
       timestamp: message.timestamp,
       generation: message.generation,
+      turn: message.turn,
       stopReason: message.stopReason,
       errorMessage: message.errorMessage
     }

@@ -7,8 +7,13 @@
  * 时直接复用，避免每个批次都重建整段历史的块对象；缓存只保留仍在投影里的消息，不持有已丢弃内容。
  * 用户消息的图片附件块经 `ChatTextBlock.image` 原样透传；工具卡片所需的字段（含 Diff）原样
  * 来自投影，本模块不计算耗时、不整理非文本内容，也不解析变更。
+ *
+ * 用户消息里被 Pi 展开的技能调用块在这里解析成 `ChatTextBlock.skill`，`text` 只保留追加在技能块
+ * 之后的用户文本；同样由 Pi 注入的图片坐标说明行也在这里剥离——两者都不是用户输入，不应进入
+ * 气泡、摘要与复制内容。本轮响应计时（`turn`）只做透传，计时口径与时刻都由投影决定。
  */
 import type { ProjectionBlock, ProjectionMessage, ToolExecution } from '../../shared/runtime-api'
+import { parseSkillBlock, stripImageMarkerLines } from '../../shared/user-message-text'
 
 /** 工具调用块的渲染项；`execution` 为 null 表示该工具调用没有对应执行条目（尚未到达或历史中没有结果）。 */
 export interface ChatToolBlock {
@@ -25,6 +30,16 @@ export interface ChatTextBlock {
   readonly truncated: boolean
   /** 图片附件描述；非图片块为 null。来自投影的 data URL，直接用于 <img>。 */
   readonly image: { readonly dataUrl: string; readonly mimeType: string; readonly bytes: number } | null
+  /**
+   * 该块文本由投影生成（当前只有超出展示上限的附件说明）；展示仍可见，但不属于用户输入，
+   * 不进复制、摘要与修改预填。
+   */
+  readonly notice: boolean
+  /**
+   * 该块被 Pi 展开的技能调用；非技能消息为 null。命中时 `text` 只含用户追加文本，
+   * `content` 是技能正文，由界面单独折叠展示。
+   */
+  readonly skill: { readonly name: string; readonly location: string; readonly content: string } | null
 }
 
 export interface ChatThinkingBlock {
@@ -44,6 +59,8 @@ export interface ChatMessageView {
   readonly failure: string | null
   readonly time: string | null
   readonly generation: ProjectionMessage['generation']
+  /** 本轮响应计时；只在用户消息上出现，历史轮次为 null。 */
+  readonly turn: ProjectionMessage['turn']
 }
 
 /** 一条消息引用到的工具条目；复用判定要求工具条目对象也未变化。 */
@@ -123,7 +140,7 @@ function buildMessageView(
   // 投影本身按 contentIndex 排序；这里再排一次，保证渲染顺序不依赖上游的插入方式。
   const blocks = [...message.blocks]
     .sort((left, right) => left.contentIndex - right.contentIndex)
-    .map((block) => toChatBlock(message.id, block, toolsById, toolRefs))
+    .map((block) => toChatBlock(message, block, toolsById, toolRefs))
 
   return {
     view: {
@@ -132,21 +149,37 @@ function buildMessageView(
       blocks,
       failure: messageFailureText(message),
       time: formatMessageTime(message.timestamp),
-      generation: message.generation
+      generation: message.generation,
+      turn: message.turn
     },
     toolRefs
   }
 }
 
 function toChatBlock(
-  messageId: string,
+  message: ProjectionMessage,
   block: ProjectionBlock,
   toolsById: ReadonlyMap<string, ToolExecution>,
   toolRefs: ToolRef[]
 ): ChatBlock {
-  const key = `${messageId}-${block.contentIndex}`
+  const key = `${message.id}-${block.contentIndex}`
   if (block.kind === 'text') {
-    return { kind: 'text', key, text: block.text, truncated: block.truncated, image: block.image }
+    // 技能调用只可能出现在用户消息：图片附件块的 text 是占位描述，助理正文也不是命令展开，都不判定。
+    const skill = message.role === 'user' && block.image === null ? parseSkillBlock(block.text) : null
+    // 命中技能块时只留追加文本；图片坐标说明行同属 Pi 注入，用户气泡与复制都不带它们。
+    const userText = skill === null ? block.text : skill.userMessage ?? ''
+    return {
+      kind: 'text',
+      key,
+      text: message.role === 'user' ? stripImageMarkerLines(userText) : userText,
+      truncated: block.truncated,
+      image: block.image,
+      // 附件说明由投影生成，按块上的标记原样透传，不靠文本前缀猜。
+      notice: block.notice,
+      skill: skill === null
+        ? null
+        : { name: skill.name, location: skill.location, content: skill.content }
+    }
   }
   if (block.kind === 'thinking') {
     return { kind: 'thinking', key, text: block.text, truncated: block.truncated }

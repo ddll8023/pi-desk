@@ -1820,6 +1820,69 @@
     font-size: 0.8125rem;
   }
 
+  /* 技能调用卡：被 Pi 展开的机器内容，用与 Thinking 同级的低强调内嵌折叠区，不借用用户气泡。 */
+  .chat-skill {
+    min-width: 0;
+    border: 1px solid var(--color-desk-line);
+    border-radius: var(--radius-desk-md);
+    background: var(--color-desk-surface-subtle);
+  }
+
+  .chat-skill > summary {
+    display: flex;
+    align-items: center;
+    gap: 0.5625rem;
+    padding: 0.625rem 0.8125rem;
+    border-radius: var(--radius-desk-md);
+    font-size: 0.75rem;
+    transition: background-color var(--default-transition-duration) ease;
+  }
+
+  .chat-skill > summary:hover {
+    background: var(--color-desk-canvas);
+  }
+
+  .chat-skill[open] > summary {
+    border-radius: var(--radius-desk-md) var(--radius-desk-md) 0 0;
+  }
+
+  .chat-skill-label {
+    flex: none;
+    color: var(--color-desk-accent);
+    font-weight: 500;
+  }
+
+  .chat-skill-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--color-desk-ink);
+    font-family: var(--font-mono);
+  }
+
+  .chat-skill-hint {
+    flex: none;
+    margin-left: auto;
+    color: var(--color-desk-muted);
+    font-size: var(--text-2xs);
+  }
+
+  .chat-skill-body {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 0.625rem;
+    padding: 0.6875rem 0.8125rem 0.8125rem;
+    border-top: 1px solid var(--color-desk-line);
+  }
+
+  .chat-skill-body .markdown-content {
+    --markdown-flow: 0.75rem;
+    --markdown-section-gap: 1.25rem;
+    font-size: 0.8125rem;
+  }
+
   .chat-truncation-note {
     margin-top: 0.5rem;
     color: var(--color-desk-muted);
@@ -2144,7 +2207,9 @@
 
   @media (prefers-reduced-motion: reduce) {
     .chat-thinking > summary,
-    .chat-thinking .disclosure {
+    .chat-thinking .disclosure,
+    .chat-skill > summary,
+    .chat-skill .disclosure {
       transition: none;
     }
   }

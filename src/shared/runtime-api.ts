@@ -191,6 +191,11 @@ export interface ProjectionBlock {
    * `bytes` 是估算字节数；非图片块为 null。图片本体不进入文本投影。
    */
   readonly image: { readonly dataUrl: string; readonly mimeType: string; readonly bytes: number } | null
+  /**
+   * 该块文本由投影自己生成（当前只有超出展示上限的附件说明），不是用户或模型的正文。
+   * 界面仍展示这段说明，但复制、摘要与修改预填不把它当用户输入。
+   */
+  readonly notice: boolean
 }
 
 /** 工具执行的终态；`unknown` 表示代际收敛时仍未收到结束事件，不冒充成功。 */
@@ -268,6 +273,17 @@ export interface MessageGeneration {
   readonly endedAt: number | null
 }
 
+/**
+ * 本轮响应计时：挂在触发本轮的用户消息上，从提交（用户消息的 `timestamp`）算到 Agent 收敛，
+ * 因此包含工具执行与等待，是整轮口径而不是单条消息的生成时间。时刻同样来自 Desktop 侧事件，
+ * 不代表模型服务端耗时；仅在本地实时轮次上有值，恢复的历史轮次为 null，不推算。
+ */
+export interface TurnTiming {
+  readonly startedAt: number
+  /** 本轮收敛时固定；仍在响应中的轮次为 null。 */
+  readonly endedAt: number | null
+}
+
 /** `id` 由 Desktop 生成，不冒充 Pi 消息字段。 */
 export interface ProjectionMessage {
   readonly id: string
@@ -276,6 +292,8 @@ export interface ProjectionMessage {
   readonly timestamp: number | null
   /** 用户消息、历史消息与缺少开始事件的 AI 消息为 null，不推算缺失耗时。 */
   readonly generation: MessageGeneration | null
+  /** 本轮响应计时；只挂在用户消息上，历史轮次与 AI 消息为 null。 */
+  readonly turn: TurnTiming | null
   readonly stopReason: string | null
   readonly errorMessage: string | null
 }
@@ -720,7 +738,8 @@ function isProjectionBlock(value: unknown): value is ProjectionBlock {
     || typeof value.text !== 'string'
     || typeof value.truncated !== 'boolean'
     || (value.toolCallId !== null && typeof value.toolCallId !== 'string')
-    || (value.toolName !== null && typeof value.toolName !== 'string')) return false
+    || (value.toolName !== null && typeof value.toolName !== 'string')
+    || typeof value.notice !== 'boolean') return false
   if (value.image === null) return true
   return isRecord(value.image)
     && typeof value.image.dataUrl === 'string'
@@ -753,6 +772,8 @@ function isProjectionMessage(value: unknown): value is ProjectionMessage {
     && (value.timestamp === null || typeof value.timestamp === 'number')
     && isMessageGeneration(value.generation)
     && (value.role === 'assistant' || value.generation === null)
+    && isTurnTiming(value.turn)
+    && (value.role === 'user' || value.turn === null)
     && (value.stopReason === null || typeof value.stopReason === 'string')
     && (value.errorMessage === null || typeof value.errorMessage === 'string')
 }
@@ -769,6 +790,14 @@ function isToolExecutionTextKind(value: unknown): value is ToolExecutionTextKind
 function isTimestamp(value: unknown): boolean {
   return value === null
     || (typeof value === 'number' && Number.isInteger(value) && value >= 0)
+}
+
+/** 进行中的本轮允许 `endedAt` 为 null；开始时刻必须是数字，结束时刻不得早于开始时刻。 */
+function isTurnTiming(value: unknown): TurnTiming | null {
+  if (value === null) return true
+  if (!isRecord(value) || typeof value.startedAt !== 'number' || !isTimestamp(value.startedAt)) return false
+  if (value.endedAt === null) return true
+  return typeof value.endedAt === 'number' && isTimestamp(value.endedAt) && value.endedAt >= value.startedAt
 }
 
 function isToolNonTextPart(value: unknown): value is ToolNonTextPart {

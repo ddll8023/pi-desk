@@ -1,8 +1,8 @@
-<!-- 单条消息：按块展示正文、Thinking、工具与计时；用户消息下方使用细线图标操作栏，回退与修改后的重新发送由父级执行。 -->
+<!-- 单条消息：按块展示正文、Thinking、技能卡、工具与计时（单条生成耗时与本轮响应耗时）；用户消息下方使用细线图标操作栏，回退与修改后的重新发送由父级执行。 -->
 <script setup lang="ts">
 import { computed, onUnmounted, reactive, ref, useId } from 'vue'
 import { copyText } from '../clipboard'
-import type { ChatMessageView } from '../chat-view'
+import type { ChatMessageView, ChatTextBlock } from '../chat-view'
 import { formatDuration, useTickingNow } from '../clock'
 import MarkdownContent from './MarkdownContent.vue'
 import ToolCard from './ToolCard.vue'
@@ -34,12 +34,20 @@ onUnmounted(() => {
   if (copyFeedbackTimer !== null) window.clearTimeout(copyFeedbackTimer)
 })
 
-/** 复制仅取显示的文本；不复制图片本体，也不把图片交给剪贴板工具。 */
+/** 复制与修改预填都取「用户实际输入」：技能消息还原成 Pi 命令形态，投影生成的附件说明不计入。 */
 const messageText = computed(() => props.message.blocks
-  .filter(block => block.kind === 'text' && block.image === null)
-  .map(block => block.kind === 'text' ? block.text : '')
+  .filter(block => block.kind === 'text' && block.image === null && !block.notice)
+  .map(block => (block.kind === 'text' ? blockUserText(block) : ''))
   .join('\n'))
 const hasText = computed(() => messageText.value.trim() !== '')
+
+/**
+ * 操作栏的显示条件：有可复制的用户文本，或有图片附件、技能调用、附件说明这类仍需保留回退入口的内容。
+ * 纯图片消息与超限附件消息的文本都不算用户输入，不能因此失去回退。
+ */
+const hasUserContent = computed(() => hasText.value || props.message.blocks.some(block => (
+  block.kind === 'text' && (block.image !== null || block.skill !== null || block.notice)
+)))
 
 /** 成功短暂切换为勾选图标；失败保留可见反馈，截断消息仍明确说明复制范围。 */
 async function copyMessage(): Promise<void> {
@@ -55,7 +63,10 @@ async function copyMessage(): Promise<void> {
     // 剪贴板回退路径也可能受环境限制，不能留下永久的复制中状态。
   }
   if (!mounted) return
-  const truncated = props.message.blocks.some(block => block.kind === 'text' && block.truncated)
+  // 截断提示只针对被复制的用户文本；技能正文的截断只影响卡片展示，不影响复制出来的命令。
+  const truncated = props.message.blocks.some(block => (
+    block.kind === 'text' && block.truncated && block.skill === null
+  ))
   copyFeedback.value = copied ? (truncated ? '已复制可见文本（已截断）' : '已复制') : '复制失败'
   copying.value = false
   if (copied) {
@@ -66,14 +77,19 @@ async function copyMessage(): Promise<void> {
   }
 }
 
-/** 手动选择只保留在当前消息组件中；重新进入聊天或切换会话后恢复初始折叠。 */
+/** 折叠块（Thinking 与技能卡）的手动选择只保留在当前消息组件中；重新进入聊天或切换会话后恢复初始折叠。 */
 const thinkingOverrides = reactive(new Map<string, boolean>())
+
+/** 技能卡与 Thinking 同样初始折叠，手动开合只影响当前块。 */
+const skillOverrides = reactive(new Map<string, boolean>())
 
 const roleLabel = computed(() => (props.message.role === 'user' ? '你' : 'Assistant'))
 const isUser = computed(() => props.message.role === 'user')
 const generation = computed(() => props.message.generation)
-/** 仅生成中的 AI 消息订阅共享刻度，结束后使用主进程给出的固定时刻。 */
-const now = useTickingNow(() => generation.value?.phase === 'running')
+/** 本轮响应计时；历史轮次与 AI 消息为 null。 */
+const turn = computed(() => props.message.turn)
+/** 生成中的 AI 消息与响应中的本轮订阅共享刻度，结束后都用主进程给出的固定时刻。 */
+const now = useTickingNow(() => generation.value?.phase === 'running' || turn.value?.endedAt === null)
 
 const generationText = computed(() => {
   const current = generation.value
@@ -81,6 +97,17 @@ const generationText = computed(() => {
   const duration = formatDuration((current.endedAt ?? now.value) - current.startedAt)
   if (current.phase === 'running') return `生成中 ${duration}`
   return current.phase === 'interrupted' ? `已中断 · ${duration}` : `生成耗时 ${duration}`
+})
+
+/**
+ * 本轮响应耗时：从提交到本轮收敛，含工具执行与等待；`turn` 为 null（历史轮次）时整段不渲染。
+ * 与单条 AI 消息的生成耗时含义不同，两者都保留。
+ */
+const turnText = computed(() => {
+  const current = turn.value
+  if (current === null) return null
+  const duration = formatDuration((current.endedAt ?? now.value) - current.startedAt)
+  return current.endedAt === null ? `响应中 ${duration}` : `响应耗时 ${duration}`
 })
 
 /** 未手动调整的块一律折叠；流式更新不改变单个块的手动选择。 */
@@ -93,7 +120,26 @@ function toggleThinking(key: string): void {
   thinkingOverrides.set(key, !isThinkingExpanded(key))
 }
 
-/** 进入编辑态：预填消息可见文本，聚焦输入框，禁用其他操作。 */
+/** 未手动调整的技能卡一律折叠；流式更新不改变手动选择。 */
+function isSkillExpanded(key: string): boolean {
+  return skillOverrides.get(key) ?? false
+}
+
+/** 由 summary 的点击统一控制开合，键盘激活同样生效。 */
+function toggleSkill(key: string): void {
+  skillOverrides.set(key, !isSkillExpanded(key))
+}
+
+/**
+ * 文本块在复制与修改预填里用的用户文本：技能消息还原为 `/skill:<名称> <追加文本>`。
+ * 该形态提交后会由 Pi 重新展开技能，因此改写不会静默丢掉技能调用。
+ */
+function blockUserText(block: ChatTextBlock): string {
+  if (block.skill === null) return block.text
+  return block.text === '' ? `/skill:${block.skill.name}` : `/skill:${block.skill.name} ${block.text}`
+}
+
+/** 进入编辑态：预填用户实际输入（技能消息还原为 `/skill:` 命令形态），聚焦输入框，禁用其他操作。 */
 function startEdit(): void {
   if (editing.value || props.actionsDisabled || !hasText.value) return
   editDraft.value = messageText.value
@@ -133,13 +179,18 @@ function onEditKeydown(event: KeyboardEvent): void {
     <header class="chat-meta">
       <span v-if="!isUser" class="chat-role-mark" aria-hidden="true">π</span>
       <span class="chat-role">{{ roleLabel }}</span>
-      <span v-if="message.time || !isUser" class="chat-time inline-flex flex-wrap items-center gap-x-3 gap-y-1">
+      <span v-if="message.time || turnText !== null || !isUser" class="chat-time inline-flex flex-wrap items-center gap-x-3 gap-y-1">
         <span v-if="message.time">{{ message.time }}</span>
         <span
           v-if="!isUser"
           class="font-mono"
           title="按客户端事件计时；生成中更新，消息结束、事件配对中断或 Agent 收敛时固定；历史无记录不推算。"
         >{{ generationText }}</span>
+        <span
+          v-if="turnText !== null"
+          class="font-mono"
+          title="从提交到本轮结束（含工具执行与等待），按客户端事件计时；历史轮次无记录。"
+        >{{ turnText }}</span>
       </span>
     </header>
 
@@ -152,7 +203,20 @@ function onEditKeydown(event: KeyboardEvent): void {
           :alt="`附件图片（${block.image.mimeType}）`"
           class="max-h-48 self-end rounded-desk-md border border-desk-line object-contain"
         />
-        <!-- 图片块只渲染图片；空文本块（仅图片消息的文本部分）不渲染容器，避免多出一个空气泡。 -->
+        <!-- 技能调用是被 Pi 展开的机器内容，单独折叠展示；用户追加文本仍走原气泡。 -->
+        <details v-if="block.skill !== null" class="chat-skill self-start w-full">
+          <summary @click.prevent="toggleSkill(block.key)">
+            <span class="disclosure"></span>
+            <span class="chat-skill-label">技能</span>
+            <span class="chat-skill-name">{{ block.skill.name }}</span>
+            <span class="chat-skill-hint">技能正文</span>
+          </summary>
+          <div class="chat-skill-body">
+            <MarkdownContent :text="block.skill.content" />
+            <p v-if="block.truncated" class="tool-note">此内容超出展示上限，已截断。</p>
+          </div>
+        </details>
+        <!-- 图片块只渲染图片；空文本块（仅图片或仅技能调用的消息）不渲染气泡，避免多出一个空气泡。 -->
         <div
           v-if="block.text !== ''"
           :class="isUser ? 'chat-bubble chat-bubble-user self-end' : 'chat-assistant-content'"
@@ -183,7 +247,7 @@ function onEditKeydown(event: KeyboardEvent): void {
       <ToolCard v-else-if="block.kind === 'toolcall'" :block="block" class="self-start w-full" />
     </template>
 
-    <div v-if="isUser && hasText && !editing" class="chat-message-actions" role="group" aria-label="用户消息操作">
+    <div v-if="isUser && hasUserContent && !editing" class="chat-message-actions" role="group" aria-label="用户消息操作">
       <span
         v-if="copyFeedback"
         role="status"
@@ -208,7 +272,7 @@ function onEditKeydown(event: KeyboardEvent): void {
           variant="unstyled"
           class="chat-message-action"
           :class="{ 'chat-message-action-copied': copySucceeded }"
-          :disabled="copying"
+          :disabled="copying || !hasText"
           aria-label="复制"
           :aria-describedby="`${tooltipId}-copy`"
           @click="copyMessage"
@@ -225,7 +289,7 @@ function onEditKeydown(event: KeyboardEvent): void {
         <AppButton
           variant="unstyled"
           class="chat-message-action"
-          :disabled="actionsDisabled"
+          :disabled="actionsDisabled || !hasText"
           aria-label="修改"
           :aria-describedby="`${tooltipId}-edit`"
           @click="startEdit"
