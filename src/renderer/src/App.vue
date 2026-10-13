@@ -232,11 +232,11 @@ onUnmounted(() => {
         <ChatMessageList />
         <!-- Widget 放置语义与官方子协议一致：aboveEditor 在输入区上方，belowEditor 在下方。 -->
         <div v-for="widget in widgetsAbove" :key="widget.placement" class="px-4 py-2 sm:px-6">
-          <pre class="widget-block">{{ widget.lines.join('\n') }}</pre>
+          <pre class="chat-column mx-auto widget-block">{{ widget.lines.join('\n') }}</pre>
         </div>
         <PromptComposer :focus-token="composerFocusToken" />
         <div v-for="widget in widgetsBelow" :key="widget.placement" class="px-4 py-2 sm:px-6">
-          <pre class="widget-block">{{ widget.lines.join('\n') }}</pre>
+          <pre class="chat-column mx-auto widget-block">{{ widget.lines.join('\n') }}</pre>
         </div>
       </template>
     </main>

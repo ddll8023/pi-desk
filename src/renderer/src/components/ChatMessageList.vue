@@ -367,7 +367,7 @@ onBeforeUnmount(() => {
       @touchmove.passive="releaseOutlineJump"
       @keydown="onReadingKey"
     >
-      <div ref="content" class="mx-auto flex max-w-3xl flex-col gap-5">
+      <div ref="content" class="chat-column mx-auto flex flex-col gap-5">
         <p v-if="syncNotice" role="status" class="status-notice status-notice-info">{{ syncNotice }}</p>
         <p v-if="truncationNotice" role="status" class="status-notice">{{ truncationNotice }}</p>
         <p v-if="rewindView.phase === 'requesting'" role="status" class="status-notice status-notice-info">正在回退对话并同步历史…</p>

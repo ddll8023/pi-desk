@@ -833,7 +833,7 @@ onMounted(() => {
 <template>
   <!-- 与消息区同色，输入坞靠描边与阴影浮起；不再用顶部分隔线切开两块。 -->
   <section class="bg-desk-canvas-sunken px-4 py-3 sm:px-6">
-    <div class="mx-auto max-w-3xl">
+    <div class="chat-column mx-auto">
       <label for="prompt-input" class="sr-only">输入要发送给 Pi 的内容</label>
       <div
         class="prompt-composer-shell"

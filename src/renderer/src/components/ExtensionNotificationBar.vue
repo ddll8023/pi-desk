@@ -16,7 +16,7 @@ function toneClass(notifyType: string): string {
 <template>
   <div
     v-if="extensionStore.notifications.length > 0"
-    class="mx-auto flex w-full max-w-3xl flex-col gap-1.5 px-4 pt-3 sm:px-6"
+    class="chat-column mx-auto flex flex-col gap-1.5 px-4 pt-3 sm:px-6"
   >
     <TransitionGroup name="pop-motion">
       <div

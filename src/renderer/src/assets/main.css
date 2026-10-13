@@ -100,6 +100,13 @@
 }
 
 @layer base {
+  :root {
+    /* 会话列宽基准：窄窗口保持 62rem，宽屏随窗口放宽，超大屏封顶，避免正文行长失控。 */
+    --chat-column-max: clamp(62rem, 68vw, 88rem);
+    /* 右侧为大纲刻度栏保留的留白：值需覆盖 ChatMessageList.vue 的大纲可用宽常量（OUTLINE_MIN_WIDTH_PX 加间距与边缘），列宽吃满该留白会让大纲因可用宽度不足而整条不显示。 */
+    --chat-column-reserve: 24rem;
+  }
+
   body {
     margin: 0;
     min-width: 320px;
@@ -1484,9 +1491,11 @@
     background: color-mix(in srgb, var(--sidebar-muted) 45%, transparent);
   }
 
-  .bg-desk-canvas-sunken > .scroll-area > .mx-auto.max-w-3xl,
-  section:has(> .mx-auto > .prompt-composer-shell) > .mx-auto.max-w-3xl {
-    max-width: min(100%, 62rem);
+  /* 消息列、输入坞、扩展通知条与 widget 文本块共用同一列宽，保证窗口变宽时纵向对齐。 */
+  .chat-column {
+    width: 100%;
+    /* 上限取设计宽度与「保留大纲留白」中的较小者，下限 62rem 保证中等窗口不被压缩。 */
+    max-width: min(100%, max(62rem, min(var(--chat-column-max), calc(100% - var(--chat-column-reserve)))));
   }
 
   @media (hover: none) {
@@ -1747,7 +1756,7 @@
 
   .chat-message-assistant {
     width: 100%;
-    max-width: min(58rem, 100%);
+    max-width: 100%;
     align-self: flex-start;
     padding: 1.5rem 1.75rem;
     border: 1px solid var(--color-desk-line);
@@ -1760,7 +1769,8 @@
   .chat-bubble {
     @apply whitespace-pre-wrap break-words rounded-desk-lg px-3.5 py-2.5 text-sm leading-6;
     min-width: 0;
-    max-width: min(42rem, 100%);
+    /* 用户气泡保持比助手卡片收窄：列宽不足 42rem 时占满列宽，超过 70rem 后按列宽 60% 跟随，介于两者之间固定 42rem。 */
+    max-width: min(100%, max(42rem, 60%));
   }
 
   .chat-bubble-user {
@@ -2276,7 +2286,7 @@
 
   /* Extension widget 文本块。 */
   .widget-block {
-    @apply mx-auto max-w-3xl whitespace-pre-wrap break-words rounded-desk-sm border border-desk-line bg-desk-surface px-3 py-2 font-mono text-xs text-desk-muted;
+    @apply whitespace-pre-wrap break-words rounded-desk-sm border border-desk-line bg-desk-surface px-3 py-2 font-mono text-xs text-desk-muted;
   }
 
   /* 状态指示点：颜色由模板按 Runtime 状态给出。 */
