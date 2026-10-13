@@ -1742,6 +1742,10 @@ async function createWindow(pageUrl: string): Promise<void> {
     windowState.dispose()
     mainWindow = null
   })
+  // 开发页面由 dev server 提供：HTML 带内容 ETag，只改响应头（如 CSP）时 ETag 不变，
+  // Vite 会回 304 且不带自定义响应头，浏览器会沿用缓存里的旧头。每次启动先清一次缓存，
+  // 保证页面用的是当前配置的响应头；生产页面由本地文件提供，不需要这一步。
+  if (pageUrl !== APPLICATION_PAGE_URL) await session.defaultSession.clearCache()
   await window.loadURL(pageUrl)
 }
 
