@@ -18,3 +18,4 @@ Pi Desktop：Electron + Vue 3 + TypeScript 桌面客户端。会话执行主链�
 - 坑：`topics/gotchas/project-trust-probe.md`——在添加项目、准备验证用目录或遇到意外信任提示时读取。
 - 坑：`topics/gotchas/dev-server-header-cache.md`——在调整开发态页面的响应头（CSP 等）或遇到 dev 下页面行为不随配置变化时读取。
 - 坑：`topics/gotchas/dev-main-process-restart.md`——在 dev 会话中判断主进程改动是否已生效、准备重启 dev 进程时读取。
+- 坑：`topics/gotchas/portable-package-lock.md`——在打包便携版、遇到 electron-builder 失败或 `release/` 下出现 `.tmp` 残留时读取。
