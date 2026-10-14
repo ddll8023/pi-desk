@@ -68,6 +68,8 @@ function applySessionInput(nextKey: string, previousKey: string | null): void {
   }
   const restored = isSessionKey(nextKey) ? sessionViewStore.takeInput(nextKey) : null
   if (restored !== null) {
+    // 空闲与未绑定状态不留底：被替换掉的附件没有其他归处，直接释放预览地址。
+    if (previousKey === null || !isSessionKey(previousKey)) sessionViewStore.releaseImages(pendingImages.value)
     draft.value = restored.draft
     pendingImages.value = restored.images
     return

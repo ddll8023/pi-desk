@@ -278,9 +278,10 @@ function jumpToBottom(): void {
   scheduleScrollToBottom()
 }
 
-/** 只有明确的手动滚动意图解除跳转保护；单纯布局变化不代表用户要回到底部。 */
+/** 只有明确的手动滚动意图解除跳转保护与待恢复位置；单纯布局变化不代表用户要回到底部。 */
 function releaseOutlineJump(): void {
   outlineTargetId = null
+  pendingRestore = null
 }
 
 function onWheel(event: WheelEvent): void {
