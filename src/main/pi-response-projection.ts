@@ -38,6 +38,8 @@ export function toRuntimeInfo(data: unknown): RuntimeInfo | null {
     sessionId: typeof sessionId === 'string' ? sessionId : null,
     messageCount,
     isStreaming,
+    // 预读是一次性进程，不会处于压缩中；仅在 get_state 明确回报布尔值时才采信。
+    isCompacting: typeof data.isCompacting === 'boolean' ? data.isCompacting : false,
     // 用量与速率不来自 get_state；预读不提供它们。
     usage: null,
     rate: { live: null, average: null }

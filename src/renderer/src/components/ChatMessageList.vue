@@ -134,7 +134,7 @@ const truncationNotice = computed(() => {
  */
 const emptyState = computed(() => {
   if (projectStore.currentProject === null) {
-    return { title: '先选择一个项目', description: '项目决定 Pi 的工作目录；在顶栏选择或新建项目后即可开始。', action: null }
+    return { title: '先选择一个项目', description: '项目决定 Pi 的工作目录；在左侧项目列表选择或添加项目后即可开始。', action: null }
   }
   const current = runtimeView.value
   if (current.phase === 'starting') {

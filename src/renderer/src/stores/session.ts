@@ -9,6 +9,7 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import type { SessionError, SessionList, SessionSummary } from '../../../shared/session-api'
+import type { ProjectError } from '../../../shared/project-api'
 import { useTrustStore } from './trust'
 import { useProjectStore } from './project'
 import { useRuntimeStore } from './runtime'
@@ -44,7 +45,11 @@ const EMPTY_SLICE: SessionListSlice = {
 export const useSessionStore = defineStore('session', () => {
   /** 按项目路径保存的列表分片；键即主进程回报的项目路径。 */
   const lists = ref<Readonly<Record<string, SessionListSlice>>>({})
-  const actionError = ref<SessionError | null>(null)
+  /**
+   * 单次动作失败：打开会话会先切项目，因此失败原因也可能来自 Project 模块；错误码原样保留，
+   * 界面只消费 message。
+   */
+  const actionError = ref<SessionError | ProjectError | null>(null)
   const opening = ref(false)
   /** 待确认的切换目标（null 表示新建会话）、目标项目与是否需要用户确认中断。 */
   const pendingSessionId = ref<string | null>(null)
