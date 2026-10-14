@@ -5,6 +5,8 @@
  * 把 Pi 的会话事件（以及恢复会话时的历史消息）重建为页面要展示的消息内容块与工具执行条目，
  * 用户消息中的图片块以附件描述块（data URL 与估算字节）投影，超限附件降级为投影自己生成的说明块
  * （块上标 `notice`，界面可见但不计入用户输入），AI 消息记录客户端接收事件的生成计时；
+ * 上下文压缩按 `compaction_end` 与恢复会话时的历史 `compactionSummary` 记为第三种消息角色（`compaction`），
+ * 只带摘要与压缩前后 token 数，不进入用户输入与回退目标；
  * 本轮响应计时挂在触发本轮的用户消息上：以该消息自带的时间戳起表（提交时刻），到 Agent 收敛
  * （`agent_settled`）收口，因此包含工具执行与等待；恢复的历史轮次没有结束时刻，一律留空不推算；
  * 不保存原始事件、不持久化、不管理 Session、不解析 response 信封与退出；工具条目的生命周期交给
@@ -15,6 +17,7 @@ import type {
   ProjectionBatch,
   ProjectionBlock,
   ProjectionBlockKind,
+  ProjectionCompaction,
   ProjectionMessage,
   ProjectionSnapshot,
   ProjectionUpdate,
@@ -46,7 +49,7 @@ const MAX_MESSAGES = 200
 /** 投影文本总量上限；超出按从旧到新的顺序丢弃消息。 */
 const MAX_TOTAL_CHARS = 4_194_304
 
-type ProjectedRole = 'user' | 'assistant'
+type ProjectedRole = 'user' | 'assistant' | 'compaction'
 
 interface MutableBlock {
   readonly contentIndex: number
@@ -75,6 +78,8 @@ interface MutableMessage {
   turn: TurnTiming | null
   stopReason: string | null
   errorMessage: string | null
+  /** 压缩记录；仅 `role === 'compaction'` 时非 null，此时块列表为空。 */
+  compaction: ProjectionCompaction | null
 }
 
 /** 投影上报给 Manager 的运行状态提示；只覆盖由事件可确定的字段。 */
@@ -101,6 +106,11 @@ function readRole(value: unknown): ProjectedRole | null {
 
 function readString(value: unknown): string | null {
   return typeof value === 'string' ? value : null
+}
+
+/** token 计数只接受有限数字；缺失或异常值保持 null，不当作 0 展示。 */
+function readCount(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null
 }
 
 export class MessageProjection {
@@ -179,10 +189,43 @@ export class MessageProjection {
         }
         return
       }
+      case 'compaction_end':
+        // 压缩只在结束时进入时间线；进行中由页面的提示行表达，不建临时消息。
+        this.appendCompaction(payload)
+        this.flush()
+        return
       default:
-        // 队列、压缩、重试与 Extension UI 事件不进入展示投影。
+        // 队列、重试与 Extension UI 事件不进入展示投影。
         return
     }
+  }
+
+  /**
+   * 追加一条压缩记录：成功、取消与失败都各自成条，不用空摘要冒充成功。
+   * 摘要与 token 数只取事件已给的字段，缺失保持 null；时间用接收时刻，不推测 Pi 侧时刻。
+   */
+  private appendCompaction(payload: Record<string, unknown>): void {
+    const reason = payload.reason === 'manual' || payload.reason === 'threshold' || payload.reason === 'overflow'
+      ? payload.reason
+      : null
+    const result = isRecord(payload.result) ? payload.result : null
+    const aborted = payload.aborted === true
+    const errorMessage = readString(payload.errorMessage)
+    // 既没有结果也不是取消/失败的终态事件没有可展示内容，不建空卡片。
+    if (result === null && !aborted && errorMessage === null) return
+    const message = this.createMessage('compaction', { timestamp: Date.now() })
+    message.compaction = {
+      reason,
+      summary: result === null ? '' : readString(result.summary) ?? '',
+      tokensBefore: result === null ? null : readCount(result.tokensBefore),
+      tokensAfter: result === null ? null : readCount(result.estimatedTokensAfter),
+      aborted,
+      errorMessage
+    }
+    this.messages.push(message)
+    this.enforceLimits()
+    this.queueUpdate({ kind: 'message', message: this.toPublicMessage(message) })
+    this.callbacks.onStatusHint({ messageCount: this.messages.length })
   }
 
   /**
@@ -403,6 +446,8 @@ export class MessageProjection {
     entryId: string | null = null
   ): MutableMessage | null {
     if (!isRecord(value)) return null
+    // 历史压缩条目带自己的摘要与压缩前 token 数；触发原因与压缩后 token 数条目里没有，保持 null。
+    if (value.role === 'compactionSummary') return this.applyCompactionSummary(value, entryId)
     const role = readRole(value.role)
     if (role === null) return null
 
@@ -421,6 +466,24 @@ export class MessageProjection {
     this.finishGeneration(target, interrupted ? 'interrupted' : 'completed')
     this.queueUpdate({ kind: 'message', message: this.toPublicMessage(target) })
     return target
+  }
+
+  /** 历史压缩条目按整条收录；与实时压缩记录共用同一展示形状，顺序按基线给定的位置。 */
+  private applyCompactionSummary(value: Record<string, unknown>, entryId: string | null): MutableMessage {
+    const message = this.createMessage('compaction', value)
+    message.compaction = {
+      reason: null,
+      summary: readString(value.summary) ?? '',
+      tokensBefore: readCount(value.tokensBefore),
+      tokensAfter: null,
+      aborted: false,
+      errorMessage: null
+    }
+    if (entryId !== null) message.entryId = entryId
+    this.messages.push(message)
+    this.enforceLimits()
+    this.queueUpdate({ kind: 'message', message: this.toPublicMessage(message) })
+    return message
   }
 
   private updateMessage(payload: Record<string, unknown>): void {
@@ -743,7 +806,9 @@ export class MessageProjection {
   }
 
   private messageChars(message: MutableMessage): number {
-    return message.blocks.reduce((sum, block) => sum + block.text.length, 0)
+    const blocks = message.blocks.reduce((sum, block) => sum + block.text.length, 0)
+    // 压缩摘要同样占展示体积，参与总量上限，避免长摘要把整段历史挤出。
+    return blocks + (message.compaction?.summary.length ?? 0)
   }
 
   private createMessage(role: ProjectedRole, value: Record<string, unknown>): MutableMessage {
@@ -756,7 +821,8 @@ export class MessageProjection {
       generation: null,
       turn: null,
       stopReason: typeof value.stopReason === 'string' ? value.stopReason : null,
-      errorMessage: typeof value.errorMessage === 'string' ? value.errorMessage : null
+      errorMessage: typeof value.errorMessage === 'string' ? value.errorMessage : null,
+      compaction: null
     }
   }
 
@@ -782,7 +848,8 @@ export class MessageProjection {
       generation: message.generation,
       turn: message.turn,
       stopReason: message.stopReason,
-      errorMessage: message.errorMessage
+      errorMessage: message.errorMessage,
+      compaction: message.compaction
     }
   }
 

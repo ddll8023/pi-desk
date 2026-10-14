@@ -1,4 +1,4 @@
-/** 只定义 Runtime 状态、Prompt 提交、对话回退、中止、可用模型读取与当前会话模型切换、Pi 资源与资源预读、诊断读取、MCP 状态、MCP 配置列举、MCP 服务器探测与 MCP 登录/退出/重连命令、消息/工具投影（含生成计时）IPC 的固定通道、事件名、结果类型与跨进程响应校验。 */
+/** 只定义 Runtime 状态、Prompt 提交、对话回退、中止、可用模型读取与当前会话模型切换、手动上下文压缩、Pi 资源与资源预读、诊断读取、MCP 状态、MCP 配置列举、MCP 服务器探测与 MCP 登录/退出/重连命令、消息/工具投影（含生成计时与压缩记录）IPC 的固定通道、事件名、结果类型与跨进程响应校验。 */
 import type { DesktopErrorCode } from './desktop-api'
 
 export const RUNTIME_STATUS_CHANNEL = 'desktop:runtime-status'
@@ -10,6 +10,8 @@ export const RUNTIME_PROJECTION_CHANNEL = 'desktop:runtime-projection'
 export const RUNTIME_PROJECTION_ACK_CHANNEL = 'desktop:runtime-projection-ack'
 export const RUNTIME_CAPABILITIES_CHANNEL = 'desktop:runtime-capabilities'
 export const RUNTIME_SET_MODEL_CHANNEL = 'desktop:runtime-set-model'
+/** 手动压缩当前会话上下文；说明文本可选，压缩过程与结果由投影事件表达。 */
+export const RUNTIME_COMPACT_CHANNEL = 'desktop:runtime-compact'
 /** 只读：读取当前代际已加载的 Pi 资源清单（扩展命令、提示词与技能）。 */
 export const RUNTIME_RESOURCES_CHANNEL = 'desktop:runtime-resources'
 /**
@@ -132,6 +134,8 @@ export interface RuntimeInfo {
   readonly sessionId: string | null
   readonly messageCount: number
   readonly isStreaming: boolean
+  /** 压缩或分支摘要正在进行；界面据此把运行中提示写成压缩文案。 */
+  readonly isCompacting: boolean
   /** 会话累计用量与上下文占用；统计未取到或形状不符时为 null。 */
   readonly usage: SessionUsage | null
   /** 输出速率；无有效样本时两个字段各为 null。 */
@@ -187,6 +191,17 @@ export interface RuntimeRewindRequest {
 export type RuntimeRewindResult =
   | { readonly ok: true; readonly data: { readonly status: RuntimeStatus; readonly cancelled: boolean; readonly text: string | null } }
   | { readonly ok: false; readonly error: RuntimeError; readonly blocked?: boolean }
+
+/**
+ * 手动压缩请求：目标身份之外只带可选的摘要说明（聚焦要保留的内容）。
+ * 压缩过程与结果不在这里返回，而是由投影中的压缩记录表达。
+ */
+export interface RuntimeCompactRequest {
+  readonly runId: number
+  readonly runtimeId: number
+  readonly sessionId: string
+  readonly instructions: string | null
+}
 
 /** `handled` 表示被扩展或输入处理器消费，不表示本次一定启动了 Agent run。 */
 export type PromptDisposition = 'started' | 'queued' | 'handled'
@@ -336,10 +351,24 @@ export interface TurnTiming {
   readonly endedAt: number | null
 }
 
+/**
+ * 一次上下文压缩的记录；摘要由 Pi 生成，`tokensBefore`/`tokensAfter` 缺失时保持 null。
+ * `reason` 为 null 表示记录来自恢复会话时的历史压缩条目（条目本身不带触发原因）。
+ * `aborted` 为 true 表示压缩被取消（含用户中止），此时 `summary` 为空、`errorMessage` 为 null。
+ */
+export interface ProjectionCompaction {
+  readonly reason: 'manual' | 'threshold' | 'overflow' | null
+  readonly summary: string
+  readonly tokensBefore: number | null
+  readonly tokensAfter: number | null
+  readonly aborted: boolean
+  readonly errorMessage: string | null
+}
+
 /** `id` 由 Desktop 生成，不冒充 Pi 消息字段。 */
 export interface ProjectionMessage {
   readonly id: string
-  readonly role: 'user' | 'assistant'
+  readonly role: 'user' | 'assistant' | 'compaction'
   readonly blocks: readonly ProjectionBlock[]
   readonly timestamp: number | null
   /** 用户消息、历史消息与缺少开始事件的 AI 消息为 null，不推算缺失耗时。 */
@@ -348,6 +377,8 @@ export interface ProjectionMessage {
   readonly turn: TurnTiming | null
   readonly stopReason: string | null
   readonly errorMessage: string | null
+  /** 压缩记录；仅 `role === 'compaction'` 时非 null，此时 `blocks` 为空。 */
+  readonly compaction: ProjectionCompaction | null
 }
 
 /**
@@ -626,6 +657,11 @@ export interface RuntimeApi {
    * 失败或超时不保证模型未改变，不自动重发；实际模型以 Runtime 状态为准。
    */
   readonly setRuntimeModel: (request: RuntimeSetModelRequest) => Promise<RuntimeResult>
+  /**
+   * 手动压缩当前会话上下文；说明可选，成功返回 Pi 刷新后的实际状态。
+   * 压缩是整段操作（含一次摘要 LLM 调用），完成后才返回；过程与结果由投影中的压缩记录表达。
+   */
+  readonly compactRuntime: (request: RuntimeCompactRequest) => Promise<RuntimeResult>
   /** 读取目标运行实例当前绑定已加载的 Pi 资源清单；来源是会话内已加载的扩展、提示词与技能。 */
   readonly getRuntimeResources: (target: RuntimeTarget) => Promise<ResourcesResult>
   /** 预读资源、可用模型与默认模型及分项错误；项目与信任由主进程决定，`force` 绕过进程内缓存。 */
@@ -703,6 +739,21 @@ export function isRuntimeRewindRequest(value: unknown): value is RuntimeRewindRe
     && Object.keys(value).every(key => key === 'runId' || key === 'runtimeId' || key === 'sessionId' || key === 'messageId')
 }
 
+/** 压缩说明长度上限；超限文本按参数拒绝，不静默截断后当成另一条指令。 */
+export const COMPACT_INSTRUCTIONS_MAX_CHARS = 2_000
+
+/** 压缩只接受明确的运行实例、Runtime、会话身份，以及有界或缺失的说明文本。 */
+export function isRuntimeCompactRequest(value: unknown): value is RuntimeCompactRequest {
+  if (!isRecord(value)) return false
+  const instructionsOk = value.instructions === null
+    || (typeof value.instructions === 'string' && value.instructions.length <= COMPACT_INSTRUCTIONS_MAX_CHARS)
+  return typeof value.runId === 'number' && Number.isSafeInteger(value.runId) && value.runId > 0
+    && typeof value.runtimeId === 'number' && Number.isSafeInteger(value.runtimeId) && value.runtimeId > 0
+    && typeof value.sessionId === 'string' && value.sessionId.trim() !== '' && value.sessionId.length <= 256
+    && instructionsOk
+    && Object.keys(value).every(key => key === 'runId' || key === 'runtimeId' || key === 'sessionId' || key === 'instructions')
+}
+
 /** 成功、扩展取消与结果不确定分开表达，不能把取消当成修改成功。 */
 export function isRuntimeRewindResult(value: unknown): value is RuntimeRewindResult {
   if (!isRecord(value)) return false
@@ -760,6 +811,7 @@ function isRuntimeInfo(value: unknown): value is RuntimeInfo {
     && (value.sessionId === null || typeof value.sessionId === 'string')
     && typeof value.messageCount === 'number'
     && typeof value.isStreaming === 'boolean'
+    && typeof value.isCompacting === 'boolean'
     && (value.usage === null || isSessionUsage(value.usage))
     && isOutputRate(value.rate)
 }
@@ -833,12 +885,28 @@ function isMessageGeneration(value: unknown): value is MessageGeneration | null 
     && value.endedAt >= value.startedAt
 }
 
+/** 压缩记录只接受契约内的触发原因与有界文本；取消与失败分别用 `aborted` 与 `errorMessage` 表达。 */
+function isProjectionCompaction(value: unknown): value is ProjectionCompaction {
+  if (!isRecord(value)) return false
+  const reason = value.reason
+  return (reason === null || reason === 'manual' || reason === 'threshold' || reason === 'overflow')
+    && typeof value.summary === 'string'
+    && (value.tokensBefore === null || typeof value.tokensBefore === 'number')
+    && (value.tokensAfter === null || typeof value.tokensAfter === 'number')
+    && typeof value.aborted === 'boolean'
+    && (value.errorMessage === null || typeof value.errorMessage === 'string')
+}
+
 function isProjectionMessage(value: unknown): value is ProjectionMessage {
   if (!isRecord(value)) return false
+  const roleOk = value.role === 'user' || value.role === 'assistant' || value.role === 'compaction'
+  if (!roleOk) return false
+  const compaction = value.role === 'compaction' ? isProjectionCompaction(value.compaction) : value.compaction === null
   return typeof value.id === 'string'
-    && (value.role === 'user' || value.role === 'assistant')
+    && compaction
     && Array.isArray(value.blocks)
     && value.blocks.every(isProjectionBlock)
+    && (value.role !== 'compaction' || value.blocks.length === 0)
     && (value.timestamp === null || typeof value.timestamp === 'number')
     && isMessageGeneration(value.generation)
     && (value.role === 'assistant' || value.generation === null)
@@ -846,6 +914,7 @@ function isProjectionMessage(value: unknown): value is ProjectionMessage {
     && (value.role === 'user' || value.turn === null)
     && (value.stopReason === null || typeof value.stopReason === 'string')
     && (value.errorMessage === null || typeof value.errorMessage === 'string')
+    && (value.role !== 'compaction' || (value.stopReason === null && value.errorMessage === null))
 }
 
 function isToolExecutionPhase(value: unknown): value is ToolExecutionPhase {

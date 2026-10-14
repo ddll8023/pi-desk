@@ -1,6 +1,7 @@
 /** SDK 宿主内部生命周期、目标授权与交互契约；不引入 SDK，不开放任意调用或凭据快照。 */
 import { isExtensionDialogResponseInput, projectExtensionUiRequest } from '../shared/extension-ui-api'
 import {
+  COMPACT_INSTRUCTIONS_MAX_CHARS,
   isCapabilitiesResult, isMcpCommandResult, isMcpStatusResult, isOutputRate, isProjectionBatch,
   isProjectionResult, isResourcesResult, isRuntimeDiagnosticsResult, isSessionUsage
 } from '../shared/runtime-api'
@@ -63,6 +64,7 @@ export interface SdkSessionStatus {
   readonly sessionId: string | null
   readonly sessionFile: string | null
   readonly isIdle: boolean
+  readonly isCompacting: boolean
   readonly pendingMessages: number
   readonly isBashRunning: boolean
   readonly waitingDialogs: number
@@ -82,7 +84,7 @@ export interface SdkSessionStatus {
 /** 无活动会话的初始副本，不意味着宿主或模型服务已经建立。 */
 export function emptySdkSessionStatus(): SdkSessionStatus {
   return { phase: 'empty', bindingId: null, activityVersion: 0, operationId: null,
-    projectPath: null, sessionId: null, sessionFile: null, isIdle: true,
+    projectPath: null, sessionId: null, sessionFile: null, isIdle: true, isCompacting: false,
     pendingMessages: 0, isBashRunning: false, waitingDialogs: 0, needsHostRebuild: false, lastError: null,
     modelProvider: null, modelId: null, messageCount: 0, usage: null, rate: { live: null, average: null } }
 }
@@ -118,6 +120,8 @@ export type SdkHostRequest =
       readonly modelId: string })
   /** 回退只回退对话分支；目标由官方条目 ID 定位，不接受任意条目或会话路径。 */
   | (RequestEnvelope & { readonly type: 'rewind'; readonly bindingId: number; readonly messageId: string })
+  /** 手动压缩当前会话上下文；说明可选，结果由投影中的压缩记录表达。 */
+  | (RequestEnvelope & { readonly type: 'compact'; readonly bindingId: number; readonly instructions: string | null })
   /** 能力清单只读当前绑定会话的模型目录；不创建会话，也不建立第二个模型容器。 */
   | (RequestEnvelope & { readonly type: 'capabilities'; readonly bindingId: number })
   /** 资源清单只读当前绑定会话内存中已加载的扩展命令、提示词与技能；不重新扫描磁盘。 */
@@ -148,6 +152,7 @@ export type SdkHostFrame =
   | (RequestEnvelope & { readonly type: 'prompt-result'; readonly disposition: 'started' | 'queued' | 'handled' })
   | (RequestEnvelope & { readonly type: 'rewind-result'; readonly cancelled: boolean;
       readonly text: string | null })
+  | (RequestEnvelope & { readonly type: 'compact-result' })
   | (RequestEnvelope & { readonly type: 'capabilities-result'; readonly capabilities: AgentCapabilities })
   | (RequestEnvelope & { readonly type: 'resources-result'; readonly resources: PiResources })
   | (RequestEnvelope & { readonly type: 'diagnostics-result'; readonly diagnostics: RuntimeDiagnostics })
@@ -248,7 +253,7 @@ export function isSdkSessionStatus(value: unknown): value is SdkSessionStatus {
     && (value.projectPath === null || isPath(value.projectPath))
     && (value.sessionId === null || isIdentifier(value.sessionId))
     && (value.sessionFile === null || isPath(value.sessionFile))
-    && typeof value.isIdle === 'boolean' && isCount(value.pendingMessages)
+    && typeof value.isIdle === 'boolean' && typeof value.isCompacting === 'boolean' && isCount(value.pendingMessages)
     && typeof value.isBashRunning === 'boolean' && isCount(value.waitingDialogs)
     && typeof value.needsHostRebuild === 'boolean'
     && (value.lastError === null || isSdkHostFailureCode(value.lastError))
@@ -258,7 +263,7 @@ export function isSdkSessionStatus(value: unknown): value is SdkSessionStatus {
     && (value.usage === null || isSessionUsage(value.usage))
     && isOutputRate(value.rate)
     && hasKeys(value, ['phase', 'bindingId', 'activityVersion', 'operationId', 'projectPath',
-      'sessionId', 'sessionFile', 'isIdle', 'pendingMessages', 'isBashRunning', 'waitingDialogs',
+      'sessionId', 'sessionFile', 'isIdle', 'isCompacting', 'pendingMessages', 'isBashRunning', 'waitingDialogs',
       'needsHostRebuild', 'lastError', 'modelProvider', 'modelId', 'messageCount', 'usage', 'rate'])
 }
 /** 中断确认只属于一个具体绑定及执行版本。 */
@@ -289,6 +294,9 @@ export function isSdkHostRequest(value: unknown): value is SdkHostRequest {
       && isIdentifier(value.modelId) && requestKeys(value, ['bindingId', 'provider', 'modelId'])
     case 'rewind': return isIdentity(value.bindingId) && isIdentifier(value.messageId)
       && requestKeys(value, ['bindingId', 'messageId'])
+    case 'compact': return isIdentity(value.bindingId) && (value.instructions === null
+      || (typeof value.instructions === 'string' && value.instructions.length <= COMPACT_INSTRUCTIONS_MAX_CHARS))
+      && requestKeys(value, ['bindingId', 'instructions'])
     case 'capabilities': return isIdentity(value.bindingId) && requestKeys(value, ['bindingId'])
     case 'resources': return isIdentity(value.bindingId) && requestKeys(value, ['bindingId'])
     case 'diagnostics': return isIdentity(value.bindingId) && requestKeys(value, ['bindingId'])
@@ -315,6 +323,7 @@ export function isSdkHostFrame(value: unknown): value is SdkHostFrame {
       && requestKeys(value, ['agentDir', 'sdkVersion'])
     case 'closed':
     case 'ack-result':
+    case 'compact-result':
     case 'ui-result': return requestKeys(value, [])
     case 'failed': return isSdkHostFailureCode(value.code) && requestKeys(value, ['code'])
     case 'capabilities-result': return isCapabilitiesResult({ ok: true, data: value.capabilities })

@@ -33,6 +33,7 @@ import type {
   PromptImageInput,
   PromptResult,
   ResourcesResult,
+  RuntimeCompactRequest,
   RuntimeDiagnosticsResult,
   RuntimeError,
   RuntimeErrorCode,
@@ -170,6 +171,7 @@ function mapInfo(session: SdkSessionStatus): RuntimeInfo {
     sessionId: session.sessionId,
     messageCount: session.messageCount,
     isStreaming: !session.isIdle,
+    isCompacting: session.isCompacting,
     usage: session.usage,
     rate: session.rate
   }
@@ -201,6 +203,7 @@ function sameStatus(left: RuntimeStatus, right: RuntimeStatus): boolean {
     && left.lastError === right.lastError
     && left.info?.sessionId === right.info?.sessionId
     && left.info?.isStreaming === right.info?.isStreaming
+    && left.info?.isCompacting === right.info?.isCompacting
     && left.info?.modelProvider === right.info?.modelProvider
     && left.info?.modelId === right.info?.modelId
     && left.info?.messageCount === right.info?.messageCount
@@ -760,6 +763,25 @@ export class SdkRuntimeBridge {
     try {
       const status = await host.setSessionModel(request.provider, request.modelId)
       return { ok: true, data: mapStatus(host.getStatus(), status, matched.run.runId) }
+    } catch (error) {
+      return { ok: false, error: runtimeErrorOf(error) }
+    }
+  }
+
+  /**
+   * 手动压缩当前会话上下文：说明可选，压缩完成后才返回；
+   * 失败原因由结果表达，实际压缩过程与结果以投影中的压缩记录为准。
+   */
+  async compact(request: RuntimeCompactRequest): Promise<RuntimeResult> {
+    const matched = this.matchedRun({ runId: request.runId, runtimeId: request.runtimeId })
+    if (matched === null || matched.run.owner.getSessionStatus().sessionId !== request.sessionId) {
+      return { ok: false, error: TARGET_CHANGED_ERROR }
+    }
+    this.keepAlive(matched.run.runId)
+    const host = matched.run.owner
+    try {
+      await host.compact(request.instructions)
+      return { ok: true, data: mapStatus(host.getStatus(), host.getSessionStatus(), matched.run.runId) }
     } catch (error) {
       return { ok: false, error: runtimeErrorOf(error) }
     }

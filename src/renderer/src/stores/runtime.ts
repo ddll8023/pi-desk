@@ -1,4 +1,4 @@
-/** 保存 Runtime、聊天投影、对话回退、模型选择与展示偏好状态；不持有进程所有权，也不直接访问文件系统。 */
+/** 保存 Runtime、聊天投影、对话回退、手动压缩、模型选择与展示偏好状态；不持有进程所有权，也不直接访问文件系统。 */
 import { defineStore } from 'pinia'
 import { computed, ref, watch } from 'vue'
 import type { WatchStopHandle } from 'vue'
@@ -14,6 +14,7 @@ import type {
   ProjectionUpdate,
   PromptDisposition,
   PromptImageInput,
+  RuntimeCompactRequest,
   RuntimeError,
   RuntimeRewindRequest,
   RuntimeStatus,
@@ -29,6 +30,7 @@ import { getPiDefaultModel, setPiDefaultModel as savePiDefaultModel } from '../s
 import {
   abortRuntime,
   ackRuntimeProjection,
+  compactRuntime,
   getRuntimeCapabilities,
   getRuntimeProjection,
   getRuntimeStatus,
@@ -62,6 +64,12 @@ type RewindViewState =
 
 /** 中止请求的展示状态；运行中状态本身仍由事件流收敛。 */
 type AbortViewState =
+  | { phase: 'idle' }
+  | { phase: 'requesting' }
+  | { phase: 'error'; error: RuntimeError }
+
+/** 手动压缩只保存动作状态；压缩过程与结果由投影中的压缩记录表达。 */
+type CompactViewState =
   | { phase: 'idle' }
   | { phase: 'requesting' }
   | { phase: 'error'; error: RuntimeError }
@@ -214,6 +222,8 @@ export const useRuntimeStore = defineStore('runtime', () => {
   const rewindView = ref<RewindViewState>({ phase: 'idle' })
   let rewindRequest = 0
   const abortView = ref<AbortViewState>({ phase: 'idle' })
+  const compactView = ref<CompactViewState>({ phase: 'idle' })
+  let compactRequest = 0
   const messages = ref<readonly ProjectionMessage[]>([])
   const tools = ref<readonly ToolExecution[]>([])
   const projectionSync = ref<ProjectionSyncState>('syncing')
@@ -636,6 +646,39 @@ export const useRuntimeStore = defineStore('runtime', () => {
     }
   }
 
+  /**
+   * 手动压缩当前会话上下文；说明可选，成功返回 true 供调用方决定是否清空输入。
+   * 只在会话空闲时发起：Pi 的手动压缩会先中止当前轮次，从文本命令里静默中断一轮太意外。
+   * 调用会等到整段压缩结束才返回，因此这里只维护动作状态，进行中与结果都由投影表达。
+   */
+  async function compact(instructions: string | null): Promise<boolean> {
+    if (view.value.phase !== 'ready' || compactView.value.phase === 'requesting'
+      || preparingPrompt.value || promptView.value.phase === 'sending'
+      || modelSwitchView.value.phase === 'switching' || rewindBlocksWrites()) return false
+    const status = view.value.snapshot
+    const runtimeId = status.runtimeId
+    const sessionId = status.info?.sessionId ?? null
+    // 运行中由页面先提示（需要中断时用停止键）；这里再按快照复核一次，避免并发提交。
+    if (status.runId === null || runtimeId === null || sessionId === null
+      || status.info?.isStreaming === true) return false
+    const sequence = ++compactRequest
+    compactView.value = { phase: 'requesting' }
+    try {
+      const result = await compactRuntime({ runId: status.runId, runtimeId, sessionId, instructions })
+      if (sequence !== compactRequest || view.value.phase !== 'ready'
+        || view.value.snapshot.runId !== status.runId || view.value.snapshot.runtimeId !== runtimeId) return false
+      if (!result.ok) {
+        compactView.value = { phase: 'error', error: result.error }
+        return false
+      }
+      if (result.data.runId === status.runId && result.data.runtimeId === runtimeId) applyStatus(result.data)
+      compactView.value = { phase: 'idle' }
+      return true
+    } finally {
+      if (sequence === compactRequest && compactView.value.phase === 'requesting') compactView.value = { phase: 'idle' }
+    }
+  }
+
   /** 只在当前实例的当前绑定空闲时切换；不乐观更新模型，也不自动重试写操作。 */
   async function switchModel(provider: string, modelId: string): Promise<void> {
     if (view.value.phase !== 'ready' || view.value.snapshot.info?.isStreaming === true
@@ -906,6 +949,8 @@ export const useRuntimeStore = defineStore('runtime', () => {
     if (targetChanged || sessionChanged) {
       promptView.value = { phase: 'idle' }
       abortView.value = { phase: 'idle' }
+      compactRequest += 1
+      compactView.value = { phase: 'idle' }
       modelSwitchRequest += 1
       capabilitiesRequest += 1
       modelSwitchView.value = { phase: 'idle' }
@@ -1001,6 +1046,7 @@ export const useRuntimeStore = defineStore('runtime', () => {
     preparingPrompt,
     rewindView,
     abortView,
+    compactView,
     capabilitiesView,
     modelSwitchView,
     modelPreviewView,
@@ -1022,6 +1068,7 @@ export const useRuntimeStore = defineStore('runtime', () => {
     dispose,
     send,
     rewind,
+    compact,
     switchModel,
     refreshModelPreview,
     loadPiDefaultModel,

@@ -213,8 +213,7 @@ export class SdkSessionRuntime {
   /** 刚结束的展示消息等待官方条目落盘；只保留一条，不无界缓存消息对象。 */
   private pendingEntryLookup: { readonly messageId: string; readonly message: unknown } | null = null
   /** 本条事件对应的消息对象；只在单次事件处理内有效。 */
-  private lastEndedMessage: unknown = null
-  private bindingId: number | null = null
+  private lastEndedMessage: unknown = null  private bindingId: number | null = null
   private activityVersion = 0
   private lastBusy = false
   private lastQueueCount = 0
@@ -249,6 +248,7 @@ export class SdkSessionRuntime {
       operationId: this.operationId, projectPath: this.target?.projectPath ?? null,
       sessionId: session?.sessionId ?? null, sessionFile: session?.sessionFile ?? null,
       isIdle: this.operationId === null && !this.isBusy(), pendingMessages: session?.pendingMessageCount ?? 0,
+      isCompacting: session?.isCompacting ?? false,
       isBashRunning: session?.isBashRunning ?? false, waitingDialogs: this.bridge?.waitingCount ?? 0,
       needsHostRebuild: this.needsHostRebuild, lastError: this.lastError,
       modelProvider: model.provider, modelId: model.id, messageCount: this.projectedMessageCount,
@@ -454,6 +454,22 @@ export class SdkSessionRuntime {
       this.phase = this.needsHostRebuild ? 'blocked' : this.valid ? 'bound' : 'empty'
       finish()
       this.publish()
+    }
+  }
+
+  /**
+   * 手动压缩上下文：只在会话空闲时发起，避免从文本命令里静默中断正在执行的轮次。
+   * 说明文本交给 Pi 作为摘要聚焦条件；摘要与终态由投影中的压缩记录表达，因此这里不返回内容。
+   * 官方拒绝（上下文太小、刚压缩过、被取消）按冲突码收敛，页面不重复播报通用文案。
+   */
+  async compact(bindingId: number, instructions: string | null): Promise<void> {
+    const session = this.requireBoundSession(bindingId)
+    if (this.operationId !== null || this.needsHostRebuild) throw new SdkSessionFailure('SESSION_BUSY')
+    if (this.isBusy()) throw new SdkSessionFailure('SESSION_BUSY')
+    try {
+      await session.compact(instructions ?? undefined)
+    } catch (error) {
+      throw error instanceof SdkSessionFailure ? error : new SdkSessionFailure('SESSION_OPERATION_CONFLICT')
     }
   }
 

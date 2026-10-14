@@ -110,6 +110,7 @@ import type {
 import {
   RUNTIME_ABORT_CHANNEL,
   RUNTIME_CAPABILITIES_CHANNEL,
+  RUNTIME_COMPACT_CHANNEL,
   RUNTIME_SET_MODEL_CHANNEL,
   RUNTIME_DIAGNOSTICS_CHANNEL,
   RUNTIME_MCP_COMMAND_CHANNEL,
@@ -127,6 +128,7 @@ import {
   RUNTIME_STATUS_CHANNEL,
   RUNTIME_STATUS_EVENT,
   isResourcePreviewRequest,
+  isRuntimeCompactRequest,
   isRuntimeSetModelRequest,
   isRuntimeRewindRequest,
   isRuntimeTarget
@@ -1016,6 +1018,20 @@ function registerRuntimeHandlers(pageUrl: string): void {
         return runtimeFailure('INVALID_REQUEST', '模型切换只接受运行实例、Runtime 代际、供应商和模型 ID。')
       }
       return sdkRuntime.setModel(args[0])
+    }
+  )
+
+  /** 手动压缩只接受受校验的目标身份与有界说明文本；摘要内容不在请求里传递。 */
+  handle(
+    RUNTIME_COMPACT_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<RuntimeResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return runtimeFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 1 || !isRuntimeCompactRequest(args[0])) {
+        return runtimeFailure('INVALID_REQUEST', '压缩只接受运行实例、Runtime 代际、会话身份与可选说明文本。')
+      }
+      return sdkRuntime.compact(args[0])
     }
   )
 

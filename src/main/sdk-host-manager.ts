@@ -35,6 +35,8 @@ const SESSION_TIMEOUT_MS = 60_000
  * 结果帧是唯一权威结果，迟到回复仍能按真实状态收敛，不把慢操作提前判成结果未知。
  */
 const WRITE_SETTLE_TIMEOUT_MS = 120_000
+/** 手动压缩是整段操作（含一次摘要 LLM 调用），超时只放弃等待，不取消宿主侧压缩。 */
+const COMPACT_TIMEOUT_MS = 600_000
 const EXIT_GRACE_MS = 2_000
 const KILL_WAIT_MS = 3_000
 const RECOVERY_DELAY_MS = 750
@@ -46,7 +48,7 @@ const MCP_LOGOUT_TIMEOUT_MS = 30_000
 const MCP_RECONNECT_TIMEOUT_MS = 60_000
 /** 会话状态字段与协议同序；被拒时只记录类型，便于对照校验失败的原因。 */
 const STATUS_FIELDS = ['phase', 'bindingId', 'activityVersion', 'operationId', 'projectPath',
-  'sessionId', 'sessionFile', 'isIdle', 'pendingMessages', 'isBashRunning', 'waitingDialogs',
+  'sessionId', 'sessionFile', 'isIdle', 'isCompacting', 'pendingMessages', 'isBashRunning', 'waitingDialogs',
   'needsHostRebuild', 'lastError'] as const
 
 /**
@@ -62,6 +64,7 @@ const EXPECTED_REPLIES: Record<SdkHostRequest['type'], SdkHostFrame['type'] | nu
   prompt: 'prompt-result',
   'set-model': 'session-result',
   rewind: 'rewind-result',
+  compact: 'compact-result',
   capabilities: 'capabilities-result',
   resources: 'resources-result',
   diagnostics: 'diagnostics-result',
@@ -357,6 +360,35 @@ export class SdkHostManager {
         // 未知态必须立刻对页面可见，不等宿主下一次状态事件。
         this.publishSession()
       }
+      if (error instanceof SdkHostError) throw error
+      throw new SdkHostError('SESSION_OPERATION_CONFLICT', FAILURE_MESSAGES.SESSION_OPERATION_CONFLICT)
+    } finally {
+      if (this.sessionSubmission === requestId) this.sessionSubmission = null
+    }
+  }
+
+  /**
+   * 手动压缩当前会话上下文：非幂等且耗时（含一次摘要 LLM 调用），
+   * 单飞且结果未知时不再重发；实际压缩过程与结果由投影中的压缩记录表达。
+   * 超时不取消宿主侧压缩，也不把会话标成“需要恢复”：压缩不改变绑定或文件身份。
+   */
+  async compact(instructions: string | null): Promise<void> {
+    if (this.sessionSubmission !== null || this.uncertainOperationId !== null) {
+      throw new SdkHostError('SESSION_OPERATION_CONFLICT', FAILURE_MESSAGES.SESSION_OPERATION_CONFLICT)
+    }
+    const requestId = randomUUID()
+    this.sessionSubmission = requestId
+    try {
+      const record = this.requireHost(true)
+      const bindingId = this.sessionSnapshot.bindingId
+      if (bindingId === null) throw new SdkHostError('STALE_SESSION', FAILURE_MESSAGES.STALE_SESSION)
+      if (this.sessionSnapshot.needsHostRebuild || !this.sessionSnapshot.isIdle) {
+        throw new SdkHostError('SESSION_BUSY', FAILURE_MESSAGES.SESSION_BUSY)
+      }
+      const frame = await this.request(record, { version: SDK_HOST_PROTOCOL_VERSION, hostId: record.hostId,
+        requestId, type: 'compact', bindingId, instructions }, COMPACT_TIMEOUT_MS)
+      if (frame.type !== 'compact-result') throw new SdkHostError('HOST_PROTOCOL_ERROR', 'SDK 压缩结果不符合契约。')
+    } catch (error) {
       if (error instanceof SdkHostError) throw error
       throw new SdkHostError('SESSION_OPERATION_CONFLICT', FAILURE_MESSAGES.SESSION_OPERATION_CONFLICT)
     } finally {
@@ -908,7 +940,7 @@ export class SdkHostManager {
   private invalidateSession(dropBinding = false): void {
     this.sessionSnapshot = { ...this.sessionSnapshot, phase: 'invalid', operationId: null,
       bindingId: dropBinding ? null : this.sessionSnapshot.bindingId,
-      isIdle: false, waitingDialogs: 0, needsHostRebuild: true, lastError: null }
+      isIdle: false, isCompacting: false, waitingDialogs: 0, needsHostRebuild: true, lastError: null }
     this.projection = null
     this.entryIds.clear()
     this.ui.beginGeneration(null)

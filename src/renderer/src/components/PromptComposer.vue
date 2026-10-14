@@ -1,4 +1,4 @@
-<!-- Prompt 输入坞：处理输入法组合态、Enter 发送与 Shift+Enter 换行、焦点回归与重复提交、响应侧栏「新建」的聚焦请求并给出一次性提示，并在 Agent 运行期间原位提供停止入口；同时承接 Extension 的 set_editor_text 填充文本、图片附件的选择/粘贴/拖拽三种入口、输入行按内容自动增高、快捷发送下拉（短语取自界面偏好，可在设置里增删改与排序）、Pi 命令的斜杠模糊补全（Runtime 就绪后用运行中的命令清单，未就绪时用主进程预读的技能清单，按类型分组并按匹配优先级排序）与 `@` 项目文件引用（只写入相对路径文本，不传文件内容）。底部工具条左侧是信息行：异常与进行中的状态文本、被收起的 Extension 对话入口、Extension status 项与会话用量（点击开明细）；右侧是附件、快捷发送与发送/停止按钮。 -->
+<!-- Prompt 输入坞：处理输入法组合态、Enter 发送与 Shift+Enter 换行、焦点回归与重复提交、响应侧栏「新建」的聚焦请求并给出一次性提示，并在 Agent 运行期间原位提供停止入口；同时承接 Extension 的 set_editor_text 填充文本、图片附件的选择/粘贴/拖拽三种入口、输入行按内容自动增高、快捷发送下拉（短语取自界面偏好，可在设置里增删改与排序）、Pi 命令的斜杠模糊补全（Runtime 就绪后用运行中的命令清单，未就绪时用主进程预读的技能清单，按类型分组并按匹配优先级排序；另含 Desktop 层自己拦截的界面命令）与 `@` 项目文件引用（只写入相对路径文本，不传文件内容）。底部工具条左侧是信息行：异常与进行中的状态文本、被收起的 Extension 对话入口、Extension status 项与会话用量（点击开明细）；右侧是附件、快捷发送与发送/停止按钮。 -->
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
@@ -23,7 +23,7 @@ const resourceStore = useResourceStore()
 const sessionStore = useSessionStore()
 const preferencesStore = usePreferencesStore()
 const sessionViewStore = useSessionViewStore()
-const { view: runtimeView, promptView, abortView, projectionSync, capabilitiesView, modelSwitchView,
+const { view: runtimeView, promptView, abortView, compactView, projectionSync, capabilitiesView, modelSwitchView,
   preparingPrompt, rewindView } = storeToRefs(runtimeStore)
 const { editorText, editorTextVersion } = storeToRefs(extensionStore)
 
@@ -41,6 +41,18 @@ const textarea = ref<HTMLTextAreaElement | null>(null)
 /** 闲置态点击「新建」后的一次性提示：说明会话由首次发送创建。 */
 const newSessionHint = ref(false)
 let newSessionHintTimer: ReturnType<typeof setTimeout> | null = null
+/** 未就绪时输入 `/compact` 的一次性提示：压缩需要已有会话上下文。 */
+const compactHint = ref(false)
+let compactHintTimer: ReturnType<typeof setTimeout> | null = null
+
+function showCompactHint(): void {
+  compactHint.value = true
+  if (compactHintTimer !== null) clearTimeout(compactHintTimer)
+  compactHintTimer = setTimeout(() => {
+    compactHint.value = false
+    compactHintTimer = null
+  }, 4_000)
+}
 
 /** 聚焦请求只在闲置态发出：聚焦输入框并短暂提示，不改动启动语义。 */
 watch(() => props.focusToken, () => {
@@ -120,10 +132,11 @@ const sending = computed(() => promptView.value.phase === 'sending')
 const stopVisible = computed(() => (
   runtimeReady.value && (streaming.value || abortView.value.phase === 'requesting')
 ))
-/** 就绪后仅在 Agent 空闲、投影同步且无提交或模型/会话切换时允许发送；未就绪时仅允许有项目且没有并发启动的首次启动请求。 */
+/** 就绪后仅在 Agent 空闲、投影同步且无提交、压缩或模型/会话切换时允许发送；未就绪时仅允许有项目且没有并发启动的首次启动请求。 */
 const canSubmit = computed(() => {
   if (sending.value || submitting.value || preparingPrompt.value || modelSwitchView.value.phase === 'switching' || sessionStore.opening
     || sessionStore.awaitingTrust || sessionStore.awaitingInterrupt || rewindView.value.phase === 'requesting'
+    || compactView.value.phase === 'requesting'
     || (rewindView.value.phase === 'error' && rewindView.value.blocked)) return false
   if (runtimeReady.value) {
     return projectionSync.value === 'synced' && !streaming.value
@@ -139,12 +152,22 @@ const attachDisabled = computed(() => (
   !canSubmit.value || imageSupported.value === false || pendingImages.value.length >= MAX_IMAGE_COUNT
 ))
 
+/** 官方拒绝（上下文太小、刚压缩过、被取消）的真实原因由聊天里的压缩记录表达，只有传输级失败才占用信息行。 */
+const compactErrorText = computed(() => {
+  const current = compactView.value
+  if (current.phase !== 'error') return null
+  return current.error.code === 'RUNTIME_COMMAND_REJECTED' ? null : `压缩未完成：${current.error.message}`
+})
+
 const status = computed<{ readonly kind: 'info' | 'error'; readonly text: string } | null>(() => {
   if (rewindView.value.phase === 'requesting') return { kind: 'info', text: '正在回退对话；草稿保留，完成后才能发送。' }
   if (rewindView.value.phase === 'error' && rewindView.value.blocked) return { kind: 'error', text: rewindView.value.error.message }
   if (preparingPrompt.value) return { kind: 'info', text: '正在读取附件并提交输入。' }
   if (abortView.value.phase === 'error') {
     return { kind: 'error', text: abortView.value.error.message }
+  }
+  if (compactErrorText.value !== null) {
+    return { kind: 'error', text: compactErrorText.value }
   }
   if (abortView.value.phase === 'requesting') {
     return { kind: 'info', text: '正在停止当前操作，等待本轮结束。' }
@@ -170,6 +193,9 @@ const status = computed<{ readonly kind: 'info' | 'error'; readonly text: string
     return { kind: 'info', text: '请先处理当前操作；输入会保留。' }
   }
   if (!runtimeReady.value) {
+    if (compactHint.value) {
+      return { kind: 'info', text: '压缩需要已有会话上下文；先发送一条消息启动 Pi，再使用 /compact。' }
+    }
     if (runtimeView.value.phase === 'failed') {
       return { kind: 'error', text: `${runtimeView.value.error.message}；可再次点击发送重试启动。` }
     }
@@ -185,6 +211,10 @@ const status = computed<{ readonly kind: 'info' | 'error'; readonly text: string
     // 未选项目与首次启动属于纯引导，按钮的禁用态已经表达，不再占信息行。
     if (canStartRuntime.value || projectStore.currentProject === null) return null
     return { kind: 'info', text: 'Runtime 正在关闭；输入会保留。' }
+  }
+  // 压缩进行中：isStreaming 为 true（会话不空闲），但文案要说明当前在做压缩而不是普通回答。
+  if (compactView.value.phase === 'requesting' || runtimeInfo.value?.isCompacting === true) {
+    return { kind: 'info', text: '正在压缩上下文；需要中断时在下方停止。' }
   }
   if (streaming.value) {
     return { kind: 'info', text: 'Agent 正在运行，本轮结束前不能提交新输入。' }
@@ -408,6 +438,7 @@ function onDocumentPointerDown(event: PointerEvent): void {
 onUnmounted(() => {
   cancelFileSearch()
   if (newSessionHintTimer !== null) clearTimeout(newSessionHintTimer)
+  if (compactHintTimer !== null) clearTimeout(compactHintTimer)
   // 已绑定会话的输入交给会话状态留底，切回时恢复；空闲与未绑定状态没有独立历史，直接释放预览地址。
   if (isSessionKey(sessionViewStore.key)) {
     sessionViewStore.saveInput(sessionViewStore.key, { draft: draft.value, images: pendingImages.value })
@@ -513,11 +544,14 @@ function onKeydown(event: KeyboardEvent): void {
   void submit()
 }
 
-/** Runtime 未就绪时只启动并保留输入；就绪后提交，只有请求被接受时才清空且不覆盖新输入。 */
+/**
+ * 界面命令（`/new`、`/resume`、`/compact`）在启动分支之前拦截，其中 `/compact` 未就绪时只保留草稿、不启动 Runtime；
+ * 其余输入在 Runtime 未就绪时只启动并保留，就绪后提交，只有请求被接受时才清空且不覆盖新输入。
+ */
 async function submit(): Promise<void> {
   if (!canSend.value) return
 
-  // Desktop 层拦截的界面命令：Pi RPC 模式没有这两个命令，不能发给模型。
+  // Desktop 层拦截的界面命令：Pi 的 prompt 不解释这些内置斜杠命令，直接发送只会把命令文本交给模型。
   if (draft.value === '/resume') {
     draft.value = ''
     sessionStore.openSessionPicker()
@@ -527,6 +561,20 @@ async function submit(): Promise<void> {
     draft.value = ''
     // 闲置时空白聊天已经可用；只有已有 Runtime 时才切换到实际 Pi 会话。
     if (runtimeReady.value) void sessionStore.open(null, false)
+    return
+  }
+  // 手动压缩由 Desktop 发起：Pi 的 prompt 不解释内置斜杠命令，直接发送只会把命令文本当成用户输入。
+  if (draft.value === '/compact' || draft.value.startsWith('/compact ')) {
+    // 未就绪时保留草稿：压缩需要已有会话上下文，不是“发送后自动补发”的输入。
+    if (!runtimeReady.value) {
+      showCompactHint()
+      return
+    }
+    const instructions = draft.value.slice('/compact'.length).trim()
+    const message = draft.value
+    const accepted = await runtimeStore.compact(instructions === '' ? null : instructions)
+    // 只有请求被接受才清空；失败时保留说明文本，便于修改后重试。
+    if (accepted && draft.value === message) draft.value = ''
     return
   }
 
@@ -619,8 +667,30 @@ watch(editorTextVersion, () => {
   }
 })
 
-/** 分组顺序与标题：技能置前，保证输入 `/` 时技能一定出现在候选里，不被其他类型整体挤出。 */
-const SUGGESTION_GROUPS: readonly { readonly kind: PiResourceKind; readonly label: string }[] = [
+/**
+ * 补全候选：Pi 资源，或 Desktop 层自己拦截的界面命令。
+ * 界面命令不在宿主资源清单里（那三类只对应扩展命令、模板与技能），因此由页面本地提供。
+ */
+type ComposerSuggestionKind = PiResourceKind | 'desktop'
+
+interface DesktopCommandEntry {
+  readonly kind: 'desktop'
+  readonly name: string
+  readonly description: string
+}
+
+type ComposerSuggestion = PiResourceEntry | DesktopCommandEntry
+
+/** Desktop 层拦截的命令：`/compact` 走手动压缩，`/new` 与 `/resume` 是会话入口。 */
+const DESKTOP_COMMANDS: readonly DesktopCommandEntry[] = [
+  { kind: 'desktop', name: 'compact', description: '压缩当前会话上下文（可跟摘要说明）' },
+  { kind: 'desktop', name: 'new', description: '开始新会话' },
+  { kind: 'desktop', name: 'resume', description: '恢复其他会话' }
+]
+
+/** 分组顺序与标题：界面命令置前，其次是技能，保证输入 `/` 时本应用支持的入口一定在候选里。 */
+const SUGGESTION_GROUPS: readonly { readonly kind: ComposerSuggestionKind; readonly label: string }[] = [
+  { kind: 'desktop', label: '界面命令' },
   { kind: 'skill', label: '技能' },
   { kind: 'prompt', label: '模板' },
   { kind: 'extension', label: '扩展命令' }
@@ -638,13 +708,13 @@ const suggestionIndex = ref(0)
 
 /** 候选分组：`index` 是该条在扁平列表中的位置，键盘导航与选中态都按它对应。 */
 interface SuggestionGroup {
-  readonly kind: PiResourceKind
+  readonly kind: ComposerSuggestionKind
   readonly label: string
-  readonly items: readonly { readonly entry: PiResourceEntry; readonly index: number }[]
+  readonly items: readonly { readonly entry: ComposerSuggestion; readonly index: number }[]
 }
 
 /** 名称完全匹配 > 前缀 > 包含 > 按顺序的非连续字符 > 描述包含；显式 `skill:` 只搜索技能。 */
-function commandMatchRank(entry: PiResourceEntry, query: string): number | null {
+function commandMatchRank(entry: ComposerSuggestion, query: string): number | null {
   const skillOnly = query.startsWith('skill:')
   if (skillOnly && entry.kind !== 'skill') return null
   const needle = skillOnly ? query.slice('skill:'.length) : query
@@ -677,12 +747,13 @@ function commandMatchRank(entry: PiResourceEntry, query: string): number | null 
 }
 
 /**
- * 候选来源：Runtime 就绪时用当前会话已加载的资源，未就绪时用主进程一次性预读的技能清单。
+ * 候选来源：界面命令始终在列；其余在 Runtime 就绪时用当前会话已加载的资源，未就绪时用主进程一次性预读的技能清单。
  * 两份数据不合并、不去重：就绪后预读结果立即作废，运行中的清单是唯一权威。
  */
-const candidateEntries = computed<readonly PiResourceEntry[]>(() => (
-  runtimeReady.value ? resourceStore.entries : resourceStore.previewSkills
-))
+const candidateEntries = computed<readonly ComposerSuggestion[]>(() => [
+  ...DESKTOP_COMMANDS,
+  ...(runtimeReady.value ? resourceStore.entries : resourceStore.previewSkills)
+])
 
 /** 按类型分组后，各组先按匹配优先级排序再限量，同级保持资源清单的原始顺序。 */
 const matchedGroups = computed<readonly SuggestionGroup[]>(() => {
@@ -692,7 +763,7 @@ const matchedGroups = computed<readonly SuggestionGroup[]>(() => {
   const groups: SuggestionGroup[] = []
   let index = 0
   for (const group of SUGGESTION_GROUPS) {
-    const ranked: { entry: PiResourceEntry; rank: number }[] = []
+    const ranked: { entry: ComposerSuggestion; rank: number }[] = []
     for (const entry of candidateEntries.value) {
       if (entry.kind !== group.kind) continue
       const rank = commandMatchRank(entry, query)
@@ -706,7 +777,7 @@ const matchedGroups = computed<readonly SuggestionGroup[]>(() => {
 })
 
 /** 扁平候选：键盘导航与 `activeListId` 判断仍按它工作，顺序与分组渲染一致。 */
-const matchedSuggestions = computed<readonly PiResourceEntry[]>(() => (
+const matchedSuggestions = computed<readonly ComposerSuggestion[]>(() => (
   matchedGroups.value.flatMap((group) => group.items.map((item) => item.entry))
 ))
 const visibleSuggestions = computed(() => (suggestionsDismissed.value ? [] : matchedSuggestions.value))
@@ -729,7 +800,7 @@ function moveSuggestion(step: number): void {
 }
 
 /** 接受候选：写入完整命令并保留一个尾随空格供追加参数，不自动发送。 */
-function acceptSuggestion(entry: PiResourceEntry | undefined): void {
+function acceptSuggestion(entry: ComposerSuggestion | undefined): void {
   if (entry === undefined) return
   draft.value = `/${entry.name} `
   textarea.value?.focus()

@@ -1,10 +1,11 @@
-/** 渲染端 Runtime 状态、模型选择、Prompt、回退与投影同步的受限桥接入口；通信异常转换为安全的展示结果。 */
+/** 渲染端 Runtime 状态、模型选择、Prompt、回退、手动压缩与投影同步的受限桥接入口；通信异常转换为安全的展示结果。 */
 import type {
   CapabilitiesResult,
   ProjectionBatch,
   ProjectionResult,
   PromptImageInput,
   PromptResult,
+  RuntimeCompactRequest,
   RuntimeError,
   RuntimeResult,
   RuntimeRewindRequest,
@@ -129,6 +130,29 @@ export async function setRuntimeModel(request: RuntimeSetModelRequest): Promise<
     return {
       ok: false,
       error: { code: 'BRIDGE_CALL_FAILED', message: `模型切换桥接调用失败：${detail}` }
+    }
+  }
+}
+
+/**
+ * 手动压缩目标实例的当前会话上下文；说明可选。
+ * 调用会等到整段压缩结束才返回，过程与结果由投影中的压缩记录表达。
+ */
+export async function compactRuntime(request: RuntimeCompactRequest): Promise<RuntimeResult> {
+  const bridge = window.desktop
+  if (!bridge || typeof bridge.compactRuntime !== 'function') return unavailable()
+  try {
+    return await bridge.compactRuntime({
+      runId: request.runId,
+      runtimeId: request.runtimeId,
+      sessionId: request.sessionId,
+      instructions: request.instructions
+    })
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error)
+    return {
+      ok: false,
+      error: { code: 'BRIDGE_CALL_FAILED', message: `压缩桥接调用失败：${detail}` }
     }
   }
 }

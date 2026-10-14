@@ -1,4 +1,4 @@
-<!-- 单条消息：按块展示正文、Thinking、技能卡、工具与计时（单条生成耗时与本轮响应耗时）；用户消息下方使用细线图标操作栏，回退与修改后的重新发送由父级执行。 -->
+<!-- 单条消息：按块展示正文、Thinking、技能卡、压缩卡、工具与计时（单条生成耗时与本轮响应耗时）；用户消息下方使用细线图标操作栏，回退与修改后的重新发送由父级执行。 -->
 <script setup lang="ts">
 import { computed, onUnmounted, reactive, ref, useId } from 'vue'
 import { copyText } from '../clipboard'
@@ -83,8 +83,13 @@ const thinkingOverrides = reactive(new Map<string, boolean>())
 /** 技能卡与 Thinking 同样初始折叠，手动开合只影响当前块。 */
 const skillOverrides = reactive(new Map<string, boolean>())
 
-const roleLabel = computed(() => (props.message.role === 'user' ? '你' : 'Assistant'))
 const isUser = computed(() => props.message.role === 'user')
+/** 压缩记录不是对话消息：不展示生成计时、用户操作栏与复制入口。 */
+const isCompaction = computed(() => props.message.role === 'compaction')
+const compaction = computed(() => props.message.compaction)
+const roleLabel = computed(() => (
+  isUser.value ? '你' : isCompaction.value ? '上下文压缩' : 'Assistant'
+))
 const generation = computed(() => props.message.generation)
 /** 本轮响应计时；历史轮次与 AI 消息为 null。 */
 const turn = computed(() => props.message.turn)
@@ -128,6 +133,54 @@ function isSkillExpanded(key: string): boolean {
 /** 由 summary 的点击统一控制开合，键盘激活同样生效。 */
 function toggleSkill(key: string): void {
   skillOverrides.set(key, !isSkillExpanded(key))
+}
+
+/** 累计数值短格式：1234 → 1.2K、1234567 → 1.2M；未知值保持 `?`，与用量行口径一致。 */
+function formatTokens(value: number | null): string {
+  if (value === null || !Number.isFinite(value)) return '?'
+  if (value >= 1e6) return `${(value / 1e6).toFixed(1).replace(/\.0$/, '')}M`
+  if (value >= 1000) return `${(value / 1000).toFixed(1).replace(/\.0$/, '')}K`
+  return String(value)
+}
+
+/** 压缩来源：实时记录带触发原因，历史条目没有原因时按「历史记录」展示。 */
+const compactionOrigin = computed(() => {
+  switch (compaction.value?.reason) {
+    case 'manual': return '手动'
+    case 'threshold': return '自动 · 阈值'
+    case 'overflow': return '自动 · 溢出'
+    default: return '历史记录'
+  }
+})
+
+/** 压缩前后的 token 对比；两侧都缺失时整段不渲染，不推算压缩量。 */
+const compactionTokens = computed(() => {
+  const current = compaction.value
+  if (current === null || (current.tokensBefore === null && current.tokensAfter === null)) return null
+  return `${formatTokens(current.tokensBefore)} → ${formatTokens(current.tokensAfter)} tokens`
+})
+
+/** 取消与失败的说明；成功时为空，由摘要正文表达。 */
+const compactionNotice = computed(() => {
+  const current = compaction.value
+  if (current === null) return null
+  if (current.aborted) return '上下文压缩已取消。'
+  if (current.errorMessage !== null) return `上下文压缩失败：${current.errorMessage}`
+  return null
+})
+
+/** 只有带错误文本的压缩按错误展示；取消与成功都不用错误样式。 */
+const compactionFailed = computed(() => (compaction.value?.errorMessage ?? null) !== null)
+
+/** 压缩摘要与技能卡一样初始折叠，手动开合只影响当前块。 */
+const compactionOverrides = reactive(new Map<string, boolean>())
+
+function isCompactionExpanded(key: string): boolean {
+  return compactionOverrides.get(key) ?? false
+}
+
+function toggleCompaction(key: string): void {
+  compactionOverrides.set(key, !isCompactionExpanded(key))
 }
 
 /**
@@ -175,14 +228,14 @@ function onEditKeydown(event: KeyboardEvent): void {
 </script>
 
 <template>
-  <article class="chat-message" :class="isUser ? 'chat-message-user' : 'chat-message-assistant'">
+  <article class="chat-message" :class="isUser ? 'chat-message-user' : isCompaction ? 'chat-message-compaction' : 'chat-message-assistant'">
     <header class="chat-meta">
-      <span v-if="!isUser" class="chat-role-mark" aria-hidden="true">π</span>
+      <span v-if="!isUser && !isCompaction" class="chat-role-mark" aria-hidden="true">π</span>
       <span class="chat-role">{{ roleLabel }}</span>
-      <span v-if="message.time || turnText !== null || !isUser" class="chat-time inline-flex flex-wrap items-center gap-x-3 gap-y-1">
+      <span v-if="message.time || turnText !== null || (!isUser && !isCompaction)" class="chat-time inline-flex flex-wrap items-center gap-x-3 gap-y-1">
         <span v-if="message.time">{{ message.time }}</span>
         <span
-          v-if="!isUser"
+          v-if="!isUser && !isCompaction"
           class="font-mono"
           title="按客户端事件计时；生成中更新，消息结束、事件配对中断或 Agent 收敛时固定；历史无记录不推算。"
         >{{ generationText }}</span>
@@ -194,6 +247,30 @@ function onEditKeydown(event: KeyboardEvent): void {
       </span>
     </header>
 
+    <!-- 压缩记录：摘要初始折叠，只展示 Pi 给出的内容；取消与失败没有摘要，用一行提示说明结果。 -->
+    <template v-if="isCompaction && compaction !== null">
+      <details
+        v-if="compaction.summary !== ''"
+        class="chat-compaction self-start w-full"
+        :open="isCompactionExpanded(message.id)"
+      >
+        <summary @click.prevent="toggleCompaction(message.id)">
+          <span class="disclosure"></span>
+          <span class="chat-compaction-origin">{{ compactionOrigin }}</span>
+          <span v-if="compactionTokens !== null" class="chat-compaction-tokens">{{ compactionTokens }}</span>
+          <span class="chat-compaction-hint">摘要正文</span>
+        </summary>
+        <div class="chat-compaction-body">
+          <MarkdownContent :text="compaction.summary" />
+        </div>
+      </details>
+      <p
+        v-else-if="compactionNotice !== null"
+        class="status-notice self-start"
+        :class="compactionFailed ? 'status-notice-error' : 'status-notice-info'"
+      >{{ compactionNotice }}</p>
+    </template>
+
     <template v-for="block in message.blocks" :key="block.key">
       <template v-if="block.kind === 'text'">
         <!-- 图片附件仍只来自用户消息的本地附件，不交给 Markdown 解析。 -->
@@ -204,7 +281,11 @@ function onEditKeydown(event: KeyboardEvent): void {
           class="max-h-48 self-end rounded-desk-md border border-desk-line object-contain"
         />
         <!-- 技能调用是被 Pi 展开的机器内容，单独折叠展示；用户追加文本仍走原气泡。 -->
-        <details v-if="block.skill !== null" class="chat-skill self-start w-full">
+        <details
+          v-if="block.skill !== null"
+          class="chat-skill self-start w-full"
+          :open="isSkillExpanded(block.key)"
+        >
           <summary @click.prevent="toggleSkill(block.key)">
             <span class="disclosure"></span>
             <span class="chat-skill-label">技能</span>

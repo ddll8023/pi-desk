@@ -142,6 +142,7 @@ import type {
 import {
   RUNTIME_ABORT_CHANNEL,
   RUNTIME_CAPABILITIES_CHANNEL,
+  RUNTIME_COMPACT_CHANNEL,
   RUNTIME_SET_MODEL_CHANNEL,
   RUNTIME_DIAGNOSTICS_CHANNEL,
   RUNTIME_MCP_COMMAND_CHANNEL,
@@ -191,6 +192,7 @@ import type {
   ResourcesResult,
   ResourcePreviewResult,
   RuntimeApi,
+  RuntimeCompactRequest,
   RuntimeDiagnosticsResult,
   RuntimeResult,
   RuntimeSetModelRequest,
@@ -581,6 +583,18 @@ const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionAp
       modelId: request.modelId
     }
     const response: unknown = await ipcRenderer.invoke(RUNTIME_SET_MODEL_CHANNEL, payload)
+    return isRuntimeResult(response) ? response : invalidRuntimeResponse()
+  },
+
+  /** 手动压缩只搬运目标身份与可选说明文本；压缩过程与结果由投影事件表达。 */
+  async compactRuntime(request: RuntimeCompactRequest): Promise<RuntimeResult> {
+    const payload: RuntimeCompactRequest = {
+      runId: request.runId,
+      runtimeId: request.runtimeId,
+      sessionId: request.sessionId,
+      instructions: request.instructions
+    }
+    const response: unknown = await ipcRenderer.invoke(RUNTIME_COMPACT_CHANNEL, payload)
     return isRuntimeResult(response) ? response : invalidRuntimeResponse()
   },
 

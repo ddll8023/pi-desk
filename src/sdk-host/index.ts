@@ -167,6 +167,10 @@ async function dispatch(request: SdkHostRequest): Promise<void> {
       send({ ...envelope, type: 'rewind-result', ...result })
       return
     }
+    case 'compact':
+      await runtime.compact(request.bindingId, request.instructions)
+      send({ ...envelope, type: 'compact-result' })
+      return
     case 'capabilities':
       send({ ...envelope, type: 'capabilities-result', capabilities: runtime.capabilities(request.bindingId) })
       return

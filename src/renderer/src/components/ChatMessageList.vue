@@ -64,6 +64,8 @@ const runtimeInfo = computed(() => (
   runtimeView.value.phase === 'ready' ? runtimeView.value.snapshot.info : null
 ))
 const streaming = computed(() => runtimeInfo.value?.isStreaming === true)
+/** 压缩进行中：运行提示改成压缩文案，但不改变粘底与停止键的行为。 */
+const compacting = computed(() => runtimeInfo.value?.isCompacting === true)
 const pendingRewind = ref<{ request: RuntimeRewindRequest } | null>(null)
 const pendingEdit = ref<{ messageId: string; text: string } | null>(null)
 const canRewind = computed(() => runtimeView.value.phase === 'ready' && runtimeInfo.value?.sessionId != null
@@ -464,7 +466,7 @@ onBeforeUnmount(() => {
 
         <p v-if="streaming" role="status" class="status-notice status-notice-info flex items-center gap-2">
           <span class="status-dot animate-pulse bg-desk-accent motion-reduce:animate-none"></span>
-          <span>Agent 正在运行；需要中断时在下方停止。</span>
+          <span>{{ compacting ? '正在压缩上下文；需要中断时在下方停止。' : 'Agent 正在运行；需要中断时在下方停止。' }}</span>
         </p>
       </div>
     </div>
