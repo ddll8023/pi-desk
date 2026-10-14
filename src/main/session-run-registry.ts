@@ -172,7 +172,7 @@ export class SessionRunRegistry<T> implements SessionRunQuery, SdkHostRunRegistr
     return this.records.get(runId)?.projectPath ?? null
   }
 
-  /** 前台选择：页面当前寻址的运行实例；与占用不同，仅用于展示归属。 */
+  /** 前台选择：页面当前寻址的运行实例；与占用不同，只表达展示目标，但空闲回收以它判断是否豁免。 */
   foreground(): SessionRunRecord<T> | null {
     const runId = this.foregroundRunId
     if (runId === null) return null

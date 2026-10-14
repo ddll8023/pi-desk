@@ -216,6 +216,10 @@ export const useRuntimeStore = defineStore('runtime', () => {
   const suspendedSessionId = computed(() => (
     view.value.phase === 'closed' ? statusSessionId.value : null
   ))
+  /** 前台实例当前展示的会话身份；宿主已回收（挂起）时仍指向同一会话。 */
+  const foregroundSessionId = computed(() => (
+    view.value.phase === 'ready' ? view.value.snapshot.info?.sessionId ?? null : suspendedSessionId.value
+  ))
   const promptView = ref<PromptViewState>({ phase: 'idle' })
   /** 附件读取也属于提交阶段，回退和切换模型不能穿插其间。 */
   const preparingPrompt = ref(false)
@@ -1041,6 +1045,7 @@ export const useRuntimeStore = defineStore('runtime', () => {
     view,
     foregroundRunId,
     suspendedSessionId,
+    foregroundSessionId,
     conversationKey,
     promptView,
     preparingPrompt,

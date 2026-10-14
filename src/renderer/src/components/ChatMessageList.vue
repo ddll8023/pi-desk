@@ -1,4 +1,4 @@
-<!-- 消息区：按投影渲染、粘底与大纲导航；承接用户消息回退确认与修改提交，原会话保留，项目文件不回退。 -->
+<!-- 消息区：按投影渲染、粘底与大纲导航；承接用户消息回退确认与修改提交，回退会新建会话（列表折叠为一条），项目文件不回退。 -->
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
@@ -73,7 +73,7 @@ const canRewind = computed(() => runtimeView.value.phase === 'ready' && runtimeI
   && promptView.value.phase !== 'sending' && modelSwitchView.value.phase !== 'switching'
   && rewindView.value.phase !== 'requesting' && !(rewindView.value.phase === 'error' && rewindView.value.blocked)
   && !sessionStore.opening && !sessionStore.awaitingTrust && !sessionStore.awaitingInterrupt)
-const rewindDetail = computed(() => '原会话保留，可从会话列表重新打开。仅回退对话，不撤销项目文件改动。')
+const rewindDetail = computed(() => '回退会新建一条会话继续，原会话保留在本机但不再单独列出。仅回退对话，不撤销项目文件改动。')
 
 /** 发起确认时固定目标（运行实例、代际与会话）；用户确认前不会改变历史。 */
 function requestRewind(messageId: string): void {

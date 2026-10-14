@@ -61,11 +61,7 @@ const { actionError: sessionActionError, opening } = storeToRefs(sessionStore)
 const projectBusy = computed(() => choosing.value || switching.value)
 const sessionBusy = computed(() => opening.value)
 /** 当前会话身份；宿主已回收（挂起）时仍指向同一会话，选中项不会因此消失。 */
-const currentSessionId = computed(() => {
-  const view = runtimeView.value
-  if (view.phase === 'ready') return view.snapshot.info?.sessionId ?? null
-  return runtimeStore.suspendedSessionId
-})
+const currentSessionId = computed(() => runtimeStore.foregroundSessionId)
 
 /** 相对时间的刻度：一分钟一次即可，不参与消息区的 500ms 计时。 */
 const now = ref(Date.now())
@@ -442,6 +438,14 @@ function menuSessionTitle(session: SessionSummary): string {
   return session.sessionId === currentSessionId.value ? '当前会话' : '未命名会话'
 }
 
+/** 浮层里的分叉来源标题：与行内标注同一口径，折叠掉的来源会话仍能解析出标题。 */
+const menuForkedFrom = computed(() => {
+  const target = menuTarget.value
+  if (target?.kind !== 'session') return null
+  const node = nodes.value.find(candidate => samePath(candidate.project.path, target.projectPath))
+  return node?.sessions.find(row => row.session.sessionId === target.session.sessionId)?.forkedFrom ?? null
+})
+
 watch(() => props.sidebarCollapsed, collapsed => {
   if (collapsed) closeMenu()
 })
@@ -682,6 +686,7 @@ onBeforeUnmount(() => {
               <dt>会话 ID</dt><dd class="sidebar-session-id">{{ menuTarget.session.sessionId }}</dd>
               <dt>最近活动</dt><dd>{{ formatUpdatedAt(menuTarget.session.updatedAt, true) }}</dd>
               <dt>文件大小</dt><dd>{{ formatSize(menuTarget.session.sizeBytes) }}</dd>
+              <dt v-if="menuForkedFrom !== null">分叉自</dt><dd v-if="menuForkedFrom !== null">{{ menuForkedFrom }}</dd>
             </dl>
           </div>
           <AppButton variant="unstyled" class="project-sidebar-menu-item" :disabled="sessionBusy || menuTarget.session.sessionId === currentSessionId" @click="openSessionFromMenu">

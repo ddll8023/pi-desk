@@ -646,7 +646,7 @@ export interface RuntimeApi {
   readonly sendPrompt: (target: RuntimeTarget, message: string, images?: readonly PromptImageInput[]) => Promise<PromptResult>
   /** 请求中止目标运行实例的当前操作；成功只表示 Pi 已确认取消，运行状态仍以事件流为准。 */
   readonly abortRuntime: (target: RuntimeTarget) => Promise<RuntimeResult>
-  /** 分支到指定用户消息之前，原会话保留；不撤销项目文件改动。 */
+  /** 回退到指定用户消息之前：Pi 的 fork 会新建会话并保留来源文件；不撤销项目文件改动。 */
   readonly rewindRuntime: (request: RuntimeRewindRequest) => Promise<RuntimeRewindResult>
   /** 读取目标运行实例当前绑定的投影快照；未绑定时返回空基准。 */
   readonly getRuntimeProjection: (target: RuntimeTarget) => Promise<ProjectionResult>

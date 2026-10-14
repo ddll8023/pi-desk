@@ -3,6 +3,8 @@
 import { storeToRefs } from 'pinia'
 import { computed, watch } from 'vue'
 import type { SessionSummary } from '../../../shared/session-api'
+import { collapseForkedSessions } from '../sidebar-tree'
+import { useRuntimeStore } from '../stores/runtime'
 import { useSessionStore } from '../stores/session'
 import AppButton from './ui/AppButton.vue'
 
@@ -14,9 +16,16 @@ const props = defineProps<{
 }>()
 
 const sessionStore = useSessionStore()
+const runtimeStore = useRuntimeStore()
 const { view, sessions, skipped, truncated, actionError, opening } = storeToRefs(sessionStore)
 
 const busy = computed(() => opening.value || view.value.phase === 'loading')
+
+/** 分叉链只展示最新一条；当前会话即使被取代也保留。 */
+const visibleSessions = computed(() => collapseForkedSessions(
+  sessions.value,
+  sessionId => sessionId === runtimeStore.foregroundSessionId
+))
 
 /** 只按最后修改时间分成两段，不推断会话内容或跨项目归属。 */
 const groups = computed(() => {
@@ -25,7 +34,7 @@ const groups = computed(() => {
   const boundary = startOfToday.getTime()
   const today: SessionSummary[] = []
   const earlier: SessionSummary[] = []
-  for (const session of sessions.value) {
+  for (const session of visibleSessions.value) {
     if (session.updatedAt >= boundary) today.push(session)
     else earlier.push(session)
   }
@@ -99,14 +108,14 @@ watch(
           <p role="alert" class="text-xs text-desk-danger">{{ view.error.message }}</p>
           <AppButton variant="unstyled" class="icon-button" @click="sessionStore.refresh()">重试</AppButton>
         </div>
-        <p v-if="view.phase === 'loading' && sessions.length === 0" class="empty-state py-10">
+        <p v-if="view.phase === 'loading' && visibleSessions.length === 0" class="empty-state py-10">
           <span class="empty-state-title">正在读取会话列表…</span>
         </p>
-        <p v-else-if="sessions.length === 0 && view.phase !== 'error'" class="empty-state py-10">
+        <p v-else-if="visibleSessions.length === 0 && view.phase !== 'error'" class="empty-state py-10">
           <span class="empty-state-title">当前项目还没有 Pi 会话</span>
           <span class="empty-state-text">在输入框输入 /new 新建会话后，这里会列出它。</span>
         </p>
-        <template v-else-if="sessions.length > 0">
+        <template v-else-if="visibleSessions.length > 0">
           <p v-if="actionError" role="alert" class="status-notice status-notice-error">
             {{ actionError.message }}
           </p>

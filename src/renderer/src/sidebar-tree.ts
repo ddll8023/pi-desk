@@ -6,6 +6,7 @@
  * 按运行实例报告的归属项目放置，因此切换项目后不会出现张冠李戴的条目。
  * 文案规则：会话行右侧只保留一项信息——需要用户动作或正在工作的状态优先于时间，
  * 已就绪的驻留实例保持安静，仍显示相对时间；完整时间与分叉来源留在操作浮层里。
+ * 折叠规则：回退（Pi 的 fork）保留来源文件，分叉链只展示最新一条；当前会话与仍承载运行实例的会话不折叠。
  */
 import type { Project } from '../../shared/project-api'
 import type { SessionSummary } from '../../shared/session-api'
@@ -160,6 +161,25 @@ function toSessionRow(
   }
 }
 
+/**
+ * 分叉折叠：回退（Pi 的 fork）新建会话并保留来源文件，列表只展示分叉链里最新的一条。
+ * `keep` 命中的会话即使已被新的一条取代也保留，用于当前会话与仍承载运行实例的会话；
+ * 来源不在 `sessions` 里的分叉不受影响。
+ */
+export function collapseForkedSessions(
+  sessions: readonly SessionSummary[],
+  keep: (sessionId: string) => boolean
+): readonly SessionSummary[] {
+  const ids = new Set(sessions.map(session => session.sessionId))
+  const superseded = new Set<string>()
+  for (const session of sessions) {
+    const source = session.forkedFromSessionId
+    if (source !== null && ids.has(source)) superseded.add(source)
+  }
+  if (superseded.size === 0) return sessions
+  return sessions.filter(session => !superseded.has(session.sessionId) || keep(session.sessionId))
+}
+
 /** 按项目聚合成树；顺序与项目列表一致，展开状态只影响是否列出会话。 */
 export function buildSidebarTree(input: SidebarTreeInput): readonly SidebarProjectNode[] {
   const { runs, foregroundSessionId, now } = input
@@ -184,6 +204,9 @@ export function buildSidebarTree(input: SidebarTreeInput): readonly SidebarProje
     const runOf = (sessionId: string): SessionRunState | null => (
       projectRuns.find(run => run.sessionId === sessionId) ?? null
     )
+    // 分叉链只展示最新一条：当前会话与仍承载运行实例的会话即使被取代也保留。
+    const visible = collapseForkedSessions(listed,
+      sessionId => sessionId === currentSessionId || runOf(sessionId) !== null)
 
     // 尚未落盘的当前会话：新建后到首次写入之间只有运行身份，先按占位条目显示。
     if (currentSessionId !== null && samePath(input.currentProjectPath, project.path)
@@ -206,7 +229,7 @@ export function buildSidebarTree(input: SidebarTreeInput): readonly SidebarProje
       seen.add(run.sessionId)
     }
     // 文件会话已按最近活动降序返回，保持该顺序。
-    for (const session of listed) {
+    for (const session of visible) {
       if (seen.has(session.sessionId)) continue
       rows.push(toSessionRow(session, {
         run: runOf(session.sessionId),

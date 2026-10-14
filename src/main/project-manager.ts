@@ -62,7 +62,8 @@ export interface ProjectManagerOptions {
   readonly chooseDirectory: (defaultPath: string) => Promise<string | null>
   /**
    * 会话后端的按实例端口：项目范围收敛只问单实例的在途工作与释放结果，
-   * 不再以单份 Runtime 状态或全局停止代替；`focusProject` 只切换展示归属，不建立宿主。
+   * 不再以单份 Runtime 状态或全局停止代替；`focusProject` 只切换展示归属，不建立宿主，
+   * 离开的实例由此重新进入空闲回收计时。
    */
   readonly runtime: {
     runHasPendingWork(runId: number): boolean

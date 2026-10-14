@@ -33,7 +33,7 @@ export function isSessionListRequest(value: unknown): value is SessionListReques
  * `/skill:` 展开的技能块，空白折叠为单个空格），取不到时为 null。
  *
  * `forkedFromSessionId` 是回退（Pi 的 fork）产生的来源会话 id：回退会新建会话文件并保留原文件，
- * 两个文件都留在同一目录里，界面需要能区分“这是从哪条会话分叉出来的”，不能把分叉当成重复条目。
+ * 两个文件都留在同一目录里；列表把分叉链折叠为最新一条，来源会话只在分叉来源标注里出现。
  */
 export interface SessionSummary {
   readonly sessionId: string

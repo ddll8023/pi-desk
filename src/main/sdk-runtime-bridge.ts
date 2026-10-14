@@ -12,6 +12,7 @@
  *
  * 前台选择由项目切换驱动：当前项目变化时切到该项目最近一次前台的实例，未命中则清空前台。
  * 项目切换只改展示归属，不建立宿主、不重绑会话、不中断任何后台实例。
+ * 前台实例不参与空闲回收：切走或清空前台后才重新计时。
  */
 import { SdkHostError } from './sdk-host-manager'
 import type { SdkHostErrorCode, SdkHostManager, SdkHostStatus } from './sdk-host-manager'
@@ -353,6 +354,7 @@ export class SdkRuntimeBridge {
       this.scheduleReclaim(runId)
     })
     const offSession = host.onSessionChanged(() => {
+      this.syncRunSession(runId)
       this.publishState()
       this.scheduleReclaim(runId)
     })
@@ -366,13 +368,27 @@ export class SdkRuntimeBridge {
   }
 
   /**
+   * 宿主侧会话替换（回退的 fork、扩展新建或切换会话）会换掉会话身份，登记必须跟上：
+   * 只收敛运行中的实例，不干扰打开、关闭与未确认窗口；身份一致时不动作。
+   */
+  private syncRunSession(runId: number): void {
+    const run = this.runOf(runId)
+    if (run === null || run.phase !== 'running') return
+    const status = run.owner.getSessionStatus()
+    // 只采纳宿主已确认绑定的身份：替换过程中会先上报一次无会话，不能当作新占用。
+    if (status.phase !== 'bound' || status.sessionId === run.sessionId) return
+    this.options.runs.settleOpen(runId, status.sessionId)
+  }
+
+  /**
    * 空闲回收计时：只在真正空闲时安排，其他情况取消已有时计。
+   * 当前显示的前台实例豁免回收，避免用户正在看的对话被挂起；它随前台切换交还资格。
    * 状态查询与投影读取不调用它，因此渲染不会无限延长宿主寿命。
    */
   private scheduleReclaim(runId: number): void {
     if (this.shuttingDown) return
     const run = this.runOf(runId)
-    if (run === null || !run.owner.isIdleForReclaim()) {
+    if (run === null || this.foregroundRunId() === runId || !run.owner.isIdleForReclaim()) {
       this.cancelReclaim(runId)
       return
     }
@@ -392,16 +408,20 @@ export class SdkRuntimeBridge {
     this.reclaimTimers.delete(runId)
   }
 
-  /** 显式需要宿主的动作：重新开始计时，不让刚刚被使用的宿主立刻到期。 */
+  /** 显式需要宿主的动作：取消旧计时后重新起表，不让刚被使用的宿主立刻到期；前台实例因豁免不再起表。 */
   private keepAlive(runId: number): void {
     this.cancelReclaim(runId)
     this.scheduleReclaim(runId)
   }
 
-  /** 回收一个空闲实例：复核空闲后释放宿主进程，占用与会话身份保留，恢复由下一次动作触发。 */
+  /**
+   * 回收一个空闲实例：复核空闲后释放宿主进程，占用与会话身份保留，恢复由下一次动作触发。
+   * 计时到期前它若已切到前台，放弃本次回收，交还给下一次前台切换重新计时。
+   */
   private async reclaimRun(runId: number): Promise<void> {
     const run = this.runOf(runId)
     if (run === null || this.shuttingDown) return
+    if (this.foregroundRunId() === runId) return
     const pending = (async () => {
       try {
         this.options.runs.beginClose(runId)
@@ -467,8 +487,11 @@ export class SdkRuntimeBridge {
    * 顺序反过来时页面会因尚未得知新前台而丢弃快照。
    */
   focusRun(runId: number): void {
+    const previous = this.foregroundRunId()
     this.options.runs.setForeground(runId)
     this.keepAlive(runId)
+    // 旧前台随切换交还回收资格：它在后台继续空闲，按同一个宽限期起表。
+    if (previous !== null && previous !== runId) this.scheduleReclaim(previous)
     this.publishState()
     const run = this.runOf(runId)
     if (run !== null) this.forwardUi(runId, run.owner.getExtensionUiSnapshot())
@@ -482,7 +505,10 @@ export class SdkRuntimeBridge {
   focusProject(projectPath: string): void {
     const run = this.options.runs.foregroundRunOfProject(projectPath)
     if (run === null) {
+      const previous = this.foregroundRunId()
       this.options.runs.clearForeground()
+      // 没有可展示的实例时前台为空：刚离开的实例交还回收资格。
+      if (previous !== null) this.scheduleReclaim(previous)
       this.publishState()
       return
     }
