@@ -4,9 +4,8 @@
  * 并向页面提供全部运行实例的粗粒度状态列表。
  *
  * 页面用二维身份寻址：`runId` 定位运行实例，`runtimeId` 固定发起时所见绑定代际；动作只在两者都
- * 与该实例当前状态一致时才发给宿主，不向旧目标转发。投影批次与 Extension UI 快照只从前台实例进入
- * 页面，后台实例的这两类事件不覆盖前台（完整分片留待后续阶段）；运行状态列表覆盖全部实例，只含
- * 低频字段。
+ * 与该实例当前状态一致时才发给宿主，不向旧目标转发。投影批次与 Extension UI 快照按来源实例转发，
+ * 页面按来源会话分片保存，只有前台实例的内容进入展示；运行状态列表覆盖全部实例，只含低频字段。
  *
  * 状态映射要点：页面 `runtimeId` 是注册表分配的应用级绑定代际（能力清单、投影快照与投影批次都按
  * 绑定代际对齐）；宿主就绪只代表 SDK 已加载，只有会话绑定完成才对页面表示 `ready`。
@@ -337,18 +336,16 @@ export class SdkRuntimeBridge {
     this.publishState()
   }
 
-  /** 投影批次只进入前台实例；后台批次在完整分片落地前直接丢弃，不覆盖前台展示。 */
+  /** 投影批次按来源实例转发；后台批次也交给页面，由页面更新来源会话的分片，不覆盖前台展示。 */
   private forwardBatch(runId: number, batch: ProjectionBatch): void {
-    if (this.foregroundRunId() !== runId) return
     const payload: ProjectionBatch = { ...batch, runId }
     for (const listener of [...this.projectionListeners]) {
       try { listener(payload) } catch { /* 展示消费者不能改变会话所有权。 */ }
     }
   }
 
-  /** Extension UI 快照同样只进入前台实例；后台交互不抢占前台展示。 */
+  /** Extension UI 快照同样按来源实例转发；后台交互进入来源会话的分片，不抢占前台展示。 */
   private forwardUi(runId: number, snapshot: ExtensionUiSnapshot): void {
-    if (this.foregroundRunId() !== runId) return
     const payload: ExtensionUiSnapshot = { ...snapshot, runId }
     for (const listener of [...this.uiListeners]) {
       try { listener(payload) } catch { /* 展示消费者不能改变会话所有权。 */ }

@@ -22,6 +22,7 @@ import type {
 } from '../../../shared/runtime-api'
 import { useProjectStore } from './project'
 import { useAuthStore } from './auth'
+import { useSessionRunsStore } from './session-runs'
 import { getResourcePreview } from '../services/resource'
 import { getModelDisplay, setModelDisplay } from '../services/preferences'
 import { getPiDefaultModel, setPiDefaultModel as savePiDefaultModel } from '../services/pi-settings'
@@ -73,6 +74,21 @@ type ModelSwitchViewState =
 
 /** `synced` 表示当前展示就是基准（无 Runtime 时为空基准），`syncing` 表示未取得基准或正在重同步，`stale` 表示失去同步且尚未取得快照。 */
 type ProjectionSyncState = 'syncing' | 'synced' | 'stale'
+
+/**
+ * 一个运行实例的投影分片：离开前台时留底，之后到达的批次只更新自己的分片，切回时取回。
+ * `appliedRuntimeId` 是这份内容对应的绑定代际，与当前代际不符时必须重新取基准。
+ */
+interface ProjectionSlice {
+  messages: readonly ProjectionMessage[]
+  tools: readonly ToolExecution[]
+  sync: ProjectionSyncState
+  truncated: boolean
+  droppedMessages: number
+  droppedTools: number
+  appliedRuntimeId: number | null
+  appliedSeq: number
+}
 
 /** 可用模型列表的读取状态。 */
 type CapabilitiesViewState =
@@ -216,6 +232,7 @@ export const useRuntimeStore = defineStore('runtime', () => {
   let modelPreviewAttemptedScope: string | undefined
   let stopProjectWatch: WatchStopHandle | null = null
   let stopAuthWatch: WatchStopHandle | null = null
+  let stopRunsWatch: WatchStopHandle | null = null
   let modelSwitchRequest = 0
   let capabilitiesRequest = 0
   let releaseSubscription: (() => void) | null = null
@@ -224,6 +241,16 @@ export const useRuntimeStore = defineStore('runtime', () => {
   let appliedRunId: number | null = null
   let appliedRuntimeId: number | null = null
   let appliedSeq = 0
+  /**
+   * 后台实例的投影分片：只保存离开前台时的内容与之后到达的增量，不参与前台展示。
+   * 分片寿命跟随运行实例，实例从运行状态列表消失时丢弃（见 pruneProjections）。
+   */
+  const backgroundProjections = new Map<number, ProjectionSlice>()
+  /**
+   * 各实例上次读到的模型清单：切回前台时先顶上，避免闪一次空列表；命中后仍会重新读取，
+   * 因此不会把过期清单当权威。分片寿命与投影分片一致。
+   */
+  const capabilitiesCache = new Map<number, AgentCapabilities>()
   let projectionSyncPromise: Promise<void> | null = null
   /** 已发起过读取的代际：读取失败后不因每次状态广播重复重试。 */
   let capabilitiesAttemptedRuntimeId: number | null = null
@@ -255,6 +282,13 @@ export const useRuntimeStore = defineStore('runtime', () => {
           }
         })
     }
+    if (stopRunsWatch === null) {
+      // 分片寿命跟随运行实例：实例从列表消失后不再保留它的投影。
+      stopRunsWatch = watch(
+        () => useSessionRunsStore().runs.map(run => run.runId),
+        (runIds) => pruneProjections(new Set(runIds))
+      )
+    }
     void loadPiDefaultModel()
     void loadModelDisplay()
     const result = await getRuntimeStatus()
@@ -276,6 +310,10 @@ export const useRuntimeStore = defineStore('runtime', () => {
     stopProjectWatch = null
     stopAuthWatch?.()
     stopAuthWatch = null
+    stopRunsWatch?.()
+    stopRunsWatch = null
+    backgroundProjections.clear()
+    capabilitiesCache.clear()
     clearModelPreview()
     modelLifecycle += 1
     rewindRequest += 1
@@ -619,6 +657,9 @@ export const useRuntimeStore = defineStore('runtime', () => {
 
     abortView.value = { phase: 'requesting' }
     const result = await abortRuntime(target)
+    // 期间前台切走：结果属于旧实例，不写入新前台的展示状态。
+    if (view.value.phase !== 'ready' || view.value.snapshot.runId !== target.runId
+      || view.value.snapshot.runtimeId !== target.runtimeId) return
     abortView.value = result.ok
       ? { phase: 'idle' }
       : { phase: 'error', error: result.error }
@@ -681,13 +722,14 @@ export const useRuntimeStore = defineStore('runtime', () => {
     }
   }
 
-  /** 批次只接受当前前台实例的来源；后台实例的事件在 1b 直接丢弃，不覆盖前台展示。 */
+  /** 批次按来源实例分流：前台走展示状态，后台只更新来源实例的分片。 */
   function applyBatch(batch: ProjectionBatch): void {
-    if (batch.runId !== undefined && batch.runId !== null && batch.runId !== foregroundRunId.value) {
-      return
-    }
     const origin = batch.runId ?? foregroundRunId.value
     if (origin === null) return
+    if (origin !== foregroundRunId.value) {
+      applyBackgroundBatch(origin, batch)
+      return
+    }
     const target: RuntimeTarget = { runId: origin, runtimeId: batch.runtimeId }
     if (appliedRunId !== origin || batch.runtimeId !== appliedRuntimeId) {
       // 尚无基准快照，或批次属于其他实例/代际：不能无基准地应用增量。
@@ -734,9 +776,88 @@ export const useRuntimeStore = defineStore('runtime', () => {
     appliedSeq = 0
   }
 
+  /** 离开前台时把当前展示留底到该实例的分片；未就绪或没有来源时不留底。 */
+  function stashProjection(runId: number): void {
+    if (view.value.phase !== 'ready') return
+    backgroundProjections.set(runId, {
+      messages: messages.value,
+      tools: tools.value,
+      sync: projectionSync.value,
+      truncated: projectionTruncated.value,
+      droppedMessages: droppedMessages.value,
+      droppedTools: droppedTools.value,
+      appliedRuntimeId,
+      appliedSeq
+    })
+  }
+
+  /**
+   * 切回前台时取回分片；没有分片就按空基准处理，由状态收敛决定是否重取。
+   * 分片保留在表里：中间经过一个未就绪的前台不会把已取得的内容丢掉。
+   */
+  function restoreProjection(runId: number | null): void {
+    const saved = runId === null ? undefined : backgroundProjections.get(runId)
+    if (saved === undefined) {
+      resetProjection()
+      return
+    }
+    messages.value = saved.messages
+    tools.value = saved.tools
+    projectionSync.value = saved.sync
+    projectionTruncated.value = saved.truncated
+    droppedMessages.value = saved.droppedMessages
+    droppedTools.value = saved.droppedTools
+    appliedRunId = runId
+    appliedRuntimeId = saved.appliedRuntimeId
+    appliedSeq = saved.appliedSeq
+  }
+
+  /** 运行实例消失（释放、移除或退出）后丢弃它的分片，不让已结束实例的内容留在内存里。 */
+  function pruneProjections(active: ReadonlySet<number>): void {
+    for (const runId of [...backgroundProjections.keys()]) {
+      if (!active.has(runId)) backgroundProjections.delete(runId)
+    }
+    for (const runId of [...capabilitiesCache.keys()]) {
+      if (!active.has(runId)) capabilitiesCache.delete(runId)
+    }
+  }
+
+  /**
+   * 后台实例的批次只更新它的分片：前台展示不变，切回时无需重取。
+   * 没有基准或代际不符时不做无基准的增量，只标记为需要重取。
+   */
+  function applyBackgroundBatch(runId: number, batch: ProjectionBatch): void {
+    const slice = backgroundProjections.get(runId)
+    if (slice === undefined) return
+    const target: RuntimeTarget = { runId, runtimeId: batch.runtimeId }
+    if (slice.appliedRuntimeId !== batch.runtimeId) {
+      slice.sync = 'stale'
+      return
+    }
+    if (batch.seq <= slice.appliedSeq) {
+      ackRuntimeProjection(target, slice.appliedSeq)
+      return
+    }
+    if (batch.resyncRequired || batch.seq !== slice.appliedSeq + 1) {
+      slice.sync = 'stale'
+      return
+    }
+    const applied = applyUpdates(slice.messages, slice.tools, batch.updates)
+    if (applied === null) {
+      slice.sync = 'stale'
+      return
+    }
+    slice.messages = applied.messages
+    slice.tools = applied.tools
+    slice.appliedSeq = batch.seq
+    slice.sync = 'synced'
+    ackRuntimeProjection(target, slice.appliedSeq)
+  }
+
   /** 主进程快照是唯一真相：事件通知与查询结果都经这里映射为展示状态。 */
   function applyStatus(status: RuntimeStatus): void {
     const previous = view.value.phase === 'ready' ? view.value.snapshot : null
+    const previousRunId = previous?.runId ?? null
     // 运行实例与绑定代际一起决定目标：任一维度变化都重置瞬态并重取基准。
     const targetChanged = status.state !== 'ready'
       || status.runId !== previous?.runId
@@ -745,6 +866,13 @@ export const useRuntimeStore = defineStore('runtime', () => {
       && (status.info?.sessionId ?? null) !== (previous?.info?.sessionId ?? null)
     const previousStreaming = previous?.info?.isStreaming === true
     foregroundRunId.value = status.runId
+    // 前台换实例：把上一个实例的投影留底，再取回目标实例的分片；同一实例内换代由下面的重取收敛。
+    if (previousRunId !== status.runId) {
+      if (previousRunId !== null) stashProjection(previousRunId)
+      // 目标实例未就绪时没有可展示的投影，分片留在表里等它重新就绪。
+      if (status.state === 'ready') restoreProjection(status.runId)
+      else resetProjection()
+    }
     if (targetChanged) {
       rewindRequest += 1
       rewindView.value = { phase: 'idle' }
@@ -811,7 +939,11 @@ export const useRuntimeStore = defineStore('runtime', () => {
     if (target === null) return
     const request = ++capabilitiesRequest
     capabilitiesAttemptedRuntimeId = target.runtimeId
-    if (capabilitiesView.value.phase !== 'ready' || capabilitiesView.value.data.modelsError !== null) {
+    // 本实例上次读到的清单先顶上（代际一致时），避免切回前台时闪一次空列表；下面仍会重新读取。
+    const cached = capabilitiesCache.get(target.runId)
+    if (cached !== undefined && cached.runtimeId === target.runtimeId) {
+      capabilitiesView.value = { phase: 'ready', data: cached }
+    } else if (capabilitiesView.value.phase !== 'ready' || capabilitiesView.value.data.modelsError !== null) {
       capabilitiesView.value = { phase: 'loading' }
     }
 
@@ -825,6 +957,7 @@ export const useRuntimeStore = defineStore('runtime', () => {
     }
     if (result.data.runtimeId !== target.runtimeId) return
     capabilitiesView.value = { phase: 'ready', data: result.data }
+    capabilitiesCache.set(target.runId, result.data)
   }
 
   return {

@@ -949,7 +949,7 @@ function isProjectionUpdate(value: unknown): value is ProjectionUpdate {
 function isProjectionSnapshot(value: unknown): value is ProjectionSnapshot {
   if (!isRecord(value)) return false
   if (value.runtimeId !== null && typeof value.runtimeId !== 'number') return false
-  // runId 是桥接层补充字段：载体缺失（宿主协议载荷）或为数字都放行，由页面按前台过滤。
+  // runId 是桥接层补充字段：载体缺失（宿主协议载荷）或为数字都放行，由页面按来源实例路由。
   if (value.runId !== undefined
     && value.runId !== null
     && (typeof value.runId !== 'number' || !Number.isSafeInteger(value.runId))) return false
@@ -969,7 +969,7 @@ function isProjectionSnapshot(value: unknown): value is ProjectionSnapshot {
 export function isProjectionBatch(value: unknown): value is ProjectionBatch {
   if (!isRecord(value)) return false
   if (typeof value.runtimeId !== 'number') return false
-  // runId 是桥接层补充字段：缺失（宿主协议载荷）或为数字都放行，由页面按前台过滤。
+  // runId 是桥接层补充字段：缺失（宿主协议载荷）或为数字都放行，由页面按来源实例路由。
   if (value.runId !== undefined && value.runId !== null
     && (typeof value.runId !== 'number' || !Number.isSafeInteger(value.runId))) return false
   if (typeof value.seq !== 'number' || !Number.isInteger(value.seq) || value.seq <= 0) return false

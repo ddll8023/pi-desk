@@ -330,7 +330,7 @@ function isExtensionUiState(value: unknown): value is ExtensionUiState {
 /** 快照校验；跨进程返回与事件载荷都只放行本契约。 */
 export function isExtensionUiSnapshot(value: unknown): value is ExtensionUiSnapshot {
   if (!isRecord(value)) return false
-  // runId 是桥接层补充字段：缺失（宿主协议载荷）或为数字都放行，由页面按前台过滤。
+  // runId 是桥接层补充字段：缺失（宿主协议载荷）或为数字都放行，由页面按来源实例路由。
   if (value.runId !== undefined && value.runId !== null
     && (typeof value.runId !== 'number' || !Number.isSafeInteger(value.runId))) return false
   if (value.runtimeId !== null && typeof value.runtimeId !== 'number') return false
