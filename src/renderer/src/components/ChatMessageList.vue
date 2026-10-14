@@ -151,6 +151,14 @@ const emptyState = computed(() => {
   if (current.phase === 'ready') {
     return { title: '可以开始对话', description: '在下方输入内容并发送；Enter 发送，Shift+Enter 换行。', action: null }
   }
+  // 挂起（宿主已回收）与关闭中不同：发送会先恢复原会话，不是重新开始。
+  if (runtimeStore.suspendedSessionId !== null) {
+    return {
+      title: '会话已回收',
+      description: '空闲后已释放执行环境以节省资源；发送新内容会先恢复这个会话。',
+      action: null
+    }
+  }
   // idle 与 closed 是同一份提示；放在最后作为兜底返回，计算式不会返回 undefined。
   return {
     title: '准备开始对话',

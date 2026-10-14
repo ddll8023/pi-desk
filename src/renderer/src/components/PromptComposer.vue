@@ -178,6 +178,10 @@ const status = computed<{ readonly kind: 'info' | 'error'; readonly text: string
     }
     // 侧栏「新建」只聚焦输入框：用一次性提示说明要发送才会开始会话。
     if (newSessionHint.value && canStartRuntime.value) return { kind: 'info', text: '发送后开始新会话。' }
+    // 宿主已被空闲回收（挂起）：发送会先恢复原会话，不是新建，也不是关闭中。
+    if (runtimeStore.suspendedSessionId !== null) {
+      return { kind: 'info', text: '会话已回收以释放资源；发送会先恢复它，历史与草稿都保留。' }
+    }
     // 未选项目与首次启动属于纯引导，按钮的禁用态已经表达，不再占信息行。
     if (canStartRuntime.value || projectStore.currentProject === null) return null
     return { kind: 'info', text: 'Runtime 正在关闭；输入会保留。' }

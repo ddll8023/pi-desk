@@ -3,14 +3,18 @@
  * 快照，编排登录、提示回应、取消、退出登录与外链打开。
  *
  * 边界：
- * - 凭据读写全部由官方 SDK 在辅助进程内完成，落在 `<agent-dir>/auth.json`；主进程不读、不写、
- *   也不回传任何已有凭据内容。
+ * - 凭据内容全部由官方 SDK 在辅助进程内读写，落在 `<agent-dir>/auth.json`；主进程不读取任何已有凭据
+ *   内容，也不写入凭据字段。唯一例外是启动辅助进程前确保该文件与父目录存在（写入空对象），
+ *   用来关闭 SDK 在取锁前初始化文件的竞争窗口（见 `ensureAuthFile`）。
  * - 页面提交的密钥只经 `respondPrompt` 单向转发给辅助进程；本模块不记录密钥，也不把它写进任何
  *   日志、快照或错误文本。
  * - 页面不能指定辅助进程路径、命令文本或 URL：外链打开只接受本模块从流程帧里记录的地址。
- * - 同一时刻只允许一个登录流程，取消与失败都如实投影，不把 UI 状态变化当作 Pi 已使用新凭据。
+ * - 同一时刻只允许一个登录流程，取消与失败都如实投影，不把 UI 状态变化当作 Pi 已使用新凭据；
+ *   登录进行中不允许发起退出登录，避免同一共享凭据收到冲突意图。
  */
 import { randomUUID } from 'node:crypto'
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import type {
   AuthErrorCode,
   AuthFlowDeviceCode,
@@ -26,6 +30,16 @@ import type { AuthHelperErrorCode, AuthHelperFrame, AuthHelperRequestInput } fro
 import { AuthHelperProcess, AuthHelperProcessError } from './auth-helper-process'
 import type { DesktopConfigStore } from './desktop-config-store'
 import { ExternalUrlError, isOpenableAuthUrl, openAuthUrl } from './external-url'
+import { getPiAgentDir } from './pi-paths'
+
+/** 与官方 SDK 一致：凭据文件固定在 agent 目录下的 auth.json。 */
+const AUTH_FILE_NAME = 'auth.json'
+
+/** 只取 Node 错误码；非对象或不带 code 的异常按未知处理。 */
+function errorCode(error: unknown): string | undefined {
+  if (typeof error !== 'object' || error === null) return undefined
+  return (error as NodeJS.ErrnoException).code
+}
 
 /** 状态读取的等待上限；官方按 Provider 逐个解析凭据，第一次读取会做一次本地可用性刷新。 */
 const STATUS_TIMEOUT_MS = 30_000
@@ -307,8 +321,15 @@ export class AuthManager {
     return this.requireSnapshot()
   }
 
-  /** 删除已保存的凭据；不影响环境变量与 models.json 配置。成功后返回刷新后的状态。 */
+  /**
+   * 退出登录（删除已保存的凭据；不影响环境变量与 models.json 配置），成功后返回刷新后的状态。
+   * 登录流程进行中时拒绝，避免同一共享凭据同时收到登录与退出两种意图：辅助进程正在写入凭据，
+   * 这里不假装退出成功，也不中断用户正在走的登录流程。
+   */
   async logout(providerId: string): Promise<AuthStatus> {
+    if (this.flow !== null && !isTerminal(this.flow.phase)) {
+      throw new AuthManagerError('AUTH_LOGIN_CONFLICT', '登录流程进行中，请先完成或取消它再退出登录。')
+    }
     const outcome = await this.request({ type: 'logout', providerId }, LOGOUT_TIMEOUT_MS)
     if (!outcome.ok) throw new AuthManagerError(outcome.code, outcome.message)
     return this.readStatus()
@@ -504,6 +525,10 @@ export class AuthManager {
     }
     if (this.helper !== null && !this.helper.isExited) return this.helper
 
+    // 先确保凭据文件存在，再启动辅助进程：SDK 在取锁前会自行初始化文件，
+    // 两个进程同时走「文件不存在」分支时后写的一方会把刚写入的凭据覆盖成空对象。
+    this.ensureAuthFile()
+
     let helper: AuthHelperProcess
     try {
       helper = AuthHelperProcess.start({
@@ -524,6 +549,25 @@ export class AuthManager {
     }
     this.helper = helper
     return helper
+  }
+
+  /**
+   * 关闭 SDK 取锁前初始化文件的竞争窗口：目录与文件不存在时先建好空对象。
+   * 只创建、不读取也不覆盖：文件已存在时直接返回，已有凭据不受影响。创建失败按不可用抛出，
+   * 因为后续凭据读写都会因此失败，静默继续只会把原因埋掉。
+   */
+  private ensureAuthFile(): void {
+    const file = join(getPiAgentDir(), AUTH_FILE_NAME)
+    if (existsSync(file)) return
+    try {
+      mkdirSync(dirname(file), { recursive: true, mode: 0o700 })
+      // 文件刚被其他写入者建好时按已存在处理，不覆盖。
+      writeFileSync(file, '{}', { encoding: 'utf8', mode: 0o600, flag: 'wx' })
+    } catch (error) {
+      if (errorCode(error) === 'EEXIST') return
+      throw new AuthManagerError('AUTH_UNAVAILABLE',
+        `无法准备凭据文件 ${file}：${error instanceof Error ? error.message : String(error)}`)
+    }
   }
 
   /** 辅助进程退出：收敛所有等待中的请求与进行中的流程，不自动重启。 */

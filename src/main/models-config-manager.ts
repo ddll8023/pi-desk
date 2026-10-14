@@ -11,6 +11,8 @@
  * - 写入是同目录临时文件加改名替换；写入前比对上次读盘记录的文件标识，磁盘被其他写入者改过
  *   就放弃本次保存，不用过期内容覆盖它。新文件沿用原文件的权限位，不因重写把可能装着密钥的
  *   文件放宽。
+ * - 读-改-写整体在 `file-lock.ts` 的协作锁内完成，且锁内重新读盘：并发保存不会用同一份过期内容
+ *   互相覆盖，两个桌面实例也不会交错。SDK 写 models.json 时不取锁，外部写入仍靠文件标识比对发现。
  * - 文件存在但无法读取或解析时只报告错误并拒绝写入，绝不用空内容覆盖用户的文件。
  * - 校验只保证写入的是形状合法的 JSON 对象；字段合法性最终由 Pi 在加载时判定，这里不重算它的 schema。
  */
@@ -18,6 +20,7 @@ import { chmod, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/pro
 import { dirname, join } from 'node:path'
 import type { ModelsConfigErrorCode, ModelsConfigProvider, ModelsConfigSnapshot } from '../shared/models-config-api'
 import { MODELS_CONFIG_MAX_PROVIDERS, MODELS_CONFIG_SECRET_SENTINEL } from '../shared/models-config-api'
+import { FileLockError, withFileLock } from './file-lock'
 import { getPiAgentDir } from './pi-paths'
 
 /** 与 Pi 一致：自定义供应商配置固定放在 agent 目录下的 models.json。 */
@@ -139,7 +142,6 @@ function readProviders(
 
 export class ModelsConfigManager {
   /** 上次读盘的结果与文件标识；写入前用它发现「磁盘在读取后被其他写入者改过」。 */
-  private loaded = false
   private exists = false
   private parsed: Record<string, unknown> | null = null
   private parseError: string | null = null
@@ -153,11 +155,11 @@ export class ModelsConfigManager {
     return this.snapshot()
   }
 
-  /** 新增或整体替换一个供应商条目；`json` 必须是形状合法的 JSON 对象文本。 */
+  /**
+   * 新增或整体替换一个供应商条目；`json` 必须是形状合法的 JSON 对象文本。
+   * 形状校验在取锁前完成（纯输入检查）；真正的读-改-写在锁内重新读盘后进行。
+   */
   async saveProvider(providerId: string, json: string): Promise<ModelsConfigSnapshot> {
-    await this.ensureLoaded()
-    this.requireWritable()
-
     let submitted: unknown
     try {
       submitted = JSON.parse(json)
@@ -167,28 +169,45 @@ export class ModelsConfigManager {
     const problem = validateEntry(submitted)
     if (problem !== null) throw new ModelsConfigError('INVALID_REQUEST', problem)
 
-    const entry = submitted as Record<string, unknown>
-    restoreSecrets(entry, this.providerEntry(providerId))
+    return this.withLock(async () => {
+      await this.read()
+      this.requireWritable()
 
-    const currentProviders = this.parsed === null ? undefined : this.parsed.providers
-    const providers: Record<string, unknown> = isRecord(currentProviders) ? { ...currentProviders } : {}
-    providers[providerId] = entry
-    await this.persist({ ...(this.parsed ?? {}), providers })
-    return this.snapshot()
+      const entry = submitted as Record<string, unknown>
+      restoreSecrets(entry, this.providerEntry(providerId))
+
+      const currentProviders = this.parsed === null ? undefined : this.parsed.providers
+      const providers: Record<string, unknown> = isRecord(currentProviders) ? { ...currentProviders } : {}
+      providers[providerId] = entry
+      await this.persist({ ...(this.parsed ?? {}), providers })
+      return this.snapshot()
+    })
   }
 
   /** 删除一个供应商条目；条目不存在时不动文件，直接返回当前快照。 */
   async deleteProvider(providerId: string): Promise<ModelsConfigSnapshot> {
-    await this.ensureLoaded()
-    this.requireWritable()
+    return this.withLock(async () => {
+      await this.read()
+      this.requireWritable()
 
-    const current = this.parsed === null ? undefined : this.parsed.providers
-    if (!isRecord(current) || !(providerId in current)) return this.snapshot()
+      const current = this.parsed === null ? undefined : this.parsed.providers
+      if (!isRecord(current) || !(providerId in current)) return this.snapshot()
 
-    const providers: Record<string, unknown> = { ...current }
-    delete providers[providerId]
-    await this.persist({ ...(this.parsed ?? {}), providers })
-    return this.snapshot()
+      const providers: Record<string, unknown> = { ...current }
+      delete providers[providerId]
+      await this.persist({ ...(this.parsed ?? {}), providers })
+      return this.snapshot()
+    })
+  }
+
+  /** 取锁超时归为内部错误并保留原文；锁内抛出的其他异常（含 ModelsConfigError）原样传播。 */
+  private async withLock<T>(fn: () => Promise<T>): Promise<T> {
+    try {
+      return await withFileLock(this.filePath(), fn)
+    } catch (error) {
+      if (error instanceof FileLockError) throw new ModelsConfigError('INTERNAL_ERROR', error.message)
+      throw error
+    }
   }
 
   private providerEntry(providerId: string): Record<string, unknown> | undefined {
@@ -205,14 +224,9 @@ export class ModelsConfigManager {
     }
   }
 
-  private async ensureLoaded(): Promise<void> {
-    if (!this.loaded) await this.read()
-  }
-
   /** 每次都重新读盘；文件缺失不是错误，解析或格式错误如实进入 `parseError`。 */
   private async read(): Promise<void> {
     const file = this.filePath()
-    this.loaded = true
     this.exists = false
     this.parsed = null
     this.parseError = null

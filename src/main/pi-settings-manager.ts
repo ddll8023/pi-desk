@@ -8,6 +8,8 @@
  *   （`models.json`、`auth.json`、`mcp.json`）。
  * - 写入是同目录临时文件加改名替换；写入前比对上次读盘记录的文件标识，磁盘被其他写入者
  *   （例如 Pi 进程自己）改过就放弃本次保存，不用过期内容覆盖它。新文件沿用原文件的权限位。
+ * - 读-改-写整体在 `file-lock.ts` 的协作锁内完成，且锁内重新读盘：并发保存不会用同一份过期内容
+ *   互相覆盖，两个桌面实例也不会交错。SDK 写 settings.json 时不取锁，外部写入仍靠文件标识比对发现。
  * - 文件存在但无法读取或解析时只报告错误并拒绝写入，绝不用空内容覆盖用户的文件。
  * - 校验只保证写入的是非空字符串；默认模型是否真实可用最终由 Pi 在加载时判定，这里不重算它的 schema。
  */
@@ -15,6 +17,7 @@ import { chmod, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/pro
 import { dirname, join } from 'node:path'
 import type { ModelIdentity } from '../shared/runtime-api'
 import type { PiDefaultModelErrorCode } from '../shared/pi-settings-api'
+import { FileLockError, withFileLock } from './file-lock'
 import { getPiAgentDir } from './pi-paths'
 
 /** 与 Pi 一致：用户级设置固定在 agent 目录下的 settings.json。 */
@@ -55,28 +58,35 @@ function readDefaultModel(parsed: Record<string, unknown> | null): ModelIdentity
 
 export class PiSettingsManager {
   /** 上次读盘的结果与文件标识；写入前用它发现「磁盘在读取后被其他写入者改过」。 */
-  private loaded = false
   private parsed: Record<string, unknown> | null = null
   private parseError: string | null = null
   private stamp: string | null = null
   /** 原文件的权限位（已去掉文件类型位）；文件不存在时为 null，新建时用默认权限。 */
   private mode: number | null = null
 
-  /** 读取 Pi 的默认模型；文件不存在或未设置这两个键时返回 null。 */
+  /**
+   * 读取 Pi 的默认模型；文件不存在或未设置这两个键时返回 null。
+   * 读取不加锁：写入用改名替换，读到的总是一份完整内容（可能是稍早的一份）。
+   */
   async getDefaultModel(): Promise<ModelIdentity | null> {
     await this.read()
     if (this.parseError !== null) throw new PiSettingsError('INTERNAL_ERROR', this.parseError)
     return readDefaultModel(this.parsed)
   }
 
-  /** 写入默认模型：覆盖 `defaultProvider` 与 `defaultModel`，其他键原样保留。 */
+  /**
+   * 写入默认模型：覆盖 `defaultProvider` 与 `defaultModel`，其他键原样保留。
+   * 锁内重新读盘，因此并发保存会依次叠加而不是互相覆盖。
+   */
   async setDefaultModel(model: ModelIdentity): Promise<ModelIdentity> {
-    await this.ensureLoaded()
-    this.requireWritable()
-    await this.persist({
-      ...(this.parsed ?? {}),
-      defaultProvider: model.provider,
-      defaultModel: model.modelId
+    await this.withLock(async () => {
+      await this.read()
+      this.requireWritable()
+      await this.persist({
+        ...(this.parsed ?? {}),
+        defaultProvider: model.provider,
+        defaultModel: model.modelId
+      })
     })
     return { provider: model.provider, modelId: model.modelId }
   }
@@ -88,14 +98,19 @@ export class PiSettingsManager {
     }
   }
 
-  private async ensureLoaded(): Promise<void> {
-    if (!this.loaded) await this.read()
+  /** 取锁超时归为内部错误并保留原文；锁内抛出的其他异常（含 PiSettingsError）原样传播。 */
+  private async withLock<T>(fn: () => Promise<T>): Promise<T> {
+    try {
+      return await withFileLock(this.filePath(), fn)
+    } catch (error) {
+      if (error instanceof FileLockError) throw new PiSettingsError('INTERNAL_ERROR', error.message)
+      throw error
+    }
   }
 
   /** 每次都重新读盘；文件缺失不是错误，解析或格式错误如实进入 `parseError`。 */
   private async read(): Promise<void> {
     const file = this.filePath()
-    this.loaded = true
     this.parsed = null
     this.parseError = null
     this.stamp = null
