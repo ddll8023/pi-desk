@@ -94,18 +94,19 @@ watch(
       </div>
 
       <div class="scroll-area dialog-body">
-        <p v-if="view.phase === 'loading'" class="empty-state py-10">
-          <span class="empty-state-title">正在读取会话列表…</span>
-        </p>
-        <div v-else-if="view.phase === 'error'" class="flex flex-wrap items-center gap-2">
+        <!-- 刷新失败只在没有可显示会话时顶替列表；已有列表时错误另起一行，与侧栏同一口径。 -->
+        <div v-if="view.phase === 'error'" class="flex flex-wrap items-center gap-2">
           <p role="alert" class="text-xs text-desk-danger">{{ view.error.message }}</p>
           <AppButton variant="unstyled" class="icon-button" @click="sessionStore.refresh()">重试</AppButton>
         </div>
-        <p v-else-if="sessions.length === 0" class="empty-state py-10">
+        <p v-if="view.phase === 'loading' && sessions.length === 0" class="empty-state py-10">
+          <span class="empty-state-title">正在读取会话列表…</span>
+        </p>
+        <p v-else-if="sessions.length === 0 && view.phase !== 'error'" class="empty-state py-10">
           <span class="empty-state-title">当前项目还没有 Pi 会话</span>
           <span class="empty-state-text">在输入框输入 /new 新建会话后，这里会列出它。</span>
         </p>
-        <template v-else>
+        <template v-else-if="sessions.length > 0">
           <p v-if="actionError" role="alert" class="status-notice status-notice-error">
             {{ actionError.message }}
           </p>

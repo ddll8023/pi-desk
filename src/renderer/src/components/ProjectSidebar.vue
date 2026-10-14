@@ -158,6 +158,11 @@ function isCurrentProject(node: SidebarProjectNode): boolean {
   return node.project.id === currentProjectId.value
 }
 
+/** 该项目当前是否有可显示的会话行；读取中或刷新失败都不应把已有列表顶掉。 */
+function hasSessionRows(node: SidebarProjectNode): boolean {
+  return node.sessions.length > 0 || node.unboundRuns.length > 0
+}
+
 function isCurrentSession(node: SidebarProjectNode, session: SessionSummary): boolean {
   return isCurrentProject(node) && session.sessionId === currentSessionId.value
 }
@@ -560,15 +565,16 @@ onBeforeUnmount(() => {
                 :inert="!node.expanded"
               >
                 <div class="sidebar-tree-children-inner">
-                  <p v-if="node.view.phase === 'loading'" role="status" class="sidebar-empty is-nested">正在读取会话…</p>
-                  <div v-else-if="node.view.phase === 'error'" class="sidebar-empty is-nested">
+                  <!-- 读取失败只在没有可显示内容时顶替列表；已有列表时错误另起一行，不让列表折叠。 -->
+                  <div v-if="node.view.phase === 'error'" class="sidebar-empty is-nested">
                     <p role="alert" class="sidebar-error">{{ node.view.error.message }}</p>
                     <AppButton variant="unstyled" class="project-sidebar-add" @click="sessionStore.ensureLoaded(node.project.path, true)">重试</AppButton>
                   </div>
-                  <p v-else-if="node.sessions.length === 0 && node.unboundRuns.length === 0" class="sidebar-empty is-nested">
+                  <p v-if="!hasSessionRows(node) && node.view.phase === 'loading'" role="status" class="sidebar-empty is-nested">正在读取会话…</p>
+                  <p v-else-if="!hasSessionRows(node) && node.view.phase !== 'error'" class="sidebar-empty is-nested">
                     还没有保存的会话，开始对话后会显示在这里。
                   </p>
-                  <ul v-else class="sidebar-session-list sidebar-session-scroll scroll-area" :ref="element => registerSessionScroller(node.project.id, element)">
+                  <ul v-if="hasSessionRows(node)" class="sidebar-session-list sidebar-session-scroll scroll-area" :ref="element => registerSessionScroller(node.project.id, element)">
                     <li v-for="row in node.sessions" :key="row.session.sessionId">
                       <div
                         class="sidebar-tree-row is-session"

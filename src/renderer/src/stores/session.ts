@@ -165,16 +165,23 @@ export const useSessionStore = defineStore('session', () => {
     }
   }
 
-  /** 读取一次并写入该项目分片；没有当前项目不是列表读取失败，界面按项目状态提示。 */
+  /**
+   * 读取一次并写入该项目分片；没有当前项目不是列表读取失败，界面按项目状态提示。
+   * 已有内容的刷新既不退回加载态、失败也不清空列表：切换项目与补读不该让正在看的列表先折叠再恢复。
+   */
   async function load(projectPath: string): Promise<void> {
-    applySlice(projectPath, { ...sliceOf(projectPath), phase: 'loading' })
+    const current = sliceOf(projectPath)
+    if (current.phase !== 'ready' || current.sessions.length === 0) {
+      applySlice(projectPath, { ...current, phase: 'loading' })
+    }
     const result = await listSessions(projectPath)
     if (!result.ok) {
       if (result.error.code === 'INVALID_PROJECT_PATH') {
         applySlice(projectPath, EMPTY_SLICE)
         return
       }
-      applySlice(projectPath, { phase: 'error', sessions: [], skipped: 0, truncated: 0, error: result.error })
+      // 保留本次读取期间已写入的列表，只记录失败；界面按「有内容」同时展示列表与提示。
+      applySlice(projectPath, { ...sliceOf(projectPath), phase: 'error', error: result.error })
       return
     }
     // 主进程回报实际读取的项目路径；与请求不符时丢弃，不把别的项目的结果写进本分片。
