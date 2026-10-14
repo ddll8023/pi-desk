@@ -1,4 +1,4 @@
-/** 管理唯一桌面窗口、本地资产边界，以及应用信息、Project 选择/添加/移除、项目文件检索、Session 与 Project Trust、会话运行状态（查询）、界面偏好、Runtime、Pi 默认模型、自定义供应商配置、认证、Extension IPC、事件广播及退出编排。 */
+/** 管理唯一桌面窗口、本地资产边界，以及应用信息、Project 选择/添加/移除、项目文件检索、Session 与 Project Trust、会话运行状态（查询）、界面偏好、Runtime、Pi 默认模型、自定义供应商配置、认证、Pi 版本检查、Extension IPC、事件广播及退出编排。 */
 import { mkdirSync } from 'node:fs'
 import { realpath } from 'node:fs/promises'
 import { dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
@@ -166,6 +166,12 @@ import {
   isPiDefaultModelSetRequest
 } from '../shared/pi-settings-api'
 import type { PiDefaultModelResult } from '../shared/pi-settings-api'
+import {
+  UPDATES_CHECK_CHANNEL,
+  UPDATES_GET_CHANNEL,
+  UPDATES_STATE_EVENT
+} from '../shared/updates-api'
+import type { UpdatesResult, UpdatesSnapshot } from '../shared/updates-api'
 import { DesktopConfigStore } from './desktop-config-store'
 import { AuthManager, AuthManagerError } from './auth-manager'
 import { readMcpConfigListing } from './mcp-config-reader'
@@ -181,6 +187,7 @@ import { SdkRuntimeBridge } from './sdk-runtime-bridge'
 import { SessionManager } from './session-manager'
 import { SessionRunRegistry } from './session-run-registry'
 import { TrustManager, TrustManagerError } from './trust-manager'
+import { UpdateChecker } from './update-checker'
 import { MIN_WINDOW_HEIGHT, MIN_WINDOW_WIDTH, WindowState } from './window-state'
 
 const DEVELOPMENT_PAGE_URL = `http://127.0.0.1:${DEV_SERVER_PORT}/`
@@ -252,6 +259,10 @@ const sessionManager = new SessionManager({
 })
 /** MCP 服务器探测与取消：与当前会话无关，只按项目跑一次性官方 CLI 进程。 */
 const mcpInspection = new McpInspectionManager()
+/** Pi 版本检查：启动时后台跑一次，之后按页面请求重查；只读，不写 Pi 的任何配置。 */
+const updateChecker = new UpdateChecker({
+  currentProjectPath: () => projectManager.currentProjectPath()
+})
 /** 项目文件索引：根路径只取当前项目，页面无法指定检索目录。 */
 const projectFileIndex = new ProjectFileIndex({
   currentProjectPath: () => projectManager.currentProjectPath()
@@ -1375,6 +1386,33 @@ function registerPiSettingsHandlers(pageUrl: string): void {
   )
 }
 
+function registerUpdatesHandlers(pageUrl: string): void {
+  handle(
+    UPDATES_GET_CHANNEL,
+    (event: IpcMainInvokeEvent, ...args: unknown[]): UpdatesResult => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return { ok: false, error: { code: 'FORBIDDEN', message: '不允许此页面调用桌面接口。' } }
+      }
+      if (args.length !== 0) {
+        return { ok: false, error: { code: 'INVALID_REQUEST', message: '版本检查读取接口不接受参数。' } }
+      }
+      return { ok: true, data: updateChecker.getSnapshot() }
+    }
+  )
+  handle(
+    UPDATES_CHECK_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<UpdatesResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return { ok: false, error: { code: 'FORBIDDEN', message: '不允许此页面调用桌面接口。' } }
+      }
+      if (args.length !== 0) {
+        return { ok: false, error: { code: 'INVALID_REQUEST', message: '版本检查接口不接受参数。' } }
+      }
+      return await updateChecker.check()
+    }
+  )
+}
+
 /** 界面偏好、对话页模型展示偏好与快捷发送短语分开读写；未知字段、任意启动参数一律拒绝。 */
 function registerPreferencesHandlers(pageUrl: string): void {
   handle(
@@ -1817,6 +1855,15 @@ function broadcastAuthFlow(snapshot: AuthFlowSnapshot): void {
   contents.send(AUTH_FLOW_EVENT, snapshot)
 }
 
+/** Pi 版本检查快照同样只发给当前唯一可信窗口；检查结论只含版本号与结论文本。 */
+function broadcastUpdates(snapshot: UpdatesSnapshot): void {
+  const target = mainWindow
+  if (target === null || target.isDestroyed()) return
+  const contents = target.webContents
+  if (contents.isDestroyed()) return
+  contents.send(UPDATES_STATE_EVENT, snapshot)
+}
+
 function restrictSession(): void {
   session.defaultSession.setPermissionCheckHandler(() => false)
   session.defaultSession.setPermissionRequestHandler((_contents, _permission, callback) => {
@@ -1985,12 +2032,16 @@ if (!app.requestSingleInstanceLock()) {
     registerPiSettingsHandlers(pageUrl)
     registerModelsConfigHandlers(pageUrl)
     registerAuthHandlers(pageUrl)
+    registerUpdatesHandlers(pageUrl)
     sdkRuntime.onStatusChanged(broadcastRuntimeStatus)
     sdkRuntime.onProjectionBatch(broadcastRuntimeProjection)
     sdkRuntime.onExtensionUi(broadcastExtensionUi)
     sdkRuntime.onRunsChanged(broadcastSessionRuns)
     authManager.onFlowChanged(broadcastAuthFlow)
+    updateChecker.onChanged(broadcastUpdates)
     await createWindow(pageUrl)
+    // 窗口已创建后再开始检查：它只影响页面上的提示，不参与启动编排。
+    updateChecker.startInitialCheck()
   }).catch(() => {
     console.error('Pi Desktop 无法加载桌面页面。')
     app.exit(1)

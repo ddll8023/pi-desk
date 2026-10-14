@@ -1,4 +1,4 @@
-/** 为沙箱页面提供应用信息、Project 选择/添加/移除/列表、项目文件检索、Session、会话运行状态、Project Trust、偏好、Runtime、Pi 资源、Pi 默认模型、自定义供应商、认证与 Extension 等受限接口，不暴露 Electron、任意 channel 或系统能力。 */
+/** 为沙箱页面提供应用信息、Project 选择/添加/移除/列表、项目文件检索、Session、会话运行状态、Project Trust、偏好、Runtime、Pi 资源、Pi 默认模型、Pi 版本检查、自定义供应商、认证与 Extension 等受限接口，不暴露 Electron、任意 channel 或系统能力。 */
 import { contextBridge, ipcRenderer } from 'electron'
 import type { IpcRendererEvent } from 'electron'
 import { APP_INFO_CHANNEL, isAppInfoResult } from '../shared/desktop-api'
@@ -119,6 +119,14 @@ import type {
   TrustStatusResult
 } from '../shared/trust-api'
 import {
+  UPDATES_CHECK_CHANNEL,
+  UPDATES_GET_CHANNEL,
+  UPDATES_STATE_EVENT,
+  isUpdatesResult,
+  isUpdatesSnapshot
+} from '../shared/updates-api'
+import type { UpdatesApi, UpdatesResult, UpdatesSnapshot } from '../shared/updates-api'
+import {
   AUTH_FLOW_EVENT,
   AUTH_LOGIN_CANCEL_CHANNEL,
   AUTH_LOGIN_RESPOND_CHANNEL,
@@ -225,6 +233,7 @@ const INVALID_MCP_CONFIG_RESPONSE = '桌面接口返回了无法识别的 MCP �
 const INVALID_MCP_INSPECT_ABORT_RESPONSE = '桌面接口返回了无法识别的中止探测结果。'
 const INVALID_AUTH_STATUS_RESPONSE = '桌面接口返回了无法识别的认证状态。'
 const INVALID_AUTH_FLOW_RESPONSE = '桌面接口返回了无法识别的登录流程状态。'
+const INVALID_UPDATES_RESPONSE = '桌面接口返回了无法识别的版本检查结果。'
 
 function invalidExtensionUiResponse(): ExtensionUiResult {
   return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_EXTENSION_UI_RESPONSE } }
@@ -330,7 +339,11 @@ function invalidAuthLogoutResponse(): AuthLogoutResult {
   return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_AUTH_STATUS_RESPONSE, detail: null } }
 }
 
-const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionApi & SessionRunApi & PreferencesApi & PiSettingsApi & TrustApi & ExtensionUiApi & AuthApi & ModelsConfigApi = {
+function invalidUpdatesResponse(): UpdatesResult {
+  return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_UPDATES_RESPONSE } }
+}
+
+const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionApi & SessionRunApi & PreferencesApi & PiSettingsApi & TrustApi & ExtensionUiApi & AuthApi & ModelsConfigApi & UpdatesApi = {
   async getAppInfo() {
     const response: unknown = await ipcRenderer.invoke(APP_INFO_CHANNEL)
     if (!isAppInfoResult(response)) {
@@ -771,6 +784,28 @@ const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionAp
     ipcRenderer.on(AUTH_FLOW_EVENT, handler)
     return () => {
       ipcRenderer.off(AUTH_FLOW_EVENT, handler)
+    }
+  },
+
+  async getUpdates(): Promise<UpdatesResult> {
+    const response: unknown = await ipcRenderer.invoke(UPDATES_GET_CHANNEL)
+    return isUpdatesResult(response) ? response : invalidUpdatesResponse()
+  },
+
+  async checkUpdates(): Promise<UpdatesResult> {
+    const response: unknown = await ipcRenderer.invoke(UPDATES_CHECK_CHANNEL)
+    return isUpdatesResult(response) ? response : invalidUpdatesResponse()
+  },
+
+  onUpdatesChanged(listener: (snapshot: UpdatesSnapshot) => void) {
+    const handler = (_event: IpcRendererEvent, payload: unknown): void => {
+      // 快照载荷同样不可信：契约不符时丢弃，由下一次快照收敛。
+      if (!isUpdatesSnapshot(payload)) return
+      listener(payload)
+    }
+    ipcRenderer.on(UPDATES_STATE_EVENT, handler)
+    return () => {
+      ipcRenderer.off(UPDATES_STATE_EVENT, handler)
     }
   }
 }

@@ -1,4 +1,4 @@
-<!-- 主界面外壳：编排项目两阶段添加/移除确认、信任与中断对话框、视图切换、侧栏「新建」到输入坞的聚焦请求、新建会话落盘后的会话列表补读及各展示 Store 生命周期。 -->
+<!-- 主界面外壳：编排项目两阶段添加/移除确认、信任与中断对话框、版本更新提示、视图切换、侧栏「新建」到输入坞的聚焦请求、新建会话落盘后的会话列表补读及各展示 Store 生命周期。 -->
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
@@ -12,6 +12,7 @@ import { useSessionStore } from './stores/session'
 import { useSessionRunsStore } from './stores/session-runs'
 import { useSessionViewStore } from './stores/session-view'
 import { useTrustStore } from './stores/trust'
+import { useUpdatesStore } from './stores/updates'
 import type { Project } from '../../shared/project-api'
 import AppTitleBar from './components/AppTitleBar.vue'
 import ChatMessageList from './components/ChatMessageList.vue'
@@ -23,6 +24,7 @@ import ProjectSidebar from './components/ProjectSidebar.vue'
 import SessionPickerDialog from './components/SessionPickerDialog.vue'
 import SettingsView from './components/SettingsView.vue'
 import TrustDialog from './components/TrustDialog.vue'
+import UpdateNoticeDialog from './components/UpdateNoticeDialog.vue'
 
 const desktopStore = useDesktopStore()
 const extensionStore = useExtensionUiStore()
@@ -37,6 +39,7 @@ const { currentProject, pendingAddition, pendingAdditionDecision } = storeToRefs
 const { awaitingInterrupt, pendingReload, pendingSessionId } = storeToRefs(sessionStore)
 const { sidebarCollapsed, ready: preferencesReady } = storeToRefs(preferencesStore)
 const trustStore = useTrustStore()
+const updatesStore = useUpdatesStore()
 const currentView = ref<'chat' | 'settings'>('chat')
 const projectToRemove = ref<Project | null>(null)
 const additionTrustStatus = computed(() => {
@@ -95,6 +98,12 @@ const sessionConfirmDescription = computed(() => (
     : '切换会话会先停止当前 Agent 操作，已提交的内容不会重放。'
 ))
 const sessionConfirmLabel = computed(() => (pendingReload.value ? '停止并重新加载' : '停止并切换'))
+
+/** 版本更新提示的「查看详情」：关掉提示并切到设置页，由设置页展示完整版本清单。 */
+function onUpdateDetails(): void {
+  updatesStore.dismissNotice()
+  currentView.value = 'settings'
+}
 
 function requestProjectRemoval(project: Project): void {
   projectToRemove.value = project
@@ -180,6 +189,7 @@ onMounted(() => {
   sessionViewStore.initialize()
   void sessionStore.initialize()
   void sessionRunsStore.initialize()
+  void updatesStore.initialize()
 })
 
 onUnmounted(() => {
@@ -189,6 +199,7 @@ onUnmounted(() => {
   runtimeStore.dispose()
   sessionViewStore.dispose()
   sessionRunsStore.dispose()
+  updatesStore.dispose()
 })
 </script>
 
@@ -272,6 +283,13 @@ onUnmounted(() => {
 
       <!-- Extension 对话一次只展示队首；队列由 store 持有，回应后自动滑到下一条。 -->
       <ExtensionDialog />
+
+      <!-- 启动检查到更新时的只读提示；每次运行最多弹一次，手动重查不再弹。 -->
+      <UpdateNoticeDialog
+        :open="updatesStore.noticeOpen"
+        @details="onUpdateDetails"
+        @dismiss="updatesStore.dismissNotice()"
+      />
     </Teleport>
   </div>
 </template>

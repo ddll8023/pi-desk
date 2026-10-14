@@ -11,7 +11,7 @@ directories:
   output: release
   buildResources: build
 # 只收构建产物；package.json 与生产依赖的 node_modules 由 electron-builder 固定纳入。
-# 三个受管入口（SDK 宿主、CLI 运行器、认证辅助进程）以裸模块名解析官方 SDK，
+# 受管入口（SDK 宿主、CLI 运行器、版本检查脚本、认证辅助进程）以裸模块名解析官方 SDK，
 # 因此生产依赖必须落在应用目录的 node_modules 下。
 files:
   - package.json

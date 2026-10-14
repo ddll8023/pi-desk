@@ -1,4 +1,4 @@
-<!-- 设置页：首页常驻「外观」与「快捷输入」两块直接控件卡片，模型与 Pi 资源作为同级子页切换；偏好统一交给 store 保存，子页读写各自负责。 -->
+<!-- 设置页：首页常驻「外观」「快捷输入」「版本与更新」直接控件卡片，模型与 Pi 资源作为同级子页切换；偏好统一交给 store 保存，子页读写各自负责。 -->
 <script setup lang="ts">
 import { ref } from 'vue'
 import { storeToRefs } from 'pinia'
@@ -7,6 +7,7 @@ import AppButton from './ui/AppButton.vue'
 import ModelSettingsView from './ModelSettingsView.vue'
 import QuickSendSection from './QuickSendSection.vue'
 import ResourceView from './ResourceView.vue'
+import VersionUpdateSection from './VersionUpdateSection.vue'
 
 /** 设置页的三个平级区域；外观是首页，其他两个是全宽子页。 */
 type SettingsSection = 'appearance' | 'resources' | 'model'
@@ -93,6 +94,8 @@ function backToAppearance(): void {
           </div>
           <p class="mt-3 text-xs text-desk-muted">其中 Pi 配置的改动需要在重新加载会话后才会生效。</p>
         </section>
+
+        <VersionUpdateSection />
       </template>
 
       <template v-else>
