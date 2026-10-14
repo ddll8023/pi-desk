@@ -36,6 +36,8 @@ export interface SdkHostRunRegistry {
   allocateGeneration(runId: number): number
   /** 记录宿主实际报告的绑定代际；未绑定时为 null。 */
   recordBinding(runId: number, generation: number | null): void
+  /** 退出或关闭结果未确认：保留占用，未确认前不建立替代实例。 */
+  markUnconfirmed(runId: number): void
 }
 
 /** 会话或项目已被占用：调用方据此拒绝重复接管，不排队也不重放。 */

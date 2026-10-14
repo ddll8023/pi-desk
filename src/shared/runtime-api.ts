@@ -850,7 +850,7 @@ function isTimestamp(value: unknown): boolean {
 }
 
 /** 进行中的本轮允许 `endedAt` 为 null；开始时刻必须是数字，结束时刻不得早于开始时刻。 */
-function isTurnTiming(value: unknown): TurnTiming | null {
+function isTurnTiming(value: unknown): boolean {
   if (value === null) return true
   if (!isRecord(value) || typeof value.startedAt !== 'number' || !isTimestamp(value.startedAt)) return false
   if (value.endedAt === null) return true
