@@ -23,3 +23,11 @@
 适用：新增任何按会话或按运行实例寻址的接口、事件、状态或缓存键时。
 
 原因：这些是跨模块的硬约束，违反其中任一条都会让旧请求命中新对象，或在多实例下互相覆盖；机制细节以 `src/main/session-run-registry.ts`、`src/main/sdk-runtime-bridge.ts`、`src/main/sdk-host-manager.ts` 与渲染端 `src/renderer/src/stores/session-view.ts` 的注释为准。
+
+### 前台实例跟随当前项目，项目与会话在侧栏同一棵树里
+
+约定：切换或添加项目成功后，主进程把前台运行实例切到该项目最近一次前台的实例（该项目没有承载会话的实例时清空前台），因此聊天区内容与当前项目始终一致；项目切换不建立宿主、不重绑会话、不中断后台实例。侧栏按「项目 → 会话」两级展示：会话列表按项目分片、展开时懒读取，会话只出现在自己项目的节点下；项目列表顺序由用户维护，加载与切换都不按 `lastOpenedAt` 重排。
+
+适用：调整侧栏、项目切换、会话列表读取、运行状态展示，或新增任何按项目寻址的查询时。
+
+原因：曾出现「切到项目 B 后聊天区仍显示项目 A 的会话、发送也投给 A」以及侧栏把 A 的当前会话列在 B 下——两者都源于项目切换只写配置、前台归属与会话列表仍按旧项目解释。涉及文件：`src/main/project-manager.ts`、`src/main/session-run-registry.ts`、`src/main/sdk-runtime-bridge.ts`、`src/main/session-manager.ts`、`src/renderer/src/sidebar-tree.ts`、`src/renderer/src/stores/session.ts`。
