@@ -1,5 +1,10 @@
 /** 作为渲染端会话列表、打开与重新加载的调用入口，把桥接缺失与通信异常转换为安全的展示结果。 */
-import type { SessionError, SessionListResult, SessionOpenResult } from '../../../shared/session-api'
+import type {
+  SessionError,
+  SessionListRequest,
+  SessionListResult,
+  SessionOpenResult
+} from '../../../shared/session-api'
 
 function unavailable(): { ok: false; error: SessionError } {
   return {
@@ -17,12 +22,14 @@ function callFailed(error: unknown): { ok: false; error: SessionError } {
   }
 }
 
-/** 读取当前项目的会话列表；会话归属与文件解析都在主进程完成。 */
-export async function listSessions(): Promise<SessionListResult> {
+/** 读取指定项目的会话列表；项目范围与会话归属都在主进程完成。 */
+export async function listSessions(projectPath: string): Promise<SessionListResult> {
   const bridge = window.desktop
   if (!bridge || typeof bridge.listSessions !== 'function') return unavailable()
   try {
-    return await bridge.listSessions()
+    // 服务层重建普通对象，避免响应式代理跨 contextBridge。
+    const request: SessionListRequest = { projectPath }
+    return await bridge.listSessions(request)
   } catch (error) {
     return callFailed(error)
   }

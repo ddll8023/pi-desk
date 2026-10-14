@@ -1,9 +1,10 @@
 /**
- * 当前项目会话列表、打开与重新加载编排的所有者：选择、新建、恢复与重载会话。
+ * 会话列表、打开与重新加载编排的所有者：选择、新建、恢复与重载会话。
  *
- * 列表来自 Pi 管理的会话文件（session-store）；新建、打开、切换与重载都交给 SDK 宿主，
- * 由宿主在同一进程内替换会话，目标、归属与信任经本模块的 SDK 授权回路复核，
- * 授权依据是来源运行实例登记的归属项目，不是前台项目。
+ * 列表来自 Pi 管理的会话文件（session-store），按调用方显式给出的项目读取：侧栏按项目树展示会话，
+ * 因此列表不再隐式取当前项目，但只接受已添加项目的规范路径。
+ * 新建、打开、切换与重载都交给 SDK 宿主，由宿主在同一进程内替换会话，目标、归属与信任经本模块的
+ * SDK 授权回路复核，授权依据是来源运行实例登记的归属项目，不是前台项目。
  * 多运行实例下打开其他会话不中断任何正在运行的会话；重载以目标会话自己的项目做信任复核。
  * 有活动操作而重载请求未确认时直接拒绝，不自动中断、不排队、不重放已提交的内容。
  * IPC 契约与校验在 shared/session-api.ts。
@@ -22,7 +23,7 @@ import { SdkHostError } from './sdk-host-manager'
 import { sessionErrorOf } from './sdk-runtime-bridge'
 import type { SdkRuntimeBridge } from './sdk-runtime-bridge'
 import { SessionStorageError, listSessions, resolveSessionFile, resolveSdkSessionFile, getProjectSessionDir } from './session-store'
-import { normalizeProjectPath } from './project-path'
+import { ProjectPathError, normalizeProjectPath } from './project-path'
 import type { SessionRunSummary } from './session-run-registry'
 import { isSdkSessionReference } from '../sdk-host/protocol'
 import type { SdkHostFailureCode, SdkSessionReference, SdkSessionStatus, SdkSessionTarget } from '../sdk-host/protocol'
@@ -43,7 +44,9 @@ class SessionFailure extends Error {
 }
 
 export interface SessionManagerOptions {
-  /** 当前项目来源与配置；只用于列表与界面上下文，不作为运行实例的授权依据。 */
+  /**
+   * 当前项目来源、已添加项目范围与配置；只用于列表校验与界面上下文，不作为运行实例的授权依据。
+   */
   readonly projects: ProjectManager
   /** 会话后端；列表之外的会话编排都经它提交。 */
   readonly sdk: SdkRuntimeBridge
@@ -86,11 +89,17 @@ export class SessionManager {
     }
   }
 
-  /** 当前项目的会话列表；不要求项目目录仍然存在。 */
-  async list(): Promise<SessionListResult> {
+  /**
+   * 指定项目的会话列表；只接受已添加项目的规范路径，不要求它是当前项目。
+   * 未添加的目录一律拒绝，页面不能借列表接口探测任意目录。
+   */
+  async list(projectPath: string): Promise<SessionListResult> {
     try {
-      const projectPath = this.requireProjectPath()
-      return { ok: true, data: await listSessions(projectPath) }
+      const requested = await normalizeProjectPath(projectPath)
+      if (!await this.options.projects.hasProject(requested)) {
+        throw new SessionFailure('INVALID_PROJECT_PATH', '只能读取已添加项目的会话。')
+      }
+      return { ok: true, data: await listSessions(requested) }
     } catch (error) {
       return this.failure(error, {
         code: 'INTERNAL_ERROR',
@@ -243,6 +252,9 @@ export class SessionManager {
   private failure(error: unknown, fallback: SessionError): { ok: false; error: SessionError } {
     if (error instanceof SessionFailure) {
       return { ok: false, error: { code: error.code, message: error.message } }
+    }
+    if (error instanceof ProjectPathError) {
+      return { ok: false, error: { code: 'INVALID_PROJECT_PATH', message: error.message } }
     }
     if (error instanceof SessionStorageError) {
       return { ok: false, error: { code: 'INTERNAL_ERROR', message: error.message } }

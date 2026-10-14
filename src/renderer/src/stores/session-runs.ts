@@ -33,6 +33,22 @@ export interface UnboundSessionRun {
   readonly badge: SessionRunBadge
 }
 
+/**
+ * 展示优先级：未确认退出与宿主失败是阻塞态，优先于一切活动状态；
+ * 等待用户回应比「正在执行」更值得提示，因为它需要用户动作才能继续。
+ * 已回收（宿主进程被空闲释放但会话仍被占用）与真正就绪分开：前者下一次发送会重建宿主。
+ * 侧栏树与状态点都复用这一份判定，不在展示层重复推导。
+ */
+export function sessionRunBadge(run: SessionRunState): SessionRunBadge {
+  if (run.phase === 'unconfirmed') return 'unconfirmed'
+  if (run.hostState === 'failed') return 'failed'
+  if (run.waitingDialogs > 0) return 'waiting'
+  if (run.isStreaming) return 'running'
+  if (run.phase === 'opening' || run.phase === 'closing') return 'transitioning'
+  if (run.hostState === 'none' && run.sessionId !== null) return 'suspended'
+  return 'ready'
+}
+
 export const useSessionRunsStore = defineStore('session-runs', () => {
   const runs = ref<readonly SessionRunState[]>([])
   /** 最近一次释放动作的失败原因；只在侧栏展示，不改变运行状态本身。 */
@@ -72,16 +88,6 @@ export const useSessionRunsStore = defineStore('session-runs', () => {
   ))
 
   /**
-   * 尚未绑定会话的运行实例：它们没有会话条目，侧栏按运行身份单独列一行，
-   * 否则点了「新建」的实例在侧栏完全不可见。
-   */
-  const unboundRuns = computed<readonly UnboundSessionRun[]>(() => (
-    runs.value
-      .filter(run => run.sessionId === null)
-      .map(run => ({ runId: run.runId, projectPath: run.projectPath, badge: badgeOf(run) }))
-  ))
-
-  /**
    * 释放一个未确认退出或宿主已失败的运行实例，让它回到可重新打开的状态。
    * 只解除登记：不中断在途工作、不删除历史、不移除侧栏条目；失败原因如实保留。
    */
@@ -115,24 +121,15 @@ export const useSessionRunsStore = defineStore('session-runs', () => {
   }
 
   /**
-   * 展示优先级：未确认退出与宿主失败是阻塞态，优先于一切活动状态；
-   * 等待用户回应比「正在执行」更值得提示，因为它需要用户动作才能继续。
-   * 已回收（宿主进程被空闲释放但会话仍被占用）与真正就绪分开：前者下一次发送会重建宿主。
+   * 展示优先级与 `sessionRunBadge` 一致；保留同名包装只是为了让 store 内部调用读起来连贯。
    */
   function badgeOf(run: SessionRunState): SessionRunBadge {
-    if (run.phase === 'unconfirmed') return 'unconfirmed'
-    if (run.hostState === 'failed') return 'failed'
-    if (run.waitingDialogs > 0) return 'waiting'
-    if (run.isStreaming) return 'running'
-    if (run.phase === 'opening' || run.phase === 'closing') return 'transitioning'
-    if (run.hostState === 'none' && run.sessionId !== null) return 'suspended'
-    return 'ready'
+    return sessionRunBadge(run)
   }
 
   return {
     runs,
     foregroundRunId,
-    unboundRuns,
     releaseError,
     releasing,
     initialize,

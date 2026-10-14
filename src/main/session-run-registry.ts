@@ -51,6 +51,11 @@ export interface SessionRunRecord<T> {
   sessionId: string | null
   phase: SessionRunPhase
   bindingGeneration: number | null
+  /**
+   * 最近一次成为前台实例的序号；null 表示从未成为前台。
+   * 项目切换后要回到该项目上次展示的会话，因此前台选择按项目记住最近一次，而不是只记全局一个。
+   */
+  foregroundOrder: number | null
   /** 打开或新建前的上一份占用；仅用于打开失败时回退。 */
   previous: { readonly projectPath: string | null; readonly sessionId: string | null; readonly phase: SessionRunPhase } | null
 }
@@ -61,9 +66,10 @@ function samePath(left: string, right: string): boolean {
 }
 
 export class SessionRunRegistry<T> implements SessionRunQuery, SdkHostRunRegistry {
-  /** 运行身份与绑定代际各自独立递增；同一个值不会被两处复用。 */
+  /** 运行身份、绑定代际与前台序号各自独立递增；同一个值不会被两处复用。 */
   private runSeed = 0
   private generationSeed = 0
+  private foregroundSeed = 0
   private readonly records = new Map<number, SessionRunRecord<T>>()
   private foregroundRunId: number | null = null
 
@@ -77,7 +83,7 @@ export class SessionRunRegistry<T> implements SessionRunQuery, SdkHostRunRegistr
     if (this.records.has(runId)) throw new Error('运行身份已登记，不能重复登记。')
     const record: SessionRunRecord<T> = {
       runId, owner, projectPath: null, sessionId: null, phase: 'idle',
-      bindingGeneration: null, previous: null
+      bindingGeneration: null, foregroundOrder: null, previous: null
     }
     this.records.set(runId, record)
     return record
@@ -130,7 +136,7 @@ export class SessionRunRegistry<T> implements SessionRunQuery, SdkHostRunRegistr
     if (record.phase !== 'idle') record.phase = 'closing'
   }
 
-  /** 释放占用：宿主仍在，只是不再承载会话。 */
+  /** 释放占用：宿主仍在，只是不再承载会话；前台顺序记录保留，供宿主再次承载会话时使用。 */
   release(runId: number): void {
     const record = this.requireRun(runId)
     record.projectPath = null
@@ -173,10 +179,25 @@ export class SessionRunRegistry<T> implements SessionRunQuery, SdkHostRunRegistr
     return this.records.get(runId) ?? null
   }
 
-  /** 设置前台运行实例。 */
+  /** 设置前台运行实例；同时记录最近一次前台的先后顺序，供按项目回到上次展示的实例。 */
   setForeground(runId: number): void {
-    this.requireRun(runId)
+    const record = this.requireRun(runId)
+    record.foregroundOrder = ++this.foregroundSeed
     this.foregroundRunId = runId
+  }
+
+  /**
+   * 该项目最近一次成为前台的运行实例；没有则返回 null。
+   * 未承载会话（已释放）的实例不参与：它们没有可展示的会话内容。
+   */
+  foregroundRunOfProject(projectPath: string): SessionRunRecord<T> | null {
+    let found: SessionRunRecord<T> | null = null
+    for (const record of this.records.values()) {
+      if (record.projectPath === null || record.foregroundOrder === null) continue
+      if (!samePath(record.projectPath, projectPath)) continue
+      if (found === null || record.foregroundOrder > (found.foregroundOrder ?? 0)) found = record
+    }
+    return found
   }
 
   /** 清除前台选择；运行实例本身不被销毁。 */

@@ -73,6 +73,7 @@ import {
 } from '../shared/session-api'
 import type {
   SessionApi,
+  SessionListRequest,
   SessionListResult,
   SessionOpenRequest
 } from '../shared/session-api'
@@ -367,8 +368,10 @@ const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionAp
     return isProjectListResult(response) ? response : invalidProjectListResponse()
   },
 
-  async listSessions() {
-    const response: unknown = await ipcRenderer.invoke(SESSION_LIST_CHANNEL)
+  /** 读取指定项目的会话列表；项目路径由主进程校验是否已添加。 */
+  async listSessions(request: SessionListRequest) {
+    const payload: SessionListRequest = { projectPath: request.projectPath }
+    const response: unknown = await ipcRenderer.invoke(SESSION_LIST_CHANNEL, payload)
     return isSessionListResult(response) ? response : invalidSessionResponse()
   },
 
@@ -481,7 +484,8 @@ const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionAp
     // 只搬运已声明的字段，不把页面传入的整个对象转交给主进程。
     const request: UiPreferences = {
       sidebarCollapsed: ui.sidebarCollapsed,
-      theme: ui.theme
+      theme: ui.theme,
+      expandedProjects: [...ui.expandedProjects]
     }
     const response: unknown = await ipcRenderer.invoke(PREFERENCES_SET_UI_CHANNEL, request)
     return isPreferencesResult(response) ? response : invalidPreferencesResponse()

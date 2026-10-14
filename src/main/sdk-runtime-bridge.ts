@@ -9,6 +9,9 @@
  *
  * 状态映射要点：页面 `runtimeId` 是注册表分配的应用级绑定代际（能力清单、投影快照与投影批次都按
  * 绑定代际对齐）；宿主就绪只代表 SDK 已加载，只有会话绑定完成才对页面表示 `ready`。
+ *
+ * 前台选择由项目切换驱动：当前项目变化时切到该项目最近一次前台的实例，未命中则清空前台。
+ * 项目切换只改展示归属，不建立宿主、不重绑会话、不中断任何后台实例。
  */
 import { SdkHostError } from './sdk-host-manager'
 import type { SdkHostErrorCode, SdkHostManager, SdkHostStatus } from './sdk-host-manager'
@@ -466,6 +469,21 @@ export class SdkRuntimeBridge {
     this.publishState()
     const run = this.runOf(runId)
     if (run !== null) this.forwardUi(runId, run.owner.getExtensionUiSnapshot())
+  }
+
+  /**
+   * 前台实例跟随项目：命中该项目最近一次前台实例时切到它（与 `focusRun` 同一条顺序），
+   * 该项目没有承载会话的实例时清空前台选择，页面回到该项目的空状态。
+   * 不建立宿主、不重绑会话、不中断任何后台实例。
+   */
+  focusProject(projectPath: string): void {
+    const run = this.options.runs.foregroundRunOfProject(projectPath)
+    if (run === null) {
+      this.options.runs.clearForeground()
+      this.publishState()
+      return
+    }
+    this.focusRun(run.runId)
   }
 
   /**

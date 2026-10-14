@@ -138,7 +138,7 @@ export const useProjectStore = defineStore('project', () => {
 
   /**
    * 把路径设为当前项目。前台切换只改变项目上下文，不停止任何后台会话，因此不再需要中断确认；
-   * `allowInterrupt` 只为 IPC 契约保留。
+   * 切换后前台实例跟随该项目（该项目没有承载会话的实例时清空前台）；`allowInterrupt` 只为 IPC 契约保留。
    */
   async function select(path: string, allowInterrupt: boolean): Promise<void> {
     if (switching.value) return

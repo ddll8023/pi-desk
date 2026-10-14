@@ -4,6 +4,8 @@
  * 添加前复核受保护资源，并在会话切换成功时一起保存项目与信任决定；移除仅清理 Desktop 配置，
  * 不删除项目目录。运行实例是否存在以注册表登记为准，不以单份 Runtime 状态代替；
  * 前台切换不再收敛任何后台会话，运行中断只在项目移除时由显式确认控制。
+ * 切换与添加成功后通知会话后端把前台实例切到该项目：页面展示的会话内容与当前项目保持一致。
+ * 项目列表顺序不在本模块维护（见 desktop-config-store）。
  * IPC 契约与调用方校验位于 shared/project-api.ts 和 main/index.ts。
  */
 import { app } from 'electron'
@@ -35,6 +37,11 @@ class ProjectFailure extends Error {
   }
 }
 
+/** 路径比较折叠 Windows 大小写；其他平台保持严格比较，与会话运行注册表同一口径。 */
+function samePath(left: string, right: string): boolean {
+  return process.platform === 'win32' ? left.toLowerCase() === right.toLowerCase() : left === right
+}
+
 function sameTrustStatus(
   preview: ProjectPathSelection['trustStatus'],
   current: ProjectPathSelection['trustStatus']
@@ -55,11 +62,12 @@ export interface ProjectManagerOptions {
   readonly chooseDirectory: (defaultPath: string) => Promise<string | null>
   /**
    * 会话后端的按实例端口：项目范围收敛只问单实例的在途工作与释放结果，
-   * 不再以单份 Runtime 状态或全局停止代替。
+   * 不再以单份 Runtime 状态或全局停止代替；`focusProject` 只切换展示归属，不建立宿主。
    */
   readonly runtime: {
     runHasPendingWork(runId: number): boolean
     releaseRun(runId: number, allowInterrupt: boolean): Promise<RuntimeResult>
+    focusProject(projectPath: string): void
   }
   /** 配置文件的唯一读写者；项目列表与界面偏好、窗口状态共用同一份文件。 */
   readonly store: DesktopConfigStore
@@ -92,6 +100,15 @@ export class ProjectManager {
     const state = this.options.store.getState()
     const current = state.projects.find((project) => project.id === state.currentProjectId)
     return current?.path ?? null
+  }
+
+  /**
+   * 该路径是否已添加为项目；会话列表按项目读取前用它把请求限制在已登记范围内。
+   * 会先加载配置，因此尚未读过列表时也不会误报未添加。
+   */
+  async hasProject(projectPath: string): Promise<boolean> {
+    const list = await this.options.store.list()
+    return list.projects.some((project) => samePath(project.path, projectPath))
   }
 
   /** 系统目录选择器；返回归一化后的目录，取消时数据为 `null`。 */
@@ -190,13 +207,16 @@ export class ProjectManager {
   /**
    * 保存前台项目选择：只写配置，不停止任何后台会话。多运行实例下前台切换与执行无关，
    * 离开项目的会话继续运行；它们的释放由项目移除、应用退出与后续的空闲回收负责。
+   * 保存成功后把前台实例切到该项目（该项目没有实例时清空前台），页面展示随之一致。
    */
   private async applySwitch(
     request: ProjectSetCurrentRequest,
     trustDecision?: TrustDecision
   ): Promise<ProjectList> {
     const projectPath = await this.loadPath(request.path)
-    return this.options.store.selectProject(projectPath, projectNameFromPath(projectPath), trustDecision)
+    const list = await this.options.store.selectProject(projectPath, projectNameFromPath(projectPath), trustDecision)
+    this.options.runtime.focusProject(projectPath)
+    return list
   }
 
   private requestChoice(): Promise<ProjectPathSelection | null> {

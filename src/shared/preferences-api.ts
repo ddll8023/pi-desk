@@ -19,10 +19,44 @@ export function isUiTheme(value: unknown): value is UiTheme {
   return typeof value === 'string' && UI_THEMES.includes(value as UiTheme)
 }
 
+/** 侧栏展开状态的上限；超出按最早记录丢弃，避免配置文件无界增长。 */
+export const MAX_EXPANDED_PROJECTS = 50
+
+/** 路径长度上限；只用于拒绝明显异常的值，不做真实路径校验。 */
+const MAX_STORED_PATH_LENGTH = 4096
+
+/**
+ * 界面偏好的路径字段只接受绝对路径：Windows 盘符或 POSIX 根开头。
+ * 共享模块同时被主进程与沙箱页面加载，因此不引入 `node:path`。
+ */
+function isAbsolutePathLike(value: string): boolean {
+  return value.startsWith('/') || /^[A-Za-z]:[\\/]/u.test(value)
+}
+
 /** Desktop 自己的界面偏好；不复制 Pi settings，也不保存单个消息块的临时开合状态。 */
 export interface UiPreferences {
   readonly sidebarCollapsed: boolean
   readonly theme: UiTheme
+  /**
+   * 侧栏中保持展开的项目路径。顺序不参与展示：项目顺序始终取项目列表本身，
+   * 这里只记录哪些项目展开过，切换项目或重启应用后仍能保持。
+   */
+  readonly expandedProjects: readonly string[]
+}
+
+/** 界面偏好的形状校验；主进程与页面共用同一份判定，多余字段、越界或不完整的载荷一律拒绝。 */
+export function isUiPreferences(value: unknown): value is UiPreferences {
+  if (!isRecord(value)) return false
+  if (!Object.keys(value).every((key) => (
+    key === 'sidebarCollapsed' || key === 'theme' || key === 'expandedProjects'
+  ))) return false
+  if (typeof value.sidebarCollapsed !== 'boolean' || !isUiTheme(value.theme)) return false
+  if (!Array.isArray(value.expandedProjects) || value.expandedProjects.length > MAX_EXPANDED_PROJECTS) {
+    return false
+  }
+  return value.expandedProjects.every((path) => (
+    typeof path === 'string' && path !== '' && path.length <= MAX_STORED_PATH_LENGTH && isAbsolutePathLike(path)
+  ))
 }
 
 /** 复用桌面错误码；界面偏好本地先生效，模型展示偏好保存成功后才提交。 */
@@ -88,12 +122,6 @@ const PREFERENCES_ERROR_CODES: readonly string[] = [
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
-function isUiPreferences(value: unknown): value is UiPreferences {
-  if (!isRecord(value)) return false
-  return typeof value.sidebarCollapsed === 'boolean'
-    && isUiTheme(value.theme)
 }
 
 /** 隐藏模型的数量上限；只用于展示过滤，与模型身份的边界保持一致。 */

@@ -254,10 +254,13 @@ export const useRuntimeStore = defineStore('runtime', () => {
    * 最近一次就绪快照的身份：挂起与恢复之间消息组件不能重建，否则回收一次就丢阅读与展开状态。
    */
   const lastReadyIdentity = ref<{ runId: number; runtimeId: number | null; sessionId: string | null } | null>(null)
-  /** 会话视图的稳定键：优先取当前就绪快照，否则退回最近一次就绪身份。 */
+  /**
+   * 会话视图的稳定键：优先取当前就绪快照，否则退回最近一次就绪身份。
+   * 不含项目身份：项目切换时前台实例先变、项目列表后到，带上项目 id 会让消息组件重建两次。
+   */
   const conversationKey = computed(() => {
     const identity = view.value.phase === 'ready' ? view.value.snapshot : lastReadyIdentity.value
-    return `${useProjectStore().currentProject?.id ?? 'none'}:${identity?.runId ?? 'none'}`
+    return `${identity?.runId ?? 'none'}`
       + `:${identity?.runtimeId ?? 'none'}:${identity?.sessionId ?? 'none'}`
   })
   /**

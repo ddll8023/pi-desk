@@ -10,13 +10,21 @@
  * 缺失或非法一律按默认值处理，不参与结构判定，也不改变版本语义；路径归一化在 project-path.ts，切换编排在
  * project-manager.ts，偏好读取在 preferences-manager.ts，窗口状态校正与保存时机在 window-state.ts，
  * 信任决定的探测与启动参数映射在 trust-manager.ts。
+ *
+ * 项目列表顺序由用户自己维护：加载时保持文件顺序，切换或添加只更新 `lastOpenedAt` 与条目内容，
+ * 不把项目重新排序，也不把最近打开的项目顶到最前；只有超出上限时才按 `lastOpenedAt` 淘汰最旧的记录。
  */
 import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join } from 'node:path'
 import { app } from 'electron'
 import type { ModelDisplayPreference, QuickSendPreference, UiPreferences, UiTheme } from '../shared/preferences-api'
-import { DEFAULT_QUICK_SEND_MESSAGES, MAX_QUICK_SEND_MESSAGES, MAX_QUICK_SEND_MESSAGE_LENGTH } from '../shared/preferences-api'
+import {
+  DEFAULT_QUICK_SEND_MESSAGES,
+  MAX_EXPANDED_PROJECTS,
+  MAX_QUICK_SEND_MESSAGES,
+  MAX_QUICK_SEND_MESSAGE_LENGTH
+} from '../shared/preferences-api'
 import type { ModelIdentity } from '../shared/runtime-api'
 import { isModelIdentity } from '../shared/runtime-api'
 import type { TrustDecision } from '../shared/trust-api'
@@ -38,7 +46,8 @@ const MAX_STORED_WINDOW = 20_000
 /** 界面偏好默认值；只在字段缺失或非法时使用。 */
 export const DEFAULT_UI_PREFERENCES: UiPreferences = {
   sidebarCollapsed: false,
-  theme: 'system'
+  theme: 'system',
+  expandedProjects: []
 }
 
 /** 窗口状态默认值；位置为 null 表示交给窗口自行居中。 */
@@ -110,13 +119,31 @@ function sanitizeTheme(value: unknown): UiTheme {
 }
 
 function sanitizeUiPreferences(value: unknown): UiPreferences {
-  if (!isRecord(value) || typeof value.sidebarCollapsed !== 'boolean') {
-    return DEFAULT_UI_PREFERENCES
-  }
+  if (!isRecord(value)) return DEFAULT_UI_PREFERENCES
   return {
-    sidebarCollapsed: value.sidebarCollapsed,
-    theme: sanitizeTheme(value.theme)
+    sidebarCollapsed: typeof value.sidebarCollapsed === 'boolean'
+      ? value.sidebarCollapsed
+      : DEFAULT_UI_PREFERENCES.sidebarCollapsed,
+    theme: sanitizeTheme(value.theme),
+    expandedProjects: sanitizeExpandedProjects(value.expandedProjects)
   }
+}
+
+/**
+ * 侧栏展开的项目路径：只接受绝对路径字符串，去重并截断到上限；
+ * 单个非法条目丢弃，不影响其他记录，也不影响其他界面偏好字段。
+ */
+function sanitizeExpandedProjects(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  const accepted: string[] = []
+  const seen = new Set<string>()
+  for (const entry of value) {
+    if (typeof entry !== 'string' || !isAbsolute(entry) || seen.has(entry)) continue
+    seen.add(entry)
+    accepted.push(entry)
+    if (accepted.length >= MAX_EXPANDED_PROJECTS) break
+  }
+  return accepted
 }
 
 /** 只接受绝对路径键与合法决定值；单个非法条目丢弃，不影响其他记录。 */
@@ -206,28 +233,32 @@ function readCoordinate(value: unknown): number | null {
   return value
 }
 
-/** 按 key 去重，保留 `lastOpenedAt` 更新的那条。 */
-function dedupeByRecency(projects: readonly Project[], keyOf: (project: Project) => string): Project[] {
-  const kept = new Map<string, Project>()
+/** 按 key 去重，保留文件中先出现的那条；顺序即用户维护的展示顺序，不按时间重排。 */
+function dedupeKeepingFirst(projects: readonly Project[], keyOf: (project: Project) => string): Project[] {
+  const seen = new Set<string>()
+  const kept: Project[] = []
   for (const project of projects) {
     const key = keyOf(project)
-    const previous = kept.get(key)
-    if (previous === undefined || project.lastOpenedAt > previous.lastOpenedAt) {
-      kept.set(key, project)
-    }
+    if (seen.has(key)) continue
+    seen.add(key)
+    kept.push(project)
   }
-  return [...kept.values()]
+  return kept
 }
 
-/** 最近打开在前；同一时间戳按路径排序，保证列表顺序稳定；超出上限丢弃最旧的。 */
-function sortByRecency(projects: readonly Project[]): Project[] {
-  return [...projects]
-    .sort((left, right) => {
-      if (left.lastOpenedAt !== right.lastOpenedAt) return right.lastOpenedAt - left.lastOpenedAt
-      if (left.path === right.path) return 0
-      return left.path < right.path ? -1 : 1
-    })
-    .slice(0, MAX_PROJECTS)
+/**
+ * 超出上限时按 `lastOpenedAt` 淘汰最旧的记录，但保留剩余条目的原有顺序：
+ * 上限是存储保护，不是排序依据。
+ */
+function trimProjects(projects: readonly Project[]): Project[] {
+  if (projects.length <= MAX_PROJECTS) return [...projects]
+  const kept = new Set(
+    [...projects]
+      .sort((left, right) => right.lastOpenedAt - left.lastOpenedAt)
+      .slice(0, MAX_PROJECTS)
+      .map((project) => project.id)
+  )
+  return projects.filter((project) => kept.has(project.id))
 }
 
 export class DesktopConfigStore {
@@ -262,7 +293,8 @@ export class DesktopConfigStore {
   }
 
   /**
-   * 把归一化后的目录设为当前项目并保存。
+   * 把归一化后的目录设为当前项目并保存；已有记录原位更新，新项目追加到列表末尾。
+   * 切换不重排列表：项目顺序由用户在侧栏里自行维护，最近打开的项目不会被顶到最前。
    * 只读降级时只更新本次运行的内存状态；保存失败保持内存状态不变。
    */
   selectProject(
@@ -280,10 +312,9 @@ export class DesktopConfigStore {
         path: projectPath,
         lastOpenedAt: Date.now()
       }
-      const projects = sortByRecency([
-        record,
-        ...this.projects.filter((project) => project.path !== projectPath)
-      ])
+      const projects = trimProjects(existing === undefined
+        ? [...this.projects, record]
+        : this.projects.map((project) => (project.path === projectPath ? record : project)))
       const projectTrust = trustDecision === undefined
         ? this.projectTrust
         : { ...this.projectTrust, [projectPath]: trustDecision }
@@ -624,7 +655,7 @@ export class DesktopConfigStore {
     }
   }
 
-  /** 只接受同时满足共享契约与"绝对路径"的记录；重复路径或重复 id 只保留最近打开的一条。 */
+  /** 只接受同时满足共享契约与"绝对路径"的记录；保持文件顺序，重复路径或重复 id 只保留先出现的一条。 */
   private sanitizeProjects(value: unknown): Project[] {
     if (!Array.isArray(value)) return []
 
@@ -638,8 +669,8 @@ export class DesktopConfigStore {
         lastOpenedAt: entry.lastOpenedAt
       })
     }
-    return sortByRecency(
-      dedupeByRecency(dedupeByRecency(accepted, (project) => project.path), (project) => project.id)
+    return trimProjects(
+      dedupeKeepingFirst(dedupeKeepingFirst(accepted, (project) => project.path), (project) => project.id)
     )
   }
 

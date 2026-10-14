@@ -31,7 +31,10 @@ export interface ProjectList {
   readonly storageNotice: string | null
 }
 
-/** 前台项目选择；切换只改变项目上下文，不中断任何后台会话，`allowInterrupt` 仅为契约保留。 */
+/**
+ * 前台项目选择；切换只改变项目上下文，不中断任何后台会话，`allowInterrupt` 仅为契约保留。
+ * 切换后前台实例跟随该项目（该项目没有承载会话的实例时清空前台），页面展示的会话内容与当前项目一致。
+ */
 export interface ProjectSetCurrentRequest {
   readonly path: string
   readonly allowInterrupt: boolean

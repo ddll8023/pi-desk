@@ -1,10 +1,24 @@
-<!-- 项目与会话侧栏：紧凑导航、共享选中背景与锚定操作浮层；只编排现有展示动作，不改变存储、信任或 Runtime 切换流程。 -->
+<!--
+  项目与会话两级树形导航：项目是一级节点，会话是各自项目的子节点，两个项目可以同时展开。
+
+  只编排现有展示动作：展开状态来自界面偏好，会话列表按项目懒读取，运行状态来自主进程登记；
+  切换项目、打开会话与新建会话都交给 store，组件自身不做归属判断（归属由 sidebar-tree.ts 计算）。
+  单击项目行 = 设为当前项目并展开，chevron 只控制展开折叠；项目右侧提供新建会话入口，
+  更多操作与详情通过悬停菜单或右键菜单完成。展开折叠用 grid-template-rows 过渡，不测高、无脚本动画。
+
+  单个项目的会话列表有高度上限（见 --sidebar-session-list-max-height）：超出部分在该项目内滚动，
+  一个项目不会占满整个侧栏；上限带来当前会话可能落在可视区外，因此展开、切项目、切会话后
+  会把当前会话滚进视野。
+-->
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
 import { LayoutGroup, Motion, useReducedMotion } from 'motion-v'
 import type { Options } from 'motion-v'
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useAnchoredPopup } from '../anchored-popup'
+import { SESSION_RUN_LABELS, buildSidebarTree } from '../sidebar-tree'
+import type { SidebarProjectNode, SidebarSessionRow } from '../sidebar-tree'
+import { usePreferencesStore } from '../stores/preferences'
 import { useProjectStore } from '../stores/project'
 import { useRuntimeStore } from '../stores/runtime'
 import { useSessionStore } from '../stores/session'
@@ -28,6 +42,7 @@ const emit = defineEmits<{
 }>()
 
 const projectStore = useProjectStore()
+const preferencesStore = usePreferencesStore()
 const runtimeStore = useRuntimeStore()
 const sessionStore = useSessionStore()
 const sessionRunsStore = useSessionRunsStore()
@@ -41,106 +56,78 @@ const {
   actionError: projectActionError
 } = storeToRefs(projectStore)
 const { view: runtimeView } = storeToRefs(runtimeStore)
-const {
-  view: sessionView, sessions, skipped, truncated, actionError: sessionActionError, opening
-} = storeToRefs(sessionStore)
+const { actionError: sessionActionError, opening } = storeToRefs(sessionStore)
 
 const projectBusy = computed(() => choosing.value || switching.value)
-const runtimeInfo = computed(() => (
-  runtimeView.value.phase === 'ready' ? runtimeView.value.snapshot.info : null
-))
-const currentSessionId = computed(() => runtimeInfo.value?.sessionId ?? null)
-/**
- * 当前会话尚未出现在磁盘列表里（Pi 新建会话的会话文件到首次写入才创建）时，用运行时身份造一条占位条目，
- * 保证正在对话的会话在侧栏可见；文件出现后由真实摘要接管。
- */
-const unsavedCurrentSession = computed<SessionSummary | null>(() => {
-  const sessionId = currentSessionId.value
-  if (sessionId === null || sessions.value.some((session) => session.sessionId === sessionId)) return null
-  return {
-    sessionId,
-    createdAt: new Date().toISOString(),
-    updatedAt: Date.now(),
-    sizeBytes: 0,
-    preview: null,
-    // 占位条目没有会话文件，也就没有回退来源。
-    forkedFromSessionId: null
-  }
+const sessionBusy = computed(() => opening.value)
+/** 当前会话身份；宿主已回收（挂起）时仍指向同一会话，选中项不会因此消失。 */
+const currentSessionId = computed(() => {
+  const view = runtimeView.value
+  if (view.phase === 'ready') return view.snapshot.info?.sessionId ?? null
+  return runtimeStore.suspendedSessionId
 })
-/**
- * 已登记运行实例但还没有文件条目的会话（包括已切到后台的那个）：同样用占位条目表示，
- * 否则它们在侧栏不可见，用户无法回到它们。文件落盘后由真实摘要接管。
- */
-const pendingRunSessions = computed<readonly SessionSummary[]>(() => {
-  const projectPath = projectStore.currentProject?.path ?? null
-  const listed = new Set(sessions.value.map((session) => session.sessionId))
-  const pending: SessionSummary[] = []
-  for (const run of sessionRunsStore.runs) {
-    const sessionId = run.sessionId
-    if (run.phase === 'idle' || run.projectPath !== projectPath || sessionId === null) continue
-    if (listed.has(sessionId)) continue
-    pending.push({
-      sessionId,
-      createdAt: new Date().toISOString(),
-      updatedAt: Date.now(),
-      sizeBytes: 0,
-      preview: null,
-      // 占位条目没有会话文件，也就没有回退来源。
-      forkedFromSessionId: null
-    })
-  }
-  return pending
-})
-const visibleSessions = computed<readonly SessionSummary[]>(() => {
-  const extras: SessionSummary[] = []
-  const seen = new Set<string>()
-  const current = unsavedCurrentSession.value
-  if (current !== null) {
-    extras.push(current)
-    seen.add(current.sessionId)
-  }
-  for (const entry of pendingRunSessions.value) {
-    if (seen.has(entry.sessionId)) continue
-    extras.push(entry)
-    seen.add(entry.sessionId)
-  }
-  return extras.length === 0 ? sessions.value : [...extras, ...sessions.value]
-})
-function isUnsavedCurrent(session: SessionSummary): boolean {
-  return session.sessionId === currentSessionId.value && unsavedCurrentSession.value !== null
-}
 
-/** 还没有文件条目的会话：没有可展示的文件元数据，也不提供基于文件的操作。 */
-function isPendingRunSession(session: SessionSummary): boolean {
-  return pendingRunSessions.value.some((entry) => entry.sessionId === session.sessionId)
-}
-const sessionBusy = computed(() => opening.value || sessionView.value.phase === 'loading')
+/** 相对时间的刻度：一分钟一次即可，不参与消息区的 500ms 计时。 */
+const now = ref(Date.now())
+let nowTimer: ReturnType<typeof setInterval> | null = null
+
+/** 侧栏树：项目顺序取项目列表本身，展开状态与会话归属都由构建函数决定。 */
+const nodes = computed<readonly SidebarProjectNode[]>(() => buildSidebarTree({
+  projects: projects.value,
+  currentProjectPath: projectStore.currentProject?.path ?? null,
+  expandedProjects: preferencesStore.expandedProjects,
+  sessionsOf: sessionStore.sessionsOf,
+  viewOf: sessionStore.viewOf,
+  countsOf: sessionStore.countsOf,
+  runs: sessionRunsStore.runs,
+  foregroundSessionId: currentSessionId.value,
+  now: now.value
+}))
+
+/** 展开的项目懒读取会话列表；已读过或正在读取的项目会被 store 直接跳过。 */
+watch(nodes, (list) => {
+  for (const node of list) {
+    if (node.expanded) void sessionStore.ensureLoaded(node.project.path)
+  }
+}, { immediate: true })
+
+/** 当前项目始终展开：手动折叠后再次成为当前项目时会重新展开。 */
+watch(() => projectStore.currentProject?.path ?? null, (path) => {
+  if (path !== null && !preferencesStore.isProjectExpanded(path)) preferencesStore.setProjectExpanded(path, true)
+}, { immediate: true })
 
 /**
- * 当前项目下尚未绑定会话的运行实例（点了「新建」但还没发出第一条消息）。
- * 它们没有会话身份也没有文件条目，因此在会话列表外单独列一行，否则在侧栏完全不可见。
+ * 每个项目的会话列表滚动容器：列表有高度上限，超出部分在项目内滚动。
+ * 登记在组件本地，只用于把当前会话滚进视野，不进全局状态。
  */
-const unboundRunRows = computed(() => (
-  sessionRunsStore.unboundRuns.filter(run => run.projectPath === (projectStore.currentProject?.path ?? null))
-))
+const sessionScrollers = new Map<string, HTMLElement>()
 
-/** 未命名实例只有「转当前会话」一个动作：新建请求会复用同一项目的空绑定实例，不会另建宿主。 */
-function focusUnboundRun(): void {
-  closeMenu()
-  void sessionStore.open(null, false)
-  emit('closeSidebar')
+function registerSessionScroller(projectId: string, element: unknown): void {
+  if (element instanceof HTMLElement) sessionScrollers.set(projectId, element)
+  else sessionScrollers.delete(projectId)
 }
 
 /**
- * 释放一个未确认退出或宿主已失败的运行实例：这是把该会话从阻塞态拉回可打开的唯一入口。
- * 只解除登记，不中断在途工作、不删除历史；失败时占用保留，原因由 store 如实展示。
+ * 当前会话可见性：会话列表有高度上限，长列表里当前会话可能被挡在可视区外，
+ * 用户在侧栏看不到自己在哪一条。展开、切项目、切会话后把它滚进视野，位置已可见时不动。
  */
-function retryRunRelease(session: SessionSummary): void {
-  const view = sessionRunsStore.viewOfSession(projectStore.currentProject?.path ?? null, session.sessionId)
-  closeMenu()
-  if (view === null) return
-  void sessionRunsStore.release(view.runId)
-}
+watch(
+  [currentSessionId, currentProjectId, () => preferencesStore.expandedProjects],
+  async () => {
+    await nextTick()
+    const projectId = currentProjectId.value
+    if (projectId === null) return
+    const scroller = sessionScrollers.get(projectId)
+    const active = scroller?.querySelector<HTMLElement>('.sidebar-tree-row.is-active')
+    if (scroller === undefined || active === null || active === undefined) return
+    const area = scroller.getBoundingClientRect()
+    const row = active.getBoundingClientRect()
+    if (row.top >= area.top && row.bottom <= area.bottom) return
+    active.scrollIntoView({ block: 'nearest' })
+  },
+  { flush: 'post' }
+)
+
 const prefersReducedMotion = useReducedMotion()
 const selectionTransition = computed<NonNullable<Options['transition']>>(() => ({
   type: 'tween', duration: prefersReducedMotion.value ? 0 : 0.25,
@@ -149,8 +136,6 @@ const selectionTransition = computed<NonNullable<Options['transition']>>(() => (
 
 /** 大批读取和跨项目替换不做逐条入场；只让小规模增删及同一列表重排参与过渡。 */
 const projectListMotion = ref(false)
-const sessionListMotion = ref(false)
-let sessionListProjectId = currentProjectId.value
 
 function isSmallListChange(previous: readonly string[], next: readonly string[]): boolean {
   if (previous.length === 0 || next.length === 0) return false
@@ -164,16 +149,131 @@ function isSmallListChange(previous: readonly string[], next: readonly string[])
 watch(projects, (next, previous) => {
   projectListMotion.value = isSmallListChange(previous.map(p => p.id), next.map(p => p.id))
 }, { flush: 'sync' })
-watch(visibleSessions, (next, previous) => {
-  sessionListMotion.value = sessionListProjectId === currentProjectId.value
-    && isSmallListChange(previous.map(s => s.sessionId), next.map(s => s.sessionId))
-  sessionListProjectId = currentProjectId.value
-}, { flush: 'sync' })
+
+function childrenId(node: SidebarProjectNode): string {
+  return `sidebar-sessions-${node.project.id}`
+}
+
+function isCurrentProject(node: SidebarProjectNode): boolean {
+  return node.project.id === currentProjectId.value
+}
+
+function isCurrentSession(node: SidebarProjectNode, session: SessionSummary): boolean {
+  return isCurrentProject(node) && session.sessionId === currentSessionId.value
+}
+
+/** 运行状态点颜色；只用设计令牌，与通知/危险/强调语义一致。 */
+const SESSION_RUN_DOT_CLASSES: Record<SessionRunBadge, string> = {
+  unconfirmed: 'bg-desk-danger',
+  failed: 'bg-desk-danger',
+  waiting: 'bg-desk-warning',
+  running: 'bg-desk-accent',
+  ready: 'bg-desk-line-strong',
+  suspended: 'bg-desk-line-strong',
+  transitioning: 'bg-desk-line-strong'
+}
+
+/**
+ * 「正在执行」是唯一随时间变化的状态，静止的点看不出还在工作；
+ * 复用消息区运行指示点的同一套动效约定（animate-pulse + motion-reduce 关闭），不新造动画。
+ */
+function runDotClass(badge: SessionRunBadge): string {
+  const tone = SESSION_RUN_DOT_CLASSES[badge]
+  return badge === 'running' ? `${tone} animate-pulse motion-reduce:animate-none` : tone
+}
+
+/** 路径展示末尾两段，兼容两种目录分隔符；完整路径仍在项目行提示与操作浮层中可读。 */
+function shortenPath(path: string): string {
+  const separators = [...path.matchAll(/[\\/]/g)]
+  const cut = separators.at(-2)
+  return cut === undefined ? path : `…${path.slice(cut.index)}`
+}
+
+function formatUpdatedAt(timestamp: number, full = false): string {
+  const date = new Date(timestamp)
+  if (Number.isNaN(date.getTime())) return '时间未知'
+  return date.toLocaleString('zh-CN', {
+    ...(full ? { year: 'numeric' as const } : {}),
+    month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false
+  })
+}
+
+function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+/** 展开折叠只改界面偏好，不改当前项目；单击项目行才会切换当前项目。 */
+function toggleProject(node: SidebarProjectNode): void {
+  closeMenu()
+  preferencesStore.setProjectExpanded(node.project.path, !node.expanded)
+}
+
+function setProjectExpanded(node: SidebarProjectNode, expanded: boolean): void {
+  if (node.expanded === expanded) return
+  preferencesStore.setProjectExpanded(node.project.path, expanded)
+}
+
+function selectProject(node: SidebarProjectNode): void {
+  closeMenu()
+  if (!isCurrentProject(node)) void projectStore.select(node.project.path, false)
+  setProjectExpanded(node, true)
+  emit('closeSidebar')
+}
+
+function chooseProject(): void {
+  closeMenu()
+  void projectStore.choose()
+  emit('closeSidebar')
+}
+
+function openSessionRow(node: SidebarProjectNode, row: SidebarSessionRow): void {
+  closeMenu()
+  if (isCurrentSession(node, row.session)) {
+    emit('closeSidebar')
+    return
+  }
+  void sessionStore.open(row.session.sessionId, false, node.project.path)
+  emit('closeSidebar')
+}
+
+/** 未绑定实例只有「转当前会话」一个动作：它没有会话身份，打开请求会复用同一实例。 */
+function focusUnboundRun(node: SidebarProjectNode): void {
+  closeMenu()
+  void sessionStore.open(null, false, node.project.path)
+  emit('closeSidebar')
+}
+
+/**
+ * 在指定项目新建会话：闲置时空白聊天已经可用，只切换项目并把焦点交给输入框，不因点击入口启动 Pi；
+ * 已有 Runtime 时先切当前项目再新建，新会话因此始终归属被点击的项目。
+ */
+function createSessionIn(node: SidebarProjectNode): void {
+  closeMenu()
+  emit('closeSidebar')
+  const phase = runtimeView.value.phase
+  if (phase === 'idle' || phase === 'closed') {
+    if (!isCurrentProject(node)) void projectStore.select(node.project.path, false)
+    setProjectExpanded(node, true)
+    emit('requestNewSession')
+    return
+  }
+  void sessionStore.open(null, false, node.project.path)
+}
+
+/** 释放阻塞态会话的运行实例；只解除登记，不中断在途工作、不删除历史。 */
+function retryRunRelease(target: { readonly projectPath: string; readonly session: SessionSummary }): void {
+  const view = sessionRunsStore.viewOfSession(target.projectPath, target.session.sessionId)
+  closeMenu()
+  if (view === null) return
+  void sessionRunsStore.release(view.runId)
+}
 
 /** 项目与会话共用一个浮层；详情来自现有摘要，不新增会话修改或删除能力。 */
 type MenuTarget =
-  | { kind: 'project'; project: Project }
-  | { kind: 'session'; session: SessionSummary }
+  | { kind: 'project'; node: SidebarProjectNode }
+  | { kind: 'session'; projectPath: string; session: SessionSummary }
 
 const MENU_WIDTH = 232
 const menuTarget = ref<MenuTarget | null>(null)
@@ -210,127 +310,8 @@ watch([menuPopup, menuOpen], ([popup, open]) => {
 }, { flush: 'post' })
 onBeforeUnmount(() => menuResizeObserver?.disconnect())
 
-function selectSavedProject(path: string): void {
-  closeMenu()
-  if (path === projectStore.currentProject?.path) {
-    emit('closeSidebar')
-    return
-  }
-  void projectStore.select(path, false)
-  emit('closeSidebar')
-}
-
-function chooseProject(): void {
-  closeMenu()
-  void projectStore.choose()
-  emit('closeSidebar')
-}
-
-function openSavedSession(sessionId: string): void {
-  closeMenu()
-  if (sessionId === currentSessionId.value) return
-  void sessionStore.open(sessionId, false)
-  emit('closeSidebar')
-}
-
-function createSession(): void {
-  closeMenu()
-  // 闲置或已关闭时空白聊天已可用：不因点击入口启动 Pi，只请外层把焦点交给输入框。
-  if (runtimeView.value.phase !== 'idle' && runtimeView.value.phase !== 'closed') {
-    void sessionStore.open(null, false)
-  } else {
-    emit('requestNewSession')
-  }
-  emit('closeSidebar')
-}
-
-function sessionTitle(session: SessionSummary): string {
-  return session.preview?.trim()
-    || (session.sessionId === currentSessionId.value ? '当前会话' : '未命名会话')
-}
-
-/** 尚未落盘的当前会话没有文件时间，显示进行中而不是伪造时间。 */
-function sessionMeta(session: SessionSummary): string {
-  const badge = sessionRunState(session)
-  // 需要动作或正在工作的状态优先于时间；已就绪的驻留实例保持安静，仍显示时间。
-  if (badge !== null && badge !== 'ready') return SESSION_RUN_LABELS[badge]
-  return isUnsavedCurrent(session) ? '进行中' : formatUpdatedAt(session.updatedAt)
-}
-
-/**
- * 回退（Pi 的 fork）产生的新会话标注来源：回退会新建会话文件并保留原文件，两个文件都在同一目录里，
- * 不标注就会被当成两条互不相干的会话。优先显示来源会话的标题，来源不在当前列表时退回 id 前缀。
- */
-function sessionForkLabel(session: SessionSummary): string | null {
-  const sourceId = session.forkedFromSessionId
-  if (sourceId === null) return null
-  const source = sessions.value.find(candidate => candidate.sessionId === sourceId)
-  return `分叉自 ${source === undefined ? `${sourceId.slice(0, 8)}…` : sessionTitle(source)}`
-}
-
-/** 各会话的运行状态文案；等待回应、未确认退出与已回收必须与普通空闲区分开。 */
-const SESSION_RUN_LABELS: Record<SessionRunBadge, string> = {
-  unconfirmed: '上次退出未确认',
-  failed: '宿主已失败',
-  waiting: '等待回应',
-  running: '正在执行',
-  ready: '已就绪',
-  suspended: '已回收，发送时恢复',
-  transitioning: '正在切换'
-}
-
-/** 运行状态点颜色；只用设计令牌，与通知/危险/强调语义一致。 */
-const SESSION_RUN_DOT_CLASSES: Record<SessionRunBadge, string> = {
-  unconfirmed: 'bg-desk-danger',
-  failed: 'bg-desk-danger',
-  waiting: 'bg-desk-warning',
-  running: 'bg-desk-accent',
-  ready: 'bg-desk-line-strong',
-  suspended: 'bg-desk-line-strong',
-  transitioning: 'bg-desk-line-strong'
-}
-
-/** 按会话 id 取运行状态展示；未登记的会话返回 null，界面按普通历史条目展示。 */
-function sessionRunState(session: SessionSummary): SessionRunBadge | null {
-  return sessionRunsStore.viewOfSession(projectStore.currentProject?.path ?? null, session.sessionId)?.badge ?? null
-}
-
-/** 阻塞态（未确认退出或宿主已失败）的会话需要用户显式释放，其他状态不需要这个动作。 */
-function needsRelease(session: SessionSummary): boolean {
-  const badge = sessionRunState(session)
-  return badge === 'unconfirmed' || badge === 'failed'
-}
-
-/** 状态点颜色；未登记的会话不渲染状态点，调用方已用 `v-if` 保证。 */
-function sessionRunDotClass(session: SessionSummary): string {
-  const badge = sessionRunState(session)
-  return badge === null ? '' : SESSION_RUN_DOT_CLASSES[badge]
-}
-
-function formatUpdatedAt(timestamp: number, full = false): string {
-  const date = new Date(timestamp)
-  if (Number.isNaN(date.getTime())) return '时间未知'
-  return date.toLocaleString('zh-CN', {
-    ...(full ? { year: 'numeric' as const } : {}),
-    month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false
-  })
-}
-
-function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
-}
-
-/** 路径展示末尾两段，兼容两种目录分隔符；完整路径仍在项目条目与操作浮层中可读。 */
-function shortenPath(path: string): string {
-  const separators = [...path.matchAll(/[\\/]/g)]
-  const cut = separators.at(-2)
-  return cut === undefined ? path : `…${path.slice(cut.index)}`
-}
-
 function isProjectMenuOpen(id: string): boolean {
-  return menuOpen.value && menuTarget.value?.kind === 'project' && menuTarget.value.project.id === id
+  return menuOpen.value && menuTarget.value?.kind === 'project' && menuTarget.value.node.project.id === id
 }
 
 function isSessionMenuOpen(id: string): boolean {
@@ -415,17 +396,71 @@ function onMenuFocusOut(event: FocusEvent): void {
 function requestProjectRemoval(): void {
   const target = menuTarget.value
   closeMenu()
-  if (target?.kind === 'project') emit('removeProject', target.project)
+  if (target?.kind === 'project') emit('removeProject', target.node.project)
+}
+
+/** 浮层里的会话打开与会话行同一口径：先按需切换当前项目，再提交会话。 */
+function openSessionFromMenu(): void {
+  const target = menuTarget.value
+  closeMenu()
+  if (target?.kind !== 'session') return
+  if (target.session.sessionId === currentSessionId.value
+    && samePath(target.projectPath, projectStore.currentProject?.path ?? null)) {
+    emit('closeSidebar')
+    return
+  }
+  void sessionStore.open(target.session.sessionId, false, target.projectPath)
+  emit('closeSidebar')
+}
+
+/** 浮层里被指向的运行实例状态；非阻塞态不提供释放动作。 */
+const menuRunView = computed(() => {
+  const target = menuTarget.value
+  if (target?.kind !== 'session') return null
+  return sessionRunsStore.viewOfSession(target.projectPath, target.session.sessionId)
+})
+
+const menuRunNeedsRelease = computed(() => (
+  menuRunView.value?.badge === 'unconfirmed' || menuRunView.value?.badge === 'failed'
+))
+
+/** 路径比较折叠大小写，与主进程和树的归属判定同一口径。 */
+function samePath(left: string | null, right: string | null): boolean {
+  if (left === null || right === null) return left === right
+  return left.toLowerCase() === right.toLowerCase()
+}
+
+/** 会话菜单标题与会话行同一口径：优先文件里的首条用户消息。 */
+function menuSessionTitle(session: SessionSummary): string {
+  const preview = session.preview?.trim()
+  if (preview !== undefined && preview !== '') return preview
+  return session.sessionId === currentSessionId.value ? '当前会话' : '未命名会话'
 }
 
 watch(() => props.sidebarCollapsed, collapsed => {
   if (collapsed) closeMenu()
 })
 watch(currentProjectId, () => closeMenu())
-watch([projects, sessions], () => {
+/** 浮层指向的项目或会话从树里消失时收起，不让动作落在一个已不存在的目标上。 */
+watch(nodes, (list) => {
   const target = menuTarget.value
-  if (target?.kind === 'project' && !projects.value.some(p => p.id === target.project.id)) closeMenu()
-  if (target?.kind === 'session' && !sessions.value.some(s => s.sessionId === target.session.sessionId)) closeMenu()
+  if (target === null) return
+  if (target.kind === 'project') {
+    if (!list.some(node => node.project.id === target.node.project.id)) closeMenu()
+    return
+  }
+  const node = list.find(candidate => samePath(candidate.project.path, target.projectPath))
+  if (node === undefined || !node.sessions.some(row => row.session.sessionId === target.session.sessionId)) {
+    closeMenu()
+  }
+})
+
+onMounted(() => {
+  nowTimer = setInterval(() => { now.value = Date.now() }, 60_000)
+})
+
+onBeforeUnmount(() => {
+  if (nowTimer !== null) clearInterval(nowTimer)
 })
 </script>
 
@@ -439,154 +474,167 @@ watch([projects, sessions], () => {
   >
     <!-- 内层保持展开宽度，外层只裁剪；折叠时长标题不反复换行，滚动容器也不重建。 -->
     <div class="sidebar-content">
-      <section class="project-sidebar-section-panel" aria-labelledby="project-nav-heading">
-        <header class="project-sidebar-header">
-          <h2 id="project-nav-heading" class="project-sidebar-heading">项目</h2>
-          <AppButton variant="unstyled" class="project-sidebar-add" :disabled="projectBusy" @click="chooseProject">
-            <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
-            <span>{{ choosing ? '正在打开…' : '添加项目' }}</span>
-          </AppButton>
-        </header>
-        <LayoutGroup id="sidebar-projects">
-          <Motion as="div" layout-scroll class="project-sidebar-scroll scroll-area" :aria-busy="projectBusy || projectView.phase === 'loading'">
-            <p v-if="projectStorageNotice" role="status" class="sidebar-notice is-warning">{{ projectStorageNotice }}</p>
-            <p v-if="projectActionError" role="alert" class="sidebar-notice is-error">{{ projectActionError.message }}</p>
-            <p v-if="projectView.phase === 'loading'" role="status" class="sidebar-empty">正在读取项目列表…</p>
-            <div v-else-if="projectView.phase === 'error'" class="sidebar-empty">
-              <p role="alert" class="sidebar-error">{{ projectView.error.message }}</p>
-              <AppButton variant="unstyled" class="project-sidebar-add" @click="projectStore.initialize()">重试</AppButton>
-            </div>
-            <p v-else-if="projects.length === 0" class="sidebar-empty">尚无项目，从上方添加项目目录。</p>
-            <TransitionGroup v-else name="sidebar-list" tag="ul" class="project-sidebar-list" :css="projectListMotion">
-              <li v-for="project in projects" :key="project.id">
-                <div
-                  class="project-sidebar-row"
-                  :class="{ 'is-active': project.id === currentProjectId, 'is-menu-open': isProjectMenuOpen(project.id) }"
-                  @contextmenu.prevent="openMenu({ kind: 'project', project }, $event)"
-                  @keydown="onRowKeydown({ kind: 'project', project }, $event)"
-                >
-                  <Motion v-if="project.id === currentProjectId" as="span" layout-id="project-selection" class="sidebar-selection" :initial="false" :transition="selectionTransition" :style="{ borderRadius: '6px' }" aria-hidden="true" />
-                  <AppButton
-                    variant="unstyled" class="project-sidebar-item"
-                    :aria-current="project.id === currentProjectId ? 'true' : undefined"
-                    :title="`${project.name}\n${project.path}`" :disabled="projectBusy"
-                    @click="selectSavedProject(project.path)"
-                  >
-                    <svg class="project-sidebar-mark sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" /><path d="M3 10h18" /></svg>
-                    <span class="project-sidebar-copy">
-                      <span class="project-sidebar-name">{{ project.name }}</span>
-                      <span class="project-sidebar-path">{{ shortenPath(project.path) }}</span>
-                    </span>
-                  </AppButton>
-                  <AppButton
-                    variant="unstyled" class="sidebar-menu-trigger" data-sidebar-menu-trigger
-                    :disabled="projectBusy" :aria-label="`项目 ${project.name} 的更多操作`"
-                    aria-haspopup="dialog" :aria-expanded="isProjectMenuOpen(project.id)"
-                    :aria-controls="isProjectMenuOpen(project.id) ? 'sidebar-actions' : undefined"
-                    @click.stop="openMenu({ kind: 'project', project }, $event, true)"
-                  >
-                    <svg class="sidebar-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.5" /><circle cx="12" cy="12" r="1.5" /><circle cx="19" cy="12" r="1.5" /></svg>
-                  </AppButton>
-                </div>
-              </li>
-            </TransitionGroup>
-          </Motion>
-        </LayoutGroup>
-      </section>
+      <header class="project-sidebar-header">
+        <h2 id="project-nav-heading" class="project-sidebar-heading">项目</h2>
+        <AppButton variant="unstyled" class="project-sidebar-add" :disabled="projectBusy" @click="chooseProject">
+          <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
+          <span>{{ choosing ? '正在打开…' : '添加项目' }}</span>
+        </AppButton>
+      </header>
 
-      <section class="session-sidebar-section" aria-labelledby="session-nav-heading">
-        <header class="session-sidebar-header">
-          <h2 id="session-nav-heading" class="project-sidebar-heading">会话</h2>
-          <AppButton variant="unstyled" class="project-sidebar-add" :disabled="projectStore.currentProject === null || sessionBusy" @click="createSession">
-            <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
-            <span>新建</span>
-          </AppButton>
-        </header>
-        <LayoutGroup id="sidebar-sessions">
-          <Motion as="div" layout-scroll class="session-sidebar-scroll scroll-area" :aria-busy="sessionBusy">
-            <p v-if="projectStore.currentProject === null" class="sidebar-empty">选择项目后显示会话。</p>
-            <p v-else-if="sessionView.phase === 'loading'" role="status" class="sidebar-empty">正在读取会话…</p>
-            <div v-else-if="sessionView.phase === 'error'" class="sidebar-empty">
-              <p role="alert" class="sidebar-error">{{ sessionView.error.message }}</p>
-              <AppButton variant="unstyled" class="project-sidebar-add" @click="sessionStore.refresh()">重试</AppButton>
-            </div>
-            <p v-else-if="visibleSessions.length === 0" class="sidebar-empty">还没有保存的会话，开始对话后会显示在这里。</p>
-            <TransitionGroup v-else name="sidebar-list" tag="ul" class="session-sidebar-list" :css="sessionListMotion">
-              <li v-for="session in visibleSessions" :key="session.sessionId">
-                <div
-                  class="session-sidebar-row"
-                  :class="{ 'is-active': session.sessionId === currentSessionId, 'is-menu-open': isSessionMenuOpen(session.sessionId) }"
-                  @contextmenu.prevent="openMenu({ kind: 'session', session }, $event)"
-                  @keydown="onRowKeydown({ kind: 'session', session }, $event)"
+      <LayoutGroup id="sidebar-tree">
+        <!-- `layout-scroll` 让共享选中背景在容器滚动时仍量到正确位置。 -->
+        <Motion as="div" layout-scroll class="sidebar-tree-scroll scroll-area" :aria-busy="projectBusy || projectView.phase === 'loading'">
+          <p v-if="projectStorageNotice" role="status" class="sidebar-notice is-warning">{{ projectStorageNotice }}</p>
+          <p v-if="projectActionError" role="alert" class="sidebar-notice is-error">{{ projectActionError.message }}</p>
+          <p v-if="sessionActionError" role="alert" class="sidebar-notice is-error">{{ sessionActionError.message }}</p>
+          <p v-if="sessionRunsStore.releaseError !== null" role="alert" class="sidebar-notice is-error">{{ sessionRunsStore.releaseError }}</p>
+
+          <p v-if="projectView.phase === 'loading'" role="status" class="sidebar-empty">正在读取项目列表…</p>
+          <div v-else-if="projectView.phase === 'error'" class="sidebar-empty">
+            <p role="alert" class="sidebar-error">{{ projectView.error.message }}</p>
+            <AppButton variant="unstyled" class="project-sidebar-add" @click="projectStore.initialize()">重试</AppButton>
+          </div>
+          <p v-else-if="projects.length === 0" class="sidebar-empty">尚无项目，从上方添加项目目录。</p>
+          <TransitionGroup v-else name="sidebar-list" tag="ul" class="sidebar-tree" :css="projectListMotion">
+            <li v-for="node in nodes" :key="node.project.id">
+              <div
+                class="sidebar-tree-row is-project"
+                :class="{ 'is-active': isCurrentProject(node), 'is-menu-open': isProjectMenuOpen(node.project.id) }"
+                @contextmenu.prevent="openMenu({ kind: 'project', node }, $event)"
+                @keydown="onRowKeydown({ kind: 'project', node }, $event)"
+              >
+                <Motion v-if="isCurrentProject(node)" as="span" layout-id="project-selection" class="sidebar-project-rail" :initial="false" :transition="selectionTransition" aria-hidden="true" />
+                <AppButton
+                  variant="unstyled" class="sidebar-chevron"
+                  :aria-expanded="node.expanded" :aria-controls="childrenId(node)"
+                  :aria-label="`${node.expanded ? '折叠' : '展开'}项目 ${node.project.name}`"
+                  :disabled="projectBusy"
+                  @click="toggleProject(node)"
+                  @keydown.left.prevent="setProjectExpanded(node, false)"
+                  @keydown.right.prevent="setProjectExpanded(node, true)"
                 >
-                  <Motion v-if="session.sessionId === currentSessionId" as="span" :layout-id="`session-selection-${currentProjectId}`" class="sidebar-selection" :initial="false" :transition="selectionTransition" :style="{ borderRadius: '6px' }" aria-hidden="true" />
-                  <AppButton
-                    variant="unstyled" class="session-sidebar-item"
-                    :aria-current="session.sessionId === currentSessionId ? 'true' : undefined"
-                    :title="sessionTitle(session)" :disabled="sessionBusy"
-                    @click="openSavedSession(session.sessionId)"
-                  >
-                    <span class="session-sidebar-copy">
-                      <span class="session-sidebar-preview">{{ sessionTitle(session) }}</span>
-                      <span class="session-sidebar-meta">
-                        <span
-                          v-if="sessionRunState(session) !== null"
-                          class="mr-1 inline-block size-1.5 shrink-0 rounded-full align-middle"
-                          :class="sessionRunDotClass(session)"
-                          aria-hidden="true"
-                        />{{ sessionMeta(session) }}
-                      </span>
-                      <!-- 回退产生的会话标注来源，避免与原会话看起来像两条重复条目。 -->
-                      <span v-if="sessionForkLabel(session) !== null" class="session-sidebar-meta">
-                        {{ sessionForkLabel(session) }}
-                      </span>
-                    </span>
-                  </AppButton>
-                  <AppButton
-                    v-if="!isPendingRunSession(session) && !isUnsavedCurrent(session)"
-                    variant="unstyled" class="sidebar-menu-trigger" data-sidebar-menu-trigger
-                    :disabled="sessionBusy" :aria-label="`会话 ${sessionTitle(session)} 的更多操作`"
-                    aria-haspopup="dialog" :aria-expanded="isSessionMenuOpen(session.sessionId)"
-                    :aria-controls="isSessionMenuOpen(session.sessionId) ? 'sidebar-actions' : undefined"
-                    @click.stop="openMenu({ kind: 'session', session }, $event, true)"
-                  >
-                    <svg class="sidebar-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.5" /><circle cx="12" cy="12" r="1.5" /><circle cx="19" cy="12" r="1.5" /></svg>
-                  </AppButton>
+                  <svg class="sidebar-icon sidebar-chevron-mark" :class="{ 'is-expanded': node.expanded }" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6" /></svg>
+                </AppButton>
+                <AppButton
+                  variant="unstyled" class="sidebar-tree-item is-project"
+                  :aria-current="isCurrentProject(node) ? 'true' : undefined"
+                  :title="`${node.project.name}\n${node.project.path}`" :disabled="projectBusy"
+                  @click="selectProject(node)"
+                >
+                  <svg class="sidebar-project-mark sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" /><path d="M3 10h18" /></svg>
+                  <span class="sidebar-tree-copy">
+                    <span class="sidebar-project-name">{{ node.project.name }}</span>
+                    <span class="sidebar-project-path">{{ shortenPath(node.project.path) }}</span>
+                  </span>
+                </AppButton>
+                <span class="sidebar-row-tail">
+                  <!-- 折叠时也要能看到该项目有活动：展开后由会话行自己表达。 -->
+                  <span v-if="!node.expanded && node.activity !== null" class="session-run-dot" :class="runDotClass(node.activity)" aria-hidden="true" />
+                  <span class="sidebar-row-actions">
+                    <AppButton
+                      variant="unstyled" class="sidebar-row-action"
+                      :disabled="projectBusy" :aria-label="`在项目 ${node.project.name} 新建会话`"
+                      @click.stop="createSessionIn(node)"
+                    >
+                      <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
+                    </AppButton>
+                    <AppButton
+                      variant="unstyled" class="sidebar-row-action" data-sidebar-menu-trigger
+                      :disabled="projectBusy" :aria-label="`项目 ${node.project.name} 的更多操作`"
+                      aria-haspopup="dialog" :aria-expanded="isProjectMenuOpen(node.project.id)"
+                      :aria-controls="isProjectMenuOpen(node.project.id) ? 'sidebar-actions' : undefined"
+                      @click.stop="openMenu({ kind: 'project', node }, $event, true)"
+                    >
+                      <svg class="sidebar-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.5" /><circle cx="12" cy="12" r="1.5" /><circle cx="19" cy="12" r="1.5" /></svg>
+                    </AppButton>
+                  </span>
+                </span>
+              </div>
+
+              <!-- 展开折叠用 0fr→1fr 过渡；折叠后内容不可聚焦，也不进入无障碍树。 -->
+              <div
+                class="sidebar-tree-children"
+                :class="{ 'is-expanded': node.expanded }"
+                :id="childrenId(node)"
+                :inert="!node.expanded"
+              >
+                <div class="sidebar-tree-children-inner">
+                  <p v-if="node.view.phase === 'loading'" role="status" class="sidebar-empty is-nested">正在读取会话…</p>
+                  <div v-else-if="node.view.phase === 'error'" class="sidebar-empty is-nested">
+                    <p role="alert" class="sidebar-error">{{ node.view.error.message }}</p>
+                    <AppButton variant="unstyled" class="project-sidebar-add" @click="sessionStore.ensureLoaded(node.project.path, true)">重试</AppButton>
+                  </div>
+                  <p v-else-if="node.sessions.length === 0 && node.unboundRuns.length === 0" class="sidebar-empty is-nested">
+                    还没有保存的会话，开始对话后会显示在这里。
+                  </p>
+                  <ul v-else class="sidebar-session-list sidebar-session-scroll scroll-area" :ref="element => registerSessionScroller(node.project.id, element)">
+                    <li v-for="row in node.sessions" :key="row.session.sessionId">
+                      <div
+                        class="sidebar-tree-row is-session"
+                        :class="{ 'is-active': isCurrentSession(node, row.session), 'is-menu-open': isSessionMenuOpen(row.session.sessionId) }"
+                        @contextmenu.prevent="openMenu({ kind: 'session', projectPath: node.project.path, session: row.session }, $event)"
+                        @keydown="onRowKeydown({ kind: 'session', projectPath: node.project.path, session: row.session }, $event)"
+                      >
+                        <Motion v-if="isCurrentSession(node, row.session)" as="span" :layout-id="`session-selection-${node.project.id}`" class="sidebar-selection" :initial="false" :transition="selectionTransition" :style="{ borderRadius: '5px' }" aria-hidden="true" />
+                        <AppButton
+                          variant="unstyled" class="sidebar-tree-item is-session"
+                          :aria-current="isCurrentSession(node, row.session) ? 'true' : undefined"
+                          :title="row.title" :disabled="sessionBusy"
+                          @click="openSessionRow(node, row)"
+                        >
+                          <span class="sidebar-session-title">{{ row.title }}</span>
+                          <!-- 分叉来源只用字形占位，完整来源与时间一样留在操作浮层里。 -->
+                          <span v-if="row.forkedFrom !== null" class="sidebar-session-fork" :title="`分叉自 ${row.forkedFrom}`" aria-hidden="true">⑂</span>
+                        </AppButton>
+                        <span class="sidebar-row-tail">
+                          <span v-if="row.badge !== null" class="session-run-dot" :class="runDotClass(row.badge)" aria-hidden="true" />
+                          <span class="sidebar-session-meta">{{ row.meta }}</span>
+                          <span class="sidebar-row-actions">
+                            <!-- 没有文件条目的会话只提供阻塞态的释放动作，其余信息不存在。 -->
+                            <AppButton
+                              v-if="!row.pending || row.needsRelease"
+                              variant="unstyled" class="sidebar-row-action" data-sidebar-menu-trigger
+                              :disabled="sessionBusy" :aria-label="`会话 ${row.title} 的更多操作`"
+                              aria-haspopup="dialog" :aria-expanded="isSessionMenuOpen(row.session.sessionId)"
+                              :aria-controls="isSessionMenuOpen(row.session.sessionId) ? 'sidebar-actions' : undefined"
+                              @click.stop="openMenu({ kind: 'session', projectPath: node.project.path, session: row.session }, $event, true)"
+                            >
+                              <svg class="sidebar-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.5" /><circle cx="12" cy="12" r="1.5" /><circle cx="19" cy="12" r="1.5" /></svg>
+                            </AppButton>
+                          </span>
+                        </span>
+                      </div>
+                    </li>
+                    <!-- 尚未绑定会话的运行实例：没有会话身份也没有文件条目，单独列一行才能被看到和切回。 -->
+                    <li v-for="run in node.unboundRuns" :key="`unbound-${run.runId}`">
+                      <div class="sidebar-tree-row is-session">
+                        <AppButton
+                          variant="unstyled" class="sidebar-tree-item is-session"
+                          :title="'尚未发送第一条消息的新会话'" :disabled="sessionBusy"
+                          @click="focusUnboundRun(node)"
+                        >
+                          <span class="sidebar-session-title">未命名会话</span>
+                        </AppButton>
+                        <span class="sidebar-row-tail">
+                          <span class="session-run-dot" :class="runDotClass(run.badge)" aria-hidden="true" />
+                          <span class="sidebar-session-meta">
+                            {{ run.badge === 'ready' ? '尚未发送' : SESSION_RUN_LABELS[run.badge] }}
+                          </span>
+                        </span>
+                      </div>
+                    </li>
+                  </ul>
+                  <p v-if="node.skipped > 0 || node.truncated > 0" role="status" class="sidebar-list-notice is-nested">
+                    <span v-if="node.skipped > 0">已跳过 {{ node.skipped }} 个无法读取或不属于该项目的文件。</span>
+                    <span v-if="node.truncated > 0">另有 {{ node.truncated }} 条较早会话未列出。</span>
+                  </p>
                 </div>
-              </li>
-            </TransitionGroup>
-            <p v-if="sessionActionError" role="alert" class="sidebar-notice is-error">{{ sessionActionError.message }}</p>
-            <p v-if="sessionRunsStore.releaseError !== null" role="alert" class="sidebar-notice is-error">{{ sessionRunsStore.releaseError }}</p>
-            <!-- 尚未绑定会话的运行实例：没有会话身份也没有文件条目，单独列一行才能被看到和切回。 -->
-            <ul v-if="unboundRunRows.length > 0" class="session-sidebar-list">
-              <li v-for="run in unboundRunRows" :key="`unbound-${run.runId}`">
-                <div class="session-sidebar-row">
-                  <AppButton
-                    variant="unstyled" class="session-sidebar-item"
-                    :title="'尚未发送第一条消息的新会话'" :disabled="sessionBusy"
-                    @click="focusUnboundRun"
-                  >
-                    <span class="session-sidebar-copy">
-                      <span class="session-sidebar-preview">未命名会话</span>
-                      <span class="session-sidebar-meta">
-                        <span
-                          class="mr-1 inline-block size-1.5 shrink-0 rounded-full align-middle"
-                          :class="SESSION_RUN_DOT_CLASSES[run.badge]"
-                          aria-hidden="true"
-                        />{{ run.badge === 'ready' ? '尚未发送' : SESSION_RUN_LABELS[run.badge] }}
-                      </span>
-                    </span>
-                  </AppButton>
-                </div>
-              </li>
-            </ul>
-            <p v-if="projectStore.currentProject !== null && sessionView.phase === 'ready' && (skipped > 0 || truncated > 0)" role="status" class="sidebar-list-notice">
-              <span v-if="skipped > 0">已跳过 {{ skipped }} 个无法读取或不属于当前项目的文件。</span>
-              <span v-if="truncated > 0">另有 {{ truncated }} 条较早会话未列出。</span>
-            </p>
-          </Motion>
-        </LayoutGroup>
-      </section>
+              </div>
+            </li>
+          </TransitionGroup>
+        </Motion>
+      </LayoutGroup>
 
       <footer class="project-sidebar-footer">
         <AppButton
@@ -613,29 +661,32 @@ watch([projects, sessions], () => {
       >
         <template v-if="menuTarget.kind === 'project'">
           <div class="sidebar-menu-details">
-            <p class="sidebar-menu-title">{{ menuTarget.project.name }}</p>
-            <p class="sidebar-menu-path">{{ menuTarget.project.path }}</p>
+            <p class="sidebar-menu-title">{{ menuTarget.node.project.name }}</p>
+            <p class="sidebar-menu-path">{{ menuTarget.node.project.path }}</p>
           </div>
+          <AppButton variant="unstyled" class="project-sidebar-menu-item" :disabled="projectBusy" @click="createSessionIn(menuTarget.node)">
+            新建会话
+          </AppButton>
           <AppButton variant="unstyled" class="project-sidebar-menu-item is-danger" :disabled="projectBusy" @click="requestProjectRemoval">从列表移除</AppButton>
         </template>
         <template v-else>
           <div class="sidebar-menu-details">
-            <p class="sidebar-menu-title">{{ sessionTitle(menuTarget.session) }}</p>
+            <p class="sidebar-menu-title">{{ menuSessionTitle(menuTarget.session) }}</p>
             <dl class="sidebar-menu-metadata">
               <dt>会话 ID</dt><dd class="sidebar-session-id">{{ menuTarget.session.sessionId }}</dd>
               <dt>最近活动</dt><dd>{{ formatUpdatedAt(menuTarget.session.updatedAt, true) }}</dd>
               <dt>文件大小</dt><dd>{{ formatSize(menuTarget.session.sizeBytes) }}</dd>
             </dl>
           </div>
-          <AppButton variant="unstyled" class="project-sidebar-menu-item" :disabled="sessionBusy || menuTarget.session.sessionId === currentSessionId" @click="openSavedSession(menuTarget.session.sessionId)">
+          <AppButton variant="unstyled" class="project-sidebar-menu-item" :disabled="sessionBusy || menuTarget.session.sessionId === currentSessionId" @click="openSessionFromMenu">
             {{ menuTarget.session.sessionId === currentSessionId ? '当前会话' : '打开会话' }}
           </AppButton>
-          <!-- 阻塞态的会话只能靠重启应用恢复；这里给出唯一恢复动作，失败时占用仍保留。 -->
+          <!-- 阻塞态的会话只能靠释放运行实例恢复；这里给出唯一恢复动作，失败时占用仍保留。 -->
           <AppButton
-            v-if="needsRelease(menuTarget.session)"
+            v-if="menuRunNeedsRelease"
             variant="unstyled" class="project-sidebar-menu-item"
             :disabled="sessionRunsStore.releasing"
-            @click="retryRunRelease(menuTarget.session)"
+            @click="retryRunRelease(menuTarget)"
           >
             {{ sessionRunsStore.releasing ? '正在释放…' : '重试释放运行实例' }}
           </AppButton>

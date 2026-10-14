@@ -1,10 +1,31 @@
-/** 只定义 Pi Session 列表、打开与重新加载 IPC 的固定通道、结果类型与跨进程响应校验。 */
+/** 只定义 Pi Session 列表（按项目）、打开与重新加载 IPC 的固定通道、请求与结果类型及跨进程响应校验。 */
 import type { RuntimeErrorCode } from './runtime-api'
 
 export const SESSION_LIST_CHANNEL = 'desktop:session-list'
 export const SESSION_OPEN_CHANNEL = 'desktop:session-open'
 /** 重新加载 Pi 资源：在同一 SDK 宿主进程内重建该会话的 services，并尽量恢复当前会话；`allowInterrupt` 与会话打开同义。 */
 export const SESSION_RELOAD_CHANNEL = 'desktop:session-reload'
+
+/**
+ * 会话列表请求：显式给出要读取的项目路径。侧栏按项目树展示会话，列表读取不再隐式取当前项目；
+ * 主进程只接受已添加项目的规范绝对路径，页面不能借它读取任意目录。
+ */
+export interface SessionListRequest {
+  readonly projectPath: string
+}
+
+/** 路径长度上限；与界面偏好中的路径字段同口径，只拒绝明显异常的值。 */
+const MAX_PROJECT_PATH_LENGTH = 4096
+
+/** 列表请求只放行一个非空的项目路径字符串，不接受多余字段。 */
+export function isSessionListRequest(value: unknown): value is SessionListRequest {
+  if (!isRecord(value)) return false
+  if (Object.keys(value).some((key) => key !== 'projectPath')) return false
+  const { projectPath } = value
+  return typeof projectPath === 'string'
+    && projectPath !== ''
+    && projectPath.length <= MAX_PROJECT_PATH_LENGTH
+}
 
 /**
  * 会话摘要只读会话文件的元数据：`createdAt` 来自文件头部的时间戳，`updatedAt` 是文件最后修改
@@ -30,8 +51,8 @@ export interface SessionList {
   /** 超过列表上限被省略的会话数。 */
   readonly truncated: number
   /**
-   * 本次实际读取的项目路径；未选择项目时为 null。
-   * 页面据此丢弃已切换项目的迟到结果，不把旧项目列表当成新项目的。
+   * 本次实际读取的项目路径；等于请求中的路径，未选择项目时不可能出现（列表请求必须带项目）。
+   * 页面据此把结果归入对应项目的分片，不把旧项目的列表当成新项目的。
    */
   readonly projectPath: string | null
 }
@@ -66,7 +87,8 @@ export type SessionOpenResult =
   | { readonly ok: false; readonly error: SessionError }
 
 export interface SessionApi {
-  readonly listSessions: () => Promise<SessionListResult>
+  /** 读取指定项目的会话列表；项目必须是已添加项目，不要求它是当前项目。 */
+  readonly listSessions: (request: SessionListRequest) => Promise<SessionListResult>
   /**
    * 打开会话；`sessionId` 为 null 表示新建，非空时必须属于当前项目。
    * 新建会话的默认模型由 Pi 自己的 settings.json 决定，不能在这里指定。

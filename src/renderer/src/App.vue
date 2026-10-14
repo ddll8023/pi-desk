@@ -140,10 +140,11 @@ function onTrustCancelled(): void {
   sessionStore.cancelPending()
 }
 
-/** 前台切换不再结束任何运行实例，这里只在项目上下文变化后刷新会话列表。 */
+/** 前台切换不再结束任何运行实例；这里只在项目上下文变化后补读该项目的会话列表（其他项目已读过的分片不受影响）。 */
 watch(currentProject, (project, previous) => {
   if (project?.path === previous?.path) return
-  void sessionStore.refresh()
+  if (project === null) return
+  void sessionStore.ensureLoaded(project.path, true)
 })
 
 /**

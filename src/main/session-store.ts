@@ -1,12 +1,13 @@
 /**
- * 当前项目会话文件的唯一读取者：会话目录定位、摘要列表与单条会话的存在性校验。
+ * 项目会话文件的唯一读取者：会话目录定位、摘要列表与单条会话的存在性校验。
  *
  * 会话文件由 Pi 管理（`<agent-dir>/sessions/--<cwd munged>--/<时间>_<会话 id>.jsonl`），本模块只按
  * 有界读取拿到首部元数据与首条用户消息开头，不解析消息模型、不写入也不删除任何会话数据；
  * 首条用户消息若是 `/skill:` 展开的技能调用，预览只取技能名与追加文本，不把技能正文当会话标题；
  * 并为 SDK 接管提供只读的目标身份复核（目录归属、头部身份与读取期间是否变化），
- * 该复核不接受越过当前项目会话目录的路径引用。
- * 路径归一化在 project-path.ts，启动与切换编排在 session-manager.ts。
+ * 该复核不接受越过该项目会话目录的路径引用。
+ * 读取范围由调用方给出的项目路径决定，不读当前项目；路径归一化在 project-path.ts，
+ * 列表、打开与重载编排在 session-manager.ts。
  */
 import type { Stats } from 'node:fs'
 import { open, readdir, realpath, stat } from 'node:fs/promises'
@@ -39,7 +40,7 @@ interface CachedSummary {
   readonly projectPath: string
   readonly size: number
   readonly mtimeMs: number
-  /** 无法解析或不属于当前项目的文件缓存为 null，避免每次列表重复读取。 */
+  /** 无法解析或不属于该项目的文件缓存为 null，避免每次列表重复读取。 */
   readonly summary: SessionSummary | null
 }
 
@@ -212,7 +213,7 @@ function forkedFromSessionId(header: Record<string, unknown>, sessionId: string)
   return parentId
 }
 
-/** 头部记录决定会话归属：分组目录名会歧义，cwd 不符的文件不属于当前项目。 */
+/** 头部记录决定会话归属：分组目录名会歧义，cwd 不符的文件不属于该项目。 */
 async function readSummary(
   filePath: string,
   projectPath: string,
@@ -307,7 +308,7 @@ export async function listSessions(projectPath: string): Promise<SessionList> {
 
 /**
  * SDK 目标授权：只读复核规范目录、文件、头部身份及读取期间是否变化。
- * 路径引用不能越过当前项目会话目录；不使用持久化 SessionManager 做预检。
+ * 路径引用不能越过该项目会话目录；不使用持久化 SessionManager 做预检。
  */
 export async function resolveSdkSessionFile(
   projectPath: string,
@@ -316,12 +317,12 @@ export async function resolveSdkSessionFile(
   try {
     const requested = reference.kind === 'id'
       ? await resolveSessionFile(projectPath, reference.sessionId) : reference.sessionFile
-    if (requested === null || !isAbsolute(requested)) throw new SessionStorageError('当前项目下找不到目标会话。')
+    if (requested === null || !isAbsolute(requested)) throw new SessionStorageError('该项目下找不到目标会话。')
     const [directory, filePath] = await Promise.all([
       realpath(getProjectSessionDir(projectPath)), realpath(requested)
     ])
     if (!isSamePath(dirname(filePath), directory)) {
-      throw new SessionStorageError('目标会话不属于当前项目的会话目录。')
+      throw new SessionStorageError('目标会话不属于该项目的会话目录。')
     }
     const before = await stat(filePath, { bigint: true })
     if (!before.isFile() || !filePath.endsWith('.jsonl')) throw new SessionStorageError('目标不是会话文件。')
@@ -346,7 +347,7 @@ export async function resolveSdkSessionFile(
 }
 
 /**
- * 在当前项目的分组目录内解析会话文件；返回绝对路径，找不到或不属于该项目时返回 null。
+ * 在该项目的分组目录内解析会话文件；返回绝对路径，找不到或不属于该项目时返回 null。
  * 结果只在主进程内用于存在性校验，不跨 IPC 交给页面。
  */
 export async function resolveSessionFile(

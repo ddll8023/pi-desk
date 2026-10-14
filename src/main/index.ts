@@ -17,7 +17,7 @@ import {
   PREFERENCES_SET_QUICK_SEND_CHANNEL
 } from '../shared/preferences-api'
 import type { ModelDisplayResult, PreferencesErrorCode, PreferencesResult, QuickSendResult } from '../shared/preferences-api'
-import { isModelDisplayPreference, isQuickSendPreference, isUiTheme } from '../shared/preferences-api'
+import { isUiPreferences, isModelDisplayPreference, isQuickSendPreference } from '../shared/preferences-api'
 import type { UiTheme } from '../shared/preferences-api'
 import {
   PROJECT_ADD_CHANNEL,
@@ -48,6 +48,7 @@ import type {
   SessionListResult,
   SessionOpenResult
 } from '../shared/session-api'
+import { isSessionListRequest } from '../shared/session-api'
 import {
   SESSION_RUNS_STATE_CHANNEL,
   SESSION_RUNS_EVENT,
@@ -709,7 +710,7 @@ function registerProjectFileHandlers(pageUrl: string): void {
   )
 }
 
-/** 只接受会话 id、显式中断确认和新会话模型；恢复会话禁止覆盖模型，归属与文件解析由主进程完成。 */
+/** 只接受会话 id 与显式中断确认；新会话的默认模型由 Pi 自己的 settings.json 决定，会话归属与文件解析由主进程完成。 */
 function registerSessionHandlers(pageUrl: string): void {
   handle(
     SESSION_LIST_CHANNEL,
@@ -717,10 +718,15 @@ function registerSessionHandlers(pageUrl: string): void {
       if (!isTrustedCaller(event, pageUrl)) {
         return sessionFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
       }
-      if (args.length !== 0) {
-        return sessionFailure('INVALID_REQUEST', '会话列表接口不接受参数。')
+      // 侧栏按项目树展示会话：列表必须显式给出项目路径，主进程只接受已添加项目。
+      if (args.length !== 1) {
+        return sessionFailure('INVALID_REQUEST', '会话列表接口只接受一个项目路径请求对象。')
       }
-      return sessionManager.list()
+      const request = args[0]
+      if (!isSessionListRequest(request)) {
+        return sessionFailure('INVALID_REQUEST', '会话列表接口只接受一个项目路径请求对象。')
+      }
+      return sessionManager.list(request.projectPath)
     }
   )
 
@@ -1397,25 +1403,13 @@ function registerPreferencesHandlers(pageUrl: string): void {
         return preferencesFailure('INVALID_REQUEST', '保存界面偏好接口只接受一个请求对象。')
       }
       const request = args[0]
-      if (typeof request !== 'object' || request === null || Array.isArray(request)) {
-        return preferencesFailure('INVALID_REQUEST', '界面偏好参数格式不正确。')
+      if (!isUiPreferences(request)) {
+        return preferencesFailure('INVALID_REQUEST', '界面偏好必须包含折叠状态、合法主题与展开的项目路径列表。')
       }
-      const fields = request as Record<string, unknown>
-      if (Object.keys(fields).some((key) => (
-        key !== 'sidebarCollapsed' && key !== 'theme'
-      ))) {
-        return preferencesFailure('INVALID_REQUEST', '界面偏好参数包含未支持的字段。')
-      }
-      const { sidebarCollapsed, theme } = fields
-      if (typeof sidebarCollapsed !== 'boolean') {
-        return preferencesFailure('INVALID_REQUEST', 'Sidebar 折叠状态必须是布尔值。')
-      }
-      if (!isUiTheme(theme)) {
-        return preferencesFailure('INVALID_REQUEST', '主题取值只能是 system、light 或 dark。')
-      }
+      const { sidebarCollapsed, theme, expandedProjects } = request
       // 主题在参数合法后立即生效：只读降级时同样切换本次运行的主题，与页面本地生效保持一致。
       applyNativeTheme(theme)
-      return preferencesManager.setUi({ sidebarCollapsed, theme })
+      return preferencesManager.setUi({ sidebarCollapsed, theme, expandedProjects })
     }
   )
 }
