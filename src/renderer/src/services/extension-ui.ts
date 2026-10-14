@@ -12,10 +12,12 @@ function unavailable(): ExtensionUiResult {
   }
 }
 
-function callFailed(): ExtensionUiResult {
+/** 桥接调用异常：保留原始错误文本，避免真实原因被固定文案盖掉。 */
+function callFailed(error: unknown): ExtensionUiResult {
+  const detail = error instanceof Error ? error.message : String(error)
   return {
     ok: false,
-    error: { code: 'BRIDGE_CALL_FAILED', message: '桌面桥接调用失败，可以重试。' }
+    error: { code: 'BRIDGE_CALL_FAILED', message: `桌面桥接调用失败，可以重试：${detail}` }
   }
 }
 
@@ -25,8 +27,8 @@ export async function getExtensionUiState(runId: number): Promise<ExtensionUiRes
   if (!bridge || typeof bridge.getExtensionUiState !== 'function') return unavailable()
   try {
     return await bridge.getExtensionUiState(runId)
-  } catch {
-    return callFailed()
+  } catch (error) {
+    return callFailed(error)
   }
 }
 
@@ -44,8 +46,8 @@ export async function respondExtensionDialog(
       dialogId,
       response
     )
-  } catch {
-    return callFailed()
+  } catch (error) {
+    return callFailed(error)
   }
 }
 

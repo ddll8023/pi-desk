@@ -47,7 +47,6 @@ interface HeadContent {
   readonly header: Record<string, unknown> | null
   readonly preview: string | null
 }
-
 /** 运行期缓存；键是项目令牌与会话文件绝对路径，每轮列表只保留仍然存在的文件。 */
 const summaryCache = new Map<string, CachedSummary>()
 
@@ -198,6 +197,21 @@ async function readHead(filePath: string): Promise<HeadContent> {
   }
 }
 
+/**
+ * 回退（Pi 的 fork）产生的来源会话 id：头部 `parentSession` 是来源会话文件的绝对路径，
+ * 这里只取文件名里的会话 id；文件不存在、路径不含合法 id 或与自身相同时返回 null。
+ */
+function forkedFromSessionId(header: Record<string, unknown>, sessionId: string): string | null {
+  const parentSession = header.parentSession
+  if (typeof parentSession !== 'string' || parentSession === '') return null
+  const name = parentSession.replace(/\\/g, '/').split('/').pop() ?? ''
+  // 文件名形如 `<时间>_<会话 id>.jsonl`；不匹配就当作没有来源，不猜内容。
+  const match = /^.+_([A-Za-z0-9._-]+)\.jsonl$/.exec(name)
+  const parentId = match?.[1] ?? null
+  if (parentId === null || !SESSION_ID_PATTERN.test(parentId) || parentId === sessionId) return null
+  return parentId
+}
+
 /** 头部记录决定会话归属：分组目录名会歧义，cwd 不符的文件不属于当前项目。 */
 async function readSummary(
   filePath: string,
@@ -219,7 +233,8 @@ async function readSummary(
     createdAt,
     updatedAt: info.mtimeMs,
     sizeBytes: info.size,
-    preview
+    preview,
+    forkedFromSessionId: forkedFromSessionId(header, sessionId)
   }
 }
 
@@ -234,7 +249,7 @@ export async function listSessions(projectPath: string): Promise<SessionList> {
       .filter((entry) => entry.isFile() && entry.name.endsWith('.jsonl') && !entry.name.startsWith('.'))
       .map((entry) => entry.name)
   } catch (error) {
-    if (isMissingPath(error)) return { sessions: [], skipped: 0, truncated: 0 }
+    if (isMissingPath(error)) return { sessions: [], skipped: 0, truncated: 0, projectPath }
     throw new SessionStorageError('无法读取本机会话目录。')
   }
 
@@ -285,7 +300,8 @@ export async function listSessions(projectPath: string): Promise<SessionList> {
   return {
     sessions: accepted.slice(0, MAX_SESSIONS),
     skipped,
-    truncated: Math.max(0, accepted.length - MAX_SESSIONS)
+    truncated: Math.max(0, accepted.length - MAX_SESSIONS),
+    projectPath
   }
 }
 

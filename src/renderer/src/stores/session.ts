@@ -3,6 +3,8 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import type { SessionError, SessionList, SessionSummary } from '../../../shared/session-api'
 import { useTrustStore } from './trust'
+import { useProjectStore } from './project'
+import { useRuntimeStore } from './runtime'
 import { listSessions, openSession, reloadSession } from '../services/session'
 
 /** `idle` 表示尚无当前项目、未读取列表；单次动作失败放在 `actionError`，不影响已加载的列表。 */
@@ -45,6 +47,14 @@ export const useSessionStore = defineStore('session', () => {
     truncated.value = list.truncated
   }
 
+  /**
+   * 列表是否属于当前项目：主进程会回报实际读取的项目路径，
+   * 请求期间前台项目已切换时旧列表不能进入新项目的视图。
+   */
+  function listMatchesCurrentProject(list: SessionList): boolean {
+    return list.projectPath === (useProjectStore().currentProject?.path ?? null)
+  }
+
   /** 首次挂载读取列表；这里不去重，重复调用会各自读取一次。 */
   async function initialize(): Promise<void> {
     await refresh()
@@ -67,6 +77,7 @@ export const useSessionStore = defineStore('session', () => {
       view.value = { phase: 'error', error: result.error }
       return
     }
+    if (!listMatchesCurrentProject(result.data)) return
     applyList(result.data)
     view.value = { phase: 'ready' }
   }
@@ -105,7 +116,8 @@ export const useSessionStore = defineStore('session', () => {
     try {
       const result = await openSession(sessionId, allowInterrupt)
       if (result.ok) {
-        applyList(result.data)
+        // 打开/新建的返回列表同样按项目复核；期间切了项目就不写入新项目的视图。
+        if (listMatchesCurrentProject(result.data)) applyList(result.data)
         pendingSessionId.value = null
         awaitingInterrupt.value = false
         view.value = { phase: 'ready' }
@@ -142,7 +154,7 @@ export const useSessionStore = defineStore('session', () => {
     try {
       const result = await reloadSession(allowInterrupt)
       if (result.ok) {
-        applyList(result.data)
+        if (listMatchesCurrentProject(result.data)) applyList(result.data)
         pendingReload.value = false
         awaitingInterrupt.value = false
         view.value = { phase: 'ready' }
@@ -154,9 +166,10 @@ export const useSessionStore = defineStore('session', () => {
         return
       }
       if (result.error.code === 'TRUST_REQUIRED') {
+        // 重载的目标是前台实例绑定的会话，它的归属项目可能不是当前项目；信任提示按该实例解析。
         pendingReload.value = true
         awaitingTrust.value = true
-        await useTrustStore().openPrompt()
+        await useTrustStore().openPrompt(useRuntimeStore().foregroundRunId)
         return
       }
       actionError.value = result.error

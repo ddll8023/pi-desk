@@ -1,4 +1,4 @@
-<!-- 顶栏模型选择器：未选项目时也读全局模型目录；选中即写为 Pi 自身默认模型（settings.json），Pi 就绪时同时切换当前会话；候选项排除设置中隐藏的模型。 -->
+<!-- 顶栏模型选择器：未选项目时也读全局模型目录；Pi 未启动时选中即写为 Pi 自身默认模型（settings.json），就绪时只切换当前会话模型，不联动全局默认；候选项排除设置中隐藏的模型。 -->
 <script setup lang="ts">
 import { computed, onUnmounted, ref } from 'vue'
 import { storeToRefs } from 'pinia'
@@ -186,12 +186,21 @@ const busy = computed(() => modelSwitchView.value.phase === 'switching'
   || piDefaultModelView.value.phase === 'loading' || piDefaultModelView.value.phase === 'saving'
   || (canPrepare.value && modelPreviewView.value.phase === 'loading'))
 
-/** 选中即生效：写为 Pi 自身默认模型；Pi 就绪时同时切换当前会话，两者都不乐观伪造结果。 */
+/**
+ * 选中即生效，但两种场景互不联动：
+ * Pi 就绪时只切换当前会话的模型（SDK 的会话切换默认不持久化全局默认），
+ * 未启动时写为 Pi 自身默认模型（settings.json），只影响以后新建的会话。
+ * 两条路径都不乐观伪造结果。
+ */
 async function chooseModel(value: string): Promise<void> {
   if (disabledReason.value !== null) return
   const model = models.value.find(candidate => modelKey(candidate.provider, candidate.id) === value)
   if (model === undefined) return
-  if (ready.value) void runtimeStore.switchModel(model.provider, model.id)
+  if (ready.value) {
+    void runtimeStore.switchModel(model.provider, model.id)
+    showNotice('success', `已切换当前会话模型：${model.name ?? model.id}`)
+    return
+  }
   const result = await runtimeStore.setPiDefaultModel({ provider: model.provider, modelId: model.id })
   if (result.ok) showNotice('success', `已设为 Pi 默认模型：${model.name ?? model.id}`)
   else showNotice('error', result.message)
@@ -237,7 +246,7 @@ function refreshModels(): void {
         :selected-meta="currentKey ? identity?.provider : undefined"
         :selected-badge="currentKey && identity ? providerBadge(identity.provider) : undefined"
         :disabled="disabledReason !== null"
-        :title="error ? `${currentIdentity}；${error}` : disabledReason ? `${currentIdentity}；${disabledReason}` : `${ready ? '当前会话模型' : 'Pi 默认模型'}：${currentIdentity}；点击选择，选中即设为 Pi 默认模型`"
+        :title="error ? `${currentIdentity}；${error}` : disabledReason ? `${currentIdentity}；${disabledReason}` : `${ready ? '当前会话模型' : 'Pi 默认模型'}：${currentIdentity}；点击选择${ready ? '，只切换当前会话，不改全局默认' : '，选中即设为 Pi 默认模型'}`"
         :aria-label="`${ready ? '当前会话模型' : 'Pi 默认模型'}：${currentIdentity}`"
         :aria-describedby="error ? 'runtime-model-error' : progress ? 'runtime-model-progress' : undefined"
         searchable

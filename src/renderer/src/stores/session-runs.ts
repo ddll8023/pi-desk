@@ -8,7 +8,7 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import type { SessionRunState, SessionRunsSnapshot } from '../../../shared/session-run-api'
-import { getSessionRuns, subscribeSessionRuns } from '../services/session-runs'
+import { getSessionRuns, releaseSessionRun, subscribeSessionRuns } from '../services/session-runs'
 
 /** 单个会话的展示状态；优先级从高到低：未确认退出 → 失败 → 等待回应 → 执行中 → 已就绪 → 打开/关闭中。 */
 export type SessionRunBadge =
@@ -25,8 +25,18 @@ export interface SessionRunView {
   readonly badge: SessionRunBadge
 }
 
+/** 未绑定会话的运行实例：点了「新建」但还没发出第一条消息，没有会话身份也没有文件条目。 */
+export interface UnboundSessionRun {
+  readonly runId: number
+  readonly projectPath: string | null
+  readonly badge: SessionRunBadge
+}
+
 export const useSessionRunsStore = defineStore('session-runs', () => {
   const runs = ref<readonly SessionRunState[]>([])
+  /** 最近一次释放动作的失败原因；只在侧栏展示，不改变运行状态本身。 */
+  const releaseError = ref<string | null>(null)
+  const releasing = ref(false)
   let releaseSubscription: (() => void) | null = null
 
   /** 先订阅、再取快照，避免初始化期间漏掉通知。 */
@@ -60,6 +70,42 @@ export const useSessionRunsStore = defineStore('session-runs', () => {
     runs.value.find(run => run.isForeground)?.runId ?? null
   ))
 
+  /**
+   * 尚未绑定会话的运行实例：它们没有会话条目，侧栏按运行身份单独列一行，
+   * 否则点了「新建」的实例在侧栏完全不可见。
+   */
+  const unboundRuns = computed<readonly UnboundSessionRun[]>(() => (
+    runs.value
+      .filter(run => run.sessionId === null)
+      .map(run => ({ runId: run.runId, projectPath: run.projectPath, badge: badgeOf(run) }))
+  ))
+
+  /**
+   * 释放一个未确认退出或宿主已失败的运行实例，让它回到可重新打开的状态。
+   * 只解除登记：不中断在途工作、不删除历史、不移除侧栏条目；失败原因如实保留。
+   */
+  async function release(runId: number): Promise<boolean> {
+    if (releasing.value) return false
+    releasing.value = true
+    releaseError.value = null
+    try {
+      const result = await releaseSessionRun(runId)
+      if (!result.ok) {
+        releaseError.value = result.error.message
+        return false
+      }
+      applySnapshot(result.data)
+      return true
+    } finally {
+      releasing.value = false
+    }
+  }
+
+  /** 关闭释放失败的提示；不重试、不改写占用状态。 */
+  function clearReleaseError(): void {
+    releaseError.value = null
+  }
+
   /** 会话行要展示的状态；未登记的会话没有运行状态，界面按普通历史条目展示。 */
   function viewOfSession(projectPath: string | null, sessionId: string | null): SessionRunView | null {
     const run = runOfSession(projectPath, sessionId)
@@ -83,8 +129,13 @@ export const useSessionRunsStore = defineStore('session-runs', () => {
   return {
     runs,
     foregroundRunId,
+    unboundRuns,
+    releaseError,
+    releasing,
     initialize,
     dispose,
+    release,
+    clearReleaseError,
     runOfSession,
     viewOfSession
   }

@@ -64,16 +64,18 @@ export class ProjectFileIndex {
   async search(query: string): Promise<ProjectFileSearchResult> {
     try {
       const root = this.options.currentProjectPath()
-      if (root === null) return this.empty()
+      if (root === null) return this.empty(null)
       const files = await this.filesOf(root)
-      return { ok: true, data: { entries: rankFiles(files, query) } }
+      // 结果报告实际检索的项目根：期间前台可能已经切走，由页面决定是否采纳。
+      return { ok: true, data: { entries: rankFiles(files, query), projectPath: root } }
     } catch {
-      return this.empty()
+      return this.empty(null)
     }
   }
 
-  private empty(): ProjectFileSearchResult {
-    return { ok: true, data: { entries: [] } }
+  /** 失败与无项目都按空结果返回，同样带上本次的项目根。 */
+  private empty(projectPath: string | null): ProjectFileSearchResult {
+    return { ok: true, data: { entries: [], projectPath } }
   }
 
   /** 取索引；根路径变化或缓存过期时重建。 */

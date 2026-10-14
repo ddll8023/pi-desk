@@ -62,7 +62,9 @@ const unsavedCurrentSession = computed<SessionSummary | null>(() => {
     createdAt: new Date().toISOString(),
     updatedAt: Date.now(),
     sizeBytes: 0,
-    preview: null
+    preview: null,
+    // 占位条目没有会话文件，也就没有回退来源。
+    forkedFromSessionId: null
   }
 })
 /**
@@ -82,7 +84,9 @@ const pendingRunSessions = computed<readonly SessionSummary[]>(() => {
       createdAt: new Date().toISOString(),
       updatedAt: Date.now(),
       sizeBytes: 0,
-      preview: null
+      preview: null,
+      // 占位条目没有会话文件，也就没有回退来源。
+      forkedFromSessionId: null
     })
   }
   return pending
@@ -111,6 +115,32 @@ function isPendingRunSession(session: SessionSummary): boolean {
   return pendingRunSessions.value.some((entry) => entry.sessionId === session.sessionId)
 }
 const sessionBusy = computed(() => opening.value || sessionView.value.phase === 'loading')
+
+/**
+ * 当前项目下尚未绑定会话的运行实例（点了「新建」但还没发出第一条消息）。
+ * 它们没有会话身份也没有文件条目，因此在会话列表外单独列一行，否则在侧栏完全不可见。
+ */
+const unboundRunRows = computed(() => (
+  sessionRunsStore.unboundRuns.filter(run => run.projectPath === (projectStore.currentProject?.path ?? null))
+))
+
+/** 未命名实例只有「转当前会话」一个动作：新建请求会复用同一项目的空绑定实例，不会另建宿主。 */
+function focusUnboundRun(): void {
+  closeMenu()
+  void sessionStore.open(null, false)
+  emit('closeSidebar')
+}
+
+/**
+ * 释放一个未确认退出或宿主已失败的运行实例：这是把该会话从阻塞态拉回可打开的唯一入口。
+ * 只解除登记，不中断在途工作、不删除历史；失败时占用保留，原因由 store 如实展示。
+ */
+function retryRunRelease(session: SessionSummary): void {
+  const view = sessionRunsStore.viewOfSession(projectStore.currentProject?.path ?? null, session.sessionId)
+  closeMenu()
+  if (view === null) return
+  void sessionRunsStore.release(view.runId)
+}
 const prefersReducedMotion = useReducedMotion()
 const selectionTransition = computed<NonNullable<Options['transition']>>(() => ({
   type: 'tween', duration: prefersReducedMotion.value ? 0 : 0.25,
@@ -227,6 +257,17 @@ function sessionMeta(session: SessionSummary): string {
   return isUnsavedCurrent(session) ? '进行中' : formatUpdatedAt(session.updatedAt)
 }
 
+/**
+ * 回退（Pi 的 fork）产生的新会话标注来源：回退会新建会话文件并保留原文件，两个文件都在同一目录里，
+ * 不标注就会被当成两条互不相干的会话。优先显示来源会话的标题，来源不在当前列表时退回 id 前缀。
+ */
+function sessionForkLabel(session: SessionSummary): string | null {
+  const sourceId = session.forkedFromSessionId
+  if (sourceId === null) return null
+  const source = sessions.value.find(candidate => candidate.sessionId === sourceId)
+  return `分叉自 ${source === undefined ? `${sourceId.slice(0, 8)}…` : sessionTitle(source)}`
+}
+
 /** 各会话的运行状态文案；等待回应与未确认退出必须与普通空闲区分开。 */
 const SESSION_RUN_LABELS: Record<SessionRunBadge, string> = {
   unconfirmed: '上次退出未确认',
@@ -250,6 +291,12 @@ const SESSION_RUN_DOT_CLASSES: Record<SessionRunBadge, string> = {
 /** 按会话 id 取运行状态展示；未登记的会话返回 null，界面按普通历史条目展示。 */
 function sessionRunState(session: SessionSummary): SessionRunBadge | null {
   return sessionRunsStore.viewOfSession(projectStore.currentProject?.path ?? null, session.sessionId)?.badge ?? null
+}
+
+/** 阻塞态（未确认退出或宿主已失败）的会话需要用户显式释放，其他状态不需要这个动作。 */
+function needsRelease(session: SessionSummary): boolean {
+  const badge = sessionRunState(session)
+  return badge === 'unconfirmed' || badge === 'failed'
 }
 
 /** 状态点颜色；未登记的会话不渲染状态点，调用方已用 `v-if` 保证。 */
@@ -487,6 +534,10 @@ watch([projects, sessions], () => {
                           aria-hidden="true"
                         />{{ sessionMeta(session) }}
                       </span>
+                      <!-- 回退产生的会话标注来源，避免与原会话看起来像两条重复条目。 -->
+                      <span v-if="sessionForkLabel(session) !== null" class="session-sidebar-meta">
+                        {{ sessionForkLabel(session) }}
+                      </span>
                     </span>
                   </AppButton>
                   <AppButton
@@ -503,6 +554,30 @@ watch([projects, sessions], () => {
               </li>
             </TransitionGroup>
             <p v-if="sessionActionError" role="alert" class="sidebar-notice is-error">{{ sessionActionError.message }}</p>
+            <p v-if="sessionRunsStore.releaseError !== null" role="alert" class="sidebar-notice is-error">{{ sessionRunsStore.releaseError }}</p>
+            <!-- 尚未绑定会话的运行实例：没有会话身份也没有文件条目，单独列一行才能被看到和切回。 -->
+            <ul v-if="unboundRunRows.length > 0" class="session-sidebar-list">
+              <li v-for="run in unboundRunRows" :key="`unbound-${run.runId}`">
+                <div class="session-sidebar-row">
+                  <AppButton
+                    variant="unstyled" class="session-sidebar-item"
+                    :title="'尚未发送第一条消息的新会话'" :disabled="sessionBusy"
+                    @click="focusUnboundRun"
+                  >
+                    <span class="session-sidebar-copy">
+                      <span class="session-sidebar-preview">未命名会话</span>
+                      <span class="session-sidebar-meta">
+                        <span
+                          class="mr-1 inline-block size-1.5 shrink-0 rounded-full align-middle"
+                          :class="SESSION_RUN_DOT_CLASSES[run.badge]"
+                          aria-hidden="true"
+                        />{{ run.badge === 'ready' ? '尚未发送' : SESSION_RUN_LABELS[run.badge] }}
+                      </span>
+                    </span>
+                  </AppButton>
+                </div>
+              </li>
+            </ul>
             <p v-if="projectStore.currentProject !== null && sessionView.phase === 'ready' && (skipped > 0 || truncated > 0)" role="status" class="sidebar-list-notice">
               <span v-if="skipped > 0">已跳过 {{ skipped }} 个无法读取或不属于当前项目的文件。</span>
               <span v-if="truncated > 0">另有 {{ truncated }} 条较早会话未列出。</span>
@@ -552,6 +627,15 @@ watch([projects, sessions], () => {
           </div>
           <AppButton variant="unstyled" class="project-sidebar-menu-item" :disabled="sessionBusy || menuTarget.session.sessionId === currentSessionId" @click="openSavedSession(menuTarget.session.sessionId)">
             {{ menuTarget.session.sessionId === currentSessionId ? '当前会话' : '打开会话' }}
+          </AppButton>
+          <!-- 阻塞态的会话只能靠重启应用恢复；这里给出唯一恢复动作，失败时占用仍保留。 -->
+          <AppButton
+            v-if="needsRelease(menuTarget.session)"
+            variant="unstyled" class="project-sidebar-menu-item"
+            :disabled="sessionRunsStore.releasing"
+            @click="retryRunRelease(menuTarget.session)"
+          >
+            {{ sessionRunsStore.releasing ? '正在释放…' : '重试释放运行实例' }}
           </AppButton>
         </template>
       </div>

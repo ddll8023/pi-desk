@@ -9,9 +9,11 @@ export const PROJECT_FILE_QUERY_MAX_CHARS = 128
 /**
  * 检索结果；`entries` 是相对当前项目根的 POSIX 风格路径，最多 50 条。
  * 未选择项目、目录不可读与没有匹配一样返回空数组，不区分成错误。
+ * `projectPath` 是本次实际检索的项目根；未选择项目时为 null。页面据此丢弃已切换项目的迟到结果。
  */
 export interface ProjectFileSearch {
   readonly entries: readonly string[]
+  readonly projectPath: string | null
 }
 
 export type ProjectFileSearchResult =
@@ -29,6 +31,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isProjectFileSearch(value: unknown): value is ProjectFileSearch {
   if (!isRecord(value)) return false
+  if (value.projectPath !== null && typeof value.projectPath !== 'string') return false
   return Array.isArray(value.entries)
     && value.entries.every((entry) => typeof entry === 'string' && entry !== '')
 }

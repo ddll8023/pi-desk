@@ -21,10 +21,12 @@ function unavailable(): { ok: false; error: RuntimeError } {
   }
 }
 
-function callFailed(): { ok: false; error: RuntimeError } {
+/** 桥接调用异常：保留原始错误文本，避免真实原因被固定文案盖掉。 */
+function callFailed(error: unknown): { ok: false; error: RuntimeError } {
+  const detail = error instanceof Error ? error.message : String(error)
   return {
     ok: false,
-    error: { code: 'BRIDGE_CALL_FAILED', message: '桌面桥接调用失败，可以重试。' }
+    error: { code: 'BRIDGE_CALL_FAILED', message: `桌面桥接调用失败，可以重试：${detail}` }
   }
 }
 
@@ -33,8 +35,8 @@ export async function getRuntimeStatus(): Promise<RuntimeResult> {
   if (!bridge || typeof bridge.getRuntimeStatus !== 'function') return unavailable()
   try {
     return await bridge.getRuntimeStatus()
-  } catch {
-    return callFailed()
+  } catch (error) {
+    return callFailed(error)
   }
 }
 
@@ -44,8 +46,8 @@ export async function abortRuntime(target: RuntimeTarget): Promise<RuntimeResult
   if (!bridge || typeof bridge.abortRuntime !== 'function') return unavailable()
   try {
     return await bridge.abortRuntime({ runId: target.runId, runtimeId: target.runtimeId })
-  } catch {
-    return callFailed()
+  } catch (error) {
+    return callFailed(error)
   }
 }
 
@@ -63,8 +65,8 @@ export async function sendPrompt(
       message,
       images.map((image) => ({ name: image.name, mimeType: image.mimeType, data: image.data }))
     )
-  } catch {
-    return callFailed()
+  } catch (error) {
+    return callFailed(error)
   }
 }
 
@@ -95,8 +97,8 @@ export async function getRuntimeProjection(target: RuntimeTarget): Promise<Proje
   if (!bridge || typeof bridge.getRuntimeProjection !== 'function') return unavailable()
   try {
     return await bridge.getRuntimeProjection({ runId: target.runId, runtimeId: target.runtimeId })
-  } catch {
-    return callFailed()
+  } catch (error) {
+    return callFailed(error)
   }
 }
 
@@ -106,8 +108,8 @@ export async function getRuntimeCapabilities(target: RuntimeTarget): Promise<Cap
   if (!bridge || typeof bridge.getRuntimeCapabilities !== 'function') return unavailable()
   try {
     return await bridge.getRuntimeCapabilities({ runId: target.runId, runtimeId: target.runtimeId })
-  } catch {
-    return callFailed()
+  } catch (error) {
+    return callFailed(error)
   }
 }
 

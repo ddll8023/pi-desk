@@ -79,10 +79,18 @@ import type {
 import {
   SESSION_RUNS_STATE_CHANNEL,
   SESSION_RUNS_EVENT,
+  SESSION_RUN_RELEASE_CHANNEL,
   isSessionRunsEvent,
-  isSessionRunsResult
+  isSessionRunsResult,
+  isSessionRunReleaseResult
 } from '../shared/session-run-api'
-import type { SessionRunApi, SessionRunsResult, SessionRunsSnapshot } from '../shared/session-run-api'
+import type {
+  SessionRunApi,
+  SessionRunReleaseRequest,
+  SessionRunReleaseResult,
+  SessionRunsResult,
+  SessionRunsSnapshot
+} from '../shared/session-run-api'
 import {
   EXTENSION_UI_RESPOND_CHANNEL,
   EXTENSION_UI_STATE_CHANNEL,
@@ -255,6 +263,10 @@ function invalidSessionRunsResponse(): SessionRunsResult {
   return { ok: false, error: { code: 'INTERNAL_ERROR', message: INVALID_SESSION_RUNS_RESPONSE } }
 }
 
+function invalidSessionRunReleaseResponse(): SessionRunReleaseResult {
+  return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_SESSION_RUNS_RESPONSE } }
+}
+
 function invalidPreferencesResponse(): PreferencesResult {
   return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_PREFERENCES_RESPONSE } }
 }
@@ -396,14 +408,25 @@ const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionAp
     }
   },
 
-  async getTrustStatus() {
-    const response: unknown = await ipcRenderer.invoke(TRUST_STATUS_CHANNEL)
+  /** 释放一个未确认退出或宿主已失败的运行实例；只搬运运行实例身份，不传其他字段。 */
+  async releaseSessionRun(request: SessionRunReleaseRequest) {
+    const response: unknown = await ipcRenderer.invoke(SESSION_RUN_RELEASE_CHANNEL, { runId: request.runId })
+    return isSessionRunReleaseResult(response) ? response : invalidSessionRunReleaseResponse()
+  },
+
+  async getTrustStatus(runId?: number) {
+    // 不传身份时保持零参数调用，让主进程按当前项目解析。
+    const response: unknown = runId === undefined
+      ? await ipcRenderer.invoke(TRUST_STATUS_CHANNEL)
+      : await ipcRenderer.invoke(TRUST_STATUS_CHANNEL, { runId })
     return isTrustStatusResult(response) ? response : invalidTrustResponse()
   },
 
-  async decideTrust(projectPath: string, decision: TrustDecisionInput) {
+  async decideTrust(projectPath: string, decision: TrustDecisionInput, runId?: number) {
     // 只搬运已声明的字段，不把页面传入的整个对象转交给主进程。
-    const request = { projectPath, decision }
+    const request = runId === undefined
+      ? { projectPath, decision }
+      : { projectPath, decision, runId }
     const response: unknown = await ipcRenderer.invoke(TRUST_DECIDE_CHANNEL, request)
     return isTrustDecisionResult(response) ? response : invalidTrustResponse()
   },

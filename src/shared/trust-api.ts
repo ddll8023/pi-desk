@@ -51,10 +51,21 @@ export type TrustDecisionResult =
   | { readonly ok: false; readonly error: DesktopError }
 
 export interface TrustApi {
-  /** 读取当前项目的信任状态与探测到的受保护资源。 */
-  readonly getTrustStatus: () => Promise<TrustStatusResult>
-  /** 保存、更新或清除（`unset`）当前项目的信任决定；只接受当前项目。 */
-  readonly decideTrust: (projectPath: string, decision: TrustDecisionInput) => Promise<TrustDecisionResult>
+  /**
+   * 读取信任状态与探测到的受保护资源。
+   * `runId` 为已登记运行实例身份时读该实例的归属项目（重载属于其他项目的会话时用），
+   * 不传时读当前项目。
+   */
+  readonly getTrustStatus: (runId?: number) => Promise<TrustStatusResult>
+  /**
+   * 保存、更新或清除（`unset`）信任决定；只接受当前项目或已登记运行实例的归属项目。
+   * `runId` 与 `getTrustStatus` 同义，用于把决定绑定到来源会话的项目。
+   */
+  readonly decideTrust: (
+    projectPath: string,
+    decision: TrustDecisionInput,
+    runId?: number
+  ) => Promise<TrustDecisionResult>
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

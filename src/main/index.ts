@@ -50,9 +50,15 @@ import type {
 } from '../shared/session-api'
 import {
   SESSION_RUNS_STATE_CHANNEL,
-  SESSION_RUNS_EVENT
+  SESSION_RUNS_EVENT,
+  SESSION_RUN_RELEASE_CHANNEL,
+  isSessionRunReleaseRequest
 } from '../shared/session-run-api'
-import type { SessionRunsResult, SessionRunsSnapshot } from '../shared/session-run-api'
+import type {
+  SessionRunReleaseResult,
+  SessionRunsResult,
+  SessionRunsSnapshot
+} from '../shared/session-run-api'
 import {
   EXTENSION_UI_RESPOND_CHANNEL,
   EXTENSION_UI_STATE_CHANNEL,
@@ -786,7 +792,7 @@ function registerSessionHandlers(pageUrl: string): void {
   )
 }
 
-/** 运行实例状态查询：零参数、只读注册表与宿主已持有状态。 */
+/** 运行实例状态查询与释放：都只操作注册表登记，不建立宿主、不删除历史。 */
 function registerSessionRunHandlers(pageUrl: string): void {
   handle(
     SESSION_RUNS_STATE_CHANNEL,
@@ -798,6 +804,26 @@ function registerSessionRunHandlers(pageUrl: string): void {
         return sessionRunsFailure('INVALID_REQUEST', '运行状态接口不接受参数。')
       }
       return { ok: true, data: { runs: sdkRuntime.listRunStates() } }
+    }
+  )
+
+  handle(
+    SESSION_RUN_RELEASE_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<SessionRunReleaseResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return { ok: false, error: { code: 'FORBIDDEN', message: '不允许此页面调用桌面接口。' } }
+      }
+      if (args.length !== 1 || !isSessionRunReleaseRequest(args[0])) {
+        return { ok: false, error: { code: 'INVALID_REQUEST', message: '释放运行实例只接受一个运行实例身份。' } }
+      }
+      try {
+        // 不中断在途工作：释放只在确实可释放时生效，未确认时占用保留并由错误如实报告。
+        const result = await sdkRuntime.releaseRun(args[0].runId, false)
+        if (!result.ok) return { ok: false, error: result.error }
+        return { ok: true, data: { runs: sdkRuntime.listRunStates() } }
+      } catch {
+        return { ok: false, error: { code: 'INTERNAL_ERROR', message: '释放运行实例时发生未预期的内部错误。' } }
+      }
     }
   )
 }
@@ -826,6 +852,18 @@ async function resolveTrustForCurrentProject(): Promise<{
 }
 
 /** Trust 查询与决定接口；决定只接受当前项目，防止页面改写其他项目的记录。 */
+/**
+ * 信任交互的目标项目：带运行实例身份时取该实例的归属项目（重载按被重载会话的归属项目复核，
+ * 可能不等于前台项目），不带身份时取当前项目。未登记的身份不解析成任何项目。
+ */
+function trustProjectOf(runId: unknown): string | null {
+  if (runId === undefined) return projectManager.currentProjectPath()
+  if (typeof runId !== 'number' || !Number.isSafeInteger(runId) || runId <= 0) return null
+  const run = sdkRuntime.listRunStates().find(candidate => candidate.runId === runId)
+  return run?.projectPath ?? null
+}
+
+/** Trust 查询与决定接口；目标项目按来源运行实例解析，未登记的身份不接受。 */
 function registerTrustHandlers(pageUrl: string): void {
   handle(
     TRUST_STATUS_CHANNEL,
@@ -833,11 +871,23 @@ function registerTrustHandlers(pageUrl: string): void {
       if (!isTrustedCaller(event, pageUrl)) {
         return trustFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
       }
-      if (args.length !== 0) {
-        return trustFailure('INVALID_REQUEST', '信任状态接口不接受参数。')
+      // 允许零参数（当前项目）或一个只含 runId 的请求对象（来源运行实例的归属项目）。
+      let runId: unknown
+      if (args.length === 1) {
+        const request = args[0]
+        if (typeof request !== 'object' || request === null || Array.isArray(request)) {
+          return trustFailure('INVALID_REQUEST', '信任状态参数格式不正确。')
+        }
+        const fields = request as Record<string, unknown>
+        if (Object.keys(fields).some((key) => key !== 'runId')) {
+          return trustFailure('INVALID_REQUEST', '信任状态参数包含未支持的字段。')
+        }
+        runId = fields.runId
+      } else if (args.length !== 0) {
+        return trustFailure('INVALID_REQUEST', '信任状态接口只接受零参数或一个请求对象。')
       }
       try {
-        return { ok: true, data: await trustManager.statusOf(projectManager.currentProjectPath()) }
+        return { ok: true, data: await trustManager.statusOf(trustProjectOf(runId)) }
       } catch (error) {
         return trustFailureFromError(error)
       }
@@ -858,23 +908,23 @@ function registerTrustHandlers(pageUrl: string): void {
         return trustFailure('INVALID_REQUEST', '信任决定参数格式不正确。')
       }
       const fields = request as Record<string, unknown>
-      if (Object.keys(fields).some((key) => key !== 'projectPath' && key !== 'decision')) {
+      if (Object.keys(fields).some((key) => key !== 'projectPath' && key !== 'decision' && key !== 'runId')) {
         return trustFailure('INVALID_REQUEST', '信任决定参数包含未支持的字段。')
       }
-      const { projectPath, decision } = fields
+      const { projectPath, decision, runId } = fields
       if (typeof projectPath !== 'string') {
         return trustFailure('INVALID_REQUEST', '项目目录必须是非空的绝对路径。')
       }
       if (!isTrustDecisionInput(decision)) {
         return trustFailure('INVALID_REQUEST', '信任决定取值只能是 trusted、untrusted 或 unset。')
       }
+      const allowedProjectPath = trustProjectOf(runId)
+      if (allowedProjectPath === null) {
+        return trustFailure('INVALID_REQUEST', '信任决定的目标不是当前项目，也不是已登记运行实例的归属项目。')
+      }
       try {
         const normalizedDecision: 'trusted' | 'untrusted' | null = decision === 'unset' ? null : decision
-        const status = await trustManager.decide(
-          projectPath,
-          normalizedDecision,
-          projectManager.currentProjectPath()
-        )
+        const status = await trustManager.decide(projectPath, normalizedDecision, allowedProjectPath)
         return { ok: true, data: status }
       } catch (error) {
         return trustFailureFromError(error)

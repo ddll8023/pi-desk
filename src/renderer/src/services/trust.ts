@@ -24,21 +24,25 @@ function callFailed(error: unknown): TrustStatusResult {
   }
 }
 
-/** 读取当前项目的信任状态与探测到的受保护资源。 */
-export async function getTrustStatus(): Promise<TrustStatusResult> {
+/** 读取信任状态与探测到的受保护资源；`runId` 给定时读该运行实例的归属项目。 */
+export async function getTrustStatus(runId?: number): Promise<TrustStatusResult> {
   const bridge = window.desktop
   if (!bridge || typeof bridge.getTrustStatus !== 'function') return unavailable()
   try {
-    return await bridge.getTrustStatus()
+    return await bridge.getTrustStatus(runId)
   } catch (error) {
     return callFailed(error)
   }
 }
 
-/** 保存、更新或清除（`unset`）当前项目的信任决定；只接受当前项目。 */
+/**
+ * 保存、更新或清除（`unset`）信任决定；只接受当前项目或已登记运行实例的归属项目。
+ * `runId` 把决定绑定到来源会话的项目，重载其他项目的会话时不必先切换前台项目。
+ */
 export async function decideTrust(
   projectPath: string,
-  decision: TrustDecisionInput
+  decision: TrustDecisionInput,
+  runId?: number
 ): Promise<TrustDecisionResult> {
   const bridge = window.desktop
   if (!bridge || typeof bridge.decideTrust !== 'function') {
@@ -51,7 +55,7 @@ export async function decideTrust(
     }
   }
   try {
-    return await bridge.decideTrust(projectPath, decision)
+    return await bridge.decideTrust(projectPath, decision, runId)
   } catch (error) {
     return callFailed(error)
   }

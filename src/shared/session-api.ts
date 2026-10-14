@@ -10,6 +10,9 @@ export const SESSION_RELOAD_CHANNEL = 'desktop:session-reload'
  * 会话摘要只读会话文件的元数据：`createdAt` 来自文件头部的时间戳，`updatedAt` 是文件最后修改
  * 时间（纪元毫秒），`preview` 是有界读取得到的首条用户消息文本（已剔除 Pi 注入的 `[Image: …]` 标记行与
  * `/skill:` 展开的技能块，空白折叠为单个空格），取不到时为 null。
+ *
+ * `forkedFromSessionId` 是回退（Pi 的 fork）产生的来源会话 id：回退会新建会话文件并保留原文件，
+ * 两个文件都留在同一目录里，界面需要能区分“这是从哪条会话分叉出来的”，不能把分叉当成重复条目。
  */
 export interface SessionSummary {
   readonly sessionId: string
@@ -17,6 +20,7 @@ export interface SessionSummary {
   readonly updatedAt: number
   readonly sizeBytes: number
   readonly preview: string | null
+  readonly forkedFromSessionId: string | null
 }
 
 export interface SessionList {
@@ -25,6 +29,11 @@ export interface SessionList {
   readonly skipped: number
   /** 超过列表上限被省略的会话数。 */
   readonly truncated: number
+  /**
+   * 本次实际读取的项目路径；未选择项目时为 null。
+   * 页面据此丢弃已切换项目的迟到结果，不把旧项目列表当成新项目的。
+   */
+  readonly projectPath: string | null
 }
 
 /** `sessionId` 为 null 表示新建会话；`allowInterrupt` 只有用户已确认时才为真。 */
@@ -107,11 +116,13 @@ function isSessionSummary(value: unknown): value is SessionSummary {
     && Number.isInteger(value.sizeBytes)
     && value.sizeBytes >= 0
     && (value.preview === null || typeof value.preview === 'string')
+    && (value.forkedFromSessionId === null || typeof value.forkedFromSessionId === 'string')
 }
 
 function isSessionList(value: unknown): value is SessionList {
   if (!isRecord(value)) return false
   if (!Array.isArray(value.sessions) || !value.sessions.every(isSessionSummary)) return false
+  if (value.projectPath !== null && typeof value.projectPath !== 'string') return false
   return typeof value.skipped === 'number'
     && Number.isInteger(value.skipped)
     && value.skipped >= 0

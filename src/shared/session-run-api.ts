@@ -1,7 +1,11 @@
-/** 只定义「会话运行状态」查询与事件的固定通道、载荷类型与跨进程校验；页面据此展示后台会话的运行、等待与未确认状态。 */
+/** 只定义「会话运行状态」查询、事件与释放请求的固定通道、载荷类型与跨进程校验；页面据此展示后台会话的运行、等待与未确认状态。 */
+import type { RuntimeError } from './runtime-api'
+import { isRuntimeError } from './runtime-api'
 
 export const SESSION_RUNS_STATE_CHANNEL = 'desktop:session-runs-state'
 export const SESSION_RUNS_EVENT = 'desktop:session-runs-changed'
+/** 释放一个未确认运行实例的占用；只解除登记，不删除历史、不移除侧栏条目。 */
+export const SESSION_RUN_RELEASE_CHANNEL = 'desktop:session-run-release'
 
 /** 运行实例生命周期阶段；`unconfirmed` 表示退出或关闭结果未确认，占用与状态都必须如实保留。 */
 export type SessionRunPhase = 'idle' | 'opening' | 'running' | 'closing' | 'unconfirmed'
@@ -41,11 +45,29 @@ export type SessionRunsResult =
       }
     }
 
+/** 释放请求：只接受一个运行实例身份。 */
+export interface SessionRunReleaseRequest {
+  readonly runId: number
+}
+
+/**
+ * 释放结果：成功返回刷新后的运行状态列表，失败沿用 Runtime 错误码族
+ * （未确认退出的实例释放失败时占用保留，必须如实报告而不是当作成功）。
+ */
+export type SessionRunReleaseResult =
+  | { readonly ok: true; readonly data: SessionRunsSnapshot }
+  | { readonly ok: false; readonly error: RuntimeError }
+
 export interface SessionRunApi {
   /** 读取应用内全部运行实例的粗粒度状态；不建立宿主、不触发任何会话操作。 */
   readonly getSessionRuns: () => Promise<SessionRunsResult>
   /** 订阅运行状态变化；返回释放函数，页面卸载时必须调用。 */
   readonly onSessionRunsChanged: (listener: (snapshot: SessionRunsSnapshot) => void) => () => void
+  /**
+   * 释放一个未确认退出或宿主已失败的运行实例的占用，让它回到可重新打开的状态。
+   * 不中断在途工作、不删除历史、不移除侧栏条目；释放未确认时占用保留并返回错误。
+   */
+  readonly releaseSessionRun: (request: SessionRunReleaseRequest) => Promise<SessionRunReleaseResult>
 }
 
 const SESSION_RUN_PHASES: readonly SessionRunPhase[] = ['idle', 'opening', 'running', 'closing', 'unconfirmed']
@@ -106,4 +128,21 @@ export function isSessionRunsResult(value: unknown): value is SessionRunsResult 
 /** 事件载荷与查询结果同形；契约不符时页面丢弃，由下一次事件或查询收敛。 */
 export function isSessionRunsEvent(value: unknown): value is SessionRunsSnapshot {
   return isSessionRunsSnapshot(value)
+}
+
+/** 释放请求只放行一个正整数运行实例身份。 */
+export function isSessionRunReleaseRequest(value: unknown): value is SessionRunReleaseRequest {
+  if (!isRecord(value)) return false
+  return typeof value.runId === 'number'
+    && Number.isSafeInteger(value.runId)
+    && value.runId > 0
+    && Object.keys(value).every(key => key === 'runId')
+}
+
+// 释放失败沿用 Runtime 错误码族；成功返回的是与查询同形的运行状态列表。
+export function isSessionRunReleaseResult(value: unknown): value is SessionRunReleaseResult {
+  if (!isRecord(value)) return false
+  if (value.ok === true) return isSessionRunsSnapshot(value.data)
+  if (value.ok !== false) return false
+  return isRuntimeError(value.error)
 }

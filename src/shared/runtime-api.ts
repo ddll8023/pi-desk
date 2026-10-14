@@ -773,7 +773,13 @@ export function isRuntimeResult(value: unknown): value is RuntimeResult {
   if (value.ok === true) return isRuntimeStatus(value.data)
   if (value.ok !== false || !isRecord(value.error)) return false
 
-  const { code, message } = value.error
+  return isRuntimeError(value.error)
+}
+
+/** 运行时错误对象校验：错误码必须在白名单内，供其他共享契约复用。 */
+export function isRuntimeError(value: unknown): value is RuntimeError {
+  if (!isRecord(value)) return false
+  const { code, message } = value
   return typeof message === 'string'
     && typeof code === 'string'
     && RUNTIME_ERROR_CODES.includes(code)

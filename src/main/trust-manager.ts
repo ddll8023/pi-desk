@@ -76,17 +76,18 @@ export class TrustManager {
   }
 
   /**
-   * 保存、更新或清除当前项目的决定，返回更新后的状态。
-   * `projectPath` 必须与当前项目一致（防止页面改写其他项目的决定）。
+   * 保存、更新或清除指定项目的决定，返回更新后的状态。
+   * `allowedProjectPath` 是调用方允许本次决定的唯一项目：调用方按来源会话的归属项目算出它，
+   * 重载一个属于其他项目的后台会话时不必先把前台项目切过去。
    */
   async decide(
     rawProjectPath: string,
     decision: TrustDecision | null,
-    currentProjectPath: string | null
+    allowedProjectPath: string | null
   ): Promise<TrustStatus> {
     const projectPath = await this.canonicalize(rawProjectPath)
-    if (currentProjectPath === null || projectPath !== currentProjectPath) {
-      throw new TrustManagerError('只能修改当前项目的信任决定。')
+    if (allowedProjectPath === null || projectPath !== allowedProjectPath) {
+      throw new TrustManagerError('只能修改当前项目或已登记运行实例归属项目的信任决定。')
     }
     await this.store.saveTrustDecision(projectPath, decision)
     this.cache.delete(projectPath)
