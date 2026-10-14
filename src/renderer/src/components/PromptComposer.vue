@@ -11,6 +11,8 @@ import { useResourceStore } from '../stores/resource'
 import { useProjectStore } from '../stores/project'
 import { useRuntimeStore } from '../stores/runtime'
 import { useSessionStore } from '../stores/session'
+import { isSessionKey, useSessionViewStore } from '../stores/session-view'
+import type { PendingImage } from '../stores/session-view'
 import AppButton from './ui/AppButton.vue'
 import UsageDetailDialog from './UsageDetailDialog.vue'
 
@@ -20,6 +22,7 @@ const projectStore = useProjectStore()
 const resourceStore = useResourceStore()
 const sessionStore = useSessionStore()
 const preferencesStore = usePreferencesStore()
+const sessionViewStore = useSessionViewStore()
 const { view: runtimeView, promptView, abortView, projectionSync, capabilitiesView, modelSwitchView,
   preparingPrompt, rewindView } = storeToRefs(runtimeStore)
 const { editorText, editorTextVersion } = storeToRefs(extensionStore)
@@ -50,13 +53,34 @@ watch(() => props.focusToken, () => {
   }, 4_000)
 })
 
-/** 待发送的图片附件：objectUrl 仅用于本地预览，发送时读取 base64 并释放。 */
-interface PendingImage {
-  readonly file: File
-  readonly objectUrl: string
-}
+/** 待发送的图片附件；预览地址的创建与释放都经会话状态，见 stores/session-view.ts。 */
 const pendingImages = ref<PendingImage[]>([])
 const imageInput = ref<HTMLInputElement | null>(null)
+
+/**
+ * 草稿与附件按会话保存：离开会话时存回该会话，切回时取走。空闲与未绑定实例没有独立历史，
+ * 输入随会话建立原样带走；首次发送只启动 Runtime 的意图属于即将建立的会话，此时不改内容。
+ */
+function applySessionInput(nextKey: string, previousKey: string | null): void {
+  if (startupRequested.value) return
+  if (previousKey !== null && isSessionKey(previousKey)) {
+    sessionViewStore.saveInput(previousKey, { draft: draft.value, images: pendingImages.value })
+  }
+  const restored = isSessionKey(nextKey) ? sessionViewStore.takeInput(nextKey) : null
+  if (restored !== null) {
+    draft.value = restored.draft
+    pendingImages.value = restored.images
+    return
+  }
+  // 会话之间必须隔离：目标会话没有留底时给干净状态；空闲与未绑定实例之间则原样带走。
+  if (previousKey !== null && isSessionKey(previousKey)) {
+    draft.value = ''
+    pendingImages.value = []
+  }
+}
+
+/** 会话切换只改输入归属，不改提交契约：草稿与附件始终属于当前会话。 */
+watch(() => sessionViewStore.key, (next, previous) => applySessionInput(next, previous ?? null), { flush: 'pre' })
 
 /** 快捷发送候选：与草稿内容无关，选中即用该短语发起一次提交；短语来自界面偏好，可在设置里编辑。 */
 const quickSendMessages = computed(() => preferencesStore.quickSendMessages)
@@ -265,7 +289,7 @@ function addImageFiles(files: readonly File[]): void {
       promptView.value = { phase: 'error', error: { code: 'INVALID_REQUEST', message: `最多携带 ${MAX_IMAGE_COUNT} 张图片。` } }
       break
     }
-    pendingImages.value = [...pendingImages.value, { file, objectUrl: URL.createObjectURL(file) }]
+    pendingImages.value = [...pendingImages.value, sessionViewStore.createImage(file)]
   }
 }
 
@@ -310,7 +334,7 @@ function onDrop(event: DragEvent): void {
 function removeImage(objectUrl: string): void {
   const target = pendingImages.value.find((entry) => entry.objectUrl === objectUrl)
   if (target === undefined) return
-  URL.revokeObjectURL(objectUrl)
+  sessionViewStore.releaseImages([target])
   pendingImages.value = pendingImages.value.filter((entry) => entry.objectUrl !== objectUrl)
 }
 
@@ -378,7 +402,12 @@ function onDocumentPointerDown(event: PointerEvent): void {
 onUnmounted(() => {
   cancelFileSearch()
   if (newSessionHintTimer !== null) clearTimeout(newSessionHintTimer)
-  for (const entry of pendingImages.value) URL.revokeObjectURL(entry.objectUrl)
+  // 已绑定会话的输入交给会话状态留底，切回时恢复；空闲与未绑定状态没有独立历史，直接释放预览地址。
+  if (isSessionKey(sessionViewStore.key)) {
+    sessionViewStore.saveInput(sessionViewStore.key, { draft: draft.value, images: pendingImages.value })
+  } else {
+    sessionViewStore.releaseImages(pendingImages.value)
+  }
   document.removeEventListener('pointerdown', onDocumentPointerDown)
 })
 
@@ -506,6 +535,8 @@ async function submit(): Promise<void> {
 
   if (runtimeView.value.phase !== 'ready') return
   const target = runtimeView.value.snapshot
+  // 提交固定来源会话：附件读取期间切走时，迟到结果只能落在原会话上。
+  const originKey = sessionViewStore.key
   const message = draft.value
   const attachments = [...pendingImages.value]
   submitting.value = true
@@ -518,15 +549,17 @@ async function submit(): Promise<void> {
     // 附件读取期间允许继续编辑草稿，但不允许把旧提交送入已切换的实例或会话。
     if (runtimeView.value.phase !== 'ready' || runtimeView.value.snapshot.runId !== target.runId
       || runtimeView.value.snapshot.runtimeId !== target.runtimeId
-      || runtimeView.value.snapshot.info?.sessionId !== target.info?.sessionId || sessionStore.opening) return
+      || runtimeView.value.snapshot.info?.sessionId !== target.info?.sessionId
+      || sessionViewStore.key !== originKey || sessionStore.opening) return
     const before = promptView.value
     await runtimeStore.send(message, images)
     if (promptView.value === before || promptView.value.phase !== 'accepted') return
 
     startupRequested.value = false
     if (draft.value === message) draft.value = ''
+    // 只丢弃本次提交的附件：提交期间新加的图片不属于这次发送。
     const sent = new Set(attachments.map(entry => entry.objectUrl))
-    for (const entry of attachments) URL.revokeObjectURL(entry.objectUrl)
+    sessionViewStore.releaseImages(attachments)
     pendingImages.value = pendingImages.value.filter(entry => !sent.has(entry.objectUrl))
     textarea.value?.focus()
   } catch (error) {
@@ -826,6 +859,12 @@ function acceptFileSuggestion(path: string | undefined): void {
 }
 
 onMounted(() => {
+  // 视图重建（例如从设置页返回）时取回当前会话的输入；没有留底时保持空状态。
+  const restored = isSessionKey(sessionViewStore.key) ? sessionViewStore.takeInput(sessionViewStore.key) : null
+  if (restored !== null) {
+    draft.value = restored.draft
+    pendingImages.value = restored.images
+  }
   textarea.value?.focus()
   autoGrow()
   document.addEventListener('pointerdown', onDocumentPointerDown)

@@ -10,6 +10,7 @@ import { useResourceStore } from './stores/resource'
 import { useRuntimeStore } from './stores/runtime'
 import { useSessionStore } from './stores/session'
 import { useSessionRunsStore } from './stores/session-runs'
+import { useSessionViewStore } from './stores/session-view'
 import { useTrustStore } from './stores/trust'
 import type { Project } from '../../shared/project-api'
 import AppTopBar from './components/AppTopBar.vue'
@@ -31,6 +32,7 @@ const resourceStore = useResourceStore()
 const runtimeStore = useRuntimeStore()
 const sessionStore = useSessionStore()
 const sessionRunsStore = useSessionRunsStore()
+const sessionViewStore = useSessionViewStore()
 const { currentProject, pendingAddition, pendingAdditionDecision } = storeToRefs(projectStore)
 const { awaitingInterrupt, pendingReload, pendingSessionId } = storeToRefs(sessionStore)
 const { sidebarCollapsed, ready: preferencesReady } = storeToRefs(preferencesStore)
@@ -173,6 +175,8 @@ onMounted(() => {
   void projectStore.initialize()
   void resourceStore.initialize()
   void runtimeStore.initialize()
+  // 会话身份要在运行状态到达之前就绪，因此紧随 Runtime 之后初始化。
+  sessionViewStore.initialize()
   void sessionStore.initialize()
   void sessionRunsStore.initialize()
 })
@@ -182,6 +186,7 @@ onUnmounted(() => {
   extensionStore.dispose()
   resourceStore.dispose()
   runtimeStore.dispose()
+  sessionViewStore.dispose()
   sessionRunsStore.dispose()
 })
 </script>

@@ -8,6 +8,8 @@ import type { RuntimeRewindRequest } from '../../../shared/runtime-api'
 import { useProjectStore } from '../stores/project'
 import { useRuntimeStore } from '../stores/runtime'
 import { useSessionStore } from '../stores/session'
+import { isSessionKey, useSessionViewStore } from '../stores/session-view'
+import type { SessionReading } from '../stores/session-view'
 import ChatMessageItem from './ChatMessageItem.vue'
 import ChatOutline from './ChatOutline.vue'
 import AppButton from './ui/AppButton.vue'
@@ -27,6 +29,7 @@ const READING_OFFSET_PX = 20
 const projectStore = useProjectStore()
 const runtimeStore = useRuntimeStore()
 const sessionStore = useSessionStore()
+const sessionViewStore = useSessionViewStore()
 const { view: runtimeView, messages, tools, projectionSync, projectionTruncated, droppedMessages, droppedTools,
   promptView, preparingPrompt, modelSwitchView, rewindView } = storeToRefs(runtimeStore)
 
@@ -39,6 +42,8 @@ const outlineLayout = ref<{ left: number; width: number } | null>(null)
 /** 大纲跳转保持阅读位置，不被程序滚动或内容收缩产生的 scroll 事件重新开启粘底。 */
 let outlineTargetId: string | null = null
 let lastScrollTop = 0
+/** 待恢复的滚动位置：投影分批到达时反复应用，同步完成后再结束恢复。 */
+let pendingRestore: number | null = null
 let scrollFrame: number | null = null
 let outlineFrame: number | null = null
 let resizeObserver: ResizeObserver | null = null
@@ -192,15 +197,57 @@ function isNearBottom(element: HTMLElement): boolean {
   return element.scrollHeight - element.scrollTop - element.clientHeight <= STICK_THRESHOLD_PX
 }
 
+/** 当前会话的阅读状态：粘底时位置无关紧要，离开底部时按最后一次滚动位置恢复。 */
+function currentReading(): SessionReading {
+  return { stickToBottom: stickToBottom.value, scrollTop: lastScrollTop }
+}
+
+/**
+ * 阅读位置按会话保存：离开会话时存回，切回时取走。空闲与未绑定实例没有独立历史，状态原样带走。
+ * 调用点必须在视图换成新会话之前执行：晚读会把新会话的滚动位置当成旧会话的位置。
+ */
+function applySessionReading(nextKey: string, previousKey: string | null): void {
+  if (previousKey !== null && isSessionKey(previousKey)) {
+    sessionViewStore.saveReading(previousKey, currentReading())
+  }
+  const restored = isSessionKey(nextKey) ? sessionViewStore.takeReading(nextKey) : null
+  if (restored !== null) {
+    stickToBottom.value = restored.stickToBottom
+    pendingRestore = restored.stickToBottom ? null : restored.scrollTop
+    return
+  }
+  // 会话之间必须隔离：目标会话没有留底时按默认贴底处理，不沿用上一个会话的位置。
+  if (previousKey !== null && isSessionKey(previousKey)) {
+    stickToBottom.value = true
+    pendingRestore = null
+  }
+}
+
+/** 会话切换：先存回原会话的阅读位置，再取走目标会话的位置。 */
+watch(() => sessionViewStore.key, (next, previous) => applySessionReading(next, previous ?? null), { flush: 'pre' })
+
+/** 恢复中的滚动位置：内容还在长高时反复应用，投影同步后确认位置并结束恢复。 */
+function applyPendingRestore(): void {
+  if (pendingRestore === null) return
+  const element = scroller.value
+  if (element === null) return
+  element.scrollTop = pendingRestore
+  lastScrollTop = element.scrollTop
+  if (projectionSync.value === 'synced') pendingRestore = null
+}
+
 /** 内容变高造成底部距离增加，不等于用户上滚；只有实际向上移动才暂停跟随。 */
 function onScroll(): void {
   const element = scroller.value
   if (element === null) return
-  if (outlineTargetId === null) {
-    if (isNearBottom(element)) stickToBottom.value = true
-    else if (element.scrollTop < lastScrollTop) stickToBottom.value = false
+  // 恢复期间的位置由目标值决定：不让中间态改写粘底判定，也不让被裁剪的位置覆盖目标。
+  if (pendingRestore === null) {
+    if (outlineTargetId === null) {
+      if (isNearBottom(element)) stickToBottom.value = true
+      else if (element.scrollTop < lastScrollTop) stickToBottom.value = false
+    }
+    lastScrollTop = element.scrollTop
   }
-  lastScrollTop = element.scrollTop
   scheduleOutlineUpdate()
 }
 
@@ -225,6 +272,7 @@ function scheduleScrollToBottom(): void {
 
 function jumpToBottom(): void {
   outlineTargetId = null
+  pendingRestore = null
   stickToBottom.value = true
   lastScrollTop = scroller.value?.scrollTop ?? 0
   scheduleScrollToBottom()
@@ -259,6 +307,7 @@ function jumpToMessage(messageId: string): void {
   if (scrollFrame !== null) cancelAnimationFrame(scrollFrame)
   scrollFrame = null
   outlineTargetId = messageId
+  pendingRestore = null
   stickToBottom.value = false
   activeOutlineId.value = messageId
   const top = element.scrollTop + target.getBoundingClientRect().top - element.getBoundingClientRect().top - READING_OFFSET_PX
@@ -327,6 +376,7 @@ function scheduleOutlineUpdate(): void {
 }
 
 function onLayoutChange(): void {
+  applyPendingRestore()
   scheduleScrollToBottom()
   scheduleOutlineUpdate()
 }
@@ -342,11 +392,14 @@ watch([chatMessages, streaming, syncNotice, truncationNotice], onLayoutChange, {
 watch(conversationKey, () => {
   pendingRewind.value = null
   activeOutlineId.value = null
-  jumpToBottom()
+  // 同一会话重绑（Runtime 代际变化）没有可恢复的位置：继续贴底，不停在历史开头。
+  if (!stickToBottom.value && pendingRestore === null) jumpToBottom()
   scheduleOutlineUpdate()
 }, { flush: 'post' })
 
 onMounted(() => {
+  // 视图重建（例如从设置页返回）时取回当前会话的阅读位置；没有留底时保持默认贴底。
+  applySessionReading(sessionViewStore.key, null)
   resizeObserver = new ResizeObserver(onLayoutChange)
   if (scroller.value !== null) resizeObserver.observe(scroller.value)
   if (content.value !== null) resizeObserver.observe(content.value)
@@ -354,6 +407,8 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  // 视图卸载（例如切到设置页）时按会话留底；这里已读不到 DOM，用最后一次已知的滚动位置。
+  if (isSessionKey(sessionViewStore.key)) sessionViewStore.saveReading(sessionViewStore.key, currentReading())
   resizeObserver?.disconnect()
   if (scrollFrame !== null) cancelAnimationFrame(scrollFrame)
   if (outlineFrame !== null) cancelAnimationFrame(outlineFrame)
