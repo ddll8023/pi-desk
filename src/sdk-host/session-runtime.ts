@@ -213,7 +213,8 @@ export class SdkSessionRuntime {
   /** 刚结束的展示消息等待官方条目落盘；只保留一条，不无界缓存消息对象。 */
   private pendingEntryLookup: { readonly messageId: string; readonly message: unknown } | null = null
   /** 本条事件对应的消息对象；只在单次事件处理内有效。 */
-  private lastEndedMessage: unknown = null  private bindingId: number | null = null
+  private lastEndedMessage: unknown = null
+  private bindingId: number | null = null
   private activityVersion = 0
   private lastBusy = false
   private lastQueueCount = 0
