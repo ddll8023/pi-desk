@@ -268,13 +268,14 @@ function sessionForkLabel(session: SessionSummary): string | null {
   return `分叉自 ${source === undefined ? `${sourceId.slice(0, 8)}…` : sessionTitle(source)}`
 }
 
-/** 各会话的运行状态文案；等待回应与未确认退出必须与普通空闲区分开。 */
+/** 各会话的运行状态文案；等待回应、未确认退出与已回收必须与普通空闲区分开。 */
 const SESSION_RUN_LABELS: Record<SessionRunBadge, string> = {
   unconfirmed: '上次退出未确认',
   failed: '宿主已失败',
   waiting: '等待回应',
   running: '正在执行',
   ready: '已就绪',
+  suspended: '已回收，发送时恢复',
   transitioning: '正在切换'
 }
 
@@ -285,6 +286,7 @@ const SESSION_RUN_DOT_CLASSES: Record<SessionRunBadge, string> = {
   waiting: 'bg-desk-warning',
   running: 'bg-desk-accent',
   ready: 'bg-desk-line-strong',
+  suspended: 'bg-desk-line-strong',
   transitioning: 'bg-desk-line-strong'
 }
 

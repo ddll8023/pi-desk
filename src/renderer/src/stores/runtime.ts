@@ -199,6 +199,15 @@ export const useRuntimeStore = defineStore('runtime', () => {
   const view = ref<RuntimeViewState>({ phase: 'idle' })
   /** 前台运行实例身份；事件与请求的目标都按它校验，切换时同步重置展示基准。 */
   const foregroundRunId = ref<number | null>(null)
+  /** 最近一次状态里的会话身份；宿主已回收（挂起）时它是唯一的恢复目标。 */
+  const statusSessionId = ref<string | null>(null)
+  /**
+   * 挂起态：宿主已回收但会话仍被占用，页面按「上次 Runtime 已关闭」展示并保留历史。
+   * 下一次发送先恢复这个会话，而不是当成新建。
+   */
+  const suspendedSessionId = computed(() => (
+    view.value.phase === 'closed' ? statusSessionId.value : null
+  ))
   const promptView = ref<PromptViewState>({ phase: 'idle' })
   /** 附件读取也属于提交阶段，回退和切换模型不能穿插其间。 */
   const preparingPrompt = ref(false)
@@ -241,6 +250,16 @@ export const useRuntimeStore = defineStore('runtime', () => {
   let appliedRunId: number | null = null
   let appliedRuntimeId: number | null = null
   let appliedSeq = 0
+  /**
+   * 最近一次就绪快照的身份：挂起与恢复之间消息组件不能重建，否则回收一次就丢阅读与展开状态。
+   */
+  const lastReadyIdentity = ref<{ runId: number; runtimeId: number | null; sessionId: string | null } | null>(null)
+  /** 会话视图的稳定键：优先取当前就绪快照，否则退回最近一次就绪身份。 */
+  const conversationKey = computed(() => {
+    const identity = view.value.phase === 'ready' ? view.value.snapshot : lastReadyIdentity.value
+    return `${useProjectStore().currentProject?.id ?? 'none'}:${identity?.runId ?? 'none'}`
+      + `:${identity?.runtimeId ?? 'none'}:${identity?.sessionId ?? 'none'}`
+  })
   /**
    * 后台实例的投影分片：只保存离开前台时的内容与之后到达的增量，不参与前台展示。
    * 分片寿命跟随运行实例，实例从运行状态列表消失时丢弃（见 pruneProjections）。
@@ -314,6 +333,8 @@ export const useRuntimeStore = defineStore('runtime', () => {
     stopRunsWatch = null
     backgroundProjections.clear()
     capabilitiesCache.clear()
+    lastReadyIdentity.value = null
+    statusSessionId.value = null
     clearModelPreview()
     modelLifecycle += 1
     rewindRequest += 1
@@ -858,6 +879,7 @@ export const useRuntimeStore = defineStore('runtime', () => {
   function applyStatus(status: RuntimeStatus): void {
     const previous = view.value.phase === 'ready' ? view.value.snapshot : null
     const previousRunId = previous?.runId ?? null
+    statusSessionId.value = status.sessionId
     // 运行实例与绑定代际一起决定目标：任一维度变化都重置瞬态并重取基准。
     const targetChanged = status.state !== 'ready'
       || status.runId !== previous?.runId
@@ -889,11 +911,14 @@ export const useRuntimeStore = defineStore('runtime', () => {
       if (modelPreviewView.value.phase !== 'idle' || modelPreviewAttemptedScope !== undefined) clearModelPreview()
     }
     if (status.state !== 'ready') {
-      resetProjection()
+      // 挂起态（宿主已回收）保留历史：会话身份仍在，清空展示会让用户以为会话丢了。
+      if (status.sessionId === null) resetProjection()
       // 离开就绪后，上一次中止请求的展示状态不再有意义。
       abortView.value = { phase: 'idle' }
-      capabilitiesView.value = { phase: 'idle' }
-      capabilitiesAttemptedRuntimeId = null
+      if (status.sessionId === null) {
+        capabilitiesView.value = { phase: 'idle' }
+        capabilitiesAttemptedRuntimeId = null
+      }
     }
     if (status.state === 'failed') {
       view.value = {
@@ -908,6 +933,10 @@ export const useRuntimeStore = defineStore('runtime', () => {
     }
     if (status.state === 'ready') {
       view.value = { phase: 'ready', snapshot: status }
+      if (status.runId !== null) {
+        lastReadyIdentity.value = { runId: status.runId, runtimeId: status.runtimeId,
+          sessionId: status.info?.sessionId ?? null }
+      }
       // 换实例、换代、换会话与上一次重同步未收敛（syncing/stale）都重新取基准。
       if (targetChanged || sessionChanged || status.runtimeId !== appliedRuntimeId
         || projectionSync.value !== 'synced') {
@@ -928,8 +957,8 @@ export const useRuntimeStore = defineStore('runtime', () => {
       view.value = { phase: 'starting' }
       return
     }
-    // idle 且带 runtimeId 表示上一次 Runtime 已正常关闭。
-    view.value = status.runtimeId === null ? { phase: 'idle' } : { phase: 'closed' }
+    // idle 且带会话身份表示宿主已回收（挂起），带 runtimeId 表示上一次 Runtime 已正常关闭。
+    view.value = status.sessionId !== null || status.runtimeId !== null ? { phase: 'closed' } : { phase: 'idle' }
     refreshModelPreviewIfNeeded()
   }
 
@@ -963,6 +992,8 @@ export const useRuntimeStore = defineStore('runtime', () => {
   return {
     view,
     foregroundRunId,
+    suspendedSessionId,
+    conversationKey,
     promptView,
     preparingPrompt,
     rewindView,

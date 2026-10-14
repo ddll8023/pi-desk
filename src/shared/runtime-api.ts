@@ -143,6 +143,12 @@ export interface RuntimeStatus {
   /** 来源运行实例；没有前台运行实例时为 null。 */
   readonly runId: number | null
   readonly runtimeId: number | null
+  /**
+   * 当前绑定或最近绑定的会话身份；未绑定时为 null。
+   * 宿主已回收（空闲释放）时它是页面唯一的恢复目标：`state` 为 `idle` 但会话身份仍在，
+   * 页面按「上次 Runtime 已关闭」展示并保留历史，下一次发送先恢复该会话。
+   */
+  readonly sessionId: string | null
   readonly info: RuntimeInfo | null
   readonly lastError: string | null
 }
@@ -762,6 +768,7 @@ export function isRuntimeStatus(value: unknown): value is RuntimeStatus {
   if (!isRecord(value) || !isRuntimeState(value.state)) return false
   if (value.runId !== null && (typeof value.runId !== 'number' || !Number.isSafeInteger(value.runId))) return false
   if (value.runtimeId !== null && typeof value.runtimeId !== 'number') return false
+  if (value.sessionId !== null && typeof value.sessionId !== 'string') return false
   if (value.lastError !== null && typeof value.lastError !== 'string') return false
   return value.info === null || isRuntimeInfo(value.info)
 }

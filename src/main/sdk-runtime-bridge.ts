@@ -174,13 +174,16 @@ function mapInfo(session: SdkSessionStatus): RuntimeInfo {
 
 /** 页面状态映射；故障码只用于可读提示，不代表可执行入口仍然有效。 */
 function mapStatus(host: SdkHostStatus, session: SdkSessionStatus, runId: number): RuntimeStatus {
-  const state = mapState(host.state, session)
+  // 宿主进程已释放但会话身份仍在：这是空闲回收后的挂起态，页面按「上次 Runtime 已关闭」展示。
+  const suspended = host.hostId === null && session.sessionId !== null
+  const state = suspended ? 'idle' : mapState(host.state, session)
   // 宿主级失败码更接近根因；宿主健康时它为空，仍回落到会话级原因。
   const failure = host.lastError ?? session.lastError
   return {
     state,
     runId,
     runtimeId: session.bindingId,
+    sessionId: session.sessionId,
     info: state === 'ready' ? mapInfo(session) : null,
     lastError: failure === null ? null : `会话后端故障（${failure}）：请重新打开会话或重启应用。`
   }
@@ -191,6 +194,7 @@ function sameStatus(left: RuntimeStatus, right: RuntimeStatus): boolean {
   return left.state === right.state
     && left.runId === right.runId
     && left.runtimeId === right.runtimeId
+    && left.sessionId === right.sessionId
     && left.lastError === right.lastError
     && left.info?.sessionId === right.info?.sessionId
     && left.info?.isStreaming === right.info?.isStreaming
@@ -248,7 +252,15 @@ interface SessionOwner {
 }
 
 /** 无前台运行实例时的页面状态：与宿主已建立但会话为空时一致。 */
-const IDLE_STATUS: RuntimeStatus = { state: 'idle', runId: null, runtimeId: null, info: null, lastError: null }
+const IDLE_STATUS: RuntimeStatus = {
+  state: 'idle', runId: null, runtimeId: null, sessionId: null, info: null, lastError: null
+}
+
+/**
+ * 空闲回收宽限期：宿主空闲这段时间后释放进程，下一次需要宿主的动作再恢复。
+ * 内部常量，不做成用户可见设置；未经资源测量的取值不写成性能结论。
+ */
+const RECLAIM_IDLE_MS = 5 * 60 * 1000
 
 /** 无运行实例时的 Extension UI 快照：没有来源、没有代际也没有状态。 */
 const EMPTY_EXTENSION_UI: ExtensionUiSnapshot = {
@@ -279,6 +291,10 @@ export class SdkRuntimeBridge {
   private runs: readonly SessionRunState[] = []
   /** 运行实例到事件订阅的映射：每个实例只在建立时挂接一次，停止时逐个释放。 */
   private readonly detachers = new Map<number, () => void>()
+  /** 按运行实例的空闲回收计时器；到期后复核空闲并释放宿主进程。 */
+  private readonly reclaimTimers = new Map<number, ReturnType<typeof setTimeout>>()
+  /** 正在进行的回收：新的提交等它收敛后再恢复，不与释放竞争。 */
+  private readonly reclaiming = new Map<number, Promise<void>>()
   private shuttingDown = false
 
   constructor(private readonly options: SdkRuntimeBridgeOptions) {}
@@ -328,12 +344,100 @@ export class SdkRuntimeBridge {
       // 未确认退出的运行实例保留占用，未确认前不建立替代实例。
       if (status.state === 'failed') this.options.runs.markUnconfirmed(runId)
       this.publishStatus()
+      this.scheduleReclaim(runId)
     })
-    const offSession = host.onSessionChanged(() => this.publishState())
+    const offSession = host.onSessionChanged(() => {
+      this.publishState()
+      this.scheduleReclaim(runId)
+    })
     const offProjection = host.onProjectionBatch(batch => this.forwardBatch(runId, batch))
     const offUi = host.onExtensionUi(snapshot => this.forwardUi(runId, snapshot))
-    this.detachers.set(runId, () => { offStatus(); offSession(); offProjection(); offUi() })
+    this.detachers.set(runId, () => {
+      offStatus(); offSession(); offProjection(); offUi()
+      this.cancelReclaim(runId)
+    })
     this.publishState()
+  }
+
+  /**
+   * 空闲回收计时：只在真正空闲时安排，其他情况取消已有时计。
+   * 状态查询与投影读取不调用它，因此渲染不会无限延长宿主寿命。
+   */
+  private scheduleReclaim(runId: number): void {
+    if (this.shuttingDown) return
+    const run = this.runOf(runId)
+    if (run === null || !run.owner.isIdleForReclaim()) {
+      this.cancelReclaim(runId)
+      return
+    }
+    if (this.reclaimTimers.has(runId)) return
+    const timer = setTimeout(() => {
+      this.reclaimTimers.delete(runId)
+      void this.reclaimRun(runId)
+    }, RECLAIM_IDLE_MS)
+    this.reclaimTimers.set(runId, timer)
+  }
+
+  /** 取消该实例的回收计时；没有计时时无副作用。 */
+  private cancelReclaim(runId: number): void {
+    const timer = this.reclaimTimers.get(runId)
+    if (timer === undefined) return
+    clearTimeout(timer)
+    this.reclaimTimers.delete(runId)
+  }
+
+  /** 显式需要宿主的动作：重新开始计时，不让刚刚被使用的宿主立刻到期。 */
+  private keepAlive(runId: number): void {
+    this.cancelReclaim(runId)
+    this.scheduleReclaim(runId)
+  }
+
+  /** 回收一个空闲实例：复核空闲后释放宿主进程，占用与会话身份保留，恢复由下一次动作触发。 */
+  private async reclaimRun(runId: number): Promise<void> {
+    const run = this.runOf(runId)
+    if (run === null || this.shuttingDown) return
+    const pending = (async () => {
+      try {
+        this.options.runs.beginClose(runId)
+      } catch {
+        return
+      }
+      let suspended = false
+      try {
+        suspended = await run.owner.suspend()
+      } catch {
+        // 关闭未确认：保留占用，不建立替代实例，交给下一次动作或应用退出收敛。
+        this.options.runs.markUnconfirmed(runId)
+        this.publishState()
+        return
+      }
+      // 挂起成功与「有在途工作所以放弃回收」都要把登记收敛回运行中。
+      this.options.runs.settleOpen(runId, run.owner.getSessionStatus().sessionId)
+      this.publishState()
+      if (!suspended) this.scheduleReclaim(runId)
+    })()
+    this.reclaiming.set(runId, pending)
+    try {
+      await pending
+    } finally {
+      if (this.reclaiming.get(runId) === pending) this.reclaiming.delete(runId)
+    }
+  }
+
+  /** 等该实例正在进行的回收收敛；没有回收时立即返回，不与释放竞争。 */
+  private async awaitReclaim(runId: number): Promise<void> {
+    const pending = this.reclaiming.get(runId)
+    if (pending !== undefined) await pending
+  }
+
+  /**
+   * 该实例是否需要重新建立宿主：宿主进程已释放（空闲回收）或已失败，
+   * 或宿主侧要求重建上下文。命中时必须重绑会话，不能只转前台。
+   */
+  private runNeedsRebind(run: SessionRunRecord<SdkHostManager>): boolean {
+    const status = run.owner.getStatus()
+    return status.hostId === null || status.state === 'failed'
+      || run.owner.getSessionStatus().needsHostRebuild
   }
 
   /** 投影批次按来源实例转发；后台批次也交给页面，由页面更新来源会话的分片，不覆盖前台展示。 */
@@ -358,6 +462,7 @@ export class SdkRuntimeBridge {
    */
   focusRun(runId: number): void {
     this.options.runs.setForeground(runId)
+    this.keepAlive(runId)
     this.publishState()
     const run = this.runOf(runId)
     if (run !== null) this.forwardUi(runId, run.owner.getExtensionUiSnapshot())
@@ -474,6 +579,9 @@ export class SdkRuntimeBridge {
   async releaseRun(runId: number, allowInterrupt: boolean): Promise<RuntimeResult> {
     const run = this.runOf(runId)
     if (run === null) return { ok: false, error: TARGET_CHANGED_ERROR }
+    // 释放与回收互斥：先等正在进行的回收收敛，再按登记结果决定释放路径。
+    await this.awaitReclaim(runId)
+    this.cancelReclaim(runId)
     if (this.hostUnavailable(run)) {
       // 没有存活宿主可等待，占用可以安全解除。
       this.options.runs.release(runId)
@@ -526,6 +634,7 @@ export class SdkRuntimeBridge {
     const matched = this.matchedRun(target)
     if (matched === null) return { ok: false, error: TARGET_CHANGED_ERROR }
     if (matched.bindingId === null) return { ok: false, error: UNBOUND_ERROR }
+    this.keepAlive(matched.run.runId)
     const host = matched.run.owner
     try {
       const status = await host.abortSession({ hostId: host.getSessionIdentity().hostId, bindingId: matched.bindingId })
@@ -544,6 +653,7 @@ export class SdkRuntimeBridge {
     const matched = this.matchedRun(target)
     if (matched === null) return { ok: false, error: TARGET_CHANGED_ERROR }
     if (matched.bindingId === null) return { ok: false, error: UNBOUND_ERROR }
+    this.keepAlive(matched.run.runId)
     try {
       return { ok: true, data: { disposition: await matched.run.owner.prompt(message, images) } }
     } catch (error) {
@@ -555,6 +665,7 @@ export class SdkRuntimeBridge {
   async readCapabilities(target: RuntimeTarget): Promise<CapabilitiesResult> {
     const matched = this.matchedRun(target)
     if (matched === null) return { ok: false, error: TARGET_CHANGED_ERROR }
+    this.keepAlive(matched.run.runId)
     try {
       return { ok: true, data: await matched.run.owner.readCapabilities() }
     } catch (error) {
@@ -567,6 +678,7 @@ export class SdkRuntimeBridge {
     const matched = this.matchedRun(target)
     if (matched === null) return { ok: false, error: TARGET_CHANGED_ERROR }
     if (matched.bindingId === null) return { ok: false, error: UNBOUND_ERROR }
+    this.keepAlive(matched.run.runId)
     try {
       return { ok: true, data: await matched.run.owner.readResources() }
     } catch (error) {
@@ -583,6 +695,7 @@ export class SdkRuntimeBridge {
     if (matched.bindingId === null) {
       return { ok: true, data: { runtimeId: null, stderrLines: [], extensionErrors: [] } }
     }
+    this.keepAlive(matched.run.runId)
     try {
       return { ok: true, data: await matched.run.owner.readDiagnostics() }
     } catch (error) {
@@ -595,6 +708,7 @@ export class SdkRuntimeBridge {
     const matched = this.matchedRun(target)
     if (matched === null) return { ok: false, error: TARGET_CHANGED_ERROR }
     if (matched.bindingId === null) return { ok: false, error: UNBOUND_ERROR }
+    this.keepAlive(matched.run.runId)
     try {
       return { ok: true, data: await matched.run.owner.readMcpStatus() }
     } catch (error) {
@@ -611,6 +725,7 @@ export class SdkRuntimeBridge {
     const matched = this.matchedRun(target)
     if (matched === null) return { ok: false, error: TARGET_CHANGED_ERROR }
     if (matched.bindingId === null) return { ok: false, error: UNBOUND_ERROR }
+    this.keepAlive(matched.run.runId)
     try {
       return { ok: true, data: await matched.run.owner.runMcpCommand(action, serverName) }
     } catch (error) {
@@ -622,6 +737,7 @@ export class SdkRuntimeBridge {
   async setModel(request: RuntimeSetModelRequest): Promise<RuntimeResult> {
     const matched = this.matchedRun({ runId: request.runId, runtimeId: request.runtimeId })
     if (matched === null) return { ok: false, error: TARGET_CHANGED_ERROR }
+    this.keepAlive(matched.run.runId)
     const host = matched.run.owner
     try {
       const status = await host.setSessionModel(request.provider, request.modelId)
@@ -641,6 +757,7 @@ export class SdkRuntimeBridge {
     if (matched === null || matched.run.owner.getSessionStatus().sessionId !== request.sessionId) {
       return { ok: false, error: TARGET_CHANGED_ERROR }
     }
+    this.keepAlive(matched.run.runId)
     const host = matched.run.owner
     try {
       const result = await host.rewind(request.messageId)
@@ -710,6 +827,7 @@ export class SdkRuntimeBridge {
   ): Promise<ExtensionUiSnapshot | null> {
     const matched = this.matchedRun(target)
     if (matched === null || matched.bindingId === null) return null
+    this.keepAlive(matched.run.runId)
     const host = matched.run.owner
     try {
       await host.respondDialog({ hostId: host.getSessionIdentity().hostId, bindingId: matched.bindingId }, dialogId, response)
@@ -734,8 +852,12 @@ export class SdkRuntimeBridge {
     if (action !== 'reload') {
       const occupied = this.reuseOccupied(owner)
       if (occupied !== null) {
-        this.focusRun(occupied.runId)
-        return { cancelled: false }
+        // 回收可能正在进行：等它收敛后再决定是复用还是重绑，不与释放竞争。
+        await this.awaitReclaim(occupied.runId)
+        if (!this.runNeedsRebind(occupied)) {
+          this.focusRun(occupied.runId)
+          return { cancelled: false }
+        }
       }
     }
 
@@ -770,6 +892,8 @@ export class SdkRuntimeBridge {
   /** 退出编排入口：先阻止所有新建与恢复，再对全部运行实例启动关闭。 */
   beginShutdown(): void {
     this.shuttingDown = true
+    for (const timer of this.reclaimTimers.values()) clearTimeout(timer)
+    this.reclaimTimers.clear()
     for (const run of this.options.runs.allRuns()) run.owner.beginShutdown()
     this.publishRuns()
   }

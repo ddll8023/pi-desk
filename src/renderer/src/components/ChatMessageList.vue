@@ -32,6 +32,8 @@ const sessionStore = useSessionStore()
 const sessionViewStore = useSessionViewStore()
 const { view: runtimeView, messages, tools, projectionSync, projectionTruncated, droppedMessages, droppedTools,
   promptView, preparingPrompt, modelSwitchView, rewindView } = storeToRefs(runtimeStore)
+/** 会话视图的稳定键：宿主被回收（挂起）时仍指向同一会话，消息组件不重建。 */
+const conversationKey = computed(() => runtimeStore.conversationKey)
 
 const viewport = ref<HTMLElement | null>(null)
 const scroller = ref<HTMLElement | null>(null)
@@ -110,12 +112,6 @@ async function handleSubmitEdit(messageId: string, text: string): Promise<void> 
   pendingEdit.value = null
 }
 /** 消息 ID 只在单个运行实例内唯一；实例或会话切换后不能复用旧消息组件的手动开合状态。 */
-const conversationKey = computed(() => {
-  const snapshot = runtimeView.value.phase === 'ready' ? runtimeView.value.snapshot : null
-  const runId = snapshot?.runId ?? null
-  const runtimeId = snapshot?.runtimeId ?? null
-  return `${projectStore.currentProject?.id ?? 'none'}:${runId ?? 'none'}:${runtimeId ?? 'none'}:${runtimeInfo.value?.sessionId ?? 'none'}`
-})
 const syncNotice = computed(() => {
   if (projectionSync.value === 'synced') return null
   return projectionSync.value === 'stale'

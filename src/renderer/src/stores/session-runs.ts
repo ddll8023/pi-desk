@@ -10,13 +10,14 @@ import { computed, ref } from 'vue'
 import type { SessionRunState, SessionRunsSnapshot } from '../../../shared/session-run-api'
 import { getSessionRuns, releaseSessionRun, subscribeSessionRuns } from '../services/session-runs'
 
-/** 单个会话的展示状态；优先级从高到低：未确认退出 → 失败 → 等待回应 → 执行中 → 已就绪 → 打开/关闭中。 */
+/** 单个会话的展示状态；优先级从高到低：未确认退出 → 失败 → 等待回应 → 执行中 → 已就绪 → 已回收 → 打开/关闭中。 */
 export type SessionRunBadge =
   | 'unconfirmed'
   | 'failed'
   | 'waiting'
   | 'running'
   | 'ready'
+  | 'suspended'
   | 'transitioning'
 
 export interface SessionRunView {
@@ -116,6 +117,7 @@ export const useSessionRunsStore = defineStore('session-runs', () => {
   /**
    * 展示优先级：未确认退出与宿主失败是阻塞态，优先于一切活动状态；
    * 等待用户回应比「正在执行」更值得提示，因为它需要用户动作才能继续。
+   * 已回收（宿主进程被空闲释放但会话仍被占用）与真正就绪分开：前者下一次发送会重建宿主。
    */
   function badgeOf(run: SessionRunState): SessionRunBadge {
     if (run.phase === 'unconfirmed') return 'unconfirmed'
@@ -123,6 +125,7 @@ export const useSessionRunsStore = defineStore('session-runs', () => {
     if (run.waitingDialogs > 0) return 'waiting'
     if (run.isStreaming) return 'running'
     if (run.phase === 'opening' || run.phase === 'closing') return 'transitioning'
+    if (run.hostState === 'none' && run.sessionId !== null) return 'suspended'
     return 'ready'
   }
 

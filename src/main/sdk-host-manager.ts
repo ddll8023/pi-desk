@@ -586,6 +586,40 @@ export class SdkHostManager {
     return this.startOnce()
   }
 
+  /**
+   * 空闲回收：关闭宿主进程但保留管理器可重用（不进入退出状态，也不解除占用）。
+   * 会话身份与投影线索保留在快照里，下一次需要宿主的动作经 `ensureStarted()` 重建进程并重绑会话。
+   * 有在途提交或结果未知时不回收（返回 false），由调用方重新计时；关闭未确认时抛错，不假装成功。
+   */
+  async suspend(): Promise<boolean> {
+    if (this.shuttingDown) throw new SdkHostError('HOST_CLOSED', '应用正在退出，不能回收 SDK 宿主。')
+    const record = this.active
+    if (record === null) return true
+    if (this.sessionSubmission !== null || this.uncertainOperationId !== null) return false
+    this.cancelRecovery()
+    // 先把宿主状态收回到空闲：否则关闭过程中的会话失效会被页面读成「正在启动」。
+    this.publish({ state: 'idle', hostId: null, sdkVersion: null, lastError: null })
+    await this.closeHost(record)
+    // 绑定代际属于已释放的进程：清掉它，避免页面把挂起态读成仍然绑定。
+    this.invalidateSession(true)
+    return true
+  }
+
+  /**
+   * 是否适合回收：镜像空闲、无在途提交、无结果未知，也不处于需要重建上下文的状态。
+   * 只读已推送的状态，不向宿主发请求；等待用户下一条消息属于空闲，等待审批与排队不属于。
+   */
+  isIdleForReclaim(): boolean {
+    const record = this.active
+    if (record === null || record.exited || !record.ready || record.closing) return false
+    if (this.sessionSubmission !== null || this.uncertainOperationId !== null) return false
+    const session = this.sessionSnapshot
+    if (session.needsHostRebuild) return false
+    if (session.operationId !== null) return false
+    if (session.pendingMessages > 0 || session.isBashRunning || session.waitingDialogs > 0) return false
+    return session.isIdle
+  }
+
   /** 退出意图同步生效，避免等待其他关闭链时仍安排宿主恢复。 */
   beginShutdown(): void {
     this.shuttingDown = true
@@ -871,8 +905,9 @@ export class SdkHostManager {
    * 失败原因由宿主状态的 `lastError` 携带（同一次失败已经发布）：会话侧不复制、
    * 也不用“未就绪”顶替崩溃，避免页面把真实原因读成 HOST_NOT_READY。
    */
-  private invalidateSession(): void {
+  private invalidateSession(dropBinding = false): void {
     this.sessionSnapshot = { ...this.sessionSnapshot, phase: 'invalid', operationId: null,
+      bindingId: dropBinding ? null : this.sessionSnapshot.bindingId,
       isIdle: false, waitingDialogs: 0, needsHostRebuild: true, lastError: null }
     this.projection = null
     this.entryIds.clear()

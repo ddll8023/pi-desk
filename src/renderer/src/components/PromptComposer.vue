@@ -528,9 +528,10 @@ async function submit(): Promise<void> {
 
   if (!runtimeReady.value) {
     // 首次发送只触发 Runtime 启动；保留文字与附件，就绪且同步完成后由下方 watch 自动补发。
+    // 宿主已被空闲回收（挂起）时先恢复那个会话，而不是新建；恢复后的会话身份不变。
     startupProjectPath = projectStore.currentProject?.path ?? null
     startupRequested.value = true
-    await sessionStore.open(null, false)
+    await sessionStore.open(runtimeStore.suspendedSessionId, false)
     if (sessionStore.actionError !== null) startupRequested.value = false
     return
   }
