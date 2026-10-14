@@ -1,4 +1,4 @@
-<!-- Prompt 输入坞：处理输入法组合态、Enter 发送与 Shift+Enter 换行、焦点回归与重复提交、响应侧栏「新建」的聚焦请求并给出一次性提示，并在 Agent 运行期间原位提供停止入口；同时承接 Extension 的 set_editor_text 填充文本、图片附件的选择/粘贴/拖拽三种入口、输入行按内容自动增高、快捷发送下拉（短语取自界面偏好，可在设置里增删改与排序）、Pi 命令的斜杠模糊补全（Runtime 就绪后用运行中的命令清单，未就绪时用主进程预读的技能清单，按类型分组并按匹配优先级排序；另含 Desktop 层自己拦截的界面命令）与 `@` 项目文件引用（只写入相对路径文本，不传文件内容）。底部工具条左侧是信息行：异常与进行中的状态文本、被收起的 Extension 对话入口、Extension status 项与会话用量（点击开明细）；右侧是附件、快捷发送与发送/停止按钮。 -->
+<!-- Prompt 输入坞：处理输入法组合态、Enter 发送与 Shift+Enter 换行、焦点回归与重复提交、响应侧栏「新建」的聚焦请求并给出一次性提示，并在 Agent 运行期间原位提供停止入口；同时承接 Extension 的 set_editor_text 填充文本、图片附件的选择/粘贴/拖拽三种入口、输入行按内容自动增高、快捷发送下拉（短语取自界面偏好，可在设置里增删改与排序）、Pi 命令的斜杠模糊补全（Runtime 就绪后用运行中的命令清单，未就绪时用主进程预读的技能清单，按类型分组并按匹配优先级排序；另含 Desktop 层自己拦截的界面命令）与 `@` 项目文件引用（只写入相对路径文本，不传文件内容）。底部工具条左侧是信息行：异常与进行中的状态文本、被收起的 Extension 对话入口、Extension status 项与会话用量（点击开明细）；右侧是模型选择、附件、快捷发送与发送/停止按钮。 -->
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
@@ -14,6 +14,7 @@ import { useSessionStore } from '../stores/session'
 import { isSessionKey, useSessionViewStore } from '../stores/session-view'
 import type { PendingImage } from '../stores/session-view'
 import AppButton from './ui/AppButton.vue'
+import RuntimeModelSelect from './RuntimeModelSelect.vue'
 import UsageDetailDialog from './UsageDetailDialog.vue'
 
 const runtimeStore = useRuntimeStore()
@@ -1106,6 +1107,9 @@ onMounted(() => {
             </button>
           </div>
           <div class="flex flex-none items-center gap-1.5">
+            <!-- 模型选择：常驻在动作组最前，未就绪时写入 Pi 默认模型、就绪时只切当前会话；详情见 RuntimeModelSelect。 -->
+            <RuntimeModelSelect />
+
             <!-- 图片选择：与粘贴、拖拽共用同一套禁用条件；当前模型明确不支持时同样禁用。 -->
             <input
               ref="imageInput"

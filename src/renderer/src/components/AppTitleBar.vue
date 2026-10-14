@@ -1,12 +1,12 @@
-<!-- 中央工作区顶栏：呈现当前项目、会话摘要、当前模型与 Runtime 状态，并按窗口模式切换侧栏。 -->
+<!-- 全宽顶部栏：自绘窗口标题栏，呈现侧栏开关、应用名、当前会话与项目、Runtime 状态；macOS 预留原生红绿灯位。模型选择已下沉到输入坞。 -->
 <script setup lang="ts">
 import { computed } from 'vue'
 import { storeToRefs } from 'pinia'
+import { useDesktopStore } from '../stores/desktop'
 import { useProjectStore } from '../stores/project'
 import { useRuntimeStore } from '../stores/runtime'
 import { useSessionStore } from '../stores/session'
 import AppButton from './ui/AppButton.vue'
-import RuntimeModelSelect from './RuntimeModelSelect.vue'
 
 defineProps<{
   readonly sidebarCollapsed: boolean
@@ -18,12 +18,19 @@ const emit = defineEmits<{
   toggleSidebar: []
 }>()
 
+const desktopStore = useDesktopStore()
 const projectStore = useProjectStore()
 const runtimeStore = useRuntimeStore()
 const sessionStore = useSessionStore()
+const { connection } = storeToRefs(desktopStore)
 const { currentProject } = storeToRefs(projectStore)
 const { view: runtimeView } = storeToRefs(runtimeStore)
 const { sessions } = storeToRefs(sessionStore)
+
+/** macOS 用 hiddenInset 保留原生红绿灯，顶部栏左侧要让出它们占的宽度；其他平台不需要。 */
+const reservesTrafficLights = computed(() => (
+  connection.value.status === 'ready' && connection.value.info.platform === 'darwin'
+))
 
 const runtimeInfo = computed(() => (
   runtimeView.value.phase === 'ready' ? runtimeView.value.snapshot.info : null
@@ -57,23 +64,28 @@ const sessionTitleText = computed(() => (
 </script>
 
 <template>
-  <header class="app-topbar">
+  <header class="app-titlebar">
+    <!-- 红绿灯占位：只作布局留白，不接收指针事件，也不进入无障碍树。 -->
+    <span v-if="reservesTrafficLights" class="app-titlebar-traffic-pad" aria-hidden="true"></span>
+
     <AppButton
-      variant="compact"
-      class="app-sidebar-toggle"
+      variant="icon"
+      class="app-titlebar-toggle"
       :aria-expanded="!sidebarCollapsed"
       :aria-label="sidebarCollapsed ? '展开导航栏' : '收起导航栏'"
+      :title="sidebarCollapsed ? '展开导航栏' : '收起导航栏'"
       :disabled="sidebarToggleDisabled"
       @click="emit('toggleSidebar')"
     >
       <span aria-hidden="true">{{ sidebarCollapsed ? '☰' : '‹' }}</span>
-      <span>{{ sidebarCollapsed ? '导航' : '收起' }}</span>
     </AppButton>
 
-    <div class="app-topbar-context">
+    <span class="app-titlebar-app-name">Pi Desktop</span>
+
+    <div class="app-titlebar-context">
       <AppButton
         variant="unstyled"
-        class="app-topbar-session"
+        class="app-titlebar-session"
         :title="`${sessionTitleText}；点击选择其他会话`"
         :disabled="currentProject === null"
         aria-haspopup="dialog"
@@ -81,10 +93,8 @@ const sessionTitleText = computed(() => (
       >
         {{ sessionTitle }}
       </AppButton>
-      <span class="app-topbar-project" :title="projectPath">{{ projectPath }}</span>
+      <span class="app-titlebar-project" :title="projectPath">{{ projectPath }}</span>
     </div>
-
-    <RuntimeModelSelect />
 
     <span v-if="runtimeStatus.kind !== 'idle'" class="app-runtime-status" :class="`is-${runtimeStatus.kind}`" role="status">
       <span class="app-runtime-status-dot" aria-hidden="true"></span>

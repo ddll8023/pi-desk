@@ -1,4 +1,4 @@
-<!-- 供应商模型可见性区块：按单个模型控制它是否出现在顶栏模型切换器里。
+<!-- 供应商模型可见性区块：按单个模型控制它是否出现在输入坞模型选择器里。
      只写桌面端的展示偏好，不读取也不修改 Pi 的模型与认证配置。 -->
 <script setup lang="ts">
 import type { ModelSummary } from '../../../shared/runtime-api'

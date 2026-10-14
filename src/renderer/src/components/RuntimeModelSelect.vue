@@ -1,4 +1,4 @@
-<!-- 顶栏模型选择器：未选项目时也读全局模型目录；Pi 未启动时选中即写为 Pi 自身默认模型（settings.json），就绪时只切换当前会话模型，不联动全局默认；候选项排除设置中隐藏的模型。 -->
+<!-- 输入坞模型选择器：未选项目时也读全局模型目录；Pi 未启动时选中即写为 Pi 自身默认模型（settings.json），就绪时只切换当前会话模型，不联动全局默认；候选项排除设置中隐藏的模型。 -->
 <script setup lang="ts">
 import { computed, onUnmounted, ref } from 'vue'
 import { storeToRefs } from 'pinia'
@@ -236,7 +236,6 @@ function refreshModels(): void {
 <template>
   <div class="app-runtime-model" :class="{ 'is-error': error !== null }" :aria-busy="busy">
     <div class="runtime-model-control">
-      <label for="runtime-model-select" class="runtime-model-label">模型</label>
       <AppSelect
         id="runtime-model-select"
         :label="ready ? '当前会话模型' : 'Pi 默认模型'"
@@ -254,18 +253,27 @@ function refreshModels(): void {
         empty-results-label="没有匹配的模型"
         @update:model-value="chooseModel"
       />
-      <AppButton v-if="canPrepare || canRetry" variant="compact" :disabled="refreshDisabled" @click="refreshModels">
-        {{ canPrepare ? '刷新' : '重试读取' }}
+      <!-- 只在未就绪与读取失败时出现的重试入口；图标按钮，不再占一行文字。 -->
+      <AppButton
+        v-if="canPrepare || canRetry"
+        variant="icon"
+        class="runtime-model-refresh"
+        :disabled="refreshDisabled"
+        :aria-label="canPrepare ? '刷新模型列表' : '重试读取模型列表'"
+        :title="canPrepare ? '刷新模型列表' : '重试读取模型列表'"
+        @click="refreshModels"
+      >
+        <span aria-hidden="true">↻</span>
       </AppButton>
     </div>
-    <!-- 进度与错误并入触发键文案与 title；此处仅保留读屏用的隐藏区域，顶栏高度保持恒定。 -->
+    <!-- 进度与错误并入触发键文案与 title；此处仅保留读屏用的隐藏区域，输入坞高度保持恒定。 -->
     <p
       v-if="error || progress"
       :id="error ? 'runtime-model-error' : 'runtime-model-progress'"
       class="sr-only"
       :role="error ? 'alert' : 'status'"
     >{{ error ?? progress }}</p>
-    <!-- 设置默认的可见反馈：绝对定位在选择器下方，不改变顶栏布局。 -->
+    <!-- 设置默认的可见反馈：绝对定位在胶囊上方，不改变输入坞布局。 -->
     <p
       v-if="notice"
       class="runtime-model-notice"
@@ -276,29 +284,26 @@ function refreshModels(): void {
 </template>
 
 <style scoped>
+/* 常驻在输入坞动作组里：宽度随模型名自适应，上限防止长名撑开工具条。 */
 .app-runtime-model {
   position: relative;
+  min-width: 0;
+  max-width: 16rem;
+  flex: none;
 }
 .runtime-model-control {
   display: flex;
   min-width: 0;
   align-items: center;
-  gap: 0.4rem;
+  gap: 0.25rem;
 }
-.runtime-model-label {
-  flex: none;
-  color: var(--color-desk-muted);
-  font-size: 0.6875rem;
-}
-/* 顶栏胶囊保持原有布局，选择状态与进程状态分开呈现。 */
+/* 输入坞里的紧凑胶囊：无边框、圆角，不占背景色，只靠悬停反馈。 */
 .runtime-model-control :deep(.app-select-trigger) {
   min-width: 0;
-  width: 0;
-  flex: 1;
   border-color: transparent;
   border-radius: 999px;
   background: transparent;
-  padding: 0.3rem 0.7rem;
+  padding: 0.3rem 0.6rem;
   font-size: 0.75rem;
 }
 .runtime-model-control :deep(.app-select-trigger:not(:disabled):hover) {
@@ -307,18 +312,18 @@ function refreshModels(): void {
 .runtime-model-control :deep(.app-select-trigger:disabled) {
   background: transparent;
 }
-/* 读取进度与错误并入触发键文案，不设独立状态行，顶栏高度保持恒定。 */
+/* 读取进度与错误并入触发键文案，不设独立状态行，输入坞高度保持恒定。 */
 .app-runtime-model.is-error :deep(.app-select-name) {
   color: var(--color-desk-danger);
 }
-/* 设置默认的反馈浮层贴在选择器下方，不占布局、不改变顶栏高度。 */
+/* 设置默认的反馈浮层贴在胶囊上方，不占布局、不改变输入坞高度；向右展开会越出窗口，因此靠右对齐向左生长。 */
 .runtime-model-notice {
   position: absolute;
   z-index: 30;
-  top: 100%;
-  left: 0;
+  bottom: 100%;
+  right: 0;
   max-width: 20rem;
-  margin-top: 0.35rem;
+  margin-bottom: 0.35rem;
   border: 1px solid var(--color-desk-line);
   border-radius: 8px;
   background: var(--color-desk-surface);

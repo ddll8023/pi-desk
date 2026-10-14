@@ -46,7 +46,7 @@ export class PreferencesManager {
     }
   }
 
-  /** 保存对话页模型展示偏好；只影响顶栏切换器，不修改 Pi 配置。 */
+  /** 保存对话页模型展示偏好；只影响输入坞模型选择器，不修改 Pi 配置。 */
   async setModelDisplay(preference: ModelDisplayPreference): Promise<ModelDisplayResult> {
     try {
       return { ok: true, data: await this.options.store.saveModelDisplay(preference) }

@@ -402,7 +402,7 @@ export const useRuntimeStore = defineStore('runtime', () => {
       ? modelPreviewView.value.data.models : []
   })
 
-  /** 顶栏切换器的候选项：排除在设置中隐藏的模型。 */
+  /** 输入坞模型选择器的候选项：排除在设置中隐藏的模型。 */
   const visibleModels = computed<readonly ModelSummary[]>(() => (
     availableModels.value.filter((model) => !hiddenModels.value.some((hidden) => (
       hidden.provider === model.provider && hidden.modelId === model.id

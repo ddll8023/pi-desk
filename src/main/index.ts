@@ -4,7 +4,7 @@ import { realpath } from 'node:fs/promises'
 import { dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { app, BrowserWindow, dialog, ipcMain, nativeTheme, net, protocol, session } from 'electron'
-import type { IpcMainInvokeEvent } from 'electron'
+import type { BrowserWindowConstructorOptions, IpcMainInvokeEvent } from 'electron'
 import { APP_INFO_CHANNEL } from '../shared/desktop-api'
 import type { AppInfoResult, DesktopErrorCode } from '../shared/desktop-api'
 import { DEV_SERVER_PORT } from '../shared/dev-server'
@@ -192,6 +192,13 @@ const WINDOW_STATE_FLUSH_MS = 1_000
 /** 窗口背景色的浅色与暗色值；与 main.css 的 canvas 令牌保持一致，避免首帧闪烁。 */
 const LIGHT_WINDOW_BACKGROUND = '#f4f6f8'
 const DARK_WINDOW_BACKGROUND = '#10161c'
+/** 页面自绘顶部栏的高度；与 main.css 的 `.app-titlebar` 及 Windows/Linux 覆盖层高度共用同一数值。 */
+const TITLEBAR_HEIGHT = 44
+/** 顶部栏底色与窗口按钮图标色的浅色/暗色值；与 main.css 的 surface、ink 令牌保持一致。 */
+const LIGHT_WINDOW_SURFACE = '#ffffff'
+const DARK_WINDOW_SURFACE = '#1a222b'
+const LIGHT_WINDOW_INK = '#17252f'
+const DARK_WINDOW_INK = '#dce6ee'
 const rendererRoot = resolve(__dirname, '../renderer')
 const productionCsp = [
   "default-src 'none'",
@@ -527,6 +534,28 @@ function applyNativeTheme(theme: UiTheme): void {
 /** 按当前生效主题返回窗口背景色；与 main.css 的 `--color-desk-canvas` 同步维护。 */
 function windowBackgroundColor(): string {
   return nativeTheme.shouldUseDarkColors ? DARK_WINDOW_BACKGROUND : LIGHT_WINDOW_BACKGROUND
+}
+
+/** 按当前生效主题返回顶部栏底色；与 main.css 的 `--color-desk-surface` 同步维护。 */
+function windowSurfaceColor(): string {
+  return nativeTheme.shouldUseDarkColors ? DARK_WINDOW_SURFACE : LIGHT_WINDOW_SURFACE
+}
+
+/** 按当前生效主题返回 Windows/Linux 窗口按钮的图标色；与 main.css 的 `--color-desk-ink` 同步维护。 */
+function windowInkColor(): string {
+  return nativeTheme.shouldUseDarkColors ? DARK_WINDOW_INK : LIGHT_WINDOW_INK
+}
+
+/**
+ * 顶部栏的窗口参数：页面自绘顶部栏后不再保留原生标题栏，避免出现两层栏。
+ * macOS 用 hiddenInset 保留原生红绿灯；Windows/Linux 用系统绘制的覆盖层提供最小化/最大化/关闭。
+ */
+function titleBarWindowOptions(): Pick<BrowserWindowConstructorOptions, 'titleBarStyle' | 'titleBarOverlay'> {
+  if (process.platform === 'darwin') return { titleBarStyle: 'hiddenInset' }
+  return {
+    titleBarStyle: 'hidden',
+    titleBarOverlay: { color: windowSurfaceColor(), symbolColor: windowInkColor(), height: TITLEBAR_HEIGHT }
+  }
 }
 
 /** 打开系统目录选择器；绑定唯一业务窗口，用户取消返回 `null`。 */
@@ -1821,6 +1850,8 @@ async function createWindow(pageUrl: string): Promise<void> {
     minWidth: MIN_WINDOW_WIDTH,
     minHeight: MIN_WINDOW_HEIGHT,
     show: false,
+    // 顶部栏由页面自绘：去掉原生标题栏，窗口按钮按平台交给原生红绿灯或系统覆盖层。
+    ...titleBarWindowOptions(),
     // 默认菜单栏隐藏（Windows/Linux 按 Alt 临时唤起）；不替换菜单对象，保留其快捷键 role。
     autoHideMenuBar: true,
     backgroundColor: windowBackgroundColor(),
@@ -1853,11 +1884,19 @@ async function createWindow(pageUrl: string): Promise<void> {
   window.on('maximize', rememberWindowState)
   window.on('unmaximize', rememberWindowState)
   window.on('close', () => windowState.captureBeforeClose(window))
-  // 跟随系统主题时，OS 切换会让原生窗口背景与页面重绘短暂脱节；这里同步收敛背景色。
+  // 跟随系统主题时，OS 切换会让原生窗口背景与页面重绘短暂脱节；这里同步收敛背景色与覆盖层配色。
   nativeTheme.on('updated', () => {
     const target = mainWindow
     if (target === null || target.isDestroyed()) return
     target.setBackgroundColor(windowBackgroundColor())
+    // 覆盖层只在 Windows/Linux 存在；macOS 调用会抛错，因此按平台区分。
+    if (process.platform !== 'darwin') {
+      target.setTitleBarOverlay({
+        color: windowSurfaceColor(),
+        symbolColor: windowInkColor(),
+        height: TITLEBAR_HEIGHT
+      })
+    }
   })
   window.once('ready-to-show', () => window.show())
   window.once('closed', () => {

@@ -285,7 +285,7 @@ function cancelDefinition(): void {
 
 /** 保存成功：给出提示、关掉弹窗并让刚保存的供应商就地展开。 */
 function onSaved(id: string): void {
-  notice.value = `已保存供应商 ${id}；改动需要重新加载会话后才会反映到顶栏的模型列表。`
+  notice.value = `已保存供应商 ${id}；改动需要重新加载会话后才会反映到输入坞的模型列表。`
   creating.value = false
   expandedId.value = id
   void revealExpanded(id)
@@ -690,7 +690,7 @@ onUnmounted(() => {
         <li>只写 <span class="font-mono">models.json</span> 里 <span class="font-mono">providers</span> 下被编辑的那一个条目；其他供应商、其他顶层键与条目里未涉及的字段原样保留。</li>
         <li>真实密钥以明文存在 <span class="font-mono">models.json</span>（Pi 自身的格式）；这里不回显已保存的密钥，也不把它写进日志。</li>
         <li>文件在应用之外被改过时，本次保存会被拒绝；点「重新读取」后再保存即可。</li>
-        <li>对话页的模型可见性只影响顶栏切换器的候选项，不改变 Pi 的模型配置；偏好读取失败时不过滤任何模型。</li>
+        <li>对话页的模型可见性只影响输入坞模型选择器的候选项，不改变 Pi 的模型配置；偏好读取失败时不过滤任何模型。</li>
       </ul>
     </section>
 

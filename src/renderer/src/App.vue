@@ -13,7 +13,7 @@ import { useSessionRunsStore } from './stores/session-runs'
 import { useSessionViewStore } from './stores/session-view'
 import { useTrustStore } from './stores/trust'
 import type { Project } from '../../shared/project-api'
-import AppTopBar from './components/AppTopBar.vue'
+import AppTitleBar from './components/AppTitleBar.vue'
 import ChatMessageList from './components/ChatMessageList.vue'
 import ConfirmDialog from './components/ConfirmDialog.vue'
 import ExtensionDialog from './components/ExtensionDialog.vue'
@@ -194,46 +194,50 @@ onUnmounted(() => {
 
 <template>
   <div class="app-layout">
-    <button
-      v-if="isNarrowWindow && !sidebarCollapsedForLayout"
-      type="button"
-      class="app-sidebar-backdrop"
-      aria-label="关闭导航栏"
-      @click="closeMobileSidebar"
-    ></button>
-
-    <!-- 侧栏始终挂载；折叠与响应式呈现只改变布局，不触碰 Runtime 生命周期。 -->
-    <ProjectSidebar
-      v-if="preferencesReady"
-      :settings-active="currentView === 'settings'"
+    <!-- 顶部栏跨整窗，位于侧栏与工作区之上；侧栏开关、会话与项目、运行状态都在这里。 -->
+    <AppTitleBar
       :sidebar-collapsed="sidebarCollapsedForLayout"
-      :mobile-open="isNarrowWindow && mobileSidebarOpen"
-      @toggle-settings="currentView = currentView === 'settings' ? 'chat' : 'settings'; closeMobileSidebar()"
-      @close-sidebar="closeMobileSidebar"
-      @remove-project="requestProjectRemoval"
-      @request-new-session="onRequestNewSession"
+      :sidebar-toggle-disabled="!preferencesReady"
+      @toggle-sidebar="toggleSidebar"
     />
 
-    <main class="app-workspace">
-      <AppTopBar
+    <div class="app-body">
+      <button
+        v-if="isNarrowWindow && !sidebarCollapsedForLayout"
+        type="button"
+        class="app-sidebar-backdrop"
+        aria-label="关闭导航栏"
+        @click="closeMobileSidebar"
+      ></button>
+
+      <!-- 侧栏始终挂载；折叠与响应式呈现只改变布局，不触碰 Runtime 生命周期。 -->
+      <ProjectSidebar
+        v-if="preferencesReady"
+        :settings-active="currentView === 'settings'"
         :sidebar-collapsed="sidebarCollapsedForLayout"
-        :sidebar-toggle-disabled="!preferencesReady"
-        @toggle-sidebar="toggleSidebar"
+        :mobile-open="isNarrowWindow && mobileSidebarOpen"
+        @toggle-settings="currentView = currentView === 'settings' ? 'chat' : 'settings'; closeMobileSidebar()"
+        @close-sidebar="closeMobileSidebar"
+        @remove-project="requestProjectRemoval"
+        @request-new-session="onRequestNewSession"
       />
-      <SettingsView v-if="currentView === 'settings'" />
-      <template v-else>
-        <ExtensionNotificationBar />
-        <ChatMessageList />
-        <!-- Widget 放置语义与官方子协议一致：aboveEditor 在输入区上方，belowEditor 在下方。 -->
-        <div v-for="widget in widgetsAbove" :key="widget.placement" class="px-4 py-2 sm:px-6">
-          <pre class="chat-column mx-auto widget-block">{{ widget.lines.join('\n') }}</pre>
-        </div>
-        <PromptComposer :focus-token="composerFocusToken" />
-        <div v-for="widget in widgetsBelow" :key="widget.placement" class="px-4 py-2 sm:px-6">
-          <pre class="chat-column mx-auto widget-block">{{ widget.lines.join('\n') }}</pre>
-        </div>
-      </template>
-    </main>
+
+      <main class="app-workspace">
+        <SettingsView v-if="currentView === 'settings'" />
+        <template v-else>
+          <ExtensionNotificationBar />
+          <ChatMessageList />
+          <!-- Widget 放置语义与官方子协议一致：aboveEditor 在输入区上方，belowEditor 在下方。 -->
+          <div v-for="widget in widgetsAbove" :key="widget.placement" class="px-4 py-2 sm:px-6">
+            <pre class="chat-column mx-auto widget-block">{{ widget.lines.join('\n') }}</pre>
+          </div>
+          <PromptComposer :focus-token="composerFocusToken" />
+          <div v-for="widget in widgetsBelow" :key="widget.placement" class="px-4 py-2 sm:px-6">
+            <pre class="chat-column mx-auto widget-block">{{ widget.lines.join('\n') }}</pre>
+          </div>
+        </template>
+      </main>
+    </div>
 
     <!-- 模态弹层统一经 Teleport 渲染到 body，全部落在根堆叠上下文；组件常驻挂载，进出由内部 Transition 驱动。 -->
     <Teleport to="body">
