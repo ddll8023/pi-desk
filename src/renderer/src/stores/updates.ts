@@ -3,7 +3,8 @@
  *
  * 只做状态映射，不持有检查进程；检查一律由主进程执行，页面只能读取快照与请求重查。
  * 提示策略：每次应用运行最多自动弹一次，且只由「启动后第一次完成的检查」触发；
- * 手动重查只更新设置页里的结果，不再弹窗。
+ * 没有结论、也没有失败原因的空快照（`checkedAt` 与 `error` 都为空，例如启动检查开始前
+ * 页面读到的那一份）不算一次完成的检查，不消耗这次机会；手动重查只更新设置页里的结果，不再弹窗。
  */
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
@@ -42,6 +43,9 @@ export const useUpdatesStore = defineStore('updates', () => {
     snapshot.value = next
     if (next.checking) return
     if (!noticeArmed) return
+    // 还没有任何检查结论、也没有失败原因时不能占用这次机会：启动检查开始前读到的那一份快照
+    // 就属于这种情形，若在这里用掉，启动检查真正查出更新时反而不会弹。
+    if (next.checkedAt === null && next.error === null) return
     noticeArmed = false
     if (hasUpdates.value) noticeOpen.value = true
   }
@@ -55,9 +59,10 @@ export const useUpdatesStore = defineStore('updates', () => {
     else checkError.value = result.error.message
   }
 
-  /** 手动重查：进行中时复用同一次检查，不排队也不叠加。 */
+  /** 手动重查：进行中时复用同一次检查，不排队也不叠加；手动重查一律不再弹提示。 */
   async function check(): Promise<void> {
     if (checkState.value === 'checking') return
+    noticeArmed = false
     checkState.value = 'checking'
     checkError.value = null
     const result = await checkUpdates()
