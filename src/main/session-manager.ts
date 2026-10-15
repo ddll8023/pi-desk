@@ -1,8 +1,10 @@
 /**
  * 会话列表、打开、重新加载与删除编排的所有者：选择、新建、恢复、重载与删除会话。
  *
- * 列表来自 Pi 管理的会话文件（session-store），按调用方显式给出的项目读取：侧栏按项目树展示会话，
- * 因此列表不再隐式取当前项目，但只接受已添加项目的规范路径。
+ * 列表来自 Pi 管理的会话文件（session-store），按调用方显式给出的项目读取并只读取窗口内的文件：
+ * 侧栏按项目树展示会话，因此列表不再隐式取当前项目，但只接受已添加项目的规范路径；
+ * 打开、重载与删除成功时回传的也是调用方窗口大小的列表快照（`listLimit`），
+ * 变更不会把页面已展开的列表塌回首屏。
  * 新建、打开、切换与重载都交给 SDK 宿主，由宿主在同一进程内替换会话，目标、归属与信任经本模块的
  * SDK 授权回路复核，授权依据是来源运行实例登记的归属项目，不是前台项目。
  * 多运行实例下打开其他会话不中断任何正在运行的会话；重载以目标会话自己的项目做信任复核。
@@ -94,16 +96,16 @@ export class SessionManager {
   }
 
   /**
-   * 指定项目的会话列表；只接受已添加项目的规范路径，不要求它是当前项目。
+   * 指定项目的会话列表窗口；只接受已添加项目的规范路径，不要求它是当前项目。
    * 未添加的目录一律拒绝，页面不能借列表接口探测任意目录。
    */
-  async list(projectPath: string): Promise<SessionListResult> {
+  async list(projectPath: string, limit: number): Promise<SessionListResult> {
     try {
       const requested = await normalizeProjectPath(projectPath)
       if (!await this.options.projects.hasProject(requested)) {
         throw new SessionFailure('INVALID_PROJECT_PATH', '只能读取已添加项目的会话。')
       }
-      return { ok: true, data: await listSessions(requested) }
+      return { ok: true, data: await listSessions(requested, limit) }
     } catch (error) {
       return this.failure(error, {
         code: 'INTERNAL_ERROR',
@@ -112,7 +114,7 @@ export class SessionManager {
     }
   }
 
-  /** 打开或新建会话；成功时返回更新后的列表。 */
+  /** 打开或新建会话；成功时返回该会话所属项目在调用方窗口内的列表快照。 */
   async open(request: SessionOpenRequest): Promise<SessionOpenResult> {
     try {
       return { ok: true, data: await this.applyOpen(request) }
@@ -135,7 +137,7 @@ export class SessionManager {
 
     if (request.sessionId !== null && status.state === 'ready'
       && status.info?.sessionId === request.sessionId) {
-      return listSessions(projectPath)
+      return listSessions(projectPath, request.listLimit)
     }
     // 已由某个运行实例承载的会话交给后端转前台复用：此时会话文件可能尚未落盘，不能当作列表过期。
     if (request.sessionId !== null && !this.isSessionOccupied(projectPath, request.sessionId)
@@ -169,7 +171,7 @@ export class SessionManager {
       // 目标一致性由宿主预检保证；这里只复核实际打开的会话，不删除任何文件。
       throw new SessionFailure('SESSION_NOT_FOUND', '实际打开的会话与请求不一致；未改动任何已有文件。')
     }
-    return listSessions(projectPath)
+    return listSessions(projectPath, request.listLimit)
   }
 
   /**
@@ -202,7 +204,7 @@ export class SessionManager {
         }
       }
       await deleteSessionFile(projectPath, request.sessionId)
-      return { ok: true, data: await listSessions(projectPath) }
+      return { ok: true, data: await listSessions(projectPath, request.listLimit) }
     } catch (error) {
       return this.failure(error, {
         code: 'INTERNAL_ERROR',
@@ -215,9 +217,9 @@ export class SessionManager {
    * 重新加载 Pi 资源：宿主在同一进程内重建会话 services；守门与打开链复用，
    * 但不做“同会话幂等返回”，因为目的正是重建服务。
    */
-  async reload(allowInterrupt: boolean): Promise<SessionOpenResult> {
+  async reload(allowInterrupt: boolean, listLimit: number): Promise<SessionOpenResult> {
     try {
-      return { ok: true, data: await this.applyReload(allowInterrupt) }
+      return { ok: true, data: await this.applyReload(allowInterrupt, listLimit) }
     } catch (error) {
       return this.failure(error, {
         code: 'INTERNAL_ERROR',
@@ -230,7 +232,7 @@ export class SessionManager {
    * 重载编排：目标是前台运行实例当前绑定的会话，目标与会话身份在提交前固定。
    * 信任按被重载会话的归属项目复核，避免用前台项目代替它的授权范围。
    */
-  private async applyReload(allowInterrupt: boolean): Promise<SessionList> {
+  private async applyReload(allowInterrupt: boolean, listLimit: number): Promise<SessionList> {
     const projectPath = this.requireProjectPath()
     const status = this.backendStatus()
     if (status.state === 'starting' || status.state === 'stopping') {
@@ -257,7 +259,7 @@ export class SessionManager {
     if (switched.cancelled) {
       throw new SessionFailure('RUNTIME_COMMAND_REJECTED', '重新加载资源被取消，当前会话保持不变。')
     }
-    return listSessions(projectPath)
+    return listSessions(projectPath, listLimit)
   }
 
   /**

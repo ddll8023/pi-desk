@@ -6,6 +6,9 @@
  * 归属该项目的单个会话文件，不批量清理目录；首条用户消息若是 `/skill:` 展开的技能调用，预览只取技能名
  * 与追加文本，不把技能正文当会话标题；并为 SDK 接管提供只读的目标身份复核（目录归属、头部身份与读取期间
  * 是否变化），该复核不接受越过该项目会话目录的路径引用。
+ *
+ * 列表按窗口读取：排序需要全目录的修改时间，因此每个文件都要 stat，但只有窗口内的文件才会被读取头部
+ * 并校验归属，窗口外的会话既没有摘要也不参与计数；窗口大小由调用方（页面）决定，逐页扩展由页面发起。
  * 读取范围由调用方给出的项目路径决定，不读当前项目；路径归一化在 project-path.ts，
  * 列表、打开、重载与删除编排在 session-manager.ts。
  */
@@ -23,9 +26,6 @@ import { getPiAgentDir } from './pi-paths'
  */
 const MAX_HEAD_BYTES = 1024 * 1024
 
-/** 会话列表上限；超出只保留最近修改的若干条并计数。 */
-const MAX_SESSIONS = 100
-
 /** 预览长度上限；只取首条用户消息的开头。 */
 const MAX_PREVIEW_CHARS = 120
 
@@ -38,6 +38,8 @@ export class SessionStorageError extends Error {}
 interface CachedSummary {
   /** 项目令牌：分组目录名可能碰撞，缓存必须按项目区分，不能复用其他项目的过滤结果。 */
   readonly projectPath: string
+  /** 会话文件绝对路径；每轮按本项目目录清单剪枝时用它判断文件是否仍然存在。 */
+  readonly filePath: string
   readonly size: number
   readonly mtimeMs: number
   /** 无法解析或不属于该项目的文件缓存为 null，避免每次列表重复读取。 */
@@ -48,7 +50,10 @@ interface HeadContent {
   readonly header: Record<string, unknown> | null
   readonly preview: string | null
 }
-/** 运行期缓存；键是项目令牌与会话文件绝对路径，每轮列表只保留仍然存在的文件。 */
+/**
+ * 运行期缓存；键是项目令牌与会话文件绝对路径。每轮按本项目拿到的目录清单剪枝：文件消失即丢弃，
+ * 其他项目的条目留给它们自己的读取轮次，多项目展开时不会互相清空。
+ */
 const summaryCache = new Map<string, CachedSummary>()
 
 /** 缓存键：项目路径与会话文件路径都可能包含任意字符，用 NUL 分隔避免拼接歧义。 */
@@ -239,8 +244,14 @@ async function readSummary(
   }
 }
 
-/** 读取会话摘要列表；目录不存在按无会话处理，无法读取才是错误。 */
-export async function listSessions(projectPath: string): Promise<SessionList> {
+/**
+ * 读取会话列表窗口：`limit` 是“最近 limit 条”的上界，由调用方按自己的加载进度给出；
+ * 上界由 IPC 契约校验（shared/session-api.ts 的 `MAX_SESSION_WINDOW`），这里不再重复限制。
+ * 目录不存在按无会话处理，无法读取才是错误。
+ * 窗口外的文件只参与排序与 `remaining` 计数，不读取头部：列表成本从“全目录头部读取”降到“窗口内头部读取”，
+ * 而逐页扩大窗口时已读过的条目直接命中缓存，不重复读盘。
+ */
+export async function listSessions(projectPath: string, limit: number): Promise<SessionList> {
   const directory = join(getSessionRoot(), getProjectGroupName(projectPath))
 
   let names: string[]
@@ -250,16 +261,17 @@ export async function listSessions(projectPath: string): Promise<SessionList> {
       .filter((entry) => entry.isFile() && entry.name.endsWith('.jsonl') && !entry.name.startsWith('.'))
       .map((entry) => entry.name)
   } catch (error) {
-    if (isMissingPath(error)) return { sessions: [], skipped: 0, truncated: 0, projectPath }
+    if (isMissingPath(error)) return { sessions: [], skipped: 0, remaining: 0, limit, projectPath }
     throw new SessionStorageError('无法读取本机会话目录。')
   }
 
-  const nextCache = new Map<string, CachedSummary>()
-  const accepted: SessionSummary[] = []
+  // 第一遍只取元数据：排序需要全目录的修改时间，但不读任何文件内容。
+  const present = new Set<string>()
+  const files: { readonly filePath: string; readonly info: Stats }[] = []
   let skipped = 0
-
   for (const name of names) {
     const filePath = join(directory, name)
+    present.add(filePath)
     let info: Stats
     try {
       info = await stat(filePath)
@@ -271,11 +283,21 @@ export async function listSessions(projectPath: string): Promise<SessionList> {
       skipped += 1
       continue
     }
+    files.push({ filePath, info })
+  }
+  files.sort((left, right) => right.info.mtimeMs - left.info.mtimeMs)
 
+  // 缓存只按本项目本轮目录清单剪枝：其他项目的条目留给它们自己的读取轮次，多项目展开时不会互相清空。
+  const nextCache = new Map<string, CachedSummary>()
+  for (const [key, value] of summaryCache) {
+    if (!isSamePath(value.projectPath, projectPath) || present.has(value.filePath)) nextCache.set(key, value)
+  }
+
+  const accepted: SessionSummary[] = []
+  for (const { filePath, info } of files.slice(0, limit)) {
     const cacheKey = summaryCacheKey(projectPath, filePath)
-    const cached = summaryCache.get(cacheKey)
+    const cached = nextCache.get(cacheKey)
     if (cached !== undefined && cached.size === info.size && cached.mtimeMs === info.mtimeMs) {
-      nextCache.set(cacheKey, cached)
       if (cached.summary === null) skipped += 1
       else accepted.push(cached.summary)
       continue
@@ -288,20 +310,20 @@ export async function listSessions(projectPath: string): Promise<SessionList> {
       // 文件在读取期间被删除或被占用：按无法解析处理。
       summary = null
     }
-    nextCache.set(cacheKey, { projectPath, size: info.size, mtimeMs: info.mtimeMs, summary })
+    nextCache.set(cacheKey, { projectPath, filePath, size: info.size, mtimeMs: info.mtimeMs, summary })
     if (summary === null) skipped += 1
     else accepted.push(summary)
   }
 
-  // 每轮只保留本轮见过的文件，缓存不会随时间无界增长。
   summaryCache.clear()
   for (const [key, value] of nextCache) summaryCache.set(key, value)
 
-  accepted.sort((left, right) => right.updatedAt - left.updatedAt)
+  // 窗口已经按修改时间降序排好（`updatedAt` 就是文件 mtime），不再二次排序。
   return {
-    sessions: accepted.slice(0, MAX_SESSIONS),
+    sessions: accepted,
     skipped,
-    truncated: Math.max(0, accepted.length - MAX_SESSIONS),
+    remaining: Math.max(0, files.length - limit),
+    limit,
     projectPath
   }
 }

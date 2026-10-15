@@ -9,6 +9,10 @@
   单个项目的会话列表有高度上限（见 --sidebar-session-list-max-height）：超出部分在该项目内滚动，
   一个项目不会占满整个侧栏；上限带来当前会话可能落在可视区外，因此展开、切项目、切会话后
   会把当前会话滚进视野。
+
+  会话列表是“最近 N 条”的分页窗口（首屏一页，滚动到底或点“加载更多”再取一页，上限见 MAX_SESSION_WINDOW）：
+  一个项目的会话再多也不会一次性读入与渲染；分页状态来自 store，组件只负责触发加载与展示入口。
+  当前会话的占位行只用于确实尚未落盘的会话（由运行状态给出），不再用“不在已加载窗口里”判断。
 -->
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
@@ -18,6 +22,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useAnchoredPopup } from '../anchored-popup'
 import { SESSION_RUN_LABELS, buildSidebarTree } from '../sidebar-tree'
 import type { SidebarProjectNode, SidebarSessionRow } from '../sidebar-tree'
+import { MAX_SESSION_WINDOW } from '../../../shared/session-api'
 import { usePreferencesStore } from '../stores/preferences'
 import { useProjectStore } from '../stores/project'
 import { useRuntimeStore } from '../stores/runtime'
@@ -64,11 +69,24 @@ const sessionBusy = computed(() => opening.value || deleting.value)
 /** 当前会话身份；宿主已回收（挂起）时仍指向同一会话，选中项不会因此消失。 */
 const currentSessionId = computed(() => runtimeStore.foregroundSessionId)
 
+/**
+ * 确实尚未落盘的当前会话身份：新建会话到首次写入之间 Pi 只分配身份，还没有会话文件。
+ * 判据与主进程的空会话释放一致（消息数为 0），所以已落盘的历史会话即使不在已加载窗口里，
+ * 也不会被误判成“尚未落盘”而多出一条占位行。
+ */
+const unsavedSessionId = computed<string | null>(() => {
+  const view = runtimeView.value
+  if (view.phase !== 'ready') return null
+  const info = view.snapshot.info
+  if (info === null || info.sessionId === null || info.messageCount > 0) return null
+  return info.sessionId
+})
+
 /** 相对时间的刻度：一分钟一次即可，不参与消息区的 500ms 计时。 */
 const now = ref(Date.now())
 let nowTimer: ReturnType<typeof setInterval> | null = null
 
-/** 侧栏树：项目顺序取项目列表本身，展开状态与会话归属都由构建函数决定。 */
+/** 侧栏树：项目顺序取项目列表本身，展开状态、会话归属与分页状态都由构建函数决定。 */
 const nodes = computed<readonly SidebarProjectNode[]>(() => buildSidebarTree({
   projects: projects.value,
   currentProjectPath: projectStore.currentProject?.path ?? null,
@@ -76,8 +94,10 @@ const nodes = computed<readonly SidebarProjectNode[]>(() => buildSidebarTree({
   sessionsOf: sessionStore.sessionsOf,
   viewOf: sessionStore.viewOf,
   countsOf: sessionStore.countsOf,
+  loadingMoreOf: sessionStore.loadingMoreOf,
   runs: sessionRunsStore.runs,
   foregroundSessionId: currentSessionId.value,
+  unsavedSessionId: unsavedSessionId.value,
   now: now.value
 }))
 
@@ -102,6 +122,43 @@ const sessionScrollers = new Map<string, HTMLElement>()
 function registerSessionScroller(projectId: string, element: unknown): void {
   if (element instanceof HTMLElement) sessionScrollers.set(projectId, element)
   else sessionScrollers.delete(projectId)
+}
+
+/** 触底判定留出的余量：滚动到接近底部就开始取下一页，不让用户等在白底上。 */
+const LOAD_MORE_THRESHOLD = 24
+
+function atSessionListBottom(projectId: string): boolean {
+  const scroller = sessionScrollers.get(projectId)
+  if (scroller === undefined) return false
+  return scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - LOAD_MORE_THRESHOLD
+}
+
+/**
+ * 逐页扩大某个项目的会话窗口，直到列表不再触底、没有更多或已达窗口上限。
+ * 每轮至少扩大一页，因此不会无界循环；读取失败时窗口不再变化，用 `loadedLimit` 记下的进度直接退出。
+ * 刚展开时列表只有首屏，若大部分文件都被跳过、行数填不满容器，这里会继续取下一页。
+ */
+async function loadMoreUntilFilled(projectPath: string, projectId: string): Promise<void> {
+  let loadedLimit = -1
+  for (;;) {
+    const state = sessionStore.countsOf(projectPath)
+    if (state.remaining <= 0 || sessionStore.windowFullOf(projectPath) || state.limit === loadedLimit) return
+    loadedLimit = state.limit
+    await sessionStore.loadMore(projectPath)
+    await nextTick()
+    if (!atSessionListBottom(projectId)) return
+  }
+}
+
+/** 会话列表滚到接近底部时自动取下一页；没有更多时 `loadMore` 自己会跳过。 */
+function onSessionScroll(node: SidebarProjectNode): void {
+  if (!atSessionListBottom(node.project.id)) return
+  void loadMoreUntilFilled(node.project.path, node.project.id)
+}
+
+/** “加载更多”入口：与触底自动加载同一条路径，只是由用户显式触发。 */
+function requestMoreSessions(node: SidebarProjectNode): void {
+  void loadMoreUntilFilled(node.project.path, node.project.id)
 }
 
 /**
@@ -569,7 +626,7 @@ onBeforeUnmount(() => {
                   <p v-else-if="!hasSessionRows(node) && node.view.phase !== 'error'" class="sidebar-empty is-nested">
                     还没有保存的会话，开始对话后会显示在这里。
                   </p>
-                  <ul v-if="hasSessionRows(node)" class="sidebar-session-list sidebar-session-scroll scroll-area" :ref="element => registerSessionScroller(node.project.id, element)">
+                  <ul v-if="hasSessionRows(node)" class="sidebar-session-list sidebar-session-scroll scroll-area" :ref="element => registerSessionScroller(node.project.id, element)" @scroll="onSessionScroll(node)">
                     <li v-for="row in node.sessions" :key="row.session.sessionId">
                       <div
                         class="sidebar-tree-row is-session"
@@ -626,9 +683,21 @@ onBeforeUnmount(() => {
                       </div>
                     </li>
                   </ul>
-                  <p v-if="node.skipped > 0 || node.truncated > 0" role="status" class="sidebar-list-notice is-nested">
-                    <span v-if="node.skipped > 0">已跳过 {{ node.skipped }} 个无法读取或不属于该项目的文件。</span>
-                    <span v-if="node.truncated > 0">另有 {{ node.truncated }} 条较早会话未列出。</span>
+                  <p v-if="node.skipped > 0" role="status" class="sidebar-list-notice is-nested">
+                    已跳过 {{ node.skipped }} 个无法读取或不属于该项目的文件。
+                  </p>
+                  <!-- 列表是“最近 N 条”的窗口：还有更早的会话时给一个常驻入口，滚动到底也会自动加载。 -->
+                  <AppButton
+                    v-if="node.remaining > 0 && !node.windowFull"
+                    variant="unstyled" class="sidebar-load-more"
+                    :disabled="node.loadingMore"
+                    @click="requestMoreSessions(node)"
+                  >
+                    {{ node.loadingMore ? '正在加载…' : `还有 ${node.remaining} 条更早的会话` }}
+                  </AppButton>
+                  <!-- 到窗口上限后不再加载：把原因写清楚，不让入口默默失效。 -->
+                  <p v-else-if="node.remaining > 0" role="status" class="sidebar-list-notice is-nested">
+                    已加载最近 {{ MAX_SESSION_WINDOW }} 条会话，更早的会话未加载。
                   </p>
                 </div>
               </div>

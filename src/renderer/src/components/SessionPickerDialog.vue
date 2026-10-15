@@ -1,7 +1,10 @@
-<!-- 会话选择弹层：展示当前项目的 Pi 会话列表，选中后沿用主进程的重启式打开链切换；列表数据与编排都在主进程与 session store，不解析会话文件。 -->
+<!-- 会话选择弹层：展示当前项目的 Pi 会话列表，选中后沿用主进程的重启式打开链切换；列表数据与编排都在主进程与 session store，不解析会话文件。
+     列表是“最近 N 条”的分页窗口（上限见 MAX_SESSION_WINDOW）：滚动到底或点“加载更多”继续取下一页，
+     分组（今天/更早）按已加载的条目划分。 -->
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
-import { computed, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
+import { MAX_SESSION_WINDOW } from '../../../shared/session-api'
 import type { SessionSummary } from '../../../shared/session-api'
 import { collapseForkedSessions } from '../sidebar-tree'
 import { useRuntimeStore } from '../stores/runtime'
@@ -17,9 +20,43 @@ const props = defineProps<{
 
 const sessionStore = useSessionStore()
 const runtimeStore = useRuntimeStore()
-const { view, sessions, skipped, truncated, actionError, opening } = storeToRefs(sessionStore)
+const {
+  view, sessions, skipped, remaining, loadingMore, windowFull, windowLimit, actionError, opening
+} = storeToRefs(sessionStore)
 
 const busy = computed(() => opening.value || view.value.phase === 'loading')
+
+/** 弹层自己的滚动容器：触底时继续取下一页，与侧栏同一口径。 */
+const dialogBody = ref<HTMLElement | null>(null)
+
+/** 触底判定余量；与侧栏一致，滚动到接近底部就取下一页。 */
+const LOAD_MORE_THRESHOLD = 24
+
+function atBodyBottom(): boolean {
+  const element = dialogBody.value
+  if (element === null) return false
+  return element.scrollTop + element.clientHeight >= element.scrollHeight - LOAD_MORE_THRESHOLD
+}
+
+/**
+ * 逐页扩大窗口，直到不再触底、没有更多或已达上限。
+ * 每轮至少扩大一页，读取失败时窗口不再变化，用 `loadedLimit` 记下的进度直接退出，不会无界循环。
+ */
+async function loadMoreUntilFilled(): Promise<void> {
+  let loadedLimit = -1
+  for (;;) {
+    if (remaining.value <= 0 || windowFull.value || windowLimit.value === loadedLimit) return
+    loadedLimit = windowLimit.value
+    await sessionStore.loadMore()
+    await nextTick()
+    if (!atBodyBottom()) return
+  }
+}
+
+function onBodyScroll(): void {
+  if (!atBodyBottom()) return
+  void loadMoreUntilFilled()
+}
 
 /** 分叉链只展示最新一条；当前会话即使被取代也保留。 */
 const visibleSessions = computed(() => collapseForkedSessions(
@@ -102,7 +139,7 @@ watch(
         <AppButton variant="unstyled" class="dialog-close-button" aria-label="关闭" @click="close" />
       </div>
 
-      <div class="scroll-area dialog-body">
+      <div ref="dialogBody" class="scroll-area dialog-body" @scroll="onBodyScroll">
         <!-- 刷新失败只在没有可显示会话时顶替列表；已有列表时错误另起一行，与侧栏同一口径。 -->
         <div v-if="view.phase === 'error'" class="flex flex-wrap items-center gap-2">
           <p role="alert" class="text-xs text-desk-danger">{{ view.error.message }}</p>
@@ -144,12 +181,25 @@ watch(
         </template>
       </div>
 
+      <!-- 列表是“最近 N 条”的窗口：底部常驻加载入口，滚动到底也会自动取下一页。 -->
       <div
-        v-if="skipped > 0 || truncated > 0"
+        v-if="skipped > 0 || remaining > 0"
         class="dialog-footer"
       >
         <p class="w-full text-left text-2xs text-desk-muted">
-          已跳过 {{ skipped }} 个不属于此项目的会话文件<span v-if="truncated > 0">，另有 {{ truncated }} 条较早会话未列出</span>。
+          已跳过 {{ skipped }} 个不属于此项目的会话文件<span v-if="remaining > 0">，还有 {{ remaining }} 条更早的会话未加载</span>。
+        </p>
+        <AppButton
+          v-if="remaining > 0 && !windowFull"
+          variant="unstyled" class="icon-button"
+          :disabled="loadingMore"
+          @click="loadMoreUntilFilled"
+        >
+          {{ loadingMore ? '正在加载…' : '加载更多' }}
+        </AppButton>
+        <!-- 到窗口上限后不再加载：把原因写清楚，不让入口默默失效。 -->
+        <p v-else-if="remaining > 0" class="w-full text-left text-2xs text-desk-muted">
+          已加载最近 {{ MAX_SESSION_WINDOW }} 条会话，更早的会话未加载。
         </p>
       </div>
         </div>

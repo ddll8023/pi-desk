@@ -7,7 +7,10 @@
  * 文案规则：会话行右侧只保留一项信息——需要用户动作或正在工作的状态优先于时间，
  * 已就绪的驻留实例保持安静，仍显示相对时间；完整时间与分叉来源留在操作浮层里。
  * 折叠规则：回退（Pi 的 fork）保留来源文件，分叉链只展示最新一条；当前会话与仍承载运行实例的会话不折叠。
+ * 分页规则：会话列表是“最近 limit 条”的窗口而不是全量，节点同时带上窗口外的剩余数与加载状态，
+ * 侧栏据此展示“加载更多”；占位条目只用于尚未落盘的会话，不用“不在已加载窗口里”判断。
  */
+import { MAX_SESSION_WINDOW } from '../../shared/session-api'
 import type { Project } from '../../shared/project-api'
 import type { SessionSummary } from '../../shared/session-api'
 import type { SessionRunState } from '../../shared/session-run-api'
@@ -63,7 +66,12 @@ export interface SidebarProjectNode {
   readonly sessions: readonly SidebarSessionRow[]
   readonly unboundRuns: readonly UnboundSessionRun[]
   readonly skipped: number
-  readonly truncated: number
+  /** 窗口之外仍未读取的会话文件数；大于 0 时侧栏提供“加载更多”。 */
+  readonly remaining: number
+  /** 正在扩大窗口；侧栏据此把“加载更多”显示为进行中。 */
+  readonly loadingMore: boolean
+  /** 窗口已达上限；到达后不再提供“加载更多”，避免无界读取与无界渲染。 */
+  readonly windowFull: boolean
 }
 
 export interface SidebarTreeInput {
@@ -72,10 +80,21 @@ export interface SidebarTreeInput {
   readonly expandedProjects: readonly string[]
   readonly sessionsOf: (projectPath: string) => readonly SessionSummary[]
   readonly viewOf: (projectPath: string) => SessionViewState
-  readonly countsOf: (projectPath: string) => { readonly skipped: number; readonly truncated: number }
+  readonly countsOf: (projectPath: string) => {
+    readonly skipped: number
+    readonly remaining: number
+    readonly limit: number
+  }
+  /** 该项目是否正在扩大列表窗口。 */
+  readonly loadingMoreOf: (projectPath: string) => boolean
   readonly runs: readonly SessionRunState[]
   /** 前台实例的会话身份；未落盘的当前会话按它造占位条目。 */
   readonly foregroundSessionId: string | null
+  /**
+   * 确实尚未落盘的当前会话身份（由运行状态给出）；只有它需要占位条目。
+   * 已落盘的会话一定有会话文件，因此不能因为不在已加载窗口里就被补成占位行。
+   */
+  readonly unsavedSessionId: string | null
   /** 当前时刻，用于相对时间；由调用方传入，避免每次渲染取时钟。 */
   readonly now: number
 }
@@ -209,8 +228,10 @@ export function buildSidebarTree(input: SidebarTreeInput): readonly SidebarProje
       sessionId => sessionId === currentSessionId || runOf(sessionId) !== null)
 
     // 尚未落盘的当前会话：新建后到首次写入之间只有运行身份，先按占位条目显示。
-    if (currentSessionId !== null && samePath(input.currentProjectPath, project.path)
-      && !listedIds.has(currentSessionId)) {
+    // 判据是“确实尚未落盘”（由运行状态给出），不是“不在已加载窗口里”：列表分页后，
+    // 后者会把窗口外已落盘的历史会话误报成占位行。
+    if (currentSessionId !== null && currentSessionId === input.unsavedSessionId
+      && samePath(input.currentProjectPath, project.path) && !listedIds.has(currentSessionId)) {
       const session = placeholderSession(currentSessionId)
       rows.push(toSessionRow(session, {
         run: runOf(currentSessionId), pending: true, unsaved: true, currentSessionId, now, forkLabelOf
@@ -218,6 +239,8 @@ export function buildSidebarTree(input: SidebarTreeInput): readonly SidebarProje
       seen.add(currentSessionId)
     }
     // 已登记运行实例但还没有文件条目的会话（含已切到后台的）：文件落盘后由真实摘要接管。
+    // 已知限制：这里仍以“不在已加载窗口里”判断，因此窗口外已落盘的历史会话会被补成占位行；
+    // 当前只有“按 id 打开未加载会话”才可能触发，而现在没有这样的入口，所以不额外传会话文件信息。
     for (const run of projectRuns) {
       if (run.phase === 'idle' || run.sessionId === null || listedIds.has(run.sessionId) || seen.has(run.sessionId)) {
         continue
@@ -250,7 +273,9 @@ export function buildSidebarTree(input: SidebarTreeInput): readonly SidebarProje
       sessions: rows,
       unboundRuns: unbound.filter(run => samePath(run.projectPath, project.path)),
       skipped: counts.skipped,
-      truncated: counts.truncated
+      remaining: counts.remaining,
+      loadingMore: input.loadingMoreOf(project.path),
+      windowFull: counts.limit >= MAX_SESSION_WINDOW
     }
   })
 }

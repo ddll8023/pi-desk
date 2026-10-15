@@ -433,9 +433,9 @@ const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionAp
     return isProjectListResult(response) ? response : invalidProjectListResponse()
   },
 
-  /** 读取指定项目的会话列表；项目路径由主进程校验是否已添加。 */
+  /** 读取指定项目的会话列表窗口；项目路径由主进程校验是否已添加，窗口大小由页面按加载进度给出。 */
   async listSessions(request: SessionListRequest) {
-    const payload: SessionListRequest = { projectPath: request.projectPath }
+    const payload: SessionListRequest = { projectPath: request.projectPath, limit: request.limit }
     const response: unknown = await ipcRenderer.invoke(SESSION_LIST_CHANNEL, payload)
     return isSessionListResult(response) ? response : invalidSessionResponse()
   },
@@ -447,14 +447,14 @@ const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionAp
     return isProjectFileSearchResult(response) ? response : invalidProjectFileResponse()
   },
 
-  async openSession(sessionId: string | null, allowInterrupt: boolean) {
-    const request: SessionOpenRequest = { sessionId, allowInterrupt }
+  async openSession(sessionId: string | null, allowInterrupt: boolean, listLimit: number) {
+    const request: SessionOpenRequest = { sessionId, allowInterrupt, listLimit }
     const response: unknown = await ipcRenderer.invoke(SESSION_OPEN_CHANNEL, request)
     return isSessionListResult(response) ? response : invalidSessionResponse()
   },
 
-  async reloadSession(allowInterrupt: boolean) {
-    const response: unknown = await ipcRenderer.invoke(SESSION_RELOAD_CHANNEL, { allowInterrupt })
+  async reloadSession(allowInterrupt: boolean, listLimit: number) {
+    const response: unknown = await ipcRenderer.invoke(SESSION_RELOAD_CHANNEL, { allowInterrupt, listLimit })
     return isSessionListResult(response) ? response : invalidSessionResponse()
   },
 
@@ -463,7 +463,8 @@ const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionAp
     const payload: SessionDeleteRequest = {
       projectPath: request.projectPath,
       sessionId: request.sessionId,
-      allowInterrupt: request.allowInterrupt
+      allowInterrupt: request.allowInterrupt,
+      listLimit: request.listLimit
     }
     const response: unknown = await ipcRenderer.invoke(SESSION_DELETE_CHANNEL, payload)
     return isSessionListResult(response) ? response : invalidSessionResponse()

@@ -1,13 +1,17 @@
 /**
- * 保存会话面板的展示状态：按项目保存的会话列表、打开、重新加载与删除动作；会话文件解析、切换与删除编排都在主进程。
+ * 保存会话面板的展示状态：按项目保存的会话列表窗口、打开、重新加载与删除动作；会话文件解析、切换与删除编排都在主进程。
  *
  * 侧栏按项目树展示会话，因此列表按项目分片保存（键是项目路径）：展开其他项目时懒读取，
  * 已读过的分片在应用内保留，切换项目不需要重新读取。分片只登记主进程回报的项目路径对应的结果，
  * 迟到响应不会写进其他项目的分片。
+ * 每个分片保存的是“最近 limit 条”的窗口而不是全量：首屏只取一页，界面触底或点“加载更多”时按页扩大窗口，
+ * 上限由 MAX_SESSION_WINDOW 约束；窗口是前缀，所以每次响应都能整体替换分片，不需要偏移量或追加合并，
+ * 两次请求之间列表重排、新增或删除也不会产生重复行或空洞。
  * 单次动作失败放在 `actionError`，不影响已加载的列表。
  */
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
+import { MAX_SESSION_WINDOW, SESSION_PAGE_SIZE } from '../../../shared/session-api'
 import type { SessionError, SessionList, SessionSummary } from '../../../shared/session-api'
 import type { ProjectError } from '../../../shared/project-api'
 import { useTrustStore } from './trust'
@@ -22,8 +26,13 @@ type SessionSlicePhase = 'idle' | 'loading' | 'ready' | 'error'
 interface SessionListSlice {
   readonly phase: SessionSlicePhase
   readonly sessions: readonly SessionSummary[]
+  /** 当前窗口大小（最近 limit 条）：加载更多时按页扩大，刷新与变更回传都沿用，列表不会塌回首屏。 */
+  readonly limit: number
   readonly skipped: number
-  readonly truncated: number
+  /** 窗口之外仍未读取的会话文件数；大于 0 时界面提供“加载更多”。 */
+  readonly remaining: number
+  /** 正在扩大窗口；与首屏读取的 `phase === 'loading'` 分开，已有列表时不退回加载态。 */
+  readonly loadingMore: boolean
   readonly error: SessionError | null
 }
 
@@ -37,8 +46,10 @@ export type SessionViewState =
 const EMPTY_SLICE: SessionListSlice = {
   phase: 'idle',
   sessions: [],
+  limit: SESSION_PAGE_SIZE,
   skipped: 0,
-  truncated: 0,
+  remaining: 0,
+  loadingMore: false,
   error: null
 }
 
@@ -61,7 +72,7 @@ export const useSessionStore = defineStore('session', () => {
   const awaitingTrust = ref(false)
   /** 待确认的重载请求：与打开共用中断确认弹窗，但目标是重启当前 Runtime。 */
   const pendingReload = ref(false)
-  /** 每个项目同时只允许一次读取；同一项目的重复请求复用同一个等待。 */
+  /** 每个项目同时只允许一次列表读取（首屏、刷新与扩大窗口都算），同一项目的重复请求复用同一个等待。 */
   const inflight = new Map<string, Promise<void>>()
 
   /** /resume 与顶栏会话 chip 共用的会话选择弹层。 */
@@ -102,25 +113,41 @@ export const useSessionStore = defineStore('session', () => {
     return { phase: 'idle' }
   }
 
-  /** 某个项目下被跳过的文件数与被省略的较早会话数；供侧栏在对应项目下如实提示。 */
-  function countsOf(projectPath: string): { readonly skipped: number; readonly truncated: number } {
+  /** 某个项目下被跳过的文件数、窗口外剩余的会话文件数与当前窗口大小；供侧栏与选择弹层展示分页状态。 */
+  function countsOf(projectPath: string): {
+    readonly skipped: number
+    readonly remaining: number
+    readonly limit: number
+  } {
     const slice = sliceOf(projectPath)
-    return { skipped: slice.skipped, truncated: slice.truncated }
+    return { skipped: slice.skipped, remaining: slice.remaining, limit: slice.limit }
+  }
+
+  /** 某个项目是否正在扩大窗口；界面据此把“加载更多”显示为进行中。 */
+  function loadingMoreOf(projectPath: string): boolean {
+    return sliceOf(projectPath).loadingMore
+  }
+
+  /** 某个项目的窗口是否已达上限；到上限后不再提供加载更多，避免无界读取与无界渲染。 */
+  function windowFullOf(projectPath: string): boolean {
+    return sliceOf(projectPath).limit >= MAX_SESSION_WINDOW
   }
 
   function applySlice(projectPath: string, slice: SessionListSlice): void {
     lists.value = { ...lists.value, [projectPath]: slice }
   }
 
-  /** 主进程返回的列表是唯一真相；只写入它回报的项目分片，跳过的文件数如实保留。 */
+  /** 主进程返回的窗口是唯一真相；只写入它回报的项目分片，跳过的文件数与窗口大小如实保留。 */
   function applyList(list: SessionList): void {
     const projectPath = list.projectPath ?? currentProjectPath()
     if (projectPath === null) return
     applySlice(projectPath, {
       phase: 'ready',
       sessions: list.sessions,
+      limit: list.limit,
       skipped: list.skipped,
-      truncated: list.truncated,
+      remaining: list.remaining,
+      loadingMore: false,
       error: null
     })
   }
@@ -142,9 +169,28 @@ export const useSessionStore = defineStore('session', () => {
     return projectPath === null ? 0 : sliceOf(projectPath).skipped
   })
 
-  const truncated = computed<number>(() => {
+  /** 当前项目窗口外仍未读取的会话文件数；大于 0 时选择弹层提供“加载更多”。 */
+  const remaining = computed<number>(() => {
     const projectPath = currentProjectPath()
-    return projectPath === null ? 0 : sliceOf(projectPath).truncated
+    return projectPath === null ? 0 : sliceOf(projectPath).remaining
+  })
+
+  /** 当前项目是否正在扩大窗口。 */
+  const loadingMore = computed<boolean>(() => {
+    const projectPath = currentProjectPath()
+    return projectPath === null ? false : sliceOf(projectPath).loadingMore
+  })
+
+  /** 当前项目的窗口是否已达上限；界面据此停止提供“加载更多”。 */
+  const windowFull = computed<boolean>(() => {
+    const projectPath = currentProjectPath()
+    return projectPath === null ? false : windowFullOf(projectPath)
+  })
+
+  /** 当前项目的窗口大小；界面用它判断一次“加载更多”是否真的推进了窗口。 */
+  const windowLimit = computed<number>(() => {
+    const projectPath = currentProjectPath()
+    return projectPath === null ? SESSION_PAGE_SIZE : sliceOf(projectPath).limit
   })
 
   /** 首次挂载读取当前项目的列表；没有当前项目时不做任何读取。 */
@@ -155,6 +201,7 @@ export const useSessionStore = defineStore('session', () => {
 
   /**
    * 确保某个项目的列表已读取；`force` 用于手动刷新与新建会话落盘后的补读。
+   * 读取窗口取该分片当前的 `limit`：刷新不会把已经展开的列表收回首屏。
    * 同一项目并发调用复用同一次读取，不产生并行请求。
    */
   async function ensureLoaded(projectPath: string, force = false): Promise<void> {
@@ -163,7 +210,7 @@ export const useSessionStore = defineStore('session', () => {
     const slice = sliceOf(projectPath)
     if (!force && slice.phase !== 'idle') return
 
-    const request = load(projectPath)
+    const request = load(projectPath, slice.limit)
     inflight.set(projectPath, request)
     try {
       await request
@@ -173,36 +220,57 @@ export const useSessionStore = defineStore('session', () => {
   }
 
   /**
-   * 读取一次并写入该项目分片；没有当前项目不是列表读取失败，界面按项目状态提示。
-   * 已有内容的刷新既不退回加载态、失败也不清空列表：切换项目与补读不该让正在看的列表先折叠再恢复。
+   * 扩大某个项目的列表窗口：每次多取一页，到 `MAX_SESSION_WINDOW` 后不再扩大。
+   * 不传项目路径时按当前项目处理。窗口是“最近 limit 条”的前缀，所以不需要偏移量或追加合并；
+   * 已经在读取时复用同一次读取，不并发请求。
    */
-  async function load(projectPath: string): Promise<void> {
+  async function loadMore(projectPath?: string): Promise<void> {
+    const target = projectPath ?? currentProjectPath()
+    if (target === null) return
+    const pending = inflight.get(target)
+    if (pending !== undefined) return pending
+    const slice = sliceOf(target)
+    if (slice.remaining <= 0 || slice.limit >= MAX_SESSION_WINDOW) return
+
+    const request = load(target, Math.min(slice.limit + SESSION_PAGE_SIZE, MAX_SESSION_WINDOW))
+    inflight.set(target, request)
+    try {
+      await request
+    } finally {
+      inflight.delete(target)
+    }
+  }
+
+  /**
+   * 读取一次窗口并写入该项目分片；没有当前项目不是列表读取失败，界面按项目状态提示。
+   * 已有内容的刷新或扩大窗口既不退回加载态、失败也不清空列表：切换项目与补读不该让正在看的列表先折叠再恢复。
+   */
+  async function load(projectPath: string, limit: number): Promise<void> {
     const current = sliceOf(projectPath)
     if (current.phase !== 'ready' || current.sessions.length === 0) {
-      applySlice(projectPath, { ...current, phase: 'loading' })
+      applySlice(projectPath, { ...current, phase: 'loading', limit })
+    } else {
+      // 已有内容时只标记“正在扩大窗口”，列表本身保持不变。
+      applySlice(projectPath, { ...current, loadingMore: true })
     }
-    const result = await listSessions(projectPath)
+    const result = await listSessions(projectPath, limit)
     if (!result.ok) {
       if (result.error.code === 'INVALID_PROJECT_PATH') {
         applySlice(projectPath, EMPTY_SLICE)
         return
       }
       // 保留本次读取期间已写入的列表，只记录失败；界面按「有内容」同时展示列表与提示。
-      applySlice(projectPath, { ...sliceOf(projectPath), phase: 'error', error: result.error })
+      applySlice(projectPath, {
+        ...sliceOf(projectPath), phase: 'error', loadingMore: false, error: result.error
+      })
       return
     }
     // 主进程回报实际读取的项目路径；与请求不符时丢弃，不把别的项目的结果写进本分片。
     if (result.data.projectPath !== projectPath) return
-    applySlice(projectPath, {
-      phase: 'ready',
-      sessions: result.data.sessions,
-      skipped: result.data.skipped,
-      truncated: result.data.truncated,
-      error: null
-    })
+    applyList(result.data)
   }
 
-  /** 重新读取当前项目的会话列表；手动刷新、回退与新建会话落盘后的补读都走这里。 */
+  /** 重新读取当前项目的会话列表窗口；手动刷新、回退与新建会话落盘后的补读都走这里。 */
   async function refresh(): Promise<void> {
     const projectPath = currentProjectPath()
     if (projectPath !== null) await ensureLoaded(projectPath, true)
@@ -257,7 +325,8 @@ export const useSessionStore = defineStore('session', () => {
         }
       }
       const targetPath = currentProjectPath()
-      const result = await openSession(sessionId, allowInterrupt)
+      // 变更回传的列表保持页面已加载的窗口深度，否则打开后列表会收回首屏。
+      const result = await openSession(sessionId, allowInterrupt, windowLimit.value)
       if (result.ok) {
         // 打开的返回列表同样只写入它回报的项目分片，不覆盖其他项目已读过的内容。
         applyList(result.data)
@@ -289,6 +358,7 @@ export const useSessionStore = defineStore('session', () => {
   /**
    * 重新加载 Pi 资源：在同一 SDK 宿主进程内重建该会话的 services（重新读取 Skills、Prompt Templates、
    * MCP 配置与 Extension），并尽量恢复当前会话。
+   * 回传列表保持当前窗口深度，避免重载后侧栏列表收回首屏。
    */
   async function reloadCurrent(allowInterrupt = false): Promise<void> {
     if (opening.value) return
@@ -297,7 +367,7 @@ export const useSessionStore = defineStore('session', () => {
     pendingReload.value = false
     actionError.value = null
     try {
-      const result = await reloadSession(allowInterrupt)
+      const result = await reloadSession(allowInterrupt, windowLimit.value)
       if (result.ok) {
         applyList(result.data)
         pendingReload.value = false
@@ -325,7 +395,7 @@ export const useSessionStore = defineStore('session', () => {
   /**
    * 删除会话：`projectPath` 是会话所属项目路径，成功时把主进程回报的删除后列表写入对应项目分片。
    * `allowInterrupt` 表示用户已在确认弹层中同意中断该会话的在途操作；失败只记录在 actionError，
-   * 已加载的列表与运行实例不受影响。
+   * 已加载的列表与运行实例不受影响。回传列表保持该项目的当前窗口深度。
    */
   async function removeSession(projectPath: string, sessionId: string, allowInterrupt: boolean): Promise<boolean> {
     if (deleting.value) return false
@@ -333,21 +403,13 @@ export const useSessionStore = defineStore('session', () => {
     deleting.value = true
     actionError.value = null
     try {
-      const result = await deleteSession(projectPath, sessionId, allowInterrupt)
+      const result = await deleteSession(projectPath, sessionId, allowInterrupt, sliceOf(projectPath).limit)
       if (!result.ok) {
         actionError.value = result.error
         return false
       }
       // 主进程回报实际读取的项目路径；与请求不符时丢弃，不把别的项目的结果写进本分片。
-      if (result.data.projectPath === projectPath) {
-        applySlice(projectPath, {
-          phase: 'ready',
-          sessions: result.data.sessions,
-          skipped: result.data.skipped,
-          truncated: result.data.truncated,
-          error: null
-        })
-      }
+      if (result.data.projectPath === projectPath) applyList(result.data)
       return true
     } finally {
       deleting.value = false
@@ -392,7 +454,10 @@ export const useSessionStore = defineStore('session', () => {
     view,
     sessions,
     skipped,
-    truncated,
+    remaining,
+    loadingMore,
+    windowFull,
+    windowLimit,
     actionError,
     opening,
     deleting,
@@ -403,10 +468,13 @@ export const useSessionStore = defineStore('session', () => {
     showSessionPicker,
     initialize,
     ensureLoaded,
+    loadMore,
     refresh,
     sessionsOf,
     viewOf,
     countsOf,
+    loadingMoreOf,
+    windowFullOf,
     reconcileCurrentSession,
     open,
     removeSession,

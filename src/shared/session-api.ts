@@ -1,4 +1,8 @@
-/** 只定义 Pi Session 列表（按项目）、打开、重新加载与删除 IPC 的固定通道、请求与结果类型及跨进程响应校验。 */
+/**
+ * 只定义 Pi Session 列表（按项目、按窗口）、打开、重新加载与删除 IPC 的固定通道、请求与结果类型及跨进程响应校验。
+ * 列表不分页追加而是逐页扩展窗口：每次请求都返回"最近 limit 条"，响应可直接整体替换页面已有的窗口，
+ * 两次请求之间列表发生重排、新增或删除时不会产生重复行或空洞；窗口大小由页面决定，主进程只校验范围。
+ */
 import type { RuntimeErrorCode } from './runtime-api'
 
 export const SESSION_LIST_CHANNEL = 'desktop:session-list'
@@ -8,31 +12,47 @@ export const SESSION_RELOAD_CHANNEL = 'desktop:session-reload'
 /** 删除会话：删除该会话的 JSONL 文件，被运行实例占用时先按 `allowInterrupt` 收敛占用；不可恢复。 */
 export const SESSION_DELETE_CHANNEL = 'desktop:session-delete'
 
+/** 会话列表首屏条数与每次“加载更多”的增量；侧栏与选择弹层共用同一分页口径。 */
+export const SESSION_PAGE_SIZE = 30
+
+/** 列表窗口上界：页面最多加载这么多条，避免无界读取与无界渲染。 */
+export const MAX_SESSION_WINDOW = 200
+
 /**
- * 会话列表请求：显式给出要读取的项目路径。侧栏按项目树展示会话，列表读取不再隐式取当前项目；
+ * 会话列表请求：显式给出要读取的项目路径与窗口大小。侧栏按项目树展示会话，列表读取不再隐式取当前项目；
  * 主进程只接受已添加项目的规范绝对路径，页面不能借它读取任意目录。
+ * `limit` 是"最近 limit 条"的窗口上界，页面按自己的加载进度逐页扩大；主进程不记录页面已加载到第几页。
  */
 export interface SessionListRequest {
   readonly projectPath: string
+  readonly limit: number
 }
 
 /** 路径长度上限；与界面偏好中的路径字段同口径，只拒绝明显异常的值。 */
 const MAX_PROJECT_PATH_LENGTH = 4096
 
-/** 列表请求只放行一个非空的项目路径字符串，不接受多余字段。 */
+/** 列表窗口校验：只接受 1..MAX_SESSION_WINDOW 的整数，避免页面要求无界读取；主进程与契约校验共用同一口径。 */
+export function isSessionListWindow(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value)
+    && value >= 1 && value <= MAX_SESSION_WINDOW
+}
+
+/** 列表请求只放行非空的项目路径与合法窗口大小，不接受多余字段。 */
 export function isSessionListRequest(value: unknown): value is SessionListRequest {
   if (!isRecord(value)) return false
-  if (Object.keys(value).some((key) => key !== 'projectPath')) return false
+  if (Object.keys(value).some((key) => key !== 'projectPath' && key !== 'limit')) return false
   const { projectPath } = value
   return typeof projectPath === 'string'
     && projectPath !== ''
     && projectPath.length <= MAX_PROJECT_PATH_LENGTH
+    && isSessionListWindow(value.limit)
 }
 
 /** 删除请求同样只放行非空且有界的项目路径与会话 id，外加显式中断确认布尔值。 */
 export function isSessionDeleteRequest(value: unknown): value is SessionDeleteRequest {
   if (!isRecord(value)) return false
-  if (Object.keys(value).some((key) => key !== 'projectPath' && key !== 'sessionId' && key !== 'allowInterrupt')) return false
+  if (Object.keys(value).some((key) => key !== 'projectPath' && key !== 'sessionId'
+    && key !== 'allowInterrupt' && key !== 'listLimit')) return false
   const { projectPath, sessionId, allowInterrupt } = value
   return typeof projectPath === 'string'
     && projectPath !== ''
@@ -41,6 +61,7 @@ export function isSessionDeleteRequest(value: unknown): value is SessionDeleteRe
     && sessionId !== ''
     && sessionId.length <= 255
     && typeof allowInterrupt === 'boolean'
+    && isSessionListWindow(value.listLimit)
 }
 
 /**
@@ -50,6 +71,9 @@ export function isSessionDeleteRequest(value: unknown): value is SessionDeleteRe
  *
  * `forkedFromSessionId` 是回退（Pi 的 fork）产生的来源会话 id：回退会新建会话文件并保留原文件，
  * 两个文件都留在同一目录里；列表把分叉链折叠为最新一条，来源会话只在分叉来源标注里出现。
+ *
+ * 列表是窗口而不是全量：主进程按最近修改时间排序后只读取窗口内的文件，因此窗口外的会话既没有摘要，
+ * 也没有参与归属校验；`remaining` 是窗口外的文件数上界，只用于表达"还有更多可加载"。
  */
 export interface SessionSummary {
   readonly sessionId: string
@@ -62,10 +86,18 @@ export interface SessionSummary {
 
 export interface SessionList {
   readonly sessions: readonly SessionSummary[]
-  /** 同一分组目录里无法解析或 cwd 与当前项目不符的文件数，界面应如实提示。 */
+  /**
+   * 无法读取或不属于该项目的文件数：stat 失败覆盖整个分组目录，解析失败只覆盖本次窗口内的文件；
+   * 界面按"已加载部分"如实提示，不承诺它是整目录的完整统计。
+   */
   readonly skipped: number
-  /** 超过列表上限被省略的会话数。 */
-  readonly truncated: number
+  /**
+   * 本次窗口之外仍未读取的会话文件数，是"还有更多可加载"的上界；
+   * 其中可能含无法解析或不属于该项目的文件，所以不能当作有效会话数展示。
+   */
+  readonly remaining: number
+  /** 本次返回的窗口上界，等于请求中的 `limit`；页面据此确定自己的加载进度。 */
+  readonly limit: number
   /**
    * 本次实际读取的项目路径；等于请求中的路径，未选择项目时不可能出现（列表请求必须带项目）。
    * 页面据此把结果归入对应项目的分片，不把旧项目的列表当成新项目的。
@@ -73,21 +105,28 @@ export interface SessionList {
   readonly projectPath: string | null
 }
 
-/** `sessionId` 为 null 表示新建会话；`allowInterrupt` 只有用户已确认时才为真。 */
+/**
+ * `sessionId` 为 null 表示新建会话；`allowInterrupt` 只有用户已确认时才为真。
+ * `listLimit` 是变更后回传列表的窗口上界：页面按自己已加载的窗口深度提交，
+ * 否则每次打开都会把列表塌回首屏，当前会话可能从侧栏消失。
+ */
 export interface SessionOpenRequest {
   readonly sessionId: string | null
   readonly allowInterrupt: boolean
+  readonly listLimit: number
 }
 
 /**
  * 删除会话请求：显式给出会话所属项目路径与会话 id；项目必须是已添加项目，会话必须属于该项目。
  * `allowInterrupt` 只有用户已确认时才为真：目标会话正被运行实例占用且在途工作未完成时，
  * 只有确认过中断才允许释放占用并删除。
+ * `listLimit` 与打开请求同义：删除后回传的列表保持页面当前窗口深度。
  */
 export interface SessionDeleteRequest {
   readonly projectPath: string
   readonly sessionId: string
   readonly allowInterrupt: boolean
+  readonly listLimit: number
 }
 
 /** 复用 Runtime 错误码族，只追加 Session 专有错误码。 */
@@ -108,35 +147,37 @@ export type SessionListResult =
   | { readonly ok: true; readonly data: SessionList }
   | { readonly ok: false; readonly error: SessionError }
 
-/** 打开会话成功时返回更新后的列表；Runtime 状态仍由状态事件收敛。 */
+/** 打开会话成功时返回该项目的列表快照（窗口取请求里的 `listLimit`）；Runtime 状态仍由状态事件收敛。 */
 export type SessionOpenResult =
   | { readonly ok: true; readonly data: SessionList }
   | { readonly ok: false; readonly error: SessionError }
 
-/** 删除会话成功时同样返回删除后的列表快照；失败时不改变任何文件与占用。 */
+/** 删除会话成功时同样返回删除后的列表快照（窗口取请求里的 `listLimit`）；失败时不改变任何文件与占用。 */
 export type SessionDeleteResult =
   | { readonly ok: true; readonly data: SessionList }
   | { readonly ok: false; readonly error: SessionError }
 
 export interface SessionApi {
-  /** 读取指定项目的会话列表；项目必须是已添加项目，不要求它是当前项目。 */
+  /** 读取指定项目的会话列表窗口；项目必须是已添加项目，不要求它是当前项目。 */
   readonly listSessions: (request: SessionListRequest) => Promise<SessionListResult>
   /**
    * 打开会话；`sessionId` 为 null 表示新建，非空时必须属于当前项目。
    * 新建会话的默认模型由 Pi 自己的 settings.json 决定，不能在这里指定。
+   * `listLimit` 只影响回传列表的窗口大小，不影响打开行为。
    */
   readonly openSession: (
     sessionId: string | null,
-    allowInterrupt: boolean
+    allowInterrupt: boolean,
+    listLimit: number
   ) => Promise<SessionOpenResult>
   /**
    * 重新加载 Pi 资源：在同一 SDK 宿主进程内重建该会话的 services（重新读取 Skills、Prompt Templates、
    * MCP 配置与 Extension），并尽量恢复当前会话；`allowInterrupt` 只有用户已确认时才为真。
    */
-  readonly reloadSession: (allowInterrupt: boolean) => Promise<SessionOpenResult>
+  readonly reloadSession: (allowInterrupt: boolean, listLimit: number) => Promise<SessionOpenResult>
   /**
    * 删除会话：删除该会话的 JSONL 文件，不可恢复；会话正被运行实例占用时先收敛占用。
-   * 成功时返回删除后的该会话所属项目的列表。
+   * 成功时返回删除后的该会话所属项目的列表快照。
    */
   readonly deleteSession: (request: SessionDeleteRequest) => Promise<SessionDeleteResult>
 }
@@ -185,9 +226,10 @@ function isSessionList(value: unknown): value is SessionList {
   return typeof value.skipped === 'number'
     && Number.isInteger(value.skipped)
     && value.skipped >= 0
-    && typeof value.truncated === 'number'
-    && Number.isInteger(value.truncated)
-    && value.truncated >= 0
+    && typeof value.remaining === 'number'
+    && Number.isInteger(value.remaining)
+    && value.remaining >= 0
+    && isSessionListWindow(value.limit)
 }
 
 // TypeScript 声明不能保证 invoke 的实际返回值；沙箱桥接只放行本契约。

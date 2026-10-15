@@ -1260,6 +1260,34 @@
     overflow-wrap: anywhere;
   }
 
+  /*
+   * 分页入口：与同层会话行对齐的一行文字按钮，常驻在项目会话列表下方。
+   * 它在滚动容器之外，所以无论列表滚到哪里都能看到“还有多少条”，不必滚到底找入口。
+   */
+  .sidebar-load-more {
+    display: flex;
+    width: 100%;
+    min-height: 26px;
+    align-items: center;
+    border-radius: 5px;
+    padding: 3px 6px;
+    color: var(--sidebar-muted);
+    font-size: 11px;
+    font-weight: 500;
+    line-height: 18px;
+    text-align: left;
+    transition: background-color var(--sidebar-duration-hover) ease, color var(--sidebar-duration-hover) ease;
+  }
+
+  .sidebar-load-more:not(:disabled):hover {
+    background: var(--sidebar-hover);
+    color: var(--sidebar-ink);
+  }
+
+  .sidebar-load-more:disabled {
+    cursor: default;
+  }
+
   .sidebar-error,
   .sidebar-notice.is-error {
     color: var(--color-desk-danger);
@@ -1328,7 +1356,7 @@
     transition: opacity var(--sidebar-duration-hover) ease, transform var(--sidebar-duration-collapse) var(--sidebar-ease), background-color var(--sidebar-duration-hover) ease, color var(--sidebar-duration-hover) ease;
   }
 
-  .app-sidebar.is-collapsed :is(.sidebar-tree-copy, .sidebar-session-title, .sidebar-session-meta, .project-sidebar-heading, .project-sidebar-add, .sidebar-footer-label, .sidebar-empty, .sidebar-notice, .sidebar-list-notice) {
+  .app-sidebar.is-collapsed :is(.sidebar-tree-copy, .sidebar-session-title, .sidebar-session-meta, .project-sidebar-heading, .project-sidebar-add, .sidebar-footer-label, .sidebar-empty, .sidebar-notice, .sidebar-list-notice, .sidebar-load-more) {
     opacity: 0;
     transform: translateX(-4px);
   }
@@ -1844,7 +1872,7 @@
       transition: none !important;
     }
 
-    .app-sidebar.is-collapsed :is(.sidebar-tree-copy, .sidebar-session-title, .sidebar-session-meta, .project-sidebar-heading, .project-sidebar-add, .sidebar-footer-label, .sidebar-empty, .sidebar-notice, .sidebar-list-notice) {
+    .app-sidebar.is-collapsed :is(.sidebar-tree-copy, .sidebar-session-title, .sidebar-session-meta, .project-sidebar-heading, .project-sidebar-add, .sidebar-footer-label, .sidebar-empty, .sidebar-notice, .sidebar-list-notice, .sidebar-load-more) {
       transform: none;
     }
 

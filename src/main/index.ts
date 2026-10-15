@@ -46,7 +46,8 @@ import {
   SESSION_OPEN_CHANNEL,
   SESSION_RELOAD_CHANNEL,
   isSessionDeleteRequest,
-  isSessionListRequest
+  isSessionListRequest,
+  isSessionListWindow
 } from '../shared/session-api'
 import type {
   SessionDeleteResult,
@@ -792,15 +793,15 @@ function registerSessionHandlers(pageUrl: string): void {
       if (!isTrustedCaller(event, pageUrl)) {
         return sessionFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
       }
-      // 侧栏按项目树展示会话：列表必须显式给出项目路径，主进程只接受已添加项目。
+      // 侧栏按项目树展示会话：列表必须显式给出项目路径与窗口大小，主进程只接受已添加项目。
       if (args.length !== 1) {
-        return sessionFailure('INVALID_REQUEST', '会话列表接口只接受一个项目路径请求对象。')
+        return sessionFailure('INVALID_REQUEST', '会话列表接口只接受一个项目路径与窗口大小请求对象。')
       }
       const request = args[0]
       if (!isSessionListRequest(request)) {
-        return sessionFailure('INVALID_REQUEST', '会话列表接口只接受一个项目路径请求对象。')
+        return sessionFailure('INVALID_REQUEST', '会话列表接口只接受一个项目路径与窗口大小请求对象。')
       }
-      return sessionManager.list(request.projectPath)
+      return sessionManager.list(request.projectPath, request.limit)
     }
   )
 
@@ -818,10 +819,10 @@ function registerSessionHandlers(pageUrl: string): void {
         return sessionFailure('INVALID_REQUEST', '打开会话参数格式不正确。')
       }
       const fields = request as Record<string, unknown>
-      if (Object.keys(fields).some((key) => key !== 'sessionId' && key !== 'allowInterrupt')) {
+      if (Object.keys(fields).some((key) => key !== 'sessionId' && key !== 'allowInterrupt' && key !== 'listLimit')) {
         return sessionFailure('INVALID_REQUEST', '打开会话参数包含未支持的字段。')
       }
-      const { sessionId, allowInterrupt } = fields
+      const { sessionId, allowInterrupt, listLimit } = fields
       let targetSessionId: string | null = null
       if (typeof sessionId === 'string') {
         if (sessionId.trim() === '') {
@@ -834,13 +835,17 @@ function registerSessionHandlers(pageUrl: string): void {
       if (typeof allowInterrupt !== 'boolean') {
         return sessionFailure('INVALID_REQUEST', '打开会话必须显式给出 allowInterrupt 布尔值。')
       }
+      if (!isSessionListWindow(listLimit)) {
+        return sessionFailure('INVALID_REQUEST', '打开会话必须显式给出合法的列表窗口大小。')
+      }
       const trust = await resolveTrustForCurrentProject()
       if (trust.requiresPrompt) {
         return sessionFailure('TRUST_REQUIRED', trust.message ?? '项目包含需要信任决定的资源。')
       }
       return sessionManager.open({
         sessionId: targetSessionId,
-        allowInterrupt
+        allowInterrupt,
+        listLimit
       })
     }
   )
@@ -861,13 +866,16 @@ function registerSessionHandlers(pageUrl: string): void {
         return sessionFailure('INVALID_REQUEST', '重新加载资源参数格式不正确。')
       }
       const fields = request as Record<string, unknown>
-      if (Object.keys(fields).some((key) => key !== 'allowInterrupt')) {
+      if (Object.keys(fields).some((key) => key !== 'allowInterrupt' && key !== 'listLimit')) {
         return sessionFailure('INVALID_REQUEST', '重新加载资源参数包含未支持的字段。')
       }
       if (typeof fields.allowInterrupt !== 'boolean') {
         return sessionFailure('INVALID_REQUEST', '重新加载资源必须显式说明是否允许中断当前操作。')
       }
-      return sessionManager.reload(fields.allowInterrupt)
+      if (!isSessionListWindow(fields.listLimit)) {
+        return sessionFailure('INVALID_REQUEST', '重新加载资源必须显式给出合法的列表窗口大小。')
+      }
+      return sessionManager.reload(fields.allowInterrupt, fields.listLimit)
     }
   )
 
@@ -879,7 +887,7 @@ function registerSessionHandlers(pageUrl: string): void {
         return sessionFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
       }
       if (args.length !== 1 || !isSessionDeleteRequest(args[0])) {
-        return sessionFailure('INVALID_REQUEST', '删除会话接口只接受一个包含项目路径、会话 id 与中断确认的请求对象。')
+        return sessionFailure('INVALID_REQUEST', '删除会话接口只接受一个包含项目路径、会话 id、中断确认与列表窗口的请求对象。')
       }
       return sessionManager.delete(args[0])
     }
