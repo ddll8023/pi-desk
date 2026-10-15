@@ -14,6 +14,8 @@ const desktopStore = useDesktopStore()
 const { snapshot, piAgent, checking, checkedAt, checkFailure, checkError } = storeToRefs(updatesStore)
 const { connection } = storeToRefs(desktopStore)
 const copied = ref(false)
+/** 扩展列表的局部折叠状态：默认展开，只影响本页显示，不写入界面偏好。 */
+const extensionsOpen = ref(true)
 
 /** 官方更新命令：扩展由 Pi 自己管理，这里只提供复制，不代跑。 */
 const UPDATE_COMMAND = 'pi update --extensions'
@@ -146,33 +148,47 @@ async function copyUpdateCommand(): Promise<void> {
 
     <div class="mt-4 border-t border-desk-line pt-4">
       <div class="flex flex-wrap items-center justify-between gap-2">
-        <h3 class="text-xs font-semibold">扩展（{{ snapshot.extensions.length }} 个 Pi 包）</h3>
+        <!-- 标题本身就是折叠开关：只控制下方列表的显示，不影响检查结果与右侧复制动作。 -->
+        <h3 class="text-xs font-semibold">
+          <AppButton
+            variant="unstyled"
+            class="settings-fold-toggle"
+            :aria-expanded="extensionsOpen"
+            aria-controls="settings-extensions-list"
+            @click="extensionsOpen = !extensionsOpen"
+          >
+            <span class="disclosure" :class="{ 'is-open': extensionsOpen }" aria-hidden="true"></span>
+            扩展（{{ snapshot.extensions.length }} 个 Pi 包）
+          </AppButton>
+        </h3>
         <AppButton variant="compact" @click="copyUpdateCommand()">
           {{ copied ? '已复制' : `复制 ${UPDATE_COMMAND}` }}
         </AppButton>
       </div>
-      <p v-if="snapshot.extensions.length === 0" class="mt-2 text-2xs text-desk-muted">
-        {{ checkedAt === null ? '还没有检查结果；点「检查更新」读取。' : 'Pi 的 settings.json 里没有声明包。' }}
-      </p>
-      <ul v-else class="mt-2 space-y-1.5">
-        <li v-for="entry in snapshot.extensions" :key="`${entry.scope}-${entry.source}`" class="list-card">
-          <div class="flex flex-wrap items-center justify-between gap-2">
-            <p class="flex min-w-0 flex-wrap items-center gap-2 text-xs font-medium">
-              <span class="status-dot" :class="statusTone(entry)"></span>
-              <span class="break-all font-mono">{{ entry.source }}</span>
+      <div id="settings-extensions-list" v-show="extensionsOpen">
+        <p v-if="snapshot.extensions.length === 0" class="mt-2 text-2xs text-desk-muted">
+          {{ checkedAt === null ? '还没有检查结果；点「检查更新」读取。' : 'Pi 的 settings.json 里没有声明包。' }}
+        </p>
+        <ul v-else class="mt-2 space-y-1.5">
+          <li v-for="entry in snapshot.extensions" :key="`${entry.scope}-${entry.source}`" class="list-card">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <p class="flex min-w-0 flex-wrap items-center gap-2 text-xs font-medium">
+                <span class="status-dot" :class="statusTone(entry)"></span>
+                <span class="break-all font-mono">{{ entry.source }}</span>
+              </p>
+              <span class="chip">{{ statusLabel(entry) }}</span>
+            </div>
+            <p class="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-2xs text-desk-muted">
+              <span class="chip">{{ entry.scope === 'user' ? '用户级' : '项目级' }}</span>
+              <span class="chip">{{ sourceTypeLabel(entry) }}</span>
+              <span class="font-mono">{{ versionText(entry) }}</span>
             </p>
-            <span class="chip">{{ statusLabel(entry) }}</span>
-          </div>
-          <p class="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-2xs text-desk-muted">
-            <span class="chip">{{ entry.scope === 'user' ? '用户级' : '项目级' }}</span>
-            <span class="chip">{{ sourceTypeLabel(entry) }}</span>
-            <span class="font-mono">{{ versionText(entry) }}</span>
-          </p>
-          <p v-if="entry.error !== null" class="mt-1 break-words text-2xs text-desk-muted">
-            {{ entry.error }}
-          </p>
-        </li>
-      </ul>
+            <p v-if="entry.error !== null" class="mt-1 break-words text-2xs text-desk-muted">
+              {{ entry.error }}
+            </p>
+          </li>
+        </ul>
+      </div>
     </div>
 
     <p class="mt-4 border-t border-desk-line pt-4 text-2xs text-desk-muted">

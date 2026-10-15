@@ -1351,6 +1351,11 @@
     @apply text-sm font-semibold;
   }
 
+  /* 标题本身充当折叠开关：外观仍是标题，可点性由三角、指针与焦点环表达，不加悬停底色避免标题跳动。 */
+  .settings-fold-toggle {
+    @apply inline-flex items-center gap-2 text-xs font-semibold;
+  }
+
   .settings-row {
     @apply mt-4 flex flex-wrap items-center justify-between gap-4 border-t border-desk-line pt-4;
   }
@@ -2438,6 +2443,11 @@
   }
 
   details[open] > summary .disclosure {
+    transform: rotate(90deg);
+  }
+
+  /* 不用 details 结构时（设置页的扩展列表）由状态类表达展开，三角保持一致。 */
+  .disclosure.is-open {
     transform: rotate(90deg);
   }
 
