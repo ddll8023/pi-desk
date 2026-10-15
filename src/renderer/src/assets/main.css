@@ -1508,6 +1508,36 @@
   .status-dot-error { background-color: var(--color-desk-danger); }
   .status-dot-idle { background-color: var(--color-desk-line-strong); }
 
+  /* 运行中指示：三点错峰跳动。点色取文字色，模板用 text-desk-accent 指定。
+     与 .status-dot 的分工是：静态点只表达状态，这里表达「正在进行」，
+     静止的单点看不出还在工作。 */
+  .status-dots {
+    @apply inline-flex shrink-0 items-center;
+    gap: 3px;
+  }
+
+  .status-dots > span {
+    @apply block size-1 rounded-full;
+    background-color: currentColor;
+    animation: status-dots-jump 1.2s ease-in-out infinite;
+  }
+
+  .status-dots > span:nth-child(2) { animation-delay: 150ms; }
+  .status-dots > span:nth-child(3) { animation-delay: 300ms; }
+
+  @keyframes status-dots-jump {
+    0%, 100% { transform: translateY(0); opacity: 0.4; }
+    35% { transform: translateY(-3px); opacity: 1; }
+  }
+
+  /* 减少动效：停在三个实心点上，仍读得出「正在进行」。 */
+  @media (prefers-reduced-motion: reduce) {
+    .status-dots > span {
+      animation: none;
+      opacity: 1;
+    }
+  }
+
   /*
    * 可折叠分组：组头一整行可点，展开内容用分隔线分层。
    * 折叠标记沿用 .disclosure 三角，与工具卡片保持一致。

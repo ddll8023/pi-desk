@@ -176,8 +176,9 @@ const SESSION_RUN_DOT_CLASSES: Record<SessionRunBadge, string> = {
 }
 
 /**
- * 「正在执行」是唯一随时间变化的状态，静止的点看不出还在工作；
- * 复用消息区运行指示点的同一套动效约定（animate-pulse + motion-reduce 关闭），不新造动画。
+ * 「正在执行」是唯一随时间变化的状态，静止的点看不出还在工作。
+ * 这里保持 6px 单点 + animate-pulse：状态色点族（failed/waiting/ready）共用同一形状，
+ * 换成三点会破坏形状一致，运行提示的形态区分只在消息区表达。
  */
 function runDotClass(badge: SessionRunBadge): string {
   const tone = SESSION_RUN_DOT_CLASSES[badge]

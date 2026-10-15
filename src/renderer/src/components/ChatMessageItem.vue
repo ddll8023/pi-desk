@@ -414,9 +414,9 @@ function onEditKeydown(event: KeyboardEvent): void {
           <span class="chat-thinking-hint">
             <span
               v-if="block.key === liveThinkingKey"
-              class="status-dot animate-pulse bg-desk-accent motion-reduce:animate-none"
+              class="status-dots text-desk-accent"
               aria-hidden="true"
-            ></span>
+            ><span></span><span></span><span></span></span>
             {{ block.key === liveThinkingKey ? '思考中' : '思考过程' }}
           </span>
           <span

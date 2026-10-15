@@ -465,7 +465,7 @@ onBeforeUnmount(() => {
         </div>
 
         <p v-if="streaming" role="status" class="status-notice status-notice-info flex items-center gap-2">
-          <span class="status-dot animate-pulse bg-desk-accent motion-reduce:animate-none"></span>
+          <span class="status-dots text-desk-accent" aria-hidden="true"><span></span><span></span><span></span></span>
           <span>{{ compacting ? '正在压缩上下文；需要中断时在下方停止。' : 'Agent 正在运行；需要中断时在下方停止。' }}</span>
         </p>
       </div>
