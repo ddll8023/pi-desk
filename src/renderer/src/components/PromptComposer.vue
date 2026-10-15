@@ -1,4 +1,4 @@
-<!-- Prompt 输入坞：处理输入法组合态、Enter 发送与 Shift+Enter 换行、焦点回归与重复提交、响应侧栏「新建」的聚焦请求并给出一次性提示，并在 Agent 运行期间原位提供停止入口；同时承接 Extension 的 set_editor_text 填充文本、图片附件的选择/粘贴/拖拽三种入口、输入行按内容自动增高、快捷发送下拉（短语取自界面偏好，可在设置里增删改与排序）、Pi 命令的斜杠模糊补全（Runtime 就绪后用运行中的命令清单，未就绪时用主进程预读的技能清单，按类型分组并按匹配优先级排序；另含 Desktop 层自己拦截的界面命令）与 `@` 项目文件引用（只写入相对路径文本，不传文件内容）。底部工具条左侧是信息行：异常与进行中的状态文本、被收起的 Extension 对话入口、Extension status 项与会话用量（点击开明细）；右侧是模型选择、附件、快捷发送与发送/停止按钮。 -->
+<!-- Prompt 输入坞：处理输入法组合态、Enter 发送与 Shift+Enter 换行、焦点回归与重复提交、响应侧栏「新建」的聚焦请求并给出一次性提示，并在 Agent 运行期间原位提供停止入口；同时承接 Extension 的 set_editor_text 填充文本、图片附件的选择/粘贴/拖拽三种入口、输入行按内容自动增高、快捷发送下拉（短语取自界面偏好，可在设置里增删改与排序）、Pi 命令的斜杠模糊补全（Runtime 就绪后用运行中的命令清单，未就绪时用主进程预读的技能清单，按类型分组并按匹配优先级排序；另含 Desktop 层自己拦截的界面命令）与 `@` 项目文件引用（只写入相对路径文本，不传文件内容）。底部工具条左侧是信息行：异常与进行中的状态文本、被收起的 Extension 对话入口与会话用量指标（累计用量与费用、缓存命中率、上下文占用、实时与平均速率，点击开明细）；右侧是模型选择、附件、快捷发送与发送/停止按钮。Extension 的 setStatus 项不在输入区展示。 -->
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
@@ -218,9 +218,7 @@ const status = computed<{ readonly kind: 'info' | 'error'; readonly text: string
   if (compactView.value.phase === 'requesting' || runtimeInfo.value?.isCompacting === true) {
     return { kind: 'info', text: '正在压缩上下文；需要中断时在下方停止。' }
   }
-  if (streaming.value) {
-    return { kind: 'info', text: 'Agent 正在运行，本轮结束前不能提交新输入。' }
-  }
+  // 运行中不再占信息行：Agent 是否在跑由右下角的停止按钮表达。
   if (projectionSync.value !== 'synced') {
     return { kind: 'info', text: '消息仍在同步，稍后才能提交输入。' }
   }
@@ -248,8 +246,25 @@ function formatTokens(value: number | null): string {
   return String(value)
 }
 
-/** 用量行分项：累计用量与费用、上下文占用、实时与平均速率；未取到统计时为空。 */
-const usageParts = computed<readonly { readonly text: string; readonly tone: string; readonly title: string }[]>(() => {
+/** 缓存命中率：缓存读占整段 prompt（输入 + 缓存读 + 缓存写）的比例；没有 prompt token 时为 null。 */
+const cacheHitRate = computed<number | null>(() => {
+  const current = usage.value
+  if (current === null) return null
+  const promptTokens = current.input + current.cacheRead + current.cacheWrite
+  if (promptTokens <= 0) return null
+  return current.cacheRead / promptTokens
+})
+
+/** 用量行的分项；`key` 稳定，供渲染复用，文案本身会随数值变化。 */
+interface UsagePart {
+  readonly key: string
+  readonly text: string
+  readonly tone: string
+  readonly title: string
+}
+
+/** 用量行分项：累计用量与费用、缓存命中率、上下文占用、实时与平均速率；未取到统计时为空。 */
+const usageParts = computed<readonly UsagePart[]>(() => {
   const current = usage.value
   if (current === null) return []
   const context = current.context
@@ -257,23 +272,33 @@ const usageParts = computed<readonly { readonly text: string; readonly tone: str
   const contextTone = percent === null
     ? ''
     : percent >= 90 ? 'text-desk-danger' : percent >= 70 ? 'text-desk-warning' : ''
-  const parts: { text: string; tone: string; title: string }[] = [
+  const hit = cacheHitRate.value
+  const parts: UsagePart[] = [
     {
+      key: 'tokens',
       text: `↑${formatTokens(current.input)} ↓${formatTokens(current.output)} R${formatTokens(current.cacheRead)} W${formatTokens(current.cacheWrite)} $${current.cost.toFixed(3)}`,
       tone: '',
       title: '本会话累计用量与费用'
     },
     {
+      key: 'cache-hit',
+      text: `缓存 ${hit === null ? '—' : `${(hit * 100).toFixed(1)}%`}`,
+      // 低于 70% 说明上一段上下文被大量重算，用警示色提示；其余档位不强调。
+      tone: hit !== null && hit < 0.7 ? 'text-desk-warning' : '',
+      title: '缓存命中率：缓存读 /（输入 + 缓存读 + 缓存写），本会话累计'
+    },
+    {
+      key: 'context',
       text: `上下文 ${percent === null ? '?' : `${percent.toFixed(1)}%`}/${formatTokens(context?.contextWindow ?? null)}`,
       tone: contextTone,
       title: '当前上下文占用与窗口大小'
     }
   ]
   if (rate.value.live !== null) {
-    parts.push({ text: `实 ${rate.value.live.toFixed(1)} t/s`, tone: 'text-desk-accent', title: '实时输出速率（2 秒窗口）' })
+    parts.push({ key: 'rate-live', text: `实 ${rate.value.live.toFixed(1)} t/s`, tone: 'text-desk-accent', title: '实时输出速率（2 秒窗口）' })
   }
   if (rate.value.average !== null) {
-    parts.push({ text: `均 ${rate.value.average.toFixed(1)} t/s`, tone: 'text-desk-accent', title: '上一轮模型调用的平均速率' })
+    parts.push({ key: 'rate-average', text: `均 ${rate.value.average.toFixed(1)} t/s`, tone: 'text-desk-accent', title: '上一轮模型调用的平均速率' })
   }
   return parts
 })
@@ -1066,7 +1091,7 @@ onMounted(() => {
 
         <div class="prompt-composer-toolbar">
           <div class="prompt-composer-meta">
-            <!-- 状态文本只在异常与进行中出现；正常态让位给用量与插件状态。 -->
+            <!-- 状态文本只在异常与进行中出现；正常态让位给用量指标。 -->
             <p
               v-if="statusText !== null"
               id="prompt-status"
@@ -1087,14 +1112,7 @@ onMounted(() => {
               <span aria-hidden="true">❓</span>
               <span class="prompt-pending-text">{{ pendingTitle }}</span>
             </button>
-            <!-- Extension setStatus 项：纯文本展示，过长时截断。 -->
-            <span
-              v-for="entry in extensionStore.statuses"
-              :key="entry.key"
-              class="prompt-status-entry"
-              :title="entry.text"
-            >{{ entry.text }}</span>
-            <!-- 会话用量：点击开明细浮层；统计未取到时显示占位。 -->
+            <!-- 会话用量指标：点击开明细浮层；统计未取到时显示占位。Extension 的 setStatus 项不在输入区展示。 -->
             <button
               type="button"
               class="prompt-usage"
@@ -1106,12 +1124,13 @@ onMounted(() => {
               <template v-if="usageParts.length > 0">
                 <span
                   v-for="part in usageParts"
-                  :key="part.text"
+                  :key="part.key"
+                  class="prompt-metric"
                   :class="part.tone"
                   :title="part.title"
                 >{{ part.text }}</span>
               </template>
-              <span v-else>用量 —</span>
+              <span v-else class="prompt-metric">用量 —</span>
             </button>
           </div>
           <div class="flex flex-none items-center gap-1.5">

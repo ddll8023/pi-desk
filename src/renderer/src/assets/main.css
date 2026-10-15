@@ -220,9 +220,9 @@
     padding: 0.5rem 1rem;
   }
 
-  /* 信息行：状态文本、插件状态、待回答入口与用量同处左侧，占满剩余宽度并允许换行。 */
+  /* 信息行：状态文本、待回答入口与用量指标同处左侧，占满剩余宽度并允许换行。 */
   .prompt-composer-meta {
-    @apply flex min-w-0 flex-1 flex-wrap items-baseline gap-x-3 gap-y-1;
+    @apply flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1;
   }
 
   /* 状态文本只在异常与进行中出现；不加重字重，避免与用量数据抢注意力。 */
@@ -246,18 +246,20 @@
     @apply min-w-0 truncate;
   }
 
-  /* Extension setStatus 项：与用量同档等宽字，过长时截断。 */
-  .prompt-status-entry {
-    @apply max-w-[min(42vw,20rem)] truncate font-mono text-2xs text-desk-muted;
-  }
-
-  /* 用量行：等宽小字、整行可点击；分项之间靠 gap 分隔，换行时不拆开单项。 */
+  /* 用量行：整行可点击的 chip 容器；分项各自成块，换行时不拆开单项。 */
   .prompt-usage {
-    @apply flex min-w-0 flex-wrap items-baseline gap-x-2.5 font-mono text-2xs text-desk-muted transition-colors;
+    @apply flex min-w-0 flex-wrap items-center gap-1.5 font-mono text-2xs text-desk-muted transition-colors;
   }
 
   .prompt-usage:hover {
     @apply text-desk-ink;
+  }
+
+  /* 用量分项 chip：浅底圆角把数值分组，等宽数字避免数值变化时行内抖动。 */
+  .prompt-metric {
+    @apply inline-flex items-baseline gap-1 rounded-full border px-2 py-0.5 tabular-nums;
+    border-color: color-mix(in srgb, var(--color-desk-line-strong) 55%, transparent);
+    background: var(--color-desk-surface);
   }
 
   /* 附件按钮的字符：与 pigui 输入坞的工具栏一致，用符号而不用图标。 */

@@ -1,4 +1,4 @@
-<!-- 本会话用量明细浮层：token 分项、费用、上下文占用与输出速率；数据缺失只显示占位，不做推算或换算。 -->
+<!-- 本会话用量明细浮层：token 分项、费用、缓存命中率、上下文占用与输出速率；数据缺失只显示占位，不做推算或换算。 -->
 <script setup lang="ts">
 import { computed, nextTick, onUnmounted, ref, useId, watch } from 'vue'
 import type { OutputRate, SessionUsage } from '../../../shared/runtime-api'
@@ -36,15 +36,26 @@ interface UsageMetric {
   readonly title: string
 }
 
-/** token 分项与费用；没有统计时返回空数组，由模板显示占位。 */
+/** 缓存命中率：缓存读 /（输入 + 缓存读 + 缓存写）；没有 prompt token 时为 null。 */
+const cacheHitRate = computed<number | null>(() => {
+  const current = props.usage
+  if (current === null) return null
+  const promptTokens = current.input + current.cacheRead + current.cacheWrite
+  if (promptTokens <= 0) return null
+  return current.cacheRead / promptTokens
+})
+
+/** token 分项、缓存命中率与费用；没有统计时返回空数组，由模板显示占位。 */
 const metrics = computed<readonly UsageMetric[]>(() => {
   const current = props.usage
   if (current === null) return []
+  const hit = cacheHitRate.value
   return [
     { tag: '↑', value: formatTokens(current.input), title: '输入 tokens' },
     { tag: '↓', value: formatTokens(current.output), title: '输出 tokens' },
     { tag: 'R', value: formatTokens(current.cacheRead), title: '缓存读 tokens' },
     { tag: 'W', value: formatTokens(current.cacheWrite), title: '缓存写 tokens' },
+    { tag: '缓存', value: hit === null ? '?' : `${(hit * 100).toFixed(1)}%`, title: '缓存命中率：缓存读 /（输入 + 缓存读 + 缓存写）' },
     { tag: '$', value: formatCost(current.cost), title: '本会话累计费用' }
   ]
 })
