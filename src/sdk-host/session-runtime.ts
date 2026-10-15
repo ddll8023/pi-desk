@@ -57,6 +57,47 @@ function readAssistantOutput(message: unknown): number | null {
   return typeof output === 'number' && Number.isFinite(output) && output >= 0 ? output : null
 }
 
+/**
+ * 流式助手消息的估算输出 token：文本、Thinking 与工具参数按非 ASCII 1 个、
+ * ASCII 1/4 个折算。Pi 只在收尾写 `usage`，流式期间拿不到权威增量，
+ * 实时速率只能按内容长度估算；权威输出 token 只在 `message_end` 用于平均值。
+ */
+function readStreamingOutputTokens(message: unknown): number | null {
+  if (typeof message !== 'object' || message === null) return null
+  const content = (message as { readonly content?: unknown }).content
+  if (!Array.isArray(content)) return null
+  let tokens = 0
+  for (const block of content) {
+    if (typeof block !== 'object' || block === null) continue
+    const record = block as Record<string, unknown>
+    if (record.type === 'text' && typeof record.text === 'string') {
+      tokens += estimateTokens(record.text)
+    } else if (record.type === 'thinking' && typeof record.thinking === 'string') {
+      tokens += estimateTokens(record.thinking)
+    } else if (record.type === 'toolCall') {
+      const partial = typeof record.partialJson === 'string' ? record.partialJson : null
+      if (partial !== null) {
+        tokens += estimateTokens(partial)
+      } else if (record.arguments !== undefined) {
+        const serialized = JSON.stringify(record.arguments)
+        if (serialized !== undefined) tokens += estimateTokens(serialized)
+      }
+    }
+  }
+  return tokens > 0 ? tokens : null
+}
+
+/** 非 ASCII 字符按 1 个 token、ASCII 字符按 1/4 个 token 折算。 */
+function estimateTokens(text: string): number {
+  let ascii = 0
+  let wide = 0
+  for (const char of text) {
+    if (char.charCodeAt(0) > 0x7f) wide += 1
+    else ascii += 1
+  }
+  return wide + ascii / 4
+}
+
 /** 模型身份只在有非空取值时投影；官方尚未选定模型时保持 null。 */
 function readModelIdentity(model: { readonly provider?: unknown; readonly id?: unknown } | undefined): {
   readonly provider: string | null
@@ -920,12 +961,13 @@ export class SdkSessionRuntime {
     this.lastEndedMessage = null
     if (event.type === 'agent_start' || event.type === 'compaction_start'
       || event.type === 'summarization_retry_attempt_start') this.activityVersion += 1
-    // 速率与统计都只依据官方事件：累计输出取助手消息自身的 usage，不从展示增量反推。
+    // 速率只依据官方事件：实时值按流式文本估算，平均值取助手消息自身的 usage；统计不从展示增量反推。
     if (event.type === 'message_start') {
       if (isAssistantMessage(event.message)) this.rate?.begin(Date.now())
     } else if (event.type === 'message_update') {
-      const output = readAssistantOutput(event.message)
-      if (output !== null) this.rate?.push(output, Date.now())
+      // 流式期间 Pi 不写 usage，实时速率只能按内容长度估算；权威输出 token 在 message_end 结算。
+      const estimated = readStreamingOutputTokens(event.message)
+      if (estimated !== null) this.rate?.push(estimated, Date.now())
       this.scheduleUsageRefresh()
     } else if (event.type === 'message_end') {
       if (isAssistantMessage(event.message)) this.rate?.settle(readAssistantOutput(event.message), Date.now())

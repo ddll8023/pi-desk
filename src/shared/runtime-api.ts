@@ -120,7 +120,10 @@ export interface SessionUsage {
   readonly context: ContextUsage | null
 }
 
-/** 输出速率（tokens/秒）：`live` 是 2000ms 滑动窗口的实时值，`average` 是上一轮的平均值。 */
+/**
+ * 输出速率（tokens/秒）：`live` 是 2000ms 滑动窗口的实时值，按流式文本长度估算（模型流式期间不上报增量 token）；
+ * `average` 是上一轮模型调用的平均值，按模型上报的输出 token 与生成时长计算。
+ */
 export interface OutputRate {
   readonly live: number | null
   readonly average: number | null
@@ -370,6 +373,17 @@ export interface ProjectionCompaction {
   readonly errorMessage: string | null
 }
 
+/**
+ * 单次模型调用的用量；Pi 的 `turn` 就是围绕一条 assistant 消息，因此它等价于单轮用量。
+ * 字段缺失、形状不符或全零（失败调用）时整条按未知处理，不用 0 冒充。
+ */
+export interface MessageUsage {
+  readonly input: number
+  readonly output: number
+  readonly cacheRead: number
+  readonly cacheWrite: number
+}
+
 /** `id` 由 Desktop 生成，不冒充 Pi 消息字段。 */
 export interface ProjectionMessage {
   readonly id: string
@@ -378,6 +392,8 @@ export interface ProjectionMessage {
   readonly timestamp: number | null
   /** 用户消息、历史消息与缺少开始事件的 AI 消息为 null，不推算缺失耗时。 */
   readonly generation: MessageGeneration | null
+  /** 本次模型调用的用量；仅 AI 消息可能非 null，缺失时保持 null，不推算。 */
+  readonly usage: MessageUsage | null
   /** 本轮响应计时；只挂在用户消息上，历史轮次与 AI 消息为 null。 */
   readonly turn: TurnTiming | null
   readonly stopReason: string | null
@@ -903,6 +919,15 @@ function isProjectionCompaction(value: unknown): value is ProjectionCompaction {
     && (value.errorMessage === null || typeof value.errorMessage === 'string')
 }
 
+/** 单次模型调用用量形状校验：四个字段都必须是有限数，缺失或异常整条拒绝。 */
+function isMessageUsage(value: unknown): value is MessageUsage {
+  if (!isRecord(value)) return false
+  return isFiniteNumber(value.input)
+    && isFiniteNumber(value.output)
+    && isFiniteNumber(value.cacheRead)
+    && isFiniteNumber(value.cacheWrite)
+}
+
 function isProjectionMessage(value: unknown): value is ProjectionMessage {
   if (!isRecord(value)) return false
   const roleOk = value.role === 'user' || value.role === 'assistant' || value.role === 'compaction'
@@ -918,6 +943,8 @@ function isProjectionMessage(value: unknown): value is ProjectionMessage {
     && (value.role === 'assistant' || value.generation === null)
     && isTurnTiming(value.turn)
     && (value.role === 'user' || value.turn === null)
+    && (value.usage === null || isMessageUsage(value.usage))
+    && (value.role === 'assistant' || value.usage === null)
     && (value.stopReason === null || typeof value.stopReason === 'string')
     && (value.errorMessage === null || typeof value.errorMessage === 'string')
     && (value.role !== 'compaction' || (value.stopReason === null && value.errorMessage === null))

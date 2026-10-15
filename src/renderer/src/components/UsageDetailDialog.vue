@@ -2,6 +2,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onUnmounted, ref, useId, watch } from 'vue'
 import type { OutputRate, SessionUsage } from '../../../shared/runtime-api'
+import { cacheHitRate, formatCost, formatTokens } from '../usage-format'
 import AppButton from './ui/AppButton.vue'
 
 const props = defineProps<{
@@ -17,18 +18,6 @@ const emit = defineEmits<{ close: [] }>()
 const panel = ref<HTMLElement | null>(null)
 const titleId = useId()
 
-/** 累计数值的短格式：1234 → 1.2K、1234567 → 1.2M；未知值保持 `?`。 */
-function formatTokens(value: number | null): string {
-  if (value === null || !Number.isFinite(value)) return '?'
-  if (value >= 1e6) return `${(value / 1e6).toFixed(1).replace(/\.0$/, '')}M`
-  if (value >= 1000) return `${(value / 1000).toFixed(1).replace(/\.0$/, '')}K`
-  return String(value)
-}
-
-function formatCost(value: number): string {
-  return Number.isFinite(value) ? value.toFixed(3) : '?'
-}
-
 /** 一条指标：淡色标签 + 实色数值，`title` 是悬停图例。 */
 interface UsageMetric {
   readonly tag: string
@@ -36,20 +25,11 @@ interface UsageMetric {
   readonly title: string
 }
 
-/** 缓存命中率：缓存读 /（输入 + 缓存读 + 缓存写）；没有 prompt token 时为 null。 */
-const cacheHitRate = computed<number | null>(() => {
-  const current = props.usage
-  if (current === null) return null
-  const promptTokens = current.input + current.cacheRead + current.cacheWrite
-  if (promptTokens <= 0) return null
-  return current.cacheRead / promptTokens
-})
-
 /** token 分项、缓存命中率与费用；没有统计时返回空数组，由模板显示占位。 */
 const metrics = computed<readonly UsageMetric[]>(() => {
   const current = props.usage
   if (current === null) return []
-  const hit = cacheHitRate.value
+  const hit = cacheHitRate(current)
   return [
     { tag: '↑', value: formatTokens(current.input), title: '输入 tokens' },
     { tag: '↓', value: formatTokens(current.output), title: '输出 tokens' },
@@ -72,7 +52,7 @@ const contextRow = computed<{ readonly text: string; readonly level: string; rea
   }
 })
 
-const liveText = computed(() => (props.rate.live === null ? null : `${props.rate.live.toFixed(1)} t/s`))
+const liveText = computed(() => (props.rate.live === null ? null : `≈${props.rate.live.toFixed(1)} t/s`))
 const averageText = computed(() => (props.rate.average === null ? null : `${props.rate.average.toFixed(1)} t/s`))
 
 function onKeydown(event: KeyboardEvent): void {
@@ -141,12 +121,12 @@ onUnmounted(() => {
               <span
                 v-if="liveText !== null"
                 class="usage-metric usage-metric-rate"
-                title="瞬时输出速率（2 秒滑动窗口）"
+                title="瞬时输出速率（2 秒滑动窗口）：按流式文本长度估算，不是模型上报的 token 数"
               >瞬时<b>{{ liveText }}</b></span>
               <span
                 v-if="averageText !== null"
                 class="usage-metric usage-metric-rate"
-                title="上一轮模型调用的平均速率"
+                title="上一轮模型调用的平均速率：按模型上报的输出 token 与生成时长计算"
               >平均<b>{{ averageText }}</b></span>
               <span v-if="liveText === null && averageText === null" class="usage-note">速率 —</span>
             </div>

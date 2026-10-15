@@ -1,9 +1,10 @@
-<!-- 单条消息：按块展示正文、Thinking、技能卡、压缩卡、工具与计时（单条生成耗时与本轮响应耗时）；Thinking 在生成中自动展开并跟随最新内容，结束后自动收起，折叠态显示尾部两行预览；用户消息下方使用细线图标操作栏，回退与修改后的重新发送由父级执行。 -->
+<!-- 单条消息：按块展示正文、Thinking、技能卡、压缩卡、工具与计时（单条生成耗时与本轮响应耗时）与本次调用的 token 花销；Thinking 在生成中自动展开并跟随最新内容，结束后自动收起，折叠态显示尾部两行预览；用户消息下方使用细线图标操作栏，回退与修改后的重新发送由父级执行。 -->
 <script setup lang="ts">
 import { computed, onUnmounted, reactive, ref, useId, watch } from 'vue'
 import { copyText } from '../clipboard'
 import type { ChatMessageView, ChatTextBlock } from '../chat-view'
 import { formatDuration, useTickingNow } from '../clock'
+import { cacheHitRate, formatTokens } from '../usage-format'
 import { thinkingPreviewText } from '../thinking-preview'
 import MarkdownContent from './MarkdownContent.vue'
 import ToolCard from './ToolCard.vue'
@@ -209,13 +210,22 @@ function toggleSkill(key: string): void {
   skillOverrides.set(key, !isSkillExpanded(key))
 }
 
-/** 累计数值短格式：1234 → 1.2K、1234567 → 1.2M；未知值保持 `?`，与用量行口径一致。 */
-function formatTokens(value: number | null): string {
-  if (value === null || !Number.isFinite(value)) return '?'
-  if (value >= 1e6) return `${(value / 1e6).toFixed(1).replace(/\.0$/, '')}M`
-  if (value >= 1000) return `${(value / 1000).toFixed(1).replace(/\.0$/, '')}K`
-  return String(value)
-}
+/** 本次模型调用的 token 花销；未上报或全零（失败调用）时为 null，整段不渲染。 */
+const usageText = computed(() => {
+  const current = props.message.usage
+  return current === null ? null : `↑${formatTokens(current.input)} ↓${formatTokens(current.output)}`
+})
+
+/**
+ * 单轮缓存命中率：本次调用的缓存读 /（输入 + 缓存读 + 缓存写）。
+ * 没有任何缓存活动时不显示，与 Pi footer 的口径一致。
+ */
+const cacheHitText = computed(() => {
+  const current = props.message.usage
+  if (current === null || (current.cacheRead === 0 && current.cacheWrite === 0)) return null
+  const hit = cacheHitRate(current)
+  return hit === null ? null : `缓存 ${(hit * 100).toFixed(1)}%`
+})
 
 /** 压缩来源：实时记录带触发原因，历史条目没有原因时按「历史记录」展示。 */
 const compactionOrigin = computed(() => {
@@ -318,6 +328,16 @@ function onEditKeydown(event: KeyboardEvent): void {
           class="font-mono"
           title="从提交到本轮结束（含工具执行与等待），按客户端事件计时；历史轮次无记录。"
         >{{ turnText }}</span>
+        <span
+          v-if="usageText !== null"
+          class="font-mono"
+          title="本次模型调用的输入 / 输出 tokens；由模型上报，未上报或全零不显示。"
+        >{{ usageText }}</span>
+        <span
+          v-if="cacheHitText !== null"
+          class="font-mono"
+          title="单轮缓存命中率：缓存读 /（输入 + 缓存读 + 缓存写），本次模型调用。"
+        >{{ cacheHitText }}</span>
       </span>
     </header>
 

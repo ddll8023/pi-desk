@@ -4,7 +4,8 @@
  *
  * 把 Pi 的会话事件（以及恢复会话时的历史消息）重建为页面要展示的消息内容块与工具执行条目，
  * 用户消息中的图片块以附件描述块（data URL 与估算字节）投影，超限附件降级为投影自己生成的说明块
- * （块上标 `notice`，界面可见但不计入用户输入），AI 消息记录客户端接收事件的生成计时；
+ * （块上标 `notice`，界面可见但不计入用户输入），AI 消息记录客户端接收事件的生成计时与本次调用的
+ * token 用量（缺失、形状不符或全零按未知，不推算）；
  * 上下文压缩按 `compaction_end` 与恢复会话时的历史 `compactionSummary` 记为第三种消息角色（`compaction`），
  * 只带摘要与压缩前后 token 数，不进入用户输入与回退目标；
  * 本轮响应计时挂在触发本轮的用户消息上：以该消息自带的时间戳起表（提交时刻），到 Agent 收敛
@@ -14,6 +15,7 @@
  * 超限都收敛到快照重同步，投影不猜测渲染端缺少的内容；触及展示上限时显式截断并计数，不伪装成完整内容。
  */
 import type {
+  MessageUsage,
   ProjectionBatch,
   ProjectionBlock,
   ProjectionBlockKind,
@@ -74,6 +76,8 @@ interface MutableMessage {
   blocks: MutableBlock[]
   timestamp: number | null
   generation: ProjectionMessage['generation']
+  /** 本次模型调用的用量；仅 AI 消息可能非 null。 */
+  usage: MessageUsage | null
   /** 本轮响应计时；仅当前实时轮次的用户消息有值。 */
   turn: TurnTiming | null
   stopReason: string | null
@@ -111,6 +115,21 @@ function readString(value: unknown): string | null {
 /** token 计数只接受有限数字；缺失或异常值保持 null，不当作 0 展示。 */
 function readCount(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null
+}
+
+/**
+ * 单次模型调用的用量；缺失、形状不符或全零（失败调用）时整条按未知处理，
+ * 不用 0 冒充一次真实调用。
+ */
+function readMessageUsage(value: unknown): MessageUsage | null {
+  if (!isRecord(value)) return null
+  const input = readCount(value.input)
+  const output = readCount(value.output)
+  const cacheRead = readCount(value.cacheRead)
+  const cacheWrite = readCount(value.cacheWrite)
+  if (input === null || output === null || cacheRead === null || cacheWrite === null) return null
+  if (input === 0 && output === 0 && cacheRead === 0 && cacheWrite === 0) return null
+  return { input, output, cacheRead, cacheWrite }
 }
 
 export class MessageProjection {
@@ -460,6 +479,7 @@ export class MessageProjection {
     target.sourceIdentity = toUserMessageIdentity(value)
     target.blocks = this.buildBlocks(value.content, role)
     target.timestamp = typeof value.timestamp === 'number' ? value.timestamp : target.timestamp
+    target.usage = role === 'assistant' ? readMessageUsage(value.usage) : null
     target.stopReason = typeof value.stopReason === 'string' ? value.stopReason : null
     target.errorMessage = typeof value.errorMessage === 'string' ? value.errorMessage : null
     const interrupted = target.stopReason === 'aborted' || target.stopReason === 'error'
@@ -819,6 +839,7 @@ export class MessageProjection {
       blocks: this.buildBlocks(value.content, role),
       timestamp: typeof value.timestamp === 'number' ? value.timestamp : null,
       generation: null,
+      usage: role === 'assistant' ? readMessageUsage(value.usage) : null,
       turn: null,
       stopReason: typeof value.stopReason === 'string' ? value.stopReason : null,
       errorMessage: typeof value.errorMessage === 'string' ? value.errorMessage : null,
@@ -846,6 +867,7 @@ export class MessageProjection {
       blocks: message.blocks.map((block) => this.toPublicBlock(block)),
       timestamp: message.timestamp,
       generation: message.generation,
+      usage: message.usage,
       turn: message.turn,
       stopReason: message.stopReason,
       errorMessage: message.errorMessage,

@@ -10,10 +10,10 @@
  *
  * 用户消息里被 Pi 展开的技能调用块在这里解析成 `ChatTextBlock.skill`，`text` 只保留追加在技能块
  * 之后的用户文本；同样由 Pi 注入的图片坐标说明行也在这里剥离——两者都不是用户输入，不应进入
- * 气泡、摘要与复制内容。本轮响应计时（`turn`）只做透传，计时口径与时刻都由投影决定。
+ * 气泡、摘要与复制内容。本轮响应计时（`turn`）与单次调用用量（`usage`）只做透传，口径与数值都由投影决定。
  * 压缩记录（`role === 'compaction'`）同样只做透传：它的摘要与 token 数来自投影，不由本模块推算。
  */
-import type { ProjectionBlock, ProjectionCompaction, ProjectionMessage, ToolExecution } from '../../shared/runtime-api'
+import type { MessageUsage, ProjectionBlock, ProjectionCompaction, ProjectionMessage, ToolExecution } from '../../shared/runtime-api'
 import { parseSkillBlock, stripImageMarkerLines } from '../../shared/user-message-text'
 
 /** 工具调用块的渲染项；`execution` 为 null 表示该工具调用没有对应执行条目（尚未到达或历史中没有结果）。 */
@@ -60,6 +60,8 @@ export interface ChatMessageView {
   readonly failure: string | null
   readonly time: string | null
   readonly generation: ProjectionMessage['generation']
+  /** 本次模型调用的用量；仅 AI 消息可能非 null，由投影给出，这里只透传。 */
+  readonly usage: MessageUsage | null
   /** 本轮响应计时；只在用户消息上出现，历史轮次为 null。 */
   readonly turn: ProjectionMessage['turn']
   /** 压缩记录；仅压缩消息非 null，界面据此渲染压缩卡片。 */
@@ -153,6 +155,7 @@ function buildMessageView(
       failure: messageFailureText(message),
       time: formatMessageTime(message.timestamp),
       generation: message.generation,
+      usage: message.usage,
       turn: message.turn,
       compaction: message.compaction
     },
