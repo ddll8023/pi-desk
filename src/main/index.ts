@@ -213,6 +213,7 @@ import { UpdateChecker } from './update-checker'
 import { PackageUpdater } from './package-updater'
 import { PiAgentUpdater } from './pi-agent-updater'
 import { getRuntimeRoot } from './pi-runtime'
+import { applyLoginShellPath } from './shell-path'
 import { MIN_WINDOW_HEIGHT, MIN_WINDOW_WIDTH, WindowState } from './window-state'
 
 const DEVELOPMENT_PAGE_URL = `http://127.0.0.1:${devServerPortFromEnv(process.env.PI_DESK_DEV_SERVER_PORT)}/`
@@ -2217,6 +2218,10 @@ function applyPortableDataDirectory(): void {
 }
 
 applyPortableDataDirectory()
+
+// 图形界面启动时进程 PATH 只有系统默认值，先补齐登录 shell 的 PATH，
+// 使后续所有受管子进程（扩展更新、运行时安装、SDK 宿主）都能找到 npm、git。
+applyLoginShellPath()
 
 /**
  * 单实例：同一份 Desktop 配置只能由一个进程写。
