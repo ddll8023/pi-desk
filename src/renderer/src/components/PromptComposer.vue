@@ -13,6 +13,7 @@ import { useRuntimeStore } from '../stores/runtime'
 import { useSessionStore } from '../stores/session'
 import { isSessionKey, useSessionViewStore } from '../stores/session-view'
 import type { PendingImage } from '../stores/session-view'
+import { parseDialogTitle } from '../extension-dialog-presentation'
 import AppButton from './ui/AppButton.vue'
 import RuntimeModelSelect from './RuntimeModelSelect.vue'
 import UsageDetailDialog from './UsageDetailDialog.vue'
@@ -288,8 +289,15 @@ const pendingDialog = computed(() => {
 const statusText = computed(() => status.value?.text ?? null)
 const statusRole = computed(() => (status.value?.kind === 'error' ? 'alert' : 'status'))
 const statusTone = computed(() => (status.value?.kind === 'error' ? 'text-desk-danger' : 'text-desk-muted'))
-/** 被收起对话的标题；没有收起态时为空。 */
-const pendingTitle = computed(() => pendingDialog.value?.title ?? null)
+/** 被收起对话的标题：只取问题正文首行，避免预览块与作答说明挤进信息行。 */
+const pendingTitle = computed(() => {
+  const current = pendingDialog.value
+  if (current === null) return null
+  const { header, question } = parseDialogTitle(current.title)
+  const label = question.split('\n')[0]?.trim() ?? ''
+  if (label === '') return header ?? current.title
+  return header === null ? label : `[${header}] ${label}`
+})
 
 /** 与主进程一致的图片 MIME 白名单；选择器另加 accept，双保险。 */
 const IMAGE_MIME_TYPES: readonly string[] = ['image/png', 'image/jpeg', 'image/gif', 'image/webp']

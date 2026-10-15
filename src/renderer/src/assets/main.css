@@ -469,7 +469,7 @@
     @apply cursor-not-allowed opacity-60;
   }
 
-  /* 输入坞弹层里的列表行：命令/文件补全与快捷发送下拉共用；对话框与页面内的清单行改用 list-card。选中态由 list-item-active 叠加左侧色条。 */
+  /* 输入坞弹层里的列表行：命令/文件补全与快捷发送下拉共用；对话框与页面内的清单行改用 list-card，Extension 对话的选项行与参考行另用 dialog-option-row 与 dialog-reference-row。选中态由 list-item-active 叠加左侧色条。 */
   .list-item {
     @apply block w-full rounded-desk-sm border border-transparent px-2.5 py-2 text-left transition-colors;
   }
@@ -619,6 +619,99 @@
 
   .dialog-close-button:not(:disabled):hover {
     @apply bg-desk-surface-subtle text-desk-ink;
+  }
+
+  /* 问题分类标签：来自标题的 `[Header]` 前缀，属元信息，不参与标题字重。 */
+  .dialog-header-chip {
+    @apply mb-1 inline-flex items-center rounded-desk-sm border border-desk-line bg-desk-surface px-1.5 py-0.5 text-2xs font-medium text-desk-muted;
+  }
+
+  /* Extension 对话的选项行：序号、标签、描述三段对齐，比通用清单行更强调「可点选」。
+     与 .list-card 分开，避免影响资源视图、设置页等既有清单。 */
+  .dialog-option-row {
+    @apply flex w-full items-start gap-3 rounded-desk-md border border-desk-line bg-desk-surface px-3.5 py-2.5 text-left transition-colors;
+  }
+
+  .dialog-option-row:not(:disabled):hover {
+    @apply border-desk-line-strong bg-desk-surface-subtle;
+  }
+
+  .dialog-option-row:not(:disabled):active {
+    @apply bg-desk-canvas-sunken;
+  }
+
+  .dialog-option-row:disabled {
+    @apply cursor-not-allowed opacity-60;
+  }
+
+  /* 键盘高亮与鼠标悬停共用同一视觉，用强调色区分当前行；
+     写在悬停规则之后，靠顺序保留高亮底色。 */
+  .dialog-option-row-active,
+  .dialog-option-row-active:not(:disabled):hover {
+    @apply border-desk-accent bg-desk-accent-soft;
+  }
+
+  /* 序号徽标：与「按编号作答」的提示对应，等宽数字保证多行选项对齐。 */
+  .dialog-option-index {
+    @apply mt-px inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-desk-sm bg-desk-canvas-sunken font-mono text-2xs text-desk-muted;
+  }
+
+  .dialog-option-label {
+    @apply block text-sm leading-5 font-medium text-desk-ink;
+  }
+
+  .dialog-option-desc {
+    @apply mt-0.5 block text-xs leading-5 text-desk-muted;
+  }
+
+  /* 标题内嵌清单（多选、自定义回答）的参考行：与选项行同一套布局，按按钮形态渲染。 */
+  .dialog-reference-row {
+    @apply flex w-full items-start gap-3 rounded-desk-md border border-desk-line bg-desk-canvas-sunken px-3.5 py-2.5 text-left transition-colors;
+  }
+
+  /* 只读参考行（自定义回答）用禁用按钮表达不可切换，外观与指针保持静态行。 */
+  .dialog-reference-row:disabled:not(.dialog-reference-row-toggle) {
+    @apply cursor-default opacity-100;
+  }
+
+  /* 可切换的参考行（多选作答）：浅底表示可点，悬停与选中态与选项行同一套视觉。 */
+  .dialog-reference-row-toggle {
+    @apply bg-desk-surface;
+  }
+
+  .dialog-reference-row-toggle:not(:disabled):hover {
+    @apply border-desk-line-strong bg-desk-surface-subtle;
+  }
+
+  .dialog-reference-row-toggle:not(:disabled):active {
+    @apply bg-desk-canvas-sunken;
+  }
+
+  .dialog-reference-row-toggle:disabled {
+    @apply cursor-not-allowed opacity-60;
+  }
+
+  .dialog-reference-row-selected,
+  .dialog-reference-row-selected:not(:disabled):hover {
+    @apply border-desk-accent bg-desk-accent-soft;
+  }
+
+  /* 已选中的编号徽标：实心强调色，与选项行的序号区分。 */
+  .dialog-reference-row-selected .dialog-option-index {
+    @apply bg-desk-accent text-desk-on-accent;
+  }
+
+  /* 选项预览：模型给的 ASCII 版式靠空格与换行对齐，故等宽 + 保留空白，超长时块内滚动。 */
+  .dialog-preview-block {
+    @apply max-h-64 overflow-auto rounded-desk-md border border-desk-line bg-desk-canvas-sunken px-3 py-2.5;
+  }
+
+  .dialog-preview-title {
+    @apply mb-1.5 text-2xs font-medium text-desk-muted;
+  }
+
+  .dialog-preview-text {
+    @apply font-mono text-xs leading-5 whitespace-pre-wrap text-desk-ink;
   }
 
   /* 弹层内的语义分区：用沉陷底色形成卡片边界，替代裸标题加分隔线。 */
