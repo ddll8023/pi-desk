@@ -2,7 +2,8 @@
  * Pi agent 运行时的布局与加载：版本化发布目录、当前版本指针、发布目录内的 SDK 入口解析，
  * 四个受管入口共用的 SDK 加载方式，以及随应用发布的基线版本。
  *
- * 边界：只做路径拼装、指针读写与只读解析；不下载、不安装，也不校验发布内容的完整性（由安装入口负责）。
+ * 边界：只做路径拼装、指针读写与只读解析；不下载、不安装，也不校验发布内容的完整性（由安装入口负责）；
+ * 清指针只删指针文件，不删发布目录。
  * 不感知 Electron，主进程与一次性安装入口共用同一份布局约定，避免两处各写一份。
  * 运行时根目录由调用方给出：主进程用应用自有数据区，安装入口用主进程传入的绝对路径；
  * 本模块不引用 `import.meta`，因为主进程也会打包它（主进程产物不是 ESM）。
@@ -92,6 +93,17 @@ export function writeCurrentVersion(runtimeRoot: string, version: string): void 
   } finally {
     rmSync(temporary, { force: true })
   }
+}
+
+/**
+ * 清除当前版本指针，返回被清掉的版本号；本来就没有合法指针时返回 null。
+ * 只删指针文件，不动 `releases` 与 `staging`：不再被指针引用的发布目录由下一次安装的清理带走。
+ */
+export function clearCurrentVersion(runtimeRoot: string): string | null {
+  const version = readCurrentVersion(runtimeRoot)
+  if (version === null) return null
+  rmSync(pointerPath(runtimeRoot), { force: true })
+  return version
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -1,5 +1,6 @@
 /**
- * 界面偏好、对话页模型展示偏好与快捷发送短语的读写入口：把同一配置存储的独立字段转换为页面契约，不写 Pi 配置。
+ * 界面偏好、对话页模型展示偏好、快捷发送短语与扩展自动更新开关的读写入口：
+ * 把同一配置存储的独立字段转换为页面契约，不写 Pi 配置。
  * 界面偏好含侧栏折叠状态、主题与侧栏展开的项目路径列表，三者作为一份载荷整体保存与读取。
  *
  * 不直接访问文件，也不管理窗口状态；窗口尺寸与位置由 window-state.ts 独占。读写失败只回传
@@ -7,7 +8,7 @@
  * 三类偏好共用错误码。
  * IPC 契约与响应校验在 shared/preferences-api.ts，请求参数与调用者校验在 main/index.ts。
  */
-import type { ModelDisplayPreference, ModelDisplayResult, PreferencesError, PreferencesResult, QuickSendPreference, QuickSendResult, UiPreferences } from '../shared/preferences-api'
+import type { AutoUpdatePreference, AutoUpdateResult, ModelDisplayPreference, ModelDisplayResult, PreferencesError, PreferencesResult, QuickSendPreference, QuickSendResult, UiPreferences } from '../shared/preferences-api'
 import type { DesktopConfigStore } from './desktop-config-store'
 import { DesktopConfigStorageError } from './desktop-config-store'
 
@@ -70,6 +71,27 @@ export class PreferencesManager {
       return { ok: true, data: await this.options.store.saveQuickSend(preference) }
     } catch (error) {
       return this.failure(error, '保存快捷发送短语时发生未预期的内部错误。')
+    }
+  }
+
+  /**
+   * 读取扩展自动更新开关；缺失或非法时为关闭。
+   * 主进程启动检查完成后按它决定要不要自动执行一次扩展更新，因此这里同时给页面与启动流程用。
+   */
+  async getExtensionAutoUpdate(): Promise<AutoUpdateResult> {
+    try {
+      return { ok: true, data: await this.options.store.readExtensionAutoUpdate() }
+    } catch (error) {
+      return this.failure(error, '读取扩展自动更新开关时发生未预期的内部错误。')
+    }
+  }
+
+  /** 保存扩展自动更新开关；只改本应用启动时的行为，不写 Pi 配置。 */
+  async setExtensionAutoUpdate(preference: AutoUpdatePreference): Promise<AutoUpdateResult> {
+    try {
+      return { ok: true, data: await this.options.store.saveExtensionAutoUpdate(preference) }
+    } catch (error) {
+      return this.failure(error, '保存扩展自动更新开关时发生未预期的内部错误。')
     }
   }
 

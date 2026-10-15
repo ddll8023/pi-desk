@@ -3,6 +3,8 @@
 import type {
   AgentInstallProgress,
   AgentInstallResult,
+  AgentRuntimeResetResult,
+  PackageUpdateOutcome,
   PackageUpdateProgress,
   PackageUpdateResult,
   UpdatesError,
@@ -79,6 +81,17 @@ export function subscribePackageUpdateProgress(listener: (progress: PackageUpdat
   }
 }
 
+/** 订阅更新结论；自动执行的更新不是页面发起的，只能靠它得知已经结束。 */
+export function subscribePackageUpdateOutcome(listener: (outcome: PackageUpdateOutcome) => void): () => void {
+  const bridge = window.desktop
+  if (!bridge || typeof bridge.onPackageUpdateOutcome !== 'function') return () => {}
+  try {
+    return bridge.onPackageUpdateOutcome(listener)
+  } catch {
+    return () => {}
+  }
+}
+
 /** 安装或切换内置 Pi agent 的运行时版本；省略版本时取官方最新。 */
 export async function installAgentRuntime(version?: string): Promise<AgentInstallResult> {
   const bridge = window.desktop
@@ -98,5 +111,27 @@ export function subscribeAgentInstallProgress(listener: (progress: AgentInstallP
     return bridge.onAgentInstallProgress(listener)
   } catch {
     return () => {}
+  }
+}
+
+/** 重装运行时指针指向的那个版本；版本号必填，只用于运行时回退时的修复。 */
+export async function reinstallAgentRuntime(version: string): Promise<AgentInstallResult> {
+  const bridge = window.desktop
+  if (!bridge || typeof bridge.reinstallAgentRuntime !== 'function') return { ok: false, error: unavailableError() }
+  try {
+    return await bridge.reinstallAgentRuntime(version)
+  } catch (error) {
+    return { ok: false, error: callFailedError(error) }
+  }
+}
+
+/** 清除运行时当前版本指针，回到随应用发布的版本；只用于运行时回退时的修复。 */
+export async function resetAgentRuntime(): Promise<AgentRuntimeResetResult> {
+  const bridge = window.desktop
+  if (!bridge || typeof bridge.resetAgentRuntime !== 'function') return { ok: false, error: unavailableError() }
+  try {
+    return await bridge.resetAgentRuntime()
+  } catch (error) {
+    return { ok: false, error: callFailedError(error) }
   }
 }

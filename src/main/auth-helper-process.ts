@@ -5,14 +5,15 @@
  * 不做认证状态机、不解析业务载荷。辅助进程不是 Pi sidecar：它由 `ELECTRON_RUN_AS_NODE` 启动、
  * 只加载官方 SDK，因此不涉及 Pi 的启动参数、项目目录或会话。
  *
- * 退出策略：先关闭 stdin，超时后按平台定向终止进程树，不接受外部 PID。
+ * 退出策略：先关闭 stdin，超时后按平台定向终止进程树（复用共用的终止实现），不接受外部 PID。
  */
 import { spawn } from 'node:child_process'
 import type { ChildProcess } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { resolve } from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
 import { getPiProcessEnvironment } from './pi-paths'
+import { terminateProcessTree } from './process-tree-termination'
 import { AUTH_HELPER_MAX_RECORD_CHARS, isAuthHelperFrame } from '../auth-helper/protocol'
 import type { AuthHelperFrame, AuthHelperRequest } from '../auth-helper/protocol'
 
@@ -113,17 +114,10 @@ export class AuthHelperProcess {
     this.closeStdin()
     if (await this.waitForClose(graceMs)) return
 
-    if (process.platform === 'win32') {
-      this.terminateProcessTree()
-      if (await this.waitForClose(forceWaitMs)) return
-      this.child.kill()
-      await this.waitForClose(forceWaitMs)
-      return
-    }
-
-    this.signalProcessGroup('SIGTERM')
+    // Windows 下两次都会走 taskkill /T，POSIX 下先 SIGTERM 再 SIGKILL；宽限期内没退出才升级。
+    terminateProcessTree(this.child, 'SIGTERM')
     if (await this.waitForClose(forceWaitMs)) return
-    this.signalProcessGroup('SIGKILL')
+    terminateProcessTree(this.child, 'SIGKILL')
     await this.waitForClose(forceWaitMs)
   }
 
@@ -216,39 +210,6 @@ export class AuthHelperProcess {
     this.diagnostics.push(trimmed.slice(0, MAX_DIAGNOSTIC_LINE_CHARS))
     if (this.diagnostics.length > MAX_DIAGNOSTIC_LINES) {
       this.diagnostics.shift()
-    }
-  }
-
-  /** Windows：用系统 taskkill 定向终止受管进程树，不依赖 PATH。 */
-  private terminateProcessTree(): void {
-    const pid = this.child.pid
-    if (pid === undefined) return
-    const taskkill = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'taskkill.exe')
-    try {
-      const killer = spawn(taskkill, ['/F', '/T', '/PID', String(pid)], {
-        stdio: 'ignore',
-        detached: true,
-        windowsHide: true
-      })
-      killer.once('error', () => {})
-      killer.unref()
-    } catch {
-      // taskkill 无法执行时由调用方回退到单进程终止。
-    }
-  }
-
-  /** macOS：向独立进程组发送信号，失败时只终止根进程。 */
-  private signalProcessGroup(signal: NodeJS.Signals): void {
-    const pid = this.child.pid
-    if (pid === undefined) return
-    try {
-      process.kill(-pid, signal)
-    } catch {
-      try {
-        this.child.kill(signal)
-      } catch {
-        // 进程已退出。
-      }
     }
   }
 

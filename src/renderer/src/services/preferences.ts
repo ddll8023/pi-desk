@@ -1,5 +1,7 @@
-/** 封装界面偏好、对话页模型展示偏好与快捷发送短语读写，重建普通载荷并保留桥接失败原因。 */
+/** 封装界面偏好、对话页模型展示偏好、快捷发送短语与扩展自动更新开关读写，重建普通载荷并保留桥接失败原因。 */
 import type {
+  AutoUpdatePreference,
+  AutoUpdateResult,
   ModelDisplayPreference,
   ModelDisplayResult,
   PreferencesError,
@@ -94,6 +96,28 @@ export async function setQuickSend(preference: QuickSendPreference): Promise<Qui
   try {
     // 服务层重建普通数组，避免响应式代理跨 contextBridge。
     return await bridge.setQuickSend({ messages: [...preference.messages] })
+  } catch (error) {
+    return callFailed(error)
+  }
+}
+
+/** 读取扩展自动更新开关；失败时页面按关闭展示。 */
+export async function getAutoUpdate(): Promise<AutoUpdateResult> {
+  const bridge = window.desktop
+  if (!bridge || typeof bridge.getAutoUpdate !== 'function') return unavailable()
+  try {
+    return await bridge.getAutoUpdate()
+  } catch (error) {
+    return callFailed(error)
+  }
+}
+
+/** 保存扩展自动更新开关；只影响本应用启动时的行为。 */
+export async function setAutoUpdate(preference: AutoUpdatePreference): Promise<AutoUpdateResult> {
+  const bridge = window.desktop
+  if (!bridge || typeof bridge.setAutoUpdate !== 'function') return unavailable()
+  try {
+    return await bridge.setAutoUpdate({ enabled: preference.enabled === true })
   } catch (error) {
     return callFailed(error)
   }

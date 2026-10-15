@@ -1,16 +1,23 @@
 /**
- * 内置 Pi agent 安装的编排：按需启动一次性安装脚本（`out/sdk-host/runtime-install.mjs`），
- * 逐行解析它带协议标记的输出，把进度广播给页面，并在进程结束时校验结论。
+ * 内置 Pi agent 安装与运行时指针修复的编排：按需启动一次性安装脚本（`out/sdk-host/runtime-install.mjs`），
+ * 逐行解析它带协议标记的输出，把进度广播给页面，并在进程结束时校验结论；运行时目录里的版本没能加载成功时，
+ * 还可以重装指针指向的那个版本（复用同一个安装流程），或直接清除指针回到随应用发布的版本。
  *
  * 边界：
- * - 安装只由页面的显式请求触发：这里不自动执行、不排队、不重试。
- * - 同一时刻只跑一次安装：并发调用复用进行中的那一次，不叠加。
+ * - 安装只由页面的显式请求触发：这里不自动执行、不排队、不重试；清指针同样只在页面请求时发生。
+ * - 同一时刻只跑一次安装：并发调用复用进行中的那一次，不叠加；清指针在安装进行中时直接拒绝，避免与指针写入竞态。
  * - 运行时根目录由主进程给出，页面无法指定；目标版本只作转发，合法性由调用点校验。
  * - 依赖命令自己的输出走脚本的 stderr，因此 stdout 上除协议行外只会有噪声，只有带标记的整行参与解析。
  * - 进程的启动、超时终止与退出码判定交给共用的受管入口执行器，这里只解析协议行。
  */
+import { clearCurrentVersion } from '../runtime-install/runtime'
 import { parseAgentInstallLine } from '../shared/updates-api'
-import type { AgentInstallOutcome, AgentInstallProgress, AgentInstallResult } from '../shared/updates-api'
+import type {
+  AgentInstallOutcome,
+  AgentInstallProgress,
+  AgentInstallResult,
+  AgentRuntimeResetResult
+} from '../shared/updates-api'
 import { SingleFlight, executeManagedEntry } from './managed-entry-runner'
 import { spawnRuntimeInstall } from './pi-cli-process'
 
@@ -38,6 +45,25 @@ export class PiAgentUpdater {
   /** 安装或切换运行时版本；省略版本时取官方最新。进行中时复用同一次安装的结果。 */
   install(version?: string): Promise<AgentInstallResult> {
     return this.flight.run(() => this.run(version))
+  }
+
+  /**
+   * 清除当前版本指针，回到随应用发布的版本。只用于运行时目录里的版本没能加载成功时的修复。
+   * 安装进行中时拒绝：安装结束时会写指针，此时删指针的结果不可预期。
+   */
+  async resetRuntime(): Promise<AgentRuntimeResetResult> {
+    if (this.flight.busy) {
+      return { ok: false, error: { code: 'INVALID_REQUEST', message: '内置 Pi agent 安装正在进行，结束之后再清除指针。' } }
+    }
+    try {
+      const clearedVersion = clearCurrentVersion(this.options.runtimeRoot())
+      if (clearedVersion === null) {
+        return { ok: false, error: { code: 'INVALID_REQUEST', message: '当前没有运行时版本指针，无需清除。' } }
+      }
+      return { ok: true, data: { clearedVersion } }
+    } catch (error) {
+      return { ok: false, error: { code: 'INTERNAL_ERROR', message: describeError(error) } }
+    }
   }
 
   private async run(version?: string): Promise<AgentInstallResult> {

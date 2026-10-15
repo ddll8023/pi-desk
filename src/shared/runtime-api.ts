@@ -154,6 +154,11 @@ export interface RuntimeStatus {
    */
   readonly sessionId: string | null
   readonly info: RuntimeInfo | null
+  /**
+   * 前台宿主实际加载的 SDK 版本；宿主尚未启动或还没就绪时为 null。
+   * 口径与版本检查快照里的版本不同：这里是「正在跑的那个」，快照里的版本是「下次启动会加载的」。
+   */
+  readonly sdkVersion: string | null
   readonly lastError: string | null
 }
 
@@ -821,6 +826,7 @@ export function isRuntimeStatus(value: unknown): value is RuntimeStatus {
   if (value.runId !== null && (typeof value.runId !== 'number' || !Number.isSafeInteger(value.runId))) return false
   if (value.runtimeId !== null && typeof value.runtimeId !== 'number') return false
   if (value.sessionId !== null && typeof value.sessionId !== 'string') return false
+  if (value.sdkVersion !== null && typeof value.sdkVersion !== 'string') return false
   if (value.lastError !== null && typeof value.lastError !== 'string') return false
   return value.info === null || isRuntimeInfo(value.info)
 }

@@ -12,12 +12,16 @@ import type {
   PackageUpdatePhase
 } from '../../../shared/updates-api'
 import { useDesktopStore } from '../stores/desktop'
+import { usePreferencesStore } from '../stores/preferences'
+import { useRuntimeStore } from '../stores/runtime'
 import { useUpdatesStore } from '../stores/updates'
 import { copyText } from '../clipboard'
 import AppButton from './ui/AppButton.vue'
 
 const updatesStore = useUpdatesStore()
 const desktopStore = useDesktopStore()
+const runtimeStore = useRuntimeStore()
+const preferencesStore = usePreferencesStore()
 const {
   snapshot,
   piAgent,
@@ -32,9 +36,13 @@ const {
   installingAgent,
   agentInstallProgress,
   agentInstallOutcome,
-  agentInstallError
+  agentInstallError,
+  resettingRuntime,
+  resetOutcome,
+  resetError
 } = storeToRefs(updatesStore)
 const { connection } = storeToRefs(desktopStore)
+const { extensionAutoUpdate, autoUpdateView } = storeToRefs(preferencesStore)
 const copied = ref(false)
 /** 扩展列表的局部折叠状态：默认展开，只影响本页显示，不写入界面偏好。 */
 const extensionsOpen = ref(true)
@@ -114,6 +122,24 @@ const piAgentError = computed(() => piAgent.value?.error ?? null)
 /** 官方在最新版本上附带的说明；没有时为 null。 */
 const piAgentNote = computed(() => piAgent.value?.note ?? null)
 
+/** 运行中前台宿主实际加载的 SDK 版本；未就绪、启动中与没有宿主三种情形分开处理。 */
+const runtimeSdkVersion = computed(() => (
+  runtimeStore.view.phase === 'ready' ? runtimeStore.view.snapshot.sdkVersion : null
+))
+
+/**
+ * 运行中宿主的说明文本：已取得版本时只在它与「下次启动会加载的版本」不同时给一句提醒，
+ * 否则如实说明当前为什么看不到版本，不用「未知」冒充。
+ */
+const runtimeSdkNote = computed(() => {
+  const running = runtimeSdkVersion.value
+  if (running !== null) {
+    const next = piAgent.value?.version ?? null
+    return next !== null && next !== running ? `重启 Runtime 后会切到 ${next}。` : null
+  }
+  return runtimeStore.view.phase === 'ready' ? 'Runtime 尚未就绪，还没有取得版本。' : '当前没有运行中的 Runtime。'
+})
+
 /** 可更新的条目数：为 0 时不给「全部更新」留一个必然失败的按钮。 */
 const updatableCount = computed(() => (
   snapshot.value.extensions.filter((entry) => entry.status === 'update-available').length
@@ -170,8 +196,31 @@ function sourceTypeLabel(entry: ExtensionUpdateInfo): string {
   return entry.type === 'npm' ? 'npm' : entry.type === 'git' ? 'git' : '本地'
 }
 
+/** 扩展自动更新开关的失败原因；没有失败时为 null。 */
+const autoUpdateError = computed(() => (
+  autoUpdateView.value.phase === 'error' ? autoUpdateView.value.error.message : null
+))
+
+/** 重装回退时没生效的运行时版本；目标版本先取快照里的那个，拿不到就不发请求。 */
+function reinstallRuntime(): void {
+  const version = agentRuntimeFallback.value
+  if (version === null) return
+  void updatesStore.reinstallAgent(version)
+}
+
 async function copyUpdateCommand(): Promise<void> {
   copied.value = await copyText(UPDATE_COMMAND)
+}
+
+/** 复选框的取值：非 input 事件按未勾选处理，与服务层重建普通载荷的写法一致。 */
+function inputChecked(event: Event): boolean {
+  const target = event.target
+  return target instanceof HTMLInputElement ? target.checked : false
+}
+
+/** 保存自动更新开关：保存失败时由 store 保留原值，页面按未变化展示并给出原因。 */
+function toggleAutoUpdate(enabled: boolean): void {
+  void preferencesStore.saveExtensionAutoUpdate(enabled)
 }
 </script>
 
@@ -233,10 +282,46 @@ async function copyUpdateCommand(): Promise<void> {
         <p v-if="piAgentNote !== null" class="mt-1 text-2xs text-desk-muted">
           {{ piAgentNote }}
         </p>
-        <p v-if="agentRuntimeFallback !== null" role="status" class="status-notice status-notice-warn mt-2">
-          运行时目录里的 {{ agentRuntimeFallback }} 没有加载成功，本次已回退到随应用发布的版本；
-          重新安装该版本并重启 Runtime 后会再次尝试使用它。
+        <div v-if="agentRuntimeFallback !== null" class="mt-2">
+          <p role="status" class="status-notice status-notice-warn">
+            运行时目录里的 {{ agentRuntimeFallback }} 没有加载成功，本次已回退到随应用发布的版本。
+          </p>
+          <div class="mt-1.5 flex flex-wrap items-center gap-1.5">
+            <AppButton
+              variant="compact"
+              :disabled="installingAgent || resettingRuntime"
+              @click="reinstallRuntime"
+            >
+              {{ installingAgent ? '正在重装…' : `重新安装 ${agentRuntimeFallback}` }}
+            </AppButton>
+            <AppButton
+              variant="compact"
+              :disabled="installingAgent || resettingRuntime"
+              @click="updatesStore.resetRuntime()"
+            >
+              {{ resettingRuntime ? '正在清除…' : '清除运行时指针' }}
+            </AppButton>
+          </div>
+          <p class="mt-1 text-2xs text-desk-muted">
+            重新安装会重新下载并校验该版本（目录已可用时只切换指针），完成后再重启 Runtime 才会用它；
+            清除指针则回到随应用发布的版本，已安装的发布目录保留，下次安装时自动清理。
+          </p>
+        </div>
+        <p v-if="resetOutcome !== null" role="status" class="status-notice status-notice-warn mt-2">
+          已清除运行时指针（原 {{ resetOutcome.clearedVersion }}）：重启 Runtime 后使用随应用发布的版本。
         </p>
+        <p v-if="resetError !== null" role="alert" class="status-notice status-notice-error mt-2">
+          {{ resetError }}
+        </p>
+      </dd>
+
+      <dt class="text-desk-muted">运行中宿主</dt>
+      <dd>
+        <template v-if="runtimeSdkVersion !== null">
+          <span class="font-mono">{{ runtimeSdkVersion }}</span>
+          <span v-if="runtimeSdkNote !== null" class="ml-1 text-2xs text-desk-muted">{{ runtimeSdkNote }}</span>
+        </template>
+        <template v-else>{{ runtimeSdkNote }}</template>
       </dd>
     </dl>
 
@@ -274,7 +359,7 @@ async function copyUpdateCommand(): Promise<void> {
       <template v-else-if="agentInstallOutcome.installedVersion !== null">
         <p role="status" class="text-xs font-semibold">
           已安装内置 Pi agent {{ agentInstallOutcome.installedVersion }}
-          <span v-if="agentInstallOutcome.previousVersion !== null" class="font-normal text-desk-muted">
+          <span v-if="agentInstallOutcome.previousVersion !== null && agentInstallOutcome.previousVersion !== agentInstallOutcome.installedVersion" class="font-normal text-desk-muted">
             （原 {{ agentInstallOutcome.previousVersion }}）
           </span>
         </p>
@@ -383,6 +468,25 @@ async function copyUpdateCommand(): Promise<void> {
           {{ copied ? '已复制' : `复制 ${UPDATE_COMMAND}` }}
         </AppButton>
       </div>
+      <label class="mt-2 flex items-start gap-2 text-xs">
+        <input
+          type="checkbox"
+          class="mt-0.5"
+          :checked="extensionAutoUpdate"
+          :disabled="autoUpdateView.phase === 'saving'"
+          @change="toggleAutoUpdate(inputChecked($event))"
+        >
+        <span>
+          启动时自动更新扩展
+          <span class="text-desk-muted">
+            开启后每次启动检查发现可更新的扩展就直接更新，不再等你点击；更新只改已装包，重启 Runtime 后生效。
+            手动检查不会触发自动更新。
+          </span>
+        </span>
+      </label>
+      <p v-if="autoUpdateError !== null" role="alert" class="status-notice status-notice-error mt-2">
+        保存自动更新开关失败：{{ autoUpdateError }}
+      </p>
       <div id="settings-extensions-list" v-show="extensionsOpen">
         <p v-if="snapshot.extensions.length === 0" class="mt-2 text-2xs text-desk-muted">
           {{ checkedAt === null ? '还没有检查结果；点「检查更新」读取。' : 'Pi 的 settings.json 里没有声明包。' }}

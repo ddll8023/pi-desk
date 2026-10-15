@@ -3,14 +3,17 @@ import { resolve } from 'node:path'
 import tailwindcss from '@tailwindcss/vite'
 import vue from '@vitejs/plugin-vue'
 import { defineConfig } from 'electron-vite'
-import { DEV_SERVER_PORT } from './src/shared/dev-server'
+import { devServerPortFromEnv } from './src/shared/dev-server'
+
+/** 开发态端口只取一次：CSP 与 dev server 必须用同一个值，否则开发页面打不开。 */
+const devServerPort = devServerPortFromEnv(process.env.PI_DESK_DEV_SERVER_PORT)
 
 const developmentCsp = [
   "default-src 'none'",
   "script-src 'self'",
   // Vite 开发期通过样式节点更新 CSS；正式页面不保留此权限。
   "style-src 'self' 'unsafe-inline'",
-  `connect-src 'self' ws://127.0.0.1:${DEV_SERVER_PORT}`,
+  `connect-src 'self' ws://127.0.0.1:${devServerPort}`,
   // data: 与 blob: 仅用于本地图片附件的缩略图展示，与生产 CSP 保持一致；不放开远程图片。
   "img-src 'self' data: blob:",
   "font-src 'self'",
@@ -61,7 +64,7 @@ export default defineConfig({
     plugins: [vue(), tailwindcss()],
     server: {
       host: '127.0.0.1',
-      port: DEV_SERVER_PORT,
+      port: devServerPort,
       strictPort: true,
       allowedHosts: ['127.0.0.1'],
       cors: false,

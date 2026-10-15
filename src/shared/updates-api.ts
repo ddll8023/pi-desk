@@ -6,6 +6,8 @@
  * 只更新 Pi 已声明的包、只写应用自有的运行时目录，不改动包声明本身，也不安装其它任何东西。
  * 远端查询（npm registry、pi.dev、git 远端）、文件读取、更新执行与运行时安装都在主进程的一次性进程里完成；
  * 页面只能读取结果快照与进度，以及发起更新、安装或重新检查，不能指定查询地址、执行入口、安装路径或运行时目录。
+ * 运行时目录里的版本没能加载成功时，页面还可以请求重装指针指向的那个版本，或清除指针回到随应用发布的版本：
+ * 两者都只写应用自有的运行时目录，清除只删指针文件、不删已安装的发布目录。
  *
  * 版本口径：
  * - `piAgent.version` 是 pi-desk 实际加载的那个 Pi agent SDK 版本（由应用自带的版本或运行时目录提供，
@@ -30,12 +32,25 @@ export const UPDATES_UPDATE_CHANNEL = 'desktop:updates-update'
 /** 更新进度事件：更新过程中逐条推送，只发给唯一可信窗口。 */
 export const UPDATES_UPDATE_PROGRESS_EVENT = 'desktop:updates-update-progress'
 /**
+ * 更新结论事件：一次更新结束时发一次，只发给唯一可信窗口。
+ * 手动发起的更新也能从 invoke 返回值拿到结论，但启动时的自动更新不是页面发起的，
+ * 只有这个事件能让页面知道它已经结束以及结果。
+ */
+export const UPDATES_UPDATE_OUTCOME_EVENT = 'desktop:updates-update-outcome'
+/**
  * 可选单参数：要安装的内置 Pi agent 版本；省略时取官方最新。
  * 取值必须是主进程已经报告过的官方最新版本，页面不能凭空构造。
  */
 export const UPDATES_INSTALL_AGENT_CHANNEL = 'desktop:updates-install-agent'
 /** 内置 Pi agent 安装进度事件：安装过程中逐条推送，只发给唯一可信窗口。 */
 export const UPDATES_INSTALL_AGENT_PROGRESS_EVENT = 'desktop:updates-install-agent-progress'
+/**
+ * 单参数：要重装的运行时版本，取值必须是主进程已经报告过的运行时指针版本。
+ * 只用于运行时目录里的版本没能加载成功时的修复，不能用来安装任意版本。
+ */
+export const UPDATES_REINSTALL_AGENT_CHANNEL = 'desktop:updates-reinstall-agent'
+/** 零参数：清除当前版本指针，回到随应用发布的版本；同样只用于运行时回退时的修复。 */
+export const UPDATES_RESET_AGENT_RUNTIME_CHANNEL = 'desktop:updates-reset-runtime'
 /**
  * 更新入口输出的行标记：只有带此前缀的行才参与协议解析。
  * 更新过程里依赖命令自己的输出会与协议共用同一个标准输出，因此必须靠标记区分。
@@ -196,6 +211,15 @@ export interface AgentInstallOutcome {
 
 export type AgentInstallResult =
   | { readonly ok: true; readonly data: AgentInstallOutcome }
+  | { readonly ok: false; readonly error: UpdatesError }
+
+/** 清除运行时指针的结论；`clearedVersion` 是被清掉的那个版本号，用于如实告知改动。 */
+export interface AgentRuntimeResetOutcome {
+  readonly clearedVersion: string
+}
+
+export type AgentRuntimeResetResult =
+  | { readonly ok: true; readonly data: AgentRuntimeResetOutcome }
   | { readonly ok: false; readonly error: UpdatesError }
 
 /** 页面在取得第一份快照前的初始值；不把「还没检查」显示成「已是最新」。 */
@@ -386,6 +410,23 @@ export function parseAgentInstallLine(line: string):
   return null
 }
 
+/** 清指针结论的运行时判定；主进程结论与沙箱页面共用同一份。 */
+export function isAgentRuntimeResetOutcome(value: unknown): value is AgentRuntimeResetOutcome {
+  return isRecord(value) && typeof value.clearedVersion === 'string' && value.clearedVersion !== ''
+}
+
+/** TypeScript 声明不能保证 invoke 的实际返回值；沙箱桥接只放行本契约。 */
+export function isAgentRuntimeResetResult(value: unknown): value is AgentRuntimeResetResult {
+  if (!isRecord(value)) return false
+  if (value.ok === true) return isAgentRuntimeResetOutcome(value.data)
+  if (value.ok !== false || !isRecord(value.error)) return false
+
+  const { code, message } = value.error
+  return typeof message === 'string'
+    && typeof code === 'string'
+    && UPDATES_ERROR_CODES.includes(code)
+}
+
 /** TypeScript 声明不能保证 invoke 的实际返回值；沙箱桥接只放行本契约。 */
 export function isAgentInstallResult(value: unknown): value is AgentInstallResult {
   if (!isRecord(value)) return false
@@ -421,8 +462,14 @@ export interface UpdatesApi {
   readonly updatePackages: (source?: string) => Promise<PackageUpdateResult>
   /** 订阅更新进度；返回释放函数。 */
   readonly onPackageUpdateProgress: (listener: (progress: PackageUpdateProgress) => void) => () => void
+  /** 订阅更新结论（含启动时自动执行的更新）；返回释放函数。 */
+  readonly onPackageUpdateOutcome: (listener: (outcome: PackageUpdateOutcome) => void) => () => void
   /** 安装或切换内置 Pi agent 的运行时版本；省略版本时取官方最新。进行中时复用同一次安装。 */
   readonly installAgentRuntime: (version?: string) => Promise<AgentInstallResult>
   /** 订阅内置 Pi agent 安装进度；返回释放函数。 */
   readonly onAgentInstallProgress: (listener: (progress: AgentInstallProgress) => void) => () => void
+  /** 重装运行时指针指向的那个版本；只用于运行时回退时的修复。进行中时复用同一次安装。 */
+  readonly reinstallAgentRuntime: (version: string) => Promise<AgentInstallResult>
+  /** 清除当前版本指针，回到随应用发布的版本；只用于运行时回退时的修复。 */
+  readonly resetAgentRuntime: () => Promise<AgentRuntimeResetResult>
 }

@@ -7,17 +7,19 @@ import { app, BrowserWindow, dialog, ipcMain, nativeTheme, net, protocol, sessio
 import type { BrowserWindowConstructorOptions, IpcMainInvokeEvent } from 'electron'
 import { APP_INFO_CHANNEL } from '../shared/desktop-api'
 import type { AppInfoResult, DesktopErrorCode } from '../shared/desktop-api'
-import { DEV_SERVER_PORT } from '../shared/dev-server'
+import { devServerPortFromEnv } from '../shared/dev-server'
 import {
   PREFERENCES_GET_CHANNEL,
   PREFERENCES_SET_UI_CHANNEL,
   PREFERENCES_GET_MODEL_DISPLAY_CHANNEL,
   PREFERENCES_SET_MODEL_DISPLAY_CHANNEL,
   PREFERENCES_GET_QUICK_SEND_CHANNEL,
-  PREFERENCES_SET_QUICK_SEND_CHANNEL
+  PREFERENCES_SET_QUICK_SEND_CHANNEL,
+  PREFERENCES_GET_AUTO_UPDATE_CHANNEL,
+  PREFERENCES_SET_AUTO_UPDATE_CHANNEL
 } from '../shared/preferences-api'
-import type { ModelDisplayResult, PreferencesErrorCode, PreferencesResult, QuickSendResult } from '../shared/preferences-api'
-import { isUiPreferences, isModelDisplayPreference, isQuickSendPreference } from '../shared/preferences-api'
+import type { AutoUpdateResult, ModelDisplayResult, PreferencesErrorCode, PreferencesResult, QuickSendResult } from '../shared/preferences-api'
+import { isAutoUpdatePreference, isUiPreferences, isModelDisplayPreference, isQuickSendPreference } from '../shared/preferences-api'
 import type { UiTheme } from '../shared/preferences-api'
 import {
   PROJECT_ADD_CHANNEL,
@@ -174,15 +176,21 @@ import {
   UPDATES_GET_CHANNEL,
   UPDATES_INSTALL_AGENT_CHANNEL,
   UPDATES_INSTALL_AGENT_PROGRESS_EVENT,
+  UPDATES_REINSTALL_AGENT_CHANNEL,
+  UPDATES_RESET_AGENT_RUNTIME_CHANNEL,
   UPDATES_STATE_EVENT,
   UPDATES_UPDATE_CHANNEL,
+  UPDATES_UPDATE_OUTCOME_EVENT,
   UPDATES_UPDATE_PROGRESS_EVENT
 } from '../shared/updates-api'
 import type {
   AgentInstallProgress,
   AgentInstallResult,
+  AgentRuntimeResetResult,
+  PackageUpdateOutcome,
   PackageUpdateProgress,
   PackageUpdateResult,
+  PiAgentUpdateInfo,
   UpdatesResult,
   UpdatesSnapshot
 } from '../shared/updates-api'
@@ -207,7 +215,7 @@ import { PiAgentUpdater } from './pi-agent-updater'
 import { getRuntimeRoot } from './pi-runtime'
 import { MIN_WINDOW_HEIGHT, MIN_WINDOW_WIDTH, WindowState } from './window-state'
 
-const DEVELOPMENT_PAGE_URL = `http://127.0.0.1:${DEV_SERVER_PORT}/`
+const DEVELOPMENT_PAGE_URL = `http://127.0.0.1:${devServerPortFromEnv(process.env.PI_DESK_DEV_SERVER_PORT)}/`
 const APPLICATION_PAGE_URL = 'app://desktop/index.html'
 /** 应用退出时等待关闭链的总预算；覆盖各平台兜底阶段后强制退出。 */
 const QUIT_DEADLINE_MS = 10_000
@@ -1423,6 +1431,17 @@ function registerPiSettingsHandlers(pageUrl: string): void {
   )
 }
 
+/**
+ * 运行时回退时返回指针指向的版本，否则返回 null。
+ * 判据是指针版本与实际加载的版本不一致：指针缺失，或目录里的版本已经用上了，都不属于回退。
+ */
+function pendingRuntimeVersion(piAgent: PiAgentUpdateInfo | null): string | null {
+  if (piAgent === null) return null
+  const pointer = piAgent.runtimeVersion
+  if (pointer === null || pointer === piAgent.version) return null
+  return pointer
+}
+
 function registerUpdatesHandlers(pageUrl: string): void {
   handle(
     UPDATES_GET_CHANNEL,
@@ -1494,6 +1513,42 @@ function registerUpdatesHandlers(pageUrl: string): void {
       return await piAgentUpdater.install(version)
     }
   )
+  handle(
+    UPDATES_REINSTALL_AGENT_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<AgentInstallResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return { ok: false, error: { code: 'FORBIDDEN', message: '不允许此页面调用桌面接口。' } }
+      }
+      if (args.length !== 1) {
+        return { ok: false, error: { code: 'INVALID_REQUEST', message: '重装运行时版本接口只接受一个版本号。' } }
+      }
+      const requested = args[0]
+      if (typeof requested !== 'string' || requested === '') {
+        return { ok: false, error: { code: 'INVALID_REQUEST', message: '重装运行时版本接口只接受非空文本版本号。' } }
+      }
+      // 只能重装主进程报告过的、运行中没生效的那个运行时版本；版本范围由安装入口再判一次。
+      if (requested !== pendingRuntimeVersion(updateChecker.getSnapshot().piAgent)) {
+        return { ok: false, error: { code: 'INVALID_REQUEST', message: '只能重装版本检查报告过的、运行中未生效的运行时版本。' } }
+      }
+      return await piAgentUpdater.install(requested)
+    }
+  )
+  handle(
+    UPDATES_RESET_AGENT_RUNTIME_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<AgentRuntimeResetResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return { ok: false, error: { code: 'FORBIDDEN', message: '不允许此页面调用桌面接口。' } }
+      }
+      if (args.length !== 0) {
+        return { ok: false, error: { code: 'INVALID_REQUEST', message: '清除运行时指针接口不接受参数。' } }
+      }
+      // 清指针只用于修复回退，避免在一切正常时把在用的版本指针删掉。
+      if (pendingRuntimeVersion(updateChecker.getSnapshot().piAgent) === null) {
+        return { ok: false, error: { code: 'INVALID_REQUEST', message: '只有运行时版本未能生效时才能清除指针。' } }
+      }
+      return await piAgentUpdater.resetRuntime()
+    }
+  )
 }
 
 /** 界面偏好、对话页模型展示偏好与快捷发送短语分开读写；未知字段、任意启动参数一律拒绝。 */
@@ -1520,6 +1575,30 @@ function registerPreferencesHandlers(pageUrl: string): void {
         return { ok: false, error: { code: 'INVALID_REQUEST', message: '快捷发送短语必须是不超过上限的文本列表。' } }
       }
       return preferencesManager.setQuickSend(args[0])
+    }
+  )
+  handle(
+    PREFERENCES_GET_AUTO_UPDATE_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<AutoUpdateResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return { ok: false, error: { code: 'FORBIDDEN', message: '不允许此页面调用桌面接口。' } }
+      }
+      if (args.length !== 0) {
+        return { ok: false, error: { code: 'INVALID_REQUEST', message: '扩展自动更新开关读取接口不接受参数。' } }
+      }
+      return preferencesManager.getExtensionAutoUpdate()
+    }
+  )
+  handle(
+    PREFERENCES_SET_AUTO_UPDATE_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<AutoUpdateResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return { ok: false, error: { code: 'FORBIDDEN', message: '不允许此页面调用桌面接口。' } }
+      }
+      if (args.length !== 1 || !isAutoUpdatePreference(args[0])) {
+        return { ok: false, error: { code: 'INVALID_REQUEST', message: '扩展自动更新开关只接受一个布尔值。' } }
+      }
+      return preferencesManager.setExtensionAutoUpdate(args[0])
     }
   )
   handle(
@@ -1956,6 +2035,15 @@ function broadcastPackageUpdateProgress(progress: PackageUpdateProgress): void {
   contents.send(UPDATES_UPDATE_PROGRESS_EVENT, progress)
 }
 
+/** 扩展更新结论同样只发给当前唯一可信窗口；自动执行的更新没有调用方在等结果，页面靠它收敛。 */
+function broadcastPackageUpdateOutcome(outcome: PackageUpdateOutcome): void {
+  const target = mainWindow
+  if (target === null || target.isDestroyed()) return
+  const contents = target.webContents
+  if (contents.isDestroyed()) return
+  contents.send(UPDATES_UPDATE_OUTCOME_EVENT, outcome)
+}
+
 /** 内置 Pi agent 安装进度只发给当前唯一可信窗口；进度只含阶段、版本与展示文本。 */
 function broadcastAgentInstallProgress(progress: AgentInstallProgress): void {
   const target = mainWindow
@@ -1982,6 +2070,31 @@ function focusMainWindow(): void {
   if (window.isMinimized()) window.restore()
   window.show()
   window.focus()
+}
+
+/**
+ * 启动时的扩展自动更新：开关为开、且首次检查发现了可更新条目时执行一次。
+ * 只由启动检查触发，手动重查不会静默安装；更新结果走广播，页面能像手动更新一样看到进度与结论。
+ * 硬失败（进程异常退出、超时）只写 stderr：自动动作没有调用方在等结果，不弹页面提示。
+ */
+async function runStartupAutoUpdate(): Promise<void> {
+  try {
+    const preference = await preferencesManager.getExtensionAutoUpdate()
+    if (!preference.ok || !preference.data.enabled) return
+    const snapshot = updateChecker.getSnapshot()
+    // 离线或本次检查没拿到结论时不动手：不知道哪些过期就不猜。
+    if (snapshot.offline || snapshot.error !== null) return
+    if (!snapshot.extensions.some((entry) => entry.status === 'update-available')) return
+    const result = await packageUpdater.update()
+    if (!result.ok) {
+      console.error(`启动时自动更新扩展失败：${result.error.message}`)
+      return
+    }
+    // 更新只改已装包，重查一次让设置页与启动提示看到新的已装版本。
+    await updateChecker.check()
+  } catch (error) {
+    console.error(`启动时自动更新扩展失败：${error instanceof Error ? error.message : String(error)}`)
+  }
 }
 
 async function createWindow(pageUrl: string): Promise<void> {
@@ -2141,10 +2254,13 @@ if (!app.requestSingleInstanceLock()) {
     authManager.onFlowChanged(broadcastAuthFlow)
     updateChecker.onChanged(broadcastUpdates)
     packageUpdater.onProgress(broadcastPackageUpdateProgress)
+    packageUpdater.onOutcome(broadcastPackageUpdateOutcome)
     piAgentUpdater.onProgress(broadcastAgentInstallProgress)
     await createWindow(pageUrl)
     // 窗口已创建后再开始检查：它只影响页面上的提示，不参与启动编排。
-    updateChecker.startInitialCheck()
+    // 首次检查结束后按开关决定要不要自动更新一次扩展；这一次不阻塞窗口显示。
+    const initialCheck = updateChecker.startInitialCheck()
+    if (initialCheck !== null) void initialCheck.then(runStartupAutoUpdate)
   }).catch(() => {
     console.error('Pi Desktop 无法加载桌面页面。')
     app.exit(1)

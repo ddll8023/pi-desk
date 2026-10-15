@@ -10,11 +10,16 @@ import {
   PREFERENCES_SET_MODEL_DISPLAY_CHANNEL,
   PREFERENCES_GET_QUICK_SEND_CHANNEL,
   PREFERENCES_SET_QUICK_SEND_CHANNEL,
+  PREFERENCES_GET_AUTO_UPDATE_CHANNEL,
+  PREFERENCES_SET_AUTO_UPDATE_CHANNEL,
   isPreferencesResult,
   isModelDisplayResult,
-  isQuickSendResult
+  isQuickSendResult,
+  isAutoUpdateResult
 } from '../shared/preferences-api'
 import type {
+  AutoUpdatePreference,
+  AutoUpdateResult,
   ModelDisplayPreference,
   ModelDisplayResult,
   PreferencesApi,
@@ -125,11 +130,16 @@ import {
   UPDATES_GET_CHANNEL,
   UPDATES_INSTALL_AGENT_CHANNEL,
   UPDATES_INSTALL_AGENT_PROGRESS_EVENT,
+  UPDATES_REINSTALL_AGENT_CHANNEL,
+  UPDATES_RESET_AGENT_RUNTIME_CHANNEL,
   UPDATES_STATE_EVENT,
   UPDATES_UPDATE_CHANNEL,
+  UPDATES_UPDATE_OUTCOME_EVENT,
   UPDATES_UPDATE_PROGRESS_EVENT,
   isAgentInstallProgress,
   isAgentInstallResult,
+  isAgentRuntimeResetResult,
+  isPackageUpdateOutcome,
   isPackageUpdateProgress,
   isPackageUpdateResult,
   isUpdatesResult,
@@ -138,6 +148,8 @@ import {
 import type {
   AgentInstallProgress,
   AgentInstallResult,
+  AgentRuntimeResetResult,
+  PackageUpdateOutcome,
   PackageUpdateProgress,
   PackageUpdateResult,
   UpdatesApi,
@@ -239,6 +251,7 @@ const INVALID_SESSION_RUNS_RESPONSE = '桌面接口返回了无法识别的会�
 const INVALID_PREFERENCES_RESPONSE = '桌面接口返回了无法识别的界面偏好。'
 const INVALID_MODEL_DISPLAY_RESPONSE = '桌面接口返回了无法识别的对话页模型展示偏好。'
 const INVALID_QUICK_SEND_RESPONSE = '桌面接口返回了无法识别的快捷发送短语。'
+const INVALID_AUTO_UPDATE_RESPONSE = '桌面接口返回了无法识别的扩展自动更新开关。'
 const INVALID_MODELS_CONFIG_RESPONSE = '桌面接口返回了无法识别的自定义供应商配置。'
 const INVALID_TRUST_RESPONSE = '桌面接口返回了无法识别的信任状态。'
 const INVALID_EXTENSION_UI_RESPONSE = '桌面接口返回了无法识别的 Extension UI 状态。'
@@ -254,6 +267,7 @@ const INVALID_AUTH_FLOW_RESPONSE = '桌面接口返回了无法识别的登录�
 const INVALID_UPDATES_RESPONSE = '桌面接口返回了无法识别的版本检查结果。'
 const INVALID_PACKAGE_UPDATE_RESPONSE = '桌面接口返回了无法识别的扩展更新结果。'
 const INVALID_AGENT_INSTALL_RESPONSE = '桌面接口返回了无法识别的内置 Pi agent 安装结果。'
+const INVALID_AGENT_RUNTIME_RESET_RESPONSE = '桌面接口返回了无法识别的运行时指针清除结果。'
 
 function invalidExtensionUiResponse(): ExtensionUiResult {
   return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_EXTENSION_UI_RESPONSE } }
@@ -309,6 +323,10 @@ function invalidModelDisplayResponse(): ModelDisplayResult {
 
 function invalidQuickSendResponse(): QuickSendResult {
   return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_QUICK_SEND_RESPONSE } }
+}
+
+function invalidAutoUpdateResponse(): AutoUpdateResult {
+  return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_AUTO_UPDATE_RESPONSE } }
 }
 
 function invalidModelsConfigResponse(): ModelsConfigResult {
@@ -369,6 +387,10 @@ function invalidPackageUpdateResponse(): PackageUpdateResult {
 
 function invalidAgentInstallResponse(): AgentInstallResult {
   return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_AGENT_INSTALL_RESPONSE } }
+}
+
+function invalidAgentRuntimeResetResponse(): AgentRuntimeResetResult {
+  return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_AGENT_RUNTIME_RESET_RESPONSE } }
 }
 
 const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionApi & SessionRunApi & PreferencesApi & PiSettingsApi & TrustApi & ExtensionUiApi & AuthApi & ModelsConfigApi & UpdatesApi = {
@@ -532,6 +554,18 @@ const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionAp
     const payload: QuickSendPreference = { messages: [...preference.messages] }
     const response: unknown = await ipcRenderer.invoke(PREFERENCES_SET_QUICK_SEND_CHANNEL, payload)
     return isQuickSendResult(response) ? response : invalidQuickSendResponse()
+  },
+
+  async getAutoUpdate(): Promise<AutoUpdateResult> {
+    const response: unknown = await ipcRenderer.invoke(PREFERENCES_GET_AUTO_UPDATE_CHANNEL)
+    return isAutoUpdateResult(response) ? response : invalidAutoUpdateResponse()
+  },
+
+  async setAutoUpdate(preference: AutoUpdatePreference): Promise<AutoUpdateResult> {
+    // 只搬运已声明的字段，不把页面传入的整个对象转交给主进程。
+    const payload: AutoUpdatePreference = { enabled: preference.enabled === true }
+    const response: unknown = await ipcRenderer.invoke(PREFERENCES_SET_AUTO_UPDATE_CHANNEL, payload)
+    return isAutoUpdateResult(response) ? response : invalidAutoUpdateResponse()
   },
 
   async setUiPreferences(ui: UiPreferences) {
@@ -868,6 +902,18 @@ const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionAp
     }
   },
 
+  onPackageUpdateOutcome(listener: (outcome: PackageUpdateOutcome) => void) {
+    const handler = (_event: IpcRendererEvent, payload: unknown): void => {
+      // 结论载荷同样不可信：契约不符时丢弃，由下一次更新或重查收敛。
+      if (!isPackageUpdateOutcome(payload)) return
+      listener(payload)
+    }
+    ipcRenderer.on(UPDATES_UPDATE_OUTCOME_EVENT, handler)
+    return () => {
+      ipcRenderer.off(UPDATES_UPDATE_OUTCOME_EVENT, handler)
+    }
+  },
+
   async installAgentRuntime(version?: string): Promise<AgentInstallResult> {
     const response: unknown = await ipcRenderer.invoke(
       UPDATES_INSTALL_AGENT_CHANNEL,
@@ -886,6 +932,16 @@ const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionAp
     return () => {
       ipcRenderer.off(UPDATES_INSTALL_AGENT_PROGRESS_EVENT, handler)
     }
+  },
+
+  async reinstallAgentRuntime(version: string): Promise<AgentInstallResult> {
+    const response: unknown = await ipcRenderer.invoke(UPDATES_REINSTALL_AGENT_CHANNEL, version)
+    return isAgentInstallResult(response) ? response : invalidAgentInstallResponse()
+  },
+
+  async resetAgentRuntime(): Promise<AgentRuntimeResetResult> {
+    const response: unknown = await ipcRenderer.invoke(UPDATES_RESET_AGENT_RUNTIME_CHANNEL)
+    return isAgentRuntimeResetResult(response) ? response : invalidAgentRuntimeResetResponse()
   }
 }
 

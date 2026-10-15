@@ -46,12 +46,12 @@ export class UpdateChecker {
   }
 
   /**
-   * 启动时的一次后台检查：已经有结论或正在检查时不做任何事，
-   * 失败已进入快照，因此这里不需要调用方处理异常。
+   * 启动时的首次检查：已经检查过或正在进行时不发起，返回 null；
+   * 发起时返回本次检查结果，供调用方在检查之后接自动更新；失败已进入快照，不需额外处理异常。
    */
-  startInitialCheck(): void {
-    if (this.snapshot.checkedAt !== null || this.flight.busy) return
-    void this.check()
+  startInitialCheck(): Promise<UpdatesResult> | null {
+    if (this.snapshot.checkedAt !== null || this.flight.busy) return null
+    return this.check()
   }
 
   /** 重新检查；进行中时复用同一次检查的结果。 */

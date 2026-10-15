@@ -193,16 +193,18 @@ function mapStatus(host: SdkHostStatus, session: SdkSessionStatus, runId: number
     runtimeId: session.bindingId,
     sessionId: session.sessionId,
     info: state === 'ready' ? mapInfo(session) : null,
+    sdkVersion: host.sdkVersion,
     lastError: failure === null ? null : `会话后端故障（${failure}）：请重新打开会话或重启应用。`
   }
 }
 
-/** 状态订阅去重：消息推送期间频繁变化的会话状态不需要重复广播给页面，运行实例变化必须广播。 */
+/** 状态订阅去重：消息推送期间频繁变化的会话状态不需要重复广播给页面，运行实例与 SDK 版本变化必须广播。 */
 function sameStatus(left: RuntimeStatus, right: RuntimeStatus): boolean {
   return left.state === right.state
     && left.runId === right.runId
     && left.runtimeId === right.runtimeId
     && left.sessionId === right.sessionId
+    && left.sdkVersion === right.sdkVersion
     && left.lastError === right.lastError
     && left.info?.sessionId === right.info?.sessionId
     && left.info?.isStreaming === right.info?.isStreaming
@@ -262,7 +264,7 @@ interface SessionOwner {
 
 /** 无前台运行实例时的页面状态：与宿主已建立但会话为空时一致。 */
 const IDLE_STATUS: RuntimeStatus = {
-  state: 'idle', runId: null, runtimeId: null, sessionId: null, info: null, lastError: null
+  state: 'idle', runId: null, runtimeId: null, sessionId: null, info: null, sdkVersion: null, lastError: null
 }
 
 /**

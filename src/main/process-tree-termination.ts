@@ -3,7 +3,7 @@
  *
  * 只终止给定的那一个进程及其子进程，不按进程名清理同名的其他实例；只负责让进程树收敛，
  * 不判定成败、不记录状态，也不等待退出：何时调用、等多久、失败怎么处理都由调用方决定。
- * 受管一次性入口、MCP 探测与资源预读共用这一份实现。
+ * 受管一次性入口、MCP 探测、资源预读与认证辅助进程共用这一份实现。
  */
 import { spawn } from 'node:child_process'
 import type { ChildProcess } from 'node:child_process'

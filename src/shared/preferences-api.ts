@@ -1,4 +1,4 @@
-/** 定义界面偏好、对话页模型展示偏好与快捷发送短语的受限 IPC；窗口状态由主进程独占，不经过 IPC。 */
+/** 定义界面偏好、对话页模型展示偏好、快捷发送短语与扩展自动更新开关的受限 IPC；窗口状态由主进程独占，不经过 IPC。 */
 import type { DesktopErrorCode } from './desktop-api'
 import type { ModelIdentity } from './runtime-api'
 import { isModelIdentity } from './runtime-api'
@@ -9,6 +9,8 @@ export const PREFERENCES_GET_MODEL_DISPLAY_CHANNEL = 'desktop:preferences-get-mo
 export const PREFERENCES_SET_MODEL_DISPLAY_CHANNEL = 'desktop:preferences-set-model-display'
 export const PREFERENCES_GET_QUICK_SEND_CHANNEL = 'desktop:preferences-get-quick-send'
 export const PREFERENCES_SET_QUICK_SEND_CHANNEL = 'desktop:preferences-set-quick-send'
+export const PREFERENCES_GET_AUTO_UPDATE_CHANNEL = 'desktop:preferences-get-auto-update'
+export const PREFERENCES_SET_AUTO_UPDATE_CHANNEL = 'desktop:preferences-set-auto-update'
 
 /** 主题三档取值，与 Electron `nativeTheme.themeSource` 状态机一一对应；默认跟随系统。 */
 export type UiTheme = 'system' | 'light' | 'dark'
@@ -89,6 +91,18 @@ export type QuickSendResult =
   | { readonly ok: true; readonly data: QuickSendPreference }
   | { readonly ok: false; readonly error: PreferencesError }
 
+/**
+ * 扩展自动更新开关：开启后，启动时第一次检查发现可更新的扩展就直接更新，不再等用户点击。
+ * 默认关：更新会改动的包在 Runtime 重启后才生效，默认让用户自己决定何时执行。
+ */
+export interface AutoUpdatePreference {
+  readonly enabled: boolean
+}
+
+export type AutoUpdateResult =
+  | { readonly ok: true; readonly data: AutoUpdatePreference }
+  | { readonly ok: false; readonly error: PreferencesError }
+
 /** 快捷发送短语的默认值；配置缺失或规范化后为空时使用，主进程与页面共用同一份。 */
 export const DEFAULT_QUICK_SEND_MESSAGES: readonly string[] = ['继续', '确认', '提交', '推送']
 
@@ -106,6 +120,10 @@ export interface PreferencesApi {
   readonly getQuickSend: () => Promise<QuickSendResult>
   /** 保存快捷发送短语；返回主进程规范化后的列表，不修改 Pi 配置。 */
   readonly setQuickSend: (preference: QuickSendPreference) => Promise<QuickSendResult>
+  /** 读取扩展自动更新开关；配置缺失或非法时主进程返回关闭。 */
+  readonly getAutoUpdate: () => Promise<AutoUpdateResult>
+  /** 保存扩展自动更新开关；只改本应用的行为，不修改 Pi 配置。 */
+  readonly setAutoUpdate: (preference: AutoUpdatePreference) => Promise<AutoUpdateResult>
   /** 保存界面偏好；非法的请求由主进程重新校验并拒绝。 */
   readonly setUiPreferences: (ui: UiPreferences) => Promise<PreferencesResult>
 }
@@ -164,6 +182,23 @@ export function isQuickSendResult(value: unknown): value is QuickSendResult {
 export function isModelDisplayResult(value: unknown): value is ModelDisplayResult {
   if (!isRecord(value)) return false
   if (value.ok === true) return isModelDisplayPreference(value.data)
+  if (value.ok !== false || !isRecord(value.error)) return false
+  return typeof value.error.message === 'string'
+    && typeof value.error.code === 'string'
+    && PREFERENCES_ERROR_CODES.includes(value.error.code)
+}
+
+/** 自动更新开关的请求形状校验：只允许 `enabled` 一个布尔字段。 */
+export function isAutoUpdatePreference(value: unknown): value is AutoUpdatePreference {
+  if (!isRecord(value)) return false
+  if (!Object.keys(value).every((key) => key === 'enabled')) return false
+  return typeof value.enabled === 'boolean'
+}
+
+/** 与其它偏好同一形状：成功返回主进程确认后的开关状态，失败保留主进程错误。 */
+export function isAutoUpdateResult(value: unknown): value is AutoUpdateResult {
+  if (!isRecord(value)) return false
+  if (value.ok === true) return isAutoUpdatePreference(value.data)
   if (value.ok !== false || !isRecord(value.error)) return false
   return typeof value.error.message === 'string'
     && typeof value.error.code === 'string'
