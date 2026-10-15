@@ -279,8 +279,6 @@ type MenuTarget =
 
 const MENU_WIDTH = 232
 const menuTarget = ref<MenuTarget | null>(null)
-const menuHeight = ref(0)
-let menuResizeObserver: ResizeObserver | null = null
 const anchoredMenu = useAnchoredPopup({
   width: MENU_WIDTH,
   align: 'end',
@@ -289,28 +287,14 @@ const anchoredMenu = useAnchoredPopup({
 const {
   trigger: menuTrigger, popup: menuPopup, isOpen: menuOpen, position: menuPosition
 } = anchoredMenu
-/** 共用锚定工具按高度上限向上定位；短浮层用实际高度补偿，仍限制在视窗内。 */
+/** 落点直接取共用锚定工具的结果：浮层高度由工具按实测值参与定位，调用点不再自行补偿。 */
 const menuStyle = computed(() => {
   const position = menuPosition.value
-  const anchor = menuTrigger.value?.getBoundingClientRect()
-  const proposedTop = menuHeight.value > 0 && anchor && position.top < anchor.top
-    ? position.top + position.maxHeight - menuHeight.value : position.top
-  const top = Math.max(8, Math.min(proposedTop, window.innerHeight - menuHeight.value - 8))
   return {
-    left: `${position.left}px`, top: `${top}px`,
+    left: `${position.left}px`, top: `${position.top}px`,
     width: `${position.width}px`, maxHeight: `${position.maxHeight}px`
   }
 })
-
-watch([menuPopup, menuOpen], ([popup, open]) => {
-  menuResizeObserver?.disconnect()
-  menuResizeObserver = null
-  if (popup === null || !open) return
-  menuHeight.value = popup.offsetHeight
-  menuResizeObserver = new ResizeObserver(() => { menuHeight.value = popup.offsetHeight })
-  menuResizeObserver.observe(popup)
-}, { flush: 'post' })
-onBeforeUnmount(() => menuResizeObserver?.disconnect())
 
 function isProjectMenuOpen(id: string): boolean {
   return menuOpen.value && menuTarget.value?.kind === 'project' && menuTarget.value.node.project.id === id
@@ -333,14 +317,11 @@ function openMenu(target: MenuTarget, event: MouseEvent | KeyboardEvent, toggle 
     return
   }
   anchoredMenu.close()
-  menuHeight.value = 0
   menuTarget.value = target
   menuTrigger.value = trigger
   anchoredMenu.open()
   void nextTick(() => {
     if (!menuOpen.value) return
-    // 同一帧切换两条记录可能复用浮层节点；主动量算避免依赖一次未发生的 resize 通知。
-    menuHeight.value = menuPopup.value?.offsetHeight ?? 0
     const first = menuPopup.value?.querySelector<HTMLButtonElement>('button:not(:disabled)')
     if (first) first.focus()
     else menuPopup.value?.focus()

@@ -1107,7 +1107,7 @@ onMounted(() => {
             </button>
           </div>
           <div class="flex flex-none items-center gap-1.5">
-            <!-- 模型选择：常驻在动作组最前，未就绪时写入 Pi 默认模型、就绪时只切当前会话；详情见 RuntimeModelSelect。 -->
+            <!-- 模型选择：常驻在动作组最前，未就绪时写入 Pi 默认模型、就绪时只切当前会话，改默认模型走候选项的「设为默认」；详情见 RuntimeModelSelect。 -->
             <RuntimeModelSelect />
 
             <!-- 图片选择：与粘贴、拖拽共用同一套禁用条件；当前模型明确不支持时同样禁用。 -->

@@ -1,14 +1,21 @@
-<!-- 公共分组选择器：提供可搜索的自绘选项面板；选项与选中值由调用方控制。 -->
+<!-- 公共分组选择器：提供可搜索的自绘选项面板（搜索行含自绘清除按钮，候选项可选带次级动作）；选项与选中值由调用方控制。 -->
 <script setup lang="ts">
 import { computed, nextTick, ref, useId, watch } from 'vue'
 import { useAnchoredPopup } from '../../anchored-popup'
 
 defineOptions({ inheritAttrs: false })
 
+/** 候选项的次级动作：不改变选中值，触发后由调用方执行自己的写入。 */
+interface SelectOptionAction {
+  readonly label: string
+  /** 键盘触发方式，用于按钮提示；缺失时不标快捷键。 */
+  readonly shortcut?: string | undefined
+}
+
 interface SelectOption {
   readonly value: string
   readonly label: string
-  /* 以下三个可选字段允许显式传 undefined：调用方会在无值时直接传 undefined，
+  /* 以下四个可选字段允许显式传 undefined：调用方会在无值时直接传 undefined，
      在 exactOptionalPropertyTypes 下必须写进类型，否则不能赋给可选属性。 */
   /** 选项首字母徽标；缺失时不渲染。 */
   readonly badge?: string | undefined
@@ -16,6 +23,8 @@ interface SelectOption {
   readonly description?: string | undefined
   /** 右侧能力小徽标，如图片输入；缺失时不渲染。 */
   readonly tag?: string | undefined
+  /** 右侧次级动作，如「设为默认」；缺失时不渲染。 */
+  readonly action?: SelectOptionAction | undefined
 }
 
 interface SelectGroup {
@@ -47,6 +56,8 @@ const props = withDefaults(defineProps<{
 
 const emit = defineEmits<{
   'update:modelValue': [value: string]
+  /** 候选项次级动作被触发；动作不改选中值，结果由调用方处理。 */
+  'option-action': [value: string]
 }>()
 
 const instanceId = useId()
@@ -145,6 +156,12 @@ function closePopup(restoreFocus = false): void {
   if (restoreFocus && wasOpen) void nextTick(() => trigger.value?.focus())
 }
 
+/** 清空搜索词：列表随查询复位，焦点留在输入框里继续输入。 */
+function clearSearch(): void {
+  searchQuery.value = ''
+  searchInput.value?.focus()
+}
+
 function togglePopup(): void {
   if (expanded.value) closePopup()
   else openPopup()
@@ -185,6 +202,19 @@ function chooseOption(option: SelectOption): void {
   closePopup(true)
 }
 
+/** 触发候选项的次级动作：动作不改选中值，浮层收起后由调用方处理结果。 */
+function runOptionAction(option: SelectOption): void {
+  if (option.action === undefined) return
+  emit('option-action', option.value)
+  closePopup(true)
+}
+
+/** 对当前高亮项执行次级动作；高亮项没有动作时不响应。 */
+function runActiveOptionAction(): void {
+  const option = visibleOptions.value[activeIndex.value]
+  if (option !== undefined) runOptionAction(option)
+}
+
 function onTriggerKeydown(event: KeyboardEvent): void {
   if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
     event.preventDefault()
@@ -208,6 +238,11 @@ function onSearchKeydown(event: KeyboardEvent): void {
   if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
     event.preventDefault()
     moveActive(event.key === 'ArrowDown' ? 1 : -1)
+    return
+  }
+  if (event.key === 'Enter' && event.altKey) {
+    event.preventDefault()
+    runActiveOptionAction()
     return
   }
   if (event.key === 'Enter') {
@@ -235,6 +270,11 @@ function onListboxKeydown(event: KeyboardEvent): void {
   if (event.key === 'Home' || event.key === 'End') {
     event.preventDefault()
     moveToBoundary(event.key === 'Home' ? 'first' : 'last')
+    return
+  }
+  if (event.key === 'Enter' && event.altKey) {
+    event.preventDefault()
+    runActiveOptionAction()
     return
   }
   if (event.key === 'Enter' || event.key === ' ') {
@@ -298,22 +338,37 @@ function onListboxKeydown(event: KeyboardEvent): void {
       :style="popupStyle"
       data-app-select-popup
     >
-      <input
-        v-if="props.searchable"
-        ref="searchInput"
-        v-model="searchQuery"
-        type="search"
-        class="app-select-search"
-        :placeholder="props.searchPlaceholder"
-        :aria-label="`${props.label}搜索`"
-        role="combobox"
-        aria-autocomplete="list"
-        aria-haspopup="listbox"
-        aria-expanded="true"
-        :aria-controls="popupId"
-        :aria-activedescendant="activeOptionId"
-        @keydown="onSearchKeydown"
-      >
+      <div v-if="props.searchable" class="app-select-search-row">
+        <input
+          ref="searchInput"
+          v-model="searchQuery"
+          type="search"
+          class="app-select-search"
+          :placeholder="props.searchPlaceholder"
+          :aria-label="`${props.label}搜索`"
+          role="combobox"
+          aria-autocomplete="list"
+          aria-haspopup="listbox"
+          aria-expanded="true"
+          :aria-controls="popupId"
+          :aria-activedescendant="activeOptionId"
+          @keydown="onSearchKeydown"
+        >
+        <!-- 原生清除按钮跟随平台配色且暗色主题下不受控，改用自绘按钮；Tab 仍按既有约定收起浮层，这里不参与键盘次序。 -->
+        <button
+          v-if="searchQuery !== ''"
+          type="button"
+          class="app-select-clear"
+          tabindex="-1"
+          :aria-label="`清空${props.label}搜索`"
+          @mousedown.prevent
+          @click="clearSearch"
+        >
+          <svg width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true">
+            <path d="M2 2L8 8M8 2L2 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
+          </svg>
+        </button>
+      </div>
       <div
         :id="popupId"
         ref="listbox"
@@ -352,6 +407,16 @@ function onListboxKeydown(event: KeyboardEvent): void {
               <span v-if="option.description" class="app-select-option-desc">{{ option.description }}</span>
             </span>
             <span v-if="option.tag" class="app-select-option-tag" aria-hidden="true">{{ option.tag }}</span>
+            <button
+              v-if="option.action"
+              type="button"
+              class="app-select-option-action"
+              tabindex="-1"
+              :aria-label="`${option.label}：${option.action.label}`"
+              :title="option.action.shortcut === undefined ? option.action.label : `${option.action.label}（${option.action.shortcut}）`"
+              @mousedown.prevent
+              @click.stop="runOptionAction(option)"
+            >{{ option.action.label }}</button>
             <svg class="app-select-check" width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
               <path d="M2 6.5L4.8 9L10 3.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
             </svg>
@@ -454,6 +519,11 @@ function onListboxKeydown(event: KeyboardEvent): void {
   animation: app-select-popup-in var(--motion-duration-base) var(--motion-ease-entrance) both;
 }
 
+/* 浮层持有焦点（搜索框或选项）时用自身描边表达，替代输入框单独再画一圈焦点环。 */
+.app-select-popup:focus-within {
+  border-color: var(--color-desk-accent);
+}
+
 @keyframes app-select-popup-in {
   from {
     opacity: 0;
@@ -466,22 +536,61 @@ function onListboxKeydown(event: KeyboardEvent): void {
   }
 }
 
+/* 搜索行：输入框占满剩余宽度，清除按钮固定在右端；分隔线画在行上。 */
+.app-select-search-row {
+  display: flex;
+  flex: none;
+  align-items: center;
+  border-bottom: 1px solid var(--color-desk-line);
+}
+
 .app-select-search {
   display: block;
-  width: 100%;
-  flex: none;
+  flex: 1;
+  min-width: 0;
   border: 0;
-  border-bottom: 1px solid var(--color-desk-line);
   border-radius: 0;
-  background: var(--color-desk-surface);
+  background: transparent;
   padding: 0.65rem 0.75rem;
   color: var(--color-desk-ink);
   font: inherit;
-  outline-offset: -2px;
+}
+
+/* 焦点由浮层描边表达：输入框再画一圈会和浮层描边叠成双框，且方角焦点环会被浮层圆角裁切。 */
+.app-select-search:focus-visible {
+  outline: none;
+}
+
+/* 原生搜索清除按钮跟随平台配色、暗色主题下不受控；隐掉后由 .app-select-clear 替代。 */
+.app-select-search::-webkit-search-cancel-button,
+.app-select-search::-webkit-search-decoration {
+  appearance: none;
+  display: none;
 }
 
 .app-select-search::placeholder {
   color: var(--color-desk-muted);
+}
+
+.app-select-clear {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  margin-right: 0.5rem;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--color-desk-muted);
+  cursor: pointer;
+  transition: background var(--motion-duration-fast) ease, color var(--motion-duration-fast) ease;
+}
+
+.app-select-clear:hover {
+  background: var(--color-desk-surface-subtle);
+  color: var(--color-desk-ink);
 }
 
 .app-select-listbox {
@@ -547,6 +656,25 @@ function onListboxKeydown(event: KeyboardEvent): void {
   color: var(--color-desk-muted);
   font-size: 0.625rem;
   line-height: 1.6;
+}
+
+/* 候选项次级动作：贴在行的右端，不改变行的选中态，只在调用方给出 action 时渲染。 */
+.app-select-option-action {
+  flex: none;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  padding: 0.15rem 0.35rem;
+  color: var(--color-desk-muted);
+  cursor: pointer;
+  font-size: var(--text-2xs);
+  line-height: 1.45;
+  transition: background var(--motion-duration-fast) ease, color var(--motion-duration-fast) ease;
+}
+
+.app-select-option-action:hover {
+  background: var(--color-desk-accent-soft);
+  color: var(--color-desk-accent);
 }
 
 .app-select-check {

@@ -3,10 +3,12 @@
  *
  * 只负责展开状态与几何，不管内容、键盘与焦点，也不渲染元素：浮层由调用方经 Teleport 渲染到
  * body，避免被侧栏、弹层等滚动容器的 overflow 裁掉。位置策略是先按触发元素的矩形算尺寸，
- * 下方空间不足且上方更宽裕时向上翻转，再贴住视窗边缘收边；展开期间监听视窗缩放与滚动
- * （捕获阶段，滚动容器内的滚动同样命中）重算，点击浮层与触发元素之外的位置收起。
+ * 下方空间不足且上方更宽裕时向上翻转，再贴住视窗边缘收边；翻转与收边都按浮层实测高度计算，
+ * 只有首帧尚未挂载时退回高度上限，否则内容短于上限的浮层会悬在触发元素上方一段空档里。
+ * 展开期间监听视窗缩放与滚动（捕获阶段，滚动容器内的滚动同样命中）重算，浮层自身高度变化
+ * （如搜索过滤后列表变短）时重算，点击浮层与触发元素之外的位置收起。
  */
-import { onUnmounted, ref } from 'vue'
+import { nextTick, onUnmounted, ref, watch } from 'vue'
 
 /** 浮层落点与尺寸；四个值由调用方直接写进浮层的内联样式。 */
 export interface AnchoredPopupPosition {
@@ -59,6 +61,14 @@ export function useAnchoredPopup(options: AnchoredPopupOptions = {}) {
   const isOpen = ref(false)
   const position = ref<AnchoredPopupPosition>({ left: 0, top: 0, width: 0, maxHeight: maxHeightCap })
 
+  /** 浮层实测高度；未挂载或量不到（高度为 0）时为 null，此时只能退回高度上限估算。 */
+  function measuredHeight(): number | null {
+    const element = popup.value
+    if (element === null) return null
+    const height = element.offsetHeight
+    return height > 0 ? height : null
+  }
+
   /** 按触发元素当前的位置重算落点；触发元素缺失时保持上一次结果。 */
   function update(): void {
     const element = trigger.value
@@ -76,8 +86,10 @@ export function useAnchoredPopup(options: AnchoredPopupOptions = {}) {
     const maxHeight = Math.max(minHeight, Math.min(maxHeightCap, available))
     const alignedLeft = options.align === 'end' ? rect.right - width : rect.left
     const left = Math.max(edge, Math.min(alignedLeft, window.innerWidth - width - edge))
-    const proposedTop = placeAbove ? rect.top - gap - maxHeight : rect.bottom + gap
-    const top = Math.max(edge, Math.min(proposedTop, window.innerHeight - maxHeight - edge))
+    // 首帧浮层尚未挂载，只能按高度上限估算；挂载后的重算会按实测高度把浮层贴回触发元素。
+    const height = Math.min(measuredHeight() ?? maxHeight, maxHeight)
+    const proposedTop = placeAbove ? rect.top - gap - height : rect.bottom + gap
+    const top = Math.max(edge, Math.min(proposedTop, window.innerHeight - height - edge))
 
     position.value = { left, top, width, maxHeight }
   }
@@ -101,6 +113,8 @@ export function useAnchoredPopup(options: AnchoredPopupOptions = {}) {
     window.addEventListener('pointerdown', onWindowPointerDown)
     window.addEventListener('resize', onViewportChange)
     window.addEventListener('scroll', onViewportChange, true)
+    // 浮层挂载后才能量到实际高度；补一次重算，短内容不会因按上限估算而悬空。
+    void nextTick(() => { if (isOpen.value) update() })
   }
 
   /** 收起并解绑；返回本次是否真的从展开态收起，供调用方决定要不要把焦点还给触发元素。 */
@@ -119,7 +133,15 @@ export function useAnchoredPopup(options: AnchoredPopupOptions = {}) {
     else open()
   }
 
+  /** 浮层高度随内容变化（如过滤后列表变短）时重算落点，保持贴住触发元素。 */
+  const resizeObserver = new ResizeObserver(() => { if (isOpen.value) update() })
+  watch(popup, (element) => {
+    resizeObserver.disconnect()
+    if (element !== null) resizeObserver.observe(element)
+  }, { flush: 'post' })
+
   onUnmounted(() => {
+    resizeObserver.disconnect()
     close()
   })
 

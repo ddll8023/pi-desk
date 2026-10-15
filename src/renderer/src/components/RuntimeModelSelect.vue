@@ -1,4 +1,4 @@
-<!-- 输入坞模型选择器：未选项目时也读全局模型目录；Pi 未启动时选中即写为 Pi 自身默认模型（settings.json），就绪时只切换当前会话模型，不联动全局默认；候选项排除设置中隐藏的模型。 -->
+<!-- 输入坞模型选择器：未选项目时也读全局模型目录；Pi 未启动时选中即写为 Pi 自身默认模型（settings.json），就绪时选中只切换当前会话、候选项里的「设为默认」才写默认模型，会话切换与默认模型写入互不联动；候选项排除设置中隐藏的模型。 -->
 <script setup lang="ts">
 import { computed, onUnmounted, ref } from 'vue'
 import { storeToRefs } from 'pinia'
@@ -81,6 +81,9 @@ const currentLabel = computed(() => {
 })
 const currentIdentity = computed(() => identity.value
   ? `${identity.value.provider} / ${identity.value.modelId}` : currentLabel.value)
+/** 就绪时也能写 Pi 默认模型（只影响以后新建的会话）；默认模型没读到或正在保存时不给这个动作。 */
+const canSetDefault = computed(() => ready.value && piDefaultModelLoaded.value
+  && piDefaultModelView.value.phase !== 'saving')
 const groups = computed(() => {
   type Option = {
     value: string
@@ -88,6 +91,7 @@ const groups = computed(() => {
     badge?: string | undefined
     description?: string | undefined
     tag?: string | undefined
+    action?: { label: string; shortcut?: string | undefined } | undefined
   }
   const providers = new Map<string, Option[]>()
   const piDefault = piDefaultModel.value
@@ -104,7 +108,10 @@ const groups = computed(() => {
       description: isDefault
         ? (context === undefined ? 'Pi 默认' : `${context} · Pi 默认`)
         : context,
-      tag: model.imageInput === true ? '图片' : undefined
+      tag: model.imageInput === true ? '图片' : undefined,
+      // 就绪时改默认模型只能走这条次级动作；已经是默认的项不再重复给出入口。
+      action: canSetDefault.value && !isDefault
+        ? { label: '设为默认', shortcut: 'Alt+Enter' } : undefined
     })
     providers.set(model.provider, options)
   }
@@ -187,10 +194,11 @@ const busy = computed(() => modelSwitchView.value.phase === 'switching'
   || (canPrepare.value && modelPreviewView.value.phase === 'loading'))
 
 /**
- * 选中即生效，但两种场景互不联动：
+ * 选中即生效，但三种场景互不联动：
  * Pi 就绪时只切换当前会话的模型（SDK 的会话切换默认不持久化全局默认），
- * 未启动时写为 Pi 自身默认模型（settings.json），只影响以后新建的会话。
- * 两条路径都不乐观伪造结果。
+ * 未启动时写为 Pi 自身默认模型（settings.json），只影响以后新建的会话；
+ * 就绪时改默认模型走候选项的「设为默认」（见 chooseDefaultModel），不动当前会话。
+ * 三条路径都不乐观伪造结果。
  */
 async function chooseModel(value: string): Promise<void> {
   if (disabledReason.value !== null) return
@@ -203,6 +211,18 @@ async function chooseModel(value: string): Promise<void> {
   }
   const result = await runtimeStore.setPiDefaultModel({ provider: model.provider, modelId: model.id })
   if (result.ok) showNotice('success', `已设为 Pi 默认模型：${model.name ?? model.id}`)
+  else showNotice('error', result.message)
+}
+
+/**
+ * 候选项里的「设为默认」：只写 Pi 默认模型（settings.json），不切换当前会话；
+ * 影响的是以后新建的会话，因此提示里点明当前会话不变。
+ */
+async function chooseDefaultModel(value: string): Promise<void> {
+  const model = models.value.find(candidate => modelKey(candidate.provider, candidate.id) === value)
+  if (model === undefined || !canSetDefault.value) return
+  const result = await runtimeStore.setPiDefaultModel({ provider: model.provider, modelId: model.id })
+  if (result.ok) showNotice('success', `已设为 Pi 默认模型：${model.name ?? model.id}（当前会话不变）`)
   else showNotice('error', result.message)
 }
 
@@ -245,13 +265,14 @@ function refreshModels(): void {
         :selected-meta="currentKey ? identity?.provider : undefined"
         :selected-badge="currentKey && identity ? providerBadge(identity.provider) : undefined"
         :disabled="disabledReason !== null"
-        :title="error ? `${currentIdentity}；${error}` : disabledReason ? `${currentIdentity}；${disabledReason}` : `${ready ? '当前会话模型' : 'Pi 默认模型'}：${currentIdentity}；点击选择${ready ? '，只切换当前会话，不改全局默认' : '，选中即设为 Pi 默认模型'}`"
+        :title="error ? `${currentIdentity}；${error}` : disabledReason ? `${currentIdentity}；${disabledReason}` : `${ready ? '当前会话模型' : 'Pi 默认模型'}：${currentIdentity}；点击选择${ready ? '，只切换当前会话，改默认模型在候选项里' : '，选中即设为 Pi 默认模型'}`"
         :aria-label="`${ready ? '当前会话模型' : 'Pi 默认模型'}：${currentIdentity}`"
         :aria-describedby="error ? 'runtime-model-error' : progress ? 'runtime-model-progress' : undefined"
         searchable
         search-placeholder="搜索供应商或模型…"
         empty-results-label="没有匹配的模型"
         @update:model-value="chooseModel"
+        @option-action="chooseDefaultModel"
       />
       <!-- 只在未就绪与读取失败时出现的重试入口；图标按钮，不再占一行文字。 -->
       <AppButton
