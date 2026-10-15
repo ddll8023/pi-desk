@@ -13,6 +13,8 @@
  * 前台选择由项目切换驱动：当前项目变化时切到该项目最近一次前台的实例，未命中则清空前台。
  * 项目切换只改展示归属，不建立宿主、不重绑会话、不中断任何后台实例。
  * 前台实例不参与空闲回收：切走或清空前台后才重新计时。
+ * 空会话释放是唯一例外：绑定还没有任何消息落盘的会话且完全空闲的实例，在让出前台或切换会话时
+ * 直接解除占用——这类会话没有文件、无法从列表重开，保留只会留下「未命名会话」占位行。
  */
 import { SdkHostError } from './sdk-host-manager'
 import type { SdkHostErrorCode, SdkHostManager, SdkHostStatus } from './sdk-host-manager'
@@ -408,6 +410,42 @@ export class SdkRuntimeBridge {
     this.reclaimTimers.delete(runId)
   }
 
+  /**
+   * 空会话判定：绑定还没有任何消息落盘的会话且完全空闲（无排队、无独立 Bash、无等待交互）。
+   * 这类会话在 Pi 侧尚未写入文件、无法从列表重开，保留运行实例绑定只会让侧栏留下永远无法打开的占位行。
+   */
+  private isEmptyBoundSession(run: SessionRunRecord<SdkHostManager>): boolean {
+    const session = run.owner.getSessionStatus()
+    if (session.phase !== 'bound' || session.sessionId === null) return false
+    return session.messageCount === 0
+      && session.isIdle
+      && session.pendingMessages === 0
+      && session.isBashRunning === false
+      && session.waitingDialogs === 0
+  }
+
+  /**
+   * 空会话释放：内容为零时解除占用不需要中断也不需要保留绑定；失败时退回常规空闲回收，
+   * 由占用门禁如实报告，不在切换链路里重试。
+   */
+  private releaseIfEmpty(runId: number): void {
+    const run = this.runOf(runId)
+    if (run === null || this.shuttingDown) return
+    if (run.phase !== 'running' || !this.isEmptyBoundSession(run)) return
+    this.cancelReclaim(runId)
+    void this.releaseRun(runId, false).then(result => {
+      if (!result.ok) this.scheduleReclaim(runId)
+    })
+  }
+
+  /** 清扫全部空会话实例：供会话切换前调用，释放后的空闲实例正好成为复用目标，不额外建宿主。 */
+  private releaseEmptySessionRuns(): void {
+    for (const run of this.options.runs.allRuns()) {
+      if (run.runId === this.foregroundRunId()) continue
+      this.releaseIfEmpty(run.runId)
+    }
+  }
+
   /** 显式需要宿主的动作：取消旧计时后重新起表，不让刚被使用的宿主立刻到期；前台实例因豁免不再起表。 */
   private keepAlive(runId: number): void {
     this.cancelReclaim(runId)
@@ -490,8 +528,8 @@ export class SdkRuntimeBridge {
     const previous = this.foregroundRunId()
     this.options.runs.setForeground(runId)
     this.keepAlive(runId)
-    // 旧前台随切换交还回收资格：它在后台继续空闲，按同一个宽限期起表。
-    if (previous !== null && previous !== runId) this.scheduleReclaim(previous)
+    // 旧前台随切换交还回收资格：空会话实例立即释放，其余按同一个宽限期起表。
+    if (previous !== null && previous !== runId) this.releaseIfEmpty(previous)
     this.publishState()
     const run = this.runOf(runId)
     if (run !== null) this.forwardUi(runId, run.owner.getExtensionUiSnapshot())
@@ -507,8 +545,8 @@ export class SdkRuntimeBridge {
     if (run === null) {
       const previous = this.foregroundRunId()
       this.options.runs.clearForeground()
-      // 没有可展示的实例时前台为空：刚离开的实例交还回收资格。
-      if (previous !== null) this.scheduleReclaim(previous)
+      // 没有可展示的实例时前台为空：刚离开的实例如果是空会话立即释放，其余交还回收资格。
+      if (previous !== null) this.releaseIfEmpty(previous)
       this.publishState()
       return
     }
@@ -916,6 +954,8 @@ export class SdkRuntimeBridge {
     owner: SessionOwner
   ): Promise<{ readonly cancelled: boolean }> {
     if (action !== 'reload') {
+      // 切换前先清扫其他实例上的空会话占用：释放后的空闲实例正好成为本次切换的复用目标。
+      this.releaseEmptySessionRuns()
       const occupied = this.reuseOccupied(owner)
       if (occupied !== null) {
         // 回收可能正在进行：等它收敛后再决定是复用还是重绑，不与释放竞争。
