@@ -105,6 +105,8 @@
     --chat-column-max: clamp(62rem, 68vw, 88rem);
     /* 右侧为大纲刻度栏保留的留白：值需覆盖 ChatMessageList.vue 的大纲可用宽常量（OUTLINE_MIN_WIDTH_PX 加间距与边缘），列宽吃满该留白会让大纲因可用宽度不足而整条不显示。 */
     --chat-column-reserve: 24rem;
+    /* 可折叠卡片内容区的高度上限：跟随窗口高度，超出部分在卡片内部滚动，短内容仍按内容高度收缩。 */
+    --chat-card-scroll-max-height: min(28rem, 60vh);
   }
 
   body {
@@ -1609,15 +1611,19 @@
     padding-top: 6px;
   }
 
-  .app-sidebar .scroll-area::-webkit-scrollbar {
+  /* 侧栏与它的浮层菜单共用同一套细条：菜单被 Teleport 到 body，需要自己的选择器。 */
+  .app-sidebar .scroll-area::-webkit-scrollbar,
+  .project-sidebar-menu::-webkit-scrollbar {
     width: 4px;
   }
 
-  .app-sidebar .scroll-area::-webkit-scrollbar-thumb {
+  .app-sidebar .scroll-area::-webkit-scrollbar-thumb,
+  .project-sidebar-menu::-webkit-scrollbar-thumb {
     background: color-mix(in srgb, var(--sidebar-muted) 25%, transparent);
   }
 
-  .app-sidebar .scroll-area::-webkit-scrollbar-thumb:hover {
+  .app-sidebar .scroll-area::-webkit-scrollbar-thumb:hover,
+  .project-sidebar-menu::-webkit-scrollbar-thumb:hover {
     background: color-mix(in srgb, var(--sidebar-muted) 45%, transparent);
   }
 
@@ -1911,6 +1917,19 @@
     min-width: 0;
   }
 
+  /*
+   * 可折叠卡片的内容区：展开长内容只让卡片自己滚动，不按内容长度撑高消息区。
+   * 不设 overscroll-behavior，滚到卡片底部后继续滚动外层消息区（与侧栏会话列表同一约定）；
+   * 不预留滚动条槽位，避免左对齐正文白占宽度。
+   */
+  .chat-thinking-body,
+  .chat-skill-body,
+  .chat-compaction-body,
+  .tool-card-body {
+    max-height: var(--chat-card-scroll-max-height);
+    overflow-y: auto;
+  }
+
   /* Thinking 使用低强调的内嵌折叠区，不借用工具卡片样式，避免调整波及工具输出。 */
   .chat-thinking {
     min-width: 0;
@@ -1922,6 +1941,8 @@
 
   .chat-thinking > summary {
     display: flex;
+    /* 预览另起一行：摘要行与预览各占一行，展开时预览隐藏，行数回到一行。 */
+    flex-wrap: wrap;
     align-items: center;
     gap: 0.5625rem;
     padding: 0.625rem 0.8125rem;
@@ -1938,9 +1959,55 @@
     border-radius: var(--radius-desk-md) var(--radius-desk-md) 0 0;
   }
 
+  /* 状态点与提示文案同行对齐；运行中的点由模板按流式状态给出。 */
   .chat-thinking-hint {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
     margin-left: auto;
     font-size: var(--text-2xs);
+  }
+
+  /*
+   * 折叠态预览：正文尾部两行，底部渐隐提示还有更多。展开后由正文承担展示，预览让位，
+   * 避免同一段内容在标题行与正文里各出现一次。
+   */
+  .chat-thinking-preview {
+    display: -webkit-box;
+    flex: 1 0 100%;
+    min-width: 0;
+    overflow: hidden;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    color: var(--color-desk-muted);
+    font-size: 0.75rem;
+    line-height: 1.55;
+    overflow-wrap: anywhere;
+    mask-image: linear-gradient(to bottom, #000 55%, transparent);
+  }
+
+  .chat-thinking[open] .chat-thinking-preview {
+    display: none;
+  }
+
+  /* 流式思考的预览：渐变文字横向扫过；减少动效时回落为纯色，见下方 prefers-reduced-motion。 */
+  .chat-thinking-preview.is-live {
+    color: transparent;
+    background-image: linear-gradient(
+      100deg,
+      var(--color-desk-muted) 35%,
+      var(--color-desk-ink) 50%,
+      var(--color-desk-muted) 65%
+    );
+    background-size: 220% 100%;
+    background-clip: text;
+    -webkit-background-clip: text;
+    animation: chat-thinking-shimmer 2.4s linear infinite;
+  }
+
+  @keyframes chat-thinking-shimmer {
+    from { background-position: 120% 0; }
+    to { background-position: -120% 0; }
   }
 
   .chat-thinking-body {
@@ -2429,6 +2496,13 @@
     .chat-compaction .disclosure {
       transition: none;
     }
+
+    /* 流光关掉后必须回到实色：透明文字在没有渐变背景时不可读。 */
+    .chat-thinking-preview.is-live {
+      animation: none;
+      background-image: none;
+      color: var(--color-desk-muted);
+    }
   }
 
   /* 折叠三角：纯 CSS 绘制，不依赖图标字体。 */
@@ -2468,8 +2542,9 @@
     @apply space-y-2 border-t border-desk-line px-3 py-2.5;
   }
 
+  /* 工具输出不设纵向上限：纵向滚动由卡片内容区统一承担，整卡只保留一层滚动条。 */
   .tool-output {
-    @apply max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-desk-sm border border-desk-line bg-desk-canvas-sunken px-2.5 py-2 font-mono text-xs leading-5;
+    @apply whitespace-pre-wrap break-words rounded-desk-sm border border-desk-line bg-desk-canvas-sunken px-2.5 py-2 font-mono text-xs leading-5;
   }
 
   .tool-note {
@@ -2529,7 +2604,7 @@
    * 预留滚动条槽位：经典滚动条会占掉内容宽度，同一容器内容一长一短就出现横向跳动
    * （设置页在子页之间切换、消息列从无滚动条变为有滚动条时最明显）。
    * 固定预留后，居中内容在有无滚动条时位置一致；侧栏的滚动容器已有同样处理。
-   * 只为需要纵向滚动的容器预留；带滚动条但条目左对齐的浮层列表（侧栏菜单、AppSelect）不加，
+   * 只为需要纵向滚动的容器预留；带滚动条但内容左对齐的容器（侧栏菜单、AppSelect、可折叠卡片内容区）不加，
    * 避免白占 8px。
    */
   .scroll-area,
@@ -2537,23 +2612,45 @@
     scrollbar-gutter: stable;
   }
 
-  /* 细滚动条；不改变滚动行为，只避免默认滚动条压住内容。弹层体一律适用，避免同一处弹层里粗细不一。
+  /* 细滚动条；不改变滚动行为，只避免默认滚动条压住内容。弹层体、消息区内的横向滚动容器与可折叠卡片的内容区
+     一律适用，避免同一处弹层或同一段正文里粗细不一。
      只用 ::-webkit-scrollbar 定制：Chromium 里 scrollbar-color 与 scrollbar-width 一旦不是 auto，
      就会覆盖这些伪元素样式，半透明细条会退回成按 scrollbar-color 上色的原生滚动条；本应用只跑 Electron。 */
   .scroll-area::-webkit-scrollbar,
-  .dialog-body::-webkit-scrollbar {
+  .dialog-body::-webkit-scrollbar,
+  .markdown-code-block pre::-webkit-scrollbar,
+  .markdown-table-scroll::-webkit-scrollbar,
+  .technical-detail-text::-webkit-scrollbar,
+  .chat-thinking-body::-webkit-scrollbar,
+  .chat-skill-body::-webkit-scrollbar,
+  .chat-compaction-body::-webkit-scrollbar,
+  .tool-card-body::-webkit-scrollbar {
     width: 8px;
     height: 8px;
   }
 
   .scroll-area::-webkit-scrollbar-track,
-  .dialog-body::-webkit-scrollbar-track {
+  .dialog-body::-webkit-scrollbar-track,
+  .markdown-code-block pre::-webkit-scrollbar-track,
+  .markdown-table-scroll::-webkit-scrollbar-track,
+  .technical-detail-text::-webkit-scrollbar-track,
+  .chat-thinking-body::-webkit-scrollbar-track,
+  .chat-skill-body::-webkit-scrollbar-track,
+  .chat-compaction-body::-webkit-scrollbar-track,
+  .tool-card-body::-webkit-scrollbar-track {
     background: transparent;
   }
 
   /* 静止时半透明，悬停才实色，避免滚动条在弹层里抢走注意力。 */
   .scroll-area::-webkit-scrollbar-thumb,
-  .dialog-body::-webkit-scrollbar-thumb {
+  .dialog-body::-webkit-scrollbar-thumb,
+  .markdown-code-block pre::-webkit-scrollbar-thumb,
+  .markdown-table-scroll::-webkit-scrollbar-thumb,
+  .technical-detail-text::-webkit-scrollbar-thumb,
+  .chat-thinking-body::-webkit-scrollbar-thumb,
+  .chat-skill-body::-webkit-scrollbar-thumb,
+  .chat-compaction-body::-webkit-scrollbar-thumb,
+  .tool-card-body::-webkit-scrollbar-thumb {
     background-color: color-mix(in srgb, var(--color-desk-line-strong) 55%, transparent);
     background-clip: content-box;
     border: 2px solid transparent;
@@ -2561,7 +2658,14 @@
   }
 
   .scroll-area::-webkit-scrollbar-thumb:hover,
-  .dialog-body::-webkit-scrollbar-thumb:hover {
+  .dialog-body::-webkit-scrollbar-thumb:hover,
+  .markdown-code-block pre::-webkit-scrollbar-thumb:hover,
+  .markdown-table-scroll::-webkit-scrollbar-thumb:hover,
+  .technical-detail-text::-webkit-scrollbar-thumb:hover,
+  .chat-thinking-body::-webkit-scrollbar-thumb:hover,
+  .chat-skill-body::-webkit-scrollbar-thumb:hover,
+  .chat-compaction-body::-webkit-scrollbar-thumb:hover,
+  .tool-card-body::-webkit-scrollbar-thumb:hover {
     background-color: var(--color-desk-line-strong);
   }
 }

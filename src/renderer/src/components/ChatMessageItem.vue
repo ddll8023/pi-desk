@@ -1,9 +1,10 @@
-<!-- 单条消息：按块展示正文、Thinking、技能卡、压缩卡、工具与计时（单条生成耗时与本轮响应耗时）；用户消息下方使用细线图标操作栏，回退与修改后的重新发送由父级执行。 -->
+<!-- 单条消息：按块展示正文、Thinking、技能卡、压缩卡、工具与计时（单条生成耗时与本轮响应耗时）；Thinking 在生成中自动展开并跟随最新内容，结束后自动收起，折叠态显示尾部两行预览；用户消息下方使用细线图标操作栏，回退与修改后的重新发送由父级执行。 -->
 <script setup lang="ts">
-import { computed, onUnmounted, reactive, ref, useId } from 'vue'
+import { computed, onUnmounted, reactive, ref, useId, watch } from 'vue'
 import { copyText } from '../clipboard'
 import type { ChatMessageView, ChatTextBlock } from '../chat-view'
 import { formatDuration, useTickingNow } from '../clock'
+import { thinkingPreviewText } from '../thinking-preview'
 import MarkdownContent from './MarkdownContent.vue'
 import ToolCard from './ToolCard.vue'
 import AppButton from './ui/AppButton.vue'
@@ -77,10 +78,10 @@ async function copyMessage(): Promise<void> {
   }
 }
 
-/** 折叠块（Thinking 与技能卡）的手动选择只保留在当前消息组件中；重新进入聊天或切换会话后恢复初始折叠。 */
+/** Thinking 的手动开合只保留在当前消息组件中；没有手动选择时按「正在生成的块自动展开」决定。 */
 const thinkingOverrides = reactive(new Map<string, boolean>())
 
-/** 技能卡与 Thinking 同样初始折叠，手动开合只影响当前块。 */
+/** 技能卡初始折叠，流式更新不改变手动选择。 */
 const skillOverrides = reactive(new Map<string, boolean>())
 
 const isUser = computed(() => props.message.role === 'user')
@@ -115,15 +116,88 @@ const turnText = computed(() => {
   return current.endedAt === null ? `响应中 ${duration}` : `响应耗时 ${duration}`
 })
 
-/** 未手动调整的块一律折叠；流式更新不改变单个块的手动选择。 */
+/**
+ * 正在生成的 Thinking 块：消息仍在生成且该块是最后一个块。投影按 contentIndex 排序、
+ * 每个块由各自的 start 事件建立，所以非末块一定已结束，不需要块级流式标记。
+ */
+const liveThinkingKey = computed(() => {
+  if (props.message.role !== 'assistant' || generation.value?.phase !== 'running') return null
+  const last = props.message.blocks[props.message.blocks.length - 1]
+  return last !== undefined && last.kind === 'thinking' ? last.key : null
+})
+
+/** 流式 Thinking 的正文；跟随滚动只在这块存在且展开时生效。 */
+const liveThinking = computed(() => {
+  const key = liveThinkingKey.value
+  if (key === null) return null
+  const block = props.message.blocks.find(candidate => candidate.key === key)
+  return block !== undefined && block.kind === 'thinking' ? { key, text: block.text } : null
+})
+
+const liveThinkingExpanded = computed(() => {
+  const key = liveThinkingKey.value
+  return key !== null && isThinkingExpanded(key)
+})
+
+/** 折叠态预览文案：随消息更新整体重算，每块只处理尾部固定长度，成本与思考总长无关。 */
+const thinkingPreviews = computed(() => {
+  const previews = new Map<string, string>()
+  for (const block of props.message.blocks) {
+    if (block.kind === 'thinking') previews.set(block.key, thinkingPreviewText(block.text))
+  }
+  return previews
+})
+
+/** 没有手动选择时，正在生成的块自动展开；生成结束或不再是末块时自动收起。 */
 function isThinkingExpanded(key: string): boolean {
-  return thinkingOverrides.get(key) ?? false
+  return thinkingOverrides.get(key) ?? key === liveThinkingKey.value
 }
 
-/** 由 summary 的点击统一控制开合，键盘激活同样生效。 */
+/** 由 summary 的点击统一控制开合，键盘激活同样生效；手动选择优先于自动展开。 */
 function toggleThinking(key: string): void {
   thinkingOverrides.set(key, !isThinkingExpanded(key))
 }
+
+/** 距底部多少像素内仍视为贴在底部；与消息列表同一口径，避免流式更新与用户滚动互抢。 */
+const THINKING_FOLLOW_THRESHOLD_PX = 24
+
+/** 流式 Thinking 的正文元素：跟随滚动要读它的滚动位置与高度。 */
+const thinkingBodies = new Map<string, HTMLElement>()
+const thinkingFollow = ref(true)
+let thinkingScrollTop = 0
+
+/** 元素卸载时移除记录，不持有已脱离文档的节点。 */
+function registerThinkingBody(key: string, element: unknown): void {
+  if (element instanceof HTMLElement) thinkingBodies.set(key, element)
+  else thinkingBodies.delete(key)
+}
+
+/** 内容变高不算上滚：只有实际向上移动才暂停跟随，回到底部再恢复。 */
+function onThinkingBodyScroll(event: Event): void {
+  const element = event.currentTarget
+  if (!(element instanceof HTMLElement)) return
+  const nearBottom = element.scrollHeight - element.scrollTop - element.clientHeight <= THINKING_FOLLOW_THRESHOLD_PX
+  if (nearBottom) thinkingFollow.value = true
+  else if (element.scrollTop < thinkingScrollTop) thinkingFollow.value = false
+  thinkingScrollTop = element.scrollTop
+}
+
+/**
+ * 流式思考的正文跟随：换块或重新展开时重置为跟随，跟随中每次文本更新滚到底部。
+ * 折叠期间元素不可见，滚动位置没有参考价值，因此重新展开一律从头跟随。
+ */
+watch([liveThinking, liveThinkingExpanded], ([current, expanded], previous) => {
+  if (current === null) return
+  if (previous[0] === null || previous[0].key !== current.key || !previous[1]) {
+    thinkingFollow.value = true
+    thinkingScrollTop = 0
+  }
+  if (!expanded || !thinkingFollow.value) return
+  const element = thinkingBodies.get(current.key)
+  if (element === undefined) return
+  element.scrollTop = element.scrollHeight
+  thinkingScrollTop = element.scrollTop
+}, { flush: 'post' })
 
 /** 未手动调整的技能卡一律折叠；流式更新不改变手动选择。 */
 function isSkillExpanded(key: string): boolean {
@@ -308,7 +382,7 @@ function onEditKeydown(event: KeyboardEvent): void {
         </div>
       </template>
 
-      <!-- 历史与流式内容均初始折叠；手动开合只影响当前块。 -->
+      <!-- 流式 Thinking 自动展开并跟随最新内容，结束后自动收起；折叠态显示尾部两行预览，手动开合优先。 -->
       <details
         v-else-if="block.kind === 'thinking'"
         :open="isThinkingExpanded(block.key)"
@@ -317,9 +391,25 @@ function onEditKeydown(event: KeyboardEvent): void {
         <summary @click.prevent="toggleThinking(block.key)">
           <span class="disclosure"></span>
           <span>Thinking</span>
-          <span class="chat-thinking-hint">思考过程</span>
+          <span class="chat-thinking-hint">
+            <span
+              v-if="block.key === liveThinkingKey"
+              class="status-dot animate-pulse bg-desk-accent motion-reduce:animate-none"
+              aria-hidden="true"
+            ></span>
+            {{ block.key === liveThinkingKey ? '思考中' : '思考过程' }}
+          </span>
+          <span
+            v-if="(thinkingPreviews.get(block.key) ?? '') !== ''"
+            class="chat-thinking-preview"
+            :class="{ 'is-live': block.key === liveThinkingKey }"
+          >{{ thinkingPreviews.get(block.key) ?? '' }}</span>
         </summary>
-        <div class="chat-thinking-body">
+        <div
+          class="chat-thinking-body"
+          :ref="element => registerThinkingBody(block.key, element)"
+          @scroll.passive="onThinkingBodyScroll"
+        >
           <MarkdownContent :text="block.text" />
           <p v-if="block.truncated" class="tool-note">此内容超出展示上限，已截断。</p>
         </div>
