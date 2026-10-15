@@ -66,6 +66,7 @@ import {
 } from '../shared/project-file-api'
 import type { ProjectFileApi, ProjectFileSearchResult } from '../shared/project-file-api'
 import {
+  SESSION_DELETE_CHANNEL,
   SESSION_LIST_CHANNEL,
   SESSION_OPEN_CHANNEL,
   SESSION_RELOAD_CHANNEL,
@@ -73,6 +74,7 @@ import {
 } from '../shared/session-api'
 import type {
   SessionApi,
+  SessionDeleteRequest,
   SessionListRequest,
   SessionListResult,
   SessionOpenRequest
@@ -405,6 +407,17 @@ const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionAp
 
   async reloadSession(allowInterrupt: boolean) {
     const response: unknown = await ipcRenderer.invoke(SESSION_RELOAD_CHANNEL, { allowInterrupt })
+    return isSessionListResult(response) ? response : invalidSessionResponse()
+  },
+
+  /** 删除会话：只搬运声明字段；主进程负责归属校验、占用收敛与文件删除。 */
+  async deleteSession(request: SessionDeleteRequest) {
+    const payload: SessionDeleteRequest = {
+      projectPath: request.projectPath,
+      sessionId: request.sessionId,
+      allowInterrupt: request.allowInterrupt
+    }
+    const response: unknown = await ipcRenderer.invoke(SESSION_DELETE_CHANNEL, payload)
     return isSessionListResult(response) ? response : invalidSessionResponse()
   },
 

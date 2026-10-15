@@ -1,5 +1,5 @@
 /**
- * 保存会话面板的展示状态：按项目保存的会话列表、打开与重新加载动作；会话文件解析与切换编排都在主进程。
+ * 保存会话面板的展示状态：按项目保存的会话列表、打开、重新加载与删除动作；会话文件解析、切换与删除编排都在主进程。
  *
  * 侧栏按项目树展示会话，因此列表按项目分片保存（键是项目路径）：展开其他项目时懒读取，
  * 已读过的分片在应用内保留，切换项目不需要重新读取。分片只登记主进程回报的项目路径对应的结果，
@@ -13,7 +13,7 @@ import type { ProjectError } from '../../../shared/project-api'
 import { useTrustStore } from './trust'
 import { useProjectStore } from './project'
 import { useRuntimeStore } from './runtime'
-import { listSessions, openSession, reloadSession } from '../services/session'
+import { listSessions, openSession, reloadSession, deleteSession } from '../services/session'
 
 /** `idle` 表示尚未读取该项目的列表；读取中、成功与失败各占一档。 */
 type SessionSlicePhase = 'idle' | 'loading' | 'ready' | 'error'
@@ -51,6 +51,8 @@ export const useSessionStore = defineStore('session', () => {
    */
   const actionError = ref<SessionError | ProjectError | null>(null)
   const opening = ref(false)
+  /** 删除动作进行中；与打开互斥，避免同一会话同时被打开与删除。 */
+  const deleting = ref(false)
   /** 待确认的切换目标（null 表示新建会话）、目标项目与是否需要用户确认中断。 */
   const pendingSessionId = ref<string | null>(null)
   const pendingProjectPath = ref<string | null>(null)
@@ -320,6 +322,38 @@ export const useSessionStore = defineStore('session', () => {
     }
   }
 
+  /**
+   * 删除会话：`projectPath` 是会话所属项目路径，成功时把主进程回报的删除后列表写入对应项目分片。
+   * `allowInterrupt` 表示用户已在确认弹层中同意中断该会话的在途操作；失败只记录在 actionError，
+   * 已加载的列表与运行实例不受影响。
+   */
+  async function removeSession(projectPath: string, sessionId: string, allowInterrupt: boolean): Promise<boolean> {
+    if (deleting.value) return false
+
+    deleting.value = true
+    actionError.value = null
+    try {
+      const result = await deleteSession(projectPath, sessionId, allowInterrupt)
+      if (!result.ok) {
+        actionError.value = result.error
+        return false
+      }
+      // 主进程回报实际读取的项目路径；与请求不符时丢弃，不把别的项目的结果写进本分片。
+      if (result.data.projectPath === projectPath) {
+        applySlice(projectPath, {
+          phase: 'ready',
+          sessions: result.data.sessions,
+          skipped: result.data.skipped,
+          truncated: result.data.truncated,
+          error: null
+        })
+      }
+      return true
+    } finally {
+      deleting.value = false
+    }
+  }
+
   /** 信任决定后重试待打开的会话（含新建）或待重载的 Runtime；取消时清空待确认目标。 */
   async function retryPendingAfterTrust(): Promise<void> {
     if (!awaitingTrust.value) return
@@ -361,6 +395,7 @@ export const useSessionStore = defineStore('session', () => {
     truncated,
     actionError,
     opening,
+    deleting,
     pendingSessionId,
     awaitingInterrupt,
     awaitingTrust,
@@ -374,6 +409,7 @@ export const useSessionStore = defineStore('session', () => {
     countsOf,
     reconcileCurrentSession,
     open,
+    removeSession,
     reloadCurrent,
     retryPendingAfterTrust,
     confirmPending,

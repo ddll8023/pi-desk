@@ -1,16 +1,16 @@
 /**
- * 项目会话文件的唯一读取者：会话目录定位、摘要列表与单条会话的存在性校验。
+ * 项目会话文件的唯一读取者与受控删除者：会话目录定位、摘要列表、单条会话的存在性校验与单个会话文件删除。
  *
  * 会话文件由 Pi 管理（`<agent-dir>/sessions/--<cwd munged>--/<时间>_<会话 id>.jsonl`），本模块只按
- * 有界读取拿到首部元数据与首条用户消息开头，不解析消息模型、不写入也不删除任何会话数据；
- * 首条用户消息若是 `/skill:` 展开的技能调用，预览只取技能名与追加文本，不把技能正文当会话标题；
- * 并为 SDK 接管提供只读的目标身份复核（目录归属、头部身份与读取期间是否变化），
- * 该复核不接受越过该项目会话目录的路径引用。
+ * 有界读取拿到首部元数据与首条用户消息开头，不解析消息模型、也不写入任何会话数据；删除仅限已解析
+ * 归属该项目的单个会话文件，不批量清理目录；首条用户消息若是 `/skill:` 展开的技能调用，预览只取技能名
+ * 与追加文本，不把技能正文当会话标题；并为 SDK 接管提供只读的目标身份复核（目录归属、头部身份与读取期间
+ * 是否变化），该复核不接受越过该项目会话目录的路径引用。
  * 读取范围由调用方给出的项目路径决定，不读当前项目；路径归一化在 project-path.ts，
- * 列表、打开与重载编排在 session-manager.ts。
+ * 列表、打开、重载与删除编排在 session-manager.ts。
  */
 import type { Stats } from 'node:fs'
-import { open, readdir, realpath, stat } from 'node:fs/promises'
+import { open, readdir, realpath, stat, unlink } from 'node:fs/promises'
 import { dirname, isAbsolute, join } from 'node:path'
 import type { SessionList, SessionSummary } from '../shared/session-api'
 import type { SdkSessionReference } from '../sdk-host/protocol'
@@ -374,5 +374,20 @@ export async function resolveSessionFile(
     return summary === null ? null : filePath
   } catch {
     return null
+  }
+}
+
+/**
+ * 删除已解析归属该项目的单个会话文件；只能由 session-manager 在占用收敛后调用。
+ * 会话已在删除前消失时按成功处理，其余失败按无法删除报告；列表缓存每轮自重建，无需失效。
+ */
+export async function deleteSessionFile(projectPath: string, sessionId: string): Promise<void> {
+  const filePath = await resolveSessionFile(projectPath, sessionId)
+  if (filePath === null) throw new SessionStorageError('该项目下找不到要删除的会话。')
+  try {
+    await unlink(filePath)
+  } catch (error) {
+    if (isMissingPath(error)) return
+    throw new SessionStorageError('会话文件无法删除，可能正被其他程序占用。')
   }
 }

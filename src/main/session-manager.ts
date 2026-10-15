@@ -1,15 +1,19 @@
 /**
- * 会话列表、打开与重新加载编排的所有者：选择、新建、恢复与重载会话。
+ * 会话列表、打开、重新加载与删除编排的所有者：选择、新建、恢复、重载与删除会话。
  *
  * 列表来自 Pi 管理的会话文件（session-store），按调用方显式给出的项目读取：侧栏按项目树展示会话，
  * 因此列表不再隐式取当前项目，但只接受已添加项目的规范路径。
  * 新建、打开、切换与重载都交给 SDK 宿主，由宿主在同一进程内替换会话，目标、归属与信任经本模块的
  * SDK 授权回路复核，授权依据是来源运行实例登记的归属项目，不是前台项目。
  * 多运行实例下打开其他会话不中断任何正在运行的会话；重载以目标会话自己的项目做信任复核。
+ * 删除以显式项目路径定位文件：先按与项目移除同一套门禁收敛占用（opening/closing 拒绝、在途工作
+ * 需显式中断确认），释放成功后才删文件；任一步失败都会保留会话原样，不产生半删状态。
  * 有活动操作而重载请求未确认时直接拒绝，不自动中断、不排队、不重放已提交的内容。
  * IPC 契约与校验在 shared/session-api.ts。
  */
 import type {
+  SessionDeleteRequest,
+  SessionDeleteResult,
   SessionError,
   SessionErrorCode,
   SessionList,
@@ -22,7 +26,7 @@ import type { ProjectManager } from './project-manager'
 import { SdkHostError } from './sdk-host-manager'
 import { sessionErrorOf } from './sdk-runtime-bridge'
 import type { SdkRuntimeBridge } from './sdk-runtime-bridge'
-import { SessionStorageError, listSessions, resolveSessionFile, resolveSdkSessionFile, getProjectSessionDir } from './session-store'
+import { SessionStorageError, deleteSessionFile, listSessions, resolveSessionFile, resolveSdkSessionFile, getProjectSessionDir } from './session-store'
 import { ProjectPathError, normalizeProjectPath } from './project-path'
 import type { SessionRunSummary } from './session-run-registry'
 import { isSdkSessionReference } from '../sdk-host/protocol'
@@ -166,6 +170,45 @@ export class SessionManager {
       throw new SessionFailure('SESSION_NOT_FOUND', '实际打开的会话与请求不一致；未改动任何已有文件。')
     }
     return listSessions(projectPath)
+  }
+
+  /**
+   * 删除会话：以显式项目路径定位，只接受已添加项目；会话正被运行实例占用时先收敛占用再删文件。
+   * 门禁与项目移除同一套：正在打开或关闭的实例直接拒绝；在途工作未确认中断时拒绝，
+   * 页面拿到 `SESSION_SWITCH_BLOCKED` 后走既有中断确认弹层重试。释放失败时文件保持原样。
+   */
+  async delete(request: SessionDeleteRequest): Promise<SessionDeleteResult> {
+    try {
+      const projectPath = await normalizeProjectPath(request.projectPath)
+      if (!await this.options.projects.hasProject(projectPath)) {
+        throw new SessionFailure('INVALID_PROJECT_PATH', '只能删除已添加项目的会话。')
+      }
+      // 文件归属先于占用收敛：解析不到的目标不释放任何运行实例，页面拿到可重试的列表过期提示。
+      if (await resolveSessionFile(projectPath, request.sessionId) === null) {
+        throw new SessionFailure('SESSION_NOT_FOUND', '当前项目下找不到该会话；列表可能已过期。')
+      }
+      const run = this.options.ownership.runOfSession(projectPath, request.sessionId)
+      if (run !== null) {
+        if (run.phase === 'opening' || run.phase === 'closing') {
+          throw new SessionFailure('SESSION_SWITCH_BLOCKED', '该会话的运行实例正在打开或关闭，请稍后再删除。')
+        }
+        if (!request.allowInterrupt && this.options.sdk.runHasPendingWork(run.runId)) {
+          throw new SessionFailure('SESSION_SWITCH_BLOCKED', '该会话有正在运行的操作；确认后会先停止它再删除。')
+        }
+        // 运行中与退出未确认的占用都经同一释放链收敛；宿主已失败时释放只解除占用。
+        const released = await this.options.sdk.releaseRun(run.runId, request.allowInterrupt)
+        if (!released.ok) {
+          throw new SessionFailure('SESSION_SWITCH_BLOCKED', '会话的运行实例未能释放，会话未删除；可稍后重试。')
+        }
+      }
+      await deleteSessionFile(projectPath, request.sessionId)
+      return { ok: true, data: await listSessions(projectPath) }
+    } catch (error) {
+      return this.failure(error, {
+        code: 'INTERNAL_ERROR',
+        message: '删除会话时发生未预期的内部错误。'
+      })
+    }
   }
 
   /**

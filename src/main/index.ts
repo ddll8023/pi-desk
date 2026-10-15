@@ -39,16 +39,19 @@ import {
 } from '../shared/project-file-api'
 import type { ProjectFileSearchResult } from '../shared/project-file-api'
 import {
+  SESSION_DELETE_CHANNEL,
   SESSION_LIST_CHANNEL,
   SESSION_OPEN_CHANNEL,
-  SESSION_RELOAD_CHANNEL
+  SESSION_RELOAD_CHANNEL,
+  isSessionDeleteRequest,
+  isSessionListRequest
 } from '../shared/session-api'
 import type {
+  SessionDeleteResult,
   SessionErrorCode,
   SessionListResult,
   SessionOpenResult
 } from '../shared/session-api'
-import { isSessionListRequest } from '../shared/session-api'
 import {
   SESSION_RUNS_STATE_CHANNEL,
   SESSION_RUNS_EVENT,
@@ -752,7 +755,7 @@ function registerProjectFileHandlers(pageUrl: string): void {
   )
 }
 
-/** 只接受会话 id 与显式中断确认；新会话的默认模型由 Pi 自己的 settings.json 决定，会话归属与文件解析由主进程完成。 */
+/** 会话列表、打开、重载与删除通道：参数白名单校验后转调会话编排层；新会话的默认模型由 Pi 自己的 settings.json 决定，会话归属与文件解析由主进程完成。 */
 function registerSessionHandlers(pageUrl: string): void {
   handle(
     SESSION_LIST_CHANNEL,
@@ -836,6 +839,20 @@ function registerSessionHandlers(pageUrl: string): void {
         return sessionFailure('INVALID_REQUEST', '重新加载资源必须显式说明是否允许中断当前操作。')
       }
       return sessionManager.reload(fields.allowInterrupt)
+    }
+  )
+
+  /** 删除会话：只接受显式项目路径、会话 id 与中断确认；归属与占用收敛都在编排层完成。 */
+  handle(
+    SESSION_DELETE_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<SessionDeleteResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return sessionFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 1 || !isSessionDeleteRequest(args[0])) {
+        return sessionFailure('INVALID_REQUEST', '删除会话接口只接受一个包含项目路径、会话 id 与中断确认的请求对象。')
+      }
+      return sessionManager.delete(args[0])
     }
   )
 }

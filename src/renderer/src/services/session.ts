@@ -1,5 +1,7 @@
-/** 作为渲染端会话列表、打开与重新加载的调用入口，把桥接缺失与通信异常转换为安全的展示结果。 */
+/** 作为渲染端会话列表、打开、重新加载与删除的调用入口，把桥接缺失与通信异常转换为安全的展示结果。 */
 import type {
+  SessionDeleteRequest,
+  SessionDeleteResult,
   SessionError,
   SessionListRequest,
   SessionListResult,
@@ -59,6 +61,26 @@ export async function reloadSession(allowInterrupt: boolean): Promise<SessionOpe
   if (!bridge || typeof bridge.reloadSession !== 'function') return unavailable()
   try {
     return await bridge.reloadSession(allowInterrupt)
+  } catch (error) {
+    return callFailed(error)
+  }
+}
+
+/**
+ * 删除会话：`projectPath` 是会话所属的已添加项目路径；占用收敛与文件删除都在主进程。
+ * `allowInterrupt` 表示用户已确认可以中断该会话的在途操作；成功时返回删除后的列表。
+ */
+export async function deleteSession(
+  projectPath: string,
+  sessionId: string,
+  allowInterrupt: boolean
+): Promise<SessionDeleteResult> {
+  const bridge = window.desktop
+  if (!bridge || typeof bridge.deleteSession !== 'function') return unavailable()
+  try {
+    // 服务层重建普通对象，避免响应式代理跨 contextBridge。
+    const request: SessionDeleteRequest = { projectPath, sessionId, allowInterrupt }
+    return await bridge.deleteSession(request)
   } catch (error) {
     return callFailed(error)
   }

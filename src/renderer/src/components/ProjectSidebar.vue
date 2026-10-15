@@ -39,6 +39,7 @@ const emit = defineEmits<{
   closeSidebar: []
   removeProject: [project: Project]
   requestNewSession: []
+  deleteSession: [projectPath: string, session: SessionSummary]
 }>()
 
 const projectStore = useProjectStore()
@@ -56,10 +57,10 @@ const {
   actionError: projectActionError
 } = storeToRefs(projectStore)
 const { view: runtimeView } = storeToRefs(runtimeStore)
-const { actionError: sessionActionError, opening } = storeToRefs(sessionStore)
+const { actionError: sessionActionError, opening, deleting } = storeToRefs(sessionStore)
 
 const projectBusy = computed(() => choosing.value || switching.value)
-const sessionBusy = computed(() => opening.value)
+const sessionBusy = computed(() => opening.value || deleting.value)
 /** 当前会话身份；宿主已回收（挂起）时仍指向同一会话，选中项不会因此消失。 */
 const currentSessionId = computed(() => runtimeStore.foregroundSessionId)
 
@@ -271,10 +272,10 @@ function retryRunRelease(target: { readonly projectPath: string; readonly sessio
   void sessionRunsStore.release(view.runId)
 }
 
-/** 项目与会话共用一个浮层；详情来自现有摘要，不新增会话修改或删除能力。 */
+/** 项目与会话共用一个浮层；详情来自现有摘要，不新增会话修改能力；删除交给根级确认弹层。 */
 type MenuTarget =
   | { kind: 'project'; node: SidebarProjectNode }
-  | { kind: 'session'; projectPath: string; session: SessionSummary }
+  | { kind: 'session'; projectPath: string; session: SessionSummary; pending: boolean }
 
 const MENU_WIDTH = 232
 const menuTarget = ref<MenuTarget | null>(null)
@@ -398,6 +399,14 @@ function requestProjectRemoval(): void {
   const target = menuTarget.value
   closeMenu()
   if (target?.kind === 'project') emit('removeProject', target.node.project)
+}
+
+/** 请求删除会话：只把目标交给根级确认弹层，真正的收敛与删除都在主进程。 */
+function requestSessionDeletion(): void {
+  const target = menuTarget.value
+  closeMenu()
+  if (target?.kind !== 'session') return
+  emit('deleteSession', target.projectPath, target.session)
 }
 
 /** 浮层里的会话打开与会话行同一口径：先按需切换当前项目，再提交会话。 */
@@ -583,8 +592,8 @@ onBeforeUnmount(() => {
                       <div
                         class="sidebar-tree-row is-session"
                         :class="{ 'is-active': isCurrentSession(node, row.session), 'is-menu-open': isSessionMenuOpen(row.session.sessionId) }"
-                        @contextmenu.prevent="openMenu({ kind: 'session', projectPath: node.project.path, session: row.session }, $event)"
-                        @keydown="onRowKeydown({ kind: 'session', projectPath: node.project.path, session: row.session }, $event)"
+                        @contextmenu.prevent="openMenu({ kind: 'session', projectPath: node.project.path, session: row.session, pending: row.pending }, $event)"
+                        @keydown="onRowKeydown({ kind: 'session', projectPath: node.project.path, session: row.session, pending: row.pending }, $event)"
                       >
                         <Motion v-if="isCurrentSession(node, row.session)" as="span" :layout-id="`session-selection-${node.project.id}`" class="sidebar-selection" :initial="false" :transition="selectionTransition" :style="{ borderRadius: '5px' }" aria-hidden="true" />
                         <AppButton
@@ -608,7 +617,7 @@ onBeforeUnmount(() => {
                               :disabled="sessionBusy" :aria-label="`会话 ${row.title} 的更多操作`"
                               aria-haspopup="dialog" :aria-expanded="isSessionMenuOpen(row.session.sessionId)"
                               :aria-controls="isSessionMenuOpen(row.session.sessionId) ? 'sidebar-actions' : undefined"
-                              @click.stop="openMenu({ kind: 'session', projectPath: node.project.path, session: row.session }, $event, true)"
+                              @click.stop="openMenu({ kind: 'session', projectPath: node.project.path, session: row.session, pending: row.pending }, $event, true)"
                             >
                               <svg class="sidebar-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.5" /><circle cx="12" cy="12" r="1.5" /><circle cx="19" cy="12" r="1.5" /></svg>
                             </AppButton>
@@ -700,6 +709,15 @@ onBeforeUnmount(() => {
             @click="retryRunRelease(menuTarget)"
           >
             {{ sessionRunsStore.releasing ? '正在释放…' : '重试释放运行实例' }}
+          </AppButton>
+          <!-- 删除只交给根级确认弹层发起；未落盘的占位会话没有文件条目，不提供删除。 -->
+          <AppButton
+            v-if="!menuTarget.pending"
+            variant="unstyled" class="project-sidebar-menu-item is-danger"
+            :disabled="sessionBusy"
+            @click="requestSessionDeletion"
+          >
+            删除会话
           </AppButton>
         </template>
       </div>

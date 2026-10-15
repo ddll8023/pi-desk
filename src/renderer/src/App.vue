@@ -1,4 +1,4 @@
-<!-- 主界面外壳：编排项目两阶段添加/移除确认、信任与中断对话框、版本更新提示、视图切换、侧栏「新建」到输入坞的聚焦请求、新建会话落盘后的会话列表补读及各展示 Store 生命周期。 -->
+<!-- 主界面外壳：编排项目两阶段添加/移除确认、会话删除确认、信任与中断对话框、版本更新提示、视图切换、侧栏「新建」到输入坞的聚焦请求、新建会话落盘后的会话列表补读及各展示 Store 生命周期。 -->
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
@@ -14,6 +14,7 @@ import { useSessionViewStore } from './stores/session-view'
 import { useTrustStore } from './stores/trust'
 import { useUpdatesStore } from './stores/updates'
 import type { Project } from '../../shared/project-api'
+import type { SessionSummary } from '../../shared/session-api'
 import AppTitleBar from './components/AppTitleBar.vue'
 import ChatMessageList from './components/ChatMessageList.vue'
 import ConfirmDialog from './components/ConfirmDialog.vue'
@@ -42,6 +43,8 @@ const trustStore = useTrustStore()
 const updatesStore = useUpdatesStore()
 const currentView = ref<'chat' | 'settings'>('chat')
 const projectToRemove = ref<Project | null>(null)
+/** 待确认删除的会话：项目路径加摘要；确认后以 allowInterrupt 提交，取消不改动任何文件。 */
+const sessionToRemove = ref<{ readonly projectPath: string; readonly session: SessionSummary } | null>(null)
 const additionTrustStatus = computed(() => {
   const candidate = pendingAddition.value
   if (candidate === null || candidate.trustStatus.resources.length === 0
@@ -119,6 +122,32 @@ function confirmProjectRemoval(): void {
 function cancelProjectRemoval(): void {
   projectToRemove.value = null
 }
+
+/** 记下待删除会话；标题与描述用现有摘要，确认后由主进程收敛占用再删文件。 */
+function requestSessionRemoval(projectPath: string, session: SessionSummary): void {
+  sessionToRemove.value = { projectPath, session }
+}
+
+function confirmSessionRemoval(): void {
+  const target = sessionToRemove.value
+  sessionToRemove.value = null
+  if (target === null) return
+  void sessionStore.removeSession(target.projectPath, target.session.sessionId, true)
+}
+
+function cancelSessionRemoval(): void {
+  sessionToRemove.value = null
+}
+
+/** 删除确认弹层的会话名：与侧栏同一口径，优先首条用户消息预览。 */
+const sessionToRemoveTitle = computed(() => {
+  const preview = sessionToRemove.value?.session.preview?.trim()
+  return preview !== undefined && preview !== '' ? preview : '未命名会话'
+})
+const isRemovingCurrentSession = computed(() => (
+  sessionToRemove.value !== null
+  && sessionToRemove.value.session.sessionId === runtimeStore.foregroundSessionId
+))
 
 function confirmSessionSwitch(): void {
   sessionStore.confirmPending()
@@ -230,6 +259,7 @@ onUnmounted(() => {
         @toggle-settings="currentView = currentView === 'settings' ? 'chat' : 'settings'; closeMobileSidebar()"
         @close-sidebar="closeMobileSidebar"
         @remove-project="requestProjectRemoval"
+        @delete-session="requestSessionRemoval"
         @request-new-session="onRequestNewSession"
       />
 
@@ -276,6 +306,17 @@ onUnmounted(() => {
         confirm-label="移除项目"
         @confirm="confirmProjectRemoval"
         @cancel="cancelProjectRemoval"
+      />
+
+      <!-- 会话删除是破坏性操作：确认后中断该会话的在途操作、释放运行实例并删除会话文件，不可恢复。 -->
+      <ConfirmDialog
+        :open="sessionToRemove !== null"
+        :title="`删除会话「${sessionToRemoveTitle}」？`"
+        description="将永久删除该会话的历史记录文件，不可恢复。若该会话正在运行，确认后会先停止它的操作；若删除的是当前会话，聊天区会回到未发送消息的状态。"
+        :detail="sessionToRemove?.session.sessionId ?? ''"
+        :confirm-label="isRemovingCurrentSession ? '停止并删除' : '删除会话'"
+        @confirm="confirmSessionRemoval"
+        @cancel="cancelSessionRemoval"
       />
 
       <!-- /resume 与会话 chip 共用的会话选择弹层。 -->

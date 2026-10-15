@@ -1,10 +1,12 @@
-/** 只定义 Pi Session 列表（按项目）、打开与重新加载 IPC 的固定通道、请求与结果类型及跨进程响应校验。 */
+/** 只定义 Pi Session 列表（按项目）、打开、重新加载与删除 IPC 的固定通道、请求与结果类型及跨进程响应校验。 */
 import type { RuntimeErrorCode } from './runtime-api'
 
 export const SESSION_LIST_CHANNEL = 'desktop:session-list'
 export const SESSION_OPEN_CHANNEL = 'desktop:session-open'
 /** 重新加载 Pi 资源：在同一 SDK 宿主进程内重建该会话的 services，并尽量恢复当前会话；`allowInterrupt` 与会话打开同义。 */
 export const SESSION_RELOAD_CHANNEL = 'desktop:session-reload'
+/** 删除会话：删除该会话的 JSONL 文件，被运行实例占用时先按 `allowInterrupt` 收敛占用；不可恢复。 */
+export const SESSION_DELETE_CHANNEL = 'desktop:session-delete'
 
 /**
  * 会话列表请求：显式给出要读取的项目路径。侧栏按项目树展示会话，列表读取不再隐式取当前项目；
@@ -25,6 +27,20 @@ export function isSessionListRequest(value: unknown): value is SessionListReques
   return typeof projectPath === 'string'
     && projectPath !== ''
     && projectPath.length <= MAX_PROJECT_PATH_LENGTH
+}
+
+/** 删除请求同样只放行非空且有界的项目路径与会话 id，外加显式中断确认布尔值。 */
+export function isSessionDeleteRequest(value: unknown): value is SessionDeleteRequest {
+  if (!isRecord(value)) return false
+  if (Object.keys(value).some((key) => key !== 'projectPath' && key !== 'sessionId' && key !== 'allowInterrupt')) return false
+  const { projectPath, sessionId, allowInterrupt } = value
+  return typeof projectPath === 'string'
+    && projectPath !== ''
+    && projectPath.length <= MAX_PROJECT_PATH_LENGTH
+    && typeof sessionId === 'string'
+    && sessionId !== ''
+    && sessionId.length <= 255
+    && typeof allowInterrupt === 'boolean'
 }
 
 /**
@@ -63,6 +79,17 @@ export interface SessionOpenRequest {
   readonly allowInterrupt: boolean
 }
 
+/**
+ * 删除会话请求：显式给出会话所属项目路径与会话 id；项目必须是已添加项目，会话必须属于该项目。
+ * `allowInterrupt` 只有用户已确认时才为真：目标会话正被运行实例占用且在途工作未完成时，
+ * 只有确认过中断才允许释放占用并删除。
+ */
+export interface SessionDeleteRequest {
+  readonly projectPath: string
+  readonly sessionId: string
+  readonly allowInterrupt: boolean
+}
+
 /** 复用 Runtime 错误码族，只追加 Session 专有错误码。 */
 export type SessionErrorCode = RuntimeErrorCode | 'SESSION_NOT_FOUND' | 'SESSION_SWITCH_BLOCKED'
 
@@ -86,6 +113,11 @@ export type SessionOpenResult =
   | { readonly ok: true; readonly data: SessionList }
   | { readonly ok: false; readonly error: SessionError }
 
+/** 删除会话成功时同样返回删除后的列表快照；失败时不改变任何文件与占用。 */
+export type SessionDeleteResult =
+  | { readonly ok: true; readonly data: SessionList }
+  | { readonly ok: false; readonly error: SessionError }
+
 export interface SessionApi {
   /** 读取指定项目的会话列表；项目必须是已添加项目，不要求它是当前项目。 */
   readonly listSessions: (request: SessionListRequest) => Promise<SessionListResult>
@@ -102,6 +134,11 @@ export interface SessionApi {
    * MCP 配置与 Extension），并尽量恢复当前会话；`allowInterrupt` 只有用户已确认时才为真。
    */
   readonly reloadSession: (allowInterrupt: boolean) => Promise<SessionOpenResult>
+  /**
+   * 删除会话：删除该会话的 JSONL 文件，不可恢复；会话正被运行实例占用时先收敛占用。
+   * 成功时返回删除后的该会话所属项目的列表。
+   */
+  readonly deleteSession: (request: SessionDeleteRequest) => Promise<SessionDeleteResult>
 }
 
 // 与 runtime-api.ts 的共享错误码保持一致，再追加 Session 专有错误码。
