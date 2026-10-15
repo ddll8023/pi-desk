@@ -1,7 +1,7 @@
-<!-- 启动时发现可更新的只读提示：列出 Pi agent 与有更新的扩展，可以跳到设置页看详情或直接关闭。
-     只报告版本差异，不在这里执行安装或更新。 -->
+<!-- 启动时发现可更新的只读提示：列出有更新的扩展，可以跳到设置页看详情或直接关闭。
+     只报告版本差异，不在这里执行安装或更新；Pi agent 随应用发布更新，不作为用户待办，因此不在这里提示。 -->
 <script setup lang="ts">
-import { computed, nextTick, onUnmounted, ref, useId, watch } from 'vue'
+import { nextTick, onUnmounted, ref, useId, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import type { ExtensionUpdateInfo } from '../../../shared/updates-api'
 import { useUpdatesStore } from '../stores/updates'
@@ -18,16 +18,9 @@ const emit = defineEmits<{
 }>()
 
 const updatesStore = useUpdatesStore()
-const { piAgent, outdatedExtensions } = storeToRefs(updatesStore)
+const { outdatedExtensions } = storeToRefs(updatesStore)
 const panel = ref<HTMLElement | null>(null)
 const titleId = useId()
-
-/** Pi agent 的版本差异文本；没有可更新版本时为 null。 */
-const piAgentChange = computed(() => {
-  const info = piAgent.value
-  if (info === null || info.status !== 'update-available' || info.latestVersion === null) return null
-  return `${info.version} → ${info.latestVersion}`
-})
 
 /** 扩展的版本差异文本；git 源比的是提交短哈希，与 npm 的版本号分开表述。 */
 function changeText(entry: ExtensionUpdateInfo): string {
@@ -84,13 +77,8 @@ onUnmounted(() => {
             <h2 :id="titleId" class="dialog-title">发现可更新的内容</h2>
           </div>
           <div class="dialog-body">
-            <p class="text-sm">检查到以下版本落后于远端；这里只报告版本，更新需要按下面的说明自行执行。</p>
+            <p class="text-sm">检查到以下扩展落后于远端；这里只报告版本，更新需要按下面的说明自行执行。</p>
             <ul class="mt-2 space-y-1.5">
-              <li v-if="piAgentChange !== null" class="list-card">
-                <p class="text-xs font-medium">Pi agent</p>
-                <p class="mt-0.5 font-mono text-2xs text-desk-muted">{{ piAgentChange }}</p>
-                <p class="mt-0.5 text-2xs text-desk-muted">随 pi-desk 打包，需要更新应用依赖并重新打包。</p>
-              </li>
               <li
                 v-for="entry in outdatedExtensions"
                 :key="`${entry.scope}-${entry.source}`"

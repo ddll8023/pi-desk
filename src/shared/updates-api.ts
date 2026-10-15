@@ -6,7 +6,8 @@
  * 页面只能读取结果快照，既不能指定查询地址，也不能触发除「重新检查」以外的动作。
  *
  * 版本口径：
- * - `piAgent.version` 是 pi-desk 实际加载的那个 Pi agent SDK 版本（随应用打包，版本由 `package.json` 的依赖声明决定）。
+ * - `piAgent.version` 是 pi-desk 实际加载的那个 Pi agent SDK 版本（随应用打包，版本由 `package.json` 的依赖声明决定），
+ *   它只能随应用发布变化，因此该条目只作信息展示，不作为用户待办、不参与启动弹窗。
  * - 扩展条目只统计 Pi 的包声明（settings.json 的 `packages`）；npm 源用版本号，git 源用提交短哈希，
  *   local 源没有可比版本，只如实标注来源。
  */
@@ -34,7 +35,10 @@ export type ExtensionUpdateStatus =
 /** Pi agent 的检查结论；只有三种，`unchecked` 表示这次没能取得远端版本。 */
 export type PiAgentUpdateStatus = 'up-to-date' | 'update-available' | 'unchecked'
 
-/** Pi agent 版本信息；`latestVersion` 取不到时为 null，并给出 `error` 说明原因。 */
+/**
+ * Pi agent 版本信息；`latestVersion` 取不到时为 null，并给出 `error` 说明原因。
+ * 内置版本只能随应用发布更新，因此这份信息只用于展示，不构成需要用户执行的更新。
+ */
 export interface PiAgentUpdateInfo {
   /** 当前应用加载的 Pi agent 版本。 */
   readonly version: string

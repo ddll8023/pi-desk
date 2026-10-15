@@ -3,6 +3,7 @@
  *
  * 只做状态映射，不持有检查进程；检查一律由主进程执行，页面只能读取快照与请求重查。
  * 提示策略：每次应用运行最多自动弹一次，且只由「启动后第一次完成的检查」触发；
+ * 只提示扩展：Pi agent 随应用发布更新，不作为用户待办，也不弹窗。
  * 没有结论、也没有失败原因的空快照（`checkedAt` 与 `error` 都为空，例如启动检查开始前
  * 页面读到的那一份）不算一次完成的检查，不消耗这次机会；手动重查只更新设置页里的结果，不再弹窗。
  */
@@ -31,12 +32,10 @@ export const useUpdatesStore = defineStore('updates', () => {
   const checkedAt = computed(() => snapshot.value.checkedAt)
   /** 检查进程报告的整体失败原因；单个条目失败在各条目的 `error` 里。 */
   const checkFailure = computed(() => snapshot.value.error)
-  const piAgentOutdated = computed(() => snapshot.value.piAgent?.status === 'update-available')
   /** 有更新的扩展条目；顺序保持快照顺序。 */
   const outdatedExtensions = computed(() => (
     snapshot.value.extensions.filter((entry) => entry.status === 'update-available')
   ))
-  const hasUpdates = computed(() => piAgentOutdated.value || outdatedExtensions.value.length > 0)
 
   /** 应用一份快照；启动后的第一份完成结果决定是否弹提示。 */
   function apply(next: UpdatesSnapshot): void {
@@ -47,7 +46,7 @@ export const useUpdatesStore = defineStore('updates', () => {
     // 就属于这种情形，若在这里用掉，启动检查真正查出更新时反而不会弹。
     if (next.checkedAt === null && next.error === null) return
     noticeArmed = false
-    if (hasUpdates.value) noticeOpen.value = true
+    if (outdatedExtensions.value.length > 0) noticeOpen.value = true
   }
 
   /** 先订阅、再取当前快照，避免初始化期间漏掉正在进行的检查结果。 */
@@ -92,9 +91,7 @@ export const useUpdatesStore = defineStore('updates', () => {
     checkedAt,
     checkFailure,
     checkError,
-    piAgentOutdated,
     outdatedExtensions,
-    hasUpdates,
     noticeOpen,
     initialize,
     check,

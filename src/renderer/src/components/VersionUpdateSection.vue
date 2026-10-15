@@ -1,5 +1,6 @@
-<!-- 设置页的「版本与更新」区块：显示应用自身版本、Pi agent 版本与 Pi 包（扩展）的已安装/最新版本，
-     并提供重新检查与复制官方更新命令。只读展示，不在这里执行任何安装或更新。 -->
+<!-- 设置页的「版本与更新」区块：显示应用自身版本、内置 Pi agent 版本与 Pi 包（扩展）的已安装/最新版本，
+     并提供重新检查与复制官方更新命令。只读展示，不在这里执行任何安装或更新；
+     Pi agent 随应用发布更新，该行只作信息展示，不当作需要用户处理的待办。 -->
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { storeToRefs } from 'pinia'
@@ -36,14 +37,13 @@ const checkedAtLabel = computed(() => {
   })
 })
 
-/** Pi agent 的展示文本：当前版本与最新版本，取不到最新版时如实说明。 */
+/** Pi agent 的展示文本：内置版本与官方最新版本；取不到最新版时如实说明。 */
 const piAgentText = computed(() => {
   const info = piAgent.value
   if (info === null) return '尚未取得版本信息'
-  if (info.status === 'unchecked') return info.version
-  if (info.latestVersion === null) return info.version
-  if (info.status === 'update-available') return `${info.version} → ${info.latestVersion}`
-  return `${info.version}（已是最新）`
+  if (info.status === 'unchecked' || info.latestVersion === null) return info.version
+  if (info.status === 'update-available') return `${info.version}（官方已发布 ${info.latestVersion}）`
+  return `${info.version}（官方最新）`
 })
 
 /** Pi agent 取不到最新版本时的原因；没有原因时为 null。 */
@@ -103,7 +103,7 @@ async function copyUpdateCommand(): Promise<void> {
       <div>
         <h2 id="settings-versions-title" class="settings-section-title">版本与更新</h2>
         <p class="mt-1 text-xs text-desk-muted">
-          应用与 Pi agent 的版本，以及 Pi 包（扩展）的已安装版本与远端最新版本。
+          应用与内置 Pi agent 的版本，以及 Pi 包（扩展）的已安装版本与远端最新版本。
         </p>
       </div>
       <div class="flex flex-wrap items-center gap-1.5">
@@ -133,10 +133,9 @@ async function copyUpdateCommand(): Promise<void> {
         <template v-else>尚未取得应用信息。</template>
       </dd>
 
-      <dt class="text-desk-muted">Pi agent</dt>
+      <dt class="text-desk-muted">Pi agent（内置）</dt>
       <dd>
         <span class="font-mono">{{ piAgentText }}</span>
-        <span v-if="piAgent?.status === 'update-available'" class="chip ml-1.5">可更新</span>
         <p v-if="piAgentError !== null" class="mt-1 text-2xs text-desk-muted">
           {{ piAgentError }}
         </p>
@@ -192,8 +191,8 @@ async function copyUpdateCommand(): Promise<void> {
     </div>
 
     <p class="mt-4 border-t border-desk-line pt-4 text-2xs text-desk-muted">
-      Pi agent 随 pi-desk 一起打包，它的版本只能通过更新应用依赖并重新打包改变；
-      这里只报告版本，不在应用内安装。扩展由 Pi 自己管理，更新请执行
+      Pi agent 随 pi-desk 一起打包，版本由应用发布保证，不需要你单独更新或执行任何安装命令；
+      这里只报告版本。扩展由 Pi 自己管理，更新请执行
       <span class="font-mono">{{ UPDATE_COMMAND }}</span>，或对单个包执行
       <span class="font-mono">pi update &lt;source&gt;</span>；
       更新完成后要在「Pi 资源」页点「重新加载资源」，Pi 才会重新读取这些包。

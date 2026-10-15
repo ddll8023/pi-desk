@@ -26,4 +26,7 @@ if [ ! -d "node_modules/electron/dist" ]; then
   exit 1
 fi
 
+# 开发端口与出包构建内嵌的默认端口（41730）区分开，避免开发版与出包版同时运行时抢端口。
+export PI_DESK_DEV_SERVER_PORT=42730
+
 npm run dev

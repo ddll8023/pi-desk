@@ -579,8 +579,8 @@ export interface McpServerReport {
   readonly tools: readonly string[]
   /** 与服务器默认 exposure 不同的逐工具 exposure；无差异为 null。 */
   readonly toolExposure: Readonly<Record<string, string>> | null
-  readonly resources: number | null
-  readonly resourceTemplates: number | null
+  /** 该服务器是否提供资源；官方 CLI 只报告有无，不报告资源与模板数量。 */
+  readonly hasResources: boolean
   /** 非 connected 状态下官方给出的错误文本；无错误为 null。 */
   readonly error: string | null
 }
@@ -1256,9 +1256,7 @@ function isMcpServerReport(value: unknown): value is McpServerReport {
   if (typeof value.state !== 'string' || value.state === '') return false
   if (!isStringArray(value.tools)) return false
   if (value.toolExposure !== null && !isToolExposure(value.toolExposure)) return false
-  if (value.resources !== null && (typeof value.resources !== 'number' || !Number.isInteger(value.resources))) return false
-  if (value.resourceTemplates !== null
-    && (typeof value.resourceTemplates !== 'number' || !Number.isInteger(value.resourceTemplates))) return false
+  if (typeof value.hasResources !== 'boolean') return false
   return value.error === null || typeof value.error === 'string'
 }
 

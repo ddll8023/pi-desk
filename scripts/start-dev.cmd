@@ -29,6 +29,9 @@ if not exist "node_modules\electron\dist\electron.exe" (
   exit /b 1
 )
 
+rem 开发端口与出包构建内嵌的默认端口（41730）区分开，避免开发版与出包版同时运行时抢端口。
+set "PI_DESK_DEV_SERVER_PORT=42730"
+
 call npm run dev
 set "code=%errorlevel%"
 

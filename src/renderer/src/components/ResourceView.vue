@@ -337,14 +337,9 @@ function rowError(row: McpServerRow): string | null {
   return row.report?.error ?? null
 }
 
-/** 资源与模板计数：只显示 Pi 报告过的项，未报告的一项不显示，不用 0 冒充。 */
+/** 资源摘要：官方只报告该服务器是否提供资源，不报告数量，因此只说有无。 */
 function resourceSummary(row: McpServerRow): string | null {
-  const report = row.report
-  if (report === null) return null
-  const parts: string[] = []
-  if (report.resources !== null) parts.push(`${report.resources} 个资源`)
-  if (report.resourceTemplates !== null) parts.push(`${report.resourceTemplates} 个模板`)
-  return parts.length === 0 ? null : parts.join(' / ')
+  return row.report?.hasResources === true ? '提供资源' : null
 }
 
 function toolExposureLabel(row: McpServerRow): string | null {
@@ -637,7 +632,7 @@ const resourceActionsDisabled = computed(() => currentProject.value === null)
               <dd class="break-all font-mono">{{ row.transport ?? '配置里没有 command 或 url' }}</dd>
               <dt v-if="exposureOf(row) !== null" class="text-desk-muted">暴露方式</dt>
               <dd v-if="exposureOf(row) !== null">{{ exposureOf(row) }}</dd>
-              <dt v-if="resourceSummary(row) !== null" class="text-desk-muted">资源 / 模板</dt>
+              <dt v-if="resourceSummary(row) !== null" class="text-desk-muted">资源</dt>
               <dd v-if="resourceSummary(row) !== null">{{ resourceSummary(row) }}</dd>
             </dl>
 

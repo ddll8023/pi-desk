@@ -3,7 +3,7 @@
  * 并为 Pi 启动与 SDK 目标授权提供决定。不读写 Pi 的 `~/.pi/agent/trust.json`，不处理 `project_trust`
  * extension 事件，也不做任何 OS 沙箱或工具权限限制；路径归一化复用 project-path.ts。
  *
- * 资源清单与决定优先级来自 Pi v1.0.4 官方文档（security.md）：CLI 覆盖最优先，因此有受保护
+ * 资源清单与决定优先级来自 Pi 官方文档（security.md）：CLI 覆盖最优先，因此有受保护
  * 资源时 Desktop 的决定会覆盖用户既有的 Pi 保存记录，这一行为已在界面中如实说明。
  */
 import { stat } from 'node:fs/promises'

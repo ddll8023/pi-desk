@@ -51,10 +51,6 @@ function toTextList(value: unknown): string[] {
   return value.map((item) => (typeof item === 'string' ? item : String(item)))
 }
 
-function toOptionalCount(value: unknown): number | null {
-  return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : null
-}
-
 function toToolExposure(value: unknown): Record<string, string> | null {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return null
   const entries = Object.entries(value as Record<string, unknown>)
@@ -78,8 +74,8 @@ function toMcpServerReport(value: Record<string, unknown>): McpServerReport | nu
     state: value.state,
     tools: Array.isArray(value.tools) ? value.tools.filter((tool): tool is string => typeof tool === 'string') : [],
     toolExposure: toToolExposure(value.toolExposure),
-    resources: toOptionalCount(value.resources),
-    resourceTemplates: toOptionalCount(value.resourceTemplates),
+    // 官方只报告该服务器是否提供资源（`resources: true`），不报告资源与模板数量。
+    hasResources: value.resources === true,
     error: typeof value.error === 'string' ? value.error : null
   }
 }
