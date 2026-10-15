@@ -1,6 +1,8 @@
 /**
  * 受管一次性入口的定位与启动：`out/sdk-host/pi-cli.mjs`（用 Electron 自带的 Node 加载官方 SDK 的 CLI 入口，
- * 因此不需要单独的 Pi 可执行文件）与 `out/sdk-host/update-check.mjs`（一次性版本检查脚本）。
+ * 因此不需要单独的 Pi 可执行文件）、`out/sdk-host/update-check.mjs`（一次性版本检查脚本）、
+ * `out/sdk-host/package-update.mjs`（一次性扩展更新脚本）与
+ * `out/sdk-host/runtime-install.mjs`（一次性内置 Pi agent 安装脚本）。
  * 命令行参数由调用点固定给出，页面不能指定入口、可执行文件或参数。
  * 这里只启动进程并交回句柄，不读写管道、不判定成败；失败分类与超时终止由调用方负责。
  */
@@ -12,6 +14,8 @@ import { getPiProcessEnvironment } from './pi-paths'
 /** 运行器入口的固定文件名与所在产物目录；页面不能指定路径。 */
 const CLI_ENTRY_NAME = 'pi-cli.mjs'
 const UPDATE_CHECK_ENTRY_NAME = 'update-check.mjs'
+const PACKAGE_UPDATE_ENTRY_NAME = 'package-update.mjs'
+const RUNTIME_INSTALL_ENTRY_NAME = 'runtime-install.mjs'
 const CLI_OUTPUT_DIRECTORY = 'sdk-host'
 
 /** 入口与主进程产物保持固定相邻布局：开发态与打包态读取同一相对子路径，页面不能指定路径。 */
@@ -26,6 +30,16 @@ export function getPiCliEntryPath(): string {
 /** 版本检查脚本入口；与 CLI 运行器同一个产物目录与解析方式。 */
 export function getUpdateCheckEntryPath(): string {
   return managedEntryPath(UPDATE_CHECK_ENTRY_NAME)
+}
+
+/** 扩展更新脚本入口；与版本检查同一个产物目录与解析方式。 */
+export function getPackageUpdateEntryPath(): string {
+  return managedEntryPath(PACKAGE_UPDATE_ENTRY_NAME)
+}
+
+/** 内置 Pi agent 安装脚本入口；与版本检查同一个产物目录与解析方式。 */
+export function getRuntimeInstallEntryPath(): string {
+  return managedEntryPath(RUNTIME_INSTALL_ENTRY_NAME)
 }
 
 export interface PiCliSpawnOptions {
@@ -61,4 +75,14 @@ export function spawnPiCli(args: readonly string[], options: PiCliSpawnOptions):
 /** 启动一次性版本检查脚本；参数由调用点固定给出（当前项目路径）。 */
 export function spawnUpdateCheck(args: readonly string[], options: PiCliSpawnOptions): ChildProcess {
   return spawnManagedEntry(getUpdateCheckEntryPath(), args, options)
+}
+
+/** 启动一次性扩展更新脚本；参数由调用点固定给出（当前项目路径与可选来源）。 */
+export function spawnPackageUpdate(args: readonly string[], options: PiCliSpawnOptions): ChildProcess {
+  return spawnManagedEntry(getPackageUpdateEntryPath(), args, options)
+}
+
+/** 启动一次性内置 Pi agent 安装脚本；参数由调用点固定给出（运行时根目录与可选版本）。 */
+export function spawnRuntimeInstall(args: readonly string[], options: PiCliSpawnOptions): ChildProcess {
+  return spawnManagedEntry(getRuntimeInstallEntryPath(), args, options)
 }

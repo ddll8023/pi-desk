@@ -8,9 +8,7 @@
  * 同一时刻只允许一次探测：并发调用按参数拒绝，不排队也不合并；探测句柄经 `activeProbe` 暴露给
  * `abort()`，使超时与用户取消共用同一条终止链，且不依赖任何会话后端状态。
  */
-import { spawn } from 'node:child_process'
 import type { ChildProcess } from 'node:child_process'
-import { join } from 'node:path'
 import type {
   McpInspection,
   McpInspectionResult,
@@ -19,6 +17,7 @@ import type {
   RuntimeErrorCode
 } from '../shared/runtime-api'
 import { spawnPiCli } from './pi-cli-process'
+import { terminateProcessTree } from './process-tree-termination'
 
 /**
  * MCP 服务器探测的等待上限：官方 CLI 会依次连接所有已启用服务器，
@@ -107,37 +106,6 @@ function parseMcpInspection(stdout: string): Omit<McpInspection, 'inspectedAt'> 
   }
 }
 
-/** 可控地终止探测进程树：POSIX 向独立进程组发信号，Windows 用系统 taskkill 定向终止。 */
-function terminateProbeTree(child: ChildProcess, signal: NodeJS.Signals): void {
-  const pid = child.pid
-  if (pid === undefined) return
-  if (process.platform === 'win32') {
-    const taskkill = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'taskkill.exe')
-    try {
-      const killer = spawn(taskkill, ['/F', '/T', '/PID', String(pid)], {
-        stdio: 'ignore',
-        detached: true,
-        windowsHide: true
-      })
-      // 失败的 spawn 会异步 emit error，必须消费以避免拖垮主进程。
-      killer.once('error', () => {})
-      killer.unref()
-    } catch {
-      // taskkill 无法执行时回退到单进程终止。
-    }
-    return
-  }
-  try {
-    process.kill(-pid, signal)
-  } catch {
-    try {
-      child.kill(signal)
-    } catch {
-      // 进程已退出时不产生未处理异常。
-    }
-  }
-}
-
 interface McpListProbeResult {
   readonly exitCode: number
   readonly stdout: string
@@ -197,8 +165,8 @@ function runMcpListProbe(
      */
     function abortProbe(code: RuntimeErrorCode, message: string): void {
       fail(new McpInspectionFailure(code, message))
-      terminateProbeTree(child, 'SIGTERM')
-      forceTimer = setTimeout(() => terminateProbeTree(child, 'SIGKILL'), MCP_INSPECT_KILL_GRACE_MS)
+      terminateProcessTree(child, 'SIGTERM')
+      forceTimer = setTimeout(() => terminateProcessTree(child, 'SIGKILL'), MCP_INSPECT_KILL_GRACE_MS)
     }
 
     child.stdout?.on('data', (chunk: string) => {

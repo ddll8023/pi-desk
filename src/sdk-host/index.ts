@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { isAbsolute, resolve } from 'node:path'
 import { SDK_HOST_PROTOCOL_VERSION, isSdkHostRequest } from './protocol'
 import type { SdkHostFrame, SdkHostEvent, SdkHostRequest, SdkHostFailureCode, SdkSessionAuthorization, SdkSessionReference } from './protocol'
+import { loadSdkModule } from '../runtime-install/runtime'
 import { SdkSessionFailure, SdkSessionRuntime } from './session-runtime'
 
 const parentPort = process.parentPort
@@ -74,7 +75,7 @@ async function initialize(request: Extract<SdkHostRequest, { type: 'initialize' 
     if (!isAbsolute(request.agentDir) || process.env.PI_CODING_AGENT_DIR !== request.agentDir) {
       fail(request, 'AGENT_DIR_MISMATCH'); return
     }
-    const sdk = await import('@earendil-works/pi-coding-agent')
+    const sdk = await loadSdkModule()
     if (closing) return
     const actualAgentDir = sdk.getAgentDir()
     if (!isAbsolute(actualAgentDir) || !samePath(actualAgentDir, request.agentDir)) {

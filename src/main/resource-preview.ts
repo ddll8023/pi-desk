@@ -6,12 +6,11 @@
  * 同项目与信任决定的并发读取合并，强制刷新淘汰旧结果；进程按组终止，不残留子进程。
  * 未选项目时另有全局预读：用中立目录作 cwd，只取模型与默认身份，不读项目资源。
  */
-import { spawn } from 'node:child_process'
 import type { ChildProcess } from 'node:child_process'
-import { join } from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
 import type { PiResourcePreview, RuntimeErrorCode } from '../shared/runtime-api'
 import { spawnPiCli } from './pi-cli-process'
+import { terminateProcessTree } from './process-tree-termination'
 import { toModelSummaries, toResources, toRuntimeInfo } from './pi-response-projection'
 
 const PREVIEW_TIMEOUT_MS = 15_000
@@ -100,30 +99,6 @@ export async function previewGlobalModels(neutralDir: string, force = false): Pr
     () => runPreviewProbe(neutralDir, 'untrusted', MODEL_PREVIEW_COMMANDS),
     force
   )
-}
-
-/** 只终止本次创建的探测进程树，不按进程名清理其他 Pi。 */
-function terminateProcessTree(child: ChildProcess, signal: NodeJS.Signals): void {
-  const pid = child.pid
-  if (pid === undefined) return
-  if (process.platform === 'win32') {
-    const taskkill = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'taskkill.exe')
-    try {
-      const killer = spawn(taskkill, ['/F', '/T', '/PID', String(pid)], {
-        stdio: 'ignore', detached: true, windowsHide: true
-      })
-      killer.once('error', () => {})
-      killer.unref()
-    } catch {
-      // taskkill 无法执行时仍允许自然退出与后续终止兜底。
-    }
-    return
-  }
-  try {
-    process.kill(-pid, signal)
-  } catch {
-    try { child.kill(signal) } catch { /* 进程已退出。 */ }
-  }
 }
 
 /** 模型预读不需要 MCP 连接，也不能为展示候选执行扩展代码或保存会话。 */

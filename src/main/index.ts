@@ -172,9 +172,20 @@ import type { PiDefaultModelResult } from '../shared/pi-settings-api'
 import {
   UPDATES_CHECK_CHANNEL,
   UPDATES_GET_CHANNEL,
-  UPDATES_STATE_EVENT
+  UPDATES_INSTALL_AGENT_CHANNEL,
+  UPDATES_INSTALL_AGENT_PROGRESS_EVENT,
+  UPDATES_STATE_EVENT,
+  UPDATES_UPDATE_CHANNEL,
+  UPDATES_UPDATE_PROGRESS_EVENT
 } from '../shared/updates-api'
-import type { UpdatesResult, UpdatesSnapshot } from '../shared/updates-api'
+import type {
+  AgentInstallProgress,
+  AgentInstallResult,
+  PackageUpdateProgress,
+  PackageUpdateResult,
+  UpdatesResult,
+  UpdatesSnapshot
+} from '../shared/updates-api'
 import { DesktopConfigStore } from './desktop-config-store'
 import { AuthManager, AuthManagerError } from './auth-manager'
 import { readMcpConfigListing } from './mcp-config-reader'
@@ -191,6 +202,9 @@ import { SessionManager } from './session-manager'
 import { SessionRunRegistry } from './session-run-registry'
 import { TrustManager, TrustManagerError } from './trust-manager'
 import { UpdateChecker } from './update-checker'
+import { PackageUpdater } from './package-updater'
+import { PiAgentUpdater } from './pi-agent-updater'
+import { getRuntimeRoot } from './pi-runtime'
 import { MIN_WINDOW_HEIGHT, MIN_WINDOW_WIDTH, WindowState } from './window-state'
 
 const DEVELOPMENT_PAGE_URL = `http://127.0.0.1:${DEV_SERVER_PORT}/`
@@ -266,6 +280,12 @@ const mcpInspection = new McpInspectionManager()
 const updateChecker = new UpdateChecker({
   currentProjectPath: () => projectManager.currentProjectPath()
 })
+/** 扩展更新：只由页面显式发起，复用受管一次性入口执行，不自动执行也不重试。 */
+const packageUpdater = new PackageUpdater({
+  currentProjectPath: () => projectManager.currentProjectPath()
+})
+/** 内置 Pi agent 安装：只由页面显式发起，写入应用自有的运行时目录，不自动执行也不重试。 */
+const piAgentUpdater = new PiAgentUpdater({ runtimeRoot: getRuntimeRoot })
 /** 项目文件索引：根路径只取当前项目，页面无法指定检索目录。 */
 const projectFileIndex = new ProjectFileIndex({
   currentProjectPath: () => projectManager.currentProjectPath()
@@ -1428,6 +1448,52 @@ function registerUpdatesHandlers(pageUrl: string): void {
       return await updateChecker.check()
     }
   )
+  handle(
+    UPDATES_UPDATE_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<PackageUpdateResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return { ok: false, error: { code: 'FORBIDDEN', message: '不允许此页面调用桌面接口。' } }
+      }
+      if (args.length > 1) {
+        return { ok: false, error: { code: 'INVALID_REQUEST', message: '扩展更新接口只接受一个可选的包来源。' } }
+      }
+      const requested = args.length === 0 ? undefined : args[0]
+      if (requested !== undefined && typeof requested !== 'string') {
+        return { ok: false, error: { code: 'INVALID_REQUEST', message: '扩展更新接口只接受文本来源。' } }
+      }
+      const source = requested === undefined || requested === '' ? undefined : requested
+      // 页面只能引用主进程已经报告过的来源，不能凭空构造要更新的包。
+      if (source !== undefined
+        && !updateChecker.getSnapshot().extensions.some((entry) => entry.source === source)) {
+        return { ok: false, error: { code: 'INVALID_REQUEST', message: '只能更新版本检查报告过的包。' } }
+      }
+      return await packageUpdater.update(source)
+    }
+  )
+  handle(
+    UPDATES_INSTALL_AGENT_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<AgentInstallResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return { ok: false, error: { code: 'FORBIDDEN', message: '不允许此页面调用桌面接口。' } }
+      }
+      if (args.length > 1) {
+        return { ok: false, error: { code: 'INVALID_REQUEST', message: '内置 Pi agent 安装接口只接受一个可选版本号。' } }
+      }
+      const requested = args.length === 0 ? undefined : args[0]
+      if (requested !== undefined && typeof requested !== 'string') {
+        return { ok: false, error: { code: 'INVALID_REQUEST', message: '内置 Pi agent 安装接口只接受文本版本号。' } }
+      }
+      const version = requested === undefined || requested === '' ? undefined : requested
+      // 页面只能要求安装主进程已经报告过的官方最新版本，且该版本得处于可更新状态；
+      // 版本范围由安装入口再判一次，这里先把明显不该装的请求挡在门外。
+      const piAgent = updateChecker.getSnapshot().piAgent
+      if (version !== undefined
+        && (piAgent === null || piAgent.status !== 'update-available' || version !== piAgent.latestVersion)) {
+        return { ok: false, error: { code: 'INVALID_REQUEST', message: '只能安装版本检查报告过的、处于可更新状态的官方版本。' } }
+      }
+      return await piAgentUpdater.install(version)
+    }
+  )
 }
 
 /** 界面偏好、对话页模型展示偏好与快捷发送短语分开读写；未知字段、任意启动参数一律拒绝。 */
@@ -1881,6 +1947,24 @@ function broadcastUpdates(snapshot: UpdatesSnapshot): void {
   contents.send(UPDATES_STATE_EVENT, snapshot)
 }
 
+/** 扩展更新进度同样只发给当前唯一可信窗口；进度只含来源、动作与展示文本。 */
+function broadcastPackageUpdateProgress(progress: PackageUpdateProgress): void {
+  const target = mainWindow
+  if (target === null || target.isDestroyed()) return
+  const contents = target.webContents
+  if (contents.isDestroyed()) return
+  contents.send(UPDATES_UPDATE_PROGRESS_EVENT, progress)
+}
+
+/** 内置 Pi agent 安装进度只发给当前唯一可信窗口；进度只含阶段、版本与展示文本。 */
+function broadcastAgentInstallProgress(progress: AgentInstallProgress): void {
+  const target = mainWindow
+  if (target === null || target.isDestroyed()) return
+  const contents = target.webContents
+  if (contents.isDestroyed()) return
+  contents.send(UPDATES_INSTALL_AGENT_PROGRESS_EVENT, progress)
+}
+
 function restrictSession(): void {
   session.defaultSession.setPermissionCheckHandler(() => false)
   session.defaultSession.setPermissionRequestHandler((_contents, _permission, callback) => {
@@ -2056,6 +2140,8 @@ if (!app.requestSingleInstanceLock()) {
     sdkRuntime.onRunsChanged(broadcastSessionRuns)
     authManager.onFlowChanged(broadcastAuthFlow)
     updateChecker.onChanged(broadcastUpdates)
+    packageUpdater.onProgress(broadcastPackageUpdateProgress)
+    piAgentUpdater.onProgress(broadcastAgentInstallProgress)
     await createWindow(pageUrl)
     // 窗口已创建后再开始检查：它只影响页面上的提示，不参与启动编排。
     updateChecker.startInitialCheck()

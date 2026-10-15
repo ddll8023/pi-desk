@@ -7,23 +7,27 @@
  * `PI_OFFLINE` 生效时完全不发起远端请求，只报告已安装版本。
  * 包声明与安装路径一律交给 SDK 的 `DefaultPackageManager` 判定，不在这里重建 Pi 的目录约定；
  * 声明了但没安装的 npm 包可能让 SDK 自行执行一次只读的 `npm root -g`（失败时静默跳过）。
+ * SDK 从运行时目录或应用自带版本加载（由主进程注入的入口决定），因此报告的 agent 版本是实际将被加载的那一个。
  *
  * 失败语义：单个条目失败只写进该条目的 `error`，不影响其他条目；整体失败（读不到包声明等）
  * 才把原因写进报告的 `error`。只有脚本自身崩溃才以非零退出码结束，由主进程转换为页面可见的失败。
  *
- * 参数：argv[2] 是当前项目路径（可为空）；为空时不做项目级读取，避免把无关目录当成项目。
+ * 参数：argv[2] 是当前项目路径（可为空）；argv[3] 是运行时根目录（可为空）。
+ * 项目路径为空时不做项目级读取；运行时根目录只用只读指针判断本次实际会加载哪个版本。
  */
 import { execFile } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
-import { DefaultPackageManager, SettingsManager, VERSION, getAgentDir } from '@earendil-works/pi-coding-agent'
-import type { ExtensionUpdateInfo, PiAgentUpdateInfo, UpdateCheckReport } from '../shared/updates-api'
+import { loadSdkModule, majorVersion, readBundledSdkVersion, readCurrentVersion } from '../runtime-install/runtime'
+import type { SdkModule } from '../runtime-install/runtime'
+import type { ExtensionUpdateInfo, PiAgentUpdateInfo, PiAgentUpdateStatus, UpdateCheckReport } from '../shared/updates-api'
 
 const runFile = promisify(execFile)
 
-/** 项目路径在 argv 里的位置；主进程固定给出，页面无法参与。 */
+/** 项目路径与运行时根目录在 argv 里的位置；主进程固定给出，页面无法参与。 */
 const PROJECT_ARG_INDEX = 2
+const RUNTIME_ROOT_ARG_INDEX = 3
 /** 单个远端查询的等待上限；每个条目各自计时，不共享总预算。 */
 const REMOTE_TIMEOUT_MS = 10_000
 /** git 子进程的等待上限与输出上限；只用于读取提交号。 */
@@ -45,9 +49,9 @@ function isOffline(): boolean {
 }
 
 /** 远端读取：只接受 JSON，超时或非 2xx 一律抛出，由调用方记入条目错误。 */
-async function fetchJson(url: string): Promise<unknown> {
+async function fetchJson(url: string, agentVersion: string): Promise<unknown> {
   const response = await fetch(url, {
-    headers: { accept: 'application/json', 'user-agent': `pi-desk-version-check/${VERSION}` },
+    headers: { accept: 'application/json', 'user-agent': `pi-desk-version-check/${agentVersion}` },
     signal: AbortSignal.timeout(REMOTE_TIMEOUT_MS)
   })
   if (!response.ok) throw new Error(`HTTP ${response.status}`)
@@ -153,7 +157,8 @@ const OFFLINE_ERROR = '离线模式（PI_OFFLINE）下不检查远端版本。'
 /** npm 源：已安装版本与 registry 最新版本比较；固定版本与未安装各自单独标注。 */
 async function checkNpmEntry(
   entry: { readonly source: string; readonly scope: 'user' | 'project'; readonly installedPath: string | undefined },
-  offline: boolean
+  offline: boolean,
+  agentVersion: string
 ): Promise<ExtensionUpdateInfo> {
   const parsed = parseNpmSource(entry.source)
   const installedVersion = readInstalledVersion(entry.installedPath)
@@ -176,7 +181,7 @@ async function checkNpmEntry(
   if (offline) return { ...base, status: 'unchecked', error: OFFLINE_ERROR }
 
   try {
-    const payload = await fetchJson(`${NPM_REGISTRY_URL}/${encodeURIComponent(parsed.name)}/latest`)
+    const payload = await fetchJson(`${NPM_REGISTRY_URL}/${encodeURIComponent(parsed.name)}/latest`, agentVersion)
     if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) {
       throw new Error('响应不是对象。')
     }
@@ -249,12 +254,26 @@ function localEntry(entry: {
   }
 }
 
-/** Pi agent 自身的版本与官方最新发布；取不到最新版时保留已安装版本并说明原因。 */
-async function checkPiAgent(offline: boolean): Promise<PiAgentUpdateInfo> {
-  const base = { version: VERSION, latestVersion: null, note: null, status: 'unchecked' as const, error: null }
+/**
+ * Pi agent 自身的版本与官方最新发布；取不到最新版时保留已加载版本并说明原因。
+ * `runtimeVersion` 是指针指向的版本：它与实际加载的版本不一致时，说明运行时目录里的版本没能用上。
+ */
+async function checkPiAgent(
+  sdk: SdkModule,
+  offline: boolean,
+  runtimeVersion: string | null
+): Promise<PiAgentUpdateInfo> {
+  const base = {
+    version: sdk.VERSION,
+    runtimeVersion,
+    latestVersion: null,
+    note: null,
+    status: 'unchecked' as const,
+    error: null
+  }
   if (offline) return { ...base, error: OFFLINE_ERROR }
   try {
-    const payload = await fetchJson(LATEST_PI_RELEASE_URL)
+    const payload = await fetchJson(LATEST_PI_RELEASE_URL, sdk.VERSION)
     if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) {
       throw new Error('响应不是对象。')
     }
@@ -263,16 +282,28 @@ async function checkPiAgent(offline: boolean): Promise<PiAgentUpdateInfo> {
     if (typeof latest !== 'string' || latest.trim() === '') throw new Error('响应缺少 version 字段。')
     const latestVersion = latest.trim()
     const note = typeof data.note === 'string' && data.note.trim() !== '' ? data.note.trim() : null
-    const comparison = compareVersions(latestVersion, VERSION)
     return {
       ...base,
       latestVersion,
       note,
-      status: comparison !== null && comparison > 0 ? 'update-available' : 'up-to-date'
+      status: piAgentStatus(latestVersion, compareVersions(latestVersion, sdk.VERSION))
     }
   } catch (error) {
     return { ...base, error: `无法取得最新版本：${describeError(error)}` }
   }
+}
+
+/**
+ * 远端版本的结论：与随应用发布的版本主版本不一致时标为 `unsupported`。
+ * 这类版本不提供应用内更新，只如实提示，避免把应用置于未验证的 SDK 上；
+ * 无法判定基线或版本号时不做这层判断，退回按版本号比较。
+ */
+function piAgentStatus(latestVersion: string, comparison: number | null): PiAgentUpdateStatus {
+  const bundledVersion = readBundledSdkVersion(import.meta.url)
+  const bundledMajor = bundledVersion === null ? null : majorVersion(bundledVersion)
+  const latestMajor = majorVersion(latestVersion)
+  if (bundledMajor !== null && latestMajor !== null && bundledMajor !== latestMajor) return 'unsupported'
+  return comparison !== null && comparison > 0 ? 'update-available' : 'up-to-date'
 }
 
 /** 项目路径为空时不读项目级声明：把 agent 目录当工作目录，避免把无关目录当成项目。 */
@@ -283,20 +314,23 @@ function resolveCwd(agentDir: string): string {
 
 async function main(): Promise<void> {
   const offline = isOffline()
-  const agentDir = getAgentDir()
+  const sdk = await loadSdkModule()
+  const agentDir = sdk.getAgentDir()
   const cwd = resolveCwd(agentDir)
-  const piAgent = await checkPiAgent(offline)
+  const runtimeRoot = (process.argv[RUNTIME_ROOT_ARG_INDEX] ?? '').trim()
+  const runtimeVersion = runtimeRoot === '' ? null : readCurrentVersion(runtimeRoot)
+  const piAgent = await checkPiAgent(sdk, offline, runtimeVersion)
 
   let extensions: ExtensionUpdateInfo[] = []
   let error: string | null = null
   try {
-    const settingsManager = SettingsManager.create(cwd, agentDir)
-    const packageManager = new DefaultPackageManager({ cwd, agentDir, settingsManager })
+    const settingsManager = sdk.SettingsManager.create(cwd, agentDir)
+    const packageManager = new sdk.DefaultPackageManager({ cwd, agentDir, settingsManager })
     const configured = packageManager.listConfiguredPackages()
     extensions = await Promise.all(configured.map((entry) => {
       const target = { source: entry.source, scope: entry.scope, installedPath: entry.installedPath }
       switch (sourceType(entry.source)) {
-        case 'npm': return checkNpmEntry(target, offline)
+        case 'npm': return checkNpmEntry(target, offline, sdk.VERSION)
         case 'git': return checkGitEntry(target, offline)
         default: return Promise.resolve(localEntry(target))
       }

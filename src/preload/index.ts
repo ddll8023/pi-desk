@@ -123,11 +123,27 @@ import type {
 import {
   UPDATES_CHECK_CHANNEL,
   UPDATES_GET_CHANNEL,
+  UPDATES_INSTALL_AGENT_CHANNEL,
+  UPDATES_INSTALL_AGENT_PROGRESS_EVENT,
   UPDATES_STATE_EVENT,
+  UPDATES_UPDATE_CHANNEL,
+  UPDATES_UPDATE_PROGRESS_EVENT,
+  isAgentInstallProgress,
+  isAgentInstallResult,
+  isPackageUpdateProgress,
+  isPackageUpdateResult,
   isUpdatesResult,
   isUpdatesSnapshot
 } from '../shared/updates-api'
-import type { UpdatesApi, UpdatesResult, UpdatesSnapshot } from '../shared/updates-api'
+import type {
+  AgentInstallProgress,
+  AgentInstallResult,
+  PackageUpdateProgress,
+  PackageUpdateResult,
+  UpdatesApi,
+  UpdatesResult,
+  UpdatesSnapshot
+} from '../shared/updates-api'
 import {
   AUTH_FLOW_EVENT,
   AUTH_LOGIN_CANCEL_CHANNEL,
@@ -236,6 +252,8 @@ const INVALID_MCP_INSPECT_ABORT_RESPONSE = '桌面接口返回了无法识别的
 const INVALID_AUTH_STATUS_RESPONSE = '桌面接口返回了无法识别的认证状态。'
 const INVALID_AUTH_FLOW_RESPONSE = '桌面接口返回了无法识别的登录流程状态。'
 const INVALID_UPDATES_RESPONSE = '桌面接口返回了无法识别的版本检查结果。'
+const INVALID_PACKAGE_UPDATE_RESPONSE = '桌面接口返回了无法识别的扩展更新结果。'
+const INVALID_AGENT_INSTALL_RESPONSE = '桌面接口返回了无法识别的内置 Pi agent 安装结果。'
 
 function invalidExtensionUiResponse(): ExtensionUiResult {
   return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_EXTENSION_UI_RESPONSE } }
@@ -343,6 +361,14 @@ function invalidAuthLogoutResponse(): AuthLogoutResult {
 
 function invalidUpdatesResponse(): UpdatesResult {
   return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_UPDATES_RESPONSE } }
+}
+
+function invalidPackageUpdateResponse(): PackageUpdateResult {
+  return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_PACKAGE_UPDATE_RESPONSE } }
+}
+
+function invalidAgentInstallResponse(): AgentInstallResult {
+  return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_AGENT_INSTALL_RESPONSE } }
 }
 
 const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionApi & SessionRunApi & PreferencesApi & PiSettingsApi & TrustApi & ExtensionUiApi & AuthApi & ModelsConfigApi & UpdatesApi = {
@@ -819,6 +845,46 @@ const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionAp
     ipcRenderer.on(UPDATES_STATE_EVENT, handler)
     return () => {
       ipcRenderer.off(UPDATES_STATE_EVENT, handler)
+    }
+  },
+
+  async updatePackages(source?: string): Promise<PackageUpdateResult> {
+    const response: unknown = await ipcRenderer.invoke(
+      UPDATES_UPDATE_CHANNEL,
+      ...(source === undefined ? [] : [source])
+    )
+    return isPackageUpdateResult(response) ? response : invalidPackageUpdateResponse()
+  },
+
+  onPackageUpdateProgress(listener: (progress: PackageUpdateProgress) => void) {
+    const handler = (_event: IpcRendererEvent, payload: unknown): void => {
+      // 进度载荷同样不可信：契约不符时丢弃，由后续进度或结论收敛。
+      if (!isPackageUpdateProgress(payload)) return
+      listener(payload)
+    }
+    ipcRenderer.on(UPDATES_UPDATE_PROGRESS_EVENT, handler)
+    return () => {
+      ipcRenderer.off(UPDATES_UPDATE_PROGRESS_EVENT, handler)
+    }
+  },
+
+  async installAgentRuntime(version?: string): Promise<AgentInstallResult> {
+    const response: unknown = await ipcRenderer.invoke(
+      UPDATES_INSTALL_AGENT_CHANNEL,
+      ...(version === undefined ? [] : [version])
+    )
+    return isAgentInstallResult(response) ? response : invalidAgentInstallResponse()
+  },
+
+  onAgentInstallProgress(listener: (progress: AgentInstallProgress) => void) {
+    const handler = (_event: IpcRendererEvent, payload: unknown): void => {
+      // 进度载荷同样不可信：契约不符时丢弃，由后续进度或结论收敛。
+      if (!isAgentInstallProgress(payload)) return
+      listener(payload)
+    }
+    ipcRenderer.on(UPDATES_INSTALL_AGENT_PROGRESS_EVENT, handler)
+    return () => {
+      ipcRenderer.off(UPDATES_INSTALL_AGENT_PROGRESS_EVENT, handler)
     }
   }
 }
