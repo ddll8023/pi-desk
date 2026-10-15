@@ -141,13 +141,13 @@ onUnmounted(() => {
               <span
                 v-if="liveText !== null"
                 class="usage-metric usage-metric-rate"
-                title="实时输出速率（2 秒窗口）"
-              >实<b>{{ liveText }}</b></span>
+                title="瞬时输出速率（2 秒滑动窗口）"
+              >瞬时<b>{{ liveText }}</b></span>
               <span
                 v-if="averageText !== null"
                 class="usage-metric usage-metric-rate"
                 title="上一轮模型调用的平均速率"
-              >均<b>{{ averageText }}</b></span>
+              >平均<b>{{ averageText }}</b></span>
               <span v-if="liveText === null && averageText === null" class="usage-note">速率 —</span>
             </div>
           </div>
