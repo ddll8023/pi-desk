@@ -291,7 +291,7 @@ onUnmounted(() => {
     <header>
       <h1 class="text-xl font-semibold tracking-tight">模型</h1>
       <p class="mt-1 text-sm text-desk-muted">
-        管理 Pi 的供应商凭据与自定义供应商，并选择对话页显示哪些模型。
+        管理 Pi 的供应商凭据与自定义供应商，并选择对话页显示哪些模型。凭据与 models.json 的改动需要在重新加载会话后才会生效。
       </p>
     </header>
 

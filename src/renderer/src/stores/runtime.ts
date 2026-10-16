@@ -403,7 +403,7 @@ export const useRuntimeStore = defineStore('runtime', () => {
 
   /**
    * 当前可见的模型来源：就绪时取 Runtime 能力，未启动时取主进程预读；
-   * 两处都会按 Runtime 代际或预读范围丢弃过期结果。模型选择器与设置子页共用这一份。
+   * 两处都会按 Runtime 代际或预读范围丢弃过期结果。模型选择器与设置页的模型分节共用这一份。
    */
   const availableModels = computed<readonly ModelSummary[]>(() => {
     if (view.value.phase === 'ready') {

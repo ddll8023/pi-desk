@@ -35,13 +35,13 @@ import type { SessionSummary } from '../../../shared/session-api'
 import AppButton from './ui/AppButton.vue'
 
 const props = defineProps<{
-  readonly settingsActive: boolean
   readonly sidebarCollapsed: boolean
   readonly mobileOpen: boolean
 }>()
 
 const emit = defineEmits<{
-  toggleSettings: []
+  /** 打开设置页；设置页自带左栏导航与返回入口，侧栏只负责进入。 */
+  openSettings: []
   closeSidebar: []
   removeProject: [project: Project]
   /** 闲置态的新建会话：由外层建立对话标签并聚焦输入框，这里只转发目标项目。 */
@@ -711,13 +711,10 @@ onBeforeUnmount(() => {
       <footer class="project-sidebar-footer">
         <AppButton
           variant="unstyled" class="project-sidebar-settings"
-          :class="{ 'is-active': props.settingsActive }"
-          :aria-current="props.settingsActive ? 'page' : undefined"
-          @click="closeMenu(); emit('toggleSettings')"
+          @click="closeMenu(); emit('openSettings')"
         >
-          <svg v-if="props.settingsActive" class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m10 6-6 6 6 6M4 12h16" /></svg>
-          <svg v-else class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 3-.6 2.4-2 .9-2.2-.7-2 3.4 1.6 1.7v2.6L2.2 15l2 3.4 2.2-.7 2 .9L9 21h4l.6-2.4 2-.9 2.2.7 2-3.4-1.6-1.7v-2.6L19.8 9l-2-3.4-2.2.7-2-.9L13 3Z" /><circle cx="11" cy="12" r="3" /></svg>
-          <span class="sidebar-footer-label">{{ props.settingsActive ? '返回对话' : '设置' }}</span>
+          <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 3-.6 2.4-2 .9-2.2-.7-2 3.4 1.6 1.7v2.6L2.2 15l2 3.4 2.2-.7 2 .9L9 21h4l.6-2.4 2-.9 2.2.7 2-3.4-1.6-1.7v-2.6L19.8 9l-2-3.4-2.2.7-2-.9L13 3Z" /><circle cx="11" cy="12" r="3" /></svg>
+          <span class="sidebar-footer-label">设置</span>
         </AppButton>
       </footer>
     </div>

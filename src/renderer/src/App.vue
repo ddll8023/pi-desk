@@ -11,6 +11,7 @@ import { useRuntimeStore } from './stores/runtime'
 import { useSessionStore } from './stores/session'
 import { useSessionRunsStore } from './stores/session-runs'
 import { useSessionViewStore } from './stores/session-view'
+import { useSettingsStore } from './stores/settings'
 import { useTerminalStore } from './stores/terminal'
 import { useTrustStore } from './stores/trust'
 import { useUpdatesStore } from './stores/updates'
@@ -47,9 +48,11 @@ const workspaceTabsStore = useWorkspaceTabsStore()
 const { currentProject, pendingAddition, pendingAdditionDecision } = storeToRefs(projectStore)
 const { awaitingInterrupt, pendingReload, pendingSessionId } = storeToRefs(sessionStore)
 const { sidebarCollapsed, rightPanelOpen, ready: preferencesReady } = storeToRefs(preferencesStore)
+const settingsStore = useSettingsStore()
 const trustStore = useTrustStore()
 const updatesStore = useUpdatesStore()
-const currentView = ref<'chat' | 'settings'>('chat')
+/** 设置页是否占据工作区；打开时侧栏、右侧面板与标签组都不渲染。 */
+const { open: settingsOpen } = storeToRefs(settingsStore)
 const projectToRemove = ref<Project | null>(null)
 /** 待确认删除的会话：项目路径加摘要；确认后以 allowInterrupt 提交，取消不改动任何文件。 */
 const sessionToRemove = ref<{ readonly projectPath: string; readonly session: SessionSummary } | null>(null)
@@ -112,10 +115,10 @@ const sessionConfirmDescription = computed(() => (
 ))
 const sessionConfirmLabel = computed(() => (pendingReload.value ? '停止并重新加载' : '停止并切换'))
 
-/** 版本更新提示的「查看详情」：关掉提示并切到设置页，由设置页展示完整版本清单。 */
+/** 版本更新提示的「查看详情」：关掉提示并直接落到设置页的「版本与更新」分节，由它展示完整版本清单。 */
 function onUpdateDetails(): void {
   updatesStore.dismissNotice()
-  currentView.value = 'settings'
+  settingsStore.openSettings('version')
 }
 
 function requestProjectRemoval(project: Project): void {
@@ -255,26 +258,27 @@ onUnmounted(() => {
       :sidebar-collapsed="sidebarCollapsedForLayout"
       :right-panel-open="rightPanelOpen"
       :sidebar-toggle-disabled="!preferencesReady"
+      :settings-mode="settingsOpen"
       @toggle-sidebar="toggleSidebar"
       @toggle-right-panel="preferencesStore.toggleRightPanel()"
+      @exit-settings="settingsStore.closeSettings()"
     />
 
     <div class="app-body">
       <button
-        v-if="isNarrowWindow && !sidebarCollapsedForLayout"
+        v-if="isNarrowWindow && !sidebarCollapsedForLayout && !settingsOpen"
         type="button"
         class="app-sidebar-backdrop"
         aria-label="关闭导航栏"
         @click="closeMobileSidebar"
       ></button>
 
-      <!-- 侧栏始终挂载；折叠与响应式呈现只改变布局，不触碰 Runtime 生命周期。 -->
+      <!-- 设置页打开时不渲染侧栏：它自己的左栏就是导航。折叠与响应式呈现只改变布局，不触碰 Runtime 生命周期。 -->
       <ProjectSidebar
-        v-if="preferencesReady"
-        :settings-active="currentView === 'settings'"
+        v-if="preferencesReady && !settingsOpen"
         :sidebar-collapsed="sidebarCollapsedForLayout"
         :mobile-open="isNarrowWindow && mobileSidebarOpen"
-        @toggle-settings="currentView = currentView === 'settings' ? 'chat' : 'settings'; closeMobileSidebar()"
+        @open-settings="settingsStore.openSettings(); closeMobileSidebar()"
         @close-sidebar="closeMobileSidebar"
         @remove-project="requestProjectRemoval"
         @delete-session="requestSessionRemoval"
@@ -282,7 +286,7 @@ onUnmounted(() => {
       />
 
       <main class="app-workspace">
-        <SettingsView v-if="currentView === 'settings'" />
+        <SettingsView v-if="settingsOpen" />
         <template v-else>
           <!-- 标签组：对话与终端同级混排；标签按当前项目分组，切换项目就换一组。 -->
           <WorkspaceTabBar
@@ -355,8 +359,8 @@ onUnmounted(() => {
         </template>
       </main>
 
-      <!-- 右侧面板始终挂载；折叠只改变布局，不触碰文件树的读取缓存与 Runtime 生命周期。 -->
-      <RightPanel v-if="preferencesReady" :collapsed="!rightPanelOpen" />
+      <!-- 右侧面板在非设置页常驻挂载；折叠只改变布局，不触碰文件树的读取缓存与 Runtime 生命周期。 -->
+      <RightPanel v-if="preferencesReady && !settingsOpen" :collapsed="!rightPanelOpen" />
     </div>
 
     <!-- 模态弹层统一经 Teleport 渲染到 body，全部落在根堆叠上下文；组件常驻挂载，进出由内部 Transition 驱动。 -->

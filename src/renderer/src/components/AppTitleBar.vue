@@ -1,4 +1,5 @@
-<!-- 全宽顶部栏：自绘窗口标题栏，呈现侧栏开关、应用名、当前会话与项目、Runtime 状态与右侧面板开关；macOS 预留原生红绿灯位。模型选择已下沉到输入坞。 -->
+<!-- 全宽顶部栏：自绘窗口标题栏，呈现侧栏开关、应用名、当前会话与项目、Runtime 状态与右侧面板开关；macOS 预留原生红绿灯位。模型选择已下沉到输入坞。
+     设置页模式：两个面板都不渲染，两个开关随之隐藏，左侧是返回对话入口。 -->
 <script setup lang="ts">
 import { computed } from 'vue'
 import { storeToRefs } from 'pinia'
@@ -13,11 +14,14 @@ defineProps<{
   readonly rightPanelOpen: boolean
   /** 界面偏好尚未读取完成时禁止切换，避免与存储状态互相覆盖；两个开关共用。 */
   readonly sidebarToggleDisabled: boolean
+  /** 设置页模式：两个面板都不渲染，面板开关无对象，改为展示返回对话入口。 */
+  readonly settingsMode: boolean
 }>()
 
 const emit = defineEmits<{
   toggleSidebar: []
   toggleRightPanel: []
+  exitSettings: []
 }>()
 
 const desktopStore = useDesktopStore()
@@ -70,7 +74,22 @@ const sessionTitleText = computed(() => (
     <!-- 红绿灯占位：只作布局留白，不接收指针事件，也不进入无障碍树。 -->
     <span v-if="reservesTrafficLights" class="app-titlebar-traffic-pad" aria-hidden="true"></span>
 
+    <!-- 设置页没有侧栏：这个位置是返回对话入口，设置页内不另设返回按钮。 -->
     <AppButton
+      v-if="settingsMode"
+      variant="unstyled"
+      class="app-titlebar-back"
+      title="返回对话"
+      @click="emit('exitSettings')"
+    >
+      <svg class="panel-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="m10 6-6 6 6 6M4 12h16" />
+      </svg>
+      返回对话
+    </AppButton>
+
+    <AppButton
+      v-else
       variant="icon"
       class="app-titlebar-toggle"
       :aria-expanded="!sidebarCollapsed"
@@ -89,7 +108,8 @@ const sessionTitleText = computed(() => (
 
     <span class="app-titlebar-app-name">Pi Desktop</span>
 
-    <div class="app-titlebar-context">
+    <!-- 会话与项目簇只描述对话上下文：设置页不显示它，也不留一个会切换会话的入口。 -->
+    <div v-if="!settingsMode" class="app-titlebar-context">
       <AppButton
         variant="unstyled"
         class="app-titlebar-session"
@@ -112,6 +132,7 @@ const sessionTitleText = computed(() => (
     </span>
 
     <AppButton
+      v-if="!settingsMode"
       variant="icon"
       class="app-titlebar-toggle"
       :aria-expanded="rightPanelOpen"

@@ -1027,6 +1027,8 @@
     z-index: -1;
     inset: 0;
     background: var(--sidebar-selected);
+    /* 底色与侧栏底色接近（亮色约 1.15:1、暗色约 1.21:1），当前会话靠这条竖条区分。 */
+    box-shadow: inset 2px 0 0 0 var(--color-desk-accent);
     pointer-events: none;
     transition: opacity var(--sidebar-duration-hover) ease;
   }
@@ -1348,12 +1350,6 @@
     color: var(--sidebar-ink);
   }
 
-  .project-sidebar-settings.is-active,
-  .project-sidebar-settings.is-active:not(:disabled):hover {
-    background: var(--sidebar-selected);
-    color: var(--sidebar-ink);
-  }
-
   /* 文字单独淡出；固定内层保住图标位置和列表行高，不在折叠期间重排内容。 */
   .sidebar-tree-copy,
   .sidebar-session-title,
@@ -1471,8 +1467,126 @@
     @apply mx-auto w-full max-w-4xl space-y-4 p-6 sm:p-8;
   }
 
-  .settings-page-header {
-    @apply border-b border-desk-line pb-5;
+  /* 设置页：左栏固定宽度的分节导航，右栏是当前分节的内容；两栏各自滚动，页面本身不滚动。 */
+  .settings-page {
+    display: grid;
+    min-width: 0;
+    min-height: 0;
+    flex: 1;
+    overflow: hidden;
+    grid-template-columns: 240px minmax(0, 1fr);
+  }
+
+  .settings-nav {
+    display: flex;
+    min-width: 0;
+    min-height: 0;
+    flex-direction: column;
+    border-right: 1px solid var(--color-desk-line);
+    background: var(--color-desk-surface-subtle);
+  }
+
+  .settings-nav-scroll {
+    min-height: 0;
+    flex: 1;
+    overflow-y: auto;
+    padding: 1rem 0.75rem 1.25rem;
+  }
+
+  /* 页面标题留在导航栏顶部；右栏每个分节自带标题，这里不再重复一次。 */
+  .settings-nav-header {
+    @apply px-2 pb-3 text-sm font-semibold;
+  }
+
+  .settings-nav-group + .settings-nav-group {
+    @apply mt-4;
+  }
+
+  .settings-nav-group-label {
+    @apply px-2 pb-1 text-2xs font-medium text-desk-muted;
+  }
+
+  /* 分节条目：图标加文案；选中态用「浅强调底色 + 2px 强调竖条」，与 .list-item-active 的当前行标记一致。
+     只靠底色不足以区分：accent-soft 与导航底色在亮色下约 1.09:1、暗色下约 1.03:1，竖条才是有对比的那一层。 */
+  .settings-nav-item {
+    @apply flex w-full items-center gap-2 rounded-desk-sm px-2 py-1.5 text-xs font-medium text-desk-muted transition-colors;
+  }
+
+  .settings-nav-item:not(:disabled):hover {
+    @apply bg-desk-surface text-desk-ink;
+  }
+
+  .settings-nav-item.is-selected,
+  .settings-nav-item.is-selected:not(:disabled):hover {
+    @apply bg-desk-accent-soft text-desk-ink;
+    box-shadow: inset 2px 0 0 0 var(--color-desk-accent);
+  }
+
+  .settings-nav-item.is-selected .settings-nav-icon {
+    @apply text-desk-accent;
+  }
+
+  .settings-nav-item.is-selected .settings-nav-label {
+    @apply font-semibold;
+  }
+
+  .settings-nav-icon {
+    @apply h-4 w-4 flex-none;
+  }
+
+  .settings-nav-label {
+    @apply min-w-0 truncate;
+  }
+
+  /* 内容栏只负责滚动；最大宽度与内边距由 .settings-page-content 提供。 */
+  .settings-content {
+    min-width: 0;
+    min-height: 0;
+    overflow-y: auto;
+  }
+
+  /* 窄窗口放不下两栏：导航塌成内容区上方的横向条目条，页面标题与分组标题让位给条目本身。 */
+  @media (max-width: 799px) {
+    .settings-page {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .settings-nav {
+      flex: none;
+      border-right: 0;
+      border-bottom: 1px solid var(--color-desk-line);
+    }
+
+    .settings-nav-scroll {
+      display: flex;
+      align-items: center;
+      gap: 0.25rem;
+      overflow-x: auto;
+      overflow-y: hidden;
+      padding: 0.5rem;
+    }
+
+    .settings-nav-header,
+    .settings-nav-group-label {
+      display: none;
+    }
+
+    .settings-nav-group {
+      display: flex;
+      align-items: center;
+      gap: 0.25rem;
+    }
+
+    .settings-nav-group + .settings-nav-group {
+      margin-top: 0;
+    }
+
+    .settings-nav-item {
+      width: auto;
+      flex: none;
+      white-space: nowrap;
+    }
   }
 
   .settings-section {
@@ -1494,21 +1608,6 @@
 
   .settings-row {
     @apply mt-4 flex flex-wrap items-center justify-between gap-4 border-t border-desk-line pt-4;
-  }
-
-  /* 设置入口行：左列是入口说明，右列是动作按钮；两列网格让按钮固定在同一列，说明再长也不会把它挤到下一行。 */
-  .settings-entry {
-    @apply mt-4 grid items-center gap-4 border-t border-desk-line pt-4;
-    grid-template-columns: minmax(0, 1fr) auto;
-  }
-
-  /* 设置子页返回入口：低对比、不抢标题，只承担导航。 */
-  .settings-back-button {
-    @apply inline-flex items-center gap-1.5 rounded-desk-sm px-2 py-1 text-xs font-medium text-desk-muted transition-colors;
-  }
-
-  .settings-back-button:not(:disabled):hover {
-    @apply bg-desk-surface-subtle text-desk-ink;
   }
 
   /*
@@ -1952,6 +2051,26 @@
     flex: none;
   }
 
+  /* 设置页的返回入口：占侧栏开关的位置，用文字说明去往哪里；高度与面板开关一致，不让标题栏跳动。 */
+  .app-titlebar-back {
+    display: inline-flex;
+    height: 28px;
+    flex: none;
+    align-items: center;
+    gap: 0.375rem;
+    border-radius: var(--radius-desk-sm);
+    padding: 0 0.5rem;
+    color: var(--color-desk-muted);
+    font-size: 0.75rem;
+    font-weight: 500;
+    transition: background-color var(--default-transition-duration) ease, color var(--default-transition-duration) ease;
+  }
+
+  .app-titlebar-back:not(:disabled):hover {
+    background: var(--color-desk-surface-subtle);
+    color: var(--color-desk-ink);
+  }
+
   .app-titlebar-app-name {
     flex: none;
     color: var(--color-desk-muted);
@@ -2391,6 +2510,8 @@
 
   .file-tree-row.is-selected {
     background: var(--panel-selected);
+    /* 与 .list-item-active、设置页导航同一套当前行标记：底色加 2px 强调竖条。 */
+    box-shadow: inset 2px 0 0 0 var(--color-desk-accent);
   }
 
   /* 展开箭头只占 12px 一列：文件行留同样宽的空位，名称因此始终对齐。 */
@@ -3459,7 +3580,7 @@
 
   /*
    * 预留滚动条槽位：经典滚动条会占掉内容宽度，同一容器内容一长一短就出现横向跳动
-   * （设置页在子页之间切换、消息列从无滚动条变为有滚动条时最明显）。
+   * （设置页在分节之间切换、消息列从无滚动条变为有滚动条时最明显）。
    * 固定预留后，居中内容在有无滚动条时位置一致；侧栏的滚动容器已有同样处理。
    * 只为需要纵向滚动的容器预留；带滚动条但内容左对齐的容器（侧栏菜单、AppSelect、可折叠卡片内容区）不加，
    * 避免白占 8px。
