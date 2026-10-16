@@ -11,7 +11,7 @@ const devServerPort = devServerPortFromEnv(process.env.PI_DESK_DEV_SERVER_PORT)
 const developmentCsp = [
   "default-src 'none'",
   "script-src 'self'",
-  // Vite 开发期通过样式节点更新 CSS；正式页面不保留此权限。
+  // Vite 开发期通过样式节点更新 CSS，终端组件也在运行时写样式；两边都放开内联样式，脚本与连接源保持严格限制。
   "style-src 'self' 'unsafe-inline'",
   `connect-src 'self' ws://127.0.0.1:${devServerPort}`,
   // data: 与 blob: 仅用于本地图片附件的缩略图展示，与生产 CSP 保持一致；不放开远程图片。
@@ -33,6 +33,8 @@ export default defineConfig({
         formats: ['cjs']
       },
       rollupOptions: {
+        // node-pty 是原生模块：只能保持外部引用，运行时从应用目录的 node_modules 加载，不能进 bundle。
+        external: ['node-pty'],
         output: {
           format: 'cjs',
           entryFileNames: 'index.cjs'

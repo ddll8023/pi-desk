@@ -1,4 +1,4 @@
-/** 管理唯一桌面窗口、本地资产边界，以及应用信息、Project 选择/添加/移除、项目文件检索与目录列举、Session 与 Project Trust、会话运行状态（查询）、界面偏好、Runtime、Pi 默认模型、自定义供应商配置、认证、Pi 版本检查、Extension IPC、事件广播及退出编排。 */
+/** 管理唯一桌面窗口、本地资产边界，以及应用信息、Project 选择/添加/移除、项目文件检索与目录列举、Session 与 Project Trust、会话运行状态（查询）、内置终端（PTY）、界面偏好、Runtime、Pi 默认模型、自定义供应商配置、认证、Pi 版本检查、Extension IPC、事件广播及退出编排。 */
 import { mkdirSync } from 'node:fs'
 import { realpath } from 'node:fs/promises'
 import { dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
@@ -41,6 +41,30 @@ import {
   PROJECT_FILE_SEARCH_CHANNEL
 } from '../shared/project-file-api'
 import type { ProjectDirectoryListResult, ProjectFileSearchResult } from '../shared/project-file-api'
+import {
+  TERMINAL_ACK_CHANNEL,
+  TERMINAL_CLOSE_CHANNEL,
+  TERMINAL_CREATE_CHANNEL,
+  TERMINAL_DATA_EVENT,
+  TERMINAL_EXIT_EVENT,
+  TERMINAL_LIST_CHANNEL,
+  TERMINAL_RESIZE_CHANNEL,
+  TERMINAL_WRITE_CHANNEL,
+  isTerminalAckRequest,
+  isTerminalCloseRequest,
+  isTerminalCreateRequest,
+  isTerminalListRequest,
+  isTerminalResizeRequest,
+  isTerminalWriteRequest
+} from '../shared/terminal-api'
+import type {
+  TerminalCommandResult,
+  TerminalDataEvent,
+  TerminalErrorCode,
+  TerminalExitEvent,
+  TerminalSessionResult,
+  TerminalSessionsResult
+} from '../shared/terminal-api'
 import {
   SESSION_DELETE_CHANNEL,
   SESSION_LIST_CHANNEL,
@@ -211,6 +235,7 @@ import { SdkHostManager } from './sdk-host-manager'
 import { SdkRuntimeBridge } from './sdk-runtime-bridge'
 import { SessionManager } from './session-manager'
 import { SessionRunRegistry } from './session-run-registry'
+import { TerminalManager } from './terminal-manager'
 import { TrustManager, TrustManagerError } from './trust-manager'
 import { UpdateChecker } from './update-checker'
 import { PackageUpdater } from './package-updater'
@@ -239,7 +264,9 @@ const rendererRoot = resolve(__dirname, '../renderer')
 const productionCsp = [
   "default-src 'none'",
   "script-src 'self'",
-  "style-src 'self'",
+  // 终端组件在运行时按测量结果写样式（xterm 的滚动条颜色等），因此样式源放开内联；
+  // 脚本仍然只允许自身，页面也不加载任何远程内容。
+  "style-src 'self' 'unsafe-inline'",
   "connect-src 'none'",
   // data: 与 blob: 仅用于本地图片附件的缩略图展示；不放开远程图片。
   "img-src 'self' data: blob:",
@@ -314,6 +341,33 @@ const modelsConfigManager = new ModelsConfigManager()
 /** Pi 默认模型（Pi 的 settings.json）的唯一读写者；只改 defaultProvider 与 defaultModel。 */
 const piSettingsManager = new PiSettingsManager()
 const windowState = new WindowState({ store: configStore })
+/** 内置终端：进程、缓冲与背压都在主进程，页面只收输出并回报已消费的字符数。 */
+const terminals = new TerminalManager({
+  resolveProjectPath: resolveRegisteredProjectPath,
+  sendData: (event) => sendToRenderer(TERMINAL_DATA_EVENT, event),
+  sendExit: (event) => sendToRenderer(TERMINAL_EXIT_EVENT, event)
+})
+
+/**
+ * 终端管理器与项目移除共用的项目解析：只认已登记项目，并回登记时的规范路径。
+ * 终端的工作目录只取这条路径，页面给出的写法不直接进入 shell。
+ */
+async function resolveRegisteredProjectPath(requested: string): Promise<string | null> {
+  const list = await configStore.list()
+  const match = list.projects.find((project) => projectMatchesPath(project.path, requested))
+  return match?.path ?? null
+}
+
+/** 按项目 id 取规范路径；只用于项目移除时收敛它的终端，找不到返回 null。 */
+async function registeredProjectPathById(projectId: string): Promise<string | null> {
+  const list = await configStore.list()
+  return list.projects.find((project) => project.id === projectId)?.path ?? null
+}
+
+/** 项目路径比较口径与项目登记一致：Windows 路径大小写不敏感。 */
+function projectMatchesPath(left: string, right: string): boolean {
+  return process.platform === 'win32' ? left.toLowerCase() === right.toLowerCase() : left === right
+}
 
 /** 有限等待；只用于退出编排，不证明被等待的操作已完成。 */
 function wait(milliseconds: number): Promise<void> {
@@ -734,7 +788,11 @@ function registerProjectHandlers(pageUrl: string): void {
       if (typeof allowInterrupt !== 'boolean') {
         return projectListFailure('INVALID_REQUEST', '移除项目必须显式说明是否允许中断当前操作。')
       }
-      return projectManager.remove(request as ProjectRemoveRequest)
+      // 项目移除后它的终端不再有意义：先取规范路径，移除成功后一并收敛该项目终端。
+      const terminalProjectPath = await registeredProjectPathById(projectId)
+      const result = await projectManager.remove(request as ProjectRemoveRequest)
+      if (result.ok && terminalProjectPath !== null) terminals.closeProject(terminalProjectPath)
+      return result
     }
   )
 
@@ -2016,6 +2074,108 @@ function registerExtensionUiHandlers(pageUrl: string): void {
   )
 }
 
+/**
+ * 内置终端：创建、写入、改尺寸、关闭、清单与数据确认。
+ * 终端进程只在主进程，页面不接触 shell、环境变量与工作目录；数据确认只释放背压额度。
+ */
+function registerTerminalHandlers(pageUrl: string): void {
+  handle(
+    TERMINAL_CREATE_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<TerminalSessionResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return terminalSessionFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 1 || !isTerminalCreateRequest(args[0])) {
+        return terminalSessionFailure('INVALID_REQUEST', '创建终端只接受已登记项目路径与初始行列数。')
+      }
+      return terminals.create(args[0])
+    }
+  )
+
+  handle(
+    TERMINAL_WRITE_CHANNEL,
+    (event: IpcMainInvokeEvent, ...args: unknown[]): TerminalCommandResult => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return terminalCommandFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 1 || !isTerminalWriteRequest(args[0])) {
+        return terminalCommandFailure('INVALID_REQUEST', '终端写入只接受终端标识与不超过上限的文本。')
+      }
+      return terminals.write(args[0])
+    }
+  )
+
+  handle(
+    TERMINAL_RESIZE_CHANNEL,
+    (event: IpcMainInvokeEvent, ...args: unknown[]): TerminalCommandResult => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return terminalCommandFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 1 || !isTerminalResizeRequest(args[0])) {
+        return terminalCommandFailure('INVALID_REQUEST', '调整终端尺寸只接受终端标识与合法行列数。')
+      }
+      return terminals.resize(args[0])
+    }
+  )
+
+  handle(
+    TERMINAL_CLOSE_CHANNEL,
+    (event: IpcMainInvokeEvent, ...args: unknown[]): TerminalCommandResult => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return terminalCommandFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 1 || !isTerminalCloseRequest(args[0])) {
+        return terminalCommandFailure('INVALID_REQUEST', '关闭终端只接受终端标识。')
+      }
+      return terminals.close(args[0])
+    }
+  )
+
+  handle(
+    TERMINAL_LIST_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<TerminalSessionsResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return terminalSessionsFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 1 || !isTerminalListRequest(args[0])) {
+        return terminalSessionsFailure('INVALID_REQUEST', '终端清单只接受一个项目路径或 null。')
+      }
+      return terminals.list(args[0])
+    }
+  )
+
+  /** 数据确认只释放背压额度；参数不合法时忽略，不回传结果。 */
+  handle(
+    TERMINAL_ACK_CHANNEL,
+    (event: IpcMainInvokeEvent, ...args: unknown[]): void => {
+      if (!isTrustedCaller(event, pageUrl) || args.length !== 1 || !isTerminalAckRequest(args[0])) return
+      terminals.acknowledge(args[0])
+    }
+  )
+}
+
+function terminalSessionFailure(code: TerminalErrorCode, message: string): TerminalSessionResult {
+  return { ok: false, error: { code, message } }
+}
+
+function terminalSessionsFailure(code: TerminalErrorCode, message: string): TerminalSessionsResult {
+  return { ok: false, error: { code, message } }
+}
+
+function terminalCommandFailure(code: TerminalErrorCode, message: string): TerminalCommandResult {
+  return { ok: false, error: { code, message } }
+}
+
+/** 只发给当前唯一可信窗口；返回是否真的投递，未投递时调用方保留数据。 */
+function sendToRenderer(channel: string, payload: unknown): boolean {
+  const target = mainWindow
+  if (target === null || target.isDestroyed()) return false
+  const contents = target.webContents
+  if (contents.isDestroyed()) return false
+  contents.send(channel, payload)
+  return true
+}
+
 /** 状态变化只发给当前唯一可信窗口，不广播到其他 webContents。 */
 function broadcastRuntimeStatus(status: RuntimeStatus): void {
   const target = mainWindow
@@ -2183,6 +2343,8 @@ async function createWindow(pageUrl: string): Promise<void> {
   contents.on('will-redirect', (event) => {
     if (!event.isMainFrame || event.url !== pageUrl) event.preventDefault()
   })
+  // 页面重新加载后，上一份页面未确认的终端数据不再有人消费：清掉在途额度，避免终端被永久背压。
+  contents.on('did-finish-load', () => terminals.resetDelivery())
   // 尺寸、位置与最大化状态的变化经防抖写回配置；close 时先记录，销毁后无法再读取 bounds。
   window.on('resize', rememberWindowState)
   window.on('move', rememberWindowState)
@@ -2205,6 +2367,8 @@ async function createWindow(pageUrl: string): Promise<void> {
   })
   window.once('ready-to-show', () => window.show())
   window.once('closed', () => {
+    // 页面已消失：终端不再有接收方，释放它的在途额度，退出链不必等待无意义的确认。
+    terminals.resetDelivery()
     windowState.dispose()
     mainWindow = null
   })
@@ -2229,11 +2393,14 @@ app.on('before-quit', (event) => {
   const sdkShutdown = sdkRuntime.shutdown().catch(() => {
     console.error('SDK 宿主未确认退出，应用按关闭预算退出。')
   })
+  // 终端 shell 的子进程（构建、服务）必须在退出前收敛，否则会留在系统里继续运行。
+  const terminalShutdown = terminals.shutdown()
   void (async () => {
     // 先落盘窗口状态：写入很小，避免被关闭链的兜底等待挤掉。
     await Promise.race([windowState.flush(), wait(WINDOW_STATE_FLUSH_MS)])
     // 认证辅助进程没有自己的业务状态，只按关闭链终止。
     await Promise.race([authManager.stop(), wait(QUIT_DEADLINE_MS)])
+    await Promise.race([terminalShutdown, wait(QUIT_DEADLINE_MS)])
     await Promise.race([sdkShutdown, wait(QUIT_DEADLINE_MS)])
     app.exit(0)
   })()
@@ -2289,6 +2456,7 @@ if (!app.requestSingleInstanceLock()) {
     registerProjectFileHandlers(pageUrl)
     registerSessionHandlers(pageUrl)
     registerSessionRunHandlers(pageUrl)
+    registerTerminalHandlers(pageUrl)
     registerTrustHandlers(pageUrl)
     registerPreferencesHandlers(pageUrl)
     registerPiSettingsHandlers(pageUrl)

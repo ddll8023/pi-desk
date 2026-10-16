@@ -1,4 +1,4 @@
-/** 为沙箱页面提供应用信息、Project 选择/添加/移除/列表、项目文件检索与目录列举、Session、会话运行状态、Project Trust、偏好、Runtime、Pi 资源、Pi 默认模型、Pi 版本检查、自定义供应商、认证与 Extension 等受限接口，不暴露 Electron、任意 channel 或系统能力。 */
+/** 为沙箱页面提供应用信息、Project 选择/添加/移除/列表、项目文件检索与目录列举、Session、会话运行状态、终端、Project Trust、偏好、Runtime、Pi 资源、Pi 默认模型、Pi 版本检查、自定义供应商、认证与 Extension 等受限接口，不暴露 Electron、任意 channel 或系统能力。 */
 import { contextBridge, ipcRenderer } from 'electron'
 import type { IpcRendererEvent } from 'electron'
 import { APP_INFO_CHANNEL, isAppInfoResult } from '../shared/desktop-api'
@@ -77,6 +77,35 @@ import type {
   ProjectFileApi,
   ProjectFileSearchResult
 } from '../shared/project-file-api'
+import {
+  TERMINAL_ACK_CHANNEL,
+  TERMINAL_CLOSE_CHANNEL,
+  TERMINAL_CREATE_CHANNEL,
+  TERMINAL_DATA_EVENT,
+  TERMINAL_EXIT_EVENT,
+  TERMINAL_LIST_CHANNEL,
+  TERMINAL_RESIZE_CHANNEL,
+  TERMINAL_WRITE_CHANNEL,
+  isTerminalCommandResult,
+  isTerminalDataEvent,
+  isTerminalExitEvent,
+  isTerminalSessionResult,
+  isTerminalSessionsResult
+} from '../shared/terminal-api'
+import type {
+  TerminalAckRequest,
+  TerminalApi,
+  TerminalCloseRequest,
+  TerminalCommandResult,
+  TerminalCreateRequest,
+  TerminalDataEvent,
+  TerminalExitEvent,
+  TerminalListRequest,
+  TerminalResizeRequest,
+  TerminalSessionResult,
+  TerminalSessionsResult,
+  TerminalWriteRequest
+} from '../shared/terminal-api'
 import {
   SESSION_DELETE_CHANNEL,
   SESSION_LIST_CHANNEL,
@@ -276,6 +305,9 @@ const INVALID_UPDATES_RESPONSE = '桌面接口返回了无法识别的版本检�
 const INVALID_PACKAGE_UPDATE_RESPONSE = '桌面接口返回了无法识别的扩展更新结果。'
 const INVALID_AGENT_INSTALL_RESPONSE = '桌面接口返回了无法识别的内置 Pi agent 安装结果。'
 const INVALID_AGENT_RUNTIME_RESET_RESPONSE = '桌面接口返回了无法识别的运行时指针清除结果。'
+const INVALID_TERMINAL_SESSION_RESPONSE = '桌面接口返回了无法识别的终端状态。'
+const INVALID_TERMINAL_SESSIONS_RESPONSE = '桌面接口返回了无法识别的终端清单。'
+const INVALID_TERMINAL_COMMAND_RESPONSE = '桌面接口返回了无法识别的终端操作结果。'
 
 function invalidExtensionUiResponse(): ExtensionUiResult {
   return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_EXTENSION_UI_RESPONSE } }
@@ -323,6 +355,18 @@ function invalidSessionRunsResponse(): SessionRunsResult {
 
 function invalidSessionRunReleaseResponse(): SessionRunReleaseResult {
   return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_SESSION_RUNS_RESPONSE } }
+}
+
+function invalidTerminalSessionResponse(): TerminalSessionResult {
+  return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_TERMINAL_SESSION_RESPONSE } }
+}
+
+function invalidTerminalSessionsResponse(): TerminalSessionsResult {
+  return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_TERMINAL_SESSIONS_RESPONSE } }
+}
+
+function invalidTerminalCommandResponse(): TerminalCommandResult {
+  return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_TERMINAL_COMMAND_RESPONSE } }
 }
 
 function invalidPreferencesResponse(): PreferencesResult {
@@ -405,7 +449,7 @@ function invalidAgentRuntimeResetResponse(): AgentRuntimeResetResult {
   return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_AGENT_RUNTIME_RESET_RESPONSE } }
 }
 
-const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionApi & SessionRunApi & PreferencesApi & PiSettingsApi & TrustApi & ExtensionUiApi & AuthApi & ModelsConfigApi & UpdatesApi = {
+const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionApi & SessionRunApi & TerminalApi & PreferencesApi & PiSettingsApi & TrustApi & ExtensionUiApi & AuthApi & ModelsConfigApi & UpdatesApi = {
   async getAppInfo() {
     const response: unknown = await ipcRenderer.invoke(APP_INFO_CHANNEL)
     if (!isAppInfoResult(response)) {
@@ -511,6 +555,76 @@ const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionAp
   async releaseSessionRun(request: SessionRunReleaseRequest) {
     const response: unknown = await ipcRenderer.invoke(SESSION_RUN_RELEASE_CHANNEL, { runId: request.runId })
     return isSessionRunReleaseResult(response) ? response : invalidSessionRunReleaseResponse()
+  },
+
+  /** 在已添加的项目内新建终端；shell、环境变量与工作目录都由主进程决定。 */
+  async createTerminal(request: TerminalCreateRequest) {
+    const payload: TerminalCreateRequest = {
+      projectPath: request.projectPath,
+      cols: request.cols,
+      rows: request.rows
+    }
+    const response: unknown = await ipcRenderer.invoke(TERMINAL_CREATE_CHANNEL, payload)
+    return isTerminalSessionResult(response) ? response : invalidTerminalSessionResponse()
+  },
+
+  /** 把用户输入写入终端；只搬运终端标识与文本，不传尺寸或路径。 */
+  async writeTerminal(request: TerminalWriteRequest) {
+    const payload: TerminalWriteRequest = { id: request.id, data: request.data }
+    const response: unknown = await ipcRenderer.invoke(TERMINAL_WRITE_CHANNEL, payload)
+    return isTerminalCommandResult(response) ? response : invalidTerminalCommandResponse()
+  },
+
+  /** 同步终端尺寸；行列数由页面按实际显示区域给出，主进程校验取值范围。 */
+  async resizeTerminal(request: TerminalResizeRequest) {
+    const payload: TerminalResizeRequest = { id: request.id, cols: request.cols, rows: request.rows }
+    const response: unknown = await ipcRenderer.invoke(TERMINAL_RESIZE_CHANNEL, payload)
+    return isTerminalCommandResult(response) ? response : invalidTerminalCommandResponse()
+  },
+
+  /** 关闭终端并收敛其进程树；只搬运终端标识。 */
+  async closeTerminal(request: TerminalCloseRequest) {
+    const payload: TerminalCloseRequest = { id: request.id }
+    const response: unknown = await ipcRenderer.invoke(TERMINAL_CLOSE_CHANNEL, payload)
+    return isTerminalCommandResult(response) ? response : invalidTerminalCommandResponse()
+  },
+
+  /** 读取终端清单；项目路径为 null 时列全部，供页面重新挂载后重建标签。 */
+  async listTerminals(request: TerminalListRequest) {
+    const payload: TerminalListRequest = { projectPath: request.projectPath }
+    const response: unknown = await ipcRenderer.invoke(TERMINAL_LIST_CHANNEL, payload)
+    return isTerminalSessionsResult(response) ? response : invalidTerminalSessionsResponse()
+  },
+
+  /** 回报已消费的字符数；只释放背压额度，失败不重试也不产生未处理的拒绝。 */
+  ackTerminalData(request: TerminalAckRequest) {
+    void ipcRenderer
+      .invoke(TERMINAL_ACK_CHANNEL, { id: request.id, chars: request.chars })
+      .catch(() => undefined)
+  },
+
+  onTerminalData(listener: (event: TerminalDataEvent) => void) {
+    const handler = (_event: IpcRendererEvent, payload: unknown): void => {
+      // 事件载荷同样不可信：契约不符时丢弃，由后续输出收敛。
+      if (!isTerminalDataEvent(payload)) return
+      listener(payload)
+    }
+    ipcRenderer.on(TERMINAL_DATA_EVENT, handler)
+    return () => {
+      ipcRenderer.off(TERMINAL_DATA_EVENT, handler)
+    }
+  },
+
+  onTerminalExit(listener: (event: TerminalExitEvent) => void) {
+    const handler = (_event: IpcRendererEvent, payload: unknown): void => {
+      // 退出事件同样不可信：契约不符时丢弃，由终端清单收敛。
+      if (!isTerminalExitEvent(payload)) return
+      listener(payload)
+    }
+    ipcRenderer.on(TERMINAL_EXIT_EVENT, handler)
+    return () => {
+      ipcRenderer.off(TERMINAL_EXIT_EVENT, handler)
+    }
   },
 
   async getTrustStatus(runId?: number) {

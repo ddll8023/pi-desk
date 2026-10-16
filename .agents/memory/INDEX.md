@@ -1,7 +1,7 @@
 # 项目记忆
 
 ## 项目范围
-Pi Desktop：Electron + Vue 3 + TypeScript 桌面客户端。会话执行主链由官方 SDK 宿主（`utilityProcess`）承担，独立 Pi 二进制已退役；已覆盖项目与会话、消息投影、Project Trust、Provider 认证、Pi 资源（Skill、模板、扩展命令、MCP 配置与连接状态）、自定义供应商（models.json 的读写）、Pi 默认模型（settings.json 的读写）与 Pi 版本检查（应用与 Pi 包版本、启动提示）。
+Pi Desktop：Electron + Vue 3 + TypeScript 桌面客户端。会话执行主链由官方 SDK 宿主（`utilityProcess`）承担，独立 Pi 二进制已退役；已覆盖项目与会话、消息投影、内置终端（按项目分组的 PTY 标签）、Project Trust、Provider 认证、Pi 资源（Skill、模板、扩展命令、MCP 配置与连接状态）、自定义供应商（models.json 的读写）、Pi 默认模型（settings.json 的读写）与 Pi 版本检查（应用与 Pi 包版本、启动提示）。
 
 ## 主题导航
 - 约定：`topics/conventions/platform-neutral.md`——在编写文档、命令示例、记忆或任何生成内容，需要提及平台、路径或命令时读取。

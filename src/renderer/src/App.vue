@@ -1,4 +1,4 @@
-<!-- 主界面外壳：编排项目两阶段添加/移除确认、会话删除确认、信任与中断对话框、版本更新提示、视图切换、侧栏「新建」到输入坞的聚焦请求、新建会话落盘后的会话列表补读及各展示 Store 生命周期。 -->
+<!-- 主界面外壳：编排工作区标签组（对话与终端面板）、项目两阶段添加/移除确认、会话删除确认、信任与中断对话框、版本更新提示、视图切换、侧栏「新建」到输入坞的聚焦请求、新建会话落盘后的会话列表补读及各展示 Store 生命周期。 -->
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
@@ -11,6 +11,7 @@ import { useRuntimeStore } from './stores/runtime'
 import { useSessionStore } from './stores/session'
 import { useSessionRunsStore } from './stores/session-runs'
 import { useSessionViewStore } from './stores/session-view'
+import { CHAT_TAB_ID, useTerminalStore } from './stores/terminal'
 import { useTrustStore } from './stores/trust'
 import { useUpdatesStore } from './stores/updates'
 import type { Project } from '../../shared/project-api'
@@ -25,8 +26,11 @@ import ProjectSidebar from './components/ProjectSidebar.vue'
 import RightPanel from './components/RightPanel.vue'
 import SessionPickerDialog from './components/SessionPickerDialog.vue'
 import SettingsView from './components/SettingsView.vue'
+import TerminalTabBar from './components/TerminalTabBar.vue'
+import TerminalView from './components/TerminalView.vue'
 import TrustDialog from './components/TrustDialog.vue'
 import UpdateNoticeDialog from './components/UpdateNoticeDialog.vue'
+import AppButton from './components/ui/AppButton.vue'
 
 const desktopStore = useDesktopStore()
 const extensionStore = useExtensionUiStore()
@@ -37,6 +41,7 @@ const runtimeStore = useRuntimeStore()
 const sessionStore = useSessionStore()
 const sessionRunsStore = useSessionRunsStore()
 const sessionViewStore = useSessionViewStore()
+const terminalStore = useTerminalStore()
 const { currentProject, pendingAddition, pendingAdditionDecision } = storeToRefs(projectStore)
 const { awaitingInterrupt, pendingReload, pendingSessionId } = storeToRefs(sessionStore)
 const { sidebarCollapsed, rightPanelOpen, ready: preferencesReady } = storeToRefs(preferencesStore)
@@ -70,6 +75,8 @@ const sidebarCollapsedForLayout = computed(() => (
 
 /** 侧栏「新建」在闲置态只聚焦输入框，不启动 Pi；会话由首次发送创建。 */
 function onRequestNewSession(): void {
+  // 输入坞在对话标签里：先切回对话，否则聚焦发生在隐藏面板上，用户看不到光标。
+  terminalStore.setActiveTab(CHAT_TAB_ID)
   composerFocusToken.value += 1
 }
 
@@ -219,6 +226,8 @@ onMounted(() => {
   sessionViewStore.initialize()
   void sessionStore.initialize()
   void sessionRunsStore.initialize()
+  // 终端状态要在项目就绪后立即接回：它先订阅事件再按项目列清单，避免重挂载期间的下发丢失。
+  terminalStore.initialize()
   void updatesStore.initialize()
 })
 
@@ -229,6 +238,7 @@ onUnmounted(() => {
   runtimeStore.dispose()
   sessionViewStore.dispose()
   sessionRunsStore.dispose()
+  terminalStore.dispose()
   updatesStore.dispose()
 })
 </script>
@@ -269,15 +279,56 @@ onUnmounted(() => {
       <main class="app-workspace">
         <SettingsView v-if="currentView === 'settings'" />
         <template v-else>
-          <ExtensionNotificationBar />
-          <ChatMessageList />
-          <!-- Widget 放置语义与官方子协议一致：aboveEditor 在输入区上方，belowEditor 在下方。 -->
-          <div v-for="widget in widgetsAbove" :key="widget.placement" class="px-4 py-2 sm:px-6">
-            <pre class="chat-column mx-auto widget-block">{{ widget.lines.join('\n') }}</pre>
-          </div>
-          <PromptComposer :focus-token="composerFocusToken" />
-          <div v-for="widget in widgetsBelow" :key="widget.placement" class="px-4 py-2 sm:px-6">
-            <pre class="chat-column mx-auto widget-block">{{ widget.lines.join('\n') }}</pre>
+          <!-- 标签组：对话与终端同级；终端标签按当前项目分组，切换项目就换一组。 -->
+          <TerminalTabBar
+            :sessions="terminalStore.projectSessions"
+            :active-tab="terminalStore.activeTab"
+            :titles="terminalStore.titles"
+            :creating="terminalStore.creating"
+            @select="terminalStore.setActiveTab"
+            @close="terminalStore.closeTerminal"
+            @create="terminalStore.createTerminal"
+            @rename="terminalStore.renameTerminal"
+          />
+
+          <!-- 终端操作失败只提示，不改变已建立的标签；关闭后不再重复展示。 -->
+          <p v-if="terminalStore.error !== null" class="workspace-notice" role="status">
+            <span class="min-w-0 flex-1">{{ terminalStore.error }}</span>
+            <AppButton variant="unstyled" class="workspace-notice-close" aria-label="关闭提示" @click="terminalStore.clearError()">关闭</AppButton>
+          </p>
+
+          <!-- 面板层：对话与各终端面板叠放在同一区域，只显示活动标签。
+               隐藏用 visibility 而不是 display：面板始终保持真实尺寸，输入框量高与终端尺寸测量在隐藏时也成立。 -->
+          <div class="workspace-panes">
+            <div
+              class="workspace-pane"
+              :class="{ 'is-hidden': terminalStore.activeTab !== CHAT_TAB_ID }"
+              :inert="terminalStore.activeTab !== CHAT_TAB_ID"
+              :aria-hidden="terminalStore.activeTab !== CHAT_TAB_ID"
+            >
+              <ExtensionNotificationBar />
+              <ChatMessageList />
+              <!-- Widget 放置语义与官方子协议一致：aboveEditor 在输入区上方，belowEditor 在下方。 -->
+              <div v-for="widget in widgetsAbove" :key="widget.placement" class="px-4 py-2 sm:px-6">
+                <pre class="chat-column mx-auto widget-block">{{ widget.lines.join('\n') }}</pre>
+              </div>
+              <PromptComposer :focus-token="composerFocusToken" />
+              <div v-for="widget in widgetsBelow" :key="widget.placement" class="px-4 py-2 sm:px-6">
+                <pre class="chat-column mx-auto widget-block">{{ widget.lines.join('\n') }}</pre>
+              </div>
+            </div>
+
+            <!-- 终端面板：当前项目的每个终端都保持挂载与尺寸，非活动标签只隐藏，切回来仍是同一屏内容。 -->
+            <div
+              v-for="session in terminalStore.projectSessions"
+              :key="session.id"
+              class="workspace-pane"
+              :class="{ 'is-hidden': terminalStore.activeTab !== session.id }"
+              :inert="terminalStore.activeTab !== session.id"
+              :aria-hidden="terminalStore.activeTab !== session.id"
+            >
+              <TerminalView :session="session" :active="terminalStore.activeTab === session.id" />
+            </div>
           </div>
         </template>
       </main>

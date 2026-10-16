@@ -12,12 +12,13 @@ import type { ProjectFileApi } from '../../shared/project-file-api'
 import type { RuntimeApi } from '../../shared/runtime-api'
 import type { SessionApi } from '../../shared/session-api'
 import type { SessionRunApi } from '../../shared/session-run-api'
+import type { TerminalApi } from '../../shared/terminal-api'
 import type { TrustApi } from '../../shared/trust-api'
 import type { UpdatesApi } from '../../shared/updates-api'
 
 declare global {
   interface Window {
-    readonly desktop?: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionApi & SessionRunApi & PreferencesApi & PiSettingsApi & TrustApi & ExtensionUiApi & AuthApi & ModelsConfigApi & UpdatesApi
+    readonly desktop?: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionApi & SessionRunApi & TerminalApi & PreferencesApi & PiSettingsApi & TrustApi & ExtensionUiApi & AuthApi & ModelsConfigApi & UpdatesApi
   }
 }
 

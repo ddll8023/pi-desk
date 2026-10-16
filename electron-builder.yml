@@ -7,12 +7,16 @@
 # 原生依赖（含 pi-tui 的平台预编译产物）只保证与安装时的架构一致。
 appId: io.pidesk.desktop
 asar: false
+# 原生依赖（node-pty）自带 N-API 预编译产物，ABI 稳定，可直接用于任意 Electron 版本。
+# 不重编译：本机编译需要工具链，重编译出的未签名二进制还会被杀软误报；因此关闭自动重建。
+npmRebuild: false
 directories:
   output: release
   buildResources: build
 # 只收构建产物；package.json 与生产依赖的 node_modules 由 electron-builder 固定纳入。
 # 受管入口（SDK 宿主、CLI 运行器、版本检查脚本、认证辅助进程）以裸模块名解析官方 SDK，
-# 因此生产依赖必须落在应用目录的 node_modules 下。
+# 因此生产依赖必须落在应用目录的 node_modules 下。node-pty 的 prebuilds/（含 conpty.dll）
+# 必须一并随包，任何过滤规则都不能排除它，否则终端无法启动。
 files:
   - package.json
   - out/**

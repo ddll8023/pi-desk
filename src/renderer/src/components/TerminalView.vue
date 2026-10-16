@@ -1,0 +1,319 @@
+<!--
+  单个终端标签的 xterm 视图：一个会话对应一个终端实例，非活动标签只隐藏不销毁。
+
+  挂载时创建 xterm 并按容器测量尺寸后同步给主进程；容器尺寸变化（窗口、面板拖拽）经防抖重新测量。
+  输出由 store 分发到这里，xterm 写完这一段后回报已消费的字符数，主进程据此释放背压额度。
+  颜色取自主题令牌，暗色随 prefers-color-scheme 自动切换，与界面其余部分同一套令牌。
+
+  安全与习惯：终端输出只作为文本写入 xterm，不解析 HTML；链接点击只复制地址，不打开浏览器（页面没有
+  打开任意地址的权限，只有认证流程能经主进程打开 URL）；多行粘贴先确认，避免一次误粘贴直接执行命令。
+-->
+<script setup lang="ts">
+import { FitAddon } from '@xterm/addon-fit'
+import { WebLinksAddon } from '@xterm/addon-web-links'
+import { WebglAddon } from '@xterm/addon-webgl'
+import { Terminal } from '@xterm/xterm'
+import type { IDisposable, ITheme } from '@xterm/xterm'
+import '@xterm/xterm/css/xterm.css'
+import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { TERMINAL_DIMENSION_MAX, TERMINAL_DIMENSION_MIN, TERMINAL_WRITE_MAX_CHARS } from '../../../shared/terminal-api'
+import type { TerminalSessionInfo } from '../../../shared/terminal-api'
+import { copyText } from '../clipboard'
+import { resizeTerminal, writeTerminal } from '../services/terminal'
+import { useTerminalStore } from '../stores/terminal'
+import AppButton from './ui/AppButton.vue'
+
+const props = defineProps<{
+  readonly session: TerminalSessionInfo
+  /** 是否为当前显示的标签；隐藏的终端保持挂载，只是不接收焦点。 */
+  readonly active: boolean
+}>()
+
+const terminalStore = useTerminalStore()
+const container = ref<HTMLDivElement | null>(null)
+/** 待确认的多行粘贴；非空时终端上方显示确认条。 */
+const pendingPaste = ref<{ readonly text: string; readonly lines: number } | null>(null)
+/** 一次性提示（复制链接结果等）；到点自动消失。 */
+const notice = ref<string | null>(null)
+
+/** 回滚缓冲行数；与 Orca 同量级，足够翻回构建日志。 */
+const SCROLLBACK_LINES = 5000
+/** 超过这个行数的粘贴需要确认，避免多行命令被直接执行。 */
+const PASTE_CONFIRM_LINES = 3
+/** 尺寸测量防抖：拖拽面板时只按最终尺寸同步一次。 */
+const FIT_DEBOUNCE_MS = 100
+const NOTICE_MS = 2500
+
+/** 暗色下的 16 色：与界面令牌同一色系（青蓝强调、低饱和语义色），不用 xterm 默认高饱和配色。 */
+const DARK_ANSI: ITheme = {
+  black: '#1b2530',
+  red: '#d4736f',
+  green: '#7fb27a',
+  yellow: '#d3b06e',
+  blue: '#6f9fd8',
+  magenta: '#b48ad4',
+  cyan: '#5fb3c4',
+  white: '#c8d3dc',
+  brightBlack: '#3d4d5c',
+  brightRed: '#e08d88',
+  brightGreen: '#9cc796',
+  brightYellow: '#e3c78d',
+  brightBlue: '#8fb8e6',
+  brightMagenta: '#c9a6e0',
+  brightCyan: '#7cc7d6',
+  brightWhite: '#e6eef5'
+}
+
+/** 浅色下的 16 色：压低亮度以保证在浅底上的对比度。 */
+const LIGHT_ANSI: ITheme = {
+  black: '#2b3843',
+  red: '#a4373a',
+  green: '#2f6d3a',
+  yellow: '#8a6116',
+  blue: '#2c5f9e',
+  magenta: '#7b4a9c',
+  cyan: '#1f6b7a',
+  white: '#d5dde3',
+  brightBlack: '#5b6b78',
+  brightRed: '#c25a5d',
+  brightGreen: '#4a8b55',
+  brightYellow: '#a87c26',
+  brightBlue: '#3f7cbf',
+  brightMagenta: '#9663b8',
+  brightCyan: '#2f8496',
+  brightWhite: '#f2f6f8'
+}
+
+let term: Terminal | null = null
+let fitAddon: FitAddon | null = null
+let stopInput: IDisposable | null = null
+let stopTitle: IDisposable | null = null
+let resizeObserver: ResizeObserver | null = null
+let themeQuery: MediaQueryList | null = null
+let fitTimer: number | null = null
+let noticeTimer: number | null = null
+
+onMounted(() => {
+  mountTerminal()
+})
+
+onBeforeUnmount(() => {
+  unmountTerminal()
+})
+
+/** 切到本标签时立即按当前尺寸重排并取得焦点；隐藏期间测不出尺寸，因此不能提前同步。 */
+watch(() => props.active, (active) => {
+  if (!active) return
+  void nextTick(() => {
+    fitNow()
+    term?.focus()
+  })
+})
+
+function mountTerminal(): void {
+  const host = container.value
+  if (host === null) return
+
+  const terminal = new Terminal({
+    fontFamily: readFontFamily(host),
+    fontSize: 13,
+    lineHeight: 1.25,
+    cursorBlink: true,
+    scrollback: SCROLLBACK_LINES,
+    theme: readTheme(host)
+  })
+  terminal.open(host)
+
+  fitAddon = new FitAddon()
+  terminal.loadAddon(fitAddon)
+  try {
+    const webgl = new WebglAddon()
+    // GPU 上下文丢失后回退到 DOM 渲染，终端仍然可用，不重建终端。
+    webgl.onContextLoss(() => webgl.dispose())
+    terminal.loadAddon(webgl)
+  } catch {
+    // 没有可用的 WebGL2 时继续用默认渲染器。
+  }
+  terminal.loadAddon(new WebLinksAddon((_event, uri) => {
+    void copyLink(uri)
+  }))
+
+  stopInput = terminal.onData((data) => {
+    void sendInput(data)
+  })
+  stopTitle = terminal.onTitleChange((title) => {
+    terminalStore.applyTerminalTitle(props.session.id, title)
+  })
+  terminal.attachCustomKeyEventHandler((event) => {
+    if (event.type !== 'keydown' || !(event.ctrlKey || event.metaKey) || event.altKey) return true
+    if (event.key.toLowerCase() !== 'c') return true
+    const selection = terminal.getSelection()
+    // 有选中内容时按复制处理，不把 Ctrl+C 当成中断发给终端。
+    if (selection === '') return true
+    void copyText(selection)
+    return false
+  })
+
+  // 输出交给本视图，写完这一段再回报消费量，主进程据此继续下发。
+  terminalStore.registerWriter(props.session.id, (event, consumed) => {
+    terminal.write(event.chunk, consumed)
+  })
+
+  term = terminal
+  // 捕获阶段拦粘贴：多行粘贴要先确认，不能让 xterm 自己先把它写进终端。
+  host.addEventListener('paste', onPaste, true)
+  resizeObserver = new ResizeObserver(() => scheduleFit())
+  resizeObserver.observe(host)
+  themeQuery = window.matchMedia('(prefers-color-scheme: dark)')
+  themeQuery.addEventListener('change', applyTheme)
+
+  fitNow()
+  // 字体可能还没就绪，就绪后重新测一次，避免用回退字体的度量算出偏小的尺寸。
+  void document.fonts.ready.then(() => scheduleFit())
+  if (props.active) terminal.focus()
+}
+
+function unmountTerminal(): void {
+  if (fitTimer !== null) {
+    window.clearTimeout(fitTimer)
+    fitTimer = null
+  }
+  if (noticeTimer !== null) {
+    window.clearTimeout(noticeTimer)
+    noticeTimer = null
+  }
+  resizeObserver?.disconnect()
+  resizeObserver = null
+  themeQuery?.removeEventListener('change', applyTheme)
+  themeQuery = null
+  container.value?.removeEventListener('paste', onPaste, true)
+  stopInput?.dispose()
+  stopInput = null
+  stopTitle?.dispose()
+  stopTitle = null
+  terminalStore.unregisterWriter(props.session.id)
+  term?.dispose()
+  term = null
+  fitAddon = null
+}
+
+function scheduleFit(): void {
+  if (fitTimer !== null) return
+  fitTimer = window.setTimeout(() => {
+    fitTimer = null
+    fitNow()
+  }, FIT_DEBOUNCE_MS)
+}
+
+/** 按容器测量并同步尺寸；隐藏标签与未布局完成的容器测不出有效尺寸，此时保持上一次尺寸。 */
+function fitNow(): void {
+  const terminal = term
+  const addon = fitAddon
+  if (terminal === null || addon === null) return
+  const dimensions = addon.proposeDimensions()
+  if (dimensions === undefined) return
+  const cols = Math.floor(dimensions.cols)
+  const rows = Math.floor(dimensions.rows)
+  if (!Number.isFinite(cols) || !Number.isFinite(rows)) return
+  if (cols < TERMINAL_DIMENSION_MIN || rows < TERMINAL_DIMENSION_MIN) return
+  if (cols > TERMINAL_DIMENSION_MAX || rows > TERMINAL_DIMENSION_MAX) return
+  if (cols === terminal.cols && rows === terminal.rows) return
+  try {
+    addon.fit()
+  } catch {
+    return
+  }
+  void resizeTerminal({ id: props.session.id, cols: terminal.cols, rows: terminal.rows })
+}
+
+async function sendInput(data: string): Promise<void> {
+  const result = await writeTerminal({ id: props.session.id, data })
+  if (!result.ok) terminalStore.reportError(result.error.message)
+}
+
+/** 多行粘贴先确认；行数不多时交给 xterm 自己的粘贴路径处理。 */
+function onPaste(event: ClipboardEvent): void {
+  const text = event.clipboardData?.getData('text/plain') ?? ''
+  if (text === '') return
+  const lines = text.split('\n').length
+  if (lines <= PASTE_CONFIRM_LINES) return
+  event.preventDefault()
+  event.stopPropagation()
+  pendingPaste.value = { text, lines }
+}
+
+/** 确认粘贴：程序启用了括号粘贴模式时补上标记，让它能区分粘贴与逐键输入。 */
+async function confirmPaste(): Promise<void> {
+  const pending = pendingPaste.value
+  pendingPaste.value = null
+  if (pending === null) return
+  if (pending.text.length > TERMINAL_WRITE_MAX_CHARS) {
+    terminalStore.reportError(`粘贴内容过长（${pending.text.length} 字符），请分几次粘贴。`)
+    return
+  }
+  const bracketed = term?.modes.bracketedPasteMode === true
+  const payload = bracketed ? `\u001b[200~${pending.text}\u001b[201~` : pending.text
+  const result = await writeTerminal({ id: props.session.id, data: payload })
+  if (!result.ok) terminalStore.reportError(result.error.message)
+}
+
+/** 链接点击只复制地址：页面没有打开任意 URL 的权限，只有认证流程能经主进程打开地址。 */
+async function copyLink(uri: string): Promise<void> {
+  const copied = await copyText(uri)
+  showNotice(copied ? `已复制链接：${uri}` : '复制链接失败。')
+}
+
+function showNotice(message: string): void {
+  notice.value = message
+  if (noticeTimer !== null) window.clearTimeout(noticeTimer)
+  noticeTimer = window.setTimeout(() => {
+    noticeTimer = null
+    notice.value = null
+  }, NOTICE_MS)
+}
+
+function applyTheme(): void {
+  const host = container.value
+  if (host === null || term === null) return
+  term.options.theme = readTheme(host)
+}
+
+function readFontFamily(element: HTMLElement): string {
+  const family = getComputedStyle(element).getPropertyValue('--font-mono').trim()
+  return family === '' ? 'monospace' : family
+}
+
+/** 主题从界面令牌读取，暗色随 prefers-color-scheme 切换，终端与界面共用同一套颜色。 */
+function readTheme(element: HTMLElement): ITheme {
+  const styles = getComputedStyle(element)
+  const dark = window.matchMedia('(prefers-color-scheme: dark)').matches
+  return {
+    background: readVariable(styles, '--color-desk-canvas-sunken'),
+    foreground: readVariable(styles, '--color-desk-ink'),
+    cursor: readVariable(styles, '--color-desk-accent'),
+    cursorAccent: readVariable(styles, '--color-desk-canvas-sunken'),
+    selectionBackground: readVariable(styles, '--color-desk-accent-soft'),
+    ...(dark ? DARK_ANSI : LIGHT_ANSI)
+  }
+}
+
+function readVariable(styles: CSSStyleDeclaration, name: string): string {
+  return styles.getPropertyValue(name).trim()
+}
+</script>
+
+<template>
+  <div class="terminal-view">
+    <div ref="container" class="terminal-view-host"></div>
+
+    <div v-if="pendingPaste !== null" class="terminal-bar" role="group" aria-label="粘贴确认">
+      <span class="terminal-bar-text">粘贴 {{ pendingPaste.lines }} 行到终端？</span>
+      <AppButton variant="compact" @click="confirmPaste">粘贴</AppButton>
+      <AppButton variant="compact" @click="pendingPaste = null">取消</AppButton>
+    </div>
+
+    <p v-else-if="notice !== null" class="terminal-bar" aria-live="polite">
+      <span class="terminal-bar-text">{{ notice }}</span>
+    </p>
+  </div>
+</template>
