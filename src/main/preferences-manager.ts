@@ -1,11 +1,11 @@
 /**
  * 界面偏好、对话页模型展示偏好、快捷发送短语与扩展自动更新开关的读写入口：
  * 把同一配置存储的独立字段转换为页面契约，不写 Pi 配置。
- * 界面偏好含侧栏折叠状态、主题与侧栏展开的项目路径列表，三者作为一份载荷整体保存与读取。
+ * 界面偏好含侧栏折叠状态、主题、侧栏展开的项目路径列表与右侧面板的开合状态和宽度，作为一份载荷整体保存与读取。
  *
  * 不直接访问文件，也不管理窗口状态；窗口尺寸与位置由 window-state.ts 独占。读写失败只回传
- * 错误：界面偏好已在页面本地生效，不阻断其他操作；模型展示偏好与快捷发送短语则在保存成功后提交。
- * 三类偏好共用错误码。
+ * 错误：界面偏好已在页面本地生效，不阻断其他操作；模型展示偏好、快捷发送短语与扩展自动更新开关则在保存成功后提交。
+ * 四类偏好共用错误码。
  * IPC 契约与响应校验在 shared/preferences-api.ts，请求参数与调用者校验在 main/index.ts。
  */
 import type { AutoUpdatePreference, AutoUpdateResult, ModelDisplayPreference, ModelDisplayResult, PreferencesError, PreferencesResult, QuickSendPreference, QuickSendResult, UiPreferences } from '../shared/preferences-api'

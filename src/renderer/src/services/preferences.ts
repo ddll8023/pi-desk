@@ -47,7 +47,9 @@ export async function setUiPreferences(ui: UiPreferences): Promise<PreferencesRe
     return await bridge.setUiPreferences({
       sidebarCollapsed: ui.sidebarCollapsed,
       theme: ui.theme,
-      expandedProjects: [...ui.expandedProjects]
+      expandedProjects: [...ui.expandedProjects],
+      rightPanelOpen: ui.rightPanelOpen,
+      rightPanelWidth: ui.rightPanelWidth
     })
   } catch (error) {
     return callFailed(error)

@@ -24,6 +24,14 @@ export function isUiTheme(value: unknown): value is UiTheme {
 /** 侧栏展开状态的上限；超出按最早记录丢弃，避免配置文件无界增长。 */
 export const MAX_EXPANDED_PROJECTS = 50
 
+/**
+ * 右侧面板宽度默认值与存储边界。
+ * 默认宽度按“能容下两层目录名加图标”取值；边界只拒绝明显异常的宽度，实际拖拽范围由界面再收紧。
+ */
+export const DEFAULT_RIGHT_PANEL_WIDTH = 350
+export const MIN_RIGHT_PANEL_WIDTH = 240
+export const MAX_RIGHT_PANEL_WIDTH = 720
+
 /** 路径长度上限；只用于拒绝明显异常的值，不做真实路径校验。 */
 const MAX_STORED_PATH_LENGTH = 4096
 
@@ -44,6 +52,16 @@ export interface UiPreferences {
    * 这里只记录哪些项目展开过，切换项目或重启应用后仍能保持。
    */
   readonly expandedProjects: readonly string[]
+  /** 右侧面板是否展开；默认关，聊天区是主界面，不默认占用宽度。 */
+  readonly rightPanelOpen: boolean
+  /** 右侧面板宽度（像素）；不按项目区分，面板宽度对同一窗口只有一个值。 */
+  readonly rightPanelWidth: number
+}
+
+/** 右侧面板宽度是否在存储边界内；非整数与越界值一律拒绝。 */
+export function isRightPanelWidth(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value)
+    && value >= MIN_RIGHT_PANEL_WIDTH && value <= MAX_RIGHT_PANEL_WIDTH
 }
 
 /** 界面偏好的形状校验；主进程与页面共用同一份判定，多余字段、越界或不完整的载荷一律拒绝。 */
@@ -51,8 +69,10 @@ export function isUiPreferences(value: unknown): value is UiPreferences {
   if (!isRecord(value)) return false
   if (!Object.keys(value).every((key) => (
     key === 'sidebarCollapsed' || key === 'theme' || key === 'expandedProjects'
+      || key === 'rightPanelOpen' || key === 'rightPanelWidth'
   ))) return false
   if (typeof value.sidebarCollapsed !== 'boolean' || !isUiTheme(value.theme)) return false
+  if (typeof value.rightPanelOpen !== 'boolean' || !isRightPanelWidth(value.rightPanelWidth)) return false
   if (!Array.isArray(value.expandedProjects) || value.expandedProjects.length > MAX_EXPANDED_PROJECTS) {
     return false
   }

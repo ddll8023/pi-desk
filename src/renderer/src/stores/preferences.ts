@@ -1,15 +1,20 @@
 /**
- * 保存侧栏与主题的界面偏好（含侧栏展开的项目路径）、快捷发送短语与扩展自动更新开关；
+ * 保存侧栏与右侧面板的界面偏好（含侧栏展开的项目路径）、快捷发送短语与扩展自动更新开关；
  * 窗口状态由主进程独占，不保存 Runtime 数据或单个消息块的临时开合状态。
  *
- * 界面偏好是一份整体载荷：折叠状态、主题与展开的项目路径一起写入，任一变化都保存当前完整值，
- * 避免分字段保存互相覆盖；保存单飞，保存期间的新变化在收敛后补写一次。
- * 展开的项目路径只记录哪些项目展开过，顺序不参与展示。
+ * 界面偏好是一份整体载荷：折叠状态、主题、展开的项目路径与右侧面板开合/宽度一起写入，
+ * 任一变化都保存当前完整值，避免分字段保存互相覆盖；保存单飞，保存期间的新变化在收敛后补写一次。
+ * 展开的项目路径只记录哪些项目展开过，顺序不参与展示；右侧面板宽度对同一窗口只有一个值，不按项目区分。
  * 自动更新开关默认关，只有用户显式打开后主进程才会在启动检查后自动更新扩展。
  */
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import { DEFAULT_QUICK_SEND_MESSAGES } from '../../../shared/preferences-api'
+import {
+  DEFAULT_QUICK_SEND_MESSAGES,
+  DEFAULT_RIGHT_PANEL_WIDTH,
+  MAX_RIGHT_PANEL_WIDTH,
+  MIN_RIGHT_PANEL_WIDTH
+} from '../../../shared/preferences-api'
 import type { PreferencesError, UiPreferences, UiTheme } from '../../../shared/preferences-api'
 import { getAutoUpdate, getPreferences, getQuickSend, setAutoUpdate, setQuickSend, setUiPreferences } from '../services/preferences'
 
@@ -30,6 +35,10 @@ export const usePreferencesStore = defineStore('preferences', () => {
   const theme = ref<UiTheme>('system')
   /** 侧栏中保持展开的项目路径；顺序不参与展示，只用于判断某个项目是否展开。 */
   const expandedProjects = ref<readonly string[]>([])
+  /** 右侧面板是否展开；默认展开，与主进程默认值一致，折叠状态会被记住。 */
+  const rightPanelOpen = ref(true)
+  /** 右侧面板宽度（像素）；拖拽期间由组件本地接管，松手后才走这里持久化。 */
+  const rightPanelWidth = ref(DEFAULT_RIGHT_PANEL_WIDTH)
   /** 快捷发送下拉的候选短语；顺序即展示顺序，读取失败或非法时为默认列表。 */
   const quickSendMessages = ref<string[]>([...DEFAULT_QUICK_SEND_MESSAGES])
   const quickSendView = ref<QuickSendView>({ phase: 'idle' })
@@ -52,6 +61,8 @@ export const usePreferencesStore = defineStore('preferences', () => {
       sidebarCollapsed.value = result.data.sidebarCollapsed
       theme.value = result.data.theme
       expandedProjects.value = [...result.data.expandedProjects]
+      rightPanelOpen.value = result.data.rightPanelOpen
+      rightPanelWidth.value = result.data.rightPanelWidth
     } else actionError.value = result.error
     if (quickSend.ok) quickSendMessages.value = [...quickSend.data.messages]
     if (autoUpdate.ok) extensionAutoUpdate.value = autoUpdate.data.enabled
@@ -90,7 +101,9 @@ export const usePreferencesStore = defineStore('preferences', () => {
     const payload: UiPreferences = {
       sidebarCollapsed: sidebarCollapsed.value,
       theme: theme.value,
-      expandedProjects: [...expandedProjects.value]
+      expandedProjects: [...expandedProjects.value],
+      rightPanelOpen: rightPanelOpen.value,
+      rightPanelWidth: rightPanelWidth.value
     }
     const pending = (async () => {
       const result = await setUiPreferences(payload)
@@ -101,6 +114,8 @@ export const usePreferencesStore = defineStore('preferences', () => {
       sidebarCollapsed.value = result.data.sidebarCollapsed
       theme.value = result.data.theme
       expandedProjects.value = [...result.data.expandedProjects]
+      rightPanelOpen.value = result.data.rightPanelOpen
+      rightPanelWidth.value = result.data.rightPanelWidth
     })()
     saving = pending
     await pending
@@ -122,6 +137,31 @@ export const usePreferencesStore = defineStore('preferences', () => {
   /** 折叠与展开共用的切换入口。 */
   function toggleSidebar(): void {
     void setSidebarCollapsed(!sidebarCollapsed.value)
+  }
+
+  /** 切换右侧面板开合；本地先生效，保存失败只提示，不回滚用户操作。 */
+  async function setRightPanelOpen(next: boolean): Promise<void> {
+    if (rightPanelOpen.value === next) return
+
+    rightPanelOpen.value = next
+    await persistUi()
+  }
+
+  /** 切换右侧面板开合（供标题栏按钮直接调用，不等待保存结果）。 */
+  function toggleRightPanel(): void {
+    void setRightPanelOpen(!rightPanelOpen.value)
+  }
+
+  /**
+   * 保存右侧面板宽度：越界值先收敛到存储边界内，再本地生效并持久化。
+   * 拖拽过程中不调用这里，松手才提交一次，避免每帧写配置。
+   */
+  async function setRightPanelWidth(next: number): Promise<void> {
+    const clamped = Math.min(MAX_RIGHT_PANEL_WIDTH, Math.max(MIN_RIGHT_PANEL_WIDTH, Math.round(next)))
+    if (rightPanelWidth.value === clamped) return
+
+    rightPanelWidth.value = clamped
+    await persistUi()
   }
 
   /** 切换主题；本地先切换，主进程应用 `themeSource`，保存失败只提示，不回滚用户操作。 */
@@ -172,6 +212,8 @@ export const usePreferencesStore = defineStore('preferences', () => {
     sidebarCollapsed,
     theme,
     expandedProjects,
+    rightPanelOpen,
+    rightPanelWidth,
     quickSendMessages,
     quickSendView,
     extensionAutoUpdate,
@@ -183,6 +225,9 @@ export const usePreferencesStore = defineStore('preferences', () => {
     setProjectExpanded,
     setSidebarCollapsed,
     toggleSidebar,
+    setRightPanelOpen,
+    toggleRightPanel,
+    setRightPanelWidth,
     setTheme,
     saveQuickSendMessages,
     saveExtensionAutoUpdate

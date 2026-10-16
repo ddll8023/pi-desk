@@ -22,6 +22,7 @@ import ExtensionDialog from './components/ExtensionDialog.vue'
 import ExtensionNotificationBar from './components/ExtensionNotificationBar.vue'
 import PromptComposer from './components/PromptComposer.vue'
 import ProjectSidebar from './components/ProjectSidebar.vue'
+import RightPanel from './components/RightPanel.vue'
 import SessionPickerDialog from './components/SessionPickerDialog.vue'
 import SettingsView from './components/SettingsView.vue'
 import TrustDialog from './components/TrustDialog.vue'
@@ -38,7 +39,7 @@ const sessionRunsStore = useSessionRunsStore()
 const sessionViewStore = useSessionViewStore()
 const { currentProject, pendingAddition, pendingAdditionDecision } = storeToRefs(projectStore)
 const { awaitingInterrupt, pendingReload, pendingSessionId } = storeToRefs(sessionStore)
-const { sidebarCollapsed, ready: preferencesReady } = storeToRefs(preferencesStore)
+const { sidebarCollapsed, rightPanelOpen, ready: preferencesReady } = storeToRefs(preferencesStore)
 const trustStore = useTrustStore()
 const updatesStore = useUpdatesStore()
 const currentView = ref<'chat' | 'settings'>('chat')
@@ -234,11 +235,13 @@ onUnmounted(() => {
 
 <template>
   <div class="app-layout">
-    <!-- 顶部栏跨整窗，位于侧栏与工作区之上；侧栏开关、会话与项目、运行状态都在这里。 -->
+    <!-- 顶部栏跨整窗，位于侧栏与工作区之上；侧栏开关、会话与项目、运行状态与右侧面板开关都在这里。 -->
     <AppTitleBar
       :sidebar-collapsed="sidebarCollapsedForLayout"
+      :right-panel-open="rightPanelOpen"
       :sidebar-toggle-disabled="!preferencesReady"
       @toggle-sidebar="toggleSidebar"
+      @toggle-right-panel="preferencesStore.toggleRightPanel()"
     />
 
     <div class="app-body">
@@ -278,6 +281,9 @@ onUnmounted(() => {
           </div>
         </template>
       </main>
+
+      <!-- 右侧面板始终挂载；折叠只改变布局，不触碰文件树的读取缓存与 Runtime 生命周期。 -->
+      <RightPanel v-if="preferencesReady" :collapsed="!rightPanelOpen" />
     </div>
 
     <!-- 模态弹层统一经 Teleport 渲染到 body，全部落在根堆叠上下文；组件常驻挂载，进出由内部 Transition 驱动。 -->

@@ -1,4 +1,4 @@
-<!-- 全宽顶部栏：自绘窗口标题栏，呈现侧栏开关、应用名、当前会话与项目、Runtime 状态；macOS 预留原生红绿灯位。模型选择已下沉到输入坞。 -->
+<!-- 全宽顶部栏：自绘窗口标题栏，呈现侧栏开关、应用名、当前会话与项目、Runtime 状态与右侧面板开关；macOS 预留原生红绿灯位。模型选择已下沉到输入坞。 -->
 <script setup lang="ts">
 import { computed } from 'vue'
 import { storeToRefs } from 'pinia'
@@ -10,12 +10,14 @@ import AppButton from './ui/AppButton.vue'
 
 defineProps<{
   readonly sidebarCollapsed: boolean
-  /** 界面偏好尚未读取完成时禁止切换，避免与存储状态互相覆盖。 */
+  readonly rightPanelOpen: boolean
+  /** 界面偏好尚未读取完成时禁止切换，避免与存储状态互相覆盖；两个开关共用。 */
   readonly sidebarToggleDisabled: boolean
 }>()
 
 const emit = defineEmits<{
   toggleSidebar: []
+  toggleRightPanel: []
 }>()
 
 const desktopStore = useDesktopStore()
@@ -77,7 +79,12 @@ const sessionTitleText = computed(() => (
       :disabled="sidebarToggleDisabled"
       @click="emit('toggleSidebar')"
     >
-      <span aria-hidden="true">{{ sidebarCollapsed ? '☰' : '‹' }}</span>
+      <!-- 导航栏图标：外框加左列，展开时左列填实；与右侧面板开关同一套画法，左右对称。 -->
+      <svg class="panel-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <rect v-if="!sidebarCollapsed" x="4" y="6" width="4.4" height="12" rx="1" fill="currentColor" stroke="none" />
+        <rect x="3" y="4" width="18" height="16" rx="2.5" />
+        <path d="M9 4v16" />
+      </svg>
     </AppButton>
 
     <span class="app-titlebar-app-name">Pi Desktop</span>
@@ -96,9 +103,29 @@ const sessionTitleText = computed(() => (
       <span class="app-titlebar-project" :title="projectPath">{{ projectPath }}</span>
     </div>
 
+    <!-- 窗口拖动区：只占控件之间的空白，控件群周围不再顺带可拖动，避免误拖与误双击最大化。 -->
+    <span class="app-titlebar-drag" aria-hidden="true"></span>
+
     <span v-if="runtimeStatus.kind !== 'idle'" class="app-runtime-status" :class="`is-${runtimeStatus.kind}`" role="status">
       <span class="app-runtime-status-dot" aria-hidden="true"></span>
       {{ runtimeStatus.label }}
     </span>
+
+    <AppButton
+      variant="icon"
+      class="app-titlebar-toggle"
+      :aria-expanded="rightPanelOpen"
+      :aria-label="rightPanelOpen ? '收起右侧面板' : '展开右侧面板'"
+      :title="rightPanelOpen ? '收起右侧面板' : '展开右侧面板'"
+      :disabled="sidebarToggleDisabled"
+      @click="emit('toggleRightPanel')"
+    >
+      <!-- 右侧面板图标：外框加右列，展开时右列填实；与左侧导航栏图标同一套画法，一眼看出管的是哪一侧。 -->
+      <svg class="panel-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <rect v-if="rightPanelOpen" x="15.6" y="6" width="4.4" height="12" rx="1" fill="currentColor" stroke="none" />
+        <rect x="3" y="4" width="18" height="16" rx="2.5" />
+        <path d="M15 4v16" />
+      </svg>
+    </AppButton>
   </header>
 </template>

@@ -1,4 +1,4 @@
-/** 为沙箱页面提供应用信息、Project 选择/添加/移除/列表、项目文件检索、Session、会话运行状态、Project Trust、偏好、Runtime、Pi 资源、Pi 默认模型、Pi 版本检查、自定义供应商、认证与 Extension 等受限接口，不暴露 Electron、任意 channel 或系统能力。 */
+/** 为沙箱页面提供应用信息、Project 选择/添加/移除/列表、项目文件检索与目录列举、Session、会话运行状态、Project Trust、偏好、Runtime、Pi 资源、Pi 默认模型、Pi 版本检查、自定义供应商、认证与 Extension 等受限接口，不暴露 Electron、任意 channel 或系统能力。 */
 import { contextBridge, ipcRenderer } from 'electron'
 import type { IpcRendererEvent } from 'electron'
 import { APP_INFO_CHANNEL, isAppInfoResult } from '../shared/desktop-api'
@@ -66,10 +66,17 @@ import type {
   ProjectSetCurrentRequest
 } from '../shared/project-api'
 import {
+  PROJECT_DIRECTORY_LIST_CHANNEL,
   PROJECT_FILE_SEARCH_CHANNEL,
+  isProjectDirectoryListResult,
   isProjectFileSearchResult
 } from '../shared/project-file-api'
-import type { ProjectFileApi, ProjectFileSearchResult } from '../shared/project-file-api'
+import type {
+  ProjectDirectoryListRequest,
+  ProjectDirectoryListResult,
+  ProjectFileApi,
+  ProjectFileSearchResult
+} from '../shared/project-file-api'
 import {
   SESSION_DELETE_CHANNEL,
   SESSION_LIST_CHANNEL,
@@ -246,6 +253,7 @@ const INVALID_CAPABILITIES_RESPONSE = '桌面接口返回了无法识别的模�
 const INVALID_PROJECT_PATH_RESPONSE = '桌面接口返回了无法识别的目录选择结果。'
 const INVALID_PROJECT_LIST_RESPONSE = '桌面接口返回了无法识别的项目列表。'
 const INVALID_PROJECT_FILE_RESPONSE = '桌面接口返回了无法识别的文件检索结果。'
+const INVALID_PROJECT_DIRECTORY_RESPONSE = '桌面接口返回了无法识别的目录列举结果。'
 const INVALID_SESSION_LIST_RESPONSE = '桌面接口返回了无法识别的会话列表。'
 const INVALID_SESSION_RUNS_RESPONSE = '桌面接口返回了无法识别的会话运行状态。'
 const INVALID_PREFERENCES_RESPONSE = '桌面接口返回了无法识别的界面偏好。'
@@ -299,6 +307,10 @@ function invalidProjectListResponse(): ProjectListResult {
 
 function invalidProjectFileResponse(): ProjectFileSearchResult {
   return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_PROJECT_FILE_RESPONSE } }
+}
+
+function invalidProjectDirectoryResponse(): ProjectDirectoryListResult {
+  return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_PROJECT_DIRECTORY_RESPONSE } }
 }
 
 function invalidSessionResponse(): SessionListResult {
@@ -447,6 +459,13 @@ const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionAp
     return isProjectFileSearchResult(response) ? response : invalidProjectFileResponse()
   },
 
+  /** 在当前项目内列举一层目录；只搬运相对目录路径，根路径与越界判定都在主进程。 */
+  async listProjectDirectory(request: ProjectDirectoryListRequest) {
+    const payload: ProjectDirectoryListRequest = { directory: request.directory }
+    const response: unknown = await ipcRenderer.invoke(PROJECT_DIRECTORY_LIST_CHANNEL, payload)
+    return isProjectDirectoryListResult(response) ? response : invalidProjectDirectoryResponse()
+  },
+
   async openSession(sessionId: string | null, allowInterrupt: boolean, listLimit: number) {
     const request: SessionOpenRequest = { sessionId, allowInterrupt, listLimit }
     const response: unknown = await ipcRenderer.invoke(SESSION_OPEN_CHANNEL, request)
@@ -574,7 +593,9 @@ const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionAp
     const request: UiPreferences = {
       sidebarCollapsed: ui.sidebarCollapsed,
       theme: ui.theme,
-      expandedProjects: [...ui.expandedProjects]
+      expandedProjects: [...ui.expandedProjects],
+      rightPanelOpen: ui.rightPanelOpen,
+      rightPanelWidth: ui.rightPanelWidth
     }
     const response: unknown = await ipcRenderer.invoke(PREFERENCES_SET_UI_CHANNEL, request)
     return isPreferencesResult(response) ? response : invalidPreferencesResponse()

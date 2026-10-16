@@ -107,6 +107,16 @@
     --chat-column-reserve: 24rem;
     /* 可折叠卡片内容区的高度上限：跟随窗口高度，超出部分在卡片内部滚动，短内容仍按内容高度收缩。 */
     --chat-card-scroll-max-height: min(28rem, 60vh);
+    /*
+     * 标题栏右端要让出的窗口按钮覆盖区宽度。
+     * Windows/Linux 上系统把最小化/最大化/关闭画在标题栏右端并覆盖在网页内容之上，DOM 元素不能用那块区域；
+     * titlebar-area-* 描述的是未被覆盖的可绘制区，两者相减即需让出的宽度。
+     * 未启用覆盖或取不到这些变量时（如 macOS）回退为 0，标题栏保持原内边距。
+     */
+    --titlebar-controls-reserve: max(
+      0px,
+      100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw)
+    );
   }
 
   body {
@@ -1615,7 +1625,7 @@
     overflow: hidden;
   }
 
-  /* 顶部栏之下的主体：侧栏与工作区并排；窄窗口遮罩与浮起的侧栏都相对它定位。 */
+  /* 顶部栏之下的主体：侧栏、工作区与右侧面板并排；窄窗口遮罩与浮起的侧栏都相对它定位。 */
   .app-body {
     position: relative;
     display: flex;
@@ -1634,9 +1644,10 @@
     overflow: hidden;
   }
 
-  /* 自绘窗口标题栏：整条是窗口拖动区，交互控件单独置回 no-drag；高度与主进程 TITLEBAR_HEIGHT 一致。 */
+  /* 自绘窗口标题栏：整条默认不可拖动，只有中间的 .app-titlebar-drag 空白能拖窗口，
+     控件与空白之间的缝隙不会把点击变成拖动或双击最大化；高度与主进程 TITLEBAR_HEIGHT 一致。 */
   .app-titlebar {
-    -webkit-app-region: drag;
+    -webkit-app-region: no-drag;
     z-index: 40;
     display: flex;
     min-width: 0;
@@ -1647,6 +1658,16 @@
     border-bottom: 1px solid var(--color-desk-line);
     background: var(--color-desk-surface);
     padding: 0 0.75rem;
+    /* 右侧另留出窗口按钮覆盖区与一段间距，否则面板开关会被压在最小化/关闭按钮下面、两者也容易点错。 */
+    padding-right: calc(1.25rem + var(--titlebar-controls-reserve, 0px));
+  }
+
+  /* 标题栏唯一的拖动区：占满控件之间的空白，窗口仍然好拖，但控件附近不再可拖。 */
+  .app-titlebar-drag {
+    -webkit-app-region: drag;
+    min-width: 3rem;
+    flex: 1 1 auto;
+    align-self: stretch;
   }
 
   .app-titlebar button,
@@ -1674,10 +1695,12 @@
     letter-spacing: 0.02em;
   }
 
+  /* 会话与项目簇按内容宽度排（上限 28rem，超长标题截断），剩余宽度交给拖动区，所以这里不吃满空间。 */
   .app-titlebar-context {
     display: flex;
     min-width: 0;
-    flex: 1;
+    max-width: 28rem;
+    flex: 0 1 auto;
     flex-direction: column;
     justify-content: center;
     gap: 1px;
@@ -1830,6 +1853,7 @@
     .app-titlebar {
       gap: 0.375rem;
       padding: 0 0.625rem;
+      padding-right: calc(1rem + var(--titlebar-controls-reserve, 0px));
     }
 
     .app-titlebar-app-name,
@@ -1840,6 +1864,389 @@
     .app-runtime-status {
       gap: 0.3rem;
       font-size: 0.6875rem;
+    }
+  }
+
+  /*
+   * 右侧面板：与左侧栏同为界面外壳面，但用独立令牌，便于单独调节层次；
+   * 面板内只有一列滚动容器，目录树、提示行与检索结果都在这列里滚动。
+   */
+  .app-right-panel {
+    --panel-width: 350px;
+    --panel-surface: var(--color-desk-surface);
+    --panel-hover: var(--color-desk-surface-subtle);
+    --panel-selected: var(--color-desk-accent-soft);
+    --panel-ink: var(--color-desk-ink);
+    --panel-muted: var(--color-desk-muted);
+    --panel-line: color-mix(in srgb, var(--color-desk-line) 70%, transparent);
+    /* 文件类型色：只表达类型分组，不承担任何语义（不占用 danger/warning/success）。 */
+    --panel-tone-folder: #236978;
+    --panel-tone-code: #2f7a86;
+    --panel-tone-data: #9a6b2f;
+    --panel-tone-doc: #5b6b78;
+    --panel-tone-markup: #6f5a91;
+    --panel-tone-plain: #7d8b98;
+    --panel-duration: 140ms;
+    --panel-duration-collapse: 290ms;
+    --panel-ease: cubic-bezier(0.22, 1, 0.36, 1);
+    position: relative;
+    display: flex;
+    width: var(--panel-width);
+    min-width: 0;
+    min-height: 0;
+    flex: none;
+    overflow: hidden;
+    border-left: 1px solid var(--panel-line);
+    background: var(--panel-surface);
+    color: var(--panel-ink);
+    transition:
+      width var(--panel-duration-collapse) var(--panel-ease),
+      border-left-width var(--panel-duration-collapse) var(--panel-ease);
+  }
+
+  .app-right-panel.is-collapsed {
+    width: 0;
+    border-left-width: 0;
+  }
+
+  /* 拖拽期间不接过渡：宽度必须跟手，不能滞后一帧。 */
+  .app-right-panel.is-resizing {
+    transition: none;
+  }
+
+  /* 内层保持展开宽度，外层只裁剪；折叠与拖拽都不会让行内文字反复重排。 */
+  .right-panel-content {
+    display: flex;
+    width: calc(var(--panel-width) - 1px);
+    height: 100%;
+    min-height: 0;
+    flex: none;
+    flex-direction: column;
+    transition: opacity var(--panel-duration) ease;
+  }
+
+  .app-right-panel.is-collapsed .right-panel-content {
+    opacity: 0;
+  }
+
+  /* 小图标：面板头部、文件行与标题栏的两个面板开关共用，尺寸统一在这里定义。 */
+  .panel-icon {
+    display: block;
+    width: 15px;
+    height: 15px;
+    flex: none;
+  }
+
+  .right-panel-header {
+    display: flex;
+    height: 34px;
+    flex: none;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 0 8px 0 12px;
+  }
+
+  .right-panel-project {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    gap: 6px;
+    color: var(--panel-ink);
+    font-size: 12px;
+    font-weight: 600;
+  }
+
+  .right-panel-project .panel-icon {
+    color: var(--panel-muted);
+  }
+
+  .right-panel-project-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* 面板头部的操作键：无边框方形键，悬停才显底色，与侧栏行内操作同一套节奏。 */
+  .right-panel-action {
+    display: flex;
+    width: 24px;
+    height: 24px;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    border-radius: 5px;
+    color: var(--panel-muted);
+    transition: background-color var(--panel-duration) ease, color var(--panel-duration) ease;
+  }
+
+  .right-panel-action:not(:disabled):hover {
+    background: var(--panel-hover);
+    color: var(--panel-ink);
+  }
+
+  .right-panel-action:disabled {
+    opacity: 0.5;
+  }
+
+  /* 刷新进行中：图标自转，仍读得出「正在刷新」。 */
+  .panel-icon.is-spinning {
+    animation: panel-icon-spin 900ms linear infinite;
+  }
+
+  @keyframes panel-icon-spin {
+    to { transform: rotate(360deg); }
+  }
+
+  /* 分隔条贴在面板左缘：只占 6px，悬停与拖拽时显出一条强调色。 */
+  .right-panel-resize {
+    position: absolute;
+    z-index: 2;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: 6px;
+    cursor: col-resize;
+    background: transparent;
+    transition: background-color var(--panel-duration) ease;
+  }
+
+  .right-panel-resize:hover,
+  .app-right-panel.is-resizing .right-panel-resize {
+    background: color-mix(in srgb, var(--color-desk-accent) 42%, transparent);
+  }
+
+  .app-right-panel.is-collapsed .right-panel-resize {
+    display: none;
+  }
+
+  .file-tree {
+    display: flex;
+    min-height: 0;
+    flex: 1;
+    flex-direction: column;
+  }
+
+  .file-tree-filter {
+    display: flex;
+    height: 28px;
+    flex: none;
+    align-items: center;
+    gap: 6px;
+    margin: 0 10px 8px;
+    border: 1px solid var(--color-desk-line);
+    border-radius: var(--radius-desk-sm);
+    background: var(--color-desk-surface-subtle);
+    padding: 0 6px;
+    color: var(--panel-muted);
+    transition: border-color var(--panel-duration) ease, background-color var(--panel-duration) ease;
+  }
+
+  .file-tree-filter:focus-within {
+    border-color: var(--color-desk-accent);
+    background: var(--panel-surface);
+  }
+
+  .file-tree-input {
+    min-width: 0;
+    flex: 1;
+    border: 0;
+    background: transparent;
+    color: var(--panel-ink);
+    font-size: 12px;
+  }
+
+  .file-tree-input:focus-visible {
+    outline: none;
+  }
+
+  .file-tree-input::placeholder {
+    color: var(--panel-muted);
+  }
+
+  .file-tree-clear {
+    display: flex;
+    width: 18px;
+    height: 18px;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    border-radius: 4px;
+    color: var(--panel-muted);
+  }
+
+  .file-tree-clear:hover {
+    background: color-mix(in srgb, var(--color-desk-ink) 8%, transparent);
+    color: var(--panel-ink);
+  }
+
+  .file-tree-scroll {
+    min-height: 0;
+    flex: 1;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 0 6px 8px;
+  }
+
+  .file-tree-list {
+    display: grid;
+    width: 100%;
+    min-width: 0;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 1px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .file-tree-list > li {
+    min-width: 0;
+  }
+
+  /* 行高与左侧栏的会话行一致：两个面板的密度不因位置不同而变。 */
+  .file-tree-row {
+    display: flex;
+    width: 100%;
+    min-width: 0;
+    height: 26px;
+    align-items: center;
+    gap: 6px;
+    border-radius: 5px;
+    padding: 0 6px 0 8px;
+    color: var(--panel-ink);
+    font-size: 12.5px;
+    text-align: left;
+    transition: background-color var(--panel-duration) ease;
+  }
+
+  .file-tree-row:hover {
+    background: var(--panel-hover);
+  }
+
+  .file-tree-row.is-selected {
+    background: var(--panel-selected);
+  }
+
+  /* 展开箭头只占 12px 一列：文件行留同样宽的空位，名称因此始终对齐。 */
+  .file-tree-chevron {
+    display: flex;
+    width: 12px;
+    height: 12px;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    color: var(--panel-muted);
+    transition: transform var(--panel-duration) var(--panel-ease);
+  }
+
+  .file-tree-chevron svg {
+    width: 12px;
+    height: 12px;
+  }
+
+  .file-tree-chevron.is-open {
+    transform: rotate(90deg);
+  }
+
+  .file-tree-icon {
+    display: flex;
+    width: 16px;
+    height: 16px;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .file-tree-icon svg {
+    width: 15px;
+    height: 15px;
+  }
+
+  .file-tree-icon.is-folder { color: var(--panel-tone-folder); }
+  .file-tree-icon.is-code { color: var(--panel-tone-code); }
+  .file-tree-icon.is-data { color: var(--panel-tone-data); }
+  .file-tree-icon.is-doc { color: var(--panel-tone-doc); }
+  .file-tree-icon.is-markup { color: var(--panel-tone-markup); }
+  .file-tree-icon.is-plain { color: var(--panel-tone-plain); }
+
+  .file-tree-name {
+    min-width: 0;
+    flex: 1 1 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .file-tree-row.is-directory .file-tree-name {
+    font-weight: 500;
+  }
+
+  /* 检索结果的所在目录：名称优先占宽，目录作为尾部提示被压缩。 */
+  .file-tree-dir {
+    max-width: 45%;
+    flex: none;
+    overflow: hidden;
+    color: var(--panel-muted);
+    font-size: 11px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .file-tree-tag {
+    flex: none;
+    border: 1px solid var(--color-desk-line);
+    border-radius: 999px;
+    padding: 0 5px;
+    color: var(--panel-muted);
+    font-size: 10px;
+    line-height: 14px;
+  }
+
+  /* 提示行与条目行同列缩进：加载中、空目录、读取失败与截断都就近显示在所属目录下。 */
+  .file-tree-notice {
+    margin: 4px 0;
+    color: var(--panel-muted);
+    font-size: 11.5px;
+    line-height: 16px;
+    overflow-wrap: anywhere;
+  }
+
+  .file-tree-notice.is-error {
+    color: var(--color-desk-danger);
+  }
+
+  /* 暗色：类型色整体提亮，保持同一组色相，不改分组含义。 */
+  @media (prefers-color-scheme: dark) {
+    .app-right-panel {
+      --panel-tone-folder: #4fa3b5;
+      --panel-tone-code: #6ab8c9;
+      --panel-tone-data: #d3b06e;
+      --panel-tone-doc: #91a2b1;
+      --panel-tone-markup: #a894c9;
+      --panel-tone-plain: #7b8b9a;
+    }
+  }
+
+  /* 窄窗口不给右侧面板留位置：它在窄窗会遮住正文，因此整块不显示。 */
+  @media (max-width: 799px) {
+    .app-right-panel {
+      display: none;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .app-right-panel,
+    .right-panel-content,
+    .right-panel-action,
+    .file-tree-row,
+    .file-tree-chevron,
+    .right-panel-resize {
+      transition: none;
+    }
+
+    .panel-icon.is-spinning {
+      animation: none;
     }
   }
 

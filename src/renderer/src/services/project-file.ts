@@ -1,6 +1,6 @@
-/** 作为渲染端项目文件检索入口，收敛桥接缺失与通信异常。 */
+/** 作为渲染端项目文件检索与目录列举入口，收敛桥接缺失与通信异常。 */
 import type { DesktopError } from '../../../shared/desktop-api'
-import type { ProjectFileSearchResult } from '../../../shared/project-file-api'
+import type { ProjectDirectoryListResult, ProjectFileSearchResult } from '../../../shared/project-file-api'
 
 function unavailable(): { ok: false; error: DesktopError } {
   return {
@@ -24,6 +24,20 @@ export async function searchProjectFiles(query: string): Promise<ProjectFileSear
   if (!bridge || typeof bridge.searchProjectFiles !== 'function') return unavailable()
   try {
     return await bridge.searchProjectFiles(query)
+  } catch (error) {
+    return callFailed(error)
+  }
+}
+
+/**
+ * 列举当前项目内一层目录；目录相对路径由页面给出，越界与绝对路径由主进程拒绝。
+ * 未选择项目时主进程返回空结果，不是错误；目录不可读才回错误。
+ */
+export async function listProjectDirectory(directory: string): Promise<ProjectDirectoryListResult> {
+  const bridge = window.desktop
+  if (!bridge || typeof bridge.listProjectDirectory !== 'function') return unavailable()
+  try {
+    return await bridge.listProjectDirectory({ directory })
   } catch (error) {
     return callFailed(error)
   }

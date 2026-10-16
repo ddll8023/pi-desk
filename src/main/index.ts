@@ -1,4 +1,4 @@
-/** 管理唯一桌面窗口、本地资产边界，以及应用信息、Project 选择/添加/移除、项目文件检索、Session 与 Project Trust、会话运行状态（查询）、界面偏好、Runtime、Pi 默认模型、自定义供应商配置、认证、Pi 版本检查、Extension IPC、事件广播及退出编排。 */
+/** 管理唯一桌面窗口、本地资产边界，以及应用信息、Project 选择/添加/移除、项目文件检索与目录列举、Session 与 Project Trust、会话运行状态（查询）、界面偏好、Runtime、Pi 默认模型、自定义供应商配置、认证、Pi 版本检查、Extension IPC、事件广播及退出编排。 */
 import { mkdirSync } from 'node:fs'
 import { realpath } from 'node:fs/promises'
 import { dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
@@ -36,10 +36,11 @@ import type {
   ProjectRemoveRequest
 } from '../shared/project-api'
 import {
+  PROJECT_DIRECTORY_LIST_CHANNEL,
   PROJECT_FILE_QUERY_MAX_CHARS,
   PROJECT_FILE_SEARCH_CHANNEL
 } from '../shared/project-file-api'
-import type { ProjectFileSearchResult } from '../shared/project-file-api'
+import type { ProjectDirectoryListResult, ProjectFileSearchResult } from '../shared/project-file-api'
 import {
   SESSION_DELETE_CHANNEL,
   SESSION_LIST_CHANNEL,
@@ -201,6 +202,7 @@ import { readMcpConfigListing } from './mcp-config-reader'
 import { ModelsConfigError, ModelsConfigManager } from './models-config-manager'
 import { PiSettingsError, PiSettingsManager } from './pi-settings-manager'
 import { PreferencesManager } from './preferences-manager'
+import { ProjectDirectoryReader } from './project-directory'
 import { ProjectFileIndex } from './project-file-index'
 import { ProjectManager } from './project-manager'
 import { McpInspectionManager } from './mcp-inspection'
@@ -298,6 +300,10 @@ const packageUpdater = new PackageUpdater({
 const piAgentUpdater = new PiAgentUpdater({ runtimeRoot: getRuntimeRoot })
 /** 项目文件索引：根路径只取当前项目，页面无法指定检索目录。 */
 const projectFileIndex = new ProjectFileIndex({
+  currentProjectPath: () => projectManager.currentProjectPath()
+})
+/** 项目目录读取：右侧面板文件树的单层列举，根路径同样只取当前项目。 */
+const projectDirectory = new ProjectDirectoryReader({
   currentProjectPath: () => projectManager.currentProjectPath()
 })
 /** 认证执行端：管理认证辅助进程，凭据读写全在官方实现内完成。 */
@@ -514,6 +520,10 @@ function projectListFailure(code: ProjectErrorCode, message: string): ProjectLis
 }
 
 function projectFileFailure(code: DesktopErrorCode, message: string): ProjectFileSearchResult {
+  return { ok: false, error: { code, message } }
+}
+
+function projectDirectoryFailure(code: DesktopErrorCode, message: string): ProjectDirectoryListResult {
   return { ok: false, error: { code, message } }
 }
 
@@ -757,7 +767,7 @@ function registerProjectHandlers(pageUrl: string): void {
   )
 }
 
-/** 只接受一个查询串；检索根固定为当前项目，页面不能指定目录，也不返回文件内容。 */
+/** 文件检索只接受一个查询串、目录列举只接受项目内相对目录路径；两者的根都是当前项目，页面不能指定绝对路径，也不返回文件内容。 */
 function registerProjectFileHandlers(pageUrl: string): void {
   handle(
     PROJECT_FILE_SEARCH_CHANNEL,
@@ -781,6 +791,31 @@ function registerProjectFileHandlers(pageUrl: string): void {
         return projectFileFailure('INVALID_REQUEST', '文件检索查询串无效。')
       }
       return projectFileIndex.search(query)
+    }
+  )
+
+  handle(
+    PROJECT_DIRECTORY_LIST_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<ProjectDirectoryListResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return projectDirectoryFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 1) {
+        return projectDirectoryFailure('INVALID_REQUEST', '目录列举接口只接受一个请求对象。')
+      }
+      const request = args[0]
+      if (typeof request !== 'object' || request === null || Array.isArray(request)) {
+        return projectDirectoryFailure('INVALID_REQUEST', '目录列举参数格式不正确。')
+      }
+      const fields = request as Record<string, unknown>
+      if (Object.keys(fields).some((key) => key !== 'directory')) {
+        return projectDirectoryFailure('INVALID_REQUEST', '目录列举参数包含未支持的字段。')
+      }
+      const { directory } = fields
+      if (typeof directory !== 'string') {
+        return projectDirectoryFailure('INVALID_REQUEST', '目录列举必须给出相对目录路径字符串。')
+      }
+      return projectDirectory.list(directory)
     }
   )
 }
@@ -1560,7 +1595,7 @@ function registerUpdatesHandlers(pageUrl: string): void {
   )
 }
 
-/** 界面偏好、对话页模型展示偏好与快捷发送短语分开读写；未知字段、任意启动参数一律拒绝。 */
+/** 界面偏好、对话页模型展示偏好、快捷发送短语与扩展自动更新开关分开读写；未知字段、任意启动参数一律拒绝。 */
 function registerPreferencesHandlers(pageUrl: string): void {
   handle(
     PREFERENCES_GET_QUICK_SEND_CHANNEL,
@@ -1658,12 +1693,12 @@ function registerPreferencesHandlers(pageUrl: string): void {
       }
       const request = args[0]
       if (!isUiPreferences(request)) {
-        return preferencesFailure('INVALID_REQUEST', '界面偏好必须包含折叠状态、合法主题与展开的项目路径列表。')
+        return preferencesFailure('INVALID_REQUEST', '界面偏好必须包含折叠状态、合法主题、展开的项目路径列表与右侧面板状态。')
       }
-      const { sidebarCollapsed, theme, expandedProjects } = request
+      const { sidebarCollapsed, theme, expandedProjects, rightPanelOpen, rightPanelWidth } = request
       // 主题在参数合法后立即生效：只读降级时同样切换本次运行的主题，与页面本地生效保持一致。
       applyNativeTheme(theme)
-      return preferencesManager.setUi({ sidebarCollapsed, theme, expandedProjects })
+      return preferencesManager.setUi({ sidebarCollapsed, theme, expandedProjects, rightPanelOpen, rightPanelWidth })
     }
   )
 }

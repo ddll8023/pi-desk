@@ -21,9 +21,11 @@ import { app } from 'electron'
 import type { AutoUpdatePreference, ModelDisplayPreference, QuickSendPreference, UiPreferences, UiTheme } from '../shared/preferences-api'
 import {
   DEFAULT_QUICK_SEND_MESSAGES,
+  DEFAULT_RIGHT_PANEL_WIDTH,
   MAX_EXPANDED_PROJECTS,
   MAX_QUICK_SEND_MESSAGES,
-  MAX_QUICK_SEND_MESSAGE_LENGTH
+  MAX_QUICK_SEND_MESSAGE_LENGTH,
+  isRightPanelWidth
 } from '../shared/preferences-api'
 import type { ModelIdentity } from '../shared/runtime-api'
 import { isModelIdentity } from '../shared/runtime-api'
@@ -47,7 +49,10 @@ const MAX_STORED_WINDOW = 20_000
 export const DEFAULT_UI_PREFERENCES: UiPreferences = {
   sidebarCollapsed: false,
   theme: 'system',
-  expandedProjects: []
+  expandedProjects: [],
+  // 右侧面板默认展开：它是本应用的文件入口，收起后只剩顶部栏一个开关，默认藏起来等于没有；折叠状态会被记住。
+  rightPanelOpen: true,
+  rightPanelWidth: DEFAULT_RIGHT_PANEL_WIDTH
 }
 
 /** 窗口状态默认值；位置为 null 表示交给窗口自行居中。 */
@@ -129,7 +134,13 @@ function sanitizeUiPreferences(value: unknown): UiPreferences {
       ? value.sidebarCollapsed
       : DEFAULT_UI_PREFERENCES.sidebarCollapsed,
     theme: sanitizeTheme(value.theme),
-    expandedProjects: sanitizeExpandedProjects(value.expandedProjects)
+    expandedProjects: sanitizeExpandedProjects(value.expandedProjects),
+    rightPanelOpen: typeof value.rightPanelOpen === 'boolean'
+      ? value.rightPanelOpen
+      : DEFAULT_UI_PREFERENCES.rightPanelOpen,
+    rightPanelWidth: isRightPanelWidth(value.rightPanelWidth)
+      ? value.rightPanelWidth
+      : DEFAULT_UI_PREFERENCES.rightPanelWidth
   }
 }
 
