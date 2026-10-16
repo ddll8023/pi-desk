@@ -94,7 +94,8 @@ function tokenizeInline(src: string): Tokens.Generic | undefined {
   for (const { pattern, display } of INLINE_PATTERNS) {
     const match = pattern.exec(src)
     if (match === null) continue
-    const text = match[1].trim()
+    // 捕获组在类型上可缺省；这些定界符的组 1 是必需内容，缺省时按未命中处理。
+    const text = (match[1] ?? '').trim()
     if (text === '') continue
     return { type: 'math', raw: match[0], text, display }
   }
@@ -106,7 +107,7 @@ function tokenizeBlock(src: string): Tokens.Generic | undefined {
   for (const pattern of BLOCK_PATTERNS) {
     const match = pattern.exec(src)
     if (match === null) continue
-    const text = match[1].trim()
+    const text = (match[1] ?? '').trim()
     if (text === '') continue
     return { type: 'mathBlock', raw: match[0], text, display: true }
   }
