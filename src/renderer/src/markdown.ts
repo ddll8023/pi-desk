@@ -1,6 +1,10 @@
-/** 将消息文本解析为受限 Markdown HTML；原始 HTML 只作文本展示，图片不加载，链接只提供复制动作。 */
+/**
+ * 将消息文本解析为受限 Markdown HTML；原始 HTML 只作文本展示，图片不加载，链接只提供复制动作。
+ * 数学公式只输出占位元素，由 markdown-math.ts 在清洗后的 DOM 上渲染，清洗白名单不因此放开。
+ */
 import DOMPurify from 'dompurify'
 import { Marked, Renderer } from 'marked'
+import { createDisplayMathBlockExtension, createMathExtension } from './markdown-math'
 import type { Config } from 'dompurify'
 
 /** 只开放正文语义和本地复制控件；不允许样式、资源地址、事件、ID 或任意 data 属性。 */
@@ -24,6 +28,8 @@ const parser = new Marked({
   gfm: true,
   breaks: false,
   async: false,
+  // 数学定界符先于内置转义规则匹配；块级只接管行首的显示公式。
+  extensions: [createDisplayMathBlockExtension(escapeHtml), createMathExtension(escapeHtml)],
   renderer: {
     code({ text, lang }) {
       return renderCodeBlock(text, lang)

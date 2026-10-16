@@ -1,5 +1,6 @@
-/* 提供主界面的本地样式、层级令牌、紧凑刻度大纲动效与键盘焦点；暗色主题经 prefers-color-scheme 重定义同名令牌，由主进程 nativeTheme.themeSource 驱动。不加载外部字体或图标。 */
+/* 提供主界面的本地样式、层级令牌、紧凑刻度大纲动效与键盘焦点；暗色主题经 prefers-color-scheme 重定义同名令牌，由主进程 nativeTheme.themeSource 驱动。数学字体来自随包引入的 KaTeX，不请求网络资源，也不加载外部字体或图标。 */
 @import "tailwindcss";
+@import "katex/dist/katex.min.css";
 
 @theme {
   /* 页面底色与沉陷面：消息区用沉陷面与侧栏、输入区区分层次。 */
@@ -2986,7 +2987,7 @@
     color: inherit;
   }
 
-  /* Markdown 样式只作用于正文与 Thinking；颜色复用主题令牌，不依赖外部样式或字体。 */
+  /* Markdown 样式只作用于正文与 Thinking；颜色复用主题令牌；公式样式与字体随 KaTeX 一并引入，其余不依赖外部样式或字体。 */
   .markdown-content {
     --markdown-flow: 1rem;
     --markdown-section-gap: 1.75rem;
@@ -3227,6 +3228,38 @@
   .markdown-image-placeholder {
     color: var(--color-desk-muted);
     font-size: 0.8125rem;
+  }
+
+  /* 数学公式：占位元素在 KaTeX 渲染前只承载原文，渲染后由 KaTeX 的节点接管排版。 */
+  .markdown-math-block {
+    display: block;
+    max-width: 100%;
+    padding: 0.25rem 0;
+    overflow-x: auto;
+    text-align: center;
+  }
+
+  .markdown-math-block .katex-display {
+    margin: 0;
+  }
+
+  /* 行内公式保持行内流，随正文一起换行。 */
+  .markdown-math-inline {
+    display: inline;
+  }
+
+  .markdown-body .katex {
+    font-size: 1.05em;
+  }
+
+  /* 渲染失败时保留公式原文，用错误色与等宽字体与正文区分。 */
+  .markdown-math-block.is-error,
+  .markdown-math-inline.is-error {
+    color: var(--color-desk-danger);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.8125rem;
+    text-align: left;
+    white-space: pre-wrap;
   }
 
   .markdown-fallback {
