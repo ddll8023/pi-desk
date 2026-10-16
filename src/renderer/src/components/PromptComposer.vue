@@ -110,6 +110,39 @@ function applySessionInput(nextKey: string, previousKey: string | null): void {
 /** 会话切换只改输入归属，不改提交契约：草稿与附件始终属于当前会话。 */
 watch(() => sessionViewStore.key, (next, previous) => applySessionInput(next, previous ?? null), { flush: 'pre' })
 
+/** 回退交回的输入无法填入时的一次性说明；不常驻信息行。 */
+const refillHint = ref<string | null>(null)
+let refillHintTimer: ReturnType<typeof setTimeout> | null = null
+
+function showRefillHint(text: string): void {
+  refillHint.value = text
+  if (refillHintTimer !== null) clearTimeout(refillHintTimer)
+  refillHintTimer = setTimeout(() => {
+    refillHint.value = null
+    refillHintTimer = null
+  }, 6_000)
+}
+
+/**
+ * 回退与修改重试交回的输入：草稿与附件都为空时填入并聚焦，用户已输入内容时保留其输入并说明原因。
+ * 交回内容来自原消息（文本与可还原的附件），用户可直接修改后发送。
+ */
+function applyRequestedInput(): void {
+  const restored = sessionViewStore.consumeRequestedInput()
+  if (restored === null) return
+  if (draft.value.trim() !== '' || pendingImages.value.length > 0) {
+    // 不覆盖用户正在写的内容；交回内容里没人接管的附件预览在这里释放。
+    sessionViewStore.releaseImages(restored.images)
+    showRefillHint('回退已完成；输入框已有内容，原消息文本未填入。')
+    return
+  }
+  draft.value = restored.draft
+  pendingImages.value = restored.images
+  textarea.value?.focus()
+}
+
+watch(() => sessionViewStore.requestedInput, applyRequestedInput)
+
 /** 快捷发送候选：与草稿内容无关，选中即用该短语发起一次提交；短语来自界面偏好，可在设置里编辑。 */
 const quickSendMessages = computed(() => preferencesStore.quickSendMessages)
 const quickSendOpen = ref(false)
@@ -174,7 +207,7 @@ const compactErrorText = computed(() => {
 })
 
 const status = computed<{ readonly kind: 'info' | 'error'; readonly text: string } | null>(() => {
-  if (rewindView.value.phase === 'requesting') return { kind: 'info', text: '正在回退对话；草稿保留，完成后才能发送。' }
+  if (rewindView.value.phase === 'requesting') return { kind: 'info', text: '正在回退对话；完成后原消息文本会回到输入框。' }
   if (rewindView.value.phase === 'error' && rewindView.value.blocked) return { kind: 'error', text: rewindView.value.error.message }
   if (preparingPrompt.value) return { kind: 'info', text: '正在读取附件并提交输入。' }
   if (abortView.value.phase === 'error') {
@@ -232,6 +265,8 @@ const status = computed<{ readonly kind: 'info' | 'error'; readonly text: string
   }
   // 命令被拦下的一次性说明：运行中不占常驻信息行，只有用户刚按过 Enter 时才解释原因。
   if (commandHint.value !== null) return { kind: 'info', text: commandHint.value }
+  // 回退交回的输入没能填入时的一次性说明。
+  if (refillHint.value !== null) return { kind: 'info', text: refillHint.value }
   // 运行中不再占信息行：Agent 是否在跑由右下角的停止按钮表达。
   if (projectionSync.value !== 'synced') {
     return { kind: 'info', text: '消息仍在同步，稍后才能提交输入。' }
@@ -472,6 +507,7 @@ onUnmounted(() => {
   cancelFileSearch()
   if (newSessionHintTimer !== null) clearTimeout(newSessionHintTimer)
   if (commandHintTimer !== null) clearTimeout(commandHintTimer)
+  if (refillHintTimer !== null) clearTimeout(refillHintTimer)
   // 已绑定会话的输入交给会话状态留底，切回时恢复；空闲与未绑定状态没有独立历史，直接释放预览地址。
   if (isSessionKey(sessionViewStore.key)) {
     sessionViewStore.saveInput(sessionViewStore.key, { draft: draft.value, images: pendingImages.value })

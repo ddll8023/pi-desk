@@ -10,10 +10,14 @@
  *
  * 会话键取自前台实例报告的会话身份，并在同一实例暂时失去会话身份（宿主失败、关闭中）时沿用上一次：
  * 否则一次宿主故障就会把用户输入判给另一个会话。跨应用重启保留草稿与图片不在本任务范围内。
+ *
+ * 另有一条不挂在会话键上的通道：回退与修改重试把原消息文本与附件交回输入区，
+ * 它跨越回退新建的会话身份变化，因此只保留一份、由输入区消费一次。
  */
 import { defineStore } from 'pinia'
 import { computed, ref, watch } from 'vue'
 import type { WatchStopHandle } from 'vue'
+import type { PromptImageInput } from '../../../shared/runtime-api'
 import { useRuntimeStore } from './runtime'
 
 /** 待发送的图片附件：objectUrl 只用于本地预览，发送时读取 base64 并释放。 */
@@ -50,6 +54,11 @@ export const useSessionViewStore = defineStore('session-view', () => {
   /** 已离开会话的输入与阅读状态；切回时取走，不在视图里保留第二份。 */
   const inputs = new Map<string, SessionInput>()
   const readings = new Map<string, SessionReading>()
+  /**
+   * 由界面动作（回退、修改重试未被受理）交回输入区的待填内容。
+   * 它跨越会话身份变化（回退会新建会话），因此不挂在会话键上；输入区消费一次后不再保留。
+   */
+  const requestedInput = ref<SessionInput | null>(null)
   let stopRuntimeWatch: WatchStopHandle | null = null
 
   /** 前台实例报告的会话身份；未就绪或宿主失败时为空。 */
@@ -75,6 +84,10 @@ export const useSessionViewStore = defineStore('session-view', () => {
     for (const input of inputs.values()) releaseImages(input.images)
     inputs.clear()
     readings.clear()
+    if (requestedInput.value !== null) {
+      releaseImages(requestedInput.value.images)
+      requestedInput.value = null
+    }
   }
 
   /** 换实例时重置会话身份；同一实例仍报告同一会话时保持，暂时失去会话身份时沿用上一次。 */
@@ -132,6 +145,30 @@ export const useSessionViewStore = defineStore('session-view', () => {
     return { file, objectUrl: URL.createObjectURL(file) }
   }
 
+  /**
+   * 交回一份待填输入：附件按 base64 还原成本地文件与预览地址。
+   * 同一时刻只保留最后一次请求，被替换的未消费预览在这里释放。
+   */
+  function requestInput(draft: string, images: readonly PromptImageInput[]): void {
+    if (requestedInput.value !== null) releaseImages(requestedInput.value.images)
+    requestedInput.value = { draft, images: images.map(toPendingImage) }
+  }
+
+  /** 取走待填输入；输入区消费一次后这里不再保留副本。 */
+  function consumeRequestedInput(): SessionInput | null {
+    const value = requestedInput.value
+    requestedInput.value = null
+    return value
+  }
+
+  /** base64 附件还原为本地文件；名称只用于提示与预览，不保留原始文件名。 */
+  function toPendingImage(image: PromptImageInput, index: number): PendingImage {
+    const binary = atob(image.data)
+    const bytes = new Uint8Array(binary.length)
+    for (let offset = 0; offset < binary.length; offset += 1) bytes[offset] = binary.charCodeAt(offset)
+    return createImage(new File([bytes], image.name === '' ? `附件${index + 1}` : image.name, { type: image.mimeType }))
+  }
+
   /** 释放附件预览地址；重复释放同一地址没有副作用。 */
   function releaseImages(images: readonly PendingImage[]): void {
     for (const image of images) URL.revokeObjectURL(image.objectUrl)
@@ -139,12 +176,15 @@ export const useSessionViewStore = defineStore('session-view', () => {
 
   return {
     key,
+    requestedInput,
     initialize,
     dispose,
     takeInput,
     saveInput,
     takeReading,
     saveReading,
+    requestInput,
+    consumeRequestedInput,
     createImage,
     releaseImages
   }

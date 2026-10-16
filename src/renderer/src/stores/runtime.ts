@@ -692,7 +692,8 @@ export const useRuntimeStore = defineStore('runtime', () => {
         rewindView.value = { phase: 'error', error: { code: 'INVALID_RESPONSE', message: '对话已回退，但消息同步失败；请重新打开会话。' }, blocked: true }
         return false
       }
-      rewindView.value = { phase: 'done', cancelled: false }
+      // 成功不留下常驻状态：交回输入框的文本与附件由调用方处理，这里只表达动作已结束。
+      rewindView.value = { phase: 'idle' }
       return true
     } finally {
       if (sequence === rewindRequest && rewindView.value.phase === 'requesting') rewindView.value = { phase: 'idle' }

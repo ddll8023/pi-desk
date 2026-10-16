@@ -12,8 +12,10 @@
  * 之后的用户文本；同样由 Pi 注入的图片坐标说明行也在这里剥离——两者都不是用户输入，不应进入
  * 气泡、摘要与复制内容。本轮响应计时（`turn`）与单次调用用量（`usage`）只做透传，口径与数值都由投影决定。
  * 压缩记录（`role === 'compaction'`）同样只做透传：它的摘要与 token 数来自投影，不由本模块推算。
+ * `userMessagePayload` 反向把一条用户消息还原成可再次提交的输入（文本与附件），供复制、修改预填与回退回填共用。
  */
-import type { MessageUsage, ProjectionBlock, ProjectionCompaction, ProjectionMessage, ToolExecution } from '../../shared/runtime-api'
+import { PROMPT_IMAGE_MAX_CHARS, PROMPT_IMAGE_MAX_COUNT } from '../../shared/runtime-api'
+import type { MessageUsage, ProjectionBlock, ProjectionCompaction, ProjectionMessage, PromptImageInput, ToolExecution } from '../../shared/runtime-api'
 import { parseSkillBlock, stripImageMarkerLines } from '../../shared/user-message-text'
 
 /** 工具调用块的渲染项；`execution` 为 null 表示该工具调用没有对应执行条目（尚未到达或历史中没有结果）。 */
@@ -66,6 +68,62 @@ export interface ChatMessageView {
   readonly turn: ProjectionMessage['turn']
   /** 压缩记录；仅压缩消息非 null，界面据此渲染压缩卡片。 */
   readonly compaction: ProjectionCompaction | null
+}
+
+/**
+ * 用户消息的可编辑载荷：复制、修改预填与回退回填共用这一份还原规则。
+ * `skippedImages` 是无法还原的附件数：超出 prompt 上限，或投影已丢弃本体只留说明。
+ */
+export interface UserMessagePayload {
+  readonly text: string
+  readonly images: readonly PromptImageInput[]
+  readonly skippedImages: number
+}
+
+/**
+ * 把一条用户消息还原成可再次提交的输入：技能块还原为 `/skill:<名称> <追加文本>`，
+ * 附件说明与图片块不计入文本；图片从投影的 data URL 取回 base64，并按主进程同一份上限裁剪。
+ */
+export function userMessagePayload(message: ChatMessageView): UserMessagePayload {
+  const parts: string[] = []
+  const images: PromptImageInput[] = []
+  let skippedImages = 0
+  for (const block of message.blocks) {
+    if (block.kind !== 'text') continue
+    if (block.image !== null) {
+      const data = base64OfDataUrl(block.image.dataUrl)
+      if (images.length < PROMPT_IMAGE_MAX_COUNT && data.length <= PROMPT_IMAGE_MAX_CHARS) {
+        images.push({ name: `附件${images.length + 1}.${extensionOf(block.image.mimeType)}`, mimeType: block.image.mimeType, data })
+      } else {
+        skippedImages += 1
+      }
+      continue
+    }
+    // 投影生成的附件说明不是用户输入，只表示这条消息带过一张无法还原的图片。
+    if (block.notice) {
+      skippedImages += 1
+      continue
+    }
+    parts.push(block.skill === null ? block.text : skillCommandText(block.skill.name, block.text))
+  }
+  return { text: parts.join('\n'), images, skippedImages }
+}
+
+/** 技能消息的提交形态：Pi 收到后会重新展开技能，改写不会静默丢掉技能调用。 */
+function skillCommandText(name: string, userText: string): string {
+  return userText === '' ? `/skill:${name}` : `/skill:${name} ${userText}`
+}
+
+/** 取 data URL 里的 base64 本体；没有分隔符时按整串处理，不猜结构。 */
+function base64OfDataUrl(dataUrl: string): string {
+  const comma = dataUrl.indexOf(',')
+  return comma === -1 ? dataUrl : dataUrl.slice(comma + 1)
+}
+
+/** 还原附件用的文件扩展名；MIME 不含子类型时退回 `png`。 */
+function extensionOf(mimeType: string): string {
+  const subtype = mimeType.split('/')[1] ?? ''
+  return subtype === '' ? 'png' : subtype.replace(/[^A-Za-z0-9]/g, '')
 }
 
 /** 一条消息引用到的工具条目；复用判定要求工具条目对象也未变化。 */

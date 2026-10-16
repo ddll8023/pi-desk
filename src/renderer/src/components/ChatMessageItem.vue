@@ -2,7 +2,8 @@
 <script setup lang="ts">
 import { computed, onUnmounted, reactive, ref, useId, watch } from 'vue'
 import { copyText } from '../clipboard'
-import type { ChatMessageView, ChatTextBlock } from '../chat-view'
+import { userMessagePayload } from '../chat-view'
+import type { ChatMessageView } from '../chat-view'
 import { formatDuration, useTickingNow } from '../clock'
 import { cacheHitRate, formatTokens } from '../usage-format'
 import { thinkingPreviewText } from '../thinking-preview'
@@ -13,6 +14,8 @@ import AppButton from './ui/AppButton.vue'
 const props = defineProps<{
   readonly message: ChatMessageView
   readonly actionsDisabled?: boolean
+  /** 动作栏不可用的原因；禁用时替换默认 tooltip，用户据此知道在等什么。 */
+  readonly disabledReason?: string | null
 }>()
 
 const emit = defineEmits<{
@@ -36,12 +39,14 @@ onUnmounted(() => {
   if (copyFeedbackTimer !== null) window.clearTimeout(copyFeedbackTimer)
 })
 
-/** 复制与修改预填都取「用户实际输入」：技能消息还原成 Pi 命令形态，投影生成的附件说明不计入。 */
-const messageText = computed(() => props.message.blocks
-  .filter(block => block.kind === 'text' && block.image === null && !block.notice)
-  .map(block => (block.kind === 'text' ? blockUserText(block) : ''))
-  .join('\n'))
+/** 复制与修改预填共用同一份还原：技能消息还原成 Pi 命令形态，投影生成的附件说明不计入。 */
+const messageText = computed(() => userMessagePayload(props.message).text)
 const hasText = computed(() => messageText.value.trim() !== '')
+
+/** 禁用原因只在动作栏确实不可用时展示，不影响启用态的默认说明。 */
+const unavailableReason = computed(() => (props.actionsDisabled === true ? props.disabledReason ?? null : null))
+const rewindTooltip = computed(() => unavailableReason.value ?? '回到这条消息之前')
+const editTooltip = computed(() => unavailableReason.value ?? '修改消息')
 
 /**
  * 操作栏的显示条件：有可复制的用户文本，或有图片附件、技能调用、附件说明这类仍需保留回退入口的内容。
@@ -267,15 +272,6 @@ function toggleCompaction(key: string): void {
   compactionOverrides.set(key, !isCompactionExpanded(key))
 }
 
-/**
- * 文本块在复制与修改预填里用的用户文本：技能消息还原为 `/skill:<名称> <追加文本>`。
- * 该形态提交后会由 Pi 重新展开技能，因此改写不会静默丢掉技能调用。
- */
-function blockUserText(block: ChatTextBlock): string {
-  if (block.skill === null) return block.text
-  return block.text === '' ? `/skill:${block.skill.name}` : `/skill:${block.skill.name} ${block.text}`
-}
-
 /** 进入编辑态：预填用户实际输入（技能消息还原为 `/skill:` 命令形态），聚焦输入框，禁用其他操作。 */
 function startEdit(): void {
   if (editing.value || props.actionsDisabled || !hasText.value) return
@@ -457,7 +453,7 @@ function onEditKeydown(event: KeyboardEvent): void {
             <path d="M4 10a8 8 0 1 1 1.8 7.1" />
             <path d="M4 4v6h6M12 7v5l3 2" />
           </svg>
-          <span :id="`${tooltipId}-rewind`" role="tooltip" class="chat-message-action-tooltip">回到这条消息之前</span>
+          <span :id="`${tooltipId}-rewind`" role="tooltip" class="chat-message-action-tooltip">{{ rewindTooltip }}</span>
         </AppButton>
         <AppButton
           variant="unstyled"
@@ -488,7 +484,7 @@ function onEditKeydown(event: KeyboardEvent): void {
           <svg viewBox="0 0 24 24" aria-hidden="true">
             <path d="m15 5 4 4M4 20l4.5-1 11-11a2.8 2.8 0 0 0-4-4l-11 11L4 20Z" />
           </svg>
-          <span :id="`${tooltipId}-edit`" role="tooltip" class="chat-message-action-tooltip">修改消息</span>
+          <span :id="`${tooltipId}-edit`" role="tooltip" class="chat-message-action-tooltip">{{ editTooltip }}</span>
         </AppButton>
       </div>
     </div>
@@ -503,7 +499,7 @@ function onEditKeydown(event: KeyboardEvent): void {
         @keydown="onEditKeydown"
       />
       <div class="chat-message-edit-actions">
-        <p class="chat-message-edit-hint">提交将回退到该消息之前并用修改后的文本重新发送。原消息中的图片附件无法恢复。</p>
+        <p class="chat-message-edit-hint">提交将回退到该消息之前并用修改后的文本重新发送；原消息的图片附件会一起重发，超出大小上限或投影已丢弃的除外。</p>
         <div class="chat-message-edit-buttons">
           <AppButton variant="default" :disabled="actionsDisabled" @click="cancelEdit">取消</AppButton>
           <AppButton variant="primary" :disabled="actionsDisabled || editDraft.trim() === ''" @click="submitEdit">提交</AppButton>
@@ -616,7 +612,8 @@ function onEditKeydown(event: KeyboardEvent): void {
   content: '';
 }
 
-.chat-message-action:not(:disabled):hover .chat-message-action-tooltip,
+/* 禁用时也展示 tooltip：回退不可用的原因必须能看到，否则只剩一个灰按钮。 */
+.chat-message-action:hover .chat-message-action-tooltip,
 .chat-message-action:focus-visible .chat-message-action-tooltip {
   opacity: 1;
   visibility: visible;
@@ -630,7 +627,7 @@ function onEditKeydown(event: KeyboardEvent): void {
   transform: translate(0, 3px);
 }
 
-.chat-message-action:last-child:not(:disabled):hover .chat-message-action-tooltip,
+.chat-message-action:last-child:hover .chat-message-action-tooltip,
 .chat-message-action:last-child:focus-visible .chat-message-action-tooltip {
   transform: translate(0, 0);
 }

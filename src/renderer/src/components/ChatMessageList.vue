@@ -1,9 +1,9 @@
-<!-- 消息区：按投影渲染、粘底与大纲导航；承接用户消息回退确认与修改提交，回退会新建会话（列表折叠为一条），项目文件不回退。 -->
+<!-- 消息区：按投影渲染、粘底与大纲导航；承接用户消息回退确认与修改提交，回退会新建会话（列表折叠为一条），项目文件不回退；回退与修改重试都把原消息文本与可还原的附件交回输入框。 -->
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { createChatViewCache } from '../chat-view'
-import type { ChatMessageView } from '../chat-view'
+import { createChatViewCache, userMessagePayload } from '../chat-view'
+import type { ChatMessageView, UserMessagePayload } from '../chat-view'
 import type { RuntimeRewindRequest } from '../../../shared/runtime-api'
 import { useProjectStore } from '../stores/project'
 import { useRuntimeStore } from '../stores/runtime'
@@ -66,52 +66,104 @@ const runtimeInfo = computed(() => (
 const streaming = computed(() => runtimeInfo.value?.isStreaming === true)
 /** 压缩进行中：运行提示改成压缩文案，但不改变粘底与停止键的行为。 */
 const compacting = computed(() => runtimeInfo.value?.isCompacting === true)
-const pendingRewind = ref<{ request: RuntimeRewindRequest } | null>(null)
-const pendingEdit = ref<{ messageId: string; text: string } | null>(null)
-const canRewind = computed(() => runtimeView.value.phase === 'ready' && runtimeInfo.value?.sessionId != null
-  && !streaming.value && projectionSync.value === 'synced' && !preparingPrompt.value
-  && promptView.value.phase !== 'sending' && modelSwitchView.value.phase !== 'switching'
-  && rewindView.value.phase !== 'requesting' && !(rewindView.value.phase === 'error' && rewindView.value.blocked)
-  && !sessionStore.opening && !sessionStore.awaitingTrust && !sessionStore.awaitingInterrupt)
-const rewindDetail = computed(() => '回退会新建一条会话继续，原会话保留在本机但不再单独列出。仅回退对话，不撤销项目文件改动。')
+const pendingRewind = ref<{ request: RuntimeRewindRequest; refill: UserMessagePayload } | null>(null)
+/** 修改重试进行中：回退与重发期间用它区分提示文案。 */
+const pendingEdit = ref(false)
+/** 回退后没能恢复的附件说明；一次性展示，不常驻。 */
+const refillNotice = ref<string | null>(null)
+let refillNoticeTimer: ReturnType<typeof setTimeout> | null = null
 
-/** 发起确认时固定目标（运行实例、代际与会话）；用户确认前不会改变历史。 */
+/**
+ * 不可回退的具体原因；为空表示可以回退。
+ * 操作栏的禁用态与 tooltip 都取自它，用户能看到在等什么，而不是只有一个灰按钮。
+ */
+const rewindBlockReason = computed<string | null>(() => {
+  if (runtimeView.value.phase !== 'ready') return '当前没有可回退的会话。'
+  if (runtimeInfo.value?.sessionId == null) return '会话尚未建立，暂时不能回退。'
+  if (streaming.value) return 'Agent 正在运行；先停止当前轮次再回退。'
+  if (projectionSync.value !== 'synced') return '消息仍在与主进程同步，稍后再回退。'
+  if (preparingPrompt.value) return '正在读取附件并提交输入，稍后再回退。'
+  if (promptView.value.phase === 'sending') return '正在发送消息，稍后再回退。'
+  if (modelSwitchView.value.phase === 'switching') return '正在切换模型，稍后再回退。'
+  if (rewindView.value.phase === 'requesting') return '正在回退对话。'
+  if (rewindView.value.phase === 'error' && rewindView.value.blocked) return '上次回退结果未知；请重新打开会话。'
+  if (sessionStore.opening) return '正在打开会话，稍后再回退。'
+  if (sessionStore.awaitingTrust) return '等待项目信任确认，暂时不能回退。'
+  if (sessionStore.awaitingInterrupt) return '等待当前操作确认，暂时不能回退。'
+  return null
+})
+const canRewind = computed(() => rewindBlockReason.value === null)
+const rewindDetail = computed(() => '回退会新建一条会话继续，原会话保留在本机但不再单独列出。仅回退对话，不撤销项目文件改动；原消息文本会回到输入框。')
+
+/** 目标消息的可提交内容（文本与可还原附件）；目标已不在投影里时返回 null，调用方据此不发起回退。 */
+function userMessagePayloadOf(messageId: string): UserMessagePayload | null {
+  const message = chatMessages.value.find(candidate => candidate.id === messageId)
+  return message === undefined ? null : userMessagePayload(message)
+}
+
+/**
+ * 把回退拿回的消息内容交回输入框；无法还原的附件只在这里说明，不静默丢。
+ * `action` 决定文案说的是回退还是修改重试。
+ */
+function handBack(refill: UserMessagePayload, action: '回退' | '修改重试'): void {
+  sessionViewStore.requestInput(refill.text, refill.images)
+  if (refill.skippedImages === 0) return
+  refillNotice.value = `${action}完成；${refill.skippedImages} 张超出大小上限或已被投影丢弃的图片附件未恢复。`
+  if (refillNoticeTimer !== null) clearTimeout(refillNoticeTimer)
+  refillNoticeTimer = setTimeout(() => {
+    refillNotice.value = null
+    refillNoticeTimer = null
+  }, 8_000)
+}
+
+/** 发起确认时固定目标（运行实例、代际与会话）并捕获要交回输入框的原消息内容；用户确认前不会改变历史。 */
 function requestRewind(messageId: string): void {
   if (!canRewind.value || runtimeView.value.phase !== 'ready') return
   const runId = runtimeView.value.snapshot.runId
   const runtimeId = runtimeView.value.snapshot.runtimeId
   const sessionId = runtimeInfo.value?.sessionId
   if (runId === null || runtimeId === null || sessionId == null) return
-  pendingRewind.value = { request: { runId, runtimeId, sessionId, messageId } }
+  const refill = userMessagePayloadOf(messageId)
+  if (refill === null) return
+  pendingRewind.value = { request: { runId, runtimeId, sessionId, messageId }, refill }
 }
 
-/** 直接回退：仅权威成功才刷新会话列表。 */
+/** 直接回退：成功后把原消息内容交回输入框；仅权威成功才刷新会话列表。 */
 async function confirmRewind(): Promise<void> {
   const pending = pendingRewind.value
   pendingRewind.value = null
   if (pending === null || !canRewind.value) return
-  if (await runtimeStore.rewind(pending.request)) await sessionStore.refresh()
+  if (!await runtimeStore.rewind(pending.request)) return
+  handBack(pending.refill, '回退')
+  await sessionStore.refresh()
 }
 
-/** 修改提交：回退成功后立即发送修改文本，再刷新会话列表。 */
+/**
+ * 修改提交：回退成功后立即用修改后的文本与原附件重发；
+ * 发送没被受理时把内容交回输入框，不让已从分支移除的消息成为唯一副本。
+ */
 async function handleSubmitEdit(messageId: string, text: string): Promise<void> {
   if (!canRewind.value || runtimeView.value.phase !== 'ready') return
   const runId = runtimeView.value.snapshot.runId
   const runtimeId = runtimeView.value.snapshot.runtimeId
   const sessionId = runtimeInfo.value?.sessionId
   if (runId === null || runtimeId === null || sessionId == null) return
+  const refill = userMessagePayloadOf(messageId)
+  if (refill === null) return
   const request: RuntimeRewindRequest = { runId, runtimeId, sessionId, messageId }
-  pendingEdit.value = { messageId, text }
-  const success = await runtimeStore.rewind(request)
-  if (!success) {
-    // 回退失败，保持编辑态，用户可再次尝试
-    pendingEdit.value = null
-    return
+  pendingEdit.value = true
+  try {
+    // 回退失败时保持编辑态，用户可再次尝试。
+    if (!await runtimeStore.rewind(request)) return
+    const before = promptView.value
+    await runtimeStore.send(text, refill.images)
+    if (promptView.value === before || promptView.value.phase !== 'accepted') {
+      handBack({ text, images: refill.images, skippedImages: refill.skippedImages }, '修改重试')
+    }
+    await sessionStore.refresh()
+  } finally {
+    pendingEdit.value = false
   }
-  // 回退成功，发送修改文本
-  await runtimeStore.send(text, [])
-  await sessionStore.refresh()
-  pendingEdit.value = null
 }
 /** 消息 ID 只在单个运行实例内唯一；实例或会话切换后不能复用旧消息组件的手动开合状态。 */
 const syncNotice = computed(() => {
@@ -416,6 +468,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   // 视图卸载（例如切到设置页）时按会话留底；这里已读不到 DOM，用最后一次已知的滚动位置。
   if (isSessionKey(sessionViewStore.key)) sessionViewStore.saveReading(sessionViewStore.key, currentReading())
+  if (refillNoticeTimer !== null) clearTimeout(refillNoticeTimer)
   resizeObserver?.disconnect()
   if (scrollFrame !== null) cancelAnimationFrame(scrollFrame)
   if (outlineFrame !== null) cancelAnimationFrame(outlineFrame)
@@ -436,15 +489,17 @@ onBeforeUnmount(() => {
       <div ref="content" class="chat-column mx-auto flex flex-col gap-5">
         <p v-if="syncNotice" role="status" class="status-notice status-notice-info">{{ syncNotice }}</p>
         <p v-if="truncationNotice" role="status" class="status-notice">{{ truncationNotice }}</p>
-        <p v-if="rewindView.phase === 'requesting'" role="status" class="status-notice status-notice-info">正在回退对话并同步历史…</p>
+        <p v-if="rewindView.phase === 'requesting'" role="status" class="status-notice status-notice-info">{{ pendingEdit ? '正在回退并重发修改后的消息…' : '正在回退对话并同步历史…' }}</p>
         <p v-else-if="rewindView.phase === 'error'" role="alert" class="status-notice status-notice-error">{{ rewindView.error.message }}</p>
-        <p v-else-if="rewindView.phase === 'done' && rewindView.cancelled" role="status" class="status-notice">Pi 扩展取消了回退；草稿未被替换。</p>
+        <p v-else-if="rewindView.phase === 'done' && rewindView.cancelled" role="status" class="status-notice">Pi 扩展取消了回退；原消息文本未交回输入框。</p>
+        <p v-if="refillNotice !== null" role="status" class="status-notice">{{ refillNotice }}</p>
 
         <ChatMessageItem
           v-for="message in chatMessages"
           :key="`${conversationKey}:${message.id}`"
           :message="message"
           :actions-disabled="!canRewind"
+          :disabled-reason="rewindBlockReason"
           :data-message-id="message.id"
           @rewind="requestRewind"
           @submit-edit="handleSubmitEdit"
