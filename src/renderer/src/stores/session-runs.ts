@@ -4,11 +4,12 @@
  * 状态只来自主进程登记与宿主已持有的状态，页面不自行推断占用：同一会话在应用内至多对应一个运行实例，
  * 这里按「归属项目 + 会话 id」归集。等待审批、运行中、未确认退出都必须如实展示，不把阻塞态显示成空闲。
  * 列表只含低频字段，流式期间不会逐条消息触发广播。
+ * 释放与结束都经本模块提交：释放只解除登记，结束额外中断在途工作并关闭宿主，两者的失败原因都如实保留。
  */
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import type { SessionRunState, SessionRunsSnapshot } from '../../../shared/session-run-api'
-import { getSessionRuns, releaseSessionRun, subscribeSessionRuns } from '../services/session-runs'
+import { getSessionRuns, releaseSessionRun, closeSessionRun, subscribeSessionRuns } from '../services/session-runs'
 
 /** 单个会话的展示状态；优先级从高到低：未确认退出 → 失败 → 等待回应 → 执行中 → 已就绪 → 已回收 → 打开/关闭中。 */
 export type SessionRunBadge =
@@ -54,6 +55,9 @@ export const useSessionRunsStore = defineStore('session-runs', () => {
   /** 最近一次释放动作的失败原因；只在侧栏展示，不改变运行状态本身。 */
   const releaseError = ref<string | null>(null)
   const releasing = ref(false)
+  /** 最近一次结束动作的失败原因；结束失败时占用仍被保留，界面据此提示而不是假装已收尾。 */
+  const closeError = ref<string | null>(null)
+  const closing = ref(false)
   let releaseSubscription: (() => void) | null = null
 
   /** 先订阅、再取快照，避免初始化期间漏掉通知。 */
@@ -113,6 +117,32 @@ export const useSessionRunsStore = defineStore('session-runs', () => {
     releaseError.value = null
   }
 
+  /**
+   * 结束一个运行实例：中断在途工作、解除占用并关闭它的宿主进程，保留会话历史文件。
+   * 与释放的区别是不再让宿主留在空闲池里复用；失败原因如实保留，调用方据此决定是否继续收起界面。
+   */
+  async function close(runId: number): Promise<boolean> {
+    if (closing.value) return false
+    closing.value = true
+    closeError.value = null
+    try {
+      const result = await closeSessionRun(runId)
+      if (!result.ok) {
+        closeError.value = result.error.message
+        return false
+      }
+      applySnapshot(result.data)
+      return true
+    } finally {
+      closing.value = false
+    }
+  }
+
+  /** 关闭结束失败的提示；不重试、不改写占用状态。 */
+  function clearCloseError(): void {
+    closeError.value = null
+  }
+
   /** 会话行要展示的状态；未登记的会话没有运行状态，界面按普通历史条目展示。 */
   function viewOfSession(projectPath: string | null, sessionId: string | null): SessionRunView | null {
     const run = runOfSession(projectPath, sessionId)
@@ -132,10 +162,14 @@ export const useSessionRunsStore = defineStore('session-runs', () => {
     foregroundRunId,
     releaseError,
     releasing,
+    closeError,
+    closing,
     initialize,
     dispose,
     release,
     clearReleaseError,
+    close,
+    clearCloseError,
     runOfSession,
     viewOfSession
   }

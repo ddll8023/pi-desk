@@ -1,8 +1,9 @@
 /**
- * 终端标签状态：按项目分组的终端清单、活动标签、标题与错误提示。
+ * 终端状态：按项目分组的终端清单、标题与错误提示。
  *
- * 终端进程只在主进程，这里只保存展示副本：标签在项目内分组，切换项目就换一组标签，与项目/会话的
- * 语义一致；关闭标签只关闭那一个终端，不影响其他项目仍在运行的终端。
+ * 终端进程只在主进程，这里只保存展示副本：清单在项目内分组，切换项目就换一组，与项目/会话的
+ * 语义一致；标签顺序与活动标签由工作区标签状态负责（见 workspace-tabs），关闭终端只关闭那一个终端，
+ * 不影响其他项目仍在运行的终端。
  *
  * 输出分发按「是否已挂载终端视图」分流：当前项目的终端都保持挂载的 xterm 实例（非活动标签只是隐藏），
  * 输出交给它并在 xterm 写完这一段后回报已消费字符数；终端刚建立、视图还没挂载的短暂窗口先暂存再回放，
@@ -24,9 +25,6 @@ import {
 } from '../services/terminal'
 import { useProjectStore } from './project'
 
-/** 对话标签的固定标识；它与终端标签同处一个标签组。 */
-export const CHAT_TAB_ID = 'chat'
-
 /** 终端创建时的初始尺寸；真实尺寸在终端视图挂载后按容器测量并同步。 */
 const INITIAL_COLS = 80
 const INITIAL_ROWS = 24
@@ -47,9 +45,6 @@ export const useTerminalStore = defineStore('terminal', () => {
   /** 最近一次操作的失败原因；展示后由界面关闭，不影响已建立的终端。 */
   const error = ref<string | null>(null)
   const creating = ref(false)
-  /** 按项目记住的活动标签，切换项目后回到该项目上次看的标签。 */
-  const activeTabs = new Map<string, string>()
-  const activeTab = ref<string>(CHAT_TAB_ID)
   /** 已挂载的终端视图；只有当前项目的终端会挂载。 */
   const writers = new Map<string, TerminalWriter>()
   /** 当前项目里尚未挂载视图的终端输出：终端建立到视图挂载之间不能丢掉提示符。 */
@@ -60,7 +55,7 @@ export const useTerminalStore = defineStore('terminal', () => {
 
   const currentProjectPath = computed(() => projectStore.currentProject?.path ?? null)
 
-  /** 当前项目的终端标签；顺序即标签顺序。 */
+  /** 当前项目的终端；顺序即主进程清单顺序，标签顺序由工作区标签状态决定。 */
   const projectSessions = computed(() => (
     sessions.value.filter((session) => session.projectPath === currentProjectPath.value)
   ))
@@ -75,11 +70,7 @@ export const useTerminalStore = defineStore('terminal', () => {
     }
     if (stopProjectWatch !== null) return
     stopProjectWatch = watch(currentProjectPath, (projectPath) => {
-      if (projectPath === null) {
-        activeTab.value = CHAT_TAB_ID
-        return
-      }
-      activeTab.value = activeTabs.get(projectPath) ?? CHAT_TAB_ID
+      if (projectPath === null) return
       void ensureLoaded(projectPath)
     }, { immediate: true })
   }
@@ -111,7 +102,7 @@ export const useTerminalStore = defineStore('terminal', () => {
     pruneLocalState()
   }
 
-  /** 清理已不存在的终端留下的本地状态：标题、重命名标记、待回放输出与记忆的活动标签。 */
+  /** 清理已不存在的终端留下的本地状态：标题、重命名标记与待回放输出。 */
   function pruneLocalState(): void {
     const alive = new Set(sessions.value.map((session) => session.id))
     const nextTitles: Record<string, string> = {}
@@ -127,40 +118,33 @@ export const useTerminalStore = defineStore('terminal', () => {
       pendingOutput.delete(id)
       pendingOutputChars.delete(id)
     }
-    for (const [projectPath, tab] of [...activeTabs]) {
-      if (tab === CHAT_TAB_ID || alive.has(tab)) continue
-      activeTabs.delete(projectPath)
-    }
-    if (activeTab.value !== CHAT_TAB_ID && !alive.has(activeTab.value)) setActiveTab(CHAT_TAB_ID)
   }
 
-  /** 在当前项目内新建终端并切到它；失败时保留原因供界面提示。 */
-  async function createTerminal(): Promise<void> {
+  /** 在当前项目内新建终端并返回它的标识；失败时保留原因供界面提示，不建立标签。 */
+  async function createTerminal(): Promise<string | null> {
     const projectPath = currentProjectPath.value
     if (projectPath === null) {
       error.value = '先选择项目，再新建终端。'
-      return
+      return null
     }
-    if (creating.value) return
+    if (creating.value) return null
     creating.value = true
     error.value = null
     try {
       const result = await createTerminalBridge({ projectPath, cols: INITIAL_COLS, rows: INITIAL_ROWS })
       if (!result.ok) {
         error.value = result.error.message
-        return
+        return null
       }
       sessions.value = [...sessions.value, result.data]
-      setActiveTab(result.data.id)
+      return result.data.id
     } finally {
       creating.value = false
     }
   }
 
-  /** 关闭一个终端并收敛它的进程树；关闭当前标签时切到相邻标签，没有相邻标签就回到对话。 */
+  /** 关闭一个终端并收敛它的进程树；关闭失败时终端保留在清单里，由调用方决定是否收起标签。 */
   async function closeTerminal(id: string): Promise<void> {
-    const list = projectSessions.value
-    const index = list.findIndex((session) => session.id === id)
     const result = await closeTerminalBridge(id)
     if (!result.ok) {
       error.value = result.error.message
@@ -168,16 +152,6 @@ export const useTerminalStore = defineStore('terminal', () => {
     }
     sessions.value = sessions.value.filter((session) => session.id !== id)
     pruneLocalState()
-    if (activeTab.value !== id) return
-    const neighbour = list[index - 1] ?? list[index + 1] ?? null
-    setActiveTab(neighbour?.id ?? CHAT_TAB_ID)
-  }
-
-  /** 切换活动标签；当前项目没有终端时切回对话。 */
-  function setActiveTab(id: string): void {
-    activeTab.value = id
-    const projectPath = currentProjectPath.value
-    if (projectPath !== null) activeTabs.set(projectPath, id)
   }
 
   /** 用户重命名：记下显式重命名，之后程序上报的标题不再覆盖。 */
@@ -267,7 +241,6 @@ export const useTerminalStore = defineStore('terminal', () => {
   return {
     sessions,
     projectSessions,
-    activeTab,
     titles,
     error,
     creating,
@@ -275,7 +248,6 @@ export const useTerminalStore = defineStore('terminal', () => {
     dispose,
     createTerminal,
     closeTerminal,
-    setActiveTab,
     renameTerminal,
     applyTerminalTitle,
     registerWriter,

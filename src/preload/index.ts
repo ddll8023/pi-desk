@@ -124,6 +124,7 @@ import {
   SESSION_RUNS_STATE_CHANNEL,
   SESSION_RUNS_EVENT,
   SESSION_RUN_RELEASE_CHANNEL,
+  SESSION_RUN_CLOSE_CHANNEL,
   isSessionRunsEvent,
   isSessionRunsResult,
   isSessionRunReleaseResult
@@ -554,6 +555,12 @@ const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionAp
   /** 释放一个未确认退出或宿主已失败的运行实例；只搬运运行实例身份，不传其他字段。 */
   async releaseSessionRun(request: SessionRunReleaseRequest) {
     const response: unknown = await ipcRenderer.invoke(SESSION_RUN_RELEASE_CHANNEL, { runId: request.runId })
+    return isSessionRunReleaseResult(response) ? response : invalidSessionRunReleaseResponse()
+  },
+
+  /** 结束一个运行实例（中断在途工作、解除占用并关闭宿主）；同样只搬运运行实例身份。 */
+  async closeSessionRun(request: SessionRunReleaseRequest) {
+    const response: unknown = await ipcRenderer.invoke(SESSION_RUN_CLOSE_CHANNEL, { runId: request.runId })
     return isSessionRunReleaseResult(response) ? response : invalidSessionRunReleaseResponse()
   },
 

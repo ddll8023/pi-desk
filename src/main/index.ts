@@ -1,4 +1,4 @@
-/** 管理唯一桌面窗口、本地资产边界，以及应用信息、Project 选择/添加/移除、项目文件检索与目录列举、Session 与 Project Trust、会话运行状态（查询）、内置终端（PTY）、界面偏好、Runtime、Pi 默认模型、自定义供应商配置、认证、Pi 版本检查、Extension IPC、事件广播及退出编排。 */
+/** 管理唯一桌面窗口、本地资产边界，以及应用信息、Project 选择/添加/移除、项目文件检索与目录列举、Session 与 Project Trust、会话运行状态（查询、释放与结束）、内置终端（PTY）、界面偏好、Runtime、Pi 默认模型、自定义供应商配置、认证、Pi 版本检查、Extension IPC、事件广播及退出编排。 */
 import { mkdirSync } from 'node:fs'
 import { realpath } from 'node:fs/promises'
 import { dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
@@ -84,6 +84,7 @@ import {
   SESSION_RUNS_STATE_CHANNEL,
   SESSION_RUNS_EVENT,
   SESSION_RUN_RELEASE_CHANNEL,
+  SESSION_RUN_CLOSE_CHANNEL,
   isSessionRunReleaseRequest
 } from '../shared/session-run-api'
 import type {
@@ -987,7 +988,7 @@ function registerSessionHandlers(pageUrl: string): void {
   )
 }
 
-/** 运行实例状态查询与释放：都只操作注册表登记，不建立宿主、不删除历史。 */
+/** 运行实例状态查询、释放与结束：都只操作注册表登记与宿主生命周期，不删除任何会话历史。 */
 function registerSessionRunHandlers(pageUrl: string): void {
   handle(
     SESSION_RUNS_STATE_CHANNEL,
@@ -1018,6 +1019,26 @@ function registerSessionRunHandlers(pageUrl: string): void {
         return { ok: true, data: { runs: sdkRuntime.listRunStates() } }
       } catch {
         return { ok: false, error: { code: 'INTERNAL_ERROR', message: '释放运行实例时发生未预期的内部错误。' } }
+      }
+    }
+  )
+
+  handle(
+    SESSION_RUN_CLOSE_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<SessionRunReleaseResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return { ok: false, error: { code: 'FORBIDDEN', message: '不允许此页面调用桌面接口。' } }
+      }
+      if (args.length !== 1 || !isSessionRunReleaseRequest(args[0])) {
+        return { ok: false, error: { code: 'INVALID_REQUEST', message: '结束运行实例只接受一个运行实例身份。' } }
+      }
+      try {
+        // 结束包含中断：页面已在关闭标签时表达了结束意图，未确认时占用保留并由错误如实报告。
+        const result = await sdkRuntime.closeRun(args[0].runId)
+        if (!result.ok) return { ok: false, error: result.error }
+        return { ok: true, data: { runs: sdkRuntime.listRunStates() } }
+      } catch {
+        return { ok: false, error: { code: 'INTERNAL_ERROR', message: '结束运行实例时发生未预期的内部错误。' } }
       }
     }
   )

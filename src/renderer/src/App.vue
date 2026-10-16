@@ -11,9 +11,10 @@ import { useRuntimeStore } from './stores/runtime'
 import { useSessionStore } from './stores/session'
 import { useSessionRunsStore } from './stores/session-runs'
 import { useSessionViewStore } from './stores/session-view'
-import { CHAT_TAB_ID, useTerminalStore } from './stores/terminal'
+import { useTerminalStore } from './stores/terminal'
 import { useTrustStore } from './stores/trust'
 import { useUpdatesStore } from './stores/updates'
+import { useWorkspaceTabsStore } from './stores/workspace-tabs'
 import type { Project } from '../../shared/project-api'
 import type { SessionSummary } from '../../shared/session-api'
 import AppTitleBar from './components/AppTitleBar.vue'
@@ -26,10 +27,10 @@ import ProjectSidebar from './components/ProjectSidebar.vue'
 import RightPanel from './components/RightPanel.vue'
 import SessionPickerDialog from './components/SessionPickerDialog.vue'
 import SettingsView from './components/SettingsView.vue'
-import TerminalTabBar from './components/TerminalTabBar.vue'
 import TerminalView from './components/TerminalView.vue'
 import TrustDialog from './components/TrustDialog.vue'
 import UpdateNoticeDialog from './components/UpdateNoticeDialog.vue'
+import WorkspaceTabBar from './components/WorkspaceTabBar.vue'
 import AppButton from './components/ui/AppButton.vue'
 
 const desktopStore = useDesktopStore()
@@ -42,6 +43,7 @@ const sessionStore = useSessionStore()
 const sessionRunsStore = useSessionRunsStore()
 const sessionViewStore = useSessionViewStore()
 const terminalStore = useTerminalStore()
+const workspaceTabsStore = useWorkspaceTabsStore()
 const { currentProject, pendingAddition, pendingAdditionDecision } = storeToRefs(projectStore)
 const { awaitingInterrupt, pendingReload, pendingSessionId } = storeToRefs(sessionStore)
 const { sidebarCollapsed, rightPanelOpen, ready: preferencesReady } = storeToRefs(preferencesStore)
@@ -73,10 +75,10 @@ const sidebarCollapsedForLayout = computed(() => (
   isNarrowWindow.value ? !mobileSidebarOpen.value : sidebarCollapsed.value
 ))
 
-/** 侧栏「新建」在闲置态只聚焦输入框，不启动 Pi；会话由首次发送创建。 */
-function onRequestNewSession(): void {
-  // 输入坞在对话标签里：先切回对话，否则聚焦发生在隐藏面板上，用户看不到光标。
-  terminalStore.setActiveTab(CHAT_TAB_ID)
+/** 侧栏「新建」在闲置态只建立标签并聚焦输入框，不启动 Pi；会话由首次发送创建。 */
+async function onRequestNewSession(projectPath: string): Promise<void> {
+  // 输入坞在对话标签里：先切到该标签，否则聚焦发生在隐藏面板上，用户看不到光标。
+  await workspaceTabsStore.openNewChatTab(projectPath)
   composerFocusToken.value += 1
 }
 
@@ -228,6 +230,8 @@ onMounted(() => {
   void sessionRunsStore.initialize()
   // 终端状态要在项目就绪后立即接回：它先订阅事件再按项目列清单，避免重挂载期间的下发丢失。
   terminalStore.initialize()
+  // 标签状态依赖项目与终端清单，放在两者之后初始化，进入项目时才能补出空对话标签。
+  workspaceTabsStore.initialize()
   void updatesStore.initialize()
 })
 
@@ -239,6 +243,7 @@ onUnmounted(() => {
   sessionViewStore.dispose()
   sessionRunsStore.dispose()
   terminalStore.dispose()
+  workspaceTabsStore.dispose()
   updatesStore.dispose()
 })
 </script>
@@ -279,16 +284,16 @@ onUnmounted(() => {
       <main class="app-workspace">
         <SettingsView v-if="currentView === 'settings'" />
         <template v-else>
-          <!-- 标签组：对话与终端同级；终端标签按当前项目分组，切换项目就换一组。 -->
-          <TerminalTabBar
-            :sessions="terminalStore.projectSessions"
-            :active-tab="terminalStore.activeTab"
-            :titles="terminalStore.titles"
+          <!-- 标签组：对话与终端同级混排；标签按当前项目分组，切换项目就换一组。 -->
+          <WorkspaceTabBar
+            :tabs="workspaceTabsStore.tabs"
+            :active-tab="workspaceTabsStore.activeTab"
             :creating="terminalStore.creating"
-            @select="terminalStore.setActiveTab"
-            @close="terminalStore.closeTerminal"
-            @create="terminalStore.createTerminal"
-            @rename="terminalStore.renameTerminal"
+            @select="workspaceTabsStore.activateTab"
+            @close="workspaceTabsStore.closeTab"
+            @create="workspaceTabsStore.createTab"
+            @rename="workspaceTabsStore.renameTab"
+            @move="workspaceTabsStore.moveTab"
           />
 
           <!-- 终端操作失败只提示，不改变已建立的标签；关闭后不再重复展示。 -->
@@ -297,14 +302,20 @@ onUnmounted(() => {
             <AppButton variant="unstyled" class="workspace-notice-close" aria-label="关闭提示" @click="terminalStore.clearError()">关闭</AppButton>
           </p>
 
+          <!-- 关闭标签时结束实例失败（关闭未确认）只提示：标签保留，占用仍由侧栏如实展示。 -->
+          <p v-if="sessionRunsStore.closeError !== null" class="workspace-notice" role="alert">
+            <span class="min-w-0 flex-1">{{ sessionRunsStore.closeError }}</span>
+            <AppButton variant="unstyled" class="workspace-notice-close" aria-label="关闭提示" @click="sessionRunsStore.clearCloseError()">关闭</AppButton>
+          </p>
+
           <!-- 面板层：对话与各终端面板叠放在同一区域，只显示活动标签。
                隐藏用 visibility 而不是 display：面板始终保持真实尺寸，输入框量高与终端尺寸测量在隐藏时也成立。 -->
           <div class="workspace-panes">
             <div
               class="workspace-pane"
-              :class="{ 'is-hidden': terminalStore.activeTab !== CHAT_TAB_ID }"
-              :inert="terminalStore.activeTab !== CHAT_TAB_ID"
-              :aria-hidden="terminalStore.activeTab !== CHAT_TAB_ID"
+              :class="{ 'is-hidden': !workspaceTabsStore.isChatActive }"
+              :inert="!workspaceTabsStore.isChatActive"
+              :aria-hidden="!workspaceTabsStore.isChatActive"
             >
               <ExtensionNotificationBar />
               <ChatMessageList />
@@ -323,11 +334,22 @@ onUnmounted(() => {
               v-for="session in terminalStore.projectSessions"
               :key="session.id"
               class="workspace-pane"
-              :class="{ 'is-hidden': terminalStore.activeTab !== session.id }"
-              :inert="terminalStore.activeTab !== session.id"
-              :aria-hidden="terminalStore.activeTab !== session.id"
+              :class="{ 'is-hidden': workspaceTabsStore.activeTab !== workspaceTabsStore.terminalTabId(session.id) }"
+              :inert="workspaceTabsStore.activeTab !== workspaceTabsStore.terminalTabId(session.id)"
+              :aria-hidden="workspaceTabsStore.activeTab !== workspaceTabsStore.terminalTabId(session.id)"
             >
-              <TerminalView :session="session" :active="terminalStore.activeTab === session.id" />
+              <TerminalView :session="session" :active="workspaceTabsStore.activeTab === workspaceTabsStore.terminalTabId(session.id)" />
+            </div>
+
+            <!-- 没有活动标签（例如关掉了全部对话标签）时的空状态：新建入口是唯一动作。 -->
+            <div v-if="workspaceTabsStore.activeTab === null" class="workspace-pane">
+              <div class="empty-state flex-1 justify-center">
+                <p class="empty-state-title">当前项目没有打开的标签</p>
+                <p class="empty-state-text">新建一个对话标签开始工作，或从左侧打开一条历史会话。</p>
+                <div class="mt-2 flex flex-wrap items-center justify-center gap-2">
+                  <AppButton variant="primary" @click="workspaceTabsStore.openNewChatTab()">新建对话</AppButton>
+                </div>
+              </div>
             </div>
           </div>
         </template>

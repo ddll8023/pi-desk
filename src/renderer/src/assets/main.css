@@ -1644,7 +1644,7 @@
     overflow: hidden;
   }
 
-  /* 工作区标签条：对话与终端标签同处一组；标签横向滚动不换行，右端固定新建按钮。 */
+  /* 工作区标签条：对话与终端标签同处一组；标签横向滚动不换行，新建按钮跟在最后一个标签之后。 */
   .workspace-tabs {
     display: flex;
     min-width: 0;
@@ -1656,6 +1656,7 @@
     padding: 0.25rem 0.5rem;
   }
 
+  /* 滚动区把标签行与新建按钮一起装下：按钮因此跟在标签之后，而不是被推到右端。 */
   .workspace-tabs-strip {
     display: flex;
     min-width: 0;
@@ -1669,6 +1670,15 @@
 
   .workspace-tabs-strip::-webkit-scrollbar {
     display: none;
+  }
+
+  /* 标签行：宽度随标签数量增长，把新建按钮顶到最后一个标签之后。 */
+  .workspace-tabs-group {
+    display: flex;
+    min-width: 0;
+    flex: none;
+    align-items: center;
+    gap: 0.25rem;
   }
 
   .workspace-tab {

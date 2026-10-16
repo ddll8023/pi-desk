@@ -693,6 +693,30 @@ export class SdkRuntimeBridge {
   }
 
   /**
+   * 结束一个运行实例：先按中断式释放解除占用与会话绑定，再关闭它的宿主进程。
+   * 释放未确认时占用保留、宿主不动，错误如实返回；会话历史文件始终不动。
+   */
+  async closeRun(runId: number): Promise<RuntimeResult> {
+    const result = await this.releaseRun(runId, true)
+    if (!result.ok) return result
+    // 释放后实例已不再承载会话：前台若仍指向它，页面会把空闲槽位读成前台会话。
+    if (this.foregroundRunId() === runId) {
+      this.options.runs.clearForeground()
+      this.publishState()
+    }
+    const run = this.runOf(runId)
+    if (run === null || this.hostUnavailable(run)) return result
+    try {
+      await run.owner.suspend()
+    } catch {
+      // 宿主未确认关闭：占用已解除，空闲回收与应用退出链会继续收敛，不改写本次结束结果。
+    }
+    // 宿主状态属于运行实例列表的展示字段，挂起后补发一次，页面才不会显示成仍就绪。
+    this.publishState()
+    return result
+  }
+
+  /**
    * 该实例是否有在途工作：排队消息、独立 Bash、等待中的审批或扩展输入都算；
    * 宿主已失败时按无在途工作处理，因为已无法确认它是否仍在工作。
    */

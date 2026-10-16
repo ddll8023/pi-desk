@@ -28,6 +28,7 @@ import { useProjectStore } from '../stores/project'
 import { useRuntimeStore } from '../stores/runtime'
 import { useSessionStore } from '../stores/session'
 import { useSessionRunsStore } from '../stores/session-runs'
+import { useWorkspaceTabsStore } from '../stores/workspace-tabs'
 import type { SessionRunBadge } from '../stores/session-runs'
 import type { Project } from '../../../shared/project-api'
 import type { SessionSummary } from '../../../shared/session-api'
@@ -43,7 +44,8 @@ const emit = defineEmits<{
   toggleSettings: []
   closeSidebar: []
   removeProject: [project: Project]
-  requestNewSession: []
+  /** 闲置态的新建会话：由外层建立对话标签并聚焦输入框，这里只转发目标项目。 */
+  requestNewSession: [projectPath: string]
   deleteSession: [projectPath: string, session: SessionSummary]
 }>()
 
@@ -52,6 +54,7 @@ const preferencesStore = usePreferencesStore()
 const runtimeStore = useRuntimeStore()
 const sessionStore = useSessionStore()
 const sessionRunsStore = useSessionRunsStore()
+const workspaceTabsStore = useWorkspaceTabsStore()
 const {
   view: projectView,
   projects,
@@ -68,6 +71,12 @@ const projectBusy = computed(() => choosing.value || switching.value)
 const sessionBusy = computed(() => opening.value || deleting.value)
 /** 当前会话身份；宿主已回收（挂起）时仍指向同一会话，选中项不会因此消失。 */
 const currentSessionId = computed(() => runtimeStore.foregroundSessionId)
+
+/**
+ * 活动对话标签展示的会话；行点击已一律走打开链，菜单的「当前会话」按同一个口径判定，
+ * 避免活动标签是终端时菜单把已经在看的会话锁成不可点。
+ */
+const activeSessionId = computed(() => workspaceTabsStore.activeSessionId)
 
 /**
  * 确实尚未落盘的当前会话身份：新建会话到首次写入之间 Pi 只分配身份，还没有会话文件。
@@ -290,10 +299,7 @@ function chooseProject(): void {
 
 function openSessionRow(node: SidebarProjectNode, row: SidebarSessionRow): void {
   closeMenu()
-  if (isCurrentSession(node, row.session)) {
-    emit('closeSidebar')
-    return
-  }
+  // 点击会话一律走打开链：会话已在前台时它同样把该会话的标签切到活动，终端标签不会挡住它。
   void sessionStore.open(row.session.sessionId, false, node.project.path)
   emit('closeSidebar')
 }
@@ -316,7 +322,8 @@ function createSessionIn(node: SidebarProjectNode): void {
   if (phase === 'idle' || phase === 'closed') {
     if (!isCurrentProject(node)) void projectStore.select(node.project.path, false)
     setProjectExpanded(node, true)
-    emit('requestNewSession')
+    // 项目切换是异步的，因此把目标项目一并交给外层，标签落到被点击的项目上而不是还在切的那个。
+    emit('requestNewSession', node.project.path)
     return
   }
   void sessionStore.open(null, false, node.project.path)
@@ -448,16 +455,11 @@ function requestSessionDeletion(): void {
   emit('deleteSession', target.projectPath, target.session)
 }
 
-/** 浮层里的会话打开与会话行同一口径：先按需切换当前项目，再提交会话。 */
+/** 浮层里的会话打开与会话行同一口径：一律走打开链，由标签状态决定聚焦已有标签还是新开。 */
 function openSessionFromMenu(): void {
   const target = menuTarget.value
   closeMenu()
   if (target?.kind !== 'session') return
-  if (target.session.sessionId === currentSessionId.value
-    && samePath(target.projectPath, projectStore.currentProject?.path ?? null)) {
-    emit('closeSidebar')
-    return
-  }
   void sessionStore.open(target.session.sessionId, false, target.projectPath)
   emit('closeSidebar')
 }
@@ -749,8 +751,8 @@ onBeforeUnmount(() => {
               <dt v-if="menuForkedFrom !== null">分叉自</dt><dd v-if="menuForkedFrom !== null">{{ menuForkedFrom }}</dd>
             </dl>
           </div>
-          <AppButton variant="unstyled" class="project-sidebar-menu-item" :disabled="sessionBusy || menuTarget.session.sessionId === currentSessionId" @click="openSessionFromMenu">
-            {{ menuTarget.session.sessionId === currentSessionId ? '当前会话' : '打开会话' }}
+          <AppButton variant="unstyled" class="project-sidebar-menu-item" :disabled="sessionBusy || menuTarget.session.sessionId === activeSessionId" @click="openSessionFromMenu">
+            {{ menuTarget.session.sessionId === activeSessionId ? '当前会话' : '打开会话' }}
           </AppButton>
           <!-- 阻塞态的会话只能靠释放运行实例恢复；这里给出唯一恢复动作，失败时占用仍保留。 -->
           <AppButton

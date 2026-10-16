@@ -18,6 +18,7 @@ import { useTrustStore } from './trust'
 import { useProjectStore } from './project'
 import { useRuntimeStore } from './runtime'
 import { listSessions, openSession, reloadSession, deleteSession } from '../services/session'
+import { useWorkspaceTabsStore } from './workspace-tabs'
 
 /** `idle` 表示尚未读取该项目的列表；读取中、成功与失败各占一档。 */
 type SessionSlicePhase = 'idle' | 'loading' | 'ready' | 'error'
@@ -56,6 +57,13 @@ const EMPTY_SLICE: SessionListSlice = {
 export const useSessionStore = defineStore('session', () => {
   /** 按项目路径保存的列表分片；键即主进程回报的项目路径。 */
   const lists = ref<Readonly<Record<string, SessionListSlice>>>({})
+  /**
+   * 已加载的会话身份集合（跨项目分片）：工作区标签据此判断某个会话是否已经落盘，
+   * 未落盘的新会话不会被当成标签身份，标题也就能继续显示「新对话」。
+   */
+  const loadedSessionIds = computed(() => new Set(
+    Object.values(lists.value).flatMap(slice => slice.sessions.map(session => session.sessionId))
+  ))
   /**
    * 单次动作失败：打开会话会先切项目，因此失败原因也可能来自 Project 模块；错误码原样保留，
    * 界面只消费 message。
@@ -330,6 +338,8 @@ export const useSessionStore = defineStore('session', () => {
       if (result.ok) {
         // 打开的返回列表同样只写入它回报的项目分片，不覆盖其他项目已读过的内容。
         applyList(result.data)
+        // 打开成功即登记工作区标签：已打开的会话聚焦它的标签，新会话新开一个标签。
+        if (targetPath !== null) useWorkspaceTabsStore().syncOpenTab(sessionId, targetPath)
         pendingSessionId.value = null
         pendingProjectPath.value = null
         awaitingInterrupt.value = false
@@ -410,6 +420,8 @@ export const useSessionStore = defineStore('session', () => {
       }
       // 主进程回报实际读取的项目路径；与请求不符时丢弃，不把别的项目的结果写进本分片。
       if (result.data.projectPath === projectPath) applyList(result.data)
+      // 会话文件已删除，它的标签随之消失；标签承载的实例已由删除链收敛。
+      useWorkspaceTabsStore().dropSession(projectPath, sessionId)
       return true
     } finally {
       deleting.value = false
@@ -453,6 +465,7 @@ export const useSessionStore = defineStore('session', () => {
   return {
     view,
     sessions,
+    loadedSessionIds,
     skipped,
     remaining,
     loadingMore,

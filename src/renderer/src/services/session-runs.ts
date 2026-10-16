@@ -1,4 +1,4 @@
-/** 作为渲染端会话运行状态查询、订阅与释放的调用入口，把桥接缺失与通信异常转换为安全的展示结果。 */
+/** 作为渲染端会话运行状态查询、订阅、释放与结束的调用入口，把桥接缺失与通信异常转换为安全的展示结果。 */
 import type {
   SessionRunReleaseResult,
   SessionRunsResult,
@@ -62,6 +62,29 @@ export async function releaseSessionRun(runId: number): Promise<SessionRunReleas
     return {
       ok: false,
       error: { code: 'BRIDGE_CALL_FAILED', message: `释放运行实例失败：${detail}` }
+    }
+  }
+}
+
+/**
+ * 结束一个运行实例：中断在途工作、解除占用并关闭它的宿主进程，保留会话历史文件。
+ * 失败原因原样保留：关闭未确认时占用仍被保留，页面必须看到真实原因。
+ */
+export async function closeSessionRun(runId: number): Promise<SessionRunReleaseResult> {
+  const bridge = window.desktop
+  if (!bridge || typeof bridge.closeSessionRun !== 'function') {
+    return {
+      ok: false,
+      error: { code: 'BRIDGE_UNAVAILABLE', message: '桌面桥接不可用，请通过 Electron 打开此页面。' }
+    }
+  }
+  try {
+    return await bridge.closeSessionRun({ runId })
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error)
+    return {
+      ok: false,
+      error: { code: 'BRIDGE_CALL_FAILED', message: `结束运行实例失败：${detail}` }
     }
   }
 }
