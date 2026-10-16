@@ -21,7 +21,8 @@ import {
   closeTerminal as closeTerminalBridge,
   createTerminal as createTerminalBridge,
   listTerminals,
-  subscribeTerminalEvents
+  subscribeTerminalEvents,
+  writeTerminal
 } from '../services/terminal'
 import { useProjectStore } from './project'
 
@@ -50,6 +51,12 @@ export const useTerminalStore = defineStore('terminal', () => {
   /** 当前项目里尚未挂载视图的终端输出：终端建立到视图挂载之间不能丢掉提示符。 */
   const pendingOutput = new Map<string, string[]>()
   const pendingOutputChars = new Map<string, number>()
+  /**
+   * 最近一次把文本插入终端的信号：终端视图据此把焦点交给该终端。
+   * 用自增序号而不是终端标识，连续插入同一个终端也能再次触发焦点。
+   */
+  const insertFocus = ref<{ readonly id: string; readonly seq: number } | null>(null)
+  let insertFocusSeq = 0
   let disposeEvents: (() => void) | null = null
   let stopProjectWatch: WatchStopHandle | null = null
 
@@ -234,6 +241,21 @@ export const useTerminalStore = defineStore('terminal', () => {
     error.value = message
   }
 
+  /**
+   * 把一段文本写入终端但不追加回车：右侧面板把文件路径插入终端时走这里，
+   * 是否补引号、补空格由调用方决定。失败只记录原因，由工作区的提示条展示；
+   * 成功时发一次焦点信号，让终端视图把焦点收回去，用户可以直接接着敲命令。
+   */
+  async function insertText(id: string, text: string): Promise<void> {
+    const result = await writeTerminal({ id, data: text })
+    if (!result.ok) {
+      error.value = result.error.message
+      return
+    }
+    insertFocusSeq += 1
+    insertFocus.value = { id, seq: insertFocusSeq }
+  }
+
   function clearError(): void {
     error.value = null
   }
@@ -244,6 +266,7 @@ export const useTerminalStore = defineStore('terminal', () => {
     titles,
     error,
     creating,
+    insertFocus,
     initialize,
     dispose,
     createTerminal,
@@ -253,6 +276,7 @@ export const useTerminalStore = defineStore('terminal', () => {
     registerWriter,
     unregisterWriter,
     reportError,
+    insertText,
     clearError
   }
 })

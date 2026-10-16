@@ -128,6 +128,15 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
   }
 
   /**
+   * 当前活动标签对应的终端标识；活动标签是对话或没有标签时为空。
+   * 右侧面板把文件路径写入终端前用它定位目标，避免写进看不见的终端。
+   */
+  const activeTerminalId = computed<string | null>(() => {
+    const key = activeTab.value
+    return key === null ? null : terminalIdOf(key)
+  })
+
+  /**
    * 页面挂载后调用：进入项目时补一个空对话标签，并跟随运行实例列表同步标签的会话身份。
    * 先订阅、再取一次当前值，避免初始化期间漏掉已经发生的项目切换与实例变化。
    */
@@ -671,6 +680,7 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     tabs,
     activeTab,
     activeSessionId,
+    activeTerminalId,
     isChatActive,
     terminalTabId,
     initialize,

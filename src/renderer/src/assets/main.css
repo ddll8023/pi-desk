@@ -1979,6 +1979,12 @@
     flex: 1;
   }
 
+  /* 文件拖到终端面板上：用内缩虚线描边提示可落点。outline 画在内容之上且不参与布局，终端尺寸不变。 */
+  .terminal-view.is-drop-target {
+    outline: 2px dashed var(--color-desk-accent);
+    outline-offset: -2px;
+  }
+
   .terminal-view-host .xterm {
     height: 100%;
   }
@@ -2512,6 +2518,11 @@
     background: var(--panel-selected);
     /* 与 .list-item-active、设置页导航同一套当前行标记：底色加 2px 强调竖条。 */
     box-shadow: inset 2px 0 0 0 var(--color-desk-accent);
+  }
+
+  /* 正在拖动的那一行：降透明度表示它已经在鼠标上，拖拽结束后恢复。 */
+  .file-tree-row.is-dragging {
+    opacity: 0.45;
   }
 
   /* 展开箭头只占 12px 一列：文件行留同样宽的空位，名称因此始终对齐。 */

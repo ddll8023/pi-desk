@@ -1,4 +1,4 @@
-/** 为沙箱页面提供应用信息、Project 选择/添加/移除/列表、项目文件检索与目录列举、Session、会话运行状态、终端、Project Trust、偏好、Runtime、Pi 资源、Pi 默认模型、Pi 版本检查、自定义供应商、认证与 Extension 等受限接口，不暴露 Electron、任意 channel 或系统能力。 */
+/** 为沙箱页面提供应用信息、Project 选择/添加/移除/列表、项目文件检索、目录列举与条目路径解析、Session、会话运行状态、终端、Project Trust、偏好、Runtime、Pi 资源、Pi 默认模型、Pi 版本检查、自定义供应商、认证与 Extension 等受限接口，不暴露 Electron、任意 channel 或系统能力。 */
 import { contextBridge, ipcRenderer } from 'electron'
 import type { IpcRendererEvent } from 'electron'
 import { APP_INFO_CHANNEL, isAppInfoResult } from '../shared/desktop-api'
@@ -67,13 +67,20 @@ import type {
 } from '../shared/project-api'
 import {
   PROJECT_DIRECTORY_LIST_CHANNEL,
+  PROJECT_ENTRY_RESOLVE_CHANNEL,
+  PROJECT_ENTRY_REVEAL_CHANNEL,
   PROJECT_FILE_SEARCH_CHANNEL,
   isProjectDirectoryListResult,
+  isProjectEntryPathResult,
+  isProjectEntryRevealResult,
   isProjectFileSearchResult
 } from '../shared/project-file-api'
 import type {
   ProjectDirectoryListRequest,
   ProjectDirectoryListResult,
+  ProjectEntryPathRequest,
+  ProjectEntryPathResult,
+  ProjectEntryRevealResult,
   ProjectFileApi,
   ProjectFileSearchResult
 } from '../shared/project-file-api'
@@ -284,6 +291,8 @@ const INVALID_PROJECT_PATH_RESPONSE = '桌面接口返回了无法识别的目�
 const INVALID_PROJECT_LIST_RESPONSE = '桌面接口返回了无法识别的项目列表。'
 const INVALID_PROJECT_FILE_RESPONSE = '桌面接口返回了无法识别的文件检索结果。'
 const INVALID_PROJECT_DIRECTORY_RESPONSE = '桌面接口返回了无法识别的目录列举结果。'
+const INVALID_PROJECT_ENTRY_PATH_RESPONSE = '桌面接口返回了无法识别的条目路径解析结果。'
+const INVALID_PROJECT_ENTRY_REVEAL_RESPONSE = '桌面接口返回了无法识别的显示文件位置结果。'
 const INVALID_SESSION_LIST_RESPONSE = '桌面接口返回了无法识别的会话列表。'
 const INVALID_SESSION_RUNS_RESPONSE = '桌面接口返回了无法识别的会话运行状态。'
 const INVALID_PREFERENCES_RESPONSE = '桌面接口返回了无法识别的界面偏好。'
@@ -344,6 +353,14 @@ function invalidProjectFileResponse(): ProjectFileSearchResult {
 
 function invalidProjectDirectoryResponse(): ProjectDirectoryListResult {
   return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_PROJECT_DIRECTORY_RESPONSE } }
+}
+
+function invalidProjectEntryPathResponse(): ProjectEntryPathResult {
+  return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_PROJECT_ENTRY_PATH_RESPONSE } }
+}
+
+function invalidProjectEntryRevealResponse(): ProjectEntryRevealResult {
+  return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_PROJECT_ENTRY_REVEAL_RESPONSE } }
 }
 
 function invalidSessionResponse(): SessionListResult {
@@ -509,6 +526,20 @@ const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionAp
     const payload: ProjectDirectoryListRequest = { directory: request.directory }
     const response: unknown = await ipcRenderer.invoke(PROJECT_DIRECTORY_LIST_CHANNEL, payload)
     return isProjectDirectoryListResult(response) ? response : invalidProjectDirectoryResponse()
+  },
+
+  /** 把项目内相对条目路径交给主进程解析为绝对路径；页面不自行拼接路径，也不传绝对路径。 */
+  async resolveProjectEntryPath(request: ProjectEntryPathRequest) {
+    const payload: ProjectEntryPathRequest = { path: request.path }
+    const response: unknown = await ipcRenderer.invoke(PROJECT_ENTRY_RESOLVE_CHANNEL, payload)
+    return isProjectEntryPathResult(response) ? response : invalidProjectEntryPathResponse()
+  },
+
+  /** 在系统文件管理器中显示一个项目内条目；路径解析、越界判定与存在性检查都在主进程。 */
+  async revealProjectEntry(request: ProjectEntryPathRequest) {
+    const payload: ProjectEntryPathRequest = { path: request.path }
+    const response: unknown = await ipcRenderer.invoke(PROJECT_ENTRY_REVEAL_CHANNEL, payload)
+    return isProjectEntryRevealResult(response) ? response : invalidProjectEntryRevealResponse()
   },
 
   async openSession(sessionId: string | null, allowInterrupt: boolean, listLimit: number) {

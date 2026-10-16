@@ -1,6 +1,11 @@
-/** 作为渲染端项目文件检索与目录列举入口，收敛桥接缺失与通信异常。 */
+/** 作为渲染端项目文件检索、目录列举与条目路径解析的入口，收敛桥接缺失与通信异常。 */
 import type { DesktopError } from '../../../shared/desktop-api'
-import type { ProjectDirectoryListResult, ProjectFileSearchResult } from '../../../shared/project-file-api'
+import type {
+  ProjectDirectoryListResult,
+  ProjectEntryPathResult,
+  ProjectEntryRevealResult,
+  ProjectFileSearchResult
+} from '../../../shared/project-file-api'
 
 function unavailable(): { ok: false; error: DesktopError } {
   return {
@@ -38,6 +43,31 @@ export async function listProjectDirectory(directory: string): Promise<ProjectDi
   if (!bridge || typeof bridge.listProjectDirectory !== 'function') return unavailable()
   try {
     return await bridge.listProjectDirectory({ directory })
+  } catch (error) {
+    return callFailed(error)
+  }
+}
+
+/**
+ * 把项目内相对条目路径解析为绝对路径；页面不自行拼接路径，平台分隔符与越界判定都由主进程负责。
+ * 未选择项目与路径非法都回错误，由调用方就近提示。
+ */
+export async function resolveProjectEntryPath(path: string): Promise<ProjectEntryPathResult> {
+  const bridge = window.desktop
+  if (!bridge || typeof bridge.resolveProjectEntryPath !== 'function') return unavailable()
+  try {
+    return await bridge.resolveProjectEntryPath({ path })
+  } catch (error) {
+    return callFailed(error)
+  }
+}
+
+/** 在系统文件管理器中显示一个项目内条目；条目已不存在时回可展示的原因。 */
+export async function revealProjectEntry(path: string): Promise<ProjectEntryRevealResult> {
+  const bridge = window.desktop
+  if (!bridge || typeof bridge.revealProjectEntry !== 'function') return unavailable()
+  try {
+    return await bridge.revealProjectEntry({ path })
   } catch (error) {
     return callFailed(error)
   }

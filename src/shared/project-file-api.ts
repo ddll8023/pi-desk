@@ -1,11 +1,14 @@
 /**
- * 定义项目文件检索与单层目录列举的 IPC 契约及跨进程响应校验；只暴露项目相对路径，不传文件内容。
- * 两者都以「当前项目」为根：页面只能给出项目内相对路径，绝对路径与越界路径由主进程拒绝。
+ * 定义项目文件检索、单层目录列举与单个条目路径解析的 IPC 契约及跨进程响应校验；只传路径，不传文件内容。
+ * 全部以「当前项目」为根：页面只能给出项目内相对路径，绝对路径与越界路径由主进程拒绝；
+ * 需要绝对路径时（复制、写入终端、在文件管理器中显示）一律由主进程解析后回传，页面不自行拼接。
  */
 import type { DesktopError } from './desktop-api'
 
 export const PROJECT_FILE_SEARCH_CHANNEL = 'desktop:project-file-search'
 export const PROJECT_DIRECTORY_LIST_CHANNEL = 'desktop:project-directory-list'
+export const PROJECT_ENTRY_RESOLVE_CHANNEL = 'desktop:project-entry-resolve'
+export const PROJECT_ENTRY_REVEAL_CHANNEL = 'desktop:project-entry-reveal'
 
 /** 查询串长度上限；主进程与渲染端共用，超出长度的一段不作为 `@` 引用处理。 */
 export const PROJECT_FILE_QUERY_MAX_CHARS = 128
@@ -64,11 +67,35 @@ export interface ProjectDirectoryListRequest {
   readonly directory: string
 }
 
+/** 单个条目的路径请求；同样只接受项目内相对路径，项目根由主进程决定。 */
+export interface ProjectEntryPathRequest {
+  readonly path: string
+}
+
+/** 条目路径解析结果：`path` 是规范化后的相对路径，`absolutePath` 是主进程按平台拼出的绝对路径。 */
+export interface ProjectEntryPath {
+  readonly path: string
+  readonly absolutePath: string
+}
+
+export type ProjectEntryPathResult =
+  | { readonly ok: true; readonly data: ProjectEntryPath }
+  | { readonly ok: false; readonly error: DesktopError }
+
+/** 在系统文件管理器中显示条目；成功不回传数据，失败带可展示的原因。 */
+export type ProjectEntryRevealResult =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly error: DesktopError }
+
 export interface ProjectFileApi {
   /** 在当前项目内按查询串检索文件路径；不接受目录参数，根路径由主进程决定。 */
   readonly searchProjectFiles: (query: string) => Promise<ProjectFileSearchResult>
   /** 列举当前项目内某一层的目录条目；不接受绝对路径，根路径由主进程决定。 */
   readonly listProjectDirectory: (request: ProjectDirectoryListRequest) => Promise<ProjectDirectoryListResult>
+  /** 把项目内相对条目路径解析为绝对路径；绝对路径、越界路径与非法段由主进程拒绝。 */
+  readonly resolveProjectEntryPath: (request: ProjectEntryPathRequest) => Promise<ProjectEntryPathResult>
+  /** 在系统文件管理器中显示一个项目内条目；条目已不存在时回可展示的原因。 */
+  readonly revealProjectEntry: (request: ProjectEntryPathRequest) => Promise<ProjectEntryRevealResult>
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -112,6 +139,43 @@ function isProjectDirectoryListing(value: unknown): value is ProjectDirectoryLis
 export function isProjectDirectoryListResult(value: unknown): value is ProjectDirectoryListResult {
   if (!isRecord(value)) return false
   if (value.ok === true) return isProjectDirectoryListing(value.data)
+  if (value.ok !== false || !isRecord(value.error)) return false
+
+  const { code, message } = value.error
+  return typeof code === 'string' && typeof message === 'string'
+}
+
+function isProjectEntryPath(value: unknown): value is ProjectEntryPath {
+  if (!isRecord(value)) return false
+  return typeof value.path === 'string'
+    && value.path !== ''
+    && value.path.length <= PROJECT_DIRECTORY_PATH_MAX_CHARS
+    && typeof value.absolutePath === 'string'
+    && value.absolutePath !== ''
+}
+
+/** 条目路径请求与目录列举同一口径：只接受非空且不超过长度上限的相对路径字符串。 */
+export function isProjectEntryPathRequest(value: unknown): value is ProjectEntryPathRequest {
+  if (!isRecord(value)) return false
+  if (Object.keys(value).some((key) => key !== 'path')) return false
+  return typeof value.path === 'string'
+    && value.path !== ''
+    && value.path.length <= PROJECT_DIRECTORY_PATH_MAX_CHARS
+}
+
+export function isProjectEntryPathResult(value: unknown): value is ProjectEntryPathResult {
+  if (!isRecord(value)) return false
+  if (value.ok === true) return isProjectEntryPath(value.data)
+  if (value.ok !== false || !isRecord(value.error)) return false
+
+  const { code, message } = value.error
+  return typeof code === 'string' && typeof message === 'string'
+}
+
+/** 显示结果只区分成功与失败：成功没有数据，失败沿用同一份错误结构。 */
+export function isProjectEntryRevealResult(value: unknown): value is ProjectEntryRevealResult {
+  if (!isRecord(value)) return false
+  if (value.ok === true) return true
   if (value.ok !== false || !isRecord(value.error)) return false
 
   const { code, message } = value.error

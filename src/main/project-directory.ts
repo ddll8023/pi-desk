@@ -1,19 +1,25 @@
 /**
- * 项目目录单层读取：为右侧面板的文件树提供「一层目录的条目」。
+ * 项目目录单层读取与条目路径解析：为右侧面板的文件树提供「一层目录的条目」，并把相对条目路径还原为绝对路径。
  *
- * 只接受项目内相对目录路径，项目根由调用方注入，页面无法指定绝对路径；读取前用 `realpath` 复核
- * 目标仍在项目内，且符号链接不跟随，因此链接不会把读取带出项目。只回传条目名与类型：不读文件内容、
+ * 只接受项目内相对路径，项目根由调用方注入，页面无法指定绝对路径；读取与解析前都用 `realpath` 复核
+ * 目标仍在项目内，且符号链接不跟随，因此链接不会把访问带出项目。列举只回传条目名与类型：不读文件内容、
  * 不递归、不做 git 过滤（只跳过 `.git`），单层条目超过上限时截断并如实标记。
- * 目录不存在、不可读与越界都回可展示的原因，由界面就近提示。
+ * 解析只对父目录做 realpath：最后一段按原名拼回，因此符号链接条目解析为链接本身而不是它指向的目标；
+ * 复制路径不需要条目仍存在，在文件管理器中显示则先 `lstat` 确认存在，否则回可展示的原因。
+ * 目录不存在、不可读、越界与条目已删除都回可展示的原因，由界面就近提示。
  */
 import type { Dirent } from 'node:fs'
-import { readdir, realpath } from 'node:fs/promises'
+import { lstat, readdir, realpath } from 'node:fs/promises'
 import { isAbsolute, join, sep } from 'node:path'
+import { shell } from 'electron'
+import type { DesktopError } from '../shared/desktop-api'
 import { PROJECT_DIRECTORY_ENTRY_LIMIT, PROJECT_DIRECTORY_PATH_MAX_CHARS } from '../shared/project-file-api'
 import type {
   ProjectDirectoryEntry,
   ProjectDirectoryEntryKind,
-  ProjectDirectoryListResult
+  ProjectDirectoryListResult,
+  ProjectEntryPathResult,
+  ProjectEntryRevealResult
 } from '../shared/project-file-api'
 
 /** 只跳过版本库目录：其余条目（含 dotfiles）都如实展示，gitignore 过滤留到后续按开关处理。 */
@@ -26,6 +32,76 @@ export interface ProjectDirectoryReaderOptions {
 
 export class ProjectDirectoryReader {
   constructor(private readonly options: ProjectDirectoryReaderOptions) {}
+
+  /**
+   * 把项目内相对条目路径解析为绝对路径；未选择项目、路径非法与越界都回可展示的原因。
+   * 不检查条目是否仍存在：复制路径不应该因为文件刚被删掉就失败。
+   */
+  async resolveEntry(path: string): Promise<ProjectEntryPathResult> {
+    const root = this.options.currentProjectPath()
+    if (root === null) {
+      return { ok: false, error: { code: 'INVALID_REQUEST', message: '尚未选择项目，无法解析文件路径。' } }
+    }
+    const resolved = await this.resolveAbsolute(root, path)
+    if (!resolved.ok) return resolved
+    return { ok: true, data: { path: resolved.relativePath, absolutePath: resolved.absolutePath } }
+  }
+
+  /**
+   * 在系统文件管理器中显示一个条目：解析通过且条目仍存在时交给 Electron 的 `showItemInFolder`，
+   * 它只定位并选中条目，不打开文件。
+   */
+  async revealEntry(path: string): Promise<ProjectEntryRevealResult> {
+    const root = this.options.currentProjectPath()
+    if (root === null) {
+      return { ok: false, error: { code: 'INVALID_REQUEST', message: '尚未选择项目，无法显示文件位置。' } }
+    }
+    const resolved = await this.resolveAbsolute(root, path)
+    if (!resolved.ok) return resolved
+    try {
+      // lstat 不跟随链接：指向已删除目标的符号链接本身仍然可以被定位。
+      await lstat(resolved.absolutePath)
+    } catch (error) {
+      const code = typeof error === 'object' && error !== null ? (error as NodeJS.ErrnoException).code : undefined
+      if (code === 'ENOENT') {
+        return { ok: false, error: { code: 'INVALID_REQUEST', message: `文件不存在，可能已被移动或删除：${resolved.relativePath}` } }
+      }
+      return { ok: false, error: { code: 'INTERNAL_ERROR', message: `无法读取文件信息：${resolved.relativePath}` } }
+    }
+    try {
+      shell.showItemInFolder(resolved.absolutePath)
+    } catch {
+      return { ok: false, error: { code: 'INTERNAL_ERROR', message: `无法在文件管理器中显示：${resolved.relativePath}` } }
+    }
+    return { ok: true }
+  }
+
+  /**
+   * 相对路径到绝对路径的公共解析：只对父目录做 realpath 与包含性校验，最后一段按原名拼回。
+   * 因此父目录是符号链接且指向项目外时被拒绝，而条目本身是符号链接时解析为链接自身。
+   */
+  private async resolveAbsolute(root: string, input: string): Promise<EntryResolution> {
+    const relativePath = normalizeRelativeDirectory(input)
+    if (relativePath === null || relativePath === '') {
+      return entryFailure('INVALID_REQUEST', '条目路径必须是项目内的相对路径。')
+    }
+
+    const slash = relativePath.lastIndexOf('/')
+    const parentRelative = slash < 0 ? '' : relativePath.slice(0, slash)
+    const name = slash < 0 ? relativePath : relativePath.slice(slash + 1)
+    const parentAbsolute = parentRelative === '' ? root : join(root, ...parentRelative.split('/'))
+
+    let resolvedParent: string
+    try {
+      resolvedParent = await realpath(parentAbsolute)
+    } catch (error) {
+      return entryFailure('INTERNAL_ERROR', readFailureMessage(error, parentRelative))
+    }
+    if (!isInsideRoot(root, resolvedParent)) {
+      return entryFailure('INVALID_REQUEST', '条目路径超出当前项目范围。')
+    }
+    return { ok: true, relativePath, absolutePath: join(resolvedParent, name) }
+  }
 
   /** 列举一层目录；未选择项目时返回空结果，与检索接口保持同一口径。 */
   async list(directory: string): Promise<ProjectDirectoryListResult> {
@@ -76,6 +152,15 @@ function failure(
   code: 'INVALID_REQUEST' | 'INTERNAL_ERROR',
   message: string
 ): ProjectDirectoryListResult {
+  return { ok: false, error: { code, message } }
+}
+
+/** 条目路径解析的内部结果：成功同时给出规范化相对路径与绝对路径，失败带可展示原因。 */
+type EntryResolution =
+  | { readonly ok: true; readonly relativePath: string; readonly absolutePath: string }
+  | { readonly ok: false; readonly error: DesktopError }
+
+function entryFailure(code: 'INVALID_REQUEST' | 'INTERNAL_ERROR', message: string): EntryResolution {
   return { ok: false, error: { code, message } }
 }
 

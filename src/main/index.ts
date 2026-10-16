@@ -37,10 +37,18 @@ import type {
 } from '../shared/project-api'
 import {
   PROJECT_DIRECTORY_LIST_CHANNEL,
+  PROJECT_ENTRY_RESOLVE_CHANNEL,
+  PROJECT_ENTRY_REVEAL_CHANNEL,
   PROJECT_FILE_QUERY_MAX_CHARS,
-  PROJECT_FILE_SEARCH_CHANNEL
+  PROJECT_FILE_SEARCH_CHANNEL,
+  isProjectEntryPathRequest
 } from '../shared/project-file-api'
-import type { ProjectDirectoryListResult, ProjectFileSearchResult } from '../shared/project-file-api'
+import type {
+  ProjectDirectoryListResult,
+  ProjectEntryPathResult,
+  ProjectEntryRevealResult,
+  ProjectFileSearchResult
+} from '../shared/project-file-api'
 import {
   TERMINAL_ACK_CHANNEL,
   TERMINAL_CLOSE_CHANNEL,
@@ -582,6 +590,14 @@ function projectDirectoryFailure(code: DesktopErrorCode, message: string): Proje
   return { ok: false, error: { code, message } }
 }
 
+function projectEntryPathFailure(code: DesktopErrorCode, message: string): ProjectEntryPathResult {
+  return { ok: false, error: { code, message } }
+}
+
+function projectEntryRevealFailure(code: DesktopErrorCode, message: string): ProjectEntryRevealResult {
+  return { ok: false, error: { code, message } }
+}
+
 function sessionFailure(code: SessionErrorCode, message: string): SessionListResult {
   return { ok: false, error: { code, message } }
 }
@@ -826,7 +842,10 @@ function registerProjectHandlers(pageUrl: string): void {
   )
 }
 
-/** 文件检索只接受一个查询串、目录列举只接受项目内相对目录路径；两者的根都是当前项目，页面不能指定绝对路径，也不返回文件内容。 */
+/**
+ * 文件检索只接受一个查询串、目录列举与条目路径解析只接受项目内相对路径；根都是当前项目，页面不能指定绝对路径，也不返回文件内容。
+ * 解析与「在文件管理器中显示」共用同一个条目解析：越界、绝对路径与非法段一律拒绝。
+ */
 function registerProjectFileHandlers(pageUrl: string): void {
   handle(
     PROJECT_FILE_SEARCH_CHANNEL,
@@ -875,6 +894,32 @@ function registerProjectFileHandlers(pageUrl: string): void {
         return projectDirectoryFailure('INVALID_REQUEST', '目录列举必须给出相对目录路径字符串。')
       }
       return projectDirectory.list(directory)
+    }
+  )
+
+  handle(
+    PROJECT_ENTRY_RESOLVE_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<ProjectEntryPathResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return projectEntryPathFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 1 || !isProjectEntryPathRequest(args[0])) {
+        return projectEntryPathFailure('INVALID_REQUEST', '路径解析只接受一个项目内相对路径请求。')
+      }
+      return projectDirectory.resolveEntry(args[0].path)
+    }
+  )
+
+  handle(
+    PROJECT_ENTRY_REVEAL_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<ProjectEntryRevealResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return projectEntryRevealFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 1 || !isProjectEntryPathRequest(args[0])) {
+        return projectEntryRevealFailure('INVALID_REQUEST', '显示文件位置只接受一个项目内相对路径请求。')
+      }
+      return projectDirectory.revealEntry(args[0].path)
     }
   )
 }

@@ -7,6 +7,9 @@
 
   安全与习惯：终端输出只作为文本写入 xterm，不解析 HTML；链接点击只复制地址，不打开浏览器（页面没有
   打开任意地址的权限，只有认证流程能经主进程打开 URL）；多行粘贴先确认，避免一次误粘贴直接执行命令。
+
+  落点：右侧面板的文件行拖到本面板时，把该文件的绝对路径写入本终端（不回车，只补一个空格），
+  由用户自己接着补命令；绝对路径经主进程解析，这里只做载荷归属校验与转义。
 -->
 <script setup lang="ts">
 import { FitAddon } from '@xterm/addon-fit'
@@ -19,7 +22,10 @@ import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { TERMINAL_DIMENSION_MAX, TERMINAL_DIMENSION_MIN, TERMINAL_WRITE_MAX_CHARS } from '../../../shared/terminal-api'
 import type { TerminalSessionInfo } from '../../../shared/terminal-api'
 import { copyText } from '../clipboard'
+import { hasProjectEntryDragData, projectEntryInsertText, readProjectEntryDragData } from '../project-entry-drag'
+import { resolveProjectEntryPath } from '../services/project-file'
 import { resizeTerminal, writeTerminal } from '../services/terminal'
+import { useProjectStore } from '../stores/project'
 import { useTerminalStore } from '../stores/terminal'
 import AppButton from './ui/AppButton.vue'
 
@@ -30,11 +36,14 @@ const props = defineProps<{
 }>()
 
 const terminalStore = useTerminalStore()
+const projectStore = useProjectStore()
 const container = ref<HTMLDivElement | null>(null)
 /** 待确认的多行粘贴；非空时终端上方显示确认条。 */
 const pendingPaste = ref<{ readonly text: string; readonly lines: number } | null>(null)
-/** 一次性提示（复制链接结果等）；到点自动消失。 */
+/** 一次性提示（复制链接结果、插入路径结果等）；到点自动消失。 */
 const notice = ref<string | null>(null)
+/** 是否有本应用的文件拖动悬停在本面板上；只用于高亮，不改变终端尺寸。 */
+const dropActive = ref(false)
 
 /** 回滚缓冲行数；与 Orca 同量级，足够翻回构建日志。 */
 const SCROLLBACK_LINES = 5000
@@ -108,6 +117,15 @@ watch(() => props.active, (active) => {
     fitNow()
     term?.focus()
   })
+})
+
+/**
+ * 有文本插入本终端（拖入文件路径、菜单里的「插入到终端」）时把焦点收回来：
+ * 触发这些动作的焦点原本在文件行或查找框上，不收回的话用户接着敲的命令会落到别处。
+ */
+watch(() => terminalStore.insertFocus, (focus) => {
+  if (focus === null || focus.id !== props.session.id) return
+  term?.focus()
 })
 
 function mountTerminal(): void {
@@ -263,6 +281,46 @@ async function copyLink(uri: string): Promise<void> {
   showNotice(copied ? `已复制链接：${uri}` : '复制链接失败。')
 }
 
+/** 只接受本应用的文件拖动：其他拖动（如系统文件）不接管，保持原有行为。 */
+function onDragOver(event: DragEvent): void {
+  if (!hasProjectEntryDragData(event)) return
+  event.preventDefault()
+  if (event.dataTransfer !== null) event.dataTransfer.dropEffect = 'copy'
+  dropActive.value = true
+}
+
+/** 在面板内的子元素之间移动也会触发 dragleave，因此只在真正离开面板时收起高亮。 */
+function onDragLeave(event: DragEvent): void {
+  const next = event.relatedTarget
+  if (next instanceof Node && event.currentTarget instanceof Node && event.currentTarget.contains(next)) return
+  dropActive.value = false
+}
+
+/** 落下：复核载荷仍属于当前项目，再把绝对路径插入本终端。 */
+function onDrop(event: DragEvent): void {
+  if (!hasProjectEntryDragData(event)) return
+  event.preventDefault()
+  dropActive.value = false
+  const payload = readProjectEntryDragData(event)
+  if (payload === null) return
+  if (payload.projectPath !== (projectStore.currentProject?.path ?? null)) {
+    showNotice('只能插入当前项目的文件。')
+    return
+  }
+  void insertEntryPath(payload.path, payload.name)
+}
+
+/** 绝对路径经主进程解析后写入本终端：只补一个空格，不隐式回车。 */
+async function insertEntryPath(path: string, name: string): Promise<void> {
+  const resolved = await resolveProjectEntryPath(path)
+  if (!resolved.ok) {
+    showNotice(resolved.error.message)
+    return
+  }
+  await terminalStore.insertText(props.session.id, projectEntryInsertText(props.session.shell, resolved.data.absolutePath))
+  showNotice(`已插入路径：${name}`)
+}
+
 function showNotice(message: string): void {
   notice.value = message
   if (noticeTimer !== null) window.clearTimeout(noticeTimer)
@@ -303,7 +361,13 @@ function readVariable(styles: CSSStyleDeclaration, name: string): string {
 </script>
 
 <template>
-  <div class="terminal-view">
+  <div
+    class="terminal-view"
+    :class="{ 'is-drop-target': dropActive }"
+    @dragover="onDragOver"
+    @dragleave="onDragLeave"
+    @drop="onDrop"
+  >
     <div ref="container" class="terminal-view-host"></div>
 
     <div v-if="pendingPaste !== null" class="terminal-bar" role="group" aria-label="粘贴确认">
