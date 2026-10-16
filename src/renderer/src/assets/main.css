@@ -1682,8 +1682,10 @@
     gap: 0.25rem;
   }
 
+  /* 标签等宽：宽度固定在容器上，不随名称变化，标题只在剩余空间里截断。 */
   .workspace-tab {
     display: flex;
+    width: 12rem;
     min-width: 0;
     flex: none;
     align-items: center;
@@ -1707,6 +1709,7 @@
   .workspace-tab-main {
     display: flex;
     min-width: 0;
+    flex: 1;
     align-items: center;
     gap: 0.375rem;
     border: 0;
@@ -1722,6 +1725,11 @@
     color: var(--color-desk-ink);
   }
 
+  /* 有新回复：标题与图标一起转强调色，配合标题后的圆点，在一排标签里也能一眼看出。 */
+  .workspace-tab.is-unseen .workspace-tab-main {
+    color: var(--color-desk-accent);
+  }
+
   .workspace-tab-icon {
     width: 0.875rem;
     height: 0.875rem;
@@ -1729,13 +1737,14 @@
   }
 
   .workspace-tab-title {
-    max-width: 12rem;
+    min-width: 0;
+    flex: 1;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
-  /* 状态点：运行中用强调色，已退出用中性色，不把退出当成错误。 */
+  /* 状态点：运行中与有新回复用强调色，已退出用中性色，不把退出当成错误。 */
   .workspace-tab-dot {
     width: 6px;
     height: 6px;
@@ -1751,8 +1760,13 @@
     background: var(--color-desk-line-strong);
   }
 
+  .workspace-tab-dot.is-unseen {
+    background: var(--color-desk-accent);
+  }
+
   .workspace-tab-rename {
-    width: 10rem;
+    min-width: 0;
+    flex: 1;
     border: 0;
     background: transparent;
     padding: 0.25rem 0.5rem;

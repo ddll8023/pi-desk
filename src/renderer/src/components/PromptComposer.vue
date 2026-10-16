@@ -13,6 +13,7 @@ import { useRuntimeStore } from '../stores/runtime'
 import { useSessionStore } from '../stores/session'
 import { isSessionKey, useSessionViewStore } from '../stores/session-view'
 import type { PendingImage } from '../stores/session-view'
+import { useWorkspaceTabsStore } from '../stores/workspace-tabs'
 import { parseDialogTitle } from '../extension-dialog-presentation'
 import { cacheHitRate, formatTokens } from '../usage-format'
 import AppButton from './ui/AppButton.vue'
@@ -26,6 +27,7 @@ const resourceStore = useResourceStore()
 const sessionStore = useSessionStore()
 const preferencesStore = usePreferencesStore()
 const sessionViewStore = useSessionViewStore()
+const workspaceTabsStore = useWorkspaceTabsStore()
 const { view: runtimeView, promptView, abortView, compactView, projectionSync, capabilitiesView, modelSwitchView,
   preparingPrompt, rewindView } = storeToRefs(runtimeStore)
 const { editorText, editorTextVersion } = storeToRefs(extensionStore)
@@ -44,16 +46,16 @@ const textarea = ref<HTMLTextAreaElement | null>(null)
 /** 闲置态点击「新建」后的一次性提示：说明会话由首次发送创建。 */
 const newSessionHint = ref(false)
 let newSessionHintTimer: ReturnType<typeof setTimeout> | null = null
-/** 输入 `/compact` 但当前无法执行时的一次性说明；文案由原因决定，用户据此知道该等还是该重试。 */
-const compactHint = ref<string | null>(null)
-let compactHintTimer: ReturnType<typeof setTimeout> | null = null
+/** 界面命令无法执行时的一次性说明；文案由命令与原因决定，用户据此知道该等还是该重试。 */
+const commandHint = ref<string | null>(null)
+let commandHintTimer: ReturnType<typeof setTimeout> | null = null
 
-function showCompactHint(text: string): void {
-  compactHint.value = text
-  if (compactHintTimer !== null) clearTimeout(compactHintTimer)
-  compactHintTimer = setTimeout(() => {
-    compactHint.value = null
-    compactHintTimer = null
+function showCommandHint(text: string): void {
+  commandHint.value = text
+  if (commandHintTimer !== null) clearTimeout(commandHintTimer)
+  commandHintTimer = setTimeout(() => {
+    commandHint.value = null
+    commandHintTimer = null
   }, 4_000)
 }
 
@@ -61,6 +63,10 @@ function showCompactHint(text: string): void {
 const COMPACT_HINT_UNBOUND = '压缩需要已有会话上下文；先发送一条消息启动 Pi，再使用 /compact。'
 /** 请求没发出：命令仍在输入框里，会话空闲且消息同步后可以原样重试。 */
 const COMPACT_HINT_BLOCKED = '当前会话不空闲或消息尚未同步，压缩未发起；等本轮结束后重试。'
+/** `/new` 落在本来就是空的对话上：没有可结束的实例，也没有可重建的会话。 */
+const NEW_CHAT_HINT_ALREADY = '当前已经是新对话。'
+/** `/new` 期间另一会话正在打开：此时新建会让意图落到别的会话上，等打开结束后重试。 */
+const NEW_CHAT_HINT_BUSY = '正在打开会话，稍后再新建。'
 
 /** 聚焦请求只在闲置态发出：聚焦输入框并短暂提示，不改动启动语义。 */
 watch(() => props.focusToken, () => {
@@ -201,8 +207,8 @@ const status = computed<{ readonly kind: 'info' | 'error'; readonly text: string
     return { kind: 'info', text: '请先处理当前操作；输入会保留。' }
   }
   if (!runtimeReady.value) {
-    if (compactHint.value !== null) {
-      return { kind: 'info', text: compactHint.value }
+    if (commandHint.value !== null) {
+      return { kind: 'info', text: commandHint.value }
     }
     if (runtimeView.value.phase === 'failed') {
       return { kind: 'error', text: `${runtimeView.value.error.message}；可再次点击发送重试启动。` }
@@ -225,7 +231,7 @@ const status = computed<{ readonly kind: 'info' | 'error'; readonly text: string
     return { kind: 'info', text: '正在压缩上下文；需要中断时在下方停止。' }
   }
   // 命令被拦下的一次性说明：运行中不占常驻信息行，只有用户刚按过 Enter 时才解释原因。
-  if (compactHint.value !== null) return { kind: 'info', text: compactHint.value }
+  if (commandHint.value !== null) return { kind: 'info', text: commandHint.value }
   // 运行中不再占信息行：Agent 是否在跑由右下角的停止按钮表达。
   if (projectionSync.value !== 'synced') {
     return { kind: 'info', text: '消息仍在同步，稍后才能提交输入。' }
@@ -465,7 +471,7 @@ function onDocumentPointerDown(event: PointerEvent): void {
 onUnmounted(() => {
   cancelFileSearch()
   if (newSessionHintTimer !== null) clearTimeout(newSessionHintTimer)
-  if (compactHintTimer !== null) clearTimeout(compactHintTimer)
+  if (commandHintTimer !== null) clearTimeout(commandHintTimer)
   // 已绑定会话的输入交给会话状态留底，切回时恢复；空闲与未绑定状态没有独立历史，直接释放预览地址。
   if (isSessionKey(sessionViewStore.key)) {
     sessionViewStore.saveInput(sessionViewStore.key, { draft: draft.value, images: pendingImages.value })
@@ -572,21 +578,35 @@ function onKeydown(event: KeyboardEvent): void {
 }
 
 /**
- * 界面命令 `/compact` 在启动分支与发送门禁之前拦截：被门禁拦下时也要说明原因，不能让命令文本静默留在输入框；
+ * 界面命令 `/compact`、`/new` 在启动分支与发送门禁之前拦截：被门禁拦下时也要说明原因，不能让命令文本静默留在输入框；
  * 未就绪时只保留草稿、不启动 Runtime。
  * 其余输入在 Runtime 未就绪时只启动并保留，就绪后提交，只有请求被接受时才清空且不覆盖新输入。
  */
 async function submit(): Promise<void> {
+  // 新建对话由 Desktop 发起：在当前标签内就地替换，结束原实例并清空它的会话身份。
+  // 判定用 trim：斜杠补全写入的候选带一个尾随空格，命令文本不能因此被当成普通输入发给模型。
+  if (draft.value.trim() === '/new') {
+    draft.value = ''
+    // 命令的含义是重开一段对话：上一次「首次发送只启动 Runtime」的待补发意图随之作废。
+    startupRequested.value = false
+    const outcome = await workspaceTabsStore.startNewChatInTab()
+    // 本来就空、以及打开其他会话期间都只是没替换，用一次性说明交代原因；
+    // 结束原实例未确认时不在这里重复文案，顶部已有结束失败的提示条。
+    if (outcome === 'already-new') showCommandHint(NEW_CHAT_HINT_ALREADY)
+    if (outcome === 'busy') showCommandHint(NEW_CHAT_HINT_BUSY)
+    return
+  }
+
   // 手动压缩由 Desktop 发起：Pi 的 prompt 不解释内置斜杠命令，直接发送只会把命令文本当成用户输入。
   if (draft.value === '/compact' || draft.value.startsWith('/compact ')) {
     // 未就绪时保留草稿：压缩需要已有会话上下文，不是“发送后自动补发”的输入。
     if (!runtimeReady.value) {
-      showCompactHint(COMPACT_HINT_UNBOUND)
+      showCommandHint(COMPACT_HINT_UNBOUND)
       return
     }
     // 会话不空闲或投影未同步时请求根本不会发出：保留命令并说明原因，而不是按了 Enter 毫无反应。
     if (!canSend.value) {
-      showCompactHint(COMPACT_HINT_BLOCKED)
+      showCommandHint(COMPACT_HINT_BLOCKED)
       return
     }
     const instructions = draft.value.slice('/compact'.length).trim()
@@ -597,7 +617,7 @@ async function submit(): Promise<void> {
     // 请求根本没发出（会话忙、目标已变）时把命令还回输入框，便于稍后重试；用户已输入新内容时不覆盖。
     if (outcome === 'refused' && draft.value === '') {
       draft.value = message
-      showCompactHint(COMPACT_HINT_BLOCKED)
+      showCommandHint(COMPACT_HINT_BLOCKED)
     }
     return
   }
@@ -707,9 +727,10 @@ interface DesktopCommandEntry {
 
 type ComposerSuggestion = PiResourceEntry | DesktopCommandEntry
 
-/** Desktop 层拦截的命令：`/compact` 走手动压缩；新建与恢复会话由侧栏与顶栏入口承担。 */
+/** Desktop 层拦截的命令：`/compact` 走手动压缩，`/new` 在当前标签内就地新建对话；恢复会话由顶栏入口承担。 */
 const DESKTOP_COMMANDS: readonly DesktopCommandEntry[] = [
-  { kind: 'desktop', name: 'compact', description: '压缩当前会话上下文（可跟摘要说明）' }
+  { kind: 'desktop', name: 'compact', description: '压缩当前会话上下文（可跟摘要说明）' },
+  { kind: 'desktop', name: 'new', description: '新建对话（结束当前对话）' }
 ]
 
 /** 分组顺序与标题：界面命令置前，其次是技能，保证输入 `/` 时本应用支持的入口一定在候选里。 */

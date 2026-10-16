@@ -5,6 +5,7 @@
   页面内生效、不回传主进程。重命名有两个入口：双击标签，或右键标签打开菜单选「重命名」；编辑态用
   输入框替换按钮（避免把输入框嵌在按钮里），Enter 或失焦提交、Esc 取消。
   拖动调整先后顺序（落点显示在目标标签左侧）；「+」按类型新建对话或终端，位置跟在标签之后（与 Orca 一致）。
+  后台对话结束一轮回复时，它的标签用强调色标题加一个圆点提示「有新回复」，切到该标签即清除。
   方向键与 Home/End 在同组标签间移动活动标签，顺序与视觉顺序一致。
 -->
 <script setup lang="ts">
@@ -225,7 +226,7 @@ function onMenuKeydown(event: KeyboardEvent, close: () => void, popup: HTMLEleme
           :key="tab.id"
           class="workspace-tab"
           :class="[
-            { 'is-active': props.activeTab === tab.id },
+            { 'is-active': props.activeTab === tab.id, 'is-unseen': tab.unseenCompletion },
             dragId === tab.id ? 'opacity-40' : '',
             dragId !== null && dragId !== tab.id && dropIndex === index
               ? 'shadow-[inset_2px_0_0_0_var(--color-desk-accent)]'
@@ -273,6 +274,9 @@ function onMenuKeydown(event: KeyboardEvent, close: () => void, popup: HTMLEleme
               aria-hidden="true"
             ></span>
             <span class="workspace-tab-title">{{ tab.title }}</span>
+            <!-- 有新回复：强调色圆点与标题变色一起提示；读屏靠后面的隐藏文本表达。 -->
+            <span v-if="tab.unseenCompletion" class="workspace-tab-dot is-unseen" aria-hidden="true"></span>
+            <span v-if="tab.unseenCompletion" class="sr-only">有新回复</span>
           </button>
           <AppButton
             variant="unstyled"

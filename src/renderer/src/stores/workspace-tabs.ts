@@ -3,11 +3,14 @@
  *
  * 标签是页面内的展示编排：活动的对话标签就是前台运行实例，其余对话标签由后台分片留底，
  * 因此切标签就是切前台；切项目换一组标签（对话与终端一起换），每个项目各自记住上次的活动标签。
- * 顺序、活动标签与重命名只留在内存里，不跨应用重启恢复：重启后每个项目回到一个空对话标签。
+ * 顺序、活动标签、重命名与「有新回复」标记只留在内存里，不跨应用重启恢复：重启后每个项目回到一个空对话标签。
  *
  * 标签键是页面内编号，只在渲染端有效：对话标签记会话身份与它承载的运行实例，终端标签记终端标识。
  * 终端清单是主进程的真相，因此终端标签按清单派生（已消失的不再展示、新出现的追加到末尾），
  * 只有对话标签需要在这里登记；同一项目内至多保留一个未落盘的新对话标签。
+ * 后台实例回复结束时给它的对话标签打「有新回复」标记，切到该标签即清除。
+ * 新建对话的入口分两类：标签条与侧栏新建一个对话标签，`/new` 则在当前标签内就地替换
+ * （结束原实例、清空会话身份与重命名，标签位置与顺序不变）。
  */
 import { defineStore } from 'pinia'
 import { computed, ref, watch } from 'vue'
@@ -27,6 +30,13 @@ const TERMINAL_KEY_PREFIX = 'term:'
 /** 标签类型：对话标签承载一个会话运行实例，终端标签承载一个终端进程。 */
 export type WorkspaceTabKind = 'chat' | 'terminal'
 
+/**
+ * 在当前标签内就地新建对话的结果：`started` 是已完成就地替换；`already-new` 是本来就空、没有可结束的实例；
+ * `refused` 是结束原实例未确认（标签与会话原样保留）；`busy` 是另一会话正在打开；
+ * `unavailable` 是没有可替换的活动对话标签。
+ */
+export type NewChatInTabOutcome = 'started' | 'already-new' | 'refused' | 'busy' | 'unavailable'
+
 /** 一个对话标签的页面内记录；会话身份在首次落盘前为空，运行实例身份随打开与回收变化。 */
 interface ChatTabRecord {
   readonly sessionId: string | null
@@ -41,6 +51,8 @@ export interface WorkspaceTabView {
   readonly tooltip: string
   /** 终端标签的运行状态；对话标签没有这个概念。 */
   readonly terminalStatus: 'running' | 'exited' | null
+  /** 该对话标签的实例已结束本轮回复，而用户还没切到过它；终端标签始终为假。 */
+  readonly unseenCompletion: boolean
 }
 
 export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
@@ -58,6 +70,10 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
   const activeTabs = ref<Readonly<Record<string, string | null>>>({})
   /** 用户重命名过的标签标题；未记录时按会话摘要或终端标题展示。 */
   const renames = ref<Readonly<Record<string, string>>>({})
+  /** 已结束回复但用户还没看过的对话标签键；只在内存里，不跨应用重启恢复。 */
+  const unseenCompletions = ref<ReadonlySet<string>>(new Set())
+  /** 上一次广播时正在执行的实例：只有由执行中变为已结束才算一轮回复完成，初始快照不产生标记。 */
+  let streamingRunIds = new Set<number>()
   /** 已经自动补过空对话标签的项目；用户显式关掉全部对话标签后不再自动补回。 */
   const preparedProjects = new Set<string>()
   let nextChatTabId = 1
@@ -125,7 +141,10 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
       stopProjectsWatch = watch(() => projectStore.projects.map(project => project.path), dropMissingProjects)
     }
     if (stopRunsWatch === null) {
-      stopRunsWatch = watch(() => sessionRunsStore.runs, syncRuns, { immediate: true })
+      stopRunsWatch = watch(() => sessionRunsStore.runs, () => {
+        syncRuns()
+        trackCompletions()
+      }, { immediate: true })
     }
     if (stopSessionsWatch === null) {
       // 会话列表刷新后重跑同步：会话落盘后标签才采纳它的身份，标题也从「新对话」换成摘要。
@@ -203,6 +222,32 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     setActive(projectPath, key)
     if (isRuntimeIdle()) return
     await sessionStore.open(null, false, projectPath)
+  }
+
+  /**
+   * 在当前活动对话标签内就地新建对话：结束该标签承载的运行实例（中断在途操作、解除占用、关闭宿主，
+   * 保留会话历史文件），标签位置、顺序与活动状态不变，会话身份与用户重命名一并清除。
+   * 本来就是空对话时不重建实例；另一会话正在打开时不动作，避免新建意图落到别的会话上。
+   */
+  async function startNewChatInTab(): Promise<NewChatInTabOutcome> {
+    const projectPath = currentProjectPath.value
+    const key = activeTab.value
+    if (projectPath === null || key === null || !isChatKey(key)) return 'unavailable'
+    const record = chatTabs.value[key]
+    if (record === undefined) return 'unavailable'
+    if (sessionStore.opening) return 'busy'
+    const runId = resolveRunId(projectPath, key)
+    // 既没有实例也没有会话身份：这个标签本来就是空对话，结束与重建都没有意义。
+    if (runId === null && record.sessionId === null) return 'already-new'
+    if (runId !== null && !await sessionRunsStore.close(runId)) return 'refused'
+    // 就地清空：只换身份，不动标签位置与顺序；旧会话的历史文件与留底草稿都不受影响。
+    chatTabs.value = { ...chatTabs.value, [key]: { sessionId: null, runId: null } }
+    clearRename(key)
+    setActive(projectPath, key)
+    // 结束实例后前台已被清空，闲置时不必预建宿主；仍占用前台实例时才提交新会话的打开请求。
+    if (isRuntimeIdle()) return 'started'
+    await sessionStore.open(null, false, projectPath)
+    return 'started'
   }
 
   /**
@@ -323,7 +368,8 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
       const record = chatTabs.value[key] ?? { sessionId: null, runId: null }
       const title = titleOfChat(projectPath, key, record)
       const detail = record.sessionId === null ? '尚未落盘的新会话' : `会话 ${record.sessionId}`
-      return { id: key, kind: 'chat', title, tooltip: `${title}\n${detail}`, terminalStatus: null }
+      return { id: key, kind: 'chat', title, tooltip: `${title}\n${detail}`, terminalStatus: null,
+        unseenCompletion: unseenCompletions.value.has(key) }
     }
     const session = terminalOf(key)
     const title = titleOfTerminal(key, session)
@@ -332,7 +378,8 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
       kind: 'terminal',
       title,
       tooltip: session === null ? title : `${title}\n${session.shell}\n${session.cwd}\n${terminalStatusText(session)}`,
-      terminalStatus: session === null ? null : session.status
+      terminalStatus: session === null ? null : session.status,
+      unseenCompletion: false
     }
   }
 
@@ -511,7 +558,60 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     orders.value = { ...orders.value, [projectPath]: keys }
   }
 
+  /**
+   * 记录后台标签的回复完成：实例由「执行中」变为「已结束」，且它绑定的标签不是活动标签时标记该标签。
+   * 宿主失败或阶段不是运行中的不算一轮完成；活动标签用户正在看，不标记。
+   */
+  function trackCompletions(): void {
+    const streaming = new Set<number>()
+    for (const run of sessionRunsStore.runs) {
+      if (run.isStreaming) {
+        streaming.add(run.runId)
+        continue
+      }
+      if (!streamingRunIds.has(run.runId)) continue
+      if (run.phase !== 'running' || run.hostState === 'failed') continue
+      const key = keyOfRun(run)
+      if (key === null) continue
+      const located = locate(key)
+      if (located !== null && activeTabs.value[located.projectPath] === key) continue
+      markUnseen(key)
+    }
+    streamingRunIds = streaming
+  }
+
+  /** 该实例当前绑定的对话标签键：先按实例身份，再按会话身份与项目顺序表匹配；没有标签时为空。 */
+  function keyOfRun(run: SessionRunState): string | null {
+    for (const [key, record] of Object.entries(chatTabs.value)) {
+      if (record.runId === run.runId) return key
+    }
+    if (run.sessionId === null || run.projectPath === null) return null
+    for (const [key, record] of Object.entries(chatTabs.value)) {
+      if (record.sessionId !== run.sessionId) continue
+      if ((orders.value[run.projectPath] ?? []).includes(key)) return key
+    }
+    return null
+  }
+
+  /** 标记该标签有新回复；已标记时不重复写入。 */
+  function markUnseen(key: string): void {
+    if (unseenCompletions.value.has(key)) return
+    const next = new Set(unseenCompletions.value)
+    next.add(key)
+    unseenCompletions.value = next
+  }
+
+  /** 清除该标签的新回复标记；没有标记时无副作用。 */
+  function clearUnseen(key: string): void {
+    if (!unseenCompletions.value.has(key)) return
+    const next = new Set(unseenCompletions.value)
+    next.delete(key)
+    unseenCompletions.value = next
+  }
+
   function setActive(projectPath: string, key: string | null): void {
+    // 用户切到该标签即视为已看过本轮回复，标记在该标签成为活动标签时清除。
+    if (key !== null) clearUnseen(key)
     if (activeTabs.value[projectPath] === key) return
     activeTabs.value = { ...activeTabs.value, [projectPath]: key }
   }
@@ -522,11 +622,16 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
       delete nextTabs[key]
       chatTabs.value = nextTabs
     }
-    if (renames.value[key] !== undefined) {
-      const nextRenames = { ...renames.value }
-      delete nextRenames[key]
-      renames.value = nextRenames
-    }
+    clearRename(key)
+    clearUnseen(key)
+  }
+
+  /** 清除某个标签的用户重命名；该标签本来没有覆盖时无副作用。 */
+  function clearRename(key: string): void {
+    if (renames.value[key] === undefined) return
+    const nextRenames = { ...renames.value }
+    delete nextRenames[key]
+    renames.value = nextRenames
   }
 
   /** 标签键属于哪个项目；登记过的顺序优先，未登记过顺序的终端标签按终端清单反查。 */
@@ -573,6 +678,7 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     activateTab,
     createTab,
     openNewChatTab,
+    startNewChatInTab,
     closeTab,
     renameTab,
     moveTab,
