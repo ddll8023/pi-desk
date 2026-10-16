@@ -1,7 +1,8 @@
 /**
  * 便携出包入口：按当前主机平台产出一份免安装包（Windows 为 zip，macOS 为含 .app 的 zip）。
  *
- * 只做参数解析、环境准备与进程转发，不改变打包内容；镜像只在同名环境变量为空时兜底，
+ * 只做参数解析、依赖与出包环境准备、进程转发，不改变打包内容：依赖准备包含修正 node-pty
+ * 预编译助手的执行权限（缺执行位时出包后的终端无法启动）；镜像只在同名环境变量为空时兜底，
  * 已显式设置的值（换镜像站或复用离线缓存）不被覆盖。不做安装器，也不做跨平台出包：
  * electron-builder 不能在非 macOS 主机上产 mac 包，Windows 目标的图标改写也依赖主机平台，
  * 因此平台参数与主机不一致时直接失败，不产出一个看似成功却不可用的包。
@@ -10,6 +11,7 @@ import { spawnSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { ensureSpawnHelperExecutable } from './fix-node-pty-permissions.mjs'
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const mirrorDefaults = {
@@ -57,6 +59,11 @@ function resolvePlatform() {
 const platform = resolvePlatform()
 const archArgument = archArguments[process.arch]
 if (!archArgument) throw new Error(`当前架构 ${process.arch} 不在支持的出包架构内。`)
+
+// 出包直接复制 node_modules，权限必须在这里就已正确：安装期的准备步骤不保证执行（可能被 allow-scripts 拦截），
+// 而 electron-builder 复制后再补权限已晚于签名。
+const helper = ensureSpawnHelperExecutable()
+if (helper !== null) console.log(`node-pty 预编译助手已可执行：${helper}`)
 
 const env = { ...process.env }
 for (const [name, value] of Object.entries(mirrorDefaults)) {

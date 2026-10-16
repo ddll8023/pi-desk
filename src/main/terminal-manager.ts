@@ -506,11 +506,12 @@ function shellTitle(file: string): string {
   return name.toLowerCase().endsWith('.exe') ? name.slice(0, -4) : name
 }
 
-/** 启动失败的可展示原因：只区分找不到 shell 与通用失败，不回传底层错误细节。 */
+/** 启动失败的可展示原因：只区分找不到 shell 与通用失败，附上错误码便于排查；完整错误只留在主进程日志。 */
 function spawnFailureMessage(error: unknown, file: string): string {
   const code = typeof error === 'object' && error !== null ? (error as NodeJS.ErrnoException).code : undefined
+  console.error(`创建终端失败（shell=${file}）：`, error)
   if (code === 'ENOENT') return `找不到 shell 可执行文件：${file}`
-  return `启动终端失败：${file}`
+  return code === undefined ? `启动终端失败：${file}` : `启动终端失败：${file}（${code}）`
 }
 
 function delay(milliseconds: number): Promise<void> {

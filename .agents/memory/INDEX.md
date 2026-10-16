@@ -23,3 +23,4 @@ Pi Desktop：Electron + Vue 3 + TypeScript 桌面客户端。会话执行主链�
 - 坑：`topics/gotchas/gui-launch-path.md`——在让主进程或检查类功能调用外部 CLI（npm、git 等）时读取。
 - 坑：`topics/gotchas/windows-cmd-spawn.md`——在受管脚本里启动 npm、git 等外部命令，或遇到「找不到可用的依赖命令」时读取。
 - 坑：`topics/gotchas/titlebar-interaction-area.md`——在调整顶部栏、窗口拖动区或标题栏右端控件时读取。
+- 坑：`topics/gotchas/node-pty-spawn-helper.md`——在终端启动失败、调整 node-pty 依赖或出包链路时读取。
