@@ -23,6 +23,7 @@
   "dependencies": {
     "@earendil-works/pi-coding-agent": "1.2.0",
     "@vueuse/core": "15.0.0",
+    "cross-spawn": "7.0.6",
     "dompurify": "3.4.16",
     "marked": "18.0.11",
     "motion-v": "2.6.0",
@@ -31,6 +32,7 @@
   },
   "devDependencies": {
     "@tailwindcss/vite": "4.3.3",
+    "@types/cross-spawn": "^6.0.6",
     "@types/node": "24.19.1",
     "@vitejs/plugin-vue": "6.0.9",
     "@vue/tsconfig": "0.9.1",

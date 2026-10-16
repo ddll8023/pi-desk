@@ -9,3 +9,5 @@
 处置：需要外部工具的能力不要依赖 CLI 直接可用——改走 HTTP，或在结果里区分「检查失败」与「没有变化」。版本检查的取舍写在 `src/update-check/index.ts` 的文件注释里。
 
 排除：不要用终端里能跑通来推断打包后的应用也能跑通。
+
+相关：Windows 上 npm 是 `.cmd`，Node 自带的 spawn 无法直接启动，表现为同一类「找不到命令」，见 `topics/gotchas/windows-cmd-spawn.md`。

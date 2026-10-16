@@ -21,3 +21,4 @@ Pi Desktop：Electron + Vue 3 + TypeScript 桌面客户端。会话执行主链�
 - 坑：`topics/gotchas/dev-main-process-restart.md`——在 dev 会话中判断主进程改动是否已生效、准备重启 dev 进程时读取。
 - 坑：`topics/gotchas/portable-package-lock.md`——在打包便携版、遇到 electron-builder 失败或 `release/` 下出现 `.tmp` 残留时读取。
 - 坑：`topics/gotchas/gui-launch-path.md`——在让主进程或检查类功能调用外部 CLI（npm、git 等）时读取。
+- 坑：`topics/gotchas/windows-cmd-spawn.md`——在受管脚本里启动 npm、git 等外部命令，或遇到「找不到可用的依赖命令」时读取。

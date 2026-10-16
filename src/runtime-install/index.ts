@@ -6,6 +6,9 @@
  * （加载候选 SDK 并比对版本）→ 原子重命名到 `releases/<版本>` → 切换当前版本指针 → 清理旧版本。
  * 校验或安装失败时删除 staging 且不切换指针，因此不会留下一个不可用的「当前版本」，旧运行时继续可用。
  *
+ * 依赖命令经 cross-spawn 启动：Windows 上 npm 是 `.cmd` 批处理，Node 自带的 spawn 不能直接执行，
+ * 与官方 SDK 的处理一致（其 `spawnProcess` 在 win32 上同样走 cross-spawn）；其余平台行为与自带 spawn 相同。
+ *
  * 边界：只写运行时目录（主进程传入的绝对路径），不写 Pi 的任何配置文件，不改动包声明，不建立会话。
  * 依赖命令（npm）自己的输出全部转到 stderr，stdout 只用于协议行。
  * `PI_OFFLINE` 生效时不下载也不安装，只报告离线。
@@ -13,11 +16,11 @@
  * 参数：argv[2] 是运行时根目录的绝对路径（必填，主进程给出）；argv[3] 是目标版本（可空，空表示取官方最新）。
  * 目标版本只接受与随应用发布的版本同一主版本的官方发布，其余不安装并如实报原因。
  */
-import { spawn } from 'node:child_process'
 import type { ChildProcess } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { isAbsolute, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import crossSpawn from 'cross-spawn'
 import { AGENT_INSTALL_LINE_PREFIX } from '../shared/updates-api'
 import type { AgentInstallFailureReason, AgentInstallOutcome, AgentInstallPhase } from '../shared/updates-api'
 import {
@@ -121,14 +124,18 @@ function readConfiguredNpmCommand(agentDir: string): readonly string[] {
   }
 }
 
-/** 依赖命令是否可执行：跑一次 `--version`，失败就是缺失，不做进一步猜测。 */
-function probeCommand(command: readonly string[]): Promise<boolean> {
+/**
+ * 依赖命令是否可执行：跑一次 `--version`。
+ * 可用时返回 null，否则返回不可用的原因（底层启动错误或退出码），由调用方带进失败文案，
+ * 使「命令缺失或不可执行」能被归类成缺少命令，而不是原因未知。
+ */
+function probeCommand(command: readonly string[]): Promise<string | null> {
   const executable = command[0]
-  if (executable === undefined) return Promise.resolve(false)
+  if (executable === undefined) return Promise.resolve('依赖命令为空。')
   return new Promise((resolve) => {
     let child: ChildProcess
     let settled = false
-    const finish = (value: boolean): void => {
+    const finish = (value: string | null): void => {
       if (settled) return
       settled = true
       clearTimeout(timer)
@@ -140,16 +147,16 @@ function probeCommand(command: readonly string[]): Promise<boolean> {
       } catch {
         // 进程已退出时不产生未处理异常。
       }
-      finish(false)
+      finish('探测超时。')
     }, NPM_PROBE_TIMEOUT_MS)
     try {
-      child = spawn(executable, [...command.slice(1), '--version'], { stdio: 'ignore', windowsHide: true })
-    } catch {
-      finish(false)
+      child = crossSpawn(executable, [...command.slice(1), '--version'], { stdio: 'ignore', windowsHide: true })
+    } catch (error) {
+      finish(`无法启动：${describeError(error)}`)
       return
     }
-    child.once('error', () => finish(false))
-    child.once('close', (code) => finish(code === 0))
+    child.once('error', (error) => finish(`无法启动：${error.message}`))
+    child.once('close', (code) => finish(code === 0 ? null : `--version 以退出码 ${code ?? '未知'} 结束。`))
   })
 }
 
@@ -180,7 +187,7 @@ function installDependencies(command: readonly string[], stageDirPath: string): 
       if (failure !== null) reject(failure)
       else resolve()
     }
-    const child = spawn(executable, args, {
+    const child = crossSpawn(executable, args, {
       cwd: stageDirPath,
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true
@@ -280,7 +287,8 @@ async function fetchLatestVersion(): Promise<string> {
 function classifyFailure(error: unknown, phase: AgentInstallPhase): AgentInstallFailureReason {
   if (error instanceof UnsupportedVersionError) return 'unsupported-version'
   const message = describeError(error)
-  if (/ENOENT|command not found|not recognized as an internal or external command/i.test(message)) {
+  // EINVAL 是 Windows 上 spawn 到不可直接执行的文件（例如 `.cmd`）时的报错，同样属于命令不可用。
+  if (/ENOENT|EINVAL|command not found|not recognized as an internal or external command/i.test(message)) {
     return 'tool-missing'
   }
   if (phase === 'verify') return 'verify-failed'
@@ -336,8 +344,9 @@ async function install(runtimeRoot: string, requestedVersion: string): Promise<A
 
     const npmCommand = readConfiguredNpmCommand(agentDir)
     writeProgress(phase, target, `使用依赖命令 ${npmCommand.join(' ')}`)
-    if (!(await probeCommand(npmCommand))) {
-      throw new Error(`找不到可用的依赖命令：${npmCommand.join(' ')}`)
+    const probeFailure = await probeCommand(npmCommand)
+    if (probeFailure !== null) {
+      throw new Error(`找不到可用的依赖命令：${npmCommand.join(' ')}（${probeFailure}）`)
     }
 
     cleanupStaging(runtimeRoot)
