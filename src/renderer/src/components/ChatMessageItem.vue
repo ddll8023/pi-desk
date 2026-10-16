@@ -37,6 +37,7 @@ const editTextarea = ref<HTMLTextAreaElement | null>(null)
 onUnmounted(() => {
   mounted = false
   if (copyFeedbackTimer !== null) window.clearTimeout(copyFeedbackTimer)
+  if (thinkingInputHandle !== null) cancelAnimationFrame(thinkingInputHandle)
 })
 
 /** 复制与修改预填共用同一份还原：技能消息还原成 Pi 命令形态，投影生成的附件说明不计入。 */
@@ -171,6 +172,12 @@ const THINKING_FOLLOW_THRESHOLD_PX = 24
 const thinkingBodies = new Map<string, HTMLElement>()
 const thinkingFollow = ref(true)
 let thinkingScrollTop = 0
+/**
+ * 用户滚动意图：滚轮与卡片内滚动条/触摸只记录一帧，只有它允许把位置下移判定为用户上滚。
+ * 内容重渲染造成的回夹不能暂停跟随，否则流式 Thinking 会停在半途。
+ */
+let thinkingUserInput = false
+let thinkingInputHandle: number | null = null
 
 /** 元素卸载时移除记录，不持有已脱离文档的节点。 */
 function registerThinkingBody(key: string, element: unknown): void {
@@ -178,13 +185,32 @@ function registerThinkingBody(key: string, element: unknown): void {
   else thinkingBodies.delete(key)
 }
 
-/** 内容变高不算上滚：只有实际向上移动才暂停跟随，回到底部再恢复。 */
+/** 标记一次用户滚动输入，只对下一帧派发的 scroll 事件有效。 */
+function markThinkingInput(): void {
+  thinkingUserInput = true
+  if (thinkingInputHandle !== null) return
+  thinkingInputHandle = requestAnimationFrame(() => {
+    thinkingInputHandle = null
+    thinkingUserInput = false
+  })
+}
+
+function onThinkingBodyWheel(event: WheelEvent): void {
+  if (event.deltaY !== 0) markThinkingInput()
+}
+
+function onThinkingBodyPointerDown(event: PointerEvent): void {
+  // 卡片内滚动条的指针事件落在正文容器；点在文本上不算滚动意图。
+  if (event.target === event.currentTarget) markThinkingInput()
+}
+
+/** 内容变高不算上滚：只有用户输入造成的实际向上移动才暂停跟随，回到底部再恢复。 */
 function onThinkingBodyScroll(event: Event): void {
   const element = event.currentTarget
   if (!(element instanceof HTMLElement)) return
   const nearBottom = element.scrollHeight - element.scrollTop - element.clientHeight <= THINKING_FOLLOW_THRESHOLD_PX
   if (nearBottom) thinkingFollow.value = true
-  else if (element.scrollTop < thinkingScrollTop) thinkingFollow.value = false
+  else if (thinkingUserInput && element.scrollTop < thinkingScrollTop) thinkingFollow.value = false
   thinkingScrollTop = element.scrollTop
 }
 
@@ -425,6 +451,8 @@ function onEditKeydown(event: KeyboardEvent): void {
           class="chat-thinking-body"
           :ref="element => registerThinkingBody(block.key, element)"
           @scroll.passive="onThinkingBodyScroll"
+          @wheel.passive="onThinkingBodyWheel"
+          @pointerdown.passive="onThinkingBodyPointerDown"
         >
           <MarkdownContent :text="block.text" />
           <p v-if="block.truncated" class="tool-note">此内容超出展示上限，已截断。</p>

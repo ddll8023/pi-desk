@@ -44,6 +44,14 @@ const outlineLayout = ref<{ left: number; width: number } | null>(null)
 /** 大纲跳转保持阅读位置，不被程序滚动或内容收缩产生的 scroll 事件重新开启粘底。 */
 let outlineTargetId: string | null = null
 let lastScrollTop = 0
+/**
+ * 用户滚动意图：滚轮与阅读键按方向记录一帧，拖动滚动条与触摸在整个手势期间有效。
+ * 只有它允许把"位置下移"判定为用户上滚，程序滚动（内容收缩回夹、视口变高、恢复位置）不会暂停跟随。
+ */
+let userScrollFrame: 'up' | 'down' | null = null
+let userScrollWasAtBottom = false
+let userGesture = false
+let userScrollFrameHandle: number | null = null
 /** 待恢复的滚动位置：投影分批到达时反复应用，同步完成后再结束恢复。 */
 let pendingRestore: number | null = null
 let scrollFrame: number | null = null
@@ -255,6 +263,42 @@ function isNearBottom(element: HTMLElement): boolean {
   return element.scrollHeight - element.scrollTop - element.clientHeight <= STICK_THRESHOLD_PX
 }
 
+/**
+ * 记录一次用户滚动输入：方向与"输入时刻是否已在底部"都取输入当时的状态。
+ * 意图只对下一帧派发的 scroll 事件有效，因此不会把随后的程序滚动一起算成用户输入。
+ */
+function armUserScroll(direction: 'up' | 'down'): void {
+  const element = scroller.value
+  userScrollFrame = direction
+  userScrollWasAtBottom = element !== null && isNearBottom(element)
+  if (userScrollFrameHandle !== null) return
+  userScrollFrameHandle = requestAnimationFrame(() => {
+    userScrollFrameHandle = null
+    userScrollFrame = null
+  })
+}
+
+/** 位置相对上次记录下移且来源是用户输入时，才算用户上滚；程序滚动不改变跟随状态。 */
+function isUserScrollUp(element: HTMLElement): boolean {
+  if (element.scrollTop >= lastScrollTop) return false
+  return userScrollFrame === 'up' || (userScrollFrame === null && userGesture)
+}
+
+/** 恢复跟随并补一次粘底；已经在跟随时不重复排队。 */
+function attachFollow(): void {
+  if (stickToBottom.value) return
+  stickToBottom.value = true
+  scheduleScrollToBottom()
+}
+
+/** 位置回到阈值内就恢复跟随：误锁，以及用户回到底部但判定已落后于新内容，都能自愈。 */
+function reattachIfAtBottom(): void {
+  if (pendingRestore !== null || stickToBottom.value) return
+  const element = scroller.value
+  if (element === null || !isNearBottom(element)) return
+  attachFollow()
+}
+
 /** 当前会话的阅读状态：粘底时位置无关紧要，离开底部时按最后一次滚动位置恢复。 */
 function currentReading(): SessionReading {
   return { stickToBottom: stickToBottom.value, scrollTop: lastScrollTop }
@@ -291,19 +335,24 @@ function applyPendingRestore(): void {
   if (element === null) return
   element.scrollTop = pendingRestore
   lastScrollTop = element.scrollTop
-  if (projectionSync.value === 'synced') pendingRestore = null
+  if (projectionSync.value !== 'synced') return
+  pendingRestore = null
+  // 恢复结束的那一帧就重判一次：目标位置若已在底部，直接回到跟随。
+  reattachIfAtBottom()
 }
 
-/** 内容变高造成底部距离增加，不等于用户上滚；只有实际向上移动才暂停跟随。 */
+/** 内容变高造成底部距离增加，不等于用户上滚；只有用户输入造成的实际向上移动才暂停跟随。 */
 function onScroll(): void {
   const element = scroller.value
   if (element === null) return
   // 恢复期间的位置由目标值决定：不让中间态改写粘底判定，也不让被裁剪的位置覆盖目标。
   if (pendingRestore === null) {
     if (outlineTargetId === null) {
-      if (isNearBottom(element)) stickToBottom.value = true
-      else if (element.scrollTop < lastScrollTop) stickToBottom.value = false
+      if (isNearBottom(element)) attachFollow()
+      else if (userScrollFrame === 'down' && userScrollWasAtBottom) attachFollow()
+      else if (isUserScrollUp(element)) stickToBottom.value = false
     }
+    // 始终记录实际位置：缓存过期会让程序滚动被误判成用户上滚。
     lastScrollTop = element.scrollTop
   }
   scheduleOutlineUpdate()
@@ -316,7 +365,8 @@ function scheduleScrollToBottom(): void {
     scrollFrame = null
     const element = scroller.value
     if (element === null || !stickToBottom.value) return
-    if (element.scrollTop < lastScrollTop && !isNearBottom(element)) {
+    // 排队期间只有用户上滚才让位；内容收缩或视口变高造成的回夹照常写到底部。
+    if (!isNearBottom(element) && isUserScrollUp(element)) {
       stickToBottom.value = false
       lastScrollTop = element.scrollTop
       return
@@ -343,17 +393,34 @@ function releaseOutlineJump(): void {
 }
 
 function onWheel(event: WheelEvent): void {
-  if (event.deltaY !== 0) releaseOutlineJump()
+  if (event.deltaY === 0) return
+  armUserScroll(event.deltaY < 0 ? 'up' : 'down')
+  releaseOutlineJump()
 }
 
 function onScrollerPointerDown(event: PointerEvent): void {
   // 原生滚动条的指针事件落在滚动容器；点击正文或复制按钮不解除阅读保护。
-  if (event.target === event.currentTarget) releaseOutlineJump()
+  if (event.target !== event.currentTarget) return
+  userGesture = true
+  releaseOutlineJump()
 }
 
+/** 触摸手势期间同样按实际位移判定上滚，手势结束就收回许可。 */
+function onUserGestureStart(): void {
+  userGesture = true
+}
+
+function onUserGestureEnd(): void {
+  userGesture = false
+}
+
+/** 阅读键按方向记录意图；其余按键不影响滚动判定。 */
 function onReadingKey(event: KeyboardEvent): void {
   if (event.target instanceof Element && event.target.closest('input, textarea, [contenteditable="true"]')) return
-  if (['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(event.key)) releaseOutlineJump()
+  if (['ArrowUp', 'PageUp', 'Home'].includes(event.key)) armUserScroll('up')
+  else if (['ArrowDown', 'PageDown', 'End', ' '].includes(event.key)) armUserScroll('down')
+  else return
+  releaseOutlineJump()
 }
 
 /** 定位当前投影里的用户消息；先取消待执行的粘底，再立即跳转，不让平滑滚动与流式更新争夺位置。 */
@@ -436,6 +503,8 @@ function scheduleOutlineUpdate(): void {
 
 function onLayoutChange(): void {
   applyPendingRestore()
+  // 内容或视口变化时重判：位置已在底部就恢复跟随，不依赖下一个 scroll 事件。
+  reattachIfAtBottom()
   scheduleScrollToBottom()
   scheduleOutlineUpdate()
 }
@@ -448,6 +517,10 @@ function startNewSession(): void {
 
 /** DOM 更新与实际尺寸变化都同步粘底及大纲；会话切换清除上一次阅读目标。 */
 watch([chatMessages, streaming, syncNotice, truncationNotice], onLayoutChange, { flush: 'post' })
+/** 用户消息被受理即回到底部：发送后不再停在旧阅读位置，随后的流式内容继续跟随。 */
+watch(() => promptView.value.phase, (next, previous) => {
+  if (next === 'accepted' && previous === 'sending') jumpToBottom()
+})
 watch(conversationKey, () => {
   pendingRewind.value = null
   activeOutlineId.value = null
@@ -462,6 +535,9 @@ onMounted(() => {
   resizeObserver = new ResizeObserver(onLayoutChange)
   if (scroller.value !== null) resizeObserver.observe(scroller.value)
   if (content.value !== null) resizeObserver.observe(content.value)
+  // 拖动滚动条的指针可能在容器外释放；手势许可在窗口层收回。
+  window.addEventListener('pointerup', onUserGestureEnd)
+  window.addEventListener('pointercancel', onUserGestureEnd)
   onLayoutChange()
 })
 
@@ -470,8 +546,11 @@ onBeforeUnmount(() => {
   if (isSessionKey(sessionViewStore.key)) sessionViewStore.saveReading(sessionViewStore.key, currentReading())
   if (refillNoticeTimer !== null) clearTimeout(refillNoticeTimer)
   resizeObserver?.disconnect()
+  window.removeEventListener('pointerup', onUserGestureEnd)
+  window.removeEventListener('pointercancel', onUserGestureEnd)
   if (scrollFrame !== null) cancelAnimationFrame(scrollFrame)
   if (outlineFrame !== null) cancelAnimationFrame(outlineFrame)
+  if (userScrollFrameHandle !== null) cancelAnimationFrame(userScrollFrameHandle)
 })
 </script>
 
@@ -483,6 +562,9 @@ onBeforeUnmount(() => {
       @scroll.passive="onScroll"
       @wheel.passive="onWheel"
       @pointerdown="onScrollerPointerDown"
+      @touchstart.passive="onUserGestureStart"
+      @touchend.passive="onUserGestureEnd"
+      @touchcancel.passive="onUserGestureEnd"
       @touchmove.passive="releaseOutlineJump"
       @keydown="onReadingKey"
     >
