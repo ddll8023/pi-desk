@@ -10,6 +10,8 @@
 
   落点：右侧面板的文件行拖到本面板时，把该文件的绝对路径写入本终端（不回车，只补一个空格），
   由用户自己接着补命令；绝对路径经主进程解析，这里只做载荷归属校验与转义。
+  右键：在指针位置打开快捷命令菜单（xterm 自身不改右键默认行为，这里只追加菜单）；
+  菜单数据与动作都由页面传入与处理，本视图不读写配置。
 -->
 <script setup lang="ts">
 import { FitAddon } from '@xterm/addon-fit'
@@ -21,6 +23,7 @@ import '@xterm/xterm/css/xterm.css'
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { TERMINAL_DIMENSION_MAX, TERMINAL_DIMENSION_MIN, TERMINAL_WRITE_MAX_CHARS } from '../../../shared/terminal-api'
 import type { TerminalSessionInfo } from '../../../shared/terminal-api'
+import type { QuickCommand, QuickCommandScope } from '../../../shared/quick-commands-api'
 import { copyText } from '../clipboard'
 import { hasProjectEntryDragData, projectEntryInsertText, readProjectEntryDragData } from '../project-entry-drag'
 import { resolveProjectEntryPath } from '../services/project-file'
@@ -28,11 +31,24 @@ import { resizeTerminal, writeTerminal } from '../services/terminal'
 import { useProjectStore } from '../stores/project'
 import { useTerminalStore } from '../stores/terminal'
 import AppButton from './ui/AppButton.vue'
+import QuickCommandMenu from './QuickCommandMenu.vue'
 
 const props = defineProps<{
   readonly session: TerminalSessionInfo
   /** 是否为当前显示的标签；隐藏的终端保持挂载，只是不接收焦点。 */
   readonly active: boolean
+  /** 当前可用的快捷命令；顺序由页面决定（项目命令在前，全局命令在后）。 */
+  readonly quickCommands: readonly QuickCommand[]
+  /** 当前项目路径；为空时快捷菜单的项目级入口禁用。 */
+  readonly projectPath: string | null
+}>()
+
+const emit = defineEmits<{
+  runCommand: [command: QuickCommand]
+  editCommand: [command: QuickCommand]
+  removeCommand: [command: QuickCommand]
+  addCommand: [scope: QuickCommandScope]
+  manageCommands: []
 }>()
 
 const terminalStore = useTerminalStore()
@@ -44,6 +60,8 @@ const pendingPaste = ref<{ readonly text: string; readonly lines: number } | nul
 const notice = ref<string | null>(null)
 /** 是否有本应用的文件拖动悬停在本面板上；只用于高亮，不改变终端尺寸。 */
 const dropActive = ref(false)
+/** 快捷命令菜单；右键时在指针位置打开。 */
+const commandMenu = ref<InstanceType<typeof QuickCommandMenu> | null>(null)
 
 /** 回滚缓冲行数；与 Orca 同量级，足够翻回构建日志。 */
 const SCROLLBACK_LINES = 5000
@@ -120,8 +138,8 @@ watch(() => props.active, (active) => {
 })
 
 /**
- * 有文本插入本终端（拖入文件路径、菜单里的「插入到终端」）时把焦点收回来：
- * 触发这些动作的焦点原本在文件行或查找框上，不收回的话用户接着敲的命令会落到别处。
+ * 有文本插入本终端（拖入文件路径、菜单里的「插入到终端」、运行快捷命令）时把焦点收回来：
+ * 触发这些动作的焦点原本在文件行、菜单或查找框上，不收回的话用户接着敲的命令会落到别处。
  */
 watch(() => terminalStore.insertFocus, (focus) => {
   if (focus === null || focus.id !== props.session.id) return
@@ -321,6 +339,15 @@ async function insertEntryPath(path: string, name: string): Promise<void> {
   showNotice(`已插入路径：${name}`)
 }
 
+/**
+ * 右键：阻止系统菜单后在指针位置打开快捷命令菜单。
+ * xterm 自己也会处理 contextmenu（把隐藏输入框移到鼠标下），但它不阻止冒泡，因此这里仍能收到事件。
+ */
+function onContextMenu(event: MouseEvent): void {
+  event.preventDefault()
+  commandMenu.value?.openAtPoint(event.clientX, event.clientY)
+}
+
 function showNotice(message: string): void {
   notice.value = message
   if (noticeTimer !== null) window.clearTimeout(noticeTimer)
@@ -364,6 +391,7 @@ function readVariable(styles: CSSStyleDeclaration, name: string): string {
   <div
     class="terminal-view"
     :class="{ 'is-drop-target': dropActive }"
+    @contextmenu="onContextMenu"
     @dragover="onDragOver"
     @dragleave="onDragLeave"
     @drop="onDrop"
@@ -380,4 +408,16 @@ function readVariable(styles: CSSStyleDeclaration, name: string): string {
       <span class="terminal-bar-text">{{ notice }}</span>
     </p>
   </div>
+
+  <!-- 快捷命令菜单：Teleport 由组件自己完成，这里只挂载并把动作上抛给页面。 -->
+  <QuickCommandMenu
+    ref="commandMenu"
+    :commands="props.quickCommands"
+    :project-path="props.projectPath"
+    @run="emit('runCommand', $event)"
+    @edit="emit('editCommand', $event)"
+    @remove="emit('removeCommand', $event)"
+    @add="emit('addCommand', $event)"
+    @manage="emit('manageCommands')"
+  />
 </template>

@@ -1,18 +1,19 @@
 /**
  * 本地 Desktop 配置的唯一读写者：最近项目的添加/移除、当前项目、界面偏好、窗口状态、各项目信任决定（Project Trust）
- * 与安装级 UUID、对话页模型展示偏好、快捷发送短语、扩展自动更新开关的加载、保存与降级处理。
+ * 与安装级 UUID、对话页模型展示偏好、快捷发送短语、扩展自动更新开关与快捷命令的加载、保存与降级处理。
  *
  * 配置位于 Electron userData 目录下的 desktop-config.json。写入采用同目录临时文件加改名替换，
  * 所有读写串行执行；加载时记录文件的标识（mtime 与大小），每次写入前比对，磁盘在加载后被其他
  * 写入者改动过就放弃本次保存，不用过期内容覆盖它。结构损坏先备份再重新开始，暂时读不到时进入
  * 只读降级，避免用空配置覆盖仍然存在的记录。界面偏好、窗口状态、各项目的信任决定、安装级 UUID
- * 与对话页模型展示偏好、快捷发送短语、扩展自动更新开关是同一文件里的可选字段，
+ * 与对话页模型展示偏好、快捷发送短语、扩展自动更新开关、快捷命令是同一文件里的可选字段，
  * 缺失或非法一律按默认值处理，不参与结构判定，也不改变版本语义；路径归一化在 project-path.ts，切换编排在
  * project-manager.ts，偏好读取在 preferences-manager.ts，窗口状态校正与保存时机在 window-state.ts，
  * 信任决定的探测与启动参数映射在 trust-manager.ts。
  *
  * 项目列表顺序由用户自己维护：加载时保持文件顺序，切换或添加只更新 `lastOpenedAt` 与条目内容，
  * 不把项目重新排序，也不把最近打开的项目顶到最前；只有超出上限时才按 `lastOpenedAt` 淘汰最旧的记录。
+ * 快捷命令按作用范围区分全局与项目：移除项目时一并清除该项目范围内的命令，与信任决定同一处置。
  */
 import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
@@ -27,6 +28,15 @@ import {
   MAX_QUICK_SEND_MESSAGE_LENGTH,
   isRightPanelWidth
 } from '../shared/preferences-api'
+import type { QuickCommand, QuickCommandsPreference } from '../shared/quick-commands-api'
+import {
+  MAX_QUICK_COMMAND_ID_LENGTH,
+  MAX_QUICK_COMMAND_LABEL_LENGTH,
+  MAX_QUICK_COMMAND_PATH_LENGTH,
+  MAX_QUICK_COMMAND_TEXT_LENGTH,
+  MAX_QUICK_COMMANDS,
+  isQuickCommandScope
+} from '../shared/quick-commands-api'
 import type { ModelIdentity } from '../shared/runtime-api'
 import { isModelIdentity } from '../shared/runtime-api'
 import type { TrustDecision } from '../shared/trust-api'
@@ -90,6 +100,8 @@ interface StoredConfig {
   readonly hiddenModels: readonly ModelIdentity[]
   /** 快捷发送下拉里的短语；缺失、非法或规范化后为空时回落默认列表。 */
   readonly quickSendMessages: readonly string[]
+  /** 快捷命令清单；缺失或非法条目逐条丢弃，缺失字段按空清单处理。 */
+  readonly quickCommands: readonly QuickCommand[]
   /** 可选字段：扩展自动更新开关；缺失或非法按关闭处理。 */
   readonly extensionAutoUpdate: boolean
 }
@@ -106,6 +118,8 @@ interface PersistPayload {
   readonly hiddenModels?: readonly ModelIdentity[]
   /** 未显式更新时保留当前值，避免其他配置写入将快捷发送短语清除。 */
   readonly quickSendMessages?: readonly string[]
+  /** 未显式更新时保留当前值，避免其他配置写入将快捷命令清除。 */
+  readonly quickCommands?: readonly QuickCommand[]
   /** 未显式更新时保留当前值，避免其他配置写入将自动更新开关复位。 */
   readonly extensionAutoUpdate?: boolean
 }
@@ -218,6 +232,43 @@ function sanitizeQuickSendMessages(value: unknown): string[] {
   return accepted.length === 0 ? [...DEFAULT_QUICK_SEND_MESSAGES] : accepted
 }
 
+/**
+ * 快捷命令：逐条校验并规范化，非法条目单独丢弃，不影响其余命令。
+ * 标签折叠空白后截断，命令文本只 trim 与截断（保留内部换行，多行命令按原样写入终端）；
+ * 标签或命令文本为空、项目范围缺少绝对路径的条目一律丢弃；标识缺失或重复时重新生成，
+ * 保证清单里的 id 唯一有效，页面不必依赖主进程回填。
+ */
+function sanitizeQuickCommands(value: unknown): QuickCommand[] {
+  if (!Array.isArray(value)) return []
+
+  const accepted: QuickCommand[] = []
+  const seen = new Set<string>()
+  for (const entry of value) {
+    if (!isRecord(entry)) continue
+    const label = typeof entry.label === 'string'
+      ? entry.label.replace(/\s+/gu, ' ').trim().slice(0, MAX_QUICK_COMMAND_LABEL_LENGTH)
+      : ''
+    const command = typeof entry.command === 'string'
+      ? entry.command.trim().slice(0, MAX_QUICK_COMMAND_TEXT_LENGTH)
+      : ''
+    if (label === '' || command === '') continue
+    const scope = isQuickCommandScope(entry.scope) ? entry.scope : 'global'
+    const projectPath = scope === 'project' && typeof entry.projectPath === 'string'
+      && entry.projectPath.length <= MAX_QUICK_COMMAND_PATH_LENGTH && isAbsolute(entry.projectPath)
+      ? entry.projectPath
+      : null
+    if (scope === 'project' && projectPath === null) continue
+    const stored = typeof entry.id === 'string' ? entry.id : ''
+    const id = stored !== '' && stored.length <= MAX_QUICK_COMMAND_ID_LENGTH && !seen.has(stored)
+      ? stored
+      : randomUUID()
+    seen.add(id)
+    accepted.push({ id, label, command, appendEnter: entry.appendEnter !== false, scope, projectPath })
+    if (accepted.length >= MAX_QUICK_COMMANDS) break
+  }
+  return accepted
+}
+
 /** 尺寸非法回落到默认值；位置缺失或非法一律丢弃，不猜测部分坐标。 */
 function sanitizeWindowState(value: unknown): WindowState {
   if (!isRecord(value)) return DEFAULT_WINDOW_STATE
@@ -287,6 +338,7 @@ export class DesktopConfigStore {
   private ui: UiPreferences = DEFAULT_UI_PREFERENCES
   private hiddenModels: ModelIdentity[] = []
   private quickSendMessages: string[] = [...DEFAULT_QUICK_SEND_MESSAGES]
+  private quickCommands: QuickCommand[] = []
   private extensionAutoUpdate = false
   private windowState: WindowState = DEFAULT_WINDOW_STATE
   private projectTrust: Record<string, TrustDecision> = {}
@@ -363,6 +415,10 @@ export class DesktopConfigStore {
       const currentProjectId = this.currentProjectId === projectId ? null : this.currentProjectId
       const projectTrust = { ...this.projectTrust }
       delete projectTrust[removed.path]
+      // 项目级命令随项目一起清除：范围键就是项目路径，留着的记录不会再被任何项目命中。
+      const quickCommands = this.quickCommands.filter(
+        (command) => command.scope !== 'project' || command.projectPath !== removed.path
+      )
       if (!this.readOnly) {
         await this.persist({
           projects,
@@ -370,13 +426,15 @@ export class DesktopConfigStore {
           ui: this.ui,
           windowState: this.windowState,
           projectTrust,
-          authDeviceId: this.deviceIdForPersist()
+          authDeviceId: this.deviceIdForPersist(),
+          quickCommands
         })
       }
 
       this.projects = projects
       this.currentProjectId = currentProjectId
       this.projectTrust = projectTrust
+      this.quickCommands = quickCommands
       return this.snapshot()
     })
   }
@@ -465,6 +523,36 @@ export class DesktopConfigStore {
       })
       this.quickSendMessages = next
       return { messages: [...next] }
+    })
+  }
+
+  /** 读取快捷命令清单；返回副本，缺失或非法条目已被过滤。 */
+  readQuickCommands(): Promise<QuickCommandsPreference> {
+    return this.enqueue(async () => {
+      await this.loadFromDisk()
+      return { commands: this.quickCommands.map((command) => ({ ...command })) }
+    })
+  }
+
+  /** 快捷命令保存成功后才提交；只读降级不能假称已保存。 */
+  saveQuickCommands(preference: QuickCommandsPreference): Promise<QuickCommandsPreference> {
+    return this.enqueue(async () => {
+      await this.loadFromDisk()
+      if (this.readOnly) {
+        throw new DesktopConfigStorageError('本地配置处于只读状态，快捷命令未保存。')
+      }
+      const next = sanitizeQuickCommands(preference.commands)
+      await this.persist({
+        projects: this.projects,
+        currentProjectId: this.currentProjectId,
+        ui: this.ui,
+        windowState: this.windowState,
+        projectTrust: this.projectTrust,
+        authDeviceId: this.deviceIdForPersist(),
+        quickCommands: next
+      })
+      this.quickCommands = next
+      return { commands: next.map((command) => ({ ...command })) }
     })
   }
 
@@ -658,6 +746,7 @@ export class DesktopConfigStore {
       this.ui = parsed.ui
       this.hiddenModels = [...parsed.hiddenModels]
       this.quickSendMessages = [...parsed.quickSendMessages]
+      this.quickCommands = parsed.quickCommands.map((command) => ({ ...command }))
       this.extensionAutoUpdate = parsed.extensionAutoUpdate
       this.windowState = parsed.window
       this.projectTrust = parsed.projectTrust
@@ -670,6 +759,7 @@ export class DesktopConfigStore {
     this.ui = parsed.ui
     this.hiddenModels = [...parsed.hiddenModels]
     this.quickSendMessages = [...parsed.quickSendMessages]
+    this.quickCommands = parsed.quickCommands.map((command) => ({ ...command }))
     this.extensionAutoUpdate = parsed.extensionAutoUpdate
     this.windowState = parsed.window
     this.projectTrust = parsed.projectTrust
@@ -697,6 +787,7 @@ export class DesktopConfigStore {
       ui: sanitizeUiPreferences(value.ui),
       hiddenModels: sanitizeHiddenModels(value.hiddenModels),
       quickSendMessages: sanitizeQuickSendMessages(value.quickSendMessages),
+      quickCommands: sanitizeQuickCommands(value.quickCommands),
       extensionAutoUpdate: value.extensionAutoUpdate === true,
       window: sanitizeWindowState(value.window),
       projectTrust: sanitizeProjectTrust(value.projectTrust),
@@ -759,6 +850,9 @@ export class DesktopConfigStore {
       authDeviceId: next.authDeviceId,
       hiddenModels: next.hiddenModels === undefined ? this.hiddenModels : [...next.hiddenModels],
       quickSendMessages: next.quickSendMessages === undefined ? this.quickSendMessages : [...next.quickSendMessages],
+      quickCommands: next.quickCommands === undefined
+        ? this.quickCommands.map((command) => ({ ...command }))
+        : next.quickCommands.map((command) => ({ ...command })),
       extensionAutoUpdate: next.extensionAutoUpdate === undefined ? this.extensionAutoUpdate : next.extensionAutoUpdate
     }
     // 这份配置是整文件写入：磁盘在加载后被别的写入者改过时，宁可放弃本次保存，也不用过期内容覆盖。

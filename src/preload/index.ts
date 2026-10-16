@@ -1,4 +1,4 @@
-/** 为沙箱页面提供应用信息、Project 选择/添加/移除/列表、项目文件检索、目录列举与条目路径解析、Session、会话运行状态、终端、Project Trust、偏好、Runtime、Pi 资源、Pi 默认模型、Pi 版本检查、自定义供应商、认证与 Extension 等受限接口，不暴露 Electron、任意 channel 或系统能力。 */
+/** 为沙箱页面提供应用信息、Project 选择/添加/移除/列表、项目文件检索、目录列举与条目路径解析、Session、会话运行状态、终端、Project Trust、偏好与快捷命令、Runtime、Pi 资源、Pi 默认模型、Pi 版本检查、自定义供应商、认证与 Extension 等受限接口，不暴露 Electron、任意 channel 或系统能力。 */
 import { contextBridge, ipcRenderer } from 'electron'
 import type { IpcRendererEvent } from 'electron'
 import { APP_INFO_CHANNEL, isAppInfoResult } from '../shared/desktop-api'
@@ -28,6 +28,12 @@ import type {
   QuickSendResult,
   UiPreferences
 } from '../shared/preferences-api'
+import {
+  QUICK_COMMANDS_GET_CHANNEL,
+  QUICK_COMMANDS_SET_CHANNEL,
+  isQuickCommandsResult
+} from '../shared/quick-commands-api'
+import type { QuickCommand, QuickCommandsApi, QuickCommandsPreference, QuickCommandsResult } from '../shared/quick-commands-api'
 import {
   PI_SETTINGS_GET_DEFAULT_MODEL_CHANNEL,
   PI_SETTINGS_SET_DEFAULT_MODEL_CHANNEL,
@@ -298,6 +304,7 @@ const INVALID_SESSION_RUNS_RESPONSE = '桌面接口返回了无法识别的会�
 const INVALID_PREFERENCES_RESPONSE = '桌面接口返回了无法识别的界面偏好。'
 const INVALID_MODEL_DISPLAY_RESPONSE = '桌面接口返回了无法识别的对话页模型展示偏好。'
 const INVALID_QUICK_SEND_RESPONSE = '桌面接口返回了无法识别的快捷发送短语。'
+const INVALID_QUICK_COMMANDS_RESPONSE = '桌面接口返回了无法识别的快捷命令清单。'
 const INVALID_AUTO_UPDATE_RESPONSE = '桌面接口返回了无法识别的扩展自动更新开关。'
 const INVALID_MODELS_CONFIG_RESPONSE = '桌面接口返回了无法识别的自定义供应商配置。'
 const INVALID_TRUST_RESPONSE = '桌面接口返回了无法识别的信任状态。'
@@ -403,6 +410,10 @@ function invalidAutoUpdateResponse(): AutoUpdateResult {
   return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_AUTO_UPDATE_RESPONSE } }
 }
 
+function invalidQuickCommandsResponse(): QuickCommandsResult {
+  return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_QUICK_COMMANDS_RESPONSE } }
+}
+
 function invalidModelsConfigResponse(): ModelsConfigResult {
   return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_MODELS_CONFIG_RESPONSE } }
 }
@@ -467,7 +478,7 @@ function invalidAgentRuntimeResetResponse(): AgentRuntimeResetResult {
   return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_AGENT_RUNTIME_RESET_RESPONSE } }
 }
 
-const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionApi & SessionRunApi & TerminalApi & PreferencesApi & PiSettingsApi & TrustApi & ExtensionUiApi & AuthApi & ModelsConfigApi & UpdatesApi = {
+const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionApi & SessionRunApi & TerminalApi & PreferencesApi & QuickCommandsApi & PiSettingsApi & TrustApi & ExtensionUiApi & AuthApi & ModelsConfigApi & UpdatesApi = {
   async getAppInfo() {
     const response: unknown = await ipcRenderer.invoke(APP_INFO_CHANNEL)
     if (!isAppInfoResult(response)) {
@@ -731,6 +742,27 @@ const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionAp
   async getAutoUpdate(): Promise<AutoUpdateResult> {
     const response: unknown = await ipcRenderer.invoke(PREFERENCES_GET_AUTO_UPDATE_CHANNEL)
     return isAutoUpdateResult(response) ? response : invalidAutoUpdateResponse()
+  },
+
+  async getQuickCommands(): Promise<QuickCommandsResult> {
+    const response: unknown = await ipcRenderer.invoke(QUICK_COMMANDS_GET_CHANNEL)
+    return isQuickCommandsResult(response) ? response : invalidQuickCommandsResponse()
+  },
+
+  async setQuickCommands(preference: QuickCommandsPreference): Promise<QuickCommandsResult> {
+    // 只搬运已声明的字段，并逐条重建普通对象，避免响应式代理跨 contextBridge。
+    const payload: QuickCommandsPreference = {
+      commands: preference.commands.map((command): QuickCommand => ({
+        id: command.id,
+        label: command.label,
+        command: command.command,
+        appendEnter: command.appendEnter === true,
+        scope: command.scope,
+        projectPath: command.projectPath
+      }))
+    }
+    const response: unknown = await ipcRenderer.invoke(QUICK_COMMANDS_SET_CHANNEL, payload)
+    return isQuickCommandsResult(response) ? response : invalidQuickCommandsResponse()
   },
 
   async setAutoUpdate(preference: AutoUpdatePreference): Promise<AutoUpdateResult> {

@@ -1,4 +1,4 @@
-<!-- 主界面外壳：编排工作区标签组（对话与终端面板）、项目两阶段添加/移除确认、会话删除确认、信任与中断对话框、版本更新提示、视图切换、侧栏「新建」到输入坞的聚焦请求、新建会话落盘后的会话列表补读及各展示 Store 生命周期。 -->
+<!-- 主界面外壳：编排工作区标签组（对话与终端面板）、项目两阶段添加/移除确认、会话删除确认、快捷命令的新增/编辑/删除与运行、信任与中断对话框、版本更新提示、视图切换、侧栏「新建」到输入坞的聚焦请求、新建会话落盘后的会话列表补读及各展示 Store 生命周期。 -->
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
@@ -6,6 +6,7 @@ import { useDesktopStore } from './stores/desktop'
 import { useExtensionUiStore } from './stores/extension-ui'
 import { usePreferencesStore } from './stores/preferences'
 import { useProjectStore } from './stores/project'
+import { useQuickCommandsStore } from './stores/quick-commands'
 import { useResourceStore } from './stores/resource'
 import { useRuntimeStore } from './stores/runtime'
 import { useSessionStore } from './stores/session'
@@ -17,6 +18,7 @@ import { useTrustStore } from './stores/trust'
 import { useUpdatesStore } from './stores/updates'
 import { useWorkspaceTabsStore } from './stores/workspace-tabs'
 import type { Project } from '../../shared/project-api'
+import type { QuickCommand, QuickCommandScope } from '../../shared/quick-commands-api'
 import type { SessionSummary } from '../../shared/session-api'
 import AppTitleBar from './components/AppTitleBar.vue'
 import ChatMessageList from './components/ChatMessageList.vue'
@@ -25,6 +27,7 @@ import ExtensionDialog from './components/ExtensionDialog.vue'
 import ExtensionNotificationBar from './components/ExtensionNotificationBar.vue'
 import PromptComposer from './components/PromptComposer.vue'
 import ProjectSidebar from './components/ProjectSidebar.vue'
+import QuickCommandDialog from './components/QuickCommandDialog.vue'
 import RightPanel from './components/RightPanel.vue'
 import SessionPickerDialog from './components/SessionPickerDialog.vue'
 import SettingsView from './components/SettingsView.vue'
@@ -38,6 +41,7 @@ const desktopStore = useDesktopStore()
 const extensionStore = useExtensionUiStore()
 const preferencesStore = usePreferencesStore()
 const projectStore = useProjectStore()
+const quickCommandsStore = useQuickCommandsStore()
 const resourceStore = useResourceStore()
 const runtimeStore = useRuntimeStore()
 const sessionStore = useSessionStore()
@@ -56,6 +60,22 @@ const { open: settingsOpen } = storeToRefs(settingsStore)
 const projectToRemove = ref<Project | null>(null)
 /** 待确认删除的会话：项目路径加摘要；确认后以 allowInterrupt 提交，取消不改动任何文件。 */
 const sessionToRemove = ref<{ readonly projectPath: string; readonly session: SessionSummary } | null>(null)
+
+/** 当前项目路径；终端、快捷命令与文件树都用它作为上下文。 */
+const projectPath = computed(() => currentProject.value?.path ?? null)
+/** 当前项目可用的快捷命令：项目命令在前，全局命令在后。 */
+const quickCommandsForProject = computed(() => quickCommandsStore.commandsForProject(projectPath.value))
+/** 快捷命令保存失败的原因；由工作区提示条展示，关闭后不再重复。 */
+const quickCommandError = computed(() => (
+  quickCommandsStore.view.phase === 'error' ? quickCommandsStore.view.error : null
+))
+/** 快捷命令编辑弹窗：null 表示新增，非空表示编辑该条。 */
+const commandEditorTarget = ref<QuickCommand | null>(null)
+const commandEditorOpen = ref(false)
+const commandEditorScope = ref<QuickCommandScope>('global')
+const commandEditorProjectPath = ref<string | null>(null)
+/** 待确认删除的快捷命令；确认后提交整份清单。 */
+const commandToRemove = ref<QuickCommand | null>(null)
 const additionTrustStatus = computed(() => {
   const candidate = pendingAddition.value
   if (candidate === null || candidate.trustStatus.resources.length === 0
@@ -119,6 +139,51 @@ const sessionConfirmLabel = computed(() => (pendingReload.value ? '停止并重�
 function onUpdateDetails(): void {
   updatesStore.dismissNotice()
   settingsStore.openSettings('version')
+}
+
+/** 菜单里运行一条命令：目标终端由标签状态决定（活动终端，没有就新建），失败留在终端提示条里。 */
+function runQuickCommand(command: QuickCommand): void {
+  void workspaceTabsStore.runQuickCommand(command)
+}
+
+/** 编辑一条命令：范围与项目取命令自身的值，弹窗里仍可改。 */
+function editQuickCommand(command: QuickCommand): void {
+  commandEditorTarget.value = command
+  commandEditorScope.value = command.scope
+  commandEditorProjectPath.value = command.projectPath
+  commandEditorOpen.value = true
+}
+
+/** 新增一条命令：范围来自菜单入口，项目默认取当前项目。 */
+function addQuickCommand(scope: QuickCommandScope): void {
+  commandEditorTarget.value = null
+  commandEditorScope.value = scope
+  commandEditorProjectPath.value = projectPath.value
+  commandEditorOpen.value = true
+}
+
+function closeCommandEditor(): void {
+  commandEditorOpen.value = false
+  commandEditorTarget.value = null
+}
+
+function requestCommandRemoval(command: QuickCommand): void {
+  commandToRemove.value = command
+}
+
+function cancelCommandRemoval(): void {
+  commandToRemove.value = null
+}
+
+async function confirmCommandRemoval(): Promise<void> {
+  const command = commandToRemove.value
+  commandToRemove.value = null
+  if (command !== null) await quickCommandsStore.removeCommand(command.id)
+}
+
+/** 菜单里的「管理快捷命令…」直接落到设置页对应分节。 */
+function openCommandSettings(): void {
+  settingsStore.openSettings('quick-commands')
 }
 
 function requestProjectRemoval(project: Project): void {
@@ -225,6 +290,7 @@ onMounted(() => {
   void extensionStore.initialize()
   void preferencesStore.initialize()
   void projectStore.initialize()
+  void quickCommandsStore.initialize()
   void resourceStore.initialize()
   void runtimeStore.initialize()
   // 会话身份要在运行状态到达之前就绪，因此紧随 Runtime 之后初始化。
@@ -293,17 +359,30 @@ onUnmounted(() => {
             :tabs="workspaceTabsStore.tabs"
             :active-tab="workspaceTabsStore.activeTab"
             :creating="terminalStore.creating"
+            :quick-commands="quickCommandsForProject"
+            :project-path="projectPath"
             @select="workspaceTabsStore.activateTab"
             @close="workspaceTabsStore.closeTab"
             @create="workspaceTabsStore.createTab"
             @rename="workspaceTabsStore.renameTab"
             @move="workspaceTabsStore.moveTab"
+            @run-command="runQuickCommand"
+            @edit-command="editQuickCommand"
+            @remove-command="requestCommandRemoval"
+            @add-command="addQuickCommand"
+            @manage-commands="openCommandSettings"
           />
 
           <!-- 终端操作失败只提示，不改变已建立的标签；关闭后不再重复展示。 -->
           <p v-if="terminalStore.error !== null" class="workspace-notice" role="status">
             <span class="min-w-0 flex-1">{{ terminalStore.error }}</span>
             <AppButton variant="unstyled" class="workspace-notice-close" aria-label="关闭提示" @click="terminalStore.clearError()">关闭</AppButton>
+          </p>
+
+          <!-- 快捷命令保存失败只提示，不清空已保存的清单；关闭后不再重复展示。 -->
+          <p v-if="quickCommandError !== null" class="workspace-notice" role="alert">
+            <span class="min-w-0 flex-1">{{ quickCommandError.message }}</span>
+            <AppButton variant="unstyled" class="workspace-notice-close" aria-label="关闭提示" @click="quickCommandsStore.clearError()">关闭</AppButton>
           </p>
 
           <!-- 关闭标签时结束实例失败（关闭未确认）只提示：标签保留，占用仍由侧栏如实展示。 -->
@@ -342,7 +421,17 @@ onUnmounted(() => {
               :inert="workspaceTabsStore.activeTab !== workspaceTabsStore.terminalTabId(session.id)"
               :aria-hidden="workspaceTabsStore.activeTab !== workspaceTabsStore.terminalTabId(session.id)"
             >
-              <TerminalView :session="session" :active="workspaceTabsStore.activeTab === workspaceTabsStore.terminalTabId(session.id)" />
+              <TerminalView
+                :session="session"
+                :active="workspaceTabsStore.activeTab === workspaceTabsStore.terminalTabId(session.id)"
+                :quick-commands="quickCommandsForProject"
+                :project-path="projectPath"
+                @run-command="runQuickCommand"
+                @edit-command="editQuickCommand"
+                @remove-command="requestCommandRemoval"
+                @add-command="addQuickCommand"
+                @manage-commands="openCommandSettings"
+              />
             </div>
 
             <!-- 没有活动标签（例如关掉了全部对话标签）时的空状态：新建入口是唯一动作。 -->
@@ -404,6 +493,27 @@ onUnmounted(() => {
 
       <!-- 顶栏会话 chip 使用的会话选择弹层。 -->
       <SessionPickerDialog :open="sessionStore.showSessionPicker" @close="sessionStore.closeSessionPicker()" />
+
+      <!-- 快捷命令的新增与编辑；保存成功才关闭，失败保留已填内容并就地提示。 -->
+      <QuickCommandDialog
+        :open="commandEditorOpen"
+        :command="commandEditorTarget"
+        :default-scope="commandEditorScope"
+        :default-project-path="commandEditorProjectPath"
+        @saved="closeCommandEditor"
+        @cancel="closeCommandEditor"
+      />
+
+      <!-- 快捷命令删除是破坏性操作：确认后从清单里移除，不可恢复。 -->
+      <ConfirmDialog
+        :open="commandToRemove !== null"
+        :title="`删除快捷命令「${commandToRemove?.label ?? ''}」？`"
+        description="该快捷命令会从保存的清单里移除，菜单与终端右键里不再出现。"
+        :detail="commandToRemove?.command ?? ''"
+        confirm-label="删除"
+        @confirm="confirmCommandRemoval"
+        @cancel="cancelCommandRemoval"
+      />
 
       <!-- Extension 对话一次只展示队首；队列由 store 持有，回应后自动滑到下一条。 -->
       <ExtensionDialog />

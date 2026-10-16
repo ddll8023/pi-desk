@@ -9,6 +9,7 @@ import type { PiSettingsApi } from '../../shared/pi-settings-api'
 import type { PreferencesApi } from '../../shared/preferences-api'
 import type { ProjectApi } from '../../shared/project-api'
 import type { ProjectFileApi } from '../../shared/project-file-api'
+import type { QuickCommandsApi } from '../../shared/quick-commands-api'
 import type { RuntimeApi } from '../../shared/runtime-api'
 import type { SessionApi } from '../../shared/session-api'
 import type { SessionRunApi } from '../../shared/session-run-api'
@@ -18,7 +19,7 @@ import type { UpdatesApi } from '../../shared/updates-api'
 
 declare global {
   interface Window {
-    readonly desktop?: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionApi & SessionRunApi & TerminalApi & PreferencesApi & PiSettingsApi & TrustApi & ExtensionUiApi & AuthApi & ModelsConfigApi & UpdatesApi
+    readonly desktop?: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionApi & SessionRunApi & TerminalApi & PreferencesApi & QuickCommandsApi & PiSettingsApi & TrustApi & ExtensionUiApi & AuthApi & ModelsConfigApi & UpdatesApi
   }
 }
 

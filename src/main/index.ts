@@ -1,4 +1,4 @@
-/** 管理唯一桌面窗口、本地资产边界，以及应用信息、Project 选择/添加/移除、项目文件检索与目录列举、Session 与 Project Trust、会话运行状态（查询、释放与结束）、内置终端（PTY）、界面偏好、Runtime、Pi 默认模型、自定义供应商配置、认证、Pi 版本检查、Extension IPC、事件广播及退出编排。 */
+/** 管理唯一桌面窗口、本地资产边界，以及应用信息、Project 选择/添加/移除、项目文件检索与目录列举、Session 与 Project Trust、会话运行状态（查询、释放与结束）、内置终端（PTY）、界面偏好、快捷命令、Runtime、Pi 默认模型、自定义供应商配置、认证、Pi 版本检查、Extension IPC、事件广播及退出编排。 */
 import { mkdirSync } from 'node:fs'
 import { realpath } from 'node:fs/promises'
 import { dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
@@ -21,6 +21,12 @@ import {
 import type { AutoUpdateResult, ModelDisplayResult, PreferencesErrorCode, PreferencesResult, QuickSendResult } from '../shared/preferences-api'
 import { isAutoUpdatePreference, isUiPreferences, isModelDisplayPreference, isQuickSendPreference } from '../shared/preferences-api'
 import type { UiTheme } from '../shared/preferences-api'
+import {
+  QUICK_COMMANDS_GET_CHANNEL,
+  QUICK_COMMANDS_SET_CHANNEL,
+  isQuickCommandsPreference
+} from '../shared/quick-commands-api'
+import type { QuickCommandsResult } from '../shared/quick-commands-api'
 import {
   PROJECT_ADD_CHANNEL,
   PROJECT_CHOOSE_DIRECTORY_CHANNEL,
@@ -1719,7 +1725,7 @@ function registerUpdatesHandlers(pageUrl: string): void {
   )
 }
 
-/** 界面偏好、对话页模型展示偏好、快捷发送短语与扩展自动更新开关分开读写；未知字段、任意启动参数一律拒绝。 */
+/** 界面偏好、对话页模型展示偏好、快捷发送短语、快捷命令与扩展自动更新开关分开读写；未知字段、任意启动参数一律拒绝。 */
 function registerPreferencesHandlers(pageUrl: string): void {
   handle(
     PREFERENCES_GET_QUICK_SEND_CHANNEL,
@@ -1743,6 +1749,36 @@ function registerPreferencesHandlers(pageUrl: string): void {
         return { ok: false, error: { code: 'INVALID_REQUEST', message: '快捷发送短语必须是不超过上限的文本列表。' } }
       }
       return preferencesManager.setQuickSend(args[0])
+    }
+  )
+  handle(
+    QUICK_COMMANDS_GET_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<QuickCommandsResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return { ok: false, error: { code: 'FORBIDDEN', message: '不允许此页面调用桌面接口。' } }
+      }
+      if (args.length !== 0) {
+        return { ok: false, error: { code: 'INVALID_REQUEST', message: '快捷命令读取接口不接受参数。' } }
+      }
+      return preferencesManager.getQuickCommands()
+    }
+  )
+  handle(
+    QUICK_COMMANDS_SET_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<QuickCommandsResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return { ok: false, error: { code: 'FORBIDDEN', message: '不允许此页面调用桌面接口。' } }
+      }
+      if (args.length !== 1 || !isQuickCommandsPreference(args[0])) {
+        return {
+          ok: false,
+          error: {
+            code: 'INVALID_REQUEST',
+            message: '快捷命令必须是不超过上限的清单，每条含标签、命令文本与合法的范围。'
+          }
+        }
+      }
+      return preferencesManager.setQuickCommands(args[0])
     }
   )
   handle(

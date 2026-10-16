@@ -11,11 +11,13 @@
  * 后台实例回复结束时给它的对话标签打「有新回复」标记，切到该标签即清除。
  * 新建对话的入口分两类：标签条与侧栏新建一个对话标签，`/new` 则在当前标签内就地替换
  * （结束原实例、清空会话身份与重命名，标签位置与顺序不变）。
+ * 快捷命令的运行目标也是标签：活动标签是终端就写进它，否则先新建一个终端再写入。
  */
 import { defineStore } from 'pinia'
 import { computed, ref, watch } from 'vue'
 import type { WatchStopHandle } from 'vue'
 import type { SessionRunState } from '../../../shared/session-run-api'
+import type { QuickCommand } from '../../../shared/quick-commands-api'
 import type { TerminalSessionInfo } from '../../../shared/terminal-api'
 import { useProjectStore } from './project'
 import { useRuntimeStore } from './runtime'
@@ -211,6 +213,27 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     const key = terminalTabId(terminalId)
     appendKey(projectPath, key)
     setActive(projectPath, key)
+  }
+
+  /**
+   * 运行一条快捷命令：活动标签是仍在运行的终端就写进它，否则先在当前项目新建终端再写入。
+   * 已退出的终端不能再输入（主进程会拒绝），因此和「没有终端」走同一条新建路径。
+   * 命令文本按原样写入，不做解析或转义（它就是要交给 shell 的输入）；`appendEnter` 为真时补一个回车立即执行。
+   * 失败（没有项目、终端达到上限、写入被拒）只留在终端 store 的错误提示里，不在这里重复文案。
+   */
+  async function runQuickCommand(command: QuickCommand): Promise<void> {
+    const text = command.appendEnter ? `${command.command}\r` : command.command
+    const active = activeTerminalId.value
+    const activeRunning = active !== null
+      && terminalStore.sessions.some(session => session.id === active && session.status === 'running')
+    if (active !== null && activeRunning) {
+      await terminalStore.insertText(active, text)
+      return
+    }
+    await createTab('terminal')
+    const created = activeTerminalId.value
+    if (created === null) return
+    await terminalStore.insertText(created, text)
   }
 
   /**
@@ -687,6 +710,7 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     dispose,
     activateTab,
     createTab,
+    runQuickCommand,
     openNewChatTab,
     startNewChatInTab,
     closeTab,

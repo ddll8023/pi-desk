@@ -7,13 +7,16 @@
   拖动调整先后顺序（落点显示在目标标签左侧）；「+」按类型新建对话或终端，位置跟在标签之后（与 Orca 一致）。
   后台对话结束一轮回复时，它的标签用强调色标题加一个圆点提示「有新回复」，切到该标签即清除。
   方向键与 Home/End 在同组标签间移动活动标签，顺序与视觉顺序一致。
+  「命令」按钮固定在标签条右端（与 Orca 同侧）打开快捷命令菜单：菜单数据由父级传入，运行、编辑、删除、添加与管理都上抛。
 -->
 <script setup lang="ts">
 import type { ComponentPublicInstance } from 'vue'
 import { computed, nextTick, ref } from 'vue'
+import type { QuickCommand, QuickCommandScope } from '../../../shared/quick-commands-api'
 import { useAnchoredPopup } from '../anchored-popup'
 import type { WorkspaceTabKind, WorkspaceTabView } from '../stores/workspace-tabs'
 import AppButton from './ui/AppButton.vue'
+import QuickCommandMenu from './QuickCommandMenu.vue'
 
 const props = defineProps<{
   readonly tabs: readonly WorkspaceTabView[]
@@ -21,6 +24,10 @@ const props = defineProps<{
   readonly activeTab: string | null
   /** 终端创建中：新建菜单的终端项据此禁用，避免重复提交。 */
   readonly creating: boolean
+  /** 当前可用的快捷命令；顺序由父级决定（项目命令在前，全局命令在后）。 */
+  readonly quickCommands: readonly QuickCommand[]
+  /** 当前项目路径；为空时快捷菜单的项目级入口禁用。 */
+  readonly projectPath: string | null
 }>()
 
 const emit = defineEmits<{
@@ -29,6 +36,11 @@ const emit = defineEmits<{
   create: [kind: WorkspaceTabKind]
   rename: [id: string, title: string]
   move: [id: string, toIndex: number]
+  runCommand: [command: QuickCommand]
+  editCommand: [command: QuickCommand]
+  removeCommand: [command: QuickCommand]
+  addCommand: [scope: QuickCommandScope]
+  manageCommands: []
 }>()
 
 /** 标签操作菜单的宽度；只放一个动作，窄一点更贴近标签。 */
@@ -79,6 +91,24 @@ const dragId = ref<string | null>(null)
 /** 拖动落点：插到该索引的标签之前；null 表示没有有效落点。 */
 const dropIndex = ref<number | null>(null)
 
+/** 快捷命令菜单；打开时锚定「命令」按钮。 */
+const commandMenu = ref<InstanceType<typeof QuickCommandMenu> | null>(null)
+/** 菜单是否展开；由菜单上报（点击外部收起也会同步），只用于按钮的 aria-expanded。 */
+const commandMenuOpen = ref(false)
+
+/** 展开或收起快捷命令菜单：已展开时收起，否则锚定「命令」按钮展开。 */
+function toggleCommandMenu(event: MouseEvent): void {
+  const host = event.currentTarget
+  if (!(host instanceof HTMLElement)) return
+  renameMenu.close()
+  createMenu.close()
+  if (commandMenuOpen.value) {
+    commandMenu.value?.close()
+    return
+  }
+  commandMenu.value?.open(host)
+}
+
 function setRenameInput(element: Element | ComponentPublicInstance | null): void {
   renameInput = element instanceof HTMLInputElement ? element : null
 }
@@ -108,6 +138,7 @@ function openTabMenu(tab: WorkspaceTabView, event: MouseEvent): void {
   if (!(host instanceof HTMLElement)) return
   createMenu.close()
   renameMenu.close()
+  commandMenu.value?.close()
   menuTargetId.value = tab.id
   renameTrigger.value = host
   renameMenu.open()
@@ -128,6 +159,7 @@ function toggleCreateMenu(event: MouseEvent): void {
   const host = event.currentTarget
   if (!(host instanceof HTMLElement)) return
   renameMenu.close()
+  commandMenu.value?.close()
   if (createOpen.value) {
     createMenu.close()
     return
@@ -304,6 +336,19 @@ function onMenuKeydown(event: KeyboardEvent, close: () => void, popup: HTMLEleme
         <svg class="workspace-tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
       </AppButton>
     </div>
+
+    <!-- 快捷命令：固定在标签条右端，不随标签横向滚动；菜单自带添加与管理入口，空清单时这个按钮仍然有用。 -->
+    <AppButton
+      variant="unstyled"
+      class="workspace-tab-command"
+      aria-haspopup="dialog"
+      :aria-expanded="commandMenuOpen"
+      title="快捷命令"
+      @click="toggleCommandMenu"
+    >
+      <svg class="workspace-tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 17 5-5-5-5" /><path d="M12 19h7" /></svg>
+      <span class="workspace-tab-command-label">命令</span>
+    </AppButton>
   </div>
 
   <!-- 标签操作菜单：只放重命名，关闭仍用标签上的按钮，避免两个入口重复。 -->
@@ -343,4 +388,16 @@ function onMenuKeydown(event: KeyboardEvent, close: () => void, popup: HTMLEleme
       </div>
     </Transition>
   </Teleport>
+  <!-- 快捷命令菜单：Teleport 由组件自己完成，这里只挂载并把动作上抛给页面。 -->
+  <QuickCommandMenu
+    ref="commandMenu"
+    :commands="props.quickCommands"
+    :project-path="props.projectPath"
+    @run="emit('runCommand', $event)"
+    @edit="emit('editCommand', $event)"
+    @remove="emit('removeCommand', $event)"
+    @add="emit('addCommand', $event)"
+    @manage="emit('manageCommands')"
+    @open-change="commandMenuOpen = $event"
+  />
 </template>

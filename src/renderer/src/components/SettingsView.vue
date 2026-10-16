@@ -10,6 +10,7 @@ import { SETTINGS_NAV_GROUPS } from '../settings-navigation'
 import AppButton from './ui/AppButton.vue'
 import ModelSettingsView from './ModelSettingsView.vue'
 import QuickSendSection from './QuickSendSection.vue'
+import QuickCommandsSection from './QuickCommandsSection.vue'
 import ResourceView from './ResourceView.vue'
 import SettingsNavIcon from './SettingsNavIcon.vue'
 import VersionUpdateSection from './VersionUpdateSection.vue'
@@ -88,6 +89,7 @@ const themeOptions = [
         </template>
 
         <QuickSendSection v-else-if="activeSection === 'quick-send'" />
+        <QuickCommandsSection v-else-if="activeSection === 'quick-commands'" />
         <ModelSettingsView v-else-if="activeSection === 'model'" />
         <ResourceView v-else-if="activeSection === 'resources'" />
         <VersionUpdateSection v-else />

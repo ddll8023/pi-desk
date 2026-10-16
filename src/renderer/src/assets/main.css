@@ -1448,6 +1448,64 @@
     background: var(--sidebar-hover);
   }
 
+  /* 快捷命令行：主体是运行入口，右侧固定两个小动作；行不换行，长标签只在主体里截断。 */
+  .quick-command-row {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+  }
+
+  .quick-command-run {
+    min-width: 0;
+    flex: 1;
+    gap: 6px;
+  }
+
+  .quick-command-label {
+    min-width: 0;
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* 范围标记：与侧栏次级文字同一层级，只作说明，不参与点击。 */
+  .quick-command-scope {
+    flex: none;
+    border-radius: 999px;
+    background: var(--sidebar-hover);
+    padding: 0 5px;
+    color: var(--sidebar-muted);
+    font-size: 10px;
+    line-height: 15px;
+  }
+
+  .quick-command-action {
+    width: auto;
+    flex: none;
+    justify-content: center;
+    padding: 5px 6px;
+    color: var(--sidebar-muted);
+    font-size: 11px;
+  }
+
+  .quick-command-action.is-danger {
+    color: var(--color-desk-danger);
+  }
+
+  .quick-command-empty {
+    margin: 0 4px 4px;
+    padding: 6px 4px;
+    color: var(--sidebar-muted);
+    font-size: 11px;
+    line-height: 16px;
+  }
+
+  .quick-command-menu-divider {
+    margin: 4px 6px;
+    border-top: 1px solid var(--sidebar-line);
+  }
+
   .sidebar-menu-enter-active,
   .sidebar-menu-leave-active {
     transition: opacity 140ms ease, transform 140ms var(--sidebar-ease);
@@ -1913,6 +1971,29 @@
   .workspace-tab-new:not(:disabled):hover {
     background: var(--color-desk-surface);
     color: var(--color-desk-ink);
+  }
+
+  /* 快捷命令按钮：固定在标签条右端（在滚动区之外，不随标签滚走），与新建按钮同一悬停表现。 */
+  .workspace-tab-command {
+    display: flex;
+    height: 1.5rem;
+    flex: none;
+    align-items: center;
+    gap: 0.25rem;
+    border-radius: var(--radius-desk-sm);
+    padding: 0 0.375rem;
+    color: var(--color-desk-muted);
+    font-size: 0.6875rem;
+    white-space: nowrap;
+  }
+
+  .workspace-tab-command:not(:disabled):hover {
+    background: var(--color-desk-surface);
+    color: var(--color-desk-ink);
+  }
+
+  .workspace-tab-command-label {
+    flex: none;
   }
 
   /* 面板层：对话与终端面板叠放在标签条之下的同一区域，只显示活动标签。 */

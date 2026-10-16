@@ -7,10 +7,10 @@
  */
 
 /** 设置页的分节标识；也是内容分发与深链跳转的唯一键。 */
-export type SettingsSectionId = 'appearance' | 'quick-send' | 'model' | 'resources' | 'version'
+export type SettingsSectionId = 'appearance' | 'quick-send' | 'quick-commands' | 'model' | 'resources' | 'version'
 
 /** 导航条目可用的图标名；每个名字对应 SettingsNavIcon 里的一段内联 Lucide 路径。 */
-export type SettingsIconName = 'palette' | 'zap' | 'bot' | 'blocks' | 'refresh-cw'
+export type SettingsIconName = 'palette' | 'zap' | 'terminal' | 'bot' | 'blocks' | 'refresh-cw'
 
 /** 一个分节条目：标签是导航上显示的名字，关键词除标签本身外补上用户可能输入的别名。 */
 export interface SettingsNavItem {
@@ -34,7 +34,8 @@ export const SETTINGS_NAV_GROUPS: readonly SettingsNavGroup[] = [
     label: '常规',
     items: [
       { id: 'appearance', label: '外观', icon: 'palette', keywords: ['主题', '浅色', '深色', 'theme'] },
-      { id: 'quick-send', label: '快捷输入', icon: 'zap', keywords: ['短语', '发送', 'quick send'] }
+      { id: 'quick-send', label: '快捷输入', icon: 'zap', keywords: ['短语', '发送', 'quick send'] },
+      { id: 'quick-commands', label: '快捷命令', icon: 'terminal', keywords: ['命令', '终端', '快捷命令', 'command'] }
     ]
   },
   {

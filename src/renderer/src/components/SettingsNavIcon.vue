@@ -24,6 +24,11 @@ defineProps<{ readonly name: SettingsIconName }>()
       d="M15.914 4a1.5 1.5 0 0 0-2.474-1.561l-9 9A1.5 1.5 0 0 0 5.5 14h4.002a.5.5 0 0 1 .471.666L8.086 20a1.5 1.5 0 0 0 2.475 1.56l9-9A1.5 1.5 0 0 0 18.5 10h-3.997a.5.5 0 0 1-.472-.667z"
     />
 
+    <template v-else-if="name === 'terminal'">
+      <path d="m4 17 6-6-6-6" />
+      <path d="M12 19h8" />
+    </template>
+
     <template v-else-if="name === 'bot'">
       <path d="M12 8V4H8" />
       <rect width="16" height="12" x="4" y="8" rx="2" />
