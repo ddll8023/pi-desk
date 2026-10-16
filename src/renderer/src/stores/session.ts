@@ -83,7 +83,7 @@ export const useSessionStore = defineStore('session', () => {
   /** 每个项目同时只允许一次列表读取（首屏、刷新与扩大窗口都算），同一项目的重复请求复用同一个等待。 */
   const inflight = new Map<string, Promise<void>>()
 
-  /** /resume 与顶栏会话 chip 共用的会话选择弹层。 */
+  /** 顶栏会话 chip 使用的会话选择弹层。 */
   const showSessionPicker = ref(false)
 
   function openSessionPicker(): void {

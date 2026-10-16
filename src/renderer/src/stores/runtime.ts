@@ -74,6 +74,12 @@ type CompactViewState =
   | { phase: 'requesting' }
   | { phase: 'error'; error: RuntimeError }
 
+/**
+ * 手动压缩的受理结果：`dispatched` 表示命令已发给 Runtime，成功、被 Pi 拒绝或结果不适用于当前实例
+ * 都由动作状态与投影表达；`refused` 表示前置条件不满足、请求根本没发出，命令文本没有被消费。
+ */
+type CompactOutcome = 'dispatched' | 'refused'
+
 /** 模型切换只保存动作状态，当前模型始终由 Runtime 快照表达。 */
 type ModelSwitchViewState =
   | { phase: 'idle' }
@@ -694,33 +700,35 @@ export const useRuntimeStore = defineStore('runtime', () => {
   }
 
   /**
-   * 手动压缩当前会话上下文；说明可选，成功返回 true 供调用方决定是否清空输入。
+   * 手动压缩当前会话上下文；说明可选，返回受理结果供调用方决定命令文本的去留。
    * 只在会话空闲时发起：Pi 的手动压缩会先中止当前轮次，从文本命令里静默中断一轮太意外。
-   * 调用会等到整段压缩结束才返回，因此这里只维护动作状态，进行中与结果都由投影表达。
+   * 调用会等到整段压缩结束才返回，因此这里只维护动作状态，进行中与结果都由投影表达；
+   * Pi 的拒绝（上下文太小、刚压缩过）已经算命令被消费，只有请求没发出才是 `refused`。
    */
-  async function compact(instructions: string | null): Promise<boolean> {
+  async function compact(instructions: string | null): Promise<CompactOutcome> {
     if (view.value.phase !== 'ready' || compactView.value.phase === 'requesting'
       || preparingPrompt.value || promptView.value.phase === 'sending'
-      || modelSwitchView.value.phase === 'switching' || rewindBlocksWrites()) return false
+      || modelSwitchView.value.phase === 'switching' || rewindBlocksWrites()) return 'refused'
     const status = view.value.snapshot
     const runtimeId = status.runtimeId
     const sessionId = status.info?.sessionId ?? null
     // 运行中由页面先提示（需要中断时用停止键）；这里再按快照复核一次，避免并发提交。
     if (status.runId === null || runtimeId === null || sessionId === null
-      || status.info?.isStreaming === true) return false
+      || status.info?.isStreaming === true) return 'refused'
     const sequence = ++compactRequest
     compactView.value = { phase: 'requesting' }
     try {
       const result = await compactRuntime({ runId: status.runId, runtimeId, sessionId, instructions })
+      // 命令已经发出：身份变化只决定结果是否应用到当前实例，命令本身已被消费。
       if (sequence !== compactRequest || view.value.phase !== 'ready'
-        || view.value.snapshot.runId !== status.runId || view.value.snapshot.runtimeId !== runtimeId) return false
+        || view.value.snapshot.runId !== status.runId || view.value.snapshot.runtimeId !== runtimeId) return 'dispatched'
       if (!result.ok) {
         compactView.value = { phase: 'error', error: result.error }
-        return false
+        return 'dispatched'
       }
       if (result.data.runId === status.runId && result.data.runtimeId === runtimeId) applyStatus(result.data)
       compactView.value = { phase: 'idle' }
-      return true
+      return 'dispatched'
     } finally {
       if (sequence === compactRequest && compactView.value.phase === 'requesting') compactView.value = { phase: 'idle' }
     }

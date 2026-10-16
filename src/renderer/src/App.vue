@@ -398,7 +398,7 @@ onUnmounted(() => {
         @cancel="cancelSessionRemoval"
       />
 
-      <!-- /resume 与会话 chip 共用的会话选择弹层。 -->
+      <!-- 顶栏会话 chip 使用的会话选择弹层。 -->
       <SessionPickerDialog :open="sessionStore.showSessionPicker" @close="sessionStore.closeSessionPicker()" />
 
       <!-- Extension 对话一次只展示队首；队列由 store 持有，回应后自动滑到下一条。 -->

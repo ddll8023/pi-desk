@@ -44,18 +44,23 @@ const textarea = ref<HTMLTextAreaElement | null>(null)
 /** 闲置态点击「新建」后的一次性提示：说明会话由首次发送创建。 */
 const newSessionHint = ref(false)
 let newSessionHintTimer: ReturnType<typeof setTimeout> | null = null
-/** 未就绪时输入 `/compact` 的一次性提示：压缩需要已有会话上下文。 */
-const compactHint = ref(false)
+/** 输入 `/compact` 但当前无法执行时的一次性说明；文案由原因决定，用户据此知道该等还是该重试。 */
+const compactHint = ref<string | null>(null)
 let compactHintTimer: ReturnType<typeof setTimeout> | null = null
 
-function showCompactHint(): void {
-  compactHint.value = true
+function showCompactHint(text: string): void {
+  compactHint.value = text
   if (compactHintTimer !== null) clearTimeout(compactHintTimer)
   compactHintTimer = setTimeout(() => {
-    compactHint.value = false
+    compactHint.value = null
     compactHintTimer = null
   }, 4_000)
 }
+
+/** 未就绪：压缩需要已有会话上下文，不是「发送后自动补发」的输入。 */
+const COMPACT_HINT_UNBOUND = '压缩需要已有会话上下文；先发送一条消息启动 Pi，再使用 /compact。'
+/** 请求没发出：命令仍在输入框里，会话空闲且消息同步后可以原样重试。 */
+const COMPACT_HINT_BLOCKED = '当前会话不空闲或消息尚未同步，压缩未发起；等本轮结束后重试。'
 
 /** 聚焦请求只在闲置态发出：聚焦输入框并短暂提示，不改动启动语义。 */
 watch(() => props.focusToken, () => {
@@ -196,8 +201,8 @@ const status = computed<{ readonly kind: 'info' | 'error'; readonly text: string
     return { kind: 'info', text: '请先处理当前操作；输入会保留。' }
   }
   if (!runtimeReady.value) {
-    if (compactHint.value) {
-      return { kind: 'info', text: '压缩需要已有会话上下文；先发送一条消息启动 Pi，再使用 /compact。' }
+    if (compactHint.value !== null) {
+      return { kind: 'info', text: compactHint.value }
     }
     if (runtimeView.value.phase === 'failed') {
       return { kind: 'error', text: `${runtimeView.value.error.message}；可再次点击发送重试启动。` }
@@ -219,6 +224,8 @@ const status = computed<{ readonly kind: 'info' | 'error'; readonly text: string
   if (compactView.value.phase === 'requesting' || runtimeInfo.value?.isCompacting === true) {
     return { kind: 'info', text: '正在压缩上下文；需要中断时在下方停止。' }
   }
+  // 命令被拦下的一次性说明：运行中不占常驻信息行，只有用户刚按过 Enter 时才解释原因。
+  if (compactHint.value !== null) return { kind: 'info', text: compactHint.value }
   // 运行中不再占信息行：Agent 是否在跑由右下角的停止按钮表达。
   if (projectionSync.value !== 'synced') {
     return { kind: 'info', text: '消息仍在同步，稍后才能提交输入。' }
@@ -565,38 +572,37 @@ function onKeydown(event: KeyboardEvent): void {
 }
 
 /**
- * 界面命令（`/new`、`/resume`、`/compact`）在启动分支之前拦截，其中 `/compact` 未就绪时只保留草稿、不启动 Runtime；
+ * 界面命令 `/compact` 在启动分支与发送门禁之前拦截：被门禁拦下时也要说明原因，不能让命令文本静默留在输入框；
+ * 未就绪时只保留草稿、不启动 Runtime。
  * 其余输入在 Runtime 未就绪时只启动并保留，就绪后提交，只有请求被接受时才清空且不覆盖新输入。
  */
 async function submit(): Promise<void> {
-  if (!canSend.value) return
-
-  // Desktop 层拦截的界面命令：Pi 的 prompt 不解释这些内置斜杠命令，直接发送只会把命令文本交给模型。
-  if (draft.value === '/resume') {
-    draft.value = ''
-    sessionStore.openSessionPicker()
-    return
-  }
-  if (draft.value === '/new') {
-    draft.value = ''
-    // 闲置时空白聊天已经可用；只有已有 Runtime 时才切换到实际 Pi 会话。
-    if (runtimeReady.value) void sessionStore.open(null, false)
-    return
-  }
   // 手动压缩由 Desktop 发起：Pi 的 prompt 不解释内置斜杠命令，直接发送只会把命令文本当成用户输入。
   if (draft.value === '/compact' || draft.value.startsWith('/compact ')) {
     // 未就绪时保留草稿：压缩需要已有会话上下文，不是“发送后自动补发”的输入。
     if (!runtimeReady.value) {
-      showCompactHint()
+      showCompactHint(COMPACT_HINT_UNBOUND)
+      return
+    }
+    // 会话不空闲或投影未同步时请求根本不会发出：保留命令并说明原因，而不是按了 Enter 毫无反应。
+    if (!canSend.value) {
+      showCompactHint(COMPACT_HINT_BLOCKED)
       return
     }
     const instructions = draft.value.slice('/compact'.length).trim()
     const message = draft.value
-    const accepted = await runtimeStore.compact(instructions === '' ? null : instructions)
-    // 只有请求被接受才清空；失败时保留说明文本，便于修改后重试。
-    if (accepted && draft.value === message) draft.value = ''
+    // 命令在发出时即从输入框移除：压缩含一次摘要调用，可达数十秒，期间把命令留在框里会与后续输入混在一起。
+    draft.value = ''
+    const outcome = await runtimeStore.compact(instructions === '' ? null : instructions)
+    // 请求根本没发出（会话忙、目标已变）时把命令还回输入框，便于稍后重试；用户已输入新内容时不覆盖。
+    if (outcome === 'refused' && draft.value === '') {
+      draft.value = message
+      showCompactHint(COMPACT_HINT_BLOCKED)
+    }
     return
   }
+
+  if (!canSend.value) return
 
   if (!runtimeReady.value) {
     // 首次发送只触发 Runtime 启动；保留文字与附件，就绪且同步完成后由下方 watch 自动补发。
@@ -701,11 +707,9 @@ interface DesktopCommandEntry {
 
 type ComposerSuggestion = PiResourceEntry | DesktopCommandEntry
 
-/** Desktop 层拦截的命令：`/compact` 走手动压缩，`/new` 与 `/resume` 是会话入口。 */
+/** Desktop 层拦截的命令：`/compact` 走手动压缩；新建与恢复会话由侧栏与顶栏入口承担。 */
 const DESKTOP_COMMANDS: readonly DesktopCommandEntry[] = [
-  { kind: 'desktop', name: 'compact', description: '压缩当前会话上下文（可跟摘要说明）' },
-  { kind: 'desktop', name: 'new', description: '开始新会话' },
-  { kind: 'desktop', name: 'resume', description: '恢复其他会话' }
+  { kind: 'desktop', name: 'compact', description: '压缩当前会话上下文（可跟摘要说明）' }
 ]
 
 /** 分组顺序与标题：界面命令置前，其次是技能，保证输入 `/` 时本应用支持的入口一定在候选里。 */

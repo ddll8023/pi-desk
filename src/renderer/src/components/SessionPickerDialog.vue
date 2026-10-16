@@ -150,7 +150,7 @@ watch(
         </p>
         <p v-else-if="visibleSessions.length === 0 && view.phase !== 'error'" class="empty-state py-10">
           <span class="empty-state-title">当前项目还没有 Pi 会话</span>
-          <span class="empty-state-text">在输入框输入 /new 新建会话后，这里会列出它。</span>
+          <span class="empty-state-text">用侧栏的「新建会话」或标签条的「新建对话」开始一条会话后，这里会列出它。</span>
         </p>
         <template v-else-if="visibleSessions.length > 0">
           <p v-if="actionError" role="alert" class="status-notice status-notice-error">
