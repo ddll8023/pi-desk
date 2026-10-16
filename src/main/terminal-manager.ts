@@ -25,6 +25,7 @@ import type {
   TerminalDataEvent,
   TerminalExitEvent,
   TerminalListRequest,
+  TerminalResizeRequest,
   TerminalSessionInfo,
   TerminalSessionResult,
   TerminalSessionsResult,

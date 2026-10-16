@@ -21,8 +21,11 @@ files:
   - package.json
   - out/**
 win:
-  # 由 build/icon.svg 自动光栅化并转换；不提供图标时回退 Electron 默认图标。
-  icon: build/icon.svg
+  # 用预生成的多尺寸 .ico（源是 build/icon.svg），不用 .svg：electron-builder 的 SVG 转换工具
+  # （resvg + libvips WASM）会为每个 CPU 核分配一个 1 GiB、不可增长的共享 WebAssembly 内存，
+  # 核数多或系统提交内存紧张时必然失败，表现为打包目录已生成、没有任何压缩包、退出码 1。
+  # 改 build/icon.svg 后必须重新生成并覆盖 build/icon.ico，不能让出包现场去转 SVG。
+  icon: build/icon.ico
   target:
     - zip
   artifactName: pi-desk-${version}-win-${arch}.${ext}
