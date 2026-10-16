@@ -1,9 +1,9 @@
-<!-- Provider 凭据区块：展示一个 Provider 的凭据来源与状态，并提供录入 API Key、账户登录与删除已保存凭据的入口。
-     只读 Pi 报告的凭据状态，不回传任何凭据内容；删除不可逆，确认对话框由父级持有，本组件只发出请求。 -->
+<!-- Provider 凭据区块：展示一个 Provider 的凭据可用性，并提供录入 API Key、账户登录与删除已保存凭据的入口。
+     供应商名称、id 与凭据状态由所在清单行给出，这里只补充行上没有的可用性提示与动作；
+     只读 Pi 报告的凭据状态，不回传任何凭据内容；删除不可逆，确认对话框由父级持有。 -->
 <script setup lang="ts">
 import type { AuthMethod, AuthProviderStatus } from '../../../shared/auth-api'
 import { useAuthStore } from '../stores/auth'
-import { providerStatusLabel } from '../provider-status'
 import AppButton from './ui/AppButton.vue'
 
 const props = defineProps<{
@@ -26,7 +26,7 @@ function methodLabel(provider: AuthProviderStatus, method: AuthMethod): string {
 function availabilityLabel(): string | null {
   if (props.runtimeModelProviders === null) return null
   if (props.runtimeModelProviders.has(props.provider.providerId)) {
-    return `Runtime 有 ${props.provider.modelCount} 个模型可用`
+    return `Runtime 里已有 ${props.provider.modelCount} 个可用模型`
   }
   if (!props.provider.configured) return null
   return 'Runtime 里还没有它的可用模型；可能需要重新加载'
@@ -35,23 +35,12 @@ function availabilityLabel(): string | null {
 
 <template>
   <div>
-    <div class="flex flex-wrap items-baseline justify-between gap-2">
-      <p class="text-sm font-medium">
-        {{ provider.name }}
-        <span class="ml-1 font-mono text-2xs text-desk-muted">{{ provider.providerId }}</span>
-      </p>
-      <p class="text-2xs text-desk-muted">
-        {{ providerStatusLabel(provider) }}<span v-if="provider.subscription">（订阅账户）</span>
-      </p>
-    </div>
-
-    <p
-      v-if="availabilityLabel() !== null"
-      class="mt-0.5 text-2xs text-desk-muted"
-    >
-      {{ provider.modelCount }} 个已知模型 · {{ availabilityLabel() }}
+    <p v-if="availabilityLabel() !== null" class="text-2xs text-desk-muted">
+      {{ availabilityLabel() }}
     </p>
-    <p v-else class="mt-0.5 text-2xs text-desk-muted">{{ provider.modelCount }} 个已知模型</p>
+    <p v-if="provider.subscription" class="text-2xs text-desk-muted">
+      账户登录由 Provider 订阅支撑。
+    </p>
 
     <div v-if="provider.authTypes.length > 0" class="mt-2 flex flex-wrap items-center gap-2">
       <AppButton

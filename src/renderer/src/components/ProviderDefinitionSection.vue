@@ -1,7 +1,8 @@
-<!-- 自定义供应商编辑区块：编辑 Pi 的 models.json 里 `providers` 下的一个供应商条目。
+<!-- 自定义供应商条目编辑器：编辑 Pi 的 models.json 里 `providers` 下的一个供应商条目，作为弹窗内容挂载。
      表单与「原始 JSON」是同一份内容的两种视图：原始 JSON 文本是唯一事实来源，表单字段读写它。
      密钥不回显：apiKey 与 headers 的值由主进程以哨兵文本回传，保存时按位置还原为磁盘上的原值。
-     本区块只提交这一个条目，不提供 modelOverrides 的专用表单（仍可在原始 JSON 里编辑）。 -->
+     本区块只提交这一个条目，不提供 modelOverrides 的专用表单（仍可在原始 JSON 里编辑）；
+     保存与取消按钮由弹窗 footer 承载，这里把提交入口、校验结论与脏状态暴露给弹窗。 -->
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { storeToRefs } from 'pinia'
@@ -23,7 +24,6 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (event: 'saved', providerId: string): void
-  (event: 'cancel'): void
 }>()
 
 /** 兼容端点常用的 API 类型；取值来自 Pi 的 KnownApi，其他取值可直接在原始 JSON 里写。 */
@@ -322,6 +322,9 @@ const saveBlockReason = computed<string | null>(() => {
 
 const canSave = computed(() => saveBlockReason.value === null && !busy.value)
 
+/** 是否与传入的初始内容不同；弹窗在关闭前用它决定要不要先确认。 */
+const dirty = computed(() => providerId.value !== props.providerId || rawText.value !== props.initialRawText)
+
 async function submit(): Promise<void> {
   if (!canSave.value) return
   const id = providerId.value.trim()
@@ -329,17 +332,13 @@ async function submit(): Promise<void> {
   if (!await store.save(id, rawText.value)) return
   emit('saved', id)
 }
+
+// 弹窗 footer 承载保存与取消：这里只暴露提交入口与校验结论，按钮布局与文案由弹窗决定。
+defineExpose({ submit, canSave, saveBlockReason, dirty })
 </script>
 
 <template>
-  <section class="panel-section space-y-4">
-    <div class="flex flex-wrap items-center justify-between gap-2">
-      <h2 class="panel-section-title">
-        {{ mode === 'create' ? '新增供应商' : `编辑供应商 ${providerId}` }}
-      </h2>
-      <AppButton variant="compact" :disabled="busy" @click="emit('cancel')">取消</AppButton>
-    </div>
-
+  <div class="space-y-4">
     <div class="grid gap-3 sm:grid-cols-2">
       <label class="space-y-1">
         <span class="field-label">供应商 ID</span>
@@ -531,10 +530,5 @@ async function submit(): Promise<void> {
         </p>
       </template>
     </div>
-
-    <div class="flex flex-wrap items-center gap-2">
-      <AppButton variant="primary" :disabled="!canSave" @click="submit">保存供应商</AppButton>
-      <span v-if="saveBlockReason !== null" class="hint-text">{{ saveBlockReason }}</span>
-    </div>
-  </section>
+  </div>
 </template>
