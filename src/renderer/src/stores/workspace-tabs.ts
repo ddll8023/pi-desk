@@ -286,13 +286,15 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     appendKey(projectPath, key)
     setActive(projectPath, key)
     if (isRuntimeIdle()) return
-    await sessionStore.open(null, false, projectPath)
+    // 新建请求指名这个标签：不让会话身份反查决定落在哪个标签上。
+    await sessionStore.open(null, false, projectPath, key)
   }
 
   /**
    * 在当前活动对话标签内就地新建对话：结束该标签承载的运行实例（中断在途操作、解除占用、关闭宿主，
    * 保留会话历史文件），标签位置、顺序与活动状态不变，会话身份与用户重命名一并清除。
    * 本来就是空对话时不重建实例；另一会话正在打开时不动作，避免新建意图落到别的会话上。
+   * 打开请求指名这个标签，因此无论标签记录是否已被旧实例写回身份，新建都只会落回它自己。
    */
   async function startNewChatInTab(): Promise<NewChatInTabOutcome> {
     const projectPath = currentProjectPath.value
@@ -311,7 +313,7 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     setActive(projectPath, key)
     // 结束实例后前台已被清空，闲置时不必预建宿主；仍占用前台实例时才提交新会话的打开请求。
     if (isRuntimeIdle()) return 'started'
-    await sessionStore.open(null, false, projectPath)
+    await sessionStore.open(null, false, projectPath, key)
     return 'started'
   }
 
@@ -375,9 +377,16 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
   /**
    * 打开会话成功后的标签同步：该会话已有标签时聚焦它，否则新开一个标签并切过去。
    * 未落盘的新会话复用该项目已有的空对话标签，因此「新建会话」不会重复占用同一个实例。
+   * `preferredKey` 是调用方指名要复用的标签（`/new` 与新建入口已经建好或重置过它）：
+   * 新建请求直接用它，不再按会话身份反查——反查可能因记录已被旧实例写回身份而落空，凭空多出一个标签。
    */
-  function syncOpenTab(sessionId: string | null, projectPath: string): void {
-    const key = findChatKey(projectPath, sessionId) ?? createChatTab(projectPath, sessionId)
+  function syncOpenTab(sessionId: string | null, projectPath: string, preferredKey: string | null = null): void {
+    const reusable = sessionId === null && preferredKey !== null
+      && isChatKey(preferredKey) && chatTabs.value[preferredKey] !== undefined
+      && (orders.value[projectPath] ?? []).includes(preferredKey)
+      ? preferredKey
+      : null
+    const key = reusable ?? findChatKey(projectPath, sessionId) ?? createChatTab(projectPath, sessionId)
     if (!(orders.value[projectPath] ?? []).includes(key)) appendKey(projectPath, key)
     bindRun(projectPath, key)
     setActive(projectPath, key)
@@ -550,6 +559,7 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
 
   /**
    * 单个标签记录的同步：先跟住它已经承载的实例，实例没了再按会话身份或本项目剩下的无主实例重新认领。
+   * 无主实例只在 `opening` / `running` 阶段才被认领：正在关闭或退出未确认的实例不会绑到别的标签上。
    * 标签承载的实例被释放（例如空会话被收掉）时只丢实例，不留下已经不存在的会话身份。
    */
   function syncRecord(
@@ -565,7 +575,9 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
       return { sessionId: adoptSession(record.sessionId, bound.sessionId, projectPath), runId: bound.runId }
     }
     if (record.sessionId !== null) return { sessionId: record.sessionId, runId: claimedRunId }
-    const free = runs.find(run => run.projectPath === projectPath && !claimed.has(run.runId))
+    // 只认领真正在用的实例：正在关闭或退出未确认的旧实例会把刚清空的标签绑回旧会话。
+    const free = runs.find(run => run.projectPath === projectPath && !claimed.has(run.runId)
+      && (run.phase === 'running' || run.phase === 'opening'))
     if (free === undefined) return { sessionId: null, runId: null }
     claimed.add(free.runId)
     return { sessionId: adoptSession(null, free.sessionId, projectPath), runId: free.runId }
@@ -613,11 +625,18 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     return key
   }
 
-  /** 该项目里会话身份匹配的对话标签键；未落盘的会话身份是 null，因此只会命中空对话标签。 */
+  /**
+   * 该项目里会话身份匹配的对话标签键；未落盘的会话身份是 null，因此只会命中空对话标签。
+   * 空对话标签可能有多个（例如新标签建立后记录还没被清干净），活动标签优先，
+   * 否则新建与打开意图会落到用户看不见的那个标签上。
+   */
   function findChatKey(projectPath: string, sessionId: string | null): string | null {
+    const keys = orders.value[projectPath] ?? []
+    const active = activeTabs.value[projectPath] ?? null
+    if (active !== null && keys.includes(active) && chatTabs.value[active]?.sessionId === sessionId) return active
     for (const [key, record] of Object.entries(chatTabs.value)) {
       if (record.sessionId !== sessionId) continue
-      if (!(orders.value[projectPath] ?? []).includes(key)) continue
+      if (!keys.includes(key)) continue
       return key
     }
     return null

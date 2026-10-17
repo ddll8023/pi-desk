@@ -309,12 +309,15 @@ export const useSessionStore = defineStore('session', () => {
   /**
    * 打开或新建会话；`projectPath` 给出时表示目标会话所属项目，与当前项目不同则先切换当前项目。
    * 打开其他会话不中断任何正在运行的会话，`allowInterrupt` 仅在用户已确认必须改变现有绑定时为真。
+   * `preferredTabKey` 是调用方指名要复用的对话标签（`/new` 与新建入口已经建好或重置过它），
+   * 只在新建会话时生效，用来避免按会话身份反查标签时落空并多出一个标签。
    * 新会话的默认模型由 Pi 自己的 settings.json 决定；信任或中断确认期间只保留目标，重试不重新选择。
    */
   async function open(
     sessionId: string | null,
     allowInterrupt: boolean,
-    projectPath?: string
+    projectPath?: string,
+    preferredTabKey: string | null = null
   ): Promise<void> {
     if (opening.value) return
 
@@ -338,8 +341,8 @@ export const useSessionStore = defineStore('session', () => {
       if (result.ok) {
         // 打开的返回列表同样只写入它回报的项目分片，不覆盖其他项目已读过的内容。
         applyList(result.data)
-        // 打开成功即登记工作区标签：已打开的会话聚焦它的标签，新会话新开一个标签。
-        if (targetPath !== null) useWorkspaceTabsStore().syncOpenTab(sessionId, targetPath)
+        // 打开成功即登记工作区标签：已打开的会话聚焦它的标签，新会话登记到调用方指名的标签，未指名时才新开一个。
+        if (targetPath !== null) useWorkspaceTabsStore().syncOpenTab(sessionId, targetPath, preferredTabKey)
         pendingSessionId.value = null
         pendingProjectPath.value = null
         awaitingInterrupt.value = false
