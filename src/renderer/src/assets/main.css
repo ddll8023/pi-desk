@@ -3741,18 +3741,33 @@
     }
   }
 
-  /* 会话活动摘要条：对话区顶部的一条窄带，只有折叠行，展开的明细是浮层（见下方 .session-activity-pop），
-     因此展开与收起都不改变消息区的高度，也不影响正文的滚动与粘底判定。 */
+  /* 会话活动摘要条：对话区顶部的一条窄带，只有一行：左侧折叠行（展开的明细是浮层，见下方 .session-activity-pop），
+     右侧是早期对话的整体折叠开关；因此展开与收起都不改变消息区的高度，也不影响正文的滚动与粘底判定。 */
   .session-activity {
     @apply shrink-0 border-b border-desk-line bg-desk-surface px-4 py-1.5 sm:px-6;
   }
 
+  /* 一行两端：左侧活动折叠行占满剩余宽度，右侧对话折叠开关按内容宽度收在行尾；
+     没有活动时只剩开关，仍靠右对齐，位置不随活动有无左右跳。 */
+  .session-activity-row {
+    @apply flex min-w-0 items-center justify-end gap-2;
+  }
+
   .session-activity-toggle {
-    @apply flex w-full min-w-0 items-center gap-2 rounded-desk-sm px-1.5 py-1 text-left transition-colors;
+    @apply flex min-w-0 flex-1 items-center gap-2 rounded-desk-sm px-1.5 py-1 text-left transition-colors;
   }
 
   .session-activity-toggle:hover {
     @apply bg-desk-surface-subtle;
+  }
+
+  /* 早期对话的整体折叠开关：与活动行同高的安静文本按钮，不描边、不抢注意力，悬停才出底色。 */
+  .session-activity-process {
+    @apply inline-flex shrink-0 items-center rounded-desk-sm px-1.5 py-1 text-2xs whitespace-nowrap text-desk-muted transition-colors;
+  }
+
+  .session-activity-process:hover {
+    @apply bg-desk-surface-subtle text-desk-ink;
   }
 
   .session-activity-title {
@@ -3978,6 +3993,52 @@
     }
   }
 
+  /*
+   * 一轮对话：用户消息、折叠摘要行与展开后的各条 AI 消息；间距与消息列表一致，
+   * 折叠只是隐藏部分成员，不改变消息本身的排版。
+   */
+  .chat-turn {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 1.25rem;
+  }
+
+  /* 早期轮次的摘要行：与工具卡同族的低强调卡片，整行可点，展开后仍留在原位当折叠入口。 */
+  .chat-turn-summary {
+    display: flex;
+    min-width: 0;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5625rem;
+    padding: 0.625rem 0.8125rem;
+    border: 1px solid var(--color-desk-line);
+    border-radius: var(--radius-desk-md);
+    background: var(--color-desk-surface-subtle);
+    color: var(--color-desk-muted);
+    font-size: 0.75rem;
+    text-align: left;
+    transition: background-color var(--default-transition-duration) ease;
+  }
+
+  .chat-turn-summary:hover {
+    background: var(--color-desk-canvas);
+  }
+
+  .chat-turn-summary-title {
+    color: var(--color-desk-ink);
+  }
+
+  .chat-turn-summary-count {
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* 耗时与 token 靠右：它们是次要信息，不跟标题抢注意力。 */
+  .chat-turn-summary-meta {
+    margin-left: auto;
+    font-variant-numeric: tabular-nums;
+  }
+
   /* Assistant 每条回复使用一张卡片；正文直接排版，工具卡片保留独立展示语义。 */
   .chat-message {
     display: flex;
@@ -4023,7 +4084,7 @@
    * 不设 overscroll-behavior，滚到卡片底部后继续滚动外层消息区（与侧栏会话列表同一约定）；
    * 不预留滚动条槽位，避免左对齐正文白占宽度。
    */
-  .chat-process-thinking,
+  .chat-thinking-body,
   .chat-skill-body,
   .chat-compaction-body,
   .tool-card-body {
@@ -4032,45 +4093,34 @@
   }
 
   /*
-   * AI 响应过程（Thinking 与工具调用）的合并折叠区：沿用低强调的内嵌卡片，不借用工具卡片样式。
-   * 过程与正文分开渲染，收起过程不会影响回答正文的可见性。
+   * 单段思考：一行轻量摘要，不套卡片框——与工具卡（卡片）和回答正文（白卡）分层。
+   * 思考与工具调用互不合并，因此收起一段思考不会连带收起任何工具。
    */
-  .chat-process {
+  .chat-thinking {
     min-width: 0;
-    border: 1px solid var(--color-desk-line);
-    border-radius: var(--radius-desk-md);
-    background: var(--color-desk-surface-subtle);
-    color: var(--color-desk-muted);
   }
 
-  .chat-process > summary {
+  .chat-thinking > summary {
     display: flex;
-    /* 预览另起一行：摘要行与预览各占一行，展开时预览隐藏，行数回到一行。 */
-    flex-wrap: wrap;
     align-items: center;
-    gap: 0.5625rem;
-    padding: 0.625rem 0.8125rem;
-    border-radius: var(--radius-desk-md);
+    gap: 0.5rem;
+    padding: 0.25rem 0.375rem;
+    border-radius: var(--radius-desk-sm);
+    color: var(--color-desk-muted);
     font-size: 0.75rem;
     transition: background-color var(--default-transition-duration) ease;
   }
 
-  .chat-process > summary:hover {
-    background: var(--color-desk-canvas);
+  .chat-thinking > summary:hover {
+    background: var(--color-desk-surface-subtle);
   }
 
-  .chat-process[open] > summary {
-    border-radius: var(--radius-desk-md) var(--radius-desk-md) 0 0;
-  }
-
-  /* 段数与次数是次要信息，不与「过程」标题抢注意力。 */
-  .chat-process-count {
-    color: var(--color-desk-muted);
-    font-variant-numeric: tabular-nums;
+  .chat-thinking-label {
+    color: var(--color-desk-ink);
   }
 
   /* 状态点与提示文案同行对齐；运行中的点由模板按流式状态给出。 */
-  .chat-process-hint {
+  .chat-thinking-hint {
     display: inline-flex;
     align-items: center;
     gap: 0.375rem;
@@ -4078,88 +4128,25 @@
     font-size: var(--text-2xs);
   }
 
-  /*
-   * 折叠态预览：正文尾部两行，底部渐隐提示还有更多。展开后由正文承担展示，预览让位，
-   * 避免同一段内容在标题行与正文里各出现一次。
-   */
-  .chat-thinking-preview {
-    display: -webkit-box;
-    flex: 1 0 100%;
-    min-width: 0;
-    overflow: hidden;
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 2;
-    color: var(--color-desk-muted);
-    font-size: 0.75rem;
-    line-height: 1.55;
-    overflow-wrap: anywhere;
-    mask-image: linear-gradient(to bottom, #000 55%, transparent);
-  }
-
-  .chat-process[open] .chat-thinking-preview {
-    display: none;
-  }
-
-  /* 流式思考的预览：渐变文字横向扫过；减少动效时回落为纯色，见下方 prefers-reduced-motion。 */
-  .chat-thinking-preview.is-live {
-    color: transparent;
-    background-image: linear-gradient(
-      100deg,
-      var(--color-desk-muted) 35%,
-      var(--color-desk-ink) 50%,
-      var(--color-desk-muted) 65%
-    );
-    background-size: 220% 100%;
-    background-clip: text;
-    -webkit-background-clip: text;
-    animation: chat-thinking-shimmer 2.4s linear infinite;
-  }
-
-  @keyframes chat-thinking-shimmer {
-    from { background-position: 120% 0; }
-    to { background-position: -120% 0; }
-  }
-
-  .chat-process-body {
+  /* 展开后的思考正文：缩进在左侧细线内，保持次要内容的层级。 */
+  .chat-thinking-body {
     display: flex;
     min-width: 0;
     flex-direction: column;
     gap: 0.625rem;
-    padding: 0.6875rem 0.8125rem 0.8125rem;
-    border-top: 1px solid var(--color-desk-line);
+    margin: 0.125rem 0 0.25rem 0.5rem;
+    padding: 0.25rem 0 0.25rem 0.75rem;
+    border-left: 1px solid var(--color-desk-line);
   }
 
-  /* 单段思考：小标题 + 正文；正文自己有滚动上限，过程区块整体不滚动。 */
-  .chat-process-item {
-    display: flex;
-    min-width: 0;
-    flex-direction: column;
-    gap: 0.375rem;
-  }
-
-  .chat-process-item-label {
-    margin: 0;
-    color: var(--color-desk-muted);
-    font-size: var(--text-2xs);
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-  }
-
-  .chat-process-thinking {
-    display: flex;
-    min-width: 0;
-    flex-direction: column;
-    gap: 0.625rem;
-  }
-
-  .chat-process-thinking .markdown-content {
+  .chat-thinking-body .markdown-content {
     --markdown-flow: 0.75rem;
     --markdown-section-gap: 1.25rem;
     color: var(--color-desk-muted);
     font-size: 0.8125rem;
   }
 
-  /* 技能调用卡：被 Pi 展开的机器内容，用与过程区块同级的低强调内嵌折叠区，不借用用户气泡。 */
+  /* 技能调用卡：被 Pi 展开的机器内容，用与工具卡同级的低强调内嵌折叠区，不借用用户气泡。 */
   .chat-skill {
     min-width: 0;
     border: 1px solid var(--color-desk-line);
@@ -4614,6 +4601,12 @@
     margin-bottom: 0.375rem;
   }
 
+  /* 同一轮内的后续 AI 消息：不重复 π 标记与角色名，表头只留时间与用量并弱化。 */
+  .chat-message-assistant > .chat-meta.chat-meta-continued {
+    margin-bottom: 0.125rem;
+    opacity: 0.9;
+  }
+
   .chat-message-assistant .chat-time {
     margin-left: auto;
   }
@@ -4653,20 +4646,15 @@
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .chat-process > summary,
-    .chat-process .disclosure,
+    .chat-thinking > summary,
+    .chat-thinking .disclosure,
+    .chat-turn-summary,
+    .chat-turn-summary .disclosure,
     .chat-skill > summary,
     .chat-skill .disclosure,
     .chat-compaction > summary,
     .chat-compaction .disclosure {
       transition: none;
-    }
-
-    /* 流光关掉后必须回到实色：透明文字在没有渐变背景时不可读。 */
-    .chat-thinking-preview.is-live {
-      animation: none;
-      background-image: none;
-      color: var(--color-desk-muted);
     }
   }
 
@@ -4690,7 +4678,7 @@
     transform: rotate(90deg);
   }
 
-  /* 工具卡片保持独立的折叠外观；头部摘要由模板排版，不受过程区块样式影响。 */
+  /* 工具卡片保持独立的折叠外观；头部摘要由模板排版，不受其它折叠卡样式影响。 */
   .tool-card {
     @apply rounded-desk-sm border border-desk-line bg-desk-surface;
   }
@@ -4786,7 +4774,7 @@
   .markdown-code-block pre::-webkit-scrollbar,
   .markdown-table-scroll::-webkit-scrollbar,
   .technical-detail-text::-webkit-scrollbar,
-  .chat-process-thinking::-webkit-scrollbar,
+  .chat-thinking-body::-webkit-scrollbar,
   .chat-skill-body::-webkit-scrollbar,
   .chat-compaction-body::-webkit-scrollbar,
   .tool-card-body::-webkit-scrollbar {
@@ -4799,7 +4787,7 @@
   .markdown-code-block pre::-webkit-scrollbar-track,
   .markdown-table-scroll::-webkit-scrollbar-track,
   .technical-detail-text::-webkit-scrollbar-track,
-  .chat-process-thinking::-webkit-scrollbar-track,
+  .chat-thinking-body::-webkit-scrollbar-track,
   .chat-skill-body::-webkit-scrollbar-track,
   .chat-compaction-body::-webkit-scrollbar-track,
   .tool-card-body::-webkit-scrollbar-track {
@@ -4812,7 +4800,7 @@
   .markdown-code-block pre::-webkit-scrollbar-thumb,
   .markdown-table-scroll::-webkit-scrollbar-thumb,
   .technical-detail-text::-webkit-scrollbar-thumb,
-  .chat-process-thinking::-webkit-scrollbar-thumb,
+  .chat-thinking-body::-webkit-scrollbar-thumb,
   .chat-skill-body::-webkit-scrollbar-thumb,
   .chat-compaction-body::-webkit-scrollbar-thumb,
   .tool-card-body::-webkit-scrollbar-thumb {
@@ -4827,7 +4815,7 @@
   .markdown-code-block pre::-webkit-scrollbar-thumb:hover,
   .markdown-table-scroll::-webkit-scrollbar-thumb:hover,
   .technical-detail-text::-webkit-scrollbar-thumb:hover,
-  .chat-process-thinking::-webkit-scrollbar-thumb:hover,
+  .chat-thinking-body::-webkit-scrollbar-thumb:hover,
   .chat-skill-body::-webkit-scrollbar-thumb:hover,
   .chat-compaction-body::-webkit-scrollbar-thumb:hover,
   .tool-card-body::-webkit-scrollbar-thumb:hover {

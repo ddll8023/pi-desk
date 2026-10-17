@@ -2,6 +2,9 @@
  * 把 Runtime 投影映射为聊天区渲染项：块按 contentIndex 排序、工具调用块按 toolCallId 关联执行条目、
  * 失败文案与 AI 消息生成计时只取投影已给的字段。
  *
+ * 渲染项分两层：消息层按块展开（`toMessages`），轮层以用户消息为界把消息分组（`toTurns`）。
+ * 折叠、展开与大纲跳转都以轮为单位，因此轮层一并算好条数、响应计时与最后一次调用的用量。
+ *
  * 不重建消息、不猜测缺失内容，也不保存历史；投影快照与批次仍是唯一来源。投影按消息 copy-on-write
  * （只替换被改动的消息与工具条目对象），因此这里缓存上一次的渲染项：消息对象与其工具条目对象都没变
  * 时直接复用，避免每个批次都重建整段历史的块对象；缓存只保留仍在投影里的消息，不持有已丢弃内容。
@@ -53,6 +56,24 @@ export interface ChatThinkingBlock {
 }
 
 export type ChatBlock = ChatTextBlock | ChatThinkingBlock | ChatToolBlock
+
+/**
+ * 一轮对话：以用户消息为界，其后到下一个用户消息之前的 AI 消息与压缩记录都属于这一轮。
+ * 折叠、展开与跳转都以轮为单位，因此这里把折叠所需的聚合量（条数、计时、用量）一次算好，
+ * 界面不再自己遍历成员消息。
+ */
+export interface ChatTurnView {
+  /** 轮标识：用户消息 id；会话开头没有用户消息的前置轮用固定键，不会与消息 id 相同。 */
+  readonly key: string
+  readonly user: ChatMessageView | null
+  readonly responses: readonly ChatMessageView[]
+  /** 轮内 AI 消息条数；折叠摘要用它说明收起了几条。 */
+  readonly responseCount: number
+  /** 本轮响应计时（挂在用户消息上）；前置轮与历史轮次为 null。 */
+  readonly turn: ChatMessageView['turn']
+  /** 轮内最后一次调用的用量；全部缺失时为 null，不编造 0。 */
+  readonly usage: MessageUsage | null
+}
 
 export interface ChatMessageView {
   readonly id: string
@@ -143,9 +164,17 @@ interface BuiltMessage {
   readonly toolRefs: readonly ToolRef[]
 }
 
+/** 轮缓存：成员消息视图对象都没变时整轮复用，避免流式期间重建整段历史。 */
+interface TurnCacheEntry {
+  readonly members: readonly ChatMessageView[]
+  readonly view: ChatTurnView
+}
+
 export interface ChatViewCache {
   /** 把投影映射为渲染项；未变化的条目复用上一次的结果。 */
   toMessages(messages: readonly ProjectionMessage[], tools: readonly ToolExecution[]): ChatMessageView[]
+  /** 在消息渲染项之上按轮分组；轮内成员未变化时整轮复用。 */
+  toTurns(messages: readonly ProjectionMessage[], tools: readonly ToolExecution[]): ChatTurnView[]
 }
 
 /** Pi 的停止原因里只有这两类属于失败；其他取值不为凑文案而冒充错误。 */
@@ -159,26 +188,105 @@ const UNKNOWN_TOOL_NAME = '未知工具'
 /** 每个组件实例持有自己的缓存；缓存不跨实例共享，也不进全局状态。 */
 export function createChatViewCache(): ChatViewCache {
   let entries = new Map<string, CacheEntry>()
+  let turnEntries = new Map<string, TurnCacheEntry>()
+
+  function toMessages(
+    messages: readonly ProjectionMessage[],
+    tools: readonly ToolExecution[]
+  ): ChatMessageView[] {
+    const toolsById = new Map(tools.map((tool) => [tool.toolCallId, tool]))
+    const kept = new Map<string, CacheEntry>()
+    const views = messages.map((message) => {
+      const cached = entries.get(message.id)
+      if (cached !== undefined && isReusable(cached, message, toolsById)) {
+        kept.set(message.id, cached)
+        return cached.view
+      }
+
+      const built = buildMessageView(message, toolsById)
+      kept.set(message.id, { source: message, toolRefs: built.toolRefs, view: built.view })
+      return built.view
+    })
+    // 只保留当前仍存在的消息，避免缓存继续持有已被投影丢弃的大块文本。
+    entries = kept
+    return views
+  }
 
   return {
-    toMessages(messages, tools) {
-      const toolsById = new Map(tools.map((tool) => [tool.toolCallId, tool]))
-      const kept = new Map<string, CacheEntry>()
-      const views = messages.map((message) => {
-        const cached = entries.get(message.id)
-        if (cached !== undefined && isReusable(cached, message, toolsById)) {
-          kept.set(message.id, cached)
+    toMessages,
+    toTurns(messages, tools) {
+      const views = toMessages(messages, tools)
+      const groups = groupTurns(views)
+      const kept = new Map<string, TurnCacheEntry>()
+      const turns = groups.map((group) => {
+        const members = group.user === null ? group.responses : [group.user, ...group.responses]
+        const cached = turnEntries.get(group.key)
+        if (cached !== undefined && sameMembers(cached.members, members)) {
+          kept.set(group.key, cached)
           return cached.view
         }
-
-        const built = buildMessageView(message, toolsById)
-        kept.set(message.id, { source: message, toolRefs: built.toolRefs, view: built.view })
-        return built.view
+        const view = buildTurnView(group)
+        kept.set(group.key, { members, view })
+        return view
       })
-      // 只保留当前仍存在的消息，避免缓存继续持有已被投影丢弃的大块文本。
-      entries = kept
-      return views
+      turnEntries = kept
+      return turns
     }
+  }
+}
+
+/** 会话开头没有用户消息的前置轮；固定键与投影消息 id 不会重复。 */
+const LEAD_TURN_KEY = '__lead__'
+
+/** 分组中间态：`user` 为 null 表示会话开头那段没有用户输入的前置轮。 */
+interface TurnGroup {
+  readonly key: string
+  readonly user: ChatMessageView | null
+  readonly responses: readonly ChatMessageView[]
+}
+
+/** 按用户消息切轮：压缩记录与 AI 消息都归入它前面的那一轮，不单独成轮。 */
+function groupTurns(views: readonly ChatMessageView[]): TurnGroup[] {
+  const groups: TurnGroup[] = []
+  let current: { key: string; user: ChatMessageView | null; responses: ChatMessageView[] } | null = null
+  for (const view of views) {
+    if (view.role === 'user') {
+      current = { key: view.id, user: view, responses: [] }
+      groups.push(current)
+      continue
+    }
+    if (current === null) {
+      current = { key: LEAD_TURN_KEY, user: null, responses: [] }
+      groups.push(current)
+    }
+    current.responses.push(view)
+  }
+  return groups
+}
+
+/** 轮内成员逐个同一对象才算可复用：任一成员被替换，摘要里的条数与用量都可能变。 */
+function sameMembers(previous: readonly ChatMessageView[], next: readonly ChatMessageView[]): boolean {
+  if (previous.length !== next.length) return false
+  return previous.every((member, index) => member === next[index])
+}
+
+/** 轮内最后一次调用的用量：多轮工具往返时只取最后一次，不把每次调用的输入重复相加。 */
+function lastUsage(responses: readonly ChatMessageView[]): MessageUsage | null {
+  for (let index = responses.length - 1; index >= 0; index -= 1) {
+    const usage = responses[index]?.usage ?? null
+    if (usage !== null) return usage
+  }
+  return null
+}
+
+function buildTurnView(group: TurnGroup): ChatTurnView {
+  return {
+    key: group.key,
+    user: group.user,
+    responses: group.responses,
+    responseCount: group.responses.length,
+    turn: group.user?.turn ?? null,
+    usage: lastUsage(group.responses)
   }
 }
 

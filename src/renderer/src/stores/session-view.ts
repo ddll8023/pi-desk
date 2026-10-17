@@ -14,11 +14,11 @@
  * 另有一条不挂在会话键上的通道：回退与修改重试把原消息文本与附件交回输入区，
  * 它跨越回退新建的会话身份变化，因此只保留一份、由输入区消费一次。
  *
- * AI 响应过程的整体折叠是一条展示模式，不属于某个会话的阅读位置：所有会话共用一份，也不写磁盘，
- * 因此切换会话不会突然换一套折叠状态，重启后仍从「过程按需展开」的默认视图开始。
+ * 对话折叠分两层：全局开关只决定「非当前轮是否收起」，所有会话共用一份，也不写磁盘；
+ * 用户单独开合某一轮属于阅读状态，按会话键分开保存，切会话不串，重启后回到默认视图。
  */
 import { defineStore } from 'pinia'
-import { computed, ref, watch } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import type { WatchStopHandle } from 'vue'
 import type { PromptImageInput } from '../../../shared/runtime-api'
 import { useRuntimeStore } from './runtime'
@@ -63,10 +63,15 @@ export const useSessionViewStore = defineStore('session-view', () => {
    */
   const requestedInput = ref<SessionInput | null>(null)
   /**
-   * AI 响应过程（Thinking 与工具调用）是否整体折叠。默认不折叠：过程在生成中展开、结束后自动收起，
-   * 用户点「折叠所有 AI 过程」后才把每个过程区块都压成一行，最终回答正文始终可见。
+   * 早期对话是否整体展开。默认 false：只展开最后一轮，更早的轮次收起成一行摘要，
+   * 用户点顶部开关后才把所有轮次都铺开。
    */
-  const processCollapsed = ref(false)
+  const historyExpanded = ref(false)
+  /**
+   * 用户对单轮的单独开合，按会话键分组：外层是会话，内层是轮标识到展开状态的映射。
+   * 读时按会话取，切会话不会把上一个会话的展开选择带进来。
+   */
+  const turnExpansions = reactive(new Map<string, Map<string, boolean>>())
   let stopRuntimeWatch: WatchStopHandle | null = null
 
   /** 前台实例报告的会话身份；未就绪或宿主失败时为空。 */
@@ -169,9 +174,22 @@ export const useSessionViewStore = defineStore('session-view', () => {
     return value
   }
 
-  /** 切换 AI 过程区块的整体折叠；只改展示，不改消息内容与折叠外的正文。 */
-  function toggleProcessCollapsed(): void {
-    processCollapsed.value = !processCollapsed.value
+  /** 切换早期对话的整体展开；改的是全局默认，并清掉当前会话的手动开合，回到一致状态。 */
+  function toggleHistoryExpanded(): void {
+    historyExpanded.value = !historyExpanded.value
+    turnExpansions.delete(key.value)
+  }
+
+  /** 某一轮的手动开合；未手动调过时为 null，由全局开关与「是否为最后一轮」决定。 */
+  function turnExpansion(sessionKey: string, turnKey: string): boolean | null {
+    return turnExpansions.get(sessionKey)?.get(turnKey) ?? null
+  }
+
+  /** 记录某一轮的手动开合；同一会话内按轮标识覆盖，不影响其他轮与会话。 */
+  function setTurnExpansion(sessionKey: string, turnKey: string, expanded: boolean): void {
+    const perSession = turnExpansions.get(sessionKey)
+    if (perSession === undefined) turnExpansions.set(sessionKey, new Map([[turnKey, expanded]]))
+    else perSession.set(turnKey, expanded)
   }
 
   /** base64 附件还原为本地文件；名称只用于提示与预览，不保留原始文件名。 */
@@ -190,7 +208,7 @@ export const useSessionViewStore = defineStore('session-view', () => {
   return {
     key,
     requestedInput,
-    processCollapsed,
+    historyExpanded,
     initialize,
     dispose,
     takeInput,
@@ -199,7 +217,9 @@ export const useSessionViewStore = defineStore('session-view', () => {
     saveReading,
     requestInput,
     consumeRequestedInput,
-    toggleProcessCollapsed,
+    toggleHistoryExpanded,
+    turnExpansion,
+    setTurnExpansion,
     createImage,
     releaseImages
   }

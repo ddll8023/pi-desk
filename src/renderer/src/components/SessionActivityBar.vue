@@ -1,4 +1,5 @@
-<!-- 会话活动摘要条：对话区顶部的一行窄带，把当前会话读过与改过的文件、调用的 Skill、MCP 与扩展（插件）工具归纳成四类计数；展开的明细是浮在消息区之上的浮层，四类各占一个页签，不占对话的内容空间，也不改变正文的滚动与粘底判定。 -->
+<!-- 会话活动摘要条：对话区顶部的一行窄带，把当前会话读过与改过的文件、调用的 Skill、MCP 与扩展（插件）工具归纳成四类计数；展开的明细是浮在消息区之上的浮层，四类各占一个页签，不占对话的内容空间，也不改变正文的滚动与粘底判定。
+     同一行右端还承载早期对话的整体折叠开关：非当前轮只留用户输入与一行 AI 摘要；两者共用一条窄带，不为单个开关再占一行高度。 -->
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
@@ -6,6 +7,7 @@ import { useAnchoredPopup } from '../anchored-popup'
 import { createSessionActivityCache } from '../session-activity'
 import { useProjectStore } from '../stores/project'
 import { useRuntimeStore } from '../stores/runtime'
+import { useSessionViewStore } from '../stores/session-view'
 import { useWorkspaceTabsStore } from '../stores/workspace-tabs'
 import AppButton from './ui/AppButton.vue'
 
@@ -38,8 +40,21 @@ interface ActivitySection {
 const runtimeStore = useRuntimeStore()
 const projectStore = useProjectStore()
 const workspaceTabsStore = useWorkspaceTabsStore()
+const sessionViewStore = useSessionViewStore()
 const { messages, tools } = storeToRefs(runtimeStore)
 const { currentProject } = storeToRefs(projectStore)
+
+/**
+ * 是否存在可折叠的历史轮：轮以用户消息为界，会话开头没有用户输入的 AI 消息也算一轮前置轮。
+ * 只有一轮时没有可收起的内容，开关整块不渲染。
+ */
+const hasHistoryTurn = computed(() => {
+  const userCount = messages.value.filter(message => message.role === 'user').length
+  const leadTurn = messages.value.length > 0 && messages.value[0]?.role !== 'user'
+  return userCount + (leadTurn ? 1 : 0) > 1
+})
+/** 全局默认只展开最后一轮；单轮的手动开合按会话保存在 session-view。 */
+const historyExpanded = computed(() => sessionViewStore.historyExpanded)
 
 /** 派生缓存属于本组件实例：流式期间每个批次只重新解析变化的条目，见 session-activity.ts。 */
 const cache = createSessionActivityCache()
@@ -299,9 +314,11 @@ function openFile(path: string): void {
 </script>
 
 <template>
-  <section v-if="!activity.empty" class="session-activity" aria-label="会话活动" @keydown.esc="onEscape">
-    <div class="chat-column mx-auto">
+  <section v-if="!activity.empty || hasHistoryTurn" class="session-activity" aria-label="对话工具" @keydown.esc="onEscape">
+    <!-- 一行两端：左侧会话活动折叠行（点击开明细浮层），右侧早期对话的整体折叠开关。 -->
+    <div class="chat-column session-activity-row mx-auto">
       <AppButton
+        v-if="!activity.empty"
         variant="unstyled"
         class="session-activity-toggle"
         :aria-expanded="popupOpen"
@@ -311,6 +328,16 @@ function openFile(path: string): void {
         <span class="disclosure" :class="{ 'is-open': popupOpen }" aria-hidden="true"></span>
         <span class="session-activity-title">会话活动</span>
         <span class="session-activity-summary">{{ summary }}</span>
+      </AppButton>
+      <AppButton
+        v-if="hasHistoryTurn"
+        variant="unstyled"
+        class="session-activity-process"
+        :aria-expanded="historyExpanded"
+        :title="historyExpanded ? '收起除最后一轮之外的对话，只留用户输入与一行 AI 摘要' : '展开所有轮次的 AI 回答'"
+        @click="sessionViewStore.toggleHistoryExpanded()"
+      >
+        {{ historyExpanded ? '折叠之前的对话' : '展开全部对话' }}
       </AppButton>
     </div>
   </section>

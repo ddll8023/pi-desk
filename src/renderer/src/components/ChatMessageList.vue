@@ -1,17 +1,17 @@
 <!-- 消息区：按投影渲染、粘底与大纲导航；承接用户消息回退确认与修改提交，回退会新建会话（列表折叠为一条），项目文件不回退；回退与修改重试都把原消息文本与可还原的附件交回输入框。
-     顶部窄带提供「折叠所有 AI 过程」开关：长会话可以只留用户输入与回答正文，过程区块按需展开。 -->
+     渲染与折叠都以轮为单位：非当前轮只留用户输入，其后的 AI 回答与过程压成一行摘要（见 ChatTurnItem），当前轮始终完整展开；开合状态按会话保存，顶部开关控制全局默认。 -->
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { createChatViewCache, userMessagePayload } from '../chat-view'
-import type { ChatMessageView, UserMessagePayload } from '../chat-view'
+import type { ChatMessageView, ChatTurnView, UserMessagePayload } from '../chat-view'
 import type { RuntimeRewindRequest } from '../../../shared/runtime-api'
 import { useProjectStore } from '../stores/project'
 import { useRuntimeStore } from '../stores/runtime'
 import { useSessionStore } from '../stores/session'
 import { isSessionKey, useSessionViewStore } from '../stores/session-view'
 import type { SessionReading } from '../stores/session-view'
-import ChatMessageItem from './ChatMessageItem.vue'
+import ChatTurnItem from './ChatTurnItem.vue'
 import ChatOutline from './ChatOutline.vue'
 import AppButton from './ui/AppButton.vue'
 import ConfirmDialog from './ConfirmDialog.vue'
@@ -42,7 +42,7 @@ const content = ref<HTMLElement | null>(null)
 const stickToBottom = ref(true)
 const activeOutlineId = ref<string | null>(null)
 const outlineLayout = ref<{ left: number; width: number } | null>(null)
-/** 大纲跳转保持阅读位置，不被程序滚动或内容收缩产生的 scroll 事件重新开启粘底。 */
+/** 大纲跳转与展开定位保持阅读位置，不被程序滚动或内容收缩产生的 scroll 事件重新开启粘底。 */
 let outlineTargetId: string | null = null
 let lastScrollTop = 0
 /**
@@ -61,16 +61,21 @@ let resizeObserver: ResizeObserver | null = null
 /** 投影映射缓存：流式期间每个批次只重建真正变化的条目，见 chat-view.ts。 */
 const viewCache = createChatViewCache()
 
-const chatMessages = computed(() => viewCache.toMessages(messages.value, tools.value))
-/** 是否存在可折叠的 AI 响应过程；没有任何过程时整条折叠按钮不渲染，不占消息区高度。 */
-const hasProcess = computed(() => chatMessages.value.some(message => (
-  message.role === 'assistant' && message.blocks.some(block => block.kind !== 'text')
+const turns = computed(() => viewCache.toTurns(messages.value, tools.value))
+
+/**
+ * 一轮是否展开：手动开合优先，其次是默认——最后一轮始终展开，更早的轮次看顶部全局开关。
+ * 最后一条消息可能还在生成，所以「最后一轮」而不是「最后一个完成的轮」才是当前轮。
+ */
+function isTurnExpanded(turn: ChatTurnView, index: number): boolean {
+  const override = sessionViewStore.turnExpansion(sessionViewStore.key, turn.key)
+  if (override !== null) return override
+  return index === turns.value.length - 1 ? true : sessionViewStore.historyExpanded
+}
+
+const outlineEntries = computed(() => turns.value.flatMap(turn => (
+  turn.user === null ? [] : [{ id: turn.user.id, label: outlineLabel(turn.user) }]
 )))
-/** 全局折叠开关只改展示，不按会话区分，也不写磁盘；见 session-view。 */
-const processCollapsed = computed(() => sessionViewStore.processCollapsed)
-const outlineEntries = computed(() => chatMessages.value
-  .filter(message => message.role === 'user')
-  .map(message => ({ id: message.id, label: outlineLabel(message) })))
 const outlineStyle = computed(() => ({
   left: `${outlineLayout.value?.left ?? 0}px`,
   width: `${outlineLayout.value?.width ?? 0}px`
@@ -112,8 +117,10 @@ const rewindDetail = computed(() => '回退会新建一条会话继续，原会�
 
 /** 目标消息的可提交内容（文本与可还原附件）；目标已不在投影里时返回 null，调用方据此不发起回退。 */
 function userMessagePayloadOf(messageId: string): UserMessagePayload | null {
-  const message = chatMessages.value.find(candidate => candidate.id === messageId)
-  return message === undefined ? null : userMessagePayload(message)
+  for (const turn of turns.value) {
+    if (turn.user !== null && turn.user.id === messageId) return userMessagePayload(turn.user)
+  }
+  return null
 }
 
 /**
@@ -180,7 +187,7 @@ async function handleSubmitEdit(messageId: string, text: string): Promise<void> 
     pendingEdit.value = false
   }
 }
-/** 消息 ID 只在单个运行实例内唯一；实例或会话切换后不能复用旧消息组件的手动开合状态。 */
+
 const syncNotice = computed(() => {
   if (projectionSync.value === 'synced') return null
   return projectionSync.value === 'stale'
@@ -431,23 +438,86 @@ function onReadingKey(event: KeyboardEvent): void {
   releaseOutlineJump()
 }
 
-/** 定位当前投影里的用户消息；先取消待执行的粘底，再立即跳转，不让平滑滚动与流式更新争夺位置。 */
-function jumpToMessage(messageId: string): void {
+/**
+ * 把某一轮对齐到视口顶部：展开后刚出现的内容立刻可见，不用再往上拖。
+ * 对齐点就是该轮开头（有用户消息时就是用户输入），展开与大纲跳转共用这一套定位规则。
+ */
+function revealTurn(turn: ChatTurnView): void {
   const element = scroller.value
-  const target = content.value?.querySelector<HTMLElement>(`.chat-message-user[data-message-id="${CSS.escape(messageId)}"]`)
+  const target = content.value?.querySelector<HTMLElement>(`.chat-turn[data-turn-key="${CSS.escape(turn.key)}"]`)
   if (element === null || target === null || target === undefined) return
-  if (!outlineEntries.value.some(entry => entry.id === messageId)) return
 
   if (scrollFrame !== null) cancelAnimationFrame(scrollFrame)
   scrollFrame = null
-  outlineTargetId = messageId
   pendingRestore = null
   stickToBottom.value = false
-  activeOutlineId.value = messageId
+  // 大纲跟到这一轮：锁定到它的用户消息，用户上滚前不再按位置重算。
+  outlineTargetId = turn.user?.id ?? null
+  activeOutlineId.value = turn.user?.id ?? activeOutlineId.value
   const top = element.scrollTop + target.getBoundingClientRect().top - element.getBoundingClientRect().top - READING_OFFSET_PX
   element.scrollTop = Math.max(0, top)
   lastScrollTop = element.scrollTop
   scheduleOutlineUpdate()
+}
+
+/** 定位当前投影里的用户消息；目标轮被折叠时先展开再定位。 */
+function jumpToMessage(messageId: string): void {
+  const index = turns.value.findIndex(turn => turn.user?.id === messageId)
+  const turn = turns.value[index]
+  if (turn === undefined) return
+  if (isTurnExpanded(turn, index)) {
+    revealTurn(turn)
+    return
+  }
+  // 先展开再定位：否则跳过去只看得到用户输入，看不到这轮回答。
+  sessionViewStore.setTurnExpansion(sessionViewStore.key, turn.key, true)
+  void nextTick(() => revealTurn(turn))
+}
+
+/** 视口顶部所在的那一轮：折叠改变高度时以它为锚点，阅读位置不跳。 */
+function topVisibleTurn(element: HTMLElement): HTMLElement | null {
+  const body = content.value
+  if (body === null) return null
+  const top = element.getBoundingClientRect().top
+  for (const turn of body.querySelectorAll<HTMLElement>('.chat-turn')) {
+    if (turn.getBoundingClientRect().bottom > top) return turn
+  }
+  return null
+}
+
+/**
+ * 收起与顶部开关会改变视口上方的高度，而正文禁用了滚动锚定：先记下顶部可见轮的位置，
+ * 更新后按它的位移补偿 scrollTop，阅读位置不跳；贴底时不补偿，交给粘底逻辑跟到最新内容。
+ * 展开走的是跳到该轮开头，见 revealTurn。
+ */
+function withAnchoredLayout(mutate: () => void): void {
+  const element = scroller.value
+  const anchor = element === null ? null : topVisibleTurn(element)
+  const before = anchor?.getBoundingClientRect().top ?? null
+  mutate()
+  if (anchor === null || before === null) return
+  void nextTick(() => {
+    const host = scroller.value
+    if (host === null || !anchor.isConnected || stickToBottom.value) return
+    const delta = anchor.getBoundingClientRect().top - before
+    if (delta === 0) return
+    host.scrollTop += delta
+    // 补偿后的位置就是当前位置：不让随后的 scroll 事件把它当成用户上滚。
+    lastScrollTop = host.scrollTop
+  })
+}
+
+/** 点一轮的摘要行：收起时保持阅读位置，展开时直接跳到这一轮开头。 */
+function toggleTurn(turn: ChatTurnView, index: number): void {
+  if (!isTurnExpanded(turn, index)) {
+    sessionViewStore.setTurnExpansion(sessionViewStore.key, turn.key, true)
+    void nextTick(() => revealTurn(turn))
+    return
+  }
+  // 收起：内容变短，按顶部可见轮的位移补偿，阅读位置不跳。
+  withAnchoredLayout(() => {
+    sessionViewStore.setTurnExpansion(sessionViewStore.key, turn.key, false)
+  })
 }
 
 /** 按实际正文右边界计算留白，扣除滚动条与安全间距；不挤占正文或输入区。 */
@@ -524,7 +594,12 @@ function startNewSession(): void {
 }
 
 /** DOM 更新与实际尺寸变化都同步粘底及大纲；会话切换清除上一次阅读目标。 */
-watch([chatMessages, streaming, syncNotice, truncationNotice], onLayoutChange, { flush: 'post' })
+watch([turns, streaming, syncNotice, truncationNotice], onLayoutChange, { flush: 'post' })
+/**
+ * 顶部开关改的是全局默认：在 DOM 更新前记下锚点、更新后补偿位置，一次展开或收起多轮也不跳屏。
+ * 用 pre 才能在补丁前量到旧位置。
+ */
+watch(() => sessionViewStore.historyExpanded, () => withAnchoredLayout(() => {}), { flush: 'pre' })
 /** 用户消息被受理即回到底部：发送后不再停在旧阅读位置，随后的流式内容继续跟随。 */
 watch(() => promptView.value.phase, (next, previous) => {
   if (next === 'accepted' && previous === 'sending') jumpToBottom()
@@ -564,14 +639,6 @@ onBeforeUnmount(() => {
 
 <template>
   <section ref="viewport" class="relative flex min-h-0 flex-1 flex-col bg-desk-canvas-sunken">
-    <!-- 长会话阅读辅助：一键收起所有 AI 过程；用户输入与回答正文始终可见。 -->
-    <div v-if="hasProcess" class="flex flex-none px-4 pt-2 sm:px-6">
-      <div class="chat-column mx-auto flex justify-end">
-        <AppButton variant="compact" @click="sessionViewStore.toggleProcessCollapsed()">
-          {{ processCollapsed ? '展开所有 AI 过程' : '折叠所有 AI 过程' }}
-        </AppButton>
-      </div>
-    </div>
     <div
       ref="scroller"
       class="scroll-area min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-6 [overflow-anchor:none]"
@@ -592,19 +659,20 @@ onBeforeUnmount(() => {
         <p v-else-if="rewindView.phase === 'done' && rewindView.cancelled" role="status" class="status-notice">Pi 扩展取消了回退；原消息文本未交回输入框。</p>
         <p v-if="refillNotice !== null" role="status" class="status-notice">{{ refillNotice }}</p>
 
-        <ChatMessageItem
-          v-for="message in chatMessages"
-          :key="`${conversationKey}:${message.id}`"
-          :message="message"
+        <ChatTurnItem
+          v-for="(turn, index) in turns"
+          :key="`${conversationKey}:${turn.key}`"
+          :turn="turn"
+          :expanded="isTurnExpanded(turn, index)"
+          :current="index === turns.length - 1"
           :actions-disabled="!canRewind"
           :disabled-reason="rewindBlockReason"
-          :process-collapsed="processCollapsed"
-          :data-message-id="message.id"
+          @toggle="toggleTurn(turn, index)"
           @rewind="requestRewind"
           @submit-edit="handleSubmitEdit"
         />
 
-        <div v-if="chatMessages.length === 0" class="empty-state">
+        <div v-if="turns.length === 0" class="empty-state">
           <p class="empty-state-title">{{ emptyState.title }}</p>
           <p class="empty-state-text">{{ emptyState.description }}</p>
           <div v-if="emptyState.action === 'new-session'" class="mt-2 flex flex-wrap items-center justify-center gap-2">
