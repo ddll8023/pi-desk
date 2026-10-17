@@ -3,7 +3,8 @@
  *
  * 索引根只取当前项目（由调用方注入，不接受页面传入的路径），只读取文件名与相对路径，不读取
  * 任何文件内容。优先用 `git ls-files` 顺带遵守 `.gitignore`，失败时退化为遍历并跳过常见构建
- * 与依赖目录；索引按 TTL 缓存，文件系统与子进程异常一律收敛为空结果，不向页面回传路径细节。
+ * 与依赖目录；索引按 TTL 缓存，目录监听发现变化时由调用方显式丢弃快照；文件系统与子进程异常
+ * 一律收敛为空结果，不向页面回传路径细节。
  */
 import { execFile } from 'node:child_process'
 import type { Dirent } from 'node:fs'
@@ -76,6 +77,14 @@ export class ProjectFileIndex {
   /** 失败与无项目都按空结果返回，同样带上本次的项目根。 */
   private empty(projectPath: string | null): ProjectFileSearchResult {
     return { ok: true, data: { entries: [], projectPath } }
+  }
+
+  /**
+   * 丢弃当前快照：目录监听发现变化时调用，让新文件立刻能被 `@` 检索到。
+   * TTL 仍作为兜底保留：监听不可用（额度用尽、网络盘）时最多旧 10 秒。
+   */
+  invalidate(): void {
+    this.cache = null
   }
 
   /** 取索引；根路径变化或缓存过期时重建。 */

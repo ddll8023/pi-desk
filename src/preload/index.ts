@@ -1,4 +1,4 @@
-/** 为沙箱页面提供应用信息、Project 选择/添加/移除/列表、项目文件检索、目录列举、条目路径解析与文件内容读写、Git（源代码管理）、Session、会话运行状态、终端、Project Trust、偏好与快捷命令、Runtime、Pi 资源、Pi 默认模型、Pi 版本检查、扩展更新与内置 agent 安装、自定义供应商、认证与 Extension 等受限接口，不暴露 Electron、任意 channel 或系统能力。 */
+/** 为沙箱页面提供应用信息、Project 选择/添加/移除/列表、项目文件检索、目录列举、目录监听、条目路径解析与文件内容读写、Git（源代码管理）、Session、会话运行状态、终端、Project Trust、偏好与快捷命令、Runtime、Pi 资源、Pi 默认模型、Pi 版本检查、扩展更新与内置 agent 安装、自定义供应商、认证与 Extension 等受限接口，不暴露 Electron、任意 channel 或系统能力。 */
 import { contextBridge, ipcRenderer } from 'electron'
 import type { IpcRendererEvent } from 'electron'
 import { APP_INFO_CHANNEL, isAppInfoResult } from '../shared/desktop-api'
@@ -72,14 +72,18 @@ import type {
   ProjectSetCurrentRequest
 } from '../shared/project-api'
 import {
+  PROJECT_DIRECTORY_CHANGED_EVENT,
   PROJECT_DIRECTORY_LIST_CHANNEL,
+  PROJECT_DIRECTORY_WATCH_CHANNEL,
   PROJECT_ENTRY_RESOLVE_CHANNEL,
   PROJECT_ENTRY_REVEAL_CHANNEL,
   PROJECT_FILE_READ_CHANNEL,
   PROJECT_FILE_SEARCH_CHANNEL,
   PROJECT_FILE_STAT_CHANNEL,
   PROJECT_FILE_WRITE_CHANNEL,
+  isProjectDirectoryChange,
   isProjectDirectoryListResult,
+  isProjectDirectoryWatchResult,
   isProjectEntryPathResult,
   isProjectEntryRevealResult,
   isProjectFileReadResult,
@@ -88,8 +92,11 @@ import {
   isProjectFileWriteResult
 } from '../shared/project-file-api'
 import type {
+  ProjectDirectoryChange,
   ProjectDirectoryListRequest,
   ProjectDirectoryListResult,
+  ProjectDirectoryWatchRequest,
+  ProjectDirectoryWatchResult,
   ProjectEntryPathRequest,
   ProjectEntryPathResult,
   ProjectEntryRevealResult,
@@ -340,6 +347,7 @@ const INVALID_PROJECT_PATH_RESPONSE = '桌面接口返回了无法识别的目�
 const INVALID_PROJECT_LIST_RESPONSE = '桌面接口返回了无法识别的项目列表。'
 const INVALID_PROJECT_FILE_RESPONSE = '桌面接口返回了无法识别的文件检索结果。'
 const INVALID_PROJECT_DIRECTORY_RESPONSE = '桌面接口返回了无法识别的目录列举结果。'
+const INVALID_PROJECT_DIRECTORY_WATCH_RESPONSE = '桌面接口返回了无法识别的目录监听登记结果。'
 const INVALID_PROJECT_ENTRY_PATH_RESPONSE = '桌面接口返回了无法识别的条目路径解析结果。'
 const INVALID_PROJECT_ENTRY_REVEAL_RESPONSE = '桌面接口返回了无法识别的显示文件位置结果。'
 const INVALID_PROJECT_FILE_READ_RESPONSE = '桌面接口返回了无法识别的文件读取结果。'
@@ -407,6 +415,10 @@ function invalidProjectFileResponse(): ProjectFileSearchResult {
 
 function invalidProjectDirectoryResponse(): ProjectDirectoryListResult {
   return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_PROJECT_DIRECTORY_RESPONSE } }
+}
+
+function invalidProjectDirectoryWatchResponse(): ProjectDirectoryWatchResult {
+  return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_PROJECT_DIRECTORY_WATCH_RESPONSE } }
 }
 
 function invalidProjectEntryPathResponse(): ProjectEntryPathResult {
@@ -616,6 +628,28 @@ const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionAp
     const payload: ProjectDirectoryListRequest = { directory: request.directory }
     const response: unknown = await ipcRenderer.invoke(PROJECT_DIRECTORY_LIST_CHANNEL, payload)
     return isProjectDirectoryListResult(response) ? response : invalidProjectDirectoryResponse()
+  },
+
+  /** 提交当前项目里需要监听的目录集合；主进程按集合增删非递归监听，越界路径直接丢弃。 */
+  async watchProjectDirectories(request: ProjectDirectoryWatchRequest) {
+    const payload: ProjectDirectoryWatchRequest = { directories: request.directories }
+    const response: unknown = await ipcRenderer.invoke(PROJECT_DIRECTORY_WATCH_CHANNEL, payload)
+    return isProjectDirectoryWatchResult(response) ? response : invalidProjectDirectoryWatchResponse()
+  },
+
+  /**
+   * 订阅目录变化；载荷不可信，契约不符时丢弃。
+   * 回调只代表「这些已登记的目录层有变化」，具体重读哪一层由页面决定。
+   */
+  onProjectDirectoryChanged(listener: (change: ProjectDirectoryChange) => void) {
+    const handler = (_event: IpcRendererEvent, payload: unknown): void => {
+      if (!isProjectDirectoryChange(payload)) return
+      listener(payload)
+    }
+    ipcRenderer.on(PROJECT_DIRECTORY_CHANGED_EVENT, handler)
+    return () => {
+      ipcRenderer.off(PROJECT_DIRECTORY_CHANGED_EVENT, handler)
+    }
   },
 
   /** 把项目内相对条目路径交给主进程解析为绝对路径；页面不自行拼接路径，也不传绝对路径。 */

@@ -6,14 +6,16 @@
  * 2. 把条目按「冲突 → 更改 → 已暂存 → 未跟踪」分组，供面板直接渲染；
  * 3. 把写操作的结果（新的状态快照）直接落地，不再补一次读取。
  *
- * 刷新时机刻意保守：切项目、面板出现、窗口重新获得焦点、页面重新可见、用户点刷新、写操作之后。
- * 不做定时轮询，也不监听文件系统：这两件事都要配合降级策略，留到后续阶段。
+ * 刷新时机刻意保守：切项目、面板出现、窗口重新获得焦点、页面重新可见、用户点刷新、写操作之后，
+ * 以及主进程目录监听回报「已加载的目录变了」；没有定时轮询。目录监听只覆盖已展开的层，
+ * 未展开目录里的改动靠聚焦与手动刷新兜底。
  */
 import { defineStore } from 'pinia'
 import { computed, ref, watch } from 'vue'
 import type { DesktopError } from '../../../shared/desktop-api'
 import type { GitArea, GitChangeEntry, GitDiff, GitOperationResult, GitStatus } from '../../../shared/git-api'
 import { commitGitStaged, discardGitPath, getGitDiff, getGitStatus, stageGitPath, unstageGitPath } from '../services/git'
+import { onProjectDirectoryChanged } from '../services/project-file'
 import { useProjectStore } from './project'
 
 /** 分组键：冲突单独成组，因为它需要的操作与普通改动不同。 */
@@ -235,7 +237,7 @@ export const useGitStatusStore = defineStore('git-status', () => {
   }
 
   /**
-   * 面板挂载时开始跟踪：切项目立即重读，窗口重新获得焦点与页面重新可见时静默重读。
+   * 面板挂载时开始跟踪：切项目立即重读，窗口重新获得焦点、页面重新可见与目录监听回报变化时静默重读。
    * 只装一次；卸载时由 `dispose` 摘掉，避免面板反复开合累积监听。
    */
   function initialize(): void {
@@ -263,9 +265,12 @@ export const useGitStatusStore = defineStore('git-status', () => {
     }
     window.addEventListener('focus', onFocus)
     document.addEventListener('visibilitychange', onVisibility)
+    // 目录监听与文件树共用同一条推送：项目里的改动同样意味着这里的改动列表过期了。
+    const stopDirectoryWatch = onProjectDirectoryChanged(() => autoRefresh())
 
     detach = () => {
       stopProjectWatch()
+      stopDirectoryWatch()
       window.removeEventListener('focus', onFocus)
       document.removeEventListener('visibilitychange', onVisibility)
     }

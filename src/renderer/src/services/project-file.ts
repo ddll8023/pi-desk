@@ -1,7 +1,9 @@
-/** 作为渲染端项目文件检索、目录列举、条目路径解析与文件内容读写的入口，收敛桥接缺失与通信异常。 */
+/** 作为渲染端项目文件检索、目录列举、目录监听、条目路径解析与文件内容读写的入口，收敛桥接缺失与通信异常。 */
 import type { DesktopError } from '../../../shared/desktop-api'
 import type {
+  ProjectDirectoryChange,
   ProjectDirectoryListResult,
+  ProjectDirectoryWatchResult,
   ProjectEntryPathResult,
   ProjectEntryRevealResult,
   ProjectFileReadResult,
@@ -48,6 +50,33 @@ export async function listProjectDirectory(directory: string): Promise<ProjectDi
     return await bridge.listProjectDirectory({ directory })
   } catch (error) {
     return callFailed(error)
+  }
+}
+
+/**
+ * 提交当前项目里需要监听的目录集合；目录是项目内相对路径，越界与绝对路径由主进程丢弃。
+ * 监听只服务于「自动刷新」，失败时按普通错误返回，调用方不必因此阻断列举。
+ */
+export async function watchProjectDirectories(
+  directories: readonly string[]
+): Promise<ProjectDirectoryWatchResult> {
+  const bridge = window.desktop
+  if (!bridge || typeof bridge.watchProjectDirectories !== 'function') return unavailable()
+  try {
+    return await bridge.watchProjectDirectories({ directories })
+  } catch (error) {
+    return callFailed(error)
+  }
+}
+
+/** 订阅目录变化；桥接缺失时返回空取消函数，调用方不必区分有没有监听。 */
+export function onProjectDirectoryChanged(listener: (change: ProjectDirectoryChange) => void): () => void {
+  const bridge = window.desktop
+  if (!bridge || typeof bridge.onProjectDirectoryChanged !== 'function') return () => {}
+  try {
+    return bridge.onProjectDirectoryChanged(listener)
+  } catch {
+    return () => {}
   }
 }
 

@@ -42,7 +42,9 @@ import type {
   ProjectRemoveRequest
 } from '../shared/project-api'
 import {
+  PROJECT_DIRECTORY_CHANGED_EVENT,
   PROJECT_DIRECTORY_LIST_CHANNEL,
+  PROJECT_DIRECTORY_WATCH_CHANNEL,
   PROJECT_ENTRY_RESOLVE_CHANNEL,
   PROJECT_ENTRY_REVEAL_CHANNEL,
   PROJECT_FILE_QUERY_MAX_CHARS,
@@ -50,6 +52,7 @@ import {
   PROJECT_FILE_SEARCH_CHANNEL,
   PROJECT_FILE_STAT_CHANNEL,
   PROJECT_FILE_WRITE_CHANNEL,
+  isProjectDirectoryWatchRequest,
   isProjectEntryPathRequest,
   isProjectFileWriteRequest
 } from '../shared/project-file-api'
@@ -80,6 +83,7 @@ import type {
 } from '../shared/git-api'
 import type {
   ProjectDirectoryListResult,
+  ProjectDirectoryWatchResult,
   ProjectEntryPathResult,
   ProjectEntryRevealResult,
   ProjectFileReadResult,
@@ -274,6 +278,7 @@ import { ModelsConfigError, ModelsConfigManager } from './models-config-manager'
 import { PiSettingsError, PiSettingsManager } from './pi-settings-manager'
 import { PreferencesManager } from './preferences-manager'
 import { ProjectDirectoryReader } from './project-directory'
+import { ProjectDirectoryWatcher } from './project-directory-watcher'
 import { ProjectFileContent } from './project-file-content'
 import { ProjectFileIndex } from './project-file-index'
 import { GitService } from './git-service'
@@ -381,6 +386,15 @@ const projectFileIndex = new ProjectFileIndex({
 /** 项目目录读取：右侧面板文件树的单层列举，根路径同样只取当前项目。 */
 const projectDirectory = new ProjectDirectoryReader({
   currentProjectPath: () => projectManager.currentProjectPath()
+})
+/**
+ * 项目目录监听：页面提交已加载的目录集合，主进程只监听这些层并推送变化，文件树不必手动刷新。
+ * 变化同时丢弃文件索引快照，让 `@` 检索立刻能看到新文件。
+ */
+const projectDirectoryWatcher = new ProjectDirectoryWatcher({
+  currentProjectPath: () => projectManager.currentProjectPath(),
+  sendChange: (change) => sendToRenderer(PROJECT_DIRECTORY_CHANGED_EVENT, change),
+  onChanged: () => projectFileIndex.invalidate()
 })
 /** 项目文件内容：工作区文件标签的读取、保存与磁盘基线查询，根路径同样只取当前项目。 */
 const projectFileContent = new ProjectFileContent({
@@ -635,6 +649,10 @@ function projectFileFailure(code: DesktopErrorCode, message: string): ProjectFil
 }
 
 function projectDirectoryFailure(code: DesktopErrorCode, message: string): ProjectDirectoryListResult {
+  return { ok: false, error: { code, message } }
+}
+
+function projectDirectoryWatchFailure(code: DesktopErrorCode, message: string): ProjectDirectoryWatchResult {
   return { ok: false, error: { code, message } }
 }
 
@@ -975,6 +993,19 @@ function registerProjectFileHandlers(pageUrl: string): void {
         return projectDirectoryFailure('INVALID_REQUEST', '目录列举必须给出相对目录路径字符串。')
       }
       return projectDirectory.list(directory)
+    }
+  )
+
+  handle(
+    PROJECT_DIRECTORY_WATCH_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<ProjectDirectoryWatchResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return projectDirectoryWatchFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 1 || !isProjectDirectoryWatchRequest(args[0])) {
+        return projectDirectoryWatchFailure('INVALID_REQUEST', '目录监听只接受一个目录路径数组。')
+      }
+      return projectDirectoryWatcher.sync(args[0].directories)
     }
   )
 
@@ -2710,6 +2741,8 @@ async function createWindow(pageUrl: string): Promise<void> {
   window.once('closed', () => {
     // 页面已消失：终端不再有接收方，释放它的在途额度，退出链不必等待无意义的确认。
     terminals.resetDelivery()
+    // 目录监听只服务于这个窗口，窗口关掉就没有接收方了。
+    projectDirectoryWatcher.dispose()
     windowState.dispose()
     mainWindow = null
   })
@@ -2736,6 +2769,8 @@ app.on('before-quit', (event) => {
   })
   // 终端 shell 的子进程（构建、服务）必须在退出前收敛，否则会留在系统里继续运行。
   const terminalShutdown = terminals.shutdown()
+  // 文件监听没有待落盘的数据，先拆掉，避免关闭链期间继续产生事件。
+  projectDirectoryWatcher.dispose()
   void (async () => {
     // 先落盘窗口状态：写入很小，避免被关闭链的兜底等待挤掉。
     await Promise.race([windowState.flush(), wait(WINDOW_STATE_FLUSH_MS)])

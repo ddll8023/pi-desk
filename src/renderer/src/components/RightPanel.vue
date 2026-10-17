@@ -7,7 +7,8 @@
   进入无障碍树。窄窗口下整块不显示（见样式里的 799px 断点），因为右侧面板在窄窗会遮住正文。
 
   页签选择同样存在界面偏好里（重启后保持）。头部只有一个刷新入口，按当前页签决定刷哪一份数据；
-  源代码管理的状态跟踪在这里启动而不是在面板里，这样未打开该页签时页签角标也能显示改动数。
+  源代码管理的状态跟踪与文件树的目录监听都在这里启动而不是在各自的页签里，这样未打开该页签时
+  页签角标也能显示改动数，两个页签切换时自动刷新也不中断。
 -->
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
@@ -103,12 +104,15 @@ function selectTab(tab: 'files' | 'source-control'): void {
 }
 
 // 状态跟踪放在外壳而不是面板里：切到文件页签时页签角标仍然要显示改动数。
+// 文件树的目录监听同样在这里启动：两个页签互相切换时自动刷新不中断。
 onMounted(() => {
   gitStore.initialize()
+  directoryStore.initialize()
 })
 
 onBeforeUnmount(() => {
   gitStore.dispose()
+  directoryStore.dispose()
 })
 </script>
 

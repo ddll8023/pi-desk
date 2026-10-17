@@ -1,8 +1,9 @@
 /**
- * 定义项目文件检索、单层目录列举、条目路径解析与文件内容读写的 IPC 契约及跨进程响应校验。
+ * 定义项目文件检索、单层目录列举、目录监听、条目路径解析与文件内容读写的 IPC 契约及跨进程响应校验。
  * 全部以「当前项目」为根：页面只能给出项目内相对路径，绝对路径与越界路径由主进程拒绝；
  * 需要绝对路径时（复制、写入终端、在文件管理器中显示）一律由主进程解析后回传，页面不自行拼接。
  * 文件内容只在读写通道里传输：读返回文本、图片或「不支持」三类结果，写只接受文本并带回新的磁盘基线。
+ * 目录监听是本契约里唯一的推送通道：页面提交「已加载的目录集合」，主进程只回报这些层里发生的变化。
  */
 import type { DesktopError } from './desktop-api'
 
@@ -13,6 +14,8 @@ export const PROJECT_ENTRY_REVEAL_CHANNEL = 'desktop:project-entry-reveal'
 export const PROJECT_FILE_READ_CHANNEL = 'desktop:project-file-read'
 export const PROJECT_FILE_WRITE_CHANNEL = 'desktop:project-file-write'
 export const PROJECT_FILE_STAT_CHANNEL = 'desktop:project-file-stat'
+export const PROJECT_DIRECTORY_WATCH_CHANNEL = 'desktop:project-directory-watch'
+export const PROJECT_DIRECTORY_CHANGED_EVENT = 'desktop:project-directory-changed'
 
 /** 查询串长度上限；主进程与渲染端共用，超出长度的一段不作为 `@` 引用处理。 */
 export const PROJECT_FILE_QUERY_MAX_CHARS = 128
@@ -22,6 +25,9 @@ export const PROJECT_DIRECTORY_PATH_MAX_CHARS = 4096
 
 /** 单层目录一次最多返回的条目数；超出截断并标记，界面据此提示而不是假装列全。 */
 export const PROJECT_DIRECTORY_ENTRY_LIMIT = 500
+
+/** 同时监听的目录层数上限；只监听已加载的层，超出部分截断，界面仍可手动刷新。 */
+export const PROJECT_DIRECTORY_WATCH_LIMIT = 256
 
 /** 可编辑文本的字节上限；超出按「不支持」返回，不截断也不提供编辑。 */
 export const PROJECT_FILE_TEXT_MAX_BYTES = 2 * 1024 * 1024
@@ -78,6 +84,34 @@ export type ProjectDirectoryListResult =
 /** 列举请求；只接受项目内相对目录路径，根目录传空串。 */
 export interface ProjectDirectoryListRequest {
   readonly directory: string
+}
+
+/**
+ * 目录监听请求：页面只提交「当前已加载的目录」相对路径集合，根路径由主进程决定。
+ * 主进程按集合做增删（不递归），页面收起或切项目时提交新集合即可。
+ */
+export interface ProjectDirectoryWatchRequest {
+  readonly directories: readonly string[]
+}
+
+/** 监听登记结果：成功时 `watching` 是实际生效的目录数（超过上限或不存在的不计）。 */
+export interface ProjectDirectoryWatchData {
+  readonly watching: number
+}
+
+export type ProjectDirectoryWatchResult =
+  | { readonly ok: true; readonly data: ProjectDirectoryWatchData }
+  | { readonly ok: false; readonly error: DesktopError }
+
+/**
+ * 目录变化事件：`changed` 时 `directories` 是被改动目录的相对路径（已落在页面登记过的层内）；
+ * `overflow` 表示变化过多或监听不可用，此时 `directories` 为空，页面应整树重读。
+ * `projectPath` 是发生变化的项目根，页面据此丢弃已切项目的迟到事件。
+ */
+export interface ProjectDirectoryChange {
+  readonly kind: 'changed' | 'overflow'
+  readonly projectPath: string
+  readonly directories: readonly string[]
 }
 
 /** 单个条目的路径请求；同样只接受项目内相对路径，项目根由主进程决定。 */
@@ -186,6 +220,10 @@ export interface ProjectFileApi {
   readonly searchProjectFiles: (query: string) => Promise<ProjectFileSearchResult>
   /** 列举当前项目内某一层的目录条目；不接受绝对路径，根路径由主进程决定。 */
   readonly listProjectDirectory: (request: ProjectDirectoryListRequest) => Promise<ProjectDirectoryListResult>
+  /** 提交当前项目里需要监听的目录集合；主进程按集合增删监听，不递归。 */
+  readonly watchProjectDirectories: (request: ProjectDirectoryWatchRequest) => Promise<ProjectDirectoryWatchResult>
+  /** 订阅目录变化；回调只在主进程登记的层内触发，返回取消订阅函数。 */
+  readonly onProjectDirectoryChanged: (listener: (change: ProjectDirectoryChange) => void) => () => void
   /** 把项目内相对条目路径解析为绝对路径；绝对路径、越界路径与非法段由主进程拒绝。 */
   readonly resolveProjectEntryPath: (request: ProjectEntryPathRequest) => Promise<ProjectEntryPathResult>
   /** 在系统文件管理器中显示一个项目内条目；条目已不存在时回可展示的原因。 */
@@ -243,6 +281,42 @@ export function isProjectDirectoryListResult(value: unknown): value is ProjectDi
 
   const { code, message } = value.error
   return typeof code === 'string' && typeof message === 'string'
+}
+
+/**
+ * 监听请求校验：只接受 `directories` 一个字段，且必须是字符串数组；
+ * 逐项范围校验（越界、绝对路径、超长）在主进程完成，这里只挡住结构异常。
+ */
+export function isProjectDirectoryWatchRequest(value: unknown): value is ProjectDirectoryWatchRequest {
+  if (!isRecord(value)) return false
+  if (Object.keys(value).some((key) => key !== 'directories')) return false
+  return Array.isArray(value.directories)
+    && value.directories.every((entry) => (
+      typeof entry === 'string' && entry.length <= PROJECT_DIRECTORY_PATH_MAX_CHARS
+    ))
+}
+
+/** 监听登记结果：成功只回生效目录数，失败沿用同一份错误结构。 */
+export function isProjectDirectoryWatchResult(value: unknown): value is ProjectDirectoryWatchResult {
+  if (!isRecord(value)) return false
+  if (value.ok === true) {
+    const data = value.data
+    return isRecord(data) && typeof data.watching === 'number' && Number.isFinite(data.watching) && data.watching >= 0
+  }
+  if (value.ok !== false || !isRecord(value.error)) return false
+
+  const { code, message } = value.error
+  return typeof code === 'string' && typeof message === 'string'
+}
+
+/** 目录变化事件校验：`changed` 必须给出目录，`overflow` 必须是空列表，未知 kind 一律拒绝。 */
+export function isProjectDirectoryChange(value: unknown): value is ProjectDirectoryChange {
+  if (!isRecord(value)) return false
+  if (typeof value.projectPath !== 'string' || value.projectPath === '') return false
+  if (!Array.isArray(value.directories) || !value.directories.every((entry) => typeof entry === 'string')) return false
+  if (value.kind === 'changed') return value.directories.length > 0
+  if (value.kind === 'overflow') return value.directories.length === 0
+  return false
 }
 
 function isProjectEntryPath(value: unknown): value is ProjectEntryPath {

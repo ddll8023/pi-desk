@@ -6,7 +6,8 @@
  *
  * 脏标记由编辑器上报，保存时把当前文本交给主进程，并把返回的新磁盘基线写回记录；
  * 外部改动通过 `stat` 比对 size/mtimeMs 发现：未修改的文件自动重新载入，有未保存修改时
- * 只标记冲突，等用户选择覆盖保存或继续编辑，绝不静默丢弃改动。
+ * 只标记冲突，等用户选择覆盖保存或继续编辑，绝不静默丢弃改动。触发时机有两个：窗口重新聚焦，
+ * 以及主进程的目录监听回报「这些目录变了」。
  */
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
@@ -48,6 +49,12 @@ export interface FileEditorRecord {
 }
 
 const FILE_KEY_PREFIX = 'file:'
+
+/** 条目的父目录相对路径；根层文件回空串，与目录监听的相对路径同一口径。 */
+function parentDirectoryOf(path: string): string {
+  const slash = path.lastIndexOf('/')
+  return slash < 0 ? '' : path.slice(0, slash)
+}
 
 export const useProjectEditorStore = defineStore('project-editor', () => {
   const records = ref<Readonly<Record<string, FileEditorRecord>>>({})
@@ -240,6 +247,27 @@ export const useProjectEditorStore = defineStore('project-editor', () => {
     await loadInto(key)
   }
 
+  /**
+   * 目录监听回报一批目录变化：父目录命中的已打开文件逐个重新比对磁盘基线。
+   * 与窗口聚焦走同一套判断（`checkExternal`），只读 `stat`，不写盘也不抢用户的未保存改动。
+   */
+  function checkChangedDirectories(directories: readonly string[]): void {
+    if (directories.length === 0) return
+    const changed = new Set(directories)
+    for (const record of Object.values(records.value)) {
+      if (!changed.has(parentDirectoryOf(record.path))) continue
+      void checkExternal(record.key)
+    }
+  }
+
+  /**
+   * 重新比对全部已打开文件的磁盘基线：用于拿不到具体目录的整树刷新（如目录监听 overflow）。
+   * 代价只是每个标签一次 `stat`，文件不多时可以接受。
+   */
+  function checkAllExternal(): void {
+    for (const record of Object.values(records.value)) void checkExternal(record.key)
+  }
+
   return {
     records,
     recordOf,
@@ -252,6 +280,8 @@ export const useProjectEditorStore = defineStore('project-editor', () => {
     setMode,
     save,
     checkExternal,
+    checkChangedDirectories,
+    checkAllExternal,
     reload
   }
 })

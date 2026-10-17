@@ -238,14 +238,16 @@ ipcMain.handle('git:commit', (e, { message }) => {
 
 ## 4. pi-desk 现状与差距
 
+以下为接入 Git 前的评估快照，用于说明当时的取舍依据；当前实现见第 5 节与 `docs/file-tree-watch-research.md`。
+
 ### 4.1 现状
 
 | 维度 | pi-desk 现状 |
 | --- | --- |
-| 右侧栏 | `RightPanel.vue` 只有「文件树」一种内容；头部是项目名 + 刷新按钮；宽度/折叠存 `UiPreferences`（`rightPanelOpen` / `rightPanelWidth`，240–720px） |
+| 右侧栏 | `RightPanel.vue` 有「文件树」与「源代码管理」两个页签（选中页签存 `UiPreferences` 的 `rightPanelTab`）；头部是项目名 + 刷新按钮；宽度/折叠存 `UiPreferences`（`rightPanelOpen` / `rightPanelWidth`，240–720px） |
 | 面板内容 | `FileTreeView.vue`（查找 + 懒加载目录树 + 拖到终端 + 右键菜单 `FileTreeMenu.vue`） |
 | IPC 模式 | `src/shared/*-api.ts`（通道常量 + 类型 + `is*Result` 校验）→ `src/preload/index.ts`（`contextBridge` 暴露窄接口）→ `src/main/index.ts` 的 `handle(...)`（含 `isTrustedCaller` + 参数校验 + `{ok,data}\|{ok,error}` 信封）→ `src/renderer/src/services/*.ts`（桥接缺失/异常收敛）→ pinia store → 组件 |
-| 已有 git 用法 | 只有 `src/main/project-file-index.ts` 的 `git ls-files -co --exclude-standard -z`（失败退化为遍历）；无 Git 服务、无状态、无 watcher |
+| 已有 git 用法 | `src/main/project-file-index.ts` 的 `git ls-files -co --exclude-standard -z`（失败退化为遍历）；`GitService` + `GitPanel.vue` 提供状态、暂存、提交、差异与历史；目录层监听（`project-directory-watcher.ts`）已驱动 git 静默刷新 |
 | 进程 | `execFile`（`project-file-index`）、`cross-spawn`（受管脚本）；`shell-path.ts` 已在启动时把登录 shell 的 PATH 合并进 `process.env`，所以 `git` 一般可直接找到 |
 | 信任 | `TrustManager` + `TRUST_REQUIRED` + `TrustDialog`（只针对 `.pi` 下的受保护资源） |
 | 项目模型 | **一次只有当前一个项目**（无 worktree、无远端 runtime）→ 缓存 key 可以简化成项目路径 |
@@ -254,7 +256,7 @@ ipcMain.handle('git:commit', (e, { message }) => {
 
 1. 右侧栏没有页签容器 → 需要加 tab（并持久化选中页签）。
 2. 没有 Git 运行时 → 需要新增主进程 Git 服务（命令封装、超时、锁、取消）。
-3. 没有文件监听 → 刷新只能手动（`RightPanel.vue` 的刷新按钮）。
+3. 文件监听只覆盖已展开的目录层（`project-directory-watcher.ts`，方案见 `docs/file-tree-watch-research.md`）；未展开目录与整仓库递归仍无监听，超大仓库降级也未做。
 4. 没有 diff 组件 → `CodeMirrorEditor.vue` 是单文档编辑器，`@codemirror/merge` 未安装（依赖表里只有 `@codemirror/{commands,language,language-data,state,view}`）。
 5. 错误码族没有 Git 语义（`DesktopErrorCode` 只有 `FORBIDDEN/INVALID_REQUEST/INTERNAL_ERROR/INVALID_RESPONSE/BRIDGE_*/TRUST_REQUIRED/CONFLICT`）。
 
@@ -378,11 +380,14 @@ export interface GitDiff {
 
 ### 5.4 刷新策略（pi-desk 版）
 
-分三步走，不要一上来就上文件监听：
+分三步走，文件监听只在必要时接入：
 
 - **P0（手动 + 触发点）**：面板可见时在「切到该页签 / 窗口 focus / 切项目 / 任一写操作成功 / 点刷新」时拉一次 `git:status`。请求带 `requestToken`，新请求取消旧请求。
 - **P1（轻量轮询）**：面板可见且窗口聚焦时 `setInterval` 3s 轮询；不可见/失焦/最小化立即停（`document.visibilitychange` + `window.blur`）。轮询请求带 `reuseLineStats: true`，只有 `head`/条目身份变了才重算行数。
-- **P2（文件监听）**：主进程 `fs.watch`（macOS 递归；Windows 逐目录）+ 忽略 `.git/`、`node_modules/`、`.pi/`，**250ms 防抖 + 1000ms 上限合并**，推 `desktop:git-changed` 事件；渲染端收到后仍走 P1 的防抖路径。**监听要能被「超大仓库」自动关闭**（条目数打到上限就降级为纯轮询/手动）。
+- **P2（文件监听）**：已落地的是逐目录非递归监听（`project-directory-watcher.ts`，只监听已展开的层），变化经
+  `desktop:project-directory-changed` 推给渲染端并触发 `git:status` 静默刷新；剩余范围是整仓库递归监听 + 忽略
+  `.git/`、`node_modules/`、`.pi/`，**250ms 防抖 + 1000ms 上限合并**，推 `desktop:git-changed` 事件，
+  渲染端收到后仍走 P1 的防抖路径。**监听要能被「超大仓库」自动关闭**（条目数打到上限就降级为纯轮询/手动）。
 
 代际令牌（照抄 Orca 的 strict/automatic）：
 
@@ -543,4 +548,4 @@ function isCurrent(order: { strict: number; automatic: number }): boolean {
 - **按文件看历史**：`history` 接受可选 `path`（项目内相对路径），命令里作为 pathspec 传给 `git log -- <path>`；
   改动行上的时钟按钮直接把历史切到该文件的过滤模式。
 
-刻意留到后续（与第 5.8 节一致）：改动行数统计（工作区）、轮询与文件监听、AI 提交信息、分支与远端操作（fetch/pull/push、分支比较）、冲突解决流程、写操作的信任边界。其中**信任边界**是唯一带安全含义的遗留项：`commit`/`pull` 会执行仓库里的 hook 与 filter，接入时应复用 `TrustManager` 与 `TrustDialog`。
+刻意留到后续（与第 5.8 节一致）：改动行数统计（工作区）、轮询与整仓库递归监听、AI 提交信息、分支与远端操作（fetch/pull/push、分支比较）、冲突解决流程、写操作的信任边界。其中**信任边界**是唯一带安全含义的遗留项：`commit`/`pull` 会执行仓库里的 hook 与 filter，接入时应复用 `TrustManager` 与 `TrustDialog`。
