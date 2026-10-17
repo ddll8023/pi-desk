@@ -2431,7 +2431,7 @@
     background: color-mix(in srgb, var(--sidebar-muted) 45%, transparent);
   }
 
-  /* 消息列、输入坞、扩展通知条与 widget 文本块共用同一列宽，保证窗口变宽时纵向对齐。 */
+  /* 消息列、输入坞、扩展通知条、会话活动摘要条与 widget 文本块共用同一列宽，保证窗口变宽时纵向对齐。 */
   .chat-column {
     width: 100%;
     /* 上限取设计宽度与「保留大纲留白」中的较小者，下限 62rem 保证中等窗口不被压缩。 */
@@ -2925,6 +2925,98 @@
       opacity: 1;
       transform: none;
     }
+  }
+
+  /* 会话活动摘要条：对话区顶部的一条窄带，只有折叠行，展开的明细是浮层（见下方 .session-activity-pop），
+     因此展开与收起都不改变消息区的高度，也不影响正文的滚动与粘底判定。 */
+  .session-activity {
+    @apply shrink-0 border-b border-desk-line bg-desk-surface px-4 py-1.5 sm:px-6;
+  }
+
+  .session-activity-toggle {
+    @apply flex w-full min-w-0 items-center gap-2 rounded-desk-sm px-1.5 py-1 text-left transition-colors;
+  }
+
+  .session-activity-toggle:hover {
+    @apply bg-desk-surface-subtle;
+  }
+
+  .session-activity-title {
+    @apply shrink-0 text-xs font-medium text-desk-ink;
+  }
+
+  /* 摘要按等宽数字排列，分类计数变化时行内不抖动；超长时整体截断，明细在展开后看。 */
+  .session-activity-summary {
+    @apply min-w-0 flex-1 truncate font-mono text-2xs text-desk-muted;
+  }
+
+  /* 明细浮层：定位与尺寸由锚定工具写入内联样式，这里只给外观与分层滚动；
+     Teleport 到 body，因此不参与工作区的布局与溢出裁切。 */
+  .session-activity-pop {
+    position: fixed;
+    z-index: 40;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    border: 1px solid var(--color-desk-line-strong);
+    border-radius: var(--radius-desk-md);
+    background: var(--color-desk-surface);
+    color: var(--color-desk-ink);
+    box-shadow: var(--shadow-desk-pop);
+  }
+
+  /* 页签栏固定在浮层顶部，明细在下方单独滚动：四类各占一个页签，不同来源的条目不混在一条清单里。 */
+  .session-activity-tabs {
+    @apply flex shrink-0 items-center gap-1 border-b border-desk-line px-2 py-1.5;
+  }
+
+  .session-activity-tab {
+    @apply inline-flex shrink-0 items-center gap-1.5 rounded-desk-sm px-2 py-1 text-2xs text-desk-muted transition-colors;
+  }
+
+  .session-activity-tab:hover {
+    @apply bg-desk-surface-subtle text-desk-ink;
+  }
+
+  .session-activity-tab.is-active {
+    @apply bg-desk-accent-soft text-desk-accent;
+  }
+
+  /* 页签里的条数用等宽数字：切换分类时页签宽度不抖动。 */
+  .session-activity-tab-count {
+    @apply font-mono text-2xs;
+    opacity: 0.75;
+  }
+
+  .session-activity-panel {
+    @apply min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 py-1.5;
+  }
+
+  .session-activity-list {
+    @apply min-w-0 space-y-px;
+  }
+
+  .session-activity-entry {
+    @apply flex w-full min-w-0 items-baseline gap-2 rounded-desk-sm px-1.5 py-0.5 text-left text-desk-ink;
+  }
+
+  /* 项目内文件整行可点：悬停只换底色与强调色，不改变行高。 */
+  .session-activity-entry.is-openable {
+    @apply transition-colors;
+  }
+
+  .session-activity-entry.is-openable:hover {
+    @apply bg-desk-surface-subtle text-desk-accent;
+  }
+
+  /* 条目文字跟随行的颜色：可点的行在悬停时整行变成强调色。 */
+  .session-activity-entry-label {
+    @apply min-w-0 flex-1 truncate font-mono text-2xs;
+    color: inherit;
+  }
+
+  .session-activity-entry-meta {
+    @apply shrink-0 text-2xs text-desk-muted;
   }
 
   /* 紧凑刻度只占窄栏，少量条目按内容高度显示；文字浮层独立于滚动列表，并留在正文右侧空白内。 */

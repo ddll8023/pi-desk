@@ -30,6 +30,7 @@ import PromptComposer from './components/PromptComposer.vue'
 import ProjectSidebar from './components/ProjectSidebar.vue'
 import QuickCommandDialog from './components/QuickCommandDialog.vue'
 import RightPanel from './components/RightPanel.vue'
+import SessionActivityBar from './components/SessionActivityBar.vue'
 import SessionPickerDialog from './components/SessionPickerDialog.vue'
 import SettingsView from './components/SettingsView.vue'
 import TerminalView from './components/TerminalView.vue'
@@ -427,6 +428,8 @@ onUnmounted(() => {
               :aria-hidden="!workspaceTabsStore.isChatActive"
             >
               <ExtensionNotificationBar />
+              <!-- 会话活动摘要条：本会话读过与改过的文件、调用的 Skill、MCP 与插件工具；折叠成一行，明细是浮层页签，不占消息区高度。 -->
+              <SessionActivityBar />
               <ChatMessageList />
               <!-- Widget 放置语义与官方子协议一致：aboveEditor 在输入区上方，belowEditor 在下方。 -->
               <div v-for="widget in widgetsAbove" :key="widget.placement" class="px-4 py-2 sm:px-6">
