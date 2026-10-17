@@ -2,7 +2,8 @@
  * 工作区文件标签的编辑状态：按项目保存已打开文件的读取结果、编辑模式、脏标记与磁盘冲突。
  *
  * 文件内容读写全经主进程：这里只保存「读到了什么、用户改没改、磁盘基线是什么」，
- * 不自行拼接绝对路径。读取结果分文本、图片与「不支持」三类；只有文本可编辑。
+ * 不自行拼接绝对路径。读取结果分文本、图片与「不支持」三类；只有文本可编辑，
+ * 且超过可编辑上限的文本只可预览：这类记录不会变脏，也不接受保存。
  *
  * 脏标记由编辑器上报，保存时把当前文本交给主进程，并把返回的新磁盘基线写回记录；
  * 外部改动通过 `stat` 比对 size/mtimeMs 发现：未修改的文件自动重新载入，有未保存修改时
@@ -12,6 +13,7 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import type { DesktopError } from '../../../shared/desktop-api'
+import { PROJECT_FILE_EDIT_MAX_BYTES } from '../../../shared/project-file-api'
 import type {
   ProjectFileImageContent,
   ProjectFileTextContent,
@@ -54,6 +56,14 @@ const FILE_KEY_PREFIX = 'file:'
 function parentDirectoryOf(path: string): string {
   const slash = path.lastIndexOf('/')
   return slash < 0 ? '' : path.slice(0, slash)
+}
+
+/** 只有读取完成且未超过可编辑上限的文本文件才能编辑与保存。 */
+function isEditable(record: FileEditorRecord): boolean {
+  const load = record.load
+  return load.phase === 'ready'
+    && load.content.kind === 'text'
+    && load.content.size <= PROJECT_FILE_EDIT_MAX_BYTES
 }
 
 export const useProjectEditorStore = defineStore('project-editor', () => {
@@ -127,7 +137,11 @@ export const useProjectEditorStore = defineStore('project-editor', () => {
       update(key, { load: { phase: 'unsupported', content } })
       return
     }
-    update(key, { load: { phase: 'ready', content }, saveError: null })
+    // 超过可编辑上限的 Markdown 直接落在预览：默认进编辑器既不能保存，又要为大文本建编辑状态。
+    const previewOnly = content.kind === 'text'
+      && content.size > PROJECT_FILE_EDIT_MAX_BYTES
+      && record.markdown
+    update(key, { load: { phase: 'ready', content }, saveError: null, ...(previewOnly ? { mode: 'preview' as const } : {}) })
   }
 
   /** 关闭文件标签：只清内存记录，不改动磁盘。 */
@@ -149,7 +163,7 @@ export const useProjectEditorStore = defineStore('project-editor', () => {
   /** 编辑器上报内容变化：只改脏标记，文本由编辑器自己持有，避免每次击键搬运整份内容。 */
   function markDirty(key: string): void {
     const record = records.value[key]
-    if (record === undefined || record.dirty) return
+    if (record === undefined || record.dirty || !isEditable(record)) return
     update(key, { dirty: true })
   }
 
@@ -180,7 +194,7 @@ export const useProjectEditorStore = defineStore('project-editor', () => {
    */
   async function save(key: string, text: string, force = false): Promise<boolean> {
     const record = records.value[key]
-    if (record === undefined || record.load.phase !== 'ready') return false
+    if (record === undefined || record.load.phase !== 'ready' || !isEditable(record)) return false
     const content = record.load.content
     if (content.kind !== 'text' || record.saving) return false
 

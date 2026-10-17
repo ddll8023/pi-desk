@@ -6,6 +6,7 @@
   `modelValue` 只在外部重新载入时变化，此时重建编辑器状态并清空撤销历史；自身编辑回声因文本相同而不会触发重建。
 
   语言按文件名/扩展名从 `@codemirror/language-data` 按需动态加载，加载失败退化为纯文本。
+  自动换行由父级控制：只读预览大文件时关闭换行，避免超长行参与折行测量。
   主题与高亮颜色全部引用 `--color-desk-*` 令牌，跟随应用的亮/暗主题，无需在脚本里判断模式。
 -->
 <script setup lang="ts">
@@ -24,6 +25,8 @@ const props = defineProps<{
   /** 项目内相对路径；只用于语言匹配与无障碍标签。 */
   readonly path: string
   readonly readOnly: boolean
+  /** 是否自动换行；只读大文件可关闭，减少长行的折行测量。 */
+  readonly wrap: boolean
 }>()
 
 const emit = defineEmits<{
@@ -96,6 +99,12 @@ let languageSupport: Extension = []
 let languageToken = 0
 const languageCompartment = new Compartment()
 const readOnlyCompartment = new Compartment()
+const wrapCompartment = new Compartment()
+
+/** 换行开关按需生效；关闭时超长行横向滚动，不参与折行测量。 */
+function wrapExtensions(): Extension {
+  return props.wrap ? EditorView.lineWrapping : []
+}
 
 /** 只读态同时关闭编辑与输入，避免内容仍可被粘贴修改。 */
 function readOnlyExtensions(): Extension {
@@ -108,7 +117,7 @@ function buildState(text: string): EditorState {
     doc: text,
     extensions: [
       basicSetup,
-      EditorView.lineWrapping,
+      wrapCompartment.of(wrapExtensions()),
       editorTheme,
       syntaxHighlighting(editorHighlight),
       languageCompartment.of(languageSupport),
@@ -160,6 +169,10 @@ watch(() => props.path, (path) => {
 
 watch(() => props.readOnly, () => {
   view?.dispatch({ effects: readOnlyCompartment.reconfigure(readOnlyExtensions()) })
+})
+
+watch(() => props.wrap, () => {
+  view?.dispatch({ effects: wrapCompartment.reconfigure(wrapExtensions()) })
 })
 
 defineExpose({

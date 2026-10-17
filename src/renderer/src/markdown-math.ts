@@ -13,7 +13,7 @@
 import katex from 'katex'
 import type { TokenizerAndRendererExtension, Tokens } from 'marked'
 
-/** 进入自定义 HTML 的文本转义由调用方注入，与 markdown.ts 共用同一实现。 */
+/** 进入自定义 HTML 的文本转义由调用方注入，与 markdown.ts、file-markdown.ts 共用 markdown-shared.ts 的同一实现。 */
 export type EscapeHtml = (text: string) => string
 
 /** 数学 token：`math` 来自行内定界符，`mathBlock` 来自行首的显示公式。 */

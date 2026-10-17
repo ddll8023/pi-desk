@@ -20,8 +20,11 @@ export function languageDescriptionForPath(path: string): LanguageDescription | 
   return LanguageDescription.matchFilename(languages, name)
 }
 
-/** Markdown 文件才提供「源码 / 预览」切换；其余文件只有代码视图。 */
+/**
+ * Markdown 文件才提供「源码 / 预览」切换；其余文件只有代码视图。
+ * `.mdx` 不在此列：它允许 JSX 与 import，marked 会把它们当普通文本渲染，预览结果与实际不符。
+ */
 export function isMarkdownPath(path: string): boolean {
   const name = fileNameOf(path).toLowerCase()
-  return name.endsWith('.md') || name.endsWith('.markdown') || name.endsWith('.mdx')
+  return name.endsWith('.md') || name.endsWith('.markdown')
 }

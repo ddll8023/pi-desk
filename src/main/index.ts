@@ -1,12 +1,17 @@
-/** 管理唯一桌面窗口、本地资产边界，以及应用信息、Project 选择/添加/移除、项目文件检索、目录列举与文件内容读写、Session 与 Project Trust、会话运行状态（查询、释放与结束）、内置终端（PTY）、界面偏好、快捷命令、Runtime、Pi 默认模型、自定义供应商配置、认证、Pi 版本检查、Extension IPC、事件广播及退出编排。 */
+/** 管理唯一桌面窗口、本地资产边界，以及应用信息、受控外链打开、Project 选择/添加/移除、项目文件检索、目录列举与文件内容读写、Session 与 Project Trust、会话运行状态（查询、释放与结束）、内置终端（PTY）、界面偏好、快捷命令、Runtime、Pi 默认模型、自定义供应商配置、认证、Pi 版本检查、Extension IPC、事件广播及退出编排。 */
 import { mkdirSync } from 'node:fs'
 import { realpath } from 'node:fs/promises'
 import { dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { app, BrowserWindow, dialog, ipcMain, nativeTheme, net, protocol, session } from 'electron'
 import type { BrowserWindowConstructorOptions, IpcMainInvokeEvent } from 'electron'
-import { APP_INFO_CHANNEL } from '../shared/desktop-api'
-import type { AppInfoResult, DesktopError, DesktopErrorCode } from '../shared/desktop-api'
+import { APP_INFO_CHANNEL, OPEN_EXTERNAL_URL_CHANNEL, isOpenExternalUrlRequest } from '../shared/desktop-api'
+import type {
+  AppInfoResult,
+  DesktopError,
+  DesktopErrorCode,
+  OpenExternalUrlResult
+} from '../shared/desktop-api'
 import { devServerPortFromEnv } from '../shared/dev-server'
 import {
   PREFERENCES_GET_CHANNEL,
@@ -275,6 +280,7 @@ import type {
 } from '../shared/updates-api'
 import { DesktopConfigStore } from './desktop-config-store'
 import { AuthManager, AuthManagerError } from './auth-manager'
+import { ExternalUrlError, openDocumentUrl } from './external-url'
 import { readMcpConfigListing } from './mcp-config-reader'
 import { ModelsConfigError, ModelsConfigManager } from './models-config-manager'
 import { PiSettingsError, PiSettingsManager } from './pi-settings-manager'
@@ -572,6 +578,33 @@ function registerAppInfoHandler(pageUrl: string): void {
       return { ok: false, error: { code: 'INTERNAL_ERROR', message: '暂时无法取得应用信息。' } }
     }
   })
+}
+
+/**
+ * 外链打开：只接受一个 http(s) 地址。文件预览里的链接来自项目文件本身，因此不限定域名，
+ * 但协议、长度与内嵌凭据由 `openDocumentUrl` 统一校验，失败原因直接回给页面。
+ */
+function registerOpenExternalUrlHandler(pageUrl: string): void {
+  handle(
+    OPEN_EXTERNAL_URL_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<OpenExternalUrlResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return { ok: false, error: { code: 'FORBIDDEN', message: '不允许此页面调用桌面接口。' } }
+      }
+      if (args.length !== 1 || !isOpenExternalUrlRequest(args[0])) {
+        return { ok: false, error: { code: 'INVALID_REQUEST', message: '外链打开只接受一个地址请求。' } }
+      }
+      try {
+        await openDocumentUrl(args[0].url)
+        return { ok: true }
+      } catch (error) {
+        const message = error instanceof ExternalUrlError
+          ? error.message
+          : '无法在系统浏览器中打开该地址。'
+        return { ok: false, error: { code: 'INVALID_REQUEST', message } }
+      }
+    }
+  )
 }
 
 function runtimeFailure(code: RuntimeErrorCode, message: string): RuntimeResult {
@@ -2888,6 +2921,7 @@ if (!app.requestSingleInstanceLock()) {
     restrictSession()
     registerAssetProtocol()
     registerAppInfoHandler(pageUrl)
+    registerOpenExternalUrlHandler(pageUrl)
     registerRuntimeHandlers(pageUrl)
     registerExtensionUiHandlers(pageUrl)
     registerProjectHandlers(pageUrl)

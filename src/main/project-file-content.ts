@@ -6,7 +6,8 @@
  *
  * 读取按内容分类：图片按扩展名映射 MIME 后回 base64；文本按 UTF-8 严格解码，识别并剥离 BOM、
  * 统计换行符主类型，编辑区统一使用 `\n`；二进制（含 NUL 字节）与非法 UTF-8 按「不支持」返回；
- * 超过大小上限同样按「不支持」返回，不截断、不假装可编辑。
+ * 超过读取上限同样按「不支持」返回，不截断、不假装可读。读取上限高于可编辑上限：
+ * 大文件仍可只读预览，但写入会按可编辑上限拒绝。
  *
  * 写入只接受文本，并带回读取时的磁盘基线：`expected` 不为空且与当前 size/mtimeMs 不一致时回
  * CONFLICT，由界面提示用户继续编辑或强制覆盖；写入走同目录临时文件 + rename 的原子替换，
@@ -17,6 +18,7 @@ import type { Stats } from 'node:fs'
 import { basename, dirname, extname, join } from 'node:path'
 import type { DesktopError, DesktopErrorCode } from '../shared/desktop-api'
 import {
+  PROJECT_FILE_EDIT_MAX_BYTES,
   PROJECT_FILE_IMAGE_MAX_BYTES,
   PROJECT_FILE_TEXT_MAX_BYTES
 } from '../shared/project-file-api'
@@ -146,8 +148,8 @@ export class ProjectFileContent {
     }
 
     const bytes = encodeText(request.text, request.eol, request.bom)
-    if (bytes.byteLength > PROJECT_FILE_TEXT_MAX_BYTES) {
-      return failure('INVALID_REQUEST', `内容超出可保存上限（${PROJECT_FILE_TEXT_MAX_BYTES} 字节），未写入。`)
+    if (bytes.byteLength > PROJECT_FILE_EDIT_MAX_BYTES) {
+      return failure('INVALID_REQUEST', `内容超出可保存上限（${PROJECT_FILE_EDIT_MAX_BYTES} 字节），未写入。`)
     }
 
     const written = await replaceAtomically(resolved.absolutePath, bytes, info.data.mode)

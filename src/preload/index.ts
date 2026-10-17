@@ -1,7 +1,13 @@
-/** 为沙箱页面提供应用信息、Project 选择/添加/移除/列表、项目文件检索、目录列举、目录监听、条目路径解析与文件内容读写、Git（源代码管理）、Session、会话运行状态、终端、Project Trust、偏好与快捷命令、Runtime、Pi 资源、Pi 默认模型、Pi 版本检查、扩展更新与内置 agent 安装、自定义供应商、认证与 Extension 等受限接口，不暴露 Electron、任意 channel 或系统能力。 */
+/** 为沙箱页面提供应用信息、外链打开（仅 http/https）、Project 选择/添加/移除/列表、项目文件检索、目录列举、目录监听、条目路径解析与文件内容读写、Git（源代码管理）、Session、会话运行状态、终端、Project Trust、偏好与快捷命令、Runtime、Pi 资源、Pi 默认模型、Pi 版本检查、扩展更新与内置 agent 安装、自定义供应商、认证与 Extension 等受限接口，不暴露 Electron、任意 channel 或系统能力。 */
 import { contextBridge, ipcRenderer } from 'electron'
 import type { IpcRendererEvent } from 'electron'
-import { APP_INFO_CHANNEL, isAppInfoResult } from '../shared/desktop-api'
+import {
+  APP_INFO_CHANNEL,
+  OPEN_EXTERNAL_URL_CHANNEL,
+  isAppInfoResult,
+  isOpenExternalUrlResult
+} from '../shared/desktop-api'
+import type { OpenExternalUrlRequest, OpenExternalUrlResult } from '../shared/desktop-api'
 import type { DesktopApi } from '../shared/desktop-api'
 import {
   PREFERENCES_GET_CHANNEL,
@@ -581,6 +587,15 @@ const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionAp
       }
     }
     return response
+  },
+
+  /** 外链打开：只搬运地址，协议与凭据由主进程校验；响应结构不对时统一报无法识别。 */
+  async openExternalUrl(request: OpenExternalUrlRequest): Promise<OpenExternalUrlResult> {
+    const payload: OpenExternalUrlRequest = { url: request.url }
+    const response: unknown = await ipcRenderer.invoke(OPEN_EXTERNAL_URL_CHANNEL, payload)
+    return isOpenExternalUrlResult(response)
+      ? response
+      : { ok: false, error: { code: 'INVALID_RESPONSE', message: '桌面接口返回了无法识别的外链打开结果。' } }
   },
 
   async chooseProjectDirectory() {

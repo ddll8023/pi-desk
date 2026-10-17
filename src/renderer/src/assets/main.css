@@ -2162,9 +2162,240 @@
   }
 
   .file-editor-preview {
-    overflow: auto;
-    padding: 1rem 1.25rem;
+    overflow: hidden;
+    padding: 0;
   }
+
+  /* 超限只读提示：跟在路径下面，不占主体高度，也不影响叠放层的测量。 */
+  .file-editor-note {
+    margin-top: 0.125rem;
+    font-size: var(--text-2xs);
+    color: var(--color-desk-warning);
+  }
+
+  .file-editor-toc-toggle {
+    padding: 0.125rem 0.5rem;
+    border: 1px solid var(--color-desk-line-strong);
+    border-radius: var(--radius-desk-sm);
+    font-size: var(--text-2xs);
+    color: var(--color-desk-muted);
+  }
+
+  .file-editor-toc-toggle.is-active {
+    border-color: var(--color-desk-accent);
+    background: var(--color-desk-accent-soft);
+    color: var(--color-desk-accent);
+  }
+
+  /* 文件预览排版：正文限宽居中，滚动交给内层容器，目录栏独立滚动。 */
+  .file-markdown {
+    position: relative;
+    display: flex;
+    min-width: 0;
+    min-height: 0;
+    flex: 1;
+    container-type: inline-size;
+    background: var(--color-desk-surface);
+  }
+
+  .file-markdown-scroll {
+    min-width: 0;
+    min-height: 0;
+    flex: 1;
+    overflow: auto;
+    padding: 1.25rem 1.5rem 3rem;
+  }
+
+  /* 正文排版在共用块级样式之后定义会失效，因此提高一级选择器权重，不依赖样式表顺序。 */
+  .file-markdown .file-markdown-body {
+    max-width: 78ch;
+    margin: 0 auto;
+    font-size: 0.9375rem;
+    line-height: 1.75;
+  }
+
+  /* 阅读场景的标题层级比聊天消息略收敛：一级标题不抢满宽，二级以下保持紧密。 */
+  .file-markdown .file-markdown-body h1 { font-size: 1.5em; }
+  .file-markdown .file-markdown-body h2 { font-size: 1.25em; }
+  .file-markdown .file-markdown-body h3 { font-size: 1.0625em; }
+  .file-markdown .file-markdown-body :is(h4, h5, h6) { font-size: 1em; }
+
+  /* 二级标题在长文里承担分节作用，加一条细线比继续加大字号更省空间。 */
+  .file-markdown .file-markdown-body h2 {
+    border-bottom: 1px solid var(--color-desk-line);
+    padding-bottom: 0.25rem;
+  }
+
+  /* 标题要能被锚点定位到，同时避开滚动容器顶部。 */
+  .file-markdown-body :is(h1, h2, h3, h4, h5, h6) {
+    scroll-margin-top: 1rem;
+  }
+
+  .file-markdown-body :is(h1, h2, h3, h4, h5, h6):focus-visible {
+    outline: 2px solid var(--color-desk-accent);
+    outline-offset: 2px;
+  }
+
+  .file-markdown .file-markdown-frontmatter {
+    max-width: 78ch;
+    margin-left: auto;
+    margin-right: auto;
+    border: 1px solid var(--color-desk-line);
+    border-radius: var(--radius-desk-md);
+    background: var(--color-desk-surface-subtle);
+    font-size: 0.8125rem;
+    color: var(--color-desk-muted);
+  }
+
+  .file-markdown-frontmatter > summary {
+    padding: 0.375rem 0.75rem;
+    cursor: pointer;
+    font-size: var(--text-2xs);
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+  }
+
+  .file-markdown-frontmatter > pre {
+    margin: 0;
+    overflow: auto;
+    border-top: 1px solid var(--color-desk-line);
+    padding: 0.5rem 0.75rem;
+    font-family: var(--font-mono);
+    line-height: 1.6;
+  }
+
+  /* 项目内图片：未加载时是占位文本，加载完成后替换成 img。 */
+  .file-markdown-image-frame {
+    display: inline-block;
+    max-width: 100%;
+    color: var(--color-desk-muted);
+    font-size: 0.8125rem;
+  }
+
+  .file-markdown-image-frame.is-error {
+    color: var(--color-desk-warning);
+  }
+
+  .file-markdown-image-frame.is-ready {
+    display: block;
+    margin: 0.25rem 0;
+  }
+
+  .file-markdown-image-frame img {
+    display: block;
+    max-width: 100%;
+    height: auto;
+    border: 1px solid var(--color-desk-line);
+    border-radius: var(--radius-desk-sm);
+    /* 透明背景的图片用棋盘底纹，避免与白色面板糊在一起。 */
+    background-color: var(--color-desk-surface-subtle);
+    background-image:
+      linear-gradient(45deg, var(--color-desk-canvas-sunken) 25%, transparent 25%),
+      linear-gradient(-45deg, var(--color-desk-canvas-sunken) 25%, transparent 25%),
+      linear-gradient(45deg, transparent 75%, var(--color-desk-canvas-sunken) 75%),
+      linear-gradient(-45deg, transparent 75%, var(--color-desk-canvas-sunken) 75%);
+    background-size: 12px 12px;
+    background-position: 0 0, 0 6px, 6px -6px, -6px 0;
+  }
+
+  .file-markdown-image-fallback {
+    color: var(--color-desk-muted);
+    font-size: 0.8125rem;
+  }
+
+  /* 目录栏：窄面板下自动隐藏，不占正文宽度。 */
+  .file-markdown-toc {
+    display: flex;
+    width: 13rem;
+    flex: none;
+    flex-direction: column;
+    gap: 0.25rem;
+    overflow: auto;
+    border-left: 1px solid var(--color-desk-line);
+    background: var(--color-desk-surface-subtle);
+    padding: 1rem 0.75rem;
+    font-size: 0.8125rem;
+  }
+
+  .file-markdown-toc-title {
+    font-size: var(--text-2xs);
+    font-weight: 500;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--color-desk-muted);
+  }
+
+  .file-markdown-toc ul {
+    display: flex;
+    flex-direction: column;
+    gap: 0.125rem;
+  }
+
+  .file-markdown-toc li.is-level-1 { padding-left: 0; }
+  .file-markdown-toc li.is-level-2 { padding-left: 0; }
+  .file-markdown-toc li.is-level-3 { padding-left: 0.625rem; }
+  .file-markdown-toc li.is-level-4,
+  .file-markdown-toc li.is-level-5,
+  .file-markdown-toc li.is-level-6 { padding-left: 1.25rem; }
+
+  .file-markdown-toc-link {
+    display: block;
+    width: 100%;
+    overflow: hidden;
+    border-radius: var(--radius-desk-sm);
+    padding: 0.125rem 0.25rem;
+    text-align: left;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--color-desk-muted);
+    font: inherit;
+  }
+
+  .file-markdown-toc-link:hover {
+    background: var(--color-desk-accent-soft);
+    color: var(--color-desk-ink);
+  }
+
+  @container (max-width: 720px) {
+    .file-markdown-toc {
+      display: none;
+    }
+  }
+
+  .file-markdown-notice {
+    position: absolute;
+    right: 1rem;
+    bottom: 1rem;
+    max-width: min(28rem, calc(100% - 2rem));
+    border: 1px solid var(--color-desk-line);
+    border-radius: var(--radius-desk-md);
+    background: var(--color-desk-surface);
+    box-shadow: var(--shadow-desk-pop);
+    padding: 0.375rem 0.625rem;
+    font-size: var(--text-2xs);
+    color: var(--color-desk-muted);
+  }
+
+  .file-markdown-notice.is-error {
+    border-color: var(--color-desk-danger);
+    color: var(--color-desk-danger);
+  }
+
+  /* 代码高亮：语义类名到令牌色，与文件编辑器的高亮保持同一套配色。 */
+  .markdown-code-block .tok-keyword { color: var(--color-desk-accent); }
+  .markdown-code-block .tok-comment { color: var(--color-desk-muted); font-style: italic; }
+  .markdown-code-block .tok-string { color: var(--color-desk-success); }
+  .markdown-code-block .tok-number { color: var(--color-desk-warning); }
+  .markdown-code-block .tok-type { color: var(--color-desk-accent); }
+  .markdown-code-block .tok-function { color: var(--color-desk-accent); }
+  .markdown-code-block .tok-property { color: var(--color-desk-ink); }
+  .markdown-code-block .tok-tag { color: var(--color-desk-accent); }
+  .markdown-code-block .tok-punctuation { color: var(--color-desk-muted); }
+  .markdown-code-block .tok-link { color: var(--color-desk-accent); text-decoration: underline; }
+  .markdown-code-block .tok-heading { font-weight: 600; }
+  .markdown-code-block .tok-emphasis { font-style: italic; }
+  .markdown-code-block .tok-strong { font-weight: 600; }
+  .markdown-code-block .tok-invalid { color: var(--color-desk-danger); }
 
   .file-editor-image {
     display: flex;

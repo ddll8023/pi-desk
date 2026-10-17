@@ -3,9 +3,11 @@
  * 数学公式只输出占位元素，由 markdown-math.ts 在清洗后的 DOM 上渲染，清洗白名单不因此放开。
  */
 import DOMPurify from 'dompurify'
-import { Marked, Renderer } from 'marked'
+import { Marked } from 'marked'
 import { createDisplayMathBlockExtension, createMathExtension } from './markdown-math'
+import { escapeHtml, renderCodeBlock, renderTable } from './markdown-shared'
 import type { Config } from 'dompurify'
+import type { Tokens } from 'marked'
 
 /** 只开放正文语义和本地复制控件；不允许样式、资源地址、事件、ID 或任意 data 属性。 */
 const SANITIZE_CONFIG: Config = {
@@ -50,8 +52,8 @@ const parser = new Marked({
       // 地址保存在惰性文本属性中，而不是 href；相对路径与自定义协议也不能触发导航或资源请求。
       return `<button type="button" class="markdown-link" data-markdown-link="${escapeHtml(href)}" title="${escapeHtml(`复制链接地址：${href}`)}">${this.parser.parseInline(tokens)}</button>`
     },
-    table(token) {
-      return `<div class="markdown-table-scroll scroll-area" tabindex="0" role="region" aria-label="表格，可横向滚动">${Renderer.prototype.table.call(this, token)}</div>`
+    table(token: Tokens.Table) {
+      return renderTable(this, token)
     },
     checkbox({ checked }) {
       return `<input type="checkbox" disabled${checked ? ' checked' : ''} aria-label="${checked ? '已完成任务' : '未完成任务'}"> `
@@ -66,16 +68,4 @@ export function renderMarkdown(text: string): string | null {
   } catch {
     return null
   }
-}
-
-/** 围栏未闭合时也沿用解析器当前的代码内容；语言只作标签，不作为 HTML 或 CSS 类插入。 */
-function renderCodeBlock(text: string, language?: string): string {
-  const label = language?.trim().split(/\s+/, 1)[0] || '纯文本'
-  return `<div class="markdown-code-block"><div class="markdown-code-header"><span class="markdown-code-language">${escapeHtml(label)}</span><button type="button" class="markdown-code-copy" aria-label="复制代码">复制</button></div><pre class="scroll-area" tabindex="0" role="region" aria-label="代码，可横向滚动"><code>${escapeHtml(text)}</code></pre></div>\n`
-}
-
-/** 所有进入自定义 HTML 的文本与属性统一转义，清洗仍在完整输出的最后一道边界执行。 */
-function escapeHtml(text: string): string {
-  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;').replace(/'/g, '&#39;')
 }

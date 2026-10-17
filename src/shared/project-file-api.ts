@@ -29,8 +29,17 @@ export const PROJECT_DIRECTORY_ENTRY_LIMIT = 500
 /** 同时监听的目录层数上限；只监听已加载的层，超出部分截断，界面仍可手动刷新。 */
 export const PROJECT_DIRECTORY_WATCH_LIMIT = 256
 
-/** 可编辑文本的字节上限；超出按「不支持」返回，不截断也不提供编辑。 */
-export const PROJECT_FILE_TEXT_MAX_BYTES = 2 * 1024 * 1024
+/**
+ * 可读取（预览）的文本字节上限；超出按「不支持」返回，不截断。
+ * 比可编辑上限大，因为只读预览不需要把全文放进编辑器，代价低得多。
+ */
+export const PROJECT_FILE_TEXT_MAX_BYTES = 8 * 1024 * 1024
+
+/**
+ * 可编辑文本的字节上限；超过它仍可预览，但编辑器与保存都不提供。
+ * 编辑器要完整持有文本并参与撤销历史与逐次比对，2 MiB 是保持响应性的分界。
+ */
+export const PROJECT_FILE_EDIT_MAX_BYTES = 2 * 1024 * 1024
 
 /** 图片预览的字节上限；超出按「不支持」返回，避免一次 IPC 搬运过大内容。 */
 export const PROJECT_FILE_IMAGE_MAX_BYTES = 8 * 1024 * 1024
