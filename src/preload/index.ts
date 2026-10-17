@@ -116,6 +116,8 @@ import {
   GIT_DIFF_CHANNEL,
   GIT_DISCARD_CHANNEL,
   GIT_HISTORY_CHANNEL,
+  GIT_PULL_CHANNEL,
+  GIT_PUSH_CHANNEL,
   GIT_STAGE_CHANNEL,
   GIT_STATUS_CHANNEL,
   GIT_UNSTAGE_CHANNEL,
@@ -1293,7 +1295,7 @@ const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionAp
     return isAgentRuntimeResetResult(response) ? response : invalidAgentRuntimeResetResponse()
   },
 
-  /** 源代码管理：状态、差异、历史与四个写操作；参数只重建契约里声明的字段。 */
+  /** 源代码管理：状态、差异、历史、四个写操作与拉取/推送；参数只重建契约里声明的字段。 */
   async getGitStatus(): Promise<GitStatusResult> {
     const response: unknown = await ipcRenderer.invoke(GIT_STATUS_CHANNEL)
     return isGitStatusResult(response) ? response : invalidGitStatusResponse()
@@ -1321,6 +1323,16 @@ const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionAp
 
   async commitGitStaged(request: GitCommitRequest): Promise<GitOperationResult> {
     const response: unknown = await ipcRenderer.invoke(GIT_COMMIT_CHANNEL, { message: request.message })
+    return isGitStatusResult(response) ? response : invalidGitStatusResponse()
+  },
+
+  async pullGit(): Promise<GitOperationResult> {
+    const response: unknown = await ipcRenderer.invoke(GIT_PULL_CHANNEL)
+    return isGitStatusResult(response) ? response : invalidGitStatusResponse()
+  },
+
+  async pushGit(): Promise<GitOperationResult> {
+    const response: unknown = await ipcRenderer.invoke(GIT_PUSH_CHANNEL)
     return isGitStatusResult(response) ? response : invalidGitStatusResponse()
   },
 

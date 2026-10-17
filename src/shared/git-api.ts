@@ -1,10 +1,13 @@
 /**
  * 定义右侧面板「源代码管理」的 IPC 契约：状态读取、单文件差异、提交历史与提交内差异，以及
- * 暂存/取消暂存/丢弃/提交四类写操作。
+ * 暂存/取消暂存/丢弃/提交四类写操作与拉取/推送两条远端操作。
  *
  * 与项目文件契约同一口径：页面只给项目内相对路径，项目根与仓库根由主进程解析，页面不能指定仓库、
  * 不能传入任何 git 参数。状态读取不带参数，历史按条数/偏移与可选过滤路径读取；写操作成功后直接回传
- * 新的状态，避免「写完再拉一次」的竞态。
+ * 新的状态，避免「写完再拉一次」的竞态。远端操作同样不接受参数：远端、分支与推送策略全部由主进程
+ * 从仓库现状与用户自己的 git 配置得出。
+ * 写操作会执行仓库里的 filter 与 hook，因此项目尚无信任决定或被标记为未信任时返回 `TRUST_REQUIRED`；
+ * 读操作（状态、差异、历史）不执行仓库代码，不做信任拦截。
  * 「不是 Git 仓库」是正常结果（`isRepository: false`）而不是错误，界面据此显示空态。
  * 状态条目与提交内文件都有硬上限（`GIT_STATUS_LIMIT` / `GIT_COMMIT_FILES_LIMIT`）：超过时截断并如实标记，
  * 界面提示而不是假装列全。
@@ -17,6 +20,8 @@ export const GIT_STAGE_CHANNEL = 'desktop:git-stage'
 export const GIT_UNSTAGE_CHANNEL = 'desktop:git-unstage'
 export const GIT_DISCARD_CHANNEL = 'desktop:git-discard'
 export const GIT_COMMIT_CHANNEL = 'desktop:git-commit'
+export const GIT_PULL_CHANNEL = 'desktop:git-pull'
+export const GIT_PUSH_CHANNEL = 'desktop:git-push'
 export const GIT_HISTORY_CHANNEL = 'desktop:git-history'
 export const GIT_COMMIT_DETAIL_CHANNEL = 'desktop:git-commit-detail'
 export const GIT_COMMIT_DIFF_CHANNEL = 'desktop:git-commit-diff'
@@ -93,6 +98,8 @@ export interface GitStatus {
   readonly branch: string | null
   readonly detached: boolean
   readonly upstream: GitUpstream | null
+  /** 已配置的远端名；空数组表示没有远端，界面据此区分「不能推送」与「需要发布分支」。 */
+  readonly remotes: readonly string[]
   readonly conflictOperation: GitConflictOperation | null
   readonly entries: readonly GitChangeEntry[]
   /** 条目数超过上限被截断；界面提示而不是假装列全。 */
@@ -250,6 +257,8 @@ export interface GitApi {
   readonly unstageGitPaths: (request: GitPathRequest) => Promise<GitOperationResult>
   readonly discardGitPath: (request: GitPathRequest) => Promise<GitOperationResult>
   readonly commitGitStaged: (request: GitCommitRequest) => Promise<GitOperationResult>
+  readonly pullGit: () => Promise<GitOperationResult>
+  readonly pushGit: () => Promise<GitOperationResult>
   readonly getGitHistory: (request: GitHistoryRequest) => Promise<GitHistoryResult>
   readonly getGitCommitDetail: (request: GitCommitDetailRequest) => Promise<GitCommitDetailResult>
   readonly getGitCommitDiff: (request: GitCommitDiffRequest) => Promise<GitCommitDiffResult>
@@ -310,6 +319,7 @@ function isGitStatus(value: unknown): value is GitStatus {
   if (value.branch !== null && typeof value.branch !== 'string') return false
   if (typeof value.detached !== 'boolean') return false
   if (value.upstream !== null && !isUpstream(value.upstream)) return false
+  if (!Array.isArray(value.remotes) || !value.remotes.every((entry) => typeof entry === 'string')) return false
   if (value.conflictOperation !== null) {
     if (typeof value.conflictOperation !== 'string' || !CONFLICT_OPERATIONS.includes(value.conflictOperation)) {
       return false

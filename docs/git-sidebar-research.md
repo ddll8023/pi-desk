@@ -446,10 +446,10 @@ function isCurrent(order: { strict: number; automatic: number }): boolean {
 7. 轻量轮询 + 可见性/焦点门控；
 8. 提交信息 AI 生成（复用 pi-desk 现有 runtime 调模型，流式 + 可取消）；
 9. 历史视图（`git log` 自定义 format + 提交详情 + 提交 diff）；
-10. 信任边界接入写操作。
+10. 信任边界接入写操作（已完成，见 §8.2）。
 
 **P2（完整）**
-11. 分支操作（切换/新建）、fetch/pull/push、ahead/behind、分支比较；
+11. 分支操作（切换/新建）、fetch、ahead/behind、分支比较；
 12. 文件监听（防抖 + 超大仓库降级）；
 13. 冲突处理（7 类冲突 + 中止 merge/rebase + 用编辑器解决）；
 14. diff 内联批注 / 发送到会话；
@@ -514,17 +514,17 @@ function isCurrent(order: { strict: number; automatic: number }): boolean {
 
 | 层 | 文件 | 说明 |
 | --- | --- | --- |
-| 契约 | `src/shared/git-api.ts` | 9 条通道、状态/差异/历史/请求类型、响应校验，以及状态条数、diff 字节、提交信息长度、历史条数与提交文件数的上限常量 |
+| 契约 | `src/shared/git-api.ts` | 11 条通道、状态/差异/历史/请求类型、响应校验，以及状态条数、diff 字节、提交信息长度、历史条数与提交文件数的上限常量 |
 | 错误码 | `src/shared/desktop-api.ts` | 新增 `NOT_A_REPOSITORY`、`GIT_UNAVAILABLE`、`GIT_FAILED` |
-| 命令 | `src/main/git-command.ts` | `execFile`/`spawn` 封装：固定环境（`GIT_TERMINAL_PROMPT=0`、`GIT_OPTIONAL_LOCKS=0`、`GIT_EDITOR=true`、`LC_ALL=C`）、读命令 120s 超时、中止、stderr→三类失败 |
+| 命令 | `src/main/git-command.ts` | `execFile`/`spawn` 封装：固定环境（`GIT_TERMINAL_PROMPT=0`、`GIT_OPTIONAL_LOCKS=0`、`GIT_EDITOR=true`、`LC_ALL=C`）、读命令 120s 超时、网络命令 180s 超时、中止、stderr→三类失败 |
 | 解析 | `src/main/git-status-parser.ts` | porcelain v2 增量解析：分块、CRLF、C 风格转义路径、`1/2/u/?/!` 记录、上限早停 |
 | 仓库 | `src/main/git-repository.ts` | `rev-parse --show-toplevel --absolute-git-dir`、`realpath` 规范化项目根、冲突操作探测、仓库↔项目路径换算 |
-| 服务 | `src/main/git-service.ts` | status/diff/stage/unstage/discard/commit + history/commitDetail/commitDiff；读合并 + 写代际重读 + 每仓库写串行；丢弃走 realpath 校验后自行删除 |
+| 服务 | `src/main/git-service.ts` | status/diff/stage/unstage/discard/commit/pull/push + history/commitDetail/commitDiff；读合并 + 写代际重读 + 每仓库写串行；丢弃走 realpath 校验后自行删除；远端失败映射成可照做的中文原因 |
 | 历史解析 | `src/main/git-history-parser.ts` | `log -z`（0x1f 分字段、NUL 分记录，标题整体回拼）与 `diff-tree --raw --numstat -z`（先原始段后 numstat 段） |
-| IPC | `src/main/index.ts` | `registerGitHandlers`：可信调用者校验 + 参数白名单 + 信封；写操作成功直接回传新状态 |
+| IPC | `src/main/index.ts` | `registerGitHandlers`：可信调用者校验 + 参数白名单 + 信封；写操作需项目信任（`TRUST_REQUIRED`）；写操作成功直接回传新状态 |
 | 桥接 | `src/preload/index.ts`、`src/renderer/src/env.d.ts` | `window.desktop.git*` 窄接口 + 结果校验 |
-| 渲染 | `services/git.ts`、`stores/git-status.ts`、`stores/git-history.ts`、`git-diff.ts` | 桥接收敛、状态/分组/选中/提交草稿、历史三层状态（列表/详情/文件差异）、行级差异计算 |
-| UI | `components/RightPanelTabs.vue`、`GitPanel.vue`、`GitDiffView.vue`、`GitHistoryView.vue`、`RightPanel.vue` | 页签（持久化到 `UiPreferences.rightPanelTab`）、分支行、提交框、四组改动、行操作、就地差异视图、历史视图（列表 → 提交详情 → 文件差异） |
+| 渲染 | `services/git.ts`、`stores/git-status.ts`、`stores/git-history.ts`、`git-diff.ts` | 桥接收敛、状态/分组/选中/提交草稿、拉取/推送（与提交互斥、未信任时转交信任对话框并重试）、历史三层状态（列表/详情/文件差异）、行级差异计算 |
+| UI | `components/RightPanelTabs.vue`、`GitPanel.vue`、`GitCommitActions.vue`、`GitDiffView.vue`、`GitHistoryView.vue`、`RightPanel.vue` | 页签（持久化到 `UiPreferences.rightPanelTab`）、分支行（只读：分支名与领先/落后）、提交框、提交区动作组（提交 / 提交并推送 / 拉取 / 推送 / 发布分支的 split 按钮，照 Orca）、四组改动、行操作、就地差异视图、历史视图（列表 → 提交详情 → 文件差异） |
 | 测试 | `src/main/git-status-parser.test.ts`、`src/main/git-history-parser.test.ts`、`src/renderer/src/git-diff.test.ts` | 23 个用例（分块、CRLF、重命名、冲突、中文与转义路径、上限截断、行级差异与大文件退化、日志字段与标题含分隔符、提交内文件与行数）；`npm test` |
 
 三条与路径相关的约束：
@@ -548,4 +548,37 @@ function isCurrent(order: { strict: number; automatic: number }): boolean {
 - **按文件看历史**：`history` 接受可选 `path`（项目内相对路径），命令里作为 pathspec 传给 `git log -- <path>`；
   改动行上的时钟按钮直接把历史切到该文件的过滤模式。
 
-刻意留到后续（与第 5.8 节一致）：改动行数统计（工作区）、轮询与整仓库递归监听、AI 提交信息、分支与远端操作（fetch/pull/push、分支比较）、冲突解决流程、写操作的信任边界。其中**信任边界**是唯一带安全含义的遗留项：`commit`/`pull` 会执行仓库里的 hook 与 filter，接入时应复用 `TrustManager` 与 `TrustDialog`。
+刻意留到后续（与第 5.8 节一致）：改动行数统计（工作区）、轮询与整仓库递归监听、AI 提交信息、fetch、分支比较、冲突解决流程。
+
+### 8.2 拉取、推送与写操作的信任门禁
+
+**拉取与推送**（`GIT_PULL_CHANNEL` / `GIT_PUSH_CHANNEL`）与其它写操作同一形状，都不接受任何参数，成功时直接回传新状态：
+
+- `pull`：裸 `git pull`，合并还是变基沿用用户自己的 `pull.rebase` / `pull.ff`。分叉且未配置策略时 git 会拒绝，
+  主进程把它换成「本地与远端已分叉，先在终端选一次策略」的文案，不替用户决定。
+- `push`：有上游时 `git push`；没有上游且仓库恰好只有一个远端时 `git push --set-upstream <远端> <分支>`，
+  一步完成首次发布；多个远端、没有远端、分离 HEAD 三种情形直接拒绝并说明该怎么做，不猜目标。
+- 两者都走已有的每仓库写锁与写后重读，并显式传 `GIT_NETWORK_TIMEOUT_MS`（180s）：ssh 口令提示或断网
+  不会让命令永久挂着。`GIT_TERMINAL_PROMPT=0` 意味着 https 首次推送会被拒，界面只能提示先在终端完成一次。
+- 失败原因集中映射在 `git-service.ts` 的 `remoteFailureMessage`：凭据被拒、连不上远端、分叉、未提交改动会被覆盖、
+  非快进、无上游、远端不可达；未命中时保留 git 自己的最后一句话。
+- 状态快照新增 `remotes`（`git remote`，与状态读取并行）：界面据此区分「没配远端」与「需要发布分支」。
+
+**入口位置照 Orca**：分支行只读（分支名 + `↑N ↓M`），拉取/推送与提交放在**同一个动作组**里，
+形态是提交区的 split 按钮（左半主操作、右半 ⌄ 菜单）：
+
+- 左半是「提交」，条件不足时禁用并把原因写进 `title`；忙碌时换成「提交中…／同步中…」。
+- 右半菜单：提交、提交并推送、分隔线、拉取（带 ↓N）、推送（带 ↑N，无上游时叫「发布分支」）。
+  每项都用 `title` 说清此刻为何可用或不可用；`aria-haspopup="menu"` 且方向键、Home/End、Esc 可用。
+- 菜单复用 `useAnchoredPopup`（自动向上翻转并回退到视窗内），不新开一套浮层逻辑。
+- 「提交并推送」由渲染端组合：`commit` 成功才 `push`；推送失败时提示写成「已提交，但推送失败：<原因>」，
+  不把已完成的一半报成整体失败。
+
+**写操作的信任门禁**：暂存、取消暂存、丢弃、提交、拉取、推送六个写操作在 `registerGitHandlers` 里先过
+`requireGitWriteTrust()`。理由不是「写文件危险」而是**它们会执行仓库里的代码**：`git add` 跑 clean filter、
+`restore`/`checkout` 跑 smudge filter、`commit` 跑 pre-commit/commit-msg hook、`push` 跑 pre-push hook、
+`pull` 跑 merge driver。
+
+- 尚无信任决定且项目含受保护资源 → `TRUST_REQUIRED`，渲染端弹出 `TrustDialog`，决定后**只重试一次**该操作；
+- 项目被标记为未信任 → 同样 `TRUST_REQUIRED` 但不弹框（没有可做的决定），直接说明「在设置里改为信任后再操作」；
+- 读操作（status/diff/history/commitDetail/commitDiff）不执行仓库代码，**不做拦截**，否则面板打开与自动刷新会被弹框打断。

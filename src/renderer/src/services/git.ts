@@ -92,6 +92,28 @@ export async function commitGitStaged(message: string): Promise<GitOperationResu
   }
 }
 
+/** 拉取当前分支的上游；远端与合并策略全部沿用仓库与用户自己的 git 配置。 */
+export async function pullGit(): Promise<GitOperationResult> {
+  const bridge = window.desktop
+  if (!bridge || typeof bridge.pullGit !== 'function') return unavailable()
+  try {
+    return await bridge.pullGit()
+  } catch (error) {
+    return callFailed(error)
+  }
+}
+
+/** 推送当前分支；没有上游且只有一个远端时由主进程自动发布分支。 */
+export async function pushGit(): Promise<GitOperationResult> {
+  const bridge = window.desktop
+  if (!bridge || typeof bridge.pushGit !== 'function') return unavailable()
+  try {
+    return await bridge.pushGit()
+  } catch (error) {
+    return callFailed(error)
+  }
+}
+
 /** 读取提交历史；`path` 非空时只看该文件的提交。 */
 export async function getGitHistory(path?: string, limit?: number): Promise<GitHistoryResult> {
   const bridge = window.desktop

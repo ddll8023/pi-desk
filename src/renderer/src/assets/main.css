@@ -2929,7 +2929,7 @@
     align-items: center;
     justify-content: space-between;
     gap: 8px;
-    padding: 0 10px 0 12px;
+    padding: 0 10px 0 14px;
   }
 
   .git-branch-name {
@@ -2962,6 +2962,102 @@
   .git-branch-behind { color: var(--color-desk-warning); }
   .git-branch-even { color: var(--panel-muted); }
 
+  /*
+   * 提交区的动作组：左边「提交」，右边 ⌄ 开关，菜单里是提交类与远端类动作（照 Orca 的 split 按钮）。
+   * 两半之间只有一条分隔线、没有间隙——它们是一组动作而不是两个并列按钮；右侧开关比左侧窄，
+   * 因为它只负责展开菜单，不承担主操作。
+   *
+   * 材质是中性描边，不用强调色填充：面板里强调色只用于页签下划线、选中文字与焦点环，
+   * 一个实心青块会凭空变成整块界面的视觉中心。尺寸 26px 与行高、分支行对齐。
+   */
+  .git-split {
+    display: flex;
+    flex: none;
+    align-items: stretch;
+    overflow: hidden;
+    border-radius: var(--radius-desk-sm);
+  }
+
+  .git-split-primary,
+  .git-split-toggle {
+    display: inline-flex;
+    height: 26px;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--color-desk-line-strong);
+    background: transparent;
+    color: var(--panel-ink);
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 1;
+    white-space: nowrap;
+    cursor: pointer;
+    transition:
+      background-color var(--panel-duration) ease,
+      border-color var(--panel-duration) ease,
+      color var(--panel-duration) ease;
+  }
+
+  .git-split-primary {
+    padding: 0 10px;
+    border-top-left-radius: var(--radius-desk-sm);
+    border-bottom-left-radius: var(--radius-desk-sm);
+  }
+
+  /* 分隔线用面板分隔色而不是前景色：两半共用一条外轮廓，中间只需要一条细线。 */
+  .git-split-toggle {
+    gap: 0;
+    border-left-color: var(--panel-line);
+    padding: 0 5px;
+    border-top-right-radius: var(--radius-desk-sm);
+    border-bottom-right-radius: var(--radius-desk-sm);
+  }
+
+  .git-split-primary:not(:disabled):hover,
+  .git-split-toggle:not(:disabled):hover {
+    background: var(--panel-hover);
+  }
+
+  .git-split-primary:not(:disabled):active,
+  .git-split-toggle:not(:disabled):active {
+    background: color-mix(in srgb, var(--color-desk-ink) 8%, transparent);
+  }
+
+  /* 禁用只降文字色、保留形状与描边：抹平底色会让人以为按钮消失了。 */
+  .git-split-primary:disabled,
+  .git-split-toggle:disabled {
+    color: var(--panel-muted);
+    cursor: default;
+  }
+
+  .git-split-primary:focus-visible,
+  .git-split-toggle:focus-visible {
+    outline: 2px solid var(--color-desk-accent);
+    outline-offset: 1px;
+  }
+
+  /* 进行中的小转圈：与面板其它 spinner 同一尺寸与节奏。 */
+  .git-split-spinner {
+    display: block;
+    width: 12px;
+    height: 12px;
+    flex: none;
+    animation: panel-icon-spin 900ms linear infinite;
+  }
+
+  .git-split-chevron {
+    display: block;
+    width: 12px;
+    height: 12px;
+    flex: none;
+  }
+
+  .git-split-menu-separator {
+    height: 1px;
+    margin: 4px 6px;
+    background: var(--sidebar-line);
+  }
+
   .git-scroll {
     display: flex;
     min-height: 0;
@@ -2970,12 +3066,12 @@
     overflow-x: hidden;
     overflow-y: auto;
     overscroll-behavior: contain;
-    padding: 0 6px 8px;
+    padding: 0 8px 8px;
   }
 
   /* 面板内提示：与文件树的提示行同一套排版，只多一个警告档。 */
   .git-notice {
-    margin: 4px 2px;
+    margin: 4px 6px;
     color: var(--panel-muted);
     font-size: 11.5px;
     line-height: 16px;
@@ -2996,22 +3092,22 @@
     margin: 2px;
   }
 
-  /* 提交框：输入区与动作行分开，动作行右侧是唯一的主按钮。 */
+  /* 提交框：输入区与动作行分开，动作行右侧是提交动作组。 */
   .git-commit {
     display: flex;
     flex-direction: column;
     gap: 6px;
-    margin: 2px 0 8px;
+    margin: 2px 6px 10px;
   }
 
   .git-commit-input {
     width: 100%;
-    min-height: 42px;
-    resize: vertical;
+    min-height: 52px;
+    resize: none;
     border: 1px solid var(--color-desk-line);
     border-radius: var(--radius-desk-sm);
     background: var(--color-desk-surface-subtle);
-    padding: 6px 8px;
+    padding: 7px 9px;
     color: var(--panel-ink);
     font-family: inherit;
     font-size: 12px;
@@ -3046,18 +3142,21 @@
     margin-bottom: 6px;
   }
 
-  /* 分组头：小写字号的标题 + 数量，不用折叠箭头（列表本来就不长）。 */
+  /* 分组之间留一道空气，避免「更改」与「未跟踪」视觉上粘成一片。 */
+  .git-group + .git-group {
+    margin-top: 10px;
+  }
+
+  /* 分组头：小字号标题 + 数量，不用折叠箭头（列表本来就不长）。 */
   .git-group-header {
     display: flex;
-    height: 22px;
+    height: 20px;
     align-items: center;
     gap: 6px;
-    padding: 0 8px;
+    padding: 0 6px;
     color: var(--panel-muted);
     font-size: 11px;
     font-weight: 600;
-    letter-spacing: 0.02em;
-    text-transform: uppercase;
   }
 
   .git-group-count {
@@ -3074,8 +3173,9 @@
     list-style: none;
   }
 
-  /* 一行 = 主体按钮（选中并看差异）+ 悬停才出现的操作键；两者都是按钮，不嵌套。 */
+  /* 一行 = 主体按钮（选中并看差异）+ 悬停时浮到右侧的操作键；两者都是按钮，不嵌套。 */
   .git-row {
+    position: relative;
     display: flex;
     min-width: 0;
     align-items: center;
@@ -3084,7 +3184,8 @@
     transition: background-color var(--panel-duration) ease;
   }
 
-  .git-row:hover {
+  .git-row:hover,
+  .git-row:focus-within {
     background: var(--panel-hover);
   }
 
@@ -3123,14 +3224,16 @@
   .git-row-badge.is-untracked { color: var(--color-desk-muted); }
 
   .git-row-text {
-    display: flex;
+    display: grid;
     min-width: 0;
     flex: 1 1 auto;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 38%);
     align-items: baseline;
-    gap: 6px;
+    gap: 8px;
   }
 
   .git-row-name {
+    min-width: 0;
     overflow: hidden;
     color: var(--panel-ink);
     font-size: 12.5px;
@@ -3138,13 +3241,13 @@
     white-space: nowrap;
   }
 
-  /* 所在目录：名称优先占宽，目录作为尾部提示被压缩。 */
+  /* 所在目录：与名称同列宽固定比例，分界点逐行一致；两侧都截断。 */
   .git-row-dir {
-    max-width: 45%;
-    flex: none;
+    min-width: 0;
     overflow: hidden;
     color: var(--panel-muted);
     font-size: 11px;
+    text-align: right;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -3159,14 +3262,18 @@
     line-height: 14px;
   }
 
-  /* 操作键：默认隐藏，行悬停或键盘聚焦时出现；窄窗口没有悬停，常显。 */
+  /* 操作键：默认隐藏，行悬停或键盘聚焦时浮到右侧，不占布局宽度——出现时文字不重排。 */
   .git-row-actions {
+    position: absolute;
+    top: 50%;
+    right: 4px;
     display: flex;
-    flex: none;
     align-items: center;
     gap: 1px;
-    padding-right: 4px;
+    padding-left: 10px;
+    background: linear-gradient(to right, transparent, var(--panel-hover) 35%);
     opacity: 0;
+    transform: translateY(-50%);
     transition: opacity var(--panel-duration) ease;
   }
 
@@ -3191,6 +3298,16 @@
     color: var(--panel-ink);
   }
 
+  .git-row-action:not(:disabled):active {
+    background: color-mix(in srgb, var(--color-desk-ink) 12%, transparent);
+    color: var(--panel-ink);
+  }
+
+  .git-row-action:focus-visible {
+    outline: 2px solid var(--color-desk-accent);
+    outline-offset: -2px;
+  }
+
   .git-row-action.is-danger:not(:disabled):hover {
     background: var(--color-desk-danger-soft);
     color: var(--color-desk-danger);
@@ -3198,6 +3315,7 @@
 
   .git-row-action:disabled {
     opacity: 0.4;
+    cursor: default;
   }
 
   @media (hover: none) {
@@ -3213,7 +3331,7 @@
     flex: none;
     align-items: center;
     gap: 2px;
-    padding: 0 6px 2px;
+    padding: 0 8px 2px;
   }
 
   .git-view-tab {
@@ -3222,7 +3340,7 @@
     align-items: center;
     gap: 4px;
     border-radius: 4px;
-    padding: 0 7px;
+    padding: 0 6px;
     color: var(--panel-muted);
     font-size: 11.5px;
     transition: background-color var(--panel-duration) ease, color var(--panel-duration) ease;
@@ -3261,7 +3379,7 @@
     align-items: center;
     justify-content: space-between;
     gap: 8px;
-    padding: 0 10px 0 12px;
+    padding: 0 10px 0 14px;
     color: var(--panel-muted);
     font-size: 11px;
   }
@@ -3298,7 +3416,7 @@
     overflow-x: hidden;
     overflow-y: auto;
     overscroll-behavior: contain;
-    padding: 0 6px 8px;
+    padding: 0 8px 8px;
   }
 
   .git-history-more {
@@ -3522,7 +3640,8 @@
     flex: none;
     align-items: center;
     gap: 4px;
-    padding: 0 8px 0 4px;
+    /* 左侧 10px + 22px 返回键内图标居中（3.5px）≈ 14px，与正文左缩进对齐。 */
+    padding: 0 8px 0 10px;
   }
 
   .git-diff-back,
@@ -3690,13 +3809,16 @@
     .git-row,
     .git-row-actions,
     .git-row-action,
+    .git-split-primary,
+    .git-split-toggle,
     .file-tree-row,
     .file-tree-chevron,
     .right-panel-resize {
       transition: none;
     }
 
-    .panel-icon.is-spinning {
+    .panel-icon.is-spinning,
+    .git-split-spinner {
       animation: none;
     }
   }

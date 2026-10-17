@@ -7,6 +7,7 @@
  * - 环境固定：`GIT_TERMINAL_PROMPT=0` 防止卡在凭据提示、`GIT_OPTIONAL_LOCKS=0` 让只读命令不刷新索引、
  *   `GIT_EDITOR=true` 防止任何命令意外拉起编辑器、`LC_ALL=C` 让提示文本稳定（错误映射与文案都依赖它）。
  * - 只读命令有 120s 超时；写与网络命令不设默认超时（可能等 hook 或凭据），但都接受 AbortSignal。
+ *   网络命令（pull/push）由调用方传 `GIT_NETWORK_TIMEOUT_MS`：它们会等远端与凭据，没有上限就会永远挂着。
  * - 失败统一成 `GitCommandError`：调用方只需要区分「没装 git」「超时/中止」「git 报错」三种。
  */
 import { execFile, spawn } from 'node:child_process'
@@ -285,3 +286,9 @@ export function streamGit(
 }
 
 export const GIT_READ_TIMEOUT_MS = READ_TIMEOUT_MS
+
+/**
+ * 网络命令（pull/push/fetch）的超时：等待远端与凭据可能很久，但必须有上限，
+ * 否则 ssh 口令提示、断网等情形会让命令永久挂着、界面一直停在「推送中」。
+ */
+export const GIT_NETWORK_TIMEOUT_MS = 180_000

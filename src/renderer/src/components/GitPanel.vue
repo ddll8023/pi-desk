@@ -11,6 +11,13 @@
 
   视图分「未提交」与「历史」两个：前者是本工作区还没提交的改动，后者是已经提交的记录（含未推送标记）。
   行上的「查看此文件的历史」把历史视图切到该路径的过滤模式，用户不必再自己找文件名。
+
+  分支行只读：分支名、分离 HEAD 与与上游的领先/落后；拉取与推送放在提交区的动作组里（`GitCommitActions`），
+  与 Orca 同一分工：分支行不因按钮而挤掉分支名的可用宽度，动作集中在一处也不用来回找。
+  拉取/推送与提交互斥，运行中按钮就地显示进度，失败原因落在下方的提示行。
+
+  两条排版约定（对应 `main.css` 的 `.git-*`）：所有区块的左缩进统一到 14px（页签文字是最靠上的
+  视觉锚点）；改动行是「名称 | 目录」两列定宽网格，目录列起点逐行一致，行操作浮在右侧不挤文字。
 -->
 <script setup lang="ts">
 import { computed, ref } from 'vue'
@@ -23,6 +30,7 @@ import { useProjectStore } from '../stores/project'
 import { useWorkspaceTabsStore } from '../stores/workspace-tabs'
 import AppButton from './ui/AppButton.vue'
 import ConfirmDialog from './ConfirmDialog.vue'
+import GitCommitActions from './GitCommitActions.vue'
 import GitDiffView from './GitDiffView.vue'
 import GitHistoryView from './GitHistoryView.vue'
 
@@ -65,8 +73,9 @@ const historyStore = useGitHistoryStore()
 const projectStore = useProjectStore()
 const workspaceTabsStore = useWorkspaceTabsStore()
 
-const { status, phase, error, busyPath, actionError, actionNotice, commitMessage, committing, selection, diff, diffPhase, diffError, groups, entries, stagedCount, hasChanges, isRepository } = storeToRefs(gitStore)
+const { status, phase, error, busyPath, actionError, actionNotice, commitMessage, committing, remoteBusy, selection, diff, diffPhase, diffError, groups, entries, stagedCount, hasChanges, isRepository } = storeToRefs(gitStore)
 const upstream = computed(() => status.value?.upstream ?? null)
+const remotes = computed<readonly string[]>(() => status.value?.remotes ?? [])
 const { currentProject } = storeToRefs(projectStore)
 
 /** 等待确认的丢弃条目；null 表示对话框关闭。 */
@@ -78,9 +87,7 @@ const selectionLabel = computed(() => (
   selection.value === null ? '' : AREA_LABELS[selection.value.area]
 ))
 
-const canCommit = computed(() => (
-  stagedCount.value > 0 && commitMessage.value.trim() !== '' && !committing.value
-))
+const messageReady = computed(() => commitMessage.value.trim() !== '')
 
 const truncatedNotice = computed(() => (
   status.value?.truncated === true
@@ -178,7 +185,7 @@ function openFileHistory(entry: GitChangeEntry): void {
 /** 提交成功后刷新历史，让新提交立刻出现在最上面。 */
 async function onCommit(): Promise<void> {
   const committed = await gitStore.commit()
-  if (committed && historyStore.isOpen) await historyStore.open(historyStore.filterPath)
+  if (committed) await refreshHistory()
 }
 
 function onCommitKeydown(event: KeyboardEvent): void {
@@ -186,6 +193,23 @@ function onCommitKeydown(event: KeyboardEvent): void {
   if (!event.metaKey && !event.ctrlKey) return
   event.preventDefault()
   void onCommit()
+}
+
+/** 远端操作成功后历史里的「未推送」标记与领先数会变，已打开的历史视图跟着重读一次。 */
+async function triggerRemote(kind: 'pull' | 'push'): Promise<void> {
+  const done = kind === 'pull' ? await gitStore.pull() : await gitStore.push()
+  if (done) await refreshHistory()
+}
+
+/** 提交并推送：提交由 store 内部完成，这里只在整体成功后补一次历史重读。 */
+async function onCommitAndPush(): Promise<void> {
+  const done = await gitStore.commitAndPush()
+  if (done) await refreshHistory()
+}
+
+/** 历史视图未打开时不读：它自己挂载时会读一次。 */
+async function refreshHistory(): Promise<void> {
+  if (historyStore.isOpen) await historyStore.open(historyStore.filterPath)
 }
 
 </script>
@@ -258,22 +282,26 @@ function onCommitKeydown(event: KeyboardEvent): void {
             class="git-commit-input"
             :value="commitMessage"
             rows="2"
-            placeholder="提交信息（⌘/Ctrl + Enter 提交）"
+            placeholder="提交信息"
             aria-label="提交信息"
+            title="⌘/Ctrl + Enter 提交"
             spellcheck="false"
             :disabled="committing"
             @input="gitStore.setCommitMessage(($event.target as HTMLTextAreaElement).value)"
             @keydown="onCommitKeydown"
           ></textarea>
-          <div class="git-commit-actions">
-            <span class="git-commit-hint">{{ stagedCount }} 个已暂存</span>
-            <AppButton
-              variant="primary"
-              :disabled="!canCommit"
-              :title="stagedCount === 0 ? '先暂存改动再提交' : canCommit ? '提交已暂存的改动' : '填写提交信息后提交'"
-              @click="onCommit"
-            >{{ committing ? '提交中…' : '提交' }}</AppButton>
-          </div>
+          <GitCommitActions
+            :staged-count="stagedCount"
+            :message-ready="messageReady"
+            :committing="committing"
+            :remote-busy="remoteBusy"
+            :upstream="upstream"
+            :remotes="remotes"
+            @commit="onCommit"
+            @commit-and-push="onCommitAndPush"
+            @pull="triggerRemote('pull')"
+            @push="triggerRemote('push')"
+          />
         </form>
 
         <p v-if="!hasChanges" class="git-notice">没有未提交的改动。</p>

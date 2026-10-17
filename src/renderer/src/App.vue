@@ -4,6 +4,7 @@ import { storeToRefs } from 'pinia'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useDesktopStore } from './stores/desktop'
 import { useExtensionUiStore } from './stores/extension-ui'
+import { useGitStatusStore } from './stores/git-status'
 import { usePreferencesStore } from './stores/preferences'
 import { useProjectStore } from './stores/project'
 import { useQuickCommandsStore } from './stores/quick-commands'
@@ -41,6 +42,7 @@ import AppButton from './components/ui/AppButton.vue'
 
 const desktopStore = useDesktopStore()
 const extensionStore = useExtensionUiStore()
+const gitStore = useGitStatusStore()
 const preferencesStore = usePreferencesStore()
 const projectStore = useProjectStore()
 const quickCommandsStore = useQuickCommandsStore()
@@ -262,7 +264,7 @@ function cancelSessionSwitch(): void {
   sessionStore.cancelPending()
 }
 
-/** 候选项目的信任决定随添加动作提交；现有 Runtime 流程则重试被拦截的会话打开。 */
+/** 候选项目的信任决定随添加动作提交；现有 Runtime 流程则重试被拦截的会话打开，Git 写操作同理重试。 */
 function onTrustResolved(decision?: 'trusted' | 'untrusted'): void {
   if (pendingAddition.value !== null) {
     if (decision === undefined) {
@@ -273,6 +275,7 @@ function onTrustResolved(decision?: 'trusted' | 'untrusted'): void {
     return
   }
   if (sessionStore.awaitingTrust) void sessionStore.retryPendingAfterTrust()
+  if (gitStore.awaitingTrust) void gitStore.retryPendingAfterTrust()
 }
 
 function onTrustCancelled(): void {
@@ -281,6 +284,7 @@ function onTrustCancelled(): void {
     return
   }
   sessionStore.cancelPending()
+  gitStore.cancelPendingTrust()
 }
 
 /** 前台切换不再结束任何运行实例；这里只在项目上下文变化后补读该项目的会话列表（其他项目已读过的分片不受影响）。 */

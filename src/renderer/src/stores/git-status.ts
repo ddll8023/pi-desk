@@ -9,14 +9,20 @@
  * 刷新时机刻意保守：切项目、面板出现、窗口重新获得焦点、页面重新可见、用户点刷新、写操作之后，
  * 以及主进程目录监听回报「已加载的目录变了」；没有定时轮询。目录监听只覆盖已展开的层，
  * 未展开目录里的改动靠聚焦与手动刷新兜底。
+ *
+ * 远端操作（拉取/推送）与提交互斥：它们都会改写仓库状态，同时进行只会让两边都在等锁。
+ *
+ * 写操作需要项目信任（它们会执行仓库里的 filter 与 hook）：主进程回 `TRUST_REQUIRED` 时不把错误直接
+ * 报给用户，而是弹出信任对话框并在决定后重试一次，与会话打开的处理方式一致。
  */
 import { defineStore } from 'pinia'
 import { computed, ref, watch } from 'vue'
 import type { DesktopError } from '../../../shared/desktop-api'
 import type { GitArea, GitChangeEntry, GitDiff, GitOperationResult, GitStatus } from '../../../shared/git-api'
-import { commitGitStaged, discardGitPath, getGitDiff, getGitStatus, stageGitPath, unstageGitPath } from '../services/git'
+import { commitGitStaged, discardGitPath, getGitDiff, getGitStatus, pullGit, pushGit, stageGitPath, unstageGitPath } from '../services/git'
 import { onProjectDirectoryChanged } from '../services/project-file'
 import { useProjectStore } from './project'
+import { useTrustStore } from './trust'
 
 /** 分组键：冲突单独成组，因为它需要的操作与普通改动不同。 */
 export type GitGroupKey = 'conflict' | 'unstaged' | 'staged' | 'untracked'
@@ -54,6 +60,10 @@ export const useGitStatusStore = defineStore('git-status', () => {
   const actionNotice = ref<string | null>(null)
   const commitMessage = ref('')
   const committing = ref(false)
+  /** 正在执行的远端操作；null 表示空闲。与 `committing` 互斥。 */
+  const remoteBusy = ref<'pull' | 'push' | null>(null)
+  /** 有写操作因项目未信任被拦下，正在等待信任决定。 */
+  const awaitingTrust = ref(false)
   /** 当前查看差异的条目；null 表示面板显示列表。 */
   const selection = ref<{ readonly path: string; readonly area: GitArea } | null>(null)
   const diff = ref<GitDiff | null>(null)
@@ -65,6 +75,10 @@ export const useGitStatusStore = defineStore('git-status', () => {
   let lastAutoRefreshAt = 0
   let attached = false
   let detach: (() => void) | null = null
+  /** 因未信任被拦下的写操作；信任决定后重跑一次，取消则丢弃。 */
+  let pendingTrustRetry: (() => Promise<void>) | null = null
+  /** 正在重跑被拦下的写操作：此时再被拒就不再弹框，直接展示原因（避免决定为未信任时反复弹框）。 */
+  let trustingRetry = false
 
   const isRepository = computed(() => status.value?.isRepository === true)
   const entries = computed<readonly GitChangeEntry[]>(() => status.value?.entries ?? [])
@@ -172,6 +186,11 @@ export const useGitStatusStore = defineStore('git-status', () => {
     try {
       const result = await run()
       if (!result.ok) {
+        // 未信任：记住这次操作，决定后重跑，不把「被拦下」当成失败展示。
+        if (result.error.code === 'TRUST_REQUIRED' && !trustingRetry) {
+          await requestTrust(() => runAction(path, run, successNotice))
+          return
+        }
         actionError.value = result.error
         return
       }
@@ -199,7 +218,7 @@ export const useGitStatusStore = defineStore('git-status', () => {
 
   /** 提交已暂存的改动；成功后清空草稿，失败保留草稿并把原因交给面板展示。 */
   async function commit(): Promise<boolean> {
-    if (committing.value) return false
+    if (committing.value || remoteBusy.value !== null) return false
     const message = commitMessage.value
     if (message.trim() === '') {
       actionError.value = { code: 'INVALID_REQUEST', message: '提交信息不能为空。' }
@@ -212,6 +231,10 @@ export const useGitStatusStore = defineStore('git-status', () => {
     try {
       const result = await commitGitStaged(message)
       if (!result.ok) {
+        if (result.error.code === 'TRUST_REQUIRED' && !trustingRetry) {
+          await requestTrust(() => commit().then(() => undefined))
+          return false
+        }
         actionError.value = result.error
         return false
       }
@@ -226,6 +249,98 @@ export const useGitStatusStore = defineStore('git-status', () => {
 
   function setCommitMessage(value: string): void {
     commitMessage.value = value
+  }
+
+  /** 远端操作的公共流程：与提交互斥，成功后落地新状态，失败原因交给面板展示。 */
+  async function runRemote(kind: 'pull' | 'push'): Promise<boolean> {
+    if (remoteBusy.value !== null || committing.value) return false
+    remoteBusy.value = kind
+    actionError.value = null
+    actionNotice.value = null
+    try {
+      const result = kind === 'pull' ? await pullGit() : await pushGit()
+      if (!result.ok) {
+        if (result.error.code === 'TRUST_REQUIRED' && !trustingRetry) {
+          await requestTrust(() => runRemote(kind).then(() => undefined))
+          return false
+        }
+        actionError.value = result.error
+        return false
+      }
+      applyStatus(result.data)
+      actionNotice.value = kind === 'pull' ? '已拉取' : '已推送'
+      return true
+    } finally {
+      remoteBusy.value = null
+    }
+  }
+
+  /** 拉取当前分支的上游；策略沿用用户自己的 git 配置。 */
+  function pull(): Promise<boolean> {
+    return runRemote('pull')
+  }
+
+  /** 推送当前分支；首次推送时由主进程在单远端情况下自动设置上游。 */
+  function push(): Promise<boolean> {
+    return runRemote('push')
+  }
+
+  /**
+   * 提交并推送：提交成功后才推送，推送失败时如实告知「已提交」而不是报成整体失败。
+   * 提交阶段被信任门禁拦下时，把重试换成整个「提交并推送」，避免决定后只提交不推送。
+   */
+  async function commitAndPush(): Promise<boolean> {
+    if (committing.value || remoteBusy.value !== null) return false
+    const committed = await commit()
+    if (!committed) {
+      if (awaitingTrust.value) pendingTrustRetry = () => commitAndPush().then(() => undefined)
+      return false
+    }
+
+    const pushed = await push()
+    if (!pushed) {
+      const reason = actionError.value?.message ?? '原因未明'
+      actionError.value = { code: 'GIT_FAILED', message: `已提交，但推送失败：${reason}` }
+      return false
+    }
+    actionNotice.value = '已提交并推送'
+    return true
+  }
+
+  /**
+   * 写操作被信任门禁拦下：记住重试动作并弹出信任对话框。
+   * 这里只负责「问」，决定后的重试由 `retryPendingAfterTrust` 触发（`App.vue` 收到对话框结果时调用）。
+   */
+  async function requestTrust(retry: () => Promise<void>): Promise<void> {
+    pendingTrustRetry = retry
+    awaitingTrust.value = true
+    const opened = await useTrustStore().openPrompt()
+    // 弹不出对话框（例如未选择项目）时不要留着一个永远等不到的重试。
+    if (!opened) {
+      pendingTrustRetry = null
+      awaitingTrust.value = false
+      actionError.value = { code: 'TRUST_REQUIRED', message: '无法打开信任对话框，请在设置里确认该项目的信任状态后重试。' }
+    }
+  }
+
+  /** 信任决定已保存：重跑被拦下的写操作。只重试一次，仍被拒时由该操作自己展示原因。 */
+  async function retryPendingAfterTrust(): Promise<void> {
+    const retry = pendingTrustRetry
+    pendingTrustRetry = null
+    awaitingTrust.value = false
+    if (retry === null) return
+    trustingRetry = true
+    try {
+      await retry()
+    } finally {
+      trustingRetry = false
+    }
+  }
+
+  /** 放弃信任决定：丢弃被拦下的写操作，不改动任何仓库状态。 */
+  function cancelPendingTrust(): void {
+    pendingTrustRetry = null
+    awaitingTrust.value = false
   }
 
   /** 焦点/可见性触发的自动刷新：按最短间隔合并，避免一次切换窗口连发多次。 */
@@ -253,6 +368,8 @@ export const useGitStatusStore = defineStore('git-status', () => {
         actionError.value = null
         actionNotice.value = null
         commitMessage.value = ''
+        // 切项目后旧项目被拦下的写操作不能再重试：信任决定是按项目记录的。
+        cancelPendingTrust()
         clearSelection()
         void refresh()
       },
@@ -292,6 +409,8 @@ export const useGitStatusStore = defineStore('git-status', () => {
     actionNotice,
     commitMessage,
     committing,
+    remoteBusy,
+    awaitingTrust,
     selection,
     diff,
     diffPhase,
@@ -308,6 +427,11 @@ export const useGitStatusStore = defineStore('git-status', () => {
     unstage,
     discard,
     commit,
+    pull,
+    push,
+    commitAndPush,
+    retryPendingAfterTrust,
+    cancelPendingTrust,
     setCommitMessage,
     initialize,
     dispose

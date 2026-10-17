@@ -9,6 +9,9 @@
  * - **写操作串行**：同一个仓库的写操作排队执行；git 自己的 index.lock 一旦被并发命令撞上就会失败。
  * - **丢弃未跟踪文件自己删**：不用 `git clean`（范围过大且会连带忽略规则），删前用 realpath 校验仍在项目内。
  * - **提交信息走 stdin**：`git commit -F -`，不拼接 shell，也不受引号、换行与长度影响。
+ * - **远端操作不猜策略**：pull 直接沿用用户自己的 `pull.rebase` / `pull.ff`；push 有上游就推当前上游，
+ *   没有上游时只在「恰好一个远端」的情况下自动 `--set-upstream`，多个远端一律交回用户决定。
+ *   网络命令必须带超时，否则 ssh 口令提示或断网会让命令永久挂着。
  */
 import { lstat, readFile, unlink } from 'node:fs/promises'
 import type { DesktopError, DesktopErrorCode } from '../shared/desktop-api'
@@ -39,7 +42,7 @@ import type {
   GitStatusResult,
   GitTextDiff
 } from '../shared/git-api'
-import { GIT_READ_TIMEOUT_MS, GitCommandError, runGit, runGitBuffer, streamGit } from './git-command'
+import { GIT_NETWORK_TIMEOUT_MS, GIT_READ_TIMEOUT_MS, GitCommandError, runGit, runGitBuffer, streamGit } from './git-command'
 import {
   canonicalProjectRoot,
   detectConflictOperation,
@@ -256,6 +259,75 @@ export class GitService {
   }
 
   /**
+   * 拉取当前分支的上游。策略沿用用户自己的 git 配置（`pull.rebase` / `pull.ff`），不替用户选合并还是变基；
+   * 分叉且未配置策略时 git 会拒绝并给出可读原因，由界面展示。
+   */
+  async pull(): Promise<GitOperationResult> {
+    const roots = await this.resolveRoots()
+    if (!roots.ok) return roots
+    const prepared = await this.prepareRoot(roots.roots)
+    if (!prepared.ok) return prepared
+
+    return this.mutate(prepared, async () => {
+      try {
+        await runGit(['pull'], {
+          cwd: prepared.repository.root,
+          timeoutMs: GIT_NETWORK_TIMEOUT_MS
+        })
+      } catch (error) {
+        throw remoteFailure(error, 'pull')
+      }
+    }, '拉取失败。')
+  }
+
+  /**
+   * 推送当前分支：有上游就直接推；没有上游且仓库只有一个远端时自动 `--set-upstream` 发布分支。
+   * 多个远端、分离 HEAD、没有远端都直接拒绝，不替用户猜该推到哪。
+   */
+  async push(): Promise<GitOperationResult> {
+    const roots = await this.resolveRoots()
+    if (!roots.ok) return roots
+    const prepared = await this.prepareRoot(roots.roots)
+    if (!prepared.ok) return prepared
+
+    return this.mutate(prepared, async () => {
+      const branch = await this.currentBranch(prepared.repository)
+      if (branch === null) {
+        throw new GitCommandError('failed', '当前处于分离 HEAD 状态，没有可推送的分支。', { subcommand: 'push' })
+      }
+
+      const upstream = await this.upstreamNameOf(prepared.repository)
+      let args: string[]
+      if (upstream === null) {
+        const remotes = await this.remoteNames(prepared.repository)
+        const [only] = remotes
+        if (remotes.length === 0) {
+          throw new GitCommandError('failed', '这个仓库还没有配置远端，先添加远端再推送。', { subcommand: 'push' })
+        }
+        if (only === undefined || remotes.length > 1) {
+          throw new GitCommandError(
+            'failed',
+            `仓库有多个远端（${remotes.join('、')}），先在终端执行 git push -u <远端> ${branch} 设置上游。`,
+            { subcommand: 'push' }
+          )
+        }
+        args = ['push', '--set-upstream', only, branch]
+      } else {
+        args = ['push']
+      }
+
+      try {
+        await runGit(args, {
+          cwd: prepared.repository.root,
+          timeoutMs: GIT_NETWORK_TIMEOUT_MS
+        })
+      } catch (error) {
+        throw remoteFailure(error, 'push')
+      }
+    }, '推送失败。')
+  }
+
+  /**
    * 读取提交历史（可选只看某个路径）。
    * `pushed` 依据上游的 `@{u}..HEAD` 判定：没有上游时这些提交确实还没推到任何地方，因此一律标为未推送。
    */
@@ -406,25 +478,50 @@ export class GitService {
     }
   }
 
-  /** 上游分支名与领先数；没有上游时返回 null（不是错误）。 */
-  private async upstreamOf(repository: GitRepository): Promise<{ name: string; ahead: number } | null> {
+  /** 上游分支名；没有配置上游时返回 null（`@{u}` 会以退出码 128 失败，这是正常状态）。 */
+  private async upstreamNameOf(repository: GitRepository): Promise<string | null> {
     try {
       const { stdout } = await runGit(
         ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}'],
         { cwd: repository.root, timeoutMs: GIT_READ_TIMEOUT_MS }
       )
       const name = stdout.trim()
-      if (name === '') return null
-      const count = await runGit(
-        ['rev-list', '--count', '@{u}..HEAD'],
-        { cwd: repository.root, timeoutMs: GIT_READ_TIMEOUT_MS }
-      )
-      return { name, ahead: Number.parseInt(count.stdout.trim(), 10) || 0 }
+      return name === '' ? null : name
     } catch (error) {
-      // 没有配置上游时 `@{u}` 会以退出码 128 失败：这是正常状态，不是故障。
       if (error instanceof GitCommandError && error.kind === 'failed') return null
       throw error
     }
+  }
+
+  /** 当前分支名；分离 HEAD 时返回 null。 */
+  private async currentBranch(repository: GitRepository): Promise<string | null> {
+    const { stdout } = await runGit(
+      ['rev-parse', '--abbrev-ref', 'HEAD'],
+      { cwd: repository.root, timeoutMs: GIT_READ_TIMEOUT_MS }
+    )
+    const name = stdout.trim()
+    return name === '' || name === 'HEAD' ? null : name
+  }
+
+  /** 已配置的远端名；读取失败时按「没有远端」处理，不把整个状态读取打成错误。 */
+  private async remoteNames(repository: GitRepository): Promise<string[]> {
+    try {
+      const { stdout } = await runGit(['remote'], { cwd: repository.root, timeoutMs: GIT_READ_TIMEOUT_MS })
+      return stdout.split(/\r?\n/u).map((line) => line.trim()).filter((line) => line !== '')
+    } catch {
+      return []
+    }
+  }
+
+  /** 上游分支名与领先数；没有上游时返回 null（不是错误）。 */
+  private async upstreamOf(repository: GitRepository): Promise<{ name: string; ahead: number } | null> {
+    const name = await this.upstreamNameOf(repository)
+    if (name === null) return null
+    const count = await runGit(
+      ['rev-list', '--count', '@{u}..HEAD'],
+      { cwd: repository.root, timeoutMs: GIT_READ_TIMEOUT_MS }
+    )
+    return { name, ahead: Number.parseInt(count.stdout.trim(), 10) || 0 }
   }
 
   /** 还没推到上游的提交 oid（最多取 limit 个）；失败时返回 null，界面按「不知道」处理。 */
@@ -473,6 +570,8 @@ export class GitService {
       if (repository === null) return { ok: true, data: emptyStatus(roots.reported) }
 
       const parser = createGitStatusParser(GIT_STATUS_LIMIT)
+      // 远端名与状态读取并行：它很便宜，但没必要再串一次子进程。
+      const remotes = this.remoteNames(repository)
       await streamGit(
         [
           ...QUOTE_PATH_ARGS,
@@ -499,6 +598,7 @@ export class GitService {
           branch: snapshot.branch,
           detached: snapshot.detached,
           upstream: snapshot.upstream,
+          remotes: await remotes,
           conflictOperation,
           entries: mapEntries(snapshot.entries, repository, roots.canonical),
           truncated: snapshot.truncated,
@@ -678,6 +778,7 @@ function emptyStatus(projectPath: string): GitStatus {
     branch: null,
     detached: false,
     upstream: null,
+    remotes: [],
     conflictOperation: null,
     entries: [],
     truncated: false,
@@ -705,6 +806,46 @@ function gitError(error: unknown, fallbackMessage: string): DesktopError {
 function isMissingRestore(error: unknown): boolean {
   if (!(error instanceof GitCommandError) || error.kind !== 'failed') return false
   return /unknown option|unknown switch|is not a git command/u.test(error.stderr)
+}
+
+/**
+ * 远端操作失败：把最常见的几种 stderr 换成能直接照做的中文原因，其余保留 git 自己的最后一句话。
+ * 只改写「git 报错」这一类，`unavailable` / `timeout` / `aborted` 保持原样，错误码映射才不会被掩盖。
+ */
+function remoteFailure(error: unknown, operation: 'pull' | 'push'): unknown {
+  if (!(error instanceof GitCommandError) || error.kind !== 'failed') return error
+  const message = remoteFailureMessage(error.stderr, operation)
+  if (message === null) return error
+  return new GitCommandError('failed', message, {
+    stderr: error.stderr,
+    exitCode: error.exitCode,
+    subcommand: error.subcommand
+  })
+}
+
+function remoteFailureMessage(stderr: string, operation: 'pull' | 'push'): string | null {
+  if (/could not read Username|Authentication failed|terminal prompts disabled|Permission denied \(publickey\)/iu.test(stderr)) {
+    return `远端拒绝了凭据：先在终端里完成一次 git ${operation} 让 git 记住账号，或配置好 SSH 密钥后重试。`
+  }
+  if (/Could not resolve host|unable to access|Connection (timed out|refused)|Network is unreachable/iu.test(stderr)) {
+    return '连不上远端：检查网络、代理与远端地址后重试。'
+  }
+  if (/Need to specify how to reconcile divergent branches|not possible to fast-forward/iu.test(stderr)) {
+    return '本地与远端已经分叉，git 不知道该合并还是变基：在终端执行一次 git pull 选择策略，或先配置 pull.rebase。'
+  }
+  if (/would be overwritten by (merge|checkout|pull)|Please commit your changes or stash them|Please move or remove them/iu.test(stderr)) {
+    return '有未提交的改动会被覆盖，先提交或暂存后再拉取。'
+  }
+  if (/\[rejected\]|non-fast-forward|fetch first/iu.test(stderr)) {
+    return '远端有本地没有的提交，先拉取再推送。'
+  }
+  if (/has no upstream branch|no upstream configured/iu.test(stderr)) {
+    return '当前分支还没有上游分支，先配置远端后再推送。'
+  }
+  if (/does not appear to be a git repository|No such remote|Could not read from remote repository/iu.test(stderr)) {
+    return '无法访问远端仓库：检查远端地址与访问权限。'
+  }
+  return null
 }
 
 function isBinary(buffer: Buffer | null): boolean {

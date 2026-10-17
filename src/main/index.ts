@@ -6,7 +6,7 @@ import { pathToFileURL } from 'node:url'
 import { app, BrowserWindow, dialog, ipcMain, nativeTheme, net, protocol, session } from 'electron'
 import type { BrowserWindowConstructorOptions, IpcMainInvokeEvent } from 'electron'
 import { APP_INFO_CHANNEL } from '../shared/desktop-api'
-import type { AppInfoResult, DesktopErrorCode } from '../shared/desktop-api'
+import type { AppInfoResult, DesktopError, DesktopErrorCode } from '../shared/desktop-api'
 import { devServerPortFromEnv } from '../shared/dev-server'
 import {
   PREFERENCES_GET_CHANNEL,
@@ -63,6 +63,8 @@ import {
   GIT_DIFF_CHANNEL,
   GIT_DISCARD_CHANNEL,
   GIT_HISTORY_CHANNEL,
+  GIT_PULL_CHANNEL,
+  GIT_PUSH_CHANNEL,
   GIT_STAGE_CHANNEL,
   GIT_STATUS_CHANNEL,
   GIT_UNSTAGE_CHANNEL,
@@ -1078,8 +1080,12 @@ function registerProjectFileHandlers(pageUrl: string): void {
 /**
  * 源代码管理通道：状态读取不带参数；diff 只接受「项目内相对路径 + 区域」；历史接受可选的条数、偏移与
  * 过滤路径；提交详情只接受提交标识；提交内差异接受提交标识与路径（重命名条目另带原路径）；写操作只接受
- * 一个路径，提交额外只接受提交信息。页面不能指定仓库根，也不能传入任何 git 参数：命令组装、仓库定位与
- * 路径折算都在主进程，写操作成功时直接回传新状态，避免「写完再拉一次」的竞态。
+ * 一个路径，提交额外只接受提交信息；拉取与推送都不接受参数。页面不能指定仓库根，也不能传入任何 git
+ * 参数：命令组装、仓库定位与路径折算都在主进程，写操作成功时直接回传新状态，避免「写完再拉一次」的竞态。
+ *
+ * 写操作需要项目信任：暂存、取消暂存与恢复会跑仓库配置的 clean/smudge filter，提交会跑 pre-commit hook，
+ * 推送会跑 pre-push hook，拉取会跑 merge driver，它们都能执行仓库里的代码。读操作（状态、差异、历史）
+ * 不执行仓库代码，因此不做拦截，面板打开与刷新不会被信任弹窗打断。
  */
 function registerGitHandlers(pageUrl: string): void {
   handle(
@@ -1117,6 +1123,8 @@ function registerGitHandlers(pageUrl: string): void {
       if (args.length !== 1 || !isGitPathRequest(args[0])) {
         return gitStatusFailure('INVALID_REQUEST', '暂存只接受一个项目内相对路径请求。')
       }
+      const blocked = await requireGitWriteTrust()
+      if (blocked !== null) return { ok: false, error: blocked }
       return gitService.stage(args[0])
     }
   )
@@ -1130,6 +1138,8 @@ function registerGitHandlers(pageUrl: string): void {
       if (args.length !== 1 || !isGitPathRequest(args[0])) {
         return gitStatusFailure('INVALID_REQUEST', '取消暂存只接受一个项目内相对路径请求。')
       }
+      const blocked = await requireGitWriteTrust()
+      if (blocked !== null) return { ok: false, error: blocked }
       return gitService.unstage(args[0])
     }
   )
@@ -1143,6 +1153,8 @@ function registerGitHandlers(pageUrl: string): void {
       if (args.length !== 1 || !isGitPathRequest(args[0])) {
         return gitStatusFailure('INVALID_REQUEST', '丢弃改动只接受一个项目内相对路径请求。')
       }
+      const blocked = await requireGitWriteTrust()
+      if (blocked !== null) return { ok: false, error: blocked }
       return gitService.discard(args[0])
     }
   )
@@ -1156,7 +1168,39 @@ function registerGitHandlers(pageUrl: string): void {
       if (args.length !== 1 || !isGitCommitRequest(args[0])) {
         return gitStatusFailure('INVALID_REQUEST', '提交只接受一条非空的提交信息。')
       }
+      const blocked = await requireGitWriteTrust()
+      if (blocked !== null) return { ok: false, error: blocked }
       return gitService.commit(args[0])
+    }
+  )
+
+  handle(
+    GIT_PULL_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<GitOperationResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return gitStatusFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 0) {
+        return gitStatusFailure('INVALID_REQUEST', '拉取不接受参数：远端与策略沿用仓库配置。')
+      }
+      const blocked = await requireGitWriteTrust()
+      if (blocked !== null) return { ok: false, error: blocked }
+      return gitService.pull()
+    }
+  )
+
+  handle(
+    GIT_PUSH_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<GitOperationResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return gitStatusFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 0) {
+        return gitStatusFailure('INVALID_REQUEST', '推送不接受参数：远端与分支由主进程根据仓库现状决定。')
+      }
+      const blocked = await requireGitWriteTrust()
+      if (blocked !== null) return { ok: false, error: blocked }
+      return gitService.push()
     }
   )
 
@@ -1388,7 +1432,25 @@ async function resolveTrustForCurrentProject(): Promise<{
   }
 }
 
-/** Trust 查询与决定接口；决定只接受当前项目，防止页面改写其他项目的记录。 */
+/**
+ * Git 写操作的项目信任门禁：暂存、提交、推送等会执行仓库里的 filter 与 hook，属于执行他人代码。
+ * 尚无决定时回 `TRUST_REQUIRED` 交给信任对话框；已被标记为未信任时同样拒绝，但不弹框，直接说明原因。
+ * 返回 null 表示放行。读操作不经过这里。
+ */
+async function requireGitWriteTrust(): Promise<DesktopError | null> {
+  const trust = await resolveTrustForCurrentProject()
+  if (trust.requiresPrompt) {
+    return { code: 'TRUST_REQUIRED', message: trust.message ?? '项目包含需要信任决定的资源，确认后再执行 Git 写操作。' }
+  }
+  if (trust.decision === 'untrusted') {
+    return {
+      code: 'TRUST_REQUIRED',
+      message: '这个项目被标记为未信任，Git 写操作不会执行仓库里的钩子与过滤器；如需继续，在设置里改为信任。'
+    }
+  }
+  return null
+}
+
 /**
  * 信任交互的目标项目：带运行实例身份时取该实例的归属项目（重载按被重载会话的归属项目复核，
  * 可能不等于前台项目），不带身份时取当前项目。未登记的身份不解析成任何项目。
