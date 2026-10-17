@@ -56,14 +56,12 @@ const SKILL_FILE_NAME = 'SKILL.md'
 /** 技能来源：用户下的 `/skill:` 命令，还是模型读取技能文件。 */
 export type SkillActivitySource = 'command' | 'file'
 
-/** 一个文件在本次会话里被读取与修改的次数；`openPath` 是可直接打开的项目内相对路径。 */
+/** 一个文件在本次会话里被读取与修改的次数。 */
 export interface SessionFileActivity {
   /** 归并键：项目内文件用相对路径，项目外的用原样路径，避免同一文件的两种写法被拆成两条。 */
   readonly key: string
   /** 展示用路径：项目内显示相对路径，项目外原样显示。 */
   readonly label: string
-  /** 可直接交给文件标签打开的项目内相对路径；不在项目内时为 null。 */
-  readonly openPath: string | null
   readonly reads: number
   readonly writes: number
 }
@@ -138,7 +136,6 @@ interface SkillRef {
 interface FileBucket {
   readonly key: string
   readonly label: string
-  readonly openPath: string | null
   reads: number
   writes: number
 }
@@ -166,13 +163,12 @@ function isAbsolutePath(path: string): boolean {
 }
 
 /**
- * 展示路径与可打开路径：项目内的绝对路径折成相对路径，模型给的相对路径原样使用；
- * 含 `..` 的相对路径、项目外的绝对路径仍然展示，但不提供打开动作（文件标签只接受项目内相对路径）。
+ * 展示路径：项目内的绝对路径折成相对路径，模型给的相对路径原样使用；
+ * 含 `..` 的相对路径与项目外的绝对路径仍然原样展示。
  */
 function describePath(raw: string, projectPath: string | null): {
   readonly key: string
   readonly label: string
-  readonly openPath: string | null
 } {
   const unified = unifyPath(raw)
   const root = projectPath === null ? null : unifyPath(projectPath)
@@ -182,17 +178,17 @@ function describePath(raw: string, projectPath: string | null): {
       const prefix = root.endsWith('/') ? root : `${root}/`
       if (unified.startsWith(prefix)) {
         const relative = unified.slice(prefix.length)
-        return { key: relative, label: relative, openPath: relative === '' ? null : relative }
+        return { key: relative, label: relative }
       }
     }
-    return { key: unified, label: unified, openPath: null }
+    return { key: unified, label: unified }
   }
 
   const relative = unified.startsWith('./') ? unified.slice(2) : unified
   if (relative === '' || relative.split('/').includes('..')) {
-    return { key: unified, label: unified, openPath: null }
+    return { key: unified, label: unified }
   }
-  return { key: relative, label: relative, openPath: projectPath === null ? null : relative }
+  return { key: relative, label: relative }
 }
 
 /** 参数摘要里该键的短值；值不是可直接显示的单行文本时为 null（长路径只给了规模）。 */
@@ -356,7 +352,6 @@ export function createSessionActivityCache(): SessionActivityCache {
           const bucket = files.get(described.key) ?? {
             key: described.key,
             label: described.label,
-            openPath: described.openPath,
             reads: 0,
             writes: 0
           }
@@ -385,7 +380,6 @@ export function createSessionActivityCache(): SessionActivityCache {
         .map(bucket => ({
           key: bucket.key,
           label: bucket.label,
-          openPath: bucket.openPath,
           reads: bucket.reads,
           writes: bucket.writes
         }))

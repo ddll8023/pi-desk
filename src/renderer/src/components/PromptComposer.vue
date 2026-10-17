@@ -1062,7 +1062,7 @@ onMounted(() => {
                 :class="item.index === suggestionIndex ? 'list-item-active' : ''"
                 @mousedown.prevent="acceptSuggestion(item.entry)"
               >
-                <span class="font-mono text-xs">/{{ item.entry.name }}</span>
+                <span class="block min-w-0 truncate font-mono text-xs">/{{ item.entry.name }}</span>
                 <span v-if="item.entry.description !== null" class="prompt-composer-option-detail">{{ item.entry.description }}</span>
               </AppButton>
             </li>

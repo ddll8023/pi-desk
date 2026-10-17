@@ -1,5 +1,5 @@
 <!-- 消息区：按投影渲染、粘底与大纲导航；承接用户消息回退确认与修改提交，回退会新建会话（列表折叠为一条），项目文件不回退；回退与修改重试都把原消息文本与可还原的附件交回输入框。
-     渲染与折叠都以轮为单位：非当前轮只留用户输入，其后的 AI 回答与过程压成一行摘要（见 ChatTurnItem），当前轮始终完整展开；开合状态按会话保存，顶部开关控制全局默认。 -->
+     渲染与折叠都以轮为单位：当前轮与上一轮始终完整展开，更早的轮次只留用户输入、其后的 AI 回答与过程压成一行摘要（见 ChatTurnItem）；开合状态按会话保存，顶部开关控制全局默认。 -->
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
@@ -64,13 +64,14 @@ const viewCache = createChatViewCache()
 const turns = computed(() => viewCache.toTurns(messages.value, tools.value))
 
 /**
- * 一轮是否展开：手动开合优先，其次是默认——最后一轮始终展开，更早的轮次看顶部全局开关。
- * 最后一条消息可能还在生成，所以「最后一轮」而不是「最后一个完成的轮」才是当前轮。
+ * 一轮是否展开：手动开合优先，其次是默认——当前轮与上一轮始终展开，更早的轮次看顶部全局开关。
+ * 留上一轮是为了让刚结束的回答仍可直接阅读；最后一条消息可能还在生成，
+ * 所以「最后一轮」而不是「最后一个完成的轮」才是当前轮。
  */
 function isTurnExpanded(turn: ChatTurnView, index: number): boolean {
   const override = sessionViewStore.turnExpansion(sessionViewStore.key, turn.key)
   if (override !== null) return override
-  return index === turns.value.length - 1 ? true : sessionViewStore.historyExpanded
+  return index >= turns.value.length - 2 ? true : sessionViewStore.historyExpanded
 }
 
 const outlineEntries = computed(() => turns.value.flatMap(turn => (

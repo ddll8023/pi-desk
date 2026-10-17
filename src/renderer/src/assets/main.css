@@ -487,9 +487,10 @@
     @apply block w-full rounded-desk-sm border border-transparent px-2.5 py-2 text-left transition-colors;
   }
 
-  /* 输入坞的补全条目：名称与说明同排成两列，说明截断为单行，浮层不被长描述撑开。 */
+  /* 输入坞的补全条目：名称独占一行、说明另起一行，说明截断为单行，浮层不被长描述撑开；
+     四组候选（界面命令 / 技能 / 模板 / 扩展命令）共用这套排版，名称长短不影响说明的起始位置。 */
   .prompt-composer-option {
-    @apply grid w-full grid-cols-[auto_minmax(0,1fr)] items-baseline gap-x-3 rounded-desk-sm border border-transparent px-2.5 py-1.5 text-left transition-colors;
+    @apply grid w-full grid-cols-1 items-baseline gap-y-0.5 rounded-desk-sm border border-transparent px-2.5 py-1.5 text-left transition-colors;
   }
 
   .prompt-composer-option:not(:disabled):hover {
@@ -505,9 +506,10 @@
     @apply px-2.5 pb-0.5 pt-1.5 text-2xs font-medium text-desk-muted;
   }
 
-  /* 文件候选：在补全条目的两列基础上让两列都参与压缩，长文件名与长目录都截断成单行，不溢出浮层。 */
+  /* 文件候选：不跟随命令候选的两行排版，仍让名称与目录同排两列且都参与压缩，
+     长文件名与长目录都截断成单行，不溢出浮层。 */
   .prompt-composer-option-file {
-    @apply grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)];
+    @apply grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)] gap-y-0;
   }
 
   .list-item:not(:disabled):hover {
@@ -3741,42 +3743,54 @@
     }
   }
 
-  /* 会话活动摘要条：对话区顶部的一条窄带，只有一行：左侧折叠行（展开的明细是浮层，见下方 .session-activity-pop），
-     右侧是早期对话的整体折叠开关；因此展开与收起都不改变消息区的高度，也不影响正文的滚动与粘底判定。 */
+  /* 会话活动摘要条：对话区顶部的一条窄带，只有一行：左侧每类一枚胶囊（点击直达该类明细，浮层见下方 .session-activity-pop），
+     右侧是早期对话的整体折叠开关；因此展开与收起都不改变消息区的高度，也不影响正文的滚动与粘底判定。
+     底色留空、底线只画在消息列宽内：窄带与下方消息卡片左右同边，不再是一条全宽空带子中间浮着几个字。 */
   .session-activity {
-    @apply shrink-0 border-b border-desk-line bg-desk-surface px-4 py-1.5 sm:px-6;
+    @apply shrink-0 px-4 py-1.5 sm:px-6;
   }
 
-  /* 一行两端：左侧活动折叠行占满剩余宽度，右侧对话折叠开关按内容宽度收在行尾；
+  /* 一行两端：左侧胶囊组占满剩余宽度，右侧对话折叠开关按内容宽度收在行尾；
      没有活动时只剩开关，仍靠右对齐，位置不随活动有无左右跳。 */
   .session-activity-row {
-    @apply flex min-w-0 items-center justify-end gap-2;
+    @apply flex min-w-0 items-center justify-between gap-2 border-b border-desk-line;
   }
 
-  .session-activity-toggle {
-    @apply flex min-w-0 flex-1 items-center gap-2 rounded-desk-sm px-1.5 py-1 text-left transition-colors;
+  /* 分类胶囊组：每类一枚独立胶囊，窄窗口下只裁掉尾部，不换行、不撑高这一行。 */
+  .session-activity-chips {
+    @apply flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden;
   }
 
-  .session-activity-toggle:hover {
-    @apply bg-desk-surface-subtle;
+  /* 一枚分类胶囊：分类名用次要色、计数用正文色加粗，两者一眼分得开；
+     外观沿用输入坞用量 chip 的圆角细边规格，不为这一处另造一套视觉。 */
+  .session-activity-chip {
+    @apply inline-flex shrink-0 items-baseline gap-1 rounded-full border px-2 py-0.5 text-2xs text-desk-muted transition-colors;
+    border-color: color-mix(in srgb, var(--color-desk-line-strong) 55%, transparent);
+    background: var(--color-desk-surface);
   }
 
-  /* 早期对话的整体折叠开关：与活动行同高的安静文本按钮，不描边、不抢注意力，悬停才出底色。 */
+  /* 悬停整枚转强调色：胶囊里没有箭头，靠变色与 title 表达点一下就能看明细。 */
+  .session-activity-chip:hover {
+    border-color: var(--color-desk-accent);
+    color: var(--color-desk-accent);
+  }
+
+  /* 计数比分类名重一级，并保持等宽数字：数值变化时胶囊宽度不抖。 */
+  .session-activity-chip-count {
+    @apply font-semibold tabular-nums text-desk-ink;
+  }
+
+  .session-activity-chip:hover .session-activity-chip-count {
+    color: var(--color-desk-accent);
+  }
+
+  /* 早期对话的整体折叠开关：与胶囊同高的安静文本按钮，不描边、不抢注意力，悬停才出底色。 */
   .session-activity-process {
-    @apply inline-flex shrink-0 items-center rounded-desk-sm px-1.5 py-1 text-2xs whitespace-nowrap text-desk-muted transition-colors;
+    @apply inline-flex shrink-0 items-center gap-1 rounded-desk-sm px-1.5 py-1 text-2xs whitespace-nowrap text-desk-muted transition-colors;
   }
 
   .session-activity-process:hover {
     @apply bg-desk-surface-subtle text-desk-ink;
-  }
-
-  .session-activity-title {
-    @apply shrink-0 text-xs font-medium text-desk-ink;
-  }
-
-  /* 摘要按等宽数字排列，分类计数变化时行内不抖动；超长时整体截断，明细在展开后看。 */
-  .session-activity-summary {
-    @apply min-w-0 flex-1 truncate font-mono text-2xs text-desk-muted;
   }
 
   /* 明细浮层：定位与尺寸由锚定工具写入内联样式，这里只给外观与分层滚动；
@@ -3794,58 +3808,67 @@
     box-shadow: var(--shadow-desk-pop);
   }
 
-  /* 页签栏固定在浮层顶部，明细在下方单独滚动：四类各占一个页签，不同来源的条目不混在一条清单里。 */
-  .session-activity-tabs {
-    @apply flex shrink-0 items-center gap-1 border-b border-desk-line px-2 py-1.5;
-  }
-
-  .session-activity-tab {
-    @apply inline-flex shrink-0 items-center gap-1.5 rounded-desk-sm px-2 py-1 text-2xs text-desk-muted transition-colors;
-  }
-
-  .session-activity-tab:hover {
-    @apply bg-desk-surface-subtle text-desk-ink;
-  }
-
-  .session-activity-tab.is-active {
-    @apply bg-desk-accent-soft text-desk-accent;
-  }
-
-  /* 页签里的条数用等宽数字：切换分类时页签宽度不抖动。 */
-  .session-activity-tab-count {
-    @apply font-mono text-2xs;
-    opacity: 0.75;
-  }
-
+  /* 明细区：浮层里唯一的滚动容器，四边内距一致（分类已由窄带胶囊选定，这里不再有页签栏）。 */
   .session-activity-panel {
-    @apply min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 py-1.5;
+    @apply min-h-0 flex-1 overflow-y-auto overscroll-contain p-1.5;
   }
 
   .session-activity-list {
     @apply min-w-0 space-y-px;
   }
 
+  /* 一条明细：徽标列、路径与次数三段分开，各段之间留出固定间隔，不靠右对齐的 auto 撑开。
+     行内距保证约 26px 行高，长清单不会糊成一片。
+     行不可点，光标保持箭头，不显示可选中文本的 I 形光标。 */
   .session-activity-entry {
-    @apply flex w-full min-w-0 items-baseline gap-2 rounded-desk-sm px-1.5 py-0.5 text-left text-desk-ink;
+    @apply relative flex w-full min-w-0 cursor-default items-center gap-2 rounded-desk-sm px-1.5 py-1 text-left text-desk-ink;
   }
 
-  /* 项目内文件整行可点：悬停只换底色与强调色，不改变行高。 */
-  .session-activity-entry.is-openable {
-    @apply transition-colors;
+  /* 明细不可点：悬停只给浅底便于横着扫读，不改文字颜色，不暗示点击动作。 */
+  .session-activity-entry:hover {
+    @apply bg-desk-surface-subtle;
   }
 
-  .session-activity-entry.is-openable:hover {
-    @apply bg-desk-surface-subtle text-desk-accent;
+  /* 行首操作徽标列：定宽两列字母，所有文件行的路径起点对齐，竖着扫一列就能分出改过与只读；
+     溢出直接裁掉而不是画到路径上；与路径的间隔由行的 gap 提供，这里不再加内距。 */
+  .session-activity-badges {
+    @apply flex w-8 shrink-0 items-center gap-1 overflow-hidden;
   }
 
-  /* 条目文字跟随行的颜色：可点的行在悬停时整行变成强调色。 */
+  /* 状态字母：与右侧面板的文件列表同一规格——定宽、等宽、无底色，只靠颜色区分状态。 */
+  .session-activity-badge {
+    @apply flex w-3.5 shrink-0 justify-center font-mono text-[11px] font-semibold;
+  }
+
+  /* 改过的文件用警告色：与工具卡、diff 与文件列表的语义色保持同一套。 */
+  .session-activity-badge.is-write {
+    color: var(--color-desk-warning);
+  }
+
+  /* 只读过的文件退成中性色：一眼能看出这一行没动过文件。 */
+  .session-activity-badge.is-read {
+    color: var(--color-desk-muted);
+  }
+
+  /* 文件名与目录合成一个路径块：内部间距比段间距小一档，读起来仍是一个路径，边界又分得清。 */
+  .session-activity-entry-path {
+    @apply flex min-w-0 items-baseline gap-1.5;
+  }
+
+  /* 文件名：比目录亮一级，优先占宽，过长时才尾部省略。 */
   .session-activity-entry-label {
-    @apply min-w-0 flex-1 truncate font-mono text-2xs;
+    @apply min-w-0 truncate font-mono text-2xs;
     color: inherit;
   }
 
+  /* 所在目录：名称优先占宽，目录作为尾部提示被压缩（与右侧面板的文件列表一致）。 */
+  .session-activity-entry-dir {
+    @apply max-w-[40%] shrink-0 truncate font-mono text-2xs text-desk-muted;
+  }
+
+  /* 行尾次数：先靠左内距保证最少 12px 间隔，再在空间富余时推到行尾。 */
   .session-activity-entry-meta {
-    @apply shrink-0 text-2xs text-desk-muted;
+    @apply ml-auto shrink-0 pl-3 text-2xs tabular-nums text-desk-muted;
   }
 
   /* 紧凑刻度只占窄栏，少量条目按内容高度显示；文字浮层独立于滚动列表，并留在正文右侧空白内。 */
@@ -4765,12 +4788,20 @@
     scrollbar-gutter: stable;
   }
 
-  /* 细滚动条；不改变滚动行为，只避免默认滚动条压住内容。弹层体、消息区内的横向滚动容器与可折叠卡片的内容区
-     一律适用，避免同一处弹层或同一段正文里粗细不一。
+  /* 细滚动条；不改变滚动行为，只避免默认滚动条压住内容。滚动容器一律适用——带 scroll-area 类的外壳、
+     弹层体、消息区内的横向滚动容器、可折叠卡片的内容区、文件编辑器的 CodeMirror 与图片预览、
+     公式的横向滚动、终端视口、会话活动浮层的明细区，以及所有多行输入框（textarea 超过最大高度后自己滚动）。
      只用 ::-webkit-scrollbar 定制：Chromium 里 scrollbar-color 与 scrollbar-width 一旦不是 auto，
      就会覆盖这些伪元素样式，半透明细条会退回成按 scrollbar-color 上色的原生滚动条；本应用只跑 Electron。 */
   .scroll-area::-webkit-scrollbar,
+  textarea::-webkit-scrollbar,
   .dialog-body::-webkit-scrollbar,
+  .file-editor-preview::-webkit-scrollbar,
+  .file-editor-image::-webkit-scrollbar,
+  .markdown-math-block::-webkit-scrollbar,
+  .cm-scroller::-webkit-scrollbar,
+  .terminal-view-host .xterm-viewport::-webkit-scrollbar,
+  .session-activity-panel::-webkit-scrollbar,
   .markdown-code-block pre::-webkit-scrollbar,
   .markdown-table-scroll::-webkit-scrollbar,
   .technical-detail-text::-webkit-scrollbar,
@@ -4783,7 +4814,14 @@
   }
 
   .scroll-area::-webkit-scrollbar-track,
+  textarea::-webkit-scrollbar-track,
   .dialog-body::-webkit-scrollbar-track,
+  .file-editor-preview::-webkit-scrollbar-track,
+  .file-editor-image::-webkit-scrollbar-track,
+  .markdown-math-block::-webkit-scrollbar-track,
+  .cm-scroller::-webkit-scrollbar-track,
+  .terminal-view-host .xterm-viewport::-webkit-scrollbar-track,
+  .session-activity-panel::-webkit-scrollbar-track,
   .markdown-code-block pre::-webkit-scrollbar-track,
   .markdown-table-scroll::-webkit-scrollbar-track,
   .technical-detail-text::-webkit-scrollbar-track,
@@ -4796,7 +4834,14 @@
 
   /* 静止时半透明，悬停才实色，避免滚动条在弹层里抢走注意力。 */
   .scroll-area::-webkit-scrollbar-thumb,
+  textarea::-webkit-scrollbar-thumb,
   .dialog-body::-webkit-scrollbar-thumb,
+  .file-editor-preview::-webkit-scrollbar-thumb,
+  .file-editor-image::-webkit-scrollbar-thumb,
+  .markdown-math-block::-webkit-scrollbar-thumb,
+  .cm-scroller::-webkit-scrollbar-thumb,
+  .terminal-view-host .xterm-viewport::-webkit-scrollbar-thumb,
+  .session-activity-panel::-webkit-scrollbar-thumb,
   .markdown-code-block pre::-webkit-scrollbar-thumb,
   .markdown-table-scroll::-webkit-scrollbar-thumb,
   .technical-detail-text::-webkit-scrollbar-thumb,
@@ -4811,7 +4856,14 @@
   }
 
   .scroll-area::-webkit-scrollbar-thumb:hover,
+  textarea::-webkit-scrollbar-thumb:hover,
   .dialog-body::-webkit-scrollbar-thumb:hover,
+  .file-editor-preview::-webkit-scrollbar-thumb:hover,
+  .file-editor-image::-webkit-scrollbar-thumb:hover,
+  .markdown-math-block::-webkit-scrollbar-thumb:hover,
+  .cm-scroller::-webkit-scrollbar-thumb:hover,
+  .terminal-view-host .xterm-viewport::-webkit-scrollbar-thumb:hover,
+  .session-activity-panel::-webkit-scrollbar-thumb:hover,
   .markdown-code-block pre::-webkit-scrollbar-thumb:hover,
   .markdown-table-scroll::-webkit-scrollbar-thumb:hover,
   .technical-detail-text::-webkit-scrollbar-thumb:hover,
