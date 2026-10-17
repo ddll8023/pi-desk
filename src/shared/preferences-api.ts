@@ -32,6 +32,15 @@ export const DEFAULT_RIGHT_PANEL_WIDTH = 350
 export const MIN_RIGHT_PANEL_WIDTH = 240
 export const MAX_RIGHT_PANEL_WIDTH = 720
 
+/** 右侧面板的页签：文件树与源代码管理共用同一列，同一时刻只显示一个。 */
+export type RightPanelTab = 'files' | 'source-control'
+
+const RIGHT_PANEL_TABS: readonly RightPanelTab[] = ['files', 'source-control']
+
+export function isRightPanelTab(value: unknown): value is RightPanelTab {
+  return typeof value === 'string' && RIGHT_PANEL_TABS.includes(value as RightPanelTab)
+}
+
 /** 路径长度上限；只用于拒绝明显异常的值，不做真实路径校验。 */
 const MAX_STORED_PATH_LENGTH = 4096
 
@@ -56,6 +65,8 @@ export interface UiPreferences {
   readonly rightPanelOpen: boolean
   /** 右侧面板宽度（像素）；不按项目区分，面板宽度对同一窗口只有一个值。 */
   readonly rightPanelWidth: number
+  /** 右侧面板当前页签；切换页签只换内容，不改宽度与开合状态。 */
+  readonly rightPanelTab: RightPanelTab
 }
 
 /** 右侧面板宽度是否在存储边界内；非整数与越界值一律拒绝。 */
@@ -69,10 +80,11 @@ export function isUiPreferences(value: unknown): value is UiPreferences {
   if (!isRecord(value)) return false
   if (!Object.keys(value).every((key) => (
     key === 'sidebarCollapsed' || key === 'theme' || key === 'expandedProjects'
-      || key === 'rightPanelOpen' || key === 'rightPanelWidth'
+      || key === 'rightPanelOpen' || key === 'rightPanelWidth' || key === 'rightPanelTab'
   ))) return false
   if (typeof value.sidebarCollapsed !== 'boolean' || !isUiTheme(value.theme)) return false
   if (typeof value.rightPanelOpen !== 'boolean' || !isRightPanelWidth(value.rightPanelWidth)) return false
+  if (!isRightPanelTab(value.rightPanelTab)) return false
   if (!Array.isArray(value.expandedProjects) || value.expandedProjects.length > MAX_EXPANDED_PROJECTS) {
     return false
   }

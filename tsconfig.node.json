@@ -21,6 +21,7 @@
     "src/update-check/**/*.ts",
     "src/package-update/**/*.ts",
     "src/runtime-install/**/*.ts",
-    "src/projection/**/*.ts"
+    "src/projection/**/*.ts",
+    "src/renderer/src/**/*.test.ts"
   ]
 }

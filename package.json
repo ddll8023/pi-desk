@@ -17,6 +17,7 @@
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json",
     "typecheck:web": "vue-tsc --noEmit -p tsconfig.web.json",
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
+    "test": "node --test src/main/*.test.ts src/renderer/src/*.test.ts",
     "package:portable": "npm run build && node scripts/package-portable.mjs",
     "package:win": "npm run build && node scripts/package-portable.mjs --win",
     "package:mac": "npm run build && node scripts/package-portable.mjs --mac"

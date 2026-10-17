@@ -1,4 +1,4 @@
-/** 为沙箱页面提供应用信息、Project 选择/添加/移除/列表、项目文件检索、目录列举、条目路径解析与文件内容读写、Session、会话运行状态、终端、Project Trust、偏好与快捷命令、Runtime、Pi 资源、Pi 默认模型、Pi 版本检查、自定义供应商、认证与 Extension 等受限接口，不暴露 Electron、任意 channel 或系统能力。 */
+/** 为沙箱页面提供应用信息、Project 选择/添加/移除/列表、项目文件检索、目录列举、条目路径解析与文件内容读写、Git（源代码管理）、Session、会话运行状态、终端、Project Trust、偏好与快捷命令、Runtime、Pi 资源、Pi 默认模型、Pi 版本检查、扩展更新与内置 agent 安装、自定义供应商、认证与 Extension 等受限接口，不暴露 Electron、任意 channel 或系统能力。 */
 import { contextBridge, ipcRenderer } from 'electron'
 import type { IpcRendererEvent } from 'electron'
 import { APP_INFO_CHANNEL, isAppInfoResult } from '../shared/desktop-api'
@@ -102,6 +102,37 @@ import type {
   ProjectFileWriteRequest,
   ProjectFileWriteResult
 } from '../shared/project-file-api'
+import {
+  GIT_COMMIT_CHANNEL,
+  GIT_COMMIT_DETAIL_CHANNEL,
+  GIT_COMMIT_DIFF_CHANNEL,
+  GIT_DIFF_CHANNEL,
+  GIT_DISCARD_CHANNEL,
+  GIT_HISTORY_CHANNEL,
+  GIT_STAGE_CHANNEL,
+  GIT_STATUS_CHANNEL,
+  GIT_UNSTAGE_CHANNEL,
+  isGitCommitDetailResult,
+  isGitCommitDiffResult,
+  isGitDiffResult,
+  isGitHistoryResult,
+  isGitStatusResult
+} from '../shared/git-api'
+import type {
+  GitApi,
+  GitCommitDetailRequest,
+  GitCommitDetailResult,
+  GitCommitDiffRequest,
+  GitCommitDiffResult,
+  GitCommitRequest,
+  GitDiffRequest,
+  GitDiffResult,
+  GitHistoryRequest,
+  GitHistoryResult,
+  GitOperationResult,
+  GitPathRequest,
+  GitStatusResult
+} from '../shared/git-api'
 import {
   TERMINAL_ACK_CHANNEL,
   TERMINAL_CLOSE_CHANNEL,
@@ -314,6 +345,7 @@ const INVALID_PROJECT_ENTRY_REVEAL_RESPONSE = '桌面接口返回了无法识别
 const INVALID_PROJECT_FILE_READ_RESPONSE = '桌面接口返回了无法识别的文件读取结果。'
 const INVALID_PROJECT_FILE_WRITE_RESPONSE = '桌面接口返回了无法识别的文件保存结果。'
 const INVALID_PROJECT_FILE_STAT_RESPONSE = '桌面接口返回了无法识别的文件状态结果。'
+const INVALID_GIT_RESPONSE = '桌面接口返回了无法识别的 Git 结果。'
 const INVALID_SESSION_LIST_RESPONSE = '桌面接口返回了无法识别的会话列表。'
 const INVALID_SESSION_RUNS_RESPONSE = '桌面接口返回了无法识别的会话运行状态。'
 const INVALID_PREFERENCES_RESPONSE = '桌面接口返回了无法识别的界面偏好。'
@@ -395,6 +427,26 @@ function invalidProjectFileWriteResponse(): ProjectFileWriteResult {
 
 function invalidProjectFileStatResponse(): ProjectFileStatResult {
   return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_PROJECT_FILE_STAT_RESPONSE } }
+}
+
+function invalidGitStatusResponse(): GitStatusResult {
+  return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_GIT_RESPONSE } }
+}
+
+function invalidGitDiffResponse(): GitDiffResult {
+  return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_GIT_RESPONSE } }
+}
+
+function invalidGitHistoryResponse(): GitHistoryResult {
+  return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_GIT_RESPONSE } }
+}
+
+function invalidGitCommitDetailResponse(): GitCommitDetailResult {
+  return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_GIT_RESPONSE } }
+}
+
+function invalidGitCommitDiffResponse(): GitCommitDiffResult {
+  return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_GIT_RESPONSE } }
 }
 
 function invalidSessionResponse(): SessionListResult {
@@ -505,7 +557,7 @@ function invalidAgentRuntimeResetResponse(): AgentRuntimeResetResult {
   return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_AGENT_RUNTIME_RESET_RESPONSE } }
 }
 
-const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionApi & SessionRunApi & TerminalApi & PreferencesApi & QuickCommandsApi & PiSettingsApi & TrustApi & ExtensionUiApi & AuthApi & ModelsConfigApi & UpdatesApi = {
+const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionApi & SessionRunApi & TerminalApi & PreferencesApi & QuickCommandsApi & PiSettingsApi & TrustApi & ExtensionUiApi & AuthApi & ModelsConfigApi & UpdatesApi & GitApi = {
   async getAppInfo() {
     const response: unknown = await ipcRenderer.invoke(APP_INFO_CHANNEL)
     if (!isAppInfoResult(response)) {
@@ -835,7 +887,8 @@ const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionAp
       theme: ui.theme,
       expandedProjects: [...ui.expandedProjects],
       rightPanelOpen: ui.rightPanelOpen,
-      rightPanelWidth: ui.rightPanelWidth
+      rightPanelWidth: ui.rightPanelWidth,
+      rightPanelTab: ui.rightPanelTab
     }
     const response: unknown = await ipcRenderer.invoke(PREFERENCES_SET_UI_CHANNEL, request)
     return isPreferencesResult(response) ? response : invalidPreferencesResponse()
@@ -1204,6 +1257,60 @@ const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionAp
   async resetAgentRuntime(): Promise<AgentRuntimeResetResult> {
     const response: unknown = await ipcRenderer.invoke(UPDATES_RESET_AGENT_RUNTIME_CHANNEL)
     return isAgentRuntimeResetResult(response) ? response : invalidAgentRuntimeResetResponse()
+  },
+
+  /** 源代码管理：状态、差异、历史与四个写操作；参数只重建契约里声明的字段。 */
+  async getGitStatus(): Promise<GitStatusResult> {
+    const response: unknown = await ipcRenderer.invoke(GIT_STATUS_CHANNEL)
+    return isGitStatusResult(response) ? response : invalidGitStatusResponse()
+  },
+
+  async getGitDiff(request: GitDiffRequest): Promise<GitDiffResult> {
+    const response: unknown = await ipcRenderer.invoke(GIT_DIFF_CHANNEL, { path: request.path, area: request.area })
+    return isGitDiffResult(response) ? response : invalidGitDiffResponse()
+  },
+
+  async stageGitPaths(request: GitPathRequest): Promise<GitOperationResult> {
+    const response: unknown = await ipcRenderer.invoke(GIT_STAGE_CHANNEL, { path: request.path })
+    return isGitStatusResult(response) ? response : invalidGitStatusResponse()
+  },
+
+  async unstageGitPaths(request: GitPathRequest): Promise<GitOperationResult> {
+    const response: unknown = await ipcRenderer.invoke(GIT_UNSTAGE_CHANNEL, { path: request.path })
+    return isGitStatusResult(response) ? response : invalidGitStatusResponse()
+  },
+
+  async discardGitPath(request: GitPathRequest): Promise<GitOperationResult> {
+    const response: unknown = await ipcRenderer.invoke(GIT_DISCARD_CHANNEL, { path: request.path })
+    return isGitStatusResult(response) ? response : invalidGitStatusResponse()
+  },
+
+  async commitGitStaged(request: GitCommitRequest): Promise<GitOperationResult> {
+    const response: unknown = await ipcRenderer.invoke(GIT_COMMIT_CHANNEL, { message: request.message })
+    return isGitStatusResult(response) ? response : invalidGitStatusResponse()
+  },
+
+  async getGitHistory(request: GitHistoryRequest): Promise<GitHistoryResult> {
+    const response: unknown = await ipcRenderer.invoke(GIT_HISTORY_CHANNEL, {
+      ...(request.limit === undefined ? {} : { limit: request.limit }),
+      ...(request.skip === undefined ? {} : { skip: request.skip }),
+      ...(request.path === undefined ? {} : { path: request.path })
+    })
+    return isGitHistoryResult(response) ? response : invalidGitHistoryResponse()
+  },
+
+  async getGitCommitDetail(request: GitCommitDetailRequest): Promise<GitCommitDetailResult> {
+    const response: unknown = await ipcRenderer.invoke(GIT_COMMIT_DETAIL_CHANNEL, { oid: request.oid })
+    return isGitCommitDetailResult(response) ? response : invalidGitCommitDetailResponse()
+  },
+
+  async getGitCommitDiff(request: GitCommitDiffRequest): Promise<GitCommitDiffResult> {
+    const response: unknown = await ipcRenderer.invoke(GIT_COMMIT_DIFF_CHANNEL, {
+      oid: request.oid,
+      path: request.path,
+      ...(request.oldPath === undefined ? {} : { oldPath: request.oldPath })
+    })
+    return isGitCommitDiffResult(response) ? response : invalidGitCommitDiffResponse()
   }
 }
 

@@ -19,6 +19,7 @@ import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join } from 'node:path'
 import { app } from 'electron'
+import { isRightPanelTab } from '../shared/preferences-api'
 import type { AutoUpdatePreference, ModelDisplayPreference, QuickSendPreference, UiPreferences, UiTheme } from '../shared/preferences-api'
 import {
   DEFAULT_QUICK_SEND_MESSAGES,
@@ -62,7 +63,8 @@ export const DEFAULT_UI_PREFERENCES: UiPreferences = {
   expandedProjects: [],
   // 右侧面板默认展开：它是本应用的文件入口，收起后只剩顶部栏一个开关，默认藏起来等于没有；折叠状态会被记住。
   rightPanelOpen: true,
-  rightPanelWidth: DEFAULT_RIGHT_PANEL_WIDTH
+  rightPanelWidth: DEFAULT_RIGHT_PANEL_WIDTH,
+  rightPanelTab: 'files'
 }
 
 /** 窗口状态默认值；位置为 null 表示交给窗口自行居中。 */
@@ -154,7 +156,10 @@ function sanitizeUiPreferences(value: unknown): UiPreferences {
       : DEFAULT_UI_PREFERENCES.rightPanelOpen,
     rightPanelWidth: isRightPanelWidth(value.rightPanelWidth)
       ? value.rightPanelWidth
-      : DEFAULT_UI_PREFERENCES.rightPanelWidth
+      : DEFAULT_UI_PREFERENCES.rightPanelWidth,
+    rightPanelTab: isRightPanelTab(value.rightPanelTab)
+      ? value.rightPanelTab
+      : DEFAULT_UI_PREFERENCES.rightPanelTab
   }
 }
 

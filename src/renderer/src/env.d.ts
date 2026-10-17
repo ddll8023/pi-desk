@@ -4,6 +4,7 @@
 import type { DesktopApi } from '../../shared/desktop-api'
 import type { AuthApi } from '../../shared/auth-api'
 import type { ExtensionUiApi } from '../../shared/extension-ui-api'
+import type { GitApi } from '../../shared/git-api'
 import type { ModelsConfigApi } from '../../shared/models-config-api'
 import type { PiSettingsApi } from '../../shared/pi-settings-api'
 import type { PreferencesApi } from '../../shared/preferences-api'
@@ -19,7 +20,7 @@ import type { UpdatesApi } from '../../shared/updates-api'
 
 declare global {
   interface Window {
-    readonly desktop?: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionApi & SessionRunApi & TerminalApi & PreferencesApi & QuickCommandsApi & PiSettingsApi & TrustApi & ExtensionUiApi & AuthApi & ModelsConfigApi & UpdatesApi
+    readonly desktop?: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionApi & SessionRunApi & TerminalApi & PreferencesApi & QuickCommandsApi & PiSettingsApi & TrustApi & ExtensionUiApi & AuthApi & ModelsConfigApi & UpdatesApi & GitApi
   }
 }
 

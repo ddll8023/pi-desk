@@ -19,6 +19,12 @@ export type DesktopErrorCode =
   | 'TRUST_REQUIRED'
   /** 写入前发现磁盘文件已被外部改动；由界面提示用户继续编辑或覆盖保存。 */
   | 'CONFLICT'
+  /** 目标目录不是 Git 仓库（或仓库根无法确定）；界面据此显示空态，不当作故障。 */
+  | 'NOT_A_REPOSITORY'
+  /** 系统里没有可用的 git，或它无法执行。 */
+  | 'GIT_UNAVAILABLE'
+  /** git 命令失败（退出码非零、超时或被中止）；message 是可展示的原因。 */
+  | 'GIT_FAILED'
 
 export interface DesktopError {
   readonly code: DesktopErrorCode

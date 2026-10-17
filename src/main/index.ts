@@ -53,6 +53,31 @@ import {
   isProjectEntryPathRequest,
   isProjectFileWriteRequest
 } from '../shared/project-file-api'
+import {
+  GIT_COMMIT_CHANNEL,
+  GIT_COMMIT_DETAIL_CHANNEL,
+  GIT_COMMIT_DIFF_CHANNEL,
+  GIT_DIFF_CHANNEL,
+  GIT_DISCARD_CHANNEL,
+  GIT_HISTORY_CHANNEL,
+  GIT_STAGE_CHANNEL,
+  GIT_STATUS_CHANNEL,
+  GIT_UNSTAGE_CHANNEL,
+  isGitCommitDetailRequest,
+  isGitCommitDiffRequest,
+  isGitCommitRequest,
+  isGitDiffRequest,
+  isGitHistoryRequest,
+  isGitPathRequest
+} from '../shared/git-api'
+import type {
+  GitCommitDetailResult,
+  GitCommitDiffResult,
+  GitDiffResult,
+  GitHistoryResult,
+  GitOperationResult,
+  GitStatusResult
+} from '../shared/git-api'
 import type {
   ProjectDirectoryListResult,
   ProjectEntryPathResult,
@@ -251,6 +276,7 @@ import { PreferencesManager } from './preferences-manager'
 import { ProjectDirectoryReader } from './project-directory'
 import { ProjectFileContent } from './project-file-content'
 import { ProjectFileIndex } from './project-file-index'
+import { GitService } from './git-service'
 import { ProjectManager } from './project-manager'
 import { McpInspectionManager } from './mcp-inspection'
 import { ResourcePreviewError, previewGlobalModels, previewProjectResources } from './resource-preview'
@@ -358,6 +384,10 @@ const projectDirectory = new ProjectDirectoryReader({
 })
 /** 项目文件内容：工作区文件标签的读取、保存与磁盘基线查询，根路径同样只取当前项目。 */
 const projectFileContent = new ProjectFileContent({
+  currentProjectPath: () => projectManager.currentProjectPath()
+})
+/** 源代码管理：状态、差异、历史与暂存/提交；仓库根与路径折算全在主进程，页面只给项目内相对路径。 */
+const gitService = new GitService({
   currentProjectPath: () => projectManager.currentProjectPath()
 })
 /** 认证执行端：管理认证辅助进程，凭据读写全在官方实现内完成。 */
@@ -625,6 +655,26 @@ function projectFileWriteFailure(code: DesktopErrorCode, message: string): Proje
 }
 
 function projectFileStatFailure(code: DesktopErrorCode, message: string): ProjectFileStatResult {
+  return { ok: false, error: { code, message } }
+}
+
+function gitStatusFailure(code: DesktopErrorCode, message: string): GitStatusResult {
+  return { ok: false, error: { code, message } }
+}
+
+function gitDiffFailure(code: DesktopErrorCode, message: string): GitDiffResult {
+  return { ok: false, error: { code, message } }
+}
+
+function gitHistoryFailure(code: DesktopErrorCode, message: string): GitHistoryResult {
+  return { ok: false, error: { code, message } }
+}
+
+function gitCommitDetailFailure(code: DesktopErrorCode, message: string): GitCommitDetailResult {
+  return { ok: false, error: { code, message } }
+}
+
+function gitCommitDiffFailure(code: DesktopErrorCode, message: string): GitCommitDiffResult {
   return { ok: false, error: { code, message } }
 }
 
@@ -990,6 +1040,131 @@ function registerProjectFileHandlers(pageUrl: string): void {
         return projectFileStatFailure('INVALID_REQUEST', '读取文件状态只接受一个项目内相对路径请求。')
       }
       return projectFileContent.stat(args[0].path)
+    }
+  )
+}
+
+/**
+ * 源代码管理通道：状态读取不带参数；diff 只接受「项目内相对路径 + 区域」；历史接受可选的条数、偏移与
+ * 过滤路径；提交详情只接受提交标识；提交内差异接受提交标识与路径（重命名条目另带原路径）；写操作只接受
+ * 一个路径，提交额外只接受提交信息。页面不能指定仓库根，也不能传入任何 git 参数：命令组装、仓库定位与
+ * 路径折算都在主进程，写操作成功时直接回传新状态，避免「写完再拉一次」的竞态。
+ */
+function registerGitHandlers(pageUrl: string): void {
+  handle(
+    GIT_STATUS_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<GitStatusResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return gitStatusFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 0) {
+        return gitStatusFailure('INVALID_REQUEST', 'Git 状态接口不接受参数。')
+      }
+      return gitService.status()
+    }
+  )
+
+  handle(
+    GIT_DIFF_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<GitDiffResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return gitDiffFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 1 || !isGitDiffRequest(args[0])) {
+        return gitDiffFailure('INVALID_REQUEST', '查看差异只接受一个项目内相对路径与区域请求。')
+      }
+      return gitService.diff(args[0])
+    }
+  )
+
+  handle(
+    GIT_STAGE_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<GitOperationResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return gitStatusFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 1 || !isGitPathRequest(args[0])) {
+        return gitStatusFailure('INVALID_REQUEST', '暂存只接受一个项目内相对路径请求。')
+      }
+      return gitService.stage(args[0])
+    }
+  )
+
+  handle(
+    GIT_UNSTAGE_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<GitOperationResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return gitStatusFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 1 || !isGitPathRequest(args[0])) {
+        return gitStatusFailure('INVALID_REQUEST', '取消暂存只接受一个项目内相对路径请求。')
+      }
+      return gitService.unstage(args[0])
+    }
+  )
+
+  handle(
+    GIT_DISCARD_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<GitOperationResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return gitStatusFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 1 || !isGitPathRequest(args[0])) {
+        return gitStatusFailure('INVALID_REQUEST', '丢弃改动只接受一个项目内相对路径请求。')
+      }
+      return gitService.discard(args[0])
+    }
+  )
+
+  handle(
+    GIT_COMMIT_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<GitOperationResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return gitStatusFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 1 || !isGitCommitRequest(args[0])) {
+        return gitStatusFailure('INVALID_REQUEST', '提交只接受一条非空的提交信息。')
+      }
+      return gitService.commit(args[0])
+    }
+  )
+
+  handle(
+    GIT_HISTORY_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<GitHistoryResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return gitHistoryFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 1 || !isGitHistoryRequest(args[0])) {
+        return gitHistoryFailure('INVALID_REQUEST', '历史只接受一个可选的条数与过滤路径请求。')
+      }
+      return gitService.history(args[0])
+    }
+  )
+
+  handle(
+    GIT_COMMIT_DETAIL_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<GitCommitDetailResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return gitCommitDetailFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 1 || !isGitCommitDetailRequest(args[0])) {
+        return gitCommitDetailFailure('INVALID_REQUEST', '提交详情只接受一个提交标识。')
+      }
+      return gitService.commitDetail(args[0])
+    }
+  )
+
+  handle(
+    GIT_COMMIT_DIFF_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<GitCommitDiffResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return gitCommitDiffFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 1 || !isGitCommitDiffRequest(args[0])) {
+        return gitCommitDiffFailure('INVALID_REQUEST', '提交内差异只接受一个提交标识与项目内相对路径。')
+      }
+      return gitService.commitDiff(args[0])
     }
   )
 }
@@ -1919,10 +2094,10 @@ function registerPreferencesHandlers(pageUrl: string): void {
       if (!isUiPreferences(request)) {
         return preferencesFailure('INVALID_REQUEST', '界面偏好必须包含折叠状态、合法主题、展开的项目路径列表与右侧面板状态。')
       }
-      const { sidebarCollapsed, theme, expandedProjects, rightPanelOpen, rightPanelWidth } = request
+      const { sidebarCollapsed, theme, expandedProjects, rightPanelOpen, rightPanelWidth, rightPanelTab } = request
       // 主题在参数合法后立即生效：只读降级时同样切换本次运行的主题，与页面本地生效保持一致。
       applyNativeTheme(theme)
-      return preferencesManager.setUi({ sidebarCollapsed, theme, expandedProjects, rightPanelOpen, rightPanelWidth })
+      return preferencesManager.setUi({ sidebarCollapsed, theme, expandedProjects, rightPanelOpen, rightPanelWidth, rightPanelTab })
     }
   )
 }
@@ -2620,6 +2795,7 @@ if (!app.requestSingleInstanceLock()) {
     registerExtensionUiHandlers(pageUrl)
     registerProjectHandlers(pageUrl)
     registerProjectFileHandlers(pageUrl)
+    registerGitHandlers(pageUrl)
     registerSessionHandlers(pageUrl)
     registerSessionRunHandlers(pageUrl)
     registerTerminalHandlers(pageUrl)

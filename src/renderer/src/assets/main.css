@@ -2497,7 +2497,7 @@
 
   /*
    * 右侧面板：与左侧栏同为界面外壳面，但用独立令牌，便于单独调节层次；
-   * 面板内只有一列滚动容器，目录树、提示行与检索结果都在这列里滚动。
+   * 面板内按页签在文件树与源代码管理之间切换，两个视图各自维护自己的滚动容器。
    */
   .app-right-panel {
     --panel-width: 350px;
@@ -2507,6 +2507,8 @@
     --panel-ink: var(--color-desk-ink);
     --panel-muted: var(--color-desk-muted);
     --panel-line: color-mix(in srgb, var(--color-desk-line) 70%, transparent);
+    /* 提交卡片的描边：比分隔线更实一点，卡片边界才看得出来。 */
+    --panel-card-line: var(--color-desk-line);
     /* 文件类型色：只表达类型分组，不承担任何语义（不占用 danger/warning/success）。 */
     --panel-tone-folder: #236978;
     --panel-tone-code: #2f7a86;
@@ -2851,9 +2853,815 @@
     color: var(--color-desk-danger);
   }
 
-  /* 暗色：类型色整体提亮，保持同一组色相，不改分组含义。 */
+  /*
+   * 右侧面板页签：文件树与源代码管理共用同一列。
+   * 页签条与面板头部同一底色，选中态只用文字色与底部竖条表达，避免再加一层卡片。
+   */
+  .right-panel-tabs {
+    display: flex;
+    height: 28px;
+    flex: none;
+    align-items: stretch;
+    gap: 2px;
+    border-bottom: 1px solid var(--panel-line);
+    padding: 0 6px;
+  }
+
+  .right-panel-tab {
+    display: flex;
+    min-width: 0;
+    flex: 0 1 auto;
+    align-items: center;
+    gap: 5px;
+    border-radius: 5px 5px 0 0;
+    padding: 0 8px;
+    color: var(--panel-muted);
+    font-size: 12px;
+    white-space: nowrap;
+    transition: color var(--panel-duration) ease, background-color var(--panel-duration) ease;
+  }
+
+  .right-panel-tab:hover {
+    background: var(--panel-hover);
+    color: var(--panel-ink);
+  }
+
+  /* 选中态：文字提亮 + 底部强调竖条（与设置页导航同一套标记语言）。 */
+  .right-panel-tab.is-active {
+    color: var(--panel-ink);
+    font-weight: 600;
+    box-shadow: inset 0 -2px 0 0 var(--color-desk-accent);
+  }
+
+  .right-panel-tab-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .right-panel-tab-count {
+    flex: none;
+    border-radius: 999px;
+    background: var(--panel-selected);
+    padding: 0 5px;
+    color: var(--color-desk-accent);
+    font-size: 10px;
+    font-variant-numeric: tabular-nums;
+    line-height: 14px;
+  }
+
+  /*
+   * 源代码管理面板：分支行固定，提交框与改动列表在下面滚动。
+   * 行高、圆角与悬停节奏与文件树一致，两个页签切换时密度不跳。
+   */
+  .git-panel {
+    display: flex;
+    min-height: 0;
+    flex: 1;
+    flex-direction: column;
+  }
+
+  .git-branch {
+    display: flex;
+    height: 26px;
+    flex: none;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 0 10px 0 12px;
+  }
+
+  .git-branch-name {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    gap: 5px;
+    color: var(--panel-muted);
+  }
+
+  .git-branch-label {
+    overflow: hidden;
+    color: var(--panel-ink);
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .git-branch-sync {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .git-branch-ahead { color: var(--color-desk-success); }
+  .git-branch-behind { color: var(--color-desk-warning); }
+  .git-branch-even { color: var(--panel-muted); }
+
+  .git-scroll {
+    display: flex;
+    min-height: 0;
+    flex: 1;
+    flex-direction: column;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 0 6px 8px;
+  }
+
+  /* 面板内提示：与文件树的提示行同一套排版，只多一个警告档。 */
+  .git-notice {
+    margin: 4px 2px;
+    color: var(--panel-muted);
+    font-size: 11.5px;
+    line-height: 16px;
+    overflow-wrap: anywhere;
+  }
+
+  .git-notice.is-error { color: var(--color-desk-danger); }
+
+  .git-notice.is-warning {
+    border-radius: var(--radius-desk-sm);
+    background: var(--color-desk-warning-soft);
+    padding: 4px 6px;
+    color: var(--color-desk-warning);
+  }
+
+  .git-retry {
+    align-self: flex-start;
+    margin: 2px;
+  }
+
+  /* 提交框：输入区与动作行分开，动作行右侧是唯一的主按钮。 */
+  .git-commit {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin: 2px 0 8px;
+  }
+
+  .git-commit-input {
+    width: 100%;
+    min-height: 42px;
+    resize: vertical;
+    border: 1px solid var(--color-desk-line);
+    border-radius: var(--radius-desk-sm);
+    background: var(--color-desk-surface-subtle);
+    padding: 6px 8px;
+    color: var(--panel-ink);
+    font-family: inherit;
+    font-size: 12px;
+    line-height: 1.5;
+    transition: border-color var(--panel-duration) ease, background-color var(--panel-duration) ease;
+  }
+
+  .git-commit-input:focus-visible {
+    border-color: var(--color-desk-accent);
+    background: var(--panel-surface);
+    outline: none;
+  }
+
+  .git-commit-input:disabled {
+    opacity: 0.6;
+  }
+
+  .git-commit-actions {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  .git-commit-hint {
+    color: var(--panel-muted);
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .git-group {
+    margin-bottom: 6px;
+  }
+
+  /* 分组头：小写字号的标题 + 数量，不用折叠箭头（列表本来就不长）。 */
+  .git-group-header {
+    display: flex;
+    height: 22px;
+    align-items: center;
+    gap: 6px;
+    padding: 0 8px;
+    color: var(--panel-muted);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+  }
+
+  .git-group-count {
+    font-variant-numeric: tabular-nums;
+    font-weight: 400;
+  }
+
+  .git-list {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 1px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  /* 一行 = 主体按钮（选中并看差异）+ 悬停才出现的操作键；两者都是按钮，不嵌套。 */
+  .git-row {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    gap: 2px;
+    border-radius: 5px;
+    transition: background-color var(--panel-duration) ease;
+  }
+
+  .git-row:hover {
+    background: var(--panel-hover);
+  }
+
+  .git-row.is-busy {
+    opacity: 0.6;
+  }
+
+  .git-row-open {
+    display: flex;
+    min-width: 0;
+    flex: 1 1 auto;
+    align-items: center;
+    gap: 6px;
+    height: 26px;
+    padding: 0 4px 0 6px;
+    text-align: left;
+  }
+
+  /* 状态字母：等宽、定宽，列表因此能按列对齐。 */
+  .git-row-badge {
+    display: flex;
+    width: 14px;
+    flex: none;
+    justify-content: center;
+    color: var(--panel-muted);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 600;
+  }
+
+  .git-row-badge.is-modified { color: var(--color-desk-warning); }
+  .git-row-badge.is-added { color: var(--color-desk-success); }
+  .git-row-badge.is-deleted { color: var(--color-desk-danger); }
+  .git-row-badge.is-renamed { color: var(--color-desk-accent); }
+  .git-row-badge.is-copied { color: var(--color-desk-accent); }
+  .git-row-badge.is-untracked { color: var(--color-desk-muted); }
+
+  .git-row-text {
+    display: flex;
+    min-width: 0;
+    flex: 1 1 auto;
+    align-items: baseline;
+    gap: 6px;
+  }
+
+  .git-row-name {
+    overflow: hidden;
+    color: var(--panel-ink);
+    font-size: 12.5px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* 所在目录：名称优先占宽，目录作为尾部提示被压缩。 */
+  .git-row-dir {
+    max-width: 45%;
+    flex: none;
+    overflow: hidden;
+    color: var(--panel-muted);
+    font-size: 11px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .git-row-tag {
+    flex: none;
+    border: 1px solid var(--color-desk-line);
+    border-radius: 999px;
+    padding: 0 5px;
+    color: var(--color-desk-danger);
+    font-size: 10px;
+    line-height: 14px;
+  }
+
+  /* 操作键：默认隐藏，行悬停或键盘聚焦时出现；窄窗口没有悬停，常显。 */
+  .git-row-actions {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: 1px;
+    padding-right: 4px;
+    opacity: 0;
+    transition: opacity var(--panel-duration) ease;
+  }
+
+  .git-row:hover .git-row-actions,
+  .git-row:focus-within .git-row-actions {
+    opacity: 1;
+  }
+
+  .git-row-action {
+    display: flex;
+    width: 22px;
+    height: 22px;
+    align-items: center;
+    justify-content: center;
+    border-radius: 4px;
+    color: var(--panel-muted);
+    transition: background-color var(--panel-duration) ease, color var(--panel-duration) ease;
+  }
+
+  .git-row-action:not(:disabled):hover {
+    background: color-mix(in srgb, var(--color-desk-ink) 8%, transparent);
+    color: var(--panel-ink);
+  }
+
+  .git-row-action.is-danger:not(:disabled):hover {
+    background: var(--color-desk-danger-soft);
+    color: var(--color-desk-danger);
+  }
+
+  .git-row-action:disabled {
+    opacity: 0.4;
+  }
+
+  @media (hover: none) {
+    .git-row-actions {
+      opacity: 1;
+    }
+  }
+
+  /* 视图切换（更改 / 历史）：胶囊式分段控件，与页签条区分开，避免两套页签混淆。 */
+  .git-view-switch {
+    display: flex;
+    height: 24px;
+    flex: none;
+    align-items: center;
+    gap: 2px;
+    padding: 0 6px 2px;
+  }
+
+  .git-view-tab {
+    display: flex;
+    height: 20px;
+    align-items: center;
+    gap: 4px;
+    border-radius: 4px;
+    padding: 0 7px;
+    color: var(--panel-muted);
+    font-size: 11.5px;
+    transition: background-color var(--panel-duration) ease, color var(--panel-duration) ease;
+  }
+
+  .git-view-tab:hover {
+    background: var(--panel-hover);
+    color: var(--panel-ink);
+  }
+
+  .git-view-tab.is-active {
+    background: var(--panel-selected);
+    color: var(--color-desk-accent);
+    font-weight: 600;
+  }
+
+  .git-view-count {
+    color: inherit;
+    font-size: 10px;
+    font-variant-numeric: tabular-nums;
+    opacity: 0.75;
+  }
+
+  /* 历史：页头一行说明（上游/未推送/过滤路径），列表在下面滚动。 */
+  .git-history {
+    display: flex;
+    min-height: 0;
+    flex: 1;
+    flex-direction: column;
+  }
+
+  .git-history-head {
+    display: flex;
+    height: 22px;
+    flex: none;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 0 10px 0 12px;
+    color: var(--panel-muted);
+    font-size: 11px;
+  }
+
+  .git-history-head-note {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .git-history-filter {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    gap: 2px;
+  }
+
+  .git-history-filter-label {
+    overflow: hidden;
+    color: var(--color-desk-accent);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .git-history-unpushed {
+    flex: none;
+    color: var(--color-desk-warning);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .git-history-scroll {
+    min-height: 0;
+    flex: 1;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 0 6px 8px;
+  }
+
+  .git-history-more {
+    display: flex;
+    justify-content: center;
+    padding: 6px 0 2px;
+  }
+
+  /*
+   * 提交列表：一条提交一张卡片，卡片之间留 6px 间隔并带描边。
+   * 历史条目比「改动」列表的一行承载更多信息（标题、元信息、角标），靠间距与描边分出边界，
+   * 连续排在一起时很难一眼看出哪几行属于同一条提交。
+   */
+  .git-commit-list {
+    gap: 6px;
+    padding: 2px 0 6px;
+  }
+
+  .git-commit-row {
+    display: flex;
+    width: 100%;
+    min-width: 0;
+    flex-direction: column;
+    gap: 3px;
+    border: 1px solid var(--panel-card-line);
+    border-radius: var(--radius-desk-sm);
+    background: var(--panel-surface);
+    padding: 5px 8px;
+    text-align: left;
+    transition:
+      border-color var(--panel-duration) ease,
+      background-color var(--panel-duration) ease;
+  }
+
+  /* 悬停只提亮描边与底色：卡片本身不位移，列表滚动时不会抖动。 */
+  .git-commit-row:hover {
+    border-color: color-mix(in srgb, var(--color-desk-accent) 40%, var(--color-desk-line));
+    background: var(--panel-hover);
+  }
+
+  .git-commit-row-subject {
+    overflow: hidden;
+    color: var(--panel-ink);
+    font-size: 12.5px;
+    font-weight: 500;
+    line-height: 1.45;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .git-commit-row-meta {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    gap: 5px;
+    color: var(--panel-muted);
+    font-size: 10.5px;
+  }
+
+  /* 元信息之间用间隔点分隔：不额外加元素，靠相邻兄弟的伪元素补上。 */
+  .git-commit-row-meta > * + *::before {
+    content: '·';
+    margin-right: 5px;
+    color: var(--color-desk-line-strong);
+  }
+
+  .git-commit-row-oid {
+    flex: none;
+    border-radius: 3px;
+    background: var(--color-desk-surface-subtle);
+    padding: 0 4px;
+    color: var(--panel-muted);
+    font-family: var(--font-mono);
+    line-height: 15px;
+  }
+
+  .git-commit-row-author,
+  .git-commit-row-time {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .git-commit-row-time {
+    flex: none;
+  }
+
+  /* 角标行与元信息分开一层：有引用或未推送时才出现，因此自带一点上间距。 */
+  .git-commit-row-badges {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-top: 1px;
+  }
+
+  /* 引用角标默认安静（描边 + 中性色）：它只是定位信息，不该比提交标题更抢眼。 */
+  .git-commit-ref {
+    max-width: 100%;
+    overflow: hidden;
+    border: 1px solid var(--panel-card-line);
+    border-radius: 999px;
+    background: var(--color-desk-surface-subtle);
+    padding: 0 5px;
+    color: var(--panel-muted);
+    font-size: 10px;
+    line-height: 14px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* 只有指向 HEAD 的那个引用用强调色：一眼看出「这条是当前分支」。 */
+  .git-commit-ref.is-current {
+    border-color: color-mix(in srgb, var(--color-desk-accent) 35%, var(--color-desk-line));
+    background: var(--panel-selected);
+    color: var(--color-desk-accent);
+    font-weight: 500;
+  }
+
+  .git-commit-unpushed {
+    flex: none;
+    border-radius: 999px;
+    background: var(--color-desk-warning-soft);
+    padding: 0 5px;
+    color: var(--color-desk-warning);
+    font-size: 10px;
+    line-height: 14px;
+  }
+
+  /* 提交详情：元信息用定义列表排版，正文保留原换行。 */
+  .git-history-detail {
+    display: flex;
+    min-height: 0;
+    flex: 1;
+    flex-direction: column;
+  }
+
+  .git-history-subject {
+    min-width: 0;
+    flex: 1 1 auto;
+    overflow: hidden;
+    color: var(--panel-ink);
+    font-size: 12px;
+    font-weight: 600;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .git-commit-meta {
+    display: grid;
+    gap: 2px;
+    margin: 2px 0 6px;
+    padding: 0 8px;
+    font-size: 11px;
+  }
+
+  .git-commit-meta-row {
+    display: flex;
+    min-width: 0;
+    gap: 6px;
+  }
+
+  .git-commit-meta-row dt {
+    width: 28px;
+    flex: none;
+    color: var(--panel-muted);
+  }
+
+  .git-commit-meta-row dd {
+    min-width: 0;
+    margin: 0;
+    overflow-wrap: anywhere;
+    color: var(--panel-ink);
+  }
+
+  .git-commit-meta-row dd.is-mono {
+    font-family: var(--font-mono);
+  }
+
+  .git-commit-body {
+    margin: 0 8px 6px;
+    border-left: 2px solid var(--color-desk-line);
+    padding-left: 8px;
+    color: var(--panel-ink);
+    font-size: 11.5px;
+    line-height: 16px;
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
+  }
+
+  .git-history-group-title {
+    margin: 4px 8px;
+    color: var(--panel-muted);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+  }
+
+  /* 提交内文件行的增删计数：定宽等宽数字，右对齐到行尾。 */
+  .git-row-delta {
+    flex: none;
+    color: var(--panel-muted);
+    font-size: 10.5px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /*
+   * 差异视图：头部固定，行区滚动。
+   * 三列分别是旧行号、新行号与内容；行号等宽定宽，长行横向滚动而不折行（折行会让行号对不上）。
+   */
+  .git-diff {
+    display: flex;
+    min-height: 0;
+    flex: 1;
+    flex-direction: column;
+  }
+
+  .git-diff-header {
+    display: flex;
+    height: 26px;
+    flex: none;
+    align-items: center;
+    gap: 4px;
+    padding: 0 8px 0 4px;
+  }
+
+  .git-diff-back,
+  .git-diff-open {
+    display: flex;
+    width: 22px;
+    height: 22px;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    border-radius: 4px;
+    color: var(--panel-muted);
+  }
+
+  .git-diff-back:hover,
+  .git-diff-open:hover {
+    background: var(--panel-hover);
+    color: var(--panel-ink);
+  }
+
+  .git-diff-title {
+    display: flex;
+    min-width: 0;
+    flex: 1 1 auto;
+    align-items: baseline;
+    gap: 6px;
+  }
+
+  .git-diff-name {
+    overflow: hidden;
+    color: var(--panel-ink);
+    font-size: 12px;
+    font-weight: 600;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .git-diff-dir {
+    overflow: hidden;
+    color: var(--panel-muted);
+    font-size: 11px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .git-diff-area {
+    flex: none;
+    border: 1px solid var(--color-desk-line);
+    border-radius: 999px;
+    padding: 0 5px;
+    color: var(--panel-muted);
+    font-size: 10px;
+    line-height: 14px;
+  }
+
+  .git-diff-scroll {
+    min-height: 0;
+    flex: 1;
+    overflow-x: auto;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 0 0 8px;
+  }
+
+  .git-diff-notice {
+    margin: 6px 8px;
+    color: var(--panel-muted);
+    font-size: 11.5px;
+    line-height: 16px;
+    overflow-wrap: anywhere;
+  }
+
+  .git-diff-notice.is-error {
+    color: var(--color-desk-danger);
+  }
+
+  .git-diff-stats {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 8px 4px;
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .git-diff-stat.is-add { color: var(--color-desk-success); }
+  .git-diff-stat.is-remove { color: var(--color-desk-danger); }
+  .git-diff-stat.is-muted { color: var(--panel-muted); }
+
+  .git-diff-lines {
+    min-width: max-content;
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    line-height: 17px;
+  }
+
+  .git-diff-line {
+    display: grid;
+    grid-template-columns: 30px 30px 10px minmax(0, 1fr);
+    align-items: start;
+    padding: 0 8px 0 0;
+  }
+
+  /* 新增行复用 success 语义色，删除行复用 danger；上下文行不加底色。 */
+  .git-diff-line.is-add {
+    background: var(--color-desk-success-soft);
+  }
+
+  .git-diff-line.is-remove {
+    background: var(--color-desk-danger-soft);
+  }
+
+  .git-diff-gutter {
+    padding-right: 6px;
+    color: var(--panel-muted);
+    font-size: 10.5px;
+    text-align: right;
+    user-select: none;
+  }
+
+  .git-diff-sign {
+    color: var(--panel-muted);
+    text-align: center;
+    user-select: none;
+  }
+
+  .git-diff-line.is-add .git-diff-sign { color: var(--color-desk-success); }
+  .git-diff-line.is-remove .git-diff-sign { color: var(--color-desk-danger); }
+
+  /* 代码列保留空白与缩进：差异视图不做任何排版重写。 */
+  .git-diff-code {
+    padding-right: 8px;
+    color: var(--panel-ink);
+    white-space: pre;
+    tab-size: 2;
+  }
+
+  /* 暗色：类型色整体提亮，保持同一组色相，不改分组含义；提交卡片的描边同步提亮一档。 */
   @media (prefers-color-scheme: dark) {
     .app-right-panel {
+      --panel-card-line: color-mix(in srgb, var(--color-desk-line) 82%, white);
       --panel-tone-folder: #4fa3b5;
       --panel-tone-code: #6ab8c9;
       --panel-tone-data: #d3b06e;
@@ -2874,6 +3682,12 @@
     .app-right-panel,
     .right-panel-content,
     .right-panel-action,
+    .right-panel-tab,
+    .git-view-tab,
+    .git-commit-row,
+    .git-row,
+    .git-row-actions,
+    .git-row-action,
     .file-tree-row,
     .file-tree-chevron,
     .right-panel-resize {
