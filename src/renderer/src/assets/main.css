@@ -3209,7 +3209,7 @@
    * 不设 overscroll-behavior，滚到卡片底部后继续滚动外层消息区（与侧栏会话列表同一约定）；
    * 不预留滚动条槽位，避免左对齐正文白占宽度。
    */
-  .chat-thinking-body,
+  .chat-process-thinking,
   .chat-skill-body,
   .chat-compaction-body,
   .tool-card-body {
@@ -3217,8 +3217,11 @@
     overflow-y: auto;
   }
 
-  /* Thinking 使用低强调的内嵌折叠区，不借用工具卡片样式，避免调整波及工具输出。 */
-  .chat-thinking {
+  /*
+   * AI 响应过程（Thinking 与工具调用）的合并折叠区：沿用低强调的内嵌卡片，不借用工具卡片样式。
+   * 过程与正文分开渲染，收起过程不会影响回答正文的可见性。
+   */
+  .chat-process {
     min-width: 0;
     border: 1px solid var(--color-desk-line);
     border-radius: var(--radius-desk-md);
@@ -3226,7 +3229,7 @@
     color: var(--color-desk-muted);
   }
 
-  .chat-thinking > summary {
+  .chat-process > summary {
     display: flex;
     /* 预览另起一行：摘要行与预览各占一行，展开时预览隐藏，行数回到一行。 */
     flex-wrap: wrap;
@@ -3238,16 +3241,22 @@
     transition: background-color var(--default-transition-duration) ease;
   }
 
-  .chat-thinking > summary:hover {
+  .chat-process > summary:hover {
     background: var(--color-desk-canvas);
   }
 
-  .chat-thinking[open] > summary {
+  .chat-process[open] > summary {
     border-radius: var(--radius-desk-md) var(--radius-desk-md) 0 0;
   }
 
+  /* 段数与次数是次要信息，不与「过程」标题抢注意力。 */
+  .chat-process-count {
+    color: var(--color-desk-muted);
+    font-variant-numeric: tabular-nums;
+  }
+
   /* 状态点与提示文案同行对齐；运行中的点由模板按流式状态给出。 */
-  .chat-thinking-hint {
+  .chat-process-hint {
     display: inline-flex;
     align-items: center;
     gap: 0.375rem;
@@ -3273,7 +3282,7 @@
     mask-image: linear-gradient(to bottom, #000 55%, transparent);
   }
 
-  .chat-thinking[open] .chat-thinking-preview {
+  .chat-process[open] .chat-thinking-preview {
     display: none;
   }
 
@@ -3297,7 +3306,7 @@
     to { background-position: -120% 0; }
   }
 
-  .chat-thinking-body {
+  .chat-process-body {
     display: flex;
     min-width: 0;
     flex-direction: column;
@@ -3306,14 +3315,37 @@
     border-top: 1px solid var(--color-desk-line);
   }
 
-  .chat-thinking-body .markdown-content {
+  /* 单段思考：小标题 + 正文；正文自己有滚动上限，过程区块整体不滚动。 */
+  .chat-process-item {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 0.375rem;
+  }
+
+  .chat-process-item-label {
+    margin: 0;
+    color: var(--color-desk-muted);
+    font-size: var(--text-2xs);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  .chat-process-thinking {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 0.625rem;
+  }
+
+  .chat-process-thinking .markdown-content {
     --markdown-flow: 0.75rem;
     --markdown-section-gap: 1.25rem;
     color: var(--color-desk-muted);
     font-size: 0.8125rem;
   }
 
-  /* 技能调用卡：被 Pi 展开的机器内容，用与 Thinking 同级的低强调内嵌折叠区，不借用用户气泡。 */
+  /* 技能调用卡：被 Pi 展开的机器内容，用与过程区块同级的低强调内嵌折叠区，不借用用户气泡。 */
   .chat-skill {
     min-width: 0;
     border: 1px solid var(--color-desk-line);
@@ -3807,8 +3839,8 @@
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .chat-thinking > summary,
-    .chat-thinking .disclosure,
+    .chat-process > summary,
+    .chat-process .disclosure,
     .chat-skill > summary,
     .chat-skill .disclosure,
     .chat-compaction > summary,
@@ -3844,7 +3876,7 @@
     transform: rotate(90deg);
   }
 
-  /* 工具卡片保持独立的折叠外观；头部摘要由模板排版，不受 Thinking 样式影响。 */
+  /* 工具卡片保持独立的折叠外观；头部摘要由模板排版，不受过程区块样式影响。 */
   .tool-card {
     @apply rounded-desk-sm border border-desk-line bg-desk-surface;
   }
@@ -3940,7 +3972,7 @@
   .markdown-code-block pre::-webkit-scrollbar,
   .markdown-table-scroll::-webkit-scrollbar,
   .technical-detail-text::-webkit-scrollbar,
-  .chat-thinking-body::-webkit-scrollbar,
+  .chat-process-thinking::-webkit-scrollbar,
   .chat-skill-body::-webkit-scrollbar,
   .chat-compaction-body::-webkit-scrollbar,
   .tool-card-body::-webkit-scrollbar {
@@ -3953,7 +3985,7 @@
   .markdown-code-block pre::-webkit-scrollbar-track,
   .markdown-table-scroll::-webkit-scrollbar-track,
   .technical-detail-text::-webkit-scrollbar-track,
-  .chat-thinking-body::-webkit-scrollbar-track,
+  .chat-process-thinking::-webkit-scrollbar-track,
   .chat-skill-body::-webkit-scrollbar-track,
   .chat-compaction-body::-webkit-scrollbar-track,
   .tool-card-body::-webkit-scrollbar-track {
@@ -3966,7 +3998,7 @@
   .markdown-code-block pre::-webkit-scrollbar-thumb,
   .markdown-table-scroll::-webkit-scrollbar-thumb,
   .technical-detail-text::-webkit-scrollbar-thumb,
-  .chat-thinking-body::-webkit-scrollbar-thumb,
+  .chat-process-thinking::-webkit-scrollbar-thumb,
   .chat-skill-body::-webkit-scrollbar-thumb,
   .chat-compaction-body::-webkit-scrollbar-thumb,
   .tool-card-body::-webkit-scrollbar-thumb {
@@ -3981,7 +4013,7 @@
   .markdown-code-block pre::-webkit-scrollbar-thumb:hover,
   .markdown-table-scroll::-webkit-scrollbar-thumb:hover,
   .technical-detail-text::-webkit-scrollbar-thumb:hover,
-  .chat-thinking-body::-webkit-scrollbar-thumb:hover,
+  .chat-process-thinking::-webkit-scrollbar-thumb:hover,
   .chat-skill-body::-webkit-scrollbar-thumb:hover,
   .chat-compaction-body::-webkit-scrollbar-thumb:hover,
   .tool-card-body::-webkit-scrollbar-thumb:hover {

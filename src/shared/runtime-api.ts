@@ -240,7 +240,10 @@ export type PromptResult =
 /** 投影只重建页面要展示的内容块；诊断不进入内容块投影，用户消息图片以附件描述块表达，工具结果以独立工具条目表达。 */
 export type ProjectionBlockKind = 'text' | 'thinking' | 'toolcall'
 
-/** 块的 `text` 是当前完整内容；`truncated` 表示已按展示上限截断。 */
+/**
+ * 块的 `text` 是当前完整内容；`truncated` 表示已按展示上限截断。
+ * 收缩时工具调用块的参数文本会被清空，这类块的 `truncated` 同样为 true、`text` 为空串。
+ */
 export interface ProjectionBlock {
   readonly contentIndex: number
   readonly kind: ProjectionBlockKind
@@ -434,7 +437,9 @@ export interface ProjectionSnapshot {
   readonly seq: number
   readonly messages: readonly ProjectionMessage[]
   readonly tools: readonly ToolExecution[]
+  /** 投影是否收缩过：块被截断、过程细节被丢弃、AI 消息被丢弃或工具条目被截断时为 true。 */
   readonly truncated: boolean
+  /** 被丢弃的 AI 侧消息条数；用户消息永不丢弃，因此不计入。 */
   readonly droppedMessages: number
   readonly droppedTools: number
 }

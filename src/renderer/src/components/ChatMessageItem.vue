@@ -1,4 +1,4 @@
-<!-- 单条消息：按块展示正文、Thinking、技能卡、压缩卡、工具与计时（单条生成耗时与本轮响应耗时）与本次调用的 token 花销；Thinking 在生成中自动展开并跟随最新内容，结束后自动收起，折叠态显示尾部两行预览；用户消息下方使用细线图标操作栏，回退与修改后的重新发送由父级执行。 -->
+<!-- 单条消息：按块展示正文、过程区块、技能卡、压缩卡与计时（单条生成耗时与本轮响应耗时）与本次调用的 token 花销；Thinking 与工具调用合并成一个可折叠的过程区块（生成中展开并跟随最新思考，结束后收起，折叠态显示摘要与流式预览，手动开合优先，全局折叠开关可一次性收起全部过程），回答正文不进过程区块、始终可见；用户消息下方使用细线图标操作栏，回退与修改后的重新发送由父级执行。 -->
 <script setup lang="ts">
 import { computed, onUnmounted, reactive, ref, useId, watch } from 'vue'
 import { copyText } from '../clipboard'
@@ -16,6 +16,8 @@ const props = defineProps<{
   readonly actionsDisabled?: boolean
   /** 动作栏不可用的原因；禁用时替换默认 tooltip，用户据此知道在等什么。 */
   readonly disabledReason?: string | null
+  /** 全局折叠：为 true 时所有过程区块都收起，最终回答正文不受影响。 */
+  readonly processCollapsed?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -85,8 +87,8 @@ async function copyMessage(): Promise<void> {
   }
 }
 
-/** Thinking 的手动开合只保留在当前消息组件中；没有手动选择时按「正在生成的块自动展开」决定。 */
-const thinkingOverrides = reactive(new Map<string, boolean>())
+/** 过程区块的手动开合只保留在当前消息组件中；没有手动选择时按全局开关与生成状态决定。 */
+const processOverrides = reactive(new Map<string, boolean>())
 
 /** 技能卡初始折叠，流式更新不改变手动选择。 */
 const skillOverrides = reactive(new Map<string, boolean>())
@@ -133,7 +135,7 @@ const liveThinkingKey = computed(() => {
   return last !== undefined && last.kind === 'thinking' ? last.key : null
 })
 
-/** 流式 Thinking 的正文；跟随滚动只在这块存在且展开时生效。 */
+/** 流式 Thinking 的正文；跟随滚动只在这块存在且所属过程区块展开时生效。 */
 const liveThinking = computed(() => {
   const key = liveThinkingKey.value
   if (key === null) return null
@@ -141,29 +143,48 @@ const liveThinking = computed(() => {
   return block !== undefined && block.kind === 'thinking' ? { key, text: block.text } : null
 })
 
-const liveThinkingExpanded = computed(() => {
-  const key = liveThinkingKey.value
-  return key !== null && isThinkingExpanded(key)
-})
+/**
+ * 正文块与响应过程分开：正文（用户文本、图片、技能卡、AI 回答）保持原样展示，
+ * Thinking 与工具调用合并成一个可折叠的过程区块，回答正文不随过程收起。
+ */
+const textBlocks = computed(() => props.message.blocks.filter(block => block.kind === 'text'))
+const processBlocks = computed(() => props.message.blocks.filter(block => block.kind !== 'text'))
 
-/** 折叠态预览文案：随消息更新整体重算，每块只处理尾部固定长度，成本与思考总长无关。 */
-const thinkingPreviews = computed(() => {
-  const previews = new Map<string, string>()
-  for (const block of props.message.blocks) {
-    if (block.kind === 'thinking') previews.set(block.key, thinkingPreviewText(block.text))
+/** 过程区块的一行摘要：只数段数与次数，不解析正文。 */
+const processSummary = computed(() => {
+  let thinking = 0
+  let tools = 0
+  for (const block of processBlocks.value) {
+    if (block.kind === 'thinking') thinking += 1
+    else if (block.kind === 'toolcall') tools += 1
   }
-  return previews
+  const parts: string[] = []
+  if (thinking > 0) parts.push(`思考 ${thinking} 段`)
+  if (tools > 0) parts.push(`工具 ${tools} 次`)
+  return parts.join(' · ')
 })
 
-/** 没有手动选择时，正在生成的块自动展开；生成结束或不再是末块时自动收起。 */
-function isThinkingExpanded(key: string): boolean {
-  return thinkingOverrides.get(key) ?? key === liveThinkingKey.value
+/**
+ * 过程区块的开合：手动选择优先，其次是全局折叠开关，最后是生成状态——
+ * 生成中展开（流式思考与工具状态要能看见），结束后收起。
+ */
+const processExpanded = computed(() => {
+  const manual = processOverrides.get(props.message.id)
+  if (manual !== undefined) return manual
+  if (props.processCollapsed === true) return false
+  return generation.value?.phase === 'running'
+})
+
+/** 由 summary 的点击统一控制开合，键盘激活同样生效；手动选择优先于自动开合。 */
+function toggleProcess(): void {
+  processOverrides.set(props.message.id, !processExpanded.value)
 }
 
-/** 由 summary 的点击统一控制开合，键盘激活同样生效；手动选择优先于自动展开。 */
-function toggleThinking(key: string): void {
-  thinkingOverrides.set(key, !isThinkingExpanded(key))
-}
+/** 折叠态预览：生成中把正在思考的尾部片段放在摘要行，收起时仍能看出在做什么。 */
+const liveThinkingPreview = computed(() => {
+  const current = liveThinking.value
+  return current === null || processExpanded.value ? '' : thinkingPreviewText(current.text)
+})
 
 /** 距底部多少像素内仍视为贴在底部；与消息列表同一口径，避免流式更新与用户滚动互抢。 */
 const THINKING_FOLLOW_THRESHOLD_PX = 24
@@ -215,10 +236,10 @@ function onThinkingBodyScroll(event: Event): void {
 }
 
 /**
- * 流式思考的正文跟随：换块或重新展开时重置为跟随，跟随中每次文本更新滚到底部。
+ * 流式思考的正文跟随：换块或过程区块重新展开时重置为跟随，跟随中每次文本更新滚到底部。
  * 折叠期间元素不可见，滚动位置没有参考价值，因此重新展开一律从头跟随。
  */
-watch([liveThinking, liveThinkingExpanded], ([current, expanded], previous) => {
+watch([liveThinking, processExpanded], ([current, expanded], previous) => {
   if (current === null) return
   if (previous[0] === null || previous[0].key !== current.key || !previous[1]) {
     thinkingFollow.value = true
@@ -387,7 +408,45 @@ function onEditKeydown(event: KeyboardEvent): void {
       >{{ compactionNotice }}</p>
     </template>
 
-    <template v-for="block in message.blocks" :key="block.key">
+    <!-- AI 响应过程：Thinking 与工具调用合并成一个可折叠区块；生成中展开、结束后收起，最终回答正文始终可见。 -->
+    <details
+      v-if="processBlocks.length > 0"
+      class="chat-process self-start w-full"
+      :open="processExpanded"
+    >
+      <summary @click.prevent="toggleProcess">
+        <span class="disclosure"></span>
+        <span>过程</span>
+        <span class="chat-process-count">{{ processSummary }}</span>
+        <span v-if="liveThinkingKey !== null" class="chat-process-hint">
+          <span class="status-dots text-desk-accent" aria-hidden="true"><span></span><span></span><span></span></span>
+          思考中
+        </span>
+        <span v-if="liveThinkingPreview !== ''" class="chat-thinking-preview is-live">{{ liveThinkingPreview }}</span>
+      </summary>
+      <div class="chat-process-body">
+        <template v-for="block in processBlocks" :key="block.key">
+          <!-- 思考段落直接铺在过程区块里：外层已经负责开合，不再嵌一层折叠。 -->
+          <div v-if="block.kind === 'thinking'" class="chat-process-item">
+            <p class="chat-process-item-label">Thinking</p>
+            <div
+              class="chat-process-thinking"
+              :ref="element => registerThinkingBody(block.key, element)"
+              @scroll.passive="onThinkingBodyScroll"
+              @wheel.passive="onThinkingBodyWheel"
+              @pointerdown.passive="onThinkingBodyPointerDown"
+            >
+              <MarkdownContent :text="block.text" />
+              <p v-if="block.truncated" class="tool-note">此内容超出展示上限，已截断。</p>
+            </div>
+          </div>
+          <ToolCard v-else-if="block.kind === 'toolcall'" :block="block" />
+        </template>
+      </div>
+    </details>
+
+    <!-- 正文块保持原有顺序与样式：用户气泡、图片、技能卡与 AI 回答都不进过程区块。 -->
+    <template v-for="block in textBlocks" :key="block.key">
       <template v-if="block.kind === 'text'">
         <!-- 图片附件仍只来自用户消息的本地附件，不交给 Markdown 解析。 -->
         <img
@@ -423,43 +482,6 @@ function onEditKeydown(event: KeyboardEvent): void {
           <p v-if="block.truncated" class="chat-truncation-note">此内容超出展示上限，已截断。</p>
         </div>
       </template>
-
-      <!-- 流式 Thinking 自动展开并跟随最新内容，结束后自动收起；折叠态显示尾部两行预览，手动开合优先。 -->
-      <details
-        v-else-if="block.kind === 'thinking'"
-        :open="isThinkingExpanded(block.key)"
-        class="chat-thinking self-start w-full"
-      >
-        <summary @click.prevent="toggleThinking(block.key)">
-          <span class="disclosure"></span>
-          <span>Thinking</span>
-          <span class="chat-thinking-hint">
-            <span
-              v-if="block.key === liveThinkingKey"
-              class="status-dots text-desk-accent"
-              aria-hidden="true"
-            ><span></span><span></span><span></span></span>
-            {{ block.key === liveThinkingKey ? '思考中' : '思考过程' }}
-          </span>
-          <span
-            v-if="(thinkingPreviews.get(block.key) ?? '') !== ''"
-            class="chat-thinking-preview"
-            :class="{ 'is-live': block.key === liveThinkingKey }"
-          >{{ thinkingPreviews.get(block.key) ?? '' }}</span>
-        </summary>
-        <div
-          class="chat-thinking-body"
-          :ref="element => registerThinkingBody(block.key, element)"
-          @scroll.passive="onThinkingBodyScroll"
-          @wheel.passive="onThinkingBodyWheel"
-          @pointerdown.passive="onThinkingBodyPointerDown"
-        >
-          <MarkdownContent :text="block.text" />
-          <p v-if="block.truncated" class="tool-note">此内容超出展示上限，已截断。</p>
-        </div>
-      </details>
-
-      <ToolCard v-else-if="block.kind === 'toolcall'" :block="block" class="self-start w-full" />
     </template>
 
     <div v-if="isUser && hasUserContent && !editing" class="chat-message-actions" role="group" aria-label="用户消息操作">

@@ -1,4 +1,5 @@
-<!-- 消息区：按投影渲染、粘底与大纲导航；承接用户消息回退确认与修改提交，回退会新建会话（列表折叠为一条），项目文件不回退；回退与修改重试都把原消息文本与可还原的附件交回输入框。 -->
+<!-- 消息区：按投影渲染、粘底与大纲导航；承接用户消息回退确认与修改提交，回退会新建会话（列表折叠为一条），项目文件不回退；回退与修改重试都把原消息文本与可还原的附件交回输入框。
+     顶部窄带提供「折叠所有 AI 过程」开关：长会话可以只留用户输入与回答正文，过程区块按需展开。 -->
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
@@ -61,6 +62,12 @@ let resizeObserver: ResizeObserver | null = null
 const viewCache = createChatViewCache()
 
 const chatMessages = computed(() => viewCache.toMessages(messages.value, tools.value))
+/** 是否存在可折叠的 AI 响应过程；没有任何过程时整条折叠按钮不渲染，不占消息区高度。 */
+const hasProcess = computed(() => chatMessages.value.some(message => (
+  message.role === 'assistant' && message.blocks.some(block => block.kind !== 'text')
+)))
+/** 全局折叠开关只改展示，不按会话区分，也不写磁盘；见 session-view。 */
+const processCollapsed = computed(() => sessionViewStore.processCollapsed)
 const outlineEntries = computed(() => chatMessages.value
   .filter(message => message.role === 'user')
   .map(message => ({ id: message.id, label: outlineLabel(message) })))
@@ -181,11 +188,12 @@ const syncNotice = computed(() => {
     : '正在与主进程同步消息，暂不显示增量内容。'
 })
 const truncationNotice = computed(() => {
-  if (!projectionTruncated.value && droppedTools.value === 0) return null
   const parts: string[] = []
-  if (projectionTruncated.value) parts.push(`省略较早消息 ${droppedMessages.value} 条，超长内容已标记截断`)
+  if (droppedMessages.value > 0) parts.push(`省略较早 AI 响应 ${droppedMessages.value} 条`)
+  if (projectionTruncated.value) parts.push('较早的响应过程与超长内容已收缩')
   if (droppedTools.value > 0) parts.push(`省略较早工具记录 ${droppedTools.value} 条`)
-  return `投影已截断：${parts.join('，')}。`
+  if (parts.length === 0) return null
+  return `为控制体积已收缩 AI 侧内容（用户输入全部保留）：${parts.join('，')}。`
 })
 
 /**
@@ -556,6 +564,14 @@ onBeforeUnmount(() => {
 
 <template>
   <section ref="viewport" class="relative flex min-h-0 flex-1 flex-col bg-desk-canvas-sunken">
+    <!-- 长会话阅读辅助：一键收起所有 AI 过程；用户输入与回答正文始终可见。 -->
+    <div v-if="hasProcess" class="flex flex-none px-4 pt-2 sm:px-6">
+      <div class="chat-column mx-auto flex justify-end">
+        <AppButton variant="compact" @click="sessionViewStore.toggleProcessCollapsed()">
+          {{ processCollapsed ? '展开所有 AI 过程' : '折叠所有 AI 过程' }}
+        </AppButton>
+      </div>
+    </div>
     <div
       ref="scroller"
       class="scroll-area min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-6 [overflow-anchor:none]"
@@ -582,6 +598,7 @@ onBeforeUnmount(() => {
           :message="message"
           :actions-disabled="!canRewind"
           :disabled-reason="rewindBlockReason"
+          :process-collapsed="processCollapsed"
           :data-message-id="message.id"
           @rewind="requestRewind"
           @submit-edit="handleSubmitEdit"

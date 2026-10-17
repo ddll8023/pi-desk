@@ -12,7 +12,12 @@
  * （`agent_settled`）收口，因此包含工具执行与等待；恢复的历史轮次没有结束时刻，一律留空不推算；
  * 不保存原始事件、不持久化、不管理 Session、不解析 response 信封与退出；工具条目的生命周期交给
  * tool-projection，本模块负责聚合、批次、序号与确认。渲染端长度校验失败、序号缺口或未确认窗口
- * 超限都收敛到快照重同步，投影不猜测渲染端缺少的内容；触及展示上限时显式截断并计数，不伪装成完整内容。
+ * 超限都收敛到快照重同步，投影不猜测渲染端缺少的内容。
+ *
+ * 展示上限只收缩 AI 侧内容：用户输入是用户自己写下的内容，不参与条数与总量收缩；超限时先丢弃旧
+ * AI 消息的 Thinking 与工具参数文本，再把旧 AI 正文压成开头片段，最后才丢整条 AI 消息。
+ * 单块超长仍按单块上限截断，与角色无关。任何收缩都在投影上标记（截断标记或丢弃计数），
+ * 并让渲染端整表重同步，不伪装成完整内容。
  */
 import type {
   MessageUsage,
@@ -45,11 +50,21 @@ const MAX_BLOCK_CHARS = 262_144
 /** 投影保留图片附件的本体大小上限（估算字节）；超出只保留描述。 */
 const MAX_IMAGE_ATTACHMENT_BYTES = 8_388_608
 
-/** 投影保留的消息条数上限；超出丢弃最旧消息并计数。 */
-const MAX_MESSAGES = 200
+/**
+ * 非用户消息（AI 消息与压缩记录）的条数上限；超出按从旧到新的顺序丢弃并计数。
+ * 它是 DOM 体量的兜底，不是体积的主要约束：文本总量由 MAX_TOTAL_CHARS 控制，
+ * 而过程细节与旧正文会先被收缩，因此每条旧消息的实际占用已经很小。
+ */
+const MAX_NON_USER_MESSAGES = 400
 
-/** 投影文本总量上限；超出按从旧到新的顺序丢弃消息。 */
+/**
+ * 投影文本总量上限；超出按「过程细节 → AI 正文 → 整条 AI 消息」的顺序从旧到新收缩。
+ * 用户消息不参与收缩：界面必须始终能看到全部用户输入。
+ */
 const MAX_TOTAL_CHARS = 4_194_304
+
+/** 收缩后的旧 AI 正文保留字符数；只留开头并标截断，旧轮次仍可辨认。 */
+const COMPACTED_TEXT_CHARS = 2_048
 
 type ProjectedRole = 'user' | 'assistant' | 'compaction'
 
@@ -802,27 +817,121 @@ export class MessageProjection {
     })
   }
 
-  /** 消息数或文本总量超限时从最旧开始丢弃；丢弃后渲染端必须整表重同步。 */
+  /**
+   * 条数或文本总量超限时收缩 AI 侧内容，用户输入原样保留。
+   * 顺序固定：先丢旧 AI 的过程细节，再压缩旧 AI 正文，最后才丢整条 AI 消息；
+   * 每一步都改动了已下发的消息，因此任何一步生效都要让渲染端整表重同步。
+   */
   private enforceLimits(): void {
-    let dropped = 0
-    while (this.messages.length > MAX_MESSAGES) {
-      this.messages.shift()
-      dropped += 1
-    }
+    let changed = this.dropNonUserOverflow()
+    if (this.totalChars() > MAX_TOTAL_CHARS) changed = this.shrinkProcessDetail() || changed
+    if (this.totalChars() > MAX_TOTAL_CHARS) changed = this.compactAssistantText() || changed
+    if (this.totalChars() > MAX_TOTAL_CHARS) changed = this.dropOldestNonUser() || changed
+    if (!changed) return
+    this.needsResync = true
+    this.flush()
+  }
 
-    let total = this.messages.reduce((sum, message) => sum + this.messageChars(message), 0)
-    while (total > MAX_TOTAL_CHARS && this.messages.length > 1) {
-      const removed = this.messages.shift()
+  /** 条数上限只约束 AI 侧消息：用户消息有多少条都保留。 */
+  private dropNonUserOverflow(): boolean {
+    let dropped = 0
+    let count = 0
+    for (const message of this.messages) {
+      if (message.role !== 'user') count += 1
+    }
+    while (count > MAX_NON_USER_MESSAGES) {
+      const index = this.oldestDroppableIndex()
+      if (index < 0) break
+      this.messages.splice(index, 1)
+      dropped += 1
+      count -= 1
+    }
+    if (dropped === 0) return false
+    this.droppedMessages += dropped
+    this.truncated = true
+    return true
+  }
+
+  /**
+   * 丢弃旧 AI 消息的响应过程：Thinking 整块去掉，工具调用只保留名称与状态（参数文本清空）。
+   * 界面本来就把过程折叠展示，这部分体积最不影响阅读；工具条目本身由 ToolProjection 自己限界。
+   * 正在生成的消息不收缩：流式事件还会继续往它的块里追加，改它只会让块反复重建。
+   */
+  private shrinkProcessDetail(): boolean {
+    let total = this.totalChars()
+    let changed = false
+    for (const message of this.messages) {
+      if (total <= MAX_TOTAL_CHARS) break
+      if (message.role !== 'assistant' || message === this.active) continue
+      const kept: MutableBlock[] = []
+      for (const block of message.blocks) {
+        if (block.kind === 'thinking') {
+          total -= block.text.length
+          changed = true
+          continue
+        }
+        if (block.kind === 'toolcall' && block.text !== '') {
+          total -= block.text.length
+          block.text = ''
+          block.truncated = true
+          changed = true
+        }
+        kept.push(block)
+      }
+      if (kept.length !== message.blocks.length) message.blocks = kept
+    }
+    // 块被改动（思考丢弃或参数清空）也算收缩，顶部提示要能说出来。
+    if (changed) this.truncated = true
+    return changed
+  }
+
+  /** 旧 AI 正文只留开头：回答仍可辨认，长文体积不再无界；正在生成的消息同样不动。 */
+  private compactAssistantText(): boolean {
+    let total = this.totalChars()
+    let changed = false
+    for (const message of this.messages) {
+      if (total <= MAX_TOTAL_CHARS) break
+      if (message.role !== 'assistant' || message === this.active) continue
+      for (const block of message.blocks) {
+        if (block.kind !== 'text' || block.text.length <= COMPACTED_TEXT_CHARS) continue
+        total -= block.text.length - COMPACTED_TEXT_CHARS
+        block.text = block.text.slice(0, COMPACTED_TEXT_CHARS)
+        block.truncated = true
+        changed = true
+      }
+    }
+    if (changed) this.truncated = true
+    return changed
+  }
+
+  /** 最后手段：丢弃最旧的 AI 消息，用户输入与其余回答保持不动。 */
+  private dropOldestNonUser(): boolean {
+    let total = this.totalChars()
+    let dropped = 0
+    while (total > MAX_TOTAL_CHARS) {
+      const index = this.oldestDroppableIndex()
+      if (index < 0) break
+      const removed = this.messages[index]
       if (removed === undefined) break
+      this.messages.splice(index, 1)
       total -= this.messageChars(removed)
       dropped += 1
     }
-    if (dropped === 0) return
-
+    if (dropped === 0) return false
     this.droppedMessages += dropped
     this.truncated = true
-    this.needsResync = true
-    this.flush()
+    return true
+  }
+
+  /** 最旧的、可以丢弃的非用户消息；用户输入与正在生成的消息永远不是候选。 */
+  private oldestDroppableIndex(): number {
+    return this.messages.findIndex((message) => message.role !== 'user' && message !== this.active)
+  }
+
+  private totalChars(): number {
+    let total = 0
+    for (const message of this.messages) total += this.messageChars(message)
+    return total
   }
 
   private messageChars(message: MutableMessage): number {

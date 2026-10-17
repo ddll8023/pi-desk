@@ -13,6 +13,9 @@
  *
  * 另有一条不挂在会话键上的通道：回退与修改重试把原消息文本与附件交回输入区，
  * 它跨越回退新建的会话身份变化，因此只保留一份、由输入区消费一次。
+ *
+ * AI 响应过程的整体折叠是一条展示模式，不属于某个会话的阅读位置：所有会话共用一份，也不写磁盘，
+ * 因此切换会话不会突然换一套折叠状态，重启后仍从「过程按需展开」的默认视图开始。
  */
 import { defineStore } from 'pinia'
 import { computed, ref, watch } from 'vue'
@@ -59,6 +62,11 @@ export const useSessionViewStore = defineStore('session-view', () => {
    * 它跨越会话身份变化（回退会新建会话），因此不挂在会话键上；输入区消费一次后不再保留。
    */
   const requestedInput = ref<SessionInput | null>(null)
+  /**
+   * AI 响应过程（Thinking 与工具调用）是否整体折叠。默认不折叠：过程在生成中展开、结束后自动收起，
+   * 用户点「折叠所有 AI 过程」后才把每个过程区块都压成一行，最终回答正文始终可见。
+   */
+  const processCollapsed = ref(false)
   let stopRuntimeWatch: WatchStopHandle | null = null
 
   /** 前台实例报告的会话身份；未就绪或宿主失败时为空。 */
@@ -161,6 +169,11 @@ export const useSessionViewStore = defineStore('session-view', () => {
     return value
   }
 
+  /** 切换 AI 过程区块的整体折叠；只改展示，不改消息内容与折叠外的正文。 */
+  function toggleProcessCollapsed(): void {
+    processCollapsed.value = !processCollapsed.value
+  }
+
   /** base64 附件还原为本地文件；名称只用于提示与预览，不保留原始文件名。 */
   function toPendingImage(image: PromptImageInput, index: number): PendingImage {
     const binary = atob(image.data)
@@ -177,6 +190,7 @@ export const useSessionViewStore = defineStore('session-view', () => {
   return {
     key,
     requestedInput,
+    processCollapsed,
     initialize,
     dispose,
     takeInput,
@@ -185,6 +199,7 @@ export const useSessionViewStore = defineStore('session-view', () => {
     saveReading,
     requestInput,
     consumeRequestedInput,
+    toggleProcessCollapsed,
     createImage,
     releaseImages
   }
