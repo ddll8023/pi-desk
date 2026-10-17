@@ -17,6 +17,8 @@ export type DesktopErrorCode =
   | 'BRIDGE_CALL_FAILED'
   /** 项目存在受保护资源且尚无信任决定；先完成信任决定再重试。 */
   | 'TRUST_REQUIRED'
+  /** 写入前发现磁盘文件已被外部改动；由界面提示用户继续编辑或覆盖保存。 */
+  | 'CONFLICT'
 
 export interface DesktopError {
   readonly code: DesktopErrorCode
@@ -58,5 +60,6 @@ export function isAppInfoResult(value: unknown): value is AppInfoResult {
       || code === 'INVALID_RESPONSE'
       || code === 'BRIDGE_UNAVAILABLE'
       || code === 'BRIDGE_CALL_FAILED'
-      || code === 'TRUST_REQUIRED')
+      || code === 'TRUST_REQUIRED'
+      || code === 'CONFLICT')
 }

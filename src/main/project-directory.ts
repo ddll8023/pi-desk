@@ -10,10 +10,9 @@
  */
 import type { Dirent } from 'node:fs'
 import { lstat, readdir, realpath } from 'node:fs/promises'
-import { isAbsolute, join, sep } from 'node:path'
+import { join } from 'node:path'
 import { shell } from 'electron'
-import type { DesktopError } from '../shared/desktop-api'
-import { PROJECT_DIRECTORY_ENTRY_LIMIT, PROJECT_DIRECTORY_PATH_MAX_CHARS } from '../shared/project-file-api'
+import { PROJECT_DIRECTORY_ENTRY_LIMIT } from '../shared/project-file-api'
 import type {
   ProjectDirectoryEntry,
   ProjectDirectoryEntryKind,
@@ -21,6 +20,7 @@ import type {
   ProjectEntryPathResult,
   ProjectEntryRevealResult
 } from '../shared/project-file-api'
+import { isInsideRoot, normalizeRelativeDirectory, readFailureMessage, resolveProjectEntryAbsolute } from './project-entry-path'
 
 /** 只跳过版本库目录：其余条目（含 dotfiles）都如实展示，gitignore 过滤留到后续按开关处理。 */
 const SKIPPED_DIRECTORIES = new Set(['.git'])
@@ -42,7 +42,7 @@ export class ProjectDirectoryReader {
     if (root === null) {
       return { ok: false, error: { code: 'INVALID_REQUEST', message: '尚未选择项目，无法解析文件路径。' } }
     }
-    const resolved = await this.resolveAbsolute(root, path)
+    const resolved = await resolveProjectEntryAbsolute(root, path)
     if (!resolved.ok) return resolved
     return { ok: true, data: { path: resolved.relativePath, absolutePath: resolved.absolutePath } }
   }
@@ -56,7 +56,7 @@ export class ProjectDirectoryReader {
     if (root === null) {
       return { ok: false, error: { code: 'INVALID_REQUEST', message: '尚未选择项目，无法显示文件位置。' } }
     }
-    const resolved = await this.resolveAbsolute(root, path)
+    const resolved = await resolveProjectEntryAbsolute(root, path)
     if (!resolved.ok) return resolved
     try {
       // lstat 不跟随链接：指向已删除目标的符号链接本身仍然可以被定位。
@@ -74,33 +74,6 @@ export class ProjectDirectoryReader {
       return { ok: false, error: { code: 'INTERNAL_ERROR', message: `无法在文件管理器中显示：${resolved.relativePath}` } }
     }
     return { ok: true }
-  }
-
-  /**
-   * 相对路径到绝对路径的公共解析：只对父目录做 realpath 与包含性校验，最后一段按原名拼回。
-   * 因此父目录是符号链接且指向项目外时被拒绝，而条目本身是符号链接时解析为链接自身。
-   */
-  private async resolveAbsolute(root: string, input: string): Promise<EntryResolution> {
-    const relativePath = normalizeRelativeDirectory(input)
-    if (relativePath === null || relativePath === '') {
-      return entryFailure('INVALID_REQUEST', '条目路径必须是项目内的相对路径。')
-    }
-
-    const slash = relativePath.lastIndexOf('/')
-    const parentRelative = slash < 0 ? '' : relativePath.slice(0, slash)
-    const name = slash < 0 ? relativePath : relativePath.slice(slash + 1)
-    const parentAbsolute = parentRelative === '' ? root : join(root, ...parentRelative.split('/'))
-
-    let resolvedParent: string
-    try {
-      resolvedParent = await realpath(parentAbsolute)
-    } catch (error) {
-      return entryFailure('INTERNAL_ERROR', readFailureMessage(error, parentRelative))
-    }
-    if (!isInsideRoot(root, resolvedParent)) {
-      return entryFailure('INVALID_REQUEST', '条目路径超出当前项目范围。')
-    }
-    return { ok: true, relativePath, absolutePath: join(resolvedParent, name) }
   }
 
   /** 列举一层目录；未选择项目时返回空结果，与检索接口保持同一口径。 */
@@ -153,51 +126,6 @@ function failure(
   message: string
 ): ProjectDirectoryListResult {
   return { ok: false, error: { code, message } }
-}
-
-/** 条目路径解析的内部结果：成功同时给出规范化相对路径与绝对路径，失败带可展示原因。 */
-type EntryResolution =
-  | { readonly ok: true; readonly relativePath: string; readonly absolutePath: string }
-  | { readonly ok: false; readonly error: DesktopError }
-
-function entryFailure(code: 'INVALID_REQUEST' | 'INTERNAL_ERROR', message: string): EntryResolution {
-  return { ok: false, error: { code, message } }
-}
-
-/**
- * 相对目录路径规范化：统一分隔符、丢弃空段与 `.`，返回 POSIX 风格相对路径（根目录为 ''）。
- * 绝对路径、盘符开头、`..` 段与超长输入一律拒绝；不做 trim，避免改写真实存在的目录名。
- */
-function normalizeRelativeDirectory(input: string): string | null {
-  if (typeof input !== 'string' || input.length > PROJECT_DIRECTORY_PATH_MAX_CHARS) return null
-  const unified = input.replace(/\\/gu, '/')
-  if (unified === '' || unified === '/' || unified === '.') return ''
-  if (isAbsolute(unified) || /^[A-Za-z]:/u.test(unified)) return null
-
-  const segments: string[] = []
-  for (const segment of unified.split('/')) {
-    if (segment === '' || segment === '.') continue
-    if (segment === '..') return null
-    segments.push(segment)
-  }
-  return segments.join('/')
-}
-
-/** 目标目录必须落在项目根内：realpath 结果与根相同，或以「根 + 分隔符」开头。 */
-function isInsideRoot(root: string, resolved: string): boolean {
-  if (resolved === root) return true
-  const prefix = root.endsWith(sep) ? root : root + sep
-  return resolved.startsWith(prefix)
-}
-
-/** 读取失败的可展示原因：区分不存在、不是目录与没有权限，其余归为通用失败。 */
-function readFailureMessage(error: unknown, relative: string): string {
-  const target = relative === '' ? '项目根目录' : relative
-  const code = typeof error === 'object' && error !== null ? (error as NodeJS.ErrnoException).code : undefined
-  if (code === 'ENOENT') return `目录不存在：${target}`
-  if (code === 'ENOTDIR') return `路径不是目录：${target}`
-  if (code === 'EACCES' || code === 'EPERM') return `没有权限读取目录：${target}`
-  return `读取目录失败：${target}`
 }
 
 /** 目录优先、同类按名称排序；符号链接只按自身类型归类，因此不会排在目录里。 */

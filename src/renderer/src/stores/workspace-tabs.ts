@@ -1,13 +1,14 @@
 /**
- * 工作区标签状态：按项目分组的对话与终端标签、活动标签、标签顺序与标题覆盖。
+ * 工作区标签状态：按项目分组的对话、终端与文件标签，活动标签、标签顺序与标题覆盖。
  *
  * 标签是页面内的展示编排：活动的对话标签就是前台运行实例，其余对话标签由后台分片留底，
- * 因此切标签就是切前台；切项目换一组标签（对话与终端一起换），每个项目各自记住上次的活动标签。
+ * 因此切标签就是切前台；切项目换一组标签（对话、终端与文件一起换），每个项目各自记住上次的活动标签。
  * 顺序、活动标签、重命名与「有新回复」标记只留在内存里，不跨应用重启恢复：重启后每个项目回到一个空对话标签。
  *
- * 标签键是页面内编号，只在渲染端有效：对话标签记会话身份与它承载的运行实例，终端标签记终端标识。
- * 终端清单是主进程的真相，因此终端标签按清单派生（已消失的不再展示、新出现的追加到末尾），
- * 只有对话标签需要在这里登记；同一项目内至多保留一个未落盘的新对话标签。
+ * 标签键是页面内编号，只在渲染端有效：对话标签记会话身份与它承载的运行实例，终端标签记终端标识，
+ * 文件标签记一个编号（路径与编辑状态由 `project-editor` 持有）。终端清单是主进程的真相，因此终端标签
+ * 按清单派生（已消失的不再展示、新出现的追加到末尾）；对话与文件标签需要在这里登记。
+ * 文件标签只能由打开文件产生，不进入「新建」菜单；关闭脏文件前由界面确认。
  * 后台实例回复结束时给它的对话标签打「有新回复」标记，切到该标签即清除。
  * 新建对话的入口分两类：标签条与侧栏新建一个对话标签，`/new` 则在当前标签内就地替换
  * （结束原实例、清空会话身份与重命名，标签位置与顺序不变）。
@@ -20,16 +21,19 @@ import type { SessionRunState } from '../../../shared/session-run-api'
 import type { QuickCommand } from '../../../shared/quick-commands-api'
 import type { TerminalSessionInfo } from '../../../shared/terminal-api'
 import { useProjectStore } from './project'
+import { useProjectEditorStore } from './project-editor'
+import type { FileEditorMode, FileEditorRecord } from './project-editor'
 import { useRuntimeStore } from './runtime'
 import { useSessionRunsStore } from './session-runs'
 import { useSessionStore } from './session'
 import { useTerminalStore } from './terminal'
 
-/** 对话标签键前缀；终端标签键是 `term:<终端标识>`。 */
+/** 对话标签键前缀；终端标签键是 `term:<终端标识>`，文件标签键是 `file:<编号>`。 */
 const CHAT_KEY_PREFIX = 'chat:'
 const TERMINAL_KEY_PREFIX = 'term:'
+const FILE_KEY_PREFIX = 'file:'
 
-/** 标签类型：对话标签承载一个会话运行实例，终端标签承载一个终端进程。 */
+/** 可通过「新建」菜单主动创建的类型；文件标签只能由打开文件产生，不在新建入口里。 */
 export type WorkspaceTabKind = 'chat' | 'terminal'
 
 /**
@@ -48,13 +52,15 @@ interface ChatTabRecord {
 /** 标签的展示模型：标题与提示都已解析，标签条只负责渲染与派发意图。 */
 export interface WorkspaceTabView {
   readonly id: string
-  readonly kind: WorkspaceTabKind
+  readonly kind: WorkspaceTabKind | 'file'
   readonly title: string
   readonly tooltip: string
-  /** 终端标签的运行状态；对话标签没有这个概念。 */
+  /** 终端标签的运行状态；对话与文件标签没有这个概念。 */
   readonly terminalStatus: 'running' | 'exited' | null
-  /** 该对话标签的实例已结束本轮回复，而用户还没切到过它；终端标签始终为假。 */
+  /** 该对话标签的实例已结束本轮回复，而用户还没切到过它；其余标签始终为假。 */
   readonly unseenCompletion: boolean
+  /** 文件标签有未保存修改；关闭前需要确认。 */
+  readonly dirty: boolean
 }
 
 export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
@@ -63,6 +69,7 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
   const sessionRunsStore = useSessionRunsStore()
   const sessionStore = useSessionStore()
   const terminalStore = useTerminalStore()
+  const editorStore = useProjectEditorStore()
 
   /** 按项目保存的标签键顺序；数组顺序即标签顺序。 */
   const orders = ref<Readonly<Record<string, readonly string[]>>>({})
@@ -113,7 +120,19 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
   const isChatActive = computed(() => activeTab.value !== null && isChatKey(activeTab.value))
 
   /**
-   * 活动对话标签正在展示的会话身份；活动标签是终端或该标签的实例尚未建立时为空。
+   * 当前项目已打开的文件记录，顺序与标签一致；文件面板按它逐个挂载，非活动面板只隐藏不卸载，
+   * 因此切回来仍是同一份编辑内容与撤销历史。
+   */
+  const openFiles = computed<readonly FileEditorRecord[]>(() => {
+    if (currentProjectPath.value === null) return []
+    return projectKeys.value
+      .filter(isFileKey)
+      .map(key => editorStore.recordOf(key))
+      .filter((record): record is FileEditorRecord => record !== null)
+  })
+
+  /**
+   * 活动对话标签正在展示的会话身份；活动标签是终端或文件标签、或该标签的实例尚未建立时为空。
    * 与 `focusChatTab` 取同一个口径（未落盘的新会话取实例报告的会话），界面据此判断会话是否已展示。
    */
   const activeSessionId = computed<string | null>(() => {
@@ -237,6 +256,20 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
   }
 
   /**
+   * 打开一个项目内文件：已打开时聚焦已有标签，否则新建文件标签并切过去。
+   * `mode` 用于右键菜单的「打开 Markdown 预览」；非 Markdown 文件会忽略该参数。
+   * 读取由编辑记录异步完成，标签先出现并展示读取中状态。
+   */
+  function openFileTab(path: string, mode: FileEditorMode = 'code'): void {
+    const projectPath = currentProjectPath.value
+    if (projectPath === null) return
+    const key = editorStore.open(projectPath, path)
+    if (mode !== 'code') editorStore.setMode(key, mode)
+    appendKey(projectPath, key)
+    setActive(projectPath, key)
+  }
+
+  /**
    * 新建对话标签：同一项目内至多一个未落盘的新对话标签，重复点击聚焦已有的那个。
    * Runtime 闲置时只建立标签、不提交打开请求，空对话本来就能直接输入。
    * `projectPath` 由调用方给出时按它建标签（侧栏可能刚切项目，不等切换完成也能落到正确项目）。
@@ -284,12 +317,19 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
 
   /**
    * 关闭标签：对话标签结束它承载的运行实例（中断在途操作、解除占用、关闭宿主，保留会话历史文件），
-   * 终端标签关掉那个终端进程。任一步失败都保留标签，避免出现「实例还在、标签已消失」。
+   * 终端标签关掉那个终端进程，文件标签只清内存编辑记录、不改动磁盘（有未保存修改时由界面先确认）。
+   * 任一步失败都保留标签，避免出现「实例还在、标签已消失」。
    */
   async function closeTab(key: string): Promise<void> {
     const located = locate(key)
     if (located === null) return
     const projectPath = located.projectPath
+    if (isFileKey(key)) {
+      // 文件标签只清内存记录，磁盘文件与其中的改动都不由关闭动作处理。
+      editorStore.close(key)
+      removeKey(projectPath, key)
+      return
+    }
     if (isChatKey(key)) {
       const runId = resolveRunId(projectPath, key)
       if (runId !== null && !await sessionRunsStore.close(runId)) return
@@ -358,6 +398,7 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     for (const key of orders.value[projectPath] ?? []) {
       if (isChatKey(key)) forgetChatTab(key)
     }
+    editorStore.closeProject(projectPath)
     const nextOrders = { ...orders.value }
     delete nextOrders[projectPath]
     orders.value = nextOrders
@@ -380,6 +421,9 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
       if (seen.has(key)) continue
       if (isChatKey(key)) {
         if (chatTabs.value[key] === undefined) continue
+      } else if (isFileKey(key)) {
+        // 文件标签的有效性由编辑记录决定：记录被关闭后，登记过的键自然失效。
+        if (editorStore.recordOf(key) === null) continue
       } else if (!alive.has(key)) {
         continue
       }
@@ -394,14 +438,30 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     return keys
   }
 
-  /** 标签的展示模型：对话标签取会话摘要，终端标签取终端标题与运行状态。 */
+  /** 标签的展示模型：对话标签取会话摘要，终端标签取终端标题与运行状态，文件标签取文件名与脏标记。 */
   function viewOf(projectPath: string, key: string): WorkspaceTabView {
     if (isChatKey(key)) {
       const record = chatTabs.value[key] ?? { sessionId: null, runId: null }
       const title = titleOfChat(projectPath, key, record)
       const detail = record.sessionId === null ? '尚未落盘的新会话' : `会话 ${record.sessionId}`
       return { id: key, kind: 'chat', title, tooltip: `${title}\n${detail}`, terminalStatus: null,
-        unseenCompletion: unseenCompletions.value.has(key) }
+        unseenCompletion: unseenCompletions.value.has(key), dirty: false }
+    }
+    if (isFileKey(key)) {
+      const record = editorStore.recordOf(key)
+      if (record === null) {
+        return { id: key, kind: 'file', title: '文件', tooltip: '', terminalStatus: null,
+          unseenCompletion: false, dirty: false }
+      }
+      return {
+        id: key,
+        kind: 'file',
+        title: renames.value[key] ?? record.name,
+        tooltip: `${record.name}\n${record.path}`,
+        terminalStatus: null,
+        unseenCompletion: false,
+        dirty: record.dirty
+      }
     }
     const session = terminalOf(key)
     const title = titleOfTerminal(key, session)
@@ -411,7 +471,8 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
       title,
       tooltip: session === null ? title : `${title}\n${session.shell}\n${session.cwd}\n${terminalStatusText(session)}`,
       terminalStatus: session === null ? null : session.status,
-      unseenCompletion: false
+      unseenCompletion: false,
+      dirty: false
     }
   }
 
@@ -689,6 +750,10 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     return key.startsWith(CHAT_KEY_PREFIX)
   }
 
+  function isFileKey(key: string): boolean {
+    return key.startsWith(FILE_KEY_PREFIX)
+  }
+
   function terminalIdOf(key: string): string | null {
     return key.startsWith(TERMINAL_KEY_PREFIX) ? key.slice(TERMINAL_KEY_PREFIX.length) : null
   }
@@ -705,6 +770,7 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     activeSessionId,
     activeTerminalId,
     isChatActive,
+    openFiles,
     terminalTabId,
     initialize,
     dispose,
@@ -712,6 +778,7 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     createTab,
     runQuickCommand,
     openNewChatTab,
+    openFileTab,
     startNewChatInTab,
     closeTab,
     renameTab,

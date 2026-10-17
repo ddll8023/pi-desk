@@ -1,4 +1,4 @@
-/** 为沙箱页面提供应用信息、Project 选择/添加/移除/列表、项目文件检索、目录列举与条目路径解析、Session、会话运行状态、终端、Project Trust、偏好与快捷命令、Runtime、Pi 资源、Pi 默认模型、Pi 版本检查、自定义供应商、认证与 Extension 等受限接口，不暴露 Electron、任意 channel 或系统能力。 */
+/** 为沙箱页面提供应用信息、Project 选择/添加/移除/列表、项目文件检索、目录列举、条目路径解析与文件内容读写、Session、会话运行状态、终端、Project Trust、偏好与快捷命令、Runtime、Pi 资源、Pi 默认模型、Pi 版本检查、自定义供应商、认证与 Extension 等受限接口，不暴露 Electron、任意 channel 或系统能力。 */
 import { contextBridge, ipcRenderer } from 'electron'
 import type { IpcRendererEvent } from 'electron'
 import { APP_INFO_CHANNEL, isAppInfoResult } from '../shared/desktop-api'
@@ -75,11 +75,17 @@ import {
   PROJECT_DIRECTORY_LIST_CHANNEL,
   PROJECT_ENTRY_RESOLVE_CHANNEL,
   PROJECT_ENTRY_REVEAL_CHANNEL,
+  PROJECT_FILE_READ_CHANNEL,
   PROJECT_FILE_SEARCH_CHANNEL,
+  PROJECT_FILE_STAT_CHANNEL,
+  PROJECT_FILE_WRITE_CHANNEL,
   isProjectDirectoryListResult,
   isProjectEntryPathResult,
   isProjectEntryRevealResult,
-  isProjectFileSearchResult
+  isProjectFileReadResult,
+  isProjectFileSearchResult,
+  isProjectFileStatResult,
+  isProjectFileWriteResult
 } from '../shared/project-file-api'
 import type {
   ProjectDirectoryListRequest,
@@ -88,7 +94,13 @@ import type {
   ProjectEntryPathResult,
   ProjectEntryRevealResult,
   ProjectFileApi,
-  ProjectFileSearchResult
+  ProjectFileReadRequest,
+  ProjectFileReadResult,
+  ProjectFileSearchResult,
+  ProjectFileStatRequest,
+  ProjectFileStatResult,
+  ProjectFileWriteRequest,
+  ProjectFileWriteResult
 } from '../shared/project-file-api'
 import {
   TERMINAL_ACK_CHANNEL,
@@ -299,6 +311,9 @@ const INVALID_PROJECT_FILE_RESPONSE = '桌面接口返回了无法识别的文�
 const INVALID_PROJECT_DIRECTORY_RESPONSE = '桌面接口返回了无法识别的目录列举结果。'
 const INVALID_PROJECT_ENTRY_PATH_RESPONSE = '桌面接口返回了无法识别的条目路径解析结果。'
 const INVALID_PROJECT_ENTRY_REVEAL_RESPONSE = '桌面接口返回了无法识别的显示文件位置结果。'
+const INVALID_PROJECT_FILE_READ_RESPONSE = '桌面接口返回了无法识别的文件读取结果。'
+const INVALID_PROJECT_FILE_WRITE_RESPONSE = '桌面接口返回了无法识别的文件保存结果。'
+const INVALID_PROJECT_FILE_STAT_RESPONSE = '桌面接口返回了无法识别的文件状态结果。'
 const INVALID_SESSION_LIST_RESPONSE = '桌面接口返回了无法识别的会话列表。'
 const INVALID_SESSION_RUNS_RESPONSE = '桌面接口返回了无法识别的会话运行状态。'
 const INVALID_PREFERENCES_RESPONSE = '桌面接口返回了无法识别的界面偏好。'
@@ -368,6 +383,18 @@ function invalidProjectEntryPathResponse(): ProjectEntryPathResult {
 
 function invalidProjectEntryRevealResponse(): ProjectEntryRevealResult {
   return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_PROJECT_ENTRY_REVEAL_RESPONSE } }
+}
+
+function invalidProjectFileReadResponse(): ProjectFileReadResult {
+  return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_PROJECT_FILE_READ_RESPONSE } }
+}
+
+function invalidProjectFileWriteResponse(): ProjectFileWriteResult {
+  return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_PROJECT_FILE_WRITE_RESPONSE } }
+}
+
+function invalidProjectFileStatResponse(): ProjectFileStatResult {
+  return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_PROJECT_FILE_STAT_RESPONSE } }
 }
 
 function invalidSessionResponse(): SessionListResult {
@@ -551,6 +578,35 @@ const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionAp
     const payload: ProjectEntryPathRequest = { path: request.path }
     const response: unknown = await ipcRenderer.invoke(PROJECT_ENTRY_REVEAL_CHANNEL, payload)
     return isProjectEntryRevealResult(response) ? response : invalidProjectEntryRevealResponse()
+  },
+
+  /** 读取项目内文件内容；只搬运相对路径，内容分类与大小上限由主进程判定。 */
+  async readProjectFile(request: ProjectFileReadRequest) {
+    const payload: ProjectFileReadRequest = { path: request.path }
+    const response: unknown = await ipcRenderer.invoke(PROJECT_FILE_READ_CHANNEL, payload)
+    return isProjectFileReadResult(response) ? response : invalidProjectFileReadResponse()
+  },
+
+  /** 保存项目内文本文件；只搬运相对路径、文本与磁盘基线，越界与符号链接由主进程拒绝。 */
+  async writeProjectFile(request: ProjectFileWriteRequest) {
+    const payload: ProjectFileWriteRequest = {
+      path: request.path,
+      text: request.text,
+      eol: request.eol,
+      bom: request.bom,
+      expected: request.expected === null
+        ? null
+        : { size: request.expected.size, mtimeMs: request.expected.mtimeMs }
+    }
+    const response: unknown = await ipcRenderer.invoke(PROJECT_FILE_WRITE_CHANNEL, payload)
+    return isProjectFileWriteResult(response) ? response : invalidProjectFileWriteResponse()
+  },
+
+  /** 查询项目内文件的磁盘基线；只回元数据，不读内容。 */
+  async statProjectFile(request: ProjectFileStatRequest) {
+    const payload: ProjectFileStatRequest = { path: request.path }
+    const response: unknown = await ipcRenderer.invoke(PROJECT_FILE_STAT_CHANNEL, payload)
+    return isProjectFileStatResult(response) ? response : invalidProjectFileStatResponse()
   },
 
   async openSession(sessionId: string | null, allowInterrupt: boolean, listLimit: number) {

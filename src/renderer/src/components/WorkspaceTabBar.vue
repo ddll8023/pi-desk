@@ -1,5 +1,5 @@
 <!--
-  工作区标签条：对话与终端标签同处一组，顺序可拖动调整，横向滚动不换行，新建按钮紧跟最后一个标签。
+  工作区标签条：对话、终端与文件标签同处一组，顺序可拖动调整，横向滚动不换行，新建按钮紧跟最后一个标签。
 
   标签只负责展示与派发意图：标签清单、活动标签、顺序与标题都来自工作区标签状态，重命名与顺序只在
   页面内生效、不回传主进程。重命名有两个入口：双击标签，或右键标签打开菜单选「重命名」；编辑态用
@@ -230,6 +230,12 @@ function onTablistKeydown(event: KeyboardEvent): void {
   if (id !== undefined) emit('select', id)
 }
 
+/** 标签类型的读屏文案；重命名输入框与标签本身共用。 */
+function kindLabel(kind: WorkspaceTabView['kind']): string {
+  if (kind === 'chat') return '对话'
+  return kind === 'terminal' ? '终端' : '文件'
+}
+
 /** 菜单内键盘导航：Esc 收起并把焦点还给触发元素；Tab 只在菜单内循环。 */
 function onMenuKeydown(event: KeyboardEvent, close: () => void, popup: HTMLElement | null): void {
   if (event.key === 'Escape') {
@@ -277,7 +283,7 @@ function onMenuKeydown(event: KeyboardEvent, close: () => void, popup: HTMLEleme
             v-model="draft"
             class="workspace-tab-rename"
             type="text"
-            :aria-label="`${tab.kind === 'chat' ? '对话' : '终端'}标签标题`"
+            :aria-label="`${kindLabel(tab.kind)}标签标题`"
             @keydown.enter.prevent="commitRename"
             @keydown.esc.prevent="cancelRename"
             @blur="commitRename"
@@ -293,12 +299,17 @@ function onMenuKeydown(event: KeyboardEvent, close: () => void, popup: HTMLEleme
             @click="emit('select', tab.id)"
             @dblclick="startRename(tab)"
           >
-            <!-- 对话标签用气泡图标，终端标签用运行状态点：两类标签在同一组里仍能一眼区分。 -->
+            <!-- 对话标签用气泡图标，终端标签用运行状态点，文件标签用文档图标：三类标签在同一组里仍能一眼区分。 -->
             <svg
               v-if="tab.kind === 'chat'"
               class="workspace-tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"
               stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"
             ><path d="M20 12a7 7 0 0 1-7 7H8l-4 3v-5.5A7 7 0 0 1 11 5h2a7 7 0 0 1 7 7Z" /></svg>
+            <svg
+              v-else-if="tab.kind === 'file'"
+              class="workspace-tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+              stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"
+            ><path d="M14 3v5h5" /><path d="M6 3h8l5 5v13H6z" /></svg>
             <span
               v-else
               class="workspace-tab-dot"
@@ -306,6 +317,9 @@ function onMenuKeydown(event: KeyboardEvent, close: () => void, popup: HTMLEleme
               aria-hidden="true"
             ></span>
             <span class="workspace-tab-title">{{ tab.title }}</span>
+            <!-- 未保存：实心小圆点与提示；读屏靠后面的隐藏文本表达。 -->
+            <span v-if="tab.dirty" class="workspace-tab-dirty" aria-hidden="true"></span>
+            <span v-if="tab.dirty" class="sr-only">有未保存修改</span>
             <!-- 有新回复：强调色圆点与标题变色一起提示；读屏靠后面的隐藏文本表达。 -->
             <span v-if="tab.unseenCompletion" class="workspace-tab-dot is-unseen" aria-hidden="true"></span>
             <span v-if="tab.unseenCompletion" class="sr-only">有新回复</span>

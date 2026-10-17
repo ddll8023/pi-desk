@@ -1802,7 +1802,7 @@
     overflow: hidden;
   }
 
-  /* 工作区标签条：对话与终端标签同处一组；标签横向滚动不换行，新建按钮跟在最后一个标签之后。 */
+  /* 工作区标签条：对话、终端与文件标签同处一组；标签横向滚动不换行，新建按钮跟在最后一个标签之后。 */
   .workspace-tabs {
     display: flex;
     min-width: 0;
@@ -1996,7 +1996,7 @@
     flex: none;
   }
 
-  /* 面板层：对话与终端面板叠放在标签条之下的同一区域，只显示活动标签。 */
+  /* 面板层：对话、终端与文件面板叠放在标签条之下的同一区域，只显示活动标签。 */
   .workspace-panes {
     position: relative;
     display: flex;
@@ -2022,6 +2022,163 @@
   .workspace-pane.is-hidden {
     visibility: hidden;
     pointer-events: none;
+  }
+
+  /* 文件标签的未保存标记：小实心点，不参与点击与布局测量。 */
+  .workspace-tab-dirty {
+    width: 6px;
+    height: 6px;
+    flex: none;
+    border-radius: 999px;
+    background: var(--color-desk-warning);
+  }
+
+  /* 文件标签面板：头部固定，主体占满剩余高度，代码与预览在主体内叠放。 */
+  .file-editor {
+    display: flex;
+    min-width: 0;
+    min-height: 0;
+    flex: 1;
+    flex-direction: column;
+    background: var(--color-desk-surface);
+  }
+
+  .file-editor-header {
+    display: flex;
+    flex: none;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    border-bottom: 1px solid var(--color-desk-line);
+    padding: 0.5rem 0.75rem;
+  }
+
+  .file-editor-heading {
+    min-width: 0;
+    flex: 1;
+  }
+
+  .file-editor-name {
+    display: flex;
+    align-items: center;
+    gap: 0.375rem;
+    font-size: var(--text-md);
+    font-weight: 600;
+    color: var(--color-desk-ink);
+  }
+
+  .file-editor-dirty {
+    font-size: 10px;
+    color: var(--color-desk-warning);
+  }
+
+  .file-editor-path {
+    margin-top: 0.125rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: var(--font-mono);
+    font-size: var(--text-2xs);
+    color: var(--color-desk-muted);
+  }
+
+  .file-editor-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.375rem;
+  }
+
+  .file-editor-switch {
+    display: flex;
+    overflow: hidden;
+    border: 1px solid var(--color-desk-line-strong);
+    border-radius: var(--radius-desk-sm);
+  }
+
+  .file-editor-switch-item {
+    padding: 0.125rem 0.5rem;
+    font-size: var(--text-2xs);
+    color: var(--color-desk-muted);
+  }
+
+  .file-editor-switch-item.is-active {
+    background: var(--color-desk-accent-soft);
+    color: var(--color-desk-accent);
+  }
+
+  .file-editor-body {
+    position: relative;
+    display: flex;
+    min-width: 0;
+    min-height: 0;
+    flex: 1;
+    flex-direction: column;
+  }
+
+  .file-editor-notice {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.75rem;
+    font-size: 0.8125rem;
+    color: var(--color-desk-muted);
+  }
+
+  .file-editor-notice.is-error {
+    color: var(--color-desk-danger);
+  }
+
+  /* 代码与预览叠放：两层都占满主体，隐藏层用 visibility 保留尺寸，CodeMirror 不需要重新测量。 */
+  .file-editor-surface {
+    position: relative;
+    min-width: 0;
+    min-height: 0;
+    flex: 1;
+  }
+
+  .file-editor-layer {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    min-width: 0;
+    min-height: 0;
+    flex-direction: column;
+  }
+
+  .file-editor-layer.is-hidden {
+    visibility: hidden;
+    pointer-events: none;
+  }
+
+  .file-editor-code {
+    height: 100%;
+    min-height: 0;
+    flex: 1;
+  }
+
+  .file-editor-preview {
+    overflow: auto;
+    padding: 1rem 1.25rem;
+  }
+
+  .file-editor-image {
+    display: flex;
+    min-height: 0;
+    flex: 1;
+    align-items: center;
+    justify-content: center;
+    overflow: auto;
+    padding: 1rem;
+    background: var(--color-desk-canvas-sunken);
+  }
+
+  .file-editor-image img {
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
   }
 
   .workspace-notice {

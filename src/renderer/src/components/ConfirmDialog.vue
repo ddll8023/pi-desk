@@ -3,14 +3,18 @@
 import { nextTick, onUnmounted, ref, useId, watch } from 'vue'
 import AppButton from './ui/AppButton.vue'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   /** 弹层由父级常驻挂载，`open` 控制进入/退出与焦点、快捷键生命周期。 */
   readonly open: boolean
   readonly title: string
   readonly description: string
   readonly detail: string
   readonly confirmLabel: string
-}>()
+  /** 确认按钮的视觉语义；破坏性操作用 danger，纯提示用 default。 */
+  readonly confirmVariant?: 'default' | 'primary' | 'danger'
+}>(), {
+  confirmVariant: 'danger'
+})
 
 const emit = defineEmits<{
   confirm: []
@@ -71,7 +75,7 @@ onUnmounted(() => {
       </div>
       <div class="dialog-footer">
         <AppButton @click="emit('cancel')">取消</AppButton>
-        <AppButton variant="danger" @click="emit('confirm')">
+        <AppButton :variant="props.confirmVariant" @click="emit('confirm')">
           {{ confirmLabel }}
         </AppButton>
       </div>

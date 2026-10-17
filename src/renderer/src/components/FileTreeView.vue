@@ -1,10 +1,11 @@
 <!--
-  文件树视图：查找输入、目录树与检索结果共用一列滚动容器；只读，不打开文件也不改动磁盘。
+  文件树视图：查找输入、目录树与检索结果共用一列滚动容器；本组件不修改磁盘，打开文件交给工作区文件标签。
 
   输入非空时改由主进程的文件检索给出候选（最多 50 条），清空即回到目录树；目录树按层懒读取，
-  展开状态与读取缓存由 store 持有，本组件只负责触发与展示。行点击对目录是展开折叠、对文件只是选中，
-  仍然没有「打开文件」这一层：行上新增的是拖动与右键菜单，两者都只把项目内相对路径交给下游，
-  绝对路径、越界判定与平台分隔符一律由主进程解析。文件图标按扩展名分组着色，只用于快速辨认类型。
+  展开状态与读取缓存由 store 持有，本组件只负责触发与展示。行点击对目录是展开折叠、对文件是在工作区
+  打开文件标签（预览与编辑），符号链接与其他特殊文件不提供打开。行上另有拖动与右键菜单，两者都只把
+  项目内相对路径交给下游，绝对路径、越界判定与平台分隔符一律由主进程解析。文件图标按扩展名分组着色，
+  只用于快速辨认类型。
 
   拖动只在应用内成立（自定义 MIME，不写 text/plain），落点是终端面板；右键与键盘菜单键打开操作菜单，
   菜单项与动作在 FileTreeMenu 里，本组件只负责把被指向的那一行交给它，并在面板内回报一次性结果。
@@ -17,6 +18,7 @@ import { setProjectEntryDragData } from '../project-entry-drag'
 import { useProjectDirectoryStore } from '../stores/project-directory'
 import type { FileTreeRow } from '../stores/project-directory'
 import { useProjectStore } from '../stores/project'
+import { useWorkspaceTabsStore } from '../stores/workspace-tabs'
 import AppButton from './ui/AppButton.vue'
 import FileTreeMenu from './FileTreeMenu.vue'
 
@@ -48,6 +50,7 @@ const MARKUP_EXTENSIONS = new Set(['html', 'htm', 'css', 'scss', 'sass', 'less',
 
 const projectStore = useProjectStore()
 const directoryStore = useProjectDirectoryStore()
+const workspaceTabsStore = useWorkspaceTabsStore()
 const { currentProject } = storeToRefs(projectStore)
 const { rows, searchView, selectedPath } = storeToRefs(directoryStore)
 
@@ -135,7 +138,10 @@ function clearQuery(): void {
   directoryStore.clearFilter()
 }
 
-/** 目录行展开折叠，文件行只选中：本期没有打开文件的行为，不给出会落空的承诺。 */
+/**
+ * 目录行展开折叠，文件行在工作区打开；符号链接与特殊文件（kind 为 other）不提供打开，
+ * 避免跟随链接读到项目外，也不对无法编辑的条目给出会落空的承诺。
+ */
 function onRowClick(row: FileTreeRow): void {
   if (row.type !== 'entry') return
   const projectPath = currentProject.value?.path
@@ -145,6 +151,17 @@ function onRowClick(row: FileTreeRow): void {
     return
   }
   directoryStore.select(row.path)
+  if (row.kind === 'file') {
+    workspaceTabsStore.openFileTab(row.path)
+    return
+  }
+  showNotice({ text: '符号链接或特殊文件不提供预览与编辑。', tone: 'muted' })
+}
+
+/** 检索结果都是文件：点击直接在工作区打开。 */
+function onSearchRowClick(path: string): void {
+  directoryStore.select(path)
+  workspaceTabsStore.openFileTab(path)
 }
 
 /** 切换项目时清掉上一个项目的查询串与选中行，并读取新项目的根层。 */
@@ -275,7 +292,7 @@ onBeforeUnmount(() => {
               :class="{ 'is-selected': row.path === selectedPath, 'is-dragging': draggingPath === row.path }"
               :title="row.path"
               draggable="true"
-              @click="directoryStore.select(row.path)"
+              @click="onSearchRowClick(row.path)"
               @dragstart="onSearchRowDragStart(row, $event)"
               @dragend="endEntryDrag"
               @contextmenu.prevent="onSearchRowMenu(row, $event)"

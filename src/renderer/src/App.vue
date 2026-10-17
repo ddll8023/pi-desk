@@ -1,4 +1,4 @@
-<!-- 主界面外壳：编排工作区标签组（对话与终端面板）、项目两阶段添加/移除确认、会话删除确认、快捷命令的新增/编辑/删除与运行、信任与中断对话框、版本更新提示、视图切换、侧栏「新建」到输入坞的聚焦请求、新建会话落盘后的会话列表补读及各展示 Store 生命周期。 -->
+<!-- 主界面外壳：编排工作区标签组（对话、终端与文件面板）、项目两阶段添加/移除确认、会话删除确认、快捷命令的新增/编辑/删除与运行、信任与中断对话框、版本更新提示、视图切换、侧栏「新建」到输入坞的聚焦请求、新建会话落盘后的会话列表补读及各展示 Store 生命周期。 -->
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
@@ -25,6 +25,7 @@ import ChatMessageList from './components/ChatMessageList.vue'
 import ConfirmDialog from './components/ConfirmDialog.vue'
 import ExtensionDialog from './components/ExtensionDialog.vue'
 import ExtensionNotificationBar from './components/ExtensionNotificationBar.vue'
+import FileEditorView from './components/FileEditorView.vue'
 import PromptComposer from './components/PromptComposer.vue'
 import ProjectSidebar from './components/ProjectSidebar.vue'
 import QuickCommandDialog from './components/QuickCommandDialog.vue'
@@ -61,7 +62,7 @@ const projectToRemove = ref<Project | null>(null)
 /** 待确认删除的会话：项目路径加摘要；确认后以 allowInterrupt 提交，取消不改动任何文件。 */
 const sessionToRemove = ref<{ readonly projectPath: string; readonly session: SessionSummary } | null>(null)
 
-/** 当前项目路径；终端、快捷命令与文件树都用它作为上下文。 */
+/** 当前项目路径；终端、快捷命令、文件树与文件标签都用它作为上下文。 */
 const projectPath = computed(() => currentProject.value?.path ?? null)
 /** 当前项目可用的快捷命令：项目命令在前，全局命令在后。 */
 const quickCommandsForProject = computed(() => quickCommandsStore.commandsForProject(projectPath.value))
@@ -173,6 +174,31 @@ function requestCommandRemoval(command: QuickCommand): void {
 
 function cancelCommandRemoval(): void {
   commandToRemove.value = null
+}
+
+/** 待确认关闭的脏文件标签；确认后才丢弃未保存修改并关闭。 */
+const pendingFileClose = ref<string | null>(null)
+const pendingFileCloseTitle = computed(() => (
+  workspaceTabsStore.tabs.find(tab => tab.id === pendingFileClose.value)?.title ?? ''
+))
+
+/**
+ * 关闭标签：有未保存修改的文件标签先确认，其余直接交给工作区标签状态。
+ * 对话与终端的关闭流程不变。
+ */
+function onCloseTab(key: string): void {
+  const tab = workspaceTabsStore.tabs.find(candidate => candidate.id === key)
+  if (tab !== undefined && tab.dirty) {
+    pendingFileClose.value = key
+    return
+  }
+  void workspaceTabsStore.closeTab(key)
+}
+
+function confirmFileClose(): void {
+  const key = pendingFileClose.value
+  pendingFileClose.value = null
+  if (key !== null) void workspaceTabsStore.closeTab(key)
 }
 
 async function confirmCommandRemoval(): Promise<void> {
@@ -354,7 +380,7 @@ onUnmounted(() => {
       <main class="app-workspace">
         <SettingsView v-if="settingsOpen" />
         <template v-else>
-          <!-- 标签组：对话与终端同级混排；标签按当前项目分组，切换项目就换一组。 -->
+          <!-- 标签组：对话、终端与文件同级混排；标签按当前项目分组，切换项目就换一组。 -->
           <WorkspaceTabBar
             :tabs="workspaceTabsStore.tabs"
             :active-tab="workspaceTabsStore.activeTab"
@@ -362,7 +388,7 @@ onUnmounted(() => {
             :quick-commands="quickCommandsForProject"
             :project-path="projectPath"
             @select="workspaceTabsStore.activateTab"
-            @close="workspaceTabsStore.closeTab"
+            @close="onCloseTab"
             @create="workspaceTabsStore.createTab"
             @rename="workspaceTabsStore.renameTab"
             @move="workspaceTabsStore.moveTab"
@@ -391,7 +417,7 @@ onUnmounted(() => {
             <AppButton variant="unstyled" class="workspace-notice-close" aria-label="关闭提示" @click="sessionRunsStore.clearCloseError()">关闭</AppButton>
           </p>
 
-          <!-- 面板层：对话与各终端面板叠放在同一区域，只显示活动标签。
+          <!-- 面板层：对话、终端与文件面板叠放在同一区域，只显示活动标签。
                隐藏用 visibility 而不是 display：面板始终保持真实尺寸，输入框量高与终端尺寸测量在隐藏时也成立。 -->
           <div class="workspace-panes">
             <div
@@ -432,6 +458,18 @@ onUnmounted(() => {
                 @add-command="addQuickCommand"
                 @manage-commands="openCommandSettings"
               />
+            </div>
+
+            <!-- 文件面板：当前项目已打开的文件各自保持挂载，非活动标签只隐藏，切回来仍是同一份编辑内容与撤销历史。 -->
+            <div
+              v-for="file in workspaceTabsStore.openFiles"
+              :key="file.key"
+              class="workspace-pane"
+              :class="{ 'is-hidden': workspaceTabsStore.activeTab !== file.key }"
+              :inert="workspaceTabsStore.activeTab !== file.key"
+              :aria-hidden="workspaceTabsStore.activeTab !== file.key"
+            >
+              <FileEditorView :tab-key="file.key" :active="workspaceTabsStore.activeTab === file.key" />
             </div>
 
             <!-- 没有活动标签（例如关掉了全部对话标签）时的空状态：新建入口是唯一动作。 -->
@@ -489,6 +527,17 @@ onUnmounted(() => {
         :confirm-label="isRemovingCurrentSession ? '停止并删除' : '删除会话'"
         @confirm="confirmSessionRemoval"
         @cancel="cancelSessionRemoval"
+      />
+
+      <!-- 脏文件标签关闭前确认：确认后丢弃未保存修改并关闭，不可恢复。 -->
+      <ConfirmDialog
+        :open="pendingFileClose !== null"
+        title="关闭文件会丢弃未保存的修改"
+        description="该文件有未保存的修改，关闭标签后不可恢复。需要保留时先取消并保存。"
+        :detail="pendingFileCloseTitle"
+        confirm-label="丢弃并关闭"
+        @confirm="confirmFileClose"
+        @cancel="pendingFileClose = null"
       />
 
       <!-- 顶栏会话 chip 使用的会话选择弹层。 -->

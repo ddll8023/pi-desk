@@ -1,10 +1,13 @@
-/** 作为渲染端项目文件检索、目录列举与条目路径解析的入口，收敛桥接缺失与通信异常。 */
+/** 作为渲染端项目文件检索、目录列举、条目路径解析与文件内容读写的入口，收敛桥接缺失与通信异常。 */
 import type { DesktopError } from '../../../shared/desktop-api'
 import type {
   ProjectDirectoryListResult,
   ProjectEntryPathResult,
   ProjectEntryRevealResult,
-  ProjectFileSearchResult
+  ProjectFileReadResult,
+  ProjectFileSearchResult,
+  ProjectFileStatResult,
+  ProjectFileWriteResult
 } from '../../../shared/project-file-api'
 
 function unavailable(): { ok: false; error: DesktopError } {
@@ -68,6 +71,48 @@ export async function revealProjectEntry(path: string): Promise<ProjectEntryReve
   if (!bridge || typeof bridge.revealProjectEntry !== 'function') return unavailable()
   try {
     return await bridge.revealProjectEntry({ path })
+  } catch (error) {
+    return callFailed(error)
+  }
+}
+
+/** 读取项目内文件内容；文本、图片与不支持三类结果都由主进程判定，页面不自行猜测类型。 */
+export async function readProjectFile(path: string): Promise<ProjectFileReadResult> {
+  const bridge = window.desktop
+  if (!bridge || typeof bridge.readProjectFile !== 'function') return unavailable()
+  try {
+    return await bridge.readProjectFile({ path })
+  } catch (error) {
+    return callFailed(error)
+  }
+}
+
+/**
+ * 保存项目内文本文件；`expected` 为读取时的磁盘基线，传 null 表示用户已确认覆盖。
+ * 磁盘基线不一致时主进程回 CONFLICT，不写入任何内容。
+ */
+export async function writeProjectFile(
+  path: string,
+  text: string,
+  eol: 'lf' | 'crlf',
+  bom: boolean,
+  expected: { readonly size: number; readonly mtimeMs: number } | null
+): Promise<ProjectFileWriteResult> {
+  const bridge = window.desktop
+  if (!bridge || typeof bridge.writeProjectFile !== 'function') return unavailable()
+  try {
+    return await bridge.writeProjectFile({ path, text, eol, bom, expected })
+  } catch (error) {
+    return callFailed(error)
+  }
+}
+
+/** 查询文件磁盘基线；用于标签重新激活或窗口聚焦时判断外部改动。 */
+export async function statProjectFile(path: string): Promise<ProjectFileStatResult> {
+  const bridge = window.desktop
+  if (!bridge || typeof bridge.statProjectFile !== 'function') return unavailable()
+  try {
+    return await bridge.statProjectFile({ path })
   } catch (error) {
     return callFailed(error)
   }

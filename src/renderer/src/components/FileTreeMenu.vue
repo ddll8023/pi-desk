@@ -1,16 +1,18 @@
 <!--
-  右侧面板文件行的操作菜单：插入到终端、复制路径、复制文件名与在系统文件管理器中显示。
+  右侧面板文件行的操作菜单：打开、打开 Markdown 预览、插入到终端、复制路径、复制文件名与在系统文件管理器中显示。
 
   菜单由文件树行按需打开（右键或键盘菜单键），锚点就是那一行，定位、翻转与收边都交给共用的锚定浮层；
   样式直接复用侧栏菜单的类，与左侧项目/会话菜单同一套令牌与层级。动作都只派发一次：
-  「插入到终端」写入当前活动终端（活动标签不是终端时禁用并写明原因），复制与显示所需的绝对路径
-  一律经主进程解析，页面不自行拼接路径。每个动作的成败都用面板内的一次性提示回报，不静默失败。
+  「打开」把项目内相对路径交给工作区文件标签；「插入到终端」写入当前活动终端（活动标签不是终端时禁用
+  并写明原因），复制与显示所需的绝对路径一律经主进程解析，页面不自行拼接路径。
+  复制、插入与显示动作的成败用面板内的一次性提示回报；打开动作的结果由文件标签自己展示。
 -->
 <script setup lang="ts">
 import { computed, nextTick, ref } from 'vue'
 import type { ProjectDirectoryEntryKind } from '../../../shared/project-file-api'
 import { useAnchoredPopup } from '../anchored-popup'
 import { copyText } from '../clipboard'
+import { isMarkdownPath } from '../file-language'
 import { projectEntryInsertText } from '../project-entry-drag'
 import { resolveProjectEntryPath, revealProjectEntry } from '../services/project-file'
 import { useDesktopStore } from '../stores/desktop'
@@ -114,6 +116,29 @@ function closeMenu(restoreFocus = false): void {
 }
 
 defineExpose({ open: openMenu, close: closeMenu })
+
+/** 文件类条目才提供打开动作；目录、符号链接与其他特殊文件只能复制/显示。 */
+const canOpen = computed(() => target.value?.kind === 'file')
+/** 只有 Markdown 文件提供「打开 Markdown 预览」；其余文件的预览模式没有意义。 */
+const markdownTarget = computed(() => (
+  target.value !== null && target.value.kind === 'file' && isMarkdownPath(target.value.path)
+))
+
+/** 打开文件：交给工作区文件标签，已打开时聚焦已有标签。 */
+function openEntry(): void {
+  const entry = target.value
+  closeMenu()
+  if (entry === null || entry.kind !== 'file') return
+  workspaceTabsStore.openFileTab(entry.path)
+}
+
+/** 以 Markdown 预览模式打开；非 Markdown 文件由编辑状态忽略该模式。 */
+function openMarkdownPreview(): void {
+  const entry = target.value
+  closeMenu()
+  if (entry === null || entry.kind !== 'file') return
+  workspaceTabsStore.openFileTab(entry.path, 'preview')
+}
 
 /** 插入到当前活动终端：绝对路径由主进程解析，写入只补一个空格，不隐式回车。 */
 function insertIntoTerminal(): void {
@@ -235,6 +260,24 @@ function onMenuKeydown(event: KeyboardEvent): void {
           <p class="sidebar-menu-title">{{ target.name }}</p>
           <p class="sidebar-menu-path">{{ target.path }}</p>
         </div>
+        <AppButton
+          variant="unstyled"
+          class="project-sidebar-menu-item"
+          :disabled="!canOpen"
+          :title="canOpen ? '在工作区打开，可预览与编辑' : '只有普通文件可以打开'"
+          @click="openEntry"
+        >
+          打开
+        </AppButton>
+        <AppButton
+          v-if="markdownTarget"
+          variant="unstyled"
+          class="project-sidebar-menu-item"
+          title="以渲染后的预览打开 Markdown"
+          @click="openMarkdownPreview"
+        >
+          打开 Markdown 预览
+        </AppButton>
         <AppButton
           variant="unstyled"
           class="project-sidebar-menu-item"

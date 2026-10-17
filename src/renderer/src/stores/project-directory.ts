@@ -61,7 +61,7 @@ export const useProjectDirectoryStore = defineStore('project-directory', () => {
   const views = ref<Readonly<Record<string, DirectoryView>>>({})
   /** 按项目保存的展开目录集合；只在内存里，不写配置。 */
   const expanded = ref<Readonly<Record<string, readonly string[]>>>({})
-  /** 当前选中的条目路径；只用于高亮，本期不打开文件。 */
+  /** 当前选中的条目路径；只用于高亮，打开文件由文件树组件交给工作区标签处理。 */
   const selectedPath = ref<string | null>(null)
   /** 过滤输入；空串表示展示目录树。 */
   const filter = ref('')
@@ -118,7 +118,7 @@ export const useProjectDirectoryStore = defineStore('project-directory', () => {
     if (next.includes(directory)) void ensureLoaded(projectPath, directory)
   }
 
-  /** 选中一行；本期只做高亮，不打开文件。 */
+  /** 选中一行；只做高亮，打开文件由调用方另行处理。 */
   function select(path: string | null): void {
     selectedPath.value = path
   }

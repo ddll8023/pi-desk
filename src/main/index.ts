@@ -1,4 +1,4 @@
-/** 管理唯一桌面窗口、本地资产边界，以及应用信息、Project 选择/添加/移除、项目文件检索与目录列举、Session 与 Project Trust、会话运行状态（查询、释放与结束）、内置终端（PTY）、界面偏好、快捷命令、Runtime、Pi 默认模型、自定义供应商配置、认证、Pi 版本检查、Extension IPC、事件广播及退出编排。 */
+/** 管理唯一桌面窗口、本地资产边界，以及应用信息、Project 选择/添加/移除、项目文件检索、目录列举与文件内容读写、Session 与 Project Trust、会话运行状态（查询、释放与结束）、内置终端（PTY）、界面偏好、快捷命令、Runtime、Pi 默认模型、自定义供应商配置、认证、Pi 版本检查、Extension IPC、事件广播及退出编排。 */
 import { mkdirSync } from 'node:fs'
 import { realpath } from 'node:fs/promises'
 import { dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
@@ -46,14 +46,21 @@ import {
   PROJECT_ENTRY_RESOLVE_CHANNEL,
   PROJECT_ENTRY_REVEAL_CHANNEL,
   PROJECT_FILE_QUERY_MAX_CHARS,
+  PROJECT_FILE_READ_CHANNEL,
   PROJECT_FILE_SEARCH_CHANNEL,
-  isProjectEntryPathRequest
+  PROJECT_FILE_STAT_CHANNEL,
+  PROJECT_FILE_WRITE_CHANNEL,
+  isProjectEntryPathRequest,
+  isProjectFileWriteRequest
 } from '../shared/project-file-api'
 import type {
   ProjectDirectoryListResult,
   ProjectEntryPathResult,
   ProjectEntryRevealResult,
-  ProjectFileSearchResult
+  ProjectFileReadResult,
+  ProjectFileSearchResult,
+  ProjectFileStatResult,
+  ProjectFileWriteResult
 } from '../shared/project-file-api'
 import {
   TERMINAL_ACK_CHANNEL,
@@ -242,6 +249,7 @@ import { ModelsConfigError, ModelsConfigManager } from './models-config-manager'
 import { PiSettingsError, PiSettingsManager } from './pi-settings-manager'
 import { PreferencesManager } from './preferences-manager'
 import { ProjectDirectoryReader } from './project-directory'
+import { ProjectFileContent } from './project-file-content'
 import { ProjectFileIndex } from './project-file-index'
 import { ProjectManager } from './project-manager'
 import { McpInspectionManager } from './mcp-inspection'
@@ -346,6 +354,10 @@ const projectFileIndex = new ProjectFileIndex({
 })
 /** 项目目录读取：右侧面板文件树的单层列举，根路径同样只取当前项目。 */
 const projectDirectory = new ProjectDirectoryReader({
+  currentProjectPath: () => projectManager.currentProjectPath()
+})
+/** 项目文件内容：工作区文件标签的读取、保存与磁盘基线查询，根路径同样只取当前项目。 */
+const projectFileContent = new ProjectFileContent({
   currentProjectPath: () => projectManager.currentProjectPath()
 })
 /** 认证执行端：管理认证辅助进程，凭据读写全在官方实现内完成。 */
@@ -604,6 +616,18 @@ function projectEntryRevealFailure(code: DesktopErrorCode, message: string): Pro
   return { ok: false, error: { code, message } }
 }
 
+function projectFileReadFailure(code: DesktopErrorCode, message: string): ProjectFileReadResult {
+  return { ok: false, error: { code, message } }
+}
+
+function projectFileWriteFailure(code: DesktopErrorCode, message: string): ProjectFileWriteResult {
+  return { ok: false, error: { code, message } }
+}
+
+function projectFileStatFailure(code: DesktopErrorCode, message: string): ProjectFileStatResult {
+  return { ok: false, error: { code, message } }
+}
+
 function sessionFailure(code: SessionErrorCode, message: string): SessionListResult {
   return { ok: false, error: { code, message } }
 }
@@ -849,7 +873,8 @@ function registerProjectHandlers(pageUrl: string): void {
 }
 
 /**
- * 文件检索只接受一个查询串、目录列举与条目路径解析只接受项目内相对路径；根都是当前项目，页面不能指定绝对路径，也不返回文件内容。
+ * 文件检索只接受一个查询串、目录列举与条目路径解析只接受项目内相对路径；根都是当前项目，页面不能指定绝对路径。
+ * 文件内容读写同样只接受项目内相对路径：读返回文本/图片/不支持三类结果，写只接受文本并比对磁盘基线；
  * 解析与「在文件管理器中显示」共用同一个条目解析：越界、绝对路径与非法段一律拒绝。
  */
 function registerProjectFileHandlers(pageUrl: string): void {
@@ -926,6 +951,45 @@ function registerProjectFileHandlers(pageUrl: string): void {
         return projectEntryRevealFailure('INVALID_REQUEST', '显示文件位置只接受一个项目内相对路径请求。')
       }
       return projectDirectory.revealEntry(args[0].path)
+    }
+  )
+
+  handle(
+    PROJECT_FILE_READ_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<ProjectFileReadResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return projectFileReadFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 1 || !isProjectEntryPathRequest(args[0])) {
+        return projectFileReadFailure('INVALID_REQUEST', '读取文件只接受一个项目内相对路径请求。')
+      }
+      return projectFileContent.read(args[0].path)
+    }
+  )
+
+  handle(
+    PROJECT_FILE_WRITE_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<ProjectFileWriteResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return projectFileWriteFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 1 || !isProjectFileWriteRequest(args[0])) {
+        return projectFileWriteFailure('INVALID_REQUEST', '保存文件只接受一个项目内相对路径、文本与磁盘基线请求。')
+      }
+      return projectFileContent.write(args[0])
+    }
+  )
+
+  handle(
+    PROJECT_FILE_STAT_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<ProjectFileStatResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return projectFileStatFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 1 || !isProjectEntryPathRequest(args[0])) {
+        return projectFileStatFailure('INVALID_REQUEST', '读取文件状态只接受一个项目内相对路径请求。')
+      }
+      return projectFileContent.stat(args[0].path)
     }
   )
 }

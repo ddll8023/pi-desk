@@ -11,7 +11,7 @@ import { DEFAULT_SETTINGS_SECTION, isSettingsSectionId } from '../settings-navig
 import type { SettingsSectionId } from '../settings-navigation'
 
 export const useSettingsStore = defineStore('settings', () => {
-  /** 设置页是否占据工作区；false 时工作区显示对话与终端标签。 */
+  /** 设置页是否占据工作区；false 时工作区显示对话、终端与文件标签。 */
   const open = ref(false)
   /** 当前分节；始终是合法 id。 */
   const activeSection = ref<SettingsSectionId>(DEFAULT_SETTINGS_SECTION)
@@ -22,7 +22,7 @@ export const useSettingsStore = defineStore('settings', () => {
     open.value = true
   }
 
-  /** 关闭设置页，回到对话与终端标签。 */
+  /** 关闭设置页，回到对话、终端与文件标签。 */
   function closeSettings(): void {
     open.value = false
   }

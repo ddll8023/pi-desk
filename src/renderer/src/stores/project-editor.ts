@@ -1,0 +1,257 @@
+/**
+ * 工作区文件标签的编辑状态：按项目保存已打开文件的读取结果、编辑模式、脏标记与磁盘冲突。
+ *
+ * 文件内容读写全经主进程：这里只保存「读到了什么、用户改没改、磁盘基线是什么」，
+ * 不自行拼接绝对路径。读取结果分文本、图片与「不支持」三类；只有文本可编辑。
+ *
+ * 脏标记由编辑器上报，保存时把当前文本交给主进程，并把返回的新磁盘基线写回记录；
+ * 外部改动通过 `stat` 比对 size/mtimeMs 发现：未修改的文件自动重新载入，有未保存修改时
+ * 只标记冲突，等用户选择覆盖保存或继续编辑，绝不静默丢弃改动。
+ */
+import { defineStore } from 'pinia'
+import { ref } from 'vue'
+import type { DesktopError } from '../../../shared/desktop-api'
+import type {
+  ProjectFileImageContent,
+  ProjectFileTextContent,
+  ProjectFileUnsupportedContent
+} from '../../../shared/project-file-api'
+import { fileNameOf, isMarkdownPath } from '../file-language'
+import { readProjectFile, statProjectFile, writeProjectFile } from '../services/project-file'
+
+/** 文件标签的展示模式：代码视图与 Markdown 预览；只有 Markdown 文件能切到预览。 */
+export type FileEditorMode = 'code' | 'preview'
+
+/** 一次读取的结果状态；错误与「不支持」分开，界面据此给出不同的提示与动作。 */
+export type FileLoadView =
+  | { readonly phase: 'loading' }
+  | { readonly phase: 'ready'; readonly content: ProjectFileTextContent | ProjectFileImageContent }
+  | { readonly phase: 'unsupported'; readonly content: ProjectFileUnsupportedContent }
+  | { readonly phase: 'error'; readonly error: DesktopError }
+
+/** 一个打开的文件标签记录；`key` 与工作区标签键一致。 */
+export interface FileEditorRecord {
+  readonly key: string
+  readonly projectPath: string
+  readonly path: string
+  readonly name: string
+  readonly markdown: boolean
+  readonly load: FileLoadView
+  readonly mode: FileEditorMode
+  readonly dirty: boolean
+  /** 组件卸载前捕获的未保存文本；为 null 表示编辑区与磁盘内容一致。 */
+  readonly draft: string | null
+  readonly saving: boolean
+  readonly saveError: string | null
+  /** 磁盘文件在本次编辑期间被外部改动，且当前有未保存修改；需要用户选择如何处理。 */
+  readonly conflict: boolean
+}
+
+const FILE_KEY_PREFIX = 'file:'
+
+export const useProjectEditorStore = defineStore('project-editor', () => {
+  const records = ref<Readonly<Record<string, FileEditorRecord>>>({})
+  let nextFileTabId = 1
+
+  /** 按标签键取记录；不存在时为 null。 */
+  function recordOf(key: string): FileEditorRecord | null {
+    return records.value[key] ?? null
+  }
+
+  /** 同项目内已打开的文件键；用于「再次点击同一文件时聚焦已有标签」。 */
+  function keyOf(projectPath: string, path: string): string | null {
+    for (const record of Object.values(records.value)) {
+      if (record.projectPath === projectPath && record.path === path) return record.key
+    }
+    return null
+  }
+
+  function update(key: string, patch: Partial<FileEditorRecord>): void {
+    const record = records.value[key]
+    if (record === undefined) return
+    records.value = { ...records.value, [key]: { ...record, ...patch } }
+  }
+
+  /**
+   * 打开一个文件：同项目同路径已打开时直接返回原键，由调用方聚焦该标签。
+   * 新键先登记为读取中并立即返回，让标签先出现，读取结果随后写入；读取失败保留错误状态，
+   * 不建立可编辑的假内容。
+   */
+  function open(projectPath: string, path: string): string {
+    const existing = keyOf(projectPath, path)
+    if (existing !== null) return existing
+
+    const key = `${FILE_KEY_PREFIX}${nextFileTabId}`
+    nextFileTabId += 1
+    const record: FileEditorRecord = {
+      key,
+      projectPath,
+      path,
+      name: fileNameOf(path),
+      markdown: isMarkdownPath(path),
+      load: { phase: 'loading' },
+      mode: 'code',
+      dirty: false,
+      draft: null,
+      saving: false,
+      saveError: null,
+      conflict: false
+    }
+    records.value = { ...records.value, [key]: record }
+    void loadInto(key)
+    return key
+  }
+
+  /** 读取或重新读取文件内容；成功后清掉脏标记、保存错误与冲突，失败保留可展示的原因。 */
+  async function loadInto(key: string): Promise<void> {
+    const record = records.value[key]
+    if (record === undefined) return
+    // 重新载入是读取失败后的重试或磁盘无改动时的动作：脏标记、草稿与冲突在这一刻结束。
+    update(key, { load: { phase: 'loading' }, dirty: false, draft: null, conflict: false, saveError: null })
+    const result = await readProjectFile(record.path)
+    // 期间标签可能已被关闭；迟到的结果不再写回。
+    if (records.value[key] === undefined) return
+    if (!result.ok) {
+      update(key, { load: { phase: 'error', error: result.error } })
+      return
+    }
+    const content = result.data
+    if (content.kind === 'unsupported') {
+      update(key, { load: { phase: 'unsupported', content } })
+      return
+    }
+    update(key, { load: { phase: 'ready', content }, saveError: null })
+  }
+
+  /** 关闭文件标签：只清内存记录，不改动磁盘。 */
+  function close(key: string): void {
+    if (records.value[key] === undefined) return
+    const next = { ...records.value }
+    delete next[key]
+    records.value = next
+  }
+
+  /** 关闭某个项目的全部文件记录；项目被移除时调用，避免残留。 */
+  function closeProject(projectPath: string): void {
+    const next = Object.fromEntries(
+      Object.entries(records.value).filter(([, record]) => record.projectPath !== projectPath)
+    )
+    records.value = next
+  }
+
+  /** 编辑器上报内容变化：只改脏标记，文本由编辑器自己持有，避免每次击键搬运整份内容。 */
+  function markDirty(key: string): void {
+    const record = records.value[key]
+    if (record === undefined || record.dirty) return
+    update(key, { dirty: true })
+  }
+
+  /**
+   * 组件卸载前捕获未保存文本：打开设置页或切换项目会卸载文件面板，草稿必须留在状态里，
+   * 否则重新挂载后未保存的修改会静默丢失。文本与磁盘基线一致时不留草稿。
+   */
+  function captureDraft(key: string, text: string): void {
+    const record = records.value[key]
+    if (record === undefined || record.load.phase !== 'ready') return
+    const content = record.load.content
+    const draft = content.kind === 'text' && text !== content.text ? text : null
+    if (record.draft === draft) return
+    update(key, { draft, dirty: draft !== null })
+  }
+
+  /** 切换代码视图与 Markdown 预览；非 Markdown 文件忽略该动作。 */
+  function setMode(key: string, mode: FileEditorMode): void {
+    const record = records.value[key]
+    if (record === undefined || !record.markdown) return
+    if (record.mode === mode) return
+    update(key, { mode })
+  }
+
+  /**
+   * 保存当前文本：`force` 为真表示用户已确认覆盖外部改动，跳过磁盘基线比对。
+   * 成功时把返回的新基线写回记录，并清除脏标记与冲突；失败保留原因，CONFLICT 额外标记冲突。
+   */
+  async function save(key: string, text: string, force = false): Promise<boolean> {
+    const record = records.value[key]
+    if (record === undefined || record.load.phase !== 'ready') return false
+    const content = record.load.content
+    if (content.kind !== 'text' || record.saving) return false
+
+    update(key, { saving: true, saveError: null })
+    const expected = force ? null : { size: content.size, mtimeMs: content.mtimeMs }
+    const result = await writeProjectFile(record.path, text, content.eol, content.bom, expected)
+    if (records.value[key] === undefined) return false
+    if (!result.ok) {
+      update(key, {
+        saving: false,
+        saveError: result.error.message,
+        conflict: result.error.code === 'CONFLICT'
+      })
+      return false
+    }
+    update(key, {
+      saving: false,
+      dirty: false,
+      draft: null,
+      conflict: false,
+      saveError: null,
+      load: {
+        phase: 'ready',
+        content: { ...content, text, size: result.data.size, mtimeMs: result.data.mtimeMs }
+      }
+    })
+    return true
+  }
+
+  /**
+   * 检查磁盘是否被外部改动。未修改的文件自动重新载入；有未保存修改时只标记冲突。
+   * 已在冲突状态或正在保存时不重复检查，避免覆盖用户的选择。
+   * 等待 `stat` 期间保存可能已经完成，因此拿到结果后重新取一次记录再比对，不用旧基线覆盖新状态。
+   */
+  async function checkExternal(key: string): Promise<void> {
+    const initial = records.value[key]
+    if (initial === undefined || initial.load.phase !== 'ready' || initial.saving || initial.conflict) return
+
+    const result = await statProjectFile(initial.path)
+    const latest = records.value[key]
+    if (latest === undefined || latest.load.phase !== 'ready' || latest.saving || latest.conflict) return
+    if (!result.ok) return
+
+    const baseline = latest.load.content
+    if (!result.data.exists) {
+      if (latest.dirty) update(key, { conflict: true })
+      else update(key, {
+        load: { phase: 'error', error: { code: 'INTERNAL_ERROR', message: '文件已被删除，可能由外部程序移动或删除。' } }
+      })
+      return
+    }
+    if (result.data.size === baseline.size && result.data.mtimeMs === baseline.mtimeMs) return
+    if (latest.dirty) {
+      update(key, { conflict: true })
+      return
+    }
+    await loadInto(key)
+  }
+
+  /** 按磁盘内容重新读取：用于读取失败后的重试与外部改动后的自动载入；保存进行中时不打断。 */
+  async function reload(key: string): Promise<void> {
+    const record = records.value[key]
+    if (record === undefined || record.saving) return
+    await loadInto(key)
+  }
+
+  return {
+    records,
+    recordOf,
+    keyOf,
+    open,
+    close,
+    closeProject,
+    markDirty,
+    captureDraft,
+    setMode,
+    save,
+    checkExternal,
+    reload
+  }
+})
