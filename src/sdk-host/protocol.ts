@@ -3,15 +3,15 @@ import { isExtensionDialogResponseInput, projectExtensionUiRequest } from '../sh
 import {
   COMPACT_INSTRUCTIONS_MAX_CHARS,
   isCapabilitiesResult, isMcpCommandResult, isMcpStatusResult, isOutputRate, isProjectionBatch,
-  isProjectionResult, isResourcesResult, isRuntimeDiagnosticsResult, isSessionUsage
+  isProjectionResult, isResourcesResult, isRuntimeDiagnosticsResult, isSessionUsage, isHistoryQuery, isHistoryData
 } from '../shared/runtime-api'
 import type { ExtensionDialogResponseInput } from '../shared/extension-ui-api'
 import type {
   AgentCapabilities, McpStatus, OutputRate, PiResources, ProjectionBatch, ProjectionSnapshot,
-  RuntimeDiagnostics, SessionUsage
+  RuntimeDiagnostics, SessionUsage, HistoryQuery, HistoryData
 } from '../shared/runtime-api'
 
-export const SDK_HOST_PROTOCOL_VERSION = 4
+export const SDK_HOST_PROTOCOL_VERSION = 5
 /**
  * `hostId` 是主进程注册表分配的应用级运行身份；宿主不能自行编号，重启后也不会复用旧值。
  */
@@ -137,6 +137,7 @@ export type SdkHostRequest =
       readonly action: SdkMcpCommandAction; readonly serverName: string })
   /** 投影快照是渲染端重同步的唯一基准；引用条目 ID 由官方会话树给出。 */
   | (RequestEnvelope & { readonly type: 'projection-snapshot'; readonly bindingId: number })
+  | (RequestEnvelope & { readonly type: 'history'; readonly bindingId: number; readonly sessionId: string; readonly query: HistoryQuery; readonly revision: number })
   | (RequestEnvelope & { readonly type: 'projection-ack'; readonly bindingId: number; readonly seq: number })
   | (RequestEnvelope & { readonly type: 'ui-response'; readonly bindingId: number;
       readonly dialogId: string; readonly response: ExtensionDialogResponseInput })
@@ -151,6 +152,7 @@ export type SdkHostFrame =
   | (RequestEnvelope & { readonly type: 'session-result'; readonly seq: number; readonly status: SdkSessionStatus;
       readonly cancelled: boolean })
   | (RequestEnvelope & { readonly type: 'projection-result'; readonly projection: ProjectionSnapshot })
+  | (RequestEnvelope & { readonly type: 'history-result'; readonly data: HistoryData })
   | (RequestEnvelope & { readonly type: 'prompt-result'; readonly disposition: 'started' | 'queued' | 'handled' })
   | (RequestEnvelope & { readonly type: 'rewind-result'; readonly cancelled: boolean;
       readonly text: string | null })
@@ -306,6 +308,8 @@ export function isSdkHostRequest(value: unknown): value is SdkHostRequest {
     case 'mcp-command': return isIdentity(value.bindingId) && isMcpCommandActionValue(value.action)
       && isIdentifier(value.serverName) && requestKeys(value, ['bindingId', 'action', 'serverName'])
     case 'projection-snapshot': return isIdentity(value.bindingId) && requestKeys(value, ['bindingId'])
+    case 'history': return isIdentity(value.bindingId) && isIdentifier(value.sessionId) && isHistoryQuery(value.query) && isCount(value.revision)
+      && requestKeys(value, ['bindingId', 'sessionId', 'query', 'revision'])
     case 'projection-ack': return isIdentity(value.bindingId) && isCount(value.seq)
       && requestKeys(value, ['bindingId', 'seq'])
     case 'ui-response': return isIdentity(value.bindingId) && isIdentifier(value.dialogId)
@@ -343,6 +347,7 @@ export function isSdkHostFrame(value: unknown): value is SdkHostFrame {
       && requestKeys(value, ['cancelled', 'text'])
     case 'prompt-result': return ['started', 'queued', 'handled'].includes(String(value.disposition))
       && requestKeys(value, ['disposition'])
+    case 'history-result': return isHistoryData(value.data) && requestKeys(value, ['data'])
     case 'projection-result': return isProjectionResult({ ok: true, data: value.projection })
       && requestKeys(value, ['projection'])
     case 'session-result': return isCount(value.seq) && isSdkSessionStatus(value.status) && typeof value.cancelled === 'boolean'

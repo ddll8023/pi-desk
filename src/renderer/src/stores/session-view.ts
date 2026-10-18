@@ -39,6 +39,8 @@ export interface SessionInput {
 export interface SessionReading {
   readonly stickToBottom: boolean
   readonly scrollTop: number
+  /** 分页或详情改变高度时优先恢复稳定轮身份与视口内偏移。 */
+  readonly anchor?: { readonly turnKey: string; readonly offset: number }
 }
 
 /** 会话键前缀；只有这类键的状态需要按会话留底，空闲与未绑定实例的键不带前缀。 */
@@ -63,8 +65,8 @@ export const useSessionViewStore = defineStore('session-view', () => {
    */
   const requestedInput = ref<SessionInput | null>(null)
   /**
-   * 早期对话是否整体展开。默认 false：只展开最后一轮，更早的轮次收起成一行摘要，
-   * 用户点顶部开关后才把所有轮次都铺开。
+   * 已加载的早期对话是否整体展开。默认 false：当前轮与上一轮展开，更早轮次收起成摘要，
+   * 用户点顶部开关后铺开已加载轮次，缺失详情按可见区域回读。
    */
   const historyExpanded = ref(false)
   /**

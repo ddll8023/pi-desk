@@ -5,6 +5,10 @@ import type { WatchStopHandle } from 'vue'
 import type { PreferencesError } from '../../../shared/preferences-api'
 import type {
   AgentCapabilities,
+  HistoryChunk,
+  HistoryData,
+  HistoryQuery,
+  SessionActivity,
   ModelIdentity,
   ModelSummary,
   PiResourcePreview,
@@ -34,6 +38,7 @@ import {
   getRuntimeCapabilities,
   getRuntimeProjection,
   getRuntimeStatus,
+  readRuntimeHistory,
   sendPrompt,
   rewindRuntime,
   setRuntimeModel,
@@ -93,6 +98,39 @@ type ProjectionSyncState = 'syncing' | 'synced' | 'stale'
  * 一个运行实例的投影分片：离开前台时留底，之后到达的批次只更新自己的分片，切回时取回。
  * `appliedRuntimeId` 是这份内容对应的绑定代际，与当前代际不符时必须重新取基准。
  */
+/** 续段失败只影响原位置，不向整轮重复铺错误或原文区域。 */
+export interface HistoryChunkLoadState {
+  loading: boolean
+  error: string | null
+}
+export function historyChunkKey(chunk: HistoryChunk): string {
+  return `${chunk.entryId}:${chunk.contentIndex}:${chunk.field}`
+}
+
+/** 原文缓存按轮限量，摘要页与实时投影分开，回读失败不清空已有内容。 */
+export interface HistoryTurnState {
+  messages: readonly ProjectionMessage[]
+  tools: readonly ToolExecution[]
+  chunks: readonly HistoryChunk[]
+  next: string | null
+  loading: boolean
+  loaded: boolean
+  error: string | null
+  chunkStates: Record<string, HistoryChunkLoadState>
+}
+interface HistoryState {
+  revision: number
+  before: string | null
+  loading: boolean
+  error: string | null
+  pages: readonly ProjectionMessage[]
+  visible: string[]
+  uiRevisions: Map<string, number>
+  turns: Record<string, HistoryTurnState>
+}
+function emptyHistory(): HistoryState { return { revision: 0, before: null, loading: false, error: null, pages: [], visible: [], uiRevisions: new Map(), turns: Object.create(null) as Record<string, HistoryTurnState> } }
+function messageKey(message: ProjectionMessage): string { return message.entryId ?? message.id }
+
 interface ProjectionSlice {
   messages: readonly ProjectionMessage[]
   tools: readonly ToolExecution[]
@@ -102,6 +140,8 @@ interface ProjectionSlice {
   droppedTools: number
   appliedRuntimeId: number | null
   appliedSeq: number
+  history: HistoryState
+  activity: SessionActivity | null
 }
 
 /** 可用模型列表的读取状态。 */
@@ -177,6 +217,7 @@ function applyUpdates(
   let nextMessages = [...messages]
   let nextTools = [...tools]
   for (const update of updates) {
+    if (update.kind === 'activity') continue
     if (update.kind === 'tool') {
       const incoming = update.tool
       // 工具条目本身是权威内容：未知 toolCallId 也直接收录，不做猜测。
@@ -241,6 +282,61 @@ export const useRuntimeStore = defineStore('runtime', () => {
   const projectionTruncated = ref(false)
   const droppedMessages = ref(0)
   const droppedTools = ref(0)
+  const history = ref<HistoryState>(emptyHistory())
+  const activity = ref<SessionActivity | null>(null)
+  /** 只合并已加载页；按官方来源去重，不按文本、时间戳或数组下标猜身份。 */
+  const displayMessages = computed<readonly ProjectionMessage[]>(() => {
+    const base = new Map<string, ProjectionMessage>()
+    for (const message of [...history.value.pages, ...messages.value]) base.set(messageKey(message), message)
+    const output: ProjectionMessage[] = []
+    const latestUser = messages.value.findLast(message => message.role === 'user')
+    let group: ProjectionMessage[] = []
+    const finish = (): void => {
+      const first = group[0]
+      const turnId = first?.role === 'user' ? first.entryId : first?.turnEntryId
+      const detail = turnId ? history.value.turns[turnId] : undefined
+      const currentLive = first?.role === 'user' && first.turn !== null && latestUser !== undefined
+        && messageKey(first) === messageKey(latestUser)
+      if (!detail?.loaded || currentLive) { output.push(...group); group = []; return }
+      const seen = new Set(detail.messages.map(messageKey))
+      for (const message of detail.messages) {
+        const live = group.find(candidate => messageKey(candidate) === messageKey(message))
+        const liveComplete = live && !live.blocks.some(block => block.truncated || block.notice)
+          && (live.role === 'user' || live.generation !== null)
+        output.push(live ? { ...message, generation: live.generation, turn: live.turn,
+          blocks: liveComplete ? live.blocks : message.blocks } : message)
+      }
+      for (const message of group) if (!seen.has(messageKey(message))
+        && (!message.recoverable || message.generation !== null || message.turn !== null)) output.push(message)
+      group = []
+    }
+    for (const message of base.values()) {
+      if (message.role === 'user') finish()
+      group.push(message)
+    }
+    finish()
+    return output
+  })
+  const displayTools = computed<readonly ToolExecution[]>(() => {
+    const combined = new Map<string, ToolExecution>()
+    for (const detail of Object.values(history.value.turns)) for (const tool of detail.tools) combined.set(tool.toolCallId, tool)
+    for (const live of tools.value) {
+      const previous = combined.get(live.toolCallId)
+      if (!previous || live.phase === 'running') { combined.set(live.toolCallId, live); continue }
+      // 实时终态始终权威；历史仅补充被展示窗口截断的参数或结果正文。
+      const keepText = previous.textKind === 'result' && (!previous.textTruncated || previous.text.length > live.text.length)
+      const keepArgs = previous.argsText !== null && (!previous.argsTruncated || previous.argsText.length > (live.argsText?.length ?? 0))
+      combined.set(live.toolCallId, { ...previous, ...live,
+        text: keepText ? previous.text : live.text,
+        textTruncated: keepText ? previous.textTruncated : live.textTruncated,
+        argsText: keepArgs ? previous.argsText : live.argsText,
+        argsTruncated: keepArgs ? previous.argsTruncated : live.argsTruncated,
+        latestRevision: Math.max(previous.latestRevision ?? 0, live.latestRevision ?? 0) })
+    }
+    return [...combined.values()].map(tool => tool.ui ? { ...tool,
+      latestRevision: Math.max(tool.ui.revision, tool.latestRevision ?? 0,
+        history.value.uiRevisions.get(tool.ui.documentId) ?? 0) } : tool)
+  })
   const capabilitiesView = ref<CapabilitiesViewState>({ phase: 'idle' })
   const modelSwitchView = ref<ModelSwitchViewState>({ phase: 'idle' })
   const modelPreviewView = ref<ModelPreviewViewState>({ phase: 'idle' })
@@ -788,10 +884,145 @@ export const useRuntimeStore = defineStore('runtime', () => {
       : { phase: 'error', error: result.error }
   }
 
-  /**
-   * 全量重同步：快照是唯一基准，期间到达的增量由序号守卫丢弃；只向当前前台实例取基准。
-   * 没有前台实例时空基准就是真实状态，不向任何目标发请求；回退换绑后不能因另一个请求进行中就提前返回。
-   */
+  /** 历史响应必须仍属于发起时的前台实例、绑定与会话；切走后的结果不写入新分片。 */
+  async function requestHistory(query: HistoryQuery): Promise<HistoryData | null> {
+    const target = currentTarget()
+    const sessionId = view.value.phase === 'ready' ? view.value.snapshot.info?.sessionId : null
+    if (target === null || target.runtimeId === null || !sessionId) return null
+    const owner = history.value
+    const result = await readRuntimeHistory({ runId: target.runId, runtimeId: target.runtimeId, sessionId, query, revision: owner.revision })
+    const current = currentTarget()
+    if (owner !== history.value || target.runId !== current?.runId || target.runtimeId !== current?.runtimeId
+      || view.value.phase !== 'ready' || view.value.snapshot.info?.sessionId !== sessionId) return null
+    if (!result.ok) throw new Error(result.error.message)
+    return result.data
+  }
+
+  async function loadEarlierHistory(): Promise<void> {
+    const owner = history.value
+    if (owner.loading || owner.before === null) return
+    owner.loading = true; owner.error = null
+    const before = owner.before
+    try {
+      const page = await requestHistory({ kind: 'page', before })
+      if (!page) return
+      if (page.kind !== 'page' || page.before === before) throw new Error('历史分页未前进，已停止自动加载。')
+      owner.pages = [...page.messages, ...owner.pages]
+      owner.before = page.before
+    } catch (error) { owner.error = error instanceof Error ? error.message : String(error) }
+    finally { owner.loading = false }
+  }
+
+  /** 只缓存少量已展开原文；被回收的详情仍可从原始分支再次读取。 */
+  async function loadHistoryTurn(turnId: string, more = false): Promise<void> {
+    const owner = history.value
+    if (owner.turns[turnId] === undefined) owner.turns[turnId] = {
+      messages: [], tools: [], chunks: [], next: null, loading: false, loaded: false, error: null,
+      chunkStates: Object.create(null) as Record<string, HistoryChunkLoadState>
+    }
+    // 插入后经响应式容器取回；赋值表达式返回原始对象，直接修改不会通知界面。
+    const state = owner.turns[turnId]
+    if (!state || state.loading || (state.loaded && !more) || (more && state.next === null)) return
+    state.loading = true; state.error = null
+    try {
+      const page = await requestHistory({ kind: 'turn', turnId, after: more ? state.next : null })
+      if (!page) return
+      if (page.kind !== 'turn' || page.turnId !== turnId || (more && page.next === state.next)) {
+        throw new Error('历史轮次游标未前进，已停止自动加载。')
+      }
+      const merge = <T,>(previous: readonly T[], incoming: readonly T[], key: (item: T) => string): T[] => {
+        const rows = new Map(previous.map(item => [key(item), item]))
+        for (const item of incoming) rows.set(key(item), item)
+        return [...rows.values()]
+      }
+      state.messages = merge(more ? state.messages : [], page.messages, messageKey)
+      state.tools = merge(more ? state.tools : [], page.tools, tool => tool.toolCallId)
+      // 已完成的参数续段可能再次随后续工具结果页出现，不能重置回原游标。
+      state.chunks = merge(more ? state.chunks : [], page.chunks.filter(chunk => !state.chunkStates[historyChunkKey(chunk)]), historyChunkKey)
+      rememberUiRevisions(owner, page.tools)
+      state.next = page.next; state.loaded = true
+      trimHistoryCache(owner, turnId)
+    } catch (error) { state.error = error instanceof Error ? error.message : String(error) }
+    finally { state.loading = false }
+  }
+
+  /** 界面版本事实不随工具卡片淘汰，避免旧历史界面被重新激活。 */
+  function rememberUiRevisions(owner: HistoryState, incoming: readonly ToolExecution[]): void {
+    for (const tool of incoming) if (tool.ui) owner.uiRevisions.set(tool.ui.documentId,
+      Math.max(owner.uiRevisions.get(tool.ui.documentId) ?? 0, tool.ui.revision, tool.latestRevision ?? 0))
+  }
+
+  /** 可见原文不被缓存回收抢走；否则全局展开可能在读取与淘汰之间循环。 */
+  function setHistoryVisibility(turnId: string, visible: boolean, ownerKey: string): void {
+    if (conversationKey.value !== ownerKey) return
+    const owner = history.value
+    owner.visible = visible ? [...new Set([...owner.visible, turnId])] : owner.visible.filter(id => id !== turnId)
+    trimHistoryCache(owner)
+  }
+  function trimHistoryCache(owner: HistoryState, current?: string): void {
+    const keys = Object.keys(owner.turns)
+    let excess = keys.length - 6
+    for (const key of keys) {
+      const saved = owner.turns[key]
+      if (excess <= 0) break
+      if (key !== current && !owner.visible.includes(key) && saved && !saved.loading) {
+        delete owner.turns[key]; excess--
+      }
+    }
+  }
+
+  async function loadHistoryChunk(turnId: string, chunk: HistoryChunk): Promise<void> {
+    const owner = history.value
+    const state = owner.turns[turnId]
+    const key = historyChunkKey(chunk)
+    if (!state || state.loading || !state.chunks.some(item => historyChunkKey(item) === key && item.offset === chunk.offset)) return
+    if (state.chunkStates[key] === undefined) state.chunkStates[key] = { loading: false, error: null }
+    const status = state.chunkStates[key]
+    if (!status) return
+    state.loading = true; status.loading = true; status.error = null
+    try {
+      const data = await requestHistory({ kind: 'text', ...chunk })
+      if (!data) return
+      if (data.kind !== 'text') throw new Error('历史续段响应类型不匹配，已停止自动加载。')
+      if (historyChunkKey(data.chunk) !== key || data.chunk.offset !== chunk.offset || data.chunk.toolCallId !== chunk.toolCallId
+        || (data.next !== null && data.next <= chunk.offset)) throw new Error('历史内容游标不匹配，未写入。')
+      if (chunk.field === 'text' || chunk.field === 'thinking') {
+        const message = state.messages.find(item => item.entryId === chunk.entryId)
+        const block = message?.blocks.find(item => item.contentIndex === chunk.contentIndex)
+        if (!block || block.text.length !== chunk.offset) throw new Error('历史正文位置已变化，未拼接。')
+        state.messages = state.messages.map(item => item !== message ? item : { ...item,
+          blocks: item.blocks.map(part => part !== block ? part : { ...part, text: part.text + data.text, truncated: data.next !== null }) })
+      } else if (chunk.field === 'summary') {
+        const message = state.messages.find(item => item.entryId === chunk.entryId)
+        if (!message?.compaction || message.compaction.summary.length !== chunk.offset) throw new Error('历史摘要位置已变化，未拼接。')
+        state.messages = state.messages.map(item => item !== message || !item.compaction ? item
+          : { ...item, compaction: { ...item.compaction, summary: item.compaction.summary + data.text } })
+      } else {
+        const tool = state.tools.find(item => item.toolCallId === chunk.toolCallId)
+        if (!tool) throw new Error('历史工具归属缺失，未写入。')
+        if (chunk.field === 'arguments') {
+          if (chunk.offset > 0 && (tool.argsText?.length ?? 0) !== chunk.offset) throw new Error('历史参数位置已变化，未拼接。')
+          state.tools = state.tools.map(item => item !== tool ? item : { ...item,
+            argsText: (chunk.offset === 0 ? '' : item.argsText ?? '') + data.text, argsTruncated: data.next !== null })
+        } else {
+          const position = chunk.targetOffset
+          if (position === undefined || position > tool.text.length) throw new Error('历史输出位置已变化，未拼接。')
+          const remaining = state.chunks.some(item => historyChunkKey(item) !== key && item.field === 'output' && item.toolCallId === tool.toolCallId)
+          state.tools = state.tools.map(item => item !== tool ? item : { ...item,
+            text: item.text.slice(0, position) + data.text + item.text.slice(position), textTruncated: data.next !== null || remaining })
+          // 一份工具结果的多个文本块共享聚合输出，前块续载后同步移动后块的插入点。
+          state.chunks = state.chunks.map(item => item.field === 'output' && item.toolCallId === tool.toolCallId
+            && item.targetOffset !== undefined && item.targetOffset >= position
+            ? { ...item, targetOffset: item.targetOffset + data.text.length } : item)
+        }
+      }
+      state.chunks = state.chunks.flatMap(item => historyChunkKey(item) !== key ? [item]
+        : data.next === null ? [] : [{ ...item, offset: data.next }])
+    } catch (error) { status.error = error instanceof Error ? error.message : String(error) }
+    finally { state.loading = false; status.loading = false }
+  }
+
+  /** 全量重同步保持序号守卫；回退换绑后等待旧请求完成，再读取新绑定基准。 */
   function syncProjection(expectedRuntimeId?: number): Promise<void> {
     // 同一代际的读取可以共用；不同代际（回退的 fork 会换绑定）必须排在它之后重新读一次，
     // 否则回退拿到的是上一代读取的结果，会被判成同步失败。
@@ -840,11 +1071,17 @@ export const useRuntimeStore = defineStore('runtime', () => {
         projectionSync.value = 'stale'
         return
       }
+      const sameBinding = appliedRunId === target.runId && appliedRuntimeId === snapshot.runtimeId
       appliedRunId = target.runId
       appliedRuntimeId = snapshot.runtimeId
       appliedSeq = snapshot.seq
+      const sameBranch = sameBinding && history.value.revision === (snapshot.history?.revision ?? 0)
+      if (!sameBranch) history.value = { ...emptyHistory(), revision: snapshot.history?.revision ?? 0 }
+      if (!sameBranch || history.value.pages.length === 0) history.value.before = snapshot.history?.before ?? null
+      activity.value = snapshot.activity ?? null
       messages.value = snapshot.messages
       tools.value = snapshot.tools
+      rememberUiRevisions(history.value, snapshot.tools)
       projectionTruncated.value = snapshot.truncated
       droppedMessages.value = snapshot.droppedMessages
       droppedTools.value = snapshot.droppedTools
@@ -890,6 +1127,8 @@ export const useRuntimeStore = defineStore('runtime', () => {
     }
     messages.value = applied.messages
     tools.value = applied.tools
+    rememberUiRevisions(history.value, applied.tools)
+    for (const update of batch.updates) if (update.kind === 'activity') activity.value = update.activity
     appliedSeq = batch.seq
     projectionSync.value = 'synced'
     ackRuntimeProjection(target, appliedSeq)
@@ -899,6 +1138,8 @@ export const useRuntimeStore = defineStore('runtime', () => {
   function resetProjection(): void {
     messages.value = []
     tools.value = []
+    history.value = emptyHistory()
+    activity.value = null
     projectionSync.value = 'synced'
     projectionTruncated.value = false
     droppedMessages.value = 0
@@ -919,7 +1160,9 @@ export const useRuntimeStore = defineStore('runtime', () => {
       droppedMessages: droppedMessages.value,
       droppedTools: droppedTools.value,
       appliedRuntimeId,
-      appliedSeq
+      appliedSeq,
+      history: history.value,
+      activity: activity.value
     })
   }
 
@@ -935,6 +1178,8 @@ export const useRuntimeStore = defineStore('runtime', () => {
     }
     messages.value = saved.messages
     tools.value = saved.tools
+    history.value = saved.history
+    activity.value = saved.activity
     projectionSync.value = saved.sync
     projectionTruncated.value = saved.truncated
     droppedMessages.value = saved.droppedMessages
@@ -981,6 +1226,8 @@ export const useRuntimeStore = defineStore('runtime', () => {
     }
     slice.messages = applied.messages
     slice.tools = applied.tools
+    rememberUiRevisions(slice.history, applied.tools)
+    for (const update of batch.updates) if (update.kind === 'activity') slice.activity = update.activity
     slice.appliedSeq = batch.seq
     slice.sync = 'synced'
     ackRuntimeProjection(target, slice.appliedSeq)
@@ -1127,6 +1374,14 @@ export const useRuntimeStore = defineStore('runtime', () => {
     visibleModels,
     messages,
     tools,
+    displayMessages,
+    displayTools,
+    history,
+    activity,
+    loadEarlierHistory,
+    setHistoryVisibility,
+    loadHistoryTurn,
+    loadHistoryChunk,
     projectionSync,
     projectionTruncated,
     droppedMessages,

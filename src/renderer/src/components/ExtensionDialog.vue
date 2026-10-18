@@ -37,6 +37,9 @@ const minimized = computed(() => dialog.value !== null && extensionStore.minimiz
 
 /** 标题与选项的展示拆解；无法识别的内容按原文回退。 */
 const content = computed(() => parseDialogTitle(dialog.value?.title ?? ''))
+/** 确认正文与标题是两个协议字段，不能只显示标题就允许批准。 */
+const confirmationMessage = computed(() => dialog.value?.method === 'confirm' ? dialog.value.message ?? '' : '')
+const confirmationAvailable = computed(() => confirmationMessage.value.trim().length > 0)
 
 /** select 的选项行；其他 method 为空数组。 */
 const optionRows = computed<readonly DialogOption[]>(
@@ -150,6 +153,7 @@ function minimize(): void {
 async function respondCurrent(response: ExtensionDialogResponseInput): Promise<void> {
   const current = dialog.value
   if (current === null || busy.value) return
+  if (current.method === 'confirm' && response.kind === 'confirm' && response.confirmed && !confirmationAvailable.value) return
   await extensionStore.respond(current.id, response)
   if (respondState.value.phase !== 'error') emit('settled')
 }
@@ -230,6 +234,7 @@ onUnmounted(() => {
           role="dialog"
           aria-modal="true"
           :aria-labelledby="titleId"
+          :aria-describedby="dialog.method === 'confirm' ? `${titleId}-message` : undefined"
           tabindex="-1"
           :class="dialog.method === 'confirm' ? 'max-w-lg' : 'max-w-xl'"
           class="dialog-panel"
@@ -242,6 +247,10 @@ onUnmounted(() => {
       </div>
 
       <div class="dialog-body">
+        <div v-if="dialog.method === 'confirm'" :id="`${titleId}-message`">
+          <p v-if="confirmationAvailable" class="scroll-area max-h-[55vh] overflow-y-auto whitespace-pre-wrap break-words text-sm leading-relaxed">{{ confirmationMessage }}</p>
+          <p v-else role="alert" class="status-notice status-notice-error">缺少操作说明，无法确认。可取消此次请求。</p>
+        </div>
         <!-- 选项预览：模型给出的 ASCII 版式，必须保留换行与列对齐，超长时块内滚动。 -->
         <div
           v-for="preview in content.previews"
@@ -344,7 +353,7 @@ onUnmounted(() => {
         <AppButton
           v-if="dialog.method === 'confirm'"
           variant="primary"
-          :disabled="busy"
+          :disabled="busy || !confirmationAvailable"
           @click="confirmYes"
         >
           是

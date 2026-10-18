@@ -21,6 +21,8 @@
  */
 import type {
   MessageUsage,
+  HistoryPage,
+  SessionActivity,
   ProjectionBatch,
   ProjectionBlock,
   ProjectionBlockKind,
@@ -99,6 +101,8 @@ interface MutableMessage {
   errorMessage: string | null
   /** 压缩记录；仅 `role === 'compaction'` 时非 null，此时块列表为空。 */
   compaction: ProjectionCompaction | null
+  recoverable?: boolean
+  turnEntryId?: string
 }
 
 /** 投影上报给 Manager 的运行状态提示；只覆盖由事件可确定的字段。 */
@@ -165,6 +169,10 @@ export class MessageProjection {
   private disposed = false
   private rebuilding = false
   private readonly toolProjection: ToolProjection
+  private activity: SessionActivity | undefined
+  private activitySignature = ''
+  private historyBefore: string | null = null
+  private historyRevision = 0
 
   constructor(
     private readonly runtimeId: number,
@@ -286,12 +294,57 @@ export class MessageProjection {
     return true
   }
 
+  /** 历史页来自原始分支；只接纳有界展示副本，不改变模型上下文。 */
+  seedProjectedHistory(page: HistoryPage): void {
+    this.rebuilding = true
+    try {
+      this.historyBefore = page.before
+      for (const message of page.messages) this.messages.push({ ...message,
+        sourceIdentity: null, blocks: message.blocks.map(block => ({ ...block })) })
+      for (const tool of page.tools) this.queueUpdate({ kind: 'tool', tool })
+      this.enforceLimits()
+    } finally { this.rebuilding = false }
+    this.callbacks.onStatusHint({ messageCount: this.messages.length })
+  }
+
+  /** 同一会话树切换分支时重建展示；保持批序号递增，旧历史缓存必须换代。 */
+  replaceProjectedHistory(page: HistoryPage, revision: number): void {
+    this.clearTimer()
+    this.pending = []; this.outstanding = []; this.messages.length = 0
+    this.active = null; this.activeTurn = null
+    this.droppedMessages = 0; this.truncated = false
+    this.toolProjection.reset()
+    this.historyRevision = revision
+    this.seedProjectedHistory(page)
+    this.needsResync = true
+    this.flush()
+  }
+
+  /** 累计活动与展示窗口分开；只有事实变化才下发。 */
+  setActivity(activity: SessionActivity): void {
+    const signature = JSON.stringify(activity)
+    if (signature === this.activitySignature) return
+    this.activity = activity
+    this.activitySignature = signature
+    this.queueUpdate({ kind: 'activity', activity })
+    this.flush()
+  }
+
   /** 官方条目 ID 只在解析成功后回填；同一展示消息以首次确认为准。 */
-  assignEntryId(messageId: string, entryId: string): boolean {
+  assignEntryId(messageId: string, entryId: string, turnEntryId?: string): boolean {
     const message = this.messages.find(candidate => candidate.id === messageId)
     if (message === undefined || message.entryId !== undefined) return false
     message.entryId = entryId
+    if (turnEntryId) message.turnEntryId = turnEntryId
+    this.queueUpdate({ kind: 'message', message: this.toPublicMessage(message) })
+    this.flush()
     return true
+  }
+
+  /** 成功压缩的来源由官方分支条目回填；失败或取消记录保持未映射。 */
+  assignCompactionEntry(entryId: string, turnEntryId?: string): void {
+    const message = this.messages.findLast(candidate => candidate.role === 'compaction' && candidate.entryId === undefined)
+    if (message) this.assignEntryId(message.id, entryId, turnEntryId)
   }
 
   /** 取出某条展示消息的官方条目 ID；未映射或已裁剪时为空。 */
@@ -370,14 +423,22 @@ export class MessageProjection {
   /** 快照是渲染端重新同步的唯一基准。 */
   snapshot(): ProjectionSnapshot {
     const tools = this.toolProjection.snapshot()
+    const keptTools = new Set(tools.tools.map(tool => tool.toolCallId))
     return {
       runtimeId: this.runtimeId,
       seq: this.seq,
-      messages: this.messages.map((message) => this.toPublicMessage(message)),
+      messages: this.messages.map(message => {
+        const projected = this.toPublicMessage(message)
+        const missingTools = tools.droppedTools > 0 && message.blocks.some(block => block.kind === 'toolcall'
+          && block.toolCallId !== null && !keptTools.has(block.toolCallId))
+        return missingTools ? { ...projected, recoverable: true } : projected
+      }),
       tools: tools.tools,
       truncated: this.truncated || tools.truncated,
       droppedMessages: this.droppedMessages,
-      droppedTools: tools.droppedTools
+      droppedTools: tools.droppedTools,
+      ...(this.activity ? { activity: this.activity } : {}),
+      history: { before: this.historyBefore, revision: this.historyRevision }
     }
   }
 
@@ -828,6 +889,8 @@ export class MessageProjection {
     if (this.totalChars() > MAX_TOTAL_CHARS) changed = this.compactAssistantText() || changed
     if (this.totalChars() > MAX_TOTAL_CHARS) changed = this.dropOldestNonUser() || changed
     if (!changed) return
+    // 回答被整条移出窗口时，用户消息仍提供本轮原文回读入口。
+    for (const message of this.messages) if (message.role === 'user') message.recoverable = true
     this.needsResync = true
     this.flush()
   }
@@ -980,7 +1043,10 @@ export class MessageProjection {
       turn: message.turn,
       stopReason: message.stopReason,
       errorMessage: message.errorMessage,
-      compaction: message.compaction
+      compaction: message.compaction,
+      entryId: message.entryId ?? null,
+      recoverable: message.recoverable === true || message.blocks.some(block => block.truncated),
+      ...(message.turnEntryId ? { turnEntryId: message.turnEntryId } : {})
     }
   }
 

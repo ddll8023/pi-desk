@@ -7,6 +7,8 @@ import type { AgentSession, AgentSessionEvent, AgentSessionRuntime, ExtensionCom
 import { ExtensionUiBridge } from './extension-ui-bridge'
 import { createGenuiExtension, GENUI_EXTENSION_NAME } from '../extensions/genui'
 import { MessageProjection } from '../projection/message-projection'
+import { ActivityProjection } from '../projection/activity-projection'
+import { historyEntryId, readBranchHistory } from '../projection/history-projection'
 import { OutputRateTracker } from '../projection/output-rate'
 import { SDK_HOST_PROTOCOL_VERSION } from './protocol'
 import type {
@@ -15,7 +17,7 @@ import type {
 } from './protocol'
 import type {
   AgentCapabilities, ExtensionErrorEntry, McpStatus, ModelSummary, OutputRate, PiResourceEntry, PiResources,
-  ProjectionBatch, ProjectionSnapshot, PromptDisposition, RuntimeDiagnostics, SessionUsage
+  ProjectionBatch, ProjectionSnapshot, PromptDisposition, RuntimeDiagnostics, SessionUsage, HistoryData, HistoryQuery
 } from '../shared/runtime-api'
 import type { ExtensionDialogResponseInput } from '../shared/extension-ui-api'
 
@@ -202,6 +204,9 @@ export class SdkSessionRuntime {
   private session: AgentSession | null = null
   private bridge: ExtensionUiBridge | null = null
   private projection: MessageProjection | null = null
+  private activity: ActivityProjection | null = null
+  private historyTail: string | null = null
+  private historyRevision = 0
   private unsubscribe: (() => void) | null = null
   private target: SdkSessionTarget | null = null
   /** 准备目标与实际活动项目分开，前置钩子取消时不能把旧对象改称新目标。 */
@@ -349,7 +354,30 @@ export class SdkSessionRuntime {
   /** 投影快照只在已绑定代际有效；未绑定时返回 null，不由宿主凭空造空基准。 */
   getProjection(bindingId: number): ProjectionSnapshot | null {
     if (bindingId !== this.bindingId || this.projection === null) return null
+    this.refreshActivity()
     return this.projection.snapshot()
+  }
+
+  /** 只读取当前绑定、当前会话的原始分支，不接受历史文件路径。 */
+  readHistory(bindingId: number, sessionId: string, query: HistoryQuery, revision: number): HistoryData {
+    const session = this.requireBoundSession(bindingId)
+    this.refreshActivity()
+    if (session.sessionManager.getSessionId() !== sessionId || revision !== this.historyRevision) throw new SdkSessionFailure('STALE_SESSION')
+    try { return readBranchHistory(session.sessionManager.getBranch(), query, bindingId) }
+    catch { throw new SdkSessionFailure('STALE_SESSION') }
+  }
+
+  private refreshActivity(): void {
+    if (this.session === null || this.target === null || this.activity === null) return
+    const branch = this.session.sessionManager.getBranch()
+    if (this.historyTail !== null && !branch.some(entry => entry.id === this.historyTail) && this.bindingId !== null) {
+      this.historyRevision++
+      this.pendingEntryLookup = null
+      const page = readBranchHistory(branch, { kind: 'page', before: null }, this.bindingId)
+      if (page.kind !== 'text') this.projection?.replaceProjectedHistory(page, this.historyRevision)
+    }
+    this.historyTail = branch.at(-1)?.id ?? null
+    this.projection?.setActivity(this.activity.refresh(branch, this.target.projectPath))
   }
 
   /** 确认只影响未确认窗口；不属于当前代际的确认直接忽略。 */
@@ -429,8 +457,8 @@ export class SdkSessionRuntime {
     const session = this.requireBoundSession(bindingId)
     if (this.operationId !== null || this.needsHostRebuild) throw new SdkSessionFailure('SESSION_BUSY')
     if (this.isBusy()) throw new SdkSessionFailure('SESSION_BUSY')
-    const entryId = this.projection?.entryIdOf(messageId) ?? null
-    const entry = entryId === null ? undefined : session.sessionManager.getEntry(entryId)
+    const entryId = historyEntryId(messageId) ?? this.projection?.entryIdOf(messageId) ?? null
+    const entry = entryId === null ? undefined : session.sessionManager.getBranch().find(candidate => candidate.id === entryId)
     if (entry === undefined || entry.type !== 'message' || entry.message.role !== 'user') {
       throw new SdkSessionFailure('STALE_SESSION')
     }
@@ -578,10 +606,12 @@ export class SdkSessionRuntime {
     this.pendingEntryLookup = null
     const session = this.session
     if (pending === null || session === null || bindingId !== this.bindingId || this.projection === null) return
-    const entry = session.sessionManager.getBranch()
-      .findLast(candidate => candidate.type === 'message' && candidate.message === pending.message)
+    const branch = session.sessionManager.getBranch()
+    const index = branch.findLastIndex(candidate => candidate.type === 'message' && candidate.message === pending.message)
+    const entry = branch[index]
     if (entry === undefined) return
-    if (this.projection.assignEntryId(pending.messageId, entry.id)) {
+    const turn = branch.slice(0, index + 1).findLast(candidate => candidate.type === 'message' && candidate.message.role === 'user')
+    if (this.projection.assignEntryId(pending.messageId, entry.id, turn?.id ?? branch[0]?.id)) {
       this.options.onEntryMap(bindingId, pending.messageId, entry.id)
     }
   }
@@ -765,13 +795,16 @@ export class SdkSessionRuntime {
           queueMicrotask(() => this.resolvePendingEntry(bindingId))
         }
       })
-      // 基准来自官方压缩感知投影，不自行重建会话树；事件先订阅，避免交接空档丢消息。
-      const baseline = session.sessionManager.buildSessionProjection()
-      const entryIds = baseline.entries.flatMap(entry => entry.messages.map(() => entry.sourceEntry.id))
-      if (!projection.seedHistory({ messages: baseline.messages }, entryIds)) {
-        throw new SdkSessionFailure('SESSION_BIND_FAILED')
-      }
+      // 展示历史与模型上下文分开；官方当前分支是历史唯一来源，不自行重建会话树。
+      const branch = session.sessionManager.getBranch()
+      const page = readBranchHistory(branch, { kind: 'page', before: null }, bindingId)
+      if (page.kind === 'text') throw new SdkSessionFailure('SESSION_BIND_FAILED')
+      projection.seedProjectedHistory(page)
       this.projection = projection
+      this.activity = new ActivityProjection()
+      this.historyTail = null
+      this.historyRevision = 0
+      this.refreshActivity()
       // 速率结算随绑定建立：订阅方只在仍是当前绑定时改写快照。
       const rate = new OutputRateTracker(snapshot => {
         if (this.rate !== rate) return
@@ -886,6 +919,7 @@ export class SdkSessionRuntime {
       this.operationDone = null
       this.phase = this.needsHostRebuild ? 'blocked' : this.valid ? 'bound' : 'empty'
       finish()
+      this.refreshActivity()
       this.publish()
     }
   }
@@ -922,7 +956,10 @@ export class SdkSessionRuntime {
     this.lastEndedMessage = event.type === 'message_end' ? event.message : null
     const projected = toProjectionEvent(event)
     // 形状不合约定的增量不进入展示；基准仍可由快照重建，不用它反推消息内容。
-    if (projected !== null) this.projection?.applySessionEvent(projected)
+    if (projected !== null) {
+      this.activity?.observe(projected)
+      this.projection?.applySessionEvent(projected)
+    }
     this.lastEndedMessage = null
     if (event.type === 'agent_start' || event.type === 'compaction_start'
       || event.type === 'summarization_retry_attempt_start') this.activityVersion += 1
@@ -935,7 +972,20 @@ export class SdkSessionRuntime {
       if (isAssistantMessage(event.message)) this.rate?.settle(readAssistantOutput(event.message), Date.now())
       this.scheduleUsageRefresh()
     }
-    if (event.type !== 'message_update' && event.type !== 'tool_execution_update') this.publish()
+    if (event.type !== 'message_update' && event.type !== 'tool_execution_update') {
+      this.publish()
+      // 官方会在订阅回调返回后完成条目追加；不读取尚未落入分支的临时结果。
+      queueMicrotask(() => {
+        if (this.session !== session || this.bindingId !== bindingId) return
+        if (event.type === 'compaction_end' && event.result) {
+          const branch = session.sessionManager.getBranch()
+          const entry = branch.findLast(candidate => candidate.type === 'compaction')
+          const turn = branch.findLast(candidate => candidate.type === 'message' && candidate.message.role === 'user')
+          if (entry) this.projection?.assignCompactionEntry(entry.id, turn?.id ?? branch[0]?.id)
+        }
+        this.refreshActivity()
+      })
+    }
   }
 
   /**
@@ -985,6 +1035,8 @@ export class SdkSessionRuntime {
     // 投影随绑定代际失效：旧批次不得升到新会话；展示统计同样不能跨代际残留。
     this.projection?.dispose()
     this.projection = null
+    this.activity = null
+    this.historyTail = null
     this.rate?.reset()
     this.rate = null
     this.rateSnapshot = { average: null }

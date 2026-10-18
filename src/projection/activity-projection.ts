@@ -2,14 +2,14 @@
  * 会话活动派生：把 Runtime 投影里的消息与工具条目归纳成当前会话的四类事实——读过与改过的文件、
  * 调用过的 Skill、用到的 MCP 服务器、调用过的扩展（插件）工具，供对话页顶部的活动摘要条展示。
  *
- * 只读投影已有的字段：不读文件、不解析 Pi 的配置文件、不建立第二份来源，因此恢复会话后同样成立
+ * 从官方当前分支累计轻量事实：不读项目文件、不解析 Pi 配置、不持有会话所有权，恢复会话后同样成立
  * （历史工具条目与用户消息都由投影按历史补种）。四类口径：
  *
  * 1. 文件：内置 `read` 算读取，`write` / `edit`（含 `multiedit`、`apply_patch`）算修改；路径取参数摘要里的 path 一类键，
  *    摘要只给规模（路径超长）时回退到参数原文解析。失败的工具不计数——没读到、也没写成；
- *    运行中的照实计入，因为参数在开始事件里就已经确定。
+ *    累计器只收录成功完成的调用，不把进行中或未知结果冒充完成。
  * 2. Skill：用户消息里 Pi 展开的 `/skill:<名称>` 块（显式调用），以及模型读取技能文件 `SKILL.md`
- *    的工具调用（隐式加载）。两者分开标注，不把隐式加载冒充成用户下的命令。
+ *    的完整上下文证据，以及宿主注入的审计证据。三者分别标注，不把读取请求冒充加载。
  * 3. MCP：`mcp__<服务器>__<工具>` 形式的工具名按服务器归并；三个 MCP 资源工具不属于任何具体服务器，
  *    单独归到一行，不猜测它们连的是哪个服务器。
  * 4. 插件：既不是内置工具、也不是 MCP 工具的工具名按扩展工具统计。投影里没有「工具属于哪个扩展文件」
@@ -18,8 +18,10 @@
  * 投影按 copy-on-write 替换对象，因此按工具条目与消息对象的身份缓存各自的贡献：流式期间每个批次
  * 只重新解析真正变化的条目，其余复用上一次的结果；缓存只保留仍在投影里的条目。
  */
-import type { ProjectionMessage, ToolArgSummaryEntry, ToolExecution } from '../../shared/runtime-api'
-import { parseSkillBlock } from '../../shared/user-message-text'
+import type { SessionEntry } from '@earendil-works/pi-coding-agent'
+import type { ProjectionMessage, ToolArgSummaryEntry, ToolExecution, SkillActivitySource, SessionActivity,
+  SessionFileActivity, SessionSkillActivity, SessionMcpActivity, SessionPluginActivity } from '../shared/runtime-api'
+import { parseSkillBlock } from '../shared/user-message-text'
 
 /** 只读取文件内容的工具；其他工具即使读到文件（如 bash）也不猜测它碰了哪个路径。 */
 const READ_TOOLS: ReadonlySet<string> = new Set(['read'])
@@ -35,7 +37,7 @@ const WRITE_TOOLS: ReadonlySet<string> = new Set(['write', 'edit', 'multiedit', 
 const BUILTIN_TOOLS: ReadonlySet<string> = new Set([
   'read', 'write', 'edit', 'multiedit', 'apply_patch',
   'bash', 'powershell', 'grep', 'find', 'ls', 'codemode', 'tool_search',
-  'ui_render', 'ui_catalog', 'ui_inspect'
+  'ui_render', 'ui_catalog', 'ui_inspect', 'ffgrep', 'fffind'
 ])
 
 /** MCP 资源工具：属于 MCP 能力，但不属于任何具体服务器。 */
@@ -51,58 +53,6 @@ const MCP_PREFIX = 'mcp__'
 
 /** 文件工具参数里可能承载路径的键；顺序即优先级。 */
 const PATH_ARG_KEYS: readonly string[] = ['path', 'file_path', 'filePath', 'notebook_path', 'target_file']
-
-/** 技能文件的固定文件名；模型读到它就等于加载了该技能。 */
-const SKILL_FILE_NAME = 'SKILL.md'
-
-/** 技能来源：用户下的 `/skill:` 命令，还是模型读取技能文件。 */
-export type SkillActivitySource = 'command' | 'file'
-
-/** 一个文件在本次会话里被读取与修改的次数。 */
-export interface SessionFileActivity {
-  /** 归并键：项目内文件用相对路径，项目外的用原样路径，避免同一文件的两种写法被拆成两条。 */
-  readonly key: string
-  /** 展示用路径：项目内显示相对路径，项目外原样显示。 */
-  readonly label: string
-  readonly reads: number
-  readonly writes: number
-}
-
-/** 一个被调用的技能；同名但来源不同分别成条，避免把隐式加载说成显式命令。 */
-export interface SessionSkillActivity {
-  readonly name: string
-  readonly source: SkillActivitySource
-  /** 技能文件位置：显式命令取展开块的 `location`，隐式加载取被读取的 `SKILL.md` 路径；取不到时为 null。 */
-  readonly location: string | null
-  readonly count: number
-}
-
-/** 一个用到的 MCP 服务器与它的工具调用次数。 */
-export interface SessionMcpActivity {
-  readonly server: string
-  readonly tools: readonly { readonly name: string; readonly count: number }[]
-  /** 该服务器的工具调用总次数。 */
-  readonly count: number
-}
-
-/** 一个被调用的扩展（插件）工具。 */
-export interface SessionPluginActivity {
-  readonly toolName: string
-  readonly count: number
-}
-
-/** 当前会话的活动归纳；四类互不重叠，`empty` 为真时界面整块不显示。 */
-export interface SessionActivity {
-  readonly files: readonly SessionFileActivity[]
-  readonly skills: readonly SessionSkillActivity[]
-  readonly mcp: readonly SessionMcpActivity[]
-  readonly plugins: readonly SessionPluginActivity[]
-  readonly fileCount: number
-  readonly skillCount: number
-  readonly mcpCount: number
-  readonly pluginCount: number
-  readonly empty: boolean
-}
 
 export interface SessionActivityCache {
   /** 把投影归纳为会话活动；未变化的工具与消息复用上一次的解析结果。 */
@@ -245,15 +195,6 @@ function parseMcpToolName(toolName: string): { server: string; tool: string } | 
   return { server, tool }
 }
 
-/** 技能文件名与它的目录名：`…/pdf-tools/SKILL.md` 的技能名取目录名 `pdf-tools`。 */
-function skillOfReadPath(path: string): { name: string; location: string | null } | null {
-  const unified = unifyPath(path)
-  const segments = unified.split('/')
-  if (segments[segments.length - 1] !== SKILL_FILE_NAME) return null
-  const name = segments.length >= 2 ? segments[segments.length - 2] ?? '' : ''
-  return { name: name === '' ? SKILL_FILE_NAME : name, location: unified }
-}
-
 /**
  * 一条工具条目的贡献：只按工具名与参数判定，不读结果内容。
  * 失败的工具没有任何贡献——没有读到、也没有写成。
@@ -268,7 +209,8 @@ function factsOf(tool: ToolExecution): ToolFacts {
     const mode = READ_TOOLS.has(name) ? 'read' : 'write'
     return {
       file: { path, mode },
-      skill: mode === 'read' ? skillOfReadPath(path) : null,
+      // 读取请求不证明正文完整加载；加载事实只由后面的有效上下文审计补入。
+      skill: null,
       mcp: null,
       plugin: false
     }
@@ -304,6 +246,7 @@ function byCountThenName<T extends { readonly count: number }>(nameOf: (item: T)
   )
 }
 
+/** 仅供宿主归纳已确认事实，不依赖渲染窗口或最近工具条数。 */
 export function createSessionActivityCache(): SessionActivityCache {
   /** 工具条目贡献缓存：键是 toolCallId，值同时记住来源对象，投影替换对象时重新解析。 */
   let toolEntries = new Map<string, { readonly source: ToolExecution; readonly facts: ToolFacts }>()
@@ -416,6 +359,110 @@ export function createSessionActivityCache(): SessionActivityCache {
         empty: fileRows.length === 0 && skillRows.length === 0
           && mcpRows.length === 0 && pluginRows.length === 0
       }
+    }
+  }
+}
+
+/** 原始分支的轻量累计器：只缓存路径、工具名和加载证据，不保存正文与工具输出。 */
+export class ActivityProjection {
+  private seen = new Set<string>()
+  private tail: string | null = null
+  private tools = new Map<string, ToolExecution>()
+  private users: ProjectionMessage[] = []
+  private skills = new Map<string, SessionSkillActivity>()
+  private evidence = new Set<string>()
+  private cache = createSessionActivityCache()
+  private incomplete = false
+
+  /** 实时嵌套调用尚未落盘时也保留轻量完成事实，后续按调用身份与原始记录合并。 */
+  observe(event: Record<string, unknown>): void {
+    if ((event.type !== 'tool_execution_start' && event.type !== 'tool_execution_end')
+      || typeof event.toolCallId !== 'string' || typeof event.toolName !== 'string') return
+    this.call(event.toolCallId, event.toolName, event.args,
+      event.type === 'tool_execution_start' ? 'running' : event.isError === true ? 'failed' : 'succeeded')
+  }
+
+  private call(id: string, name: string, input: unknown, phase: ToolExecution['phase']): void {
+    const previous = this.tools.get(id)
+    const args = isRecord(input) ? input : {}
+    const path = PATH_ARG_KEYS.map(key => args[key]).find(value => typeof value === 'string')
+    this.tools.set(id, { toolCallId: id, toolName: name,
+      phase: phase === 'unknown' ? previous?.phase ?? phase : phase,
+      startedAt: null, endedAt: null,
+      argsText: typeof path === 'string' ? JSON.stringify({ path }) : previous?.argsText ?? null,
+      argsTruncated: false, argsSummary: null, outputPath: null, text: '', textKind: 'none', textTruncated: false,
+      nonTextBlocks: 0, nonTextParts: [], diff: null, ui: null })
+  }
+
+  refresh(branch: readonly SessionEntry[], projectPath: string): SessionActivity {
+    if (this.tail !== null && !branch.some(entry => entry.id === this.tail)) {
+      this.seen.clear(); this.tools.clear(); this.users = []; this.skills.clear(); this.evidence.clear()
+      this.cache = createSessionActivityCache()
+      this.incomplete = false
+    }
+    for (const entry of branch) {
+      if (this.seen.has(entry.id)) continue
+      this.seen.add(entry.id)
+      if (entry.type === 'message') this.message(entry.id, entry.message)
+      if (entry.type === 'custom' && entry.customType === 'skill-guard') this.audit(entry.data)
+    }
+    this.tail = branch.at(-1)?.id ?? null
+    const derived = this.cache.derive(this.users, [...this.tools.values()].filter(tool => tool.phase === 'succeeded'), projectPath)
+    const skills = [...derived.skills, ...this.skills.values()]
+      .sort(byCountThenName(item => item.name))
+    return { ...derived, skills, skillCount: skills.length, incomplete: this.incomplete,
+      empty: derived.files.length === 0 && skills.length === 0 && derived.mcp.length === 0 && derived.plugins.length === 0 }
+  }
+
+  private message(id: string, message: unknown): void {
+    if (!isRecord(message)) return
+    const content = Array.isArray(message.content) ? message.content : []
+    if (message.role === 'assistant') for (const part of content) {
+      if (!isRecord(part) || part.type !== 'toolCall' || typeof part.id !== 'string' || typeof part.name !== 'string') continue
+      this.call(part.id, part.name, part.arguments, 'unknown')
+    }
+    if (message.role === 'toolResult' && typeof message.toolCallId === 'string') {
+      const previous = this.tools.get(message.toolCallId)
+      if (previous) {
+        if (message.isError === true) this.tools.delete(message.toolCallId)
+        else this.tools.set(message.toolCallId, { ...previous, phase: 'succeeded' })
+      }
+    }
+    if (message.role === 'toolResult' && isRecord(message.nestedCalls)) {
+      if (message.nestedCalls.complete === false) this.incomplete = true
+      if (Array.isArray(message.nestedCalls.calls)) for (const nested of message.nestedCalls.calls) {
+        if (!isRecord(nested) || typeof nested.id !== 'string' || typeof nested.name !== 'string') continue
+        this.call(nested.id, nested.name, nested.arguments,
+          nested.status === 'ok' ? 'succeeded' : nested.status === 'error' ? 'failed' : 'unknown')
+      }
+    }
+    if (message.role === 'user') {
+      const text = typeof message.content === 'string' ? message.content : content
+        .filter(part => isRecord(part) && part.type === 'text' && typeof part.text === 'string')
+        .map(part => (part as { text: string }).text).join('\n')
+      const skill = parseSkillBlock(text)
+      if (skill === null) return
+      this.users.push({ id, role: 'user', timestamp: null, generation: null, usage: null, turn: null,
+        stopReason: null, errorMessage: null, compaction: null, blocks: [{ contentIndex: 0, kind: 'text',
+          text: `<skill name="${skill.name}" location="${skill.location}">\n已展开\n</skill>`,
+          truncated: false, toolCallId: null, toolName: null, image: null, notice: false }] })
+    }
+  }
+
+  private audit(data: unknown): void {
+    if (!isRecord(data) || data.event !== 'context-loaded' || !Array.isArray(data.loaded)) return
+    for (const item of data.loaded) {
+      if (!isRecord(item) || item.kind === 'reference' || typeof item.name !== 'string' || typeof item.path !== 'string'
+        || typeof item.sha256 !== 'string' || !Array.isArray(item.via)) continue
+      if (item.source !== 'model-read' && item.source !== 'host-injected') continue
+      const source: SkillActivitySource = item.source === 'model-read' ? 'file' : 'host'
+      // 同一证据反复出现在context审计中只算一次；宿主注入按该轮运行去重。
+      const proof = JSON.stringify([source, item.path, item.sha256, source === 'host' ? data.runId : item.via])
+      if (this.evidence.has(proof)) continue
+      this.evidence.add(proof)
+      const key = `${source}:${item.name}:${item.path}`
+      const previous = this.skills.get(key)
+      this.skills.set(key, { name: item.name, source, location: item.path, count: (previous?.count ?? 0) + 1 })
     }
   }
 }

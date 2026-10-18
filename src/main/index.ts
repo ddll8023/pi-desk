@@ -215,6 +215,8 @@ import {
   RUNTIME_REWIND_CHANNEL,
   RUNTIME_PROJECTION_ACK_CHANNEL,
   RUNTIME_PROJECTION_CHANNEL,
+  RUNTIME_HISTORY_CHANNEL,
+  isRuntimeHistoryRequest,
   RUNTIME_PROJECTION_EVENT,
   RUNTIME_RESOURCES_CHANNEL,
   RUNTIME_RESOURCE_PREVIEW_CHANNEL,
@@ -240,6 +242,7 @@ import type {
   ResourcesResult,
   ResourcePreviewResult,
   RuntimeDiagnosticsResult,
+  RuntimeHistoryResult,
   RuntimeErrorCode,
   RuntimeResult,
   RuntimeRewindResult,
@@ -1895,6 +1898,15 @@ function registerRuntimeHandlers(pageUrl: string): void {
       return sdkRuntime.getProjection(args[0])
     }
   )
+
+  /** 历史入口不接受路径；会话、绑定与分支由宿主复核。 */
+  handle(RUNTIME_HISTORY_CHANNEL, async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<RuntimeHistoryResult> => {
+    if (!isTrustedCaller(event, pageUrl)) return { ok: false, error: { code: 'FORBIDDEN', message: '不允许此页面读取会话历史。' } }
+    if (args.length !== 1 || !isRuntimeHistoryRequest(args[0])) {
+      return { ok: false, error: { code: 'INVALID_REQUEST', message: '历史读取参数不符合当前会话契约。' } }
+    }
+    return sdkRuntime.readHistory(args[0])
+  })
 
   /** 应用确认只控制未确认通知窗口；参数不合法时忽略，不回传结果。 */
   handle(

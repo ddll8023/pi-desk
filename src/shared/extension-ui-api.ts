@@ -147,7 +147,9 @@ const PLACEMENTS: readonly string[] = ['aboveEditor', 'belowEditor']
 
 /** 字段字符上限只限制形状；内容语义由 Pi 侧给出，展示截断在投影层处理。 */
 const MAX_TITLE_CHARS = 2_000
-const MAX_TEXT_CHARS = 65_536
+/** 确认桥可承诺完整传递的正文上限；扩展通过当前宿主能力协商获取，不依赖项目源码。 */
+export const EXTENSION_CONFIRM_MESSAGE_MAX_CHARS = 65_536
+const MAX_TEXT_CHARS = EXTENSION_CONFIRM_MESSAGE_MAX_CHARS
 const MAX_OPTION_CHARS = 2_000
 const MAX_KEY_CHARS = 256
 const MAX_LIST_ITEMS = 128

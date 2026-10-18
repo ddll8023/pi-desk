@@ -3,6 +3,7 @@
 
   面板按标签常驻挂载，非活动标签只隐藏不卸载，因此切回来仍是同一份编辑内容与撤销历史。
   Markdown 的「源码 / 预览」用叠放层切换而不是销毁编辑器：切到预览再切回来，未保存的修改仍在。
+  预览里的就地编辑以区间替换写回编辑器文档，脏标记、撤销栈与保存都仍由编辑器承担。
   超过可编辑上限的文本仍可预览：这类文件只挂载当前需要的一层，避免大文本同时进入编辑器与渲染器。
   保存统一走 Cmd/Ctrl+S（标签处于活动状态时全局生效），头部不设保存与重新载入按钮；
   外部改动在标签激活与窗口重新聚焦时用 `stat` 检查，未修改的文件自动重新载入，有未保存修改或保存失败时直接弹窗。
@@ -115,6 +116,17 @@ const moreStyle = computed(() => {
 function onChange(): void {
   if (!editable.value) return
   editorStore.markDirty(props.tabKey)
+  // 预览就地编辑的改动先落在预览里，这里把编辑器的最新文本追平给预览，
+  // 两边一致时预览不会重建；不一致（例如外部重新载入）则按新文本重建。
+  if (mode.value === 'preview') previewText.value = editorRef.value?.getText() ?? editorText.value
+}
+
+/**
+ * 预览里就地编辑后写回编辑器文档：编辑器是唯一真源，脏标记、撤销栈、保存与磁盘冲突检测都跟着它走。
+ * 写回失败（编辑器尚未挂载）时只保留预览侧的临时内容，下次外部同步会被编辑器文本覆盖。
+ */
+function onPreviewEdit(change: { readonly start: number; readonly end: number; readonly text: string }): void {
+  editorRef.value?.applyEdit(change.start, change.end, change.text)
 }
 
 /** 预览组件提取完目录后回报条数；没有目录时开关自然隐藏。 */
@@ -431,8 +443,10 @@ onBeforeUnmount(() => {
             :font-size="editorStore.previewFontSize"
             :show-frontmatter="editorStore.showFrontmatter"
             :active="active && mode === 'preview'"
+            :editable="editable"
             @toc="onToc"
             @close-toc="closeToc"
+            @edit="onPreviewEdit"
           />
         </div>
       </div>

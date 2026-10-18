@@ -6,6 +6,8 @@ import type {
   PromptImageInput,
   PromptResult,
   RuntimeCompactRequest,
+  RuntimeHistoryRequest,
+  RuntimeHistoryResult,
   RuntimeError,
   RuntimeResult,
   RuntimeRewindRequest,
@@ -101,6 +103,16 @@ export async function getRuntimeProjection(target: RuntimeTarget): Promise<Proje
   } catch (error) {
     return callFailed(error)
   }
+}
+
+/** 历史查询只向固定会话发送普通对象；桥接异常保留原因。 */
+export async function readRuntimeHistory(request: RuntimeHistoryRequest): Promise<RuntimeHistoryResult> {
+  const bridge = window.desktop
+  if (!bridge || typeof bridge.readRuntimeHistory !== 'function') return unavailable()
+  try {
+    return await bridge.readRuntimeHistory({ runId: request.runId, runtimeId: request.runtimeId,
+      sessionId: request.sessionId, revision: request.revision, query: { ...request.query } })
+  } catch (error) { return callFailed(error) }
 }
 
 /** 读取目标实例当前绑定的可用模型；失败原因由结果表达。 */

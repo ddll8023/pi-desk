@@ -37,6 +37,8 @@ import type {
   PromptResult,
   ResourcesResult,
   RuntimeCompactRequest,
+  RuntimeHistoryRequest,
+  RuntimeHistoryResult,
   RuntimeDiagnosticsResult,
   RuntimeError,
   RuntimeErrorCode,
@@ -163,7 +165,8 @@ const EMPTY_PROJECTION: ProjectionSnapshot = {
   tools: [],
   truncated: false,
   droppedMessages: 0,
-  droppedTools: 0
+  droppedTools: 0,
+  history: { before: null, revision: 0 }
 }
 
 /** 会话状态直接提供模型身份、用量与速率；消息条数沿用投影的展示口径。 */
@@ -935,6 +938,22 @@ export class SdkRuntimeBridge {
     } catch (error) {
       return { ok: false, error: runtimeErrorOf(error) }
     }
+  }
+
+  /** 只转发当前实例、会话与绑定的历史查询；不改变会话或模型上下文。 */
+  async readHistory(request: RuntimeHistoryRequest): Promise<RuntimeHistoryResult> {
+    const matched = this.matchedRun(request)
+    if (matched === null || matched.bindingId === null
+      || matched.run.owner.getSessionStatus().sessionId !== request.sessionId) return { ok: false, error: TARGET_CHANGED_ERROR }
+    const projectPath = matched.run.owner.getSessionStatus().projectPath
+    try {
+      const data = await matched.run.owner.readHistory(request.sessionId, request.query, request.revision)
+      const current = this.matchedRun(request)
+      if (current === null || current.run.owner !== matched.run.owner
+        || current.run.owner.getSessionStatus().sessionId !== request.sessionId
+        || current.run.owner.getSessionStatus().projectPath !== projectPath) return { ok: false, error: TARGET_CHANGED_ERROR }
+      return { ok: true, data }
+    } catch (error) { return { ok: false, error: runtimeErrorOf(error) } }
   }
 
   /** 确认只影响目标实例的未确认窗口；目标不成立或不属于该绑定的确认直接忽略。 */

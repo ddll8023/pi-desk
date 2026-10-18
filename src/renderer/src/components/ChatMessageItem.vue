@@ -5,7 +5,11 @@
 import { computed, onUnmounted, reactive, ref, useId, watch } from 'vue'
 import { copyText } from '../clipboard'
 import { userMessagePayload } from '../chat-view'
-import type { ChatMessageView } from '../chat-view'
+import type { ChatBlock, ChatMessageView } from '../chat-view'
+import type { HistoryChunk } from '../../../shared/runtime-api'
+import { historyChunkKey } from '../stores/runtime'
+import type { HistoryChunkLoadState } from '../stores/runtime'
+import HistoryLoadSentinel from './HistoryLoadSentinel.vue'
 import { formatDuration, useTickingNow } from '../clock'
 import { cacheHitRate, formatTokens } from '../usage-format'
 import MarkdownContent from './MarkdownContent.vue'
@@ -20,12 +24,29 @@ const props = defineProps<{
   readonly disabledReason?: string | null
   /** 同一轮内的非首条 AI 消息：只留时间与用量，不重复 π 标记与角色名。 */
   readonly compactHeader?: boolean
+  readonly historyChunks?: readonly HistoryChunk[] | undefined
+  readonly chunkStates?: Readonly<Record<string, HistoryChunkLoadState>> | undefined
+  readonly historyEnabled?: boolean | undefined
+  readonly historyBusy?: boolean | undefined
+  readonly historyMore?: string | null | undefined
+  readonly historyError?: string | null | undefined
 }>()
 
 const emit = defineEmits<{
   rewind: [messageId: string]
   submitEdit: [messageId: string, editedText: string]
+  loadChunk: [chunk: HistoryChunk]
+  loadMore: []
 }>()
+
+/** 续载定位到原始块；工具结果按调用身份而不是助手消息的位置匹配。 */
+function chunksFor(block: ChatBlock): readonly HistoryChunk[] {
+  return (props.historyChunks ?? []).filter(chunk => block.kind === 'toolcall'
+    ? block.toolCallId !== null && chunk.toolCallId === block.toolCallId
+    : chunk.entryId === props.message.entryId && chunk.contentIndex === block.contentIndex && chunk.field === block.kind)
+}
+const summaryChunks = computed(() => (props.historyChunks ?? []).filter(chunk => chunk.field === 'summary'
+  && chunk.entryId === props.message.entryId))
 const copyFeedback = ref('')
 const copying = ref(false)
 const copySucceeded = computed(() => copyFeedback.value.startsWith('已复制'))
@@ -383,6 +404,15 @@ function onEditKeydown(event: KeyboardEvent): void {
         </summary>
         <div class="chat-compaction-body">
           <MarkdownContent :text="compaction.summary" />
+          <HistoryLoadSentinel
+            v-for="chunk in summaryChunks"
+            :key="historyChunkKey(chunk)"
+            :cursor="`${historyChunkKey(chunk)}:${chunk.offset}`"
+            :enabled="historyEnabled === true && isCompactionExpanded(message.id)"
+            :loading="historyBusy === true"
+            :error="chunkStates?.[historyChunkKey(chunk)]?.error"
+            @load="emit('loadChunk', chunk)"
+          />
         </div>
       </details>
       <p
@@ -415,7 +445,16 @@ function onEditKeydown(event: KeyboardEvent): void {
           @pointerdown.passive="onThinkingBodyPointerDown"
         >
           <MarkdownContent :text="block.text" />
-          <p v-if="block.truncated" class="tool-note">此内容超出展示上限，已截断。</p>
+          <HistoryLoadSentinel
+            v-for="chunk in chunksFor(block)"
+            :key="historyChunkKey(chunk)"
+            :cursor="`${historyChunkKey(chunk)}:${chunk.offset}`"
+            :enabled="historyEnabled === true && isThinkingExpanded(block.key)"
+            :loading="historyBusy === true"
+            :error="chunkStates?.[historyChunkKey(chunk)]?.error"
+            @load="emit('loadChunk', chunk)"
+          />
+          <p v-if="block.truncated && chunksFor(block).length === 0" class="tool-note">此内容超出展示上限，已截断。</p>
         </div>
       </details>
       <!-- 交付了生成式界面的工具调用直接渲染界面，不再套一层折叠卡；其余工具仍走通用 ToolCard。
@@ -448,7 +487,18 @@ function onEditKeydown(event: KeyboardEvent): void {
           :submit-disabled="actionsDisabled === true"
           :submit-disabled-reason="disabledReason ?? null"
         />
-        <ToolCard v-else :block="block" />
+        <ToolCard
+          v-else
+          :block="block"
+          :history-chunks="chunksFor(block)"
+          :chunk-states="chunkStates"
+          :history-enabled="historyEnabled"
+          :history-busy="historyBusy"
+          :history-more="historyMore"
+          :history-error="historyError"
+          @load-more="emit('loadMore')"
+          @load-chunk="emit('loadChunk', $event)"
+        />
       </template>
       <!-- 正文块保持原有样式：用户气泡、图片、技能卡与 AI 回答都不进折叠卡。 -->
       <template v-else-if="block.kind === 'text'">
@@ -473,7 +523,7 @@ function onEditKeydown(event: KeyboardEvent): void {
           </summary>
           <div class="chat-skill-body">
             <MarkdownContent :text="block.skill.content" />
-            <p v-if="block.truncated" class="tool-note">此内容超出展示上限，已截断。</p>
+            <p v-if="block.truncated && chunksFor(block).length === 0" class="tool-note">此内容超出展示上限，已截断。</p>
           </div>
         </details>
         <!-- 图片块只渲染图片；空文本块（仅图片或仅技能调用的消息）不渲染气泡，避免多出一个空气泡。 -->
@@ -483,8 +533,17 @@ function onEditKeydown(event: KeyboardEvent): void {
         >
           <p v-if="isUser">{{ block.text }}</p>
           <MarkdownContent v-else :text="block.text" />
-          <p v-if="block.truncated" class="chat-truncation-note">此内容超出展示上限，已截断。</p>
+          <p v-if="block.truncated && chunksFor(block).length === 0" class="chat-truncation-note">此内容超出展示上限，已截断。</p>
         </div>
+        <HistoryLoadSentinel
+          v-for="chunk in chunksFor(block)"
+          :key="historyChunkKey(chunk)"
+          :cursor="`${historyChunkKey(chunk)}:${chunk.offset}`"
+          :enabled="historyEnabled === true"
+          :loading="historyBusy === true"
+          :error="chunkStates?.[historyChunkKey(chunk)]?.error"
+          @load="emit('loadChunk', chunk)"
+        />
       </template>
     </template>
 

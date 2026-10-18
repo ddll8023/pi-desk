@@ -12,6 +12,7 @@ import { useSessionStore } from '../stores/session'
 import { isSessionKey, useSessionViewStore } from '../stores/session-view'
 import type { SessionReading } from '../stores/session-view'
 import ChatTurnItem from './ChatTurnItem.vue'
+import HistoryLoadSentinel from './HistoryLoadSentinel.vue'
 import ChatOutline from './ChatOutline.vue'
 import AppButton from './ui/AppButton.vue'
 import ConfirmDialog from './ConfirmDialog.vue'
@@ -31,7 +32,7 @@ const projectStore = useProjectStore()
 const runtimeStore = useRuntimeStore()
 const sessionStore = useSessionStore()
 const sessionViewStore = useSessionViewStore()
-const { view: runtimeView, messages, tools, projectionSync, projectionTruncated, droppedMessages, droppedTools,
+const { view: runtimeView, displayMessages: messages, displayTools: tools, history, projectionSync, projectionTruncated, droppedMessages, droppedTools,
   promptView, preparingPrompt, modelSwitchView, rewindView } = storeToRefs(runtimeStore)
 /** 会话视图的稳定键：宿主被回收（挂起）时仍指向同一会话，消息组件不重建。 */
 const conversationKey = computed(() => runtimeStore.conversationKey)
@@ -40,6 +41,7 @@ const viewport = ref<HTMLElement | null>(null)
 const scroller = ref<HTMLElement | null>(null)
 const content = ref<HTMLElement | null>(null)
 const stickToBottom = ref(true)
+const historyIntent = ref(false)
 const activeOutlineId = ref<string | null>(null)
 const outlineLayout = ref<{ left: number; width: number } | null>(null)
 /** 大纲跳转与展开定位保持阅读位置，不被程序滚动或内容收缩产生的 scroll 事件重新开启粘底。 */
@@ -55,6 +57,7 @@ let userGesture = false
 let userScrollFrameHandle: number | null = null
 /** 待恢复的滚动位置：投影分批到达时反复应用，同步完成后再结束恢复。 */
 let pendingRestore: number | null = null
+let pendingAnchor: SessionReading['anchor'] = undefined
 let scrollFrame: number | null = null
 let outlineFrame: number | null = null
 let resizeObserver: ResizeObserver | null = null
@@ -119,7 +122,10 @@ const rewindDetail = computed(() => '回退会新建一条会话继续，原会�
 /** 目标消息的可提交内容（文本与可还原附件）；目标已不在投影里时返回 null，调用方据此不发起回退。 */
 function userMessagePayloadOf(messageId: string): UserMessagePayload | null {
   for (const turn of turns.value) {
-    if (turn.user !== null && turn.user.id === messageId) return userMessagePayload(turn.user)
+    if (turn.user !== null && turn.user.id === messageId) {
+      if (turn.user.blocks.some(block => block.kind === 'text' && block.truncated)) return null
+      return userMessagePayload(turn.user)
+    }
   }
   return null
 }
@@ -207,7 +213,7 @@ const truncationNotice = computed(() => {
   if (projectionTruncated.value) parts.push('较早的响应过程与超长内容已收缩')
   if (droppedTools.value > 0) parts.push(`省略较早工具记录 ${droppedTools.value} 条`)
   if (parts.length === 0) return null
-  return `为控制体积已收缩 AI 侧内容（用户输入全部保留）：${parts.join('，')}。`
+  return `当前展示窗口已收缩：${parts.join('，')}。可加载更早消息，展开对应轮次读取原始记录；这不改变模型上下文。`
 })
 
 /**
@@ -323,7 +329,11 @@ function reattachIfAtBottom(): void {
 
 /** 当前会话的阅读状态：粘底时位置无关紧要，离开底部时按最后一次滚动位置恢复。 */
 function currentReading(): SessionReading {
-  return { stickToBottom: stickToBottom.value, scrollTop: lastScrollTop }
+  const host = scroller.value
+  const anchor = host ? topVisibleTurn(host) : null
+  return { stickToBottom: stickToBottom.value, scrollTop: lastScrollTop,
+    ...(anchor?.dataset.turnKey && host ? { anchor: { turnKey: anchor.dataset.turnKey,
+      offset: anchor.getBoundingClientRect().top - host.getBoundingClientRect().top } } : {}) }
 }
 
 /**
@@ -338,12 +348,14 @@ function applySessionReading(nextKey: string, previousKey: string | null): void 
   if (restored !== null) {
     stickToBottom.value = restored.stickToBottom
     pendingRestore = restored.stickToBottom ? null : restored.scrollTop
+    pendingAnchor = restored.stickToBottom ? undefined : restored.anchor
     return
   }
   // 会话之间必须隔离：目标会话没有留底时按默认贴底处理，不沿用上一个会话的位置。
   if (previousKey !== null && isSessionKey(previousKey)) {
     stickToBottom.value = true
     pendingRestore = null
+    pendingAnchor = undefined
   }
 }
 
@@ -355,6 +367,17 @@ function applyPendingRestore(): void {
   if (pendingRestore === null) return
   const element = scroller.value
   if (element === null) return
+  if (pendingAnchor) {
+    const anchor = content.value?.querySelector<HTMLElement>(`.chat-turn[data-turn-key="${CSS.escape(pendingAnchor.turnKey)}"]`)
+    if (anchor) {
+      element.scrollTop += anchor.getBoundingClientRect().top - element.getBoundingClientRect().top - pendingAnchor.offset
+      pendingAnchor = undefined
+      pendingRestore = element.scrollTop
+    } else if (history.value.before !== null) {
+      if (!history.value.loading && history.value.error === null) void runtimeStore.loadEarlierHistory()
+      return
+    } else pendingAnchor = undefined
+  }
   element.scrollTop = pendingRestore
   lastScrollTop = element.scrollTop
   if (projectionSync.value !== 'synced') return
@@ -401,6 +424,7 @@ function scheduleScrollToBottom(): void {
 }
 
 function jumpToBottom(): void {
+  pendingAnchor = undefined
   outlineTargetId = null
   pendingRestore = null
   stickToBottom.value = true
@@ -410,12 +434,14 @@ function jumpToBottom(): void {
 
 /** 只有明确的手动滚动意图解除跳转保护与待恢复位置；单纯布局变化不代表用户要回到底部。 */
 function releaseOutlineJump(): void {
+  pendingAnchor = undefined
   outlineTargetId = null
   pendingRestore = null
 }
 
 function onWheel(event: WheelEvent): void {
   if (event.deltaY === 0) return
+  if (event.deltaY < 0) historyIntent.value = true
   armUserScroll(event.deltaY < 0 ? 'up' : 'down')
   releaseOutlineJump()
 }
@@ -439,7 +465,10 @@ function onUserGestureEnd(): void {
 /** 阅读键按方向记录意图；其余按键不影响滚动判定。 */
 function onReadingKey(event: KeyboardEvent): void {
   if (event.target instanceof Element && event.target.closest('input, textarea, [contenteditable="true"]')) return
-  if (['ArrowUp', 'PageUp', 'Home'].includes(event.key)) armUserScroll('up')
+  if (['ArrowUp', 'PageUp', 'Home'].includes(event.key)) {
+    historyIntent.value = true
+    armUserScroll('up')
+  }
   else if (['ArrowDown', 'PageDown', 'End', ' '].includes(event.key)) armUserScroll('down')
   else return
   releaseOutlineJump()
@@ -514,7 +543,21 @@ function withAnchoredLayout(mutate: () => void): void {
   })
 }
 
-/** 点一轮的摘要行：收起时保持阅读位置，展开时直接跳到这一轮开头。 */
+/** 前插历史后补偿原可见轮位移，避免滚动条跳到新页顶部。 */
+async function loadEarlier(): Promise<void> {
+  const host = scroller.value
+  const anchor = host ? topVisibleTurn(host) : null
+  const top = anchor?.getBoundingClientRect().top
+  const key = conversationKey.value
+  stickToBottom.value = false
+  await runtimeStore.loadEarlierHistory()
+  await nextTick()
+  if (key !== conversationKey.value || !host || !anchor?.isConnected || top === undefined) return
+  host.scrollTop += anchor.getBoundingClientRect().top - top
+  lastScrollTop = host.scrollTop
+}
+
+/** 点摘要只负责展开或收起，不暴露缓存维护动作。 */
 function toggleTurn(turn: ChatTurnView, index: number): void {
   if (!isTurnExpanded(turn, index)) {
     sessionViewStore.setTurnExpansion(sessionViewStore.key, turn.key, true)
@@ -600,6 +643,9 @@ function startNewSession(): void {
   void sessionStore.open(null, false)
 }
 
+/** 回读详情替换摘要也会改变视口上方高度，DOM更新前保留稳定轮锚点。 */
+watch(turns, () => withAnchoredLayout(() => {}), { flush: 'pre' })
+
 /** DOM 更新与实际尺寸变化都同步粘底及大纲；会话切换清除上一次阅读目标。 */
 watch([turns, streaming, syncNotice, truncationNotice], onLayoutChange, { flush: 'post' })
 /**
@@ -612,6 +658,7 @@ watch(() => promptView.value.phase, (next, previous) => {
   if (next === 'accepted' && previous === 'sending') jumpToBottom()
 })
 watch(conversationKey, () => {
+  historyIntent.value = false
   pendingRewind.value = null
   activeOutlineId.value = null
   // 同一会话重绑（Runtime 代际变化）没有可恢复的位置：继续贴底，不停在历史开头。
@@ -666,14 +713,30 @@ onBeforeUnmount(() => {
         <p v-else-if="rewindView.phase === 'done' && rewindView.cancelled" role="status" class="status-notice">Pi 扩展取消了回退；原消息文本未交回输入框。</p>
         <p v-if="refillNotice !== null" role="status" class="status-notice">{{ refillNotice }}</p>
 
+        <HistoryLoadSentinel
+          v-if="history.before !== null || history.loading || history.error"
+          :cursor="history.before ?? 'history-start'"
+          :enabled="runtimeView.phase === 'ready' && projectionSync === 'synced' && (!stickToBottom || historyIntent)"
+          :loading="history.loading"
+          :error="history.error"
+          @load="loadEarlier"
+        />
+
         <ChatTurnItem
           v-for="(turn, index) in turns"
           :key="`${conversationKey}:${turn.key}`"
           :turn="turn"
           :expanded="isTurnExpanded(turn, index)"
           :current="index === turns.length - 1"
+          :running="streaming"
           :actions-disabled="!canRewind"
           :disabled-reason="rewindBlockReason"
+          :detail="turn.historyId ? history.turns[turn.historyId] : undefined"
+          :history-available="runtimeView.phase === 'ready'"
+          :owner-key="conversationKey"
+          @visibility="(visible, ownerKey) => turn.historyId && runtimeStore.setHistoryVisibility(turn.historyId, visible, ownerKey)"
+          @load-detail="(more) => turn.historyId && runtimeStore.loadHistoryTurn(turn.historyId, more)"
+          @load-chunk="(chunk) => turn.historyId && runtimeStore.loadHistoryChunk(turn.historyId, chunk)"
           @toggle="toggleTurn(turn, index)"
           @rewind="requestRewind"
           @submit-edit="handleSubmitEdit"

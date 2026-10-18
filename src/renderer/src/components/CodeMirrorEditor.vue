@@ -181,7 +181,24 @@ watch(() => props.wrap, () => {
 defineExpose({
   /** 保存时取当前文本；编辑器尚未建立时退回初始值。 */
   getText: (): string => view?.state.doc.toString() ?? props.modelValue,
-  focus: (): void => view?.focus()
+  focus: (): void => view?.focus(),
+  /**
+   * 预览就地编辑的写回入口：按原文区间替换后立即派发，撤销栈、脏标记与保存链路都与源码输入一致。
+   * 区间按文档长度夹紧，避免预览文本比文档新一步时抛错。编辑器未挂载时返回 false，由调用方处理。
+   */
+  applyEdit: (from: number, to: number, insert: string): boolean => {
+    if (view === null) return false
+    const length = view.state.doc.length
+    const start = Math.max(0, Math.min(from, length))
+    const end = Math.max(start, Math.min(to, length))
+    view.dispatch({
+      changes: { from: start, to: end, insert },
+      selection: { anchor: start + insert.length },
+      // 预览态下编辑器是隐藏层，不跟着滚动。
+      scrollIntoView: false
+    })
+    return true
+  }
 })
 </script>
 

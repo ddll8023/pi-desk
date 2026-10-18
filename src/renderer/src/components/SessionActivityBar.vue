@@ -5,8 +5,6 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useAnchoredPopup } from '../anchored-popup'
-import { createSessionActivityCache } from '../session-activity'
-import { useProjectStore } from '../stores/project'
 import { useRuntimeStore } from '../stores/runtime'
 import { useSessionViewStore } from '../stores/session-view'
 import { useWorkspaceTabsStore } from '../stores/workspace-tabs'
@@ -55,11 +53,9 @@ interface ActivitySection {
 }
 
 const runtimeStore = useRuntimeStore()
-const projectStore = useProjectStore()
 const workspaceTabsStore = useWorkspaceTabsStore()
 const sessionViewStore = useSessionViewStore()
-const { messages, tools } = storeToRefs(runtimeStore)
-const { currentProject } = storeToRefs(projectStore)
+const { displayMessages: messages } = storeToRefs(runtimeStore)
 
 /**
  * 是否存在可折叠的历史轮：轮以用户消息为界，会话开头没有用户输入的 AI 消息也算一轮前置轮。
@@ -73,9 +69,10 @@ const hasHistoryTurn = computed(() => {
 /** 全局默认展开当前轮与上一轮；更早轮次的默认开合由它控制，单轮的手动开合按会话保存在 session-view。 */
 const historyExpanded = computed(() => sessionViewStore.historyExpanded)
 
-/** 派生缓存属于本组件实例：流式期间每个批次只重新解析变化的条目，见 session-activity.ts。 */
-const cache = createSessionActivityCache()
-const activity = computed(() => cache.derive(messages.value, tools.value, currentProject.value?.path ?? null))
+/** 轻量累计事实由宿主提供，不受工具卡片的最近100条展示窗口影响。 */
+const activity = computed(() => runtimeStore.activity ?? {
+  files: [], skills: [], mcp: [], plugins: [], fileCount: 0, skillCount: 0, mcpCount: 0, pluginCount: 0, empty: true, incomplete: false
+})
 
 /**
  * 明细浮层：定位、翻转与收边交给共用锚定工具，渲染到 body，因此既不被工作区的
@@ -266,8 +263,8 @@ function splitPath(path: string): { readonly dir: string | null, readonly label:
 }
 
 /** 技能行的来源：显式命令与读取技能文件分开标注，不把隐式加载说成用户下的命令。 */
-function skillMeta(source: 'command' | 'file', count: number): string {
-  const label = source === 'command' ? '技能命令' : '读取 SKILL.md'
+function skillMeta(source: 'command' | 'file' | 'host', count: number): string {
+  const label = source === 'command' ? '用户显式展开' : source === 'host' ? '宿主注入' : '模型完整读取'
   return count > 1 ? `${label} ×${count}` : label
 }
 
@@ -318,7 +315,7 @@ function onEscape(): void {
 </script>
 
 <template>
-  <section v-if="!activity.empty || hasHistoryTurn" class="session-activity" aria-label="对话工具" @keydown.esc="onEscape">
+  <section v-if="!activity.empty || hasHistoryTurn || activity.incomplete" class="session-activity" aria-label="对话工具" @keydown.esc="onEscape">
     <!-- 一行两端：左侧每类一枚胶囊（点开该类明细），右侧早期对话的整体折叠开关。 -->
     <div ref="rowElement" class="chat-column session-activity-row mx-auto">
       <div v-if="!activity.empty" class="session-activity-chips" role="group" aria-label="会话活动分类">
@@ -336,15 +333,16 @@ function onEscape(): void {
           <span class="session-activity-chip-count">{{ section.count }}</span>
         </AppButton>
       </div>
+      <span v-if="activity.incomplete" class="text-xs text-desk-text-muted" title="SDK曾省略嵌套调用或参数；当前事实不受工具窗口裁剪，但不能恢复从未保存的信息。">嵌套记录不完整，计数可能偏少</span>
       <AppButton
         v-if="hasHistoryTurn"
         variant="unstyled"
         class="session-activity-process"
         :aria-expanded="historyExpanded"
-        :title="historyExpanded ? '收起当前轮与上一轮之外的对话，只留用户输入与一行 AI 摘要' : '展开所有轮次的 AI 回答'"
+        :title="historyExpanded ? '收起当前轮与上一轮之外的对话，只留用户输入与一行 AI 摘要' : '展开已加载轮次；缺失详情在进入视口时读取'"
         @click="onToggleHistory"
       >
-        <span>{{ historyExpanded ? '折叠之前的对话' : '展开全部对话' }}</span>
+        <span>{{ historyExpanded ? '折叠之前的对话' : '展开已加载对话' }}</span>
         <span aria-hidden="true">{{ historyExpanded ? '⌃' : '⌄' }}</span>
       </AppButton>
     </div>

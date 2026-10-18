@@ -1,4 +1,4 @@
-/** 只定义 Runtime 状态、Prompt 提交、对话回退、中止、可用模型读取与当前会话模型切换、手动上下文压缩、Pi 资源与资源预读、诊断读取、MCP 状态、MCP 配置列举、MCP 服务器探测与 MCP 登录/退出/重连命令、消息/工具投影（含生成计时与压缩记录）IPC 的固定通道、事件名、结果类型与跨进程响应校验。 */
+/** 只定义 Runtime 状态、Prompt 提交、对话回退、中止、可用模型读取与当前会话模型切换、手动上下文压缩、Pi 资源与资源预读、诊断读取、MCP 状态、MCP 配置列举、MCP 服务器探测与 MCP 登录/退出/重连命令、当前分支历史分页与原文回读、累计活动、消息/工具投影（含生成计时与压缩记录）IPC 的固定通道、事件名、结果类型与跨进程响应校验。 */
 import type { DesktopErrorCode } from './desktop-api'
 import { isGenuiPayload } from './genui-api'
 import type { GenuiPayload } from './genui-api'
@@ -9,6 +9,8 @@ export const RUNTIME_PROMPT_CHANNEL = 'desktop:runtime-prompt'
 export const RUNTIME_REWIND_CHANNEL = 'desktop:runtime-rewind'
 export const RUNTIME_ABORT_CHANNEL = 'desktop:runtime-abort'
 export const RUNTIME_PROJECTION_CHANNEL = 'desktop:runtime-projection'
+/** 历史读取只针对已绑定会话的当前分支，不接受文件路径。 */
+export const RUNTIME_HISTORY_CHANNEL = 'desktop:runtime-history'
 export const RUNTIME_PROJECTION_ACK_CHANNEL = 'desktop:runtime-projection-ack'
 export const RUNTIME_CAPABILITIES_CHANNEL = 'desktop:runtime-capabilities'
 export const RUNTIME_SET_MODEL_CHANNEL = 'desktop:runtime-set-model'
@@ -354,6 +356,8 @@ export interface ToolExecution {
    * 载荷已由主进程按 `parseGenuiPayload` 校验并归一，渲染端可直接使用。
    */
   readonly ui: GenuiPayload | null
+  /** 完整当前分支中该界面的最高版本，避免回读旧页时误启用旧界面。 */
+  readonly latestRevision?: number
 }
 
 /** AI 消息生成计时：时刻来自 Desktop 接收事件，不代表模型服务端耗时，也不包含后续工具执行。 */
@@ -416,6 +420,12 @@ export interface ProjectionMessage {
   readonly errorMessage: string | null
   /** 压缩记录；仅 `role === 'compaction'` 时非 null，此时 `blocks` 为空。 */
   readonly compaction: ProjectionCompaction | null
+  /** 官方来源条目；临时流式消息在落盘前为空。 */
+  readonly entryId?: string | null
+  /** 展示窗口中的摘要或截断内容可以按此标记回读，不代表原始记录已丢失。 */
+  readonly recoverable?: boolean
+  /** 前置轮也有稳定身份；不依赖某次分页恰好保留的最后一条回答。 */
+  readonly turnEntryId?: string
 }
 
 /**
@@ -433,6 +443,7 @@ export type ProjectionUpdate =
   | { readonly kind: 'block'; readonly messageId: string; readonly block: ProjectionBlock }
   | { readonly kind: 'message'; readonly message: ProjectionMessage }
   | { readonly kind: 'tool'; readonly tool: ToolExecution }
+  | { readonly kind: 'activity'; readonly activity: SessionActivity }
 
 /** 重新订阅或失去同步时的唯一基准；没有活动 Runtime 时消息与工具列表为空。 */
 export interface ProjectionSnapshot {
@@ -447,6 +458,8 @@ export interface ProjectionSnapshot {
   /** 被丢弃的 AI 侧消息条数；用户消息永不丢弃，因此不计入。 */
   readonly droppedMessages: number
   readonly droppedTools: number
+  readonly activity?: SessionActivity
+  readonly history?: { readonly before: string | null; readonly revision: number }
 }
 
 /** `resyncRequired` 表示增量已作废，渲染端应换取快照而不是继续应用本批更新。 */
@@ -461,6 +474,84 @@ export interface ProjectionBatch {
 
 export type ProjectionResult =
   | { readonly ok: true; readonly data: ProjectionSnapshot }
+  | { readonly ok: false; readonly error: RuntimeError }
+
+/** 轻量会话活动契约；共享层不依赖宿主、SDK或渲染实现。 */
+export type SkillActivitySource = 'command' | 'file' | 'host'
+export interface SessionFileActivity {
+  readonly key: string
+  readonly label: string
+  readonly reads: number
+  readonly writes: number
+}
+export interface SessionSkillActivity {
+  readonly name: string
+  readonly source: SkillActivitySource
+  readonly location: string | null
+  readonly count: number
+}
+export interface SessionMcpActivity {
+  readonly server: string
+  readonly tools: readonly { readonly name: string; readonly count: number }[]
+  readonly count: number
+}
+export interface SessionPluginActivity {
+  readonly toolName: string
+  readonly count: number
+}
+export interface SessionActivity {
+  readonly files: readonly SessionFileActivity[]
+  readonly skills: readonly SessionSkillActivity[]
+  readonly mcp: readonly SessionMcpActivity[]
+  readonly plugins: readonly SessionPluginActivity[]
+  readonly fileCount: number
+  readonly skillCount: number
+  readonly mcpCount: number
+  readonly pluginCount: number
+  readonly empty: boolean
+  /** SDK嵌套记录曾省略调用或参数，恢复时无法凭空补全。 */
+  readonly incomplete?: boolean
+}
+
+/** 分段读取始终指向当前分支中的一个原始内容块。 */
+export interface HistoryChunk {
+  readonly entryId: string
+  readonly contentIndex: number
+  readonly field: 'text' | 'thinking' | 'arguments' | 'output' | 'summary'
+  readonly offset: number
+  /** 工具续段必须写回原卡片，不另外生成原文区域。 */
+  readonly toolCallId?: string
+  /** 已载入的该文本块末尾在工具聚合输出中的位置。 */
+  readonly targetOffset?: number
+}
+export type HistoryQuery =
+  | { readonly kind: 'page'; readonly before: string | null }
+  | { readonly kind: 'turn'; readonly turnId: string; readonly after: string | null }
+  | ({ readonly kind: 'text' } & HistoryChunk)
+export interface RuntimeHistoryRequest {
+  readonly revision: number
+  readonly runId: number
+  readonly runtimeId: number
+  readonly sessionId: string
+  readonly query: HistoryQuery
+}
+export interface HistoryPage {
+  readonly kind: 'page' | 'turn'
+  readonly messages: readonly ProjectionMessage[]
+  readonly tools: readonly ToolExecution[]
+  readonly chunks: readonly HistoryChunk[]
+  readonly before: string | null
+  readonly next: string | null
+  readonly turnId: string | null
+}
+export type HistoryData = HistoryPage | {
+  readonly kind: 'text'
+  readonly chunk: HistoryChunk
+  readonly text: string
+  readonly next: number | null
+}
+export type RuntimeHistoryResult =
+  | { readonly ok: true; readonly data: HistoryData }
   | { readonly ok: false; readonly error: RuntimeError }
 
 /** 可用模型的精简投影；仅保留模型选择与展示、Provider 状态与图片输入判断所需字段。 */
@@ -689,6 +780,7 @@ export interface RuntimeApi {
   readonly rewindRuntime: (request: RuntimeRewindRequest) => Promise<RuntimeRewindResult>
   /** 读取目标运行实例当前绑定的投影快照；未绑定时返回空基准。 */
   readonly getRuntimeProjection: (target: RuntimeTarget) => Promise<ProjectionResult>
+  readonly readRuntimeHistory: (request: RuntimeHistoryRequest) => Promise<RuntimeHistoryResult>
   /** 读取目标运行实例当前绑定的可用模型；失败原因由结果表达。 */
   readonly getRuntimeCapabilities: (target: RuntimeTarget) => Promise<CapabilitiesResult>
   /**
@@ -952,6 +1044,9 @@ function isProjectionMessage(value: unknown): value is ProjectionMessage {
   if (!roleOk) return false
   const compaction = value.role === 'compaction' ? isProjectionCompaction(value.compaction) : value.compaction === null
   return typeof value.id === 'string'
+    && (value.entryId === undefined || value.entryId === null || isHistoryId(value.entryId))
+    && (value.recoverable === undefined || typeof value.recoverable === 'boolean')
+    && (value.turnEntryId === undefined || isHistoryId(value.turnEntryId))
     && compaction
     && Array.isArray(value.blocks)
     && value.blocks.every(isProjectionBlock)
@@ -1020,6 +1115,7 @@ function isToolExecution(value: unknown): value is ToolExecution {
     && value.nonTextBlocks >= 0
     && Array.isArray(value.nonTextParts)
     && value.nonTextParts.every(isToolNonTextPart)
+    && (value.latestRevision === undefined || isCount(value.latestRevision))
     && (value.ui === null || isGenuiPayload(value.ui))
     && isToolDiff(value.diff)
 }
@@ -1067,6 +1163,7 @@ function isToolDiff(value: unknown): value is ToolDiff | null {
 
 function isProjectionUpdate(value: unknown): value is ProjectionUpdate {
   if (!isRecord(value)) return false
+  if (value.kind === 'activity') return isSessionActivity(value.activity)
   if (value.kind === 'tool') return isToolExecution(value.tool)
   if (value.kind === 'message') return isProjectionMessage(value.message)
   if (typeof value.messageId !== 'string') return false
@@ -1090,7 +1187,10 @@ function isProjectionSnapshot(value: unknown): value is ProjectionSnapshot {
   if (typeof value.seq !== 'number' || !Number.isInteger(value.seq) || value.seq < 0) return false
   if (!Array.isArray(value.messages) || !value.messages.every(isProjectionMessage)) return false
   if (!Array.isArray(value.tools) || !value.tools.every(isToolExecution)) return false
-  return typeof value.truncated === 'boolean'
+  return (value.activity === undefined || isSessionActivity(value.activity))
+    && (value.history === undefined || (isRecord(value.history)
+      && (value.history.before === null || isHistoryId(value.history.before)) && isCount(value.history.revision)))
+    && typeof value.truncated === 'boolean'
     && typeof value.droppedMessages === 'number'
     && Number.isInteger(value.droppedMessages)
     && value.droppedMessages >= 0
@@ -1137,6 +1237,67 @@ export function isProjectionResult(value: unknown): value is ProjectionResult {
   return typeof message === 'string'
     && typeof code === 'string'
     && RUNTIME_ERROR_CODES.includes(code)
+}
+
+/** 条目身份有界；不允许把任意路径混入历史请求。 */
+function isHistoryId(value: unknown): value is string {
+  return typeof value === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value)
+}
+function isHistoryChunk(value: unknown): value is HistoryChunk {
+  return isRecord(value) && isHistoryId(value.entryId)
+    && typeof value.field === 'string' && ['text', 'thinking', 'arguments', 'output', 'summary'].includes(value.field)
+    && typeof value.contentIndex === 'number' && Number.isSafeInteger(value.contentIndex) && value.contentIndex >= 0
+    && typeof value.offset === 'number' && Number.isSafeInteger(value.offset) && value.offset >= 0
+    && (value.toolCallId === undefined || (typeof value.toolCallId === 'string' && value.toolCallId.length > 0
+      && value.toolCallId.length <= 512 && !value.toolCallId.includes('\0')))
+    && (value.targetOffset === undefined || (typeof value.targetOffset === 'number'
+      && Number.isSafeInteger(value.targetOffset) && value.targetOffset >= 0))
+    && Object.keys(value).every(key => ['entryId', 'field', 'contentIndex', 'offset', 'kind', 'toolCallId', 'targetOffset'].includes(key))
+}
+export function isHistoryQuery(value: unknown): value is HistoryQuery {
+  if (!isRecord(value)) return false
+  if (value.kind === 'page') return (value.before === null || isHistoryId(value.before))
+    && Object.keys(value).every(key => key === 'kind' || key === 'before')
+  if (value.kind === 'turn') return isHistoryId(value.turnId) && (value.after === null || isHistoryId(value.after))
+    && Object.keys(value).every(key => ['kind', 'turnId', 'after'].includes(key))
+  return value.kind === 'text' && isHistoryChunk(value)
+}
+export function isRuntimeHistoryRequest(value: unknown): value is RuntimeHistoryRequest {
+  return isRecord(value) && isRuntimeTarget({ runId: value.runId, runtimeId: value.runtimeId })
+    && value.runtimeId !== null && isHistoryId(value.sessionId) && isHistoryQuery(value.query) && isCount(value.revision)
+    && Object.keys(value).every(key => ['runId', 'runtimeId', 'sessionId', 'query', 'revision'].includes(key))
+}
+/** 活动只携带轻量事实，验证每类明细而非信任静态类型。 */
+export function isSessionActivity(value: unknown): value is SessionActivity {
+  if (!isRecord(value)) return false
+  const counted = (row: unknown): row is Record<string, unknown> => isRecord(row) && isCount(row.count)
+  return Array.isArray(value.files) && value.files.every(row => isRecord(row)
+      && typeof row.key === 'string' && typeof row.label === 'string' && isCount(row.reads) && isCount(row.writes))
+    && Array.isArray(value.skills) && value.skills.every(row => counted(row) && typeof row.name === 'string'
+      && ['command', 'file', 'host'].includes(String(row.source)) && (row.location === null || typeof row.location === 'string'))
+    && Array.isArray(value.mcp) && value.mcp.every(row => counted(row) && typeof row.server === 'string'
+      && Array.isArray(row.tools) && row.tools.every(tool => counted(tool) && typeof tool.name === 'string'))
+    && Array.isArray(value.plugins) && value.plugins.every(row => counted(row) && typeof row.toolName === 'string')
+    && ['fileCount', 'skillCount', 'mcpCount', 'pluginCount'].every(key => isCount(value[key]))
+    && typeof value.empty === 'boolean'
+    && (value.incomplete === undefined || typeof value.incomplete === 'boolean')
+}
+export function isHistoryData(value: unknown): value is HistoryData {
+  if (!isRecord(value)) return false
+  if (value.kind === 'text') return isHistoryChunk(value.chunk) && typeof value.text === 'string'
+    && value.text.length <= 262_144 && (value.next === null || isCount(value.next))
+  return (value.kind === 'page' || value.kind === 'turn')
+    && Array.isArray(value.messages) && value.messages.length <= 64 && value.messages.every(isProjectionMessage)
+    && Array.isArray(value.tools) && value.tools.length <= 100 && value.tools.every(isToolExecution)
+    && Array.isArray(value.chunks) && value.chunks.every(isHistoryChunk)
+    && (value.before === null || isHistoryId(value.before)) && (value.next === null || isHistoryId(value.next))
+    && (value.turnId === null || isHistoryId(value.turnId))
+}
+export function isRuntimeHistoryResult(value: unknown): value is RuntimeHistoryResult {
+  if (!isRecord(value)) return false
+  if (value.ok === true) return isHistoryData(value.data)
+  return value.ok === false && isRecord(value.error) && typeof value.error.message === 'string'
+    && typeof value.error.code === 'string' && RUNTIME_ERROR_CODES.includes(value.error.code)
 }
 
 function isModelSummary(value: unknown): value is ModelSummary {

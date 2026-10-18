@@ -1,7 +1,7 @@
 /** SDK 扩展交互桥：持有可取消 Promise，按绑定隔离请求；回应只用于本次交互，不进入快照或日志。 */
 import { randomUUID } from 'node:crypto'
 import type { ExtensionUIContext, ExtensionUIDialogOptions } from '@earendil-works/pi-coding-agent'
-import { projectExtensionUiRequest } from '../shared/extension-ui-api'
+import { EXTENSION_CONFIRM_MESSAGE_MAX_CHARS, projectExtensionUiRequest } from '../shared/extension-ui-api'
 import type { ExtensionDialogResponseInput } from '../shared/extension-ui-api'
 
 interface PendingDialog {
@@ -46,7 +46,11 @@ export class ExtensionUiBridge {
         return response.kind === 'value' ? values.get(response.value) : undefined
       },
       confirm: async (title, message, opts) => {
-        const response = await this.dialog('confirm', { title: displayText(title), message: displayText(message) }, opts)
+        // 审批正文必须完整、原样传递；不能截断后仍接受“是”。其他展示方法维持既有预算。
+        if (typeof message !== 'string' || message.length > EXTENSION_CONFIRM_MESSAGE_MAX_CHARS) {
+          throw this.unavailable('确认正文超过完整展示上限，未截断放行。')
+        }
+        const response = await this.dialog('confirm', { title: displayText(title), message }, opts)
         return response.kind === 'confirm' && response.confirmed
       },
       input: async (title, placeholder, opts) => {

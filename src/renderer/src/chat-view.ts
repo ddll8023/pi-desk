@@ -5,7 +5,7 @@
  * 渲染项分两层：消息层按块展开（`toMessages`），轮层以用户消息为界把消息分组（`toTurns`）。
  * 折叠、展开与大纲跳转都以轮为单位，因此轮层一并算好条数、响应计时与最后一次调用的用量。
  *
- * 不重建消息、不猜测缺失内容，也不保存历史；投影快照与批次仍是唯一来源。投影按消息 copy-on-write
+ * 不猜测缺失内容，也不读取磁盘；来源为宿主实时投影与当前分支历史回读副本。投影按消息 copy-on-write
  * （只替换被改动的消息与工具条目对象），因此这里缓存上一次的渲染项：消息对象与其工具条目对象都没变
  * 时直接复用，避免每个批次都重建整段历史的块对象；缓存只保留仍在投影里的消息，不持有已丢弃内容。
  * 用户消息的图片附件块经 `ChatTextBlock.image` 原样透传；工具卡片所需的字段（含 Diff）原样
@@ -18,7 +18,7 @@
  * 压缩记录（`role === 'compaction'`）同样只做透传：它的摘要与 token 数来自投影，不由本模块推算。
  * `userMessagePayload` 反向把一条用户消息还原成可再次提交的输入（文本与附件），供复制、修改预填与回退回填共用。
  *
- * 生成式界面只有一份可交互：同一 `documentId` 取当前投影里的最高 `revision`，其余版本标上
+ * 生成式界面只有一份可交互：同一 `documentId` 取已加载记录与宿主给出的完整分支最高版本，其余版本标上
  * `supersededBy` 由界面折叠成只读记录。这个判定只在本模块做一次，渲染组件不各自推断；
  * 因此缓存有效性除了消息与工具条目，还要比对每个界面当前应得的 `supersededBy`。
  */
@@ -29,6 +29,8 @@ import { parseSkillBlock, stripImageMarkerLines } from '../../shared/user-messag
 
 /** 工具调用块的渲染项；`execution` 为 null 表示该工具调用没有对应执行条目（尚未到达或历史中没有结果）。 */
 export interface ChatToolBlock {
+  readonly contentIndex: number
+  readonly toolCallId: string | null
   readonly kind: 'toolcall'
   readonly key: string
   readonly toolName: string
@@ -46,6 +48,7 @@ export interface ChatToolBlock {
 }
 
 export interface ChatTextBlock {
+  readonly contentIndex: number
   readonly kind: 'text'
   readonly key: string
   readonly text: string
@@ -65,6 +68,7 @@ export interface ChatTextBlock {
 }
 
 export interface ChatThinkingBlock {
+  readonly contentIndex: number
   readonly kind: 'thinking'
   readonly key: string
   readonly text: string
@@ -81,6 +85,7 @@ export type ChatBlock = ChatTextBlock | ChatThinkingBlock | ChatToolBlock
 export interface ChatTurnView {
   /** 轮标识：用户消息 id；会话开头没有用户消息的前置轮用固定键，不会与消息 id 相同。 */
   readonly key: string
+  readonly historyId: string | null
   readonly user: ChatMessageView | null
   readonly responses: readonly ChatMessageView[]
   /** 轮内 AI 消息条数；折叠摘要用它说明收起了几条。 */
@@ -93,6 +98,9 @@ export interface ChatTurnView {
 
 export interface ChatMessageView {
   readonly id: string
+  readonly entryId: string | null
+  readonly recoverable: boolean
+  readonly turnEntryId: string | null
   readonly role: 'user' | 'assistant' | 'compaction'
   readonly blocks: readonly ChatBlock[]
   /** 整条消息的失败文案；非 null 时界面按错误提示展示。 */
@@ -224,7 +232,8 @@ function latestRevisions(
       const ui = toolsById.get(block.toolCallId)?.ui
       if (ui === undefined || ui === null) continue
       const current = latest.get(ui.documentId)
-      if (current === undefined || ui.revision > current) latest.set(ui.documentId, ui.revision)
+      const revision = Math.max(ui.revision, toolsById.get(block.toolCallId)?.latestRevision ?? ui.revision)
+      if (current === undefined || revision > current) latest.set(ui.documentId, revision)
     }
   }
   return latest
@@ -356,6 +365,7 @@ function lastUsage(responses: readonly ChatMessageView[]): MessageUsage | null {
 function buildTurnView(group: TurnGroup): ChatTurnView {
   return {
     key: group.key,
+    historyId: group.user?.entryId ?? group.responses[0]?.turnEntryId ?? null,
     user: group.user,
     responses: group.responses,
     responseCount: group.responses.length,
@@ -390,7 +400,10 @@ function buildMessageView(
 
   return {
     view: {
-      id: message.id,
+      id: message.entryId ? `history:${message.entryId}` : message.id,
+      entryId: message.entryId ?? null,
+      recoverable: message.recoverable === true,
+      turnEntryId: message.turnEntryId ?? null,
       role: message.role,
       blocks,
       failure: messageFailureText(message),
@@ -420,6 +433,7 @@ function toChatBlock(
     const userText = skill === null ? block.text : skill.userMessage ?? ''
     return {
       kind: 'text',
+      contentIndex: block.contentIndex,
       key,
       text: message.role === 'user' ? stripImageMarkerLines(userText) : userText,
       truncated: block.truncated,
@@ -432,7 +446,7 @@ function toChatBlock(
     }
   }
   if (block.kind === 'thinking') {
-    return { kind: 'thinking', key, text: block.text, truncated: block.truncated }
+    return { kind: 'thinking', contentIndex: block.contentIndex, key, text: block.text, truncated: block.truncated }
   }
 
   const execution = block.toolCallId === null ? undefined : toolsById.get(block.toolCallId)
@@ -444,6 +458,8 @@ function toChatBlock(
     : uiRefs.find((ref) => ref.documentId === ui.documentId)?.supersededBy ?? null
   return {
     kind: 'toolcall',
+    contentIndex: block.contentIndex,
+    toolCallId: block.toolCallId,
     key,
     toolName: firstNonEmpty(block.toolName, execution?.toolName) ?? UNKNOWN_TOOL_NAME,
     execution: execution ?? null,

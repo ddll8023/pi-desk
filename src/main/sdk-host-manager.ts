@@ -19,7 +19,7 @@ import type {
 } from '../sdk-host/protocol'
 import type {
   AgentCapabilities, McpStatus, PiResources, ProjectionBatch, ProjectionSnapshot, PromptImageInput,
-  RuntimeDiagnostics
+  RuntimeDiagnostics, HistoryData, HistoryQuery
 } from '../shared/runtime-api'
 import { ExtensionUiManager } from './extension-ui-manager'
 import type { ExtensionDialogResponseInput, ExtensionUiSnapshot } from '../shared/extension-ui-api'
@@ -71,6 +71,7 @@ const EXPECTED_REPLIES: Record<SdkHostRequest['type'], SdkHostFrame['type'] | nu
   'mcp-status': 'mcp-status-result',
   'mcp-command': 'mcp-command-result',
   'projection-snapshot': 'projection-result',
+  history: 'history-result',
   'projection-ack': 'ack-result',
   'ui-response': 'ui-result',
   'authorization-result': null
@@ -456,6 +457,20 @@ export class SdkHostManager {
 
   /** 展示消息到官方条目 ID 的镜像：只在同一绑定代际内保留，宿主失效时清空。 */
   entryIdOf(messageId: string): string | null { return this.entryIds.get(messageId) ?? null }
+
+  /** 历史读取固定会话与绑定；等待期间换代即拒绝旧结果。 */
+  async readHistory(sessionId: string, query: HistoryQuery, revision: number): Promise<HistoryData> {
+    const record = this.requireHost(true)
+    const bindingId = this.sessionSnapshot.bindingId
+    if (bindingId === null || this.sessionSnapshot.sessionId !== sessionId) throw new SdkHostError('STALE_SESSION', FAILURE_MESSAGES.STALE_SESSION)
+    const frame = await this.request(record, { version: SDK_HOST_PROTOCOL_VERSION, hostId: record.hostId,
+      requestId: randomUUID(), type: 'history', bindingId, sessionId, query, revision }, SESSION_TIMEOUT_MS)
+    if (this.active !== record || this.sessionSnapshot.bindingId !== bindingId || this.sessionSnapshot.sessionId !== sessionId) {
+      throw new SdkHostError('STALE_SESSION', FAILURE_MESSAGES.STALE_SESSION)
+    }
+    if (frame.type !== 'history-result') throw new SdkHostError('HOST_PROTOCOL_ERROR', '历史读取结果不符合契约。')
+    return frame.data
+  }
 
   /** 镜像的最新投影快照；未取得时为 null，不由主进程凭空造空基准。 */
   getProjection(): ProjectionSnapshot | null { return this.projection }

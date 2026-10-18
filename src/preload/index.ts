@@ -306,6 +306,8 @@ import {
   RUNTIME_REWIND_CHANNEL,
   RUNTIME_PROJECTION_ACK_CHANNEL,
   RUNTIME_PROJECTION_CHANNEL,
+  RUNTIME_HISTORY_CHANNEL,
+  isRuntimeHistoryResult,
   RUNTIME_PROJECTION_EVENT,
   RUNTIME_RESOURCES_CHANNEL,
   RUNTIME_RESOURCE_PREVIEW_CHANNEL,
@@ -346,6 +348,7 @@ import type {
   RuntimeApi,
   RuntimeCompactRequest,
   RuntimeDiagnosticsResult,
+  RuntimeHistoryRequest,
   RuntimeResult,
   RuntimeSetModelRequest,
   RuntimeRewindRequest,
@@ -1043,6 +1046,14 @@ const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionAp
       runtimeId: target.runtimeId
     })
     return isProjectionResult(response) ? response : invalidProjectionResponse()
+  },
+
+  async readRuntimeHistory(request: RuntimeHistoryRequest) {
+    const response: unknown = await ipcRenderer.invoke(RUNTIME_HISTORY_CHANNEL, {
+      runId: request.runId, runtimeId: request.runtimeId, sessionId: request.sessionId, revision: request.revision, query: { ...request.query }
+    })
+    return isRuntimeHistoryResult(response) ? response
+      : { ok: false as const, error: { code: 'INVALID_RESPONSE' as const, message: '桌面接口返回了无法识别的历史记录。' } }
   },
 
   async getRuntimeCapabilities(target: RuntimeTarget) {

@@ -188,6 +188,9 @@ async function dispatch(request: SdkHostRequest): Promise<void> {
       send({ ...envelope, type: 'mcp-command-result',
         status: await runtime.runMcpCommand(request.bindingId, request.action, request.serverName) })
       return
+    case 'history':
+      send({ ...envelope, type: 'history-result', data: runtime.readHistory(request.bindingId, request.sessionId, request.query, request.revision) })
+      return
     case 'projection-snapshot': {
       const projection = runtime.getProjection(request.bindingId)
       if (projection === null) { fail(request, 'STALE_SESSION'); return }

@@ -9,6 +9,9 @@
  * 边界：只按已登记项目创建终端，工作目录固定为该项目路径；shell 由本机探测决定，不接受页面指定。
  * 关闭、项目移除与应用退出都经 `terminateProcessTree` 收敛进程树。已退出的终端记录保留到页面显式关闭，
  * 以便标签如实展示退出码；退出前最后一段输出一定下发，背压只约束在途流量，不丢数据。
+ *
+ * 应用退出必须等 PTY 进程真正退出：node-pty 用原生线程把退出事件经 ThreadSafeFunction 投递回主线程，
+ * 主线程一旦进入 Node 环境销毁，这个回调会在已失效的环境里调用 JS，异常无人接收并直接 abort 进程。
  */
 import type { ChildProcess } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
@@ -58,8 +61,11 @@ const MAX_SESSIONS = 12
 /** 终止进程树后的收尾等待：仍未退出时补一次强杀，避免残留 shell 及其子进程。 */
 const KILL_GRACE_MS = 1500
 
-/** 应用退出时的收敛等待：给 shell 一点退出时间，之后强制收敛，不把退出链拖住。 */
-const SHUTDOWN_WAIT_MS = 300
+/** 应用退出时的收敛等待：给 shell 一点退出时间，等它的退出回调回到主线程。 */
+const SHUTDOWN_WAIT_MS = 400
+
+/** 强制收敛后的确认等待：SIGKILL 生效很快，预算内仍不确认就放弃，不把退出链拖住。 */
+const SHUTDOWN_KILL_WAIT_MS = 300
 
 /** 交互式 shell 不需要的应用内部变量：把 Electron 的运行开关与 Node 参数留在主进程。 */
 const EXCLUDED_ENVIRONMENT_KEYS: readonly string[] = ['ELECTRON_RUN_AS_NODE', 'NODE_OPTIONS']
@@ -94,6 +100,12 @@ interface TerminalSession {
   paused: boolean
   /** 已从会话表移除：不再下发、不再改状态，只等进程收尾。 */
   released: boolean
+  /** PTY 进程已确认退出；退出链靠它判断能否安全结束进程。 */
+  exited: boolean
+  /** 退出确认兑现时完成；与 `released` 无关，只表达进程真的没了。 */
+  readonly exitPromise: Promise<void>
+  /** 兑现 `exitPromise`：退出事件到达时调用，重复调用无副作用。 */
+  readonly settleExit: () => void
 }
 
 export interface TerminalManagerOptions {
@@ -137,6 +149,10 @@ export class TerminalManager {
       return sessionFailure('INTERNAL_ERROR', spawnFailureMessage(error, shell.file))
     }
 
+    let settleExit: () => void = () => {}
+    const exitPromise = new Promise<void>((resolveExit) => {
+      settleExit = resolveExit
+    })
     const session: TerminalSession = {
       id: randomUUID(),
       projectPath,
@@ -154,7 +170,10 @@ export class TerminalManager {
       flushTimer: null,
       killTimer: null,
       paused: false,
-      released: false
+      released: false,
+      exited: false,
+      exitPromise,
+      settleExit
     }
     this.sessions.set(session.id, session)
     pty.onData((chunk) => this.onData(session, chunk))
@@ -248,19 +267,33 @@ export class TerminalManager {
     }
   }
 
-  /** 应用退出：收敛全部终端并等一小段收尾时间，之后强制结束，不把退出链拖住。 */
+  /**
+   * 应用退出：收敛全部终端，并等到进程真的退出、退出回调已在主线程派发完才返回。
+   *
+   * 先给 SIGTERM 一点时间；仍未退出的进程树用 SIGKILL 收敛，再等一次确认。预算内确认不完才放弃，
+   * 不把退出链拖住。这个等待不是礼貌收尾：退出回调必须赶在 Node 环境销毁之前跑完，否则进程被 abort。
+   */
   async shutdown(): Promise<void> {
     const sessions = [...this.sessions.values()]
     this.sessions.clear()
     if (sessions.length === 0) return
     for (const session of sessions) this.release(session)
-    await delay(SHUTDOWN_WAIT_MS)
+    await waitForExits(sessions, SHUTDOWN_WAIT_MS)
+    const survivors = sessions.filter((session) => !session.exited)
+    for (const session of survivors) {
+      if (session.killTimer !== null) {
+        clearTimeout(session.killTimer)
+        session.killTimer = null
+      }
+      terminatePty(session, 'SIGKILL')
+    }
+    if (survivors.length > 0) await waitForExits(survivors, SHUTDOWN_KILL_WAIT_MS)
+    // 已退出的会话仍留着释放时的强杀定时器：退出后不会再有页面关闭它，统一在这里收掉。
     for (const session of sessions) {
       if (session.killTimer !== null) {
         clearTimeout(session.killTimer)
         session.killTimer = null
       }
-      killPty(session)
     }
   }
 
@@ -339,6 +372,9 @@ export class TerminalManager {
   }
 
   private onExit(session: TerminalSession, exitCode: number): void {
+    // 先记录并兑现退出确认：退出链等的是进程真的没了，与页面是否还认这个终端无关。
+    session.exited = true
+    session.settleExit()
     if (session.released) return
     session.status = 'exited'
     session.exitCode = exitCode
@@ -414,13 +450,32 @@ function toSessionInfo(session: TerminalSession): TerminalSessionInfo {
 }
 
 /** 终止整个进程树：shell 的子进程（构建、服务）不能因为关标签而留下。 */
-function terminatePty(session: TerminalSession): void {
+function terminatePty(session: TerminalSession, signal: NodeJS.Signals = 'SIGTERM'): void {
   // node-pty 的 IPty 与 ChildProcess 在终止路径上只需要 pid 与 kill，这里按结构适配既有实现。
   const target = {
     pid: session.pty.pid,
-    kill: (signal?: string) => session.pty.kill(signal)
+    kill: (killSignal?: string) => session.pty.kill(killSignal)
   } as unknown as ChildProcess
-  terminateProcessTree(target, 'SIGTERM')
+  terminateProcessTree(target, signal)
+}
+
+/** 等一批终端进程真正退出：全部兑现返回 true，预算用完返回 false。 */
+async function waitForExits(sessions: readonly TerminalSession[], budgetMs: number): Promise<boolean> {
+  const pending = sessions.filter((session) => !session.exited)
+  if (pending.length === 0) return true
+  let settleTimeout: (expired: boolean) => void = () => {}
+  const timeout = new Promise<boolean>((resolve) => {
+    settleTimeout = resolve
+  })
+  const timer = setTimeout(() => settleTimeout(false), budgetMs)
+  try {
+    return await Promise.race([
+      Promise.all(pending.map((session) => session.exitPromise)).then(() => true),
+      timeout
+    ])
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 /** 强杀：进程树终止未在收尾时间内生效时的兜底，失败不再上报。 */
@@ -512,10 +567,4 @@ function spawnFailureMessage(error: unknown, file: string): string {
   console.error(`创建终端失败（shell=${file}）：`, error)
   if (code === 'ENOENT') return `找不到 shell 可执行文件：${file}`
   return code === undefined ? `启动终端失败：${file}` : `启动终端失败：${file}（${code}）`
-}
-
-function delay(milliseconds: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, milliseconds)
-  })
 }

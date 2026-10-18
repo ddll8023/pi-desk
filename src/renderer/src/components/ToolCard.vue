@@ -3,12 +3,16 @@
 import { computed, ref } from 'vue'
 import type {
   ToolArgSummaryEntry,
+  HistoryChunk,
   ToolDiff,
   ToolDiffLine,
   ToolExecutionPhase,
   ToolNonTextPart
 } from '../../../shared/runtime-api'
 import type { ChatToolBlock } from '../chat-view'
+import { historyChunkKey } from '../stores/runtime'
+import type { HistoryChunkLoadState } from '../stores/runtime'
+import HistoryLoadSentinel from './HistoryLoadSentinel.vue'
 import { copyText } from '../clipboard'
 import { formatDuration, useTickingNow } from '../clock'
 import {
@@ -24,7 +28,16 @@ import AppButton from './ui/AppButton.vue'
 
 const props = defineProps<{
   readonly block: ChatToolBlock
+  readonly historyChunks?: readonly HistoryChunk[] | undefined
+  readonly chunkStates?: Readonly<Record<string, HistoryChunkLoadState>> | undefined
+  readonly historyEnabled?: boolean | undefined
+  readonly historyBusy?: boolean | undefined
+  readonly historyMore?: string | null | undefined
+  readonly historyError?: string | null | undefined
 }>()
+const emit = defineEmits<{ loadChunk: [chunk: HistoryChunk]; loadMore: [] }>()
+const argsChunks = computed(() => (props.historyChunks ?? []).filter(chunk => chunk.field === 'arguments'))
+const outputChunks = computed(() => (props.historyChunks ?? []).filter(chunk => chunk.field === 'output'))
 
 /** 可复制的原文区块；参数与结果各自独立反馈。 */
 type CopyTarget = 'args' | 'text'
@@ -170,9 +183,18 @@ function copyLabel(target: CopyTarget): string {
           <AppButton variant="compact" @click="argsExpanded = true">显示原始参数</AppButton>
         </template>
         <p v-else class="tool-output">{{ execution.argsText }}</p>
-        <p v-if="execution.argsTruncated" class="tool-note">此参数超出展示上限，已截断。</p>
+        <HistoryLoadSentinel
+          v-for="chunk in argsChunks"
+          :key="historyChunkKey(chunk)"
+          :cursor="`${historyChunkKey(chunk)}:${chunk.offset}`"
+          :enabled="historyEnabled === true && expanded && (argsExpanded || argsSummary === null)"
+          :loading="historyBusy === true"
+          :error="chunkStates?.[historyChunkKey(chunk)]?.error"
+          @load="emit('loadChunk', chunk)"
+        />
+        <p v-if="execution.argsTruncated && argsChunks.length === 0" class="tool-note">此参数超出展示上限，已截断。</p>
       </template>
-      <template v-if="execution.text !== ''">
+      <template v-if="execution.text !== '' || outputChunks.length > 0">
         <div class="tool-fold-row">
           <p class="tool-note">{{ textLabel }}</p>
           <AppButton variant="compact" @click="copyTarget('text', execution.text)">{{ copyLabel('text') }}</AppButton>
@@ -191,7 +213,16 @@ function copyLabel(target: CopyTarget): string {
             <AppButton variant="compact" @click="textExpanded = true">显示全部</AppButton>
           </div>
         </template>
-        <p v-if="execution.textTruncated" class="tool-note">此输出超出展示上限，已截断。</p>
+        <HistoryLoadSentinel
+          v-for="chunk in outputChunks"
+          :key="historyChunkKey(chunk)"
+          :cursor="`${historyChunkKey(chunk)}:${chunk.offset}`"
+          :enabled="historyEnabled === true && expanded && (showFullResult || execution.text === '')"
+          :loading="historyBusy === true"
+          :error="chunkStates?.[historyChunkKey(chunk)]?.error"
+          @load="emit('loadChunk', chunk)"
+        />
+        <p v-if="execution.textTruncated && outputChunks.length === 0" class="tool-note">此输出超出展示上限，已截断。</p>
         <p v-if="execution.outputPath !== null" class="tool-note">完整输出：{{ execution.outputPath }}</p>
       </template>
       <p v-else class="tool-note">无文本输出。</p>
@@ -200,8 +231,19 @@ function copyLabel(target: CopyTarget): string {
   </details>
 
   <!-- 没有对应工具条目时的占位：只显示消息块已有的名称与状态，不猜测参数或结果。 -->
-  <p v-else class="flex flex-wrap items-baseline gap-2 px-1 text-xs">
-    <span class="font-mono">{{ block.toolName }}</span>
-    <span :class="phaseClass">{{ phaseLabel }}</span>
-  </p>
+  <div v-else>
+    <p class="flex flex-wrap items-baseline gap-2 px-1 text-xs">
+      <span class="font-mono">{{ block.toolName }}</span>
+      <span :class="phaseClass">{{ historyEnabled ? (historyError ? '历史内容暂不可用' : historyMore ? '正在加载历史记录…' : '未记录执行结果') : phaseLabel }}</span>
+    </p>
+    <HistoryLoadSentinel
+      v-if="historyMore"
+      :cursor="`tool:${block.toolCallId}:${historyMore}`"
+      :enabled="historyEnabled === true"
+      :loading="historyBusy === true"
+      :error="historyError"
+      quiet-error
+      @load="emit('loadMore')"
+    />
+  </div>
 </template>
