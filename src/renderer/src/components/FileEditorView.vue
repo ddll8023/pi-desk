@@ -120,7 +120,6 @@ function retryLoad(): void {
 }
 
 function setMode(next: 'code' | 'preview'): void {
-  if (next === 'preview') previewText.value = editorRef.value?.getText() ?? editorText.value
   editorStore.setMode(props.tabKey, next)
 }
 
@@ -155,10 +154,10 @@ watch(conflict, (value) => {
   conflictDialog.value = true
 })
 
-// 外部重新载入后，预览文本跟着记录走；正在预览时尤其不能停在旧内容。
-watch(textContent, (content) => {
-  if (mode.value === 'preview') previewText.value = content?.text ?? ''
-})
+// 所有进入预览的入口共用同一同步点；外部菜单改 mode 也要取当前未保存的编辑文本。
+watch([mode, textContent], () => {
+  if (mode.value === 'preview') previewText.value = editorRef.value?.getText() ?? editorText.value
+}, { flush: 'post' })
 
 onMounted(() => {
   window.addEventListener('focus', onWindowFocus)
