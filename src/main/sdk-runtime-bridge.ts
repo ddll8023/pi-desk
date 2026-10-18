@@ -230,10 +230,10 @@ function sameUsage(left: SessionUsage | null, right: SessionUsage | null): boole
     && left.context?.percent === right.context?.percent
 }
 
-/** 速率按实时值与上一轮平均值比较。 */
+/** 速率按上一轮平均值比较。 */
 function sameRate(left: OutputRate | undefined, right: OutputRate | undefined): boolean {
   if (left === undefined || right === undefined) return left === right
-  return left.live === right.live && left.average === right.average
+  return left.average === right.average
 }
 
 /** 运行状态列表去重：只比较展示字段，顺序由注册表登记顺序决定。 */

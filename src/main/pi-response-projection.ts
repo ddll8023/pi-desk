@@ -42,7 +42,7 @@ export function toRuntimeInfo(data: unknown): RuntimeInfo | null {
     isCompacting: typeof data.isCompacting === 'boolean' ? data.isCompacting : false,
     // 用量与速率不来自 get_state；预读不提供它们。
     usage: null,
-    rate: { live: null, average: null }
+    rate: { average: null }
   }
 }
 

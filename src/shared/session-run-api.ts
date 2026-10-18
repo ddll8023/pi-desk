@@ -16,7 +16,7 @@ export type SessionRunPhase = 'idle' | 'opening' | 'running' | 'closing' | 'unco
 export type SessionRunHostState = 'none' | 'starting' | 'ready' | 'recovering' | 'stopping' | 'failed'
 
 /**
- * 单个运行实例的粗粒度状态。只含低频变化的展示字段：消息条数、用量、速率等流式期间高频变化的
+ * 单个运行实例的粗粒度状态。只含低频变化的展示字段：消息条数、用量等流式期间高频变化的
  * 内容不在这里表达，页面需要时另读 Runtime 状态通道，避免每次消息都触发一次广播。
  */
 export interface SessionRunState {

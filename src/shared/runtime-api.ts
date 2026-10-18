@@ -123,11 +123,9 @@ export interface SessionUsage {
 }
 
 /**
- * 输出速率（tokens/秒）：`live` 是 2000ms 滑动窗口的实时值，按流式文本长度估算（模型流式期间不上报增量 token）；
- * `average` 是上一轮模型调用的平均值，按模型上报的输出 token 与生成时长计算。
+ * 输出速率（tokens/秒）：上一轮模型调用的平均值，按模型上报的输出 token 与生成时长计算。
  */
 export interface OutputRate {
-  readonly live: number | null
   readonly average: number | null
 }
 
@@ -143,7 +141,7 @@ export interface RuntimeInfo {
   readonly isCompacting: boolean
   /** 会话累计用量与上下文占用；统计未取到或形状不符时为 null。 */
   readonly usage: SessionUsage | null
-  /** 输出速率；无有效样本时两个字段各为 null。 */
+  /** 输出速率；未结算到有效值时为 null。 */
   readonly rate: OutputRate
 }
 
@@ -842,7 +840,7 @@ export function isSessionUsage(value: unknown): value is SessionUsage {
 /** 输出速率形状校验；同上，宿主上报与页面消费共用。 */
 export function isOutputRate(value: unknown): value is OutputRate {
   if (!isRecord(value)) return false
-  return isNullableFiniteNumber(value.live) && isNullableFiniteNumber(value.average)
+  return isNullableFiniteNumber(value.average)
 }
 
 function isRuntimeInfo(value: unknown): value is RuntimeInfo {

@@ -1,4 +1,4 @@
-<!-- Prompt 输入坞：处理输入法组合态、Enter 发送与 Shift+Enter 换行、焦点回归与重复提交、响应侧栏「新建」的聚焦请求并给出一次性提示，并在 Agent 运行期间原位提供停止入口；同时承接 Extension 的 set_editor_text 填充文本、图片附件的选择/粘贴/拖拽三种入口、输入行按内容自动增高、快捷发送下拉（短语取自界面偏好，可在设置里增删改与排序）、Pi 命令的斜杠模糊补全（Runtime 就绪后用运行中的命令清单，未就绪时用主进程预读的技能清单，按类型分组并按匹配优先级排序；另含 Desktop 层自己拦截的界面命令）与 `@` 项目文件引用（只写入相对路径文本，不传文件内容）。底部工具条左侧是信息行：异常与进行中的状态文本、被收起的 Extension 对话入口与会话用量指标（缓存命中率、上下文占用、瞬时（估算）与平均速率，点击开明细；累计 token 与费用只在明细浮层展示）；右侧是模型选择、附件、快捷发送与发送/停止按钮。Extension 的 setStatus 项不在输入区展示。 -->
+<!-- Prompt 输入坞：处理输入法组合态、Enter 发送与 Shift+Enter 换行、焦点回归与重复提交、响应侧栏「新建」的聚焦请求并给出一次性提示，并在 Agent 运行期间原位提供停止入口；同时承接 Extension 的 set_editor_text 填充文本、图片附件的选择/粘贴/拖拽三种入口、输入行按内容自动增高、快捷发送下拉（短语取自界面偏好，可在设置里增删改与排序）、Pi 命令的斜杠模糊补全（Runtime 就绪后用运行中的命令清单，未就绪时用主进程预读的技能清单，按类型分组并按匹配优先级排序；另含 Desktop 层自己拦截的界面命令）与 `@` 项目文件引用（只写入相对路径文本，不传文件内容）。底部工具条左侧是信息行：异常与进行中的状态文本、被收起的 Extension 对话入口与会话用量指标（缓存命中率、上下文占用与平均速率，点击开明细；累计 token 与费用只在明细浮层展示）；右侧是模型选择、附件、快捷发送与发送/停止按钮。Extension 的 setStatus 项不在输入区展示。 -->
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
@@ -286,8 +286,8 @@ function acceptedText(disposition: PromptDisposition): string {
 
 /** 本会话累计用量；主进程未取到统计时为 null。 */
 const usage = computed(() => runtimeInfo.value?.usage ?? null)
-/** 输出速率；未采样到有效值时两个字段各为 null。 */
-const rate = computed<OutputRate>(() => runtimeInfo.value?.rate ?? { live: null, average: null })
+/** 输出速率；未结算到有效值时 average 为 null。 */
+const rate = computed<OutputRate>(() => runtimeInfo.value?.rate ?? { average: null })
 const usageOpen = ref(false)
 
 /** 用量行的分项；`key` 稳定，供渲染复用，文案本身会随数值变化。 */
@@ -298,7 +298,7 @@ interface UsagePart {
   readonly title: string
 }
 
-/** 用量行分项：缓存命中率、上下文占用、瞬时与平均速率；未取到统计时为空。 */
+/** 用量行分项：缓存命中率、上下文占用与平均速率；未取到统计时为空。 */
 const usageParts = computed<readonly UsagePart[]>(() => {
   const current = usage.value
   if (current === null) return []
@@ -323,14 +323,7 @@ const usageParts = computed<readonly UsagePart[]>(() => {
       title: '当前上下文占用与窗口大小'
     }
   ]
-  // 速率常驻：没有样本时显示占位，避免指标随运行状态忽隐忽现。
-  parts.push({
-    key: 'rate-live',
-    // 实时值来自流式文本长度估算，用 `≈` 与平均值区分，不冒充模型上报的 token 数。
-    text: `瞬时 ${rate.value.live === null ? '—' : `≈${rate.value.live.toFixed(1)} t/s`}`,
-    tone: rate.value.live === null ? '' : 'text-desk-accent',
-    title: '瞬时输出速率（2 秒滑动窗口）：按流式文本长度估算，不是模型上报的 token 数'
-  })
+  // 速率常驻：没有结算结果时显示占位，避免指标随运行状态忽隐忽现。
   parts.push({
     key: 'rate-average',
     text: `平均 ${rate.value.average === null ? '—' : `${rate.value.average.toFixed(1)} t/s`}`,

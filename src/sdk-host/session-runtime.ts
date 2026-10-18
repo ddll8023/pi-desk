@@ -43,7 +43,7 @@ const USAGE_REFRESH_MS = 1_000
  */
 const PROMPT_ACCEPT_TIMEOUT_MS = 30_000
 
-/** 助手消息的事件身份；只有它的输出推进速率与统计。 */
+/** 助手消息的事件身份；只有它参与速率结算与统计。 */
 function isAssistantMessage(message: unknown): boolean {
   return typeof message === 'object' && message !== null
     && (message as { readonly role?: unknown }).role === 'assistant'
@@ -56,47 +56,6 @@ function readAssistantOutput(message: unknown): number | null {
   if (typeof usage !== 'object' || usage === null) return null
   const output = (usage as { readonly output?: unknown }).output
   return typeof output === 'number' && Number.isFinite(output) && output >= 0 ? output : null
-}
-
-/**
- * 流式助手消息的估算输出 token：文本、Thinking 与工具参数按非 ASCII 1 个、
- * ASCII 1/4 个折算。Pi 只在收尾写 `usage`，流式期间拿不到权威增量，
- * 实时速率只能按内容长度估算；权威输出 token 只在 `message_end` 用于平均值。
- */
-function readStreamingOutputTokens(message: unknown): number | null {
-  if (typeof message !== 'object' || message === null) return null
-  const content = (message as { readonly content?: unknown }).content
-  if (!Array.isArray(content)) return null
-  let tokens = 0
-  for (const block of content) {
-    if (typeof block !== 'object' || block === null) continue
-    const record = block as Record<string, unknown>
-    if (record.type === 'text' && typeof record.text === 'string') {
-      tokens += estimateTokens(record.text)
-    } else if (record.type === 'thinking' && typeof record.thinking === 'string') {
-      tokens += estimateTokens(record.thinking)
-    } else if (record.type === 'toolCall') {
-      const partial = typeof record.partialJson === 'string' ? record.partialJson : null
-      if (partial !== null) {
-        tokens += estimateTokens(partial)
-      } else if (record.arguments !== undefined) {
-        const serialized = JSON.stringify(record.arguments)
-        if (serialized !== undefined) tokens += estimateTokens(serialized)
-      }
-    }
-  }
-  return tokens > 0 ? tokens : null
-}
-
-/** 非 ASCII 字符按 1 个 token、ASCII 字符按 1/4 个 token 折算。 */
-function estimateTokens(text: string): number {
-  let ascii = 0
-  let wide = 0
-  for (const char of text) {
-    if (char.charCodeAt(0) > 0x7f) wide += 1
-    else ascii += 1
-  }
-  return wide + ascii / 4
 }
 
 /** 模型身份只在有非空取值时投影；官方尚未选定模型时保持 null。 */
@@ -267,9 +226,9 @@ export class SdkSessionRuntime {
   private lastError: SdkHostFailureCode | null = null
   private needsHostRebuild = false
   private valid = false
-  /** 速率采样与用量缓存都只属于当前绑定；换代或失效时一并清空。 */
+  /** 速率结算与用量缓存都只属于当前绑定；换代或失效时一并清空。 */
   private rate: OutputRateTracker | null = null
-  private rateSnapshot: OutputRate = { live: null, average: null }
+  private rateSnapshot: OutputRate = { average: null }
   private usage: SessionUsage | null = null
   private usageReadAt = 0
   private usageTimer: ReturnType<typeof setTimeout> | null = null
@@ -813,14 +772,14 @@ export class SdkSessionRuntime {
         throw new SdkSessionFailure('SESSION_BIND_FAILED')
       }
       this.projection = projection
-      // 速率采样随绑定建立：订阅方只在仍是当前绑定时改写快照。
+      // 速率结算随绑定建立：订阅方只在仍是当前绑定时改写快照。
       const rate = new OutputRateTracker(snapshot => {
         if (this.rate !== rate) return
         this.rateSnapshot = snapshot
         this.publish()
       })
       this.rate = rate
-      this.rateSnapshot = { live: null, average: null }
+      this.rateSnapshot = { average: null }
       this.usage = null
       this.bridge = new ExtensionUiBridge(session.extensionRunner.getUIContext(), {
         bindingId, onRequest: this.options.onUiRequest, onCancel: this.options.onUiCancel,
@@ -967,13 +926,10 @@ export class SdkSessionRuntime {
     this.lastEndedMessage = null
     if (event.type === 'agent_start' || event.type === 'compaction_start'
       || event.type === 'summarization_retry_attempt_start') this.activityVersion += 1
-    // 速率只依据官方事件：实时值按流式文本估算，平均值取助手消息自身的 usage；统计不从展示增量反推。
+    // 速率只依据官方事件：平均值取助手消息自身的 usage，统计不从展示增量反推。
     if (event.type === 'message_start') {
       if (isAssistantMessage(event.message)) this.rate?.begin(Date.now())
     } else if (event.type === 'message_update') {
-      // 流式期间 Pi 不写 usage，实时速率只能按内容长度估算；权威输出 token 在 message_end 结算。
-      const estimated = readStreamingOutputTokens(event.message)
-      if (estimated !== null) this.rate?.push(estimated, Date.now())
       this.scheduleUsageRefresh()
     } else if (event.type === 'message_end') {
       if (isAssistantMessage(event.message)) this.rate?.settle(readAssistantOutput(event.message), Date.now())
@@ -1003,7 +959,7 @@ export class SdkSessionRuntime {
     }, wait)
   }
 
-  /** 统计与速率定时器只属于当前绑定；换代或关闭时必须停掉。 */
+  /** 统计补读定时器只属于当前绑定；换代或关闭时必须停掉。 */
   private clearUsageTimer(): void {
     if (this.usageTimer !== null) clearTimeout(this.usageTimer)
     this.usageTimer = null
@@ -1031,7 +987,7 @@ export class SdkSessionRuntime {
     this.projection = null
     this.rate?.reset()
     this.rate = null
-    this.rateSnapshot = { live: null, average: null }
+    this.rateSnapshot = { average: null }
     this.clearUsageTimer()
     this.usage = null
     this.projectedMessageCount = 0

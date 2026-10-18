@@ -230,6 +230,7 @@ export const useRuntimeStore = defineStore('runtime', () => {
   /** 附件读取也属于提交阶段，回退和切换模型不能穿插其间。 */
   const preparingPrompt = ref(false)
   const rewindView = ref<RewindViewState>({ phase: 'idle' })
+  /** 回退尝试序号：换前台实例、重新发起回退或页面卸载时递增，用于作废旧结果。 */
   let rewindRequest = 0
   const abortView = ref<AbortViewState>({ phase: 'idle' })
   const compactView = ref<CompactViewState>({ phase: 'idle' })
@@ -300,6 +301,8 @@ export const useRuntimeStore = defineStore('runtime', () => {
    */
   const capabilitiesCache = new Map<number, AgentCapabilities>()
   let projectionSyncPromise: Promise<void> | null = null
+  /** 在途读取针对的绑定代际；不同代际的读取要排在它之后，不复用它的结果。 */
+  let projectionSyncExpectation: number | undefined
   /** 已发起过读取的代际：读取失败后不因每次状态广播重复重试。 */
   let capabilitiesAttemptedRuntimeId: number | null = null
 
@@ -666,28 +669,25 @@ export const useRuntimeStore = defineStore('runtime', () => {
     rewindView.value = { phase: 'requesting' }
     try {
       const result = await rewindRuntime(request)
-      if (sequence !== rewindRequest || view.value.phase !== 'ready'
-        || view.value.snapshot.runId !== request.runId
-        || view.value.snapshot.runtimeId !== request.runtimeId) return false
+      // 分叉本身会换会话与绑定代际，宿主还会先上报一次 preparing；只有换了前台实例或又发起了新的回退才作废结果。
+      if (sequence !== rewindRequest) return false
       if (!result.ok) {
         rewindView.value = { phase: 'error', error: result.error, blocked: result.blocked === true }
         return false
       }
       const status = result.data.status
-      const sessionId = status.info?.sessionId
-      const currentSessionId = view.value.snapshot.info?.sessionId
-      if (status.state !== 'ready' || status.runId !== request.runId
-        || status.runtimeId !== request.runtimeId
-        || (currentSessionId !== request.sessionId && currentSessionId !== sessionId)) return false
       if (result.data.cancelled) {
         rewindView.value = { phase: 'done', cancelled: true }
         return false
       }
+      // 以主进程在分叉后读到的权威状态为准，不拿回退前固定的代际与过程中变化的页面快照比较。
+      if (status.state !== 'ready' || status.runId !== request.runId) {
+        rewindView.value = { phase: 'error', error: { code: 'INVALID_RESPONSE', message: '对话已回退，但运行时没有回到就绪；请重新打开会话。' }, blocked: true }
+        return false
+      }
       applyStatus(status)
       await syncProjection(status.runtimeId ?? undefined)
-      if (sequence !== rewindRequest || view.value.phase !== 'ready'
-        || view.value.snapshot.runId !== status.runId || view.value.snapshot.runtimeId !== status.runtimeId
-        || view.value.snapshot.info?.sessionId !== sessionId) return false
+      if (sequence !== rewindRequest) return false
       if (projectionSync.value !== 'synced') {
         rewindView.value = { phase: 'error', error: { code: 'INVALID_RESPONSE', message: '对话已回退，但消息同步失败；请重新打开会话。' }, blocked: true }
         return false
@@ -790,15 +790,24 @@ export const useRuntimeStore = defineStore('runtime', () => {
 
   /**
    * 全量重同步：快照是唯一基准，期间到达的增量由序号守卫丢弃；只向当前前台实例取基准。
-   * 没有前台实例时空基准就是真实状态，不向任何目标发请求。
+   * 没有前台实例时空基准就是真实状态，不向任何目标发请求；回退换绑后不能因另一个请求进行中就提前返回。
    */
   function syncProjection(expectedRuntimeId?: number): Promise<void> {
-    if (projectionSyncPromise !== null) return projectionSyncPromise
-    // 回退动作必须等真正的同步完成，不能因另一个请求进行中就提前返回。
-    const pending: Promise<void> = readProjection(expectedRuntimeId).finally(() => {
-      if (projectionSyncPromise === pending) projectionSyncPromise = null
-    })
+    // 同一代际的读取可以共用；不同代际（回退的 fork 会换绑定）必须排在它之后重新读一次，
+    // 否则回退拿到的是上一代读取的结果，会被判成同步失败。
+    if (projectionSyncPromise !== null
+      && (expectedRuntimeId === undefined || projectionSyncExpectation === expectedRuntimeId)) return projectionSyncPromise
+    const queued = projectionSyncPromise
+    const pending: Promise<void> = (queued ?? Promise.resolve())
+      .then(() => readProjection(expectedRuntimeId))
+      .finally(() => {
+        if (projectionSyncPromise === pending) {
+          projectionSyncPromise = null
+          projectionSyncExpectation = undefined
+        }
+      })
     projectionSyncPromise = pending
+    projectionSyncExpectation = expectedRuntimeId
     return pending
   }
 
@@ -997,10 +1006,11 @@ export const useRuntimeStore = defineStore('runtime', () => {
       if (status.state === 'ready') restoreProjection(status.runId)
       else resetProjection()
     }
-    if (targetChanged) {
+    if (targetChanged) preparingPrompt.value = false
+    // 只有换了前台实例才作废进行中的回退：回退自身会换会话与绑定代际，不能把自己的结果判成过期。
+    if (status.runId !== previousRunId) {
       rewindRequest += 1
       rewindView.value = { phase: 'idle' }
-      preparingPrompt.value = false
     }
     if (targetChanged || sessionChanged) {
       promptView.value = { phase: 'idle' }

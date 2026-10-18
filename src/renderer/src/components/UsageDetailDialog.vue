@@ -1,4 +1,4 @@
-<!-- 本会话用量明细浮层：token 分项、费用、缓存命中率、上下文占用与输出速率；数据缺失只显示占位，不做推算或换算。 -->
+<!-- 本会话用量明细浮层：token 分项、费用、缓存命中率、上下文占用与平均输出速率；数据缺失只显示占位，不做推算或换算。 -->
 <script setup lang="ts">
 import { computed, nextTick, onUnmounted, ref, useId, watch } from 'vue'
 import type { OutputRate, SessionUsage } from '../../../shared/runtime-api'
@@ -52,7 +52,6 @@ const contextRow = computed<{ readonly text: string; readonly level: string; rea
   }
 })
 
-const liveText = computed(() => (props.rate.live === null ? null : `≈${props.rate.live.toFixed(1)} t/s`))
 const averageText = computed(() => (props.rate.average === null ? null : `${props.rate.average.toFixed(1)} t/s`))
 
 function onKeydown(event: KeyboardEvent): void {
@@ -119,16 +118,11 @@ onUnmounted(() => {
 
             <div class="usage-metrics">
               <span
-                v-if="liveText !== null"
-                class="usage-metric usage-metric-rate"
-                title="瞬时输出速率（2 秒滑动窗口）：按流式文本长度估算，不是模型上报的 token 数"
-              >瞬时<b>{{ liveText }}</b></span>
-              <span
                 v-if="averageText !== null"
                 class="usage-metric usage-metric-rate"
                 title="上一轮模型调用的平均速率：按模型上报的输出 token 与生成时长计算"
               >平均<b>{{ averageText }}</b></span>
-              <span v-if="liveText === null && averageText === null" class="usage-note">速率 —</span>
+              <span v-else class="usage-note">速率 —</span>
             </div>
           </div>
           <div class="dialog-footer">

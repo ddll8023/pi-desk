@@ -319,7 +319,8 @@ function submitEdit(): void {
   const text = editDraft.value.trim()
   if (text === '') return
   emit('submitEdit', props.message.id, text)
-  // 父级负责回退与重新发送；回退成功后本条消息离开历史，组件随之卸载，失败时保持编辑态供重试
+  // 父级负责回退与重新发送；回退成功后本条消息离开历史，组件随之卸载，历史未变时保持编辑态供重试；
+  // 分叉已发生时由父级把文本交回输入框。
 }
 
 /** Esc 取消，Enter 提交（非 Shift+Enter）。 */

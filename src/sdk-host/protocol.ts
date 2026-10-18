@@ -79,7 +79,7 @@ export interface SdkSessionStatus {
   readonly messageCount: number
   /** 会话累计用量；官方统计未取到时为 null，不用全零冒充。 */
   readonly usage: SessionUsage | null
-  /** 输出速率；无有效样本时两个字段各为 null。 */
+  /** 输出速率；未结算到有效值时为 null。 */
   readonly rate: OutputRate
 }
 
@@ -88,7 +88,7 @@ export function emptySdkSessionStatus(): SdkSessionStatus {
   return { phase: 'empty', bindingId: null, activityVersion: 0, operationId: null,
     projectPath: null, sessionId: null, sessionFile: null, isIdle: true, isCompacting: false,
     pendingMessages: 0, isBashRunning: false, waitingDialogs: 0, needsHostRebuild: false, lastError: null,
-    modelProvider: null, modelId: null, messageCount: 0, usage: null, rate: { live: null, average: null } }
+    modelProvider: null, modelId: null, messageCount: 0, usage: null, rate: { average: null } }
 }
 
 /** 调用方固定的宿主与绑定身份，防止进程重建后编号重用导致旧动作穿透。 */

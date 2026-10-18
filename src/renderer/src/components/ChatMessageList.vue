@@ -1,4 +1,4 @@
-<!-- 消息区：按投影渲染、粘底与大纲导航；承接用户消息回退确认与修改提交，回退会新建会话（列表折叠为一条），项目文件不回退；回退与修改重试都把原消息文本与可还原的附件交回输入框。
+<!-- 消息区：按投影渲染、粘底与大纲导航；承接用户消息回退确认与修改提交，回退会新建会话（列表折叠为一条），项目文件不回退；回退把原消息文本与可还原的附件交回输入框，修改重试在没能重发时交回修改后的文本。
      渲染与折叠都以轮为单位：当前轮与上一轮始终完整展开，更早的轮次只留用户输入、其后的 AI 回答与过程压成一行摘要（见 ChatTurnItem）；开合状态按会话保存，顶部开关控制全局默认。 -->
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
@@ -163,7 +163,7 @@ async function confirmRewind(): Promise<void> {
 
 /**
  * 修改提交：回退成功后立即用修改后的文本与原附件重发；
- * 发送没被受理时把内容交回输入框，不让已从分支移除的消息成为唯一副本。
+ * 发送没被受理、或回退返回失败但分叉确已发生时，把内容交回输入框，不让已从分支移除的消息成为唯一副本。
  */
 async function handleSubmitEdit(messageId: string, text: string): Promise<void> {
   if (!canRewind.value || runtimeView.value.phase !== 'ready') return
@@ -176,8 +176,14 @@ async function handleSubmitEdit(messageId: string, text: string): Promise<void> 
   const request: RuntimeRewindRequest = { runId, runtimeId, sessionId, messageId }
   pendingEdit.value = true
   try {
-    // 回退失败时保持编辑态，用户可再次尝试。
-    if (!await runtimeStore.rewind(request)) return
+    // 回退失败时保持编辑态，用户可再次尝试；但会话身份已变说明分叉确已发生，
+    // 修改后的文本不能只留在已从分支移除的消息里，先交回输入框。
+    if (!await runtimeStore.rewind(request)) {
+      if (runtimeInfo.value?.sessionId !== sessionId) {
+        handBack({ text, images: refill.images, skippedImages: refill.skippedImages }, '修改重试')
+      }
+      return
+    }
     const before = promptView.value
     await runtimeStore.send(text, refill.images)
     if (promptView.value === before || promptView.value.phase !== 'accepted') {
