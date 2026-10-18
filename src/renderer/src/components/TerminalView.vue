@@ -5,6 +5,10 @@
   输出由 store 分发到这里，xterm 写完这一段后回报已消费的字符数，主进程据此释放背压额度。
   颜色取自主题令牌，暗色随 prefers-color-scheme 自动切换，与界面其余部分同一套令牌。
 
+  渲染器：WebGL 只在标签可见期间持有，切走即释放 GPU 上下文、切回重建，隐藏标签不占上下文，
+  多标签时不会因超出浏览器上下文上限被淘汰成空白画面；上下文丢失或窗口从隐藏恢复时降级/重建
+  渲染器并强制整屏重绘，终端实例与进程都不受影响。
+
   安全与习惯：终端输出只作为文本写入 xterm，不解析 HTML；链接点击只复制地址，不打开浏览器（页面没有
   打开任意地址的权限，只有认证流程能经主进程打开 URL）；多行粘贴先确认，避免一次误粘贴直接执行命令。
 
@@ -113,6 +117,9 @@ const LIGHT_ANSI: ITheme = {
 
 let term: Terminal | null = null
 let fitAddon: FitAddon | null = null
+let webglAddon: WebglAddon | null = null
+/** 本次挂载已判定 WebGL 不可用（创建失败或上下文丢失），后续一律用默认 DOM 渲染器。 */
+let webglBlocked = false
 let stopInput: IDisposable | null = null
 let stopTitle: IDisposable | null = null
 let resizeObserver: ResizeObserver | null = null
@@ -128,12 +135,20 @@ onBeforeUnmount(() => {
   unmountTerminal()
 })
 
-/** 切到本标签时立即按当前尺寸重排并取得焦点；隐藏期间测不出尺寸，因此不能提前同步。 */
+/**
+ * 切到本标签时重建 WebGL 渲染器、按当前尺寸重排、整屏重绘并取得焦点；隐藏期间测不出尺寸，因此不能提前同步。
+ * 切走时释放 GPU 上下文，避免多个隐藏终端各自占着一个上下文。
+ */
 watch(() => props.active, (active) => {
-  if (!active) return
+  if (!active) {
+    detachWebgl()
+    return
+  }
   void nextTick(() => {
     if (!props.active) return
+    attachWebgl()
     fitNow()
+    refreshTerminal()
     term?.focus()
   })
 })
@@ -163,14 +178,6 @@ function mountTerminal(): void {
 
   fitAddon = new FitAddon()
   terminal.loadAddon(fitAddon)
-  try {
-    const webgl = new WebglAddon()
-    // GPU 上下文丢失后回退到 DOM 渲染，终端仍然可用，不重建终端。
-    webgl.onContextLoss(() => webgl.dispose())
-    terminal.loadAddon(webgl)
-  } catch {
-    // 没有可用的 WebGL2 时继续用默认渲染器。
-  }
   terminal.loadAddon(new WebLinksAddon((_event, uri) => {
     void copyLink(uri)
   }))
@@ -197,12 +204,15 @@ function mountTerminal(): void {
   })
 
   term = terminal
+  // 渲染器要在 term 赋值之后才挂：attachWebgl 通过 term 读写渲染器。
+  if (props.active) attachWebgl()
   // 捕获阶段拦粘贴：多行粘贴要先确认，不能让 xterm 自己先把它写进终端。
   host.addEventListener('paste', onPaste, true)
   resizeObserver = new ResizeObserver(() => scheduleFit())
   resizeObserver.observe(host)
   themeQuery = window.matchMedia('(prefers-color-scheme: dark)')
   themeQuery.addEventListener('change', applyTheme)
+  document.addEventListener('visibilitychange', onDocumentVisibilityChange)
 
   fitNow()
   // 字体可能还没就绪，就绪后重新测一次，避免用回退字体的度量算出偏小的尺寸。
@@ -223,15 +233,70 @@ function unmountTerminal(): void {
   resizeObserver = null
   themeQuery?.removeEventListener('change', applyTheme)
   themeQuery = null
+  document.removeEventListener('visibilitychange', onDocumentVisibilityChange)
   container.value?.removeEventListener('paste', onPaste, true)
   stopInput?.dispose()
   stopInput = null
   stopTitle?.dispose()
   stopTitle = null
   terminalStore.unregisterWriter(props.session.id)
+  detachWebgl()
   term?.dispose()
   term = null
   fitAddon = null
+}
+
+/**
+ * 为当前终端挂上 WebGL 渲染器；只在标签可见时调用。
+ * 创建失败（没有可用的 WebGL2）或已经判定不可用时直接返回，终端继续用默认 DOM 渲染器。
+ */
+function attachWebgl(): void {
+  const terminal = term
+  if (terminal === null || webglBlocked || webglAddon !== null) return
+  try {
+    const webgl = new WebglAddon()
+    // 上下文丢失（GPU 进程异常、上下文被回收）后降级到 DOM 渲染器，终端实例与进程都不重建。
+    webgl.onContextLoss(() => handleContextLoss())
+    terminal.loadAddon(webgl)
+    webglAddon = webgl
+  } catch {
+    webglBlocked = true
+  }
+}
+
+/**
+ * 释放 WebGL 渲染器与其 GPU 上下文。
+ * dispose 会触发 addon 自身的回退钩子，把终端切回默认 DOM 渲染器并做一次全量重绘。
+ */
+function detachWebgl(): void {
+  const webgl = webglAddon
+  webglAddon = null
+  webgl?.dispose()
+}
+
+/** 上下文丢失：本次挂载放弃 WebGL，交给 DOM 渲染器并立即重绘，不停在空白画面。 */
+function handleContextLoss(): void {
+  webglBlocked = true
+  detachWebgl()
+  refreshTerminal()
+}
+
+/** 强制整屏重绘；切回标签、窗口恢复、上下文丢失后都靠它把已有内容画出来。 */
+function refreshTerminal(): void {
+  const terminal = term
+  if (terminal === null || terminal.rows <= 0) return
+  terminal.refresh(0, terminal.rows - 1)
+}
+
+/**
+ * 窗口从隐藏恢复时重建渲染器：上下文可能在窗口不可见期间被静默丢弃且不派发 context loss 事件，
+ * 重建一次比等下一次输出才恢复更可靠。
+ */
+function onDocumentVisibilityChange(): void {
+  if (document.visibilityState !== 'visible' || !props.active) return
+  detachWebgl()
+  attachWebgl()
+  refreshTerminal()
 }
 
 function scheduleFit(): void {
