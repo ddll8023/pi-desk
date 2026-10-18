@@ -21,6 +21,7 @@ import { useWorkspaceTabsStore } from './stores/workspace-tabs'
 import type { Project } from '../../shared/project-api'
 import type { QuickCommand, QuickCommandScope } from '../../shared/quick-commands-api'
 import type { SessionSummary } from '../../shared/session-api'
+import type { TerminalSessionInfo } from '../../shared/terminal-api'
 import AppTitleBar from './components/AppTitleBar.vue'
 import ChatMessageList from './components/ChatMessageList.vue'
 import ConfirmDialog from './components/ConfirmDialog.vue'
@@ -69,6 +70,12 @@ const sessionToRemove = ref<{ readonly projectPath: string; readonly session: Se
 const projectPath = computed(() => currentProject.value?.path ?? null)
 /** 当前项目可用的快捷命令：项目命令在前，全局命令在后。 */
 const quickCommandsForProject = computed(() => quickCommandsStore.commandsForProject(projectPath.value))
+
+/** 后台项目和设置页中的终端保持挂载，但不能接收焦点与菜单交互。 */
+function isTerminalActive(session: TerminalSessionInfo): boolean {
+  return !settingsOpen.value && session.projectPath === projectPath.value
+    && workspaceTabsStore.activeTab === workspaceTabsStore.terminalTabId(session.id)
+}
 /** 快捷命令保存失败的原因；由工作区提示条展示，关闭后不再重复。 */
 const quickCommandError = computed(() => (
   quickCommandsStore.view.phase === 'error' ? quickCommandsStore.view.error : null
@@ -384,7 +391,7 @@ onUnmounted(() => {
 
       <main class="app-workspace">
         <SettingsView v-if="settingsOpen" />
-        <template v-else>
+        <div v-show="!settingsOpen" class="flex min-h-0 min-w-0 flex-1 flex-col">
           <!-- 标签组：对话、终端与文件同级混排；标签按当前项目分组，切换项目就换一组。 -->
           <WorkspaceTabBar
             :tabs="workspaceTabsStore.tabs"
@@ -445,20 +452,20 @@ onUnmounted(() => {
               </div>
             </div>
 
-            <!-- 终端面板：当前项目的每个终端都保持挂载与尺寸，非活动标签只隐藏，切回来仍是同一屏内容。 -->
+            <!-- 所有存活终端跨项目常驻；设置页只隐藏工作区，不销毁 xterm 的屏幕与滚动历史。 -->
             <div
-              v-for="session in terminalStore.projectSessions"
+              v-for="session in terminalStore.sessions"
               :key="session.id"
               class="workspace-pane"
-              :class="{ 'is-hidden': workspaceTabsStore.activeTab !== workspaceTabsStore.terminalTabId(session.id) }"
-              :inert="workspaceTabsStore.activeTab !== workspaceTabsStore.terminalTabId(session.id)"
-              :aria-hidden="workspaceTabsStore.activeTab !== workspaceTabsStore.terminalTabId(session.id)"
+              :class="{ 'is-hidden': !isTerminalActive(session) }"
+              :inert="!isTerminalActive(session)"
+              :aria-hidden="!isTerminalActive(session)"
             >
               <TerminalView
                 :session="session"
-                :active="workspaceTabsStore.activeTab === workspaceTabsStore.terminalTabId(session.id)"
-                :quick-commands="quickCommandsForProject"
-                :project-path="projectPath"
+                :active="isTerminalActive(session)"
+                :quick-commands="quickCommandsStore.commandsForProject(session.projectPath)"
+                :project-path="session.projectPath"
                 @run-command="runQuickCommand"
                 @edit-command="editQuickCommand"
                 @remove-command="requestCommandRemoval"
@@ -476,7 +483,7 @@ onUnmounted(() => {
               :inert="workspaceTabsStore.activeTab !== file.key"
               :aria-hidden="workspaceTabsStore.activeTab !== file.key"
             >
-              <FileEditorView :tab-key="file.key" :active="workspaceTabsStore.activeTab === file.key" />
+              <FileEditorView :tab-key="file.key" :active="!settingsOpen && workspaceTabsStore.activeTab === file.key" />
             </div>
 
             <!-- 没有活动标签（例如关掉了全部对话标签）时的空状态：新建入口是唯一动作。 -->
@@ -490,7 +497,7 @@ onUnmounted(() => {
               </div>
             </div>
           </div>
-        </template>
+        </div>
       </main>
 
       <!-- 右侧面板在非设置页常驻挂载；折叠只改变布局，不触碰文件树的读取缓存与 Runtime 生命周期。 -->

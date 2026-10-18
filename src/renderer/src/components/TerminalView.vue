@@ -132,6 +132,7 @@ onBeforeUnmount(() => {
 watch(() => props.active, (active) => {
   if (!active) return
   void nextTick(() => {
+    if (!props.active) return
     fitNow()
     term?.focus()
   })
@@ -142,7 +143,7 @@ watch(() => props.active, (active) => {
  * 触发这些动作的焦点原本在文件行、菜单或查找框上，不收回的话用户接着敲的命令会落到别处。
  */
 watch(() => terminalStore.insertFocus, (focus) => {
-  if (focus === null || focus.id !== props.session.id) return
+  if (!props.active || focus === null || focus.id !== props.session.id) return
   term?.focus()
 })
 
@@ -243,6 +244,7 @@ function scheduleFit(): void {
 
 /** 按容器测量并同步尺寸；隐藏标签与未布局完成的容器测不出有效尺寸，此时保持上一次尺寸。 */
 function fitNow(): void {
+  if (!props.active) return
   const terminal = term
   const addon = fitAddon
   if (terminal === null || addon === null) return
@@ -263,12 +265,14 @@ function fitNow(): void {
 }
 
 async function sendInput(data: string): Promise<void> {
+  if (!props.active) return
   const result = await writeTerminal({ id: props.session.id, data })
   if (!result.ok) terminalStore.reportError(result.error.message)
 }
 
 /** 多行粘贴先确认；行数不多时交给 xterm 自己的粘贴路径处理。 */
 function onPaste(event: ClipboardEvent): void {
+  if (!props.active) return
   const text = event.clipboardData?.getData('text/plain') ?? ''
   if (text === '') return
   const lines = text.split('\n').length

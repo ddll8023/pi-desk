@@ -5,9 +5,9 @@
  * 语义一致；标签顺序与活动标签由工作区标签状态负责（见 workspace-tabs），关闭终端只关闭那一个终端，
  * 不影响其他项目仍在运行的终端。
  *
- * 输出分发按「是否已挂载终端视图」分流：当前项目的终端都保持挂载的 xterm 实例（非活动标签只是隐藏），
- * 输出交给它并在 xterm 写完这一段后回报已消费字符数；终端刚建立、视图还没挂载的短暂窗口先暂存再回放，
- * 不丢首个提示符；不在当前项目里的终端没有接收方，直接确认丢弃，避免主进程为它保留在途额度而被背压卡住。
+ * 存活终端在窗口内跨项目保持挂载，输出始终交给对应 xterm，写完后再回报消费量。
+ * 新建与清单初始化期间、视图尚未挂载的短暂窗口先缓冲再回放，不按当前项目丢弃输出。
+ * 终端关闭或项目移除时释放本地记录，设置页与前台项目切换不改变终端生命周期。
  *
  * 标题分两类：默认标题来自主进程（shell 名），终端程序通过 OSC 标题上报时在用户未重命名前覆盖它；
  * 用户重命名后不再被覆盖。标题只留在页面内，不写回主进程。
@@ -46,7 +46,7 @@ export const useTerminalStore = defineStore('terminal', () => {
   /** 最近一次操作的失败原因；展示后由界面关闭，不影响已建立的终端。 */
   const error = ref<string | null>(null)
   const creating = ref(false)
-  /** 已挂载的终端视图；只有当前项目的终端会挂载。 */
+  /** 已挂载的终端视图；后台项目的存活终端也保持接收输出。 */
   const writers = new Map<string, TerminalWriter>()
   /** 当前项目里尚未挂载视图的终端输出：终端建立到视图挂载之间不能丢掉提示符。 */
   const pendingOutput = new Map<string, string[]>()
@@ -59,26 +59,31 @@ export const useTerminalStore = defineStore('terminal', () => {
   let insertFocusSeq = 0
   let disposeEvents: (() => void) | null = null
   let stopProjectWatch: WatchStopHandle | null = null
+  let mutationVersion = 0
+  const loadVersions = new Map<string, number>()
+  const pendingExits = new Map<string, number>()
+  let loadingCount = 0
 
   const currentProjectPath = computed(() => projectStore.currentProject?.path ?? null)
 
-  /** 当前项目的终端；顺序即主进程清单顺序，标签顺序由工作区标签状态决定。 */
-  const projectSessions = computed(() => (
-    sessions.value.filter((session) => session.projectPath === currentProjectPath.value)
-  ))
-
   /**
-   * 先订阅输出与退出，再按当前项目列出终端：反过来的话，重新挂载期间的下发会无人接收。
-   * 项目尚未就绪时只订阅，等项目出现后由 watch 补一次读取。
+   * 先订阅输出与退出，再接回全部存活终端；项目切换只改变可见性，不重新建立终端。
+   * 项目移除只清对应记录，主进程负责终止它的进程树。
    */
   function initialize(): void {
     if (disposeEvents === null) {
       disposeEvents = subscribeTerminalEvents({ onData: dispatchData, onExit: applyExit })
     }
     if (stopProjectWatch !== null) return
-    stopProjectWatch = watch(currentProjectPath, (projectPath) => {
-      if (projectPath === null) return
-      void ensureLoaded(projectPath)
+    void ensureLoaded(null)
+    stopProjectWatch = watch(() => projectStore.projects.map(project => project.path), paths => {
+      if (projectStore.view.phase !== 'ready') return
+      const alive = new Set(paths)
+      const kept = sessions.value.filter(session => alive.has(session.projectPath))
+      if (kept.length === sessions.value.length) return
+      mutationVersion += 1
+      sessions.value = kept
+      pruneLocalState()
     }, { immediate: true })
   }
 
@@ -91,22 +96,41 @@ export const useTerminalStore = defineStore('terminal', () => {
     writers.clear()
     pendingOutput.clear()
     pendingOutputChars.clear()
+    pendingExits.clear()
+    mutationVersion += 1
+    loadVersions.clear()
   }
 
   /** 读取某个项目的终端清单并替换该项目在本地的副本；失败只提示，不清空已有标签。 */
-  async function ensureLoaded(projectPath: string): Promise<void> {
-    const result = await listTerminals(projectPath)
-    if (!result.ok) {
-      error.value = result.error.message
-      return
+  async function ensureLoaded(projectPath: string | null): Promise<void> {
+    const key = projectPath ?? '*'
+    const version = (loadVersions.get(key) ?? 0) + 1
+    loadVersions.set(key, version)
+    const mutation = mutationVersion
+    loadingCount += 1
+    try {
+      const result = await listTerminals(projectPath)
+      if (loadVersions.get(key) !== version) return
+      if (!result.ok) {
+        error.value = result.error.message
+        return
+      }
+      // 列表截取后发生过创建、关闭或退出时，旧快照不能覆盖新状态。
+      if (mutation !== mutationVersion) {
+        await ensureLoaded(projectPath)
+        return
+      }
+      const alive = new Set(projectStore.projects.map(project => project.path))
+      const list = result.data.sessions.filter(session => projectStore.view.phase !== 'ready' || alive.has(session.projectPath))
+        .map(session => pendingExits.has(session.id)
+          ? { ...session, status: 'exited' as const, exitCode: pendingExits.get(session.id) ?? null }
+          : session)
+      sessions.value = projectPath === null ? list
+        : [...sessions.value.filter(session => session.projectPath !== projectPath), ...list]
+      pruneLocalState()
+    } finally {
+      loadingCount -= 1
     }
-    applySessions(projectPath, result.data.sessions)
-  }
-
-  /** 用主进程清单替换该项目的终端；其他项目的标签不受影响。 */
-  function applySessions(projectPath: string, list: readonly TerminalSessionInfo[]): void {
-    sessions.value = [...sessions.value.filter((session) => session.projectPath !== projectPath), ...list]
-    pruneLocalState()
   }
 
   /** 清理已不存在的终端留下的本地状态：标题、重命名标记与待回放输出。 */
@@ -121,21 +145,24 @@ export const useTerminalStore = defineStore('terminal', () => {
       if (!alive.has(id)) renamed.delete(id)
     }
     for (const id of [...pendingOutput.keys()]) {
-      if (alive.has(id)) continue
+      if (alive.has(id) || creating.value) continue
       pendingOutput.delete(id)
       pendingOutputChars.delete(id)
+    }
+    for (const id of pendingExits.keys()) {
+      if (!alive.has(id) && !creating.value) pendingExits.delete(id)
     }
   }
 
   /** 在当前项目内新建终端并返回它的标识；失败时保留原因供界面提示，不建立标签。 */
-  async function createTerminal(): Promise<string | null> {
-    const projectPath = currentProjectPath.value
+  async function createTerminal(projectPath: string | null = currentProjectPath.value): Promise<string | null> {
     if (projectPath === null) {
       error.value = '先选择项目，再新建终端。'
       return null
     }
     if (creating.value) return null
     creating.value = true
+    mutationVersion += 1
     error.value = null
     try {
       const result = await createTerminalBridge({ projectPath, cols: INITIAL_COLS, rows: INITIAL_ROWS })
@@ -143,16 +170,27 @@ export const useTerminalStore = defineStore('terminal', () => {
         error.value = result.error.message
         return null
       }
-      sessions.value = [...sessions.value, result.data]
-      return result.data.id
+      if (projectStore.view.phase === 'ready' && !projectStore.projects.some(project => project.path === projectPath)) {
+        await closeTerminalBridge(result.data.id)
+        return null
+      }
+      const exitCode = pendingExits.get(result.data.id)
+      const session = exitCode === undefined ? result.data
+        : { ...result.data, status: 'exited' as const, exitCode }
+      sessions.value = [...sessions.value.filter(entry => entry.id !== session.id), session]
+      return session.id
     } finally {
+      mutationVersion += 1
       creating.value = false
+      pruneLocalState()
     }
   }
 
   /** 关闭一个终端并收敛它的进程树；关闭失败时终端保留在清单里，由调用方决定是否收起标签。 */
   async function closeTerminal(id: string): Promise<void> {
+    mutationVersion += 1
     const result = await closeTerminalBridge(id)
+    mutationVersion += 1
     if (!result.ok) {
       error.value = result.error.message
       return
@@ -201,9 +239,8 @@ export const useTerminalStore = defineStore('terminal', () => {
   }
 
   /**
-   * 输出分发：有挂载的视图就交给它，否则直接确认丢弃。
-   * 当前项目里尚未挂载视图的终端（刚建立、视图还没挂载）先留住这一小段输出，避免丢掉首个提示符；
-   * 其他项目的终端没有接收方，直接确认，不让主进程为它们保留在途额度。
+   * 输出按终端身份分发，不按前台项目过滤；已存在或正在建立的终端在挂载前先留住输出。
+   * 暂存数据立即确认，避免视图建立期间触发主进程背压；回放时不重复确认。
    */
   function dispatchData(event: TerminalDataEvent): void {
     const writer = writers.get(event.id)
@@ -212,7 +249,7 @@ export const useTerminalStore = defineStore('terminal', () => {
       return
     }
     const session = sessions.value.find((entry) => entry.id === event.id)
-    if (session !== undefined && session.projectPath === currentProjectPath.value) bufferOutput(event)
+    if (session !== undefined || creating.value || loadingCount > 0) bufferOutput(event)
     acknowledgeTerminalData(event.id, event.chars)
   }
 
@@ -231,6 +268,8 @@ export const useTerminalStore = defineStore('terminal', () => {
 
   /** 退出事件只更新展示状态；终端记录保留到用户关闭标签。 */
   function applyExit(event: TerminalExitEvent): void {
+    mutationVersion += 1
+    if (creating.value || loadingCount > 0) pendingExits.set(event.id, event.exitCode)
     sessions.value = sessions.value.map((session): TerminalSessionInfo => (
       session.id === event.id ? { ...session, status: 'exited', exitCode: event.exitCode } : session
     ))
@@ -262,7 +301,6 @@ export const useTerminalStore = defineStore('terminal', () => {
 
   return {
     sessions,
-    projectSessions,
     titles,
     error,
     creating,
