@@ -399,6 +399,7 @@ onUnmounted(() => {
             :creating="terminalStore.creating"
             :quick-commands="quickCommandsForProject"
             :project-path="projectPath"
+            :project-name="currentProject?.name ?? null"
             @select="workspaceTabsStore.activateTab"
             @close="onCloseTab"
             @create="workspaceTabsStore.createTab"

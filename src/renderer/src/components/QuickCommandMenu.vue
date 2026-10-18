@@ -1,6 +1,7 @@
 <!--
-  快捷命令菜单：列出当前可用的命令（当前项目命令在前，全局命令在后），点一条就在终端运行。
+  快捷命令菜单：按作用域分组列出当前可用的命令（当前项目在前，全局在后），点一条就在终端运行。
 
+  作用域由组头表达，行内不再重复范围标记：项目命令是更具体的上下文，排在前面；全局命令是兜底。
   菜单由标签栏的「命令」按钮或终端内右键按需打开，锚点就是触发元素，定位、翻转与收边都交给共用的锚定浮层；
   样式复用侧栏菜单的类。每条命令一行：主体是运行入口，右侧是编辑与删除两个小动作，避免把菜单做成两级。
   菜单本身不写配置也不碰终端：运行、编辑、删除、添加、管理都上抛给调用方，由它决定落到哪里。
@@ -12,10 +13,12 @@ import { useAnchoredPopup } from '../anchored-popup'
 import AppButton from './ui/AppButton.vue'
 
 const props = defineProps<{
-  /** 当前可用的命令；顺序即展示顺序，调用方已按「项目命令在前、全局命令在后」排好。 */
+  /** 当前可用的命令；组内顺序即展示顺序，调用方已按「项目命令在前、全局命令在后」排好，组顺序由作用域决定。 */
   readonly commands: readonly QuickCommand[]
   /** 当前项目路径；为空时项目级添加入口禁用。 */
   readonly projectPath: string | null
+  /** 当前项目名；取不到时项目组标题退回「当前项目」，路径仍作为提示。 */
+  readonly projectName: string | null
 }>()
 
 const emit = defineEmits<{
@@ -28,8 +31,15 @@ const emit = defineEmits<{
   openChange: [open: boolean]
 }>()
 
-/** 菜单宽度：按「添加到当前项目」与命令行的标签加两个动作按钮留位。 */
+/** 菜单宽度：按「在此项目添加」与命令行的标签加两个动作按钮留位。 */
 const MENU_WIDTH = 264
+
+/** 项目命令：只在当前项目可用，排在前面。 */
+const projectCommands = computed(() => props.commands.filter((command) => command.scope === 'project'))
+/** 全局命令：兜底范围，排在项目命令之后。 */
+const globalCommands = computed(() => props.commands.filter((command) => command.scope === 'global'))
+/** 项目组标题：有项目名就用项目名，取不到时退回「当前项目」，路径始终在提示里给出。 */
+const projectGroupTitle = computed(() => props.projectName ?? '当前项目')
 
 /** 打开菜单的触发元素；关闭时把焦点还给它。 */
 let anchor: HTMLElement | null = null
@@ -180,8 +190,8 @@ function onMenuKeydown(event: KeyboardEvent): void {
       >
         <div class="sidebar-menu-details">
           <p class="sidebar-menu-title">快捷命令</p>
-          <p class="sidebar-menu-path">
-            {{ props.projectPath === null ? '当前没有项目，只能使用全局命令。' : '项目命令在前，全局命令在后。' }}
+          <p v-if="props.projectPath === null" class="sidebar-menu-path">
+            当前没有项目，只能使用全局命令。
           </p>
         </div>
 
@@ -189,40 +199,92 @@ function onMenuKeydown(event: KeyboardEvent): void {
           还没有快捷命令，先在下方添加一条。
         </p>
 
-        <div v-for="command in props.commands" :key="command.id" class="quick-command-row">
-          <AppButton
-            variant="unstyled"
-            class="project-sidebar-menu-item quick-command-run"
-            :title="commandHint(command)"
-            @click="run(command)"
-          >
-            <span class="quick-command-label">{{ command.label }}</span>
-            <span class="quick-command-scope">{{ command.scope === 'global' ? '全局' : '项目' }}</span>
-          </AppButton>
-          <AppButton
-            variant="unstyled"
-            class="project-sidebar-menu-item quick-command-action"
-            :aria-label="`编辑 ${command.label}`"
-            :title="`编辑 ${command.label}`"
-            @click="edit(command)"
-          >
-            编辑
-          </AppButton>
-          <AppButton
-            variant="unstyled"
-            class="project-sidebar-menu-item quick-command-action is-danger"
-            :aria-label="`删除 ${command.label}`"
-            :title="`删除 ${command.label}`"
-            @click="remove(command)"
-          >
-            删除
-          </AppButton>
-        </div>
+        <!-- 项目组：只在当前项目有命令时出现；空组不占位置，添加入口在底部。 -->
+        <section
+          v-if="props.projectPath !== null && projectCommands.length > 0"
+          class="quick-command-group is-project"
+          aria-label="当前项目的快捷命令"
+        >
+          <p class="quick-command-group-head" :title="props.projectPath">
+            <span class="scope-dot is-project" aria-hidden="true"></span>
+            <span class="quick-command-group-title">{{ projectGroupTitle }}</span>
+            <span class="quick-command-group-count">{{ projectCommands.length }}</span>
+          </p>
+          <div v-for="command in projectCommands" :key="command.id" class="quick-command-row">
+            <AppButton
+              variant="unstyled"
+              class="project-sidebar-menu-item quick-command-run"
+              :title="commandHint(command)"
+              @click="run(command)"
+            >
+              <span class="quick-command-label">{{ command.label }}</span>
+            </AppButton>
+            <AppButton
+              variant="unstyled"
+              class="project-sidebar-menu-item quick-command-action"
+              :aria-label="`编辑 ${command.label}`"
+              :title="`编辑 ${command.label}`"
+              @click="edit(command)"
+            >
+              编辑
+            </AppButton>
+            <AppButton
+              variant="unstyled"
+              class="project-sidebar-menu-item quick-command-action is-danger"
+              :aria-label="`删除 ${command.label}`"
+              :title="`删除 ${command.label}`"
+              @click="remove(command)"
+            >
+              删除
+            </AppButton>
+          </div>
+        </section>
+
+        <!-- 全局组：所有项目可用，标题弱一档，不与项目命令争注意力。 -->
+        <section
+          v-if="globalCommands.length > 0"
+          class="quick-command-group is-global"
+          aria-label="全局快捷命令"
+        >
+          <p class="quick-command-group-head">
+            <span class="scope-dot" aria-hidden="true"></span>
+            <span class="quick-command-group-title">全局</span>
+            <span class="quick-command-group-count">{{ globalCommands.length }}</span>
+          </p>
+          <div v-for="command in globalCommands" :key="command.id" class="quick-command-row">
+            <AppButton
+              variant="unstyled"
+              class="project-sidebar-menu-item quick-command-run"
+              :title="commandHint(command)"
+              @click="run(command)"
+            >
+              <span class="quick-command-label">{{ command.label }}</span>
+            </AppButton>
+            <AppButton
+              variant="unstyled"
+              class="project-sidebar-menu-item quick-command-action"
+              :aria-label="`编辑 ${command.label}`"
+              :title="`编辑 ${command.label}`"
+              @click="edit(command)"
+            >
+              编辑
+            </AppButton>
+            <AppButton
+              variant="unstyled"
+              class="project-sidebar-menu-item quick-command-action is-danger"
+              :aria-label="`删除 ${command.label}`"
+              :title="`删除 ${command.label}`"
+              @click="remove(command)"
+            >
+              删除
+            </AppButton>
+          </div>
+        </section>
 
         <div class="quick-command-menu-divider" role="separator"></div>
 
         <AppButton variant="unstyled" class="project-sidebar-menu-item" @click="add('global')">
-          添加快捷命令（全局）
+          添加全局命令
         </AppButton>
         <AppButton
           variant="unstyled"
@@ -231,7 +293,7 @@ function onMenuKeydown(event: KeyboardEvent): void {
           :title="props.projectPath === null ? '当前没有项目' : '保存后只在这个项目可用'"
           @click="add('project')"
         >
-          添加到当前项目
+          在此项目添加
         </AppButton>
         <AppButton variant="unstyled" class="project-sidebar-menu-item" @click="manage">
           管理快捷命令…

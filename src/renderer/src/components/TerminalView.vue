@@ -24,7 +24,7 @@ import { WebglAddon } from '@xterm/addon-webgl'
 import { Terminal } from '@xterm/xterm'
 import type { IDisposable, ITheme } from '@xterm/xterm'
 import '@xterm/xterm/css/xterm.css'
-import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { TERMINAL_DIMENSION_MAX, TERMINAL_DIMENSION_MIN, TERMINAL_WRITE_MAX_CHARS } from '../../../shared/terminal-api'
 import type { TerminalSessionInfo } from '../../../shared/terminal-api'
 import type { QuickCommand, QuickCommandScope } from '../../../shared/quick-commands-api'
@@ -57,6 +57,10 @@ const emit = defineEmits<{
 
 const terminalStore = useTerminalStore()
 const projectStore = useProjectStore()
+/** 当前项目名：快捷菜单的项目组标题用它；项目不在列表里时为空，由菜单退回「当前项目」。 */
+const projectName = computed(() => (
+  projectStore.projects.find((project) => project.path === props.projectPath)?.name ?? null
+))
 const container = ref<HTMLDivElement | null>(null)
 /** 待确认的多行粘贴；非空时终端上方显示确认条。 */
 const pendingPaste = ref<{ readonly text: string; readonly lines: number } | null>(null)
@@ -483,6 +487,7 @@ function readVariable(styles: CSSStyleDeclaration, name: string): string {
     ref="commandMenu"
     :commands="props.quickCommands"
     :project-path="props.projectPath"
+    :project-name="projectName"
     @run="emit('runCommand', $event)"
     @edit="emit('editCommand', $event)"
     @remove="emit('removeCommand', $event)"

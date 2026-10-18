@@ -2,8 +2,8 @@
   快捷命令编辑弹窗：新增或修改一条命令（标签、命令文本、是否追加回车、作用范围）。
 
   表单由本弹窗自己持有并直接提交给快捷命令 store：保存成功后关闭并把焦点还给打开它的元素，
-  失败时保留已填内容并就地展示主进程的原因。范围选「项目」时出现项目选择，项目列表来自侧栏同一份项目数据；
-  命令文本按原样保存（不转义、不解析），写入终端时才会补回车。
+  失败时保留已填内容并就地展示主进程的原因。范围选「项目」时出现项目选择，项目列表来自侧栏同一份项目数据，
+  编辑的命令所属项目已不在列表时按路径补一项；命令文本按原样保存（不转义、不解析），写入终端时才会补回车。
 -->
 <script setup lang="ts">
 import { computed, nextTick, onUnmounted, ref, useId, watch } from 'vue'
@@ -56,14 +56,22 @@ const canSave = computed(() => (
   && (scope.value === 'global' || projectSelection.value !== '')
 ))
 
-/** 项目选择项：与侧栏同一份项目数据，展示名与路径一起给出。 */
-const projectGroups = computed(() => [{
-  options: projectStore.projects.map((project) => ({
+/**
+ * 项目选择项：与侧栏同一份项目数据，展示名与路径一起给出。
+ * 编辑的项目命令所属项目已不在列表时，补一条以路径为名的项，避免选中值退化成「选择项目」。
+ */
+const projectGroups = computed(() => {
+  const options = projectStore.projects.map((project) => ({
     value: project.path,
     label: project.name,
     description: project.path
   }))
-}])
+  const selectedPath = projectSelection.value
+  if (selectedPath !== '' && !options.some((option) => option.value === selectedPath)) {
+    options.push({ value: selectedPath, label: selectedPath, description: '该项目已不在侧栏列表中' })
+  }
+  return [{ options }]
+})
 
 /** 打开时按编辑目标或初始范围重置表单；关闭时解绑快捷键并把焦点还回去。 */
 watch(
@@ -227,22 +235,22 @@ function onKeydown(event: KeyboardEvent): void {
                       项目
                     </AppButton>
                   </div>
-                </div>
 
-                <div v-if="scope === 'project'" class="space-y-1">
-                  <label class="field-label" for="quick-command-project">项目</label>
-                  <AppSelect
-                    id="quick-command-project"
-                    v-model="projectSelection"
-                    label="项目"
-                    searchable
-                    search-placeholder="搜索项目…"
-                    empty-label="选择项目"
-                    empty-results-label="没有匹配的项目"
-                    :groups="projectGroups"
-                    :disabled="saving"
-                  />
-                  <p class="hint-text">命令只在选中的项目里出现。</p>
+                  <!-- 选「项目」时项目选择直接跟在同一块里：范围与项目是同一件事的两个字段，不拆成两段。 -->
+                  <template v-if="scope === 'project'">
+                    <AppSelect
+                      id="quick-command-project"
+                      v-model="projectSelection"
+                      label="项目"
+                      searchable
+                      search-placeholder="搜索项目…"
+                      empty-label="选择项目"
+                      empty-results-label="没有匹配的项目"
+                      :groups="projectGroups"
+                      :disabled="saving"
+                    />
+                    <p class="hint-text">只在这个项目可用。</p>
+                  </template>
                 </div>
               </div>
             </div>

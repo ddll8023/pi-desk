@@ -535,6 +535,31 @@
     @apply inline-flex max-w-full items-center gap-1 rounded-full border border-desk-line bg-desk-surface-subtle px-2 py-0.5 text-2xs text-desk-muted;
   }
 
+  /*
+   * 作用域徽标：只在结构丢失处出现（搜索后的扁平清单），分组态由组头表达归属。
+   * 形状共用，只有「只在本项目」带强调底色，「到处可用」保持中性。
+   */
+  .scope-badge {
+    @apply inline-flex max-w-full flex-none items-center rounded-full border px-1.5 py-0.5 text-2xs;
+  }
+
+  .scope-badge.is-global {
+    @apply border-desk-line bg-desk-surface-subtle text-desk-muted;
+  }
+
+  .scope-badge.is-project {
+    @apply border-transparent bg-desk-accent-soft text-desk-accent;
+  }
+
+  /* 作用域组头标记：实心点表示「只在本项目生效」，空心点表示「到处可用」。 */
+  .scope-dot {
+    @apply size-1.5 flex-none rounded-full border border-desk-muted;
+  }
+
+  .scope-dot.is-project {
+    @apply border-desk-accent bg-desk-accent;
+  }
+
   /* 状态提示条：左侧色条表达语义，正文仍按纯文本展示。 */
   .status-notice {
     @apply rounded-desk-sm border border-desk-line bg-desk-surface px-3 py-2 text-xs text-desk-muted;
@@ -1450,6 +1475,59 @@
     background: var(--sidebar-hover);
   }
 
+  /*
+   * 快捷命令按作用域分组：作用域是清单的第一分层，组头只出现一次，行内不再重复范围标记。
+   * 组头右侧是条目计数，下沿用分隔线把两个作用域分开；空组不渲染，由底部动作兜底。
+   */
+  .quick-command-group + .quick-command-group {
+    margin-top: 4px;
+  }
+
+  .quick-command-group-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 8px;
+    border-bottom: 1px solid var(--sidebar-line);
+    color: var(--sidebar-muted);
+    font-size: 11px;
+    line-height: 16px;
+  }
+
+  .quick-command-group-head .scope-dot {
+    border-color: var(--sidebar-muted);
+  }
+
+  .quick-command-group-head .scope-dot.is-project {
+    border-color: var(--color-desk-accent);
+    background: var(--color-desk-accent);
+  }
+
+  .quick-command-group-title {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--sidebar-ink);
+    font-weight: 600;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* 全局组是兜底范围，标题与项目组拉开层级，不抢项目命令的注意力。 */
+  .quick-command-group.is-global .quick-command-group-title {
+    color: var(--sidebar-muted);
+    font-weight: 500;
+  }
+
+  .quick-command-group-count {
+    flex: none;
+    margin-left: auto;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .quick-command-group-head + .quick-command-row {
+    margin-top: 2px;
+  }
+
   /* 快捷命令行：主体是运行入口，右侧固定两个小动作；行不换行，长标签只在主体里截断。 */
   .quick-command-row {
     display: flex;
@@ -1469,17 +1547,6 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-  }
-
-  /* 范围标记：与侧栏次级文字同一层级，只作说明，不参与点击。 */
-  .quick-command-scope {
-    flex: none;
-    border-radius: 999px;
-    background: var(--sidebar-hover);
-    padding: 0 5px;
-    color: var(--sidebar-muted);
-    font-size: 10px;
-    line-height: 15px;
   }
 
   .quick-command-action {

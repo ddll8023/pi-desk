@@ -28,6 +28,8 @@ const props = defineProps<{
   readonly quickCommands: readonly QuickCommand[]
   /** 当前项目路径；为空时快捷菜单的项目级入口禁用。 */
   readonly projectPath: string | null
+  /** 当前项目名；快捷菜单的项目组标题用它，取不到时由菜单退回「当前项目」。 */
+  readonly projectName: string | null
 }>()
 
 const emit = defineEmits<{
@@ -425,6 +427,7 @@ function onMenuKeydown(event: KeyboardEvent, close: () => void, popup: HTMLEleme
     ref="commandMenu"
     :commands="props.quickCommands"
     :project-path="props.projectPath"
+    :project-name="props.projectName"
     @run="emit('runCommand', $event)"
     @edit="emit('editCommand', $event)"
     @remove="emit('removeCommand', $event)"
