@@ -1,6 +1,6 @@
 /** 保存项目列表与候选添加状态；候选信任确认后才提交，项目持久化和 Runtime 切换由主进程编排。 */
 import { defineStore } from 'pinia'
-import { computed, ref, shallowRef } from 'vue'
+import { computed, ref, shallowRef, watch } from 'vue'
 import type { Project, ProjectError, ProjectList, ProjectPathSelection } from '../../../shared/project-api'
 import type { TrustDecision } from '../../../shared/trust-api'
 import {
@@ -25,6 +25,10 @@ export const useProjectStore = defineStore('project', () => {
   const actionError = ref<ProjectError | null>(null)
   const choosing = ref(false)
   const switching = ref(false)
+  /** 会话打开链引起的项目选择不应被标签监听误认成用户的新选择。 */
+  const selectionOrigin = ref<'user' | 'session' | null>(null)
+  /** 项目选择按提交顺序收敛，不因另一次切换尚未完成而静默丢弃。 */
+  let selectionTail: Promise<void> = Promise.resolve()
   /** 目录选择后暂存候选；信任确认或取消之前不会切换当前项目或写入列表。 */
   /** 候选项目只在流程内只读使用，不需要深度响应式；用 shallowRef 避免把代理存下来并传过桥。 */
   const pendingAddition = shallowRef<ProjectPathSelection | null>(null)
@@ -140,21 +144,35 @@ export const useProjectStore = defineStore('project', () => {
    * 把路径设为当前项目。前台切换只改变项目上下文，不停止任何后台会话，因此不再需要中断确认；
    * 切换后前台实例跟随该项目（该项目没有承载会话的实例时清空前台）；`allowInterrupt` 只为 IPC 契约保留。
    */
-  async function select(path: string, allowInterrupt: boolean): Promise<void> {
-    if (switching.value) return
-
-    switching.value = true
-    actionError.value = null
-    try {
-      const result = await setCurrentProject(path, allowInterrupt)
-      if (!result.ok) {
-        actionError.value = result.error
-        return
+  async function select(path: string, allowInterrupt: boolean, origin: 'user' | 'session' = 'user'): Promise<void> {
+    const selection = selectionTail.then(async () => {
+      // 添加或移除项目也持有 switching，先等它收敛再提交选择。
+      if (switching.value) {
+        await new Promise<void>(resolve => {
+          const stop = watch(switching, busy => {
+            if (busy) return
+            stop()
+            resolve()
+          }, { flush: 'sync' })
+        })
       }
-      applyList(result.data)
-    } finally {
-      switching.value = false
-    }
+      switching.value = true
+      selectionOrigin.value = origin
+      actionError.value = null
+      try {
+        const result = await setCurrentProject(path, allowInterrupt)
+        if (!result.ok) {
+          actionError.value = result.error
+          return
+        }
+        applyList(result.data)
+      } finally {
+        selectionOrigin.value = null
+        switching.value = false
+      }
+    })
+    selectionTail = selection.catch(() => {})
+    await selection
   }
 
   return {
@@ -166,6 +184,7 @@ export const useProjectStore = defineStore('project', () => {
     actionError,
     choosing,
     switching,
+    selectionOrigin,
     pendingAddition,
     pendingAdditionDecision,
     initialize,

@@ -33,12 +33,13 @@ const { view: runtimeView, promptView, abortView, compactView, projectionSync, c
 const { editorText, editorTextVersion } = storeToRefs(extensionStore)
 
 /** 侧栏「新建」在闲置态的聚焦请求；父组件只传这个自增计数。 */
-const props = defineProps<{ readonly focusToken: number }>()
+const props = defineProps<{ readonly focusToken: number; readonly active: boolean }>()
 
 const draft = ref('')
 /** 首次提交只启动 Runtime；就绪且投影同步后自动补发输入，启动期间用户仍可继续编辑。 */
 const startupRequested = ref(false)
 let startupProjectPath: string | null = null
+let startupTabKey: string | null = null
 const submitting = ref(false)
 /** 输入法组合态：此期间的 Enter 只确认候选词，不能当发送。 */
 const composing = ref(false)
@@ -70,6 +71,7 @@ const NEW_CHAT_HINT_BUSY = '正在打开会话，稍后再新建。'
 
 /** 聚焦请求只在闲置态发出：聚焦输入框并短暂提示，不改动启动语义。 */
 watch(() => props.focusToken, () => {
+  if (!props.active) return
   textarea.value?.focus()
   newSessionHint.value = true
   if (newSessionHintTimer !== null) clearTimeout(newSessionHintTimer)
@@ -181,6 +183,7 @@ const stopVisible = computed(() => (
 ))
 /** 就绪后仅在 Agent 空闲、投影同步且无提交、压缩或模型/会话切换时允许发送；未就绪时仅允许有项目且没有并发启动的首次启动请求。 */
 const canSubmit = computed(() => {
+  if (!props.active || !workspaceTabsStore.isChatReady) return false
   if (sending.value || submitting.value || preparingPrompt.value || modelSwitchView.value.phase === 'switching' || sessionStore.opening
     || sessionStore.awaitingTrust || sessionStore.awaitingInterrupt || rewindView.value.phase === 'requesting'
     || compactView.value.phase === 'requesting'
@@ -664,8 +667,9 @@ async function submit(): Promise<void> {
     // 首次发送只触发 Runtime 启动；保留文字与附件，就绪且同步完成后由下方 watch 自动补发。
     // 宿主已被空闲回收（挂起）时先恢复那个会话，而不是新建；恢复后的会话身份不变。
     startupProjectPath = projectStore.currentProject?.path ?? null
+    startupTabKey = workspaceTabsStore.activeTab
     startupRequested.value = true
-    await sessionStore.open(runtimeStore.suspendedSessionId, false)
+    await sessionStore.open(runtimeStore.suspendedSessionId, false, startupProjectPath ?? undefined, startupTabKey)
     if (sessionStore.actionError !== null) startupRequested.value = false
     return
   }
@@ -674,6 +678,7 @@ async function submit(): Promise<void> {
   const target = runtimeView.value.snapshot
   // 提交固定来源会话：附件读取期间切走时，迟到结果只能落在原会话上。
   const originKey = sessionViewStore.key
+  const originTab = workspaceTabsStore.activeTab
   const message = draft.value
   const attachments = [...pendingImages.value]
   submitting.value = true
@@ -687,7 +692,8 @@ async function submit(): Promise<void> {
     if (runtimeView.value.phase !== 'ready' || runtimeView.value.snapshot.runId !== target.runId
       || runtimeView.value.snapshot.runtimeId !== target.runtimeId
       || runtimeView.value.snapshot.info?.sessionId !== target.info?.sessionId
-      || sessionViewStore.key !== originKey || sessionStore.opening) return
+      || sessionViewStore.key !== originKey || workspaceTabsStore.activeTab !== originTab
+      || !props.active || sessionStore.opening) return
     const before = promptView.value
     await runtimeStore.send(message, images)
     if (promptView.value === before || promptView.value.phase !== 'accepted') return
@@ -698,7 +704,7 @@ async function submit(): Promise<void> {
     const sent = new Set(attachments.map(entry => entry.objectUrl))
     sessionViewStore.releaseImages(attachments)
     pendingImages.value = pendingImages.value.filter(entry => !sent.has(entry.objectUrl))
-    textarea.value?.focus()
+    if (props.active) textarea.value?.focus()
   } catch (error) {
     if (runtimeView.value.phase === 'ready' && runtimeView.value.snapshot.runId === target.runId
       && runtimeView.value.snapshot.runtimeId === target.runtimeId
@@ -719,6 +725,7 @@ function stop(): void {
 watch(
   () => startupRequested.value && runtimeReady.value && projectionSync.value === 'synced'
     && !sessionStore.opening && !sessionStore.awaitingTrust && !sessionStore.awaitingInterrupt
+    && props.active && workspaceTabsStore.activeTab === startupTabKey
     && (draft.value.trim() === '' || canSend.value),
   (pending) => {
     if (!pending) return
@@ -728,9 +735,9 @@ watch(
 )
 
 /** 换项目、启动失败或取消信任确认时作废自动发送意图，不让它泄漏到其他会话。 */
-watch(() => projectStore.currentProject?.path ?? null, (path) => {
-  if (path !== startupProjectPath) startupRequested.value = false
-})
+watch(() => [projectStore.currentProject?.path ?? null, workspaceTabsStore.activeTab] as const, ([path, key]) => {
+  if (path !== startupProjectPath || key !== startupTabKey) startupRequested.value = false
+}, { flush: 'sync' })
 watch(() => runtimeView.value.phase, (phase) => {
   if (phase === 'failed' || phase === 'closed' || phase === 'stopping') startupRequested.value = false
 })
@@ -1024,7 +1031,7 @@ onMounted(() => {
     draft.value = restored.draft
     pendingImages.value = restored.images
   }
-  textarea.value?.focus()
+  if (props.active) textarea.value?.focus()
   autoGrow()
   document.addEventListener('pointerdown', onDocumentPointerDown)
 })

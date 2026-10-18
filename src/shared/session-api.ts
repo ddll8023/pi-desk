@@ -111,9 +111,21 @@ export interface SessionList {
  * 否则每次打开都会把列表塌回首屏，当前会话可能从侧栏消失。
  */
 export interface SessionOpenRequest {
+  readonly projectPath: string
   readonly sessionId: string | null
   readonly allowInterrupt: boolean
   readonly listLimit: number
+}
+
+/** 打开请求固定项目归属，不允许在异步信任检查后重新解释当前项目。 */
+export function isSessionOpenRequest(value: unknown): value is SessionOpenRequest {
+  if (!isRecord(value)) return false
+  if (Object.keys(value).some(key => !['projectPath', 'sessionId', 'allowInterrupt', 'listLimit'].includes(key))) return false
+  return typeof value.projectPath === 'string' && value.projectPath.trim() !== ''
+    && value.projectPath.length <= MAX_PROJECT_PATH_LENGTH
+    && (value.sessionId === null || (typeof value.sessionId === 'string'
+      && value.sessionId.trim() !== '' && value.sessionId.length <= 255))
+    && typeof value.allowInterrupt === 'boolean' && isSessionListWindow(value.listLimit)
 }
 
 /**
@@ -147,9 +159,14 @@ export type SessionListResult =
   | { readonly ok: true; readonly data: SessionList }
   | { readonly ok: false; readonly error: SessionError }
 
-/** 打开会话成功时返回该项目的列表快照（窗口取请求里的 `listLimit`）；Runtime 状态仍由状态事件收敛。 */
+/** 打开结果固定实际实例与会话身份，标签绑定不依赖前台事件和请求响应的到达顺序。 */
+export interface SessionOpenData extends SessionList {
+  readonly runId: number
+  readonly openedSessionId: string | null
+}
+
 export type SessionOpenResult =
-  | { readonly ok: true; readonly data: SessionList }
+  | { readonly ok: true; readonly data: SessionOpenData }
   | { readonly ok: false; readonly error: SessionError }
 
 /** 删除会话成功时同样返回删除后的列表快照（窗口取请求里的 `listLimit`）；失败时不改变任何文件与占用。 */
@@ -161,15 +178,11 @@ export interface SessionApi {
   /** 读取指定项目的会话列表窗口；项目必须是已添加项目，不要求它是当前项目。 */
   readonly listSessions: (request: SessionListRequest) => Promise<SessionListResult>
   /**
-   * 打开会话；`sessionId` 为 null 表示新建，非空时必须属于当前项目。
+   * 打开会话；`sessionId` 为 null 表示新建，非空时必须属于显式给定的已登记项目。
    * 新建会话的默认模型由 Pi 自己的 settings.json 决定，不能在这里指定。
    * `listLimit` 只影响回传列表的窗口大小，不影响打开行为。
    */
-  readonly openSession: (
-    sessionId: string | null,
-    allowInterrupt: boolean,
-    listLimit: number
-  ) => Promise<SessionOpenResult>
+  readonly openSession: (request: SessionOpenRequest) => Promise<SessionOpenResult>
   /**
    * 重新加载 Pi 资源：在同一 SDK 宿主进程内重建该会话的 services（重新读取 Skills、Prompt Templates、
    * MCP 配置与 Extension），并尽量恢复当前会话；`allowInterrupt` 只有用户已确认时才为真。
@@ -230,6 +243,15 @@ function isSessionList(value: unknown): value is SessionList {
     && Number.isInteger(value.remaining)
     && value.remaining >= 0
     && isSessionListWindow(value.limit)
+}
+
+/** 打开与重载结果必须包含可绑定的实例身份。 */
+export function isSessionOpenResult(value: unknown): value is SessionOpenResult {
+  if (!isSessionListResult(value)) return false
+  if (!value.ok) return true
+  const data: unknown = value.data
+  return isRecord(data) && typeof data.runId === 'number' && Number.isSafeInteger(data.runId)
+    && data.runId > 0 && (data.openedSessionId === null || typeof data.openedSessionId === 'string')
 }
 
 // TypeScript 声明不能保证 invoke 的实际返回值；沙箱桥接只放行本契约。

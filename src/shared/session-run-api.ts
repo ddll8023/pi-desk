@@ -28,6 +28,8 @@ export interface SessionRunState {
   readonly isForeground: boolean
   /** 绑定会话是否正在执行（模型或工具工作）；未绑定时为 false。 */
   readonly isStreaming: boolean
+  /** 已有消息时不再当作空白标签；挂起期间同样保留这一低频状态。 */
+  readonly hasMessages: boolean
   /** 等待用户回应的审批或扩展输入条数；等待不属于空闲。 */
   readonly waitingDialogs: number
   readonly hostState: SessionRunHostState
@@ -107,6 +109,7 @@ function isSessionRunState(value: unknown): value is SessionRunState {
     && SESSION_RUN_PHASES.includes(value.phase as SessionRunPhase)
     && typeof value.isForeground === 'boolean'
     && typeof value.isStreaming === 'boolean'
+    && typeof value.hasMessages === 'boolean'
     && typeof value.waitingDialogs === 'number'
     && Number.isInteger(value.waitingDialogs)
     && value.waitingDialogs >= 0

@@ -411,6 +411,11 @@ onUnmounted(() => {
             @manage-commands="openCommandSettings"
           />
 
+          <p v-if="sessionStore.actionError !== null" class="workspace-notice" role="alert">
+            <span class="min-w-0 flex-1">{{ sessionStore.actionError.message }}</span>
+            <AppButton variant="unstyled" class="workspace-notice-close" aria-label="关闭提示" @click="sessionStore.actionError = null">关闭</AppButton>
+          </p>
+
           <!-- 终端操作失败只提示，不改变已建立的标签；关闭后不再重复展示。 -->
           <p v-if="terminalStore.error !== null" class="workspace-notice" role="status">
             <span class="min-w-0 flex-1">{{ terminalStore.error }}</span>
@@ -434,9 +439,9 @@ onUnmounted(() => {
           <div class="workspace-panes">
             <div
               class="workspace-pane"
-              :class="{ 'is-hidden': !workspaceTabsStore.isChatActive }"
-              :inert="!workspaceTabsStore.isChatActive"
-              :aria-hidden="!workspaceTabsStore.isChatActive"
+              :class="{ 'is-hidden': !workspaceTabsStore.isChatReady }"
+              :inert="settingsOpen || !workspaceTabsStore.isChatReady"
+              :aria-hidden="settingsOpen || !workspaceTabsStore.isChatReady"
             >
               <ExtensionNotificationBar />
               <!-- 会话活动摘要条：本会话读过与改过的文件、调用的 Skill、MCP 与插件工具；折叠成一行，明细是浮层，一次只列一类，不占消息区高度。 -->
@@ -446,7 +451,7 @@ onUnmounted(() => {
               <div v-for="widget in widgetsAbove" :key="widget.placement" class="px-4 py-2 sm:px-6">
                 <pre class="chat-column mx-auto widget-block">{{ widget.lines.join('\n') }}</pre>
               </div>
-              <PromptComposer :focus-token="composerFocusToken" />
+              <PromptComposer :focus-token="composerFocusToken" :active="!settingsOpen && workspaceTabsStore.isChatReady" />
               <div v-for="widget in widgetsBelow" :key="widget.placement" class="px-4 py-2 sm:px-6">
                 <pre class="chat-column mx-auto widget-block">{{ widget.lines.join('\n') }}</pre>
               </div>
@@ -484,6 +489,18 @@ onUnmounted(() => {
               :aria-hidden="workspaceTabsStore.activeTab !== file.key"
             >
               <FileEditorView :tab-key="file.key" :active="!settingsOpen && workspaceTabsStore.activeTab === file.key" />
+            </div>
+
+            <div v-if="workspaceTabsStore.isChatActive && !workspaceTabsStore.isChatReady" class="workspace-pane" :aria-busy="sessionStore.opening">
+              <div class="empty-state flex-1 justify-center" role="status">
+                <p class="empty-state-title">{{ sessionStore.opening || projectStore.switching ? '正在切换会话…' : '当前标签尚未连接到会话' }}</p>
+                <p v-if="sessionStore.actionError" class="empty-state-text">{{ sessionStore.actionError.message }}</p>
+                <AppButton
+                  v-if="!sessionStore.opening && !sessionStore.awaitingTrust && !sessionStore.awaitingInterrupt"
+                  variant="primary" :disabled="projectStore.switching"
+                  @click="workspaceTabsStore.activeTab !== null && workspaceTabsStore.activateTab(workspaceTabsStore.activeTab)"
+                >重新打开</AppButton>
+              </div>
             </div>
 
             <!-- 没有活动标签（例如关掉了全部对话标签）时的空状态：新建入口是唯一动作。 -->

@@ -187,7 +187,8 @@ import {
   SESSION_LIST_CHANNEL,
   SESSION_OPEN_CHANNEL,
   SESSION_RELOAD_CHANNEL,
-  isSessionListResult
+  isSessionListResult,
+  isSessionOpenResult
 } from '../shared/session-api'
 import type {
   SessionApi,
@@ -475,7 +476,7 @@ function invalidGitCommitDiffResponse(): GitCommitDiffResult {
   return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_GIT_RESPONSE } }
 }
 
-function invalidSessionResponse(): SessionListResult {
+function invalidSessionResponse(): Extract<SessionListResult, { ok: false }> {
   return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_SESSION_LIST_RESPONSE } }
 }
 
@@ -723,15 +724,18 @@ const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionAp
     return isProjectFileStatResult(response) ? response : invalidProjectFileStatResponse()
   },
 
-  async openSession(sessionId: string | null, allowInterrupt: boolean, listLimit: number) {
-    const request: SessionOpenRequest = { sessionId, allowInterrupt, listLimit }
-    const response: unknown = await ipcRenderer.invoke(SESSION_OPEN_CHANNEL, request)
-    return isSessionListResult(response) ? response : invalidSessionResponse()
+  async openSession(request: SessionOpenRequest) {
+    const payload: SessionOpenRequest = {
+      projectPath: request.projectPath, sessionId: request.sessionId,
+      allowInterrupt: request.allowInterrupt, listLimit: request.listLimit
+    }
+    const response: unknown = await ipcRenderer.invoke(SESSION_OPEN_CHANNEL, payload)
+    return isSessionOpenResult(response) ? response : invalidSessionResponse()
   },
 
   async reloadSession(allowInterrupt: boolean, listLimit: number) {
     const response: unknown = await ipcRenderer.invoke(SESSION_RELOAD_CHANNEL, { allowInterrupt, listLimit })
-    return isSessionListResult(response) ? response : invalidSessionResponse()
+    return isSessionOpenResult(response) ? response : invalidSessionResponse()
   },
 
   /** 删除会话：只搬运声明字段；主进程负责归属校验、占用收敛与文件删除。 */

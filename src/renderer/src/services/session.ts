@@ -5,6 +5,7 @@ import type {
   SessionError,
   SessionListRequest,
   SessionListResult,
+  SessionOpenRequest,
   SessionOpenResult
 } from '../../../shared/session-api'
 
@@ -44,6 +45,7 @@ export async function listSessions(projectPath: string, limit: number): Promise<
  * `listLimit` 只决定回传列表的窗口大小：页面按自己已加载的深度提交，打开后不会把列表塌回首屏。
  */
 export async function openSession(
+  projectPath: string,
   sessionId: string | null,
   allowInterrupt: boolean,
   listLimit: number
@@ -51,7 +53,8 @@ export async function openSession(
   const bridge = window.desktop
   if (!bridge || typeof bridge.openSession !== 'function') return unavailable()
   try {
-    return await bridge.openSession(sessionId, allowInterrupt, listLimit)
+    const request: SessionOpenRequest = { projectPath, sessionId, allowInterrupt, listLimit }
+    return await bridge.openSession(request)
   } catch (error) {
     return callFailed(error)
   }

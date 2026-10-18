@@ -318,15 +318,9 @@ function focusUnboundRun(node: SidebarProjectNode): void {
 function createSessionIn(node: SidebarProjectNode): void {
   closeMenu()
   emit('closeSidebar')
-  const phase = runtimeView.value.phase
-  if (phase === 'idle' || phase === 'closed') {
-    if (!isCurrentProject(node)) void projectStore.select(node.project.path, false)
-    setProjectExpanded(node, true)
-    // 项目切换是异步的，因此把目标项目一并交给外层，标签落到被点击的项目上而不是还在切的那个。
-    emit('requestNewSession', node.project.path)
-    return
-  }
-  void sessionStore.open(null, false, node.project.path)
+  setProjectExpanded(node, true)
+  // 标签层统一编排项目切换、空白复用与已有实例，不按前台 Runtime 阶段绕过标签身份。
+  emit('requestNewSession', node.project.path)
 }
 
 /** 释放阻塞态会话的运行实例；只解除登记，不中断在途工作、不删除历史。 */

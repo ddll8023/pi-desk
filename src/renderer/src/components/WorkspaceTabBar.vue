@@ -11,7 +11,7 @@
 -->
 <script setup lang="ts">
 import type { ComponentPublicInstance } from 'vue'
-import { computed, nextTick, ref } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import type { QuickCommand, QuickCommandScope } from '../../../shared/quick-commands-api'
 import { useAnchoredPopup } from '../anchored-popup'
 import type { WorkspaceTabKind, WorkspaceTabView } from '../stores/workspace-tabs'
@@ -51,6 +51,22 @@ const CREATE_MENU_WIDTH = 176
 /** 正在重命名的标签；同一时刻只编辑一个标签。 */
 const editingId = ref<string | null>(null)
 const draft = ref('')
+const strip = ref<HTMLElement | null>(null)
+
+/** 新建与切换只滚动越界标签，避免高亮已变化但标签仍藏在横向滚动区之外。 */
+watch(() => [props.activeTab, props.tabs.map(tab => tab.id).join(','), props.projectPath], async () => {
+  await nextTick()
+  const host = strip.value
+  if (host === null) return
+  const tab = [...host.querySelectorAll<HTMLElement>('[data-tab-id]')]
+    .find(element => element.dataset.tabId === props.activeTab)
+  if (tab === undefined) return
+  const viewport = host.getBoundingClientRect()
+  const bounds = tab.getBoundingClientRect()
+  if (bounds.left < viewport.left || bounds.right > viewport.right) {
+    tab.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+  }
+}, { flush: 'post' })
 /** 重命名输入框：在 v-for 内渲染，用函数 ref 取当前那一个。 */
 let renameInput: HTMLInputElement | null = null
 
@@ -218,6 +234,7 @@ function tabIds(): string[] {
 }
 
 function onTablistKeydown(event: KeyboardEvent): void {
+  if (event.target instanceof Element && event.target.closest('input, textarea, select, [contenteditable="true"]') !== null) return
   const ids = tabIds()
   const current = props.activeTab === null ? -1 : ids.indexOf(props.activeTab)
   if (current < 0) return
@@ -257,11 +274,12 @@ function onMenuKeydown(event: KeyboardEvent, close: () => void, popup: HTMLEleme
 
 <template>
   <div class="workspace-tabs">
-    <div class="workspace-tabs-strip">
+    <div ref="strip" class="workspace-tabs-strip">
       <div class="workspace-tabs-group" role="tablist" aria-label="工作区标签" @keydown="onTablistKeydown">
         <div
           v-for="(tab, index) in props.tabs"
           :key="tab.id"
+          :data-tab-id="tab.id"
           class="workspace-tab"
           :class="[
             { 'is-active': props.activeTab === tab.id, 'is-unseen': tab.unseenCompletion },

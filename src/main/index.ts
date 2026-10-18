@@ -132,6 +132,7 @@ import {
   SESSION_RELOAD_CHANNEL,
   isSessionDeleteRequest,
   isSessionListRequest,
+  isSessionOpenRequest,
   isSessionListWindow
 } from '../shared/session-api'
 import type {
@@ -736,7 +737,7 @@ function gitCommitDiffFailure(code: DesktopErrorCode, message: string): GitCommi
   return { ok: false, error: { code, message } }
 }
 
-function sessionFailure(code: SessionErrorCode, message: string): SessionListResult {
+function sessionFailure(code: SessionErrorCode, message: string): Extract<SessionListResult, { ok: false }> {
   return { ok: false, error: { code, message } }
 }
 
@@ -1308,42 +1309,17 @@ function registerSessionHandlers(pageUrl: string): void {
       if (!isTrustedCaller(event, pageUrl)) {
         return sessionFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
       }
-      if (args.length !== 1) {
-        return sessionFailure('INVALID_REQUEST', '打开会话接口只接受一个请求对象。')
+      if (args.length !== 1 || !isSessionOpenRequest(args[0])) {
+        return sessionFailure('INVALID_REQUEST', '打开会话必须给出项目、会话身份、中断确认和列表窗口。')
       }
       const request = args[0]
-      if (typeof request !== 'object' || request === null || Array.isArray(request)) {
-        return sessionFailure('INVALID_REQUEST', '打开会话参数格式不正确。')
-      }
-      const fields = request as Record<string, unknown>
-      if (Object.keys(fields).some((key) => key !== 'sessionId' && key !== 'allowInterrupt' && key !== 'listLimit')) {
-        return sessionFailure('INVALID_REQUEST', '打开会话参数包含未支持的字段。')
-      }
-      const { sessionId, allowInterrupt, listLimit } = fields
-      let targetSessionId: string | null = null
-      if (typeof sessionId === 'string') {
-        if (sessionId.trim() === '') {
-          return sessionFailure('INVALID_REQUEST', '会话 id 不能为空字符串。')
-        }
-        targetSessionId = sessionId
-      } else if (sessionId !== null) {
-        return sessionFailure('INVALID_REQUEST', '会话 id 必须是字符串或 null。')
-      }
-      if (typeof allowInterrupt !== 'boolean') {
-        return sessionFailure('INVALID_REQUEST', '打开会话必须显式给出 allowInterrupt 布尔值。')
-      }
-      if (!isSessionListWindow(listLimit)) {
-        return sessionFailure('INVALID_REQUEST', '打开会话必须显式给出合法的列表窗口大小。')
-      }
-      const trust = await resolveTrustForCurrentProject()
+      const projectPath = await resolveRegisteredProjectPath(request.projectPath)
+      if (projectPath === null) return sessionFailure('INVALID_PROJECT_PATH', '会话所属项目未登记或已被移除。')
+      const trust = await trustManager.resolveLaunchDecision(projectPath)
       if (trust.requiresPrompt) {
-        return sessionFailure('TRUST_REQUIRED', trust.message ?? '项目包含需要信任决定的资源。')
+        return sessionFailure('TRUST_REQUIRED', '该项目包含需要信任决定的资源。')
       }
-      return sessionManager.open({
-        sessionId: targetSessionId,
-        allowInterrupt,
-        listLimit
-      })
+      return sessionManager.open({ ...request, projectPath })
     }
   )
 

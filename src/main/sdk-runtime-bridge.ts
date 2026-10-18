@@ -248,6 +248,7 @@ function sameRuns(left: readonly SessionRunState[], right: readonly SessionRunSt
       && run.phase === other.phase
       && run.isForeground === other.isForeground
       && run.isStreaming === other.isStreaming
+      && run.hasMessages === other.hasMessages
       && run.waitingDialogs === other.waitingDialogs
       && run.hostState === other.hostState
   })
@@ -573,6 +574,7 @@ export class SdkRuntimeBridge {
         phase: run.phase,
         isForeground: run.runId === foreground,
         isStreaming: session === null ? false : !session.isIdle,
+        hasMessages: run.owner.getSessionStatus().messageCount > 0,
         waitingDialogs: session === null ? 0 : session.waitingDialogs,
         hostState: host.hostId === null || host.state === 'idle' ? 'none' : host.state
       }
@@ -978,7 +980,7 @@ export class SdkRuntimeBridge {
     reference: SdkSessionReference,
     allowInterrupt: boolean,
     owner: SessionOwner
-  ): Promise<{ readonly cancelled: boolean }> {
+  ): Promise<{ readonly cancelled: boolean; readonly runId: number }> {
     if (action !== 'reload') {
       // 切换前先清扫其他实例上的空会话占用：释放后的空闲实例正好成为本次切换的复用目标。
       this.releaseEmptySessionRuns()
@@ -988,7 +990,7 @@ export class SdkRuntimeBridge {
         await this.awaitReclaim(occupied.runId)
         if (!this.runNeedsRebind(occupied)) {
           this.focusRun(occupied.runId)
-          return { cancelled: false }
+          return { cancelled: false, runId: occupied.runId }
         }
       }
     }
@@ -1013,7 +1015,7 @@ export class SdkRuntimeBridge {
       const result = await host.runSessionAction(action, reference, host.getSessionIdentity(), interrupt)
       this.options.runs.settleOpen(run.runId, host.getSessionStatus().sessionId)
       this.publishState()
-      return { cancelled: result.cancelled }
+      return { cancelled: result.cancelled, runId: run.runId }
     } catch (error) {
       this.options.runs.failOpen(run.runId)
       this.publishRuns()

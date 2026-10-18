@@ -43,10 +43,11 @@ export type WorkspaceTabKind = 'chat' | 'terminal'
  */
 export type NewChatInTabOutcome = 'started' | 'already-new' | 'refused' | 'busy' | 'unavailable'
 
-/** 一个对话标签的页面内记录；会话身份在首次落盘前为空，运行实例身份随打开与回收变化。 */
+/** 标签绑定实际会话与实例；是否空白单独记录，不用列表刷新进度充当身份。 */
 interface ChatTabRecord {
   readonly sessionId: string | null
   readonly runId: number | null
+  readonly hasMessages: boolean
 }
 
 /** 标签的展示模型：标题与提示都已解析，标签条只负责渲染与派发意图。 */
@@ -85,11 +86,15 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
   let streamingRunIds = new Set<number>()
   /** 已经自动补过空对话标签的项目；用户显式关掉全部对话标签后不再自动补回。 */
   const preparedProjects = new Set<string>()
+  const closingTabs = new Set<string>()
+  let runCloseTail: Promise<void> = Promise.resolve()
+  let selectionVersion = 0
   let nextChatTabId = 1
   let stopProjectWatch: WatchStopHandle | null = null
   let stopProjectsWatch: WatchStopHandle | null = null
   let stopRunsWatch: WatchStopHandle | null = null
   let stopSessionsWatch: WatchStopHandle | null = null
+  let stopOpeningWatch: WatchStopHandle | null = null
 
   const currentProjectPath = computed(() => projectStore.currentProject?.path ?? null)
 
@@ -118,6 +123,17 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
 
   /** 活动标签是否是对话标签；对话面板只在此时可见。 */
   const isChatActive = computed(() => activeTab.value !== null && isChatKey(activeTab.value))
+
+  /** 共用聊天视图只有在活动标签与前台身份一致时可见，等待和失败期间不冒用旧会话。 */
+  const isChatReady = computed(() => {
+    const key = activeTab.value
+    if (key === null || !isChatKey(key) || sessionStore.opening || projectStore.switching) return false
+    const record = chatTabs.value[key]
+    if (record === undefined) return false
+    if (record.runId !== null) return record.runId === runtimeStore.foregroundRunId
+    if (record.sessionId !== null) return record.sessionId === runtimeStore.foregroundSessionId
+    return isRuntimeIdle()
+  })
 
   /**
    * 当前项目已打开的文件记录，顺序与标签一致；文件面板按它逐个挂载，非活动面板只隐藏不卸载，
@@ -164,8 +180,14 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
   function initialize(): void {
     if (stopProjectWatch === null) {
       stopProjectWatch = watch(currentProjectPath, (projectPath) => {
-        if (projectPath !== null) prepareProject(projectPath)
-      }, { immediate: true })
+        const openingHere = projectStore.selectionOrigin === 'session'
+          || (projectPath !== null && sessionStore.openingProjectPath === projectPath)
+        if (!openingHere) sessionStore.invalidateOpenSelection()
+        if (projectPath === null) return
+        prepareProject(projectPath)
+        const key = activeTabs.value[projectPath] ?? null
+        if (!openingHere && key !== null && isChatKey(key)) void focusChatTab(projectPath, key)
+      }, { immediate: true, flush: 'sync' })
     }
     if (stopProjectsWatch === null) {
       stopProjectsWatch = watch(() => projectStore.projects.map(project => project.path), dropMissingProjects)
@@ -180,6 +202,16 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
       // 会话列表刷新后重跑同步：会话落盘后标签才采纳它的身份，标题也从「新对话」换成摘要。
       stopSessionsWatch = watch(() => sessionStore.loadedSessionIds, syncRuns)
     }
+    if (stopOpeningWatch === null) {
+      stopOpeningWatch = watch(() => sessionStore.opening, opening => {
+        const key = activeTab.value
+        const projectPath = currentProjectPath.value
+        if (opening || projectPath === null || key === null || !isChatActive.value || isChatReady.value
+          || closingTabs.has(key) || sessionStore.actionError !== null || projectStore.switching
+          || sessionStore.awaitingTrust || sessionStore.awaitingInterrupt) return
+        void focusChatTab(projectPath, key)
+      }, { flush: 'post' })
+    }
   }
 
   /** 页面卸载时释放订阅；标签只留在内存里，重新挂载后回到一个空对话标签。 */
@@ -192,6 +224,8 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     stopRunsWatch = null
     stopSessionsWatch?.()
     stopSessionsWatch = null
+    stopOpeningWatch?.()
+    stopOpeningWatch = null
   }
 
   /**
@@ -210,9 +244,9 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
   /** 切换活动标签；活动对话标签对应前台实例，切过去时把该实例切到前台。 */
   async function activateTab(key: string): Promise<void> {
     const projectPath = currentProjectPath.value
-    if (projectPath === null || activeTab.value === key) return
-    if (!projectKeys.value.includes(key)) return
-    setActive(projectPath, key)
+    if (projectPath === null || !projectKeys.value.includes(key)) return
+    if (activeTab.value === key && (!isChatKey(key) || isChatReady.value)) return
+    selectLocal(projectPath, key)
     if (isChatKey(key)) await focusChatTab(projectPath, key)
   }
 
@@ -220,18 +254,20 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
    * 新建标签：对话标签走空对话入口（同一项目只保留一个未落盘的），终端标签在当前项目内新建终端。
    * 终端创建失败时保留原因由终端 store 提示，不建立空标签。
    */
-  async function createTab(kind: WorkspaceTabKind): Promise<void> {
+  async function createTab(kind: WorkspaceTabKind): Promise<string | null> {
     if (kind === 'chat') {
       await openNewChatTab()
-      return
+      return null
     }
     const projectPath = currentProjectPath.value
-    if (projectPath === null) return
-    const terminalId = await terminalStore.createTerminal()
-    if (terminalId === null) return
+    if (projectPath === null) return null
+    const version = selectionVersion
+    const terminalId = await terminalStore.createTerminal(projectPath)
+    if (terminalId === null) return null
     const key = terminalTabId(terminalId)
     appendKey(projectPath, key)
-    setActive(projectPath, key)
+    if (version === selectionVersion && currentProjectPath.value === projectPath) selectLocal(projectPath, key)
+    return terminalId
   }
 
   /**
@@ -249,8 +285,7 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
       await terminalStore.insertText(active, text)
       return
     }
-    await createTab('terminal')
-    const created = activeTerminalId.value
+    const created = await createTab('terminal')
     if (created === null) return
     await terminalStore.insertText(created, text)
   }
@@ -266,7 +301,7 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     const key = editorStore.open(projectPath, path)
     if (mode !== 'code') editorStore.setMode(key, mode)
     appendKey(projectPath, key)
-    setActive(projectPath, key)
+    selectLocal(projectPath, key)
   }
 
   /**
@@ -276,18 +311,13 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
    */
   async function openNewChatTab(projectPath: string | null = currentProjectPath.value): Promise<void> {
     if (projectPath === null) return
-    const existing = findChatKey(projectPath, null)
-    if (existing !== null) {
-      setActive(projectPath, existing)
-      await focusChatTab(projectPath, existing)
-      return
-    }
-    const key = createChatTab(projectPath)
+    const key = findChatKey(projectPath, null) ?? createChatTab(projectPath)
     appendKey(projectPath, key)
-    setActive(projectPath, key)
-    if (isRuntimeIdle()) return
-    // 新建请求指名这个标签：不让会话身份反查决定落在哪个标签上。
-    await sessionStore.open(null, false, projectPath, key)
+    selectLocal(projectPath, key)
+    const version = selectionVersion
+    if (projectPath !== currentProjectPath.value) await projectStore.select(projectPath, false, 'session')
+    if (version !== selectionVersion || projectPath !== currentProjectPath.value || !hasChatTabKey(projectPath, key)) return
+    await focusChatTab(projectPath, key)
   }
 
   /**
@@ -304,13 +334,16 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     if (record === undefined) return 'unavailable'
     if (sessionStore.opening) return 'busy'
     const runId = resolveRunId(projectPath, key)
+    const version = selectionVersion
     // 既没有实例也没有会话身份：这个标签本来就是空对话，结束与重建都没有意义。
     if (runId === null && record.sessionId === null) return 'already-new'
-    if (runId !== null && !await sessionRunsStore.close(runId)) return 'refused'
+    if (runId !== null && !await closeChatRun(runId)) return 'refused'
+    if (!hasChatTabKey(projectPath, key)) return 'unavailable'
     // 就地清空：只换身份，不动标签位置与顺序；旧会话的历史文件与留底草稿都不受影响。
-    chatTabs.value = { ...chatTabs.value, [key]: { sessionId: null, runId: null } }
+    chatTabs.value = { ...chatTabs.value, [key]: { sessionId: null, runId: null, hasMessages: false } }
     clearRename(key)
-    setActive(projectPath, key)
+    if (version !== selectionVersion || currentProjectPath.value !== projectPath) return 'started'
+    selectLocal(projectPath, key)
     // 结束实例后前台已被清空，闲置时不必预建宿主；仍占用前台实例时才提交新会话的打开请求。
     if (isRuntimeIdle()) return 'started'
     await sessionStore.open(null, false, projectPath, key)
@@ -324,27 +357,52 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
    */
   async function closeTab(key: string): Promise<void> {
     const located = locate(key)
-    if (located === null) return
+    if (located === null || closingTabs.has(key)) return
     const projectPath = located.projectPath
-    if (isFileKey(key)) {
-      // 文件标签只清内存记录，磁盘文件与其中的改动都不由关闭动作处理。
-      editorStore.close(key)
-      removeKey(projectPath, key)
-      return
+    const keys = effectiveKeys(projectPath)
+    const index = keys.indexOf(key)
+    const neighbor = index < 0 ? null : keys[index - 1] ?? keys[index + 1] ?? null
+    closingTabs.add(key)
+    if (activeTabs.value[projectPath] === key) sessionStore.invalidateOpenSelection()
+    try {
+      if (isFileKey(key)) editorStore.close(key)
+      else if (isChatKey(key)) {
+        // 打开尚未返回时先保留标签，等实际身份绑定后再关闭；失败时仍能保留原标签。
+        await sessionStore.waitForOpenActions()
+        const runId = resolveRunId(projectPath, key)
+        if (runId !== null && !await closeChatRun(runId)) return
+      } else {
+        const terminalId = terminalIdOf(key)
+        if (terminalId === null) return
+        await terminalStore.closeTerminal(terminalId)
+        if (terminalStore.sessions.some(session => session.id === terminalId)) return
+      }
+      const fallback = removeKey(projectPath, key, neighbor)
+      if (isChatKey(key)) forgetChatTab(key)
+      if (projectPath === currentProjectPath.value && fallback !== null && isChatKey(fallback)) {
+        await focusChatTab(projectPath, fallback)
+      }
+    } finally {
+      closingTabs.delete(key)
     }
-    if (isChatKey(key)) {
-      const runId = resolveRunId(projectPath, key)
-      if (runId !== null && !await sessionRunsStore.close(runId)) return
-      const fallback = removeKey(projectPath, key)
-      forgetChatTab(key)
-      if (fallback !== null && isChatKey(fallback)) await focusChatTab(projectPath, fallback)
-      return
-    }
-    const terminalId = terminalIdOf(key)
-    if (terminalId === null) return
-    await terminalStore.closeTerminal(terminalId)
-    if (terminalStore.sessions.some(session => session.id === terminalId)) return
-    removeKey(projectPath, key)
+  }
+
+  /** 所有标签关闭与迟到打开的清理共用一条串行关闭链，不因其他关闭忙而静默丢弃。 */
+  async function closeChatRun(runId: number): Promise<boolean> {
+    const pending = runCloseTail.then(async () => {
+      if (sessionRunsStore.closing) {
+        await new Promise<void>(resolve => {
+          const stop = watch(() => sessionRunsStore.closing, closing => {
+            if (closing) return
+            stop()
+            resolve()
+          }, { flush: 'sync' })
+        })
+      }
+      return sessionRunsStore.close(runId)
+    })
+    runCloseTail = pending.then(() => {}, () => {})
+    return pending
   }
 
   /** 用户重命名标签：空标题清掉覆盖，回到按会话摘要或终端标题展示。 */
@@ -359,14 +417,15 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     renames.value = { ...renames.value, [key]: trimmed }
   }
 
-  /** 把标签移动到目标位置（0 是标签组里的第一个）；越界位置收敛到合法范围。 */
+  /** 移到原列表目标标签之前；先移除源标签，再换算插入边界。 */
   function moveTab(key: string, toIndex: number): void {
     const projectPath = currentProjectPath.value
     if (projectPath === null) return
     const keys = projectKeys.value
     const from = keys.indexOf(key)
     if (from < 0) return
-    const target = Math.min(Math.max(toIndex, 0), keys.length - 1)
+    const boundary = Math.min(Math.max(toIndex, 0), keys.length)
+    const target = boundary > from ? boundary - 1 : boundary
     if (target === from) return
     const next = [...keys]
     next.splice(from, 1)
@@ -374,22 +433,48 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     writeOrder(projectPath, next)
   }
 
-  /**
-   * 打开会话成功后的标签同步：该会话已有标签时聚焦它，否则新开一个标签并切过去。
-   * 未落盘的新会话复用该项目已有的空对话标签，因此「新建会话」不会重复占用同一个实例。
-   * `preferredKey` 是调用方指名要复用的标签（`/new` 与新建入口已经建好或重置过它）：
-   * 新建请求直接用它，不再按会话身份反查——反查可能因记录已被旧实例写回身份而落空，凭空多出一个标签。
-   */
-  function syncOpenTab(sessionId: string | null, projectPath: string, preferredKey: string | null = null): void {
-    const reusable = sessionId === null && preferredKey !== null
-      && isChatKey(preferredKey) && chatTabs.value[preferredKey] !== undefined
-      && (orders.value[projectPath] ?? []).includes(preferredKey)
-      ? preferredKey
-      : null
-    const key = reusable ?? findChatKey(projectPath, sessionId) ?? createChatTab(projectPath, sessionId)
-    if (!(orders.value[projectPath] ?? []).includes(key)) appendKey(projectPath, key)
-    bindRun(projectPath, key)
+  /** 仅绑定打开请求事先固定的标签；过期响应保留原实例归属，但不抢占最新选择。 */
+  function syncOpenTab(
+    sessionId: string | null, projectPath: string, key: string, runId: number, activate: boolean
+  ): boolean {
+    const record = chatTabs.value[key]
+    if (record === undefined || !hasChatTabKey(projectPath, key)) return false
+    const run = sessionRunsStore.runs.find(candidate => candidate.runId === runId)
+    const released = run !== undefined && (run.projectPath !== projectPath
+      || (run.sessionId !== null && sessionId !== null && run.sessionId !== sessionId))
+    const hasMessages = record.hasMessages || (!released && run?.hasMessages === true)
+      || (sessionId !== null && sessionStore.loadedSessionIds.has(sessionId))
+    chatTabs.value = { ...chatTabs.value, [key]: {
+      sessionId: released && !hasMessages ? null : sessionId,
+      runId: released ? null : runId, hasMessages
+    } }
+    if (activate) setActive(projectPath, key)
+    return true
+  }
+
+  /** 打开意图先固定标签；重试只复用原键，原标签被关闭时不另建替代标签。 */
+  function prepareOpenTab(projectPath: string, sessionId: string | null, preferredKey: string | null): string | null {
+    if (preferredKey !== null && !hasChatTabKey(projectPath, preferredKey)) return null
+    const key = preferredKey ?? findChatKey(projectPath, sessionId) ?? createChatTab(projectPath, sessionId)
+    if (closingTabs.has(key)) return null
+    appendKey(projectPath, key)
+    selectionVersion += 1
     setActive(projectPath, key)
+    return key
+  }
+
+  function hasChatTabKey(projectPath: string, key: string): boolean {
+    return isChatKey(key) && chatTabs.value[key] !== undefined && (orders.value[projectPath] ?? []).includes(key)
+  }
+
+  function hasRunTab(runId: number): boolean {
+    return Object.values(chatTabs.value).some(record => record.runId === runId)
+  }
+
+  function sessionIdForTab(projectPath: string, key: string): string | null {
+    if (!hasChatTabKey(projectPath, key)) return null
+    const record = chatTabs.value[key]
+    return record?.sessionId ?? sessionIdOfRun(record?.runId ?? null)
   }
 
   /** 会话被删除后移除它的标签；它承载的实例已由删除链收敛，这里只清展示。 */
@@ -404,6 +489,7 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
 
   /** 项目从列表移除后丢掉它的标签记录；只清展示，不动任何终端或运行实例。 */
   function dropProject(projectPath: string): void {
+    preparedProjects.delete(projectPath)
     for (const key of orders.value[projectPath] ?? []) {
       if (isChatKey(key)) forgetChatTab(key)
     }
@@ -450,7 +536,7 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
   /** 标签的展示模型：对话标签取会话摘要，终端标签取终端标题与运行状态，文件标签取文件名与脏标记。 */
   function viewOf(projectPath: string, key: string): WorkspaceTabView {
     if (isChatKey(key)) {
-      const record = chatTabs.value[key] ?? { sessionId: null, runId: null }
+      const record = chatTabs.value[key] ?? { sessionId: null, runId: null, hasMessages: false }
       const title = titleOfChat(projectPath, key, record)
       const detail = record.sessionId === null ? '尚未落盘的新会话' : `会话 ${record.sessionId}`
       return { id: key, kind: 'chat', title, tooltip: `${title}\n${detail}`, terminalStatus: null,
@@ -489,7 +575,7 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
   function titleOfChat(projectPath: string, key: string, record: ChatTabRecord): string {
     const renamed = renames.value[key]
     if (renamed !== undefined) return renamed
-    if (record.sessionId === null) return '新对话'
+    if (record.sessionId === null || !record.hasMessages) return '新对话'
     const summary = sessionStore.sessionsOf(projectPath)
       .find(session => session.sessionId === record.sessionId)
     const preview = summary?.preview ?? null
@@ -525,72 +611,37 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     if (record === undefined) return
     const sessionId = record.sessionId ?? sessionIdOfRun(record.runId)
     if (sessionId === null && record.runId === null && isRuntimeIdle()) return
-    await sessionStore.open(sessionId, false, projectPath)
+    await sessionStore.open(sessionId, false, projectPath, key)
   }
 
-  /** 运行实例列表变化时同步标签：未落盘的标签认领它承载的实例，实例换了会话身份（回退新建会话）时跟着走。 */
+  /** 已绑定标签随实例的会话身份变化；未知实例不再由空标签猜测认领。 */
   function syncRuns(): void {
-    const runs = sessionRunsStore.runs
     const next: Record<string, ChatTabRecord> = {}
-    const claimed = new Set<number>()
-    const items: { readonly key: string; readonly record: ChatTabRecord; readonly projectPath: string }[] = []
-    for (const [key, record] of Object.entries(chatTabs.value)) {
-      const located = locate(key)
-      if (located === null) next[key] = record
-      else items.push({ key, record, projectPath: located.projectPath })
-    }
-    // 先按会话身份认领：一个实例只判给一个标签，未落盘的标签再认领本项目剩下的无主实例。
-    const claimedBySession = new Map<string, number>()
-    for (const item of items) {
-      if (item.record.sessionId === null) continue
-      const found = runs.find(run => run.sessionId === item.record.sessionId && run.projectPath === item.projectPath)
-      if (found === undefined) continue
-      claimedBySession.set(item.key, found.runId)
-      claimed.add(found.runId)
-    }
     let changed = false
-    for (const item of items) {
-      const record = syncRecord(item.record, item.projectPath, runs, claimed, claimedBySession.get(item.key) ?? null)
-      next[item.key] = record
-      if (record.sessionId !== item.record.sessionId || record.runId !== item.record.runId) changed = true
+    for (const [key, record] of Object.entries(chatTabs.value)) {
+      const projectPath = locate(key)?.projectPath
+      const run = sessionRunsStore.runs.find(candidate => candidate.projectPath === projectPath
+        && (candidate.runId === record.runId || (record.sessionId !== null && candidate.sessionId === record.sessionId)))
+      let updated: ChatTabRecord
+      if (run !== undefined) {
+        const sessionId = run.sessionId ?? record.sessionId
+        updated = { sessionId, runId: run.runId,
+          hasMessages: run.hasMessages || (sessionId === record.sessionId && record.hasMessages)
+            || (sessionId !== null && sessionStore.loadedSessionIds.has(sessionId)) }
+      } else {
+        const hasMessages = record.hasMessages
+          || (record.sessionId !== null && sessionStore.loadedSessionIds.has(record.sessionId))
+        const boundKnown = record.runId === null || sessionRunsStore.runs.some(candidate => candidate.runId === record.runId)
+        updated = boundKnown
+          ? { sessionId: hasMessages ? record.sessionId : null, runId: null, hasMessages }
+          : { ...record, hasMessages }
+      }
+      next[key] = updated
+      if (updated.sessionId !== record.sessionId || updated.runId !== record.runId
+        || updated.hasMessages !== record.hasMessages) changed = true
     }
+    // 不再让空标签猜测认领“剩余实例”；首次绑定只采纳对应打开请求返回的实例身份。
     if (changed) chatTabs.value = next
-  }
-
-  /**
-   * 单个标签记录的同步：先跟住它已经承载的实例，实例没了再按会话身份或本项目剩下的无主实例重新认领。
-   * 无主实例只在 `opening` / `running` 阶段才被认领：正在关闭或退出未确认的实例不会绑到别的标签上。
-   * 标签承载的实例被释放（例如空会话被收掉）时只丢实例，不留下已经不存在的会话身份。
-   */
-  function syncRecord(
-    record: ChatTabRecord,
-    projectPath: string,
-    runs: readonly SessionRunState[],
-    claimed: Set<number>,
-    claimedRunId: number | null
-  ): ChatTabRecord {
-    const bound = record.runId === null ? undefined : runs.find(run => run.runId === record.runId)
-    // 实例仍属于该项目时才跟着它走：被释放后项目归属会清空，不能把别的项目的新会话算到这个标签上。
-    if (bound !== undefined && bound.projectPath === projectPath) {
-      return { sessionId: adoptSession(record.sessionId, bound.sessionId, projectPath), runId: bound.runId }
-    }
-    if (record.sessionId !== null) return { sessionId: record.sessionId, runId: claimedRunId }
-    // 只认领真正在用的实例：正在关闭或退出未确认的旧实例会把刚清空的标签绑回旧会话。
-    const free = runs.find(run => run.projectPath === projectPath && !claimed.has(run.runId)
-      && (run.phase === 'running' || run.phase === 'opening'))
-    if (free === undefined) return { sessionId: null, runId: null }
-    claimed.add(free.runId)
-    return { sessionId: adoptSession(null, free.sessionId, projectPath), runId: free.runId }
-  }
-
-  /**
-   * 采纳实例报告的会话身份：实例换了会话（回退新建会话）时跟着走；实例尚未落盘的新会话保持「新对话」，
-   * 因此被释放的空会话不会在标签上留下一个没有文件的会话身份。
-   */
-  function adoptSession(current: string | null, fromRun: string | null, projectPath: string): string | null {
-    if (fromRun === null || fromRun === current) return current
-    if (current !== null) return fromRun
-    return sessionStore.loadedSessionIds.has(fromRun) ? fromRun : null
   }
 
   /** 实例当前绑定的会话身份；实例不存在或未绑定时为空。 */
@@ -620,24 +671,30 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
   function createChatTab(projectPath: string, sessionId: string | null = null): string {
     const key = `${CHAT_KEY_PREFIX}${nextChatTabId}`
     nextChatTabId += 1
-    chatTabs.value = { ...chatTabs.value, [key]: { sessionId, runId: null } }
+    chatTabs.value = { ...chatTabs.value, [key]: { sessionId, runId: null, hasMessages: sessionId !== null } }
     bindRun(projectPath, key)
     return key
   }
 
   /**
-   * 该项目里会话身份匹配的对话标签键；未落盘的会话身份是 null，因此只会命中空对话标签。
-   * 空对话标签可能有多个（例如新标签建立后记录还没被清干净），活动标签优先，
+   * 命名会话按实际身份匹配，null 则只匹配尚无消息的空白标签，不受列表刷新进度影响。
+   * 同一项目已有空标签时优先取活动的那个，
    * 否则新建与打开意图会落到用户看不见的那个标签上。
    */
   function findChatKey(projectPath: string, sessionId: string | null): string | null {
     const keys = orders.value[projectPath] ?? []
     const active = activeTabs.value[projectPath] ?? null
-    if (active !== null && keys.includes(active) && chatTabs.value[active]?.sessionId === sessionId) return active
-    for (const [key, record] of Object.entries(chatTabs.value)) {
-      if (record.sessionId !== sessionId) continue
-      if (!keys.includes(key)) continue
-      return key
+    const matches = (key: string): boolean => {
+      const record = chatTabs.value[key]
+      if (record === undefined) return false
+      if (sessionId !== null) return record.sessionId === sessionId || sessionIdOfRun(record.runId) === sessionId
+      const run = sessionRunsStore.runs.find(candidate => candidate.runId === record.runId)
+      return !record.hasMessages && run?.hasMessages !== true
+        && (record.sessionId === null || !sessionStore.loadedSessionIds.has(record.sessionId))
+    }
+    if (active !== null && keys.includes(active) && matches(active)) return active
+    for (const key of keys) {
+      if (matches(key)) return key
     }
     return null
   }
@@ -647,14 +704,17 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
   }
 
   /** 移除标签键并返回接替它成为活动标签的那个键；没有可接替的标签时清空活动标签。 */
-  function removeKey(projectPath: string, key: string): string | null {
+  function removeKey(projectPath: string, key: string, neighbor?: string | null): string | null {
     const keys = effectiveKeys(projectPath)
     const index = keys.indexOf(key)
     const next = (orders.value[projectPath] ?? []).filter(candidate => candidate !== key)
     writeOrder(projectPath, next)
+    clearRename(key)
+    clearUnseen(key)
     if (activeTabs.value[projectPath] !== key) return null
-    const fallback = index < 0 ? null : keys[index - 1] ?? keys[index + 1] ?? null
-    const replaced = fallback === null ? null : effectiveKeys(projectPath).includes(fallback) ? fallback : null
+    const fallback = neighbor === undefined ? (index < 0 ? null : keys[index - 1] ?? keys[index + 1] ?? null) : neighbor
+    const remaining = effectiveKeys(projectPath)
+    const replaced = fallback !== null && remaining.includes(fallback) ? fallback : remaining[0] ?? null
     setActive(projectPath, replaced)
     return replaced
   }
@@ -721,6 +781,13 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     unseenCompletions.value = next
   }
 
+  /** 本地选择会使旧的异步打开意图失效，响应绑定本身不再产生新的选择。 */
+  function selectLocal(projectPath: string, key: string): void {
+    selectionVersion += 1
+    sessionStore.invalidateOpenSelection()
+    setActive(projectPath, key)
+  }
+
   function setActive(projectPath: string, key: string | null): void {
     // 用户切到该标签即视为已看过本轮回复，标记在该标签成为活动标签时清除。
     if (key !== null) clearUnseen(key)
@@ -780,7 +847,7 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
   /** Runtime 是否闲置；闲置时不因点击标签或新建入口启动 Pi。 */
   function isRuntimeIdle(): boolean {
     const phase = runtimeStore.view.phase
-    return phase === 'idle' || phase === 'closed'
+    return (phase === 'idle' || phase === 'closed') && runtimeStore.foregroundSessionId === null
   }
 
   return {
@@ -789,6 +856,7 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     activeSessionId,
     activeTerminalId,
     isChatActive,
+    isChatReady,
     openFiles,
     terminalTabId,
     initialize,
@@ -803,6 +871,11 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     renameTab,
     moveTab,
     syncOpenTab,
+    prepareOpenTab,
+    hasChatTabKey,
+    hasRunTab,
+    closeChatRun,
+    sessionIdForTab,
     dropSession,
     dropProject
   }

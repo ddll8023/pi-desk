@@ -70,6 +70,12 @@ export const useSessionStore = defineStore('session', () => {
    */
   const actionError = ref<SessionError | ProjectError | null>(null)
   const opening = ref(false)
+  /** 最新打开意图固定项目与标签；已发出的请求收敛后才执行下一次，不并发改前台。 */
+  const openingProjectPath = ref<string | null>(null)
+  let openSequence = 0
+  let queuedActions = 0
+  let actionTail: Promise<void> = Promise.resolve()
+  let pendingTabKey: string | null = null
   /** 删除动作进行中；与打开互斥，避免同一会话同时被打开与删除。 */
   const deleting = ref(false)
   /** 待确认的切换目标（null 表示新建会话）、目标项目与是否需要用户确认中断。 */
@@ -319,53 +325,107 @@ export const useSessionStore = defineStore('session', () => {
     projectPath?: string,
     preferredTabKey: string | null = null
   ): Promise<void> {
-    if (opening.value) return
-
-    opening.value = true
+    const targetPath = projectPath ?? currentProjectPath()
+    if (targetPath === null) return
+    const tabs = useWorkspaceTabsStore()
+    const key = tabs.prepareOpenTab(targetPath, sessionId, preferredTabKey)
+    if (key === null) return
+    const sequence = ++openSequence
+    openingProjectPath.value = targetPath
+    clearPendingTarget()
     pendingReload.value = false
     actionError.value = null
-    try {
+    await enqueueAction(async () => {
+      if (sequence !== openSequence || !tabs.hasChatTabKey(targetPath, key)) return
       const projectStore = useProjectStore()
-      if (projectPath !== undefined && projectPath !== currentProjectPath()) {
-        // 跨项目打开：先切当前项目，会话才能落在正确的项目上下文里；切换失败就不提交会话。
-        await projectStore.select(projectPath, false)
-        if (currentProjectPath() !== projectPath) {
-          actionError.value = projectStore.actionError
-            ?? { code: 'INVALID_PROJECT_PATH', message: '切换项目失败，未打开该会话。' }
-          return
-        }
-      }
-      const targetPath = currentProjectPath()
-      // 变更回传的列表保持页面已加载的窗口深度，否则打开后列表会收回首屏。
-      const result = await openSession(sessionId, allowInterrupt, windowLimit.value)
-      if (result.ok) {
-        // 打开的返回列表同样只写入它回报的项目分片，不覆盖其他项目已读过的内容。
-        applyList(result.data)
-        // 打开成功即登记工作区标签：已打开的会话聚焦它的标签，新会话登记到调用方指名的标签，未指名时才新开一个。
-        if (targetPath !== null) useWorkspaceTabsStore().syncOpenTab(sessionId, targetPath, preferredTabKey)
-        pendingSessionId.value = null
-        pendingProjectPath.value = null
-        awaitingInterrupt.value = false
+      if (targetPath !== currentProjectPath()) await projectStore.select(targetPath, false, 'session')
+      if (sequence !== openSequence) return
+      if (currentProjectPath() !== targetPath) {
+        actionError.value = projectStore.actionError
+          ?? { code: 'INVALID_PROJECT_PATH', message: '切换项目失败，未打开该会话。' }
         return
       }
+      // 同一空标签的前一次打开可能刚收敛；此时复用实际身份，不能再次按 null 新建并遗留旧实例。
+      const requestedSessionId = sessionId ?? tabs.sessionIdForTab(targetPath, key)
+      const result = await openSession(targetPath, requestedSessionId, allowInterrupt, sliceOf(targetPath).limit)
+      if (result.ok) {
+        if (result.data.projectPath !== targetPath) {
+          if (sequence === openSequence) actionError.value = {
+            code: 'INVALID_RESPONSE', message: '打开结果的项目归属不一致，未采纳该结果。'
+          }
+          return
+        }
+        const projectAlive = projectStore.projects.some(project => project.path === targetPath)
+        if (projectAlive) applyList(result.data)
+        // 实例身份即使迟到也只能绑定原标签，不能按新的前台或空标签重新猜测。
+        const bound = projectAlive && tabs.syncOpenTab(result.data.openedSessionId, targetPath, key,
+          result.data.runId, sequence === openSequence && currentProjectPath() === targetPath)
+        if (!bound && !tabs.hasRunTab(result.data.runId)) {
+          // 用户在打开期间已关闭目标标签：收敛该打开动作，不留下无标签的运行实例。
+          await tabs.closeChatRun(result.data.runId)
+        }
+        if (sequence === openSequence) clearPendingTarget()
+        return
+      }
+      if (sequence !== openSequence || currentProjectPath() !== targetPath) return
       if (result.error.code === 'SESSION_SWITCH_BLOCKED' && !allowInterrupt) {
-        pendingSessionId.value = sessionId
+        pendingSessionId.value = requestedSessionId
         pendingProjectPath.value = targetPath
+        pendingTabKey = key
         awaitingInterrupt.value = true
         return
       }
       if (result.error.code === 'TRUST_REQUIRED') {
-        // 记住待打开目标（null 表示新建）与目标项目，由信任对话框决定后重试；取消则清空。
-        pendingSessionId.value = sessionId
+        pendingSessionId.value = requestedSessionId
         pendingProjectPath.value = targetPath
+        pendingTabKey = key
         awaitingTrust.value = true
-        await useTrustStore().openPrompt()
+        const shown = await useTrustStore().openPrompt()
+        if (!shown && sequence === openSequence) {
+          awaitingTrust.value = false
+          actionError.value = { code: 'TRUST_REQUIRED', message: useTrustStore().actionError ?? result.error.message }
+        }
         return
       }
       actionError.value = result.error
+    })
+  }
+
+  /** 序列化会话动作；计数覆盖等待中的请求，不能在旧请求 finally 中提前开放输入。 */
+  async function enqueueAction(action: () => Promise<void>): Promise<void> {
+    queuedActions += 1
+    opening.value = true
+    const pending = actionTail.then(action)
+    actionTail = pending.catch(() => {})
+    try {
+      await pending
     } finally {
-      opening.value = false
+      queuedActions -= 1
+      opening.value = queuedActions > 0
+      if (!opening.value) openingProjectPath.value = null
     }
+  }
+
+  /** 关闭一个尚在打开中的标签前，先等待已提交动作报告其实际实例身份。 */
+  function waitForOpenActions(): Promise<void> {
+    return actionTail
+  }
+
+  function clearPendingTarget(): void {
+    pendingSessionId.value = null
+    pendingProjectPath.value = null
+    pendingTabKey = null
+    awaitingInterrupt.value = false
+    awaitingTrust.value = false
+  }
+
+  /** 切到文件、终端或另一项目时，只取消选择意图，不中断已发送的宿主动作。 */
+  function invalidateOpenSelection(): void {
+    if (awaitingTrust.value) useTrustStore().cancel()
+    openSequence += 1
+    openingProjectPath.value = null
+    clearPendingTarget()
+    actionError.value = null
   }
 
   /**
@@ -376,11 +436,12 @@ export const useSessionStore = defineStore('session', () => {
   async function reloadCurrent(allowInterrupt = false): Promise<void> {
     if (opening.value) return
 
-    opening.value = true
+    const sequence = ++openSequence
     pendingReload.value = false
     actionError.value = null
-    try {
+    await enqueueAction(async () => {
       const result = await reloadSession(allowInterrupt, windowLimit.value)
+      if (sequence !== openSequence) return
       if (result.ok) {
         applyList(result.data)
         pendingReload.value = false
@@ -400,9 +461,7 @@ export const useSessionStore = defineStore('session', () => {
         return
       }
       actionError.value = result.error
-    } finally {
-      opening.value = false
-    }
+    })
   }
 
   /**
@@ -441,9 +500,9 @@ export const useSessionStore = defineStore('session', () => {
     }
     const target = pendingSessionId.value
     const projectPath = pendingProjectPath.value
-    pendingSessionId.value = null
-    pendingProjectPath.value = null
-    await open(target, false, projectPath ?? undefined)
+    const key = pendingTabKey
+    clearPendingTarget()
+    await open(target, false, projectPath ?? undefined, key)
   }
 
   /** 用户确认中断后带 `allowInterrupt` 重试待确认的切换或重载。 */
@@ -453,16 +512,13 @@ export const useSessionStore = defineStore('session', () => {
       void reloadCurrent(true)
       return
     }
-    void open(pendingSessionId.value, true, pendingProjectPath.value ?? undefined)
+    void open(pendingSessionId.value, true, pendingProjectPath.value ?? undefined, pendingTabKey)
   }
 
   /** 放弃待确认的切换；运行中的操作不受影响。 */
   function cancelPending(): void {
-    pendingSessionId.value = null
-    pendingProjectPath.value = null
+    clearPendingTarget()
     pendingReload.value = false
-    awaitingInterrupt.value = false
-    awaitingTrust.value = false
   }
 
   return {
@@ -476,6 +532,9 @@ export const useSessionStore = defineStore('session', () => {
     windowLimit,
     actionError,
     opening,
+    openingProjectPath,
+    invalidateOpenSelection,
+    waitForOpenActions,
     deleting,
     pendingSessionId,
     awaitingInterrupt,
