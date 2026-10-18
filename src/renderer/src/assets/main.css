@@ -4522,15 +4522,18 @@
     font-size: 0.8125rem;
   }
 
-  /* 技能调用卡：被 Pi 展开的机器内容，用与工具卡同级的低强调内嵌折叠区，不借用用户气泡。 */
-  .chat-skill {
+  /* 技能调用卡：被 Pi 展开的机器内容，用与工具卡同级的低强调内嵌折叠区，不借用用户气泡。
+     已被更高版本取代的生成式界面（.chat-genui-superseded）共用这套折叠样式。 */
+  .chat-skill,
+  .chat-genui-superseded {
     min-width: 0;
     border: 1px solid var(--color-desk-line);
     border-radius: var(--radius-desk-md);
     background: var(--color-desk-surface-subtle);
   }
 
-  .chat-skill > summary {
+  .chat-skill > summary,
+  .chat-genui-superseded > summary {
     display: flex;
     align-items: center;
     gap: 0.5625rem;
@@ -4540,11 +4543,13 @@
     transition: background-color var(--default-transition-duration) ease;
   }
 
-  .chat-skill > summary:hover {
+  .chat-skill > summary:hover,
+  .chat-genui-superseded > summary:hover {
     background: var(--color-desk-canvas);
   }
 
-  .chat-skill[open] > summary {
+  .chat-skill[open] > summary,
+  .chat-genui-superseded[open] > summary {
     border-radius: var(--radius-desk-md) var(--radius-desk-md) 0 0;
   }
 
@@ -4570,7 +4575,8 @@
     font-size: var(--text-2xs);
   }
 
-  .chat-skill-body {
+  .chat-skill-body,
+  .chat-genui-superseded > div {
     display: flex;
     min-width: 0;
     flex-direction: column;

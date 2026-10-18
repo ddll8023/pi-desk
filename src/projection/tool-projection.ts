@@ -4,7 +4,8 @@
  * 只把 `tool_execution_*` 会话事件重建为有界展示条目：不持有子进程、不管理批次与序号、
  * 不做请求关联，也不进入消息块。`partialResult` 的追加或替换语义由具体工具决定，因此这里
  * 只保留最近一次报告、结束事件再用 `result` 校正，不做内容级累加；非文本内容只保留类型与
- * 估算大小的描述，不携带载荷也不渲染。
+ * 估算大小的描述，不携带载荷也不渲染。`details.ui` 是唯一被放行的非文本载荷，
+ * 读取时重新走一次完整校验，不符即丢弃。
  *
  * Edit / Write 变更展示只来自 Pi 已有的信息：优先解析结束结果 `details.diff`（Pi 执行时刻
  * 基于真实文件内容算出，天然覆盖重复修改与并发变更），缺失时对 edit 工具用参数 `edits[]`
@@ -27,6 +28,8 @@ import type {
   ToolExecutionTextKind,
   ToolNonTextPart
 } from '../shared/runtime-api'
+import { parseGenuiPayload } from '../shared/genui-api'
+import type { GenuiPayload } from '../shared/genui-api'
 
 /** 工具参数摘要上限；超限截断并在条目上标记，不伪装成完整参数。 */
 const MAX_TOOL_ARGS_CHARS = 4096
@@ -82,6 +85,7 @@ interface MutableToolExecution {
   nonTextBlocks: number
   nonTextParts: ToolNonTextPart[]
   diff: ToolDiff | null
+  ui: GenuiPayload | null
 }
 
 export interface ToolProjectionCallbacks {
@@ -181,6 +185,16 @@ function readOutputPath(result: unknown): string | null {
   if (!isRecord(result) || !isRecord(result.details)) return null
   const path = result.details.fullOutputPath
   return typeof path === 'string' && path !== '' ? path : null
+}
+
+/**
+ * 生成式 UI 载荷：只从结果 `details.ui` 读取，并重新走一次完整校验。
+ * 宿主已校验过的载荷在这里仍然重校，是因为渲染端只能相信跨进程契约，不能相信上游一定校验过；
+ * 形状不符、版本未知或超限时返回 null，由界面降级为文本结果。
+ */
+function readUiPayload(result: unknown): GenuiPayload | null {
+  if (!isRecord(result) || !isRecord(result.details)) return null
+  return parseGenuiPayload(result.details.ui)
 }
 
 /** 由 base64 字符数估算解码后字节数；不解析内容，也不保留数据本身。 */
@@ -346,7 +360,8 @@ function toPublicTool(entry: MutableToolExecution): ToolExecution {
     textTruncated: entry.textTruncated,
     nonTextBlocks: entry.nonTextBlocks,
     nonTextParts: entry.nonTextParts,
-    diff: entry.diff
+    diff: entry.diff,
+    ui: entry.ui
   }
 }
 
@@ -431,7 +446,8 @@ export class ToolProjection {
       textTruncated: false,
       nonTextBlocks: 0,
       nonTextParts: [],
-      diff: null
+      diff: null,
+      ui: null
     }
     this.entries.push(entry)
     this.index.set(seed.toolCallId, entry)
@@ -441,15 +457,17 @@ export class ToolProjection {
     this.applyNonText(entry, extracted)
     entry.outputPath = readOutputPath(seed.result)
     entry.diff = extractDiff(entry.toolName, entry.argsText, seed.result)
+    entry.ui = readUiPayload(seed.result)
     this.emit(entry)
   }
 
   private startExecution(payload: Record<string, unknown>): ToolEventKind {
     const entry = this.ensureEntry(payload, 'running', Date.now())
     if (entry === null) return 'none'
-    // 重复的开始事件只刷新字段；已有 diff 一并重置，避免残留上一轮结果。
+    // 重复的开始事件只刷新字段；已有 diff 与界面一并重置，避免残留上一轮结果。
     entry.diff = null
     entry.outputPath = null
+    entry.ui = null
     this.applyArgs(entry, payload.args)
     this.emit(entry)
     return 'start'
@@ -480,6 +498,7 @@ export class ToolProjection {
     this.setText(entry, result, 'result')
     this.applyNonText(entry, result)
     entry.diff = extractDiff(entry.toolName, entry.argsText, payload.result)
+    entry.ui = readUiPayload(payload.result)
     this.emit(entry)
     return 'end'
   }
@@ -515,7 +534,8 @@ export class ToolProjection {
       textTruncated: false,
       nonTextBlocks: 0,
       nonTextParts: [],
-      diff: null
+      diff: null,
+      ui: null
     }
     this.entries.push(entry)
     this.index.set(toolCallId, entry)

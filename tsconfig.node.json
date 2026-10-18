@@ -17,6 +17,7 @@
     "src/shared/**/*.ts",
     "src/auth-helper/**/*.ts",
     "src/sdk-host/**/*.ts",
+    "src/extensions/**/*.ts",
     "src/pi-cli/**/*.ts",
     "src/update-check/**/*.ts",
     "src/package-update/**/*.ts",

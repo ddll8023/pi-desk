@@ -21,10 +21,12 @@ import {
   PREFERENCES_GET_QUICK_SEND_CHANNEL,
   PREFERENCES_SET_QUICK_SEND_CHANNEL,
   PREFERENCES_GET_AUTO_UPDATE_CHANNEL,
-  PREFERENCES_SET_AUTO_UPDATE_CHANNEL
+  PREFERENCES_SET_AUTO_UPDATE_CHANNEL,
+  PREFERENCES_GET_GENUI_CHANNEL,
+  PREFERENCES_SET_GENUI_CHANNEL
 } from '../shared/preferences-api'
-import type { AutoUpdateResult, ModelDisplayResult, PreferencesErrorCode, PreferencesResult, QuickSendResult } from '../shared/preferences-api'
-import { isAutoUpdatePreference, isUiPreferences, isModelDisplayPreference, isQuickSendPreference } from '../shared/preferences-api'
+import type { AutoUpdateResult, GenuiResult, ModelDisplayResult, PreferencesErrorCode, PreferencesResult, QuickSendResult } from '../shared/preferences-api'
+import { isAutoUpdatePreference, isGenuiPreference, isUiPreferences, isModelDisplayPreference, isQuickSendPreference } from '../shared/preferences-api'
 import type { UiTheme } from '../shared/preferences-api'
 import {
   QUICK_COMMANDS_GET_CHANNEL,
@@ -373,7 +375,9 @@ const sessionManager = new SessionManager({
   projects: projectManager,
   sdk: sdkRuntime,
   projectsTrust: trustManager,
-  ownership: sessionRuns
+  ownership: sessionRuns,
+  // 生成式 UI 开关在会话创建期读取；读失败按开启处理，不因偏好故障阻断会话。
+  readGenuiEnabled: async () => (await configStore.readGenui()).enabled
 })
 /** MCP 服务器探测与取消：与当前会话无关，只按项目跑一次性官方 CLI 进程。 */
 const mcpInspection = new McpInspectionManager()
@@ -2168,6 +2172,30 @@ function registerPreferencesHandlers(pageUrl: string): void {
         return { ok: false, error: { code: 'INVALID_REQUEST', message: '扩展自动更新开关只接受一个布尔值。' } }
       }
       return preferencesManager.setExtensionAutoUpdate(args[0])
+    }
+  )
+  handle(
+    PREFERENCES_GET_GENUI_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<GenuiResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return { ok: false, error: { code: 'FORBIDDEN', message: '不允许此页面调用桌面接口。' } }
+      }
+      if (args.length !== 0) {
+        return { ok: false, error: { code: 'INVALID_REQUEST', message: '生成式 UI 开关读取接口不接受参数。' } }
+      }
+      return preferencesManager.getGenui()
+    }
+  )
+  handle(
+    PREFERENCES_SET_GENUI_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<GenuiResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return { ok: false, error: { code: 'FORBIDDEN', message: '不允许此页面调用桌面接口。' } }
+      }
+      if (args.length !== 1 || !isGenuiPreference(args[0])) {
+        return { ok: false, error: { code: 'INVALID_REQUEST', message: '生成式 UI 开关只接受一个布尔值。' } }
+      }
+      return preferencesManager.setGenui(args[0])
     }
   )
   handle(

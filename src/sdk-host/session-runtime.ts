@@ -5,6 +5,7 @@ import { readFile, realpath, stat } from 'node:fs/promises'
 import { dirname, isAbsolute, resolve } from 'node:path'
 import type { AgentSession, AgentSessionEvent, AgentSessionRuntime, ExtensionCommandContextActions, ExtensionFactory, SessionStats } from '@earendil-works/pi-coding-agent'
 import { ExtensionUiBridge } from './extension-ui-bridge'
+import { createGenuiExtension, GENUI_EXTENSION_NAME } from '../extensions/genui'
 import { MessageProjection } from '../projection/message-projection'
 import { OutputRateTracker } from '../projection/output-rate'
 import { SDK_HOST_PROTOCOL_VERSION } from './protocol'
@@ -728,6 +729,11 @@ export class SdkSessionRuntime {
           { name: 'codemode', factory: this.sdk.createCodemodeExtension(), builtin: true, replaceable: true },
           { name: 'tool-search', factory: this.sdk.createToolSearchExtension(), builtin: true, replaceable: true },
           { name: 'mcp', factory: this.sdk.createMcpExtension(), builtin: true, replaceable: true },
+          // 生成式 UI 是产品内置能力，与上述内置扩展同形态注册；工厂自身不抛异常。
+          // 用户关掉开关时直接不注册，而不是注册后再报错：这样模型完全看不到这几个工具。
+          ...(target.genui
+            ? [{ name: GENUI_EXTENSION_NAME, factory: createGenuiExtension(), builtin: true, replaceable: true }]
+            : []),
           bindingGuard
         ] } })
       if (this.closing) throw new SdkSessionFailure('HOST_NOT_READY')

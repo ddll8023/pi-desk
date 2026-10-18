@@ -1,0 +1,185 @@
+/* 生成式界面的局部视觉体系：复用宿主色彩与字体，只作用于 genui 前缀节点。
+ * 标题签条是唯一强强调；正文按分区、对比、数据、操作组织，不重复套整张灰卡。
+ * 分栏和控件直接依容器宽度换行；长表的折叠由节点组件管理，不裁剪文档数据。 */
+
+.genui-document {
+  container: genui / inline-size;
+  width: 100%;
+  min-width: 0;
+  color: var(--color-desk-ink);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.genui-document :where(p, h3, h4, figure, ol, ul) { margin: 0; }
+.chat-message-assistant.chat-message-has-genui { gap: 1rem; }
+
+.genui-document-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  border-left: 3px solid var(--color-desk-accent);
+  border-radius: 0 var(--radius-desk-md) var(--radius-desk-md) 0;
+  background: color-mix(in srgb, var(--color-desk-accent-soft) 65%, var(--color-desk-surface));
+  padding: 16px;
+}
+
+.genui-document-mark {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  flex: none;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--color-desk-accent) 24%, transparent);
+  border-radius: var(--radius-desk-sm);
+  background: var(--color-desk-surface);
+  color: var(--color-desk-accent);
+}
+.genui-document-mark svg { width: 20px; height: 20px; }
+.genui-document-heading { min-width: 0; flex: 1; }
+.genui-document-eyebrow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--color-desk-accent); font-size: 11px; line-height: 1.5; }
+.genui-document-version { border-left: 1px solid var(--color-desk-line-strong); padding-left: 8px; color: var(--color-desk-muted); font-family: var(--font-mono); }
+.genui-document .genui-document-title { margin-top: 4px; color: var(--color-desk-ink); font-size: 18px; font-weight: 650; line-height: 1.45; overflow-wrap: anywhere; }
+.genui-document-mode { flex: none; padding: 4px 8px; border-radius: var(--radius-desk-sm); background: var(--color-desk-surface); color: var(--color-desk-muted); font-size: 11px; white-space: nowrap; }
+.genui-document-body { padding-top: 20px; }
+.genui-stack { display: flex; min-width: 0; flex-direction: column; gap: 16px; }
+.genui-stack > * { min-width: 0; }
+
+.genui-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.genui-text-small { font-size: 11px; }
+.genui-text-body { font-size: 13px; }
+.genui-text-large { font-size: 15px; font-weight: 600; line-height: 1.5; }
+.genui-tone-default { color: var(--color-desk-ink); }
+.genui-tone-muted { color: var(--color-desk-muted); }
+.genui-tone-accent { color: var(--color-desk-accent); }
+.genui-tone-success { color: var(--color-desk-success); }
+.genui-tone-warning { color: var(--color-desk-warning); }
+.genui-tone-danger { color: var(--color-desk-danger); }
+.genui-text.genui-tone-warning,
+.genui-text.genui-tone-danger { border-left: 2px solid currentColor; border-radius: 0 var(--radius-desk-sm) var(--radius-desk-sm) 0; padding: 12px 16px; }
+.genui-text.genui-tone-warning { background: var(--color-desk-warning-soft); }
+.genui-text.genui-tone-danger { background: var(--color-desk-danger-soft); }
+
+.genui-document .genui-list { display: grid; gap: 8px; padding-left: 20px; list-style: disc; overflow-wrap: anywhere; }
+.genui-document .genui-list-ordered { list-style: decimal; }
+.genui-list > li { padding-left: 4px; }
+.genui-list > li::marker { color: var(--color-desk-muted); font-variant-numeric: tabular-nums; }
+
+.genui-card { min-width: 0; }
+.genui-card + .genui-card { border-top: 1px solid var(--color-desk-line); padding-top: 20px; }
+.genui-document .genui-card-title { margin-bottom: 12px; font-size: 15px; font-weight: 650; line-height: 1.5; overflow-wrap: anywhere; }
+.genui-card .genui-card { border-left: 1px solid var(--color-desk-line); padding-left: 16px; }
+.genui-card .genui-card-title { font-size: 13px; }
+.genui-document-body > .genui-card > .genui-card-title { font-size: 15px; }
+
+/* 百分比最小列宽限制列数上限，14rem 底线负责窄容器减列；嵌套分栏同样成立。 */
+.genui-row {
+  display: grid;
+  min-width: 0;
+  gap: 16px;
+  align-items: stretch;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, max(14rem, calc((100% - (var(--genui-columns, 4) - 1) * 16px) / var(--genui-columns, 4)))), 1fr));
+}
+.genui-row > * { min-width: 0; }
+.genui-row > .genui-card { border: 1px solid var(--color-desk-line); border-radius: var(--radius-desk-md); background: var(--color-desk-surface-subtle); padding: 16px; }
+.genui-row > .genui-card > .genui-card-title { font-size: 15px; }
+.genui-row > .genui-card .genui-card { background: transparent; }
+
+.genui-metric { display: flex; min-width: 0; flex-direction: column; gap: 8px; border-radius: var(--radius-desk-md); background: var(--color-desk-surface-subtle); padding: 16px; }
+.genui-metric-label { color: var(--color-desk-muted); font-size: 12px; overflow-wrap: anywhere; }
+.genui-metric-reading { display: flex; min-width: 0; flex-wrap: wrap; align-items: baseline; gap: 8px; }
+.genui-metric-value { font-size: 30px; font-weight: 650; line-height: 1.2; letter-spacing: -0.025em; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.genui-metric-unit { color: var(--color-desk-muted); font-size: 12px; }
+.genui-card .genui-metric { background: transparent; padding: 0; }
+
+.genui-table { min-width: 0; }
+.genui-table-scroll { min-width: 0; overflow-x: auto; border: 1px solid var(--color-desk-line); border-radius: var(--radius-desk-md); background: var(--color-desk-surface); scrollbar-width: thin; scrollbar-color: var(--color-desk-line-strong) transparent; }
+.genui-table table { width: 100%; border-collapse: collapse; font-size: 13px; line-height: 1.6; }
+.genui-table th { border-bottom: 1px solid var(--color-desk-line); background: var(--color-desk-surface-subtle); color: var(--color-desk-muted); font-size: 11px; font-weight: 600; text-align: left; }
+.genui-table :where(th, td) { padding: 12px; vertical-align: top; }
+.genui-table td { color: var(--color-desk-ink); white-space: pre-line; }
+.genui-table tbody tr + tr { border-top: 1px solid var(--color-desk-line); }
+.genui-table tbody tr:nth-child(even) { background: color-mix(in srgb, var(--color-desk-surface-subtle) 40%, var(--color-desk-surface)); }
+.genui-table tbody tr:hover { background: color-mix(in srgb, var(--color-desk-accent-soft) 45%, var(--color-desk-surface)); }
+.genui-table .genui-cell-numeric { min-width: 5rem; width: 1%; text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.genui-table td.genui-cell-numeric { font-family: var(--font-mono); }
+.genui-table .genui-cell-compact { min-width: 4rem; width: 1%; white-space: nowrap; }
+.genui-table .genui-cell-text { min-width: 14rem; max-width: 28rem; overflow-wrap: anywhere; }
+.genui-table-footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding-top: 8px; }
+.genui-table-count { color: var(--color-desk-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.genui-table-expand { display: inline-flex; min-height: 32px; align-items: center; gap: 8px; border-radius: var(--radius-desk-sm); padding: 4px 8px; color: var(--color-desk-accent); font-size: 12px; font-weight: 550; cursor: pointer; transition: background-color var(--default-transition-duration) ease; }
+.genui-table-expand:hover { background: var(--color-desk-accent-soft); }
+.genui-table-expand svg { width: 16px; height: 16px; }
+.genui-table-expand svg.is-expanded { transform: rotate(180deg); }
+.genui-document .genui-caption { margin-top: 8px; color: var(--color-desk-muted); font-size: 11px; line-height: 1.6; overflow-wrap: anywhere; }
+
+.genui-document .genui-steps { display: flex; flex-direction: column; gap: 16px; padding: 0; list-style: none; }
+.genui-step { position: relative; display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: 12px; }
+.genui-step:not(:last-child)::after { position: absolute; top: 28px; bottom: -12px; left: 11px; width: 1px; background: var(--color-desk-line-strong); content: ''; }
+.genui-step-index { display: grid; width: 24px; height: 24px; place-items: center; border: 1px solid var(--color-desk-line-strong); border-radius: 50%; background: var(--color-desk-surface-subtle); color: var(--color-desk-accent); font-family: var(--font-mono); font-size: 11px; }
+.genui-step-content { min-width: 0; padding-top: 0; overflow-wrap: anywhere; }
+.genui-step-title { font-size: 13px; font-weight: 600; }
+.genui-document .genui-step-description { margin-top: 4px; color: var(--color-desk-muted); font-size: 12px; }
+
+.genui-controls { display: flex; min-width: 0; flex-direction: column; gap: 16px; border-top: 1px solid var(--color-desk-line); padding-top: 16px; }
+.genui-controls-grid { display: grid; min-width: 0; grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr)); gap: 20px 24px; }
+.genui-controls-heading { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px; }
+.genui-controls-heading h4 { font-size: 15px; font-weight: 650; }
+.genui-controls-heading > span { color: var(--color-desk-muted); font-size: 11px; }
+.genui-control { display: flex; min-width: 0; flex-direction: column; gap: 8px; }
+.genui-control-heading { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 12px; }
+.genui-control-label { min-width: 0; font-size: 13px; font-weight: 550; overflow-wrap: anywhere; }
+.genui-control-value { max-width: 100%; flex: none; overflow-wrap: anywhere; border-radius: var(--radius-desk-sm); background: var(--color-desk-accent-soft); padding: 4px 8px; color: var(--color-desk-accent); font-family: var(--font-mono); font-size: 12px; font-variant-numeric: tabular-nums; }
+.genui-range { width: 100%; min-height: 24px; accent-color: var(--color-desk-accent); cursor: pointer; }
+.genui-control .text-control { width: 100%; min-width: 0; min-height: 36px; }
+.genui-toggle { display: flex; min-height: 36px; align-items: center; gap: 8px; color: var(--color-desk-muted); }
+.genui-checkbox { width: 16px; height: 16px; accent-color: var(--color-desk-accent); }
+.genui-range:disabled, .genui-checkbox:disabled { opacity: 0.6; cursor: not-allowed; }
+.genui-control-description { color: var(--color-desk-muted); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+
+.genui-chart, .genui-figure { min-width: 0; }
+.genui-document .genui-chart-title { margin-bottom: 12px; font-size: 15px; font-weight: 650; }
+.genui-figure-canvas { display: block; width: 100%; height: auto; border: 1px solid var(--color-desk-line); border-radius: var(--radius-desk-md); background: color-mix(in srgb, var(--color-desk-surface-subtle) 55%, var(--color-desk-surface)); }
+.genui-document .genui-figure-notes { margin-top: 12px; border-left: 2px solid var(--color-desk-line-strong); padding-left: 12px; color: var(--color-desk-ink); font-size: 12px; line-height: 1.65; overflow-wrap: anywhere; }
+
+.genui-document-footer { display: flex; flex-direction: column; gap: 8px; margin-top: 20px; border-top: 1px solid var(--color-desk-line); padding-top: 16px; }
+.genui-submit-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.genui-submit-note { min-width: 0; flex: 1; color: var(--color-desk-muted); font-size: 11px; line-height: 1.65; }
+.genui-submit { display: inline-flex; min-height: 36px; flex: none; align-items: center; justify-content: center; gap: 8px; white-space: normal; overflow-wrap: anywhere; }
+.genui-submit svg { width: 16px; height: 16px; flex: none; }
+.genui-feedback { font-size: 12px; overflow-wrap: anywhere; }
+
+/* 旧版折叠行沿用相同的界面身份，但弱化为历史记录，不再借用技能卡的视觉语义。 */
+.genui-history { min-width: 0; width: 100%; border: 1px solid var(--color-desk-line); border-radius: var(--radius-desk-md); color: var(--color-desk-muted); }
+.genui-history > summary { display: flex; min-width: 0; flex-wrap: wrap; align-items: center; gap: 12px; border-radius: inherit; padding: 12px 16px; background: var(--color-desk-surface-subtle); cursor: pointer; list-style: none; }
+.genui-history > summary:hover { background: var(--color-desk-accent-soft); }
+.genui-history[open] > summary { border-radius: var(--radius-desk-md) var(--radius-desk-md) 0 0; }
+.genui-history > summary::-webkit-details-marker { display: none; }
+.genui-history > summary::after { width: 6px; height: 6px; flex: none; margin-left: auto; border-right: 1px solid currentColor; border-bottom: 1px solid currentColor; content: ''; transform: rotate(45deg); }
+.genui-history[open] > summary::after { transform: rotate(225deg); }
+.genui-history-label { flex: none; color: var(--color-desk-accent); font-size: 11px; }
+.genui-history-title { min-width: 0; flex: 1; overflow: hidden; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.genui-history-version { flex: none; font-family: var(--font-mono); font-size: 11px; white-space: nowrap; }
+.genui-history-body { border-top: 1px solid var(--color-desk-line); padding: 16px; }
+.genui-document.is-readonly .genui-document-header { border-left-color: var(--color-desk-line-strong); background: var(--color-desk-surface-subtle); }
+.genui-document.is-readonly :where(.genui-document-eyebrow, .genui-document-mark) { color: var(--color-desk-muted); }
+
+.genui-table-scroll:focus-visible,
+.genui-table-expand:focus-visible,
+.genui-history > summary:focus-visible,
+.genui-range:focus-visible,
+.genui-checkbox:focus-visible { outline: 2px solid var(--color-desk-accent); outline-offset: 3px; }
+
+@container genui (max-width: 560px) {
+  .genui-document-header { flex-wrap: wrap; gap: 12px; padding: 12px; }
+  .genui-document-mode { margin-left: auto; }
+  .genui-submit-row { flex-direction: column; align-items: stretch; }
+  .genui-submit { align-self: flex-end; max-width: 100%; }
+  .genui-control-heading { flex-wrap: wrap; gap: 8px; }
+  .genui-document .genui-document-title { font-size: 16px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .genui-table-expand, .genui-submit { transition: none; }
+}

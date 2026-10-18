@@ -11,6 +11,7 @@
  * 删除以显式项目路径定位文件：先按与项目移除同一套门禁收敛占用（opening/closing 拒绝、在途工作
  * 需显式中断确认），释放成功后才删文件；任一步失败都会保留会话原样，不产生半删状态。
  * 有活动操作而重载请求未确认时直接拒绝，不自动中断、不排队、不重放已提交的内容。
+ * 生成式 UI 开关在每次授权时读一次并随目标下发给宿主；读失败按开启处理，不让偏好故障阻断会话。
  * IPC 契约与校验在 shared/session-api.ts。
  */
 import type {
@@ -66,6 +67,8 @@ export interface SessionManagerOptions {
     isProjectActive(projectPath: string): boolean
     runOfSession(projectPath: string, sessionId: string): SessionRunSummary | null
   }
+  /** 生成式 UI 开关：由主进程读配置后交给宿主决定是否注册该内置扩展。 */
+  readonly readGenuiEnabled: () => Promise<boolean>
 }
 
 export class SessionManager {
@@ -86,12 +89,25 @@ export class SessionManager {
       const identity = reference.kind === 'new' ? null : await resolveSdkSessionFile(projectPath, reference)
       if (!this.options.ownership.isProjectActive(projectPath)) throw new SdkTargetFailure('STALE_SESSION')
       return { projectPath, sessionDir: getProjectSessionDir(projectPath), trusted: trust.decision === 'trusted',
+        genui: await this.genuiEnabled(),
         sessionId: identity?.sessionId ?? null, sessionFile: identity?.sessionFile ?? null,
         fileStamp: identity?.fileStamp ?? null }
     } catch (error) {
       if (error instanceof SdkTargetFailure) throw error
       if (error instanceof SessionStorageError) throw new SdkTargetFailure('SESSION_NOT_FOUND')
       throw new SdkTargetFailure('AUTHORIZATION_FAILED')
+    }
+  }
+
+  /**
+   * 读生成式 UI 开关；读失败按开启处理。偏好读不到不应让用户建不了会话，
+   * 也不能把一次瞬时 IO 故障变成「功能消失」。
+   */
+  private async genuiEnabled(): Promise<boolean> {
+    try {
+      return await this.options.readGenuiEnabled()
+    } catch {
+      return true
     }
   }
 

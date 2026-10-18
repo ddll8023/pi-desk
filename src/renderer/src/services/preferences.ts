@@ -1,7 +1,9 @@
-/** 封装界面偏好、对话页模型展示偏好、快捷发送短语与扩展自动更新开关读写，重建普通载荷并保留桥接失败原因。 */
+/** 封装界面偏好、对话页模型展示偏好、快捷发送短语、扩展自动更新开关与生成式 UI 开关读写，重建普通载荷并保留桥接失败原因。 */
 import type {
   AutoUpdatePreference,
   AutoUpdateResult,
+  GenuiPreference,
+  GenuiResult,
   ModelDisplayPreference,
   ModelDisplayResult,
   PreferencesError,
@@ -121,6 +123,28 @@ export async function setAutoUpdate(preference: AutoUpdatePreference): Promise<A
   if (!bridge || typeof bridge.setAutoUpdate !== 'function') return unavailable()
   try {
     return await bridge.setAutoUpdate({ enabled: preference.enabled === true })
+  } catch (error) {
+    return callFailed(error)
+  }
+}
+
+/** 读取生成式 UI 开关；失败时页面按开启展示。 */
+export async function getGenui(): Promise<GenuiResult> {
+  const bridge = window.desktop
+  if (!bridge || typeof bridge.getGenui !== 'function') return unavailable()
+  try {
+    return await bridge.getGenui()
+  } catch (error) {
+    return callFailed(error)
+  }
+}
+
+/** 保存生成式 UI 开关；只影响本应用是否注册这项内置能力，需要重载资源后生效。 */
+export async function setGenui(preference: GenuiPreference): Promise<GenuiResult> {
+  const bridge = window.desktop
+  if (!bridge || typeof bridge.setGenui !== 'function') return unavailable()
+  try {
+    return await bridge.setGenui({ enabled: preference.enabled === true })
   } catch (error) {
     return callFailed(error)
   }

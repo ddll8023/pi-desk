@@ -16,7 +16,7 @@ import {
   MIN_RIGHT_PANEL_WIDTH
 } from '../../../shared/preferences-api'
 import type { PreferencesError, RightPanelTab, UiPreferences, UiTheme } from '../../../shared/preferences-api'
-import { getAutoUpdate, getPreferences, getQuickSend, setAutoUpdate, setQuickSend, setUiPreferences } from '../services/preferences'
+import { getAutoUpdate, getGenui, getPreferences, getQuickSend, setAutoUpdate, setGenui, setQuickSend, setUiPreferences } from '../services/preferences'
 
 /** 快捷发送短语的保存状态；失败保留原列表并把原因交给设置页展示。 */
 type QuickSendView =
@@ -26,6 +26,12 @@ type QuickSendView =
 
 /** 自动更新开关的保存状态；与短语分开，失败原因只影响这一个控件。 */
 type AutoUpdateView =
+  | { readonly phase: 'idle' }
+  | { readonly phase: 'saving' }
+  | { readonly phase: 'error'; readonly error: PreferencesError }
+
+/** 生成式 UI 开关的保存状态；与自动更新开关分开，失败原因只影响这一个控件。 */
+type GenuiView =
   | { readonly phase: 'idle' }
   | { readonly phase: 'saving' }
   | { readonly phase: 'error'; readonly error: PreferencesError }
@@ -47,6 +53,9 @@ export const usePreferencesStore = defineStore('preferences', () => {
   /** 扩展自动更新开关；读取失败或非法时按关闭处理，不把未知当成已开启。 */
   const extensionAutoUpdate = ref(false)
   const autoUpdateView = ref<AutoUpdateView>({ phase: 'idle' })
+  /** 生成式 UI 开关；读取失败或非法时按开启处理，与产品默认口径一致。 */
+  const genuiEnabled = ref(true)
+  const genuiView = ref<GenuiView>({ phase: 'idle' })
   /** 首次读取是否已结束；用于侧栏挂载与设置控件启用，读取失败也结束等待。 */
   const ready = ref(false)
   const actionError = ref<PreferencesError | null>(null)
@@ -57,8 +66,13 @@ export const usePreferencesStore = defineStore('preferences', () => {
   async function initialize(): Promise<void> {
     if (ready.value) return
 
-    // 三份偏好互相独立：快捷发送或自动更新读取失败不影响侧栏与主题，也不把启动变成阻塞。
-    const [result, quickSend, autoUpdate] = await Promise.all([getPreferences(), getQuickSend(), getAutoUpdate()])
+    // 四份偏好互相独立：快捷发送、自动更新或生成式 UI 开关读取失败不影响侧栏与主题，也不把启动变成阻塞。
+    const [result, quickSend, autoUpdate, genui] = await Promise.all([
+      getPreferences(),
+      getQuickSend(),
+      getAutoUpdate(),
+      getGenui()
+    ])
     if (result.ok) {
       sidebarCollapsed.value = result.data.sidebarCollapsed
       theme.value = result.data.theme
@@ -69,6 +83,7 @@ export const usePreferencesStore = defineStore('preferences', () => {
     } else actionError.value = result.error
     if (quickSend.ok) quickSendMessages.value = [...quickSend.data.messages]
     if (autoUpdate.ok) extensionAutoUpdate.value = autoUpdate.data.enabled
+    if (genui.ok) genuiEnabled.value = genui.data.enabled
     // 读取失败也结束等待：界面继续使用默认布局，不把偏好读取变成启动阻塞。
     ready.value = true
   }
@@ -221,6 +236,24 @@ export const usePreferencesStore = defineStore('preferences', () => {
     return true
   }
 
+  /**
+   * 保存生成式 UI 开关：保存成功才用主进程确认后的值覆盖当前值，失败保留原值并暴露错误。
+   * 开关只影响会话创建期，因此这里不重载资源——生效时机由设置页说明，并交给用户决定。
+   */
+  async function saveGenuiEnabled(enabled: boolean): Promise<boolean> {
+    if (genuiView.value.phase === 'saving') return false
+
+    genuiView.value = { phase: 'saving' }
+    const result = await setGenui({ enabled })
+    if (!result.ok) {
+      genuiView.value = { phase: 'error', error: result.error }
+      return false
+    }
+    genuiEnabled.value = result.data.enabled
+    genuiView.value = { phase: 'idle' }
+    return true
+  }
+
   return {
     sidebarCollapsed,
     theme,
@@ -232,6 +265,8 @@ export const usePreferencesStore = defineStore('preferences', () => {
     quickSendView,
     extensionAutoUpdate,
     autoUpdateView,
+    genuiEnabled,
+    genuiView,
     ready,
     actionError,
     initialize,
@@ -245,6 +280,7 @@ export const usePreferencesStore = defineStore('preferences', () => {
     setRightPanelTab,
     setTheme,
     saveQuickSendMessages,
-    saveExtensionAutoUpdate
+    saveExtensionAutoUpdate,
+    saveGenuiEnabled
   }
 })

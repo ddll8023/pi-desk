@@ -9,16 +9,22 @@
  * （只替换被改动的消息与工具条目对象），因此这里缓存上一次的渲染项：消息对象与其工具条目对象都没变
  * 时直接复用，避免每个批次都重建整段历史的块对象；缓存只保留仍在投影里的消息，不持有已丢弃内容。
  * 用户消息的图片附件块经 `ChatTextBlock.image` 原样透传；工具卡片所需的字段（含 Diff）原样
- * 来自投影，本模块不计算耗时、不整理非文本内容，也不解析变更。
+ * 来自投影，本模块不计算耗时、不整理非文本内容，也不解析变更。工具调用交付的生成式界面
+ * 同样只做透传：载荷校验已在投影层完成，这里不重复判断也不补造。
  *
  * 用户消息里被 Pi 展开的技能调用块在这里解析成 `ChatTextBlock.skill`，`text` 只保留追加在技能块
  * 之后的用户文本；同样由 Pi 注入的图片坐标说明行也在这里剥离——两者都不是用户输入，不应进入
  * 气泡、摘要与复制内容。本轮响应计时（`turn`）与单次调用用量（`usage`）只做透传，口径与数值都由投影决定。
  * 压缩记录（`role === 'compaction'`）同样只做透传：它的摘要与 token 数来自投影，不由本模块推算。
  * `userMessagePayload` 反向把一条用户消息还原成可再次提交的输入（文本与附件），供复制、修改预填与回退回填共用。
+ *
+ * 生成式界面只有一份可交互：同一 `documentId` 取当前投影里的最高 `revision`，其余版本标上
+ * `supersededBy` 由界面折叠成只读记录。这个判定只在本模块做一次，渲染组件不各自推断；
+ * 因此缓存有效性除了消息与工具条目，还要比对每个界面当前应得的 `supersededBy`。
  */
 import { PROMPT_IMAGE_MAX_CHARS, PROMPT_IMAGE_MAX_COUNT } from '../../shared/runtime-api'
 import type { MessageUsage, ProjectionBlock, ProjectionCompaction, ProjectionMessage, PromptImageInput, ToolExecution } from '../../shared/runtime-api'
+import type { GenuiPayload } from '../../shared/genui-api'
 import { parseSkillBlock, stripImageMarkerLines } from '../../shared/user-message-text'
 
 /** 工具调用块的渲染项；`execution` 为 null 表示该工具调用没有对应执行条目（尚未到达或历史中没有结果）。 */
@@ -27,6 +33,16 @@ export interface ChatToolBlock {
   readonly key: string
   readonly toolName: string
   readonly execution: ToolExecution | null
+  /**
+   * 该工具调用交付的生成式界面；null 表示没有界面或载荷未通过校验。
+   * 只从执行条目透传，本模块不解析、不补造。
+   */
+  readonly ui: GenuiPayload | null
+  /**
+   * 该界面已被更高版本取代时给出那个版本号，否则 null。
+   * 取代判定按 `documentId` 取当前投影里的最高 `revision`，只在本模块算一次。
+   */
+  readonly supersededBy: number | null
 }
 
 export interface ChatTextBlock {
@@ -153,15 +169,23 @@ interface ToolRef {
   readonly execution: ToolExecution | undefined
 }
 
+/** 一条消息里出现的界面及其应得的取代状态；取代版本变化时该消息必须重建。 */
+interface UiRef {
+  readonly documentId: string
+  readonly supersededBy: number | null
+}
+
 interface CacheEntry {
   readonly source: ProjectionMessage
   readonly toolRefs: readonly ToolRef[]
+  readonly uiRefs: readonly UiRef[]
   readonly view: ChatMessageView
 }
 
 interface BuiltMessage {
   readonly view: ChatMessageView
   readonly toolRefs: readonly ToolRef[]
+  readonly uiRefs: readonly UiRef[]
 }
 
 /** 轮缓存：成员消息视图对象都没变时整轮复用，避免流式期间重建整段历史。 */
@@ -185,6 +209,53 @@ const FAILURE_STOP_REASONS: Readonly<Record<string, string>> = {
 
 const UNKNOWN_TOOL_NAME = '未知工具'
 
+/**
+ * 每份界面当前应得的最高版本：按 `documentId` 聚合所有消息块携带的界面载荷。
+ * 只读 `revision` 字段，不做校验（载荷已在投影层校验过）。
+ */
+function latestRevisions(
+  messages: readonly ProjectionMessage[],
+  toolsById: ReadonlyMap<string, ToolExecution>
+): ReadonlyMap<string, number> {
+  const latest = new Map<string, number>()
+  for (const message of messages) {
+    for (const block of message.blocks) {
+      if (block.kind !== 'toolcall' || block.toolCallId === null) continue
+      const ui = toolsById.get(block.toolCallId)?.ui
+      if (ui === undefined || ui === null) continue
+      const current = latest.get(ui.documentId)
+      if (current === undefined || ui.revision > current) latest.set(ui.documentId, ui.revision)
+    }
+  }
+  return latest
+}
+
+/** 一条消息的界面取代状态：只有低于最高版本的那些才标出取代它的版本。 */
+function uiRefsOf(
+  message: ProjectionMessage,
+  toolsById: ReadonlyMap<string, ToolExecution>,
+  latest: ReadonlyMap<string, number>
+): UiRef[] {
+  const refs: UiRef[] = []
+  for (const block of message.blocks) {
+    if (block.kind !== 'toolcall' || block.toolCallId === null) continue
+    const ui = toolsById.get(block.toolCallId)?.ui
+    if (ui === undefined || ui === null) continue
+    const max = latest.get(ui.documentId)
+    refs.push({ documentId: ui.documentId, supersededBy: max === undefined || max <= ui.revision ? null : max })
+  }
+  return refs
+}
+
+/** 缓存命中时，该消息每个界面的取代状态都必须与当前一致。 */
+function sameUiRefs(previous: readonly UiRef[], next: readonly UiRef[]): boolean {
+  if (previous.length !== next.length) return false
+  return previous.every((ref, index) => {
+    const other = next[index]
+    return other !== undefined && other.documentId === ref.documentId && other.supersededBy === ref.supersededBy
+  })
+}
+
 /** 每个组件实例持有自己的缓存；缓存不跨实例共享，也不进全局状态。 */
 export function createChatViewCache(): ChatViewCache {
   let entries = new Map<string, CacheEntry>()
@@ -195,16 +266,19 @@ export function createChatViewCache(): ChatViewCache {
     tools: readonly ToolExecution[]
   ): ChatMessageView[] {
     const toolsById = new Map(tools.map((tool) => [tool.toolCallId, tool]))
+    // 先算一次当前最高版本，再逐条消息比对缓存：修改发生后旧版能立刻变成只读。
+    const latest = latestRevisions(messages, toolsById)
     const kept = new Map<string, CacheEntry>()
     const views = messages.map((message) => {
       const cached = entries.get(message.id)
-      if (cached !== undefined && isReusable(cached, message, toolsById)) {
+      const uiRefs = uiRefsOf(message, toolsById, latest)
+      if (cached !== undefined && isReusable(cached, message, toolsById) && sameUiRefs(cached.uiRefs, uiRefs)) {
         kept.set(message.id, cached)
         return cached.view
       }
 
-      const built = buildMessageView(message, toolsById)
-      kept.set(message.id, { source: message, toolRefs: built.toolRefs, view: built.view })
+      const built = buildMessageView(message, toolsById, uiRefs)
+      kept.set(message.id, { source: message, toolRefs: built.toolRefs, uiRefs: built.uiRefs, view: built.view })
       return built.view
     })
     // 只保留当前仍存在的消息，避免缓存继续持有已被投影丢弃的大块文本。
@@ -305,13 +379,14 @@ function isReusable(
 
 function buildMessageView(
   message: ProjectionMessage,
-  toolsById: ReadonlyMap<string, ToolExecution>
+  toolsById: ReadonlyMap<string, ToolExecution>,
+  uiRefs: readonly UiRef[]
 ): BuiltMessage {
   const toolRefs: ToolRef[] = []
   // 投影本身按 contentIndex 排序；这里再排一次，保证渲染顺序不依赖上游的插入方式。
   const blocks = [...message.blocks]
     .sort((left, right) => left.contentIndex - right.contentIndex)
-    .map((block) => toChatBlock(message, block, toolsById, toolRefs))
+    .map((block) => toChatBlock(message, block, toolsById, toolRefs, uiRefs))
 
   return {
     view: {
@@ -325,7 +400,8 @@ function buildMessageView(
       turn: message.turn,
       compaction: message.compaction
     },
-    toolRefs
+    toolRefs,
+    uiRefs
   }
 }
 
@@ -333,7 +409,8 @@ function toChatBlock(
   message: ProjectionMessage,
   block: ProjectionBlock,
   toolsById: ReadonlyMap<string, ToolExecution>,
-  toolRefs: ToolRef[]
+  toolRefs: ToolRef[],
+  uiRefs: readonly UiRef[]
 ): ChatBlock {
   const key = `${message.id}-${block.contentIndex}`
   if (block.kind === 'text') {
@@ -360,11 +437,18 @@ function toChatBlock(
 
   const execution = block.toolCallId === null ? undefined : toolsById.get(block.toolCallId)
   if (block.toolCallId !== null) toolRefs.push({ toolCallId: block.toolCallId, execution })
+  const ui = execution?.ui ?? null
+  // 取代状态按界面而非块位置匹配：一份界面在一段历史里可能出现多次，逐份比对即可。
+  const superseded = ui === null
+    ? null
+    : uiRefs.find((ref) => ref.documentId === ui.documentId)?.supersededBy ?? null
   return {
     kind: 'toolcall',
     key,
     toolName: firstNonEmpty(block.toolName, execution?.toolName) ?? UNKNOWN_TOOL_NAME,
-    execution: execution ?? null
+    execution: execution ?? null,
+    ui,
+    supersededBy: superseded
   }
 }
 

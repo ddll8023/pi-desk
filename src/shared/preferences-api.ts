@@ -1,4 +1,4 @@
-/** 定义界面偏好、对话页模型展示偏好、快捷发送短语与扩展自动更新开关的受限 IPC；窗口状态由主进程独占，不经过 IPC。 */
+/** 定义界面偏好、对话页模型展示偏好、快捷发送短语、扩展自动更新开关与生成式 UI 开关的受限 IPC；窗口状态由主进程独占，不经过 IPC。 */
 import type { DesktopErrorCode } from './desktop-api'
 import type { ModelIdentity } from './runtime-api'
 import { isModelIdentity } from './runtime-api'
@@ -11,6 +11,8 @@ export const PREFERENCES_GET_QUICK_SEND_CHANNEL = 'desktop:preferences-get-quick
 export const PREFERENCES_SET_QUICK_SEND_CHANNEL = 'desktop:preferences-set-quick-send'
 export const PREFERENCES_GET_AUTO_UPDATE_CHANNEL = 'desktop:preferences-get-auto-update'
 export const PREFERENCES_SET_AUTO_UPDATE_CHANNEL = 'desktop:preferences-set-auto-update'
+export const PREFERENCES_GET_GENUI_CHANNEL = 'desktop:preferences-get-genui'
+export const PREFERENCES_SET_GENUI_CHANNEL = 'desktop:preferences-set-genui'
 
 /** 主题三档取值，与 Electron `nativeTheme.themeSource` 状态机一一对应；默认跟随系统。 */
 export type UiTheme = 'system' | 'light' | 'dark'
@@ -135,6 +137,19 @@ export type AutoUpdateResult =
   | { readonly ok: true; readonly data: AutoUpdatePreference }
   | { readonly ok: false; readonly error: PreferencesError }
 
+/**
+ * 生成式 UI 开关：关闭后 SDK 宿主不再注册 ui_render / ui_catalog / ui_inspect，
+ * 模型也就看不到这项能力。默认开：它是产品内置特性，不需要用户先发现再开启。
+ * 开关只影响会话创建期，改动要重载资源后才生效；历史会话里已交付的界面仍照常渲染。
+ */
+export interface GenuiPreference {
+  readonly enabled: boolean
+}
+
+export type GenuiResult =
+  | { readonly ok: true; readonly data: GenuiPreference }
+  | { readonly ok: false; readonly error: PreferencesError }
+
 /** 快捷发送短语的默认值；配置缺失或规范化后为空时使用，主进程与页面共用同一份。 */
 export const DEFAULT_QUICK_SEND_MESSAGES: readonly string[] = ['继续', '确认', '提交', '推送']
 
@@ -156,6 +171,10 @@ export interface PreferencesApi {
   readonly getAutoUpdate: () => Promise<AutoUpdateResult>
   /** 保存扩展自动更新开关；只改本应用的行为，不修改 Pi 配置。 */
   readonly setAutoUpdate: (preference: AutoUpdatePreference) => Promise<AutoUpdateResult>
+  /** 读取生成式 UI 开关；配置缺失或非法时主进程返回开启。 */
+  readonly getGenui: () => Promise<GenuiResult>
+  /** 保存生成式 UI 开关；只改本应用是否注册这项内置能力，不修改 Pi 配置。 */
+  readonly setGenui: (preference: GenuiPreference) => Promise<GenuiResult>
   /** 保存界面偏好；非法的请求由主进程重新校验并拒绝。 */
   readonly setUiPreferences: (ui: UiPreferences) => Promise<PreferencesResult>
 }
@@ -231,6 +250,23 @@ export function isAutoUpdatePreference(value: unknown): value is AutoUpdatePrefe
 export function isAutoUpdateResult(value: unknown): value is AutoUpdateResult {
   if (!isRecord(value)) return false
   if (value.ok === true) return isAutoUpdatePreference(value.data)
+  if (value.ok !== false || !isRecord(value.error)) return false
+  return typeof value.error.message === 'string'
+    && typeof value.error.code === 'string'
+    && PREFERENCES_ERROR_CODES.includes(value.error.code)
+}
+
+/** 生成式 UI 开关的请求形状校验：只允许 `enabled` 一个布尔字段。 */
+export function isGenuiPreference(value: unknown): value is GenuiPreference {
+  if (!isRecord(value)) return false
+  if (!Object.keys(value).every((key) => key === 'enabled')) return false
+  return typeof value.enabled === 'boolean'
+}
+
+/** 与其它偏好同一形状：成功返回主进程确认后的开关状态，失败保留主进程错误。 */
+export function isGenuiResult(value: unknown): value is GenuiResult {
+  if (!isRecord(value)) return false
+  if (value.ok === true) return isGenuiPreference(value.data)
   if (value.ok !== false || !isRecord(value.error)) return false
   return typeof value.error.message === 'string'
     && typeof value.error.code === 'string'

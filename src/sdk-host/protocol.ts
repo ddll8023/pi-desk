@@ -11,7 +11,7 @@ import type {
   RuntimeDiagnostics, SessionUsage
 } from '../shared/runtime-api'
 
-export const SDK_HOST_PROTOCOL_VERSION = 3
+export const SDK_HOST_PROTOCOL_VERSION = 4
 /**
  * `hostId` 是主进程注册表分配的应用级运行身份；宿主不能自行编号，重启后也不会复用旧值。
  */
@@ -41,6 +41,8 @@ export interface SdkSessionTarget {
   readonly sessionFile: string | null
   readonly fileStamp: string | null
   readonly trusted: boolean
+  /** 是否注册生成式 UI 内置扩展；由主进程按用户开关给出，宿主只负责据此决定注册与否。 */
+  readonly genui: boolean
 }
 
 /** 宿主内 MCP 动作；与页面契约 `McpCommandAction` 同集合，enable/disable 不在范围内。 */
@@ -237,11 +239,11 @@ export function isSdkSessionReference(value: unknown): value is SdkSessionRefere
 /** 新建目标与恢复目标的文件、身份和读取标识必须一致存在。 */
 export function isSdkSessionTarget(value: unknown): value is SdkSessionTarget {
   if (!isRecord(value) || !isPath(value.projectPath) || !isPath(value.sessionDir)
-    || typeof value.trusted !== 'boolean') return false
+    || typeof value.trusted !== 'boolean' || typeof value.genui !== 'boolean') return false
   const targetValid = value.sessionFile === null
     ? value.sessionId === null && value.fileStamp === null
     : isPath(value.sessionFile) && isIdentifier(value.sessionId) && isIdentifier(value.fileStamp)
-  return targetValid && hasKeys(value, ['projectPath', 'sessionDir', 'sessionId', 'sessionFile', 'fileStamp', 'trusted'])
+  return targetValid && hasKeys(value, ['projectPath', 'sessionDir', 'sessionId', 'sessionFile', 'fileStamp', 'trusted', 'genui'])
 }
 /** 状态是安全展示副本，不包含模型对象、工具参数、消息或认证记录。 */
 export function isSdkSessionStatus(value: unknown): value is SdkSessionStatus {

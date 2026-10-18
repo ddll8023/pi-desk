@@ -1,5 +1,7 @@
 /** 只定义 Runtime 状态、Prompt 提交、对话回退、中止、可用模型读取与当前会话模型切换、手动上下文压缩、Pi 资源与资源预读、诊断读取、MCP 状态、MCP 配置列举、MCP 服务器探测与 MCP 登录/退出/重连命令、消息/工具投影（含生成计时与压缩记录）IPC 的固定通道、事件名、结果类型与跨进程响应校验。 */
 import type { DesktopErrorCode } from './desktop-api'
+import { isGenuiPayload } from './genui-api'
+import type { GenuiPayload } from './genui-api'
 
 export const RUNTIME_STATUS_CHANNEL = 'desktop:runtime-status'
 export const RUNTIME_PROMPT_CHANNEL = 'desktop:runtime-prompt'
@@ -349,6 +351,11 @@ export interface ToolExecution {
   readonly nonTextParts: readonly ToolNonTextPart[]
   /** 文件变更展示数据；null 表示无可信来源，不伪造 Diff。 */
   readonly diff: ToolDiff | null
+  /**
+   * 生成式 UI 载荷；null 表示该工具没有交付界面，或载荷未通过校验。
+   * 载荷已由主进程按 `parseGenuiPayload` 校验并归一，渲染端可直接使用。
+   */
+  readonly ui: GenuiPayload | null
 }
 
 /** AI 消息生成计时：时刻来自 Desktop 接收事件，不代表模型服务端耗时，也不包含后续工具执行。 */
@@ -1015,6 +1022,7 @@ function isToolExecution(value: unknown): value is ToolExecution {
     && value.nonTextBlocks >= 0
     && Array.isArray(value.nonTextParts)
     && value.nonTextParts.every(isToolNonTextPart)
+    && (value.ui === null || isGenuiPayload(value.ui))
     && isToolDiff(value.diff)
 }
 

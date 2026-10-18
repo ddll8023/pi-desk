@@ -7,10 +7,10 @@
  */
 
 /** 设置页的分节标识；也是内容分发与深链跳转的唯一键。 */
-export type SettingsSectionId = 'appearance' | 'quick-send' | 'quick-commands' | 'model' | 'resources' | 'version'
+export type SettingsSectionId = 'appearance' | 'quick-send' | 'quick-commands' | 'model' | 'resources' | 'features' | 'version'
 
 /** 导航条目可用的图标名；每个名字对应 SettingsNavIcon 里的一段内联 Lucide 路径。 */
-export type SettingsIconName = 'palette' | 'zap' | 'terminal' | 'bot' | 'blocks' | 'refresh-cw'
+export type SettingsIconName = 'palette' | 'zap' | 'terminal' | 'bot' | 'blocks' | 'toggle-left' | 'refresh-cw'
 
 /** 一个分节条目：标签是导航上显示的名字，关键词除标签本身外补上用户可能输入的别名。 */
 export interface SettingsNavItem {
@@ -43,7 +43,8 @@ export const SETTINGS_NAV_GROUPS: readonly SettingsNavGroup[] = [
     label: 'Pi',
     items: [
       { id: 'model', label: '模型', icon: 'bot', keywords: ['供应商', '凭据', 'models.json', 'provider'] },
-      { id: 'resources', label: '资源', icon: 'blocks', keywords: ['技能', '提示词模板', '扩展', 'MCP', 'skills'] }
+      { id: 'resources', label: '资源', icon: 'blocks', keywords: ['技能', '提示词模板', '扩展', 'MCP', 'skills'] },
+      { id: 'features', label: '功能', icon: 'toggle-left', keywords: ['生成式界面', '界面', 'genui', '开关', 'feature'] }
     ]
   },
   {

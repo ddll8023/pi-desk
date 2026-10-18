@@ -12,6 +12,7 @@ import ModelSettingsView from './ModelSettingsView.vue'
 import QuickSendSection from './QuickSendSection.vue'
 import QuickCommandsSection from './QuickCommandsSection.vue'
 import ResourceView from './ResourceView.vue'
+import GenuiSettingsSection from './GenuiSettingsSection.vue'
 import SettingsNavIcon from './SettingsNavIcon.vue'
 import VersionUpdateSection from './VersionUpdateSection.vue'
 
@@ -92,6 +93,7 @@ const themeOptions = [
         <QuickCommandsSection v-else-if="activeSection === 'quick-commands'" />
         <ModelSettingsView v-else-if="activeSection === 'model'" />
         <ResourceView v-else-if="activeSection === 'resources'" />
+        <GenuiSettingsSection v-else-if="activeSection === 'features'" />
         <VersionUpdateSection v-else />
       </div>
     </div>

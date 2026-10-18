@@ -1,5 +1,5 @@
 <!-- 单条消息：按块展示正文、思考、工具卡、技能卡、压缩卡与计时（单条生成耗时与本轮响应耗时）与本次调用的 token 花销。
-     过程块逐项展示、互不合并：每段 Thinking 各自折叠成一行轻量摘要（生成中展开并跟随最新思考，结束后收起），每个工具调用就是一张独立折叠的 ToolCard，参数与结果在卡内二级折叠；回答正文按原位置展示、始终可见。用户消息下方使用细线图标操作栏，回退与修改后的重新发送由父级执行。
+     过程块逐项展示、互不合并：每段 Thinking 各自折叠成一行轻量摘要（生成中展开并跟随最新思考，结束后收起），每个工具调用就是一张独立折叠的 ToolCard，参数与结果在卡内二级折叠；交付了生成式界面的工具调用改渲染界面本身，不再套折叠卡；回答正文按原位置展示、始终可见。界面内的参数提交复用消息动作栏的禁用口径（运行中、未同步、正在发送等），不另做一套判断。用户消息下方使用细线图标操作栏，回退与修改后的重新发送由父级执行。
      早期轮次的整体收起由 ChatTurnItem 负责，这里只表达单条消息内部每项自己的开合；同一轮内的非首条 AI 消息用紧凑表头，不重复 π 标记与角色名。 -->
 <script setup lang="ts">
 import { computed, onUnmounted, reactive, ref, useId, watch } from 'vue'
@@ -10,6 +10,7 @@ import { formatDuration, useTickingNow } from '../clock'
 import { cacheHitRate, formatTokens } from '../usage-format'
 import MarkdownContent from './MarkdownContent.vue'
 import ToolCard from './ToolCard.vue'
+import UiDocument from './genui/UiDocument.vue'
 import AppButton from './ui/AppButton.vue'
 
 const props = defineProps<{
@@ -95,6 +96,8 @@ const thinkingOverrides = reactive(new Map<string, boolean>())
 const skillOverrides = reactive(new Map<string, boolean>())
 
 const isUser = computed(() => props.message.role === 'user')
+/** 只标记渲染入口，不改变界面版本、会话身份或消息的块顺序。 */
+const hasGenui = computed(() => props.message.blocks.some(block => block.kind === 'toolcall' && block.ui !== null))
 /** 压缩记录不是对话消息：不展示生成计时、用户操作栏与复制入口。 */
 const isCompaction = computed(() => props.message.role === 'compaction')
 const compaction = computed(() => props.message.compaction)
@@ -332,7 +335,10 @@ function onEditKeydown(event: KeyboardEvent): void {
 </script>
 
 <template>
-  <article class="chat-message" :class="isUser ? 'chat-message-user' : isCompaction ? 'chat-message-compaction' : 'chat-message-assistant'">
+  <article class="chat-message" :class="[
+    isUser ? 'chat-message-user' : isCompaction ? 'chat-message-compaction' : 'chat-message-assistant',
+    { 'chat-message-has-genui': hasGenui }
+  ]">
     <header class="chat-meta" :class="{ 'chat-meta-continued': compactHeader === true }">
       <span v-if="!isUser && !isCompaction && compactHeader !== true" class="chat-role-mark" aria-hidden="true">π</span>
       <span v-if="compactHeader !== true" class="chat-role">{{ roleLabel }}</span>
@@ -411,7 +417,38 @@ function onEditKeydown(event: KeyboardEvent): void {
           <p v-if="block.truncated" class="tool-note">此内容超出展示上限，已截断。</p>
         </div>
       </details>
-      <ToolCard v-else-if="block.kind === 'toolcall'" :block="block" />
+      <!-- 交付了生成式界面的工具调用直接渲染界面，不再套一层折叠卡；其余工具仍走通用 ToolCard。
+           同一份界面只有最高版本可交互：被取代的版本折叠成一行只读记录，展开后控件与提交都禁用。
+           按 documentId 作 key：文档被替换时整个界面连同内存参数一起重建。 -->
+      <template v-else-if="block.kind === 'toolcall'">
+        <details
+          v-if="block.ui !== null && block.supersededBy !== null"
+          class="genui-history"
+        >
+          <summary>
+            <span class="genui-history-label">历史界面</span>
+            <span class="genui-history-title" :title="block.ui.document.title">{{ block.ui.document.title }}</span>
+            <span class="genui-history-version">已被第 {{ block.supersededBy }} 版取代</span>
+          </summary>
+          <div class="genui-history-body">
+            <UiDocument
+              :key="block.ui.documentId"
+              :payload="block.ui"
+              :submit-disabled="actionsDisabled === true"
+              :submit-disabled-reason="disabledReason ?? null"
+              :superseded-by="block.supersededBy"
+            />
+          </div>
+        </details>
+        <UiDocument
+          v-else-if="block.ui !== null"
+          :key="block.ui.documentId"
+          :payload="block.ui"
+          :submit-disabled="actionsDisabled === true"
+          :submit-disabled-reason="disabledReason ?? null"
+        />
+        <ToolCard v-else :block="block" />
+      </template>
       <!-- 正文块保持原有样式：用户气泡、图片、技能卡与 AI 回答都不进折叠卡。 -->
       <template v-else-if="block.kind === 'text'">
         <!-- 图片附件仍只来自用户消息的本地附件，不交给 Markdown 解析。 -->

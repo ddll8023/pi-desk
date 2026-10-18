@@ -18,14 +18,19 @@ import {
   PREFERENCES_SET_QUICK_SEND_CHANNEL,
   PREFERENCES_GET_AUTO_UPDATE_CHANNEL,
   PREFERENCES_SET_AUTO_UPDATE_CHANNEL,
+  PREFERENCES_GET_GENUI_CHANNEL,
+  PREFERENCES_SET_GENUI_CHANNEL,
   isPreferencesResult,
   isModelDisplayResult,
   isQuickSendResult,
-  isAutoUpdateResult
+  isAutoUpdateResult,
+  isGenuiResult
 } from '../shared/preferences-api'
 import type {
   AutoUpdatePreference,
   AutoUpdateResult,
+  GenuiPreference,
+  GenuiResult,
   ModelDisplayPreference,
   ModelDisplayResult,
   PreferencesApi,
@@ -369,6 +374,7 @@ const INVALID_MODEL_DISPLAY_RESPONSE = '桌面接口返回了无法识别的对�
 const INVALID_QUICK_SEND_RESPONSE = '桌面接口返回了无法识别的快捷发送短语。'
 const INVALID_QUICK_COMMANDS_RESPONSE = '桌面接口返回了无法识别的快捷命令清单。'
 const INVALID_AUTO_UPDATE_RESPONSE = '桌面接口返回了无法识别的扩展自动更新开关。'
+const INVALID_GENUI_RESPONSE = '桌面接口返回了无法识别的生成式 UI 开关。'
 const INVALID_MODELS_CONFIG_RESPONSE = '桌面接口返回了无法识别的自定义供应商配置。'
 const INVALID_TRUST_RESPONSE = '桌面接口返回了无法识别的信任状态。'
 const INVALID_EXTENSION_UI_RESPONSE = '桌面接口返回了无法识别的 Extension UI 状态。'
@@ -507,6 +513,10 @@ function invalidQuickSendResponse(): QuickSendResult {
 
 function invalidAutoUpdateResponse(): AutoUpdateResult {
   return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_AUTO_UPDATE_RESPONSE } }
+}
+
+function invalidGenuiResponse(): GenuiResult {
+  return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_GENUI_RESPONSE } }
 }
 
 function invalidQuickCommandsResponse(): QuickCommandsResult {
@@ -929,6 +939,18 @@ const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionAp
     const payload: AutoUpdatePreference = { enabled: preference.enabled === true }
     const response: unknown = await ipcRenderer.invoke(PREFERENCES_SET_AUTO_UPDATE_CHANNEL, payload)
     return isAutoUpdateResult(response) ? response : invalidAutoUpdateResponse()
+  },
+
+  async getGenui(): Promise<GenuiResult> {
+    const response: unknown = await ipcRenderer.invoke(PREFERENCES_GET_GENUI_CHANNEL)
+    return isGenuiResult(response) ? response : invalidGenuiResponse()
+  },
+
+  async setGenui(preference: GenuiPreference): Promise<GenuiResult> {
+    // 只搬运已声明的字段，不把页面传入的整个对象转交给主进程。
+    const payload: GenuiPreference = { enabled: preference.enabled === true }
+    const response: unknown = await ipcRenderer.invoke(PREFERENCES_SET_GENUI_CHANNEL, payload)
+    return isGenuiResult(response) ? response : invalidGenuiResponse()
   },
 
   async setUiPreferences(ui: UiPreferences) {
