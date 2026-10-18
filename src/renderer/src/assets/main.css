@@ -2102,7 +2102,7 @@
     background: var(--color-desk-warning);
   }
 
-  /* 文件标签面板：头部固定，主体占满剩余高度，代码与预览在主体内叠放。 */
+  /* 文件标签面板：头部是单行编辑器 chrome，主体占满剩余高度，代码与预览在主体内叠放。 */
   .file-editor {
     display: flex;
     min-width: 0;
@@ -2112,69 +2112,234 @@
     background: var(--color-desk-surface);
   }
 
+  /* 单行头部：路径在左、操作在右；固定 36px，与标签条一起构成两层薄 chrome。 */
   .file-editor-header {
     display: flex;
     flex: none;
-    flex-wrap: wrap;
     align-items: center;
     justify-content: space-between;
     gap: 0.5rem;
+    min-height: 36px;
     border-bottom: 1px solid var(--color-desk-line);
-    padding: 0.5rem 0.75rem;
+    padding: 0 0.5rem 0 0.75rem;
   }
 
-  .file-editor-heading {
+  .file-editor-path-row {
+    position: relative;
+    display: flex;
     min-width: 0;
     flex: 1;
-  }
-
-  .file-editor-name {
-    display: flex;
     align-items: center;
     gap: 0.375rem;
-    font-size: var(--text-md);
+  }
+
+  /* 未保存标记：小实心点，绝对定位在行首留白里，出现/消失不推动路径。 */
+  .file-editor-dirty {
+    position: absolute;
+    left: -0.5rem;
+    top: 50%;
+    width: 6px;
+    height: 6px;
+    border-radius: 999px;
+    background: var(--color-desk-warning);
+    transform: translateY(-50%);
+  }
+
+  /* 路径整行可点复制：目录前缀从左侧省略，文件名始终完整可见。 */
+  .file-editor-path {
+    display: flex;
+    min-width: 0;
+    flex: 0 1 auto;
+    align-items: center;
+    gap: 0.125rem;
+    border-radius: var(--radius-desk-sm);
+    padding: 0.125rem 0.25rem;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    line-height: 1.2;
+    color: var(--color-desk-muted);
+    text-align: left;
+    transition: background-color var(--default-transition-duration) ease, color var(--default-transition-duration) ease;
+  }
+
+  .file-editor-path:hover {
+    background: var(--color-desk-surface-subtle);
+    color: var(--color-desk-ink);
+  }
+
+  .file-editor-path:focus-visible {
+    outline: 2px solid var(--color-desk-accent);
+    outline-offset: -1px;
+  }
+
+  /*
+   * 目录前缀用 rtl 方向让省略号出现在左侧；内层 bdi 把路径按原方向隔离，
+   * 否则结尾的斜杠会被 bidi 排到最前面。
+   */
+  .file-editor-path-prefix {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    direction: rtl;
+    text-align: left;
+  }
+
+  .file-editor-path-prefix > bdi {
+    direction: ltr;
+  }
+
+  .file-editor-path-name {
+    flex: none;
     font-weight: 600;
     color: var(--color-desk-ink);
   }
 
-  .file-editor-dirty {
+  /* 复制结果的一次性提示：跟在路径后面，1.6s 后消失，不推动右侧操作区。 */
+  .file-editor-path-toast {
+    flex: none;
+    border-radius: 999px;
+    background: var(--color-desk-accent-soft);
+    padding: 0.0625rem 0.375rem;
     font-size: 10px;
-    color: var(--color-desk-warning);
+    color: var(--color-desk-accent);
   }
 
-  .file-editor-path {
-    margin-top: 0.125rem;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-family: var(--font-mono);
-    font-size: var(--text-2xs);
-    color: var(--color-desk-muted);
+  /* 只读徽标：替代原先占一行的小字提示，完整原因放在 title 里。 */
+  .file-editor-badge {
+    flex: none;
+    border: 1px solid var(--color-desk-warning);
+    border-radius: 999px;
+    padding: 0 0.375rem;
+    font-size: 10px;
+    line-height: 1.5;
+    color: var(--color-desk-warning);
   }
 
   .file-editor-actions {
     display: flex;
-    flex-wrap: wrap;
+    flex: none;
     align-items: center;
-    gap: 0.375rem;
+    gap: 0.25rem;
   }
 
-  .file-editor-switch {
-    display: flex;
-    overflow: hidden;
-    border: 1px solid var(--color-desk-line-strong);
+  /* 图标键：24px 方形；hover 用浅底，活动态保持同一底色并改用强调色。 */
+  .file-editor-icon-button {
+    display: inline-flex;
+    width: 24px;
+    height: 24px;
+    flex: none;
+    align-items: center;
+    justify-content: center;
     border-radius: var(--radius-desk-sm);
-  }
-
-  .file-editor-switch-item {
-    padding: 0.125rem 0.5rem;
-    font-size: var(--text-2xs);
     color: var(--color-desk-muted);
+    transition: background-color var(--default-transition-duration) ease, color var(--default-transition-duration) ease;
   }
 
-  .file-editor-switch-item.is-active {
+  .file-editor-icon-button:hover {
+    background: var(--color-desk-surface-subtle);
+    color: var(--color-desk-ink);
+  }
+
+  .file-editor-icon-button.is-active {
     background: var(--color-desk-accent-soft);
     color: var(--color-desk-accent);
+  }
+
+  .file-editor-icon-button:focus-visible,
+  .file-editor-mode-item:focus-visible,
+  .file-editor-font-size:focus-visible,
+  .file-markdown-toc-level:focus-visible,
+  .file-markdown-toc-close:focus-visible,
+  .file-markdown-toc-link:focus-visible,
+  .file-markdown-toc-disclosure:focus-visible,
+  .file-markdown-search-button:focus-visible,
+  .markdown-heading-anchor:focus-visible {
+    outline: 2px solid var(--color-desk-accent);
+    outline-offset: -1px;
+  }
+
+  /* 图标统一 14px 线性描边，不随字号缩放。 */
+  .file-editor-icon-button svg,
+  .file-editor-mode-item svg,
+  .file-markdown-toc-close svg,
+  .file-markdown-toc-disclosure svg,
+  .file-markdown-search-button svg {
+    width: 14px;
+    height: 14px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.5;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  /* 「更多」是三个实心点，不走线性描边。 */
+  .file-editor-icon-button svg.file-editor-dots {
+    fill: currentColor;
+    stroke: none;
+  }
+
+  /* 读写轨：两段等宽，活动段由滑块承载；滑块是这处 chrome 唯一的动效。 */
+  .file-editor-mode {
+    position: relative;
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: 1fr;
+    align-items: center;
+    height: 24px;
+    margin-left: 0.125rem;
+    border: 1px solid var(--color-desk-line-strong);
+    border-radius: var(--radius-desk-sm);
+    padding: 1px;
+    background: var(--color-desk-surface);
+  }
+
+  .file-editor-mode-thumb {
+    position: absolute;
+    top: 1px;
+    bottom: 1px;
+    left: 1px;
+    width: calc(50% - 1px);
+    border-radius: 4px;
+    background: var(--color-desk-accent-soft);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-desk-accent) 32%, transparent);
+    transition: transform var(--default-transition-duration) var(--motion-ease-entrance);
+  }
+
+  .file-editor-mode-thumb.is-preview {
+    transform: translateX(100%);
+  }
+
+  .file-editor-mode-item {
+    position: relative;
+    z-index: 1;
+    display: inline-flex;
+    height: 20px;
+    align-items: center;
+    justify-content: center;
+    gap: 0.1875rem;
+    border-radius: 4px;
+    padding: 0 0.375rem;
+    font-size: var(--text-2xs);
+    line-height: 1;
+    color: var(--color-desk-muted);
+    transition: color var(--default-transition-duration) ease;
+  }
+
+  .file-editor-mode-item:hover {
+    color: var(--color-desk-ink);
+  }
+
+  .file-editor-mode-item.is-active {
+    color: var(--color-desk-accent);
+  }
+
+  /* 降低动态效果时不做滑块位移，直接换底色。 */
+  @media (prefers-reduced-motion: reduce) {
+    .file-editor-mode-thumb {
+      transition: none;
+    }
   }
 
   .file-editor-body {
@@ -2233,28 +2398,58 @@
     padding: 0;
   }
 
-  /* 超限只读提示：跟在路径下面，不占主体高度，也不影响叠放层的测量。 */
-  .file-editor-note {
-    margin-top: 0.125rem;
-    font-size: var(--text-2xs);
-    color: var(--color-desk-warning);
+  /* 「更多」菜单：沿用侧栏菜单的外观，勾选标记占固定宽，字号是一行四个小键。 */
+  .file-editor-menu-item {
+    gap: 0.375rem;
   }
 
-  .file-editor-toc-toggle {
-    padding: 0.125rem 0.5rem;
-    border: 1px solid var(--color-desk-line-strong);
-    border-radius: var(--radius-desk-sm);
-    font-size: var(--text-2xs);
-    color: var(--color-desk-muted);
+  .file-editor-menu-check {
+    width: 10px;
+    flex: none;
+    font-size: 10px;
+    color: var(--color-desk-accent);
   }
 
-  .file-editor-toc-toggle.is-active {
+  .file-editor-menu-section {
+    margin-top: 2px;
+    border-top: 1px solid var(--sidebar-line);
+    padding: 6px 8px 4px;
+  }
+
+  .file-editor-menu-label {
+    margin-bottom: 4px;
+    font-size: 11px;
+    color: var(--sidebar-muted);
+  }
+
+  .file-editor-font-sizes {
+    display: flex;
+    gap: 2px;
+  }
+
+  .file-editor-font-size {
+    min-width: 30px;
+    flex: 1;
+    border: 1px solid var(--sidebar-line);
+    border-radius: 4px;
+    padding: 2px 0;
+    font-size: 11px;
+    color: var(--sidebar-muted);
+    transition: background-color var(--default-transition-duration) ease, color var(--default-transition-duration) ease;
+  }
+
+  .file-editor-font-size:hover {
+    background: var(--sidebar-hover);
+    color: var(--sidebar-ink);
+  }
+
+  .file-editor-font-size.is-active {
     border-color: var(--color-desk-accent);
     background: var(--color-desk-accent-soft);
     color: var(--color-desk-accent);
   }
 
-  /* 文件预览排版：正文限宽居中，滚动交给内层容器，目录栏独立滚动。 */
+  /* 文件预览：左侧目录 + 右侧正文；正文限宽居中，滚动只发生在正文容器里。 */
   .file-markdown {
     position: relative;
     display: flex;
@@ -2270,27 +2465,44 @@
     min-height: 0;
     flex: 1;
     overflow: auto;
-    padding: 1.25rem 1.5rem 3rem;
+    padding: 1.5rem 2rem 4rem;
+  }
+
+  .file-markdown-scroll:focus-visible {
+    outline: 2px solid var(--color-desk-accent);
+    outline-offset: -2px;
   }
 
   /* 正文排版在共用块级样式之后定义会失效，因此提高一级选择器权重，不依赖样式表顺序。 */
   .file-markdown .file-markdown-body {
-    max-width: 78ch;
+    /* 字号由面板以自定义属性传入；块间距按字号换算，调字号时整篇比例不变。 */
+    --markdown-flow: calc(var(--file-preview-font-size, 15px) * 0.85);
+    --markdown-section-gap: calc(var(--file-preview-font-size, 15px) * 1.6);
+    max-width: 72ch;
     margin: 0 auto;
-    font-size: 0.9375rem;
-    line-height: 1.75;
+    font-size: var(--file-preview-font-size, 15px);
+    line-height: 1.7;
   }
 
-  /* 阅读场景的标题层级比聊天消息略收敛：一级标题不抢满宽，二级以下保持紧密。 */
-  .file-markdown .file-markdown-body h1 { font-size: 1.5em; }
-  .file-markdown .file-markdown-body h2 { font-size: 1.25em; }
-  .file-markdown .file-markdown-body h3 { font-size: 1.0625em; }
-  .file-markdown .file-markdown-body :is(h4, h5, h6) { font-size: 1em; }
+  /* 阅读尺度：一级标题明显大于正文，二级不再加分隔线，靠字号与间距分节。 */
+  .file-markdown .file-markdown-body :is(h1, h2, h3, h4, h5, h6) {
+    font-weight: 650;
+    line-height: 1.3;
+    letter-spacing: -0.01em;
+  }
 
-  /* 二级标题在长文里承担分节作用，加一条细线比继续加大字号更省空间。 */
-  .file-markdown .file-markdown-body h2 {
-    border-bottom: 1px solid var(--color-desk-line);
-    padding-bottom: 0.25rem;
+  .file-markdown .file-markdown-body h1 {
+    font-size: 1.9em;
+    font-weight: 700;
+    letter-spacing: -0.015em;
+  }
+
+  .file-markdown .file-markdown-body h2 { font-size: 1.45em; }
+  .file-markdown .file-markdown-body h3 { font-size: 1.15em; }
+  .file-markdown .file-markdown-body h4 { font-size: 1em; }
+  .file-markdown .file-markdown-body :is(h5, h6) {
+    font-size: 0.95em;
+    color: var(--color-desk-muted);
   }
 
   /* 标题要能被锚点定位到，同时避开滚动容器顶部。 */
@@ -2303,8 +2515,36 @@
     outline-offset: 2px;
   }
 
+  /* 标题锚点：hover 或键盘聚焦到标题内部时出现，点击复制「路径#id」。 */
+  .markdown-heading-anchor {
+    margin-left: 0.375rem;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    padding: 0 0.25rem;
+    font-family: var(--font-mono);
+    font-size: 0.75em;
+    font-weight: 400;
+    line-height: 1;
+    color: var(--color-desk-muted);
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity var(--default-transition-duration) ease, color var(--default-transition-duration) ease;
+  }
+
+  .file-markdown-body :is(h1, h2, h3, h4, h5, h6):hover .markdown-heading-anchor,
+  .file-markdown-body :is(h1, h2, h3, h4, h5, h6):focus-within .markdown-heading-anchor,
+  .markdown-heading-anchor:focus-visible {
+    opacity: 1;
+  }
+
+  .markdown-heading-anchor:hover {
+    background: var(--color-desk-surface-subtle);
+    color: var(--color-desk-accent);
+  }
+
   .file-markdown .file-markdown-frontmatter {
-    max-width: 78ch;
+    max-width: 72ch;
     margin-left: auto;
     margin-right: auto;
     border: 1px solid var(--color-desk-line);
@@ -2312,6 +2552,11 @@
     background: var(--color-desk-surface-subtle);
     font-size: 0.8125rem;
     color: var(--color-desk-muted);
+  }
+
+  /* Front Matter 关闭展示时整块移除排版占位，不留下空白折叠块。 */
+  .file-markdown-body.is-hide-frontmatter .file-markdown-frontmatter {
+    display: none;
   }
 
   .file-markdown-frontmatter > summary {
@@ -2345,7 +2590,7 @@
 
   .file-markdown-image-frame.is-ready {
     display: block;
-    margin: 0.25rem 0;
+    margin: 0.5rem 0;
   }
 
   .file-markdown-image-frame img {
@@ -2370,63 +2615,324 @@
     font-size: 0.8125rem;
   }
 
-  /* 目录栏：窄面板下自动隐藏，不占正文宽度。 */
+  /* 行内代码：去掉描边，用底色 + 小圆角，避免打断行距。 */
+  .file-markdown .file-markdown-body :not(pre) > code {
+    padding: 0.125rem 0.3rem;
+    border: 0;
+    border-radius: 5px;
+    background: var(--color-desk-surface-subtle);
+    color: var(--color-desk-ink);
+    font-size: 0.875em;
+  }
+
+  /* 代码块：与正文同一套行距尺度，头部只在 hover/聚焦时露出复制键。 */
+  .file-markdown .markdown-code-block pre {
+    padding: 14px 18px;
+    font-size: 12.5px;
+    line-height: 1.65;
+  }
+
+  .file-markdown .markdown-code-header {
+    padding: 0.5rem 0.75rem;
+    border-bottom-color: color-mix(in srgb, var(--color-desk-line) 72%, transparent);
+  }
+
+  .file-markdown .markdown-code-copy {
+    opacity: 0;
+    transition: opacity var(--default-transition-duration) ease, border-color var(--default-transition-duration) ease,
+      color var(--default-transition-duration) ease;
+  }
+
+  .file-markdown .markdown-code-block:hover .markdown-code-copy,
+  .file-markdown .markdown-code-block:focus-within .markdown-code-copy {
+    opacity: 1;
+  }
+
+  /* 表格：阅读场景比聊天正文略大一档，表头靠字重与底色区分，不做全大写。 */
+  .file-markdown .markdown-body table {
+    font-size: 13px;
+    line-height: 1.6;
+  }
+
+  .file-markdown .markdown-body :is(th, td) {
+    min-width: 6rem;
+    padding: 8px 14px;
+  }
+
+  .file-markdown .markdown-body th {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+  }
+
+  /* 链接：下划线默认降低不透明度，hover 再回到实色，正文不被满篇实线压住。 */
+  .file-markdown-body .markdown-link {
+    text-decoration-color: color-mix(in srgb, currentColor 40%, transparent);
+    text-underline-offset: 2px;
+    transition: text-decoration-color var(--default-transition-duration) ease;
+  }
+
+  .file-markdown-body .markdown-link:hover {
+    text-decoration-color: currentColor;
+  }
+
+  /* 目录面板：左侧固定宽，头部 40px；窄容器改为浮层，不再整块消失。 */
   .file-markdown-toc {
     display: flex;
-    width: 13rem;
+    width: 14rem;
+    min-height: 0;
     flex: none;
     flex-direction: column;
-    gap: 0.25rem;
-    overflow: auto;
-    border-left: 1px solid var(--color-desk-line);
+    border-right: 1px solid var(--color-desk-line);
     background: var(--color-desk-surface-subtle);
-    padding: 1rem 0.75rem;
-    font-size: 0.8125rem;
+  }
+
+  .file-markdown-toc-header {
+    display: flex;
+    min-height: 40px;
+    flex: none;
+    align-items: center;
+    gap: 0.5rem;
+    border-bottom: 1px solid var(--color-desk-line);
+    padding: 0 0.5rem 0 0.75rem;
   }
 
   .file-markdown-toc-title {
+    flex: none;
     font-size: var(--text-2xs);
-    font-weight: 500;
+    font-weight: 600;
     letter-spacing: 0.04em;
-    text-transform: uppercase;
     color: var(--color-desk-muted);
   }
 
-  .file-markdown-toc ul {
+  .file-markdown-toc-levels {
     display: flex;
-    flex-direction: column;
-    gap: 0.125rem;
+    flex: 1;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 1px;
   }
 
-  .file-markdown-toc li.is-level-1 { padding-left: 0; }
-  .file-markdown-toc li.is-level-2 { padding-left: 0; }
-  .file-markdown-toc li.is-level-3 { padding-left: 0.625rem; }
-  .file-markdown-toc li.is-level-4,
-  .file-markdown-toc li.is-level-5,
-  .file-markdown-toc li.is-level-6 { padding-left: 1.25rem; }
-
-  .file-markdown-toc-link {
-    display: block;
-    width: 100%;
-    overflow: hidden;
-    border-radius: var(--radius-desk-sm);
-    padding: 0.125rem 0.25rem;
-    text-align: left;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+  .file-markdown-toc-level {
+    min-width: 24px;
+    border-radius: 4px;
+    padding: 1px 2px;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 600;
+    line-height: 1.4;
     color: var(--color-desk-muted);
-    font: inherit;
+    transition: background-color var(--default-transition-duration) ease, color var(--default-transition-duration) ease;
   }
 
-  .file-markdown-toc-link:hover {
-    background: var(--color-desk-accent-soft);
+  .file-markdown-toc-level:hover {
+    background: var(--color-desk-surface);
     color: var(--color-desk-ink);
   }
 
-  @container (max-width: 720px) {
-    .file-markdown-toc {
-      display: none;
+  .file-markdown-toc-level.is-active {
+    background: var(--color-desk-accent-soft);
+    color: var(--color-desk-accent);
+  }
+
+  .file-markdown-toc-close {
+    display: inline-flex;
+    width: 24px;
+    height: 24px;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--radius-desk-sm);
+    color: var(--color-desk-muted);
+    transition: background-color var(--default-transition-duration) ease, color var(--default-transition-duration) ease;
+  }
+
+  .file-markdown-toc-close:hover {
+    background: var(--color-desk-surface);
+    color: var(--color-desk-ink);
+  }
+
+  .file-markdown-toc-list {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 0.5rem;
+  }
+
+  .file-markdown-toc-row {
+    display: flex;
+    align-items: center;
+    gap: 0.125rem;
+    border-radius: var(--radius-desk-sm);
+    padding-right: 0.25rem;
+  }
+
+  .file-markdown-toc-row:hover {
+    background: var(--color-desk-surface);
+  }
+
+  .file-markdown-toc-row.is-active {
+    background: var(--color-desk-accent-soft);
+  }
+
+  .file-markdown-toc-row.is-active .file-markdown-toc-link {
+    color: var(--color-desk-accent);
+  }
+
+  .file-markdown-toc-disclosure {
+    display: inline-flex;
+    width: 12px;
+    height: 12px;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    border-radius: 3px;
+    color: var(--color-desk-muted);
+  }
+
+  .file-markdown-toc-disclosure.is-empty {
+    visibility: hidden;
+  }
+
+  /* 默认展开指向下，折叠时转回向右；只动 transform，不改变行宽。 */
+  .file-markdown-toc-disclosure svg {
+    width: 10px;
+    height: 10px;
+    transform: rotate(90deg);
+    transition: transform var(--default-transition-duration) ease;
+  }
+
+  .file-markdown-toc-disclosure svg.is-collapsed {
+    transform: rotate(0deg);
+  }
+
+  .file-markdown-toc-link {
+    min-width: 0;
+    flex: 1;
+    overflow: hidden;
+    border-radius: 4px;
+    padding: 0.25rem;
+    text-align: left;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 12px;
+    line-height: 1.25;
+    color: var(--color-desk-ink);
+  }
+
+  .file-markdown-toc-empty {
+    padding: 0.5rem 0.75rem;
+    font-size: 12px;
+    color: var(--color-desk-muted);
+  }
+
+  /* 降低动态效果时折叠三角直接切换方向。 */
+  @media (prefers-reduced-motion: reduce) {
+    .file-markdown-toc-disclosure svg {
+      transition: none;
     }
+  }
+
+  @container (max-width: 880px) {
+    .file-markdown-toc {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      left: 0;
+      z-index: 20;
+      width: min(16rem, 80%);
+      box-shadow: var(--shadow-desk-pop);
+    }
+  }
+
+  /* 查找条：贴在滚动容器顶部，右对齐；不随内容滚走。 */
+  .file-markdown-search {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    display: flex;
+    width: fit-content;
+    max-width: 100%;
+    align-items: center;
+    margin: 0 0 0.75rem auto;
+    border: 1px solid var(--color-desk-line-strong);
+    border-radius: var(--radius-desk-sm);
+    background: var(--color-desk-surface);
+    box-shadow: var(--shadow-desk-raise);
+    padding: 2px 2px 2px 4px;
+  }
+
+  /* 输入框本身去掉描边，焦点用整条查找框的边框表达。 */
+  .file-markdown-search:focus-within {
+    border-color: var(--color-desk-accent);
+  }
+
+  .file-markdown-search-input {
+    width: 200px;
+    max-width: 45vw;
+    height: 24px;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    padding: 0 0.375rem;
+    font-size: 12px;
+    color: var(--color-desk-ink);
+  }
+
+  .file-markdown-search-input::placeholder {
+    color: var(--color-desk-muted);
+  }
+
+  .file-markdown-search-input:focus {
+    outline: none;
+  }
+
+  .file-markdown-search-status {
+    min-width: 2.5rem;
+    flex: none;
+    padding: 0 0.375rem;
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+    color: var(--color-desk-muted);
+  }
+
+  .file-markdown-search-button {
+    display: inline-flex;
+    width: 22px;
+    height: 22px;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    border-radius: 4px;
+    color: var(--color-desk-muted);
+    transition: background-color var(--default-transition-duration) ease, color var(--default-transition-duration) ease;
+  }
+
+  .file-markdown-search-button:hover:not(:disabled) {
+    background: var(--color-desk-surface-subtle);
+    color: var(--color-desk-ink);
+  }
+
+  .file-markdown-search-button:disabled {
+    opacity: 0.4;
+  }
+
+  .file-markdown-search-divider {
+    width: 1px;
+    height: 14px;
+    margin: 0 2px;
+    background: var(--color-desk-line);
+  }
+
+  /* 匹配高亮：普通命中用警告色，当前命中用强调色；只换底色，不改正文颜色。 */
+  ::highlight(file-preview-search-match) {
+    background-color: color-mix(in srgb, var(--color-desk-warning) 32%, transparent);
+  }
+
+  ::highlight(file-preview-search-active-match) {
+    background-color: color-mix(in srgb, var(--color-desk-accent) 38%, transparent);
+    color: var(--color-desk-ink);
   }
 
   .file-markdown-notice {

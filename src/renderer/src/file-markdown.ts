@@ -37,7 +37,10 @@ const SANITIZE_CONFIG: Config = {
 /** front matter 的识别上限：超出这个行数就不当作元信息，避免把正文里的分隔线误判。 */
 const FRONT_MATTER_MAX_LINES = 60
 
-/** 链接分类：由渲染阶段判定一次，点击时只按分类执行，不再重新解析地址。 */
+/**
+ * 渲染阶段判定一次的链接分类：点击时只按分类执行，不再重新解析地址。
+ * 后处理阶段插入的标题锚点复用同一 `data-link-kind` 通道，取值不在本类型内。
+ */
 export type FileMarkdownLinkKind = 'anchor' | 'file' | 'external' | 'copy'
 
 /** 目录条目：在渲染后的 DOM 上提取，`id` 与标题元素的 id 一致，供锚点跳转。 */
@@ -109,13 +112,15 @@ function imagePlaceholder(label: string, reason: string): string {
 }
 
 /**
- * 为标题补上唯一 id 并提取目录条目；已存在 id 的标题沿用原值，重复的 slug 追加序号。
+ * 为标题补上唯一 id、追加可复制的标题锚点，并提取目录条目；已存在 id 的标题沿用原值，重复的 slug 追加序号。
  * 在清洗后的 DOM 上进行，因此标题文本里可能残留行内代码、链接等节点，只取 textContent。
+ * 锚点按钮插在标题文字之后：重复调用时先移除旧锚点，否则第二次会把「#」算进标题文本。
  */
 export function ensureHeadingIds(root: HTMLElement): readonly FileMarkdownTocEntry[] {
   const entries: FileMarkdownTocEntry[] = []
   const used = new Set<string>()
   for (const heading of root.querySelectorAll<HTMLElement>('h1, h2, h3, h4, h5, h6')) {
+    heading.querySelector('.markdown-heading-anchor')?.remove()
     const label = (heading.textContent ?? '').trim()
     if (label === '') continue
     let id = heading.id === '' ? headingSlug(label) : heading.id
@@ -126,9 +131,26 @@ export function ensureHeadingIds(root: HTMLElement): readonly FileMarkdownTocEnt
     }
     used.add(id)
     heading.id = id
+    appendHeadingAnchor(heading, id, label)
     entries.push({ id, label, level: Number(heading.tagName.slice(1)) })
   }
   return entries
+}
+
+/**
+ * 追加标题锚点：点击由预览组件代理，把「文件路径#标题 id」复制到剪贴板，便于在对话里引用小节。
+ * 按钮只带 data 属性、不带 href，与正文链接同一套安全边界。
+ */
+function appendHeadingAnchor(heading: HTMLElement, id: string, label: string): void {
+  const anchor = document.createElement('button')
+  anchor.type = 'button'
+  anchor.className = 'markdown-heading-anchor'
+  anchor.dataset.linkKind = 'heading'
+  anchor.dataset.linkTarget = `#${id}`
+  anchor.title = '复制标题引用'
+  anchor.setAttribute('aria-label', `复制标题引用：${label}`)
+  anchor.textContent = '#'
+  heading.append(anchor)
 }
 
 /** 标题文本转 id：保留文字、数字与连字符，其余符号折叠成单个连字符。 */

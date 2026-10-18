@@ -9,6 +9,9 @@
  * 外部改动通过 `stat` 比对 size/mtimeMs 发现：未修改的文件自动重新载入，有未保存修改时
  * 只标记冲突，等用户选择覆盖保存或继续编辑，绝不静默丢弃改动。触发时机有两个：窗口重新聚焦，
  * 以及主进程的目录监听回报「这些目录变了」。
+ *
+ * 预览字号、Front Matter 显隐与源码自动换行是阅读偏好，只放在本窗口内存里：它们不改变文件内容，
+ * 也不进偏好 IPC，重启后回默认值。
  */
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
@@ -24,6 +27,12 @@ import { readProjectFile, statProjectFile, writeProjectFile } from '../services/
 
 /** 文件标签的展示模式：代码视图与 Markdown 预览；只有 Markdown 文件能切到预览。 */
 export type FileEditorMode = 'code' | 'preview'
+
+/** 预览字号档位：只给四档，避免任意值把阅读排版拉坏。 */
+export const PREVIEW_FONT_SIZES = [13, 14, 15, 16] as const
+
+/** 预览字号默认值：与聊天正文的 15px 对齐，切到文件预览不会有明显跳变。 */
+const DEFAULT_PREVIEW_FONT_SIZE = 15
 
 /** 一次读取的结果状态；错误与「不支持」分开，界面据此给出不同的提示与动作。 */
 export type FileLoadView =
@@ -68,6 +77,10 @@ function isEditable(record: FileEditorRecord): boolean {
 
 export const useProjectEditorStore = defineStore('project-editor', () => {
   const records = ref<Readonly<Record<string, FileEditorRecord>>>({})
+  /** 窗口级阅读偏好：同一窗口内切换文件保持不变，不写盘。 */
+  const previewFontSize = ref<number>(DEFAULT_PREVIEW_FONT_SIZE)
+  const showFrontmatter = ref(true)
+  const codeWrap = ref(true)
   let nextFileTabId = 1
   /** 同一记录只采纳最后一次读取，关闭后也使在途结果失效。 */
   const loadVersions = new Map<string, number>()
@@ -186,6 +199,22 @@ export const useProjectEditorStore = defineStore('project-editor', () => {
     update(key, { draft, dirty: draft !== null })
   }
 
+  /** 设置预览字号：只接受档位内的整数，越界值忽略，不改动当前字号。 */
+  function setPreviewFontSize(size: number): void {
+    if (!(PREVIEW_FONT_SIZES as readonly number[]).includes(size)) return
+    previewFontSize.value = size
+  }
+
+  /** Front Matter 折叠块是否显示；只影响预览，不改动文件内容。 */
+  function setShowFrontmatter(value: boolean): void {
+    showFrontmatter.value = value
+  }
+
+  /** 源码模式是否自动换行；只读大文件仍由界面另行关闭换行。 */
+  function setCodeWrap(value: boolean): void {
+    codeWrap.value = value
+  }
+
   /** 切换代码视图与 Markdown 预览；非 Markdown 文件忽略该动作。 */
   function setMode(key: string, mode: FileEditorMode): void {
     const record = records.value[key]
@@ -296,6 +325,12 @@ export const useProjectEditorStore = defineStore('project-editor', () => {
     records,
     recordOf,
     keyOf,
+    previewFontSize,
+    showFrontmatter,
+    codeWrap,
+    setPreviewFontSize,
+    setShowFrontmatter,
+    setCodeWrap,
     open,
     close,
     closeProject,

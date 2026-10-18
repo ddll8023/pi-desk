@@ -8,6 +8,7 @@
   语言按文件名/扩展名从 `@codemirror/language-data` 按需动态加载，加载失败退化为纯文本。
   自动换行由父级控制：只读预览大文件时关闭换行，避免超长行参与折行测量。
   主题与高亮颜色全部引用 `--color-desk-*` 令牌，跟随应用的亮/暗主题，无需在脚本里判断模式。
+  正文左右留出内边距，长行与折行都不贴行号栏和右边界；行号栏只留一条分隔线，不再用整块底色压住正文。
 -->
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
@@ -25,7 +26,7 @@ const props = defineProps<{
   /** 项目内相对路径；只用于语言匹配与无障碍标签。 */
   readonly path: string
   readonly readOnly: boolean
-  /** 是否自动换行；只读大文件可关闭，减少长行的折行测量。 */
+  /** 是否自动换行；只读大文件与用户关闭换行时都为假，减少长行的折行测量。 */
   readonly wrap: boolean
 }>()
 
@@ -42,22 +43,24 @@ const editorTheme = EditorView.theme({
     fontSize: '13px'
   },
   '&.cm-focused': { outline: 'none' },
-  '.cm-scroller': { fontFamily: 'var(--font-mono)', lineHeight: '1.6' },
-  '.cm-content': { caretColor: 'var(--color-desk-accent)', padding: '10px 0' },
+  '.cm-scroller': { fontFamily: 'var(--font-mono)', lineHeight: '1.65' },
+  '.cm-content': { caretColor: 'var(--color-desk-accent)', padding: '12px 16px' },
   '.cm-gutters': {
-    backgroundColor: 'var(--color-desk-surface-subtle)',
+    backgroundColor: 'var(--color-desk-surface)',
     color: 'var(--color-desk-muted)',
     border: 'none',
-    borderRight: '1px solid var(--color-desk-line)'
+    borderRight: '1px solid var(--color-desk-line)',
+    paddingRight: '4px'
   },
-  '.cm-activeLine': { backgroundColor: 'color-mix(in srgb, var(--color-desk-accent-soft) 55%, transparent)' },
+  '.cm-lineNumbers .cm-gutterElement': { fontSize: '11px' },
+  '.cm-activeLine': { backgroundColor: 'color-mix(in srgb, var(--color-desk-accent-soft) 35%, transparent)' },
   '.cm-activeLineGutter': { backgroundColor: 'var(--color-desk-accent-soft)', color: 'var(--color-desk-ink)' },
   '.cm-cursor': { borderLeftColor: 'var(--color-desk-accent)' },
   '.cm-selectionBackground, .cm-content ::selection': {
-    backgroundColor: 'color-mix(in srgb, var(--color-desk-accent) 26%, transparent)'
+    backgroundColor: 'color-mix(in srgb, var(--color-desk-accent) 22%, transparent)'
   },
   '&.cm-focused .cm-selectionBackground': {
-    backgroundColor: 'color-mix(in srgb, var(--color-desk-accent) 32%, transparent)'
+    backgroundColor: 'color-mix(in srgb, var(--color-desk-accent) 28%, transparent)'
   },
   '.cm-panels': { backgroundColor: 'var(--color-desk-surface-subtle)', color: 'var(--color-desk-ink)' },
   '.cm-panel input, .cm-panel button': { fontFamily: 'var(--font-sans)' },
