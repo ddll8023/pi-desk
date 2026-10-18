@@ -61,6 +61,7 @@ import {
   PROJECT_FILE_WRITE_CHANNEL,
   isProjectDirectoryWatchRequest,
   isProjectEntryPathRequest,
+  isProjectFileReadRequest,
   isProjectFileWriteRequest
 } from '../shared/project-file-api'
 import {
@@ -408,9 +409,9 @@ const projectDirectoryWatcher = new ProjectDirectoryWatcher({
   sendChange: (change) => sendToRenderer(PROJECT_DIRECTORY_CHANGED_EVENT, change),
   onChanged: () => projectFileIndex.invalidate()
 })
-/** 项目文件内容：工作区文件标签的读取、保存与磁盘基线查询，根路径同样只取当前项目。 */
+/** 文件内容按请求固定的已登记项目读写，切换前台项目不改变异步请求归属。 */
 const projectFileContent = new ProjectFileContent({
-  currentProjectPath: () => projectManager.currentProjectPath()
+  resolveProjectPath: resolveRegisteredProjectPath
 })
 /** 源代码管理：状态、差异、历史与暂存/提交；仓库根与路径折算全在主进程，页面只给项目内相对路径。 */
 const gitService = new GitService({
@@ -432,7 +433,7 @@ const terminals = new TerminalManager({
 })
 
 /**
- * 终端管理器与项目移除共用的项目解析：只认已登记项目，并回登记时的规范路径。
+ * 终端、文件内容与项目移除共用的项目解析：只认已登记项目，并回登记时的规范路径。
  * 终端的工作目录只取这条路径，页面给出的写法不直接进入 shell。
  */
 async function resolveRegisteredProjectPath(requested: string): Promise<string | null> {
@@ -1080,10 +1081,10 @@ function registerProjectFileHandlers(pageUrl: string): void {
       if (!isTrustedCaller(event, pageUrl)) {
         return projectFileReadFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
       }
-      if (args.length !== 1 || !isProjectEntryPathRequest(args[0])) {
-        return projectFileReadFailure('INVALID_REQUEST', '读取文件只接受一个项目内相对路径请求。')
+      if (args.length !== 1 || !isProjectFileReadRequest(args[0])) {
+        return projectFileReadFailure('INVALID_REQUEST', '读取文件必须给出所属项目和项目内相对路径。')
       }
-      return projectFileContent.read(args[0].path)
+      return projectFileContent.read(args[0])
     }
   )
 
@@ -1106,10 +1107,10 @@ function registerProjectFileHandlers(pageUrl: string): void {
       if (!isTrustedCaller(event, pageUrl)) {
         return projectFileStatFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
       }
-      if (args.length !== 1 || !isProjectEntryPathRequest(args[0])) {
-        return projectFileStatFailure('INVALID_REQUEST', '读取文件状态只接受一个项目内相对路径请求。')
+      if (args.length !== 1 || !isProjectFileReadRequest(args[0])) {
+        return projectFileStatFailure('INVALID_REQUEST', '读取文件状态必须给出所属项目和项目内相对路径。')
       }
-      return projectFileContent.stat(args[0].path)
+      return projectFileContent.stat(args[0])
     }
   )
 }

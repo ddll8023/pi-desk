@@ -143,8 +143,9 @@ export type ProjectEntryRevealResult =
   | { readonly ok: true }
   | { readonly ok: false; readonly error: DesktopError }
 
-/** 读取文件内容请求；与条目路径解析同一口径，只接受项目内相对路径。 */
+/** 文件读写固定所属项目；路径仍必须是该已登记项目内的相对路径。 */
 export interface ProjectFileReadRequest {
+  readonly projectPath: string
   readonly path: string
 }
 
@@ -189,6 +190,7 @@ export type ProjectFileReadResult =
 
 /** 写入文件请求；`expected` 为 null 表示用户已确认覆盖，跳过磁盘基线比对。 */
 export interface ProjectFileWriteRequest {
+  readonly projectPath: string
   readonly path: string
   readonly text: string
   readonly eol: ProjectFileEol
@@ -208,9 +210,7 @@ export type ProjectFileWriteResult =
   | { readonly ok: false; readonly error: DesktopError }
 
 /** 磁盘基线查询请求；用于标签重新激活或窗口重新聚焦时判断外部改动。 */
-export interface ProjectFileStatRequest {
-  readonly path: string
-}
+export interface ProjectFileStatRequest extends ProjectFileReadRequest {}
 
 /** 磁盘基线；条目已不存在时 `exists` 为 false，size 与 mtimeMs 为 0。 */
 export interface ProjectFileStatData {
@@ -346,6 +346,19 @@ export function isProjectEntryPathRequest(value: unknown): value is ProjectEntry
     && value.path.length <= PROJECT_DIRECTORY_PATH_MAX_CHARS
 }
 
+/** 项目归属只做有界结构校验；主进程继续核对项目登记及路径安全。 */
+export function isProjectFileReadRequest(value: unknown): value is ProjectFileReadRequest {
+  if (!isRecord(value)) return false
+  return Object.keys(value).every(key => key === 'projectPath' || key === 'path')
+    && isFileProjectPath(value.projectPath)
+    && typeof value.path === 'string' && value.path !== ''
+    && value.path.length <= PROJECT_DIRECTORY_PATH_MAX_CHARS
+}
+
+function isFileProjectPath(value: unknown): value is string {
+  return typeof value === 'string' && value.trim() !== '' && value.length <= 4096
+}
+
 export function isProjectEntryPathResult(value: unknown): value is ProjectEntryPathResult {
   if (!isRecord(value)) return false
   if (value.ok === true) return isProjectEntryPath(value.data)
@@ -407,12 +420,12 @@ export function isProjectFileReadResult(value: unknown): value is ProjectFileRea
 export function isProjectFileWriteRequest(value: unknown): value is ProjectFileWriteRequest {
   if (!isRecord(value)) return false
   if (Object.keys(value).some((key) => (
-    key !== 'path' && key !== 'text' && key !== 'eol' && key !== 'bom' && key !== 'expected'
+    key !== 'projectPath' && key !== 'path' && key !== 'text' && key !== 'eol' && key !== 'bom' && key !== 'expected'
   ))) return false
   if (typeof value.path !== 'string' || value.path === '' || value.path.length > PROJECT_DIRECTORY_PATH_MAX_CHARS) {
     return false
   }
-  if (typeof value.text !== 'string') return false
+  if (!isFileProjectPath(value.projectPath) || typeof value.text !== 'string') return false
   if (value.eol !== 'lf' && value.eol !== 'crlf') return false
   if (typeof value.bom !== 'boolean') return false
   if (value.expected === null) return true

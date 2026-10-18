@@ -278,7 +278,7 @@ export const useProjectDirectoryStore = defineStore('project-directory', () => {
 
     if (change.kind === 'overflow') {
       await refresh()
-      useProjectEditorStore().checkAllExternal()
+      useProjectEditorStore().checkAllExternal(projectPath)
       return
     }
 
@@ -289,7 +289,7 @@ export const useProjectDirectoryStore = defineStore('project-directory', () => {
     await Promise.all(affected.map((directory) => reloadDirectory(projectPath, directory)))
     pruneStale(projectPath)
     syncWatch()
-    useProjectEditorStore().checkChangedDirectories(affected)
+    useProjectEditorStore().checkChangedDirectories(projectPath, affected)
   }
 
   /**

@@ -106,11 +106,11 @@ export async function revealProjectEntry(path: string): Promise<ProjectEntryReve
 }
 
 /** 读取项目内文件内容；文本、图片与不支持三类结果都由主进程判定，页面不自行猜测类型。 */
-export async function readProjectFile(path: string): Promise<ProjectFileReadResult> {
+export async function readProjectFile(projectPath: string, path: string): Promise<ProjectFileReadResult> {
   const bridge = window.desktop
   if (!bridge || typeof bridge.readProjectFile !== 'function') return unavailable()
   try {
-    return await bridge.readProjectFile({ path })
+    return await bridge.readProjectFile({ projectPath, path })
   } catch (error) {
     return callFailed(error)
   }
@@ -121,6 +121,7 @@ export async function readProjectFile(path: string): Promise<ProjectFileReadResu
  * 磁盘基线不一致时主进程回 CONFLICT，不写入任何内容。
  */
 export async function writeProjectFile(
+  projectPath: string,
   path: string,
   text: string,
   eol: 'lf' | 'crlf',
@@ -130,18 +131,18 @@ export async function writeProjectFile(
   const bridge = window.desktop
   if (!bridge || typeof bridge.writeProjectFile !== 'function') return unavailable()
   try {
-    return await bridge.writeProjectFile({ path, text, eol, bom, expected })
+    return await bridge.writeProjectFile({ projectPath, path, text, eol, bom, expected })
   } catch (error) {
     return callFailed(error)
   }
 }
 
 /** 查询文件磁盘基线；用于标签重新激活或窗口聚焦时判断外部改动。 */
-export async function statProjectFile(path: string): Promise<ProjectFileStatResult> {
+export async function statProjectFile(projectPath: string, path: string): Promise<ProjectFileStatResult> {
   const bridge = window.desktop
   if (!bridge || typeof bridge.statProjectFile !== 'function') return unavailable()
   try {
-    return await bridge.statProjectFile({ path })
+    return await bridge.statProjectFile({ projectPath, path })
   } catch (error) {
     return callFailed(error)
   }

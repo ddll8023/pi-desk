@@ -69,6 +69,8 @@ function isEditable(record: FileEditorRecord): boolean {
 export const useProjectEditorStore = defineStore('project-editor', () => {
   const records = ref<Readonly<Record<string, FileEditorRecord>>>({})
   let nextFileTabId = 1
+  /** 同一记录只采纳最后一次读取，关闭后也使在途结果失效。 */
+  const loadVersions = new Map<string, number>()
 
   /** 按标签键取记录；不存在时为 null。 */
   function recordOf(key: string): FileEditorRecord | null {
@@ -123,11 +125,11 @@ export const useProjectEditorStore = defineStore('project-editor', () => {
   async function loadInto(key: string): Promise<void> {
     const record = records.value[key]
     if (record === undefined) return
-    // 重新载入是读取失败后的重试或磁盘无改动时的动作：脏标记、草稿与冲突在这一刻结束。
+    const version = (loadVersions.get(key) ?? 0) + 1
+    loadVersions.set(key, version)
     update(key, { load: { phase: 'loading' }, dirty: false, draft: null, conflict: false, saveError: null })
-    const result = await readProjectFile(record.path)
-    // 期间标签可能已被关闭；迟到的结果不再写回。
-    if (records.value[key] === undefined) return
+    const result = await readProjectFile(record.projectPath, record.path)
+    if (records.value[key] === undefined || loadVersions.get(key) !== version) return
     if (!result.ok) {
       update(key, { load: { phase: 'error', error: result.error } })
       return
@@ -149,11 +151,15 @@ export const useProjectEditorStore = defineStore('project-editor', () => {
     if (records.value[key] === undefined) return
     const next = { ...records.value }
     delete next[key]
+    loadVersions.delete(key)
     records.value = next
   }
 
   /** 关闭某个项目的全部文件记录；项目被移除时调用，避免残留。 */
   function closeProject(projectPath: string): void {
+    for (const record of Object.values(records.value)) {
+      if (record.projectPath === projectPath) loadVersions.delete(record.key)
+    }
     const next = Object.fromEntries(
       Object.entries(records.value).filter(([, record]) => record.projectPath !== projectPath)
     )
@@ -200,7 +206,7 @@ export const useProjectEditorStore = defineStore('project-editor', () => {
 
     update(key, { saving: true, saveError: null })
     const expected = force ? null : { size: content.size, mtimeMs: content.mtimeMs }
-    const result = await writeProjectFile(record.path, text, content.eol, content.bom, expected)
+    const result = await writeProjectFile(record.projectPath, record.path, text, content.eol, content.bom, expected)
     if (records.value[key] === undefined) return false
     if (!result.ok) {
       update(key, {
@@ -233,9 +239,11 @@ export const useProjectEditorStore = defineStore('project-editor', () => {
     const initial = records.value[key]
     if (initial === undefined || initial.load.phase !== 'ready' || initial.saving || initial.conflict) return
 
-    const result = await statProjectFile(initial.path)
+    const baselineAtRequest = initial.load.content
+    const result = await statProjectFile(initial.projectPath, initial.path)
     const latest = records.value[key]
-    if (latest === undefined || latest.load.phase !== 'ready' || latest.saving || latest.conflict) return
+    if (latest === undefined || latest.load.phase !== 'ready' || latest.saving || latest.conflict
+      || latest.load.content !== baselineAtRequest) return
     if (!result.ok) return
 
     const baseline = latest.load.content
@@ -265,11 +273,11 @@ export const useProjectEditorStore = defineStore('project-editor', () => {
    * 目录监听回报一批目录变化：父目录命中的已打开文件逐个重新比对磁盘基线。
    * 与窗口聚焦走同一套判断（`checkExternal`），只读 `stat`，不写盘也不抢用户的未保存改动。
    */
-  function checkChangedDirectories(directories: readonly string[]): void {
+  function checkChangedDirectories(projectPath: string, directories: readonly string[]): void {
     if (directories.length === 0) return
     const changed = new Set(directories)
     for (const record of Object.values(records.value)) {
-      if (!changed.has(parentDirectoryOf(record.path))) continue
+      if (record.projectPath !== projectPath || !changed.has(parentDirectoryOf(record.path))) continue
       void checkExternal(record.key)
     }
   }
@@ -278,8 +286,10 @@ export const useProjectEditorStore = defineStore('project-editor', () => {
    * 重新比对全部已打开文件的磁盘基线：用于拿不到具体目录的整树刷新（如目录监听 overflow）。
    * 代价只是每个标签一次 `stat`，文件不多时可以接受。
    */
-  function checkAllExternal(): void {
-    for (const record of Object.values(records.value)) void checkExternal(record.key)
+  function checkAllExternal(projectPath: string): void {
+    for (const record of Object.values(records.value)) {
+      if (record.projectPath === projectPath) void checkExternal(record.key)
+    }
   }
 
   return {

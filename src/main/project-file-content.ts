@@ -1,7 +1,7 @@
 /**
  * 项目文件内容读写：为工作区文件标签提供「读内容、写内容、查磁盘基线」三个能力。
  *
- * 根路径只取当前项目（由调用方注入），页面只能给出项目内相对路径；解析与越界判定复用
+ * 根路径由请求固定并经已登记项目解析器复核，页面只能给出项目内相对路径；解析与越界判定复用
  * `project-entry-path` 的同一套规则。符号链接一律拒绝读写，避免链接把访问带出项目。
  *
  * 读取按内容分类：图片按扩展名映射 MIME 后回 base64；文本按 UTF-8 严格解码，识别并剥离 BOM、
@@ -24,7 +24,9 @@ import {
 } from '../shared/project-file-api'
 import type {
   ProjectFileEol,
+  ProjectFileReadRequest,
   ProjectFileReadResult,
+  ProjectFileStatRequest,
   ProjectFileStatResult,
   ProjectFileWriteRequest,
   ProjectFileWriteResult
@@ -49,18 +51,18 @@ const IMAGE_MIME_TYPES: Readonly<Record<string, string>> = {
 const UTF8_BOM = Buffer.from([0xef, 0xbb, 0xbf])
 
 export interface ProjectFileContentOptions {
-  /** 当前项目路径的内存快照；未选择项目时为 null，不触发磁盘访问。 */
-  readonly currentProjectPath: () => string | null
+  /** 只解析已登记项目，返回规范项目路径；不按变化中的当前项目解释请求。 */
+  readonly resolveProjectPath: (requested: string) => Promise<string | null>
 }
 
 export class ProjectFileContent {
   constructor(private readonly options: ProjectFileContentOptions) {}
 
   /** 读取一个项目内文件；分类由主进程判定，页面只按返回的 kind 展示。 */
-  async read(path: string): Promise<ProjectFileReadResult> {
-    const root = this.options.currentProjectPath()
-    if (root === null) return failure('INVALID_REQUEST', '尚未选择项目，无法读取文件。')
-    const resolved = await resolveProjectEntryAbsolute(root, path)
+  async read(request: ProjectFileReadRequest): Promise<ProjectFileReadResult> {
+    const root = await this.options.resolveProjectPath(request.projectPath)
+    if (root === null) return failure('INVALID_REQUEST', '文件所属项目未登记或已被移除。')
+    const resolved = await resolveProjectEntryAbsolute(root, request.path)
     if (!resolved.ok) return resolved
 
     const info = await statEntry(resolved.absolutePath)
@@ -121,8 +123,8 @@ export class ProjectFileContent {
    * 不写入任何内容。
    */
   async write(request: ProjectFileWriteRequest): Promise<ProjectFileWriteResult> {
-    const root = this.options.currentProjectPath()
-    if (root === null) return failure('INVALID_REQUEST', '尚未选择项目，无法保存文件。')
+    const root = await this.options.resolveProjectPath(request.projectPath)
+    if (root === null) return failure('INVALID_REQUEST', '文件所属项目未登记或已被移除。')
     const resolved = await resolveProjectEntryAbsolute(root, request.path)
     if (!resolved.ok) return resolved
 
@@ -161,10 +163,10 @@ export class ProjectFileContent {
   }
 
   /** 查询磁盘基线；文件不存在或不是普通文件时 `exists` 为 false，不视为错误。 */
-  async stat(path: string): Promise<ProjectFileStatResult> {
-    const root = this.options.currentProjectPath()
-    if (root === null) return failure('INVALID_REQUEST', '尚未选择项目，无法读取文件状态。')
-    const resolved = await resolveProjectEntryAbsolute(root, path)
+  async stat(request: ProjectFileStatRequest): Promise<ProjectFileStatResult> {
+    const root = await this.options.resolveProjectPath(request.projectPath)
+    if (root === null) return failure('INVALID_REQUEST', '文件所属项目未登记或已被移除。')
+    const resolved = await resolveProjectEntryAbsolute(root, request.path)
     if (!resolved.ok) return resolved
 
     const info = await statEntry(resolved.absolutePath)

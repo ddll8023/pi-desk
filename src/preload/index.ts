@@ -693,9 +693,9 @@ const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionAp
     return isProjectEntryRevealResult(response) ? response : invalidProjectEntryRevealResponse()
   },
 
-  /** 读取项目内文件内容；只搬运相对路径，内容分类与大小上限由主进程判定。 */
+  /** 读取指定项目内文件；固定项目归属，内容分类与大小上限由主进程判定。 */
   async readProjectFile(request: ProjectFileReadRequest) {
-    const payload: ProjectFileReadRequest = { path: request.path }
+    const payload: ProjectFileReadRequest = { projectPath: request.projectPath, path: request.path }
     const response: unknown = await ipcRenderer.invoke(PROJECT_FILE_READ_CHANNEL, payload)
     return isProjectFileReadResult(response) ? response : invalidProjectFileReadResponse()
   },
@@ -703,6 +703,7 @@ const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionAp
   /** 保存项目内文本文件；只搬运相对路径、文本与磁盘基线，越界与符号链接由主进程拒绝。 */
   async writeProjectFile(request: ProjectFileWriteRequest) {
     const payload: ProjectFileWriteRequest = {
+      projectPath: request.projectPath,
       path: request.path,
       text: request.text,
       eol: request.eol,
@@ -717,7 +718,7 @@ const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionAp
 
   /** 查询项目内文件的磁盘基线；只回元数据，不读内容。 */
   async statProjectFile(request: ProjectFileStatRequest) {
-    const payload: ProjectFileStatRequest = { path: request.path }
+    const payload: ProjectFileStatRequest = { projectPath: request.projectPath, path: request.path }
     const response: unknown = await ipcRenderer.invoke(PROJECT_FILE_STAT_CHANNEL, payload)
     return isProjectFileStatResult(response) ? response : invalidProjectFileStatResponse()
   },

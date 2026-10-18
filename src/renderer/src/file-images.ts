@@ -42,7 +42,7 @@ export async function loadMarkdownImage(
   const cached = cache.get(key)
   if (cached !== undefined) return cached
 
-  const pending = readImage(path)
+  const pending = readImage(projectPath, path)
   cache.set(key, pending)
   if (cache.size > CACHE_LIMIT) cache.clear()
   const result = await pending
@@ -57,8 +57,8 @@ export function clearMarkdownImageCache(): void {
 }
 
 /** 读取并转换成可直接放进 `img.src` 的地址；失败原因保持可展示。 */
-async function readImage(path: string): Promise<MarkdownImageSource> {
-  const result = await readProjectFile(path)
+async function readImage(projectPath: string, path: string): Promise<MarkdownImageSource> {
+  const result = await readProjectFile(projectPath, path)
   if (!result.ok) return { url: null, error: result.error.message }
 
   const content = result.data
