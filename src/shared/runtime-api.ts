@@ -499,15 +499,28 @@ export interface SessionPluginActivity {
   readonly toolName: string
   readonly count: number
 }
+
+/**
+ * 一份生成式界面的交付事实：只记身份与版本，不带节点树与标题以外的内容。
+ * `versions` 是该界面在分支上出现过的次数（含修改），与 `ui_inspect` 的列表口径一致。
+ */
+export interface SessionGenuiActivity {
+  readonly documentId: string
+  readonly title: string
+  readonly revision: number
+  readonly versions: number
+}
 export interface SessionActivity {
   readonly files: readonly SessionFileActivity[]
   readonly skills: readonly SessionSkillActivity[]
   readonly mcp: readonly SessionMcpActivity[]
   readonly plugins: readonly SessionPluginActivity[]
+  readonly genui: readonly SessionGenuiActivity[]
   readonly fileCount: number
   readonly skillCount: number
   readonly mcpCount: number
   readonly pluginCount: number
+  readonly genuiCount: number
   readonly empty: boolean
   /** SDK嵌套记录曾省略调用或参数，恢复时无法凭空补全。 */
   readonly incomplete?: boolean
@@ -1278,7 +1291,10 @@ export function isSessionActivity(value: unknown): value is SessionActivity {
     && Array.isArray(value.mcp) && value.mcp.every(row => counted(row) && typeof row.server === 'string'
       && Array.isArray(row.tools) && row.tools.every(tool => counted(tool) && typeof tool.name === 'string'))
     && Array.isArray(value.plugins) && value.plugins.every(row => counted(row) && typeof row.toolName === 'string')
-    && ['fileCount', 'skillCount', 'mcpCount', 'pluginCount'].every(key => isCount(value[key]))
+    && Array.isArray(value.genui) && value.genui.every(row => isRecord(row)
+      && typeof row.documentId === 'string' && row.documentId !== ''
+      && typeof row.title === 'string' && isCount(row.revision) && isCount(row.versions) && row.versions >= 1)
+    && ['fileCount', 'skillCount', 'mcpCount', 'pluginCount', 'genuiCount'].every(key => isCount(value[key]))
     && typeof value.empty === 'boolean'
     && (value.incomplete === undefined || typeof value.incomplete === 'boolean')
 }

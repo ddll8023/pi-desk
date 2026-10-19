@@ -41,6 +41,10 @@ function describeNode(node: GenuiNode): string {
       return `[card]${node.title === undefined ? '' : ` ${preview(node.title)}`}`
     case 'row':
       return `[row]${node.columns === undefined ? '（自动换行）' : ` ${node.columns} 列`}`
+    case 'collapse':
+      return `[collapse] ${node.items.length} 组：${preview(node.items.map((item) => item.title).join(' / '))}`
+    case 'tabs':
+      return `[tabs] ${node.items.length} 页：${preview(node.items.map((item) => item.label).join(' / '))}（默认选中第一页）`
     case 'controls':
       return `[controls] ${node.params === undefined ? '全部参数' : node.params.join(', ')}`
     case 'diagram':
@@ -103,21 +107,50 @@ function childrenOf(node: GenuiNode): readonly GenuiNode[] | null {
   return null
 }
 
-/** 参数声明的单行描述：类型、区间或选项、占位、默认值。 */
+/**
+ * 分组容器的组列表：每组有自己的子节点数组，因此路径比 card / row 多一层（`0.1` 是第 2 组）。
+ * 大纲把组这一层也打出来，模型手里的路径才能直接当 ui_patch 的 path 用。
+ */
+function groupsOf(
+  node: GenuiNode
+): readonly { readonly label: string; readonly children: readonly GenuiNode[] }[] | null {
+  if (node.type === 'collapse') {
+    return node.items.map((item) => ({
+      label: `${item.title}${item.open === true ? '（默认展开）' : ''}`,
+      children: item.children
+    }))
+  }
+  if (node.type === 'tabs') {
+    return node.items.map((item) => ({ label: item.label, children: item.children }))
+  }
+  return null
+}
+
+/** 参数声明的单行描述：类型、区间或选项、占位、默认值、分组与显示条件。 */
 function describeParam(param: GenuiParam): string {
+  const group = param.group === undefined ? '' : ` 分组「${param.group}」`
+  const condition = param.visibleWhen === undefined
+    ? ''
+    : ` 仅当 ${param.visibleWhen.id}=${String(param.visibleWhen.equals)} 时显示`
   switch (param.type) {
     case 'number':
       return `number ${param.min}..${param.max}`
         + (param.step === undefined ? '' : ` step ${param.step}`)
         + ` 默认 ${param.default}`
         + (param.unit === undefined ? '' : ` ${param.unit}`)
+        + group
+        + condition
     case 'select':
       return `select ${param.options.map((option) => option.value).join('|')} 默认 ${param.default}`
+        + group
+        + condition
     case 'toggle':
-      return `toggle 默认 ${param.default ? 'true' : 'false'}`
+      return `toggle 默认 ${param.default ? 'true' : 'false'}` + group + condition
     case 'text':
       return `text 默认 ${param.default === '' ? '（空）' : `「${param.default}」`}`
         + (param.placeholder === undefined ? '' : ` 占位「${param.placeholder}」`)
+        + group
+        + condition
   }
 }
 
@@ -132,6 +165,18 @@ function walkNodes(
     if (lines.length >= MAX_OUTLINE_LINES) return true
     const path = pathPrefix === '' ? `${index}` : `${pathPrefix}.${index}`
     lines.push(`${'  '.repeat(depth)}${path} ${describeNode(node)}`)
+    const groups = groupsOf(node)
+    if (groups !== null) {
+      // 组这一层单独成行：模型要能看出「组」是路径的一层，而不是一个节点。
+      const kindLabel = node.type === 'collapse' ? '分组' : '页'
+      for (const [groupIndex, group] of groups.entries()) {
+        if (lines.length >= MAX_OUTLINE_LINES) return true
+        const groupPath = `${path}.${groupIndex}`
+        lines.push(`${'  '.repeat(depth + 1)}${groupPath} [${kindLabel}] ${preview(group.label)}`)
+        if (walkNodes(group.children, groupPath, depth + 2, lines)) return true
+      }
+      continue
+    }
     const children = childrenOf(node)
     if (children !== null && walkNodes(children, path, depth + 1, lines)) return true
   }

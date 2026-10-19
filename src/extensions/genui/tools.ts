@@ -120,7 +120,7 @@ const CATALOG_PARAMETERS = {
       enum: [...GENUI_CATALOG_TOPICS],
       description: 'overview=协议总览（默认）；nodes=全部节点字段与上限；params=可调参数与控件组；'
         + `diagram=机制图解（${GENUI_DIAGRAM_KINDS.join('、')}）；chart=${GENUI_CHART_KINDS.join('、')}；`
-        + 'update=修改既有界面；examples=九个完整示例。'
+        + 'update=修改既有界面；examples=十一个完整示例。'
     }
   }
 } as unknown as ToolParameters
@@ -304,13 +304,15 @@ export function registerGenuiTools(pi: ExtensionAPI): void {
     label: '生成式界面',
     description:
       '把结构化内容渲染成对话内的原生界面（卡片、指标、表格、步骤、时间线、列表、分栏、'
-      + '可调参数控件、机制图解与图表），而不是让模型写 HTML。只用于值得用界面表达的内容：方案对比、数据摘要、'
+      + '折叠、标签页、可调参数控件、机制图解与图表），而不是让模型写 HTML。只用于值得用界面表达的内容：方案对比、数据摘要、'
       + '流程说明、多指标并列。修改既有界面时带同一个 documentId 重新交付。纯文本、代码与简短回答继续用正文。',
     promptSnippet: 'ui_render — 把对比、数据摘要、流程与多指标并列渲染成对话内原生界面',
     promptGuidelines: [
       '真实的方案对比、多指标、数据表、顺序关系或可调参数才使用 ui_render；纯叙述、路径清单和简短结论留在正文，不把整段回答套成卡片。',
       '先按信息关系组织布局：方案用 row 并排比较，指标用 metric，真实先后顺序用 steps，带具体时间点的过程用 timeline，参数用 controls；card 只负责主题分组，不反复嵌套 card。',
       'table 只放可横向比较的同类记录，避免把长段落塞进每个单元格；结论和警告单独用 text 表达，不藏在长表尾部。',
+      '次要内容收纳用 collapse、并列互斥的内容用 tabs（开合与选中页是视图状态，不写进文档）；'
+        + '两者都不允许放 controls，参数要放在文档顶层或 card / row 里。',
       'ui_render 的 document 必须同时提供 title 与 fallback；fallback 要能独立读懂，不能依赖视觉。',
       '不确定节点字段时先调用 ui_catalog，不要凭猜测提交。',
       `收到以 ${GENUI_SUBMIT_PREFIX} 开头的用户消息时，那是界面参数的显式回填：按其中的 documentId`
@@ -321,6 +323,8 @@ export function registerGenuiTools(pi: ExtensionAPI): void {
         + '想让图解随用户调节变化，就声明 number 参数、用 binds 绑定，并用 controls 节点把它渲染出来。',
       '需要展示 1~3 条序列的数值对比或趋势时用 chart 的 bar/line（多序列自动出图例，字段见 ui_catalog({topic:"chart"})）；'
         + '超过 3 条、或单位与量级不可比时用 table，不要硬塞进图表。',
+      '参数多时用 group 分块（只有相邻同名参数归到同一块）、用 visibleWhen 做条件显示（目标只能是 select / toggle，不支持多级依赖）；'
+        + '界面底部自带「重置为默认值」按钮，不需要在文档里声明。',
       '要表达占比与构成时用 chart 的 pie/donut（单序列、不超过 6 片，环形中间显示总计）；'
         + '不要用柱状图让人硬读比例。'
     ],
@@ -354,6 +358,8 @@ export function registerGenuiTools(pi: ExtensionAPI): void {
       '改已交付界面的文案、数据或增删节点时优先用 ui_patch；只有结构大改（重排大部分节点）才用 ui_render 重发整份。',
       '用 ui_patch 前先 ui_inspect 取结构：路径就是大纲里的 0、0.1 这类节点位置，不要自己推测。',
       'ui_patch 的粒度是节点：改表格里的一行也要 replace 整个 table 节点，没有行级、项级补丁。',
+      'collapse / tabs 多一层路径："0.1" 是第 2 组、"0.1.0" 是组内第一个节点；insert 可以指向组，'
+        + 'replace / remove 只能指向节点，增删整组要 replace 整个容器节点。',
       '补丁合并后仍要过整份校验：改 params 时要同步改 controls 节点，删参数时一起删掉引用它的 controls。'
     ],
     parameters: PATCH_PARAMETERS,
@@ -402,7 +408,7 @@ export function registerGenuiTools(pi: ExtensionAPI): void {
     description:
       '按主题读取 ui_render 的字段说明：overview=协议总览，nodes=全部节点字段与上限，'
       + 'params=可调参数与控件组，diagram=机制图解，chart=柱状图、折线图、饼图与环形图，update=修改既有界面，'
-      + 'examples=九个可直接照抄的完整示例。仅在需要确认字段时调用。',
+      + 'examples=十一个可直接照抄的完整示例。仅在需要确认字段时调用。',
     promptSnippet: 'ui_catalog — 按需读取 ui_render 的节点字段、可调参数、机制图解、图表与示例',
     parameters: CATALOG_PARAMETERS,
     async execute(_toolCallId, params) {

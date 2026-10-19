@@ -9,15 +9,12 @@
  * 之前时，那个版本会重新成为最新版，这是正确的语义，这里不做额外处理。
  */
 import type { SessionEntry } from '@earendil-works/pi-coding-agent'
-import { parseGenuiPayload } from '../../shared/genui-api'
+import { GENUI_RENDER_TOOL_NAMES, parseGenuiPayload, readGenuiPayloadHeader } from '../../shared/genui-api'
 import type { GenuiPayload } from '../../shared/genui-api'
 
-/** 产生界面载荷的工具名；其他工具即使带 `details.ui` 也不认。补丁与整份交付产出的载荷形状一致。 */
-const RENDER_TOOL_NAMES: ReadonlySet<string> = new Set(['ui_render', 'ui_patch'])
-
-/** 该工具是否会产生界面载荷。 */
+/** 该工具是否会产生界面载荷。名单的唯一事实源在 `genui-api.ts`，活动投影也用它。 */
 function isRenderTool(toolName: string): boolean {
-  return RENDER_TOOL_NAMES.has(toolName)
+  return GENUI_RENDER_TOOL_NAMES.has(toolName)
 }
 
 /** 分支上一份界面的头部信息；不含节点树，用于列表、版本推导与「是否存在」判断。 */
@@ -28,23 +25,12 @@ export interface DocumentHeader {
 }
 
 /**
- * 从一份工具结果的 `details` 里读界面头部。
- * 形状不符（非对象、缺字段、类型不对）一律返回 null，不猜造。
+ * 从一份工具结果的 `details` 里读界面头部；头部解析本身在 `genui-api.ts`，
+ * 与活动投影共用同一份实现，避免两处口径漂移。
  */
 export function readPayloadHeader(details: unknown): DocumentHeader | null {
   if (typeof details !== 'object' || details === null || Array.isArray(details)) return null
-  const ui = (details as Record<string, unknown>).ui
-  if (typeof ui !== 'object' || ui === null || Array.isArray(ui)) return null
-  const record = ui as Record<string, unknown>
-  const documentId = record.documentId
-  const revision = record.revision
-  if (typeof documentId !== 'string' || documentId === '') return null
-  if (typeof revision !== 'number' || !Number.isSafeInteger(revision) || revision < 0) return null
-  const document = record.document
-  const title = typeof document === 'object' && document !== null && !Array.isArray(document)
-    ? (document as Record<string, unknown>).title
-    : undefined
-  return { documentId, revision, title: typeof title === 'string' ? title : '' }
+  return readGenuiPayloadHeader((details as Record<string, unknown>).ui)
 }
 
 /** 分支上所有界面载荷的头部，按出现顺序（即交付顺序）。 */

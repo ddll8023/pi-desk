@@ -10,6 +10,11 @@
  *
  * 路径格式与 `ui_inspect` 的结构大纲一致（`0`、`0.1`），模型手里已经有这套路径，不必换算成
  * JSON Pointer。粒度到「节点」为止：改表格就 replace 整个表格节点，没有行级、项级补丁。
+ *
+ * 容器与分组：顶层 `nodes`、card / row 的 `children`、collapse / tabs 的组内 `children` 都是容器。
+ * 分组容器比 card / row 多一层——`0.1` 指第 2 组本身，`0.1.0` 指组内第一个节点。因此 `insert` 可以
+ * 指向组（往这一组里加节点），而 `replace` / `remove` 只能指向节点：组不是节点，增删整组要 replace
+ * 整个 collapse / tabs 节点。这条边界必须明确报错而不是就近兜底，否则补丁会改到不是模型想改的地方。
  */
 import type { GenuiDocument, GenuiNode } from '../../shared/genui-api'
 
@@ -41,6 +46,26 @@ function childrenOf(node: GenuiNode): readonly GenuiNode[] | null {
   return null
 }
 
+/**
+ * 分组容器（`collapse` / `tabs`）的组：两者都是「标签 + 子节点数组」，
+ * 遍历只关心子节点，标签不参与定位，因此统一看成同一种结构；
+ * 带上 `kind` 是为了让错误文案能说出「组」还是「页」而不靠调用方再判一次。
+ */
+interface GroupEntry {
+  readonly children: readonly GenuiNode[]
+}
+
+interface GroupList {
+  readonly kind: 'collapse' | 'tabs'
+  readonly items: readonly GroupEntry[]
+}
+
+/** 分组容器的组；非分组容器返回 null。 */
+function groupsOf(node: GenuiNode): GroupList | null {
+  if (node.type === 'collapse' || node.type === 'tabs') return { kind: node.type, items: node.items }
+  return null
+}
+
 /** 把路径拆成索引数组；空路径表示文档顶层。 */
 function parsePath(path: string | undefined): number[] {
   if (path === undefined || path.trim() === '') return []
@@ -52,49 +77,98 @@ function parsePath(path: string | undefined): number[] {
   })
 }
 
-/** 取路径指向的容器（子节点数组）；顶层返回文档 `nodes`。路径不可达时抛出带范围的说明。 */
-function containerAt(
-  nodes: readonly GenuiNode[],
-  containerPath: readonly number[],
-  label: string
-): readonly GenuiNode[] {
-  let current: readonly GenuiNode[] = nodes
-  for (const [depth, index] of containerPath.entries()) {
-    const node = current[index]
-    if (node === undefined) {
-      throw new GenuiPatchError(`${label}：路径第 ${depth + 1} 段 ${index} 不存在，该层只有 0..${current.length - 1}。先 ui_inspect 核对结构。`)
-    }
-    const children = childrenOf(node)
-    if (children === null) {
-      throw new GenuiPatchError(`${label}：路径第 ${depth + 1} 段是 ${node.type} 节点，没有子节点，无法继续下钻。`)
-    }
-    current = children
-  }
-  return current
+/** 用新的子节点重建容器节点；只对真正带 children 的容器生效。 */
+function rebuildChildren(node: GenuiNode, children: readonly GenuiNode[]): GenuiNode {
+  if (node.type === 'card') return { ...node, children }
+  if (node.type === 'row') return { ...node, children }
+  return node
 }
 
-/** 用 `edit` 改写路径指向的容器，沿途容器逐层复制，原文档不被改动。 */
-function withContainer(
+/**
+ * 按路径在 `nodes` 这一层下钻，并对终点容器执行 `edit`；`segments` 为空表示容器就是 `nodes` 本身。
+ * 每段先选一个节点，再按节点类型决定下一层是子节点（card / row）还是分组（collapse / tabs）。
+ * 沿途容器逐层复制，原文档不被改动。
+ */
+function editContainer(
   nodes: readonly GenuiNode[],
-  containerPath: readonly number[],
+  segments: readonly number[],
   label: string,
+  op: GenuiPatchOp['op'],
   edit: (container: readonly GenuiNode[]) => GenuiNode[]
 ): GenuiNode[] {
-  const container = containerAt(nodes, containerPath, label)
-  if (containerPath.length === 0) return edit(container)
-  const head = containerPath[0] ?? 0
-  const parent = nodes[head]
-  if (parent === undefined) return [...nodes]
-  const children = childrenOf(parent)
-  if (children === null) return [...nodes]
-  const merged = withContainer(children, containerPath.slice(1), label, edit)
-  // 按类型逐分支重建，不用交叉断言：容器的 `children` 字段在不同 kind 上语义相同。
-  return nodes.map((node, index) => {
-    if (index !== head) return node
-    if (node.type === 'card') return { ...node, children: merged }
-    if (node.type === 'row') return { ...node, children: merged }
-    return node
-  })
+  const head = segments[0]
+  if (head === undefined) return edit(nodes)
+  const node = nodes[head]
+  if (node === undefined) {
+    throw new GenuiPatchError(`${label}：路径中的下标 ${head} 不存在，该层只有 0..${nodes.length - 1}。先 ui_inspect 核对结构。`)
+  }
+  const rebuilt = editNode(node, segments.slice(1), label, op, edit)
+  return nodes.map((item, index) => (index === head ? rebuilt : item))
+}
+
+/**
+ * 在单个节点内部继续下钻；`segments` 为空表示这个节点本身就是终点容器。
+ * 分组容器的第一段选组，其余段在组内节点里继续下钻。
+ *
+ * `op` 只用于把错误说准：组列表本身既不是节点、也不是可插入的容器，
+ * 不同操作的正确写法不同，混写成一句会把模型引到另一个错上。
+ */
+function editNode(
+  node: GenuiNode,
+  segments: readonly number[],
+  label: string,
+  op: GenuiPatchOp['op'],
+  edit: (container: readonly GenuiNode[]) => GenuiNode[]
+): GenuiNode {
+  const children = childrenOf(node)
+  if (children !== null) return rebuildChildren(node, editContainer(children, segments, label, op, edit))
+
+  const groups = groupsOf(node)
+  if (groups !== null) {
+    const groupIndex = segments[0]
+    if (groupIndex === undefined) {
+      throw new GenuiPatchError(`${label}：${groupHint(groups.kind, op)}`)
+    }
+    const group = groups.items[groupIndex]
+    if (group === undefined) {
+      throw new GenuiPatchError(
+        `${label}：路径中的组下标 ${groupIndex} 不存在，该层只有 0..${groups.items.length - 1} 个组。先 ui_inspect 核对结构。`
+      )
+    }
+    const nextChildren = editContainer(group.children, segments.slice(1), label, op, edit)
+    // 按类型逐分支重建：两者的 items 元素类型不同（折叠分组带 title / open，标签页只带 label），
+    // 分开写才能保持元素类型，不做交叉断言。
+    switch (node.type) {
+      case 'collapse':
+        return {
+          ...node,
+          items: node.items.map((item, index) => (index === groupIndex ? { ...item, children: nextChildren } : item))
+        }
+      case 'tabs':
+        return {
+          ...node,
+          items: node.items.map((item, index) => (index === groupIndex ? { ...item, children: nextChildren } : item))
+        }
+      default:
+        // `groupsOf` 已经限定了容器类型，这里不可达；保留分支是为了让类型检查闭合。
+        throw new GenuiPatchError(`${label}：${node.type} 不是分组容器。`)
+    }
+  }
+
+  throw new GenuiPatchError(`${label}：这一层是 ${node.type} 节点，没有子节点，无法继续下钻。`)
+}
+
+/** 组层被当成目标时的提示：按操作给出它真正该写什么路径。 */
+function groupHint(kind: 'collapse' | 'tabs', op: GenuiPatchOp['op']): string {
+  const target = kind === 'collapse' ? '组' : '页'
+  if (op === 'insert') {
+    return `这一层是分组容器（${kind}）的分${target}列表，不是可插入的容器：`
+      + `往第 2 ${target}里加节点请把 path 写成 0.1（该${target}的子节点容器），`
+      + `要新增一${target}请 replace 整个 ${kind} 节点。`
+  }
+  return `这一层是分组容器（${kind}）的分${target}列表，分${target}本身不是节点：`
+    + `replace / remove 只能指向节点，改${target}内内容请写到 0.1.0；`
+    + `要增删整${target}请 replace 整个 ${kind} 节点。`
 }
 
 /** 应用一条补丁，返回合并后的顶层节点数组。 */
@@ -106,7 +180,7 @@ function applyOp(nodes: readonly GenuiNode[], op: GenuiPatchOp, ordinal: number)
   if (op.op === 'insert') {
     if (op.node === undefined) throw new GenuiPatchError(`${label} 缺少 node：insert 必须给出要插入的节点。`)
     const containerPath = parsePath(op.path)
-    return withContainer(nodes, containerPath, label, (container) => {
+    return editContainer(nodes, containerPath, label, op.op, (container) => {
       const at = op.index ?? container.length
       if (!Number.isSafeInteger(at) || at < 0 || at > container.length) {
         throw new GenuiPatchError(`${label} 的 index=${String(op.index)} 越界：该容器可插入位置是 0..${container.length}。`)
@@ -122,19 +196,22 @@ function applyOp(nodes: readonly GenuiNode[], op: GenuiPatchOp, ordinal: number)
   const index = segments[segments.length - 1] ?? 0
   if (op.op === 'replace') {
     if (op.node === undefined) throw new GenuiPatchError(`${label} 缺少 node：replace 必须给出替换后的节点。`)
-    return withContainer(nodes, containerPath, label, (container) => {
+    return editContainer(nodes, containerPath, label, op.op, (container) => {
       if (container[index] === undefined) {
         throw new GenuiPatchError(`${label}：路径 ${op.path ?? ''} 不存在，该层只有 0..${container.length - 1}。先 ui_inspect 核对结构。`)
       }
       return container.map((node, current) => (current === index ? (op.node as GenuiNode) : node))
     })
   }
-  return withContainer(nodes, containerPath, label, (container) => {
+  return editContainer(nodes, containerPath, label, op.op, (container) => {
     if (container[index] === undefined) {
       throw new GenuiPatchError(`${label}：路径 ${op.path ?? ''} 不存在，该层只有 0..${container.length - 1}。先 ui_inspect 核对结构。`)
     }
     if (container.length === 1) {
-      throw new GenuiPatchError(`${label} 会删掉最后一个节点：文档至少要有一个节点，这种情况请改用 replace。`)
+      throw new GenuiPatchError(
+        `${label} 会删掉这个容器里的最后一个节点：每个容器至少要保留一个节点，`
+        + '这种情况请改用 replace 换掉它，或把整个上级容器节点一起 replace。'
+      )
     }
     return container.filter((_, current) => current !== index)
   })

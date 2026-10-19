@@ -4922,6 +4922,20 @@
     background: var(--color-desk-accent);
   }
 
+  /* 本轮交付过生成式界面：在刻度右上方点一枚强调色小圆点。
+     圆点不参与刻度的 transform（Motion 只控制刻度自身的波峰缩放），因此不会与动画争用。 */
+  .chat-outline-trigger.has-ui::after {
+    content: '';
+    position: absolute;
+    top: 0.25rem;
+    right: 0.25rem;
+    width: 0.25rem;
+    height: 0.25rem;
+    border-radius: 999px;
+    background: var(--color-desk-accent);
+    pointer-events: none;
+  }
+
   /* Motion 分别控制锚点纵向定位和表面入退场；静态居中独立一层，避免争用 transform。 */
   .chat-outline-preview-anchor {
     position: absolute;
@@ -4988,6 +5002,15 @@
     overflow-wrap: anywhere;
     -webkit-box-orient: vertical;
     -webkit-line-clamp: 2;
+  }
+
+  /* 预览里的补充行：比摘要弱一级，说明本轮含几个界面；不与摘要争行数上限。 */
+  .chat-outline-preview-meta {
+    display: block;
+    margin-top: 0.25rem;
+    color: var(--color-desk-muted);
+    font-size: var(--text-2xs);
+    line-height: 1.4;
   }
 
   @media (prefers-reduced-motion: reduce) {

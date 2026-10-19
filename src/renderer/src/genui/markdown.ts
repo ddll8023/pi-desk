@@ -11,6 +11,9 @@
  * 表格输出全部行，不受界面上「前 6 行」预览的限制；单元格里的竖线与换行做转义，
  * 否则一行数据会把整张表拆坏。正文文本原样输出，不转义 Markdown 标记：用户或模型写的
  * `*`、`_` 应当保持原意，替他们决定哪些该被转义反而会改变内容。
+ * 折叠容器与标签页一律按声明顺序全部展开，组标题与页签作小标题——收起只是视觉收纳，
+ * 复制出来的内容不能因为屏幕上收着就丢掉。参数小节对条件未满足（界面上被隐藏）的参数
+ * 追加与提交消息相同的标注，不静默丢键。
  */
 import type {
   GenuiChartNode,
@@ -21,6 +24,7 @@ import type {
   GenuiParamValue,
   GenuiTableNode
 } from '../../../shared/genui-api'
+import { isGenuiParamVisible } from '../../../shared/genui-api'
 import { formatShare, layoutBarChart, layoutLineChart, layoutPieChart } from './chart-geometry'
 import { layoutCircuit, layoutCrank, layoutExploded, layoutGearTrain, layoutSection, layoutVectors } from './diagram-geometry'
 import { readGenuiBinding } from './param-state'
@@ -199,6 +203,15 @@ function paramValueText(param: GenuiParam, value: GenuiParamValue | undefined): 
   }
 }
 
+/** 一组子节点按声明顺序展开；卡片、分栏与分组容器共用同一阅读顺序。 */
+function childrenMarkdown(
+  nodes: readonly GenuiNode[],
+  values: Readonly<Record<string, GenuiParamValue>>,
+  level: number
+): string[][] {
+  return nodes.map((child) => nodeMarkdown(child, values, level))
+}
+
 /** 单节点输出；`level` 是当前允许使用的标题层级，由外层容器决定。 */
 function nodeMarkdown(node: GenuiNode, values: Readonly<Record<string, GenuiParamValue>>, level: number): string[] {
   switch (node.type) {
@@ -231,6 +244,18 @@ function nodeMarkdown(node: GenuiNode, values: Readonly<Record<string, GenuiPara
     case 'row':
       // 分栏在纯文本里没有并排语义，按声明顺序展开，保持阅读顺序与屏幕一致。
       return joinBlocks(node.children.map((child) => nodeMarkdown(child, values, level)))
+    case 'collapse':
+      // 收起只是视觉收纳：复制时全部展开，隐藏的内容不能因为屏幕上收着就丢掉。
+      return joinBlocks(node.items.map((item) => [
+        heading(level, item.title),
+        ...childrenMarkdown(item.children, values, level + 1)
+      ]))
+    case 'tabs':
+      // 一次只看一页，但复制要完整：按页顺序全部展开，页签文案作小标题。
+      return joinBlocks(node.items.map((item) => [
+        heading(level, item.label),
+        ...childrenMarkdown(item.children, values, level + 1)
+      ]))
     case 'controls':
       // 控件本身不复制，当前取值统一放在文末的参数小节，避免与界面元素重复。
       return []
@@ -256,7 +281,11 @@ export function genuiDocumentToMarkdown(
   }
   const params = document.params ?? []
   if (params.length > 0) {
-    const rows = params.map((param) => `| ${cellText(param.label)} | ${cellText(paramValueText(param, values[param.id]))} |`)
+    // 条件未满足的参数照样输出并标注：与提交消息同口径，不静默丢键。
+    const rows = params.map((param) => {
+      const note = isGenuiParamVisible(param, values) ? '' : '（条件未满足，未生效）'
+      return `| ${cellText(param.label)} | ${cellText(paramValueText(param, values[param.id]))}${note} |`
+    })
     blocks.push([heading(2, '参数'), '', '| 参数 | 当前取值 |', '| --- | --- |', ...rows].join('\n'))
   }
   return `${blocks.join('\n\n').trimEnd()}\n`

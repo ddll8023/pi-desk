@@ -4,7 +4,8 @@
  * 只有用户点击提交才走这条路径：参数变化本身不触发任何请求，界面也不自动提交。
  * 提交文本是真实的用户消息，会进入历史与模型上下文，因此格式固定为「固定前缀 + 逐行参数」，
  * 前缀与扩展层提示词共用同一份定义（`GENUI_SUBMIT_PREFIX`），让模型能认出这是同一份界面的回填，
- * 也让用户在气泡里一眼看出它不是自己手打的。
+ * 也让用户在气泡里一眼看出它不是自己手打的。逐行输出全部已声明参数：条件未满足（界面上被隐藏）
+ * 的那几行同样保留，并在行尾追加「条件未满足，未生效」，避免模型以为自己声明的参数丢了。
  *
  * 取值来源是渲染端内存（见 `param-state.ts`）：这里不读 session、不做派生计算；
  * 本机旁路文件由 `param-persistence.ts` 负责，提交时顺手把待写的变化落盘。
@@ -14,7 +15,7 @@
 import { ref } from 'vue'
 import type { Ref } from 'vue'
 import type { GenuiDocument, GenuiParam, GenuiParamValue } from '../../../shared/genui-api'
-import { GENUI_SUBMIT_PREFIX } from '../../../shared/genui-api'
+import { GENUI_SUBMIT_PREFIX, isGenuiParamVisible } from '../../../shared/genui-api'
 import { useRuntimeStore } from '../stores/runtime'
 import { flushGenuiParamPersistence } from './param-persistence'
 
@@ -47,6 +48,10 @@ function formatParamValue(param: GenuiParam, value: GenuiParamValue | undefined)
 /**
  * 组装提交文本：第一行给界面身份与 documentId，后续每行一个参数。
  * 纯函数，便于界面上直接预览「将要发送什么」。
+ *
+ * 条件未满足（界面上被隐藏）的参数仍然输出，并追加「条件未满足，未生效」：
+ * 静默省略会让模型以为自己声明的参数丢了，而保留取值又能让用户切回去时状态还在。
+ * 可见性判断与控件、复制为 Markdown 共用 `isGenuiParamVisible`，不在这里另写一份。
  */
 export function composeParamSubmitText(
   document: GenuiDocument,
@@ -56,7 +61,8 @@ export function composeParamSubmitText(
 ): string {
   const lines = [`${GENUI_SUBMIT_PREFIX}：《${document.title}》 documentId=${documentId} revision=${revision}`]
   for (const param of document.params ?? []) {
-    lines.push(`- ${param.label}（${param.id}）：${formatParamValue(param, values[param.id])}`)
+    const note = isGenuiParamVisible(param, values) ? '' : '（条件未满足，未生效）'
+    lines.push(`- ${param.label}（${param.id}）：${formatParamValue(param, values[param.id])}${note}`)
   }
   return lines.join('\n')
 }

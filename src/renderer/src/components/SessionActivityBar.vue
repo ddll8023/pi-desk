@@ -1,4 +1,4 @@
-<!-- 会话活动摘要条：对话区顶部的一行窄带，把当前会话读过与改过的文件、调用的 Skill、MCP 与扩展（插件）工具归纳成四类计数，每类一枚胶囊；点胶囊展开这一类明细，明细是浮在消息区之上的浮层，一次只列一类，不占对话的内容空间，也不改变正文的滚动与粘底判定。
+<!-- 会话活动摘要条：对话区顶部的一行窄带，把当前会话读过与改过的文件、交付过的生成式界面、调用的 Skill、MCP 与扩展（插件）工具归纳成五类计数，每类一枚胶囊；点胶囊展开这一类明细，明细是浮在消息区之上的浮层，一次只列一类，不占对话的内容空间，也不改变正文的滚动与粘底判定。
      窄带本身不画底色，底线只画在消息列宽内，与下方消息卡片左右同边。
      同一行右端还承载早期对话的整体折叠开关：非当前轮只留用户输入与一行 AI 摘要；两者共用一条窄带，不为单个开关再占一行高度。 -->
 <script setup lang="ts">
@@ -22,8 +22,8 @@ const POPUP_MAX_HEIGHT_PX = 420
  */
 const POPUP_WIDTH_PX = 640
 
-/** 四类活动；窄带上胶囊的顺序即展示顺序，空分类不出胶囊。 */
-type ActivityCategory = 'files' | 'skills' | 'mcp' | 'plugins'
+/** 五类活动；窄带上胶囊的顺序即展示顺序，空分类不出胶囊。 */
+type ActivityCategory = 'files' | 'genui' | 'skills' | 'mcp' | 'plugins'
 
 /** 行首的一枚操作徽标；只表达操作类型，次数放到行尾，徽标列宽度才不会随次数变化。 */
 interface ActivityBadge {
@@ -71,7 +71,9 @@ const historyExpanded = computed(() => sessionViewStore.historyExpanded)
 
 /** 轻量累计事实由宿主提供，不受工具卡片的最近100条展示窗口影响。 */
 const activity = computed(() => runtimeStore.activity ?? {
-  files: [], skills: [], mcp: [], plugins: [], fileCount: 0, skillCount: 0, mcpCount: 0, pluginCount: 0, empty: true, incomplete: false
+  files: [], genui: [], skills: [], mcp: [], plugins: [],
+  fileCount: 0, genuiCount: 0, skillCount: 0, mcpCount: 0, pluginCount: 0,
+  empty: true, incomplete: false
 })
 
 /**
@@ -168,6 +170,23 @@ const sections = computed<readonly ActivitySection[]>(() => {
     })
   }
 
+  if (current.genui.length > 0) {
+    result.push({
+      key: 'genui',
+      label: '界面',
+      count: current.genuiCount,
+      rows: current.genui.map(document => ({
+        key: document.documentId,
+        badges: [],
+        dir: null,
+        // 标题缺失时用 documentId 前 8 位占位：不编造标题，但也不留空行。
+        label: document.title === '' ? document.documentId.slice(0, 8) : document.title,
+        meta: genuiMeta(document.revision, document.versions),
+        title: document.documentId
+      }))
+    })
+  }
+
   if (current.skills.length > 0) {
     result.push({
       key: 'skills',
@@ -237,6 +256,12 @@ const activeSection = computed<ActivitySection | null>(() => (
 /** 模板用的非空投影：浮层的标题与当前行清单都从同一份结果派生。 */
 const activeKey = computed(() => activeSection.value?.key ?? null)
 const activeRows = computed<readonly ActivityRow[]>(() => activeSection.value?.rows ?? [])
+
+/** 界面行：当前版本与交付次数；只交付过一次时版本号已经说完，不再重复次数。 */
+function genuiMeta(revision: number, versions: number): string {
+  const version = revision === 0 ? '初版' : `第 ${revision} 版`
+  return versions > 1 ? `${version} · ×${versions}` : version
+}
 
 /** 文件行的操作徽标：修改在前、读取在后，只给非零项；单字母与右侧面板的文件状态列同规格。 */
 function fileBadges(reads: number, writes: number): readonly ActivityBadge[] {

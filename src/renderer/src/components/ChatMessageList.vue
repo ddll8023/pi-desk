@@ -78,7 +78,7 @@ function isTurnExpanded(turn: ChatTurnView, index: number): boolean {
 }
 
 const outlineEntries = computed(() => turns.value.flatMap(turn => (
-  turn.user === null ? [] : [{ id: turn.user.id, label: outlineLabel(turn.user) }]
+  turn.user === null ? [] : [{ id: turn.user.id, label: outlineLabel(turn.user), uiCount: turn.uiCount }]
 )))
 const outlineStyle = computed(() => ({
   left: `${outlineLayout.value?.left ?? 0}px`,

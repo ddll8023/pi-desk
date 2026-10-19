@@ -3,7 +3,8 @@
  * 失败文案与 AI 消息生成计时只取投影已给的字段。
  *
  * 渲染项分两层：消息层按块展开（`toMessages`），轮层以用户消息为界把消息分组（`toTurns`）。
- * 折叠、展开与大纲跳转都以轮为单位，因此轮层一并算好条数、响应计时与最后一次调用的用量。
+ * 折叠、展开与大纲跳转都以轮为单位，因此轮层一并算好条数、响应计时、最后一次调用的用量与
+ * 本轮交付的界面数。
  *
  * 不猜测缺失内容，也不读取磁盘；来源为宿主实时投影与当前分支历史回读副本。投影按消息 copy-on-write
  * （只替换被改动的消息与工具条目对象），因此这里缓存上一次的渲染项：消息对象与其工具条目对象都没变
@@ -21,6 +22,7 @@
  * 生成式界面只有一份可交互：同一 `documentId` 取已加载记录与宿主给出的完整分支最高版本，其余版本标上
  * `supersededBy` 由界面折叠成只读记录。这个判定只在本模块做一次，渲染组件不各自推断；
  * 因此缓存有效性除了消息与工具条目，还要比对每个界面当前应得的 `supersededBy`。
+ * 该比对在稳态下不分配：取代状态与上一次一致时直接复用同一个 refs 数组，只有变了才重建。
  */
 import { PROMPT_IMAGE_MAX_CHARS, PROMPT_IMAGE_MAX_COUNT } from '../../shared/runtime-api'
 import type { MessageUsage, ProjectionBlock, ProjectionCompaction, ProjectionMessage, PromptImageInput, ToolExecution } from '../../shared/runtime-api'
@@ -90,6 +92,8 @@ export interface ChatTurnView {
   readonly responses: readonly ChatMessageView[]
   /** 轮内 AI 消息条数；折叠摘要用它说明收起了几条。 */
   readonly responseCount: number
+  /** 本轮交付的界面个数（按块计，不是按文档去重）；大纲据此在刻度上标一枚圆点。 */
+  readonly uiCount: number
   /** 本轮响应计时（挂在用户消息上）；前置轮与历史轮次为 null。 */
   readonly turn: ChatMessageView['turn']
   /** 轮内最后一次调用的用量；全部缺失时为 null，不编造 0。 */
@@ -242,26 +246,67 @@ function latestRevisions(
   return latest
 }
 
-/** 一条消息的界面取代状态：只有低于最高版本的那些才标出取代它的版本。 */
-function uiRefsOf(
+/**
+ * 遍历一条消息里携带界面的工具块，按出现顺序回调 `(documentId, supersededBy)`。
+ * 抽成回调是为了让「先比对、再构造」两遍扫描共用同一套取值逻辑；各写一份必然漂移。
+ * 回调返回 false 时提前结束，比对阶段一旦发现不一致就不用继续扫。
+ */
+function scanUiRefs(
   message: ProjectionMessage,
   toolsById: ReadonlyMap<string, ToolExecution>,
-  latest: ReadonlyMap<string, number>
-): readonly UiRef[] {
-  const refs: UiRef[] = []
+  latest: ReadonlyMap<string, number>,
+  visit: (documentId: string, supersededBy: number | null) => boolean
+): void {
   for (const block of message.blocks) {
     if (block.kind !== 'toolcall' || block.toolCallId === null) continue
     const ui = toolsById.get(block.toolCallId)?.ui
     if (ui === undefined || ui === null) continue
     const max = latest.get(ui.documentId)
-    refs.push({ documentId: ui.documentId, supersededBy: max === undefined || max <= ui.revision ? null : max })
+    const supersededBy = max === undefined || max <= ui.revision ? null : max
+    if (!visit(ui.documentId, supersededBy)) return
   }
+}
+
+/**
+ * 一条消息的界面取代状态：只有低于最高版本的那些才标出取代它的版本。
+ *
+ * `previous` 是上一次为这条消息算出的结果：完全一致时返回同一个数组引用，
+ * 让流式期间每批都跑一遍的映射在稳态下零分配。代价是多扫一遍块列表，
+ * 但那一遍只读字段、不建对象，比每条消息每批新建一个数组便宜。
+ */
+function uiRefsOf(
+  message: ProjectionMessage,
+  toolsById: ReadonlyMap<string, ToolExecution>,
+  latest: ReadonlyMap<string, number>,
+  previous: readonly UiRef[]
+): readonly UiRef[] {
+  let index = 0
+  let same = true
+  scanUiRefs(message, toolsById, latest, (documentId, supersededBy) => {
+    const existing = previous[index]
+    index += 1
+    if (existing !== undefined && existing.documentId === documentId && existing.supersededBy === supersededBy) {
+      return true
+    }
+    same = false
+    return false
+  })
+  // 长度也要一致：消息里的界面少了，比对的项数会少于旧数组。
+  if (same && index === previous.length) return previous
+
+  const refs: UiRef[] = []
+  scanUiRefs(message, toolsById, latest, (documentId, supersededBy) => {
+    refs.push({ documentId, supersededBy })
+    return true
+  })
   // 共用空数组：缓存命中判定按长度与逐项比对，共用不影响正确性。
   return refs.length === 0 ? NO_UI_REFS : refs
 }
 
 /** 缓存命中时，该消息每个界面的取代状态都必须与当前一致。 */
 function sameUiRefs(previous: readonly UiRef[], next: readonly UiRef[]): boolean {
+  // 稳态下 `uiRefsOf` 直接复用旧数组，这里先走引用相等这条快路径。
+  if (previous === next) return true
   if (previous.length !== next.length) return false
   return previous.every((ref, index) => {
     const other = next[index]
@@ -284,7 +329,8 @@ export function createChatViewCache(): ChatViewCache {
     const kept = new Map<string, CacheEntry>()
     const views = messages.map((message) => {
       const cached = entries.get(message.id)
-      const uiRefs = uiRefsOf(message, toolsById, latest)
+      // 把上一次的结果传进去：一致时拿回同一个数组，不一致才新建。
+      const uiRefs = uiRefsOf(message, toolsById, latest, cached === undefined ? NO_UI_REFS : cached.uiRefs)
       if (cached !== undefined && isReusable(cached, message, toolsById) && sameUiRefs(cached.uiRefs, uiRefs)) {
         kept.set(message.id, cached)
         return cached.view
@@ -373,9 +419,22 @@ function buildTurnView(group: TurnGroup): ChatTurnView {
     user: group.user,
     responses: group.responses,
     responseCount: group.responses.length,
+    // 在轮缓存里算一次：渲染期不重扫块，也不必给每条消息另存计数。
+    uiCount: countTurnUi(group.responses),
     turn: group.user?.turn ?? null,
     usage: lastUsage(group.responses)
   }
+}
+
+/** 本轮交付的界面个数：只数带载荷的工具块，载荷已由投影层校验过。 */
+function countTurnUi(responses: readonly ChatMessageView[]): number {
+  let count = 0
+  for (const response of responses) {
+    for (const block of response.blocks) {
+      if (block.kind === 'toolcall' && block.ui !== null) count += 1
+    }
+  }
+  return count
 }
 
 /** 消息对象未替换，且它引用的每个工具条目仍是同一个对象时，可以直接复用。 */

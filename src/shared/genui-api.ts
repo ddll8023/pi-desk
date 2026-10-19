@@ -20,7 +20,9 @@
  * 参数（文档级 `params` 与 `controls` 节点）只描述「界面上能调什么」：协议里不含派生计算、
  * 不含默认值以外的取值，也不含持久化。取值只活在渲染进程内存里，用户显式提交后才以一条
  * 用户消息回填，因此协议不为参数留任何迁移字段；界面改版后的取值承接由渲染进程按参数 `id`
- * 完成（见 `param-state.ts`），与协议无关。
+ * 完成（见 `param-state.ts`），与协议无关。`group` 与 `visibleWhen` 只影响呈现：前者按声明顺序的
+ * 相邻同名分块，后者按另一个参数的当前取值决定是否渲染控件；两者都不改变参数的取值集合、
+ * 默认值，也不改变提交时输出的键集。
  *
  * 图示节点（`diagram`）同理：协议只给零件、齿数、曲柄与连杆长度这类静态事实，几何、传动比与
  * 运动关系全部由渲染端公式算出；绑定也只允许把某个几何量指到已声明的数值参数上，不引入表达式。
@@ -35,8 +37,13 @@ export const GENUI_MAX_DOCUMENT_CHARS = 256 * 1024
 /** 单份文档的节点总数上限（含嵌套子节点）。 */
 export const GENUI_MAX_NODES = 240
 
-/** 容器嵌套深度上限；根节点的子节点为第 1 层。 */
-export const GENUI_MAX_DEPTH = 4
+/**
+ * 容器嵌套深度上限；根节点的子节点为第 1 层。
+ * 取 5 而不是 4：新增 collapse / tabs 后，「标签页的一页里放分栏，分栏里再并排指标」
+ * 就是 tabs > row > card > row > metric 五层，按 4 层会把常见写法直接拒掉；
+ * 只放宽不收紧，历史文档不受影响。
+ */
+export const GENUI_MAX_DEPTH = 5
 
 /** 表格行数与列数上限。 */
 export const GENUI_MAX_TABLE_ROWS = 100
@@ -67,6 +74,17 @@ export const GENUI_MAX_CELL_CHARS = 200
 /** 行内分栏的列数上限。 */
 export const GENUI_MAX_COLUMNS = 4
 
+/** 折叠容器的分组个数上下限。 */
+export const GENUI_MIN_COLLAPSE_ITEMS = 1
+export const GENUI_MAX_COLLAPSE_ITEMS = 8
+
+/** 标签页的页数上下限；少于两页不构成标签页，直接用 card 即可。 */
+export const GENUI_MIN_TABS = 2
+export const GENUI_MAX_TABS = 6
+
+/** 标签页页签的字符上限；页签是短标签，不承担句子。 */
+export const GENUI_MAX_TAB_LABEL_CHARS = 60
+
 /** 单份文档可声明的参数个数上限。 */
 export const GENUI_MAX_PARAMS = 8
 
@@ -87,6 +105,9 @@ export const GENUI_MAX_PARAM_OPTION_CHARS = 100
 
 /** 参数单位的字符上限。 */
 export const GENUI_MAX_PARAM_UNIT_CHARS = 40
+
+/** 参数分组标题的字符上限；组标题是短标签，不承担句子。 */
+export const GENUI_MAX_PARAM_GROUP_CHARS = 60
 
 /**
  * 单行文本参数的字符上限。
@@ -307,11 +328,68 @@ export interface GenuiRowNode {
   readonly children: readonly GenuiNode[]
 }
 
-/** 参数公共字段：标识、展示标签与可选说明。 */
+/**
+ * 折叠容器的一组内容：组标题 + 是否默认展开 + 子节点。
+ * `open` 只描述初次渲染时的开合；开合是视图状态，不写回文档、不参与参数提交，
+ * 文档改版（新工具结果）后回到声明值，与表格的排序筛选同一口径。
+ */
+export interface GenuiCollapseItem {
+  readonly title: string
+  readonly open?: boolean
+  readonly children: readonly GenuiNode[]
+}
+
+/**
+ * 折叠容器（手风琴）：把次要内容收进可展开的分组，默认全部收起。
+ * 与 tabs 的分工：collapse 是同一主题下可同时展开的细节，tabs 是并列互斥、一次只看一页的内容。
+ * 分组会隐藏内容，因此组内不允许放 controls——那会让参数看不见却仍随提交带出去。
+ */
+export interface GenuiCollapseNode {
+  readonly type: 'collapse'
+  readonly items: readonly GenuiCollapseItem[]
+}
+
+/** 标签页的一页：页签文本 + 子节点。 */
+export interface GenuiTabItem {
+  readonly label: string
+  readonly children: readonly GenuiNode[]
+}
+
+/**
+ * 标签页：并列互斥的内容，一次只显示一页，默认选中第一页。
+ * 选中页是视图状态，不写文档、不参与提交；页签不重复，否则无法用文案定位页。
+ * 与 collapse 一样不允许页内放 controls：未选中的页会把参数藏起来。
+ */
+export interface GenuiTabsNode {
+  readonly type: 'tabs'
+  readonly items: readonly GenuiTabItem[]
+}
+
+/** 参数公共字段：标识、展示标签、可选说明、可选分组与可选显示条件。 */
 interface GenuiParamBase {
   readonly id: string
   readonly label: string
   readonly description?: string
+  /** 分组标题：声明顺序上相邻且组名相同的参数会归到同一个带标题的区块。 */
+  readonly group?: string
+  /** 显示条件：只在另一个参数取到指定值时显示。 */
+  readonly visibleWhen?: GenuiParamCondition
+}
+
+/**
+ * 参数的显示条件：目标参数取到 `equals` 时才显示自己。
+ *
+ * 只支持单值相等，不做表达式、不做数值比较：区间与组合条件会把「受限求值」的风险重新引进来，
+ * 而真实场景（选了 TTL 才显示超时秒数、开了压缩才显示级别）用单值相等就能表达。
+ * 目标只能是 select 或 toggle：这两类的取值集合在解析期就已知，`equals` 才能被校验。
+ * 目标自身不得再声明条件（单层依赖）：环由构造排除，不需要图分析。
+ *
+ * 条件不满足时参数仍会随提交带出去，但会标注「条件未满足，未生效」：
+ * 静默省略会让模型以为自己声明的参数丢了，而保留取值又能让用户切回去时状态还在。
+ */
+export interface GenuiParamCondition {
+  readonly id: string
+  readonly equals: string | boolean
 }
 
 /** 数值参数：滑杆调节，`default` 必须落在区间内。 */
@@ -619,6 +697,8 @@ export type GenuiNode =
   | GenuiTimelineNode
   | GenuiCardNode
   | GenuiRowNode
+  | GenuiCollapseNode
+  | GenuiTabsNode
   | GenuiControlsNode
   | GenuiDiagramNode
   | GenuiChartNode
@@ -725,7 +805,19 @@ function parseParam(value: unknown, path: string, context: ParseContext): GenuiP
   if (description === null) {
     return fail(context, `${path}.description`, `省略，或给 1..${GENUI_MAX_PARAM_DESCRIPTION_CHARS} 字符的字符串`)
   }
-  const base = { id, label, ...(description === undefined ? {} : { description }) }
+  const group = optionalText(value.group, GENUI_MAX_PARAM_GROUP_CHARS)
+  if (group === null) {
+    return fail(context, `${path}.group`, `省略，或给 1..${GENUI_MAX_PARAM_GROUP_CHARS} 字符的字符串`)
+  }
+  const visibleWhen = parseParamCondition(value.visibleWhen, `${path}.visibleWhen`, context)
+  if (visibleWhen === null) return null
+  const base = {
+    id,
+    label,
+    ...(description === undefined ? {} : { description }),
+    ...(group === undefined ? {} : { group }),
+    ...(visibleWhen === undefined ? {} : { visibleWhen })
+  }
 
   switch (value.type) {
     case 'number': {
@@ -819,6 +911,77 @@ function parseParam(value: unknown, path: string, context: ParseContext): GenuiP
   }
 }
 
+/**
+ * 解析参数的显示条件；形状与自引用在这里校验，目标是否存在、目标类型与 `equals` 是否合法
+ * 需要全量参数才能判断，因此交给解析完所有参数后的 `validateParamConditions`。
+ * 自引用必须在这里拒：它是形状错误，与目标参数无关，放进后置校验会把顺序搞得很绕。
+ */
+function parseParamCondition(
+  value: unknown,
+  path: string,
+  context: ParseContext
+): GenuiParamCondition | undefined | null {
+  if (value === undefined) return undefined
+  if (!isRecord(value)) return fail(context, path, '省略，或给 {id, equals} 对象')
+  const id = value.id
+  if (typeof id !== 'string' || !PARAM_ID_PATTERN.test(id)) {
+    return fail(context, `${path}.id`, '必须是小写字母开头、只含小写字母/数字/下划线的参数标识')
+  }
+  const equals = value.equals
+  if (typeof equals !== 'string' && typeof equals !== 'boolean') {
+    return fail(context, `${path}.equals`, '必须是字符串（select 选项 value）或布尔值（toggle）')
+  }
+  return { id, equals }
+}
+
+/**
+ * 参数条件的全量校验：目标必须已声明且是 select / toggle，`equals` 必须落在目标的取值集合里，
+ * 且目标自身不得声明条件（单层依赖）。
+ * 放在参数全部解析完之后：这些判定都需要看到完整的参数表。
+ */
+function validateParamConditions(params: readonly GenuiParam[], context: ParseContext): boolean {
+  const byId = new Map(params.map((param) => [param.id, param]))
+  for (const [index, param] of params.entries()) {
+    const condition = param.visibleWhen
+    if (condition === undefined) continue
+    const path = `params[${index}].visibleWhen`
+    if (condition.id === param.id) {
+      fail(context, `${path}.id`, '不能引用自己：显示条件只能指向另一个参数')
+      return false
+    }
+    const target = byId.get(condition.id)
+    if (target === undefined) {
+      fail(context, `${path}.id`, `参数「${condition.id}」未在 document.params 中声明`)
+      return false
+    }
+    if (target.type !== 'select' && target.type !== 'toggle') {
+      fail(context, `${path}.id`, `只能由 select 或 toggle 参数控制显示，「${condition.id}」是 ${target.type}`)
+      return false
+    }
+    if (target.visibleWhen !== undefined) {
+      fail(
+        context,
+        `${path}.id`,
+        `「${condition.id}」自己也有 visibleWhen，不支持多级依赖；请改成单层，或把条件合并到控制它的那个参数上`
+      )
+      return false
+    }
+    if (target.type === 'select') {
+      const values = target.options.map((option) => option.value)
+      if (typeof condition.equals !== 'string' || !values.includes(condition.equals)) {
+        fail(context, `${path}.equals`, `必须是「${condition.id}」的选项 value：${values.join(' / ')}`)
+        return false
+      }
+      continue
+    }
+    if (typeof condition.equals !== 'boolean') {
+      fail(context, `${path}.equals`, `「${condition.id}」是 toggle，equals 必须是布尔值`)
+      return false
+    }
+  }
+  return true
+}
+
 /** 解析参数数组：数量、id 唯一性在这里收口；空数组按未声明处理，返回 null 让调用方整体拒绝。 */
 function parseParams(value: readonly unknown[], path: string, context: ParseContext): GenuiParam[] | null {
   if (value.length === 0) return fail(context, path, '要么省略 params，要么至少声明一个参数')
@@ -865,6 +1028,14 @@ function parseDiagramBinds(
     }
     if (param.type !== 'number') {
       return fail(context, `${path}.${key}`, `参数「${raw}」不是数值参数，绑定只能指向 number 参数`)
+    }
+    // 条件参数可能被隐藏：控件看不见、图解却被它驱动，用户找不到原因。
+    if (param.visibleWhen !== undefined) {
+      return fail(
+        context,
+        `${path}.${key}`,
+        `参数「${raw}」声明了 visibleWhen，可能被隐藏，不能作为图示绑定；请换一个始终可见的 number 参数`
+      )
     }
     binds[key] = raw
   }
@@ -1240,9 +1411,16 @@ function parseChart(value: Record<string, unknown>, path: string, context: Parse
 
 /**
  * 解析单个节点；`depth` 为当前层（根节点的子节点为 1），`path` 是给诊断用的 JSON 路径。
+ * `inGroup` 表示这个节点位于 collapse / tabs 的分组内：分组会隐藏内容，因此组内不允许 controls。
  * 任何未知字段都被忽略但不视为错误——模型常带多余字段，而字段值本身仍受严格校验。
  */
-function parseNode(value: unknown, path: string, depth: number, context: ParseContext): GenuiNode | null {
+function parseNode(
+  value: unknown,
+  path: string,
+  depth: number,
+  context: ParseContext,
+  inGroup: boolean
+): GenuiNode | null {
   if (!isRecord(value)) return fail(context, path, '必须是节点对象，至少带 type')
   if (depth > GENUI_MAX_DEPTH) return fail(context, path, `容器最多嵌套 ${GENUI_MAX_DEPTH} 层`)
   context.nodes += 1
@@ -1399,7 +1577,8 @@ function parseNode(value: unknown, path: string, depth: number, context: ParseCo
       if (value.children.length === 0) return fail(context, `${path}.children`, '子节点至少一个')
       const title = optionalText(value.title, 200)
       if (title === null) return fail(context, `${path}.title`, '省略，或给 1..200 字符的字符串')
-      const children = parseNodes(value.children, `${path}.children`, depth + 1, context)
+      // 分组标记继续往下传：折叠或标签页里的 card 仍然算「在分组内」。
+      const children = parseNodes(value.children, `${path}.children`, depth + 1, context, inGroup)
       if (children === null) return null
       return { type: 'card', ...(title === undefined ? {} : { title }), children }
     }
@@ -1408,11 +1587,19 @@ function parseNode(value: unknown, path: string, depth: number, context: ParseCo
       if (value.children.length === 0) return fail(context, `${path}.children`, '子节点至少一个')
       const columns = readCount(value.columns, GENUI_MAX_COLUMNS)
       if (columns === null) return fail(context, `${path}.columns`, `省略，或给 1..${GENUI_MAX_COLUMNS} 的整数`)
-      const children = parseNodes(value.children, `${path}.children`, depth + 1, context)
+      const children = parseNodes(value.children, `${path}.children`, depth + 1, context, inGroup)
       if (children === null) return null
       return { type: 'row', ...(columns === undefined ? {} : { columns }), children }
     }
     case 'controls': {
+      // 分组与切页都会隐藏内容：参数藏起来却仍会随提交带出去，等于破坏「声明即可见」这条不变式。
+      if (inGroup) {
+        return fail(
+          context,
+          path,
+          'controls 不能放在 collapse 或 tabs 里（包括它们内部的 card / row）：收起或切页会把参数藏起来，提交时却仍会带上。请把它放到文档顶层，或放在不在 collapse / tabs 内的 card / row 里'
+        )
+      }
       // 没有声明参数时控件组没有可渲染的内容，按无效处理而不是渲染空壳。
       if (context.declaredParams.size === 0) {
         return fail(context, path, '文档没有声明 params 时不能用 controls 节点')
@@ -1439,6 +1626,55 @@ function parseNode(value: unknown, path: string, depth: number, context: ParseCo
       }
       return { type: 'controls', params: ids }
     }
+    case 'collapse': {
+      if (!Array.isArray(value.items)) {
+        return fail(context, `${path}.items`, '必须是分组数组，每项 {title,open?,children}')
+      }
+      if (value.items.length < GENUI_MIN_COLLAPSE_ITEMS || value.items.length > GENUI_MAX_COLLAPSE_ITEMS) {
+        return fail(context, `${path}.items`, `分组个数必须是 ${GENUI_MIN_COLLAPSE_ITEMS}..${GENUI_MAX_COLLAPSE_ITEMS}`)
+      }
+      const items: GenuiCollapseItem[] = []
+      for (const [index, item] of value.items.entries()) {
+        const itemPath = `${path}.items[${index}]`
+        if (!isRecord(item)) return fail(context, itemPath, '必须是 {title,open?,children} 对象')
+        const title = item.title
+        if (!isText(title, 200)) return fail(context, `${itemPath}.title`, '必须是 1..200 字符的非空字符串')
+        if (item.open !== undefined && typeof item.open !== 'boolean') {
+          return fail(context, `${itemPath}.open`, '省略（默认收起），或给布尔值')
+        }
+        if (!Array.isArray(item.children)) return fail(context, `${itemPath}.children`, '必须是节点数组')
+        if (item.children.length === 0) return fail(context, `${itemPath}.children`, '子节点至少一个')
+        const children = parseNodes(item.children, `${itemPath}.children`, depth + 1, context, true)
+        if (children === null) return null
+        items.push({ title, ...(item.open === undefined ? {} : { open: item.open }), children })
+      }
+      return { type: 'collapse', items }
+    }
+    case 'tabs': {
+      if (!Array.isArray(value.items)) return fail(context, `${path}.items`, '必须是页数组，每项 {label,children}')
+      if (value.items.length < GENUI_MIN_TABS || value.items.length > GENUI_MAX_TABS) {
+        return fail(context, `${path}.items`, `页数必须是 ${GENUI_MIN_TABS}..${GENUI_MAX_TABS}`)
+      }
+      const items: GenuiTabItem[] = []
+      const labels = new Set<string>()
+      for (const [index, item] of value.items.entries()) {
+        const itemPath = `${path}.items[${index}]`
+        if (!isRecord(item)) return fail(context, itemPath, '必须是 {label,children} 对象')
+        const label = item.label
+        if (!isText(label, GENUI_MAX_TAB_LABEL_CHARS)) {
+          return fail(context, `${itemPath}.label`, `必须是 1..${GENUI_MAX_TAB_LABEL_CHARS} 字符的非空字符串`)
+        }
+        // 页签重复就无法用文案定位到具体哪一页，模型改数据时也会认错。
+        if (labels.has(label)) return fail(context, `${itemPath}.label`, `页签「${label}」重复`)
+        labels.add(label)
+        if (!Array.isArray(item.children)) return fail(context, `${itemPath}.children`, '必须是节点数组')
+        if (item.children.length === 0) return fail(context, `${itemPath}.children`, '子节点至少一个')
+        const children = parseNodes(item.children, `${itemPath}.children`, depth + 1, context, true)
+        if (children === null) return null
+        items.push({ label, children })
+      }
+      return { type: 'tabs', items }
+    }
     case 'diagram': {
       // 图示是叶子节点：内部不再嵌子节点，因此不占额外嵌套深度。
       return parseDiagram(value, path, context)
@@ -1450,7 +1686,7 @@ function parseNode(value: unknown, path: string, depth: number, context: ParseCo
       return fail(
         context,
         `${path}.type`,
-        '节点 type 只能是 text、list、metric、table、steps、timeline、card、row、controls、diagram 或 chart'
+        '节点 type 只能是 text、list、metric、table、steps、timeline、card、row、collapse、tabs、controls、diagram 或 chart'
       )
   }
 }
@@ -1460,12 +1696,13 @@ function parseNodes(
   value: readonly unknown[],
   path: string,
   depth: number,
-  context: ParseContext
+  context: ParseContext,
+  inGroup = false
 ): GenuiNode[] | null {
   if (value.length === 0) return fail(context, path, '至少一个节点')
   const nodes: GenuiNode[] = []
   for (const [index, item] of value.entries()) {
-    const node = parseNode(item, `${path}[${index}]`, depth, context)
+    const node = parseNode(item, `${path}[${index}]`, depth, context, inGroup)
     if (node === null) return null
     nodes.push(node)
   }
@@ -1513,6 +1750,8 @@ function missingParamIds(nodes: readonly unknown[], declared: ReadonlySet<string
         }
         continue
       }
+      // 不进入 collapse / tabs：组内不允许 controls，进来也找不到引用者，反而会让
+      // 「参数未渲染」的自动修复口径与严格解析不一致。
       if ((node.type === 'card' || node.type === 'row') && Array.isArray(node.children)) walk(node.children)
     }
   }
@@ -1585,9 +1824,50 @@ function repairNode(
       const children = repairNodeList(node.children, `${path}.children`, declared, numbers, record)
       return children.changed ? { ...node, children: children.items } : node
     }
+    case 'collapse':
+      return repairGroupItems(node, path, declared, numbers, record)
+    case 'tabs':
+      return repairGroupItems(node, path, declared, numbers, record)
     default:
       return node
   }
+}
+
+/**
+ * 修一个分组容器的组内子节点：引用类错误照常修，返回同一引用表示没改。
+ * 组内的 controls 不做特殊处理：未声明 params 时由 `repairNode` 的 controls 分支删掉，
+ * 「controls 不能放进分组」这类结构性错误仍交给严格解析拒绝，修复层不替模型绕过它。
+ */
+function repairGroupItems(
+  node: Record<string, unknown>,
+  path: string,
+  declared: ReadonlySet<string>,
+  numbers: ReadonlySet<string>,
+  record: RepairRecorder
+): Record<string, unknown> {
+  if (!Array.isArray(node.items)) return node
+  let changed = false
+  const items: unknown[] = []
+  for (const [index, item] of node.items.entries()) {
+    if (!isRecord(item) || !Array.isArray(item.children)) {
+      items.push(item)
+      continue
+    }
+    const children = repairNodeList(
+      item.children,
+      `${path}.items[${index}].children`,
+      declared,
+      numbers,
+      record
+    )
+    if (!children.changed) {
+      items.push(item)
+      continue
+    }
+    changed = true
+    items.push({ ...item, children: children.items })
+  }
+  return changed ? { ...node, items } : node
 }
 
 /**
@@ -1620,6 +1900,43 @@ function repairNodeList(
 }
 
 /**
+ * 修参数上的显示条件：目标不存在、目标不是 select / toggle、目标自身也带条件、或自引用时，
+ * 去掉这条 `visibleWhen` 并记一条修复。
+ * 与 `binds` 同口径：只修「指向不成立的东西」，不改参数本身的取值与选项。
+ * `equals` 不落在目标取值集合里时不修：那是模型给错了值，猜一个反而会把错藏起来。
+ */
+function repairParamConditions(params: readonly unknown[], record: RepairRecorder): unknown[] | null {
+  const byId = new Map<string, Record<string, unknown>>()
+  for (const param of params) {
+    if (isRecord(param) && typeof param.id === 'string' && param.id !== '') byId.set(param.id, param)
+  }
+  let changed = false
+  const items: unknown[] = []
+  for (const [index, param] of params.entries()) {
+    if (!isRecord(param) || !isRecord(param.visibleWhen)) {
+      items.push(param)
+      continue
+    }
+    const condition = param.visibleWhen
+    const target = typeof condition.id === 'string' ? byId.get(condition.id) : undefined
+    const broken = target === undefined
+      || target === param
+      || (target.type !== 'select' && target.type !== 'toggle')
+      || target.visibleWhen !== undefined
+    if (!broken) {
+      items.push(param)
+      continue
+    }
+    const rest: Record<string, unknown> = { ...param }
+    delete rest.visibleWhen
+    record(`params[${index}].visibleWhen`, '显示条件的目标不成立（不存在、不是 select/toggle、或自身也带条件），已去掉这条条件')
+    changed = true
+    items.push(rest)
+  }
+  return changed ? items : null
+}
+
+/**
  * 浅层修复：只改「引用不存在的东西」与「空数组冗余」这两类错误，不补内容、不改数值、不截断。
  * 返回 null 表示没有可修的，或修复条数超出 `GENUI_MAX_REPAIRS`（视为结构性错误，仍原样拒绝）。
  * 结果不保证能通过校验——调用方必须再跑一遍严格解析，只有通过才采用。
@@ -1641,6 +1958,11 @@ function repairDocumentShallow(value: Record<string, unknown>): ShallowRepairRes
   if (Array.isArray(next.params) && next.params.length === 0) {
     delete next.params
     record('params', '空参数数组按未声明处理，已省略')
+  }
+  if (Array.isArray(next.params)) {
+    const repairedParams = repairParamConditions(next.params, record)
+    // null 表示没有改动，保持原数组引用。
+    if (repairedParams !== null) next.params = repairedParams
   }
   const { declared, numbers } = readDeclaredParams(next.params)
 
@@ -1696,6 +2018,8 @@ export function explainGenuiDocument(value: unknown): GenuiParseResult {
     }
     const parsed = parseParams(value.params, 'params', context)
     if (parsed === null) return { ok: false, issues: context.issues }
+    // 条件的目标与取值集合需要全量参数才能判定，因此放在这里而不是 parseParam 里。
+    if (!validateParamConditions(parsed, context)) return { ok: false, issues: context.issues }
     params = parsed
   }
   const submitLabel = optionalText(value.submitLabel, GENUI_MAX_SUBMIT_LABEL_CHARS)
@@ -1751,6 +2075,24 @@ export function explainGenuiDocumentWithRepairs(value: unknown): GenuiParseResul
 }
 
 /**
+ * 参数在当前取值下是否应当显示。
+ *
+ * 放在 shared 而不是渲染端，是因为渲染（控件）、提交（组装消息）、复制为 Markdown 与扩展层的
+ * 交付检查必须看同一份判断：各写一份必然漂移，而漂移的后果是「界面上看不见的参数被静默当成生效值」。
+ * 无 `visibleWhen` 的参数恒为真；条件目标缺失时也按可见处理——解析期已经保证目标存在，
+ * 走到这里的缺失只可能是历史文档或调用方传了半份取值，此时宁可多显示一个控件。
+ */
+export function isGenuiParamVisible(
+  param: GenuiParam,
+  values: Readonly<Record<string, GenuiParamValue>>
+): boolean {
+  const condition = param.visibleWhen
+  if (condition === undefined) return true
+  const current = values[condition.id]
+  return current !== undefined && current === condition.equals
+}
+
+/**
  * 只关心是否通过的校验入口：投影层与渲染端用它，不携带诊断文本。
  * 与 `explainGenuiDocument` 共用同一份实现，不存在第二套口径。
  */
@@ -1777,4 +2119,35 @@ export function parseGenuiPayload(value: unknown): GenuiPayload | null {
 /** 跨进程校验入口：只判断形状，不复制对象。 */
 export function isGenuiPayload(value: unknown): value is GenuiPayload {
   return parseGenuiPayload(value) !== null
+}
+
+/**
+ * 产生界面载荷的工具名：整份交付与局部补丁。
+ * 两个下游都要判断「这条工具结果是不是交付了一份界面」，因此定在这里只写一份：
+ * 扩展层的版本推导与活动投影的计数必须看同一份名单，否则一边算交付、另一边不算。
+ */
+export const GENUI_RENDER_TOOL_NAMES: ReadonlySet<string> = new Set(['ui_render', 'ui_patch'])
+
+/** 界面载荷的头部信息；不含节点树。 */
+export interface GenuiPayloadHeader {
+  readonly documentId: string
+  readonly revision: number
+  readonly title: string
+}
+
+/**
+ * 从 UI 载荷里只读头部字段：`documentId` / `revision` / `document.title`。
+ *
+ * 不做整份校验——分支越长，这个开销越要压住；需要完整文档时再走 `parseGenuiPayload`。
+ * 形状不符（非对象、缺字段、类型不对）一律返回 null，不猜造。
+ */
+export function readGenuiPayloadHeader(value: unknown): GenuiPayloadHeader | null {
+  if (!isRecord(value)) return null
+  const documentId = value.documentId
+  const revision = value.revision
+  if (typeof documentId !== 'string' || documentId === '') return null
+  if (typeof revision !== 'number' || !Number.isSafeInteger(revision) || revision < 0) return null
+  const document = value.document
+  const title = isRecord(document) ? document.title : undefined
+  return { documentId, revision, title: typeof title === 'string' ? title : '' }
 }

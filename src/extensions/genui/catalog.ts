@@ -15,7 +15,9 @@ import {
   GENUI_MAX_CHART_TITLE_CHARS,
   GENUI_MAX_PIE_SLICES,
   GENUI_MAX_CELL_CHARS,
+  GENUI_MAX_COLLAPSE_ITEMS,
   GENUI_MAX_COLUMNS,
+  GENUI_MAX_DEPTH,
   GENUI_MAX_DIAGRAM_LABEL_CHARS,
   GENUI_MAX_DIAGRAM_NOTE_CHARS,
   GENUI_MAX_EXPLODED_PARTS,
@@ -29,10 +31,13 @@ import {
   GENUI_MAX_PARAM_OPTIONS,
   GENUI_MAX_PARAMS,
   GENUI_MAX_PARAM_LABEL_CHARS,
+  GENUI_MAX_PARAM_GROUP_CHARS,
   GENUI_MAX_PARAM_OPTION_CHARS,
   GENUI_MAX_PARAM_PLACEHOLDER_CHARS,
   GENUI_MAX_PARAM_TEXT_CHARS,
   GENUI_MAX_STEPS,
+  GENUI_MAX_TABS,
+  GENUI_MAX_TAB_LABEL_CHARS,
   GENUI_MAX_TIMELINE_ITEMS,
   GENUI_MAX_TIMELINE_TIME_CHARS,
   GENUI_MAX_SUBMIT_LABEL_CHARS,
@@ -40,6 +45,7 @@ import {
   GENUI_MAX_TABLE_ROWS,
   GENUI_MAX_TEXT_CHARS,
   GENUI_MIN_CHART_POINTS,
+  GENUI_MIN_COLLAPSE_ITEMS,
   GENUI_MIN_EXPLODED_PARTS,
   GENUI_MIN_VECTORS,
   GENUI_MIN_CIRCUIT_PARTS,
@@ -47,6 +53,7 @@ import {
   GENUI_MIN_GEARS,
   GENUI_MIN_GEAR_TEETH,
   GENUI_MIN_PARAM_OPTIONS,
+  GENUI_MIN_TABS,
   GENUI_PARAM_ID_PATTERN_SOURCE,
   GENUI_SUBMIT_PREFIX,
   GENUI_VERSION
@@ -67,13 +74,15 @@ const OVERVIEW = `生成式 UI 用一份声明式文档描述界面，由桌面�
 - title：界面标题，不超过 200 字符。
 - fallback：界面无法渲染时的替代文本，必填。它同时是纯文本客户端与导出场景唯一可见的内容，
   必须能独立读懂，不能写"见上图"之类依赖视觉的措辞。
-- nodes：至少一个节点，总数不超过 ${GENUI_MAX_NODES}（含嵌套），容器最多嵌套 4 层。
+- nodes：至少一个节点，总数不超过 ${GENUI_MAX_NODES}（含嵌套），容器最多嵌套 ${GENUI_MAX_DEPTH} 层。
 - params / submitLabel：可选，声明界面内可调参数与提交按钮文案，字段见 ui_catalog({topic:"params"})。
 - diagram：可选节点，${DIAGRAM_PURPOSE}，字段见 ui_catalog({topic:"diagram"})。
 - chart：可选节点，${CHART_PURPOSE}，字段见 ui_catalog({topic:"chart"})。
 只有两个渲染入口：ui_render 交付整份文档，ui_patch 按 documentId 只发改动部分。同一次回答可以多次调用，生成不同主题的独立界面。
 先判断是否真的需要界面：纯叙述、简短结论与路径清单用正文，不用 card 把整篇回答重新包装。
 方案对比用 row 并排，指标用 metric，真实先后顺序用 steps，带具体时间点的过程用 timeline；有参数时才提供 controls。
+参数多时用 group 分块、用 visibleWhen 做条件显示；界面底部自带重置按钮，无需声明。
+次要内容收纳用 collapse（可同时展开），并列互斥的内容用 tabs（一次看一页）；两者的开合与选中页是视图状态，不写进文档。
 card 只表达主题分组，不用多层嵌套来制造层级；解释和结论写在相关数据旁边。
 参数变化不会请求模型；只有用户点提交时，才会发一条以 ${GENUI_SUBMIT_PREFIX} 开头的用户消息回填当前取值。
 要修改已交付的界面，见 ui_catalog({topic:"update"})。`
@@ -94,8 +103,15 @@ timeline {type:"timeline", items:[{time, title, description?}]}   1..${GENUI_MAX
         不要把时间点写成“进行中/已完成”的任务进度。
 card    {type:"card", title?, children:[...]}            子节点至少一个
 row     {type:"row", columns?, children:[...]}           columns 1..${GENUI_MAX_COLUMNS}，作为期望列数上限；窄容器自动减列，省略时自适应；子节点至少一个
+collapse {type:"collapse", items:[{title, open?, children:[...]}]}
+        ${GENUI_MIN_COLLAPSE_ITEMS}..${GENUI_MAX_COLLAPSE_ITEMS} 组，默认全部收起，open:true 才默认展开；title 不超过 200 字符
+        （手风琴：同一主题下的次要细节，可同时展开多组）
+tabs    {type:"tabs", items:[{label, children:[...]}]}
+        ${GENUI_MIN_TABS}..${GENUI_MAX_TABS} 页，默认选中第一页；label 不超过 ${GENUI_MAX_TAB_LABEL_CHARS} 字符且不重复
+        （并列互斥的内容，一次只看一页）
 controls {type:"controls", params?:[string]}             参数控件组，params 省略时渲染全部已声明参数；
-        只能引用文档 params 里已声明的 id，且每个声明的参数都必须被某个 controls 引用
+        只能引用文档 params 里已声明的 id，且每个声明的参数都必须被某个 controls 引用；
+        不能放在 collapse 或 tabs 里——收起或切页会把参数藏起来，提交却仍会带上
 diagram {type:"diagram", kind, ...}                       机制图解，${GENUI_DIAGRAM_KINDS.length} 种 kind（${GENUI_DIAGRAM_KINDS.join(' / ')}），字段见 ui_catalog({topic:"diagram"})
 chart   {type:"chart", kind, labels:[string], series:[{name?,values}], ...}   ${CHART_PURPOSE}（${GENUI_CHART_KINDS.join(' / ')}），字段见 ui_catalog({topic:"chart"})
 
@@ -104,6 +120,9 @@ chart   {type:"chart", kind, labels:[string], series:[{name?,values}], ...}   ${
 - card 的标题就是分区标题，内部直接放数据或说明；不要再套一张只装相同内容的 card。
 - table 只放同类记录，列内内容尽量简短。长解释用 text，不把整段报告压进表格。
 - 长表默认显示前 6 行并提供展开全部；仍须传入完整 rows，不要把显示折叠误当成数据截断。
+- 次要内容收纳用 collapse，并列互斥的内容用 tabs；开合与选中页是视图状态，不写文档、不参与参数提交。
+- collapse / tabs 比 card 多一层路径：0.1 是第 2 组，0.1.0 是组内第一个节点（ui_inspect 大纲会把组这一层打出来）。
+- 不要在 collapse / tabs 里放 controls：收起或切页会让参数看不见却仍被提交。
 - 表格的排序与筛选是用户侧的视图操作，不影响文档本身；需要固定顺序时按期望顺序传 rows，不要指望默认排序。
 - 重要结论、警告和限制单独放 text，使用正确 tone；不要把唯一的重要提示放在长表尾部。
 
@@ -118,16 +137,29 @@ const PARAMS = `参数只在用户点提交时才回填，参数变化不会请�
 把它们渲染出来，否则整份文档被拒绝——不允许界面上看不见、提交却带出去的参数。
 
 参数个数 1..${GENUI_MAX_PARAMS}，id 唯一，形如 /${GENUI_PARAM_ID_PATTERN_SOURCE}/；label 不超过 ${GENUI_MAX_PARAM_LABEL_CHARS} 字符，
-description 可选。四类参数：
-number  {type:"number", id, label, description?, min, max, step?, default, unit?}
+description 可选。四类参数都可用 group 与 visibleWhen（见下）：
+number  {type:"number", id, label, description?, group?, visibleWhen?, min, max, step?, default, unit?}
         min < max，default 必须落在 [min, max]；step 省略时由渲染端决定，写了必须大于 0。
-select  {type:"select", id, label, description?, options:[{value,label}], default}
+select  {type:"select", id, label, description?, group?, visibleWhen?, options:[{value,label}], default}
         选项 ${GENUI_MIN_PARAM_OPTIONS}..${GENUI_MAX_PARAM_OPTIONS} 个，value 不重复，default 必须是某个选项的 value。
         value 与 label 都限 ${GENUI_MAX_PARAM_OPTION_CHARS} 字符；value 是提交时回填的原始值，label 是界面文案。
-toggle  {type:"toggle", id, label, description?, default}      default 必须是布尔值
-text    {type:"text", id, label, description?, default?, placeholder?}
+toggle  {type:"toggle", id, label, description?, group?, visibleWhen?, default}      default 必须是布尔值
+text    {type:"text", id, label, description?, group?, visibleWhen?, default?, placeholder?}
         单行自由输入（项目名、备注），上限 ${GENUI_MAX_PARAM_TEXT_CHARS} 字符，placeholder 限 ${GENUI_MAX_PARAM_PLACEHOLDER_CHARS} 字符。
         default 省略即空串，交给用户填；用户留空时提交内容会写成「（未填写）」，不会自动拦下提交。
+
+group：可选，不超过 ${GENUI_MAX_PARAM_GROUP_CHARS} 字符的分组标题。只有声明顺序上相邻且组名相同的参数会归到同一个带标题的区块；
+同一个组名出现在不相邻的位置会被拆成两块，所以要把同组参数排在一起。不用分组的参数直接跟在后面。
+
+visibleWhen：可选，参数的条件显示 {id, equals}。只在参数 id 取到 equals 时才显示这个控件。
+- 目标只能是 select 或 toggle（取值集合在解析期就已知，equals 才能被校验），不能用 number 或 text。
+- equals 必须是目标 select 的某个选项 value，或布尔值（目标是 toggle）。
+- 目标参数自己不能再声明 visibleWhen（不支持多级依赖）；自引用也会被拒。
+- 不能是图示 binds 的绑定目标（被隐藏的控件不该驱动图解）。
+- 条件不满足时参数仍会随提交带出去，但会标注「条件未满足，未生效」；不要靠隐藏来表达「这个参数不用管了」。
+典型用法：选了「过期时间」才显示超时秒数；开了压缩才显示压缩级别。
+
+重置按钮：界面上自动有一个「重置为默认值」按钮，不需要在文档里声明任何字段。
 
 submitLabel 可选，不超过 ${GENUI_MAX_SUBMIT_LABEL_CHARS} 字符，用于提交按钮；省略时按钮叫「提交参数」。
 
@@ -235,9 +267,11 @@ ui_patch 的形状：
 {documentId, ops?:[{op, path?, index?, node?}], title?, fallback?, submitLabel?, params?}
 - path 就是 ui_inspect 大纲里的节点位置："0"、"0.1"；省略或 "" 表示文档顶层的 nodes。
 - op=replace：用 node 整节点替换 path 指向的节点。
-- op=insert：把 node 插到 path 指向的容器（card / row 的子节点，或顶层 nodes）的 index 处；
+- op=insert：把 node 插到 path 指向的容器（顶层 nodes、card / row 的子节点、collapse / tabs 的某一组）的 index 处；
   index 省略则追加到末尾。
 - op=remove：删掉 path 指向的节点（不能删到剩零个节点）。
+- 分组容器多一层：collapse / tabs 里 "0.1" 指第 2 组本身，"0.1.0" 指组内第一个节点。
+  insert 可以指向组；replace / remove 只能指向节点——要增删整组请 replace 整个 collapse / tabs 节点。
 - title / fallback / submitLabel 省略即不变；params 给数组则整体替换，给 null 则清空全部参数。
 - 粒度是节点：改表格里的一行也要 replace 整个 table 节点；没有行级、项级补丁。
 - 合并后仍过整份校验：改 params 时要同步改 controls，删参数时一起删掉引用它的 controls。
@@ -348,7 +382,47 @@ const EXAMPLES = `示例一：方案对比（两个配置并排，不把说明�
     {"time":"09:25","title":"完成回滚","description":"全部实例回到上一版。"},
     {"time":"09:40","title":"指标恢复","description":"错误率回到 0.2%。"}
   ]}
- ]}`
+ ]}
+
+示例十：标签页 + 折叠（并列互斥的内容放 tabs，次要清单收进 collapse；两者都不放 controls）
+{"version":${GENUI_VERSION},"title":"一次发布的三个阶段","fallback":"准备阶段确认变更范围与回滚点；发布阶段先灰度 5% 再放全量；收尾阶段核对错误率与耗时是否回到基线。","nodes":[
+  {"type":"tabs","items":[
+    {"label":"准备","children":[
+      {"type":"list","items":["确认本次变更的文件范围","记录当前错误率与 p95 作为基线","写好回滚命令"]}
+    ]},
+    {"label":"发布","children":[
+      {"type":"steps","items":[
+        {"title":"灰度 5%","description":"观察 10 分钟错误率与耗时。"},
+        {"title":"放量到 100%","description":"灰度无异常后一次放完。"}
+      ]}
+    ]},
+    {"label":"收尾","children":[
+      {"type":"collapse","items":[
+        {"title":"核对清单","open":true,"children":[
+          {"type":"list","items":["错误率回到基线","p95 无明显上升","监控告警已复位"]}
+        ]},
+        {"title":"回滚命令（备用）","children":[
+          {"type":"text","text":"回滚只在上一步不通过时使用；执行后重新核对基线。"}
+        ]}
+      ]}
+    ]}
+  ]}
+ ]}
+
+示例十一：参数分组 + 条件显示（选「过期时间」才出现超时秒数；开了压缩才出现级别；界面自带重置按钮）
+{"version":${GENUI_VERSION},"title":"缓存参数","fallback":"缓存容量 256 MB，淘汰策略为 LRU，开启压缩、级别 6；选「过期时间」时额外给超时秒数。",
+ "params":[
+  {"id":"capacity","type":"number","label":"缓存容量","group":"基本","min":64,"max":2048,"step":64,"default":256,"unit":"MB"},
+  {"id":"strategy","type":"select","label":"淘汰策略","group":"基本","default":"lru","options":[
+    {"value":"lru","label":"LRU"},{"value":"lfu","label":"LFU"},{"value":"ttl","label":"过期时间"}]},
+  {"id":"ttlSeconds","type":"number","label":"超时秒数","group":"基本","visibleWhen":{"id":"strategy","equals":"ttl"},
+   "min":30,"max":3600,"step":30,"default":300,"unit":"s"},
+  {"id":"compression","type":"toggle","label":"启用压缩","group":"压缩","default":true},
+  {"id":"level","type":"number","label":"压缩级别","group":"压缩","visibleWhen":{"id":"compression","equals":true},
+   "min":1,"max":9,"step":1,"default":6}
+ ],
+ "submitLabel":"按这组参数继续",
+ "nodes":[{"type":"controls"}]}`
 
 const TOPICS: Readonly<Record<GenuiCatalogTopic, string>> = {
   overview: OVERVIEW,

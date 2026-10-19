@@ -8,7 +8,8 @@
  * 状态按会话持有（由扩展工厂的闭包提供），不落盘、不进 details。
  */
 import { GENUI_MAX_ISSUES } from '../../shared/genui-api'
-import type { GenuiDocument, GenuiIssue, GenuiNode } from '../../shared/genui-api'
+import { isGenuiParamVisible } from '../../shared/genui-api'
+import type { GenuiDocument, GenuiIssue, GenuiNode, GenuiParamValue } from '../../shared/genui-api'
 
 /** 完整排查指引只在前面这几次失败里附带；之后模型已经看过，再附只会挤占上下文。 */
 const VERBOSE_FAILURES = 2
@@ -80,10 +81,11 @@ export function formatValidationError(
   return lines.join('\n')
 }
 
-/** 统计一份文档里的节点：是否只有文本、空表格个数。 */
+/** 统计一份文档里的节点：是否只有文本、空表格个数、是否首屏只剩一个收起的折叠容器。 */
 interface DocumentShape {
   readonly textOnly: boolean
   readonly emptyTables: number
+  readonly loneCollapsedGroup: boolean
 }
 
 function measureDocument(document: GenuiDocument): DocumentShape {
@@ -94,14 +96,55 @@ function measureDocument(document: GenuiDocument): DocumentShape {
       if (node.type !== 'text') textOnly = false
       if (node.type === 'table' && node.rows.length === 0) emptyTables += 1
       if (node.type === 'card' || node.type === 'row') walk(node.children)
+      // 分组容器里的内容也会渲染，统计时一并进去，否则组内的表格与文本会被当成不存在。
+      // 两个分支分开写而不是并成一个条件：items 的元素类型不同，联合数组无法直接迭代。
+      if (node.type === 'collapse') {
+        for (const item of node.items) walk(item.children)
+      } else if (node.type === 'tabs') {
+        for (const item of node.items) walk(item.children)
+      }
     }
   }
   walk(document.nodes)
-  return { textOnly, emptyTables }
+  // 整份文档只有一个折叠容器且全部收起时，首屏只剩组标题，读者看不到任何结论。
+  const first = document.nodes[0]
+  const loneCollapsedGroup = document.nodes.length === 1
+    && first !== undefined
+    && first.type === 'collapse'
+    && first.items.every((item) => item.open !== true)
+  return { textOnly, emptyTables, loneCollapsedGroup }
 }
 
 /** `fallback` 过短时说明它没写清结论；这是交付质量提示，不是校验失败。 */
 const MIN_FALLBACK_CHARS = 12
+
+/**
+ * 参数分组的两类问题：默认取值下全部参数都被条件藏起来，同一组名出现在不相邻的段。
+ * 前者会让控件区只剩一行说明，后者会让同名组裂成多块。两者都是排版问题，不是校验失败。
+ */
+function collectParamWarnings(document: GenuiDocument): readonly string[] {
+  const params = document.params ?? []
+  if (params.length === 0) return []
+  const defaults: Record<string, GenuiParamValue> = {}
+  for (const param of params) defaults[param.id] = param.default
+  const warnings: string[] = []
+  if (params.every((param) => !isGenuiParamVisible(param, defaults))) {
+    warnings.push('默认取值下所有参数都被 visibleWhen 隐藏，界面只剩一行说明；请调整条件目标的默认值，或去掉其中一个参数的条件。')
+  }
+  // 相邻同名已合并渲染；同名却不相邻会被拆成多块，只能靠模型调整声明顺序。
+  const lastSeen = new Map<string, number>()
+  for (const [index, param] of params.entries()) {
+    const group = param.group
+    if (group === undefined) continue
+    const previous = lastSeen.get(group)
+    if (previous !== undefined && previous !== index - 1) {
+      warnings.push(`参数分组「${group}」出现在不相邻的位置（params[${previous}] 与 params[${index}]），会被拆成两块；请把同组参数排到一起。`)
+      break
+    }
+    lastSeen.set(group, index)
+  }
+  return warnings
+}
 
 /**
  * 非阻断的交付检查：只返回给模型看的提示，不改变工具结果的成功状态，也不进 details。
@@ -116,11 +159,15 @@ export function collectDeliveryWarnings(document: GenuiDocument): readonly strin
   if (shape.emptyTables > 0) {
     warnings.push(`有 ${shape.emptyTables} 个表格没有任何数据行，界面会显示空表头。`)
   }
+  if (shape.loneCollapsedGroup) {
+    warnings.push('整份界面只有一个默认收起的折叠容器，首屏只剩组标题；请加一个 open:true 或把结论放到容器外。')
+  }
   if (document.fallback.trim().length < MIN_FALLBACK_CHARS) {
     warnings.push('fallback 过短，纯文本客户端只能看到它；请写成能独立读懂的结论。')
   }
   if (document.fallback.trim() === document.title.trim()) {
     warnings.push('fallback 与 title 相同，没有提供替代内容。')
   }
+  warnings.push(...collectParamWarnings(document))
   return warnings
 }

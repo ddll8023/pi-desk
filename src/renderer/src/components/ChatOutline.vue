@@ -1,4 +1,5 @@
-<!-- 对话大纲：悬停或键盘聚焦时刻度形成弹性波峰，摘要浮层平滑定位并交叉淡化；保留紧凑布局与减少动效支持，只发出跳转意图，不控制正文滚动。 -->
+<!-- 对话大纲：悬停或键盘聚焦时刻度形成弹性波峰，摘要浮层平滑定位并交叉淡化；保留紧凑布局与减少动效支持，只发出跳转意图，不控制正文滚动。
+     本轮交付过生成式界面时，刻度右上方点一枚强调色小圆点，预览里多一行个数；圆点不参与刻度的波峰缩放。 -->
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { AnimatePresence, Motion, MotionConfig, useReducedMotion, useSpring } from 'motion-v'
@@ -8,6 +9,8 @@ import AppButton from './ui/AppButton.vue'
 interface OutlineEntry {
   readonly id: string
   readonly label: string
+  /** 本轮交付的界面个数；大于 0 时在刻度旁标一枚强调色圆点。 */
+  readonly uiCount: number
 }
 
 const props = defineProps<{
@@ -216,10 +219,11 @@ onBeforeUnmount(() => {
             :class="{
               'is-active': entry.id === activeId,
               'is-previewing': entry.id === previewId,
-              'is-near-preview': entry.nearPreview
+              'is-near-preview': entry.nearPreview,
+              'has-ui': entry.uiCount > 0
             }"
             :data-outline-id="entry.id"
-            :aria-label="`第 ${index + 1} 条用户输入：${entry.label}`"
+            :aria-label="`第 ${index + 1} 条用户输入：${entry.label}${entry.uiCount > 0 ? `，含 ${entry.uiCount} 个界面` : ''}`"
             :aria-current="entry.id === activeId ? 'location' : undefined"
             @mouseenter="showEntry(entry.id)"
             @mouseleave="scheduleHide"
@@ -268,7 +272,7 @@ onBeforeUnmount(() => {
                 variant="unstyled"
                 class="chat-outline-preview-button"
                 :tabindex="-1"
-                :aria-label="`跳转到用户输入：${displayedEntry.label}`"
+                :aria-label="`跳转到用户输入：${displayedEntry.label}${displayedEntry.uiCount > 0 ? `，含 ${displayedEntry.uiCount} 个生成式界面` : ''}`"
                 @click="displayedEntry && emit('navigate', displayedEntry.id)"
               >
                 <AnimatePresence
@@ -290,6 +294,11 @@ onBeforeUnmount(() => {
                     {{ displayedEntry.label }}
                   </Motion>
                 </AnimatePresence>
+                <!-- 本轮交付了界面时补一行：刻度上的圆点只能说明“有”，个数与含义靠这行说清；
+                     读屏已由按钮的 aria-label 完整转达，因此这行不重复进无障碍树。 -->
+                <span v-if="displayedEntry.uiCount > 0" class="chat-outline-preview-meta" aria-hidden="true">
+                  含 {{ displayedEntry.uiCount }} 个生成式界面
+                </span>
               </AppButton>
             </Motion>
           </AnimatePresence>

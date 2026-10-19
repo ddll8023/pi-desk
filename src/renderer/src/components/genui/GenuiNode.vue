@@ -1,14 +1,17 @@
 <!-- 生成式界面的节点渲染器：按类型提供不同的信息层级，分栏随容器宽度收敛。
      表格（含长表折叠、排序、筛选）整体交给 GenuiTable，这里只做分派，不再内联表格状态。
      容器递归复用本组件，图形与参数仍交给各自组件，不推断内容的业务状态。
-     steps 表达先后顺序（序号），timeline 表达具体时刻（时间列），两者不互相代替。 -->
+     steps 表达先后顺序（序号），timeline 表达具体时刻（时间列），两者不互相代替。
+     collapse 与 tabs 都是分组容器，交给各自组件处理视图状态（开合、选中页），这里只做分派。 -->
 <script setup lang="ts">
 // 类型名加别名，避免与模板里的递归组件同名。
 import type { GenuiNode as GenuiNodeModel, GenuiTone } from '../../../../shared/genui-api'
 import GenuiChart from './GenuiChart.vue'
+import GenuiCollapse from './GenuiCollapse.vue'
 import GenuiControls from './GenuiControls.vue'
 import GenuiDiagram from './GenuiDiagram.vue'
 import GenuiTable from './GenuiTable.vue'
+import GenuiTabs from './GenuiTabs.vue'
 
 defineProps<{
   readonly node: GenuiNodeModel
@@ -93,6 +96,9 @@ function rowStyle(columns: number | undefined): Record<string, string> {
   <div v-else-if="node.type === 'row'" class="genui-row" :style="rowStyle(node.columns)">
     <GenuiNode v-for="(child, index) in node.children" :key="index" :node="child" />
   </div>
+
+  <GenuiCollapse v-else-if="node.type === 'collapse'" :node="node" />
+  <GenuiTabs v-else-if="node.type === 'tabs'" :node="node" />
 
   <GenuiControls v-else-if="node.type === 'controls'" :node="node" />
   <GenuiDiagram v-else-if="node.type === 'diagram'" :node="node" />

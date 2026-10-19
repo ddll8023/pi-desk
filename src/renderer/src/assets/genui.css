@@ -159,11 +159,35 @@
 .genui-timeline-title { font-size: 13px; font-weight: 600; }
 .genui-document .genui-timeline-description { margin-top: 4px; color: var(--color-desk-muted); font-size: 12px; }
 
+/* 折叠容器：原生 details / summary，标题行整行可点；展开只换箭头方向，不加高度动画。 */
+.genui-collapse { display: flex; min-width: 0; flex-direction: column; gap: 8px; }
+.genui-collapse-item { min-width: 0; border: 1px solid var(--color-desk-line); border-radius: var(--radius-desk-md); background: var(--color-desk-surface); }
+.genui-collapse-summary { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 12px; border-radius: var(--radius-desk-md); padding: 12px 16px; cursor: pointer; list-style: none; }
+/* Safari 与 Chrome 都会画默认的三角标记，隐藏后由右侧箭头统一表达开合。 */
+.genui-collapse-summary::-webkit-details-marker { display: none; }
+.genui-collapse-summary:hover { background: var(--color-desk-surface-subtle); }
+.genui-collapse-title { min-width: 0; font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
+.genui-collapse-icon { width: 16px; height: 16px; flex: none; color: var(--color-desk-muted); transition: transform var(--default-transition-duration) ease; }
+.genui-collapse-item[open] > .genui-collapse-summary .genui-collapse-icon { transform: rotate(180deg); }
+.genui-collapse-body { border-top: 1px solid var(--color-desk-line); padding: 16px; }
+
+/* 标签页：页签行用下边框标选中态，不叠背景块；选中页之外的面板用 v-show 隐藏。 */
+.genui-tabs { min-width: 0; }
+.genui-tabs-list { display: flex; min-width: 0; flex-wrap: wrap; gap: 4px; border-bottom: 1px solid var(--color-desk-line); }
+.genui-tabs-tab { margin-bottom: -1px; border: 0; border-bottom: 2px solid transparent; border-radius: var(--radius-desk-sm) var(--radius-desk-sm) 0 0; background: transparent; padding: 8px 12px; color: var(--color-desk-muted); font: inherit; font-size: 13px; cursor: pointer; overflow-wrap: anywhere; }
+.genui-tabs-tab:hover { color: var(--color-desk-ink); }
+.genui-tabs-tab.is-active { border-bottom-color: var(--color-desk-accent); color: var(--color-desk-ink); font-weight: 600; }
+.genui-tabs-panel { padding-top: 16px; }
+
 .genui-controls { display: flex; min-width: 0; flex-direction: column; gap: 16px; border-top: 1px solid var(--color-desk-line); padding-top: 16px; }
 .genui-controls-grid { display: grid; min-width: 0; grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr)); gap: 20px 24px; }
 .genui-controls-heading { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px; }
 .genui-controls-heading h4 { font-size: 15px; font-weight: 650; }
 .genui-controls-heading > span { color: var(--color-desk-muted); font-size: 11px; }
+/* 分组标题：比控件标签弱一级，只负责分区，不抢参数本身的注意力。 */
+.genui-controls-group-title { color: var(--color-desk-muted); font-size: 11px; font-weight: 600; letter-spacing: 0.02em; }
+/* 条件把全部参数藏起来时的一行说明：占位而不是留白，避免看着像控件丢了。 */
+.genui-controls-empty { border: 1px dashed var(--color-desk-line); border-radius: var(--radius-desk-md); padding: 12px 16px; color: var(--color-desk-muted); font-size: 12px; line-height: 1.65; }
 .genui-control { display: flex; min-width: 0; flex-direction: column; gap: 8px; }
 .genui-control-heading { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 12px; }
 .genui-control-label { min-width: 0; font-size: 13px; font-weight: 550; overflow-wrap: anywhere; }
@@ -233,6 +257,12 @@
 .genui-document-footer { display: flex; flex-direction: column; gap: 8px; margin-top: 20px; border-top: 1px solid var(--color-desk-line); padding-top: 16px; }
 .genui-submit-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .genui-submit-note { min-width: 0; flex: 1; color: var(--color-desk-muted); font-size: 11px; line-height: 1.65; }
+/* 重置与提交并排：重置是次要动作，用无底色的文字按钮，不与主按钮争强调。 */
+.genui-submit-actions { display: flex; flex: none; align-items: center; gap: 12px; }
+.genui-reset { min-height: 36px; border-radius: var(--radius-desk-sm); padding: 6px 10px; color: var(--color-desk-muted); font-size: 12px; cursor: pointer; white-space: nowrap; }
+.genui-reset:hover { background: var(--color-desk-surface-subtle); color: var(--color-desk-ink); }
+.genui-reset:disabled { opacity: 0.55; cursor: not-allowed; }
+.genui-reset:disabled:hover { background: transparent; color: var(--color-desk-muted); }
 .genui-submit { display: inline-flex; min-height: 36px; flex: none; align-items: center; justify-content: center; gap: 8px; white-space: normal; overflow-wrap: anywhere; }
 .genui-submit svg { width: 16px; height: 16px; flex: none; }
 .genui-feedback { font-size: 12px; overflow-wrap: anywhere; }
@@ -264,9 +294,13 @@
 .genui-table-expand:focus-visible,
 .genui-table-sort:focus-visible,
 .genui-table-clear:focus-visible,
+.genui-collapse-summary:focus-visible,
+.genui-tabs-tab:focus-visible,
+.genui-tabs-panel:focus-visible,
 .genui-history-main:focus-visible,
 .genui-history-toggle:focus-visible,
 .genui-document-copy:focus-visible,
+.genui-reset:focus-visible,
 .genui-range:focus-visible,
 .genui-checkbox:focus-visible { outline: 2px solid var(--color-desk-accent); outline-offset: 3px; }
 
@@ -278,11 +312,12 @@
   .genui-document-mode { margin-left: auto; }
   .genui-document-actions { margin-left: auto; }
   .genui-submit-row { flex-direction: column; align-items: stretch; }
+  .genui-submit-actions { justify-content: flex-end; flex-wrap: wrap; }
   .genui-submit { align-self: flex-end; max-width: 100%; }
   .genui-control-heading { flex-wrap: wrap; gap: 8px; }
   .genui-document .genui-document-title { font-size: 16px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .genui-table-expand, .genui-submit { transition: none; }
+  .genui-table-expand, .genui-submit, .genui-collapse-icon { transition: none; }
 }

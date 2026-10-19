@@ -3,7 +3,8 @@
      同一份界面只有最高版本可交互：被取代的版本由父级折叠传入，本组件把控件与提交都置为只读。
      复制为 Markdown 不写任何状态，因此只读版本也给这个入口：它输出的是文档与当前取值。
      参数取值存在本机（param-persistence.ts），重启后仍在：界面底部说明这一点，
-     并在保存失败时提示一次；只有用户点击提交才会调用 sendPrompt，参数变化本身不发请求。 -->
+     并在保存失败时提示一次；只有用户点击提交才会调用 sendPrompt，参数变化与重置为默认值
+     都只改本地取值、不发请求。 -->
 <script setup lang="ts">
 import { computed, onUnmounted, ref, useId, watch } from 'vue'
 import '../../assets/genui.css'
@@ -42,11 +43,33 @@ const { phase, error, submit, reset } = useParamSubmit()
 const submitting = computed(() => phase.value === 'submitting')
 const submitBlocked = computed(() => superseded.value !== null || props.submitDisabled === true || submitting.value)
 const submitText = computed(() => (submitting.value ? '提交中…' : doc.value.submitLabel ?? '提交参数'))
+
+/**
+ * 是否已全部等于声明默认值；相等则重置按钮禁用，否则用户点了没反应会以为坏了。
+ * 数值用容差比较：滑杆收敛后可能存在浮点尾差，严格相等会把「看起来已经是默认值」误判为可重置。
+ */
+const atDefaults = computed(() => params.value.every((param) => {
+  const current = context.values[param.id]
+  if (typeof param.default === 'number') {
+    return typeof current === 'number' && Math.abs(current - param.default) < 1e-9
+  }
+  return current === param.default
+}))
+
 const submitTitle = computed(() => {
   if (superseded.value !== null) return `已被第 ${superseded.value} 版取代，请在新版界面提交参数。`
   if (props.submitDisabled === true) return props.submitDisabledReason ?? '当前不能提交参数。'
   return submitting.value ? '正在提交参数…' : '把当前参数作为一条消息发给 Agent'
 })
+
+/** 重置全部参数；与调参同口径——不提交、不发消息，只改本地状态。只读或已是默认值时禁用。 */
+const resetBlocked = computed(() => superseded.value !== null || atDefaults.value)
+
+function onReset(): void {
+  if (resetBlocked.value) return
+  context.resetToDefaults()
+}
+
 /** 参数因条目淘汰或旧取值超期被重置过；提示一次，不让用户以为自己的调节丢了。 */
 const expired = computed(() => context.expired)
 /** 本机保存失败过：参数仍可用，但重启后会回到上一次成功保存的值，需要说明。 */
@@ -135,17 +158,25 @@ async function copyMarkdown(): Promise<void> {
       <div class="genui-submit-row">
         <p class="genui-submit-note">
           <template v-if="superseded !== null">这一版已被第 {{ superseded }} 版取代，只能查看，不能调参或提交。</template>
-          <template v-else>调整不会自动发送。参数保存在本机，重启后仍在。</template>
+          <template v-else>调整与重置都不会自动发送。参数保存在本机，重启后仍在。</template>
         </p>
-        <AppButton
-          variant="primary" class="genui-submit"
-          :disabled="submitBlocked"
-          :title="submitTitle"
-          @click="onSubmit"
-        >
-          {{ submitText }}
-          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M3 8h10m-4-4 4 4-4 4" /></svg>
-        </AppButton>
+        <div class="genui-submit-actions">
+          <AppButton
+            variant="unstyled" class="genui-reset"
+            :disabled="resetBlocked"
+            :title="superseded !== null ? '这一版已被取代，不能重置参数。' : atDefaults ? '已经是默认值。' : '把所有参数恢复为文档声明的默认值'
+            @click="onReset"
+          >重置为默认值</AppButton>
+          <AppButton
+            variant="primary" class="genui-submit"
+            :disabled="submitBlocked"
+            :title="submitTitle"
+            @click="onSubmit"
+          >
+            {{ submitText }}
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M3 8h10m-4-4 4 4-4 4" /></svg>
+          </AppButton>
+        </div>
       </div>
       <p v-if="expired" class="genui-feedback genui-tone-warning" role="status">参数已过期，已回到默认值。</p>
       <p v-if="persistFailed" class="genui-feedback genui-tone-warning" role="status">

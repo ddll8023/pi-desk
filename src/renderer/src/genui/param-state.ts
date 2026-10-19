@@ -245,6 +245,16 @@ export interface GenuiParamContext {
   readonly expired: boolean
   /** 写入一个参数：越界数值夹到区间，声明了 step 时按步长对齐；类型不符或非有限值回落默认值；未知 id 直接忽略，不抛异常。只读时直接不写。 */
   setValue(id: string, value: GenuiParamValue): void
+  /**
+   * 把全部已声明参数恢复为声明默认值。
+   *
+   * 只作用于整份文档的参数，而不是某一个控件组：参数是文档级声明，多个 controls 可能只渲染子集，
+   * 「按节点重置」在多控件组时会变成多个含义不同的按钮。
+   * 逐个走与调参同一条写值路径（收敛、条目挂回），但整批只回写一次；
+   * 因此只读时也自然不生效，不需要在这里再判一次。
+   * 不提交、不发消息：重置与调参一样只是本地状态变化。
+   */
+  resetToDefaults(): void
 }
 
 /** 上下文注入键；界面外（无提供者）时控件组静默不渲染，不抛错。 */
@@ -270,6 +280,29 @@ export function provideGenuiParams(source: {
   const { entry, expired } = entryFor(source.documentId, source.revision, source.params, isReadOnly())
   const key = entryKey(source.documentId)
   const byId = new Map(source.params.map((param) => [param.id, param]))
+
+  /** 把一个取值写进条目；返回是否真的写入（只读、未知 id 不写）。不负责标脏与回写。 */
+  function applyValue(id: string, value: GenuiParamValue): boolean {
+    if (isReadOnly()) return false
+    const param = byId.get(id)
+    if (param === undefined) return false
+    // 走到这里只有两种可能：条目被上限淘汰过，或键下换成了另一个版本的条目而那个版本又被回退掉。
+    // 两种都说明 Map 里没有本版条目，必须挂回去，否则这次调节会写进一个脱离 Map 的对象、
+    // 重新挂载后静默丢失。已被取代的版本不会走到这里——上面的只读判定已经拦下。
+    if (entries.get(key) !== entry) remember(key, entry)
+    entry.values[id] = coerceValue(param, value)
+    return true
+  }
+
+  /** 写入单个参数并回写；抽成函数而不是内联，让重置与拖动共用同一条路径。 */
+  function writeValue(id: string, value: GenuiParamValue): void {
+    if (!applyValue(id, value)) return
+    entry.updatedAt = Date.now()
+    dirty.add(key)
+    // 回写交给持久化层做节流：滑杆拖动能一秒写十几次，每步落盘会变成写放大。
+    notifyWrite(key, entry)
+  }
+
   const context: GenuiParamContext = {
     documentId: source.documentId,
     params: source.params,
@@ -277,18 +310,17 @@ export function provideGenuiParams(source: {
     // 写成取值器：取代状态变化时控件与提交必须同时失效，不能各自缓存一份判断结果。
     get readOnly() { return isReadOnly() },
     expired,
-    setValue(id, value) {
+    setValue: writeValue,
+    resetToDefaults() {
       if (isReadOnly()) return
-      const param = byId.get(id)
-      if (param === undefined) return
-      // 条目可能已不在 Map 里：被上限淘汰过，或键下已换成更高版本的条目而那个版本又被回退掉
-      // （此时本版重新成为最新版，readOnly 已转假）。两种都得把条目挂回去，
-      // 否则用户此刻的调节会写进一个脱离 Map 的对象，重新挂载后静默丢失。
-      if (entries.get(key) !== entry) remember(key, entry)
-      entry.values[id] = coerceValue(param, value)
+      // 逐个写值但只回写一次：重置是一整批变化，按参数逐次触发节流只会堆出 N 个定时器。
+      let changed = false
+      for (const param of source.params) {
+        if (applyValue(param.id, param.default)) changed = true
+      }
+      if (!changed) return
       entry.updatedAt = Date.now()
       dirty.add(key)
-      // 回写交给持久化层做节流：滑杆拖动能一秒写十几次，每步落盘会变成写放大。
       notifyWrite(key, entry)
     }
   }

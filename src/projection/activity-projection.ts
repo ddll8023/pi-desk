@@ -14,13 +14,18 @@
  *    单独归到一行，不猜测它们连的是哪个服务器。
  * 4. 插件：既不是内置工具、也不是 MCP 工具的工具名按扩展工具统计。投影里没有「工具属于哪个扩展文件」
  *    的信息，因此只报工具名与次数，不编造来源扩展。
+ * 5. 界面：`ui_render` / `ui_patch` 的 `toolResult` 里带 `details.ui` 时记一份交付事实，
+ *    按 `documentId` 合并：版本取最大、标题取后出现的非空值、`versions` 累加。
+ *    只读头部字段，不解析节点树；嵌套调用（`nestedCalls`）不带 `details`，因此其中的界面不计入。
  *
  * 投影按 copy-on-write 替换对象，因此按工具条目与消息对象的身份缓存各自的贡献：流式期间每个批次
  * 只重新解析真正变化的条目，其余复用上一次的结果；缓存只保留仍在投影里的条目。
  */
 import type { SessionEntry } from '@earendil-works/pi-coding-agent'
 import type { ProjectionMessage, ToolArgSummaryEntry, ToolExecution, SkillActivitySource, SessionActivity,
-  SessionFileActivity, SessionSkillActivity, SessionMcpActivity, SessionPluginActivity } from '../shared/runtime-api'
+  SessionFileActivity, SessionSkillActivity, SessionMcpActivity, SessionPluginActivity,
+  SessionGenuiActivity } from '../shared/runtime-api'
+import { GENUI_RENDER_TOOL_NAMES, readGenuiPayloadHeader } from '../shared/genui-api'
 import { parseSkillBlock } from '../shared/user-message-text'
 
 /** 只读取文件内容的工具；其他工具即使读到文件（如 bash）也不猜测它碰了哪个路径。 */
@@ -96,6 +101,14 @@ interface McpBucket {
   readonly server: string
   readonly tools: Map<string, number>
   count: number
+}
+
+/** 一份界面的累计：`versions` 是分支上出现过的次数，`revision` 取最大值。 */
+interface GenuiBucket {
+  readonly documentId: string
+  title: string
+  revision: number
+  versions: number
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -352,10 +365,13 @@ export function createSessionActivityCache(): SessionActivityCache {
         skills: skillRows,
         mcp: mcpRows,
         plugins: pluginRows,
+        // 界面交付不来自工具条目本身（投影的轻量条目不带载荷），由 `ActivityProjection` 另计。
+        genui: [],
         fileCount: fileRows.length,
         skillCount: skillRows.length,
         mcpCount: mcpRows.length,
         pluginCount: pluginRows.length,
+        genuiCount: 0,
         empty: fileRows.length === 0 && skillRows.length === 0
           && mcpRows.length === 0 && pluginRows.length === 0
       }
@@ -370,6 +386,8 @@ export class ActivityProjection {
   private tools = new Map<string, ToolExecution>()
   private users: ProjectionMessage[] = []
   private skills = new Map<string, SessionSkillActivity>()
+  /** 界面交付：按 `documentId` 合并，保留首次交付顺序。 */
+  private genui = new Map<string, GenuiBucket>()
   private evidence = new Set<string>()
   private cache = createSessionActivityCache()
   private incomplete = false
@@ -397,6 +415,8 @@ export class ActivityProjection {
   refresh(branch: readonly SessionEntry[], projectPath: string): SessionActivity {
     if (this.tail !== null && !branch.some(entry => entry.id === this.tail)) {
       this.seen.clear(); this.tools.clear(); this.users = []; this.skills.clear(); this.evidence.clear()
+      // 界面交付也属于分支事实：回退到会话开头后，已不在分支上的界面不能继续留在活动条里。
+      this.genui.clear()
       this.cache = createSessionActivityCache()
       this.incomplete = false
     }
@@ -410,8 +430,17 @@ export class ActivityProjection {
     const derived = this.cache.derive(this.users, [...this.tools.values()].filter(tool => tool.phase === 'succeeded'), projectPath)
     const skills = [...derived.skills, ...this.skills.values()]
       .sort(byCountThenName(item => item.name))
-    return { ...derived, skills, skillCount: skills.length, incomplete: this.incomplete,
-      empty: derived.files.length === 0 && skills.length === 0 && derived.mcp.length === 0 && derived.plugins.length === 0 }
+    const genui: SessionGenuiActivity[] = [...this.genui.values()]
+      .map(bucket => ({
+        documentId: bucket.documentId,
+        title: bucket.title,
+        revision: bucket.revision,
+        versions: bucket.versions
+      }))
+    return { ...derived, skills, skillCount: skills.length, genui, genuiCount: genui.length,
+      incomplete: this.incomplete,
+      empty: derived.files.length === 0 && skills.length === 0 && derived.mcp.length === 0
+        && derived.plugins.length === 0 && genui.length === 0 }
   }
 
   private message(id: string, message: unknown): void {
@@ -426,6 +455,10 @@ export class ActivityProjection {
       if (previous) {
         if (message.isError === true) this.tools.delete(message.toolCallId)
         else this.tools.set(message.toolCallId, { ...previous, phase: 'succeeded' })
+      }
+      // 失败的交付不算数：没交付出去就不该出现在活动条里，与文件工具的口径一致。
+      if (message.isError !== true && typeof message.toolName === 'string') {
+        this.recordGenui(message.toolName, message.details)
       }
     }
     if (message.role === 'toolResult' && isRecord(message.nestedCalls)) {
@@ -447,6 +480,34 @@ export class ActivityProjection {
           text: `<skill name="${skill.name}" location="${skill.location}">\n已展开\n</skill>`,
           truncated: false, toolCallId: null, toolName: null, image: null, notice: false }] })
     }
+  }
+
+  /**
+   * 记一份界面交付：只认 `ui_render` / `ui_patch` 的 `details.ui`，且只读头部。
+   * 同一 `documentId` 合并成一条：版本取最大、标题取后出现的非空值、`versions` 累加。
+   * 标题为空（历史文档缺字段）时不拿空串盖掉已有标题。
+   */
+  private recordGenui(toolName: string, details: unknown): void {
+    if (!GENUI_RENDER_TOOL_NAMES.has(toolName)) return
+    if (!isRecord(details)) return
+    const header = readGenuiPayloadHeader(details.ui)
+    if (header === null) return
+    const existing = this.genui.get(header.documentId)
+    if (existing === undefined) {
+      this.genui.set(header.documentId, {
+        documentId: header.documentId,
+        title: header.title,
+        revision: header.revision,
+        versions: 1
+      })
+      return
+    }
+    this.genui.set(header.documentId, {
+      ...existing,
+      title: header.title === '' ? existing.title : header.title,
+      revision: Math.max(existing.revision, header.revision),
+      versions: existing.versions + 1
+    })
   }
 
   private audit(data: unknown): void {
