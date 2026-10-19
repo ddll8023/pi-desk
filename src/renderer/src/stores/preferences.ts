@@ -1,11 +1,13 @@
 /**
- * 保存侧栏与右侧面板的界面偏好（含侧栏展开的项目路径）、Markdown 默认视图、快捷发送短语与扩展自动更新开关；
- * 窗口状态由主进程独占，不保存 Runtime 数据或单个消息块的临时开合状态。
+ * 保存侧栏与右侧面板的界面偏好（含侧栏展开的项目路径）、Markdown 默认视图、快捷发送短语、
+ * 扩展自动更新开关与生成式 UI 开关；窗口状态由主进程独占，不保存 Runtime 数据或单个消息块的临时开合状态。
  *
  * 界面偏好是一份整体载荷：折叠状态、主题、展开的项目路径、右侧面板开合/宽度/页签与 Markdown 默认视图
  * 一起写入，任一变化都保存当前完整值，避免分字段保存互相覆盖；保存单飞，保存期间的新变化在收敛后补写一次。
  * 展开的项目路径只记录哪些项目展开过，顺序不参与展示；右侧面板宽度对同一窗口只有一个值，不按项目区分。
  * 自动更新开关默认关，只有用户显式打开后主进程才会在启动检查后自动更新扩展。
+ * 生成式 UI 开关区分「最近保存值」与「当前会话已生效值」：它在会话创建期读取，保存本身不重建会话，
+ * 两者不等就表示还要重新加载资源才生效；生效标记由重载成功处统一写入。
  */
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
@@ -58,6 +60,15 @@ export const usePreferencesStore = defineStore('preferences', () => {
   /** 生成式 UI 开关；读取失败或非法时按开启处理，与产品默认口径一致。 */
   const genuiEnabled = ref(true)
   const genuiView = ref<GenuiView>({ phase: 'idle' })
+  /**
+   * 最近一次保存成功的开关值。与 `genuiAppliedEnabled` 不等，就说明改动还没在当前会话生效：
+   * 开关只在会话创建期读取，保存本身不重建会话。
+   */
+  const genuiSavedEnabled = ref(true)
+  /** 当前运行中的会话实际采用的开关值；由启动读取与重载成功回调写入，不落盘。 */
+  const genuiAppliedEnabled = ref(true)
+  /** 开关是否成功从配置读到；读失败时界面显示的是默认值，设置页据此提示。 */
+  const genuiLoaded = ref(false)
   /** 首次读取是否已结束；用于侧栏挂载与设置控件启用，读取失败也结束等待。 */
   const ready = ref(false)
   const actionError = ref<PreferencesError | null>(null)
@@ -86,7 +97,13 @@ export const usePreferencesStore = defineStore('preferences', () => {
     } else actionError.value = result.error
     if (quickSend.ok) quickSendMessages.value = [...quickSend.data.messages]
     if (autoUpdate.ok) extensionAutoUpdate.value = autoUpdate.data.enabled
-    if (genui.ok) genuiEnabled.value = genui.data.enabled
+    if (genui.ok) {
+      genuiEnabled.value = genui.data.enabled
+      // 启动时读到的值就是本次运行将要采用的值：会话都还没建立，不存在待生效的改动。
+      genuiSavedEnabled.value = genui.data.enabled
+      genuiAppliedEnabled.value = genui.data.enabled
+      genuiLoaded.value = true
+    }
     // 读取失败也结束等待：界面继续使用默认布局，不把偏好读取变成启动阻塞。
     ready.value = true
   }
@@ -263,8 +280,17 @@ export const usePreferencesStore = defineStore('preferences', () => {
       return false
     }
     genuiEnabled.value = result.data.enabled
+    genuiSavedEnabled.value = result.data.enabled
     genuiView.value = { phase: 'idle' }
     return true
+  }
+
+  /**
+   * 标记开关已在运行中的会话生效：设置页在重载成功后调用。
+   * 传当前保存值而不是重新读一次配置，避免重载期间又被改过时记错。
+   */
+  function markGenuiApplied(enabled: boolean): void {
+    genuiAppliedEnabled.value = enabled
   }
 
   return {
@@ -281,6 +307,9 @@ export const usePreferencesStore = defineStore('preferences', () => {
     autoUpdateView,
     genuiEnabled,
     genuiView,
+    genuiSavedEnabled,
+    genuiAppliedEnabled,
+    genuiLoaded,
     ready,
     actionError,
     initialize,
@@ -296,6 +325,7 @@ export const usePreferencesStore = defineStore('preferences', () => {
     setMarkdownDefaultView,
     saveQuickSendMessages,
     saveExtensionAutoUpdate,
-    saveGenuiEnabled
+    saveGenuiEnabled,
+    markGenuiApplied
   }
 })

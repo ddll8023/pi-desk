@@ -16,6 +16,7 @@ import type { SessionError, SessionList, SessionSummary } from '../../../shared/
 import type { ProjectError } from '../../../shared/project-api'
 import { useTrustStore } from './trust'
 import { useProjectStore } from './project'
+import { usePreferencesStore } from './preferences'
 import { useRuntimeStore } from './runtime'
 import { listSessions, openSession, reloadSession, deleteSession } from '../services/session'
 import { useWorkspaceTabsStore } from './workspace-tabs'
@@ -432,13 +433,16 @@ export const useSessionStore = defineStore('session', () => {
    * 重新加载 Pi 资源：在同一 SDK 宿主进程内重建该会话的 services（重新读取 Skills、Prompt Templates、
    * MCP 配置与 Extension），并尽量恢复当前会话。
    * 回传列表保持当前窗口深度，避免重载后侧栏列表收回首屏。
+   * 返回是否真的重建成功：被中断确认或信任流程拦下、有在途动作、结果已过期时都算未完成，
+   * 调用方（如设置页的「立即重新加载」）据此给出反馈，而不是当成已生效。
    */
-  async function reloadCurrent(allowInterrupt = false): Promise<void> {
-    if (opening.value) return
+  async function reloadCurrent(allowInterrupt = false): Promise<boolean> {
+    if (opening.value) return false
 
     const sequence = ++openSequence
     pendingReload.value = false
     actionError.value = null
+    let reloaded = false
     await enqueueAction(async () => {
       const result = await reloadSession(allowInterrupt, windowLimit.value)
       if (sequence !== openSequence) return
@@ -446,6 +450,11 @@ export const useSessionStore = defineStore('session', () => {
         applyList(result.data)
         pendingReload.value = false
         awaitingInterrupt.value = false
+        // 会话已重建，它读到的就是已保存的开关值：在这里收敛「待重新加载」状态。
+        // 模型页、资源页与设置页都走同一个入口，不靠调用方各自标记。
+        const preferencesStore = usePreferencesStore()
+        preferencesStore.markGenuiApplied(preferencesStore.genuiSavedEnabled)
+        reloaded = true
         return
       }
       if (result.error.code === 'SESSION_SWITCH_BLOCKED' && !allowInterrupt) {
@@ -462,6 +471,7 @@ export const useSessionStore = defineStore('session', () => {
       }
       actionError.value = result.error
     })
+    return reloaded
   }
 
   /**

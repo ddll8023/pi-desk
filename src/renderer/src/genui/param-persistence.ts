@@ -27,7 +27,12 @@ export const genuiParamPersistence = reactive({
   /** 至少有一次回写失败且尚未被后续成功覆盖。 */
   failed: false,
   /** 首次预加载是否已结束；读取失败也算结束，不把启动变成阻塞。 */
-  ready: false
+  ready: false,
+  /**
+   * 本机已保存参数值的界面份数；供设置页在清除前后告知实际影响。
+   * 按已确认写入磁盘的界面标识计，不包含只改了默认值的界面。
+   */
+  recordCount: 0
 })
 
 /** 待落盘的变化；`null` 表示删除该界面的记录。后写覆盖前写。 */
@@ -36,10 +41,22 @@ const timers = new Map<string, ReturnType<typeof setTimeout>>()
 /** 正在执行的保存数；用于 `flushGenuiParamPersistence` 等齐在途请求。 */
 const inflight = new Set<Promise<unknown>>()
 
+/**
+ * 磁盘上确实存有取值的界面标识。`recordCount` 从它派生，不另外维护计数：
+ * 同一界面的重复回写与删除不会让份数漂移，也不需要为了报数再读一次磁盘。
+ */
+const storedIds = new Set<string>()
+
 /** 发起一次保存并跟踪状态；失败只置标记，不抛出、不重试。 */
 function persist(documentId: string, record: GenuiParamRecord | null): void {
   const run = saveGenuiParam(documentId, record).then((result) => {
     genuiParamPersistence.failed = !result.ok
+    // 只在写入成功后改动份数：失败时磁盘没变，提前记上会让设置页报出虚数。
+    if (result.ok) {
+      if (record === null) storedIds.delete(documentId)
+      else storedIds.add(documentId)
+      genuiParamPersistence.recordCount = storedIds.size
+    }
   }).catch(() => {
     genuiParamPersistence.failed = true
   })
@@ -85,7 +102,14 @@ export async function initializeGenuiParamPersistence(): Promise<void> {
   setGenuiParamWriteHook((documentId, record) => schedule(documentId, record))
   try {
     const result = await getGenuiParams()
-    if (result.ok) hydrateGenuiParams(result.data)
+    if (result.ok) {
+      // 没有取值项的记录 `hydrateGenuiParams` 会直接丢弃，这里同样不计入份数，两边口径一致。
+      for (const [documentId, record] of Object.entries(result.data)) {
+        if (Object.keys(record.values).length > 0) storedIds.add(documentId)
+      }
+      genuiParamPersistence.recordCount = storedIds.size
+      hydrateGenuiParams(result.data)
+    }
   } catch {
     // 预加载失败只影响能否恢复上次的取值，不影响界面本身，因此不置 `failed`。
   } finally {
@@ -109,6 +133,8 @@ export async function clearGenuiParamsEverywhere(): Promise<
   const result = await clearGenuiParamsOnDisk()
   if (!result.ok) return { ok: false, message: result.error.message }
   clearGenuiParamsInMemory()
+  storedIds.clear()
+  genuiParamPersistence.recordCount = 0
   genuiParamPersistence.failed = false
   return { ok: true, removed: result.data.removed }
 }
