@@ -85,6 +85,7 @@ metric  {type:"metric", label, value, unit?, tone?}      value 只接受字符�
 table   {type:"table", columns:[{key,label}], rows:[{...}], caption?}
         columns 1..${GENUI_MAX_TABLE_COLUMNS} 且 key 不重复；rows 最多 ${GENUI_MAX_TABLE_ROWS} 行；
         单元格只接受字符串（不超过 ${GENUI_MAX_CELL_CHARS} 字符）或有限数字，未声明的列会被忽略。
+        排序与筛选由桌面端自动提供，不需要在文档里声明 sortable、filter 之类的字段。
 steps   {type:"steps", items:[{title, description?}]}    1..${GENUI_MAX_STEPS} 条；步骤不带状态字段，
         静态说明不伪装成任务进度。只表达先后，不表达时刻。
 timeline {type:"timeline", items:[{time, title, description?}]}   1..${GENUI_MAX_TIMELINE_ITEMS} 个时间点；
@@ -103,6 +104,7 @@ chart   {type:"chart", kind, labels:[string], series:[{name?,values}], ...}   ${
 - card 的标题就是分区标题，内部直接放数据或说明；不要再套一张只装相同内容的 card。
 - table 只放同类记录，列内内容尽量简短。长解释用 text，不把整段报告压进表格。
 - 长表默认显示前 6 行并提供展开全部；仍须传入完整 rows，不要把显示折叠误当成数据截断。
+- 表格的排序与筛选是用户侧的视图操作，不影响文档本身；需要固定顺序时按期望顺序传 rows，不要指望默认排序。
 - 重要结论、警告和限制单独放 text，使用正确 tone；不要把唯一的重要提示放在长表尾部。
 
 通用约束：
@@ -212,7 +214,8 @@ const CHART_DETAIL = `占比、构成、份额优先用 pie/donut，不要用柱
 - bar/line 的坐标轴范围与刻度由桌面端按全部序列自动取整，不要自己补零值或占位分类。
 - 画布只有 320px 宽，多序列建议分类不超过 8 个；多序列不标每点数值，饼图只在占比 ≥10% 的切片上标百分比，完整占比靠图例与说明文字承载。
 
-图表不绑定参数、不做交互；需要随参数变化的图形用 diagram。
+图表不绑定参数；桌面端提供悬停数值提示，那是只读增强（不改数据、不参与参数提交），
+因此仍需把关键结论写进 fallback 与 caption。需要随参数变化的图形用 diagram。
 图表与 fallback 的分工：fallback 里要写清结论（每序列的最大值、占比最大的分类与百分比、趋势或差距），不能只写“见下图”。`
 
 const CHART = [

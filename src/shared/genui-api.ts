@@ -606,7 +606,7 @@ export interface GenuiDonutChart {
   readonly unit?: string
 }
 
-/** 图表节点联合；只画图，不做交互，也不绑定参数。 */
+/** 图表节点联合；只画图，不绑定参数；悬停数值提示由渲染端提供，属只读增强，不进协议。 */
 export type GenuiChartNode = GenuiBarChart | GenuiLineChart | GenuiPieChart | GenuiDonutChart
 
 /** 文档节点联合；新增类型必须同时补解析分支与渲染分支，否则解析即拒绝。 */

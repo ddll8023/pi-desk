@@ -101,11 +101,31 @@
 .genui-card .genui-metric { background: transparent; padding: 0; }
 
 .genui-table { min-width: 0; }
+/* 筛选行：单个关键词输入 + 清除；与表头分开，避免把搜索框当成表头的一部分。 */
+.genui-table-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 8px; }
+.genui-table-search { display: flex; min-width: 0; flex: 1 1 12rem; align-items: center; gap: 8px; }
+.genui-table-search-label { flex: none; color: var(--color-desk-muted); font-size: 11px; }
+.genui-table-search .text-control { min-height: 32px; padding: 4px 10px; font-size: 12px; }
+.genui-table-clear { flex: none; border-radius: var(--radius-desk-sm); padding: 4px 8px; color: var(--color-desk-accent); font-size: 11px; cursor: pointer; }
+.genui-table-clear:hover { background: var(--color-desk-accent-soft); }
 .genui-table-scroll { min-width: 0; overflow-x: auto; border: 1px solid var(--color-desk-line); border-radius: var(--radius-desk-md); background: var(--color-desk-surface); scrollbar-width: thin; scrollbar-color: var(--color-desk-line-strong) transparent; }
 .genui-table table { width: 100%; border-collapse: collapse; font-size: 13px; line-height: 1.6; }
 .genui-table th { border-bottom: 1px solid var(--color-desk-line); background: var(--color-desk-surface-subtle); color: var(--color-desk-muted); font-size: 11px; font-weight: 600; text-align: left; }
+/* 表头整体是排序按钮：整格可点，箭头贴文字；数值列靠右对齐，箭头也跟着靠右。 */
+.genui-table-sort { display: inline-flex; width: 100%; min-height: 20px; align-items: center; gap: 4px; border-radius: var(--radius-desk-sm); color: inherit; font: inherit; cursor: pointer; }
+.genui-table-sort:hover { color: var(--color-desk-ink); }
+.genui-table .genui-cell-numeric .genui-table-sort { justify-content: flex-end; }
+.genui-table-sort-icon { width: 12px; height: 12px; flex: none; }
+/* 未排序时两个箭头都弱化；已排序时只亮对应的那一个，并用强调色区分“当前排序依据”。 */
+.genui-table-sort-icon path { opacity: 0.35; }
+.genui-table-sort-icon.is-ascending path:first-child,
+.genui-table-sort-icon.is-descending path:last-child { opacity: 1; }
+.genui-table-sort-icon.is-ascending,
+.genui-table-sort-icon.is-descending { color: var(--color-desk-accent); }
 .genui-table :where(th, td) { padding: 12px; vertical-align: top; }
 .genui-table td { color: var(--color-desk-ink); white-space: pre-line; }
+/* 筛选零命中：用一行说明占据表体，而不是留一片空白让人以为表格坏了。 */
+.genui-table .genui-table-empty { color: var(--color-desk-muted); font-size: 12px; text-align: center; }
 .genui-table tbody tr + tr { border-top: 1px solid var(--color-desk-line); }
 .genui-table tbody tr:nth-child(even) { background: color-mix(in srgb, var(--color-desk-surface-subtle) 40%, var(--color-desk-surface)); }
 .genui-table tbody tr:hover { background: color-mix(in srgb, var(--color-desk-accent-soft) 45%, var(--color-desk-surface)); }
@@ -185,7 +205,29 @@
 .genui-figure-canvas path.genui-series-4,
 .genui-figure-canvas path.genui-series-5,
 .genui-figure-canvas path.genui-series-6 { stroke: var(--color-desk-surface); }
+.genui-figure-canvas-wrap { position: relative; min-width: 0; }
 .genui-figure-canvas { display: block; width: 100%; height: auto; border: 1px solid var(--color-desk-line); border-radius: var(--radius-desk-md); background: color-mix(in srgb, var(--color-desk-surface-subtle) 55%, var(--color-desk-surface)); }
+/* 有热区时其余图元一律不接收指针事件：否则柱顶的数值文字与折点会把热区切成碎片。 */
+.genui-figure-canvas.has-hotspots > :not(.genui-hotspot) { pointer-events: none; }
+.genui-hotspot { fill: transparent; pointer-events: all; }
+/* 命中高亮只给淡色与描边：不能盖掉切片本身的颜色，否则悬停时就看不出是哪一片了。 */
+.genui-hotspot.is-active { fill: color-mix(in srgb, var(--color-desk-accent) 10%, transparent); stroke: var(--color-desk-accent); stroke-width: 1.2; }
+/* 悬停数值提示：以锚点百分比定位，向右下或左上展开（由组件给出的 --genui-tooltip-x/y 决定），
+   因此不需要测量浮层尺寸，也不会越出图表；不接收指针事件，否则浮层会盖住热区导致闪跳。 */
+.genui-chart-tooltip {
+  position: absolute;
+  z-index: 2;
+  max-width: 60%;
+  transform: translate(var(--genui-tooltip-x, 8px), var(--genui-tooltip-y, calc(-100% - 8px)));
+  border: 1px solid var(--color-desk-line-strong);
+  border-radius: var(--radius-desk-sm);
+  background: var(--color-desk-surface);
+  box-shadow: var(--shadow-desk-pop);
+  padding: 6px 10px;
+  pointer-events: none;
+}
+.genui-chart-tooltip-title { color: var(--color-desk-ink); font-size: 12px; font-weight: 600; line-height: 1.5; overflow-wrap: anywhere; }
+.genui-chart-tooltip-line { color: var(--color-desk-muted); font-family: var(--font-mono); font-size: 11px; line-height: 1.55; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .genui-document .genui-figure-notes { margin-top: 12px; border-left: 2px solid var(--color-desk-line-strong); padding-left: 12px; color: var(--color-desk-ink); font-size: 12px; line-height: 1.65; overflow-wrap: anywhere; }
 
 .genui-document-footer { display: flex; flex-direction: column; gap: 8px; margin-top: 20px; border-top: 1px solid var(--color-desk-line); padding-top: 16px; }
@@ -220,6 +262,8 @@
 
 .genui-table-scroll:focus-visible,
 .genui-table-expand:focus-visible,
+.genui-table-sort:focus-visible,
+.genui-table-clear:focus-visible,
 .genui-history-main:focus-visible,
 .genui-history-toggle:focus-visible,
 .genui-document-copy:focus-visible,

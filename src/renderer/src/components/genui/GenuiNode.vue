@@ -1,17 +1,16 @@
 <!-- 生成式界面的节点渲染器：按类型提供不同的信息层级，分栏随容器宽度收敛。
-     长表只折叠展示行，不改文档数据；展开状态留在组件内，不参与参数提交。
+     表格（含长表折叠、排序、筛选）整体交给 GenuiTable，这里只做分派，不再内联表格状态。
      容器递归复用本组件，图形与参数仍交给各自组件，不推断内容的业务状态。
      steps 表达先后顺序（序号），timeline 表达具体时刻（时间列），两者不互相代替。 -->
 <script setup lang="ts">
-import { computed, ref, useId, watch } from 'vue'
 // 类型名加别名，避免与模板里的递归组件同名。
-import type { GenuiNode as GenuiNodeModel, GenuiTableCell, GenuiTone } from '../../../../shared/genui-api'
-import AppButton from '../ui/AppButton.vue'
+import type { GenuiNode as GenuiNodeModel, GenuiTone } from '../../../../shared/genui-api'
 import GenuiChart from './GenuiChart.vue'
 import GenuiControls from './GenuiControls.vue'
 import GenuiDiagram from './GenuiDiagram.vue'
+import GenuiTable from './GenuiTable.vue'
 
-const props = defineProps<{
+defineProps<{
   readonly node: GenuiNodeModel
 }>()
 
@@ -30,40 +29,9 @@ const SIZE_CLASS: Readonly<Record<'small' | 'body' | 'large', string>> = {
   large: 'genui-text-large'
 }
 
-const TABLE_PREVIEW_ROWS = 6
-const tableExpanded = ref(false)
-const tableBodyId = useId()
-
-/** 列宽按实际数据形态区分，不根据列名或文案猜测路径、优先级或成功状态。 */
-const tableColumns = computed(() => {
-  const node = props.node
-  if (node.type !== 'table') return []
-  return node.columns.map(column => {
-    const values = node.rows.map(row => row[column.key])
-      .filter((value): value is GenuiTableCell => value !== undefined && value !== '')
-    const numeric = values.length > 0 && values.every(value => typeof value === 'number')
-    const compact = !numeric && column.label.length <= 8
-      && values.every(value => String(value).length <= 12 && !String(value).includes('\n'))
-    return { ...column, kind: numeric ? 'numeric' : compact ? 'compact' : 'text' }
-  })
-})
-
-const tableRows = computed(() => {
-  const node = props.node
-  if (node.type !== 'table') return []
-  return tableExpanded.value ? node.rows : node.rows.slice(0, TABLE_PREVIEW_ROWS)
-})
-
-watch(() => props.node, () => { tableExpanded.value = false })
-
 /** 列数是上限；最小列宽与插入间距由局部 CSS 计算，小容器自动减列。 */
 function rowStyle(columns: number | undefined): Record<string, string> {
   return { '--genui-columns': String(columns ?? 4) }
-}
-
-function cellText(value: GenuiTableCell | undefined): string {
-  if (value === undefined) return ''
-  return typeof value === 'number' ? value.toLocaleString('zh-CN') : value
 }
 </script>
 
@@ -91,40 +59,7 @@ function cellText(value: GenuiTableCell | undefined): string {
     </span>
   </div>
 
-  <figure v-else-if="node.type === 'table'" class="genui-table">
-    <div class="genui-table-scroll" role="region" :aria-label="node.caption ?? '数据表格'" tabindex="0">
-      <table>
-        <thead>
-          <tr>
-            <th v-for="column in tableColumns" :key="column.key" scope="col" :class="`genui-cell-${column.kind}`">
-              {{ column.label }}
-            </th>
-          </tr>
-        </thead>
-        <tbody :id="tableBodyId">
-          <tr v-for="(row, index) in tableRows" :key="index">
-            <td v-for="column in tableColumns" :key="column.key" :class="`genui-cell-${column.kind}`">
-              {{ cellText(row[column.key]) }}
-            </td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-    <div v-if="node.rows.length > TABLE_PREVIEW_ROWS" class="genui-table-footer">
-      <span class="genui-table-count">共 {{ node.rows.length }} 行 · 已显示 {{ tableRows.length }} 行</span>
-      <AppButton
-        variant="unstyled" class="genui-table-expand"
-        :aria-expanded="tableExpanded" :aria-controls="tableBodyId"
-        @click="tableExpanded = !tableExpanded"
-      >
-        {{ tableExpanded ? `收起至前 ${TABLE_PREVIEW_ROWS} 行` : `展开全部 ${node.rows.length} 行` }}
-        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true" :class="{ 'is-expanded': tableExpanded }">
-          <path d="m4 6 4 4 4-4" />
-        </svg>
-      </AppButton>
-    </div>
-    <figcaption v-if="node.caption !== undefined" class="genui-caption">{{ node.caption }}</figcaption>
-  </figure>
+  <GenuiTable v-else-if="node.type === 'table'" :node="node" />
 
   <ol v-else-if="node.type === 'steps'" class="genui-steps">
     <li v-for="(item, index) in node.items" :key="index" class="genui-step">

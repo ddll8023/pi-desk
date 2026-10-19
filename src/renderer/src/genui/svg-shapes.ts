@@ -80,12 +80,43 @@ export interface SvgText {
 /** 图元联合；新增种类必须同时补渲染组件里的分支，否则解析结果画不出来。 */
 export type SvgShape = SvgRect | SvgCircle | SvgLine | SvgPath | SvgText
 
+/**
+ * 悬停热区共用的部分：命中区域之外的文案与锚点。
+ * `title` 是提示浮层的首行（分类名），`lines` 是逐条数值说明；`anchor` 是画布坐标系里的
+ * 提示锚点，组件按它把浮层贴到图元旁边，几何层因此不必知道像素、百分比或容器宽度。
+ */
+interface SvgHotspotBase {
+  readonly title: string
+  readonly lines: readonly string[]
+  readonly anchor: { readonly x: number; readonly y: number }
+}
+
+/** 矩形热区；柱与折线按分类整列覆盖，窄柱与细线也能命中。 */
+export interface SvgRectHotspot extends SvgHotspotBase {
+  readonly kind: 'rect'
+  readonly x: number
+  readonly y: number
+  readonly width: number
+  readonly height: number
+}
+
+/** 路径热区；饼图与环形图直接用切片自身的路径，环形空心区天然不命中。 */
+export interface SvgPathHotspot extends SvgHotspotBase {
+  readonly kind: 'path'
+  readonly d: string
+}
+
+/** 悬停热区联合；只有图表产出，图解不给就等同于没有提示。 */
+export type SvgHotspot = SvgRectHotspot | SvgPathHotspot
+
 /** 一次布局的结果：画布高度、图元与推导摘要。 */
 export interface SvgLayout {
   readonly height: number
   readonly shapes: readonly SvgShape[]
   /** 推导出的关键结论（传动比、行程、数值范围等）；渲染端写进 aria-label 与可见说明。 */
   readonly notes: readonly string[]
+  /** 悬停热区；省略表示这张图没有可悬停的数值（图解都属于这种）。 */
+  readonly hotspots?: readonly SvgHotspot[]
 }
 
 /** 数值守卫：非有限值回落 `fallback`，其余夹到区间。 */

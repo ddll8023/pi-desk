@@ -52,7 +52,11 @@ function joinBlocks(blocks: readonly (readonly string[])[]): string[] {
   return lines
 }
 
-/** 表格：列顺序按声明顺序，行数全量。 */
+/**
+ * 表格：列顺序按声明顺序，行数全量。
+ * 界面上的排序与筛选是视图状态，不进文档也不进参数；复制始终输出全量、文档顺序的表格，
+ * 否则同一份界面在不同人手里复制出不同的行序，反而不好对账。
+ */
 function tableMarkdown(node: GenuiTableNode): string[] {
   const lines = [
     `| ${node.columns.map((column) => cellText(column.label)).join(' | ')} |`,

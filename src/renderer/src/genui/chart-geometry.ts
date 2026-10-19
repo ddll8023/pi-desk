@@ -6,10 +6,12 @@
  *
  * 色槽是 0..5 的下标，具体颜色由 CSS 令牌给出，几何层不写死色值；
  * 柱/折线单序列不给色槽，沿用图元默认的中性填充，饼/环图逐片取色。
- * 这里不做交互、不做动画，刻度取整、扇形路径与占比都在本模块内收口，组件不碰数学。
+ * 刻度取整、扇形路径与占比都在本模块内收口，组件不碰数学。
+ * 悬停提示也在这里只算「命中哪块区域、显示哪几行、浮层贴在哪」：几何层不持状态、不改数据，
+ * 显隐与像素定位交给组件，因此同一份布局既能在屏幕上看，也能原样复制成 Markdown。
  */
 import { SVG_CANVAS_WIDTH, clampNumber, round2 } from './svg-shapes'
-import type { SvgLayout, SvgSeriesSlot, SvgShape } from './svg-shapes'
+import type { SvgHotspot, SvgLayout, SvgSeriesSlot, SvgShape } from './svg-shapes'
 
 /** 绘图区在画布内的留白：左侧给刻度文字、下方给分类标签、上方给数值标注。 */
 const PAD_LEFT = 34
@@ -207,6 +209,40 @@ function chartNotes(labels: readonly string[], series: readonly ChartSeries[], u
   return series.length === 1 ? singleNotes(labels, first.values, unit) : multiNotes(labels, series, unit)
 }
 
+/**
+ * 分类列的悬停热区：整列覆盖，窄柱与细线也能命中。
+ * 按图元本身命中会让几像素宽的柱几乎点不中，因此横向铺满槽位、纵向铺满绘图区。
+ * 锚点取该列最靠上的数据点，浮层因此贴着最高的那根柱或折点出现。
+ */
+function columnHotspots(
+  labels: readonly string[],
+  series: readonly ChartSeries[],
+  toY: (value: number) => number,
+  unit: string | undefined
+): SvgHotspot[] {
+  const plotLeft = PAD_LEFT
+  const plotRight = SVG_CANVAS_WIDTH - PAD_RIGHT
+  const slotWidth = (plotRight - plotLeft) / Math.max(labels.length, 1)
+  return labels.map((label, index) => {
+    const values = series.map((item) => item.values[index] ?? 0)
+    return {
+      kind: 'rect',
+      x: plotLeft + slotWidth * index,
+      y: PAD_TOP,
+      width: slotWidth,
+      height: PLOT_HEIGHT,
+      title: label,
+      lines: series.map(
+        (item, seriesIndex) => `${seriesName(item, seriesIndex)} ${valueText(item.values[index] ?? 0, unit)}`
+      ),
+      anchor: {
+        x: plotLeft + slotWidth * (index + 0.5),
+        y: values.length === 0 ? PAD_TOP : Math.min(...values.map(toY))
+      }
+    }
+  })
+}
+
 /** 柱状图：柱从零线起算，正负方向相反；多序列在同一分类内分组并列。 */
 export function layoutBarChart(
   labels: readonly string[],
@@ -259,7 +295,8 @@ export function layoutBarChart(
   return {
     height: PAD_TOP + PLOT_HEIGHT + PAD_BOTTOM,
     shapes,
-    notes: chartNotes(labels, safe, unit)
+    notes: chartNotes(labels, safe, unit),
+    hotspots: columnHotspots(labels, safe, toY, unit)
   }
 }
 
@@ -308,7 +345,8 @@ export function layoutLineChart(
   return {
     height: PAD_TOP + PLOT_HEIGHT + PAD_BOTTOM,
     shapes,
-    notes: chartNotes(labels, safe, unit)
+    notes: chartNotes(labels, safe, unit),
+    hotspots: columnHotspots(labels, safe, toY, unit)
   }
 }
 
@@ -391,6 +429,7 @@ export function layoutPieChart(
   const cy = height / 2
   const inner = donut ? PIE_INNER_RADIUS : 0
   const shapes: SvgShape[] = []
+  const hotspots: SvgHotspot[] = []
   const notes: string[] = []
 
   // 总和非正时只画一个空圆，不硬算占比（除零会得到 NaN 路径）。
@@ -404,13 +443,23 @@ export function layoutPieChart(
     const share = value / total
     const end = index === safe.length - 1 ? Math.PI * 2 : angle + share * Math.PI * 2
     const slot = (index % 6) as SvgSeriesSlot
+    const label = labels[index] ?? `分类 ${index + 1}`
+    const mid = (angle + end) / 2
+    const labelRadius = inner > 0 ? (PIE_RADIUS + inner) / 2 : PIE_RADIUS * 0.62
     // 零值切片不画路径（面积为零），但仍要进说明，否则用户会以为数据丢了。
     if (value > 0) {
-      shapes.push({ kind: 'path', d: slicePath(cx, cy, PIE_RADIUS, inner, angle, end), series: slot })
+      const d = slicePath(cx, cy, PIE_RADIUS, inner, angle, end)
+      shapes.push({ kind: 'path', d, series: slot })
+      // 热区直接复用切片路径：环形的空心区不是任何切片，天然不会命中，不需要额外的坐标判定。
+      hotspots.push({
+        kind: 'path',
+        d,
+        title: label,
+        lines: [`数值 ${valueText(value, unit)}`, `占比 ${formatShare(value, total)}`],
+        anchor: polarPoint(cx, cy, labelRadius, mid)
+      })
     }
     if (share >= PIE_MIN_LABEL_SHARE) {
-      const mid = (angle + end) / 2
-      const labelRadius = inner > 0 ? (PIE_RADIUS + inner) / 2 : PIE_RADIUS * 0.62
       const point = polarPoint(cx, cy, labelRadius, mid)
       // 百分比压在切片上，用底色描边做光晕，否则深色扇区上的深色字读不出来。
       shapes.push({
@@ -423,7 +472,6 @@ export function layoutPieChart(
         halo: true
       })
     }
-    const label = labels[index] ?? `分类 ${index + 1}`
     notes.push(`${label} ${formatShare(value, total)}（${valueText(value, unit)}）`)
     angle = end
   }
@@ -434,5 +482,5 @@ export function layoutPieChart(
     shapes.push({ kind: 'text', x: cx, y: cy + 16, text: '合计', anchor: 'middle', muted: true })
   }
 
-  return { height, shapes, notes: [`总计 ${valueText(total, unit)}`, ...notes] }
+  return { height, shapes, notes: [`总计 ${valueText(total, unit)}`, ...notes], hotspots }
 }
