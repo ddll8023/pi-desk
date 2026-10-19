@@ -164,7 +164,7 @@ async function copyMarkdown(): Promise<void> {
           <AppButton
             variant="unstyled" class="genui-reset"
             :disabled="resetBlocked"
-            :title="superseded !== null ? '这一版已被取代，不能重置参数。' : atDefaults ? '已经是默认值。' : '把所有参数恢复为文档声明的默认值'
+            :title="superseded !== null ? '这一版已被取代，不能重置参数。' : atDefaults ? '已经是默认值。' : '把所有参数恢复为文档声明的默认值'"
             @click="onReset"
           >重置为默认值</AppButton>
           <AppButton
