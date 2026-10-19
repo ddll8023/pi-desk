@@ -2,7 +2,10 @@
      为什么不用 content-visibility：它只跳过绘制，DOM 与组件实例仍然存在，达不到减少同时挂载量的目的。
      为什么要自己补偿滚动：对话区滚动容器设了 overflow-anchor:none，浏览器不会替高度变化补偿，
      占位换成真实界面的高度差必须自己补，否则界面在可视区上方首次挂载时，正在读的内容会整体下移。
-     参数取值按 documentId 存在模块内存里（见 param-state.ts），卸载不清空，重新挂载沿用当前取值。 -->
+     参数取值按 documentId 存在模块内存里（见 param-state.ts），卸载不清空，重新挂载沿用当前取值；
+     同一份取值另存本机旁路文件（param-persistence.ts），重启后仍在。
+     根节点带 documentId 与 revision 两个 data 属性：被取代的旧版折叠行靠它们定位新版落点，
+     未挂载时占位也在，因此不参与布局、也不影响挂载判定。 -->
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import type { GenuiPayload } from '../../../../shared/genui-api'
@@ -131,7 +134,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div ref="root" class="genui-mount">
+  <div ref="root" class="genui-mount" :data-genui-document-id="payload.documentId" :data-genui-revision="payload.revision">
     <slot v-if="mounted" />
     <!-- 占位保留标题与替代文本：未挂载时仍能看到这份界面是什么、说了什么。 -->
     <div v-else class="genui-mount-placeholder" :style="{ minHeight: placeholderMinHeight }">

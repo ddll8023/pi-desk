@@ -195,18 +195,17 @@
 .genui-submit svg { width: 16px; height: 16px; flex: none; }
 .genui-feedback { font-size: 12px; overflow-wrap: anywhere; }
 
-/* 旧版折叠行沿用相同的界面身份，但弱化为历史记录，不再借用技能卡的视觉语义。 */
-.genui-history { min-width: 0; width: 100%; border: 1px solid var(--color-desk-line); border-radius: var(--radius-desk-md); color: var(--color-desk-muted); }
-.genui-history > summary { display: flex; min-width: 0; flex-wrap: wrap; align-items: center; gap: 12px; border-radius: inherit; padding: 12px 16px; background: var(--color-desk-surface-subtle); cursor: pointer; list-style: none; }
-.genui-history > summary:hover { background: var(--color-desk-accent-soft); }
-.genui-history[open] > summary { border-radius: var(--radius-desk-md) var(--radius-desk-md) 0 0; }
-.genui-history > summary::-webkit-details-marker { display: none; }
-.genui-history > summary::after { width: 6px; height: 6px; flex: none; margin-left: auto; border-right: 1px solid currentColor; border-bottom: 1px solid currentColor; content: ''; transform: rotate(45deg); }
-.genui-history[open] > summary::after { transform: rotate(225deg); }
+/* 旧版折叠行沿用相同的界面身份，但弱化为历史记录，不再借用技能卡的视觉语义。
+   整行是可点的主按钮（跳到新版），右侧是独立的查看旧版按钮，两者各自有焦点环。 */
+.genui-history { display: flex; min-width: 0; width: 100%; align-items: center; gap: 8px; border: 1px solid var(--color-desk-line); border-radius: var(--radius-desk-md); color: var(--color-desk-muted); }
+.genui-history-main { display: flex; min-width: 0; flex: 1; flex-wrap: wrap; align-items: center; gap: 12px; border: 0; border-radius: var(--radius-desk-md); padding: 12px 16px; background: var(--color-desk-surface-subtle); color: inherit; cursor: pointer; font: inherit; text-align: left; }
+.genui-history-main:hover { background: var(--color-desk-accent-soft); }
+.genui-history-toggle { flex: none; margin-right: 12px; border: 1px solid var(--color-desk-line); border-radius: var(--radius-desk-sm); padding: 4px 10px; background: transparent; color: inherit; cursor: pointer; font: inherit; font-size: 11px; white-space: nowrap; }
+.genui-history-toggle:hover { background: var(--color-desk-accent-soft); }
 .genui-history-label { flex: none; color: var(--color-desk-accent); font-size: 11px; }
 .genui-history-title { min-width: 0; flex: 1; overflow: hidden; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
 .genui-history-version { flex: none; font-family: var(--font-mono); font-size: 11px; white-space: nowrap; }
-.genui-history-body { border-top: 1px solid var(--color-desk-line); padding: 16px; }
+.genui-history-body { border: 1px solid var(--color-desk-line); border-top: 0; border-radius: 0 0 var(--radius-desk-md) var(--radius-desk-md); padding: 16px; }
 
 /* 可见性挂载门：远离视口的界面只留一行占位，视觉上弱于真实界面，但仍说清是什么、讲了什么。 */
 .genui-mount { min-width: 0; width: 100%; }
@@ -221,10 +220,14 @@
 
 .genui-table-scroll:focus-visible,
 .genui-table-expand:focus-visible,
-.genui-history > summary:focus-visible,
+.genui-history-main:focus-visible,
+.genui-history-toggle:focus-visible,
 .genui-document-copy:focus-visible,
 .genui-range:focus-visible,
 .genui-checkbox:focus-visible { outline: 2px solid var(--color-desk-accent); outline-offset: 3px; }
+
+/* 跳转落点：长会话里滚过去的距离很远，给一个短暂描边让用户看清落在哪。 */
+.is-jump-target { outline: 2px solid var(--color-desk-accent); outline-offset: 4px; border-radius: var(--radius-desk-md); }
 
 @container genui (max-width: 560px) {
   .genui-document-header { flex-wrap: wrap; gap: 12px; padding: 12px; }

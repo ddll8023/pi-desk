@@ -22,7 +22,7 @@ import type {
   GenuiTableNode
 } from '../../../shared/genui-api'
 import { formatShare, layoutBarChart, layoutLineChart, layoutPieChart } from './chart-geometry'
-import { layoutCrank, layoutExploded, layoutGearTrain } from './diagram-geometry'
+import { layoutCircuit, layoutCrank, layoutExploded, layoutGearTrain, layoutSection, layoutVectors } from './diagram-geometry'
 import { readGenuiBinding } from './param-state'
 import type { SvgLayout } from './svg-shapes'
 
@@ -112,6 +112,7 @@ function chartLayout(node: GenuiChartNode): SvgLayout {
 function diagramMarkdown(node: GenuiDiagramNode, values: Readonly<Record<string, GenuiParamValue>>): string[] {
   const angle = readGenuiBinding(values, node.binds?.angle) ?? 0
   const spread = readGenuiBinding(values, node.binds?.spread) ?? 0
+  const voltage = readGenuiBinding(values, node.binds?.voltage) ?? 0
   const lines: string[] = []
   switch (node.kind) {
     case 'exploded': {
@@ -133,6 +134,37 @@ function diagramMarkdown(node: GenuiDiagramNode, values: Readonly<Record<string,
     case 'crank': {
       const layout = layoutCrank(node.crank, node.rod, angle, node.unit)
       lines.push(`曲柄 ${node.crank}${node.unit ?? ''}，连杆 ${node.rod}${node.unit ?? ''}`)
+      lines.push('', ...layout.notes.map((note) => `- ${note}`))
+      break
+    }
+    case 'vector': {
+      const layout = layoutVectors(node.vectors, node.unit, angle)
+      lines.push('| 力 | 模长 | 方向 |', '| --- | --- | --- |')
+      const suffix = node.unit === undefined ? '' : ` ${node.unit}`
+      for (const vector of node.vectors) {
+        lines.push(`| ${cellText(vector.label)} | ${cellText(`${vector.magnitude}${suffix}`)} | ${cellText(`${vector.angle}°`)} |`)
+      }
+      lines.push('', ...layout.notes.map((note) => `- ${note}`))
+      break
+    }
+    case 'circuit': {
+      const layout = layoutCircuit(voltage > 0 ? voltage : node.voltage, node.components)
+      lines.push('| 元件 | 类型 | 阻值 |', '| --- | --- | --- |')
+      for (const component of node.components) {
+        const typeText = component.kind === 'resistor' ? '电阻' : component.kind === 'lamp' ? '灯泡' : '开关'
+        const valueText = component.value === undefined ? '—' : `${component.value} Ω`
+        lines.push(`| ${cellText(component.label)} | ${typeText} | ${cellText(valueText)} |`)
+      }
+      lines.push('', ...layout.notes.map((note) => `- ${note}`))
+      break
+    }
+    case 'section': {
+      const layout = layoutSection(node.layers, node.unit)
+      const suffix = node.unit === undefined ? '' : ` ${node.unit}`
+      lines.push('| 层 | 厚度 | 说明 |', '| --- | --- | --- |')
+      for (const [index, layer] of node.layers.entries()) {
+        lines.push(`| ${cellText(`${index + 1} ${layer.label}`)} | ${cellText(`${layer.thickness}${suffix}`)} | ${cellText(layer.note ?? '—')} |`)
+      }
       lines.push('', ...layout.notes.map((note) => `- ${note}`))
       break
     }

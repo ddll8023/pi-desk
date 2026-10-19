@@ -6,6 +6,8 @@
  * 一一对应，字段上限以该模块的常量为准，这里不重复声明数值。
  */
 import {
+  GENUI_CHART_KINDS,
+  GENUI_DIAGRAM_KINDS,
   GENUI_MAX_CHART_LABEL_CHARS,
   GENUI_MAX_CHART_POINTS,
   GENUI_MAX_CHART_SERIES,
@@ -17,6 +19,9 @@ import {
   GENUI_MAX_DIAGRAM_LABEL_CHARS,
   GENUI_MAX_DIAGRAM_NOTE_CHARS,
   GENUI_MAX_EXPLODED_PARTS,
+  GENUI_MAX_VECTORS,
+  GENUI_MAX_CIRCUIT_PARTS,
+  GENUI_MAX_SECTION_LAYERS,
   GENUI_MAX_GEARS,
   GENUI_MAX_GEAR_TEETH,
   GENUI_MAX_LIST_ITEMS,
@@ -36,6 +41,9 @@ import {
   GENUI_MAX_TEXT_CHARS,
   GENUI_MIN_CHART_POINTS,
   GENUI_MIN_EXPLODED_PARTS,
+  GENUI_MIN_VECTORS,
+  GENUI_MIN_CIRCUIT_PARTS,
+  GENUI_MIN_SECTION_LAYERS,
   GENUI_MIN_GEARS,
   GENUI_MIN_GEAR_TEETH,
   GENUI_MIN_PARAM_OPTIONS,
@@ -43,9 +51,16 @@ import {
   GENUI_SUBMIT_PREFIX,
   GENUI_VERSION
 } from '../../shared/genui-api'
+import type { GenuiChartKind, GenuiDiagramKind } from '../../shared/genui-api'
 
 /** 目录主题；未知主题由调用方拒绝并列出可选项。 */
 export type GenuiCatalogTopic = 'overview' | 'nodes' | 'params' | 'diagram' | 'chart' | 'update' | 'examples'
+
+/** 图解用途的一句话概括；`OVERVIEW` 与 `DIAGRAM` 的引导段共用，避免两处措辞分叉。 */
+const DIAGRAM_PURPOSE = '把装配关系、传动比、运动规律、受力、串联回路与层状剖面画成图解'
+
+/** 图表用途的一句话概括；`OVERVIEW` / `NODES` 与 `CHART` 的引导段共用。 */
+const CHART_PURPOSE = '把分类数据画成柱状图、折线图、饼图或环形图'
 
 const OVERVIEW = `生成式 UI 用一份声明式文档描述界面，由桌面端渲染成原生组件。
 文档形状：{version:${GENUI_VERSION}, title, fallback, params?, submitLabel?, nodes:[...]}。
@@ -54,8 +69,8 @@ const OVERVIEW = `生成式 UI 用一份声明式文档描述界面，由桌面�
   必须能独立读懂，不能写"见上图"之类依赖视觉的措辞。
 - nodes：至少一个节点，总数不超过 ${GENUI_MAX_NODES}（含嵌套），容器最多嵌套 4 层。
 - params / submitLabel：可选，声明界面内可调参数与提交按钮文案，字段见 ui_catalog({topic:"params"})。
-- diagram：可选节点，把装配关系、传动比与运动规律画成图解，字段见 ui_catalog({topic:"diagram"})。
-- chart：可选节点，把分类数据画成柱状图、折线图、饼图或环形图，字段见 ui_catalog({topic:"chart"})。
+- diagram：可选节点，${DIAGRAM_PURPOSE}，字段见 ui_catalog({topic:"diagram"})。
+- chart：可选节点，${CHART_PURPOSE}，字段见 ui_catalog({topic:"chart"})。
 只有两个渲染入口：ui_render 交付整份文档，ui_patch 按 documentId 只发改动部分。同一次回答可以多次调用，生成不同主题的独立界面。
 先判断是否真的需要界面：纯叙述、简短结论与路径清单用正文，不用 card 把整篇回答重新包装。
 方案对比用 row 并排，指标用 metric，真实先后顺序用 steps，带具体时间点的过程用 timeline；有参数时才提供 controls。
@@ -80,8 +95,8 @@ card    {type:"card", title?, children:[...]}            子节点至少一个
 row     {type:"row", columns?, children:[...]}           columns 1..${GENUI_MAX_COLUMNS}，作为期望列数上限；窄容器自动减列，省略时自适应；子节点至少一个
 controls {type:"controls", params?:[string]}             参数控件组，params 省略时渲染全部已声明参数；
         只能引用文档 params 里已声明的 id，且每个声明的参数都必须被某个 controls 引用
-diagram {type:"diagram", kind, ...}                       机制图解，三种 kind 字段见 ui_catalog({topic:"diagram"})
-chart   {type:"chart", kind, labels:[string], series:[{name?,values}], ...}   柱状图、折线图、饼图与环形图，字段见 ui_catalog({topic:"chart"})
+diagram {type:"diagram", kind, ...}                       机制图解，${GENUI_DIAGRAM_KINDS.length} 种 kind（${GENUI_DIAGRAM_KINDS.join(' / ')}），字段见 ui_catalog({topic:"diagram"})
+chart   {type:"chart", kind, labels:[string], series:[{name?,values}], ...}   ${CHART_PURPOSE}（${GENUI_CHART_KINDS.join(' / ')}），字段见 ui_catalog({topic:"chart"})
 
 布局与阅读：
 - 方案对比用 row 包含并列 card，指标并列用 row 包含 metric；不要把可比较项全排成纵向长文。
@@ -119,38 +134,75 @@ ${GENUI_SUBMIT_PREFIX}：《界面标题》 documentId=… revision=…
 - 缓存容量（capacity）：256 MB
 按 documentId 认定是同一份界面的回填，直接基于这些取值继续，不要重画同一界面。`
 
-const DIAGRAM = `机制图解用几何公式把关系画出来，适合装配顺序、传动比、运动规律；不适合画任意示意图。
-三种 kind 共用的字段：caption?（1..400 字符）与 binds?（绑定，见下）。
+/** 图解目录的引导段；不写种类数，新增种类时不必改这里。 */
+const DIAGRAM_INTRO = `机制图解用几何公式把关系画出来，适合装配顺序、传动比、运动规律、受力、串联回路与层状剖面；不适合画任意示意图。
+所有 kind 共用的字段：caption?（1..400 字符）与 binds?（绑定，见下）。`
 
-exploded  装配拆解：纵向展开零件
+/**
+ * 每种图示的字段说明；键集合由 `GenuiDiagramKind` 约束，新增种类时缺键会立刻编译报错。
+ * 拼进目录的顺序取 `GENUI_DIAGRAM_KINDS`，与解析分派顺序一致。
+ */
+const DIAGRAM_KIND_DOCS: Readonly<Record<GenuiDiagramKind, string>> = {
+  exploded: `exploded  装配拆解：纵向展开零件
   {type:"diagram", kind:"exploded", parts:[{label, note?}], caption?, binds?:{spread?}}
   parts ${GENUI_MIN_EXPLODED_PARTS}..${GENUI_MAX_EXPLODED_PARTS} 个；label 不超过 ${GENUI_MAX_DIAGRAM_LABEL_CHARS} 字符，note 不超过 ${GENUI_MAX_DIAGRAM_NOTE_CHARS} 字符。
-  spread 取 0..1，控制拆解间距：0 最紧、1 最松。
-
-gear  齿轮传动：节圆半径正比于齿数，相邻齿轮相切
+  spread 取 0..1，控制拆解间距：0 最紧、1 最松。`,
+  gear: `gear  齿轮传动：节圆半径正比于齿数，相邻齿轮相切
   {type:"diagram", kind:"gear", gears:[{label, teeth}], caption?, binds?:{angle?}}
-  gears ${GENUI_MIN_GEARS}..${GENUI_MAX_GEARS} 个；teeth 是 ${GENUI_MIN_GEAR_TEETH}..${GENUI_MAX_GEAR_TEETH} 的整数。
+  gears ${GENUI_MIN_GEARS}..${GENUI_MAX_GEARS} 级；teeth 是 ${GENUI_MIN_GEAR_TEETH}..${GENUI_MAX_GEAR_TEETH} 的整数。
   转速比由齿数推出（上一级齿数/本级齿数），转向交替；angle 是主动轮的驱动角，单位度。
-
-crank  曲柄连杆：活塞位移 x = r·cosθ + √(l² − r²sin²θ)
+  级数超过 4 时单个齿轮变小，齿数文字可能不画，但齿数仍在结论里。`,
+  crank: `crank  曲柄连杆：活塞位移 x = r·cosθ + √(l² − r²sin²θ)
   {type:"diagram", kind:"crank", crank, rod, unit?, caption?, binds?:{angle?}}
   crank 与 rod 都是大于 0 的有限数字，且必须 rod > crank，否则曲柄转不过一周、整份被拒。
-  unit 是长度单位（如 mm）；angle 是曲柄角，单位度，默认 0。
+  unit 是长度单位（如 mm）；angle 是曲柄角，单位度，默认 0。`,
+  vector: `vector  力矢量：多个力共起点，末端画箭头，并给出合力
+  {type:"diagram", kind:"vector", vectors:[{label, magnitude, angle}], unit?, caption?, binds?:{angle?}}
+  vectors ${GENUI_MIN_VECTORS}..${GENUI_MAX_VECTORS} 个；magnitude 是大于 0 的有限数字。
+  angle 是方向角，单位度，0 表示向右、逆时针为正（与曲柄角同口径）；unit 是力或长度的单位（如 N）。
+  合力由分量求和推出；模长几乎相抵时结论会写“合力为 0（受力平衡）”。angle 绑定把整个力系一起旋转。`,
+  circuit: `circuit  串联电路：单一回路，电源在左，元件依次串入
+  {type:"diagram", kind:"circuit", voltage, components:[{kind, label, value?}], caption?, binds?:{voltage?}}
+  voltage 是大于 0 的有限数字（伏）；components ${GENUI_MIN_CIRCUIT_PARTS}..${GENUI_MAX_CIRCUIT_PARTS} 个。
+  元件 kind 只能是 resistor（电阻）、lamp（灯泡）或 switch（开关）；resistor 与 lamp 必须给 value（阻值，> 0），
+  switch 不接受 value。只支持串联：并联与分支需要节点图自动布局，请改用 table 表达。
+  结论给 R总、I=U/R总、各元件压降与总功率；回路含断开的开关时写“回路不通，电流 0”而不给假值。`,
+  section: `section  剖面：同心圆环，由内到外逐层包裹
+  {type:"diagram", kind:"section", layers:[{label, thickness, note?}], unit?, caption?, binds?:{}}
+  layers ${GENUI_MIN_SECTION_LAYERS}..${GENUI_MAX_SECTION_LAYERS} 层，数组顺序就是由内到外；thickness 大于 0。
+  结论给各层外径、总外径与环形面积占比（面积按外圆减内圆算，不是厚度占比）。
+  剖面没有天然可调量，不接受 binds。`
+}
 
-绑定 binds 不是表达式：只有 spread（exploded）与 angle（gear/crank）两个键，值必须是
-文档 params 里已声明的 number 参数 id。绑到 select、toggle 或 text 会被拒。
+const DIAGRAM_OUTRO = `绑定 binds 不是表达式：只有 spread（exploded）、angle（gear / crank / vector）与 voltage（circuit）三个键，
+值必须是文档 params 里已声明的 number 参数 id。绑到 select、toggle 或 text 会被拒。
 注意：绑定不会让参数免于被控件组引用——要让用户能调，仍然必须有 controls 节点引用它。
 
 图示是叶子节点，内部不再嵌套其他节点；几何与推导结论由桌面端算出并以文本同时给出。`
 
-const CHART = `图表画分类轴 + 数据。四种 kind 按用途选：
-bar   柱状图：分类对比，从零线起算，正负方向相反，同一分类的多条序列并排分组；1~${GENUI_MAX_CHART_SERIES} 条序列。
-line  折线图：趋势与变化，每条序列各一条线；1~${GENUI_MAX_CHART_SERIES} 条序列。
-pie   饼图：占比表达，只画一条序列，每片是一个分类。
-donut 环形图：与饼图同数据，中间显示总计，适合把总量一并写出来。
-占比、构成、份额优先用 pie/donut，不要用柱状图让人硬读比例；超过 ${GENUI_MAX_PIE_SLICES} 片或需要跨分类对比时用 table。
+const DIAGRAM = [
+  DIAGRAM_INTRO,
+  ...GENUI_DIAGRAM_KINDS.map((kind) => DIAGRAM_KIND_DOCS[kind]),
+  DIAGRAM_OUTRO
+].join('\n\n')
 
-形状：{type:"chart", kind:"bar"|"line"|"pie"|"donut", labels:[string], series:[{name?,values}], title?, caption?, unit?}
+/** 图表目录的引导段；不写种类数，新增种类时不必改这里。 */
+const CHART_INTRO = '图表画分类轴 + 数据。按用途选 kind：'
+
+/**
+ * 每种图表的用途说明；键集合由 `GenuiChartKind` 约束，新增种类时缺键会立刻编译报错。
+ * 拼进目录的顺序取 `GENUI_CHART_KINDS`，与解析分派顺序一致。
+ */
+const CHART_KIND_DOCS: Readonly<Record<GenuiChartKind, string>> = {
+  bar: `bar   柱状图：分类对比，从零线起算，正负方向相反，同一分类的多条序列并排分组；1~${GENUI_MAX_CHART_SERIES} 条序列。`,
+  line: `line  折线图：趋势与变化，每条序列各一条线；1~${GENUI_MAX_CHART_SERIES} 条序列。`,
+  pie: 'pie   饼图：占比表达，只画一条序列，每片是一个分类。',
+  donut: 'donut 环形图：与饼图同数据，中间显示总计，适合把总量一并写出来。'
+}
+
+const CHART_DETAIL = `占比、构成、份额优先用 pie/donut，不要用柱状图让人硬读比例；超过 ${GENUI_MAX_PIE_SLICES} 片或需要跨分类对比时用 table。
+
+形状：{type:"chart", kind:${GENUI_CHART_KINDS.map((kind) => `"${kind}"`).join('|')}, labels:[string], series:[{name?,values}], title?, caption?, unit?}
 - labels 是分类轴，${GENUI_MIN_CHART_POINTS}..${GENUI_MAX_CHART_POINTS} 个，每个不超过 ${GENUI_MAX_CHART_LABEL_CHARS} 字符；超过 4 个字符时轴标签会截断（完整值仍在无障碍说明里）。
 - series ${GENUI_MAX_CHART_SERIES} 条以内，每条 {name?, values}；values 是数字数组，长度必须等于 labels，按位置一一对应。
 - 多条序列时 name 必填且不重复（不超过 ${GENUI_MAX_CHART_SERIES_NAME_CHARS} 字符），图例靠它区分；单序列可以省略 name。
@@ -162,6 +214,12 @@ donut 环形图：与饼图同数据，中间显示总计，适合把总量一�
 
 图表不绑定参数、不做交互；需要随参数变化的图形用 diagram。
 图表与 fallback 的分工：fallback 里要写清结论（每序列的最大值、占比最大的分类与百分比、趋势或差距），不能只写“见下图”。`
+
+const CHART = [
+  CHART_INTRO,
+  ...GENUI_CHART_KINDS.map((kind) => CHART_KIND_DOCS[kind]),
+  CHART_DETAIL
+].join('\n')
 
 const UPDATE = `修改已交付的界面分两步：
 1. ui_inspect 查看现有界面。不带参数列出当前会话分支上的全部界面（documentId、标题、当前版本）；
@@ -231,25 +289,36 @@ const EXAMPLES = `示例一：方案对比（两个配置并排，不把说明�
  "submitLabel":"按这组参数继续",
  "nodes":[{"type":"controls"}]}
 
-示例四：图解与参数并排（宽度不足时自动上下排列，两边读取同一份参数）
-{"version":${GENUI_VERSION},"title":"两级减速","fallback":"两级齿轮减速：齿数 12→36→18，第一级减速 3 倍，第二级加速 2 倍。",
+示例四：图解与参数并排（宽度不足时自动上下排列，两边读取同一份参数；齿轮最多 6 级）
+{"version":${GENUI_VERSION},"title":"四级减速","fallback":"四级齿轮减速：齿数 12→36→18→54→20，总传动比 1.67，末级转向与主动轮相反。",
  "params":[{"id":"angle","type":"number","label":"驱动角","min":0,"max":360,"step":5,"default":30,"unit":"°"}],
  "nodes":[
   {"type":"row","columns":2,"children":[
-    {"type":"diagram","kind":"gear","binds":{"angle":"angle"},"caption":"齿数 12 / 36 / 18",
-     "gears":[{"label":"主动轮","teeth":12},{"label":"中间轮","teeth":36},{"label":"输出轮","teeth":18}]},
+    {"type":"diagram","kind":"gear","binds":{"angle":"angle"},"caption":"齿数 12 / 36 / 18 / 54 / 20",
+     "gears":[{"label":"主动轮","teeth":12},{"label":"一级轮","teeth":36},{"label":"二级轮","teeth":18},
+              {"label":"三级轮","teeth":54},{"label":"输出轮","teeth":20}]},
     {"type":"controls"}
   ]}
  ]}
 
-示例五：柱状图（单序列，省略 name 时不出图例）
+示例五：力矢量（方向角 0 表示向右、逆时针为正；合力由分量求和推出）
+{"version":${GENUI_VERSION},"title":"斜面受力","fallback":"重力 100 N 向下、支持力 80 N 向上偏右 30°、摩擦力 20 N 向左；合力约 36.6 N，方向向下偏右。","nodes":[
+  {"type":"diagram","kind":"vector","unit":"N","caption":"三个力共起点，虚线为合力",
+   "vectors":[
+    {"label":"重力","magnitude":100,"angle":270},
+    {"label":"支持力","magnitude":80,"angle":60},
+    {"label":"摩擦力","magnitude":20,"angle":180}
+   ]}
+ ]}
+
+示例六：柱状图（单序列，省略 name 时不出图例）
 {"version":${GENUI_VERSION},"title":"各方案构建耗时","fallback":"四个方案的构建耗时：冷构建 92 秒最长，增量构建 11 秒最短。","nodes":[
   {"type":"chart","kind":"bar","unit":"s","caption":"示例数据，不代表本机实测",
    "labels":["冷构建","增量","并行","缓存"],
    "series":[{"values":[92,11,34,27]}]}
  ]}
 
-示例六：双序列折线（多序列必须给 name，图例自动生成）
+示例七：双序列折线（多序列必须给 name，图例自动生成）
 {"version":${GENUI_VERSION},"title":"一周接口耗时","fallback":"p95 从 180 毫秒降到 120 毫秒，p50 稳定在 40 毫秒上下；这是示例数据。","nodes":[
   {"type":"chart","kind":"line","unit":"ms","title":"接口耗时",
    "labels":["周一","周二","周三","周四","周五"],
@@ -260,7 +329,7 @@ const EXAMPLES = `示例一：方案对比（两个配置并排，不把说明�
    "caption":"示例数据，不代表本机实测"}
  ]}
 
-示例七：环形图（占比表达，只能一条序列，中间显示总计）
+示例八：环形图（占比表达，只能一条序列，中间显示总计）
 {"version":${GENUI_VERSION},"title":"缓存占用构成","fallback":"图片缓存占 60%（600 MB）最多，其次是构建产物 20%，其余两类各占 10%。","nodes":[
   {"type":"chart","kind":"donut","unit":"MB","title":"缓存占用",
    "labels":["图片缓存","构建产物","日志","临时文件"],
@@ -268,7 +337,7 @@ const EXAMPLES = `示例一：方案对比（两个配置并排，不把说明�
    "caption":"示例数据，不代表本机实测"}
  ]}
 
-示例八：带时间点的时间线（按时间先后传入；时间原样展示，不解析不排序）
+示例九：带时间点的时间线（按时间先后传入；时间原样展示，不解析不排序）
 {"version":${GENUI_VERSION},"title":"一次回滚的经过","fallback":"09:12 开始灰度，09:18 错误率升高后中止，09:25 完成回滚，09:40 恢复稳定。","nodes":[
   {"type":"timeline","items":[
     {"time":"09:12","title":"开始灰度","description":"先放 5% 流量。"},

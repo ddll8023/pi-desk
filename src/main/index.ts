@@ -29,6 +29,17 @@ import type { AutoUpdateResult, GenuiResult, ModelDisplayResult, PreferencesErro
 import { isAutoUpdatePreference, isGenuiPreference, isUiPreferences, isModelDisplayPreference, isQuickSendPreference } from '../shared/preferences-api'
 import type { UiTheme } from '../shared/preferences-api'
 import {
+  GENUI_PARAMS_CLEAR_CHANNEL,
+  GENUI_PARAMS_GET_CHANNEL,
+  GENUI_PARAMS_SAVE_CHANNEL,
+  isGenuiParamSaveRequest
+} from '../shared/genui-params-api'
+import type {
+  GenuiParamsClearResult,
+  GenuiParamsGetResult,
+  GenuiParamsSaveResult
+} from '../shared/genui-params-api'
+import {
   QUICK_COMMANDS_GET_CHANNEL,
   QUICK_COMMANDS_SET_CHANNEL,
   isQuickCommandsPreference
@@ -292,6 +303,7 @@ import { readMcpConfigListing } from './mcp-config-reader'
 import { ModelsConfigError, ModelsConfigManager } from './models-config-manager'
 import { PiSettingsError, PiSettingsManager } from './pi-settings-manager'
 import { PreferencesManager } from './preferences-manager'
+import { GenuiParamStore } from './genui-param-store'
 import { ProjectDirectoryReader } from './project-directory'
 import { ProjectDirectoryWatcher } from './project-directory-watcher'
 import { ProjectFileContent } from './project-file-content'
@@ -424,6 +436,8 @@ const gitService = new GitService({
 /** 认证执行端：管理认证辅助进程，凭据读写全在官方实现内完成。 */
 const authManager = new AuthManager({ store: configStore, isPackaged: app.isPackaged })
 const preferencesManager = new PreferencesManager({ store: configStore })
+/** 生成式界面参数取值的本机旁路存储；与 Desktop 配置分开，高频变化且可再生产。 */
+const genuiParamStore = new GenuiParamStore()
 /** 自定义供应商配置（Pi 的 models.json）的唯一读写者；与 Desktop 自己的配置互不影响。 */
 const modelsConfigManager = new ModelsConfigManager()
 /** Pi 默认模型（Pi 的 settings.json）的唯一读写者；只改 defaultProvider 与 defaultModel。 */
@@ -750,6 +764,14 @@ function sessionRunsFailure(code: 'FORBIDDEN' | 'INVALID_REQUEST' | 'INTERNAL_ER
 }
 
 function preferencesFailure(code: PreferencesErrorCode, message: string): PreferencesResult {
+  return { ok: false, error: { code, message } }
+}
+
+/** 界面参数存储失败：码取自共享错误码族，消息可直接展示。 */
+function genuiParamsFailure(
+  code: DesktopErrorCode,
+  message: string
+): { readonly ok: false; readonly error: DesktopError } {
   return { ok: false, error: { code, message } }
 }
 
@@ -2246,6 +2268,68 @@ function registerPreferencesHandlers(pageUrl: string): void {
 }
 
 /**
+ * 生成式界面参数取值：读取全量、保存单条、清除全部。
+ * 这三项只动本机旁路文件 `genui-params.json`，不读写 Desktop 配置，也不修改 Pi 配置。
+ * 失败一律回传错误而不静默吞掉：参数可再生产，但用户需要知道本次调节没存下来。
+ */
+function registerGenuiParamHandlers(pageUrl: string): void {
+  handle(
+    GENUI_PARAMS_GET_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<GenuiParamsGetResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return genuiParamsFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 0) {
+        return genuiParamsFailure('INVALID_REQUEST', '界面参数读取接口不接受参数。')
+      }
+      try {
+        return { ok: true, data: await genuiParamStore.read() }
+      } catch (error) {
+        return genuiParamsFailure('INTERNAL_ERROR', error instanceof Error ? error.message : '读取界面参数时发生未知错误。')
+      }
+    }
+  )
+
+  handle(
+    GENUI_PARAMS_SAVE_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<GenuiParamsSaveResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return genuiParamsFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 1) {
+        return genuiParamsFailure('INVALID_REQUEST', '保存界面参数接口只接受一个请求对象。')
+      }
+      const request = args[0]
+      if (!isGenuiParamSaveRequest(request)) {
+        return genuiParamsFailure('INVALID_REQUEST', '界面参数请求必须包含合法的界面标识，record 为 null 或合法记录对象。')
+      }
+      try {
+        return { ok: true, data: await genuiParamStore.save(request.documentId, request.record) }
+      } catch (error) {
+        return genuiParamsFailure('INTERNAL_ERROR', error instanceof Error ? error.message : '保存界面参数时发生未知错误。')
+      }
+    }
+  )
+
+  handle(
+    GENUI_PARAMS_CLEAR_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<GenuiParamsClearResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return genuiParamsFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 0) {
+        return genuiParamsFailure('INVALID_REQUEST', '清除界面参数接口不接受参数。')
+      }
+      try {
+        return { ok: true, data: { removed: await genuiParamStore.clear() } }
+      } catch (error) {
+        return genuiParamsFailure('INTERNAL_ERROR', error instanceof Error ? error.message : '清除界面参数时发生未知错误。')
+      }
+    }
+  )
+}
+
+/**
  * 第三方自定义供应商（Pi 的 models.json）：读取快照、按单个条目新增或替换、删除条目。
  * 页面只能提交一个供应商条目的 JSON 文本，不能指定文件路径、不能整体替换文件；
  * 真实密钥不回传，页面看到的是哨兵文本，保存时由主进程按位置还原。
@@ -2949,6 +3033,7 @@ if (!app.requestSingleInstanceLock()) {
     registerTerminalHandlers(pageUrl)
     registerTrustHandlers(pageUrl)
     registerPreferencesHandlers(pageUrl)
+    registerGenuiParamHandlers(pageUrl)
     registerPiSettingsHandlers(pageUrl)
     registerModelsConfigHandlers(pageUrl)
     registerAuthHandlers(pageUrl)

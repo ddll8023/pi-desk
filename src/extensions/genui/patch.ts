@@ -1,7 +1,7 @@
 /**
  * 生成式界面的局部修改：把一组节点级补丁合并进现有文档，产出下一版完整文档。
  *
- * 边界：只做结构合并，不做校验——合并结果仍要过 `explainGenuiDocument` 整份校验，
+ * 边界：只做结构合并，不做校验——合并结果仍要过 `explainGenuiDocumentWithRepairs` 的两遍解析，
  * 否则会产出渲染不出来的版本（参数与 `controls` 的交叉引用、节点数、序列化上限都要重新确认）。
  *
  * 为什么合并后的完整文档仍然整份写进 `details.ui`：投影层与渲染端只认结果里的 `details.ui`，
@@ -142,7 +142,7 @@ function applyOp(nodes: readonly GenuiNode[], op: GenuiPatchOp, ordinal: number)
 
 /**
  * 合并补丁：先按顺序应用节点补丁，再覆盖文档级字段。
- * 返回的对象还没校验，交给 `explainGenuiDocument` 确认整份仍然成立。
+ * 返回的对象还没校验，交给 `explainGenuiDocumentWithRepairs` 确认整份仍然成立。
  */
 export function applyGenuiPatch(
   document: GenuiDocument,

@@ -11,6 +11,12 @@
  * 需要告诉模型「哪一处不对」时用 `explainGenuiDocument`：它与 `parseGenuiDocument` 共用同一份
  * 解析实现，只在失败时额外收集带 JSON 路径的诊断，不存在第二套校验口径。
  *
+ * 交付入口（扩展层）另走 `explainGenuiDocumentWithRepairs` 的两遍解析：严格解析失败时，先只修
+ * 引用与冗余这类机械错误（`repairDocumentShallow`），再跑一次同一份严格解析，只有第二次通过
+ * 才采用修复结果。因此校验口径仍只有一份，投影层与渲染端继续只看严格解析的结果。
+ * 超限内容（行数、字数、单元格长度）不在可修范围内：截断会让用户看到缺行缺字的界面且没有任何
+ * 可见提示，属静默数据丢失，这类错误仍原样退回给模型自行精简。
+ *
  * 参数（文档级 `params` 与 `controls` 节点）只描述「界面上能调什么」：协议里不含派生计算、
  * 不含默认值以外的取值，也不含持久化。取值只活在渲染进程内存里，用户显式提交后才以一条
  * 用户消息回填，因此协议不为参数留任何迁移字段；界面改版后的取值承接由渲染进程按参数 `id`
@@ -98,11 +104,27 @@ export const GENUI_MAX_SUBMIT_LABEL_CHARS = 40
 export const GENUI_MIN_EXPLODED_PARTS = 2
 export const GENUI_MAX_EXPLODED_PARTS = 8
 
-/** 齿轮传动里齿轮个数与单齿轮齿数的上下限。 */
+/**
+ * 齿轮传动里齿轮个数与单齿轮齿数的上下限。
+ * 上限放到 6 级：多级减速是真实需求，但 320px 画布上超过 6 个齿轮就分不清了，
+ * 几何层会在半径过小时不画齿数文字，只把齿数留在结论里。
+ */
 export const GENUI_MIN_GEARS = 2
-export const GENUI_MAX_GEARS = 3
+export const GENUI_MAX_GEARS = 6
 export const GENUI_MIN_GEAR_TEETH = 6
 export const GENUI_MAX_GEAR_TEETH = 60
+
+/** 力矢量的个数上下限；再多箭头会挤在一起，改用 table 表达分量。 */
+export const GENUI_MIN_VECTORS = 1
+export const GENUI_MAX_VECTORS = 6
+
+/** 串联电路的元件个数上下限。 */
+export const GENUI_MIN_CIRCUIT_PARTS = 1
+export const GENUI_MAX_CIRCUIT_PARTS = 6
+
+/** 剖面图的层数上下限；少于两层不构成剖面。 */
+export const GENUI_MIN_SECTION_LAYERS = 2
+export const GENUI_MAX_SECTION_LAYERS = 6
 
 /** 图示标签与说明的字符上限。 */
 export const GENUI_MAX_DIAGRAM_LABEL_CHARS = 60
@@ -146,6 +168,12 @@ export const GENUI_SUBMIT_PREFIX = '[genui] 界面参数已提交'
 /** 一次校验最多报告的诊断条数；再多也只是重复同类错误，不如让模型先改前几处。 */
 export const GENUI_MAX_ISSUES = 6
 
+/**
+ * 一次交付最多自动修复的处数；超过这个量说明文档本身结构性错误，
+ * 继续猜下去只会把模型的错误藏起来，因此整体按不可修处理。
+ */
+export const GENUI_MAX_REPAIRS = 12
+
 /** 一条校验诊断：`path` 是 JSON 路径，`reason` 是可直接执行的修正方向。 */
 export interface GenuiIssue {
   readonly path: string
@@ -153,12 +181,27 @@ export interface GenuiIssue {
 }
 
 /**
+ * 一条自动修复记录：`path` 是被改动的位置，`note` 说明改成了什么。
+ * 修复是可见的——它会写进工具摘要，用户与模型都能看出哪几处不是原始输入。
+ */
+export interface GenuiRepair {
+  readonly path: string
+  readonly note: string
+}
+
+/**
  * 文档校验结果：通过时给归一化后的文档，失败时给带路径的诊断。
  * 只有扩展层需要诊断（要告诉模型改哪一处）；投影层与渲染端仍用 `parseGenuiDocument` 的 null 语义。
+ * `repairs` 只由 `explainGenuiDocumentWithRepairs` 填充，严格解析入口永远不带。
  */
 export type GenuiParseResult =
-  | { readonly ok: true; readonly document: GenuiDocument }
-  | { readonly ok: false; readonly issues: readonly GenuiIssue[] }
+  | { readonly ok: true; readonly document: GenuiDocument; readonly repairs?: readonly GenuiRepair[] }
+  | {
+    readonly ok: false
+    readonly issues: readonly GenuiIssue[]
+    /** 失败前已尝试的自动修复条数；大于 0 时说明这些错不是引用问题。 */
+    readonly repairs?: readonly GenuiRepair[]
+  }
 
 /** 文档标识：小写 UUID v4，与工具结果一一对应，供后续轮次定位与局部修改。 */
 const DOCUMENT_ID_PATTERN = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/
@@ -327,8 +370,15 @@ export interface GenuiControlsNode {
   readonly params?: readonly string[]
 }
 
+/**
+ * 图示种类的唯一事实源：数组供运行时遍历（目录说明、错误文案、绑定表），
+ * `GenuiDiagramKind` 从它派生。新增种类只需在这里加一项，`Record` 形状的映射与穷尽
+ * `switch` 会立刻报错，不会静默漏改。
+ */
+export const GENUI_DIAGRAM_KINDS = ['exploded', 'gear', 'crank', 'vector', 'circuit', 'section'] as const
+
 /** 图示种类；每种只接受自己的字段，未知 kind 整份拒绝。 */
-export type GenuiDiagramKind = 'exploded' | 'gear' | 'crank'
+export type GenuiDiagramKind = (typeof GENUI_DIAGRAM_KINDS)[number]
 
 /** 装配拆解的零件：名称必填，说明可选。 */
 export interface GenuiExplodedPart {
@@ -338,13 +388,32 @@ export interface GenuiExplodedPart {
 
 /**
  * 图示的绑定：把一个几何量绑到已声明的数值参数上，参数变化时重算几何。
- * 不是表达式：只有这两个键，且目标必须是 number 参数，因此不需要求值器。
+ * 不是表达式：只有这三个键，且目标必须是 number 参数，因此不需要求值器。
  */
 export interface GenuiDiagramBinds {
-  /** 曲柄角度或齿轮驱动角，单位度。 */
+  /** 曲柄角度、齿轮驱动角或力系的整体旋转偏移，单位度。 */
   readonly angle?: string
   /** 装配拆解的拆解间距系数，取值 0..1。 */
   readonly spread?: string
+  /** 串联电路的电源电压；电流与压降随之重算。 */
+  readonly voltage?: string
+}
+
+/** 各类图示允许绑定的键；解析与自动修复共用同一份，避免校验与修复两处漂移。 */
+const DIAGRAM_BIND_KEYS: Readonly<Record<GenuiDiagramKind, readonly (keyof GenuiDiagramBinds)[]>> = {
+  exploded: ['spread'],
+  gear: ['angle'],
+  crank: ['angle'],
+  vector: ['angle'],
+  circuit: ['voltage'],
+  // 剖面没有天然可调量：层厚是静态事实，不提供绑定。
+  section: []
+}
+
+/** 按 kind 取允许的绑定键；未知 kind 返回 null，由调用方按不可处理对待。 */
+function allowedBindsOf(kind: unknown): readonly (keyof GenuiDiagramBinds)[] | null {
+  if (typeof kind !== 'string') return null
+  return Object.hasOwn(DIAGRAM_BIND_KEYS, kind) ? DIAGRAM_BIND_KEYS[kind as GenuiDiagramKind] : null
 }
 
 /** 装配拆解图：纵向展开的零件序列。 */
@@ -385,11 +454,90 @@ export interface GenuiCrankDiagram {
   readonly binds?: GenuiDiagramBinds
 }
 
+/**
+ * 一个力矢量：标签、模长与方向角。
+ * `angle` 以度为单位，0 表示向右，逆时针为正（与曲柄角同口径）；
+ * 几何层再把它转成屏幕坐标，因此传入方不需要关心 SVG 的 y 轴方向。
+ */
+export interface GenuiVectorSpec {
+  readonly label: string
+  readonly magnitude: number
+  readonly angle: number
+}
+
+/** 力矢量图：多个力共起点，末端画箭头，并给出合力大小与方向。 */
+export interface GenuiVectorDiagram {
+  readonly type: 'diagram'
+  readonly kind: 'vector'
+  readonly vectors: readonly GenuiVectorSpec[]
+  readonly unit?: string
+  readonly caption?: string
+  readonly binds?: GenuiDiagramBinds
+}
+
+/**
+ * 串联电路里允许的元件种类。
+ * 只收这三种纯阻性元件：它们的电压电流关系是线性的，推导结论才成立。
+ * 电容与电感在直流稳态下不适用 `I = U/R`，加进来只能画图不能给结论，因此不收。
+ */
+export type GenuiCircuitComponentKind = 'resistor' | 'lamp' | 'switch'
+
+/** 一个串联元件；`value` 是阻值（> 0），开关不接受阻值。 */
+export interface GenuiCircuitComponent {
+  readonly kind: GenuiCircuitComponentKind
+  readonly label: string
+  readonly value?: number
+}
+
+/**
+ * 串联电路图：单一回路，电源在左，元件依次串在回路上。
+ * 只做串联：并联需要节点图自动布局，收益远低于成本，而且推导结论会变复杂。
+ */
+export interface GenuiCircuitDiagram {
+  readonly type: 'diagram'
+  readonly kind: 'circuit'
+  readonly voltage: number
+  readonly components: readonly GenuiCircuitComponent[]
+  readonly caption?: string
+  readonly binds?: GenuiDiagramBinds
+}
+
+/** 剖面的一层：由内到外排列，`thickness` 是这一层的厚度。 */
+export interface GenuiSectionLayer {
+  readonly label: string
+  readonly thickness: number
+  readonly note?: string
+}
+
+/**
+ * 剖面图：同心圆环，由内到外逐层包裹。
+ * 不做堆叠分层带：那种视觉与 exploded 高度重合，而同心圆环适合电缆、管路、滤芯这类真实剖面。
+ */
+export interface GenuiSectionDiagram {
+  readonly type: 'diagram'
+  readonly kind: 'section'
+  readonly layers: readonly GenuiSectionLayer[]
+  readonly unit?: string
+  readonly caption?: string
+  readonly binds?: GenuiDiagramBinds
+}
+
 /** 图示节点联合；几何由渲染端公式计算，协议里没有表达式也没有脚本。 */
-export type GenuiDiagramNode = GenuiExplodedDiagram | GenuiGearDiagram | GenuiCrankDiagram
+export type GenuiDiagramNode =
+  | GenuiExplodedDiagram
+  | GenuiGearDiagram
+  | GenuiCrankDiagram
+  | GenuiVectorDiagram
+  | GenuiCircuitDiagram
+  | GenuiSectionDiagram
+
+/**
+ * 图表种类的唯一事实源；与 `GENUI_DIAGRAM_KINDS` 同一做法：数组供运行时遍历，类型从它派生。
+ */
+export const GENUI_CHART_KINDS = ['bar', 'line', 'pie', 'donut'] as const
 
 /** 图表种类：柱状图用于分类对比，折线图用于趋势，饼图与环形图用于占比。 */
-export type GenuiChartKind = 'bar' | 'line' | 'pie' | 'donut'
+export type GenuiChartKind = (typeof GENUI_CHART_KINDS)[number]
 
 /**
  * 旧形状的一个数据点：分类标签加数值。
@@ -698,8 +846,10 @@ function parseDiagramBinds(
   context: ParseContext
 ): GenuiDiagramBinds | undefined | null {
   if (value === undefined) return undefined
-  if (!isRecord(value)) return fail(context, path, '省略，或给 {angle?, spread?}')
-  const binds: { angle?: string; spread?: string } = {}
+  if (!isRecord(value)) return fail(context, path, '省略，或给 {angle?, spread?, voltage?}')
+  // 允许列表为空时直接拒绝：剖面没有可绑定的量，逐键报错会输出「只支持 」这种残缺文案。
+  if (allowed.length === 0) return fail(context, path, '这个图示不支持绑定，请省略 binds')
+  const binds: { angle?: string; spread?: string; voltage?: string } = {}
   for (const key of Object.keys(value)) {
     if (!(allowed as readonly string[]).includes(key)) {
       return fail(context, `${path}.${key}`, `这个图示不支持绑定 ${key}，只支持 ${allowed.join('、')}`)
@@ -751,7 +901,7 @@ function parseDiagram(value: Record<string, unknown>, path: string, context: Par
         }
         parts.push({ label, ...(note === undefined ? {} : { note }) })
       }
-      const binds = parseDiagramBinds(value.binds, `${path}.binds`, ['spread'], context)
+      const binds = parseDiagramBinds(value.binds, `${path}.binds`, DIAGRAM_BIND_KEYS.exploded, context)
       if (binds === null) return null
       return { type: 'diagram', kind: 'exploded', parts, ...captionField, ...(binds === undefined ? {} : { binds }) }
     }
@@ -779,7 +929,7 @@ function parseDiagram(value: Record<string, unknown>, path: string, context: Par
         }
         gears.push({ label, teeth })
       }
-      const binds = parseDiagramBinds(value.binds, `${path}.binds`, ['angle'], context)
+      const binds = parseDiagramBinds(value.binds, `${path}.binds`, DIAGRAM_BIND_KEYS.gear, context)
       if (binds === null) return null
       return { type: 'diagram', kind: 'gear', gears, ...captionField, ...(binds === undefined ? {} : { binds }) }
     }
@@ -792,7 +942,7 @@ function parseDiagram(value: Record<string, unknown>, path: string, context: Par
       if (rod <= crank) return fail(context, `${path}.rod`, '必须大于 crank，否则曲柄转不过一周')
       const unit = optionalText(value.unit, GENUI_MAX_PARAM_UNIT_CHARS)
       if (unit === null) return fail(context, `${path}.unit`, `省略，或给 1..${GENUI_MAX_PARAM_UNIT_CHARS} 字符的字符串`)
-      const binds = parseDiagramBinds(value.binds, `${path}.binds`, ['angle'], context)
+      const binds = parseDiagramBinds(value.binds, `${path}.binds`, DIAGRAM_BIND_KEYS.crank, context)
       if (binds === null) return null
       return {
         type: 'diagram',
@@ -804,8 +954,115 @@ function parseDiagram(value: Record<string, unknown>, path: string, context: Par
         ...(binds === undefined ? {} : { binds })
       }
     }
+    case 'vector': {
+      if (!Array.isArray(value.vectors)) return fail(context, `${path}.vectors`, '必须是矢量数组，每项 {label,magnitude,angle}')
+      if (value.vectors.length < GENUI_MIN_VECTORS || value.vectors.length > GENUI_MAX_VECTORS) {
+        return fail(context, `${path}.vectors`, `矢量个数必须是 ${GENUI_MIN_VECTORS}..${GENUI_MAX_VECTORS}`)
+      }
+      const vectors: GenuiVectorSpec[] = []
+      for (const [index, item] of value.vectors.entries()) {
+        const itemPath = `${path}.vectors[${index}]`
+        if (!isRecord(item)) return fail(context, itemPath, '必须是 {label,magnitude,angle} 对象')
+        const label = item.label
+        if (!isText(label, GENUI_MAX_DIAGRAM_LABEL_CHARS)) {
+          return fail(context, `${itemPath}.label`, `必须是 1..${GENUI_MAX_DIAGRAM_LABEL_CHARS} 字符的非空字符串`)
+        }
+        const magnitude = item.magnitude
+        if (!isFiniteNumber(magnitude) || magnitude <= 0) {
+          return fail(context, `${itemPath}.magnitude`, '必须是大于 0 的有限数字')
+        }
+        const vectorAngle = item.angle
+        if (!isFiniteNumber(vectorAngle)) return fail(context, `${itemPath}.angle`, '必须是有限数字，单位度')
+        vectors.push({ label, magnitude, angle: vectorAngle })
+      }
+      const unit = optionalText(value.unit, GENUI_MAX_PARAM_UNIT_CHARS)
+      if (unit === null) return fail(context, `${path}.unit`, `省略，或给 1..${GENUI_MAX_PARAM_UNIT_CHARS} 字符的字符串`)
+      const binds = parseDiagramBinds(value.binds, `${path}.binds`, DIAGRAM_BIND_KEYS.vector, context)
+      if (binds === null) return null
+      return {
+        type: 'diagram',
+        kind: 'vector',
+        vectors,
+        ...(unit === undefined ? {} : { unit }),
+        ...captionField,
+        ...(binds === undefined ? {} : { binds })
+      }
+    }
+    case 'circuit': {
+      const voltage = value.voltage
+      if (!isFiniteNumber(voltage) || voltage <= 0) return fail(context, `${path}.voltage`, '必须是大于 0 的有限数字')
+      if (!Array.isArray(value.components)) {
+        return fail(context, `${path}.components`, '必须是元件数组，每项 {kind,label,value?}')
+      }
+      if (value.components.length < GENUI_MIN_CIRCUIT_PARTS || value.components.length > GENUI_MAX_CIRCUIT_PARTS) {
+        return fail(context, `${path}.components`, `元件个数必须是 ${GENUI_MIN_CIRCUIT_PARTS}..${GENUI_MAX_CIRCUIT_PARTS}`)
+      }
+      const components: GenuiCircuitComponent[] = []
+      for (const [index, item] of value.components.entries()) {
+        const itemPath = `${path}.components[${index}]`
+        if (!isRecord(item)) return fail(context, itemPath, '必须是 {kind,label,value?} 对象')
+        const kind = item.kind
+        if (kind !== 'resistor' && kind !== 'lamp' && kind !== 'switch') {
+          return fail(context, `${itemPath}.kind`, '元件 kind 只能是 resistor、lamp 或 switch')
+        }
+        const label = item.label
+        if (!isText(label, GENUI_MAX_DIAGRAM_LABEL_CHARS)) {
+          return fail(context, `${itemPath}.label`, `必须是 1..${GENUI_MAX_DIAGRAM_LABEL_CHARS} 字符的非空字符串`)
+        }
+        // 开关没有阻值；其余两种必须有，否则算不出电流与压降。
+        if (kind === 'switch') {
+          if (item.value !== undefined) return fail(context, `${itemPath}.value`, '开关不接受 value，请省略')
+          components.push({ kind, label })
+          continue
+        }
+        const resistance = item.value
+        if (!isFiniteNumber(resistance) || resistance <= 0) {
+          return fail(context, `${itemPath}.value`, '必须是大于 0 的有限数字（阻值）')
+        }
+        components.push({ kind, label, value: resistance })
+      }
+      const binds = parseDiagramBinds(value.binds, `${path}.binds`, DIAGRAM_BIND_KEYS.circuit, context)
+      if (binds === null) return null
+      return { type: 'diagram', kind: 'circuit', voltage, components, ...captionField, ...(binds === undefined ? {} : { binds }) }
+    }
+    case 'section': {
+      if (!Array.isArray(value.layers)) return fail(context, `${path}.layers`, '必须是层数组，每项 {label,thickness,note?}')
+      if (value.layers.length < GENUI_MIN_SECTION_LAYERS || value.layers.length > GENUI_MAX_SECTION_LAYERS) {
+        return fail(context, `${path}.layers`, `层数必须是 ${GENUI_MIN_SECTION_LAYERS}..${GENUI_MAX_SECTION_LAYERS}`)
+      }
+      const layers: GenuiSectionLayer[] = []
+      for (const [index, item] of value.layers.entries()) {
+        const itemPath = `${path}.layers[${index}]`
+        if (!isRecord(item)) return fail(context, itemPath, '必须是 {label,thickness,note?} 对象')
+        const label = item.label
+        if (!isText(label, GENUI_MAX_DIAGRAM_LABEL_CHARS)) {
+          return fail(context, `${itemPath}.label`, `必须是 1..${GENUI_MAX_DIAGRAM_LABEL_CHARS} 字符的非空字符串`)
+        }
+        const thickness = item.thickness
+        if (!isFiniteNumber(thickness) || thickness <= 0) {
+          return fail(context, `${itemPath}.thickness`, '必须是大于 0 的有限数字')
+        }
+        const note = optionalText(item.note, GENUI_MAX_DIAGRAM_NOTE_CHARS)
+        if (note === null) {
+          return fail(context, `${itemPath}.note`, `省略，或给 1..${GENUI_MAX_DIAGRAM_NOTE_CHARS} 字符的字符串`)
+        }
+        layers.push({ label, thickness, ...(note === undefined ? {} : { note }) })
+      }
+      const unit = optionalText(value.unit, GENUI_MAX_PARAM_UNIT_CHARS)
+      if (unit === null) return fail(context, `${path}.unit`, `省略，或给 1..${GENUI_MAX_PARAM_UNIT_CHARS} 字符的字符串`)
+      const binds = parseDiagramBinds(value.binds, `${path}.binds`, DIAGRAM_BIND_KEYS.section, context)
+      if (binds === null) return null
+      return {
+        type: 'diagram',
+        kind: 'section',
+        layers,
+        ...(unit === undefined ? {} : { unit }),
+        ...captionField,
+        ...(binds === undefined ? {} : { binds })
+      }
+    }
     default:
-      return fail(context, `${path}.kind`, '图示 kind 只能是 exploded、gear 或 crank')
+      return fail(context, `${path}.kind`, `图示 kind 只能是 ${GENUI_DIAGRAM_KINDS.join('、')}`)
   }
 }
 
@@ -977,7 +1234,7 @@ function parseChart(value: Record<string, unknown>, path: string, context: Parse
       const kind: 'pie' | 'donut' = value.kind === 'pie' ? 'pie' : 'donut'
       return { ...common, kind }
     }
-    default: return fail(context, `${path}.kind`, '图表 kind 只能是 bar、line、pie 或 donut')
+    default: return fail(context, `${path}.kind`, `图表 kind 只能是 ${GENUI_CHART_KINDS.join('、')}`)
   }
 }
 
@@ -1215,6 +1472,198 @@ function parseNodes(
   return nodes
 }
 
+/** 浅层修复的产物：改写后的文档与改动记录。 */
+interface ShallowRepairResult {
+  readonly value: Record<string, unknown>
+  readonly repairs: readonly GenuiRepair[]
+}
+
+/** 记一条修复记录；不做上限判断，由调用方在最后统一比对 `GENUI_MAX_REPAIRS`。 */
+type RepairRecorder = (path: string, note: string) => void
+
+/**
+ * 从原始 `params` 里宽松读出已声明参数 id 与其中的数值参数 id。
+ * 参数内容的错误仍交给严格解析报告，这里只关心「引用的目标存不存在」。
+ */
+function readDeclaredParams(params: unknown): { declared: Set<string>; numbers: Set<string> } {
+  const declared = new Set<string>()
+  const numbers = new Set<string>()
+  if (!Array.isArray(params)) return { declared, numbers }
+  for (const param of params) {
+    if (!isRecord(param) || typeof param.id !== 'string' || param.id === '') continue
+    declared.add(param.id)
+    if (param.type === 'number') numbers.add(param.id)
+  }
+  return { declared, numbers }
+}
+
+/** 找出没有任何控件组引用的参数 id；`controls` 省略 `params` 时视为渲染全部。 */
+function missingParamIds(nodes: readonly unknown[], declared: ReadonlySet<string>): string[] {
+  const used = new Set<string>()
+  const walk = (list: readonly unknown[]): void => {
+    for (const node of list) {
+      if (!isRecord(node)) continue
+      if (node.type === 'controls') {
+        if (!Array.isArray(node.params)) {
+          for (const id of declared) used.add(id)
+          continue
+        }
+        for (const id of node.params) {
+          if (typeof id === 'string') used.add(id)
+        }
+        continue
+      }
+      if ((node.type === 'card' || node.type === 'row') && Array.isArray(node.children)) walk(node.children)
+    }
+  }
+  walk(nodes)
+  return [...declared].filter((id) => !used.has(id))
+}
+
+/**
+ * 修复单个节点的引用类错误；`null` 表示这个节点应当删除。
+ * 只处理「指向不存在的东西」这类字段，节点内容一律原样保留，返回同一引用表示没改。
+ */
+function repairNode(
+  node: Record<string, unknown>,
+  path: string,
+  declared: ReadonlySet<string>,
+  numbers: ReadonlySet<string>,
+  record: RepairRecorder
+): Record<string, unknown> | null {
+  switch (node.type) {
+    case 'controls': {
+      // 没有声明参数时控件组没有可渲染内容，删掉它比留一个空壳更接近模型的本意。
+      if (declared.size === 0) {
+        record(path, '文档没有声明 params，已删除这个空的 controls 节点')
+        return null
+      }
+      if (!Array.isArray(node.params)) return node
+      const kept: string[] = []
+      const seen = new Set<string>()
+      for (const id of node.params) {
+        if (typeof id !== 'string' || !declared.has(id) || seen.has(id)) continue
+        seen.add(id)
+        kept.push(id)
+      }
+      if (kept.length === node.params.length) return node
+      if (kept.length === 0) {
+        const rest: Record<string, unknown> = { ...node }
+        delete rest.params
+        record(`${path}.params`, '引用的参数都不存在，已改为渲染全部参数')
+        return rest
+      }
+      record(`${path}.params`, `剔除了 ${node.params.length - kept.length} 个不存在或重复的参数 id`)
+      return { ...node, params: kept }
+    }
+    case 'diagram': {
+      if (!isRecord(node.binds)) return node
+      const allowed = allowedBindsOf(node.kind)
+      if (allowed === null) return node
+      const kept: Record<string, string> = {}
+      let dropped = 0
+      for (const [key, target] of Object.entries(node.binds)) {
+        if ((allowed as readonly string[]).includes(key) && typeof target === 'string' && numbers.has(target)) {
+          kept[key] = target
+        } else {
+          dropped += 1
+        }
+      }
+      if (dropped === 0) return node
+      if (Object.keys(kept).length === 0) {
+        const rest: Record<string, unknown> = { ...node }
+        delete rest.binds
+        record(`${path}.binds`, '绑定目标不是已声明的数值参数，已去掉这处绑定')
+        return rest
+      }
+      record(`${path}.binds`, `剔除了 ${dropped} 处无效绑定`)
+      return { ...node, binds: kept }
+    }
+    case 'card':
+    case 'row': {
+      if (!Array.isArray(node.children)) return node
+      const children = repairNodeList(node.children, `${path}.children`, declared, numbers, record)
+      return children.changed ? { ...node, children: children.items } : node
+    }
+    default:
+      return node
+  }
+}
+
+/**
+ * 修复节点列表里的引用类错误，返回新数组与是否改动。
+ * 容器递归下去，其余节点原样保留；被判定要删的节点直接不进入结果。
+ */
+function repairNodeList(
+  list: readonly unknown[],
+  path: string,
+  declared: ReadonlySet<string>,
+  numbers: ReadonlySet<string>,
+  record: RepairRecorder
+): { items: unknown[]; changed: boolean } {
+  const items: unknown[] = []
+  let changed = false
+  for (const [index, raw] of list.entries()) {
+    if (!isRecord(raw)) {
+      items.push(raw)
+      continue
+    }
+    const repaired = repairNode(raw, `${path}[${index}]`, declared, numbers, record)
+    if (repaired === null) {
+      changed = true
+      continue
+    }
+    if (repaired !== raw) changed = true
+    items.push(repaired)
+  }
+  return { items, changed }
+}
+
+/**
+ * 浅层修复：只改「引用不存在的东西」与「空数组冗余」这两类错误，不补内容、不改数值、不截断。
+ * 返回 null 表示没有可修的，或修复条数超出 `GENUI_MAX_REPAIRS`（视为结构性错误，仍原样拒绝）。
+ * 结果不保证能通过校验——调用方必须再跑一遍严格解析，只有通过才采用。
+ */
+function repairDocumentShallow(value: Record<string, unknown>): ShallowRepairResult | null {
+  const repairs: GenuiRepair[] = []
+  const record: RepairRecorder = (path, note) => {
+    repairs.push({ path, note })
+  }
+  const next: Record<string, unknown> = { ...value }
+
+  if (next.version !== GENUI_VERSION) {
+    next.version = GENUI_VERSION
+    record('version', `已按当前协议写为 ${GENUI_VERSION}`)
+  }
+
+  // params 不是数组时不知道到底声明了什么，因此不做任何引用类修复，只留着严格解析去报错。
+  const paramsReadable = next.params === undefined || Array.isArray(next.params)
+  if (Array.isArray(next.params) && next.params.length === 0) {
+    delete next.params
+    record('params', '空参数数组按未声明处理，已省略')
+  }
+  const { declared, numbers } = readDeclaredParams(next.params)
+
+  if (paramsReadable && Array.isArray(next.nodes)) {
+    const list = repairNodeList(next.nodes, 'nodes', declared, numbers, record)
+    if (list.changed) next.nodes = list.items
+  }
+
+  // 未被任何控件组引用的参数会让提交带上用户看不见的值；补一个只渲染这些参数的控件组，
+  // 比丢掉模型声明的参数更接近原意，也不会让已渲染的参数重复出现。
+  if (paramsReadable && Array.isArray(next.nodes) && declared.size > 0) {
+    const missing = missingParamIds(next.nodes, declared)
+    if (missing.length > 0) {
+      const appended = [...next.nodes, { type: 'controls', params: missing }]
+      next.nodes = appended
+      record(`nodes[${appended.length - 1}]`, `为未被引用的参数 ${missing.join('、')} 补了一个 controls 节点`)
+    }
+  }
+
+  if (repairs.length === 0 || repairs.length > GENUI_MAX_REPAIRS) return null
+  return { value: next, repairs }
+}
+
 /**
  * 解析一份文档并返回带路径的诊断；扩展层用它把失败原因告诉模型。
  * 版本不是当前协议版本时直接拒绝：历史会话里的旧文档由渲染端降级为文本，不做兼容猜测。
@@ -1282,6 +1731,23 @@ export function explainGenuiDocument(value: unknown): GenuiParseResult {
       nodes
     }
   }
+}
+
+/**
+ * 交付入口的两遍解析：严格解析失败时，先修引用与冗余这类机械错误，再跑一次同一份严格解析。
+ *
+ * 只有第二次通过才采用修复结果；仍然失败时返回第一次的诊断——那些路径指向模型原始输入，
+ * 模型据此改写比看修复后的文档更直接。因此校验口径仍只有一份，修复只是前置的一次重试。
+ */
+export function explainGenuiDocumentWithRepairs(value: unknown): GenuiParseResult {
+  const strict = explainGenuiDocument(value)
+  if (strict.ok) return strict
+  if (!isRecord(value)) return strict
+  const repaired = repairDocumentShallow(value)
+  if (repaired === null) return strict
+  const retried = explainGenuiDocument(repaired.value)
+  if (!retried.ok) return { ...strict, repairs: repaired.repairs }
+  return { ...retried, repairs: repaired.repairs }
 }
 
 /**

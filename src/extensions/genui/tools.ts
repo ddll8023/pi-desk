@@ -15,14 +15,16 @@
 import { randomUUID } from 'node:crypto'
 import type { ExtensionAPI, SessionEntry } from '@earendil-works/pi-coding-agent'
 import {
+  GENUI_CHART_KINDS,
+  GENUI_DIAGRAM_KINDS,
   GENUI_MAX_DOCUMENT_CHARS,
   GENUI_MAX_PARAMS,
   GENUI_MAX_SUBMIT_LABEL_CHARS,
   GENUI_SUBMIT_PREFIX,
   GENUI_VERSION,
-  explainGenuiDocument
+  explainGenuiDocumentWithRepairs
 } from '../../shared/genui-api'
-import type { GenuiDocument, GenuiParam, GenuiPayload } from '../../shared/genui-api'
+import type { GenuiDocument, GenuiParam, GenuiPayload, GenuiRepair } from '../../shared/genui-api'
 import { GENUI_CATALOG_TOPICS, genuiCatalog } from './catalog'
 import type { GenuiCatalogTopic } from './catalog'
 import { collectDeliveryWarnings, createDiagnosticsState, formatValidationError } from './diagnostics'
@@ -117,8 +119,8 @@ const CATALOG_PARAMETERS = {
       type: 'string',
       enum: [...GENUI_CATALOG_TOPICS],
       description: 'overview=协议总览（默认）；nodes=全部节点字段与上限；params=可调参数与控件组；'
-        + 'diagram=机制图解（装配拆解、齿轮传动、曲柄连杆）；chart=柱状图、折线图、饼图与环形图；'
-        + 'update=修改既有界面；examples=八个完整示例。'
+        + `diagram=机制图解（${GENUI_DIAGRAM_KINDS.join('、')}）；chart=${GENUI_CHART_KINDS.join('、')}；`
+        + 'update=修改既有界面；examples=九个完整示例。'
     }
   }
 } as unknown as ToolParameters
@@ -153,8 +155,20 @@ function defaultText(param: GenuiParam): string {
   return String(param.default)
 }
 
+/**
+ * 自动修复说明：让模型与用户都能看出哪几处不是原始输入。
+ * 修复不改内容，只修引用与冗余，因此这里只列位置与动作，不回灌整份文档。
+ */
+function repairNote(repairs: readonly GenuiRepair[]): string {
+  if (repairs.length === 0) return ''
+  const shown = repairs.slice(0, 6)
+  const lines = shown.map((repair) => `- ${repair.path}：${repair.note}`)
+  if (repairs.length > shown.length) lines.push(`- 另有 ${repairs.length - shown.length} 处未列出`)
+  return `\n\n已自动修复 ${repairs.length} 处机械错误（不改内容，只修正引用与冗余）：\n${lines.join('\n')}`
+}
+
 /** 组装模型可见摘要：只给标题、替代文本、文档标识与可调参数，不回灌整份文档。 */
-function summaryText(payload: GenuiPayload, updateNote?: string): string {
+function summaryText(payload: GenuiPayload, updateNote?: string, repairs: readonly GenuiRepair[] = []): string {
   const { document, documentId, revision } = payload
   const params = document.params ?? []
   const paramNote = params.length === 0
@@ -173,13 +187,19 @@ function summaryText(payload: GenuiPayload, updateNote?: string): string {
     + actionNote
     + versionNote
     + paramNote
+    + repairNote(repairs)
 }
 
 /**
- * 校验一份文档并返回归一化结果。两个渲染入口共用：序列化上限、整份解析与诊断文案完全一致，
+ * 校验一份文档并返回归一化结果。两个渲染入口共用：序列化上限、两遍解析与诊断文案完全一致，
  * 补丁合并出来的文档不能因为走了另一条路径而放宽校验。
+ * 返回的 `repairs` 是被采用的自动修复；空数组表示原始输入已经通过校验。
  */
-function validateDocument(rawDocument: unknown, toolName: string, diagnostics: DiagnosticsState): GenuiDocument {
+function validateDocument(
+  rawDocument: unknown,
+  toolName: string,
+  diagnostics: DiagnosticsState
+): { document: GenuiDocument; repairs: readonly GenuiRepair[] } {
   const normalized = normalizeDocumentInput(rawDocument, toolName)
   if (normalized === undefined || normalized === null) {
     throw new Error(`${toolName}: 缺少 document。请传入完整界面文档，字段见 ui_catalog({topic:"overview"})。`)
@@ -197,9 +217,11 @@ function validateDocument(rawDocument: unknown, toolName: string, diagnostics: D
       + '请拆成多份界面或精简表格行数后重试。'
     )
   }
-  const result = explainGenuiDocument(normalized)
-  if (!result.ok) throw new Error(formatValidationError(result.issues, diagnostics, toolName))
-  return result.document
+  const result = explainGenuiDocumentWithRepairs(normalized)
+  if (!result.ok) {
+    throw new Error(formatValidationError(result.issues, diagnostics, toolName, result.repairs?.length ?? 0))
+  }
+  return { document: result.document, repairs: result.repairs ?? [] }
 }
 
 /**
@@ -213,10 +235,10 @@ function buildPayload(
   documentId: string | undefined,
   entries: readonly SessionEntry[],
   diagnostics: DiagnosticsState
-): GenuiPayload {
-  const document = validateDocument(rawDocument, 'ui_render', diagnostics)
+): { payload: GenuiPayload; repairs: readonly GenuiRepair[] } {
+  const { document, repairs } = validateDocument(rawDocument, 'ui_render', diagnostics)
   if (documentId === undefined) {
-    return { version: GENUI_VERSION, documentId: randomUUID(), revision: 0, document }
+    return { payload: { version: GENUI_VERSION, documentId: randomUUID(), revision: 0, document }, repairs }
   }
   const revision = nextRevision(entries, documentId)
   if (revision === null) {
@@ -225,7 +247,7 @@ function buildPayload(
       + '先用 ui_inspect 确认既有界面的 documentId；要新建界面就去掉 documentId。'
     )
   }
-  return { version: GENUI_VERSION, documentId, revision, document }
+  return { payload: { version: GENUI_VERSION, documentId, revision, document }, repairs }
 }
 
 /**
@@ -239,7 +261,7 @@ function buildPatchedPayload(
   fields: GenuiDocumentPatch,
   entries: readonly SessionEntry[],
   diagnostics: DiagnosticsState
-): { payload: GenuiPayload; opCount: number; fieldCount: number } {
+): { payload: GenuiPayload; opCount: number; fieldCount: number; repairs: readonly GenuiRepair[] } {
   const latest = findLatestPayload(entries, documentId)
   if (latest === null) {
     throw new Error(
@@ -259,11 +281,12 @@ function buildPatchedPayload(
     if (error instanceof GenuiPatchError) throw new Error(`ui_patch: ${error.message}`)
     throw error
   }
-  const document = validateDocument(merged, 'ui_patch', diagnostics)
+  const { document, repairs } = validateDocument(merged, 'ui_patch', diagnostics)
   return {
     payload: { version: GENUI_VERSION, documentId, revision, document },
     opCount: ops.length,
-    fieldCount: Object.keys(fields).length
+    fieldCount: Object.keys(fields).length,
+    repairs
   }
 }
 
@@ -294,7 +317,7 @@ export function registerGenuiTools(pi: ExtensionAPI): void {
         + '认定是同一份界面，直接基于这些取值继续，不要重画同一界面。',
       '要修改已经交付过的界面时，先 ui_inspect 取它的结构与 documentId，再带同一个 documentId 调 ui_render；'
         + '不要用新 documentId 重复交付同一界面。小改动优先用 ui_patch 只发改动部分。',
-      '要表达装配顺序、传动比或运动规律时用 diagram 节点（字段见 ui_catalog({topic:"diagram"})）；'
+      '要表达装配顺序、传动比、运动规律、受力、串联回路或层状剖面时用 diagram 节点（字段见 ui_catalog({topic:"diagram"})）；'
         + '想让图解随用户调节变化，就声明 number 参数、用 binds 绑定，并用 controls 节点把它渲染出来。',
       '需要展示 1~3 条序列的数值对比或趋势时用 chart 的 bar/line（多序列自动出图例，字段见 ui_catalog({topic:"chart"})）；'
         + '超过 3 条、或单位与量级不可比时用 table，不要硬塞进图表。',
@@ -309,13 +332,13 @@ export function registerGenuiTools(pi: ExtensionAPI): void {
         ? input.documentId
         : undefined
       const entries = ctx.sessionManager.getBranch()
-      const payload = buildPayload(input.document, documentId, entries, diagnostics)
+      const { payload, repairs } = buildPayload(input.document, documentId, entries, diagnostics)
       const warnings = collectDeliveryWarnings(payload.document)
       const warningNote = warnings.length === 0
         ? ''
         : `\n\n交付检查：\n${warnings.map((warning) => `- ${warning}`).join('\n')}`
       const details: GenuiToolDetails = { ui: payload }
-      return { content: [{ type: 'text', text: summaryText(payload) + warningNote }], details }
+      return { content: [{ type: 'text', text: summaryText(payload, undefined, repairs) + warningNote }], details }
     }
   })
 
@@ -358,7 +381,7 @@ export function registerGenuiTools(pi: ExtensionAPI): void {
         ...(input.params === undefined ? {} : { params: input.params })
       }
       const entries = ctx.sessionManager.getBranch()
-      const { payload, opCount, fieldCount } = buildPatchedPayload(documentId, ops, fields, entries, diagnostics)
+      const { payload, opCount, fieldCount, repairs } = buildPatchedPayload(documentId, ops, fields, entries, diagnostics)
       const warnings = collectDeliveryWarnings(payload.document)
       const warningNote = warnings.length === 0
         ? ''
@@ -369,7 +392,7 @@ export function registerGenuiTools(pi: ExtensionAPI): void {
         ...(fieldCount === 0 ? [] : [`${fieldCount} 处文档级字段`])
       ]
       const details: GenuiToolDetails = { ui: payload }
-      return { content: [{ type: 'text', text: summaryText(payload, parts.join('、')) + warningNote }], details }
+      return { content: [{ type: 'text', text: summaryText(payload, parts.join('、'), repairs) + warningNote }], details }
     }
   })
 
@@ -379,7 +402,7 @@ export function registerGenuiTools(pi: ExtensionAPI): void {
     description:
       '按主题读取 ui_render 的字段说明：overview=协议总览，nodes=全部节点字段与上限，'
       + 'params=可调参数与控件组，diagram=机制图解，chart=柱状图、折线图、饼图与环形图，update=修改既有界面，'
-      + 'examples=八个可直接照抄的完整示例。仅在需要确认字段时调用。',
+      + 'examples=九个可直接照抄的完整示例。仅在需要确认字段时调用。',
     promptSnippet: 'ui_catalog — 按需读取 ui_render 的节点字段、可调参数、机制图解、图表与示例',
     parameters: CATALOG_PARAMETERS,
     async execute(_toolCallId, params) {

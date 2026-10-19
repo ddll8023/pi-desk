@@ -50,12 +50,15 @@ export interface SvgLine {
 }
 
 /**
- * 路径：扇形与环形扇形的外弧、内弧与两条半径。
- * 几何层算出 `d`，组件只负责输出——把弧线计算放进模板会让两种图形各写一套三角函数。
+ * 路径：扇形、环形扇形的弧、箭头头部与电路符号。
+ * 几何层算出 `d`，组件只负责输出——把弧线计算放进模板会让每种图形各写一套三角函数。
+ * `fill` 决定填充方式：`soft`（默认，淡色填充）用于饼图切片，`solid` 用于实心箭头，
+ * `none` 用于只描边的符号（电路元件、剖面圆环）。
  */
 export interface SvgPath {
   readonly kind: 'path'
   readonly d: string
+  readonly fill?: 'soft' | 'solid' | 'none'
   readonly series?: SvgSeriesSlot
 }
 

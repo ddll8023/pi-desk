@@ -32,6 +32,8 @@ const emit = defineEmits<{
   loadChunk: [chunk: HistoryChunk]
   rewind: [messageId: string]
   submitEdit: [messageId: string, editedText: string]
+  /** 旧版界面折叠行请求跳转到同一界面的最新版；定位在消息列表完成。 */
+  jumpLatest: [documentId: string]
 }>()
 
 /** 会话开头没有用户消息的前置轮：摘要文案要区分，不把历史残片说成某一轮回答。 */
@@ -140,6 +142,7 @@ const metaText = computed(() => [durationText.value, usageText.value].filter(par
       @load-chunk="emit('loadChunk', $event)"
       @rewind="emit('rewind', $event)"
       @submit-edit="(messageId, text) => emit('submitEdit', messageId, text)"
+      @jump-latest="emit('jumpLatest', $event)"
     />
 
     <HistoryLoadSentinel
@@ -182,6 +185,7 @@ const metaText = computed(() => [durationText.value, usageText.value].filter(par
         @load-chunk="emit('loadChunk', $event)"
         @rewind="emit('rewind', $event)"
         @submit-edit="(messageId, text) => emit('submitEdit', messageId, text)"
+        @jump-latest="emit('jumpLatest', $event)"
       />
       <HistoryLoadSentinel
         v-if="detail?.next && !live"

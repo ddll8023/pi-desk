@@ -1,8 +1,9 @@
-<!-- 参数控件组：按文档声明顺序渲染 number / select / toggle / text 四类输入，只读写渲染端内存里的参数取值。
+<!-- 参数控件组：按文档声明顺序渲染 number / select / toggle / text 四类输入，只读写渲染端内存里的参数取值
+     （内存为真源，写入后由 param-persistence.ts 节流回写本机旁路文件）。
      改动参数不发请求、不做派生计算；提交按钮在 UiDocument 底部，由用户显式点击。
      界面被更高版本取代时上下文为只读，四类控件全部禁用，取值仍可查看。
      类型特有字段（min/max/step/options/placeholder）一律经按类型分派的辅助函数取值，模板不做窄化断言。
-     文本参数额外持有本地草稿：输入法组合期间只写草稿不写状态，compositionend 才落盘，
+     文本参数额外持有本地草稿：输入法组合期间只写草稿不写状态，compositionend 才写回状态，
      否则回灌的收敛结果会打断中文输入。 -->
 <script setup lang="ts">
 import { computed, reactive, useId, watch } from 'vue'

@@ -1,6 +1,7 @@
 <!-- 单条消息：按块展示正文、思考、工具卡、技能卡、压缩卡与计时（单条生成耗时与本轮响应耗时）与本次调用的 token 花销。
      过程块逐项展示、互不合并：每段 Thinking 各自折叠成一行轻量摘要（生成中展开并跟随最新思考，结束后收起），每个工具调用就是一张独立折叠的 ToolCard，参数与结果在卡内二级折叠；交付了生成式界面的工具调用改渲染界面本身，不再套折叠卡；回答正文按原位置展示、始终可见。界面按可见性挂载：远离视口的界面只留一行占位，展开全部轮次时不把每份界面都常驻。界面内的参数提交复用消息动作栏的禁用口径（运行中、未同步、正在发送等），不另做一套判断。用户消息下方使用细线图标操作栏，回退与修改后的重新发送由父级执行。
-     早期轮次的整体收起由 ChatTurnItem 负责，这里只表达单条消息内部每项自己的开合；同一轮内的非首条 AI 消息用紧凑表头，不重复 π 标记与角色名。 -->
+     早期轮次的整体收起由 ChatTurnItem 负责，这里只表达单条消息内部每项自己的开合；同一轮内的非首条 AI 消息用紧凑表头，不重复 π 标记与角色名。
+     被取代的旧版界面折叠成一行：整行点击跳转到新版（由消息列表定位），右侧小按钮展开查看旧版。 -->
 <script setup lang="ts">
 import { computed, onUnmounted, reactive, ref, useId, watch } from 'vue'
 import { copyText } from '../clipboard'
@@ -38,6 +39,8 @@ const emit = defineEmits<{
   submitEdit: [messageId: string, editedText: string]
   loadChunk: [chunk: HistoryChunk]
   loadMore: []
+  /** 旧版折叠行跳转到同一界面的最新版；定位由消息列表负责。 */
+  jumpLatest: [documentId: string]
 }>()
 
 /** 续载定位到原始块；工具结果按调用身份而不是助手消息的位置匹配。 */
@@ -116,6 +119,15 @@ const thinkingOverrides = reactive(new Map<string, boolean>())
 
 /** 技能卡初始折叠，流式更新不改变手动选择。 */
 const skillOverrides = reactive(new Map<string, boolean>())
+
+/** 被取代版本的只读展开状态；键为块 key，默认收起。跳到新版不影响它。 */
+const readonlyOpen = reactive(new Set<string>())
+
+/** 切换某个历史界面的展开状态；只影响查看，不改版本与参数。 */
+function toggleReadonly(key: string): void {
+  if (readonlyOpen.has(key)) readonlyOpen.delete(key)
+  else readonlyOpen.add(key)
+}
 
 const isUser = computed(() => props.message.role === 'user')
 /** 只标记渲染入口，不改变界面版本、会话身份或消息的块顺序。 */
@@ -461,18 +473,33 @@ function onEditKeydown(event: KeyboardEvent): void {
       <!-- 交付了生成式界面的工具调用直接渲染界面，不再套一层折叠卡；其余工具仍走通用 ToolCard。
            同一份界面只有最高版本可交互：被取代的版本折叠成一行只读记录，展开后控件与提交都禁用。
            按 documentId 作 key：文档被替换时整个界面连同内存参数一起重建。
-           界面由 GenuiMountGate 按可见性挂载：长会话里展开全部轮次时，不把每份界面的组件都常驻。 -->
+           界面由 GenuiMountGate 按可见性挂载：长会话里展开全部轮次时，不把每份界面的组件都常驻。
+           旧版折叠行的整行点击是「跳到新版」，右侧小按钮才是查看旧版，两种意图不混用。 -->
       <template v-else-if="block.kind === 'toolcall'">
-        <details
-          v-if="block.ui !== null && block.supersededBy !== null"
-          class="genui-history"
-        >
-          <summary>
-            <span class="genui-history-label">历史界面</span>
-            <span class="genui-history-title" :title="block.ui.document.title">{{ block.ui.document.title }}</span>
-            <span class="genui-history-version">已被第 {{ block.supersededBy }} 版取代</span>
-          </summary>
-          <div class="genui-history-body">
+        <!-- 被取代的旧版折叠成一行：整行是跳转到新版的按钮，右侧单独切换查看旧版。
+             两者分成两个按钮而不是套在 details 的 summary 里：点击意图不同，嵌套交互控件也不合语义。 -->
+        <template v-if="block.ui !== null && block.supersededBy !== null">
+          <div class="genui-history">
+            <button
+              type="button"
+              class="genui-history-main"
+              :title="`跳到《${block.ui.document.title}》第 ${block.supersededBy} 版`"
+              @click="emit('jumpLatest', block.ui.documentId)"
+            >
+              <span class="genui-history-label">历史界面</span>
+              <span class="genui-history-title">{{ block.ui.document.title }}</span>
+              <span class="genui-history-version">已被第 {{ block.supersededBy }} 版取代 · 跳到新版</span>
+            </button>
+            <button
+              type="button"
+              class="genui-history-toggle"
+              :aria-expanded="readonlyOpen.has(block.key)"
+              @click="toggleReadonly(block.key)"
+            >
+              {{ readonlyOpen.has(block.key) ? '收起' : '查看旧版' }}
+            </button>
+          </div>
+          <div v-if="readonlyOpen.has(block.key)" class="genui-history-body">
             <GenuiMountGate :payload="block.ui">
               <UiDocument
                 :key="block.ui.documentId"
@@ -483,7 +510,7 @@ function onEditKeydown(event: KeyboardEvent): void {
               />
             </GenuiMountGate>
           </div>
-        </details>
+        </template>
         <GenuiMountGate v-else-if="block.ui !== null" :payload="block.ui">
           <UiDocument
             :key="block.ui.documentId"

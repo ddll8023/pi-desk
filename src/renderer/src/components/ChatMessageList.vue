@@ -475,25 +475,98 @@ function onReadingKey(event: KeyboardEvent): void {
 }
 
 /**
- * 把某一轮对齐到视口顶部：展开后刚出现的内容立刻可见，不用再往上拖。
- * 对齐点就是该轮开头（有用户消息时就是用户输入），展开与大纲跳转共用这一套定位规则。
+ * 把某个元素对齐到视口顶部：展开后刚出现的内容立刻可见，不用再往上拖。
+ * 对齐点就是目标元素的开头；展开、大纲跳转与「跳到新版」共用这一套定位规则。
+ * `outlineMessageId` 是要锁定的用户消息（没有时传 null，大纲保持原目标）。
  */
-function revealTurn(turn: ChatTurnView): void {
+function scrollToElement(target: HTMLElement, outlineMessageId: string | null): void {
   const element = scroller.value
-  const target = content.value?.querySelector<HTMLElement>(`.chat-turn[data-turn-key="${CSS.escape(turn.key)}"]`)
-  if (element === null || target === null || target === undefined) return
+  if (element === null) return
 
   if (scrollFrame !== null) cancelAnimationFrame(scrollFrame)
   scrollFrame = null
   pendingRestore = null
   stickToBottom.value = false
   // 大纲跟到这一轮：锁定到它的用户消息，用户上滚前不再按位置重算。
-  outlineTargetId = turn.user?.id ?? null
-  activeOutlineId.value = turn.user?.id ?? activeOutlineId.value
+  outlineTargetId = outlineMessageId
+  if (outlineMessageId !== null) activeOutlineId.value = outlineMessageId
   const top = element.scrollTop + target.getBoundingClientRect().top - element.getBoundingClientRect().top - READING_OFFSET_PX
   element.scrollTop = Math.max(0, top)
   lastScrollTop = element.scrollTop
   scheduleOutlineUpdate()
+}
+
+/**
+ * 把某一轮对齐到视口顶部；对齐点就是该轮开头（有用户消息时就是用户输入）。
+ */
+function revealTurn(turn: ChatTurnView): void {
+  const target = content.value?.querySelector<HTMLElement>(`.chat-turn[data-turn-key="${CSS.escape(turn.key)}"]`)
+  if (target === null || target === undefined) return
+  scrollToElement(target, turn.user?.id ?? null)
+}
+
+/** 跳转落点的高亮时长；足够看清落在哪，又不至于长期抢视觉重点。 */
+const JUMP_HIGHLIGHT_MS = 1600
+let jumpHighlightTimer: ReturnType<typeof setTimeout> | null = null
+
+/** 给跳转落点加短暂描边：长会话里滚过去的距离很远，不标一下看不出落点。 */
+function highlightJumpTarget(target: HTMLElement): void {
+  if (jumpHighlightTimer !== null) clearTimeout(jumpHighlightTimer)
+  for (const element of content.value?.querySelectorAll<HTMLElement>('.is-jump-target') ?? []) {
+    element.classList.remove('is-jump-target')
+  }
+  target.classList.add('is-jump-target')
+  jumpHighlightTimer = setTimeout(() => {
+    jumpHighlightTimer = null
+    target.classList.remove('is-jump-target')
+  }, JUMP_HIGHLIGHT_MS)
+}
+
+/**
+ * 跳到某份界面的最新版本：被取代的旧版折叠行用它。
+ *
+ * 按「包含这个 documentId 且 revision 最大的那一轮」定位，而不是精确匹配 `supersededBy`：
+ * 最高版本号可能来自已被截断的工具条目，对应的元素不一定在当前 DOM 里。
+ * 目标优先取挂载门的 data 属性（未挂载时占位也在），找不到时退到该轮本身。
+ */
+function jumpToGenuiVersion(documentId: string): void {
+  let best: { turn: ChatTurnView; messageId: string | null; revision: number } | null = null
+  for (const turn of turns.value) {
+    for (const message of [...(turn.user === null ? [] : [turn.user]), ...turn.responses]) {
+      for (const block of message.blocks) {
+        if (block.kind !== 'toolcall' || block.ui === null || block.ui.documentId !== documentId) continue
+        if (best !== null && block.ui.revision <= best.revision) continue
+        best = { turn, messageId: turn.user?.id ?? null, revision: block.ui.revision }
+      }
+    }
+  }
+  if (best === null) return
+  const target = best
+  const index = turns.value.indexOf(target.turn)
+  const locate = (): void => {
+    const body = content.value
+    if (body === null) return
+    const turnElement = body.querySelector<HTMLElement>(`.chat-turn[data-turn-key="${CSS.escape(target.turn.key)}"]`)
+    const candidates = turnElement?.querySelectorAll<HTMLElement>(`[data-genui-document-id="${CSS.escape(documentId)}"]`)
+    let anchor = turnElement
+    let anchorRevision = -1
+    for (const candidate of candidates ?? []) {
+      const revision = Number(candidate.dataset.genuiRevision ?? '')
+      if (!Number.isFinite(revision) || revision <= anchorRevision) continue
+      anchor = candidate
+      anchorRevision = revision
+    }
+    if (anchor === null || anchor === undefined) return
+    scrollToElement(anchor, target.messageId)
+    highlightJumpTarget(anchor)
+  }
+  // 目标轮被折叠时先展开再定位，否则跳过去只看得到用户输入。
+  if (!isTurnExpanded(target.turn, index)) {
+    sessionViewStore.setTurnExpansion(sessionViewStore.key, target.turn.key, true)
+    void nextTick(locate)
+    return
+  }
+  locate()
 }
 
 /** 定位当前投影里的用户消息；目标轮被折叠时先展开再定位。 */
@@ -688,6 +761,7 @@ onBeforeUnmount(() => {
   if (scrollFrame !== null) cancelAnimationFrame(scrollFrame)
   if (outlineFrame !== null) cancelAnimationFrame(outlineFrame)
   if (userScrollFrameHandle !== null) cancelAnimationFrame(userScrollFrameHandle)
+  if (jumpHighlightTimer !== null) clearTimeout(jumpHighlightTimer)
 })
 </script>
 
@@ -740,6 +814,7 @@ onBeforeUnmount(() => {
           @toggle="toggleTurn(turn, index)"
           @rewind="requestRewind"
           @submit-edit="handleSubmitEdit"
+          @jump-latest="jumpToGenuiVersion"
         />
 
         <div v-if="turns.length === 0" class="empty-state">

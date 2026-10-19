@@ -2,14 +2,15 @@
      载荷已在投影层按协议完整校验，这里只负责渲染与未知类型降级，不重复校验、不补造内容。
      同一份界面只有最高版本可交互：被取代的版本由父级折叠传入，本组件把控件与提交都置为只读。
      复制为 Markdown 不写任何状态，因此只读版本也给这个入口：它输出的是文档与当前取值。
-     参数取值只在渲染端内存里：界面底部常驻说明「不随历史恢复」这一降级口径，
-     只有用户点击提交才会调用 sendPrompt，参数变化本身不发请求。 -->
+     参数取值存在本机（param-persistence.ts），重启后仍在：界面底部说明这一点，
+     并在保存失败时提示一次；只有用户点击提交才会调用 sendPrompt，参数变化本身不发请求。 -->
 <script setup lang="ts">
 import { computed, onUnmounted, ref, useId, watch } from 'vue'
 import '../../assets/genui.css'
 import type { GenuiPayload } from '../../../../shared/genui-api'
 import { copyText } from '../../clipboard'
 import { genuiDocumentToMarkdown } from '../../genui/markdown'
+import { flushGenuiParamPersistence, genuiParamPersistence } from '../../genui/param-persistence'
 import { provideGenuiParams } from '../../genui/param-state'
 import { composeParamSubmitText, useParamSubmit } from '../../genui/param-submit'
 import GenuiNode from './GenuiNode.vue'
@@ -48,6 +49,8 @@ const submitTitle = computed(() => {
 })
 /** 参数因条目淘汰或旧取值超期被重置过；提示一次，不让用户以为自己的调节丢了。 */
 const expired = computed(() => context.expired)
+/** 本机保存失败过：参数仍可用，但重启后会回到上一次成功保存的值，需要说明。 */
+const persistFailed = computed(() => genuiParamPersistence.failed)
 
 /** 参数一变，上一次的提交反馈就过期了：清掉它，避免旧文案看着像刚提交过。 */
 watch(context.values, () => reset())
@@ -63,6 +66,8 @@ let copyTimer: number | null = null
 
 onUnmounted(() => {
   if (copyTimer !== null) window.clearTimeout(copyTimer)
+  // 卸载（含可见性挂载门收起、会话切换）前把待写的取值落盘：窗口期内的最后一次变化不能丢。
+  void flushGenuiParamPersistence()
 })
 
 async function copyMarkdown(): Promise<void> {
@@ -130,7 +135,7 @@ async function copyMarkdown(): Promise<void> {
       <div class="genui-submit-row">
         <p class="genui-submit-note">
           <template v-if="superseded !== null">这一版已被第 {{ superseded }} 版取代，只能查看，不能调参或提交。</template>
-          <template v-else>调整不会自动发送。参数仅保存在当前窗口，不随对话历史保存；重启后恢复默认值。</template>
+          <template v-else>调整不会自动发送。参数保存在本机，重启后仍在。</template>
         </p>
         <AppButton
           variant="primary" class="genui-submit"
@@ -143,6 +148,9 @@ async function copyMarkdown(): Promise<void> {
         </AppButton>
       </div>
       <p v-if="expired" class="genui-feedback genui-tone-warning" role="status">参数已过期，已回到默认值。</p>
+      <p v-if="persistFailed" class="genui-feedback genui-tone-warning" role="status">
+        参数未能保存到本机，本次仍可正常调整；重启后可能回到上一次成功保存的取值。
+      </p>
       <p v-if="phase === 'accepted'" class="genui-feedback genui-tone-success" role="status">已提交参数。</p>
       <p
         v-else-if="phase === 'error' && error !== null"

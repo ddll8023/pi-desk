@@ -70,7 +70,7 @@ function describeChart(node: GenuiChartNode): string {
   return `[chart:${node.kind}]${title} ${node.labels.length} 个分类，序列：${names}；范围 ${range}${unit}`
 }
 
-/** 图示节点的一行描述：kind 加最能定位它的静态事实（零件数、齿数序列或 r/l）。 */
+/** 图示节点的一行描述：kind 加最能定位它的静态事实（零件数、齿数序列、r/l、矢量、元件或层）。 */
 function describeDiagram(node: GenuiDiagramNode): string {
   const binds = node.binds === undefined
     ? ''
@@ -82,6 +82,18 @@ function describeDiagram(node: GenuiDiagramNode): string {
       return `[diagram:gear] 齿数 ${node.gears.map((gear) => gear.teeth).join(':')}${binds}`
     case 'crank':
       return `[diagram:crank] r=${node.crank} l=${node.rod}${node.unit === undefined ? '' : ` ${node.unit}`}${binds}`
+    case 'vector': {
+      const unit = node.unit === undefined ? '' : ` ${node.unit}`
+      const max = Math.max(...node.vectors.map((vector) => vector.magnitude))
+      return `[diagram:vector] ${node.vectors.length} 个力，最大 ${max}${unit}：${preview(node.vectors.map((vector) => vector.label).join(' / '))}${binds}`
+    }
+    case 'circuit':
+      return `[diagram:circuit] U=${node.voltage}V，${node.components.length} 个元件：${preview(node.components.map((item) => item.label).join(' / '))}${binds}`
+    case 'section': {
+      const unit = node.unit === undefined ? '' : ` ${node.unit}`
+      const total = node.layers.reduce((sum, layer) => sum + layer.thickness, 0)
+      return `[diagram:section] ${node.layers.length} 层，总厚 ${Math.round(total * 100) / 100}${unit}：${preview(node.layers.map((layer) => layer.label).join(' / '))}${binds}`
+    }
   }
 }
 

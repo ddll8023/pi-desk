@@ -36,17 +36,26 @@ function signatureOf(issues: readonly GenuiIssue[]): string {
  * 组装校验失败的工具错误文本。
  * `issues` 来自 `explainGenuiDocument`，已带路径与可执行原因，这里只负责排版与去重。
  * `toolName` 是失败的那个工具（`ui_render` 或 `ui_patch`）：前缀写错会让模型去改另一个入口。
+ * `repairsTried` 是失败前已尝试的自动修复条数：大于 0 时说明这些错不是引用问题，
+ * 需提醒模型改写内容而不是再试引用。
  */
 export function formatValidationError(
   issues: readonly GenuiIssue[],
   state: DiagnosticsState,
-  toolName = 'ui_render'
+  toolName = 'ui_render',
+  repairsTried = 0
 ): string {
   state.failures += 1
   const shown = issues.slice(0, GENUI_MAX_ISSUES)
   const lines = [`${toolName}: document 未通过校验，界面未生成。具体问题：`]
   for (const issue of shown) lines.push(`- ${issue.path}：${issue.reason}`)
   if (issues.length > shown.length) lines.push(`（另有 ${issues.length - shown.length} 处问题未列出，先修上面这些。）`)
+  if (repairsTried > 0) {
+    lines.push(
+      `（已按可机械修正的规则尝试修复 ${repairsTried} 处引用与冗余，但这些错不在可修范围内：`
+      + '需要改写内容或调整数量，而不是只改引用。）'
+    )
+  }
 
   const signature = signatureOf(shown)
   if (signature === state.lastSignature) state.repeated += 1

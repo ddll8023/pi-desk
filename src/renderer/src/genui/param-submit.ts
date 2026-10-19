@@ -6,7 +6,8 @@
  * 前缀与扩展层提示词共用同一份定义（`GENUI_SUBMIT_PREFIX`），让模型能认出这是同一份界面的回填，
  * 也让用户在气泡里一眼看出它不是自己手打的。
  *
- * 取值来源是渲染端内存（见 `param-state.ts`）：这里不读 session、不写文件，也不做派生计算。
+ * 取值来源是渲染端内存（见 `param-state.ts`）：这里不读 session、不做派生计算；
+ * 本机旁路文件由 `param-persistence.ts` 负责，提交时顺手把待写的变化落盘。
  * 自由文本参数会原样进入模型上下文，因此格式化时用「」包裹、空值明写为「未填写」：
  * 换行已在收敛层剥成空格，逐行结构不会被用户输入破坏。
  */
@@ -15,6 +16,7 @@ import type { Ref } from 'vue'
 import type { GenuiDocument, GenuiParam, GenuiParamValue } from '../../../shared/genui-api'
 import { GENUI_SUBMIT_PREFIX } from '../../../shared/genui-api'
 import { useRuntimeStore } from '../stores/runtime'
+import { flushGenuiParamPersistence } from './param-persistence'
 
 /** 单个参数的展示文本；取值缺失或类型不符时用默认值，不输出空值。 */
 function formatParamValue(param: GenuiParam, value: GenuiParamValue | undefined): string {
@@ -84,6 +86,9 @@ export function useParamSubmit(): ParamSubmitState {
     if (text === '' || phase.value === 'submitting') return
     phase.value = 'submitting'
     error.value = null
+    // 提交是用户对当前取值的一次明确确认：顺手把节流窗口里的待写变化落盘，
+    // 不让「已经发出去的参数」和「本机记着的参数」出现差异。不等待结果，失败由持久化层置标记。
+    void flushGenuiParamPersistence()
     // `send` 被前置条件拦下时什么都不会发：用 promptView 的对象身份判断请求到底有没有发出，
     // 避免把「没发出去」显示成「已提交」。
     const before = runtimeStore.promptView

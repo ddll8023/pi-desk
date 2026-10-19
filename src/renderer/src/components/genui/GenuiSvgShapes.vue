@@ -3,9 +3,10 @@
      这里不含任何数学与状态：只按 shape.kind 出标签，外加 caption 与结论文本。
      每个分支都精确匹配 kind 而不留 v-else 兜底：新增图元却漏改模板时，类型检查会报错，
      而不是被当成文本静默画成空白。
-     带 series 色槽的图元改用序列色（多序列图表与饼图切片），不带时沿用图解的中性与强调色。 -->
+     带 series 色槽的图元改用序列色（多序列图表与饼图切片），不带时沿用图解的中性与强调色；
+     path 按 fill 分派填充方式（soft 淡色、solid 实心、none 只描边），序列色仍优先。 -->
 <script setup lang="ts">
-import type { SvgSeriesSlot, SvgShape } from '../../genui/svg-shapes'
+import type { SvgPath, SvgSeriesSlot, SvgShape } from '../../genui/svg-shapes'
 
 defineProps<{
   readonly shapes: readonly SvgShape[]
@@ -21,6 +22,17 @@ defineProps<{
 /** 序列色类名；色槽为空时返回 undefined，让模板回落各图元的默认色。 */
 function seriesClass(slot: SvgSeriesSlot | undefined): string | undefined {
   return slot === undefined ? undefined : `genui-series-${slot + 1}`
+}
+
+/** 路径填充类名：`soft` 保持原样，`solid` 实心，`none` 只描边；序列色优先。 */
+function pathClass(shape: SvgPath): string {
+  const series = seriesClass(shape.series)
+  if (series !== undefined) return series
+  switch (shape.fill) {
+    case 'solid': return 'fill-desk-ink stroke-desk-ink'
+    case 'none': return 'fill-none stroke-desk-ink'
+    default: return 'fill-desk-accent-soft stroke-desk-accent'
+  }
 }
 </script>
 
@@ -66,7 +78,7 @@ function seriesClass(slot: SvgSeriesSlot | undefined): string | undefined {
         <path
           v-else-if="shape.kind === 'path'"
           :d="shape.d"
-          :class="seriesClass(shape.series) ?? 'fill-desk-accent-soft stroke-desk-accent'"
+          :class="pathClass(shape)"
           stroke-width="1"
         />
         <text

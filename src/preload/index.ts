@@ -46,6 +46,22 @@ import {
 } from '../shared/quick-commands-api'
 import type { QuickCommand, QuickCommandsApi, QuickCommandsPreference, QuickCommandsResult } from '../shared/quick-commands-api'
 import {
+  GENUI_PARAMS_CLEAR_CHANNEL,
+  GENUI_PARAMS_GET_CHANNEL,
+  GENUI_PARAMS_SAVE_CHANNEL,
+  isGenuiParamsClearResult,
+  isGenuiParamsGetResult,
+  isGenuiParamsSaveResult
+} from '../shared/genui-params-api'
+import type {
+  GenuiParamRecord,
+  GenuiParamsApi,
+  GenuiParamsClearResult,
+  GenuiParamsGetResult,
+  GenuiParamSaveRequest,
+  GenuiParamsSaveResult
+} from '../shared/genui-params-api'
+import {
   PI_SETTINGS_GET_DEFAULT_MODEL_CHANNEL,
   PI_SETTINGS_SET_DEFAULT_MODEL_CHANNEL,
   isPiDefaultModelResult
@@ -379,6 +395,9 @@ const INVALID_QUICK_SEND_RESPONSE = '桌面接口返回了无法识别的快捷�
 const INVALID_QUICK_COMMANDS_RESPONSE = '桌面接口返回了无法识别的快捷命令清单。'
 const INVALID_AUTO_UPDATE_RESPONSE = '桌面接口返回了无法识别的扩展自动更新开关。'
 const INVALID_GENUI_RESPONSE = '桌面接口返回了无法识别的生成式 UI 开关。'
+const INVALID_GENUI_PARAMS_GET_RESPONSE = '桌面接口返回了无法识别的界面参数记录。'
+const INVALID_GENUI_PARAMS_SAVE_RESPONSE = '桌面接口返回了无法识别的界面参数保存结果。'
+const INVALID_GENUI_PARAMS_CLEAR_RESPONSE = '桌面接口返回了无法识别的界面参数清除结果。'
 const INVALID_MODELS_CONFIG_RESPONSE = '桌面接口返回了无法识别的自定义供应商配置。'
 const INVALID_TRUST_RESPONSE = '桌面接口返回了无法识别的信任状态。'
 const INVALID_EXTENSION_UI_RESPONSE = '桌面接口返回了无法识别的 Extension UI 状态。'
@@ -523,6 +542,18 @@ function invalidGenuiResponse(): GenuiResult {
   return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_GENUI_RESPONSE } }
 }
 
+function invalidGenuiParamsGetResponse(): GenuiParamsGetResult {
+  return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_GENUI_PARAMS_GET_RESPONSE } }
+}
+
+function invalidGenuiParamsSaveResponse(): GenuiParamsSaveResult {
+  return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_GENUI_PARAMS_SAVE_RESPONSE } }
+}
+
+function invalidGenuiParamsClearResponse(): GenuiParamsClearResult {
+  return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_GENUI_PARAMS_CLEAR_RESPONSE } }
+}
+
 function invalidQuickCommandsResponse(): QuickCommandsResult {
   return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_QUICK_COMMANDS_RESPONSE } }
 }
@@ -591,7 +622,7 @@ function invalidAgentRuntimeResetResponse(): AgentRuntimeResetResult {
   return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_AGENT_RUNTIME_RESET_RESPONSE } }
 }
 
-const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionApi & SessionRunApi & TerminalApi & PreferencesApi & QuickCommandsApi & PiSettingsApi & TrustApi & ExtensionUiApi & AuthApi & ModelsConfigApi & UpdatesApi & GitApi = {
+const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionApi & SessionRunApi & TerminalApi & PreferencesApi & QuickCommandsApi & GenuiParamsApi & PiSettingsApi & TrustApi & ExtensionUiApi & AuthApi & ModelsConfigApi & UpdatesApi & GitApi = {
   async getAppInfo() {
     const response: unknown = await ipcRenderer.invoke(APP_INFO_CHANNEL)
     if (!isAppInfoResult(response)) {
@@ -959,6 +990,26 @@ const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionAp
     const payload: GenuiPreference = { enabled: preference.enabled === true }
     const response: unknown = await ipcRenderer.invoke(PREFERENCES_SET_GENUI_CHANNEL, payload)
     return isGenuiResult(response) ? response : invalidGenuiResponse()
+  },
+
+  async getGenuiParams(): Promise<GenuiParamsGetResult> {
+    const response: unknown = await ipcRenderer.invoke(GENUI_PARAMS_GET_CHANNEL)
+    return isGenuiParamsGetResult(response) ? response : invalidGenuiParamsGetResponse()
+  },
+
+  async saveGenuiParam(request: GenuiParamSaveRequest): Promise<GenuiParamsSaveResult> {
+    // 重建普通对象与取值表：响应式代理不能跨 contextBridge，只搬运已声明的字段。
+    const record: GenuiParamRecord | null = request.record === null
+      ? null
+      : { revision: request.record.revision, updatedAt: request.record.updatedAt, values: { ...request.record.values } }
+    const payload: GenuiParamSaveRequest = { documentId: request.documentId, record }
+    const response: unknown = await ipcRenderer.invoke(GENUI_PARAMS_SAVE_CHANNEL, payload)
+    return isGenuiParamsSaveResult(response) ? response : invalidGenuiParamsSaveResponse()
+  },
+
+  async clearGenuiParams(): Promise<GenuiParamsClearResult> {
+    const response: unknown = await ipcRenderer.invoke(GENUI_PARAMS_CLEAR_CHANNEL)
+    return isGenuiParamsClearResult(response) ? response : invalidGenuiParamsClearResponse()
   },
 
   async setUiPreferences(ui: UiPreferences) {
