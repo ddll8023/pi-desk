@@ -163,7 +163,7 @@
 ### 5.3 状态归属
 
 - **document 放 `details`**：随工具结果进入会话，天然跟随 fork / rewind / 树导航，无需额外重建逻辑。
-- **参数值只存渲染进程内存**，键为 `documentId`：参数不是对话内容，塞进 session 会污染分支语义，也会让历史回放显示过期值。每份界面只有一份可交互（旧版本折叠为只读），因此键里不带版本；`revision` 变化时取值重建为默认值。条目数量上限 500，按创建序淘汰；被淘汰的界面再次挂载时会明示“参数已过期”，不静默归零。
+- **参数值只存渲染进程内存**，键为 `documentId`：参数不是对话内容，塞进 session 会污染分支语义，也会让历史回放显示过期值。每份界面只有一份可交互（旧版本折叠为只读），因此键里不带版本。文档改版（`revision` 变大）时按参数 `id` 迁移已调取值，并对新声明重跑一次收敛：区间、步长、选项变了会被夹取或回落默认值，新版删掉的参数直接丢弃，新增参数取默认值；回退到旧版本不迁移，否则取值会跨分支泄漏。旧取值的保留期限与条目淘汰上限见 `param-state.ts` 的 `PARAM_INHERIT_TTL_MS` 与 `MAX_PARAM_ENTRIES`；超期或条目被淘汰时界面会明示“参数已过期”，不静默归零；被淘汰的条目若又被旧组件写入，会挂回 Map，不丢这次调节；`evicted` 集合同样受条目上限约束。
 - 该状态是模块级内存，不写 session、不落盘：页面重载或重启后回到文档默认值，界面上明示这一口径。同一版本被多处引用时共享同一组取值——文档内容相同，共享是正确语义。
 - 这是与 dsh-motion-ui 的实质差异：dsh 的宿主没有分支结构，因此可以用扁平的按文档 + 会话哈希的文件存储；pi-desk 有 rewind / fork / navigateTree，必须尊重分支语义。
 
@@ -247,11 +247,11 @@
 ### 8.1 已完成阶段的落地形态
 
 - **P1**：协议、上限与严格解析在 `src/shared/genui-api.ts`；工具与按需目录在 `src/extensions/genui/`；渲染组件在 `src/renderer/src/components/genui/`；投影层只放行 `details.ui` 并重新完整校验，不符即降级为文本结果。
-- **P2**：文档级 `params` 加 `controls` 节点承载 number / select / toggle / text 四类参数；文本参数只做单行自由输入（上限 200 字符，`default` 可省略即空串），组合期间只写本地草稿、`compositionend` 才落状态，提交时空值写成「（未填写）」而不拦截提交；取值只在渲染端内存；提交按钮是唯一的模型请求入口，复用既有 `sendPrompt`；界面内常驻说明参数不随历史恢复。
+- **P2**：文档级 `params` 加 `controls` 节点承载 number / select / toggle / text 四类参数；文本参数只做单行自由输入（单行与长度上限见 `genui-api.ts` 的 `GENUI_MAX_PARAM_TEXT_CHARS`，`default` 可省略即空串），组合期间只写本地草稿、`compositionend` 才落状态，提交时空值写成「（未填写）」而不拦截提交；取值只在渲染端内存；提交按钮是唯一的模型请求入口，复用既有 `sendPrompt`；界面内常驻说明参数不随历史恢复。
 - **P3**：`revision` 从会话分支重建；`ui_inspect` 提供界面列表与结构大纲；`explainGenuiDocument` 给出带 JSON 路径的失败诊断，并对重复错误收敛提示；交付检查以非阻断提示形式写进工具摘要。
 - **P4**：新增 `diagram` 节点（`kind` 为 `exploded` / `gear` / `crank`），几何由 `src/renderer/src/genui/diagram-geometry.ts` 的纯函数算出，组件只负责拼图元；`binds` 只允许把 `angle` / `spread` 指向已声明的 `number` 参数，不做表达式求值；图解无动效，参数变化直接重算几何。
 - **图表**：新增 `chart` 节点（`kind` 为 `bar` / `line`，单序列）；刻度取整与坐标映射在 `src/renderer/src/genui/chart-geometry.ts`，输出与机制图解同一套图元；图元渲染抽到 `GenuiSvgShapes.vue` 由两类图形共用；图表不绑定参数、无动效。
-- **版本收敛**：同一 `documentId` 只有最高 `revision` 可交互，判定集中在 `chat-view.ts` 的 `toMessages`（缓存有效性一并比对）；其余版本折叠为只读记录，控件与提交禁用。参数状态按 `documentId` 而非版本存，`revision` 变化即重置；条目淘汰上限 500，被淘汰界面再次挂载时提示“参数已过期”。
+- **版本收敛**：同一 `documentId` 只有最高 `revision` 可交互，判定集中在 `chat-view.ts` 的 `toMessages`（缓存有效性一并比对）；其余版本折叠为只读记录，控件与提交禁用。参数状态按 `documentId` 而非版本存，改版（新工具调用带来的新界面实例）挂载时按参数 id 迁移取值并重新收敛，迁移有效期与条目淘汰上限见 `param-state.ts` 的同名常量，过期时提示“参数已过期”。界面以 `documentId` 作 key：同一实例的 `payload` 不会换版本，但 `supersededBy` 会在新版本交付后变，所以只读判定必须用取值器（`provideGenuiParams` 的 `readOnly` 传函数）而不是 setup 时快照，否则旧版界面会“文案只读、控件可拖”；被取代的旧版以较低 `revision` 重挂载时不回写参数条目，避免折叠再展开把当前版本的取值换成旧版默认值。
 
 ### 8.2 用户侧开关
 
@@ -278,7 +278,6 @@
 
 | 项 | 现状依据 | 目标 |
 | --- | --- | --- |
-| 修改后参数继承 | `param-state.ts` 在 `revision` 变化时重置为默认值 | 同 `documentId` 修改后按参数 id 迁移已调取值，id 消失时回落默认值 |
 | 界面按可见性挂载 | §7 第 8 条风险；渲染端目前无可见性挂载机制 | 长会话只为可见区域内的界面挂载交互组件 |
 | 复制界面为 Markdown | `copyText` 只复制用户消息文本，界面内容无法复制出去 | 界面可一键复制为 Markdown，含表格、图表数据与图解结论 |
 
@@ -303,7 +302,7 @@
 - 导出界面为图片 / HTML：对应 P6，依赖离屏渲染与主窗口渲染一致性。
 - `ui_inspect` 可选返回完整 JSON，便于模型改字段时直接改写。
 - 参数条件显示、参数分组、重置为默认值按钮。
-- 性能与健壮性遗留：`chat-view.ts` 每批为每条消息分配 `uiRefs`；`param-state.ts` 条目淘汰后旧组件仍写已脱离 Map 的取值；`evicted` 集合无上限。
+- 性能与健壮性遗留：`chat-view.ts` 每批为每条消息分配 `uiRefs`。
 - 会话活动条与大纲体现「本轮交付了界面」。
 
 **明确不做**：代码块与公式节点。Markdown 已有这两类表达，走界面反而降低可复制性。§9 的三条战略待定仍保持开放。

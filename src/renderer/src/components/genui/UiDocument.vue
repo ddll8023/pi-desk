@@ -29,7 +29,9 @@ const context = provideGenuiParams({
   documentId: props.payload.documentId,
   revision: props.payload.revision,
   params: params.value,
-  readOnly: superseded.value !== null
+  // 传函数而不是当前布尔值：新版本交付后旧界面会从可交互转为只读，
+  // 控件与提交按钮必须看同一个实时判定。
+  readOnly: () => superseded.value !== null
 })
 const { phase, error, submit, reset } = useParamSubmit()
 
@@ -41,7 +43,7 @@ const submitTitle = computed(() => {
   if (props.submitDisabled === true) return props.submitDisabledReason ?? '当前不能提交参数。'
   return submitting.value ? '正在提交参数…' : '把当前参数作为一条消息发给 Agent'
 })
-/** 参数因条目淘汰被重置过；提示一次，不让用户以为自己的调节丢了。 */
+/** 参数因条目淘汰或旧取值超期被重置过；提示一次，不让用户以为自己的调节丢了。 */
 const expired = computed(() => context.expired)
 
 /** 参数一变，上一次的提交反馈就过期了：清掉它，避免旧文案看着像刚提交过。 */
