@@ -33,7 +33,7 @@ export const SETTINGS_NAV_GROUPS: readonly SettingsNavGroup[] = [
     id: 'general',
     label: '常规',
     items: [
-      { id: 'appearance', label: '外观', icon: 'palette', keywords: ['主题', '浅色', '深色', 'theme'] },
+      { id: 'appearance', label: '外观', icon: 'palette', keywords: ['主题', '浅色', '深色', 'theme', '预览', '源码', 'markdown', '默认视图'] },
       { id: 'quick-send', label: '快捷输入', icon: 'zap', keywords: ['短语', '发送', 'quick send'] },
       { id: 'quick-commands', label: '快捷命令', icon: 'terminal', keywords: ['命令', '终端', '快捷命令', 'command'] }
     ]

@@ -969,7 +969,8 @@ const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionAp
       expandedProjects: [...ui.expandedProjects],
       rightPanelOpen: ui.rightPanelOpen,
       rightPanelWidth: ui.rightPanelWidth,
-      rightPanelTab: ui.rightPanelTab
+      rightPanelTab: ui.rightPanelTab,
+      markdownDefaultView: ui.markdownDefaultView
     }
     const response: unknown = await ipcRenderer.invoke(PREFERENCES_SET_UI_CHANNEL, request)
     return isPreferencesResult(response) ? response : invalidPreferencesResponse()

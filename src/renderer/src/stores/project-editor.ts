@@ -3,7 +3,10 @@
  *
  * 文件内容读写全经主进程：这里只保存「读到了什么、用户改没改、磁盘基线是什么」，
  * 不自行拼接绝对路径。读取结果分文本、图片与「不支持」三类；只有文本可编辑，
- * 且超过可编辑上限的文本只可预览：这类记录不会变脏，也不接受保存。
+ * 且超过可编辑上限的文本只读：这类记录不会变脏，也不接受保存。
+ *
+ * 打开时的默认模式按文件类型与偏好决定：Markdown 按设置里的默认视图（默认预览，阅读是主要用途），
+ * 其余文本进源码；用户在标签内切换后，同一个标签保持该选择，不会每次重读都跳回默认值。
  *
  * 脏标记由编辑器上报，保存时把当前文本交给主进程，并把返回的新磁盘基线写回记录；
  * 外部改动通过 `stat` 比对 size/mtimeMs 发现：未修改的文件自动重新载入，有未保存修改时
@@ -24,6 +27,7 @@ import type {
 } from '../../../shared/project-file-api'
 import { fileNameOf, isMarkdownPath } from '../file-language'
 import { readProjectFile, statProjectFile, writeProjectFile } from '../services/project-file'
+import { usePreferencesStore } from './preferences'
 
 /** 文件标签的展示模式：代码视图与 Markdown 预览；只有 Markdown 文件能切到预览。 */
 export type FileEditorMode = 'code' | 'preview'
@@ -76,6 +80,7 @@ function isEditable(record: FileEditorRecord): boolean {
 }
 
 export const useProjectEditorStore = defineStore('project-editor', () => {
+  const preferencesStore = usePreferencesStore()
   const records = ref<Readonly<Record<string, FileEditorRecord>>>({})
   /** 窗口级阅读偏好：同一窗口内切换文件保持不变，不写盘。 */
   const previewFontSize = ref<number>(DEFAULT_PREVIEW_FONT_SIZE)
@@ -107,7 +112,7 @@ export const useProjectEditorStore = defineStore('project-editor', () => {
   /**
    * 打开一个文件：同项目同路径已打开时直接返回原键，由调用方聚焦该标签。
    * 新键先登记为读取中并立即返回，让标签先出现，读取结果随后写入；读取失败保留错误状态，
-   * 不建立可编辑的假内容。
+   * 不建立可编辑的假内容。Markdown 按偏好取默认视图，其余文本进源码。
    */
   function open(projectPath: string, path: string): string {
     const existing = keyOf(projectPath, path)
@@ -115,14 +120,15 @@ export const useProjectEditorStore = defineStore('project-editor', () => {
 
     const key = `${FILE_KEY_PREFIX}${nextFileTabId}`
     nextFileTabId += 1
+    const markdown = isMarkdownPath(path)
     const record: FileEditorRecord = {
       key,
       projectPath,
       path,
       name: fileNameOf(path),
-      markdown: isMarkdownPath(path),
+      markdown,
       load: { phase: 'loading' },
-      mode: 'code',
+      mode: markdown ? preferencesStore.markdownDefaultView : 'code',
       dirty: false,
       draft: null,
       saving: false,
@@ -152,11 +158,8 @@ export const useProjectEditorStore = defineStore('project-editor', () => {
       update(key, { load: { phase: 'unsupported', content } })
       return
     }
-    // 超过可编辑上限的 Markdown 直接落在预览：默认进编辑器既不能保存，又要为大文本建编辑状态。
-    const previewOnly = content.kind === 'text'
-      && content.size > PROJECT_FILE_EDIT_MAX_BYTES
-      && record.markdown
-    update(key, { load: { phase: 'ready', content }, saveError: null, ...(previewOnly ? { mode: 'preview' as const } : {}) })
+    // 读取只覆盖内容与保存状态：模式是用户的选择，重读时不回到默认值。
+    update(key, { load: { phase: 'ready', content }, saveError: null })
   }
 
   /** 关闭文件标签：只清内存记录，不改动磁盘。 */

@@ -36,7 +36,7 @@ export const PROJECT_DIRECTORY_WATCH_LIMIT = 256
 export const PROJECT_FILE_TEXT_MAX_BYTES = 8 * 1024 * 1024
 
 /**
- * 可编辑文本的字节上限；超过它仍可预览，但编辑器与保存都不提供。
+ * 可编辑文本的字节上限；超过它只读：内容仍可查看，编辑与保存都不提供。
  * 编辑器要完整持有文本并参与撤销历史与逐次比对，2 MiB 是保持响应性的分界。
  */
 export const PROJECT_FILE_EDIT_MAX_BYTES = 2 * 1024 * 1024

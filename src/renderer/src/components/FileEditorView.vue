@@ -4,7 +4,7 @@
   面板按标签常驻挂载，非活动标签只隐藏不卸载，因此切回来仍是同一份编辑内容与撤销历史。
   Markdown 的「源码 / 预览」用叠放层切换而不是销毁编辑器：切到预览再切回来，未保存的修改仍在。
   预览里的就地编辑以区间替换写回编辑器文档，脏标记、撤销栈与保存都仍由编辑器承担。
-  超过可编辑上限的文本仍可预览：这类文件只挂载当前需要的一层，避免大文本同时进入编辑器与渲染器。
+  超过可编辑上限的文本仍可查看：这类文件只挂载当前需要的一层，避免大文本同时进入编辑器与渲染器。
   保存统一走 Cmd/Ctrl+S（标签处于活动状态时全局生效），头部不设保存与重新载入按钮；
   外部改动在标签激活与窗口重新聚焦时用 `stat` 检查，未修改的文件自动重新载入，有未保存修改或保存失败时直接弹窗。
 
@@ -65,11 +65,11 @@ const unsupportedReason = computed(() => {
     ? '这是二进制文件，不提供预览与编辑。'
     : '文件超出预览上限（文本 8 MiB、图片 8 MiB），未读取内容。'
 })
-/** 文本已读取但超过可编辑上限：仍可预览，但不提供编辑与保存。 */
+/** 文本已读取但超过可编辑上限：仍可查看，但不提供编辑与保存。 */
 const readOnlyNote = computed(() => {
   const content = textContent.value
   if (content === null || content.size <= PROJECT_FILE_EDIT_MAX_BYTES) return null
-  return `文件超过 ${PROJECT_FILE_EDIT_MAX_BYTES / 1024 / 1024} MiB，只能预览，不能编辑。`
+  return `文件超过 ${PROJECT_FILE_EDIT_MAX_BYTES / 1024 / 1024} MiB，只能查看，不能编辑。`
 })
 const editable = computed(() => textContent.value !== null && readOnlyNote.value === null)
 /** 编辑区初始文本：优先用卸载前捕获的草稿，保证设置页往返或项目切换不丢未保存修改。 */

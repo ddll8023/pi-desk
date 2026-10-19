@@ -267,7 +267,10 @@ function describeList(token: BlockToken, whole: FileMarkdownBlock): readonly Fil
     const child = children[0] as BlockToken
     // 松散列表的条目内容包在段落里，紧列表直接是文本节点。
     const loose = child.type === 'paragraph' || child.type === 'heading'
-    const range = locateText(token.raw, whole.start, child.text ?? '', itemStart - whole.start)
+    // 松散列表的段落文本保留了 `[ ] ` 标记，而渲染结果里的复选框是独立元素、不参与行内序列化；
+    // 区间必须从标记之后开始，否则提交编辑会把复选框标记一起吃掉，条目退化成普通列表项。
+    const text = loose && item.task === true ? stripTaskMarker(child.text ?? '') : (child.text ?? '')
+    const range = locateText(token.raw, whole.start, text, itemStart - whole.start)
     if (range === null) {
       blocks.push({ ...whole, kind: 'source', start: itemStart, end: itemEnd, path: [itemIndex], checkbox: -1 })
       continue
@@ -295,6 +298,14 @@ function locateText(
   const index = raw.indexOf(text, from)
   if (index < 0) return null
   return { start: absoluteStart + index, end: absoluteStart + index + text.length }
+}
+
+/**
+ * 去掉任务条目文本开头的 `[ ]`/`[x]` 标记及其后的空格。
+ * 紧列表的条目文本本来就不含标记，这里只对松散列表的段落文本起作用。
+ */
+function stripTaskMarker(text: string): string {
+  return text.replace(/^\[[ xX]\]\s*/, '')
 }
 
 /** 任务条目里的 `[ ]`/`[x]` 位于条目开头；返回方括号内字符的绝对偏移。 */

@@ -52,7 +52,8 @@ export async function setUiPreferences(ui: UiPreferences): Promise<PreferencesRe
       expandedProjects: [...ui.expandedProjects],
       rightPanelOpen: ui.rightPanelOpen,
       rightPanelWidth: ui.rightPanelWidth,
-      rightPanelTab: ui.rightPanelTab
+      rightPanelTab: ui.rightPanelTab,
+      markdownDefaultView: ui.markdownDefaultView
     })
   } catch (error) {
     return callFailed(error)

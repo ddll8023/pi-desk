@@ -23,6 +23,18 @@ export function isUiTheme(value: unknown): value is UiTheme {
   return typeof value === 'string' && UI_THEMES.includes(value as UiTheme)
 }
 
+/**
+ * Markdown 文件的默认视图：只决定新打开标签的初始模式，不改变已打开标签的当前视图。
+ * 默认预览：阅读是打开 Markdown 的主要用途，源码编辑再切换。
+ */
+export type MarkdownDefaultView = 'preview' | 'code'
+
+const MARKDOWN_DEFAULT_VIEWS: readonly MarkdownDefaultView[] = ['preview', 'code']
+
+export function isMarkdownDefaultView(value: unknown): value is MarkdownDefaultView {
+  return typeof value === 'string' && MARKDOWN_DEFAULT_VIEWS.includes(value as MarkdownDefaultView)
+}
+
 /** 侧栏展开状态的上限；超出按最早记录丢弃，避免配置文件无界增长。 */
 export const MAX_EXPANDED_PROJECTS = 50
 
@@ -69,6 +81,8 @@ export interface UiPreferences {
   readonly rightPanelWidth: number
   /** 右侧面板当前页签；切换页签只换内容，不改宽度与开合状态。 */
   readonly rightPanelTab: RightPanelTab
+  /** Markdown 文件新标签的默认视图；已打开的标签保持它自己的当前视图。 */
+  readonly markdownDefaultView: MarkdownDefaultView
 }
 
 /** 右侧面板宽度是否在存储边界内；非整数与越界值一律拒绝。 */
@@ -83,10 +97,12 @@ export function isUiPreferences(value: unknown): value is UiPreferences {
   if (!Object.keys(value).every((key) => (
     key === 'sidebarCollapsed' || key === 'theme' || key === 'expandedProjects'
       || key === 'rightPanelOpen' || key === 'rightPanelWidth' || key === 'rightPanelTab'
+      || key === 'markdownDefaultView'
   ))) return false
   if (typeof value.sidebarCollapsed !== 'boolean' || !isUiTheme(value.theme)) return false
   if (typeof value.rightPanelOpen !== 'boolean' || !isRightPanelWidth(value.rightPanelWidth)) return false
   if (!isRightPanelTab(value.rightPanelTab)) return false
+  if (!isMarkdownDefaultView(value.markdownDefaultView)) return false
   if (!Array.isArray(value.expandedProjects) || value.expandedProjects.length > MAX_EXPANDED_PROJECTS) {
     return false
   }

@@ -9,6 +9,8 @@
   段落、标题、列表条目、引用段直接改渲染结果，提交时用 `markdown-inline-serialize` 还原成 Markdown；
   代码块、表格、公式、图片、front matter 以及带嵌套结构的条目改成等宽源码框，避免渲染层丢失结构。
   提交后只重绘被改的那一个顶层块，其余 DOM 不动，因此图片不重读、代码不重新高亮、滚动位置不跳。
+  提交前与进入编辑时的序列化基线比较：内容没真变（例如只点了一下就看别处）就只还原 DOM，
+  不写回编辑器，也不会把标点改成转义写法。
 
   渲染后的异步补全（图片、高亮）都带序号校验：正文一变就丢弃旧结果，避免迟到的读取覆盖新内容。
   目录在左侧，条目在提取标题 id 时一并算出并上报父级，由父级决定是否显示目录栏；当前标题按滚动位置
@@ -95,6 +97,12 @@ interface EditingState {
   readonly end: number
   /** 承载输入的元素：text 是块元素本身，source 是等宽源码框。 */
   readonly target: HTMLElement
+  /**
+   * 进入编辑时序列化出的文本：提交时与它比较，判「有没有真改过」。
+   * 不能拿它和原文切片比：行内序列化会给 Markdown 标点加反斜杠，永远和原文对不上，
+   * 那样即使只是点了一下再走开也会写回文件。
+   */
+  readonly baseline: string
   /** 退出编辑时把 DOM 恢复成进入前的样子。 */
   readonly restore: () => void
 }
@@ -589,6 +597,7 @@ function startEdit(host: HTMLElement): void {
       start,
       end,
       target: host,
+      baseline: textBlockMarkdown(host),
       restore: () => {
         host.innerHTML = originalHtml
         host.removeAttribute('contenteditable')
@@ -616,6 +625,7 @@ function startEdit(host: HTMLElement): void {
     start,
     end,
     target: textarea,
+    baseline: textarea.value,
     restore: () => { parent.replaceChild(host, textarea) }
   }
 }
@@ -625,7 +635,10 @@ function autoSizeSource(textarea: HTMLTextAreaElement): void {
   textarea.rows = Math.min(Math.max(textarea.value.split('\n').length, 2), SOURCE_MAX_ROWS)
 }
 
-/** 提交当前编辑：文本块按行内序列化还原 Markdown，源码框直接用框里的内容。 */
+/**
+ * 提交当前编辑：文本块按行内序列化还原 Markdown，源码框直接用框里的内容。
+ * 与进入编辑时的基线一致说明没真改过（例如只点了一下再看别处）：原地还原 DOM，不写回编辑器。
+ */
 function commitEdit(): void {
   const state = editing.value
   if (state === null) return
@@ -635,7 +648,8 @@ function commitEdit(): void {
   const next = state.kind === 'text'
     ? textBlockMarkdown(state.target)
     : (state.target as HTMLTextAreaElement).value
-  if (next === renderText.value.slice(state.start, state.end)) {
+  // 与进入编辑时的基线一致，或改回与原文完全相同，都不必写回编辑器。
+  if (next === state.baseline || next === renderText.value.slice(state.start, state.end)) {
     state.restore()
     return
   }
@@ -646,9 +660,11 @@ function commitEdit(): void {
 /**
  * 文本块序列化：行内 DOM 还原成 Markdown 后去掉首尾空白。
  * 任务条目的复选框后面跟一个分隔空格，它属于标记层而不是文字，不能随编辑一起写回原文。
+ * 位于列表条目里时额外保护行首的 `[ ]`/`[x]`：它会被重新解析成任务标记。
  */
 function textBlockMarkdown(element: HTMLElement): string {
-  return serializeInlineMarkdown(element).trim()
+  // 条目文字的元素是 `li` 本身或它里面的段落，往上找列表就能判断是否属于列表条目。
+  return serializeInlineMarkdown(element, { inListItem: element.closest('ul, ol') !== null }).trim()
 }
 
 /** 放弃当前编辑，把 DOM 恢复成进入编辑前的样子。 */

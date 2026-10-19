@@ -18,13 +18,19 @@ import VersionUpdateSection from './VersionUpdateSection.vue'
 
 const preferencesStore = usePreferencesStore()
 const settingsStore = useSettingsStore()
-const { theme } = storeToRefs(preferencesStore)
+const { theme, markdownDefaultView } = storeToRefs(preferencesStore)
 const { activeSection } = storeToRefs(settingsStore)
 
 const themeOptions = [
   { value: 'system', label: '跟随系统' },
   { value: 'light', label: '浅色' },
   { value: 'dark', label: '深色' }
+] as const
+
+/** Markdown 默认视图的两档；只影响新打开的标签，已打开的保持各自当前视图。 */
+const markdownViewOptions = [
+  { value: 'preview', label: '预览' },
+  { value: 'code', label: '源码' }
 ] as const
 </script>
 
@@ -56,7 +62,7 @@ const themeOptions = [
         <template v-if="activeSection === 'appearance'">
           <header>
             <h1 class="text-xl font-semibold tracking-tight">外观</h1>
-            <p class="mt-1 text-sm text-desk-muted">选择界面的颜色主题。</p>
+            <p class="mt-1 text-sm text-desk-muted">选择界面的颜色主题，以及 Markdown 文件默认打开的视图。</p>
           </header>
 
           <section class="settings-section" aria-labelledby="settings-theme-title">
@@ -86,6 +92,34 @@ const themeOptions = [
             <p v-if="preferencesStore.actionError" role="alert" class="mt-3 text-xs text-desk-danger">
               {{ preferencesStore.actionError.message }}
             </p>
+          </section>
+
+          <section class="settings-section" aria-labelledby="settings-markdown-view-title">
+            <div class="settings-section-heading">
+              <div>
+                <h2 id="settings-markdown-view-title" class="settings-section-title">文件预览</h2>
+                <p class="mt-1 text-xs text-desk-muted">
+                  打开 Markdown 文件时默认进入哪个视图；已打开的标签保持它当前的视图，不受影响。
+                </p>
+              </div>
+            </div>
+            <div class="settings-row">
+              <span class="text-sm font-medium">Markdown 默认视图</span>
+              <div class="segment w-full sm:w-80" role="group" aria-label="Markdown 默认视图">
+                <AppButton
+                  v-for="option in markdownViewOptions"
+                  :key="option.value"
+                  variant="unstyled"
+                  class="segment-option"
+                  :class="markdownDefaultView === option.value ? 'is-selected' : ''"
+                  :aria-pressed="markdownDefaultView === option.value"
+                  :disabled="!preferencesStore.ready"
+                  @click="preferencesStore.setMarkdownDefaultView(option.value)"
+                >
+                  {{ option.label }}
+                </AppButton>
+              </div>
+            </div>
           </section>
         </template>
 
