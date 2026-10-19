@@ -5,7 +5,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { GenuiDiagramNode } from '../../../../shared/genui-api'
-import { useGenuiParams } from '../../genui/param-state'
+import { useGenuiParams, readGenuiBinding } from '../../genui/param-state'
 import {
   layoutCrank,
   layoutExploded,
@@ -23,9 +23,7 @@ const context = useGenuiParams()
 
 /** 取一个绑定参数的数值；未绑定、参数不存在或类型不符时返回 null，由调用方决定回落。 */
 function boundValue(id: string | undefined): number | null {
-  if (id === undefined || context === null) return null
-  const value = context.values[id]
-  return typeof value === 'number' && Number.isFinite(value) ? value : null
+  return context === null ? null : readGenuiBinding(context.values, id)
 }
 
 /** 角度绑定的默认值：0°，即机构处于初始位置。 */

@@ -1,12 +1,15 @@
-<!-- 生成式界面根容器：标题、节点树，以及有可调参数时底部的提交区。
+<!-- 生成式界面根容器：标题、节点树、复制入口，以及有可调参数时底部的提交区。
      载荷已在投影层按协议完整校验，这里只负责渲染与未知类型降级，不重复校验、不补造内容。
      同一份界面只有最高版本可交互：被取代的版本由父级折叠传入，本组件把控件与提交都置为只读。
+     复制为 Markdown 不写任何状态，因此只读版本也给这个入口：它输出的是文档与当前取值。
      参数取值只在渲染端内存里：界面底部常驻说明「不随历史恢复」这一降级口径，
      只有用户点击提交才会调用 sendPrompt，参数变化本身不发请求。 -->
 <script setup lang="ts">
-import { computed, useId, watch } from 'vue'
+import { computed, onUnmounted, ref, useId, watch } from 'vue'
 import '../../assets/genui.css'
 import type { GenuiPayload } from '../../../../shared/genui-api'
+import { copyText } from '../../clipboard'
+import { genuiDocumentToMarkdown } from '../../genui/markdown'
 import { provideGenuiParams } from '../../genui/param-state'
 import { composeParamSubmitText, useParamSubmit } from '../../genui/param-submit'
 import GenuiNode from './GenuiNode.vue'
@@ -53,6 +56,31 @@ function onSubmit(): void {
   if (submitBlocked.value || params.value.length === 0) return
   void submit(composeParamSubmitText(doc.value, props.payload.documentId, props.payload.revision, context.values))
 }
+
+/** 复制反馈：成功短暂显示勾选，失败保留可见提示，不让失败看着像没点。 */
+const copyFeedback = ref<'idle' | 'copied' | 'failed'>('idle')
+let copyTimer: number | null = null
+
+onUnmounted(() => {
+  if (copyTimer !== null) window.clearTimeout(copyTimer)
+})
+
+async function copyMarkdown(): Promise<void> {
+  let copied = false
+  try {
+    copied = await copyText(genuiDocumentToMarkdown(doc.value, context.values))
+  } catch {
+    // 剪贴板回退路径也可能受环境限制：下面统一按失败处理，不留永久状态。
+  }
+  copyFeedback.value = copied ? 'copied' : 'failed'
+  if (copyTimer !== null) window.clearTimeout(copyTimer)
+  copyTimer = null
+  if (!copied) return
+  copyTimer = window.setTimeout(() => {
+    copyFeedback.value = 'idle'
+    copyTimer = null
+  }, 1800)
+}
 </script>
 
 <template>
@@ -73,7 +101,25 @@ function onSubmit(): void {
         </div>
         <h3 :id="titleId" class="genui-document-title">{{ doc.title }}</h3>
       </div>
-      <span class="genui-document-mode">{{ superseded !== null ? '只读' : params.length > 0 ? '可交互' : '结构化视图' }}</span>
+      <div class="genui-document-actions">
+        <AppButton
+          variant="unstyled"
+          class="genui-document-copy"
+          :class="{ 'is-copied': copyFeedback === 'copied' }"
+          :aria-label="copyFeedback === 'failed' ? '复制 Markdown 失败' : '复制为 Markdown'"
+          @click="copyMarkdown"
+        >
+          <svg v-if="copyFeedback === 'copied'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+            <path d="m5 12 4 4L19 6" />
+          </svg>
+          <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+            <rect x="8" y="8" width="12" height="12" rx="2" />
+            <path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3" />
+          </svg>
+          <span>{{ copyFeedback === 'copied' ? '已复制' : copyFeedback === 'failed' ? '复制失败' : '复制' }}</span>
+        </AppButton>
+        <span class="genui-document-mode">{{ superseded !== null ? '只读' : params.length > 0 ? '可交互' : '结构化视图' }}</span>
+      </div>
     </header>
     <div class="genui-document-body genui-stack">
       <GenuiNode v-for="(node, index) in doc.nodes" :key="index" :node="node" />

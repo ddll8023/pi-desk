@@ -244,3 +244,17 @@ export function provideGenuiParams(source: {
 export function useGenuiParams(): GenuiParamContext | null {
   return inject(GENUI_PARAM_CONTEXT, null)
 }
+
+/**
+ * 按图示的 `binds` 取一个绑定值：未绑定、参数不存在或不是有限数字时返回 null，
+ * 由调用方决定回落值（图解渲染取 0，复制为 Markdown 也取 0，两边必须一致）。
+ * 几何渲染与 Markdown 序列化共用这一处，避免回落规则在两边逐渐漂移。
+ */
+export function readGenuiBinding(
+  values: Readonly<Record<string, GenuiParamValue>>,
+  id: string | undefined
+): number | null {
+  if (id === undefined) return null
+  const value = values[id]
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}

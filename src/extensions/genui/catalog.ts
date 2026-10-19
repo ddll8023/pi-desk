@@ -51,7 +51,7 @@ const OVERVIEW = `生成式 UI 用一份声明式文档描述界面，由桌面�
 - params / submitLabel：可选，声明界面内可调参数与提交按钮文案，字段见 ui_catalog({topic:"params"})。
 - diagram：可选节点，把装配关系、传动比与运动规律画成图解，字段见 ui_catalog({topic:"diagram"})。
 - chart：可选节点，把单序列数据画成柱状图或折线图，字段见 ui_catalog({topic:"chart"})。
-只有 ui_render 一个渲染入口；同一次回答可以多次调用，生成不同主题的独立界面。
+只有两个渲染入口：ui_render 交付整份文档，ui_patch 按 documentId 只发改动部分。同一次回答可以多次调用，生成不同主题的独立界面。
 先判断是否真的需要界面：纯叙述、简短结论与路径清单用正文，不用 card 把整篇回答重新包装。
 方案对比用 row 并排，指标用 metric，真实先后顺序用 steps；有参数时才提供 controls。
 card 只表达主题分组，不用多层嵌套来制造层级；解释和结论写在相关数据旁边。
@@ -151,21 +151,34 @@ line  折线图：适合趋势与变化。
 const UPDATE = `修改已交付的界面分两步：
 1. ui_inspect 查看现有界面。不带参数列出当前会话分支上的全部界面（documentId、标题、当前版本）；
    带 documentId 返回结构大纲（节点路径、类型、短预览与参数声明）。
-2. ui_render 带上同一个 documentId 重新交付整份文档。
+2. 选一个入口交付新版本：
+   - ui_patch：只发改动部分，适合改文案、换数据、增删一两个节点。
+   - ui_render：重发整份文档，适合结构大改（重排大部分节点）或改动超过文档一半。
+
+ui_patch 的形状：
+{documentId, ops?:[{op, path?, index?, node?}], title?, fallback?, submitLabel?, params?}
+- path 就是 ui_inspect 大纲里的节点位置："0"、"0.1"；省略或 "" 表示文档顶层的 nodes。
+- op=replace：用 node 整节点替换 path 指向的节点。
+- op=insert：把 node 插到 path 指向的容器（card / row 的子节点，或顶层 nodes）的 index 处；
+  index 省略则追加到末尾。
+- op=remove：删掉 path 指向的节点（不能删到剩零个节点）。
+- title / fallback / submitLabel 省略即不变；params 给数组则整体替换，给 null 则清空全部参数。
+- 粒度是节点：改表格里的一行也要 replace 整个 table 节点；没有行级、项级补丁。
+- 合并后仍过整份校验：改 params 时要同步改 controls，删参数时一起删掉引用它的 controls。
 
 版本语义：
-- 不带 documentId 是新建，revision 从 0 开始；带 documentId 且该界面在当前分支上时，revision 自动加一。
-- documentId 不在当前分支上会直接报错，不会静默变成新界面。这种情况先用 ui_inspect 核对标识。
+- ui_render 不带 documentId 是新建，revision 从 0 开始；带 documentId 且该界面在当前分支上时，revision 自动加一。
+- ui_patch 必须带 documentId，且总是应用到当前分支上的最新版；documentId 不在当前分支上会直接报错。
 - 旧版本会折叠成一行只读记录，不能调参也不能提交；只有最新版可交互。回退（rewind）到修改之前时，
   那个版本会重新成为最新版并恢复可交互。
-- 本版只支持整份重渲染，没有字段级 patch：改了哪里就把完整文档重发一次，不要只发改动部分。
+- 每个版本都存完整文档（不是补丁链），所以任何一版都能单独渲染。
 
 什么时候应该改、什么时候应该新开：
 - 同一份内容需要迭代（换数据、改文案、加节点）时带 documentId 修改，保持用户在流里的位置不变。
 - 不同主题、不同用途的界面用新 documentId，不要合并进同一份。
 
 用户回填参数后怎么续：以 ${GENUI_SUBMIT_PREFIX} 开头的用户消息里的 documentId 就是该界面，
-直接基于那些取值给结论；需要把新取值画进界面时，带同一 documentId 重新交付。`
+直接基于那些取值给结论；需要把新取值画进界面时，用 ui_patch 改相关节点或参数默认值。`
 
 const EXAMPLES = `示例一：方案对比（两个配置并排，不把说明重复写成表格）
 {"version":${GENUI_VERSION},"title":"日志保留策略","fallback":"短期方案保留 7 天，占用较小；长期方案保留 30 天，排查跨度更长。这是配置示例，不是实测结果。","nodes":[

@@ -1,5 +1,5 @@
 /**
- * 把一份界面文档压成结构大纲：模型据此在后续轮次里改字段并重新交付，而不必重读整份历史。
+ * 把一份界面文档压成结构大纲：模型据此在后续轮次里改字段并用 ui_patch 交付新版本，而不必重读整份历史。
  *
  * 大纲只描述结构与短预览，不回灌完整文本——它进的是模型上下文，体积必须可控。
  * 缩进用节点在树中的位置（`0`、`0.1`）表示，与 `ui_catalog` 的字段说明互补：
@@ -145,6 +145,6 @@ export function formatDocumentList(entries: readonly DocumentListEntry[]): strin
     const title = entry.title === '' ? '（标题缺失）' : `《${entry.title}》`
     lines.push(`- ${entry.documentId} ${title} 当前 revision=${entry.revision}，共 ${entry.versions} 个版本`)
   }
-  lines.push('查看某份界面的结构用 ui_inspect({documentId})；修改后重新交付时带上同一个 documentId。')
+  lines.push('查看某份界面的结构用 ui_inspect({documentId})；修改时用 ui_patch 只发改动部分（path 取大纲里的节点路径），结构大改时带同一个 documentId 用 ui_render 重发整份。')
   return lines.join('\n')
 }

@@ -183,6 +183,9 @@ interface UiRef {
   readonly supersededBy: number | null
 }
 
+/** 没有界面的消息共用同一份空数组：长会话里每条消息每批都新建空数组是无谓分配。 */
+const NO_UI_REFS: readonly UiRef[] = Object.freeze([])
+
 interface CacheEntry {
   readonly source: ProjectionMessage
   readonly toolRefs: readonly ToolRef[]
@@ -244,7 +247,7 @@ function uiRefsOf(
   message: ProjectionMessage,
   toolsById: ReadonlyMap<string, ToolExecution>,
   latest: ReadonlyMap<string, number>
-): UiRef[] {
+): readonly UiRef[] {
   const refs: UiRef[] = []
   for (const block of message.blocks) {
     if (block.kind !== 'toolcall' || block.toolCallId === null) continue
@@ -253,7 +256,8 @@ function uiRefsOf(
     const max = latest.get(ui.documentId)
     refs.push({ documentId: ui.documentId, supersededBy: max === undefined || max <= ui.revision ? null : max })
   }
-  return refs
+  // 共用空数组：缓存命中判定按长度与逐项比对，共用不影响正确性。
+  return refs.length === 0 ? NO_UI_REFS : refs
 }
 
 /** 缓存命中时，该消息每个界面的取代状态都必须与当前一致。 */

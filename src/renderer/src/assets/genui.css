@@ -42,6 +42,13 @@
 .genui-document-version { border-left: 1px solid var(--color-desk-line-strong); padding-left: 8px; color: var(--color-desk-muted); font-family: var(--font-mono); }
 .genui-document .genui-document-title { margin-top: 4px; color: var(--color-desk-ink); font-size: 18px; font-weight: 650; line-height: 1.45; overflow-wrap: anywhere; }
 .genui-document-mode { flex: none; padding: 4px 8px; border-radius: var(--radius-desk-sm); background: var(--color-desk-surface); color: var(--color-desk-muted); font-size: 11px; white-space: nowrap; }
+
+/* 头部右侧的动作区：复制按钮与模式标记并排，只读态也保留复制（它不改任何状态）。 */
+.genui-document-actions { display: flex; flex: none; align-items: center; gap: 8px; }
+.genui-document-copy { display: inline-flex; align-items: center; gap: 6px; border-radius: var(--radius-desk-sm); padding: 4px 8px; color: var(--color-desk-muted); font-size: 11px; white-space: nowrap; cursor: pointer; }
+.genui-document-copy:hover { background: var(--color-desk-surface); color: var(--color-desk-ink); }
+.genui-document-copy.is-copied { color: var(--color-desk-accent); }
+.genui-document-copy svg { width: 13px; height: 13px; flex: none; }
 .genui-document-body { padding-top: 20px; }
 .genui-stack { display: flex; min-width: 0; flex-direction: column; gap: 16px; }
 .genui-stack > * { min-width: 0; }
@@ -162,18 +169,29 @@
 .genui-history-title { min-width: 0; flex: 1; overflow: hidden; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
 .genui-history-version { flex: none; font-family: var(--font-mono); font-size: 11px; white-space: nowrap; }
 .genui-history-body { border-top: 1px solid var(--color-desk-line); padding: 16px; }
+
+/* 可见性挂载门：远离视口的界面只留一行占位，视觉上弱于真实界面，但仍说清是什么、讲了什么。 */
+.genui-mount { min-width: 0; width: 100%; }
+.genui-mount-placeholder { display: flex; flex-direction: column; gap: 8px; border: 1px dashed var(--color-desk-line); border-radius: var(--radius-desk-md); padding: 12px 16px; color: var(--color-desk-muted); }
+.genui-mount-head { display: flex; min-width: 0; flex-wrap: wrap; align-items: center; gap: 12px; }
+.genui-mount-label { flex: none; color: var(--color-desk-accent); font-size: 11px; }
+.genui-mount-title { min-width: 0; flex: 1; overflow: hidden; color: var(--color-desk-ink); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.genui-mount-hint { flex: none; font-size: 11px; white-space: nowrap; }
+.genui-mount-fallback { font-size: 12px; line-height: 1.65; overflow-wrap: anywhere; }
 .genui-document.is-readonly .genui-document-header { border-left-color: var(--color-desk-line-strong); background: var(--color-desk-surface-subtle); }
 .genui-document.is-readonly :where(.genui-document-eyebrow, .genui-document-mark) { color: var(--color-desk-muted); }
 
 .genui-table-scroll:focus-visible,
 .genui-table-expand:focus-visible,
 .genui-history > summary:focus-visible,
+.genui-document-copy:focus-visible,
 .genui-range:focus-visible,
 .genui-checkbox:focus-visible { outline: 2px solid var(--color-desk-accent); outline-offset: 3px; }
 
 @container genui (max-width: 560px) {
   .genui-document-header { flex-wrap: wrap; gap: 12px; padding: 12px; }
   .genui-document-mode { margin-left: auto; }
+  .genui-document-actions { margin-left: auto; }
   .genui-submit-row { flex-direction: column; align-items: stretch; }
   .genui-submit { align-self: flex-end; max-width: 100%; }
   .genui-control-heading { flex-wrap: wrap; gap: 8px; }

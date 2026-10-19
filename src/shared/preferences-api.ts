@@ -154,7 +154,7 @@ export type AutoUpdateResult =
   | { readonly ok: false; readonly error: PreferencesError }
 
 /**
- * 生成式 UI 开关：关闭后 SDK 宿主不再注册 ui_render / ui_catalog / ui_inspect，
+ * 生成式 UI 开关：关闭后 SDK 宿主不再注册 ui_render / ui_patch / ui_catalog / ui_inspect，
  * 模型也就看不到这项能力。默认开：它是产品内置特性，不需要用户先发现再开启。
  * 开关只影响会话创建期，改动要重载资源后才生效；历史会话里已交付的界面仍照常渲染。
  */

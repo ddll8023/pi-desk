@@ -2,8 +2,8 @@
  * 从会话分支重建生成式界面的身份与版本：`revision` 不落任何外部文件，唯一来源就是当前分支上
  * 已经写进工具结果的 `details.ui`。
  *
- * 只认 `ui_render` 的 `toolResult` 条目。读身份时只看 `documentId` / `revision` / 标题这几个
- * 头部字段，不做整份校验——分支越长，这个开销越要压住；需要完整文档时再走 `parseGenuiPayload`。
+ * 只认产生界面载荷的工具（`ui_render` / `ui_patch`）的 `toolResult` 条目。读身份时只看 `documentId` / `revision` / 标题
+ * 这几个头部字段，不做整份校验——分支越长，这个开销越要压住；需要完整文档时再走 `parseGenuiPayload`。
  *
  * 分支语义由调用方决定：传入 `sessionManager.getBranch()` 就是当前叶路径，因此 rewind 到修改
  * 之前时，那个版本会重新成为最新版，这是正确的语义，这里不做额外处理。
@@ -12,8 +12,13 @@ import type { SessionEntry } from '@earendil-works/pi-coding-agent'
 import { parseGenuiPayload } from '../../shared/genui-api'
 import type { GenuiPayload } from '../../shared/genui-api'
 
-/** 产生界面载荷的工具名；其他工具即使带 `details.ui` 也不认。 */
-const RENDER_TOOL_NAME = 'ui_render'
+/** 产生界面载荷的工具名；其他工具即使带 `details.ui` 也不认。补丁与整份交付产出的载荷形状一致。 */
+const RENDER_TOOL_NAMES: ReadonlySet<string> = new Set(['ui_render', 'ui_patch'])
+
+/** 该工具是否会产生界面载荷。 */
+function isRenderTool(toolName: string): boolean {
+  return RENDER_TOOL_NAMES.has(toolName)
+}
 
 /** 分支上一份界面的头部信息；不含节点树，用于列表、版本推导与「是否存在」判断。 */
 export interface DocumentHeader {
@@ -48,7 +53,7 @@ function headersOf(entries: readonly SessionEntry[]): DocumentHeader[] {
   for (const entry of entries) {
     if (entry.type !== 'message') continue
     const message = entry.message
-    if (message.role !== 'toolResult' || message.toolName !== RENDER_TOOL_NAME) continue
+    if (message.role !== 'toolResult' || !isRenderTool(message.toolName)) continue
     const header = readPayloadHeader(message.details)
     if (header !== null) headers.push(header)
   }
@@ -114,7 +119,7 @@ export function findLatestPayload(entries: readonly SessionEntry[], documentId: 
   for (const entry of entries) {
     if (entry.type !== 'message') continue
     const message = entry.message
-    if (message.role !== 'toolResult' || message.toolName !== RENDER_TOOL_NAME) continue
+    if (message.role !== 'toolResult' || !isRenderTool(message.toolName)) continue
     // 先当 unknown 处理：下面只在 `readPayloadHeader` 确认形状后才取具体字段。
     const details: unknown = message.details
     const header = readPayloadHeader(details)

@@ -1,9 +1,10 @@
 /**
- * 生成式 UI 的工具定义：一个渲染入口、一个按需字段目录与一个查看入口。
+ * 生成式 UI 的工具定义：两个渲染入口（整份交付、局部补丁）、一个按需字段目录与一个查看入口。
  *
  * 边界：只做参数归一化、校验与结果组装，不持有会话内容、不读写文件。`revision` 是唯一的
  * 跨调用状态，它不落盘：每次调用都从当前会话分支上的工具结果重建（见 `session-scan.ts`），
- * 因此 rewind / fork 之后版本语义自然跟着分支走。
+ * 因此 rewind / fork 之后版本语义自然跟着分支走。两个入口产出的 `details.ui` 形状完全一致，
+ * 渲染端与投影层不区分工具名。
  *
  * 富载荷放在工具结果的 `details` 里，不进入模型上下文；`content` 只给可读摘要，
  * 保证 TUI、纯文本模式与导出场景都有可用的替代文本。
@@ -21,12 +22,14 @@ import {
   GENUI_VERSION,
   explainGenuiDocument
 } from '../../shared/genui-api'
-import type { GenuiParam, GenuiPayload } from '../../shared/genui-api'
+import type { GenuiDocument, GenuiParam, GenuiPayload } from '../../shared/genui-api'
 import { GENUI_CATALOG_TOPICS, genuiCatalog } from './catalog'
 import type { GenuiCatalogTopic } from './catalog'
 import { collectDeliveryWarnings, createDiagnosticsState, formatValidationError } from './diagnostics'
 import type { DiagnosticsState } from './diagnostics'
 import { formatDocumentList, formatDocumentOutline } from './outline'
+import { GenuiPatchError, applyGenuiPatch } from './patch'
+import type { GenuiDocumentPatch, GenuiPatchOp } from './patch'
 import { findLatestPayload, listDocuments, nextRevision } from './session-scan'
 
 /** 工具结果的 details：渲染端只认这一个键，不认工具名，因此改名不影响渲染。 */
@@ -71,6 +74,41 @@ const RENDER_PARAMETERS = {
   }
 } as unknown as ToolParameters
 
+const PATCH_PARAMETERS = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['documentId'],
+  properties: {
+    documentId: {
+      type: 'string',
+      description: '要修改的界面标识（见 ui_inspect）；补丁总是应用到当前分支上的最新版。'
+    },
+    ops: {
+      type: 'array',
+      description: '节点补丁，按顺序应用。路径与 ui_inspect 的大纲一致（"0"、"0.1"）；空字符串表示文档顶层 nodes。',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['op'],
+        properties: {
+          op: { type: 'string', enum: ['replace', 'insert', 'remove'], description: 'replace=整节点替换；insert=插入到容器；remove=删除节点' },
+          path: { type: 'string', description: 'replace/remove 指向被改的节点；insert 指向要插入的容器；省略或空串表示顶层 nodes' },
+          index: { type: 'number', description: '仅 insert：插入位置，省略表示追加到末尾' },
+          node: { type: 'object', description: 'replace 与 insert 必填：节点对象，字段见 ui_catalog({topic:"nodes"})' }
+        }
+      }
+    },
+    title: { type: 'string', description: '改标题；省略则不变' },
+    fallback: { type: 'string', description: '改替代文本；省略则不变' },
+    submitLabel: { type: 'string', description: '改提交按钮文案；省略则不变' },
+    params: {
+      type: ['array', 'null'],
+      description: '改参数声明：给数组则整体替换，给 null 则清空全部参数（同时要删掉对应的 controls 节点）；省略则不变',
+      items: { type: 'object' }
+    }
+  }
+} as unknown as ToolParameters
+
 const CATALOG_PARAMETERS = {
   type: 'object',
   additionalProperties: false,
@@ -100,12 +138,12 @@ const INSPECT_PARAMETERS = {
  * 归一化模型传来的 document：部分模型会把整个对象编码成 JSON 字符串。
  * 只做一次无损解码，不做字段级修补——修补会把错误藏起来，让模型无法从诊断中学习。
  */
-function normalizeDocumentInput(raw: unknown): unknown {
+function normalizeDocumentInput(raw: unknown, toolName: string): unknown {
   if (typeof raw !== 'string') return raw
   try {
     return JSON.parse(raw) as unknown
   } catch {
-    throw new Error('ui_render: document 不是合法 JSON，也没有提供对象。请直接传对象，字段见 ui_catalog({topic:"nodes"})。')
+    throw new Error(`${toolName}: document 不是合法 JSON，也没有提供对象。请直接传对象，字段见 ui_catalog({topic:"nodes"})。`)
   }
 }
 
@@ -116,7 +154,7 @@ function defaultText(param: GenuiParam): string {
 }
 
 /** 组装模型可见摘要：只给标题、替代文本、文档标识与可调参数，不回灌整份文档。 */
-function summaryText(payload: GenuiPayload): string {
+function summaryText(payload: GenuiPayload, updateNote?: string): string {
   const { document, documentId, revision } = payload
   const params = document.params ?? []
   const paramNote = params.length === 0
@@ -126,11 +164,42 @@ function summaryText(payload: GenuiPayload): string {
   const versionNote = revision === 0
     ? ''
     : `\n这是同一界面的第 ${revision} 版；之前的版本已折叠为只读记录，只有本版可交互。`
-  return `已生成界面《${document.title}》。\n${document.fallback}\n`
+  const actionNote = updateNote === undefined
+    ? '需要修改时优先用 ui_patch 只发改动部分，结构大改时用 ui_render 重发整份。'
+    : `本次改动 ${updateNote}；要再改可继续用 ui_patch，结构大改时用 ui_render 重发整份。`
+  const head = updateNote === undefined ? '已生成界面' : '已更新界面'
+  return `${head}《${document.title}》。\n${document.fallback}\n`
     + `UI documentId=${documentId}; revision=${revision}. `
-    + '需要修改时重新调用 ui_render 生成新版本，或按 documentId 引用本界面。'
+    + actionNote
     + versionNote
     + paramNote
+}
+
+/**
+ * 校验一份文档并返回归一化结果。两个渲染入口共用：序列化上限、整份解析与诊断文案完全一致，
+ * 补丁合并出来的文档不能因为走了另一条路径而放宽校验。
+ */
+function validateDocument(rawDocument: unknown, toolName: string, diagnostics: DiagnosticsState): GenuiDocument {
+  const normalized = normalizeDocumentInput(rawDocument, toolName)
+  if (normalized === undefined || normalized === null) {
+    throw new Error(`${toolName}: 缺少 document。请传入完整界面文档，字段见 ui_catalog({topic:"overview"})。`)
+  }
+  let size = Number.POSITIVE_INFINITY
+  try {
+    size = JSON.stringify(normalized)?.length ?? Number.POSITIVE_INFINITY
+  } catch {
+    // 循环引用等无法序列化的输入按校验失败处理，不把原始异常抛给模型。
+    throw new Error(`${toolName}: document 无法序列化（可能存在循环引用），请检查结构后重试。`)
+  }
+  if (size > GENUI_MAX_DOCUMENT_CHARS) {
+    throw new Error(
+      `${toolName}: document 序列化后约 ${size} 字符，超过上限 ${GENUI_MAX_DOCUMENT_CHARS}。`
+      + '请拆成多份界面或精简表格行数后重试。'
+    )
+  }
+  const result = explainGenuiDocument(normalized)
+  if (!result.ok) throw new Error(formatValidationError(result.issues, diagnostics, toolName))
+  return result.document
 }
 
 /**
@@ -145,29 +214,9 @@ function buildPayload(
   entries: readonly SessionEntry[],
   diagnostics: DiagnosticsState
 ): GenuiPayload {
-  const normalized = normalizeDocumentInput(rawDocument)
-  if (normalized === undefined || normalized === null) {
-    throw new Error('ui_render: 缺少 document。请传入完整界面文档，字段见 ui_catalog({topic:"overview"})。')
-  }
-  let size = Number.POSITIVE_INFINITY
-  try {
-    size = JSON.stringify(normalized)?.length ?? Number.POSITIVE_INFINITY
-  } catch {
-    // 循环引用等无法序列化的输入按校验失败处理，不把原始异常抛给模型。
-    throw new Error('ui_render: document 无法序列化（可能存在循环引用），请检查结构后重试。')
-  }
-  if (size > GENUI_MAX_DOCUMENT_CHARS) {
-    throw new Error(
-      `ui_render: document 序列化后约 ${size} 字符，超过上限 ${GENUI_MAX_DOCUMENT_CHARS}。`
-      + '请拆成多份界面或精简表格行数后重试。'
-    )
-  }
-
-  const result = explainGenuiDocument(normalized)
-  if (!result.ok) throw new Error(formatValidationError(result.issues, diagnostics))
-
+  const document = validateDocument(rawDocument, 'ui_render', diagnostics)
   if (documentId === undefined) {
-    return { version: GENUI_VERSION, documentId: randomUUID(), revision: 0, document: result.document }
+    return { version: GENUI_VERSION, documentId: randomUUID(), revision: 0, document }
   }
   const revision = nextRevision(entries, documentId)
   if (revision === null) {
@@ -176,12 +225,51 @@ function buildPayload(
       + '先用 ui_inspect 确认既有界面的 documentId；要新建界面就去掉 documentId。'
     )
   }
-  return { version: GENUI_VERSION, documentId, revision, document: result.document }
+  return { version: GENUI_VERSION, documentId, revision, document }
 }
 
 /**
- * 注册三个工具。任何异常都在调用方（扩展工厂）收敛，这里不吞异常：
- * 工具执行期抛出会变成失败的工具结果，模型能看到并据此修正。
+ * 把补丁应用到分支上的最新版并构造载荷。
+ * 补丁总是作用于当前分支的最新版：没有「期望版本」校验，因为版本号本身就由分支推出，
+ * 模型拿旧大纲改字段时应当先重新 ui_inspect。
+ */
+function buildPatchedPayload(
+  documentId: string,
+  ops: readonly GenuiPatchOp[],
+  fields: GenuiDocumentPatch,
+  entries: readonly SessionEntry[],
+  diagnostics: DiagnosticsState
+): { payload: GenuiPayload; opCount: number; fieldCount: number } {
+  const latest = findLatestPayload(entries, documentId)
+  if (latest === null) {
+    throw new Error(
+      `ui_patch: documentId=${documentId} 不在当前会话分支上，或历史版本已损坏。`
+      + '先用 ui_inspect 确认既有界面的 documentId；要新建界面用 ui_render。'
+    )
+  }
+  const revision = nextRevision(entries, documentId)
+  if (revision === null) {
+    throw new Error(`ui_patch: documentId=${documentId} 无法推导下一版版本号，请重新 ui_inspect 后重试。`)
+  }
+  let merged: Record<string, unknown>
+  try {
+    merged = applyGenuiPatch(latest.document, ops, fields)
+  } catch (error) {
+    // 路径类错误带具体层级与可用范围，直接交给模型，不再包一层。
+    if (error instanceof GenuiPatchError) throw new Error(`ui_patch: ${error.message}`)
+    throw error
+  }
+  const document = validateDocument(merged, 'ui_patch', diagnostics)
+  return {
+    payload: { version: GENUI_VERSION, documentId, revision, document },
+    opCount: ops.length,
+    fieldCount: Object.keys(fields).length
+  }
+}
+
+/**
+ * 注册四个工具（整份交付、局部补丁、字段目录、查看）。任何异常都在调用方（扩展工厂）收敛，
+ * 这里不吞异常：工具执行期抛出会变成失败的工具结果，模型能看到并据此修正。
  *
  * 诊断状态按会话持有（工厂每次建会话调用一次注册），跨调用累积失败次数与重复签名。
  */
@@ -205,7 +293,7 @@ export function registerGenuiTools(pi: ExtensionAPI): void {
       `收到以 ${GENUI_SUBMIT_PREFIX} 开头的用户消息时，那是界面参数的显式回填：按其中的 documentId`
         + '认定是同一份界面，直接基于这些取值继续，不要重画同一界面。',
       '要修改已经交付过的界面时，先 ui_inspect 取它的结构与 documentId，再带同一个 documentId 调 ui_render；'
-        + '不要用新 documentId 重复交付同一界面。',
+        + '不要用新 documentId 重复交付同一界面。小改动优先用 ui_patch 只发改动部分。',
       '要表达装配顺序、传动比或运动规律时用 diagram 节点（字段见 ui_catalog({topic:"diagram"})）；'
         + '想让图解随用户调节变化，就声明 number 参数、用 binds 绑定，并用 controls 节点把它渲染出来。',
       '需要展示单序列的数值对比或趋势时用 chart（字段见 ui_catalog({topic:"chart"})）；'
@@ -226,6 +314,60 @@ export function registerGenuiTools(pi: ExtensionAPI): void {
         : `\n\n交付检查：\n${warnings.map((warning) => `- ${warning}`).join('\n')}`
       const details: GenuiToolDetails = { ui: payload }
       return { content: [{ type: 'text', text: summaryText(payload) + warningNote }], details }
+    }
+  })
+
+  pi.registerTool({
+    name: 'ui_patch',
+    label: '局部修改生成式界面',
+    description:
+      '按 documentId 只发改动部分来更新已交付的界面，不重发整份文档：ops 里用 replace / insert / remove '
+      + '改节点，或直接给 title / fallback / submitLabel / params。路径与 ui_inspect 大纲一致（"0"、"0.1"）。'
+      + '结构大改、或改动超过文档一半时改用 ui_render 重发整份。',
+    promptSnippet: 'ui_patch — 按 documentId 只发改动部分，不重发整份界面文档',
+    promptGuidelines: [
+      '改已交付界面的文案、数据或增删节点时优先用 ui_patch；只有结构大改（重排大部分节点）才用 ui_render 重发整份。',
+      '用 ui_patch 前先 ui_inspect 取结构：路径就是大纲里的 0、0.1 这类节点位置，不要自己推测。',
+      'ui_patch 的粒度是节点：改表格里的一行也要 replace 整个 table 节点，没有行级、项级补丁。',
+      '补丁合并后仍要过整份校验：改 params 时要同步改 controls 节点，删参数时一起删掉引用它的 controls。'
+    ],
+    parameters: PATCH_PARAMETERS,
+    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+      if (signal?.aborted === true) throw new Error('ui_patch: 已取消。')
+      const input = params as unknown as {
+        documentId?: unknown
+        ops?: unknown
+        title?: unknown
+        fallback?: unknown
+        submitLabel?: unknown
+        params?: unknown
+      }
+      const documentId = typeof input.documentId === 'string' ? input.documentId : ''
+      if (documentId === '') throw new Error('ui_patch: 缺少 documentId。先 ui_inspect 取界面标识；新建界面用 ui_render。')
+      if (input.ops !== undefined && !Array.isArray(input.ops)) {
+        throw new Error('ui_patch: ops 必须是数组，每项带 op 字段（replace / insert / remove）。')
+      }
+      const ops = (input.ops ?? []) as readonly GenuiPatchOp[]
+      // 只把真实给出的字段传给合并层：四个键全部写 undefined 会让「空补丁」检查失效。
+      const fields: GenuiDocumentPatch = {
+        ...(input.title === undefined ? {} : { title: input.title }),
+        ...(input.fallback === undefined ? {} : { fallback: input.fallback }),
+        ...(input.submitLabel === undefined ? {} : { submitLabel: input.submitLabel }),
+        ...(input.params === undefined ? {} : { params: input.params })
+      }
+      const entries = ctx.sessionManager.getBranch()
+      const { payload, opCount, fieldCount } = buildPatchedPayload(documentId, ops, fields, entries, diagnostics)
+      const warnings = collectDeliveryWarnings(payload.document)
+      const warningNote = warnings.length === 0
+        ? ''
+        : `\n\n交付检查：\n${warnings.map((warning) => `- ${warning}`).join('\n')}`
+      // 摘要按实际改了什报告：只改文档级字段时不能写成「0 处节点」。
+      const parts = [
+        ...(opCount === 0 ? [] : [`${opCount} 处节点`]),
+        ...(fieldCount === 0 ? [] : [`${fieldCount} 处文档级字段`])
+      ]
+      const details: GenuiToolDetails = { ui: payload }
+      return { content: [{ type: 'text', text: summaryText(payload, parts.join('、')) + warningNote }], details }
     }
   })
 
@@ -258,10 +400,10 @@ export function registerGenuiTools(pi: ExtensionAPI): void {
     description:
       '查看当前会话分支上已交付的界面：省略 documentId 时列出全部界面（标识、标题、当前版本）；'
       + '给出 documentId 时返回该界面的结构大纲（节点路径、类型、短预览与参数声明）。'
-      + '修改既有界面前先用它确认结构与标识。',
+      + '修改既有界面前先用它确认结构与标识：大纲里的节点路径就是 ui_patch 的 path。',
     promptSnippet: 'ui_inspect — 列出会话内的界面，或读取某份界面的结构大纲',
     promptGuidelines: [
-      '要修改已交付的界面时先 ui_inspect 取结构，再带同一 documentId 调 ui_render。'
+      '要修改已交付的界面时先 ui_inspect 取结构：小改用 ui_patch，结构大改用 ui_render 带同一 documentId 重发整份。'
     ],
     parameters: INSPECT_PARAMETERS,
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {

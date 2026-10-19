@@ -1,5 +1,5 @@
 <!-- 单条消息：按块展示正文、思考、工具卡、技能卡、压缩卡与计时（单条生成耗时与本轮响应耗时）与本次调用的 token 花销。
-     过程块逐项展示、互不合并：每段 Thinking 各自折叠成一行轻量摘要（生成中展开并跟随最新思考，结束后收起），每个工具调用就是一张独立折叠的 ToolCard，参数与结果在卡内二级折叠；交付了生成式界面的工具调用改渲染界面本身，不再套折叠卡；回答正文按原位置展示、始终可见。界面内的参数提交复用消息动作栏的禁用口径（运行中、未同步、正在发送等），不另做一套判断。用户消息下方使用细线图标操作栏，回退与修改后的重新发送由父级执行。
+     过程块逐项展示、互不合并：每段 Thinking 各自折叠成一行轻量摘要（生成中展开并跟随最新思考，结束后收起），每个工具调用就是一张独立折叠的 ToolCard，参数与结果在卡内二级折叠；交付了生成式界面的工具调用改渲染界面本身，不再套折叠卡；回答正文按原位置展示、始终可见。界面按可见性挂载：远离视口的界面只留一行占位，展开全部轮次时不把每份界面都常驻。界面内的参数提交复用消息动作栏的禁用口径（运行中、未同步、正在发送等），不另做一套判断。用户消息下方使用细线图标操作栏，回退与修改后的重新发送由父级执行。
      早期轮次的整体收起由 ChatTurnItem 负责，这里只表达单条消息内部每项自己的开合；同一轮内的非首条 AI 消息用紧凑表头，不重复 π 标记与角色名。 -->
 <script setup lang="ts">
 import { computed, onUnmounted, reactive, ref, useId, watch } from 'vue'
@@ -14,6 +14,7 @@ import { formatDuration, useTickingNow } from '../clock'
 import { cacheHitRate, formatTokens } from '../usage-format'
 import MarkdownContent from './MarkdownContent.vue'
 import ToolCard from './ToolCard.vue'
+import GenuiMountGate from './genui/GenuiMountGate.vue'
 import UiDocument from './genui/UiDocument.vue'
 import AppButton from './ui/AppButton.vue'
 
@@ -459,7 +460,8 @@ function onEditKeydown(event: KeyboardEvent): void {
       </details>
       <!-- 交付了生成式界面的工具调用直接渲染界面，不再套一层折叠卡；其余工具仍走通用 ToolCard。
            同一份界面只有最高版本可交互：被取代的版本折叠成一行只读记录，展开后控件与提交都禁用。
-           按 documentId 作 key：文档被替换时整个界面连同内存参数一起重建。 -->
+           按 documentId 作 key：文档被替换时整个界面连同内存参数一起重建。
+           界面由 GenuiMountGate 按可见性挂载：长会话里展开全部轮次时，不把每份界面的组件都常驻。 -->
       <template v-else-if="block.kind === 'toolcall'">
         <details
           v-if="block.ui !== null && block.supersededBy !== null"
@@ -471,22 +473,25 @@ function onEditKeydown(event: KeyboardEvent): void {
             <span class="genui-history-version">已被第 {{ block.supersededBy }} 版取代</span>
           </summary>
           <div class="genui-history-body">
-            <UiDocument
-              :key="block.ui.documentId"
-              :payload="block.ui"
-              :submit-disabled="actionsDisabled === true"
-              :submit-disabled-reason="disabledReason ?? null"
-              :superseded-by="block.supersededBy"
-            />
+            <GenuiMountGate :payload="block.ui">
+              <UiDocument
+                :key="block.ui.documentId"
+                :payload="block.ui"
+                :submit-disabled="actionsDisabled === true"
+                :submit-disabled-reason="disabledReason ?? null"
+                :superseded-by="block.supersededBy"
+              />
+            </GenuiMountGate>
           </div>
         </details>
-        <UiDocument
-          v-else-if="block.ui !== null"
-          :key="block.ui.documentId"
-          :payload="block.ui"
-          :submit-disabled="actionsDisabled === true"
-          :submit-disabled-reason="disabledReason ?? null"
-        />
+        <GenuiMountGate v-else-if="block.ui !== null" :payload="block.ui">
+          <UiDocument
+            :key="block.ui.documentId"
+            :payload="block.ui"
+            :submit-disabled="actionsDisabled === true"
+            :submit-disabled-reason="disabledReason ?? null"
+          />
+        </GenuiMountGate>
         <ToolCard
           v-else
           :block="block"

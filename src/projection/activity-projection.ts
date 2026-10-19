@@ -31,13 +31,13 @@ const WRITE_TOOLS: ReadonlySet<string> = new Set(['write', 'edit', 'multiedit', 
 
 /**
  * Pi 的内置工具与内置扩展工具（codemode / tool_search 随宿主固定注册，
- * 生成式 UI 的 ui_render / ui_catalog / ui_inspect 由 Desktop 以 builtin factory 注册）：
+ * 生成式 UI 的 ui_render / ui_patch / ui_catalog / ui_inspect 由 Desktop 以 builtin factory 注册）：
  * 其余既非内置、也非 MCP 的工具按扩展（插件）工具统计。
  */
 const BUILTIN_TOOLS: ReadonlySet<string> = new Set([
   'read', 'write', 'edit', 'multiedit', 'apply_patch',
   'bash', 'powershell', 'grep', 'find', 'ls', 'codemode', 'tool_search',
-  'ui_render', 'ui_catalog', 'ui_inspect', 'ffgrep', 'fffind'
+  'ui_render', 'ui_patch', 'ui_catalog', 'ui_inspect', 'ffgrep', 'fffind'
 ])
 
 /** MCP 资源工具：属于 MCP 能力，但不属于任何具体服务器。 */

@@ -35,11 +35,16 @@ function signatureOf(issues: readonly GenuiIssue[]): string {
 /**
  * 组装校验失败的工具错误文本。
  * `issues` 来自 `explainGenuiDocument`，已带路径与可执行原因，这里只负责排版与去重。
+ * `toolName` 是失败的那个工具（`ui_render` 或 `ui_patch`）：前缀写错会让模型去改另一个入口。
  */
-export function formatValidationError(issues: readonly GenuiIssue[], state: DiagnosticsState): string {
+export function formatValidationError(
+  issues: readonly GenuiIssue[],
+  state: DiagnosticsState,
+  toolName = 'ui_render'
+): string {
   state.failures += 1
   const shown = issues.slice(0, GENUI_MAX_ISSUES)
-  const lines = ['ui_render: document 未通过校验，界面未生成。具体问题：']
+  const lines = [`${toolName}: document 未通过校验，界面未生成。具体问题：`]
   for (const issue of shown) lines.push(`- ${issue.path}：${issue.reason}`)
   if (issues.length > shown.length) lines.push(`（另有 ${issues.length - shown.length} 处问题未列出，先修上面这些。）`)
 
