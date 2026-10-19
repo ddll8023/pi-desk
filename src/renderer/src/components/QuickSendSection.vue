@@ -76,84 +76,88 @@ async function save(): Promise<void> {
 </script>
 
 <template>
-  <section class="settings-section" aria-labelledby="settings-quick-send-title">
-    <div class="settings-section-heading">
-      <div>
-        <h2 id="settings-quick-send-title" class="settings-section-title">快捷输入</h2>
-        <p class="mt-1 text-xs text-desk-muted">输入坞快捷发送下拉里的短语，点一下就用该短语直接发送。</p>
+  <div class="space-y-4">
+    <header>
+      <h1 class="text-xl font-semibold tracking-tight">快捷输入</h1>
+      <p class="mt-1 text-sm text-desk-muted">输入坞快捷发送下拉里的短语，点一下就用该短语直接发送。</p>
+    </header>
+
+    <section class="settings-section" aria-labelledby="settings-quick-send-title">
+      <div class="settings-section-heading">
+        <h2 id="settings-quick-send-title" class="settings-section-title">短语清单</h2>
+        <span class="text-2xs text-desk-muted">{{ draft.length }} / {{ MAX_QUICK_SEND_MESSAGES }}</span>
       </div>
-      <span class="text-2xs text-desk-muted">{{ draft.length }} / {{ MAX_QUICK_SEND_MESSAGES }}</span>
-    </div>
 
-    <ul v-if="draft.length > 0" class="mt-4 space-y-2">
-      <li v-for="(message, index) in draft" :key="index" class="flex items-center gap-2">
-        <input
-          v-model="draft[index]"
-          type="text"
-          class="text-control flex-1"
-          :maxlength="MAX_QUICK_SEND_MESSAGE_LENGTH"
-          :disabled="saving"
-          :aria-label="`第 ${index + 1} 条快捷输入`"
-          placeholder="例如：继续"
-        >
-        <AppButton
-          variant="compact"
-          :disabled="saving || index === 0"
-          aria-label="上移"
-          title="上移"
-          @click="moveMessage(index, -1)"
-        >
-          ↑
-        </AppButton>
-        <AppButton
-          variant="compact"
-          :disabled="saving || index === draft.length - 1"
-          aria-label="下移"
-          title="下移"
-          @click="moveMessage(index, 1)"
-        >
-          ↓
-        </AppButton>
-        <AppButton
-          variant="quiet-danger"
-          :disabled="saving"
-          :aria-label="`删除第 ${index + 1} 条快捷输入`"
-          title="删除"
-          @click="removeMessage(index)"
-        >
-          ✕
-        </AppButton>
-      </li>
-    </ul>
+      <ul v-if="draft.length > 0" class="mt-4 space-y-2">
+        <li v-for="(message, index) in draft" :key="index" class="flex items-center gap-2">
+          <input
+            v-model="draft[index]"
+            type="text"
+            class="text-control flex-1"
+            :maxlength="MAX_QUICK_SEND_MESSAGE_LENGTH"
+            :disabled="saving"
+            :aria-label="`第 ${index + 1} 条快捷输入`"
+            placeholder="例如：继续"
+          >
+          <AppButton
+            variant="compact"
+            :disabled="saving || index === 0"
+            aria-label="上移"
+            title="上移"
+            @click="moveMessage(index, -1)"
+          >
+            ↑
+          </AppButton>
+          <AppButton
+            variant="compact"
+            :disabled="saving || index === draft.length - 1"
+            aria-label="下移"
+            title="下移"
+            @click="moveMessage(index, 1)"
+          >
+            ↓
+          </AppButton>
+          <AppButton
+            variant="quiet-danger"
+            :disabled="saving"
+            :aria-label="`删除第 ${index + 1} 条快捷输入`"
+            title="删除"
+            @click="removeMessage(index)"
+          >
+            ✕
+          </AppButton>
+        </li>
+      </ul>
 
-    <p v-else class="mt-4 text-xs text-desk-muted">还没有短语，添加至少一条后才能保存。</p>
+      <p v-else class="mt-4 text-xs text-desk-muted">还没有短语，添加至少一条后才能保存。</p>
 
-    <AppButton
-      variant="compact"
-      class="mt-2"
-      :disabled="saving || atLimit"
-      aria-label="添加快捷输入"
-      @click="addMessage"
-    >
-      添加
-    </AppButton>
+      <AppButton
+        variant="compact"
+        class="mt-2"
+        :disabled="saving || atLimit"
+        aria-label="添加快捷输入"
+        @click="addMessage"
+      >
+        添加
+      </AppButton>
 
-    <div class="settings-row">
-      <p class="text-xs text-desk-muted">
-        <template v-if="atLimit">已达到 {{ MAX_QUICK_SEND_MESSAGES }} 条上限，删除一条后可继续添加。</template>
-        <template v-else-if="willNormalize">保存时会忽略空白项、合并重复短语。</template>
-        <template v-else>每条 {{ MAX_QUICK_SEND_MESSAGE_LENGTH }} 字以内，顺序即下拉里的顺序。</template>
+      <div class="settings-row">
+        <p class="text-xs text-desk-muted">
+          <template v-if="atLimit">已达到 {{ MAX_QUICK_SEND_MESSAGES }} 条上限，删除一条后可继续添加。</template>
+          <template v-else-if="willNormalize">保存时会忽略空白项、合并重复短语。</template>
+          <template v-else>每条 {{ MAX_QUICK_SEND_MESSAGE_LENGTH }} 字以内，顺序即下拉里的顺序。</template>
+        </p>
+        <div class="flex items-center gap-2">
+          <AppButton variant="compact" :disabled="saving || !dirty" @click="resetDraft">恢复</AppButton>
+          <AppButton variant="primary" :disabled="!canSave" @click="save">
+            {{ saving ? '保存中…' : '保存' }}
+          </AppButton>
+        </div>
+      </div>
+
+      <p v-if="quickSendView.phase === 'error'" role="alert" class="mt-3 text-xs text-desk-danger">
+        {{ quickSendView.error.message }}
       </p>
-      <div class="flex items-center gap-2">
-        <AppButton variant="compact" :disabled="saving || !dirty" @click="resetDraft">恢复</AppButton>
-        <AppButton variant="primary" :disabled="!canSave" @click="save">
-          {{ saving ? '保存中…' : '保存' }}
-        </AppButton>
-      </div>
-    </div>
-
-    <p v-if="quickSendView.phase === 'error'" role="alert" class="mt-3 text-xs text-desk-danger">
-      {{ quickSendView.error.message }}
-    </p>
-  </section>
+    </section>
+  </div>
 </template>
