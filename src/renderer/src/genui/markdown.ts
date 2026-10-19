@@ -21,9 +21,10 @@ import type {
   GenuiParamValue,
   GenuiTableNode
 } from '../../../shared/genui-api'
-import { layoutBarChart, layoutLineChart } from './chart-geometry'
+import { formatShare, layoutBarChart, layoutLineChart, layoutPieChart } from './chart-geometry'
 import { layoutCrank, layoutExploded, layoutGearTrain } from './diagram-geometry'
 import { readGenuiBinding } from './param-state'
+import type { SvgLayout } from './svg-shapes'
 
 /** 卡片与分栏嵌套时标题最多降到六级，再深就退回加粗行。 */
 const MAX_HEADING_LEVEL = 6
@@ -64,17 +65,47 @@ function tableMarkdown(node: GenuiTableNode): string[] {
   return lines
 }
 
-/** 图表：数据表 + 结论。图形本身不复制，复制的是它能表达的事实。 */
+/**
+ * 图表：数据表 + 结论。图形本身不复制，复制的是它能表达的事实。
+ * 柱/折线按序列展成多列；饼/环图改给「数值 + 占比」两列，并补一行总计。
+ */
 function chartMarkdown(node: GenuiChartNode): string[] {
-  const layout = node.kind === 'bar' ? layoutBarChart(node.points, node.unit) : layoutLineChart(node.points, node.unit)
+  const share = node.kind === 'pie' || node.kind === 'donut'
+  const layout = chartLayout(node)
   const lines: string[] = []
   if (node.title !== undefined) lines.push(heading(3, node.title))
   const unit = node.unit === undefined ? '' : ` ${node.unit}`
-  lines.push('| 分类 | 数值 |', '| --- | --- |')
-  for (const point of node.points) lines.push(`| ${cellText(point.label)} | ${point.value}${unit} |`)
+  if (share) {
+    const values = node.series[0]?.values ?? []
+    const total = values.reduce((sum, value) => sum + value, 0)
+    lines.push('| 分类 | 数值 | 占比 |', '| --- | --- | --- |')
+    for (const [index, label] of node.labels.entries()) {
+      const value = values[index] ?? 0
+      lines.push(`| ${cellText(label)} | ${value}${unit} | ${formatShare(value, total)} |`)
+    }
+    lines.push(`| 总计 | ${total}${unit} | 100% |`)
+  } else {
+    // 列名取序列名；无名序列（旧形状或单序列）统一叫「数值」，与几何层的说明口径一致。
+    const headers = node.series.map((series, index) => cellText(series.name ?? (index === 0 ? '数值' : `序列 ${index + 1}`)))
+    lines.push(`| 分类 | ${headers.join(' | ')} |`, `| --- | ${node.series.map(() => '---').join(' | ')} |`)
+    for (const [index, label] of node.labels.entries()) {
+      const cells = node.series.map((series) => `${series.values[index] ?? 0}${unit}`)
+      lines.push(`| ${cellText(label)} | ${cells.join(' | ')} |`)
+    }
+  }
   if (node.caption !== undefined) lines.push('', node.caption)
   lines.push('', ...layout.notes.map((note) => `- ${note}`))
   return lines
+}
+
+/** 按 kind 取几何；显式分派，避免新增种类时被当成折线图算。 */
+function chartLayout(node: GenuiChartNode): SvgLayout {
+  switch (node.kind) {
+    case 'bar': return layoutBarChart(node.labels, node.series, node.unit)
+    case 'line': return layoutLineChart(node.labels, node.series, node.unit)
+    case 'pie':
+    case 'donut': return layoutPieChart(node.labels, node.series[0]?.values ?? [], node.unit, node.kind === 'donut')
+  }
 }
 
 /** 图解：按种类给出静态数据与几何层算出的结论；绑定取值取当前参数。 */
@@ -150,6 +181,13 @@ function nodeMarkdown(node: GenuiNode, values: Readonly<Record<string, GenuiPara
         `${index + 1}. **${item.title}**`,
         ...(item.description === undefined ? [] : [`   ${item.description}`])
       ])
+    case 'timeline':
+      // 时间是可横向比较的列，表格比「列表 + 时间前缀」更贴合数据结构；时间原样输出，不重排。
+      return [
+        '| 时间 | 事件 | 说明 |',
+        '| --- | --- | --- |',
+        ...node.items.map((item) => `| ${cellText(item.time)} | ${cellText(item.title)} | ${cellText(item.description)} |`)
+      ]
     case 'card': {
       const children = node.children.map((child) => nodeMarkdown(child, values, level + 1))
       return joinBlocks([node.title === undefined ? [] : [heading(level, node.title)], ...children])

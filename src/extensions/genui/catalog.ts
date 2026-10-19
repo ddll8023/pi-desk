@@ -8,7 +8,10 @@
 import {
   GENUI_MAX_CHART_LABEL_CHARS,
   GENUI_MAX_CHART_POINTS,
+  GENUI_MAX_CHART_SERIES,
+  GENUI_MAX_CHART_SERIES_NAME_CHARS,
   GENUI_MAX_CHART_TITLE_CHARS,
+  GENUI_MAX_PIE_SLICES,
   GENUI_MAX_CELL_CHARS,
   GENUI_MAX_COLUMNS,
   GENUI_MAX_DIAGRAM_LABEL_CHARS,
@@ -25,6 +28,8 @@ import {
   GENUI_MAX_PARAM_PLACEHOLDER_CHARS,
   GENUI_MAX_PARAM_TEXT_CHARS,
   GENUI_MAX_STEPS,
+  GENUI_MAX_TIMELINE_ITEMS,
+  GENUI_MAX_TIMELINE_TIME_CHARS,
   GENUI_MAX_SUBMIT_LABEL_CHARS,
   GENUI_MAX_TABLE_COLUMNS,
   GENUI_MAX_TABLE_ROWS,
@@ -50,10 +55,10 @@ const OVERVIEW = `生成式 UI 用一份声明式文档描述界面，由桌面�
 - nodes：至少一个节点，总数不超过 ${GENUI_MAX_NODES}（含嵌套），容器最多嵌套 4 层。
 - params / submitLabel：可选，声明界面内可调参数与提交按钮文案，字段见 ui_catalog({topic:"params"})。
 - diagram：可选节点，把装配关系、传动比与运动规律画成图解，字段见 ui_catalog({topic:"diagram"})。
-- chart：可选节点，把单序列数据画成柱状图或折线图，字段见 ui_catalog({topic:"chart"})。
+- chart：可选节点，把分类数据画成柱状图、折线图、饼图或环形图，字段见 ui_catalog({topic:"chart"})。
 只有两个渲染入口：ui_render 交付整份文档，ui_patch 按 documentId 只发改动部分。同一次回答可以多次调用，生成不同主题的独立界面。
 先判断是否真的需要界面：纯叙述、简短结论与路径清单用正文，不用 card 把整篇回答重新包装。
-方案对比用 row 并排，指标用 metric，真实先后顺序用 steps；有参数时才提供 controls。
+方案对比用 row 并排，指标用 metric，真实先后顺序用 steps，带具体时间点的过程用 timeline；有参数时才提供 controls。
 card 只表达主题分组，不用多层嵌套来制造层级；解释和结论写在相关数据旁边。
 参数变化不会请求模型；只有用户点提交时，才会发一条以 ${GENUI_SUBMIT_PREFIX} 开头的用户消息回填当前取值。
 要修改已交付的界面，见 ui_catalog({topic:"update"})。`
@@ -66,13 +71,17 @@ table   {type:"table", columns:[{key,label}], rows:[{...}], caption?}
         columns 1..${GENUI_MAX_TABLE_COLUMNS} 且 key 不重复；rows 最多 ${GENUI_MAX_TABLE_ROWS} 行；
         单元格只接受字符串（不超过 ${GENUI_MAX_CELL_CHARS} 字符）或有限数字，未声明的列会被忽略。
 steps   {type:"steps", items:[{title, description?}]}    1..${GENUI_MAX_STEPS} 条；步骤不带状态字段，
-        静态说明不伪装成任务进度。
+        静态说明不伪装成任务进度。只表达先后，不表达时刻。
+timeline {type:"timeline", items:[{time, title, description?}]}   1..${GENUI_MAX_TIMELINE_ITEMS} 个时间点；
+        time 是自由文本（1..${GENUI_MAX_TIMELINE_TIME_CHARS} 字符，如 "09:12"、"第 3 天"、"2026-03-04 09:12"），
+        桌面端不解析、不排序，按数组顺序原样渲染，因此要自己按时间先后传入；同样不带状态字段，
+        不要把时间点写成“进行中/已完成”的任务进度。
 card    {type:"card", title?, children:[...]}            子节点至少一个
 row     {type:"row", columns?, children:[...]}           columns 1..${GENUI_MAX_COLUMNS}，作为期望列数上限；窄容器自动减列，省略时自适应；子节点至少一个
 controls {type:"controls", params?:[string]}             参数控件组，params 省略时渲染全部已声明参数；
         只能引用文档 params 里已声明的 id，且每个声明的参数都必须被某个 controls 引用
 diagram {type:"diagram", kind, ...}                       机制图解，三种 kind 字段见 ui_catalog({topic:"diagram"})
-chart   {type:"chart", kind, points:[{label,value}], ...}   柱状图与折线图，字段见 ui_catalog({topic:"chart"})
+chart   {type:"chart", kind, labels:[string], series:[{name?,values}], ...}   柱状图、折线图、饼图与环形图，字段见 ui_catalog({topic:"chart"})
 
 布局与阅读：
 - 方案对比用 row 包含并列 card，指标并列用 row 包含 metric；不要把可比较项全排成纵向长文。
@@ -134,19 +143,25 @@ crank  曲柄连杆：活塞位移 x = r·cosθ + √(l² − r²sin²θ)
 
 图示是叶子节点，内部不再嵌套其他节点；几何与推导结论由桌面端算出并以文本同时给出。`
 
-const CHART = `图表只画单序列：分类轴 + 数值。多序列对比用 table，不要硬塞进图表。
-两种 kind 字段相同，只差渲染方式：
-bar   柱状图：从零线起算，正负方向相反，适合数值对比。
-line  折线图：适合趋势与变化。
+const CHART = `图表画分类轴 + 数据。四种 kind 按用途选：
+bar   柱状图：分类对比，从零线起算，正负方向相反，同一分类的多条序列并排分组；1~${GENUI_MAX_CHART_SERIES} 条序列。
+line  折线图：趋势与变化，每条序列各一条线；1~${GENUI_MAX_CHART_SERIES} 条序列。
+pie   饼图：占比表达，只画一条序列，每片是一个分类。
+donut 环形图：与饼图同数据，中间显示总计，适合把总量一并写出来。
+占比、构成、份额优先用 pie/donut，不要用柱状图让人硬读比例；超过 ${GENUI_MAX_PIE_SLICES} 片或需要跨分类对比时用 table。
 
-形状：{type:"chart", kind:"bar"|"line", points:[{label,value}], title?, caption?, unit?}
-- points ${GENUI_MIN_CHART_POINTS}..${GENUI_MAX_CHART_POINTS} 个；label 不超过 ${GENUI_MAX_CHART_LABEL_CHARS} 字符，超过 4 个字符时轴标签会截断（完整值仍在无障碍说明里）。
-- value 必须是有限数字，允许负数；不要传字符串化的数字。
-- title 不超过 ${GENUI_MAX_CHART_TITLE_CHARS} 字符；caption 不超过 400 字符；unit 是数值单位（如 ms、MB）。
-- 坐标轴范围与刻度由桌面端按数据自动取整，不要自己补零值或占位数据点。
+形状：{type:"chart", kind:"bar"|"line"|"pie"|"donut", labels:[string], series:[{name?,values}], title?, caption?, unit?}
+- labels 是分类轴，${GENUI_MIN_CHART_POINTS}..${GENUI_MAX_CHART_POINTS} 个，每个不超过 ${GENUI_MAX_CHART_LABEL_CHARS} 字符；超过 4 个字符时轴标签会截断（完整值仍在无障碍说明里）。
+- series ${GENUI_MAX_CHART_SERIES} 条以内，每条 {name?, values}；values 是数字数组，长度必须等于 labels，按位置一一对应。
+- 多条序列时 name 必填且不重复（不超过 ${GENUI_MAX_CHART_SERIES_NAME_CHARS} 字符），图例靠它区分；单序列可以省略 name。
+- values 必须是有限数字；bar/line 允许负数，pie/donut 不允许负数。不要传字符串化的数字，也不要用 null 表示缺失。
+- pie/donut 额外约束：只能一条序列、切片不超过 ${GENUI_MAX_PIE_SLICES} 个、每个值 ≥ 0 且总和 > 0；百分比由桌面端按总和算，不要自己写“45%”这类字符串值。
+- title 不超过 ${GENUI_MAX_CHART_TITLE_CHARS} 字符；caption 不超过 400 字符；unit 是数值单位（如 ms、MB），所有序列共用一个单位。
+- bar/line 的坐标轴范围与刻度由桌面端按全部序列自动取整，不要自己补零值或占位分类。
+- 画布只有 320px 宽，多序列建议分类不超过 8 个；多序列不标每点数值，饼图只在占比 ≥10% 的切片上标百分比，完整占比靠图例与说明文字承载。
 
 图表不绑定参数、不做交互；需要随参数变化的图形用 diagram。
-图表与 fallback 的分工：fallback 里要写清结论（最大值、趋势），不能只写“见下图”。`
+图表与 fallback 的分工：fallback 里要写清结论（每序列的最大值、占比最大的分类与百分比、趋势或差距），不能只写“见下图”。`
 
 const UPDATE = `修改已交付的界面分两步：
 1. ui_inspect 查看现有界面。不带参数列出当前会话分支上的全部界面（documentId、标题、当前版本）；
@@ -227,15 +242,40 @@ const EXAMPLES = `示例一：方案对比（两个配置并排，不把说明�
   ]}
  ]}
 
-示例五：柱状图（分类对比）
+示例五：柱状图（单序列，省略 name 时不出图例）
 {"version":${GENUI_VERSION},"title":"各方案构建耗时","fallback":"四个方案的构建耗时：冷构建 92 秒最长，增量构建 11 秒最短。","nodes":[
   {"type":"chart","kind":"bar","unit":"s","caption":"示例数据，不代表本机实测",
-   "points":[
-    {"label":"冷构建","value":92},
-    {"label":"增量","value":11},
-    {"label":"并行","value":34},
-    {"label":"缓存","value":27}
-   ]}
+   "labels":["冷构建","增量","并行","缓存"],
+   "series":[{"values":[92,11,34,27]}]}
+ ]}
+
+示例六：双序列折线（多序列必须给 name，图例自动生成）
+{"version":${GENUI_VERSION},"title":"一周接口耗时","fallback":"p95 从 180 毫秒降到 120 毫秒，p50 稳定在 40 毫秒上下；这是示例数据。","nodes":[
+  {"type":"chart","kind":"line","unit":"ms","title":"接口耗时",
+   "labels":["周一","周二","周三","周四","周五"],
+   "series":[
+    {"name":"p50","values":[42,40,38,41,39]},
+    {"name":"p95","values":[180,165,150,132,120]}
+   ],
+   "caption":"示例数据，不代表本机实测"}
+ ]}
+
+示例七：环形图（占比表达，只能一条序列，中间显示总计）
+{"version":${GENUI_VERSION},"title":"缓存占用构成","fallback":"图片缓存占 60%（600 MB）最多，其次是构建产物 20%，其余两类各占 10%。","nodes":[
+  {"type":"chart","kind":"donut","unit":"MB","title":"缓存占用",
+   "labels":["图片缓存","构建产物","日志","临时文件"],
+   "series":[{"values":[600,200,100,100]}],
+   "caption":"示例数据，不代表本机实测"}
+ ]}
+
+示例八：带时间点的时间线（按时间先后传入；时间原样展示，不解析不排序）
+{"version":${GENUI_VERSION},"title":"一次回滚的经过","fallback":"09:12 开始灰度，09:18 错误率升高后中止，09:25 完成回滚，09:40 恢复稳定。","nodes":[
+  {"type":"timeline","items":[
+    {"time":"09:12","title":"开始灰度","description":"先放 5% 流量。"},
+    {"time":"09:18","title":"中止放量","description":"错误率从 0.2% 升到 3.1%。"},
+    {"time":"09:25","title":"完成回滚","description":"全部实例回到上一版。"},
+    {"time":"09:40","title":"指标恢复","description":"错误率回到 0.2%。"}
+  ]}
  ]}`
 
 const TOPICS: Readonly<Record<GenuiCatalogTopic, string>> = {

@@ -39,6 +39,16 @@ export const GENUI_MAX_TABLE_COLUMNS = 8
 /** 步骤条目上限。 */
 export const GENUI_MAX_STEPS = 12
 
+/** 时间线时间点个数上限；与 steps 对齐，两类过程节点的体量一致。 */
+export const GENUI_MAX_TIMELINE_ITEMS = 12
+
+/**
+ * 时间点的字符上限。
+ * 时间不解析：`09:12`、`第 3 天`、`2026-03-04 09:12` 都合法，
+ * 因此限长而不是限格式——格式校验只会把合理写法挡在外面。
+ */
+export const GENUI_MAX_TIMELINE_TIME_CHARS = 40
+
 /** 列表条目上限。 */
 export const GENUI_MAX_LIST_ITEMS = 40
 
@@ -98,13 +108,26 @@ export const GENUI_MAX_GEAR_TEETH = 60
 export const GENUI_MAX_DIAGRAM_LABEL_CHARS = 60
 export const GENUI_MAX_DIAGRAM_NOTE_CHARS = 200
 
-/** 图表数据点的个数上下限；与列表上限对齐，避免单份文档被数据点撞爆体积。 */
+/** 图表分类的个数上下限；与列表上限对齐，避免单份文档被数据点撞爆体积。 */
 export const GENUI_MIN_CHART_POINTS = 1
 export const GENUI_MAX_CHART_POINTS = 40
 
-/** 图表标题与分类标签的字符上限。 */
+/**
+ * 图表序列条数上限。三条以上在 320px 画布上已经分不清色块，
+ * 再多同类记录应当改用 table，而不是把图例堆到看不见。
+ */
+export const GENUI_MAX_CHART_SERIES = 3
+
+/** 图表标题、分类标签与序列名的字符上限。 */
 export const GENUI_MAX_CHART_TITLE_CHARS = 200
 export const GENUI_MAX_CHART_LABEL_CHARS = 60
+export const GENUI_MAX_CHART_SERIES_NAME_CHARS = 30
+
+/**
+ * 饼图与环形图的切片上限。
+ * 超过六片在 320px 画布上已经分不清扇区，也超出可用色槽；这类数据应改用 table。
+ */
+export const GENUI_MAX_PIE_SLICES = 6
 
 /**
  * 参数标识的匹配源：小写字母开头，只含小写字母、数字与下划线。
@@ -204,6 +227,27 @@ export interface GenuiStepItem {
 export interface GenuiStepsNode {
   readonly type: 'steps'
   readonly items: readonly GenuiStepItem[]
+}
+
+/**
+ * 时间线的一个时间点：自由文本的时间 + 事件标题 + 可选说明。
+ * `time` 不做格式校验也不做排序：桌面端按数组顺序原样渲染，
+ * 传入方应按时间先后排列；这样既不用为时区与格式兼容付出代价，也不会把合法写法拒掉。
+ */
+export interface GenuiTimelineItem {
+  readonly time: string
+  readonly title: string
+  readonly description?: string
+}
+
+/**
+ * 时间线：带具体时间点的过程。
+ * 与 steps 的分工：steps 表达「第几步」，timeline 表达「什么时刻发生了什么」。
+ * 同样不带状态字段——时间点只陈述事实，不伪装成任务进度。
+ */
+export interface GenuiTimelineNode {
+  readonly type: 'timeline'
+  readonly items: readonly GenuiTimelineItem[]
 }
 
 /** 卡片：可选标题 + 子节点。 */
@@ -344,37 +388,78 @@ export interface GenuiCrankDiagram {
 /** 图示节点联合；几何由渲染端公式计算，协议里没有表达式也没有脚本。 */
 export type GenuiDiagramNode = GenuiExplodedDiagram | GenuiGearDiagram | GenuiCrankDiagram
 
-/** 图表种类；只支持单序列，多序列请用 table。 */
-export type GenuiChartKind = 'bar' | 'line'
+/** 图表种类：柱状图用于分类对比，折线图用于趋势，饼图与环形图用于占比。 */
+export type GenuiChartKind = 'bar' | 'line' | 'pie' | 'donut'
 
-/** 图表的一个数据点：分类标签加数值；数值允许为负，用于表达增减。 */
+/**
+ * 旧形状的一个数据点：分类标签加数值。
+ * 只用于把历史会话里的 `points` 归一化成单序列，新文档请写 `labels` + `series`。
+ */
 export interface GenuiChartPoint {
   readonly label: string
   readonly value: number
 }
 
-/** 柱状图：分类轴上的数值对比。 */
+/**
+ * 一条序列：可选的名称与逐分类取值。
+ * `values` 与文档的 `labels` 一一对应且等长，错位在解析期就被拒，
+ * 因此几何层不需要按标签对齐，也不存在「缺点按 0 补齐」的歧义。
+ */
+export interface GenuiChartSeries {
+  readonly name?: string
+  readonly values: readonly number[]
+}
+
+/** 柱状图：分类轴上的数值对比；多条序列时同一分类分组并列出图例。 */
 export interface GenuiBarChart {
   readonly type: 'chart'
   readonly kind: 'bar'
-  readonly points: readonly GenuiChartPoint[]
+  readonly labels: readonly string[]
+  readonly series: readonly GenuiChartSeries[]
   readonly title?: string
   readonly caption?: string
   readonly unit?: string
 }
 
-/** 折线图：分类轴上的趋势。 */
+/** 折线图：分类轴上的趋势；多条序列时各自连线并出图例。 */
 export interface GenuiLineChart {
   readonly type: 'chart'
   readonly kind: 'line'
-  readonly points: readonly GenuiChartPoint[]
+  readonly labels: readonly string[]
+  readonly series: readonly GenuiChartSeries[]
+  readonly title?: string
+  readonly caption?: string
+  readonly unit?: string
+}
+
+/**
+ * 饼图：各分类占总量的比例。
+ * 只允许一条序列（占比只有一个维度），切片数、非负与总和在解析期就把关，
+ * 否则渲染端要面对「占比除零」「负面积」这类画不出来的数据。
+ */
+export interface GenuiPieChart {
+  readonly type: 'chart'
+  readonly kind: 'pie'
+  readonly labels: readonly string[]
+  readonly series: readonly GenuiChartSeries[]
+  readonly title?: string
+  readonly caption?: string
+  readonly unit?: string
+}
+
+/** 环形图：与饼图同数据，中间留空显示总计，适合把总量一并写出来。 */
+export interface GenuiDonutChart {
+  readonly type: 'chart'
+  readonly kind: 'donut'
+  readonly labels: readonly string[]
+  readonly series: readonly GenuiChartSeries[]
   readonly title?: string
   readonly caption?: string
   readonly unit?: string
 }
 
 /** 图表节点联合；只画图，不做交互，也不绑定参数。 */
-export type GenuiChartNode = GenuiBarChart | GenuiLineChart
+export type GenuiChartNode = GenuiBarChart | GenuiLineChart | GenuiPieChart | GenuiDonutChart
 
 /** 文档节点联合；新增类型必须同时补解析分支与渲染分支，否则解析即拒绝。 */
 export type GenuiNode =
@@ -383,6 +468,7 @@ export type GenuiNode =
   | GenuiMetricNode
   | GenuiTableNode
   | GenuiStepsNode
+  | GenuiTimelineNode
   | GenuiCardNode
   | GenuiRowNode
   | GenuiControlsNode
@@ -723,13 +809,87 @@ function parseDiagram(value: Record<string, unknown>, path: string, context: Par
   }
 }
 
-/** 解析图表节点；两种 kind 字段相同，只差渲染方式。 */
-function parseChart(value: Record<string, unknown>, path: string, context: ParseContext): GenuiChartNode | null {
-  if (!Array.isArray(value.points)) return fail(context, `${path}.points`, '必须是数据点数组，每项 {label,value}')
+/** 图表分类轴：1..上限个非空标签。 */
+function parseChartLabels(value: Record<string, unknown>, path: string, context: ParseContext): string[] | null {
+  if (!Array.isArray(value.labels)) return fail(context, `${path}.labels`, '必须是分类标签数组，如 ["周一","周二"]')
+  if (value.labels.length < GENUI_MIN_CHART_POINTS || value.labels.length > GENUI_MAX_CHART_POINTS) {
+    return fail(context, `${path}.labels`, `分类个数必须是 ${GENUI_MIN_CHART_POINTS}..${GENUI_MAX_CHART_POINTS}`)
+  }
+  const labels: string[] = []
+  for (const [index, label] of value.labels.entries()) {
+    if (!isText(label, GENUI_MAX_CHART_LABEL_CHARS)) {
+      return fail(context, `${path}.labels[${index}]`, `必须是 1..${GENUI_MAX_CHART_LABEL_CHARS} 字符的非空字符串`)
+    }
+    labels.push(label)
+  }
+  return labels
+}
+
+/**
+ * 图表序列：1..上限条，每条 `values` 必须与 `labels` 等长。
+ * 多序列时 `name` 必填且唯一——图例靠它区分，缺名字的图例等于没有图例。
+ */
+function parseChartSeries(
+  value: Record<string, unknown>,
+  path: string,
+  labels: readonly string[],
+  context: ParseContext
+): GenuiChartSeries[] | null {
+  if (!Array.isArray(value.series)) return fail(context, `${path}.series`, '必须是序列数组，每项 {name?,values}')
+  if (value.series.length < 1 || value.series.length > GENUI_MAX_CHART_SERIES) {
+    return fail(context, `${path}.series`, `序列条数必须是 1..${GENUI_MAX_CHART_SERIES}`)
+  }
+  const multi = value.series.length > 1
+  const series: GenuiChartSeries[] = []
+  const names = new Set<string>()
+  for (const [index, item] of value.series.entries()) {
+    const seriesPath = `${path}.series[${index}]`
+    if (!isRecord(item)) return fail(context, seriesPath, '必须是 {name?,values} 对象')
+    const name = optionalText(item.name, GENUI_MAX_CHART_SERIES_NAME_CHARS)
+    if (name === null) {
+      return fail(context, `${seriesPath}.name`, `省略，或给 1..${GENUI_MAX_CHART_SERIES_NAME_CHARS} 字符的字符串`)
+    }
+    if (multi && name === undefined) return fail(context, `${seriesPath}.name`, '多条序列时必填，否则图例无法区分')
+    if (name !== undefined) {
+      if (names.has(name)) return fail(context, `${seriesPath}.name`, `序列名「${name}」重复，图例无法区分`)
+      names.add(name)
+    }
+    if (!Array.isArray(item.values)) return fail(context, `${seriesPath}.values`, '必须是数字数组，长度与 labels 一致')
+    if (item.values.length !== labels.length) {
+      return fail(
+        context,
+        `${seriesPath}.values`,
+        `长度必须是 ${labels.length}，与 labels 一一对应（当前 ${item.values.length}）`
+      )
+    }
+    const values: number[] = []
+    for (const [valueIndex, rawValue] of item.values.entries()) {
+      // 允许负数：柱状图需要表达增减；NaN 与 Infinity 仍拒绝。
+      if (!isFiniteNumber(rawValue)) return fail(context, `${seriesPath}.values[${valueIndex}]`, '必须是有限数字')
+      values.push(rawValue)
+    }
+    series.push({ ...(name === undefined ? {} : { name }), values })
+  }
+  return series
+}
+
+/**
+ * 旧形状 `points:[{label,value}]` 归一化成一条无名序列。
+ * 历史会话里已交付的图表要能继续画出来，否则一次协议变更会让旧图全部降级成纯文本。
+ */
+function legacyChartPoints(
+  value: Record<string, unknown>,
+  path: string,
+  context: ParseContext
+): { labels: string[]; series: GenuiChartSeries[] } | null {
+  if (!Array.isArray(value.points)) {
+    return fail(context, `${path}.series`, '必须是序列数组，每项 {name?,values}，并配合 labels 数组')
+  }
   if (value.points.length < GENUI_MIN_CHART_POINTS || value.points.length > GENUI_MAX_CHART_POINTS) {
     return fail(context, `${path}.points`, `数据点个数必须是 ${GENUI_MIN_CHART_POINTS}..${GENUI_MAX_CHART_POINTS}`)
   }
-  const points: GenuiChartPoint[] = []
+  const labels: string[] = []
+  const values: number[] = []
   for (const [index, point] of value.points.entries()) {
     const pointPath = `${path}.points[${index}]`
     if (!isRecord(point)) return fail(context, pointPath, '必须是 {label,value} 对象')
@@ -737,10 +897,60 @@ function parseChart(value: Record<string, unknown>, path: string, context: Parse
     if (!isText(label, GENUI_MAX_CHART_LABEL_CHARS)) {
       return fail(context, `${pointPath}.label`, `必须是 1..${GENUI_MAX_CHART_LABEL_CHARS} 字符的非空字符串`)
     }
-    const rawValue = point.value
-    // 允许负数：柱状图需要表达增减；NaN 与 Infinity 仍拒绝。
-    if (!isFiniteNumber(rawValue)) return fail(context, `${pointPath}.value`, '必须是有限数字')
-    points.push({ label, value: rawValue })
+    if (!isFiniteNumber(point.value)) return fail(context, `${pointPath}.value`, '必须是有限数字')
+    labels.push(label)
+    values.push(point.value)
+  }
+  return { labels, series: [{ values }] }
+}
+
+/**
+ * 饼图与环形图的额外约束：一条序列、切片不超过上限、每值非负、总和大于 0。
+ * 这四项任一不成立都画不出有意义的占比，因此直接拒掉，不让渲染端去猜怎么兜底。
+ */
+function checkPieShape(
+  data: { labels: string[]; series: GenuiChartSeries[] },
+  path: string,
+  context: ParseContext
+): boolean {
+  const first = data.series[0]
+  if (data.series.length !== 1 || first === undefined) {
+    fail(context, `${path}.series`, '饼图与环形图只能有一条序列，多条序列请用 bar/line 或 table')
+    return false
+  }
+  if (data.labels.length > GENUI_MAX_PIE_SLICES) {
+    fail(context, `${path}.labels`, `切片个数不能超过 ${GENUI_MAX_PIE_SLICES}，更多占比请用 table`)
+    return false
+  }
+  let total = 0
+  for (const [index, value] of first.values.entries()) {
+    if (value < 0) {
+      fail(context, `${path}.series[0].values[${index}]`, '占比不能为负')
+      return false
+    }
+    total += value
+  }
+  if (total <= 0) {
+    fail(context, `${path}.series[0].values`, '所有切片之和必须大于 0，否则占比无定义')
+    return false
+  }
+  return true
+}
+
+/** 解析图表节点；四种 kind 共用 labels + series，饼图/环形图另有占比约束。 */
+function parseChart(value: Record<string, unknown>, path: string, context: ParseContext): GenuiChartNode | null {
+  // `series` 存在就按新形状解析，`points` 仅作为旧形状的兼容入口；
+  // 两者同时给时不静默合并——静默取一个会让模型以为自己写错了地方还"生效了"。
+  let data: { labels: string[]; series: GenuiChartSeries[] } | null
+  if (Array.isArray(value.series)) {
+    const labels = parseChartLabels(value, path, context)
+    if (labels === null) return null
+    const series = parseChartSeries(value, path, labels, context)
+    if (series === null) return null
+    data = { labels, series }
+  } else {
+    data = legacyChartPoints(value, path, context)
+    if (data === null) return null
   }
   const title = optionalText(value.title, GENUI_MAX_CHART_TITLE_CHARS)
   if (title === null) return fail(context, `${path}.title`, `省略，或给 1..${GENUI_MAX_CHART_TITLE_CHARS} 字符的字符串`)
@@ -751,7 +961,8 @@ function parseChart(value: Record<string, unknown>, path: string, context: Parse
 
   const common = {
     type: 'chart' as const,
-    points,
+    labels: data.labels,
+    series: data.series,
     ...(title === undefined ? {} : { title }),
     ...(caption === undefined ? {} : { caption }),
     ...(unit === undefined ? {} : { unit })
@@ -759,7 +970,14 @@ function parseChart(value: Record<string, unknown>, path: string, context: Parse
   switch (value.kind) {
     case 'bar': return { ...common, kind: 'bar' }
     case 'line': return { ...common, kind: 'line' }
-    default: return fail(context, `${path}.kind`, '图表 kind 只能是 bar 或 line')
+    case 'pie':
+    case 'donut': {
+      if (!checkPieShape(data, path, context)) return null
+      // 不用 switch 对 unknown 的窄化：显式比较后再赋字面量，类型不依赖窄化细节。
+      const kind: 'pie' | 'donut' = value.kind === 'pie' ? 'pie' : 'donut'
+      return { ...common, kind }
+    }
+    default: return fail(context, `${path}.kind`, '图表 kind 只能是 bar、line、pie 或 donut')
   }
 }
 
@@ -898,6 +1116,27 @@ function parseNode(value: unknown, path: string, depth: number, context: ParseCo
       }
       return { type: 'steps', items }
     }
+    case 'timeline': {
+      if (!Array.isArray(value.items)) return fail(context, `${path}.items`, '必须是时间点数组，每项 {time,title,description?}')
+      if (value.items.length === 0 || value.items.length > GENUI_MAX_TIMELINE_ITEMS) {
+        return fail(context, `${path}.items`, `时间点个数必须是 1..${GENUI_MAX_TIMELINE_ITEMS}`)
+      }
+      const items: GenuiTimelineItem[] = []
+      for (const [index, item] of value.items.entries()) {
+        const itemPath = `${path}.items[${index}]`
+        if (!isRecord(item)) return fail(context, itemPath, '必须是 {time,title,description?} 对象')
+        const time = item.time
+        if (!isText(time, GENUI_MAX_TIMELINE_TIME_CHARS)) {
+          return fail(context, `${itemPath}.time`, `必须是 1..${GENUI_MAX_TIMELINE_TIME_CHARS} 字符的非空字符串，如 "09:12"`)
+        }
+        const title = item.title
+        if (!isText(title, 200)) return fail(context, `${itemPath}.title`, '必须是 1..200 字符的非空字符串')
+        const description = optionalText(item.description, 1000)
+        if (description === null) return fail(context, `${itemPath}.description`, '省略，或给 1..1000 字符的字符串')
+        items.push({ time, title, ...(description === undefined ? {} : { description }) })
+      }
+      return { type: 'timeline', items }
+    }
     case 'card': {
       if (!Array.isArray(value.children)) return fail(context, `${path}.children`, '必须是节点数组')
       if (value.children.length === 0) return fail(context, `${path}.children`, '子节点至少一个')
@@ -954,7 +1193,7 @@ function parseNode(value: unknown, path: string, depth: number, context: ParseCo
       return fail(
         context,
         `${path}.type`,
-        '节点 type 只能是 text、list、metric、table、steps、card、row、controls、diagram 或 chart'
+        '节点 type 只能是 text、list、metric、table、steps、timeline、card、row、controls、diagram 或 chart'
       )
   }
 }

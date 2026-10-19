@@ -117,8 +117,8 @@ const CATALOG_PARAMETERS = {
       type: 'string',
       enum: [...GENUI_CATALOG_TOPICS],
       description: 'overview=协议总览（默认）；nodes=全部节点字段与上限；params=可调参数与控件组；'
-        + 'diagram=机制图解（装配拆解、齿轮传动、曲柄连杆）；chart=柱状图与折线图；'
-        + 'update=修改既有界面；examples=五个完整示例。'
+        + 'diagram=机制图解（装配拆解、齿轮传动、曲柄连杆）；chart=柱状图、折线图、饼图与环形图；'
+        + 'update=修改既有界面；examples=八个完整示例。'
     }
   }
 } as unknown as ToolParameters
@@ -280,13 +280,13 @@ export function registerGenuiTools(pi: ExtensionAPI): void {
     name: 'ui_render',
     label: '生成式界面',
     description:
-      '把结构化内容渲染成对话内的原生界面（卡片、指标、表格、步骤、列表、分栏、'
+      '把结构化内容渲染成对话内的原生界面（卡片、指标、表格、步骤、时间线、列表、分栏、'
       + '可调参数控件、机制图解与图表），而不是让模型写 HTML。只用于值得用界面表达的内容：方案对比、数据摘要、'
       + '流程说明、多指标并列。修改既有界面时带同一个 documentId 重新交付。纯文本、代码与简短回答继续用正文。',
     promptSnippet: 'ui_render — 把对比、数据摘要、流程与多指标并列渲染成对话内原生界面',
     promptGuidelines: [
       '真实的方案对比、多指标、数据表、顺序关系或可调参数才使用 ui_render；纯叙述、路径清单和简短结论留在正文，不把整段回答套成卡片。',
-      '先按信息关系组织布局：方案用 row 并排比较，指标用 metric，真实先后顺序用 steps，参数用 controls；card 只负责主题分组，不反复嵌套 card。',
+      '先按信息关系组织布局：方案用 row 并排比较，指标用 metric，真实先后顺序用 steps，带具体时间点的过程用 timeline，参数用 controls；card 只负责主题分组，不反复嵌套 card。',
       'table 只放可横向比较的同类记录，避免把长段落塞进每个单元格；结论和警告单独用 text 表达，不藏在长表尾部。',
       'ui_render 的 document 必须同时提供 title 与 fallback；fallback 要能独立读懂，不能依赖视觉。',
       '不确定节点字段时先调用 ui_catalog，不要凭猜测提交。',
@@ -296,8 +296,10 @@ export function registerGenuiTools(pi: ExtensionAPI): void {
         + '不要用新 documentId 重复交付同一界面。小改动优先用 ui_patch 只发改动部分。',
       '要表达装配顺序、传动比或运动规律时用 diagram 节点（字段见 ui_catalog({topic:"diagram"})）；'
         + '想让图解随用户调节变化，就声明 number 参数、用 binds 绑定，并用 controls 节点把它渲染出来。',
-      '需要展示单序列的数值对比或趋势时用 chart（字段见 ui_catalog({topic:"chart"})）；'
-        + '多序列对比用 table，不要往图表里塞第二条序列。'
+      '需要展示 1~3 条序列的数值对比或趋势时用 chart 的 bar/line（多序列自动出图例，字段见 ui_catalog({topic:"chart"})）；'
+        + '超过 3 条、或单位与量级不可比时用 table，不要硬塞进图表。',
+      '要表达占比与构成时用 chart 的 pie/donut（单序列、不超过 6 片，环形中间显示总计）；'
+        + '不要用柱状图让人硬读比例。'
     ],
     parameters: RENDER_PARAMETERS,
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
@@ -376,8 +378,8 @@ export function registerGenuiTools(pi: ExtensionAPI): void {
     label: '生成式界面字段目录',
     description:
       '按主题读取 ui_render 的字段说明：overview=协议总览，nodes=全部节点字段与上限，'
-      + 'params=可调参数与控件组，diagram=机制图解，chart=柱状图与折线图，update=修改既有界面，'
-      + 'examples=五个可直接照抄的完整示例。仅在需要确认字段时调用。',
+      + 'params=可调参数与控件组，diagram=机制图解，chart=柱状图、折线图、饼图与环形图，update=修改既有界面，'
+      + 'examples=八个可直接照抄的完整示例。仅在需要确认字段时调用。',
     promptSnippet: 'ui_catalog — 按需读取 ui_render 的节点字段、可调参数、机制图解、图表与示例',
     parameters: CATALOG_PARAMETERS,
     async execute(_toolCallId, params) {

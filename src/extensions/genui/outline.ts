@@ -34,6 +34,9 @@ function describeNode(node: GenuiNode): string {
         + (node.caption === undefined ? '' : `；说明：${preview(node.caption)}`)
     case 'steps':
       return `[steps] ${node.items.length} 步：${preview(node.items.map((item) => item.title).join(' / '))}`
+    case 'timeline':
+      // 带上时间点：模型改数据时要能看出当前顺序与时刻，不能只给标题。
+      return `[timeline] ${node.items.length} 个时间点：${preview(node.items.map((item) => `${item.time} ${item.title}`).join(' / '))}`
     case 'card':
       return `[card]${node.title === undefined ? '' : ` ${preview(node.title)}`}`
     case 'row':
@@ -47,13 +50,24 @@ function describeNode(node: GenuiNode): string {
   }
 }
 
-/** 图表节点的一行描述：种类、点数与数值范围。 */
+/** 图表节点的一行描述：种类、序列或切片、分类数与数值范围。 */
 function describeChart(node: GenuiChartNode): string {
-  const values = node.points.map((point) => point.value)
+  const values = node.series.flatMap((series) => series.values)
   const range = values.length === 0 ? '无数据' : `${Math.min(...values)}..${Math.max(...values)}`
   const unit = node.unit === undefined ? '' : ` ${node.unit}`
   const title = node.title === undefined ? '' : ` 《${preview(node.title)}》`
-  return `[chart:${node.kind}]${title} ${node.points.length} 点，范围 ${range}${unit}`
+  // 占比图给切片数与总量：大纲里没有「哪片最大」就改不动数据。
+  if (node.kind === 'pie' || node.kind === 'donut') {
+    const slices = node.series[0]?.values ?? []
+    const total = slices.reduce((sum, value) => sum + value, 0)
+    const maxIndex = slices.reduce((best, value, index) => (value > (slices[best] ?? 0) ? index : best), 0)
+    const maxLabel = node.labels[maxIndex] ?? `分类 ${maxIndex + 1}`
+    const maxShare = total > 0 ? `${Math.round(((slices[maxIndex] ?? 0) / total) * 100)}%` : '—'
+    return `[chart:${node.kind}]${title} ${node.labels.length} 片，总计 ${total}${unit}；最大 ${preview(maxLabel)}（${maxShare}）`
+  }
+  // 序列名是模型下次改数据时的定位依据，大纲里要列出来，不能只给条数。
+  const names = node.series.map((series, index) => series.name ?? `序列${index + 1}`).join(', ')
+  return `[chart:${node.kind}]${title} ${node.labels.length} 个分类，序列：${names}；范围 ${range}${unit}`
 }
 
 /** 图示节点的一行描述：kind 加最能定位它的静态事实（零件数、齿数序列或 r/l）。 */

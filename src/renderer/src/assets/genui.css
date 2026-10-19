@@ -128,6 +128,16 @@
 .genui-step-content { min-width: 0; padding-top: 0; overflow-wrap: anywhere; }
 .genui-step-title { font-size: 13px; font-weight: 600; }
 .genui-document .genui-step-description { margin-top: 4px; color: var(--color-desk-muted); font-size: 12px; }
+/* 时间线：时间列 + 中轴 + 内容。中轴圆点不带序号、不描边，与 steps 的序号圆点区分开。 */
+.genui-document .genui-timeline { display: flex; flex-direction: column; gap: 16px; padding: 0; list-style: none; }
+.genui-timeline-item { position: relative; display: grid; grid-template-columns: 5.5rem 16px minmax(0, 1fr); gap: 10px; }
+.genui-timeline-time { align-self: start; padding-top: 2px; color: var(--color-desk-muted); font-family: var(--font-mono); font-size: 11px; font-variant-numeric: tabular-nums; text-align: right; overflow-wrap: anywhere; }
+.genui-timeline-axis { position: relative; align-self: stretch; }
+.genui-timeline-axis::before { position: absolute; top: 7px; left: 5px; width: 6px; height: 6px; border-radius: 50%; background: var(--color-desk-accent); content: ''; }
+.genui-timeline-item:not(:last-child) .genui-timeline-axis::after { position: absolute; top: 17px; bottom: -14px; left: 8px; width: 1px; background: var(--color-desk-line-strong); content: ''; }
+.genui-timeline-content { min-width: 0; overflow-wrap: anywhere; }
+.genui-timeline-title { font-size: 13px; font-weight: 600; }
+.genui-document .genui-timeline-description { margin-top: 4px; color: var(--color-desk-muted); font-size: 12px; }
 
 .genui-controls { display: flex; min-width: 0; flex-direction: column; gap: 16px; border-top: 1px solid var(--color-desk-line); padding-top: 16px; }
 .genui-controls-grid { display: grid; min-width: 0; grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr)); gap: 20px 24px; }
@@ -147,6 +157,34 @@
 
 .genui-chart, .genui-figure { min-width: 0; }
 .genui-document .genui-chart-title { margin-bottom: 12px; font-size: 15px; font-weight: 650; }
+/* 图例：色块 + 序列名，可换行；名称文字与无障碍说明同时承载语义，不只靠颜色。 */
+.genui-chart-legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-bottom: 10px; }
+.genui-chart-legend-item { display: inline-flex; min-width: 0; align-items: center; gap: 6px; color: var(--color-desk-muted); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.genui-chart-swatch { width: 10px; height: 10px; flex: none; border-radius: 2px; background: var(--genui-series-color, var(--color-desk-line-strong)); }
+/* 占比图的图例多一个百分比；与名称同排，窄容器里跟着换行。 */
+.genui-chart-legend-detail { flex: none; color: var(--color-desk-ink); font-family: var(--font-mono); font-size: 11px; font-variant-numeric: tabular-nums; }
+/* 色槽：图元带 series 色槽时同时给填充与描边，柱、折线、饼图切片共用同一组令牌。 */
+.genui-series-1 { --genui-series-color: var(--color-desk-chart-1); }
+.genui-series-2 { --genui-series-color: var(--color-desk-chart-2); }
+.genui-series-3 { --genui-series-color: var(--color-desk-chart-3); }
+.genui-series-4 { --genui-series-color: var(--color-desk-chart-4); }
+.genui-series-5 { --genui-series-color: var(--color-desk-chart-5); }
+.genui-series-6 { --genui-series-color: var(--color-desk-chart-6); }
+.genui-figure-canvas .genui-series-1,
+.genui-figure-canvas .genui-series-2,
+.genui-figure-canvas .genui-series-3,
+.genui-figure-canvas .genui-series-4,
+.genui-figure-canvas .genui-series-5,
+.genui-figure-canvas .genui-series-6 { fill: var(--genui-series-color); stroke: var(--genui-series-color); }
+/* 压在上色切片上的文字：用底色做描边光晕，深浅主题与任意切片色下都能读。 */
+.genui-figure-canvas .genui-text-halo { paint-order: stroke; stroke: var(--color-desk-surface); stroke-width: 3px; stroke-linejoin: round; }
+/* 饼/环图相邻切片用底色描边分开，否则同色系相邻时边界会糊成一片。 */
+.genui-figure-canvas path.genui-series-1,
+.genui-figure-canvas path.genui-series-2,
+.genui-figure-canvas path.genui-series-3,
+.genui-figure-canvas path.genui-series-4,
+.genui-figure-canvas path.genui-series-5,
+.genui-figure-canvas path.genui-series-6 { stroke: var(--color-desk-surface); }
 .genui-figure-canvas { display: block; width: 100%; height: auto; border: 1px solid var(--color-desk-line); border-radius: var(--radius-desk-md); background: color-mix(in srgb, var(--color-desk-surface-subtle) 55%, var(--color-desk-surface)); }
 .genui-document .genui-figure-notes { margin-top: 12px; border-left: 2px solid var(--color-desk-line-strong); padding-left: 12px; color: var(--color-desk-ink); font-size: 12px; line-height: 1.65; overflow-wrap: anywhere; }
 

@@ -11,7 +11,13 @@
 /** 画布宽度；所有图形共用同一数值，并排展示时视觉一致。 */
 export const SVG_CANVAS_WIDTH = 320
 
-/** 矩形；`radius` 为 0 表示直角。 */
+/**
+ * 图表序列的色槽；具体色值由 CSS 令牌（`--color-desk-chart-1..6`）给出，
+ * 图元只带下标，几何层与样式层不互相写死颜色。柱/折线最多用 3 槽，饼图用满 6 槽。
+ */
+export type SvgSeriesSlot = 0 | 1 | 2 | 3 | 4 | 5
+
+/** 矩形；`radius` 为 0 表示直角，`series` 只在图表里出现。 */
 export interface SvgRect {
   readonly kind: 'rect'
   readonly x: number
@@ -19,18 +25,20 @@ export interface SvgRect {
   readonly width: number
   readonly height: number
   readonly radius: number
+  readonly series?: SvgSeriesSlot
 }
 
-/** 圆；`dash` 给出虚线节距时画成虚线圆（齿轮的齿圈用它）。 */
+/** 圆；`dash` 给出虚线节距时画成虚线圆（齿轮的齿圈用它），`series` 只在图表里出现。 */
 export interface SvgCircle {
   readonly kind: 'circle'
   readonly cx: number
   readonly cy: number
   readonly r: number
   readonly dash?: number
+  readonly series?: SvgSeriesSlot
 }
 
-/** 线段；`muted` 表示参照线一类弱化的线。 */
+/** 线段；`muted` 表示参照线一类弱化的线，`series` 只在图表里出现。 */
 export interface SvgLine {
   readonly kind: 'line'
   readonly x1: number
@@ -38,9 +46,23 @@ export interface SvgLine {
   readonly x2: number
   readonly y2: number
   readonly muted: boolean
+  readonly series?: SvgSeriesSlot
 }
 
-/** 文本；`anchor` 是 SVG 的 text-anchor，`muted` 表示注释或尺寸小字。 */
+/**
+ * 路径：扇形与环形扇形的外弧、内弧与两条半径。
+ * 几何层算出 `d`，组件只负责输出——把弧线计算放进模板会让两种图形各写一套三角函数。
+ */
+export interface SvgPath {
+  readonly kind: 'path'
+  readonly d: string
+  readonly series?: SvgSeriesSlot
+}
+
+/**
+ * 文本；`anchor` 是 SVG 的 text-anchor，`muted` 表示注释或尺寸小字，
+ * `emphasis` 用于环形中心总计这类主角文字，`halo` 给压在上色图元上的文字加底色描边。
+ */
 export interface SvgText {
   readonly kind: 'text'
   readonly x: number
@@ -48,10 +70,12 @@ export interface SvgText {
   readonly text: string
   readonly anchor: 'start' | 'middle' | 'end'
   readonly muted: boolean
+  readonly emphasis?: boolean
+  readonly halo?: boolean
 }
 
 /** 图元联合；新增种类必须同时补渲染组件里的分支，否则解析结果画不出来。 */
-export type SvgShape = SvgRect | SvgCircle | SvgLine | SvgText
+export type SvgShape = SvgRect | SvgCircle | SvgLine | SvgPath | SvgText
 
 /** 一次布局的结果：画布高度、图元与推导摘要。 */
 export interface SvgLayout {

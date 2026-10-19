@@ -20,6 +20,13 @@
   --color-desk-accent-soft: #e2eef1;
   /* 实心强调按钮上的文字色。 */
   --color-desk-on-accent: #ffffff;
+  /* 图表色槽（共 6 个）：柱/折线按序列取前 3 个，饼/环图按切片取满 6 个；不借用 accent 与语义色，避免多序列图表被误读为成功/警告。 */
+  --color-desk-chart-1: #2f6f9e;
+  --color-desk-chart-2: #b4762a;
+  --color-desk-chart-3: #6b5aa8;
+  --color-desk-chart-4: #2f7d52;
+  --color-desk-chart-5: #a8446b;
+  --color-desk-chart-6: #7a6234;
   /* 错误、失败与中止提示；只用于语义提示，不做强调色。 */
   --color-desk-danger: #a4373a;
   --color-desk-danger-soft: #f8eaea;
@@ -85,6 +92,13 @@
     --color-desk-accent-hover: #6ab8c9;
     --color-desk-accent-soft: #1d3138;
     --color-desk-on-accent: #07181d;
+    /* 图表色槽在暗色下提亮，保证与沉陷面底色对比。 */
+    --color-desk-chart-1: #6fa8d6;
+    --color-desk-chart-2: #d9a45f;
+    --color-desk-chart-3: #9b8bd0;
+    --color-desk-chart-4: #6fbb90;
+    --color-desk-chart-5: #d488a8;
+    --color-desk-chart-6: #c2a878;
     --color-desk-danger: #d47c7f;
     --color-desk-danger-soft: #372225;
     --color-desk-warning: #d3b06e;

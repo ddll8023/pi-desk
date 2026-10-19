@@ -1,6 +1,7 @@
 <!-- 生成式界面的节点渲染器：按类型提供不同的信息层级，分栏随容器宽度收敛。
      长表只折叠展示行，不改文档数据；展开状态留在组件内，不参与参数提交。
-     容器递归复用本组件，图形与参数仍交给各自组件，不推断内容的业务状态。 -->
+     容器递归复用本组件，图形与参数仍交给各自组件，不推断内容的业务状态。
+     steps 表达先后顺序（序号），timeline 表达具体时刻（时间列），两者不互相代替。 -->
 <script setup lang="ts">
 import { computed, ref, useId, watch } from 'vue'
 // 类型名加别名，避免与模板里的递归组件同名。
@@ -131,6 +132,18 @@ function cellText(value: GenuiTableCell | undefined): string {
       <div class="genui-step-content">
         <p class="genui-step-title">{{ item.title }}</p>
         <p v-if="item.description !== undefined" class="genui-step-description">{{ item.description }}</p>
+      </div>
+    </li>
+  </ol>
+
+  <!-- 时间线：时间列 + 中轴圆点，按数组顺序渲染；时间不解析、不排序，避免擅自重排。 -->
+  <ol v-else-if="node.type === 'timeline'" class="genui-timeline">
+    <li v-for="(item, index) in node.items" :key="index" class="genui-timeline-item">
+      <span class="genui-timeline-time">{{ item.time }}</span>
+      <span class="genui-timeline-axis" aria-hidden="true" />
+      <div class="genui-timeline-content">
+        <p class="genui-timeline-title">{{ item.title }}</p>
+        <p v-if="item.description !== undefined" class="genui-timeline-description">{{ item.description }}</p>
       </div>
     </li>
   </ol>
