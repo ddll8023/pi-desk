@@ -3,7 +3,8 @@
  *
  * 标签是页面内的展示编排：活动的对话标签就是前台运行实例，其余对话标签由后台分片留底，
  * 因此切标签就是切前台；切项目换一组标签（对话、终端与文件一起换），每个项目各自记住上次的活动标签。
- * 顺序、活动标签、重命名与「有新回复」标记只留在内存里，不跨应用重启恢复：重启后每个项目回到一个空对话标签。
+ * 顺序、活动标签、对话与文件标签的重命名、以及「有新回复」标记只留在内存里，不跨应用重启恢复：
+ * 重启后每个项目回到一个空对话标签。终端标签的命名是例外：它交给守护进程随会话记录落盘。
  *
  * 标签键是页面内编号，只在渲染端有效：对话标签记会话身份与它承载的运行实例，终端标签记终端标识，
  * 文件标签记一个编号（路径与编辑状态由 `project-editor` 持有）。终端清单是主进程的真相，因此终端标签
@@ -78,7 +79,10 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
   const chatTabs = ref<Readonly<Record<string, ChatTabRecord>>>({})
   /** 按项目记住的活动标签；记录的标签消失时由 `activeTab` 回退。 */
   const activeTabs = ref<Readonly<Record<string, string | null>>>({})
-  /** 用户重命名过的标签标题；未记录时按会话摘要或终端标题展示。 */
+  /**
+   * 用户重命名过的对话与文件标签标题；未记录时按会话摘要或文件名展示。
+   * 终端标签不走这里：它的命名由守护进程随会话记录落盘。
+   */
   const renames = ref<Readonly<Record<string, string>>>({})
   /** 已结束回复但用户还没看过的对话标签键；只在内存里，不跨应用重启恢复。 */
   const unseenCompletions = ref<ReadonlySet<string>>(new Set())
@@ -407,9 +411,18 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     return pending
   }
 
-  /** 用户重命名标签：空标题清掉覆盖，回到按会话摘要或终端标题展示。 */
+  /**
+   * 用户重命名标签：空标题清掉覆盖，回到按会话摘要或文件名展示。
+   * 终端标签走另一条路：交给守护进程落盘（重启后仍保留）。对话与文件标签的键不跨重启稳定，只能留在页面内。
+   */
   function renameTab(key: string, title: string): void {
     const trimmed = title.trim()
+    const terminalId = terminalIdOf(key)
+    if (terminalId !== null) {
+      // 终端侧命名交给守护进程：它才能随会话记录持久化。页面内不再另存覆盖，避免两份标题不一致。
+      void terminalStore.renameTerminal(terminalId, trimmed)
+      return
+    }
     if (trimmed === '') {
       const next = { ...renames.value }
       delete next[key]
@@ -584,10 +597,11 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     return preview === null || preview === '' ? `会话 ${record.sessionId.slice(0, 8)}` : preview
   }
 
-  /** 终端标签标题：页面内的标题（重命名或程序上报）优先，其次是主进程给的默认标题。 */
+  /**
+   * 终端标签标题：会话记录给出的标题（用户命名 → 程序上报 → shell 默认名）。
+   * 终端重命名已改由守护进程落盘，因此这里不再看页面内的 `renames`。
+   */
   function titleOfTerminal(key: string, session: TerminalSessionInfo | null): string {
-    const renamed = renames.value[key]
-    if (renamed !== undefined) return renamed
     const terminalId = terminalIdOf(key)
     const title = terminalId === null ? undefined : terminalStore.titles[terminalId]
     if (title !== undefined && title !== '') return title
@@ -807,7 +821,7 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     clearUnseen(key)
   }
 
-  /** 清除某个标签的用户重命名；该标签本来没有覆盖时无副作用。 */
+  /** 清除某个对话或文件标签的用户重命名；该标签本来没有覆盖时无副作用。终端命名不在这里。 */
   function clearRename(key: string): void {
     if (renames.value[key] === undefined) return
     const nextRenames = { ...renames.value }

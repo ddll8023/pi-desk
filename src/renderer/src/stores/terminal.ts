@@ -6,7 +6,7 @@ import type { TerminalDaemonStatus, TerminalDataEvent, TerminalExitEvent, Termin
 import {
   acknowledgeTerminalData, closeAllTerminals as closeAllTerminalsBridge, closeTerminal as closeTerminalBridge,
   createTerminal as createTerminalBridge, fetchTerminalSnapshots, getTerminalDaemonStatus, listTerminals,
-  recoverTerminal as recoverTerminalBridge, stopStaleTerminalDaemon as stopStaleTerminalDaemonBridge,
+  recoverTerminal as recoverTerminalBridge, renameTerminal as renameTerminalBridge, stopStaleTerminalDaemon as stopStaleTerminalDaemonBridge,
   stopTerminalDaemon as stopTerminalDaemonBridge, subscribeTerminalDaemonStatus, subscribeTerminalEvents, writeTerminal
 } from '../services/terminal'
 import { useProjectStore } from './project'
@@ -22,7 +22,8 @@ export const useTerminalStore = defineStore('terminal', () => {
   const projectStore = useProjectStore()
   const sessions = ref<readonly TerminalSessionInfo[]>([])
   const titles = ref<Record<string, string>>({})
-  const renamed = new Set<string>()
+  /** 已由用户命名的终端：实时上报的 OSC 标题不再参与展示，避免盖回自定义名字。 */
+  const named = new Set<string>()
   const error = ref<string | null>(null)
   const creating = ref(false)
   const daemonStatus = ref<TerminalDaemonStatus | null>(null)
@@ -103,7 +104,7 @@ export const useTerminalStore = defineStore('terminal', () => {
   function pruneLocalState(): void {
     const alive = new Set(sessions.value.map((session) => session.id))
     titles.value = Object.fromEntries(Object.entries(titles.value).filter(([id]) => alive.has(id)))
-    for (const id of renamed) if (!alive.has(id)) renamed.delete(id)
+    for (const id of named) if (!alive.has(id)) named.delete(id)
     for (const [id, entry] of writers) if (!alive.has(id)) unregisterWriter(id, entry.deliveryId)
     for (const id of pendingExits.keys()) if (!alive.has(id) && !creating.value && loadPromise === null) pendingExits.delete(id)
   }
@@ -137,16 +138,29 @@ export const useTerminalStore = defineStore('terminal', () => {
     sessions.value = sessions.value.filter((session) => session.id !== id)
     pruneLocalState()
   }
-  function renameTerminal(id: string, title: string): void {
-    const trimmed = title.trim()
-    if (trimmed === '') { delete titles.value[id]; renamed.delete(id); titles.value = { ...titles.value }; return }
-    renamed.add(id)
-    titles.value = { ...titles.value, [id]: trimmed }
-  }
+  /** 程序上报的标题只影响未命名的终端；命名后展示一律以会话记录为准。 */
   function applyTerminalTitle(id: string, title: string): void {
     const trimmed = title.trim()
-    if (renamed.has(id) || trimmed === '' || titles.value[id] === trimmed) return
+    if (named.has(id) || trimmed === '' || titles.value[id] === trimmed) return
     titles.value = { ...titles.value, [id]: trimmed }
+  }
+
+  /**
+   * 给终端命名；空标题清除用户命名，刷新后回到程序上报或 shell 默认名。
+   * 命名由守护进程落盘，因此重启应用后仍保留——这是它和标签重命名的区别：后者只活在页面内。
+   * 成功后重读清单，以守护进程给出的展示标题为准，不在页面里自行推导优先级。
+   */
+  async function renameTerminal(id: string, title: string): Promise<boolean> {
+    const result = await renameTerminalBridge({ id, title })
+    if (!result.ok) { error.value = result.error.message; return false }
+    // 命名后停用实时上报标题，并清掉已有缓存，避免盖回旧值；清除命名时重新开放。
+    if (title.trim() === '') named.delete(id)
+    else named.add(id)
+    delete titles.value[id]
+    titles.value = { ...titles.value }
+    // 先重读清单再退出：清单返回的 title 已是守护进程算好的展示标题，页面不再自行推导优先级。
+    await ensureLoaded()
+    return true
   }
 
   function registerWriter(id: string, deliveryId: string, writer: TerminalWriter): void {
@@ -267,7 +281,7 @@ export const useTerminalStore = defineStore('terminal', () => {
   }
   return {
     sessions, titles, error, creating, insertFocus, daemonStatus, recoveryEpoch,
-    initialize, dispose, createTerminal, closeTerminal, closeAllTerminals, renameTerminal, applyTerminalTitle,
+    initialize, dispose, createTerminal, closeTerminal, closeAllTerminals, applyTerminalTitle, renameTerminal,
     registerWriter, unregisterWriter, loadSnapshot, finishRecovery, reportError, insertText,
     refreshDaemonStatus, stopStaleDaemon, stopDaemon, clearError
   }

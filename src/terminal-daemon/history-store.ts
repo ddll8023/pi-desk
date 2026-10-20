@@ -1,6 +1,7 @@
 /** 终端历史与冷画面的落盘：输出批量追加、积压可计量，画面及元数据原子写入且同一路径不并发写。 */
 import { appendFile, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { TERMINAL_TITLE_MAX_CHARS } from '../shared/terminal-api'
 import { TERMINAL_SNAPSHOT_MAX_CHARS } from '../shared/terminal-daemon-protocol'
 
 const MAX_HISTORY_CHARS = 4 * 1024 * 1024
@@ -14,7 +15,12 @@ export interface PersistedSessionRecord {
   readonly projectPath: string
   readonly shell: string
   readonly cwd: string
-  readonly title: string
+  /** 用户命名的标题；null 表示用户未命名，回退到程序上报标题或 shell 默认名。 */
+  readonly userTitle: string | null
+  /** 程序通过 OSC 上报的标题；null 表示从未上报，恢复时用 shell 默认名。 */
+  readonly title: string | null
+  /** 新建时的 shell 默认名；作为最后回退，保证标签永远不会空。 */
+  readonly defaultTitle: string
   readonly cols: number
   readonly rows: number
   readonly createdAt: number
@@ -232,13 +238,28 @@ function parseRecord(value: unknown): PersistedSessionRecord | null {
   const record = value as Record<string, unknown>
   // 记录来自磁盘，标识仍需限制为单个文件名，不能借恢复访问历史目录之外。
   if (typeof record.id !== 'string' || !/^[a-zA-Z0-9-]{1,128}$/.test(record.id)) return null
-  for (const key of ['projectPath', 'shell', 'cwd', 'title'] as const) {
+  for (const key of ['projectPath', 'shell', 'cwd'] as const) {
     if (typeof record[key] !== 'string' || record[key] === '') return null
   }
   if (!isDimension(record.cols) || !isDimension(record.rows)
     || typeof record.createdAt !== 'number' || !Number.isFinite(record.createdAt)) return null
+  const title = parseOptionalTitle(record.title)
   return {
     id: record.id, projectPath: record.projectPath as string, shell: record.shell as string,
-    cwd: record.cwd as string, title: record.title as string, cols: record.cols, rows: record.rows, createdAt: record.createdAt
+    cwd: record.cwd as string, userTitle: parseOptionalTitle(record.userTitle),
+    title, defaultTitle: parseOptionalTitle(record.defaultTitle) ?? title ?? shellNameOf(record.shell as string),
+    cols: record.cols, rows: record.rows, createdAt: record.createdAt
   }
+}
+/**
+ * 旧版本记录只有 `title`（当时存的就是 shell 默认名），没有 `defaultTitle`。
+ * 这类记录按 shell 文件名补出默认名，避免升级后整条会话记录被判非法而丢失。
+ */
+function shellNameOf(shell: string): string {
+  const name = shell.slice(shell.lastIndexOf('/') + 1).slice(shell.lastIndexOf('\\') + 1)
+  return name.toLowerCase().endsWith('.exe') ? name.slice(0, -4) : name
+}
+/** 可选标题：非法或缺失一律按未设置处理，不让一条脏记录拖掉整份会话清单。 */
+function parseOptionalTitle(value: unknown): string | null {
+  return typeof value === 'string' && value !== '' && value.length <= TERMINAL_TITLE_MAX_CHARS ? value : null
 }

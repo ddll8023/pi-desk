@@ -126,12 +126,14 @@ import {
   TERMINAL_LIST_CHANNEL,
   TERMINAL_RESIZE_CHANNEL,
   TERMINAL_RECOVERY_CHANNEL,
+  TERMINAL_RENAME_CHANNEL,
   TERMINAL_SNAPSHOTS_CHANNEL,
   TERMINAL_WRITE_CHANNEL,
   isTerminalAckRequest,
   isTerminalCloseRequest,
   isTerminalCreateRequest,
   isTerminalListRequest,
+  isTerminalRenameRequest,
   isTerminalResizeRequest,
   isTerminalSnapshotRequest,
   isTerminalRecoveryRequest,
@@ -2698,6 +2700,19 @@ function registerTerminalHandlers(pageUrl: string): void {
         return terminalCommandFailure('INVALID_REQUEST', '调整终端尺寸只接受终端标识与合法行列数。')
       }
       return terminals.resize(args[0])
+    }
+  )
+
+  handle(
+    TERMINAL_RENAME_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<TerminalCommandResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return terminalCommandFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 1 || !isTerminalRenameRequest(args[0])) {
+        return terminalCommandFailure('INVALID_REQUEST', '命名终端只接受终端标识与不超长的标题。')
+      }
+      return terminals.rename(args[0])
     }
   )
 

@@ -25,6 +25,7 @@ import type {
   TerminalAckRequest,
   TerminalCloseRequest,
   TerminalResizeRequest,
+  TerminalRenameRequest,
   TerminalSnapshotRequest,
   TerminalRecoveryRequest,
   TerminalWriteRequest
@@ -103,6 +104,12 @@ export class TerminalManager {
       cols: request.cols,
       rows: request.rows
     })
+    return commandResult(result)
+  }
+
+  /** 给终端命名；空标题清除命名。命名随会话元数据落盘，重启后仍保留。 */
+  async rename(request: TerminalRenameRequest): Promise<TerminalCommandResult> {
+    const result = await this.client.request({ type: 'rename', id: request.id, title: request.title })
     return commandResult(result)
   }
 
@@ -205,6 +212,7 @@ export class TerminalManager {
   /** 守护进程状态：连接信息、会话计数，以及是否存在接不回来的旧版本守护进程。 */
   async status(): Promise<TerminalDaemonStatusResult> {
     const stale = this.client.staleDaemon()
+    const staleBuild = this.client.staleBuild()
     const result = await this.client.request({ type: 'status' })
     if (!result.ok) {
       return {
@@ -217,7 +225,8 @@ export class TerminalManager {
           sessionCount: 0,
           runningCount: 0,
           restoredCount: 0,
-          stale
+          stale,
+          staleBuild
         }
       }
     }
@@ -229,7 +238,8 @@ export class TerminalManager {
       sessionCount: result.data.sessionCount,
       runningCount: result.data.runningCount,
       restoredCount: result.data.restoredCount,
-      stale
+      stale,
+      staleBuild
     }
     return { ok: true, data: status }
   }

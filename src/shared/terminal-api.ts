@@ -12,6 +12,7 @@
 export const TERMINAL_CREATE_CHANNEL = 'desktop:terminal-create'
 export const TERMINAL_WRITE_CHANNEL = 'desktop:terminal-write'
 export const TERMINAL_RESIZE_CHANNEL = 'desktop:terminal-resize'
+export const TERMINAL_RENAME_CHANNEL = 'desktop:terminal-rename'
 export const TERMINAL_CLOSE_CHANNEL = 'desktop:terminal-close'
 export const TERMINAL_CLOSE_ALL_CHANNEL = 'desktop:terminal-close-all'
 export const TERMINAL_LIST_CHANNEL = 'desktop:terminal-list'
@@ -33,6 +34,9 @@ export const TERMINAL_PATH_MAX_CHARS = 4096
 
 /** 单次写入的字符上限；超出拒绝，避免一次粘贴把主进程的缓冲撑爆。 */
 export const TERMINAL_WRITE_MAX_CHARS = 512 * 1024
+
+/** 标签标题长度上限；标题会落盘到会话元数据，过长值一律拒绝而不截断。 */
+export const TERMINAL_TITLE_MAX_CHARS = 256
 
 /** 终端行列的取值边界；只拒绝明显异常的尺寸，不代替 PTY 自身的限制。 */
 export const TERMINAL_DIMENSION_MIN = 2
@@ -65,7 +69,10 @@ export interface TerminalSessionInfo {
   readonly id: string
   /** 终端所属项目路径；终端的展示与收敛都按它分组。 */
   readonly projectPath: string
-  /** 默认标题取 shell 可执行文件名；重命名由页面自己保存，不回传主进程。 */
+  /**
+   * 展示标题：用户命名优先，其次是程序上报的标题，最后是 shell 可执行文件名。
+   * 均由守护进程计算并随会话元数据落盘，命名走 `renameTerminal`。
+   */
   readonly title: string
   /** 实际启动的 shell 可执行文件；用于界面展示与排障。 */
   readonly shell: string
@@ -94,6 +101,12 @@ export interface TerminalResizeRequest {
   readonly id: string
   readonly cols: number
   readonly rows: number
+}
+
+/** 给终端命名；空标题清除用户命名，回退到程序上报的标题或 shell 默认名。 */
+export interface TerminalRenameRequest {
+  readonly id: string
+  readonly title: string
 }
 
 export interface TerminalCloseRequest {
@@ -183,6 +196,11 @@ export interface TerminalDaemonStatus {
   readonly runningCount: number
   readonly restoredCount: number
   readonly stale: { readonly pid: number; readonly protocolVersion: number } | null
+  /**
+   * 同协议版本但跑着旧构建的守护进程：它仍在执行重新构建前的入口产物，需要重启才能加载新代码。
+   * 开发态由主进程自动重启；出包态只提示，停止与否由用户决定。
+   */
+  readonly staleBuild: { readonly pid: number; readonly buildId: string | null } | null
 }
 
 export type TerminalDaemonStatusResult =
@@ -196,6 +214,11 @@ export interface TerminalApi {
   readonly writeTerminal: (request: TerminalWriteRequest) => Promise<TerminalCommandResult>
   /** 同步终端尺寸；尺寸变化会转给 PTY，让全屏程序按新尺寸重排。 */
   readonly resizeTerminal: (request: TerminalResizeRequest) => Promise<TerminalCommandResult>
+  /**
+   * 给终端命名；命名随会话元数据落盘，重启应用后仍保留。
+   * 命名优先于程序上报的标题，直到用空标题清除。
+   */
+  readonly renameTerminal: (request: TerminalRenameRequest) => Promise<TerminalCommandResult>
   /** 关闭终端并收敛其进程树；关闭不存在的终端按已关闭处理。 */
   readonly closeTerminal: (request: TerminalCloseRequest) => Promise<TerminalCommandResult>
   /**
@@ -357,6 +380,11 @@ export function isTerminalDaemonStatus(value: unknown): value is TerminalDaemonS
     && Number.isInteger(stale.pid)
     && typeof stale.protocolVersion === 'number'
     && Number.isInteger(stale.protocolVersion))
+  const staleBuild = value.staleBuild
+  const staleBuildValid = staleBuild === null || (isRecord(staleBuild)
+    && typeof staleBuild.pid === 'number'
+    && Number.isInteger(staleBuild.pid)
+    && (staleBuild.buildId === null || typeof staleBuild.buildId === 'string'))
   return typeof value.connected === 'boolean'
     && (value.protocolVersion === null || typeof value.protocolVersion === 'number')
     && (value.pid === null || (typeof value.pid === 'number' && Number.isInteger(value.pid)))
@@ -365,6 +393,7 @@ export function isTerminalDaemonStatus(value: unknown): value is TerminalDaemonS
     && typeof value.runningCount === 'number'
     && typeof value.restoredCount === 'number'
     && staleValid
+    && staleBuildValid
 }
 
 export function isTerminalDaemonStatusResult(value: unknown): value is TerminalDaemonStatusResult {
@@ -399,6 +428,14 @@ export function isTerminalResizeRequest(value: unknown): value is TerminalResize
   if (!isRecord(value)) return false
   if (Object.keys(value).some((key) => key !== 'id' && key !== 'cols' && key !== 'rows')) return false
   return isTerminalId(value.id) && isDimension(value.cols) && isDimension(value.rows)
+}
+
+export function isTerminalRenameRequest(value: unknown): value is TerminalRenameRequest {
+  if (!isRecord(value)) return false
+  if (Object.keys(value).some((key) => key !== 'id' && key !== 'title')) return false
+  return isTerminalId(value.id)
+    && typeof value.title === 'string'
+    && value.title.length <= TERMINAL_TITLE_MAX_CHARS
 }
 
 export function isTerminalCloseRequest(value: unknown): value is TerminalCloseRequest {

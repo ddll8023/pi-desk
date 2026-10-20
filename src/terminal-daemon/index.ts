@@ -6,7 +6,7 @@ import type { TerminalDaemonRequest } from '../shared/terminal-daemon-protocol'
 import { TerminalDaemonServer } from './daemon-server'
 import type { TerminalDaemonReply } from './daemon-server'
 import {
-  acquireDaemonOwnership, ensureDaemonDirectories, readPidFile, readTokenFile,
+  acquireDaemonOwnership, ensureDaemonDirectories, readEntryBuildId, readPidFile, readTokenFile,
   removeOwnedFile, resolveDaemonPaths, writePidFile, writeTokenFile
 } from './endpoint'
 import { HistoryStore } from './history-store'
@@ -23,6 +23,8 @@ function readRuntimeDir(argv: readonly string[]): string {
   return value
 }
 const paths = resolveDaemonPaths(readRuntimeDir(process.argv.slice(2)), TERMINAL_DAEMON_PROTOCOL_VERSION)
+// 构建标识在启动时取一次：之后同一进程始终自报它真正执行的构建，不随产物被重新构建而漂移。
+const buildId = readEntryBuildId(process.argv[1] ?? '')
 ensureDaemonDirectories(paths)
 // 失败实例在这里直接退出，不注册任何会修改运行资料的收尾逻辑。
 let releaseOwnership: () => void
@@ -69,7 +71,7 @@ const sessions = new TerminalSessionManager({
 async function handleRequest(request: TerminalDaemonRequest): Promise<TerminalDaemonReply> {
   if (shuttingDown) return { ok: false, error: { code: 'TERMINAL_DAEMON_UNAVAILABLE', message: '终端守护进程正在停止。' } }
   switch (request.type) {
-    case 'status': return { ok: true, data: sessions.status() }
+    case 'status': return { ok: true, data: { ...sessions.status(), buildId } }
     case 'list': return { ok: true, data: sessions.list(request.projectPath) }
     case 'create': {
       const outcome = await sessions.create(request.projectPath, request.cols, request.rows)
@@ -80,6 +82,7 @@ async function handleRequest(request: TerminalDaemonRequest): Promise<TerminalDa
     }
     case 'write': return commandReply(sessions.write(request.id, request.data), '该终端已退出或已关闭，不能再输入。')
     case 'resize': return commandReply(sessions.resize(request.id, request.cols, request.rows), '该终端已关闭。')
+    case 'rename': return commandReply(sessions.rename(request.id, request.title), '该终端已关闭或标题不合法。')
     case 'close': sessions.close(request.id); return { ok: true, data: null }
     case 'close-all': sessions.closeAll(); return { ok: true, data: null }
     case 'ack': sessions.acknowledge(request.id, request.deliveryId, request.seqEnd); return { ok: true, data: null }
@@ -125,7 +128,9 @@ process.on('uncaughtException', (error) => { logError(error); void shutdown(1) }
 process.on('unhandledRejection', (error) => { logError(error); void shutdown(1) })
 void (async () => {
   writeTokenFile(paths.tokenFile, token)
-  writePidFile(paths.pidFile, { pid: process.pid, protocolVersion: TERMINAL_DAEMON_PROTOCOL_VERSION, startedAt: Date.now() })
+  writePidFile(paths.pidFile, {
+    pid: process.pid, protocolVersion: TERMINAL_DAEMON_PROTOCOL_VERSION, startedAt: Date.now(), buildId
+  })
   await sessions.restore()
   restored = true
   server = new TerminalDaemonServer({
@@ -142,7 +147,9 @@ void (async () => {
   log(`守护进程已启动（pid=${process.pid}，协议 v${TERMINAL_DAEMON_PROTOCOL_VERSION}）。`)
   const idleTimer = setInterval(() => {
     if (shuttingDown) return
-    if (sessions.sessionCount > 0 || server?.attached === true) { lastClientAt = Date.now(); return }
+    // 只有运行中的终端与已连接的应用才需要守护进程常驻；仅剩已退出的冷记录时允许空闲退出，
+    // 历史与画面仍在磁盘上，下次拉起由 restore() 按轻量记录接回。
+    if (sessions.runningSessionCount > 0 || server?.attached === true) { lastClientAt = Date.now(); return }
     if (Date.now() - lastClientAt >= IDLE_EXIT_MS) { clearInterval(idleTimer); void shutdown(0) }
   }, 5000)
   idleTimer.unref()

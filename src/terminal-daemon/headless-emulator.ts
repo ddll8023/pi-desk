@@ -1,4 +1,4 @@
-/** 守护进程画面解析器：批量消费输出、计量解析积压，并由唯一模拟器回答终端协议查询。 */
+/** 守护进程画面解析器：批量消费输出、计量解析积压，并由唯一模拟器回答终端协议查询与上报标题。 */
 import { SerializeAddon } from '@xterm/addon-serialize'
 import { Terminal } from '@xterm/headless'
 import { TERMINAL_SNAPSHOT_MAX_CHARS } from '../shared/terminal-daemon-protocol'
@@ -10,6 +10,7 @@ const PARSE_BATCH_CHARS = 64 * 1024
 export class HeadlessEmulator {
   private readonly term: Terminal
   private readonly serializer = new SerializeAddon()
+  private readonly stopTitle: { dispose(): void }
   private operations: Operation[] = []
   private queuedChars = 0
   private busy = false
@@ -23,11 +24,14 @@ export class HeadlessEmulator {
     private readonly scrollbackLines: number,
     private readonly onError: (error: unknown) => void,
     private readonly onConsumed: () => void = () => {},
-    onReply: (data: string) => void = () => {}
+    onReply: (data: string) => void = () => {},
+    /** 程序通过 OSC 设置的标题；守护进程侧据此持久化，应用重启后标签标题不回退。 */
+    onTitle: (title: string) => void = () => {}
   ) {
     this.term = new Terminal({ cols, rows, scrollback: scrollbackLines, allowProposedApi: true })
     this.term.loadAddon(this.serializer)
     this.term.onData(onReply)
+    this.stopTitle = this.term.onTitleChange(onTitle)
     this.term.parser.registerCsiHandler({ final: 't' }, (params) => {
       if (params[0] !== 18) return false
       onReply(`\u001b[8;${this.term.rows};${this.term.cols}t`)
@@ -143,6 +147,7 @@ export class HeadlessEmulator {
     this.operations = []
     this.queuedChars = 0
     this.settleIdle()
+    this.stopTitle.dispose()
     try { this.term.dispose() } catch (error) { this.onError(error) }
   }
 }

@@ -12,6 +12,7 @@ import { chmodSync, mkdirSync, readdirSync, readFileSync, renameSync, rmdirSync,
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import {
+  TERMINAL_DAEMON_BUILD_ID_MAX_CHARS,
   TERMINAL_DAEMON_HISTORY_DIR_NAME,
   TERMINAL_DAEMON_PROTOCOL_VERSION,
   TERMINAL_DAEMON_SESSIONS_FILE
@@ -157,11 +158,13 @@ export function readTokenFile(file: string): string | null {
   }
 }
 
-/** pid 文件内容：守护进程自报的进程号、协议版本与启动时间。 */
+/** pid 文件内容：守护进程自报的进程号、协议版本、启动时间与入口构建标识。 */
 export interface DaemonPidRecord {
   readonly pid: number
   readonly protocolVersion: number
   readonly startedAt: number
+  /** 启动时入口文件的构建标识；null 表示当时读不到入口文件。 */
+  readonly buildId: string | null
 }
 
 export function writePidFile(file: string, record: DaemonPidRecord): void {
@@ -173,11 +176,26 @@ export function readPidFile(file: string): DaemonPidRecord | null {
   try {
     const parsed: unknown = JSON.parse(readFileSync(file, 'utf8'))
     if (typeof parsed !== 'object' || parsed === null) return null
-    const record = parsed as { pid?: unknown; protocolVersion?: unknown; startedAt?: unknown }
+    const record = parsed as { pid?: unknown; protocolVersion?: unknown; startedAt?: unknown; buildId?: unknown }
     if (typeof record.pid !== 'number' || !Number.isInteger(record.pid)) return null
     if (typeof record.protocolVersion !== 'number' || !Number.isInteger(record.protocolVersion)) return null
     const startedAt = typeof record.startedAt === 'number' ? record.startedAt : 0
-    return { pid: record.pid, protocolVersion: record.protocolVersion, startedAt }
+    const buildId = typeof record.buildId === 'string' && record.buildId !== ''
+      && record.buildId.length <= TERMINAL_DAEMON_BUILD_ID_MAX_CHARS ? record.buildId : null
+    return { pid: record.pid, protocolVersion: record.protocolVersion, startedAt, buildId }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * 入口文件的构建标识：mtime 与大小。构建会重写入口产物，因此同一协议版本下标识变化即代表新构建。
+ * 读不到入口文件时返回 null，调用方据此跳过比对，不把「读不到」当成「不一致」而反复重启。
+ */
+export function readEntryBuildId(file: string): string | null {
+  try {
+    const info = statSync(file)
+    return `${info.mtimeMs}:${info.size}`
   } catch {
     return null
   }

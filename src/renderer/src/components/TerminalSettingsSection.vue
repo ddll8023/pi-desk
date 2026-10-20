@@ -34,6 +34,8 @@ const daemonDetail = computed(() => {
   return `进程 ${status.pid} · 协议 ${version}`
 })
 const stale = computed(() => daemonStatus.value?.stale ?? null)
+/** 同协议版本但跑旧构建的守护进程；开发态主进程会自动重启，所以这一节实际只在出包态出现。 */
+const staleBuild = computed(() => daemonStatus.value?.staleBuild ?? null)
 
 onMounted(() => {
   void terminalStore.refreshDaemonStatus()
@@ -146,6 +148,24 @@ async function stopDaemon(): Promise<void> {
       </p>
       <p v-if="feedback !== null" class="mt-3 text-xs text-desk-muted" role="status">{{ feedback }}</p>
       <p v-if="error !== null" class="mt-3 text-xs text-desk-danger" role="alert">{{ error }}</p>
+    </section>
+
+    <section v-if="staleBuild !== null" class="settings-section" aria-labelledby="settings-terminal-stale-build-title">
+      <div class="settings-section-heading">
+        <div>
+          <h2 id="settings-terminal-stale-build-title" class="settings-section-title">守护进程不是最新构建</h2>
+          <p class="mt-1 text-xs text-desk-muted">
+            进程 {{ staleBuild.pid }} 启动后终端守护进程产物已被重新构建，它仍在执行旧代码。
+            重启应用不会换掉它：停止守护进程后重新打开终端即加载新构建。
+          </p>
+        </div>
+      </div>
+      <div class="settings-row">
+        <span class="text-sm font-medium">旧构建守护进程</span>
+        <AppButton variant="quiet-danger" :disabled="stopping" @click="stopOpen = true">
+          停止守护进程
+        </AppButton>
+      </div>
     </section>
 
     <section v-if="stale !== null" class="settings-section" aria-labelledby="settings-terminal-stale-title">

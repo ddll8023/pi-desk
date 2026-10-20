@@ -13,6 +13,7 @@ import type {
   TerminalDataEvent,
   TerminalExitEvent,
   TerminalResizeRequest,
+  TerminalRenameRequest,
   TerminalSnapshotRequest,
   TerminalRecoveryRequest,
   TerminalSessionResult,
@@ -68,6 +69,17 @@ export async function resizeTerminal(request: TerminalResizeRequest): Promise<Te
     return await bridge.resizeTerminal(request)
   } catch (error) {
     return callFailed(error, '调整终端尺寸')
+  }
+}
+
+/** 给终端命名；空标题清除命名，回退到程序上报的标题或 shell 默认名。 */
+export async function renameTerminal(request: TerminalRenameRequest): Promise<TerminalCommandResult> {
+  const bridge = window.desktop
+  if (!bridge || typeof bridge.renameTerminal !== 'function') return unavailable()
+  try {
+    return await bridge.renameTerminal(request)
+  } catch (error) {
+    return callFailed(error, '命名终端')
   }
 }
 
@@ -166,7 +178,8 @@ export async function getTerminalDaemonStatus(): Promise<TerminalDaemonStatusRes
         sessionCount: 0,
         runningCount: 0,
         restoredCount: 0,
-        stale: null
+        stale: null,
+        staleBuild: null
       }
     }
   }

@@ -5,7 +5,7 @@ import { existsSync } from 'node:fs'
 import { basename, delimiter, join } from 'node:path'
 import { spawn as spawnPty } from 'node-pty'
 import type { IPty } from 'node-pty'
-import { TERMINAL_DATA_MAX_CHARS, TERMINAL_DIMENSION_MAX, TERMINAL_DIMENSION_MIN } from '../shared/terminal-api'
+import { TERMINAL_DATA_MAX_CHARS, TERMINAL_DIMENSION_MAX, TERMINAL_DIMENSION_MIN, TERMINAL_TITLE_MAX_CHARS } from '../shared/terminal-api'
 import type { TerminalDataEvent, TerminalExitEvent, TerminalSessionInfo, TerminalStatus } from '../shared/terminal-api'
 import {
   TERMINAL_DAEMON_PROTOCOL_VERSION, TERMINAL_RECOVERY_TIMEOUT_MS, TERMINAL_SNAPSHOT_CHUNK_CHARS
@@ -35,7 +35,12 @@ interface DaemonSession {
   pty: IPty | null
   readonly shell: string
   readonly cwd: string
-  readonly title: string
+  /** 用户命名的标题；非空时始终优先于程序上报的标题。 */
+  userTitle: string | null
+  /** 程序通过 OSC 上报的标题；用户命名后被覆盖展示但不丢失，清除命名后可恢复。 */
+  reportedTitle: string | null
+  /** 新建时的 shell 默认名；最后回退。 */
+  readonly defaultTitle: string
   readonly createdAt: number
   readonly restored: boolean
   cols: number
@@ -109,14 +114,14 @@ export class TerminalSessionManager {
     } catch (error) { this.options.onError(error); return { ok: false, reason: 'spawn' } }
     const session = this.newSession({
       id: randomUUID(), projectPath, shell: shell.file, cwd: projectPath,
-      title: shellTitle(shell.file), cols, rows, createdAt: Date.now()
+      userTitle: null, title: null, defaultTitle: shellTitle(shell.file), cols, rows, createdAt: Date.now()
     }, pty, false)
     session.emulator = new HeadlessEmulator(cols, rows, this.options.scrollbackLines, this.options.onError,
       () => this.updatePressure(session), (reply) => {
         if (!session.released && session.status === 'running') {
           try { pty.write(reply) } catch (error) { this.options.onError(error) }
         }
-      })
+      }, (title) => this.onTitle(session, title))
     this.sessions.set(session.id, session)
     pty.onData((chunk) => this.onData(session, chunk))
     pty.onExit((event) => this.onExit(session, event.exitCode))
@@ -124,11 +129,39 @@ export class TerminalSessionManager {
     return { ok: true, info: toSessionInfo(session) }
   }
 
+  /** 程序上报的标题：只有用户未命名时才影响展示；无值时也排入落盘，重启后不再回退到 shell 名。 */
+  private onTitle(session: DaemonSession, title: string): void {
+    const trimmed = title.trim()
+    if (session.released || trimmed === '' || session.reportedTitle === trimmed) return
+    session.reportedTitle = trimmed
+    // 用户命名优先，但上报值仍要落盘：清除命名后能回到程序自己的标题。
+    this.options.onSessionsChanged()
+  }
+
+  /**
+   * 给终端命名；空标题清除用户命名。返回值与写入、改尺寸一致：已退出或已关闭的终端不接受命名。
+   * 命名随会话元数据落盘，重启应用后仍保留。
+   */
+  rename(id: string, title: string): boolean {
+    const session = this.sessions.get(id)
+    if (this.stopping || session === undefined || session.released) return false
+    const trimmed = title.trim()
+    if (trimmed.length > TERMINAL_TITLE_MAX_CHARS) return false
+    const next = trimmed === '' ? null : trimmed
+    if (session.userTitle === next) return true
+    session.userTitle = next
+    this.options.onSessionsChanged()
+    return true
+  }
+
   private newSession(record: PersistedSessionRecord, pty: IPty | null, restored: boolean): DaemonSession {
     let settleExit: () => void = () => {}
     const exitPromise = new Promise<void>((resolve) => { settleExit = resolve })
+    // 记录里的 `title` 是程序上报值，会话侧存成 `reportedTitle`；直接展开会把两个同义字段都带上。
+    const { title, ...rest } = record
     return {
-      ...record, pty, restored, status: 'running', exitCode: null, emulator: null,
+      ...rest, pty, restored, status: 'running', exitCode: null, emulator: null,
+      reportedTitle: title,
       pending: [], pendingChars: 0, outputSeq: 0, sentSeq: 0, ackedSeq: 0,
       deliveryId: null, ready: false, transfer: null, recoveryTimer: null, snapshotWork: null,
       snapshotPaused: false, finalizing: null, flushTimer: null, killTimer: null,
@@ -235,7 +268,8 @@ export class TerminalSessionManager {
         const saved = await this.options.history.readScreen(session.id)
         if (saved !== null) screen = saved
         else {
-          const emulator = new HeadlessEmulator(session.cols, session.rows, this.options.scrollbackLines, this.options.onError)
+          const emulator = new HeadlessEmulator(session.cols, session.rows, this.options.scrollbackLines, this.options.onError,
+            undefined, undefined, (title) => this.onTitle(session, title))
           try {
             emulator.write(await this.options.history.readRestorable(session.id))
             screen = { ansi: await emulator.serialize(), cols: session.cols, rows: session.rows }
@@ -388,7 +422,8 @@ export class TerminalSessionManager {
     }
   }
 
-  status(): TerminalDaemonStatusData {
+  /** 会话侧状态；构建标识由编排层补充，不在这里重复获取。 */
+  status(): Omit<TerminalDaemonStatusData, 'buildId'> {
     const sessions = [...this.sessions.values()]
     return {
       protocolVersion: TERMINAL_DAEMON_PROTOCOL_VERSION, pid: process.pid, startedAt: this.startedAt,
@@ -396,10 +431,13 @@ export class TerminalSessionManager {
       restoredCount: sessions.filter((session) => session.restored).length
     }
   }
-  get sessionCount(): number { return this.sessions.size }
+  /** 仍在运行（持有 PTY）的终端数；只有这部分需要守护进程常驻。 */
+  get runningSessionCount(): number {
+    return [...this.sessions.values()].filter((session) => session.status === 'running').length
+  }
   persistedRecords(): readonly PersistedSessionRecord[] {
-    return [...this.sessions.values()].map(({ id, projectPath, shell, cwd, title, cols, rows, createdAt }) => ({
-      id, projectPath, shell, cwd, title, cols, rows, createdAt
+    return [...this.sessions.values()].map(({ id, projectPath, shell, cwd, userTitle, reportedTitle, defaultTitle, cols, rows, createdAt }) => ({
+      id, projectPath, shell, cwd, userTitle, title: reportedTitle, defaultTitle, cols, rows, createdAt
     }))
   }
 
@@ -443,8 +481,12 @@ export class TerminalSessionManager {
 }
 
 function toSessionInfo(session: DaemonSession): TerminalSessionInfo {
-  return { id: session.id, projectPath: session.projectPath, title: session.title, shell: session.shell,
+  return { id: session.id, projectPath: session.projectPath, title: displayTitleOf(session), shell: session.shell,
     cwd: session.cwd, cols: session.cols, rows: session.rows, status: session.status, exitCode: session.exitCode }
+}
+/** 展示标题：用户命名优先，其次是程序上报，最后是 shell 默认名。 */
+function displayTitleOf(session: DaemonSession): string {
+  return session.userTitle ?? session.reportedTitle ?? session.defaultTitle
 }
 function isDimension(value: number): boolean {
   return Number.isInteger(value) && value >= TERMINAL_DIMENSION_MIN && value <= TERMINAL_DIMENSION_MAX

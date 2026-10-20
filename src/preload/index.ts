@@ -182,6 +182,7 @@ import {
   TERMINAL_EXIT_EVENT,
   TERMINAL_LIST_CHANNEL,
   TERMINAL_RESIZE_CHANNEL,
+  TERMINAL_RENAME_CHANNEL,
   TERMINAL_RECOVERY_CHANNEL,
   TERMINAL_SNAPSHOTS_CHANNEL,
   TERMINAL_WRITE_CHANNEL,
@@ -208,6 +209,7 @@ import type {
   TerminalResizeRequest,
   TerminalSnapshotRequest,
   TerminalRecoveryRequest,
+  TerminalRenameRequest,
   TerminalSessionResult,
   TerminalSessionsResult,
   TerminalSnapshotsResult,
@@ -861,6 +863,13 @@ const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionAp
   async resizeTerminal(request: TerminalResizeRequest) {
     const payload: TerminalResizeRequest = { id: request.id, cols: request.cols, rows: request.rows }
     const response: unknown = await ipcRenderer.invoke(TERMINAL_RESIZE_CHANNEL, payload)
+    return isTerminalCommandResult(response) ? response : invalidTerminalCommandResponse()
+  },
+
+  /** 给终端命名；空标题清除命名。命名随会话元数据落盘，重启应用后仍保留。 */
+  async renameTerminal(request: TerminalRenameRequest) {
+    const payload: TerminalRenameRequest = { id: request.id, title: request.title }
+    const response: unknown = await ipcRenderer.invoke(TERMINAL_RENAME_CHANNEL, payload)
     return isTerminalCommandResult(response) ? response : invalidTerminalCommandResponse()
   },
 
