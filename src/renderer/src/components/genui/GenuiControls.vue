@@ -116,10 +116,12 @@ function formatNumber(value: number): string {
   return Number(value.toFixed(6)).toLocaleString('zh-CN')
 }
 
-/** 参数值文本（含单位）；非数值参数返回空串，模板据此不渲染数值行。 */
+/** 参数值文本（含单位）；非数值参数返回空串，模板据此不渲染数值行。
+ * 同时作为滑杆的 aria-valuetext：读屏只报裸数字时听不到单位。
+ * 数值与单位用不换行空格连接，避免窄容器里被拆到两行。 */
 function numberText(param: GenuiParam): string {
   if (param.type !== 'number') return ''
-  const unit = param.unit === undefined ? '' : ` ${param.unit}`
+  const unit = param.unit === undefined ? '' : `\u00a0${param.unit}`
   return `${formatNumber(numberCurrent(param))}${unit}`
 }
 
@@ -232,6 +234,7 @@ watch(
             :max="rangeMax(param)"
             :step="rangeStep(param)"
             :value="numberCurrent(param)"
+            :aria-valuetext="numberText(param)"
             :disabled="readOnly"
             @input="onNumberInput(param, $event)"
           >
@@ -255,6 +258,7 @@ watch(
             :value="textDraft(param)"
             :maxlength="GENUI_MAX_PARAM_TEXT_CHARS"
             :placeholder="textPlaceholder(param)"
+            spellcheck="false"
             :disabled="readOnly"
             @input="onTextInput(param, $event)"
             @compositionend="onTextCompositionEnd(param, $event)"

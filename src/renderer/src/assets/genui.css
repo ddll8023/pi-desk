@@ -40,7 +40,7 @@
 .genui-document-heading { min-width: 0; flex: 1; }
 .genui-document-eyebrow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--color-desk-accent); font-size: 11px; line-height: 1.5; }
 .genui-document-version { border-left: 1px solid var(--color-desk-line-strong); padding-left: 8px; color: var(--color-desk-muted); font-family: var(--font-mono); }
-.genui-document .genui-document-title { margin-top: 4px; color: var(--color-desk-ink); font-size: 18px; font-weight: 650; line-height: 1.45; overflow-wrap: anywhere; }
+.genui-document .genui-document-title { margin-top: 4px; color: var(--color-desk-ink); font-size: 18px; font-weight: 650; line-height: 1.45; text-wrap: balance; overflow-wrap: anywhere; }
 .genui-document-mode { flex: none; padding: 4px 8px; border-radius: var(--radius-desk-sm); background: var(--color-desk-surface); color: var(--color-desk-muted); font-size: 11px; white-space: nowrap; }
 
 /* 头部右侧的动作区：复制按钮与模式标记并排，只读态也保留复制（它不改任何状态）。 */
@@ -75,7 +75,7 @@
 
 .genui-card { min-width: 0; }
 .genui-card + .genui-card { border-top: 1px solid var(--color-desk-line); padding-top: 20px; }
-.genui-document .genui-card-title { margin-bottom: 12px; font-size: 15px; font-weight: 650; line-height: 1.5; overflow-wrap: anywhere; }
+.genui-document .genui-card-title { margin-bottom: 12px; font-size: 15px; font-weight: 650; line-height: 1.5; text-wrap: balance; overflow-wrap: anywhere; }
 .genui-card .genui-card { border-left: 1px solid var(--color-desk-line); padding-left: 16px; }
 .genui-card .genui-card-title { font-size: 13px; }
 .genui-document-body > .genui-card > .genui-card-title { font-size: 15px; }
@@ -200,7 +200,7 @@
 .genui-control-description { color: var(--color-desk-muted); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
 
 .genui-chart, .genui-figure { min-width: 0; }
-.genui-document .genui-chart-title { margin-bottom: 12px; font-size: 15px; font-weight: 650; }
+.genui-document .genui-chart-title { margin-bottom: 12px; font-size: 15px; font-weight: 650; text-wrap: balance; }
 /* 图例：色块 + 序列名，可换行；名称文字与无障碍说明同时承载语义，不只靠颜色。 */
 .genui-chart-legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-bottom: 10px; }
 .genui-chart-legend-item { display: inline-flex; min-width: 0; align-items: center; gap: 6px; color: var(--color-desk-muted); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
@@ -252,6 +252,10 @@
 }
 .genui-chart-tooltip-title { color: var(--color-desk-ink); font-size: 12px; font-weight: 600; line-height: 1.5; overflow-wrap: anywhere; }
 .genui-chart-tooltip-line { color: var(--color-desk-muted); font-family: var(--font-mono); font-size: 11px; line-height: 1.55; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+/* 暗色下 --shadow-desk-pop 是纯黑投影，浮层与画布底色几乎同色；改靠更亮的底色与描边分层。 */
+@media (prefers-color-scheme: dark) {
+  .genui-chart-tooltip { border-color: var(--color-desk-line-strong); background: var(--color-desk-surface-subtle); }
+}
 .genui-document .genui-figure-notes { margin-top: 12px; border-left: 2px solid var(--color-desk-line-strong); padding-left: 12px; color: var(--color-desk-ink); font-size: 12px; line-height: 1.65; overflow-wrap: anywhere; }
 
 .genui-document-footer { display: flex; flex-direction: column; gap: 8px; margin-top: 20px; border-top: 1px solid var(--color-desk-line); padding-top: 16px; }
@@ -263,6 +267,9 @@
 .genui-reset:hover { background: var(--color-desk-surface-subtle); color: var(--color-desk-ink); }
 .genui-reset:disabled { opacity: 0.55; cursor: not-allowed; }
 .genui-reset:disabled:hover { background: transparent; color: var(--color-desk-muted); }
+/* 重置按钮的确认态：文案与配色同时变化，避免与普通态混淆。 */
+.genui-reset.is-confirming { background: var(--color-desk-warning-soft); color: var(--color-desk-warning); }
+.genui-reset.is-confirming:hover { background: var(--color-desk-warning-soft); color: var(--color-desk-warning); }
 .genui-submit { display: inline-flex; min-height: 36px; flex: none; align-items: center; justify-content: center; gap: 8px; white-space: normal; overflow-wrap: anywhere; }
 .genui-submit svg { width: 16px; height: 16px; flex: none; }
 .genui-feedback { font-size: 12px; overflow-wrap: anywhere; }
@@ -303,6 +310,18 @@
 .genui-reset:focus-visible,
 .genui-range:focus-visible,
 .genui-checkbox:focus-visible { outline: 2px solid var(--color-desk-accent); outline-offset: 3px; }
+
+/* 触屏与手写笔：去掉双击缩放判定延迟，点按即时响应；桌面鼠标不受影响。 */
+.genui-document-copy,
+.genui-table-sort,
+.genui-table-expand,
+.genui-table-clear,
+.genui-collapse-summary,
+.genui-tabs-tab,
+.genui-reset,
+.genui-submit,
+.genui-history-main,
+.genui-history-toggle { touch-action: manipulation; }
 
 /* 跳转落点：长会话里滚过去的距离很远，给一个短暂描边让用户看清落在哪。 */
 .is-jump-target { outline: 2px solid var(--color-desk-accent); outline-offset: 4px; border-radius: var(--radius-desk-md); }

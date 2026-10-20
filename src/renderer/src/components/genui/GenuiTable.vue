@@ -170,7 +170,7 @@ watch(() => props.node, () => {
           class="text-control"
           type="search"
           autocomplete="off"
-          :placeholder="`在 ${node.rows.length} 行里查找`"
+          :placeholder="`在 ${node.rows.length} 行里查找…`"
         >
       </label>
       <AppButton v-if="keyword !== ''" variant="unstyled" class="genui-table-clear" @click="clearKeyword">
@@ -217,7 +217,7 @@ watch(() => props.node, () => {
       </table>
     </div>
     <div v-if="showFooter" class="genui-table-footer">
-      <span class="genui-table-count">{{ countText }}</span>
+      <span class="genui-table-count" aria-live="polite">{{ countText }}</span>
       <AppButton
         v-if="sortedRows.length > TABLE_PREVIEW_ROWS"
         variant="unstyled"

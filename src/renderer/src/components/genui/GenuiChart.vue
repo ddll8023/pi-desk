@@ -77,13 +77,16 @@ const legend = computed(() => {
   }))
 })
 
-/** 无障碍说明：标题（若有）+ 图表种类 + 序列名或切片 + 结论；信息不能只靠颜色传达。 */
+/** 无障碍说明：标题（若有）+ 图表种类 + 每个分类的取值 + 结论；信息不能只靠颜色或鼠标悬停。 */
 const ariaLabel = computed(() => {
   const title = props.node.title === undefined ? '' : `${props.node.title}，`
-  const names = isShare.value
-    ? `切片：${props.node.labels.join('、')}。`
-    : `序列：${props.node.series.map((series, index) => series.name ?? `序列 ${index + 1}`).join('、')}。`
-  return `${title}${kindText.value}。${names}${layout.value.notes.join('；')}`
+  const notes = layout.value.notes.join('；')
+  // 占比图的结论已逐切片列出数值，柱/折线的结论只给极值，因此把热区的逐项取值补进来。
+  if (isShare.value) return `${title}${kindText.value}。${notes}`
+  const values = (layout.value.hotspots ?? [])
+    .map((spot) => `${spot.title}：${spot.lines.join('，')}`)
+    .join('；')
+  return `${title}${kindText.value}。${values}。${notes}`
 })
 
 /** 当前悬停的分类下标；离开图区即清空，不记忆上一次命中。 */

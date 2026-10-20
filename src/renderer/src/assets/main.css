@@ -2533,7 +2533,8 @@
   .file-markdown .file-markdown-body {
     /* 字号由面板以自定义属性传入；块间距按字号换算，调字号时整篇比例不变。 */
     --markdown-flow: calc(var(--file-preview-font-size, 15px) * 0.85);
-    --markdown-section-gap: calc(var(--file-preview-font-size, 15px) * 1.6);
+    /* 节间距比段间距大得多：二级标题不加分隔线，节边界只能靠这段留白与字号梯度建立。 */
+    --markdown-section-gap: calc(var(--file-preview-font-size, 15px) * 2.05);
     max-width: 72ch;
     margin: 0 auto;
     font-size: var(--file-preview-font-size, 15px);
@@ -2553,7 +2554,7 @@
     letter-spacing: -0.015em;
   }
 
-  .file-markdown .file-markdown-body h2 { font-size: 1.45em; }
+  .file-markdown .file-markdown-body h2 { font-size: 1.55em; }
   .file-markdown .file-markdown-body h3 { font-size: 1.15em; }
   .file-markdown .file-markdown-body h4 { font-size: 1em; }
   .file-markdown .file-markdown-body :is(h5, h6) {
@@ -2704,9 +2705,10 @@
     opacity: 1;
   }
 
-  /* 表格：阅读场景比聊天正文略大一档，表头靠字重与底色区分，不做全大写。 */
+  /* 表格：阅读场景比聊天正文略大一档，表头靠字色、字重与底色区分，不做全大写。 */
   .file-markdown .markdown-body table {
-    font-size: 13px;
+    /* 跟随面板字号，与 --markdown-flow 用同一换算基准，避免调字号时正文变而表格不动。 */
+    font-size: calc(var(--file-preview-font-size, 15px) * 0.87);
     line-height: 1.6;
   }
 
@@ -2715,10 +2717,29 @@
     padding: 8px 14px;
   }
 
+  /* 表头用正文色压住表体：灰色表头在 4 列以上读不出层级。 */
   .file-markdown .markdown-body th {
+    color: var(--color-desk-ink);
     font-size: 11px;
     font-weight: 600;
     letter-spacing: 0.02em;
+  }
+
+  /* 行悬停：多列宽表跨行追读时给一个落点，与聊天正文表格行为一致。 */
+  .file-markdown .markdown-body tbody tr:hover td {
+    background: var(--color-desk-surface-subtle);
+  }
+
+  /* 分隔线：共用令牌与表格边框同色，在预览里提到明显更高对比，否则等于看不见。 */
+  .file-markdown .file-markdown-body hr {
+    margin: calc(var(--markdown-flow) * 1.8) 0;
+    border-top-color: color-mix(in srgb, var(--color-desk-line) 55%, var(--color-desk-ink));
+  }
+
+  /* 词条列表：条目以行内代码开头时给它一个统一宽度，说明文字纵向对齐成列。 */
+  .file-markdown .file-markdown-body li > code:first-child {
+    display: inline-block;
+    min-width: 4.5em;
   }
 
   /* 链接：下划线默认降低不透明度，hover 再回到实色，正文不被满篇实线压住。 */
