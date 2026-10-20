@@ -171,18 +171,26 @@ import type {
 } from '../shared/git-api'
 import {
   TERMINAL_ACK_CHANNEL,
+  TERMINAL_CLOSE_ALL_CHANNEL,
   TERMINAL_CLOSE_CHANNEL,
   TERMINAL_CREATE_CHANNEL,
+  TERMINAL_DAEMON_STATUS_CHANNEL,
+  TERMINAL_DAEMON_STATUS_EVENT,
+  TERMINAL_DAEMON_STOP_STALE_CHANNEL,
   TERMINAL_DATA_EVENT,
   TERMINAL_EXIT_EVENT,
   TERMINAL_LIST_CHANNEL,
   TERMINAL_RESIZE_CHANNEL,
+  TERMINAL_SNAPSHOTS_CHANNEL,
   TERMINAL_WRITE_CHANNEL,
   isTerminalCommandResult,
+  isTerminalDaemonStatus,
+  isTerminalDaemonStatusResult,
   isTerminalDataEvent,
   isTerminalExitEvent,
   isTerminalSessionResult,
-  isTerminalSessionsResult
+  isTerminalSessionsResult,
+  isTerminalSnapshotsResult
 } from '../shared/terminal-api'
 import type {
   TerminalAckRequest,
@@ -190,12 +198,15 @@ import type {
   TerminalCloseRequest,
   TerminalCommandResult,
   TerminalCreateRequest,
+  TerminalDaemonStatus,
+  TerminalDaemonStatusResult,
   TerminalDataEvent,
   TerminalExitEvent,
   TerminalListRequest,
   TerminalResizeRequest,
   TerminalSessionResult,
   TerminalSessionsResult,
+  TerminalSnapshotsResult,
   TerminalWriteRequest
 } from '../shared/terminal-api'
 import {
@@ -417,6 +428,8 @@ const INVALID_AGENT_RUNTIME_RESET_RESPONSE = '桌面接口返回了无法识别�
 const INVALID_TERMINAL_SESSION_RESPONSE = '桌面接口返回了无法识别的终端状态。'
 const INVALID_TERMINAL_SESSIONS_RESPONSE = '桌面接口返回了无法识别的终端清单。'
 const INVALID_TERMINAL_COMMAND_RESPONSE = '桌面接口返回了无法识别的终端操作结果。'
+const INVALID_TERMINAL_SNAPSHOTS_RESPONSE = '桌面接口返回了无法识别的终端快照。'
+const INVALID_TERMINAL_DAEMON_STATUS_RESPONSE = '桌面接口返回了无法识别的终端守护进程状态。'
 
 function invalidExtensionUiResponse(): ExtensionUiResult {
   return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_EXTENSION_UI_RESPONSE } }
@@ -520,6 +533,14 @@ function invalidTerminalSessionsResponse(): TerminalSessionsResult {
 
 function invalidTerminalCommandResponse(): TerminalCommandResult {
   return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_TERMINAL_COMMAND_RESPONSE } }
+}
+
+function invalidTerminalSnapshotsResponse(): TerminalSnapshotsResult {
+  return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_TERMINAL_SNAPSHOTS_RESPONSE } }
+}
+
+function invalidTerminalDaemonStatusResponse(): TerminalDaemonStatusResult {
+  return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_TERMINAL_DAEMON_STATUS_RESPONSE } }
 }
 
 function invalidPreferencesResponse(): PreferencesResult {
@@ -851,6 +872,42 @@ const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionAp
     const payload: TerminalListRequest = { projectPath: request.projectPath }
     const response: unknown = await ipcRenderer.invoke(TERMINAL_LIST_CHANNEL, payload)
     return isTerminalSessionsResult(response) ? response : invalidTerminalSessionsResponse()
+  },
+
+  /** 读取全部终端的画面快照；页面重挂载后用它还原滚动历史。 */
+  async fetchTerminalSnapshots() {
+    const response: unknown = await ipcRenderer.invoke(TERMINAL_SNAPSHOTS_CHANNEL)
+    return isTerminalSnapshotsResult(response) ? response : invalidTerminalSnapshotsResponse()
+  },
+
+  /** 关闭全部终端（含其他项目）；只用于用户显式清理常驻会话。 */
+  async closeAllTerminals() {
+    const response: unknown = await ipcRenderer.invoke(TERMINAL_CLOSE_ALL_CHANNEL)
+    return isTerminalCommandResult(response) ? response : invalidTerminalCommandResponse()
+  },
+
+  /** 读取终端守护进程状态；不传参数，不暴露端点或 token。 */
+  async getTerminalDaemonStatus() {
+    const response: unknown = await ipcRenderer.invoke(TERMINAL_DAEMON_STATUS_CHANNEL)
+    return isTerminalDaemonStatusResult(response) ? response : invalidTerminalDaemonStatusResponse()
+  },
+
+  /** 结束协议版本不符的旧守护进程；只在用户显式操作时调用。 */
+  async stopStaleTerminalDaemon() {
+    const response: unknown = await ipcRenderer.invoke(TERMINAL_DAEMON_STOP_STALE_CHANNEL)
+    return isTerminalCommandResult(response) ? response : invalidTerminalCommandResponse()
+  },
+
+  onTerminalDaemonStatus(listener: (status: TerminalDaemonStatus) => void) {
+    const handler = (_event: IpcRendererEvent, payload: unknown): void => {
+      // 状态事件同样不可信：契约不符时丢弃，由下一次读取收敛。
+      if (!isTerminalDaemonStatus(payload)) return
+      listener(payload)
+    }
+    ipcRenderer.on(TERMINAL_DAEMON_STATUS_EVENT, handler)
+    return () => {
+      ipcRenderer.off(TERMINAL_DAEMON_STATUS_EVENT, handler)
+    }
   },
 
   /** 回报已消费的字符数；只释放背压额度，失败不重试也不产生未处理的拒绝。 */

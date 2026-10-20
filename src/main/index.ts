@@ -114,12 +114,17 @@ import type {
 } from '../shared/project-file-api'
 import {
   TERMINAL_ACK_CHANNEL,
+  TERMINAL_CLOSE_ALL_CHANNEL,
   TERMINAL_CLOSE_CHANNEL,
   TERMINAL_CREATE_CHANNEL,
+  TERMINAL_DAEMON_STATUS_CHANNEL,
+  TERMINAL_DAEMON_STATUS_EVENT,
+  TERMINAL_DAEMON_STOP_STALE_CHANNEL,
   TERMINAL_DATA_EVENT,
   TERMINAL_EXIT_EVENT,
   TERMINAL_LIST_CHANNEL,
   TERMINAL_RESIZE_CHANNEL,
+  TERMINAL_SNAPSHOTS_CHANNEL,
   TERMINAL_WRITE_CHANNEL,
   isTerminalAckRequest,
   isTerminalCloseRequest,
@@ -130,11 +135,13 @@ import {
 } from '../shared/terminal-api'
 import type {
   TerminalCommandResult,
+  TerminalDaemonStatusResult,
   TerminalDataEvent,
   TerminalErrorCode,
   TerminalExitEvent,
   TerminalSessionResult,
-  TerminalSessionsResult
+  TerminalSessionsResult,
+  TerminalSnapshotsResult
 } from '../shared/terminal-api'
 import {
   SESSION_DELETE_CHANNEL,
@@ -447,7 +454,11 @@ const windowState = new WindowState({ store: configStore })
 const terminals = new TerminalManager({
   resolveProjectPath: resolveRegisteredProjectPath,
   sendData: (event) => sendToRenderer(TERMINAL_DATA_EVENT, event),
-  sendExit: (event) => sendToRenderer(TERMINAL_EXIT_EVENT, event)
+  sendExit: (event) => sendToRenderer(TERMINAL_EXIT_EVENT, event),
+  // 连接变化（守护进程拉起、断开、重连）时把状态推给页面；页面据此刷新快照与提示。
+  onStatusChange: () => {
+    void broadcastTerminalDaemonStatus()
+  }
 })
 
 /**
@@ -972,7 +983,7 @@ function registerProjectHandlers(pageUrl: string): void {
       // 项目移除后它的终端不再有意义：先取规范路径，移除成功后一并收敛该项目终端。
       const terminalProjectPath = await registeredProjectPathById(projectId)
       const result = await projectManager.remove(request as ProjectRemoveRequest)
-      if (result.ok && terminalProjectPath !== null) terminals.closeProject(terminalProjectPath)
+      if (result.ok && terminalProjectPath !== null) void terminals.closeProject(terminalProjectPath)
       return result
     }
   )
@@ -2662,7 +2673,7 @@ function registerTerminalHandlers(pageUrl: string): void {
 
   handle(
     TERMINAL_WRITE_CHANNEL,
-    (event: IpcMainInvokeEvent, ...args: unknown[]): TerminalCommandResult => {
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<TerminalCommandResult> => {
       if (!isTrustedCaller(event, pageUrl)) {
         return terminalCommandFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
       }
@@ -2675,7 +2686,7 @@ function registerTerminalHandlers(pageUrl: string): void {
 
   handle(
     TERMINAL_RESIZE_CHANNEL,
-    (event: IpcMainInvokeEvent, ...args: unknown[]): TerminalCommandResult => {
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<TerminalCommandResult> => {
       if (!isTrustedCaller(event, pageUrl)) {
         return terminalCommandFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
       }
@@ -2688,7 +2699,7 @@ function registerTerminalHandlers(pageUrl: string): void {
 
   handle(
     TERMINAL_CLOSE_CHANNEL,
-    (event: IpcMainInvokeEvent, ...args: unknown[]): TerminalCommandResult => {
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<TerminalCommandResult> => {
       if (!isTrustedCaller(event, pageUrl)) {
         return terminalCommandFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
       }
@@ -2709,6 +2720,58 @@ function registerTerminalHandlers(pageUrl: string): void {
         return terminalSessionsFailure('INVALID_REQUEST', '终端清单只接受一个项目路径或 null。')
       }
       return terminals.list(args[0])
+    }
+  )
+
+  handle(
+    TERMINAL_SNAPSHOTS_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<TerminalSnapshotsResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return terminalSnapshotsFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 0) {
+        return terminalSnapshotsFailure('INVALID_REQUEST', '终端快照接口不接受参数。')
+      }
+      return terminals.snapshots()
+    }
+  )
+
+  handle(
+    TERMINAL_CLOSE_ALL_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<TerminalCommandResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return terminalCommandFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 0) {
+        return terminalCommandFailure('INVALID_REQUEST', '关闭全部终端不接受参数。')
+      }
+      return terminals.closeAll()
+    }
+  )
+
+  handle(
+    TERMINAL_DAEMON_STATUS_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<TerminalDaemonStatusResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return terminalDaemonStatusFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 0) {
+        return terminalDaemonStatusFailure('INVALID_REQUEST', '终端守护进程状态接口不接受参数。')
+      }
+      return terminals.status()
+    }
+  )
+
+  handle(
+    TERMINAL_DAEMON_STOP_STALE_CHANNEL,
+    (event: IpcMainInvokeEvent, ...args: unknown[]): TerminalCommandResult => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return terminalCommandFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 0) {
+        return terminalCommandFailure('INVALID_REQUEST', '结束旧终端守护进程不接受参数。')
+      }
+      return terminals.stopStaleDaemon()
     }
   )
 
@@ -2734,6 +2797,14 @@ function terminalCommandFailure(code: TerminalErrorCode, message: string): Termi
   return { ok: false, error: { code, message } }
 }
 
+function terminalSnapshotsFailure(code: TerminalErrorCode, message: string): TerminalSnapshotsResult {
+  return { ok: false, error: { code, message } }
+}
+
+function terminalDaemonStatusFailure(code: TerminalErrorCode, message: string): TerminalDaemonStatusResult {
+  return { ok: false, error: { code, message } }
+}
+
 /** 只发给当前唯一可信窗口；返回是否真的投递，未投递时调用方保留数据。 */
 function sendToRenderer(channel: string, payload: unknown): boolean {
   const target = mainWindow
@@ -2742,6 +2813,22 @@ function sendToRenderer(channel: string, payload: unknown): boolean {
   if (contents.isDestroyed()) return false
   contents.send(channel, payload)
   return true
+}
+
+/**
+ * 守护进程连接变化时推一份最新状态给页面。
+ * 重入保护：状态请求本身可能触发重连，重连又会回调到这里，不加保护会形成回环。
+ */
+let broadcastingTerminalDaemonStatus = false
+async function broadcastTerminalDaemonStatus(): Promise<void> {
+  if (broadcastingTerminalDaemonStatus) return
+  broadcastingTerminalDaemonStatus = true
+  try {
+    const result = await terminals.status()
+    if (result.ok) sendToRenderer(TERMINAL_DAEMON_STATUS_EVENT, result.data)
+  } finally {
+    broadcastingTerminalDaemonStatus = false
+  }
 }
 
 /** 状态变化只发给当前唯一可信窗口，不广播到其他 webContents。 */
@@ -2912,6 +2999,7 @@ async function createWindow(pageUrl: string): Promise<void> {
     if (!event.isMainFrame || event.url !== pageUrl) event.preventDefault()
   })
   // 页面重新加载后，上一份页面未确认的终端数据不再有人消费：清掉在途额度，避免终端被永久背压。
+  // 输出本身不丢：守护进程的画面状态是权威来源，页面重新挂载后按快照接回。
   contents.on('did-finish-load', () => terminals.resetDelivery())
   // 尺寸、位置与最大化状态的变化经防抖写回配置；close 时先记录，销毁后无法再读取 bounds。
   window.on('resize', rememberWindowState)
@@ -2935,7 +3023,7 @@ async function createWindow(pageUrl: string): Promise<void> {
   })
   window.once('ready-to-show', () => window.show())
   window.once('closed', () => {
-    // 页面已消失：终端不再有接收方，释放它的在途额度，退出链不必等待无意义的确认。
+    // 页面已消失：终端不再有接收方，释放它的在途额度；终端本身由守护进程保留，重新打开时接回。
     terminals.resetDelivery()
     // 目录监听只服务于这个窗口，窗口关掉就没有接收方了。
     projectDirectoryWatcher.dispose()
@@ -2963,8 +3051,9 @@ app.on('before-quit', (event) => {
   const sdkShutdown = sdkRuntime.shutdown().catch(() => {
     console.error('SDK 宿主未确认退出，应用按关闭预算退出。')
   })
-  // 终端 shell 的子进程（构建、服务）必须在退出前收敛，否则会留在系统里继续运行。
-  const terminalShutdown = terminals.shutdown()
+  // 终端不再随应用退出而终止：终端由独立守护进程持有，应用退出后继续运行；这里只断开连接，
+  // 下次启动按同一端点接回。用户要结束终端时用「关闭全部终端」或关闭对应标签。
+  terminals.shutdown()
   // 文件监听没有待落盘的数据，先拆掉，避免关闭链期间继续产生事件。
   projectDirectoryWatcher.dispose()
   void (async () => {
@@ -2972,7 +3061,6 @@ app.on('before-quit', (event) => {
     await Promise.race([windowState.flush(), wait(WINDOW_STATE_FLUSH_MS)])
     // 认证辅助进程没有自己的业务状态，只按关闭链终止。
     await Promise.race([authManager.stop(), wait(QUIT_DEADLINE_MS)])
-    await Promise.race([terminalShutdown, wait(QUIT_DEADLINE_MS)])
     await Promise.race([sdkShutdown, wait(QUIT_DEADLINE_MS)])
     app.exit(0)
   })()

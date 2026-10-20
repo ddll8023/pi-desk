@@ -1,26 +1,37 @@
 /**
- * 终端状态：按项目分组的终端清单、标题与错误提示。
+ * 终端状态：按项目分组的终端清单、标题、快照与错误提示。
  *
- * 终端进程只在主进程，这里只保存展示副本：清单在项目内分组，切换项目就换一组，与项目/会话的
- * 语义一致；标签顺序与活动标签由工作区标签状态负责（见 workspace-tabs），关闭终端只关闭那一个终端，
- * 不影响其他项目仍在运行的终端。
+ * 终端进程由独立守护进程持有，应用退出后继续运行；这里只保存展示副本：清单在项目内分组，切换项目
+ * 就换一组，与项目/会话的语义一致；标签顺序与活动标签由工作区标签状态负责（见 workspace-tabs），
+ * 关闭终端只关闭那一个终端，不影响其他项目仍在运行的终端。
  *
- * 存活终端在窗口内跨项目保持挂载，输出始终交给对应 xterm，写完后再回报消费量。
- * 新建与清单初始化期间、视图尚未挂载的短暂窗口先缓冲再回放，不按当前项目丢弃输出。
- * 终端关闭或项目移除时释放本地记录，设置页与前台项目切换不改变终端生命周期。
+ * 重新挂载时先取画面快照再接实时输出：快照带 `seq`（该终端累计已下发字符数），实时数据带 `seqEnd`，
+ * 因此快照已覆盖的实时段可以直接丢弃，既不会重复也不会丢段。视图挂载前的输出仍然先缓冲再回放，
+ * 回放时同样按 `seq` 过滤。
  *
- * 标题分两类：默认标题来自主进程（shell 名），终端程序通过 OSC 标题上报时在用户未重命名前覆盖它；
- * 用户重命名后不再被覆盖。标题只留在页面内，不写回主进程。
+ * 标题分两类：默认标题来自守护进程（shell 名），终端程序通过 OSC 标题上报时在用户未重命名前覆盖它；
+ * 用户重命名后不再被覆盖。标题只留在页面内，不写回守护进程。
  */
 import { defineStore } from 'pinia'
 import { computed, ref, watch } from 'vue'
 import type { WatchStopHandle } from 'vue'
-import type { TerminalDataEvent, TerminalExitEvent, TerminalSessionInfo } from '../../../shared/terminal-api'
+import type {
+  TerminalDaemonStatus,
+  TerminalDataEvent,
+  TerminalExitEvent,
+  TerminalSessionInfo,
+  TerminalSessionSnapshot
+} from '../../../shared/terminal-api'
 import {
   acknowledgeTerminalData,
+  closeAllTerminals as closeAllTerminalsBridge,
   closeTerminal as closeTerminalBridge,
   createTerminal as createTerminalBridge,
+  fetchTerminalSnapshots,
+  getTerminalDaemonStatus,
   listTerminals,
+  stopStaleTerminalDaemon as stopStaleTerminalDaemonBridge,
+  subscribeTerminalDaemonStatus,
   subscribeTerminalEvents,
   writeTerminal
 } from '../services/terminal'
@@ -48,8 +59,12 @@ export const useTerminalStore = defineStore('terminal', () => {
   const creating = ref(false)
   /** 已挂载的终端视图；后台项目的存活终端也保持接收输出。 */
   const writers = new Map<string, TerminalWriter>()
+  /** 每个终端的当前画面快照；视图挂载时先写它，再回放之后的实时输出。 */
+  const snapshots = ref<Record<string, TerminalSessionSnapshot>>({})
+  /** 守护进程状态；设置页据此展示常驻会话与旧版本守护进程提示。 */
+  const daemonStatus = ref<TerminalDaemonStatus | null>(null)
   /** 当前项目里尚未挂载视图的终端输出：终端建立到视图挂载之间不能丢掉提示符。 */
-  const pendingOutput = new Map<string, string[]>()
+  const pendingOutput = new Map<string, TerminalDataEvent[]>()
   const pendingOutputChars = new Map<string, number>()
   /**
    * 最近一次把文本插入终端的信号：终端视图据此把焦点交给该终端。
@@ -58,6 +73,7 @@ export const useTerminalStore = defineStore('terminal', () => {
   const insertFocus = ref<{ readonly id: string; readonly seq: number } | null>(null)
   let insertFocusSeq = 0
   let disposeEvents: (() => void) | null = null
+  let disposeDaemonStatus: (() => void) | null = null
   let stopProjectWatch: WatchStopHandle | null = null
   let mutationVersion = 0
   const loadVersions = new Map<string, number>()
@@ -68,14 +84,31 @@ export const useTerminalStore = defineStore('terminal', () => {
 
   /**
    * 先订阅输出与退出，再接回全部存活终端；项目切换只改变可见性，不重新建立终端。
-   * 项目移除只清对应记录，主进程负责终止它的进程树。
+   * 项目移除只清对应记录，守护进程负责终止它的进程树。
+   * 清单之后取一次快照：快照比实时数据更权威，页面重挂载后靠它还原滚动历史。
    */
   function initialize(): void {
     if (disposeEvents === null) {
       disposeEvents = subscribeTerminalEvents({ onData: dispatchData, onExit: applyExit })
     }
+    if (disposeDaemonStatus === null) {
+      disposeDaemonStatus = subscribeTerminalDaemonStatus((status) => {
+        const wasConnected = daemonStatus.value?.connected === true
+        daemonStatus.value = status
+        // 守护进程重新连上（崩溃重启、应用重启）：清单与快照都可能变了，重新拉一次再接回。
+        if (status.connected && !wasConnected) {
+          void (async () => {
+            await ensureLoaded(null)
+            await refreshSnapshots()
+          })()
+        }
+      })
+    }
     if (stopProjectWatch !== null) return
-    void ensureLoaded(null)
+    void (async () => {
+      await ensureLoaded(null)
+      await refreshSnapshots()
+    })()
     stopProjectWatch = watch(() => projectStore.projects.map(project => project.path), paths => {
       if (projectStore.view.phase !== 'ready') return
       const alive = new Set(paths)
@@ -87,10 +120,12 @@ export const useTerminalStore = defineStore('terminal', () => {
     }, { immediate: true })
   }
 
-  /** 页面卸载时释放事件订阅；终端本身留在主进程，重新挂载后再列一次即可接回。 */
+  /** 页面卸载时释放事件订阅；终端本身留在守护进程，重新挂载后再列一次并取快照即可接回。 */
   function dispose(): void {
     disposeEvents?.()
     disposeEvents = null
+    disposeDaemonStatus?.()
+    disposeDaemonStatus = null
     stopProjectWatch?.()
     stopProjectWatch = null
     writers.clear()
@@ -133,7 +168,7 @@ export const useTerminalStore = defineStore('terminal', () => {
     }
   }
 
-  /** 清理已不存在的终端留下的本地状态：标题、重命名标记与待回放输出。 */
+  /** 清理已不存在的终端留下的本地状态：标题、重命名标记、快照与待回放输出。 */
   function pruneLocalState(): void {
     const alive = new Set(sessions.value.map((session) => session.id))
     const nextTitles: Record<string, string> = {}
@@ -141,6 +176,11 @@ export const useTerminalStore = defineStore('terminal', () => {
       if (alive.has(id)) nextTitles[id] = title
     }
     titles.value = nextTitles
+    const nextSnapshots: Record<string, TerminalSessionSnapshot> = {}
+    for (const [id, snapshot] of Object.entries(snapshots.value)) {
+      if (alive.has(id)) nextSnapshots[id] = snapshot
+    }
+    snapshots.value = nextSnapshots
     for (const id of [...renamed]) {
       if (!alive.has(id)) renamed.delete(id)
     }
@@ -221,16 +261,21 @@ export const useTerminalStore = defineStore('terminal', () => {
     titles.value = { ...titles.value, [id]: trimmed }
   }
 
-  /** 登记已挂载的终端视图；同一终端重复挂载时以最后一次为准，并把挂载前的输出补给它。 */
+  /**
+   * 登记已挂载的终端视图；同一终端重复挂载时以最后一次为准，并把挂载前的输出补给它。
+   * 已经被快照覆盖的段不再回放，否则接回时会把同一段输出写两遍。
+   */
   function registerWriter(id: string, writer: TerminalWriter): void {
     writers.set(id, writer)
     const buffered = pendingOutput.get(id)
     if (buffered === undefined) return
     pendingOutput.delete(id)
     pendingOutputChars.delete(id)
-    for (const chunk of buffered) {
-      // 这些数据在主进程侧已经确认过，回放时不再重复确认。
-      writer({ id, chunk, chars: chunk.length }, () => {})
+    const snapshot = snapshots.value[id]
+    for (const event of buffered) {
+      if (snapshot !== undefined && event.seqEnd <= snapshot.seq) continue
+      // 这些数据在守护进程侧已经确认过，回放时不再重复确认。
+      writer(event, () => {})
     }
   }
 
@@ -240,9 +285,14 @@ export const useTerminalStore = defineStore('terminal', () => {
 
   /**
    * 输出按终端身份分发，不按前台项目过滤；已存在或正在建立的终端在挂载前先留住输出。
-   * 暂存数据立即确认，避免视图建立期间触发主进程背压；回放时不重复确认。
+   * 快照已覆盖的段直接确认并丢弃：它已经在画面里，再写一遍会重复。
    */
   function dispatchData(event: TerminalDataEvent): void {
+    const snapshot = snapshots.value[event.id]
+    if (snapshot !== undefined && event.seqEnd <= snapshot.seq) {
+      acknowledgeTerminalData(event.id, event.chars)
+      return
+    }
     const writer = writers.get(event.id)
     if (writer !== undefined) {
       writer(event, () => acknowledgeTerminalData(event.id, event.chars))
@@ -255,14 +305,14 @@ export const useTerminalStore = defineStore('terminal', () => {
 
   /** 暂存挂载前的输出；超出上限时丢弃最早的块，只为短暂窗口服务。 */
   function bufferOutput(event: TerminalDataEvent): void {
-    const chunks = pendingOutput.get(event.id) ?? []
-    chunks.push(event.chunk)
+    const events = pendingOutput.get(event.id) ?? []
+    events.push(event)
     let total = (pendingOutputChars.get(event.id) ?? 0) + event.chars
-    while (total > MAX_PENDING_OUTPUT_CHARS && chunks.length > 1) {
-      const dropped = chunks.shift()
-      if (dropped !== undefined) total -= dropped.length
+    while (total > MAX_PENDING_OUTPUT_CHARS && events.length > 1) {
+      const dropped = events.shift()
+      if (dropped !== undefined) total -= dropped.chars
     }
-    pendingOutput.set(event.id, chunks)
+    pendingOutput.set(event.id, events)
     pendingOutputChars.set(event.id, total)
   }
 
@@ -295,6 +345,57 @@ export const useTerminalStore = defineStore('terminal', () => {
     insertFocus.value = { id, seq: insertFocusSeq }
   }
 
+  /** 取一次画面快照并整体替换；失败只提示，保留已有快照。 */
+  async function refreshSnapshots(): Promise<void> {
+    const result = await fetchTerminalSnapshots()
+    if (!result.ok) {
+      error.value = result.error.message
+      return
+    }
+    const next: Record<string, TerminalSessionSnapshot> = {}
+    for (const snapshot of result.data.snapshots) next[snapshot.id] = snapshot
+    snapshots.value = next
+  }
+
+  /** 取某个终端的快照；视图挂载时先写它，再回放之后的实时输出。 */
+  function takeSnapshot(id: string): TerminalSessionSnapshot | null {
+    return snapshots.value[id] ?? null
+  }
+
+  /** 关闭全部终端（含其他项目）；成功后清空本地副本，由调用方决定标签去向。 */
+  async function closeAllTerminals(): Promise<void> {
+    mutationVersion += 1
+    const result = await closeAllTerminalsBridge()
+    mutationVersion += 1
+    if (!result.ok) {
+      error.value = result.error.message
+      return
+    }
+    sessions.value = []
+    snapshots.value = {}
+    pruneLocalState()
+  }
+
+  /** 读取守护进程状态；失败只记录原因，不清空已有状态。 */
+  async function refreshDaemonStatus(): Promise<void> {
+    const result = await getTerminalDaemonStatus()
+    if (!result.ok) {
+      error.value = result.error.message
+      return
+    }
+    daemonStatus.value = result.data
+  }
+
+  /** 结束旧版本守护进程；成功后刷新状态，让提示消失。 */
+  async function stopStaleDaemon(): Promise<void> {
+    const result = await stopStaleTerminalDaemonBridge()
+    if (!result.ok) {
+      error.value = result.error.message
+      return
+    }
+    await refreshDaemonStatus()
+  }
+
   function clearError(): void {
     error.value = null
   }
@@ -305,16 +406,23 @@ export const useTerminalStore = defineStore('terminal', () => {
     error,
     creating,
     insertFocus,
+    snapshots,
+    daemonStatus,
     initialize,
     dispose,
     createTerminal,
     closeTerminal,
+    closeAllTerminals,
     renameTerminal,
     applyTerminalTitle,
     registerWriter,
     unregisterWriter,
     reportError,
     insertText,
+    refreshSnapshots,
+    takeSnapshot,
+    refreshDaemonStatus,
+    stopStaleDaemon,
     clearError
   }
 })

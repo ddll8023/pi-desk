@@ -1,21 +1,28 @@
 /**
  * 定义内置终端（PTY）的固定通道、载荷类型与跨进程校验。
  *
- * 通道分工：创建、写入、改尺寸、关闭与清单读取走 invoke 并只回受限结果；终端输出与退出走单向事件；
- * 数据确认沿用运行时投影的做法，用 invoke 只回报已消费的字符数、不回传结果。
+ * 通道分工：创建、写入、改尺寸、关闭、清单读取、快照读取、全部关闭与守护进程状态走 invoke 并只回受限结果；
+ * 终端输出、退出与守护进程连接状态走单向事件；数据确认沿用运行时投影的做法，用 invoke 只回报已消费的字符数、
+ * 不回传结果。
  *
  * 边界：页面只能给出已登记项目的路径与终端标识，shell、环境变量与工作目录都由主进程决定；
- * 终端进程与其缓冲只存在于主进程，页面卸载、标签切换与项目切换都不结束终端。
+ * 终端进程与其缓冲由独立守护进程持有，应用退出后继续运行，页面卸载、标签切换、项目切换与应用重启
+ * 都不结束终端。重新接回时先取快照（滚动历史与模式恢复序列），再接实时输出。
  * 字符数一律按 UTF-16 码元（JS 字符串长度）计，下发与确认必须同一口径。
  */
 export const TERMINAL_CREATE_CHANNEL = 'desktop:terminal-create'
 export const TERMINAL_WRITE_CHANNEL = 'desktop:terminal-write'
 export const TERMINAL_RESIZE_CHANNEL = 'desktop:terminal-resize'
 export const TERMINAL_CLOSE_CHANNEL = 'desktop:terminal-close'
+export const TERMINAL_CLOSE_ALL_CHANNEL = 'desktop:terminal-close-all'
 export const TERMINAL_LIST_CHANNEL = 'desktop:terminal-list'
+export const TERMINAL_SNAPSHOTS_CHANNEL = 'desktop:terminal-snapshots'
 export const TERMINAL_ACK_CHANNEL = 'desktop:terminal-ack'
+export const TERMINAL_DAEMON_STATUS_CHANNEL = 'desktop:terminal-daemon-status'
+export const TERMINAL_DAEMON_STOP_STALE_CHANNEL = 'desktop:terminal-daemon-stop-stale'
 export const TERMINAL_DATA_EVENT = 'desktop:terminal-data'
 export const TERMINAL_EXIT_EVENT = 'desktop:terminal-exit'
+export const TERMINAL_DAEMON_STATUS_EVENT = 'desktop:terminal-daemon-status-event'
 
 /** 终端标识长度上限；只拒绝明显异常的值，真实存在性由主进程核对。 */
 export const TERMINAL_ID_MAX_CHARS = 128
@@ -35,6 +42,20 @@ export const TERMINAL_DATA_MAX_CHARS = 256 * 1024
 
 /** 终端状态：`exited` 的终端记录保留到页面显式关闭，以便标签如实展示退出码。 */
 export type TerminalStatus = 'running' | 'exited'
+
+/**
+ * 终端快照：重新接回时用来还原画面。`ansi` 是 xterm 序列化结果（含滚动历史与模式恢复序列），
+ * `seq` 是该终端已下发字符数的累计值——快照覆盖到这一刻为止的全部输出，页面据此丢弃重复的实时数据。
+ */
+export interface TerminalSessionSnapshot {
+  readonly id: string
+  readonly ansi: string
+  readonly cols: number
+  readonly rows: number
+  readonly status: TerminalStatus
+  readonly exitCode: number | null
+  readonly seq: number
+}
 
 export interface TerminalSessionInfo {
   readonly id: string
@@ -91,6 +112,8 @@ export interface TerminalDataEvent {
   readonly chunk: string
   /** 本次下发的字符数；页面原样回报，主进程据此释放背压额度。 */
   readonly chars: number
+  /** 该终端累计已下发的字符数（含本段）；与快照的 `seq` 比较可判断这段是否已被快照覆盖。 */
+  readonly seqEnd: number
 }
 
 export interface TerminalExitEvent {
@@ -110,6 +133,8 @@ export type TerminalErrorCode =
   | 'TERMINAL_NOT_FOUND'
   /** 同时运行的终端数达到上限；页面提示先关闭一个。 */
   | 'TERMINAL_LIMIT_REACHED'
+  /** 终端守护进程不可用（未安装、启动失败或协议版本不符）；终端功能整体不可用。 */
+  | 'TERMINAL_DAEMON_UNAVAILABLE'
 
 export interface TerminalError {
   readonly code: TerminalErrorCode
@@ -129,6 +154,29 @@ export type TerminalCommandResult =
   | { readonly ok: true }
   | { readonly ok: false; readonly error: TerminalError }
 
+export type TerminalSnapshotsResult =
+  | { readonly ok: true; readonly data: { readonly snapshots: readonly TerminalSessionSnapshot[] } }
+  | { readonly ok: false; readonly error: TerminalError }
+
+/**
+ * 守护进程状态：`stale` 表示存在一个协议版本不符的旧守护进程，它持有的终端当前版本接不回来。
+ * 结束它需要用户显式操作——静默杀掉会中断其中仍在运行的命令。
+ */
+export interface TerminalDaemonStatus {
+  readonly connected: boolean
+  readonly protocolVersion: number | null
+  readonly pid: number | null
+  readonly startedAt: number | null
+  readonly sessionCount: number
+  readonly runningCount: number
+  readonly restoredCount: number
+  readonly stale: { readonly pid: number; readonly protocolVersion: number } | null
+}
+
+export type TerminalDaemonStatusResult =
+  | { readonly ok: true; readonly data: TerminalDaemonStatus }
+  | { readonly ok: false; readonly error: TerminalError }
+
 export interface TerminalApi {
   /** 在已添加的项目内新建终端；shell、环境变量与工作目录都由主进程决定。 */
   readonly createTerminal: (request: TerminalCreateRequest) => Promise<TerminalSessionResult>
@@ -142,6 +190,16 @@ export interface TerminalApi {
    * 读取终端清单。页面应先订阅数据与退出事件再列出终端，避免重挂载期间的下发无人接收。
    */
   readonly listTerminals: (request: TerminalListRequest) => Promise<TerminalSessionsResult>
+  /** 读取全部终端的当前画面快照；页面重挂载或守护进程重连后用它还原滚动历史。 */
+  readonly fetchTerminalSnapshots: () => Promise<TerminalSnapshotsResult>
+  /** 关闭全部终端（含其他项目）；用于清理常驻会话。 */
+  readonly closeAllTerminals: () => Promise<TerminalCommandResult>
+  /** 读取守护进程状态；不可用时也回成功结果，用 `connected` 表达。 */
+  readonly getTerminalDaemonStatus: () => Promise<TerminalDaemonStatusResult>
+  /** 结束协议版本不符的旧守护进程及其全部终端；只在用户显式操作时调用。 */
+  readonly stopStaleTerminalDaemon: () => Promise<TerminalCommandResult>
+  /** 订阅守护进程状态变化；返回释放函数，页面卸载时必须调用。 */
+  readonly onTerminalDaemonStatus: (listener: (status: TerminalDaemonStatus) => void) => () => void
   /** 回报已消费的字符数；只用于释放背压额度，失败不重试。 */
   readonly ackTerminalData: (request: TerminalAckRequest) => void
   /** 订阅终端输出；返回释放函数，页面卸载时必须调用。 */
@@ -161,7 +219,8 @@ const TERMINAL_ERROR_CODES: readonly string[] = [
   'BRIDGE_UNAVAILABLE',
   'BRIDGE_CALL_FAILED',
   'TERMINAL_NOT_FOUND',
-  'TERMINAL_LIMIT_REACHED'
+  'TERMINAL_LIMIT_REACHED',
+  'TERMINAL_DAEMON_UNAVAILABLE'
 ]
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -241,6 +300,61 @@ export function isTerminalDataEvent(value: unknown): value is TerminalDataEvent 
     && Number.isInteger(value.chars)
     && value.chars >= 0
     && value.chars === value.chunk.length
+    && typeof value.seqEnd === 'number'
+    && Number.isInteger(value.seqEnd)
+    && value.seqEnd >= value.chars
+}
+
+/** 快照校验：`seq` 必须与已下发量同口径，非整数或负数会让页面的重复丢弃判定失效。 */
+export function isTerminalSessionSnapshot(value: unknown): value is TerminalSessionSnapshot {
+  if (!isRecord(value)) return false
+  return isTerminalId(value.id)
+    && typeof value.ansi === 'string'
+    && isDimension(value.cols)
+    && isDimension(value.rows)
+    && typeof value.status === 'string'
+    && TERMINAL_STATUSES.includes(value.status)
+    && (value.exitCode === null || (typeof value.exitCode === 'number' && Number.isInteger(value.exitCode)))
+    && typeof value.seq === 'number'
+    && Number.isInteger(value.seq)
+    && value.seq >= 0
+}
+
+export function isTerminalSnapshotsResult(value: unknown): value is TerminalSnapshotsResult {
+  if (!isRecord(value)) return false
+  if (value.ok === true) {
+    const data = value.data
+    return isRecord(data)
+      && Array.isArray(data.snapshots)
+      && data.snapshots.every(isTerminalSessionSnapshot)
+  }
+  if (value.ok !== false) return false
+  return isTerminalError(value.error)
+}
+
+export function isTerminalDaemonStatus(value: unknown): value is TerminalDaemonStatus {
+  if (!isRecord(value)) return false
+  const stale = value.stale
+  const staleValid = stale === null || (isRecord(stale)
+    && typeof stale.pid === 'number'
+    && Number.isInteger(stale.pid)
+    && typeof stale.protocolVersion === 'number'
+    && Number.isInteger(stale.protocolVersion))
+  return typeof value.connected === 'boolean'
+    && (value.protocolVersion === null || typeof value.protocolVersion === 'number')
+    && (value.pid === null || (typeof value.pid === 'number' && Number.isInteger(value.pid)))
+    && (value.startedAt === null || typeof value.startedAt === 'number')
+    && typeof value.sessionCount === 'number'
+    && typeof value.runningCount === 'number'
+    && typeof value.restoredCount === 'number'
+    && staleValid
+}
+
+export function isTerminalDaemonStatusResult(value: unknown): value is TerminalDaemonStatusResult {
+  if (!isRecord(value)) return false
+  if (value.ok === true) return isTerminalDaemonStatus(value.data)
+  if (value.ok !== false) return false
+  return isTerminalError(value.error)
 }
 
 export function isTerminalExitEvent(value: unknown): value is TerminalExitEvent {

@@ -7,7 +7,7 @@
  */
 
 /** 设置页的分节标识；也是内容分发与深链跳转的唯一键。 */
-export type SettingsSectionId = 'appearance' | 'quick-send' | 'quick-commands' | 'model' | 'resources' | 'features' | 'version'
+export type SettingsSectionId = 'appearance' | 'quick-send' | 'quick-commands' | 'terminal' | 'model' | 'resources' | 'features' | 'version'
 
 /** 导航条目可用的图标名；每个名字对应 SettingsNavIcon 里的一段内联 Lucide 路径。 */
 export type SettingsIconName = 'palette' | 'zap' | 'terminal' | 'bot' | 'blocks' | 'toggle-left' | 'refresh-cw'
@@ -35,7 +35,8 @@ export const SETTINGS_NAV_GROUPS: readonly SettingsNavGroup[] = [
     items: [
       { id: 'appearance', label: '外观', icon: 'palette', keywords: ['主题', '浅色', '深色', 'theme', '预览', '源码', 'markdown', '默认视图'] },
       { id: 'quick-send', label: '快捷输入', icon: 'zap', keywords: ['短语', '发送', 'quick send'] },
-      { id: 'quick-commands', label: '快捷命令', icon: 'terminal', keywords: ['命令', '终端', '快捷命令', 'command'] }
+      { id: 'quick-commands', label: '快捷命令', icon: 'terminal', keywords: ['命令', '终端', '快捷命令', 'command'] },
+      { id: 'terminal', label: '终端', icon: 'terminal', keywords: ['终端', '常驻', '守护进程', 'terminal', 'daemon', '滚动历史'] }
     ]
   },
   {

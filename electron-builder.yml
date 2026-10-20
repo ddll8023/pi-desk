@@ -17,6 +17,8 @@ directories:
 # 受管入口（SDK 宿主、CLI 运行器、版本检查脚本、认证辅助进程）以裸模块名解析官方 SDK，
 # 因此生产依赖必须落在应用目录的 node_modules 下。node-pty 的 prebuilds/（含 conpty.dll）
 # 必须一并随包，任何过滤规则都不能排除它，否则终端无法启动。
+# 终端守护进程入口是 out/terminal-daemon/index.cjs：它由应用用 Electron 自带的 Node 拉起后脱离运行，
+# 同样从应用目录的 node_modules 解析 node-pty 与 @xterm/headless，两者都是生产依赖，不能移到 devDependencies。
 files:
   - package.json
   - out/**

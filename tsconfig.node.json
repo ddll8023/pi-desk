@@ -2,21 +2,27 @@
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "target": "ES2022",
-    "lib": ["ES2023"],
+    "lib": [
+      "ES2023"
+    ],
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "skipLibCheck": true,
-    "types": ["node"]
+    "types": [
+      "node"
+    ]
   },
   "include": [
     "electron.vite.config.ts",
     "vite.auth-helper.config.ts",
     "vite.sdk-host.config.ts",
+    "vite.terminal-daemon.config.ts",
     "src/main/**/*.ts",
     "src/preload/**/*.ts",
     "src/shared/**/*.ts",
     "src/auth-helper/**/*.ts",
     "src/sdk-host/**/*.ts",
+    "src/terminal-daemon/**/*.ts",
     "src/extensions/**/*.ts",
     "src/pi-cli/**/*.ts",
     "src/update-check/**/*.ts",

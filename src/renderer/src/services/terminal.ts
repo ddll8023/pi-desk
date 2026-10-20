@@ -8,11 +8,14 @@ import type { TerminalError } from '../../../shared/terminal-api'
 import type {
   TerminalCommandResult,
   TerminalCreateRequest,
+  TerminalDaemonStatus,
+  TerminalDaemonStatusResult,
   TerminalDataEvent,
   TerminalExitEvent,
   TerminalResizeRequest,
   TerminalSessionResult,
   TerminalSessionsResult,
+  TerminalSnapshotsResult,
   TerminalWriteRequest
 } from '../../../shared/terminal-api'
 
@@ -111,6 +114,75 @@ export function subscribeTerminalEvents(handlers: {
       stopData()
       stopExit()
     }
+  } catch {
+    return () => {}
+  }
+}
+
+/** 读取全部终端的画面快照；页面重挂载后用它还原滚动历史。 */
+export async function fetchTerminalSnapshots(): Promise<TerminalSnapshotsResult> {
+  const bridge = window.desktop
+  if (!bridge || typeof bridge.fetchTerminalSnapshots !== 'function') return unavailable()
+  try {
+    return await bridge.fetchTerminalSnapshots()
+  } catch (error) {
+    return callFailed(error, '读取终端快照')
+  }
+}
+
+/** 关闭全部终端（含其他项目）；用于用户显式清理常驻会话。 */
+export async function closeAllTerminals(): Promise<TerminalCommandResult> {
+  const bridge = window.desktop
+  if (!bridge || typeof bridge.closeAllTerminals !== 'function') return unavailable()
+  try {
+    return await bridge.closeAllTerminals()
+  } catch (error) {
+    return callFailed(error, '关闭全部终端')
+  }
+}
+
+/** 读取终端守护进程状态；桥接不可用时回一个「未连接」的结果，不把异常当断线。 */
+export async function getTerminalDaemonStatus(): Promise<TerminalDaemonStatusResult> {
+  const bridge = window.desktop
+  if (!bridge || typeof bridge.getTerminalDaemonStatus !== 'function') {
+    return {
+      ok: true,
+      data: {
+        connected: false,
+        protocolVersion: null,
+        pid: null,
+        startedAt: null,
+        sessionCount: 0,
+        runningCount: 0,
+        restoredCount: 0,
+        stale: null
+      }
+    }
+  }
+  try {
+    return await bridge.getTerminalDaemonStatus()
+  } catch (error) {
+    return callFailed(error, '读取终端守护进程状态')
+  }
+}
+
+/** 结束协议版本不符的旧守护进程；只在用户显式操作时调用。 */
+export async function stopStaleTerminalDaemon(): Promise<TerminalCommandResult> {
+  const bridge = window.desktop
+  if (!bridge || typeof bridge.stopStaleTerminalDaemon !== 'function') return unavailable()
+  try {
+    return await bridge.stopStaleTerminalDaemon()
+  } catch (error) {
+    return callFailed(error, '结束旧终端守护进程')
+  }
+}
+
+/** 订阅守护进程状态变化；桥接缺失时返回无操作的释放函数。 */
+export function subscribeTerminalDaemonStatus(listener: (status: TerminalDaemonStatus) => void): () => void {
+  const bridge = window.desktop
+  if (!bridge || typeof bridge.onTerminalDaemonStatus !== 'function') return () => {}
+  try {
+    return bridge.onTerminalDaemonStatus(listener)
   } catch {
     return () => {}
   }

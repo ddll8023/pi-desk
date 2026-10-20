@@ -5,6 +5,8 @@
   菜单由标签栏的「命令」按钮或终端内右键按需打开，锚点就是触发元素，定位、翻转与收边都交给共用的锚定浮层；
   样式复用侧栏菜单的类。每条命令一行：主体是运行入口，右侧是编辑与删除两个小动作，避免把菜单做成两级。
   菜单本身不写配置也不碰终端：运行、编辑、删除、添加、管理都上抛给调用方，由它决定落到哪里。
+  终端里右键打开时额外提供「关闭全部终端」：终端由守护进程常驻，需要一个明确的清理入口；
+  该入口默认不出现在标签栏的菜单里，由调用方用 `showCloseAll` 控制。
 -->
 <script setup lang="ts">
 import { computed, nextTick } from 'vue'
@@ -19,6 +21,8 @@ const props = defineProps<{
   readonly projectPath: string | null
   /** 当前项目名；取不到时项目组标题退回「当前项目」，路径仍作为提示。 */
   readonly projectName: string | null
+  /** 是否提供「关闭全部终端」：只在终端内右键菜单里为真。 */
+  readonly showCloseAll?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -27,6 +31,8 @@ const emit = defineEmits<{
   remove: [command: QuickCommand]
   add: [scope: QuickCommandScope]
   manage: []
+  /** 关闭全部终端（含其他项目）；只在 showCloseAll 时由菜单底部触发。 */
+  closeAll: []
   /** 菜单展开状态变化；触发按钮据此维护 aria-expanded（点击外部收起也会上报）。 */
   openChange: [open: boolean]
 }>()
@@ -140,6 +146,12 @@ function add(scope: QuickCommandScope): void {
 function manage(): void {
   closeMenu()
   emit('manage')
+}
+
+/** 关闭全部终端：与运行命令一样先收起菜单，再由调用方执行并提示结果。 */
+function closeAll(): void {
+  closeMenu()
+  emit('closeAll')
 }
 
 /** 命令的提示：命令文本可能多行，只取首行做 tooltip。 */
@@ -298,6 +310,19 @@ function onMenuKeydown(event: KeyboardEvent): void {
         <AppButton variant="unstyled" class="project-sidebar-menu-item" @click="manage">
           管理快捷命令…
         </AppButton>
+
+        <!-- 终端常驻后的清理入口：只在终端内右键菜单出现，不与快捷命令的添加入口混在一起。 -->
+        <template v-if="props.showCloseAll === true">
+          <div class="quick-command-menu-divider" role="separator"></div>
+          <AppButton
+            variant="unstyled"
+            class="project-sidebar-menu-item is-danger"
+            title="结束全部终端及其中的进程（含其他项目）"
+            @click="closeAll"
+          >
+            关闭全部终端
+          </AppButton>
+        </template>
       </div>
     </Transition>
   </Teleport>

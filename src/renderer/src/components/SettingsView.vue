@@ -11,6 +11,7 @@ import AppButton from './ui/AppButton.vue'
 import ModelSettingsView from './ModelSettingsView.vue'
 import QuickSendSection from './QuickSendSection.vue'
 import QuickCommandsSection from './QuickCommandsSection.vue'
+import TerminalSettingsSection from './TerminalSettingsSection.vue'
 import ResourceView from './ResourceView.vue'
 import GenuiSettingsSection from './GenuiSettingsSection.vue'
 import SettingsNavIcon from './SettingsNavIcon.vue'
@@ -125,6 +126,7 @@ const markdownViewOptions = [
 
         <QuickSendSection v-else-if="activeSection === 'quick-send'" />
         <QuickCommandsSection v-else-if="activeSection === 'quick-commands'" />
+        <TerminalSettingsSection v-else-if="activeSection === 'terminal'" />
         <ModelSettingsView v-else-if="activeSection === 'model'" />
         <ResourceView v-else-if="activeSection === 'resources'" />
         <GenuiSettingsSection v-else-if="activeSection === 'features'" />

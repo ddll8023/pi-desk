@@ -2,7 +2,9 @@
   单个终端标签的 xterm 视图：一个会话对应一个终端实例，非活动标签只隐藏不销毁。
 
   挂载时创建 xterm 并按容器测量尺寸后同步给主进程；容器尺寸变化（窗口、面板拖拽）经防抖重新测量。
-  输出由 store 分发到这里，xterm 写完这一段后回报已消费的字符数，主进程据此释放背压额度。
+  输出由 store 分发到这里，xterm 写完这一段后回报已消费的字符数，守护进程据此释放背压额度。
+  挂载后先写画面快照（含滚动历史与模式恢复序列）再接实时输出：应用重启后终端由守护进程接回，
+  历史不丢；快照比已写入的进度旧时不重复写。
   颜色取自主题令牌，暗色随 prefers-color-scheme 自动切换，与界面其余部分同一套令牌。
 
   渲染器：WebGL 只在标签可见期间持有，切走即释放 GPU 上下文、切回重建，隐藏标签不占上下文，
@@ -15,7 +17,8 @@
   落点：右侧面板的文件行拖到本面板时，把该文件的绝对路径写入本终端（不回车，只补一个空格），
   由用户自己接着补命令；绝对路径经主进程解析，这里只做载荷归属校验与转义。
   右键：在指针位置打开快捷命令菜单（xterm 自身不改右键默认行为，这里只追加菜单）；
-  菜单数据与动作都由页面传入与处理，本视图不读写配置。
+  菜单数据与动作都由页面传入与处理，本视图不读写配置。菜单底部还有「关闭全部终端」：
+  终端由守护进程常驻，需要给用户一个明确的一键清理入口。
 -->
 <script setup lang="ts">
 import { FitAddon } from '@xterm/addon-fit'
@@ -130,6 +133,8 @@ let resizeObserver: ResizeObserver | null = null
 let themeQuery: MediaQueryList | null = null
 let fitTimer: number | null = null
 let noticeTimer: number | null = null
+/** 已写入画面的快照进度（该终端累计已下发字符数）；小于等于它的快照不重复写。初始为 -1，保证 seq=0 的首次快照也会写入。 */
+let appliedSnapshotSeq = -1
 
 onMounted(() => {
   mountTerminal()
@@ -164,6 +169,16 @@ watch(() => props.active, (active) => {
 watch(() => terminalStore.insertFocus, (focus) => {
   if (!props.active || focus === null || focus.id !== props.session.id) return
   term?.focus()
+})
+
+/**
+ * 快照更新（守护进程重连、页面重新拉快照）时重画本终端：先清屏再写快照，
+ * 因为新快照是权威状态，旧画面里可能有已被覆盖的内容。
+ */
+watch(() => terminalStore.snapshots[props.session.id], (snapshot) => {
+  if (snapshot === undefined || snapshot.seq <= appliedSnapshotSeq) return
+  applySnapshot()
+  refreshTerminal()
 })
 
 function mountTerminal(): void {
@@ -202,12 +217,16 @@ function mountTerminal(): void {
     return false
   })
 
-  // 输出交给本视图，写完这一段再回报消费量，主进程据此继续下发。
+  // 输出交给本视图，写完这一段再回报消费量，守护进程据此继续下发。
+  // 先按容器定好尺寸再写快照：快照是按守护进程那边的行列序列化的，尺寸差太多会被重新换行；
+  // 写快照后登记视图，登记时会回放挂载前缓冲的实时段，顺序必须与守护进程一致。
+  term = terminal
+  fitNow()
+  applySnapshot()
   terminalStore.registerWriter(props.session.id, (event, consumed) => {
     terminal.write(event.chunk, consumed)
   })
 
-  term = terminal
   // 渲染器要在 term 赋值之后才挂：attachWebgl 通过 term 读写渲染器。
   if (props.active) attachWebgl()
   // 捕获阶段拦粘贴：多行粘贴要先确认，不能让 xterm 自己先把它写进终端。
@@ -222,6 +241,27 @@ function mountTerminal(): void {
   // 字体可能还没就绪，就绪后重新测一次，避免用回退字体的度量算出偏小的尺寸。
   void document.fonts.ready.then(() => scheduleFit())
   if (props.active) terminal.focus()
+}
+
+/**
+ * 写一次画面快照：先清屏再写序列化内容，避免旧内容与新快照叠加。
+ * 快照进度不比已写入的更新时直接返回，重复写会把同一段历史画两遍。
+ */
+function applySnapshot(): void {
+  const terminal = term
+  const snapshot = terminalStore.takeSnapshot(props.session.id)
+  if (terminal === null || snapshot === null) return
+  if (snapshot.seq <= appliedSnapshotSeq) return
+  appliedSnapshotSeq = snapshot.seq
+  terminal.reset()
+  if (snapshot.ansi !== '') terminal.write(snapshot.ansi)
+}
+
+/** 上下文菜单里的「关闭全部终端」：先收起菜单，再把结果告诉用户。 */
+async function closeAllTerminals(): Promise<void> {
+  commandMenu.value?.close()
+  await terminalStore.closeAllTerminals()
+  showNotice('已关闭全部终端。')
 }
 
 function unmountTerminal(): void {
@@ -495,10 +535,12 @@ function readVariable(styles: CSSStyleDeclaration, name: string): string {
     :commands="props.quickCommands"
     :project-path="props.projectPath"
     :project-name="projectName"
+    show-close-all
     @run="emit('runCommand', $event)"
     @edit="emit('editCommand', $event)"
     @remove="emit('removeCommand', $event)"
     @add="emit('addCommand', $event)"
     @manage="emit('manageCommands')"
+    @close-all="closeAllTerminals"
   />
 </template>
