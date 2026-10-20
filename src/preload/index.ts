@@ -176,6 +176,7 @@ import {
   TERMINAL_CREATE_CHANNEL,
   TERMINAL_DAEMON_STATUS_CHANNEL,
   TERMINAL_DAEMON_STATUS_EVENT,
+  TERMINAL_DAEMON_STOP_CHANNEL,
   TERMINAL_DAEMON_STOP_STALE_CHANNEL,
   TERMINAL_DATA_EVENT,
   TERMINAL_EXIT_EVENT,
@@ -895,6 +896,12 @@ const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionAp
   /** 结束协议版本不符的旧守护进程；只在用户显式操作时调用。 */
   async stopStaleTerminalDaemon() {
     const response: unknown = await ipcRenderer.invoke(TERMINAL_DAEMON_STOP_STALE_CHANNEL)
+    return isTerminalCommandResult(response) ? response : invalidTerminalCommandResponse()
+  },
+
+  /** 停止守护进程（含全部终端）；用于释放被终端占用的文件。 */
+  async stopTerminalDaemon() {
+    const response: unknown = await ipcRenderer.invoke(TERMINAL_DAEMON_STOP_CHANNEL)
     return isTerminalCommandResult(response) ? response : invalidTerminalCommandResponse()
   },
 

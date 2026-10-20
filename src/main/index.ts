@@ -119,6 +119,7 @@ import {
   TERMINAL_CREATE_CHANNEL,
   TERMINAL_DAEMON_STATUS_CHANNEL,
   TERMINAL_DAEMON_STATUS_EVENT,
+  TERMINAL_DAEMON_STOP_CHANNEL,
   TERMINAL_DAEMON_STOP_STALE_CHANNEL,
   TERMINAL_DATA_EVENT,
   TERMINAL_EXIT_EVENT,
@@ -2772,6 +2773,19 @@ function registerTerminalHandlers(pageUrl: string): void {
         return terminalCommandFailure('INVALID_REQUEST', '结束旧终端守护进程不接受参数。')
       }
       return terminals.stopStaleDaemon()
+    }
+  )
+
+  handle(
+    TERMINAL_DAEMON_STOP_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<TerminalCommandResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return terminalCommandFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 0) {
+        return terminalCommandFailure('INVALID_REQUEST', '停止终端守护进程不接受参数。')
+      }
+      return terminals.stopDaemon()
     }
   )
 

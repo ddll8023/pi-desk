@@ -73,8 +73,6 @@ export interface TerminalDaemonClientOptions {
 }
 
 export class TerminalDaemonClient {
-  private readonly paths: TerminalDaemonPaths
-  private readonly entryPath: string
   private socket: Socket | null = null
   private buffer = ''
   private pending = new Map<string, {
@@ -88,11 +86,24 @@ export class TerminalDaemonClient {
   private lastSpawnError: string | null = null
   /** 已显式断开（应用收尾）：后续请求不再自动拉起守护进程。 */
   private disposed = false
+  /** 已解析的运行目录与端点；首次使用时才解析，见 `resolvePaths`。 */
+  private resolvedPaths: TerminalDaemonPaths | null = null
+  private readonly entryPath: string
 
   constructor(private readonly options: TerminalDaemonClientOptions) {
-    const runtimeDir = resolve(app.getPath('userData'), TERMINAL_DAEMON_DIR_NAME)
-    this.paths = resolveDaemonPaths(runtimeDir, TERMINAL_DAEMON_PROTOCOL_VERSION)
     this.entryPath = resolve(__dirname, '..', 'terminal-daemon', TERMINAL_DAEMON_ENTRY_FILE)
+  }
+
+  /**
+   * 运行目录首次使用时才解析：本类在模块顶层被构造，早于便携版把 userData 改到程序目录，
+   * 构造函数里就读 `app.getPath('userData')` 会拿到系统默认位置，便携版与开发态会共用同一端点。
+   */
+  private get paths(): TerminalDaemonPaths {
+    if (this.resolvedPaths === null) {
+      const runtimeDir = resolve(app.getPath('userData'), TERMINAL_DAEMON_DIR_NAME)
+      this.resolvedPaths = resolveDaemonPaths(runtimeDir, TERMINAL_DAEMON_PROTOCOL_VERSION)
+    }
+    return this.resolvedPaths
   }
 
   /** 是否已连接；断开后下一次请求会自动重连。 */
@@ -116,7 +127,7 @@ export class TerminalDaemonClient {
     return null
   }
 
-  /** 结束旧版本守护进程及其终端；只在用户显式操作时调用。 */
+  /** 结束协议版本不符的旧守护进程及其终端；只在用户显式操作时调用。 */
   stopStaleDaemon(): boolean {
     const stale = this.staleDaemon()
     if (stale === null) return true
@@ -141,6 +152,16 @@ export class TerminalDaemonClient {
   disconnect(): void {
     this.disposed = true
     this.teardown()
+  }
+
+  /** 停止守护进程并结束它的全部终端；用于释放被终端占用的文件。 */
+  async stopDaemon(): Promise<TerminalDaemonResult<null>> {
+    if (!this.connected) return { ok: true, data: null }
+    const closed = await this.request({ type: 'close-all' })
+    if (!closed.ok) return closed
+    const stopped = await this.request({ type: 'shutdown' })
+    this.teardown()
+    return stopped
   }
 
   /** 只在已连接时发送，不建立连接；用于 ACK 这类丢了也不影响正确性的请求。 */
@@ -335,8 +356,8 @@ export class TerminalDaemonClient {
       }
     }
     this.spawnTimes.push(now)
-    // 旧 token 与端点都属于上一个实例：先清掉，避免读到过期 token 而连不上新实例。
-    removeOwnedFile(this.paths.tokenFile)
+    // 不在这里删旧 token：它可能属于一个仍在运行的守护进程，删掉会让那个实例再也连不上。
+    // 新实例启动时会先写 token 再开始监听，而连接重试每次都重读 token，因此旧值不会被误用。
     try {
       const child = spawn(process.execPath, [this.entryPath, `--runtime-dir=${this.paths.runtimeDir}`], {
         detached: true,

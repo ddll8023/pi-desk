@@ -31,6 +31,7 @@ import {
   getTerminalDaemonStatus,
   listTerminals,
   stopStaleTerminalDaemon as stopStaleTerminalDaemonBridge,
+  stopTerminalDaemon as stopTerminalDaemonBridge,
   subscribeTerminalDaemonStatus,
   subscribeTerminalEvents,
   writeTerminal
@@ -396,6 +397,19 @@ export const useTerminalStore = defineStore('terminal', () => {
     await refreshDaemonStatus()
   }
 
+  /** 停止守护进程（含全部终端）；成功后清空本地副本，下次开终端会重新拉起。 */
+  async function stopDaemon(): Promise<void> {
+    const result = await stopTerminalDaemonBridge()
+    if (!result.ok) {
+      error.value = result.error.message
+      return
+    }
+    sessions.value = []
+    snapshots.value = {}
+    pruneLocalState()
+    await refreshDaemonStatus()
+  }
+
   function clearError(): void {
     error.value = null
   }
@@ -423,6 +437,7 @@ export const useTerminalStore = defineStore('terminal', () => {
     takeSnapshot,
     refreshDaemonStatus,
     stopStaleDaemon,
+    stopDaemon,
     clearError
   }
 })

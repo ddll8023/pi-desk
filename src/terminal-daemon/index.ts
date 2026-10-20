@@ -21,6 +21,7 @@ import type { TerminalDaemonReply } from './daemon-server'
 import {
   ensureDaemonDirectories,
   readPidFile,
+  readTokenFile,
   removeOwnedFile,
   resolveDaemonPaths,
   writePidFile,
@@ -35,11 +36,15 @@ const SCROLLBACK_LINES = 5000
 /** 元数据落盘防抖：尺寸拖动会连续触发，只在停下来后写一次。 */
 const PERSIST_DEBOUNCE_MS = 500
 
-/** 没有任何会话且没有客户端时的空闲退出时间；再连上会重新拉起一个新守护进程。 */
-const IDLE_EXIT_MS = 5 * 60 * 1000
+/**
+ * 没有任何会话且没有客户端时的空闲退出时间。
+ * 短一点是为了让「关掉应用后想覆盖解压或更新」不必等太久，也不必手动杀进程；
+ * 只要还有一个终端（含已退出但保留历史的），就不会命中这条退出。
+ */
+const IDLE_EXIT_MS = 30 * 1000
 
 /** 空闲检查间隔；只做一次时间比较，开销可以忽略。 */
-const IDLE_CHECK_INTERVAL_MS = 60 * 1000
+const IDLE_CHECK_INTERVAL_MS = 5 * 1000
 
 /** 日志文件上限；超过后裁掉前半段，避免长期运行把日志写爆。 */
 const LOG_MAX_BYTES = 512 * 1024
@@ -110,8 +115,15 @@ function schedulePersist(): void {
 const sessions = new TerminalSessionManager({
   scrollbackLines: SCROLLBACK_LINES,
   history,
-  sendData: (event) => server?.sendEvent({ event: 'data', ...event }) ?? false,
-  sendExit: (event) => server?.sendEvent({ event: 'exit', ...event }) ?? false,
+  // 事件帧的形状以协议为准，逐字段映射：直接展开 `event` 会带上 `chars` 这类协议没声明的字段，
+  // 对端校验不过就会把连接当成异常对端断开（终端因此只能建出来、拿不到任何输出）。
+  sendData: (event) => server?.sendEvent({
+    event: 'data',
+    id: event.id,
+    chunk: event.chunk,
+    seqEnd: event.seqEnd
+  }) ?? false,
+  sendExit: (event) => server?.sendEvent({ event: 'exit', id: event.id, exitCode: event.exitCode }) ?? false,
   onSessionsChanged: schedulePersist,
   onError: logError
 })
@@ -183,10 +195,11 @@ async function shutdown(exitCode: number): Promise<void> {
   } catch (error) {
     logError(error)
   }
-  // 只删自己写的记录：pid 文件可能已被新实例替换，按 pid 比对后再删。
+  // 只删自己写的记录：pid 与 token 都可能已被新实例替换，按内容比对后再删。
+  // 无条件删 token 会把新实例的握手凭据一起删掉，客户端随后只能靠重启守护进程才能连上。
   const record = readPidFile(paths.pidFile)
   if (record !== null && record.pid === process.pid) removeOwnedFile(paths.pidFile)
-  removeOwnedFile(paths.tokenFile)
+  if (readTokenFile(paths.tokenFile) === token) removeOwnedFile(paths.tokenFile)
   log('守护进程已退出。')
   process.exit(exitCode)
 }

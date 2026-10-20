@@ -20,6 +20,7 @@ export const TERMINAL_SNAPSHOTS_CHANNEL = 'desktop:terminal-snapshots'
 export const TERMINAL_ACK_CHANNEL = 'desktop:terminal-ack'
 export const TERMINAL_DAEMON_STATUS_CHANNEL = 'desktop:terminal-daemon-status'
 export const TERMINAL_DAEMON_STOP_STALE_CHANNEL = 'desktop:terminal-daemon-stop-stale'
+export const TERMINAL_DAEMON_STOP_CHANNEL = 'desktop:terminal-daemon-stop'
 export const TERMINAL_DATA_EVENT = 'desktop:terminal-data'
 export const TERMINAL_EXIT_EVENT = 'desktop:terminal-exit'
 export const TERMINAL_DAEMON_STATUS_EVENT = 'desktop:terminal-daemon-status-event'
@@ -198,6 +199,8 @@ export interface TerminalApi {
   readonly getTerminalDaemonStatus: () => Promise<TerminalDaemonStatusResult>
   /** 结束协议版本不符的旧守护进程及其全部终端；只在用户显式操作时调用。 */
   readonly stopStaleTerminalDaemon: () => Promise<TerminalCommandResult>
+  /** 停止当前守护进程（含全部终端）；用于释放被终端占用的文件，下次开终端会重新拉起。 */
+  readonly stopTerminalDaemon: () => Promise<TerminalCommandResult>
   /** 订阅守护进程状态变化；返回释放函数，页面卸载时必须调用。 */
   readonly onTerminalDaemonStatus: (listener: (status: TerminalDaemonStatus) => void) => () => void
   /** 回报已消费的字符数；只用于释放背压额度，失败不重试。 */

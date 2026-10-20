@@ -177,6 +177,17 @@ export async function stopStaleTerminalDaemon(): Promise<TerminalCommandResult> 
   }
 }
 
+/** 停止守护进程（含全部终端）；用于释放被终端占用的文件。 */
+export async function stopTerminalDaemon(): Promise<TerminalCommandResult> {
+  const bridge = window.desktop
+  if (!bridge || typeof bridge.stopTerminalDaemon !== 'function') return unavailable()
+  try {
+    return await bridge.stopTerminalDaemon()
+  } catch (error) {
+    return callFailed(error, '停止终端守护进程')
+  }
+}
+
 /** 订阅守护进程状态变化；桥接缺失时返回无操作的释放函数。 */
 export function subscribeTerminalDaemonStatus(listener: (status: TerminalDaemonStatus) => void): () => void {
   const bridge = window.desktop

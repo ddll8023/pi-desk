@@ -196,6 +196,16 @@ export class TerminalManager {
     return { ok: true }
   }
 
+  /**
+   * 停止守护进程（含全部终端）：用于覆盖解压或更新前释放文件占用。
+   * 下次打开终端会自动拉起新守护进程；已结束的终端会按历史恢复成「已退出」记录。
+   */
+  async stopDaemon(): Promise<TerminalCommandResult> {
+    const result = await this.client.stopDaemon()
+    if (!result.ok) return { ok: false, error: toTerminalError(result.error) }
+    return { ok: true }
+  }
+
   /** 应用退出：只断开连接，终端与守护进程继续运行。 */
   shutdown(): void {
     this.client.disconnect()
