@@ -143,7 +143,11 @@ export class TerminalManager {
         cols: request.cols,
         rows: request.rows,
         cwd: projectPath,
-        env: terminalEnvironment()
+        env: terminalEnvironment(),
+        // Windows 用 node-pty 随包的 conpty.dll（Windows Terminal 的实现）：系统 ConPTY 会吞掉应用请求
+        // 鼠标上报的 DECSET 1000/1002/1003/1006，xterm 因此不会上报鼠标，全屏 TUI（opencode、vim）的
+        // 点击与滚轮全部失效。包内实现会透传鼠标模式与 SGR 鼠标输入；其他平台没有这个选项。
+        ...(process.platform === 'win32' ? { useConptyDll: true } : {})
       })
     } catch (error) {
       return sessionFailure('INTERNAL_ERROR', spawnFailureMessage(error, shell.file))
