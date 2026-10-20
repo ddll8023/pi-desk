@@ -13,6 +13,8 @@ import type {
   TerminalDataEvent,
   TerminalExitEvent,
   TerminalResizeRequest,
+  TerminalSnapshotRequest,
+  TerminalRecoveryRequest,
   TerminalSessionResult,
   TerminalSessionsResult,
   TerminalSnapshotsResult,
@@ -92,10 +94,10 @@ export async function listTerminals(projectPath: string | null): Promise<Termina
 }
 
 /** 回报已消费的字符数；桥接缺失时静默跳过，主进程按在途上限自行收敛。 */
-export function acknowledgeTerminalData(id: string, chars: number): void {
+export function acknowledgeTerminalData(id: string, deliveryId: string, seqEnd: number): void {
   const bridge = window.desktop
   if (!bridge || typeof bridge.ackTerminalData !== 'function') return
-  bridge.ackTerminalData({ id, chars })
+  bridge.ackTerminalData({ id, deliveryId, seqEnd })
 }
 
 /** 订阅终端输出与退出；桥接缺失或订阅失败时返回无操作的释放函数。 */
@@ -119,15 +121,24 @@ export function subscribeTerminalEvents(handlers: {
   }
 }
 
-/** 读取全部终端的画面快照；页面重挂载后用它还原滚动历史。 */
-export async function fetchTerminalSnapshots(): Promise<TerminalSnapshotsResult> {
+/** 只读取一个终端的画面；页面解析完毕后另行确认恢复。 */
+export async function fetchTerminalSnapshots(request: TerminalSnapshotRequest): Promise<TerminalSnapshotsResult> {
   const bridge = window.desktop
   if (!bridge || typeof bridge.fetchTerminalSnapshots !== 'function') return unavailable()
   try {
-    return await bridge.fetchTerminalSnapshots()
+    return await bridge.fetchTerminalSnapshots({ id: request.id, deliveryId: request.deliveryId })
   } catch (error) {
     return callFailed(error, '读取终端快照')
   }
+}
+
+/** 恢复确认或解除投递不改变 PTY 生命周期；载荷在桥接入口重建为普通对象。 */
+export async function recoverTerminal(request: TerminalRecoveryRequest): Promise<TerminalCommandResult> {
+  const bridge = window.desktop
+  if (!bridge || typeof bridge.recoverTerminal !== 'function') return unavailable()
+  try {
+    return await bridge.recoverTerminal({ id: request.id, deliveryId: request.deliveryId, action: request.action })
+  } catch (error) { return callFailed(error, '恢复终端') }
 }
 
 /** 关闭全部终端（含其他项目）；用于用户显式清理常驻会话。 */

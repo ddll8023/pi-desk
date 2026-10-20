@@ -1,9 +1,8 @@
 /**
  * 定义内置终端（PTY）的固定通道、载荷类型与跨进程校验。
  *
- * 通道分工：创建、写入、改尺寸、关闭、清单读取、快照读取、全部关闭与守护进程状态走 invoke 并只回受限结果；
- * 终端输出、退出与守护进程连接状态走单向事件；数据确认沿用运行时投影的做法，用 invoke 只回报已消费的字符数、
- * 不回传结果。
+ * 页面逐终端取得有容量上限的画面，解析完成后确认恢复，随后接收实时输出。
+ * 数据确认带投递代际与累计进度；迟到或重复确认不会释放其他页面的额度。
  *
  * 边界：页面只能给出已登记项目的路径与终端标识，shell、环境变量与工作目录都由主进程决定；
  * 终端进程与其缓冲由独立守护进程持有，应用退出后继续运行，页面卸载、标签切换、项目切换与应用重启
@@ -17,6 +16,7 @@ export const TERMINAL_CLOSE_CHANNEL = 'desktop:terminal-close'
 export const TERMINAL_CLOSE_ALL_CHANNEL = 'desktop:terminal-close-all'
 export const TERMINAL_LIST_CHANNEL = 'desktop:terminal-list'
 export const TERMINAL_SNAPSHOTS_CHANNEL = 'desktop:terminal-snapshots'
+export const TERMINAL_RECOVERY_CHANNEL = 'desktop:terminal-recovery'
 export const TERMINAL_ACK_CHANNEL = 'desktop:terminal-ack'
 export const TERMINAL_DAEMON_STATUS_CHANNEL = 'desktop:terminal-daemon-status'
 export const TERMINAL_DAEMON_STOP_STALE_CHANNEL = 'desktop:terminal-daemon-stop-stale'
@@ -39,17 +39,20 @@ export const TERMINAL_DIMENSION_MIN = 2
 export const TERMINAL_DIMENSION_MAX = 1000
 
 /** 单个终端一次下发的字符上限；超出由主进程切片，页面无需感知。 */
-export const TERMINAL_DATA_MAX_CHARS = 256 * 1024
+export const TERMINAL_DATA_MAX_CHARS = 64 * 1024
+/** 单个恢复画面的字符容量；超出时由守护进程减少回滚部分或明确拒绝。 */
+export const TERMINAL_SNAPSHOT_MAX_CHARS = 8 * 1024 * 1024
 
 /** 终端状态：`exited` 的终端记录保留到页面显式关闭，以便标签如实展示退出码。 */
 export type TerminalStatus = 'running' | 'exited'
 
 /**
  * 终端快照：重新接回时用来还原画面。`ansi` 是 xterm 序列化结果（含滚动历史与模式恢复序列），
- * `seq` 是该终端已下发字符数的累计值——快照覆盖到这一刻为止的全部输出，页面据此丢弃重复的实时数据。
+ * `seq` 是画面覆盖的累计输出进度；`deliveryId` 标识本次恢复，旧视图的事件与确认不进入新视图。
  */
 export interface TerminalSessionSnapshot {
   readonly id: string
+  readonly deliveryId: string
   readonly ansi: string
   readonly cols: number
   readonly rows: number
@@ -102,18 +105,26 @@ export interface TerminalListRequest {
   readonly projectPath: string | null
 }
 
-/** 数据确认：只回报一个终端已消费的字符数；主进程按已下发的在途量收敛，不信任超出部分。 */
-export interface TerminalAckRequest {
+/** 逐终端恢复；调用方每次挂载生成新的投递代际。 */
+export interface TerminalSnapshotRequest {
   readonly id: string
-  readonly chars: number
+  readonly deliveryId: string
+}
+export interface TerminalRecoveryRequest extends TerminalSnapshotRequest {
+  readonly action: 'ready' | 'detach'
+}
+/** 累计确认只能前进，且必须属于当前投递代际。 */
+export interface TerminalAckRequest extends TerminalSnapshotRequest {
+  readonly seqEnd: number
 }
 
 export interface TerminalDataEvent {
   readonly id: string
+  readonly deliveryId: string
   readonly chunk: string
-  /** 本次下发的字符数；页面原样回报，主进程据此释放背压额度。 */
+  /** 本段字符数，用于判断累计输出进度是否连续。 */
   readonly chars: number
-  /** 该终端累计已下发的字符数（含本段）；与快照的 `seq` 比较可判断这段是否已被快照覆盖。 */
+  /** 该段覆盖到的累计输出进度；解析完成后按代际原样回报。 */
   readonly seqEnd: number
 }
 
@@ -156,7 +167,7 @@ export type TerminalCommandResult =
   | { readonly ok: false; readonly error: TerminalError }
 
 export type TerminalSnapshotsResult =
-  | { readonly ok: true; readonly data: { readonly snapshots: readonly TerminalSessionSnapshot[] } }
+  | { readonly ok: true; readonly data: { readonly snapshot: TerminalSessionSnapshot } }
   | { readonly ok: false; readonly error: TerminalError }
 
 /**
@@ -191,8 +202,9 @@ export interface TerminalApi {
    * 读取终端清单。页面应先订阅数据与退出事件再列出终端，避免重挂载期间的下发无人接收。
    */
   readonly listTerminals: (request: TerminalListRequest) => Promise<TerminalSessionsResult>
-  /** 读取全部终端的当前画面快照；页面重挂载或守护进程重连后用它还原滚动历史。 */
-  readonly fetchTerminalSnapshots: () => Promise<TerminalSnapshotsResult>
+  /** 读取一个终端的受限快照；解析完成后必须确认恢复，才能开启实时投递。 */
+  readonly fetchTerminalSnapshots: (request: TerminalSnapshotRequest) => Promise<TerminalSnapshotsResult>
+  readonly recoverTerminal: (request: TerminalRecoveryRequest) => Promise<TerminalCommandResult>
   /** 关闭全部终端（含其他项目）；用于清理常驻会话。 */
   readonly closeAllTerminals: () => Promise<TerminalCommandResult>
   /** 读取守护进程状态；不可用时也回成功结果，用 `connected` 表达。 */
@@ -203,7 +215,7 @@ export interface TerminalApi {
   readonly stopTerminalDaemon: () => Promise<TerminalCommandResult>
   /** 订阅守护进程状态变化；返回释放函数，页面卸载时必须调用。 */
   readonly onTerminalDaemonStatus: (listener: (status: TerminalDaemonStatus) => void) => () => void
-  /** 回报已消费的字符数；只用于释放背压额度，失败不重试。 */
+  /** 回报当前代际的累计已消费进度；重复确认无副作用。 */
   readonly ackTerminalData: (request: TerminalAckRequest) => void
   /** 订阅终端输出；返回释放函数，页面卸载时必须调用。 */
   readonly onTerminalData: (listener: (event: TerminalDataEvent) => void) => () => void
@@ -298,7 +310,9 @@ export function isTerminalCommandResult(value: unknown): value is TerminalComman
 export function isTerminalDataEvent(value: unknown): value is TerminalDataEvent {
   if (!isRecord(value)) return false
   return isTerminalId(value.id)
+    && isTerminalId(value.deliveryId)
     && typeof value.chunk === 'string'
+    && value.chunk.length <= TERMINAL_DATA_MAX_CHARS
     && typeof value.chars === 'number'
     && Number.isInteger(value.chars)
     && value.chars >= 0
@@ -312,7 +326,9 @@ export function isTerminalDataEvent(value: unknown): value is TerminalDataEvent 
 export function isTerminalSessionSnapshot(value: unknown): value is TerminalSessionSnapshot {
   if (!isRecord(value)) return false
   return isTerminalId(value.id)
+    && isTerminalId(value.deliveryId)
     && typeof value.ansi === 'string'
+    && value.ansi.length <= TERMINAL_SNAPSHOT_MAX_CHARS
     && isDimension(value.cols)
     && isDimension(value.rows)
     && typeof value.status === 'string'
@@ -327,9 +343,7 @@ export function isTerminalSnapshotsResult(value: unknown): value is TerminalSnap
   if (!isRecord(value)) return false
   if (value.ok === true) {
     const data = value.data
-    return isRecord(data)
-      && Array.isArray(data.snapshots)
-      && data.snapshots.every(isTerminalSessionSnapshot)
+    return isRecord(data) && isTerminalSessionSnapshot(data.snapshot)
   }
   if (value.ok !== false) return false
   return isTerminalError(value.error)
@@ -399,12 +413,16 @@ export function isTerminalListRequest(value: unknown): value is TerminalListRequ
   return value.projectPath === null || isTerminalProjectPath(value.projectPath)
 }
 
+export function isTerminalSnapshotRequest(value: unknown): value is TerminalSnapshotRequest {
+  return isRecord(value) && Object.keys(value).every((key) => key === 'id' || key === 'deliveryId')
+    && isTerminalId(value.id) && isTerminalId(value.deliveryId)
+}
+export function isTerminalRecoveryRequest(value: unknown): value is TerminalRecoveryRequest {
+  return isRecord(value) && Object.keys(value).every((key) => key === 'id' || key === 'deliveryId' || key === 'action')
+    && isTerminalId(value.id) && isTerminalId(value.deliveryId) && (value.action === 'ready' || value.action === 'detach')
+}
 export function isTerminalAckRequest(value: unknown): value is TerminalAckRequest {
-  if (!isRecord(value)) return false
-  if (Object.keys(value).some((key) => key !== 'id' && key !== 'chars')) return false
-  return isTerminalId(value.id)
-    && typeof value.chars === 'number'
-    && Number.isInteger(value.chars)
-    && value.chars >= 0
-    && value.chars <= TERMINAL_DATA_MAX_CHARS
+  return isRecord(value) && Object.keys(value).every((key) => key === 'id' || key === 'deliveryId' || key === 'seqEnd')
+    && isTerminalId(value.id) && isTerminalId(value.deliveryId)
+    && typeof value.seqEnd === 'number' && Number.isSafeInteger(value.seqEnd) && value.seqEnd >= 0
 }

@@ -49,8 +49,7 @@ async function closeAll(): Promise<void> {
   confirmOpen.value = false
   closing.value = true
   try {
-    await terminalStore.closeAllTerminals()
-    feedback.value = error.value === null ? '已关闭全部终端。' : null
+    feedback.value = await terminalStore.closeAllTerminals() ? '已关闭全部终端。' : null
   } finally {
     closing.value = false
   }
@@ -64,8 +63,7 @@ async function stopStaleDaemon(): Promise<void> {
   stopStale.value = false
   stoppingStale.value = true
   try {
-    await terminalStore.stopStaleDaemon()
-    feedback.value = error.value === null ? '已结束旧版本终端守护进程。' : null
+    feedback.value = await terminalStore.stopStaleDaemon() ? '已发送旧版本终端守护进程结束请求。' : null
   } finally {
     stoppingStale.value = false
   }
@@ -79,8 +77,7 @@ async function stopDaemon(): Promise<void> {
   stopOpen.value = false
   stopping.value = true
   try {
-    await terminalStore.stopDaemon()
-    feedback.value = error.value === null ? '已停止终端守护进程。' : null
+    feedback.value = await terminalStore.stopDaemon() ? '已发送停止请求，终端历史保留。' : null
   } finally {
     stopping.value = false
   }
@@ -92,7 +89,7 @@ async function stopDaemon(): Promise<void> {
     <header>
       <h1 class="text-xl font-semibold tracking-tight">终端</h1>
       <p class="mt-1 text-sm text-desk-muted">
-        终端由独立守护进程持有，关闭应用窗口不会结束终端与其中运行的命令；重新打开应用时会接回原来的终端与滚动历史。
+        终端由独立守护进程持有，关闭应用窗口不会结束终端与其中运行的命令；重新打开应用时会接回原来的终端与保留窗口内的滚动历史。
       </p>
     </header>
 
@@ -117,7 +114,7 @@ async function stopDaemon(): Promise<void> {
       </div>
 
       <p class="mt-3 text-xs text-desk-muted">
-        终端达到上限时按运行中的数量计算，已退出但保留历史的终端不占额度。关闭应用后终端继续运行；
+        终端资源上限约束运行中及正在保存画面的实例；已完成冷存储的历史记录不占模拟器额度。关闭应用后终端继续运行；
         结束终端请用下面的「关闭全部终端」，或直接关闭对应标签。
       </p>
     </section>
@@ -136,7 +133,7 @@ async function stopDaemon(): Promise<void> {
         </AppButton>
       </div>
       <p class="mt-3 text-xs text-desk-muted">
-        关掉应用不影响终端；最后一个终端关闭后约 30 秒，守护进程会自己退出并释放占用的文件。
+        关掉应用不影响终端；没有终端记录且没有应用连接时，守护进程闲置一段时间后自动退出。
       </p>
       <div class="settings-row">
         <span class="text-sm font-medium">守护进程</span>
@@ -145,7 +142,7 @@ async function stopDaemon(): Promise<void> {
         </AppButton>
       </div>
       <p class="mt-3 text-xs text-desk-muted">
-        覆盖解压新版本或更新前，先停止守护进程；它会一并结束全部终端，下次打开终端会重新拉起。
+        覆盖解压新版本或更新前，先停止守护进程；它会结束全部终端并保留历史，下次新建终端时重新拉起。
       </p>
       <p v-if="feedback !== null" class="mt-3 text-xs text-desk-muted" role="status">{{ feedback }}</p>
       <p v-if="error !== null" class="mt-3 text-xs text-desk-danger" role="alert">{{ error }}</p>
@@ -192,7 +189,7 @@ async function stopDaemon(): Promise<void> {
     <ConfirmDialog
       :open="stopOpen"
       title="停止守护进程"
-      description="将结束全部终端及其中的进程与构建任务，并退出守护进程。"
+      description="将结束全部终端及其中的进程与构建任务，保留历史并退出守护进程。"
       detail="覆盖解压新版本或更新前需要停止它；下次打开终端会重新拉起守护进程。"
       confirm-label="停止守护进程"
       @confirm="stopDaemon"

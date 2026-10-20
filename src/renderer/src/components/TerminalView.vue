@@ -3,8 +3,8 @@
 
   挂载时创建 xterm 并按容器测量尺寸后同步给主进程；容器尺寸变化（窗口、面板拖拽）经防抖重新测量。
   输出由 store 分发到这里，xterm 写完这一段后回报已消费的字符数，守护进程据此释放背压额度。
-  挂载后先写画面快照（含滚动历史与模式恢复序列）再接实时输出：应用重启后终端由守护进程接回，
-  历史不丢；快照比已写入的进度旧时不重复写。
+  挂载后逐终端取得受限画面，按画面尺寸解析完毕才确认实时投递；重连先排空旧写入，再恢复新代际。
+  终端协议查询由守护进程回答，页面不重复回复；退出视图可销毁，历史按保留窗口从冷存储恢复。
   颜色取自主题令牌，暗色随 prefers-color-scheme 自动切换，与界面其余部分同一套令牌。
 
   渲染器：WebGL 只在标签可见期间持有，切走即释放 GPU 上下文、切回重建，隐藏标签不占上下文，
@@ -133,8 +133,14 @@ let resizeObserver: ResizeObserver | null = null
 let themeQuery: MediaQueryList | null = null
 let fitTimer: number | null = null
 let noticeTimer: number | null = null
-/** 已写入画面的快照进度（该终端累计已下发字符数）；小于等于它的快照不重复写。初始为 -1，保证 seq=0 的首次快照也会写入。 */
-let appliedSnapshotSeq = -1
+let deliveryId: string | null = null
+let viewReady = false
+let recoveryVersion = 0
+let recoveryQueued = false
+let recoveryWork: Promise<void> | null = null
+/** 销毁时兑现写入屏障，避免已不存在的 xterm 回调永久挂住恢复任务。 */
+const writeWaiters = new Set<() => void>()
+const protocolHandlers: IDisposable[] = []
 
 onMounted(() => {
   mountTerminal()
@@ -163,23 +169,16 @@ watch(() => props.active, (active) => {
 })
 
 /**
- * 有文本插入本终端（拖入文件路径、菜单里的「插入到终端」、运行快捷命令）时把焦点收回来：
- * 触发这些动作的焦点原本在文件行、菜单或查找框上，不收回的话用户接着敲的命令会落到别处。
+ * 有文本插入本终端（拖入文件路径、菜单里的「插入到终端」）时把焦点收回来：
+ * 触发这些动作的焦点原本在文件行或菜单上，不收回的话用户接着敲的命令会落到别处。
  */
 watch(() => terminalStore.insertFocus, (focus) => {
   if (!props.active || focus === null || focus.id !== props.session.id) return
   term?.focus()
 })
 
-/**
- * 快照更新（守护进程重连、页面重新拉快照）时重画本终端：先清屏再写快照，
- * 因为新快照是权威状态，旧画面里可能有已被覆盖的内容。
- */
-watch(() => terminalStore.snapshots[props.session.id], (snapshot) => {
-  if (snapshot === undefined || snapshot.seq <= appliedSnapshotSeq) return
-  applySnapshot()
-  refreshTerminal()
-})
+/** 重连只安排一次恢复任务；正在恢复时的新通知合并到同一个串行循环。 */
+watch(() => terminalStore.recoveryEpoch, () => requestRecovery())
 
 function mountTerminal(): void {
   const host = container.value
@@ -191,6 +190,7 @@ function mountTerminal(): void {
     lineHeight: 1.25,
     cursorBlink: true,
     scrollback: SCROLLBACK_LINES,
+    allowProposedApi: true,
     theme: readTheme(host)
   })
   terminal.open(host)
@@ -201,6 +201,7 @@ function mountTerminal(): void {
     void copyLink(uri)
   }))
 
+  suppressProtocolReplies(terminal)
   stopInput = terminal.onData((data) => {
     void sendInput(data)
   })
@@ -217,15 +218,8 @@ function mountTerminal(): void {
     return false
   })
 
-  // 输出交给本视图，写完这一段再回报消费量，守护进程据此继续下发。
-  // 先按容器定好尺寸再写快照：快照是按守护进程那边的行列序列化的，尺寸差太多会被重新换行；
-  // 写快照后登记视图，登记时会回放挂载前缓冲的实时段，顺序必须与守护进程一致。
   term = terminal
-  fitNow()
-  applySnapshot()
-  terminalStore.registerWriter(props.session.id, (event, consumed) => {
-    terminal.write(event.chunk, consumed)
-  })
+  requestRecovery()
 
   // 渲染器要在 term 赋值之后才挂：attachWebgl 通过 term 读写渲染器。
   if (props.active) attachWebgl()
@@ -243,28 +237,95 @@ function mountTerminal(): void {
   if (props.active) terminal.focus()
 }
 
-/**
- * 写一次画面快照：先清屏再写序列化内容，避免旧内容与新快照叠加。
- * 快照进度不比已写入的更新时直接返回，重复写会把同一段历史画两遍。
- */
-function applySnapshot(): void {
-  const terminal = term
-  const snapshot = terminalStore.takeSnapshot(props.session.id)
-  if (terminal === null || snapshot === null) return
-  if (snapshot.seq <= appliedSnapshotSeq) return
-  appliedSnapshotSeq = snapshot.seq
-  terminal.reset()
-  if (snapshot.ansi !== '') terminal.write(snapshot.ansi)
+/** 协议查询只交给守护进程，键盘、粘贴和鼠标输入仍走 xterm 原有 onData。 */
+function suppressProtocolReplies(terminal: Terminal): void {
+  const queries: { readonly final: string; readonly prefix?: string; readonly intermediates?: string }[] = [
+    { final: 'c' }, { prefix: '>', final: 'c' }, { final: 'n' }, { prefix: '?', final: 'n' },
+    { intermediates: '$', final: 'p' }, { prefix: '?', intermediates: '$', final: 'p' }
+  ]
+  for (const id of queries) protocolHandlers.push(terminal.parser.registerCsiHandler(id, () => true))
+  protocolHandlers.push(terminal.parser.registerCsiHandler({ final: 't' }, (params) => {
+    const operation = params[0]
+    return operation === 14 || operation === 16 || operation === 18
+  }))
+  protocolHandlers.push(terminal.parser.registerDcsHandler({ intermediates: '$', final: 'q' }, () => true))
+  for (const code of [4, 10, 11, 12]) {
+    protocolHandlers.push(terminal.parser.registerOscHandler(code, (data) => data.includes('?')))
+  }
+}
+
+function writeAndWait(terminal: Terminal, text: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const finish = (): void => { writeWaiters.delete(finish); resolve() }
+    writeWaiters.add(finish)
+    try { terminal.write(text, finish) }
+    catch (error) { writeWaiters.delete(finish); reject(error) }
+  })
+}
+
+function requestRecovery(): void {
+  if (term === null) return
+  recoveryVersion += 1
+  recoveryQueued = true
+  viewReady = false
+  if (deliveryId !== null) terminalStore.unregisterWriter(props.session.id, deliveryId)
+  deliveryId = null
+  if (recoveryWork !== null) return
+  recoveryWork = recoverLoop().finally(() => {
+    recoveryWork = null
+    if (recoveryQueued && term !== null) requestRecovery()
+  })
+}
+
+async function recoverLoop(): Promise<void> {
+  while (recoveryQueued && term !== null) {
+    recoveryQueued = false
+    viewReady = false
+    const terminal = term
+    const version = recoveryVersion
+    const currentDelivery = crypto.randomUUID()
+    deliveryId = currentDelivery
+    terminalStore.registerWriter(props.session.id, currentDelivery, (event, consumed) => terminal.write(event.chunk, consumed))
+    try {
+      const snapshot = await terminalStore.loadSnapshot(props.session.id, currentDelivery)
+      if (snapshot === null || term !== terminal || version !== recoveryVersion) continue
+      // 空写入是旧数据的解析屏障；RIS 随快照入队，不能在未消费的写入之外同步 reset。
+      await writeAndWait(terminal, '')
+      if (term !== terminal || version !== recoveryVersion) continue
+      terminal.resize(snapshot.cols, snapshot.rows)
+      await writeAndWait(terminal, `\u001bc${snapshot.ansi}`)
+      if (term !== terminal || version !== recoveryVersion) continue
+      viewReady = true
+      fitNow()
+      const ready = await terminalStore.finishRecovery(props.session.id, currentDelivery)
+      if (term === terminal && version === recoveryVersion) { viewReady = ready; refreshTerminal() }
+      else viewReady = false
+    } catch (error) {
+      if (term === terminal && version === recoveryVersion) {
+        viewReady = false
+        terminalStore.reportError(error instanceof Error ? error.message : '恢复终端画面失败。')
+      }
+    } finally {
+      if (!viewReady || term !== terminal || version !== recoveryVersion) terminalStore.unregisterWriter(props.session.id, currentDelivery)
+    }
+  }
 }
 
 /** 上下文菜单里的「关闭全部终端」：先收起菜单，再把结果告诉用户。 */
 async function closeAllTerminals(): Promise<void> {
   commandMenu.value?.close()
-  await terminalStore.closeAllTerminals()
-  showNotice('已关闭全部终端。')
+  if (await terminalStore.closeAllTerminals()) showNotice('已关闭全部终端。')
 }
 
 function unmountTerminal(): void {
+  recoveryVersion += 1
+  recoveryQueued = false
+  viewReady = false
+  for (const finish of [...writeWaiters]) finish()
+  for (const handler of protocolHandlers) handler.dispose()
+  protocolHandlers.length = 0
+  if (deliveryId !== null) terminalStore.unregisterWriter(props.session.id, deliveryId)
+  deliveryId = null
   if (fitTimer !== null) {
     window.clearTimeout(fitTimer)
     fitTimer = null
@@ -283,7 +344,6 @@ function unmountTerminal(): void {
   stopInput = null
   stopTitle?.dispose()
   stopTitle = null
-  terminalStore.unregisterWriter(props.session.id)
   detachWebgl()
   term?.dispose()
   term = null
@@ -344,7 +404,7 @@ function onDocumentVisibilityChange(): void {
 }
 
 function scheduleFit(): void {
-  if (fitTimer !== null) return
+  if (term === null || fitTimer !== null) return
   fitTimer = window.setTimeout(() => {
     fitTimer = null
     fitNow()
@@ -353,7 +413,7 @@ function scheduleFit(): void {
 
 /** 按容器测量并同步尺寸；隐藏标签与未布局完成的容器测不出有效尺寸，此时保持上一次尺寸。 */
 function fitNow(): void {
-  if (!props.active) return
+  if (!props.active || !viewReady) return
   const terminal = term
   const addon = fitAddon
   if (terminal === null || addon === null) return
@@ -374,7 +434,7 @@ function fitNow(): void {
 }
 
 async function sendInput(data: string): Promise<void> {
-  if (!props.active) return
+  if (!props.active || !viewReady || props.session.status !== 'running') return
   const result = await writeTerminal({ id: props.session.id, data })
   if (!result.ok) terminalStore.reportError(result.error.message)
 }

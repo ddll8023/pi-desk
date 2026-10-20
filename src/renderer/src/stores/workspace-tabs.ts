@@ -12,7 +12,7 @@
  * 后台实例回复结束时给它的对话标签打「有新回复」标记，切到该标签即清除。
  * 新建对话的入口分两类：标签条与侧栏新建一个对话标签，`/new` 则在当前标签内就地替换
  * （结束原实例、清空会话身份与重命名，标签位置与顺序不变）。
- * 快捷命令的运行目标也是标签：活动标签是终端就写进它，否则先新建一个终端再写入。
+ * 快捷命令的运行目标也是标签：每次都新开一个终端标签再写入，不复用当前活动终端。
  */
 import { defineStore } from 'pinia'
 import { computed, ref, watch } from 'vue'
@@ -260,7 +260,10 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
       return null
     }
     const projectPath = currentProjectPath.value
-    if (projectPath === null) return null
+    if (projectPath === null) {
+      terminalStore.reportError('先选择项目，再新建终端。')
+      return null
+    }
     const version = selectionVersion
     const terminalId = await terminalStore.createTerminal(projectPath)
     if (terminalId === null) return null
@@ -271,8 +274,10 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
   }
 
   /**
-   * 运行一条快捷命令：活动标签是仍在运行的终端就写进它，否则先在当前项目新建终端再写入。
-   * 已退出的终端不能再输入（主进程会拒绝），因此和「没有终端」走同一条新建路径。
+   * 运行一条快捷命令：每次都在当前项目新开一个终端标签再写入，不写进已有终端。
+   * 不复用活动终端的原因：常驻前台命令（`vite`、`uvicorn --reload` 等）会把 PTY 一直占在前台，
+   * 写进去的文本既不执行也不报错，用户看到的就是「点了没反应」；而渲染端拿不到「终端是否停在 shell 提示符」
+   * 的可靠信号，无法只挑空闲终端复用，因此统一新建。代价是连点同一条命令会得到多个终端标签，由用户自行关闭。
    * 命令文本不做解析或转义（它就是要交给 shell 的输入）；`appendEnter` 为真时补一个回车立即执行。
    * 回车一律用 CR：多行命令里的 LF 在 PowerShell/PSReadLine 里不是 Enter，只当作输入缓冲里的换行，
    * 整段会被攒成一条待提交的多行输入，行的先后顺序就不再是逐条执行的顺序（例如 `cd` 反而落在后面的命令之后）。
@@ -281,13 +286,6 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
    */
   async function runQuickCommand(command: QuickCommand): Promise<void> {
     const text = command.appendEnter ? `${command.command.replace(/\r\n|\r|\n/g, '\r')}\r` : command.command
-    const active = activeTerminalId.value
-    const activeRunning = active !== null
-      && terminalStore.sessions.some(session => session.id === active && session.status === 'running')
-    if (active !== null && activeRunning) {
-      await terminalStore.insertText(active, text)
-      return
-    }
     const created = await createTab('terminal')
     if (created === null) return
     await terminalStore.insertText(created, text)

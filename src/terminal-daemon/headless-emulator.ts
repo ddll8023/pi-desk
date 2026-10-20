@@ -1,91 +1,166 @@
-/**
- * 守护进程侧的终端模拟器：用 headless xterm 复刻每个终端的画面与滚动历史，并在接回时序列化成快照。
- *
- * 为什么需要它：应用退出期间 PTY 仍在输出，重新打开时要还原「退出期间的输出 + 之前的滚动历史」。
- * 只保存原始输出也能回放，但长历史回放慢、且无法表达当前画面；headless 模拟器让快照等于当前状态，
- * 体积远小于原始字节流。序列化由官方 addon 完成，包含滚动缓冲与模式恢复序列（备用屏、光标、SGR 等）。
- *
- * 写入是异步的：xterm 把写入排队解析，因此这里把所有写入与改尺寸串成一条链，序列化前先等链排空，
- * 否则快照会丢掉最后一段输出。链上任何一步失败都不影响后续写入，只记一次日志。
- *
- * 边界：这里只维护画面状态，不碰 PTY、不碰文件、不判断终端是否退出；行数与回滚量由会话管理给出。
- */
+/** 守护进程画面解析器：批量消费输出、计量解析积压，并由唯一模拟器回答终端协议查询。 */
 import { SerializeAddon } from '@xterm/addon-serialize'
 import { Terminal } from '@xterm/headless'
+import { TERMINAL_SNAPSHOT_MAX_CHARS } from '../shared/terminal-daemon-protocol'
+
+type Operation = { readonly kind: 'data'; readonly chunk: string }
+  | { readonly kind: 'resize'; readonly cols: number; readonly rows: number }
+const PARSE_BATCH_CHARS = 64 * 1024
 
 export class HeadlessEmulator {
   private readonly term: Terminal
-  private readonly serializer: SerializeAddon
-  /** 写入与改尺寸的串行链；序列化前等它排空。 */
-  private pending: Promise<void> = Promise.resolve()
+  private readonly serializer = new SerializeAddon()
+  private operations: Operation[] = []
+  private queuedChars = 0
+  private busy = false
+  private timer: NodeJS.Timeout | null = null
   private disposed = false
+  private waiters: (() => void)[] = []
 
   constructor(
     cols: number,
     rows: number,
     private readonly scrollbackLines: number,
-    private readonly onError: (error: unknown) => void
+    private readonly onError: (error: unknown) => void,
+    private readonly onConsumed: () => void = () => {},
+    onReply: (data: string) => void = () => {}
   ) {
-    this.term = new Terminal({
-      cols,
-      rows,
-      scrollback: scrollbackLines,
-      // 序列化插件用到的部分接口仍在 proposed 阶段；headless 终端没有 UI，放开它没有副作用。
-      allowProposedApi: true
-    })
-    this.serializer = new SerializeAddon()
+    this.term = new Terminal({ cols, rows, scrollback: scrollbackLines, allowProposedApi: true })
     this.term.loadAddon(this.serializer)
+    this.term.onData(onReply)
+    this.term.parser.registerCsiHandler({ final: 't' }, (params) => {
+      if (params[0] !== 18) return false
+      onReply(`\u001b[8;${this.term.rows};${this.term.cols}t`)
+      return true
+    })
+    // headless 没有浏览器颜色服务，显式回答颜色查询，避免后台程序等不到回复。
+    for (const code of [4, 10, 11, 12]) {
+      this.term.parser.registerOscHandler(code, (data) => {
+        if (!data.includes('?')) return false
+        if (code === 4) {
+          const values = data.split(';')
+          for (let index = 0; index + 1 < values.length; index += 2) {
+            const color = Number(values[index])
+            if (values[index + 1] === '?' && Number.isInteger(color) && color >= 0 && color <= 255) {
+              onReply(`\u001b]4;${color};${indexedColor(color)}\u001b\\`)
+            }
+          }
+        } else {
+          onReply(`\u001b]${code};${code === 11 ? 'rgb:0000/0000/0000' : 'rgb:ffff/ffff/ffff'}\u001b\\`)
+        }
+        return true
+      })
+    }
   }
 
-  /** 写入一段输出；顺序由链保证，不等待完成。 */
+  get pendingChars(): number { return this.queuedChars }
+
   write(chunk: string): void {
     if (this.disposed || chunk === '') return
-    this.pending = this.pending.then(() => new Promise<void>((resolve) => {
-      if (this.disposed) {
-        resolve()
-        return
-      }
-      try {
-        this.term.write(chunk, () => resolve())
-      } catch (error) {
-        this.onError(error)
-        resolve()
-      }
-    }))
+    for (let offset = 0; offset < chunk.length; offset += PARSE_BATCH_CHARS) {
+      this.operations.push({ kind: 'data', chunk: chunk.slice(offset, offset + PARSE_BATCH_CHARS) })
+    }
+    this.queuedChars += chunk.length
+    this.schedule()
   }
 
-  /** 同步尺寸；与写入同链，避免在解析中途改尺寸导致换行错位。 */
   resize(cols: number, rows: number): void {
     if (this.disposed) return
-    this.pending = this.pending.then(() => {
-      if (this.disposed) return
-      try {
-        this.term.resize(cols, rows)
-      } catch (error) {
-        this.onError(error)
-      }
-    })
+    const last = this.operations[this.operations.length - 1]
+    if (last?.kind === 'resize') this.operations.pop()
+    this.operations.push({ kind: 'resize', cols, rows })
+    this.schedule()
   }
 
-  /** 等链排空并序列化当前画面；`scrollback` 给出要带上的历史行数。 */
+  private schedule(): void {
+    if (this.busy || this.timer !== null || this.disposed) return
+    this.timer = setTimeout(() => {
+      this.timer = null
+      this.pump()
+    }, 0)
+  }
+
+  /** 一个批次只创建一个写入回调，不给每个 PTY 块再包一层 Promise。 */
+  private pump(): void {
+    if (this.disposed || this.busy) return
+    const first = this.operations[0]
+    if (first === undefined) { this.settleIdle(); return }
+    if (first.kind === 'resize') {
+      this.operations.shift()
+      try { this.term.resize(first.cols, first.rows) } catch (error) { this.onError(error) }
+      this.schedule()
+      return
+    }
+    const chunks: string[] = []
+    let chars = 0
+    let count = 0
+    for (const operation of this.operations) {
+      if (operation.kind !== 'data' || (chars > 0 && chars + operation.chunk.length > PARSE_BATCH_CHARS)) break
+      chunks.push(operation.chunk)
+      chars += operation.chunk.length
+      count += 1
+    }
+    this.operations.splice(0, count)
+    this.busy = true
+    const consumed = (): void => {
+      this.queuedChars = Math.max(0, this.queuedChars - chars)
+      this.busy = false
+      this.onConsumed()
+      // 回调执行时 xterm 尚未移除当前块；让它先完成内部收尾，再提交下一批。
+      if (this.operations.length > 0) this.schedule()
+      else this.settleIdle()
+    }
+    try { this.term.write(chunks.join(''), consumed) } catch (error) { this.onError(error); consumed() }
+  }
+
   async serialize(): Promise<string> {
     if (this.disposed) return ''
-    await this.pending
-    try {
-      return this.serializer.serialize({ scrollback: this.scrollbackLines })
-    } catch (error) {
-      this.onError(error)
-      return ''
+    if (this.busy || this.operations.length > 0) {
+      await new Promise<void>((resolve) => { this.waiters.push(resolve); this.schedule() })
     }
+    if (this.disposed) return ''
+    // 超长快照减少回滚部分，不截断 ANSI 字节流；活动屏仍过大时明确拒绝恢复。
+    let scrollback = this.scrollbackLines
+    while (true) {
+      const ansi = this.serializer.serialize({ scrollback })
+      if (ansi.length <= TERMINAL_SNAPSHOT_MAX_CHARS) return ansi
+      if (scrollback === 0) throw new Error('终端画面超过恢复容量，请缩小终端尺寸后重试。')
+      scrollback = Math.floor(scrollback / 2)
+    }
+  }
+
+  private settleIdle(): void {
+    const waiters = this.waiters
+    this.waiters = []
+    for (const resolve of waiters) resolve()
   }
 
   dispose(): void {
     if (this.disposed) return
     this.disposed = true
-    try {
-      this.term.dispose()
-    } catch (error) {
-      this.onError(error)
-    }
+    if (this.timer !== null) clearTimeout(this.timer)
+    this.timer = null
+    this.operations = []
+    this.queuedChars = 0
+    this.settleIdle()
+    try { this.term.dispose() } catch (error) { this.onError(error) }
   }
+}
+
+/** 没有显示服务时采用终端标准调色板，不把页面是否挂载作为查询能否完成的条件。 */
+function indexedColor(index: number): string {
+  const ansi = ['000000', 'cd0000', '00cd00', 'cdcd00', '0000ee', 'cd00cd', '00cdcd', 'e5e5e5',
+    '7f7f7f', 'ff0000', '00ff00', 'ffff00', '5c5cff', 'ff00ff', '00ffff', 'ffffff']
+  let values: number[]
+  if (index < 16) {
+    const hex = ansi[index] ?? '000000'
+    values = [0, 2, 4].map((offset) => Number.parseInt(hex.slice(offset, offset + 2), 16))
+  } else if (index < 232) {
+    const color = index - 16
+    const level = (value: number): number => value === 0 ? 0 : 55 + value * 40
+    values = [level(Math.floor(color / 36)), level(Math.floor(color / 6) % 6), level(color % 6)]
+  } else {
+    values = Array<number>(3).fill(8 + (index - 232) * 10)
+  }
+  return `rgb:${values.map((value) => (value * 257).toString(16).padStart(4, '0')).join('/')}`
 }

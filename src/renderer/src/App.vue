@@ -72,11 +72,15 @@ const projectPath = computed(() => currentProject.value?.path ?? null)
 /** 当前项目可用的快捷命令：项目命令在前，全局命令在后。 */
 const quickCommandsForProject = computed(() => quickCommandsStore.commandsForProject(projectPath.value))
 
-/** 后台项目和设置页中的终端保持挂载，但不能接收焦点与菜单交互。 */
+/** 后台运行终端仍保持挂载，但不能接收焦点与菜单交互。 */
 function isTerminalActive(session: TerminalSessionInfo): boolean {
   return !settingsOpen.value && session.projectPath === projectPath.value
     && workspaceTabsStore.activeTab === workspaceTabsStore.terminalTabId(session.id)
 }
+/** 冷会话连空面板也不创建，避免历史记录数量继续扩大 DOM。 */
+const mountedTerminalSessions = computed(() => terminalStore.sessions.filter((session) => (
+  session.status === 'running' || isTerminalActive(session)
+)))
 /** 快捷命令保存失败的原因；由工作区提示条展示，关闭后不再重复。 */
 const quickCommandError = computed(() => (
   quickCommandsStore.view.phase === 'error' ? quickCommandsStore.view.error : null
@@ -153,7 +157,7 @@ function onUpdateDetails(): void {
   settingsStore.openSettings('version')
 }
 
-/** 菜单里运行一条命令：目标终端由标签状态决定（活动终端，没有就新建），失败留在终端提示条里。 */
+/** 菜单里运行一条命令：每次新开一个终端标签再写入，失败留在终端提示条里。 */
 function runQuickCommand(command: QuickCommand): void {
   void workspaceTabsStore.runQuickCommand(command)
 }
@@ -468,9 +472,9 @@ onUnmounted(() => {
               </div>
             </div>
 
-            <!-- 所有存活终端跨项目常驻；设置页只隐藏工作区，不销毁 xterm 的屏幕与滚动历史。 -->
+            <!-- 运行中终端跨项目保留视图；退出终端仅在查看时恢复画面，切走释放 xterm。 -->
             <div
-              v-for="session in terminalStore.sessions"
+              v-for="session in mountedTerminalSessions"
               :key="session.id"
               class="workspace-pane"
               :class="{ 'is-hidden': !isTerminalActive(session) }"

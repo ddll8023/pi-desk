@@ -7,8 +7,8 @@
  * 安全边界：token 文件只允许当前用户读取（0600），端点名按运行目录散列，避免同一台机器上不同数据目录
  * （例如便携版与开发态）互相连上。这里只做路径与文件读写，不判断进程存活之外的任何状态。
  */
-import { createHash } from 'node:crypto'
-import { chmodSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
+import { createHash, randomUUID } from 'node:crypto'
+import { chmodSync, mkdirSync, readdirSync, readFileSync, renameSync, rmdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import {
@@ -20,6 +20,8 @@ import {
 /** 守护进程自有的全部路径；`runtimeDir` 由调用方给出（应用侧是 userData 下的固定子目录）。 */
 export interface TerminalDaemonPaths {
   readonly runtimeDir: string
+  readonly dataDir: string
+  readonly lockDir: string
   readonly endpoint: string
   readonly tokenFile: string
   readonly pidFile: string
@@ -38,14 +40,17 @@ export function resolveDaemonPaths(
   runtimeDir: string,
   protocolVersion: number = TERMINAL_DAEMON_PROTOCOL_VERSION
 ): TerminalDaemonPaths {
+  const dataDir = join(runtimeDir, `${ARTIFACT_PREFIX}${protocolVersion}`)
   return {
     runtimeDir,
+    dataDir,
+    lockDir: join(runtimeDir, `${ARTIFACT_PREFIX}${protocolVersion}.lock`),
     endpoint: resolveEndpoint(runtimeDir, protocolVersion),
     tokenFile: join(runtimeDir, `${ARTIFACT_PREFIX}${protocolVersion}.token`),
     pidFile: join(runtimeDir, `${ARTIFACT_PREFIX}${protocolVersion}.pid`),
-    sessionsFile: join(runtimeDir, TERMINAL_DAEMON_SESSIONS_FILE),
-    historyDir: join(runtimeDir, TERMINAL_DAEMON_HISTORY_DIR_NAME),
-    logFile: join(runtimeDir, 'daemon.log')
+    sessionsFile: join(dataDir, TERMINAL_DAEMON_SESSIONS_FILE),
+    historyDir: join(dataDir, TERMINAL_DAEMON_HISTORY_DIR_NAME),
+    logFile: join(dataDir, 'daemon.log')
   }
 }
 
@@ -66,7 +71,68 @@ function resolveEndpoint(runtimeDir: string, protocolVersion: number): string {
 /** 创建运行目录与历史目录；权限只影响其他用户能否枚举，读不到内容仍由 token 兜底。 */
 export function ensureDaemonDirectories(paths: TerminalDaemonPaths): void {
   mkdirSync(paths.runtimeDir, { recursive: true, mode: 0o700 })
+  mkdirSync(paths.dataDir, { recursive: true, mode: 0o700 })
   mkdirSync(paths.historyDir, { recursive: true, mode: 0o700 })
+}
+
+/** 先获得版本独占目录才允许触碰 token、元数据或监听端点。失败实例没有清理权。 */
+export function acquireDaemonOwnership(paths: TerminalDaemonPaths): () => void {
+  const ownerFile = join(paths.lockDir, 'owner.json')
+  const identity = randomUUID()
+  const claim = (): void => {
+    mkdirSync(paths.lockDir, { mode: 0o700 })
+    writeFileSync(ownerFile, JSON.stringify({ pid: process.pid, identity }), { mode: 0o600 })
+  }
+  try { claim() } catch (error) {
+    if (typeof error !== 'object' || error === null || !('code' in error) || error.code !== 'EEXIST') throw error
+    const observed = statSync(paths.lockDir)
+    const guardDir = join(paths.lockDir, 'reclaim')
+    // 清理者也要独占；记录清理者身份，清理过程中崩溃不会永久留下一个不可恢复的标记。
+    const guardOwner = join(guardDir, 'owner.json')
+    try { mkdirSync(guardDir, { mode: 0o700 }) } catch (guardError) {
+      if (typeof guardError !== 'object' || guardError === null || !('code' in guardError) || guardError.code !== 'EEXIST') throw guardError
+      let guard: { pid?: unknown; identity?: unknown } | null = null
+      try { guard = JSON.parse(readFileSync(guardOwner, 'utf8')) as { pid?: unknown; identity?: unknown } } catch { /* 可能在写入身份前崩溃。 */ }
+      if (typeof guard?.pid === 'number' && guard.pid > 0) {
+        if (isProcessAlive(guard.pid)) throw new Error('另一终端守护进程正在清理旧端点。')
+      } else if (Date.now() - statSync(guardDir).mtimeMs < 30_000) {
+        throw new Error('终端守护进程清理标记尚在初始化。')
+      }
+      try { unlinkSync(guardOwner) } catch (unlinkError) {
+        if (typeof unlinkError !== 'object' || unlinkError === null || !('code' in unlinkError) || unlinkError.code !== 'ENOENT') throw unlinkError
+      }
+      rmdirSync(guardDir)
+      mkdirSync(guardDir, { mode: 0o700 })
+    }
+    writeFileSync(guardOwner, JSON.stringify({ pid: process.pid, identity }), { mode: 0o600 })
+    try {
+      const current = statSync(paths.lockDir)
+      if (observed.ino !== current.ino || observed.dev !== current.dev) throw new Error('终端守护进程所有权已变化。')
+      let owner: { pid?: unknown } | null = null
+      try { owner = JSON.parse(readFileSync(ownerFile, 'utf8')) as { pid?: unknown } } catch { /* 允许恢复初始化中断的空锁。 */ }
+      if (typeof owner?.pid === 'number' && owner.pid > 0) {
+        if (isProcessAlive(owner.pid)) throw new Error('已有终端守护进程正在运行。')
+      } else if (Date.now() - observed.mtimeMs < 30_000) {
+        throw new Error('终端守护进程正在初始化。')
+      }
+      try { unlinkSync(ownerFile) } catch (unlinkError) {
+        if (typeof unlinkError !== 'object' || unlinkError === null || !('code' in unlinkError) || unlinkError.code !== 'ENOENT') throw unlinkError
+      }
+    } finally {
+      const guard = JSON.parse(readFileSync(guardOwner, 'utf8')) as { identity?: unknown }
+      if (guard.identity === identity) { unlinkSync(guardOwner); rmdirSync(guardDir) }
+    }
+    rmdirSync(paths.lockDir)
+    claim()
+  }
+  return () => {
+    try {
+      const owner = JSON.parse(readFileSync(ownerFile, 'utf8')) as { pid?: unknown; identity?: unknown }
+      if (owner.pid !== process.pid || owner.identity !== identity) return
+      unlinkSync(ownerFile)
+      rmdirSync(paths.lockDir)
+    } catch { /* 所有权已变化时不清理。 */ }
+  }
 }
 
 /** 写入 token 文件：先写临时文件再改名，避免读到半截内容。 */

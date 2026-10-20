@@ -125,6 +125,7 @@ import {
   TERMINAL_EXIT_EVENT,
   TERMINAL_LIST_CHANNEL,
   TERMINAL_RESIZE_CHANNEL,
+  TERMINAL_RECOVERY_CHANNEL,
   TERMINAL_SNAPSHOTS_CHANNEL,
   TERMINAL_WRITE_CHANNEL,
   isTerminalAckRequest,
@@ -132,6 +133,8 @@ import {
   isTerminalCreateRequest,
   isTerminalListRequest,
   isTerminalResizeRequest,
+  isTerminalSnapshotRequest,
+  isTerminalRecoveryRequest,
   isTerminalWriteRequest
 } from '../shared/terminal-api'
 import type {
@@ -451,7 +454,7 @@ const modelsConfigManager = new ModelsConfigManager()
 /** Pi 默认模型（Pi 的 settings.json）的唯一读写者；只改 defaultProvider 与 defaultModel。 */
 const piSettingsManager = new PiSettingsManager()
 const windowState = new WindowState({ store: configStore })
-/** 内置终端：进程、缓冲与背压都在主进程，页面只收输出并回报已消费的字符数。 */
+/** 内置终端适配：PTY、画面与流控由独立守护进程持有，主进程只转发受限协议。 */
 const terminals = new TerminalManager({
   resolveProjectPath: resolveRegisteredProjectPath,
   sendData: (event) => sendToRenderer(TERMINAL_DATA_EVENT, event),
@@ -2730,10 +2733,21 @@ function registerTerminalHandlers(pageUrl: string): void {
       if (!isTrustedCaller(event, pageUrl)) {
         return terminalSnapshotsFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
       }
-      if (args.length !== 0) {
-        return terminalSnapshotsFailure('INVALID_REQUEST', '终端快照接口不接受参数。')
+      if (args.length !== 1 || !isTerminalSnapshotRequest(args[0])) {
+        return terminalSnapshotsFailure('INVALID_REQUEST', '读取终端画面需要终端标识和投递代际。')
       }
-      return terminals.snapshots()
+      return terminals.snapshots(args[0])
+    }
+  )
+
+  handle(
+    TERMINAL_RECOVERY_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<TerminalCommandResult> => {
+      if (!isTrustedCaller(event, pageUrl)) return terminalCommandFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      if (args.length !== 1 || !isTerminalRecoveryRequest(args[0])) {
+        return terminalCommandFailure('INVALID_REQUEST', '终端恢复动作不合法。')
+      }
+      return terminals.recover(args[0])
     }
   )
 
@@ -2789,7 +2803,7 @@ function registerTerminalHandlers(pageUrl: string): void {
     }
   )
 
-  /** 数据确认只释放背压额度；参数不合法时忽略，不回传结果。 */
+  /** 只有当前投递代际的累计进度能释放额度；迟到和重复确认由守护进程忽略。 */
   handle(
     TERMINAL_ACK_CHANNEL,
     (event: IpcMainInvokeEvent, ...args: unknown[]): void => {
@@ -3012,9 +3026,8 @@ async function createWindow(pageUrl: string): Promise<void> {
   contents.on('will-redirect', (event) => {
     if (!event.isMainFrame || event.url !== pageUrl) event.preventDefault()
   })
-  // 页面重新加载后，上一份页面未确认的终端数据不再有人消费：清掉在途额度，避免终端被永久背压。
-  // 输出本身不丢：守护进程的画面状态是权威来源，页面重新挂载后按快照接回。
-  contents.on('did-finish-load', () => terminals.resetDelivery())
+  // 导航开始时撤销旧页面投递；不能在加载完成时撤销，否则会清掉新页面已建立的恢复代际。
+  contents.on('did-start-loading', () => terminals.resetDelivery())
   // 尺寸、位置与最大化状态的变化经防抖写回配置；close 时先记录，销毁后无法再读取 bounds。
   window.on('resize', rememberWindowState)
   window.on('move', rememberWindowState)

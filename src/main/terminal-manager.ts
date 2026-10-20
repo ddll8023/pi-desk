@@ -25,8 +25,12 @@ import type {
   TerminalAckRequest,
   TerminalCloseRequest,
   TerminalResizeRequest,
+  TerminalSnapshotRequest,
+  TerminalRecoveryRequest,
   TerminalWriteRequest
 } from '../shared/terminal-api'
+import { isTerminalSessionSnapshot } from '../shared/terminal-api'
+import { TERMINAL_SNAPSHOT_MAX_CHARS } from '../shared/terminal-daemon-protocol'
 import { TerminalDaemonClient } from './terminal-daemon-client'
 import type { TerminalDaemonResult } from './terminal-daemon-client'
 
@@ -60,7 +64,7 @@ export class TerminalManager {
       onData: (event) => {
         // 没有页面接收时立刻回报消费量：这一段已经在守护进程的画面里，重挂载时由快照补齐。
         if (this.options.sendData(event)) return
-        this.client.sendIfConnected({ type: 'ack', id: event.id, chars: event.chars })
+        this.client.sendIfConnected({ type: 'ack', id: event.id, deliveryId: event.deliveryId, seqEnd: event.seqEnd })
       },
       onExit: (event) => {
         this.options.sendExit(event)
@@ -80,7 +84,7 @@ export class TerminalManager {
       projectPath,
       cols: request.cols,
       rows: request.rows
-    })
+    }, true)
     if (!result.ok) return { ok: false, error: toTerminalError(result.error) }
     return { ok: true, data: result.data }
   }
@@ -123,21 +127,61 @@ export class TerminalManager {
       return sessionsFailure('INVALID_REQUEST', '只能读取已添加项目的终端。')
     }
     const result = await this.client.request({ type: 'list', projectPath })
-    if (!result.ok) return { ok: false, error: toTerminalError(result.error) }
+    if (!result.ok) {
+      if (!this.client.hasLiveProcess) return { ok: true, data: { sessions: [] } }
+      return { ok: false, error: toTerminalError(result.error) }
+    }
     return { ok: true, data: { sessions: result.data } }
   }
 
-  /** 读取全部终端的当前画面快照；页面重新挂载或守护进程重连后用它还原滚动历史。 */
-  async snapshots(): Promise<TerminalSnapshotsResult> {
-    const result = await this.client.request({ type: 'snapshots' })
-    if (!result.ok) return { ok: false, error: toTerminalError(result.error) }
-    return { ok: true, data: { snapshots: result.data } }
+  /** 单终端分块取画面；页面解析完成后另行开启投递，实时输出不会抢在快照前进入页面。 */
+  async snapshots(request: TerminalSnapshotRequest): Promise<TerminalSnapshotsResult> {
+    let completed = false
+    try {
+      const result = await this.client.request({ type: 'snapshot-begin', id: request.id, deliveryId: request.deliveryId })
+      if (!result.ok) return { ok: false, error: toTerminalError(result.error) }
+      const header = result.data
+      if (!header || header.id !== request.id || header.deliveryId !== request.deliveryId
+        || !Number.isSafeInteger(header.totalChars) || header.totalChars < 0 || header.totalChars > TERMINAL_SNAPSHOT_MAX_CHARS
+        || !isTerminalSessionSnapshot({ ...header, ansi: '' })) {
+        return { ok: false, error: { code: 'INVALID_RESPONSE', message: '终端快照头不合法。' } }
+      }
+      const chunks: string[] = []
+      let offset = 0
+      while (offset < header.totalChars) {
+        const part = await this.client.request({ type: 'snapshot-read', id: request.id, deliveryId: request.deliveryId, offset })
+        if (!part.ok) return { ok: false, error: toTerminalError(part.error) }
+        if (typeof part.data?.chunk !== 'string' || part.data.chunk.length === 0
+          || part.data.nextOffset !== offset + part.data.chunk.length || part.data.nextOffset > header.totalChars) {
+          return { ok: false, error: { code: 'INVALID_RESPONSE', message: '终端快照分块不合法。' } }
+        }
+        chunks.push(part.data.chunk)
+        offset = part.data.nextOffset
+      }
+      const snapshot = { id: header.id, deliveryId: header.deliveryId, ansi: chunks.join(''), cols: header.cols,
+        rows: header.rows, status: header.status, exitCode: header.exitCode, seq: header.seq }
+      if (!isTerminalSessionSnapshot(snapshot)) return { ok: false, error: { code: 'INVALID_RESPONSE', message: '终端快照不合法。' } }
+      completed = true
+      return { ok: true, data: { snapshot } }
+    } catch (error) {
+      return { ok: false, error: { code: 'INTERNAL_ERROR', message: error instanceof Error ? error.message : '读取终端快照失败。' } }
+    } finally {
+      if (!completed) this.client.sendIfConnected({ type: 'detach', id: request.id, deliveryId: request.deliveryId })
+    }
+  }
+
+  async recover(request: TerminalRecoveryRequest): Promise<TerminalCommandResult> {
+    if (request.action === 'detach') {
+      this.client.sendIfConnected({ type: 'detach', id: request.id, deliveryId: request.deliveryId })
+      return { ok: true }
+    }
+    return commandResult(await this.client.request({ type: 'snapshot-ready', id: request.id, deliveryId: request.deliveryId }))
   }
 
   /** 释放页面已消费的背压额度；未知终端与非法数量一律忽略，不回传结果。 */
   acknowledge(request: TerminalAckRequest): void {
     // 只回报消费量：断开时不必为了 ACK 去拉起守护进程。
-    this.client.sendIfConnected({ type: 'ack', id: request.id, chars: request.chars })
+    this.client.sendIfConnected({ type: 'ack', id: request.id, deliveryId: request.deliveryId, seqEnd: request.seqEnd })
   }
 
   /** 关闭某个项目的全部终端；项目被移除时调用，页面无需逐个关闭。 */
@@ -198,7 +242,7 @@ export class TerminalManager {
 
   /**
    * 停止守护进程（含全部终端）：用于覆盖解压或更新前释放文件占用。
-   * 下次打开终端会自动拉起新守护进程；已结束的终端会按历史恢复成「已退出」记录。
+   * 下次显式新建终端才允许拉起守护进程；历史保留并按「已退出」记录恢复。
    */
   async stopDaemon(): Promise<TerminalCommandResult> {
     const result = await this.client.stopDaemon()

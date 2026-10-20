@@ -1,27 +1,14 @@
-/**
- * 终端历史的落盘：每个终端一份追加写入的原始输出，另有一份会话元数据清单。
- *
- * 为什么同时保留原始输出与模拟器快照：快照只活在守护进程内存里，机器重启或守护进程崩溃后就没了；
- * 原始输出可以重放，用来把「上一次看到的画面与历史」重建出来。两者互补，落盘只做前者。
- *
- * 写入是排队追加的：PTY 输出频率高，逐段同步写会把守护进程卡在磁盘上；队列同时保证同一终端的
- * 追加、裁剪与删除不会互相穿插。单个文件超过上限时按行边界裁掉前半段，避免无界增长。
- *
- * 边界：这里只负责文件读写与裁剪，不判断会话状态、不决定保留哪些终端；元数据由调用方按当前清单给出。
- */
-import { appendFile, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
+/** 终端历史与冷画面的落盘：输出批量追加、积压可计量，画面及元数据原子写入且同一路径不并发写。 */
+import { appendFile, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { TERMINAL_SNAPSHOT_MAX_CHARS } from '../shared/terminal-daemon-protocol'
 
-/** 单个终端历史文件的上限（字符）；超过后裁到一半，按行边界切。 */
 const MAX_HISTORY_CHARS = 4 * 1024 * 1024
-
-/** 恢复时最多重放的历史长度；只为让启动不被超长历史拖住。 */
 const RESTORE_HISTORY_CHARS = 2 * 1024 * 1024
-
-/** 元数据文件的格式版本；结构变化时递增，读到不认识的版本按空清单处理。 */
 const SESSIONS_FILE_VERSION = 1
+const APPEND_INTERVAL_MS = 16
+const APPEND_BATCH_CHARS = 256 * 1024
 
-/** 一条会话记录：足以在守护进程重启后重建「已结束但保留历史」的终端。 */
 export interface PersistedSessionRecord {
   readonly id: string
   readonly projectPath: string
@@ -32,186 +19,226 @@ export interface PersistedSessionRecord {
   readonly rows: number
   readonly createdAt: number
 }
-
+export interface PersistedScreen {
+  readonly ansi: string
+  readonly cols: number
+  readonly rows: number
+}
 export interface HistoryStoreOptions {
-  /** 历史文件目录；由守护进程在启动时创建。 */
   readonly directory: string
-  /** 会话元数据文件路径。 */
   readonly sessionsFile: string
-  /** 记录非致命错误；不抛出，落盘失败只影响重启恢复。 */
   readonly onError: (error: unknown) => void
+  readonly onConsumed?: (id: string) => void
+}
+interface OutputBuffer {
+  chunks: string[]
+  chars: number
+  timer: NodeJS.Timeout | null
+  draining: boolean
 }
 
 export class HistoryStore {
-  /** 每个终端一条写入队列；追加、裁剪与删除都排在同一条链上。 */
   private readonly queues = new Map<string, Promise<void>>()
-  /** 已写入的字符数（近似值）；用于判断何时裁剪，不必每次读文件大小。 */
+  private readonly buffers = new Map<string, OutputBuffer>()
   private readonly written = new Map<string, number>()
-  private directoryReady: Promise<void> | null = null
+  private directoryReady: Promise<unknown> | null = null
+  private recordsPending: readonly PersistedSessionRecord[] | null = null
+  private recordsWriting: Promise<void> | null = null
 
   constructor(private readonly options: HistoryStoreOptions) {}
 
-  /** 创建历史目录；失败只记日志，后续追加会自然失败并被忽略。 */
-  private ensureDirectory(): Promise<void> {
-    if (this.directoryReady === null) {
-      this.directoryReady = mkdir(this.options.directory, { recursive: true, mode: 0o700 }).then(
-        () => undefined,
-        (error: unknown) => {
-          this.options.onError(error)
-        }
-      )
-    }
+  private ensureDirectory(): Promise<unknown> {
+    this.directoryReady ??= mkdir(this.options.directory, { recursive: true, mode: 0o700 })
     return this.directoryReady
   }
 
-  /** 追加一段输出；不等待落盘，失败只记日志。 */
+  getPendingChars(id: string): number { return this.buffers.get(id)?.chars ?? 0 }
+
   append(id: string, chunk: string): void {
     if (chunk === '') return
-    const file = this.fileOf(id)
-    const next = this.enqueue(id, async () => {
-      await this.ensureDirectory()
-      await appendFile(file, chunk, 'utf8')
-      const total = (this.written.get(id) ?? 0) + chunk.length
-      this.written.set(id, total)
-      if (total > MAX_HISTORY_CHARS) await this.trim(id, file)
-    })
-    void next
-  }
-
-  /**
-   * 读取用于恢复的历史：只取尾部，并在行边界切开，避免首行是半截转义序列。
-   * 文件不存在时返回空串。
-   */
-  async readRestorable(id: string): Promise<string> {
-    const file = this.fileOf(id)
-    let content: string
-    try {
-      content = await readFile(file, 'utf8')
-    } catch {
-      return ''
+    let buffer = this.buffers.get(id)
+    if (buffer === undefined) {
+      buffer = { chunks: [], chars: 0, timer: null, draining: false }
+      this.buffers.set(id, buffer)
     }
-    if (content.length <= RESTORE_HISTORY_CHARS) return content
-    const tail = content.slice(content.length - RESTORE_HISTORY_CHARS)
-    const firstBreak = tail.indexOf('\n')
-    return firstBreak === -1 ? tail : tail.slice(firstBreak + 1)
+    buffer.chunks.push(chunk)
+    buffer.chars += chunk.length
+    if (buffer.draining) return
+    if (buffer.chars >= APPEND_BATCH_CHARS) { this.drain(id, buffer); return }
+    if (buffer.timer === null) buffer.timer = setTimeout(() => this.drain(id, buffer), APPEND_INTERVAL_MS)
   }
 
-  /** 删除一个终端的历史文件；终端被关闭或项目被移除时调用。 */
-  remove(id: string): void {
-    const file = this.fileOf(id)
+  /** 仅文件批次进入串行链；PTY 小块不再各自创建文件操作与 Promise。 */
+  private drain(id: string, buffer: OutputBuffer): void {
+    if (buffer.timer !== null) clearTimeout(buffer.timer)
+    buffer.timer = null
+    if (buffer.draining || buffer.chunks.length === 0) return
+    buffer.draining = true
     void this.enqueue(id, async () => {
-      this.written.delete(id)
       try {
-        await rm(file, { force: true })
-      } catch (error) {
-        this.options.onError(error)
+        await this.ensureDirectory()
+        while (buffer.chunks.length > 0) {
+          const content = buffer.chunks.join('')
+          buffer.chunks = []
+          try {
+            await appendFile(this.fileOf(id), content, { encoding: 'utf8', mode: 0o600 })
+            const total = (this.written.get(id) ?? 0) + content.length
+            this.written.set(id, total)
+            if (total > MAX_HISTORY_CHARS) await this.trim(id)
+          } finally {
+            buffer.chars = Math.max(0, buffer.chars - content.length)
+            this.options.onConsumed?.(id)
+          }
+        }
+      } finally {
+        buffer.draining = false
+        // 磁盘失败时释放剩余引用，错误由队列统一上报；不把失败输出永久留在内存。
+        buffer.chunks = []
+        buffer.chars = 0
+        if (this.buffers.get(id) === buffer) this.buffers.delete(id)
+        this.options.onConsumed?.(id)
       }
     })
   }
 
-  /** 等全部排队写入落盘；守护进程收尾前调用。 */
-  async flush(): Promise<void> {
-    await Promise.all([...this.queues.values()])
+  async readRestorable(id: string): Promise<string> {
+    let content: string
+    try { content = await readFile(this.fileOf(id), 'utf8') } catch { return '' }
+    if (content.length <= RESTORE_HISTORY_CHARS) return content
+    const tail = content.slice(-RESTORE_HISTORY_CHARS)
+    const firstBreak = tail.indexOf('\n')
+    return firstBreak === -1 ? tail : tail.slice(firstBreak + 1)
   }
 
-  /** 读取会话元数据；文件缺失、损坏或版本不认识时返回空清单。 */
-  async readSessionRecords(): Promise<readonly PersistedSessionRecord[]> {
-    let parsed: unknown
+  async readScreen(id: string): Promise<PersistedScreen | null> {
     try {
-      parsed = JSON.parse(await readFile(this.options.sessionsFile, 'utf8'))
-    } catch {
-      return []
-    }
-    if (typeof parsed !== 'object' || parsed === null) return []
-    const file = parsed as { version?: unknown; sessions?: unknown }
-    if (file.version !== SESSIONS_FILE_VERSION || !Array.isArray(file.sessions)) return []
-    const records: PersistedSessionRecord[] = []
-    for (const entry of file.sessions) {
-      const record = parseRecord(entry)
-      if (record !== null) records.push(record)
-    }
-    return records
+      const parsed: unknown = JSON.parse(await readFile(this.screenOf(id), 'utf8'))
+      if (typeof parsed !== 'object' || parsed === null) return null
+      const value = parsed as Record<string, unknown>
+      if (typeof value.ansi !== 'string' || value.ansi.length > TERMINAL_SNAPSHOT_MAX_CHARS
+        || !isDimension(value.cols) || !isDimension(value.rows)) return null
+      return { ansi: value.ansi, cols: value.cols, rows: value.rows }
+    } catch { return null }
   }
 
-  /** 原子写入会话元数据：先写临时文件再改名，避免读到半截 JSON。 */
-  async writeSessionRecords(records: readonly PersistedSessionRecord[]): Promise<void> {
-    const payload = JSON.stringify({ version: SESSIONS_FILE_VERSION, sessions: records })
-    const temporary = `${this.options.sessionsFile}.tmp-${process.pid}`
-    try {
+  async writeScreen(id: string, screen: PersistedScreen): Promise<void> {
+    this.flushBuffer(id)
+    await this.enqueue(id, async () => {
       await this.ensureDirectory()
-      await writeFile(temporary, payload, { encoding: 'utf8', mode: 0o600 })
-      await rename(temporary, this.options.sessionsFile)
-    } catch (error) {
-      this.options.onError(error)
+      await this.atomicWrite(this.screenOf(id), JSON.stringify(screen))
+    })
+  }
+
+  /** 已退出会话不再保留写入计数；文件和画面留在磁盘供按需读取。 */
+  async seal(id: string): Promise<void> {
+    this.flushBuffer(id)
+    await this.queues.get(id)
+    this.written.delete(id)
+  }
+
+  remove(id: string): void {
+    const buffer = this.buffers.get(id)
+    if (buffer !== undefined) {
+      if (buffer.timer !== null) clearTimeout(buffer.timer)
+      buffer.timer = null
+      buffer.chunks = []
+      if (!buffer.draining) this.buffers.delete(id)
     }
+    void this.enqueue(id, async () => {
+      await rm(this.fileOf(id), { force: true })
+      await rm(this.screenOf(id), { force: true })
+      this.written.delete(id)
+    })
   }
 
-  private fileOf(id: string): string {
-    return join(this.options.directory, `${id}.log`)
+  private flushBuffer(id: string): void {
+    const buffer = this.buffers.get(id)
+    if (buffer !== undefined) this.drain(id, buffer)
   }
 
-  /** 把一次操作排到该终端的队列尾部，返回本次操作的完成承诺。 */
+  async flush(): Promise<void> {
+    for (const id of this.buffers.keys()) this.flushBuffer(id)
+    await Promise.all([...this.queues.values()])
+    await this.recordsWriting
+  }
+
+  async readSessionRecords(): Promise<readonly PersistedSessionRecord[]> {
+    try {
+      const parsed: unknown = JSON.parse(await readFile(this.options.sessionsFile, 'utf8'))
+      if (typeof parsed !== 'object' || parsed === null) return []
+      const file = parsed as { version?: unknown; sessions?: unknown }
+      if (file.version !== SESSIONS_FILE_VERSION || !Array.isArray(file.sessions)) return []
+      const records: PersistedSessionRecord[] = []
+      const ids = new Set<string>()
+      for (const entry of file.sessions) {
+        const record = parseRecord(entry)
+        if (record !== null && !ids.has(record.id)) { records.push(record); ids.add(record.id) }
+      }
+      return records
+    } catch { return [] }
+  }
+
+  /** 最多保留一个最新待写版本，慢盘不会把尺寸变化排成无界元数据队列。 */
+  writeSessionRecords(records: readonly PersistedSessionRecord[]): Promise<void> {
+    this.recordsPending = records
+    if (this.recordsWriting !== null) return this.recordsWriting
+    this.recordsWriting = (async () => {
+      while (this.recordsPending !== null) {
+        const next = this.recordsPending
+        this.recordsPending = null
+        try {
+          await this.ensureDirectory()
+          await this.atomicWrite(this.options.sessionsFile, JSON.stringify({ version: SESSIONS_FILE_VERSION, sessions: next }))
+        } catch (error) { this.options.onError(error) }
+      }
+    })().finally(() => { this.recordsWriting = null })
+    return this.recordsWriting
+  }
+
+  private fileOf(id: string): string { return join(this.options.directory, `${id}.log`) }
+  private screenOf(id: string): string { return join(this.options.directory, `${id}.screen.json`) }
+
   private enqueue(id: string, operation: () => Promise<void>): Promise<void> {
-    const previous = this.queues.get(id) ?? Promise.resolve()
-    const next = previous.then(operation).catch((error: unknown) => {
-      this.options.onError(error)
-    })
+    const next = (this.queues.get(id) ?? Promise.resolve()).then(operation).catch(this.options.onError)
     this.queues.set(id, next)
-    // 队列排空后清掉引用，避免长期运行后按终端累积空链。
-    void next.then(() => {
-      if (this.queues.get(id) === next) this.queues.delete(id)
-    })
+    void next.then(() => { if (this.queues.get(id) === next) this.queues.delete(id) })
     return next
   }
 
-  /** 裁剪：保留后半段，并从第一个换行之后开始，避免留下半截转义序列。 */
-  private async trim(id: string, file: string): Promise<void> {
-    let content: string
-    try {
-      content = await readFile(file, 'utf8')
-    } catch {
-      return
-    }
-    if (content.length <= MAX_HISTORY_CHARS / 2) return
-    const tail = content.slice(content.length - MAX_HISTORY_CHARS / 2)
-    const firstBreak = tail.indexOf('\n')
-    const kept = firstBreak === -1 ? tail : tail.slice(firstBreak + 1)
+  private async atomicWrite(file: string, content: string): Promise<void> {
     const temporary = `${file}.tmp-${process.pid}`
-    await writeFile(temporary, kept, 'utf8')
-    await rename(temporary, file)
-    this.written.set(id, kept.length)
+    try {
+      await writeFile(temporary, content, { encoding: 'utf8', mode: 0o600 })
+      await rename(temporary, file)
+    } finally { await rm(temporary, { force: true }).catch(() => {}) }
   }
 
-  /** 历史文件当前大小（字节）；只用于状态展示，读取失败按 0 处理。 */
-  async sizeOf(id: string): Promise<number> {
-    try {
-      return (await stat(this.fileOf(id))).size
-    } catch {
-      return 0
-    }
+  private async trim(id: string): Promise<void> {
+    const file = this.fileOf(id)
+    const content = await readFile(file, 'utf8')
+    const tail = content.slice(-MAX_HISTORY_CHARS / 2)
+    const firstBreak = tail.indexOf('\n')
+    const kept = firstBreak === -1 ? tail : tail.slice(firstBreak + 1)
+    await this.atomicWrite(file, kept)
+    this.written.set(id, kept.length)
   }
 }
 
-/** 校验一条持久化记录；字段不全或类型不符时丢弃这一条，不影响其他记录。 */
+function isDimension(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 2 && value <= 1000
+}
 function parseRecord(value: unknown): PersistedSessionRecord | null {
   if (typeof value !== 'object' || value === null) return null
   const record = value as Record<string, unknown>
-  const strings = ['id', 'projectPath', 'shell', 'cwd', 'title'] as const
-  for (const key of strings) {
-    if (typeof record[key] !== 'string' || (record[key] as string) === '') return null
+  // 记录来自磁盘，标识仍需限制为单个文件名，不能借恢复访问历史目录之外。
+  if (typeof record.id !== 'string' || !/^[a-zA-Z0-9-]{1,128}$/.test(record.id)) return null
+  for (const key of ['projectPath', 'shell', 'cwd', 'title'] as const) {
+    if (typeof record[key] !== 'string' || record[key] === '') return null
   }
-  const numbers = ['cols', 'rows', 'createdAt'] as const
-  for (const key of numbers) {
-    if (typeof record[key] !== 'number' || !Number.isFinite(record[key] as number)) return null
-  }
+  if (!isDimension(record.cols) || !isDimension(record.rows)
+    || typeof record.createdAt !== 'number' || !Number.isFinite(record.createdAt)) return null
   return {
-    id: record.id as string,
-    projectPath: record.projectPath as string,
-    shell: record.shell as string,
-    cwd: record.cwd as string,
-    title: record.title as string,
-    cols: record.cols as number,
-    rows: record.rows as number,
-    createdAt: record.createdAt as number
+    id: record.id, projectPath: record.projectPath as string, shell: record.shell as string,
+    cwd: record.cwd as string, title: record.title as string, cols: record.cols, rows: record.rows, createdAt: record.createdAt
   }
 }

@@ -168,7 +168,7 @@ async function confirmRemoval(): Promise<void> {
     <header>
       <h1 class="text-xl font-semibold tracking-tight">快捷命令</h1>
       <p class="mt-1 text-sm text-desk-muted">
-        保存常用命令，在标签栏的「命令」菜单或终端右键里一键运行。
+        保存常用命令，在标签栏的「命令」菜单或终端右键里一键运行；运行时新开一个终端标签执行。
       </p>
     </header>
 

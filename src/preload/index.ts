@@ -182,6 +182,7 @@ import {
   TERMINAL_EXIT_EVENT,
   TERMINAL_LIST_CHANNEL,
   TERMINAL_RESIZE_CHANNEL,
+  TERMINAL_RECOVERY_CHANNEL,
   TERMINAL_SNAPSHOTS_CHANNEL,
   TERMINAL_WRITE_CHANNEL,
   isTerminalCommandResult,
@@ -205,6 +206,8 @@ import type {
   TerminalExitEvent,
   TerminalListRequest,
   TerminalResizeRequest,
+  TerminalSnapshotRequest,
+  TerminalRecoveryRequest,
   TerminalSessionResult,
   TerminalSessionsResult,
   TerminalSnapshotsResult,
@@ -875,10 +878,17 @@ const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionAp
     return isTerminalSessionsResult(response) ? response : invalidTerminalSessionsResponse()
   },
 
-  /** 读取全部终端的画面快照；页面重挂载后用它还原滚动历史。 */
-  async fetchTerminalSnapshots() {
-    const response: unknown = await ipcRenderer.invoke(TERMINAL_SNAPSHOTS_CHANNEL)
+  /** 每次只读取一个终端的受限画面，传输分块由主进程负责。 */
+  async fetchTerminalSnapshots(request: TerminalSnapshotRequest) {
+    const payload: TerminalSnapshotRequest = { id: request.id, deliveryId: request.deliveryId }
+    const response: unknown = await ipcRenderer.invoke(TERMINAL_SNAPSHOTS_CHANNEL, payload)
     return isTerminalSnapshotsResult(response) ? response : invalidTerminalSnapshotsResponse()
+  },
+
+  async recoverTerminal(request: TerminalRecoveryRequest) {
+    const payload: TerminalRecoveryRequest = { id: request.id, deliveryId: request.deliveryId, action: request.action }
+    const response: unknown = await ipcRenderer.invoke(TERMINAL_RECOVERY_CHANNEL, payload)
+    return isTerminalCommandResult(response) ? response : invalidTerminalCommandResponse()
   },
 
   /** 关闭全部终端（含其他项目）；只用于用户显式清理常驻会话。 */
@@ -920,7 +930,7 @@ const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionAp
   /** 回报已消费的字符数；只释放背压额度，失败不重试也不产生未处理的拒绝。 */
   ackTerminalData(request: TerminalAckRequest) {
     void ipcRenderer
-      .invoke(TERMINAL_ACK_CHANNEL, { id: request.id, chars: request.chars })
+      .invoke(TERMINAL_ACK_CHANNEL, { id: request.id, deliveryId: request.deliveryId, seqEnd: request.seqEnd })
       .catch(() => undefined)
   },
 
