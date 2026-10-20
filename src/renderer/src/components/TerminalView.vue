@@ -351,7 +351,12 @@ function onPaste(event: ClipboardEvent): void {
   pendingPaste.value = { text, lines }
 }
 
-/** 确认粘贴：程序启用了括号粘贴模式时补上标记，让它能区分粘贴与逐键输入。 */
+/**
+ * 确认粘贴：程序启用了括号粘贴模式时补上标记，让它能区分粘贴与逐键输入。
+ * 未启用括号粘贴模式时把 LF 换成 CR：PowerShell/PSReadLine 不把 LF 当 Enter，
+ * 多行粘贴会被攒成一条待提交输入，行的先后顺序就不再是逐条执行的顺序。
+ * 括号粘贴模式交给程序自己解析粘贴内容，此时不做转换。
+ */
 async function confirmPaste(): Promise<void> {
   const pending = pendingPaste.value
   pendingPaste.value = null
@@ -361,7 +366,9 @@ async function confirmPaste(): Promise<void> {
     return
   }
   const bracketed = term?.modes.bracketedPasteMode === true
-  const payload = bracketed ? `\u001b[200~${pending.text}\u001b[201~` : pending.text
+  const payload = bracketed
+    ? `\u001b[200~${pending.text}\u001b[201~`
+    : pending.text.replace(/\r\n|\r|\n/g, '\r')
   const result = await writeTerminal({ id: props.session.id, data: payload })
   if (!result.ok) terminalStore.reportError(result.error.message)
 }

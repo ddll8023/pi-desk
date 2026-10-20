@@ -273,11 +273,14 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
   /**
    * 运行一条快捷命令：活动标签是仍在运行的终端就写进它，否则先在当前项目新建终端再写入。
    * 已退出的终端不能再输入（主进程会拒绝），因此和「没有终端」走同一条新建路径。
-   * 命令文本按原样写入，不做解析或转义（它就是要交给 shell 的输入）；`appendEnter` 为真时补一个回车立即执行。
+   * 命令文本不做解析或转义（它就是要交给 shell 的输入）；`appendEnter` 为真时补一个回车立即执行。
+   * 回车一律用 CR：多行命令里的 LF 在 PowerShell/PSReadLine 里不是 Enter，只当作输入缓冲里的换行，
+   * 整段会被攒成一条待提交的多行输入，行的先后顺序就不再是逐条执行的顺序（例如 `cd` 反而落在后面的命令之后）。
+   * 因此要执行时把每个换行都换成 CR，让每行各自成为一次提交；只插入文本时不转换，否则等于替用户按下执行。
    * 失败（没有项目、终端达到上限、写入被拒）只留在终端 store 的错误提示里，不在这里重复文案。
    */
   async function runQuickCommand(command: QuickCommand): Promise<void> {
-    const text = command.appendEnter ? `${command.command}\r` : command.command
+    const text = command.appendEnter ? `${command.command.replace(/\r\n|\r|\n/g, '\r')}\r` : command.command
     const active = activeTerminalId.value
     const activeRunning = active !== null
       && terminalStore.sessions.some(session => session.id === active && session.status === 'running')
