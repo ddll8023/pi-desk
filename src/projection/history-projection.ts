@@ -192,7 +192,12 @@ export function readBranchHistory(branch: readonly SessionEntry[], query: Histor
     if (!entryId) throw new Error('历史消息缺少官方来源身份')
     const original = selected.find(entry => entry.id === entryId)
     // 图片占位必须与用户原文区分，避免复制、修改重试把说明文字当成输入。
-    const originalContent = original?.type === 'message' ? original.message.content : null
+    // AgentMessage 是联合类型：bashExecution / branchSummary / compactionSummary 没有 content，
+    // 直接取字段会命中不存在的属性，因此先确认带 content 再读。
+    const originalMessage = original?.type === 'message' ? original.message : null
+    const originalContent = originalMessage !== null && 'content' in originalMessage
+      ? originalMessage.content
+      : null
     const sourceTurn = turnIds.get(entryId)
     return { ...message, id: historyMessageId(entryId), entryId,
       recoverable: query.kind === 'page' || chunks.some(chunk => chunk.entryId === entryId),

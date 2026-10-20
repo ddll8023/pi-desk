@@ -22,8 +22,9 @@ import AppButton from './ui/AppButton.vue'
 const props = defineProps<{
   readonly message: ChatMessageView
   readonly actionsDisabled?: boolean
-  /** 动作栏不可用的原因；禁用时替换默认 tooltip，用户据此知道在等什么。 */
-  readonly disabledReason?: string | null
+  /** 动作栏不可用的原因；禁用时替换默认 tooltip，用户据此知道在等什么。
+   *  显式带上 `undefined`：开启 exactOptionalPropertyTypes 时，可选属性不自动接受 undefined 值。 */
+  readonly disabledReason?: string | null | undefined
   /** 同一轮内的非首条 AI 消息：只留时间与用量，不重复 π 标记与角色名。 */
   readonly compactHeader?: boolean
   readonly historyChunks?: readonly HistoryChunk[] | undefined

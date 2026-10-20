@@ -1145,7 +1145,8 @@ function isToolArgSummaryEntry(value: unknown): value is ToolArgSummaryEntry {
 }
 
 /** 摘要里的计数都是非负整数。 */
-function isCount(value: unknown): boolean {
+/** 非负整数计数；带类型谓词，让后续比较不用再收窄一次。 */
+function isCount(value: unknown): value is number {
   return typeof value === 'number' && Number.isInteger(value) && value >= 0
 }
 

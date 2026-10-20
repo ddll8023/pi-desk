@@ -126,9 +126,18 @@ function runPrimary(): void {
   emit('commit')
 }
 
+/**
+ * 菜单项统一走这里：emit 是按事件名逐个声明的，联合类型不能直接传，
+ * 因此按动作分派到各自的 emit，而不是用断言绕过类型。
+ */
 function run(action: 'commit' | 'commitAndPush' | 'pull' | 'push'): void {
   closePopup()
-  emit(action)
+  switch (action) {
+    case 'commit': emit('commit'); break
+    case 'commitAndPush': emit('commitAndPush'); break
+    case 'pull': emit('pull'); break
+    case 'push': emit('push'); break
+  }
 }
 
 /**

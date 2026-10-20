@@ -246,14 +246,16 @@ function nodeMarkdown(node: GenuiNode, values: Readonly<Record<string, GenuiPara
       return joinBlocks(node.children.map((child) => nodeMarkdown(child, values, level)))
     case 'collapse':
       // 收起只是视觉收纳：复制时全部展开，隐藏的内容不能因为屏幕上收着就丢掉。
-      return joinBlocks(node.items.map((item) => [
-        heading(level, item.title),
+      // 每个条目拆成「标题块 + 子节点块」交给 joinBlocks 按块留空行：直接摊平会吃掉条目之间的空行，
+      // 把标题当成普通行塞进去还会被 joinBlocks 按字符展开。
+      return joinBlocks(node.items.flatMap((item) => [
+        [heading(level, item.title)],
         ...childrenMarkdown(item.children, values, level + 1)
       ]))
     case 'tabs':
-      // 一次只看一页，但复制要完整：按页顺序全部展开，页签文案作小标题。
-      return joinBlocks(node.items.map((item) => [
-        heading(level, item.label),
+      // 一次只看一页，但复制要完整：按页顺序全部展开，页签文案作小标题；块结构同 collapse。
+      return joinBlocks(node.items.flatMap((item) => [
+        [heading(level, item.label)],
         ...childrenMarkdown(item.children, values, level + 1)
       ]))
     case 'controls':

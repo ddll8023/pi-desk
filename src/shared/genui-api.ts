@@ -774,8 +774,8 @@ function readCount(value: unknown, max: number): number | undefined | null {
  */
 interface ParseContext {
   nodes: number
-  /** 文档已声明的参数；控件组只能引用这些 id，图示绑定还要额外确认是数值参数。 */
-  readonly declaredParams: ReadonlyMap<string, GenuiParam>
+  /** 文档已声明的参数；控件组只能引用这些 id，图示绑定还要额外确认是数值参数。解析期会写入，读完即冻结语义。 */
+  readonly declaredParams: Map<string, GenuiParam>
   /** 已被某个控件组引用的参数 id；文档级交叉校验用它找出未被渲染的参数。 */
   readonly usedParams: Set<string>
   readonly issues: GenuiIssue[]
@@ -1605,7 +1605,8 @@ function parseNode(
         return fail(context, path, '文档没有声明 params 时不能用 controls 节点')
       }
       if (value.params === undefined) {
-        for (const id of context.declaredParams) context.usedParams.add(id)
+        // 遍历 Map 默认给的是 [id, 参数] 元组，这里要的是 id 本身。
+        for (const id of context.declaredParams.keys()) context.usedParams.add(id)
         return { type: 'controls' }
       }
       if (!Array.isArray(value.params)) return fail(context, `${path}.params`, '省略（渲染全部参数）或给参数 id 数组')

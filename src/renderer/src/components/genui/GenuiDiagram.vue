@@ -69,11 +69,12 @@ const ariaLabel = computed(() => `${DIAGRAM_KIND_TITLES[props.node.kind]}：${la
 </script>
 
 <template>
+  <!-- 无障碍名用 camelCase 绑定：`aria-label` 在 Vue 里按原生属性处理，不会被当成 ariaLabel 这个 prop。 -->
   <GenuiSvgShapes
     :shapes="layout.shapes"
     :width="SVG_CANVAS_WIDTH"
     :height="layout.height"
-    :aria-label="ariaLabel"
+    :ariaLabel="ariaLabel"
     :caption="node.caption"
     :notes="layout.notes"
   />

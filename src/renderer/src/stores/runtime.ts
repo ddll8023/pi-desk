@@ -289,7 +289,15 @@ export const useRuntimeStore = defineStore('runtime', () => {
     const base = new Map<string, ProjectionMessage>()
     for (const message of [...history.value.pages, ...messages.value]) base.set(messageKey(message), message)
     const output: ProjectionMessage[] = []
-    const latestUser = messages.value.findLast(message => message.role === 'user')
+    // 最后一条用户消息：`findLast` 属于 ES2023，当前页面的 lib 只到 ES2022，因此从尾部手写一次查找。
+    let latestUser: ProjectionMessage | undefined
+    for (let index = messages.value.length - 1; index >= 0; index -= 1) {
+      const candidate = messages.value[index]
+      if (candidate?.role === 'user') {
+        latestUser = candidate
+        break
+      }
+    }
     let group: ProjectionMessage[] = []
     const finish = (): void => {
       const first = group[0]

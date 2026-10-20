@@ -18,7 +18,8 @@ const props = defineProps<{
   readonly height: number
   /** 无障碍说明：图解/图表的关键结论，读屏用户不必看图也能得到同样的信息。 */
   readonly ariaLabel: string
-  readonly caption?: string
+  /** 图表/图解的补充说明；未给时不渲染。显式带上 `undefined`，与仓库其他可选 prop 同一口径。 */
+  readonly caption?: string | undefined
   /** 推导结论；以文本同时给出，复制与读屏场景都不该只拿到图形。 */
   readonly notes: readonly string[]
   /** 悬停热区；图解不传，等同于没有悬停提示。 */
