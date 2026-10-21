@@ -1,38 +1,20 @@
 <!--
-  文件标签的 Markdown 预览：渲染受限 HTML，再在 DOM 上补齐公式、标题锚点与目录、代码高亮与项目内图片。
-
-  与聊天正文共用块级排版样式，但内容边界不同：这里允许项目内图片与可跳转链接，因此点击分五类处理
-  ——锚点在文档内滚动、标题锚点复制「路径#id」、项目内 Markdown 打开新标签页、http(s) 交系统浏览器、
-  其余只复制地址；代码块与表格沿用与聊天一致的结构，复制按钮仍在本地完成。
-
-  预览本身可编辑，修改结果按原文区间上报父级写回编辑器文档（父级是唯一真源，保存与撤销仍走编辑器）：
-  段落、标题、列表条目、引用段直接改渲染结果，提交时用 `markdown-inline-serialize` 还原成 Markdown；
-  代码块、表格、公式、图片、front matter 以及带嵌套结构的条目改成等宽源码框，避免渲染层丢失结构。
-  提交后只重绘被改的那一个顶层块，其余 DOM 不动，因此图片不重读、代码不重新高亮、滚动位置不跳。
-  提交前与进入编辑时的序列化基线比较：内容没真变（例如只点了一下就看别处）就只还原 DOM，
-  不写回编辑器，也不会把标点改成转义写法。
-
-  渲染后的异步补全（图片、高亮）都带序号校验：正文一变就丢弃旧结果，避免迟到的读取覆盖新内容。
-  目录在左侧，条目在提取标题 id 时一并算出并上报父级，由父级决定是否显示目录栏；当前标题按滚动位置
-  计算后交给目录面板高亮，面板不自己监听滚动。
-
-  预览内查找在正文文本节点上做匹配，用 CSS Custom Highlight API 着色；快捷键只在预览可见时生效，
-  关闭查找、切换文件与卸载都会清掉高亮，避免旧 Range 留在新内容上。
-
-  三处与正文渲染器无关的阅读增强都在这里落地：引用首行的 `[!NOTE]` 一类标记由 `applyCallouts` 换成
-  带语义色的标题行；超过阈值的长文档进入大文档模式，跳过代码高亮与多余图片读取，也不提供就地编辑；
-  项目内图片可点击放大，浮层复用的是正文里已加载的同一份地址，不再读盘。
+  独立文件阅读表面：正文、目录、可见文本查找、标题导航与项目内图片查看。
+  默认只读；父级明确开启编辑后才允许修改块内容，保存和退出通过 flushEdit 同步到源码编辑器。
+  文本与结构块分别使用行内序列化与源码输入；只有顶层边界和邻块内容均保持一致时才局部重绘。
+  隐藏期间只记录最新文本，重新激活后补全呈现；异步装饰始终受文档代数约束。
 -->
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { FileMarkdownBlock, FileMarkdownTocEntry } from '../file-markdown'
 import {
   applyCallouts,
+  canPreviewFileMarkdown,
   ensureHeadingIds,
   lexFileMarkdown,
   renderFileMarkdown,
   renderFileMarkdownBlock,
-  resolveProjectPath
+  resolveFileMarkdownLink
 } from '../file-markdown'
 import { applyHighlights, clearHighlights, collectMatches, scrollRangeIntoView } from '../file-markdown-search'
 import { clearMarkdownImageCache, loadMarkdownImage } from '../file-images'
@@ -43,6 +25,7 @@ import { copyText } from '../clipboard'
 import { openExternalUrl } from '../services/external-url'
 import { useWorkspaceTabsStore } from '../stores/workspace-tabs'
 import FileMarkdownToc from './FileMarkdownToc.vue'
+import FileMarkdownImageViewer from './FileMarkdownImageViewer.vue'
 
 const props = defineProps<{
   /** 要渲染的 Markdown 文本；未保存的修改也走这里。 */
@@ -61,11 +44,14 @@ const props = defineProps<{
   readonly active: boolean
   /** 是否允许在预览里就地编辑；只读大文件为 false，此时只有阅读能力。 */
   readonly editable: boolean
+  readonly anchorRequest?: { readonly id: number; readonly anchor: string } | null
 }>()
 
 const emit = defineEmits<{
   toc: [entries: readonly FileMarkdownTocEntry[]]
-  closeToc: []
+  closeToc: [restoreFocus?: boolean]
+  pendingEdit: [pending: boolean]
+  anchorHandled: [requestId: number]
   /** 就地编辑的结果：把原文 [start, end) 换成 text，由父级写回编辑器文档。 */
   edit: [change: { readonly start: number; readonly end: number; readonly text: string }]
 }>()
@@ -82,10 +68,6 @@ const SEARCH_DEBOUNCE_MS = 120
 const HEADING_THRESHOLD_PX = 24
 /** 源码框最多铺开的行数；更长的块在框内滚动，避免一屏被一个代码块占满。 */
 const SOURCE_MAX_ROWS = 40
-/** 进入大文档模式的字符数：超过后跳过重活，只保留阅读必要的那部分补全。 */
-const LARGE_DOCUMENT_CHARS = 300_000
-/** 大文档模式下最多加载的图片张数：其余只保留占位说明。 */
-const LARGE_DOCUMENT_MAX_IMAGES = 8
 /** 进入就地编辑时要跳过的子结构：这些块改渲染会丢内容，渲染器已把它们标成源码编辑。 */
 const STRUCTURED_SELECTOR = [
   '.markdown-code-block',
@@ -94,6 +76,7 @@ const STRUCTURED_SELECTOR = [
   '.markdown-math-inline',
   '.markdown-math-block',
   '.file-markdown-frontmatter',
+  'details',
   'ul',
   'ol'
 ].join(', ')
@@ -145,10 +128,13 @@ const searchActive = ref(0)
 const searchInput = ref<HTMLInputElement | null>(null)
 /** 正在放大查看的图片；只存已加载的项目内图片地址与替代文本。 */
 const zoomed = ref<{ readonly src: string; readonly alt: string } | null>(null)
-const zoomDialog = ref<HTMLElement | null>(null)
-
-/** 正文是否超出大文档阈值：渲染与补全都按它降级，阈值只看字符数，不额外做统计。 */
-const largeDocument = computed(() => renderText.value.length > LARGE_DOCUMENT_CHARS)
+const shell = ref<HTMLElement | null>(null)
+const narrow = ref(false)
+let resizeObserver: ResizeObserver | null = null
+let needsMount = true
+let needsDecoration = false
+let composing = false
+let pointerEditTarget: HTMLElement | null = null
 
 /** 匹配状态文案：空查询不显示；命中为 0 时说明无结果，触顶时用「+」标注还有更多。 */
 const searchStatus = computed(() => {
@@ -168,7 +154,9 @@ watch(() => props.text, (text) => {
   activeHeadingId.value = ''
   resetSearch()
   clearMarkdownImageCache()
-  mountDocument()
+  needsMount = true
+  revision += 1
+  if (props.active) mountDocument()
 })
 
 // 相对路径变了，图片与链接的基准目录也变了：必须重新渲染，不能只清缓存。
@@ -177,43 +165,71 @@ watch(() => props.path, () => {
   activeHeadingId.value = ''
   resetSearch()
   clearMarkdownImageCache()
-  mountDocument()
+  revision += 1
+  needsMount = true
+  zoomed.value = null
+  if (props.active) mountDocument()
 })
 
-// 可编辑性变化（大文件只读）时重新标注块：复选框与编辑入口都要跟着变。
 watch(() => props.editable, () => {
-  cancelEdit()
+  commitEdit()
   if (body.value !== null) applyBlockRanges(body.value)
 })
 
-// 预览被隐藏（切回源码或换标签）时收起查找、放大图并清高亮，避免快捷键与高亮残留在看不见的层里。
 watch(() => props.active, (active) => {
-  if (active) return
-  closeSearch()
-  closeZoom()
+  if (active) {
+    if (needsMount) mountDocument()
+    else if (needsDecoration) void decorate()
+    handleAnchorRequest()
+    return
+  }
+  commitEdit()
+  revision += 1
+  needsDecoration = true
+  resetSearch()
+  zoomed.value = null
+})
+
+watch(() => props.anchorRequest?.id, () => handleAnchorRequest(), { flush: 'post' })
+watch(() => props.showFrontmatter, () => { if (searchOpen.value) void nextTick(runSearch) })
+watch(() => props.fontSize, () => { if (props.active) void nextTick(updateActiveHeading) })
+watch(() => props.showToc, (show) => {
+  if (show && narrow.value) void nextTick(() => shell.value?.querySelector<HTMLElement>('nav select')?.focus())
 })
 
 onBeforeUnmount(() => {
-  editing.value = null
+  commitEdit(true)
   revision += 1
+  resizeObserver?.disconnect()
   window.removeEventListener('keydown', onFindShortcut)
-  window.removeEventListener('keydown', onZoomEscape)
   if (scrollFrame !== 0) cancelAnimationFrame(scrollFrame)
-  if (searchTimer !== null) window.clearTimeout(searchTimer)
-  clearHighlights()
+  resetSearch()
 })
 
 onMounted(() => {
   window.addEventListener('keydown', onFindShortcut)
-  window.addEventListener('keydown', onZoomEscape)
-  mountDocument()
+  if (shell.value !== null) {
+    resizeObserver = new ResizeObserver(([entry]) => {
+      if (entry === undefined) return
+      const wasNarrow = narrow.value
+      narrow.value = entry.contentRect.width < 960
+      if (narrow.value && !wasNarrow) emit('closeToc', false)
+    })
+    narrow.value = shell.value.clientWidth < 960
+    if (narrow.value) emit('closeToc', false)
+    resizeObserver.observe(shell.value)
+  }
+  if (props.active) mountDocument()
 })
 
 /** 整篇重建：写入 HTML、标注块区间，再补全公式、标题 id、代码高亮与图片。 */
 function mountDocument(): void {
+  if (!props.active) { needsMount = true; return }
   const root = body.value
   if (root === null) return
+  needsMount = false
   revision += 1
+  if (!canPreviewFileMarkdown(renderText.value)) return
   const doc = renderFileMarkdown(renderText.value)
   if (doc === null) {
     renderFailed.value = true
@@ -242,27 +258,19 @@ async function decorate(): Promise<void> {
     return
   }
   const current = revision
+  needsDecoration = false
 
   renderMathInto(root)
-  // 提示块把引用首行的标记换成标题行，必须在提取目录与计算块区间之前完成，
-  // 否则标题文本与可编辑区间都会带上已被剥离的标记。
   applyCallouts(root)
   toc.value = ensureHeadingIds(root)
   emit('toc', toc.value)
   updateActiveHeading()
-
-  // 大文档只保留阅读必需的补全：代码高亮与其余图片逐张读取会拖慢整篇的首次呈现。
+  handleAnchorRequest()
   const images = loadImages(root, current)
-  if (largeDocument.value) {
-    if (searchOpen.value) runSearch()
-    await images
-    if (current === revision) updateActiveHeading()
-    return
-  }
 
   // 代码高亮会重写代码块里的文本节点，查找必须等它结束再扫，否则代码块内的 Range 会立即失效；
   // 图片读取与高亮互不依赖，同时开始，避免有大代码块时预览图片被拖后。
-  await highlightCodeBlocks(root, () => current !== revision)
+  await highlightCodeBlocks(root, () => current !== revision || !props.active)
   if (current === revision && searchOpen.value) runSearch()
   await images
   // 图片撑开高度后当前标题可能变化，补一次测量。
@@ -274,8 +282,23 @@ async function decorate(): Promise<void> {
  * 元素数与分组数不一致说明渲染结构与解析结果对不上，此时不给任何元素标注，整篇保持只读。
  */
 function applyBlockRanges(root: HTMLElement): void {
-  // 大文档不提供就地编辑：块区间标注会扫完整篇 DOM，而长文档的就地提交也只能整篇重建。
-  if (!props.editable || largeDocument.value) return
+  // 先清旧编辑标注，关闭编辑模式后不能留下可勾选任务或可编辑块入口。
+  for (const element of root.querySelectorAll<HTMLElement>('[data-md-kind], [data-md-token]')) {
+    delete element.dataset.mdKind
+    delete element.dataset.mdStart
+    delete element.dataset.mdEnd
+    delete element.dataset.mdToken
+    if (element.dataset.mdSourceFocus === 'true') {
+      element.removeAttribute('tabindex')
+      element.removeAttribute('title')
+      delete element.dataset.mdSourceFocus
+    }
+  }
+  for (const checkbox of root.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')) {
+    checkbox.disabled = true
+    delete checkbox.dataset.mdCheck
+  }
+  if (!props.editable) return
   const groups = groupByToken(blocks)
   const elements = Array.from(root.children)
   if (elements.length !== groups.length) return
@@ -335,6 +358,9 @@ function markText(element: HTMLElement, block: FileMarkdownBlock): void {
 
 /** 标注「用源码框编辑」的块；区间覆盖整块源码。 */
 function markSource(element: HTMLElement, block: FileMarkdownBlock): void {
+  element.tabIndex = 0
+  element.dataset.mdSourceFocus = 'true'
+  element.title = '双击或按 Enter 编辑此块源码'
   element.dataset.mdKind = 'source'
   element.dataset.mdStart = String(block.start)
   element.dataset.mdEnd = String(block.end)
@@ -346,12 +372,13 @@ async function loadImages(root: HTMLElement, current: number): Promise<void> {
   const frames = Array.from(root.querySelectorAll<HTMLElement>('.file-markdown-image-frame'))
   if (frames.length === 0) return
 
-  const limit = largeDocument.value ? LARGE_DOCUMENT_MAX_IMAGES : MAX_IMAGES
-  const queue = frames.slice(0, limit)
-  for (const frame of frames.slice(limit)) markUnloaded(frame, '图片过多，未加载')
+  const queue = frames.slice(0, MAX_IMAGES).filter(frame => !frame.classList.contains('is-ready'))
+  for (const frame of frames.slice(MAX_IMAGES)) markUnloaded(frame, '图片过多，未加载')
 
-  let loadedChars = 0
+  let loadedChars = Array.from(root.querySelectorAll<HTMLImageElement>('.file-markdown-image-frame.is-ready img'))
+    .reduce((total, image) => total + image.src.length, 0)
   for (let start = 0; start < queue.length; start += IMAGE_CONCURRENCY) {
+    if (current !== revision || !props.active) return
     // 预算用尽就停下：一次预览不把整篇图片都搬进内存。
     if (loadedChars > MAX_IMAGE_TOTAL_CHARS) {
       for (const frame of queue.slice(start)) markUnloaded(frame, '图片总量超出预览上限，未加载')
@@ -368,6 +395,10 @@ async function loadImages(root: HTMLElement, current: number): Promise<void> {
         markUnloaded(frame, source.error ?? '未加载')
         return
       }
+      if (loadedChars + source.url.length > MAX_IMAGE_TOTAL_CHARS) {
+        markUnloaded(frame, '图片总量超出预览上限，未加载')
+        return
+      }
       loadedChars += source.url.length
       const image = document.createElement('img')
       image.src = source.url
@@ -376,6 +407,10 @@ async function loadImages(root: HTMLElement, current: number): Promise<void> {
       image.decoding = 'async'
       frame.replaceChildren(image)
       frame.classList.add('is-ready')
+      frame.tabIndex = 0
+      frame.setAttribute('role', 'button')
+      frame.setAttribute('aria-label', `放大图片：${label}`)
+      frame.title = '点击放大图片'
     }))
   }
 }
@@ -384,19 +419,46 @@ async function loadImages(root: HTMLElement, current: number): Promise<void> {
 function markUnloaded(frame: HTMLElement, reason: string): void {
   const label = frame.dataset.imageLabel ?? '图片'
   frame.textContent = `${label}（${reason}）`
+  frame.removeAttribute('tabindex')
+  frame.removeAttribute('role')
+  frame.removeAttribute('aria-label')
+  frame.removeAttribute('title')
   frame.classList.remove('is-ready')
   frame.classList.add('is-error')
 }
 
 /**
  * 就地编辑提交：先本地替换文本并只重绘被改的顶层块，再上报父级写回编辑器。
- * 块数变了说明编辑改变了文档结构（例如多出一个空行），此时只能整篇重建。
+ * 顶层类型、子块路径或相邻 token 原文发生变化时，保留源码修改并回退整篇重建。
  */
 function applyLocalEdit(tokenIndex: number, start: number, end: number, insert: string): void {
   const root = body.value
   const next = renderText.value.slice(0, start) + insert + renderText.value.slice(end)
+  if (!canPreviewFileMarkdown(next)) {
+    renderText.value = next
+    needsMount = true
+    return
+  }
   const nextBlocks = lexFileMarkdown(next)
-  const sameShape = nextBlocks.length === blocks.length
+  const before = groupByToken(blocks)
+  const after = groupByToken(nextBlocks)
+  // 引用定义可能改变邻块的行内渲染，即使邻块原文没变也不能局部替换。
+  const hasDefinitions = /^ {0,3}\[[^\]]+\]:/m.test(next)
+  const sameShape = !hasDefinitions && before.length === after.length && before.every((group, index) => {
+    const previous = group[0]
+    const nextGroup = after[index]
+    const following = nextGroup?.[0]
+    if (previous === undefined || following === undefined || nextGroup === undefined) return false
+    if (previous.tokenIndex !== following.tokenIndex || previous.tokenType !== following.tokenType) return false
+    if (previous.tokenIndex !== tokenIndex) {
+      return renderText.value.slice(previous.tokenStart, previous.tokenEnd)
+        === next.slice(following.tokenStart, following.tokenEnd)
+    }
+    return group.length === nextGroup.length && group.every((block, blockIndex) => {
+      const other = nextGroup[blockIndex]
+      return other !== undefined && block.kind === other.kind && block.path.join('.') === other.path.join('.')
+    })
+  })
   const top = sameShape ? findTokenElement(root, tokenIndex) : null
   const html = sameShape ? renderFileMarkdownBlock(next, tokenIndex) : null
   const replacement = html === null ? null : toElement(html)
@@ -430,12 +492,13 @@ function findTokenElement(root: HTMLElement | null, tokenIndex: number): HTMLEle
   return null
 }
 
-/** 单块 HTML 包一层容器取首个子元素；渲染结果为空时返回 null。 */
+/** 只有恰好一个顶层元素且没有散落文本时才允许局部替换。 */
 function toElement(html: string): HTMLElement | null {
   const holder = document.createElement('div')
   holder.innerHTML = html
   const element = holder.firstElementChild
-  return element instanceof HTMLElement ? element : null
+  const hasLooseText = Array.from(holder.childNodes).some(node => node instanceof Text && node.data.trim() !== '')
+  return holder.children.length === 1 && !hasLooseText && element instanceof HTMLElement ? element : null
 }
 
 /** 标题可能刚被改过：重算 id 与目录，并更新当前标题高亮。 */
@@ -449,15 +512,27 @@ function refreshToc(): void {
 
 /** 目录跳转：滚动到标题并聚焦，便于键盘用户继续阅读；目标不存在时返回 false。 */
 function jumpTo(id: string): boolean {
-  commitEdit()
+  if (!commitEdit()) return false
   const target = body.value?.querySelector<HTMLElement>(`[id="${CSS.escape(id)}"]`)
   if (target === null || target === undefined) return false
+  for (let parent = target.parentElement; parent !== null && parent !== body.value; parent = parent.parentElement) {
+    if (parent instanceof HTMLDetailsElement) parent.open = true
+  }
   const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches
   target.scrollIntoView({ behavior: reduced ? 'auto' : 'smooth', block: 'start' })
   target.setAttribute('tabindex', '-1')
   target.focus({ preventScroll: true })
   activeHeadingId.value = id
+  if (narrow.value) emit('closeToc', false)
   return true
+}
+
+/** 标题请求在目录提取完成后消费；不存在的标题就地说明，不无限重试。 */
+function handleAnchorRequest(): void {
+  const request = props.anchorRequest
+  if (!props.active || needsMount || request === undefined || request === null || body.value === null) return
+  if (!jumpTo(request.anchor)) showNotice('文档里没有对应的标题。', true)
+  emit('anchorHandled', request.id)
 }
 
 /**
@@ -471,6 +546,7 @@ function updateActiveHeading(): void {
   const threshold = container.getBoundingClientRect().top + HEADING_THRESHOLD_PX
   let current = ''
   for (const heading of root.querySelectorAll<HTMLElement>('h1, h2, h3, h4, h5, h6')) {
+    if (heading.getClientRects().length === 0) continue
     if (heading.getBoundingClientRect().top > threshold) break
     current = heading.id
   }
@@ -488,7 +564,7 @@ function onScroll(): void {
 
 /** Cmd/Ctrl+F：只在预览可见时接管，打开查找并选中已有查询词。 */
 function onFindShortcut(event: KeyboardEvent): void {
-  if (!props.active || event.defaultPrevented || event.isComposing) return
+  if (!props.active || zoomed.value !== null || event.defaultPrevented || event.isComposing) return
   if (event.key.toLowerCase() !== 'f' || event.altKey || event.shiftKey) return
   if (!event.metaKey && !event.ctrlKey) return
   event.preventDefault()
@@ -496,6 +572,7 @@ function onFindShortcut(event: KeyboardEvent): void {
 }
 
 function openSearch(): void {
+  if (!props.active || !commitEdit()) return
   searchOpen.value = true
   void nextTick(() => {
     searchInput.value?.focus()
@@ -514,6 +591,7 @@ function closeSearch(): void {
 
 /** 清掉查找状态与高亮；文本重建与切换文件也走这里。 */
 function resetSearch(): void {
+  const ownedHighlights = searchOpen.value
   if (searchTimer !== null) {
     window.clearTimeout(searchTimer)
     searchTimer = null
@@ -523,7 +601,7 @@ function resetSearch(): void {
   searchMatches.value = []
   searchTruncated.value = false
   searchActive.value = 0
-  clearHighlights()
+  if (ownedHighlights) clearHighlights()
 }
 
 /** 查询变化后防抖重扫；命中为空时也要清掉上一次的高亮。 */
@@ -569,6 +647,7 @@ function moveMatch(step: number): void {
 
 /** 输入框内的键盘操作：Enter 下一个、Shift+Enter 上一个、Esc 关闭。 */
 function onSearchKeydown(event: KeyboardEvent): void {
+  if (event.isComposing) return
   if (event.key === 'Enter') {
     event.preventDefault()
     moveMatch(event.shiftKey ? -1 : 1)
@@ -576,6 +655,7 @@ function onSearchKeydown(event: KeyboardEvent): void {
   }
   if (event.key === 'Escape') {
     event.preventDefault()
+    event.stopPropagation()
     closeSearch()
   }
 }
@@ -586,7 +666,7 @@ function onSearchKeydown(event: KeyboardEvent): void {
  * 提交只替换被改的那一块，点击目标本身不会被销毁，一次点击即可换块继续编辑。
  */
 function onContentMouseDown(event: MouseEvent): void {
-  if (!props.editable || event.button !== 0) return
+  if (!props.editable || event.button !== 0 || composing) return
   const target = event.target
   if (!(target instanceof Element)) return
 
@@ -611,11 +691,18 @@ function onContentMouseDown(event: MouseEvent): void {
 
   const host = target.closest<HTMLElement>('[data-md-kind]')
   if (host === null) return
+  // 结构块用双击进入源码输入，保留单击和拖选复制的阅读动作。
+  if (host.dataset.mdKind === 'source') {
+    pointerEditTarget = host
+    return
+  }
   startEdit(host)
 }
 
 /** 进入编辑：文本块直接在渲染结果上改，结构块换成等宽源码框。 */
 function startEdit(host: HTMLElement): void {
+  if (!props.editable || composing) return
+  resetSearch()
   const rawStart = host.dataset.mdStart
   const rawEnd = host.dataset.mdEnd
   const start = Number(rawStart)
@@ -677,9 +764,12 @@ function autoSizeSource(textarea: HTMLTextAreaElement): void {
  * 提交当前编辑：文本块按行内序列化还原 Markdown，源码框直接用框里的内容。
  * 与进入编辑时的基线一致说明没真改过（例如只点了一下再看别处）：原地还原 DOM，不写回编辑器。
  */
-function commitEdit(): void {
+function commitEdit(force = false): boolean {
+  // 卸载时保留当前组合输入的可见内容作为草稿；普通提交等待输入法结束，不截断候选确认。
+  if (composing && !force) return false
+  if (force) composing = false
   const state = editing.value
-  if (state === null) return
+  if (state === null) return true
   // 先清状态：接下来的 DOM 替换会触发 focusout，不能让它再提交一次。
   editing.value = null
 
@@ -687,12 +777,14 @@ function commitEdit(): void {
     ? textBlockMarkdown(state.target)
     : (state.target as HTMLTextAreaElement).value
   // 与进入编辑时的基线一致，或改回与原文完全相同，都不必写回编辑器。
-  if (next === state.baseline || next === renderText.value.slice(state.start, state.end)) {
-    state.restore()
-    return
+  // 源码框会临时替换顶层元素，提交前先恢复承载块，才能找到正确的 token 边界。
+  state.restore()
+  if (next !== state.baseline && next !== renderText.value.slice(state.start, state.end)) {
+    applyLocalEdit(state.tokenIndex, state.start, state.end, next)
+    emit('edit', { start: state.start, end: state.end, text: next })
   }
-  applyLocalEdit(state.tokenIndex, state.start, state.end, next)
-  emit('edit', { start: state.start, end: state.end, text: next })
+  emit('pendingEdit', false)
+  return true
 }
 
 /**
@@ -710,15 +802,56 @@ function cancelEdit(): void {
   const state = editing.value
   if (state === null) return
   editing.value = null
+  composing = false
   state.restore()
+  emit('pendingEdit', false)
 }
+
+/** 输入时先上报待提交状态，关闭标签和外部文件更新不得把它误当成未修改。 */
+function onContentInput(): void {
+  if (editing.value !== null) emit('pendingEdit', true)
+}
+
+function onCompositionEnd(): void {
+  composing = false
+  if (!props.active || !props.editable) commitEdit()
+}
+
+function onContentDoubleClick(event: MouseEvent): void {
+  const target = event.target
+  if (!(target instanceof Element) || target.closest('button, input, summary, .file-markdown-image-frame') !== null) return
+  const host = target.closest<HTMLElement>('[data-md-kind="source"]')
+  if (host !== null && host === pointerEditTarget) startEdit(host)
+  pointerEditTarget = null
+}
+
+/** 只有保存、切换与卸载需要跨组件刷新当前输入，其余 DOM 细节仍由本组件持有。 */
+defineExpose({ flushEdit: commitEdit, openSearch })
 
 /** 编辑态的键盘操作：Esc 放弃，Enter 提交文本块，源码框用 Cmd/Ctrl+Enter 提交（Enter 留给换行）。 */
 function onContentKeydown(event: KeyboardEvent): void {
+  if (event.isComposing || composing || event.keyCode === 229) return
+  const target = event.target
+  if ((event.key === 'Enter' || event.key === ' ') && target instanceof HTMLElement
+    && target.matches('.file-markdown-image-frame.is-ready')) {
+    const image = target.querySelector('img')
+    if (image !== null) {
+      event.preventDefault()
+      openZoom(image.currentSrc || image.src, image.alt)
+    }
+    return
+  }
   const state = editing.value
-  if (state === null) return
+  if (state === null) {
+    if (event.key === 'Enter' && props.editable && target instanceof HTMLElement && target.dataset.mdKind === 'source') {
+      event.preventDefault()
+      startEdit(target)
+    }
+    return
+  }
   if (event.key === 'Escape') {
     event.preventDefault()
+    event.stopPropagation()
     cancelEdit()
     return
   }
@@ -766,6 +899,7 @@ async function onContentClick(event: MouseEvent): Promise<void> {
   const image = target.closest('img')
   if (image !== null && image.closest('.file-markdown-image-frame') !== null) {
     event.preventDefault()
+    image.closest<HTMLElement>('.file-markdown-image-frame')?.focus({ preventScroll: true })
     openZoom(image.currentSrc || image.src, image.alt)
     return
   }
@@ -823,39 +957,24 @@ function toggleTask(checkbox: HTMLInputElement): void {
   emit('edit', { start: offset, end: offset + 1, text: next })
 }
 
-/** 打开大图浮层：只接受已加载的图片地址，空地址直接忽略；打开后焦点进关闭键。 */
+/** 只放大正文已加载的项目内图片；原生对话框负责焦点边界与恢复。 */
 function openZoom(src: string, alt: string): void {
-  if (src === '') return
+  if (src === '' || !commitEdit()) return
   zoomed.value = { src, alt }
-  void nextTick(() => zoomDialog.value?.querySelector<HTMLButtonElement>('button')?.focus())
-}
-
-/** 关闭大图浮层：焦点还给正文滚动区，键盘操作不掉到页面顶部。 */
-function closeZoom(): void {
-  if (zoomed.value === null) return
-  zoomed.value = null
-  void nextTick(() => scroller.value?.focus({ preventScroll: true }))
-}
-
-/** 大图浮层的 Esc：只在浮层打开时接管，不干扰预览里的其他快捷键。 */
-function onZoomEscape(event: KeyboardEvent): void {
-  if (zoomed.value === null || event.key !== 'Escape' || event.isComposing) return
-  event.preventDefault()
-  closeZoom()
 }
 
 /** 项目内链接：只有能解析成项目内路径的 Markdown 文件才打开新标签页，其余只提示。 */
 function openProjectFile(address: string): void {
-  const path = resolveLinkPath(address)
-  if (path === null) {
+  const link = resolveFileMarkdownLink(address, props.path)
+  if (link === null) {
     showNotice('链接目标不在项目内，未打开。', true)
     return
   }
-  if (!/\.(md|markdown)$/i.test(path)) {
-    showNotice(`链接目标是 ${path}，不是 Markdown 文件；可在文件树中打开。`, true)
+  if (!/\.(md|markdown)$/i.test(link.path)) {
+    showNotice(`链接目标是 ${link.path}，不是 Markdown 文件；可在文件树中打开。`, true)
     return
   }
-  workspaceTabsStore.openFileTab(path)
+  workspaceTabsStore.openFileTab(link.path, 'preview', link.anchor)
 }
 
 /** 外部链接：地址与协议由主进程再校验一次，拒绝原因就地展示。 */
@@ -874,6 +993,12 @@ async function reportCopy(text: string, label: string): Promise<void> {
   showNotice(copied ? `${label}已复制。` : `无法复制${label}，请手动选择文本复制。`, !copied)
 }
 
+/** 折叠状态改变后重新读取可见文本与当前标题，不让查找停在已隐藏的内容上。 */
+function onDetailsToggle(): void {
+  updateActiveHeading()
+  if (searchOpen.value) runSearch()
+}
+
 function showNotice(text: string, failed: boolean): void {
   notice.value = text
   noticeFailed.value = failed
@@ -888,14 +1013,11 @@ function safeDecode(value: string): string {
   }
 }
 
-/** 链接解析复用渲染阶段的同一套规则：相对当前文件目录，越界返回 null。 */
-function resolveLinkPath(address: string): string | null {
-  return resolveProjectPath(address, props.path)
-}
 </script>
 
 <template>
-  <div class="file-markdown">
+  <div ref="shell" class="file-markdown" :class="{ 'is-editable': editable, 'is-narrow': narrow }" @keydown.esc="emit('closeToc')">
+    <button v-if="narrow && showToc && toc.length > 0" type="button" class="file-markdown-toc-backdrop" aria-label="关闭目录" @click="emit('closeToc')"></button>
     <FileMarkdownToc
       v-if="showToc && toc.length > 0"
       :entries="toc"
@@ -957,10 +1079,7 @@ function resolveLinkPath(address: string): string | null {
         </button>
       </div>
 
-      <!-- 大文档降级提示：告诉用户少了什么、去哪看全文，不把它当成错误。 -->
-      <p v-if="largeDocument" class="file-markdown-large-notice" role="status">
-        文档较大（{{ renderText.length.toLocaleString() }} 个字符），已进入大文档模式：不提供预览内的就地编辑，代码高亮与超出上限的图片暂不加载。需要完整内容时请切到源码视图。
-      </p>
+      <p v-if="renderText.trim() === ''" class="file-markdown-empty">文档为空，可切换到源码开始书写。</p>
 
       <!-- 正文由脚本挂载：块区间、局部重绘与编辑态都直接操作 DOM，v-html 会整篇覆盖这些改动。 -->
       <div
@@ -970,7 +1089,12 @@ function resolveLinkPath(address: string): string | null {
         :style="{ '--file-preview-font-size': `${fontSize}px` }"
         @click="onContentClick"
         @mousedown="onContentMouseDown"
+        @dblclick="onContentDoubleClick"
         @keydown="onContentKeydown"
+        @input="onContentInput"
+        @compositionstart="composing = true"
+        @compositionend="onCompositionEnd"
+        @toggle.capture="onDetailsToggle"
         @focusout="onContentFocusOut"
       ></div>
       <p v-if="renderFailed" role="status" class="markdown-render-note">Markdown 暂时无法渲染，已显示原文。</p>
@@ -980,27 +1104,6 @@ function resolveLinkPath(address: string): string | null {
       {{ notice }}
     </p>
 
-    <!-- 图片放大浮层：复用的是正文里已加载的 data URL，点击遮罩或 Esc 关闭。 -->
-    <div
-      v-if="zoomed !== null"
-      ref="zoomDialog"
-      class="file-markdown-zoom"
-      role="dialog"
-      aria-modal="true"
-      :aria-label="zoomed.alt === '' ? '图片预览' : `图片预览：${zoomed.alt}`"
-      @click="closeZoom"
-    >
-      <button
-        type="button"
-        class="file-markdown-zoom-close"
-        aria-label="关闭图片预览"
-        title="关闭图片预览（Esc）"
-        @click.stop="closeZoom"
-      >
-        <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M4 4l8 8M12 4l-8 8" /></svg>
-      </button>
-      <img :src="zoomed.src" :alt="zoomed.alt" @click.stop />
-      <p v-if="zoomed.alt !== ''" class="file-markdown-zoom-caption">{{ zoomed.alt }}</p>
-    </div>
+    <FileMarkdownImageViewer :image="zoomed" @close="zoomed = null" />
   </div>
 </template>

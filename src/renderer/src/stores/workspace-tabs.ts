@@ -299,13 +299,15 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
    * 打开一个项目内文件：已打开时聚焦已有标签，否则新建文件标签并切过去。
    * 不传 `mode` 时按文件类型与设置里的默认视图决定（Markdown 取偏好，其余进源码）；传了则以该模式打开，
    * 用于右键菜单里与默认视图相反的那个入口。非 Markdown 文件会忽略预览模式。
+   * `anchor` 指定 Markdown 标题：请求留在目标文件记录内，等待正文呈现后消费。
    * 读取由编辑记录异步完成，标签先出现并展示读取中状态。
    */
-  function openFileTab(path: string, mode?: FileEditorMode): void {
+  function openFileTab(path: string, mode?: FileEditorMode, anchor?: string | null): void {
     const projectPath = currentProjectPath.value
     if (projectPath === null) return
     const key = editorStore.open(projectPath, path)
     if (mode !== undefined) editorStore.setMode(key, mode)
+    if (anchor !== undefined && anchor !== null) editorStore.requestAnchor(key, anchor)
     appendKey(projectPath, key)
     selectLocal(projectPath, key)
   }

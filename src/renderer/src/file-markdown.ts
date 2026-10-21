@@ -21,7 +21,7 @@
 import DOMPurify from 'dompurify'
 import { Marked } from 'marked'
 import type { Config } from 'dompurify'
-import type { TokenizerAndRendererExtension, Tokens } from 'marked'
+import type { Token, TokenizerAndRendererExtension, Tokens } from 'marked'
 import { createDisplayMathBlockExtension, createMathExtension } from './markdown-math'
 import { escapeHtml, renderCodeBlock, renderTable } from './markdown-shared'
 
@@ -45,6 +45,14 @@ const SANITIZE_CONFIG: Config = {
 
 /** front matter 的识别上限：超出这个行数就不当作元信息，避免把正文里的分隔线误判。 */
 const FRONT_MATTER_MAX_LINES = 60
+
+/** 富排版入口的字符预算：先决定展示方式，再进入解析与 DOM 构建。 */
+const PREVIEW_MAX_CHARS = 300_000
+
+/** 大文档交给源码视图阅读，避免先构建完整预览再降级。 */
+export function canPreviewFileMarkdown(text: string): boolean {
+  return text.length <= PREVIEW_MAX_CHARS
+}
 
 /** GitHub 风格提示块的标志：这些取值之外的 `[!XXX]` 仍按普通引用展示。 */
 const CALLOUT_TITLES: Readonly<Record<string, string>> = {
@@ -84,6 +92,10 @@ export interface FileMarkdownTocEntry {
 export interface FileMarkdownBlock {
   /** 顶层 token 序号；front matter 用 -1。局部重绘按它定位整块元素。 */
   readonly tokenIndex: number
+  /** 顶层 token 的类型与完整区间，用于判断局部替换是否会影响相邻结构。 */
+  readonly tokenType: string
+  readonly tokenStart: number
+  readonly tokenEnd: number
   readonly kind: 'text' | 'source' | 'skip'
   readonly start: number
   readonly end: number
@@ -158,6 +170,7 @@ const parser = new Marked({
  * 不输出错误堆栈，也不因为一段坏内容让整个标签空白。
  */
 export function renderFileMarkdown(text: string): FileMarkdownDocument | null {
+  if (!canPreviewFileMarkdown(text)) return null
   try {
     const doc = lexDocument(text)
     // front matter 不经 marked 解析，先拼成折叠块再与正文一起清洗，保证整段输出只有一道边界。
@@ -212,7 +225,8 @@ function lexDocument(text: string): LexedDocument {
   const tokens = parser.lexer(body) as unknown as readonly BlockToken[]
   const blocks: FileMarkdownBlock[] = []
   if (frontMatter !== null) {
-    blocks.push({ tokenIndex: -1, kind: 'source', start: 0, end: bodyOffset, path: [], checkbox: -1 })
+    blocks.push({ tokenIndex: -1, tokenType: 'frontmatter', tokenStart: 0, tokenEnd: bodyOffset,
+      kind: 'source', start: 0, end: bodyOffset, path: [], checkbox: -1 })
   }
 
   let cursor = bodyOffset
@@ -227,7 +241,10 @@ function lexDocument(text: string): LexedDocument {
 /** 按 token 类型给出块描述；无法定位文字时退化为整块源码编辑，绝不猜区间。 */
 function describeToken(token: BlockToken, index: number, start: number): readonly FileMarkdownBlock[] {
   const end = start + token.raw.length
-  const whole: FileMarkdownBlock = { tokenIndex: index, kind: 'source', start, end, path: [], checkbox: -1 }
+  const whole: FileMarkdownBlock = {
+    tokenIndex: index, tokenType: token.type, tokenStart: start, tokenEnd: end,
+    kind: 'source', start, end, path: [], checkbox: -1
+  }
   switch (token.type) {
     case 'space':
     case 'def':
@@ -342,29 +359,83 @@ function locateCheckbox(raw: string, absoluteStart: number): number {
   return match === null ? -1 : absoluteStart + match.index + 1
 }
 
-/**
- * 折叠内容的块级解析：`<details>` 在文档里很常见（可折叠清单、提示词模板），但 marked 内置的
- * 块级 HTML 规则遇到空行就断开，跨空行的折叠块会被拆成「代码块 + 散落的 HTML 文本」。
- * 这里按 `</details>` 收尾整块取走，输出仍过同一道清洗白名单；没有闭合标签时不接管，
- * 交回内置规则当普通原始 HTML 处理（即展示成等宽代码块），不假装成能折叠的结构。
- *
- * 采用非贪婪匹配：嵌套的 `<details>` 到内层闭合为止，外层剩下的部分仍按普通 HTML 处理。
- */
+/** 折叠块只保留明确支持的结构，内部继续走 Markdown 与同一道清洗边界。 */
+interface DetailsBlockToken extends Tokens.Generic {
+  readonly type: 'detailsBlock'
+  readonly open: boolean
+  readonly summaryTokens: Token[]
+  readonly tokens: Token[]
+}
+
+/** 用嵌套深度定位外层闭合标签，忽略注释、代码围栏与原始 pre/code 区域中的标签文本。 */
+function detailsBoundary(source: string): { openingEnd: number; closingStart: number; end: number } | null {
+  const opening = /^ {0,3}<details\b[^>]*>/i.exec(source)
+  if (opening === null) return null
+  const markers = /<!--[\s\S]*?-->|^ {0,3}(`{3,}|~{3,})[^\n]*(?:\n|$)|(`+)[^\n]*?\2(?!`)|<\/?(?:details|pre|code)\b[^>]*>/gim
+  markers.lastIndex = opening[0].length
+  let depth = 1
+  let fence = ''
+  let rawCode = ''
+  for (let match = markers.exec(source); match !== null; match = markers.exec(source)) {
+    const value = match[0]
+    if (value.startsWith('<!--')) continue
+    const delimiter = match[1]
+    if (delimiter !== undefined) {
+      if (rawCode !== '') continue
+      if (fence === '') fence = delimiter
+      else if (delimiter[0] === fence[0] && delimiter.length >= fence.length
+        && value.trim() === delimiter) fence = ''
+      continue
+    }
+    if (fence !== '') continue
+    const tag = /^<(\/?)(details|pre|code)\b/i.exec(value)
+    if (tag === null) continue
+    const closing = tag[1] === '/'
+    const name = (tag[2] ?? '').toLowerCase()
+    if (rawCode !== '') {
+      if (closing && name === rawCode) rawCode = ''
+      continue
+    }
+    if (name !== 'details') {
+      if (!closing) rawCode = name
+      continue
+    }
+    depth += closing ? -1 : 1
+    if (depth === 0) {
+      const trailing = /^[ \t]*(?:\r?\n)*/.exec(source.slice(markers.lastIndex))?.[0] ?? ''
+      return { openingEnd: opening[0].length, closingStart: match.index, end: markers.lastIndex + trailing.length }
+    }
+  }
+  return null
+}
+
+/** 标题按行内 Markdown 解析，正文按块递归解析；未闭合的结构仍按原始 HTML 展示。 */
 function createDetailsBlockExtension(): TokenizerAndRendererExtension {
   return {
     name: 'detailsBlock',
     level: 'block',
-    start(src) {
-      return src.search(/^ {0,3}<details[\s>]/im)
-    },
+    childTokens: ['summaryTokens', 'tokens'],
+    start(src) { return src.search(/^ {0,3}<details[\s>]/im) },
     tokenizer(src) {
-      const match = /^ {0,3}<details(?:\s[^>]*)?>[\s\S]*?<\/details>[ \t]*(?:\n+|$)/i.exec(src)
-      if (match === null) return undefined
-      return { type: 'detailsBlock', raw: match[0] }
+      const boundary = detailsBoundary(src)
+      if (boundary === null) return undefined
+      const inner = src.slice(boundary.openingEnd, boundary.closingStart)
+      const summary = /^\s*<summary\b[^>]*>([\s\S]*?)<\/summary>[ \t]*(?:\r?\n)?/i.exec(inner)
+      const content = (summary === null ? inner : inner.slice(summary[0].length)).replace(/^\s*\n/, '')
+      const attributes = src.slice(0, boundary.openingEnd)
+        .replace(/^ {0,3}<details\b|>$/gi, '')
+        .matchAll(/(?:^|\s)([^\s=<>]+)(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+))?/g)
+      const open = Array.from(attributes).some(attribute => attribute[1]?.toLowerCase() === 'open')
+      return {
+        type: 'detailsBlock', raw: src.slice(0, boundary.end),
+        open,
+        summaryTokens: this.lexer.inlineTokens(summary?.[1] ?? '详细内容'),
+        tokens: this.lexer.blockTokens(content)
+      }
     },
     renderer(token) {
-      // 整块原文就是渲染结果：折叠结构不需要二次拼装，也不会因此多出一道转义。
-      return token.raw
+      const details = token as DetailsBlockToken
+      return `<details class="file-markdown-details"${details.open ? ' open' : ''}><summary>${this.parser.parseInline(details.summaryTokens)}</summary><div class="file-markdown-details-body">${this.parser.parse(details.tokens)}</div></details>\n`
     }
   }
 }
@@ -505,7 +576,21 @@ export function resolveProjectPath(reference: string, documentPath: string): str
   return segments.length === 0 ? null : segments.join('/')
 }
 
-/** 地址分类只做前缀判断，真正的项目内解析在点击时用 `resolveProjectPath` 完成。 */
+/** 文件地址与片段分开携带，打开新文档时不丢弃标题定位意图。 */
+export function resolveFileMarkdownLink(reference: string, documentPath: string): {
+  readonly path: string
+  readonly anchor: string | null
+} | null {
+  const path = resolveProjectPath(reference, documentPath)
+  if (path === null) return null
+  const index = reference.indexOf('#')
+  const rawAnchor = index < 0 ? '' : reference.slice(index + 1)
+  let anchor = rawAnchor
+  try { anchor = decodeURIComponent(rawAnchor) } catch { /* 无效编码按原文定位。 */ }
+  return { path, anchor: anchor === '' ? null : anchor }
+}
+
+/** 地址分类只做前缀判断，点击时仍按项目路径边界解析。 */
 function classifyLinkKind(target: string): FileMarkdownLinkKind {
   if (target.startsWith('#')) return 'anchor'
   if (/^https?:\/\//i.test(target)) return 'external'
@@ -566,7 +651,7 @@ function splitFrontMatter(text: string): {
   return { frontMatter: null, body: text, bodyOffset: 0 }
 }
 
-/** front matter 用折叠块展示；内容仍是文本，不解析 YAML，也不提供编辑入口。 */
+/** 元信息按原始文本折叠展示；不解析 YAML，编辑由组件的结构块入口承担。 */
 function renderFrontMatter(block: string): string {
   return `<details class="file-markdown-frontmatter"><summary>Front Matter</summary><pre class="scroll-area">${escapeHtml(block)}</pre></details>\n`
 }

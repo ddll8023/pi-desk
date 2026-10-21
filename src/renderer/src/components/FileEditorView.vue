@@ -1,15 +1,8 @@
 <!--
-  工作区文件标签的预览/编辑面板：头部是单行文件信息、视图选项与「源码 / 预览」切换，主体按内容类型渲染代码编辑器、预览或图片。
-
-  面板按标签常驻挂载，非活动标签只隐藏不卸载，因此切回来仍是同一份编辑内容与撤销历史。
-  Markdown 的「源码 / 预览」用叠放层切换而不是销毁编辑器：切到预览再切回来，未保存的修改仍在。
-  预览里的就地编辑以区间替换写回编辑器文档，脏标记、撤销栈与保存都仍由编辑器承担。
-  超过可编辑上限的文本仍可查看：这类文件只挂载当前需要的一层，避免大文本同时进入编辑器与渲染器。
-  保存统一走 Cmd/Ctrl+S（标签处于活动状态时全局生效），头部不设保存与重新载入按钮；
-  外部改动在标签激活与窗口重新聚焦时用 `stat` 检查，未修改的文件自动重新载入，有未保存修改或保存失败时直接弹窗。
-
-  头部按编辑器 chrome 处理：路径单行、目录前缀左侧省略、整行可点复制；右侧是图标键与分段切换，
-  字号、Front Matter 与自动换行收进「更多」菜单，避免头部堆控件。
+  文件工作台：文档头部与阅读工具栏独立于正文；阅读默认只读，显式开启后才允许预览编辑。
+  CodeMirror 持有唯一源码与撤销历史；保存、退出编辑和卸载先刷新预览输入，再读取源码。
+  文件预览首次可见时才初始化，源码编辑器保持常驻；超出阅读预算的文档在解析前回退源码。
+  标题定位请求按文件消费，草稿与阅读状态仅保存在当前窗口内。
 -->
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
@@ -17,6 +10,7 @@ import { PROJECT_FILE_EDIT_MAX_BYTES } from '../../../shared/project-file-api'
 import type { ProjectFileTextContent } from '../../../shared/project-file-api'
 import { useAnchoredPopup } from '../anchored-popup'
 import { copyText } from '../clipboard'
+import { canPreviewFileMarkdown } from '../file-markdown'
 import type { FileEditorMode } from '../stores/project-editor'
 import { PREVIEW_FONT_SIZES, useProjectEditorStore } from '../stores/project-editor'
 import AppButton from './ui/AppButton.vue'
@@ -33,6 +27,10 @@ const props = defineProps<{
 
 const editorStore = useProjectEditorStore()
 const editorRef = ref<InstanceType<typeof CodeMirrorEditor> | null>(null)
+const previewRef = ref<InstanceType<typeof FileMarkdownView> | null>(null)
+const previewVisited = ref(false)
+const editingPreview = ref(false)
+const navigationNotice = ref('')
 /** Markdown 预览文本：切到预览或外部重新载入时从编辑器/记录取值。 */
 const previewText = ref('')
 /** 磁盘冲突与保存失败的提示弹窗；冲突保留状态，下次保存会再次提示。 */
@@ -77,15 +75,20 @@ const editorText = computed(() => record.value?.draft ?? textContent.value?.text
 const dirty = computed(() => record.value?.dirty === true)
 const conflict = computed(() => record.value?.conflict === true)
 const saveError = computed(() => record.value?.saveError ?? null)
-const mode = computed(() => record.value?.mode ?? 'code')
+const requestedMode = computed(() => record.value?.mode ?? 'code')
 const markdown = computed(() => record.value?.markdown === true)
+const previewAllowed = computed(() => canPreviewFileMarkdown(previewText.value))
+const sourceFallback = computed(() => markdown.value && requestedMode.value === 'preview' && !previewAllowed.value)
+const mode = computed<FileEditorMode>(() => sourceFallback.value ? 'code' : requestedMode.value)
+const previewEditingAllowed = computed(() => editable.value && previewAllowed.value)
+const savedState = computed(() => record.value?.saving ? '正在保存…' : dirty.value ? '未保存' : '已保存')
 /** 路径前缀：只展示目录部分，文件名单独成段并保持可见。 */
 const pathPrefix = computed(() => {
   const path = record.value?.path ?? ''
   const slash = path.lastIndexOf('/')
   return slash < 0 ? '' : path.slice(0, slash + 1)
 })
-/** 目录栏开关：只在预览模式下有目录时才有意义，默认展开。 */
+/** 宽屏目录默认展开；预览初始化时会按实际容器宽度关闭窄屏目录。 */
 const showToc = ref(true)
 /** 预览里实际提取到的目录条数，用于决定是否显示开关。 */
 const tocCount = ref(0)
@@ -129,6 +132,27 @@ function onPreviewEdit(change: { readonly start: number; readonly end: number; r
   editorRef.value?.applyEdit(change.start, change.end, change.text)
 }
 
+/** 尚未离开输入块时也要有脏标记，避免关闭标签或外部重读覆盖用户输入。 */
+function onPreviewPending(pending: boolean): void {
+  if (pending) editorStore.markDirty(props.tabKey)
+  else editorStore.captureDraft(props.tabKey, editorRef.value?.getText() ?? editorText.value)
+}
+
+function flushPreview(force = false): boolean {
+  return previewRef.value?.flushEdit(force) ?? true
+}
+
+function togglePreviewEditing(): void {
+  if (!previewEditingAllowed.value || !flushPreview()) return
+  editingPreview.value = !editingPreview.value
+}
+
+function changeReadingSize(step: number): void {
+  const index = (PREVIEW_FONT_SIZES as readonly number[]).indexOf(editorStore.previewFontSize)
+  const size = PREVIEW_FONT_SIZES[index + step]
+  if (size !== undefined) editorStore.setPreviewFontSize(size)
+}
+
 /** 预览组件提取完目录后回报条数；没有目录时开关自然隐藏。 */
 function onToc(entries: readonly { readonly id: string }[]): void {
   tocCount.value = entries.length
@@ -149,6 +173,7 @@ function reportSaveFailure(): void {
 
 /** 显式保存：使用编辑器当前文本；失败原因由弹窗展示。 */
 async function save(): Promise<void> {
+  if (!flushPreview()) return
   const current = editorStore.recordOf(props.tabKey)
   if (!editable.value) return
   if (current === null || !current.dirty || current.saving) return
@@ -159,6 +184,7 @@ async function save(): Promise<void> {
 
 /** 冲突弹窗的覆盖保存：用户已明确选择保留自己的修改。 */
 async function forceSave(): Promise<void> {
+  if (!flushPreview()) return
   const text = editorRef.value?.getText() ?? editorText.value
   conflictDialog.value = false
   if (await editorStore.save(props.tabKey, text, true)) return
@@ -171,6 +197,10 @@ function retryLoad(): void {
 }
 
 function setMode(next: FileEditorMode): void {
+  if (!flushPreview()) return
+  editingPreview.value = false
+  navigationNotice.value = ''
+  if (next === 'preview') previewText.value = editorRef.value?.getText() ?? editorText.value
   editorStore.setMode(props.tabKey, next)
 }
 
@@ -242,11 +272,12 @@ function toggleFrontmatter(): void {
   closeMoreAndFocus()
 }
 
-/** 关闭左侧目录面板：焦点回到头部目录开关，避免停在已卸载的按钮上。 */
-function closeToc(): void {
+/** 主动关闭时回到开关；导航和自适应收起不抢走正文焦点。 */
+function closeToc(restoreFocus = true): void {
+  if (!showToc.value) return
   showToc.value = false
-  void nextTick(() => {
-    header.value?.querySelector<HTMLElement>('[data-toc-toggle]')?.focus()
+  if (restoreFocus) void nextTick(() => {
+    header.value?.parentElement?.querySelector<HTMLElement>('[data-toc-toggle]')?.focus()
   })
 }
 
@@ -277,6 +308,7 @@ function onSaveShortcut(event: KeyboardEvent): void {
 
 watch(() => props.active, (active) => {
   if (active) checkExternal()
+  else flushPreview()
 })
 
 // 换文件或重新载入后目录条数归零，避免开关停在上一份文档的按下态。
@@ -289,9 +321,24 @@ watch(conflict, (value) => {
   conflictDialog.value = true
 })
 
-// 所有进入预览的入口共用同一同步点；外部菜单改 mode 也要取当前未保存的编辑文本。
-watch([mode, textContent], () => {
-  if (mode.value === 'preview') previewText.value = editorRef.value?.getText() ?? editorText.value
+// 切换视图取当前编辑器内容；外部重新读取则取新记录，不能拿尚未更新的旧编辑器覆盖磁盘结果。
+watch(requestedMode, (next) => {
+  flushPreview()
+  editingPreview.value = false
+  if (next === 'preview') previewText.value = editorRef.value?.getText() ?? editorText.value
+}, { flush: 'sync' })
+watch(textContent, (content) => {
+  if (content !== null) previewText.value = record.value?.draft ?? content.text
+}, { immediate: true, flush: 'sync' })
+
+watch([() => props.active, mode, previewAllowed], () => {
+  if (props.active && mode.value === 'preview' && previewAllowed.value) previewVisited.value = true
+}, { immediate: true })
+
+watch(() => record.value?.anchorRequest, (request) => {
+  if (request === undefined || request === null || !sourceFallback.value) return
+  navigationNotice.value = `此文档使用源码阅读，请在源码中查找标题「${request.anchor}」。`
+  editorStore.consumeAnchor(props.tabKey, request.id)
 }, { flush: 'post' })
 
 onMounted(() => {
@@ -304,6 +351,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  flushPreview(true)
   window.removeEventListener('focus', onWindowFocus)
   window.removeEventListener('keydown', onSaveShortcut)
   if (pathNoticeTimer !== null) window.clearTimeout(pathNoticeTimer)
@@ -313,7 +361,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="file-editor">
+  <div class="file-editor" :class="{ 'is-markdown-workspace': markdown }">
     <header ref="header" class="file-editor-header">
       <div class="file-editor-path-row">
         <span v-if="dirty" class="file-editor-dirty" role="img" aria-label="有未保存的修改"></span>
@@ -331,21 +379,7 @@ onBeforeUnmount(() => {
       </div>
 
       <div class="file-editor-actions">
-        <AppButton
-          v-if="mode === 'preview' && tocCount > 0"
-          variant="unstyled"
-          class="file-editor-icon-button"
-          :class="{ 'is-active': showToc }"
-          :aria-pressed="showToc"
-          aria-label="目录"
-          title="目录"
-          data-toc-toggle
-          @click="showToc = !showToc"
-        >
-          <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
-            <path d="M3 4h10M3 8h10M3 12h6" />
-          </svg>
-        </AppButton>
+        <span v-if="markdown && textContent !== null" class="file-reader-save-state" :class="{ 'is-dirty': dirty }" role="status">{{ savedState }}</span>
         <AppButton
           v-if="textContent !== null"
           variant="unstyled"
@@ -399,11 +433,39 @@ onBeforeUnmount(() => {
               <path d="M1.5 8S3.9 4 8 4s6.5 4 6.5 4-2.4 4-6.5 4S1.5 8 1.5 8Z" />
               <circle cx="8" cy="8" r="1.75" />
             </svg>
-            <span>预览</span>
+            <span>阅读</span>
           </button>
         </div>
       </div>
     </header>
+
+    <div v-if="markdown && mode === 'preview' && textContent !== null" class="file-reader-toolbar">
+      <div class="file-reader-toolbar-group">
+        <button type="button" class="file-reader-tool" data-toc-toggle :class="{ 'is-active': showToc }"
+          :aria-pressed="showToc" :disabled="tocCount === 0" @click="showToc = !showToc">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 4h10M3 8h10M3 12h6" /></svg>
+          目录
+        </button>
+        <button type="button" class="file-reader-tool" @click="previewRef?.openSearch()">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="6.5" cy="6.5" r="4"/><path d="m10 10 3.5 3.5" /></svg>
+          查找
+        </button>
+      </div>
+      <p class="file-reader-context">{{ editingPreview ? '文字直接编辑 · 结构块双击编辑 · Esc 取消' : '阅读模式' }}</p>
+      <div class="file-reader-toolbar-group">
+        <div class="file-reader-font-control" role="group" aria-label="阅读字号">
+          <button type="button" aria-label="缩小字号" :disabled="editorStore.previewFontSize === PREVIEW_FONT_SIZES[0]" @click="changeReadingSize(-1)">A−</button>
+          <span>{{ editorStore.previewFontSize }}</span>
+          <button type="button" aria-label="放大字号" :disabled="editorStore.previewFontSize === PREVIEW_FONT_SIZES[PREVIEW_FONT_SIZES.length - 1]" @click="changeReadingSize(1)">A＋</button>
+        </div>
+        <button type="button" class="file-reader-tool file-reader-edit-toggle" :class="{ 'is-active': editingPreview }"
+          :aria-pressed="editingPreview" :disabled="!previewEditingAllowed" @click="togglePreviewEditing">
+          {{ editingPreview ? '结束编辑' : '编辑正文' }}
+        </button>
+      </div>
+    </div>
+    <p v-if="sourceFallback && textContent !== null" class="file-reader-limit" role="status">文档较大，已使用源码阅读，避免完整排版占用过多资源。</p>
+    <p v-if="navigationNotice !== ''" class="file-reader-limit" role="status">{{ navigationNotice }}</p>
 
     <div class="file-editor-body">
       <p v-if="loading" class="file-editor-notice">正在读取…</p>
@@ -431,11 +493,12 @@ onBeforeUnmount(() => {
           />
         </div>
         <div
-          v-if="markdown"
+          v-if="markdown && previewVisited && previewAllowed"
           class="file-editor-layer file-editor-preview"
           :class="{ 'is-hidden': mode !== 'preview' }"
         >
           <FileMarkdownView
+            ref="previewRef"
             :text="previewText"
             :path="record?.path ?? ''"
             :project-path="record?.projectPath ?? ''"
@@ -443,7 +506,10 @@ onBeforeUnmount(() => {
             :font-size="editorStore.previewFontSize"
             :show-frontmatter="editorStore.showFrontmatter"
             :active="active && mode === 'preview'"
-            :editable="editable"
+            :editable="editingPreview && previewEditingAllowed"
+            :anchor-request="record?.anchorRequest ?? null"
+            @anchor-handled="editorStore.consumeAnchor(tabKey, $event)"
+            @pending-edit="onPreviewPending"
             @toc="onToc"
             @close-toc="closeToc"
             @edit="onPreviewEdit"

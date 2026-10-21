@@ -33,10 +33,10 @@ import { usePreferencesStore } from './preferences'
 export type FileEditorMode = 'code' | 'preview'
 
 /** 预览字号档位：只给四档，避免任意值把阅读排版拉坏。 */
-export const PREVIEW_FONT_SIZES = [13, 14, 15, 16] as const
+export const PREVIEW_FONT_SIZES = [14, 16, 18, 20] as const
 
-/** 预览字号默认值：与聊天正文的 15px 对齐，切到文件预览不会有明显跳变。 */
-const DEFAULT_PREVIEW_FONT_SIZE = 15
+/** 文件阅读独立于聊天密度，正文默认使用舒适阅读档。 */
+const DEFAULT_PREVIEW_FONT_SIZE = 16
 
 /** 一次读取的结果状态；错误与「不支持」分开，界面据此给出不同的提示与动作。 */
 export type FileLoadView =
@@ -61,6 +61,8 @@ export interface FileEditorRecord {
   readonly saveError: string | null
   /** 磁盘文件在本次编辑期间被外部改动，且当前有未保存修改；需要用户选择如何处理。 */
   readonly conflict: boolean
+  /** 跨文件导航只留在当前标签内；序号使相同标题的重复点击也能重新定位。 */
+  readonly anchorRequest: { readonly id: number; readonly anchor: string } | null
 }
 
 const FILE_KEY_PREFIX = 'file:'
@@ -87,6 +89,7 @@ export const useProjectEditorStore = defineStore('project-editor', () => {
   const showFrontmatter = ref(true)
   const codeWrap = ref(true)
   let nextFileTabId = 1
+  let nextAnchorRequestId = 1
   /** 同一记录只采纳最后一次读取，关闭后也使在途结果失效。 */
   const loadVersions = new Map<string, number>()
 
@@ -133,7 +136,8 @@ export const useProjectEditorStore = defineStore('project-editor', () => {
       draft: null,
       saving: false,
       saveError: null,
-      conflict: false
+      conflict: false,
+      anchorRequest: null
     }
     records.value = { ...records.value, [key]: record }
     void loadInto(key)
@@ -200,6 +204,16 @@ export const useProjectEditorStore = defineStore('project-editor', () => {
     const draft = content.kind === 'text' && text !== content.text ? text : null
     if (record.draft === draft) return
     update(key, { draft, dirty: draft !== null })
+  }
+
+  /** 导航请求按文件记录，在目标预览完成定位后消费；不写入偏好或磁盘。 */
+  function requestAnchor(key: string, anchor: string): void {
+    if (records.value[key]?.markdown !== true) return
+    update(key, { mode: 'preview', anchorRequest: { id: nextAnchorRequestId++, anchor } })
+  }
+
+  function consumeAnchor(key: string, requestId: number): void {
+    if (records.value[key]?.anchorRequest?.id === requestId) update(key, { anchorRequest: null })
   }
 
   /** 设置预览字号：只接受档位内的整数，越界值忽略，不改动当前字号。 */
@@ -332,6 +346,8 @@ export const useProjectEditorStore = defineStore('project-editor', () => {
     showFrontmatter,
     codeWrap,
     setPreviewFontSize,
+    requestAnchor,
+    consumeAnchor,
     setShowFrontmatter,
     setCodeWrap,
     open,

@@ -3,7 +3,7 @@
 
   条目来自预览渲染后的标题扫描（扁平数组，带 level）。面板内部先按 level 还原成树：层级只增不减，
   用栈就能在 O(n) 内确定父子关系，不需要额外的缩进字段。层级过滤取「最多显示到第几级」的语义，
-  过滤只影响展示，不改变折叠状态；折叠按标题 id 记录，换文档时整体清空。
+  过滤只影响展示，不改变折叠状态；折叠按标题 id 记录，正文更新时只移除失效项。
 
   当前标题由父级按滚动位置算出后传入：面板只负责高亮与在必要时把该行滚进可视区，
   不自己监听滚动，避免两个滚动源互相触发。
@@ -25,8 +25,8 @@ const emit = defineEmits<{
   close: []
 }>()
 
-/** 可选的层级过滤档位；中文文档很少用到 h4 以下，三档足够。 */
-const LEVELS = [1, 2, 3] as const
+/** 全部标题层级可达，默认展示完整文档结构。 */
+const LEVELS = [1, 2, 3, 4, 5, 6] as const
 
 /** 目录节点：只保留展示需要的字段，子节点顺序与正文一致。 */
 interface TocNode {
@@ -43,8 +43,8 @@ interface TocRow {
   readonly collapsed: boolean
 }
 
-/** 最多显示到第几级标题；默认三档全开。 */
-const maxLevel = ref<number>(3)
+/** 最多显示到第几级标题；默认不隐藏深层标题。 */
+const maxLevel = ref<number>(6)
 /** 折叠的标题 id 集合；整体替换以触发响应式更新。 */
 const collapsedIds = ref<ReadonlySet<string>>(new Set<string>())
 const list = ref<HTMLElement | null>(null)
@@ -85,8 +85,11 @@ const rows = computed<readonly TocRow[]>(() => {
   return visible
 })
 
-// 换文档后旧 id 可能不存在，折叠状态留着没有意义，直接清空。
-watch(() => props.entries, () => { collapsedIds.value = new Set<string>() })
+// 更新正文时保留仍存在的标题，避免一次编辑就把用户折叠的整棵目录重新展开。
+watch(() => props.entries, (entries) => {
+  const valid = new Set(entries.map(entry => entry.id))
+  collapsedIds.value = new Set([...collapsedIds.value].filter(id => valid.has(id)))
+})
 
 // 当前标题变化时把它带进可视区；`nearest` 只在该行越界时滚动，不会打断用户自己翻目录。
 watch(() => props.activeId, async (id) => {
@@ -116,21 +119,17 @@ function toggleCollapse(id: string): void {
 </script>
 
 <template>
-  <nav class="file-markdown-toc" aria-label="文档目录">
+  <nav class="file-markdown-toc" aria-label="文档目录" @keydown.esc.stop="emit('close')">
     <header class="file-markdown-toc-header">
       <p class="file-markdown-toc-title">目录</p>
-      <div class="file-markdown-toc-levels" role="group" aria-label="目录层级">
-        <button
-          v-for="level in LEVELS"
-          :key="level"
-          type="button"
-          class="file-markdown-toc-level"
-          :class="{ 'is-active': maxLevel === level }"
-          :aria-pressed="maxLevel === level"
-          :title="`最多显示到 ${level} 级标题`"
-          @click="setMaxLevel(level)"
-        >H{{ level }}</button>
-      </div>
+      <select
+        class="file-markdown-toc-level-select"
+        aria-label="目录显示层级"
+        :value="maxLevel"
+        @change="setMaxLevel(Number(($event.target as HTMLSelectElement).value))"
+      >
+        <option v-for="level in LEVELS" :key="level" :value="level">{{ level === 6 ? '全部层级' : `至 H${level}` }}</option>
+      </select>
       <AppButton
         variant="unstyled"
         class="file-markdown-toc-close"

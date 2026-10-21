@@ -1,8 +1,8 @@
 /**
  * 文件预览的查找：在渲染后的正文 DOM 上按文本节点匹配，用 CSS Custom Highlight API 着色。
  *
- * 只在单个文本节点内匹配，不跨节点拼接：行内标签把一句话拆开时不会命中跨元素片段，也不会产生
- * 跨越元素的 Range。匹配数有上限，长文档命中过多时只取前若干条并标记被截断，界面据此显示「+」。
+ * 按可见块收集文本，粗体、链接等行内边界不打断匹配；块边界与显式换行分开处理。
+ * 隐藏的元信息、未展开的折叠正文与本地控件不参与查找。命中数有上限，界面以「+」标注截断。
  * 浏览器不支持 Highlight API 时降级为「只计数与跳转、不着色」：查找本身仍可用，不抛错。
  *
  * 预览自带的控件（代码块头部、标题锚点）不是正文，查找时跳过，避免命中「复制」「#」这类按钮文字。
@@ -12,7 +12,9 @@
 const MAX_MATCHES = 500
 
 /** 不参与查找的预览控件；代码块语言标签与复制键、标题锚点都在此列。 */
-const SKIP_SELECTOR = '.markdown-code-header, .markdown-heading-anchor'
+const SKIP_SELECTOR = '.markdown-code-header, .markdown-heading-anchor, input, textarea, [hidden]'
+const BLOCK_TAGS = new Set(['P', 'DIV', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'LI', 'UL', 'OL',
+  'BLOCKQUOTE', 'PRE', 'TABLE', 'TR', 'TD', 'TH', 'DETAILS', 'SUMMARY', 'HR'])
 
 /** 普通匹配与当前匹配的高亮名；同一时间只注册这两个。 */
 const MATCH_HIGHLIGHT = 'file-preview-search-match'
@@ -48,16 +50,14 @@ function highlightRegistry(): HighlightRegistry | null {
   return candidate ?? null
 }
 
-/** 文本节点是否落在预览控件里；控件文字不是正文，不参与查找。 */
-function isSkipped(node: Node): boolean {
-  const parent = node.parentElement
-  return parent === null ? false : parent.closest(SKIP_SELECTOR) !== null
+/** 一个可见块里的原始文本节点与偏移，匹配完成后据此恢复跨行内标签的 Range。 */
+interface TextPart {
+  readonly node: Text
+  readonly start: number
+  readonly end: number
 }
 
-/**
- * 收集查询词在正文中的匹配位置。
- * 大小写不敏感；小写转换会改变长度的字符（少数语言的特殊字母）直接跳过该节点，避免 Range 偏移错位。
- */
+/** 在可见正文中匹配；大小写转换改变长度的文本段不参与，避免字符偏移错位。 */
 export function collectMatches(
   root: HTMLElement,
   query: string,
@@ -65,29 +65,63 @@ export function collectMatches(
 ): FileMarkdownSearchResult {
   const needle = query.trim().toLowerCase()
   if (needle === '') return { ranges: [], truncated: false }
-
   const ranges: Range[] = []
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
-  let node = walker.nextNode()
-  while (node !== null) {
-    const text = node.textContent ?? ''
+  let truncated = false
+  let text = ''
+  let parts: TextPart[] = []
+
+  const flush = (): void => {
     const haystack = text.toLowerCase()
-    if (text !== '' && haystack.length === text.length && !isSkipped(node)) {
+    if (haystack.length === text.length) {
       let from = 0
-      for (;;) {
+      while (!truncated) {
         const index = haystack.indexOf(needle, from)
         if (index < 0) break
-        if (ranges.length >= limit) return { ranges, truncated: true }
-        const range = document.createRange()
-        range.setStart(node, index)
-        range.setEnd(node, index + needle.length)
-        ranges.push(range)
-        from = index + needle.length
+        if (ranges.length >= limit) { truncated = true; break }
+        const end = index + needle.length
+        const first = parts.find(part => part.end > index)
+        const last = parts.find(part => part.end >= end)
+        if (first !== undefined && last !== undefined) {
+          const range = document.createRange()
+          range.setStart(first.node, index - first.start)
+          range.setEnd(last.node, end - last.start)
+          ranges.push(range)
+        }
+        from = end
       }
     }
-    node = walker.nextNode()
+    text = ''
+    parts = []
   }
-  return { ranges, truncated: false }
+
+  const walk = (node: Node): void => {
+    if (truncated) return
+    if (node instanceof Text) {
+      if (node.data !== '') {
+        parts.push({ node, start: text.length, end: text.length + node.data.length })
+        text += node.data
+      }
+      return
+    }
+    if (!(node instanceof HTMLElement)) return
+    const style = window.getComputedStyle(node)
+    if (node.matches(SKIP_SELECTOR) || style.display === 'none' || style.visibility === 'hidden') {
+      flush()
+      return
+    }
+    const block = BLOCK_TAGS.has(node.tagName)
+    if (block || node.tagName === 'BR') flush()
+    if (node instanceof HTMLDetailsElement && !node.open) {
+      const summary = node.querySelector(':scope > summary')
+      if (summary !== null) walk(summary)
+    } else {
+      for (const child of node.childNodes) walk(child)
+    }
+    if (block || node.tagName === 'BR') flush()
+  }
+  walk(root)
+  flush()
+  return { ranges, truncated }
 }
 
 /**

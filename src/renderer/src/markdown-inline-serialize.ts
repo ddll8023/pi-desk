@@ -18,9 +18,8 @@ import { escapeHtml } from './markdown-shared'
 const ESCAPE_CHARS_GLOBAL = /[\\`*_[\]~<>$]/g
 
 /**
- * 转义判定的专用实例：扩展与预览同源，单换行分行也保持同一口径。
- * 这里比较的是「两种写法渲染后是否等价」，预览会把软换行渲染成 `<br>`，
- * 因此比较器也必须这样，否则跨软换行的行首标点会被误判为等价。
+ * 转义判定的专用实例：复用公式扩展、GFM 与单换行选项，比较两种行内写法是否等价。
+ * 折叠块等结构由调用方作为源码处理，不进入此比较器。
  */
 const parser = new Marked({
   gfm: true,
@@ -130,7 +129,7 @@ function escapeText(text: string): string {
 }
 
 /**
- * 按预览同一套解析配置（含单换行分行）把一段源码渲染成 HTML，只用于比较两种写法是否等价。
+ * 按行内转义判定的解析配置渲染源码，只用于比较两种写法是否等价。
  * 用整块渲染而不是行内渲染：行首的 `* `、`> ` 这类写法只有经过块级解析才能看出差别。
  */
 function renderFragmentHtml(source: string): string {
