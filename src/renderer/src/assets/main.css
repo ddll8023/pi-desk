@@ -2641,6 +2641,11 @@
     font-size: 0.8125rem;
   }
 
+  /* 图片已加载：点击可放大查看，光标给出可交互的提示。 */
+  .file-markdown-image-frame.is-ready {
+    cursor: zoom-in;
+  }
+
   .file-markdown-image-frame.is-error {
     color: var(--color-desk-warning);
   }
@@ -2695,7 +2700,8 @@
   }
 
   .file-markdown .markdown-code-copy {
-    opacity: 0;
+    /* 常显但在低对比：hint 靠悬停才能发现，长文档里找不到复制键。 */
+    opacity: 0.6;
     transition: opacity var(--default-transition-duration) ease, border-color var(--default-transition-duration) ease,
       color var(--default-transition-duration) ease;
   }
@@ -2728,6 +2734,70 @@
   /* 行悬停：多列宽表跨行追读时给一个落点，与聊天正文表格行为一致。 */
   .file-markdown .markdown-body tbody tr:hover td {
     background: var(--color-desk-surface-subtle);
+  }
+
+  /* 引用：文件预览里的引用比聊天正文更收敛，左侧细线 + 略暗底色，不抢正文层级。 */
+  .file-markdown .file-markdown-body blockquote {
+    border-left-color: color-mix(in srgb, var(--color-desk-accent) 55%, var(--color-desk-line));
+    background: var(--color-desk-surface-subtle);
+  }
+
+  /* GitHub 提示块：五种语义各给一条色条与标题色，图标靠伪元素，不引入外部字体。
+     具体颜色由下面的 data-callout 规则提供，这里只用回退值兼容未识别的类型。 */
+  .file-markdown .file-markdown-body blockquote.is-callout {
+    position: relative;
+    border-left-width: 3px;
+    border-left-color: var(--callout-ink, var(--color-desk-accent));
+    background: var(--callout-soft, var(--color-desk-accent-soft));
+    color: var(--color-desk-muted);
+  }
+
+  .file-markdown-body blockquote[data-callout="NOTE"] {
+    --callout-ink: var(--color-desk-accent);
+    --callout-soft: var(--color-desk-accent-soft);
+    --callout-icon: "ℹ";
+  }
+
+  .file-markdown-body blockquote[data-callout="TIP"] {
+    --callout-ink: var(--color-desk-success);
+    --callout-soft: var(--color-desk-success-soft);
+    --callout-icon: "✦";
+  }
+
+  .file-markdown-body blockquote[data-callout="IMPORTANT"] {
+    --callout-ink: var(--color-desk-accent);
+    --callout-soft: var(--color-desk-accent-soft);
+    --callout-icon: "!";
+  }
+
+  .file-markdown-body blockquote[data-callout="WARNING"] {
+    --callout-ink: var(--color-desk-warning);
+    --callout-soft: var(--color-desk-warning-soft);
+    --callout-icon: "△";
+  }
+
+  .file-markdown-body blockquote[data-callout="CAUTION"] {
+    --callout-ink: var(--color-desk-danger);
+    --callout-soft: var(--color-desk-danger-soft);
+    --callout-icon: "✖";
+  }
+
+  /* 标题行用语义色加粗；图标与标题同色，色块只负责区分语义。 */
+  .file-markdown .file-markdown-body blockquote.is-callout > .file-markdown-callout-title {
+    display: flex;
+    align-items: center;
+    gap: 0.375rem;
+    margin-bottom: 0.35rem;
+    font-size: 0.86em;
+    font-weight: 650;
+    letter-spacing: 0.01em;
+    color: var(--callout-ink, var(--color-desk-accent));
+  }
+
+  .file-markdown-body blockquote.is-callout > .file-markdown-callout-title::before {
+    content: var(--callout-icon, "ℹ");
+    font-size: 0.9em;
+    line-height: 1;
   }
 
   /* 分隔线：共用令牌与表格边框同色，在预览里提到明显更高对比，否则等于看不见。 */
@@ -3029,6 +3099,77 @@
   .file-markdown-notice.is-error {
     border-color: var(--color-desk-danger);
     color: var(--color-desk-danger);
+  }
+
+  /* 大文档模式提示：附在正文上方的一条说明，不遮挡内容，也不隐藏符号。 */
+  .file-markdown-large-notice {
+    max-width: 72ch;
+    margin: 0 auto 1.25rem;
+    border: 1px solid var(--color-desk-line);
+    border-radius: var(--radius-desk-sm);
+    background: var(--color-desk-surface-subtle);
+    padding: 0.5rem 0.75rem;
+    font-size: var(--text-2xs);
+    line-height: 1.6;
+    color: var(--color-desk-muted);
+  }
+
+  /* 图片放大浮层：盖住整个预览区域，大图最大 92vw × 88vh，超高时在浮层内滚动。 */
+  .file-markdown-zoom {
+    position: absolute;
+    inset: 0;
+    z-index: 30;
+    display: flex;
+    overflow: auto;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    gap: 0.75rem;
+    background: color-mix(in srgb, var(--color-desk-canvas-sunken) 88%, transparent);
+    padding: 2.5rem 1.5rem 1.5rem;
+    cursor: zoom-out;
+  }
+
+  .file-markdown-zoom img {
+    max-width: 92vw;
+    max-height: 88vh;
+    border: 1px solid var(--color-desk-line);
+    border-radius: var(--radius-desk-sm);
+    background: var(--color-desk-surface);
+    box-shadow: var(--shadow-desk-pop);
+    cursor: default;
+  }
+
+  .file-markdown-zoom-close {
+    position: absolute;
+    top: 0.75rem;
+    right: 0.75rem;
+    display: inline-flex;
+    width: 28px;
+    height: 28px;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--color-desk-line);
+    border-radius: 999px;
+    background: var(--color-desk-surface);
+    color: var(--color-desk-muted);
+    cursor: pointer;
+  }
+
+  .file-markdown-zoom-close:hover {
+    color: var(--color-desk-ink);
+  }
+
+  .file-markdown-zoom-close:focus-visible {
+    outline: 2px solid var(--color-desk-accent);
+    outline-offset: 2px;
+  }
+
+  .file-markdown-zoom-caption {
+    max-width: 72ch;
+    font-size: var(--text-2xs);
+    color: var(--color-desk-muted);
+    text-align: center;
   }
 
   /* 代码高亮：语义类名到令牌色，与文件编辑器的高亮保持同一套配色。 */

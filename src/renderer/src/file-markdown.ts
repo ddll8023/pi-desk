@@ -2,12 +2,17 @@
  * 文件标签的 Markdown 预览渲染：与聊天渲染器分开，因为两者的安全边界不同。
  *
  * 聊天正文里的图片一律不加载、链接只提供复制动作（消息来自模型与外部内容）；文件预览的内容来自
- * 用户自己打开的项目文件，因此额外允许「项目内图片」与「可跳转链接」，但仍然：原始 HTML 只作文本、
- * 不放开 `src`/`href`/`style`、不加载远程图片、不放行 `file:` 与越界路径。图片与链接的目标写在
- * `data-*` 属性里，由组件按类型决定是否读取文件、跳转锚点、打开标签页或交给系统浏览器。
+ * 用户自己打开的项目文件，因此额外允许「项目内图片」与「可跳转链接」，但仍然：不放开 `src`/`href`/`style`、
+ * 不加载远程图片、不放行 `file:` 与越界路径。原始 HTML 只作文本，唯一例外是整块 `<details>` 折叠结构
+ * （按结构渲染，仍由同一道白名单清洗）。图片与链接的目标写在 `data-*` 属性里，由组件按类型决定
+ * 是否读取文件、跳转锚点、打开标签页或交给系统浏览器。
  *
  * front matter 在解析前剥离（`---` 起止、60 行内、含 `key:` 行），渲染成默认折叠的 details，
  * 避免元信息混进正文，也避免被当成主题分隔线。
+ *
+ * 段内单换行照样换行（GFM 预览的通行做法，作者换行通常就是要分行），引用首行的 `> [!NOTE]`
+ * 一类标记渲染成提示块；两者与 `<details>` 例外一样，都在同一道清洗边界内完成，
+ * 没有放开新的标签族。
  *
  * 渲染按顶层 token 逐块进行，并同时给出每块在原文中的区间（`FileMarkdownBlock`）：预览里就地编辑后
  * 只需按区间替换原文并重绘这一块，不必整篇重建。区间一律相对原文件文本，front matter 剥离后仍按
@@ -16,7 +21,7 @@
 import DOMPurify from 'dompurify'
 import { Marked } from 'marked'
 import type { Config } from 'dompurify'
-import type { Tokens } from 'marked'
+import type { TokenizerAndRendererExtension, Tokens } from 'marked'
 import { createDisplayMathBlockExtension, createMathExtension } from './markdown-math'
 import { escapeHtml, renderCodeBlock, renderTable } from './markdown-shared'
 
@@ -29,7 +34,7 @@ const SANITIZE_CONFIG: Config = {
     'details', 'summary'
   ],
   ALLOWED_ATTR: [
-    'class', 'type', 'disabled', 'checked', 'start', 'align', 'title',
+    'class', 'type', 'disabled', 'checked', 'start', 'align', 'title', 'open',
     'tabindex', 'role', 'aria-label', 'data-image-path', 'data-image-label',
     'data-link-kind', 'data-link-target'
   ],
@@ -40,6 +45,21 @@ const SANITIZE_CONFIG: Config = {
 
 /** front matter 的识别上限：超出这个行数就不当作元信息，避免把正文里的分隔线误判。 */
 const FRONT_MATTER_MAX_LINES = 60
+
+/** GitHub 风格提示块的标志：这些取值之外的 `[!XXX]` 仍按普通引用展示。 */
+const CALLOUT_TITLES: Readonly<Record<string, string>> = {
+  NOTE: '注意',
+  TIP: '提示',
+  IMPORTANT: '重要',
+  WARNING: '警告',
+  CAUTION: '危险'
+}
+
+/** 引用首行的提示块标记；渲染时从 DOM 里剥离，因此就地编辑必须避开这类引用。 */
+const CALLOUT_MARKER = /^\s*\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*/i
+
+/** 原文里的提示块标记：带引用前缀 `> `，用于判断一段引用是否属于提示块。 */
+const CALLOUT_RAW_MARKER = /^\s*>\s*\[!(?:NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]/i
 
 /**
  * 渲染阶段判定一次的链接分类：点击时只按分类执行，不再重新解析地址。
@@ -90,15 +110,21 @@ interface BlockToken {
 
 const parser = new Marked({
   gfm: true,
-  breaks: false,
+  // 单换行照样分行：文档里的换行多半就是作者的分行意图，合并成一段会改变阅读节奏。
+  breaks: true,
   async: false,
-  extensions: [createDisplayMathBlockExtension(escapeHtml), createMathExtension(escapeHtml)],
+  extensions: [
+    createDisplayMathBlockExtension(escapeHtml),
+    createMathExtension(escapeHtml),
+    createDetailsBlockExtension()
+  ],
   renderer: {
     code({ text, lang }) {
       return renderCodeBlock(text, lang)
     },
     html({ text, block }) {
       // 原始 HTML 一律当文本：块级给等宽代码块，行内按纯文本输出，不交给浏览器解释。
+      // （可折叠的 <details> 由 createDetailsBlockExtension 单独接管，不走这里）
       return block ? renderCodeBlock(text, 'html') : escapeHtml(text)
     },
     text(token) {
@@ -226,6 +252,8 @@ function describeToken(token: BlockToken, index: number, start: number): readonl
 
 /** 引用的每一段各自可编辑；出现列表、代码块等嵌套结构时整块按源码编辑，避免改一段丢掉其余结构。 */
 function describeBlockquote(token: BlockToken, whole: FileMarkdownBlock): readonly FileMarkdownBlock[] {
+  // 提示块的 `[!NOTE]` 标记在渲染时被剥离了，就地编辑会把标记吃掉，整个引用只能按源码编辑。
+  if (CALLOUT_RAW_MARKER.test(token.raw)) return [{ ...whole, kind: 'source' }]
   const children = (token.tokens ?? []).filter((child) => child.type !== 'space')
   // 只有段落与标题能对应到可定位的元素；裸文本节点与其它块一律整块按源码编辑。
   const simple = children.length > 0 && children.every((child) => (
@@ -314,9 +342,85 @@ function locateCheckbox(raw: string, absoluteStart: number): number {
   return match === null ? -1 : absoluteStart + match.index + 1
 }
 
-/** 图片地址为空时的占位片段；仍走同一套清洗流程，不输出原始地址。 */
+/**
+ * 折叠内容的块级解析：`<details>` 在文档里很常见（可折叠清单、提示词模板），但 marked 内置的
+ * 块级 HTML 规则遇到空行就断开，跨空行的折叠块会被拆成「代码块 + 散落的 HTML 文本」。
+ * 这里按 `</details>` 收尾整块取走，输出仍过同一道清洗白名单；没有闭合标签时不接管，
+ * 交回内置规则当普通原始 HTML 处理（即展示成等宽代码块），不假装成能折叠的结构。
+ *
+ * 采用非贪婪匹配：嵌套的 `<details>` 到内层闭合为止，外层剩下的部分仍按普通 HTML 处理。
+ */
+function createDetailsBlockExtension(): TokenizerAndRendererExtension {
+  return {
+    name: 'detailsBlock',
+    level: 'block',
+    start(src) {
+      return src.search(/^ {0,3}<details[\s>]/im)
+    },
+    tokenizer(src) {
+      const match = /^ {0,3}<details(?:\s[^>]*)?>[\s\S]*?<\/details>[ \t]*(?:\n+|$)/i.exec(src)
+      if (match === null) return undefined
+      return { type: 'detailsBlock', raw: match[0] }
+    },
+    renderer(token) {
+      // 整块原文就是渲染结果：折叠结构不需要二次拼装，也不会因此多出一道转义。
+      return token.raw
+    }
+  }
+}
+
+/**
+ * 图片地址为空时的占位片段；仍走同一套清洗流程，不输出原始地址。
+ */
 function imagePlaceholder(label: string, reason: string): string {
   return `<span class="file-markdown-image-fallback">${escapeHtml(label)}（${escapeHtml(reason)}）</span>`
+}
+
+/**
+ * 把 GitHub 风格的提示块（首行为 `[!NOTE]` 等）就地改写成带标题行的容器。
+ * 只在清洗后的 DOM 上做：不新增 HTML 字符串入口，也就不需要给白名单放新的标签；
+ * 标记不认识的引用保持原样展示，不把它当成普通段落删掉。
+ * 调用方传入的既可能是整篇正文容器，也可能是单块重绘后的引用本身，因此要一并检查根节点。
+ */
+export function applyCallouts(root: HTMLElement): void {
+  const quotes = [
+    ...(root.matches('blockquote') ? [root] : []),
+    ...Array.from(root.querySelectorAll<HTMLElement>('blockquote'))
+  ]
+  for (const quote of quotes) {
+    const kind = takeCalloutKind(quote)
+    if (kind === null) continue
+    quote.classList.add('is-callout')
+    quote.dataset.callout = kind
+    const title = document.createElement('p')
+    title.className = 'file-markdown-callout-title'
+    title.textContent = CALLOUT_TITLES[kind] ?? kind
+    const first = quote.firstElementChild
+    if (first === null) quote.append(title)
+    else first.before(title)
+  }
+}
+
+/**
+ * 从引用的首段里取出提示块标记并返回类型；不是提示块时返回 null。
+ * 标记只占段落文本的开头：剥离后的段落文本可能为空，段落也只剩一个分隔用的 `<br>`，
+ * 两者一并清理，否则提示块顶部会多出一行空白。段落里的其余内容（包括换行）一律保留。
+ */
+function takeCalloutKind(quote: HTMLElement): string | null {
+  const first = quote.firstElementChild
+  const text = first?.firstChild
+  if (first === null || !(text instanceof Text)) return null
+  const match = CALLOUT_MARKER.exec(text.data)
+  if (match === null) return null
+
+  text.data = text.data.slice(match[0].length)
+  if (text.data === '') {
+    const next = text.nextSibling
+    if (next instanceof HTMLBRElement) next.remove()
+    if (text.parentNode !== null) text.remove()
+  }
+  if (first.textContent?.trim() === '') first.remove()
+  return (match[1] ?? '').toUpperCase()
 }
 
 /**

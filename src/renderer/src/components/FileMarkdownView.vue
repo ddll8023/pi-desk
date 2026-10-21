@@ -18,11 +18,16 @@
 
   预览内查找在正文文本节点上做匹配，用 CSS Custom Highlight API 着色；快捷键只在预览可见时生效，
   关闭查找、切换文件与卸载都会清掉高亮，避免旧 Range 留在新内容上。
+
+  三处与正文渲染器无关的阅读增强都在这里落地：引用首行的 `[!NOTE]` 一类标记由 `applyCallouts` 换成
+  带语义色的标题行；超过阈值的长文档进入大文档模式，跳过代码高亮与多余图片读取，也不提供就地编辑；
+  项目内图片可点击放大，浮层复用的是正文里已加载的同一份地址，不再读盘。
 -->
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { FileMarkdownBlock, FileMarkdownTocEntry } from '../file-markdown'
 import {
+  applyCallouts,
   ensureHeadingIds,
   lexFileMarkdown,
   renderFileMarkdown,
@@ -77,6 +82,10 @@ const SEARCH_DEBOUNCE_MS = 120
 const HEADING_THRESHOLD_PX = 24
 /** 源码框最多铺开的行数；更长的块在框内滚动，避免一屏被一个代码块占满。 */
 const SOURCE_MAX_ROWS = 40
+/** 进入大文档模式的字符数：超过后跳过重活，只保留阅读必要的那部分补全。 */
+const LARGE_DOCUMENT_CHARS = 300_000
+/** 大文档模式下最多加载的图片张数：其余只保留占位说明。 */
+const LARGE_DOCUMENT_MAX_IMAGES = 8
 /** 进入就地编辑时要跳过的子结构：这些块改渲染会丢内容，渲染器已把它们标成源码编辑。 */
 const STRUCTURED_SELECTOR = [
   '.markdown-code-block',
@@ -134,6 +143,12 @@ const searchMatches = ref<readonly Range[]>([])
 const searchTruncated = ref(false)
 const searchActive = ref(0)
 const searchInput = ref<HTMLInputElement | null>(null)
+/** 正在放大查看的图片；只存已加载的项目内图片地址与替代文本。 */
+const zoomed = ref<{ readonly src: string; readonly alt: string } | null>(null)
+const zoomDialog = ref<HTMLElement | null>(null)
+
+/** 正文是否超出大文档阈值：渲染与补全都按它降级，阈值只看字符数，不额外做统计。 */
+const largeDocument = computed(() => renderText.value.length > LARGE_DOCUMENT_CHARS)
 
 /** 匹配状态文案：空查询不显示；命中为 0 时说明无结果，触顶时用「+」标注还有更多。 */
 const searchStatus = computed(() => {
@@ -171,15 +186,18 @@ watch(() => props.editable, () => {
   if (body.value !== null) applyBlockRanges(body.value)
 })
 
-// 预览被隐藏（切回源码或换标签）时收起查找并清高亮，避免快捷键与高亮残留在看不见的层里。
+// 预览被隐藏（切回源码或换标签）时收起查找、放大图并清高亮，避免快捷键与高亮残留在看不见的层里。
 watch(() => props.active, (active) => {
-  if (!active) closeSearch()
+  if (active) return
+  closeSearch()
+  closeZoom()
 })
 
 onBeforeUnmount(() => {
   editing.value = null
   revision += 1
   window.removeEventListener('keydown', onFindShortcut)
+  window.removeEventListener('keydown', onZoomEscape)
   if (scrollFrame !== 0) cancelAnimationFrame(scrollFrame)
   if (searchTimer !== null) window.clearTimeout(searchTimer)
   clearHighlights()
@@ -187,6 +205,7 @@ onBeforeUnmount(() => {
 
 onMounted(() => {
   window.addEventListener('keydown', onFindShortcut)
+  window.addEventListener('keydown', onZoomEscape)
   mountDocument()
 })
 
@@ -213,7 +232,7 @@ function mountDocument(): void {
   void decorate()
 }
 
-/** 渲染后的补全：公式、标题 id 与目录、代码高亮、项目内图片；每一步都校验代数。 */
+/** 渲染后的补全：公式、提示块、标题 id 与目录、代码高亮、项目内图片；每一步都校验代数。 */
 async function decorate(): Promise<void> {
   const root = body.value
   // 渲染失败时没有 DOM 可补全；目录也要清空，不能停在上一份文档的条目上。
@@ -225,13 +244,24 @@ async function decorate(): Promise<void> {
   const current = revision
 
   renderMathInto(root)
+  // 提示块把引用首行的标记换成标题行，必须在提取目录与计算块区间之前完成，
+  // 否则标题文本与可编辑区间都会带上已被剥离的标记。
+  applyCallouts(root)
   toc.value = ensureHeadingIds(root)
   emit('toc', toc.value)
   updateActiveHeading()
 
+  // 大文档只保留阅读必需的补全：代码高亮与其余图片逐张读取会拖慢整篇的首次呈现。
+  const images = loadImages(root, current)
+  if (largeDocument.value) {
+    if (searchOpen.value) runSearch()
+    await images
+    if (current === revision) updateActiveHeading()
+    return
+  }
+
   // 代码高亮会重写代码块里的文本节点，查找必须等它结束再扫，否则代码块内的 Range 会立即失效；
   // 图片读取与高亮互不依赖，同时开始，避免有大代码块时预览图片被拖后。
-  const images = loadImages(root, current)
   await highlightCodeBlocks(root, () => current !== revision)
   if (current === revision && searchOpen.value) runSearch()
   await images
@@ -244,7 +274,8 @@ async function decorate(): Promise<void> {
  * 元素数与分组数不一致说明渲染结构与解析结果对不上，此时不给任何元素标注，整篇保持只读。
  */
 function applyBlockRanges(root: HTMLElement): void {
-  if (!props.editable) return
+  // 大文档不提供就地编辑：块区间标注会扫完整篇 DOM，而长文档的就地提交也只能整篇重建。
+  if (!props.editable || largeDocument.value) return
   const groups = groupByToken(blocks)
   const elements = Array.from(root.children)
   if (elements.length !== groups.length) return
@@ -315,8 +346,9 @@ async function loadImages(root: HTMLElement, current: number): Promise<void> {
   const frames = Array.from(root.querySelectorAll<HTMLElement>('.file-markdown-image-frame'))
   if (frames.length === 0) return
 
-  const queue = frames.slice(0, MAX_IMAGES)
-  for (const frame of frames.slice(MAX_IMAGES)) markUnloaded(frame, '图片过多，未加载')
+  const limit = largeDocument.value ? LARGE_DOCUMENT_MAX_IMAGES : MAX_IMAGES
+  const queue = frames.slice(0, limit)
+  for (const frame of frames.slice(limit)) markUnloaded(frame, '图片过多，未加载')
 
   let loadedChars = 0
   for (let start = 0; start < queue.length; start += IMAGE_CONCURRENCY) {
@@ -382,6 +414,7 @@ function applyLocalEdit(tokenIndex: number, start: number, end: number, insert: 
   // 只补全被改的这一块：图片缓存仍在，代码高亮只重跑这一块。
   const current = revision
   renderMathInto(replacement)
+  applyCallouts(replacement)
   void highlightCodeBlocks(replacement, () => current !== revision)
   void loadImages(replacement, current)
   refreshToc()
@@ -560,6 +593,11 @@ function onContentMouseDown(event: MouseEvent): void {
   const current = editing.value
   // 点在正在编辑的块内部：交给浏览器处理插入点，不打断输入。
   if (current !== null && current.target.contains(target)) return
+  // 图片自己的点击是放大查看，不是进入编辑；先收尾再放行。
+  if (target.closest('.file-markdown-image-frame') !== null) {
+    commitEdit()
+    return
+  }
   // 复选框、链接、复制按钮自己处理点击，先收尾再放行。
   if (target.closest('button, input, textarea, summary, a') !== null) {
     commitEdit()
@@ -724,6 +762,14 @@ async function onContentClick(event: MouseEvent): Promise<void> {
     return
   }
 
+  // 图片放大：只对已加载的项目内图片生效，浮层里复用的是同一份 data URL，不再读盘。
+  const image = target.closest('img')
+  if (image !== null && image.closest('.file-markdown-image-frame') !== null) {
+    event.preventDefault()
+    openZoom(image.currentSrc || image.src, image.alt)
+    return
+  }
+
   const button = target.closest('button')
   if (!(button instanceof HTMLButtonElement) || !root.contains(button)) return
 
@@ -775,6 +821,27 @@ function toggleTask(checkbox: HTMLInputElement): void {
   const next = renderText.value[offset] === ' ' ? 'x' : ' '
   applyLocalEdit(tokenIndex, offset, offset + 1, next)
   emit('edit', { start: offset, end: offset + 1, text: next })
+}
+
+/** 打开大图浮层：只接受已加载的图片地址，空地址直接忽略；打开后焦点进关闭键。 */
+function openZoom(src: string, alt: string): void {
+  if (src === '') return
+  zoomed.value = { src, alt }
+  void nextTick(() => zoomDialog.value?.querySelector<HTMLButtonElement>('button')?.focus())
+}
+
+/** 关闭大图浮层：焦点还给正文滚动区，键盘操作不掉到页面顶部。 */
+function closeZoom(): void {
+  if (zoomed.value === null) return
+  zoomed.value = null
+  void nextTick(() => scroller.value?.focus({ preventScroll: true }))
+}
+
+/** 大图浮层的 Esc：只在浮层打开时接管，不干扰预览里的其他快捷键。 */
+function onZoomEscape(event: KeyboardEvent): void {
+  if (zoomed.value === null || event.key !== 'Escape' || event.isComposing) return
+  event.preventDefault()
+  closeZoom()
 }
 
 /** 项目内链接：只有能解析成项目内路径的 Markdown 文件才打开新标签页，其余只提示。 */
@@ -890,6 +957,11 @@ function resolveLinkPath(address: string): string | null {
         </button>
       </div>
 
+      <!-- 大文档降级提示：告诉用户少了什么、去哪看全文，不把它当成错误。 -->
+      <p v-if="largeDocument" class="file-markdown-large-notice" role="status">
+        文档较大（{{ renderText.length.toLocaleString() }} 个字符），已进入大文档模式：不提供预览内的就地编辑，代码高亮与超出上限的图片暂不加载。需要完整内容时请切到源码视图。
+      </p>
+
       <!-- 正文由脚本挂载：块区间、局部重绘与编辑态都直接操作 DOM，v-html 会整篇覆盖这些改动。 -->
       <div
         ref="body"
@@ -907,5 +979,28 @@ function resolveLinkPath(address: string): string | null {
     <p v-if="notice !== ''" role="status" class="file-markdown-notice" :class="{ 'is-error': noticeFailed }">
       {{ notice }}
     </p>
+
+    <!-- 图片放大浮层：复用的是正文里已加载的 data URL，点击遮罩或 Esc 关闭。 -->
+    <div
+      v-if="zoomed !== null"
+      ref="zoomDialog"
+      class="file-markdown-zoom"
+      role="dialog"
+      aria-modal="true"
+      :aria-label="zoomed.alt === '' ? '图片预览' : `图片预览：${zoomed.alt}`"
+      @click="closeZoom"
+    >
+      <button
+        type="button"
+        class="file-markdown-zoom-close"
+        aria-label="关闭图片预览"
+        title="关闭图片预览（Esc）"
+        @click.stop="closeZoom"
+      >
+        <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M4 4l8 8M12 4l-8 8" /></svg>
+      </button>
+      <img :src="zoomed.src" :alt="zoomed.alt" @click.stop />
+      <p v-if="zoomed.alt !== ''" class="file-markdown-zoom-caption">{{ zoomed.alt }}</p>
+    </div>
   </div>
 </template>
