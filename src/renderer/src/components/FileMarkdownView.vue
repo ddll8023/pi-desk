@@ -1,1109 +1,390 @@
-<!--
-  独立文件阅读表面：正文、目录、可见文本查找、标题导航与项目内图片查看。
-  默认只读；父级明确开启编辑后才允许修改块内容，保存和退出通过 flushEdit 同步到源码编辑器。
-  文本与结构块分别使用行内序列化与源码输入；只有顶层边界和邻块内容均保持一致时才局部重绘。
-  隐藏期间只记录最新文本，重新激活后补全呈现；异步装饰始终受文档代数约束。
--->
+<!-- 文件 Markdown 的统一阅读外壳：安全文档直接富文本编辑；其余保留只读排版，目录、查找和图片查看共用。 -->
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import type { FileMarkdownBlock, FileMarkdownTocEntry } from '../file-markdown'
-import {
-  applyCallouts,
-  canPreviewFileMarkdown,
-  ensureHeadingIds,
-  lexFileMarkdown,
-  renderFileMarkdown,
-  renderFileMarkdownBlock,
-  resolveFileMarkdownLink
-} from '../file-markdown'
+import { applyCallouts, canPreviewFileMarkdown, ensureHeadingIds, renderFileMarkdown, resolveFileMarkdownLink } from '../file-markdown'
+import type { FileMarkdownTocEntry } from '../file-markdown'
+import { richMarkdownUnsupportedReason } from '../file-rich-markdown'
 import { applyHighlights, clearHighlights, collectMatches, scrollRangeIntoView } from '../file-markdown-search'
 import { clearMarkdownImageCache, loadMarkdownImage } from '../file-images'
 import { highlightCodeBlocks } from '../file-code-highlight'
-import { serializeInlineMarkdown } from '../markdown-inline-serialize'
 import { renderMathInto } from '../markdown-math'
 import { copyText } from '../clipboard'
 import { openExternalUrl } from '../services/external-url'
 import { useWorkspaceTabsStore } from '../stores/workspace-tabs'
+import FileRichMarkdownEditor from './FileRichMarkdownEditor.vue'
+import type { RichMarkdownDraft } from '../file-rich-markdown-draft'
+import { resolveDocumentLink } from '../file-rich-markdown-doc-link'
+import type { DocumentCatalog } from '../file-rich-markdown-doc-link'
+import { headingSlug } from '../file-markdown'
 import FileMarkdownToc from './FileMarkdownToc.vue'
 import FileMarkdownImageViewer from './FileMarkdownImageViewer.vue'
 
 const props = defineProps<{
-  /** 要渲染的 Markdown 文本；未保存的修改也走这里。 */
-  readonly text: string
-  /** 当前文件的项目内相对路径，用于解析图片与链接的相对地址。 */
-  readonly path: string
-  /** 项目根路径，只作为图片缓存键的一部分，不参与路径拼接。 */
-  readonly projectPath: string
-  /** 是否显示左侧目录栏；目录为空时无论该值如何都不显示。 */
-  readonly showToc: boolean
-  /** 正文字号（px）；标题与行内元素按 em 联动。 */
-  readonly fontSize: number
-  /** 是否显示 Front Matter 折叠块；关闭后只隐藏展示，不改变文件内容。 */
-  readonly showFrontmatter: boolean
-  /** 预览当前可见（标签活动且处于预览模式）：查找快捷键只在这时生效。 */
-  readonly active: boolean
-  /** 是否允许在预览里就地编辑；只读大文件为 false，此时只有阅读能力。 */
-  readonly editable: boolean
+  readonly text: string; readonly path: string; readonly projectPath: string
+  readonly showToc: boolean; readonly fontSize: number; readonly showFrontmatter: boolean
+  readonly active: boolean; readonly editable: boolean
+  readonly recovery?: RichMarkdownDraft | null
+  readonly reportAssetNotice?: ((message: string) => void) | null
   readonly anchorRequest?: { readonly id: number; readonly anchor: string } | null
 }>()
-
 const emit = defineEmits<{
   toc: [entries: readonly FileMarkdownTocEntry[]]
   closeToc: [restoreFocus?: boolean]
   pendingEdit: [pending: boolean]
+  draft: [snapshot: RichMarkdownDraft | null]
   anchorHandled: [requestId: number]
-  /** 就地编辑的结果：把原文 [start, end) 换成 text，由父级写回编辑器文档。 */
-  edit: [change: { readonly start: number; readonly end: number; readonly text: string }]
+  edit: [text: string]
+  editingStatus: [reason: string | null]
 }>()
-
-/** 单张图片的加载上限：文档里图片过多时只加载前若干张，其余保留占位说明。 */
-const MAX_IMAGES = 40
-/** 图片并发读取数：跨进程读取是 IO 密集操作，少量并发即可，避免一次占满主进程。 */
-const IMAGE_CONCURRENCY = 4
-/** 单次预览累计图片字符预算（base64 长度近似内存占用）；超出后不再继续读取。 */
-const MAX_IMAGE_TOTAL_CHARS = 32 * 1024 * 1024
-/** 输入到重新查找的防抖间隔：连续输入时只扫最后一份内容。 */
-const SEARCH_DEBOUNCE_MS = 120
-/** 目录高亮的判定线：标题越过滚动容器顶部这段距离后才算「当前」。 */
-const HEADING_THRESHOLD_PX = 24
-/** 源码框最多铺开的行数；更长的块在框内滚动，避免一屏被一个代码块占满。 */
-const SOURCE_MAX_ROWS = 40
-/** 进入就地编辑时要跳过的子结构：这些块改渲染会丢内容，渲染器已把它们标成源码编辑。 */
-const STRUCTURED_SELECTOR = [
-  '.markdown-code-block',
-  '.markdown-table-scroll',
-  '.file-markdown-image-frame',
-  '.markdown-math-inline',
-  '.markdown-math-block',
-  '.file-markdown-frontmatter',
-  'details',
-  'ul',
-  'ol'
-].join(', ')
-
-/** 正在编辑的块：提交或取消时按这里记录的区间与现场处理。 */
-interface EditingState {
-  readonly kind: 'text' | 'source'
-  readonly tokenIndex: number
-  readonly start: number
-  readonly end: number
-  /** 承载输入的元素：text 是块元素本身，source 是等宽源码框。 */
-  readonly target: HTMLElement
-  /**
-   * 进入编辑时序列化出的文本：提交时与它比较，判「有没有真改过」。
-   * 不能拿它和原文切片比：行内序列化会给 Markdown 标点加反斜杠，永远和原文对不上，
-   * 那样即使只是点了一下再走开也会写回文件。
-   */
-  readonly baseline: string
-  /** 退出编辑时把 DOM 恢复成进入前的样子。 */
-  readonly restore: () => void
-}
-
-const workspaceTabsStore = useWorkspaceTabsStore()
+const tabs = useWorkspaceTabsStore()
+const documents = ref<DocumentCatalog>({ entries: [], loaded: false, truncated: false })
+const shell = ref<HTMLElement | null>(null)
 const scroller = ref<HTMLElement | null>(null)
 const body = ref<HTMLElement | null>(null)
+const readonlyBody = ref<HTMLElement | null>(null)
+const rich = ref<InstanceType<typeof FileRichMarkdownEditor> | null>(null)
+const renderText = ref(props.text)
+const unsupported = computed(() => props.editable ? richMarkdownUnsupportedReason(renderText.value) : '此文件只读。')
+const runtimeFailure = ref('')
+const richReady = ref(false)
+const richEnabled = computed(() => props.editable && unsupported.value === null && runtimeFailure.value === '')
 const toc = ref<readonly FileMarkdownTocEntry[]>([])
 const activeHeadingId = ref('')
+const narrow = ref(false)
+const renderFailed = ref(false)
 const notice = ref('')
 const noticeFailed = ref(false)
-/** 当前用于渲染的文本：本地编辑先落地到这里，父级写回编辑器后由 `text` 追平。 */
-const renderText = ref(props.text)
-/** 渲染失败时正文区退化为原文展示。 */
-const renderFailed = ref(false)
-/** 当前 DOM 对应的块描述；提交编辑时用它判断结构是否变化。 */
-let blocks: readonly FileMarkdownBlock[] = []
-const editing = ref<EditingState | null>(null)
-/** 渲染代数：正文更新或卸载后递增，异步补全据此放弃过期结果。 */
-let revision = 0
-/** 目录高亮的滚动节流句柄。 */
-let scrollFrame = 0
-/** 查找防抖句柄。 */
-let searchTimer: number | null = null
-
+const zoomed = ref<{ readonly src: string; readonly alt: string } | null>(null)
 const searchOpen = ref(false)
 const searchQuery = ref('')
 const searchMatches = ref<readonly Range[]>([])
 const searchTruncated = ref(false)
 const searchActive = ref(0)
 const searchInput = ref<HTMLInputElement | null>(null)
-/** 正在放大查看的图片；只存已加载的项目内图片地址与替代文本。 */
-const zoomed = ref<{ readonly src: string; readonly alt: string } | null>(null)
-const shell = ref<HTMLElement | null>(null)
-const narrow = ref(false)
+let revision = 0
+let scrollFrame = 0
+let searchTimer: number | null = null
 let resizeObserver: ResizeObserver | null = null
 let needsMount = true
-let needsDecoration = false
-let composing = false
-let pointerEditTarget: HTMLElement | null = null
+const searchStatus = computed(() => !searchQuery.value.trim() ? '' : !searchMatches.value.length ? '无结果' : `${searchActive.value + 1}/${searchMatches.value.length}${searchTruncated.value ? ' +' : ''}`)
 
-/** 匹配状态文案：空查询不显示；命中为 0 时说明无结果，触顶时用「+」标注还有更多。 */
-const searchStatus = computed(() => {
-  if (searchQuery.value.trim() === '') return ''
-  if (searchMatches.value.length === 0) return '无结果'
-  const suffix = searchTruncated.value ? ' +' : ''
-  return `${searchActive.value + 1}/${searchMatches.value.length}${suffix}`
-})
-
-// 外部文本替换（切文件、磁盘重新载入、源码模式改完再切回来）：整篇重建，图片缓存一并清掉。
-watch(() => props.text, (text) => {
+function contentRoot(): HTMLElement | null { return body.value?.querySelector<HTMLElement>('.file-rich-body') ?? readonlyBody.value }
+/** 委托富文本刷新并透传 force；只读分支无待提交输入，直接返回 true，不放宽安全校验。 */
+function flushEdit(force = false): boolean { return rich.value?.flushEdit(force) ?? true }
+/** 返回刷新后的文档全文；富文本同步受阻时返回 null，由调用方停止本次保存或主动视图切换。 */
+function getText(force = false): string | null { return flushEdit(force) ? renderText.value : null }
+function showNotice(text: string, failed = false): void { notice.value = text; noticeFailed.value = failed }
+function onRichEdit(text: string): void { renderText.value = text; emit('edit', text) }
+function onRichUpdated(): void {
+  void nextTick(() => { refreshToc(); updateActiveHeading(); handleAnchorRequest(); if (searchOpen.value) runSearch(false) })
+}
+function onRichReady(ready: boolean): void {
+  richReady.value = ready
+  if (ready) onRichUpdated()
+  else { runtimeFailure.value = notice.value || '富文本编辑器不可用，已保留只读排版。'; needsMount = true; void nextTick(mountReadonly) }
+}
+watch([unsupported, runtimeFailure], () => emit('editingStatus', runtimeFailure.value || unsupported.value), { immediate: true })
+watch(() => props.text, text => {
   if (text === renderText.value) return
-  cancelEdit()
   renderText.value = text
-  notice.value = ''
-  noticeFailed.value = false
-  activeHeadingId.value = ''
+  if (runtimeFailure.value) { runtimeFailure.value = ''; richReady.value = false }
   resetSearch()
   clearMarkdownImageCache()
-  needsMount = true
+  activeHeadingId.value = ''
   revision += 1
-  if (props.active) mountDocument()
+  needsMount = true
+  if (props.active && !richEnabled.value) void nextTick(mountReadonly)
 })
-
-// 相对路径变了，图片与链接的基准目录也变了：必须重新渲染，不能只清缓存。
 watch(() => props.path, () => {
-  cancelEdit()
-  activeHeadingId.value = ''
+  flushEdit(true)
+  runtimeFailure.value = ''
+  richReady.value = false
   resetSearch()
   clearMarkdownImageCache()
   revision += 1
   needsMount = true
-  zoomed.value = null
-  if (props.active) mountDocument()
+  if (props.active && !richEnabled.value) void nextTick(mountReadonly)
 })
-
-watch(() => props.editable, () => {
-  commitEdit()
-  if (body.value !== null) applyBlockRanges(body.value)
-})
-
-watch(() => props.active, (active) => {
+watch(richEnabled, enabled => { if (!enabled) { needsMount = true; if (props.active) void nextTick(mountReadonly) } })
+watch(() => props.active, active => {
   if (active) {
-    if (needsMount) mountDocument()
-    else if (needsDecoration) void decorate()
-    handleAnchorRequest()
-    return
+    if (!richEnabled.value && needsMount) void nextTick(mountReadonly)
+    else onRichUpdated()
+  } else {
+    flushEdit()
+    revision += 1
+    if (!richEnabled.value) needsMount = true
+    resetSearch()
+    zoomed.value = null
   }
-  commitEdit()
-  revision += 1
-  needsDecoration = true
-  resetSearch()
-  zoomed.value = null
 })
-
-watch(() => props.anchorRequest?.id, () => handleAnchorRequest(), { flush: 'post' })
-watch(() => props.showFrontmatter, () => { if (searchOpen.value) void nextTick(runSearch) })
+watch(() => props.anchorRequest?.id, () => void nextTick(handleAnchorRequest))
+watch(() => props.showFrontmatter, () => { if (searchOpen.value) void nextTick(() => runSearch(false)) })
 watch(() => props.fontSize, () => { if (props.active) void nextTick(updateActiveHeading) })
-watch(() => props.showToc, (show) => {
-  if (show && narrow.value) void nextTick(() => shell.value?.querySelector<HTMLElement>('nav select')?.focus())
-})
-
-onBeforeUnmount(() => {
-  commitEdit(true)
-  revision += 1
-  resizeObserver?.disconnect()
-  window.removeEventListener('keydown', onFindShortcut)
-  if (scrollFrame !== 0) cancelAnimationFrame(scrollFrame)
-  resetSearch()
-})
+watch(() => props.showToc, show => { if (show && narrow.value) void nextTick(() => shell.value?.querySelector<HTMLElement>('nav select')?.focus()) })
 
 onMounted(() => {
   window.addEventListener('keydown', onFindShortcut)
-  if (shell.value !== null) {
+  if (shell.value) {
     resizeObserver = new ResizeObserver(([entry]) => {
-      if (entry === undefined) return
-      const wasNarrow = narrow.value
+      if (!entry) return
+      const previous = narrow.value
       narrow.value = entry.contentRect.width < 960
-      if (narrow.value && !wasNarrow) emit('closeToc', false)
+      if (narrow.value && !previous) emit('closeToc', false)
     })
     narrow.value = shell.value.clientWidth < 960
     if (narrow.value) emit('closeToc', false)
     resizeObserver.observe(shell.value)
   }
-  if (props.active) mountDocument()
+  if (props.active && !richEnabled.value) mountReadonly()
+})
+onBeforeUnmount(() => {
+  flushEdit(true)
+  revision += 1
+  resizeObserver?.disconnect()
+  window.removeEventListener('keydown', onFindShortcut)
+  if (scrollFrame) cancelAnimationFrame(scrollFrame)
+  resetSearch()
 })
 
-/** 整篇重建：写入 HTML、标注块区间，再补全公式、标题 id、代码高亮与图片。 */
-function mountDocument(): void {
-  if (!props.active) { needsMount = true; return }
-  const root = body.value
-  if (root === null) return
+/** 只有只读降级分支允许直接挂载/装饰 HTML，不能触碰富文本管理的 DOM。 */
+function mountReadonly(): void {
+  if (!props.active || richEnabled.value) return
+  const root = readonlyBody.value
+  if (!root || !canPreviewFileMarkdown(renderText.value)) return
+  const current = ++revision
   needsMount = false
-  revision += 1
-  if (!canPreviewFileMarkdown(renderText.value)) return
-  const doc = renderFileMarkdown(renderText.value)
-  if (doc === null) {
-    renderFailed.value = true
-    blocks = []
-    root.replaceChildren()
-    root.textContent = renderText.value
-    toc.value = []
-    emit('toc', [])
-    return
-  }
-
-  renderFailed.value = false
-  root.innerHTML = doc.html
-  blocks = doc.blocks
-  applyBlockRanges(root)
-  void decorate()
-}
-
-/** 渲染后的补全：公式、提示块、标题 id 与目录、代码高亮、项目内图片；每一步都校验代数。 */
-async function decorate(): Promise<void> {
-  const root = body.value
-  // 渲染失败时没有 DOM 可补全；目录也要清空，不能停在上一份文档的条目上。
-  if (root === null) {
-    toc.value = []
-    emit('toc', [])
-    return
-  }
-  const current = revision
-  needsDecoration = false
-
+  const document = renderFileMarkdown(renderText.value)
+  renderFailed.value = document === null
+  if (!document) { root.textContent = renderText.value; toc.value = []; emit('toc', []); return }
+  root.innerHTML = document.html
   renderMathInto(root)
   applyCallouts(root)
-  toc.value = ensureHeadingIds(root)
-  emit('toc', toc.value)
+  refreshToc()
   updateActiveHeading()
   handleAnchorRequest()
-  const images = loadImages(root, current)
-
-  // 代码高亮会重写代码块里的文本节点，查找必须等它结束再扫，否则代码块内的 Range 会立即失效；
-  // 图片读取与高亮互不依赖，同时开始，避免有大代码块时预览图片被拖后。
-  await highlightCodeBlocks(root, () => current !== revision || !props.active)
-  if (current === revision && searchOpen.value) runSearch()
-  await images
-  // 图片撑开高度后当前标题可能变化，补一次测量。
-  if (current === revision) updateActiveHeading()
+  void highlightCodeBlocks(root, () => current !== revision || !props.active).then(() => { if (current === revision && searchOpen.value) runSearch(false) })
+  void loadImages(root, current)
 }
-
-/**
- * 把块区间写到 DOM 上：顶层元素按 token 顺序一一对应，再沿 `path` 找到可编辑元素。
- * 元素数与分组数不一致说明渲染结构与解析结果对不上，此时不给任何元素标注，整篇保持只读。
- */
-function applyBlockRanges(root: HTMLElement): void {
-  // 先清旧编辑标注，关闭编辑模式后不能留下可勾选任务或可编辑块入口。
-  for (const element of root.querySelectorAll<HTMLElement>('[data-md-kind], [data-md-token]')) {
-    delete element.dataset.mdKind
-    delete element.dataset.mdStart
-    delete element.dataset.mdEnd
-    delete element.dataset.mdToken
-    if (element.dataset.mdSourceFocus === 'true') {
-      element.removeAttribute('tabindex')
-      element.removeAttribute('title')
-      delete element.dataset.mdSourceFocus
-    }
-  }
-  for (const checkbox of root.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')) {
-    checkbox.disabled = true
-    delete checkbox.dataset.mdCheck
-  }
-  if (!props.editable) return
-  const groups = groupByToken(blocks)
-  const elements = Array.from(root.children)
-  if (elements.length !== groups.length) return
-
-  groups.forEach((group, index) => {
-    const top = elements[index]
-    const tokenIndex = group[0]?.tokenIndex
-    if (top === undefined || tokenIndex === undefined) return
-    if (!(top instanceof HTMLElement)) return
-    top.dataset.mdToken = String(tokenIndex)
-
-    for (const block of group) {
-      if (block.kind === 'skip') continue
-      const element = resolveElement(top, block.path)
-      if (element === null) continue
-      // 行内混了图片、公式或嵌套结构的块改渲染会丢内容，退化成源码编辑。
-      if (block.kind === 'text' && element.querySelector(STRUCTURED_SELECTOR) === null) markText(element, block)
-      else markSource(element, block)
-    }
-  })
-}
-
-/** 按 tokenIndex 归并块：一个顶层 token 可能给出多条块（列表按条目、引用按段落）。 */
-function groupByToken(list: readonly FileMarkdownBlock[]): readonly (readonly FileMarkdownBlock[])[] {
-  const groups: FileMarkdownBlock[][] = []
-  for (const block of list) {
-    const last = groups[groups.length - 1]
-    if (last !== undefined && last[0]?.tokenIndex === block.tokenIndex) last.push(block)
-    else groups.push([block])
-  }
-  // 空白 token 不产生元素，不占顶层元素位。
-  return groups.filter((group) => group.some((block) => block.kind !== 'skip'))
-}
-
-/** 沿子元素路径定位可编辑元素；路径与实际 DOM 不符时返回 null，由调用方跳过。 */
-function resolveElement(top: Element, path: readonly number[]): HTMLElement | null {
-  let node: Element | null = top
-  for (const index of path) {
-    node = node.children[index] ?? null
-    if (node === null) return null
-  }
-  return node instanceof HTMLElement ? node : null
-}
-
-/** 标注「直接编辑渲染结果」的块；带任务复选框时把偏移挂到复选框上，并解除只读。 */
-function markText(element: HTMLElement, block: FileMarkdownBlock): void {
-  element.dataset.mdKind = 'text'
-  element.dataset.mdStart = String(block.start)
-  element.dataset.mdEnd = String(block.end)
-  element.dataset.mdToken = String(block.tokenIndex)
-  if (block.checkbox < 0) return
-  const input = element.querySelector<HTMLInputElement>('input[type="checkbox"]')
-  if (input === null) return
-  input.dataset.mdCheck = String(block.checkbox)
-  input.disabled = false
-}
-
-/** 标注「用源码框编辑」的块；区间覆盖整块源码。 */
-function markSource(element: HTMLElement, block: FileMarkdownBlock): void {
-  element.tabIndex = 0
-  element.dataset.mdSourceFocus = 'true'
-  element.title = '双击或按 Enter 编辑此块源码'
-  element.dataset.mdKind = 'source'
-  element.dataset.mdStart = String(block.start)
-  element.dataset.mdEnd = String(block.end)
-  element.dataset.mdToken = String(block.tokenIndex)
-}
-
-/** 逐批读取项目内图片；失败时把占位说明替换成可展示的原因，不留下破图。 */
 async function loadImages(root: HTMLElement, current: number): Promise<void> {
   const frames = Array.from(root.querySelectorAll<HTMLElement>('.file-markdown-image-frame'))
-  if (frames.length === 0) return
-
-  const queue = frames.slice(0, MAX_IMAGES).filter(frame => !frame.classList.contains('is-ready'))
-  for (const frame of frames.slice(MAX_IMAGES)) markUnloaded(frame, '图片过多，未加载')
-
-  let loadedChars = Array.from(root.querySelectorAll<HTMLImageElement>('.file-markdown-image-frame.is-ready img'))
-    .reduce((total, image) => total + image.src.length, 0)
-  for (let start = 0; start < queue.length; start += IMAGE_CONCURRENCY) {
+  let chars = 0
+  for (const frame of frames.slice(40)) frame.textContent = '图片过多，未加载'
+  const queue = frames.slice(0, 40)
+  for (let start = 0; start < queue.length; start += 4) {
     if (current !== revision || !props.active) return
-    // 预算用尽就停下：一次预览不把整篇图片都搬进内存。
-    if (loadedChars > MAX_IMAGE_TOTAL_CHARS) {
-      for (const frame of queue.slice(start)) markUnloaded(frame, '图片总量超出预览上限，未加载')
-      return
-    }
-
-    const batch = queue.slice(start, start + IMAGE_CONCURRENCY)
-    await Promise.all(batch.map(async (frame) => {
-      const reference = frame.dataset.imagePath ?? ''
+    await Promise.all(queue.slice(start, start + 4).map(async frame => {
       const label = frame.dataset.imageLabel ?? '图片'
-      const source = await loadMarkdownImage(props.projectPath, props.path, reference)
+      const source = await loadMarkdownImage(props.projectPath, props.path, frame.dataset.imagePath ?? '')
       if (current !== revision || !frame.isConnected) return
-      if (source.url === null) {
-        markUnloaded(frame, source.error ?? '未加载')
+      if (!source.url || chars + source.url.length > 32 * 1024 * 1024) {
+        frame.textContent = `${label}（${source.error ?? '图片总量超出上限'}）`
+        frame.classList.add('is-error')
         return
       }
-      if (loadedChars + source.url.length > MAX_IMAGE_TOTAL_CHARS) {
-        markUnloaded(frame, '图片总量超出预览上限，未加载')
-        return
-      }
-      loadedChars += source.url.length
+      chars += source.url.length
       const image = document.createElement('img')
-      image.src = source.url
-      image.alt = label
-      image.loading = 'lazy'
-      image.decoding = 'async'
+      image.src = source.url; image.alt = label; image.loading = 'lazy'; image.decoding = 'async'
       frame.replaceChildren(image)
       frame.classList.add('is-ready')
       frame.tabIndex = 0
       frame.setAttribute('role', 'button')
       frame.setAttribute('aria-label', `放大图片：${label}`)
-      frame.title = '点击放大图片'
     }))
   }
+  if (current === revision) updateActiveHeading()
 }
-
-/** 把占位框换成「未加载」说明；失败原因要可见，不能停在「加载中」。 */
-function markUnloaded(frame: HTMLElement, reason: string): void {
-  const label = frame.dataset.imageLabel ?? '图片'
-  frame.textContent = `${label}（${reason}）`
-  frame.removeAttribute('tabindex')
-  frame.removeAttribute('role')
-  frame.removeAttribute('aria-label')
-  frame.removeAttribute('title')
-  frame.classList.remove('is-ready')
-  frame.classList.add('is-error')
-}
-
-/**
- * 就地编辑提交：先本地替换文本并只重绘被改的顶层块，再上报父级写回编辑器。
- * 顶层类型、子块路径或相邻 token 原文发生变化时，保留源码修改并回退整篇重建。
- */
-function applyLocalEdit(tokenIndex: number, start: number, end: number, insert: string): void {
-  const root = body.value
-  const next = renderText.value.slice(0, start) + insert + renderText.value.slice(end)
-  if (!canPreviewFileMarkdown(next)) {
-    renderText.value = next
-    needsMount = true
-    return
-  }
-  const nextBlocks = lexFileMarkdown(next)
-  const before = groupByToken(blocks)
-  const after = groupByToken(nextBlocks)
-  // 引用定义可能改变邻块的行内渲染，即使邻块原文没变也不能局部替换。
-  const hasDefinitions = /^ {0,3}\[[^\]]+\]:/m.test(next)
-  const sameShape = !hasDefinitions && before.length === after.length && before.every((group, index) => {
-    const previous = group[0]
-    const nextGroup = after[index]
-    const following = nextGroup?.[0]
-    if (previous === undefined || following === undefined || nextGroup === undefined) return false
-    if (previous.tokenIndex !== following.tokenIndex || previous.tokenType !== following.tokenType) return false
-    if (previous.tokenIndex !== tokenIndex) {
-      return renderText.value.slice(previous.tokenStart, previous.tokenEnd)
-        === next.slice(following.tokenStart, following.tokenEnd)
-    }
-    return group.length === nextGroup.length && group.every((block, blockIndex) => {
-      const other = nextGroup[blockIndex]
-      return other !== undefined && block.kind === other.kind && block.path.join('.') === other.path.join('.')
-    })
-  })
-  const top = sameShape ? findTokenElement(root, tokenIndex) : null
-  const html = sameShape ? renderFileMarkdownBlock(next, tokenIndex) : null
-  const replacement = html === null ? null : toElement(html)
-
-  if (root === null || top === null || replacement === null) {
-    renderText.value = next
-    mountDocument()
-    return
-  }
-
-  top.replaceWith(replacement)
-  renderText.value = next
-  blocks = nextBlocks
-  applyBlockRanges(root)
-  // 只补全被改的这一块：图片缓存仍在，代码高亮只重跑这一块。
-  const current = revision
-  renderMathInto(replacement)
-  applyCallouts(replacement)
-  void highlightCodeBlocks(replacement, () => current !== revision)
-  void loadImages(replacement, current)
-  refreshToc()
-  if (searchOpen.value) runSearch()
-}
-
-/** 顶层元素 → 块：`tokenIndex` 标注在顶层元素上，因此只在直接子元素里找。 */
-function findTokenElement(root: HTMLElement | null, tokenIndex: number): HTMLElement | null {
-  if (root === null) return null
-  for (const child of root.children) {
-    if (child instanceof HTMLElement && child.dataset.mdToken === String(tokenIndex)) return child
-  }
-  return null
-}
-
-/** 只有恰好一个顶层元素且没有散落文本时才允许局部替换。 */
-function toElement(html: string): HTMLElement | null {
-  const holder = document.createElement('div')
-  holder.innerHTML = html
-  const element = holder.firstElementChild
-  const hasLooseText = Array.from(holder.childNodes).some(node => node instanceof Text && node.data.trim() !== '')
-  return holder.children.length === 1 && !hasLooseText && element instanceof HTMLElement ? element : null
-}
-
-/** 标题可能刚被改过：重算 id 与目录，并更新当前标题高亮。 */
 function refreshToc(): void {
-  const root = body.value
-  if (root === null) return
-  toc.value = ensureHeadingIds(root)
+  const root = contentRoot()
+  if (!root) return
+  if (richEnabled.value) {
+    toc.value = Array.from(root.querySelectorAll<HTMLElement>('h1,h2,h3,h4,h5,h6')).flatMap(heading => {
+      const copy = heading.cloneNode(true) as HTMLElement
+      copy.querySelectorAll('.markdown-heading-anchor').forEach(anchor => anchor.remove())
+      const label = copy.textContent?.trim() ?? ''
+      return label && heading.id ? [{ id: heading.id, label, level: Number(heading.tagName.slice(1)) }] : []
+    })
+  } else toc.value = ensureHeadingIds(root)
   emit('toc', toc.value)
-  updateActiveHeading()
 }
-
-/** 目录跳转：滚动到标题并聚焦，便于键盘用户继续阅读；目标不存在时返回 false。 */
 function jumpTo(id: string): boolean {
-  if (!commitEdit()) return false
-  const target = body.value?.querySelector<HTMLElement>(`[id="${CSS.escape(id)}"]`)
-  if (target === null || target === undefined) return false
-  for (let parent = target.parentElement; parent !== null && parent !== body.value; parent = parent.parentElement) {
-    if (parent instanceof HTMLDetailsElement) parent.open = true
+  if (!flushEdit()) return false
+  const target = contentRoot()?.querySelector<HTMLElement>(`[id="${CSS.escape(id)}"]`)
+  if (!target) return false
+  if (richEnabled.value) rich.value?.navigateTo(id)
+  else {
+    for (let parent = target.parentElement; parent && parent !== body.value; parent = parent.parentElement) if (parent instanceof HTMLDetailsElement) parent.open = true
+    target.tabIndex = -1
+    target.focus({ preventScroll: true })
   }
-  const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches
-  target.scrollIntoView({ behavior: reduced ? 'auto' : 'smooth', block: 'start' })
-  target.setAttribute('tabindex', '-1')
-  target.focus({ preventScroll: true })
+  void nextTick(() => target.scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' }))
   activeHeadingId.value = id
   if (narrow.value) emit('closeToc', false)
   return true
 }
-
-/** 标题请求在目录提取完成后消费；不存在的标题就地说明，不无限重试。 */
 function handleAnchorRequest(): void {
   const request = props.anchorRequest
-  if (!props.active || needsMount || request === undefined || request === null || body.value === null) return
+  if (!props.active || !request || !contentRoot() || (richEnabled.value && !richReady.value) || (!richEnabled.value && needsMount)) return
   if (!jumpTo(request.anchor)) showNotice('文档里没有对应的标题。', true)
   emit('anchorHandled', request.id)
 }
-
-/**
- * 按滚动位置算出当前标题：取最后一个已经越过判定线的标题。
- * 标题按文档顺序排列，遇到第一个未越线的就停，不必每次遍历整篇。
- */
 function updateActiveHeading(): void {
-  const root = body.value
-  const container = scroller.value
-  if (root === null || container === null) return
-  const threshold = container.getBoundingClientRect().top + HEADING_THRESHOLD_PX
-  let current = ''
-  for (const heading of root.querySelectorAll<HTMLElement>('h1, h2, h3, h4, h5, h6')) {
-    if (heading.getClientRects().length === 0) continue
+  const root = contentRoot(); const container = scroller.value
+  if (!root || !container) return
+  const threshold = container.getBoundingClientRect().top + 24
+  let id = ''
+  for (const heading of root.querySelectorAll<HTMLElement>('h1,h2,h3,h4,h5,h6')) {
+    if (!heading.getClientRects().length) continue
     if (heading.getBoundingClientRect().top > threshold) break
-    current = heading.id
+    id = heading.id
   }
-  activeHeadingId.value = current
+  activeHeadingId.value = id
 }
-
-/** 滚动只按帧计算一次当前标题，避免长文档滚动时每个事件都做一次布局读取。 */
+/** 正文下方留白也能开始编辑，但不能拦截滚动条、目录、工具按钮或正文拖选。 */
+function onBlankPointerDown(event: PointerEvent): void {
+  const target = event.target; const container = scroller.value
+  if (!props.active || !richEnabled.value || event.button !== 0 || !container || (target !== container && target !== body.value)) return
+  const rect = container.getBoundingClientRect()
+  if (event.clientX >= rect.left + container.clientWidth) return
+  event.preventDefault(); rich.value?.focusEnd()
+}
 function onScroll(): void {
-  if (scrollFrame !== 0) return
-  scrollFrame = requestAnimationFrame(() => {
-    scrollFrame = 0
-    updateActiveHeading()
-  })
+  if (!scrollFrame) scrollFrame = requestAnimationFrame(() => { scrollFrame = 0; updateActiveHeading() })
 }
-
-/** Cmd/Ctrl+F：只在预览可见时接管，打开查找并选中已有查询词。 */
 function onFindShortcut(event: KeyboardEvent): void {
-  if (!props.active || zoomed.value !== null || event.defaultPrevented || event.isComposing) return
-  if (event.key.toLowerCase() !== 'f' || event.altKey || event.shiftKey) return
-  if (!event.metaKey && !event.ctrlKey) return
-  event.preventDefault()
-  openSearch()
+  if (!props.active || zoomed.value || event.defaultPrevented || event.isComposing || event.key.toLowerCase() !== 'f' || event.altKey || event.shiftKey || (!event.metaKey && !event.ctrlKey)) return
+  event.preventDefault(); openSearch()
 }
-
 function openSearch(): void {
-  if (!props.active || !commitEdit()) return
+  if (!props.active) return
+  if (richEnabled.value && rich.value) { rich.value.openSearch(); return }
+  if (!flushEdit()) return
   searchOpen.value = true
-  void nextTick(() => {
-    searchInput.value?.focus()
-    searchInput.value?.select()
-    if (searchQuery.value.trim() !== '') runSearch()
-  })
+  void nextTick(() => { searchInput.value?.focus(); searchInput.value?.select(); runSearch() })
 }
-
-/** 收起查找：清空查询与高亮，焦点还给正文滚动区，键盘用户不会掉回页面顶部。 */
-function closeSearch(): void {
-  const wasOpen = searchOpen.value
-  resetSearch()
-  if (!wasOpen) return
-  void nextTick(() => scroller.value?.focus({ preventScroll: true }))
-}
-
-/** 清掉查找状态与高亮；文本重建与切换文件也走这里。 */
 function resetSearch(): void {
-  const ownedHighlights = searchOpen.value
-  if (searchTimer !== null) {
-    window.clearTimeout(searchTimer)
-    searchTimer = null
-  }
-  searchOpen.value = false
-  searchQuery.value = ''
-  searchMatches.value = []
-  searchTruncated.value = false
-  searchActive.value = 0
-  if (ownedHighlights) clearHighlights()
-}
-
-/** 查询变化后防抖重扫；命中为空时也要清掉上一次的高亮。 */
-function onSearchInput(event: Event): void {
-  const target = event.target
-  searchQuery.value = target instanceof HTMLInputElement ? target.value : ''
   if (searchTimer !== null) window.clearTimeout(searchTimer)
-  searchTimer = window.setTimeout(() => {
-    searchTimer = null
-    runSearch()
-  }, SEARCH_DEBOUNCE_MS)
+  searchTimer = null
+  if (searchOpen.value) clearHighlights()
+  searchOpen.value = false; searchQuery.value = ''; searchMatches.value = []; searchActive.value = 0; searchTruncated.value = false
 }
-
-/** 在当前正文上重新匹配，并把第一个命中滚到视口中间。 */
-function runSearch(): void {
-  const root = body.value
-  if (root === null || searchQuery.value.trim() === '') {
-    searchMatches.value = []
-    searchTruncated.value = false
-    searchActive.value = 0
-    clearHighlights()
-    return
-  }
+function closeSearch(): void { resetSearch(); richEnabled.value ? rich.value?.focus() : scroller.value?.focus({ preventScroll: true }) }
+function runSearch(reset = true): void {
+  const root = contentRoot()
+  if (!root || !searchQuery.value.trim()) { searchMatches.value = []; searchTruncated.value = false; clearHighlights(); return }
   const result = collectMatches(root, searchQuery.value)
   searchMatches.value = result.ranges
   searchTruncated.value = result.truncated
-  searchActive.value = 0
-  applyHighlights(result.ranges, 0)
-  const first = result.ranges[0]
-  if (first !== undefined && scroller.value !== null) scrollRangeIntoView(first, scroller.value)
+  searchActive.value = reset ? 0 : Math.max(0, Math.min(searchActive.value, result.ranges.length - 1))
+  applyHighlights(result.ranges, searchActive.value)
+  const first = result.ranges[searchActive.value]
+  if (reset && first && scroller.value) scrollRangeIntoView(first, scroller.value)
 }
-
-/** 上一个/下一个命中：循环移动，同时更新高亮与滚动位置。 */
+function onSearchInput(event: Event): void {
+  if (!(event.target instanceof HTMLInputElement)) return
+  searchQuery.value = event.target.value
+  if (searchTimer !== null) window.clearTimeout(searchTimer)
+  searchTimer = window.setTimeout(() => { searchTimer = null; runSearch() }, 120)
+}
 function moveMatch(step: number): void {
   const total = searchMatches.value.length
-  if (total === 0) return
-  const next = (searchActive.value + step + total) % total
-  searchActive.value = next
-  applyHighlights(searchMatches.value, next)
-  const range = searchMatches.value[next]
-  if (range !== undefined && scroller.value !== null) scrollRangeIntoView(range, scroller.value)
+  if (!total) return
+  searchActive.value = (searchActive.value + step + total) % total
+  applyHighlights(searchMatches.value, searchActive.value)
+  const range = searchMatches.value[searchActive.value]
+  if (range && scroller.value) scrollRangeIntoView(range, scroller.value)
 }
-
-/** 输入框内的键盘操作：Enter 下一个、Shift+Enter 上一个、Esc 关闭。 */
 function onSearchKeydown(event: KeyboardEvent): void {
-  if (event.isComposing) return
-  if (event.key === 'Enter') {
-    event.preventDefault()
-    moveMatch(event.shiftKey ? -1 : 1)
-    return
-  }
-  if (event.key === 'Escape') {
-    event.preventDefault()
-    event.stopPropagation()
-    closeSearch()
-  }
+  if (event.isComposing || event.keyCode === 229) return
+  if (event.key === 'Enter') { event.preventDefault(); moveMatch(event.shiftKey ? -1 : 1) }
+  else if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeSearch() }
 }
-
-/**
- * 按下鼠标：先结束上一处编辑，再在命中的块上进入编辑。
- * 放在 mousedown 而不是 click，是因为可编辑元素要在浏览器决定插入点之前就位，光标才能落在点击处；
- * 提交只替换被改的那一块，点击目标本身不会被销毁，一次点击即可换块继续编辑。
- */
-function onContentMouseDown(event: MouseEvent): void {
-  if (!props.editable || event.button !== 0 || composing) return
-  const target = event.target
-  if (!(target instanceof Element)) return
-
-  const current = editing.value
-  // 点在正在编辑的块内部：交给浏览器处理插入点，不打断输入。
-  if (current !== null && current.target.contains(target)) return
-  // 图片自己的点击是放大查看，不是进入编辑；先收尾再放行。
-  if (target.closest('.file-markdown-image-frame') !== null) {
-    commitEdit()
-    return
-  }
-  // 复选框、链接、复制按钮自己处理点击，先收尾再放行。
-  if (target.closest('button, input, textarea, summary, a') !== null) {
-    commitEdit()
-    return
-  }
-  if (current !== null) {
-    commitEdit()
-    // 提交替换掉了整块元素时，原点击目标已离开文档，只能放弃这一次进入编辑。
-    if (!target.isConnected) return
-  }
-
-  const host = target.closest<HTMLElement>('[data-md-kind]')
-  if (host === null) return
-  // 结构块用双击进入源码输入，保留单击和拖选复制的阅读动作。
-  if (host.dataset.mdKind === 'source') {
-    pointerEditTarget = host
-    return
-  }
-  startEdit(host)
+async function reportCopy(text: string, label = '代码'): Promise<void> {
+  const copied = await copyText(text)
+  showNotice(copied ? `${label}已复制。` : `无法复制${label}，请手动复制。`, !copied)
 }
-
-/** 进入编辑：文本块直接在渲染结果上改，结构块换成等宽源码框。 */
-function startEdit(host: HTMLElement): void {
-  if (!props.editable || composing) return
-  resetSearch()
-  const rawStart = host.dataset.mdStart
-  const rawEnd = host.dataset.mdEnd
-  const start = Number(rawStart)
-  const end = Number(rawEnd)
-  const tokenIndex = Number(host.dataset.mdToken)
-  if (rawStart === undefined || rawEnd === undefined) return
-  if (!Number.isInteger(start) || !Number.isInteger(end) || !Number.isInteger(tokenIndex)) return
-
-  if (host.dataset.mdKind !== 'source') {
-    const originalHtml = host.innerHTML
-    host.setAttribute('contenteditable', 'plaintext-only')
-    host.classList.add('is-editing')
-    host.spellcheck = false
-    editing.value = {
-      kind: 'text',
-      tokenIndex,
-      start,
-      end,
-      target: host,
-      baseline: textBlockMarkdown(host),
-      restore: () => {
-        host.innerHTML = originalHtml
-        host.removeAttribute('contenteditable')
-        host.classList.remove('is-editing')
-      }
-    }
-    return
-  }
-
-  const parent = host.parentElement
-  if (parent === null) return
-  const textarea = document.createElement('textarea')
-  textarea.className = 'file-md-source'
-  textarea.spellcheck = false
-  textarea.value = renderText.value.slice(start, end)
-  autoSizeSource(textarea)
-  // 高度跟着输入长；监听器随元素一起销毁，不用单独解绑。
-  textarea.addEventListener('input', () => autoSizeSource(textarea))
-  parent.replaceChild(textarea, host)
-  textarea.focus({ preventScroll: true })
-  textarea.setSelectionRange(textarea.value.length, textarea.value.length)
-  editing.value = {
-    kind: 'source',
-    tokenIndex,
-    start,
-    end,
-    target: textarea,
-    baseline: textarea.value,
-    restore: () => { parent.replaceChild(host, textarea) }
-  }
-}
-
-/** 源码框高度跟着内容走，最多铺开固定行数，再长就在框内滚动。 */
-function autoSizeSource(textarea: HTMLTextAreaElement): void {
-  textarea.rows = Math.min(Math.max(textarea.value.split('\n').length, 2), SOURCE_MAX_ROWS)
-}
-
-/**
- * 提交当前编辑：文本块按行内序列化还原 Markdown，源码框直接用框里的内容。
- * 与进入编辑时的基线一致说明没真改过（例如只点了一下再看别处）：原地还原 DOM，不写回编辑器。
- */
-function commitEdit(force = false): boolean {
-  // 卸载时保留当前组合输入的可见内容作为草稿；普通提交等待输入法结束，不截断候选确认。
-  if (composing && !force) return false
-  if (force) composing = false
-  const state = editing.value
-  if (state === null) return true
-  // 先清状态：接下来的 DOM 替换会触发 focusout，不能让它再提交一次。
-  editing.value = null
-
-  const next = state.kind === 'text'
-    ? textBlockMarkdown(state.target)
-    : (state.target as HTMLTextAreaElement).value
-  // 与进入编辑时的基线一致，或改回与原文完全相同，都不必写回编辑器。
-  // 源码框会临时替换顶层元素，提交前先恢复承载块，才能找到正确的 token 边界。
-  state.restore()
-  if (next !== state.baseline && next !== renderText.value.slice(state.start, state.end)) {
-    applyLocalEdit(state.tokenIndex, state.start, state.end, next)
-    emit('edit', { start: state.start, end: state.end, text: next })
-  }
-  emit('pendingEdit', false)
+function openImage(target: Element): boolean {
+  const image = target.closest('img')
+  if (!image || !image.closest('.file-markdown-image-frame') || !flushEdit()) return false
+  zoomed.value = { src: image.currentSrc || image.src, alt: image.alt }
   return true
 }
-
-/**
- * 文本块序列化：行内 DOM 还原成 Markdown 后去掉首尾空白。
- * 任务条目的复选框后面跟一个分隔空格，它属于标记层而不是文字，不能随编辑一起写回原文。
- * 位于列表条目里时额外保护行首的 `[ ]`/`[x]`：它会被重新解析成任务标记。
- */
-function textBlockMarkdown(element: HTMLElement): string {
-  // 条目文字的元素是 `li` 本身或它里面的段落，往上找列表就能判断是否属于列表条目。
-  return serializeInlineMarkdown(element, { inListItem: element.closest('ul, ol') !== null }).trim()
-}
-
-/** 放弃当前编辑，把 DOM 恢复成进入编辑前的样子。 */
-function cancelEdit(): void {
-  const state = editing.value
-  if (state === null) return
-  editing.value = null
-  composing = false
-  state.restore()
-  emit('pendingEdit', false)
-}
-
-/** 输入时先上报待提交状态，关闭标签和外部文件更新不得把它误当成未修改。 */
-function onContentInput(): void {
-  if (editing.value !== null) emit('pendingEdit', true)
-}
-
-function onCompositionEnd(): void {
-  composing = false
-  if (!props.active || !props.editable) commitEdit()
-}
-
-function onContentDoubleClick(event: MouseEvent): void {
-  const target = event.target
-  if (!(target instanceof Element) || target.closest('button, input, summary, .file-markdown-image-frame') !== null) return
-  const host = target.closest<HTMLElement>('[data-md-kind="source"]')
-  if (host !== null && host === pointerEditTarget) startEdit(host)
-  pointerEditTarget = null
-}
-
-/** 只有保存、切换与卸载需要跨组件刷新当前输入，其余 DOM 细节仍由本组件持有。 */
-defineExpose({ flushEdit: commitEdit, openSearch })
-
-/** 编辑态的键盘操作：Esc 放弃，Enter 提交文本块，源码框用 Cmd/Ctrl+Enter 提交（Enter 留给换行）。 */
+function onDoubleClick(event: MouseEvent): void { if (richEnabled.value && event.target instanceof Element && openImage(event.target)) event.preventDefault() }
 function onContentKeydown(event: KeyboardEvent): void {
-  if (event.isComposing || composing || event.keyCode === 229) return
-  const target = event.target
-  if ((event.key === 'Enter' || event.key === ' ') && target instanceof HTMLElement
-    && target.matches('.file-markdown-image-frame.is-ready')) {
-    const image = target.querySelector('img')
-    if (image !== null) {
-      event.preventDefault()
-      openZoom(image.currentSrc || image.src, image.alt)
-    }
-    return
-  }
-  const state = editing.value
-  if (state === null) {
-    if (event.key === 'Enter' && props.editable && target instanceof HTMLElement && target.dataset.mdKind === 'source') {
-      event.preventDefault()
-      startEdit(target)
-    }
-    return
-  }
-  if (event.key === 'Escape') {
-    event.preventDefault()
-    event.stopPropagation()
-    cancelEdit()
-    return
-  }
-  if (event.key !== 'Enter') return
-  if (state.kind === 'source') {
-    // 源码框里 Enter 是换行，提交走 Cmd/Ctrl+Enter。
-    if (!event.metaKey && !event.ctrlKey) return
-    event.preventDefault()
-    commitEdit()
-    return
-  }
-  if (event.shiftKey) return
-  event.preventDefault()
-  commitEdit()
+  if (event.isComposing || event.keyCode === 229 || richEnabled.value) return
+  if ((event.key === 'Enter' || event.key === ' ') && event.target instanceof HTMLElement && event.target.matches('.file-markdown-image-frame.is-ready') && openImage(event.target.querySelector('img') ?? event.target)) event.preventDefault()
 }
-
-/** 焦点离开编辑元素时提交：键盘 Tab 走开也要落地，不能留下看不见的未提交内容。 */
-function onContentFocusOut(event: FocusEvent): void {
-  const state = editing.value
-  if (state === null) return
-  const next = event.relatedTarget
-  if (next instanceof Node && state.target.contains(next)) return
-  commitEdit()
-}
-
-/** 正文是脚本挂载的 HTML，不会经过 Vue 编译；点击统一在内容根节点代理，
- * 处理代码复制、标题锚点、复选框与链接。 */
 async function onContentClick(event: MouseEvent): Promise<void> {
   const target = event.target
-  const root = event.currentTarget
-  if (!(target instanceof Element) || !(root instanceof HTMLElement)) return
-  // 正在编辑的块里不触发链接与复制，避免打断输入。
-  const editingState = editing.value
-  if (editingState !== null && editingState.target.contains(target)) return
-
-  const checkbox = target.closest<HTMLInputElement>('input[type="checkbox"]')
-  if (checkbox !== null) {
-    // 复选框的勾选状态由重渲染决定，先挡住原生切换。
-    event.preventDefault()
-    if (props.editable) toggleTask(checkbox)
-    return
+  if (!(target instanceof Element)) return
+  if (!richEnabled.value && openImage(target)) { event.preventDefault(); return }
+  const control = target.closest<HTMLElement>('.markdown-heading-anchor, .markdown-code-copy, .markdown-link')
+  if (!control || !body.value?.contains(control)) return
+  if (control.classList.contains('markdown-code-copy')) {
+    event.preventDefault(); await reportCopy(control.closest('.markdown-code-block')?.querySelector('pre code')?.textContent ?? ''); return
   }
-
-  // 图片放大：只对已加载的项目内图片生效，浮层里复用的是同一份 data URL，不再读盘。
-  const image = target.closest('img')
-  if (image !== null && image.closest('.file-markdown-image-frame') !== null) {
-    event.preventDefault()
-    image.closest<HTMLElement>('.file-markdown-image-frame')?.focus({ preventScroll: true })
-    openZoom(image.currentSrc || image.src, image.alt)
-    return
+  if (control.classList.contains('markdown-heading-anchor')) {
+    event.preventDefault(); await reportCopy(`${props.path}${control.dataset.linkTarget ?? ''}`, '标题引用'); return
   }
-
-  const button = target.closest('button')
-  if (!(button instanceof HTMLButtonElement) || !root.contains(button)) return
-
-  if (button.classList.contains('markdown-code-copy')) {
-    const code = button.closest('.markdown-code-block')?.querySelector('pre > code')
-    if (code === null || code === undefined) return
-    event.preventDefault()
-    await reportCopy(code.textContent ?? '', '代码')
-    return
-  }
-
-  if (button.classList.contains('markdown-heading-anchor')) {
-    event.preventDefault()
-    const id = (button.dataset.linkTarget ?? '').replace(/^#/, '')
-    if (id === '') return
-    await reportCopy(`${props.path}#${id}`, '标题引用')
-    return
-  }
-
-  if (!button.classList.contains('markdown-link')) return
+  // 富文本普通点击用于落光标；显式修饰键点击才导航，避免编辑链接文字时打开页面。
+  if (richEnabled.value && !event.metaKey && !event.ctrlKey) return
   event.preventDefault()
-  const address = button.dataset.linkTarget ?? ''
-  if (address === '') return
-
-  switch (button.dataset.linkKind) {
-    case 'anchor':
-      if (!jumpTo(safeDecode(address.replace(/^#/, '')))) {
-        showNotice('文档里没有对应的标题锚点。', true)
-      }
+  if (!flushEdit()) return
+  const address = control.dataset.linkTarget ?? ''
+  switch (control.dataset.linkKind) {
+    case 'anchor': {
+      let anchor = address.slice(1)
+      try { anchor = decodeURIComponent(anchor) } catch { /* 无效编码按原文定位。 */ }
+      if (!jumpTo(anchor)) showNotice('文档里没有对应的标题锚点。', true)
       return
-    case 'file':
-      openProjectFile(address)
+    }
+    case 'document': {
+      const link = resolveDocumentLink(address, documents.value)
+      if (!link) { showNotice(documents.value.truncated ? '索引尚未完整，无法确认文档目标。' : '文档不存在或名称有歧义，请使用完整项目相对路径。', true); return }
+      let anchor = link.anchor
+      if (anchor) { try { anchor = decodeURIComponent(anchor) } catch { /* 无效编码按原文处理。 */ } }
+      tabs.openFileTab(link.path, 'preview', anchor ? headingSlug(anchor) : null, props.projectPath)
       return
-    case 'external':
-      await openInBrowser(address)
+    }
+    case 'file': {
+      const link = resolveFileMarkdownLink(address, props.path)
+      if (!link) { showNotice('链接目标不在项目内，未打开。', true); return }
+      if (!/\.(md|markdown)$/i.test(link.path)) { showNotice(`链接目标是 ${link.path}，可在文件树中打开。`, true); return }
+      tabs.openFileTab(link.path, 'preview', link.anchor, props.projectPath)
       return
-    default:
-      await reportCopy(address, '链接地址')
+    }
+    case 'external': {
+      const result = await openExternalUrl(address)
+      if (!result.ok) showNotice(result.error.message, true)
+      return
+    }
+    default: await reportCopy(address, '链接地址')
   }
 }
-
-/** 勾选/取消任务：只替换方括号里那一个字符，其余内容与标记原样保留。 */
-function toggleTask(checkbox: HTMLInputElement): void {
-  const raw = checkbox.dataset.mdCheck
-  const tokenIndex = Number(checkbox.closest<HTMLElement>('[data-md-token]')?.dataset.mdToken)
-  if (raw === undefined || !Number.isInteger(tokenIndex)) return
-  const offset = Number(raw)
-  if (!Number.isInteger(offset)) return
-  const next = renderText.value[offset] === ' ' ? 'x' : ' '
-  applyLocalEdit(tokenIndex, offset, offset + 1, next)
-  emit('edit', { start: offset, end: offset + 1, text: next })
-}
-
-/** 只放大正文已加载的项目内图片；原生对话框负责焦点边界与恢复。 */
-function openZoom(src: string, alt: string): void {
-  if (src === '' || !commitEdit()) return
-  zoomed.value = { src, alt }
-}
-
-/** 项目内链接：只有能解析成项目内路径的 Markdown 文件才打开新标签页，其余只提示。 */
-function openProjectFile(address: string): void {
-  const link = resolveFileMarkdownLink(address, props.path)
-  if (link === null) {
-    showNotice('链接目标不在项目内，未打开。', true)
-    return
-  }
-  if (!/\.(md|markdown)$/i.test(link.path)) {
-    showNotice(`链接目标是 ${link.path}，不是 Markdown 文件；可在文件树中打开。`, true)
-    return
-  }
-  workspaceTabsStore.openFileTab(link.path, 'preview', link.anchor)
-}
-
-/** 外部链接：地址与协议由主进程再校验一次，拒绝原因就地展示。 */
-async function openInBrowser(address: string): Promise<void> {
-  const result = await openExternalUrl(address)
-  if (!result.ok) showNotice(result.error.message, true)
-}
-
-/** 复制到剪贴板并就地反馈；失败必须可见，不能停在「复制」。 */
-async function reportCopy(text: string, label: string): Promise<void> {
-  if (text === '') {
-    showNotice(`${label}为空，没有可复制的内容。`, true)
-    return
-  }
-  const copied = await copyText(text)
-  showNotice(copied ? `${label}已复制。` : `无法复制${label}，请手动选择文本复制。`, !copied)
-}
-
-/** 折叠状态改变后重新读取可见文本与当前标题，不让查找停在已隐藏的内容上。 */
-function onDetailsToggle(): void {
-  updateActiveHeading()
-  if (searchOpen.value) runSearch()
-}
-
-function showNotice(text: string, failed: boolean): void {
-  notice.value = text
-  noticeFailed.value = failed
-}
-
-/** 链接地址里可能有百分号编码；解不开时按原文处理，不阻断跳转。 */
-function safeDecode(value: string): string {
-  try {
-    return decodeURIComponent(value)
-  } catch {
-    return value
-  }
-}
-
+defineExpose({ flushEdit, getText, openSearch })
 </script>
 
 <template>
-  <div ref="shell" class="file-markdown" :class="{ 'is-editable': editable, 'is-narrow': narrow }" @keydown.esc="emit('closeToc')">
-    <button v-if="narrow && showToc && toc.length > 0" type="button" class="file-markdown-toc-backdrop" aria-label="关闭目录" @click="emit('closeToc')"></button>
-    <FileMarkdownToc
-      v-if="showToc && toc.length > 0"
-      :entries="toc"
-      :active-id="activeHeadingId"
-      @navigate="jumpTo"
-      @close="emit('closeToc')"
-    />
-
-    <div
-      ref="scroller"
-      class="file-markdown-scroll scroll-area"
-      tabindex="-1"
-      aria-label="文档正文"
-      @scroll.passive="onScroll"
-    >
-      <div v-if="searchOpen" class="file-markdown-search" role="search" aria-label="在预览中查找">
-        <input
-          ref="searchInput"
-          :value="searchQuery"
-          type="text"
-          class="file-markdown-search-input"
-          placeholder="在预览中查找"
-          aria-label="在 Markdown 预览中查找"
-          autocomplete="off"
-          spellcheck="false"
-          @input="onSearchInput"
-          @keydown="onSearchKeydown"
-        >
+  <div ref="shell" class="file-markdown" :class="{ 'is-editable': richEnabled, 'is-narrow': narrow }">
+    <button v-if="narrow && showToc && toc.length" type="button" class="file-markdown-toc-backdrop" aria-label="关闭目录" @click="emit('closeToc')"></button>
+    <FileMarkdownToc v-if="showToc && toc.length" :entries="toc" :active-id="activeHeadingId" @navigate="jumpTo" @close="emit('closeToc')" />
+    <div ref="scroller" class="file-markdown-scroll scroll-area" tabindex="-1" aria-label="文档正文" @pointerdown="onBlankPointerDown" @scroll.passive="onScroll">
+      <div v-if="searchOpen" class="file-markdown-search" role="search" aria-label="在文档中查找">
+        <input ref="searchInput" :value="searchQuery" type="text" class="file-markdown-search-input" placeholder="在文档中查找" aria-label="在 Markdown 文档中查找" autocomplete="off" spellcheck="false" @input="onSearchInput" @keydown="onSearchKeydown">
         <p class="file-markdown-search-status" role="status">{{ searchStatus }}</p>
-        <button
-          type="button"
-          class="file-markdown-search-button"
-          :disabled="searchMatches.length === 0"
-          aria-label="上一个匹配"
-          title="上一个匹配"
-          @click="moveMatch(-1)"
-        >
-          <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M4 10l4-4 4 4" /></svg>
-        </button>
-        <button
-          type="button"
-          class="file-markdown-search-button"
-          :disabled="searchMatches.length === 0"
-          aria-label="下一个匹配"
-          title="下一个匹配"
-          @click="moveMatch(1)"
-        >
-          <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M4 6l4 4 4-4" /></svg>
-        </button>
-        <span class="file-markdown-search-divider" aria-hidden="true"></span>
-        <button
-          type="button"
-          class="file-markdown-search-button"
-          aria-label="关闭查找"
-          title="关闭查找"
-          @click="closeSearch"
-        >
-          <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M4 4l8 8M12 4l-8 8" /></svg>
-        </button>
+        <button type="button" class="file-markdown-search-button" :disabled="!searchMatches.length" aria-label="上一个匹配" @click="moveMatch(-1)">↑</button>
+        <button type="button" class="file-markdown-search-button" :disabled="!searchMatches.length" aria-label="下一个匹配" @click="moveMatch(1)">↓</button>
+        <button type="button" class="file-markdown-search-button" aria-label="关闭查找" @click="closeSearch">×</button>
       </div>
-
-      <p v-if="renderText.trim() === ''" class="file-markdown-empty">文档为空，可切换到源码开始书写。</p>
-
-      <!-- 正文由脚本挂载：块区间、局部重绘与编辑态都直接操作 DOM，v-html 会整篇覆盖这些改动。 -->
-      <div
-        ref="body"
-        class="markdown-content markdown-body file-markdown-body"
-        :class="{ 'is-hide-frontmatter': !showFrontmatter, 'is-raw': renderFailed }"
-        :style="{ '--file-preview-font-size': `${fontSize}px` }"
-        @click="onContentClick"
-        @mousedown="onContentMouseDown"
-        @dblclick="onContentDoubleClick"
-        @keydown="onContentKeydown"
-        @input="onContentInput"
-        @compositionstart="composing = true"
-        @compositionend="onCompositionEnd"
-        @toggle.capture="onDetailsToggle"
-        @focusout="onContentFocusOut"
-      ></div>
+      <p v-if="!richEnabled && !renderText.trim()" class="file-markdown-empty">文档为空。</p>
+      <div ref="body" class="file-rich-container" :style="{ '--file-preview-font-size': `${fontSize}px` }" @click="onContentClick" @dblclick="onDoubleClick" @keydown="onContentKeydown" @toggle.capture="updateActiveHeading(); searchOpen && runSearch(false)">
+        <FileRichMarkdownEditor v-if="richEnabled" :key="`${projectPath}\n${path}`" ref="rich" :text="renderText" :path="path" :project-path="projectPath" :active="active" :show-frontmatter="showFrontmatter" :recovery="recovery ?? null" :report-asset-notice="reportAssetNotice ?? null" @notice="showNotice($event)" @draft="emit('draft', $event)" @documents="documents = $event" @edit="onRichEdit" @pending-edit="emit('pendingEdit', $event)" @updated="onRichUpdated" @error="showNotice($event, true)" @ready="onRichReady" @copy="reportCopy" />
+        <div v-else ref="readonlyBody" class="markdown-content markdown-body file-markdown-body" :class="{ 'is-hide-frontmatter': !showFrontmatter, 'is-raw': renderFailed }"></div>
+      </div>
       <p v-if="renderFailed" role="status" class="markdown-render-note">Markdown 暂时无法渲染，已显示原文。</p>
+      <p v-if="!richEnabled && (runtimeFailure || unsupported)" class="file-reader-limit" role="status">{{ runtimeFailure || unsupported }}</p>
     </div>
-
-    <p v-if="notice !== ''" role="status" class="file-markdown-notice" :class="{ 'is-error': noticeFailed }">
-      {{ notice }}
-    </p>
-
+    <p v-if="notice" role="status" class="file-markdown-notice" :class="{ 'is-error': noticeFailed }">{{ notice }}</p>
     <FileMarkdownImageViewer :image="zoomed" @close="zoomed = null" />
   </div>
 </template>

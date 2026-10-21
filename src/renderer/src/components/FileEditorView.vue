@@ -1,6 +1,6 @@
 <!--
-  文件工作台：文档头部与阅读工具栏独立于正文；阅读默认只读，显式开启后才允许预览编辑。
-  CodeMirror 持有唯一源码与撤销历史；保存、退出编辑和卸载先刷新预览输入，再读取源码。
+  文件工作台：Markdown 排版面默认可编辑，源码与富文本各自持有当前编辑面的光标和撤销历史。
+  富文本按快照同步源码；保存、切换和卸载先刷新输入，磁盘重载与保存更新基线分开处理。
   文件预览首次可见时才初始化，源码编辑器保持常驻；超出阅读预算的文档在解析前回退源码。
   标题定位请求按文件消费，草稿与阅读状态仅保存在当前窗口内。
 -->
@@ -26,12 +26,15 @@ const props = defineProps<{
 }>()
 
 const editorStore = useProjectEditorStore()
+let syncingPreview = false
+const assetOwnerKey = props.tabKey
+function reportAssetNotice(message: string): void { editorStore.setAssetNotice(assetOwnerKey, message) }
 const editorRef = ref<InstanceType<typeof CodeMirrorEditor> | null>(null)
 const previewRef = ref<InstanceType<typeof FileMarkdownView> | null>(null)
 const previewVisited = ref(false)
-const editingPreview = ref(false)
+const previewReadOnlyReason = ref<string | null>(null)
 const navigationNotice = ref('')
-/** Markdown 预览文本：切到预览或外部重新载入时从编辑器/记录取值。 */
+/** 预览的已同步全文快照：由富文本提交、源码视图切入或磁盘重新载入更新，不随保存回执重置。 */
 const previewText = ref('')
 /** 磁盘冲突与保存失败的提示弹窗；冲突保留状态，下次保存会再次提示。 */
 const conflictDialog = ref(false)
@@ -70,8 +73,8 @@ const readOnlyNote = computed(() => {
   return `文件超过 ${PROJECT_FILE_EDIT_MAX_BYTES / 1024 / 1024} MiB，只能查看，不能编辑。`
 })
 const editable = computed(() => textContent.value !== null && readOnlyNote.value === null)
-/** 编辑区初始文本：优先用卸载前捕获的草稿，保证设置页往返或项目切换不丢未保存修改。 */
-const editorText = computed(() => record.value?.draft ?? textContent.value?.text ?? '')
+/** 源码编辑器的初始/外部载入文本：优先使用已捕获草稿；已挂载时富文本同步走 applyText，保存回执不覆盖编辑面。 */
+const editorText = ref('')
 const dirty = computed(() => record.value?.dirty === true)
 const conflict = computed(() => record.value?.conflict === true)
 const saveError = computed(() => record.value?.saveError ?? null)
@@ -115,36 +118,44 @@ const moreStyle = computed(() => {
   }
 })
 
-/** 内容变化只上报脏标记；文本留在编辑器里，保存时再取。 */
+/** 登记源码文档的变化版本与脏状态；预览回写时同步全文回声。 */
 function onChange(): void {
-  if (!editable.value) return
+  if (!editable.value || syncingPreview) return
+  editorStore.captureRichDraft(props.tabKey, null)
   editorStore.markDirty(props.tabKey)
-  // 预览就地编辑的改动先落在预览里，这里把编辑器的最新文本追平给预览，
-  // 两边一致时预览不会重建；不一致（例如外部重新载入）则按新文本重建。
+  // 富文本快照同步源码也会触发此回调；追平全文后，富文本组件可识别自身回声，保留光标和撤销历史。
   if (mode.value === 'preview') previewText.value = editorRef.value?.getText() ?? editorText.value
 }
 
 /**
- * 预览里就地编辑后写回编辑器文档：编辑器是唯一真源，脏标记、撤销栈、保存与磁盘冲突检测都跟着它走。
- * 写回失败（编辑器尚未挂载）时只保留预览侧的临时内容，下次外部同步会被编辑器文本覆盖。
+ * 接收富文本全文快照，先同步源码，再捕获草稿；源码未挂载时保留初始文本供挂载使用。
  */
-function onPreviewEdit(change: { readonly start: number; readonly end: number; readonly text: string }): void {
-  editorRef.value?.applyEdit(change.start, change.end, change.text)
+function onPreviewEdit(text: string): void {
+  previewText.value = text
+  syncingPreview = true
+  try { if (!editorRef.value?.applyText(text)) editorText.value = text }
+  finally { syncingPreview = false }
+  editorStore.captureDraft(props.tabKey, text)
 }
 
-/** 尚未离开输入块时也要有脏标记，避免关闭标签或外部重读覆盖用户输入。 */
+/** 每次文档变化都登记版本，保存期间的后续输入不能被标成已保存。 */
 function onPreviewPending(pending: boolean): void {
   if (pending) editorStore.markDirty(props.tabKey)
-  else editorStore.captureDraft(props.tabKey, editorRef.value?.getText() ?? editorText.value)
 }
 
 function flushPreview(force = false): boolean {
   return previewRef.value?.flushEdit(force) ?? true
 }
 
-function togglePreviewEditing(): void {
-  if (!previewEditingAllowed.value || !flushPreview()) return
-  editingPreview.value = !editingPreview.value
+/** 获取当前编辑面的全文；预览刷新受阻返回 null，force 沿刷新链透传给卸载收尾。 */
+function currentText(force = false): string | null {
+  if (mode.value === 'preview') return previewRef.value ? previewRef.value.getText(force) : previewText.value
+  return editorRef.value?.getText() ?? editorText.value
+}
+
+function captureCurrentDraft(force = false): void {
+  const text = currentText(force)
+  if (text !== null) editorStore.captureDraft(props.tabKey, text)
 }
 
 function changeReadingSize(step: number): void {
@@ -177,18 +188,22 @@ async function save(): Promise<void> {
   const current = editorStore.recordOf(props.tabKey)
   if (!editable.value) return
   if (current === null || !current.dirty || current.saving) return
-  const text = editorRef.value?.getText() ?? editorText.value
-  if (await editorStore.save(props.tabKey, text)) return
-  reportSaveFailure()
+  const text = currentText()
+  if (text === null) return
+  const saved = await editorStore.save(props.tabKey, text)
+  captureCurrentDraft()
+  if (!saved) reportSaveFailure()
 }
 
 /** 冲突弹窗的覆盖保存：用户已明确选择保留自己的修改。 */
 async function forceSave(): Promise<void> {
   if (!flushPreview()) return
-  const text = editorRef.value?.getText() ?? editorText.value
+  const text = currentText()
+  if (text === null) return
   conflictDialog.value = false
-  if (await editorStore.save(props.tabKey, text, true)) return
-  reportSaveFailure()
+  const saved = await editorStore.save(props.tabKey, text, true)
+  captureCurrentDraft()
+  if (!saved) reportSaveFailure()
 }
 
 /** 读取失败时重试：重新按磁盘内容读取，不涉及保存。 */
@@ -198,7 +213,6 @@ function retryLoad(): void {
 
 function setMode(next: FileEditorMode): void {
   if (!flushPreview()) return
-  editingPreview.value = false
   navigationNotice.value = ''
   if (next === 'preview') previewText.value = editorRef.value?.getText() ?? editorText.value
   editorStore.setMode(props.tabKey, next)
@@ -324,11 +338,14 @@ watch(conflict, (value) => {
 // 切换视图取当前编辑器内容；外部重新读取则取新记录，不能拿尚未更新的旧编辑器覆盖磁盘结果。
 watch(requestedMode, (next) => {
   flushPreview()
-  editingPreview.value = false
   if (next === 'preview') previewText.value = editorRef.value?.getText() ?? editorText.value
 }, { flush: 'sync' })
-watch(textContent, (content) => {
-  if (content !== null) previewText.value = record.value?.draft ?? content.text
+watch(() => record.value?.loadRevision, () => {
+  const content = textContent.value
+  if (content === null) return
+  const text = record.value?.draft ?? record.value?.richDraft?.text ?? content.text
+  editorText.value = text
+  previewText.value = text
 }, { immediate: true, flush: 'sync' })
 
 watch([() => props.active, mode, previewAllowed], () => {
@@ -356,7 +373,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('keydown', onSaveShortcut)
   if (pathNoticeTimer !== null) window.clearTimeout(pathNoticeTimer)
   // 卸载前把未保存文本留给状态，重新挂载时从草稿恢复。
-  editorStore.captureDraft(props.tabKey, editorRef.value?.getText() ?? editorText.value)
+  captureCurrentDraft(true)
 })
 </script>
 
@@ -433,7 +450,7 @@ onBeforeUnmount(() => {
               <path d="M1.5 8S3.9 4 8 4s6.5 4 6.5 4-2.4 4-6.5 4S1.5 8 1.5 8Z" />
               <circle cx="8" cy="8" r="1.75" />
             </svg>
-            <span>阅读</span>
+            <span>预览</span>
           </button>
         </div>
       </div>
@@ -451,21 +468,18 @@ onBeforeUnmount(() => {
           查找
         </button>
       </div>
-      <p class="file-reader-context">{{ editingPreview ? '文字直接编辑 · 结构块双击编辑 · Esc 取消' : '阅读模式' }}</p>
+      <p v-if="previewReadOnlyReason" class="file-reader-context">只读排版 · 在源码中编辑</p>
       <div class="file-reader-toolbar-group">
         <div class="file-reader-font-control" role="group" aria-label="阅读字号">
           <button type="button" aria-label="缩小字号" :disabled="editorStore.previewFontSize === PREVIEW_FONT_SIZES[0]" @click="changeReadingSize(-1)">A−</button>
           <span>{{ editorStore.previewFontSize }}</span>
           <button type="button" aria-label="放大字号" :disabled="editorStore.previewFontSize === PREVIEW_FONT_SIZES[PREVIEW_FONT_SIZES.length - 1]" @click="changeReadingSize(1)">A＋</button>
         </div>
-        <button type="button" class="file-reader-tool file-reader-edit-toggle" :class="{ 'is-active': editingPreview }"
-          :aria-pressed="editingPreview" :disabled="!previewEditingAllowed" @click="togglePreviewEditing">
-          {{ editingPreview ? '结束编辑' : '编辑正文' }}
-        </button>
       </div>
     </div>
     <p v-if="sourceFallback && textContent !== null" class="file-reader-limit" role="status">文档较大，已使用源码阅读，避免完整排版占用过多资源。</p>
     <p v-if="navigationNotice !== ''" class="file-reader-limit" role="status">{{ navigationNotice }}</p>
+    <div v-if="record?.assetNotice" class="file-editor-notice" role="status"><span>{{ record.assetNotice }}</span><button type="button" aria-label="关闭图片导入提示" @click="editorStore.setAssetNotice(tabKey, null)">×</button></div>
 
     <div class="file-editor-body">
       <p v-if="loading" class="file-editor-notice">正在读取…</p>
@@ -484,6 +498,7 @@ onBeforeUnmount(() => {
           :class="{ 'is-hidden': mode !== 'code' }"
         >
           <CodeMirrorEditor
+            :key="`${tabKey}:${record?.loadRevision ?? 0}`"
             ref="editorRef"
             :model-value="editorText"
             :path="record?.path ?? ''"
@@ -498,6 +513,7 @@ onBeforeUnmount(() => {
           :class="{ 'is-hidden': mode !== 'preview' }"
         >
           <FileMarkdownView
+            :key="`${tabKey}:${record?.loadRevision ?? 0}`"
             ref="previewRef"
             :text="previewText"
             :path="record?.path ?? ''"
@@ -506,10 +522,14 @@ onBeforeUnmount(() => {
             :font-size="editorStore.previewFontSize"
             :show-frontmatter="editorStore.showFrontmatter"
             :active="active && mode === 'preview'"
-            :editable="editingPreview && previewEditingAllowed"
+            :editable="previewEditingAllowed"
             :anchor-request="record?.anchorRequest ?? null"
+            :recovery="record?.richDraft ?? null"
+            :report-asset-notice="reportAssetNotice"
+            @draft="editorStore.captureRichDraft(tabKey, $event)"
             @anchor-handled="editorStore.consumeAnchor(tabKey, $event)"
             @pending-edit="onPreviewPending"
+            @editing-status="previewReadOnlyReason = $event"
             @toc="onToc"
             @close-toc="closeToc"
             @edit="onPreviewEdit"

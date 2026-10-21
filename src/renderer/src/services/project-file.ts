@@ -1,5 +1,7 @@
-/** 作为渲染端项目文件检索、目录列举、目录监听、条目路径解析与文件内容读写的入口，收敛桥接缺失与通信异常。 */
+/** 项目文件与 Markdown 资源的渲染端服务入口：重建普通请求载荷，收敛桥接缺失并保留通信错误。 */
 import type { DesktopError } from '../../../shared/desktop-api'
+import type { ProjectMarkdownDocumentsResult, ProjectMarkdownImageResult } from '../../../shared/project-file-api'
+
 import type {
   ProjectDirectoryChange,
   ProjectDirectoryListResult,
@@ -26,6 +28,21 @@ function callFailed(error: unknown): { ok: false; error: DesktopError } {
     ok: false,
     error: { code: 'BRIDGE_CALL_FAILED', message: `桌面桥接调用失败，可以重试：${detail}` }
   }
+}
+
+/** 固定文档所属项目，不使用可变的当前项目信息解释迟到响应。 */
+export async function listMarkdownDocuments(projectPath: string, path: string): Promise<ProjectMarkdownDocumentsResult> {
+  if (!window.desktop?.listMarkdownDocuments) return unavailable()
+  try { return await window.desktop.listMarkdownDocuments({ projectPath, path }) } catch (error) { return callFailed(error) }
+}
+/** 图片只接收选择器动作或已捕获的字节，不把响应式对象直接交给桥接。 */
+export async function importMarkdownImage(projectPath: string, path: string, bytes?: Uint8Array): Promise<ProjectMarkdownImageResult> {
+  if (!window.desktop?.importMarkdownImage) return unavailable()
+  try {
+    return await window.desktop.importMarkdownImage(bytes
+      ? { projectPath, path, source: 'clipboard', bytes: new Uint8Array(bytes) }
+      : { projectPath, path, source: 'pick' })
+  } catch (error) { return callFailed(error) }
 }
 
 /** 在当前项目内检索文件候选；没有当前项目时主进程返回空列表，不是错误。 */

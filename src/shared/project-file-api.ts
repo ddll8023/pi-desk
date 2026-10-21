@@ -1,8 +1,8 @@
 /**
  * 定义项目文件检索、单层目录列举、目录监听、条目路径解析与文件内容读写的 IPC 契约及跨进程响应校验。
- * 全部以「当前项目」为根：页面只能给出项目内相对路径，绝对路径与越界路径由主进程拒绝；
+ * 目录操作以当前项目为根；文件内容和 Markdown 资源固定请求所属的已登记项目，绝对路径与越界路径由主进程拒绝；
  * 需要绝对路径时（复制、写入终端、在文件管理器中显示）一律由主进程解析后回传，页面不自行拼接。
- * 文件内容只在读写通道里传输：读返回文本、图片或「不支持」三类结果，写只接受文本并带回新的磁盘基线。
+ * 普通文件读返回文本、图片或「不支持」，保存只接受文本并带回磁盘基线；图片导入走独立受限通道，不暴露任意二进制写入。
  * 目录监听是本契约里唯一的推送通道：页面提交「已加载的目录集合」，主进程只回报这些层里发生的变化。
  */
 import type { DesktopError } from './desktop-api'
@@ -224,7 +224,47 @@ export type ProjectFileStatResult =
   | { readonly ok: true; readonly data: ProjectFileStatData }
   | { readonly ok: false; readonly error: DesktopError }
 
+export const PROJECT_MARKDOWN_DOCUMENTS_CHANNEL = 'desktop:project-markdown-documents'
+export const PROJECT_MARKDOWN_IMAGE_CHANNEL = 'desktop:project-markdown-image'
+
+export type ProjectMarkdownImageRequest = ProjectFileReadRequest & (
+  | { readonly source: 'pick' }
+  | { readonly source: 'clipboard'; readonly bytes: Uint8Array }
+)
+export type ProjectMarkdownImageResult =
+  | { readonly ok: true; readonly data: { readonly projectPath: string; readonly path: string | null; readonly reference: string | null } }
+  | { readonly ok: false; readonly error: DesktopError }
+export type ProjectMarkdownDocumentsResult =
+  | { readonly ok: true; readonly data: { readonly projectPath: string; readonly entries: readonly string[]; readonly truncated: boolean } }
+  | { readonly ok: false; readonly error: DesktopError }
+
+/** 图片来源只认系统选择器或粘贴事件字节，不接受页面提供的外部路径。 */
+export function isProjectMarkdownImageRequest(value: unknown): value is ProjectMarkdownImageRequest {
+  if (!isRecord(value)) return false
+  if (Object.keys(value).some(key => !['projectPath', 'path', 'source', 'bytes'].includes(key))) return false
+  if (!isProjectFileReadRequest({ projectPath: value.projectPath, path: value.path })) return false
+  return value.source === 'pick' ? !('bytes' in value)
+    : value.source === 'clipboard' && value.bytes instanceof Uint8Array && value.bytes.byteLength > 0 && value.bytes.byteLength <= PROJECT_FILE_IMAGE_MAX_BYTES
+}
+export function isProjectMarkdownImageResult(value: unknown): value is ProjectMarkdownImageResult {
+  if (!isRecord(value)) return false
+  if (value.ok === false) return isProjectFileSearchResult(value)
+  if (value.ok !== true || !isRecord(value.data)) return false
+  const data = value.data
+  return typeof data.projectPath === 'string' && ((data.path === null && data.reference === null)
+    || (typeof data.path === 'string' && typeof data.reference === 'string'))
+}
+export function isProjectMarkdownDocumentsResult(value: unknown): value is ProjectMarkdownDocumentsResult {
+  if (!isRecord(value)) return false
+  if (value.ok === false) return isProjectFileSearchResult(value)
+  return value.ok === true && isRecord(value.data) && typeof value.data.projectPath === 'string'
+    && typeof value.data.truncated === 'boolean' && Array.isArray(value.data.entries)
+    && value.data.entries.length <= 20000 && value.data.entries.every(entry => typeof entry === 'string' && entry.length <= PROJECT_DIRECTORY_PATH_MAX_CHARS)
+}
+
 export interface ProjectFileApi {
+  readonly listMarkdownDocuments: (request: ProjectFileReadRequest) => Promise<ProjectMarkdownDocumentsResult>
+  readonly importMarkdownImage: (request: ProjectMarkdownImageRequest) => Promise<ProjectMarkdownImageResult>
   /** 在当前项目内按查询串检索文件路径；不接受目录参数，根路径由主进程决定。 */
   readonly searchProjectFiles: (query: string) => Promise<ProjectFileSearchResult>
   /** 列举当前项目内某一层的目录条目；不接受绝对路径，根路径由主进程决定。 */

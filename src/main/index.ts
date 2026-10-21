@@ -4,6 +4,8 @@ import { realpath } from 'node:fs/promises'
 import { dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { app, BrowserWindow, dialog, ipcMain, nativeTheme, net, protocol, session } from 'electron'
+import { ProjectMarkdownAssets } from './project-markdown-assets'
+import { PROJECT_MARKDOWN_DOCUMENTS_CHANNEL, PROJECT_MARKDOWN_IMAGE_CHANNEL, isProjectMarkdownImageRequest } from '../shared/project-file-api'
 import type { BrowserWindowConstructorOptions, IpcMainInvokeEvent } from 'electron'
 import { APP_INFO_CHANNEL, OPEN_EXTERNAL_URL_CHANNEL, isOpenExternalUrlRequest } from '../shared/desktop-api'
 import type {
@@ -1024,11 +1026,26 @@ function registerProjectHandlers(pageUrl: string): void {
 }
 
 /**
- * 文件检索只接受一个查询串、目录列举与条目路径解析只接受项目内相对路径；根都是当前项目，页面不能指定绝对路径。
+ * 普通文件检索、目录与条目解析跟随当前项目；Markdown 文档候选与图片导入固定所属的已登记项目，页面不能指定外部路径。
  * 文件内容读写同样只接受项目内相对路径：读返回文本/图片/不支持三类结果，写只接受文本并比对磁盘基线；
  * 解析与「在文件管理器中显示」共用同一个条目解析：越界、绝对路径与非法段一律拒绝。
  */
 function registerProjectFileHandlers(pageUrl: string): void {
+  const assets = new ProjectMarkdownAssets(resolveRegisteredProjectPath)
+  handle(PROJECT_MARKDOWN_DOCUMENTS_CHANNEL, async (event: IpcMainInvokeEvent, ...args: unknown[]) => {
+    if (!isTrustedCaller(event, pageUrl)) return projectFileFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+    if (args.length !== 1 || !isProjectFileReadRequest(args[0])) return projectFileFailure('INVALID_REQUEST', '文档补全必须固定所属项目和文档。')
+    const root = await resolveRegisteredProjectPath(args[0].projectPath)
+    if (!root) return projectFileFailure('INVALID_REQUEST', '所属项目已移除。')
+    return projectFileIndex.markdownDocuments(root)
+  })
+  handle(PROJECT_MARKDOWN_IMAGE_CHANNEL, async (event: IpcMainInvokeEvent, ...args: unknown[]) => {
+    if (!isTrustedCaller(event, pageUrl)) return projectFileFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+    if (args.length !== 1 || !isProjectMarkdownImageRequest(args[0])) return projectFileFailure('INVALID_REQUEST', '图片导入参数无效。')
+    const result = await assets.import(args[0], BrowserWindow.fromWebContents(event.sender))
+    if (result.ok && result.data.path) projectFileIndex.invalidate()
+    return result
+  })
   handle(
     PROJECT_FILE_SEARCH_CHANNEL,
     async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<ProjectFileSearchResult> => {

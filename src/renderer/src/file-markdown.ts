@@ -1,23 +1,4 @@
-/**
- * 文件标签的 Markdown 预览渲染：与聊天渲染器分开，因为两者的安全边界不同。
- *
- * 聊天正文里的图片一律不加载、链接只提供复制动作（消息来自模型与外部内容）；文件预览的内容来自
- * 用户自己打开的项目文件，因此额外允许「项目内图片」与「可跳转链接」，但仍然：不放开 `src`/`href`/`style`、
- * 不加载远程图片、不放行 `file:` 与越界路径。原始 HTML 只作文本，唯一例外是整块 `<details>` 折叠结构
- * （按结构渲染，仍由同一道白名单清洗）。图片与链接的目标写在 `data-*` 属性里，由组件按类型决定
- * 是否读取文件、跳转锚点、打开标签页或交给系统浏览器。
- *
- * front matter 在解析前剥离（`---` 起止、60 行内、含 `key:` 行），渲染成默认折叠的 details，
- * 避免元信息混进正文，也避免被当成主题分隔线。
- *
- * 段内单换行照样换行（GFM 预览的通行做法，作者换行通常就是要分行），引用首行的 `> [!NOTE]`
- * 一类标记渲染成提示块；两者与 `<details>` 例外一样，都在同一道清洗边界内完成，
- * 没有放开新的标签族。
- *
- * 渲染按顶层 token 逐块进行，并同时给出每块在原文中的区间（`FileMarkdownBlock`）：预览里就地编辑后
- * 只需按区间替换原文并重绘这一块，不必整篇重建。区间一律相对原文件文本，front matter 剥离后仍按
- * 原文偏移计算，因此提交时可以直接写回编辑器文档。
- */
+/** 文件 Markdown 的只读安全渲染与项目内导航。富文本编辑另由 Tiptap 负责；这里不再维护块区间或局部编辑状态。 */
 import DOMPurify from 'dompurify'
 import { Marked } from 'marked'
 import type { Config } from 'dompurify'
@@ -25,633 +6,186 @@ import type { Token, TokenizerAndRendererExtension, Tokens } from 'marked'
 import { createDisplayMathBlockExtension, createMathExtension } from './markdown-math'
 import { escapeHtml, renderCodeBlock, renderTable } from './markdown-shared'
 
-/** 只开放正文语义、项目内图片、折叠块与本地控件；样式、资源地址、事件与任意 data 属性仍不允许。 */
 const SANITIZE_CONFIG: Config = {
-  ALLOWED_TAGS: [
-    'p', 'br', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'strong', 'em', 'del',
-    'blockquote', 'ul', 'ol', 'li', 'hr', 'pre', 'code', 'table', 'thead',
-    'tbody', 'tr', 'th', 'td', 'div', 'span', 'button', 'input',
-    'details', 'summary'
-  ],
-  ALLOWED_ATTR: [
-    'class', 'type', 'disabled', 'checked', 'start', 'align', 'title', 'open',
-    'tabindex', 'role', 'aria-label', 'data-image-path', 'data-image-label',
-    'data-link-kind', 'data-link-target'
-  ],
-  ALLOW_DATA_ATTR: false,
-  ALLOW_ARIA_ATTR: false,
-  RETURN_TRUSTED_TYPE: false
+  ALLOWED_TAGS: ['p', 'br', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'strong', 'em', 'del', 'blockquote', 'ul', 'ol', 'li', 'hr', 'pre', 'code', 'table', 'thead', 'tbody', 'tr', 'th', 'td', 'div', 'span', 'button', 'input', 'details', 'summary'],
+  ALLOWED_ATTR: ['class', 'type', 'disabled', 'checked', 'start', 'align', 'title', 'open', 'tabindex', 'role', 'aria-label', 'data-image-path', 'data-image-label', 'data-link-kind', 'data-link-target'],
+  ALLOW_DATA_ATTR: false, ALLOW_ARIA_ATTR: false, RETURN_TRUSTED_TYPE: false
 }
-
-/** front matter 的识别上限：超出这个行数就不当作元信息，避免把正文里的分隔线误判。 */
-const FRONT_MATTER_MAX_LINES = 60
-
-/** 富排版入口的字符预算：先决定展示方式，再进入解析与 DOM 构建。 */
-const PREVIEW_MAX_CHARS = 300_000
-
-/** 大文档交给源码视图阅读，避免先构建完整预览再降级。 */
-export function canPreviewFileMarkdown(text: string): boolean {
-  return text.length <= PREVIEW_MAX_CHARS
-}
-
-/** GitHub 风格提示块的标志：这些取值之外的 `[!XXX]` 仍按普通引用展示。 */
-const CALLOUT_TITLES: Readonly<Record<string, string>> = {
-  NOTE: '注意',
-  TIP: '提示',
-  IMPORTANT: '重要',
-  WARNING: '警告',
-  CAUTION: '危险'
-}
-
-/** 引用首行的提示块标记；渲染时从 DOM 里剥离，因此就地编辑必须避开这类引用。 */
-const CALLOUT_MARKER = /^\s*\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*/i
-
-/** 原文里的提示块标记：带引用前缀 `> `，用于判断一段引用是否属于提示块。 */
-const CALLOUT_RAW_MARKER = /^\s*>\s*\[!(?:NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]/i
-
-/**
- * 渲染阶段判定一次的链接分类：点击时只按分类执行，不再重新解析地址。
- * 后处理阶段插入的标题锚点复用同一 `data-link-kind` 通道，取值不在本类型内。
- */
+const CALLOUT_TITLES: Readonly<Record<string, string>> = { NOTE: '注意', TIP: '提示', IMPORTANT: '重要', WARNING: '警告', CAUTION: '危险' }
 export type FileMarkdownLinkKind = 'anchor' | 'file' | 'external' | 'copy'
+export interface FileMarkdownTocEntry { readonly id: string; readonly label: string; readonly level: number }
+export interface FileMarkdownDocument { readonly html: string }
 
-/** 目录条目：在渲染后的 DOM 上提取，`id` 与标题元素的 id 一致，供锚点跳转。 */
-export interface FileMarkdownTocEntry {
-  readonly id: string
-  readonly label: string
-  readonly level: number
-}
-
-/**
- * 一个顶层块的可编辑描述。
- *
- * `kind` 决定编辑方式：`text` 直接在渲染结果上编辑，`source` 换成等宽源码框，`skip` 不参与编辑。
- * `start`/`end` 是提交时被替换的原文区间：`text` 块只覆盖文字本身（保留 `## `、`- `、`> ` 等标记），
- * `source` 块覆盖整块源码。`path` 是从顶层元素到可编辑元素的子元素路径，空数组表示顶层元素自身。
- */
-export interface FileMarkdownBlock {
-  /** 顶层 token 序号；front matter 用 -1。局部重绘按它定位整块元素。 */
-  readonly tokenIndex: number
-  /** 顶层 token 的类型与完整区间，用于判断局部替换是否会影响相邻结构。 */
-  readonly tokenType: string
-  readonly tokenStart: number
-  readonly tokenEnd: number
-  readonly kind: 'text' | 'source' | 'skip'
-  readonly start: number
-  readonly end: number
-  readonly path: readonly number[]
-  /** 任务复选框里那个字符的偏移；-1 表示这一块没有复选框。 */
-  readonly checkbox: number
-}
-
-/** 一次渲染的产物：可直接写入容器的 HTML，以及与之顺序一致的块描述。 */
-export interface FileMarkdownDocument {
-  readonly html: string
-  readonly blocks: readonly FileMarkdownBlock[]
-}
-
-/** 只在本文件内部使用的 token 视图：marked 的 Token 是联合类型，这里只关心块级结构用到的字段。 */
-interface BlockToken {
-  readonly type: string
-  readonly raw: string
-  readonly text?: string
-  readonly task?: boolean
-  readonly tokens?: readonly BlockToken[]
-  readonly items?: readonly BlockToken[]
-}
+/** 大文档在解析前回退源码，避免先创建整篇排版 DOM 再降级。 */
+export function canPreviewFileMarkdown(text: string): boolean { return text.length <= 300_000 }
 
 const parser = new Marked({
-  gfm: true,
-  // 单换行照样分行：文档里的换行多半就是作者的分行意图，合并成一段会改变阅读节奏。
-  breaks: true,
-  async: false,
-  extensions: [
-    createDisplayMathBlockExtension(escapeHtml),
-    createMathExtension(escapeHtml),
-    createDetailsBlockExtension()
-  ],
+  gfm: true, breaks: true, async: false,
+  extensions: [createDisplayMathBlockExtension(escapeHtml), createMathExtension(escapeHtml), createDetailsBlockExtension()],
   renderer: {
-    code({ text, lang }) {
-      return renderCodeBlock(text, lang)
-    },
-    html({ text, block }) {
-      // 原始 HTML 一律当文本：块级给等宽代码块，行内按纯文本输出，不交给浏览器解释。
-      // （可折叠的 <details> 由 createDetailsBlockExtension 单独接管，不走这里）
-      return block ? renderCodeBlock(text, 'html') : escapeHtml(text)
-    },
-    text(token) {
-      if ('escaped' in token && token.escaped && !token.tokens) return escapeHtml(token.text)
-      return false
-    },
+    code: ({ text, lang }) => renderCodeBlock(text, lang),
+    html: ({ text, block }) => block ? renderCodeBlock(text, 'html') : escapeHtml(text),
+    text(token) { return 'escaped' in token && token.escaped && !token.tokens ? escapeHtml(token.text) : false },
     image({ href, text }) {
-      const label = text === '' ? '图片' : text
-      if (href.trim() === '') return imagePlaceholder(label, '图片地址为空，未加载')
-      // 只记录地址与替代文本，不写 src：读取与否由组件按项目边界判断后再创建 img 节点。
-      return `<span class="file-markdown-image-frame" data-image-path="${escapeHtml(href)}" data-image-label="${escapeHtml(label)}">${escapeHtml(`图片：${label}`)}（加载中…）</span>`
+      const label = text || '图片'
+      if (!href.trim()) return `<span class="file-markdown-image-fallback">${escapeHtml(label)}（图片地址为空）</span>`
+      return `<span class="file-markdown-image-frame" data-image-path="${escapeHtml(href)}" data-image-label="${escapeHtml(label)}">${escapeHtml(label)}（加载中…）</span>`
     },
     link({ href, tokens }) {
       const target = href.trim()
-      const kind = classifyLinkKind(target)
-      const title = linkTitle(kind, target)
-      // 地址保存在惰性 data 属性里，而不是 href；协议与越界判定在点击时按分类处理。
-      return `<button type="button" class="markdown-link" data-link-kind="${kind}" data-link-target="${escapeHtml(target)}" title="${escapeHtml(title)}">${this.parser.parseInline(tokens)}</button>`
+      return `<button type="button" class="markdown-link" data-link-kind="${classifyLinkKind(target)}" data-link-target="${escapeHtml(target)}" title="${escapeHtml(target)}">${this.parser.parseInline(tokens)}</button>`
     },
-    table(token: Tokens.Table) {
-      return renderTable(this, token)
-    },
-    checkbox({ checked }) {
-      return `<input type="checkbox" disabled${checked ? ' checked' : ''} aria-label="${checked ? '已完成任务' : '未完成任务'}"> `
-    }
+    table(token: Tokens.Table) { return renderTable(this, token) },
+    checkbox: ({ checked }) => `<input type="checkbox" disabled${checked ? ' checked' : ''} aria-label="${checked ? '已完成任务' : '未完成任务'}"> `
   }
 })
 
-/**
- * 渲染文件预览的 Markdown。解析或清洗失败时返回 null，由组件用文本插值保留原文，
- * 不输出错误堆栈，也不因为一段坏内容让整个标签空白。
- */
+/** 只在清洗之后输出 HTML；原始地址不进入 src/href，读取与打开操作由组件代理。 */
 export function renderFileMarkdown(text: string): FileMarkdownDocument | null {
   if (!canPreviewFileMarkdown(text)) return null
   try {
-    const doc = lexDocument(text)
-    // front matter 不经 marked 解析，先拼成折叠块再与正文一起清洗，保证整段输出只有一道边界。
-    // 传 options 会让 Parser 丢掉实例上的自定义 renderer，因此这里只用默认选项。
-    const parts = doc.tokens.map((token) => parser.parser([token]))
-    if (doc.frontMatter !== null) parts.unshift(renderFrontMatter(doc.frontMatter))
-    return { html: DOMPurify.sanitize(parts.join(''), SANITIZE_CONFIG), blocks: doc.blocks }
-  } catch {
-    return null
-  }
+    const { frontMatter, body } = splitFrontMatter(text)
+    const metadata = frontMatter === null ? '' : `<details class="file-markdown-frontmatter"><summary>Front Matter</summary><pre class="scroll-area">${escapeHtml(frontMatter)}</pre></details>\n`
+    const html = parser.parse(body)
+    return typeof html === 'string' ? { html: DOMPurify.sanitize(metadata + html, SANITIZE_CONFIG) } : null
+  } catch { return null }
 }
 
-/**
- * 只解析结构、不生成 HTML：就地编辑提交前用它确认块数没变，
- * 块数变了说明编辑改变了文档结构，只能整篇重建。
- */
-export function lexFileMarkdown(text: string): readonly FileMarkdownBlock[] {
-  try {
-    return lexDocument(text).blocks
-  } catch {
-    return []
-  }
-}
-
-/** 渲染单个顶层块（已清洗），用于就地编辑后的局部重绘；`tokenIndex` 为 -1 时渲染 front matter。 */
-export function renderFileMarkdownBlock(text: string, tokenIndex: number): string | null {
-  try {
-    const doc = lexDocument(text)
-    if (tokenIndex === -1) {
-      return doc.frontMatter === null
-        ? null
-        : DOMPurify.sanitize(renderFrontMatter(doc.frontMatter), SANITIZE_CONFIG)
-    }
-    const token = doc.tokens[tokenIndex]
-    if (token === undefined) return null
-    return DOMPurify.sanitize(parser.parser([token]), SANITIZE_CONFIG)
-  } catch {
-    return null
-  }
-}
-
-/** 解析结果：front matter 源码、顶层 token 与顺序一致的块描述。 */
-interface LexedDocument {
-  readonly frontMatter: string | null
-  readonly tokens: readonly Tokens.Generic[]
-  readonly blocks: readonly FileMarkdownBlock[]
-}
-
-/** 逐顶层 token 解析并计算原文区间；区间靠累加 `raw.length` 得到，与 marked 的切分保持一致。 */
-function lexDocument(text: string): LexedDocument {
-  const { frontMatter, body, bodyOffset } = splitFrontMatter(text)
-  const tokens = parser.lexer(body) as unknown as readonly BlockToken[]
-  const blocks: FileMarkdownBlock[] = []
-  if (frontMatter !== null) {
-    blocks.push({ tokenIndex: -1, tokenType: 'frontmatter', tokenStart: 0, tokenEnd: bodyOffset,
-      kind: 'source', start: 0, end: bodyOffset, path: [], checkbox: -1 })
-  }
-
-  let cursor = bodyOffset
-  tokens.forEach((token, index) => {
-    const start = cursor
-    cursor += token.raw.length
-    blocks.push(...describeToken(token, index, start))
-  })
-  return { frontMatter, tokens: tokens as unknown as readonly Tokens.Generic[], blocks }
-}
-
-/** 按 token 类型给出块描述；无法定位文字时退化为整块源码编辑，绝不猜区间。 */
-function describeToken(token: BlockToken, index: number, start: number): readonly FileMarkdownBlock[] {
-  const end = start + token.raw.length
-  const whole: FileMarkdownBlock = {
-    tokenIndex: index, tokenType: token.type, tokenStart: start, tokenEnd: end,
-    kind: 'source', start, end, path: [], checkbox: -1
-  }
-  switch (token.type) {
-    case 'space':
-    case 'def':
-    // 顶层 text token 只渲染出裸文本节点，不占顶层元素位，也就无法就地编辑。
-    case 'text':
-      return [{ ...whole, kind: 'skip' }]
-    case 'paragraph':
-    case 'heading': {
-      const range = locateText(token.raw, start, token.text ?? '', 0)
-      if (range === null) return [whole]
-      return [{ ...whole, kind: 'text', start: range.start, end: range.end }]
-    }
-    case 'blockquote':
-      return describeBlockquote(token, whole)
-    case 'list':
-      return describeList(token, whole)
-    default:
-      // 代码块、表格、公式块、原始 HTML、分隔线都以源码编辑。
-      return [whole]
-  }
-}
-
-/** 引用的每一段各自可编辑；出现列表、代码块等嵌套结构时整块按源码编辑，避免改一段丢掉其余结构。 */
-function describeBlockquote(token: BlockToken, whole: FileMarkdownBlock): readonly FileMarkdownBlock[] {
-  // 提示块的 `[!NOTE]` 标记在渲染时被剥离了，就地编辑会把标记吃掉，整个引用只能按源码编辑。
-  if (CALLOUT_RAW_MARKER.test(token.raw)) return [{ ...whole, kind: 'source' }]
-  const children = (token.tokens ?? []).filter((child) => child.type !== 'space')
-  // 只有段落与标题能对应到可定位的元素；裸文本节点与其它块一律整块按源码编辑。
-  const simple = children.length > 0 && children.every((child) => (
-    child.type === 'paragraph' || child.type === 'heading'
-  ))
-  if (!simple) return [{ ...whole, kind: 'source' }]
-
-  const blocks: FileMarkdownBlock[] = []
-  let from = 0
-  for (const [childIndex, child] of children.entries()) {
-    const range = locateText(token.raw, whole.start, child.text ?? '', from)
-    if (range === null) return [{ ...whole, kind: 'source' }]
-    blocks.push({ ...whole, kind: 'text', start: range.start, end: range.end, path: [childIndex] })
-    from = range.end - whole.start
-  }
-  return blocks
-}
-
-/**
- * 列表按条目给出块：只有一个段落/文本的条目就地编辑文字，带嵌套列表或第二段的条目整条按源码编辑。
- * 任务复选框的字符偏移随条目一起给出，点击时只需替换这一个字符。
- */
-function describeList(token: BlockToken, whole: FileMarkdownBlock): readonly FileMarkdownBlock[] {
-  const blocks: FileMarkdownBlock[] = []
-  let itemOffset = 0
-  for (const [itemIndex, item] of (token.items ?? []).entries()) {
-    const itemStart = whole.start + itemOffset
-    const itemEnd = itemStart + item.raw.length
-    itemOffset += item.raw.length
-
-    const checkbox = item.task === true ? locateCheckbox(item.raw, itemStart) : -1
-    // 复选框与空白不算结构；剩下多个子块说明条目里还有嵌套结构。
-    const children = (item.tokens ?? []).filter((child) => child.type !== 'space' && child.type !== 'checkbox')
-    if (children.length !== 1) {
-      blocks.push({ ...whole, kind: 'source', start: itemStart, end: itemEnd, path: [itemIndex], checkbox: -1 })
-      continue
-    }
-
-    const child = children[0] as BlockToken
-    // 松散列表的条目内容包在段落里，紧列表直接是文本节点。
-    const loose = child.type === 'paragraph' || child.type === 'heading'
-    // 松散列表的段落文本保留了 `[ ] ` 标记，而渲染结果里的复选框是独立元素、不参与行内序列化；
-    // 区间必须从标记之后开始，否则提交编辑会把复选框标记一起吃掉，条目退化成普通列表项。
-    const text = loose && item.task === true ? stripTaskMarker(child.text ?? '') : (child.text ?? '')
-    const range = locateText(token.raw, whole.start, text, itemStart - whole.start)
-    if (range === null) {
-      blocks.push({ ...whole, kind: 'source', start: itemStart, end: itemEnd, path: [itemIndex], checkbox: -1 })
-      continue
-    }
-    blocks.push({
-      ...whole,
-      kind: 'text',
-      start: range.start,
-      end: range.end,
-      path: loose ? [itemIndex, 0] : [itemIndex],
-      checkbox
-    })
-  }
-  return blocks.length === 0 ? [{ ...whole, kind: 'skip' }] : blocks
-}
-
-/** 在 `raw` 里从 `from` 之后找文字，返回原文绝对区间；找不到返回 null，由调用方退化处理。 */
-function locateText(
-  raw: string,
-  absoluteStart: number,
-  text: string,
-  from: number
-): { readonly start: number; readonly end: number } | null {
-  if (text === '') return null
-  const index = raw.indexOf(text, from)
-  if (index < 0) return null
-  return { start: absoluteStart + index, end: absoluteStart + index + text.length }
-}
-
-/**
- * 去掉任务条目文本开头的 `[ ]`/`[x]` 标记及其后的空格。
- * 紧列表的条目文本本来就不含标记，这里只对松散列表的段落文本起作用。
- */
-function stripTaskMarker(text: string): string {
-  return text.replace(/^\[[ xX]\]\s*/, '')
-}
-
-/** 任务条目里的 `[ ]`/`[x]` 位于条目开头；返回方括号内字符的绝对偏移。 */
-function locateCheckbox(raw: string, absoluteStart: number): number {
-  const match = /\[([ xX])\]/.exec(raw)
-  return match === null ? -1 : absoluteStart + match.index + 1
-}
-
-/** 折叠块只保留明确支持的结构，内部继续走 Markdown 与同一道清洗边界。 */
-interface DetailsBlockToken extends Tokens.Generic {
-  readonly type: 'detailsBlock'
-  readonly open: boolean
-  readonly summaryTokens: Token[]
-  readonly tokens: Token[]
-}
-
-/** 用嵌套深度定位外层闭合标签，忽略注释、代码围栏与原始 pre/code 区域中的标签文本。 */
+interface DetailsToken extends Tokens.Generic { readonly open: boolean; readonly summaryTokens: Token[]; readonly tokens: Token[] }
 function detailsBoundary(source: string): { openingEnd: number; closingStart: number; end: number } | null {
   const opening = /^ {0,3}<details\b[^>]*>/i.exec(source)
-  if (opening === null) return null
+  if (!opening) return null
   const markers = /<!--[\s\S]*?-->|^ {0,3}(`{3,}|~{3,})[^\n]*(?:\n|$)|(`+)[^\n]*?\2(?!`)|<\/?(?:details|pre|code)\b[^>]*>/gim
   markers.lastIndex = opening[0].length
-  let depth = 1
-  let fence = ''
-  let rawCode = ''
-  for (let match = markers.exec(source); match !== null; match = markers.exec(source)) {
+  let depth = 1; let fence = ''; let rawCode = ''
+  for (let match = markers.exec(source); match; match = markers.exec(source)) {
     const value = match[0]
     if (value.startsWith('<!--')) continue
     const delimiter = match[1]
-    if (delimiter !== undefined) {
-      if (rawCode !== '') continue
-      if (fence === '') fence = delimiter
-      else if (delimiter[0] === fence[0] && delimiter.length >= fence.length
-        && value.trim() === delimiter) fence = ''
+    if (delimiter) {
+      if (rawCode) continue
+      if (!fence) fence = delimiter
+      else if (delimiter[0] === fence[0] && delimiter.length >= fence.length && value.trim() === delimiter) fence = ''
       continue
     }
-    if (fence !== '') continue
+    if (fence) continue
     const tag = /^<(\/?)(details|pre|code)\b/i.exec(value)
-    if (tag === null) continue
-    const closing = tag[1] === '/'
-    const name = (tag[2] ?? '').toLowerCase()
-    if (rawCode !== '') {
-      if (closing && name === rawCode) rawCode = ''
-      continue
-    }
-    if (name !== 'details') {
-      if (!closing) rawCode = name
-      continue
-    }
+    if (!tag) continue
+    const closing = tag[1] === '/'; const name = tag[2]?.toLowerCase() ?? ''
+    if (rawCode) { if (closing && name === rawCode) rawCode = ''; continue }
+    if (name !== 'details') { if (!closing) rawCode = name; continue }
     depth += closing ? -1 : 1
-    if (depth === 0) {
+    if (!depth) {
       const trailing = /^[ \t]*(?:\r?\n)*/.exec(source.slice(markers.lastIndex))?.[0] ?? ''
       return { openingEnd: opening[0].length, closingStart: match.index, end: markers.lastIndex + trailing.length }
     }
   }
   return null
 }
-
-/** 标题按行内 Markdown 解析，正文按块递归解析；未闭合的结构仍按原始 HTML 展示。 */
 function createDetailsBlockExtension(): TokenizerAndRendererExtension {
   return {
-    name: 'detailsBlock',
-    level: 'block',
-    childTokens: ['summaryTokens', 'tokens'],
-    start(src) { return src.search(/^ {0,3}<details[\s>]/im) },
-    tokenizer(src) {
-      const boundary = detailsBoundary(src)
-      if (boundary === null) return undefined
-      const inner = src.slice(boundary.openingEnd, boundary.closingStart)
+    name: 'detailsBlock', level: 'block', childTokens: ['summaryTokens', 'tokens'],
+    start: source => source.search(/^ {0,3}<details[\s>]/im),
+    tokenizer(source) {
+      const boundary = detailsBoundary(source)
+      if (!boundary) return undefined
+      const inner = source.slice(boundary.openingEnd, boundary.closingStart)
       const summary = /^\s*<summary\b[^>]*>([\s\S]*?)<\/summary>[ \t]*(?:\r?\n)?/i.exec(inner)
-      const content = (summary === null ? inner : inner.slice(summary[0].length)).replace(/^\s*\n/, '')
-      const attributes = src.slice(0, boundary.openingEnd)
-        .replace(/^ {0,3}<details\b|>$/gi, '')
-        .matchAll(/(?:^|\s)([^\s=<>]+)(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+))?/g)
-      const open = Array.from(attributes).some(attribute => attribute[1]?.toLowerCase() === 'open')
-      return {
-        type: 'detailsBlock', raw: src.slice(0, boundary.end),
-        open,
-        summaryTokens: this.lexer.inlineTokens(summary?.[1] ?? '详细内容'),
-        tokens: this.lexer.blockTokens(content)
-      }
+      const content = (summary ? inner.slice(summary[0].length) : inner).replace(/^\s*\n/, '')
+      const attributes = source.slice(0, boundary.openingEnd).replace(/^ {0,3}<details\b|>$/gi, '').matchAll(/(?:^|\s)([^\s=<>]+)(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+))?/g)
+      return { type: 'detailsBlock', raw: source.slice(0, boundary.end), open: Array.from(attributes).some(attribute => attribute[1]?.toLowerCase() === 'open'), summaryTokens: this.lexer.inlineTokens(summary?.[1] ?? '详细内容'), tokens: this.lexer.blockTokens(content) }
     },
     renderer(token) {
-      const details = token as DetailsBlockToken
+      const details = token as DetailsToken
       return `<details class="file-markdown-details"${details.open ? ' open' : ''}><summary>${this.parser.parseInline(details.summaryTokens)}</summary><div class="file-markdown-details-body">${this.parser.parse(details.tokens)}</div></details>\n`
     }
   }
 }
 
-/**
- * 图片地址为空时的占位片段；仍走同一套清洗流程，不输出原始地址。
- */
-function imagePlaceholder(label: string, reason: string): string {
-  return `<span class="file-markdown-image-fallback">${escapeHtml(label)}（${escapeHtml(reason)}）</span>`
-}
-
-/**
- * 把 GitHub 风格的提示块（首行为 `[!NOTE]` 等）就地改写成带标题行的容器。
- * 只在清洗后的 DOM 上做：不新增 HTML 字符串入口，也就不需要给白名单放新的标签；
- * 标记不认识的引用保持原样展示，不把它当成普通段落删掉。
- * 调用方传入的既可能是整篇正文容器，也可能是单块重绘后的引用本身，因此要一并检查根节点。
- */
+/** 提示块的 DOM 补全只供只读渲染器使用，不允许用于富文本管理的 DOM。 */
 export function applyCallouts(root: HTMLElement): void {
-  const quotes = [
-    ...(root.matches('blockquote') ? [root] : []),
-    ...Array.from(root.querySelectorAll<HTMLElement>('blockquote'))
-  ]
+  const quotes = [...(root.matches('blockquote') ? [root] : []), ...Array.from(root.querySelectorAll<HTMLElement>('blockquote'))]
   for (const quote of quotes) {
-    const kind = takeCalloutKind(quote)
-    if (kind === null) continue
+    const first = quote.firstElementChild
+    const text = first?.firstChild
+    if (!first || !(text instanceof Text)) continue
+    const match = /^\s*\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*/i.exec(text.data)
+    if (!match) continue
+    const kind = (match[1] ?? '').toUpperCase()
+    text.data = text.data.slice(match[0].length)
+    if (!text.data) {
+      if (text.nextSibling instanceof HTMLBRElement) text.nextSibling.remove()
+      text.remove()
+    }
+    if (!first.textContent?.trim()) first.remove()
     quote.classList.add('is-callout')
     quote.dataset.callout = kind
     const title = document.createElement('p')
     title.className = 'file-markdown-callout-title'
     title.textContent = CALLOUT_TITLES[kind] ?? kind
-    const first = quote.firstElementChild
-    if (first === null) quote.append(title)
-    else first.before(title)
+    quote.prepend(title)
   }
 }
 
-/**
- * 从引用的首段里取出提示块标记并返回类型；不是提示块时返回 null。
- * 标记只占段落文本的开头：剥离后的段落文本可能为空，段落也只剩一个分隔用的 `<br>`，
- * 两者一并清理，否则提示块顶部会多出一行空白。段落里的其余内容（包括换行）一律保留。
- */
-function takeCalloutKind(quote: HTMLElement): string | null {
-  const first = quote.firstElementChild
-  const text = first?.firstChild
-  if (first === null || !(text instanceof Text)) return null
-  const match = CALLOUT_MARKER.exec(text.data)
-  if (match === null) return null
-
-  text.data = text.data.slice(match[0].length)
-  if (text.data === '') {
-    const next = text.nextSibling
-    if (next instanceof HTMLBRElement) next.remove()
-    if (text.parentNode !== null) text.remove()
-  }
-  if (first.textContent?.trim() === '') first.remove()
-  return (match[1] ?? '').toUpperCase()
-}
-
-/**
- * 为标题补上唯一 id、追加可复制的标题锚点，并提取目录条目；已存在 id 的标题沿用原值，重复的 slug 追加序号。
- * 在清洗后的 DOM 上进行，因此标题文本里可能残留行内代码、链接等节点，只取 textContent。
- * 锚点按钮插在标题文字之后：重复调用时先移除旧锚点，否则第二次会把「#」算进标题文本。
- */
+/** 只读标题补全；富文本使用位置装饰生成同样的 id 与按钮。 */
 export function ensureHeadingIds(root: HTMLElement): readonly FileMarkdownTocEntry[] {
-  const entries: FileMarkdownTocEntry[] = []
-  const used = new Set<string>()
-  for (const heading of root.querySelectorAll<HTMLElement>('h1, h2, h3, h4, h5, h6')) {
+  const entries: FileMarkdownTocEntry[] = []; const used = new Set<string>()
+  for (const heading of root.querySelectorAll<HTMLElement>('h1,h2,h3,h4,h5,h6')) {
     heading.querySelector('.markdown-heading-anchor')?.remove()
-    const label = (heading.textContent ?? '').trim()
-    if (label === '') continue
-    let id = heading.id === '' ? headingSlug(label) : heading.id
-    if (used.has(id)) {
-      let suffix = 2
-      while (used.has(`${id}-${suffix}`)) suffix += 1
-      id = `${id}-${suffix}`
-    }
-    used.add(id)
-    heading.id = id
-    appendHeadingAnchor(heading, id, label)
+    const label = heading.textContent?.trim() ?? ''
+    if (!label) continue
+    const base = heading.id || headingSlug(label)
+    let id = base
+    for (let suffix = 2; used.has(id); suffix += 1) id = `${base}-${suffix}`
+    used.add(id); heading.id = id
+    const anchor = document.createElement('button')
+    anchor.type = 'button'; anchor.className = 'markdown-heading-anchor'; anchor.dataset.linkKind = 'heading'; anchor.dataset.linkTarget = `#${id}`
+    anchor.title = '复制标题引用'; anchor.setAttribute('aria-label', `复制标题引用：${label}`); anchor.textContent = '#'
+    heading.append(anchor)
     entries.push({ id, label, level: Number(heading.tagName.slice(1)) })
   }
   return entries
 }
-
-/**
- * 追加标题锚点：点击由预览组件代理，把「文件路径#标题 id」复制到剪贴板，便于在对话里引用小节。
- * 按钮只带 data 属性、不带 href，与正文链接同一套安全边界。
- */
-function appendHeadingAnchor(heading: HTMLElement, id: string, label: string): void {
-  const anchor = document.createElement('button')
-  anchor.type = 'button'
-  anchor.className = 'markdown-heading-anchor'
-  anchor.dataset.linkKind = 'heading'
-  anchor.dataset.linkTarget = `#${id}`
-  anchor.title = '复制标题引用'
-  anchor.setAttribute('aria-label', `复制标题引用：${label}`)
-  anchor.textContent = '#'
-  heading.append(anchor)
+export function headingSlug(label: string): string {
+  return label.toLowerCase().replace(/[`*_~[\]()]/g, '').replace(/[^\p{L}\p{N}\s-]/gu, '').replace(/\s+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '') || 'section'
 }
 
-/** 标题文本转 id：保留文字、数字与连字符，其余符号折叠成单个连字符。 */
-function headingSlug(label: string): string {
-  const slug = label.toLowerCase()
-    .replace(/[`*_~[\]()]/g, '')
-    .replace(/[^\p{L}\p{N}\s-]/gu, '')
-    .replace(/\s+/g, '-')
-    .replace(/-+/g, '-')
-    .replace(/^-|-$/g, '')
-  return slug === '' ? 'section' : slug
-}
-
-/**
- * 把 Markdown 里的地址解析成项目内相对路径；解析不出或越界时返回 null。
- *
- * 规则与主进程的条目解析保持同一口径：`/` 开头视为项目根，其余相对当前文件所在目录；
- * 带 scheme 的地址（`http:`、`data:`、`file:`、Windows 盘符）一律不当作项目内路径，
- * 空段与 `.` 忽略，`..` 逐级回退且不得越过项目根。
- */
+/** / 表示项目根；协议、控制字符、反斜杠和越界回退都不交给主进程读取。 */
 export function resolveProjectPath(reference: string, documentPath: string): string | null {
   const trimmed = reference.trim()
-  if (trimmed === '' || hasScheme(trimmed)) return null
-  const withoutSuffix = trimmed.split(/[?#]/, 1)[0] ?? ''
-  const decoded = decodePath(withoutSuffix)
-  if (decoded === null) return null
-
+  if (!trimmed || /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(trimmed)) return null
+  let decoded: string
+  try { decoded = decodeURIComponent(trimmed.split(/[?#]/, 1)[0] ?? '') } catch { return null }
   const segments = decoded.startsWith('/') ? [] : documentPath.split('/').slice(0, -1)
-  for (const raw of decoded.split('/')) {
-    if (raw === '' || raw === '.') continue
-    if (raw === '..') {
-      if (segments.length === 0) return null
-      segments.pop()
-      continue
-    }
-    // 反斜杠与控制字符在 POSIX 相对路径里没有合法含义，出现即视为越界写法。
-    if (raw.includes('\\') || /[\u0000-\u001f]/.test(raw)) return null
-    segments.push(raw)
+  for (const segment of decoded.split('/')) {
+    if (!segment || segment === '.') continue
+    if (segment === '..') { if (!segments.length) return null; segments.pop(); continue }
+    if (segment.includes('\\') || /[\u0000-\u001f]/.test(segment)) return null
+    segments.push(segment)
   }
-  return segments.length === 0 ? null : segments.join('/')
+  return segments.length ? segments.join('/') : null
 }
-
-/** 文件地址与片段分开携带，打开新文档时不丢弃标题定位意图。 */
-export function resolveFileMarkdownLink(reference: string, documentPath: string): {
-  readonly path: string
-  readonly anchor: string | null
-} | null {
+export function resolveFileMarkdownLink(reference: string, documentPath: string): { readonly path: string; readonly anchor: string | null } | null {
   const path = resolveProjectPath(reference, documentPath)
-  if (path === null) return null
+  if (!path) return null
   const index = reference.indexOf('#')
-  const rawAnchor = index < 0 ? '' : reference.slice(index + 1)
-  let anchor = rawAnchor
-  try { anchor = decodeURIComponent(rawAnchor) } catch { /* 无效编码按原文定位。 */ }
-  return { path, anchor: anchor === '' ? null : anchor }
+  let anchor = index < 0 ? '' : reference.slice(index + 1)
+  try { anchor = decodeURIComponent(anchor) } catch { /* 无效编码按原文定位。 */ }
+  return { path, anchor: anchor || null }
 }
-
-/** 地址分类只做前缀判断，点击时仍按项目路径边界解析。 */
-function classifyLinkKind(target: string): FileMarkdownLinkKind {
+export function classifyLinkKind(target: string): FileMarkdownLinkKind {
   if (target.startsWith('#')) return 'anchor'
   if (/^https?:\/\//i.test(target)) return 'external'
-  if (hasScheme(target)) return 'copy'
-  return 'file'
+  return /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(target) ? 'copy' : 'file'
 }
-
-function linkTitle(kind: FileMarkdownLinkKind, target: string): string {
-  switch (kind) {
-    case 'anchor': return `跳到：${target}`
-    case 'external': return `在系统浏览器中打开：${target}`
-    case 'file': return `打开文件：${target}`
-    case 'copy': return `复制链接地址：${target}`
-  }
-}
-
-/** `scheme:` 前缀（含 Windows 盘符）都表示「不是项目内相对路径」。 */
-function hasScheme(value: string): boolean {
-  return /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(value)
-}
-
-/** 百分号编码按段解码；解不开的地址直接放弃，不猜测原文。 */
-function decodePath(value: string): string | null {
-  try {
-    return decodeURIComponent(value)
-  } catch {
-    return null
-  }
-}
-
-/**
- * 剥离 front matter：只有首行是 `---`、在限定行数内遇到结束行、且块内至少有一行 `key:` 时才算。
- * 返回的 `body` 保持原换行，交给 marked 正常解析；`bodyOffset` 是正文在原文中的起点，
- * 供块区间换算回原文偏移。
- */
-function splitFrontMatter(text: string): {
-  readonly frontMatter: string | null
-  readonly body: string
-  readonly bodyOffset: number
-} {
+function splitFrontMatter(text: string): { frontMatter: string | null; body: string } {
   const lines = text.split('\n')
-  if (lines.length < 3) return { frontMatter: null, body: text, bodyOffset: 0 }
-  if ((lines[0] ?? '').trim() !== '---') return { frontMatter: null, body: text, bodyOffset: 0 }
-
-  const limit = Math.min(lines.length, FRONT_MATTER_MAX_LINES + 1)
-  for (let index = 1; index < limit; index += 1) {
-    const line = lines[index] ?? ''
-    if (line.trim() !== '---' && line.trim() !== '...') continue
+  if (lines.length < 3 || lines[0]?.trim() !== '---') return { frontMatter: null, body: text }
+  for (let index = 1; index < Math.min(lines.length, 61); index += 1) {
+    if (lines[index]?.trim() !== '---' && lines[index]?.trim() !== '...') continue
     const block = lines.slice(1, index)
-    if (!block.some((entry) => /^[\w.-]+\s*:/.test(entry))) return { frontMatter: null, body: text, bodyOffset: 0 }
-    return {
-      frontMatter: block.join('\n'),
-      body: lines.slice(index + 1).join('\n'),
-      // 结束行连同它的换行都属于 front matter 区间。
-      bodyOffset: lines.slice(0, index + 1).join('\n').length + 1
-    }
+    if (!block.some(line => /^[\w.-]+\s*:/.test(line))) break
+    return { frontMatter: block.join('\n'), body: lines.slice(index + 1).join('\n') }
   }
-  return { frontMatter: null, body: text, bodyOffset: 0 }
-}
-
-/** 元信息按原始文本折叠展示；不解析 YAML，编辑由组件的结构块入口承担。 */
-function renderFrontMatter(block: string): string {
-  return `<details class="file-markdown-frontmatter"><summary>Front Matter</summary><pre class="scroll-area">${escapeHtml(block)}</pre></details>\n`
+  return { frontMatter: null, body: text }
 }

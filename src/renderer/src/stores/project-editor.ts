@@ -17,6 +17,7 @@
  * 也不进偏好 IPC，重启后回默认值。
  */
 import { defineStore } from 'pinia'
+import type { RichMarkdownDraft } from '../file-rich-markdown-draft'
 import { ref } from 'vue'
 import type { DesktopError } from '../../../shared/desktop-api'
 import { PROJECT_FILE_EDIT_MAX_BYTES } from '../../../shared/project-file-api'
@@ -53,10 +54,16 @@ export interface FileEditorRecord {
   readonly name: string
   readonly markdown: boolean
   readonly load: FileLoadView
+  /** 只在实际读取磁盘后变化；保存回写基线不能被编辑面误认为外部重新载入。 */
+  readonly loadRevision: number
   readonly mode: FileEditorMode
   readonly dirty: boolean
-  /** 组件卸载前捕获的未保存文本；为 null 表示编辑区与磁盘内容一致。 */
+  /** 最近捕获的未保存文本；null 表示没有已捕获的差异快照，是否有待保存输入以 dirty 为准。 */
   readonly draft: string | null
+  /** 序列化失败也能恢复的富文本结构；不落盘、不跨应用重启。 */
+  readonly richDraft: RichMarkdownDraft | null
+  /** 导入结束时编辑面已切走的反馈，跟随文件留在窗口内存。 */
+  readonly assetNotice: string | null
   readonly saving: boolean
   readonly saveError: string | null
   /** 磁盘文件在本次编辑期间被外部改动，且当前有未保存修改；需要用户选择如何处理。 */
@@ -92,6 +99,8 @@ export const useProjectEditorStore = defineStore('project-editor', () => {
   let nextAnchorRequestId = 1
   /** 同一记录只采纳最后一次读取，关闭后也使在途结果失效。 */
   const loadVersions = new Map<string, number>()
+  /** 每次用户文档变化递增，保存只清理由该快照覆盖的修改。 */
+  const editVersions = new Map<string, number>()
 
   /** 按标签键取记录；不存在时为 null。 */
   function recordOf(key: string): FileEditorRecord | null {
@@ -131,9 +140,12 @@ export const useProjectEditorStore = defineStore('project-editor', () => {
       name: fileNameOf(path),
       markdown,
       load: { phase: 'loading' },
+      loadRevision: 0,
       mode: markdown ? preferencesStore.markdownDefaultView : 'code',
       dirty: false,
       draft: null,
+      richDraft: null,
+      assetNotice: null,
       saving: false,
       saveError: null,
       conflict: false,
@@ -144,13 +156,16 @@ export const useProjectEditorStore = defineStore('project-editor', () => {
     return key
   }
 
-  /** 读取或重新读取文件内容；成功后清掉脏标记、保存错误与冲突，失败保留可展示的原因。 */
+  /**
+   * 开始读取即重置草稿、脏状态、冲突和保存错误；支持的内容读取成功后更新载入版本。
+   * 只采纳最新请求的结果；错误与不支持原因分别保留，用户选择的视图不变。
+   */
   async function loadInto(key: string): Promise<void> {
     const record = records.value[key]
     if (record === undefined) return
     const version = (loadVersions.get(key) ?? 0) + 1
     loadVersions.set(key, version)
-    update(key, { load: { phase: 'loading' }, dirty: false, draft: null, conflict: false, saveError: null })
+    update(key, { load: { phase: 'loading' }, dirty: false, draft: null, richDraft: null, conflict: false, saveError: null })
     const result = await readProjectFile(record.projectPath, record.path)
     if (records.value[key] === undefined || loadVersions.get(key) !== version) return
     if (!result.ok) {
@@ -163,7 +178,8 @@ export const useProjectEditorStore = defineStore('project-editor', () => {
       return
     }
     // 读取只覆盖内容与保存状态：模式是用户的选择，重读时不回到默认值。
-    update(key, { load: { phase: 'ready', content }, saveError: null })
+    editVersions.set(key, 0)
+    update(key, { load: { phase: 'ready', content }, loadRevision: version, saveError: null })
   }
 
   /** 关闭文件标签：只清内存记录，不改动磁盘。 */
@@ -172,13 +188,17 @@ export const useProjectEditorStore = defineStore('project-editor', () => {
     const next = { ...records.value }
     delete next[key]
     loadVersions.delete(key)
+    editVersions.delete(key)
     records.value = next
   }
 
   /** 关闭某个项目的全部文件记录；项目被移除时调用，避免残留。 */
   function closeProject(projectPath: string): void {
     for (const record of Object.values(records.value)) {
-      if (record.projectPath === projectPath) loadVersions.delete(record.key)
+      if (record.projectPath === projectPath) {
+        loadVersions.delete(record.key)
+        editVersions.delete(record.key)
+      }
     }
     const next = Object.fromEntries(
       Object.entries(records.value).filter(([, record]) => record.projectPath !== projectPath)
@@ -186,25 +206,35 @@ export const useProjectEditorStore = defineStore('project-editor', () => {
     records.value = next
   }
 
-  /** 编辑器上报内容变化：只改脏标记，文本由编辑器自己持有，避免每次击键搬运整份内容。 */
+  /** 登记每次文档变化的版本并设置脏标记；文本仍由编辑器持有，不在每次击键时搬运全文。 */
   function markDirty(key: string): void {
     const record = records.value[key]
-    if (record === undefined || record.dirty || !isEditable(record)) return
-    update(key, { dirty: true })
+    if (record === undefined || !isEditable(record)) return
+    editVersions.set(key, (editVersions.get(key) ?? 0) + 1)
+    if (!record.dirty) update(key, { dirty: true })
   }
 
   /**
-   * 组件卸载前捕获未保存文本：打开设置页或切换项目会卸载文件面板，草稿必须留在状态里，
-   * 否则重新挂载后未保存的修改会静默丢失。文本与磁盘基线一致时不留草稿。
+   * 在富文本提交、保存返回后核对以及面板卸载时捕获全文快照，供重新挂载恢复。
+   * 快照与磁盘基线相同时清除草稿及脏标记，否则记录差异；尚未捕获的输入由编辑面负责刷新。
    */
   function captureDraft(key: string, text: string): void {
     const record = records.value[key]
     if (record === undefined || record.load.phase !== 'ready') return
     const content = record.load.content
     const draft = content.kind === 'text' && text !== content.text ? text : null
-    if (record.draft === draft) return
-    update(key, { draft, dirty: draft !== null })
+    if (record.draft === draft && record.dirty === (draft !== null) && record.richDraft === null) return
+    update(key, { draft, dirty: draft !== null, richDraft: null })
   }
+
+  /** 捕获结构草稿不能依赖 Markdown 序列化成功；旧记录关闭后不重新创建。 */
+  function captureRichDraft(key: string, richDraft: RichMarkdownDraft | null): void {
+    const record = recordOf(key)
+    if (!record || !isEditable(record)) return
+    update(key, { richDraft, ...(richDraft ? { dirty: true } : {}) })
+  }
+
+  function setAssetNotice(key: string, assetNotice: string | null): void { update(key, { assetNotice }) }
 
   /** 导航请求按文件记录，在目标预览完成定位后消费；不写入偏好或磁盘。 */
   function requestAnchor(key: string, anchor: string): void {
@@ -242,7 +272,7 @@ export const useProjectEditorStore = defineStore('project-editor', () => {
 
   /**
    * 保存当前文本：`force` 为真表示用户已确认覆盖外部改动，跳过磁盘基线比对。
-   * 成功时把返回的新基线写回记录，并清除脏标记与冲突；失败保留原因，CONFLICT 额外标记冲突。
+   * 成功时更新磁盘基线并清除冲突；只有没有后续输入时才清除脏标记。失败保留原因，CONFLICT 额外标记冲突。
    */
   async function save(key: string, text: string, force = false): Promise<boolean> {
     const record = records.value[key]
@@ -250,6 +280,7 @@ export const useProjectEditorStore = defineStore('project-editor', () => {
     const content = record.load.content
     if (content.kind !== 'text' || record.saving) return false
 
+    const savedVersion = editVersions.get(key) ?? 0
     update(key, { saving: true, saveError: null })
     const expected = force ? null : { size: content.size, mtimeMs: content.mtimeMs }
     const result = await writeProjectFile(record.projectPath, record.path, text, content.eol, content.bom, expected)
@@ -262,10 +293,13 @@ export const useProjectEditorStore = defineStore('project-editor', () => {
       })
       return false
     }
+    const changedDuringSave = (editVersions.get(key) ?? 0) !== savedVersion
+    const latest = records.value[key]
     update(key, {
       saving: false,
-      dirty: false,
-      draft: null,
+      dirty: changedDuringSave,
+      draft: changedDuringSave ? latest?.draft ?? null : null,
+      richDraft: changedDuringSave ? latest?.richDraft ?? null : null,
       conflict: false,
       saveError: null,
       load: {
@@ -355,6 +389,8 @@ export const useProjectEditorStore = defineStore('project-editor', () => {
     closeProject,
     markDirty,
     captureDraft,
+    captureRichDraft,
+    setAssetNotice,
     setMode,
     save,
     checkExternal,

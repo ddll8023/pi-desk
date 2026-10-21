@@ -1,7 +1,7 @@
 /**
- * 项目文件索引：为输入框的 `@` 引用提供候选路径。
+ * 项目文件索引：为输入框的 `@` 引用与 Markdown 文档链接提供候选路径。
  *
- * 索引根只取当前项目（由调用方注入，不接受页面传入的路径），只读取文件名与相对路径，不读取
+ * @ 索引根取当前项目；Markdown 文档补全由调用方验证已登记项目后固定根路径。只读取文件名与相对路径，不读取
  * 任何文件内容。优先用 `git ls-files` 顺带遵守 `.gitignore`，失败时退化为遍历并跳过常见构建
  * 与依赖目录；索引按 TTL 缓存，目录监听发现变化时由调用方显式丢弃快照；文件系统与子进程异常
  * 一律收敛为空结果，不向页面回传路径细节。
@@ -10,7 +10,7 @@ import { execFile } from 'node:child_process'
 import type { Dirent } from 'node:fs'
 import { readdir } from 'node:fs/promises'
 import { join, relative, sep } from 'node:path'
-import type { ProjectFileSearchResult } from '../shared/project-file-api'
+import type { ProjectMarkdownDocumentsResult, ProjectFileSearchResult } from '../shared/project-file-api'
 
 /** 一次检索最多返回多少条候选。 */
 const FILE_SEARCH_LIMIT = 50
@@ -71,6 +71,16 @@ export class ProjectFileIndex {
       return { ok: true, data: { entries: rankFiles(files, query), projectPath: root } }
     } catch {
       return this.empty(null)
+    }
+  }
+
+  /** 文档补全使用调用方已验证的固定项目；原有 @ 检索仍只取当前项目。 */
+  async markdownDocuments(root: string): Promise<ProjectMarkdownDocumentsResult> {
+    try {
+      const files = await this.filesOf(root)
+      return { ok: true, data: { projectPath: root, entries: [...new Set(files.filter(path => /\.(md|markdown)$/i.test(path)))], truncated: files.length >= FILE_INDEX_MAX } }
+    } catch (error) {
+      return { ok: false, error: { code: 'INTERNAL_ERROR', message: error instanceof Error ? error.message : String(error) } }
     }
   }
 

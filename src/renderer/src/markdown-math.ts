@@ -1,9 +1,9 @@
 /**
- * 数学公式的定界符解析与渲染：解析只产出占位元素，渲染由 KaTeX 在清洗后的 DOM 上原地完成。
+ * 数学公式的定界符识别与 KaTeX 渲染：识别函数只返回 token，供只读渲染与富文本节点共用。
  *
- * 解析侧把公式换成 `span` 占位元素（class 区分行内与显示，公式源文本按文本节点转义），公式本身
- * 不进入 HTML 字符串；渲染侧在 DOMPurify 清洗之后读取占位元素的文本并调用 `katex.render`，
- * 由 KaTeX 直接构建 DOM，因此清洗白名单不需要放开 `style`，也不引入 MathML 标签。KaTeX 以
+ * 聊天和只读预览扩展把 token 转成转义后的 HTML 占位并清洗；富文本 NodeView 直接用 DOM API
+ * 构造占位并通过文本节点填入公式。两路均从占位的文本读取公式，再由 KaTeX 构建渲染 DOM，
+ * 不把原始公式当作 HTML 注入，也不为只读清洗白名单开放 `style` 或 MathML 标签。KaTeX 以
  * `trust: false` 运行，`\href`、`\url`、`\includegraphics` 与自定义 class/id 都不会被写出。
  *
  * 定界符支持 `$$…$$` 与 `\[…\]`（显示）、`\(…\)` 与 `$…$`（行内）。行内 `$` 另设护栏以避开
@@ -79,8 +79,8 @@ export function createDisplayMathBlockExtension(escapeHtml: EscapeHtml): Tokeniz
 }
 
 /**
- * 把占位元素渲染为 KaTeX 节点。清洗后的 DOM 每轮重建，因此这里只跳过已含 `.katex` 的元素；
- * 渲染失败时保留原文并标记错误，不让整条消息失去可读性。
+ * 渲染只读 HTML 清洗后的占位或富文本 NodeView 安全构造的占位，跳过已有 `.katex` 的元素。
+ * 渲染失败时保留公式原文并标记错误，不影响其余正文。
  */
 export function renderMathInto(root: HTMLElement): void {
   const placeholders = root.querySelectorAll<HTMLElement>('.markdown-math-inline, .markdown-math-block')
@@ -90,7 +90,7 @@ export function renderMathInto(root: HTMLElement): void {
 }
 
 /** 行内匹配：返回首个命中的定界符内容，未命中返回 undefined 交回内置规则。 */
-function tokenizeInline(src: string): Tokens.Generic | undefined {
+export function tokenizeInline(src: string): Tokens.Generic | undefined {
   for (const { pattern, display } of INLINE_PATTERNS) {
     const match = pattern.exec(src)
     if (match === null) continue
@@ -103,7 +103,7 @@ function tokenizeInline(src: string): Tokens.Generic | undefined {
 }
 
 /** 块级匹配：只接受从行首开始的显示公式，未命中返回 undefined 交回内置规则。 */
-function tokenizeBlock(src: string): Tokens.Generic | undefined {
+export function tokenizeBlock(src: string): Tokens.Generic | undefined {
   for (const pattern of BLOCK_PATTERNS) {
     const match = pattern.exec(src)
     if (match === null) continue

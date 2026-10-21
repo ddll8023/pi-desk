@@ -1,5 +1,7 @@
 /** 为沙箱页面提供应用信息、外链打开（仅 http/https）、Project 选择/添加/移除/列表、项目文件检索、目录列举、目录监听、条目路径解析与文件内容读写、Git（源代码管理）、Session、会话运行状态、终端、Project Trust、偏好与快捷命令、Runtime、Pi 资源、Pi 默认模型、Pi 版本检查、扩展更新与内置 agent 安装、自定义供应商、认证与 Extension 等受限接口，不暴露 Electron、任意 channel 或系统能力。 */
 import { contextBridge, ipcRenderer } from 'electron'
+import { PROJECT_MARKDOWN_DOCUMENTS_CHANNEL, PROJECT_MARKDOWN_IMAGE_CHANNEL, isProjectMarkdownDocumentsResult, isProjectMarkdownImageResult } from '../shared/project-file-api'
+import type { ProjectMarkdownImageRequest, ProjectFileReadRequest as MarkdownOwnerRequest } from '../shared/project-file-api'
 import type { IpcRendererEvent } from 'electron'
 import {
   APP_INFO_CHANNEL,
@@ -776,6 +778,19 @@ const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionAp
     }
     const response: unknown = await ipcRenderer.invoke(PROJECT_FILE_WRITE_CHANNEL, payload)
     return isProjectFileWriteResult(response) ? response : invalidProjectFileWriteResponse()
+  },
+
+  /** Markdown 资源通道不暴露外部路径或任意 IPC。 */
+  async listMarkdownDocuments(request: MarkdownOwnerRequest) {
+    const response: unknown = await ipcRenderer.invoke(PROJECT_MARKDOWN_DOCUMENTS_CHANNEL, { projectPath: request.projectPath, path: request.path })
+    return isProjectMarkdownDocumentsResult(response) ? response : { ok: false as const, error: { code: 'INVALID_RESPONSE' as const, message: '文档索引响应无效。' } }
+  },
+  async importMarkdownImage(request: ProjectMarkdownImageRequest) {
+    const payload: ProjectMarkdownImageRequest = request.source === 'pick'
+      ? { projectPath: request.projectPath, path: request.path, source: 'pick' }
+      : { projectPath: request.projectPath, path: request.path, source: 'clipboard', bytes: new Uint8Array(request.bytes) }
+    const response: unknown = await ipcRenderer.invoke(PROJECT_MARKDOWN_IMAGE_CHANNEL, payload)
+    return isProjectMarkdownImageResult(response) ? response : { ok: false as const, error: { code: 'INVALID_RESPONSE' as const, message: '图片导入响应无效。' } }
   },
 
   /** 查询项目内文件的磁盘基线；只回元数据，不读内容。 */

@@ -302,9 +302,10 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
    * `anchor` 指定 Markdown 标题：请求留在目标文件记录内，等待正文呈现后消费。
    * 读取由编辑记录异步完成，标签先出现并展示读取中状态。
    */
-  function openFileTab(path: string, mode?: FileEditorMode, anchor?: string | null): void {
+  function openFileTab(path: string, mode?: FileEditorMode, anchor?: string | null, expectedProjectPath?: string): void {
     const projectPath = currentProjectPath.value
-    if (projectPath === null) return
+    // 异步文档候选只能打开原项目，不能在切换后把同名路径解释为新项目的文件。
+    if (projectPath === null || (expectedProjectPath !== undefined && expectedProjectPath !== projectPath)) return
     const key = editorStore.open(projectPath, path)
     if (mode !== undefined) editorStore.setMode(key, mode)
     if (anchor !== undefined && anchor !== null) editorStore.requestAnchor(key, anchor)

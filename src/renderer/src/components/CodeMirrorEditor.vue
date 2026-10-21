@@ -183,19 +183,22 @@ defineExpose({
   getText: (): string => view?.state.doc.toString() ?? props.modelValue,
   focus: (): void => view?.focus(),
   /**
-   * 预览就地编辑的写回入口：按原文区间替换后立即派发，撤销栈、脏标记与保存链路都与源码输入一致。
-   * 区间按文档长度夹紧，避免预览文本比文档新一步时抛错。编辑器未挂载时返回 false，由调用方处理。
+   * 接收全文快照并派发最小差异，不重建源码编辑器，也不让隐藏层抢滚动。
+   * 未挂载或只读时返回 false；文本相同则直接返回 true，不派发修改。
    */
-  applyEdit: (from: number, to: number, insert: string): boolean => {
-    if (view === null) return false
-    const length = view.state.doc.length
-    const start = Math.max(0, Math.min(from, length))
-    const end = Math.max(start, Math.min(to, length))
+  applyText: (text: string): boolean => {
+    if (view === null || props.readOnly) return false
+    const previous = view.state.doc.toString()
+    if (previous === text) return true
+    let start = 0
+    while (start < Math.min(previous.length, text.length) && previous[start] === text[start]) start += 1
+    let end = previous.length
+    let nextEnd = text.length
+    while (end > start && nextEnd > start && previous[end - 1] === text[nextEnd - 1]) { end -= 1; nextEnd -= 1 }
     view.dispatch({
-      changes: { from: start, to: end, insert },
-      selection: { anchor: start + insert.length },
-      // 预览态下编辑器是隐藏层，不跟着滚动。
-      scrollIntoView: false
+      changes: { from: start, to: end, insert: text.slice(start, nextEnd) },
+      scrollIntoView: false,
+      userEvent: 'input.preview'
     })
     return true
   }

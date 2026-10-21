@@ -1,11 +1,12 @@
 /**
  * 文件预览里的围栏代码高亮：复用文件编辑器已有的 CodeMirror 语言包，不引入第二套高亮引擎。
  *
- * 语言由代码块头部的标签决定（先查常见别名，再用 `LanguageDescription.matchLanguageName`），
+ * 语言由围栏标签决定（只读入口从代码块头部读取，先查常见别名，再用 `LanguageDescription.matchLanguageName`），
  * 匹配不到时保持纯文本。语言包按需动态加载，因此未出现过的语言不会进入首屏包。
  *
- * 高亮在 DOM 上原地进行（替换 code 元素的子节点），不参与 HTML 字符串生成，清洗白名单不需要放开
- * 任何新标签。为避免长文档一次性解析过多代码，按块大小、块数与累计字符数设上限，超出就跳过。
+ * 只读入口替换 code 元素的子节点；富文本入口返回高亮区间，由调用方生成位置装饰，不直接改写正文 DOM。
+ * 两个入口共用语言包和语义类名，均不生成待注入的 HTML 字符串。单块大小在本模块限制；
+ * 只读入口还在此限制块数和累计字符数，富文本的累计预算由调用方控制。
  */
 import { LanguageDescription } from '@codemirror/language'
 import type { LanguageSupport } from '@codemirror/language'
@@ -105,7 +106,7 @@ export async function highlightCodeBlocks(root: HTMLElement, isStale: () => bool
 }
 
 /** 语言标签 → 语言支持；别名优先，其次按名称/别名模糊匹配。空标签与未知标签返回 null。 */
-async function loadLanguage(label: string): Promise<LanguageSupport | null> {
+export async function loadLanguage(label: string): Promise<LanguageSupport | null> {
   const normalized = label.trim().toLowerCase()
   // 用 hasOwn 而不是 `in`：后者会把 prototype 上的键（如 `constructor`）当成别名。
   if (normalized === '' || Object.hasOwn(LANGUAGE_ALIASES, normalized)) {
@@ -126,6 +127,20 @@ async function loadByName(name: string): Promise<LanguageSupport | null> {
   const pending = description.load().catch(() => null)
   supportCache.set(name, pending)
   return pending
+}
+
+/** 返回富文本高亮区间；未知语言、单块超限或解析失败返回空数组，块数及累计预算由调用方控制。 */
+export async function codeHighlightRanges(text: string, label: string): Promise<readonly { from: number; to: number; className: string }[]> {
+  if (text.length > MAX_BLOCK_CHARS) return []
+  const support = await loadLanguage(label)
+  if (support === null) return []
+  const ranges: { from: number; to: number; className: string }[] = []
+  try {
+    highlightTree(support.language.parser.parse(text), highlighter, (from, to, className) => {
+      ranges.push({ from, to, className })
+    })
+  } catch { return [] }
+  return ranges
 }
 
 /** 用解析树把代码文本切成带语义类名的 span；解析失败时保留原文，不影响可读性。 */
