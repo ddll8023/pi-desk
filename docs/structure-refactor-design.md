@@ -134,7 +134,7 @@ src/main/
 
 `ipc/` 不设独立目录：IPC 注册函数按业务域迁入对应能力目录（如 `sessions/ipc.ts`），由 `index.ts` 统一调用。这样“能力 → IPC → 编排 → 数据”在目录内闭合，避免新增一层只做转发的目录。
 
-根目录只保留三个文件：`index.ts`、`app-lifecycle.ts`（`app.on` 事件、单实例、退出链、启动自动更新）、`window.ts`（`createWindow`、背景色与标题栏窗口参数）。后两者与 `shell/` 的区别：它们是应用级生命周期与唯一窗口的创建链，不被任何业务能力反向依赖。
+根目录只保留应用级与窗口相关的文件：`index.ts`（装配）、`app-lifecycle.ts`（`app.on` 事件、单实例、退出链、启动自动更新）、`window.ts`（`createWindow`、背景色与标题栏窗口参数）、`window-channel.ts`（窗口引用、投递与广播）、`services.ts`（业务实例装配）、`asset-protocol.ts`（资产协议）、`window-state.ts`（窗口尺寸与位置）。`app-lifecycle.ts`、`window.ts` 与 `window-channel.ts` 与 `shell/` 的区别：它们是应用级生命周期与唯一窗口的创建链，不被任何业务能力反向依赖。`window.ts` 会读取 `services.ts` 注入的实例（配置、终端、窗口状态、SDK 运行时、目录监听），但业务能力不反向引用窗口层；`window-channel.ts` 通过注册取值函数取得终端状态，因此不反向依赖 `services.ts`。
 
 ### 3.3 SDK 宿主目标结构
 

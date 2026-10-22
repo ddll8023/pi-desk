@@ -1,4 +1,4 @@
-/** 唯一桌面窗口的所有权：窗口创建、原生主题与标题栏配色、导航与权限限制、向渲染进程投递事件与单实例聚焦。窗口引用只在这里持有，业务实例由 services.ts 注入；退出时的落盘由 app-lifecycle.ts 驱动。 */
+/** 唯一桌面窗口的创建与外观：窗口创建、原生主题与标题栏配色、导航与权限限制、单实例聚焦。窗口引用由 window-channel.ts 持有，业务实例由 services.ts 注入；投递与广播在同目录的 window-channel.ts，退出时的落盘由 app-lifecycle.ts 驱动。 */
 
 import { resolve } from 'node:path'
 import { app, BrowserWindow, dialog, nativeTheme, session } from 'electron'
