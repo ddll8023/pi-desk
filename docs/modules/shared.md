@@ -58,12 +58,12 @@
 | --- | --- | --- |
 | `src/main/shared/managed-entry-runner.ts` | 一次性入口输出分帧、超时、退出判定、单飞执行槽 | 版本检查、扩展更新、运行时安装 |
 | `src/main/shared/pi-cli-process.ts` | 固定产物定位与启动，只返回子进程句柄 | 资源预读、MCP 探测、版本与更新编排 |
-| `src/main/shared/process-tree-termination.ts` | 跨平台进程树终止 | 受管入口、资源探测、认证及终端生命周期 |
 | `src/main/shared/pi-paths.ts` | 固定 Pi agent 目录与受管环境；注入 SDK 入口 | 会话文件、配置、认证、SDK 宿主与辅助入口 |
 | `src/main/shared/shell-path.ts` | 图形界面启动时补齐登录 shell 的 PATH | 应用启动与后续外部命令 |
+| `src/shared-process/process-tree-termination.ts` | 跨平台进程树终止 | 受管入口、资源探测、认证及终端守护进程 |
 | `src/shared-process/runtime.ts` | SDK 发布目录布局、当前版本指针、SDK 入口解析、动态加载及自带版本回退 | 主进程运行时解析、SDK 宿主、认证、CLI、版本检查、安装入口 |
 
-前五行位于 `src/main/shared/`，`runtime.ts` 位于 `src/shared-process/`。`runtime.ts` 与 `src/entries/runtime-install/index.ts` 不是同一职责：前者本身不下载、不安装，只维护发布目录布局与当前版本指针。
+前四行位于 `src/main/shared/`，后两行位于 `src/shared-process/`。`runtime.ts` 与 `src/entries/runtime-install/index.ts` 不是同一职责：前者本身不下载、不安装，只维护发布目录布局与当前版本指针。
 
 ## F-platform：文件锁、外链与基础错误（共享）
 

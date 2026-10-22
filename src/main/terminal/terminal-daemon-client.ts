@@ -15,7 +15,7 @@ import type {
   TerminalDaemonNotice, TerminalDaemonReplyData, TerminalDaemonRequest, TerminalDaemonRequestType
 } from '../../shared/terminal-daemon-protocol'
 import type { TerminalDataEvent, TerminalExitEvent } from '../../shared/terminal-api'
-import { terminateProcessTree } from '../shared/process-tree-termination'
+import { terminateProcessTree } from '../../shared-process/process-tree-termination'
 import { isProcessAlive, listOtherVersionDaemons, readEntryBuildId, readPidFile, readTokenFile, removeOwnedFile, resolveDaemonPaths } from '../../terminal-daemon/endpoint'
 import type { TerminalDaemonPaths } from '../../terminal-daemon/endpoint'
 

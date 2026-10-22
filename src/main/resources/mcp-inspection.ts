@@ -17,7 +17,7 @@ import type {
   RuntimeErrorCode
 } from '../../shared/runtime-api'
 import { spawnPiCli } from '../shared/pi-cli-process'
-import { terminateProcessTree } from '../shared/process-tree-termination'
+import { terminateProcessTree } from '../../shared-process/process-tree-termination'
 
 /**
  * MCP 服务器探测的等待上限：官方 CLI 会依次连接所有已启用服务器，

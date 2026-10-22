@@ -8,7 +8,7 @@
  * 因此内存不随依赖命令的输出量增长，也不因为输出超过某个总量而误判失败。
  */
 import type { ChildProcess } from 'node:child_process'
-import { terminateProcessTree } from './process-tree-termination'
+import { terminateProcessTree } from '../../shared-process/process-tree-termination'
 
 /** 进程被要求终止后，等待其自行退出的期限。 */
 const KILL_GRACE_MS = 3_000

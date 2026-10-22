@@ -30,6 +30,8 @@
 
 ### 2.1 规模与分布
 
+下表的目录与行数是**重构开始前的快照**，其中的 `src/projection/`、`src/extensions/genui/`、`src/runtime-install/`、`src/update-check/`、`src/package-update/`、`src/pi-cli/` 已不存在，现行结构见 [项目结构文档](项目结构文档.md)。保留本表只为说明当时的规模依据。
+
 | 运行单元 | 文件数 | 代码行数 | 备注 |
 | --- | --- | --- | --- |
 | `src/main/` | 50 | 15 803 | `index.ts` 3 206 行；其余 45 个非测试文件 12 206 行 |
@@ -50,12 +52,12 @@
 - 但 `import` 出度不等于跨能力复用。按导出符号名静态比对，业务模块之间仍存在跨能力引用具体符号的情况：`git-service` 复用 `git-command` 的错误类与常量，`session-manager` 复用 `sdk-host-manager` 的 `SdkHostError` 与 `sdk-runtime-bridge` 的 `sessionErrorOf`，`models-config-manager` 与 `pi-settings-manager` 复用 `file-lock` 的 `FileLockError`/`withFileLock`。
 - 真正的横跨中心只有 `src/main/index.ts`：按导出符号名比对，它引用了 38 个来自其他主进程文件的导出符号，是所有业务模块的唯一组装者。**这是“只有组合根横跨全部业务”的直接证据，也是阶段 1 选它作为起点的依据。**
 - `src/shared` 内部无循环；被引用次数：`runtime-api.ts` 43、`desktop-api.ts` 30、`genui-api.ts` 24，其余 8–19。
-- 跨运行单元引用共 22 条，其中 20 条指向 `src/shared`；非 shared 的四类为：`main → sdk-host/protocol`、`main → auth-helper/protocol`、`main → terminal-daemon/endpoint`、`terminal-daemon/session-manager → main/process-tree-termination`，另有多处 → `runtime-install/runtime`。
+- 跨运行单元引用共 22 条，其中 20 条指向 `src/shared`；非 shared 的四类为：`main → sdk-host/protocol`、`main → auth-helper/protocol`、`main → terminal-daemon/endpoint`、`terminal-daemon/session-manager → main/shared/process-tree-termination`，另有多处指向当时的 `runtime-install/runtime.ts`。后两类已在阶段 2 处置：`runtime.ts` 与 `process-tree-termination.ts` 都下沉到 `src/shared-process/`，跨单元依赖不再指向 `src/main` 内的文件。
 - 全库共 5 处循环，全部在前端：`session.ts ↔ workspace-tabs.ts`、`file-rich-markdown-codec ↔ -details`、`file-rich-markdown-source ↔ -block-source`、`GenuiNode ↔ GenuiCollapse`、`GenuiNode ↔ GenuiTabs`。后四者中，`file-rich-markdown` 两对为数据编解码互递归，`GenuiNode` 两处为节点递归渲染，**属有意为之**，不应按“必须消除”处理；只有 `session ↔ workspace-tabs` 是编排倒挂。
 
 ### 2.3 职责混杂的实测证据
 
-- `src/main/index.ts`：105 个 `handle()` IPC 注册（集中在 17 个 `register*Handlers`）、44 个 `*Failure` 错误映射函数（259 处调用）、10 个广播函数加 1 个状态广播，以及窗口创建、资产协议、便携数据目录、单实例锁、退出链、启动自动更新，还集中实例化全部业务服务（约 385–470 行）。
+- `src/main/index.ts`：102 个 `handle()` IPC 注册、40 个 `*Failure` 错误映射函数（全仓共 49 个此类函数，其余 9 个定义在非 `ipc.ts` 文件里）、10 个广播函数，以及窗口创建、资产协议、便携数据目录、单实例锁、退出链、启动自动更新，还集中实例化全部业务服务。
 - `src/preload/index.ts`：114 处 `ipcRenderer` 调用、约 100 条 `INVALID_*` 常量与 `invalid*Response` 工厂，16 个域的 Api 合并后一次性 `exposeInMainWorld('desktop')`。
 - `src/renderer/src/App.vue`：17 个 Store 引用、Store 初始化与 `dispose` 顺序编排、5 个 `ConfirmDialog` 与 4 个业务弹层、布局与响应式处理，以及项目/会话/文件/快捷命令的确认意图。
 - `src/renderer/src/stores/runtime.ts`：1 412 行，同时持有会话运行状态、投影应用与历史缓存、模型能力与切换、Pi 默认模型、隐藏模型偏好与写回、资源预读。其中模型相关部分只被 4 个组件消费（`ModelSettingsView`、`ProviderListItem`、`ProviderVisibilitySection`、`RuntimeModelSelect`），边界已可切。
@@ -128,7 +130,7 @@ src/main/
 - **合并 `projects/` 与 `files/`**：`project-manager`、`project-directory`、`project-directory-watcher`、`project-file-index`、`project-file-content`、`project-markdown-assets`、`project-entry-path` 与 `project-path` 命名同源、调用链同源（都围绕“已登记项目 + 项目内相对路径”），且 `project-entry-path` 被文件类四个模块共用。拆成两个目录会制造一条 `files → projects` 的隐式主干依赖，因此合并。
 - **新增 `config/`**：`desktop-config-store` 被项目、外壳、偏好、供应商、终端、更新、生成式界面共 6 处使用，但它不是叶子设施（自身依赖 `project-path`），也不属于 `shell/`。单独成目录使其“唯一配置写者”身份在目录层面可见。
 - **`project-path` 归 `shared/`**：它被 `config`、`projects`、`trust`、`sessions` 四处使用，是叶子模块（零依赖），符合叶子设施判据。
-- **`pi-runtime` 归 `updates/`**：它只是 `updates` 与 `resources` 用于注入运行时入口的两函数，但自身依赖 `runtime-install/runtime.ts`，属“运行时布局”而非叶子设施；阶段 2 把 `runtime.ts` 下沉为 `src/shared-process/` 后，`pi-runtime` 再与它合并，避免阶段 1 在 `shared/` 留下一个指向 `runtime-install/` 的反向依赖。
+- **`pi-runtime` 归 `updates/`**：它只是 `updates` 与 `resources` 用于注入运行时入口的两函数，但自身依赖 `shared-process/runtime.ts`，并因其消费 `electron.app` 而无法进入不感知 Electron 的 `shared-process/`；阶段 2 把 `runtime.ts` 下沉后，两个函数留在 `updates/` 是为了不在 `shared/` 留下一条指向 `shared-process/` 的依赖。
 
 `ipc/` 不设独立目录：IPC 注册函数按业务域迁入对应能力目录（如 `sessions/ipc.ts`），由 `index.ts` 统一调用。这样“能力 → IPC → 编排 → 数据”在目录内闭合，避免新增一层只做转发的目录。
 
@@ -146,7 +148,7 @@ src/sdk-host/
 └─ runtime/              SDK 运行时布局与加载（已下沉为 `src/shared-process/runtime.ts`，宿主单向引用）
 ```
 
-`src/runtime-install/index.ts` 是一次性安装入口，迁入 `src/entries/`（见 3.4）。
+一次性安装入口现为 `src/entries/runtime-install/index.ts`（见 3.4）。
 
 ### 3.4 辅助入口目标结构
 
@@ -166,12 +168,15 @@ src/entries/
 
 ```text
 src/shared/         分域契约（请求/事件/结果/运行期校验），按业务域分文件
-src/shared-process/ 跨进程基础设施：运行时布局与 SDK 加载
+src/shared-process/ 跨进程基础设施：运行时布局与 SDK 加载、进程树终止
 ```
 
-`src/shared-process/` 的判据是“被两个及以上非主进程运行单元引用且不感知 Electron”。按此判据实测，当前只有 `runtime-install/runtime.ts` 满足：它被 `sdk-host`、`auth-helper`、`pi-cli`、`update-check` 四个运行单元引用，自身只依赖 `node:fs`、`node:path` 与 `node:url`。
+`src/shared-process/` 的判据是“被两个及以上运行单元引用且不感知 Electron”，其中“运行单元”含主进程。当前有两个文件满足：
 
-以下三项**不满足**该判据，留在 `src/main/shared/`：`pi-paths.ts` 的 8 处引用全部在 `src/main` 内，且经 `updates/pi-runtime` 传递依赖 `electron.app`；`managed-entry-runner.ts` 的 3 处引用全在 `src/main` 内；`process-tree-termination.ts` 虽有 `terminal-daemon/session-manager` 这一个非主进程消费者，但只涉及一个运行单元。
+- `runtime.ts`：被 `sdk-host`、`auth-helper`、`pi-cli`、`update-check` 四个运行单元引用，自身只依赖 `node:fs`、`node:path` 与 `node:url`。
+- `process-tree-termination.ts`：被主进程与 `terminal-daemon` 两个运行单元引用，自身只依赖 `node:child_process` 与 `node:path`。它的存在使终端守护进程不必反向引用 `src/main` 内的实现。
+
+以下两项**不满足**该判据，留在 `src/main/shared/`：`pi-paths.ts` 的 8 处引用全部在 `src/main` 内，且经 `updates/pi-runtime` 传递依赖 `electron.app`；`managed-entry-runner.ts` 的 3 处引用同样全在 `src/main` 内。
 
 ### 3.6 前端目标结构
 
@@ -201,7 +206,7 @@ src/renderer/src/
 
 | 目标 | 现状 | 收敛方向 |
 | --- | --- | --- |
-| `src/main/index.ts` | 3 206 行，业务与装配混排 | 只保留：单实例、便携目录、登录 shell PATH、`whenReady` 注册装配顺序、窗口创建与关闭、退出链、启动检查编排。105 个 IPC 处理、44 个错误映射与 11 个广播函数迁入各能力目录；服务仍在组合根集中实例化后按序注入（现状已如此，不改变实例化方式） |
+| `src/main/index.ts` | 3 206 行，业务与装配混排 | 只保留：单实例、便携目录、登录 shell PATH、`whenReady` 注册装配顺序、窗口创建与关闭、退出链、启动检查编排。102 个 IPC 处理、40 个错误映射与 10 个广播函数迁入各能力目录；服务仍在组合根集中实例化后按序注入（现状已如此，不改变实例化方式） |
 | `src/preload/index.ts` | 1 566 行，16 域混装 | 按域拆为 `preload/<domain>.ts`，各域自带 `ipcRenderer` 调用、载荷重建与结果校验；`index.ts` 只合并并 `exposeInMainWorld`。沙箱不能 require 拆分模块，构建侧须保持 `inlineDynamicImports` 单产物 |
 | `App.vue` | 624 行，布局 + 生命周期 + 弹层 + 业务确认 | 拆为：组合根（provider 装配与 Store 初始化/释放顺序）、布局骨架组件、启动编排 composable、弹层宿主组件。业务确认意图交回各能力的 Store 或弹层组件 |
 | `stores/runtime.ts` | 1 412 行，会话 + 模型 + 资源 | 拆为：会话运行与投影状态、历史缓存、模型能力与切换、模型展示偏好与写回。拆分后会话侧不依赖模型侧与资源预读 |
@@ -251,7 +256,7 @@ src/renderer/src/
 
 | 风险 | 说明 | 缓解方向 |
 | --- | --- | --- |
-| 构建产物路径 | `pi-cli-process.ts`、`createWindow`、`runtime-install/runtime.ts` 均按 `__dirname` 与相对路径定位产物 | 只移动源码、不改四份 Vite 配置的输出目录与 `entryFileNames` |
+| 构建产物路径 | `pi-cli-process.ts`、`createWindow`、`shared-process/runtime.ts` 均按 `__dirname` 与相对路径定位产物 | 只移动源码、不改四份 Vite 配置的输出目录与 `entryFileNames` |
 | preload 沙箱限制 | 沙箱不能 require 拆分模块；需保持 `externalizeDeps: false` 与 `inlineDynamicImports: true` | preload 拆分在构建配置不变的前提下进行，拆分维度只到源文件 |
 | 测试与类型检查漏检 | `test` 脚本与两份 tsconfig 用目录 glob | 每阶段把四类配置同步纳入执行清单 |
 | 未提交改动冲突 | 工作区已有修改与未跟踪文档 | 移动前先落定基线，移动阶段避免触碰这些文件 |
@@ -265,14 +270,16 @@ src/renderer/src/
 
 阶段划分按“风险由低到高、依赖由叶子到编排”排序。每阶段在开始前单独讨论实现细节并提交逐文件执行清单，另获确认后实施。
 
-### 阶段 1：主进程布局与装配拆分（推荐先实施）
+当前进度：阶段 1 与阶段 2 已完成，阶段 3 至 6 未开始。各阶段标题下标注的是该阶段**开始时**的计划与判据，实施中对不上实测的部分已在文中就地更正。
+
+### 阶段 1：主进程布局与装配拆分（已完成）
 
 - 目标：消除 `src/main/index.ts` 的 3 206 行混合职责，建立主进程能力目录，落实 3.8 的依赖方向规则。
 - 涉及职责：全部主进程能力切片的目录聚合、17 个 IPC 注册函数迁入能力目录、组合根瘦身。
 - 前置依赖：无。
 - 风险：中低。主进程内部零循环，依赖已下沉到叶子设施，是四个混合职责中边界最清晰的一个。
 
-已核实的迁移量：49 个源文件位移（含 3 个测试文件）、162 处 import 说明符改写。单个文件往往同时引用多个迁走目标，因此 import 改写量远大于文件数。
+已核实的迁移量：48 个源文件位移（含 3 个测试文件）、158 处 import 说明符改写。单个文件往往同时引用多个迁走目标，因此 import 改写量远大于文件数。
 
 阶段 1 内部拆为三个可独立停下确认的子阶段，按“叶子 → 能力 → 组合根”顺序：
 
@@ -280,7 +287,7 @@ src/renderer/src/
 | --- | --- | --- |
 | 1a 叶子设施与目录骨架 | 把 `pi-paths`、`process-tree-termination`、`managed-entry-runner`、`pi-cli-process`、`external-url`、`file-lock`、`project-path` 归入 `main/shared/`；`desktop-config-store` 归入 `main/config/`；`window-state`、`shell-path` 归入 `main/shell/`。同步改写引用它们的文件（含 `index.ts`）的导入路径 | 最低。叶子模块零依赖或单向依赖，改动只有路径 |
 | 1b 业务能力目录聚合 | 把 38 个业务文件按 3.2 的目录划分归类；同目录内的相对导入不变，跨目录的改写为新路径 | 中。跨能力符号复用（`FileLockError`、`SdkHostError`、`sessionErrorOf`、git 错误类）在目录边界改变后仍需可达 |
-| 1c 组合根拆分 | `index.ts` 拆为 `index.ts` / `app-lifecycle.ts` / `window.ts`，17 个 `register*Handlers` 与 44 个 `*Failure` 映射器、10 个广播函数迁入各能力目录 | 中。需逐函数确认它只依赖组合根传入的实例，而不依赖 `index.ts` 的其他局部状态 |
+| 1c 组合根拆分 | `index.ts` 拆为 `index.ts` / `app-lifecycle.ts` / `window.ts` / `window-channel.ts`，17 个 `register*Handlers` 与 40 个 `*Failure` 映射器、10 个广播函数迁入各能力目录 | 中。需逐函数确认它只依赖组合根传入的实例，而不依赖 `index.ts` 的其他局部状态 |
 
 1c 的已核实前提：17 个 `register*Handlers` 之间 **互不调用**，只由 `index.ts` 的 `whenReady` 按固定顺序调用；每个注册器需要的外部依赖是组合根集中实例化的服务对象与 `pageUrl` + `isTrustedCaller` 两个横切参数。因此可以按能力目录接收显式注入，不需要为它们新增全局单例或透传层。
 
@@ -291,18 +298,19 @@ src/renderer/src/
 - `electron.vite.config.ts`：主进程入口仍为 `src/main/index.ts`、产物仍为 `out/main/index.cjs`，**不需要改动**。
 - `docs/项目结构文档.md`、`docs/modules/*.md`：路径索引会大面积失效，需在同阶段同步。
 
-### 阶段 2：辅助入口与跨单元共享设施归位
+### 阶段 2：辅助入口与跨单元共享设施归位（已完成）
 
-- 目标：收拢四个一次性入口为 `src/entries/`；`projection`、`extensions/genui` 并入 `sdk-host`；`runtime-install/runtime.ts` 下沉为 `src/shared-process/runtime.ts`。`main/shared/` 下的三个设施留在原处，判据见 §3.5。
+- 目标：收拢四个一次性入口为 `src/entries/`；`projection`、`extensions/genui` 并入 `sdk-host`；`runtime-install/runtime.ts` 与 `main/shared/process-tree-termination.ts` 下沉为 `src/shared-process/`。`main/shared/` 下的 `pi-paths.ts` 与 `managed-entry-runner.ts` 留在原处，判据见 §3.5。
 - 涉及职责：跨单元引用、SDK 宿主内部组成、构建配置的 5 个 input 路径。
 - 前置依赖：阶段 1 完成（`shared-process` 的归位会影响主进程导入路径）。
-- 风险：中。需同步 `vite.sdk-host.config.ts` 与 `vite.auth-helper.config.ts` 的入口，但产物路径不变。
+- 风险：中。需同步 `vite.sdk-host.config.ts` 的四个 input 路径，但产物路径与产物名不变。
+- 实施结果：`src/projection/`、`src/extensions/genui/` 并入 `src/sdk-host/`；`runtime.ts` 与 `process-tree-termination.ts` 下沉为 `src/shared-process/`；四个一次性入口收拢为 `src/entries/`。实测 `shared-process` 只收到这两个文件——`pi-paths.ts` 与 `managed-entry-runner.ts` 的引用面全在 `src/main` 内，不满足判据，留在原处。
 
 ### 阶段 3：preload 按域拆分
 
 - 目标：`src/preload/index.ts` 拆为按域的多个源文件，`index.ts` 只做合并与暴露。
 - 涉及职责：16 个域 Api、约 100 条校验常量与工厂的域内归位。
-- 前置依赖：阶段 1（域划分与主进程能力目录保持同名，便于对照）。
+- 前置依赖：阶段 1–2（域划分与主进程能力目录保持同名，便于对照）。
 - 风险：中。沙箱与 `inlineDynamicImports` 约束需在实施前确认构建行为不变。
 
 ### 阶段 4：共享契约分域
@@ -328,7 +336,7 @@ src/renderer/src/
 ## 7. 推荐先实施阶段 1 的理由
 
 1. **边界最清晰**：主进程内部实测零循环，业务管理器之间近乎不互相依赖，依赖已下沉到 `pi-paths`、`desktop-config-store` 等叶子设施。迁移动机明确、判定标准唯一。
-2. **收益最集中**：`index.ts` 的 3 206 行是全项目最大的单文件混合职责，且承载 105 个 IPC 注册。拆分后主进程后续任何改动都不再落到同一文件。
+2. **收益最集中**：`index.ts` 的 3 206 行是全项目最大的单文件混合职责，且承载 102 个 IPC 注册。拆分后主进程后续任何改动都不再落到同一文件。
 3. **风险最低且可为后续定名**：产物路径与构建配置不变，只动源码与导入；同时主进程能力目录名会成为 preload 域划分与 shared 契约分域的命名基准，先做可避免后续反复改名。
 4. **不触碰用户未提交改动**：`src/main` 下当前无未提交修改，移动不会与用户改动混叠。
 

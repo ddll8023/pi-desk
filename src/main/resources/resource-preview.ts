@@ -10,7 +10,7 @@ import type { ChildProcess } from 'node:child_process'
 import { StringDecoder } from 'node:string_decoder'
 import type { PiResourcePreview, RuntimeErrorCode } from '../../shared/runtime-api'
 import { spawnPiCli } from '../shared/pi-cli-process'
-import { terminateProcessTree } from '../shared/process-tree-termination'
+import { terminateProcessTree } from '../../shared-process/process-tree-termination'
 import { toModelSummaries, toResources, toRuntimeInfo } from './pi-response-projection'
 
 const PREVIEW_TIMEOUT_MS = 15_000

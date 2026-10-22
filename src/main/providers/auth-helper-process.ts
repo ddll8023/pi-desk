@@ -13,7 +13,7 @@ import { existsSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
 import { getPiProcessEnvironment } from '../shared/pi-paths'
-import { terminateProcessTree } from '../shared/process-tree-termination'
+import { terminateProcessTree } from '../../shared-process/process-tree-termination'
 import { AUTH_HELPER_MAX_RECORD_CHARS, isAuthHelperFrame } from '../../auth-helper/protocol'
 import type { AuthHelperFrame, AuthHelperRequest } from '../../auth-helper/protocol'
 

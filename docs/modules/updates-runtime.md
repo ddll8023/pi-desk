@@ -29,7 +29,7 @@
 
 ## 公共与跨模块引用
 
-- [F-process](shared.md#f-process受管进程与-sdk-公共设施共享)：`managed-entry-runner.ts` 提供单飞、超时和输出边界；`pi-cli-process.ts` 只允许固定产物；`pi-paths.ts` 提供固定 agent 环境；`runtime-install/runtime.ts` 提供布局、指针及 SDK 加载公共实现。
+- [F-process](shared.md#f-process受管进程与-sdk-公共设施共享)：`managed-entry-runner.ts` 提供单飞、超时和输出边界；`pi-cli-process.ts` 只允许固定产物；`pi-paths.ts` 提供固定 agent 环境；`shared-process/runtime.ts` 提供布局、指针及 SDK 加载公共实现。
 - [F-assembly](shared.md#f-assembly进程与页面组装混合)：`registerUpdatesHandlers` 校验允许版本／已报告来源，广播进度和结论；`runStartupAutoUpdate` 消费启动检查与偏好。
 - [F-build](shared.md#f-build构建与发行上下文)：一次性入口与 SDK 宿主共用多入口 ESM 构建，但在运行时分别启动。
 - [项目](projects-trust.md)：扩展声明读取使用当前项目上下文；[偏好](preferences.md)：扩展自动更新开关。

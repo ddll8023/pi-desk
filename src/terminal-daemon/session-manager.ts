@@ -11,7 +11,7 @@ import {
   TERMINAL_DAEMON_PROTOCOL_VERSION, TERMINAL_RECOVERY_TIMEOUT_MS, TERMINAL_SNAPSHOT_CHUNK_CHARS
 } from '../shared/terminal-daemon-protocol'
 import type { TerminalDaemonStatusData, TerminalSnapshotHeader } from '../shared/terminal-daemon-protocol'
-import { terminateProcessTree } from '../main/shared/process-tree-termination'
+import { terminateProcessTree } from '../shared-process/process-tree-termination'
 import { HeadlessEmulator } from './headless-emulator'
 import type { HistoryStore, PersistedSessionRecord, PersistedScreen } from './history-store'
 
