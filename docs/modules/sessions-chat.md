@@ -14,13 +14,13 @@
 
 | 文件 | 用途 |
 | --- | --- |
-| `src/main/session-manager.ts` | 列表、打开、重载、删除与 SDK 目标授权编排 |
-| `src/main/session-store.ts` | 项目会话目录、受限列表窗口、文件定位与删除 |
-| `src/main/session-run-registry.ts` | 运行 ID、绑定代际、前台顺序及会话占用的唯一登记 |
-| `src/main/sdk-runtime-bridge.ts` | 多实例运行选择、请求分发、状态与宿主生命周期适配 |
-| `src/main/sdk-host-manager.ts` | utilityProcess 启动、协议请求、超时、身份和退出监督 |
-| `src/main/extension-ui-manager.ts` | 扩展 UI 投影、等待与回应管理 |
-| `src/main/prompt-input.ts` | Prompt 与图片附件边界处理 |
+| `src/main/sessions/session-manager.ts` | 列表、打开、重载、删除与 SDK 目标授权编排 |
+| `src/main/sessions/session-store.ts` | 项目会话目录、受限列表窗口、文件定位与删除 |
+| `src/main/sessions/session-run-registry.ts` | 运行 ID、绑定代际、前台顺序及会话占用的唯一登记 |
+| `src/main/sessions/sdk-runtime-bridge.ts` | 多实例运行选择、请求分发、状态与宿主生命周期适配 |
+| `src/main/sessions/sdk-host-manager.ts` | utilityProcess 启动、协议请求、超时、身份和退出监督 |
+| `src/main/sessions/extension-ui-manager.ts` | 扩展 UI 投影、等待与回应管理 |
+| `src/main/sessions/prompt-input.ts` | Prompt 与图片附件边界处理 |
 | `src/sdk-host/index.ts` | 宿主入口、初始化、授权回应与控制／生命周期分派 |
 | `src/sdk-host/protocol.ts` | 主进程和 SDK 宿主的版本化消息、请求与目标校验 |
 | `src/sdk-host/session-runtime.ts` | 官方 SDK 会话、运行请求、订阅、回退／压缩及内置扩展装配 |

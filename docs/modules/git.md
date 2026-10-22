@@ -12,12 +12,12 @@
 
 | 文件 | 用途 |
 | --- | --- |
-| `src/main/git-service.ts` | 仓库操作用例、路径折算、状态／差异／历史及写动作结果 |
-| `src/main/git-command.ts` | 固定命令参数、外部 git 执行、输出限制、超时与错误 |
-| `src/main/git-repository.ts` | 仓库根与上下文、仓库状态和项目路径边界 |
-| `src/main/git-status-parser.ts` | porcelain v2 增量状态解析 |
+| `src/main/git/git-service.ts` | 仓库操作用例、路径折算、状态／差异／历史及写动作结果 |
+| `src/main/git/git-command.ts` | 固定命令参数、外部 git 执行、输出限制、超时与错误 |
+| `src/main/git/git-repository.ts` | 仓库根与上下文、仓库状态和项目路径边界 |
+| `src/main/git/git-status-parser.ts` | porcelain v2 增量状态解析 |
 | `src/main/git-status-parser.test.ts` | 现有分块、重命名、冲突与路径解析用例 |
-| `src/main/git-history-parser.ts` | 提交历史及提交文件清单解析 |
+| `src/main/git/git-history-parser.ts` | 提交历史及提交文件清单解析 |
 | `src/main/git-history-parser.test.ts` | 现有历史字段、重命名和二进制记录用例 |
 | `src/shared/git-api.ts` | 状态、差异、历史、写操作请求及校验 |
 | `src/renderer/src/stores/git-status.ts` | 状态跟踪、差异、写动作及待信任重试 |

@@ -12,12 +12,12 @@
 
 | 文件 | 用途 |
 | --- | --- |
-| `src/main/auth-manager.ts` | 认证状态、登录流程、提示回应、取消、退出与受控授权地址 |
-| `src/main/auth-helper-process.ts` | 认证辅助进程启动、JSONL 通信与关闭 |
+| `src/main/providers/auth-manager.ts` | 认证状态、登录流程、提示回应、取消、退出与受控授权地址 |
+| `src/main/providers/auth-helper-process.ts` | 认证辅助进程启动、JSONL 通信与关闭 |
 | `src/auth-helper/index.ts` | 官方 ModelRuntime 认证适配、提示与敏感信息脱敏 |
 | `src/auth-helper/protocol.ts` | 辅助进程请求、响应和事件帧 |
-| `src/main/models-config-manager.ts` | 自定义供应商快照、脱敏、单条保存／删除与并发基线 |
-| `src/main/pi-settings-manager.ts` | Pi 默认模型读取与定点写入 |
+| `src/main/providers/models-config-manager.ts` | 自定义供应商快照、脱敏、单条保存／删除与并发基线 |
+| `src/main/providers/pi-settings-manager.ts` | Pi 默认模型读取与定点写入 |
 | `src/shared/auth-api.ts` | 页面认证状态、登录方法、提示、流程与错误契约 |
 | `src/shared/models-config-api.ts` | 自定义供应商请求、快照与校验 |
 | `src/shared/pi-settings-api.ts` | 默认模型读取／写入契约 |

@@ -30,7 +30,7 @@
 ## 公共与跨模块引用
 
 - [F-assembly](shared.md#f-assembly进程与页面组装混合)：`src/main/index.ts` 的 `createWindow`、资产协议、`restrictSession`、便携数据目录与退出链；`src/preload/index.ts` 的应用信息／外链接口；`src/renderer/src/App.vue` 的应用布局、弹层与 Store 生命周期。
-- [F-config](shared.md#f-configdesktop-配置混合)：`src/main/desktop-config-store.ts` 保存窗口状态。
+- [F-config](shared.md#f-configdesktop-配置混合)：`src/main/config/desktop-config-store.ts` 保存窗口状态。
 - [F-platform](shared.md#f-platform文件锁外链与基础错误共享)：`src/shared/desktop-api.ts` 定义应用信息和外链接口；受控外链不暴露任意系统协议。
 - [F-style](shared.md#f-style全局主题与业务样式混合)：`src/renderer/src/assets/main.css` 的布局、主题、标题栏与公共控件样式。
 - [偏好](preferences.md)：主题、面板宽度、折叠和页签值；主进程 `nativeTheme` 驱动页面亮暗色。

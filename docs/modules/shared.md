@@ -6,7 +6,12 @@
 
 | 文件 | 真实职责与模块使用范围 |
 | --- | --- |
-| `src/main/index.ts` | 应用启动、窗口与资产协议、依赖组装、固定 IPC 注册、事件投递、退出链；各业务模块分别引用自己的 `register*Handlers` 与回调 |
+| `src/main/index.ts` | 只有装配与启动顺序：准备协议与应用目录、取单实例锁、注册生命周期、窗口就绪后按固定顺序装配。不含业务逻辑 |
+| `src/main/app-lifecycle.ts` | 便携数据目录、登录 shell PATH、单实例锁、窗口全部关闭与退出链、启动时的扩展自动更新 |
+| `src/main/window.ts` | 唯一窗口的创建、主题与标题栏配色、导航与权限限制、向渲染进程投递事件与全部广播、单实例聚焦 |
+| `src/main/asset-protocol.ts` | 应用协议注册、页面地址解析、目录越界判定与生产 CSP |
+| `src/main/services.ts` | 主进程业务实例的唯一装配处（配置、项目、信任、会话、终端、供应商、资源、更新、生成式界面） |
+| `src/main/ipc/dispatch.ts` | IPC 注册包装、调用者校验、有界标识与 MCP 服务器名校验 |
 | `src/preload/index.ts` | 各域固定 channel 调用、声明字段载荷重建、响应与事件校验、订阅释放，最终只暴露 `window.desktop` |
 | `src/renderer/src/App.vue` | Store 生命周期、工作区面板、设置切换、项目／会话／文件／快捷命令确认弹层、生成式参数持久化初始化 |
 | `src/renderer/src/env.d.ts` | 将各域 Api 合成为可缺失的 `Window.desktop`；仅环境类型，不承担业务请求 |
@@ -24,7 +29,7 @@
 
 ## F-config：Desktop 配置（混合）
 
-唯一归属文件：`src/main/desktop-config-store.ts`。
+唯一归属文件：`src/main/config/desktop-config-store.ts`。
 
 | 使用者 | 涉及字段／入口 |
 | --- | --- |
@@ -35,7 +40,7 @@
 | 终端与快捷命令 | 全局与项目范围命令列表 |
 | 更新与生成式界面 | 扩展自动更新、生成式 UI 开关 |
 
-文件位于 `userData/desktop-config.json`。全部读写串行进行，保存前比对已加载的磁盘文件标识；读失败可进入只读降级，结构损坏走备份重建。其他服务通过同一个实例访问，不另行直接覆盖此文件。应用单实例锁在 `src/main/index.ts` 建立。
+文件位于 `userData/desktop-config.json`。全部读写串行进行，保存前比对已加载的磁盘文件标识；读失败可进入只读降级，结构损坏走备份重建。其他服务通过同一个实例访问，不另行直接覆盖此文件。应用单实例锁由 `src/main/app-lifecycle.ts` 的 `acquireSingleInstance` 建立。
 
 ## F-sidebar：项目会话树（混合）
 
@@ -50,21 +55,21 @@
 
 | 文件 | 共享职责 | 已知消费者 |
 | --- | --- | --- |
-| `src/main/managed-entry-runner.ts` | 一次性入口输出分帧、超时、退出判定、单飞执行槽 | 版本检查、扩展更新、运行时安装 |
-| `src/main/pi-cli-process.ts` | 固定产物定位与启动，只返回子进程句柄 | 资源预读、MCP 探测、版本与更新编排 |
-| `src/main/process-tree-termination.ts` | 跨平台进程树终止 | 受管入口、资源探测、认证及终端生命周期 |
-| `src/main/pi-paths.ts` | 固定 Pi agent 目录与受管环境；注入 SDK 入口 | 会话文件、配置、认证、SDK 宿主与辅助入口 |
-| `src/main/shell-path.ts` | 图形界面启动时补齐登录 shell 的 PATH | 应用启动与后续外部命令 |
+| `src/main/shared/managed-entry-runner.ts` | 一次性入口输出分帧、超时、退出判定、单飞执行槽 | 版本检查、扩展更新、运行时安装 |
+| `src/main/shared/pi-cli-process.ts` | 固定产物定位与启动，只返回子进程句柄 | 资源预读、MCP 探测、版本与更新编排 |
+| `src/main/shared/process-tree-termination.ts` | 跨平台进程树终止 | 受管入口、资源探测、认证及终端生命周期 |
+| `src/main/shared/pi-paths.ts` | 固定 Pi agent 目录与受管环境；注入 SDK 入口 | 会话文件、配置、认证、SDK 宿主与辅助入口 |
+| `src/main/shared/shell-path.ts` | 图形界面启动时补齐登录 shell 的 PATH | 应用启动与后续外部命令 |
 | `src/runtime-install/runtime.ts` | SDK 发布目录布局、当前版本指针、SDK 入口解析、动态加载及自带版本回退 | 主进程运行时解析、SDK 宿主、认证、CLI、版本检查、安装入口 |
 
-这些源码目前不全在 `shared/` 下；物理目录不改变它们被多个运行单元使用的事实。`runtime-install/runtime.ts` 与同目录的安装入口不是同一职责：前者本身不下载、不安装。
+以上文件现已归入 `src/main/shared/`；`runtime-install/runtime.ts` 仍属运行时布局，阶段 2 会下沉为跨单元的 `shared-process`。`runtime-install/runtime.ts` 与同目录的安装入口不是同一职责：前者本身不下载、不安装。
 
 ## F-platform：文件锁、外链与基础错误（共享）
 
 | 文件 | 职责与已知使用者 |
 | --- | --- |
-| `src/main/file-lock.ts` | Pi 配置写入的文件锁边界；供应商条目与默认模型管理使用 |
-| `src/main/external-url.ts` | 受控 http(s) 外链打开；主进程桌面外链接口及认证流程使用 |
+| `src/main/shared/file-lock.ts` | Pi 配置写入的文件锁边界；供应商条目与默认模型管理使用 |
+| `src/main/shared/external-url.ts` | 受控 http(s) 外链打开；主进程桌面外链接口及认证流程使用 |
 | `src/shared/desktop-api.ts` | 应用信息、外链请求及跨域基础错误；各域契约引用错误定义 |
 | `src/shared/dev-server.ts` | 从传入环境值解析开发端口；构建配置与主进程页面地址共用 |
 | `src/renderer/src/services/external-url.ts` | 页面文档链接打开的统一桥接封装；主进程执行协议与凭据检查 |

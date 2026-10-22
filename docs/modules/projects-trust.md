@@ -12,9 +12,9 @@
 
 | 文件 | 用途 |
 | --- | --- |
-| `src/main/project-manager.ts` | 项目列表、候选添加、切换、移除与 Runtime 协作 |
-| `src/main/project-path.ts` | 项目绝对路径规范化与显示名 |
-| `src/main/trust-manager.ts` | 受保护项目资源探测、信任状态与决定保存 |
+| `src/main/projects/project-manager.ts` | 项目列表、候选添加、切换、移除与 Runtime 协作 |
+| `src/main/shared/project-path.ts` | 项目绝对路径规范化与显示名 |
+| `src/main/trust/trust-manager.ts` | 受保护项目资源探测、信任状态与决定保存 |
 | `src/shared/project-api.ts` | 项目请求、列表、选择结果与运行时校验 |
 | `src/shared/trust-api.ts` | 信任资源、状态与决定契约 |
 | `src/renderer/src/stores/project.ts` | 项目展示副本、候选添加、串行选择及操作错误 |
@@ -29,8 +29,8 @@
 
 - [F-sidebar](shared.md#f-sidebar项目会话树混合)：`src/renderer/src/components/ProjectSidebar.vue`、`src/renderer/src/sidebar-tree.ts` 承载项目与会话混合视图。
 - [F-assembly](shared.md#f-assembly进程与页面组装混合)：`src/main/index.ts` 的 `registerProjectHandlers`、`registerTrustHandlers` 与已登记项目解析；App 处理候选添加和移除确认。
-- [F-config](shared.md#f-configdesktop-配置混合)：`src/main/desktop-config-store.ts` 是项目列表、当前项目、信任决定的唯一持久化入口。
-- [会话](sessions-chat.md)：`src/main/session-run-registry.ts`、`src/main/sdk-runtime-bridge.ts` 提供占用查询、前台选择与项目范围关闭。
+- [F-config](shared.md#f-configdesktop-配置混合)：`src/main/config/desktop-config-store.ts` 是项目列表、当前项目、信任决定的唯一持久化入口。
+- [会话](sessions-chat.md)：`src/main/sessions/session-run-registry.ts`、`src/main/sessions/sdk-runtime-bridge.ts` 提供占用查询、前台选择与项目范围关闭。
 - [终端](terminal-commands.md)：项目移除成功后，主进程使用原规范路径另行请求关闭该项目终端。
 - [Git](git.md)：Git 写动作经主进程的项目级信任拦截。
 

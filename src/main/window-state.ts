@@ -7,8 +7,8 @@
  */
 import { screen } from 'electron'
 import type { BrowserWindow, Display, Rectangle } from 'electron'
-import { DEFAULT_WINDOW_STATE } from './desktop-config-store'
-import type { DesktopConfigStore, WindowState as StoredWindowState } from './desktop-config-store'
+import { DEFAULT_WINDOW_STATE } from './config/desktop-config-store'
+import type { DesktopConfigStore, WindowState as StoredWindowState } from './config/desktop-config-store'
 
 /** 窗口尺寸下限；创建窗口时同样使用，避免恢复出比最小尺寸更小的窗口。 */
 export const MIN_WINDOW_WIDTH = 720

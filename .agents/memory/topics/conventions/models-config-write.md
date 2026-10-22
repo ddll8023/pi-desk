@@ -2,7 +2,7 @@
 
 ### models.json 由 ModelsConfigManager 独占写入
 
-约定：桌面端写 Pi 的 `<agent-dir>/models.json` 只走 `src/main/models-config-manager.ts` 的 `ModelsConfigManager`，一次只改 `providers` 下被编辑的那一个条目；写入前比对读盘时记录的文件标识，不一致就放弃本次保存；文件无法解析时拒绝写入；`apiKey` 与 `headers` 的值以哨兵文本在 IPC 上往返，真实密钥不进渲染端。
+约定：桌面端写 Pi 的 `<agent-dir>/models.json` 只走 `src/main/providers/models-config-manager.ts` 的 `ModelsConfigManager`，一次只改 `providers` 下被编辑的那一个条目；写入前比对读盘时记录的文件标识，不一致就放弃本次保存；文件无法解析时拒绝写入；`apiKey` 与 `headers` 的值以哨兵文本在 IPC 上往返，真实密钥不进渲染端。
 
 适用：新增任何写 models.json 的路径、扩展模型页的端点与模型区块，或判断「桌面端会不会改 Pi 配置」时。
 

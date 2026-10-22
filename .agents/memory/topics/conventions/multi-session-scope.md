@@ -14,7 +14,7 @@
 
 适用：新增或修改任何按会话、运行实例或项目寻址的接口、事件、状态、缓存键与标签相关交互时；判断某个「切走再切回」的行为是否算 bug 时。
 
-原因：标签把「同一窗口多会话」从隐式约定变成显式交互，容易顺手加出跨重启恢复、标签数量上限、标签钉住或豁免回收这类被明确排除的能力。前台实例仍然只有「跟随当前项目」这一套归属规则，标签不引入第二套：渲染端用既有打开链表达前台切换，不新增寻址通道。涉及文件：`src/renderer/src/stores/workspace-tabs.ts`、`src/renderer/src/components/WorkspaceTabBar.vue`、`src/renderer/src/stores/project-editor.ts`、`src/renderer/src/components/FileEditorView.vue`、`src/renderer/src/stores/terminal.ts`、`src/renderer/src/stores/session.ts`、`src/shared/session-run-api.ts`、`src/main/sdk-runtime-bridge.ts`。
+原因：标签把「同一窗口多会话」从隐式约定变成显式交互，容易顺手加出跨重启恢复、标签数量上限、标签钉住或豁免回收这类被明确排除的能力。前台实例仍然只有「跟随当前项目」这一套归属规则，标签不引入第二套：渲染端用既有打开链表达前台切换，不新增寻址通道。涉及文件：`src/renderer/src/stores/workspace-tabs.ts`、`src/renderer/src/components/WorkspaceTabBar.vue`、`src/renderer/src/stores/project-editor.ts`、`src/renderer/src/components/FileEditorView.vue`、`src/renderer/src/stores/terminal.ts`、`src/renderer/src/stores/session.ts`、`src/shared/session-run-api.ts`、`src/main/sessions/sdk-runtime-bridge.ts`。
 
 ### 进程隔离不等于文件隔离或安全沙箱
 
@@ -30,7 +30,7 @@
 
 适用：新增任何按会话或按运行实例寻址的接口、事件、状态或缓存键时。
 
-原因：这些是跨模块的硬约束，违反其中任一条都会让旧请求命中新对象，或在多实例下互相覆盖；机制细节以 `src/main/session-run-registry.ts`、`src/main/sdk-runtime-bridge.ts`、`src/main/sdk-host-manager.ts` 与渲染端 `src/renderer/src/stores/session-view.ts` 的注释为准。
+原因：这些是跨模块的硬约束，违反其中任一条都会让旧请求命中新对象，或在多实例下互相覆盖；机制细节以 `src/main/sessions/session-run-registry.ts`、`src/main/sessions/sdk-runtime-bridge.ts`、`src/main/sessions/sdk-host-manager.ts` 与渲染端 `src/renderer/src/stores/session-view.ts` 的注释为准。
 
 ### 前台实例跟随当前项目，项目与会话在侧栏同一棵树里
 
@@ -38,4 +38,4 @@
 
 适用：调整侧栏、项目切换、会话列表读取、运行状态展示，或新增任何按项目寻址的查询时。
 
-原因：曾出现「切到项目 B 后聊天区仍显示项目 A 的会话、发送也投给 A」以及侧栏把 A 的当前会话列在 B 下——两者都源于项目切换只写配置、前台归属与会话列表仍按旧项目解释。涉及文件：`src/main/project-manager.ts`、`src/main/session-run-registry.ts`、`src/main/sdk-runtime-bridge.ts`、`src/main/session-manager.ts`、`src/renderer/src/sidebar-tree.ts`、`src/renderer/src/stores/session.ts`。
+原因：曾出现「切到项目 B 后聊天区仍显示项目 A 的会话、发送也投给 A」以及侧栏把 A 的当前会话列在 B 下——两者都源于项目切换只写配置、前台归属与会话列表仍按旧项目解释。涉及文件：`src/main/projects/project-manager.ts`、`src/main/sessions/session-run-registry.ts`、`src/main/sessions/sdk-runtime-bridge.ts`、`src/main/sessions/session-manager.ts`、`src/renderer/src/sidebar-tree.ts`、`src/renderer/src/stores/session.ts`。

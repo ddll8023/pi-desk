@@ -48,7 +48,7 @@
 | `src/renderer/src/services/genui-params.ts` | 参数旁路存储桥接 |
 | `src/renderer/src/assets/genui.css` | 声明式界面的业务样式 |
 | `src/renderer/src/components/GenuiSettingsSection.vue` | 能力开关与本机参数清除入口 |
-| `src/main/genui-param-store.ts` | `genui-params.json` 的唯一读写、容错和限量存储 |
+| `src/main/genui/genui-param-store.ts` | `genui-params.json` 的唯一读写、容错和限量存储 |
 
 扩展工厂、集成位置及参数持久化已读；节点、工具与几何文件结合契约、组件和会话集成引用定位。源码中生成式界面是产品内置能力，不需要用户另行安装同名扩展。
 

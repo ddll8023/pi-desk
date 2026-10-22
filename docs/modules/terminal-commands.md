@@ -12,8 +12,8 @@
 
 | 文件 | 用途 |
 | --- | --- |
-| `src/main/terminal-manager.ts` | 已登记项目校验、守护进程请求适配、错误映射与画面分块 |
-| `src/main/terminal-daemon-client.ts` | 固定守护进程入口、连接／握手、请求、重连、版本与构建状态 |
+| `src/main/terminal/terminal-manager.ts` | 已登记项目校验、守护进程请求适配、错误映射与画面分块 |
+| `src/main/terminal/terminal-daemon-client.ts` | 固定守护进程入口、连接／握手、请求、重连、版本与构建状态 |
 | `src/terminal-daemon/index.ts` | 独立入口、端点所有权、服务与持久化组装、正常停止 |
 | `src/terminal-daemon/daemon-server.ts` | 本地连接认证、协议分帧、请求分发与事件投递 |
 | `src/terminal-daemon/endpoint.ts` | 版本化端点、token、pid、独占锁与数据路径 |

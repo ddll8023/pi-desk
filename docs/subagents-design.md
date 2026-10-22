@@ -33,12 +33,12 @@
 
 - 项目采用 Electron、Vue 3、TypeScript 和 Pinia，依据 `package.json`。
 - 会话执行由 SDK 宿主承担；内置扩展工厂、会话创建、订阅和失效处理集中在 `src/sdk-host/session-runtime.ts`。
-- 主进程在 `src/main/sdk-host-manager.ts` 监督 SDK 宿主，运行身份、绑定代际和会话占用由 `src/main/session-run-registry.ts` 统一登记。
+- 主进程在 `src/main/sessions/sdk-host-manager.ts` 监督 SDK 宿主，运行身份、绑定代际和会话占用由 `src/main/sessions/session-run-registry.ts` 统一登记。
 - 现有宿主与页面契约围绕会话运行实例建立，`src/sdk-host/protocol.ts` 和 `src/shared/runtime-api.ts` 尚未提供完整的父子任务归属与子任务展示契约。
 - `src/projection/tool-projection.ts` 将工具事件转换为有界展示条目；普通工具更新主要保留文本，不保留任意结构化结果详情。生成式 UI 载荷有单独识别逻辑，不能据此认为子代理详情已经能够透传。
 - `src/renderer/src/components/ChatMessageItem.vue` 逐项渲染思考块和工具调用；普通工具使用独立工具卡，生成式 UI 使用专用渲染分支。
 - `src/sdk-host/extension-ui-bridge.ts` 已有可取消的选择、确认、输入与编辑交互桥，但现有交互不自动具备子任务来源语义。
-- `src/main/trust-manager.ts` 明确只管理项目资源信任，不提供 OS 沙箱或工具权限限制。
+- `src/main/trust/trust-manager.ts` 明确只管理项目资源信任，不提供 OS 沙箱或工具权限限制。
 - `src/runtime-install/runtime.ts` 支持加载受管 SDK 运行时，因此实际 SDK 可能不同于编译期依赖；不能只根据依赖声明推断运行能力。
 - 项目记忆 `.agents/memory/topics/conventions/multi-session-scope.md` 明确：独立宿主只隔离进程与运行身份，同项目会话仍访问共享工作目录，不提供文件隔离、自动冲突解决或自动恢复全部运行任务。
 - 项目记忆 `.agents/memory/topics/conventions/projection-limits.md` 中的合并过程折叠描述，与当前 `ChatMessageItem.vue` 的逐项展示不一致。本设计以当前源码作为展示接入事实，不据旧描述决定交互，也不在本次修改项目记忆。
@@ -317,14 +317,14 @@ Project Trust 是项目资源加载的信任决定，不是逐任务写入授权
 
 ### 10.2 现有身份与生命周期缺少父子关系
 
-- **位置**：`src/main/session-run-registry.ts`、`src/main/sdk-host-manager.ts`、`src/sdk-host/protocol.ts`。
+- **位置**：`src/main/sessions/session-run-registry.ts`、`src/main/sessions/sdk-host-manager.ts`、`src/sdk-host/protocol.ts`。
 - **证据**：现有机制统一管理普通会话的运行身份、绑定和宿主，没有完整的子任务归属与父级取消关系。
 - **影响**：子任务自行启动会绕过桌面所有权，可能造成旧事件串线、父会话释放后仍执行或空闲判断失真。
 - **推荐处置**：沿用主进程身份权威，补齐父子登记、在途状态、取消、过期事件隔离和退出未确认状态的收敛。
 
 ### 10.3 项目信任不能替代子任务授权
 
-- **位置**：`src/main/trust-manager.ts`、`src/sdk-host/session-runtime.ts`、`src/sdk-host/extension-ui-bridge.ts`。
+- **位置**：`src/main/trust/trust-manager.ts`、`src/sdk-host/session-runtime.ts`、`src/sdk-host/extension-ui-bridge.ts`。
 - **证据**：Project Trust 明确不做工具权限限制；新子会话也不会自动获得父会话的完整安全装配和交互来源关联。
 - **影响**：可能将“信任项目”错误解释为允许子任务任意写入，或在必要安全钩子缺失时执行。
 - **推荐处置**：显式装配允许能力与必要安全资源，关联用户交互到原任务，未获授权或交互不可用时停止推进。

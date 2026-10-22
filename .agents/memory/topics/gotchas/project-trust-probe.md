@@ -4,7 +4,7 @@
 
 现象：把一个全新的空目录添加为项目，也会弹出「信任此项目？」。
 
-根因：`src/main/trust-manager.ts` 除探测 `<项目>/.pi/*` 外还探测祖先目录的 `.agents/skills`，而本机 home 下存在 `~/.agents/skills`，因此 home 之下每个目录都含受保护资源。
+根因：`src/main/trust/trust-manager.ts` 除探测 `<项目>/.pi/*` 外还探测祖先目录的 `.agents/skills`，而本机 home 下存在 `~/.agents/skills`，因此 home 之下每个目录都含受保护资源。
 
 处置：需要免信任决定的验证 fixture 放在 home 之外（例如临时目录）；恢复用户既有项目时，信任决定必须由用户做，不能代做。
 
