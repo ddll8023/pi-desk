@@ -306,12 +306,13 @@ src/renderer/src/
 - 风险：中。需同步 `vite.sdk-host.config.ts` 的四个 input 路径，但产物路径与产物名不变。
 - 实施结果：`src/projection/`、`src/extensions/genui/` 并入 `src/sdk-host/`；`runtime.ts` 与 `process-tree-termination.ts` 下沉为 `src/shared-process/`；四个一次性入口收拢为 `src/entries/`。实测 `shared-process` 只收到这两个文件——`pi-paths.ts` 与 `managed-entry-runner.ts` 的引用面全在 `src/main` 内，不满足判据，留在原处。
 
-### 阶段 3：preload 按域拆分
+### 阶段 3：preload 按域拆分（已完成）
 
 - 目标：`src/preload/index.ts` 拆为按域的多个源文件，`index.ts` 只做合并与暴露。
 - 涉及职责：16 个域 Api、约 100 条校验常量与工厂的域内归位。
 - 前置依赖：阶段 1–2（域划分与主进程能力目录保持同名，便于对照）。
 - 风险：中。沙箱与 `inlineDynamicImports` 约束需在实施前确认构建行为不变。
+- 实施结果：拆为 11 个域文件（`desktop`、`projects`、`sessions`、`runtime`、`terminal`、`git`、`preferences`、`providers`、`updates`、`trust`、`genui`），`index.ts` 由 1 566 行降为只做合并与暴露。115 个方法、53 个错误工厂、47 条错误文案、113 个 channel 与拆分前逐一对应。`runtime-api` 的 21 个方法作为一个域整体保留在 `runtime.ts`，其内部的方法归属留到阶段 4 拆契约时一并调整。
 
 ### 阶段 4：共享契约分域
 
