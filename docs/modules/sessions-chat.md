@@ -1,0 +1,107 @@
+# 会话与聊天
+
+模块 ID：`sessions-chat`。返回 [总览](../项目结构文档.md)。
+
+## 职责与入口
+
+负责按项目读取会话列表、打开／新建／重载／删除会话，监督 SDK 宿主、维护运行身份与占用，发送与中止、回退、压缩，投影聊天／工具／历史／活动与用量，以及 SDK 扩展对话框、通知和 widget。
+
+入口为侧栏及会话选择器、输入坞、聊天消息动作和资源重载。文件编辑器、终端、MCP 配置与供应商持久化属于其他模块；会话内 Agent 自己读写项目文件也不等于桌面文件编辑接口。
+
+## 专属文件
+
+### 主进程与宿主
+
+| 文件 | 用途 |
+| --- | --- |
+| `src/main/session-manager.ts` | 列表、打开、重载、删除与 SDK 目标授权编排 |
+| `src/main/session-store.ts` | 项目会话目录、受限列表窗口、文件定位与删除 |
+| `src/main/session-run-registry.ts` | 运行 ID、绑定代际、前台顺序及会话占用的唯一登记 |
+| `src/main/sdk-runtime-bridge.ts` | 多实例运行选择、请求分发、状态与宿主生命周期适配 |
+| `src/main/sdk-host-manager.ts` | utilityProcess 启动、协议请求、超时、身份和退出监督 |
+| `src/main/extension-ui-manager.ts` | 扩展 UI 投影、等待与回应管理 |
+| `src/main/prompt-input.ts` | Prompt 与图片附件边界处理 |
+| `src/sdk-host/index.ts` | 宿主入口、初始化、授权回应与控制／生命周期分派 |
+| `src/sdk-host/protocol.ts` | 主进程和 SDK 宿主的版本化消息、请求与目标校验 |
+| `src/sdk-host/session-runtime.ts` | 官方 SDK 会话、运行请求、订阅、回退／压缩及内置扩展装配 |
+| `src/sdk-host/extension-ui-bridge.ts` | SDK UI 回调到宿主消息的适配及取消 |
+
+### 会话投影与契约
+
+| 文件 | 用途 |
+| --- | --- |
+| `src/projection/message-projection.ts` | 有界消息／工具聚合、序号、批次与确认 |
+| `src/projection/tool-projection.ts` | 工具生命周期、参数／结果摘要与生成式界面载荷接入 |
+| `src/projection/history-projection.ts` | 当前分支按轮历史与原文续段 |
+| `src/projection/activity-projection.ts` | 从官方分支累计文件、技能、MCP、扩展工具及界面活动事实 |
+| `src/projection/identity.ts` | 用户消息规范化摘要身份；不替代官方回退条目 ID |
+| `src/projection/output-rate.ts` | 模型输出速率计算 |
+| `src/shared/session-api.ts` | 会话列表、打开、重载和删除的页面契约 |
+| `src/shared/session-run-api.ts` | 应用级运行清单、释放／结束与事件契约 |
+| `src/shared/extension-ui-api.ts` | 扩展对话、通知、widget 与回应形态 |
+| `src/shared/user-message-text.ts` | 用户消息里的技能块与图片标记处理，供摘要和展示共用 |
+
+### 前端状态与服务
+
+| 文件 | 用途 |
+| --- | --- |
+| `src/renderer/src/stores/session.ts` | 按项目的列表分片、串行打开／重载、删除与待确认目标 |
+| `src/renderer/src/stores/session-runs.ts` | 运行清单、副本状态、释放与结束 |
+| `src/renderer/src/stores/session-view.ts` | 按会话保存输入草稿、附件、阅读位置与展开状态 |
+| `src/renderer/src/stores/extension-ui.ts` | 运行目标的扩展对话、通知、widget 展示副本 |
+| `src/renderer/src/services/session.ts` | 会话请求桥接 |
+| `src/renderer/src/services/session-runs.ts` | 运行清单与生命周期桥接 |
+| `src/renderer/src/services/runtime.ts` | Runtime 状态、Prompt、回退、压缩、模型命令与投影桥接 |
+| `src/renderer/src/services/extension-ui.ts` | 扩展快照订阅与对话回应桥接 |
+| `src/renderer/src/chat-view.ts` | 将消息与工具投影组织为聊天展示模型 |
+| `src/renderer/src/clock.ts` | 聊天生成／工具计时与显示时钟 |
+| `src/renderer/src/usage-format.ts` | token、费用及用量展示格式 |
+| `src/renderer/src/tool-summary.ts` | 工具参数摘要展示 |
+| `src/renderer/src/extension-dialog-presentation.ts` | 扩展提示、选择及对话展示转换 |
+
+### 界面
+
+| 文件 | 用途 |
+| --- | --- |
+| `src/renderer/src/components/PromptComposer.vue` | 输入、附件、命令、补全与提交编排 |
+| `src/renderer/src/components/ChatMessageList.vue` | 消息列表、历史加载、滚动与布局观察 |
+| `src/renderer/src/components/ChatTurnItem.vue` | 按轮摘要、展开与原文内容 |
+| `src/renderer/src/components/ChatMessageItem.vue` | 单消息、思考与工具展示 |
+| `src/renderer/src/components/ChatOutline.vue` | 对话大纲与定位 |
+| `src/renderer/src/components/HistoryLoadSentinel.vue` | 历史加载触发哨兵 |
+| `src/renderer/src/components/ToolCard.vue` | 工具参数、结果与状态卡片 |
+| `src/renderer/src/components/UsageDetailDialog.vue` | 用量明细 |
+| `src/renderer/src/components/SessionActivityBar.vue` | 会话活动摘要和明细 |
+| `src/renderer/src/components/SessionPickerDialog.vue` | 会话选择弹层 |
+| `src/renderer/src/components/ExtensionDialog.vue` | SDK 扩展交互队列的当前对话 |
+| `src/renderer/src/components/ExtensionNotificationBar.vue` | 扩展通知展示 |
+
+核心打开链、Store、宿主入口及投影职责已由源码读取；投影辅助实现与界面文件结合导入、模板和接口调用映射，不将本表视作逐函数质量结论。
+
+## 公共与跨模块引用
+
+- [F-assembly](shared.md#f-assembly进程与页面组装混合)：会话／运行／Runtime／扩展 IPC 注册、广播、App 生命周期及确认弹层。
+- [F-runtime-state](shared.md#f-runtime-state综合-runtime-状态混合)：`src/renderer/src/stores/runtime.ts` 持有展示状态、分片和历史缓存；`src/shared/runtime-api.ts` 提供综合契约。
+- [F-sidebar](shared.md#f-sidebar项目会话树混合)：项目树中的会话与运行状态。
+- [F-process](shared.md#f-process受管进程与-sdk-公共设施共享)：SDK 定位、固定环境与进程终止。SDK 动态加载不代表宿主可自行选择任意授权目录。
+- [F-ui](shared.md#f-ui前端共享展示共享)、[F-style](shared.md#f-style全局主题与业务样式混合)：Markdown、数学、复制、浮层和聊天样式。
+- [项目与信任](projects-trust.md)：登记项目与目标授权；[工作区](workspace-tabs.md)：原标签绑定、选择与关闭；两者不拥有 SDK 分配权。
+- [供应商](providers-auth.md)：`RuntimeModelSelect.vue` 提供模型选择，持久默认模型不等于当前会话模型。
+- [文件](files-editor.md)：`project-file` Store 提供 `@` 文件候选；[资源](resources-mcp.md) 提供技能和命令补全；[偏好](preferences.md) 提供快捷输入。
+- [生成式界面](genui.md)：宿主注册内置扩展，工具投影识别其载荷，消息组件分发到专用渲染器。
+
+## 关键调用链
+
+1. 页面表达打开意图，`session` Store 先固定项目与标签并串行提交。
+2. 主进程校验登记项目与信任，注册表管理占用，Runtime 桥决定复用、切前台或建立宿主。
+3. 宿主请求会话目标准备，主进程按来源实例的归属项目复核目标，再返回绑定代际与目录；宿主不能自行编号授权。
+4. 输入坞经 Runtime 服务提交固定目标和附件；SDK 事件转换成消息、工具与活动投影，主进程广播到可信页面。
+5. 页面校验代际／序号并应用增量，缺基准时取快照；早期历史和超长正文使用宿主的当前分支查询，不接受任意文件路径。
+6. 回退基于官方条目身份建立新分支；压缩由 SDK 处理。成功请求和最终展示收敛不是同一个时点。
+7. 删除会话先按登记占用结束或释放实例，再删除受限会话文件并刷新列表。关闭标签保留历史，与删除不同。
+
+## 状态与边界
+
+运行注册表是运行身份、绑定代际和占用真源；SDK 持有会话及历史；renderer 保存展示副本、后台投影留底与有限历史缓存。会话列表按项目取有界窗口，不能当作完整运行清单。
+
+输入、附件和阅读状态只保留页面内；空闲回收后的会话可在发送时恢复，不意味着应用重启后恢复所有运行任务。应用退出关闭 SDK 宿主，终端常驻是另一条生命周期。独立宿主不隔离项目文件，多会话不承诺自动解决并行文件修改。

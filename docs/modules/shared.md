@@ -1,0 +1,129 @@
+# 公共记录
+
+本页唯一登记跨模块公共设施、混合职责文件及全局上下文。模块引用本页记录，不重新认领文件。源码路径以仓库根为基准。
+
+## F-assembly：进程与页面组装（混合）
+
+| 文件 | 真实职责与模块使用范围 |
+| --- | --- |
+| `src/main/index.ts` | 应用启动、窗口与资产协议、依赖组装、固定 IPC 注册、事件投递、退出链；各业务模块分别引用自己的 `register*Handlers` 与回调 |
+| `src/preload/index.ts` | 各域固定 channel 调用、声明字段载荷重建、响应与事件校验、订阅释放，最终只暴露 `window.desktop` |
+| `src/renderer/src/App.vue` | Store 生命周期、工作区面板、设置切换、项目／会话／文件／快捷命令确认弹层、生成式参数持久化初始化 |
+| `src/renderer/src/env.d.ts` | 将各域 Api 合成为可缺失的 `Window.desktop`；仅环境类型，不承担业务请求 |
+
+已知消费者覆盖总览列出的业务模块。IPC 参数与调用者校验、preload 验证和渲染服务异常转换是不同边界，不能因存在相似代码就省掉任一边界。单窗口事件只投递给受信任窗口。
+
+## F-runtime-state：综合 Runtime 状态（混合）
+
+| 文件 | 模块相关符号与范围 |
+| --- | --- |
+| `src/renderer/src/stores/runtime.ts` | 会话模块使用 `initialize`、`dispose`、`send`、`rewind`、`compact`、`stopOperation`、投影同步与历史读取；供应商模块使用能力列表、`switchModel`、默认模型、模型隐藏偏好；资源模块读取前台运行目标与预读阶段 |
+| `src/shared/runtime-api.ts` | 运行目标、状态与命令，消息／工具／历史／活动投影，模型能力，资源预读、诊断与 MCP 契约；被主进程、宿主、preload、多个前端模块共同引用 |
+
+请求目标的运行实例与绑定代际由主进程登记，不等同于标签键或可变的当前项目。后台投影留底是页面展示缓存，SDK 会话和历史文件仍是另一层生命周期。本文不把当前综合 Store 描述为已经拆分的独立模块。
+
+## F-config：Desktop 配置（混合）
+
+唯一归属文件：`src/main/desktop-config-store.ts`。
+
+| 使用者 | 涉及字段／入口 |
+| --- | --- |
+| 项目与信任 | 项目列表、当前项目、`projectTrust`、按项目清除快捷命令 |
+| 应用外壳 | 窗口位置、尺寸、最大化状态 |
+| 偏好 | 界面主题、侧栏、右侧面板、Markdown 默认视图、快捷输入 |
+| 供应商与认证 | 安装级设备标识、隐藏模型列表 |
+| 终端与快捷命令 | 全局与项目范围命令列表 |
+| 更新与生成式界面 | 扩展自动更新、生成式 UI 开关 |
+
+文件位于 `userData/desktop-config.json`。全部读写串行进行，保存前比对已加载的磁盘文件标识；读失败可进入只读降级，结构损坏走备份重建。其他服务通过同一个实例访问，不另行直接覆盖此文件。应用单实例锁在 `src/main/index.ts` 建立。
+
+## F-sidebar：项目会话树（混合）
+
+| 文件 | 范围与消费者 |
+| --- | --- |
+| `src/renderer/src/components/ProjectSidebar.vue` | 项目树、展开、会话与运行状态、项目／会话菜单；应用外壳接收移除和删除意图，会话及工作区模块接收打开意图 |
+| `src/renderer/src/sidebar-tree.ts` | 将项目、项目内会话列表、运行实例与读取状态转换为侧栏树数据 |
+
+项目节点不拥有会话文件；删除项目记录、删除会话和关闭标签是不同动作。此处同时服务项目与会话，不登记为纯通用树控件。
+
+## F-process：受管进程与 SDK 公共设施（共享）
+
+| 文件 | 共享职责 | 已知消费者 |
+| --- | --- | --- |
+| `src/main/managed-entry-runner.ts` | 一次性入口输出分帧、超时、退出判定、单飞执行槽 | 版本检查、扩展更新、运行时安装 |
+| `src/main/pi-cli-process.ts` | 固定产物定位与启动，只返回子进程句柄 | 资源预读、MCP 探测、版本与更新编排 |
+| `src/main/process-tree-termination.ts` | 跨平台进程树终止 | 受管入口、资源探测、认证及终端生命周期 |
+| `src/main/pi-paths.ts` | 固定 Pi agent 目录与受管环境；注入 SDK 入口 | 会话文件、配置、认证、SDK 宿主与辅助入口 |
+| `src/main/shell-path.ts` | 图形界面启动时补齐登录 shell 的 PATH | 应用启动与后续外部命令 |
+| `src/runtime-install/runtime.ts` | SDK 发布目录布局、当前版本指针、SDK 入口解析、动态加载及自带版本回退 | 主进程运行时解析、SDK 宿主、认证、CLI、版本检查、安装入口 |
+
+这些源码目前不全在 `shared/` 下；物理目录不改变它们被多个运行单元使用的事实。`runtime-install/runtime.ts` 与同目录的安装入口不是同一职责：前者本身不下载、不安装。
+
+## F-platform：文件锁、外链与基础错误（共享）
+
+| 文件 | 职责与已知使用者 |
+| --- | --- |
+| `src/main/file-lock.ts` | Pi 配置写入的文件锁边界；供应商条目与默认模型管理使用 |
+| `src/main/external-url.ts` | 受控 http(s) 外链打开；主进程桌面外链接口及认证流程使用 |
+| `src/shared/desktop-api.ts` | 应用信息、外链请求及跨域基础错误；各域契约引用错误定义 |
+| `src/shared/dev-server.ts` | 从传入环境值解析开发端口；构建配置与主进程页面地址共用 |
+| `src/renderer/src/services/external-url.ts` | 页面文档链接打开的统一桥接封装；主进程执行协议与凭据检查 |
+
+主进程业务结果、桥接通信失败、调用者权限拒绝是不同失败来源。声明类型不替代实际跨进程载荷校验。
+
+## F-ui：前端共享展示（共享）
+
+| 文件 | 职责与已知使用者 |
+| --- | --- |
+| `src/renderer/src/components/ui/AppButton.vue` | 原生按钮及统一视觉变体；业务组件共用 |
+| `src/renderer/src/components/ui/AppSelect.vue` | 自定义选择器；业务表单共用 |
+| `src/renderer/src/components/ConfirmDialog.vue` | 通用确认弹层；应用外壳、Git、供应商与快捷命令消费 |
+| `src/renderer/src/anchored-popup.ts` | 浮层定位与生命周期；标签、菜单、文件编辑、Git、侧栏与基础选择器消费 |
+| `src/renderer/src/clipboard.ts` | 复制文本与错误结果；聊天、文件、供应商、资源、终端、更新与生成式界面消费 |
+| `src/renderer/src/components/MarkdownContent.vue` | 安全 Markdown 展示、数学与代码／表格交互；聊天及工具正文消费 |
+| `src/renderer/src/markdown.ts` | 聊天 Markdown 解析与清洗，供 Markdown 展示组件使用 |
+| `src/renderer/src/markdown-shared.ts` | 代码、表格与 HTML 转义的共同渲染；聊天及文件 Markdown 消费 |
+| `src/renderer/src/markdown-math.ts` | 数学解析与 KaTeX 渲染；聊天、文件预览及富文本公式消费 |
+
+无状态转换并不因为处在根目录就成为共享；例如 `clock.ts` 目前服务聊天计时，归会话模块，`project-entry-drag.ts` 归文件模块并对终端提供协议。
+
+## F-style：全局主题与业务样式（混合）
+
+唯一归属文件：`src/renderer/src/assets/main.css`。
+
+包含 Tailwind 引入、KaTeX 本地样式、亮暗色与尺寸／动效令牌、基础语义样式，以及聊天输入、设置、侧栏、工作区、文件编辑、终端和 Git 的业务类。所有模块经页面入口加载；各模块只引用自己使用的类族，不重复认领此物理文件。
+
+`src/renderer/src/assets/genui.css` 由生成式界面模块维护，独立于本记录。全局主题与主进程窗口背景／覆盖层颜色存在同步关系，改动不只影响单个组件。
+
+## F-build：构建与发行上下文
+
+| 文件 | 输入／作用 |
+| --- | --- |
+| `package.json` | 应用入口、依赖、开发、构建、类型检查、既有测试及发行脚本 |
+| `package-lock.json` | npm 解析结果；与依赖声明共同确定安装内容 |
+| `tsconfig.json` | Node 与页面共享的严格类型选项 |
+| `tsconfig.node.json` | 主进程、preload、宿主、辅助入口、投影、共享契约与现有 TS 测试的检查范围 |
+| `tsconfig.web.json` | Vue 页面与共享契约的浏览器检查范围 |
+| `electron.vite.config.ts` | `src/main/index.ts` → `out/main/index.cjs`；`src/preload/index.ts` → `out/preload/index.cjs`；`src/renderer/index.html` → 页面产物 |
+| `vite.auth-helper.config.ts` | `src/auth-helper/index.ts` → `out/auth-helper/index.mjs` |
+| `vite.sdk-host.config.ts` | SDK 宿主、CLI、版本检查、扩展更新、运行时安装五入口 → `out/sdk-host/` 下各自 ESM 产物 |
+| `vite.terminal-daemon.config.ts` | `src/terminal-daemon/index.ts` → `out/terminal-daemon/index.cjs`；原生 PTY 与终端依赖保留外部引用 |
+| `electron-builder.yml` | 随包文件、图标、平台发行目标与输出目录；生产依赖随应用分发 |
+| `scripts/start-dev.cmd` | 对应平台的开发启动包装 |
+| `scripts/start-dev.sh` | 对应平台的开发启动包装 |
+| `scripts/package-win.cmd` | 对应平台的便携出包包装 |
+| `scripts/package-mac.sh` | 对应平台的便携出包包装 |
+| `scripts/package-portable.mjs` | 按主机平台／架构调用打包器，准备镜像默认值及 PTY 助手权限 |
+| `scripts/fix-node-pty-permissions.mjs` | 修正 PTY 预编译助手执行权限，供开发与发行准备使用 |
+| `build/icon.svg` | 应用图标源 |
+| `build/icon.ico` | 预生成的发行图标资源 |
+| `licenses/emojibase-MIT.txt` | 对应第三方许可声明 |
+| `licenses/mermaid-MIT.txt` | 对应第三方许可声明 |
+| `licenses/orca-MIT.txt` | 对应借鉴代码的许可声明 |
+| `.gitignore` | 排除依赖、编译输出、发行输出与平台元数据 |
+
+构建入口与业务模块不是一一对应；同一个 SDK 宿主构建配置输出多个独立运行入口。产物目录不能当源码归属记录，便携应用的 `data/` 更不能当构建缓存。
+
+## 关系覆盖边界
+
+消费者依据仓库 `src/` 的静态导入、IPC 注册、Store 调用、模板与构建入口建立。动态加载的 SDK 与第三方扩展内部调用不在消费者清单中；公共记录不声称穷尽应用外部使用者。源码只定位而未逐函数读取的辅助文件，由所属模块说明其职责边界，不据此推断行为正确性。
