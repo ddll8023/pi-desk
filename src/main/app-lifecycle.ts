@@ -30,7 +30,7 @@ import {
   broadcastRuntimeStatus,
   broadcastSessionRuns,
   broadcastUpdates,
-} from './window'
+} from './window-channel'
 import { getPageUrl, registerAssetProtocol, registerAssetScheme } from './asset-protocol'
 import { registerAppInfoHandler, registerOpenExternalUrlHandler } from './shell/ipc'
 import { registerProjectHandlers, registerProjectFileHandlers } from './projects/ipc'

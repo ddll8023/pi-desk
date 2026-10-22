@@ -4,7 +4,7 @@
 
 ## 职责与入口
 
-负责 Electron 窗口与原生标题栏集成、应用信息、Vue 挂载、设置页导航、右侧面板宿主，以及应用级启动与退出组装。入口为 `src/main/index.ts`、`src/renderer/src/main.ts` 和页面根组件。
+负责 Electron 窗口与原生标题栏集成、应用信息、Vue 挂载、设置页导航、右侧面板宿主，以及应用级启动与退出组装。主进程侧由 `src/main/window.ts` 承担窗口与标题栏实现、`src/main/window-channel.ts` 承担事件投递与广播、`src/main/app-lifecycle.ts` 承担启动与退出编排，`src/main/index.ts` 只做装配；页面侧入口为 `src/renderer/src/main.ts` 和页面根组件。
 
 不负责具体会话执行、文件读写、Git 命令或设置值的持久化。设置页只是各业务模块的导航容器，右侧面板只是文件树与 Git 视图的共同宿主。
 
@@ -29,7 +29,7 @@
 
 ## 公共与跨模块引用
 
-- [F-assembly](shared.md#f-assembly进程与页面组装混合)：`src/main/index.ts` 的 `createWindow`、资产协议、`restrictSession`、便携数据目录与退出链；`src/preload/index.ts` 的应用信息／外链接口；`src/renderer/src/App.vue` 的应用布局、弹层与 Store 生命周期。
+- [F-assembly](shared.md#f-assembly进程与页面组装混合)：`src/main/window.ts` 的 `createWindow` 与 `restrictSession`、`src/main/asset-protocol.ts` 的资产协议、`src/main/app-lifecycle.ts` 的便携数据目录与退出链；`src/preload/index.ts` 的应用信息／外链接口；`src/renderer/src/App.vue` 的应用布局、弹层与 Store 生命周期。
 - [F-config](shared.md#f-configdesktop-配置混合)：`src/main/config/desktop-config-store.ts` 保存窗口状态。
 - [F-platform](shared.md#f-platform文件锁外链与基础错误共享)：`src/shared/desktop-api.ts` 定义应用信息和外链接口；受控外链不暴露任意系统协议。
 - [F-style](shared.md#f-style全局主题与业务样式混合)：`src/renderer/src/assets/main.css` 的布局、主题、标题栏与公共控件样式。

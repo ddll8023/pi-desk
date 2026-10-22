@@ -1,4 +1,4 @@
-/** 主进程业务实例的唯一装配处：配置、项目、信任、会话、终端、供应商、资源、更新与生成式界面各一份，按依赖顺序建立并互相注入回调。本文件只做实例化，不注册 IPC、不创建窗口、不写业务判断。 */
+/** 主进程业务实例的唯一装配处：配置、项目、信任、会话、终端、供应商、资源、更新与生成式界面各一份，按依赖顺序建立并互相注入回调。本文件只做实例化，不注册 IPC、不写业务判断；其中系统目录选择与终端守护状态广播经 window.ts 提供，是本文件对窗口层的唯一依赖。 */
 
 import { app } from 'electron'
 import { PROJECT_DIRECTORY_CHANGED_EVENT } from '../shared/project-file-api'
@@ -27,7 +27,12 @@ import { PackageUpdater } from './updates/package-updater'
 import { PiAgentUpdater } from './updates/pi-agent-updater'
 import { getRuntimeRoot } from './updates/pi-runtime'
 import { WindowState } from './window-state'
-import { broadcastTerminalDaemonStatus, chooseDirectoryWithDialog, sendToRenderer } from './window'
+import {
+  broadcastTerminalDaemonStatus,
+  chooseDirectoryWithDialog,
+  registerTerminalStatusSource,
+  sendToRenderer,
+} from './window-channel'
 
 /** 会话运行注册表：应用级运行身份、绑定代际与会话占用的唯一登记处。 */
 export const sessionRuns = new SessionRunRegistry<SdkHostManager>()
@@ -137,6 +142,9 @@ export const terminals = new TerminalManager({
     void broadcastTerminalDaemonStatus()
   }
 })
+
+// 投递通道不持有终端实例：把状态取值来源注册给它，避免投递层反向依赖本装配文件。
+registerTerminalStatusSource(() => terminals.status())
 
 /**
  * 终端、文件内容与项目移除共用的项目解析：只认已登记项目，并回登记时的规范路径。

@@ -8,7 +8,8 @@
 | --- | --- |
 | `src/main/index.ts` | 只有装配与启动顺序：准备协议与应用目录、取单实例锁、注册生命周期、窗口就绪后按固定顺序装配。不含业务逻辑 |
 | `src/main/app-lifecycle.ts` | 便携数据目录、登录 shell PATH、单实例锁、窗口全部关闭与退出链、启动时的扩展自动更新 |
-| `src/main/window.ts` | 唯一窗口的创建、主题与标题栏配色、导航与权限限制、向渲染进程投递事件与全部广播、单实例聚焦 |
+| `src/main/window.ts` | 唯一窗口的创建、主题与标题栏配色、导航与权限限制、单实例聚焦 |
+| `src/main/window-channel.ts` | 窗口引用、向页面投递事件与全部业务广播、系统目录选择；不持有业务实例，终端状态来源由组合根注册 |
 | `src/main/asset-protocol.ts` | 应用协议注册、页面地址解析、目录越界判定与生产 CSP |
 | `src/main/services.ts` | 主进程业务实例的唯一装配处（配置、项目、信任、会话、终端、供应商、资源、更新、生成式界面） |
 | `src/main/ipc/dispatch.ts` | IPC 注册包装、调用者校验、有界标识与 MCP 服务器名校验 |
@@ -62,7 +63,7 @@
 | `src/main/shared/shell-path.ts` | 图形界面启动时补齐登录 shell 的 PATH | 应用启动与后续外部命令 |
 | `src/runtime-install/runtime.ts` | SDK 发布目录布局、当前版本指针、SDK 入口解析、动态加载及自带版本回退 | 主进程运行时解析、SDK 宿主、认证、CLI、版本检查、安装入口 |
 
-以上文件现已归入 `src/main/shared/`；`runtime-install/runtime.ts` 仍属运行时布局，阶段 2 会下沉为跨单元的 `shared-process`。`runtime-install/runtime.ts` 与同目录的安装入口不是同一职责：前者本身不下载、不安装。
+以上文件均位于 `src/main/shared/`。`src/runtime-install/runtime.ts` 与同目录的安装入口不是同一职责：前者本身不下载、不安装，只维护发布目录布局与当前版本指针。
 
 ## F-platform：文件锁、外链与基础错误（共享）
 

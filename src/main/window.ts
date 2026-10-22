@@ -1,4 +1,4 @@
-/** 唯一桌面窗口的所有权：窗口创建、原生主题与标题栏配色、导航与权限限制、向渲染进程投递事件、单实例聚焦与应用退出时的窗口状态收敛。窗口引用只在这里持有，业务实例由 services.ts 注入。 */
+/** 唯一桌面窗口的所有权：窗口创建、原生主题与标题栏配色、导航与权限限制、向渲染进程投递事件与单实例聚焦。窗口引用只在这里持有，业务实例由 services.ts 注入；退出时的落盘由 app-lifecycle.ts 驱动。 */
 
 import { resolve } from 'node:path'
 import { app, BrowserWindow, dialog, nativeTheme, session } from 'electron'
@@ -34,6 +34,10 @@ import {
   windowState,
 } from './services'
 import { APPLICATION_PAGE_URL } from './asset-protocol'
+import { mainWindow, setMainWindow } from './window-channel'
+
+/** 窗口引用由 window-channel 持有；此处再导出，使既有调用方无需改路径。 */
+export { mainWindow }
 
 /** 窗口背景色的浅色与暗色值；与 main.css 的 canvas 令牌保持一致，避免首帧闪烁。 */
 export const LIGHT_WINDOW_BACKGROUND = '#f4f6f8'
@@ -45,9 +49,6 @@ const LIGHT_WINDOW_SURFACE = '#ffffff'
 const DARK_WINDOW_SURFACE = '#1a222b'
 const LIGHT_WINDOW_INK = '#17252f'
 const DARK_WINDOW_INK = '#dce6ee'
-
-/** 唯一业务窗口的引用；全部推送与调用者校验都从这里取当前窗口。 */
-export let mainWindow: BrowserWindow | null = null
 
 /** 把界面偏好的主题取值应用到 Electron 原生主题；驱动页面内 `prefers-color-scheme` 媒体查询。 */
 export function applyNativeTheme(theme: UiTheme): void {
@@ -81,133 +82,7 @@ export function titleBarWindowOptions(): Pick<BrowserWindowConstructorOptions, '
   }
 }
 
-/** 打开系统目录选择器；绑定唯一业务窗口，用户取消返回 `null`。 */
-export async function chooseDirectoryWithDialog(defaultPath: string): Promise<string | null> {
-  const target = mainWindow
-  if (target === null || target.isDestroyed()) {
-    throw new Error('没有可用的桌面窗口。')
-  }
-
-  const result = await dialog.showOpenDialog(target, {
-    title: '选择项目目录',
-    buttonLabel: '选择此目录',
-    defaultPath,
-    properties: ['openDirectory']
-  })
-  if (result.canceled) return null
-
-  const selected = result.filePaths[0]
-  return typeof selected === 'string' && selected.trim() !== '' ? selected : null
-}
-
-/** 只发给当前唯一可信窗口；返回是否真的投递，未投递时调用方保留数据。 */
-export function sendToRenderer(channel: string, payload: unknown): boolean {
-  const target = mainWindow
-  if (target === null || target.isDestroyed()) return false
-  const contents = target.webContents
-  if (contents.isDestroyed()) return false
-  contents.send(channel, payload)
-  return true
-}
-
-/**
- * 守护进程连接变化时推一份最新状态给页面。
- * 重入保护：状态请求本身可能触发重连，重连又会回调到这里，不加保护会形成回环。
- */
-export let broadcastingTerminalDaemonStatus = false
-
-export async function broadcastTerminalDaemonStatus(): Promise<void> {
-  if (broadcastingTerminalDaemonStatus) return
-  broadcastingTerminalDaemonStatus = true
-  try {
-    const result = await terminals.status()
-    if (result.ok) sendToRenderer(TERMINAL_DAEMON_STATUS_EVENT, result.data)
-  } finally {
-    broadcastingTerminalDaemonStatus = false
-  }
-}
-
-/** 状态变化只发给当前唯一可信窗口，不广播到其他 webContents。 */
-export function broadcastRuntimeStatus(status: RuntimeStatus): void {
-  const target = mainWindow
-  if (target === null || target.isDestroyed()) return
-  const contents = target.webContents
-  if (contents.isDestroyed()) return
-  contents.send(RUNTIME_STATUS_EVENT, status)
-}
-
-/** 投影批次同样只发给当前唯一可信窗口，不广播到其他 webContents。 */
-export function broadcastRuntimeProjection(batch: ProjectionBatch): void {
-  const target = mainWindow
-  if (target === null || target.isDestroyed()) return
-  const contents = target.webContents
-  if (contents.isDestroyed()) return
-  contents.send(RUNTIME_PROJECTION_EVENT, batch)
-}
-
-/** Extension UI 快照同样只发给当前唯一可信窗口，不广播到其他 webContents。 */
-export function broadcastExtensionUi(snapshot: ExtensionUiSnapshot): void {
-  const target = mainWindow
-  if (target === null || target.isDestroyed()) return
-  const contents = target.webContents
-  if (contents.isDestroyed()) return
-  contents.send(EXTENSION_UI_EVENT, snapshot)
-}
-
-/** 运行实例状态列表只发给当前唯一可信窗口；列表只含粗粒度字段。 */
-export function broadcastSessionRuns(snapshot: SessionRunsSnapshot): void {
-  const target = mainWindow
-  if (target === null || target.isDestroyed()) return
-  const contents = target.webContents
-  if (contents.isDestroyed()) return
-  contents.send(SESSION_RUNS_EVENT, snapshot)
-}
-
-/** 登录流程快照同样只发给当前唯一可信窗口。 */
-export function broadcastAuthFlow(snapshot: AuthFlowSnapshot): void {
-  const target = mainWindow
-  if (target === null || target.isDestroyed()) return
-  const contents = target.webContents
-  if (contents.isDestroyed()) return
-  contents.send(AUTH_FLOW_EVENT, snapshot)
-}
-
-/** Pi 版本检查快照同样只发给当前唯一可信窗口；检查结论只含版本号与结论文本。 */
-export function broadcastUpdates(snapshot: UpdatesSnapshot): void {
-  const target = mainWindow
-  if (target === null || target.isDestroyed()) return
-  const contents = target.webContents
-  if (contents.isDestroyed()) return
-  contents.send(UPDATES_STATE_EVENT, snapshot)
-}
-
-/** 扩展更新进度同样只发给当前唯一可信窗口；进度只含来源、动作与展示文本。 */
-export function broadcastPackageUpdateProgress(progress: PackageUpdateProgress): void {
-  const target = mainWindow
-  if (target === null || target.isDestroyed()) return
-  const contents = target.webContents
-  if (contents.isDestroyed()) return
-  contents.send(UPDATES_UPDATE_PROGRESS_EVENT, progress)
-}
-
-/** 扩展更新结论同样只发给当前唯一可信窗口；自动执行的更新没有调用方在等结果，页面靠它收敛。 */
-export function broadcastPackageUpdateOutcome(outcome: PackageUpdateOutcome): void {
-  const target = mainWindow
-  if (target === null || target.isDestroyed()) return
-  const contents = target.webContents
-  if (contents.isDestroyed()) return
-  contents.send(UPDATES_UPDATE_OUTCOME_EVENT, outcome)
-}
-
-/** 内置 Pi agent 安装进度只发给当前唯一可信窗口；进度只含阶段、版本与展示文本。 */
-export function broadcastAgentInstallProgress(progress: AgentInstallProgress): void {
-  const target = mainWindow
-  if (target === null || target.isDestroyed()) return
-  const contents = target.webContents
-  if (contents.isDestroyed()) return
-  contents.send(UPDATES_INSTALL_AGENT_PROGRESS_EVENT, progress)
-}
-
+/** 应用级权限收紧：拒绝页面发起的一切权限请求，并阻止下载。 */
 export function restrictSession(): void {
   session.defaultSession.setPermissionCheckHandler(() => false)
   session.defaultSession.setPermissionRequestHandler((_contents, _permission, callback) => {
@@ -256,7 +131,7 @@ export async function createWindow(pageUrl: string): Promise<void> {
     }
   })
   if (restored.maximized) window.maximize()
-  mainWindow = window
+  setMainWindow(window)
   const contents = window.webContents
   const rememberWindowState = (): void => windowState.notifyChanged(window)
   contents.setWindowOpenHandler(() => ({ action: 'deny' }))
@@ -298,7 +173,7 @@ export async function createWindow(pageUrl: string): Promise<void> {
     // 目录监听只服务于这个窗口，窗口关掉就没有接收方了。
     projectDirectoryWatcher.dispose()
     windowState.dispose()
-    mainWindow = null
+    setMainWindow(null)
   })
   // 开发页面由 dev server 提供：HTML 带内容 ETag，只改响应头（如 CSP）时 ETag 不变，
   // Vite 会回 304 且不带自定义响应头，浏览器会沿用缓存里的旧头。每次启动先清一次缓存，

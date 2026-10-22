@@ -16,7 +16,7 @@
 | --- | --- |
 | `src/main/projects/project-directory.ts` | 按层列举目录、解析条目与文件管理器定位 |
 | `src/main/projects/project-directory-watcher.ts` | 已加载目录层的监听集合、变化合并与 overflow |
-| `src/main/project-directory-watcher.test.ts` | 现有目录归一、差异与批次调度用例 |
+| `src/main/projects/project-directory-watcher.test.ts` | 现有目录归一、差异与批次调度用例 |
 | `src/main/projects/project-entry-path.ts` | 相对条目路径规范化、真实路径与项目边界 |
 | `src/main/projects/project-file-index.ts` | 项目文件检索与 Markdown 文档候选 |
 | `src/main/projects/project-file-content.ts` | 内容分类、文本／图片读取、磁盘基线与原子保存 |
