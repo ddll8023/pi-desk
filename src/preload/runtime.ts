@@ -1,4 +1,4 @@
-/** Runtime、模型能力与资源与 MCP：preload 的 runtime 域，只经固定 channel 与主进程通信，载荷与响应在此重建与校验。 */
+/** Runtime、模型能力、资源与 MCP：preload 的 runtime 域，只经固定 channel 与主进程通信，载荷与响应在此重建与校验。 */
 
 import { ipcRenderer } from 'electron'
 import type { IpcRendererEvent } from 'electron'

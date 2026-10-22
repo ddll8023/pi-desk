@@ -109,7 +109,7 @@
 | `package.json` | 应用入口、依赖、开发、构建、类型检查、既有测试及发行脚本 |
 | `package-lock.json` | npm 解析结果；与依赖声明共同确定安装内容 |
 | `tsconfig.json` | Node 与页面共享的严格类型选项 |
-| `tsconfig.node.json` | 主进程、preload、宿主、辅助入口、投影、共享契约与现有 TS 测试的检查范围 |
+| `tsconfig.node.json` | 主进程、preload、宿主、终端守护进程、跨进程设施、一次性入口、共享契约与现有 TS 测试的检查范围 |
 | `tsconfig.web.json` | Vue 页面与共享契约的浏览器检查范围 |
 | `electron.vite.config.ts` | `src/main/index.ts` → `out/main/index.cjs`；`src/preload/index.ts` → `out/preload/index.cjs`；`src/renderer/index.html` → 页面产物 |
 | `vite.auth-helper.config.ts` | `src/auth-helper/index.ts` → `out/auth-helper/index.mjs` |
