@@ -16,7 +16,7 @@ import type { PendingImage } from '../stores/session-view'
 import { useWorkspaceTabsStore } from '../stores/workspace-tabs'
 import { parseDialogTitle } from '../extension-dialog-presentation'
 import { cacheHitRate, formatTokens } from '../usage-format'
-import AppButton from './ui/AppButton.vue'
+import AppButton from '../ui/AppButton.vue'
 import RuntimeModelSelect from './RuntimeModelSelect.vue'
 import UsageDetailDialog from './UsageDetailDialog.vue'
 

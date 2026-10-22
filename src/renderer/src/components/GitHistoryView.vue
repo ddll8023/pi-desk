@@ -13,7 +13,7 @@ import { storeToRefs } from 'pinia'
 import type { GitChangeStatus, GitCommitFile, GitCommitSummary } from '../../../shared/git-api'
 import { formatRelativeTime } from '../sidebar-tree'
 import { useGitHistoryStore } from '../stores/git-history'
-import AppButton from './ui/AppButton.vue'
+import AppButton from '../ui/AppButton.vue'
 import GitDiffView from './GitDiffView.vue'
 
 /** 改动类型到单字符标记：与改动列表保持同一套。 */

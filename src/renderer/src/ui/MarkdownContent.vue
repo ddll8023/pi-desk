@@ -1,9 +1,9 @@
 <!-- 消息、Thinking 与技能卡正文共用的安全 Markdown 展示，公式在清洗后由 KaTeX 就地渲染；复制代码或链接就地反馈，不导航、不调用桌面桥接。 -->
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { copyText } from '../clipboard'
-import { renderMarkdown } from '../markdown'
-import { renderMathInto } from '../markdown-math'
+import { copyText } from './clipboard'
+import { renderMarkdown } from './markdown'
+import { renderMathInto } from './markdown-math'
 
 const props = defineProps<{
   readonly text: string

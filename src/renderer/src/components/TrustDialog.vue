@@ -4,7 +4,7 @@ import { storeToRefs } from 'pinia'
 import { computed, onMounted, onUnmounted, useId } from 'vue'
 import { useTrustStore } from '../stores/trust'
 import type { TrustDecision, TrustResourceKind, TrustStatus } from '../../../shared/trust-api'
-import AppButton from './ui/AppButton.vue'
+import AppButton from '../ui/AppButton.vue'
 
 const props = defineProps<{
   /** 非空表示添加项目流程：决定仅返回给添加动作，成功切换时才持久化。 */

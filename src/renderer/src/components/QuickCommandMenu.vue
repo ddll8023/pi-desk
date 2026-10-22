@@ -11,8 +11,8 @@
 <script setup lang="ts">
 import { computed, nextTick } from 'vue'
 import type { QuickCommand, QuickCommandScope } from '../../../shared/quick-commands-api'
-import { useAnchoredPopup } from '../anchored-popup'
-import AppButton from './ui/AppButton.vue'
+import { useAnchoredPopup } from '../ui/anchored-popup'
+import AppButton from '../ui/AppButton.vue'
 
 const props = defineProps<{
   /** 当前可用的命令；组内顺序即展示顺序，调用方已按「项目命令在前、全局命令在后」排好，组顺序由作用域决定。 */

@@ -2,7 +2,7 @@
 <script setup lang="ts">
 import { computed, nextTick, ref } from 'vue'
 import type { Editor } from '@tiptap/core'
-import { useAnchoredPopup } from '../anchored-popup'
+import { useAnchoredPopup } from '../ui/anchored-popup'
 import type { RichCommandId } from '../file-rich-markdown-commands'
 const props = defineProps<{ editor: Editor | null; revision: number }>()
 const emit = defineEmits<{ command: [id: RichCommandId] }>()

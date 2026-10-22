@@ -7,7 +7,7 @@ import { storeToRefs } from 'pinia'
 import type { AuthFlowSnapshot } from '../../../shared/auth-api'
 import { useAuthStore } from '../stores/auth'
 import { useRuntimeStore } from '../stores/runtime'
-import AppButton from './ui/AppButton.vue'
+import AppButton from '../ui/AppButton.vue'
 
 defineProps<{
   /** Runtime 是否正在重新加载；用于禁用重载入口。 */

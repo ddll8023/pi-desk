@@ -14,8 +14,8 @@ import { MAX_QUICK_COMMANDS } from '../../../shared/quick-commands-api'
 import type { QuickCommand, QuickCommandScope } from '../../../shared/quick-commands-api'
 import { useProjectStore } from '../stores/project'
 import { useQuickCommandsStore } from '../stores/quick-commands'
-import AppButton from './ui/AppButton.vue'
-import ConfirmDialog from './ConfirmDialog.vue'
+import AppButton from '../ui/AppButton.vue'
+import ConfirmDialog from '../ui/ConfirmDialog.vue'
 import QuickCommandDialog from './QuickCommandDialog.vue'
 
 /** 展示用的一组命令：组头表达作用域，组内不再逐行重复范围。 */

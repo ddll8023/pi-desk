@@ -1,7 +1,7 @@
 <!-- 光标锚定的斜杠与文档补全列表：输入仍在文档里，支持方向键、Enter 和 Escape。 -->
 <script setup lang="ts">
 import { computed, nextTick, onMounted, watch } from 'vue'
-import { useAnchoredPopup } from '../anchored-popup'
+import { useAnchoredPopup } from '../ui/anchored-popup'
 import type { RichSuggestionItem } from '../file-rich-markdown-suggestions'
 const props = defineProps<{ items: readonly RichSuggestionItem[]; active: number; left: number; top: number; menuId: string; loading: boolean; message: string }>()
 const emit = defineEmits<{ choose: [item: RichSuggestionItem]; close: []; hover: [index: number] }>()

@@ -11,8 +11,8 @@ import { MAX_QUICK_COMMAND_LABEL_LENGTH, MAX_QUICK_COMMAND_TEXT_LENGTH } from '.
 import type { QuickCommand, QuickCommandScope } from '../../../shared/quick-commands-api'
 import { useProjectStore } from '../stores/project'
 import { useQuickCommandsStore } from '../stores/quick-commands'
-import AppButton from './ui/AppButton.vue'
-import AppSelect from './ui/AppSelect.vue'
+import AppButton from '../ui/AppButton.vue'
+import AppSelect from '../ui/AppSelect.vue'
 
 const props = defineProps<{
   /** 弹层由父级常驻挂载，`open` 控制进入/退出与焦点、快捷键生命周期。 */

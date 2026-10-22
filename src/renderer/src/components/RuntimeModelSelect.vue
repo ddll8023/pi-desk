@@ -5,8 +5,8 @@ import { storeToRefs } from 'pinia'
 import { useProjectStore } from '../stores/project'
 import { useRuntimeStore } from '../stores/runtime'
 import { useSessionStore } from '../stores/session'
-import AppButton from './ui/AppButton.vue'
-import AppSelect from './ui/AppSelect.vue'
+import AppButton from '../ui/AppButton.vue'
+import AppSelect from '../ui/AppSelect.vue'
 
 const runtimeStore = useRuntimeStore()
 const sessionStore = useSessionStore()

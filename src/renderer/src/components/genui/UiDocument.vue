@@ -10,13 +10,13 @@
 import { computed, onUnmounted, ref, useId, watch } from 'vue'
 import '../../assets/genui.css'
 import type { GenuiPayload } from '../../../../shared/genui-api'
-import { copyText } from '../../clipboard'
+import { copyText } from '../../ui/clipboard'
 import { genuiDocumentToMarkdown } from '../../genui/markdown'
 import { flushGenuiParamPersistence, genuiParamPersistence } from '../../genui/param-persistence'
 import { provideGenuiParams } from '../../genui/param-state'
 import { composeParamSubmitText, useParamSubmit } from '../../genui/param-submit'
 import GenuiNode from './GenuiNode.vue'
-import AppButton from '../ui/AppButton.vue'
+import AppButton from '../../ui/AppButton.vue'
 
 const props = defineProps<{
   readonly payload: GenuiPayload

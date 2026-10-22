@@ -6,7 +6,7 @@ import type { ExtensionDialogRequest, ExtensionDialogResponseInput } from '../..
 import { parseDialogTitle, parseOptionRows, parseSelectionTokens, toggleSelection } from '../extension-dialog-presentation'
 import type { DialogOption } from '../extension-dialog-presentation'
 import { useExtensionUiStore } from '../stores/extension-ui'
-import AppButton from './ui/AppButton.vue'
+import AppButton from '../ui/AppButton.vue'
 
 const extensionStore = useExtensionUiStore()
 const { respondState } = storeToRefs(extensionStore)

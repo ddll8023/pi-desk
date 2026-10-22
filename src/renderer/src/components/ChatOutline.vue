@@ -4,7 +4,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { AnimatePresence, Motion, MotionConfig, useReducedMotion, useSpring } from 'motion-v'
 import type { Options, VariantType } from 'motion-v'
-import AppButton from './ui/AppButton.vue'
+import AppButton from '../ui/AppButton.vue'
 
 interface OutlineEntry {
   readonly id: string

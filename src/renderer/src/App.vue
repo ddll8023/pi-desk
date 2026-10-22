@@ -25,7 +25,7 @@ import type { SessionSummary } from '../../shared/session-api'
 import type { TerminalSessionInfo } from '../../shared/terminal-api'
 import AppTitleBar from './components/AppTitleBar.vue'
 import ChatMessageList from './components/ChatMessageList.vue'
-import ConfirmDialog from './components/ConfirmDialog.vue'
+import ConfirmDialog from './ui/ConfirmDialog.vue'
 import ExtensionDialog from './components/ExtensionDialog.vue'
 import ExtensionNotificationBar from './components/ExtensionNotificationBar.vue'
 import FileEditorView from './components/FileEditorView.vue'
@@ -40,7 +40,7 @@ import TerminalView from './components/TerminalView.vue'
 import TrustDialog from './components/TrustDialog.vue'
 import UpdateNoticeDialog from './components/UpdateNoticeDialog.vue'
 import WorkspaceTabBar from './components/WorkspaceTabBar.vue'
-import AppButton from './components/ui/AppButton.vue'
+import AppButton from './ui/AppButton.vue'
 
 const desktopStore = useDesktopStore()
 const extensionStore = useExtensionUiStore()

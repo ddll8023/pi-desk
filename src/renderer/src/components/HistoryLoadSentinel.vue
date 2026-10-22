@@ -1,7 +1,7 @@
 <!-- 历史加载触发点：进入可见区域后按游标自动读取；正常时不占操作区，失败时才提供就地重试。 -->
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import AppButton from './ui/AppButton.vue'
+import AppButton from '../ui/AppButton.vue'
 
 const props = withDefaults(defineProps<{
   readonly cursor: string

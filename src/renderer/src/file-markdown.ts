@@ -3,8 +3,8 @@ import DOMPurify from 'dompurify'
 import { Marked } from 'marked'
 import type { Config } from 'dompurify'
 import type { Token, TokenizerAndRendererExtension, Tokens } from 'marked'
-import { createDisplayMathBlockExtension, createMathExtension } from './markdown-math'
-import { escapeHtml, renderCodeBlock, renderTable } from './markdown-shared'
+import { createDisplayMathBlockExtension, createMathExtension } from './ui/markdown-math'
+import { escapeHtml, renderCodeBlock, renderTable } from './ui/markdown-shared'
 
 const SANITIZE_CONFIG: Config = {
   ALLOWED_TAGS: ['p', 'br', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'strong', 'em', 'del', 'blockquote', 'ul', 'ol', 'li', 'hr', 'pre', 'code', 'table', 'thead', 'tbody', 'tr', 'th', 'td', 'div', 'span', 'button', 'input', 'details', 'summary'],

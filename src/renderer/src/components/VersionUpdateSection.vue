@@ -15,8 +15,8 @@ import { useDesktopStore } from '../stores/desktop'
 import { usePreferencesStore } from '../stores/preferences'
 import { useRuntimeStore } from '../stores/runtime'
 import { useUpdatesStore } from '../stores/updates'
-import { copyText } from '../clipboard'
-import AppButton from './ui/AppButton.vue'
+import { copyText } from '../ui/clipboard'
+import AppButton from '../ui/AppButton.vue'
 
 const updatesStore = useUpdatesStore()
 const desktopStore = useDesktopStore()

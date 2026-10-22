@@ -12,9 +12,9 @@ import type { McpServerRow } from '../stores/resource'
 import { useProjectStore } from '../stores/project'
 import { useResourceStore } from '../stores/resource'
 import { useSessionStore } from '../stores/session'
-import { copyText } from '../clipboard'
-import AppButton from './ui/AppButton.vue'
-import ConfirmDialog from './ConfirmDialog.vue'
+import { copyText } from '../ui/clipboard'
+import AppButton from '../ui/AppButton.vue'
+import ConfirmDialog from '../ui/ConfirmDialog.vue'
 
 const resourceStore = useResourceStore()
 const sessionStore = useSessionStore()

@@ -2,7 +2,7 @@
 import { Node } from '@tiptap/core'
 import { Image } from '@tiptap/extension-image'
 import { loadMarkdownImage } from './file-images'
-import { renderMathInto, tokenizeBlock, tokenizeInline } from './markdown-math'
+import { renderMathInto, tokenizeBlock, tokenizeInline } from './ui/markdown-math'
 
 export interface MathEditRequest { readonly position: number; readonly latex: string; readonly type: 'inlineMath' | 'blockMath' }
 export interface RichMediaContext {

@@ -4,7 +4,7 @@ import type { Editor } from '@tiptap/core'
 import { Details, DetailsContent, DetailsSummary } from '@tiptap/extension-details'
 import { TextSelection } from '@tiptap/pm/state'
 import type { RichMarkdownCodec } from './file-rich-markdown-codec'
-import { escapeHtml } from './markdown-shared'
+import { escapeHtml } from './ui/markdown-shared'
 
 /** 查找配对结束标签，跳过注释、围栏代码与行内代码中的伪标签。 */
 export function matchRichDetails(source: string): { raw: string; attributes: string; inner: string } | null {

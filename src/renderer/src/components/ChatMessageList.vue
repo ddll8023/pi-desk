@@ -14,8 +14,8 @@ import type { SessionReading } from '../stores/session-view'
 import ChatTurnItem from './ChatTurnItem.vue'
 import HistoryLoadSentinel from './HistoryLoadSentinel.vue'
 import ChatOutline from './ChatOutline.vue'
-import AppButton from './ui/AppButton.vue'
-import ConfirmDialog from './ConfirmDialog.vue'
+import AppButton from '../ui/AppButton.vue'
+import ConfirmDialog from '../ui/ConfirmDialog.vue'
 
 /** 距底部多少像素内仍视为"停在底部"，避免流式更新时与用户上滚互相争夺。 */
 const STICK_THRESHOLD_PX = 24

@@ -8,7 +8,7 @@
 <script setup lang="ts">
 import { computed, ref, useId, watch } from 'vue'
 import type { GenuiTableCell, GenuiTableNode, GenuiTableRow } from '../../../../shared/genui-api'
-import AppButton from '../ui/AppButton.vue'
+import AppButton from '../../ui/AppButton.vue'
 
 const props = defineProps<{
   readonly node: GenuiTableNode

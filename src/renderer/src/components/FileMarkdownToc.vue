@@ -11,7 +11,7 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
 import type { FileMarkdownTocEntry } from '../file-markdown'
-import AppButton from './ui/AppButton.vue'
+import AppButton from '../ui/AppButton.vue'
 
 const props = defineProps<{
   /** 文档标题清单，顺序与正文一致。 */

@@ -3,7 +3,7 @@
 import { computed, nextTick, onUnmounted, ref, useId, watch } from 'vue'
 import type { OutputRate, SessionUsage } from '../../../shared/runtime-api'
 import { cacheHitRate, formatCost, formatTokens } from '../usage-format'
-import AppButton from './ui/AppButton.vue'
+import AppButton from '../ui/AppButton.vue'
 
 const props = defineProps<{
   /** 常驻挂载，`open` 控制进入/退出与焦点、快捷键生命周期。 */

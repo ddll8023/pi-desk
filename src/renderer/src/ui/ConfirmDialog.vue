@@ -1,7 +1,7 @@
 <!-- 需要用户确认的操作对话框：运行中切换带 allowInterrupt 重试，信任决定重置由调用方执行对应动作，取消不做任何改动。 -->
 <script setup lang="ts">
 import { nextTick, onUnmounted, ref, useId, watch } from 'vue'
-import AppButton from './ui/AppButton.vue'
+import AppButton from './AppButton.vue'
 
 const props = withDefaults(defineProps<{
   /** 弹层由父级常驻挂载，`open` 控制进入/退出与焦点、快捷键生命周期。 */

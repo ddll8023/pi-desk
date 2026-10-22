@@ -81,7 +81,7 @@
 ## 公共与跨模块引用
 
 - [F-assembly](shared.md#f-assembly进程与页面组装混合)：`registerProjectFileHandlers` 校验调用者和固定请求；App 渲染文件面板并确认丢弃脏文件。
-- [F-ui](shared.md#f-ui前端共享展示共享)：公共按钮、浮层、复制，`markdown-shared.ts` 与 `markdown-math.ts` 的共同排版能力。
+- [F-ui](shared.md#f-ui前端共享展示共享)：公共按钮、浮层、复制，`ui/markdown-shared.ts` 与 `ui/markdown-math.ts` 的共同排版能力。
 - [F-style](shared.md#f-style全局主题与业务样式混合)：`main.css` 的文件编辑、Markdown、富文本和文件树样式。
 - [工作区](workspace-tabs.md)：打开／关闭文件标签和消费锚点请求；编辑状态归本模块，标签状态归工作区。
 - [项目](projects-trust.md)：普通树和检索跟随当前项目，文件内容与图片导入固定已登记的所属项目。

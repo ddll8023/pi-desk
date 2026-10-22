@@ -3,7 +3,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { ModelsConfigProvider } from '../../../shared/models-config-api'
-import AppButton from './ui/AppButton.vue'
+import AppButton from '../ui/AppButton.vue'
 
 const props = defineProps<{
   /** 当前供应商在 models.json 里的条目；null 表示它用的是 Pi 内置定义。 */

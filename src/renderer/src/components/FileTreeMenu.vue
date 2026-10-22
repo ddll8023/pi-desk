@@ -11,8 +11,8 @@
 <script setup lang="ts">
 import { computed, nextTick, ref } from 'vue'
 import type { ProjectDirectoryEntryKind } from '../../../shared/project-file-api'
-import { useAnchoredPopup } from '../anchored-popup'
-import { copyText } from '../clipboard'
+import { useAnchoredPopup } from '../ui/anchored-popup'
+import { copyText } from '../ui/clipboard'
 import { isMarkdownPath } from '../file-language'
 import { projectEntryInsertText } from '../project-entry-drag'
 import { resolveProjectEntryPath, revealProjectEntry } from '../services/project-file'
@@ -21,7 +21,7 @@ import { usePreferencesStore } from '../stores/preferences'
 import type { FileEditorMode } from '../stores/project-editor'
 import { useTerminalStore } from '../stores/terminal'
 import { useWorkspaceTabsStore } from '../stores/workspace-tabs'
-import AppButton from './ui/AppButton.vue'
+import AppButton from '../ui/AppButton.vue'
 
 /** 菜单指向的条目；只保留展示与动作需要的最小信息。 */
 interface FileTreeMenuTarget {

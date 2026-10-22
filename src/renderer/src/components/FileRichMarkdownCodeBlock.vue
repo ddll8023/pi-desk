@@ -2,8 +2,8 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue'
 import { NodeViewContent, NodeViewWrapper, nodeViewProps } from '@tiptap/vue-3'
-import AppSelect from './ui/AppSelect.vue'
-import { copyText } from '../clipboard'
+import AppSelect from '../ui/AppSelect.vue'
+import { copyText } from '../ui/clipboard'
 import { renderRichDiagram } from '../file-rich-markdown-diagram'
 const props = defineProps(nodeViewProps)
 const languageId = useId()

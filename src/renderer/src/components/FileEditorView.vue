@@ -8,14 +8,14 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { PROJECT_FILE_EDIT_MAX_BYTES } from '../../../shared/project-file-api'
 import type { ProjectFileTextContent } from '../../../shared/project-file-api'
-import { useAnchoredPopup } from '../anchored-popup'
-import { copyText } from '../clipboard'
+import { useAnchoredPopup } from '../ui/anchored-popup'
+import { copyText } from '../ui/clipboard'
 import { canPreviewFileMarkdown } from '../file-markdown'
 import type { FileEditorMode } from '../stores/project-editor'
 import { PREVIEW_FONT_SIZES, useProjectEditorStore } from '../stores/project-editor'
-import AppButton from './ui/AppButton.vue'
+import AppButton from '../ui/AppButton.vue'
 import CodeMirrorEditor from './CodeMirrorEditor.vue'
-import ConfirmDialog from './ConfirmDialog.vue'
+import ConfirmDialog from '../ui/ConfirmDialog.vue'
 import FileMarkdownView from './FileMarkdownView.vue'
 
 const props = defineProps<{

@@ -5,7 +5,7 @@
 import { computed, nextTick, onUnmounted, ref, useId, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useModelsConfigStore } from '../stores/models-config'
-import AppButton from './ui/AppButton.vue'
+import AppButton from '../ui/AppButton.vue'
 import ProviderDefinitionSection from './ProviderDefinitionSection.vue'
 
 const props = defineProps<{

@@ -7,7 +7,7 @@ import { useDesktopStore } from '../stores/desktop'
 import { useProjectStore } from '../stores/project'
 import { useRuntimeStore } from '../stores/runtime'
 import { useSessionStore } from '../stores/session'
-import AppButton from './ui/AppButton.vue'
+import AppButton from '../ui/AppButton.vue'
 
 defineProps<{
   readonly sidebarCollapsed: boolean

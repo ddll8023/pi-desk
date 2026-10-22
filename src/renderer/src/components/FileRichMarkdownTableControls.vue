@@ -3,7 +3,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { Editor } from '@tiptap/core'
 import type { Transaction } from '@tiptap/pm/state'
-import { useAnchoredPopup } from '../anchored-popup'
+import { useAnchoredPopup } from '../ui/anchored-popup'
 import { canRunTableAction, richTableActions, runTableAction, tableCellPosition } from '../file-rich-markdown-table'
 import type { RichTableAction } from '../file-rich-markdown-table'
 const props = defineProps<{ editor: Editor; active: boolean }>()

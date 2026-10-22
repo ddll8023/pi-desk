@@ -9,8 +9,8 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useTerminalStore } from '../stores/terminal'
-import AppButton from './ui/AppButton.vue'
-import ConfirmDialog from './ConfirmDialog.vue'
+import AppButton from '../ui/AppButton.vue'
+import ConfirmDialog from '../ui/ConfirmDialog.vue'
 
 const terminalStore = useTerminalStore()
 const { daemonStatus, error } = storeToRefs(terminalStore)

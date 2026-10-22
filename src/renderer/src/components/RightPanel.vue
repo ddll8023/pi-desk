@@ -17,7 +17,7 @@ import { MAX_RIGHT_PANEL_WIDTH, MIN_RIGHT_PANEL_WIDTH } from '../../../shared/pr
 import { usePreferencesStore } from '../stores/preferences'
 import { useProjectDirectoryStore } from '../stores/project-directory'
 import { useProjectStore } from '../stores/project'
-import AppButton from './ui/AppButton.vue'
+import AppButton from '../ui/AppButton.vue'
 import FileTreeView from './FileTreeView.vue'
 import GitPanel from './GitPanel.vue'
 import RightPanelTabs from './RightPanelTabs.vue'

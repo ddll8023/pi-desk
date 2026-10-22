@@ -14,9 +14,9 @@
 import type { ComponentPublicInstance } from 'vue'
 import { computed, nextTick, ref, watch } from 'vue'
 import type { QuickCommand, QuickCommandScope } from '../../../shared/quick-commands-api'
-import { useAnchoredPopup } from '../anchored-popup'
+import { useAnchoredPopup } from '../ui/anchored-popup'
 import type { WorkspaceTabKind, WorkspaceTabView } from '../stores/workspace-tabs'
-import AppButton from './ui/AppButton.vue'
+import AppButton from '../ui/AppButton.vue'
 import QuickCommandMenu from './QuickCommandMenu.vue'
 
 const props = defineProps<{

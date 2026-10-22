@@ -19,7 +19,7 @@ import { storeToRefs } from 'pinia'
 import { LayoutGroup, Motion, useReducedMotion } from 'motion-v'
 import type { Options } from 'motion-v'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { useAnchoredPopup } from '../anchored-popup'
+import { useAnchoredPopup } from '../ui/anchored-popup'
 import { SESSION_RUN_LABELS, buildSidebarTree } from '../sidebar-tree'
 import type { SidebarProjectNode, SidebarSessionRow } from '../sidebar-tree'
 import { MAX_SESSION_WINDOW } from '../../../shared/session-api'
@@ -32,7 +32,7 @@ import { useWorkspaceTabsStore } from '../stores/workspace-tabs'
 import type { SessionRunBadge } from '../stores/session-runs'
 import type { Project } from '../../../shared/project-api'
 import type { SessionSummary } from '../../../shared/session-api'
-import AppButton from './ui/AppButton.vue'
+import AppButton from '../ui/AppButton.vue'
 
 const props = defineProps<{
   readonly sidebarCollapsed: boolean

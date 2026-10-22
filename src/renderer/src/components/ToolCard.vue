@@ -13,7 +13,7 @@ import type { ChatToolBlock } from '../chat-view'
 import { historyChunkKey } from '../stores/runtime'
 import type { HistoryChunkLoadState } from '../stores/runtime'
 import HistoryLoadSentinel from './HistoryLoadSentinel.vue'
-import { copyText } from '../clipboard'
+import { copyText } from '../ui/clipboard'
 import { formatDuration, useTickingNow } from '../clock'
 import {
   RESULT_PREVIEW_CHARS,
@@ -24,7 +24,7 @@ import {
   summarizeResultText,
   toolCallPreview
 } from '../tool-summary'
-import AppButton from './ui/AppButton.vue'
+import AppButton from '../ui/AppButton.vue'
 
 const props = defineProps<{
   readonly block: ChatToolBlock

@@ -6,7 +6,7 @@ import { computed, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { MAX_QUICK_SEND_MESSAGES, MAX_QUICK_SEND_MESSAGE_LENGTH } from '../../../shared/preferences-api'
 import { usePreferencesStore } from '../stores/preferences'
-import AppButton from './ui/AppButton.vue'
+import AppButton from '../ui/AppButton.vue'
 
 const preferencesStore = usePreferencesStore()
 const { quickSendMessages, quickSendView, ready } = storeToRefs(preferencesStore)

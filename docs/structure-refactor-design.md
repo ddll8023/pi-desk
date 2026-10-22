@@ -59,7 +59,7 @@
 
 - `src/main/index.ts`：102 个 `handle()` IPC 注册、40 个 `*Failure` 错误映射函数（全仓共 49 个此类函数，其余 9 个定义在非 `ipc.ts` 文件里）、10 个广播函数，以及窗口创建、资产协议、便携数据目录、单实例锁、退出链、启动自动更新，还集中实例化全部业务服务。
 - `src/preload/index.ts`：114 处 `ipcRenderer` 调用、约 100 条 `INVALID_*` 常量与 `invalid*Response` 工厂，16 个域的 Api 合并后一次性 `exposeInMainWorld('desktop')`。
-- `src/renderer/src/App.vue`：17 个 Store 引用、Store 初始化与 `dispose` 顺序编排、5 个 `ConfirmDialog` 与 4 个业务弹层、布局与响应式处理，以及项目/会话/文件/快捷命令的确认意图。
+- `src/renderer/src/App.vue`：16 个 Store 引用、Store 初始化与 `dispose` 顺序编排、5 个 `ConfirmDialog` 与 5 个业务弹层、布局与响应式处理，以及项目/会话/文件/快捷命令的确认意图。
 - `src/renderer/src/stores/runtime.ts`：1 412 行，同时持有会话运行状态、投影应用与历史缓存、模型能力与切换、Pi 默认模型、隐藏模型偏好与写回、资源预读。其中模型相关部分只被 4 个组件消费（`ModelSettingsView`、`ProviderListItem`、`ProviderVisibilitySection`、`RuntimeModelSelect`），边界已可切。
 - 顶层目录语义混杂：`src/projection/` 与 `src/extensions/genui/` 是“假顶层能力目录”，实际是 SDK 宿主的内部组成；`src/runtime-install/` 把一次性安装入口与被 5 个运行单元引用的 `runtime.ts` 混在同一目录。
 
@@ -322,12 +322,17 @@ src/renderer/src/
 - 风险：高（引用面最广）。建议按域逐个提交，不一次性替换全部导入路径。
 - 实施结果：只拆了过载的两个文件，未把 19 个单文件契约移入子目录。`runtime-api.ts` 拆为 `status`、`projection`、`models`、`resources` 四文件（129 个导出），`genui-api.ts` 拆为 `limits`、`nodes`、`params`、`diagram`、`chart`、`parse` 六文件（122 个导出）。两个原文件改为只再导出，既有 66 处导入路径不变。可跨组的非导出辅助（如 `isRecord`、`RUNTIME_ERROR_CODES`）落在各组内，被两组以上共用的才提升为导出。
 
-### 阶段 5：前端能力切片
+### 阶段 5：前端能力切片（进行中）
 
 - 目标：`src/renderer/src/` 按能力垂直切片；拆分 `App.vue` 与 `stores/runtime.ts`；收敛 `session ↔ workspace-tabs` 的编排方向。
-- 涉及职责：165 个前端文件、22 个 Store、19 个服务、60 个组件。
+- 涉及职责：162 个前端文件、22 个 Store、19 个服务、58 个组件。
 - 前置依赖：阶段 4（契约分域后切片引用的契约路径才稳定）。
 - 风险：中高。逐个能力切片，每次只动一个能力目录。
+- 批次划分（按风险从低到高，各自单独提交清单）：
+  - A0 共享展示层归位：把被多能力复用的展示代码收进 `ui/`，纯路径搬迁，不改行为。**已完成**：9 个文件移入 `src/renderer/src/ui/`，56 个文件改写 88 处导入。
+  - A1 拆分 `stores/runtime.ts`：按会话运行与投影、历史缓存、模型能力与切换、模型展示偏好、资源预读切开。
+  - A2 拆分 `App.vue`：组合根、布局骨架、启动编排、弹层宿主分离。
+  - A3 收敛 `session ↔ workspace-tabs` 的打开编排方向，这是本阶段唯一有行为风险的项。
 
 ### 阶段 6：文档与记忆同步
 
@@ -357,4 +362,4 @@ src/renderer/src/
 
 ## 9. 待确认事项
 
-推荐按 3.2 的目标目录与阶段 1 的 1a → 1b → 1c 顺序推进，先实施 1a。确认后进入 1a 的逐文件执行清单编制（准确路径、操作类型、import 改写、`package.json` 测试脚本与文档同步项），另获确认后实施。若希望对全程一次性确认，需明确告知，否则默认逐子阶段单独提交清单。
+阶段 1–4 已完成，阶段 5 进行中、已完成 A0。下一步是 A1（拆分 `stores/runtime.ts`）：先做只读调查确认四个切片的边界与跨切片调用，再提交逐文件执行清单，另获确认后实施。各批次默认单独提交清单，不一次性确认全程。

@@ -13,7 +13,7 @@ import { computed } from 'vue'
 import type { DesktopError } from '../../../shared/desktop-api'
 import type { GitTextDiff } from '../../../shared/git-api'
 import { buildDiffRows } from '../git-diff'
-import AppButton from './ui/AppButton.vue'
+import AppButton from '../ui/AppButton.vue'
 
 const props = withDefaults(defineProps<{
   readonly path: string

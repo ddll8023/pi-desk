@@ -4,7 +4,7 @@
 <script setup lang="ts">
 import type { AuthMethod, AuthProviderStatus } from '../../../shared/auth-api'
 import { useAuthStore } from '../stores/auth'
-import AppButton from './ui/AppButton.vue'
+import AppButton from '../ui/AppButton.vue'
 
 const props = defineProps<{
   /** 要展示的 Provider 状态；不含凭据内容。 */

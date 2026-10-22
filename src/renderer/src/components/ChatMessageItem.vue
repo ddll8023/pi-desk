@@ -4,7 +4,7 @@
      被取代的旧版界面折叠成一行：整行点击跳转到新版（由消息列表定位），右侧小按钮展开查看旧版。 -->
 <script setup lang="ts">
 import { computed, onUnmounted, reactive, ref, useId, watch } from 'vue'
-import { copyText } from '../clipboard'
+import { copyText } from '../ui/clipboard'
 import { userMessagePayload } from '../chat-view'
 import type { ChatBlock, ChatMessageView } from '../chat-view'
 import type { HistoryChunk } from '../../../shared/runtime-api'
@@ -13,11 +13,11 @@ import type { HistoryChunkLoadState } from '../stores/runtime'
 import HistoryLoadSentinel from './HistoryLoadSentinel.vue'
 import { formatDuration, useTickingNow } from '../clock'
 import { cacheHitRate, formatTokens } from '../usage-format'
-import MarkdownContent from './MarkdownContent.vue'
+import MarkdownContent from '../ui/MarkdownContent.vue'
 import ToolCard from './ToolCard.vue'
 import GenuiMountGate from './genui/GenuiMountGate.vue'
 import UiDocument from './genui/UiDocument.vue'
-import AppButton from './ui/AppButton.vue'
+import AppButton from '../ui/AppButton.vue'
 
 const props = defineProps<{
   readonly message: ChatMessageView

@@ -8,8 +8,8 @@ import { computed, ref } from 'vue'
 import { storeToRefs } from 'pinia'
 import { MODELS_CONFIG_SECRET_SENTINEL } from '../../../shared/models-config-api'
 import { useModelsConfigStore } from '../stores/models-config'
-import AppButton from './ui/AppButton.vue'
-import AppSelect from './ui/AppSelect.vue'
+import AppButton from '../ui/AppButton.vue'
+import AppSelect from '../ui/AppSelect.vue'
 
 const props = defineProps<{
   /** 新建还是编辑既有条目；编辑时供应商 ID 被锁定。 */

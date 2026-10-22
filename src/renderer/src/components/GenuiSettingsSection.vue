@@ -12,7 +12,7 @@ import { storeToRefs } from 'pinia'
 import { clearGenuiParamsEverywhere, genuiParamPersistence } from '../genui/param-persistence'
 import { usePreferencesStore } from '../stores/preferences'
 import { useSessionStore } from '../stores/session'
-import AppButton from './ui/AppButton.vue'
+import AppButton from '../ui/AppButton.vue'
 
 const preferencesStore = usePreferencesStore()
 const sessionStore = useSessionStore()

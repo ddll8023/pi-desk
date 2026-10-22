@@ -1,7 +1,7 @@
 <!-- 公共分组选择器：提供可搜索的自绘选项面板（搜索行含自绘清除按钮，候选项可选带次级动作）；选项与选中值由调用方控制。 -->
 <script setup lang="ts">
 import { computed, nextTick, ref, useId, watch } from 'vue'
-import { useAnchoredPopup } from '../../anchored-popup'
+import { useAnchoredPopup } from './anchored-popup'
 
 defineOptions({ inheritAttrs: false })
 

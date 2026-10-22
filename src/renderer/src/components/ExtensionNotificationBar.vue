@@ -1,7 +1,7 @@
 <!-- Extension notify 通知条：展示最近的通知（info/warning/error），可关闭；纯文本插值。 -->
 <script setup lang="ts">
 import { useExtensionUiStore } from '../stores/extension-ui'
-import AppButton from './ui/AppButton.vue'
+import AppButton from '../ui/AppButton.vue'
 
 const extensionStore = useExtensionUiStore()
 

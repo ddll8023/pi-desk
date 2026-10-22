@@ -34,7 +34,7 @@ export interface ProviderRow {
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useRuntimeStore } from '../stores/runtime'
-import AppButton from './ui/AppButton.vue'
+import AppButton from '../ui/AppButton.vue'
 import ProviderCredentialSection from './ProviderCredentialSection.vue'
 import ProviderEntrySummary from './ProviderEntrySummary.vue'
 import ProviderVisibilitySection from './ProviderVisibilitySection.vue'

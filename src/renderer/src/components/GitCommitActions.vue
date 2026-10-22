@@ -17,8 +17,8 @@
 <script setup lang="ts">
 import { computed, nextTick } from 'vue'
 import type { GitUpstream } from '../../../shared/git-api'
-import { useAnchoredPopup } from '../anchored-popup'
-import AppButton from './ui/AppButton.vue'
+import { useAnchoredPopup } from '../ui/anchored-popup'
+import AppButton from '../ui/AppButton.vue'
 
 const props = defineProps<{
   /** 已暂存的改动数；为 0 时提交类动作不可用。 */

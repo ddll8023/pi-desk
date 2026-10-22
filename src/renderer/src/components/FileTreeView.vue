@@ -19,7 +19,7 @@ import { useProjectDirectoryStore } from '../stores/project-directory'
 import type { FileTreeRow } from '../stores/project-directory'
 import { useProjectStore } from '../stores/project'
 import { useWorkspaceTabsStore } from '../stores/workspace-tabs'
-import AppButton from './ui/AppButton.vue'
+import AppButton from '../ui/AppButton.vue'
 import FileTreeMenu from './FileTreeMenu.vue'
 
 /** 连续输入合并窗口：主进程每次检索都要遍历项目文件索引，不能逐字发起。 */

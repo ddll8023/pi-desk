@@ -3,7 +3,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { Editor } from '@tiptap/core'
 import { captureRichInsertion } from '../file-rich-markdown-image-insert'
-import { useAnchoredPopup } from '../anchored-popup'
+import { useAnchoredPopup } from '../ui/anchored-popup'
 interface EmojiItem { unicode: string; label: string; search: string; group: number }
 const props = defineProps<{ editor: Editor; left: number; top: number }>()
 const emit = defineEmits<{ close: []; notice: [message: string] }>()

@@ -87,17 +87,17 @@
 
 | 文件 | 职责与已知使用者 |
 | --- | --- |
-| `src/renderer/src/components/ui/AppButton.vue` | 原生按钮及统一视觉变体；业务组件共用 |
-| `src/renderer/src/components/ui/AppSelect.vue` | 自定义选择器；业务表单共用 |
-| `src/renderer/src/components/ConfirmDialog.vue` | 通用确认弹层；应用外壳、Git、供应商与快捷命令消费 |
-| `src/renderer/src/anchored-popup.ts` | 浮层定位与生命周期；标签、菜单、文件编辑、Git、侧栏与基础选择器消费 |
-| `src/renderer/src/clipboard.ts` | 复制文本与错误结果；聊天、文件、供应商、资源、终端、更新与生成式界面消费 |
-| `src/renderer/src/components/MarkdownContent.vue` | 安全 Markdown 展示、数学与代码／表格交互；聊天及工具正文消费 |
-| `src/renderer/src/markdown.ts` | 聊天 Markdown 解析与清洗，供 Markdown 展示组件使用 |
-| `src/renderer/src/markdown-shared.ts` | 代码、表格与 HTML 转义的共同渲染；聊天及文件 Markdown 消费 |
-| `src/renderer/src/markdown-math.ts` | 数学解析与 KaTeX 渲染；聊天、文件预览及富文本公式消费 |
+| `src/renderer/src/ui/AppButton.vue` | 原生按钮及统一视觉变体；业务组件共用 |
+| `src/renderer/src/ui/AppSelect.vue` | 自定义选择器；业务表单共用 |
+| `src/renderer/src/ui/ConfirmDialog.vue` | 通用确认弹层；应用外壳、聊天列表、文件编辑、Git、供应商、资源、终端设置与快捷命令消费 |
+| `src/renderer/src/ui/anchored-popup.ts` | 浮层定位与生命周期；标签、菜单、文件编辑、Git、侧栏与基础选择器消费 |
+| `src/renderer/src/ui/clipboard.ts` | 复制文本与错误结果；聊天、文件、供应商、资源、终端、更新与生成式界面消费 |
+| `src/renderer/src/ui/MarkdownContent.vue` | 安全 Markdown 展示、数学与代码／表格交互；聊天正文的 Thinking、回答与技能正文消费 |
+| `src/renderer/src/ui/markdown.ts` | 聊天 Markdown 解析与清洗，供 Markdown 展示组件使用 |
+| `src/renderer/src/ui/markdown-shared.ts` | 代码、表格与 HTML 转义的共同渲染；聊天及文件 Markdown 消费 |
+| `src/renderer/src/ui/markdown-math.ts` | 数学解析与 KaTeX 渲染；聊天、文件预览及富文本公式消费 |
 
-无状态转换并不因为处在根目录就成为共享；例如 `clock.ts` 目前服务聊天计时，归会话模块，`project-entry-drag.ts` 归文件模块并对终端提供协议。
+`src/renderer/src/ui/` 是已经落地的共享展示目录，只收被多个能力重复使用的无业务状态代码。尚未切片的根目录文件不能因为位置相同就视为共享：`clock.ts` 目前服务聊天计时，归会话模块；`project-entry-drag.ts` 归文件模块并对终端提供协议。
 
 ## F-style：全局主题与业务样式（混合）
 

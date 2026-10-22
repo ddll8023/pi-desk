@@ -2,9 +2,9 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { Editor } from '@tiptap/core'
-import { useAnchoredPopup } from '../anchored-popup'
+import { useAnchoredPopup } from '../ui/anchored-popup'
 import { captureRichInsertion } from '../file-rich-markdown-image-insert'
-import { copyText } from '../clipboard'
+import { copyText } from '../ui/clipboard'
 const props = defineProps<{ editor: Editor; left: number; top: number }>()
 const emit = defineEmits<{ close: [restoreFocus: boolean]; notice: [message: string] }>()
 const editor = props.editor

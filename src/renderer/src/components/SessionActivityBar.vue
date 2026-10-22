@@ -4,11 +4,11 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
-import { useAnchoredPopup } from '../anchored-popup'
+import { useAnchoredPopup } from '../ui/anchored-popup'
 import { useRuntimeStore } from '../stores/runtime'
 import { useSessionViewStore } from '../stores/session-view'
 import { useWorkspaceTabsStore } from '../stores/workspace-tabs'
-import AppButton from './ui/AppButton.vue'
+import AppButton from '../ui/AppButton.vue'
 
 /** MCP 行里最多列出的工具名个数；其余只报总数，避免一条行被长清单撑开。 */
 const MCP_TOOL_PREVIEW = 3

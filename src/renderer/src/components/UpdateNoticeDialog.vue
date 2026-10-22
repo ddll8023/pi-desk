@@ -5,7 +5,7 @@ import { nextTick, onUnmounted, ref, useId, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import type { ExtensionUpdateInfo } from '../../../shared/updates-api'
 import { useUpdatesStore } from '../stores/updates'
-import AppButton from './ui/AppButton.vue'
+import AppButton from '../ui/AppButton.vue'
 
 const props = defineProps<{
   /** 弹层由父级常驻挂载，`open` 控制进入/退出与焦点、快捷键生命周期。 */

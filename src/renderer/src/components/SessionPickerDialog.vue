@@ -9,7 +9,7 @@ import type { SessionSummary } from '../../../shared/session-api'
 import { collapseForkedSessions } from '../sidebar-tree'
 import { useRuntimeStore } from '../stores/runtime'
 import { useSessionStore } from '../stores/session'
-import AppButton from './ui/AppButton.vue'
+import AppButton from '../ui/AppButton.vue'
 
 const emit = defineEmits<{ close: [] }>()
 
