@@ -46,14 +46,16 @@
 
 ### 2.2 依赖图实测结论
 
-- `src/main` 内部**无循环依赖**；入度集中在 `pi-paths.ts`(8)、`desktop-config-store.ts`(6)、`pi-cli-process.ts`(5)、`process-tree-termination.ts`(5)、`project-entry-path.ts`(5)、`session-run-registry.ts`(5)；除 `session-manager`(7)、`git-service`(5)、`project-manager`(4)、`sdk-host-manager`(4)、`sdk-runtime-bridge`(4) 外，各业务模块出度为 0–1。**业务管理器之间近乎不互相依赖，依赖主要下沉到叶子设施。**
+- `src/main` 内部**无循环依赖**；`import` 出度集中在 `session-manager`(7)、`git-service`(5)、`project-manager`(4)、`sdk-host-manager`(4)、`sdk-runtime-bridge`(4)，其余业务模块出度为 0–1；被引用集中在 `pi-paths.ts`(8)、`desktop-config-store.ts`(6)、`pi-cli-process.ts`(5)、`process-tree-termination.ts`(5)、`project-entry-path.ts`(5)、`session-run-registry.ts`(5)。
+- 但 `import` 出度不等于跨能力复用。按导出符号名静态比对，业务模块之间仍存在跨能力引用具体符号的情况：`git-service` 复用 `git-command` 的错误类与常量，`session-manager` 复用 `sdk-host-manager` 的 `SdkHostError` 与 `sdk-runtime-bridge` 的 `sessionErrorOf`，`models-config-manager` 与 `pi-settings-manager` 复用 `file-lock` 的 `FileLockError`/`withFileLock`。
+- 真正的横跨中心只有 `src/main/index.ts`：按导出符号名比对，它引用了 38 个来自其他主进程文件的导出符号，是所有业务模块的唯一组装者。**这是“只有组合根横跨全部业务”的直接证据，也是阶段 1 选它作为起点的依据。**
 - `src/shared` 内部无循环；被引用次数：`runtime-api.ts` 43、`desktop-api.ts` 30、`genui-api.ts` 24，其余 8–19。
 - 跨运行单元引用共 22 条，其中 20 条指向 `src/shared`；非 shared 的四类为：`main → sdk-host/protocol`、`main → auth-helper/protocol`、`main → terminal-daemon/endpoint`、`terminal-daemon/session-manager → main/process-tree-termination`，另有多处 → `runtime-install/runtime`。
 - 全库共 5 处循环，全部在前端：`session.ts ↔ workspace-tabs.ts`、`file-rich-markdown-codec ↔ -details`、`file-rich-markdown-source ↔ -block-source`、`GenuiNode ↔ GenuiCollapse`、`GenuiNode ↔ GenuiTabs`。后四者中，`file-rich-markdown` 两对为数据编解码互递归，`GenuiNode` 两处为节点递归渲染，**属有意为之**，不应按“必须消除”处理；只有 `session ↔ workspace-tabs` 是编排倒挂。
 
 ### 2.3 职责混杂的实测证据
 
-- `src/main/index.ts`：105 个 `handle()` IPC 注册、18 个 `register*Handlers`、约 90 个 `*Failure` 错误映射、11 个广播函数，以及窗口创建、资产协议、便携数据目录、单实例锁、退出链、启动自动更新，还集中实例化全部业务服务（约 385–470 行）。
+- `src/main/index.ts`：105 个 `handle()` IPC 注册（集中在 17 个 `register*Handlers`）、44 个 `*Failure` 错误映射函数（259 处调用）、10 个广播函数加 1 个状态广播，以及窗口创建、资产协议、便携数据目录、单实例锁、退出链、启动自动更新，还集中实例化全部业务服务（约 385–470 行）。
 - `src/preload/index.ts`：114 处 `ipcRenderer` 调用、约 100 条 `INVALID_*` 常量与 `invalid*Response` 工厂，16 个域的 Api 合并后一次性 `exposeInMainWorld('desktop')`。
 - `src/renderer/src/App.vue`：17 个 Store 引用、Store 初始化与 `dispose` 顺序编排、5 个 `ConfirmDialog` 与 4 个业务弹层、布局与响应式处理，以及项目/会话/文件/快捷命令的确认意图。
 - `src/renderer/src/stores/runtime.ts`：1 412 行，同时持有会话运行状态、投影应用与历史缓存、模型能力与切换、Pi 默认模型、隐藏模型偏好与写回、资源预读。其中模型相关部分只被 4 个组件消费（`ModelSettingsView`、`ProviderListItem`、`ProviderVisibilitySection`、`RuntimeModelSelect`），边界已可切。
@@ -79,6 +81,13 @@
 
 本次未做外部方案调研。理由是：Electron 官方已确立的多入口目录与 electron-vite 的多构建产物约束、以及垂直切片（feature-first）与按技术层平铺的取舍，属于成熟工程共识，不存在需要外部证据才能判断的技术路线分歧；当前决策的主要依据是上文实测的依赖图与耦合点，外部资料不会改变方向选择。
 
+### 2.8 实测方法与局限
+
+- 依赖边由 `src/` 下全部 `.ts`/`.vue` 的静态 `import`/`from`/动态 `import()` 解析得出，`import type` 一并计入；循环检测在解析后的文件图上做深度优先遍历。
+- 跨能力复用按“导出符号名 + 词边界匹配”静态比对，只证明符号名在某文件中出现，不区分实际调用路径，可能高估复用；因此引用结论只用作方向判断，不作为行为结论。
+- 未执行类型检查、构建或运行，因此不声称迁移前后产物等价；这需要在获准运行后单独确认。
+- 未逐函数审阅业务实现，函数行号区间与频道归属来自静态定位。
+
 ## 3. 推荐方案
 
 ### 3.1 核心思路
@@ -94,25 +103,36 @@
 
 ### 3.2 主进程目标结构
 
+以下目录划分已按阶段 1 的细节调查核实（依赖方向与符号复用均已逐文件比对）：
+
 ```text
 src/main/
-├─ index.ts              组合根：app 生命周期、单实例、便携目录、窗口、退出链、注册装配
-├─ shell/                窗口、标题栏配色、窗口状态、原生主题、资产协议、可信来源校验
-├─ shared/               叶子设施：pi-paths、process-tree-termination、managed-entry-runner、pi-cli-process、prompt-input、external-url、file-lock、shell-path
-├─ projects/             项目登记、目录读取与监听、文件索引、文件内容、Markdown 资源、条目路径
+├─ index.ts              组合根：app 生命周期、单实例、便携目录、登录 shell PATH、窗口创建与关闭、退出链、IPC 注册装配、启动检查编排
+├─ shell/                窗口状态、原生主题与标题栏配色、资产协议、会话权限限制、可信来源校验、事件投递
+├─ config/               Desktop 配置的唯一读写者（desktop-config-store）
+├─ shared/               叶子设施：pi-paths、process-tree-termination、managed-entry-runner、pi-cli-process、external-url、file-lock、project-path
+├─ projects/             项目登记与收敛、目录读取与监听、文件索引、文件内容、Markdown 资产、条目路径
 ├─ trust/                Project Trust 探测与决定
-├─ sessions/             会话编排、会话存储、运行注册表、宿主监督、Runtime 桥、扩展 UI 管理、宿主协议适配
-├─ files/                文件 IPC 与文件业务结果（若与 projects 边界重叠则合并，见 3.6 待定项）
-├─ git/                  命令、仓库、状态/历史解析、服务
+├─ sessions/             会话编排、会话存储、运行注册表、宿主监督、Runtime 桥、扩展 UI 管理、Prompt 输入边界
+├─ git/                  命令、仓库、状态与历史解析、服务
 ├─ terminal/             守护进程客户端与终端适配
-├─ preferences/          界面偏好与窗口状态适配
+├─ preferences/          界面偏好读写适配
 ├─ providers/            自定义供应商、Pi 默认模型、认证编排与认证辅助进程
-├─ resources/            MCP 配置读取、MCP 探测、资源预读
-├─ updates/              版本检查、扩展更新、运行时安装编排
+├─ resources/            MCP 配置读取、MCP 探测、资源预读、Pi 响应投影
+├─ updates/              版本检查、扩展更新、运行时安装编排、运行时入口解析（pi-runtime）
 └─ genui/                生成式界面参数存储
 ```
 
-`ipc/` 不设独立目录：IPC 注册函数按业务域迁入对应能力目录（如 `sessions/register-handlers.ts`），由 `index.ts` 统一调用。这样“能力 → IPC → 编排 → 数据”在目录内闭合，避免新增一层只做转发的 `ipc/` 目录。
+与初始设想的差异及依据：
+
+- **合并 `projects/` 与 `files/`**：`project-manager`、`project-directory`、`project-directory-watcher`、`project-file-index`、`project-file-content`、`project-markdown-assets`、`project-entry-path` 与 `project-path` 命名同源、调用链同源（都围绕“已登记项目 + 项目内相对路径”），且 `project-entry-path` 被文件类四个模块共用。拆成两个目录会制造一条 `files → projects` 的隐式主干依赖，因此合并。
+- **新增 `config/`**：`desktop-config-store` 被项目、外壳、偏好、供应商、终端、更新、生成式界面共 6 处使用，但它不是叶子设施（自身依赖 `project-path`），也不属于 `shell/`。单独成目录使其“唯一配置写者”身份在目录层面可见。
+- **`project-path` 归 `shared/`**：它被 `config`、`projects`、`trust`、`sessions` 四处使用，是叶子模块（零依赖），符合叶子设施判据。
+- **`pi-runtime` 归 `updates/`**：它只是 `updates` 与 `resources` 用于注入运行时入口的两函数，但自身依赖 `runtime-install/runtime.ts`，属“运行时布局”而非叶子设施；阶段 2 把 `runtime.ts` 下沉为 `src/shared-process/` 后，`pi-runtime` 再与它合并，避免阶段 1 在 `shared/` 留下一个指向 `runtime-install/` 的反向依赖。
+
+`ipc/` 不设独立目录：IPC 注册函数按业务域迁入对应能力目录（如 `sessions/ipc.ts`），由 `index.ts` 统一调用。这样“能力 → IPC → 编排 → 数据”在目录内闭合，避免新增一层只做转发的目录。
+
+根目录只保留三个文件：`index.ts`、`app-lifecycle.ts`（`app.on` 事件、单实例、退出链、启动自动更新）、`window.ts`（`createWindow`、背景色与标题栏窗口参数）。后两者与 `shell/` 的区别：它们是应用级生命周期与唯一窗口的创建链，不被任何业务能力反向依赖。
 
 ### 3.3 SDK 宿主目标结构
 
@@ -126,7 +146,7 @@ src/sdk-host/
 └─ runtime/              SDK 运行时布局与加载（来自 runtime-install/runtime.ts）
 ```
 
-`src/runtime-install/index.ts` 是一次性安装入口，迁入 `src/entries/`（见 3.6）。
+`src/runtime-install/index.ts` 是一次性安装入口，迁入 `src/entries/`（见 3.4）。
 
 ### 3.4 辅助入口目标结构
 
@@ -179,7 +199,7 @@ src/renderer/src/
 
 | 目标 | 现状 | 收敛方向 |
 | --- | --- | --- |
-| `src/main/index.ts` | 3 206 行，业务与装配混排 | 只保留：单实例、便携目录、登录 shell PATH、`whenReady` 注册装配顺序、窗口创建与关闭、退出链、启动检查编排。105 个 IPC 处理迁入各能力目录的注册模块；服务实例化改为各能力模块自持或由组合根按序注入 |
+| `src/main/index.ts` | 3 206 行，业务与装配混排 | 只保留：单实例、便携目录、登录 shell PATH、`whenReady` 注册装配顺序、窗口创建与关闭、退出链、启动检查编排。105 个 IPC 处理、44 个错误映射与 11 个广播函数迁入各能力目录；服务仍在组合根集中实例化后按序注入（现状已如此，不改变实例化方式） |
 | `src/preload/index.ts` | 1 566 行，16 域混装 | 按域拆为 `preload/<domain>.ts`，各域自带 `ipcRenderer` 调用、载荷重建与结果校验；`index.ts` 只合并并 `exposeInMainWorld`。沙箱不能 require 拆分模块，构建侧须保持 `inlineDynamicImports` 单产物 |
 | `App.vue` | 624 行，布局 + 生命周期 + 弹层 + 业务确认 | 拆为：组合根（provider 装配与 Store 初始化/释放顺序）、布局骨架组件、启动编排 composable、弹层宿主组件。业务确认意图交回各能力的 Store 或弹层组件 |
 | `stores/runtime.ts` | 1 412 行，会话 + 模型 + 资源 | 拆为：会话运行与投影状态、历史缓存、模型能力与切换、模型展示偏好与写回。拆分后会话侧不依赖模型侧与资源预读 |
@@ -246,9 +266,28 @@ src/renderer/src/
 ### 阶段 1：主进程布局与装配拆分（推荐先实施）
 
 - 目标：消除 `src/main/index.ts` 的 3 206 行混合职责，建立主进程能力目录，落实 3.8 的依赖方向规则。
-- 涉及职责：全部主进程能力切片的目录聚合、18 个 IPC 注册函数迁入能力目录、组合根瘦身。
+- 涉及职责：全部主进程能力切片的目录聚合、17 个 IPC 注册函数迁入能力目录、组合根瘦身。
 - 前置依赖：无。
 - 风险：中低。主进程内部零循环，依赖已下沉到叶子设施，是四个混合职责中边界最清晰的一个。
+
+已核实的迁移量：49 个源文件位移（含 3 个测试文件）、162 处 import 说明符改写。单个文件往往同时引用多个迁走目标，因此 import 改写量远大于文件数。
+
+阶段 1 内部拆为三个可独立停下确认的子阶段，按“叶子 → 能力 → 组合根”顺序：
+
+| 子阶段 | 内容 | 主要风险 |
+| --- | --- | --- |
+| 1a 叶子设施与目录骨架 | 把 `pi-paths`、`process-tree-termination`、`managed-entry-runner`、`pi-cli-process`、`external-url`、`file-lock`、`project-path` 归入 `main/shared/`；`desktop-config-store` 归入 `main/config/`；`window-state`、`shell-path` 归入 `main/shell/`。同步改写引用它们的文件（含 `index.ts`）的导入路径 | 最低。叶子模块零依赖或单向依赖，改动只有路径 |
+| 1b 业务能力目录聚合 | 把 38 个业务文件按 3.2 的目录划分归类；同目录内的相对导入不变，跨目录的改写为新路径 | 中。跨能力符号复用（`FileLockError`、`SdkHostError`、`sessionErrorOf`、git 错误类）在目录边界改变后仍需可达 |
+| 1c 组合根拆分 | `index.ts` 拆为 `index.ts` / `app-lifecycle.ts` / `window.ts`，17 个 `register*Handlers` 与 44 个 `*Failure` 映射器、10 个广播函数迁入各能力目录 | 中。需逐函数确认它只依赖组合根传入的实例，而不依赖 `index.ts` 的其他局部状态 |
+
+1c 的已核实前提：17 个 `register*Handlers` 之间 **互不调用**，只由 `index.ts` 的 `whenReady` 按固定顺序调用；每个注册器需要的外部依赖是组合根集中实例化的服务对象与 `pageUrl` + `isTrustedCaller` 两个横切参数。因此可以按能力目录接收显式注入，不需要为它们新增全局单例或透传层。
+
+阶段 1 必须同步的配置与文档项：
+
+- `package.json` 的 `test` 脚本：`src/main/*.test.ts` 不再匹配迁入子目录的 2 个 git 测试文件与 1 个项目目录监听测试，需改为覆盖子目录的形式。具体写法在阶段 1 执行清单中给出，不在本设计阶段锁定。
+- `tsconfig.node.json` 的 `include`：现为 `src/main/**/*.ts`，递归包含子目录，**不需要改动**；其它单元条目同理。
+- `electron.vite.config.ts`：主进程入口仍为 `src/main/index.ts`、产物仍为 `out/main/index.cjs`，**不需要改动**。
+- `docs/项目结构文档.md`、`docs/modules/*.md`：路径索引会大面积失效，需在同阶段同步。
 
 ### 阶段 2：辅助入口与跨单元共享设施归位
 
@@ -293,14 +332,17 @@ src/renderer/src/
 
 ## 8. 待定问题
 
+阶段 1 的细节已核实，原先三项待定已结清；下列问题留待后续阶段：
+
 | # | 待定事项 | 待定原因 | 决定阶段 |
 | --- | --- | --- | --- |
-| 1 | `projects/` 与 `files/` 的边界 | 当前 `project-manager`/`project-directory`/`project-file-*`/`project-entry-path` 命名高度同源，需按真实调用链判断合并还是分立 | 阶段 1 细节调查 |
-| 2 | 主进程服务实例化方式 | 由组合根集中注入还是各能力模块自持，取决于 IPC 注册函数对实例的依赖形态 | 阶段 1 细节调查 |
-| 3 | `terminal-manager` 归 `main/terminal/` 还是随 `workspace/` | 终端常驻生命周期横跨主进程与页面两侧，需确认主进程侧是否只有适配职责 | 阶段 1 细节调查 |
-| 4 | preload 拆分的域粒度 | 与主进程能力目录对齐，但部分域（如 Runtime 内混装模型与资源）在阶段 4 前无法最终对齐 | 阶段 3 讨论 |
-| 5 | 契约拆分是否改变校验函数分组 | 拆分可能暴露同一形状的重复校验，需确认是否合并 | 阶段 4 讨论 |
+| 1 | preload 拆分的域粒度 | 与主进程能力目录对齐，但部分域（如 Runtime 内混装模型与资源）在阶段 4 前无法最终对齐 | 阶段 3 讨论 |
+| 2 | 契约拆分是否改变校验函数分组 | 拆分可能暴露同一形状的重复校验，需确认是否合并 | 阶段 4 讨论 |
+| 3 | `main.css` 是否按能力拆分样式 | 与结构重构正交，且全局主题存在跨模块令牌依赖 | 阶段 5 后单独评估 |
+| 4 | `resources/pi-response-projection` 的归属 | 它把 CLI JSON 响应转为共享契约，既可算 `resources` 内部实现，也可下沉到 `shared/` | 阶段 1 实施时按调用点确认 |
+
+已结清的原待定项：`projects/` 与 `files/` 合并；主进程服务实例化保持组合根集中注入（现状已如此，不需改动实例化方式）；`terminal-manager` 归 `terminal/`（主进程侧只做适配，终端生命周期在守护进程）。
 
 ## 9. 待确认事项
 
-推荐按上述阶段推进，先实施阶段 1。确认后进入阶段 1 的细节调查，提交准确的逐文件执行清单（含文件路径、操作类型、导入路径、构建入口与文档同步项），另获确认后实施。
+推荐按 3.2 的目标目录与阶段 1 的 1a → 1b → 1c 顺序推进，先实施 1a。确认后进入 1a 的逐文件执行清单编制（准确路径、操作类型、import 改写、`package.json` 测试脚本与文档同步项），另获确认后实施。若希望对全程一次性确认，需明确告知，否则默认逐子阶段单独提交清单。
