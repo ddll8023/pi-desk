@@ -233,8 +233,8 @@ src/renderer/src/
 
 | 位置 | 证据 | 影响 | 推荐处置 |
 | --- | --- | --- | --- |
-| `src/shared/runtime-api.ts` | 1 558 行承载运行状态、Prompt、回退、压缩、投影、模型能力、资源与 MCP、历史、诊断共 6 组契约 | 单文件过载 | 在阶段 4 按域拆为 `shared/sessions/runtime.ts`、`shared/sessions/projection.ts`、`shared/providers/models.ts`、`shared/resources/mcp.ts` |
-| `src/shared/genui-api.ts` | 2 154 行 | 单文件过载 | 随生成式界面能力归入 `shared/genui/`，内部按 catalog/nodes/params/diagram/chart 分文件 |
+| `src/shared/runtime-api.ts` | 1 558 行承载运行状态、Prompt、回退、压缩、投影、模型能力、资源与 MCP、历史、诊断共 6 组契约 | 单文件过载 | 已在阶段 4 拆为 `shared/runtime/` 下的 `status`、`projection`、`models`、`resources`；`runtime-api.ts` 只再导出 |
+| `src/shared/genui-api.ts` | 2 154 行 | 单文件过载 | 已在阶段 4 拆为 `shared/genui/` 下的 `limits`、`nodes`、`params`、`diagram`、`chart`、`parse`；`genui-api.ts` 只再导出 |
 | `package.json` 的 `test` | 目录 glob 写死 `src/main/*.test.ts` 与 `src/renderer/src/*.test.ts` | 文件移动后测试静默漏检 | 每阶段随文件移动同步更新 glob |
 | `src/renderer/src/assets/main.css` | 单一全局样式文件承载多能力业务类 | 切片后样式归属仍不清晰 | 结构重构不处理；单独评估是否按能力拆分样式 |
 
@@ -314,12 +314,13 @@ src/renderer/src/
 - 风险：中。沙箱与 `inlineDynamicImports` 约束需在实施前确认构建行为不变。
 - 实施结果：拆为 11 个域文件（`desktop`、`projects`、`sessions`、`runtime`、`terminal`、`git`、`preferences`、`providers`、`updates`、`trust`、`genui`），`index.ts` 由 1 566 行降为只做合并与暴露。115 个方法、53 个错误工厂、47 条错误文案、113 个 channel 与拆分前逐一对应。`runtime-api` 的 21 个方法作为一个域整体保留在 `runtime.ts`，其内部的方法归属留到阶段 4 拆契约时一并调整。
 
-### 阶段 4：共享契约分域
+### 阶段 4：共享契约分域（已完成）
 
 - 目标：`src/shared/` 按业务域重组，`runtime-api.ts` 与 `genui-api.ts` 按域拆分。
 - 涉及职责：契约文件与运行期校验函数；被 87 处渲染端与 71 处主进程引用，是引用面最广的阶段。
 - 前置依赖：阶段 1–3（域命名在此时已稳定）。
 - 风险：高（引用面最广）。建议按域逐个提交，不一次性替换全部导入路径。
+- 实施结果：只拆了过载的两个文件，未把 19 个单文件契约移入子目录。`runtime-api.ts` 拆为 `status`、`projection`、`models`、`resources` 四文件（129 个导出），`genui-api.ts` 拆为 `limits`、`nodes`、`params`、`diagram`、`chart`、`parse` 六文件（122 个导出）。两个原文件改为只再导出，既有 66 处导入路径不变。可跨组的非导出辅助（如 `isRecord`、`RUNTIME_ERROR_CODES`）落在各组内，被两组以上共用的才提升为导出。
 
 ### 阶段 5：前端能力切片
 

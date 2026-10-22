@@ -25,7 +25,11 @@
 | 文件 | 模块相关符号与范围 |
 | --- | --- |
 | `src/renderer/src/stores/runtime.ts` | 会话模块使用 `initialize`、`dispose`、`send`、`rewind`、`compact`、`stopOperation`、投影同步与历史读取；供应商模块使用能力列表、`switchModel`、默认模型、模型隐藏偏好；资源模块读取前台运行目标与预读阶段 |
-| `src/shared/runtime-api.ts` | 运行目标、状态与命令，消息／工具／历史／活动投影，模型能力，资源预读、诊断与 MCP 契约；被主进程、宿主、preload、多个前端模块共同引用 |
+| `src/shared/runtime-api.ts` | 只再导出 `./runtime/`，外部导入路径不变 |
+| `src/shared/runtime/status.ts` | 运行目标、状态、错误与命令（Prompt、回退、压缩、切换模型） |
+| `src/shared/runtime/projection.ts` | 消息／工具／历史／活动／用量／速率投影 |
+| `src/shared/runtime/models.ts` | 模型标识、摘要与 agent 能力清单 |
+| `src/shared/runtime/resources.ts` | 资源预读、诊断与 MCP 状态、探测、配置、命令 |
 
 请求目标的运行实例与绑定代际由主进程登记，不等同于标签键或可变的当前项目。后台投影留底是页面展示缓存，SDK 会话和历史文件仍是另一层生命周期。本文不把当前综合 Store 描述为已经拆分的独立模块。
 
