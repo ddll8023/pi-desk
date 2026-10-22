@@ -16,9 +16,9 @@
 | `src/main/updates/package-updater.ts` | 已声明 Pi 扩展包更新、进度与结论 |
 | `src/main/updates/pi-agent-updater.ts` | 内置运行时安装、进度、结论与指针修复 |
 | `src/main/updates/pi-runtime.ts` | Electron 数据目录下的运行时根与可用 SDK 入口环境 |
-| `src/update-check/index.ts` | 一次性读取安装信息并查询官方发布、npm、git 版本 |
-| `src/package-update/index.ts` | 一次性调用 Pi 包管理更新，输出带前缀的进度与结论 |
-| `src/runtime-install/index.ts` | 官方发布依赖安装、候选加载、发布切换与旧版本清理 |
+| `src/entries/update-check/index.ts` | 一次性读取安装信息并查询官方发布、npm、git 版本 |
+| `src/entries/package-update/index.ts` | 一次性调用 Pi 包管理更新，输出带前缀的进度与结论 |
+| `src/entries/runtime-install/index.ts` | 官方发布依赖安装、候选加载、发布切换与旧版本清理 |
 | `src/shared/updates-api.ts` | 更新状态、进度、结果、协议前缀与载荷校验 |
 | `src/renderer/src/stores/updates.ts` | 检查／更新／安装动作、订阅与启动提示状态 |
 | `src/renderer/src/services/updates.ts` | 更新、安装和修复的固定桥接与事件 |

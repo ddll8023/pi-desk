@@ -14,7 +14,7 @@
 import { randomUUID } from 'node:crypto'
 import { StringDecoder } from 'node:string_decoder'
 import type { CreateModelRuntimeOptions, ModelRuntime } from '@earendil-works/pi-coding-agent'
-import { loadSdkModule } from '../runtime-install/runtime'
+import { loadSdkModule } from '../shared-process/runtime'
 import type { AuthMethod, AuthPrompt, AuthProviderStatus } from '../shared/auth-api'
 import {
   AUTH_HELPER_MAX_RECORD_CHARS,

@@ -7,7 +7,7 @@
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { app } from 'electron'
-import { resolveActiveRuntime, SDK_ENTRY_ENV } from '../../runtime-install/runtime'
+import { resolveActiveRuntime, SDK_ENTRY_ENV } from '../../shared-process/runtime'
 
 /** 运行时目录放在应用自有数据区：与桌面配置同级，清理与卸载语义一致，也不进入 Pi 的配置目录。 */
 export function getRuntimeRoot(): string {

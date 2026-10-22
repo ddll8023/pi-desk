@@ -10,7 +10,7 @@
  * - 依赖命令自己的输出走脚本的 stderr，因此 stdout 上除协议行外只会有噪声，只有带标记的整行参与解析。
  * - 进程的启动、超时终止与退出码判定交给共用的受管入口执行器，这里只解析协议行。
  */
-import { clearCurrentVersion } from '../../runtime-install/runtime'
+import { clearCurrentVersion } from '../../shared-process/runtime'
 import { parseAgentInstallLine } from '../../shared/updates-api'
 import type {
   AgentInstallOutcome,

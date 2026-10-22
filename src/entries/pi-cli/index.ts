@@ -6,7 +6,7 @@
  * SDK 从运行时目录或应用自带版本加载（由主进程注入的入口决定），环境标记与官方 CLI 入口保持一致，
  * 使运行器与被它取代的独立可执行文件行为相同。
  */
-import { loadSdkModule } from '../runtime-install/runtime'
+import { loadSdkModule } from '../../shared-process/runtime'
 
 async function run(): Promise<void> {
   process.env.PI_CODING_AGENT = 'true'

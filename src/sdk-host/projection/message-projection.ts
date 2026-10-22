@@ -32,7 +32,7 @@ import type {
   ProjectionUpdate,
   ToolExecution,
   TurnTiming
-} from '../shared/runtime-api'
+} from '../../shared/runtime-api'
 import { ToolProjection, serializeToolArguments } from './tool-projection'
 import { toUserMessageIdentity } from './identity'
 import type { UserMessageIdentity } from './identity'

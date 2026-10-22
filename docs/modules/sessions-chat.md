@@ -30,12 +30,12 @@
 
 | 文件 | 用途 |
 | --- | --- |
-| `src/projection/message-projection.ts` | 有界消息／工具聚合、序号、批次与确认 |
-| `src/projection/tool-projection.ts` | 工具生命周期、参数／结果摘要与生成式界面载荷接入 |
-| `src/projection/history-projection.ts` | 当前分支按轮历史与原文续段 |
-| `src/projection/activity-projection.ts` | 从官方分支累计文件、技能、MCP、扩展工具及界面活动事实 |
-| `src/projection/identity.ts` | 用户消息规范化摘要身份；不替代官方回退条目 ID |
-| `src/projection/output-rate.ts` | 模型输出速率计算 |
+| `src/sdk-host/projection/message-projection.ts` | 有界消息／工具聚合、序号、批次与确认 |
+| `src/sdk-host/projection/tool-projection.ts` | 工具生命周期、参数／结果摘要与生成式界面载荷接入 |
+| `src/sdk-host/projection/history-projection.ts` | 当前分支按轮历史与原文续段 |
+| `src/sdk-host/projection/activity-projection.ts` | 从官方分支累计文件、技能、MCP、扩展工具及界面活动事实 |
+| `src/sdk-host/projection/identity.ts` | 用户消息规范化摘要身份；不替代官方回退条目 ID |
+| `src/sdk-host/projection/output-rate.ts` | 模型输出速率计算 |
 | `src/shared/session-api.ts` | 会话列表、打开、重载和删除的页面契约 |
 | `src/shared/session-run-api.ts` | 应用级运行清单、释放／结束与事件契约 |
 | `src/shared/extension-ui-api.ts` | 扩展对话、通知、widget 与回应形态 |

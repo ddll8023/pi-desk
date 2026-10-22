@@ -143,7 +143,7 @@ src/sdk-host/
 ├─ index.ts、protocol.ts、session-runtime.ts、extension-ui-bridge.ts
 ├─ projection/           消息、工具、历史、活动、身份、输出速率投影
 ├─ genui/                内置生成式 UI 扩展
-└─ runtime/              SDK 运行时布局与加载（来自 runtime-install/runtime.ts）
+└─ runtime/              SDK 运行时布局与加载（已下沉为 `src/shared-process/runtime.ts`，宿主单向引用）
 ```
 
 `src/runtime-install/index.ts` 是一次性安装入口，迁入 `src/entries/`（见 3.4）。
@@ -166,10 +166,12 @@ src/entries/
 
 ```text
 src/shared/         分域契约（请求/事件/结果/运行期校验），按业务域分文件
-src/shared-process/ 跨进程基础设施：pi-paths、进程树终止、受管入口运行器、运行时布局、文件锁
+src/shared-process/ 跨进程基础设施：运行时布局与 SDK 加载
 ```
 
-`src/shared-process/` 的判据是“被两个及以上非主进程运行单元引用且不感知 Electron”。当前 `runtime-install/runtime.ts`、`main/process-tree-termination.ts`、`main/pi-paths.ts`、`main/managed-entry-runner.ts` 满足该判据（分别被 5、5+、8、3 处引用，含 sdk-host、auth-helper、pi-cli、update-check、terminal-daemon）。
+`src/shared-process/` 的判据是“被两个及以上非主进程运行单元引用且不感知 Electron”。按此判据实测，当前只有 `runtime-install/runtime.ts` 满足：它被 `sdk-host`、`auth-helper`、`pi-cli`、`update-check` 四个运行单元引用，自身只依赖 `node:fs`、`node:path` 与 `node:url`。
+
+以下三项**不满足**该判据，留在 `src/main/shared/`：`pi-paths.ts` 的 8 处引用全部在 `src/main` 内，且经 `updates/pi-runtime` 传递依赖 `electron.app`；`managed-entry-runner.ts` 的 3 处引用全在 `src/main` 内；`process-tree-termination.ts` 虽有 `terminal-daemon/session-manager` 这一个非主进程消费者，但只涉及一个运行单元。
 
 ### 3.6 前端目标结构
 
@@ -291,7 +293,7 @@ src/renderer/src/
 
 ### 阶段 2：辅助入口与跨单元共享设施归位
 
-- 目标：收拢四个一次性入口为 `src/entries/`；`projection`、`extensions/genui` 并入 `sdk-host`；`runtime-install/runtime.ts` 等下沉为 `src/shared-process/`。
+- 目标：收拢四个一次性入口为 `src/entries/`；`projection`、`extensions/genui` 并入 `sdk-host`；`runtime-install/runtime.ts` 下沉为 `src/shared-process/runtime.ts`。`main/shared/` 下的三个设施留在原处，判据见 §3.5。
 - 涉及职责：跨单元引用、SDK 宿主内部组成、构建配置的 5 个 input 路径。
 - 前置依赖：阶段 1 完成（`shared-process` 的归位会影响主进程导入路径）。
 - 风险：中。需同步 `vite.sdk-host.config.ts` 与 `vite.auth-helper.config.ts` 的入口，但产物路径不变。

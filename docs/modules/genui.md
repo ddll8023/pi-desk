@@ -14,13 +14,13 @@
 
 | 文件 | 用途 |
 | --- | --- |
-| `src/extensions/genui/index.ts` | 内置扩展工厂与注册失败降级 |
-| `src/extensions/genui/tools.ts` | 界面交付、patch、目录与检查工具注册和结果 |
-| `src/extensions/genui/catalog.ts` | 按主题读取工具字段说明 |
-| `src/extensions/genui/diagnostics.ts` | 交付内容的非阻断诊断 |
-| `src/extensions/genui/outline.ts` | 声明式文档的大纲与路径 |
-| `src/extensions/genui/patch.ts` | 文档 patch 应用与约束 |
-| `src/extensions/genui/session-scan.ts` | 从会话条目定位界面和版本 |
+| `src/sdk-host/genui/index.ts` | 内置扩展工厂与注册失败降级 |
+| `src/sdk-host/genui/tools.ts` | 界面交付、patch、目录与检查工具注册和结果 |
+| `src/sdk-host/genui/catalog.ts` | 按主题读取工具字段说明 |
+| `src/sdk-host/genui/diagnostics.ts` | 交付内容的非阻断诊断 |
+| `src/sdk-host/genui/outline.ts` | 声明式文档的大纲与路径 |
+| `src/sdk-host/genui/patch.ts` | 文档 patch 应用与约束 |
+| `src/sdk-host/genui/session-scan.ts` | 从会话条目定位界面和版本 |
 | `src/shared/genui-api.ts` | 节点、文档、版本、载荷和校验 |
 | `src/shared/genui-params-api.ts` | 本机参数保存、读取、清除与校验 |
 
@@ -54,7 +54,7 @@
 
 ## 公共与跨模块引用
 
-- [会话](sessions-chat.md)：`src/sdk-host/session-runtime.ts` 创建内置工厂；`src/projection/tool-projection.ts` 接收结果载荷，`activity-projection.ts` 统计交付；`ChatMessageItem.vue` 分发界面，历史读取带回原工具事实。
+- [会话](sessions-chat.md)：`src/sdk-host/session-runtime.ts` 创建内置工厂；`src/sdk-host/projection/tool-projection.ts` 接收结果载荷，`activity-projection.ts` 统计交付；`ChatMessageItem.vue` 分发界面，历史读取带回原工具事实。
 - [F-runtime-state](shared.md#f-runtime-state综合-runtime-状态混合)：综合 Runtime 契约包含工具上的 UI 载荷，Store 在合并历史与实时内容时维护版本事实。
 - [F-assembly](shared.md#f-assembly进程与页面组装混合)：参数 IPC、preload 固定接口，以及 App 的参数预加载与页面关闭写回。
 - [偏好](preferences.md)、[F-config](shared.md#f-configdesktop-配置混合)：能力开关写 Desktop 配置；宿主创建／重载时读取，不与参数缓存混存。

@@ -1,9 +1,9 @@
 /** 当前分支的按轮历史与分段原文投影；只消费SDK条目，不读取任意文件、不拥有会话。 */
 import type { SessionEntry } from '@earendil-works/pi-coding-agent'
-import type { HistoryChunk, HistoryData, HistoryPage, HistoryQuery, ProjectionMessage } from '../shared/runtime-api'
+import type { HistoryChunk, HistoryData, HistoryPage, HistoryQuery, ProjectionMessage } from '../../shared/runtime-api'
 import { MessageProjection } from './message-projection'
 import { summarizeToolArguments } from './tool-projection'
-import { parseGenuiPayload } from '../shared/genui-api'
+import { parseGenuiPayload } from '../../shared/genui-api'
 
 const PAGE_TURNS = 8
 const DETAIL_ENTRIES = 32

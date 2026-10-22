@@ -16,7 +16,7 @@
 | `src/main/resources/pi-response-projection.ts` | CLI `get_commands`、`get_available_models`、`get_state` 的字段投影 |
 | `src/main/resources/mcp-config-reader.ts` | 全局／项目 MCP 配置的受限读取、覆盖与生效说明 |
 | `src/main/resources/mcp-inspection.ts` | 一次性 MCP 探测、超时和取消 |
-| `src/pi-cli/index.ts` | 用官方 SDK CLI 执行主进程固定参数的一次性入口 |
+| `src/entries/pi-cli/index.ts` | 用官方 SDK CLI 执行主进程固定参数的一次性入口 |
 | `src/renderer/src/stores/resource.ts` | 运行资源、预读技能、诊断、MCP 配置／探测／动作展示状态 |
 | `src/renderer/src/services/resource.ts` | 资源、预读、诊断和 MCP 的受限桥接 |
 | `src/renderer/src/components/ResourceView.vue` | 资源分组、详情、配置和 MCP 状态／动作入口 |

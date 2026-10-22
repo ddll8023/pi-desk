@@ -21,8 +21,8 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, s
 import { isAbsolute, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import crossSpawn from 'cross-spawn'
-import { AGENT_INSTALL_LINE_PREFIX } from '../shared/updates-api'
-import type { AgentInstallFailureReason, AgentInstallOutcome, AgentInstallPhase } from '../shared/updates-api'
+import { AGENT_INSTALL_LINE_PREFIX } from '../../shared/updates-api'
+import type { AgentInstallFailureReason, AgentInstallOutcome, AgentInstallPhase } from '../../shared/updates-api'
 import {
   isValidReleaseVersion,
   majorVersion,
@@ -33,7 +33,7 @@ import {
   resolveSdkEntryInRelease,
   stagingRoot,
   writeCurrentVersion
-} from './runtime'
+} from '../../shared-process/runtime'
 
 const RUNTIME_ROOT_ARG_INDEX = 2
 const VERSION_ARG_INDEX = 3

@@ -13,13 +13,13 @@
  * 参数：argv[2] 是当前项目路径（可为空）；argv[3] 是要更新的包声明原文（可为空，空表示全部）。
  */
 import { DefaultPackageManager, SettingsManager, getAgentDir } from '@earendil-works/pi-coding-agent'
-import { PACKAGE_UPDATE_LINE_PREFIX } from '../shared/updates-api'
+import { PACKAGE_UPDATE_LINE_PREFIX } from '../../shared/updates-api'
 import type {
   PackageUpdateFailure,
   PackageUpdateFailureReason,
   PackageUpdateOutcome,
   PackageUpdateProgress
-} from '../shared/updates-api'
+} from '../../shared/updates-api'
 
 /** 项目路径与来源在 argv 里的位置；主进程固定给出，页面无法参与。 */
 const PROJECT_ARG_INDEX = 2

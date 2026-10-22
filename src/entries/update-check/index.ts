@@ -19,9 +19,9 @@ import { execFile } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
-import { loadSdkModule, majorVersion, readBundledSdkVersion, readCurrentVersion } from '../runtime-install/runtime'
-import type { SdkModule } from '../runtime-install/runtime'
-import type { ExtensionUpdateInfo, PiAgentUpdateInfo, PiAgentUpdateStatus, UpdateCheckReport } from '../shared/updates-api'
+import { loadSdkModule, majorVersion, readBundledSdkVersion, readCurrentVersion } from '../../shared-process/runtime'
+import type { SdkModule } from '../../shared-process/runtime'
+import type { ExtensionUpdateInfo, PiAgentUpdateInfo, PiAgentUpdateStatus, UpdateCheckReport } from '../../shared/updates-api'
 
 const runFile = promisify(execFile)
 

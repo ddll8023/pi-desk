@@ -27,9 +27,9 @@ import type {
   ToolExecutionPhase,
   ToolExecutionTextKind,
   ToolNonTextPart
-} from '../shared/runtime-api'
-import { parseGenuiPayload } from '../shared/genui-api'
-import type { GenuiPayload } from '../shared/genui-api'
+} from '../../shared/runtime-api'
+import { parseGenuiPayload } from '../../shared/genui-api'
+import type { GenuiPayload } from '../../shared/genui-api'
 
 /** 工具参数摘要上限；超限截断并在条目上标记，不伪装成完整参数。 */
 const MAX_TOOL_ARGS_CHARS = 4096

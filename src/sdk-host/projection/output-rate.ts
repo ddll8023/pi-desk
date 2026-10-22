@@ -4,7 +4,7 @@
  * 只做数值计算，不持有进程、快照或进程通信；
  * 平均值由宿主在消息结束时用模型上报的输出 token 与生成时长结算。非有限数不参与结算。
  */
-import type { OutputRate } from '../shared/runtime-api'
+import type { OutputRate } from '../../shared/runtime-api'
 
 /** 生成时长短于这个时长不给速率，避免开头几个 token 算出天量。 */
 const MIN_ELAPSED_MS = 250

@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { isAbsolute, resolve } from 'node:path'
 import { SDK_HOST_PROTOCOL_VERSION, isSdkHostRequest } from './protocol'
 import type { SdkHostFrame, SdkHostEvent, SdkHostRequest, SdkHostFailureCode, SdkSessionAuthorization, SdkSessionReference } from './protocol'
-import { loadSdkModule } from '../runtime-install/runtime'
+import { loadSdkModule } from '../shared-process/runtime'
 import { SdkSessionFailure, SdkSessionRuntime } from './session-runtime'
 
 const parentPort = process.parentPort

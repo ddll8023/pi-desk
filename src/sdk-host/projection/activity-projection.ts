@@ -24,9 +24,9 @@
 import type { SessionEntry } from '@earendil-works/pi-coding-agent'
 import type { ProjectionMessage, ToolArgSummaryEntry, ToolExecution, SkillActivitySource, SessionActivity,
   SessionFileActivity, SessionSkillActivity, SessionMcpActivity, SessionPluginActivity,
-  SessionGenuiActivity } from '../shared/runtime-api'
-import { GENUI_RENDER_TOOL_NAMES, readGenuiPayloadHeader } from '../shared/genui-api'
-import { parseSkillBlock } from '../shared/user-message-text'
+  SessionGenuiActivity } from '../../shared/runtime-api'
+import { GENUI_RENDER_TOOL_NAMES, readGenuiPayloadHeader } from '../../shared/genui-api'
+import { parseSkillBlock } from '../../shared/user-message-text'
 
 /** 只读取文件内容的工具；其他工具即使读到文件（如 bash）也不猜测它碰了哪个路径。 */
 const READ_TOOLS: ReadonlySet<string> = new Set(['read'])

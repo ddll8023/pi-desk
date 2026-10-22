@@ -22,10 +22,10 @@ export default defineConfig({
     rollupOptions: {
       input: {
         index: resolve('src/sdk-host/index.ts'),
-        'pi-cli': resolve('src/pi-cli/index.ts'),
-        'update-check': resolve('src/update-check/index.ts'),
-        'package-update': resolve('src/package-update/index.ts'),
-        'runtime-install': resolve('src/runtime-install/index.ts')
+        'pi-cli': resolve('src/entries/pi-cli/index.ts'),
+        'update-check': resolve('src/entries/update-check/index.ts'),
+        'package-update': resolve('src/entries/package-update/index.ts'),
+        'runtime-install': resolve('src/entries/runtime-install/index.ts')
       },
       external: ['@earendil-works/pi-coding-agent', /^node:/],
       output: {
