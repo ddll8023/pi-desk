@@ -30,6 +30,7 @@
 | `src/shared/runtime/projection.ts` | 消息／工具／历史／活动／用量／速率投影 |
 | `src/shared/runtime/models.ts` | 模型标识、摘要与 agent 能力清单 |
 | `src/shared/runtime/resources.ts` | 资源预读、诊断与 MCP 状态、探测、配置、命令 |
+| `src/shared/runtime/api.ts` | `RuntimeApi` 桥接接口：聚合上述四组方法，跨域类型在此引用 |
 
 请求目标的运行实例与绑定代际由主进程登记，不等同于标签键或可变的当前项目。后台投影留底是页面展示缓存，SDK 会话和历史文件仍是另一层生命周期。本文不把当前综合 Store 描述为已经拆分的独立模块。
 
