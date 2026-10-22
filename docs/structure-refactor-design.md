@@ -60,7 +60,7 @@
 - `src/main/index.ts`：102 个 `handle()` IPC 注册、40 个 `*Failure` 错误映射函数（全仓共 49 个此类函数，其余 9 个定义在非 `ipc.ts` 文件里）、10 个广播函数，以及窗口创建、资产协议、便携数据目录、单实例锁、退出链、启动自动更新，还集中实例化全部业务服务。
 - `src/preload/index.ts`：114 处 `ipcRenderer` 调用、约 100 条 `INVALID_*` 常量与 `invalid*Response` 工厂，16 个域的 Api 合并后一次性 `exposeInMainWorld('desktop')`。
 - `src/renderer/src/App.vue`：16 个 Store 引用、Store 初始化与 `dispose` 顺序编排、5 个 `ConfirmDialog` 与 5 个业务弹层、布局与响应式处理，以及项目/会话/文件/快捷命令的确认意图。
-- `src/renderer/src/stores/runtime.ts`：1 412 行，同时持有会话运行状态、投影应用与历史缓存、模型能力与切换、Pi 默认模型、隐藏模型偏好与写回、资源预读。其中模型相关部分只被 4 个组件消费（`ModelSettingsView`、`ProviderListItem`、`ProviderVisibilitySection`、`RuntimeModelSelect`），边界已可切。
+- `src/renderer/src/stores/runtime.ts`：1 412 行，同时持有会话运行状态、投影应用与历史缓存、模型能力与切换、Pi 默认模型、隐藏模型偏好与写回、资源预读。其中模型相关部分只被 4 个组件消费（`ModelSettingsView`、`ProviderListItem`、`ProviderVisibilitySection`、`RuntimeModelSelect`），边界已可切。（拆分结果见 §6 阶段 5 的 A1 条目。）
 - 顶层目录语义混杂：`src/projection/` 与 `src/extensions/genui/` 是“假顶层能力目录”，实际是 SDK 宿主的内部组成；`src/runtime-install/` 把一次性安装入口与被 5 个运行单元引用的 `runtime.ts` 混在同一目录。
 
 ### 2.4 必须保持的既有设计
@@ -73,7 +73,7 @@
 
 ### 2.5 结构变更的耦合点
 
-移动文件会同时牵动四类配置：`package.json` 的 `test` 脚本（按 `src/main/*.test.ts` 与 `src/renderer/src/*.test.ts` 的目录 glob 列举）、`tsconfig.node.json` 与 `tsconfig.web.json` 的 `include` 目录列举、以及四份 Vite 构建配置的入口路径。任何阶段都必须把这四类同步纳入。
+移动文件会同时牵动四类配置：`package.json` 的 `test` 脚本（按目录 glob 列举测试文件，移动测试文件后需同步该 glob）、`tsconfig.node.json` 与 `tsconfig.web.json` 的 `include` 目录列举、以及四份 Vite 构建配置的入口路径。任何阶段都必须把这四类同步纳入。
 
 ### 2.6 工作区状态
 
@@ -235,7 +235,7 @@ src/renderer/src/
 | --- | --- | --- | --- |
 | `src/shared/runtime-api.ts` | 1 558 行承载运行状态、Prompt、回退、压缩、投影、模型能力、资源与 MCP、历史、诊断共 6 组契约 | 单文件过载 | 已在阶段 4 拆为 `shared/runtime/` 下的 `status`、`projection`、`models`、`resources`；`runtime-api.ts` 只再导出 |
 | `src/shared/genui-api.ts` | 2 154 行 | 单文件过载 | 已在阶段 4 拆为 `shared/genui/` 下的 `limits`、`nodes`、`params`、`diagram`、`chart`、`parse`；`genui-api.ts` 只再导出 |
-| `package.json` 的 `test` | 目录 glob 写死 `src/main/*.test.ts` 与 `src/renderer/src/*.test.ts` | 文件移动后测试静默漏检 | 每阶段随文件移动同步更新 glob |
+| `package.json` 的 `test` | 目录 glob 按目录列举测试文件 | 新增或移动测试目录时静默漏检 | 每阶段随测试文件位置同步更新 glob |
 | `src/renderer/src/assets/main.css` | 单一全局样式文件承载多能力业务类 | 切片后样式归属仍不清晰 | 结构重构不处理；单独评估是否按能力拆分样式 |
 
 ## 4. 备选方向与取舍
@@ -325,12 +325,12 @@ src/renderer/src/
 ### 阶段 5：前端能力切片（进行中）
 
 - 目标：`src/renderer/src/` 按能力垂直切片；拆分 `App.vue` 与 `stores/runtime.ts`；收敛 `session ↔ workspace-tabs` 的编排方向。
-- 涉及职责：162 个前端文件、22 个 Store、19 个服务、58 个组件。
+- 涉及职责：`src/renderer/src/` 下的页面能力文件、Store、服务与组件。
 - 前置依赖：阶段 4（契约分域后切片引用的契约路径才稳定）。
 - 风险：中高。逐个能力切片，每次只动一个能力目录。
 - 批次划分（按风险从低到高，各自单独提交清单）：
   - A0 共享展示层归位：把被多能力复用的展示代码收进 `ui/`，纯路径搬迁，不改行为。**已完成**：9 个文件移入 `src/renderer/src/ui/`，56 个文件改写 88 处导入。
-  - A1 拆分 `stores/runtime.ts`：按会话运行与投影、历史缓存、模型能力与切换、模型展示偏好、资源预读切开。
+  - A1 拆分 `stores/runtime.ts`：按会话运行与投影、历史缓存、模型能力与切换、模型展示偏好切开。**已完成**：拆为 `stores/runtime-core.ts`、`stores/runtime-history.ts`、`stores/runtime-models.ts`、`stores/runtime-model-display.ts` 四个切片模块，`runtime.ts` 只作门面（组合与初始化/释放编排），保留原有 49 个公开成员（`initialize`、`dispose` 与 47 个状态及动作）与两个历史类型再导出，19 个引用 `useRuntimeStore` 的文件不改调用点。切片间不互相 import，会话状态收敛对模型侧的影响经组合根一次性晚绑定转交。
   - A2 拆分 `App.vue`：组合根、布局骨架、启动编排、弹层宿主分离。
   - A3 收敛 `session ↔ workspace-tabs` 的打开编排方向，这是本阶段唯一有行为风险的项。
 
@@ -362,4 +362,4 @@ src/renderer/src/
 
 ## 9. 待确认事项
 
-阶段 1–4 已完成，阶段 5 进行中、已完成 A0。下一步是 A1（拆分 `stores/runtime.ts`）：先做只读调查确认四个切片的边界与跨切片调用，再提交逐文件执行清单，另获确认后实施。各批次默认单独提交清单，不一次性确认全程。
+阶段 1–4 已完成；阶段 5 进行中，已完成 A0 与 A1。下一步是 A2（拆分 `App.vue`：组合根、布局骨架、启动编排、弹层宿主分离）：先做只读调查确认 Store 初始化/释放顺序与弹层归属，再提交逐文件执行清单，另获确认后实施。各批次默认单独提交清单，不一次性确认全程。

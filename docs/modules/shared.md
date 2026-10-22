@@ -24,7 +24,11 @@
 
 | 文件 | 模块相关符号与范围 |
 | --- | --- |
-| `src/renderer/src/stores/runtime.ts` | 会话模块使用 `initialize`、`dispose`、`send`、`rewind`、`compact`、`stopOperation`、投影同步与历史读取；供应商模块使用能力列表、`switchModel`、默认模型、模型隐藏偏好；资源模块读取前台运行目标与预读阶段 |
+| `src/renderer/src/stores/runtime.ts` | 只做装配与初始化／释放编排，不含业务状态；按原成员名转发到下列四个切片 |
+| `src/renderer/src/stores/runtime-core.ts` | 前台实例身份、Prompt／回退／中止／压缩等动作状态、投影分片与后台留底、`send`、`rewind`、`compact`、`stopOperation`、同步与快照收敛 |
+| `src/renderer/src/stores/runtime-history.ts` | 历史分页、展开轮次的原文与续段状态、缓存淘汰；读取目标与会话键由调用方注入 |
+| `src/renderer/src/stores/runtime-models.ts` | 可用模型能力清单、Runtime 未就绪时的候选预读、Pi 默认模型、当前会话 `switchModel` |
+| `src/renderer/src/stores/runtime-model-display.ts` | 对话页隐藏模型偏好、乐观更新与串行写回、失败回滚 |
 | `src/shared/runtime-api.ts` | 只再导出 `./runtime/`，外部导入路径不变 |
 | `src/shared/runtime/status.ts` | 运行目标、状态、错误与命令（Prompt、回退、压缩、切换模型） |
 | `src/shared/runtime/projection.ts` | 消息／工具／历史／活动／用量／速率投影 |
@@ -32,7 +36,7 @@
 | `src/shared/runtime/resources.ts` | 资源预读、诊断与 MCP 状态、探测、配置、命令 |
 | `src/shared/runtime/api.ts` | `RuntimeApi` 桥接接口：聚合上述四组方法，跨域类型在此引用 |
 
-请求目标的运行实例与绑定代际由主进程登记，不等同于标签键或可变的当前项目。后台投影留底是页面展示缓存，SDK 会话和历史文件仍是另一层生命周期。本文不把当前综合 Store 描述为已经拆分的独立模块。
+请求目标的运行实例与绑定代际由主进程登记，不等同于标签键或可变的当前项目。后台投影留底是页面展示缓存，SDK 会话和历史文件仍是另一层生命周期。`stores/runtime.ts` 只是装配门面：会话运行、历史缓存、模型能力与模型展示偏好分别落在 `runtime-core`、`runtime-history`、`runtime-models`、`runtime-model-display`，门面保留原有公开成员与历史类型再导出，消费者不需要改调用点。
 
 ## F-config：Desktop 配置（混合）
 

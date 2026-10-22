@@ -20,7 +20,7 @@ Store 完整实现已读；组件经 App 的 Props 与事件注册定位。标�
 ## 公共与跨模块引用
 
 - [F-assembly](shared.md#f-assembly进程与页面组装混合)：`src/renderer/src/App.vue` 挂载面板，处理脏文件关闭确认与快捷命令弹层。
-- [F-runtime-state](shared.md#f-runtime-state综合-runtime-状态混合)：`src/renderer/src/stores/runtime.ts` 提供前台运行身份及就绪情况。
+- [F-runtime-state](shared.md#f-runtime-state综合-runtime-状态混合)：`src/renderer/src/stores/runtime-core.ts` 提供前台运行身份及就绪情况，经 `src/renderer/src/stores/runtime.ts` 门面暴露。
 - [项目](projects-trust.md)：`src/renderer/src/stores/project.ts` 提供当前项目与选择来源。
 - [会话](sessions-chat.md)：`src/renderer/src/stores/session.ts` 提供 `open`、`invalidateOpenSelection`、`waitForOpenActions`；`src/renderer/src/stores/session-runs.ts` 提供运行清单与结束动作。
 - [文件](files-editor.md)：`src/renderer/src/stores/project-editor.ts` 拥有编辑记录，标签只引用其 key 与脏状态。

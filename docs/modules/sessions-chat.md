@@ -81,7 +81,7 @@
 ## 公共与跨模块引用
 
 - [F-assembly](shared.md#f-assembly进程与页面组装混合)：会话／运行／Runtime／扩展 IPC 注册、广播、App 生命周期及确认弹层。
-- [F-runtime-state](shared.md#f-runtime-state综合-runtime-状态混合)：`src/renderer/src/stores/runtime.ts` 持有展示状态、分片和历史缓存；`src/shared/runtime-api.ts` 提供综合契约。
+- [F-runtime-state](shared.md#f-runtime-state综合-runtime-状态混合)：`src/renderer/src/stores/runtime-core.ts` 持有展示状态与投影分片，`src/renderer/src/stores/runtime-history.ts` 持有历史缓存，`src/renderer/src/stores/runtime.ts` 为装配门面；`src/shared/runtime-api.ts` 提供综合契约。
 - [F-sidebar](shared.md#f-sidebar项目会话树混合)：项目树中的会话与运行状态。
 - [F-process](shared.md#f-process受管进程与-sdk-公共设施共享)：SDK 定位、固定环境与进程终止。SDK 动态加载不代表宿主可自行选择任意授权目录。
 - [F-ui](shared.md#f-ui前端共享展示共享)、[F-style](shared.md#f-style全局主题与业务样式混合)：Markdown、数学、复制、浮层和聊天样式。

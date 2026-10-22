@@ -42,7 +42,7 @@
 ## 公共与跨模块引用
 
 - [F-assembly](shared.md#f-assembly进程与页面组装混合)：认证、自定义模型与 Pi 默认模型 IPC、事件投递及对应 preload 方法。
-- [F-runtime-state](shared.md#f-runtime-state综合-runtime-状态混合)：`runtime.ts` 的能力、模型切换、`loadPiDefaultModel`、`setPiDefaultModel`、`loadModelDisplay`、可见性动作；`runtime-api.ts` 的模型身份与能力类型。
+- [F-runtime-state](shared.md#f-runtime-state综合-runtime-状态混合)：`stores/runtime-models.ts` 的能力、模型切换、`loadPiDefaultModel`、`setPiDefaultModel`；`stores/runtime-model-display.ts` 的 `loadModelDisplay` 与可见性动作；`runtime.ts` 只做门面转发；`runtime-api.ts` 的模型身份与能力类型。
 - [F-config](shared.md#f-configdesktop-配置混合)：模型隐藏项与安装级设备标识；不保存认证密钥。
 - [F-platform](shared.md#f-platform文件锁外链与基础错误共享)：配置写锁、外链与基础错误。
 - [F-process](shared.md#f-process受管进程与-sdk-公共设施共享)：固定 agent 目录、受管 SDK 加载与进程终止。
