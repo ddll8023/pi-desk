@@ -270,7 +270,7 @@ src/renderer/src/
 
 阶段划分按“风险由低到高、依赖由叶子到编排”排序。每阶段在开始前单独讨论实现细节并提交逐文件执行清单，另获确认后实施。
 
-当前进度：阶段 1 与阶段 2 已完成，阶段 3 至 6 未开始。各阶段标题下标注的是该阶段**开始时**的计划与判据，实施中对不上实测的部分已在文中就地更正。
+当前进度：阶段 1 至 4 已完成；阶段 5 进行中，A0、A1、A2 已完成，剩 A3；阶段 6 未开始。各阶段标题下标注的是该阶段**开始时**的计划与判据，实施中对不上实测的部分已在文中就地更正。
 
 ### 阶段 1：主进程布局与装配拆分（已完成）
 
@@ -331,8 +331,8 @@ src/renderer/src/
 - 批次划分（按风险从低到高，各自单独提交清单）：
   - A0 共享展示层归位：把被多能力复用的展示代码收进 `ui/`，纯路径搬迁，不改行为。**已完成**：9 个文件移入 `src/renderer/src/ui/`，56 个文件改写 88 处导入。
   - A1 拆分 `stores/runtime.ts`：按会话运行与投影、历史缓存、模型能力与切换、模型展示偏好切开。**已完成**：拆为 `stores/runtime-core.ts`、`stores/runtime-history.ts`、`stores/runtime-models.ts`、`stores/runtime-model-display.ts` 四个切片模块，`runtime.ts` 只作门面（组合与初始化/释放编排），保留原有 49 个公开成员（`initialize`、`dispose` 与 47 个状态及动作）与两个历史类型再导出，19 个引用 `useRuntimeStore` 的文件不改调用点。切片间不互相 import，会话状态收敛对模型侧的影响经组合根一次性晚绑定转交。
-  - A2 拆分 `App.vue`：组合根、布局骨架、启动编排、弹层宿主分离。
-  - A3 收敛 `session ↔ workspace-tabs` 的打开编排方向，这是本阶段唯一有行为风险的项。
+  - A2 拆分 `App.vue`：组合根、布局骨架、启动编排、弹层宿主分离。**已完成**：`App.vue` 从 624 行降为只装配 `<AppShell />`、`<AppDialogHost />` 并调用 `useAppStartup()`；新增 `shell/AppShell.vue`（布局骨架与窄窗开合）、`shell/WorkspaceView.vue`（标签条、四条提示与面板层）、`shell/AppDialogHost.vue`（9 个弹层与展示派生值）、`shell/use-app-startup.ts`（Store 初始化/释放顺序、生成式参数落盘、两条补读 watch）。项目移除、会话删除、脏文件关闭与快捷命令增删改的待确认目标分别归入 `stores/project.ts`、`stores/session.ts`、`stores/workspace-tabs.ts`、`stores/quick-commands.ts`，弹层宿主不另存副本；同时删掉 `App.vue` 里未被使用的 `trustStore`。
+  - A3 收敛 `session ↔ workspace-tabs` 的打开编排方向，这是本阶段唯一有行为风险的项。**已完成**：标签侧导出 `ChatOpenIntent`，只计算「打开哪个会话、落到哪个标签」；`activateTab`／`openNewChatTab`／`startNewChatInTab`／`closeTab`／`requestClose`／`confirmPendingClose` 改为返回意图，新增 `session.openIntent` 作为唯一提交入口；原挂在标签 Store 上的两个补焦订阅迁到 `shell/use-app-startup.ts`，标签侧改为 `onProjectChanged`／`chatFocusIntent` 返回意图；`createTab` 收窄为 `createTerminalTab`。
 
 ### 阶段 6：文档与记忆同步
 
@@ -349,17 +349,19 @@ src/renderer/src/
 
 ## 8. 待定问题
 
-阶段 1 的细节已核实，原先三项待定已结清；下列问题留待后续阶段：
+原四项待定中三项已在实施中结清，只余样式归属一项：
 
 | # | 待定事项 | 待定原因 | 决定阶段 |
 | --- | --- | --- | --- |
-| 1 | preload 拆分的域粒度 | 与主进程能力目录对齐，但部分域（如 Runtime 内混装模型与资源）在阶段 4 前无法最终对齐 | 阶段 3 讨论 |
-| 2 | 契约拆分是否改变校验函数分组 | 拆分可能暴露同一形状的重复校验，需确认是否合并 | 阶段 4 讨论 |
-| 3 | `main.css` 是否按能力拆分样式 | 与结构重构正交，且全局主题存在跨模块令牌依赖 | 阶段 5 后单独评估 |
-| 4 | `resources/pi-response-projection` 的归属 | 它把 CLI JSON 响应转为共享契约，既可算 `resources` 内部实现，也可下沉到 `shared/` | 阶段 1 实施时按调用点确认 |
+| 1 | `main.css` 是否按能力拆分样式 | 与结构重构正交，且全局主题存在跨模块令牌依赖；类名与能力的一对一归属要等 `components/` 真正切片后才能判定 | 阶段 5 全部批次完成后单独评估 |
 
-已结清的原待定项：`projects/` 与 `files/` 合并；主进程服务实例化保持组合根集中注入（现状已如此，不需改动实例化方式）；`terminal-manager` 归 `terminal/`（主进程侧只做适配，终端生命周期在守护进程）。
+已结清的原待定项：
+
+- preload 拆分的域粒度（阶段 3）：定为 11 个域文件（`desktop`、`projects`、`sessions`、`runtime`、`terminal`、`git`、`preferences`、`providers`、`updates`、`trust`、`genui`）；`runtime-api` 的 21 个方法作为一个域整体保留，契约分域不改变 preload 的方法归属。
+- 契约拆分是否改变校验函数分组（阶段 4）：未合并形状相同的重复校验；可跨组的非导出辅助（`isRecord`、`RUNTIME_ERROR_CODES`）留在各自组内，被两组以上共用的才提升为导出。
+- `resources/pi-response-projection` 的归属（阶段 1）：按调用点确认留在 `src/main/resources/`，唯一消费者是同目录的 `resource-preview.ts`，不属于跨单元共享契约。
+- `projects/` 与 `files/` 合并；主进程服务实例化保持组合根集中注入（现状已如此，不需改动实例化方式）；`terminal-manager` 归 `terminal/`（主进程侧只做适配，终端生命周期在守护进程）。
 
 ## 9. 待确认事项
 
-阶段 1–4 已完成；阶段 5 进行中，已完成 A0 与 A1。下一步是 A2（拆分 `App.vue`：组合根、布局骨架、启动编排、弹层宿主分离）：先做只读调查确认 Store 初始化/释放顺序与弹层归属，再提交逐文件执行清单，另获确认后实施。各批次默认单独提交清单，不一次性确认全程。
+阶段 1–5 已完成，下一步是阶段 6：重写 `docs/项目结构文档.md` 与 `docs/modules/*.md` 的路径索引做全量校对，并评估 `.agents/memory/` 中涉及目录约定的条目；`main.css` 的样式归属仍按 §8 待定项处理，前置是 `components/` 完成能力切片。

@@ -45,7 +45,7 @@
 
 | 文件 | 用途 |
 | --- | --- |
-| `src/renderer/src/stores/session.ts` | 按项目的列表分片、串行打开／重载、删除与待确认目标 |
+| `src/renderer/src/stores/session.ts` | 按项目的列表分片、串行打开／重载、按标签意图提交打开、删除与待确认目标 |
 | `src/renderer/src/stores/session-runs.ts` | 运行清单、副本状态、释放与结束 |
 | `src/renderer/src/stores/session-view.ts` | 按会话保存输入草稿、附件、阅读位置与展开状态 |
 | `src/renderer/src/stores/extension-ui.ts` | 运行目标的扩展对话、通知、widget 展示副本 |
@@ -92,7 +92,7 @@
 
 ## 关键调用链
 
-1. 页面表达打开意图，`session` Store 先固定项目与标签并串行提交。
+1. 页面表达打开意图：标签 Store 计算 `ChatOpenIntent`，`session` Store 固定项目与标签并串行提交。
 2. 主进程校验登记项目与信任，注册表管理占用，Runtime 桥决定复用、切前台或建立宿主。
 3. 宿主请求会话目标准备，主进程按来源实例的归属项目复核目标，再返回绑定代际与目录；宿主不能自行编号授权。
 4. 输入坞经 Runtime 服务提交固定目标和附件；SDK 事件转换成消息、工具与活动投影，主进程广播到可信页面。

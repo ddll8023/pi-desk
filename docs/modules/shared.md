@@ -15,7 +15,11 @@
 | `src/main/ipc/dispatch.ts` | IPC 注册包装、调用者校验、有界标识与 MCP 服务器名校验 |
 | `src/preload/index.ts` | 只合并各域 Api 并暴露 `window.desktop`，不含 channel 调用与校验 |
 | `src/preload/*.ts`（域文件） | 按业务域各一个文件（`desktop`、`projects`、`sessions`、`runtime`、`terminal`、`git`、`preferences`、`providers`、`updates`、`trust`、`genui`），各自承载固定 channel 调用、声明字段载荷重建、响应与事件校验、订阅释放 |
-| `src/renderer/src/App.vue` | Store 生命周期、工作区面板、设置切换、项目／会话／文件／快捷命令确认弹层、生成式参数持久化初始化 |
+| `src/renderer/src/App.vue` | 页面组合根：只装配外壳骨架、弹层宿主与启动编排 |
+| `src/renderer/src/shell/AppShell.vue` | 布局骨架：顶部栏、侧栏与窄窗遮罩、工作区槽、右侧面板；持有窄窗与侧栏开合状态 |
+| `src/renderer/src/shell/WorkspaceView.vue` | 工作区：标签条、四条操作失败提示、对话／终端／文件面板层与空态 |
+| `src/renderer/src/shell/AppDialogHost.vue` | 弹层宿主：会话中断、信任、项目移除、会话删除、脏文件关闭、会话选择、快捷命令编辑与删除、Extension、更新提示 |
+| `src/renderer/src/shell/use-app-startup.ts` | Store 初始化与释放顺序、打开意图的补提交、生成式参数持久化初始化与退出落盘、项目切换与会话落盘的补读 |
 | `src/renderer/src/env.d.ts` | 将各域 Api 合成为可缺失的 `Window.desktop`；仅环境类型，不承担业务请求 |
 
 已知消费者覆盖总览列出的业务模块。IPC 参数与调用者校验、preload 验证和渲染服务异常转换是不同边界，不能因存在相似代码就省掉任一边界。单窗口事件只投递给受信任窗口。
