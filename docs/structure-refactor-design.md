@@ -240,7 +240,7 @@ src/renderer/src/
 | `src/shared/runtime-api.ts` | 1 558 行承载运行状态、Prompt、回退、压缩、投影、模型能力、资源与 MCP、历史、诊断共 6 组契约 | 单文件过载 | 已在阶段 4 拆为 `shared/runtime/` 下的 `status`、`projection`、`models`、`resources`；`runtime-api.ts` 只再导出 |
 | `src/shared/genui-api.ts` | 2 154 行 | 单文件过载 | 已在阶段 4 拆为 `shared/genui/` 下的 `limits`、`nodes`、`params`、`diagram`、`chart`、`parse`；`genui-api.ts` 只再导出 |
 | `package.json` 的 `test` | 目录 glob 按目录列举测试文件 | 新增或移动测试目录时静默漏检 | 每阶段随测试文件位置同步更新 glob |
-| `src/renderer/src/assets/main.css` | 单一全局样式文件承载多能力业务类 | 切片后样式归属仍不清晰 | 结构重构不处理；单独评估是否按能力拆分样式 |
+| `src/renderer/src/assets/main.css` | 单一全局样式文件承载多能力业务类 | 样式归属已拆分为基础层、能力层与共享层 | 实施结果见 §8 样式归属评估 |
 | `src/renderer/src/` 跨能力 import | 阶段 7 后实测 433 条导入：280 条同能力内部、88 条指向 `ui/`（§3.8 允许）、105 条指向其他能力的 Store 公开接口（§3.8 允许）；其余 40 条中 31 条是 `shell/` 与组合根作为宿主挂载各能力视图与弹层（职责本身），9 条是真正的跨能力内部引用 | 已处置 4 条：`project-entry-drag` 作为文件与终端共用的拖拽协议下沉到 `ui/`（对应两条引用）、相对时间与分叉折叠两个纯展示整形函数下沉到 `ui/relative-time.ts` 与 `ui/forked-sessions.ts`（对应两条引用）、`external-url` 桥接移入唯一消费者 `editor/services/` | 余 5 条保留并登记：`sessions/stores/runtime-models.ts` 直引 `providers/services/pi-settings.ts` 与 `resources/services/resource.ts`、`sessions/stores/runtime-model-display.ts` 直引 `preferences/services/preferences.ts`、`workspace/components/TerminalView.vue` 与 `git/stores/git-status.ts` 直引 `editor/services/project-file.ts`；这些是无状态的 preload 薄桥接，不是对方能力的状态或编排，改经对方 Store 只会多出一层纯转发（与 §3.1 不造透传层冲突）。另有 5 条跨能力组件组合（`ChatMessageItem` 渲染生成式界面、`PromptComposer` 嵌入模型选择器、终端与标签条嵌入快捷命令菜单），属能力间经公开组件的协作，同样保留 |
 
 ## 4. 备选方向与取舍
@@ -365,9 +365,9 @@ src/renderer/src/
 
 | # | 待定事项 | 待定原因 | 决定阶段 |
 | --- | --- | --- | --- |
-| 1 | `main.css` 是否按能力拆分样式 | 阶段 7 后已具备判定前提（组件已按能力切片）；归属评估已完成，结论见本表下方 | 已评估，待排期实施 |
+| 1 | `main.css` 是否按能力拆分样式 | 阶段 7 后已具备判定前提（组件已按能力切片）；归属评估与实施结果见本表下方 | 已完成 |
 
-样式归属的评估结论（阶段 7 收尾实测）：`assets/main.css` 6 202 行、605 个类选择器，484 个只被单一能力使用（`editor` 136、`sessions` 123、`git` 84、`shell` 44、`projects` 42、`workspace` 21、`preferences` 14、`ui` 14，`resources`、`genui`、`providers`、`updates` 各 1），75 个被两个以上能力共用，没有未被引用的类。按能力归属判定可行，但 `:root` 与暗色主题令牌、动效、焦点环、Tailwind 引入与图表色槽是跨能力基础层，必须留下。推荐分两步、各自单独确认：先抽「令牌与基础层」并把业务类改为在 `main.css` 内按能力 `@import`（只改文件与层叠顺序，不改选择器），再按能力搬业务类（`editor` 与 `sessions` 两批最大、`git` 次之）。风险集中在层叠顺序与令牌依赖，每一步都需要页面视觉核对，所以实施时必须单独申请运行授权。
+样式归属的评估结论（阶段 7 收尾实测）：`assets/main.css` 6 202 行、605 个类选择器，484 个只被单一能力使用，75 个被两个以上能力共用，没有未被引用的类。`:root` 与暗色主题令牌、动效、焦点环、Tailwind 引入与图表色槽属于跨能力基础层，必须保留为共享样式。实施结果：`assets/main.css` 现为入口，`assets/styles/base.css` 承载主题令牌与基础规则；组件样式拆入 `editor.css`、`sessions.css`、`git.css`、`shell.css`、`projects.css`、`workspace.css`、`preferences.css` 与 `ui.css`。规则声明未改写，公共与混合选择器归入 `ui.css`；`assets/genui.css` 继续由生成式界面模块独立维护。样式拆分改变了不同能力样式表之间的加载顺序，页面视觉效果尚未运行核对。
 
 已结清的原待定项：
 
@@ -378,4 +378,4 @@ src/renderer/src/
 
 ## 9. 待确认事项
 
-阶段 1–7 已完成，§3.6 的前端能力目录已落地，文档与记忆索引已随之同步。剩余工作只有 §8 待定项一项：`main.css` 的样式归属，前置已满足（组件已按能力切片），可在下次评估时单独讨论。
+阶段 1–7 与 §8 的样式归属拆分均已完成，§3.6 的前端能力目录及全局样式已按能力归位，相关模块文档已更新。样式加载后的实际视觉表现尚未核对。

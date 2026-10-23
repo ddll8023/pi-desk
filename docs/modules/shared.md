@@ -112,11 +112,9 @@
 
 ## F-style：全局主题与业务样式（混合）
 
-唯一归属文件：`src/renderer/src/assets/main.css`。
+页面样式入口为 `src/renderer/src/assets/main.css`，负责引入 Tailwind、KaTeX、本地基础样式及能力样式。主题令牌与基础规则归 `src/renderer/src/assets/styles/base.css`；能力规则按样式归属分别位于 `src/renderer/src/assets/styles/editor.css`、`sessions.css`、`git.css`、`shell.css`、`projects.css`、`workspace.css`、`preferences.css` 与 `ui.css`。这些样式均由页面入口统一加载，不由各能力组件重复导入。
 
-包含 Tailwind 引入、KaTeX 本地样式、亮暗色与尺寸／动效令牌、基础语义样式，以及聊天输入、设置、侧栏、工作区、文件编辑、终端和 Git 的业务类。实测 6 202 行、605 个类选择器：484 个只被单一能力使用，75 个被两个以上能力共用，没有被引用却仍留在这里的类。按能力拆分的前置条件已具备（前端已按能力切片），评估结论与分两步的做法见[结构重构设计](../structure-refactor-design.md) §8。所有模块经页面入口加载；各模块只引用自己使用的类族，不重复认领此物理文件。
-
-`src/renderer/src/assets/genui.css` 由生成式界面模块维护，独立于本记录。全局主题与主进程窗口背景／覆盖层颜色存在同步关系，改动不只影响单个组件。
+`src/renderer/src/assets/genui.css` 仍由生成式界面模块独立维护。全局主题与主进程窗口背景／覆盖层颜色存在同步关系，改动不只影响单个组件。
 
 ## F-build：构建与发行上下文
 

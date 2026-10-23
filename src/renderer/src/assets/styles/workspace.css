@@ -1,0 +1,268 @@
+/* 归集工作区标签与终端相关的组件样式。 */
+@layer components {
+/* 工作区标签条：对话、终端与文件标签同处一组；标签横向滚动不换行，新建按钮跟在最后一个标签之后。 */
+.workspace-tabs {
+    display: flex;
+    min-width: 0;
+    flex: none;
+    align-items: center;
+    gap: 0.25rem;
+    border-bottom: 1px solid var(--color-desk-line);
+    background: var(--color-desk-surface-subtle);
+    padding: 0.25rem 0.5rem;
+  }
+/* 滚动区把标签行与新建按钮一起装下：按钮因此跟在标签之后，而不是被推到右端。 */
+.workspace-tabs-strip {
+    display: flex;
+    min-width: 0;
+    flex: 1;
+    align-items: center;
+    gap: 0.25rem;
+    overflow-x: auto;
+    /* 标签条本身不出现滚动条：内容超出时用滚轮或键盘移动，保持一行高度稳定。 */
+    scrollbar-width: none;
+  }
+.workspace-tabs-strip::-webkit-scrollbar {
+    display: none;
+  }
+/* 标签行：宽度随标签数量增长，把新建按钮顶到最后一个标签之后。 */
+.workspace-tabs-group {
+    display: flex;
+    min-width: 0;
+    flex: none;
+    align-items: center;
+    gap: 0.25rem;
+  }
+/* 标签等宽：宽度固定在容器上，不随名称变化，标题只在剩余空间里截断。 */
+.workspace-tab {
+    display: flex;
+    width: 12rem;
+    min-width: 0;
+    flex: none;
+    align-items: center;
+    border: 1px solid transparent;
+    border-radius: var(--radius-desk-sm);
+    transition: background-color var(--default-transition-duration) ease,
+      border-color var(--default-transition-duration) ease;
+  }
+.workspace-tab:not(.is-active):hover {
+    background: var(--color-desk-surface);
+  }
+/* 活动标签用底色加描边从同组中抬起，不用强调色，避免与终端输出抢注意力。 */
+.workspace-tab.is-active {
+    border-color: var(--color-desk-line);
+    background: var(--color-desk-surface);
+    box-shadow: var(--shadow-desk-raise);
+  }
+.workspace-tab-main {
+    display: flex;
+    min-width: 0;
+    flex: 1;
+    align-items: center;
+    gap: 0.375rem;
+    border: 0;
+    border-radius: var(--radius-desk-sm);
+    background: transparent;
+    padding: 0.25rem 0.25rem 0.25rem 0.5rem;
+    color: var(--color-desk-muted);
+    font-size: 0.75rem;
+    cursor: pointer;
+  }
+.workspace-tab.is-active .workspace-tab-main {
+    color: var(--color-desk-ink);
+  }
+/* 有新回复：标题与图标一起转强调色，配合标题后的圆点，在一排标签里也能一眼看出。 */
+.workspace-tab.is-unseen .workspace-tab-main {
+    color: var(--color-desk-accent);
+  }
+.workspace-tab-icon {
+    width: 0.875rem;
+    height: 0.875rem;
+    flex: none;
+  }
+.workspace-tab-title {
+    min-width: 0;
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+/* 状态点：运行中与有新回复用强调色，已退出用中性色，不把退出当成错误。 */
+.workspace-tab-dot {
+    width: 6px;
+    height: 6px;
+    flex: none;
+    border-radius: 999px;
+  }
+.workspace-tab-dot.is-running {
+    background: var(--color-desk-accent);
+  }
+.workspace-tab-dot.is-exited {
+    background: var(--color-desk-line-strong);
+  }
+.workspace-tab-dot.is-unseen {
+    background: var(--color-desk-accent);
+  }
+.workspace-tab-rename {
+    min-width: 0;
+    flex: 1;
+    border: 0;
+    background: transparent;
+    padding: 0.25rem 0.5rem;
+    color: var(--color-desk-ink);
+    font: inherit;
+    outline: none;
+  }
+/* 关闭按钮只在悬停或活动标签上出现，标签条本身保持安静。 */
+.workspace-tab-close {
+    display: flex;
+    width: 1.125rem;
+    height: 1.125rem;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    margin-right: 0.125rem;
+    border-radius: var(--radius-desk-sm);
+    color: var(--color-desk-muted);
+    opacity: 0;
+    transition: opacity var(--default-transition-duration) ease, color var(--default-transition-duration) ease;
+  }
+.workspace-tab:hover .workspace-tab-close,
+  .workspace-tab.is-active .workspace-tab-close {
+    opacity: 1;
+  }
+.workspace-tab-close:hover {
+    background: var(--color-desk-surface-subtle);
+    color: var(--color-desk-ink);
+  }
+.workspace-tab-new {
+    display: flex;
+    width: 1.5rem;
+    height: 1.5rem;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--radius-desk-sm);
+    color: var(--color-desk-muted);
+  }
+.workspace-tab-new:not(:disabled):hover {
+    background: var(--color-desk-surface);
+    color: var(--color-desk-ink);
+  }
+/* 快捷命令按钮：固定在标签条右端（在滚动区之外，不随标签滚走），与新建按钮同一悬停表现。 */
+.workspace-tab-command {
+    display: flex;
+    height: 1.5rem;
+    flex: none;
+    align-items: center;
+    gap: 0.25rem;
+    border-radius: var(--radius-desk-sm);
+    padding: 0 0.375rem;
+    color: var(--color-desk-muted);
+    font-size: 0.6875rem;
+    white-space: nowrap;
+  }
+.workspace-tab-command:not(:disabled):hover {
+    background: var(--color-desk-surface);
+    color: var(--color-desk-ink);
+  }
+.workspace-tab-command-label {
+    flex: none;
+  }
+/* 面板层：对话、终端与文件面板叠放在标签条之下的同一区域，只显示活动标签。 */
+.workspace-panes {
+    position: relative;
+    display: flex;
+    min-width: 0;
+    min-height: 0;
+    flex: 1;
+  }
+/*
+   * 工作区内容面板：每个面板都占满整块区域，非活动面板用 visibility 隐藏而不是 display。
+   * 面板始终保持真实尺寸，输入框量高与终端尺寸测量在隐藏状态下也成立，切回时不需要重建。
+   */
+.workspace-pane {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    min-width: 0;
+    min-height: 0;
+    flex-direction: column;
+    overflow: hidden;
+  }
+.workspace-pane.is-hidden {
+    visibility: hidden;
+    pointer-events: none;
+  }
+/* 文件标签的未保存标记：小实心点，不参与点击与布局测量。 */
+.workspace-tab-dirty {
+    width: 6px;
+    height: 6px;
+    flex: none;
+    border-radius: 999px;
+    background: var(--color-desk-warning);
+  }
+.workspace-notice {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: 0.5rem;
+    border-bottom: 1px solid var(--color-desk-line);
+    background: var(--color-desk-danger-soft);
+    padding: 0.375rem 0.75rem;
+    color: var(--color-desk-danger);
+    font-size: 0.75rem;
+  }
+.workspace-notice-close {
+    flex: none;
+    color: inherit;
+    font-size: 0.75rem;
+    text-decoration: underline;
+  }
+/* 终端面板：内边距用与 xterm 主题同一张底色的画布，看起来是一整块终端。 */
+.terminal-view {
+    position: relative;
+    display: flex;
+    min-width: 0;
+    min-height: 0;
+    flex: 1;
+    background: var(--color-desk-canvas-sunken);
+    padding: 0.5rem 0.5rem 0.375rem 0.625rem;
+  }
+.terminal-view-host {
+    min-width: 0;
+    min-height: 0;
+    flex: 1;
+  }
+/* 文件拖到终端面板上：用内缩虚线描边提示可落点。outline 画在内容之上且不参与布局，终端尺寸不变。 */
+.terminal-view.is-drop-target {
+    outline: 2px dashed var(--color-desk-accent);
+    outline-offset: -2px;
+  }
+.terminal-view-host .xterm {
+    height: 100%;
+  }
+/* 粘贴确认与一次性提示共用的浮条：固定在终端右上角，不占用终端尺寸。 */
+.terminal-bar {
+    position: absolute;
+    top: 0.5rem;
+    right: 0.75rem;
+    display: flex;
+    max-width: calc(100% - 1.5rem);
+    align-items: center;
+    gap: 0.5rem;
+    border: 1px solid var(--color-desk-line-strong);
+    border-radius: var(--radius-desk-sm);
+    background: var(--color-desk-surface);
+    box-shadow: var(--shadow-desk-pop);
+    padding: 0.25rem 0.5rem;
+    color: var(--color-desk-ink);
+    font-size: 0.75rem;
+  }
+.terminal-bar-text {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}

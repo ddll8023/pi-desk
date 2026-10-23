@@ -1,0 +1,1147 @@
+/* 归集文件编辑能力相关的组件样式。 */
+@layer components {
+/* 文件标签面板：头部是单行编辑器 chrome，主体占满剩余高度，代码与预览在主体内叠放。 */
+.file-editor {
+    display: flex;
+    min-width: 0;
+    min-height: 0;
+    flex: 1;
+    flex-direction: column;
+    background: var(--color-desk-surface);
+  }
+/* 单行头部：路径在左、操作在右；固定 36px，与标签条一起构成两层薄 chrome。 */
+.file-editor-header {
+    display: flex;
+    flex: none;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    min-height: 36px;
+    border-bottom: 1px solid var(--color-desk-line);
+    padding: 0 0.5rem 0 0.75rem;
+  }
+.file-editor-path-row {
+    position: relative;
+    display: flex;
+    min-width: 0;
+    flex: 1;
+    align-items: center;
+    gap: 0.375rem;
+  }
+/* 未保存标记：小实心点，绝对定位在行首留白里，出现/消失不推动路径。 */
+.file-editor-dirty {
+    position: absolute;
+    left: -0.5rem;
+    top: 50%;
+    width: 6px;
+    height: 6px;
+    border-radius: 999px;
+    background: var(--color-desk-warning);
+    transform: translateY(-50%);
+  }
+/* 路径整行可点复制：目录前缀从左侧省略，文件名始终完整可见。 */
+.file-editor-path {
+    display: flex;
+    min-width: 0;
+    flex: 0 1 auto;
+    align-items: center;
+    gap: 0.125rem;
+    border-radius: var(--radius-desk-sm);
+    padding: 0.125rem 0.25rem;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    line-height: 1.2;
+    color: var(--color-desk-muted);
+    text-align: left;
+    transition: background-color var(--default-transition-duration) ease, color var(--default-transition-duration) ease;
+  }
+.file-editor-path:hover {
+    background: var(--color-desk-surface-subtle);
+    color: var(--color-desk-ink);
+  }
+.file-editor-path:focus-visible {
+    outline: 2px solid var(--color-desk-accent);
+    outline-offset: -1px;
+  }
+/*
+   * 目录前缀用 rtl 方向让省略号出现在左侧；内层 bdi 把路径按原方向隔离，
+   * 否则结尾的斜杠会被 bidi 排到最前面。
+   */
+.file-editor-path-prefix {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    direction: rtl;
+    text-align: left;
+  }
+.file-editor-path-prefix > bdi {
+    direction: ltr;
+  }
+.file-editor-path-name {
+    flex: none;
+    font-weight: 600;
+    color: var(--color-desk-ink);
+  }
+/* 复制结果的一次性提示：跟在路径后面，1.6s 后消失，不推动右侧操作区。 */
+.file-editor-path-toast {
+    flex: none;
+    border-radius: 999px;
+    background: var(--color-desk-accent-soft);
+    padding: 0.0625rem 0.375rem;
+    font-size: 10px;
+    color: var(--color-desk-accent);
+  }
+/* 只读徽标：替代原先占一行的小字提示，完整原因放在 title 里。 */
+.file-editor-badge {
+    flex: none;
+    border: 1px solid var(--color-desk-warning);
+    border-radius: 999px;
+    padding: 0 0.375rem;
+    font-size: 10px;
+    line-height: 1.5;
+    color: var(--color-desk-warning);
+  }
+.file-editor-actions {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: 0.25rem;
+  }
+/* 图标键：24px 方形；hover 用浅底，活动态保持同一底色并改用强调色。 */
+.file-editor-icon-button {
+    display: inline-flex;
+    width: 24px;
+    height: 24px;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--radius-desk-sm);
+    color: var(--color-desk-muted);
+    transition: background-color var(--default-transition-duration) ease, color var(--default-transition-duration) ease;
+  }
+.file-editor-icon-button:hover {
+    background: var(--color-desk-surface-subtle);
+    color: var(--color-desk-ink);
+  }
+.file-editor-icon-button.is-active {
+    background: var(--color-desk-accent-soft);
+    color: var(--color-desk-accent);
+  }
+/* 图标统一 14px 线性描边，不随字号缩放。 */
+.file-editor-icon-button svg,
+  .file-editor-mode-item svg,
+  .file-markdown-toc-close svg,
+  .file-markdown-toc-disclosure svg,
+  .file-markdown-search-button svg {
+    width: 14px;
+    height: 14px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.5;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+/* 「更多」是三个实心点，不走线性描边。 */
+.file-editor-icon-button svg.file-editor-dots {
+    fill: currentColor;
+    stroke: none;
+  }
+/* 读写轨：两段等宽，活动段由滑块承载；滑块是这处 chrome 唯一的动效。 */
+.file-editor-mode {
+    position: relative;
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: 1fr;
+    align-items: center;
+    height: 24px;
+    margin-left: 0.125rem;
+    border: 1px solid var(--color-desk-line-strong);
+    border-radius: var(--radius-desk-sm);
+    padding: 1px;
+    background: var(--color-desk-surface);
+  }
+.file-editor-mode-thumb {
+    position: absolute;
+    top: 1px;
+    bottom: 1px;
+    left: 1px;
+    width: calc(50% - 1px);
+    border-radius: 4px;
+    background: var(--color-desk-accent-soft);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-desk-accent) 32%, transparent);
+    transition: transform var(--default-transition-duration) var(--motion-ease-entrance);
+  }
+.file-editor-mode-thumb.is-preview {
+    transform: translateX(100%);
+  }
+.file-editor-mode-item {
+    position: relative;
+    z-index: 1;
+    display: inline-flex;
+    height: 20px;
+    align-items: center;
+    justify-content: center;
+    gap: 0.1875rem;
+    border-radius: 4px;
+    padding: 0 0.375rem;
+    font-size: var(--text-2xs);
+    line-height: 1;
+    color: var(--color-desk-muted);
+    transition: color var(--default-transition-duration) ease;
+  }
+.file-editor-mode-item:hover {
+    color: var(--color-desk-ink);
+  }
+.file-editor-mode-item.is-active {
+    color: var(--color-desk-accent);
+  }
+/* 降低动态效果时不做滑块位移，直接换底色。 */
+@media (prefers-reduced-motion: reduce) {
+    .file-editor-mode-thumb {
+      transition: none;
+    }
+  }
+.file-editor-body {
+    position: relative;
+    display: flex;
+    min-width: 0;
+    min-height: 0;
+    flex: 1;
+    flex-direction: column;
+  }
+.file-editor-notice {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.75rem;
+    font-size: 0.8125rem;
+    color: var(--color-desk-muted);
+  }
+.file-editor-notice.is-error {
+    color: var(--color-desk-danger);
+  }
+/* 代码与预览叠放：两层都占满主体，隐藏层用 visibility 保留尺寸，CodeMirror 不需要重新测量。 */
+.file-editor-surface {
+    position: relative;
+    min-width: 0;
+    min-height: 0;
+    flex: 1;
+  }
+.file-editor-layer {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    min-width: 0;
+    min-height: 0;
+    flex-direction: column;
+  }
+.file-editor-layer.is-hidden {
+    visibility: hidden;
+    pointer-events: none;
+  }
+.file-editor-code {
+    height: 100%;
+    min-height: 0;
+    flex: 1;
+  }
+.file-editor-preview {
+    overflow: hidden;
+    padding: 0;
+  }
+/* 「更多」菜单：沿用侧栏菜单的外观，勾选标记占固定宽，字号是一行四个小键。 */
+.file-editor-menu-item {
+    gap: 0.375rem;
+  }
+.file-editor-menu-check {
+    width: 10px;
+    flex: none;
+    font-size: 10px;
+    color: var(--color-desk-accent);
+  }
+.file-editor-menu-section {
+    margin-top: 2px;
+    border-top: 1px solid var(--sidebar-line);
+    padding: 6px 8px 4px;
+  }
+.file-editor-menu-label {
+    margin-bottom: 4px;
+    font-size: 11px;
+    color: var(--sidebar-muted);
+  }
+.file-editor-font-sizes {
+    display: flex;
+    gap: 2px;
+  }
+.file-editor-font-size {
+    min-width: 30px;
+    flex: 1;
+    border: 1px solid var(--sidebar-line);
+    border-radius: 4px;
+    padding: 2px 0;
+    font-size: 11px;
+    color: var(--sidebar-muted);
+    transition: background-color var(--default-transition-duration) ease, color var(--default-transition-duration) ease;
+  }
+.file-editor-font-size:hover {
+    background: var(--sidebar-hover);
+    color: var(--sidebar-ink);
+  }
+.file-editor-font-size.is-active {
+    border-color: var(--color-desk-accent);
+    background: var(--color-desk-accent-soft);
+    color: var(--color-desk-accent);
+  }
+.is-markdown-workspace .file-editor-header {
+    min-height: 72px;
+    gap: 20px;
+    padding: 12px 24px;
+    background: var(--color-desk-surface);
+  }
+.is-markdown-workspace .file-editor-path {
+    display: flex;
+    min-width: 0;
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 3px;
+    text-align: left;
+  }
+.is-markdown-workspace .file-editor-path-name {
+    order: -1;
+    max-width: 100%;
+    overflow: hidden;
+    font-family: var(--font-sans);
+    font-size: 17px;
+    font-weight: 650;
+    text-overflow: ellipsis;
+  }
+.is-markdown-workspace .file-editor-path-prefix { max-width: 100%; font-size: 11px; line-height: 1.4; color: var(--color-desk-muted); }
+.file-reader-save-state { flex: none; font-size: 11px; color: var(--color-desk-muted); }
+.file-reader-save-state.is-dirty { color: var(--color-desk-warning); }
+.file-reader-toolbar {
+    display: flex;
+    min-height: 44px;
+    flex: none;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px 16px;
+    border-bottom: 1px solid var(--color-desk-line);
+    background: var(--color-desk-surface);
+    padding: 6px 24px;
+  }
+.file-reader-toolbar-group { display: flex; align-items: center; gap: 8px; }
+.file-reader-tool {
+    display: inline-flex;
+    min-height: 30px;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    border: 1px solid transparent;
+    border-radius: 5px;
+    padding: 4px 8px;
+    color: var(--color-desk-muted);
+    font-size: 12px;
+    white-space: nowrap;
+    cursor: pointer;
+  }
+.file-reader-tool svg, .file-markdown-image-viewer-header svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.file-reader-tool:hover:not(:disabled) { background: var(--color-desk-surface-subtle); color: var(--color-desk-ink); }
+.file-reader-tool.is-active { background: var(--color-desk-accent-soft); color: var(--color-desk-accent); }
+.file-reader-tool:disabled, .file-reader-font-control button:disabled { opacity: 0.4; cursor: default; }
+.file-reader-context { flex: 1; min-width: 0; font-size: 11px; color: var(--color-desk-muted); }
+.file-reader-font-control {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+  }
+.file-reader-font-control button { min-width: 30px; min-height: 30px; border-radius: 4px; font-size: 12px; color: var(--color-desk-muted); }
+.file-reader-font-control button:hover:not(:disabled) { background: var(--color-desk-surface-subtle); color: var(--color-desk-ink); }
+.file-reader-font-control span { min-width: 20px; text-align: center; font-size: 11px; font-variant-numeric: tabular-nums; color: var(--color-desk-muted); }
+.file-reader-tool:focus-visible, .file-reader-font-control button:focus-visible, .file-markdown-toc-level-select:focus-visible { outline: 2px solid var(--color-desk-accent); outline-offset: 2px; }
+.file-reader-limit { border-bottom: 1px solid var(--color-desk-line); background: var(--color-desk-surface-subtle); padding: 8px 24px; font-size: 12px; line-height: 1.6; color: var(--color-desk-muted); }
+/* 目录是阅读辅助栏，正文独立滚动；窄容器由组件切换为按需抽屉。 */
+.file-markdown {
+    position: relative;
+    display: flex;
+    min-width: 0;
+    min-height: 0;
+    flex: 1;
+    container-type: inline-size;
+    background: var(--color-desk-surface);
+  }
+.file-markdown-scroll {
+    min-width: 0;
+    min-height: 0;
+    flex: 1;
+    overflow: auto;
+    padding: clamp(28px, 4cqw, 56px) clamp(24px, 5cqw, 72px) max(80px, 16vh);
+  }
+.file-markdown-scroll:focus-visible {
+    outline: 2px solid var(--color-desk-accent);
+    outline-offset: -2px;
+  }
+/* 渲染失败时正文区退回原文：保留换行，不假装成排版后的内容。 */
+.file-markdown .file-markdown-body.is-raw {
+    white-space: pre-wrap;
+  }
+/* 富文本只有一个连续正文，不再给每段套独立输入框。 */
+.file-rich-container { width: 100%; max-width: 54rem; margin: 0 auto; }
+/* 编辑工具的分组、浮层与状态只作用于文件富文本，不更改聊天 Markdown。 */
+.file-rich-surface { position: relative; min-width: 0; }
+.file-rich-toolbar { position: sticky; top: 0; z-index: 12; display: flex; flex-wrap: wrap; align-items: center; gap: 4px; min-height: 40px; margin: 0 -8px 20px; padding: 6px 8px; border-bottom: 1px solid var(--color-desk-line); background: var(--color-desk-surface); }
+.file-rich-toolbar-group { display: flex; align-items: center; gap: 2px; padding-right: 6px; border-right: 1px solid var(--color-desk-line); }
+.file-rich-icon { display: inline-flex; align-items: center; justify-content: center; min-width: 28px; height: 28px; padding: 0 6px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--color-desk-muted); font-size: 12px; line-height: 1; font-weight: 600; cursor: pointer; }
+.file-rich-icon:hover:not(:disabled), .file-rich-icon.is-active, .file-rich-icon[aria-pressed="true"] { color: var(--color-desk-ink); background: var(--color-desk-accent-soft); border-color: var(--color-desk-line); }
+.file-rich-icon.is-italic { font-style: italic; }
+.file-rich-icon.is-strike { text-decoration: line-through; }
+.file-rich-icon:disabled { opacity: .4; cursor: default; }
+.file-rich-icon:focus-visible, .file-rich-action-menu button:focus-visible, .file-rich-suggestions button:focus-visible, .file-rich-emoji-picker button:focus-visible, .file-rich-table-handle:focus-visible { outline: 2px solid var(--color-desk-accent); outline-offset: 1px; }
+.file-rich-caret-anchor { position: fixed; width: 1px; height: 1px; pointer-events: none; }
+.file-rich-suggestions, .file-rich-action-menu, .file-rich-link-popover, .file-rich-emoji-picker { position: fixed; z-index: 90; overflow: auto; border: 1px solid var(--color-desk-line-strong); border-radius: 6px; background: var(--color-desk-surface); color: var(--color-desk-ink); box-shadow: var(--shadow-desk-pop); font-family: var(--font-sans); font-size: 13px; }
+.file-rich-menu-group { padding: 8px 10px 4px; font-size: 11px; font-weight: 600; color: var(--color-desk-muted); }
+.file-rich-menu-empty { padding: 12px; font-size: 12px; color: var(--color-desk-muted); }
+.file-rich-suggestions { padding: 4px; }
+.file-rich-suggestions button { display: flex; align-items: center; gap: 10px; width: 100%; padding: 7px 8px; border-radius: 4px; text-align: left; cursor: pointer; }
+.file-rich-suggestions button:hover, .file-rich-suggestions button.is-active { background: var(--color-desk-accent-soft); }
+.file-rich-command-icon { display: grid; place-items: center; flex: 0 0 30px; height: 30px; border: 1px solid var(--color-desk-line); border-radius: 4px; font-size: 14px; background: var(--color-desk-surface); }
+.file-rich-suggestions button > span:last-child { min-width: 0; }
+.file-rich-suggestions strong, .file-rich-suggestions small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-rich-suggestions strong { font-weight: 500; }
+.file-rich-suggestions small { margin-top: 2px; font-size: 11px; color: var(--color-desk-muted); }
+.file-rich-suggestions footer { padding: 7px 8px 3px; border-top: 1px solid var(--color-desk-line); color: var(--color-desk-muted); font-size: 11px; }
+.file-rich-action-menu { padding: 4px; }
+.file-rich-action-menu button { display: block; width: 100%; padding: 7px 10px; text-align: left; border-radius: 4px; cursor: pointer; }
+.file-rich-action-menu button:hover:not(:disabled) { background: var(--color-desk-accent-soft); }
+.file-rich-action-menu button:disabled { opacity: .4; cursor: default; }
+.file-rich-action-menu button.is-danger { color: var(--color-desk-danger); }
+.file-rich-action-menu hr { margin: 4px; border-color: var(--color-desk-line); }
+.file-rich-table-handle { position: fixed; z-index: 75; display: grid; place-items: center; width: 20px; height: 20px; border: 1px solid var(--color-desk-line); border-radius: 3px; background: var(--color-desk-surface); color: var(--color-desk-muted); cursor: pointer; font: 14px var(--font-sans); }
+.file-rich-table-handle:hover { background: var(--color-desk-accent-soft); color: var(--color-desk-ink); }
+.file-rich-link-popover { display: flex; flex-direction: column; gap: 12px; padding: 12px; }
+.file-rich-link-popover label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--color-desk-muted); }
+.file-rich-link-popover input, .file-rich-emoji-picker > input, .file-rich-search input { min-width: 0; width: 100%; padding: 5px 7px; border: 1px solid var(--color-desk-line-strong); border-radius: 3px; background: var(--color-desk-surface); color: var(--color-desk-ink); outline-color: var(--color-desk-accent); font: 13px var(--font-sans); }
+.file-rich-link-popover p { color: var(--color-desk-danger); font-size: 12px; }
+.file-rich-popover-actions { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.file-rich-popover-actions > span { flex: 1; }
+.file-rich-popover-actions button { padding: 4px; border-radius: 3px; cursor: pointer; }
+.file-rich-popover-actions button:hover { background: var(--color-desk-accent-soft); }
+.file-rich-doc-link { cursor: text; border-radius: 3px; background: color-mix(in srgb, var(--color-desk-accent) 6%, transparent); }
+.file-rich-doc-link.is-missing, .file-rich-doc-link.is-unresolved { color: var(--color-desk-muted); text-decoration-style: dashed; }
+.file-rich-body .is-empty::before { content: attr(data-placeholder); float: left; height: 0; pointer-events: none; color: var(--color-desk-muted); opacity: .75; }
+.file-rich-body .file-rich-code-block { position: relative; border: 1px solid var(--color-desk-line); border-radius: 8px; background: var(--color-desk-surface-subtle); white-space: normal; }
+.file-rich-body .file-rich-code-block pre { padding-top: 40px; margin: 0; background: transparent; white-space: pre; }
+.file-rich-code-controls { position: absolute; top: 6px; right: 6px; z-index: 1; display: flex; align-items: center; gap: 4px; height: 26px; font: 12px var(--font-sans); }
+.file-rich-code-controls > button { opacity: 0; transition: opacity 120ms; }
+.file-rich-code-block:hover .file-rich-code-controls > button, .file-rich-code-block:focus-within .file-rich-code-controls > button { opacity: 1; }
+.file-rich-diagram { padding: 12px 18px; border-top: 1px solid var(--color-desk-line); white-space: normal; }
+.file-rich-diagram > p { color: var(--color-desk-muted); font: 12px var(--font-sans); }
+.file-rich-search { position: fixed; z-index: 80; display: flex; gap: 2px; max-width: calc(100vw - 24px); padding: 4px; border: 1px solid var(--color-desk-line-strong); border-radius: 4px; background: var(--color-desk-surface); color: var(--color-desk-ink); box-shadow: var(--shadow-desk-pop); font: 12px var(--font-sans); }
+.file-rich-search-rows { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 4px; }
+.file-rich-search-row { display: flex; min-width: 0; align-items: center; gap: 2px; }
+.file-rich-search-row input { flex: 1; width: 0; }
+.file-rich-search-row > button:not(.file-rich-icon) { padding: 4px; white-space: nowrap; border-radius: 3px; cursor: pointer; }
+.file-rich-search-row > button:not(.file-rich-icon):hover { background: var(--color-desk-accent-soft); }
+.file-rich-search-row > button:disabled { opacity: .4; cursor: default; }
+.file-rich-search-status { white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--color-desk-muted); }
+.file-rich-search-rows > p { margin: 2px; color: var(--color-desk-muted); }
+.file-rich-search-match { background: var(--color-desk-warning-soft); box-shadow: inset 0 -1px var(--color-desk-warning); border-radius: 2px; }
+.file-rich-search-match.is-active { background: var(--color-desk-accent-soft); box-shadow: inset 0 -1px var(--color-desk-accent); }
+.file-rich-emoji-picker { display: flex; flex-direction: column; padding: 8px; gap: 8px; }
+.file-rich-emoji-picker nav { display: flex; gap: 4px; flex-wrap: wrap; }
+.file-rich-emoji-picker nav button { padding: 3px 5px; border-radius: 3px; color: var(--color-desk-muted); font-size: 11px; cursor: pointer; }
+.file-rich-emoji-picker nav button[aria-pressed="true"], .file-rich-emoji-picker nav button:hover { background: var(--color-desk-accent-soft); color: var(--color-desk-ink); }
+.file-rich-emoji-grid { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); min-height: 0; max-height: 260px; overflow-y: auto; }
+.file-rich-emoji-grid button { min-width: 0; height: 34px; border-radius: 4px; cursor: pointer; font-size: 24px; line-height: 1; }
+.file-rich-emoji-grid button:hover { background: var(--color-desk-accent-soft); }
+@media (prefers-reduced-motion: reduce) { .file-rich-code-controls > button { transition: none; } }
+@media (max-width: 700px) { .file-rich-toolbar { gap: 2px; padding-inline: 4px; } .file-rich-toolbar-group { gap: 0; padding-right: 3px; } .file-rich-icon { min-width: 26px; padding-inline: 4px; } }
+.file-markdown .file-rich-body {
+    position: relative;
+    min-height: 16rem;
+    white-space: pre-wrap;
+    white-space: break-spaces;
+    caret-color: var(--color-desk-accent);
+    cursor: text;
+  }
+.file-markdown .file-rich-body:focus { outline: none; }
+.file-markdown .file-rich-body:focus-visible { outline: 1px solid var(--color-desk-line); outline-offset: 12px; border-radius: 2px; }
+.file-rich-body p { min-height: 1em; }
+.file-rich-body .ProseMirror-selectednode { outline: 2px solid var(--color-desk-accent); outline-offset: 2px; }
+.file-markdown .file-rich-body ul[data-type="taskList"] { list-style: none; padding-left: 0; }
+.file-markdown .file-rich-body li[data-type="taskItem"] { display: flex; align-items: flex-start; gap: 0.6em; padding-left: 0; }
+.file-markdown .file-rich-body li[data-type="taskItem"] > label { flex: none; margin-top: 0.35em; line-height: 1; }
+.file-markdown .file-rich-body li[data-type="taskItem"] > label input { margin: 0; vertical-align: 0; }
+.file-markdown .file-rich-body li[data-type="taskItem"] > div { flex: 1; min-width: 0; margin-top: 0; }
+.file-rich-body li > div > p { margin: 0; }
+.file-markdown .file-rich-body li[data-type="taskItem"] ul[data-type="taskList"] { padding-left: 1.5em; }
+.file-markdown .file-rich-body .tableWrapper { overflow-x: auto; border: 1px solid var(--color-desk-line); border-radius: 8px; }
+.file-rich-body :is(th, td) { position: relative; }
+.file-rich-body :is(th, td) > p { margin: 0; }
+.file-rich-body .selectedCell::after { content: ''; position: absolute; inset: 0; pointer-events: none; background: color-mix(in srgb, var(--color-desk-accent) 15%, transparent); }
+.file-rich-body .file-rich-details { position: relative; border: 1px solid var(--color-desk-line); border-radius: 8px; padding: 0.6em 1em 0.6em 2em; white-space: normal; }
+.file-rich-details > button { position: absolute; top: 0.7em; left: 0.5em; width: 1.25em; color: var(--color-desk-muted); cursor: pointer; }
+.file-rich-details summary { display: block; font-weight: 600; white-space: pre-wrap; }
+.file-rich-details [data-type="detailsContent"] { margin-top: 0.75em; white-space: pre-wrap; }
+.file-rich-details [data-type="detailsContent"][hidden] { display: none; }
+.file-rich-details [data-type="detailsContent"] > * + * { margin-top: var(--markdown-flow); }
+.file-rich-body .file-rich-callout-marker, .file-rich-body .file-rich-callout-empty-marker { display: none; }
+.file-rich-body .file-rich-raw-source { color: var(--color-desk-muted); font-family: var(--font-mono); font-size: 0.85em; white-space: pre-wrap; }
+.file-rich-body .file-rich-math { cursor: pointer; }
+.file-rich-math-dialog { width: min(560px, calc(100vw - 48px)); margin: auto; padding: 20px; border: 1px solid var(--color-desk-line); border-radius: 10px; background: var(--color-desk-surface); color: var(--color-desk-ink); }
+.file-rich-math-dialog::backdrop { background: color-mix(in srgb, var(--color-desk-canvas-sunken) 60%, transparent); }
+.file-rich-math-editor { display: flex; flex-direction: column; gap: 12px; }
+.file-rich-math-editor label { font-size: 13px; font-weight: 600; }
+.file-rich-math-editor textarea { width: 100%; padding: 10px; border: 1px solid var(--color-desk-line); border-radius: 5px; font-family: var(--font-mono); font-size: 13px; resize: vertical; }
+.file-rich-math-editor > div { display: flex; justify-content: flex-end; gap: 8px; }
+.file-rich-math-editor button { padding: 5px 12px; border: 1px solid var(--color-desk-line); border-radius: 5px; cursor: pointer; }
+.file-rich-math-editor :is(button, textarea):focus-visible { outline: 2px solid var(--color-desk-accent); outline-offset: 2px; }
+/* 正文排版在共用块级样式之后定义会失效，因此提高一级选择器权重，不依赖样式表顺序。 */
+.file-markdown .file-markdown-body {
+    --markdown-flow: 1em;
+    --markdown-section-gap: 2.35em;
+    width: 100%;
+    max-width: 54rem;
+    margin: 0 auto;
+    font-size: var(--file-preview-font-size, 16px);
+    line-height: 1.85;
+    color: var(--color-desk-ink);
+  }
+/* 阅读尺度：一级标题明显大于正文，二级不再加分隔线，靠字号与间距分节。 */
+.file-markdown .file-markdown-body :is(h1, h2, h3, h4, h5, h6) {
+    font-weight: 650;
+    line-height: 1.35;
+    letter-spacing: -0.015em;
+    text-wrap: pretty;
+  }
+.file-markdown .file-markdown-body h1 {
+    font-size: 2.35em;
+    font-weight: 700;
+    line-height: 1.2;
+    letter-spacing: -0.03em;
+    padding-bottom: 0.55em;
+    border-bottom: 1px solid var(--color-desk-line);
+  }
+.file-markdown .file-markdown-body h2 { font-size: 1.65em; }
+.file-markdown .file-markdown-body h3 { font-size: 1.3em; }
+.file-markdown .file-markdown-body h4 { font-size: 1.1em; }
+.file-markdown .file-markdown-body h5 { font-size: 1em; }
+.file-markdown .file-markdown-body h6 { font-size: 0.9em; color: var(--color-desk-muted); }
+.file-markdown .file-markdown-body :is(ul, ol) { padding-left: 1.6em; }
+.file-markdown .file-markdown-body li + li { margin-top: 0.45em; }
+.file-markdown-empty { max-width: 54rem; margin: 0 auto; color: var(--color-desk-muted); font-size: 14px; }
+/* 标题要能被锚点定位到，同时避开滚动容器顶部。 */
+.file-markdown-body :is(h1, h2, h3, h4, h5, h6) {
+    scroll-margin-top: 1rem;
+  }
+.file-markdown-body :is(h1, h2, h3, h4, h5, h6):focus-visible {
+    outline: 2px solid var(--color-desk-accent);
+    outline-offset: 2px;
+  }
+.file-markdown .file-markdown-frontmatter {
+    max-width: 100%;
+    margin-left: auto;
+    margin-right: auto;
+    border: 1px solid var(--color-desk-line);
+    border-radius: var(--radius-desk-md);
+    background: var(--color-desk-surface-subtle);
+    font-size: 0.85em;
+    color: var(--color-desk-muted);
+  }
+/* Front Matter 关闭展示时整块移除排版占位，不留下空白折叠块。 */
+.file-markdown-body.is-hide-frontmatter .file-markdown-frontmatter {
+    display: none;
+  }
+.file-markdown-frontmatter > summary {
+    padding: 0.375rem 0.75rem;
+    cursor: pointer;
+    font-size: var(--text-2xs);
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+  }
+.file-markdown-frontmatter > pre {
+    margin: 0;
+    overflow: auto;
+    border-top: 1px solid var(--color-desk-line);
+    padding: 0.5rem 0.75rem;
+    font-family: var(--font-mono);
+    line-height: 1.6;
+  }
+.file-markdown .file-markdown-details { border: 1px solid var(--color-desk-line); border-radius: 8px; background: var(--color-desk-surface); overflow: clip; }
+.file-markdown-details > summary { padding: 0.65em 1em; font-weight: 600; cursor: pointer; background: var(--color-desk-surface-subtle); }
+.file-markdown-details[open] > summary { border-bottom: 1px solid var(--color-desk-line); }
+.file-markdown-details > summary:focus-visible { outline: 2px solid var(--color-desk-accent); outline-offset: -2px; }
+.file-markdown-details-body { padding: 1em 1.25em; }
+.file-markdown-details-body > * { margin: 0; }
+.file-markdown-details-body > * + * { margin-top: var(--markdown-flow); }
+.file-markdown-details-body > * + :is(h1, h2, h3, h4, h5, h6) { margin-top: var(--markdown-section-gap); }
+/* 项目内图片：未加载时是占位文本，加载完成后替换成 img。 */
+.file-markdown-image-frame {
+    display: inline-block;
+    max-width: 100%;
+    color: var(--color-desk-muted);
+    font-size: 0.8125rem;
+  }
+/* 图片已加载：点击可放大查看，光标给出可交互的提示。 */
+.file-markdown-image-frame.is-ready { cursor: zoom-in; border-radius: 8px; }
+.file-markdown-image-frame.is-ready:focus-visible { outline: 2px solid var(--color-desk-accent); outline-offset: 4px; }
+.file-markdown-image-frame.is-ready:hover img { border-color: var(--color-desk-accent); }
+.file-markdown-image-frame.is-error {
+    color: var(--color-desk-warning);
+  }
+.file-markdown-image-frame.is-ready {
+    display: block;
+    margin: 0.5rem 0;
+  }
+.file-markdown-image-frame img {
+    display: block;
+    max-width: 100%;
+    height: auto;
+    border: 1px solid var(--color-desk-line);
+    border-radius: var(--radius-desk-sm);
+    /* 透明背景的图片用棋盘底纹，避免与白色面板糊在一起。 */
+    background-color: var(--color-desk-surface-subtle);
+    background-image:
+      linear-gradient(45deg, var(--color-desk-canvas-sunken) 25%, transparent 25%),
+      linear-gradient(-45deg, var(--color-desk-canvas-sunken) 25%, transparent 25%),
+      linear-gradient(45deg, transparent 75%, var(--color-desk-canvas-sunken) 75%),
+      linear-gradient(-45deg, transparent 75%, var(--color-desk-canvas-sunken) 75%);
+    background-size: 12px 12px;
+    background-position: 0 0, 0 6px, 6px -6px, -6px 0;
+  }
+.file-markdown-image-fallback {
+    color: var(--color-desk-muted);
+    font-size: 0.8125rem;
+  }
+/* 行内代码：去掉描边，用底色 + 小圆角，避免打断行距。 */
+.file-markdown .file-markdown-body :not(pre) > code {
+    padding: 0.125rem 0.3rem;
+    border: 0;
+    border-radius: 5px;
+    background: var(--color-desk-surface-subtle);
+    color: var(--color-desk-ink);
+    font-size: 0.875em;
+  }
+/* 引用：文件预览里的引用比聊天正文更收敛，左侧细线 + 略暗底色，不抢正文层级。 */
+.file-markdown .file-markdown-body blockquote {
+    border-left-color: var(--color-desk-line-strong);
+    background: transparent;
+    padding: 0.3em 1.25em;
+    font-size: 1em;
+  }
+/* GitHub 提示块：五种语义各给一条色条与标题色，图标靠伪元素，不引入外部字体。
+     具体颜色由下面的 data-callout 规则提供，这里只用回退值兼容未识别的类型。 */
+.file-markdown .file-markdown-body blockquote.is-callout {
+    position: relative;
+    padding: 0.85em 1.1em;
+    border-radius: 0 8px 8px 0;
+    border-left-width: 3px;
+    border-left-color: var(--callout-ink, var(--color-desk-accent));
+    background: var(--callout-soft, var(--color-desk-accent-soft));
+    color: var(--color-desk-muted);
+  }
+.file-markdown-body blockquote[data-callout="NOTE"] {
+    --callout-ink: var(--color-desk-accent);
+    --callout-soft: var(--color-desk-accent-soft);
+    --callout-icon: "ℹ";
+  }
+.file-markdown-body blockquote[data-callout="TIP"] {
+    --callout-ink: var(--color-desk-success);
+    --callout-soft: var(--color-desk-success-soft);
+    --callout-icon: "✦";
+  }
+.file-markdown-body blockquote[data-callout="IMPORTANT"] {
+    --callout-ink: var(--color-desk-accent);
+    --callout-soft: var(--color-desk-accent-soft);
+    --callout-icon: "!";
+  }
+.file-markdown-body blockquote[data-callout="WARNING"] {
+    --callout-ink: var(--color-desk-warning);
+    --callout-soft: var(--color-desk-warning-soft);
+    --callout-icon: "△";
+  }
+.file-markdown-body blockquote[data-callout="CAUTION"] {
+    --callout-ink: var(--color-desk-danger);
+    --callout-soft: var(--color-desk-danger-soft);
+    --callout-icon: "✖";
+  }
+/* 标题行用语义色加粗；图标与标题同色，色块只负责区分语义。 */
+.file-markdown .file-markdown-body blockquote.is-callout > .file-markdown-callout-title {
+    display: flex;
+    align-items: center;
+    gap: 0.375rem;
+    margin-bottom: 0.35rem;
+    font-size: 0.86em;
+    font-weight: 650;
+    letter-spacing: 0.01em;
+    color: var(--callout-ink, var(--color-desk-accent));
+  }
+.file-markdown-body blockquote.is-callout > .file-markdown-callout-title::before {
+    content: var(--callout-icon, "ℹ");
+    font-size: 0.9em;
+    line-height: 1;
+  }
+/* 分隔线：共用令牌与表格边框同色，在预览里提到明显更高对比，否则等于看不见。 */
+.file-markdown .file-markdown-body hr {
+    margin: calc(var(--markdown-flow) * 1.8) 0;
+    border-top-color: var(--color-desk-line-strong);
+  }
+/* 目录占据固定阅读辅助区，关闭后正文自然扩展。 */
+.file-markdown-toc {
+    display: flex;
+    width: clamp(200px, 20cqw, 248px);
+    min-height: 0;
+    flex: none;
+    flex-direction: column;
+    border-right: 1px solid var(--color-desk-line);
+    background: var(--color-desk-surface-subtle);
+  }
+.file-markdown-toc-header {
+    display: flex;
+    min-height: 48px;
+    flex: none;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0 12px 0 16px;
+  }
+.file-markdown-toc-title {
+    flex: none;
+    font-size: var(--text-2xs);
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    color: var(--color-desk-muted);
+  }
+.file-markdown-toc-level-select { margin-left: auto; max-width: 96px; border: 0; border-radius: 4px; background: transparent; padding: 4px; font-size: 11px; color: var(--color-desk-muted); }
+.file-markdown-toc-level-select option { background: var(--color-desk-surface); color: var(--color-desk-ink); }
+.file-markdown-toc-close {
+    display: inline-flex;
+    width: 24px;
+    height: 24px;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--radius-desk-sm);
+    color: var(--color-desk-muted);
+    transition: background-color var(--default-transition-duration) ease, color var(--default-transition-duration) ease;
+  }
+.file-markdown-toc-close:hover {
+    background: var(--color-desk-surface);
+    color: var(--color-desk-ink);
+  }
+.file-markdown-toc-list {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 0.5rem;
+  }
+.file-markdown-toc-row {
+    display: flex;
+    align-items: center;
+    gap: 0.125rem;
+    border-radius: var(--radius-desk-sm);
+    padding-right: 0.25rem;
+  }
+.file-markdown-toc-row:hover {
+    background: var(--color-desk-surface);
+  }
+.file-markdown-toc-row.is-active {
+    background: var(--color-desk-accent-soft);
+  }
+.file-markdown-toc-row.is-active .file-markdown-toc-link {
+    color: var(--color-desk-accent);
+  }
+.file-markdown-toc-disclosure {
+    display: inline-flex;
+    width: 12px;
+    height: 12px;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    border-radius: 3px;
+    color: var(--color-desk-muted);
+  }
+.file-markdown-toc-disclosure.is-empty {
+    visibility: hidden;
+  }
+/* 默认展开指向下，折叠时转回向右；只动 transform，不改变行宽。 */
+.file-markdown-toc-disclosure svg {
+    width: 10px;
+    height: 10px;
+    transform: rotate(90deg);
+    transition: transform var(--default-transition-duration) ease;
+  }
+.file-markdown-toc-disclosure svg.is-collapsed {
+    transform: rotate(0deg);
+  }
+.file-markdown-toc-link {
+    min-width: 0;
+    flex: 1;
+    overflow: hidden;
+    border-radius: 4px;
+    padding: 7px 6px;
+    text-align: left;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--color-desk-ink);
+  }
+.file-markdown-toc-empty {
+    padding: 0.5rem 0.75rem;
+    font-size: 12px;
+    color: var(--color-desk-muted);
+  }
+/* 降低动态效果时折叠三角直接切换方向。 */
+@media (prefers-reduced-motion: reduce) {
+    .file-markdown-toc-disclosure svg {
+      transition: none;
+    }
+  }
+.file-markdown.is-narrow .file-markdown-toc {
+    position: absolute;
+    inset: 0 auto 0 0;
+    z-index: 20;
+    width: min(280px, 85%);
+    box-shadow: var(--shadow-desk-pop);
+  }
+.file-markdown-toc-backdrop { position: absolute; inset: 0; z-index: 19; border: 0; background: color-mix(in srgb, var(--color-desk-ink) 12%, transparent); cursor: pointer; }
+@container (max-width: 760px) {
+    .is-markdown-workspace .file-editor-header { padding: 12px 16px; gap: 8px; }
+    .file-reader-toolbar { padding: 6px 12px; gap: 8px; }
+    .file-reader-context, .file-reader-save-state { display: none; }
+    .file-reader-toolbar-group { gap: 4px; }
+  }
+/* 查找条：贴在滚动容器顶部，右对齐；不随内容滚走。 */
+.file-markdown-search {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    display: flex;
+    width: fit-content;
+    max-width: 100%;
+    align-items: center;
+    margin: 0 0 0.75rem auto;
+    border: 1px solid var(--color-desk-line-strong);
+    border-radius: var(--radius-desk-sm);
+    background: var(--color-desk-surface);
+    box-shadow: var(--shadow-desk-raise);
+    padding: 2px 2px 2px 4px;
+  }
+/* 输入框本身去掉描边，焦点用整条查找框的边框表达。 */
+.file-markdown-search:focus-within {
+    border-color: var(--color-desk-accent);
+  }
+.file-markdown-search-input {
+    width: 200px;
+    max-width: 45vw;
+    height: 24px;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    padding: 0 0.375rem;
+    font-size: 12px;
+    color: var(--color-desk-ink);
+  }
+.file-markdown-search-input::placeholder {
+    color: var(--color-desk-muted);
+  }
+.file-markdown-search-input:focus {
+    outline: none;
+  }
+.file-markdown-search-status {
+    min-width: 2.5rem;
+    flex: none;
+    padding: 0 0.375rem;
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+    color: var(--color-desk-muted);
+  }
+.file-markdown-search-button {
+    display: inline-flex;
+    width: 22px;
+    height: 22px;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    border-radius: 4px;
+    color: var(--color-desk-muted);
+    transition: background-color var(--default-transition-duration) ease, color var(--default-transition-duration) ease;
+  }
+.file-markdown-search-button:hover:not(:disabled) {
+    background: var(--color-desk-surface-subtle);
+    color: var(--color-desk-ink);
+  }
+.file-markdown-search-button:disabled {
+    opacity: 0.4;
+  }
+.file-markdown-search-divider {
+    width: 1px;
+    height: 14px;
+    margin: 0 2px;
+    background: var(--color-desk-line);
+  }
+.file-markdown-notice {
+    position: absolute;
+    right: 1rem;
+    bottom: 1rem;
+    max-width: min(28rem, calc(100% - 2rem));
+    border: 1px solid var(--color-desk-line);
+    border-radius: var(--radius-desk-md);
+    background: var(--color-desk-surface);
+    box-shadow: var(--shadow-desk-pop);
+    padding: 0.375rem 0.625rem;
+    font-size: var(--text-2xs);
+    color: var(--color-desk-muted);
+  }
+.file-markdown-notice.is-error {
+    border-color: var(--color-desk-danger);
+    color: var(--color-desk-danger);
+  }
+/* 原生模态大图查看器使用浏览器顶层，尺寸只受实际窗口约束。 */
+.file-markdown-image-viewer {
+    width: fit-content;
+    max-width: calc(100vw - 48px);
+    max-height: calc(100dvh - 48px);
+    margin: auto;
+    padding: 0;
+    overflow: hidden;
+    border: 1px solid var(--color-desk-line);
+    border-radius: 12px;
+    background: var(--color-desk-surface);
+    color: var(--color-desk-ink);
+    box-shadow: var(--shadow-desk-pop);
+  }
+.file-markdown-image-viewer::backdrop { background: color-mix(in srgb, var(--color-desk-canvas-sunken) 80%, transparent); backdrop-filter: blur(4px); }
+.file-markdown-image-viewer-header {
+    display: flex;
+    min-height: 48px;
+    align-items: center;
+    justify-content: space-between;
+    gap: 24px;
+    border-bottom: 1px solid var(--color-desk-line);
+    padding: 8px 12px 8px 16px;
+  }
+.file-markdown-image-viewer-header span { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12px; }
+.file-markdown-image-viewer-header button {
+    display: inline-flex;
+    width: 32px;
+    height: 32px;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    border: 0;
+    border-radius: 6px;
+    color: var(--color-desk-muted);
+    cursor: pointer;
+  }
+.file-markdown-image-viewer-header button:hover { background: var(--color-desk-surface-subtle); color: var(--color-desk-ink); }
+.file-markdown-image-viewer-header button:focus-visible { outline: 2px solid var(--color-desk-accent); outline-offset: -2px; }
+.file-markdown-image-viewer-body {
+    display: grid;
+    place-items: center;
+    overflow: auto;
+    max-height: calc(100dvh - 112px);
+    padding: 16px;
+  }
+.file-markdown-image-viewer-body img {
+    display: block;
+    max-width: 100%;
+    max-height: calc(100dvh - 144px);
+    width: auto;
+    height: auto;
+    object-fit: contain;
+  }
+.file-editor-image {
+    display: flex;
+    min-height: 0;
+    flex: 1;
+    align-items: center;
+    justify-content: center;
+    overflow: auto;
+    padding: 1rem;
+    background: var(--color-desk-canvas-sunken);
+  }
+.file-editor-image img {
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+  }
+.file-tree {
+    display: flex;
+    min-height: 0;
+    flex: 1;
+    flex-direction: column;
+  }
+.file-tree-filter {
+    display: flex;
+    height: 28px;
+    flex: none;
+    align-items: center;
+    gap: 6px;
+    margin: 0 10px 8px;
+    border: 1px solid var(--color-desk-line);
+    border-radius: var(--radius-desk-sm);
+    background: var(--color-desk-surface-subtle);
+    padding: 0 6px;
+    color: var(--panel-muted);
+    transition: border-color var(--panel-duration) ease, background-color var(--panel-duration) ease;
+  }
+.file-tree-filter:focus-within {
+    border-color: var(--color-desk-accent);
+    background: var(--panel-surface);
+  }
+.file-tree-input {
+    min-width: 0;
+    flex: 1;
+    border: 0;
+    background: transparent;
+    color: var(--panel-ink);
+    font-size: 12px;
+  }
+.file-tree-input:focus-visible {
+    outline: none;
+  }
+.file-tree-input::placeholder {
+    color: var(--panel-muted);
+  }
+.file-tree-clear {
+    display: flex;
+    width: 18px;
+    height: 18px;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    border-radius: 4px;
+    color: var(--panel-muted);
+  }
+.file-tree-clear:hover {
+    background: color-mix(in srgb, var(--color-desk-ink) 8%, transparent);
+    color: var(--panel-ink);
+  }
+.file-tree-scroll {
+    min-height: 0;
+    flex: 1;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 0 6px 8px;
+  }
+.file-tree-list {
+    display: grid;
+    width: 100%;
+    min-width: 0;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 1px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+.file-tree-list > li {
+    min-width: 0;
+  }
+/* 行高与左侧栏的会话行一致：两个面板的密度不因位置不同而变。 */
+.file-tree-row {
+    display: flex;
+    width: 100%;
+    min-width: 0;
+    height: 26px;
+    align-items: center;
+    gap: 6px;
+    border-radius: 5px;
+    padding: 0 6px 0 8px;
+    color: var(--panel-ink);
+    font-size: 12.5px;
+    text-align: left;
+    transition: background-color var(--panel-duration) ease;
+  }
+.file-tree-row:hover {
+    background: var(--panel-hover);
+  }
+.file-tree-row.is-selected {
+    background: var(--panel-selected);
+    /* 与 .list-item-active、设置页导航同一套当前行标记：底色加 2px 强调竖条。 */
+    box-shadow: inset 2px 0 0 0 var(--color-desk-accent);
+  }
+/* 正在拖动的那一行：降透明度表示它已经在鼠标上，拖拽结束后恢复。 */
+.file-tree-row.is-dragging {
+    opacity: 0.45;
+  }
+/* 展开箭头只占 12px 一列：文件行留同样宽的空位，名称因此始终对齐。 */
+.file-tree-chevron {
+    display: flex;
+    width: 12px;
+    height: 12px;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    color: var(--panel-muted);
+    transition: transform var(--panel-duration) var(--panel-ease);
+  }
+.file-tree-chevron svg {
+    width: 12px;
+    height: 12px;
+  }
+.file-tree-chevron.is-open {
+    transform: rotate(90deg);
+  }
+.file-tree-icon {
+    display: flex;
+    width: 16px;
+    height: 16px;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+  }
+.file-tree-icon svg {
+    width: 15px;
+    height: 15px;
+  }
+.file-tree-icon.is-folder { color: var(--panel-tone-folder); }
+.file-tree-icon.is-code { color: var(--panel-tone-code); }
+.file-tree-icon.is-data { color: var(--panel-tone-data); }
+.file-tree-icon.is-doc { color: var(--panel-tone-doc); }
+.file-tree-icon.is-markup { color: var(--panel-tone-markup); }
+.file-tree-icon.is-plain { color: var(--panel-tone-plain); }
+.file-tree-name {
+    min-width: 0;
+    flex: 1 1 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+.file-tree-row.is-directory .file-tree-name {
+    font-weight: 500;
+  }
+/* 检索结果的所在目录：名称优先占宽，目录作为尾部提示被压缩。 */
+.file-tree-dir {
+    max-width: 45%;
+    flex: none;
+    overflow: hidden;
+    color: var(--panel-muted);
+    font-size: 11px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+.file-tree-tag {
+    flex: none;
+    border: 1px solid var(--color-desk-line);
+    border-radius: 999px;
+    padding: 0 5px;
+    color: var(--panel-muted);
+    font-size: 10px;
+    line-height: 14px;
+  }
+/* 提示行与条目行同列缩进：加载中、空目录、读取失败与截断都就近显示在所属目录下。 */
+.file-tree-notice {
+    margin: 4px 0;
+    color: var(--panel-muted);
+    font-size: 11.5px;
+    line-height: 16px;
+    overflow-wrap: anywhere;
+  }
+.file-tree-notice.is-error {
+    color: var(--color-desk-danger);
+  }
+}

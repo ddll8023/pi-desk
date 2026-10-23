@@ -1,0 +1,88 @@
+/* 归集快捷命令与偏好能力相关的组件样式。 */
+@layer components {
+/*
+   * 快捷命令按作用域分组：作用域是清单的第一分层，组头只出现一次，行内不再重复范围标记。
+   * 组头右侧是条目计数，下沿用分隔线把两个作用域分开；空组不渲染，由底部动作兜底。
+   */
+.quick-command-group + .quick-command-group {
+    margin-top: 4px;
+  }
+.quick-command-group-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 8px;
+    border-bottom: 1px solid var(--sidebar-line);
+    color: var(--sidebar-muted);
+    font-size: 11px;
+    line-height: 16px;
+  }
+.quick-command-group-head .scope-dot {
+    border-color: var(--sidebar-muted);
+  }
+.quick-command-group-head .scope-dot.is-project {
+    border-color: var(--color-desk-accent);
+    background: var(--color-desk-accent);
+  }
+.quick-command-group-title {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--sidebar-ink);
+    font-weight: 600;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+/* 全局组是兜底范围，标题与项目组拉开层级，不抢项目命令的注意力。 */
+.quick-command-group.is-global .quick-command-group-title {
+    color: var(--sidebar-muted);
+    font-weight: 500;
+  }
+.quick-command-group-count {
+    flex: none;
+    margin-left: auto;
+    font-variant-numeric: tabular-nums;
+  }
+.quick-command-group-head + .quick-command-row {
+    margin-top: 2px;
+  }
+/* 快捷命令行：主体是运行入口，右侧固定两个小动作；行不换行，长标签只在主体里截断。 */
+.quick-command-row {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+  }
+.quick-command-run {
+    min-width: 0;
+    flex: 1;
+    gap: 6px;
+  }
+.quick-command-label {
+    min-width: 0;
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+.quick-command-action {
+    width: auto;
+    flex: none;
+    justify-content: center;
+    padding: 5px 6px;
+    color: var(--sidebar-muted);
+    font-size: 11px;
+  }
+.quick-command-action.is-danger {
+    color: var(--color-desk-danger);
+  }
+.quick-command-empty {
+    margin: 0 4px 4px;
+    padding: 6px 4px;
+    color: var(--sidebar-muted);
+    font-size: 11px;
+    line-height: 16px;
+  }
+.quick-command-menu-divider {
+    margin: 4px 6px;
+    border-top: 1px solid var(--sidebar-line);
+  }
+}

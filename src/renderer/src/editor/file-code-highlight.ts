@@ -59,7 +59,7 @@ const LANGUAGE_ALIASES: Readonly<Record<string, string>> = {
   plaintext: ''
 }
 
-/** 语义类名到高亮标签的映射；颜色在 main.css 里按 `--color-desk-*` 令牌定义。 */
+/** 语义类名到高亮标签的映射；颜色令牌定义在 `assets/styles/base.css`。 */
 const highlighter = tagHighlighter([
   { tag: tags.keyword, class: 'tok-keyword' },
   { tag: [tags.comment, tags.lineComment, tags.blockComment, tags.docComment], class: 'tok-comment' },

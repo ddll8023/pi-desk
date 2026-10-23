@@ -1,0 +1,790 @@
+/* 归集全局共享与跨能力复用的组件样式。 */
+@layer components {
+.section-heading {
+    @apply text-sm font-semibold;
+  }
+.section-label {
+    @apply text-xs font-medium text-desk-muted;
+  }
+.field-label {
+    @apply block text-xs font-medium text-desk-muted;
+  }
+.text-control {
+    @apply block w-full rounded-desk-sm border border-desk-line-strong bg-desk-surface px-3 py-2 text-sm text-desk-ink transition-colors;
+  }
+.text-control::placeholder {
+    color: var(--color-desk-muted);
+  }
+/* 通用按钮样式：次要、主操作、危险、紧凑、轻量与低强调危险；悬停只提升底色，强调色留给主按钮。 */
+.control-button {
+    @apply inline-flex items-center justify-center gap-1.5 rounded-desk-sm border border-desk-line-strong bg-desk-surface px-3 py-2 text-sm font-medium whitespace-nowrap text-desk-ink transition-colors;
+  }
+.control-button:not(:disabled):hover {
+    @apply bg-desk-surface-subtle;
+  }
+.control-button:not(:disabled):active {
+    @apply bg-desk-canvas-sunken;
+  }
+.control-button:disabled {
+    @apply cursor-not-allowed border-desk-line bg-desk-canvas text-desk-muted;
+  }
+/* 主按钮：一个界面只用一次，用于发送、确定、信任并加载这类主操作。 */
+.control-button-primary {
+    @apply inline-flex items-center justify-center gap-1.5 rounded-desk-sm border border-transparent bg-desk-accent px-3 py-2 text-sm font-medium whitespace-nowrap text-desk-on-accent transition-colors;
+  }
+.control-button-primary:not(:disabled):hover {
+    @apply bg-desk-accent-hover;
+  }
+.control-button-primary:not(:disabled):active {
+    @apply bg-desk-accent-hover opacity-90;
+  }
+.control-button-primary:disabled {
+    @apply cursor-not-allowed border-desk-line bg-desk-canvas text-desk-muted;
+  }
+.control-button-danger {
+    @apply inline-flex items-center justify-center gap-1.5 rounded-desk-sm border border-desk-danger bg-desk-surface px-3 py-2 text-sm font-medium whitespace-nowrap text-desk-danger transition-colors;
+  }
+.control-button-danger:not(:disabled):hover {
+    @apply bg-desk-danger-soft;
+  }
+.control-button-danger:not(:disabled):active {
+    @apply bg-desk-danger-soft opacity-80;
+  }
+.control-button-danger:disabled {
+    @apply cursor-not-allowed border-desk-line bg-desk-canvas text-desk-muted;
+  }
+/* 设置页与工具条的紧凑按钮。 */
+.control-button-sm {
+    @apply inline-flex h-8 items-center justify-center gap-1.5 rounded-desk-sm border border-desk-line-strong bg-desk-surface px-2.5 text-xs font-medium whitespace-nowrap text-desk-ink transition-colors;
+  }
+.control-button-sm:not(:disabled):hover {
+    @apply bg-desk-surface-subtle;
+  }
+.control-button-sm:not(:disabled):active {
+    @apply bg-desk-canvas-sunken;
+  }
+.control-button-sm:disabled {
+    @apply cursor-not-allowed border-desk-line bg-desk-canvas text-desk-muted;
+  }
+.icon-button {
+    @apply inline-flex h-7 items-center justify-center gap-1.5 rounded-desk-sm border border-desk-line-strong bg-desk-surface px-2.5 text-xs font-medium whitespace-nowrap text-desk-ink transition-colors;
+  }
+.icon-button:not(:disabled):hover {
+    @apply bg-desk-surface-subtle;
+  }
+.icon-button:not(:disabled):active {
+    @apply bg-desk-canvas-sunken;
+  }
+.icon-button:disabled {
+    @apply cursor-not-allowed border-desk-line bg-desk-canvas text-desk-muted;
+  }
+/* 输入坞的方形图标键：固定 34px 尺寸与圆角独立于文字按钮；只放图标，带短语的用法由调用方覆盖宽度与内边距。 */
+.icon-button-square {
+    @apply inline-flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-desk-md border border-desk-line-strong bg-desk-surface text-desk-ink transition-colors;
+  }
+.icon-button-square:not(:disabled):hover {
+    @apply bg-desk-surface-subtle;
+  }
+.icon-button-square:not(:disabled):active {
+    @apply bg-desk-canvas-sunken;
+  }
+.icon-button-square:disabled {
+    @apply cursor-not-allowed border-desk-line bg-desk-canvas text-desk-muted;
+  }
+/* 主操作图标键：界面里唯一的实心强调控件，发送与停止原位共用这一档。 */
+.icon-button-square-primary {
+    @apply inline-flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-desk-md border border-transparent bg-desk-accent text-desk-on-accent transition-colors;
+  }
+.icon-button-square-primary:not(:disabled):hover {
+    @apply bg-desk-accent-hover;
+  }
+.icon-button-square-primary:not(:disabled):active {
+    @apply bg-desk-accent-hover opacity-90;
+  }
+.icon-button-square-primary:disabled {
+    @apply cursor-not-allowed border-desk-line bg-desk-canvas text-desk-muted;
+  }
+/* 无边框的轻量按钮：通知关闭与内联动作。 */
+.control-button-ghost {
+    @apply inline-flex items-center justify-center gap-1 rounded-desk-sm px-1.5 py-0.5 text-xs font-medium text-desk-muted transition-colors;
+  }
+.control-button-ghost:not(:disabled):hover {
+    @apply bg-desk-surface-subtle text-desk-ink;
+  }
+.control-button-ghost:disabled {
+    @apply cursor-not-allowed opacity-60;
+  }
+/* 输入坞弹层里的列表行：命令/文件补全与快捷发送下拉共用；对话框与页面内的清单行改用 list-card，Extension 对话的选项行与参考行另用 dialog-option-row 与 dialog-reference-row。选中态由 list-item-active 叠加左侧色条。 */
+.list-item {
+    @apply block w-full rounded-desk-sm border border-transparent px-2.5 py-2 text-left transition-colors;
+  }
+.list-item:not(:disabled):hover {
+    @apply bg-desk-surface-subtle;
+  }
+.list-item:not(:disabled):active {
+    @apply bg-desk-canvas-sunken;
+  }
+.list-item:disabled {
+    @apply cursor-not-allowed opacity-60;
+  }
+.list-item-active,
+  .list-item-active:not(:disabled):hover {
+    @apply border-desk-line bg-desk-accent-soft;
+    box-shadow: inset 2px 0 0 0 var(--color-desk-accent);
+  }
+/* 中性小标签：会话 ID、路径、来源与占比等元信息。 */
+.chip {
+    @apply inline-flex max-w-full items-center gap-1 rounded-full border border-desk-line bg-desk-surface-subtle px-2 py-0.5 text-2xs text-desk-muted;
+  }
+/*
+   * 作用域徽标：只在结构丢失处出现（搜索后的扁平清单），分组态由组头表达归属。
+   * 形状共用，只有「只在本项目」带强调底色，「到处可用」保持中性。
+   */
+.scope-badge {
+    @apply inline-flex max-w-full flex-none items-center rounded-full border px-1.5 py-0.5 text-2xs;
+  }
+.scope-badge.is-global {
+    @apply border-desk-line bg-desk-surface-subtle text-desk-muted;
+  }
+.scope-badge.is-project {
+    @apply border-transparent bg-desk-accent-soft text-desk-accent;
+  }
+/* 作用域组头标记：实心点表示「只在本项目生效」，空心点表示「到处可用」。 */
+.scope-dot {
+    @apply size-1.5 flex-none rounded-full border border-desk-muted;
+  }
+.scope-dot.is-project {
+    @apply border-desk-accent bg-desk-accent;
+  }
+/* 状态提示条：左侧色条表达语义，正文仍按纯文本展示。 */
+.status-notice {
+    @apply rounded-desk-sm border border-desk-line bg-desk-surface px-3 py-2 text-xs text-desk-muted;
+    border-left-width: 3px;
+  }
+.status-notice-info {
+    border-left-color: var(--color-desk-accent);
+  }
+.status-notice-warn {
+    border-left-color: var(--color-desk-warning);
+    color: var(--color-desk-warning);
+  }
+.status-notice-error {
+    border-left-color: var(--color-desk-danger);
+    color: var(--color-desk-danger);
+  }
+/* 空状态：靠留白与排版表达，不用边框。 */
+.empty-state {
+    @apply flex flex-col items-center gap-2 px-4 py-14 text-center;
+  }
+.empty-state-title {
+    @apply text-sm font-medium;
+  }
+.empty-state-text {
+    @apply max-w-md text-xs text-desk-muted;
+  }
+/* 弹层：遮罩、面板与头/体/脚三段；锚定弹层复用面板外观但不定位。
+     遮罩做 paint 包含，使弹层内部的重绘失效不下传整页；面板不用圆角裁剪包住滚动容器，
+     避免合成滚动降级为逐帧重绘。 */
+.dialog-overlay {
+    @apply fixed inset-0 z-50 flex items-center justify-center bg-desk-overlay p-4;
+    contain: paint;
+  }
+.dialog-panel {
+    @apply flex w-full flex-col rounded-desk-lg border border-desk-line-strong bg-desk-surface shadow-desk-dialog;
+    max-height: 85vh;
+  }
+/* 头部用沉陷底色与面板体分层，标题比正文重一级。 */
+.dialog-header {
+    @apply flex shrink-0 items-start justify-between gap-3 border-b border-desk-line bg-desk-surface-subtle px-5 py-4;
+  }
+.dialog-title {
+    @apply text-base leading-6 font-semibold tracking-tight;
+  }
+/* 弹层标题下的一句话说明：只交代边界，不承载操作。 */
+.dialog-subtitle {
+    @apply mt-1 text-xs leading-5 text-desk-muted;
+  }
+.dialog-body {
+    @apply min-h-0 flex-1 space-y-5 overflow-y-auto px-5 py-5;
+  }
+.dialog-footer {
+    @apply flex shrink-0 flex-wrap justify-end gap-2 rounded-b-desk-lg border-t border-desk-line bg-desk-surface-subtle px-5 py-3;
+  }
+.dialog-popover {
+    @apply absolute z-40 flex w-80 flex-col overflow-hidden rounded-desk-lg border border-desk-line bg-desk-surface shadow-desk-pop;
+    max-height: 32rem;
+    contain: paint;
+  }
+/* 弹层右上角的关闭入口：纯 CSS 绘制的 ×，不引入图标库；不参与收缩，避免被标题挤变形。 */
+.dialog-close-button {
+    @apply relative inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-desk-sm border border-transparent text-desk-muted transition-colors;
+  }
+.dialog-close-button::before,
+  .dialog-close-button::after {
+    content: "";
+    position: absolute;
+    width: 13px;
+    height: 1.5px;
+    border-radius: 999px;
+    background-color: currentColor;
+  }
+.dialog-close-button::before {
+    transform: rotate(45deg);
+  }
+.dialog-close-button::after {
+    transform: rotate(-45deg);
+  }
+.dialog-close-button:not(:disabled):hover {
+    @apply bg-desk-surface-subtle text-desk-ink;
+  }
+/* 问题分类标签：来自标题的 `[Header]` 前缀，属元信息，不参与标题字重。 */
+.dialog-header-chip {
+    @apply mb-1 inline-flex items-center rounded-desk-sm border border-desk-line bg-desk-surface px-1.5 py-0.5 text-2xs font-medium text-desk-muted;
+  }
+/* Extension 对话的选项行：序号、标签、描述三段对齐，比通用清单行更强调「可点选」。
+     与 .list-card 分开，避免影响资源视图、设置页等既有清单。 */
+.dialog-option-row {
+    @apply flex w-full items-start gap-3 rounded-desk-md border border-desk-line bg-desk-surface px-3.5 py-2.5 text-left transition-colors;
+  }
+.dialog-option-row:not(:disabled):hover {
+    @apply border-desk-line-strong bg-desk-surface-subtle;
+  }
+.dialog-option-row:not(:disabled):active {
+    @apply bg-desk-canvas-sunken;
+  }
+.dialog-option-row:disabled {
+    @apply cursor-not-allowed opacity-60;
+  }
+/* 键盘高亮与鼠标悬停共用同一视觉，用强调色区分当前行；
+     写在悬停规则之后，靠顺序保留高亮底色。 */
+.dialog-option-row-active,
+  .dialog-option-row-active:not(:disabled):hover {
+    @apply border-desk-accent bg-desk-accent-soft;
+  }
+/* 序号徽标：与「按编号作答」的提示对应，等宽数字保证多行选项对齐。 */
+.dialog-option-index {
+    @apply mt-px inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-desk-sm bg-desk-canvas-sunken font-mono text-2xs text-desk-muted;
+  }
+.dialog-option-label {
+    @apply block text-sm leading-5 font-medium text-desk-ink;
+  }
+.dialog-option-desc {
+    @apply mt-0.5 block text-xs leading-5 text-desk-muted;
+  }
+/* 标题内嵌清单（多选、自定义回答）的参考行：与选项行同一套布局，按按钮形态渲染。 */
+.dialog-reference-row {
+    @apply flex w-full items-start gap-3 rounded-desk-md border border-desk-line bg-desk-canvas-sunken px-3.5 py-2.5 text-left transition-colors;
+  }
+/* 只读参考行（自定义回答）用禁用按钮表达不可切换，外观与指针保持静态行。 */
+.dialog-reference-row:disabled:not(.dialog-reference-row-toggle) {
+    @apply cursor-default opacity-100;
+  }
+/* 可切换的参考行（多选作答）：浅底表示可点，悬停与选中态与选项行同一套视觉。 */
+.dialog-reference-row-toggle {
+    @apply bg-desk-surface;
+  }
+.dialog-reference-row-toggle:not(:disabled):hover {
+    @apply border-desk-line-strong bg-desk-surface-subtle;
+  }
+.dialog-reference-row-toggle:not(:disabled):active {
+    @apply bg-desk-canvas-sunken;
+  }
+.dialog-reference-row-toggle:disabled {
+    @apply cursor-not-allowed opacity-60;
+  }
+.dialog-reference-row-selected,
+  .dialog-reference-row-selected:not(:disabled):hover {
+    @apply border-desk-accent bg-desk-accent-soft;
+  }
+/* 已选中的编号徽标：实心强调色，与选项行的序号区分。 */
+.dialog-reference-row-selected .dialog-option-index {
+    @apply bg-desk-accent text-desk-on-accent;
+  }
+/* 选项预览：模型给的 ASCII 版式靠空格与换行对齐，故等宽 + 保留空白，超长时块内滚动。 */
+.dialog-preview-block {
+    @apply max-h-64 overflow-auto rounded-desk-md border border-desk-line bg-desk-canvas-sunken px-3 py-2.5;
+  }
+.dialog-preview-title {
+    @apply mb-1.5 text-2xs font-medium text-desk-muted;
+  }
+.dialog-preview-text {
+    @apply font-mono text-xs leading-5 whitespace-pre-wrap text-desk-ink;
+  }
+/* 弹层内的语义分区：用沉陷底色形成卡片边界，替代裸标题加分隔线。 */
+.panel-section {
+    @apply space-y-2 rounded-desk-md border border-desk-line bg-desk-canvas-sunken px-3.5 py-3;
+  }
+.panel-section-title {
+    @apply text-sm font-semibold;
+  }
+/* 说明性段落：限制行宽并压低对比，避免弹层里出现整屏同权重的灰字。 */
+.hint-text {
+    @apply max-w-prose text-xs leading-5 text-desk-muted;
+  }
+/* 弹层内列表项：浅底卡片，与分区一起构成两级层次。 */
+.list-card {
+    @apply block w-full rounded-desk-sm border border-desk-line bg-desk-surface px-3 py-2.5 text-left transition-colors;
+  }
+.list-card:not(:disabled):hover {
+    @apply border-desk-line-strong bg-desk-surface-subtle;
+  }
+.list-card:not(:disabled):active {
+    @apply bg-desk-canvas-sunken;
+  }
+.list-card:disabled {
+    @apply cursor-not-allowed opacity-60;
+  }
+/* 选中态必须写在 list-card 之后：两者选择器权重相同，靠顺序决定悬停时保留强调底色与左侧色条。 */
+.list-card.list-item-active,
+  .list-card.list-item-active:not(:disabled):hover {
+    @apply border-desk-line bg-desk-accent-soft;
+    box-shadow: inset 2px 0 0 0 var(--color-desk-accent);
+  }
+/* 弹层内的细节值：等宽、可换行，与说明文字拉开字体层次。 */
+.detail-note {
+    @apply break-words rounded-desk-sm border border-desk-line bg-desk-canvas-sunken px-3 py-2 font-mono text-xs leading-5 text-desk-muted;
+  }
+/* 危险操作默认中性，悬停或聚焦才显红；用于列表行内的删除类动作。 */
+.control-button-quiet-danger {
+    @apply inline-flex items-center justify-center gap-1.5 rounded-desk-sm border border-transparent px-2.5 py-1.5 text-xs font-medium whitespace-nowrap text-desk-muted transition-colors;
+  }
+.control-button-quiet-danger:not(:disabled):hover,
+  .control-button-quiet-danger:not(:disabled):focus-visible {
+    @apply bg-desk-danger-soft text-desk-danger;
+  }
+.control-button-quiet-danger:focus-visible {
+    outline-color: var(--color-desk-danger);
+  }
+.control-button-quiet-danger:disabled {
+    @apply cursor-not-allowed opacity-60;
+  }
+/* 遮罩：纯透明度交叉淡入，无位移，用基准时长。 */
+.dialog-fade-enter-active {
+    transition: opacity var(--motion-duration-base) var(--motion-ease-entrance);
+  }
+.dialog-fade-leave-active {
+    transition: opacity var(--motion-duration-fast) var(--motion-ease-exit);
+  }
+.dialog-fade-enter-from,
+  .dialog-fade-leave-to {
+    opacity: 0;
+  }
+/* 面板：进场「快启动、平稳停下」——长尾缓动让 8px 位移 + 5% 缩放在末段几乎不可察觉地落位；
+     退场距离更短（4px + 3%），用快档时长与加速曲线，不拖沓。
+     transform 只在动画期间开启，静止时不留合成层。 */
+.dialog-panel-motion-enter-active {
+    transition:
+      opacity var(--motion-duration-base) var(--motion-ease-entrance),
+      transform var(--motion-duration-slow) var(--motion-ease-entrance);
+  }
+.dialog-panel-motion-leave-active {
+    transition:
+      opacity var(--motion-duration-fast) var(--motion-ease-exit),
+      transform var(--motion-duration-fast) var(--motion-ease-exit);
+  }
+.dialog-panel-motion-enter-from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.95);
+  }
+.dialog-panel-motion-leave-to {
+    opacity: 0;
+    transform: translateY(4px) scale(0.97);
+  }
+/* 弹出层与通知条：6px 位移属于小距离，用快档，进快退更快。 */
+.pop-motion-enter-active {
+    transition:
+      opacity var(--motion-duration-fast) var(--motion-ease-entrance),
+      transform var(--motion-duration-fast) var(--motion-ease-entrance);
+  }
+.pop-motion-leave-active {
+    transition:
+      opacity var(--motion-duration-fast) var(--motion-ease-exit),
+      transform var(--motion-duration-fast) var(--motion-ease-exit);
+  }
+.pop-motion-enter-from,
+  .pop-motion-leave-to {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+/* 令牌只作用于侧栏与其 Teleport 浮层，不改变聊天区或其他控件的主题。 */
+.app-sidebar,
+  .project-sidebar-menu {
+    --sidebar-surface: #fafaf9;
+    --sidebar-hover: #f0f1f0;
+    --sidebar-selected: #e5eceb;
+    --sidebar-ink: #24282b;
+    --sidebar-muted: #737b83;
+    --sidebar-line: #e6e8e7;
+    --sidebar-focus: var(--color-desk-accent);
+    /* 单个项目的会话列表高度上限：8 行（8×26px 行高 + 7×1px 间隔）；超出在该项目内滚动。 */
+    --sidebar-session-list-max-height: 216px;
+    --sidebar-duration-hover: 140ms;
+    --sidebar-duration-collapse: 290ms;
+    --sidebar-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  }
+@media (prefers-color-scheme: dark) {
+    .app-sidebar,
+    .project-sidebar-menu {
+      --sidebar-surface: color-mix(in srgb, var(--color-desk-surface) 85%, var(--color-desk-canvas));
+      --sidebar-hover: var(--color-desk-surface-subtle);
+      --sidebar-selected: var(--color-desk-accent-soft);
+      --sidebar-ink: var(--color-desk-ink);
+      --sidebar-muted: var(--color-desk-muted);
+      --sidebar-line: color-mix(in srgb, var(--color-desk-line) 70%, transparent);
+    }
+  }
+.app-sidebar button:disabled,
+  .project-sidebar-menu button:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+  }
+.app-sidebar button:focus-visible,
+  .project-sidebar-menu:focus-visible,
+  .project-sidebar-menu button:focus-visible {
+    outline: 2px solid var(--sidebar-focus);
+    outline-offset: -2px;
+  }
+.app-sidebar.is-collapsed :is(.sidebar-tree-copy, .sidebar-session-title, .sidebar-session-meta, .project-sidebar-heading, .project-sidebar-add, .sidebar-footer-label, .sidebar-empty, .sidebar-notice, .sidebar-list-notice, .sidebar-load-more) {
+    opacity: 0;
+    transform: translateX(-4px);
+  }
+/*
+   * 分段控件：同一层级并列内容的切换入口。选中态用实心边框与提亮的底色表达，
+   * 不用左侧色条，避免与侧栏列表的选中语义混淆。
+   */
+.segment {
+    @apply flex flex-wrap gap-1 rounded-desk-md border border-desk-line bg-desk-canvas-sunken p-1;
+  }
+.segment-option {
+    @apply inline-flex flex-1 items-center justify-center gap-1.5 rounded-desk-sm border border-transparent px-3 py-1.5 text-xs font-medium whitespace-nowrap text-desk-muted transition-colors;
+  }
+.segment-option:not(:disabled):hover {
+    @apply text-desk-ink;
+  }
+.segment-option.is-selected,
+  .segment-option.is-selected:not(:disabled):hover {
+    @apply border-desk-line-strong bg-desk-surface text-desk-ink;
+  }
+/* 分段标签里的元信息：计数等次级信息，不参与选中态。 */
+.segment-option-meta {
+    @apply text-2xs text-desk-muted;
+  }
+/* 连接状态点：颜色只作辅助，状态文案始终同时出现，不单独依赖颜色表意。 */
+.status-dot {
+    @apply inline-block size-2 shrink-0 rounded-full bg-desk-line-strong;
+  }
+.status-dot-ok { background-color: var(--color-desk-success); }
+.status-dot-warn { background-color: var(--color-desk-warning); }
+.status-dot-error { background-color: var(--color-desk-danger); }
+.status-dot-idle { background-color: var(--color-desk-line-strong); }
+@keyframes status-dots-jump {
+    0%, 100% { transform: translateY(0); opacity: 0.4; }
+    35% { transform: translateY(-3px); opacity: 1; }
+  }
+/*
+   * 可折叠分组：组头一整行可点，展开内容用分隔线分层。
+   * 折叠标记沿用 .disclosure 三角，与工具卡片保持一致。
+   */
+.fold-group {
+    @apply rounded-desk-md border border-desk-line bg-desk-surface;
+  }
+.fold-group > summary {
+    @apply flex flex-wrap items-center gap-x-2 gap-y-1 rounded-desk-md px-3.5 py-2.5 text-sm font-medium transition-colors;
+  }
+.fold-group > summary:hover {
+    @apply bg-desk-surface-subtle;
+  }
+.fold-group-body {
+    @apply space-y-1.5 border-t border-desk-line px-3.5 py-3;
+  }
+/* 复制类小动作：与普通按钮区分，只在悬停时提亮。 */
+.copy-button {
+    @apply inline-flex items-center gap-1 rounded-desk-sm border border-desk-line px-1.5 py-0.5 text-2xs text-desk-muted transition-colors;
+  }
+.copy-button:not(:disabled):hover {
+    @apply border-desk-line-strong bg-desk-surface-subtle text-desk-ink;
+  }
+.file-editor-icon-button:focus-visible,
+  .file-editor-mode-item:focus-visible,
+  .file-editor-font-size:focus-visible,
+  .file-markdown-toc-level-select:focus-visible,
+  .file-markdown-toc-close:focus-visible,
+  .file-markdown-toc-link:focus-visible,
+  .file-markdown-toc-disclosure:focus-visible,
+  .file-markdown-search-button:focus-visible,
+  .markdown-heading-anchor:focus-visible {
+    outline: 2px solid var(--color-desk-accent);
+    outline-offset: -1px;
+  }
+/* 文件工作台独立于聊天密度，头部与阅读工具始终位于正文滚动区域之外。 */
+.is-markdown-workspace { container-type: inline-size; }
+.file-rich-code-controls .app-select { width: 130px; }
+.file-rich-code-controls .app-select-trigger { min-height: 24px; padding: 2px 6px; font-size: 11px; }
+.file-markdown-body :is(h1, h2, h3, h4, h5, h6):hover .markdown-heading-anchor,
+  .file-markdown-body :is(h1, h2, h3, h4, h5, h6):focus-within .markdown-heading-anchor,
+  .markdown-heading-anchor:focus-visible {
+    opacity: 1;
+  }
+/* 代码字号随文档缩放，复制入口始终可见。 */
+.file-markdown .markdown-code-block { border-radius: 8px; }
+.file-markdown .markdown-code-block pre { padding: 1.1em 1.4em; font-size: 0.875em; line-height: 1.7; }
+.file-markdown .markdown-code-language { border: 0; padding: 0; font-size: 0.75em; }
+.file-markdown .markdown-code-copy { font-size: 0.75em; }
+.file-markdown .markdown-code-header {
+    padding: 0.5rem 0.75rem;
+    border-bottom-color: color-mix(in srgb, var(--color-desk-line) 72%, transparent);
+  }
+.file-markdown .markdown-code-copy {
+    opacity: 0.8;
+    transition: opacity var(--default-transition-duration) ease, border-color var(--default-transition-duration) ease,
+      color var(--default-transition-duration) ease;
+  }
+.file-markdown .markdown-code-block:hover .markdown-code-copy,
+  .file-markdown .markdown-code-block:focus-within .markdown-code-copy {
+    opacity: 1;
+  }
+/* 表格：阅读场景比聊天正文略大一档，表头靠字色、字重与底色区分，不做全大写。 */
+.file-markdown .markdown-body table {
+    font-size: 0.875em;
+    line-height: 1.7;
+  }
+.file-markdown .markdown-body :is(th, td) {
+    min-width: 5em;
+    padding: 0.75em 1em;
+  }
+/* 表头用正文色压住表体：灰色表头在 4 列以上读不出层级。 */
+.file-markdown .markdown-body th { color: var(--color-desk-ink); font-size: 1em; font-weight: 650; letter-spacing: 0; }
+/* 行悬停：多列宽表跨行追读时给一个落点，与聊天正文表格行为一致。 */
+.file-markdown .markdown-body tbody tr:hover td {
+    background: var(--color-desk-surface-subtle);
+  }
+/* 链接：下划线默认降低不透明度，hover 再回到实色，正文不被满篇实线压住。 */
+.file-markdown-body .markdown-link {
+    text-decoration-color: color-mix(in srgb, currentColor 40%, transparent);
+    text-underline-offset: 2px;
+    transition: text-decoration-color var(--default-transition-duration) ease;
+  }
+.file-markdown-body .markdown-link:hover {
+    text-decoration-color: currentColor;
+  }
+/* 匹配高亮：普通命中用警告色，当前命中用强调色；只换底色，不改正文颜色。 */
+::highlight(file-preview-search-match) {
+    background-color: color-mix(in srgb, var(--color-desk-warning) 32%, transparent);
+  }
+::highlight(file-preview-search-active-match) {
+    background-color: color-mix(in srgb, var(--color-desk-accent) 38%, transparent);
+    color: var(--color-desk-ink);
+  }
+@media (prefers-reduced-motion: reduce) {
+    .file-reader-tool, .file-markdown .markdown-code-copy, .file-markdown-body .markdown-link { transition: none; }
+  }
+/* 代码高亮：语义类名到令牌色，与文件编辑器的高亮保持同一套配色。 */
+.markdown-code-block .tok-keyword { color: var(--color-desk-accent); }
+.markdown-code-block .tok-comment { color: var(--color-desk-muted); font-style: italic; }
+.markdown-code-block .tok-string { color: var(--color-desk-success); }
+.markdown-code-block .tok-number { color: var(--color-desk-warning); }
+.markdown-code-block .tok-type { color: var(--color-desk-accent); }
+.markdown-code-block .tok-function { color: var(--color-desk-accent); }
+.markdown-code-block .tok-property { color: var(--color-desk-ink); }
+.markdown-code-block .tok-tag { color: var(--color-desk-accent); }
+.markdown-code-block .tok-punctuation { color: var(--color-desk-muted); }
+.markdown-code-block .tok-link { color: var(--color-desk-accent); text-decoration: underline; }
+.markdown-code-block .tok-heading { font-weight: 600; }
+.markdown-code-block .tok-emphasis { font-style: italic; }
+.markdown-code-block .tok-strong { font-weight: 600; }
+.markdown-code-block .tok-invalid { color: var(--color-desk-danger); }
+/* 侧栏与它的浮层菜单共用同一套细条：菜单被 Teleport 到 body，需要自己的选择器。 */
+.app-sidebar .scroll-area::-webkit-scrollbar,
+  .project-sidebar-menu::-webkit-scrollbar {
+    width: 4px;
+  }
+.app-sidebar .scroll-area::-webkit-scrollbar-thumb,
+  .project-sidebar-menu::-webkit-scrollbar-thumb {
+    background: color-mix(in srgb, var(--sidebar-muted) 25%, transparent);
+  }
+.app-sidebar .scroll-area::-webkit-scrollbar-thumb:hover,
+  .project-sidebar-menu::-webkit-scrollbar-thumb:hover {
+    background: color-mix(in srgb, var(--sidebar-muted) 45%, transparent);
+  }
+@keyframes panel-icon-spin {
+    to { transform: rotate(360deg); }
+  }
+@media (prefers-reduced-motion: reduce) {
+    .app-right-panel,
+    .right-panel-content,
+    .right-panel-action,
+    .right-panel-tab,
+    .git-view-tab,
+    .git-commit-row,
+    .git-row,
+    .git-row-actions,
+    .git-row-action,
+    .git-split-primary,
+    .git-split-toggle,
+    .file-tree-row,
+    .file-tree-chevron,
+    .right-panel-resize {
+      transition: none;
+    }
+
+    .panel-icon.is-spinning,
+    .git-split-spinner {
+      animation: none;
+    }
+  }
+/* 用户偏好减少动效：过渡与关键帧动画全关，且不留下半透明起点（enter-from 依旧会被 Vue
+     移除，但加上 opacity:1 保险，避免极端时序下元素停在透明态）。 */
+@media (prefers-reduced-motion: reduce) {
+    .app-sidebar {
+      transition: none;
+    }
+
+    .dialog-fade-enter-active,
+    .dialog-fade-leave-active,
+    .dialog-panel-motion-enter-active,
+    .dialog-panel-motion-leave-active,
+    .pop-motion-enter-active,
+    .pop-motion-leave-active {
+      transition: none;
+    }
+
+    .dialog-fade-enter-from,
+    .dialog-panel-motion-enter-from {
+      opacity: 1;
+      transform: none;
+    }
+
+    /* 侧栏 CSS 动画全部关闭；共享背景由 useReducedMotion 同时关闭 Motion 过渡。 */
+    .app-sidebar *,
+    .project-sidebar-menu,
+    .project-sidebar-menu * {
+      transition: none !important;
+    }
+
+    .app-sidebar.is-collapsed :is(.sidebar-tree-copy, .sidebar-session-title, .sidebar-session-meta, .project-sidebar-heading, .project-sidebar-add, .sidebar-footer-label, .sidebar-empty, .sidebar-notice, .sidebar-list-notice, .sidebar-load-more) {
+      transform: none;
+    }
+
+    .sidebar-list-enter-from,
+    .sidebar-list-leave-to,
+    .sidebar-menu-enter-from,
+    .sidebar-menu-leave-to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+/* 折叠三角：纯 CSS 绘制，不依赖图标字体。 */
+.disclosure {
+    @apply inline-block shrink-0 transition-transform;
+    width: 0;
+    height: 0;
+    align-self: center;
+    border-top: 4px solid transparent;
+    border-bottom: 4px solid transparent;
+    border-left: 5px solid currentColor;
+  }
+details[open] > summary .disclosure {
+    transform: rotate(90deg);
+  }
+/* 不用 details 结构时（设置页的扩展列表）由状态类表达展开，三角保持一致。 */
+.disclosure.is-open {
+    transform: rotate(90deg);
+  }
+/* 状态指示点：颜色由模板按 Runtime 状态给出。 */
+.status-dot {
+    @apply inline-block h-2 w-2 shrink-0 rounded-full;
+  }
+/*
+   * 预留滚动条槽位：经典滚动条会占掉内容宽度，同一容器内容一长一短就出现横向跳动
+   * （设置页在分节之间切换、消息列从无滚动条变为有滚动条时最明显）。
+   * 固定预留后，居中内容在有无滚动条时位置一致；侧栏的滚动容器已有同样处理。
+   * 只为需要纵向滚动的容器预留；带滚动条但内容左对齐的容器（侧栏菜单、AppSelect、可折叠卡片内容区）不加，
+   * 避免白占 8px。
+   */
+.scroll-area,
+  .dialog-body {
+    scrollbar-gutter: stable;
+  }
+/* 细滚动条；不改变滚动行为，只避免默认滚动条压住内容。滚动容器一律适用——带 scroll-area 类的外壳、
+     弹层体、消息区内的横向滚动容器、可折叠卡片的内容区、文件编辑器的 CodeMirror 与图片预览、
+     公式的横向滚动、终端视口、会话活动浮层的明细区，以及所有多行输入框（textarea 超过最大高度后自己滚动）。
+     只用 ::-webkit-scrollbar 定制：Chromium 里 scrollbar-color 与 scrollbar-width 一旦不是 auto，
+     就会覆盖这些伪元素样式，半透明细条会退回成按 scrollbar-color 上色的原生滚动条；本应用只跑 Electron。 */
+.scroll-area::-webkit-scrollbar,
+  textarea::-webkit-scrollbar,
+  .dialog-body::-webkit-scrollbar,
+  .file-editor-preview::-webkit-scrollbar,
+  .file-editor-image::-webkit-scrollbar,
+  .markdown-math-block::-webkit-scrollbar,
+  .cm-scroller::-webkit-scrollbar,
+  .terminal-view-host .xterm-viewport::-webkit-scrollbar,
+  .session-activity-panel::-webkit-scrollbar,
+  .markdown-code-block pre::-webkit-scrollbar,
+  .markdown-table-scroll::-webkit-scrollbar,
+  .technical-detail-text::-webkit-scrollbar,
+  .chat-thinking-body::-webkit-scrollbar,
+  .chat-skill-body::-webkit-scrollbar,
+  .chat-compaction-body::-webkit-scrollbar,
+  .tool-card-body::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+.scroll-area::-webkit-scrollbar-track,
+  textarea::-webkit-scrollbar-track,
+  .dialog-body::-webkit-scrollbar-track,
+  .file-editor-preview::-webkit-scrollbar-track,
+  .file-editor-image::-webkit-scrollbar-track,
+  .markdown-math-block::-webkit-scrollbar-track,
+  .cm-scroller::-webkit-scrollbar-track,
+  .terminal-view-host .xterm-viewport::-webkit-scrollbar-track,
+  .session-activity-panel::-webkit-scrollbar-track,
+  .markdown-code-block pre::-webkit-scrollbar-track,
+  .markdown-table-scroll::-webkit-scrollbar-track,
+  .technical-detail-text::-webkit-scrollbar-track,
+  .chat-thinking-body::-webkit-scrollbar-track,
+  .chat-skill-body::-webkit-scrollbar-track,
+  .chat-compaction-body::-webkit-scrollbar-track,
+  .tool-card-body::-webkit-scrollbar-track {
+    background: transparent;
+  }
+/* 静止时半透明，悬停才实色，避免滚动条在弹层里抢走注意力。 */
+.scroll-area::-webkit-scrollbar-thumb,
+  textarea::-webkit-scrollbar-thumb,
+  .dialog-body::-webkit-scrollbar-thumb,
+  .file-editor-preview::-webkit-scrollbar-thumb,
+  .file-editor-image::-webkit-scrollbar-thumb,
+  .markdown-math-block::-webkit-scrollbar-thumb,
+  .cm-scroller::-webkit-scrollbar-thumb,
+  .terminal-view-host .xterm-viewport::-webkit-scrollbar-thumb,
+  .session-activity-panel::-webkit-scrollbar-thumb,
+  .markdown-code-block pre::-webkit-scrollbar-thumb,
+  .markdown-table-scroll::-webkit-scrollbar-thumb,
+  .technical-detail-text::-webkit-scrollbar-thumb,
+  .chat-thinking-body::-webkit-scrollbar-thumb,
+  .chat-skill-body::-webkit-scrollbar-thumb,
+  .chat-compaction-body::-webkit-scrollbar-thumb,
+  .tool-card-body::-webkit-scrollbar-thumb {
+    background-color: color-mix(in srgb, var(--color-desk-line-strong) 55%, transparent);
+    background-clip: content-box;
+    border: 2px solid transparent;
+    border-radius: 999px;
+  }
+.scroll-area::-webkit-scrollbar-thumb:hover,
+  textarea::-webkit-scrollbar-thumb:hover,
+  .dialog-body::-webkit-scrollbar-thumb:hover,
+  .file-editor-preview::-webkit-scrollbar-thumb:hover,
+  .file-editor-image::-webkit-scrollbar-thumb:hover,
+  .markdown-math-block::-webkit-scrollbar-thumb:hover,
+  .cm-scroller::-webkit-scrollbar-thumb:hover,
+  .terminal-view-host .xterm-viewport::-webkit-scrollbar-thumb:hover,
+  .session-activity-panel::-webkit-scrollbar-thumb:hover,
+  .markdown-code-block pre::-webkit-scrollbar-thumb:hover,
+  .markdown-table-scroll::-webkit-scrollbar-thumb:hover,
+  .technical-detail-text::-webkit-scrollbar-thumb:hover,
+  .chat-thinking-body::-webkit-scrollbar-thumb:hover,
+  .chat-skill-body::-webkit-scrollbar-thumb:hover,
+  .chat-compaction-body::-webkit-scrollbar-thumb:hover,
+  .tool-card-body::-webkit-scrollbar-thumb:hover {
+    background-color: var(--color-desk-line-strong);
+  }
+}

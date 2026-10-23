@@ -1,0 +1,570 @@
+/* 归集应用外壳与右侧面板相关的组件样式。 */
+@layer components {
+.settings-page-content {
+    @apply mx-auto w-full max-w-4xl space-y-4 p-6 sm:p-8;
+  }
+/* 设置页：左栏固定宽度的分节导航，右栏是当前分节的内容；两栏各自滚动，页面本身不滚动。 */
+.settings-page {
+    display: grid;
+    min-width: 0;
+    min-height: 0;
+    flex: 1;
+    overflow: hidden;
+    grid-template-columns: 240px minmax(0, 1fr);
+  }
+.settings-nav {
+    display: flex;
+    min-width: 0;
+    min-height: 0;
+    flex-direction: column;
+    border-right: 1px solid var(--color-desk-line);
+    background: var(--color-desk-surface-subtle);
+  }
+.settings-nav-scroll {
+    min-height: 0;
+    flex: 1;
+    overflow-y: auto;
+    padding: 1rem 0.75rem 1.25rem;
+  }
+/* 页面标题留在导航栏顶部；右栏每个分节自带标题，这里不再重复一次。 */
+.settings-nav-header {
+    @apply px-2 pb-3 text-sm font-semibold;
+  }
+.settings-nav-group + .settings-nav-group {
+    @apply mt-4;
+  }
+.settings-nav-group-label {
+    @apply px-2 pb-1 text-2xs font-medium text-desk-muted;
+  }
+/* 分节条目：图标加文案；选中态用「浅强调底色 + 2px 强调竖条」，与 .list-item-active 的当前行标记一致。
+     只靠底色不足以区分：accent-soft 与导航底色在亮色下约 1.09:1、暗色下约 1.03:1，竖条才是有对比的那一层。 */
+.settings-nav-item {
+    @apply flex w-full items-center gap-2 rounded-desk-sm px-2 py-1.5 text-xs font-medium text-desk-muted transition-colors;
+  }
+.settings-nav-item:not(:disabled):hover {
+    @apply bg-desk-surface text-desk-ink;
+  }
+.settings-nav-item.is-selected,
+  .settings-nav-item.is-selected:not(:disabled):hover {
+    @apply bg-desk-accent-soft text-desk-ink;
+    box-shadow: inset 2px 0 0 0 var(--color-desk-accent);
+  }
+.settings-nav-item.is-selected .settings-nav-icon {
+    @apply text-desk-accent;
+  }
+.settings-nav-item.is-selected .settings-nav-label {
+    @apply font-semibold;
+  }
+.settings-nav-icon {
+    @apply h-4 w-4 flex-none;
+  }
+.settings-nav-label {
+    @apply min-w-0 truncate;
+  }
+/* 内容栏只负责滚动；最大宽度与内边距由 .settings-page-content 提供。 */
+.settings-content {
+    min-width: 0;
+    min-height: 0;
+    overflow-y: auto;
+  }
+/* 窄窗口放不下两栏：导航塌成内容区上方的横向条目条，页面标题与分组标题让位给条目本身。 */
+@media (max-width: 799px) {
+    .settings-page {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .settings-nav {
+      flex: none;
+      border-right: 0;
+      border-bottom: 1px solid var(--color-desk-line);
+    }
+
+    .settings-nav-scroll {
+      display: flex;
+      align-items: center;
+      gap: 0.25rem;
+      overflow-x: auto;
+      overflow-y: hidden;
+      padding: 0.5rem;
+    }
+
+    .settings-nav-header,
+    .settings-nav-group-label {
+      display: none;
+    }
+
+    .settings-nav-group {
+      display: flex;
+      align-items: center;
+      gap: 0.25rem;
+    }
+
+    .settings-nav-group + .settings-nav-group {
+      margin-top: 0;
+    }
+
+    .settings-nav-item {
+      width: auto;
+      flex: none;
+      white-space: nowrap;
+    }
+  }
+.settings-section {
+    @apply rounded-desk-lg border border-desk-line bg-desk-surface p-5;
+  }
+.settings-section-heading {
+    @apply flex flex-wrap items-center justify-between gap-4;
+  }
+.settings-section-title {
+    @apply text-sm font-semibold;
+  }
+/* 标题本身充当折叠开关：外观仍是标题，可点性由三角、指针与焦点环表达，不加悬停底色避免标题跳动。 */
+.settings-fold-toggle {
+    @apply inline-flex items-center gap-2 text-xs font-semibold;
+  }
+.settings-row {
+    @apply mt-4 flex flex-wrap items-center justify-between gap-4 border-t border-desk-line pt-4;
+  }
+/* 运行中指示：三点错峰跳动。点色取文字色，模板用 text-desk-accent 指定。
+     与 .status-dot 的分工是：静态点只表达状态，这里表达「正在进行」，
+     静止的单点看不出还在工作。 */
+.status-dots {
+    @apply inline-flex shrink-0 items-center;
+    gap: 3px;
+  }
+.status-dots > span {
+    @apply block size-1 rounded-full;
+    background-color: currentColor;
+    animation: status-dots-jump 1.2s ease-in-out infinite;
+  }
+.status-dots > span:nth-child(2) { animation-delay: 150ms; }
+.status-dots > span:nth-child(3) { animation-delay: 300ms; }
+/* 减少动效：停在三个实心点上，仍读得出「正在进行」。 */
+@media (prefers-reduced-motion: reduce) {
+    .status-dots > span {
+      animation: none;
+      opacity: 1;
+    }
+  }
+/* 技术细节：默认收起的原始文本，等宽、可复制，与面向用户的结论分层。 */
+.technical-detail {
+    @apply rounded-desk-sm border border-desk-line bg-desk-canvas-sunken px-3 py-2;
+  }
+.technical-detail-text {
+    @apply mt-1.5 max-h-40 overflow-auto whitespace-pre-wrap break-all font-mono text-2xs leading-5 text-desk-muted;
+  }
+.app-layout {
+    position: relative;
+    display: flex;
+    width: 100%;
+    height: 100vh;
+    height: 100dvh;
+    min-width: 0;
+    flex-direction: column;
+    overflow: hidden;
+  }
+/* 顶部栏之下的主体：侧栏、工作区与右侧面板并排；窄窗口遮罩与浮起的侧栏都相对它定位。 */
+.app-body {
+    position: relative;
+    display: flex;
+    min-width: 0;
+    min-height: 0;
+    flex: 1;
+    overflow: hidden;
+  }
+.app-workspace {
+    display: flex;
+    min-width: 0;
+    min-height: 0;
+    flex: 1;
+    flex-direction: column;
+    overflow: hidden;
+  }
+/* 自绘窗口标题栏：整条默认不可拖动，只有中间的 .app-titlebar-drag 空白能拖窗口，
+     控件与空白之间的缝隙不会把点击变成拖动或双击最大化；高度与主进程 TITLEBAR_HEIGHT 一致。 */
+.app-titlebar {
+    -webkit-app-region: no-drag;
+    z-index: 40;
+    display: flex;
+    min-width: 0;
+    height: 44px;
+    flex: none;
+    align-items: center;
+    gap: 0.5rem;
+    border-bottom: 1px solid var(--color-desk-line);
+    background: var(--color-desk-surface);
+    padding: 0 0.75rem;
+    /* 右侧另留出窗口按钮覆盖区与一段间距，否则面板开关会被压在最小化/关闭按钮下面、两者也容易点错。 */
+    padding-right: calc(1.25rem + var(--titlebar-controls-reserve, 0px));
+  }
+/* 标题栏唯一的拖动区：占满控件之间的空白，窗口仍然好拖，但控件附近不再可拖。 */
+.app-titlebar-drag {
+    -webkit-app-region: drag;
+    min-width: 3rem;
+    flex: 1 1 auto;
+    align-self: stretch;
+  }
+.app-titlebar button,
+  .app-titlebar a,
+  .app-titlebar input,
+  .app-titlebar select {
+    -webkit-app-region: no-drag;
+  }
+/* macOS 红绿灯占位：与左侧内边距合计 78px，正好让开系统按钮区。 */
+.app-titlebar-traffic-pad {
+    width: 4.125rem;
+    flex: none;
+  }
+.app-titlebar-toggle {
+    flex: none;
+  }
+/* 设置页的返回入口：占侧栏开关的位置，用文字说明去往哪里；高度与面板开关一致，不让标题栏跳动。 */
+.app-titlebar-back {
+    display: inline-flex;
+    height: 28px;
+    flex: none;
+    align-items: center;
+    gap: 0.375rem;
+    border-radius: var(--radius-desk-sm);
+    padding: 0 0.5rem;
+    color: var(--color-desk-muted);
+    font-size: 0.75rem;
+    font-weight: 500;
+    transition: background-color var(--default-transition-duration) ease, color var(--default-transition-duration) ease;
+  }
+.app-titlebar-back:not(:disabled):hover {
+    background: var(--color-desk-surface-subtle);
+    color: var(--color-desk-ink);
+  }
+.app-titlebar-app-name {
+    flex: none;
+    color: var(--color-desk-muted);
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+  }
+/* 会话与项目簇按内容宽度排（上限 28rem，超长标题截断），剩余宽度交给拖动区，所以这里不吃满空间。 */
+.app-titlebar-context {
+    display: flex;
+    min-width: 0;
+    max-width: 28rem;
+    flex: 0 1 auto;
+    flex-direction: column;
+    justify-content: center;
+    gap: 1px;
+  }
+.app-titlebar-session {
+    display: block;
+    max-width: 100%;
+    overflow: hidden;
+    text-align: left;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.875rem;
+    font-weight: 600;
+  }
+.app-titlebar-project {
+    display: block;
+    overflow: hidden;
+    color: var(--color-desk-muted);
+    font-size: 0.6875rem;
+    line-height: 1.35;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+.app-runtime-status {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    gap: 0.4rem;
+    color: var(--color-desk-muted);
+    font-size: 0.75rem;
+    white-space: nowrap;
+  }
+.app-runtime-status-dot {
+    width: 0.45rem;
+    height: 0.45rem;
+    border-radius: 999px;
+    background: currentColor;
+  }
+.app-runtime-status.is-active,
+  .app-runtime-status.is-ready {
+    color: var(--color-desk-accent);
+  }
+.app-runtime-status.is-error {
+    color: var(--color-desk-danger);
+  }
+.app-sidebar-backdrop {
+    display: none;
+  }
+/* 侧栏常驻；外层宽度释放工作区空间，内层固定宽度防止折叠时文字与滚动布局抖动。 */
+.app-sidebar {
+    --sidebar-width: 260px;
+    display: flex;
+    width: var(--sidebar-width);
+    min-width: 0;
+    min-height: 0;
+    flex: none;
+    overflow: hidden;
+    border-right: 1px solid var(--sidebar-line);
+    background: var(--sidebar-surface);
+    color: var(--sidebar-ink);
+    transition: width var(--sidebar-duration-collapse) var(--sidebar-ease), border-right-width var(--sidebar-duration-collapse) var(--sidebar-ease);
+  }
+.app-sidebar.is-collapsed {
+    width: 0;
+    border-right-width: 0;
+  }
+@media (max-width: 799px) {
+    .app-sidebar {
+      --sidebar-width: min(260px, calc(100vw - 3.5rem));
+      position: absolute;
+      z-index: 30;
+      inset: 0 auto 0 0;
+      width: var(--sidebar-width);
+      transform: translateX(-100%);
+      box-shadow: none;
+      transition: transform var(--sidebar-duration-collapse) var(--sidebar-ease);
+    }
+
+    .app-sidebar.is-collapsed {
+      width: var(--sidebar-width);
+      border-right-width: 1px;
+      transform: translateX(-100%);
+    }
+
+    .app-sidebar.is-mobile-open {
+      transform: translateX(0);
+      box-shadow: var(--shadow-desk-pop);
+    }
+
+    .app-sidebar-backdrop {
+      position: absolute;
+      z-index: 20;
+      inset: 0;
+      display: block;
+      border: 0;
+      background: var(--color-desk-overlay);
+    }
+
+    /* 窄窗口顶部栏保持单行：应用名与项目路径让位给会话标题与运行状态。 */
+    .app-titlebar {
+      gap: 0.375rem;
+      padding: 0 0.625rem;
+      padding-right: calc(1rem + var(--titlebar-controls-reserve, 0px));
+    }
+
+    .app-titlebar-app-name,
+    .app-titlebar-project {
+      display: none;
+    }
+
+    .app-runtime-status {
+      gap: 0.3rem;
+      font-size: 0.6875rem;
+    }
+  }
+/*
+   * 右侧面板：与左侧栏同为界面外壳面，但用独立令牌，便于单独调节层次；
+   * 面板内按页签在文件树与源代码管理之间切换，两个视图各自维护自己的滚动容器。
+   */
+.app-right-panel {
+    --panel-width: 350px;
+    --panel-surface: var(--color-desk-surface);
+    --panel-hover: var(--color-desk-surface-subtle);
+    --panel-selected: var(--color-desk-accent-soft);
+    --panel-ink: var(--color-desk-ink);
+    --panel-muted: var(--color-desk-muted);
+    --panel-line: color-mix(in srgb, var(--color-desk-line) 70%, transparent);
+    /* 提交卡片的描边：比分隔线更实一点，卡片边界才看得出来。 */
+    --panel-card-line: var(--color-desk-line);
+    /* 文件类型色：只表达类型分组，不承担任何语义（不占用 danger/warning/success）。 */
+    --panel-tone-folder: #236978;
+    --panel-tone-code: #2f7a86;
+    --panel-tone-data: #9a6b2f;
+    --panel-tone-doc: #5b6b78;
+    --panel-tone-markup: #6f5a91;
+    --panel-tone-plain: #7d8b98;
+    --panel-duration: 140ms;
+    --panel-duration-collapse: 290ms;
+    --panel-ease: cubic-bezier(0.22, 1, 0.36, 1);
+    position: relative;
+    display: flex;
+    width: var(--panel-width);
+    min-width: 0;
+    min-height: 0;
+    flex: none;
+    overflow: hidden;
+    border-left: 1px solid var(--panel-line);
+    background: var(--panel-surface);
+    color: var(--panel-ink);
+    transition:
+      width var(--panel-duration-collapse) var(--panel-ease),
+      border-left-width var(--panel-duration-collapse) var(--panel-ease);
+  }
+.app-right-panel.is-collapsed {
+    width: 0;
+    border-left-width: 0;
+  }
+/* 拖拽期间不接过渡：宽度必须跟手，不能滞后一帧。 */
+.app-right-panel.is-resizing {
+    transition: none;
+  }
+/* 内层保持展开宽度，外层只裁剪；折叠与拖拽都不会让行内文字反复重排。 */
+.right-panel-content {
+    display: flex;
+    width: calc(var(--panel-width) - 1px);
+    height: 100%;
+    min-height: 0;
+    flex: none;
+    flex-direction: column;
+    transition: opacity var(--panel-duration) ease;
+  }
+.app-right-panel.is-collapsed .right-panel-content {
+    opacity: 0;
+  }
+/* 小图标：面板头部、文件行与标题栏的两个面板开关共用，尺寸统一在这里定义。 */
+.panel-icon {
+    display: block;
+    width: 15px;
+    height: 15px;
+    flex: none;
+  }
+.right-panel-header {
+    display: flex;
+    height: 34px;
+    flex: none;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 0 8px 0 12px;
+  }
+.right-panel-project {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    gap: 6px;
+    color: var(--panel-ink);
+    font-size: 12px;
+    font-weight: 600;
+  }
+.right-panel-project .panel-icon {
+    color: var(--panel-muted);
+  }
+.right-panel-project-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+/* 面板头部的操作键：无边框方形键，悬停才显底色，与侧栏行内操作同一套节奏。 */
+.right-panel-action {
+    display: flex;
+    width: 24px;
+    height: 24px;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    border-radius: 5px;
+    color: var(--panel-muted);
+    transition: background-color var(--panel-duration) ease, color var(--panel-duration) ease;
+  }
+.right-panel-action:not(:disabled):hover {
+    background: var(--panel-hover);
+    color: var(--panel-ink);
+  }
+.right-panel-action:disabled {
+    opacity: 0.5;
+  }
+/* 刷新进行中：图标自转，仍读得出「正在刷新」。 */
+.panel-icon.is-spinning {
+    animation: panel-icon-spin 900ms linear infinite;
+  }
+/* 分隔条贴在面板左缘：只占 6px，悬停与拖拽时显出一条强调色。 */
+.right-panel-resize {
+    position: absolute;
+    z-index: 2;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: 6px;
+    cursor: col-resize;
+    background: transparent;
+    transition: background-color var(--panel-duration) ease;
+  }
+.right-panel-resize:hover,
+  .app-right-panel.is-resizing .right-panel-resize {
+    background: color-mix(in srgb, var(--color-desk-accent) 42%, transparent);
+  }
+.app-right-panel.is-collapsed .right-panel-resize {
+    display: none;
+  }
+/*
+   * 右侧面板页签：文件树与源代码管理共用同一列。
+   * 页签条与面板头部同一底色，选中态只用文字色与底部竖条表达，避免再加一层卡片。
+   */
+.right-panel-tabs {
+    display: flex;
+    height: 28px;
+    flex: none;
+    align-items: stretch;
+    gap: 2px;
+    border-bottom: 1px solid var(--panel-line);
+    padding: 0 6px;
+  }
+.right-panel-tab {
+    display: flex;
+    min-width: 0;
+    flex: 0 1 auto;
+    align-items: center;
+    gap: 5px;
+    border-radius: 5px 5px 0 0;
+    padding: 0 8px;
+    color: var(--panel-muted);
+    font-size: 12px;
+    white-space: nowrap;
+    transition: color var(--panel-duration) ease, background-color var(--panel-duration) ease;
+  }
+.right-panel-tab:hover {
+    background: var(--panel-hover);
+    color: var(--panel-ink);
+  }
+/* 选中态：文字提亮 + 底部强调竖条（与设置页导航同一套标记语言）。 */
+.right-panel-tab.is-active {
+    color: var(--panel-ink);
+    font-weight: 600;
+    box-shadow: inset 0 -2px 0 0 var(--color-desk-accent);
+  }
+.right-panel-tab-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+.right-panel-tab-count {
+    flex: none;
+    border-radius: 999px;
+    background: var(--panel-selected);
+    padding: 0 5px;
+    color: var(--color-desk-accent);
+    font-size: 10px;
+    font-variant-numeric: tabular-nums;
+    line-height: 14px;
+  }
+/* 暗色：类型色整体提亮，保持同一组色相，不改分组含义；提交卡片的描边同步提亮一档。 */
+@media (prefers-color-scheme: dark) {
+    .app-right-panel {
+      --panel-card-line: color-mix(in srgb, var(--color-desk-line) 82%, white);
+      --panel-tone-folder: #4fa3b5;
+      --panel-tone-code: #6ab8c9;
+      --panel-tone-data: #d3b06e;
+      --panel-tone-doc: #91a2b1;
+      --panel-tone-markup: #a894c9;
+      --panel-tone-plain: #7b8b9a;
+    }
+  }
+/* 窄窗口不给右侧面板留位置：它在窄窗会遮住正文，因此整块不显示。 */
+@media (max-width: 799px) {
+    .app-right-panel {
+      display: none;
+    }
+  }
+}

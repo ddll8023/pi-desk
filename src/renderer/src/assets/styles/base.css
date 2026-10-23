@@ -1,0 +1,167 @@
+/* 跨能力主题令牌与页面基础样式。 */
+/* 提供全局颜色、尺寸与动效令牌，以及页面基础排版和焦点规则；暗色令牌由主进程 nativeTheme.themeSource 驱动。 */
+@theme {
+  /* 页面底色与沉陷面：消息区用沉陷面与侧栏、输入区区分层次。 */
+  --color-desk-canvas: #f4f6f8;
+  --color-desk-canvas-sunken: #eceff3;
+  --color-desk-surface: #ffffff;
+  /* 悬停、内嵌块与禁用态底色；与 canvas 分开，避免在白色面板上串色。 */
+  --color-desk-surface-subtle: #f2f6f8;
+  --color-desk-ink: #17252f;
+  --color-desk-muted: #5b6b78;
+  --color-desk-line: #dce3e9;
+  /* 控件描边；比分隔线略深，让可点控件与静态分区分开。 */
+  --color-desk-line-strong: #c5d0d9;
+  --color-desk-accent: #236978;
+  --color-desk-accent-hover: #1b5563;
+  /* 选中行与浅强调底色；不用于正文文字。 */
+  --color-desk-accent-soft: #e2eef1;
+  /* 实心强调按钮上的文字色。 */
+  --color-desk-on-accent: #ffffff;
+  /* 图表色槽（共 6 个）：柱/折线按序列取前 3 个，饼/环图按切片取满 6 个；不借用 accent 与语义色，避免多序列图表被误读为成功/警告。 */
+  --color-desk-chart-1: #2f6f9e;
+  --color-desk-chart-2: #b4762a;
+  --color-desk-chart-3: #6b5aa8;
+  --color-desk-chart-4: #2f7d52;
+  --color-desk-chart-5: #a8446b;
+  --color-desk-chart-6: #7a6234;
+  /* 错误、失败与中止提示；只用于语义提示，不做强调色。 */
+  --color-desk-danger: #a4373a;
+  --color-desk-danger-soft: #f8eaea;
+  /* Extension 警告通知的语义色。 */
+  --color-desk-warning: #8a6116;
+  --color-desk-warning-soft: #f8f0dd;
+  /* Diff 新增行语义色；删除行复用 desk-danger。 */
+  --color-desk-success: #2f6d3a;
+  --color-desk-success-soft: #e7f1e9;
+  /* 模态遮罩。 */
+  --color-desk-overlay: rgba(16, 27, 36, 0.52);
+
+  --radius-desk-sm: 6px;
+  --radius-desk-md: 8px;
+  --radius-desk-lg: 12px;
+
+  --shadow-desk-raise: 0 1px 2px rgba(23, 37, 47, 0.06);
+  /* 输入坞浮在消息区底色上用的投影：比 raise 散得更远，比 pop 更收敛。 */
+  --shadow-desk-dock: 0 2px 6px rgba(23, 37, 47, 0.06), 0 14px 32px -16px rgba(23, 37, 47, 0.28);
+  --shadow-desk-pop: 0 10px 28px rgba(23, 37, 47, 0.14), 0 2px 6px rgba(23, 37, 47, 0.08);
+  /* 模态面板用的小半径清晰阴影：大模糊阴影在重绘时反复光栅化，代价远高于它的观感收益。 */
+  --shadow-desk-dialog: 0 4px 16px rgba(23, 37, 47, 0.14);
+
+  --font-sans: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, "Microsoft YaHei UI",
+    "Microsoft YaHei", "PingFang SC", sans-serif;
+  --font-mono: "Cascadia Mono", Consolas, "SFMono-Regular", Menlo, monospace;
+
+  /* 比 text-xs 更小的元信息字号，用于 chip、时间与路径等次要标签。 */
+  --text-2xs: 11px;
+  --text-2xs--line-height: 1.45;
+
+  /* 侧栏项目名这类次级主标签的字号；比 text-xs 大一档，与路径的 11px 拉开层级。 */
+  --text-md: 13px;
+  --text-md--line-height: 1.4;
+
+  /* 交互反馈统一时长；transition-colors 等工具类据此生成。 */
+  --default-transition-duration: 120ms;
+
+  /* 动效令牌：按时程与缓动两类收敛，不再逐处写死。
+     时长按实际移动距离定：弹层面板 ~38px（8px 位移 + 5% 缩放），用 240ms；
+     弹出层 6px，用 140ms；遮罩纯淡入淡出无位移，180ms；退出统一取进场的 ~60%，更利落。
+     缓动分两档：进场「快启动、平稳停下」（前段速度高、末段长尾），退场「加速离场、不拖沓」。 */
+  --motion-duration-fast: 140ms;
+  --motion-duration-base: 180ms;
+  --motion-duration-slow: 240ms;
+  --motion-ease-entrance: cubic-bezier(0.16, 1, 0.3, 1);
+  --motion-ease-exit: cubic-bezier(0.4, 0, 1, 1);
+}
+/* 暗色主题：由主进程 nativeTheme.themeSource 驱动 prefers-color-scheme，无需页面脚本参与。
+   仅重定义同名令牌，工具类经 var() 引用即可全局生效；色值与主进程窗口背景色保持同步。 */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-desk-canvas: #10161c;
+    --color-desk-canvas-sunken: #0b1015;
+    --color-desk-surface: #1a222b;
+    --color-desk-surface-subtle: #232d38;
+    --color-desk-ink: #dce6ee;
+    --color-desk-muted: #91a2b1;
+    --color-desk-line: #2c3a47;
+    --color-desk-line-strong: #3d4d5c;
+    --color-desk-accent: #4fa3b5;
+    --color-desk-accent-hover: #6ab8c9;
+    --color-desk-accent-soft: #1d3138;
+    --color-desk-on-accent: #07181d;
+    /* 图表色槽在暗色下提亮，保证与沉陷面底色对比。 */
+    --color-desk-chart-1: #6fa8d6;
+    --color-desk-chart-2: #d9a45f;
+    --color-desk-chart-3: #9b8bd0;
+    --color-desk-chart-4: #6fbb90;
+    --color-desk-chart-5: #d488a8;
+    --color-desk-chart-6: #c2a878;
+    --color-desk-danger: #d47c7f;
+    --color-desk-danger-soft: #372225;
+    --color-desk-warning: #d3b06e;
+    --color-desk-warning-soft: #33291a;
+    --color-desk-success: #7cb98a;
+    --color-desk-success-soft: #1b2c21;
+    --color-desk-overlay: rgba(0, 0, 0, 0.62);
+
+    --shadow-desk-raise: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --shadow-desk-dock: 0 2px 8px rgba(0, 0, 0, 0.35), 0 14px 32px -16px rgba(0, 0, 0, 0.6);
+    --shadow-desk-pop: 0 12px 32px rgba(0, 0, 0, 0.55);
+    --shadow-desk-dialog: 0 4px 18px rgba(0, 0, 0, 0.55);
+  }
+}
+@layer base {
+  :root {
+    /* 会话列宽基准：窄窗口保持 62rem，宽屏随窗口放宽，超大屏封顶，避免正文行长失控。 */
+    --chat-column-max: clamp(62rem, 68vw, 88rem);
+    /* 右侧为大纲刻度栏保留的留白：值需覆盖 ChatMessageList.vue 的大纲可用宽常量（OUTLINE_MIN_WIDTH_PX 加间距与边缘），列宽吃满该留白会让大纲因可用宽度不足而整条不显示。 */
+    --chat-column-reserve: 24rem;
+    /* 可折叠卡片内容区的高度上限：跟随窗口高度，超出部分在卡片内部滚动，短内容仍按内容高度收缩。 */
+    --chat-card-scroll-max-height: min(28rem, 60vh);
+    /*
+     * 标题栏右端要让出的窗口按钮覆盖区宽度。
+     * Windows/Linux 上系统把最小化/最大化/关闭画在标题栏右端并覆盖在网页内容之上，DOM 元素不能用那块区域；
+     * titlebar-area-* 描述的是未被覆盖的可绘制区，两者相减即需让出的宽度。
+     * 未启用覆盖或取不到这些变量时（如 macOS）回退为 0，标题栏保持原内边距。
+     */
+    --titlebar-controls-reserve: max(
+      0px,
+      100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw)
+    );
+  }
+
+  body {
+    margin: 0;
+    min-width: 320px;
+    background: var(--color-desk-canvas);
+    color: var(--color-desk-ink);
+    font-family: var(--font-sans);
+    line-height: 1.5;
+  }
+
+  /* 焦点环贴住控件边框，避免大输入框上出现内外双框。 */
+  button:not(:disabled),
+  input,
+  textarea,
+  select,
+  summary {
+    &:focus-visible {
+      outline: 2px solid var(--color-desk-accent);
+      outline-offset: 0;
+    }
+  }
+
+  /* 折叠控件统一用自绘三角，去掉浏览器默认标记。 */
+  summary {
+    cursor: pointer;
+    list-style: none;
+  }
+
+  summary::-webkit-details-marker {
+    display: none;
+  }
+
+  ::selection {
+    background: var(--color-desk-accent-soft);
+  }
+}
