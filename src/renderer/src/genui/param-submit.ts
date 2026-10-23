@@ -16,7 +16,7 @@ import { ref } from 'vue'
 import type { Ref } from 'vue'
 import type { GenuiDocument, GenuiParam, GenuiParamValue } from '../../../shared/genui-api'
 import { GENUI_SUBMIT_PREFIX, isGenuiParamVisible } from '../../../shared/genui-api'
-import { useRuntimeStore } from '../stores/runtime'
+import { useRuntimeStore } from '../sessions/stores/runtime'
 import { flushGenuiParamPersistence } from './param-persistence'
 
 /** 单个参数的展示文本；取值缺失或类型不符时用默认值，不输出空值。 */

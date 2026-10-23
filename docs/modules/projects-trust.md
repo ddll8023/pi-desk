@@ -15,20 +15,21 @@
 | `src/main/projects/project-manager.ts` | 项目列表、候选添加、切换、移除与 Runtime 协作 |
 | `src/main/shared/project-path.ts` | 项目绝对路径规范化与显示名 |
 | `src/main/trust/trust-manager.ts` | 受保护项目资源探测、信任状态与决定保存 |
+| `src/main/trust/guards.ts` | 当前项目的信任门禁：探测是否需要信任决定，并为 Git 写操作提供统一放行判断 |
 | `src/shared/project-api.ts` | 项目请求、列表、选择结果与运行时校验 |
 | `src/shared/trust-api.ts` | 信任资源、状态与决定契约 |
-| `src/renderer/src/stores/project.ts` | 项目展示副本、候选添加、串行选择及操作错误 |
-| `src/renderer/src/stores/trust.ts` | 信任提示目标、决定与交互状态 |
-| `src/renderer/src/services/project.ts` | 项目固定桥接接口；重建普通信任载荷 |
-| `src/renderer/src/services/trust.ts` | 信任查询与决定的桥接接口 |
-| `src/renderer/src/components/TrustDialog.vue` | 候选项目及已有运行目标的信任交互 |
+| `src/renderer/src/projects/stores/project.ts` | 项目展示副本、候选添加、串行选择及操作错误 |
+| `src/renderer/src/projects/stores/trust.ts` | 信任提示目标、决定与交互状态 |
+| `src/renderer/src/projects/services/project.ts` | 项目固定桥接接口；重建普通信任载荷 |
+| `src/renderer/src/projects/services/trust.ts` | 信任查询与决定的桥接接口 |
+| `src/renderer/src/projects/components/TrustDialog.vue` | 候选项目及已有运行目标的信任交互 |
 
 入口、主进程调用关系、项目 Store 与服务已读；信任界面及辅助契约由注册和引用定位。
 
 ## 公共与跨模块引用
 
-- [F-sidebar](shared.md#f-sidebar项目会话树混合)：`src/renderer/src/components/ProjectSidebar.vue`、`src/renderer/src/sidebar-tree.ts` 承载项目与会话混合视图。
-- [F-assembly](shared.md#f-assembly进程与页面组装混合)：`src/main/index.ts` 的 `registerProjectHandlers`、`registerTrustHandlers` 与已登记项目解析；App 处理候选添加和移除确认。
+- [F-sidebar](shared.md#f-sidebar项目会话树混合)：`src/renderer/src/projects/components/ProjectSidebar.vue`、`src/renderer/src/projects/sidebar-tree.ts` 承载项目与会话混合视图。
+- [F-assembly](shared.md#f-assembly进程与页面组装混合)：`src/main/projects/ipc.ts` 的 `registerProjectHandlers`、`src/main/trust/ipc.ts` 的 `registerTrustHandlers` 与已登记项目解析；候选添加和移除确认的待确认目标在 `src/renderer/src/projects/stores/project.ts`，经 `src/renderer/src/shell/components/AppDialogHost.vue` 呈现。
 - [F-config](shared.md#f-configdesktop-配置混合)：`src/main/config/desktop-config-store.ts` 是项目列表、当前项目、信任决定的唯一持久化入口。
 - [会话](sessions-chat.md)：`src/main/sessions/session-run-registry.ts`、`src/main/sessions/sdk-runtime-bridge.ts` 提供占用查询、前台选择与项目范围关闭。
 - [终端](terminal-commands.md)：项目移除成功后，主进程使用原规范路径另行请求关闭该项目终端。

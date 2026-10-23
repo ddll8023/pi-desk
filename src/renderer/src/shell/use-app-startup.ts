@@ -10,21 +10,41 @@
  */
 import { onMounted, onUnmounted, watch } from 'vue'
 import { flushGenuiParamPersistence, initializeGenuiParamPersistence } from '../genui/param-persistence'
-import { useDesktopStore } from '../stores/desktop'
-import { useExtensionUiStore } from '../stores/extension-ui'
-import { usePreferencesStore } from '../stores/preferences'
-import { useProjectStore } from '../stores/project'
-import { useQuickCommandsStore } from '../stores/quick-commands'
-import { useResourceStore } from '../stores/resource'
-import { useRuntimeStore } from '../stores/runtime'
-import { useSessionRunsStore } from '../stores/session-runs'
-import { useSessionStore } from '../stores/session'
-import { useSessionViewStore } from '../stores/session-view'
-import { useTerminalStore } from '../stores/terminal'
-import { useUpdatesStore } from '../stores/updates'
-import { useWorkspaceTabsStore } from '../stores/workspace-tabs'
+import { useDesktopStore } from './stores/desktop'
+import { useExtensionUiStore } from '../sessions/stores/extension-ui'
+import { usePreferencesStore } from '../preferences/stores/preferences'
+import { useProjectStore } from '../projects/stores/project'
+import { useQuickCommandsStore } from '../preferences/stores/quick-commands'
+import { useResourceStore } from '../resources/stores/resource'
+import { useRuntimeStore } from '../sessions/stores/runtime'
+import { useSessionRunsStore } from '../sessions/stores/session-runs'
+import { useSessionStore } from '../sessions/stores/session'
+import { useSessionViewStore } from '../sessions/stores/session-view'
+import { useTerminalStore } from '../workspace/stores/terminal'
+import { useUpdatesStore } from '../updates/stores/updates'
+import { useWorkspaceTabsStore } from '../workspace/stores/workspace-tabs'
+import { registerSessionTabState } from '../workspace/stores/session-tab-bridge'
 
 export function useAppStartup(): void {
+  /**
+   * 标签侧经注册的只读视图读取会话状态：标签模块不 import 会话 Store，打开链才不构成模块环。
+   * 提供者在首次读取时才实例化会话 Store，因此这里的注册必须先于任何标签动作。
+   */
+  registerSessionTabState(() => {
+    const session = useSessionStore()
+    return {
+      get opening() { return session.opening },
+      get openingProjectPath() { return session.openingProjectPath },
+      get actionError() { return session.actionError },
+      get awaitingTrust() { return session.awaitingTrust },
+      get awaitingInterrupt() { return session.awaitingInterrupt },
+      get loadedSessionIds() { return session.loadedSessionIds },
+      sessionsOf: projectPath => session.sessionsOf(projectPath),
+      waitForOpenActions: () => session.waitForOpenActions(),
+      invalidateOpenSelection: () => session.invalidateOpenSelection()
+    }
+  })
+
   const desktopStore = useDesktopStore()
   const extensionStore = useExtensionUiStore()
   const preferencesStore = usePreferencesStore()

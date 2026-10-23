@@ -2,7 +2,7 @@
 
 ### 跨 contextBridge 的载荷必须由服务层重建为普通对象
 
-约定：`src/renderer/src/services/` 的每个桥接调用只传原始值或当场构造的普通对象；要传响应式数据时在该层显式重建（现有例子：`toPlainTrustStatus`），不把 `ref` 或 store 里的对象直接传过去。
+约定：各能力目录下 `services/` 的每个桥接调用只传原始值或当场构造的普通对象；要传响应式数据时在该层显式重建（现有例子：`toPlainTrustStatus`），不把 `ref` 或 store 里的对象直接传过去。
 
 适用：新增或修改任何渲染端桥接方法，以及把 store 数据作为参数的调用。
 
@@ -10,7 +10,7 @@
 
 ### 桥接失败的展示必须保留原始异常文本
 
-约定：桥接异常的展示结果带原始 message——项目等模块拼进文案，认证模块放 `AuthError.detail` 由界面折叠展示；新增 IPC 通道用 `src/main/index.ts` 的 `handle()` 包装，使处理器抛错时主进程留有 `[ipc] …` 日志。不许只回固定文案。
+约定：桥接异常的展示结果带原始 message——项目等模块拼进文案，认证模块放 `AuthError.detail` 由界面折叠展示；新增 IPC 通道用 `src/main/ipc/dispatch.ts` 的 `handle()` 包装，使处理器抛错时主进程留有 `[ipc] …` 日志。不许只回固定文案。
 
 适用：新增桥接方法及其错误分支。
 

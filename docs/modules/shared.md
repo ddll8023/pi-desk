@@ -6,8 +6,8 @@
 
 | 文件 | 真实职责与模块使用范围 |
 | --- | --- |
-| `src/main/index.ts` | 只有装配与启动顺序：准备协议与应用目录、取单实例锁、注册生命周期、窗口就绪后按固定顺序装配。不含业务逻辑 |
-| `src/main/app-lifecycle.ts` | 便携数据目录、登录 shell PATH、单实例锁、窗口全部关闭与退出链、启动时的扩展自动更新 |
+| `src/main/index.ts` | 只准备入口步骤：准备协议与应用目录、取单实例锁、注册生命周期，随后把启动编排交给 `app-lifecycle.ts`。不含业务逻辑 |
+| `src/main/app-lifecycle.ts` | 便携数据目录、登录 shell PATH、单实例锁、窗口就绪后按固定顺序调用各能力 `ipc.ts` 注册器、窗口全部关闭与退出链、启动时的扩展自动更新 |
 | `src/main/window.ts` | 唯一窗口的创建、主题与标题栏配色、导航与权限限制、单实例聚焦 |
 | `src/main/window-channel.ts` | 窗口引用、向页面投递事件与全部业务广播、系统目录选择；不持有业务实例，终端状态来源由组合根注册 |
 | `src/main/asset-protocol.ts` | 应用协议注册、页面地址解析、目录越界判定与生产 CSP |
@@ -16,10 +16,10 @@
 | `src/preload/index.ts` | 只合并各域 Api 并暴露 `window.desktop`，不含 channel 调用与校验 |
 | `src/preload/*.ts`（域文件） | 按业务域各一个文件（`desktop`、`projects`、`sessions`、`runtime`、`terminal`、`git`、`preferences`、`providers`、`updates`、`trust`、`genui`），各自承载固定 channel 调用、声明字段载荷重建、响应与事件校验、订阅释放 |
 | `src/renderer/src/App.vue` | 页面组合根：只装配外壳骨架、弹层宿主与启动编排 |
-| `src/renderer/src/shell/AppShell.vue` | 布局骨架：顶部栏、侧栏与窄窗遮罩、工作区槽、右侧面板；持有窄窗与侧栏开合状态 |
-| `src/renderer/src/shell/WorkspaceView.vue` | 工作区：标签条、四条操作失败提示、对话／终端／文件面板层与空态 |
-| `src/renderer/src/shell/AppDialogHost.vue` | 弹层宿主：会话中断、信任、项目移除、会话删除、脏文件关闭、会话选择、快捷命令编辑与删除、Extension、更新提示 |
-| `src/renderer/src/shell/use-app-startup.ts` | Store 初始化与释放顺序、打开意图的补提交、生成式参数持久化初始化与退出落盘、项目切换与会话落盘的补读 |
+| `src/renderer/src/shell/components/AppShell.vue` | 布局骨架：顶部栏、侧栏与窄窗遮罩、工作区槽、右侧面板；持有窄窗与侧栏开合状态 |
+| `src/renderer/src/shell/components/WorkspaceView.vue` | 工作区：标签条、四条操作失败提示、对话／终端／文件面板层与空态 |
+| `src/renderer/src/shell/components/AppDialogHost.vue` | 弹层宿主：会话中断、信任、项目移除、会话删除、脏文件关闭、会话选择、快捷命令编辑与删除、Extension、更新提示 |
+| `src/renderer/src/shell/use-app-startup.ts` | Store 初始化与释放顺序、打开意图的补提交、标签侧会话状态视图的注册、生成式参数持久化初始化与退出落盘、项目切换与会话落盘的补读 |
 | `src/renderer/src/env.d.ts` | 将各域 Api 合成为可缺失的 `Window.desktop`；仅环境类型，不承担业务请求 |
 
 已知消费者覆盖总览列出的业务模块。IPC 参数与调用者校验、preload 验证和渲染服务异常转换是不同边界，不能因存在相似代码就省掉任一边界。单窗口事件只投递给受信任窗口。
@@ -28,11 +28,11 @@
 
 | 文件 | 模块相关符号与范围 |
 | --- | --- |
-| `src/renderer/src/stores/runtime.ts` | 只做装配与初始化／释放编排，不含业务状态；按原成员名转发到下列四个切片 |
-| `src/renderer/src/stores/runtime-core.ts` | 前台实例身份、Prompt／回退／中止／压缩等动作状态、投影分片与后台留底、`send`、`rewind`、`compact`、`stopOperation`、同步与快照收敛 |
-| `src/renderer/src/stores/runtime-history.ts` | 历史分页、展开轮次的原文与续段状态、缓存淘汰；读取目标与会话键由调用方注入 |
-| `src/renderer/src/stores/runtime-models.ts` | 可用模型能力清单、Runtime 未就绪时的候选预读、Pi 默认模型、当前会话 `switchModel` |
-| `src/renderer/src/stores/runtime-model-display.ts` | 对话页隐藏模型偏好、乐观更新与串行写回、失败回滚 |
+| `src/renderer/src/sessions/stores/runtime.ts` | 只做装配与初始化／释放编排，不含业务状态；按原成员名转发到下列四个切片 |
+| `src/renderer/src/sessions/stores/runtime-core.ts` | 前台实例身份、Prompt／回退／中止／压缩等动作状态、投影分片与后台留底、`send`、`rewind`、`compact`、`stopOperation`、同步与快照收敛 |
+| `src/renderer/src/sessions/stores/runtime-history.ts` | 历史分页、展开轮次的原文与续段状态、缓存淘汰；读取目标与会话键由调用方注入 |
+| `src/renderer/src/sessions/stores/runtime-models.ts` | 可用模型能力清单、Runtime 未就绪时的候选预读、Pi 默认模型、当前会话 `switchModel` |
+| `src/renderer/src/sessions/stores/runtime-model-display.ts` | 对话页隐藏模型偏好、乐观更新与串行写回、失败回滚 |
 | `src/shared/runtime-api.ts` | 只再导出 `./runtime/`，外部导入路径不变 |
 | `src/shared/runtime/status.ts` | 运行目标、状态、错误与命令（Prompt、回退、压缩、切换模型） |
 | `src/shared/runtime/projection.ts` | 消息／工具／历史／活动／用量／速率投影 |
@@ -61,8 +61,8 @@
 
 | 文件 | 范围与消费者 |
 | --- | --- |
-| `src/renderer/src/components/ProjectSidebar.vue` | 项目树、展开、会话与运行状态、项目／会话菜单；应用外壳接收移除和删除意图，会话及工作区模块接收打开意图 |
-| `src/renderer/src/sidebar-tree.ts` | 将项目、项目内会话列表、运行实例与读取状态转换为侧栏树数据 |
+| `src/renderer/src/projects/components/ProjectSidebar.vue` | 项目树、展开、会话与运行状态、项目／会话菜单；应用外壳接收移除和删除意图，会话及工作区模块接收打开意图 |
+| `src/renderer/src/projects/sidebar-tree.ts` | 将项目、项目内会话列表、运行实例与读取状态转换为侧栏树数据 |
 
 项目节点不拥有会话文件；删除项目记录、删除会话和关闭标签是不同动作。此处同时服务项目与会话，不登记为纯通用树控件。
 
@@ -87,7 +87,7 @@
 | `src/main/shared/external-url.ts` | 受控 http(s) 外链打开；主进程桌面外链接口及认证流程使用 |
 | `src/shared/desktop-api.ts` | 应用信息、外链请求及跨域基础错误；各域契约引用错误定义 |
 | `src/shared/dev-server.ts` | 从传入环境值解析开发端口；构建配置与主进程页面地址共用 |
-| `src/renderer/src/services/external-url.ts` | 页面文档链接打开的统一桥接封装；主进程执行协议与凭据检查 |
+| `src/renderer/src/editor/services/external-url.ts` | 文件内文档链接打开的统一桥接封装；主进程执行协议与凭据检查 |
 
 主进程业务结果、桥接通信失败、调用者权限拒绝是不同失败来源。声明类型不替代实际跨进程载荷校验。
 
@@ -104,14 +104,17 @@
 | `src/renderer/src/ui/markdown.ts` | 聊天 Markdown 解析与清洗，供 Markdown 展示组件使用 |
 | `src/renderer/src/ui/markdown-shared.ts` | 代码、表格与 HTML 转义的共同渲染；聊天及文件 Markdown 消费 |
 | `src/renderer/src/ui/markdown-math.ts` | 数学解析与 KaTeX 渲染；聊天、文件预览及富文本公式消费 |
+| `src/renderer/src/ui/project-entry-drag.ts` | 项目条目拖拽载荷与终端插入文本；文件树与终端视图共用 |
+| `src/renderer/src/ui/relative-time.ts` | 相对时间文案；侧栏会话行与提交历史共用 |
+| `src/renderer/src/ui/forked-sessions.ts` | 分叉会话折叠；侧栏项目树与会话选择器共用 |
 
-`src/renderer/src/ui/` 是已经落地的共享展示目录，只收被多个能力重复使用的无业务状态代码。尚未切片的根目录文件不能因为位置相同就视为共享：`clock.ts` 目前服务聊天计时，归会话模块；`project-entry-drag.ts` 归文件模块并对终端提供协议。
+`src/renderer/src/ui/` 是共享展示目录，只收被多个能力重复使用的无业务状态代码：展示组件、Markdown 与数学渲染、剪贴板、浮层定位、相对时间与分叉折叠。仅服务单一能力的文件不因位置相同就视为共享：`sessions/clock.ts` 服务聊天计时，`editor/` 的富文本实现只服务文件编辑。
 
 ## F-style：全局主题与业务样式（混合）
 
 唯一归属文件：`src/renderer/src/assets/main.css`。
 
-包含 Tailwind 引入、KaTeX 本地样式、亮暗色与尺寸／动效令牌、基础语义样式，以及聊天输入、设置、侧栏、工作区、文件编辑、终端和 Git 的业务类。所有模块经页面入口加载；各模块只引用自己使用的类族，不重复认领此物理文件。
+包含 Tailwind 引入、KaTeX 本地样式、亮暗色与尺寸／动效令牌、基础语义样式，以及聊天输入、设置、侧栏、工作区、文件编辑、终端和 Git 的业务类。实测 6 202 行、605 个类选择器：484 个只被单一能力使用，75 个被两个以上能力共用，没有被引用却仍留在这里的类。按能力拆分的前置条件已具备（前端已按能力切片），评估结论与分两步的做法见[结构重构设计](../structure-refactor-design.md) §8。所有模块经页面入口加载；各模块只引用自己使用的类族，不重复认领此物理文件。
 
 `src/renderer/src/assets/genui.css` 由生成式界面模块维护，独立于本记录。全局主题与主进程窗口背景／覆盖层颜色存在同步关系，改动不只影响单个组件。
 

@@ -21,21 +21,21 @@
 | `src/shared/auth-api.ts` | 页面认证状态、登录方法、提示、流程与错误契约 |
 | `src/shared/models-config-api.ts` | 自定义供应商请求、快照与校验 |
 | `src/shared/pi-settings-api.ts` | 默认模型读取／写入契约 |
-| `src/renderer/src/stores/auth.ts` | 认证状态、流程副本及临时输入 |
-| `src/renderer/src/stores/models-config.ts` | 供应商条目快照与编辑动作 |
-| `src/renderer/src/services/auth.ts` | 认证桥接、事件与错误细节 |
-| `src/renderer/src/services/models-config.ts` | 供应商定义桥接 |
-| `src/renderer/src/services/pi-settings.ts` | 默认模型桥接 |
-| `src/renderer/src/provider-status.ts` | 供应商配置／认证状态文案 |
-| `src/renderer/src/components/ModelSettingsView.vue` | 按供应商聚合清单、搜索、凭据、定义与可见性 |
-| `src/renderer/src/components/AuthFlowBanner.vue` | 登录流程、提示与资源重载入口 |
-| `src/renderer/src/components/ProviderListItem.vue` | 供应商清单行与展开区编排 |
-| `src/renderer/src/components/ProviderEntrySummary.vue` | 自定义条目摘要 |
-| `src/renderer/src/components/ProviderCredentialSection.vue` | 凭据配置及登录／退出入口 |
-| `src/renderer/src/components/ProviderDefinitionSection.vue` | 供应商定义与模型条目编辑 |
-| `src/renderer/src/components/ProviderVisibilitySection.vue` | 对话页模型展示开关 |
-| `src/renderer/src/components/ProviderEditorDialog.vue` | 自定义供应商新增／编辑弹层 |
-| `src/renderer/src/components/RuntimeModelSelect.vue` | 聊天模型候选、当前模型与默认模型选择 |
+| `src/renderer/src/providers/stores/auth.ts` | 认证状态、流程副本及临时输入 |
+| `src/renderer/src/providers/stores/models-config.ts` | 供应商条目快照与编辑动作 |
+| `src/renderer/src/providers/services/auth.ts` | 认证桥接、事件与错误细节 |
+| `src/renderer/src/providers/services/models-config.ts` | 供应商定义桥接 |
+| `src/renderer/src/providers/services/pi-settings.ts` | 默认模型桥接 |
+| `src/renderer/src/providers/provider-status.ts` | 供应商配置／认证状态文案 |
+| `src/renderer/src/providers/components/ModelSettingsView.vue` | 按供应商聚合清单、搜索、凭据、定义与可见性 |
+| `src/renderer/src/providers/components/AuthFlowBanner.vue` | 登录流程、提示与资源重载入口 |
+| `src/renderer/src/providers/components/ProviderListItem.vue` | 供应商清单行与展开区编排 |
+| `src/renderer/src/providers/components/ProviderEntrySummary.vue` | 自定义条目摘要 |
+| `src/renderer/src/providers/components/ProviderCredentialSection.vue` | 凭据配置及登录／退出入口 |
+| `src/renderer/src/providers/components/ProviderDefinitionSection.vue` | 供应商定义与模型条目编辑 |
+| `src/renderer/src/providers/components/ProviderVisibilitySection.vue` | 对话页模型展示开关 |
+| `src/renderer/src/providers/components/ProviderEditorDialog.vue` | 自定义供应商新增／编辑弹层 |
+| `src/renderer/src/providers/components/RuntimeModelSelect.vue` | 聊天模型候选、当前模型与默认模型选择 |
 
 认证 Store、模型页编排、服务及辅助入口已读；子组件和配置管理的关联按调用与契约定位。登录方法和供应商支持范围来自运行期 SDK，不在本文固定枚举。
 

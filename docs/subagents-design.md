@@ -36,7 +36,7 @@
 - 主进程在 `src/main/sessions/sdk-host-manager.ts` 监督 SDK 宿主，运行身份、绑定代际和会话占用由 `src/main/sessions/session-run-registry.ts` 统一登记。
 - 现有宿主与页面契约围绕会话运行实例建立，`src/sdk-host/protocol.ts` 和 `src/shared/runtime-api.ts` 尚未提供完整的父子任务归属与子任务展示契约。
 - `src/sdk-host/projection/tool-projection.ts` 将工具事件转换为有界展示条目；普通工具更新主要保留文本，不保留任意结构化结果详情。生成式 UI 载荷有单独识别逻辑，不能据此认为子代理详情已经能够透传。
-- `src/renderer/src/components/ChatMessageItem.vue` 逐项渲染思考块和工具调用；普通工具使用独立工具卡，生成式 UI 使用专用渲染分支。
+- `src/renderer/src/sessions/components/ChatMessageItem.vue` 逐项渲染思考块和工具调用；普通工具使用独立工具卡，生成式 UI 使用专用渲染分支。
 - `src/sdk-host/extension-ui-bridge.ts` 已有可取消的选择、确认、输入与编辑交互桥，但现有交互不自动具备子任务来源语义。
 - `src/main/trust/trust-manager.ts` 明确只管理项目资源信任，不提供 OS 沙箱或工具权限限制。
 - `src/shared-process/runtime.ts` 支持加载受管 SDK 运行时，因此实际 SDK 可能不同于编译期依赖；不能只根据依赖声明推断运行能力。
@@ -352,7 +352,7 @@ Project Trust 是项目资源加载的信任决定，不是逐任务写入授权
 
 ### 10.7 展示记忆与当前源码不一致
 
-- **位置**：`.agents/memory/topics/conventions/projection-limits.md`、`src/renderer/src/components/ChatMessageItem.vue`。
+- **位置**：`.agents/memory/topics/conventions/projection-limits.md`、`src/renderer/src/sessions/components/ChatMessageItem.vue`。
 - **证据**：记忆写明合并过程折叠，当前组件则逐项展示独立工具卡。
 - **影响**：按旧记忆设计会接入错误的展示结构。
 - **推荐处置**：本设计以当前源码作为接入事实，旧描述不作设计依据；本次不自动改写项目记忆。

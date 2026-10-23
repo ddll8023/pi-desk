@@ -27,60 +27,61 @@
 
 | 文件 | 用途 |
 | --- | --- |
-| `src/renderer/src/stores/project-directory.ts` | 文件树缓存、展开、目录读取与变化订阅 |
-| `src/renderer/src/stores/project-file.ts` | `@` 引用候选、查询序号与项目匹配 |
-| `src/renderer/src/stores/project-editor.ts` | 按项目与文件保存编辑记录、脏状态、磁盘基线与草稿 |
-| `src/renderer/src/services/project-file.ts` | 文件／目录／图片导入固定桥接与事件 |
-| `src/renderer/src/components/FileTreeView.vue` | 文件树展示、打开及拖拽入口 |
-| `src/renderer/src/components/FileTreeMenu.vue` | 条目菜单、复制、定位、打开及插入终端 |
-| `src/renderer/src/components/FileEditorView.vue` | 文件标签面板、视图切换、保存与冲突交互 |
-| `src/renderer/src/components/CodeMirrorEditor.vue` | 源码编辑器及对外编辑接口 |
-| `src/renderer/src/components/FileMarkdownView.vue` | Markdown 预览／可编辑排版、目录、查找及只读降级 |
-| `src/renderer/src/components/FileMarkdownToc.vue` | Markdown 标题目录 |
-| `src/renderer/src/components/FileMarkdownImageViewer.vue` | Markdown 图片查看 |
+| `src/renderer/src/editor/stores/project-directory.ts` | 文件树缓存、展开、目录读取与变化订阅 |
+| `src/renderer/src/editor/stores/project-file.ts` | `@` 引用候选、查询序号与项目匹配 |
+| `src/renderer/src/editor/stores/project-editor.ts` | 按项目与文件保存编辑记录、脏状态、磁盘基线与草稿 |
+| `src/renderer/src/editor/services/project-file.ts` | 文件／目录／图片导入固定桥接与事件 |
+| `src/renderer/src/editor/services/external-url.ts` | 文件内文档链接的外链打开封装；主进程执行协议与凭据检查 |
+| `src/renderer/src/editor/components/FileTreeView.vue` | 文件树展示、打开及拖拽入口 |
+| `src/renderer/src/editor/components/FileTreeMenu.vue` | 条目菜单、复制、定位、打开及插入终端 |
+| `src/renderer/src/editor/components/FileEditorView.vue` | 文件标签面板、视图切换、保存与冲突交互 |
+| `src/renderer/src/editor/components/CodeMirrorEditor.vue` | 源码编辑器及对外编辑接口 |
+| `src/renderer/src/editor/components/FileMarkdownView.vue` | Markdown 预览／可编辑排版、目录、查找及只读降级 |
+| `src/renderer/src/editor/components/FileMarkdownToc.vue` | Markdown 标题目录 |
+| `src/renderer/src/editor/components/FileMarkdownImageViewer.vue` | Markdown 图片查看 |
 
 ### 文件排版与富文本实现
 
 | 文件 | 用途 |
 | --- | --- |
-| `src/renderer/src/file-language.ts` | 文件名、语言与 Markdown 类型识别 |
-| `src/renderer/src/file-code-highlight.ts` | 文件代码高亮与语言加载 |
-| `src/renderer/src/file-images.ts` | 项目内 Markdown 图片读取和显示地址管理 |
-| `src/renderer/src/file-markdown.ts` | 文件 Markdown 排版、链接分类／解析、标题与预览边界 |
-| `src/renderer/src/file-markdown-search.ts` | 只读正文查找、匹配范围与高亮 |
-| `src/renderer/src/project-entry-drag.ts` | 项目条目拖拽载荷与终端插入文本；终端模块引用此协议 |
-| `src/renderer/src/file-rich-markdown.ts` | Tiptap 扩展组装、事件入口与不支持语法判定 |
-| `src/renderer/src/file-rich-markdown-codec.ts` | Markdown 编解码上下文与 Front Matter 分离 |
-| `src/renderer/src/file-rich-markdown-source.ts` | 文档等价、字面源码保存与序列化协调 |
-| `src/renderer/src/file-rich-markdown-block-source.ts` | 块级源码归属与空行协调 |
-| `src/renderer/src/file-rich-markdown-nodes.ts` | 自定义节点、列表、段落、源码片段与拖拽保护 |
-| `src/renderer/src/file-rich-markdown-code.ts` | 富文本代码块扩展与 Vue NodeView 接入 |
-| `src/renderer/src/file-rich-markdown-details.ts` | 折叠块解析与序列化 |
-| `src/renderer/src/file-rich-markdown-media.ts` | 图片与数学公式节点 |
-| `src/renderer/src/file-rich-markdown-diagram.ts` | 编辑视图的图解渲染适配 |
-| `src/renderer/src/file-rich-markdown-doc-link.ts` | 文档链接节点、候选与链接解析 |
-| `src/renderer/src/file-rich-markdown-draft.ts` | 结构草稿捕获、恢复与编辑器状态替换 |
-| `src/renderer/src/file-rich-markdown-image-insert.ts` | 图片插入位置和异步结果归属 |
-| `src/renderer/src/file-rich-markdown-keyboard.ts` | 列表、段落与选区键盘规则 |
-| `src/renderer/src/file-rich-markdown-clipboard.ts` | 结构化复制、剪切及粘贴清洗／解析 |
-| `src/renderer/src/file-rich-markdown-commands.ts` | 工具栏与插入命令 |
-| `src/renderer/src/file-rich-markdown-suggestions.ts` | 斜杠与文档补全模型 |
-| `src/renderer/src/file-rich-markdown-search.ts` | 富文本查找与替换状态／操作 |
-| `src/renderer/src/file-rich-markdown-table.ts` | 表格位置与行列动作 |
-| `src/renderer/src/components/FileRichMarkdownEditor.vue` | Editor 实例、事务、输入同步、撤销、草稿及浮层编排 |
-| `src/renderer/src/components/FileRichMarkdownCodeBlock.vue` | 代码块 NodeView、高亮和图解展示 |
-| `src/renderer/src/components/FileRichMarkdownToolbar.vue` | 工具栏命令入口 |
-| `src/renderer/src/components/FileRichMarkdownSuggestions.vue` | 补全菜单 |
-| `src/renderer/src/components/FileRichMarkdownLinkPopover.vue` | 链接编辑浮层 |
-| `src/renderer/src/components/FileRichMarkdownEmojiPicker.vue` | 表情选择与插入 |
-| `src/renderer/src/components/FileRichMarkdownSearchBar.vue` | 富文本查找／替换栏 |
-| `src/renderer/src/components/FileRichMarkdownTableControls.vue` | 表格行列操作入口 |
+| `src/renderer/src/editor/file-language.ts` | 文件名、语言与 Markdown 类型识别 |
+| `src/renderer/src/editor/file-code-highlight.ts` | 文件代码高亮与语言加载 |
+| `src/renderer/src/editor/file-images.ts` | 项目内 Markdown 图片读取和显示地址管理 |
+| `src/renderer/src/editor/file-markdown.ts` | 文件 Markdown 排版、链接分类／解析、标题与预览边界 |
+| `src/renderer/src/editor/file-markdown-search.ts` | 只读正文查找、匹配范围与高亮 |
+| `src/renderer/src/ui/project-entry-drag.ts` | 项目条目拖拽载荷与终端插入文本；文件与终端两个能力共用，因此放在共享展示层 |
+| `src/renderer/src/editor/file-rich-markdown.ts` | Tiptap 扩展组装、事件入口与不支持语法判定 |
+| `src/renderer/src/editor/file-rich-markdown-codec.ts` | Markdown 编解码上下文与 Front Matter 分离 |
+| `src/renderer/src/editor/file-rich-markdown-source.ts` | 文档等价、字面源码保存与序列化协调 |
+| `src/renderer/src/editor/file-rich-markdown-block-source.ts` | 块级源码归属与空行协调 |
+| `src/renderer/src/editor/file-rich-markdown-nodes.ts` | 自定义节点、列表、段落、源码片段与拖拽保护 |
+| `src/renderer/src/editor/file-rich-markdown-code.ts` | 富文本代码块扩展与 Vue NodeView 接入 |
+| `src/renderer/src/editor/file-rich-markdown-details.ts` | 折叠块解析与序列化 |
+| `src/renderer/src/editor/file-rich-markdown-media.ts` | 图片与数学公式节点 |
+| `src/renderer/src/editor/file-rich-markdown-diagram.ts` | 编辑视图的图解渲染适配 |
+| `src/renderer/src/editor/file-rich-markdown-doc-link.ts` | 文档链接节点、候选与链接解析 |
+| `src/renderer/src/editor/file-rich-markdown-draft.ts` | 结构草稿捕获、恢复与编辑器状态替换 |
+| `src/renderer/src/editor/file-rich-markdown-image-insert.ts` | 图片插入位置和异步结果归属 |
+| `src/renderer/src/editor/file-rich-markdown-keyboard.ts` | 列表、段落与选区键盘规则 |
+| `src/renderer/src/editor/file-rich-markdown-clipboard.ts` | 结构化复制、剪切及粘贴清洗／解析 |
+| `src/renderer/src/editor/file-rich-markdown-commands.ts` | 工具栏与插入命令 |
+| `src/renderer/src/editor/file-rich-markdown-suggestions.ts` | 斜杠与文档补全模型 |
+| `src/renderer/src/editor/file-rich-markdown-search.ts` | 富文本查找与替换状态／操作 |
+| `src/renderer/src/editor/file-rich-markdown-table.ts` | 表格位置与行列动作 |
+| `src/renderer/src/editor/components/FileRichMarkdownEditor.vue` | Editor 实例、事务、输入同步、撤销、草稿及浮层编排 |
+| `src/renderer/src/editor/components/FileRichMarkdownCodeBlock.vue` | 代码块 NodeView、高亮和图解展示 |
+| `src/renderer/src/editor/components/FileRichMarkdownToolbar.vue` | 工具栏命令入口 |
+| `src/renderer/src/editor/components/FileRichMarkdownSuggestions.vue` | 补全菜单 |
+| `src/renderer/src/editor/components/FileRichMarkdownLinkPopover.vue` | 链接编辑浮层 |
+| `src/renderer/src/editor/components/FileRichMarkdownEmojiPicker.vue` | 表情选择与插入 |
+| `src/renderer/src/editor/components/FileRichMarkdownSearchBar.vue` | 富文本查找／替换栏 |
+| `src/renderer/src/editor/components/FileRichMarkdownTableControls.vue` | 表格行列操作入口 |
 
 文件内容边界、Editor 编排与扩展组装已读；其余辅助文件依据组装导入与组件使用定位。富文本内部存在源码与块级源码的相互协作，不将文件表误认为已消除内部依赖环。
 
 ## 公共与跨模块引用
 
-- [F-assembly](shared.md#f-assembly进程与页面组装混合)：`registerProjectFileHandlers` 校验调用者和固定请求；App 渲染文件面板并确认丢弃脏文件。
+- [F-assembly](shared.md#f-assembly进程与页面组装混合)：`registerProjectFileHandlers` 校验调用者和固定请求；文件面板由 `src/renderer/src/shell/components/WorkspaceView.vue` 渲染，脏文件关闭确认状态在 `src/renderer/src/workspace/stores/workspace-tabs.ts`，经 `src/renderer/src/shell/components/AppDialogHost.vue` 呈现。
 - [F-ui](shared.md#f-ui前端共享展示共享)：公共按钮、浮层、复制，`ui/markdown-shared.ts` 与 `ui/markdown-math.ts` 的共同排版能力。
 - [F-style](shared.md#f-style全局主题与业务样式混合)：`main.css` 的文件编辑、Markdown、富文本和文件树样式。
 - [工作区](workspace-tabs.md)：打开／关闭文件标签和消费锚点请求；编辑状态归本模块，标签状态归工作区。

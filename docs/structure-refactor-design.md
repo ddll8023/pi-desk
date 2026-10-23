@@ -60,7 +60,7 @@
 - `src/main/index.ts`：102 个 `handle()` IPC 注册、40 个 `*Failure` 错误映射函数（全仓共 49 个此类函数，其余 9 个定义在非 `ipc.ts` 文件里）、10 个广播函数，以及窗口创建、资产协议、便携数据目录、单实例锁、退出链、启动自动更新，还集中实例化全部业务服务。
 - `src/preload/index.ts`：114 处 `ipcRenderer` 调用、约 100 条 `INVALID_*` 常量与 `invalid*Response` 工厂，16 个域的 Api 合并后一次性 `exposeInMainWorld('desktop')`。
 - `src/renderer/src/App.vue`：16 个 Store 引用、Store 初始化与 `dispose` 顺序编排、5 个 `ConfirmDialog` 与 5 个业务弹层、布局与响应式处理，以及项目/会话/文件/快捷命令的确认意图。
-- `src/renderer/src/stores/runtime.ts`：1 412 行，同时持有会话运行状态、投影应用与历史缓存、模型能力与切换、Pi 默认模型、隐藏模型偏好与写回、资源预读。其中模型相关部分只被 4 个组件消费（`ModelSettingsView`、`ProviderListItem`、`ProviderVisibilitySection`、`RuntimeModelSelect`），边界已可切。（拆分结果见 §6 阶段 5 的 A1 条目。）
+- `stores/runtime.ts`（重构前的路径）：1 412 行，同时持有会话运行状态、投影应用与历史缓存、模型能力与切换、Pi 默认模型、隐藏模型偏好与写回、资源预读。其中模型相关部分只被 4 个组件消费（`ModelSettingsView`、`ProviderListItem`、`ProviderVisibilitySection`、`RuntimeModelSelect`），边界已可切。（拆分结果见 §6 阶段 5 的 A1 条目；该文件现位于 `src/renderer/src/sessions/stores/runtime.ts`。）
 - 顶层目录语义混杂：`src/projection/` 与 `src/extensions/genui/` 是“假顶层能力目录”，实际是 SDK 宿主的内部组成；`src/runtime-install/` 把一次性安装入口与被 5 个运行单元引用的 `runtime.ts` 混在同一目录。
 
 ### 2.4 必须保持的既有设计
@@ -180,27 +180,31 @@ src/shared-process/ 跨进程基础设施：运行时布局与 SDK 加载、进�
 
 ### 3.6 前端目标结构
 
-前端在 `src/renderer/src/` 下按能力做垂直切片，每个能力目录内聚其组件、Store、服务与纯函数：
+前端在 `src/renderer/src/` 下按能力做垂直切片：能力目录内聚其组件、Store、服务与纯函数，`ui/` 与 `assets/` 是共享展示层与样式，组合根留在目录根：
 
 ```text
 src/renderer/src/
-├─ main.ts、App.vue      组合根：布局骨架与 provider 装配
-├─ shell/                标题栏、布局、设置导航、右侧面板宿主
-├─ projects/             项目、信任、侧栏项目树
-├─ sessions/             会话列表、运行状态、会话视图、投影应用、历史、聊天展示
-├─ workspace/            标签、面板宿主、终端视图与终端状态
-├─ editor/               文件树、文件编辑、富文本 Markdown、代码高亮
-├─ git/                  状态、历史、差异、面板
-├─ providers/            供应商、认证、模型选择与展示偏好
-├─ preferences/          偏好、快捷输入、快捷命令
-├─ resources/            资源、MCP、生成式界面设置
-├─ updates/              版本检查与运行时更新
-└─ ui/                   公共展示：按钮、选择器、确认弹层、Markdown 展示、浮层定位、剪贴板、计时与格式化
+├─ main.ts、App.vue、env.d.ts   组合根与环境类型
+├─ shell/                       标题栏、布局、设置导航、右侧面板宿主、弹层与启动编排
+├─ projects/                    项目、信任、侧栏项目树
+├─ sessions/                    会话列表、运行状态、会话视图、投影应用、历史、聊天展示
+├─ workspace/                   标签、终端视图与终端状态
+├─ editor/                      文件树、文件编辑、富文本 Markdown、代码高亮
+├─ git/                         状态、历史、差异、面板
+├─ providers/                   供应商、认证、模型选择与展示偏好
+├─ preferences/                 偏好、快捷输入、快捷命令
+├─ resources/                   资源、MCP
+├─ updates/                     版本检查与运行时更新
+├─ genui/                       声明式界面渲染与几何、参数与设置入口
+├─ ui/                          公共展示：按钮、选择器、确认弹层、Markdown 展示、浮层定位、剪贴板
+└─ assets/                      全局与生成式界面样式
 ```
 
-`ui/` 只放真正被多个能力复用的无业务状态内容；仅服务单一能力的纯函数随该能力走，不因位于根目录就升级为公共设施。
+能力目录内按 `components/`、`stores/`、`services/` 三处子目录分放组件、Store 与服务，仅供该能力使用的纯函数与组合式函数就近放在能力目录根。实施结果见 §6 阶段 7：原计划的能力目录平铺会让 15 对 `stores/x.ts` 与 `services/x.ts` 同名冲突，需改名 15 个服务文件并波及文档与记忆里按文件名引用的位置，因此改为子目录。
 
-关键编排倒挂处理：`session.ts ↔ workspace-tabs.ts` 的循环来自“打开会话先固定标签，标签选择又调用会话打开”。推荐把**打开编排**收拢到会话能力，标签只声明意图与接收结果（不反向调用会话打开）；这是收敛调用方向，不是新增事件总线或透传层。`GenuiNode ↔ Collapse/Tabs` 的递归渲染与 `file-rich-markdown` 的编解码互递归保留，只在切片时保证同一目录内。
+`ui/` 只放真正被多个能力复用的无业务状态内容；仅服务单一能力的纯函数随该能力走，不因位于 ui/ 或能力目录根就升级为公共设施。
+
+关键编排倒挂处理：`session.ts ↔ workspace-tabs.ts` 的循环来自“打开会话先固定标签，标签选择又调用会话打开”。推荐把**打开编排**收拢到会话能力，标签只声明意图与接收结果（不反向调用会话打开）；读取会话状态改经组合根注册的只读视图（`workspace/stores/session-tab-bridge.ts`，提供者在 `shell/use-app-startup.ts` 注册），标签因此不 import 会话 Store。这是收敛调用方向，不是新增事件总线或透传层。`GenuiNode ↔ Collapse/Tabs` 的递归渲染与 `file-rich-markdown` 的编解码互递归保留，只在切片时保证同一目录内。
 
 ### 3.7 四大混合职责的收敛目标
 
@@ -237,6 +241,7 @@ src/renderer/src/
 | `src/shared/genui-api.ts` | 2 154 行 | 单文件过载 | 已在阶段 4 拆为 `shared/genui/` 下的 `limits`、`nodes`、`params`、`diagram`、`chart`、`parse`；`genui-api.ts` 只再导出 |
 | `package.json` 的 `test` | 目录 glob 按目录列举测试文件 | 新增或移动测试目录时静默漏检 | 每阶段随测试文件位置同步更新 glob |
 | `src/renderer/src/assets/main.css` | 单一全局样式文件承载多能力业务类 | 切片后样式归属仍不清晰 | 结构重构不处理；单独评估是否按能力拆分样式 |
+| `src/renderer/src/` 跨能力 import | 阶段 7 后实测 433 条导入：280 条同能力内部、88 条指向 `ui/`（§3.8 允许）、105 条指向其他能力的 Store 公开接口（§3.8 允许）；其余 40 条中 31 条是 `shell/` 与组合根作为宿主挂载各能力视图与弹层（职责本身），9 条是真正的跨能力内部引用 | 已处置 4 条：`project-entry-drag` 作为文件与终端共用的拖拽协议下沉到 `ui/`（对应两条引用）、相对时间与分叉折叠两个纯展示整形函数下沉到 `ui/relative-time.ts` 与 `ui/forked-sessions.ts`（对应两条引用）、`external-url` 桥接移入唯一消费者 `editor/services/` | 余 5 条保留并登记：`sessions/stores/runtime-models.ts` 直引 `providers/services/pi-settings.ts` 与 `resources/services/resource.ts`、`sessions/stores/runtime-model-display.ts` 直引 `preferences/services/preferences.ts`、`workspace/components/TerminalView.vue` 与 `git/stores/git-status.ts` 直引 `editor/services/project-file.ts`；这些是无状态的 preload 薄桥接，不是对方能力的状态或编排，改经对方 Store 只会多出一层纯转发（与 §3.1 不造透传层冲突）。另有 5 条跨能力组件组合（`ChatMessageItem` 渲染生成式界面、`PromptComposer` 嵌入模型选择器、终端与标签条嵌入快捷命令菜单），属能力间经公开组件的协作，同样保留 |
 
 ## 4. 备选方向与取舍
 
@@ -270,7 +275,7 @@ src/renderer/src/
 
 阶段划分按“风险由低到高、依赖由叶子到编排”排序。每阶段在开始前单独讨论实现细节并提交逐文件执行清单，另获确认后实施。
 
-当前进度：阶段 1 至 4 已完成；阶段 5 进行中，A0、A1、A2 已完成，剩 A3；阶段 6 未开始。各阶段标题下标注的是该阶段**开始时**的计划与判据，实施中对不上实测的部分已在文中就地更正。
+当前进度：阶段 1 至 7 已完成。各阶段标题下标注的是该阶段**开始时**的计划与判据，实施中对不上实测的部分已在文中就地更正。
 
 ### 阶段 1：主进程布局与装配拆分（已完成）
 
@@ -322,7 +327,7 @@ src/renderer/src/
 - 风险：高（引用面最广）。建议按域逐个提交，不一次性替换全部导入路径。
 - 实施结果：只拆了过载的两个文件，未把 19 个单文件契约移入子目录。`runtime-api.ts` 拆为 `status`、`projection`、`models`、`resources` 四文件（129 个导出），`genui-api.ts` 拆为 `limits`、`nodes`、`params`、`diagram`、`chart`、`parse` 六文件（122 个导出）。两个原文件改为只再导出，既有 66 处导入路径不变。可跨组的非导出辅助（如 `isRecord`、`RUNTIME_ERROR_CODES`）落在各组内，被两组以上共用的才提升为导出。
 
-### 阶段 5：前端能力切片（进行中）
+### 阶段 5：前端能力切片（已完成）
 
 - 目标：`src/renderer/src/` 按能力垂直切片；拆分 `App.vue` 与 `stores/runtime.ts`；收敛 `session ↔ workspace-tabs` 的编排方向。
 - 涉及职责：`src/renderer/src/` 下的页面能力文件、Store、服务与组件。
@@ -331,14 +336,21 @@ src/renderer/src/
 - 批次划分（按风险从低到高，各自单独提交清单）：
   - A0 共享展示层归位：把被多能力复用的展示代码收进 `ui/`，纯路径搬迁，不改行为。**已完成**：9 个文件移入 `src/renderer/src/ui/`，56 个文件改写 88 处导入。
   - A1 拆分 `stores/runtime.ts`：按会话运行与投影、历史缓存、模型能力与切换、模型展示偏好切开。**已完成**：拆为 `stores/runtime-core.ts`、`stores/runtime-history.ts`、`stores/runtime-models.ts`、`stores/runtime-model-display.ts` 四个切片模块，`runtime.ts` 只作门面（组合与初始化/释放编排），保留原有 49 个公开成员（`initialize`、`dispose` 与 47 个状态及动作）与两个历史类型再导出，19 个引用 `useRuntimeStore` 的文件不改调用点。切片间不互相 import，会话状态收敛对模型侧的影响经组合根一次性晚绑定转交。
-  - A2 拆分 `App.vue`：组合根、布局骨架、启动编排、弹层宿主分离。**已完成**：`App.vue` 从 624 行降为只装配 `<AppShell />`、`<AppDialogHost />` 并调用 `useAppStartup()`；新增 `shell/AppShell.vue`（布局骨架与窄窗开合）、`shell/WorkspaceView.vue`（标签条、四条提示与面板层）、`shell/AppDialogHost.vue`（9 个弹层与展示派生值）、`shell/use-app-startup.ts`（Store 初始化/释放顺序、生成式参数落盘、两条补读 watch）。项目移除、会话删除、脏文件关闭与快捷命令增删改的待确认目标分别归入 `stores/project.ts`、`stores/session.ts`、`stores/workspace-tabs.ts`、`stores/quick-commands.ts`，弹层宿主不另存副本；同时删掉 `App.vue` 里未被使用的 `trustStore`。
+  - A2 拆分 `App.vue`：组合根、布局骨架、启动编排、弹层宿主分离。**已完成**：`App.vue` 从 624 行降为只装配 `<AppShell />`、`<AppDialogHost />` 并调用 `useAppStartup()`；新增 `shell/AppShell.vue`（布局骨架与窄窗开合）、`shell/WorkspaceView.vue`（标签条、四条提示与面板层）、`shell/AppDialogHost.vue`（5 个确认弹层与 5 个业务弹层，以及展示派生值）、`shell/use-app-startup.ts`（Store 初始化/释放顺序、生成式参数落盘、两条补读 watch）。项目移除、会话删除、脏文件关闭与快捷命令增删改的待确认目标分别归入 `stores/project.ts`、`stores/session.ts`、`stores/workspace-tabs.ts`、`stores/quick-commands.ts`，弹层宿主不另存副本；同时删掉 `App.vue` 里未被使用的 `trustStore`。
   - A3 收敛 `session ↔ workspace-tabs` 的打开编排方向，这是本阶段唯一有行为风险的项。**已完成**：标签侧导出 `ChatOpenIntent`，只计算「打开哪个会话、落到哪个标签」；`activateTab`／`openNewChatTab`／`startNewChatInTab`／`closeTab`／`requestClose`／`confirmPendingClose` 改为返回意图，新增 `session.openIntent` 作为唯一提交入口；原挂在标签 Store 上的两个补焦订阅迁到 `shell/use-app-startup.ts`，标签侧改为 `onProjectChanged`／`chatFocusIntent` 返回意图；`createTab` 收窄为 `createTerminalTab`。
 
-### 阶段 6：文档与记忆同步
+### 阶段 6：文档与记忆同步（已完成）
 
 - 目标：重写 `docs/项目结构文档.md` 与 `docs/modules/*.md` 的路径索引；评估并更新 `.agents/memory/` 中涉及目录约定的条目。
 - 前置依赖：可与各阶段末尾增量进行，最终阶段做全量校对。
 - 风险：低。
+
+### 阶段 7：前端能力目录切片（已完成）
+
+- 目标：把 `src/renderer/src/` 下仍平铺的 `components/`、`stores/`、`services/` 与根目录散文件归入 §3.6 的能力目录，结清“前端实现分散”的最后一块，并为 §8 的样式归属提供判定前提。
+- 前置依赖：阶段 5（共享展示层与外壳已归位）、阶段 6（文档索引已校对）。
+- 风险：中。纯路径搬迁与导入改写，不改 IPC 契约、Store 归属、存储位置与行为。
+- 实施结果：150 个文件迁入 11 个能力目录，377 处导入语句改写（代码改动 379 行，其中 2 行为注释里的路径），`src/renderer/src/` 文件数守恒 172。四类配置均已是递归匹配，未改动：`tsconfig.web.json` 的 `src/renderer/src/**/*` include、四份 Vite 配置（`renderer.root` 与 `index.html` 的 `/src/main.ts` 不动）、`package.json` 的 `src/renderer/src/**/*.test.ts` test glob。能力目录内按 `components/`、`stores/`、`services/` 三处子目录组织（原因见 §3.6）。`ui/`、`assets/` 与 `main.ts`、`App.vue`、`env.d.ts` 留在原处，`assets/main.css` 的样式归属仍按 §8 待定。混合文件归属：`stores/runtime*.ts` 五文件整体留 `sessions/stores/`（门面不跨目录）、`ProjectSidebar.vue` 与 `sidebar-tree.ts` 归 `projects/`、设置页与右侧面板归 `shell/`、`services/genui-params.ts` 归 `genui/`。搬迁本身只改路径；随后的小收尾断开了 `stores/session.ts ↔ stores/workspace-tabs.ts` 的模块环——标签改为经 `workspace/stores/session-tab-bridge.ts` 的只读视图读取会话状态，提供者由 `shell/use-app-startup.ts` 注册，全库循环降为 4 组，均为有意递归（`file-rich-markdown` 两对编解码互递归、`GenuiNode` 与折叠／页签两处节点递归）。随后又把 4 条跨能力内部引用收掉（拖拽协议、相对时间、分叉折叠下沉 `ui/`，`external-url` 桥接移入唯一消费者 `editor/services/`），余 5 条薄桥接与 5 条跨能力组件组合按 §3.9 登记保留；收尾新增 `session-tab-bridge.ts`、`ui/relative-time.ts`、`ui/forked-sessions.ts` 三个文件，`src/renderer/src/` 现为 175 个文件。
 
 ## 7. 推荐先实施阶段 1 的理由
 
@@ -353,7 +365,9 @@ src/renderer/src/
 
 | # | 待定事项 | 待定原因 | 决定阶段 |
 | --- | --- | --- | --- |
-| 1 | `main.css` 是否按能力拆分样式 | 与结构重构正交，且全局主题存在跨模块令牌依赖；类名与能力的一对一归属要等 `components/` 真正切片后才能判定 | 阶段 5 全部批次完成后单独评估 |
+| 1 | `main.css` 是否按能力拆分样式 | 阶段 7 后已具备判定前提（组件已按能力切片）；归属评估已完成，结论见本表下方 | 已评估，待排期实施 |
+
+样式归属的评估结论（阶段 7 收尾实测）：`assets/main.css` 6 202 行、605 个类选择器，484 个只被单一能力使用（`editor` 136、`sessions` 123、`git` 84、`shell` 44、`projects` 42、`workspace` 21、`preferences` 14、`ui` 14，`resources`、`genui`、`providers`、`updates` 各 1），75 个被两个以上能力共用，没有未被引用的类。按能力归属判定可行，但 `:root` 与暗色主题令牌、动效、焦点环、Tailwind 引入与图表色槽是跨能力基础层，必须留下。推荐分两步、各自单独确认：先抽「令牌与基础层」并把业务类改为在 `main.css` 内按能力 `@import`（只改文件与层叠顺序，不改选择器），再按能力搬业务类（`editor` 与 `sessions` 两批最大、`git` 次之）。风险集中在层叠顺序与令牌依赖，每一步都需要页面视觉核对，所以实施时必须单独申请运行授权。
 
 已结清的原待定项：
 
@@ -364,4 +378,4 @@ src/renderer/src/
 
 ## 9. 待确认事项
 
-阶段 1–5 已完成，下一步是阶段 6：重写 `docs/项目结构文档.md` 与 `docs/modules/*.md` 的路径索引做全量校对，并评估 `.agents/memory/` 中涉及目录约定的条目；`main.css` 的样式归属仍按 §8 待定项处理，前置是 `components/` 完成能力切片。
+阶段 1–7 已完成，§3.6 的前端能力目录已落地，文档与记忆索引已随之同步。剩余工作只有 §8 待定项一项：`main.css` 的样式归属，前置已满足（组件已按能力切片），可在下次评估时单独讨论。

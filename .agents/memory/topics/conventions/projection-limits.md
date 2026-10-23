@@ -10,7 +10,7 @@
 
 ### 界面把响应过程合并成一个折叠区块
 
-约定：对话区把一条 AI 消息里的 Thinking 与工具调用合并成一个可折叠的「过程」区块，回答正文留在区块之外、始终可见；开合优先级为手动选择 > 全局折叠开关 > 生成状态（生成中展开、结束后收起）。全局折叠开关是跨会话共用的展示模式，只存在页面内存里，不写磁盘、不按会话留底。实现与开合细则以 `src/renderer/src/components/ChatMessageItem.vue` 与 `src/renderer/src/stores/session-view.ts` 的注释为准。
+约定：对话区把一条 AI 消息里的 Thinking 与工具调用合并成一个可折叠的「过程」区块，回答正文留在区块之外、始终可见；开合优先级为手动选择 > 全局折叠开关 > 生成状态（生成中展开、结束后收起）。全局折叠开关是跨会话共用的展示模式，只存在页面内存里，不写磁盘、不按会话留底。实现与开合细则以 `src/renderer/src/sessions/components/ChatMessageItem.vue` 与 `src/renderer/src/sessions/stores/session-view.ts` 的注释为准。
 
 适用：调整对话区消息渲染、折叠交互或会话视图状态时。
 

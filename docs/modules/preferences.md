@@ -14,16 +14,16 @@
 | --- | --- |
 | `src/main/preferences/preferences-manager.ts` | 通过共享配置实例读取／保存偏好，返回页面结果 |
 | `src/shared/preferences-api.ts` | 主题、布局、模型显示、快捷输入、自动更新、生成式开关的契约及校验 |
-| `src/renderer/src/stores/preferences.ts` | 偏好展示与动作状态、布局修改及已保存／待应用的功能开关状态 |
-| `src/renderer/src/services/preferences.ts` | 固定偏好桥接与普通载荷重建 |
-| `src/renderer/src/components/QuickSendSection.vue` | 快捷发送短语管理 |
+| `src/renderer/src/preferences/stores/preferences.ts` | 偏好展示与动作状态、布局修改及已保存／待应用的功能开关状态 |
+| `src/renderer/src/preferences/services/preferences.ts` | 固定偏好桥接与普通载荷重建 |
+| `src/renderer/src/preferences/components/QuickSendSection.vue` | 快捷发送短语管理 |
 
 偏好入口、共享配置字段及 Store 消费关系来自源码读取与静态调用；各偏好的视觉样式在公共样式记录。
 
 ## 公共与跨模块引用
 
 - [F-config](shared.md#f-configdesktop-配置混合)：`src/main/config/desktop-config-store.ts` 才是 `desktop-config.json` 的唯一持久化所有者；PreferencesManager 不另建第二份文件写入。
-- [F-assembly](shared.md#f-assembly进程与页面组装混合)：`registerPreferencesHandlers` 校验完整偏好请求并应用原生主题；preload 和 App 分别提供固定接口及布局消费。
+- [F-assembly](shared.md#f-assembly进程与页面组装混合)：`registerPreferencesHandlers` 校验完整偏好请求并应用原生主题；preload 提供固定接口，布局值由 `src/renderer/src/shell/components/AppShell.vue` 消费。
 - [应用外壳](app-shell.md)：`SettingsView.vue` 的外观分节、`RightPanel.vue` 的宽度／页签、标题栏的布局开关。
 - [供应商](providers-auth.md)：隐藏模型列表的读写通过本模块服务，交互状态当前位于综合 Runtime Store。
 - [终端](terminal-commands.md)：快捷命令有独立业务契约与 Store，配置适配复用 PreferencesManager。

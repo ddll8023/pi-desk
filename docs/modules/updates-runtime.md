@@ -20,10 +20,10 @@
 | `src/entries/package-update/index.ts` | 一次性调用 Pi 包管理更新，输出带前缀的进度与结论 |
 | `src/entries/runtime-install/index.ts` | 官方发布依赖安装、候选加载、发布切换与旧版本清理 |
 | `src/shared/updates-api.ts` | 更新状态、进度、结果、协议前缀与载荷校验 |
-| `src/renderer/src/stores/updates.ts` | 检查／更新／安装动作、订阅与启动提示状态 |
-| `src/renderer/src/services/updates.ts` | 更新、安装和修复的固定桥接与事件 |
-| `src/renderer/src/components/VersionUpdateSection.vue` | 版本清单、检查、更新、安装和修复入口 |
-| `src/renderer/src/components/UpdateNoticeDialog.vue` | 启动更新提示与详情导航 |
+| `src/renderer/src/updates/stores/updates.ts` | 检查／更新／安装动作、订阅与启动提示状态 |
+| `src/renderer/src/updates/services/updates.ts` | 更新、安装和修复的固定桥接与事件 |
+| `src/renderer/src/updates/components/VersionUpdateSection.vue` | 版本清单、检查、更新、安装和修复入口 |
+| `src/renderer/src/updates/components/UpdateNoticeDialog.vue` | 启动更新提示与详情导航 |
 
 更新与安装入口、通用执行器及组装调用已读；前端各分支通过服务、事件和视图引用定位。本文不把外部发布服务的可用性或兼容性当作仓库事实。
 

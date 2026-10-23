@@ -20,21 +20,21 @@
 | `src/main/git/git-history-parser.ts` | 提交历史及提交文件清单解析 |
 | `src/main/git/git-history-parser.test.ts` | 现有历史字段、重命名和二进制记录用例 |
 | `src/shared/git-api.ts` | 状态、差异、历史、写操作请求及校验 |
-| `src/renderer/src/stores/git-status.ts` | 状态跟踪、差异、写动作及待信任重试 |
-| `src/renderer/src/stores/git-history.ts` | 历史分页、提交详情与提交内差异 |
-| `src/renderer/src/services/git.ts` | Git 固定桥接方法 |
-| `src/renderer/src/git-diff.ts` | 前端行级差异展示模型 |
-| `src/renderer/src/git-diff.test.ts` | 现有行差异与大文件退化用例 |
-| `src/renderer/src/components/GitPanel.vue` | 状态分组、差异入口与源代码管理主体 |
-| `src/renderer/src/components/GitCommitActions.vue` | 提交、拉取、推送及操作反馈 |
-| `src/renderer/src/components/GitDiffView.vue` | 文件差异展示 |
-| `src/renderer/src/components/GitHistoryView.vue` | 提交列表与详情入口 |
+| `src/renderer/src/git/stores/git-status.ts` | 状态跟踪、差异、写动作及待信任重试 |
+| `src/renderer/src/git/stores/git-history.ts` | 历史分页、提交详情与提交内差异 |
+| `src/renderer/src/git/services/git.ts` | Git 固定桥接方法 |
+| `src/renderer/src/git/git-diff.ts` | 前端行级差异展示模型 |
+| `src/renderer/src/git/git-diff.test.ts` | 现有行差异与大文件退化用例 |
+| `src/renderer/src/git/components/GitPanel.vue` | 状态分组、差异入口与源代码管理主体 |
+| `src/renderer/src/git/components/GitCommitActions.vue` | 提交、拉取、推送及操作反馈 |
+| `src/renderer/src/git/components/GitDiffView.vue` | 文件差异展示 |
+| `src/renderer/src/git/components/GitHistoryView.vue` | 提交列表与详情入口 |
 
 状态解析与现有用例、模块注册、Store 调用及主进程职责由读取和静态引用建立；仓库实际状态和外部 git 的行为不是文档映射结果。
 
 ## 公共与跨模块引用
 
-- [F-assembly](shared.md#f-assembly进程与页面组装混合)：`registerGitHandlers` 的调用者／请求校验及 `requireGitWriteTrust`；preload 固定方法与 App 信任回路。
+- [F-assembly](shared.md#f-assembly进程与页面组装混合)：`registerGitHandlers` 的调用者／请求校验及 `requireGitWriteTrust`；preload 固定方法，待信任重试在 `src/renderer/src/git/stores/git-status.ts`，信任弹层由 `src/renderer/src/shell/components/AppDialogHost.vue` 呈现。
 - [应用外壳](app-shell.md)：`RightPanel.vue` 启动状态跟踪并切换文件／Git 页签，角标不依赖当前页签是否展示。
 - [文件](files-editor.md)：目录变化事件触发状态重读，文件内容与打开编辑仍归文件模块。
 - [项目与信任](projects-trust.md)：当前项目决定仓库上下文；写动作复核项目信任。

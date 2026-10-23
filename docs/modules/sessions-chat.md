@@ -45,43 +45,43 @@
 
 | 文件 | 用途 |
 | --- | --- |
-| `src/renderer/src/stores/session.ts` | 按项目的列表分片、串行打开／重载、按标签意图提交打开、删除与待确认目标 |
-| `src/renderer/src/stores/session-runs.ts` | 运行清单、副本状态、释放与结束 |
-| `src/renderer/src/stores/session-view.ts` | 按会话保存输入草稿、附件、阅读位置与展开状态 |
-| `src/renderer/src/stores/extension-ui.ts` | 运行目标的扩展对话、通知、widget 展示副本 |
-| `src/renderer/src/services/session.ts` | 会话请求桥接 |
-| `src/renderer/src/services/session-runs.ts` | 运行清单与生命周期桥接 |
-| `src/renderer/src/services/runtime.ts` | Runtime 状态、Prompt、回退、压缩、模型命令与投影桥接 |
-| `src/renderer/src/services/extension-ui.ts` | 扩展快照订阅与对话回应桥接 |
-| `src/renderer/src/chat-view.ts` | 将消息与工具投影组织为聊天展示模型 |
-| `src/renderer/src/clock.ts` | 聊天生成／工具计时与显示时钟 |
-| `src/renderer/src/usage-format.ts` | token、费用及用量展示格式 |
-| `src/renderer/src/tool-summary.ts` | 工具参数摘要展示 |
-| `src/renderer/src/extension-dialog-presentation.ts` | 扩展提示、选择及对话展示转换 |
+| `src/renderer/src/sessions/stores/session.ts` | 按项目的列表分片、串行打开／重载、按标签意图提交打开、删除与待确认目标 |
+| `src/renderer/src/sessions/stores/session-runs.ts` | 运行清单、副本状态、释放与结束 |
+| `src/renderer/src/sessions/stores/session-view.ts` | 按会话保存输入草稿、附件、阅读位置与展开状态 |
+| `src/renderer/src/sessions/stores/extension-ui.ts` | 运行目标的扩展对话、通知、widget 展示副本 |
+| `src/renderer/src/sessions/services/session.ts` | 会话请求桥接 |
+| `src/renderer/src/sessions/services/session-runs.ts` | 运行清单与生命周期桥接 |
+| `src/renderer/src/sessions/services/runtime.ts` | Runtime 状态、Prompt、回退、压缩、模型命令与投影桥接 |
+| `src/renderer/src/sessions/services/extension-ui.ts` | 扩展快照订阅与对话回应桥接 |
+| `src/renderer/src/sessions/chat-view.ts` | 将消息与工具投影组织为聊天展示模型 |
+| `src/renderer/src/sessions/clock.ts` | 聊天生成／工具计时与显示时钟 |
+| `src/renderer/src/sessions/usage-format.ts` | token、费用及用量展示格式 |
+| `src/renderer/src/sessions/tool-summary.ts` | 工具参数摘要展示 |
+| `src/renderer/src/sessions/extension-dialog-presentation.ts` | 扩展提示、选择及对话展示转换 |
 
 ### 界面
 
 | 文件 | 用途 |
 | --- | --- |
-| `src/renderer/src/components/PromptComposer.vue` | 输入、附件、命令、补全与提交编排 |
-| `src/renderer/src/components/ChatMessageList.vue` | 消息列表、历史加载、滚动与布局观察 |
-| `src/renderer/src/components/ChatTurnItem.vue` | 按轮摘要、展开与原文内容 |
-| `src/renderer/src/components/ChatMessageItem.vue` | 单消息、思考与工具展示 |
-| `src/renderer/src/components/ChatOutline.vue` | 对话大纲与定位 |
-| `src/renderer/src/components/HistoryLoadSentinel.vue` | 历史加载触发哨兵 |
-| `src/renderer/src/components/ToolCard.vue` | 工具参数、结果与状态卡片 |
-| `src/renderer/src/components/UsageDetailDialog.vue` | 用量明细 |
-| `src/renderer/src/components/SessionActivityBar.vue` | 会话活动摘要和明细 |
-| `src/renderer/src/components/SessionPickerDialog.vue` | 会话选择弹层 |
-| `src/renderer/src/components/ExtensionDialog.vue` | SDK 扩展交互队列的当前对话 |
-| `src/renderer/src/components/ExtensionNotificationBar.vue` | 扩展通知展示 |
+| `src/renderer/src/sessions/components/PromptComposer.vue` | 输入、附件、命令、补全与提交编排 |
+| `src/renderer/src/sessions/components/ChatMessageList.vue` | 消息列表、历史加载、滚动与布局观察 |
+| `src/renderer/src/sessions/components/ChatTurnItem.vue` | 按轮摘要、展开与原文内容 |
+| `src/renderer/src/sessions/components/ChatMessageItem.vue` | 单消息、思考与工具展示 |
+| `src/renderer/src/sessions/components/ChatOutline.vue` | 对话大纲与定位 |
+| `src/renderer/src/sessions/components/HistoryLoadSentinel.vue` | 历史加载触发哨兵 |
+| `src/renderer/src/sessions/components/ToolCard.vue` | 工具参数、结果与状态卡片 |
+| `src/renderer/src/sessions/components/UsageDetailDialog.vue` | 用量明细 |
+| `src/renderer/src/sessions/components/SessionActivityBar.vue` | 会话活动摘要和明细 |
+| `src/renderer/src/sessions/components/SessionPickerDialog.vue` | 会话选择弹层 |
+| `src/renderer/src/sessions/components/ExtensionDialog.vue` | SDK 扩展交互队列的当前对话 |
+| `src/renderer/src/sessions/components/ExtensionNotificationBar.vue` | 扩展通知展示 |
 
 核心打开链、Store、宿主入口及投影职责已由源码读取；投影辅助实现与界面文件结合导入、模板和接口调用映射，不将本表视作逐函数质量结论。
 
 ## 公共与跨模块引用
 
-- [F-assembly](shared.md#f-assembly进程与页面组装混合)：会话／运行／Runtime／扩展 IPC 注册、广播、App 生命周期及确认弹层。
-- [F-runtime-state](shared.md#f-runtime-state综合-runtime-状态混合)：`src/renderer/src/stores/runtime-core.ts` 持有展示状态与投影分片，`src/renderer/src/stores/runtime-history.ts` 持有历史缓存，`src/renderer/src/stores/runtime.ts` 为装配门面；`src/shared/runtime-api.ts` 提供综合契约。
+- [F-assembly](shared.md#f-assembly进程与页面组装混合)：会话／运行／Runtime／扩展 IPC 注册、广播、`src/main/app-lifecycle.ts` 的生命周期及 `src/renderer/src/shell/components/AppDialogHost.vue` 的确认弹层。
+- [F-runtime-state](shared.md#f-runtime-state综合-runtime-状态混合)：`src/renderer/src/sessions/stores/runtime-core.ts` 持有展示状态与投影分片，`src/renderer/src/sessions/stores/runtime-history.ts` 持有历史缓存，`src/renderer/src/sessions/stores/runtime.ts` 为装配门面；`src/shared/runtime-api.ts` 提供综合契约。
 - [F-sidebar](shared.md#f-sidebar项目会话树混合)：项目树中的会话与运行状态。
 - [F-process](shared.md#f-process受管进程与-sdk-公共设施共享)：SDK 定位、固定环境与进程终止。SDK 动态加载不代表宿主可自行选择任意授权目录。
 - [F-ui](shared.md#f-ui前端共享展示共享)、[F-style](shared.md#f-style全局主题与业务样式混合)：Markdown、数学、复制、浮层和聊天样式。

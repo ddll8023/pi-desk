@@ -21,23 +21,29 @@
 | `src/sdk-host/genui/outline.ts` | 声明式文档的大纲与路径 |
 | `src/sdk-host/genui/patch.ts` | 文档 patch 应用与约束 |
 | `src/sdk-host/genui/session-scan.ts` | 从会话条目定位界面和版本 |
-| `src/shared/genui-api.ts` | 节点、文档、版本、载荷和校验 |
+| `src/shared/genui-api.ts` | 只再导出 `./genui/`，既有导入路径与符号名不变 |
+| `src/shared/genui/limits.ts` | 版本、数量、字符数、深度与取值枚举的全部上下限 |
+| `src/shared/genui/nodes.ts` | 展示节点：文本、列表、指标、表格、步骤、时间线、卡片、行、折叠、页签与控件容器 |
+| `src/shared/genui/params.ts` | 可调参数：数值、选项、开关与文本四类及其显隐与可见性判定 |
+| `src/shared/genui/diagram.ts` | 机制图解六类与图解参数绑定 |
+| `src/shared/genui/chart.ts` | 柱状、折线、饼图与环形图的数据点与序列结构 |
+| `src/shared/genui/parse.ts` | 文档与节点联合类型、解析、修复、说明生成、交付工具名及载荷头读取 |
 | `src/shared/genui-params-api.ts` | 本机参数保存、读取、清除与校验 |
 
 ### 渲染与参数
 
 | 文件 | 用途 |
 | --- | --- |
-| `src/renderer/src/components/genui/UiDocument.vue` | 文档容器、版本和用户动作 |
-| `src/renderer/src/components/genui/GenuiMountGate.vue` | 界面实例挂载边界 |
-| `src/renderer/src/components/genui/GenuiNode.vue` | 按节点类型分发渲染 |
-| `src/renderer/src/components/genui/GenuiControls.vue` | 参数控件 |
-| `src/renderer/src/components/genui/GenuiTable.vue` | 表格与本地操作 |
-| `src/renderer/src/components/genui/GenuiTabs.vue` | 文档内页签 |
-| `src/renderer/src/components/genui/GenuiCollapse.vue` | 文档内折叠 |
-| `src/renderer/src/components/genui/GenuiChart.vue` | 图表渲染 |
-| `src/renderer/src/components/genui/GenuiDiagram.vue` | 机制图解 |
-| `src/renderer/src/components/genui/GenuiSvgShapes.vue` | 受限 SVG 图形渲染 |
+| `src/renderer/src/genui/components/UiDocument.vue` | 文档容器、版本和用户动作 |
+| `src/renderer/src/genui/components/GenuiMountGate.vue` | 界面实例挂载边界 |
+| `src/renderer/src/genui/components/GenuiNode.vue` | 按节点类型分发渲染 |
+| `src/renderer/src/genui/components/GenuiControls.vue` | 参数控件 |
+| `src/renderer/src/genui/components/GenuiTable.vue` | 表格与本地操作 |
+| `src/renderer/src/genui/components/GenuiTabs.vue` | 文档内页签 |
+| `src/renderer/src/genui/components/GenuiCollapse.vue` | 文档内折叠 |
+| `src/renderer/src/genui/components/GenuiChart.vue` | 图表渲染 |
+| `src/renderer/src/genui/components/GenuiDiagram.vue` | 机制图解 |
+| `src/renderer/src/genui/components/GenuiSvgShapes.vue` | 受限 SVG 图形渲染 |
 | `src/renderer/src/genui/chart-geometry.ts` | 图表几何与数据布局 |
 | `src/renderer/src/genui/diagram-geometry.ts` | 机制图解几何与派生数值 |
 | `src/renderer/src/genui/svg-shapes.ts` | 图形定义与生成 |
@@ -45,9 +51,9 @@
 | `src/renderer/src/genui/param-state.ts` | 运行期参数真源、版本迁移及写钩子 |
 | `src/renderer/src/genui/param-submit.ts` | 参数提交到真实用户消息的编排 |
 | `src/renderer/src/genui/param-persistence.ts` | 启动补齐、节流写回、清除及失败标记 |
-| `src/renderer/src/services/genui-params.ts` | 参数旁路存储桥接 |
+| `src/renderer/src/genui/services/genui-params.ts` | 参数旁路存储桥接 |
 | `src/renderer/src/assets/genui.css` | 声明式界面的业务样式 |
-| `src/renderer/src/components/GenuiSettingsSection.vue` | 能力开关与本机参数清除入口 |
+| `src/renderer/src/genui/components/GenuiSettingsSection.vue` | 能力开关与本机参数清除入口 |
 | `src/main/genui/genui-param-store.ts` | `genui-params.json` 的唯一读写、容错和限量存储 |
 
 扩展工厂、集成位置及参数持久化已读；节点、工具与几何文件结合契约、组件和会话集成引用定位。源码中生成式界面是产品内置能力，不需要用户另行安装同名扩展。
@@ -56,7 +62,7 @@
 
 - [会话](sessions-chat.md)：`src/sdk-host/session-runtime.ts` 创建内置工厂；`src/sdk-host/projection/tool-projection.ts` 接收结果载荷，`activity-projection.ts` 统计交付；`ChatMessageItem.vue` 分发界面，历史读取带回原工具事实。
 - [F-runtime-state](shared.md#f-runtime-state综合-runtime-状态混合)：综合 Runtime 契约包含工具上的 UI 载荷，Store 在合并历史与实时内容时维护版本事实。
-- [F-assembly](shared.md#f-assembly进程与页面组装混合)：参数 IPC、preload 固定接口，以及 App 的参数预加载与页面关闭写回。
+- [F-assembly](shared.md#f-assembly进程与页面组装混合)：参数 IPC、preload 固定接口，以及 `src/renderer/src/shell/use-app-startup.ts` 的参数预加载与页面关闭写回。
 - [偏好](preferences.md)、[F-config](shared.md#f-configdesktop-配置混合)：能力开关写 Desktop 配置；宿主创建／重载时读取，不与参数缓存混存。
 - [F-ui](shared.md#f-ui前端共享展示共享)、[F-style](shared.md#f-style全局主题与业务样式混合)：复制、按钮、主题与图表颜色令牌。
 

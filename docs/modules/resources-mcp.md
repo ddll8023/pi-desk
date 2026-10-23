@@ -17,15 +17,15 @@
 | `src/main/resources/mcp-config-reader.ts` | 全局／项目 MCP 配置的受限读取、覆盖与生效说明 |
 | `src/main/resources/mcp-inspection.ts` | 一次性 MCP 探测、超时和取消 |
 | `src/entries/pi-cli/index.ts` | 用官方 SDK CLI 执行主进程固定参数的一次性入口 |
-| `src/renderer/src/stores/resource.ts` | 运行资源、预读技能、诊断、MCP 配置／探测／动作展示状态 |
-| `src/renderer/src/services/resource.ts` | 资源、预读、诊断和 MCP 的受限桥接 |
-| `src/renderer/src/components/ResourceView.vue` | 资源分组、详情、配置和 MCP 状态／动作入口 |
+| `src/renderer/src/resources/stores/resource.ts` | 运行资源、预读技能、诊断、MCP 配置／探测／动作展示状态 |
+| `src/renderer/src/resources/services/resource.ts` | 资源、预读、诊断和 MCP 的受限桥接 |
+| `src/renderer/src/resources/components/ResourceView.vue` | 资源分组、详情、配置和 MCP 状态／动作入口 |
 
 资源 Store、服务、CLI 入口及预读关联已读；配置解析和页面辅助片段结合静态调用映射。外部 MCP 配置内容与服务器实现不属于本仓库源码地图。
 
 ## 公共与跨模块引用
 
-- [F-assembly](shared.md#f-assembly进程与页面组装混合)：`registerRuntimeHandlers` 中资源、预读、诊断和 MCP 固定通道及 preload 方法。
+- [F-assembly](shared.md#f-assembly进程与页面组装混合)：`src/main/resources/ipc.ts` 的 `registerResourceHandlers` 注册资源、预读、诊断和 MCP 固定通道及对应 preload 方法。
 - [F-runtime-state](shared.md#f-runtime-state综合-runtime-状态混合)：`src/shared/runtime-api.ts` 中 `PiResourcePreview`、资源、MCP 与诊断类型；Runtime Store 提供当前运行目标及模型预读消费者。
 - [F-process](shared.md#f-process受管进程与-sdk-公共设施共享)：`pi-cli-process.ts` 启动固定 CLI 入口；`pi-paths.ts` 与运行时加载固定 SDK 来源；进程树终止用于探测取消。
 - [项目与信任](projects-trust.md)：项目级配置是否生效取决于真实信任决定；当前项目与运行目标的所属项目要分别理解。
@@ -46,6 +46,6 @@ Store 按配置清单构建 MCP 列表，再按服务器名叠加探测结果；
 
 ## 状态与生命周期
 
-资源与诊断跟随 Runtime 绑定，预读跟随项目与启动阶段，MCP 配置跟随项目；App 初始化并释放 resource Store 的监听。Store 保留各来源独立的读取和动作状态，资源与诊断读取还使用各自忙标记，不把不同来源的加载视为一个动作。
+资源与诊断跟随 Runtime 绑定，预读跟随项目与启动阶段，MCP 配置跟随项目；resource Store 的监听由 `src/renderer/src/shell/use-app-startup.ts` 初始化并释放。Store 保留各来源独立的读取和动作状态，资源与诊断读取还使用各自忙标记，不把不同来源的加载视为一个动作。
 
 桌面资源读取与展示层不编辑 MCP 配置文件、不安装扩展，也不把预读当作会话已执行过扩展。MCP 登录／退出可能涉及 SDK 管理的认证状态，不等同于只读配置列举；网络、OAuth 及凭据持久化由实际调用的 SDK／服务器处理。改完配置后的运行资源重载由会话模块负责。页面不能传入任意 CLI 入口、参数或 MCP 命令文本。

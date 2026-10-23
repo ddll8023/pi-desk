@@ -23,26 +23,26 @@
 | `src/shared/terminal-api.ts` | 页面终端接口、快照、输出、退出、恢复与守护状态契约 |
 | `src/shared/terminal-daemon-protocol.ts` | 主进程客户端与守护进程的版本化协议 |
 | `src/shared/quick-commands-api.ts` | 快捷命令范围、字段和清单校验 |
-| `src/renderer/src/stores/terminal.ts` | 清单、画面恢复、终端动作与订阅状态 |
-| `src/renderer/src/stores/quick-commands.ts` | 命令清单、按项目筛选和保存动作 |
-| `src/renderer/src/services/terminal.ts` | 终端固定桥接及输出／退出事件 |
-| `src/renderer/src/services/quick-commands.ts` | 命令清单读写桥接 |
-| `src/renderer/src/components/TerminalView.vue` | xterm 视图、输入、尺寸、恢复确认、链接及路径拖入 |
-| `src/renderer/src/components/TerminalSettingsSection.vue` | 守护进程状态与停止／清理入口 |
-| `src/renderer/src/components/QuickCommandDialog.vue` | 命令新增、编辑、范围和执行选项 |
-| `src/renderer/src/components/QuickCommandMenu.vue` | 当前项目可用命令菜单 |
-| `src/renderer/src/components/QuickCommandsSection.vue` | 设置页命令管理 |
+| `src/renderer/src/workspace/stores/terminal.ts` | 清单、画面恢复、终端动作与订阅状态 |
+| `src/renderer/src/preferences/stores/quick-commands.ts` | 命令清单、按项目筛选和保存动作 |
+| `src/renderer/src/workspace/services/terminal.ts` | 终端固定桥接及输出／退出事件 |
+| `src/renderer/src/preferences/services/quick-commands.ts` | 命令清单读写桥接 |
+| `src/renderer/src/workspace/components/TerminalView.vue` | xterm 视图、输入、尺寸、恢复确认、链接及路径拖入 |
+| `src/renderer/src/workspace/components/TerminalSettingsSection.vue` | 守护进程状态与停止／清理入口 |
+| `src/renderer/src/preferences/components/QuickCommandDialog.vue` | 命令新增、编辑、范围和执行选项 |
+| `src/renderer/src/preferences/components/QuickCommandMenu.vue` | 当前项目可用命令菜单 |
+| `src/renderer/src/preferences/components/QuickCommandsSection.vue` | 设置页命令管理 |
 
 主进程适配、守护路径、会话与历史职责已读，视图和状态调用结合源码引用映射。真实 shell、原生 PTY 和操作系统进程是运行依赖，不由目录映射证明其跨平台行为。
 
 ## 公共与跨模块引用
 
-- [F-assembly](shared.md#f-assembly进程与页面组装混合)：`registerTerminalHandlers`、终端事件投递、页面代际撤销与应用退出断开；App 管理终端面板和快捷命令弹层。
+- [F-assembly](shared.md#f-assembly进程与页面组装混合)：`registerTerminalHandlers`、终端事件投递、页面代际撤销与应用退出断开；终端面板由 `src/renderer/src/shell/components/WorkspaceView.vue` 渲染，快捷命令弹层由 `src/renderer/src/shell/components/AppDialogHost.vue` 呈现，弹层状态在 `src/renderer/src/preferences/stores/quick-commands.ts`。
 - [F-config](shared.md#f-configdesktop-配置混合)：命令清单写 Desktop 配置；[偏好](preferences.md) 的 `PreferencesManager` 提供相关配置适配。
 - [F-process](shared.md#f-process受管进程与-sdk-公共设施共享)：`process-tree-termination.ts` 收敛终端关联进程树。
 - [F-build](shared.md#f-build构建与发行上下文)：守护进程独立 CJS 构建及 PTY 权限准备；不将原生模块打入浏览器。
 - [工作区](workspace-tabs.md)：标签由真实终端清单派生；快捷命令经 `runQuickCommand` 创建新终端再写入。
-- [文件](files-editor.md)：`project-entry-drag.ts` 提供拖拽载荷与路径插入文本。
+- [文件](files-editor.md)：`ui/project-entry-drag.ts` 提供拖拽载荷与路径插入文本。
 - [项目](projects-trust.md)：终端 cwd 只能取已登记项目的规范路径，项目移除触发该项目终端关闭请求。
 
 ## 接回与生命周期

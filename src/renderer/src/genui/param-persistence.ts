@@ -12,7 +12,7 @@
  */
 import { reactive } from 'vue'
 import type { GenuiParamRecord } from '../../../shared/genui-params-api'
-import { clearGenuiParams as clearGenuiParamsOnDisk, getGenuiParams, saveGenuiParam } from '../services/genui-params'
+import { clearGenuiParams as clearGenuiParamsOnDisk, getGenuiParams, saveGenuiParam } from './services/genui-params'
 import {
   clearGenuiParams as clearGenuiParamsInMemory,
   hydrateGenuiParams,

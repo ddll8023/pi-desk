@@ -4,7 +4,7 @@
 
 ## 职责与入口
 
-负责 Electron 窗口与原生标题栏集成、应用信息、Vue 挂载、设置页导航、右侧面板宿主，以及应用级启动与退出组装。主进程侧由 `src/main/window.ts` 承担窗口与标题栏实现、`src/main/window-channel.ts` 承担事件投递与广播、`src/main/app-lifecycle.ts` 承担启动与退出编排，`src/main/index.ts` 只做装配；页面侧入口为 `src/renderer/src/main.ts`，页面根组件 `src/renderer/src/App.vue` 只装配 `shell/` 下的骨架、工作区宿主、弹层宿主与启动编排。
+负责 Electron 窗口与原生标题栏集成、应用信息、Vue 挂载、设置页导航、右侧面板宿主，以及应用级启动与退出组装。主进程侧由 `src/main/window.ts` 承担窗口与标题栏实现、`src/main/window-channel.ts` 承担事件投递与广播、`src/main/app-lifecycle.ts` 承担启动与退出编排，`src/main/index.ts` 只按固定顺序转交 `app-lifecycle.ts` 装配；页面侧入口为 `src/renderer/src/main.ts`，页面根组件 `src/renderer/src/App.vue` 只装配 `shell/` 下的骨架、工作区宿主、弹层宿主与启动编排。
 
 不负责具体会话执行、文件读写、Git 命令或设置值的持久化。设置页只是各业务模块的导航容器，右侧面板只是文件树与 Git 视图的共同宿主。
 
@@ -16,25 +16,25 @@
 | `src/renderer/index.html` | 页面文档与应用挂载点 |
 | `src/renderer/src/main.ts` | 创建 Vue、Pinia 并加载全局样式 |
 | `src/renderer/src/App.vue` | 页面组合根：装配外壳骨架、弹层宿主与启动编排，不含业务逻辑 |
-| `src/renderer/src/shell/AppShell.vue` | 布局骨架：顶部栏、侧栏与窄窗遮罩、工作区槽、右侧面板，持有窄窗与侧栏开合状态 |
-| `src/renderer/src/shell/WorkspaceView.vue` | 工作区：标签条、操作失败提示条、对话／终端／文件面板层与空态 |
-| `src/renderer/src/shell/AppDialogHost.vue` | 应用级弹层宿主：把各 Store 的待确认目标渲染成对话框，并按来源分派确认结果 |
+| `src/renderer/src/shell/components/AppShell.vue` | 布局骨架：顶部栏、侧栏与窄窗遮罩、工作区槽、右侧面板，持有窄窗与侧栏开合状态 |
+| `src/renderer/src/shell/components/WorkspaceView.vue` | 工作区：标签条、操作失败提示条、对话／终端／文件面板层与空态 |
+| `src/renderer/src/shell/components/AppDialogHost.vue` | 应用级弹层宿主：把各 Store 的待确认目标渲染成对话框，并按来源分派确认结果 |
 | `src/renderer/src/shell/use-app-startup.ts` | 展示 Store 的初始化与释放顺序、生成式参数持久化与退出落盘、项目切换与会话落盘后的补读 |
-| `src/renderer/src/components/AppTitleBar.vue` | 自绘标题栏、项目／会话信息与布局切换入口 |
-| `src/renderer/src/components/SettingsView.vue` | 设置导航与分节内容分发；外观设置入口 |
-| `src/renderer/src/components/SettingsNavIcon.vue` | 设置导航图标映射 |
-| `src/renderer/src/components/RightPanel.vue` | 面板宽度与页签、文件目录和 Git 跟踪生命周期 |
-| `src/renderer/src/components/RightPanelTabs.vue` | 文件／源代码管理页签与角标 |
-| `src/renderer/src/stores/desktop.ts` | 应用信息展示状态 |
-| `src/renderer/src/stores/settings.ts` | 设置页开关与当前分节，不保存设置值 |
-| `src/renderer/src/services/desktop.ts` | 应用信息桥接与通信失败转换 |
-| `src/renderer/src/settings-navigation.ts` | 分组、分节 ID、图标及关键词定义 |
+| `src/renderer/src/shell/components/AppTitleBar.vue` | 自绘标题栏、项目／会话信息与布局切换入口 |
+| `src/renderer/src/shell/components/SettingsView.vue` | 设置导航与分节内容分发；外观设置入口 |
+| `src/renderer/src/shell/components/SettingsNavIcon.vue` | 设置导航图标映射 |
+| `src/renderer/src/shell/components/RightPanel.vue` | 面板宽度与页签、文件目录和 Git 跟踪生命周期 |
+| `src/renderer/src/shell/components/RightPanelTabs.vue` | 文件／源代码管理页签与角标 |
+| `src/renderer/src/shell/stores/desktop.ts` | 应用信息展示状态 |
+| `src/renderer/src/shell/stores/settings.ts` | 设置页开关与当前分节，不保存设置值 |
+| `src/renderer/src/shell/services/desktop.ts` | 应用信息桥接与通信失败转换 |
+| `src/renderer/src/shell/settings-navigation.ts` | 分组、分节 ID、图标及关键词定义 |
 
 窗口与页面入口已读；标题栏和导航辅助组件通过直接调用定位。综合组装文件不在本表重复归属。
 
 ## 公共与跨模块引用
 
-- [F-assembly](shared.md#f-assembly进程与页面组装混合)：`src/main/window.ts` 的 `createWindow` 与 `restrictSession`、`src/main/asset-protocol.ts` 的资产协议、`src/main/app-lifecycle.ts` 的便携数据目录与退出链；`src/preload/index.ts` 的应用信息／外链接口；`src/renderer/src/shell/AppShell.vue` 的应用布局、`src/renderer/src/shell/AppDialogHost.vue` 的弹层与 `src/renderer/src/shell/use-app-startup.ts` 的 Store 生命周期。
+- [F-assembly](shared.md#f-assembly进程与页面组装混合)：`src/main/window.ts` 的 `createWindow` 与 `restrictSession`、`src/main/asset-protocol.ts` 的资产协议、`src/main/app-lifecycle.ts` 的便携数据目录与退出链；`src/preload/index.ts` 的应用信息／外链接口；`src/renderer/src/shell/components/AppShell.vue` 的应用布局、`src/renderer/src/shell/components/AppDialogHost.vue` 的弹层与 `src/renderer/src/shell/use-app-startup.ts` 的 Store 生命周期。
 - [F-config](shared.md#f-configdesktop-配置混合)：`src/main/config/desktop-config-store.ts` 保存窗口状态。
 - [F-platform](shared.md#f-platform文件锁外链与基础错误共享)：`src/shared/desktop-api.ts` 定义应用信息和外链接口；受控外链不暴露任意系统协议。
 - [F-style](shared.md#f-style全局主题与业务样式混合)：`src/renderer/src/assets/main.css` 的布局、主题、标题栏与公共控件样式。

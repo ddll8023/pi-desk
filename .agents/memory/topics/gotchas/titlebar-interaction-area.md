@@ -6,7 +6,7 @@
 
 根因：Windows/Linux 上用 `titleBarStyle: 'hidden'` 时，窗口按钮由系统绘制并**覆盖在网页内容之上**，DOM 元素不能用那块区域；标题栏若按普通 flex 行把控件排到最右端，控件就落在覆盖区里。macOS 没有这层覆盖，同样的代码不会暴露问题。
 
-处置：标题栏右端按系统给出的可绘制区让位——用 CSS 环境变量 `env(titlebar-area-x, 0px)` 与 `env(titlebar-area-width, 100%)` 算出被覆盖的宽度（`100vw - x - width`），作为标题栏的右侧内边距；取值不可用时回退 0，macOS 行为不变。实现见 `src/renderer/src/assets/main.css` 的 `--titlebar-controls-reserve`，窗口选项见 `src/main/index.ts` 的 `titleBarWindowOptions()`。
+处置：标题栏右端按系统给出的可绘制区让位——用 CSS 环境变量 `env(titlebar-area-x, 0px)` 与 `env(titlebar-area-width, 100%)` 算出被覆盖的宽度（`100vw - x - width`），作为标题栏的右侧内边距；取值不可用时回退 0，macOS 行为不变。实现见 `src/renderer/src/assets/main.css` 的 `--titlebar-controls-reserve`，窗口选项见 `src/main/window.ts` 的 `titleBarWindowOptions()`。
 
 排除：不要靠固定像素宽度硬留白（窗口按钮宽度随系统与缩放变化）；也不要把「控件看不见」当成渲染或构建问题排查。
 

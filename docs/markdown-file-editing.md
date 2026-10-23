@@ -63,4 +63,4 @@
 
 超过排版预算的文档在解析前回退源码。超过文件可编辑上限的文本不允许编辑或保存，回退源码也不会解除只读限制。
 
-排版预算与可编辑语法判定分别以 `src/renderer/src/file-markdown.ts`、`src/renderer/src/file-rich-markdown.ts` 的定义为准；文件读取与保存限制以 `src/shared/project-file-api.ts` 的常量及主进程判定为准。
+排版预算与可编辑语法判定分别以 `src/renderer/src/editor/file-markdown.ts`、`src/renderer/src/editor/file-rich-markdown.ts` 的定义为准；文件读取与保存限制以 `src/shared/project-file-api.ts` 的常量及主进程判定为准。
