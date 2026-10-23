@@ -60,9 +60,10 @@ interface RichEditorContext extends RichMediaContext {
 export function richEditorOptions(context: RichEditorContext): Pick<EditorOptions, 'extensions' | 'editorProps'> {
   const RichLink = Link.extend({
     addAttributes() { return { ...this.parent?.(), title: { default: null } } },
-    renderHTML({ node }) {
-      const address = String(node.attrs.href ?? '')
-      return ['a', { class: 'markdown-link', 'data-link-target': address, 'data-link-kind': classifyLinkKind(address), title: node.attrs.title || null }, 0]
+    // Mark 扩展的渲染参数只有 mark 与 HTMLAttributes（没有 node），链接地址只能从 mark.attrs 取。
+    renderHTML({ mark }) {
+      const address = String(mark.attrs.href ?? '')
+      return ['a', { class: 'markdown-link', 'data-link-target': address, 'data-link-kind': classifyLinkKind(address), title: mark.attrs.title || null }, 0]
     },
     parseHTML() {
       return [{ tag: 'a[data-link-target]', getAttrs: element => ({ href: element.getAttribute('data-link-target') ?? '' }) }, ...(this.parent?.() ?? [])]

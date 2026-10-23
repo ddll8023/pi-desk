@@ -53,7 +53,8 @@ function createMarkedFacade(): MarkdownManager['instance'] {
   const registry = new Marked()
   class RegistryLexer extends Lexer {
     constructor(options?: MarkedOptions) {
-      super({ ...registry.defaults, ...options, tokenizer: options?.tokenizer ?? registry.defaults.tokenizer ?? new QuoteListTokenizer(), extensions: registry.defaults.extensions })
+      // `extensions` 在 MarkedOptions 上是可选属性，exactOptionalPropertyTypes 下不能传显式 undefined。
+      super({ ...registry.defaults, ...options, tokenizer: options?.tokenizer ?? registry.defaults.tokenizer ?? new QuoteListTokenizer(), extensions: registry.defaults.extensions ?? null })
     }
   }
   const upstream = new MarkdownManager({ extensions: [] }).instance

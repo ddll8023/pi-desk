@@ -275,7 +275,8 @@ defineExpose({ flushEdit, getText, navigateTo, openSearch, getDraft: snapshot, f
   <div class="file-rich-surface" @compositionend="scheduleCommit">
     <FileRichMarkdownToolbar :editor="editor" :revision="revision" @command="command" />
     <details v-if="frontmatter && showFrontmatter" class="file-markdown-frontmatter"><summary>Front Matter（在源码中编辑）</summary><pre class="scroll-area">{{ frontmatter }}</pre></details>
-    <EditorContent :editor="editor" />
+    <!-- EditorContent 的 editor 声明为非空，未创建前不渲染它；库在 rootEl 就绪后自行挂入 view DOM。 -->
+    <EditorContent v-if="editor" :editor="editor" />
     <FileRichMarkdownSearchBar v-if="searchOpen && editor" ref="searchBar" :editor="editor" :replace="replaceOpen" @close="closeSearch" />
     <FileRichMarkdownTableControls v-if="editor" :editor="editor" :active="active" />
     <FileRichMarkdownSuggestions v-if="suggestion" :items="items" :active="suggestionIndex" :left="point.left" :top="point.top" :menu-id="menuId" :loading="documentsLoading" :message="suggestion.kind === 'document' ? documentsMessage : ''" @choose="choose" @hover="suggestionIndex = $event" @close="closeSuggestions" />
