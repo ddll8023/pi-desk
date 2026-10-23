@@ -309,7 +309,7 @@ export const useGitStatusStore = defineStore('git-status', () => {
 
   /**
    * 写操作被信任门禁拦下：记住重试动作并弹出信任对话框。
-   * 这里只负责「问」，决定后的重试由 `retryPendingAfterTrust` 触发（`App.vue` 收到对话框结果时调用）。
+   * 这里只负责「问」，决定后的重试由 `retryPendingAfterTrust` 触发（`shell/AppDialogHost.vue` 收到对话框结果时调用）。
    */
   async function requestTrust(retry: () => Promise<void>): Promise<void> {
     pendingTrustRetry = retry

@@ -25,7 +25,7 @@ export const useProjectStore = defineStore('project', () => {
   const actionError = ref<ProjectError | null>(null)
   const choosing = ref(false)
   const switching = ref(false)
-  /** 会话打开链引起的项目选择不应被标签监听误认成用户的新选择。 */
+  /** 会话打开链引起的项目选择不应被标签侧的项目切换反应误认成用户的新选择。 */
   const selectionOrigin = ref<'user' | 'session' | null>(null)
   /** 项目选择按提交顺序收敛，不因另一次切换尚未完成而静默丢弃。 */
   let selectionTail: Promise<void> = Promise.resolve()
@@ -33,6 +33,8 @@ export const useProjectStore = defineStore('project', () => {
   /** 候选项目只在流程内只读使用，不需要深度响应式；用 shallowRef 避免把代理存下来并传过桥。 */
   const pendingAddition = shallowRef<ProjectPathSelection | null>(null)
   const pendingAdditionDecision = ref<TrustDecision | null>(null)
+  /** 待确认移除的项目；确认后按 allowInterrupt 提交移除，取消不改变列表。 */
+  const pendingRemoval = shallowRef<Project | null>(null)
 
   const currentProject = computed<Project | null>(() => (
     projects.value.find((project) => project.id === currentProjectId.value) ?? null
@@ -140,6 +142,22 @@ export const useProjectStore = defineStore('project', () => {
     }
   }
 
+  /** 记下待移除的项目；确认前不会改列表，也不会关闭 Runtime。 */
+  function requestRemoval(project: Project): void {
+    pendingRemoval.value = project
+  }
+
+  function cancelRemoval(): void {
+    pendingRemoval.value = null
+  }
+
+  /** 确认后按 allowInterrupt 提交移除：只移除记录，项目目录、代码与会话文件都不受影响。 */
+  async function confirmRemoval(): Promise<void> {
+    const project = pendingRemoval.value
+    pendingRemoval.value = null
+    if (project !== null) await remove(project.id, true)
+  }
+
   /**
    * 把路径设为当前项目。前台切换只改变项目上下文，不停止任何后台会话，因此不再需要中断确认；
    * 切换后前台实例跟随该项目（该项目没有承载会话的实例时清空前台）；`allowInterrupt` 只为 IPC 契约保留。
@@ -187,11 +205,15 @@ export const useProjectStore = defineStore('project', () => {
     selectionOrigin,
     pendingAddition,
     pendingAdditionDecision,
+    pendingRemoval,
     initialize,
     choose,
     commitAddition,
     cancelAddition,
     remove,
+    requestRemoval,
+    cancelRemoval,
+    confirmRemoval,
     select
   }
 })

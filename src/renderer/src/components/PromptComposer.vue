@@ -621,7 +621,9 @@ async function submit(): Promise<void> {
     draft.value = ''
     // 命令的含义是重开一段对话：上一次「首次发送只启动 Runtime」的待补发意图随之作废。
     startupRequested.value = false
-    const outcome = await workspaceTabsStore.startNewChatInTab()
+    const { outcome, intent } = await workspaceTabsStore.startNewChatInTab()
+    // 标签只给出重建实例的打开意图，实际打开由会话能力执行。
+    if (intent !== null) void sessionStore.openIntent(intent)
     // 本来就空、以及打开其他会话期间都只是没替换，用一次性说明交代原因；
     // 结束原实例未确认时不在这里重复文案，顶部已有结束失败的提示条。
     if (outcome === 'already-new') showCommandHint(NEW_CHAT_HINT_ALREADY)

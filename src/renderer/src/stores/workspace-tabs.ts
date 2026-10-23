@@ -3,13 +3,15 @@
  *
  * 标签是页面内的展示编排：活动的对话标签就是前台运行实例，其余对话标签由后台分片留底，
  * 因此切标签就是切前台；切项目换一组标签（对话、终端与文件一起换），每个项目各自记住上次的活动标签。
+ * 标签只计算打开意图（`ChatOpenIntent`），实际提交由会话能力（`sessionStore.openIntent`）与外层编排执行，
+ * 标签侧不反向调用会话的打开动作。
  * 顺序、活动标签、对话与文件标签的重命名、以及「有新回复」标记只留在内存里，不跨应用重启恢复：
  * 重启后每个项目回到一个空对话标签。终端标签的命名是例外：它交给守护进程随会话记录落盘。
  *
  * 标签键是页面内编号，只在渲染端有效：对话标签记会话身份与它承载的运行实例，终端标签记终端标识，
  * 文件标签记一个编号（路径与编辑状态由 `project-editor` 持有）。终端清单是主进程的真相，因此终端标签
  * 按清单派生（已消失的不再展示、新出现的追加到末尾）；对话与文件标签需要在这里登记。
- * 文件标签只能由打开文件产生，不进入「新建」菜单；关闭脏文件前由界面确认。
+ * 文件标签只能由打开文件产生，不进入「新建」菜单；关闭脏文件前先置待确认状态，用户确认后才丢弃未保存修改。
  * 后台实例回复结束时给它的对话标签打「有新回复」标记，切到该标签即清除。
  * 新建对话的入口分两类：标签条与侧栏新建一个对话标签，`/new` 则在当前标签内就地替换
  * （结束原实例、清空会话身份与重命名，标签位置与顺序不变）。
@@ -36,6 +38,19 @@ const FILE_KEY_PREFIX = 'file:'
 
 /** 可通过「新建」菜单主动创建的类型；文件标签只能由打开文件产生，不在新建入口里。 */
 export type WorkspaceTabKind = 'chat' | 'terminal'
+
+/**
+ * 一次「把某个对话标签的实例切到前台」的打开意图。
+ *
+ * 标签侧只计算「该打开哪个会话、落到哪个标签」，实际提交由会话能力完成（`sessionStore.openIntent`），
+ * 因此标签不再反向调用会话的打开动作。
+ */
+export interface ChatOpenIntent {
+  readonly projectPath: string
+  readonly tabKey: string
+  readonly sessionId: string | null
+  readonly allowInterrupt: boolean
+}
 
 /**
  * 在当前标签内就地新建对话的结果：`started` 是已完成就地替换；`already-new` 是本来就空、没有可结束的实例；
@@ -86,6 +101,8 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
   const renames = ref<Readonly<Record<string, string>>>({})
   /** 已结束回复但用户还没看过的对话标签键；只在内存里，不跨应用重启恢复。 */
   const unseenCompletions = ref<ReadonlySet<string>>(new Set())
+  /** 待确认关闭的脏文件标签键；确认前标签与未保存内容都保留。 */
+  const pendingCloseKey = ref<string | null>(null)
   /** 上一次广播时正在执行的实例：只有由执行中变为已结束才算一轮回复完成，初始快照不产生标记。 */
   let streamingRunIds = new Set<number>()
   /** 已经自动补过空对话标签的项目；用户显式关掉全部对话标签后不再自动补回。 */
@@ -94,12 +111,9 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
   let runCloseTail: Promise<void> = Promise.resolve()
   let selectionVersion = 0
   let nextChatTabId = 1
-  let stopProjectWatch: WatchStopHandle | null = null
   let stopProjectsWatch: WatchStopHandle | null = null
   let stopRunsWatch: WatchStopHandle | null = null
   let stopSessionsWatch: WatchStopHandle | null = null
-  let stopOpeningWatch: WatchStopHandle | null = null
-
   const currentProjectPath = computed(() => projectStore.currentProject?.path ?? null)
 
   /** 当前项目按顺序展开后的标签键：跳过失效的对话标签与已消失的终端，新终端追加到末尾。 */
@@ -153,7 +167,7 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
 
   /**
    * 活动对话标签正在展示的会话身份；活动标签是终端或文件标签、或该标签的实例尚未建立时为空。
-   * 与 `focusChatTab` 取同一个口径（未落盘的新会话取实例报告的会话），界面据此判断会话是否已展示。
+   * 与 `focusIntent` 取同一个口径（未落盘的新会话取实例报告的会话），界面据此判断会话是否已展示。
    */
   const activeSessionId = computed<string | null>(() => {
     const key = activeTab.value
@@ -178,21 +192,11 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
   })
 
   /**
-   * 页面挂载后调用：进入项目时补一个空对话标签，并跟随运行实例列表同步标签的会话身份。
-   * 先订阅、再取一次当前值，避免初始化期间漏掉已经发生的项目切换与实例变化。
+   * 页面挂载后调用：跟随运行实例与会话列表同步标签身份。
+   * 项目切换与打开结束引起的补提交不在这里：它们是打开编排，由启动编排（`shell/use-app-startup.ts`）
+   * 取意图后交给会话能力，标签只负责计算。
    */
   function initialize(): void {
-    if (stopProjectWatch === null) {
-      stopProjectWatch = watch(currentProjectPath, (projectPath) => {
-        const openingHere = projectStore.selectionOrigin === 'session'
-          || (projectPath !== null && sessionStore.openingProjectPath === projectPath)
-        if (!openingHere) sessionStore.invalidateOpenSelection()
-        if (projectPath === null) return
-        prepareProject(projectPath)
-        const key = activeTabs.value[projectPath] ?? null
-        if (!openingHere && key !== null && isChatKey(key)) void focusChatTab(projectPath, key)
-      }, { immediate: true, flush: 'sync' })
-    }
     if (stopProjectsWatch === null) {
       stopProjectsWatch = watch(() => projectStore.projects.map(project => project.path), dropMissingProjects)
     }
@@ -206,30 +210,16 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
       // 会话列表刷新后重跑同步：会话落盘后标签才采纳它的身份，标题也从「新对话」换成摘要。
       stopSessionsWatch = watch(() => sessionStore.loadedSessionIds, syncRuns)
     }
-    if (stopOpeningWatch === null) {
-      stopOpeningWatch = watch(() => sessionStore.opening, opening => {
-        const key = activeTab.value
-        const projectPath = currentProjectPath.value
-        if (opening || projectPath === null || key === null || !isChatActive.value || isChatReady.value
-          || closingTabs.has(key) || sessionStore.actionError !== null || projectStore.switching
-          || sessionStore.awaitingTrust || sessionStore.awaitingInterrupt) return
-        void focusChatTab(projectPath, key)
-      }, { flush: 'post' })
-    }
   }
 
   /** 页面卸载时释放订阅；标签只留在内存里，重新挂载后回到一个空对话标签。 */
   function dispose(): void {
-    stopProjectWatch?.()
-    stopProjectWatch = null
     stopProjectsWatch?.()
     stopProjectsWatch = null
     stopRunsWatch?.()
     stopRunsWatch = null
     stopSessionsWatch?.()
     stopSessionsWatch = null
-    stopOpeningWatch?.()
-    stopOpeningWatch = null
   }
 
   /**
@@ -245,24 +235,20 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     setActive(projectPath, key)
   }
 
-  /** 切换活动标签；活动对话标签对应前台实例，切过去时把该实例切到前台。 */
-  async function activateTab(key: string): Promise<void> {
+  /** 切换活动标签；活动对话标签对应前台实例，切过去时返回把它切到前台的打开意图。 */
+  async function activateTab(key: string): Promise<ChatOpenIntent | null> {
     const projectPath = currentProjectPath.value
-    if (projectPath === null || !projectKeys.value.includes(key)) return
-    if (activeTab.value === key && (!isChatKey(key) || isChatReady.value)) return
+    if (projectPath === null || !projectKeys.value.includes(key)) return null
+    if (activeTab.value === key && (!isChatKey(key) || isChatReady.value)) return null
     selectLocal(projectPath, key)
-    if (isChatKey(key)) await focusChatTab(projectPath, key)
+    return isChatKey(key) ? focusIntent(projectPath, key) : null
   }
 
   /**
-   * 新建标签：对话标签走空对话入口（同一项目只保留一个未落盘的），终端标签在当前项目内新建终端。
+   * 新建一个终端标签：对话标签不走这里，由 `openNewChatTab` 建立并返回打开意图。
    * 终端创建失败时保留原因由终端 store 提示，不建立空标签。
    */
-  async function createTab(kind: WorkspaceTabKind): Promise<string | null> {
-    if (kind === 'chat') {
-      await openNewChatTab()
-      return null
-    }
+  async function createTerminalTab(): Promise<string | null> {
     const projectPath = currentProjectPath.value
     if (projectPath === null) {
       terminalStore.reportError('先选择项目，再新建终端。')
@@ -290,7 +276,7 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
    */
   async function runQuickCommand(command: QuickCommand): Promise<void> {
     const text = command.appendEnter ? `${command.command.replace(/\r\n|\r|\n/g, '\r')}\r` : command.command
-    const created = await createTab('terminal')
+    const created = await createTerminalTab()
     if (created === null) return
     await terminalStore.insertText(created, text)
   }
@@ -315,18 +301,19 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
 
   /**
    * 新建对话标签：同一项目内至多一个未落盘的新对话标签，重复点击聚焦已有的那个。
-   * Runtime 闲置时只建立标签、不提交打开请求，空对话本来就能直接输入。
+   * Runtime 闲置时只建立标签、不提交打开请求，空对话本来就能直接输入；
+   * 需要打开时返回意图，由调用方交给会话能力提交。
    * `projectPath` 由调用方给出时按它建标签（侧栏可能刚切项目，不等切换完成也能落到正确项目）。
    */
-  async function openNewChatTab(projectPath: string | null = currentProjectPath.value): Promise<void> {
-    if (projectPath === null) return
+  async function openNewChatTab(projectPath: string | null = currentProjectPath.value): Promise<ChatOpenIntent | null> {
+    if (projectPath === null) return null
     const key = findChatKey(projectPath, null) ?? createChatTab(projectPath)
     appendKey(projectPath, key)
     selectLocal(projectPath, key)
     const version = selectionVersion
     if (projectPath !== currentProjectPath.value) await projectStore.select(projectPath, false, 'session')
-    if (version !== selectionVersion || projectPath !== currentProjectPath.value || !hasChatTabKey(projectPath, key)) return
-    await focusChatTab(projectPath, key)
+    if (version !== selectionVersion || projectPath !== currentProjectPath.value || !hasChatTabKey(projectPath, key)) return null
+    return focusIntent(projectPath, key)
   }
 
   /**
@@ -334,39 +321,39 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
    * 保留会话历史文件），标签位置、顺序与活动状态不变，会话身份与用户重命名一并清除。
    * 本来就是空对话时不重建实例；另一会话正在打开时不动作，避免新建意图落到别的会话上。
    * 打开请求指名这个标签，因此无论标签记录是否已被旧实例写回身份，新建都只会落回它自己。
+   * 返回结果同时给出打开意图：标签只声明“若需要重建实例，应该打开哪一个”，提交在会话能力。
    */
-  async function startNewChatInTab(): Promise<NewChatInTabOutcome> {
+  async function startNewChatInTab(): Promise<{ readonly outcome: NewChatInTabOutcome; readonly intent: ChatOpenIntent | null }> {
     const projectPath = currentProjectPath.value
     const key = activeTab.value
-    if (projectPath === null || key === null || !isChatKey(key)) return 'unavailable'
+    if (projectPath === null || key === null || !isChatKey(key)) return { outcome: 'unavailable', intent: null }
     const record = chatTabs.value[key]
-    if (record === undefined) return 'unavailable'
-    if (sessionStore.opening) return 'busy'
+    if (record === undefined) return { outcome: 'unavailable', intent: null }
+    if (sessionStore.opening) return { outcome: 'busy', intent: null }
     const runId = resolveRunId(projectPath, key)
     const version = selectionVersion
     // 既没有实例也没有会话身份：这个标签本来就是空对话，结束与重建都没有意义。
-    if (runId === null && record.sessionId === null) return 'already-new'
-    if (runId !== null && !await closeChatRun(runId)) return 'refused'
-    if (!hasChatTabKey(projectPath, key)) return 'unavailable'
+    if (runId === null && record.sessionId === null) return { outcome: 'already-new', intent: null }
+    if (runId !== null && !await closeChatRun(runId)) return { outcome: 'refused', intent: null }
+    if (!hasChatTabKey(projectPath, key)) return { outcome: 'unavailable', intent: null }
     // 就地清空：只换身份，不动标签位置与顺序；旧会话的历史文件与留底草稿都不受影响。
     chatTabs.value = { ...chatTabs.value, [key]: { sessionId: null, runId: null, hasMessages: false } }
     clearRename(key)
-    if (version !== selectionVersion || currentProjectPath.value !== projectPath) return 'started'
+    if (version !== selectionVersion || currentProjectPath.value !== projectPath) return { outcome: 'started', intent: null }
     selectLocal(projectPath, key)
     // 结束实例后前台已被清空，闲置时不必预建宿主；仍占用前台实例时才提交新会话的打开请求。
-    if (isRuntimeIdle()) return 'started'
-    await sessionStore.open(null, false, projectPath, key)
-    return 'started'
+    return { outcome: 'started', intent: focusIntent(projectPath, key) }
   }
 
   /**
    * 关闭标签：对话标签结束它承载的运行实例（中断在途操作、解除占用、关闭宿主，保留会话历史文件），
    * 终端标签关掉那个终端进程，文件标签只清内存编辑记录、不改动磁盘（有未保存修改时由界面先确认）。
    * 任一步失败都保留标签，避免出现「实例还在、标签已消失」。
+   * 关闭后需要把落到的相邻对话标签切到前台时返回打开意图，由调用方提交。
    */
-  async function closeTab(key: string): Promise<void> {
+  async function closeTab(key: string): Promise<ChatOpenIntent | null> {
     const located = locate(key)
-    if (located === null || closingTabs.has(key)) return
+    if (located === null || closingTabs.has(key)) return null
     const projectPath = located.projectPath
     const keys = effectiveKeys(projectPath)
     const index = keys.indexOf(key)
@@ -379,21 +366,46 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
         // 打开尚未返回时先保留标签，等实际身份绑定后再关闭；失败时仍能保留原标签。
         await sessionStore.waitForOpenActions()
         const runId = resolveRunId(projectPath, key)
-        if (runId !== null && !await closeChatRun(runId)) return
+        if (runId !== null && !await closeChatRun(runId)) return null
       } else {
         const terminalId = terminalIdOf(key)
-        if (terminalId === null) return
+        if (terminalId === null) return null
         await terminalStore.closeTerminal(terminalId)
-        if (terminalStore.sessions.some(session => session.id === terminalId)) return
+        if (terminalStore.sessions.some(session => session.id === terminalId)) return null
       }
       const fallback = removeKey(projectPath, key, neighbor)
       if (isChatKey(key)) forgetChatTab(key)
       if (projectPath === currentProjectPath.value && fallback !== null && isChatKey(fallback)) {
-        await focusChatTab(projectPath, fallback)
+        return focusIntent(projectPath, fallback)
       }
+      return null
     } finally {
       closingTabs.delete(key)
     }
+  }
+
+  /**
+   * 关闭入口：有未保存修改的文件标签先置待确认状态，其余直接走关闭链；
+   * 关闭后需要补打开的相邻对话标签由返回值交给调用方提交。
+   */
+  async function requestClose(key: string): Promise<ChatOpenIntent | null> {
+    const tab = tabs.value.find(candidate => candidate.id === key)
+    if (tab !== undefined && tab.dirty) {
+      pendingCloseKey.value = key
+      return null
+    }
+    return closeTab(key)
+  }
+
+  /** 确认丢弃未保存修改并关闭；标签已消失时无副作用。 */
+  async function confirmPendingClose(): Promise<ChatOpenIntent | null> {
+    const key = pendingCloseKey.value
+    pendingCloseKey.value = null
+    return key === null ? null : closeTab(key)
+  }
+
+  function cancelPendingClose(): void {
+    pendingCloseKey.value = null
   }
 
   /** 所有标签关闭与迟到打开的清理共用一条串行关闭链，不因其他关闭忙而静默丢弃。 */
@@ -622,15 +634,44 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
   }
 
   /**
-   * 把该对话标签的实例切到前台：主进程按占用或可复用实例决定是复用还是新建，渲染端只表达打开意图。
+   * 该对话标签需要提交的打开意图：主进程按占用或可复用实例决定是复用还是新建，渲染端只表达意图。
    * 标签身份取实例报告的会话（可能尚未落盘），实例尚未建立时在 Runtime 闲置下不提交请求。
    */
-  async function focusChatTab(projectPath: string, key: string): Promise<void> {
+  function focusIntent(projectPath: string, key: string): ChatOpenIntent | null {
     const record = chatTabs.value[key]
-    if (record === undefined) return
+    if (record === undefined) return null
     const sessionId = record.sessionId ?? sessionIdOfRun(record.runId)
-    if (sessionId === null && record.runId === null && isRuntimeIdle()) return
-    await sessionStore.open(sessionId, false, projectPath, key)
+    if (sessionId === null && record.runId === null && isRuntimeIdle()) return null
+    return { projectPath, tabKey: key, sessionId, allowInterrupt: false }
+  }
+
+  /**
+   * 一次打开动作结束后，若活动对话标签仍未就绪则返回重新打开的意图。
+   * 打开中、项目切换中、错误未消除以及信任与中断待确认时都不提交：这些时候重新打开会抢掉用户的确认。
+   */
+  function chatFocusIntent(): ChatOpenIntent | null {
+    const key = activeTab.value
+    const projectPath = currentProjectPath.value
+    if (sessionStore.opening || projectPath === null || key === null || !isChatActive.value || isChatReady.value
+      || closingTabs.has(key) || sessionStore.actionError !== null || projectStore.switching
+      || sessionStore.awaitingTrust || sessionStore.awaitingInterrupt) return null
+    return focusIntent(projectPath, key)
+  }
+
+  /**
+   * 项目切换后的标签反应：失效旧的打开选择、首次进入项目时补一个空对话标签，
+   * 并在需要时返回把活动对话标签切到前台的意图。
+   * 会话自己发起的项目切换（打开会话时）不能当作新的用户选择，也不重复提交打开。
+   */
+  function onProjectChanged(projectPath: string | null): ChatOpenIntent | null {
+    const openingHere = projectStore.selectionOrigin === 'session'
+      || (projectPath !== null && sessionStore.openingProjectPath === projectPath)
+    if (!openingHere) sessionStore.invalidateOpenSelection()
+    if (projectPath === null) return null
+    prepareProject(projectPath)
+    const key = activeTabs.value[projectPath] ?? null
+    if (openingHere || key === null || !isChatKey(key)) return null
+    return focusIntent(projectPath, key)
   }
 
   /** 已绑定标签随实例的会话身份变化；未知实例不再由空标签猜测认领。 */
@@ -881,12 +922,18 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     initialize,
     dispose,
     activateTab,
-    createTab,
+    createTerminalTab,
     runQuickCommand,
     openNewChatTab,
     openFileTab,
     startNewChatInTab,
     closeTab,
+    requestClose,
+    confirmPendingClose,
+    cancelPendingClose,
+    pendingCloseKey,
+    chatFocusIntent,
+    onProjectChanged,
     renameTab,
     moveTab,
     syncOpenTab,

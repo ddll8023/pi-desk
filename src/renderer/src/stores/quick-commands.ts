@@ -4,11 +4,12 @@
  * 清单只保存用户维护的命令；运行目标是终端，因此这里不碰 Runtime、会话与标签状态。
  * 保存是整份清单替换：主进程规范化成功后页面才采纳返回值，失败保留原清单并把原因交给界面展示。
  * 保存单飞：同一时刻只有一个写请求，在途期间的新编辑被拒绝（界面据此禁用入口），避免后写者覆盖先写者。
+ * 编辑弹窗与删除确认的目标也留在这里：它们只描述「正在改哪一条命令」，不涉及其他能力的展示状态。
  */
 import { defineStore } from 'pinia'
-import { computed, ref } from 'vue'
+import { computed, ref, shallowRef } from 'vue'
 import type { PreferencesError } from '../../../shared/preferences-api'
-import type { QuickCommand } from '../../../shared/quick-commands-api'
+import type { QuickCommand, QuickCommandScope } from '../../../shared/quick-commands-api'
 import { getQuickCommands, setQuickCommands } from '../services/quick-commands'
 
 /** 清单保存状态；失败时保留原清单，由界面展示原因。 */
@@ -22,6 +23,17 @@ export const useQuickCommandsStore = defineStore('quick-commands', () => {
   const view = ref<QuickCommandsView>({ phase: 'idle' })
   /** 首次读取是否已结束；读取失败也结束等待，界面按空清单展示。 */
   const ready = ref(false)
+  /**
+   * 编辑弹窗状态：`target` 为 null 表示新增；关闭后回到 null。
+   * 只存「正在编辑哪一条、默认范围与项目」，表单内容由弹窗自己持有。
+   */
+  const editor = shallowRef<{
+    readonly target: QuickCommand | null
+    readonly scope: QuickCommandScope
+    readonly projectPath: string | null
+  } | null>(null)
+  /** 待确认删除的命令；确认后提交整份清单，取消不改动任何文件。 */
+  const pendingRemoval = shallowRef<QuickCommand | null>(null)
 
   /** 全局命令；顺序即清单里的顺序。 */
   const globalCommands = computed(() => commands.value.filter((command) => command.scope === 'global'))
@@ -82,10 +94,38 @@ export const useQuickCommandsStore = defineStore('quick-commands', () => {
     if (view.value.phase === 'error') view.value = { phase: 'idle' }
   }
 
+  /** 打开编辑弹窗：新增时 target 为 null，编辑时以命令自身的范围与项目作为初始值。 */
+  function openEditor(target: QuickCommand | null, scope: QuickCommandScope, projectPath: string | null): void {
+    editor.value = { target, scope, projectPath }
+  }
+
+  /** 关闭编辑弹窗并丢弃编辑目标；表单内容随弹窗卸载一起清空。 */
+  function closeEditor(): void {
+    editor.value = null
+  }
+
+  /** 记下待删除的命令；确认前不提交任何写请求。 */
+  function requestRemoval(command: QuickCommand): void {
+    pendingRemoval.value = command
+  }
+
+  function cancelRemoval(): void {
+    pendingRemoval.value = null
+  }
+
+  /** 确认后提交整份清单；失败原因交给界面提示，已加载的命令不变。 */
+  async function confirmRemoval(): Promise<void> {
+    const command = pendingRemoval.value
+    pendingRemoval.value = null
+    if (command !== null) await removeCommand(command.id)
+  }
+
   return {
     commands,
     view,
     ready,
+    editor,
+    pendingRemoval,
     globalCommands,
     commandsOfProject,
     commandsForProject,
@@ -93,6 +133,11 @@ export const useQuickCommandsStore = defineStore('quick-commands', () => {
     saveCommands,
     upsertCommand,
     removeCommand,
-    clearError
+    clearError,
+    openEditor,
+    closeEditor,
+    requestRemoval,
+    cancelRemoval,
+    confirmRemoval
   }
 })

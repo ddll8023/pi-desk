@@ -10,7 +10,7 @@
  * 单次动作失败放在 `actionError`，不影响已加载的列表。
  */
 import { defineStore } from 'pinia'
-import { computed, ref } from 'vue'
+import { computed, ref, shallowRef } from 'vue'
 import { MAX_SESSION_WINDOW, SESSION_PAGE_SIZE } from '../../../shared/session-api'
 import type { SessionError, SessionList, SessionSummary } from '../../../shared/session-api'
 import type { ProjectError } from '../../../shared/project-api'
@@ -20,6 +20,7 @@ import { usePreferencesStore } from './preferences'
 import { useRuntimeStore } from './runtime'
 import { listSessions, openSession, reloadSession, deleteSession } from '../services/session'
 import { useWorkspaceTabsStore } from './workspace-tabs'
+import type { ChatOpenIntent } from './workspace-tabs'
 
 /** `idle` 表示尚未读取该项目的列表；读取中、成功与失败各占一档。 */
 type SessionSlicePhase = 'idle' | 'loading' | 'ready' | 'error'
@@ -92,6 +93,11 @@ export const useSessionStore = defineStore('session', () => {
 
   /** 顶栏会话 chip 使用的会话选择弹层。 */
   const showSessionPicker = ref(false)
+  /** 待确认删除的会话：项目路径加摘要；确认后以 allowInterrupt 提交，取消不改动任何文件。 */
+  const pendingRemoval = shallowRef<{
+    readonly projectPath: string
+    readonly session: SessionSummary
+  } | null>(null)
 
   function openSessionPicker(): void {
     showSessionPicker.value = true
@@ -392,6 +398,14 @@ export const useSessionStore = defineStore('session', () => {
     })
   }
 
+  /**
+   * 按标签侧给出的打开意图提交打开：意图由标签能力声明（该打开哪个会话、落到哪个标签），
+   * 打开编排统一在这里执行，标签不再反向调用它。
+   */
+  async function openIntent(intent: ChatOpenIntent): Promise<void> {
+    await open(intent.sessionId, intent.allowInterrupt, intent.projectPath, intent.tabKey)
+  }
+
   /** 序列化会话动作；计数覆盖等待中的请求，不能在旧请求 finally 中提前开放输入。 */
   async function enqueueAction(action: () => Promise<void>): Promise<void> {
     queuedActions += 1
@@ -500,6 +514,22 @@ export const useSessionStore = defineStore('session', () => {
     }
   }
 
+  /** 记下待删除会话；确认后由主进程收敛占用再删文件，取消不做任何改动。 */
+  function requestRemoval(projectPath: string, session: SessionSummary): void {
+    pendingRemoval.value = { projectPath, session }
+  }
+
+  function cancelRemoval(): void {
+    pendingRemoval.value = null
+  }
+
+  /** 确认后以 allowInterrupt 提交删除：先停止该会话的在途操作，再删除它的历史记录文件。 */
+  async function confirmRemoval(): Promise<void> {
+    const target = pendingRemoval.value
+    pendingRemoval.value = null
+    if (target !== null) await removeSession(target.projectPath, target.session.sessionId, true)
+  }
+
   /** 信任决定后重试待打开的会话（含新建）或待重载的 Runtime；取消时清空待确认目标。 */
   async function retryPendingAfterTrust(): Promise<void> {
     if (!awaitingTrust.value) return
@@ -551,6 +581,7 @@ export const useSessionStore = defineStore('session', () => {
     awaitingTrust,
     pendingReload,
     showSessionPicker,
+    pendingRemoval,
     initialize,
     ensureLoaded,
     loadMore,
@@ -562,12 +593,16 @@ export const useSessionStore = defineStore('session', () => {
     windowFullOf,
     reconcileCurrentSession,
     open,
+    openIntent,
     removeSession,
     reloadCurrent,
     retryPendingAfterTrust,
     confirmPending,
     cancelPending,
     openSessionPicker,
-    closeSessionPicker
+    closeSessionPicker,
+    requestRemoval,
+    cancelRemoval,
+    confirmRemoval
   }
 })
