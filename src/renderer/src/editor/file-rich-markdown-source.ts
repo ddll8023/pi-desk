@@ -5,9 +5,11 @@ import type { Node as DocumentNode } from '@tiptap/pm/model'
 import type { RichMarkdownCodec } from './file-rich-markdown-codec'
 import { serializationDocument } from './file-rich-markdown-nodes'
 import { reconcileBlockSource } from './file-rich-markdown-block-source'
+import { parseRichMarkdown } from './file-rich-markdown-parser'
 
 export interface RichSourceBaseline { original: string; canonical: string }
 const LITERAL_BLOCKS = new Set(['paragraph', 'heading', 'blockquote', 'bulletList', 'orderedList', 'taskList'])
+const serializers = new WeakMap<Editor, (document: DocumentNode) => string>()
 
 /** 比较语义时排除公式原始定界符与重复记录的 open 属性；折叠状态本身及真正的属性值仍参与比较。 */
 export function equivalentRichDocuments(before: DocumentNode, after: DocumentNode): boolean {
@@ -44,6 +46,7 @@ function repeatedDiffSeed(before: string, after: string): boolean {
 
 /** 只移除经重新解析证明不影响节点、标记与属性的转义，不能无条件删除反斜杠。 */
 export function installLiteralSerialization(editor: Editor, codec: RichMarkdownCodec): void {
+  if (serializers.has(editor)) return
   const manager = editor.markdown
   if (!manager) throw new Error('Markdown 扩展尚未初始化。')
   const render = manager.renderNodeToMarkdown.bind(manager)
@@ -64,23 +67,31 @@ export function installLiteralSerialization(editor: Editor, codec: RichMarkdownC
       const candidate = unescape(result)
       if (candidate === result) continue
       try {
-        const parsed = manager.parse(codec.prepare(candidate))
-        const first = parsed.content?.[0]
-        if (parsed.content?.length === 1 && first && equivalentRichDocuments(editor.schema.nodeFromJSON(first), block)) result = candidate
+        const parsed = parseRichMarkdown(editor, codec, candidate)
+        if (parsed.childCount === 1 && equivalentRichDocuments(parsed.child(0), block)) result = candidate
       } catch { /* 无法证明等价时保留原转义。 */ }
     }
     cache.set(block, { markdown, result })
     return result
   }
-  editor.getMarkdown = () => {
-    const document = serializationDocument(editor)
+  const serialize = (document: DocumentNode): string => {
     const json: JSONContent = document.toJSON()
     const initial = manager.serialize(json)
     if (!/\\[_\[\]~`*]/.test(initial)) return initial
+    const previous = blocks
     blocks = new Map()
     json.content?.forEach((node, index) => { if (node.type && LITERAL_BLOCKS.has(node.type)) blocks?.set(node, document.child(index)) })
-    try { return manager.serialize(json) } finally { blocks = undefined }
+    try { return manager.serialize(json) } finally { blocks = previous }
   }
+  serializers.set(editor, serialize)
+  editor.getMarkdown = () => serialize(serializationDocument(editor))
+}
+
+/** 候选文档的序列化不读取当前编辑状态，外部同步因此不必先安装候选才能完成往返证明。 */
+export function serializeRichDocument(editor: Editor, document: DocumentNode): string {
+  const serialize = serializers.get(editor)
+  if (!serialize) throw new Error('Markdown 序列化器尚未初始化。')
+  return serialize(document)
 }
 
 /** diff 库应用补丁时按 UTF-8 解码起点；把 UTF-16 下标转换过去，避免中文与 emoji 错位。 */
@@ -130,11 +141,7 @@ export function serializeRichSource(editor: Editor, codec: RichMarkdownCodec, ba
   const proofs = new Map<string, string | null>()
   const proveDocument = (source: string): string | null => {
     try {
-      const parsed = editor.markdown?.parse(codec.prepare(source))
-      if (!parsed) return null
-      const doc = parsed.content?.length ? editor.schema.nodeFromJSON(parsed) : editor.schema.topNodeType.createAndFill()
-      if (!doc) return null
-      doc.check()
+      const doc = parseRichMarkdown(editor, codec, source)
       return equivalentRichDocuments(doc, serializationDocument(editor)) ? edited : null
     } catch { return null }
   }

@@ -9,7 +9,7 @@ import type { Node as DocumentNode } from '@tiptap/pm/model'
 import { Plugin, PluginKey } from '@tiptap/pm/state'
 import { Decoration, DecorationSet } from '@tiptap/pm/view'
 import type { RichMarkdownCodec } from './file-rich-markdown-codec'
-import { headingSlug } from './file-markdown'
+import { headingSlug } from './file-markdown-links'
 
 const paragraphParser = Paragraph.config.parseMarkdown
 export const RichParagraph = Paragraph.extend({
@@ -20,7 +20,7 @@ export const RichParagraph = Paragraph.extend({
     return paragraphParser(token, helpers)
   }
 })
-export const RichCode = Code.extend({ excludes: 'code bold italic strike' })
+export const RichCode = Code.extend({ excludes: 'code' })
 const orderedTokenizer = OrderedList.config.markdownTokenizer as MarkdownTokenizer
 const orderedStart = new RegExp(`^\\s*(?:${ORDERED_LIST_MARKER_PATTERN})[.)]\\s`)
 export const RichOrderedList = OrderedList.extend({

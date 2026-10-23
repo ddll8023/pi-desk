@@ -206,7 +206,7 @@ export const useProjectEditorStore = defineStore('project-editor', () => {
     records.value = next
   }
 
-  /** 登记每次文档变化的版本并设置脏标记；文本仍由编辑器持有，不在每次击键时搬运全文。 */
+  /** 登记文档变化版本并设置脏标记；全文快照由 captureDraft 另行接收。 */
   function markDirty(key: string): void {
     const record = records.value[key]
     if (record === undefined || !isEditable(record)) return
@@ -215,8 +215,9 @@ export const useProjectEditorStore = defineStore('project-editor', () => {
   }
 
   /**
-   * 在富文本提交、保存返回后核对以及面板卸载时捕获全文快照，供重新挂载恢复。
-   * 快照与磁盘基线相同时清除草稿及脏标记，否则记录差异；尚未捕获的输入由编辑面负责刷新。
+   * 接收源码变化、富文本安全提交、保存后核对及面板卸载时捕获的全文快照，供重新挂载恢复。
+   * 与磁盘基线相同时清除文本草稿及脏标记，否则记录差异；同时清除由本次文本提交替代的结构草稿。
+   * 调用者须先确认待提交输入可安全转换为文本，不能用旧快照覆盖尚未恢复的结构草稿。
    */
   function captureDraft(key: string, text: string): void {
     const record = records.value[key]

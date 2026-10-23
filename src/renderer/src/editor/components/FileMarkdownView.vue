@@ -1,236 +1,140 @@
-<!-- 文件 Markdown 的统一阅读外壳：安全文档直接富文本编辑；其余保留只读排版，目录、查找和图片查看共用。 -->
+<!-- Markdown 文档页面：编辑能力及受阻原因贴近操作区，正文不通过整块焦点描边表达可编辑性。 -->
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { applyCallouts, canPreviewFileMarkdown, ensureHeadingIds, renderFileMarkdown, resolveFileMarkdownLink } from '../file-markdown'
-import type { FileMarkdownTocEntry } from '../file-markdown'
-import { richMarkdownUnsupportedReason } from '../file-rich-markdown'
-import { applyHighlights, clearHighlights, collectMatches, scrollRangeIntoView } from '../file-markdown-search'
-import { clearMarkdownImageCache, loadMarkdownImage } from '../file-images'
-import { highlightCodeBlocks } from '../file-code-highlight'
-import { renderMathInto } from '../../ui/markdown-math'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
+import { markdownFailureText, richMarkdownUnsupportedReason } from '../file-rich-markdown-parser'
+import type { RichMarkdownDraft } from '../file-rich-markdown-draft'
+import type { FileMarkdownTocEntry } from '../file-markdown-dom'
+import type { DocumentCatalog } from '../file-rich-markdown-doc-link'
+import { resolveDocumentLink } from '../file-rich-markdown-doc-link'
+import { headingSlug, resolveFileMarkdownLink } from '../file-markdown-links'
+import { EMPTY_MARKDOWN_SEARCH, EMPTY_MARKDOWN_SEARCH_STATUS } from '../file-markdown-view'
+import type { FileDocumentSurface, MarkdownFormatState, MarkdownReadingView, MarkdownSearchQuery, MarkdownSearchStatus, MarkdownSurfaceState } from '../file-markdown-view'
+import type { RichCommandId } from '../file-rich-markdown-commands'
 import { copyText } from '../../ui/clipboard'
 import { openExternalUrl } from '../services/external-url'
 import { useWorkspaceTabsStore } from '../../workspace/stores/workspace-tabs'
 import FileRichMarkdownEditor from './FileRichMarkdownEditor.vue'
-import type { RichMarkdownDraft } from '../file-rich-markdown-draft'
-import { resolveDocumentLink } from '../file-rich-markdown-doc-link'
-import type { DocumentCatalog } from '../file-rich-markdown-doc-link'
-import { headingSlug } from '../file-markdown'
+import FileRichMarkdownToolbar from './FileRichMarkdownToolbar.vue'
+import FileMarkdownPreview from './FileMarkdownPreview.vue'
+import FileMarkdownToolbar from './FileMarkdownToolbar.vue'
+import FileMarkdownSearchBar from './FileMarkdownSearchBar.vue'
 import FileMarkdownToc from './FileMarkdownToc.vue'
 import FileMarkdownImageViewer from './FileMarkdownImageViewer.vue'
 
 const props = defineProps<{
-  readonly text: string; readonly path: string; readonly projectPath: string
-  readonly showToc: boolean; readonly fontSize: number; readonly showFrontmatter: boolean
-  readonly active: boolean; readonly editable: boolean
-  readonly recovery?: RichMarkdownDraft | null
-  readonly reportAssetNotice?: ((message: string) => void) | null
-  readonly anchorRequest?: { readonly id: number; readonly anchor: string } | null
+  readonly text: string
+  readonly path: string
+  readonly projectPath: string
+  readonly fontSize: number
+  readonly showFrontmatter: boolean
+  readonly active: boolean
+  readonly editable: boolean
+  readonly recovery: RichMarkdownDraft | null
+  readonly reportAssetNotice: ((message: string) => void) | null
+  readonly anchorRequest: { readonly id: number; readonly anchor: string } | null
 }>()
 const emit = defineEmits<{
-  toc: [entries: readonly FileMarkdownTocEntry[]]
-  closeToc: [restoreFocus?: boolean]
+  edit: [text: string]
   pendingEdit: [pending: boolean]
   draft: [snapshot: RichMarkdownDraft | null]
+  state: [state: MarkdownSurfaceState]
   anchorHandled: [requestId: number]
-  edit: [text: string]
-  editingStatus: [reason: string | null]
+  fontSize: [size: number]
+  frontmatter: [show: boolean]
+  source: []
 }>()
 const tabs = useWorkspaceTabsStore()
-const documents = ref<DocumentCatalog>({ entries: [], loaded: false, truncated: false })
+const page = ref<HTMLElement | null>(null)
 const shell = ref<HTMLElement | null>(null)
 const scroller = ref<HTMLElement | null>(null)
 const body = ref<HTMLElement | null>(null)
-const readonlyBody = ref<HTMLElement | null>(null)
 const rich = ref<InstanceType<typeof FileRichMarkdownEditor> | null>(null)
-const renderText = ref(props.text)
-const unsupported = computed(() => props.editable ? richMarkdownUnsupportedReason(renderText.value) : '此文件只读。')
-const runtimeFailure = ref('')
-const richReady = ref(false)
-const richEnabled = computed(() => props.editable && unsupported.value === null && runtimeFailure.value === '')
-const toc = ref<readonly FileMarkdownTocEntry[]>([])
+const preview = ref<InstanceType<typeof FileMarkdownPreview> | null>(null)
+const searchBar = ref<InstanceType<typeof FileMarkdownSearchBar> | null>(null)
+const state = shallowRef<MarkdownSurfaceState>(sourceState())
+const richEnabled = computed(() => state.value.phase !== 'readonly')
+const adapter = computed<MarkdownReadingView | null>(() => richEnabled.value ? rich.value : preview.value)
+const format = shallowRef<MarkdownFormatState>({ enabled: false, active: [] })
+const canReplace = computed(() => richEnabled.value && format.value.enabled)
+const toolbarFormat = computed<MarkdownFormatState>(() => props.active ? format.value : { enabled: false, active: format.value.active })
+const searchAvailable = computed(() => state.value.phase !== 'initializing' && adapter.value !== null)
+const toc = shallowRef<readonly FileMarkdownTocEntry[]>([])
+const showToc = ref(true)
 const activeHeadingId = ref('')
 const narrow = ref(false)
-const renderFailed = ref(false)
-const notice = ref('')
-const noticeFailed = ref(false)
+const notice = shallowRef<{ message: string; failed: boolean } | null>(null)
 const zoomed = ref<{ readonly src: string; readonly alt: string } | null>(null)
+const documents = shallowRef<DocumentCatalog>({ entries: [], loaded: false, truncated: false })
 const searchOpen = ref(false)
-const searchQuery = ref('')
-const searchMatches = ref<readonly Range[]>([])
-const searchTruncated = ref(false)
-const searchActive = ref(0)
-const searchInput = ref<HTMLInputElement | null>(null)
-let revision = 0
+const replaceOpen = ref(false)
+const query = shallowRef<MarkdownSearchQuery>(EMPTY_MARKDOWN_SEARCH)
+const searchStatus = shallowRef<MarkdownSearchStatus>(EMPTY_MARKDOWN_SEARCH_STATUS)
+const blockedMessage = computed(() => state.value.phase === 'blocked' ? markdownFailureText(state.value.failure) : '')
+let viewGeneration = 0
+let handledAnchor = 0
 let scrollFrame = 0
-let searchTimer: number | null = null
 let resizeObserver: ResizeObserver | null = null
-let needsMount = true
-const searchStatus = computed(() => !searchQuery.value.trim() ? '' : !searchMatches.value.length ? '无结果' : `${searchActive.value + 1}/${searchMatches.value.length}${searchTruncated.value ? ' +' : ''}`)
+let disposed = false
 
-function contentRoot(): HTMLElement | null { return body.value?.querySelector<HTMLElement>('.file-rich-body') ?? readonlyBody.value }
-/** 委托富文本刷新并透传 force；只读分支无待提交输入，直接返回 true，不放宽安全校验。 */
-function flushEdit(force = false): boolean { return rich.value?.flushEdit(force) ?? true }
-/** 返回刷新后的文档全文；富文本同步受阻时返回 null，由调用方停止本次保存或主动视图切换。 */
-function getText(force = false): string | null { return flushEdit(force) ? renderText.value : null }
-function showNotice(text: string, failed = false): void { notice.value = text; noticeFailed.value = failed }
-function onRichEdit(text: string): void { renderText.value = text; emit('edit', text) }
-function onRichUpdated(): void {
-  void nextTick(() => { refreshToc(); updateActiveHeading(); handleAnchorRequest(); if (searchOpen.value) runSearch(false) })
+function sourceState(): MarkdownSurfaceState {
+  const reason = props.editable ? richMarkdownUnsupportedReason(props.text) : '此文件只读。'
+  return reason ? { phase: 'readonly', reason } : { phase: 'initializing' }
 }
-function onRichReady(ready: boolean): void {
-  richReady.value = ready
-  if (ready) onRichUpdated()
-  else { runtimeFailure.value = notice.value || '富文本编辑器不可用，已保留只读排版。'; needsMount = true; void nextTick(mountReadonly) }
+function showNotice(message: string, failed = false): void { notice.value = { message, failed } }
+function flushEdit(force = false): boolean {
+  if (richEnabled.value) return rich.value?.flushEdit(force) ?? false
+  return props.recovery === null
 }
-watch([unsupported, runtimeFailure], () => emit('editingStatus', runtimeFailure.value || unsupported.value), { immediate: true })
-watch(() => props.text, text => {
-  if (text === renderText.value) return
-  renderText.value = text
-  if (runtimeFailure.value) { runtimeFailure.value = ''; richReady.value = false }
-  resetSearch()
-  clearMarkdownImageCache()
-  activeHeadingId.value = ''
-  revision += 1
-  needsMount = true
-  if (props.active && !richEnabled.value) void nextTick(mountReadonly)
-})
-watch(() => props.path, () => {
-  flushEdit(true)
-  runtimeFailure.value = ''
-  richReady.value = false
-  resetSearch()
-  clearMarkdownImageCache()
-  revision += 1
-  needsMount = true
-  if (props.active && !richEnabled.value) void nextTick(mountReadonly)
-})
-watch(richEnabled, enabled => { if (!enabled) { needsMount = true; if (props.active) void nextTick(mountReadonly) } })
-watch(() => props.active, active => {
-  if (active) {
-    if (!richEnabled.value && needsMount) void nextTick(mountReadonly)
-    else onRichUpdated()
-  } else {
-    flushEdit()
-    revision += 1
-    if (!richEnabled.value) needsMount = true
-    resetSearch()
-    zoomed.value = null
+function getText(force = false): string | null {
+  if (richEnabled.value) return rich.value?.getText(force) ?? null
+  return props.recovery ? null : props.text
+}
+function getDraft(): RichMarkdownDraft | null { return rich.value?.getDraft() ?? props.recovery }
+function onRichState(next: MarkdownSurfaceState): void {
+  if (!disposed && richEnabled.value) state.value = next
+}
+function refreshSurface(): void {
+  if (disposed) return
+  const current = adapter.value
+  toc.value = current?.getToc() ?? []
+  format.value = richEnabled.value ? rich.value?.getFormatState() ?? { enabled: false, active: [] } : { enabled: false, active: [] }
+  if (searchOpen.value) {
+    // 富文本匹配由事务插件维护；重复派发搜索事务会形成更新循环。
+    searchStatus.value = richEnabled.value ? current?.getSearchStatus() ?? EMPTY_MARKDOWN_SEARCH_STATUS : current?.setSearch(query.value) ?? EMPTY_MARKDOWN_SEARCH_STATUS
   }
-})
-watch(() => props.anchorRequest?.id, () => void nextTick(handleAnchorRequest))
-watch(() => props.showFrontmatter, () => { if (searchOpen.value) void nextTick(() => runSearch(false)) })
-watch(() => props.fontSize, () => { if (props.active) void nextTick(updateActiveHeading) })
-watch(() => props.showToc, show => { if (show && narrow.value) void nextTick(() => shell.value?.querySelector<HTMLElement>('nav select')?.focus()) })
-
-onMounted(() => {
-  window.addEventListener('keydown', onFindShortcut)
-  if (shell.value) {
-    resizeObserver = new ResizeObserver(([entry]) => {
-      if (!entry) return
-      const previous = narrow.value
-      narrow.value = entry.contentRect.width < 960
-      if (narrow.value && !previous) emit('closeToc', false)
-    })
-    narrow.value = shell.value.clientWidth < 960
-    if (narrow.value) emit('closeToc', false)
-    resizeObserver.observe(shell.value)
-  }
-  if (props.active && !richEnabled.value) mountReadonly()
-})
-onBeforeUnmount(() => {
-  flushEdit(true)
-  revision += 1
-  resizeObserver?.disconnect()
-  window.removeEventListener('keydown', onFindShortcut)
-  if (scrollFrame) cancelAnimationFrame(scrollFrame)
-  resetSearch()
-})
-
-/** 只有只读降级分支允许直接挂载/装饰 HTML，不能触碰富文本管理的 DOM。 */
-function mountReadonly(): void {
-  if (!props.active || richEnabled.value) return
-  const root = readonlyBody.value
-  if (!root || !canPreviewFileMarkdown(renderText.value)) return
-  const current = ++revision
-  needsMount = false
-  const document = renderFileMarkdown(renderText.value)
-  renderFailed.value = document === null
-  if (!document) { root.textContent = renderText.value; toc.value = []; emit('toc', []); return }
-  root.innerHTML = document.html
-  renderMathInto(root)
-  applyCallouts(root)
-  refreshToc()
   updateActiveHeading()
   handleAnchorRequest()
-  void highlightCodeBlocks(root, () => current !== revision || !props.active).then(() => { if (current === revision && searchOpen.value) runSearch(false) })
-  void loadImages(root, current)
 }
-async function loadImages(root: HTMLElement, current: number): Promise<void> {
-  const frames = Array.from(root.querySelectorAll<HTMLElement>('.file-markdown-image-frame'))
-  let chars = 0
-  for (const frame of frames.slice(40)) frame.textContent = '图片过多，未加载'
-  const queue = frames.slice(0, 40)
-  for (let start = 0; start < queue.length; start += 4) {
-    if (current !== revision || !props.active) return
-    await Promise.all(queue.slice(start, start + 4).map(async frame => {
-      const label = frame.dataset.imageLabel ?? '图片'
-      const source = await loadMarkdownImage(props.projectPath, props.path, frame.dataset.imagePath ?? '')
-      if (current !== revision || !frame.isConnected) return
-      if (!source.url || chars + source.url.length > 32 * 1024 * 1024) {
-        frame.textContent = `${label}（${source.error ?? '图片总量超出上限'}）`
-        frame.classList.add('is-error')
-        return
-      }
-      chars += source.url.length
-      const image = document.createElement('img')
-      image.src = source.url; image.alt = label; image.loading = 'lazy'; image.decoding = 'async'
-      frame.replaceChildren(image)
-      frame.classList.add('is-ready')
-      frame.tabIndex = 0
-      frame.setAttribute('role', 'button')
-      frame.setAttribute('aria-label', `放大图片：${label}`)
-    }))
-  }
-  if (current === revision) updateActiveHeading()
+function onSurfaceUpdated(): void {
+  const generation = viewGeneration
+  void nextTick(() => { if (generation === viewGeneration) refreshSurface() })
 }
-function refreshToc(): void {
-  const root = contentRoot()
-  if (!root) return
-  if (richEnabled.value) {
-    toc.value = Array.from(root.querySelectorAll<HTMLElement>('h1,h2,h3,h4,h5,h6')).flatMap(heading => {
-      const copy = heading.cloneNode(true) as HTMLElement
-      copy.querySelectorAll('.markdown-heading-anchor').forEach(anchor => anchor.remove())
-      const label = copy.textContent?.trim() ?? ''
-      return label && heading.id ? [{ id: heading.id, label, level: Number(heading.tagName.slice(1)) }] : []
-    })
-  } else toc.value = ensureHeadingIds(root)
-  emit('toc', toc.value)
+function toggleToc(): void {
+  showToc.value = !showToc.value
+  if (showToc.value && narrow.value) void nextTick(() => shell.value?.querySelector<HTMLElement>('nav select')?.focus())
+}
+function closeToc(restoreFocus = true): void {
+  showToc.value = false
+  if (restoreFocus) void nextTick(() => page.value?.querySelector<HTMLElement>('[data-toc-toggle]')?.focus())
 }
 function jumpTo(id: string): boolean {
   if (!flushEdit()) return false
-  const target = contentRoot()?.querySelector<HTMLElement>(`[id="${CSS.escape(id)}"]`)
-  if (!target) return false
-  if (richEnabled.value) rich.value?.navigateTo(id)
-  else {
-    for (let parent = target.parentElement; parent && parent !== body.value; parent = parent.parentElement) if (parent instanceof HTMLDetailsElement) parent.open = true
-    target.tabIndex = -1
-    target.focus({ preventScroll: true })
-  }
-  void nextTick(() => target.scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' }))
+  if (!adapter.value?.navigateTo(id)) return false
   activeHeadingId.value = id
-  if (narrow.value) emit('closeToc', false)
+  if (narrow.value) closeToc(false)
   return true
 }
 function handleAnchorRequest(): void {
   const request = props.anchorRequest
-  if (!props.active || !request || !contentRoot() || (richEnabled.value && !richReady.value) || (!richEnabled.value && needsMount)) return
+  if (!props.active || !request || request.id === handledAnchor || !adapter.value?.getRoot()) return
+  if (!flushEdit()) return
   if (!jumpTo(request.anchor)) showNotice('文档里没有对应的标题。', true)
+  handledAnchor = request.id
   emit('anchorHandled', request.id)
 }
 function updateActiveHeading(): void {
-  const root = contentRoot(); const container = scroller.value
-  if (!root || !container) return
+  const root = adapter.value?.getRoot(); const container = scroller.value
+  if (!root || !container || !props.active) return
   const threshold = container.getBoundingClientRect().top + 24
   let id = ''
   for (const heading of root.querySelectorAll<HTMLElement>('h1,h2,h3,h4,h5,h6')) {
@@ -240,68 +144,55 @@ function updateActiveHeading(): void {
   }
   activeHeadingId.value = id
 }
-/** 正文下方留白也能开始编辑，但不能拦截滚动条、目录、工具按钮或正文拖选。 */
-function onBlankPointerDown(event: PointerEvent): void {
-  const target = event.target; const container = scroller.value
-  if (!props.active || !richEnabled.value || event.button !== 0 || !container || (target !== container && target !== body.value)) return
-  const rect = container.getBoundingClientRect()
-  if (event.clientX >= rect.left + container.clientWidth) return
-  event.preventDefault(); rich.value?.focusEnd()
-}
 function onScroll(): void {
   if (!scrollFrame) scrollFrame = requestAnimationFrame(() => { scrollFrame = 0; updateActiveHeading() })
+}
+function openSearch(replace = false): void {
+  if (!props.active || !searchAvailable.value || zoomed.value) return
+  replaceOpen.value = canReplace.value && replace
+  searchOpen.value = true
+  searchStatus.value = adapter.value?.setSearch(query.value, true) ?? EMPTY_MARKDOWN_SEARCH_STATUS
+  void nextTick(() => searchBar.value?.focus())
+}
+function closeSearch(restoreFocus = true): void {
+  const wasOpen = searchOpen.value
+  searchOpen.value = false; replaceOpen.value = false
+  query.value = EMPTY_MARKDOWN_SEARCH; searchStatus.value = EMPTY_MARKDOWN_SEARCH_STATUS
+  if (wasOpen) adapter.value?.clearSearch()
+  if (restoreFocus && wasOpen) adapter.value?.focus()
+}
+function changeQuery(next: MarkdownSearchQuery): void {
+  query.value = canReplace.value ? next : { ...EMPTY_MARKDOWN_SEARCH, query: next.query }
+  searchStatus.value = adapter.value?.setSearch(query.value, true) ?? EMPTY_MARKDOWN_SEARCH_STATUS
+}
+function moveMatch(step: number): void { searchStatus.value = adapter.value?.moveMatch(step) ?? EMPTY_MARKDOWN_SEARCH_STATUS }
+function replaceMatch(text: string, all: boolean): void {
+  if (!canReplace.value || !rich.value?.replaceMatch(text, all)) showNotice('当前状态无法替换，原有内容仍被保留。', true)
+  searchStatus.value = adapter.value?.getSearchStatus() ?? EMPTY_MARKDOWN_SEARCH_STATUS
+}
+function command(id: RichCommandId): void {
+  if (!rich.value?.runCommand(id)) showNotice('当前选区无法执行这项格式操作。', true)
 }
 function onFindShortcut(event: KeyboardEvent): void {
   if (!props.active || zoomed.value || event.defaultPrevented || event.isComposing || event.key.toLowerCase() !== 'f' || event.altKey || event.shiftKey || (!event.metaKey && !event.ctrlKey)) return
   event.preventDefault(); openSearch()
 }
-function openSearch(): void {
-  if (!props.active) return
-  if (richEnabled.value && rich.value) { rich.value.openSearch(); return }
-  if (!flushEdit()) return
-  searchOpen.value = true
-  void nextTick(() => { searchInput.value?.focus(); searchInput.value?.select(); runSearch() })
+function onBlankPointerDown(event: PointerEvent): void {
+  const target = event.target; const container = scroller.value
+  if (!props.active || !canReplace.value || event.button !== 0 || !container || (target !== container && target !== body.value)) return
+  if (event.clientX >= container.getBoundingClientRect().left + container.clientWidth) return
+  event.preventDefault(); rich.value?.focusEnd()
 }
-function resetSearch(): void {
-  if (searchTimer !== null) window.clearTimeout(searchTimer)
-  searchTimer = null
-  if (searchOpen.value) clearHighlights()
-  searchOpen.value = false; searchQuery.value = ''; searchMatches.value = []; searchActive.value = 0; searchTruncated.value = false
-}
-function closeSearch(): void { resetSearch(); richEnabled.value ? rich.value?.focus() : scroller.value?.focus({ preventScroll: true }) }
-function runSearch(reset = true): void {
-  const root = contentRoot()
-  if (!root || !searchQuery.value.trim()) { searchMatches.value = []; searchTruncated.value = false; clearHighlights(); return }
-  const result = collectMatches(root, searchQuery.value)
-  searchMatches.value = result.ranges
-  searchTruncated.value = result.truncated
-  searchActive.value = reset ? 0 : Math.max(0, Math.min(searchActive.value, result.ranges.length - 1))
-  applyHighlights(result.ranges, searchActive.value)
-  const first = result.ranges[searchActive.value]
-  if (reset && first && scroller.value) scrollRangeIntoView(first, scroller.value)
-}
-function onSearchInput(event: Event): void {
-  if (!(event.target instanceof HTMLInputElement)) return
-  searchQuery.value = event.target.value
-  if (searchTimer !== null) window.clearTimeout(searchTimer)
-  searchTimer = window.setTimeout(() => { searchTimer = null; runSearch() }, 120)
-}
-function moveMatch(step: number): void {
-  const total = searchMatches.value.length
-  if (!total) return
-  searchActive.value = (searchActive.value + step + total) % total
-  applyHighlights(searchMatches.value, searchActive.value)
-  const range = searchMatches.value[searchActive.value]
-  if (range && scroller.value) scrollRangeIntoView(range, scroller.value)
-}
-function onSearchKeydown(event: KeyboardEvent): void {
-  if (event.isComposing || event.keyCode === 229) return
-  if (event.key === 'Enter') { event.preventDefault(); moveMatch(event.shiftKey ? -1 : 1) }
-  else if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeSearch() }
+function onDrawerKeydown(event: KeyboardEvent): void {
+  if (!narrow.value || !showToc.value || event.key !== 'Tab' || !(event.target instanceof Element) || !event.target.closest('nav')) return
+  const controls = Array.from(shell.value?.querySelectorAll<HTMLElement>('nav button:not(:disabled), nav select') ?? []).filter(element => element.getClientRects().length)
+  const first = controls[0]; const last = controls.at(-1)
+  if (event.shiftKey && event.target === first) { event.preventDefault(); last?.focus() }
+  else if (!event.shiftKey && event.target === last) { event.preventDefault(); first?.focus() }
 }
 async function reportCopy(text: string, label = '代码'): Promise<void> {
   const copied = await copyText(text)
-  showNotice(copied ? `${label}已复制。` : `无法复制${label}，请手动复制。`, !copied)
+  if (!disposed) showNotice(copied ? `${label}已复制。` : `无法复制${label}，请手动复制。`, !copied)
 }
 function openImage(target: Element): boolean {
   const image = target.closest('img')
@@ -326,7 +217,6 @@ async function onContentClick(event: MouseEvent): Promise<void> {
   if (control.classList.contains('markdown-heading-anchor')) {
     event.preventDefault(); await reportCopy(`${props.path}${control.dataset.linkTarget ?? ''}`, '标题引用'); return
   }
-  // 富文本普通点击用于落光标；显式修饰键点击才导航，避免编辑链接文字时打开页面。
   if (richEnabled.value && !event.metaKey && !event.ctrlKey) return
   event.preventDefault()
   if (!flushEdit()) return
@@ -355,36 +245,147 @@ async function onContentClick(event: MouseEvent): Promise<void> {
     }
     case 'external': {
       const result = await openExternalUrl(address)
-      if (!result.ok) showNotice(result.error.message, true)
+      if (!result.ok && !disposed) showNotice(result.error.message, true)
       return
     }
     default: await reportCopy(address, '链接地址')
   }
 }
-defineExpose({ flushEdit, getText, openSearch })
+
+watch(state, next => { emit('state', next); onSurfaceUpdated() }, { immediate: true })
+watch(richEnabled, (enabled, previous) => {
+  viewGeneration += 1
+  // 先清旧视图状态，再让新适配器发布目录，不能在 nextTick 后无条件清空新目录。
+  const old = previous ? rich.value : preview.value
+  old?.clearSearch()
+  toc.value = []; activeHeadingId.value = ''; format.value = { enabled: false, active: [] }
+  if (!enabled) { replaceOpen.value = false; query.value = { ...EMPTY_MARKDOWN_SEARCH, query: query.value.query } }
+  onSurfaceUpdated()
+}, { flush: 'sync' })
+watch([() => props.text, () => props.editable], () => {
+  viewGeneration += 1
+  if (!rich.value?.getDraft()) {
+    const next = sourceState()
+    if (state.value.phase === 'readonly' || next.phase === 'readonly') state.value = next
+  }
+  onSurfaceUpdated()
+})
+watch([() => props.path, () => props.projectPath], () => {
+  viewGeneration += 1; handledAnchor = 0
+  closeSearch(false); notice.value = null
+  documents.value = { entries: [], loaded: false, truncated: false }
+  state.value = sourceState(); toc.value = []; activeHeadingId.value = ''
+})
+watch(() => props.active, active => {
+  if (active) onSurfaceUpdated()
+  else { flushEdit(); closeSearch(false); zoomed.value = null }
+})
+watch(() => props.anchorRequest?.id, onSurfaceUpdated)
+watch(() => props.fontSize, onSurfaceUpdated)
+onMounted(() => {
+  window.addEventListener('keydown', onFindShortcut)
+  if (shell.value) {
+    resizeObserver = new ResizeObserver(([entry]) => {
+      if (!entry) return
+      const previous = narrow.value
+      narrow.value = entry.contentRect.width < 960
+      if (narrow.value && !previous) closeToc(false)
+    })
+    narrow.value = shell.value.clientWidth < 960
+    if (narrow.value) closeToc(false)
+    resizeObserver.observe(shell.value)
+  }
+  onSurfaceUpdated()
+})
+onBeforeUnmount(() => {
+  disposed = true; viewGeneration += 1
+  flushEdit(true); closeSearch(false)
+  resizeObserver?.disconnect()
+  window.removeEventListener('keydown', onFindShortcut)
+  if (scrollFrame) cancelAnimationFrame(scrollFrame)
+})
+const surface: FileDocumentSurface = { flushEdit, getText, getDraft }
+defineExpose(surface)
 </script>
 
 <template>
-  <div ref="shell" class="file-markdown" :class="{ 'is-editable': richEnabled, 'is-narrow': narrow }">
-    <button v-if="narrow && showToc && toc.length" type="button" class="file-markdown-toc-backdrop" aria-label="关闭目录" @click="emit('closeToc')"></button>
-    <FileMarkdownToc v-if="showToc && toc.length" :entries="toc" :active-id="activeHeadingId" @navigate="jumpTo" @close="emit('closeToc')" />
-    <div ref="scroller" class="file-markdown-scroll scroll-area" tabindex="-1" aria-label="文档正文" @pointerdown="onBlankPointerDown" @scroll.passive="onScroll">
-      <div v-if="searchOpen" class="file-markdown-search" role="search" aria-label="在文档中查找">
-        <input ref="searchInput" :value="searchQuery" type="text" class="file-markdown-search-input" placeholder="在文档中查找" aria-label="在 Markdown 文档中查找" autocomplete="off" spellcheck="false" @input="onSearchInput" @keydown="onSearchKeydown">
-        <p class="file-markdown-search-status" role="status">{{ searchStatus }}</p>
-        <button type="button" class="file-markdown-search-button" :disabled="!searchMatches.length" aria-label="上一个匹配" @click="moveMatch(-1)">↑</button>
-        <button type="button" class="file-markdown-search-button" :disabled="!searchMatches.length" aria-label="下一个匹配" @click="moveMatch(1)">↓</button>
-        <button type="button" class="file-markdown-search-button" aria-label="关闭查找" @click="closeSearch">×</button>
-      </div>
-      <p v-if="!richEnabled && !renderText.trim()" class="file-markdown-empty">文档为空。</p>
-      <div ref="body" class="file-rich-container" :style="{ '--file-preview-font-size': `${fontSize}px` }" @click="onContentClick" @dblclick="onDoubleClick" @keydown="onContentKeydown" @toggle.capture="updateActiveHeading(); searchOpen && runSearch(false)">
-        <FileRichMarkdownEditor v-if="richEnabled" :key="`${projectPath}\n${path}`" ref="rich" :text="renderText" :path="path" :project-path="projectPath" :active="active" :show-frontmatter="showFrontmatter" :recovery="recovery ?? null" :report-asset-notice="reportAssetNotice ?? null" @notice="showNotice($event)" @draft="emit('draft', $event)" @documents="documents = $event" @edit="onRichEdit" @pending-edit="emit('pendingEdit', $event)" @updated="onRichUpdated" @error="showNotice($event, true)" @ready="onRichReady" @copy="reportCopy" />
-        <div v-else ref="readonlyBody" class="markdown-content markdown-body file-markdown-body" :class="{ 'is-hide-frontmatter': !showFrontmatter, 'is-raw': renderFailed }"></div>
-      </div>
-      <p v-if="renderFailed" role="status" class="markdown-render-note">Markdown 暂时无法渲染，已显示原文。</p>
-      <p v-if="!richEnabled && (runtimeFailure || unsupported)" class="file-reader-limit" role="status">{{ runtimeFailure || unsupported }}</p>
+  <div ref="page" class="file-markdown-workspace" :style="{ '--file-preview-font-size': `${fontSize}px` }">
+    <FileMarkdownToolbar
+      :active="active"
+      :state="state"
+      :source-editable="editable"
+      :toc-open="showToc"
+      :has-toc="toc.length > 0"
+      :font-size="fontSize"
+      :show-frontmatter="showFrontmatter"
+      @toc="toggleToc"
+      @font-size="emit('fontSize', $event)"
+      @frontmatter="emit('frontmatter', $event)"
+      @source="emit('source')"
+    >
+      <template v-if="state.phase === 'editable' || state.phase === 'blocked'" #format>
+        <FileRichMarkdownToolbar :state="toolbarFormat" @command="command" />
+      </template>
+    </FileMarkdownToolbar>
+    <div v-if="blockedMessage" class="file-markdown-status is-blocked" role="status">
+      <span>{{ blockedMessage }}</span>
+      <button type="button" class="file-reader-tool" @click="flushEdit()">重试同步</button>
     </div>
-    <p v-if="notice" role="status" class="file-markdown-notice" :class="{ 'is-error': noticeFailed }">{{ notice }}</p>
+    <FileMarkdownSearchBar
+      v-if="searchOpen"
+      ref="searchBar"
+      :query="query"
+      :status="searchStatus"
+      :can-replace="canReplace"
+      :replace="replaceOpen"
+      @query="changeQuery"
+      @move="moveMatch"
+      @replace="replaceMatch"
+      @close="closeSearch()"
+    />
+    <div ref="shell" class="file-markdown" :class="{ 'is-editable': canReplace, 'is-narrow': narrow }" :aria-busy="state.phase === 'initializing'" @keydown="onDrawerKeydown">
+      <button v-if="narrow && showToc && toc.length" type="button" class="file-markdown-toc-backdrop" aria-label="关闭目录" @click="closeToc()"></button>
+      <FileMarkdownToc v-if="showToc && toc.length" :entries="toc" :active-id="activeHeadingId" @navigate="jumpTo" @close="closeToc()" />
+      <div ref="scroller" class="file-markdown-scroll scroll-area" tabindex="-1" aria-label="文档正文" @pointerdown="onBlankPointerDown" @scroll.passive="onScroll">
+        <div ref="body" class="file-rich-container" @click="onContentClick" @dblclick="onDoubleClick" @keydown="onContentKeydown" @toggle.capture="updateActiveHeading">
+          <FileRichMarkdownEditor
+            v-if="richEnabled"
+            :key="`${projectPath}\n${path}`"
+            ref="rich"
+            :text="text"
+            :path="path"
+            :project-path="projectPath"
+            :active="active"
+            :show-frontmatter="showFrontmatter"
+            :searching="searchOpen"
+            :recovery="recovery"
+            :report-asset-notice="reportAssetNotice"
+            @draft="emit('draft', $event)"
+            @documents="documents = $event"
+            @edit="emit('edit', $event)"
+            @pending-edit="emit('pendingEdit', $event)"
+            @updated="onSurfaceUpdated"
+            @error="showNotice($event, true)"
+            @state="onRichState"
+            @search-request="openSearch"
+            @close-search="closeSearch(false)"
+            @copy="reportCopy"
+          />
+          <FileMarkdownPreview
+            v-else
+            ref="preview"
+            :text="text"
+            :path="path"
+            :project-path="projectPath"
+            :active="active"
+            :show-frontmatter="showFrontmatter"
+            @updated="onSurfaceUpdated"
+            @notice="showNotice($event, true)"
+          />
+        </div>
+      </div>
+    </div>
+    <div v-if="notice" class="file-markdown-notice" :class="{ 'is-error': notice.failed }" role="status"><span>{{ notice.message }}</span><button type="button" aria-label="关闭提示" @click="notice = null">×</button></div>
     <FileMarkdownImageViewer :image="zoomed" @close="zoomed = null" />
   </div>
 </template>

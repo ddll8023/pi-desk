@@ -16,9 +16,10 @@ const SKIP_SELECTOR = '.markdown-code-header, .markdown-heading-anchor, input, t
 const BLOCK_TAGS = new Set(['P', 'DIV', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'LI', 'UL', 'OL',
   'BLOCKQUOTE', 'PRE', 'TABLE', 'TR', 'TD', 'TH', 'DETAILS', 'SUMMARY', 'HR'])
 
-/** 普通匹配与当前匹配的高亮名；同一时间只注册这两个。 */
+/** 同一时间只展示活动预览的高亮，清理操作必须持有当前注册者的标识。 */
 const MATCH_HIGHLIGHT = 'file-preview-search-match'
 const ACTIVE_HIGHLIGHT = 'file-preview-search-active-match'
+let highlightOwner: symbol | null = null
 
 /** 一次查找的结果；`truncated` 为真表示命中数已达上限，界面需提示还有更多。 */
 export interface FileMarkdownSearchResult {
@@ -128,11 +129,12 @@ export function collectMatches(
  * 注册高亮：当前匹配单独一组，其余匹配另一组，两者颜色不同。
  * 每次调用先清掉上一次的注册，避免旧 Range 残留在已卸载的节点上。
  */
-export function applyHighlights(ranges: readonly Range[], activeIndex: number): void {
+export function applyHighlights(owner: symbol, ranges: readonly Range[], activeIndex: number): void {
   const registry = highlightRegistry()
   const HighlightClass = highlightConstructor()
   if (registry === null || HighlightClass === null) return
 
+  highlightOwner = owner
   registry.delete(MATCH_HIGHLIGHT)
   registry.delete(ACTIVE_HIGHLIGHT)
   if (ranges.length === 0) return
@@ -144,7 +146,9 @@ export function applyHighlights(ranges: readonly Range[], activeIndex: number): 
 }
 
 /** 清空查找高亮；关闭查找、切换文件与卸载时都要调用，否则高亮会停在旧内容上。 */
-export function clearHighlights(): void {
+export function clearHighlights(owner: symbol): void {
+  if (highlightOwner !== owner) return
+  highlightOwner = null
   const registry = highlightRegistry()
   if (registry === null) return
   registry.delete(MATCH_HIGHLIGHT)

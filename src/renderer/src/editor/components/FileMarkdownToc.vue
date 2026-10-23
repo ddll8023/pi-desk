@@ -10,7 +10,7 @@
 -->
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
-import type { FileMarkdownTocEntry } from '../file-markdown'
+import type { FileMarkdownTocEntry } from '../file-markdown-dom'
 import AppButton from '../../ui/AppButton.vue'
 
 const props = defineProps<{

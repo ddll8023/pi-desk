@@ -1,9 +1,9 @@
 <!--
   文件标签的代码编辑器：CodeMirror 6 的薄封装，只负责创建/销毁编辑器、受控文本同步与内容变化上报。
 
-  文本由编辑器自己持有：内容变化只上报 `change`（不搬运整份文本），保存时由父级调用 `getText()` 取当前值，
-  避免每次击键都把整份文件通过 props/事件往返一次。保存快捷键由面板统一处理，编辑器不重复绑定。
-  `modelValue` 只在外部重新载入时变化，此时重建编辑器状态并清空撤销历史；自身编辑回声因文本相同而不会触发重建。
+  编辑器持有当前文档、选区与撤销历史；内容变化只发送无正文载荷的 `change`，由文件会话通过 `getText()` 捕获全文快照。
+  `modelValue` 回传会话已接受的文本，自身编辑回声不重建状态；与当前文本不同的外部快照会重建状态并清空撤销历史。
+  富文本镜像通过 `applyText()` 派发最小差异；保存快捷键由面板统一处理，编辑器不重复绑定。
 
   语言按文件名/扩展名从 `@codemirror/language-data` 按需动态加载，加载失败退化为纯文本。
   自动换行由父级控制：只读预览大文件时关闭换行，避免超长行参与折行测量。
@@ -21,7 +21,7 @@ import { tags as highlightTags } from '@lezer/highlight'
 import { languageDescriptionForPath } from '../file-language'
 
 const props = defineProps<{
-  /** 外部文本；只在重新载入或初次挂载时使用。 */
+  /** 文件会话回传的文本快照；与当前文档相同时不重建编辑状态。 */
   readonly modelValue: string
   /** 项目内相对路径；只用于语言匹配与无障碍标签。 */
   readonly path: string
@@ -160,7 +160,7 @@ onBeforeUnmount(() => {
   view = null
 })
 
-// 外部重新载入：文本确实不同才重建，避免把自身编辑回声当成外部改动。
+// 文本回传仅在内容不同时重建；自身回声与已应用的富文本镜像不清空撤销历史。
 watch(() => props.modelValue, (text) => {
   if (view === null || view.state.doc.toString() === text) return
   view.setState(buildState(text))
@@ -179,7 +179,7 @@ watch(() => props.wrap, () => {
 })
 
 defineExpose({
-  /** 保存时取当前文本；编辑器尚未建立时退回初始值。 */
+  /** 取当前全文供快照捕获与保存；未挂载时回退到会话传入的文本。 */
   getText: (): string => view?.state.doc.toString() ?? props.modelValue,
   focus: (): void => view?.focus(),
   /**

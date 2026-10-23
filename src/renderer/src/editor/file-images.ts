@@ -9,7 +9,7 @@
  * 失败不缓存，重新载入文件时可以再试。
  */
 import { readProjectFile } from './services/project-file'
-import { resolveProjectPath } from './file-markdown'
+import { resolveProjectPath } from './file-markdown-links'
 
 /** 单张图片的加载结果；`url` 与 `error` 互斥：要么有可用的地址，要么有可展示的原因。 */
 export interface MarkdownImageSource {

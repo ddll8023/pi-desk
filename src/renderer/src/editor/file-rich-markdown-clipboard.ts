@@ -4,6 +4,7 @@ import { PROJECT_FILE_IMAGE_MAX_BYTES } from '../../../shared/project-file-api'
 import { DOMSerializer } from '@tiptap/pm/model'
 import type { Editor } from '@tiptap/core'
 import type { RichMarkdownCodec } from './file-rich-markdown-codec'
+import { markdownFailure, markdownFailureText, parseRichMarkdown, RichMarkdownError, richMarkdownFragment } from './file-rich-markdown-parser'
 
 /** 只有剪贴板写入完成才删除选区；不能让复制失败变成内容丢失。 */
 export function copyRichSelection(editor: Editor, event: ClipboardEvent, cut: boolean, onError: (message: string) => void): boolean {
@@ -56,18 +57,19 @@ export function pasteRichContent(editor: Editor, event: ClipboardEvent, codec: R
         ALLOWED_ATTR: ['class', 'href', 'src', 'alt', 'title', 'start', 'type', 'checked', 'data-type', 'data-checked', 'data-file-image', 'data-image-reference', 'data-alt', 'data-title', 'data-link-target', 'data-link-kind', 'data-file-math', 'data-latex', 'data-display', 'data-rich-source', 'data-doc-target', 'data-doc-label', 'data-doc-literal'],
         ALLOW_DATA_ATTR: false
       })
-      editor.commands.insertContent(clean, { contentType: 'html', parseOptions: { preserveWhitespace: true } })
+      if (!editor.commands.insertContent(clean, { contentType: 'html', parseOptions: { preserveWhitespace: true } })) {
+        throw new RichMarkdownError({ stage: 'content', message: '无法在当前位置插入剪贴板内容，原有选区未被删除。' })
+      }
     } else {
-      const prepared = codec.prepare(text.replace(/\r\n?/g, '\n'))
-      const json = editor.markdown?.parse(prepared)
-      if (!json) throw new Error('Markdown 解析器尚未就绪。')
-      const content = json.content ?? []
-      const first = content[0]
-      editor.commands.insertContent(content.length === 1 && first?.type === 'paragraph' ? first.content ?? [] : content)
+      const document = parseRichMarkdown(editor, codec, text.replace(/\r\n?/g, '\n'))
+      const content = richMarkdownFragment(document)
+      if (!editor.commands.insertContent(content)) {
+        throw new RichMarkdownError({ stage: 'content', message: '无法在当前位置插入 Markdown，原有选区未被删除。' })
+      }
     }
     return true
-  } catch (error) {
-    onError(`无法粘贴内容：${error instanceof Error ? error.message : String(error)}`)
+  } catch (cause) {
+    onError(`无法粘贴内容：${markdownFailureText(markdownFailure(cause, 'content'))}`)
     return true
   }
 }

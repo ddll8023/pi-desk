@@ -6,15 +6,15 @@ import { diffArrays } from 'diff'
 import type { RichMarkdownCodec } from './file-rich-markdown-codec'
 import { serializationDocument } from './file-rich-markdown-nodes'
 import { reconcileSource } from './file-rich-markdown-source'
+import { parseRichMarkdown } from './file-rich-markdown-parser'
 
 interface SourceBlock { node: DocumentNode; source: string; separator: string }
 interface SourceDocument { leading: string; blocks: SourceBlock[] }
 
 /** 每个暂定区间最终都要经过整篇解析证明，不能仅凭 token 数量猜测源码归属。 */
 function readDocument(editor: Editor, codec: RichMarkdownCodec, source: string, expected?: DocumentNode): SourceDocument | null {
-  const json = editor.markdown?.parse(codec.prepare(source))
-  if (!json) return null
-  const document = expected ?? editor.schema.nodeFromJSON(json)
+  const parsed = parseRichMarkdown(editor, codec, source)
+  const document = expected ?? parsed
   const tokens = extractAbsorbedBlankLines(codec.marked.lexer(codec.prepare(source)))
   // 原始内容传输会改变字面长度；这类文档保留字符级回写，不猜测传输标记的原文区间。
   if (tokens.map(token => token.raw).join('') !== source) return null
@@ -71,12 +71,11 @@ export function reconcileBlockSource(editor: Editor, codec: RichMarkdownCodec, o
           const previous = removed.length === change.count ? removed[index] : undefined
           let source = block.source
           if (previous) {
-            const canonical = editor.markdown?.serialize(editor.markdown.parse(codec.prepare(previous.source)))
+            const canonical = editor.markdown?.serialize(parseRichMarkdown(editor, codec, previous.source).toJSON())
             if (canonical !== undefined) {
               const blockProof = (candidate: string): string | null => {
-                const parsed = editor.markdown?.parse(codec.prepare(candidate))
-                const first = parsed?.content?.[0]
-                return first && parsed?.content?.length === 1 && editor.schema.nodeFromJSON(first).eq(block.node) ? block.source : null
+                const parsed = parseRichMarkdown(editor, codec, candidate)
+                return parsed.childCount === 1 && parsed.child(0).eq(block.node) ? block.source : null
               }
               source = reconcileSource(previous.source, canonical, block.source, blockProof)
             }

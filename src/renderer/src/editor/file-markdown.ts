@@ -1,19 +1,18 @@
-/** 文件 Markdown 的只读安全渲染与项目内导航。富文本编辑另由 Tiptap 负责；这里不再维护块区间或局部编辑状态。 */
+/** 文件 Markdown 的只读解析与安全渲染：不管理编辑状态、链接导航或渲染后的 DOM。 */
 import DOMPurify from 'dompurify'
 import { Marked } from 'marked'
 import type { Config } from 'dompurify'
 import type { Token, TokenizerAndRendererExtension, Tokens } from 'marked'
 import { createDisplayMathBlockExtension, createMathExtension } from '../ui/markdown-math'
 import { escapeHtml, renderCodeBlock, renderTable } from '../ui/markdown-shared'
+import { classifyLinkKind } from './file-markdown-links'
 
 const SANITIZE_CONFIG: Config = {
   ALLOWED_TAGS: ['p', 'br', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'strong', 'em', 'del', 'blockquote', 'ul', 'ol', 'li', 'hr', 'pre', 'code', 'table', 'thead', 'tbody', 'tr', 'th', 'td', 'div', 'span', 'button', 'input', 'details', 'summary'],
   ALLOWED_ATTR: ['class', 'type', 'disabled', 'checked', 'start', 'align', 'title', 'open', 'tabindex', 'role', 'aria-label', 'data-image-path', 'data-image-label', 'data-link-kind', 'data-link-target'],
   ALLOW_DATA_ATTR: false, ALLOW_ARIA_ATTR: false, RETURN_TRUSTED_TYPE: false
 }
-const CALLOUT_TITLES: Readonly<Record<string, string>> = { NOTE: '注意', TIP: '提示', IMPORTANT: '重要', WARNING: '警告', CAUTION: '危险' }
-export type FileMarkdownLinkKind = 'anchor' | 'file' | 'external' | 'copy'
-export interface FileMarkdownTocEntry { readonly id: string; readonly label: string; readonly level: number }
+
 export interface FileMarkdownDocument { readonly html: string }
 
 /** 大文档在解析前回退源码，避免先创建整篇排版 DOM 再降级。 */
@@ -69,7 +68,7 @@ function detailsBoundary(source: string): { openingEnd: number; closingStart: nu
       continue
     }
     if (fence) continue
-    const tag = /^<(\/?)(details|pre|code)\b/i.exec(value)
+    const tag = /^<(\x2f?)(details|pre|code)\b/i.exec(value)
     if (!tag) continue
     const closing = tag[1] === '/'; const name = tag[2]?.toLowerCase() ?? ''
     if (rawCode) { if (closing && name === rawCode) rawCode = ''; continue }
@@ -102,82 +101,6 @@ function createDetailsBlockExtension(): TokenizerAndRendererExtension {
   }
 }
 
-/** 提示块的 DOM 补全只供只读渲染器使用，不允许用于富文本管理的 DOM。 */
-export function applyCallouts(root: HTMLElement): void {
-  const quotes = [...(root.matches('blockquote') ? [root] : []), ...Array.from(root.querySelectorAll<HTMLElement>('blockquote'))]
-  for (const quote of quotes) {
-    const first = quote.firstElementChild
-    const text = first?.firstChild
-    if (!first || !(text instanceof Text)) continue
-    const match = /^\s*\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*/i.exec(text.data)
-    if (!match) continue
-    const kind = (match[1] ?? '').toUpperCase()
-    text.data = text.data.slice(match[0].length)
-    if (!text.data) {
-      if (text.nextSibling instanceof HTMLBRElement) text.nextSibling.remove()
-      text.remove()
-    }
-    if (!first.textContent?.trim()) first.remove()
-    quote.classList.add('is-callout')
-    quote.dataset.callout = kind
-    const title = document.createElement('p')
-    title.className = 'file-markdown-callout-title'
-    title.textContent = CALLOUT_TITLES[kind] ?? kind
-    quote.prepend(title)
-  }
-}
-
-/** 只读标题补全；富文本使用位置装饰生成同样的 id 与按钮。 */
-export function ensureHeadingIds(root: HTMLElement): readonly FileMarkdownTocEntry[] {
-  const entries: FileMarkdownTocEntry[] = []; const used = new Set<string>()
-  for (const heading of root.querySelectorAll<HTMLElement>('h1,h2,h3,h4,h5,h6')) {
-    heading.querySelector('.markdown-heading-anchor')?.remove()
-    const label = heading.textContent?.trim() ?? ''
-    if (!label) continue
-    const base = heading.id || headingSlug(label)
-    let id = base
-    for (let suffix = 2; used.has(id); suffix += 1) id = `${base}-${suffix}`
-    used.add(id); heading.id = id
-    const anchor = document.createElement('button')
-    anchor.type = 'button'; anchor.className = 'markdown-heading-anchor'; anchor.dataset.linkKind = 'heading'; anchor.dataset.linkTarget = `#${id}`
-    anchor.title = '复制标题引用'; anchor.setAttribute('aria-label', `复制标题引用：${label}`); anchor.textContent = '#'
-    heading.append(anchor)
-    entries.push({ id, label, level: Number(heading.tagName.slice(1)) })
-  }
-  return entries
-}
-export function headingSlug(label: string): string {
-  return label.toLowerCase().replace(/[`*_~[\]()]/g, '').replace(/[^\p{L}\p{N}\s-]/gu, '').replace(/\s+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '') || 'section'
-}
-
-/** / 表示项目根；协议、控制字符、反斜杠和越界回退都不交给主进程读取。 */
-export function resolveProjectPath(reference: string, documentPath: string): string | null {
-  const trimmed = reference.trim()
-  if (!trimmed || /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(trimmed)) return null
-  let decoded: string
-  try { decoded = decodeURIComponent(trimmed.split(/[?#]/, 1)[0] ?? '') } catch { return null }
-  const segments = decoded.startsWith('/') ? [] : documentPath.split('/').slice(0, -1)
-  for (const segment of decoded.split('/')) {
-    if (!segment || segment === '.') continue
-    if (segment === '..') { if (!segments.length) return null; segments.pop(); continue }
-    if (segment.includes('\\') || /[\u0000-\u001f]/.test(segment)) return null
-    segments.push(segment)
-  }
-  return segments.length ? segments.join('/') : null
-}
-export function resolveFileMarkdownLink(reference: string, documentPath: string): { readonly path: string; readonly anchor: string | null } | null {
-  const path = resolveProjectPath(reference, documentPath)
-  if (!path) return null
-  const index = reference.indexOf('#')
-  let anchor = index < 0 ? '' : reference.slice(index + 1)
-  try { anchor = decodeURIComponent(anchor) } catch { /* 无效编码按原文定位。 */ }
-  return { path, anchor: anchor || null }
-}
-export function classifyLinkKind(target: string): FileMarkdownLinkKind {
-  if (target.startsWith('#')) return 'anchor'
-  if (/^https?:\/\//i.test(target)) return 'external'
-  return /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(target) ? 'copy' : 'file'
-}
 function splitFrontMatter(text: string): { frontMatter: string | null; body: string } {
   const lines = text.split('\n')
   if (lines.length < 3 || lines[0]?.trim() !== '---') return { frontMatter: null, body: text }

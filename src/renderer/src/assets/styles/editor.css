@@ -1,6 +1,6 @@
 /* 归集文件编辑能力相关的组件样式。 */
 @layer components {
-/* 文件标签面板：头部是单行编辑器 chrome，主体占满剩余高度，代码与预览在主体内叠放。 */
+/* 文件工作台：文档身份与操作区固定，源码或 Markdown 正文独立占据剩余空间。 */
 .file-editor {
     display: flex;
     min-width: 0;
@@ -108,29 +108,8 @@
     align-items: center;
     gap: 0.25rem;
   }
-/* 图标键：24px 方形；hover 用浅底，活动态保持同一底色并改用强调色。 */
-.file-editor-icon-button {
-    display: inline-flex;
-    width: 24px;
-    height: 24px;
-    flex: none;
-    align-items: center;
-    justify-content: center;
-    border-radius: var(--radius-desk-sm);
-    color: var(--color-desk-muted);
-    transition: background-color var(--default-transition-duration) ease, color var(--default-transition-duration) ease;
-  }
-.file-editor-icon-button:hover {
-    background: var(--color-desk-surface-subtle);
-    color: var(--color-desk-ink);
-  }
-.file-editor-icon-button.is-active {
-    background: var(--color-desk-accent-soft);
-    color: var(--color-desk-accent);
-  }
 /* 图标统一 14px 线性描边，不随字号缩放。 */
-.file-editor-icon-button svg,
-  .file-editor-mode-item svg,
+.file-editor-mode-item svg,
   .file-markdown-toc-close svg,
   .file-markdown-toc-disclosure svg,
   .file-markdown-search-button svg {
@@ -141,11 +120,6 @@
     stroke-width: 1.5;
     stroke-linecap: round;
     stroke-linejoin: round;
-  }
-/* 「更多」是三个实心点，不走线性描边。 */
-.file-editor-icon-button svg.file-editor-dots {
-    fill: currentColor;
-    stroke: none;
   }
 /* 读写轨：两段等宽，活动段由滑块承载；滑块是这处 chrome 唯一的动效。 */
 .file-editor-mode {
@@ -250,7 +224,7 @@
     overflow: hidden;
     padding: 0;
   }
-/* 「更多」菜单：沿用侧栏菜单的外观，勾选标记占固定宽，字号是一行四个小键。 */
+/* 阅读选项沿用应用菜单；字号直接由工具区的原生选择器提供。 */
 .file-editor-menu-item {
     gap: 0.375rem;
   }
@@ -260,63 +234,53 @@
     font-size: 10px;
     color: var(--color-desk-accent);
   }
-.file-editor-menu-section {
-    margin-top: 2px;
-    border-top: 1px solid var(--sidebar-line);
-    padding: 6px 8px 4px;
-  }
-.file-editor-menu-label {
-    margin-bottom: 4px;
-    font-size: 11px;
-    color: var(--sidebar-muted);
-  }
-.file-editor-font-sizes {
-    display: flex;
-    gap: 2px;
-  }
 .file-editor-font-size {
-    min-width: 30px;
-    flex: 1;
-    border: 1px solid var(--sidebar-line);
+    min-width: 72px;
+    height: 28px;
+    border: 1px solid var(--color-desk-line);
     border-radius: 4px;
-    padding: 2px 0;
-    font-size: 11px;
-    color: var(--sidebar-muted);
-    transition: background-color var(--default-transition-duration) ease, color var(--default-transition-duration) ease;
+    background: var(--color-desk-surface);
+    padding: 0 8px;
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+    color: var(--color-desk-ink);
+    cursor: pointer;
   }
-.file-editor-font-size:hover {
-    background: var(--sidebar-hover);
-    color: var(--sidebar-ink);
-  }
-.file-editor-font-size.is-active {
-    border-color: var(--color-desk-accent);
-    background: var(--color-desk-accent-soft);
-    color: var(--color-desk-accent);
-  }
+.file-editor-font-size:hover:not(:disabled) { border-color: var(--color-desk-line-strong); }
+.file-editor-font-size:disabled { opacity: 0.4; cursor: default; }
+.file-editor.is-markdown-workspace { container-type: inline-size; }
 .is-markdown-workspace .file-editor-header {
-    min-height: 72px;
-    gap: 20px;
-    padding: 12px 24px;
+    min-height: 44px;
+    gap: 16px;
+    padding: 4px 16px;
     background: var(--color-desk-surface);
   }
-.is-markdown-workspace .file-editor-path {
-    display: flex;
-    min-width: 0;
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 3px;
-    text-align: left;
-  }
+.is-markdown-workspace .file-editor-actions { gap: 12px; }
+.is-markdown-workspace .file-editor-mode { height: 32px; }
+.is-markdown-workspace .file-editor-mode-item { height: 28px; padding-inline: 8px; }
+.file-editor-capability { display: inline-flex; flex: none; align-items: center; gap: 4px; font-size: 11px; line-height: 20px; white-space: nowrap; color: var(--color-desk-muted); }
+.file-editor-capability::before { content: ''; width: 4px; height: 4px; flex: none; border-radius: 50%; background: currentColor; }
+.file-editor-capability.is-ready { color: var(--color-desk-accent); }
+.file-editor-capability.is-readonly, .file-editor-capability.is-blocked { color: var(--color-desk-warning); }
+.file-editor-source-tools { display: flex; flex: none; align-items: center; padding: 4px 12px; border-bottom: 1px solid var(--color-desk-line); }
+.file-markdown-workspace { position: relative; display: flex; flex: 1; min-width: 0; min-height: 0; flex-direction: column; container-type: inline-size; }
+.file-reader-format { flex: 1 1 480px; min-width: 0; }
+.file-reader-options { margin-left: auto; }
+.is-markdown-workspace .file-editor-path { min-width: 0; align-items: baseline; gap: 8px; padding-block: 4px; }
 .is-markdown-workspace .file-editor-path-name {
     order: -1;
+    min-width: 0;
     max-width: 100%;
+    flex: 0 1 auto;
     overflow: hidden;
     font-family: var(--font-sans);
-    font-size: 17px;
-    font-weight: 650;
+    font-size: 14px;
+    font-weight: 600;
+    line-height: 1.5;
     text-overflow: ellipsis;
+    white-space: nowrap;
   }
-.is-markdown-workspace .file-editor-path-prefix { max-width: 100%; font-size: 11px; line-height: 1.4; color: var(--color-desk-muted); }
+.is-markdown-workspace .file-editor-path-prefix { max-width: min(24cqw, 14rem); font-size: 11px; line-height: 1.5; color: var(--color-desk-muted); }
 .file-reader-save-state { flex: none; font-size: 11px; color: var(--color-desk-muted); }
 .file-reader-save-state.is-dirty { color: var(--color-desk-warning); }
 .file-reader-toolbar {
@@ -326,10 +290,10 @@
     flex-wrap: wrap;
     align-items: center;
     justify-content: space-between;
-    gap: 8px 16px;
+    gap: 4px 12px;
     border-bottom: 1px solid var(--color-desk-line);
     background: var(--color-desk-surface);
-    padding: 6px 24px;
+    padding: 4px 16px;
   }
 .file-reader-toolbar-group { display: flex; align-items: center; gap: 8px; }
 .file-reader-tool {
@@ -349,17 +313,13 @@
 .file-reader-tool svg, .file-markdown-image-viewer-header svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
 .file-reader-tool:hover:not(:disabled) { background: var(--color-desk-surface-subtle); color: var(--color-desk-ink); }
 .file-reader-tool.is-active { background: var(--color-desk-accent-soft); color: var(--color-desk-accent); }
-.file-reader-tool:disabled, .file-reader-font-control button:disabled { opacity: 0.4; cursor: default; }
-.file-reader-context { flex: 1; min-width: 0; font-size: 11px; color: var(--color-desk-muted); }
-.file-reader-font-control {
-    display: flex;
-    align-items: center;
-    gap: 2px;
-  }
-.file-reader-font-control button { min-width: 30px; min-height: 30px; border-radius: 4px; font-size: 12px; color: var(--color-desk-muted); }
-.file-reader-font-control button:hover:not(:disabled) { background: var(--color-desk-surface-subtle); color: var(--color-desk-ink); }
-.file-reader-font-control span { min-width: 20px; text-align: center; font-size: 11px; font-variant-numeric: tabular-nums; color: var(--color-desk-muted); }
-.file-reader-tool:focus-visible, .file-reader-font-control button:focus-visible, .file-markdown-toc-level-select:focus-visible { outline: 2px solid var(--color-desk-accent); outline-offset: 2px; }
+.file-reader-tool:disabled { opacity: 0.4; cursor: default; }
+.file-reader-size { display: inline-flex; flex: none; align-items: center; gap: 8px; font-size: 11px; color: var(--color-desk-muted); }
+.file-reader-context { display: flex; flex: 1 1 280px; min-width: 0; align-items: center; gap: 8px; font-size: 12px; line-height: 1.5; color: var(--color-desk-muted); }
+.file-reader-context > span { min-width: 0; flex: 1; overflow-wrap: anywhere; }
+.file-reader-context.is-readonly { color: var(--color-desk-warning); }
+.file-reader-source { flex: none; color: var(--color-desk-ink); border-color: var(--color-desk-line); }
+.file-reader-tool:focus-visible, .file-editor-font-size:focus-visible, .file-markdown-toc-level-select:focus-visible { outline: 2px solid var(--color-desk-accent); outline-offset: 2px; }
 .file-reader-limit { border-bottom: 1px solid var(--color-desk-line); background: var(--color-desk-surface-subtle); padding: 8px 24px; font-size: 12px; line-height: 1.6; color: var(--color-desk-muted); }
 /* 目录是阅读辅助栏，正文独立滚动；窄容器由组件切换为按需抽屉。 */
 .file-markdown {
@@ -378,10 +338,9 @@
     overflow: auto;
     padding: clamp(28px, 4cqw, 56px) clamp(24px, 5cqw, 72px) max(80px, 16vh);
   }
-.file-markdown-scroll:focus-visible {
-    outline: 2px solid var(--color-desk-accent);
-    outline-offset: -2px;
-  }
+/* 滚动区不是输入框；正文使用光标和局部选区反馈，控件继续保留键盘焦点描边。 */
+.file-markdown-scroll:focus,
+.file-markdown-scroll:focus-visible { outline: none; }
 /* 渲染失败时正文区退回原文：保留换行，不假装成排版后的内容。 */
 .file-markdown .file-markdown-body.is-raw {
     white-space: pre-wrap;
@@ -390,8 +349,8 @@
 .file-rich-container { width: 100%; max-width: 54rem; margin: 0 auto; }
 /* 编辑工具的分组、浮层与状态只作用于文件富文本，不更改聊天 Markdown。 */
 .file-rich-surface { position: relative; min-width: 0; }
-.file-rich-toolbar { position: sticky; top: 0; z-index: 12; display: flex; flex-wrap: wrap; align-items: center; gap: 4px; min-height: 40px; margin: 0 -8px 20px; padding: 6px 8px; border-bottom: 1px solid var(--color-desk-line); background: var(--color-desk-surface); }
-.file-rich-toolbar-group { display: flex; align-items: center; gap: 2px; padding-right: 6px; border-right: 1px solid var(--color-desk-line); }
+.file-rich-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; min-width: 0; }
+.file-rich-toolbar-group { display: flex; align-items: center; gap: 4px; padding-right: 8px; border-right: 1px solid var(--color-desk-line); }
 .file-rich-icon { display: inline-flex; align-items: center; justify-content: center; min-width: 28px; height: 28px; padding: 0 6px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--color-desk-muted); font-size: 12px; line-height: 1; font-weight: 600; cursor: pointer; }
 .file-rich-icon:hover:not(:disabled), .file-rich-icon.is-active, .file-rich-icon[aria-pressed="true"] { color: var(--color-desk-ink); background: var(--color-desk-accent-soft); border-color: var(--color-desk-line); }
 .file-rich-icon.is-italic { font-style: italic; }
@@ -421,7 +380,7 @@
 .file-rich-table-handle:hover { background: var(--color-desk-accent-soft); color: var(--color-desk-ink); }
 .file-rich-link-popover { display: flex; flex-direction: column; gap: 12px; padding: 12px; }
 .file-rich-link-popover label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--color-desk-muted); }
-.file-rich-link-popover input, .file-rich-emoji-picker > input, .file-rich-search input { min-width: 0; width: 100%; padding: 5px 7px; border: 1px solid var(--color-desk-line-strong); border-radius: 3px; background: var(--color-desk-surface); color: var(--color-desk-ink); outline-color: var(--color-desk-accent); font: 13px var(--font-sans); }
+.file-rich-link-popover input, .file-rich-emoji-picker > input { min-width: 0; width: 100%; padding: 5px 7px; border: 1px solid var(--color-desk-line-strong); border-radius: 3px; background: var(--color-desk-surface); color: var(--color-desk-ink); outline-color: var(--color-desk-accent); font: 13px var(--font-sans); }
 .file-rich-link-popover p { color: var(--color-desk-danger); font-size: 12px; }
 .file-rich-popover-actions { display: flex; align-items: center; gap: 8px; font-size: 12px; }
 .file-rich-popover-actions > span { flex: 1; }
@@ -437,15 +396,6 @@
 .file-rich-code-block:hover .file-rich-code-controls > button, .file-rich-code-block:focus-within .file-rich-code-controls > button { opacity: 1; }
 .file-rich-diagram { padding: 12px 18px; border-top: 1px solid var(--color-desk-line); white-space: normal; }
 .file-rich-diagram > p { color: var(--color-desk-muted); font: 12px var(--font-sans); }
-.file-rich-search { position: fixed; z-index: 80; display: flex; gap: 2px; max-width: calc(100vw - 24px); padding: 4px; border: 1px solid var(--color-desk-line-strong); border-radius: 4px; background: var(--color-desk-surface); color: var(--color-desk-ink); box-shadow: var(--shadow-desk-pop); font: 12px var(--font-sans); }
-.file-rich-search-rows { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 4px; }
-.file-rich-search-row { display: flex; min-width: 0; align-items: center; gap: 2px; }
-.file-rich-search-row input { flex: 1; width: 0; }
-.file-rich-search-row > button:not(.file-rich-icon) { padding: 4px; white-space: nowrap; border-radius: 3px; cursor: pointer; }
-.file-rich-search-row > button:not(.file-rich-icon):hover { background: var(--color-desk-accent-soft); }
-.file-rich-search-row > button:disabled { opacity: .4; cursor: default; }
-.file-rich-search-status { white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--color-desk-muted); }
-.file-rich-search-rows > p { margin: 2px; color: var(--color-desk-muted); }
 .file-rich-search-match { background: var(--color-desk-warning-soft); box-shadow: inset 0 -1px var(--color-desk-warning); border-radius: 2px; }
 .file-rich-search-match.is-active { background: var(--color-desk-accent-soft); box-shadow: inset 0 -1px var(--color-desk-accent); }
 .file-rich-emoji-picker { display: flex; flex-direction: column; padding: 8px; gap: 8px; }
@@ -456,7 +406,6 @@
 .file-rich-emoji-grid button { min-width: 0; height: 34px; border-radius: 4px; cursor: pointer; font-size: 24px; line-height: 1; }
 .file-rich-emoji-grid button:hover { background: var(--color-desk-accent-soft); }
 @media (prefers-reduced-motion: reduce) { .file-rich-code-controls > button { transition: none; } }
-@media (max-width: 700px) { .file-rich-toolbar { gap: 2px; padding-inline: 4px; } .file-rich-toolbar-group { gap: 0; padding-right: 3px; } .file-rich-icon { min-width: 26px; padding-inline: 4px; } }
 .file-markdown .file-rich-body {
     position: relative;
     min-height: 16rem;
@@ -465,8 +414,8 @@
     caret-color: var(--color-desk-accent);
     cursor: text;
   }
-.file-markdown .file-rich-body:focus { outline: none; }
-.file-markdown .file-rich-body:focus-visible { outline: 1px solid var(--color-desk-line); outline-offset: 12px; border-radius: 2px; }
+.file-markdown .file-rich-body:focus,
+.file-markdown .file-rich-body:focus-visible { outline: none; }
 .file-rich-body p { min-height: 1em; }
 .file-rich-body .ProseMirror-selectednode { outline: 2px solid var(--color-desk-accent); outline-offset: 2px; }
 .file-markdown .file-rich-body ul[data-type="taskList"] { list-style: none; padding-left: 0; }
@@ -807,48 +756,38 @@
   }
 .file-markdown-toc-backdrop { position: absolute; inset: 0; z-index: 19; border: 0; background: color-mix(in srgb, var(--color-desk-ink) 12%, transparent); cursor: pointer; }
 @container (max-width: 760px) {
-    .is-markdown-workspace .file-editor-header { padding: 12px 16px; gap: 8px; }
-    .file-reader-toolbar { padding: 6px 12px; gap: 8px; }
-    .file-reader-context, .file-reader-save-state { display: none; }
+    .is-markdown-workspace .file-editor-header { padding: 4px 12px; gap: 8px; }
+    .is-markdown-workspace .file-editor-actions { gap: 8px; }
+    .file-reader-toolbar { padding: 4px 12px; gap: 4px 8px; }
     .file-reader-toolbar-group { gap: 4px; }
+    .file-reader-format, .file-reader-context { order: 3; flex-basis: 100%; border-top: 1px solid var(--color-desk-line); padding-top: 4px; }
   }
-/* 查找条：贴在滚动容器顶部，右对齐；不随内容滚走。 */
-.file-markdown-search {
-    position: sticky;
-    top: 0;
-    z-index: 10;
-    display: flex;
-    width: fit-content;
-    max-width: 100%;
-    align-items: center;
-    margin: 0 0 0.75rem auto;
-    border: 1px solid var(--color-desk-line-strong);
-    border-radius: var(--radius-desk-sm);
-    background: var(--color-desk-surface);
-    box-shadow: var(--shadow-desk-raise);
-    padding: 2px 2px 2px 4px;
+@container (max-width: 440px) {
+    .is-markdown-workspace .file-editor-header { flex-wrap: wrap; }
+    .is-markdown-workspace .file-editor-path-row { flex-basis: 100%; }
+    .is-markdown-workspace .file-editor-actions { width: 100%; justify-content: space-between; }
+    .file-markdown-search-row { flex-wrap: wrap; }
   }
-/* 输入框本身去掉描边，焦点用整条查找框的边框表达。 */
-.file-markdown-search:focus-within {
-    border-color: var(--color-desk-accent);
-  }
+/* 查找属于固定操作区，不向只读正文插控件，也不依赖浮层重新测量位置。 */
+.file-markdown-search { display: flex; flex: none; min-width: 0; flex-direction: column; gap: 4px; border-bottom: 1px solid var(--color-desk-line); background: var(--color-desk-surface-subtle); padding: 8px 16px; }
+.file-markdown-search-row { display: flex; min-width: 0; align-items: center; gap: 4px; }
+.file-markdown-search-note { font-size: 12px; color: var(--color-desk-muted); }
 .file-markdown-search-input {
-    width: 200px;
-    max-width: 45vw;
-    height: 24px;
-    border: 0;
+    min-width: 80px;
+    width: 0;
+    flex: 1;
+    height: 32px;
+    border: 1px solid var(--color-desk-line-strong);
     border-radius: 4px;
-    background: transparent;
-    padding: 0 0.375rem;
+    background: var(--color-desk-surface);
+    padding: 0 8px;
     font-size: 12px;
     color: var(--color-desk-ink);
   }
 .file-markdown-search-input::placeholder {
     color: var(--color-desk-muted);
   }
-.file-markdown-search-input:focus {
-    outline: none;
-  }
+.file-markdown-search-input:focus { outline: 2px solid var(--color-desk-accent); outline-offset: -1px; }
 .file-markdown-search-status {
     min-width: 2.5rem;
     flex: none;
@@ -860,8 +799,8 @@
   }
 .file-markdown-search-button {
     display: inline-flex;
-    width: 22px;
-    height: 22px;
+    min-width: 28px;
+    height: 28px;
     flex: none;
     align-items: center;
     justify-content: center;
@@ -876,29 +815,14 @@
 .file-markdown-search-button:disabled {
     opacity: 0.4;
   }
-.file-markdown-search-divider {
-    width: 1px;
-    height: 14px;
-    margin: 0 2px;
-    background: var(--color-desk-line);
-  }
-.file-markdown-notice {
-    position: absolute;
-    right: 1rem;
-    bottom: 1rem;
-    max-width: min(28rem, calc(100% - 2rem));
-    border: 1px solid var(--color-desk-line);
-    border-radius: var(--radius-desk-md);
-    background: var(--color-desk-surface);
-    box-shadow: var(--shadow-desk-pop);
-    padding: 0.375rem 0.625rem;
-    font-size: var(--text-2xs);
-    color: var(--color-desk-muted);
-  }
-.file-markdown-notice.is-error {
-    border-color: var(--color-desk-danger);
-    color: var(--color-desk-danger);
-  }
+.file-markdown-search-button[aria-pressed="true"] { color: var(--color-desk-accent); background: var(--color-desk-accent-soft); }
+.file-markdown-status, .file-markdown-notice { display: flex; flex: none; min-width: 0; align-items: center; gap: 8px; border-top: 1px solid var(--color-desk-line); background: var(--color-desk-surface-subtle); padding: 8px 16px; font-size: 12px; line-height: 1.6; color: var(--color-desk-muted); }
+.file-markdown-status > span, .file-markdown-notice > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.file-markdown-status.is-blocked { color: var(--color-desk-warning); border-top: 0; border-bottom: 1px solid var(--color-desk-line); }
+.file-markdown-notice.is-error { color: var(--color-desk-danger); }
+.file-markdown-status button, .file-markdown-notice button { flex: none; }
+.file-markdown-notice button { width: 28px; height: 28px; border-radius: 4px; cursor: pointer; }
+.file-markdown-notice button:focus-visible { outline: 2px solid var(--color-desk-accent); outline-offset: -1px; }
 /* 原生模态大图查看器使用浏览器顶层，尺寸只受实际窗口约束。 */
 .file-markdown-image-viewer {
     width: fit-content;

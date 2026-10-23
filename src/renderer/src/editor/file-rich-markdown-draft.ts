@@ -23,12 +23,20 @@ export function replaceRichEditorState(editor: Editor, nextState: EditorState): 
   editor.view.updateState(nextState)
 }
 
-/** 结构检查在接管实例之前完成；失败不删除状态中原有的草稿。 */
-export function restoreRichDraft(editor: Editor, draft: RichMarkdownDraft): void {
+/** 只准备恢复状态，不修改现有实例；JSON 草稿严格检查，不套用 Markdown 的标记修正规则。 */
+export function prepareRichDraft(editor: Editor, draft: RichMarkdownDraft): EditorState {
   const doc = editor.schema.nodeFromJSON(draft.document)
   doc.check()
   let selection: Selection
   try { selection = Selection.fromJSON(doc, draft.selection) } catch { selection = Selection.atEnd(doc) }
-  replaceRichEditorState(editor, EditorState.create({ schema: editor.schema, doc, selection, plugins: editor.state.plugins }))
+  return EditorState.create({ schema: editor.schema, doc, selection, plugins: editor.state.plugins })
+}
+
+/**
+ * 接管由 prepareRichDraft 为同一编辑器和草稿准备的 prepared 状态，恢复文档、选区及文末输入区标记。
+ * 会话须先完成文档检查与基线准备；本函数不删除窗口中保存的恢复草稿。
+ */
+export function restoreRichDraft(editor: Editor, draft: RichMarkdownDraft, prepared: EditorState): void {
+  replaceRichEditorState(editor, prepared)
   if (draft.syntheticTrailing) restoreSyntheticTrailing(editor)
 }

@@ -30,6 +30,8 @@
 | `src/renderer/src/editor/stores/project-directory.ts` | 文件树缓存、展开、目录读取与变化订阅 |
 | `src/renderer/src/editor/stores/project-file.ts` | `@` 引用候选、查询序号与项目匹配 |
 | `src/renderer/src/editor/stores/project-editor.ts` | 按项目与文件保存编辑记录、脏状态、磁盘基线与草稿 |
+| `src/renderer/src/editor/file-document-session.ts` | 源码与排版编辑面的提交、保存及视图切换协调 |
+| `src/renderer/src/editor/file-markdown-view.ts` | Markdown 编辑能力、格式、查找及渲染适配器契约 |
 | `src/renderer/src/editor/services/project-file.ts` | 文件／目录／图片导入固定桥接与事件 |
 | `src/renderer/src/editor/services/external-url.ts` | 文件内文档链接的外链打开封装；主进程执行协议与凭据检查 |
 | `src/renderer/src/editor/components/FileTreeView.vue` | 文件树展示、打开及拖拽入口 |
@@ -37,6 +39,9 @@
 | `src/renderer/src/editor/components/FileEditorView.vue` | 文件标签面板、视图切换、保存与冲突交互 |
 | `src/renderer/src/editor/components/CodeMirrorEditor.vue` | 源码编辑器及对外编辑接口 |
 | `src/renderer/src/editor/components/FileMarkdownView.vue` | Markdown 预览／可编辑排版、目录、查找及只读降级 |
+| `src/renderer/src/editor/components/FileMarkdownPreview.vue` | 只读安全 DOM、资源及阅读交互适配 |
+| `src/renderer/src/editor/components/FileMarkdownToolbar.vue` | 文档工具区、编辑能力提示与阅读选项 |
+| `src/renderer/src/editor/components/FileMarkdownSearchBar.vue` | 可编辑排版与只读视图共用的查找／替换界面 |
 | `src/renderer/src/editor/components/FileMarkdownToc.vue` | Markdown 标题目录 |
 | `src/renderer/src/editor/components/FileMarkdownImageViewer.vue` | Markdown 图片查看 |
 
@@ -47,10 +52,13 @@
 | `src/renderer/src/editor/file-language.ts` | 文件名、语言与 Markdown 类型识别 |
 | `src/renderer/src/editor/file-code-highlight.ts` | 文件代码高亮与语言加载 |
 | `src/renderer/src/editor/file-images.ts` | 项目内 Markdown 图片读取和显示地址管理 |
-| `src/renderer/src/editor/file-markdown.ts` | 文件 Markdown 排版、链接分类／解析、标题与预览边界 |
+| `src/renderer/src/editor/file-markdown.ts` | 文件 Markdown 只读解析、安全渲染与预览支持判定 |
+| `src/renderer/src/editor/file-markdown-dom.ts` | 只读 DOM 增强、标题锚点与目录条目提取 |
+| `src/renderer/src/editor/file-markdown-links.ts` | 纯路径、链接分类与项目相对目标解析 |
 | `src/renderer/src/editor/file-markdown-search.ts` | 只读正文查找、匹配范围与高亮 |
-| `src/renderer/src/ui/project-entry-drag.ts` | 项目条目拖拽载荷与终端插入文本；文件与终端两个能力共用，因此放在共享展示层 |
-| `src/renderer/src/editor/file-rich-markdown.ts` | Tiptap 扩展组装、事件入口与不支持语法判定 |
+| `src/renderer/src/editor/file-rich-markdown.ts` | Tiptap 扩展组装、节点配置与事件接入 |
+| `src/renderer/src/editor/file-rich-markdown-parser.ts` | Markdown 唯一结构转换入口、语法支持判定、schema 规范化与完整检查 |
+| `src/renderer/src/editor/file-rich-markdown-session.ts` | 候选准备与接管、源文同步、往返证明及受阻草稿保留 |
 | `src/renderer/src/editor/file-rich-markdown-codec.ts` | Markdown 编解码上下文与 Front Matter 分离 |
 | `src/renderer/src/editor/file-rich-markdown-source.ts` | 文档等价、字面源码保存与序列化协调 |
 | `src/renderer/src/editor/file-rich-markdown-block-source.ts` | 块级源码归属与空行协调 |
@@ -68,21 +76,20 @@
 | `src/renderer/src/editor/file-rich-markdown-suggestions.ts` | 斜杠与文档补全模型 |
 | `src/renderer/src/editor/file-rich-markdown-search.ts` | 富文本查找与替换状态／操作 |
 | `src/renderer/src/editor/file-rich-markdown-table.ts` | 表格位置与行列动作 |
-| `src/renderer/src/editor/components/FileRichMarkdownEditor.vue` | Editor 实例、事务、输入同步、撤销、草稿及浮层编排 |
+| `src/renderer/src/editor/components/FileRichMarkdownEditor.vue` | Editor 实例与交互适配、浮层编排；文档装载和提交交给富文本会话 |
 | `src/renderer/src/editor/components/FileRichMarkdownCodeBlock.vue` | 代码块 NodeView、高亮和图解展示 |
 | `src/renderer/src/editor/components/FileRichMarkdownToolbar.vue` | 工具栏命令入口 |
 | `src/renderer/src/editor/components/FileRichMarkdownSuggestions.vue` | 补全菜单 |
 | `src/renderer/src/editor/components/FileRichMarkdownLinkPopover.vue` | 链接编辑浮层 |
 | `src/renderer/src/editor/components/FileRichMarkdownEmojiPicker.vue` | 表情选择与插入 |
-| `src/renderer/src/editor/components/FileRichMarkdownSearchBar.vue` | 富文本查找／替换栏 |
 | `src/renderer/src/editor/components/FileRichMarkdownTableControls.vue` | 表格行列操作入口 |
 
-文件内容边界、Editor 编排与扩展组装已读；其余辅助文件依据组装导入与组件使用定位。富文本内部存在源码与块级源码的相互协作，不将文件表误认为已消除内部依赖环。
+原文回写模块与块级源码模块相互引用，候选 Markdown 的重新解析共用统一结构转换入口；统一解析不消除回写模块间的双向依赖。
 
 ## 公共与跨模块引用
 
 - [F-assembly](shared.md#f-assembly进程与页面组装混合)：`registerProjectFileHandlers` 校验调用者和固定请求；文件面板由 `src/renderer/src/shell/components/WorkspaceView.vue` 渲染，脏文件关闭确认状态在 `src/renderer/src/workspace/stores/workspace-tabs.ts`，经 `src/renderer/src/shell/components/AppDialogHost.vue` 呈现。
-- [F-ui](shared.md#f-ui前端共享展示共享)：公共按钮、浮层、复制，`ui/markdown-shared.ts` 与 `ui/markdown-math.ts` 的共同排版能力。
+- [F-ui](shared.md#f-ui前端共享展示共享)：公共按钮、浮层、复制，`ui/markdown-shared.ts` 与 `ui/markdown-math.ts` 的共同排版能力，以及文件树与终端共用的 `ui/project-entry-drag.ts` 拖拽载荷和路径插入文本。
 - [F-style](shared.md#f-style全局主题与业务样式混合)：`src/renderer/src/assets/styles/editor.css` 的文件编辑、Markdown、富文本和文件树样式，由 `src/renderer/src/assets/main.css` 统一加载。
 - [工作区](workspace-tabs.md)：打开／关闭文件标签和消费锚点请求；编辑状态归本模块，标签状态归工作区。
 - [项目](projects-trust.md)：普通树和检索跟随当前项目，文件内容与图片导入固定已登记的所属项目。
@@ -94,9 +101,14 @@
 1. `RightPanel.vue` 初始化目录 Store；列举结果按已加载层缓存，再将需观察的目录集合登记到主进程。
 2. 主进程监听变化并合并事件，页面收到后重读对应层；变化同时使文件索引失效。overflow 走更大范围的重新读取，不伪造逐文件增量。
 3. 打开条目先由工作区登记文件标签，再由 `project-editor` 读取固定项目内文件；内容分为文本、图片或不支持，不把超大或非文本内容伪装成可编辑文本。
-4. Markdown 可编辑预览保留 Editor 事务与撤销，无法证明安全序列化时留存结构草稿并返回错误，不静默覆盖源文件。
-5. 保存携带文本、换行／BOM 语义与磁盘基线。主进程复核路径与符号链接，冲突返回给界面，明确覆盖才允许不带旧基线写入。
-6. 图片导入创建文档所属项目内的新资产，正文仍需显式保存；期间项目切换不应将旧结果解释为新项目同名路径。
+4. `file-document-session.ts` 协调源码／排版切换与保存；Store 维护已接受的源文和恢复草稿，编辑实例持有未提交输入、选区及撤销历史。源码变化捕获全文快照，富文本仅将已证明可回写的文本交给 Store。
+5. `FileMarkdownView.vue` 统一提供操作区、目录与查找界面，富文本和只读视图通过 `file-markdown-view.ts` 的契约适配。保存进度与编辑能力分开表达，只读原因在操作区展示。
+6. 初次装载与外部全文替换先分离 Front Matter，再经 `parseRichMarkdown()` 完成语法支持判定、无损标记规范化及完整结构检查；富文本会话完成候选的序列化往返证明后才接管实例。编辑器从不可编辑的合法空文档启动，不在 Markdown 扩展初始化时隐式装载整篇源文。
+7. 同一实例的自身文本回声不重建历史；外部替换须先准备候选，尚有未提交输入时拒绝覆盖。结构草稿先严格检查 JSON 并准备恢复状态与基线，再接管文档和选区，不套用 Markdown 的标记修正规则。
+8. 初始装载失败时降级为只读状态并展示原因；已编辑文档无法证明安全序列化时保留结构草稿并允许继续修正。刷新失败会阻止保存或视图切换，不用旧文本冒充当前输入，不静默覆盖源文件。
+9. 活动排版视图可查找时，通过 `Cmd/Ctrl + F` 唤起并聚焦共用查找栏，顶部工具区不提供查找按钮；查找栏内按 `Esc` 关闭并返回当前视图。只读视图按 DOM 匹配，富文本视图按 ProseMirror 文档查找并在编辑能力允许时提供替换。
+10. 保存携带文本、换行／BOM 语义与磁盘基线。主进程复核路径与符号链接，冲突返回给界面，明确覆盖才允许不带旧基线写入。
+11. 图片导入创建文档所属项目内的新资产，正文仍需显式保存；期间项目切换不应将旧结果解释为新项目同名路径。
 
 ## 数据与安全边界
 
