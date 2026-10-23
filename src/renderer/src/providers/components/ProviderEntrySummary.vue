@@ -47,13 +47,13 @@ const summary = computed(() => {
 </script>
 
 <template>
-  <div class="space-y-2">
-    <p v-if="loading" class="hint-text">正在读取 models.json…</p>
-    <p v-else-if="parseError !== null" class="hint-text">
+  <div class="provider-entry-summary">
+    <p v-if="loading" class="provider-entry-summary__message">正在读取 models.json…</p>
+    <p v-else-if="parseError !== null" class="provider-entry-summary__message">
       models.json 目前无法解析，先在外部修正文件再点「重新读取」，这里才会显示它的条目。
     </p>
     <template v-else-if="summary === null">
-      <p class="hint-text">
+      <p class="provider-entry-summary__message">
         这个供应商不在 models.json 的 providers 里，用的是 Pi 内置定义。还没有 models.json 时，新增供应商会创建它。
       </p>
       <AppButton variant="compact" :disabled="busy" @click="emit('create')">
@@ -61,20 +61,18 @@ const summary = computed(() => {
       </AppButton>
     </template>
     <template v-else>
-      <dl class="space-y-1 text-xs">
-        <div class="flex flex-wrap items-baseline gap-1.5">
-          <dt class="text-desk-muted">API</dt>
-          <dd class="font-mono">{{ summary.api }}</dd>
+      <dl class="provider-entry-summary__fields">
+        <div>
+          <dt>API</dt>
+          <dd>{{ summary.api }}</dd>
         </div>
-        <div class="flex flex-wrap items-baseline gap-1.5">
-          <dt class="text-desk-muted">Base URL</dt>
-          <dd class="break-all font-mono">{{ summary.baseUrl }}</dd>
+        <div>
+          <dt>Base URL</dt>
+          <dd>{{ summary.baseUrl }}</dd>
         </div>
-        <div class="flex flex-wrap items-baseline gap-1.5">
-          <dt class="text-desk-muted">模型</dt>
-          <dd>
-            {{ summary.modelCount }} 个条目<span v-if="summary.hasApiKey"> · 已配置密钥</span>
-          </dd>
+        <div>
+          <dt>模型</dt>
+          <dd>{{ summary.modelCount }} 个条目<span v-if="summary.hasApiKey"> · 已配置密钥</span></dd>
         </div>
       </dl>
       <AppButton variant="compact" :disabled="busy" @click="emit('edit')">
@@ -83,3 +81,62 @@ const summary = computed(() => {
     </template>
   </div>
 </template>
+
+<style scoped>
+.provider-entry-summary {
+  display: grid;
+  justify-items: start;
+  gap: 0.625rem;
+}
+
+.provider-entry-summary__message {
+  max-width: 42rem;
+  margin: 0;
+  color: var(--color-desk-muted);
+  font-size: 0.75rem;
+  line-height: 1.6;
+}
+
+.provider-entry-summary__fields {
+  display: grid;
+  width: 100%;
+  grid-template-columns: minmax(7rem, 0.55fr) minmax(12rem, 2fr) minmax(8rem, 0.8fr);
+  gap: 0.75rem 1rem;
+  margin: 0;
+}
+
+.provider-entry-summary__fields > div {
+  min-width: 0;
+}
+
+.provider-entry-summary__fields dt {
+  margin-bottom: 0.25rem;
+  color: var(--color-desk-muted);
+  font-size: 0.6875rem;
+}
+
+.provider-entry-summary__fields dd {
+  overflow-wrap: anywhere;
+  margin: 0;
+  color: var(--color-desk-ink);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  line-height: 1.55;
+}
+
+.provider-entry-summary__fields > div:last-child dd {
+  font-family: var(--font-sans);
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 620px) {
+  .provider-entry-summary__fields {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+
+  .provider-entry-summary__fields > div:nth-child(2) {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+}
+</style>

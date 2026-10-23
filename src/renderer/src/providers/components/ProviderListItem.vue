@@ -89,43 +89,44 @@ function setAllVisible(visible: boolean): void {
 </script>
 
 <template>
-  <div>
+  <div class="provider-row">
     <button
       type="button"
-      class="list-card"
-      :class="expanded ? 'list-item-active' : ''"
+      class="provider-row-trigger"
+      :class="expanded ? 'is-expanded' : ''"
       :aria-expanded="expanded"
       :aria-controls="detailId"
       @click="emit('toggle')"
     >
-      <div class="flex flex-wrap items-baseline justify-between gap-2">
-        <p class="text-sm font-medium">
-          {{ row.name }}
-          <span class="ml-1 font-mono text-2xs text-desk-muted">{{ row.id }}</span>
-        </p>
-        <p class="text-2xs text-desk-muted">
-          {{ row.status }} · {{ row.modelCount }} 个模型<span v-if="row.hiddenCount > 0"> · 已隐藏 {{ row.hiddenCount }}</span>
-        </p>
-      </div>
-      <p v-if="row.custom" class="mt-0.5 text-2xs text-desk-muted">
-        在 models.json 里有自定义条目<span v-if="row.hasApiKey"> · 已配置密钥</span>
-      </p>
+      <span class="provider-row-trigger__identity">
+        <span class="provider-row-trigger__name">{{ row.name }}</span>
+        <span class="provider-row-trigger__id">{{ row.id }}</span>
+        <span v-if="row.custom" class="provider-row-trigger__custom">
+          自定义<span v-if="row.hasApiKey"> · 已配置密钥</span>
+        </span>
+      </span>
+      <span class="provider-row-trigger__summary">
+        <span>{{ row.status }}</span>
+        <span>{{ row.modelCount }} 个模型</span>
+        <span v-if="row.hiddenCount > 0">隐藏 {{ row.hiddenCount }}</span>
+      </span>
+      <span class="provider-row-trigger__action">{{ expanded ? '收起' : '详情' }}</span>
     </button>
 
-    <!-- 详情就地展开在被点的那一行下面，不用滑到页面底部。 -->
-    <div v-if="expanded" :id="detailId" :data-provider-detail="row.id" class="mt-1.5 space-y-3">
-      <div class="panel-section">
-        <h3 class="panel-section-title">凭据</h3>
+    <!-- 详情仍在供应商上下文内展开，各类操作用分隔与标题表达层级。 -->
+    <div v-if="expanded" :id="detailId" :data-provider-detail="row.id" class="provider-detail">
+      <section class="provider-detail-section">
+        <h3 class="provider-detail-section__title">凭据</h3>
         <ProviderCredentialSection
           :provider="row.authStatus"
           :runtime-model-providers="runtimeModelProviders"
           @request-remove="emit('requestRemoveCredential')"
         />
-      </div>
+      </section>
 
-      <div class="panel-section space-y-3">
-        <div class="flex flex-wrap items-center justify-between gap-2">
-          <h3 class="panel-section-title">端点与模型</h3>
+      <section class="provider-detail-section">
+        <div class="provider-detail-section__heading">
+          <h3 class="provider-detail-section__title">端点与模型</h3>
           <AppButton
             v-if="row.entry !== null"
             variant="quiet-danger"
@@ -146,12 +147,12 @@ function setAllVisible(visible: boolean): void {
           @edit="emit('edit')"
           @create="emit('create')"
         />
-      </div>
+      </section>
 
-      <div class="panel-section space-y-2">
-        <div class="flex flex-wrap items-center justify-between gap-2">
-          <h3 class="panel-section-title">在对话页显示</h3>
-          <div class="flex items-center gap-2">
+      <section class="provider-detail-section">
+        <div class="provider-detail-section__heading">
+          <h3 class="provider-detail-section__title">在对话页显示</h3>
+          <div class="provider-detail__bulk-actions">
             <AppButton
               variant="compact"
               :disabled="!canToggle || row.models.length === 0 || row.hiddenIds.size === 0"
@@ -168,7 +169,7 @@ function setAllVisible(visible: boolean): void {
             </AppButton>
           </div>
         </div>
-        <p v-if="displayError !== null" role="alert" class="status-notice status-notice-error">
+        <p v-if="displayError !== null" role="alert" class="provider-detail__error">
           {{ displayError }}
         </p>
         <p v-else-if="displayLoading" class="hint-text">正在读取展示偏好…</p>
@@ -182,7 +183,145 @@ function setAllVisible(visible: boolean): void {
           :hidden-model-ids="row.hiddenIds"
           :disabled="!canToggle"
         />
-      </div>
+      </section>
     </div>
   </div>
 </template>
+
+<style scoped>
+.provider-row {
+  min-width: 0;
+}
+
+.provider-row-trigger {
+  display: grid;
+  width: 100%;
+  grid-template-columns: minmax(12rem, 1fr) auto auto;
+  align-items: center;
+  gap: 0.75rem 1rem;
+  border-left: 2px solid transparent;
+  padding: 0.75rem 0.625rem;
+  color: var(--color-desk-ink);
+  text-align: left;
+  transition: background-color var(--default-transition-duration) ease, border-color var(--default-transition-duration) ease;
+}
+
+.provider-row-trigger:hover,
+.provider-row-trigger.is-expanded {
+  border-left-color: var(--color-desk-accent);
+  background: var(--color-desk-accent-soft);
+}
+
+.provider-row-trigger:focus-visible {
+  outline: 2px solid var(--color-desk-accent);
+  outline-offset: -2px;
+}
+
+.provider-row-trigger__identity,
+.provider-row-trigger__summary {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.375rem 0.75rem;
+}
+
+.provider-row-trigger__name {
+  font-size: 0.875rem;
+  font-weight: 650;
+  line-height: 1.4;
+}
+
+.provider-row-trigger__id {
+  overflow-wrap: anywhere;
+  color: var(--color-desk-muted);
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+}
+
+.provider-row-trigger__custom {
+  color: var(--color-desk-accent);
+  font-size: 0.6875rem;
+}
+
+.provider-row-trigger__summary {
+  justify-content: flex-end;
+  color: var(--color-desk-muted);
+  font-size: 0.6875rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.provider-row-trigger__action {
+  color: var(--color-desk-accent);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.provider-detail {
+  display: grid;
+  gap: 0;
+  padding: 0 0.625rem 0.75rem 1rem;
+}
+
+.provider-detail-section {
+  min-width: 0;
+  padding: 0.875rem 0;
+}
+
+.provider-detail-section + .provider-detail-section {
+  border-top: 1px solid var(--color-desk-line);
+}
+
+.provider-detail-section__heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  margin-bottom: 0.625rem;
+}
+
+.provider-detail-section__title {
+  margin: 0;
+  font-size: 0.75rem;
+  font-weight: 650;
+}
+
+.provider-detail__bulk-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+}
+
+.provider-detail__error {
+  margin: 0 0 0.625rem;
+  border-left: 2px solid var(--color-desk-danger);
+  background: var(--color-desk-danger-soft);
+  padding: 0.5rem 0.625rem;
+  color: var(--color-desk-danger);
+  font-size: 0.75rem;
+  line-height: 1.5;
+}
+
+@media (max-width: 700px) {
+  .provider-row-trigger {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 0.5rem;
+  }
+
+  .provider-row-trigger__summary {
+    grid-column: 1;
+    justify-content: flex-start;
+  }
+
+  .provider-row-trigger__action {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+  }
+
+  .provider-detail {
+    padding-left: 0.75rem;
+  }
+}
+</style>

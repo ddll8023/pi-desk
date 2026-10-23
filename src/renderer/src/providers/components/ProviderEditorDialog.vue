@@ -138,18 +138,18 @@ onUnmounted(() => {
             aria-modal="true"
             :aria-labelledby="titleId"
             tabindex="-1"
-            class="dialog-panel"
+            class="dialog-panel provider-editor-panel"
             :class="mode === 'edit' ? 'max-w-3xl' : 'max-w-2xl'"
           >
-            <div class="dialog-header">
+            <div class="provider-editor-header">
               <div>
-                <h2 :id="titleId" class="dialog-title">{{ title }}</h2>
-                <p class="dialog-subtitle">{{ subtitle }}</p>
+                <h2 :id="titleId" class="provider-editor-title">{{ title }}</h2>
+                <p class="provider-editor-subtitle">{{ subtitle }}</p>
               </div>
             </div>
 
-            <div class="dialog-body">
-              <p v-if="confirmingDiscard" class="text-sm">
+            <div class="provider-editor-body">
+              <p v-if="confirmingDiscard" class="provider-editor-confirmation">
                 这个条目的改动还没有保存；放弃后表单会回到上次读取到的内容。
               </p>
               <!-- 表单始终挂载：确认视图只是把它藏起来，避免「继续编辑」丢掉已填内容。 -->
@@ -166,7 +166,7 @@ onUnmounted(() => {
               </div>
             </div>
 
-            <div class="dialog-footer">
+            <div class="provider-editor-footer">
               <template v-if="confirmingDiscard">
                 <AppButton @click="confirmingDiscard = false">继续编辑</AppButton>
                 <AppButton variant="danger" @click="emit('cancel')">放弃改动</AppButton>
@@ -188,3 +188,74 @@ onUnmounted(() => {
     </Transition>
   </Teleport>
 </template>
+
+<style scoped>
+.provider-editor-panel {
+  max-height: min(90vh, 64rem);
+  border-color: var(--color-desk-line-strong);
+}
+
+.provider-editor-header {
+  flex: none;
+  border-bottom: 1px solid var(--color-desk-line);
+  padding: 1.25rem 1.5rem 1rem;
+}
+
+.provider-editor-title {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 650;
+  line-height: 1.4;
+  letter-spacing: -0.015em;
+}
+
+.provider-editor-subtitle {
+  max-width: 50rem;
+  margin: 0.375rem 0 0;
+  color: var(--color-desk-muted);
+  font-size: 0.75rem;
+  line-height: 1.55;
+}
+
+.provider-editor-body {
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+  padding: 1.25rem 1.5rem;
+}
+
+.provider-editor-confirmation {
+  max-width: 40rem;
+  margin: 0;
+  font-size: 0.875rem;
+  line-height: 1.6;
+}
+
+.provider-editor-footer {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  border-top: 1px solid var(--color-desk-line);
+  background: var(--color-desk-surface);
+  padding: 0.75rem 1.5rem;
+}
+
+@media (max-width: 560px) {
+  .provider-editor-header,
+  .provider-editor-body,
+  .provider-editor-footer {
+    padding-inline: 1rem;
+  }
+
+  .provider-editor-footer {
+    justify-content: stretch;
+  }
+
+  .provider-editor-footer :deep(button) {
+    flex: 1 1 auto;
+  }
+}
+</style>

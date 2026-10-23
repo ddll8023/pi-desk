@@ -338,8 +338,8 @@ defineExpose({ submit, canSave, saveBlockReason, dirty })
 </script>
 
 <template>
-  <div class="space-y-4">
-    <div class="grid gap-3 sm:grid-cols-2">
+  <div class="provider-definition">
+    <div class="provider-definition__fields">
       <label class="space-y-1">
         <span class="field-label">供应商 ID</span>
         <input
@@ -396,16 +396,16 @@ defineExpose({ submit, canSave, saveBlockReason, dirty })
     </div>
 
     <!-- headers：空名字的行只在界面上保留，不会写进配置。 -->
-    <div class="space-y-2">
-      <div class="flex items-center justify-between gap-2">
-        <h3 class="section-heading">请求头</h3>
+    <div class="provider-definition__block">
+      <div class="provider-definition__block-heading">
+        <h3 class="provider-definition__block-title">请求头</h3>
         <AppButton variant="compact" :disabled="!formReady" @click="addHeader">添加请求头</AppButton>
       </div>
       <p v-if="headerDraft.length === 0" class="hint-text">没有额外的请求头。</p>
       <div
         v-for="(row, index) in headerDraft"
         :key="`header-${index}`"
-        class="flex items-start gap-2"
+        class="provider-definition__header-row"
       >
         <input
           class="text-control font-mono"
@@ -428,16 +428,16 @@ defineExpose({ submit, canSave, saveBlockReason, dirty })
     </div>
 
     <!-- 模型：表单只覆盖常用字段，其余字段在原始 JSON 里编辑。 -->
-    <div class="space-y-2">
-      <div class="flex items-center justify-between gap-2">
-        <h3 class="section-heading">模型</h3>
+    <div class="provider-definition__block">
+      <div class="provider-definition__block-heading">
+        <h3 class="provider-definition__block-title">模型</h3>
         <AppButton variant="compact" :disabled="!formReady" @click="addModel">添加模型</AppButton>
       </div>
       <p v-if="modelList.length === 0" class="hint-text">还没有模型；一个供应商至少需要一个模型。</p>
       <div
         v-for="index in modelIndexes"
         :key="`model-${index}`"
-        class="list-card space-y-2"
+        class="provider-definition__model"
       >
         <div class="flex items-start gap-2">
           <input
@@ -506,9 +506,9 @@ defineExpose({ submit, canSave, saveBlockReason, dirty })
     </div>
 
     <!-- 原始 JSON：高级字段（compat、thinkingLevelMap、cost、modelOverrides 等）在这里编辑。 -->
-    <div class="space-y-2">
-      <div class="flex items-center justify-between gap-2">
-        <h3 class="section-heading">原始 JSON</h3>
+    <div class="provider-definition__block">
+      <div class="provider-definition__block-heading">
+        <h3 class="provider-definition__block-title">原始 JSON</h3>
         <AppButton variant="compact" @click="toggleRaw">
           {{ rawOpen ? '收起' : '展开' }}
         </AppButton>
@@ -520,7 +520,7 @@ defineExpose({ submit, canSave, saveBlockReason, dirty })
         <p v-if="jsonError !== null" role="alert" class="status-notice status-notice-error">{{ jsonError }}</p>
         <textarea
           v-model="rawTextInput"
-          class="text-control min-h-72 font-mono text-xs"
+          class="text-control provider-definition__json font-mono text-xs"
           spellcheck="false"
           aria-label="供应商条目原始 JSON"
         />
@@ -532,3 +532,108 @@ defineExpose({ submit, canSave, saveBlockReason, dirty })
     </div>
   </div>
 </template>
+
+<style scoped>
+.provider-definition {
+  display: grid;
+  gap: 1.5rem;
+}
+
+.provider-definition__fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.provider-definition__fields > label,
+.provider-definition__fields > div {
+  display: grid;
+  min-width: 0;
+  align-content: start;
+  gap: 0.375rem;
+}
+
+.provider-definition__fields > label:last-child {
+  grid-column: 1 / -1;
+}
+
+.provider-definition :deep(.field-label) {
+  color: var(--color-desk-muted);
+  font-size: 0.6875rem;
+  font-weight: 600;
+}
+
+.provider-definition__block {
+  min-width: 0;
+  border-top: 1px solid var(--color-desk-line);
+  padding-top: 0.875rem;
+}
+
+.provider-definition__block-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.625rem;
+}
+
+.provider-definition__block-title {
+  margin: 0;
+  font-size: 0.8125rem;
+  font-weight: 650;
+}
+
+.provider-definition__header-row {
+  display: grid;
+  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr) auto;
+  gap: 0.5rem;
+  padding-block: 0.25rem;
+}
+
+.provider-definition__model {
+  display: grid;
+  gap: 0.75rem;
+  border-top: 1px solid var(--color-desk-line);
+  padding: 0.875rem 0;
+}
+
+.provider-definition__model > div:first-child {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.provider-definition__model > div:first-child > input {
+  min-width: 0;
+  flex: 1;
+}
+
+.provider-definition__json {
+  min-height: 18rem;
+  line-height: 1.55;
+  tab-size: 2;
+}
+
+.provider-definition :deep(.hint-text) {
+  margin: 0;
+}
+
+@media (max-width: 640px) {
+  .provider-definition__fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .provider-definition__fields > label:last-child {
+    grid-column: auto;
+  }
+
+  .provider-definition__header-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .provider-definition__header-row > input:nth-child(2) {
+    grid-column: 1;
+    grid-row: 2;
+  }
+}
+</style>

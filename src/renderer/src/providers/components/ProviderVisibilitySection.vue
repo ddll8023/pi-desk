@@ -46,35 +46,130 @@ function toggle(model: ModelSummary): void {
 </script>
 
 <template>
-  <div class="space-y-2">
-    <div class="flex flex-wrap items-center gap-2">
+  <div class="provider-visibility">
+    <div class="provider-visibility__toolbar">
       <input
         v-model="query"
         type="search"
         placeholder="按模型 id 或显示名过滤"
-        class="text-control sm:max-w-64"
+        class="text-control provider-visibility__search"
       >
-      <span class="chip">已隐藏 {{ hiddenCount }} / {{ models.length }}</span>
+      <span class="provider-visibility__count">已隐藏 <strong>{{ hiddenCount }}</strong> / {{ models.length }}</span>
     </div>
-    <p v-if="filteredModels.length === 0" class="hint-text">
+    <p v-if="filteredModels.length === 0" class="provider-visibility__empty">
       没有匹配的模型；清空过滤可以看到这个供应商的全部模型。
     </p>
-    <ul v-else class="space-y-1">
+    <ul v-else class="provider-visibility__list">
       <li v-for="model in filteredModels" :key="model.id">
-        <label class="flex items-start gap-2 text-xs">
+        <label class="provider-visibility__row">
           <input
             type="checkbox"
-            class="mt-0.5"
+            class="provider-visibility__checkbox"
             :checked="!hiddenModelIds.has(model.id)"
             :disabled="disabled"
-            @click.prevent="toggle(model)"
+            @change="toggle(model)"
           >
-          <span class="min-w-0">
-            {{ model.name ?? model.id }}
-            <span class="ml-1 font-mono text-2xs text-desk-muted">{{ model.id }}</span>
+          <span class="provider-visibility__model">
+            <span class="provider-visibility__name">{{ model.name ?? model.id }}</span>
+            <span class="provider-visibility__id">{{ model.id }}</span>
           </span>
         </label>
       </li>
     </ul>
   </div>
 </template>
+
+<style scoped>
+.provider-visibility {
+  display: grid;
+  gap: 0.625rem;
+}
+
+.provider-visibility__toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.625rem 0.875rem;
+}
+
+.provider-visibility__search {
+  width: min(100%, 22rem);
+}
+
+.provider-visibility__count {
+  color: var(--color-desk-muted);
+  font-size: 0.6875rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.provider-visibility__count strong {
+  color: var(--color-desk-ink);
+  font-weight: 650;
+}
+
+.provider-visibility__empty {
+  margin: 0;
+  color: var(--color-desk-muted);
+  font-size: 0.75rem;
+  line-height: 1.55;
+}
+
+.provider-visibility__list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.provider-visibility__row {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  gap: 0.625rem;
+  border-top: 1px solid var(--color-desk-line);
+  padding: 0.625rem 0.5rem;
+  cursor: pointer;
+}
+
+.provider-visibility__row:hover {
+  background: var(--color-desk-surface-subtle);
+}
+
+.provider-visibility__checkbox {
+  flex: none;
+  margin-top: 0.1875rem;
+  accent-color: var(--color-desk-accent);
+}
+
+.provider-visibility__checkbox:focus-visible {
+  outline: 2px solid var(--color-desk-accent);
+  outline-offset: 2px;
+}
+
+.provider-visibility__model {
+  display: grid;
+  min-width: 0;
+  gap: 0.125rem;
+}
+
+.provider-visibility__name {
+  overflow-wrap: anywhere;
+  font-size: 0.75rem;
+  line-height: 1.45;
+}
+
+.provider-visibility__id {
+  overflow-wrap: anywhere;
+  color: var(--color-desk-muted);
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  line-height: 1.45;
+}
+
+@media (max-width: 700px) {
+  .provider-visibility__list {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+</style>

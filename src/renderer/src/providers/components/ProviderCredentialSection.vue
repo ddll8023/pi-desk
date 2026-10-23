@@ -34,15 +34,15 @@ function availabilityLabel(): string | null {
 </script>
 
 <template>
-  <div>
-    <p v-if="availabilityLabel() !== null" class="text-2xs text-desk-muted">
+  <div class="provider-credential">
+    <p v-if="availabilityLabel() !== null" class="provider-credential__note">
       {{ availabilityLabel() }}
     </p>
-    <p v-if="provider.subscription" class="text-2xs text-desk-muted">
+    <p v-if="provider.subscription" class="provider-credential__note">
       账户登录由 Provider 订阅支撑。
     </p>
 
-    <div v-if="provider.authTypes.length > 0" class="mt-2 flex flex-wrap items-center gap-2">
+    <div v-if="provider.authTypes.length > 0" class="provider-credential__actions">
       <AppButton
         v-for="method in provider.authTypes"
         :key="`${provider.providerId}-${method}`"
@@ -62,8 +62,43 @@ function availabilityLabel(): string | null {
         删除已保存凭据
       </AppButton>
     </div>
-    <p v-else class="mt-1 text-2xs text-desk-muted">
+    <p v-else class="provider-credential__note">
       这个 Provider 的凭据只能在 Pi 外部配置；这里只展示状态。
     </p>
   </div>
 </template>
+
+<style scoped>
+.provider-credential {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1rem;
+}
+
+.provider-credential__note {
+  flex: 1 1 18rem;
+  margin: 0;
+  color: var(--color-desk-muted);
+  font-size: 0.6875rem;
+  line-height: 1.55;
+}
+
+.provider-credential__actions {
+  display: flex;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+.provider-credential__actions :deep(.control-button-quiet-danger) {
+  margin-left: 0.25rem;
+}
+
+@media (max-width: 600px) {
+  .provider-credential__actions {
+    flex-basis: 100%;
+  }
+}
+</style>

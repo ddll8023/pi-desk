@@ -47,10 +47,10 @@ function phaseLabel(snapshot: AuthFlowSnapshot | null): string {
 
 <template>
   <!-- 流程进行中：固定在清单上方，展开另一行不会让它从视野里消失。 -->
-  <section v-if="activeFlow !== null && flow !== null" class="panel-section">
+  <section v-if="activeFlow !== null && flow !== null" class="auth-flow auth-flow--active">
     <div class="flex flex-wrap items-center gap-2">
-      <h2 class="panel-section-title">{{ flow.providerId }}</h2>
-      <span class="chip">{{ flowMethodLabel }} · {{ phaseLabel(flow) }}</span>
+      <h2 class="auth-flow__provider">{{ flow.providerId }}</h2>
+      <span class="auth-flow__phase">{{ flowMethodLabel }} · {{ phaseLabel(flow) }}</span>
     </div>
 
     <p v-if="flow.prompt === null" class="hint-text">
@@ -140,7 +140,7 @@ function phaseLabel(snapshot: AuthFlowSnapshot | null): string {
   </section>
 
   <!-- 流程结束后只留一行结论，不把清单整体下推。 -->
-  <div v-else-if="flow !== null" role="status" class="status-notice">
+  <div v-else-if="flow !== null" role="status" class="auth-flow auth-flow--complete">
     <p>
       {{ flow.providerId }} · {{ flowMethodLabel }} {{ phaseLabel(flow) }}<span v-if="flow.message !== null">：{{ flow.message }}</span>
     </p>
@@ -158,3 +158,45 @@ function phaseLabel(snapshot: AuthFlowSnapshot | null): string {
     </AppButton>
   </div>
 </template>
+
+<style scoped>
+.auth-flow {
+  min-width: 0;
+  border-left: 3px solid var(--color-desk-accent);
+  background: var(--color-desk-surface);
+  padding: 0.75rem 1rem;
+}
+
+.auth-flow--active {
+  display: grid;
+  gap: 0.625rem;
+}
+
+.auth-flow__provider {
+  overflow-wrap: anywhere;
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  font-weight: 650;
+}
+
+.auth-flow__phase {
+  color: var(--color-desk-accent);
+  font-size: 0.6875rem;
+  font-weight: 600;
+}
+
+.auth-flow--active :deep(.hint-text) {
+  margin: 0;
+}
+
+.auth-flow--complete {
+  color: var(--color-desk-ink);
+  font-size: 0.75rem;
+  line-height: 1.55;
+}
+
+.auth-flow--complete p {
+  margin: 0;
+}
+</style>

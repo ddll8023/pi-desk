@@ -287,10 +287,10 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="space-y-4">
-    <header>
-      <h1 class="text-xl font-semibold tracking-tight">模型</h1>
-      <p class="mt-1 text-sm text-desk-muted">
+  <div class="model-settings">
+    <header class="model-settings__header">
+      <h1 class="model-settings__title">模型</h1>
+      <p class="model-settings__description">
         管理 Pi 的供应商凭据与自定义供应商，并选择对话页显示哪些模型。凭据与 models.json 的改动需要在重新加载会话后才会生效。
       </p>
     </header>
@@ -298,7 +298,7 @@ onUnmounted(() => {
     <!-- 流程条固定在顶部：滚到清单中部发起登录时，进度与重载入口仍在视野内。 -->
     <div
       v-if="flow !== null"
-      class="sticky top-0 z-10 -mx-6 border-b border-desk-line bg-desk-canvas px-6 py-3 sm:-mx-8 sm:px-8"
+      class="model-settings__flow-sticky"
     >
       <AuthFlowBanner :reloading="sessionStore.opening" @reload="reloadRuntime" />
     </div>
@@ -351,39 +351,47 @@ onUnmounted(() => {
       </AppButton>
     </div>
 
-    <div class="flex flex-wrap items-center gap-2">
-      <input
-        v-model="query"
-        type="search"
-        placeholder="按名称或 provider 过滤"
-        class="text-control sm:max-w-64"
-      >
-      <span v-if="statusView.phase === 'ready'" class="chip">
-        已配置 {{ configuredCount }} / {{ authProviders.length }}
-      </span>
-      <span class="chip">隐藏 {{ totalHiddenCount }} 个模型</span>
-      <AppButton
-        variant="compact"
-        :disabled="!canToggle || totalHiddenCount === 0"
-        @click="showAll"
-      >
-        恢复全部显示
-      </AppButton>
-      <AppButton
-        variant="compact"
-        class="ml-auto"
-        :disabled="configBusy || statusView.phase === 'loading'"
-        @click="refreshAll"
-      >
-        重新读取
-      </AppButton>
-      <AppButton
-        variant="primary"
-        :disabled="configBusy || parseError !== null"
-        @click="startCreate()"
-      >
-        添加自定义供应商
-      </AppButton>
+    <div class="model-settings__toolbar">
+      <label class="model-settings__search">
+        <span class="sr-only">搜索供应商</span>
+        <input
+          v-model="query"
+          type="search"
+          placeholder="按名称或 provider 过滤"
+          class="text-control"
+        >
+      </label>
+      <div class="model-settings__toolbar-meta">
+        <span v-if="statusView.phase === 'ready'" class="model-settings__stat">
+          已配置 <strong>{{ configuredCount }}</strong><span class="model-settings__stat-total">/ {{ authProviders.length }}</span>
+        </span>
+        <span class="model-settings__stat">
+          隐藏模型 <strong>{{ totalHiddenCount }}</strong>
+        </span>
+      </div>
+      <div class="model-settings__actions">
+        <AppButton
+          variant="compact"
+          :disabled="!canToggle || totalHiddenCount === 0"
+          @click="showAll"
+        >
+          恢复全部显示
+        </AppButton>
+        <AppButton
+          variant="compact"
+          :disabled="configBusy || statusView.phase === 'loading'"
+          @click="refreshAll"
+        >
+          重新读取
+        </AppButton>
+        <AppButton
+          variant="primary"
+          :disabled="configBusy || parseError !== null"
+          @click="startCreate()"
+        >
+          添加自定义供应商
+        </AppButton>
+      </div>
     </div>
 
     <p v-if="snapshot !== null" class="font-mono text-2xs text-desk-muted">{{ snapshot.filePath }}</p>
@@ -391,10 +399,10 @@ onUnmounted(() => {
       条目过多，这里只展示了一部分；其余条目仍保留在文件里。
     </p>
 
-    <section class="space-y-1.5">
-      <div class="flex flex-wrap items-baseline justify-between gap-2">
-        <h2 class="panel-section-title">供应商</h2>
-        <span class="chip">{{ providerRows.length }}</span>
+    <section class="model-settings__providers">
+      <div class="model-settings__section-heading">
+        <h2>供应商</h2>
+        <span>{{ providerRows.length }} 项</span>
       </div>
 
       <p v-if="statusView.phase === 'loading'" class="hint-text">正在读取凭据状态…</p>
@@ -402,7 +410,7 @@ onUnmounted(() => {
         {{ authProviders.length === 0 ? 'Pi 没有报告任何 Provider。' : '没有匹配的供应商；清空搜索可以看到全部已配置项。' }}
       </p>
 
-      <ul v-else ref="listElement" class="space-y-1.5">
+      <ul v-else ref="listElement" class="model-settings__provider-list">
         <li v-for="row in providerRows" :key="row.id">
           <ProviderListItem
             :row="row"
@@ -434,9 +442,9 @@ onUnmounted(() => {
       @cancel="cancelEditor"
     />
 
-    <section class="panel-section">
-      <h2 class="panel-section-title">边界说明</h2>
-      <ul class="list-disc space-y-1 pl-4 text-xs leading-5 text-desk-muted">
+    <details class="model-settings__boundaries">
+      <summary>凭据与模型配置说明</summary>
+      <ul class="model-settings__boundary-list">
         <li>提交的密钥只经一次受限通道交给 Pi，不进入聊天、提示词、偏好或日志；已保存的凭据不会回传到页面。</li>
         <li>退出登录只删除 Pi 保存在 auth.json 里的凭据，不影响环境变量与 models.json 里配置的凭据或密钥命令。</li>
         <li>凭据与条目变化后，运行中的 Runtime 仍使用启动时的模型快照，需要重新加载才会生效。</li>
@@ -445,7 +453,7 @@ onUnmounted(() => {
         <li>文件在应用之外被改过时，本次保存会被拒绝；点「重新读取」后再保存即可。</li>
         <li>对话页的模型可见性只影响输入坞模型选择器的候选项，不改变 Pi 的模型配置；偏好读取失败时不过滤任何模型。</li>
       </ul>
-    </section>
+    </details>
 
     <Teleport to="body">
       <ConfirmDialog
@@ -470,3 +478,177 @@ onUnmounted(() => {
     />
   </div>
 </template>
+
+<style scoped>
+.model-settings {
+  display: grid;
+  gap: 1.25rem;
+  color: var(--color-desk-ink);
+}
+
+.model-settings__header {
+  max-width: 48rem;
+  padding-bottom: 0.25rem;
+}
+
+.model-settings__title {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 650;
+  line-height: 1.35;
+  letter-spacing: -0.02em;
+}
+
+.model-settings__description {
+  margin-top: 0.5rem;
+  color: var(--color-desk-muted);
+  font-size: 0.8125rem;
+  line-height: 1.65;
+}
+
+.model-settings__flow-sticky {
+  position: sticky;
+  z-index: 10;
+  top: 0;
+  margin-inline: -1.5rem;
+  border-bottom: 1px solid var(--color-desk-line);
+  background: var(--color-desk-canvas);
+  padding: 0.75rem 1.5rem;
+}
+
+.model-settings__toolbar {
+  display: grid;
+  grid-template-columns: minmax(12rem, 1fr) auto auto;
+  align-items: center;
+  gap: 0.75rem 1rem;
+  border-block: 1px solid var(--color-desk-line);
+  padding-block: 0.75rem;
+}
+
+.model-settings__search {
+  min-width: 0;
+  max-width: 24rem;
+}
+
+.model-settings__toolbar-meta,
+.model-settings__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+}
+
+.model-settings__stat {
+  color: var(--color-desk-muted);
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+.model-settings__stat strong {
+  padding-left: 0.25rem;
+  color: var(--color-desk-ink);
+  font-variant-numeric: tabular-nums;
+  font-weight: 650;
+}
+
+.model-settings__stat-total {
+  padding-left: 0.125rem;
+}
+
+.model-settings__actions {
+  justify-content: flex-end;
+}
+
+.model-settings__providers {
+  min-width: 0;
+}
+
+.model-settings__section-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  border-bottom: 1px solid var(--color-desk-line-strong);
+  padding: 0.25rem 0 0.625rem;
+}
+
+.model-settings__section-heading h2 {
+  margin: 0;
+  font-size: 0.875rem;
+  font-weight: 650;
+}
+
+.model-settings__section-heading > span {
+  color: var(--color-desk-muted);
+  font-size: 0.6875rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.model-settings__provider-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.model-settings__provider-list > li + li {
+  border-top: 1px solid var(--color-desk-line);
+}
+
+.model-settings__boundaries {
+  border-top: 1px solid var(--color-desk-line);
+  padding-top: 0.75rem;
+}
+
+.model-settings__boundaries summary {
+  width: fit-content;
+  color: var(--color-desk-muted);
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.model-settings__boundary-list {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0.75rem 0 0;
+  padding-left: 1.125rem;
+  color: var(--color-desk-muted);
+  font-size: 0.75rem;
+  line-height: 1.6;
+}
+
+.model-settings__boundaries summary:focus-visible {
+  outline: 2px solid var(--color-desk-accent);
+  outline-offset: 3px;
+}
+
+@media (max-width: 900px) {
+  .model-settings__toolbar {
+    grid-template-columns: minmax(12rem, 1fr) auto;
+  }
+
+  .model-settings__actions {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 560px) {
+  .model-settings {
+    gap: 1rem;
+  }
+
+  .model-settings__flow-sticky {
+    margin-inline: -1.5rem;
+    padding-inline: 1rem;
+  }
+
+  .model-settings__toolbar {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .model-settings__toolbar-meta,
+  .model-settings__actions {
+    justify-content: flex-start;
+  }
+}
+</style>
