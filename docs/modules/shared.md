@@ -40,7 +40,7 @@
 | `src/shared/runtime/resources.ts` | 资源预读、诊断与 MCP 状态、探测、配置、命令 |
 | `src/shared/runtime/api.ts` | `RuntimeApi` 桥接接口：聚合上述四组方法，跨域类型在此引用 |
 
-请求目标的运行实例与绑定代际由主进程登记，不等同于标签键或可变的当前项目。后台投影留底是页面展示缓存，SDK 会话和历史文件仍是另一层生命周期。`stores/runtime.ts` 只是装配门面：会话运行、历史缓存、模型能力与模型展示偏好分别落在 `runtime-core`、`runtime-history`、`runtime-models`、`runtime-model-display`，门面保留原有公开成员与历史类型再导出，消费者不需要改调用点。
+请求目标的运行实例与绑定代际由主进程登记，不等同于标签键或可变的当前项目；按会话读取历史不带这两项，由主进程判定该会话走绑定路径还是日志路径。后台投影留底是页面展示缓存，SDK 会话和历史文件仍是另一层生命周期。`stores/runtime.ts` 只是装配门面：会话运行、历史缓存、模型能力与模型展示偏好分别落在 `runtime-core`、`runtime-history`、`runtime-models`、`runtime-model-display`，门面保留原有公开成员与历史类型再导出，消费者不需要改调用点。
 
 ## F-config：Desktop 配置（混合）
 

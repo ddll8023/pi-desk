@@ -8,6 +8,7 @@
  * 上限由 MAX_SESSION_WINDOW 约束；窗口是前缀，所以每次响应都能整体替换分片，不需要偏移量或追加合并，
  * 两次请求之间列表重排、新增或删除也不会产生重复行或空洞。
  * 单次动作失败放在 `actionError`，不影响已加载的列表。
+ * 打开前先按会话读取一页历史交给运行切片展示，未绑定时也能看内容；日志读取不排队，失败或过期一律不写入。
  */
 import { defineStore } from 'pinia'
 import { computed, ref, shallowRef } from 'vue'

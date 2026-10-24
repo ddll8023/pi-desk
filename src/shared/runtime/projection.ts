@@ -254,6 +254,10 @@ export interface ProjectionSnapshot {
   readonly droppedMessages: number
   readonly droppedTools: number
   readonly activity?: SessionActivity
+  /**
+   * 分页锚点与分支版本：`revision` 由宿主产生，只用于判断已加载的分页是否仍属于同一分支，
+   * 不由页面回传，也不参与寻址。
+   */
   readonly history?: { readonly before: string | null; readonly revision: number }
 }
 

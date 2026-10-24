@@ -1,4 +1,4 @@
-/** 会话列表、开关与运行状态：preload 的 sessions 域，只经固定 channel 与主进程通信，载荷与响应在此重建与校验。 */
+/** 会话列表、开关、历史读取与运行状态：preload 的 sessions 域，只经固定 channel 与主进程通信，载荷与响应在此重建与校验。 */
 
 import { ipcRenderer } from 'electron'
 import type { IpcRendererEvent } from 'electron'

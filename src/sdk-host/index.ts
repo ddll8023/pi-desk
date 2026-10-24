@@ -1,4 +1,4 @@
-/** SDK 宿主入口：初始化不建立会话，内部生命周期与解除等待控制分开分派，不提供页面提交入口。 */
+/** SDK 宿主入口：初始化不建立会话，内部生命周期与解除等待控制分开分派，不提供页面提交入口；日志读取与投影检查点在同一进程内共享，绑定可直接复用查看时解析出的首页。 */
 import { randomUUID } from 'node:crypto'
 import { isAbsolute, resolve } from 'node:path'
 import { SDK_HOST_PROTOCOL_VERSION, isSdkHostRequest } from './protocol'

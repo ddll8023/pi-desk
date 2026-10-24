@@ -1,4 +1,4 @@
-/** 单活动 SDK 会话的生命周期所有者；只提供内部绑定，不提供 prompt、历史投影或页面 ready。 */
+/** 单活动 SDK 会话的生命周期所有者：提供内部绑定、绑定首页与按分支读取历史；不提供 prompt，页面级投影与 ready 由主进程映射。 */
 import { randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { readFile, realpath, stat } from 'node:fs/promises'

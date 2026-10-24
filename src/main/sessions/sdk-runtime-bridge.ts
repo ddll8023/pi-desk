@@ -15,6 +15,9 @@
  * 前台实例不参与空闲回收：切走或清空前台后才重新计时。
  * 空会话释放是唯一例外：绑定还没有任何消息落盘的会话且完全空闲的实例，在让出前台或切换会话时
  * 直接解除占用——这类会话没有文件、无法从列表重开，保留只会留下「未命名会话」占位行。
+ *
+ * 查看历史不属于运行实例：它由只读宿主池承担，不登记运行实例、不占会话、不参与前台选择；
+ * 同一会话随后真正绑定时可以接管那个进程，投影检查点因此能跨「查看」与「绑定」复用。
  */
 import { HOST_IDLE_RECLAIM_MS, SdkHostError, SDK_HOST_FAILURE_MESSAGES } from './sdk-host-manager'
 import type { SdkHostErrorCode, SdkHostManager, SdkHostStatus } from './sdk-host-manager'

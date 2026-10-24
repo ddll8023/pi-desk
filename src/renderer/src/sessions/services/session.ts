@@ -1,4 +1,4 @@
-/** 作为渲染端会话列表、打开、重新加载与删除的调用入口，把桥接缺失与通信异常转换为安全的展示结果。 */
+/** 作为渲染端会话列表、打开、重新加载、删除与历史读取的调用入口，把桥接缺失与通信异常转换为安全的展示结果。 */
 import type { HistoryQuery } from '../../../../shared/runtime-api'
 import type {
   SessionDeleteRequest,

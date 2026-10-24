@@ -4,7 +4,7 @@
 
 ## 职责与入口
 
-负责按项目读取会话列表、打开／新建／重载／删除会话，监督 SDK 宿主、维护运行身份与占用，发送与中止、回退、压缩，投影聊天／工具／历史／活动与用量，以及 SDK 扩展对话框、通知和 widget。
+负责按项目读取会话列表、打开／新建／重载／删除会话、按会话读取历史（页、轮次与原文续段），监督 SDK 宿主、维护运行身份与占用，发送与中止、回退、压缩，投影聊天／工具／历史／活动与用量，以及 SDK 扩展对话框、通知和 widget。
 
 入口为侧栏及会话选择器、输入坞、聊天消息动作和资源重载。文件编辑器、终端、MCP 配置与供应商持久化属于其他模块；会话内 Agent 自己读写项目文件也不等于桌面文件编辑接口。
 
@@ -83,7 +83,7 @@
 
 ## 公共与跨模块引用
 
-- [F-assembly](shared.md#f-assembly进程与页面组装混合)：会话／运行／Runtime／扩展 IPC 注册、广播、`src/main/app-lifecycle.ts` 的生命周期及 `src/renderer/src/shell/components/AppDialogHost.vue` 的确认弹层。
+- [F-assembly](shared.md#f-assembly进程与页面组装混合)：`src/main/sessions/ipc.ts` 的 `registerSessionHandlers`、`src/main/sessions/runtime-ipc.ts` 的 `registerRuntimeHandlers`、`src/main/sessions/extension-ui-ipc.ts` 的 `registerExtensionUiHandlers`、广播，`src/main/app-lifecycle.ts` 的生命周期及 `src/renderer/src/shell/components/AppDialogHost.vue` 的确认弹层。
 - [F-runtime-state](shared.md#f-runtime-state综合-runtime-状态混合)：`src/renderer/src/sessions/stores/runtime-core.ts` 持有展示状态与投影分片，`src/renderer/src/sessions/stores/runtime-history.ts` 持有历史缓存，`src/renderer/src/sessions/stores/runtime.ts` 为装配门面；`src/shared/runtime-api.ts` 提供综合契约。
 - [F-sidebar](shared.md#f-sidebar项目会话树混合)：项目树中的会话与运行状态。
 - [F-process](shared.md#f-process受管进程与-sdk-公共设施共享)：SDK 定位、固定环境与进程终止。SDK 动态加载不代表宿主可自行选择任意授权目录。

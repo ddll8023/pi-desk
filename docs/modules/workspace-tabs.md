@@ -21,7 +21,7 @@ Store 完整实现已读；组件经 `shell/WorkspaceView.vue` 的 Props 与事�
 ## 公共与跨模块引用
 
 - [F-assembly](shared.md#f-assembly进程与页面组装混合)：`src/renderer/src/shell/components/WorkspaceView.vue` 挂载面板，脏文件关闭确认状态由工作区标签 Store 持有，快捷命令弹层由快捷命令 Store 持有。
-- [F-runtime-state](shared.md#f-runtime-state综合-runtime-状态混合)：`src/renderer/src/sessions/stores/runtime-core.ts` 提供前台运行身份及就绪情况，经 `src/renderer/src/sessions/stores/runtime.ts` 门面暴露。
+- [F-runtime-state](shared.md#f-runtime-state综合-runtime-状态混合)：`src/renderer/src/sessions/stores/runtime-core.ts` 提供前台运行身份、就绪情况，以及会话日志历史的展示与退场交接，经 `src/renderer/src/sessions/stores/runtime.ts` 门面暴露。
 - [项目](projects-trust.md)：`src/renderer/src/projects/stores/project.ts` 提供当前项目与选择来源。
 - [会话](sessions-chat.md)：会话状态经 `src/renderer/src/workspace/stores/session-tab-bridge.ts` 的只读视图读取（`opening`、`openingProjectPath`、`loadedSessionIds`、`sessionsOf`、`actionError`、`awaitingTrust`、`awaitingInterrupt`、`waitForOpenActions`、`invalidateOpenSelection`），提供者由 `src/renderer/src/shell/use-app-startup.ts` 注册；提交与打开意图的类型仍来自 `src/renderer/src/sessions/stores/session.ts` 的 `open`、`openIntent`（意图由标签侧声明）；`src/renderer/src/sessions/stores/session-runs.ts` 提供运行清单与结束动作。
 - [文件](files-editor.md)：`src/renderer/src/editor/stores/project-editor.ts` 拥有编辑记录，标签只引用其 key 与脏状态。

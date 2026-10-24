@@ -1,4 +1,4 @@
-/** SDK 宿主内部生命周期、目标授权与交互契约；不引入 SDK，不开放任意调用或凭据快照。 */
+/** SDK 宿主内部生命周期、目标授权、日志读取与交互契约；不引入 SDK，不开放任意调用或凭据快照。 */
 import { isExtensionDialogResponseInput, projectExtensionUiRequest } from '../shared/extension-ui-api'
 import {
   COMPACT_INSTRUCTIONS_MAX_CHARS,

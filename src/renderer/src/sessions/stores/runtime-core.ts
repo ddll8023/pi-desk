@@ -1,7 +1,9 @@
 /**
  * 会话运行与投影状态：前台实例身份、Prompt/回退/中止/压缩等动作状态、投影分片与后台留底。
- * 历史缓存是纯函数模块、由本切片组合；模型能力、模型切换与展示偏好由 `runtime-models`
- * 与 `runtime-model-display` 持有，本切片只经 `bindStatusEffects` 在状态收敛时通知它们。
+ * 同时持有日志展示：会话未绑定时先展示按会话读到的历史，绑定后等权威基准落位再交还展示位。
+ * 历史读取按会话寻址，读取目标由本切片给出；历史缓存是纯函数模块、由本切片组合；
+ * 模型能力、模型切换与展示偏好由 `runtime-models` 与 `runtime-model-display` 持有，
+ * 本切片只经 `bindStatusEffects` 在状态收敛时通知它们。
  */
 import { computed, ref, shallowRef } from 'vue'
 import type { ComputedRef, Ref } from 'vue'
