@@ -37,7 +37,8 @@ async function render(): Promise<void> {
     await nextTick()
     if (disposed || current !== generation || !preview.value) return
     const shadow = preview.value.shadowRoot ?? preview.value.attachShadow({ mode: 'open' })
-    shadow.innerHTML = `<style>:host{display:block;overflow:auto}svg{display:block;max-width:100%;height:auto;margin:auto}@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}</style>${svg}`
+    // 图表在 shadow DOM 内自己滚动，外部样式表进不去，滚动条样式只能随这份内联样式一起注入。
+    shadow.innerHTML = `<style>:host{display:block;overflow:auto}:host::-webkit-scrollbar{width:8px;height:8px}:host::-webkit-scrollbar-track{background:transparent}:host::-webkit-scrollbar-thumb{background-color:color-mix(in srgb, var(--color-desk-line-strong) 55%, transparent);border:2px solid transparent;border-radius:999px}:host::-webkit-scrollbar-thumb:hover{background-color:var(--color-desk-line-strong)}svg{display:block;max-width:100%;height:auto;margin:auto}@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}</style>${svg}`
   } catch (error) { if (!disposed && current === generation) { previewError.value = error instanceof Error ? error.message : String(error); preview.value?.shadowRoot?.replaceChildren() } }
   finally { if (!disposed && current === generation) previewLoading.value = false }
 }

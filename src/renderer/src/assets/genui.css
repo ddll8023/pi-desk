@@ -108,7 +108,10 @@
 .genui-table-search .text-control { min-height: 32px; padding: 4px 10px; font-size: 12px; }
 .genui-table-clear { flex: none; border-radius: var(--radius-desk-sm); padding: 4px 8px; color: var(--color-desk-accent); font-size: 11px; cursor: pointer; }
 .genui-table-clear:hover { background: var(--color-desk-accent-soft); }
-.genui-table-scroll { min-width: 0; overflow-x: auto; border: 1px solid var(--color-desk-line); border-radius: var(--radius-desk-md); background: var(--color-desk-surface); scrollbar-width: thin; scrollbar-color: var(--color-desk-line-strong) transparent; }
+/* 横向滚动条沿用 ui.css 的共享细条：此处不设 scrollbar-width 与 scrollbar-color，
+ * 它们一旦不是 auto 就会覆盖 ::-webkit-scrollbar 定制，把细条退回成按 scrollbar-color 上色的原生滚动条。
+ * 本文件由 UiDocument.vue 单独导入，不在 main.css 的样式入口链上。 */
+.genui-table-scroll { min-width: 0; overflow-x: auto; border: 1px solid var(--color-desk-line); border-radius: var(--radius-desk-md); background: var(--color-desk-surface); }
 .genui-table table { width: 100%; border-collapse: collapse; font-size: 13px; line-height: 1.6; }
 .genui-table th { border-bottom: 1px solid var(--color-desk-line); background: var(--color-desk-surface-subtle); color: var(--color-desk-muted); font-size: 11px; font-weight: 600; text-align: left; }
 /* 表头整体是排序按钮：整格可点，箭头贴文字；数值列靠右对齐，箭头也跟着靠右。 */

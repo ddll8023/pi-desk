@@ -17,6 +17,7 @@ Pi Desktop：Electron + Vue 3 + TypeScript 桌面客户端。会话执行主链�
 - 约定：`topics/conventions/settings-page.md`——在新增或调整设置页的分节、导航与入口时读取。
 - 约定：`topics/conventions/multi-session-scope.md`——在调整侧栏、会话列表、工作区标签、宿主生命周期或输入区，或考虑给多会话加新能力时读取。
 - 约定：`topics/conventions/projection-limits.md`——在调整消息投影的展示上限、截断与丢弃逻辑，或修改对话区的响应过程折叠与截断提示时读取。
+- 约定：`topics/conventions/scrollbar-styling.md`——在新增滚动容器、调整滚动条样式或 `scrollbar-gutter` 槽位时读取。
 - 坑：`topics/gotchas/project-trust-probe.md`——在添加项目、准备验证用目录或遇到意外信任提示时读取。
 - 坑：`topics/gotchas/dev-server-header-cache.md`——在调整开发态页面的响应头（CSP 等）或遇到 dev 下页面行为不随配置变化时读取。
 - 坑：`topics/gotchas/dev-main-process-restart.md`——在 dev 会话中判断主进程改动是否已生效、准备重启 dev 进程时读取。
