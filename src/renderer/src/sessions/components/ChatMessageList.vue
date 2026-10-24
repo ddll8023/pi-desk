@@ -88,6 +88,8 @@ const runtimeInfo = computed(() => (
   runtimeView.value.phase === 'ready' ? runtimeView.value.snapshot.info : null
 ))
 const streaming = computed(() => runtimeInfo.value?.isStreaming === true)
+/** 当前展示来自会话日志：内容由文件解析得到，可执行会话尚未绑定。 */
+const logActive = computed(() => runtimeStore.logSessionId !== null)
 /** 压缩进行中：运行提示改成压缩文案，但不改变粘底与停止键的行为。 */
 const compacting = computed(() => runtimeInfo.value?.isCompacting === true)
 const pendingRewind = ref<{ request: RuntimeRewindRequest; refill: UserMessagePayload } | null>(null)
@@ -782,6 +784,9 @@ onBeforeUnmount(() => {
       <div ref="content" class="chat-column mx-auto flex flex-col gap-5">
         <p v-if="syncNotice" role="status" class="status-notice status-notice-info">{{ syncNotice }}</p>
         <p v-if="truncationNotice" role="status" class="status-notice">{{ truncationNotice }}</p>
+        <p v-if="logActive" role="status" class="status-notice status-notice-info">
+          已显示该会话的历史；正在连接可执行会话，连接完成前不能发送、回退或压缩。
+        </p>
         <p v-if="rewindView.phase === 'requesting'" role="status" class="status-notice status-notice-info">{{ pendingEdit ? '正在回退并重发修改后的消息…' : '正在回退对话并同步历史…' }}</p>
         <p v-else-if="rewindView.phase === 'error'" role="alert" class="status-notice status-notice-error">{{ rewindView.error.message }}</p>
         <p v-else-if="rewindView.phase === 'done' && rewindView.cancelled" role="status" class="status-notice">Pi 扩展取消了回退；原消息文本未交回输入框。</p>

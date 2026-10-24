@@ -3,7 +3,8 @@
  *
  * 列表来自 Pi 管理的会话文件（session-store），按调用方显式给出的项目读取并只读取窗口内的文件：
  * 侧栏按项目树展示会话，因此列表不再隐式取当前项目，但只接受已添加项目的规范路径；
- * 打开、重载与删除成功时回传的也是调用方窗口大小的列表快照（`listLimit`），
+ * 打开与重载只回传运行实例与会话身份，不附带会话列表：切换链不等目录扫描，列表读取失败也不会
+ * 把已完成的切换报成失败；删除成功后回传调用方窗口大小的列表快照（`listLimit`），
  * 变更不会把页面已展开的列表塌回首屏。
  * 新建、打开、切换与重载都交给 SDK 宿主，由宿主在同一进程内替换会话，目标、归属与信任经本模块的
  * SDK 授权回路复核，授权依据是来源运行实例登记的归属项目，不是前台项目。
@@ -22,7 +23,9 @@ import type {
   SessionListResult,
   SessionOpenRequest,
   SessionOpenData,
-  SessionOpenResult
+  SessionOpenResult,
+  SessionHistoryRequest,
+  SessionHistoryResult
 } from '../../shared/session-api'
 import type { RuntimeStatus } from '../../shared/runtime-api'
 import type { ProjectManager } from '../projects/project-manager'
@@ -121,7 +124,11 @@ export class SessionManager {
       if (!await this.options.projects.hasProject(requested)) {
         throw new SessionFailure('INVALID_PROJECT_PATH', '只能读取已添加项目的会话。')
       }
-      return { ok: true, data: await listSessions(requested, limit) }
+      const list = await listSessions(requested, limit)
+      // 侧栏展开项目即读取它的会话列表：顺手预热该项目的只读解析宿主，用户点开会话时查看几乎只剩文件解析。
+      // 预热只保活一个解析进程，不改登记、不占会话、不报错，失败也只是退回冷启动。
+      this.options.sdk.prepareProject(requested)
+      return { ok: true, data: list }
     } catch (error) {
       return this.failure(error, {
         code: 'INTERNAL_ERROR',
@@ -130,7 +137,38 @@ export class SessionManager {
     }
   }
 
-  /** 打开或新建会话；成功时返回该会话所属项目在调用方窗口内的列表快照。 */
+  /**
+   * 会话历史读取：页面只给项目与会话，这里判定该会话当前由哪条路径作答。
+   * 已被运行实例接管时由绑定路径读权威分支（绑定代际在 SDK 桥内复核）；未接管时由宿主解析日志文件。
+   * 两条都不建立会话、不申请信任、不改动任何文件；读不到时页面退回原来的等待呈现。
+   */
+  async readHistory(request: SessionHistoryRequest): Promise<SessionHistoryResult> {
+    try {
+      const projectPath = await normalizeProjectPath(request.projectPath)
+      if (!await this.options.projects.hasProject(projectPath)) {
+        throw new SessionFailure('INVALID_PROJECT_PATH', '只能读取已添加项目的会话历史。')
+      }
+      const bound = await this.options.sdk.readBoundHistory({
+        projectPath, sessionId: request.sessionId, query: request.query
+      })
+      if (bound !== null) {
+        return { ok: true, data: { projectPath, sessionId: request.sessionId, data: bound } }
+      }
+      const identity = await resolveSdkSessionFile(projectPath, { kind: 'id', sessionId: request.sessionId })
+      const data = await this.options.sdk.readSessionLog({
+        projectPath, sessionId: identity.sessionId,
+        sessionFile: identity.sessionFile, fileStamp: identity.fileStamp, query: request.query
+      })
+      return { ok: true, data: { projectPath, sessionId: identity.sessionId, data } }
+    } catch (error) {
+      return this.failure(error, {
+        code: 'INTERNAL_ERROR',
+        message: '读取会话历史时发生未预期的内部错误。'
+      })
+    }
+  }
+
+  /** 打开或新建会话；成功时只返回实际归属项目、运行实例与会话身份，不回传会话列表。 */
   async open(request: SessionOpenRequest): Promise<SessionOpenResult> {
     try {
       return { ok: true, data: await this.applyOpen(request) }
@@ -151,6 +189,8 @@ export class SessionManager {
    * `allowInterrupt` 仍在契约中保留，供后端在必须改变现有绑定且用户已确认时使用。
    */
   private async applyOpen(request: SessionOpenRequest): Promise<SessionOpenData> {
+    // 选择序号在主进程分配：后到的打开不论谁先完成，前台都归于最后一次选择。
+    const selection = this.options.sdk.beginSelection()
     const projectPath = await normalizeProjectPath(request.projectPath)
     if (!await this.options.projects.hasProject(projectPath)) {
       throw new SessionFailure('INVALID_PROJECT_PATH', '只能打开已添加项目的会话。')
@@ -162,7 +202,7 @@ export class SessionManager {
     const bound = this.boundSessionOfForeground()
     if (request.sessionId !== null && status.state === 'ready' && status.runId !== null
       && bound?.projectPath === projectPath && status.info?.sessionId === request.sessionId) {
-      return this.openData(projectPath, request.listLimit, status.runId, request.sessionId)
+      return this.openData(projectPath, status.runId, request.sessionId)
     }
     // 已由某个运行实例承载的会话交给后端转前台复用：此时会话文件可能尚未落盘，不能当作列表过期。
     if (request.sessionId !== null && !this.isSessionOccupied(projectPath, request.sessionId)
@@ -170,7 +210,7 @@ export class SessionManager {
       throw new SessionFailure('SESSION_NOT_FOUND', '当前项目下找不到该会话；列表可能已过期。')
     }
 
-    return this.openWithSdk(projectPath, request)
+    return this.openWithSdk(projectPath, request, selection)
   }
 
   /** 该会话是否已由某个运行实例占用；占用覆盖打开中与未确认退出，与会话文件是否已落盘无关。 */
@@ -182,12 +222,15 @@ export class SessionManager {
    * SDK 主链：目标预检、信任判定与旧会话收敛都由宿主在替换前完成，
    * 这里只复核实际打开的会话；成功后的状态经事件收敛。
    */
-  private async openWithSdk(projectPath: string, request: SessionOpenRequest): Promise<SessionOpenData> {
+  private async openWithSdk(
+    projectPath: string, request: SessionOpenRequest, selection: number
+  ): Promise<SessionOpenData> {
     const switched = await this.options.sdk.switchSession(
       request.sessionId === null ? 'new' : 'open',
       request.sessionId === null ? { kind: 'new' } : { kind: 'id', sessionId: request.sessionId },
       request.allowInterrupt,
-      { projectPath, sessionId: request.sessionId }
+      { projectPath, sessionId: request.sessionId },
+      selection
     )
     if (switched.cancelled) {
       throw new SessionFailure('RUNTIME_COMMAND_REJECTED', '会话切换被取消，当前会话保持不变。')
@@ -197,20 +240,23 @@ export class SessionManager {
       // 目标一致性由宿主预检保证；这里只复核实际打开的会话，不删除任何文件。
       throw new SessionFailure('SESSION_NOT_FOUND', '实际打开的会话与请求不一致；未改动任何已有文件。')
     }
-    return this.openData(projectPath, request.listLimit, switched.runId, openedSessionId)
+    return this.openData(projectPath, switched.runId, openedSessionId)
   }
 
-  /** 列表读取可能晚于前台切换，因此实际打开身份必须在读取前固定。 */
-  private async openData(
-    projectPath: string, listLimit: number, runId: number, openedSessionId: string | null
-  ): Promise<SessionOpenData> {
-    const list = await listSessions(projectPath, listLimit)
+  /**
+   * 打开结果的固定内容：实际归属项目、运行实例与实际会话身份。
+   * 不再附带回传会话列表：列表由页面按自己的窗口节奏单独读取，打开链不等目录扫描。
+   * 列表读取可能晚于前台切换，因此实际打开身份必须在读取前固定。
+   */
+  private openData(
+    projectPath: string, runId: number, openedSessionId: string | null
+  ): SessionOpenData {
     const currentProjectPath = this.options.projects.currentProjectPath()
     if (currentProjectPath !== null && currentProjectPath !== projectPath) {
-      // 等待宿主或列表期间用户可能已经切项目；旧请求不能把前台留在原项目。
+      // 等待宿主期间用户可能已经切项目；旧请求不能把前台留在原项目。
       this.options.sdk.focusProject(currentProjectPath)
     }
-    return { ...list, runId, openedSessionId }
+    return { projectPath, runId, openedSessionId }
   }
 
   /**
@@ -256,9 +302,9 @@ export class SessionManager {
    * 重新加载 Pi 资源：宿主在同一进程内重建会话 services；守门与打开链复用，
    * 但不做“同会话幂等返回”，因为目的正是重建服务。
    */
-  async reload(allowInterrupt: boolean, listLimit: number): Promise<SessionOpenResult> {
+  async reload(allowInterrupt: boolean): Promise<SessionOpenResult> {
     try {
-      return { ok: true, data: await this.applyReload(allowInterrupt, listLimit) }
+      return { ok: true, data: await this.applyReload(allowInterrupt) }
     } catch (error) {
       return this.failure(error, {
         code: 'INTERNAL_ERROR',
@@ -271,7 +317,7 @@ export class SessionManager {
    * 重载编排：目标是前台运行实例当前绑定的会话，目标与会话身份在提交前固定。
    * 信任按被重载会话的归属项目复核，避免用前台项目代替它的授权范围。
    */
-  private async applyReload(allowInterrupt: boolean, listLimit: number): Promise<SessionOpenData> {
+  private async applyReload(allowInterrupt: boolean): Promise<SessionOpenData> {
     this.requireProjectPath()
     const status = this.backendStatus()
     if (status.state === 'starting' || status.state === 'stopping') {
@@ -289,16 +335,17 @@ export class SessionManager {
     if (bound === null) {
       throw new SessionFailure('RUNTIME_NOT_READY', '当前没有可重新加载的会话。')
     }
+    const selection = this.options.sdk.beginSelection()
     const trust = await this.options.projectsTrust.refreshStatusOf(bound.projectPath)
     if (trust.resources.length > 0 && trust.decision === null) {
       throw new SessionFailure('TRUST_REQUIRED', '该会话所属项目包含需要信任决定的资源。')
     }
     const switched = await this.options.sdk.switchSession('reload', { kind: 'new' }, allowInterrupt,
-      { projectPath: bound.projectPath, sessionId: bound.sessionId })
+      { projectPath: bound.projectPath, sessionId: bound.sessionId }, selection)
     if (switched.cancelled) {
       throw new SessionFailure('RUNTIME_COMMAND_REJECTED', '重新加载资源被取消，当前会话保持不变。')
     }
-    return this.openData(bound.projectPath, listLimit, switched.runId,
+    return this.openData(bound.projectPath, switched.runId,
       this.options.sdk.sessionStatusOfRun(switched.runId)?.sessionId ?? null)
   }
 

@@ -5,8 +5,8 @@
 
 import type { CapabilitiesResult } from './models'
 import type { McpCommandAction, McpCommandResult, McpConfigResult, McpInspectAbortResult, McpInspectionResult, McpStatusResult, ResourcePreviewResult, ResourcesResult } from './resources'
-import type { HistoryData, ProjectionBatch, ProjectionResult, RuntimeHistoryRequest } from './projection'
-import type { PromptImageInput, PromptResult, RuntimeCompactRequest, RuntimeDiagnosticsResult, RuntimeHistoryResult, RuntimeResult, RuntimeRewindRequest, RuntimeRewindResult, RuntimeSetModelRequest, RuntimeStatus, RuntimeTarget } from './status'
+import type { ProjectionBatch, ProjectionResult } from './projection'
+import type { PromptImageInput, PromptResult, RuntimeCompactRequest, RuntimeDiagnosticsResult, RuntimeResult, RuntimeRewindRequest, RuntimeRewindResult, RuntimeSetModelRequest, RuntimeStatus, RuntimeTarget } from './status'
 
 
 export interface RuntimeApi {
@@ -19,7 +19,6 @@ export interface RuntimeApi {
   readonly rewindRuntime: (request: RuntimeRewindRequest) => Promise<RuntimeRewindResult>
   /** 读取目标运行实例当前绑定的投影快照；未绑定时返回空基准。 */
   readonly getRuntimeProjection: (target: RuntimeTarget) => Promise<ProjectionResult>
-  readonly readRuntimeHistory: (request: RuntimeHistoryRequest) => Promise<RuntimeHistoryResult>
   /** 读取目标运行实例当前绑定的可用模型；失败原因由结果表达。 */
   readonly getRuntimeCapabilities: (target: RuntimeTarget) => Promise<CapabilitiesResult>
   /**

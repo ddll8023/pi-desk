@@ -16,13 +16,14 @@
  * 空会话释放是唯一例外：绑定还没有任何消息落盘的会话且完全空闲的实例，在让出前台或切换会话时
  * 直接解除占用——这类会话没有文件、无法从列表重开，保留只会留下「未命名会话」占位行。
  */
-import { SdkHostError } from './sdk-host-manager'
+import { HOST_IDLE_RECLAIM_MS, SdkHostError, SDK_HOST_FAILURE_MESSAGES } from './sdk-host-manager'
 import type { SdkHostErrorCode, SdkHostManager, SdkHostStatus } from './sdk-host-manager'
 import { isSdkHostFailureCode, emptySdkSessionStatus } from '../../sdk-host/protocol'
 import type {
-  SdkInterruptConfirmation, SdkSessionReference, SdkSessionStatus
+  SdkInterruptConfirmation, SdkLogTarget, SdkSessionReference, SdkSessionStatus
 } from '../../sdk-host/protocol'
 import { SessionRunConflict } from './session-run-registry'
+import type { LogHostPool } from './log-host-pool'
 import type { SessionRunRecord, SessionRunRegistry } from './session-run-registry'
 import type {
   CapabilitiesResult,
@@ -37,8 +38,6 @@ import type {
   PromptResult,
   ResourcesResult,
   RuntimeCompactRequest,
-  RuntimeHistoryRequest,
-  RuntimeHistoryResult,
   RuntimeDiagnosticsResult,
   RuntimeError,
   RuntimeErrorCode,
@@ -50,6 +49,8 @@ import type {
   RuntimeState,
   RuntimeStatus,
   RuntimeTarget,
+  HistoryData,
+  HistoryQuery,
   SessionUsage
 } from '../../shared/runtime-api'
 import type { ExtensionDialogResponseInput, ExtensionUiSnapshot } from '../../shared/extension-ui-api'
@@ -134,6 +135,17 @@ export function sessionErrorOf(error: unknown): SessionError {
   if (failure === null) return { code: 'INTERNAL_ERROR', message: '会话后端发生未预期的内部错误。' }
   return { code: SESSION_ERROR_CODES[failure.code], message: failure.message }
 }
+
+/** 日志读取用过的宿主身份：已有运行实例，或仍在只读池里等待被接管。 */
+type LogHostOrigin = { readonly runId: number } | { readonly poolHostId: number }
+
+/** 日志宿主记忆键：项目与会话都可能含任意字符，用 NUL 分隔避免拼接歧义。 */
+function logHostKey(projectPath: string, sessionId: string): string {
+  return `${projectPath}\u0000${sessionId}`
+}
+
+/** 日志宿主记忆条数上限：只需要覆盖最近查看过的会话。 */
+const LOG_HOST_MEMORY = 32
 
 /** 路径比较与注册表一致：Windows 折叠大小写，其他平台严格比较；用于实例能否跨项目复用。 */
 function sameProjectPath(left: string, right: string): boolean {
@@ -273,9 +285,8 @@ const IDLE_STATUS: RuntimeStatus = {
 
 /**
  * 空闲回收宽限期：宿主空闲这段时间后释放进程，下一次需要宿主的动作再恢复。
- * 内部常量，不做成用户可见设置；未经资源测量的取值不写成性能结论。
+ * 时限取 `HOST_IDLE_RECLAIM_MS`，与只读解析宿主共用，两处不会各写一个数而悄悄漂移。
  */
-const RECLAIM_IDLE_MS = 5 * 60 * 1000
 
 /** 无运行实例时的 Extension UI 快照：没有来源、没有代际也没有状态。 */
 const EMPTY_EXTENSION_UI: ExtensionUiSnapshot = {
@@ -290,6 +301,13 @@ export interface SdkRuntimeBridgeOptions {
   readonly runs: SessionRunRegistry<SdkHostManager>
   /** 宿主按需建立；运行身份由注册表分配，授权回路由组合根接线。 */
   readonly createHost: (runId: number) => SdkHostManager
+  /**
+   * 接上授权回路：新建宿主与从只读池接管宿主都走同一处接线，
+   * 「查看」与「执行」因此共用一套进程而不会出现两种身份。
+   */
+  readonly prepareHost: (host: SdkHostManager) => void
+  /** 只读宿主池：查看历史使用的解析进程，不属于运行实例，也不参与占用判定。 */
+  readonly logHosts: LogHostPool
 }
 
 /**
@@ -311,12 +329,35 @@ export class SdkRuntimeBridge {
   /** 正在进行的回收：新的提交等它收敛后再恢复，不与释放竞争。 */
   private readonly reclaiming = new Map<number, Promise<void>>()
   private shuttingDown = false
+  /** 前台选择序号：打开与重载提交时递增，用于不让先提交后完成的选择把前台改回旧目标。 */
+  private selectionSeed = 0
+  /** 会话最近一次日志读取用过的宿主；绑定时优先接管同一个进程，宿主内的投影检查点才能命中。 */
+  private readonly logHosts = new Map<string, LogHostOrigin>()
+  /** 只读池的关闭结果：退出编排只启动一次，关闭时统一等待。 */
+  private logHostShutdown: Promise<void> | null = null
 
   constructor(private readonly options: SdkRuntimeBridgeOptions) {}
 
   /** 前台运行实例的运行身份；没有前台实例时为 null。页面据此过滤事件来源。 */
   foregroundRunId(): number | null {
     return this.options.runs.foreground()?.runId ?? null
+  }
+
+  /**
+   * 开始一次前台选择：返回本次选择的序号，提交方在完成后凭它判断自己是否已被更晚的选择取代。
+   * 序号只在主进程内有效，不交给页面，因此页面不能影响前台的先后顺序。
+   */
+  beginSelection(): number {
+    return ++this.selectionSeed
+  }
+
+  /**
+   * 选择完成后的归属收敛：本次选择已被更晚的选择取代时，按登记把前台还给该项目最近一次前台的实例，
+   * 不把前台留在本次目标上。这样慢请求完成时不会把用户已经切走的会话又拉回前台。
+   */
+  private settleSelection(selection: number, owner: SessionOwner): void {
+    if (selection === this.selectionSeed) return
+    this.focusProject(owner.projectPath)
   }
 
   /** 指定身份的运行实例；未知身份返回 null，查询不建立宿主。 */
@@ -404,7 +445,7 @@ export class SdkRuntimeBridge {
     const timer = setTimeout(() => {
       this.reclaimTimers.delete(runId)
       void this.reclaimRun(runId)
-    }, RECLAIM_IDLE_MS)
+    }, HOST_IDLE_RECLAIM_MS)
     this.reclaimTimers.set(runId, timer)
   }
 
@@ -547,6 +588,8 @@ export class SdkRuntimeBridge {
    * 不建立宿主、不重绑会话、不中断任何后台实例。
    */
   focusProject(projectPath: string): void {
+    // 该项目成为当前项目时预热解析宿主：预览几乎只剩文件解析，随后的打开也能接管它。
+    this.prepareProject(projectPath)
     const run = this.options.runs.foregroundRunOfProject(projectPath)
     if (run === null) {
       const previous = this.foregroundRunId()
@@ -560,8 +603,99 @@ export class SdkRuntimeBridge {
   }
 
   /**
+   * 项目预热：为当前项目保活一个只读解析宿主，让随后的查看几乎只剩文件解析。
+   * 预热不建立会话、不登记运行实例；失败、被回收或应用退出都只是退回冷启动。
+   */
+  prepareProject(projectPath: string): void {
+    if (this.shuttingDown) return
+    this.options.logHosts.warm(projectPath)
+  }
+
+  /**
+   * 会话日志读取：解析一份已授权的会话文件，供页面在绑定前先展示与翻页历史。
+   * 先借该项目现成可用的执行宿主（同一进程内随后的绑定能直接命中投影检查点），
+   * 没有才用只读宿主池；两条路都不承载会话、不登记运行实例。
+   */
+  async readSessionLog(target: SdkLogTarget): Promise<HistoryData> {
+    if (this.shuttingDown) throw new SdkHostError('HOST_CLOSED', '应用正在退出，不能读取会话历史。')
+    const borrowed = this.borrowableRun(target.projectPath)
+    if (borrowed !== null) {
+      const data = await borrowed.owner.readSessionLog(target)
+      this.rememberLogHost(target.projectPath, target.sessionId, { runId: borrowed.runId })
+      return data
+    }
+    const pooled = this.options.logHosts.acquire(target.projectPath)
+    const data = await pooled.host.readSessionLog(target)
+    this.rememberLogHost(target.projectPath, target.sessionId, { poolHostId: pooled.hostId })
+    return data
+  }
+
+  /**
+   * 可借宿主：先取该项目前台实例，再取同项目其余可用实例。宿主可跨会话共用，
+   * 但它们必须没有未收敛的生命周期操作、也不在关闭或失败状态，否则一次读取会撞上正在收敛的进程。
+   */
+  private borrowableRun(projectPath: string): SessionRunRecord<SdkHostManager> | null {
+    const usable = (run: SessionRunRecord<SdkHostManager>): boolean => {
+      if (run.phase === 'closing' || run.phase === 'unconfirmed') return false
+      const state = run.owner.getStatus().state
+      return state !== 'failed' && state !== 'stopping'
+    }
+    const foreground = this.options.runs.foregroundRunOfProject(projectPath)
+    if (foreground !== null && usable(foreground)) return foreground
+    const other = this.options.runs.allRuns().find(run =>
+      run.projectPath !== null && sameProjectPath(run.projectPath, projectPath) && usable(run))
+    return other ?? null
+  }
+
+  /** 记下服务过该会话日志读取的宿主；表只保留少量最近项，避免随查看过的会话无限增长。 */
+  private rememberLogHost(projectPath: string, sessionId: string, origin: LogHostOrigin): void {
+    const key = logHostKey(projectPath, sessionId)
+    this.logHosts.delete(key)
+    this.logHosts.set(key, origin)
+    while (this.logHosts.size > LOG_HOST_MEMORY) {
+      const oldest = this.logHosts.keys().next().value
+      if (oldest === undefined) break
+      this.logHosts.delete(oldest)
+    }
+  }
+
+  /**
+   * 该会话最近服务日志读取的宿主：已经是运行实例时按常规复用判定；
+   * 还在只读池里时把它接管成运行实例（登记身份、接上授权回路），
+   * 这样绑定与查看落在同一个进程，宿主内的投影检查点才能被复用。
+   */
+  private logHostOf(owner: SessionOwner): SessionRunRecord<SdkHostManager> | null {
+    if (owner.sessionId === null) return null
+    const key = logHostKey(owner.projectPath, owner.sessionId)
+    const origin = this.logHosts.get(key)
+    if (origin === undefined) return null
+    if ('runId' in origin) {
+      const run = this.options.runs.allRuns().find(candidate => candidate.runId === origin.runId)
+      if (run !== undefined && this.canReuse(run, owner.projectPath)) return run
+      this.logHosts.delete(key)
+      return null
+    }
+    const host = this.options.logHosts.claim(origin.poolHostId)
+    this.logHosts.delete(key)
+    if (host === null) return null
+    const runId = this.options.runs.allocateRunId()
+    host.adoptRun(runId, this.options.runs)
+    this.options.prepareHost(host)
+    const record = this.options.runs.registerRun(runId, host)
+    this.attachRun(runId, host)
+    return record
+  }
+
+  /** 实例释放后丢弃指向它的记录，避免绑定落到已结束的进程编号上。 */
+  private forgetLogHosts(runId: number): void {
+    for (const [key, value] of [...this.logHosts]) {
+      if ('runId' in value && value.runId === runId) this.logHosts.delete(key)
+    }
+  }
+
+  /**
    * 全部运行实例的粗粒度状态：只读注册表与各宿主已持有的状态，不建立宿主。
-   * 页面据此展示后台会话的运行、等待与未确认状态。
+   * 页面据此展示后台会话的运行、等待与未确认状态；只读解析宿主不在此列。
    */
   listRunStates(): readonly SessionRunState[] {
     const foreground = this.foregroundRunId()
@@ -616,6 +750,12 @@ export class SdkRuntimeBridge {
       this.focusRun(occupied.runId)
       return occupied
     }
+    // 优先复用刚为该会话读过日志的宿主：同一进程内绑定能直接命中投影检查点，省掉一次整体重建。
+    const preferred = this.logHostOf(owner)
+    if (preferred !== null) {
+      this.focusRun(preferred.runId)
+      return preferred
+    }
     const reusable = this.options.runs.allRuns().find(run => this.canReuse(run, owner.projectPath))
     if (reusable !== undefined) {
       this.focusRun(reusable.runId)
@@ -623,6 +763,7 @@ export class SdkRuntimeBridge {
     }
     const runId = this.options.runs.allocateRunId()
     const host = this.options.createHost(runId)
+    this.options.prepareHost(host)
     const record = this.options.runs.registerRun(runId, host)
     this.attachRun(runId, host)
     this.focusRun(runId)
@@ -630,14 +771,16 @@ export class SdkRuntimeBridge {
   }
 
   /**
-   * 可复用判定：实例没有未收敛的生命周期操作、宿主已就绪或空闲、且当前没有绑定会话。
-   * 仍承载其他项目会话的空绑定实例不复用，避免把闲宿主跨项目改绑。
+   * 可复用判定：实例没有未收敛的生命周期操作、宿主已就绪、空闲或仍在启动、且当前没有绑定会话。
+   * 从只读池接管或刚建立的宿主往往还在启动，复用后由 `runSessionAction` 内的 `ensureStarted()`
+   * 等它就绪，这样「展开项目后立刻点会话」不会另起第二个进程。仍承载其他项目会话的空绑定实例不复用，
+   * 避免把闲宿主跨项目改绑。
    */
   private canReuse(run: SessionRunRecord<SdkHostManager>, projectPath: string): boolean {
     if (run.phase !== 'idle' && run.phase !== 'running') return false
     if (run.projectPath !== null && !sameProjectPath(run.projectPath, projectPath)) return false
     const host = run.owner.getStatus()
-    if (host.state !== 'idle' && host.state !== 'ready') return false
+    if (host.state !== 'idle' && host.state !== 'ready' && host.state !== 'starting') return false
     return run.owner.getSessionStatus().bindingId === null
   }
 
@@ -677,6 +820,7 @@ export class SdkRuntimeBridge {
     if (this.hostUnavailable(run)) {
       // 没有存活宿主可等待，占用可以安全解除。
       this.options.runs.release(runId)
+      this.forgetLogHosts(runId)
       this.publishRuns()
       return { ok: true, data: this.foregroundStatus() }
     }
@@ -688,6 +832,7 @@ export class SdkRuntimeBridge {
       this.options.runs.beginClose(runId)
       const result = await run.owner.runSessionAction('release', { kind: 'new' }, run.owner.getSessionIdentity(), interrupt)
       this.options.runs.release(runId)
+      this.forgetLogHosts(runId)
       this.publishRuns()
       return { ok: true, data: mapStatus(run.owner.getStatus(), result.status, runId) }
     } catch (error) {
@@ -940,20 +1085,28 @@ export class SdkRuntimeBridge {
     }
   }
 
-  /** 只转发当前实例、会话与绑定的历史查询；不改变会话或模型上下文。 */
-  async readHistory(request: RuntimeHistoryRequest): Promise<RuntimeHistoryResult> {
-    const matched = this.matchedRun(request)
-    if (matched === null || matched.bindingId === null
-      || matched.run.owner.getSessionStatus().sessionId !== request.sessionId) return { ok: false, error: TARGET_CHANGED_ERROR }
-    const projectPath = matched.run.owner.getSessionStatus().projectPath
-    try {
-      const data = await matched.run.owner.readHistory(request.sessionId, request.query, request.revision)
-      const current = this.matchedRun(request)
-      if (current === null || current.run.owner !== matched.run.owner
-        || current.run.owner.getSessionStatus().sessionId !== request.sessionId
-        || current.run.owner.getSessionStatus().projectPath !== projectPath) return { ok: false, error: TARGET_CHANGED_ERROR }
-      return { ok: true, data }
-    } catch (error) { return { ok: false, error: runtimeErrorOf(error) } }
+  /**
+   * 已接管会话的权威历史读取：页面只给项目与会话，这里按占用找到运行实例。
+   * 未接管、尚未绑定或宿主正在收敛时返回 null，由调用方退回日志解析；
+   * 读取期间换绑或换会话按失效报告，不把旧分支的内容写进当前展示。
+   */
+  async readBoundHistory(request: {
+    readonly projectPath: string
+    readonly sessionId: string
+    readonly query: HistoryQuery
+  }): Promise<HistoryData | null> {
+    const occupied = this.options.runs.runOfSession(request.projectPath, request.sessionId)
+    if (occupied === null) return null
+    if (occupied.phase !== 'running') return null
+    const before = occupied.owner.getSessionStatus()
+    if (before.bindingId === null || before.sessionId !== request.sessionId
+      || before.projectPath === null || !sameProjectPath(before.projectPath, request.projectPath)) return null
+    const data = await occupied.owner.readHistory(request.sessionId, request.query)
+    const after = occupied.owner.getSessionStatus()
+    if (after.bindingId !== before.bindingId || after.sessionId !== request.sessionId) {
+      throw new SdkHostError('STALE_SESSION', SDK_HOST_FAILURE_MESSAGES.STALE_SESSION)
+    }
+    return data
   }
 
   /** 确认只影响目标实例的未确认窗口；目标不成立或不属于该绑定的确认直接忽略。 */
@@ -998,7 +1151,8 @@ export class SdkRuntimeBridge {
     action: SessionSwitchAction,
     reference: SdkSessionReference,
     allowInterrupt: boolean,
-    owner: SessionOwner
+    owner: SessionOwner,
+    selection: number
   ): Promise<{ readonly cancelled: boolean; readonly runId: number }> {
     if (action !== 'reload') {
       // 切换前先清扫其他实例上的空会话占用：释放后的空闲实例正好成为本次切换的复用目标。
@@ -1009,6 +1163,7 @@ export class SdkRuntimeBridge {
         await this.awaitReclaim(occupied.runId)
         if (!this.runNeedsRebind(occupied)) {
           this.focusRun(occupied.runId)
+          this.settleSelection(selection, owner)
           return { cancelled: false, runId: occupied.runId }
         }
       }
@@ -1034,6 +1189,7 @@ export class SdkRuntimeBridge {
       const result = await host.runSessionAction(action, reference, host.getSessionIdentity(), interrupt)
       this.options.runs.settleOpen(run.runId, host.getSessionStatus().sessionId)
       this.publishState()
+      this.settleSelection(selection, owner)
       return { cancelled: result.cancelled, runId: run.runId }
     } catch (error) {
       this.options.runs.failOpen(run.runId)
@@ -1048,6 +1204,8 @@ export class SdkRuntimeBridge {
     for (const timer of this.reclaimTimers.values()) clearTimeout(timer)
     this.reclaimTimers.clear()
     for (const run of this.options.runs.allRuns()) run.owner.beginShutdown()
+    // 只读池与运行实例一起收敛：它们同样是子进程，退出前必须确认已经关闭。
+    this.logHostShutdown ??= this.options.logHosts.shutdown().catch(() => undefined)
     this.publishRuns()
   }
 
@@ -1062,6 +1220,8 @@ export class SdkRuntimeBridge {
         failures.push(error)
       }
     }))
+    // 只读宿主不承载会话，但仍是子进程：关闭失败同样如实抛出。
+    await this.logHostShutdown
     const failure = failures[0]
     if (failure !== undefined) throw failure
   }

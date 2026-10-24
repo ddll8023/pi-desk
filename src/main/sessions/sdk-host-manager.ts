@@ -15,7 +15,8 @@ import {
 } from '../../sdk-host/protocol'
 import type {
   SdkHostFrame, SdkHostRequest, SdkHostFailureCode, SdkHostEvent, SdkMcpCommandAction, SdkSessionStatus,
-  SdkSessionReference, SdkSessionTarget, SdkSessionAction, SdkInterruptConfirmation, SdkSessionIdentity
+  SdkSessionReference, SdkSessionTarget, SdkSessionAction, SdkInterruptConfirmation, SdkSessionIdentity,
+  SdkLogTarget
 } from '../../sdk-host/protocol'
 import type {
   AgentCapabilities, McpStatus, PiResources, ProjectionBatch, ProjectionSnapshot, PromptImageInput,
@@ -40,6 +41,11 @@ const COMPACT_TIMEOUT_MS = 600_000
 const EXIT_GRACE_MS = 2_000
 const KILL_WAIT_MS = 3_000
 const RECOVERY_DELAY_MS = 750
+/**
+ * 宿主进程的空闲回收时限：执行实例与只读解析实例共用同一口径。
+ * 内部常量，不做成用户可见设置；这是待实测的取值，不当作性能结论。
+ */
+export const HOST_IDLE_RECLAIM_MS = 5 * 60 * 1000
 /** MCP 状态读取等待上限：`/mcp` 会等所有已启用服务器连接完成，比普通命令长。 */
 const MCP_STATUS_TIMEOUT_MS = 60_000
 /** MCP 登录需在浏览器完成授权；退出与重连不涉及浏览器交互。 */
@@ -73,6 +79,7 @@ const EXPECTED_REPLIES: Record<SdkHostRequest['type'], SdkHostFrame['type'] | nu
   'projection-snapshot': 'projection-result',
   history: 'history-result',
   'projection-ack': 'ack-result',
+  'session-log': 'log-result',
   'ui-response': 'ui-result',
   'authorization-result': null
 }
@@ -215,10 +222,29 @@ function samePath(left: string, right: string): boolean {
 }
 
 export interface SdkHostManagerOptions {
-  /** 应用级运行身份；由主进程注册表分配，宿主不自行编号。 */
-  readonly runId: number
-  /** 运行实例登记与绑定代际分配；归属项目只以登记结果为准。 */
-  readonly runs: SdkHostRunRegistry
+  /**
+   * 应用级运行身份；由主进程注册表分配，宿主不自行编号。
+   * 只读宿主先取池编号，被接管成运行实例时换成运行实例编号。
+   */
+  runId: number
+  /** 运行实例登记与绑定代际分配；归属项目只以登记结果为准。只读宿主使用拒绝式实现。 */
+  runs: SdkHostRunRegistry
+}
+
+/**
+ * 只读宿主的登记端口：只解析会话文件，没有会话占用与绑定代际。
+ * 任何会话动作都会先因缺少授权回路被拒绝，这里不给它伪造归属或编号。
+ */
+const READ_ONLY_RUNS: SdkHostRunRegistry = {
+  projectOfRun: () => null,
+  allocateGeneration: () => { throw new SdkHostError('INVALID_SESSION_TARGET', FAILURE_MESSAGES.INVALID_SESSION_TARGET) },
+  recordBinding: () => {},
+  markUnconfirmed: () => {}
+}
+
+/** 只读宿主：用于查看会话历史，不承载会话；绑定前由执行链接管，接管后才接上授权回路。 */
+export function createReadOnlyHost(options: { readonly hostId: number }): SdkHostManager {
+  return new SdkHostManager({ runId: options.hostId, runs: READ_ONLY_RUNS })
 }
 
 export class SdkHostManager {
@@ -252,6 +278,15 @@ export class SdkHostManager {
   }
 
   constructor(private readonly options: SdkHostManagerOptions) {}
+
+  /**
+   * 只读宿主被接管成运行实例：换上真实运行身份与登记端口。
+   * 接管前的进程状态与解析缓存都保留，因此随后的绑定能直接命中宿主内的投影检查点。
+   */
+  adoptRun(runId: number, runs: SdkHostRunRegistry): void {
+    this.options.runId = runId
+    this.options.runs = runs
+  }
 
   /** 查询仅返回已持有状态，绝不为了展示建立宿主。 */
   getStatus(): SdkHostStatus {
@@ -458,13 +493,13 @@ export class SdkHostManager {
   /** 展示消息到官方条目 ID 的镜像：只在同一绑定代际内保留，宿主失效时清空。 */
   entryIdOf(messageId: string): string | null { return this.entryIds.get(messageId) ?? null }
 
-  /** 历史读取固定会话与绑定；等待期间换代即拒绝旧结果。 */
-  async readHistory(sessionId: string, query: HistoryQuery, revision: number): Promise<HistoryData> {
+  /** 历史读取固定会话与绑定；等待期间换代即拒绝旧结果。游标是否属于当前分支由宿主复核。 */
+  async readHistory(sessionId: string, query: HistoryQuery): Promise<HistoryData> {
     const record = this.requireHost(true)
     const bindingId = this.sessionSnapshot.bindingId
     if (bindingId === null || this.sessionSnapshot.sessionId !== sessionId) throw new SdkHostError('STALE_SESSION', FAILURE_MESSAGES.STALE_SESSION)
     const frame = await this.request(record, { version: SDK_HOST_PROTOCOL_VERSION, hostId: record.hostId,
-      requestId: randomUUID(), type: 'history', bindingId, sessionId, query, revision }, SESSION_TIMEOUT_MS)
+      requestId: randomUUID(), type: 'history', bindingId, sessionId, query }, SESSION_TIMEOUT_MS)
     if (this.active !== record || this.sessionSnapshot.bindingId !== bindingId || this.sessionSnapshot.sessionId !== sessionId) {
       throw new SdkHostError('STALE_SESSION', FAILURE_MESSAGES.STALE_SESSION)
     }
@@ -485,6 +520,19 @@ export class SdkHostManager {
     if (frame.type !== 'projection-result') throw new SdkHostError('HOST_PROTOCOL_ERROR', 'SDK 投影快照不符合契约。')
     if (this.sessionSnapshot.bindingId === bindingId) this.projection = frame.projection
     return frame.projection
+  }
+
+  /**
+   * 会话日志读取：不需要活动绑定，也不建立 AgentSession；宿主未启动时先启动再解析。
+   * 页、轮次与原文续段共用同一条读取链。失败按已声明分类抛错，不返回空历史冒充「没有内容」。
+   */
+  async readSessionLog(target: SdkLogTarget): Promise<HistoryData> {
+    await this.ensureStarted()
+    const record = this.requireHost()
+    const frame = await this.request(record, { version: SDK_HOST_PROTOCOL_VERSION, hostId: record.hostId,
+      requestId: randomUUID(), type: 'session-log', target }, SESSION_TIMEOUT_MS)
+    if (frame.type !== 'log-result') throw new SdkHostError('HOST_PROTOCOL_ERROR', 'SDK 日志读取结果不符合契约。')
+    return frame.data
   }
 
   /** 确认只影响未确认窗口；确认失败不回退已展示内容。 */

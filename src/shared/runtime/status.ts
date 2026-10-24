@@ -1,6 +1,6 @@
 /** Runtime 的状态、目标、错误与命令契约：运行状态快照、Prompt、回退、压缩、切换模型，以及这些命令的请求与结果校验。 */
 
-import type { ExtensionErrorEntry, HistoryData, OutputRate, ProjectionBatch, SessionUsage } from './projection'
+import type { ExtensionErrorEntry, OutputRate, ProjectionBatch, SessionUsage } from './projection'
 import type { DesktopErrorCode } from '../desktop-api'
 
 export const RUNTIME_STATUS_CHANNEL = 'desktop:runtime-status'
@@ -9,8 +9,6 @@ export const RUNTIME_PROMPT_CHANNEL = 'desktop:runtime-prompt'
 export const RUNTIME_REWIND_CHANNEL = 'desktop:runtime-rewind'
 export const RUNTIME_ABORT_CHANNEL = 'desktop:runtime-abort'
 export const RUNTIME_PROJECTION_CHANNEL = 'desktop:runtime-projection'
-/** 历史读取只针对已绑定会话的当前分支，不接受文件路径。 */
-export const RUNTIME_HISTORY_CHANNEL = 'desktop:runtime-history'
 export const RUNTIME_PROJECTION_ACK_CHANNEL = 'desktop:runtime-projection-ack'
 export const RUNTIME_CAPABILITIES_CHANNEL = 'desktop:runtime-capabilities'
 export const RUNTIME_SET_MODEL_CHANNEL = 'desktop:runtime-set-model'
@@ -177,10 +175,6 @@ export const PROMPT_IMAGE_MAX_CHARS = 4_194_304
 /** prompt 结果只表达请求被接受、排队或被处理，不等待 Agent 执行结束。 */
 export type PromptResult =
   | { readonly ok: true; readonly data: { readonly disposition: PromptDisposition } }
-  | { readonly ok: false; readonly error: RuntimeError }
-
-export type RuntimeHistoryResult =
-  | { readonly ok: true; readonly data: HistoryData }
   | { readonly ok: false; readonly error: RuntimeError }
 
 /**

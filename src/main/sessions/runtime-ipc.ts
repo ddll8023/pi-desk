@@ -1,4 +1,4 @@
-/** 会话执行主链的 IPC：状态查询、中止、回退、可用模型与切换、手动压缩、Prompt 提交、投影快照与确认、当前分支历史读取。目标身份、绑定代际与会话归属全部由主进程核对，页面不能指定任意会话文件或 Pi 条目。 */
+/** 会话执行主链的 IPC：状态查询、中止、回退、可用模型与切换、手动压缩、Prompt 提交、投影快照与确认。目标身份、绑定代际与会话归属全部由主进程核对，页面不能指定任意会话文件或 Pi 条目；历史读取走会话通道。 */
 
 import type { IpcMainInvokeEvent } from 'electron'
 import {
@@ -10,8 +10,6 @@ import {
   RUNTIME_REWIND_CHANNEL,
   RUNTIME_PROJECTION_ACK_CHANNEL,
   RUNTIME_PROJECTION_CHANNEL,
-  RUNTIME_HISTORY_CHANNEL,
-  isRuntimeHistoryRequest,
   RUNTIME_STATUS_CHANNEL,
   isRuntimeCompactRequest,
   isRuntimeSetModelRequest,
@@ -23,7 +21,6 @@ import type {
   ProjectionResult,
   PromptImageInput,
   PromptResult,
-  RuntimeHistoryResult,
   RuntimeErrorCode,
   RuntimeResult,
   RuntimeRewindResult
@@ -198,15 +195,6 @@ export function registerRuntimeHandlers(pageUrl: string): void {
       return sdkRuntime.getProjection(args[0])
     }
   )
-
-  /** 历史入口不接受路径；会话、绑定与分支由宿主复核。 */
-  handle(RUNTIME_HISTORY_CHANNEL, async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<RuntimeHistoryResult> => {
-    if (!isTrustedCaller(event, pageUrl)) return { ok: false, error: { code: 'FORBIDDEN', message: '不允许此页面读取会话历史。' } }
-    if (args.length !== 1 || !isRuntimeHistoryRequest(args[0])) {
-      return { ok: false, error: { code: 'INVALID_REQUEST', message: '历史读取参数不符合当前会话契约。' } }
-    }
-    return sdkRuntime.readHistory(args[0])
-  })
 
   /** 应用确认只控制未确认通知窗口；参数不合法时忽略，不回传结果。 */
   handle(

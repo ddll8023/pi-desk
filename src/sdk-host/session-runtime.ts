@@ -9,6 +9,8 @@ import { createGenuiExtension, GENUI_EXTENSION_NAME } from './genui/index'
 import { MessageProjection } from './projection/message-projection'
 import { ActivityProjection } from './projection/activity-projection'
 import { historyEntryId, readBranchHistory } from './projection/history-projection'
+import { fileStampOf } from './projection/checkpoint'
+import type { ProjectionCheckpoints } from './projection/checkpoint'
 import { OutputRateTracker } from './projection/output-rate'
 import { SDK_HOST_PROTOCOL_VERSION } from './protocol'
 import type {
@@ -17,7 +19,7 @@ import type {
 } from './protocol'
 import type {
   AgentCapabilities, ExtensionErrorEntry, McpStatus, ModelSummary, OutputRate, PiResourceEntry, PiResources,
-  ProjectionBatch, ProjectionSnapshot, PromptDisposition, RuntimeDiagnostics, SessionUsage, HistoryData, HistoryQuery
+  ProjectionBatch, ProjectionSnapshot, PromptDisposition, RuntimeDiagnostics, SessionUsage, HistoryData, HistoryPage, HistoryQuery
 } from '../shared/runtime-api'
 import type { ExtensionDialogResponseInput } from '../shared/extension-ui-api'
 
@@ -32,6 +34,8 @@ interface RuntimeOptions {
   readonly onUiCancel: (bindingId: number, dialogId: string) => void
   readonly onProjectionBatch: (bindingId: number, batch: ProjectionBatch) => void
   readonly onEntryMap: (bindingId: number, messageId: string, entryId: string) => void
+  /** 与本宿主同一进程的投影检查点：日志读取写入，绑定建立时取用。 */
+  readonly checkpoints: ProjectionCheckpoints
 }
 const SETTLE_TIMEOUT_MS = 5_000
 /** 会话统计补读的最小间隔：状态推送频繁，不能每次取状态都遍历会话条目。 */
@@ -358,13 +362,44 @@ export class SdkSessionRuntime {
     return this.projection.snapshot()
   }
 
-  /** 只读取当前绑定、当前会话的原始分支，不接受历史文件路径。 */
-  readHistory(bindingId: number, sessionId: string, query: HistoryQuery, revision: number): HistoryData {
+  /**
+   * 只读取当前绑定、当前会话的原始分支，不接受历史文件路径。
+   * 分支版本随请求传入已取消：游标若不属于当前分支，`readBranchHistory` 会拒绝，页面据此重取首页。
+   */
+  readHistory(bindingId: number, sessionId: string, query: HistoryQuery): HistoryData {
     const session = this.requireBoundSession(bindingId)
     this.refreshActivity()
-    if (session.sessionManager.getSessionId() !== sessionId || revision !== this.historyRevision) throw new SdkSessionFailure('STALE_SESSION')
+    if (session.sessionManager.getSessionId() !== sessionId) throw new SdkSessionFailure('STALE_SESSION')
     try { return readBranchHistory(session.sessionManager.getBranch(), query, bindingId) }
     catch { throw new SdkSessionFailure('STALE_SESSION') }
+  }
+
+  /**
+   * 绑定用的首页：与检查点一致时直接复用日志解析结果，避免同一会话在「查看」与「绑定」两处各投影一次。
+   * 检查点只是派生数据——文件戳或分支尾不一致、或文件读不到时，按当前分支重建，不改变绑定结果。
+   */
+  private async seedPage(session: AgentSession, bindingId: number): Promise<{
+    readonly page: HistoryPage
+    readonly fileStamp: string | null
+    readonly tailEntryId: string | null
+  }> {
+    const branch = session.sessionManager.getBranch()
+    const tailEntryId = branch.at(-1)?.id ?? null
+    const sessionFile = session.sessionFile
+    let fileStamp: string | null = null
+    if (sessionFile !== undefined) {
+      try {
+        fileStamp = await fileStampOf(sessionFile)
+        const reused = this.options.checkpoints.take(session.sessionId, fileStamp, tailEntryId)
+        if (reused !== null) return { page: reused, fileStamp, tailEntryId }
+      } catch {
+        // 文件不可读或已被移除：按重建处理，绑定自身仍会复核会话目标。
+        fileStamp = null
+      }
+    }
+    const page = readBranchHistory(branch, { kind: 'page', before: null }, bindingId)
+    if (page.kind === 'text') throw new SdkSessionFailure('SESSION_BIND_FAILED')
+    return { page, fileStamp, tailEntryId }
   }
 
   private refreshActivity(): void {
@@ -796,10 +831,13 @@ export class SdkSessionRuntime {
         }
       })
       // 展示历史与模型上下文分开；官方当前分支是历史唯一来源，不自行重建会话树。
-      const branch = session.sessionManager.getBranch()
-      const page = readBranchHistory(branch, { kind: 'page', before: null }, bindingId)
-      if (page.kind === 'text') throw new SdkSessionFailure('SESSION_BIND_FAILED')
-      projection.seedProjectedHistory(page)
+      const seeded = await this.seedPage(session, bindingId)
+      projection.seedProjectedHistory(seeded.page)
+      if (seeded.fileStamp !== null) {
+        this.options.checkpoints.remember(session.sessionId, {
+          fileStamp: seeded.fileStamp, tailEntryId: seeded.tailEntryId, page: seeded.page
+        })
+      }
       this.projection = projection
       this.activity = new ActivityProjection()
       this.historyTail = null

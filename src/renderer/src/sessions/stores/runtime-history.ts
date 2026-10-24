@@ -33,6 +33,7 @@ export interface HistoryTurnState {
   chunkStates: Record<string, HistoryChunkLoadState>
 }
 export interface HistoryState {
+  /** 本页缓存所属的分支版本，只用于判断是否还能沿用已加载页；不随请求外发。 */
   revision: number
   before: string | null
   loading: boolean
@@ -59,8 +60,8 @@ export function rememberUiRevisions(state: HistoryState, incoming: readonly Tool
 }
 
 export interface HistoryCacheDeps {
-  /** 按当前前台实例读取历史；`revision` 是发起时的分支版本，供主进程判断是否仍是同一分支。 */
-  request(query: HistoryQuery, revision: number): Promise<HistoryData | null>
+  /** 按当前展示的会话读取历史；绑定与否由主进程判定。 */
+  request(query: HistoryQuery): Promise<HistoryData | null>
   /** 会话视图的稳定键；展开可见性只对发起它的那个会话生效。 */
   conversationKey(): string
 }
@@ -83,7 +84,7 @@ export function createHistoryCache(deps: HistoryCacheDeps): HistoryCache {
     owner.loading = true; owner.error = null
     const before = owner.before
     try {
-      const page = await deps.request({ kind: 'page', before }, owner.revision)
+      const page = await deps.request({ kind: 'page', before })
       // 期间换过分支时读取已返回 null，旧分页不会写回新缓存。
       if (page === null) return
       if (page.kind !== 'page' || page.before === before) throw new Error('历史分页未前进，已停止自动加载。')
@@ -105,7 +106,7 @@ export function createHistoryCache(deps: HistoryCacheDeps): HistoryCache {
     if (!turn || turn.loading || (turn.loaded && !more) || (more && turn.next === null)) return
     turn.loading = true; turn.error = null
     try {
-      const page = await deps.request({ kind: 'turn', turnId, after: more ? turn.next : null }, owner.revision)
+      const page = await deps.request({ kind: 'turn', turnId, after: more ? turn.next : null })
       if (page === null) return
       if (page.kind !== 'turn' || page.turnId !== turnId || (more && page.next === turn.next)) {
         throw new Error('历史轮次游标未前进，已停止自动加载。')
@@ -155,7 +156,7 @@ export function createHistoryCache(deps: HistoryCacheDeps): HistoryCache {
     if (!status) return
     turn.loading = true; status.loading = true; status.error = null
     try {
-      const data = await deps.request({ kind: 'text', ...chunk }, owner.revision)
+      const data = await deps.request({ kind: 'text', ...chunk })
       if (data === null) return
       if (data.kind !== 'text') throw new Error('历史续段响应类型不匹配，已停止自动加载。')
       if (historyChunkKey(data.chunk) !== key || data.chunk.offset !== chunk.offset || data.chunk.toolCallId !== chunk.toolCallId

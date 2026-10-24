@@ -5,15 +5,17 @@ import {
   SESSION_DELETE_CHANNEL,
   SESSION_LIST_CHANNEL,
   SESSION_OPEN_CHANNEL,
+  SESSION_HISTORY_CHANNEL,
   SESSION_RELOAD_CHANNEL,
   isSessionDeleteRequest,
   isSessionListRequest,
   isSessionOpenRequest,
-  isSessionListWindow
+  isSessionHistoryRequest
 } from '../../shared/session-api'
 import type {
   SessionDeleteResult,
   SessionErrorCode,
+  SessionHistoryResult,
   SessionListResult,
   SessionOpenResult
 } from '../../shared/session-api'
@@ -57,6 +59,26 @@ export function registerSessionHandlers(pageUrl: string): void {
     }
   )
 
+  /**
+   * 会话历史读取：只要求项目已登记，不进入信任与占用判定；已绑定与未绑定的分流、
+   * 归属与文件复核都在编排层完成。
+   */
+  handle(
+    SESSION_HISTORY_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<SessionHistoryResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return sessionFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 1 || !isSessionHistoryRequest(args[0])) {
+        return sessionFailure('INVALID_REQUEST', '会话历史读取必须给出项目、会话身份与历史查询。')
+      }
+      const request = args[0]
+      const projectPath = await resolveRegisteredProjectPath(request.projectPath)
+      if (projectPath === null) return sessionFailure('INVALID_PROJECT_PATH', '会话所属项目未登记或已被移除。')
+      return sessionManager.readHistory({ ...request, projectPath })
+    }
+  )
+
   handle(
     SESSION_OPEN_CHANNEL,
     async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<SessionOpenResult> => {
@@ -64,7 +86,7 @@ export function registerSessionHandlers(pageUrl: string): void {
         return sessionFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
       }
       if (args.length !== 1 || !isSessionOpenRequest(args[0])) {
-        return sessionFailure('INVALID_REQUEST', '打开会话必须给出项目、会话身份、中断确认和列表窗口。')
+        return sessionFailure('INVALID_REQUEST', '打开会话必须给出项目、会话身份与中断确认。')
       }
       const request = args[0]
       const projectPath = await resolveRegisteredProjectPath(request.projectPath)
@@ -93,16 +115,13 @@ export function registerSessionHandlers(pageUrl: string): void {
         return sessionFailure('INVALID_REQUEST', '重新加载资源参数格式不正确。')
       }
       const fields = request as Record<string, unknown>
-      if (Object.keys(fields).some((key) => key !== 'allowInterrupt' && key !== 'listLimit')) {
+      if (Object.keys(fields).some((key) => key !== 'allowInterrupt')) {
         return sessionFailure('INVALID_REQUEST', '重新加载资源参数包含未支持的字段。')
       }
       if (typeof fields.allowInterrupt !== 'boolean') {
         return sessionFailure('INVALID_REQUEST', '重新加载资源必须显式说明是否允许中断当前操作。')
       }
-      if (!isSessionListWindow(fields.listLimit)) {
-        return sessionFailure('INVALID_REQUEST', '重新加载资源必须显式给出合法的列表窗口大小。')
-      }
-      return sessionManager.reload(fields.allowInterrupt, fields.listLimit)
+      return sessionManager.reload(fields.allowInterrupt)
     }
   )
 

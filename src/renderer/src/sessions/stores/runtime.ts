@@ -19,7 +19,10 @@ export type { HistoryChunkLoadState, HistoryTurnState } from './runtime-history'
 export const useRuntimeStore = defineStore('runtime', () => {
   /** 页面每次释放都递增；切片据此丢弃在途结果，避免迟到的读取写回新页面。 */
   const lifecycle: RuntimeLifecycle = { count: 0 }
-  const core = createRuntimeCore({ lifecycle })
+  const core = createRuntimeCore({
+    lifecycle,
+    currentProjectPath: () => useProjectStore().currentProject?.path ?? null
+  })
   const modelSlice = createRuntimeModels({
     lifecycle,
     view: core.view,
@@ -125,6 +128,9 @@ export const useRuntimeStore = defineStore('runtime', () => {
     displayTools: core.displayTools,
     history: core.history,
     activity: core.activity,
+    logSessionId: core.logSessionId,
+    applyLogPage: core.applyLogPage,
+    clearPreview: core.clearPreview,
     loadEarlierHistory: core.loadEarlierHistory,
     setHistoryVisibility: core.setHistoryVisibility,
     loadHistoryTurn: core.loadHistoryTurn,

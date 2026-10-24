@@ -78,7 +78,11 @@ export class SessionRunRegistry<T> implements SessionRunQuery, SdkHostRunRegistr
     return ++this.runSeed
   }
 
-  /** 登记运行实例；身份已登记时视为调用错误。 */
+  /**
+   * 登记运行实例；身份已登记时视为调用错误。
+   * 登记只建立身份与空的归属：项目与会话在打开时经 `beginOpen` 写入，未承载会话的实例保持 `idle`。
+   * 只读的解析宿主不进这张表，查看历史因此不产生任何占用。
+   */
   registerRun(runId: number, owner: T): SessionRunRecord<T> {
     if (this.records.has(runId)) throw new Error('运行身份已登记，不能重复登记。')
     const record: SessionRunRecord<T> = {
@@ -223,6 +227,7 @@ export class SessionRunRegistry<T> implements SessionRunQuery, SdkHostRunRegistr
   runsOfProject(projectPath: string): readonly SessionRunRecord<T>[] {
     const found: SessionRunRecord<T>[] = []
     for (const record of this.records.values()) {
+      // 没有承载会话或已经空闲的实例不算该项目的活动运行实例，也不拦住项目移除。
       if (record.projectPath === null || record.phase === 'idle') continue
       if (samePath(record.projectPath, projectPath)) found.push(record)
     }

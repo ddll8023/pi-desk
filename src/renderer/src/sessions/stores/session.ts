@@ -18,7 +18,7 @@ import { useTrustStore } from '../../projects/stores/trust'
 import { useProjectStore } from '../../projects/stores/project'
 import { usePreferencesStore } from '../../preferences/stores/preferences'
 import { useRuntimeStore } from './runtime'
-import { listSessions, openSession, reloadSession, deleteSession } from '../services/session'
+import { listSessions, openSession, reloadSession, deleteSession, readSessionHistory } from '../services/session'
 import { useWorkspaceTabsStore } from '../../workspace/stores/workspace-tabs'
 import type { ChatOpenIntent } from '../../workspace/stores/workspace-tabs'
 
@@ -75,6 +75,8 @@ export const useSessionStore = defineStore('session', () => {
   /** 最新打开意图固定项目与标签；已发出的请求收敛后才执行下一次，不并发改前台。 */
   const openingProjectPath = ref<string | null>(null)
   let openSequence = 0
+  /** 日志读取序号：只让最后一次选择发起的日志首页落地，过期的历史不覆盖当前展示。 */
+  let logSequence = 0
   let queuedActions = 0
   let actionTail: Promise<void> = Promise.resolve()
   let pendingTabKey: string | null = null
@@ -302,7 +304,7 @@ export const useSessionStore = defineStore('session', () => {
 
   /**
    * 当前会话不在列表里时补读一次该项目的列表：Pi 新建会话只分配身份，会话文件到首次写入才创建，
-   * 因此「新建」返回的列表快照可能不含它；调用方应在确有消息落盘后触发。
+   * 因此列表里可能根本没有它（打开也不再回传列表）；调用方应在确有消息落盘后触发。
    */
   async function reconcileCurrentSession(sessionId: string | null): Promise<void> {
     if (sessionId === null || reconciledSessionId === sessionId) return
@@ -338,6 +340,14 @@ export const useSessionStore = defineStore('session', () => {
     const key = tabs.prepareOpenTab(targetPath, sessionId, preferredTabKey)
     if (key === null) return
     const sequence = ++openSequence
+    // 日志读取不排队：先把已有历史显示出来，打开动作照旧串行提交；失败或过期都静默降级。
+    // 同一会话已经在展示日志历史时不重复请求：补提交的打开会因为重复清空再重发而闪一下。
+    const runtime = useRuntimeStore()
+    if (sessionId === null || runtime.logSessionId !== sessionId) {
+      runtime.clearPreview()
+      const logToken = ++logSequence
+      if (sessionId !== null) void loadLogPage(runtime, targetPath, sessionId, logToken)
+    }
     openingProjectPath.value = targetPath
     clearPendingTarget()
     pendingReload.value = false
@@ -354,7 +364,7 @@ export const useSessionStore = defineStore('session', () => {
       }
       // 同一空标签的前一次打开可能刚收敛；此时复用实际身份，不能再次按 null 新建并遗留旧实例。
       const requestedSessionId = sessionId ?? tabs.sessionIdForTab(targetPath, key)
-      const result = await openSession(targetPath, requestedSessionId, allowInterrupt, sliceOf(targetPath).limit)
+      const result = await openSession(targetPath, requestedSessionId, allowInterrupt)
       if (result.ok) {
         if (result.data.projectPath !== targetPath) {
           if (sequence === openSequence) actionError.value = {
@@ -362,8 +372,9 @@ export const useSessionStore = defineStore('session', () => {
           }
           return
         }
+        // 打开不再回传列表：侧栏由项目切换、删除、回退与新增会话落盘后的补读维护，
+        // 切换链不等目录扫描，列表读取失败也不会把已完成的切换报成失败。
         const projectAlive = projectStore.projects.some(project => project.path === targetPath)
-        if (projectAlive) applyList(result.data)
         // 实例身份即使迟到也只能绑定原标签，不能按新的前台或空标签重新猜测。
         const bound = projectAlive && tabs.syncOpenTab(result.data.openedSessionId, targetPath, key,
           result.data.runId, sequence === openSequence && currentProjectPath() === targetPath)
@@ -396,6 +407,25 @@ export const useSessionStore = defineStore('session', () => {
       }
       actionError.value = result.error
     })
+  }
+
+  /**
+   * 日志首页：命中就先把首页历史放进展示位，绑定完成后由权威投影接管。
+   * 成功后展示目标固定为该项目与会话，后续翻页、展开轮次与续段由运行时按同一目标继续读取。
+   * 读取只是可放弃的加速，失败、结果不属于请求目标或被更晚的选择取代时都不写入，
+   * 界面退回原来的等待呈现；它不改变任何文件、占用或信任判定。
+   */
+  async function loadLogPage(
+    runtime: ReturnType<typeof useRuntimeStore>,
+    projectPath: string,
+    sessionId: string,
+    token: number
+  ): Promise<void> {
+    const result = await readSessionHistory(projectPath, sessionId, { kind: 'page', before: null })
+    if (token !== logSequence || !result.ok) return
+    if (result.data.projectPath !== projectPath || result.data.sessionId !== sessionId) return
+    if (result.data.data.kind !== 'page') return
+    runtime.applyLogPage(result.data.data, { projectPath, sessionId })
   }
 
   /**
@@ -438,6 +468,9 @@ export const useSessionStore = defineStore('session', () => {
   function invalidateOpenSelection(): void {
     if (awaitingTrust.value) useTrustStore().cancel()
     openSequence += 1
+    // 选择已被放弃：在途日志读取不能再落到新的展示目标上。
+    logSequence += 1
+    useRuntimeStore().clearPreview()
     openingProjectPath.value = null
     clearPendingTarget()
     actionError.value = null
@@ -446,7 +479,7 @@ export const useSessionStore = defineStore('session', () => {
   /**
    * 重新加载 Pi 资源：在同一 SDK 宿主进程内重建该会话的 services（重新读取 Skills、Prompt Templates、
    * MCP 配置与 Extension），并尽量恢复当前会话。
-   * 回传列表保持当前窗口深度，避免重载后侧栏列表收回首屏。
+   * 回传结果只含实例与会话身份：重载不改变列表内容，不需要顺带重读侧栏。
    * 返回是否真的重建成功：被中断确认或信任流程拦下、有在途动作、结果已过期时都算未完成，
    * 调用方（如设置页的「立即重新加载」）据此给出反馈，而不是当成已生效。
    */
@@ -458,10 +491,9 @@ export const useSessionStore = defineStore('session', () => {
     actionError.value = null
     let reloaded = false
     await enqueueAction(async () => {
-      const result = await reloadSession(allowInterrupt, windowLimit.value)
+      const result = await reloadSession(allowInterrupt)
       if (sequence !== openSequence) return
       if (result.ok) {
-        applyList(result.data)
         pendingReload.value = false
         awaitingInterrupt.value = false
         // 会话已重建，它读到的就是已保存的开关值：在这里收敛「待重新加载」状态。

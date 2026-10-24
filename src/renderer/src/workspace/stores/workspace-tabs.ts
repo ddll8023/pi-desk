@@ -142,16 +142,43 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
   /** 活动标签是否是对话标签；对话面板只在此时可见。 */
   const isChatActive = computed(() => activeTab.value !== null && isChatKey(activeTab.value))
 
-  /** 共用聊天视图只有在活动标签与前台身份一致时可见，等待和失败期间不冒用旧会话。 */
+  /**
+   * 共用聊天视图在活动标签与前台身份一致时即可显示，不等打开动作整体收尾。
+   * 身份匹配已经说明主进程把该实例切到了前台，此时展示缓存内容不会把旧会话冒充成新会话；
+   * 打开中、待确认等对写入的限制放在 `isChatInteractive`，不拿来隐藏已就绪的内容。
+   */
   const isChatReady = computed(() => {
     const key = activeTab.value
-    if (key === null || !isChatKey(key) || session.opening || projectStore.switching) return false
+    // 可见性不看 `projectStore.switching`：切换期间活动标签已指向目标项目，身份不匹配自然不显示，
+    // 而拿切换状态当可见条件会让整块面板在切换途中被迫退回等待态。
+    if (key === null || !isChatKey(key)) return false
     const record = chatTabs.value[key]
     if (record === undefined) return false
     if (record.runId !== null) return record.runId === runtimeStore.foregroundRunId
     if (record.sessionId !== null) return record.sessionId === runtimeStore.foregroundSessionId
     return isRuntimeIdle()
   })
+
+  /**
+   * 活动标签是否正在展示会话日志历史：内容已经可见，但可执行会话尚未绑定。
+   * 它让面板先出内容，同时不放开任何写入——`isChatInteractive` 仍要求 `isChatReady`。
+   */
+  const isChatLogPreview = computed(() => {
+    const key = activeTab.value
+    const sessionId = runtimeStore.logSessionId
+    if (sessionId === null || key === null || !isChatKey(key)) return false
+    const record = chatTabs.value[key]
+    if (record === undefined || record.sessionId !== sessionId) return false
+    return !isChatReady.value
+  })
+
+  /**
+   * 活动对话标签是否允许写入：显示就绪之外，还要求没有会话生命周期动作在途。
+   * 发送、回退与压缩读这一份；它比 `isChatReady` 严，避免向尚未确认的目标提交。
+   */
+  const isChatInteractive = computed(() => (
+    isChatReady.value && !session.opening && !projectStore.switching
+  ))
 
   /**
    * 当前项目已打开的文件记录，顺序与标签一致；文件面板按它逐个挂载，非活动面板只隐藏不卸载，
@@ -917,6 +944,8 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     activeTerminalId,
     isChatActive,
     isChatReady,
+    isChatLogPreview,
+    isChatInteractive,
     openFiles,
     terminalTabId,
     initialize,

@@ -1,4 +1,5 @@
 /** 作为渲染端会话列表、打开、重新加载与删除的调用入口，把桥接缺失与通信异常转换为安全的展示结果。 */
+import type { HistoryQuery } from '../../../../shared/runtime-api'
 import type {
   SessionDeleteRequest,
   SessionDeleteResult,
@@ -6,7 +7,9 @@ import type {
   SessionListRequest,
   SessionListResult,
   SessionOpenRequest,
-  SessionOpenResult
+  SessionOpenResult,
+  SessionHistoryRequest,
+  SessionHistoryResult
 } from '../../../../shared/session-api'
 
 function unavailable(): { ok: false; error: SessionError } {
@@ -39,33 +42,51 @@ export async function listSessions(projectPath: string, limit: number): Promise<
 }
 
 /**
+ * 会话历史读取：按查询取该会话当前分支的历史（页、轮次或原文续段）。绑定与否由主进程判定，
+ * 页面只给项目与会话；读取不改动任何文件与占用，失败时调用方退回原来的等待呈现。
+ */
+export async function readSessionHistory(
+  projectPath: string,
+  sessionId: string,
+  query: HistoryQuery
+): Promise<SessionHistoryResult> {
+  const bridge = window.desktop
+  if (!bridge || typeof bridge.readSessionHistory !== 'function') return unavailable()
+  try {
+    const request: SessionHistoryRequest = { projectPath, sessionId, query }
+    return await bridge.readSessionHistory(request)
+  } catch (error) {
+    return callFailed(error)
+  }
+}
+
+/**
  * 打开会话；`sessionId` 为 null 表示新建。打开其他会话不中断任何正在运行的会话，
  * `allowInterrupt` 仅在用户已确认必须改变现有绑定时为真。
  * 新建会话的默认模型由 Pi 自己的 settings.json 决定，本服务不读取或传递模型覆盖。
- * `listLimit` 只决定回传列表的窗口大小：页面按自己已加载的深度提交，打开后不会把列表塌回首屏。
+ * 打开只确认实例与会话身份，不附带会话列表；列表由 `listSessions` 按自己的窗口节奏读取。
  */
 export async function openSession(
   projectPath: string,
   sessionId: string | null,
-  allowInterrupt: boolean,
-  listLimit: number
+  allowInterrupt: boolean
 ): Promise<SessionOpenResult> {
   const bridge = window.desktop
   if (!bridge || typeof bridge.openSession !== 'function') return unavailable()
   try {
-    const request: SessionOpenRequest = { projectPath, sessionId, allowInterrupt, listLimit }
+    const request: SessionOpenRequest = { projectPath, sessionId, allowInterrupt }
     return await bridge.openSession(request)
   } catch (error) {
     return callFailed(error)
   }
 }
 
-/** 重新加载 Pi 资源：在同一 SDK 宿主进程内重建该会话的 services，并尽量恢复当前会话；`allowInterrupt` 表示用户已确认可以中断，`listLimit` 与打开会话同义。 */
-export async function reloadSession(allowInterrupt: boolean, listLimit: number): Promise<SessionOpenResult> {
+/** 重新加载 Pi 资源：在同一 SDK 宿主进程内重建该会话的 services，并尽量恢复当前会话；`allowInterrupt` 表示用户已确认可以中断。 */
+export async function reloadSession(allowInterrupt: boolean): Promise<SessionOpenResult> {
   const bridge = window.desktop
   if (!bridge || typeof bridge.reloadSession !== 'function') return unavailable()
   try {
-    return await bridge.reloadSession(allowInterrupt, listLimit)
+    return await bridge.reloadSession(allowInterrupt)
   } catch (error) {
     return callFailed(error)
   }

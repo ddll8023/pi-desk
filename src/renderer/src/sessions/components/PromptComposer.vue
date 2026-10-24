@@ -183,7 +183,8 @@ const stopVisible = computed(() => (
 ))
 /** 就绪后仅在 Agent 空闲、投影同步且无提交、压缩或模型/会话切换时允许发送；未就绪时仅允许有项目且没有并发启动的首次启动请求。 */
 const canSubmit = computed(() => {
-  if (!props.active || !workspaceTabsStore.isChatReady) return false
+  // 交互条件比“可见”严：内容可以先展示，向尚未确认的目标提交则不行。
+  if (!props.active || !workspaceTabsStore.isChatInteractive) return false
   if (sending.value || submitting.value || preparingPrompt.value || modelSwitchView.value.phase === 'switching' || sessionStore.opening
     || sessionStore.awaitingTrust || sessionStore.awaitingInterrupt || rewindView.value.phase === 'requesting'
     || compactView.value.phase === 'requesting'

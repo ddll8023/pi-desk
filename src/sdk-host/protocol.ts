@@ -11,7 +11,7 @@ import type {
   RuntimeDiagnostics, SessionUsage, HistoryQuery, HistoryData
 } from '../shared/runtime-api'
 
-export const SDK_HOST_PROTOCOL_VERSION = 5
+export const SDK_HOST_PROTOCOL_VERSION = 7
 /**
  * `hostId` 是主进程注册表分配的应用级运行身份；宿主不能自行编号，重启后也不会复用旧值。
  */
@@ -43,6 +43,19 @@ export interface SdkSessionTarget {
   readonly trusted: boolean
   /** 是否注册生成式 UI 内置扩展；由主进程按用户开关给出，宿主只负责据此决定注册与否。 */
   readonly genui: boolean
+}
+
+/**
+ * 会话日志读取目标：主进程已复核归属与文件戳的会话文件，以及要读的历史查询。
+ * 日志读取只解析出当前分支的历史（页、轮次或原文续段），不建立 AgentSession，也不加载技能、扩展与 MCP，
+ * 因此不携带信任与生成式 UI 开关；它不能用来提交任何写操作。
+ */
+export interface SdkLogTarget {
+  readonly projectPath: string
+  readonly sessionId: string
+  readonly sessionFile: string
+  readonly fileStamp: string
+  readonly query: HistoryQuery
 }
 
 /** 宿主内 MCP 动作；与页面契约 `McpCommandAction` 同集合，enable/disable 不在范围内。 */
@@ -137,8 +150,9 @@ export type SdkHostRequest =
       readonly action: SdkMcpCommandAction; readonly serverName: string })
   /** 投影快照是渲染端重同步的唯一基准；引用条目 ID 由官方会话树给出。 */
   | (RequestEnvelope & { readonly type: 'projection-snapshot'; readonly bindingId: number })
-  | (RequestEnvelope & { readonly type: 'history'; readonly bindingId: number; readonly sessionId: string; readonly query: HistoryQuery; readonly revision: number })
+  | (RequestEnvelope & { readonly type: 'history'; readonly bindingId: number; readonly sessionId: string; readonly query: HistoryQuery })
   | (RequestEnvelope & { readonly type: 'projection-ack'; readonly bindingId: number; readonly seq: number })
+  | (RequestEnvelope & { readonly type: 'session-log'; readonly target: SdkLogTarget })
   | (RequestEnvelope & { readonly type: 'ui-response'; readonly bindingId: number;
       readonly dialogId: string; readonly response: ExtensionDialogResponseInput })
   | (RequestEnvelope & { readonly type: 'authorization-result'; readonly bindingId: number | null;
@@ -153,6 +167,7 @@ export type SdkHostFrame =
       readonly cancelled: boolean })
   | (RequestEnvelope & { readonly type: 'projection-result'; readonly projection: ProjectionSnapshot })
   | (RequestEnvelope & { readonly type: 'history-result'; readonly data: HistoryData })
+  | (RequestEnvelope & { readonly type: 'log-result'; readonly data: HistoryData })
   | (RequestEnvelope & { readonly type: 'prompt-result'; readonly disposition: 'started' | 'queued' | 'handled' })
   | (RequestEnvelope & { readonly type: 'rewind-result'; readonly cancelled: boolean;
       readonly text: string | null })
@@ -247,6 +262,13 @@ export function isSdkSessionTarget(value: unknown): value is SdkSessionTarget {
     : isPath(value.sessionFile) && isIdentifier(value.sessionId) && isIdentifier(value.fileStamp)
   return targetValid && hasKeys(value, ['projectPath', 'sessionDir', 'sessionId', 'sessionFile', 'fileStamp', 'trusted', 'genui'])
 }
+/** 日志目标只接受绝对路径、会话身份、文件戳与已声明的历史查询；不带信任或功能开关，避免被当成绑定目标。 */
+export function isSdkLogTarget(value: unknown): value is SdkLogTarget {
+  if (!isRecord(value) || !isPath(value.projectPath) || !isPath(value.sessionFile)) return false
+  return isIdentifier(value.sessionId) && isIdentifier(value.fileStamp) && isHistoryQuery(value.query)
+    && hasKeys(value, ['projectPath', 'sessionId', 'sessionFile', 'fileStamp', 'query'])
+}
+
 /** 状态是安全展示副本，不包含模型对象、工具参数、消息或认证记录。 */
 export function isSdkSessionStatus(value: unknown): value is SdkSessionStatus {
   if (!isRecord(value)) return false
@@ -308,10 +330,11 @@ export function isSdkHostRequest(value: unknown): value is SdkHostRequest {
     case 'mcp-command': return isIdentity(value.bindingId) && isMcpCommandActionValue(value.action)
       && isIdentifier(value.serverName) && requestKeys(value, ['bindingId', 'action', 'serverName'])
     case 'projection-snapshot': return isIdentity(value.bindingId) && requestKeys(value, ['bindingId'])
-    case 'history': return isIdentity(value.bindingId) && isIdentifier(value.sessionId) && isHistoryQuery(value.query) && isCount(value.revision)
-      && requestKeys(value, ['bindingId', 'sessionId', 'query', 'revision'])
+    case 'history': return isIdentity(value.bindingId) && isIdentifier(value.sessionId) && isHistoryQuery(value.query)
+      && requestKeys(value, ['bindingId', 'sessionId', 'query'])
     case 'projection-ack': return isIdentity(value.bindingId) && isCount(value.seq)
       && requestKeys(value, ['bindingId', 'seq'])
+    case 'session-log': return isSdkLogTarget(value.target) && requestKeys(value, ['target'])
     case 'ui-response': return isIdentity(value.bindingId) && isIdentifier(value.dialogId)
       && isExtensionDialogResponseInput(value.response) && requestKeys(value, ['bindingId', 'dialogId', 'response'])
     case 'authorization-result': return (value.bindingId === null || isIdentity(value.bindingId))
@@ -348,6 +371,7 @@ export function isSdkHostFrame(value: unknown): value is SdkHostFrame {
     case 'prompt-result': return ['started', 'queued', 'handled'].includes(String(value.disposition))
       && requestKeys(value, ['disposition'])
     case 'history-result': return isHistoryData(value.data) && requestKeys(value, ['data'])
+    case 'log-result': return isHistoryData(value.data) && requestKeys(value, ['data'])
     case 'projection-result': return isProjectionResult({ ok: true, data: value.projection })
       && requestKeys(value, ['projection'])
     case 'session-result': return isCount(value.seq) && isSdkSessionStatus(value.status) && typeof value.cancelled === 'boolean'

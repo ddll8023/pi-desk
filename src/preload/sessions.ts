@@ -2,9 +2,9 @@
 
 import { ipcRenderer } from 'electron'
 import type { IpcRendererEvent } from 'electron'
-import { SESSION_DELETE_CHANNEL, SESSION_LIST_CHANNEL, SESSION_OPEN_CHANNEL, SESSION_RELOAD_CHANNEL, isSessionListResult, isSessionOpenResult } from '../shared/session-api'
+import { SESSION_DELETE_CHANNEL, SESSION_LIST_CHANNEL, SESSION_OPEN_CHANNEL, SESSION_HISTORY_CHANNEL, SESSION_RELOAD_CHANNEL, isSessionListResult, isSessionOpenResult, isSessionHistoryResult } from '../shared/session-api'
 import { SESSION_RUNS_STATE_CHANNEL, SESSION_RUNS_EVENT, SESSION_RUN_RELEASE_CHANNEL, SESSION_RUN_CLOSE_CHANNEL, isSessionRunsEvent, isSessionRunsResult, isSessionRunReleaseResult } from '../shared/session-run-api'
-import type { SessionDeleteRequest, SessionListRequest, SessionListResult, SessionOpenRequest } from '../shared/session-api'
+import type { SessionDeleteRequest, SessionListRequest, SessionListResult, SessionOpenRequest, SessionHistoryRequest } from '../shared/session-api'
 import type { SessionRunReleaseRequest, SessionRunReleaseResult, SessionRunsResult, SessionRunsSnapshot } from '../shared/session-run-api'
 import type { SessionApi } from '../shared/session-api'
 import type { SessionRunApi } from '../shared/session-run-api'
@@ -31,17 +31,25 @@ export const sessionsApi = {
     return isSessionListResult(response) ? response : invalidSessionResponse()
   },
 
+  async readSessionHistory(request: SessionHistoryRequest) {
+    const payload: SessionHistoryRequest = {
+      projectPath: request.projectPath, sessionId: request.sessionId, query: request.query
+    }
+    const response: unknown = await ipcRenderer.invoke(SESSION_HISTORY_CHANNEL, payload)
+    return isSessionHistoryResult(response) ? response : invalidSessionResponse()
+  },
+
   async openSession(request: SessionOpenRequest) {
     const payload: SessionOpenRequest = {
       projectPath: request.projectPath, sessionId: request.sessionId,
-      allowInterrupt: request.allowInterrupt, listLimit: request.listLimit
+      allowInterrupt: request.allowInterrupt
     }
     const response: unknown = await ipcRenderer.invoke(SESSION_OPEN_CHANNEL, payload)
     return isSessionOpenResult(response) ? response : invalidSessionResponse()
   },
 
-  async reloadSession(allowInterrupt: boolean, listLimit: number) {
-    const response: unknown = await ipcRenderer.invoke(SESSION_RELOAD_CHANNEL, { allowInterrupt, listLimit })
+  async reloadSession(allowInterrupt: boolean) {
+    const response: unknown = await ipcRenderer.invoke(SESSION_RELOAD_CHANNEL, { allowInterrupt })
     return isSessionOpenResult(response) ? response : invalidSessionResponse()
   },
 

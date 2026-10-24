@@ -1,11 +1,10 @@
 /** Pi 资源与 MCP 契约：资源清单、资源预读、诊断，以及 MCP 状态、探测、配置与命令。 */
 
 import { COMPACT_INSTRUCTIONS_MAX_CHARS } from './status'
-import type { PromptDisposition, PromptResult, RuntimeCompactRequest, RuntimeDiagnosticsResult, RuntimeError, RuntimeHistoryResult, RuntimeInfo, RuntimeResult, RuntimeRewindRequest, RuntimeRewindResult, RuntimeSetModelRequest, RuntimeState, RuntimeStatus, RuntimeTarget } from './status'
+import type { PromptDisposition, PromptResult, RuntimeCompactRequest, RuntimeDiagnosticsResult, RuntimeError, RuntimeInfo, RuntimeResult, RuntimeRewindRequest, RuntimeRewindResult, RuntimeSetModelRequest, RuntimeState, RuntimeStatus, RuntimeTarget } from './status'
 import type { AgentCapabilities, CapabilitiesResult, ModelIdentity, ModelSummary } from './models'
 import type { ContextUsage, ExtensionErrorEntry, HistoryChunk, HistoryData, HistoryQuery, MessageGeneration, MessageUsage, OutputRate, ProjectionBatch, ProjectionBlock, ProjectionBlockKind, ProjectionCompaction, ProjectionMessage, ProjectionResult, ProjectionSnapshot, ProjectionUpdate, SessionActivity, SessionUsage, ToolArgSummaryEntry, ToolDiff, ToolDiffLine, ToolDiffLineKind, ToolExecution, ToolExecutionPhase, ToolExecutionTextKind, ToolNonTextPart } from './projection'
 import { isGenuiPayload } from '../genui-api'
-import type { RuntimeHistoryRequest } from './projection'
 
 
 /** 二维目标只放行安全整数；`runtimeId` 为 null 表示该运行实例尚未绑定会话。 */
@@ -646,12 +645,6 @@ export function isHistoryQuery(value: unknown): value is HistoryQuery {
   return value.kind === 'text' && isHistoryChunk(value)
 }
 
-export function isRuntimeHistoryRequest(value: unknown): value is RuntimeHistoryRequest {
-  return isRecord(value) && isRuntimeTarget({ runId: value.runId, runtimeId: value.runtimeId })
-    && value.runtimeId !== null && isHistoryId(value.sessionId) && isHistoryQuery(value.query) && isCount(value.revision)
-    && Object.keys(value).every(key => ['runId', 'runtimeId', 'sessionId', 'query', 'revision'].includes(key))
-}
-
 /** 活动只携带轻量事实，验证每类明细而非信任静态类型。 */
 export function isSessionActivity(value: unknown): value is SessionActivity {
   if (!isRecord(value)) return false
@@ -681,13 +674,6 @@ export function isHistoryData(value: unknown): value is HistoryData {
     && Array.isArray(value.chunks) && value.chunks.every(isHistoryChunk)
     && (value.before === null || isHistoryId(value.before)) && (value.next === null || isHistoryId(value.next))
     && (value.turnId === null || isHistoryId(value.turnId))
-}
-
-export function isRuntimeHistoryResult(value: unknown): value is RuntimeHistoryResult {
-  if (!isRecord(value)) return false
-  if (value.ok === true) return isHistoryData(value.data)
-  return value.ok === false && isRecord(value.error) && typeof value.error.message === 'string'
-    && typeof value.error.code === 'string' && RUNTIME_ERROR_CODES.includes(value.error.code)
 }
 
 function isModelSummary(value: unknown): value is ModelSummary {

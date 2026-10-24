@@ -56,6 +56,12 @@ interface HeadContent {
  */
 const summaryCache = new Map<string, CachedSummary>()
 
+/**
+ * 列表元数据的并行度：取修改时间必须逐文件 stat，串行时延迟随会话数线性增长，
+ * 按批并行把这段系统调用压成常数级等待，同时不给文件系统制造无界并发。
+ */
+const STAT_CONCURRENCY = 32
+
 /** 缓存键：项目路径与会话文件路径都可能包含任意字符，用 NUL 分隔避免拼接歧义。 */
 function summaryCacheKey(projectPath: string, filePath: string): string {
   return `${projectPath}\u0000${filePath}`
@@ -265,25 +271,30 @@ export async function listSessions(projectPath: string, limit: number): Promise<
     throw new SessionStorageError('无法读取本机会话目录。')
   }
 
-  // 第一遍只取元数据：排序需要全目录的修改时间，但不读任何文件内容。
+  // 第一遍只取元数据：排序需要全目录的修改时间，但不读任何文件内容；按批并行取，避免随会话数线性变慢。
   const present = new Set<string>()
   const files: { readonly filePath: string; readonly info: Stats }[] = []
   let skipped = 0
-  for (const name of names) {
-    const filePath = join(directory, name)
-    present.add(filePath)
-    let info: Stats
-    try {
-      info = await stat(filePath)
-    } catch {
-      skipped += 1
-      continue
+  for (let start = 0; start < names.length; start += STAT_CONCURRENCY) {
+    const batch = names.slice(start, start + STAT_CONCURRENCY)
+    const rows = await Promise.all(batch.map(async (name) => {
+      const filePath = join(directory, name)
+      try {
+        const info = await stat(filePath)
+        return info.isFile() ? { filePath, info } : null
+      } catch {
+        return null
+      }
+    }))
+    for (const [index, name] of batch.entries()) {
+      present.add(join(directory, name))
+      const row = rows[index]
+      if (row === null || row === undefined) {
+        skipped += 1
+        continue
+      }
+      files.push(row)
     }
-    if (!info.isFile()) {
-      skipped += 1
-      continue
-    }
-    files.push({ filePath, info })
   }
   files.sort((left, right) => right.info.mtimeMs - left.info.mtimeMs)
 

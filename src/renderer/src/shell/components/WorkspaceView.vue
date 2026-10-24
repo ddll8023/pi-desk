@@ -54,6 +54,11 @@ const quickCommandError = computed(() => (
   quickCommandsStore.view.phase === 'error' ? quickCommandsStore.view.error : null
 ))
 
+/** 对话面板可见条件：绑定身份已匹配，或当前标签已有该会话的日志历史。 */
+const chatVisible = computed(() => (
+  workspaceTabsStore.isChatReady || workspaceTabsStore.isChatLogPreview
+))
+
 /** 后台运行终端仍保持挂载，但不能接收焦点与菜单交互。 */
 function isTerminalActive(session: TerminalSessionInfo): boolean {
   return !settingsOpen.value && session.projectPath === projectPath.value
@@ -173,9 +178,10 @@ function openCommandSettings(): void {
   <div class="workspace-panes">
     <div
       class="workspace-pane"
-      :class="{ 'is-hidden': !workspaceTabsStore.isChatReady }"
-      :inert="settingsOpen || !workspaceTabsStore.isChatReady"
-      :aria-hidden="settingsOpen || !workspaceTabsStore.isChatReady"
+      :class="{ 'is-hidden': !chatVisible }"
+      :inert="settingsOpen || !chatVisible"
+      :aria-hidden="settingsOpen || !chatVisible"
+      :aria-busy="chatVisible && sessionStore.opening"
     >
       <ExtensionNotificationBar />
       <!-- 会话活动摘要条：本会话读过与改过的文件、调用的 Skill、MCP 与插件工具；折叠成一行，明细是浮层，一次只列一类，不占消息区高度。 -->
@@ -225,7 +231,8 @@ function openCommandSettings(): void {
       <FileEditorView :tab-key="file.key" :active="!settingsOpen && workspaceTabsStore.activeTab === file.key" />
     </div>
 
-    <div v-if="workspaceTabsStore.isChatActive && !workspaceTabsStore.isChatReady" class="workspace-pane" :aria-busy="sessionStore.opening">
+    <!-- 目标内容尚不可展示（身份不匹配、没有日志历史、或正在切项目）时才占位：其余情况直接展示缓存或日志历史。 -->
+    <div v-if="workspaceTabsStore.isChatActive && !chatVisible" class="workspace-pane" :aria-busy="sessionStore.opening">
       <div class="empty-state flex-1 justify-center" role="status">
         <p class="empty-state-title">{{ sessionStore.opening || projectStore.switching ? '正在切换会话…' : '当前标签尚未连接到会话' }}</p>
         <p v-if="sessionStore.actionError" class="empty-state-text">{{ sessionStore.actionError.message }}</p>

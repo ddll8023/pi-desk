@@ -420,8 +420,13 @@ export class MessageProjection {
     }
   }
 
-  /** 快照是渲染端重新同步的唯一基准。 */
+  /**
+   * 快照是渲染端重新同步的唯一基准，因此必须与序号对应：
+   * 先把待发增量结算出去，否则快照正文会超前于它携带的 seq，
+   * 接收端随后重放这些增量就会重复追加同一段文本。
+   */
   snapshot(): ProjectionSnapshot {
+    if (this.pending.length > 0) this.flush()
     const tools = this.toolProjection.snapshot()
     const keptTools = new Set(tools.tools.map(tool => tool.toolCallId))
     return {

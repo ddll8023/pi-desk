@@ -2,8 +2,8 @@
 
 import { ipcRenderer } from 'electron'
 import type { IpcRendererEvent } from 'electron'
-import { RUNTIME_ABORT_CHANNEL, RUNTIME_CAPABILITIES_CHANNEL, RUNTIME_COMPACT_CHANNEL, RUNTIME_SET_MODEL_CHANNEL, RUNTIME_DIAGNOSTICS_CHANNEL, RUNTIME_MCP_COMMAND_CHANNEL, RUNTIME_MCP_CONFIG_CHANNEL, RUNTIME_MCP_INSPECT_ABORT_CHANNEL, RUNTIME_MCP_INSPECT_CHANNEL, RUNTIME_MCP_STATUS_CHANNEL, RUNTIME_PROMPT_CHANNEL, RUNTIME_REWIND_CHANNEL, RUNTIME_PROJECTION_ACK_CHANNEL, RUNTIME_PROJECTION_CHANNEL, RUNTIME_HISTORY_CHANNEL, isRuntimeHistoryResult, RUNTIME_PROJECTION_EVENT, RUNTIME_RESOURCES_CHANNEL, RUNTIME_RESOURCE_PREVIEW_CHANNEL, RUNTIME_STATUS_CHANNEL, RUNTIME_STATUS_EVENT, isCapabilitiesResult, isMcpCommandResult, isMcpConfigResult, isMcpInspectionResult, isMcpInspectAbortResult, isMcpStatusResult, isProjectionBatch, isProjectionResult, isPromptResult, isResourcesResult, isResourcePreviewResult, isRuntimeDiagnosticsResult, isRuntimeResult, isRuntimeRewindResult, isRuntimeStatus } from '../shared/runtime-api'
-import type { CapabilitiesResult, McpCommandAction, McpCommandResult, McpConfigResult, McpInspectionResult, McpInspectAbortResult, McpStatusResult, ProjectionBatch, ProjectionResult, PromptImageInput, PromptResult, ResourcesResult, ResourcePreviewResult, RuntimeCompactRequest, RuntimeDiagnosticsResult, RuntimeHistoryRequest, RuntimeResult, RuntimeSetModelRequest, RuntimeRewindRequest, RuntimeStatus, RuntimeTarget } from '../shared/runtime-api'
+import { RUNTIME_ABORT_CHANNEL, RUNTIME_CAPABILITIES_CHANNEL, RUNTIME_COMPACT_CHANNEL, RUNTIME_SET_MODEL_CHANNEL, RUNTIME_DIAGNOSTICS_CHANNEL, RUNTIME_MCP_COMMAND_CHANNEL, RUNTIME_MCP_CONFIG_CHANNEL, RUNTIME_MCP_INSPECT_ABORT_CHANNEL, RUNTIME_MCP_INSPECT_CHANNEL, RUNTIME_MCP_STATUS_CHANNEL, RUNTIME_PROMPT_CHANNEL, RUNTIME_REWIND_CHANNEL, RUNTIME_PROJECTION_ACK_CHANNEL, RUNTIME_PROJECTION_CHANNEL, RUNTIME_PROJECTION_EVENT, RUNTIME_RESOURCES_CHANNEL, RUNTIME_RESOURCE_PREVIEW_CHANNEL, RUNTIME_STATUS_CHANNEL, RUNTIME_STATUS_EVENT, isCapabilitiesResult, isMcpCommandResult, isMcpConfigResult, isMcpInspectionResult, isMcpInspectAbortResult, isMcpStatusResult, isProjectionBatch, isProjectionResult, isPromptResult, isResourcesResult, isResourcePreviewResult, isRuntimeDiagnosticsResult, isRuntimeResult, isRuntimeRewindResult, isRuntimeStatus } from '../shared/runtime-api'
+import type { CapabilitiesResult, McpCommandAction, McpCommandResult, McpConfigResult, McpInspectionResult, McpInspectAbortResult, McpStatusResult, ProjectionBatch, ProjectionResult, PromptImageInput, PromptResult, ResourcesResult, ResourcePreviewResult, RuntimeCompactRequest, RuntimeDiagnosticsResult, RuntimeResult, RuntimeSetModelRequest, RuntimeRewindRequest, RuntimeStatus, RuntimeTarget } from '../shared/runtime-api'
 import type { RuntimeApi } from '../shared/runtime-api'
 
 const INVALID_RUNTIME_RESPONSE = '桌面接口返回了无法识别的 Runtime 结果。'
@@ -109,14 +109,6 @@ export const runtimeApi = {
       runtimeId: target.runtimeId
     })
     return isProjectionResult(response) ? response : invalidProjectionResponse()
-  },
-
-  async readRuntimeHistory(request: RuntimeHistoryRequest) {
-    const response: unknown = await ipcRenderer.invoke(RUNTIME_HISTORY_CHANNEL, {
-      runId: request.runId, runtimeId: request.runtimeId, sessionId: request.sessionId, revision: request.revision, query: { ...request.query }
-    })
-    return isRuntimeHistoryResult(response) ? response
-      : { ok: false as const, error: { code: 'INVALID_RESPONSE' as const, message: '桌面接口返回了无法识别的历史记录。' } }
   },
 
   async getRuntimeCapabilities(target: RuntimeTarget) {

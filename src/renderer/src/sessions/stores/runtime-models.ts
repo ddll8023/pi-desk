@@ -331,8 +331,19 @@ export function createRuntimeModels(deps: RuntimeModelsDeps): RuntimeModels {
     }
     if (view.phase === 'ready') {
       const status = view.snapshot
-      // 新实例、新会话或一轮结束后刷新模型列表，维持 Provider、模型显示名与图片输入能力提示。
-      if (effects.targetChanged || effects.sessionChanged || status.runtimeId !== capabilitiesAttemptedRuntimeId
+      const runId = status.runId
+      const cached = runId === null ? undefined : capabilitiesCache.get(runId)
+      // 同一实例同一代际的清单仍然有效：普通切回直接用它，不再多发一次读取，也就不会闪一次空列表。
+      const cachedUsable = cached !== undefined && cached.runtimeId === status.runtimeId
+      if (cachedUsable && cached !== undefined) {
+        if (capabilitiesView.value.phase !== 'ready' || capabilitiesView.value.data !== cached) {
+          capabilitiesView.value = { phase: 'ready', data: cached }
+        }
+        capabilitiesAttemptedRuntimeId = status.runtimeId
+      }
+      // 新实例、新会话、未命中的代际与一轮结束后刷新模型列表，维持 Provider、模型显示名与图片输入能力提示。
+      if ((effects.targetChanged && !cachedUsable) || effects.sessionChanged
+        || status.runtimeId !== capabilitiesAttemptedRuntimeId
         || (effects.previousStreaming && status.info?.isStreaming !== true)) {
         void refreshCapabilities()
       }

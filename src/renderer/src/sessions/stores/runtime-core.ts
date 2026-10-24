@@ -3,7 +3,7 @@
  * 历史缓存是纯函数模块、由本切片组合；模型能力、模型切换与展示偏好由 `runtime-models`
  * 与 `runtime-model-display` 持有，本切片只经 `bindStatusEffects` 在状态收敛时通知它们。
  */
-import { computed, ref } from 'vue'
+import { computed, ref, shallowRef } from 'vue'
 import type { ComputedRef, Ref } from 'vue'
 import type {
   HistoryChunk,
@@ -20,7 +20,8 @@ import type {
   RuntimeStatus,
   RuntimeTarget,
   SessionActivity,
-  ToolExecution
+  ToolExecution,
+  HistoryPage
 } from '../../../../shared/runtime-api'
 import {
   abortRuntime,
@@ -28,12 +29,12 @@ import {
   compactRuntime,
   getRuntimeProjection,
   getRuntimeStatus,
-  readRuntimeHistory,
   rewindRuntime,
   sendPrompt,
   subscribeRuntimeProjection,
   subscribeRuntimeStatus
 } from '../services/runtime'
+import { readSessionHistory } from '../services/session'
 import { createHistoryCache, emptyHistory, messageKey, rememberUiRevisions } from './runtime-history'
 import type { HistoryCache, HistoryState } from './runtime-history'
 
@@ -193,6 +194,8 @@ export interface RuntimeLifecycle {
 
 export interface RuntimeCoreDeps {
   lifecycle: RuntimeLifecycle
+  /** 当前项目的规范路径：历史读取按会话寻址，需要与会话一起给出项目。 */
+  currentProjectPath: () => string | null
 }
 
 /** 会话运行切片对外提供的能力；组合根据此装配，模型切片只读取其中的身份与互斥状态。 */
@@ -214,6 +217,15 @@ export interface RuntimeCore {
   displayTools: ComputedRef<readonly ToolExecution[]>
   history: Ref<HistoryState>
   activity: Ref<SessionActivity | null>
+  /** 正在展示的日志来源所属会话；null 表示当前展示由绑定投影（或空基准）提供。 */
+  logSessionId: Ref<string | null>
+  /**
+   * 应用一页日志历史：只在会话尚未绑定时生效，绑定投影到达即退场。
+   * 它同时固定后续翻页、轮次与续段的读取目标，因此未绑定的会话也能继续往回读。
+   */
+  applyLogPage(page: HistoryPage, target: { readonly projectPath: string; readonly sessionId: string }): void
+  /** 丢弃日志展示并清空内容；切换目标与会话绑定完成时调用。 */
+  clearPreview(): void
   projectionSync: Ref<ProjectionSyncState>
   projectionTruncated: Ref<boolean>
   droppedMessages: Ref<number>
@@ -278,17 +290,44 @@ export function createRuntimeCore(deps: RuntimeCoreDeps): RuntimeCore {
    */
   const lastReadyIdentity = ref<{ runId: number; runtimeId: number | null; sessionId: string | null } | null>(null)
   const conversationKey = computed(() => {
+    if (view.value.phase !== 'ready' && logSessionId.value !== null) {
+      // 日志来源按会话固定键：同一份历史不会因为绑定前后的实例编号不同而重建两次内容。
+      return `log:${logSessionId.value}`
+    }
     const identity = view.value.phase === 'ready' ? view.value.snapshot : lastReadyIdentity.value
     return `${identity?.runId ?? 'none'}`
       + `:${identity?.runtimeId ?? 'none'}:${identity?.sessionId ?? 'none'}`
   })
   /** 历史分页与展开原文；读取目标与分支版本由下面的 `requestHistory` 提供。 */
   const historyCache: HistoryCache = createHistoryCache({
-    request: (query, revision) => requestHistory(query, revision),
+    request: (query) => requestHistory(query),
     conversationKey: () => conversationKey.value
   })
   const history = historyCache.state
   const activity = ref<SessionActivity | null>(null)
+  /** 日志来源：内容随页面进来，绑定完成即退场；它不是权威投影，不参与任何写操作。 */
+  const logPage = shallowRef<HistoryPage | null>(null)
+  const logSessionId = ref<string | null>(null)
+  /** 日志读取目标：翻页、展开轮次与续段都按它寻址，未绑定时不依赖前台实例。 */
+  const logProjectPath = ref<string | null>(null)
+  /**
+   * 最近一次已知的「会话 → 项目」：绑定后按会话读取历史需要项目，
+   * 而绑定状态本身只带会话身份；退场时保留这条对应关系，只在与当前会话一致时使用。
+   */
+  const lastSessionProject = ref<{ readonly sessionId: string; readonly projectPath: string } | null>(null)
+  /** 日志展示期间跳过了前台批次：退场时必须重取权威基准，不能当成本地已同步。 */
+  let logBatchPending = false
+  /**
+   * 欠一次基准快照：与 `projectionSync` 分开，避免把「欠基准」说成「失去同步」。
+   * 日志展示期间跳过的批次只欠一次重取，界面内容仍是完整一页，不该出现失步提示；
+   * 真正取到快照之前也不该放开写入——写入另由绑定态门禁。
+   */
+  let baselineNeeded = false
+  /**
+   * 日志展示正等待退场：会话已经绑定到同一个会话，但权威基准还没落位。
+   * 期间继续显示日志内容，不提前清空；基准应用后再交还展示位，交接中间不出现空白。
+   */
+  let previewRetiring = false
   /** 只合并已加载页；按官方来源去重，不按文本、时间戳或数组下标猜身份。 */
   const displayMessages = computed<readonly ProjectionMessage[]>(() => {
     const base = new Map<string, ProjectionMessage>()
@@ -515,18 +554,50 @@ export function createRuntimeCore(deps: RuntimeCoreDeps): RuntimeCore {
       : { phase: 'error', error: result.error }
   }
 
-  /** 历史响应必须仍属于发起时的前台实例、绑定与会话；切走后的结果不写入新分片。 */
-  async function requestHistory(query: HistoryQuery, revision: number): Promise<HistoryData | null> {
-    const target = currentTarget()
-    const sessionId = view.value.phase === 'ready' ? view.value.snapshot.info?.sessionId : null
-    if (target === null || target.runtimeId === null || !sessionId) return null
+  /**
+   * 历史读取：页面只给会话，绑定与否由主进程判定，两条路径返回同一套条目身份，
+   * 缓存合并规则不需要区分来源。读取期间换目标或换会话就丢弃结果，不写进别的展示。
+   * 游标失效说明分支已变（回退、压缩或外部改写）：本页不再有效，按权威基准重建一次。
+   */
+  async function requestHistory(query: HistoryQuery): Promise<HistoryData | null> {
+    const target = historyTarget()
+    if (target === null) return null
     const owner = history.value
-    const result = await readRuntimeHistory({ runId: target.runId, runtimeId: target.runtimeId, sessionId, query, revision })
-    const current = currentTarget()
-    if (owner !== history.value || target.runId !== current?.runId || target.runtimeId !== current?.runtimeId
-      || view.value.phase !== 'ready' || view.value.snapshot.info?.sessionId !== sessionId) return null
-    if (!result.ok) throw new Error(result.error.message)
-    return result.data
+    const result = await readSessionHistory(target.projectPath, target.sessionId, query)
+    const current = historyTarget()
+    if (owner !== history.value || current === null
+      || current.projectPath !== target.projectPath || current.sessionId !== target.sessionId) return null
+    if (!result.ok) {
+      if (result.error.code === 'STALE_SESSION') {
+        if (view.value.phase === 'ready') {
+          baselineNeeded = true
+          void syncProjection()
+        } else history.value = emptyHistory()
+        return null
+      }
+      throw new Error(result.error.message)
+    }
+    if (result.data.projectPath !== target.projectPath || result.data.sessionId !== target.sessionId) return null
+    return result.data.data
+  }
+
+  /**
+   * 历史读取目标：正在展示的日志会话优先（它可能与已绑定的会话不是同一个），
+   * 其余情况取前台已就绪的绑定会话；都没有时不读取。
+   */
+  function historyTarget(): { readonly projectPath: string; readonly sessionId: string } | null {
+    const readySessionId = view.value.phase === 'ready' ? view.value.snapshot.info?.sessionId ?? null : null
+    if (logSessionId.value !== null && logSessionId.value !== readySessionId) {
+      const projectPath = logProjectPath.value
+      return projectPath === null ? null : { projectPath, sessionId: logSessionId.value }
+    }
+    if (readySessionId === null) return null
+    // 绑定状态只带会话身份，项目取同一会话最近一次的读取目标，缺失时退回当前项目。
+    const known = lastSessionProject.value
+    const projectPath = known !== null && known.sessionId === readySessionId
+      ? known.projectPath
+      : deps.currentProjectPath()
+    return projectPath === null ? null : { projectPath, sessionId: readySessionId }
   }
 
   /** 全量重同步保持序号守卫；回退换绑后等待旧请求完成，再读取新绑定基准。 */
@@ -579,6 +650,14 @@ export function createRuntimeCore(deps: RuntimeCoreDeps): RuntimeCore {
         return
       }
       const sameBinding = appliedRunId === target.runId && appliedRuntimeId === snapshot.runtimeId
+      if (sameBinding && snapshot.seq < appliedSeq) {
+        // 同一绑定的快照水位不得倒退：更早的快照已经被在手的增量覆盖，采用它会把正文回退；
+        // 只补一次确认，保留已应用的高水位。
+        projectionSync.value = 'synced'
+        if (snapshot.runtimeId !== null) ackRuntimeProjection(target, appliedSeq)
+        if (previewRetiring) retirePreview()
+        return
+      }
       appliedRunId = target.runId
       appliedRuntimeId = snapshot.runtimeId
       appliedSeq = snapshot.seq
@@ -594,16 +673,27 @@ export function createRuntimeCore(deps: RuntimeCoreDeps): RuntimeCore {
       droppedTools.value = snapshot.droppedTools
       projectionSync.value = 'synced'
       if (snapshot.runtimeId !== null) ackRuntimeProjection(target, snapshot.seq)
+      // 权威基准已经写进展示位：日志展示到此退场，内容不需要再清一次。
+      if (previewRetiring) retirePreview()
       return
     }
   }
 
-  /** 批次按来源实例分流：前台走展示状态，后台只更新来源实例的分片。 */
+  /**
+   * 批次按来源实例分流：前台走展示状态，后台只更新来源实例的分片。
+   * 日志展示期间前台批次不落在展示上，但仍要补一次确认并记下待重取：
+   * 丢弃又不确认会让未确认窗口白白堆积，而退场后本来就要按权威基准重建。
+   */
   function applyBatch(batch: ProjectionBatch): void {
     const origin = batch.runId ?? foregroundRunId.value
     if (origin === null) return
     if (origin !== foregroundRunId.value) {
       applyBackgroundBatch(origin, batch)
+      return
+    }
+    if (logPage.value !== null) {
+      logBatchPending = true
+      ackRuntimeProjection({ runId: origin, runtimeId: batch.runtimeId }, batch.seq)
       return
     }
     const target: RuntimeTarget = { runId: origin, runtimeId: batch.runtimeId }
@@ -641,8 +731,16 @@ export function createRuntimeCore(deps: RuntimeCoreDeps): RuntimeCore {
     ackRuntimeProjection(target, appliedSeq)
   }
 
-  /** 投影随运行实例与绑定代际存在：离开就绪即清空展示消息；没有目标时空投影本身就是基准。 */
+  /**
+   * 投影随运行实例与绑定代际存在：离开就绪即清空展示消息；没有目标时空投影本身就是基准。
+   * 日志展示在场时改由它提供内容：否则一次空重置就会把用户刚看到的历史抹掉。
+   */
   function resetProjection(): void {
+    const logDisplay = logPage.value
+    if (logDisplay !== null) {
+      showPreview(logDisplay, false)
+      return
+    }
     messages.value = []
     tools.value = []
     history.value = emptyHistory()
@@ -758,12 +856,24 @@ export function createRuntimeCore(deps: RuntimeCoreDeps): RuntimeCore {
       && (status.info?.sessionId ?? null) !== (previous?.info?.sessionId ?? null)
     const previousStreaming = previous?.info?.isStreaming === true
     foregroundRunId.value = status.runId
+    // 只有绑定到日志展示所属会话时才让日志展示退场：切到另一个项目的旧前台实例也会上报 ready，
+    // 那种情况下用户等待的仍然是日志展示中的会话，提前清掉就会退回等待态。
+    // 退场不在这里清空：先取一次权威基准，应用成功后再交还展示位，中间不出现空白。
+    if (status.state === 'ready' && status.info?.sessionId === logSessionId.value) {
+      previewRetiring = true
+      baselineNeeded = true
+    }
     // 前台换实例：把上一个实例的投影留底，再取回目标实例的分片；同一实例内换代由下面的重取收敛。
+    let reusedSlice = false
     if (previousRunId !== status.runId) {
       if (previousRunId !== null) stashProjection(previousRunId)
       // 目标实例未就绪时没有可展示的投影，分片留在表里等它重新就绪。
-      if (status.state === 'ready') restoreProjection(status.runId)
-      else resetProjection()
+      if (status.state === 'ready') {
+        restoreProjection(status.runId)
+        // 分片的绑定代际与目标一致且未失去同步时，取回的就是权威基准，再读一次整表不会带来新内容。
+        reusedSlice = appliedRunId === status.runId && appliedRuntimeId === status.runtimeId
+          && projectionSync.value === 'synced'
+      } else resetProjection()
     }
     if (targetChanged) preparingPrompt.value = false
     // 只有换了前台实例才作废进行中的回退：回退自身会换会话与绑定代际，不能把自己的结果判成过期。
@@ -799,9 +909,12 @@ export function createRuntimeCore(deps: RuntimeCoreDeps): RuntimeCore {
         lastReadyIdentity.value = { runId: status.runId, runtimeId: status.runtimeId,
           sessionId: status.info?.sessionId ?? null }
       }
-      // 换实例、换代、换会话与上一次重同步未收敛（syncing/stale）都重新取基准。
-      if (targetChanged || sessionChanged || status.runtimeId !== appliedRuntimeId
-        || projectionSync.value !== 'synced') {
+      // 换实例、换代、换会话、上一次重同步未收敛（syncing/stale）或欠着基准快照都重新取基准；
+      // 例外是取回的分片仍与该绑定一致：此时切回直接复用缓存，不再重读整表。
+      // 日志展示等退场时也一定取一次基准：退场只能发生在基准落位之后。
+      if (previewRetiring || sessionChanged || status.runtimeId !== appliedRuntimeId
+        || projectionSync.value !== 'synced' || baselineNeeded || (targetChanged && !reusedSlice)) {
+        baselineNeeded = false
         void syncProjection(status.runtimeId ?? undefined)
       }
       return { targetChanged, sessionChanged, previousStreaming, sessionAbsent: false }
@@ -819,8 +932,76 @@ export function createRuntimeCore(deps: RuntimeCoreDeps): RuntimeCore {
     return { targetChanged, sessionChanged, previousStreaming, sessionAbsent: status.sessionId === null }
   }
 
+  /**
+   * 把日志历史写进展示位；只替换展示，不触碰应用水位与确认状态。
+   * `resetHistory` 为假时保留已往回加载的分页与游标：同一份日志在状态收敛时重放，
+   * 不该把用户已经翻到的更早内容与游标一起丢掉。
+   */
+  function showPreview(page: HistoryPage, resetHistory = true): void {
+    messages.value = page.messages
+    tools.value = page.tools
+    if (resetHistory) history.value = { ...emptyHistory(), before: page.before }
+    activity.value = null
+    projectionTruncated.value = false
+    droppedMessages.value = 0
+    droppedTools.value = 0
+    // 日志页本身就是完整一页：不进入 stale，否则界面会提示「失去同步」而掩盖真实状态。
+    projectionSync.value = 'synced'
+  }
+
+  /**
+   * 应用一页日志历史：同一会话已经绑定就忽略（权威投影优先），
+   * 否则把内容放进展示位，并记住后续读取要寻址的项目与会话。
+   */
+  function applyLogPage(page: HistoryPage, target: { readonly projectPath: string; readonly sessionId: string }): void {
+    if (view.value.phase === 'ready' && view.value.snapshot.info?.sessionId === target.sessionId) return
+    logPage.value = page
+    logSessionId.value = target.sessionId
+    logProjectPath.value = target.projectPath
+    lastSessionProject.value = { sessionId: target.sessionId, projectPath: target.projectPath }
+    showPreview(page)
+  }
+
+  /**
+   * 日志展示退场但保留内容：权威基准已经写在同一展示位上，再清一次会把刚取到的历史抹掉。
+   * 只交还来源身份与欠基准标记，写入门禁由绑定态本身决定。
+   */
+  function retirePreview(): void {
+    previewRetiring = false
+    logPage.value = null
+    logSessionId.value = null
+    logProjectPath.value = null
+    logBatchPending = false
+    baselineNeeded = false
+  }
+
+  /** 丢弃日志展示并清空内容；随后由状态收敛决定是否取权威基准。 */
+  function clearPreview(): void {
+    if (logPage.value === null && logSessionId.value === null) return
+    previewRetiring = false
+    logPage.value = null
+    logSessionId.value = null
+    logProjectPath.value = null
+    messages.value = []
+    tools.value = []
+    history.value = emptyHistory()
+    activity.value = null
+    projectionTruncated.value = false
+    droppedMessages.value = 0
+    droppedTools.value = 0
+    // 日志展示期间跳过的前台批次只能靠重取补上：只记「欠基准」，不改失步状态，
+    // 由随后的就绪收敛取一次权威快照。
+    if (logBatchPending) {
+      logBatchPending = false
+      baselineNeeded = true
+    }
+  }
+
   /** 页面卸载：释放订阅并作废回退结果；已提交的主进程操作不受影响。 */
   function reset(): void {
+    clearPreview()
+    previewRetiring = false
+    baselineNeeded = false
     unsubscribe()
     projectionSyncPromise = null
     foregroundRunId.value = null
@@ -851,6 +1032,9 @@ export function createRuntimeCore(deps: RuntimeCoreDeps): RuntimeCore {
     displayTools,
     history,
     activity,
+    logSessionId,
+    applyLogPage,
+    clearPreview,
     projectionSync,
     projectionTruncated,
     droppedMessages,

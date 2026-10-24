@@ -4,7 +4,10 @@ import { isAbsolute, resolve } from 'node:path'
 import { SDK_HOST_PROTOCOL_VERSION, isSdkHostRequest } from './protocol'
 import type { SdkHostFrame, SdkHostEvent, SdkHostRequest, SdkHostFailureCode, SdkSessionAuthorization, SdkSessionReference } from './protocol'
 import { loadSdkModule } from '../shared-process/runtime'
+import type { SdkModule } from '../shared-process/runtime'
 import { SdkSessionFailure, SdkSessionRuntime } from './session-runtime'
+import { readSessionLog } from './log-reader'
+import { ProjectionCheckpoints } from './projection/checkpoint'
 
 const parentPort = process.parentPort
 const INITIALIZE_WAIT_MS = 30_000
@@ -15,6 +18,10 @@ let ready = false
 let closing = false
 let seq = 0
 let sessions: SdkSessionRuntime | null = null
+/** 已加载的官方 SDK 模块：预览只需要它的解析与内存会话管理，不建立 AgentSession。 */
+let sdkModule: SdkModule | null = null
+/** 投影检查点：日志读取写入、绑定建立时取用，两处共享同一个进程内实例。 */
+const checkpoints = new ProjectionCheckpoints()
 let shutdownTask: Promise<void> | null = null
 const authorizations = new Map<string, {
   readonly bindingId: number | null
@@ -77,12 +84,13 @@ async function initialize(request: Extract<SdkHostRequest, { type: 'initialize' 
     }
     const sdk = await loadSdkModule()
     if (closing) return
+    sdkModule = sdk
     const actualAgentDir = sdk.getAgentDir()
     if (!isAbsolute(actualAgentDir) || !samePath(actualAgentDir, request.agentDir)) {
       fail(request, 'AGENT_DIR_MISMATCH'); return
     }
     sessions = new SdkSessionRuntime(sdk, {
-      hostId: request.hostId, agentDir: actualAgentDir, authorize,
+      hostId: request.hostId, agentDir: actualAgentDir, authorize, checkpoints,
       onState: status => {
         if (status.phase === 'invalid') cancelAuthorizations(status.bindingId)
         send({ version: SDK_HOST_PROTOCOL_VERSION, hostId: request.hostId, type: 'session-state', seq: ++seq, status })
@@ -189,7 +197,7 @@ async function dispatch(request: SdkHostRequest): Promise<void> {
         status: await runtime.runMcpCommand(request.bindingId, request.action, request.serverName) })
       return
     case 'history':
-      send({ ...envelope, type: 'history-result', data: runtime.readHistory(request.bindingId, request.sessionId, request.query, request.revision) })
+      send({ ...envelope, type: 'history-result', data: runtime.readHistory(request.bindingId, request.sessionId, request.query) })
       return
     case 'projection-snapshot': {
       const projection = runtime.getProjection(request.bindingId)
@@ -201,6 +209,12 @@ async function dispatch(request: SdkHostRequest): Promise<void> {
       runtime.ackProjection(request.bindingId, request.seq)
       send({ ...envelope, type: 'ack-result' })
       return
+    case 'session-log': {
+      const sdk = sdkModule
+      if (sdk === null) { fail(request, 'HOST_NOT_READY'); return }
+      send({ ...envelope, type: 'log-result', data: await readSessionLog(sdk, request.target, checkpoints) })
+      return
+    }
     case 'ui-response':
       if (!runtime.respond(request.bindingId, request.dialogId, request.response)) {
         fail(request, 'INTERACTION_INVALID'); return

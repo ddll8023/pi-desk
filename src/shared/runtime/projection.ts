@@ -341,13 +341,6 @@ export type HistoryQuery =
   | { readonly kind: 'page'; readonly before: string | null }
   | { readonly kind: 'turn'; readonly turnId: string; readonly after: string | null }
   | ({ readonly kind: 'text' } & HistoryChunk)
-export interface RuntimeHistoryRequest {
-  readonly revision: number
-  readonly runId: number
-  readonly runtimeId: number
-  readonly sessionId: string
-  readonly query: HistoryQuery
-}
 
 export interface HistoryPage {
   readonly kind: 'page' | 'turn'

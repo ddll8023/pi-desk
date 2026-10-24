@@ -16,7 +16,8 @@ import { ProjectFileIndex } from './projects/project-file-index'
 import { GitService } from './git/git-service'
 import { ProjectManager } from './projects/project-manager'
 import { McpInspectionManager } from './resources/mcp-inspection'
-import { SdkHostManager } from './sessions/sdk-host-manager'
+import { createReadOnlyHost, SdkHostManager } from './sessions/sdk-host-manager'
+import { LogHostPool } from './sessions/log-host-pool'
 import { SdkRuntimeBridge } from './sessions/sdk-runtime-bridge'
 import { SessionManager } from './sessions/session-manager'
 import { SessionRunRegistry } from './sessions/session-run-registry'
@@ -37,15 +38,20 @@ import {
 /** 会话运行注册表：应用级运行身份、绑定代际与会话占用的唯一登记处。 */
 export const sessionRuns = new SessionRunRegistry<SdkHostManager>()
 
+/** 只读解析宿主池：查看会话历史不再需要登记运行实例，查看与打开共用同一套进程。 */
+export const logHosts = new LogHostPool({
+  create: (hostId) => createReadOnlyHost({ hostId })
+})
+
 /** 页面会话主链后端：按注册表定位运行实例，宿主按需建立，失败分类在此映射回既有 Runtime 契约。 */
 export const sdkRuntime = new SdkRuntimeBridge({
   runs: sessionRuns,
+  logHosts,
   // 授权回路接主进程会话编排：宿主不能自行授权项目或任意会话路径。
-  createHost: (runId) => {
-    const host = new SdkHostManager({ runId, runs: sessionRuns })
+  prepareHost: (host) => {
     host.setSessionAuthority((reference, ownerProjectPath) => sessionManager.prepareSdkTarget(reference, ownerProjectPath))
-    return host
-  }
+  },
+  createHost: (runId) => new SdkHostManager({ runId, runs: sessionRuns })
 })
 
 /** 本地配置文件的唯一读写者；本文件的所有字段共用同一份配置与写入队列。 */
