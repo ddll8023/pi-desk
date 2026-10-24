@@ -1,4 +1,5 @@
-<!-- 消息区：按投影渲染、粘底与大纲导航；承接用户消息回退确认与修改提交，回退会新建会话（列表折叠为一条），项目文件不回退；回退把原消息文本与可还原的附件交回输入框，修改重试在没能重发时交回修改后的文本。
+<!-- 原位新建时保持消息区挂载与阅读留底，但隐藏旧内容、暂停旧会话操作并收起浮层。
+     消息区：按投影渲染、粘底与大纲导航；承接用户消息回退确认与修改提交，回退会新建会话（列表折叠为一条），项目文件不回退；回退把原消息文本与可还原的附件交回输入框，修改重试在没能重发时交回修改后的文本。
      渲染与折叠都以轮为单位：当前轮与上一轮始终完整展开，更早的轮次只留用户输入、其后的 AI 回答与过程压成一行摘要（见 ChatTurnItem）；开合状态按会话保存，顶部开关控制全局默认。 -->
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
@@ -28,6 +29,7 @@ const OUTLINE_MIN_HEIGHT_PX = 128
 const OUTLINE_SUMMARY_CHARS = 160
 const READING_OFFSET_PX = 20
 
+const props = withDefaults(defineProps<{ readonly hidden?: boolean }>(), { hidden: false })
 const projectStore = useProjectStore()
 const runtimeStore = useRuntimeStore()
 const sessionStore = useSessionStore()
@@ -98,12 +100,24 @@ const pendingEdit = ref(false)
 /** 回退后没能恢复的附件说明；一次性展示，不常驻。 */
 const refillNotice = ref<string | null>(null)
 let refillNoticeTimer: ReturnType<typeof setTimeout> | null = null
+/** 新建隐藏发生过就作废旧消息动作的收尾，即使期间已经恢复或绑定另一会话。 */
+let displayVersion = 0
+watch(() => props.hidden, (hidden) => {
+  displayVersion += 1
+  if (hidden) {
+    pendingRewind.value = null
+    historyIntent.value = false
+    activeOutlineId.value = null
+    outlineLayout.value = null
+  } else scheduleOutlineUpdate()
+}, { flush: 'sync' })
 
 /**
  * 不可回退的具体原因；为空表示可以回退。
  * 操作栏的禁用态与 tooltip 都取自它，用户能看到在等什么，而不是只有一个灰按钮。
  */
 const rewindBlockReason = computed<string | null>(() => {
+  if (props.hidden) return '当前为新对话，原会话操作已暂停。'
   if (runtimeView.value.phase !== 'ready') return '当前没有可回退的会话。'
   if (runtimeInfo.value?.sessionId == null) return '会话尚未建立，暂时不能回退。'
   if (streaming.value) return 'Agent 正在运行；先停止当前轮次再回退。'
@@ -137,6 +151,7 @@ function userMessagePayloadOf(messageId: string): UserMessagePayload | null {
  * `action` 决定文案说的是回退还是修改重试。
  */
 function handBack(refill: UserMessagePayload, action: '回退' | '修改重试'): void {
+  if (props.hidden) return
   sessionViewStore.requestInput(refill.text, refill.images)
   if (refill.skippedImages === 0) return
   refillNotice.value = `${action}完成；${refill.skippedImages} 张超出大小上限或已被投影丢弃的图片附件未恢复。`
@@ -164,7 +179,8 @@ async function confirmRewind(): Promise<void> {
   const pending = pendingRewind.value
   pendingRewind.value = null
   if (pending === null || !canRewind.value) return
-  if (!await runtimeStore.rewind(pending.request)) return
+  const version = displayVersion
+  if (!await runtimeStore.rewind(pending.request) || version !== displayVersion) return
   handBack(pending.refill, '回退')
   await sessionStore.refresh()
 }
@@ -182,11 +198,14 @@ async function handleSubmitEdit(messageId: string, text: string): Promise<void> 
   const refill = userMessagePayloadOf(messageId)
   if (refill === null) return
   const request: RuntimeRewindRequest = { runId, runtimeId, sessionId, messageId }
+  const version = displayVersion
   pendingEdit.value = true
   try {
     // 回退失败时保持编辑态，用户可再次尝试；但会话身份已变说明分叉确已发生，
     // 修改后的文本不能只留在已从分支移除的消息里，先交回输入框。
-    if (!await runtimeStore.rewind(request)) {
+    const rewound = await runtimeStore.rewind(request)
+    if (version !== displayVersion) return
+    if (!rewound) {
       if (runtimeInfo.value?.sessionId !== sessionId) {
         handBack({ text, images: refill.images, skippedImages: refill.skippedImages }, '修改重试')
       }
@@ -194,6 +213,7 @@ async function handleSubmitEdit(messageId: string, text: string): Promise<void> 
     }
     const before = promptView.value
     await runtimeStore.send(text, refill.images)
+    if (version !== displayVersion) return
     if (promptView.value === before || promptView.value.phase !== 'accepted') {
       handBack({ text, images: refill.images, skippedImages: refill.skippedImages }, '修改重试')
     }
@@ -620,6 +640,8 @@ function withAnchoredLayout(mutate: () => void): void {
 
 /** 前插历史后补偿原可见轮位移，避免滚动条跳到新页顶部。 */
 async function loadEarlier(): Promise<void> {
+  if (props.hidden) return
+  const version = displayVersion
   const host = scroller.value
   const anchor = host ? topVisibleTurn(host) : null
   const top = anchor?.getBoundingClientRect().top
@@ -627,7 +649,7 @@ async function loadEarlier(): Promise<void> {
   stickToBottom.value = false
   await runtimeStore.loadEarlierHistory()
   await nextTick()
-  if (key !== conversationKey.value || !host || !anchor?.isConnected || top === undefined) return
+  if (version !== displayVersion || key !== conversationKey.value || !host || !anchor?.isConnected || top === undefined) return
   host.scrollTop += anchor.getBoundingClientRect().top - top
   lastScrollTop = host.scrollTop
 }
@@ -768,7 +790,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <section ref="viewport" class="relative flex min-h-0 flex-1 flex-col bg-desk-canvas-sunken">
+  <section v-show="!props.hidden" ref="viewport" class="relative flex min-h-0 flex-1 flex-col bg-desk-canvas-sunken" :inert="props.hidden" :aria-hidden="props.hidden">
     <div
       ref="scroller"
       class="scroll-area min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-6 [overflow-anchor:none]"
@@ -795,7 +817,7 @@ onBeforeUnmount(() => {
         <HistoryLoadSentinel
           v-if="history.before !== null || history.loading || history.error"
           :cursor="history.before ?? 'history-start'"
-          :enabled="runtimeView.phase === 'ready' && projectionSync === 'synced' && (!stickToBottom || historyIntent)"
+          :enabled="!props.hidden && runtimeView.phase === 'ready' && projectionSync === 'synced' && (!stickToBottom || historyIntent)"
           :loading="history.loading"
           :error="history.error"
           @load="loadEarlier"
@@ -811,11 +833,11 @@ onBeforeUnmount(() => {
           :actions-disabled="!canRewind"
           :disabled-reason="rewindBlockReason"
           :detail="turn.historyId ? history.turns[turn.historyId] : undefined"
-          :history-available="runtimeView.phase === 'ready'"
+          :history-available="!props.hidden && runtimeView.phase === 'ready'"
           :owner-key="conversationKey"
-          @visibility="(visible, ownerKey) => turn.historyId && runtimeStore.setHistoryVisibility(turn.historyId, visible, ownerKey)"
-          @load-detail="(more) => turn.historyId && runtimeStore.loadHistoryTurn(turn.historyId, more)"
-          @load-chunk="(chunk) => turn.historyId && runtimeStore.loadHistoryChunk(turn.historyId, chunk)"
+          @visibility="(visible, ownerKey) => turn.historyId && runtimeStore.setHistoryVisibility(turn.historyId, !props.hidden && visible, ownerKey)"
+          @load-detail="(more) => !props.hidden && turn.historyId && runtimeStore.loadHistoryTurn(turn.historyId, more)"
+          @load-chunk="(chunk) => !props.hidden && turn.historyId && runtimeStore.loadHistoryChunk(turn.historyId, chunk)"
           @toggle="toggleTurn(turn, index)"
           @rewind="requestRewind"
           @submit-edit="handleSubmitEdit"
@@ -844,7 +866,7 @@ onBeforeUnmount(() => {
     </div>
 
     <ConfirmDialog
-      :open="pendingRewind !== null"
+      :open="!props.hidden && pendingRewind !== null"
       title="回退到这条消息之前？"
       description="当前对话将回到这条用户消息发送之前；该消息及后续内容不再显示在新分支中。"
       :detail="rewindDetail"
@@ -854,7 +876,7 @@ onBeforeUnmount(() => {
     />
 
     <ChatOutline
-      v-if="outlineLayout !== null && outlineEntries.length > 0"
+      v-if="!props.hidden && outlineLayout !== null && outlineEntries.length > 0"
       :key="conversationKey"
       :entries="outlineEntries"
       :active-id="activeOutlineId"

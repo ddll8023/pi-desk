@@ -1,4 +1,5 @@
-<!-- Prompt 输入坞：处理输入法组合态、Enter 发送与 Shift+Enter 换行、焦点回归与重复提交、响应侧栏「新建」的聚焦请求并给出一次性提示，并在 Agent 运行期间原位提供停止入口；同时承接 Extension 的 set_editor_text 填充文本、图片附件的选择/粘贴/拖拽三种入口、输入行按内容自动增高、快捷发送下拉（短语取自界面偏好，可在设置里增删改与排序）、Pi 命令的斜杠模糊补全（Runtime 就绪后用运行中的命令清单，未就绪时用主进程预读的技能清单，按类型分组并按匹配优先级排序；另含 Desktop 层自己拦截的界面命令）与 `@` 项目文件引用（只写入相对路径文本，不传文件内容）。底部工具条左侧是信息行：异常与进行中的状态文本、被收起的 Extension 对话入口与会话用量指标（缓存命中率、上下文占用与平均速率，点击开明细；累计 token 与费用只在明细浮层展示）；右侧是模型选择、附件、快捷发送与发送/停止按钮。Extension 的 setStatus 项不在输入区展示。 -->
+<!-- 原位新建以独立草稿承接输入：旧实例结束期间可编辑但不发送，首次发送才建立新会话。
+     Prompt 输入坞：处理输入法组合态、Enter 发送与 Shift+Enter 换行、焦点回归与重复提交、响应侧栏「新建」的聚焦请求并给出一次性提示，并在 Agent 运行期间原位提供停止入口；同时承接 Extension 的 set_editor_text 填充文本、图片附件的选择/粘贴/拖拽三种入口、输入行按内容自动增高、快捷发送下拉（短语取自界面偏好，可在设置里增删改与排序）、Pi 命令的斜杠模糊补全（Runtime 就绪后用运行中的命令清单，未就绪时用主进程预读的技能清单，按类型分组并按匹配优先级排序；另含 Desktop 层自己拦截的界面命令）与 `@` 项目文件引用（只写入相对路径文本，不传文件内容）。底部工具条左侧是信息行：异常与进行中的状态文本、被收起的 Extension 对话入口与会话用量指标（缓存命中率、上下文占用与平均速率，点击开明细；累计 token 与费用只在明细浮层展示）；右侧是模型选择、附件、快捷发送与发送/停止按钮。Extension 的 setStatus 项不在输入区展示。 -->
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
@@ -11,7 +12,7 @@ import { useResourceStore } from '../../resources/stores/resource'
 import { useProjectStore } from '../../projects/stores/project'
 import { useRuntimeStore } from '../stores/runtime'
 import { useSessionStore } from '../stores/session'
-import { isSessionKey, useSessionViewStore } from '../stores/session-view'
+import { isSavedInputKey, useSessionViewStore } from '../stores/session-view'
 import type { PendingImage } from '../stores/session-view'
 import { useWorkspaceTabsStore } from '../../workspace/stores/workspace-tabs'
 import { parseDialogTitle } from '../extension-dialog-presentation'
@@ -32,7 +33,7 @@ const { view: runtimeView, promptView, abortView, compactView, projectionSync, c
   preparingPrompt, rewindView } = storeToRefs(runtimeStore)
 const { editorText, editorTextVersion } = storeToRefs(extensionStore)
 
-/** 侧栏「新建」在闲置态的聚焦请求；父组件只传这个自增计数。 */
+/** 侧栏新建入口的聚焦请求；父组件只传自增计数，不代表 SDK 已启动。 */
 const props = defineProps<{ readonly focusToken: number; readonly active: boolean }>()
 
 const draft = ref('')
@@ -44,7 +45,7 @@ const submitting = ref(false)
 /** 输入法组合态：此期间的 Enter 只确认候选词，不能当发送。 */
 const composing = ref(false)
 const textarea = ref<HTMLTextAreaElement | null>(null)
-/** 闲置态点击「新建」后的一次性提示：说明会话由首次发送创建。 */
+/** 新建入口聚焦后的一次性提示：尚未绑定时，发送才准备执行会话。 */
 const newSessionHint = ref(false)
 let newSessionHintTimer: ReturnType<typeof setTimeout> | null = null
 /** 界面命令无法执行时的一次性说明；文案由命令与原因决定，用户据此知道该等还是该重试。 */
@@ -66,10 +67,10 @@ const COMPACT_HINT_UNBOUND = '压缩需要已有会话上下文；先发送一�
 const COMPACT_HINT_BLOCKED = '当前会话不空闲或消息尚未同步，压缩未发起；等本轮结束后重试。'
 /** `/new` 落在本来就是空的对话上：没有可结束的实例，也没有可重建的会话。 */
 const NEW_CHAT_HINT_ALREADY = '当前已经是新对话。'
-/** `/new` 期间另一会话正在打开：此时新建会让意图落到别的会话上，等打开结束后重试。 */
-const NEW_CHAT_HINT_BUSY = '正在打开会话，稍后再新建。'
+/** 生命周期动作尚未收敛时不执行新的原位替换，避免改变仍在处理的目标。 */
+const NEW_CHAT_HINT_BUSY = '正在处理会话操作，稍后再新建。'
 
-/** 聚焦请求只在闲置态发出：聚焦输入框并短暂提示，不改动启动语义。 */
+/** 聚焦请求只作用于当前活动对话，不改变会话启动策略。 */
 watch(() => props.focusToken, () => {
   if (!props.active) return
   textarea.value?.focus()
@@ -86,30 +87,30 @@ const pendingImages = ref<PendingImage[]>([])
 const imageInput = ref<HTMLInputElement | null>(null)
 
 /**
- * 草稿与附件按会话保存：离开会话时存回该会话，切回时取走。空闲与未绑定实例没有独立历史，
- * 输入随会话建立原样带走；首次发送只启动 Runtime 的意图属于即将建立的会话，此时不改内容。
+ * 草稿与附件按会话或原位新建的输入身份保存，旧实例收尾不改变新草稿归属。
+ * 首次发送的输入随新会话建立原样带走；其他空闲与未绑定状态仍不单独留底。
  */
 function applySessionInput(nextKey: string, previousKey: string | null): void {
   if (startupRequested.value) return
-  if (previousKey !== null && isSessionKey(previousKey)) {
+  if (previousKey !== null && isSavedInputKey(previousKey)) {
     sessionViewStore.saveInput(previousKey, { draft: draft.value, images: pendingImages.value })
   }
-  const restored = isSessionKey(nextKey) ? sessionViewStore.takeInput(nextKey) : null
+  const restored = sessionViewStore.takeInput(nextKey)
   if (restored !== null) {
-    // 空闲与未绑定状态不留底：被替换掉的附件没有其他归处，直接释放预览地址。
-    if (previousKey === null || !isSessionKey(previousKey)) sessionViewStore.releaseImages(pendingImages.value)
+    // 没有归属的空闲附件不会进入留底，替换时由当前输入框释放。
+    if (previousKey === null || !isSavedInputKey(previousKey)) sessionViewStore.releaseImages(pendingImages.value)
     draft.value = restored.draft
     pendingImages.value = restored.images
     return
   }
-  // 会话之间必须隔离：目标会话没有留底时给干净状态；空闲与未绑定实例之间则原样带走。
-  if (previousKey !== null && isSessionKey(previousKey)) {
+  // 会话与独立新草稿之间必须隔离；普通空闲与未绑定状态之间仍原样带走输入。
+  if (previousKey !== null && isSavedInputKey(previousKey)) {
     draft.value = ''
     pendingImages.value = []
   }
 }
 
-/** 会话切换只改输入归属，不改提交契约：草稿与附件始终属于当前会话。 */
+/** 输入身份变化时切换草稿与附件归属，原位新草稿独立于旧执行会话。 */
 watch(() => sessionViewStore.key, (next, previous) => applySessionInput(next, previous ?? null), { flush: 'pre' })
 
 /** 回退交回的输入无法填入时的一次性说明；不常驻信息行。 */
@@ -132,6 +133,11 @@ function showRefillHint(text: string): void {
 function applyRequestedInput(): void {
   const restored = sessionViewStore.consumeRequestedInput()
   if (restored === null) return
+  if (workspaceTabsStore.isChatNewDraft) {
+    // 原位新建已放弃旧会话的回填，不能把迟到的回退结果填进新草稿。
+    sessionViewStore.releaseImages(restored.images)
+    return
+  }
   if (draft.value.trim() !== '' || pendingImages.value.length > 0) {
     // 不覆盖用户正在写的内容；交回内容里没人接管的附件预览在这里释放。
     sessionViewStore.releaseImages(restored.images)
@@ -159,6 +165,7 @@ const dragging = computed(() => dragDepth.value > 0)
 
 /** 当前模型的图片输入能力；未知（null）时不限制，明确不支持时提示。 */
 const imageSupported = computed(() => {
+  if (workspaceTabsStore.isChatNewDraft) return null
   if (capabilitiesView.value.phase !== 'ready') return null
   const current = capabilitiesView.value.data.models.find((model) => {
     const info = runtimeInfo.value
@@ -167,17 +174,18 @@ const imageSupported = computed(() => {
   return current?.imageInput ?? null
 })
 
-const runtimeReady = computed(() => runtimeView.value.phase === 'ready')
+const runtimeReady = computed(() => !workspaceTabsStore.isChatNewDraft && runtimeView.value.phase === 'ready')
 const canStartRuntime = computed(() => (
-  runtimeView.value.phase === 'idle'
+  (workspaceTabsStore.isChatNewDraft && !workspaceTabsStore.isChatResetting && !workspaceTabsStore.isChatBinding)
+  || runtimeView.value.phase === 'idle'
   || runtimeView.value.phase === 'closed'
   || runtimeView.value.phase === 'failed'
 ))
 const runtimeInfo = computed(() => (
-  runtimeView.value.phase === 'ready' ? runtimeView.value.snapshot.info : null
+  runtimeReady.value && runtimeView.value.phase === 'ready' ? runtimeView.value.snapshot.info : null
 ))
 const streaming = computed(() => runtimeInfo.value?.isStreaming === true)
-const sending = computed(() => promptView.value.phase === 'sending')
+const sending = computed(() => !workspaceTabsStore.isChatNewDraft && promptView.value.phase === 'sending')
 const stopVisible = computed(() => (
   runtimeReady.value && (streaming.value || abortView.value.phase === 'requesting')
 ))
@@ -185,9 +193,10 @@ const stopVisible = computed(() => (
 const canSubmit = computed(() => {
   // 交互条件比“可见”严：内容可以先展示，向尚未确认的目标提交则不行。
   if (!props.active || !workspaceTabsStore.isChatInteractive) return false
-  if (sending.value || submitting.value || preparingPrompt.value || modelSwitchView.value.phase === 'switching' || sessionStore.opening
-    || sessionStore.awaitingTrust || sessionStore.awaitingInterrupt || rewindView.value.phase === 'requesting'
-    || compactView.value.phase === 'requesting'
+  if (submitting.value || sessionStore.opening || sessionStore.awaitingTrust || sessionStore.awaitingInterrupt) return false
+  if (workspaceTabsStore.isChatNewDraft) return canStartRuntime.value && projectStore.currentProject !== null
+  if (sending.value || preparingPrompt.value || modelSwitchView.value.phase === 'switching'
+    || rewindView.value.phase === 'requesting' || compactView.value.phase === 'requesting'
     || (rewindView.value.phase === 'error' && rewindView.value.blocked)) return false
   if (runtimeReady.value) {
     return projectionSync.value === 'synced' && !streaming.value
@@ -211,6 +220,20 @@ const compactErrorText = computed(() => {
 })
 
 const status = computed<{ readonly kind: 'info' | 'error'; readonly text: string } | null>(() => {
+  if (workspaceTabsStore.newChatError !== null) {
+    return { kind: 'error', text: `${workspaceTabsStore.newChatError} 原会话已保留，新草稿会在重试 /new 时恢复。` }
+  }
+  if (workspaceTabsStore.isChatResetting) {
+    return { kind: 'info', text: '正在结束上一段对话；可以先编辑草稿，结束后再发送。' }
+  }
+  if (workspaceTabsStore.isChatNewDraft) {
+    if (sessionStore.awaitingTrust) return { kind: 'info', text: '请先完成项目信任确认；新草稿会保留。' }
+    if (sessionStore.awaitingInterrupt) return { kind: 'info', text: '请先处理操作确认；新草稿会保留。' }
+    if (sessionStore.opening || workspaceTabsStore.isChatBinding || startupRequested.value) {
+      return { kind: 'info', text: '正在准备新会话；输入已保留，就绪后自动发送。' }
+    }
+    return { kind: 'info', text: commandHint.value ?? '发送后开始新会话。' }
+  }
   if (rewindView.value.phase === 'requesting') return { kind: 'info', text: '正在回退对话；完成后原消息文本会回到输入框。' }
   if (rewindView.value.phase === 'error' && rewindView.value.blocked) return { kind: 'error', text: rewindView.value.error.message }
   if (preparingPrompt.value) return { kind: 'info', text: '正在读取附件并提交输入。' }
@@ -291,6 +314,15 @@ const usage = computed(() => runtimeInfo.value?.usage ?? null)
 const rate = computed<OutputRate>(() => runtimeInfo.value?.rate ?? { average: null })
 const usageOpen = ref(false)
 
+/** 原位新建继续使用同一个输入框，但旧会话的浮层与文件补全请求不能跨输入身份保留。 */
+watch(() => workspaceTabsStore.newChatInputKey, (key, previous) => {
+  if (key === null || key === previous) return
+  usageOpen.value = false
+  quickSendOpen.value = false
+  cancelFileSearch()
+  void nextTick(() => { if (props.active) textarea.value?.focus() })
+}, { flush: 'post' })
+
 /** 用量行的分项；`key` 稳定，供渲染复用，文案本身会随数值变化。 */
 interface UsagePart {
   readonly key: string
@@ -336,6 +368,7 @@ const usageParts = computed<readonly UsagePart[]>(() => {
 
 /** 被收起的队首 Extension 对话：只在收起时占据信息行，点击恢复到弹窗。 */
 const pendingDialog = computed(() => {
+  if (workspaceTabsStore.isChatNewDraft) return null
   const first = extensionStore.dialogs[0] ?? null
   if (first === null || extensionStore.minimizedDialogId !== first.id) return null
   return first
@@ -505,8 +538,8 @@ onUnmounted(() => {
   if (newSessionHintTimer !== null) clearTimeout(newSessionHintTimer)
   if (commandHintTimer !== null) clearTimeout(commandHintTimer)
   if (refillHintTimer !== null) clearTimeout(refillHintTimer)
-  // 已绑定会话的输入交给会话状态留底，切回时恢复；空闲与未绑定状态没有独立历史，直接释放预览地址。
-  if (isSessionKey(sessionViewStore.key)) {
+  // 会话与原位新建的输入分别留底；其他空闲输入没有归属，卸载时释放附件。
+  if (isSavedInputKey(sessionViewStore.key)) {
     sessionViewStore.saveInput(sessionViewStore.key, { draft: draft.value, images: pendingImages.value })
   } else {
     sessionViewStore.releaseImages(pendingImages.value)
@@ -619,12 +652,14 @@ async function submit(): Promise<void> {
   // 新建对话由 Desktop 发起：在当前标签内就地替换，结束原实例并清空它的会话身份。
   // 判定用 trim：斜杠补全写入的候选带一个尾随空格，命令文本不能因此被当成普通输入发给模型。
   if (draft.value.trim() === '/new') {
+    const projectPath = projectStore.currentProject?.path ?? null
+    const tabKey = workspaceTabsStore.activeTab
     draft.value = ''
     // 命令的含义是重开一段对话：上一次「首次发送只启动 Runtime」的待补发意图随之作废。
     startupRequested.value = false
-    const { outcome, intent } = await workspaceTabsStore.startNewChatInTab()
-    // 标签只给出重建实例的打开意图，实际打开由会话能力执行。
-    if (intent !== null) void sessionStore.openIntent(intent)
+    // 新建只收敛原标签；不在旧实例结束后补开会话，首次发送时才创建执行目标。
+    const { outcome } = await workspaceTabsStore.startNewChatInTab()
+    if (projectPath !== (projectStore.currentProject?.path ?? null) || tabKey !== workspaceTabsStore.activeTab) return
     // 本来就空、以及打开其他会话期间都只是没替换，用一次性说明交代原因；
     // 结束原实例未确认时不在这里重复文案，顶部已有结束失败的提示条。
     if (outcome === 'already-new') showCommandHint(NEW_CHAT_HINT_ALREADY)
@@ -660,12 +695,13 @@ async function submit(): Promise<void> {
   if (!canSend.value) return
 
   if (!runtimeReady.value) {
-    // 首次发送只触发 Runtime 启动；保留文字与附件，就绪且同步完成后由下方 watch 自动补发。
-    // 宿主已被空闲回收（挂起）时先恢复那个会话，而不是新建；恢复后的会话身份不变。
+    // 首次发送先准备当前对话的执行目标；文字与附件保留到就绪且投影同步后再补发。
+    // 原位新草稿不从旧挂起身份恢复；其他已有挂起会话仍按原身份恢复。
     startupProjectPath = projectStore.currentProject?.path ?? null
     startupTabKey = workspaceTabsStore.activeTab
     startupRequested.value = true
-    await sessionStore.open(runtimeStore.suspendedSessionId, false, startupProjectPath ?? undefined, startupTabKey)
+    await sessionStore.open(workspaceTabsStore.isChatNewDraft ? null : runtimeStore.suspendedSessionId,
+      false, startupProjectPath ?? undefined, startupTabKey)
     if (sessionStore.actionError !== null) startupRequested.value = false
     return
   }
@@ -735,6 +771,8 @@ watch(() => [projectStore.currentProject?.path ?? null, workspaceTabsStore.activ
   if (path !== startupProjectPath || key !== startupTabKey) startupRequested.value = false
 }, { flush: 'sync' })
 watch(() => runtimeView.value.phase, (phase) => {
+  // 新草稿不接受旧实例的关闭状态；新会话启动失败由打开请求的实际结果收敛。
+  if (workspaceTabsStore.isChatNewDraft) return
   if (phase === 'failed' || phase === 'closed' || phase === 'stopping') startupRequested.value = false
 })
 watch(() => sessionStore.awaitingTrust || sessionStore.awaitingInterrupt, (awaiting, previous) => {
@@ -746,6 +784,7 @@ watch(editorTextVersion, () => {
   const text = editorText.value
   if (text === null) return
   extensionStore.markEditorTextConsumed()
+  if (workspaceTabsStore.isChatNewDraft) return
   if (draft.value.trim() === '') {
     draft.value = text
     textarea.value?.focus()
@@ -1021,8 +1060,8 @@ function acceptFileSuggestion(path: string | undefined): void {
 }
 
 onMounted(() => {
-  // 视图重建（例如从设置页返回）时取回当前会话的输入；没有留底时保持空状态。
-  const restored = isSessionKey(sessionViewStore.key) ? sessionViewStore.takeInput(sessionViewStore.key) : null
+  // 视图重建时取回当前输入身份的留底，也能通过实际绑定身份取回原位新草稿。
+  const restored = sessionViewStore.takeInput(sessionViewStore.key)
   if (restored !== null) {
     draft.value = restored.draft
     pendingImages.value = restored.images
@@ -1127,7 +1166,7 @@ onMounted(() => {
           placeholder="输入要发送给 Pi 的内容（可粘贴或拖入图片）"
           autocomplete="off"
           spellcheck="false"
-          aria-describedby="statusText !== null ? 'prompt-status' : undefined"
+          :aria-describedby="statusText !== null ? 'prompt-status' : undefined"
           aria-autocomplete="list"
           :aria-controls="activeListId"
           :aria-expanded="activeListOpen"
@@ -1184,8 +1223,11 @@ onMounted(() => {
             </button>
           </div>
           <div class="flex flex-none items-center gap-1.5">
-            <!-- 模型选择：常驻在动作组最前，未就绪时写入 Pi 默认模型、就绪时只切当前会话，改默认模型走候选项的「设为默认」；详情见 RuntimeModelSelect。 -->
-            <RuntimeModelSelect />
+            <!-- 未绑定或原位新草稿选择 Pi 默认模型；实际绑定后才切当前会话模型，另设默认走次级动作。 -->
+            <RuntimeModelSelect
+              :new-conversation="workspaceTabsStore.isChatNewDraft"
+              :resetting="workspaceTabsStore.isChatResetting || workspaceTabsStore.isChatBinding"
+            />
 
             <!-- 图片选择：与粘贴、拖拽共用同一套禁用条件；当前模型明确不支持时同样禁用。 -->
             <input

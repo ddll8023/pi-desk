@@ -30,7 +30,7 @@ const { open: settingsOpen } = storeToRefs(settingsStore)
 
 const isNarrowWindow = ref(window.matchMedia('(max-width: 799px)').matches)
 const mobileSidebarOpen = ref(false)
-/** 侧栏「新建」在闲置态的聚焦请求；自增一次即一次请求，输入坞只看这个值。 */
+/** 侧栏新建入口的聚焦请求；自增一次即一次请求，不表示执行会话已建立。 */
 const composerFocusToken = ref(0)
 let narrowWindowQuery: MediaQueryList | null = null
 
@@ -44,7 +44,7 @@ const sidebarCollapsedForLayout = computed(() => (
   isNarrowWindow.value ? !mobileSidebarOpen.value : sidebarCollapsed.value
 ))
 
-/** 侧栏「新建」在闲置态只建立标签并聚焦输入框，不启动 Pi；会话由首次发送创建。 */
+/** 侧栏新建先选定对话标签，有打开意图时交给会话能力提交，再请求输入框聚焦。 */
 async function onRequestNewSession(projectPath: string): Promise<void> {
   // 输入坞在对话标签里：先切到该标签，否则聚焦发生在隐藏面板上，用户看不到光标。
   const intent = await workspaceTabsStore.openNewChatTab(projectPath)

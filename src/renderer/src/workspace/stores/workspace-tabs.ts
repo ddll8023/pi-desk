@@ -3,8 +3,8 @@
  *
  * 标签是页面内的展示编排：活动的对话标签就是前台运行实例，其余对话标签由后台分片留底，
  * 因此切标签就是切前台；切项目换一组标签（对话、终端与文件一起换），每个项目各自记住上次的活动标签。
- * 会话尚未绑定时，活动标签可以先展示该会话的日志历史：可见性只看身份是否匹配，
- * 写入仍由 `isChatInteractive` 另加生命周期门禁。
+ * 会话尚未绑定时，活动标签可以先展示该会话的日志历史；`/new` 的空白视图独立于旧实例状态，
+ * 原实例结束后才允许首次发送，新会话实际绑定前不因标签聚焦预建宿主。
  * 标签只计算打开意图（`ChatOpenIntent`），实际提交由会话能力（`session.openIntent`）与外层编排执行，
  * 标签侧不反向调用会话的打开动作。
  * 顺序、活动标签、对话与文件标签的重命名、以及「有新回复」标记只留在内存里，不跨应用重启恢复：
@@ -37,6 +37,8 @@ import { useTerminalStore } from './terminal'
 const CHAT_KEY_PREFIX = 'chat:'
 const TERMINAL_KEY_PREFIX = 'term:'
 const FILE_KEY_PREFIX = 'file:'
+/** 原位新建的输入身份；与 SDK 会话身份分开，避免旧实例收尾清掉新草稿。 */
+export const NEW_CHAT_INPUT_PREFIX = 'new-chat:'
 
 /** 可通过「新建」菜单主动创建的类型；文件标签只能由打开文件产生，不在新建入口里。 */
 export type WorkspaceTabKind = 'chat' | 'terminal'
@@ -55,11 +57,26 @@ export interface ChatOpenIntent {
 }
 
 /**
- * 在当前标签内就地新建对话的结果：`started` 是已完成就地替换；`already-new` 是本来就空、没有可结束的实例；
- * `refused` 是结束原实例未确认（标签与会话原样保留）；`busy` 是另一会话正在打开；
+ * 原位新建结果：`started` 表示原标签已重置且新草稿就绪，不表示 SDK 已启动；`already-new` 是本来就空；
+ * `refused` 表示结束未确认，保留标签与新草稿，执行状态以主进程报告为准；`busy` 是已有生命周期动作；
  * `unavailable` 是没有可替换的活动对话标签。
  */
 export type NewChatInTabOutcome = 'started' | 'already-new' | 'refused' | 'busy' | 'unavailable'
+
+interface NewChatInTabResult {
+  readonly outcome: NewChatInTabOutcome
+  readonly intent: ChatOpenIntent | null
+}
+
+/** 新建失败保留输入身份供重试；绑定后保留映射，供暂时卸载的输入框取回草稿。 */
+interface NewChatState {
+  readonly projectPath: string
+  readonly inputKey: string
+  readonly phase: 'closing' | 'draft' | 'binding' | 'failed' | 'bound'
+  readonly error: string | null
+  readonly sessionId: string | null
+  readonly runId: number | null
+}
 
 /** 标签绑定实际会话与实例；是否空白单独记录，不用列表刷新进度充当身份。 */
 interface ChatTabRecord {
@@ -110,12 +127,16 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
   /** 已经自动补过空对话标签的项目；用户显式关掉全部对话标签后不再自动补回。 */
   const preparedProjects = new Set<string>()
   const closingTabs = new Set<string>()
+  const newChats = ref<Readonly<Record<string, NewChatState>>>({})
+  const newChatRequests = new Map<string, Promise<NewChatInTabResult>>()
+  let nextNewChatInputId = 0
   let runCloseTail: Promise<void> = Promise.resolve()
   let selectionVersion = 0
   let nextChatTabId = 1
   let stopProjectsWatch: WatchStopHandle | null = null
   let stopRunsWatch: WatchStopHandle | null = null
   let stopSessionsWatch: WatchStopHandle | null = null
+  let stopNewChatWatch: WatchStopHandle | null = null
   const currentProjectPath = computed(() => projectStore.currentProject?.path ?? null)
 
   /** 当前项目按顺序展开后的标签键：跳过失效的对话标签与已消失的终端，新终端追加到末尾。 */
@@ -141,6 +162,21 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     return stored !== null && keys.includes(stored) ? stored : keys[0] ?? null
   })
 
+  /** 新建的展示与输入归属按原标签固定，不随旧 Runtime 的中间状态变化。 */
+  const activeNewChat = computed(() => {
+    const key = activeTab.value
+    const state = key === null ? undefined : newChats.value[key]
+    return state !== undefined && state.projectPath === currentProjectPath.value ? state : null
+  })
+  const isChatNewDraft = computed(() => activeNewChat.value?.phase === 'closing'
+    || activeNewChat.value?.phase === 'draft' || activeNewChat.value?.phase === 'binding')
+  const isChatResetting = computed(() => activeNewChat.value?.phase === 'closing')
+  const isChatBinding = computed(() => activeNewChat.value?.phase === 'binding')
+  const newChatInputKey = computed(() => isChatNewDraft.value ? activeNewChat.value?.inputKey ?? null : null)
+  const newChatError = computed(() => activeNewChat.value?.phase === 'failed' ? activeNewChat.value.error : null)
+  const newChatInputKeys = computed<ReadonlySet<string>>(() => new Set(Object.values(newChats.value).map(state => state.inputKey)))
+  const newChatInputBindings = computed(() => Object.values(newChats.value).filter(state => state.phase === 'bound'))
+
   /** 活动标签是否是对话标签；对话面板只在此时可见。 */
   const isChatActive = computed(() => activeTab.value !== null && isChatKey(activeTab.value))
 
@@ -150,6 +186,7 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
    * 打开中、待确认等对写入的限制放在 `isChatInteractive`，不拿来隐藏已就绪的内容。
    */
   const isChatReady = computed(() => {
+    if (isChatNewDraft.value) return false
     const key = activeTab.value
     // 可见性不看 `projectStore.switching`：切换期间活动标签已指向目标项目，身份不匹配自然不显示，
     // 而拿切换状态当可见条件会让整块面板在切换途中被迫退回等待态。
@@ -166,6 +203,7 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
    * 它让面板先出内容，同时不放开任何写入——`isChatInteractive` 仍要求 `isChatReady`。
    */
   const isChatLogPreview = computed(() => {
+    if (isChatNewDraft.value) return false
     const key = activeTab.value
     const sessionId = runtimeStore.logSessionId
     if (sessionId === null || key === null || !isChatKey(key)) return false
@@ -175,11 +213,12 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
   })
 
   /**
-   * 活动对话标签是否允许写入：显示就绪之外，还要求没有会话生命周期动作在途。
-   * 发送、回退与压缩读这一份；它比 `isChatReady` 严，避免向尚未确认的目标提交。
+   * 已有会话写入要求身份就绪；独立新草稿要求旧实例已经结束，且没有生命周期动作在途。
+   * 新草稿只允许发起首次绑定，不把旧 Runtime 的就绪状态当作可发送目标。
    */
   const isChatInteractive = computed(() => (
-    isChatReady.value && !session.opening && !projectStore.switching
+    (isChatReady.value || isChatNewDraft.value) && !isChatResetting.value && !isChatBinding.value
+      && !session.opening && !projectStore.switching
   ))
 
   /**
@@ -199,6 +238,7 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
    * 与 `focusIntent` 取同一个口径（未落盘的新会话取实例报告的会话），界面据此判断会话是否已展示。
    */
   const activeSessionId = computed<string | null>(() => {
+    if (isChatNewDraft.value) return null
     const key = activeTab.value
     if (key === null || !isChatKey(key)) return null
     const record = chatTabs.value[key]
@@ -239,6 +279,11 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
       // 会话列表刷新后重跑同步：会话落盘后标签才采纳它的身份，标题也从「新对话」换成摘要。
       stopSessionsWatch = watch(() => session.loadedSessionIds, syncRuns)
     }
+    if (stopNewChatWatch === null) {
+      // 打开应答与状态推送分别到达；原位视图一直等到自己的执行目标真正可展示。
+      stopNewChatWatch = watch(() => [runtimeStore.view, sessionRunsStore.runs, currentProjectPath.value, activeTab.value, newChats.value],
+        settleNewChatBindings, { flush: 'sync' })
+    }
   }
 
   /** 页面卸载时释放订阅；标签只留在内存里，重新挂载后回到一个空对话标签。 */
@@ -249,6 +294,10 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     stopRunsWatch = null
     stopSessionsWatch?.()
     stopSessionsWatch = null
+    stopNewChatWatch?.()
+    stopNewChatWatch = null
+    newChats.value = {}
+    newChatRequests.clear()
   }
 
   /**
@@ -346,32 +395,61 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
   }
 
   /**
-   * 在当前活动对话标签内就地新建对话：结束该标签承载的运行实例（中断在途操作、解除占用、关闭宿主，
-   * 保留会话历史文件），标签位置、顺序与活动状态不变，会话身份与用户重命名一并清除。
-   * 本来就是空对话时不重建实例；另一会话正在打开时不动作，避免新建意图落到别的会话上。
-   * 打开请求指名这个标签，因此无论标签记录是否已被旧实例写回身份，新建都只会落回它自己。
-   * 返回结果同时给出打开意图：标签只声明“若需要重建实例，应该打开哪一个”，提交在会话能力。
+   * 原位新建先展示独立空白视图，再按原标签结束实例；期间只允许编辑，首次发送才建立新会话。
+   * 每个标签只运行一份结束任务，迟到结果只收敛原标签；失败恢复原会话，新草稿留待重试。
    */
-  async function startNewChatInTab(): Promise<{ readonly outcome: NewChatInTabOutcome; readonly intent: ChatOpenIntent | null }> {
+  async function startNewChatInTab(): Promise<NewChatInTabResult> {
     const projectPath = currentProjectPath.value
     const key = activeTab.value
     if (projectPath === null || key === null || !isChatKey(key)) return { outcome: 'unavailable', intent: null }
     const record = chatTabs.value[key]
     if (record === undefined) return { outcome: 'unavailable', intent: null }
-    if (session.opening) return { outcome: 'busy', intent: null }
+    const pending = newChatRequests.get(key)
+    if (pending !== undefined) return pending
+    if (session.opening || closingTabs.has(key) || newChats.value[key]?.phase === 'closing') {
+      return { outcome: 'busy', intent: null }
+    }
     const runId = resolveRunId(projectPath, key)
-    const version = selectionVersion
-    // 既没有实例也没有会话身份：这个标签本来就是空对话，结束与重建都没有意义。
-    if (runId === null && record.sessionId === null) return { outcome: 'already-new', intent: null }
-    if (runId !== null && !await closeChatRun(runId)) return { outcome: 'refused', intent: null }
-    if (!hasChatTabKey(projectPath, key)) return { outcome: 'unavailable', intent: null }
-    // 就地清空：只换身份，不动标签位置与顺序；旧会话的历史文件与留底草稿都不受影响。
-    chatTabs.value = { ...chatTabs.value, [key]: { sessionId: null, runId: null, hasMessages: false } }
-    clearRename(key)
-    if (version !== selectionVersion || currentProjectPath.value !== projectPath) return { outcome: 'started', intent: null }
+    const previous = newChats.value[key]
+    if (runId === null && record.sessionId === null && previous?.phase !== 'failed') {
+      return { outcome: 'already-new', intent: null }
+    }
+    const state: NewChatState = {
+      projectPath,
+      inputKey: previous?.phase === 'failed' ? previous.inputKey : `${NEW_CHAT_INPUT_PREFIX}${++nextNewChatInputId}`,
+      phase: 'closing', error: null, sessionId: record.sessionId, runId
+    }
+    newChats.value = { ...newChats.value, [key]: state }
     selectLocal(projectPath, key)
-    // 结束实例后前台已被清空，闲置时不必预建宿主；仍占用前台实例时才提交新会话的打开请求。
-    return { outcome: 'started', intent: focusIntent(projectPath, key) }
+    const task: Promise<NewChatInTabResult> = Promise.resolve().then(async (): Promise<NewChatInTabResult> => {
+      if (runId !== null && !await closeChatRun(runId)) {
+        failNewChat(key, state, sessionRunsStore.closeError ?? '结束原会话未确认。')
+        return { outcome: 'refused', intent: null }
+      }
+      if (!hasChatTabKey(projectPath, key) || newChats.value[key]?.inputKey !== state.inputKey) {
+        return { outcome: 'unavailable', intent: null }
+      }
+      chatTabs.value = { ...chatTabs.value, [key]: { sessionId: null, runId: null, hasMessages: false } }
+      clearRename(key)
+      clearUnseen(key)
+      newChats.value = { ...newChats.value, [key]: { ...state, phase: 'draft', sessionId: null, runId: null } }
+      // 不再根据旧 Runtime 快照补开会话，也不在异步收尾时重新选择标签。
+      return { outcome: 'started', intent: null }
+    }).catch((error: unknown): NewChatInTabResult => {
+      failNewChat(key, state, error instanceof Error ? error.message : '结束原会话失败。')
+      return { outcome: 'refused', intent: null }
+    }).finally(() => {
+      if (newChatRequests.get(key) === task) newChatRequests.delete(key)
+    })
+    newChatRequests.set(key, task)
+    return task
+  }
+
+  /** 只回退仍属于本次新建的标签；保留输入身份，让重试取回新草稿而非覆盖原会话输入。 */
+  function failNewChat(key: string, state: NewChatState, error: string): void {
+    if (!hasChatTabKey(state.projectPath, key) || newChats.value[key]?.inputKey !== state.inputKey) return
+    newChats.value = { ...newChats.value, [key]: { ...state, phase: 'failed', error } }
+    syncRuns()
   }
 
   /**
@@ -394,6 +472,7 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
       else if (isChatKey(key)) {
         // 打开尚未返回时先保留标签，等实际身份绑定后再关闭；失败时仍能保留原标签。
         await session.waitForOpenActions()
+        await newChatRequests.get(key)
         const runId = resolveRunId(projectPath, key)
         if (runId !== null && !await closeChatRun(runId)) return null
       } else {
@@ -507,15 +586,41 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
       sessionId: released && !hasMessages ? null : sessionId,
       runId: released ? null : runId, hasMessages
     } }
+    const newChat = newChats.value[key]
+    if (!released && newChat?.phase === 'draft') {
+      // 先记实际归属；当前标签继续等状态推送，后台标签只等登记身份确认。
+      newChats.value = { ...newChats.value, [key]: { ...newChat, phase: 'binding', sessionId, runId } }
+      settleNewChatBindings()
+    }
     if (activate) setActive(projectPath, key)
     return true
+  }
+
+  /** 状态确认前保持新草稿；已切走的标签只记实际绑定，不再等待它成为前台。 */
+  function settleNewChatBindings(): void {
+    const view = runtimeStore.view
+    let next: Record<string, NewChatState> | null = null
+    for (const [key, state] of Object.entries(newChats.value)) {
+      if (state.phase !== 'binding') continue
+      const registered = sessionRunsStore.runs.some(run => run.runId === state.runId
+        && run.projectPath === state.projectPath && run.sessionId === state.sessionId)
+      if (!registered) continue
+      const active = state.projectPath === currentProjectPath.value && key === activeTab.value
+      const reported = runtimeStore.foregroundRunId === state.runId && (view.phase === 'ready'
+        ? (view.snapshot.info?.sessionId ?? null) === state.sessionId
+        : view.phase === 'failed' || view.phase === 'closed')
+      if (active && !reported) continue
+      next ??= { ...newChats.value }
+      next[key] = { ...state, phase: 'bound' }
+    }
+    if (next !== null) newChats.value = next
   }
 
   /** 打开意图先固定标签；重试只复用原键，原标签被关闭时不另建替代标签。 */
   function prepareOpenTab(projectPath: string, sessionId: string | null, preferredKey: string | null): string | null {
     if (preferredKey !== null && !hasChatTabKey(projectPath, preferredKey)) return null
     const key = preferredKey ?? findChatKey(projectPath, sessionId) ?? createChatTab(projectPath, sessionId)
-    if (closingTabs.has(key)) return null
+    if (closingTabs.has(key) || newChats.value[key]?.phase === 'closing' || newChats.value[key]?.phase === 'binding') return null
     appendKey(projectPath, key)
     selectionVersion += 1
     setActive(projectPath, key)
@@ -597,7 +702,9 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     if (isChatKey(key)) {
       const record = chatTabs.value[key] ?? { sessionId: null, runId: null, hasMessages: false }
       const title = titleOfChat(projectPath, key, record)
-      const detail = record.sessionId === null ? '尚未落盘的新会话' : `会话 ${record.sessionId}`
+      const newChat = newChats.value[key]
+      const detail = record.sessionId === null || newChat?.phase === 'closing' || newChat?.phase === 'draft' || newChat?.phase === 'binding'
+        ? '尚未落盘的新会话' : `会话 ${record.sessionId}`
       return { id: key, kind: 'chat', title, tooltip: `${title}\n${detail}`, terminalStatus: null,
         unseenCompletion: unseenCompletions.value.has(key), dirty: false }
     }
@@ -630,8 +737,10 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     }
   }
 
-  /** 对话标签标题：用户重命名优先，其次是会话摘要的首行，未落盘的新会话显示「新对话」。 */
+  /** 原位新建先显示「新对话」；其他标签依次使用重命名、会话摘要或未落盘名称。 */
   function titleOfChat(projectPath: string, key: string, record: ChatTabRecord): string {
+    const newChat = newChats.value[key]
+    if (newChat?.phase === 'closing' || newChat?.phase === 'draft' || newChat?.phase === 'binding') return '新对话'
     const renamed = renames.value[key]
     if (renamed !== undefined) return renamed
     if (record.sessionId === null || !record.hasMessages) return '新对话'
@@ -664,11 +773,13 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
 
   /**
    * 该对话标签需要提交的打开意图：主进程按占用或可复用实例决定是复用还是新建，渲染端只表达意图。
-   * 标签身份取实例报告的会话（可能尚未落盘），实例尚未建立时在 Runtime 闲置下不提交请求。
+   * 原位新草稿不因聚焦预建实例；其他标签取实例报告的会话，空闲时不为无身份标签提交请求。
    */
   function focusIntent(projectPath: string, key: string): ChatOpenIntent | null {
     const record = chatTabs.value[key]
     if (record === undefined) return null
+    const newChat = newChats.value[key]
+    if (newChat?.phase === 'closing' || newChat?.phase === 'draft' || newChat?.phase === 'binding') return null
     const sessionId = record.sessionId ?? sessionIdOfRun(record.runId)
     if (sessionId === null && record.runId === null && isRuntimeIdle()) return null
     return { projectPath, tabKey: key, sessionId, allowInterrupt: false }
@@ -708,6 +819,11 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     const next: Record<string, ChatTabRecord> = {}
     let changed = false
     for (const [key, record] of Object.entries(chatTabs.value)) {
+      const newChat = newChats.value[key]
+      if (newChat?.phase === 'closing' || newChat?.phase === 'draft' || newChat?.phase === 'binding') {
+        next[key] = record
+        continue
+      }
       const projectPath = locate(key)?.projectPath
       const run = sessionRunsStore.runs.find(candidate => candidate.projectPath === projectPath
         && (candidate.runId === record.runId || (record.sessionId !== null && candidate.sessionId === record.sessionId)))
@@ -777,6 +893,8 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
       const record = chatTabs.value[key]
       if (record === undefined) return false
       if (sessionId !== null) return record.sessionId === sessionId || sessionIdOfRun(record.runId) === sessionId
+      const newChat = newChats.value[key]
+      if (newChat?.phase === 'closing' || newChat?.phase === 'draft' || newChat?.phase === 'binding') return true
       const run = sessionRunsStore.runs.find(candidate => candidate.runId === record.runId)
       return !record.hasMessages && run?.hasMessages !== true
         && (record.sessionId === null || !session.loadedSessionIds.has(record.sessionId))
@@ -885,6 +1003,11 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
   }
 
   function forgetChatTab(key: string): void {
+    if (newChats.value[key] !== undefined) {
+      const nextNewChats = { ...newChats.value }
+      delete nextNewChats[key]
+      newChats.value = nextNewChats
+    }
     if (chatTabs.value[key] !== undefined) {
       const nextTabs = { ...chatTabs.value }
       delete nextTabs[key]
@@ -948,6 +1071,13 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     isChatReady,
     isChatLogPreview,
     isChatInteractive,
+    isChatNewDraft,
+    isChatResetting,
+    isChatBinding,
+    newChatInputKey,
+    newChatInputKeys,
+    newChatInputBindings,
+    newChatError,
     openFiles,
     terminalTabId,
     initialize,

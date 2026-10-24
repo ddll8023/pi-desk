@@ -1,6 +1,7 @@
-<!-- 输入坞模型选择器：未选项目时也读全局模型目录；Pi 未启动时选中即写为 Pi 自身默认模型（settings.json），就绪时选中只切换当前会话、候选项里的「设为默认」才写默认模型，会话切换与默认模型写入互不联动；候选项排除设置中隐藏的模型。 -->
+<!-- 原位新建使用默认模型预读，不把旧实例的模型当作新会话模型；结束旧实例期间禁止模型操作。
+     输入坞模型选择器：未选项目时也读全局模型目录；Pi 未启动时选中即写为 Pi 自身默认模型（settings.json），就绪时选中只切换当前会话、候选项里的「设为默认」才写默认模型，会话切换与默认模型写入互不联动；候选项排除设置中隐藏的模型。 -->
 <script setup lang="ts">
-import { computed, onUnmounted, ref } from 'vue'
+import { computed, onUnmounted, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useProjectStore } from '../../projects/stores/project'
 import { useRuntimeStore } from '../../sessions/stores/runtime'
@@ -8,23 +9,33 @@ import { useSessionStore } from '../../sessions/stores/session'
 import AppButton from '../../ui/AppButton.vue'
 import AppSelect from '../../ui/AppSelect.vue'
 
+const props = withDefaults(defineProps<{
+  /** 按新草稿展示默认模型，不把旧 Runtime 的绑定当作当前操作目标。 */
+  readonly newConversation?: boolean
+  /** 旧实例结束或新绑定确认期间，禁止改选与手动刷新。 */
+  readonly resetting?: boolean
+}>(), { newConversation: false, resetting: false })
+
 const runtimeStore = useRuntimeStore()
 const sessionStore = useSessionStore()
 const projectStore = useProjectStore()
 const {
   view, capabilitiesView, modelSwitchView, promptView,
   modelPreviewView, piDefaultModelView, piDefaultModelLoaded, piDefaultModel,
-  availableModels, visibleModels
+  availableModels, visibleModels: runtimeVisibleModels, hiddenModels
 } = storeToRefs(runtimeStore)
-const ready = computed(() => view.value.phase === 'ready')
+const ready = computed(() => !props.newConversation && view.value.phase === 'ready')
 const canPrepare = computed(() => (
-  view.value.phase === 'idle' || view.value.phase === 'closed' || view.value.phase === 'failed'
+  props.newConversation || view.value.phase === 'idle' || view.value.phase === 'closed' || view.value.phase === 'failed'
 ))
-const info = computed(() => view.value.phase === 'ready' ? view.value.snapshot.info : null)
+const info = computed(() => ready.value && view.value.phase === 'ready' ? view.value.snapshot.info : null)
 const preview = computed(() => canPrepare.value && modelPreviewView.value.phase === 'ready'
   && modelPreviewView.value.data.projectPath === (projectStore.currentProject?.path ?? null)
   ? modelPreviewView.value.data : null)
-const models = availableModels
+const models = computed(() => props.newConversation ? preview.value?.models ?? [] : availableModels.value)
+const visibleModels = computed(() => props.newConversation
+  ? models.value.filter(model => !hiddenModels.value.some(hidden => hidden.provider === model.provider && hidden.modelId === model.id))
+  : runtimeVisibleModels.value)
 /** 全部候选都被隐藏；用于区分空态文案。 */
 const allModelsHidden = computed(() => models.value.length > 0 && visibleModels.value.length === 0)
 const identity = computed(() => {
@@ -66,12 +77,12 @@ const currentModel = computed(() => models.value.find(model => (
   model.provider === identity.value?.provider && model.id === identity.value?.modelId
 )) ?? null)
 const currentLabel = computed(() => {
-  if (view.value.phase === 'starting') return 'Pi 启动中'
-  if (view.value.phase === 'stopping') return 'Pi 关闭中'
+  if (!props.newConversation && view.value.phase === 'starting') return 'Pi 启动中'
+  if (!props.newConversation && view.value.phase === 'stopping') return 'Pi 关闭中'
   if (error.value !== null) {
     // 已保存选择只是不可用时不改写触发键文案，仍展示当前选择，错误由 title 与读屏提示传达。
     if (error.value !== unavailableChoice.value) {
-      return view.value.phase === 'ready' && modelSwitchView.value.phase === 'error'
+      return ready.value && modelSwitchView.value.phase === 'error'
         ? '模型切换失败' : '模型读取失败'
     }
   }
@@ -145,6 +156,7 @@ const error = computed(() => {
 })
 const sessionChanging = computed(() => sessionStore.opening || sessionStore.awaitingTrust || sessionStore.awaitingInterrupt)
 const disabledReason = computed(() => {
+  if (props.resetting) return '正在准备新对话，稍后可选择模型'
   if (sessionChanging.value) return '正在处理会话切换'
   if (!ready.value) {
     if (!canPrepare.value) return 'Pi 正在启动或关闭'
@@ -167,7 +179,7 @@ const disabledReason = computed(() => {
   return null
 })
 const progress = computed(() => {
-  if (modelSwitchView.value.phase === 'switching') return '正在切换模型…'
+  if (ready.value && modelSwitchView.value.phase === 'switching') return '正在切换模型…'
   if (piDefaultModelView.value.phase === 'saving') return '正在保存 Pi 默认模型…'
   if (canPrepare.value) {
     if (piDefaultModelView.value.phase === 'loading') return '正在读取默认模型…'
@@ -186,19 +198,19 @@ const progress = computed(() => {
 })
 const canRetry = computed(() => ready.value && capabilitiesError.value !== null
   && modelSwitchView.value.phase !== 'switching')
-const refreshDisabled = computed(() => sessionChanging.value
+const refreshDisabled = computed(() => props.resetting || sessionChanging.value
   || modelPreviewView.value.phase === 'loading'
   || piDefaultModelView.value.phase === 'loading' || piDefaultModelView.value.phase === 'saving')
-const busy = computed(() => modelSwitchView.value.phase === 'switching'
+const busy = computed(() => props.resetting || (ready.value && modelSwitchView.value.phase === 'switching')
   || piDefaultModelView.value.phase === 'loading' || piDefaultModelView.value.phase === 'saving'
   || (canPrepare.value && modelPreviewView.value.phase === 'loading'))
 
 /**
- * 选中即生效，但三种场景互不联动：
- * Pi 就绪时只切换当前会话的模型（SDK 的会话切换默认不持久化全局默认），
- * 未启动时写为 Pi 自身默认模型（settings.json），只影响以后新建的会话；
- * 就绪时改默认模型走候选项的「设为默认」（见 chooseDefaultModel），不动当前会话。
- * 三条路径都不乐观伪造结果。
+ * 模型选择按当前对话的实际绑定状态决定写入目标：
+ * 已绑定时只切当前会话模型，不隐式持久化全局默认；
+ * 未绑定或原位新草稿写入 Pi 自身默认模型，不操作仍在收尾的旧实例；
+ * 已绑定后另设默认走候选项的次级动作（见 chooseDefaultModel），不动当前会话。
+ * 反馈以实际结果为准，不在请求提交时宣告切换成功。
  */
 async function chooseModel(value: string): Promise<void> {
   if (disabledReason.value !== null) return
@@ -206,7 +218,6 @@ async function chooseModel(value: string): Promise<void> {
   if (model === undefined) return
   if (ready.value) {
     void runtimeStore.switchModel(model.provider, model.id)
-    showNotice('success', `已切换当前会话模型：${model.name ?? model.id}`)
     return
   }
   const result = await runtimeStore.setPiDefaultModel({ provider: model.provider, modelId: model.id })
@@ -229,6 +240,13 @@ async function chooseDefaultModel(value: string): Promise<void> {
 /** 设置默认的可见反馈：成功短暂提示，失败显示原因；不占布局，靠浮层呈现。 */
 const notice = ref<{ readonly kind: 'success' | 'error'; readonly text: string } | null>(null)
 let noticeTimer: ReturnType<typeof setTimeout> | null = null
+
+/** 新建视图不沿用旧会话的操作反馈。 */
+watch(() => [props.newConversation, props.resetting], () => {
+  if (noticeTimer !== null) clearTimeout(noticeTimer)
+  noticeTimer = null
+  notice.value = null
+})
 
 /** 取消上一条提示的计时并重新计时；成功与失败停留时长不同。 */
 function showNotice(kind: 'success' | 'error', text: string): void {

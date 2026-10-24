@@ -1,5 +1,5 @@
 <!--
-  工作区视图：标签条、操作失败提示条与面板层（对话、终端、文件三类面板叠放在同一区域）。
+  工作区视图：标签条、操作失败提示条与面板层；原位新建直接展示空白对话，旧实例收尾不切到整页占位。
 
   面板层只显示活动标签，隐藏用 visibility 而不是 display：面板始终保持真实尺寸，
   输入框量高与终端尺寸测量在隐藏状态下也成立。运行中终端跨项目保留视图，
@@ -54,9 +54,9 @@ const quickCommandError = computed(() => (
   quickCommandsStore.view.phase === 'error' ? quickCommandsStore.view.error : null
 ))
 
-/** 对话面板可见条件：绑定身份已匹配，或当前标签已有该会话的日志历史。 */
+/** 空白新草稿可以立即显示；已有会话仍要求绑定身份匹配或已有日志历史。 */
 const chatVisible = computed(() => (
-  workspaceTabsStore.isChatReady || workspaceTabsStore.isChatLogPreview
+  workspaceTabsStore.isChatNewDraft || workspaceTabsStore.isChatReady || workspaceTabsStore.isChatLogPreview
 ))
 
 /** 后台运行终端仍保持挂载，但不能接收焦点与菜单交互。 */
@@ -70,8 +70,10 @@ const mountedTerminalSessions = computed(() => terminalStore.sessions.filter((se
 )))
 
 /** Extension widget 按放置位置拆分；空 lines 的条目不会出现在主进程快照中。 */
-const widgetsAbove = computed(() => extensionStore.widgets.filter((w) => w.placement === 'aboveEditor'))
-const widgetsBelow = computed(() => extensionStore.widgets.filter((w) => w.placement === 'belowEditor'))
+const widgetsAbove = computed(() => workspaceTabsStore.isChatNewDraft ? []
+  : extensionStore.widgets.filter((w) => w.placement === 'aboveEditor'))
+const widgetsBelow = computed(() => workspaceTabsStore.isChatNewDraft ? []
+  : extensionStore.widgets.filter((w) => w.placement === 'belowEditor'))
 
 /** 打开意图统一在这里提交：标签侧只算「打开哪个会话、落到哪个标签」，会话能力负责实际打开。 */
 function submitOpen(intent: ChatOpenIntent | null): void {
@@ -183,15 +185,22 @@ function openCommandSettings(): void {
       :aria-hidden="settingsOpen || !chatVisible"
       :aria-busy="chatVisible && sessionStore.opening"
     >
-      <ExtensionNotificationBar />
-      <!-- 会话活动摘要条：本会话读过与改过的文件、调用的 Skill、MCP 与插件工具；折叠成一行，明细是浮层，一次只列一类，不占消息区高度。 -->
-      <SessionActivityBar />
-      <ChatMessageList />
+      <ExtensionNotificationBar v-if="!workspaceTabsStore.isChatNewDraft" />
+      <!-- 原位新建不展示旧会话活动与浮层；消息区保持挂载以保留失败时的阅读状态。 -->
+      <SessionActivityBar v-if="!workspaceTabsStore.isChatNewDraft" />
+      <ChatMessageList :hidden="workspaceTabsStore.isChatNewDraft" />
+      <div v-if="workspaceTabsStore.isChatNewDraft" class="empty-state flex-1 justify-center" role="status">
+        <p class="empty-state-title">新对话</p>
+        <p class="empty-state-text">在下方编辑草稿，发送后开始新的对话。</p>
+      </div>
       <!-- Widget 放置语义与官方子协议一致：aboveEditor 在输入区上方，belowEditor 在下方。 -->
       <div v-for="widget in widgetsAbove" :key="widget.placement" class="px-4 py-2 sm:px-6">
         <pre class="chat-column mx-auto widget-block">{{ widget.lines.join('\n') }}</pre>
       </div>
-      <PromptComposer :focus-token="props.composerFocusToken" :active="!settingsOpen && workspaceTabsStore.isChatReady" />
+      <PromptComposer
+        :focus-token="props.composerFocusToken"
+        :active="!settingsOpen && (workspaceTabsStore.isChatNewDraft || workspaceTabsStore.isChatReady)"
+      />
       <div v-for="widget in widgetsBelow" :key="widget.placement" class="px-4 py-2 sm:px-6">
         <pre class="chat-column mx-auto widget-block">{{ widget.lines.join('\n') }}</pre>
       </div>
@@ -231,7 +240,7 @@ function openCommandSettings(): void {
       <FileEditorView :tab-key="file.key" :active="!settingsOpen && workspaceTabsStore.activeTab === file.key" />
     </div>
 
-    <!-- 目标内容尚不可展示（身份不匹配、没有日志历史、或正在切项目）时才占位：其余情况直接展示缓存或日志历史。 -->
+    <!-- 已有会话身份不匹配且无日志历史时才占位；原位新草稿走独立空态，不经过这里。 -->
     <div v-if="workspaceTabsStore.isChatActive && !chatVisible" class="workspace-pane" :aria-busy="sessionStore.opening">
       <div class="empty-state flex-1 justify-center" role="status">
         <p class="empty-state-title">{{ sessionStore.opening || projectStore.switching ? '正在切换会话…' : '当前标签尚未连接到会话' }}</p>

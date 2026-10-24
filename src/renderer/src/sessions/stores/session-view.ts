@@ -4,9 +4,9 @@
  * 状态只在内存中保留，不写磁盘；渲染层同一时刻只显示当前会话的那一份，离开会话时写入、
  * 切回时取走，因此切换会话不会把上一个会话的草稿、附件或阅读位置带进下一个会话。
  *
- * 只登记已绑定会话的状态：空闲与未绑定实例没有独立历史，它们的输入与阅读状态由视图原样带走，
- * 不需要单独留底。附件的 objectUrl 由本模块创建与释放：视图卸载不释放，避免切到设置页或切换
- * 会话时预览失效；应用关闭或状态被替换时统一释放。
+ * 已绑定会话与 `/new` 的独立草稿分别留底；新草稿不随旧实例的关闭状态变化，失败后可再次取回。
+ * 其他空闲与未绑定实例仍由视图原样带走输入。附件的 objectUrl 由本模块创建与释放：
+ * 应用关闭、状态替换或新草稿所属标签消失时统一释放，视图暂时卸载不使预览失效。
  *
  * 会话键取自前台实例报告的会话身份，并在同一实例暂时失去会话身份（宿主失败、关闭中）时沿用上一次：
  * 否则一次宿主故障就会把用户输入判给另一个会话。跨应用重启保留草稿与图片不在本任务范围内。
@@ -22,6 +22,7 @@ import { computed, reactive, ref, watch } from 'vue'
 import type { WatchStopHandle } from 'vue'
 import type { PromptImageInput } from '../../../../shared/runtime-api'
 import { useRuntimeStore } from './runtime'
+import { NEW_CHAT_INPUT_PREFIX, useWorkspaceTabsStore } from '../../workspace/stores/workspace-tabs'
 
 /** 待发送的图片附件：objectUrl 只用于本地预览，发送时读取 base64 并释放。 */
 export interface PendingImage {
@@ -51,12 +52,18 @@ export function isSessionKey(key: string): boolean {
   return key.startsWith(SESSION_KEY_PREFIX)
 }
 
+/** 已绑定会话与独立新草稿需要保存输入；阅读状态仍只按实际会话保存。 */
+export function isSavedInputKey(key: string): boolean {
+  return isSessionKey(key) || key.startsWith(NEW_CHAT_INPUT_PREFIX)
+}
+
 export const useSessionViewStore = defineStore('session-view', () => {
   const runtime = useRuntimeStore()
+  const workspace = useWorkspaceTabsStore()
   /** 当前前台实例最近一次报告的运行身份与会话身份；后者在宿主失败时保留。 */
   const boundRunId = ref<number | null>(null)
   const boundSessionId = ref<string | null>(null)
-  /** 已离开会话的输入与阅读状态；切回时取走，不在视图里保留第二份。 */
+  /** 会话与独立新草稿的输入留底；阅读状态只按实际会话保存，切回时取走。 */
   const inputs = new Map<string, SessionInput>()
   const readings = new Map<string, SessionReading>()
   /**
@@ -75,6 +82,7 @@ export const useSessionViewStore = defineStore('session-view', () => {
    */
   const turnExpansions = reactive(new Map<string, Map<string, boolean>>())
   let stopRuntimeWatch: WatchStopHandle | null = null
+  let stopDraftWatch: WatchStopHandle | null = null
 
   /** 前台实例报告的会话身份；未就绪或宿主失败时为空。 */
   const reportedSessionId = computed(() => (
@@ -82,20 +90,30 @@ export const useSessionViewStore = defineStore('session-view', () => {
   ))
 
   /**
-   * 先订阅、再取一次当前值：身份由运行状态派生，必须在视图读取之前完成同步，
-   * 因此这个 watch 用同步 flush，晚于视图的普通 watch 会让视图先读到上一个会话的状态。
+   * 先同步当前身份，再订阅后续变化；身份必须在视图读取前更新，
+   * 因此身份 watch 使用同步 flush，草稿回收则等待输入框完成旧身份留底。
    */
   function initialize(): void {
     if (stopRuntimeWatch !== null) return
     applyIdentity()
     stopRuntimeWatch = watch(() => [runtime.foregroundRunId, reportedSessionId.value] as const, applyIdentity,
       { flush: 'sync' })
+    // 等输入框完成旧身份留底后再清理，避免迟到的保存把已关闭标签的附件重新留下。
+    stopDraftWatch = watch(() => workspace.newChatInputKeys, keys => {
+      for (const [inputKey, input] of inputs) {
+        if (!inputKey.startsWith(NEW_CHAT_INPUT_PREFIX) || keys.has(inputKey)) continue
+        releaseImages(input.images)
+        inputs.delete(inputKey)
+      }
+    }, { flush: 'post' })
   }
 
   /** 页面卸载时释放订阅与全部附件预览地址。 */
   function dispose(): void {
     stopRuntimeWatch?.()
     stopRuntimeWatch = null
+    stopDraftWatch?.()
+    stopDraftWatch = null
     for (const input of inputs.values()) releaseImages(input.images)
     inputs.clear()
     readings.clear()
@@ -122,21 +140,27 @@ export const useSessionViewStore = defineStore('session-view', () => {
     if (sessionId !== null) boundSessionId.value = sessionId
   }
 
-  /** 当前输入与阅读状态应归属的键：已绑定会话按会话区分，未绑定实例按运行身份区分，其余为空闲。 */
+  /** 新建期间以草稿身份隔离旧实例；其余按实际会话、未绑定实例或空闲状态区分。 */
   const key = computed(() => {
+    if (workspace.newChatInputKey !== null) return workspace.newChatInputKey
     if (boundRunId.value === null) return 'idle'
     return boundSessionId.value === null ? `run:${boundRunId.value}` : `${SESSION_KEY_PREFIX}${boundSessionId.value}`
   })
 
-  /** 取走某个会话的输入状态：调用方接管这份状态，这里不再保留副本。 */
+  /** 按输入身份取走留底，支持新草稿绑定后的身份映射；调用方接管，不保留副本。 */
   function takeInput(sessionKey: string): SessionInput | null {
-    const saved = inputs.get(sessionKey)
+    // 输入框可能在首次绑定期间卸载；实际身份建立后仍能取回原位新建时保存的输入。
+    const binding = workspace.newChatInputBindings.find(state => state.sessionId !== null
+      ? sessionKey === `${SESSION_KEY_PREFIX}${state.sessionId}`
+      : state.runId !== null && sessionKey === `run:${state.runId}`)
+    const sourceKey = inputs.has(sessionKey) ? sessionKey : binding?.inputKey ?? sessionKey
+    const saved = inputs.get(sourceKey)
     if (saved === undefined) return null
-    inputs.delete(sessionKey)
+    inputs.delete(sourceKey)
     return saved
   }
 
-  /** 存回某个会话的输入状态；同一会话已有留底时以本次为准。 */
+  /** 按输入身份存回草稿与附件；替换留底时释放旧附件预览地址。 */
   function saveInput(sessionKey: string, input: SessionInput): void {
     const previous = inputs.get(sessionKey)
     if (previous !== undefined) releaseImages(previous.images)
