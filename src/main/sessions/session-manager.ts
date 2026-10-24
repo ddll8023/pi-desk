@@ -126,7 +126,7 @@ export class SessionManager {
         throw new SessionFailure('INVALID_PROJECT_PATH', '只能读取已添加项目的会话。')
       }
       const list = await listSessions(requested, limit)
-      // 侧栏展开项目即读取它的会话列表：顺手预热该项目的只读解析宿主，用户点开会话时查看几乎只剩文件解析。
+      // 列表读取成功后预热该项目的只读解析宿主，为后续历史读取准备 SDK。
       // 预热只保活一个解析进程，不改登记、不占会话、不报错，失败也只是退回冷启动。
       this.options.sdk.prepareProject(requested)
       return { ok: true, data: list }

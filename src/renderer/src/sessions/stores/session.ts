@@ -1,9 +1,9 @@
 /**
- * 保存会话面板的展示状态：按项目保存的会话列表窗口、打开、重新加载与删除动作；会话文件解析、切换与删除编排都在主进程。
+ * 保存会话面板的展示状态：按项目保存会话列表窗口、打开、重新加载与删除动作；列表摘要与打开、切换、删除编排在主进程，完整日志解析与执行在 SDK 宿主。
  *
  * 侧栏按项目树展示会话，因此列表按项目分片保存（键是项目路径）：展开其他项目时懒读取，
  * 已读过的分片在应用内保留，切换项目不需要重新读取。分片只登记主进程回报的项目路径对应的结果，
- * 迟到响应不会写进其他项目的分片。
+ * 迟到响应既不能写进其他项目，也不能覆盖本项目更晚的刷新或删除结果。
  * 每个分片保存的是“最近 limit 条”的窗口而不是全量：首屏只取一页，界面触底或点“加载更多”时按页扩大窗口，
  * 上限由 MAX_SESSION_WINDOW 约束；窗口是前缀，所以每次响应都能整体替换分片，不需要偏移量或追加合并，
  * 两次请求之间列表重排、新增或删除也不会产生重复行或空洞。
@@ -38,6 +38,14 @@ interface SessionListSlice {
   /** 正在扩大窗口；与首屏读取的 `phase === 'loading'` 分开，已有列表时不退回加载态。 */
   readonly loadingMore: boolean
   readonly error: SessionError | null
+}
+
+/** 普通读取串行收敛；强制刷新合并后置补读。删除可替换任务，已发出的旧 IPC 只能丢弃结果。 */
+interface SessionListReadTask {
+  limit: number
+  refreshQueued: boolean
+  closed: boolean
+  readonly promise: Promise<void>
 }
 
 /** `idle` 表示尚无当前项目或该项目列表未读取；单次动作失败放在 `actionError`。 */
@@ -91,8 +99,10 @@ export const useSessionStore = defineStore('session', () => {
   const awaitingTrust = ref(false)
   /** 待确认的重载请求：与打开共用中断确认弹窗，但目标是重启当前 Runtime。 */
   const pendingReload = ref(false)
-  /** 每个项目同时只允许一次列表读取（首屏、刷新与扩大窗口都算），同一项目的重复请求复用同一个等待。 */
-  const inflight = new Map<string, Promise<void>>()
+  /** 普通读取共用在途任务；强制刷新等待后置的新读取，不能只等一个更早的快照。 */
+  const inflight = new Map<string, SessionListReadTask>()
+  const listGenerations = new Map<string, number>()
+  let listSequence = 0
 
   /** 顶栏会话 chip 使用的会话选择弹层。 */
   const showSessionPicker = ref(false)
@@ -223,61 +233,83 @@ export const useSessionStore = defineStore('session', () => {
     if (projectPath !== null) await ensureLoaded(projectPath)
   }
 
-  /**
-   * 确保某个项目的列表已读取；`force` 用于手动刷新与新建会话落盘后的补读。
-   * 读取窗口取该分片当前的 `limit`：刷新不会把已经展开的列表收回首屏。
-   * 同一项目并发调用复用同一次读取，不产生并行请求。
-   */
-  async function ensureLoaded(projectPath: string, force = false): Promise<void> {
-    const pending = inflight.get(projectPath)
-    if (pending !== undefined) return pending
-    const slice = sliceOf(projectPath)
-    if (!force && slice.phase !== 'idle') return
-
-    const request = load(projectPath, slice.limit)
-    inflight.set(projectPath, request)
-    try {
-      await request
-    } finally {
-      inflight.delete(projectPath)
-    }
+  /** 新读取、强制刷新与成功删除各自推进代际，旧结果不再修改本项目的任何展示状态。 */
+  function nextListGeneration(projectPath: string): number {
+    const generation = ++listSequence
+    listGenerations.set(projectPath, generation)
+    return generation
   }
 
-  /**
-   * 扩大某个项目的列表窗口：每次多取一页，到 `MAX_SESSION_WINDOW` 后不再扩大。
-   * 不传项目路径时按当前项目处理。窗口是“最近 limit 条”的前缀，所以不需要偏移量或追加合并；
-   * 已经在读取时复用同一次读取，不并发请求。
-   */
+  /** 先登记任务再发请求；补读串行执行，旧任务收尾只能删除自己的登记。 */
+  function requestList(projectPath: string, limit: number, force = false): Promise<void> {
+    const desiredLimit = Math.min(MAX_SESSION_WINDOW, Math.max(limit, sliceOf(projectPath).limit))
+    const pending = inflight.get(projectPath)
+    if (pending !== undefined && !pending.closed) {
+      if (force || desiredLimit > pending.limit) {
+        pending.limit = Math.max(pending.limit, desiredLimit)
+        pending.refreshQueued = true
+        nextListGeneration(projectPath)
+      }
+      return pending.promise
+    }
+    const task: SessionListReadTask = {
+      limit: desiredLimit, refreshQueued: false, closed: false,
+      promise: Promise.resolve().then(async () => {
+        while (inflight.get(projectPath) === task) {
+          task.refreshQueued = false
+          const generation = nextListGeneration(projectPath)
+          await load(projectPath, task.limit, generation)
+          if (!task.refreshQueued) break
+        }
+        // 在 Promise 收尾前关闭入口，避免最后一个补读请求落进已经退出的循环。
+        task.closed = true
+        // 删除可能移交到更大窗口的补读，原来的等待者也跟随新任务，而不是只等旧 IPC 返回。
+        const replacement = inflight.get(projectPath)
+        if (replacement !== undefined && replacement !== task) await replacement.promise
+      }).finally(() => {
+        task.closed = true
+        if (inflight.get(projectPath) === task) inflight.delete(projectPath)
+      })
+    }
+    inflight.set(projectPath, task)
+    return task.promise
+  }
+
+  /** 保持当前窗口深度；普通请求复用在途读取，强制刷新合并安排其后的新读取。 */
+  async function ensureLoaded(projectPath: string, force = false): Promise<void> {
+    const pending = inflight.get(projectPath)
+    const slice = sliceOf(projectPath)
+    if (pending !== undefined && !pending.closed) return requestList(projectPath, slice.limit, force)
+    if (!force && slice.phase !== 'idle') return
+    await requestList(projectPath, slice.limit)
+  }
+
+  /** 扩大“最近 limit 条”的前缀窗口；已有读取时等待它收敛，不重复扩大或并行读取。 */
   async function loadMore(projectPath?: string): Promise<void> {
     const target = projectPath ?? currentProjectPath()
     if (target === null) return
     const pending = inflight.get(target)
-    if (pending !== undefined) return pending
+    if (pending !== undefined && !pending.closed) return pending.promise
     const slice = sliceOf(target)
     if (slice.remaining <= 0 || slice.limit >= MAX_SESSION_WINDOW) return
-
-    const request = load(target, Math.min(slice.limit + SESSION_PAGE_SIZE, MAX_SESSION_WINDOW))
-    inflight.set(target, request)
-    try {
-      await request
-    } finally {
-      inflight.delete(target)
-    }
+    await requestList(target, Math.min(slice.limit + SESSION_PAGE_SIZE, MAX_SESSION_WINDOW))
   }
 
   /**
    * 读取一次窗口并写入该项目分片；没有当前项目不是列表读取失败，界面按项目状态提示。
    * 已有内容的刷新或扩大窗口既不退回加载态、失败也不清空列表：切换项目与补读不该让正在看的列表先折叠再恢复。
    */
-  async function load(projectPath: string, limit: number): Promise<void> {
+  async function load(projectPath: string, limit: number, generation: number): Promise<void> {
+    if (listGenerations.get(projectPath) !== generation) return
     const current = sliceOf(projectPath)
-    if (current.phase !== 'ready' || current.sessions.length === 0) {
+    if (current.sessions.length === 0) {
       applySlice(projectPath, { ...current, phase: 'loading', limit })
     } else {
       // 已有内容时只标记“正在扩大窗口”，列表本身保持不变。
       applySlice(projectPath, { ...current, loadingMore: true })
     }
     const result = await listSessions(projectPath, limit)
+    if (listGenerations.get(projectPath) !== generation) return
     if (!result.ok) {
       if (result.error.code === 'INVALID_PROJECT_PATH') {
         applySlice(projectPath, EMPTY_SLICE)
@@ -524,7 +556,7 @@ export const useSessionStore = defineStore('session', () => {
   /**
    * 删除会话：`projectPath` 是会话所属项目路径，成功时把主进程回报的删除后列表写入对应项目分片。
    * `allowInterrupt` 表示用户已在确认弹层中同意中断该会话的在途操作；失败只记录在 actionError，
-   * 已加载的列表与运行实例不受影响。回传列表保持该项目的当前窗口深度。
+   * 已加载的列表与运行实例不受影响。删除期间若窗口继续扩大，保留已有内容并补读所需的更大窗口。
    */
   async function removeSession(projectPath: string, sessionId: string, allowInterrupt: boolean): Promise<boolean> {
     if (deleting.value) return false
@@ -537,10 +569,28 @@ export const useSessionStore = defineStore('session', () => {
         actionError.value = result.error
         return false
       }
-      // 主进程回报实际读取的项目路径；与请求不符时丢弃，不把别的项目的结果写进本分片。
-      if (result.data.projectPath === projectPath) applyList(result.data)
-      // 会话文件已删除，它的标签随之消失；标签承载的实例已由删除链收敛。
+      let refill: Promise<void> | null = null
+      // 删除后快照是新的基准；旧读取的成功、失败与收尾都不能再覆盖它。
+      if (result.data.projectPath === projectPath) {
+        const current = sliceOf(projectPath)
+        const pending = inflight.get(projectPath)
+        const desiredLimit = Math.min(MAX_SESSION_WINDOW,
+          Math.max(current.limit, pending?.limit ?? 0, result.data.limit))
+        nextListGeneration(projectPath)
+        inflight.delete(projectPath)
+        if (result.data.limit >= desiredLimit) {
+          applyList(result.data)
+        } else {
+          // 删除回传的窄窗口不能收起已展开内容；旧计数暂留为缓存值，补读完成后整体替换。
+          const sessions = current.sessions.filter(session => session.sessionId !== sessionId)
+          applySlice(projectPath, { ...current, sessions, phase: sessions.length > 0 ? 'ready' : 'loading',
+            loadingMore: true, error: null })
+          refill = requestList(projectPath, desiredLimit)
+        }
+      }
+      // 不等待列表补读才移除标签；会话文件已删除，标签承载的实例也已由主进程收敛。
       useWorkspaceTabsStore().dropSession(projectPath, sessionId)
+      if (refill !== null) await refill
       return true
     } finally {
       deleting.value = false

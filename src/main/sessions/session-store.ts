@@ -1,5 +1,6 @@
 /**
- * 项目会话文件的唯一读取者与受控删除者：会话目录定位、摘要列表、单条会话的存在性校验与单个会话文件删除。
+ * 项目会话列表摘要与目标身份复核：会话目录定位、有界头部读取、存在性校验及受控的单文件删除。
+ * 完整历史解析由 SDK 宿主承担，本模块不是会话文件的唯一读取路径。
  *
  * 会话文件由 Pi 管理（`<agent-dir>/sessions/--<cwd munged>--/<时间>_<会话 id>.jsonl`），本模块只按
  * 有界读取拿到首部元数据与首条用户消息开头，不解析消息模型、也不写入任何会话数据；删除仅限已解析
@@ -8,13 +9,15 @@
  * 是否变化），该复核不接受越过该项目会话目录的路径引用。
  *
  * 列表按窗口读取：排序需要全目录的修改时间，因此每个文件都要 stat，但只有窗口内的文件才会被读取头部
- * 并校验归属，窗口外的会话既没有摘要也不参与计数；窗口大小由调用方（页面）决定，逐页扩展由页面发起。
+ * 并校验归属；窗口外的文件只参与排序与 remaining 上界，stat 失败计入 skipped，不推断其归属。
+ * 窗口大小由调用方（页面）决定，逐页扩展由页面发起。
  * 读取范围由调用方给出的项目路径决定，不读当前项目；路径归一化在 project-path.ts，
  * 列表、打开、重载与删除编排在 session-manager.ts。
  */
-import type { Stats } from 'node:fs'
+import type { BigIntStats } from 'node:fs'
 import { open, readdir, realpath, stat, unlink } from 'node:fs/promises'
 import { dirname, isAbsolute, join } from 'node:path'
+import { MAX_SESSION_WINDOW } from '../../shared/session-api'
 import type { SessionList, SessionSummary } from '../../shared/session-api'
 import type { SdkSessionReference } from '../../sdk-host/protocol'
 import { parseSkillBlock, stripImageMarkerLines } from '../../shared/user-message-text'
@@ -35,36 +38,125 @@ const SESSION_ID_PATTERN = /^[A-Za-z0-9._-]+$/
 /** 会话目录无法读取；由调用方归为通用内部错误并保留原因文本。 */
 export class SessionStorageError extends Error {}
 
-interface CachedSummary {
-  /** 项目令牌：分组目录名可能碰撞，缓存必须按项目区分，不能复用其他项目的过滤结果。 */
-  readonly projectPath: string
-  /** 会话文件绝对路径；每轮按本项目目录清单剪枝时用它判断文件是否仍然存在。 */
-  readonly filePath: string
+interface SummaryMetadata {
   readonly size: number
   readonly mtimeMs: number
-  /** 无法解析或不属于该项目的文件缓存为 null，避免每次列表重复读取。 */
+}
+
+interface CachedSummary {
+  readonly fileStamp: string
+  /** 只有读盘成功且版本稳定的无效内容才缓存 null，瞬时 I/O 失败不进入缓存。 */
   readonly summary: SessionSummary | null
+  readonly bytes: number
+}
+
+interface ProjectSummaryCache {
+  generation: number
+  readers: number
+  readonly summaries: Map<string, CachedSummary>
+  readonly pending: Map<string, Promise<SessionSummary | null>>
 }
 
 interface HeadContent {
   readonly header: Record<string, unknown> | null
   readonly preview: string | null
 }
-/**
- * 运行期缓存；键是项目令牌与会话文件绝对路径。每轮按本项目拿到的目录清单剪枝：文件消失即丢弃，
- * 其他项目的条目留给它们自己的读取轮次，多项目展开时不会互相清空。
- */
-const summaryCache = new Map<string, CachedSummary>()
 
-/**
- * 列表元数据的并行度：取修改时间必须逐文件 stat，串行时延迟随会话数线性增长，
- * 按批并行把这段系统调用压成常数级等待，同时不给文件系统制造无界并发。
- */
+/** 项目缓存分别更新；活跃扫描保留自己的登记对象，旧扫描不能提交或剪枝新一代缓存。 */
+const summaryCaches = new Map<string, ProjectSummaryCache>()
+let summaryCacheBytes = 0
+/** 仅限制缓存，不限制项目或会话数量；序列化体积不等于实际堆内存。 */
+const CACHED_IDLE_PROJECTS = 16
+const SUMMARY_CACHE_BYTES = 8 * 1024 * 1024
+
+/** 有界并发限制瞬时文件系统压力，stat 总次数仍随目录文件数增长，不是常数复杂度。 */
 const STAT_CONCURRENCY = 32
 
-/** 缓存键：项目路径与会话文件路径都可能包含任意字符，用 NUL 分隔避免拼接歧义。 */
-function summaryCacheKey(projectPath: string, filePath: string): string {
-  return `${projectPath}\u0000${filePath}`
+/** 纳秒时间与文件实体身份一起判脏，避免同大小、同毫秒 mtime 的替换复用旧摘要。 */
+function summaryStamp(info: BigIntStats): string {
+  return `${info.dev}:${info.ino}:${info.size}:${info.mtimeNs}:${info.ctimeNs}`
+}
+
+/** 项目已经过规范化；Windows 的大小写比较与项目归属规则一致。 */
+function projectCacheKey(projectPath: string): string {
+  return process.platform === 'win32' ? projectPath.toLowerCase() : projectPath
+}
+
+/** 相同文件版本的头部读取可以合并，但每次列表仍独立发现目录并读取文件元数据。 */
+function summaryCacheKey(filePath: string, fileStamp: string): string {
+  return `${filePath}\u0000${fileStamp}`
+}
+
+/** 删除时同步体积账本；不重建或清空其他项目的缓存。 */
+function removeCachedSummary(cache: ProjectSummaryCache, filePath: string): void {
+  const saved = cache.summaries.get(filePath)
+  if (saved === undefined) return
+  cache.summaries.delete(filePath)
+  summaryCacheBytes -= saved.bytes
+}
+
+/** 空闲项目按最近使用淘汰；体积预算还可裁剪活跃项目的缓存行，但不打断其在途读取。 */
+function trimSummaryCaches(): void {
+  let idleProjects = 0
+  for (const cache of summaryCaches.values()) if (cache.readers === 0) idleProjects += 1
+  for (const [key, cache] of summaryCaches) {
+    if (idleProjects <= CACHED_IDLE_PROJECTS) break
+    if (cache.readers > 0) continue
+    for (const filePath of cache.summaries.keys()) removeCachedSummary(cache, filePath)
+    summaryCaches.delete(key)
+    idleProjects -= 1
+  }
+  for (const cache of summaryCaches.values()) {
+    for (const filePath of cache.summaries.keys()) {
+      if (summaryCacheBytes <= SUMMARY_CACHE_BYTES) return
+      removeCachedSummary(cache, filePath)
+    }
+  }
+}
+
+/** 只保存已经核对版本的结果，超出单项目窗口或全局体积时按最近使用裁剪。 */
+function rememberSummary(cache: ProjectSummaryCache, filePath: string, fileStamp: string, summary: SessionSummary | null): void {
+  removeCachedSummary(cache, filePath)
+  const bytes = Buffer.byteLength(JSON.stringify({ filePath, fileStamp, summary }), 'utf8')
+  if (bytes > SUMMARY_CACHE_BYTES) return
+  cache.summaries.set(filePath, { fileStamp, summary, bytes })
+  summaryCacheBytes += bytes
+  while (cache.summaries.size > MAX_SESSION_WINDOW) {
+    const oldest = cache.summaries.keys().next().value
+    if (oldest === undefined) break
+    removeCachedSummary(cache, oldest)
+  }
+  trimSummaryCaches()
+}
+
+/** 合并相同版本的摘要读取；缓存发布由最新扫描决定，不合并整份列表快照。 */
+async function listedSummary(
+  cache: ProjectSummaryCache, generation: number, projectPath: string,
+  filePath: string, info: SummaryMetadata, fileStamp: string
+): Promise<SessionSummary | null> {
+  const saved = cache.summaries.get(filePath)
+  if (saved !== undefined && saved.fileStamp === fileStamp) {
+    cache.summaries.delete(filePath)
+    cache.summaries.set(filePath, saved)
+    return saved.summary
+  }
+  const key = summaryCacheKey(filePath, fileStamp)
+  let pending = cache.pending.get(key)
+  if (pending === undefined) {
+    const request: Promise<SessionSummary | null> = readSummary(filePath, projectPath, info, fileStamp).finally(() => {
+      if (cache.pending.get(key) === request) cache.pending.delete(key)
+    })
+    cache.pending.set(key, request)
+    pending = request
+  }
+  try {
+    const summary = await pending
+    if (cache.generation === generation) rememberSummary(cache, filePath, fileStamp, summary)
+    return summary
+  } catch (error) {
+    if (cache.generation === generation) removeCachedSummary(cache, filePath)
+    throw error
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -185,10 +277,16 @@ function previewFromTruncatedLine(line: string): string | null {
   return normalizePreviewText(text)
 }
 
-/** 单次有界读取：首行是会话头，其余行里找首条用户消息；截断的末行只做容错解析。 */
-async function readHead(filePath: string): Promise<HeadContent> {
+/** 有界读取；列表给出版本时，同时核对打开的实体与读后路径，拒绝缓存改写或替换中的切面。 */
+async function readHead(filePath: string, expectedStamp?: string): Promise<HeadContent> {
   const handle = await open(filePath, 'r')
   try {
+    if (expectedStamp !== undefined) {
+      const opened = await handle.stat({ bigint: true })
+      if (!opened.isFile() || summaryStamp(opened) !== expectedStamp) {
+        throw new SessionStorageError('会话文件在读取摘要前发生变化。')
+      }
+    }
     const buffer = Buffer.alloc(MAX_HEAD_BYTES)
     const { bytesRead } = await handle.read(buffer, 0, MAX_HEAD_BYTES, 0)
     const text = buffer.subarray(0, bytesRead).toString('utf8')
@@ -203,6 +301,13 @@ async function readHead(filePath: string): Promise<HeadContent> {
       if (preview !== null) break
     }
     if (preview === null && truncatedTail !== null) preview = previewFromTruncatedLine(truncatedTail)
+    if (expectedStamp !== undefined) {
+      const after = await handle.stat({ bigint: true })
+      const current = await stat(filePath, { bigint: true })
+      if (summaryStamp(after) !== expectedStamp || !current.isFile() || summaryStamp(current) !== expectedStamp) {
+        throw new SessionStorageError('会话文件在读取摘要期间发生变化。')
+      }
+    }
     return { header, preview }
   } finally {
     await handle.close()
@@ -228,9 +333,10 @@ function forkedFromSessionId(header: Record<string, unknown>, sessionId: string)
 async function readSummary(
   filePath: string,
   projectPath: string,
-  info: Stats
+  info: SummaryMetadata,
+  expectedStamp?: string
 ): Promise<SessionSummary | null> {
-  const { header, preview } = await readHead(filePath)
+  const { header, preview } = await readHead(filePath, expectedStamp)
   if (header === null || header.type !== 'session') return null
 
   const sessionId = typeof header.id === 'string' ? header.id : null
@@ -255,87 +361,87 @@ async function readSummary(
  * 上界由 IPC 契约校验（shared/session-api.ts 的 `MAX_SESSION_WINDOW`），这里不再重复限制。
  * 目录不存在按无会话处理，无法读取才是错误。
  * 窗口外的文件只参与排序与 `remaining` 计数，不读取头部：列表成本从“全目录头部读取”降到“窗口内头部读取”，
- * 而逐页扩大窗口时已读过的条目直接命中缓存，不重复读盘。
+ * 扩大窗口时，版本未变且尚未淘汰的摘要可以复用；目录和元数据仍需重新读取。
  */
 export async function listSessions(projectPath: string, limit: number): Promise<SessionList> {
-  const directory = join(getSessionRoot(), getProjectGroupName(projectPath))
-
-  let names: string[]
+  const key = projectCacheKey(projectPath)
+  let cache = summaryCaches.get(key)
+  if (cache === undefined) {
+    cache = { generation: 0, readers: 0, summaries: new Map<string, CachedSummary>(),
+      pending: new Map<string, Promise<SessionSummary | null>>() }
+  }
+  summaryCaches.delete(key)
+  summaryCaches.set(key, cache)
+  cache.readers += 1
+  const generation = ++cache.generation
   try {
-    const entries = await readdir(directory, { withFileTypes: true })
-    names = entries
-      .filter((entry) => entry.isFile() && entry.name.endsWith('.jsonl') && !entry.name.startsWith('.'))
-      .map((entry) => entry.name)
-  } catch (error) {
-    if (isMissingPath(error)) return { sessions: [], skipped: 0, remaining: 0, limit, projectPath }
-    throw new SessionStorageError('无法读取本机会话目录。')
-  }
-
-  // 第一遍只取元数据：排序需要全目录的修改时间，但不读任何文件内容；按批并行取，避免随会话数线性变慢。
-  const present = new Set<string>()
-  const files: { readonly filePath: string; readonly info: Stats }[] = []
-  let skipped = 0
-  for (let start = 0; start < names.length; start += STAT_CONCURRENCY) {
-    const batch = names.slice(start, start + STAT_CONCURRENCY)
-    const rows = await Promise.all(batch.map(async (name) => {
-      const filePath = join(directory, name)
-      try {
-        const info = await stat(filePath)
-        return info.isFile() ? { filePath, info } : null
-      } catch {
-        return null
-      }
-    }))
-    for (const [index, name] of batch.entries()) {
-      present.add(join(directory, name))
-      const row = rows[index]
-      if (row === null || row === undefined) {
-        skipped += 1
-        continue
-      }
-      files.push(row)
-    }
-  }
-  files.sort((left, right) => right.info.mtimeMs - left.info.mtimeMs)
-
-  // 缓存只按本项目本轮目录清单剪枝：其他项目的条目留给它们自己的读取轮次，多项目展开时不会互相清空。
-  const nextCache = new Map<string, CachedSummary>()
-  for (const [key, value] of summaryCache) {
-    if (!isSamePath(value.projectPath, projectPath) || present.has(value.filePath)) nextCache.set(key, value)
-  }
-
-  const accepted: SessionSummary[] = []
-  for (const { filePath, info } of files.slice(0, limit)) {
-    const cacheKey = summaryCacheKey(projectPath, filePath)
-    const cached = nextCache.get(cacheKey)
-    if (cached !== undefined && cached.size === info.size && cached.mtimeMs === info.mtimeMs) {
-      if (cached.summary === null) skipped += 1
-      else accepted.push(cached.summary)
-      continue
-    }
-
-    let summary: SessionSummary | null = null
+    const directory = join(getSessionRoot(), getProjectGroupName(projectPath))
+    let names: string[]
     try {
-      summary = await readSummary(filePath, projectPath, info)
-    } catch {
-      // 文件在读取期间被删除或被占用：按无法解析处理。
-      summary = null
+      const entries = await readdir(directory, { withFileTypes: true })
+      names = entries
+        .filter((entry) => entry.isFile() && entry.name.endsWith('.jsonl') && !entry.name.startsWith('.'))
+        .map((entry) => entry.name)
+    } catch (error) {
+      if (!isMissingPath(error)) throw new SessionStorageError('无法读取本机会话目录。')
+      if (cache.generation === generation) {
+        for (const filePath of cache.summaries.keys()) removeCachedSummary(cache, filePath)
+      }
+      return { sessions: [], skipped: 0, remaining: 0, limit, projectPath }
     }
-    nextCache.set(cacheKey, { projectPath, filePath, size: info.size, mtimeMs: info.mtimeMs, summary })
-    if (summary === null) skipped += 1
-    else accepted.push(summary)
-  }
 
-  summaryCache.clear()
-  for (const [key, value] of nextCache) summaryCache.set(key, value)
+    // 每次都扫描全部元数据以保持 mtime 排序；分批限制并发，不把目录扫描缓存成持久索引。
+    const present = new Set<string>()
+    const files: { readonly filePath: string; readonly info: SummaryMetadata; readonly fileStamp: string }[] = []
+    let skipped = 0
+    for (let start = 0; start < names.length; start += STAT_CONCURRENCY) {
+      const batch = names.slice(start, start + STAT_CONCURRENCY)
+      const rows = await Promise.all(batch.map(async (name) => {
+        const filePath = join(directory, name)
+        try {
+          const info = await stat(filePath, { bigint: true })
+          if (!info.isFile()) return null
+          return { filePath, fileStamp: summaryStamp(info), info: {
+            size: Number(info.size),
+            mtimeMs: Number(info.mtimeNs / 1_000_000n) + Number(info.mtimeNs % 1_000_000n) / 1_000_000
+          } }
+        } catch {
+          return null
+        }
+      }))
+      for (const [index, name] of batch.entries()) {
+        present.add(join(directory, name))
+        const row = rows[index]
+        if (row === null || row === undefined) skipped += 1
+        else files.push(row)
+      }
+    }
+    files.sort((left, right) => right.info.mtimeMs - left.info.mtimeMs)
+    if (cache.generation === generation) {
+      for (const filePath of cache.summaries.keys()) {
+        if (!present.has(filePath)) removeCachedSummary(cache, filePath)
+      }
+    }
 
-  // 窗口已经按修改时间降序排好（`updatedAt` 就是文件 mtime），不再二次排序。
-  return {
-    sessions: accepted,
-    skipped,
-    remaining: Math.max(0, files.length - limit),
-    limit,
-    projectPath
+    const accepted: SessionSummary[] = []
+    for (const { filePath, info, fileStamp } of files.slice(0, limit)) {
+      try {
+        const summary = await listedSummary(cache, generation, projectPath, filePath, info, fileStamp)
+        if (summary === null) skipped += 1
+        else accepted.push(summary)
+      } catch {
+        // 改写、替换、删除与瞬时 I/O 故障都只影响本次结果；不把失败缓存成稳定的无效文件。
+        skipped += 1
+      }
+    }
+    return { sessions: accepted, skipped, remaining: Math.max(0, files.length - limit), limit, projectPath }
+  } finally {
+    cache.readers -= 1
+    if (summaryCaches.get(key) === cache) {
+      summaryCaches.delete(key)
+      summaryCaches.set(key, cache)
+    }
+    trimSummaryCaches()
   }
 }
 
@@ -412,7 +518,7 @@ export async function resolveSessionFile(
 
 /**
  * 删除已解析归属该项目的单个会话文件；只能由 session-manager 在占用收敛后调用。
- * 会话已在删除前消失时按成功处理，其余失败按无法删除报告；列表缓存每轮自重建，无需失效。
+ * 会话已在删除前消失时按成功处理，其余失败按无法删除报告；后续列表读取通过目录清单剪掉已删除摘要。
  */
 export async function deleteSessionFile(projectPath: string, sessionId: string): Promise<void> {
   const filePath = await resolveSessionFile(projectPath, sessionId)

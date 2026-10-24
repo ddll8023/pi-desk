@@ -11,13 +11,13 @@
  * 绑定代际对齐）；宿主就绪只代表 SDK 已加载，只有会话绑定完成才对页面表示 `ready`。
  *
  * 前台选择由项目切换驱动：当前项目变化时切到该项目最近一次前台的实例，未命中则清空前台。
- * 项目切换只改展示归属，不建立宿主、不重绑会话、不中断任何后台实例。
+ * 项目切换只改执行实例的展示归属，不建立执行宿主、不重绑会话、不中断任何后台实例。
  * 前台实例不参与空闲回收：切走或清空前台后才重新计时。
  * 空会话释放是唯一例外：绑定还没有任何消息落盘的会话且完全空闲的实例，在让出前台或切换会话时
  * 直接解除占用——这类会话没有文件、无法从列表重开，保留只会留下「未命名会话」占位行。
  *
- * 查看历史不属于运行实例：它由只读宿主池承担，不登记运行实例、不占会话、不参与前台选择；
- * 同一会话随后真正绑定时可以接管那个进程，投影检查点因此能跨「查看」与「绑定」复用。
+ * 查看历史不新增执行占用：优先复用原服务宿主，再借同项目执行宿主或只读池，不改变前台选择；
+ * 池中宿主不登记运行实例，真正绑定时才被接管，进程内缓存与检查点因此可以继续复用。
  */
 import { HOST_IDLE_RECLAIM_MS, SdkHostError, SDK_HOST_FAILURE_MESSAGES } from './sdk-host-manager'
 import type { SdkHostErrorCode, SdkHostManager, SdkHostStatus } from './sdk-host-manager'
@@ -26,7 +26,7 @@ import type {
   SdkInterruptConfirmation, SdkLogTarget, SdkSessionReference, SdkSessionStatus
 } from '../../sdk-host/protocol'
 import { SessionRunConflict } from './session-run-registry'
-import type { LogHostPool } from './log-host-pool'
+import type { LogHostHandle, LogHostPool } from './log-host-pool'
 import type { SessionRunRecord, SessionRunRegistry } from './session-run-registry'
 import type {
   CapabilitiesResult,
@@ -139,8 +139,8 @@ export function sessionErrorOf(error: unknown): SessionError {
   return { code: SESSION_ERROR_CODES[failure.code], message: failure.message }
 }
 
-/** 日志读取用过的宿主身份：已有运行实例，或仍在只读池里等待被接管。 */
-type LogHostOrigin = { readonly runId: number } | { readonly poolHostId: number }
+/** 池租约与执行宿主的统一读取句柄；执行宿主的回收由读取收尾重新安排。 */
+type LogReadLease = Pick<LogHostHandle, 'host' | 'release'>
 
 /** 日志宿主记忆键：项目与会话都可能含任意字符，用 NUL 分隔避免拼接歧义。 */
 function logHostKey(projectPath: string, sessionId: string): string {
@@ -334,10 +334,10 @@ export class SdkRuntimeBridge {
   private shuttingDown = false
   /** 前台选择序号：打开与重载提交时递增，用于不让先提交后完成的选择把前台改回旧目标。 */
   private selectionSeed = 0
-  /** 会话最近一次日志读取用过的宿主；绑定时优先接管同一个进程，宿主内的投影检查点才能命中。 */
-  private readonly logHosts = new Map<string, LogHostOrigin>()
-  /** 只读池的关闭结果：退出编排只启动一次，关闭时统一等待。 */
-  private logHostShutdown: Promise<void> | null = null
+  /** 按对象记住原服务宿主；读取与绑定都能复用，池身份移交后也不会留下过期编号。 */
+  private readonly logHosts = new Map<string, SdkHostManager>()
+  /** 只读池关闭只启动一次；立即接住拒绝并保留结果，关闭时统一等待。 */
+  private logHostShutdown: Promise<PromiseSettledResult<void>> | null = null
 
   constructor(private readonly options: SdkRuntimeBridgeOptions) {}
 
@@ -588,10 +588,10 @@ export class SdkRuntimeBridge {
   /**
    * 前台实例跟随项目：命中该项目最近一次前台实例时切到它（与 `focusRun` 同一条顺序），
    * 该项目没有承载会话的实例时清空前台选择，页面回到该项目的空状态。
-   * 不建立宿主、不重绑会话、不中断任何后台实例。
+   * 不建立执行宿主、不重绑会话、不中断任何后台实例。
    */
   focusProject(projectPath: string): void {
-    // 该项目成为当前项目时预热解析宿主：预览几乎只剩文件解析，随后的打开也能接管它。
+    // 项目切换时预热只读解析宿主，不建立会话；后续绑定可接管池中仍可用的宿主。
     this.prepareProject(projectPath)
     const run = this.options.runs.foregroundRunOfProject(projectPath)
     if (run === null) {
@@ -606,7 +606,7 @@ export class SdkRuntimeBridge {
   }
 
   /**
-   * 项目预热：为当前项目保活一个只读解析宿主，让随后的查看几乎只剩文件解析。
+   * 项目预热：为指定项目准备只读解析宿主，减少后续历史读取的冷启动开销。
    * 预热不建立会话、不登记运行实例；失败、被回收或应用退出都只是退回冷启动。
    */
   prepareProject(projectPath: string): void {
@@ -615,46 +615,74 @@ export class SdkRuntimeBridge {
   }
 
   /**
-   * 会话日志读取：解析一份已授权的会话文件，供页面在绑定前先展示与翻页历史。
-   * 先借该项目现成可用的执行宿主（同一进程内随后的绑定能直接命中投影检查点），
-   * 没有才用只读宿主池；两条路都不承载会话、不登记运行实例。
+   * 会话日志读取：先复用该会话的原服务宿主，再借同项目执行宿主或只读池。
+   * 只有宿主失效才换一个宿主重读一次；文件版本、游标与解析错误原样交还，不盲目重试。
+   * 读取不改变执行占用，池租约或管理器读取计数保护在途请求，收尾后再安排自动回收。
    */
   async readSessionLog(target: SdkLogTarget): Promise<HistoryData> {
-    if (this.shuttingDown) throw new SdkHostError('HOST_CLOSED', '应用正在退出，不能读取会话历史。')
-    const borrowed = this.borrowableRun(target.projectPath)
-    if (borrowed !== null) {
-      const data = await borrowed.owner.readSessionLog(target)
-      this.rememberLogHost(target.projectPath, target.sessionId, { runId: borrowed.runId })
-      return data
+    const key = logHostKey(target.projectPath, target.sessionId)
+    let excluded: SdkHostManager | null = null
+    for (let attempt = 0; ; attempt += 1) {
+      if (this.shuttingDown) throw new SdkHostError('HOST_CLOSED', '应用正在退出，不能读取会话历史。')
+      const lease = this.acquireLogHost(target.projectPath, this.logHosts.get(key), excluded)
+      try {
+        const data = await lease.host.readSessionLog(target)
+        if (!this.shuttingDown) this.rememberLogHost(target.projectPath, target.sessionId, lease.host)
+        return data
+      } catch (error) {
+        if (this.logHosts.get(key) === lease.host) this.logHosts.delete(key)
+        if (attempt > 0 || this.shuttingDown || !(error instanceof SdkHostError)
+          || (error.code !== 'HOST_EXITED' && error.code !== 'HOST_CLOSED' && error.code !== 'HOST_NOT_READY')) throw error
+        excluded = lease.host
+      } finally {
+        lease.release()
+        // 池宿主可能在等待期间被接管：按当前对象归属重新安排，而不是沿用旧池编号。
+        const run = this.options.runs.allRuns().find(candidate => candidate.owner === lease.host)
+        if (run !== undefined) this.scheduleReclaim(run.runId)
+      }
     }
-    const pooled = this.options.logHosts.acquire(target.projectPath)
-    const data = await pooled.host.readSessionLog(target)
-    this.rememberLogHost(target.projectPath, target.sessionId, { poolHostId: pooled.hostId })
-    return data
   }
 
-  /**
-   * 可借宿主：先取该项目前台实例，再取同项目其余可用实例。宿主可跨会话共用，
-   * 但它们必须没有未收敛的生命周期操作、也不在关闭或失败状态，否则一次读取会撞上正在收敛的进程。
-   */
-  private borrowableRun(projectPath: string): SessionRunRecord<SdkHostManager> | null {
-    const usable = (run: SessionRunRecord<SdkHostManager>): boolean => {
-      if (run.phase === 'closing' || run.phase === 'unconfirmed') return false
-      const state = run.owner.getStatus().state
-      return state !== 'failed' && state !== 'stopping'
+  /** 固定本次读取的宿主；未存活的执行宿主不因浏览其他历史而被重新启动。 */
+  private acquireLogHost(projectPath: string, preferred: SdkHostManager | undefined, excluded: SdkHostManager | null): LogReadLease {
+    let run: SessionRunRecord<SdkHostManager> | undefined
+    if (preferred !== undefined && preferred !== excluded) {
+      run = this.options.runs.allRuns().find(candidate => candidate.owner === preferred && this.canReadLog(candidate, projectPath))
+      if (run === undefined) {
+        const lease = this.options.logHosts.acquireExisting(projectPath, preferred)
+        if (lease !== null) return lease
+      }
     }
+    run ??= this.borrowableRun(projectPath, excluded) ?? undefined
+    if (run !== undefined) {
+      this.cancelReclaim(run.runId)
+      return { host: run.owner, release: () => {} }
+    }
+    return this.options.logHosts.acquire(projectPath, excluded ?? undefined)
+  }
+
+  /** 读取只借仍在同项目服务的宿主，回收中、关闭中与退出未确认的实例都不可借。 */
+  private canReadLog(run: SessionRunRecord<SdkHostManager>, projectPath: string): boolean {
+    if (run.projectPath === null || !sameProjectPath(run.projectPath, projectPath)
+      || run.phase === 'closing' || run.phase === 'unconfirmed' || this.reclaiming.has(run.runId)) return false
+    const state = run.owner.getStatus().state
+    return state === 'ready' || state === 'starting'
+  }
+
+  /** 没有原服务宿主时先借该项目最近的前台实例，再借同项目其余可用实例。 */
+  private borrowableRun(projectPath: string, excluded: SdkHostManager | null): SessionRunRecord<SdkHostManager> | null {
+    const usable = (run: SessionRunRecord<SdkHostManager>): boolean =>
+      run.owner !== excluded && this.canReadLog(run, projectPath)
     const foreground = this.options.runs.foregroundRunOfProject(projectPath)
     if (foreground !== null && usable(foreground)) return foreground
-    const other = this.options.runs.allRuns().find(run =>
-      run.projectPath !== null && sameProjectPath(run.projectPath, projectPath) && usable(run))
-    return other ?? null
+    return this.options.runs.allRuns().find(usable) ?? null
   }
 
-  /** 记下服务过该会话日志读取的宿主；表只保留少量最近项，避免随查看过的会话无限增长。 */
-  private rememberLogHost(projectPath: string, sessionId: string, origin: LogHostOrigin): void {
+  /** 只保留少量最近服务对象；接管改变登记身份但不改变对象，也不搬运进程内缓存。 */
+  private rememberLogHost(projectPath: string, sessionId: string, host: SdkHostManager): void {
     const key = logHostKey(projectPath, sessionId)
     this.logHosts.delete(key)
-    this.logHosts.set(key, origin)
+    this.logHosts.set(key, host)
     while (this.logHosts.size > LOG_HOST_MEMORY) {
       const oldest = this.logHosts.keys().next().value
       if (oldest === undefined) break
@@ -672,15 +700,14 @@ export class SdkRuntimeBridge {
     const key = logHostKey(owner.projectPath, owner.sessionId)
     const origin = this.logHosts.get(key)
     if (origin === undefined) return null
-    if ('runId' in origin) {
-      const run = this.options.runs.allRuns().find(candidate => candidate.runId === origin.runId)
-      if (run !== undefined && this.canReuse(run, owner.projectPath)) return run
+    const run = this.options.runs.allRuns().find(candidate => candidate.owner === origin)
+    if (run !== undefined) {
+      if (this.canReuse(run, owner.projectPath)) return run
       this.logHosts.delete(key)
       return null
     }
-    const host = this.options.logHosts.claim(origin.poolHostId)
-    this.logHosts.delete(key)
-    if (host === null) return null
+    const host = this.options.logHosts.claim(owner.projectPath, origin)
+    if (host === null) { this.logHosts.delete(key); return null }
     const runId = this.options.runs.allocateRunId()
     host.adoptRun(runId, this.options.runs)
     this.options.prepareHost(host)
@@ -689,10 +716,11 @@ export class SdkRuntimeBridge {
     return record
   }
 
-  /** 实例释放后丢弃指向它的记录，避免绑定落到已结束的进程编号上。 */
+  /** 实例释放后清理它的来源记录，不能把已解除项目归属的宿主继续当作原服务来源。 */
   private forgetLogHosts(runId: number): void {
-    for (const [key, value] of [...this.logHosts]) {
-      if ('runId' in value && value.runId === runId) this.logHosts.delete(key)
+    const host = this.runOf(runId)?.owner
+    for (const [key, value] of this.logHosts) {
+      if (value === host) this.logHosts.delete(key)
     }
   }
 
@@ -753,7 +781,7 @@ export class SdkRuntimeBridge {
       this.focusRun(occupied.runId)
       return occupied
     }
-    // 优先复用刚为该会话读过日志的宿主：同一进程内绑定能直接命中投影检查点，省掉一次整体重建。
+    // 优先复用原日志宿主：首页与稳定活动分别校验复用，但都不能替代 SDK 打开会话文件。
     const preferred = this.logHostOf(owner)
     if (preferred !== null) {
       this.focusRun(preferred.runId)
@@ -1104,12 +1132,17 @@ export class SdkRuntimeBridge {
     const before = occupied.owner.getSessionStatus()
     if (before.bindingId === null || before.sessionId !== request.sessionId
       || before.projectPath === null || !sameProjectPath(before.projectPath, request.projectPath)) return null
-    const data = await occupied.owner.readHistory(request.sessionId, request.query)
-    const after = occupied.owner.getSessionStatus()
-    if (after.bindingId !== before.bindingId || after.sessionId !== request.sessionId) {
-      throw new SdkHostError('STALE_SESSION', SDK_HOST_FAILURE_MESSAGES.STALE_SESSION)
+    this.cancelReclaim(occupied.runId)
+    try {
+      const data = await occupied.owner.readHistory(request.sessionId, request.query)
+      const after = occupied.owner.getSessionStatus()
+      if (after.bindingId !== before.bindingId || after.sessionId !== request.sessionId) {
+        throw new SdkHostError('STALE_SESSION', SDK_HOST_FAILURE_MESSAGES.STALE_SESSION)
+      }
+      return data
+    } finally {
+      this.scheduleReclaim(occupied.runId)
     }
-    return data
   }
 
   /** 确认只影响目标实例的未确认窗口；目标不成立或不属于该绑定的确认直接忽略。 */
@@ -1207,12 +1240,13 @@ export class SdkRuntimeBridge {
     for (const timer of this.reclaimTimers.values()) clearTimeout(timer)
     this.reclaimTimers.clear()
     for (const run of this.options.runs.allRuns()) run.owner.beginShutdown()
-    // 只读池与运行实例一起收敛：它们同样是子进程，退出前必须确认已经关闭。
-    this.logHostShutdown ??= this.options.logHosts.shutdown().catch(() => undefined)
+    // 立即把拒绝转为结果记录，避免等待运行实例关闭期间产生未处理拒绝，同时保留原始错误。
+    this.logHostShutdown ??= Promise.allSettled([this.options.logHosts.shutdown()])
+      .then(([result]) => result)
     this.publishRuns()
   }
 
-  /** 关闭全部宿主；任一未确认退出时如实抛出，不把关闭失败当作成功。 */
+  /** 等待全部宿主关闭，汇总运行实例与只读池的失败并抛出首个原始错误。 */
   async shutdown(): Promise<void> {
     this.beginShutdown()
     const failures: unknown[] = []
@@ -1223,10 +1257,9 @@ export class SdkRuntimeBridge {
         failures.push(error)
       }
     }))
-    // 只读宿主不承载会话，但仍是子进程：关闭失败同样如实抛出。
-    await this.logHostShutdown
-    const failure = failures[0]
-    if (failure !== undefined) throw failure
+    const logHostResult = await this.logHostShutdown
+    if (logHostResult?.status === 'rejected') failures.push(logHostResult.reason)
+    if (failures.length > 0) throw failures[0]
   }
 
   /** 任一实例状态变化后的统一广播入口：前台状态与运行实例列表各自去重。 */

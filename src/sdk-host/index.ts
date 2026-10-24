@@ -20,7 +20,7 @@ let seq = 0
 let sessions: SdkSessionRuntime | null = null
 /** 已加载的官方 SDK 模块：预览只需要它的解析与内存会话管理，不建立 AgentSession。 */
 let sdkModule: SdkModule | null = null
-/** 投影检查点：日志读取写入、绑定建立时取用，两处共享同一个进程内实例。 */
+/** 进程内共享检查点：首页由日志读取提供，稳定活动由运行时累计，两类状态分别校验和复用。 */
 const checkpoints = new ProjectionCheckpoints()
 let shutdownTask: Promise<void> | null = null
 const authorizations = new Map<string, {

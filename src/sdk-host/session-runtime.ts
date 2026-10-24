@@ -1,4 +1,4 @@
-/** 单活动 SDK 会话的生命周期所有者：提供内部绑定、绑定首页与按分支读取历史；不提供 prompt，页面级投影与 ready 由主进程映射。 */
+/** 单活动 SDK 会话的生命周期所有者：负责绑定、运行请求及按分支读取历史，页面级投影与 ready 由主进程映射。 */
 import { randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { readFile, realpath, stat } from 'node:fs/promises'
@@ -7,10 +7,11 @@ import type { AgentSession, AgentSessionEvent, AgentSessionRuntime, ExtensionCom
 import { ExtensionUiBridge } from './extension-ui-bridge'
 import { createGenuiExtension, GENUI_EXTENSION_NAME } from './genui/index'
 import { MessageProjection } from './projection/message-projection'
-import { ActivityProjection } from './projection/activity-projection'
+import { ActivityProjection, matchesActivityPrefix } from './projection/activity-projection'
+import type { ActivityCheckpointState } from './projection/activity-projection'
 import { historyEntryId, readBranchHistory } from './projection/history-projection'
 import { fileStampOf } from './projection/checkpoint'
-import type { ProjectionCheckpoints } from './projection/checkpoint'
+import type { ActivityCheckpointIdentity, ProjectionCheckpoints } from './projection/checkpoint'
 import { OutputRateTracker } from './projection/output-rate'
 import { SDK_HOST_PROTOCOL_VERSION } from './protocol'
 import type {
@@ -19,7 +20,7 @@ import type {
 } from './protocol'
 import type {
   AgentCapabilities, ExtensionErrorEntry, McpStatus, ModelSummary, OutputRate, PiResourceEntry, PiResources,
-  ProjectionBatch, ProjectionSnapshot, PromptDisposition, RuntimeDiagnostics, SessionUsage, HistoryData, HistoryPage, HistoryQuery
+  ProjectionBatch, ProjectionSnapshot, PromptDisposition, RuntimeDiagnostics, SessionActivity, SessionUsage, HistoryData, HistoryPage, HistoryQuery
 } from '../shared/runtime-api'
 import type { ExtensionDialogResponseInput } from '../shared/extension-ui-api'
 
@@ -34,7 +35,7 @@ interface RuntimeOptions {
   readonly onUiCancel: (bindingId: number, dialogId: string) => void
   readonly onProjectionBatch: (bindingId: number, batch: ProjectionBatch) => void
   readonly onEntryMap: (bindingId: number, messageId: string, entryId: string) => void
-  /** 与本宿主同一进程的投影检查点：日志读取写入，绑定建立时取用。 */
+  /** 进程内检查点：首页由日志读取提供，稳定活动由绑定累计；两类状态分别复用。 */
   readonly checkpoints: ProjectionCheckpoints
 }
 const SETTLE_TIMEOUT_MS = 5_000
@@ -209,6 +210,13 @@ export class SdkSessionRuntime {
   private bridge: ExtensionUiBridge | null = null
   private projection: MessageProjection | null = null
   private activity: ActivityProjection | null = null
+  private activityView: SessionActivity | null = null
+  private savedActivityState: ActivityCheckpointState | null = null
+  /** 候选只由已通过文件戳及前缀复核的预检产生；不会携带旧绑定的实时状态。 */
+  private preparedActivity: (ActivityCheckpointIdentity & {
+    readonly fileStamp: string
+    readonly state: ActivityCheckpointState
+  }) | null = null
   private historyTail: string | null = null
   private historyRevision = 0
   private unsubscribe: (() => void) | null = null
@@ -403,8 +411,11 @@ export class SdkSessionRuntime {
   }
 
   private refreshActivity(): void {
-    if (this.session === null || this.target === null || this.activity === null) return
-    const branch = this.session.sessionManager.getBranch()
+    const session = this.session
+    const target = this.target
+    const activity = this.activity
+    if (session === null || target === null || activity === null) return
+    const branch = session.sessionManager.getBranch()
     if (this.historyTail !== null && !branch.some(entry => entry.id === this.historyTail) && this.bindingId !== null) {
       this.historyRevision++
       this.pendingEntryLookup = null
@@ -412,7 +423,22 @@ export class SdkSessionRuntime {
       if (page.kind !== 'text') this.projection?.replaceProjectedHistory(page, this.historyRevision)
     }
     this.historyTail = branch.at(-1)?.id ?? null
-    this.projection?.setActivity(this.activity.refresh(branch, this.target.projectPath))
+    const view = activity.refresh(branch, target.projectPath, session.sessionId, session.sessionManager)
+    if (view !== this.activityView) {
+      this.projection?.setActivity(view)
+      this.activityView = view
+    }
+    const sessionFile = session.sessionFile
+    if (sessionFile === undefined) return
+    const state = activity.snapshot()
+    if (state === this.savedActivityState) return
+    const identity = { projectPath: target.projectPath, sessionId: session.sessionId, sessionFile }
+    if (state === null) {
+      if (this.savedActivityState !== null) this.options.checkpoints.forgetActivity(identity, this.savedActivityState)
+    } else {
+      this.options.checkpoints.rememberActivity(identity, state)
+    }
+    this.savedActivityState = state
   }
 
   /** 确认只影响未确认窗口；不属于当前代际的确认直接忽略。 */
@@ -701,6 +727,7 @@ export class SdkSessionRuntime {
 
   /** 预检不使用持久化 SDK manager，避免把检查变成迁移或初始化文件。 */
   private async precheck(target: SdkSessionTarget): Promise<void> {
+    this.preparedActivity = null
     if (!isAbsolute(target.projectPath) || !isAbsolute(target.sessionDir)
       || !samePath(target.sessionDir, resolve(this.options.agentDir, 'sessions',
         `--${target.projectPath.replace(/^[\\/]/, '').replace(/[\\/:]/g, '-')}--`))) {
@@ -716,7 +743,8 @@ export class SdkSessionRuntime {
     }
     const before = await stat(filePath, { bigint: true })
     const stamp = (info: typeof before): string => `${info.dev}:${info.ino}:${info.size}:${info.mtimeNs}:${info.ctimeNs}`
-    if (!before.isFile() || stamp(before) !== target.fileStamp) throw new SdkSessionFailure('INVALID_SESSION_TARGET')
+    if (!before.isFile() || target.fileStamp === null || target.sessionId === null
+      || stamp(before) !== target.fileStamp) throw new SdkSessionFailure('INVALID_SESSION_TARGET')
     const entries = this.sdk.parseSessionEntries(await readFile(filePath, 'utf8'))
     const header = entries.find(entry => entry.type === 'session')
     if (header?.type !== 'session' || header.id !== target.sessionId
@@ -726,7 +754,15 @@ export class SdkSessionRuntime {
     }
     const preview = this.sdk.SessionManager.inMemory(target.projectPath, undefined, entries)
     preview.buildSessionContext()
+    const identity = { projectPath: target.projectPath, sessionId: target.sessionId, sessionFile: filePath }
+    const state = this.options.checkpoints.activityOf(identity)
+    // 使用这次预检已经解析的分支，不为活动恢复额外读取一遍日志。
+    const matches = state !== null && matchesActivityPrefix(state, preview.getBranch())
     if (stamp(await stat(filePath, { bigint: true })) !== target.fileStamp) throw new SdkSessionFailure('INVALID_SESSION_TARGET')
+    if (state !== null) {
+      if (matches) this.preparedActivity = { ...identity, fileStamp: target.fileStamp, state }
+      else this.options.checkpoints.forgetActivity(identity, state)
+    }
   }
 
   /** services 每次重建；项目 provider 不注册进全局查询容器。 */
@@ -839,7 +875,16 @@ export class SdkSessionRuntime {
         })
       }
       this.projection = projection
-      this.activity = new ActivityProjection()
+      const prepared = this.preparedActivity
+      this.preparedActivity = null
+      const canRestore = prepared !== null && this.target !== null
+        && prepared.sessionId === session.sessionId && session.sessionFile !== undefined
+        && samePath(prepared.projectPath, this.target.projectPath) && samePath(prepared.sessionFile, session.sessionFile)
+        && prepared.fileStamp === this.target.fileStamp && prepared.fileStamp === seeded.fileStamp
+      // 即使预检命中，累计器仍会核对实际 SDK 分支；失效时正常重建，不影响绑定。
+      this.activity = new ActivityProjection(canRestore ? prepared?.state : undefined)
+      this.activityView = null
+      this.savedActivityState = null
       this.historyTail = null
       this.historyRevision = 0
       this.refreshActivity()
@@ -1074,6 +1119,9 @@ export class SdkSessionRuntime {
     this.projection?.dispose()
     this.projection = null
     this.activity = null
+    this.activityView = null
+    this.savedActivityState = null
+    // 预检候选属于下一次绑定，不能在旧会话的同步失效钩子里清掉。
     this.historyTail = null
     this.rate?.reset()
     this.rate = null
@@ -1142,6 +1190,7 @@ export class SdkSessionRuntime {
       }
     }
     this.invalidateCurrent()
+    this.preparedActivity = null
     this.runtime = null
     this.target = null
     this.bindingId = null

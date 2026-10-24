@@ -259,6 +259,8 @@ export class SdkHostManager {
   private sessionSnapshot = emptySdkSessionStatus()
   private sessionSubmission: string | null = null
   private uncertainOperationId: string | null = null
+  /** 历史读取从首次等待前登记；自动回收不能在宿主启动或返回历史期间关闭进程。 */
+  private historyReads = 0
   private readonly sessionListeners = new Set<(status: SdkSessionStatus) => void>()
   private readonly projectionListeners = new Set<(batch: ProjectionBatch) => void>()
   private projection: ProjectionSnapshot | null = null
@@ -498,13 +500,18 @@ export class SdkHostManager {
     const record = this.requireHost(true)
     const bindingId = this.sessionSnapshot.bindingId
     if (bindingId === null || this.sessionSnapshot.sessionId !== sessionId) throw new SdkHostError('STALE_SESSION', FAILURE_MESSAGES.STALE_SESSION)
-    const frame = await this.request(record, { version: SDK_HOST_PROTOCOL_VERSION, hostId: record.hostId,
-      requestId: randomUUID(), type: 'history', bindingId, sessionId, query }, SESSION_TIMEOUT_MS)
-    if (this.active !== record || this.sessionSnapshot.bindingId !== bindingId || this.sessionSnapshot.sessionId !== sessionId) {
-      throw new SdkHostError('STALE_SESSION', FAILURE_MESSAGES.STALE_SESSION)
+    this.historyReads += 1
+    try {
+      const frame = await this.request(record, { version: SDK_HOST_PROTOCOL_VERSION, hostId: record.hostId,
+        requestId: randomUUID(), type: 'history', bindingId, sessionId, query }, SESSION_TIMEOUT_MS)
+      if (this.active !== record || this.sessionSnapshot.bindingId !== bindingId || this.sessionSnapshot.sessionId !== sessionId) {
+        throw new SdkHostError('STALE_SESSION', FAILURE_MESSAGES.STALE_SESSION)
+      }
+      if (frame.type !== 'history-result') throw new SdkHostError('HOST_PROTOCOL_ERROR', '历史读取结果不符合契约。')
+      return frame.data
+    } finally {
+      this.historyReads -= 1
     }
-    if (frame.type !== 'history-result') throw new SdkHostError('HOST_PROTOCOL_ERROR', '历史读取结果不符合契约。')
-    return frame.data
   }
 
   /** 镜像的最新投影快照；未取得时为 null，不由主进程凭空造空基准。 */
@@ -527,13 +534,24 @@ export class SdkHostManager {
    * 页、轮次与原文续段共用同一条读取链。失败按已声明分类抛错，不返回空历史冒充「没有内容」。
    */
   async readSessionLog(target: SdkLogTarget): Promise<HistoryData> {
-    await this.ensureStarted()
-    const record = this.requireHost()
-    const frame = await this.request(record, { version: SDK_HOST_PROTOCOL_VERSION, hostId: record.hostId,
-      requestId: randomUUID(), type: 'session-log', target }, SESSION_TIMEOUT_MS)
-    if (frame.type !== 'log-result') throw new SdkHostError('HOST_PROTOCOL_ERROR', 'SDK 日志读取结果不符合契约。')
-    return frame.data
+    this.historyReads += 1
+    try {
+      await this.ensureStarted()
+      const record = this.requireHost()
+      const frame = await this.request(record, { version: SDK_HOST_PROTOCOL_VERSION, hostId: record.hostId,
+        requestId: randomUUID(), type: 'session-log', target }, SESSION_TIMEOUT_MS)
+      if (this.active !== record || record.closing || record.exited) {
+        throw new SdkHostError('HOST_CLOSED', '读取日志的 SDK 宿主已经失效。')
+      }
+      if (frame.type !== 'log-result') throw new SdkHostError('HOST_PROTOCOL_ERROR', 'SDK 日志读取结果不符合契约。')
+      return frame.data
+    } finally {
+      this.historyReads -= 1
+    }
   }
+
+  /** 只读的读取占用，用于池的容量裁剪；显式关闭与退出不受此标记阻止。 */
+  hasHistoryReads(): boolean { return this.historyReads > 0 }
 
   /** 确认只影响未确认窗口；确认失败不回退已展示内容。 */
   async ackProjection(seq: number): Promise<void> {
@@ -684,13 +702,13 @@ export class SdkHostManager {
   /**
    * 空闲回收：关闭宿主进程但保留管理器可重用（不进入退出状态，也不解除占用）。
    * 会话身份与投影线索保留在快照里，下一次需要宿主的动作经 `ensureStarted()` 重建进程并重绑会话。
-   * 有在途提交或结果未知时不回收（返回 false），由调用方重新计时；关闭未确认时抛错，不假装成功。
+   * 有在途读取、提交或结果未知时不回收（返回 false），由调用方重新计时；关闭未确认时抛错，不假装成功。
    */
   async suspend(): Promise<boolean> {
     if (this.shuttingDown) throw new SdkHostError('HOST_CLOSED', '应用正在退出，不能回收 SDK 宿主。')
+    if (this.historyReads > 0 || this.sessionSubmission !== null || this.uncertainOperationId !== null) return false
     const record = this.active
     if (record === null) return true
-    if (this.sessionSubmission !== null || this.uncertainOperationId !== null) return false
     this.cancelRecovery()
     // 先把宿主状态收回到空闲：否则关闭过程中的会话失效会被页面读成「正在启动」。
     this.publish({ state: 'idle', hostId: null, sdkVersion: null, lastError: null })
@@ -701,13 +719,13 @@ export class SdkHostManager {
   }
 
   /**
-   * 是否适合回收：镜像空闲、无在途提交、无结果未知，也不处于需要重建上下文的状态。
+   * 是否适合回收：镜像空闲、无在途读取或提交、无结果未知，也不处于需要重建上下文的状态。
    * 只读已推送的状态，不向宿主发请求；等待用户下一条消息属于空闲，等待审批与排队不属于。
    */
   isIdleForReclaim(): boolean {
     const record = this.active
     if (record === null || record.exited || !record.ready || record.closing) return false
-    if (this.sessionSubmission !== null || this.uncertainOperationId !== null) return false
+    if (this.historyReads > 0 || this.sessionSubmission !== null || this.uncertainOperationId !== null) return false
     const session = this.sessionSnapshot
     if (session.needsHostRebuild) return false
     if (session.operationId !== null) return false
