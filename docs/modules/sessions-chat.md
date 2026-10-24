@@ -22,6 +22,9 @@
 | `src/main/sessions/sdk-host-manager.ts` | utilityProcess 启动、协议请求、超时、身份和退出监督 |
 | `src/main/sessions/extension-ui-manager.ts` | 扩展 UI 投影、等待与回应管理 |
 | `src/main/sessions/prompt-input.ts` | Prompt 与图片附件边界处理 |
+| `src/main/sessions/ipc.ts` | 会话列表、打开、重载、删除、按会话读取历史，以及运行清单查询、释放与结束的通道注册 |
+| `src/main/sessions/runtime-ipc.ts` | 执行主链通道注册：状态、中止、回退、模型、压缩、Prompt、投影快照与确认 |
+| `src/main/sessions/extension-ui-ipc.ts` | 扩展交互通道注册：对话、通知与 widget 快照读取及应答提交 |
 | `src/sdk-host/index.ts` | 宿主入口、初始化、授权回应与控制／生命周期分派 |
 | `src/sdk-host/protocol.ts` | 主进程和 SDK 宿主的版本化消息、请求与目标校验 |
 | `src/sdk-host/session-runtime.ts` | 官方 SDK 会话、运行请求、订阅、回退／压缩及内置扩展装配 |
