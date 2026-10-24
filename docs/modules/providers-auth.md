@@ -55,6 +55,7 @@
 | --- | --- | --- |
 | 登录／退出 | 模型页 → auth Store／服务 → IPC → AuthManager → 辅助进程 → 官方 SDK | agent 目录 `auth.json`；页面只接收状态与提示 |
 | 定义供应商 | 条目弹层 → models-config Store／服务 → IPC → ModelsConfigManager | agent 目录 `models.json`；按单个 provider 修改 |
+| 删除供应商 | 展开区危险操作 → 确认对话框 → models-config Store／服务 → IPC → ModelsConfigManager | agent 目录 `models.json`；只删该 provider 的条目 |
 | 默认模型 | 选择器 → Runtime Store → pi-settings 服务 → PiSettingsManager | agent 目录 `settings.json` 的默认模型字段 |
 | 当前模型 | 选择器 → Runtime 命令 → 主进程 → 已绑定 SDK 会话 | 当前会话状态，不等同于写默认模型 |
 | 显示／隐藏 | 供应商展开区 → Runtime Store → preferences 服务／管理器 | Desktop 配置的隐藏模型列表 |

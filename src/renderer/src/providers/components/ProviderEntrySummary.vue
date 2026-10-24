@@ -54,7 +54,7 @@ const summary = computed(() => {
     </p>
     <template v-else-if="summary === null">
       <p class="provider-entry-summary__message">
-        这个供应商不在 models.json 的 providers 里，用的是 Pi 内置定义。还没有 models.json 时，新增供应商会创建它。
+        这个供应商不在 models.json 的 providers 里，用的是 Pi 内置定义，无法在应用内删除。还没有 models.json 时，新增供应商会创建它。
       </p>
       <AppButton variant="compact" :disabled="busy" @click="emit('create')">
         添加到 models.json

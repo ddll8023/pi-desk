@@ -127,14 +127,6 @@ function setAllVisible(visible: boolean): void {
       <section class="provider-detail-section">
         <div class="provider-detail-section__heading">
           <h3 class="provider-detail-section__title">端点与模型</h3>
-          <AppButton
-            v-if="row.entry !== null"
-            variant="quiet-danger"
-            :disabled="configBusy"
-            @click="emit('removeEntry')"
-          >
-            从 models.json 删除
-          </AppButton>
         </div>
         <p v-if="actionError !== null" role="alert" class="status-notice status-notice-error">
           {{ actionError }}
@@ -147,6 +139,15 @@ function setAllVisible(visible: boolean): void {
           @edit="emit('edit')"
           @create="emit('create')"
         />
+        <!-- 删除是本区块的最后一个动作，单独占一行，不与编辑入口抢同一行。 -->
+        <div v-if="row.entry !== null" class="provider-detail__danger">
+          <AppButton variant="quiet-danger" :disabled="configBusy" @click="emit('removeEntry')">
+            删除这个自定义供应商
+          </AppButton>
+          <p class="provider-detail__danger-hint">
+            只从 models.json 移除这一个条目，不影响其他供应商；Pi 内置或扩展提供的供应商无法在这里删除。
+          </p>
+        </div>
       </section>
 
       <section class="provider-detail-section">
@@ -292,6 +293,24 @@ function setAllVisible(visible: boolean): void {
   display: flex;
   flex-wrap: wrap;
   gap: 0.375rem;
+}
+
+.provider-detail__danger {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem 0.75rem;
+  margin-top: 0.75rem;
+  border-top: 1px solid var(--color-desk-line);
+  padding-top: 0.75rem;
+}
+
+.provider-detail__danger-hint {
+  flex: 1 1 20rem;
+  margin: 0;
+  color: var(--color-desk-muted);
+  font-size: 0.6875rem;
+  line-height: 1.55;
 }
 
 .provider-detail__error {

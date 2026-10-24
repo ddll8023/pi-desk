@@ -259,7 +259,7 @@ async function confirmDelete(): Promise<void> {
   const removed = await modelsConfigStore.remove(id)
   pendingDelete.value = null
   if (!removed) return
-  notice.value = `已删除供应商 ${id}；改动需要重新加载 Runtime 后才会生效。`
+  notice.value = `已删除供应商 ${id} 的 models.json 条目；若它还有保存在 auth.json 里的凭据，仍会留在清单上。改动需要重新加载 Runtime 后才会生效。`
   if (expandedId.value === id) expandedId.value = null
 }
 
