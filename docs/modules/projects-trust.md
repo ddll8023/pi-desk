@@ -28,7 +28,7 @@
 
 ## 公共与跨模块引用
 
-- [F-sidebar](shared.md#f-sidebar项目会话树混合)：`src/renderer/src/projects/components/ProjectSidebar.vue`、`src/renderer/src/projects/sidebar-tree.ts` 承载项目与会话混合视图。
+- [F-sidebar](shared.md#f-sidebar项目会话树混合)：`src/renderer/src/projects/components/ProjectSidebar.vue`、`src/renderer/src/projects/components/ProjectRow.vue`、`src/renderer/src/projects/components/SessionRow.vue`、`src/renderer/src/projects/components/SessionStatusMark.vue`、`src/renderer/src/projects/sidebar-tree.ts` 承载项目与会话混合视图。
 - [F-assembly](shared.md#f-assembly进程与页面组装混合)：`src/main/projects/ipc.ts` 的 `registerProjectHandlers`、`src/main/trust/ipc.ts` 的 `registerTrustHandlers` 与已登记项目解析；候选添加和移除确认的待确认目标在 `src/renderer/src/projects/stores/project.ts`，经 `src/renderer/src/shell/components/AppDialogHost.vue` 呈现。
 - [F-config](shared.md#f-configdesktop-配置混合)：`src/main/config/desktop-config-store.ts` 是项目列表、当前项目、信任决定的唯一持久化入口。
 - [会话](sessions-chat.md)：`src/main/sessions/session-run-registry.ts`、`src/main/sessions/sdk-runtime-bridge.ts` 提供占用查询、前台选择与项目范围关闭。

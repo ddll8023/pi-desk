@@ -61,8 +61,11 @@
 
 | 文件 | 范围与消费者 |
 | --- | --- |
-| `src/renderer/src/projects/components/ProjectSidebar.vue` | 项目树、展开、会话与运行状态、项目／会话菜单；应用外壳接收移除和删除意图，会话及工作区模块接收打开意图 |
-| `src/renderer/src/projects/sidebar-tree.ts` | 将项目、项目内会话列表、运行实例与读取状态转换为侧栏树数据 |
+| `src/renderer/src/projects/components/ProjectSidebar.vue` | 侧栏编排：滚动、分页、当前会话可见性、展开折叠、项目／会话菜单；应用外壳接收移除和删除意图，会话及工作区模块接收打开意图 |
+| `src/renderer/src/projects/components/ProjectRow.vue` | 项目行排布（展开控件、名称与路径、折叠时的活动标记、新建与更多操作），动作以事件交回编排层 |
+| `src/renderer/src/projects/components/SessionRow.vue` | 会话行与未绑定实例行的统一排布：状态槽、标题与状态 chip、相对时间、悬停操作 |
+| `src/renderer/src/projects/components/SessionStatusMark.vue` | 运行状态标记：执行中为旋转环，需留意为实心点加光晕，空闲为中性点；装饰性输出，读屏文案由调用方提供 |
+| `src/renderer/src/projects/sidebar-tree.ts` | 将项目、项目内会话列表、运行实例与读取状态转换为侧栏树数据，并给出状态文案、chip 与视觉分级映射 |
 
 项目节点不拥有会话文件；删除项目记录、删除会话和关闭标签是不同动作。此处同时服务项目与会话，不登记为纯通用树控件。
 

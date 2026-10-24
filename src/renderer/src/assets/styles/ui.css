@@ -412,12 +412,14 @@
     --sidebar-surface: #fafaf9;
     --sidebar-hover: #f0f1f0;
     --sidebar-selected: #e5eceb;
+    /* 当前会话的底色：比悬停明显一档（对侧栏底约 1.27:1），但仍不抢强调色竖条与标题字重的表达。 */
+    --sidebar-selected-strong: #d5e4e5;
     --sidebar-ink: #24282b;
     --sidebar-muted: #737b83;
     --sidebar-line: #e6e8e7;
     --sidebar-focus: var(--color-desk-accent);
-    /* 单个项目的会话列表高度上限：8 行（8×26px 行高 + 7×1px 间隔）；超出在该项目内滚动。 */
-    --sidebar-session-list-max-height: 216px;
+    /* 单个项目的会话列表高度上限：8 行（8×28px 行高 + 7×1px 间隔）；超出在该项目内滚动。 */
+    --sidebar-session-list-max-height: 231px;
     --sidebar-duration-hover: 140ms;
     --sidebar-duration-collapse: 290ms;
     --sidebar-ease: cubic-bezier(0.22, 1, 0.36, 1);
@@ -428,6 +430,7 @@
       --sidebar-surface: color-mix(in srgb, var(--color-desk-surface) 85%, var(--color-desk-canvas));
       --sidebar-hover: var(--color-desk-surface-subtle);
       --sidebar-selected: var(--color-desk-accent-soft);
+      --sidebar-selected-strong: color-mix(in srgb, var(--color-desk-accent) 22%, var(--color-desk-surface));
       --sidebar-ink: var(--color-desk-ink);
       --sidebar-muted: var(--color-desk-muted);
       --sidebar-line: color-mix(in srgb, var(--color-desk-line) 70%, transparent);
@@ -444,7 +447,7 @@
     outline: 2px solid var(--sidebar-focus);
     outline-offset: -2px;
   }
-.app-sidebar.is-collapsed :is(.sidebar-tree-copy, .sidebar-session-title, .sidebar-session-meta, .project-sidebar-heading, .project-sidebar-add, .sidebar-footer-label, .sidebar-empty, .sidebar-notice, .sidebar-list-notice, .sidebar-load-more) {
+.app-sidebar.is-collapsed :is(.sidebar-tree-copy, .sidebar-session-title, .sidebar-session-chip, .sidebar-session-meta, .project-sidebar-heading, .project-sidebar-add, .sidebar-footer-label, .sidebar-empty, .sidebar-notice, .sidebar-list-notice, .sidebar-load-more) {
     opacity: 0;
     transform: translateX(-4px);
   }
@@ -661,7 +664,7 @@
       transition: none !important;
     }
 
-    .app-sidebar.is-collapsed :is(.sidebar-tree-copy, .sidebar-session-title, .sidebar-session-meta, .project-sidebar-heading, .project-sidebar-add, .sidebar-footer-label, .sidebar-empty, .sidebar-notice, .sidebar-list-notice, .sidebar-load-more) {
+    .app-sidebar.is-collapsed :is(.sidebar-tree-copy, .sidebar-session-title, .sidebar-session-chip, .sidebar-session-meta, .project-sidebar-heading, .project-sidebar-add, .sidebar-footer-label, .sidebar-empty, .sidebar-notice, .sidebar-list-notice, .sidebar-load-more) {
       transform: none;
     }
 

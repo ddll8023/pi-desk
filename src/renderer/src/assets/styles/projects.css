@@ -90,7 +90,8 @@
 .sidebar-list-move {
     transition: transform 220ms var(--sidebar-ease);
   }
-/* 行是悬停与选中的承载体：左侧引导控件与右侧信息槽都是它的网格列。 */
+/* 行是悬停与选中的承载体：行首引导列、主体列与尾部信息列都是它的网格列。
+   项目行行首是展开控件，会话行行首是状态槽，因此两行不共用同一套列宽。 */
 .sidebar-tree-row {
     position: relative;
     isolation: isolate;
@@ -106,13 +107,14 @@
     min-height: 30px;
   }
 .sidebar-tree-row.is-session {
-    grid-template-columns: minmax(0, 1fr) auto;
-    min-height: 26px;
+    grid-template-columns: 16px minmax(0, 1fr) auto;
+    min-height: 28px;
   }
 .sidebar-tree-row:is(:hover, :focus-within, .is-menu-open) {
     background: var(--sidebar-hover);
   }
-/* 选中底色仅由共享背景承担，避免瞬时底色与移动背景同时出现。 */
+/* 选中底色仅由共享背景承担，避免瞬时底色与移动背景同时出现；
+   共享背景本身用「比悬停深一档的底色 + 左竖条」两条通道表达选中。 */
 .sidebar-tree-row.is-active {
     background: transparent;
   }
@@ -132,8 +134,9 @@
     position: absolute;
     z-index: -1;
     inset: 0;
-    background: var(--sidebar-selected);
-    /* 底色与侧栏底色接近（亮色约 1.15:1、暗色约 1.21:1），当前会话靠这条竖条区分。 */
+    border-radius: 5px;
+    background: var(--sidebar-selected-strong);
+    /* 选中靠底色与左竖条两条通道同时表达：只靠竖条时，长列表里很难一眼找到自己在哪里。 */
     box-shadow: inset 2px 0 0 0 var(--color-desk-accent);
     pointer-events: none;
     transition: opacity var(--sidebar-duration-hover) ease;
@@ -184,8 +187,98 @@
     padding: 4px 6px 4px 4px;
   }
 .sidebar-tree-item.is-session {
-    min-height: 26px;
-    padding: 3px 6px;
+    min-height: 28px;
+    /* 左侧 0：状态槽已经占位，再加内边距会把标题推得太远；右侧留给时间与悬停操作。 */
+    padding: 4px 6px 4px 0;
+    gap: 6px;
+  }
+/* 状态槽：固定在行首 16px 列，会话标题无论多长都不遮挡状态。 */
+.sidebar-session-status {
+    display: flex;
+    width: 16px;
+    height: 20px;
+    align-items: center;
+    justify-content: center;
+  }
+/*
+   * 运行状态标记：形状承担主要区分（旋转环／实心点／中性点），颜色是第二通道。
+   * 实心点用 20% 同色光晕，让它在 28px 行高里与旋转环的视觉重量相当。
+   */
+.sidebar-status-mark {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    color: var(--sidebar-muted);
+  }
+.sidebar-status-mark.is-busy {
+    color: var(--color-desk-accent);
+  }
+.sidebar-status-mark.is-attention {
+    color: var(--color-desk-warning);
+  }
+.sidebar-status-mark.is-danger {
+    color: var(--color-desk-danger);
+  }
+.sidebar-status-mark.is-idle {
+    color: var(--sidebar-muted);
+  }
+.sidebar-status-core {
+    display: block;
+    border-radius: 9999px;
+    background: currentColor;
+  }
+/* 需要留意与阻塞态在核心外多一层同色光晕：形状不变，视觉重量明显高于空闲点。 */
+.sidebar-status-mark:is(.is-attention, .is-danger) .sidebar-status-core {
+    box-shadow: 0 0 0 2px color-mix(in srgb, currentColor 20%, transparent);
+  }
+.sidebar-status-ring {
+    display: block;
+    overflow: visible;
+  }
+.sidebar-status-ring-motion {
+    transform-origin: center;
+    animation: sidebar-status-ring-spin 1.5s linear infinite;
+  }
+.sidebar-status-ring-track,
+  .sidebar-status-ring-arc {
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2.4;
+    stroke-linecap: round;
+  }
+.sidebar-status-ring-track {
+    opacity: 0.25;
+  }
+.sidebar-status-ring-arc {
+    stroke-dasharray: 12 150;
+    animation: sidebar-status-ring-dash 1.5s ease-in-out infinite;
+  }
+@keyframes sidebar-status-ring-spin {
+    to { transform: rotate(360deg); }
+  }
+@keyframes sidebar-status-ring-dash {
+    0% { stroke-dasharray: 12 150; stroke-dashoffset: 0; }
+    50% { stroke-dasharray: 24 150; stroke-dashoffset: -6; }
+    100% { stroke-dasharray: 12 150; stroke-dashoffset: 0; }
+  }
+/* 减少动效：环停在固定弧段上，仍读得出“正在进行”。 */
+@media (prefers-reduced-motion: reduce) {
+    .sidebar-status-ring-motion,
+    .sidebar-status-ring-arc {
+      animation: none;
+    }
+
+    .sidebar-status-ring-arc {
+      stroke-dasharray: 18 150;
+      stroke-dashoffset: -3;
+    }
+  }
+/* 项目行折叠时的活动提示：与行内状态点同形状，只是小一档。 */
+.sidebar-project-activity {
+    display: flex;
+    align-items: center;
+    justify-content: center;
   }
 /* 层级引导线：只在展开的会话块左侧出现，是树里唯一的结构性装饰。 */
 .sidebar-tree-children {
@@ -248,7 +341,7 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-/* 会话行单行：标题占满可用宽度，右侧只留状态与时间。 */
+/* 会话行单行：标题占满可用宽度，右侧只留时间。 */
 .sidebar-session-title {
     min-width: 0;
     flex: 1 1 auto;
@@ -261,13 +354,42 @@
 .sidebar-tree-row.is-active .sidebar-session-title {
     font-weight: 500;
   }
+/*
+   * 状态 chip：只对需要留意的状态出现（正在执行／等待回应／阻塞）。
+   * 它是文案通道，颜色只作辅助；字号比标题小一档且不参与压缩，标题先截断。
+   */
+.sidebar-session-chip {
+    flex: none;
+    border-radius: 4px;
+    padding: 0 4px;
+    font-size: 10px;
+    font-weight: 500;
+    line-height: 15px;
+    white-space: nowrap;
+    color: var(--sidebar-muted);
+    background: color-mix(in srgb, var(--sidebar-ink) 7%, transparent);
+  }
+.sidebar-session-chip.is-running,
+  .sidebar-session-chip.is-transitioning {
+    color: var(--color-desk-accent);
+    background: color-mix(in srgb, var(--color-desk-accent) 14%, transparent);
+  }
+.sidebar-session-chip.is-waiting {
+    color: var(--color-desk-warning);
+    background: color-mix(in srgb, var(--color-desk-warning) 16%, transparent);
+  }
+.sidebar-session-chip.is-unconfirmed,
+  .sidebar-session-chip.is-failed {
+    color: var(--color-desk-danger);
+    background: color-mix(in srgb, var(--color-desk-danger) 14%, transparent);
+  }
 /* 分叉来源只用字形占位，完整来源在操作浮层里；它不参与压缩。 */
 .sidebar-session-fork {
     flex: none;
     color: var(--sidebar-muted);
     font-size: 11px;
   }
-/* 右侧信息槽：状态点与元信息常显，操作按钮占用同一列里的固定宽度，悬停时才出现。 */
+/* 右侧信息槽：时间常显，操作按钮占用同一列里的固定宽度，悬停时才出现。 */
 .sidebar-row-tail {
     display: flex;
     min-width: 0;

@@ -38,7 +38,7 @@ export interface UnboundSessionRun {
  * 展示优先级：未确认退出与宿主失败是阻塞态，优先于一切活动状态；
  * 等待用户回应比「正在执行」更值得提示，因为它需要用户动作才能继续。
  * 已回收（宿主进程被空闲释放但会话仍被占用）与真正就绪分开：前者下一次发送会重建宿主。
- * 侧栏树与状态点都复用这一份判定，不在展示层重复推导。
+ * 侧栏树与状态标记都复用这一份判定，不在展示层重复推导。
  */
 export function sessionRunBadge(run: SessionRunState): SessionRunBadge {
   if (run.phase === 'unconfirmed') return 'unconfirmed'

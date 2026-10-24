@@ -4,8 +4,8 @@
  *
  * 归属规则：会话只出现在自己项目的节点下；尚未落盘的当前会话与已登记但还没有文件条目的运行实例
  * 按运行实例报告的归属项目放置，因此切换项目后不会出现张冠李戴的条目。
- * 文案规则：会话行右侧只保留一项信息——需要用户动作或正在工作的状态优先于时间，
- * 已就绪的驻留实例保持安静，仍显示相对时间；完整时间与分叉来源留在操作浮层里。
+ * 文案规则：会话行分三格——左侧状态槽（形状区分运行中／需留意／空闲）、标题后的状态 chip
+ * （只在需要留意时出现）、行尾相对时间；完整时间与分叉来源留在操作浮层里。
  * 折叠规则：回退（Pi 的 fork）保留来源文件，分叉链只展示最新一条；当前会话与仍承载运行实例的会话不折叠。
  * 分页规则：会话列表是“最近 limit 条”的窗口而不是全量，节点同时带上窗口外的剩余数与加载状态，
  * 侧栏据此展示“加载更多”；占位条目只用于尚未落盘的会话，不用“不在已加载窗口里”判断。
@@ -20,7 +20,10 @@ import { sessionRunBadge } from '../sessions/stores/session-runs'
 import type { SessionRunBadge, UnboundSessionRun } from '../sessions/stores/session-runs'
 import type { SessionViewState } from '../sessions/stores/session'
 
-/** 各会话的运行状态文案；等待回应、未确认退出与已回收必须与普通空闲区分开。 */
+/**
+ * 各会话的运行状态文案，也是状态标记的悬停提示与读屏文案。
+ * 这里只给文案，形状与颜色由 `sessionRunTone` 决定；`suspended` 归入安静态，与 `ready` 同属空闲。
+ */
 export const SESSION_RUN_LABELS: Record<SessionRunBadge, string> = {
   unconfirmed: '上次退出未确认',
   failed: '宿主已失败',
@@ -29,6 +32,41 @@ export const SESSION_RUN_LABELS: Record<SessionRunBadge, string> = {
   ready: '已就绪',
   suspended: '已回收',
   transitioning: '正在切换'
+}
+
+/**
+ * 会话状态的视觉分级：颜色之外还给出形状与文案，静止的点与转动的环不再只靠色相区分。
+ * busy 是唯一随时间变化的形状（旋转环），attention/danger 用实心点加光晕，idle 保持安静。
+ */
+export type SessionRunTone = 'busy' | 'attention' | 'danger' | 'idle'
+
+const SESSION_RUN_TONES: Readonly<Record<SessionRunBadge, SessionRunTone>> = {
+  running: 'busy',
+  transitioning: 'busy',
+  waiting: 'attention',
+  unconfirmed: 'danger',
+  failed: 'danger',
+  ready: 'idle',
+  suspended: 'idle'
+}
+
+/** 运行状态对应的视觉分级；侧栏状态标记按它选择形状与颜色令牌。 */
+export function sessionRunTone(badge: SessionRunBadge): SessionRunTone {
+  return SESSION_RUN_TONES[badge]
+}
+
+/**
+ * 需要用户留意时附在标题后的短标签；已就绪、已回收与切换中不占位，
+ * 行尾因此始终留给相对时间，不再出现“状态词顶掉时间”的歧义。
+ */
+export const SESSION_RUN_CHIPS: Readonly<Record<SessionRunBadge, string | null>> = {
+  running: '正在执行',
+  waiting: '等待回应',
+  unconfirmed: '上次退出未确认',
+  failed: '宿主已失败',
+  transitioning: null,
+  ready: null,
+  suspended: null
 }
 
 /** 项目节点上只展示需要留意的状态；已就绪、已回收与切换中不占用折叠项目的提示位。 */
@@ -42,19 +80,30 @@ const PROJECT_ACTIVITY_RANK: Readonly<Record<SessionRunBadge, number>> = {
   ready: 0
 }
 
-/** 侧栏会话行；`title` 与 `meta` 已是可直接展示的文案。 */
+/** 侧栏会话行；`title`、`meta` 与 `chip` 已是可直接展示的文案。 */
 export interface SidebarSessionRow {
   readonly session: SessionSummary
   readonly title: string
-  /** 右侧元信息：状态短词或相对时间；标题因此获得整行宽度。 */
+  /** 行尾元信息：始终是相对时间，状态改由左侧状态槽与标题后的 chip 表达。 */
   readonly meta: string
   readonly badge: SessionRunBadge | null
+  /** 需要留意的状态短标签；其余状态为 null，标题因此独占可用宽度。 */
+  readonly chip: string | null
   /** 分叉来源标题；没有来源或来源不可读时为 null。 */
   readonly forkedFrom: string | null
   /** 没有会话文件条目（尚未落盘的新会话或未绑定实例），不提供基于文件的操作。 */
   readonly pending: boolean
   /** 阻塞态（未确认退出或宿主失败），需要用户显式释放运行实例。 */
   readonly needsRelease: boolean
+}
+
+/** 尚未绑定会话的运行实例行：没有会话身份、时间与分叉来源，也没有可操作内容。 */
+export interface SidebarUnboundRow {
+  readonly runId: number
+  readonly title: string
+  readonly meta: string
+  readonly badge: SessionRunBadge
+  readonly chip: string | null
 }
 
 /** 一个项目节点及其会话；`expanded` 为假时不渲染会话行。 */
@@ -66,7 +115,7 @@ export interface SidebarProjectNode {
   readonly activity: SessionRunBadge | null
   readonly view: SessionViewState
   readonly sessions: readonly SidebarSessionRow[]
-  readonly unboundRuns: readonly UnboundSessionRun[]
+  readonly unboundRuns: readonly SidebarUnboundRow[]
   readonly skipped: number
   /** 窗口之外仍未读取的会话文件数；大于 0 时侧栏提供“加载更多”。 */
   readonly remaining: number
@@ -78,7 +127,8 @@ export interface SidebarProjectNode {
 
 export interface SidebarTreeInput {
   readonly projects: readonly Project[]
-  readonly currentProjectPath: string | null
+  /** 当前项目身份；节点选中态与未落盘会话的归属都按它判断，不再重复比较路径。 */
+  readonly currentProjectId: string | null
   readonly expandedProjects: readonly string[]
   readonly sessionsOf: (projectPath: string) => readonly SessionSummary[]
   readonly viewOf: (projectPath: string) => SessionViewState
@@ -137,7 +187,7 @@ function projectActivity(runs: readonly SessionRunState[]): SessionRunBadge | nu
   return found
 }
 
-/** 会话行：状态优先于时间；未落盘的会话没有文件时间，显示进行中而不是伪造时间。 */
+/** 会话行：行尾始终是时间（未落盘会话给“进行中”而不是伪造时间），状态在行首与标题后。 */
 function toSessionRow(
   session: SessionSummary,
   options: {
@@ -150,21 +200,36 @@ function toSessionRow(
   }
 ): SidebarSessionRow {
   const badge = options.run === null ? null : sessionRunBadge(options.run)
-  const meta = badge !== null && badge !== 'ready'
-    ? SESSION_RUN_LABELS[badge]
-    : options.unsaved
-      ? '进行中'
-      : formatRelativeTime(session.updatedAt, options.now)
+  // 时间始终在行尾，状态改由左侧状态槽与 chip 承担：同一格既放时间又放状态词时，
+  // 正在执行的会话看起来只是“时间变成了文字”，区分度最低。
+  const meta = options.unsaved
+    ? '进行中'
+    : formatRelativeTime(session.updatedAt, options.now)
   return {
     session,
     title: sessionTitle(session, options.currentSessionId),
     meta,
     badge,
+    chip: badge === null ? null : SESSION_RUN_CHIPS[badge],
     forkedFrom: session.forkedFromSessionId === null
       ? null
       : options.forkLabelOf(session.forkedFromSessionId),
     pending: options.pending,
     needsRelease: badge === 'unconfirmed' || badge === 'failed'
+  }
+}
+
+/**
+ * 未绑定实例的展示数据：与已落盘会话同形状，侧栏因此用同一个行组件渲染。
+ * 它没有会话文件，也就没有可靠的时间，行尾统一给「尚未发送」而不是把状态词放进时间位。
+ */
+function toUnboundRow(run: UnboundSessionRun): SidebarUnboundRow {
+  return {
+    runId: run.runId,
+    title: '未命名会话',
+    meta: '尚未发送',
+    badge: run.badge,
+    chip: SESSION_RUN_CHIPS[run.badge]
   }
 }
 
@@ -200,7 +265,7 @@ export function buildSidebarTree(input: SidebarTreeInput): readonly SidebarProje
     // 判据是“确实尚未落盘”（由运行状态给出），不是“不在已加载窗口里”：列表分页后，
     // 后者会把窗口外已落盘的历史会话误报成占位行。
     if (currentSessionId !== null && currentSessionId === input.unsavedSessionId
-      && samePath(input.currentProjectPath, project.path) && !listedIds.has(currentSessionId)) {
+      && project.id === input.currentProjectId && !listedIds.has(currentSessionId)) {
       const session = placeholderSession(currentSessionId)
       rows.push(toSessionRow(session, {
         run: runOf(currentSessionId), pending: true, unsaved: true, currentSessionId, now, forkLabelOf
@@ -235,12 +300,12 @@ export function buildSidebarTree(input: SidebarTreeInput): readonly SidebarProje
 
     return {
       project,
-      current: samePath(input.currentProjectPath, project.path),
+      current: project.id === input.currentProjectId,
       expanded: input.expandedProjects.includes(project.path),
       activity: projectActivity(projectRuns),
       view: input.viewOf(project.path),
       sessions: rows,
-      unboundRuns: unbound.filter(run => samePath(run.projectPath, project.path)),
+      unboundRuns: unbound.filter(run => samePath(run.projectPath, project.path)).map(toUnboundRow),
       skipped: counts.skipped,
       remaining: counts.remaining,
       loadingMore: input.loadingMoreOf(project.path),
