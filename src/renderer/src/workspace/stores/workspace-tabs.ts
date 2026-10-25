@@ -7,8 +7,8 @@
  * 原实例结束后才允许首次发送，新会话实际绑定前不因标签聚焦预建宿主。
  * 标签只计算打开意图（`ChatOpenIntent`），实际提交由会话能力（`session.openIntent`）与外层编排执行，
  * 标签侧不反向调用会话的打开动作。
- * 顺序、活动标签、对话与文件标签的重命名、以及「有新回复」标记只留在内存里，不跨应用重启恢复：
- * 重启后每个项目回到一个空对话标签。终端标签的命名是例外：它交给守护进程随会话记录落盘。
+ * 顺序、活动标签、对话与文件标签的重命名、以及「有新回复」标记只留在内存里，不跨应用重启恢复；
+ * 项目切换时不自动补建空对话标签。终端标签的命名是例外：它交给守护进程随会话记录落盘。
  *
  * 标签键是页面内编号，只在渲染端有效：对话标签记会话身份与它承载的运行实例，终端标签记终端标识，
  * 文件标签记一个编号（路径与编辑状态由 `project-editor` 持有）。终端清单是主进程的真相，因此终端标签
@@ -124,8 +124,6 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
   const pendingCloseKey = ref<string | null>(null)
   /** 上一次广播时正在执行的实例：只有由执行中变为已结束才算一轮回复完成，初始快照不产生标记。 */
   let streamingRunIds = new Set<number>()
-  /** 已经自动补过空对话标签的项目；用户显式关掉全部对话标签后不再自动补回。 */
-  const preparedProjects = new Set<string>()
   const closingTabs = new Set<string>()
   const newChats = ref<Readonly<Record<string, NewChatState>>>({})
   const newChatRequests = new Map<string, Promise<NewChatInTabResult>>()
@@ -286,7 +284,7 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     }
   }
 
-  /** 页面卸载时释放订阅；标签只留在内存里，重新挂载后回到一个空对话标签。 */
+  /** 页面卸载时释放订阅；标签只留在内存里，重新挂载后不恢复标签。 */
   function dispose(): void {
     stopProjectsWatch?.()
     stopProjectsWatch = null
@@ -298,19 +296,6 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     stopNewChatWatch = null
     newChats.value = {}
     newChatRequests.clear()
-  }
-
-  /**
-   * 首次进入某个项目时补一个空对话标签：重启后回到一个空对话标签，而不是一片空白。
-   * 只在本次应用运行内补一次，用户显式关掉全部对话标签后不再自动补回。
-   */
-  function prepareProject(projectPath: string): void {
-    if (preparedProjects.has(projectPath)) return
-    preparedProjects.add(projectPath)
-    if (hasChatTab(projectPath)) return
-    const key = createChatTab(projectPath)
-    writeOrder(projectPath, [key, ...(orders.value[projectPath] ?? [])])
-    setActive(projectPath, key)
   }
 
   /** 切换活动标签；活动对话标签对应前台实例，切过去时返回把它切到前台的打开意图。 */
@@ -653,7 +638,6 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
 
   /** 项目从列表移除后丢掉它的标签记录；只清展示，不动任何终端或运行实例。 */
   function dropProject(projectPath: string): void {
-    preparedProjects.delete(projectPath)
     for (const key of orders.value[projectPath] ?? []) {
       if (isChatKey(key)) forgetChatTab(key)
     }
@@ -799,8 +783,7 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
   }
 
   /**
-   * 项目切换后的标签反应：失效旧的打开选择、首次进入项目时补一个空对话标签，
-   * 并在需要时返回把活动对话标签切到前台的意图。
+   * 项目切换后的标签反应：失效旧的打开选择，并在需要时返回把活动对话标签切到前台的意图。
    * 会话自己发起的项目切换（打开会话时）不能当作新的用户选择，也不重复提交打开。
    */
   function onProjectChanged(projectPath: string | null): ChatOpenIntent | null {
@@ -808,7 +791,6 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
       || (projectPath !== null && session.openingProjectPath === projectPath)
     if (!openingHere) session.invalidateOpenSelection()
     if (projectPath === null) return null
-    prepareProject(projectPath)
     const key = activeTabs.value[projectPath] ?? null
     if (openingHere || key === null || !isChatKey(key)) return null
     return focusIntent(projectPath, key)
@@ -904,10 +886,6 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
       if (matches(key)) return key
     }
     return null
-  }
-
-  function hasChatTab(projectPath: string): boolean {
-    return (orders.value[projectPath] ?? []).some(key => isChatKey(key) && chatTabs.value[key] !== undefined)
   }
 
   /** 移除标签键并返回接替它成为活动标签的那个键；没有可接替的标签时清空活动标签。 */
