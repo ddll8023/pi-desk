@@ -316,35 +316,15 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-/* 对话导航浮层：与标题栏同一套弹层视觉。面板头说明排序与轮次数，列表内部自己滚动，不撑高顶部栏。 */
-.chat-nav-popup {
-    position: fixed;
-    z-index: 1000;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-    border: 1px solid var(--color-desk-line-strong);
-    border-radius: var(--radius-desk-lg);
-    background: var(--color-desk-surface);
-    box-shadow: var(--shadow-desk-pop);
-    color: var(--color-desk-ink);
-  }
-/* 头部是列表的读法说明：降序与正文相反，不写明「新的在前」，列表看起来就像排坏了。 */
+/* 对话导航弹窗：外壳复用通用弹窗（.dialog-overlay / .dialog-panel / .dialog-body），
+     这里只补面板头与列表的排版。头部是列表的读法说明：降序与正文相反，不写明「新的在前」，
+     列表看起来就像排坏了。 */
 .chat-nav-header {
     display: flex;
-    flex: none;
+    flex-wrap: wrap;
     align-items: baseline;
     justify-content: space-between;
-    gap: 0.75rem;
-    border-bottom: 1px solid var(--color-desk-line);
-    padding: 0.625rem 0.75rem 0.5rem;
-  }
-.chat-nav-header-title {
-    flex: none;
-    color: var(--color-desk-muted);
-    font-size: var(--text-2xs);
-    font-weight: 600;
-    letter-spacing: 0.04em;
+    gap: 0.25rem 0.75rem;
   }
 .chat-nav-header-meta {
     overflow: hidden;
@@ -353,15 +333,15 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+/* 列表自己滚动、高度受弹窗体上限约束：轮次多时滚动条出现在列表内，弹窗头与底部操作不跟着滚。 */
 .chat-nav-list {
-    min-height: 0;
-    flex: 1;
+    max-height: min(52vh, 30rem);
     overflow-y: auto;
     overscroll-behavior: contain;
     padding: 0.25rem;
   }
 /* 条目两列：序号栏等宽右对齐，内容列吃满剩余宽度；序号是真实轮次，不是装饰编号。
-   圆角按同心取：外层 lg 12px 减列表 4px 内缩，得 md 8px。 */
+   圆角取 md：条目直接嵌在弹窗体的内边距里，不与面板边缘相邻，因此不按面板半径做同心推导。 */
 .chat-nav-entry {
     display: grid;
     grid-template-columns: 1.75rem minmax(0, 1fr);
@@ -441,29 +421,6 @@
     font-size: var(--text-2xs);
     line-height: 1.6;
     text-align: center;
-  }
-/* 浮层进场：小距离位移用快档，进快退更快；降级动态效果时直接切换。 */
-.chat-nav-enter-active {
-    transition:
-      opacity var(--motion-duration-fast) var(--motion-ease-entrance),
-      transform var(--motion-duration-fast) var(--motion-ease-entrance);
-  }
-.chat-nav-leave-active {
-    transition:
-      opacity var(--motion-duration-fast) var(--motion-ease-exit),
-      transform var(--motion-duration-fast) var(--motion-ease-exit);
-    pointer-events: none;
-  }
-.chat-nav-enter-from,
-  .chat-nav-leave-to {
-    opacity: 0;
-    transform: translateY(-4px);
-  }
-@media (prefers-reduced-motion: reduce) {
-    .chat-nav-enter-active,
-    .chat-nav-leave-active {
-      transition: none;
-    }
   }
 .app-runtime-status {
     display: inline-flex;

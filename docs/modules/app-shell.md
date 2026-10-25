@@ -6,7 +6,7 @@
 
 负责 Electron 窗口与原生标题栏集成、应用信息、Vue 挂载、设置页导航、右侧面板宿主，以及应用级启动与退出组装。主进程侧由 `src/main/window.ts` 承担窗口与标题栏实现、`src/main/window-channel.ts` 承担事件投递与广播、`src/main/app-lifecycle.ts` 承担启动与退出编排，`src/main/index.ts` 只按固定顺序转交 `app-lifecycle.ts` 装配；页面侧入口为 `src/renderer/src/main.ts`，页面根组件 `src/renderer/src/App.vue` 只装配 `shell/` 下的骨架、工作区宿主、弹层宿主与启动编排。
 
-顶部栏第一行是对话导航入口：入口是浮层面板，按新的在前列出每轮用户输入（序号、摘要、发送时间、含几个生成式界面），触发键带「当前轮／总轮数」位置小标。入口列表与当前轮由消息区发布，顶部栏只渲染面板并发出跳转意图，滚动与折叠仍由消息区执行（见[会话与聊天](sessions-chat.md)）。
+顶部栏第一行是对话导航入口：入口是模态弹窗（遮罩、居中面板、Escape 或点遮罩收起，收起后焦点回到触发键），按新的在前列出每轮用户输入（序号、摘要、发送时间、含几个生成式界面），列表内部自己滚动，键盘 ↑↓／Home／End 移动、Enter 跳转；触发键带「当前轮／总轮数」位置小标。入口列表与当前轮由消息区发布，顶部栏只渲染弹窗并发出跳转意图，滚动与折叠仍由消息区执行（见[会话与聊天](sessions-chat.md)）。
 
 不负责具体会话执行、文件读写、Git 命令或设置值的持久化。设置页只是各业务模块的导航容器，右侧面板只是文件树与 Git 视图的共同宿主。
 
@@ -22,7 +22,7 @@
 | `src/renderer/src/shell/components/WorkspaceView.vue` | 工作区：标签条、操作失败提示条、对话／终端／文件面板层与空态 |
 | `src/renderer/src/shell/components/AppDialogHost.vue` | 应用级弹层宿主：把各 Store 的待确认目标渲染成对话框，并按来源分派确认结果 |
 | `src/renderer/src/shell/use-app-startup.ts` | 展示 Store 的初始化与释放顺序、生成式参数持久化与退出落盘、项目切换与会话落盘后的补读 |
-| `src/renderer/src/shell/components/AppTitleBar.vue` | 自绘标题栏、项目与会话信息、对话跳转列表与布局切换入口 |
+| `src/renderer/src/shell/components/AppTitleBar.vue` | 自绘标题栏、项目与会话信息、对话导航弹窗与布局切换入口 |
 | `src/renderer/src/shell/components/SettingsView.vue` | 设置导航与分节内容分发；外观设置入口 |
 | `src/renderer/src/shell/components/SettingsNavIcon.vue` | 设置导航图标映射 |
 | `src/renderer/src/shell/components/RightPanel.vue` | 面板宽度与页签、文件目录和 Git 跟踪生命周期 |

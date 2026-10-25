@@ -1,6 +1,7 @@
 <!-- 全宽顶部栏：自绘窗口标题栏，呈现侧栏开关、应用名、当前会话与项目、Runtime 状态与右侧面板开关；macOS 预留原生红绿灯位。模型选择已下沉到输入坞。
-     会话簇的第一行是对话导航入口：显示当前读到的那一轮与其位置（第几轮/共几轮），点开是一个浮层面板，
+     会话簇的第一行是对话导航入口：显示当前读到的那一轮与其位置（第几轮/共几轮），点开是一个模态弹窗，
      按新的在前列出本会话每一轮的用户输入（序号、摘要、发送时间、含几个生成式界面），选中后由消息区按既有定位规则滚动。
+     弹窗与其余应用级对话框同一套外壳（遮罩、居中面板、Escape 关闭），收起方式为点遮罩或 Esc，列表内部自己滚动。
      设置页模式：两个面板都不渲染，两个开关随之隐藏，左侧是返回对话入口。 -->
 <script setup lang="ts">
 import { computed, nextTick, ref, useId, watch } from 'vue'
@@ -12,7 +13,6 @@ import type { ChatNavEntry } from '../../sessions/stores/chat-navigation'
 import { useRuntimeStore } from '../../sessions/stores/runtime'
 import { useSessionStore } from '../../sessions/stores/session'
 import { useSessionViewStore } from '../../sessions/stores/session-view'
-import { useAnchoredPopup } from '../../ui/anchored-popup'
 import AppButton from '../../ui/AppButton.vue'
 
 defineProps<{
@@ -75,7 +75,7 @@ const runtimeStatus = computed(() => {
 const projectPath = computed(() => currentProject.value?.path ?? '尚未选择项目')
 
 /**
- * 浮层里的展示行：在入口基础上补真实轮次序号（按正文顺序从 1 起）。
+ * 弹窗里的展示行：在入口基础上补真实轮次序号（按正文顺序从 1 起）。
  * 序号只用于展示，跳转仍以 `id` 为准。
  */
 interface ChatNavRow extends ChatNavEntry {
@@ -99,7 +99,7 @@ const activeOrdinal = computed(() => (
 ))
 /**
  * 触发键显示当前所在轮；没有可跳转轮次时退回会话标题，入口仍在但点开是空态。
- * 浮层按新的在前排列，键盘上下键的方向也按这个顺序：向上更新、向下更旧。
+ * 弹窗按新的在前排列，键盘上下键的方向也按这个顺序：向上更新、向下更旧。
  */
 const triggerLabel = computed(() => activeEntry.value?.label ?? sessionTitle.value)
 const triggerTitle = computed(() => (
@@ -108,26 +108,17 @@ const triggerTitle = computed(() => (
     : `${activeEntry.value?.label ?? sessionTitle.value}；点击查看本会话的对话导航，新的在前`
 ))
 
-/** 跳转浮层：宽度固定、贴住触发键左缘，浮层内部自己滚动，不撑高顶部栏。 */
+/**
+ * 跳转弹窗：外壳复用通用弹窗（.dialog-overlay / .dialog-panel），宽度取 max-w-xl，列表自己滚动，
+ * 弹窗高度不随轮次增长。收起方式为点遮罩、Esc 或底部关闭按钮，收起后焦点还给触发键。
+ */
 const highlightedId = ref<string | null>(null)
-const anchoredPopup = useAnchoredPopup({
-  width: 460,
-  minWidth: 320,
-  maxHeightCap: 520,
-  // 收起时（含点击外部）清掉高亮，下次打开重新落在当前轮。
-  onClose: () => { highlightedId.value = null }
-})
-const { trigger, popup, isOpen: expanded, position: popupPosition } = anchoredPopup
+const navOpen = ref(false)
+const trigger = ref<HTMLElement | null>(null)
+const panel = ref<HTMLElement | null>(null)
 const listbox = ref<HTMLElement | null>(null)
 const entryElements = new Map<string, HTMLElement>()
 const listboxId = `chat-nav-list-${useId()}`
-
-const popupStyle = computed(() => ({
-  left: `${popupPosition.value.left}px`,
-  top: `${popupPosition.value.top}px`,
-  width: `${popupPosition.value.width}px`,
-  maxHeight: `${popupPosition.value.maxHeight}px`
-}))
 
 function setEntryElement(id: string, element: unknown): void {
   if (element instanceof HTMLElement) entryElements.set(id, element)
@@ -150,24 +141,27 @@ function focusHighlighted(): void {
 }
 
 function openPopup(): void {
-  if (expanded.value) return
+  if (navOpen.value) return
   resetHighlight()
-  anchoredPopup.open()
-  // 条目要等浮层挂载后才有焦点对象；高亮项拿到焦点后方向键与 Enter 都在列表内完成。
+  navOpen.value = true
+  // 弹窗声明了 aria-modal，焦点先移进面板，再把高亮行作为实际操作起点；没有轮次时停在面板上，
+  // 列表容器随后由键盘用户 Tab 进入。
   void nextTick(() => {
+    panel.value?.focus()
     if (displayEntries.value.length > 0) focusHighlighted()
-    else listbox.value?.focus()
     scrollHighlightedIntoView()
   })
 }
 
 function closePopup(restoreFocus = false): void {
-  const wasOpen = anchoredPopup.close()
-  if (restoreFocus && wasOpen) void nextTick(() => trigger.value?.focus())
+  if (!navOpen.value) return
+  navOpen.value = false
+  highlightedId.value = null
+  if (restoreFocus) void nextTick(() => trigger.value?.focus())
 }
 
 function togglePopup(): void {
-  if (expanded.value) closePopup()
+  if (navOpen.value) closePopup()
   else openPopup()
 }
 
@@ -200,7 +194,7 @@ function moveToBoundary(boundary: 'newest' | 'oldest'): void {
   })
 }
 
-/** 选中一轮：把意图交给消息区（折叠轮由它先展开再定位），收起浮层并把焦点还给触发键。 */
+/** 选中一轮：把意图交给消息区（折叠轮由它先展开再定位），收起弹窗并把焦点还给触发键。 */
 function chooseEntry(id: string): void {
   chatNavigationStore.requestJump(sessionViewStore.key, id)
   closePopup(true)
@@ -252,10 +246,10 @@ function onListRef(element: unknown): void {
 
 /**
  * 列表随正文变化（新的一轮、历史回读）时校高亮：高亮行被丢弃时重新落回当前轮。
- * 高亮按 id 保留，新轮次插到顶部时仍指着原来那一轮；没有入口了则收起浮层。
+ * 高亮按 id 保留，新轮次插到顶部时仍指着原来那一轮；没有入口了则收起弹窗。
  */
 watch(navEntries, () => {
-  if (!expanded.value) return
+  if (!navOpen.value) return
   if (navEntries.value.length === 0) {
     closePopup(true)
     return
@@ -311,9 +305,9 @@ watch(navEntries, () => {
         class="app-titlebar-session"
         :title="triggerTitle"
         :disabled="currentProject === null"
-        aria-haspopup="listbox"
-        :aria-expanded="expanded"
-        :aria-controls="expanded ? listboxId : undefined"
+        aria-haspopup="dialog"
+        :aria-expanded="navOpen"
+        :aria-controls="navOpen ? listboxId : undefined"
         @click="togglePopup"
         @keydown.down.prevent="openPopup"
         @keydown.esc.prevent="closePopup(true)"
@@ -326,7 +320,7 @@ watch(navEntries, () => {
         <span class="app-titlebar-session-text">{{ triggerLabel }}</span>
         <svg
           class="app-titlebar-session-chevron"
-          :class="{ 'is-expanded': expanded }"
+          :class="{ 'is-expanded': navOpen }"
           width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true"
         >
           <path d="M2 3.5L5 6.5L8 3.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
@@ -361,56 +355,79 @@ watch(navEntries, () => {
       </svg>
     </AppButton>
 
-    <!-- 对话导航浮层：标题栏说明排序与轮次数，列表按新的在前排列；条目是序号 + 摘要 + 元信息，当前轮带强调条与文字标记。 -->
+    <!-- 对话导航弹窗：外壳与其余应用级对话框一致，点遮罩、Esc 或底部关闭按钮收起；标题栏说明排序与轮次数，
+         列表按新的在前排列；条目是序号 + 摘要 + 元信息，当前轮带强调条与文字标记。 -->
     <Teleport to="body">
-      <Transition name="chat-nav">
-        <div v-if="expanded" ref="popup" class="chat-nav-popup" :style="popupStyle">
-          <div class="chat-nav-header">
-            <span class="chat-nav-header-title">对话导航</span>
-            <span v-if="navEntries.length > 0" class="chat-nav-header-meta">
-              共 {{ navEntries.length }} 轮 · 新的在前
-            </span>
-          </div>
-          <div
-            :id="listboxId"
-            :ref="onListRef"
-            class="chat-nav-list"
-            role="listbox"
-            aria-label="对话导航"
-            :tabindex="displayEntries.length === 0 ? 0 : -1"
-            @keydown="onListKeydown"
-          >
+      <Transition name="dialog-fade">
+        <div v-if="navOpen" class="dialog-overlay" @click.self="closePopup(true)">
+          <Transition name="dialog-panel-motion" appear>
             <div
-              v-for="row in displayEntries"
-              :id="`chat-nav-${row.id}`"
-              :key="row.id"
-              :ref="(element) => setEntryElement(row.id, element)"
-              class="chat-nav-entry"
-              :class="{
-                'is-active': row.id === highlightedId,
-                'is-current': row.id === navActiveId
-              }"
-              role="option"
-              :aria-selected="row.id === navActiveId"
+              ref="panel"
+              role="dialog"
+              aria-modal="true"
+              :aria-labelledby="`${listboxId}-title`"
               tabindex="-1"
-              @mousedown.prevent
-              @click="chooseEntry(row.id)"
-              @focus="onEntryFocus(row.id)"
+              class="dialog-panel max-w-xl"
+              @keydown.esc.prevent="closePopup(true)"
             >
-              <span class="chat-nav-entry-ordinal" aria-hidden="true">{{ row.ordinal }}</span>
-              <span class="chat-nav-entry-body">
-                <span class="chat-nav-entry-text">{{ row.label }}</span>
-                <span class="chat-nav-entry-meta">
-                  <span v-if="row.time !== null" class="chat-nav-entry-time">{{ row.time }}</span>
-                  <span v-if="row.uiCount > 0">含 {{ row.uiCount }} 个生成式界面</span>
-                  <span v-if="row.id === navActiveId" class="chat-nav-entry-current">当前</span>
-                </span>
-              </span>
+              <div class="dialog-header">
+                <div class="chat-nav-header">
+                  <h2 :id="`${listboxId}-title`" class="dialog-title">对话导航</h2>
+                  <span v-if="navEntries.length > 0" class="chat-nav-header-meta">
+                    共 {{ navEntries.length }} 轮 · 新的在前
+                  </span>
+                </div>
+              </div>
+              <div class="dialog-body">
+                <div
+                  :id="listboxId"
+                  :ref="onListRef"
+                  class="chat-nav-list scroll-area"
+                  role="listbox"
+                  aria-label="对话导航"
+                  :tabindex="displayEntries.length === 0 ? 0 : -1"
+                  @keydown="onListKeydown"
+                >
+                  <div
+                    v-for="row in displayEntries"
+                    :id="`chat-nav-${row.id}`"
+                    :key="row.id"
+                    :ref="(element) => setEntryElement(row.id, element)"
+                    class="chat-nav-entry"
+                    :class="{
+                      'is-active': row.id === highlightedId,
+                      'is-current': row.id === navActiveId
+                    }"
+                    role="option"
+                    :aria-selected="row.id === navActiveId"
+                    tabindex="-1"
+                    @mousedown.prevent
+                    @click="chooseEntry(row.id)"
+                    @focus="onEntryFocus(row.id)"
+                  >
+                    <span class="chat-nav-entry-ordinal" aria-hidden="true">{{ row.ordinal }}</span>
+                    <span class="chat-nav-entry-body">
+                      <span class="chat-nav-entry-text">{{ row.label }}</span>
+                      <span class="chat-nav-entry-meta">
+                        <span v-if="row.time !== null" class="chat-nav-entry-time">{{ row.time }}</span>
+                        <span v-if="row.uiCount > 0">含 {{ row.uiCount }} 个生成式界面</span>
+                        <span v-if="row.id === navActiveId" class="chat-nav-entry-current">当前</span>
+                      </span>
+                    </span>
+                  </div>
+                  <p v-if="displayEntries.length === 0" class="chat-nav-empty">
+                    本会话还没有可跳转的对话轮次；发送第一条消息后这里会列出每一轮。
+                  </p>
+                </div>
+              </div>
+              <div class="dialog-footer">
+                <p class="mr-auto self-center text-2xs text-desk-muted">
+                  ↑↓ 移动 · Enter 跳转 · Esc 关闭
+                </p>
+                <AppButton @click="closePopup(true)">关闭</AppButton>
+              </div>
             </div>
-            <p v-if="displayEntries.length === 0" class="chat-nav-empty">
-              本会话还没有可跳转的对话轮次；发送第一条消息后这里会列出每一轮。
-            </p>
-          </div>
+          </Transition>
         </div>
       </Transition>
     </Teleport>
