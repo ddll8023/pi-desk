@@ -1,0 +1,1335 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'none'; img-src 'none'; font-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>项目地图</title>
+  <style>
+    :root { --bg:#f4f6f9; --paper:#fff; --ink:#26344b; --muted:#63738a; --line:#dfe5ef; --accent:#335fe5; --soft:#edf2ff; --mono:"SFMono-Regular",Consolas,monospace; }
+    * { box-sizing:border-box; }
+    body { margin:0; color:var(--ink); background:var(--bg); font:13px/1.7 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif; }
+    h1,h2,h3,p { margin:0; }
+    button,input,select { font:inherit; color:inherit; }
+    button { cursor:pointer; }
+    button:disabled { cursor:default; }
+    a { color:var(--accent); text-decoration:none; }
+    a:hover { text-decoration:underline; }
+    :focus-visible { outline:3px solid #7196ff; outline-offset:3px; }
+    [hidden] { display:none !important; }
+    code { font-family:var(--mono); font-size:11px; overflow-wrap:anywhere; }
+    .sr-only { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; }
+    .skip { position:fixed; top:-80px; left:16px; z-index:5; background:white; border:1px solid var(--accent); padding:8px 16px; }
+    .skip:focus { top:8px; }
+    .topbar { min-height:68px; padding:12px 24px; display:flex; align-items:center; justify-content:space-between; gap:20px; border-bottom:1px solid var(--line); background:white; }
+    .brand { display:flex; align-items:center; gap:12px; min-width:0; }
+    .brand-mark { width:34px; height:34px; flex-shrink:0; background:var(--accent); border-radius:7px; display:grid; place-items:center; color:white; font:600 17px var(--mono); }
+    .brand-title { font-size:15px; font-weight:650; }
+    .brand-sub { color:var(--muted); font:9px var(--mono); letter-spacing:1.5px; margin-top:3px; }
+    .top-right { display:flex; gap:16px; align-items:center; flex-wrap:wrap; justify-content:flex-end; }
+    .badge { font-size:10px; border:1px solid var(--line); background:#fafbfd; color:var(--muted); border-radius:4px; padding:3px 8px; }
+    #project-links { display:flex; gap:12px; flex-wrap:wrap; font-size:11px; }
+    .notice { max-width:760px; margin:48px auto; padding:24px; border:1px solid var(--line); border-radius:8px; background:white; }
+    .notice p { color:var(--muted); margin-top:8px; white-space:pre-wrap; }
+    .workspace { display:grid; grid-template-columns:208px minmax(0,1fr) 312px; min-height:calc(100vh - 68px); align-items:start; }
+    .sidebar { background:white; border-right:1px solid var(--line); padding:24px 16px; position:sticky; top:0; min-height:calc(100vh - 68px); }
+    .search { display:block; width:100%; padding:9px 10px; border:1px solid var(--line); border-radius:6px; background:#f8fafc; font-size:12px; }
+    .scope-label { display:block; margin:18px 0 6px; font-size:11px; color:var(--muted); }
+    .scope { width:100%; border:1px solid var(--line); border-radius:5px; background:white; padding:7px; font-size:12px; }
+    .scope-note { color:var(--muted); font-size:10px; margin:7px 0 20px; }
+    .nav-heading { display:flex; justify-content:space-between; color:var(--muted); font-size:11px; padding:0 8px 8px; }
+    .nav-heading span:last-child { font-family:var(--mono); font-size:10px; }
+    .module-list { display:grid; gap:3px; }
+    .module-button { display:flex; align-items:center; gap:8px; border:1px solid transparent; border-radius:6px; padding:9px 8px; background:none; width:100%; text-align:left; font-size:12px; }
+    .module-button:hover { background:#f5f7fa; }
+    .module-button[aria-pressed="true"] { background:var(--soft); color:var(--accent); border-color:#dfe7ff; }
+    .dot { display:inline-block; width:6px; height:6px; border-radius:50%; flex-shrink:0; }
+    .text-button { background:none; border:0; padding:6px 0; color:var(--accent); font-size:11px; }
+    .source-note { margin-top:24px; padding-top:16px; border-top:1px solid var(--line); font-size:11px; color:var(--muted); white-space:pre-line; }
+    .main { min-width:0; padding:32px 28px; }
+    .eyebrow { color:var(--muted); font:10px var(--mono); letter-spacing:1.4px; margin-bottom:8px; }
+    h1 { font-size:26px; line-height:1.45; font-weight:650; letter-spacing:-.5px; }
+    .intro { color:var(--muted); font-size:12px; margin-top:8px; max-width:680px; white-space:pre-line; }
+    .tabs { display:flex; gap:24px; margin:26px 0 22px; border-bottom:1px solid var(--line); overflow-x:auto; }
+    .tab { padding:0 0 12px; border:0; background:none; color:var(--muted); font-size:12px; white-space:nowrap; position:relative; }
+    .tab[aria-selected="true"] { color:var(--accent); font-weight:600; }
+    .tab[aria-selected="true"]::after { content:""; position:absolute; bottom:0; left:0; right:0; height:2px; background:var(--accent); }
+    .panel { background:white; border:1px solid var(--line); border-radius:9px; overflow:hidden; }
+    .panel-head { padding:15px 18px; display:flex; align-items:center; justify-content:space-between; gap:12px; border-bottom:1px solid #e9edf4; }
+    .panel-head h2 { font-size:13px; font-weight:600; }
+    .small { font-size:11px; color:var(--muted); }
+    .legend { display:flex; gap:12px; flex-wrap:wrap; }
+    .legend span { display:inline-flex; gap:5px; align-items:center; font-size:10px; color:var(--muted); }
+    .canvas { overflow:auto; background-color:#fbfcfe; background-image:radial-gradient(#dce4ef .7px,transparent .7px); background-size:18px 18px; padding:8px; }
+    .map-svg { display:block; width:100%; height:auto; min-width:600px; }
+    .graph-group { fill:#64748b; font-size:12px; font-weight:600; }
+    .graph-count { fill:#8a97a9; font:10px var(--mono); }
+    .node { cursor:pointer; }
+    .node-box { fill:white; stroke:#dce4ef; stroke-width:1; transition:fill .15s,stroke .15s; }
+    .node:hover .node-box { stroke:#9aaedb; }
+    .node.selected .node-box { fill:#f3f7ff; stroke:var(--accent); stroke-width:2; }
+    .node.related .node-box { stroke:#a0b6ea; }
+    .node.filtered { opacity:.15; pointer-events:none; }
+    .node.muted { opacity:.3; }
+    .node:focus { outline:none; }
+    .node:focus-visible .node-box { stroke:var(--accent); stroke-width:3; }
+    .node-name { fill:#29384f; font-size:14px; font-weight:600; }
+    .node-id { fill:#7a889b; font:10px var(--mono); }
+    .node-summary { fill:#6a7990; font-size:11px; }
+    .edge { fill:none; stroke:#97acda; stroke-width:1.6; }
+    .edge.compose { stroke-dasharray:6 4; }
+    .edge.reference { stroke-dasharray:2 4; }
+    .canvas-foot { padding:11px 18px; border-top:1px solid #e9edf4; display:flex; align-items:center; justify-content:space-between; gap:12px; color:var(--muted); font-size:11px; }
+    .edge-summary { display:flex; flex-wrap:wrap; gap:6px; margin:14px 0; }
+    .edge-chip { background:#edf1f7; border:1px solid #e0e6ef; color:#61718a; border-radius:4px; padding:3px 7px; font-size:10px; }
+    .empty { color:var(--muted); padding:24px; font-size:12px; }
+    .inspector { background:white; border-left:1px solid var(--line); min-height:calc(100vh - 68px); max-height:100vh; overflow-y:auto; position:sticky; top:0; }
+    .inspector-heading { padding:22px 22px 16px; color:var(--muted); font-size:11px; border-bottom:1px solid var(--line); }
+    .detail { padding:24px 22px; }
+    .detail-id { font:10px var(--mono); color:var(--muted); margin-bottom:8px; overflow-wrap:anywhere; }
+    .detail h2 { font-size:21px; font-weight:650; margin-bottom:12px; }
+    .detail-description { color:#5b6b83; font-size:12px; white-space:pre-line; }
+    .tags { display:flex; flex-wrap:wrap; gap:5px; margin-top:12px; }
+    .tag { padding:2px 6px; border-radius:4px; background:#f0f3f8; color:#68788f; font-size:10px; }
+    .detail-section { margin-top:24px; }
+    .detail-section h3 { color:#748299; font-size:11px; font-weight:500; margin-bottom:10px; }
+    .detail-list { padding-left:16px; margin:0; font-size:12px; color:#52637c; }
+    .detail-list li + li { margin-top:7px; }
+    .file { display:block; margin:6px 0 0; border:1px solid #e5eaf2; border-radius:5px; background:#fcfdff; padding:9px 10px; }
+    a.file:hover { background:#f5f8ff; border-color:#afc1ed; text-decoration:none; }
+    .file-label { display:block; color:#76859a; font-size:10px; margin-bottom:3px; }
+    .file code { display:block; font-size:10px; }
+    .disabled-link { color:#69798f; }
+    .link-state { display:block; font-size:10px; color:#8b7050; margin-top:4px; }
+    .resource + .resource { margin-top:12px; }
+    .resource strong { display:block; font-size:12px; font-weight:500; overflow-wrap:anywhere; }
+    .resource p { color:var(--muted); font-size:11px; margin-top:3px; white-space:pre-line; }
+    .boundary { border-left:2px solid #bdccec; background:#f6f8fc; padding:10px 12px; }
+    .related-list { display:flex; flex-wrap:wrap; gap:6px; }
+    .related-button { border:1px solid var(--line); border-radius:5px; background:white; color:#5c6f8e; padding:4px 7px; font-size:11px; text-align:left; }
+    .related-button:hover { border-color:var(--accent); color:var(--accent); }
+    .matrix-wrap { overflow:auto; }
+    table { border-collapse:collapse; width:100%; min-width:680px; table-layout:fixed; }
+    caption { text-align:left; color:var(--muted); font-size:11px; padding:16px 18px; }
+    th { text-align:left; font-size:11px; color:#718198; font-weight:500; padding:12px; background:#f8fafc; border-top:1px solid var(--line); border-bottom:1px solid var(--line); }
+    td { vertical-align:top; border-bottom:1px solid #edf1f6; padding:14px 12px; color:#61718a; font-size:11px; overflow-wrap:anywhere; }
+    tr:last-child td { border-bottom:0; }
+    tr.selected-row { background:#f5f8ff; }
+    td p + p { margin-top:5px; }
+    .matrix-button { border:0; background:none; color:#355285; font-weight:600; padding:0; text-align:left; font-size:12px; }
+    .matrix-id { color:#8794a8; font:9px var(--mono); display:block; margin-top:4px; }
+    .flow-selector { display:flex; align-items:center; gap:12px; margin-bottom:16px; }
+    .flow-selector label { color:var(--muted); font-size:12px; }
+    .flow-selector select { flex:1; min-width:0; max-width:440px; background:white; border:1px solid var(--line); border-radius:6px; padding:8px 10px; }
+    .flow-title { font-size:16px; font-weight:600; margin-bottom:8px; }
+    .flow-description { color:var(--muted); font-size:12px; margin-bottom:20px; white-space:pre-line; }
+    .steps { list-style:none; padding:0; margin:20px 0 0; }
+    .steps li { position:relative; padding:0 0 12px 34px; }
+    .steps li:not(:last-child)::before { content:""; position:absolute; left:12px; top:28px; bottom:-2px; width:1px; background:#dce4ef; }
+    .step-number { position:absolute; left:0; top:12px; border:1px solid #d9e2ef; width:25px; height:25px; border-radius:50%; background:white; color:#71829b; display:grid; place-items:center; font:10px var(--mono); }
+    .step-number.current { color:white; background:var(--accent); border-color:var(--accent); }
+    .step { display:block; width:100%; text-align:left; border:1px solid var(--line); border-radius:7px; padding:12px 16px; background:white; }
+    .step[aria-current="step"] { border-color:#a0b7ef; background:#f4f7ff; }
+    .step strong { display:block; font-size:12px; font-weight:600; }
+    .step p { color:var(--muted); font-size:11px; white-space:pre-line; margin-top:4px; }
+    .flow-note { padding:12px 16px; border-radius:6px; background:#edf2fb; color:#5d7399; margin:16px 0; font-size:11px; white-space:pre-line; }
+    @media (min-width:1600px) { .workspace { grid-template-columns:224px minmax(0,1fr) 352px; } .main { padding:40px; } }
+    @media (max-width:1180px) { .workspace { grid-template-columns:190px minmax(0,1fr); } .sidebar { grid-row:1 / 3; } .inspector { grid-column:2; position:static; min-height:0; max-height:none; border-top:1px solid var(--line); } .detail { display:grid; grid-template-columns:1fr 1fr; gap:0 28px; } .detail-overview { grid-column:1 / -1; } .main { padding:28px 24px; } }
+    @media (max-width:720px) { .topbar { padding:12px 16px; } .top-right { gap:8px; } #project-links { display:none; } .workspace { display:block; } .sidebar { position:static; min-height:0; border-right:0; border-bottom:1px solid var(--line); padding:16px; } .sidebar-controls { display:grid; grid-template-columns:minmax(0,1fr) 128px; gap:8px; } .scope-label { margin:0; } .scope-label span { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0,0,0,0); } .scope { height:40px; } .scope-note { margin-bottom:12px; } .module-list { grid-template-columns:repeat(2,minmax(0,1fr)); max-height:180px; overflow-y:auto; } .source-note { display:none; } .main { padding:24px 16px; } h1 { font-size:23px; } .tabs { gap:22px; } .panel-head { flex-direction:column; align-items:flex-start; gap:8px; padding:12px; } .inspector { border-left:0; } .detail { display:block; padding:20px; } .notice { margin:24px 16px; } }
+    @media (prefers-reduced-motion:reduce) { *,*::before,*::after { transition:none !important; scroll-behavior:auto !important; } }
+  </style>
+</head>
+<body>
+  <script type="application/json" id="project-map-data">
+{
+    "template": false,
+    "project": {
+      "name": "Pi Desktop",
+      "summary": "基于 Electron 的桌面客户端：Vue 3 页面经沙箱 preload 与主进程通信，会话由独立 SDK 宿主执行，终端由独立守护进程持有 PTY。本页把业务模块、运行单元与关键流程放在同一张图上，用于从功能定位实现、从关系判断影响边界。",
+      "sourceNote": "事实来源：docs/项目结构文档.md 与 docs/modules/ 的 13 份模块文档，路径与入口已按 src/ 静态核对。覆盖范围止于本地调用边界：外部 SDK、依赖包内部实现、用户安装的扩展与运行时动态发现的资源不在此登记。本页不是完整依赖分析，也不是代码质量或运行状态认证。",
+      "links": [
+        {"label": "项目结构总览", "href": "项目结构文档.md"},
+        {"label": "公共记录", "href": "modules/shared.md"},
+        {"label": "生成式界面功能清单", "href": "生成式界面功能清单.md"}
+      ]
+    },
+    "groups": [
+      {"id": "shell", "name": "外壳与布局"},
+      {"id": "chat", "name": "会话与生成"},
+      {"id": "work", "name": "项目与工作区"},
+      {"id": "model", "name": "模型与运行时资源"},
+      {"id": "setting", "name": "偏好与设置"}
+    ],
+    "modules": [
+      {
+        "id": "app-shell",
+        "name": "应用外壳",
+        "groupId": "shell",
+        "summary": "窗口、标题栏、Vue 挂载、设置页导航与右侧面板宿主，以及应用启动与退出编排；只做布局与生命周期组装，不持有业务状态。",
+        "features": [
+          "唯一窗口创建、标题栏配色与导航／权限限制",
+          "Vue 页面挂载与展示 Store 初始化／释放顺序",
+          "设置页导航分节与右侧面板宽度、页签宿主",
+          "应用启动、退出链与窗口状态落盘"
+        ],
+        "tags": ["Electron 主进程", "Vue 组合根", "生命周期"],
+        "entries": [
+          {"kind": "页面入口", "label": "页面组合根", "path": "src/renderer/src/App.vue"},
+          {"kind": "进程入口", "label": "启动与退出编排", "path": "src/main/app-lifecycle.ts"},
+          {"kind": "关键实现", "label": "createWindow 与导航限制", "path": "src/main/window.ts"},
+          {"kind": "关键实现", "label": "布局骨架 AppShell", "path": "src/renderer/src/shell/components/AppShell.vue"},
+          {"kind": "关键实现", "label": "Store 初始化与释放", "path": "src/renderer/src/shell/use-app-startup.ts"}
+        ],
+        "resources": [
+          {"name": "窗口位置与尺寸", "owner": "DesktopConfigStore", "lifecycle": "窗口状态变化防抖保存，退出时落盘"}
+        ],
+        "constraints": [
+          "设置页只是业务模块的导航容器，不持有全部设置值",
+          "右侧面板只是文件树与 Git 视图的共同宿主",
+          "单窗口、单实例，事件只投递给可信主 frame"
+        ],
+        "links": [
+          {"label": "模块文档：应用外壳", "href": "modules/app-shell.md"},
+          {"label": "公共记录 F-assembly", "href": "modules/shared.md#f-assembly进程与页面组装混合"}
+        ]
+      },
+      {
+        "id": "sessions-chat",
+        "name": "会话与聊天",
+        "groupId": "chat",
+        "summary": "会话生命周期、SDK 宿主监督、运行身份与占用、聊天与历史投影、扩展交互；不拥有文件编辑、终端与供应商持久化。",
+        "features": [
+          "按项目读取会话列表，打开／新建／重载／删除会话",
+          "历史按会话寻址：已绑定读权威分支，未绑定由日志解析作答",
+          "运行注册表管理运行身份、绑定代际与占用",
+          "消息、工具、历史、活动与用量投影",
+          "SDK 扩展对话框、通知与 widget"
+        ],
+        "tags": ["Vue 页面", "SDK 宿主", "运行注册表"],
+        "entries": [
+          {"kind": "关键实现", "label": "会话编排", "path": "src/main/sessions/session-manager.ts"},
+          {"kind": "关键实现", "label": "运行身份与占用登记", "path": "src/main/sessions/session-run-registry.ts"},
+          {"kind": "关键实现", "label": "宿主监督与启动", "path": "src/main/sessions/sdk-host-manager.ts"},
+          {"kind": "关键实现", "label": "官方 SDK 会话", "path": "src/sdk-host/session-runtime.ts"},
+          {"kind": "关键实现", "label": "消息与工具投影", "path": "src/sdk-host/projection/message-projection.ts"},
+          {"kind": "界面入口", "label": "输入坞", "path": "src/renderer/src/sessions/components/PromptComposer.vue"},
+          {"kind": "关键实现", "label": "Runtime 展示状态", "path": "src/renderer/src/sessions/stores/runtime-core.ts"}
+        ],
+        "resources": [
+          {"name": "会话历史文件", "owner": "官方 SDK", "lifecycle": "位于 Pi agent 目录下的项目会话文件；应用内占用由主进程注册表维护"},
+          {"name": "页面投影留底与历史缓存", "owner": "renderer Runtime Store", "lifecycle": "展示缓存，不替代会话历史存储"}
+        ],
+        "constraints": [
+          "会话真正绑定前不能发送、回退或压缩",
+          "历史读取只接受项目与会话，不接受任意文件路径",
+          "关闭标签保留历史，与删除会话不同"
+        ],
+        "links": [
+          {"label": "模块文档：会话与聊天", "href": "modules/sessions-chat.md"},
+          {"label": "公共记录 F-runtime-state", "href": "modules/shared.md#f-runtime-state综合-runtime-状态混合"}
+        ]
+      },
+      {
+        "id": "genui",
+        "name": "生成式界面",
+        "groupId": "chat",
+        "summary": "内置声明式界面工具、文档修改与检索、工具结果载荷、Vue 原生渲染，以及可交互参数的页面状态与本机留档。",
+        "features": [
+          "界面交付、patch、目录与检查工具注册",
+          "节点、图表、图解与参数的共享契约校验",
+          "聊天消息内的生成式渲染分支",
+          "参数在页面内更新并显式提交为真实用户消息",
+          "本机旁路参数文件与清除入口"
+        ],
+        "tags": ["SDK 扩展", "Vue 渲染", "共享契约"],
+        "entries": [
+          {"kind": "关键实现", "label": "内置扩展工厂", "path": "src/sdk-host/genui/index.ts"},
+          {"kind": "关键实现", "label": "工具注册与结果", "path": "src/sdk-host/genui/tools.ts"},
+          {"kind": "关键实现", "label": "文档解析与校验", "path": "src/shared/genui/parse.ts"},
+          {"kind": "界面入口", "label": "文档容器", "path": "src/renderer/src/genui/components/UiDocument.vue"},
+          {"kind": "关键实现", "label": "参数运行期真源", "path": "src/renderer/src/genui/param-state.ts"},
+          {"kind": "关键实现", "label": "参数旁路存储", "path": "src/main/genui/genui-param-store.ts"}
+        ],
+        "resources": [
+          {"name": "生成式界面参数", "owner": "GenuiParamStore", "lifecycle": "userData/genui-params.json 按文档合并写回，不写回会话正文"}
+        ],
+        "constraints": [
+          "不执行模型生成的任意 HTML、CSS 或脚本",
+          "清除本机参数不删除会话中的工具结果",
+          "能力开关与已建立会话的实际装载状态分开"
+        ],
+        "links": [
+          {"label": "模块文档：生成式界面", "href": "modules/genui.md"},
+          {"label": "生成式界面功能清单", "href": "生成式界面功能清单.md"}
+        ]
+      },
+      {
+        "id": "workspace-tabs",
+        "name": "工作区标签",
+        "groupId": "work",
+        "summary": "按项目分组的对话、终端、文件标签，活动选择、排序、关闭与原位新建的页面编排；只产出打开意图，不执行 Agent。",
+        "features": [
+          "标签记录、项目分组、活动选择与排序",
+          "对话标签关联运行实例，终端标签由真实清单派生",
+          "打开意图与绑定结果，过期结果不抢占当前选择",
+          "原位新建空态、独立草稿身份与失败恢复"
+        ],
+        "tags": ["Vue 页面", "Pinia Store", "标签编排"],
+        "entries": [
+          {"kind": "关键实现", "label": "标签 Store", "path": "src/renderer/src/workspace/stores/workspace-tabs.ts"},
+          {"kind": "界面入口", "label": "标签条", "path": "src/renderer/src/workspace/components/WorkspaceTabBar.vue"},
+          {"kind": "关键实现", "label": "会话只读视图注册", "path": "src/renderer/src/workspace/stores/session-tab-bridge.ts"}
+        ],
+        "resources": [
+          {"name": "标签顺序、活动标签与重命名", "owner": "workspace-tabs Store", "lifecycle": "仅页面内状态，不跨应用重启恢复"}
+        ],
+        "constraints": [
+          "标签不执行 Agent、不持有 PTY、不直接保存文件正文",
+          "标签键、新草稿身份、会话 ID、运行实例 ID、绑定代际与文件 key 不能互相替代"
+        ],
+        "links": [
+          {"label": "模块文档：工作区标签", "href": "modules/workspace-tabs.md"}
+        ]
+      },
+      {
+        "id": "projects-trust",
+        "name": "项目与信任",
+        "groupId": "work",
+        "summary": "项目目录选择、规范化、登记、切换与移除，以及 Project Trust 的资源探测与决定；不删除项目目录，不提供系统沙箱。",
+        "features": [
+          "候选添加、规范化路径与当前项目切换",
+          "移除只清 Desktop 记录并按占用条件收敛运行实例",
+          "受保护项目资源探测与信任决定",
+          "Git 写操作的统一信任放行判断"
+        ],
+        "tags": ["Electron 主进程", "Vue 页面", "信任门禁"],
+        "entries": [
+          {"kind": "关键实现", "label": "项目列表与切换", "path": "src/main/projects/project-manager.ts"},
+          {"kind": "关键实现", "label": "信任状态与决定", "path": "src/main/trust/trust-manager.ts"},
+          {"kind": "关键实现", "label": "当前项目信任门禁", "path": "src/main/trust/guards.ts"},
+          {"kind": "关键实现", "label": "项目展示副本", "path": "src/renderer/src/projects/stores/project.ts"},
+          {"kind": "界面入口", "label": "信任交互", "path": "src/renderer/src/projects/components/TrustDialog.vue"}
+        ],
+        "resources": [
+          {"name": "项目列表、当前项目与信任决定", "owner": "DesktopConfigStore", "lifecycle": "写入 userData/desktop-config.json；候选状态只在内存"}
+        ],
+        "constraints": [
+          "信任表示是否允许加载或执行受保护项目资源，不是文件、网络或工具权限沙箱",
+          "移除项目记录与删除会话文件是不同动作"
+        ],
+        "links": [
+          {"label": "模块文档：项目与信任", "href": "modules/projects-trust.md"},
+          {"label": "公共记录 F-sidebar", "href": "modules/shared.md#f-sidebar项目会话树混合"}
+        ]
+      },
+      {
+        "id": "files-editor",
+        "name": "文件与编辑器",
+        "groupId": "work",
+        "summary": "项目文件树、目录监听、引用检索、内容读写与磁盘基线，以及源码、图片、Markdown 预览与富文本编辑；不执行 Agent 的文件工具。",
+        "features": [
+          "目录分层列举、监听与变化合并",
+          "文件引用检索与条目拖拽引用",
+          "文本／图片读取、磁盘基线与原子保存",
+          "Markdown 富文本往返证明与结构草稿恢复",
+          "文档链接外链与图片导入"
+        ],
+        "tags": ["Electron 主进程", "Vue 页面", "CodeMirror", "Tiptap"],
+        "entries": [
+          {"kind": "关键实现", "label": "内容分类与原子保存", "path": "src/main/projects/project-file-content.ts"},
+          {"kind": "关键实现", "label": "目录列举与条目解析", "path": "src/main/projects/project-directory.ts"},
+          {"kind": "关键实现", "label": "编辑记录与草稿", "path": "src/renderer/src/editor/stores/project-editor.ts"},
+          {"kind": "界面入口", "label": "文件面板", "path": "src/renderer/src/editor/components/FileEditorView.vue"},
+          {"kind": "界面入口", "label": "富文本编辑", "path": "src/renderer/src/editor/components/FileRichMarkdownEditor.vue"}
+        ],
+        "resources": [
+          {"name": "项目文件", "owner": "项目目录（外部真实数据）", "lifecycle": "同目录临时文件加 rename 写入；页面草稿与撤销只在内存"},
+          {"name": "目录树缓存与检索索引", "owner": "files-editor Store", "lifecycle": "可再生，不拥有文件真源"}
+        ],
+        "constraints": [
+          "页面只提交契约允许的项目与相对路径，主进程执行真实路径边界检查",
+          "关闭脏标签不等于保存",
+          "已编辑文档无法证明安全序列化时保留结构草稿并阻止保存"
+        ],
+        "links": [
+          {"label": "模块文档：文件与编辑器", "href": "modules/files-editor.md"}
+        ]
+      },
+      {
+        "id": "git",
+        "name": "Git",
+        "groupId": "work",
+        "summary": "当前项目仓库的状态、差异、提交历史与暂存／提交／拉取／推送；不自行实现 Git 存储，不创建隔离工作树。",
+        "features": [
+          "porcelain v2 增量状态解析与路径折算",
+          "工作区／暂存区差异、提交历史与提交内差异",
+          "暂存、取消暂存、恢复、提交、拉取与推送",
+          "写动作的信任拦截与待信任重试"
+        ],
+        "tags": ["Electron 主进程", "Vue 页面", "外部 git"],
+        "entries": [
+          {"kind": "关键实现", "label": "仓库操作用例", "path": "src/main/git/git-service.ts"},
+          {"kind": "关键实现", "label": "固定命令与输出限制", "path": "src/main/git/git-command.ts"},
+          {"kind": "关键实现", "label": "状态跟踪与写动作", "path": "src/renderer/src/git/stores/git-status.ts"},
+          {"kind": "界面入口", "label": "源代码管理面板", "path": "src/renderer/src/git/components/GitPanel.vue"}
+        ],
+        "resources": [
+          {"name": "仓库状态与差异模型", "owner": "git Store", "lifecycle": "内存缓存；真源是项目所在仓库"}
+        ],
+        "constraints": [
+          "写操作可能执行仓库 filter、hook 或 merge driver，因此在主进程做信任拦截",
+          "信任不提供并发隔离，同项目其他会话与外部程序仍可修改仓库"
+        ],
+        "links": [
+          {"label": "模块文档：Git", "href": "modules/git.md"}
+        ]
+      },
+      {
+        "id": "terminal-commands",
+        "name": "终端与快捷命令",
+        "groupId": "work",
+        "summary": "项目终端创建、输入、尺寸、命名、关闭、常驻与恢复、画面与背压，以及全局／项目快捷命令；不承载内置 Agent 会话。",
+        "features": [
+          "守护进程连接、握手与版本化端点",
+          "PTY 会话、快照恢复与实时流控",
+          "原始历史、磁盘画面与退出冷存储",
+          "快捷命令范围保存与新终端执行"
+        ],
+        "tags": ["Electron 主进程", "终端守护进程", "node-pty", "xterm"],
+        "entries": [
+          {"kind": "关键实现", "label": "守护进程入口", "path": "src/terminal-daemon/index.ts"},
+          {"kind": "关键实现", "label": "PTY 与快照恢复", "path": "src/terminal-daemon/session-manager.ts"},
+          {"kind": "关键实现", "label": "主进程适配", "path": "src/main/terminal/terminal-manager.ts"},
+          {"kind": "关键实现", "label": "终端 Store", "path": "src/renderer/src/workspace/stores/terminal.ts"},
+          {"kind": "界面入口", "label": "xterm 视图", "path": "src/renderer/src/workspace/components/TerminalView.vue"}
+        ],
+        "resources": [
+          {"name": "终端历史与画面", "owner": "终端守护进程", "lifecycle": "userData 下版本化终端数据区；显式关闭终端删除对应历史"},
+          {"name": "全局与项目快捷命令", "owner": "DesktopConfigStore", "lifecycle": "写入 desktop-config.json"}
+        ],
+        "constraints": [
+          "应用退出只断开连接，关闭终端才结束 PTY",
+          "守护进程重启恢复退出记录，旧 shell 不会复活",
+          "快捷命令是用户配置的 shell 输入，不是 Agent 工具权限"
+        ],
+        "links": [
+          {"label": "模块文档：终端与快捷命令", "href": "modules/terminal-commands.md"}
+        ]
+      },
+      {
+        "id": "providers-auth",
+        "name": "供应商与认证",
+        "groupId": "model",
+        "summary": "供应商凭据与 OAuth 登录退出、自定义 models.json 条目、默认模型与当前会话模型选择，以及对话页模型可见性。",
+        "features": [
+          "认证状态、登录流程与提示回应",
+          "认证辅助进程的 JSONL 通信与关闭",
+          "自定义供应商条目的脱敏与单条保存",
+          "默认模型定点写入与当前会话模型切换",
+          "对话页模型可见性偏好"
+        ],
+        "tags": ["Electron 主进程", "认证辅助进程", "Vue 页面"],
+        "entries": [
+          {"kind": "关键实现", "label": "认证状态与流程", "path": "src/main/providers/auth-manager.ts"},
+          {"kind": "关键实现", "label": "认证辅助入口", "path": "src/auth-helper/index.ts"},
+          {"kind": "关键实现", "label": "自定义供应商配置", "path": "src/main/providers/models-config-manager.ts"},
+          {"kind": "界面入口", "label": "模型设置页", "path": "src/renderer/src/providers/components/ModelSettingsView.vue"},
+          {"kind": "界面入口", "label": "聊天模型选择器", "path": "src/renderer/src/providers/components/RuntimeModelSelect.vue"}
+        ],
+        "resources": [
+          {"name": "认证凭据", "owner": "官方 SDK（经认证辅助进程）", "lifecycle": "Pi agent 目录下的 auth.json；不将密钥快照回传页面"},
+          {"name": "自定义供应商与默认模型", "owner": "ModelsConfigManager / PiSettingsManager", "lifecycle": "Pi agent 目录下的 models.json 与 settings.json，按文件锁与基线写入"}
+        ],
+        "constraints": [
+          "凭据、供应商定义、默认模型与展示偏好是四类数据，不共享存储",
+          "默认模型保存不修改当前会话；当前模型切换不隐式改全局默认",
+          "登录成功不意味着已有会话自动加载新凭据"
+        ],
+        "links": [
+          {"label": "模块文档：供应商与认证", "href": "modules/providers-auth.md"}
+        ]
+      },
+      {
+        "id": "resources-mcp",
+        "name": "资源与 MCP",
+        "groupId": "model",
+        "summary": "技能、模板与扩展命令的展示与补全，启动前资源／模型预读、会话诊断，MCP 配置列举与一次性探测，以及运行中会话的 MCP 动作。",
+        "features": [
+          "一次性 CLI RPC 资源与模型预读、分项错误",
+          "全局／项目 MCP 配置的受限读取与覆盖说明",
+          "一次性 MCP 探测、超时与取消",
+          "运行中会话的资源、诊断与 MCP 命令结果"
+        ],
+        "tags": ["Electron 主进程", "一次性入口", "Vue 页面"],
+        "entries": [
+          {"kind": "关键实现", "label": "资源与模型预读", "path": "src/main/resources/resource-preview.ts"},
+          {"kind": "关键实现", "label": "MCP 配置读取", "path": "src/main/resources/mcp-config-reader.ts"},
+          {"kind": "关键实现", "label": "MCP 一次性探测", "path": "src/main/resources/mcp-inspection.ts"},
+          {"kind": "命令入口", "label": "固定参数 CLI 入口", "path": "src/entries/pi-cli/index.ts"},
+          {"kind": "界面入口", "label": "资源视图", "path": "src/renderer/src/resources/components/ResourceView.vue"}
+        ],
+        "resources": [
+          {"name": "MCP 配置文件", "owner": "Pi agent 目录与项目目录", "lifecycle": "只读列举，不连接服务器"},
+          {"name": "资源预读结果", "owner": "resource Store", "lifecycle": "跟随项目与启动阶段，各来源分别报告错误"}
+        ],
+        "constraints": [
+          "资源预读、文件配置、独立探测与运行中会话状态是不同来源，不能合并成一份连接状态",
+          "一次性探测只代表探测时刻，与会话连接不是同一实例",
+          "页面不能传入任意 CLI 入口、参数或 MCP 命令文本"
+        ],
+        "links": [
+          {"label": "模块文档：资源与 MCP", "href": "modules/resources-mcp.md"}
+        ]
+      },
+      {
+        "id": "updates-runtime",
+        "name": "更新与运行时",
+        "groupId": "model",
+        "summary": "Pi agent 与扩展的版本检查、显式扩展更新、内置运行时安装与指针修复；不等于 Electron 应用自更新器。",
+        "features": [
+          "版本检查单飞、状态快照与启动检查",
+          "已声明扩展包更新与进度结论",
+          "运行时 staging 安装、候选加载与指针切换",
+          "指针未生效时的重装或清指针"
+        ],
+        "tags": ["Electron 主进程", "一次性入口", "运行时指针"],
+        "entries": [
+          {"kind": "关键实现", "label": "版本检查", "path": "src/main/updates/update-checker.ts"},
+          {"kind": "关键实现", "label": "扩展包更新", "path": "src/main/updates/package-updater.ts"},
+          {"kind": "关键实现", "label": "运行时安装", "path": "src/main/updates/pi-agent-updater.ts"},
+          {"kind": "命令入口", "label": "运行时安装入口", "path": "src/entries/runtime-install/index.ts"},
+          {"kind": "界面入口", "label": "版本与更新分节", "path": "src/renderer/src/updates/components/VersionUpdateSection.vue"}
+        ],
+        "resources": [
+          {"name": "受管 Pi 运行时", "owner": "运行时安装入口", "lifecycle": "userData/pi-runtime 的发布目录、staging 与当前版本指针"},
+          {"name": "扩展包", "owner": "Pi 包管理器", "lifecycle": "与运行时发布目录不同，不由本应用清空"}
+        ],
+        "constraints": [
+          "不修改项目 package.json 或项目依赖",
+          "检查本身不安装、不修改 Pi 配置；手动检查不等于授权静默安装",
+          "正在使用的 SDK 宿主不会因磁盘指针改变就自动切换版本"
+        ],
+        "links": [
+          {"label": "模块文档：更新与运行时", "href": "modules/updates-runtime.md"},
+          {"label": "公共记录 F-build", "href": "modules/shared.md#f-build构建与发行上下文"}
+        ]
+      },
+      {
+        "id": "preferences",
+        "name": "偏好",
+        "groupId": "setting",
+        "summary": "界面主题、侧栏与右侧面板、Markdown 默认视图、快捷输入短语，以及统一偏好服务对模型展示、快捷命令与功能开关的适配。",
+        "features": [
+          "主题、布局与 Markdown 默认视图读写",
+          "快捷输入短语管理",
+          "隐藏模型、快捷命令与功能开关的配置适配",
+          "已保存值与待应用状态的区分"
+        ],
+        "tags": ["Electron 主进程", "Vue 页面", "配置适配"],
+        "entries": [
+          {"kind": "关键实现", "label": "偏好读写适配", "path": "src/main/preferences/preferences-manager.ts"},
+          {"kind": "共享契约", "label": "偏好契约与校验", "path": "src/shared/preferences-api.ts"},
+          {"kind": "关键实现", "label": "偏好展示与动作状态", "path": "src/renderer/src/preferences/stores/preferences.ts"},
+          {"kind": "界面入口", "label": "快捷发送短语", "path": "src/renderer/src/preferences/components/QuickSendSection.vue"}
+        ],
+        "resources": [
+          {"name": "界面偏好、快捷输入、快捷命令与功能开关", "owner": "DesktopConfigStore", "lifecycle": "写入 desktop-config.json，经统一实例串行保存"}
+        ],
+        "constraints": [
+          "设置页导航不是设置值存储",
+          "配置不可写时不创建另一套本地存储兜底",
+          "生成式开关不意味着自动重建全部会话"
+        ],
+        "links": [
+          {"label": "模块文档：偏好", "href": "modules/preferences.md"},
+          {"label": "公共记录 F-config", "href": "modules/shared.md#f-configdesktop-配置混合"}
+        ]
+      }
+    ],
+    "relations": [
+      {"id": "r-wt-open-intent", "from": "workspace-tabs", "to": "sessions-chat", "label": "提交打开意图", "kind": "call"},
+      {"id": "r-sc-tab-lifecycle", "from": "sessions-chat", "to": "workspace-tabs", "label": "准备与去标签", "kind": "call"},
+      {"id": "r-sc-project-guard", "from": "sessions-chat", "to": "projects-trust", "label": "复核登记项目与信任", "kind": "call"},
+      {"id": "r-pr-session-occupancy", "from": "projects-trust", "to": "sessions-chat", "label": "查询占用与项目范围关闭", "kind": "call"},
+      {"id": "r-pr-terminal-close", "from": "projects-trust", "to": "terminal-commands", "label": "项目移除后关闭该项目终端", "kind": "call"},
+      {"id": "r-sc-model-candidates", "from": "sessions-chat", "to": "providers-auth", "label": "读取模型候选与默认模型", "kind": "read"},
+      {"id": "r-sc-resource-completion", "from": "sessions-chat", "to": "resources-mcp", "label": "读取技能与命令补全", "kind": "read"},
+      {"id": "r-sc-genui-payload", "from": "sessions-chat", "to": "genui", "label": "分发生成式界面载荷", "kind": "compose"},
+      {"id": "r-genui-session-tools", "from": "genui", "to": "sessions-chat", "label": "注册内置工具并回传结果", "kind": "compose"},
+      {"id": "r-sc-file-candidates", "from": "sessions-chat", "to": "files-editor", "label": "取文件引用候选", "kind": "read"},
+      {"id": "r-sc-quick-send", "from": "sessions-chat", "to": "preferences", "label": "读取快捷输入短语", "kind": "read"},
+      {"id": "r-fe-project-scope", "from": "files-editor", "to": "projects-trust", "label": "固定已登记项目范围", "kind": "call"},
+      {"id": "r-fe-tab-register", "from": "files-editor", "to": "workspace-tabs", "label": "登记文件标签", "kind": "call"},
+      {"id": "r-fe-terminal-path", "from": "files-editor", "to": "terminal-commands", "label": "插入路径到活动终端", "kind": "call"},
+      {"id": "r-fe-markdown-default", "from": "files-editor", "to": "preferences", "label": "读取 Markdown 默认视图", "kind": "read"},
+      {"id": "r-tc-project-path", "from": "terminal-commands", "to": "projects-trust", "label": "取已登记项目规范路径", "kind": "read"},
+      {"id": "r-tc-entry-drag", "from": "terminal-commands", "to": "files-editor", "label": "复用拖拽载荷与路径文本", "kind": "reference"},
+      {"id": "r-tc-tab-derive", "from": "terminal-commands", "to": "workspace-tabs", "label": "提供真实终端清单", "kind": "call"},
+      {"id": "r-git-dir-invalidate", "from": "git", "to": "files-editor", "label": "目录变化触发状态重读", "kind": "read"},
+      {"id": "r-git-write-trust", "from": "git", "to": "projects-trust", "label": "写操作复核项目信任", "kind": "call"},
+      {"id": "r-git-panel-host", "from": "git", "to": "app-shell", "label": "右侧面板承载状态视图", "kind": "compose"},
+      {"id": "r-pa-hidden-models", "from": "providers-auth", "to": "preferences", "label": "保存隐藏模型偏好", "kind": "write"},
+      {"id": "r-pa-runtime-load", "from": "providers-auth", "to": "updates-runtime", "label": "依赖受管运行时与 SDK 加载", "kind": "call"},
+      {"id": "r-rm-project-trust", "from": "resources-mcp", "to": "projects-trust", "label": "项目级配置信任判定", "kind": "call"},
+      {"id": "r-rm-model-preview", "from": "resources-mcp", "to": "providers-auth", "label": "复用预读模型与默认身份", "kind": "read"},
+      {"id": "r-up-project-ext", "from": "updates-runtime", "to": "projects-trust", "label": "读取当前项目扩展声明", "kind": "read"},
+      {"id": "r-up-auto-switch", "from": "updates-runtime", "to": "preferences", "label": "消费扩展自动更新开关", "kind": "read"},
+      {"id": "r-pf-shell-layout", "from": "preferences", "to": "app-shell", "label": "布局值由外壳消费", "kind": "call"},
+      {"id": "r-genui-param-switch", "from": "genui", "to": "preferences", "label": "读写生成式开关", "kind": "write"}
+    ],
+    "runtime": {
+      "nodes": [
+        {
+          "id": "electron-main",
+          "name": "Electron 主进程",
+          "kind": "常驻进程",
+          "summary": "应用级配置、IPC、安全边界与退出编排的所有者；启动时按固定顺序注册各能力通道。",
+          "contains": ["app-shell", "projects-trust", "sessions-chat", "files-editor", "git", "terminal-commands", "providers-auth", "resources-mcp", "updates-runtime", "preferences", "genui"],
+          "entries": [
+            {"kind": "进程入口", "label": "组合根", "path": "src/main/index.ts"},
+            {"kind": "关键实现", "label": "业务实例唯一装配处", "path": "src/main/services.ts"},
+            {"kind": "关键实现", "label": "IPC 注册与调用者校验", "path": "src/main/ipc/dispatch.ts"}
+          ],
+          "resources": [
+            {"name": "desktop-config.json", "owner": "DesktopConfigStore", "lifecycle": "userData 下唯一写入队列；读失败进入只读降级"}
+          ],
+          "constraints": [
+            "不向页面开放任意 channel",
+            "窗口关闭与退出链按固定顺序收敛宿主、辅助进程与终端连接"
+          ],
+          "links": [
+            {"label": "项目结构总览", "href": "项目结构文档.md"},
+            {"label": "公共记录 F-assembly", "href": "modules/shared.md#f-assembly进程与页面组装混合"}
+          ]
+        },
+        {
+          "id": "preload",
+          "name": "沙箱 preload",
+          "kind": "桥接",
+          "summary": "经 contextBridge 暴露固定业务接口，重建声明字段载荷并校验响应与事件。",
+          "contains": [],
+          "entries": [
+            {"kind": "关键实现", "label": "合并各域 Api", "path": "src/preload/index.ts"},
+            {"kind": "关键实现", "label": "页面类型声明", "path": "src/renderer/src/env.d.ts"}
+          ],
+          "resources": [],
+          "constraints": [
+            "不承载 channel 调用与业务校验",
+            "域文件按业务域拆分，订阅须可释放"
+          ],
+          "links": [
+            {"label": "公共记录 F-assembly", "href": "modules/shared.md#f-assembly进程与页面组装混合"}
+          ]
+        },
+        {
+          "id": "renderer",
+          "name": "Vue 页面",
+          "kind": "常驻进程",
+          "summary": "保存展示副本、局部编辑与阅读状态；不直接持有系统进程，也不直接调用 Electron。",
+          "contains": ["app-shell", "workspace-tabs", "sessions-chat", "files-editor", "git", "terminal-commands", "providers-auth", "resources-mcp", "updates-runtime", "preferences", "genui"],
+          "entries": [
+            {"kind": "页面入口", "label": "Vue 挂载", "path": "src/renderer/src/main.ts"},
+            {"kind": "页面入口", "label": "组合根", "path": "src/renderer/src/App.vue"}
+          ],
+          "resources": [
+            {"name": "标签顺序、草稿与阅读状态", "owner": "renderer 各 Store", "lifecycle": "页面内状态，不承诺跨应用重启恢复"}
+          ],
+          "constraints": [
+            "只经 preload 固定接口通信",
+            "不把展示副本当作会话历史或仓库状态的真源"
+          ],
+          "links": [
+            {"label": "项目结构总览", "href": "项目结构文档.md"}
+          ]
+        },
+        {
+          "id": "sdk-host",
+          "name": "SDK 宿主",
+          "kind": "受管进程",
+          "summary": "utilityProcess 承载官方 SDK 会话执行，并把 SDK 事件转换为有界消息、工具、历史与活动投影。",
+          "contains": ["sessions-chat", "genui"],
+          "entries": [
+            {"kind": "进程入口", "label": "宿主入口", "path": "src/sdk-host/index.ts"},
+            {"kind": "关键实现", "label": "会话运行", "path": "src/sdk-host/session-runtime.ts"},
+            {"kind": "关键实现", "label": "日志读取与检查点", "path": "src/sdk-host/log-reader.ts"}
+          ],
+          "resources": [
+            {"name": "会话日志解析缓存", "owner": "宿主进程", "lifecycle": "按项目、会话与文件版本有界复用，不保留原始日志文本"}
+          ],
+          "constraints": [
+            "宿主不能自行编号授权，目标由主进程按来源实例复核",
+            "不隔离同项目文件与 Git 工作区，不构成安全沙箱"
+          ],
+          "links": [
+            {"label": "模块文档：会话与聊天", "href": "modules/sessions-chat.md"}
+          ]
+        },
+        {
+          "id": "auth-helper",
+          "name": "认证辅助进程",
+          "kind": "受管进程",
+          "summary": "用 stdin／stdout JSONL 与主进程通信，调用官方 SDK 完成 Provider 认证并脱敏提示。",
+          "contains": ["providers-auth"],
+          "entries": [
+            {"kind": "进程入口", "label": "认证辅助入口", "path": "src/auth-helper/index.ts"},
+            {"kind": "关键实现", "label": "主进程拉起与通信", "path": "src/main/providers/auth-helper-process.ts"}
+          ],
+          "resources": [],
+          "constraints": [
+            "密钥与验证码只在认证交互窗口存在，不作为状态快照回传"
+          ],
+          "links": [
+            {"label": "模块文档：供应商与认证", "href": "modules/providers-auth.md"}
+          ]
+        },
+        {
+          "id": "terminal-daemon",
+          "name": "终端守护进程",
+          "kind": "受管进程",
+          "summary": "持有 PTY、画面解析与历史存储；本地版本化端点与 token 认证，应用退出后继续持有终端。",
+          "contains": ["terminal-commands"],
+          "entries": [
+            {"kind": "进程入口", "label": "守护进程入口", "path": "src/terminal-daemon/index.ts"},
+            {"kind": "关键实现", "label": "本地服务与协议分帧", "path": "src/terminal-daemon/daemon-server.ts"},
+            {"kind": "关键实现", "label": "版本化端点与独占锁", "path": "src/terminal-daemon/endpoint.ts"}
+          ],
+          "resources": [
+            {"name": "终端历史与画面数据区", "owner": "终端守护进程", "lifecycle": "userData 下按协议版本隔离；显式关闭终端删除对应历史"}
+          ],
+          "constraints": [
+            "应用退出只断开连接，关闭终端才结束对应 PTY",
+            "重启恢复退出记录，不复活旧 shell"
+          ],
+          "links": [
+            {"label": "模块文档：终端与快捷命令", "href": "modules/terminal-commands.md"}
+          ]
+        },
+        {
+          "id": "entries",
+          "name": "一次性受管入口",
+          "kind": "受管进程",
+          "summary": "CLI 预读、MCP 探测、版本检查、扩展更新与运行时安装；参数由主进程给出，完成后退出。",
+          "contains": ["resources-mcp", "updates-runtime"],
+          "entries": [
+            {"kind": "命令入口", "label": "固定参数 CLI", "path": "src/entries/pi-cli/index.ts"},
+            {"kind": "命令入口", "label": "版本检查", "path": "src/entries/update-check/index.ts"},
+            {"kind": "命令入口", "label": "扩展更新", "path": "src/entries/package-update/index.ts"},
+            {"kind": "命令入口", "label": "运行时安装", "path": "src/entries/runtime-install/index.ts"}
+          ],
+          "resources": [],
+          "constraints": [
+            "只允许固定产物，页面不能构造任意入口或参数",
+            "超时、输出边界与退出判定由主进程编排层负责"
+          ],
+          "links": [
+            {"label": "模块文档：更新与运行时", "href": "modules/updates-runtime.md"}
+          ]
+        },
+        {
+          "id": "contracts",
+          "name": "跨进程契约与设施",
+          "kind": "库",
+          "summary": "src/shared/ 的请求、响应、事件与运行时校验，以及 src/shared-process/ 的运行时布局、指针解析与进程树终止；不感知 Electron。",
+          "contains": [],
+          "entries": [
+            {"kind": "公开库入口", "label": "Runtime 契约聚合", "path": "src/shared/runtime-api.ts"},
+            {"kind": "关键实现", "label": "发布目录布局与指针", "path": "src/shared-process/runtime.ts"},
+            {"kind": "关键实现", "label": "固定 Pi agent 目录", "path": "src/main/shared/pi-paths.ts"}
+          ],
+          "resources": [],
+          "constraints": [
+            "声明类型不替代跨进程载荷校验",
+            "主进程结果、桥接通信失败与调用者权限拒绝是不同失败来源"
+          ],
+          "links": [
+            {"label": "公共记录 F-process", "href": "modules/shared.md#f-process受管进程与-sdk-公共设施共享"}
+          ]
+        },
+        {
+          "id": "pi-agent-dir",
+          "name": "Pi agent 目录",
+          "kind": "资源",
+          "summary": "会话历史、auth.json、models.json 与 settings.json 所在目录，由固定解析器定位，与 Desktop 数据目录分开。",
+          "contains": [],
+          "entries": [
+            {"kind": "关键实现", "label": "目录与环境固定解析", "path": "src/main/shared/pi-paths.ts"}
+          ],
+          "resources": [
+            {"name": "会话文件", "owner": "官方 SDK", "lifecycle": "随会话产生、回退与删除变化"},
+            {"name": "auth.json / models.json / settings.json", "owner": "官方 SDK 与 Pi 配置管理器", "lifecycle": "受文件锁与基线保护，不由 Desktop 配置写入"}
+          ],
+          "constraints": [
+            "受保护的目录内容可能触发 Project Trust 决定"
+          ],
+          "links": [
+            {"label": "公共记录 F-config", "href": "modules/shared.md#f-configdesktop-配置混合"}
+          ]
+        },
+        {
+          "id": "pi-runtime",
+          "name": "受管 Pi 运行时",
+          "kind": "资源",
+          "summary": "userData 下 pi-runtime 的发布目录、staging 与当前版本指针，供受管入口解析并动态加载 SDK。",
+          "contains": [],
+          "entries": [
+            {"kind": "关键实现", "label": "运行时根与可用入口", "path": "src/main/updates/pi-runtime.ts"},
+            {"kind": "关键实现", "label": "指针与动态加载", "path": "src/shared-process/runtime.ts"}
+          ],
+          "resources": [
+            {"name": "当前版本指针", "owner": "运行时安装入口", "lifecycle": "安装成功才切换；清指针不等于删除运行时文件"}
+          ],
+          "constraints": [
+            "不是项目依赖缓存，不能按编译输出清理",
+            "正在使用的宿主不会因指针改变自动切换版本"
+          ],
+          "links": [
+            {"label": "模块文档：更新与运行时", "href": "modules/updates-runtime.md"}
+          ]
+        },
+        {
+          "id": "upstream",
+          "name": "官方发布与包管理远端",
+          "kind": "外部系统",
+          "summary": "版本检查与运行时安装访问的官方发布、npm 与 git 远端；离线时由检查器降级处理。",
+          "contains": [],
+          "entries": [],
+          "resources": [],
+          "constraints": [
+            "远端可用性与兼容性不是本仓库事实",
+            "检查不等于安装，手动检查不等于授权静默安装"
+          ],
+          "links": [
+            {"label": "模块文档：更新与运行时", "href": "modules/updates-runtime.md"}
+          ]
+        }
+      ],
+      "relations": [
+        {"id": "rr-renderer-preload", "from": "renderer", "to": "preload", "label": "固定业务接口", "kind": "call"},
+        {"id": "rr-preload-main", "from": "preload", "to": "electron-main", "label": "Electron IPC", "kind": "call"},
+        {"id": "rr-main-sdkhost", "from": "electron-main", "to": "sdk-host", "label": "utilityProcess 与 MessagePort", "kind": "call"},
+        {"id": "rr-main-authhelper", "from": "electron-main", "to": "auth-helper", "label": "JSONL 请求与响应", "kind": "call"},
+        {"id": "rr-main-terminal", "from": "electron-main", "to": "terminal-daemon", "label": "版本化端点与 token", "kind": "call"},
+        {"id": "rr-main-entries", "from": "electron-main", "to": "entries", "label": "启动固定产物", "kind": "call"},
+        {"id": "rr-main-contracts", "from": "electron-main", "to": "contracts", "label": "引用契约与运行时解析", "kind": "reference"},
+        {"id": "rr-sdkhost-contracts", "from": "sdk-host", "to": "contracts", "label": "宿主协议与投影契约", "kind": "reference"},
+        {"id": "rr-terminal-contracts", "from": "terminal-daemon", "to": "contracts", "label": "守护进程协议", "kind": "reference"},
+        {"id": "rr-entries-contracts", "from": "entries", "to": "contracts", "label": "运行时布局与指针", "kind": "reference"},
+        {"id": "rr-main-agentdir", "from": "electron-main", "to": "pi-agent-dir", "label": "读取配置与会话文件", "kind": "read"},
+        {"id": "rr-sdkhost-agentdir", "from": "sdk-host", "to": "pi-agent-dir", "label": "打开会话文件", "kind": "read"},
+        {"id": "rr-authhelper-agentdir", "from": "auth-helper", "to": "pi-agent-dir", "label": "写入认证凭据", "kind": "write"},
+        {"id": "rr-main-runtime", "from": "electron-main", "to": "pi-runtime", "label": "解析当前 SDK 入口", "kind": "read"},
+        {"id": "rr-entries-runtime", "from": "entries", "to": "pi-runtime", "label": "安装候选并切换指针", "kind": "write"},
+        {"id": "rr-entries-upstream", "from": "entries", "to": "upstream", "label": "查询版本与安装依赖", "kind": "read"}
+      ]
+    },
+    "flows": [
+      {
+        "id": "send-message",
+        "name": "发送消息",
+        "summary": "页面提交输入，主进程定位 SDK 宿主，宿主执行并把 SDK 事件投影回页面。",
+        "note": "投影到达与 SDK 请求成功收敛不是同一个时点；页面按代际与序号校验后才应用增量。",
+        "relationIds": ["r-wt-open-intent", "r-sc-project-guard", "r-genui-session-tools"],
+        "steps": [
+          {"title": "准备输入与附件", "description": "输入坞准备文本、附件与文件引用，打开意图固定目标项目与标签；选择本身立即落到标签，不等打开动作整体收尾。", "moduleIds": ["sessions-chat", "workspace-tabs"]},
+          {"title": "提交 Runtime 请求", "description": "Runtime 服务经桥接把运行实例与绑定代际交给主进程，页面不自行决定授权目标。", "moduleIds": ["sessions-chat"]},
+          {"title": "定位宿主并执行", "description": "主进程复核登记项目与信任，注册表决定复用、切前台或建立宿主；宿主请求会话目标准备后调用官方 SDK。", "moduleIds": ["projects-trust", "sessions-chat"]},
+          {"title": "生成有界投影", "description": "宿主把 SDK 事件转换为消息、工具、历史与活动投影，生成式界面载荷随工具结果一并识别。", "moduleIds": ["sessions-chat", "genui"]},
+          {"title": "页面应用增量", "description": "页面校验代际与序号后应用增量，聊天组件渲染；切回已缓存实例时直接复用分片。", "moduleIds": ["sessions-chat", "workspace-tabs"]}
+        ]
+      },
+      {
+        "id": "save-project-file",
+        "name": "打开并保存项目文件",
+        "summary": "从文件树或文件菜单打开条目，经编辑记录修改后按磁盘基线原子保存，冲突回到界面。",
+        "note": "关闭脏标签前先确认，关闭不等于保存；富文本只把已证明可回写的文本交给编辑记录。",
+        "relationIds": ["r-fe-tab-register", "r-fe-project-scope"],
+        "steps": [
+          {"title": "打开条目并登记标签", "description": "工作区先登记文件标签，再由编辑模块读取固定项目内的文件。", "moduleIds": ["files-editor", "workspace-tabs"]},
+          {"title": "分类并读取内容", "description": "主进程复核已登记项目、相对路径与文件类型，内容分为文本、图片或不支持。", "moduleIds": ["files-editor", "projects-trust"]},
+          {"title": "编辑与视图切换", "description": "源码与排版视图共用编辑记录；富文本会话完成序列化往返证明后才接管实例。", "moduleIds": ["files-editor"]},
+          {"title": "保存并判定冲突", "description": "保存携带文本、换行语义与磁盘基线；主进程复核真实路径，同目录临时文件加 rename 原子替换。", "moduleIds": ["files-editor"]},
+          {"title": "脏标签关闭确认", "description": "关闭前由应用级弹层宿主确认，脏文件不隐式保存。", "moduleIds": ["app-shell", "workspace-tabs"]}
+        ]
+      },
+      {
+        "id": "terminal-resume",
+        "name": "终端接回",
+        "summary": "页面订阅事件并读取清单，按投递代际请求画面快照，解析确认后接收实时输出。",
+        "note": "应用退出只断开连接，关闭终端才结束 PTY；守护进程重启只恢复历史记录。",
+        "relationIds": ["r-tc-tab-derive"],
+        "steps": [
+          {"title": "订阅并派生标签", "description": "终端 Store 先订阅事件再读取清单，状态查询不自动拉起守护进程；标签由真实终端清单派生。", "moduleIds": ["terminal-commands", "workspace-tabs"]},
+          {"title": "请求画面快照", "description": "单个终端视图带投递代际请求快照，主进程适配器经守护进程客户端分块读取画面。", "moduleIds": ["terminal-commands"]},
+          {"title": "解析并确认恢复", "description": "页面解析画面后确认恢复，守护进程再按连续序号开启实时段投递。", "moduleIds": ["terminal-commands"]},
+          {"title": "实时输出与背压", "description": "页面按序号确认，背压同时考虑页面、解析与磁盘积压。", "moduleIds": ["terminal-commands"]},
+          {"title": "退出只断开", "description": "页面重载只撤销投递与额度；退出应用由外壳编排断开连接，PTY 继续由守护进程持有。", "moduleIds": ["app-shell", "terminal-commands"]}
+        ]
+      },
+      {
+        "id": "auth-and-model",
+        "name": "认证与模型切换",
+        "summary": "模型设置页发起登录，认证辅助进程完成 Provider 认证；当前模型切换与默认模型保存是两条不同路径。",
+        "note": "登录成功不意味着已有会话自动加载新凭据；默认模型保存不修改当前会话。",
+        "relationIds": ["r-pa-runtime-load", "r-sc-model-candidates"],
+        "steps": [
+          {"title": "打开模型设置", "description": "设置页分节由外壳提供，模型页挂载时初始化认证状态与供应商快照，卸载时释放订阅。", "moduleIds": ["app-shell", "providers-auth"]},
+          {"title": "发起登录流程", "description": "认证 Store 与服务经 IPC 交主进程，AuthManager 启动认证辅助进程并转交提示。", "moduleIds": ["providers-auth"]},
+          {"title": "辅助进程完成认证", "description": "辅助进程调用官方 SDK，提示与状态回传，密钥与验证码不进入页面状态快照。", "moduleIds": ["providers-auth"]},
+          {"title": "切换当前会话模型", "description": "选择器按当前对话实际绑定状态决定操作目标，命令经主进程送到已绑定会话。", "moduleIds": ["providers-auth", "sessions-chat"]},
+          {"title": "保存默认模型", "description": "默认模型定点写入 Pi settings.json，供新会话预读；受管运行时与 SDK 加载由更新模块负责。", "moduleIds": ["providers-auth", "updates-runtime"]}
+        ]
+      },
+      {
+        "id": "genui-deliver",
+        "name": "生成式界面交付与参数提交",
+        "summary": "模型交付声明式文档，经工具结果进入会话投影并在聊天内渲染；参数变动本地生效，显式提交才成为真实用户消息。",
+        "note": "本机参数是独立旁路，不写回会话正文；清除本机参数不删除会话中的工具结果。",
+        "relationIds": ["r-genui-session-tools", "r-sc-genui-payload"],
+        "steps": [
+          {"title": "交付文档", "description": "模型经内置工具交付结构化文档，共享契约校验形态、版本与上限。", "moduleIds": ["genui", "sessions-chat"]},
+          {"title": "进入会话投影", "description": "工具结果进入投影，聊天消息选择生成式渲染分支，节点组件只实现受支持的声明。", "moduleIds": ["sessions-chat", "genui"]},
+          {"title": "本机调节参数", "description": "参数变动先更新运行期真源，在本地完成派生展示，不发起网络或会话请求。", "moduleIds": ["genui"]},
+          {"title": "提交为真实消息", "description": "显式提交经会话链发出真实用户消息，回到模型输入。", "moduleIds": ["genui", "sessions-chat"]},
+          {"title": "旁路留档", "description": "参数按文档合并写回 userData/genui-params.json；冷启动只补尚未被用户新选择替代的记录。", "moduleIds": ["genui"]}
+        ]
+      },
+      {
+        "id": "runtime-install",
+        "name": "版本检查与运行时安装",
+        "summary": "启动后后台检查版本；显式安装时在 staging 安装候选 SDK、比对版本后切换指针。",
+        "note": "检查不安装；扩展自动更新仅在开关开启且启动检查满足条件时执行。",
+        "relationIds": ["r-up-auto-switch", "r-up-project-ext"],
+        "steps": [
+          {"title": "后台启动检查", "description": "窗口建立后由检查器启动一次性脚本读取已安装包；扩展自动更新开关在此被消费。", "moduleIds": ["app-shell", "updates-runtime", "preferences"]},
+          {"title": "查询远端版本", "description": "按离线状态决定是否访问官方发布、npm 与 git 远端；扩展声明读取使用当前项目上下文。", "moduleIds": ["updates-runtime", "projects-trust"]},
+          {"title": "安装候选 SDK", "description": "运行时安装入口在应用自有 staging 中安装并加载候选 SDK，比对版本。", "moduleIds": ["updates-runtime"]},
+          {"title": "切换当前指针", "description": "成功才移动到版本目录并切换当前版本指针；失败不切换。", "moduleIds": ["updates-runtime"]},
+          {"title": "宿主不热切换", "description": "正在使用的 SDK 宿主不会因磁盘指针改变就自动切换版本，重建由会话链决定。", "moduleIds": ["sessions-chat", "updates-runtime"]}
+        ]
+      }
+    ]
+  }
+  </script>
+  <a class="skip" href="#main-content">跳到地图内容</a>
+  <header class="topbar">
+    <div class="brand"><div class="brand-mark" aria-hidden="true">⌘</div><div><div class="brand-title" id="brand-name">项目地图</div><div class="brand-sub">ARCHITECTURE ATLAS</div></div></div>
+    <div class="top-right"><span class="badge">结构快照 · 无实时数据</span><div id="project-links"></div></div>
+  </header>
+  <section id="notice" class="notice" aria-labelledby="notice-title"><h1 id="notice-title">无法显示项目地图</h1><p id="notice-description">请检查内嵌 project-map-data。结构事实也可通过项目已有的 Markdown 文档读取。</p></section>
+  <div id="workspace" class="workspace" hidden>
+    <aside class="sidebar" aria-label="查找业务模块">
+      <div class="sidebar-controls"><div><label class="sr-only" for="search">搜索模块、功能或路径</label><input class="search" id="search" type="search" placeholder="搜索功能、模块或路径…" autocomplete="off"></div><label class="scope-label" for="scope"><span>业务分组</span><select id="scope" class="scope"></select></label></div>
+      <p class="scope-note">筛选模块地图与矩阵；不裁剪运行和流程视图。</p>
+      <div class="nav-heading"><span>模块索引</span><span id="module-count"></span></div><nav id="module-list" class="module-list" aria-label="模块"></nav>
+      <button type="button" class="text-button" id="reset" hidden>清除搜索与筛选</button><p id="source-note" class="source-note"></p>
+    </aside>
+    <main class="main" id="main-content" tabindex="-1">
+      <div class="eyebrow">SYSTEM EXPLORER</div><h1 id="project-name"></h1><p class="intro" id="project-summary"></p>
+      <div class="tabs" role="tablist" aria-label="结构视图">
+        <button id="tab-map" type="button" class="tab" role="tab" data-view="map" aria-controls="view-map" aria-selected="false" tabindex="-1">功能地图</button>
+        <button id="tab-matrix" type="button" class="tab" role="tab" data-view="matrix" aria-controls="view-matrix" aria-selected="false" tabindex="-1">功能矩阵</button>
+        <button id="tab-runtime" type="button" class="tab" role="tab" data-view="runtime" aria-controls="view-runtime" aria-selected="false" tabindex="-1">运行全貌</button>
+        <button id="tab-flows" type="button" class="tab" role="tab" data-view="flows" aria-controls="view-flows" aria-selected="false" tabindex="-1">关键流程</button>
+      </div>
+      <section id="view-map" role="tabpanel" aria-labelledby="tab-map" hidden>
+        <div class="panel"><div class="panel-head"><div><h2>业务能力分布</h2><p class="small">视觉分组不代表进程；只显示选中模块发起的已登记关系。</p></div><div id="legend" class="legend"></div></div><div id="map-canvas" class="canvas" data-focus-scope></div><div class="canvas-foot"><span id="map-caption"></span><button type="button" class="text-button" data-detail>查看详情 ↓</button></div></div>
+        <div id="edge-summary" class="edge-summary"></div><p class="small">实线表示调用／读写，虚线表示组合，点线表示引用。具体含义以关系标签为准，不视为完整依赖分析。</p>
+      </section>
+      <section id="view-matrix" role="tabpanel" aria-labelledby="tab-matrix" hidden>
+        <div class="panel matrix-wrap"><table><caption>功能与实现位置对照。入口类型依据项目事实，不强制按前端／后端配对。</caption><colgroup><col style="width:19%"><col style="width:25%"><col style="width:32%"><col style="width:24%"></colgroup><thead><tr><th scope="col">模块</th><th scope="col">功能</th><th scope="col">入口与实现</th><th scope="col">状态／资源</th></tr></thead><tbody id="matrix-body" data-focus-scope></tbody></table><p id="matrix-empty" class="empty" hidden>没有匹配模块，请调整筛选。</p></div>
+      </section>
+      <section id="view-runtime" role="tabpanel" aria-labelledby="tab-runtime" hidden>
+        <div class="panel"><div class="panel-head"><div><h2>运行与资源边界</h2><p class="small">节点依据真实运行单元、资源或外部系统登记；点击查看包含模块与来源。</p></div></div><div id="runtime-canvas" class="canvas" data-focus-scope></div><div class="canvas-foot"><span>箭头仅表达已登记关系，不推断部署实例、并行度或执行顺序。</span><button type="button" class="text-button" data-detail>查看详情 ↓</button></div></div><div id="runtime-edges" class="edge-summary"></div>
+      </section>
+      <section id="view-flows" role="tabpanel" aria-labelledby="tab-flows" hidden>
+        <div class="flow-selector"><label for="flow-select">业务场景</label><select id="flow-select"></select></div><h2 id="flow-name" class="flow-title"></h2><p id="flow-summary" class="flow-description"></p>
+        <div id="flow-map-panel" class="panel"><div class="panel-head"><h2>场景参与模块</h2><span class="small">高亮当前步骤；步骤给先后，连线给协作。</span></div><div id="flow-canvas" class="canvas" data-focus-scope></div></div><div id="flow-edges" class="edge-summary"></div>
+        <ol id="flow-steps" class="steps" aria-label="场景步骤" data-focus-scope></ol><p id="flow-note" class="flow-note"></p><p class="small">场景参与者不随左侧搜索或分组筛选删减；外部参与者和并行语义见步骤说明。</p>
+      </section>
+      <p id="announcement" class="sr-only" aria-live="polite" aria-atomic="true"></p>
+    </main>
+    <aside id="inspector" class="inspector" aria-labelledby="inspector-title" tabindex="-1"><div id="inspector-title" class="inspector-heading">结构详情</div><div id="detail" class="detail" data-focus-scope></div></aside>
+  </div>
+  <noscript><section class="notice"><h2>需要启用 JavaScript</h2><p>地图交互需要浏览器执行内嵌脚本；结构事实也可通过项目已有 Markdown 文档读取。</p></section></noscript>
+  <script>
+    'use strict';
+    // 渲染器只使用内嵌数据。所有说明通过 DOM 文本写入，不解析为 HTML，也不访问业务服务。
+    const $ = id => document.getElementById(id);
+    const NS = 'http://www.w3.org/2000/svg';
+    const COLORS = ['#335fe5', '#237761', '#9b6b22', '#7960a8', '#3c778a'];
+    const VIEW_IDS = ['map', 'matrix', 'runtime', 'flows'];
+    let model, moduleIndex, runtimeIndex, relationIndex, visualGroups, availableViews;
+    const state = { view: '', selection: null, query: '', scope: -1, flow: 0, step: 0 };
+
+    function element(tag, className = '', text = '') {
+      const node = document.createElement(tag);
+      if (className) node.className = className;
+      if (text !== '') node.textContent = text;
+      return node;
+    }
+    function svgElement(tag, attributes = {}, text = '') {
+      const node = document.createElementNS(NS, tag);
+      Object.entries(attributes).forEach(([key, value]) => node.setAttribute(key, String(value)));
+      if (text !== '') node.textContent = text;
+      return node;
+    }
+    function emptyText(text) { return element('p', 'empty', text); }
+
+    /** 检查展示契约，错误保持可见；不悄悄丢弃无效端点后冒充完整结构。 */
+    function record(value, location) {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(location + ' 必须是对象');
+      return value;
+    }
+    function text(value, location, required = false) {
+      if (value === undefined && !required) return '';
+      if (typeof value !== 'string' || (required && !value.trim())) throw new Error(location + ' 必须是' + (required ? '非空' : '') + '字符串');
+      return value;
+    }
+    function array(value, location) {
+      if (value === undefined) return [];
+      if (!Array.isArray(value)) throw new Error(location + ' 必须是数组');
+      return value;
+    }
+    function strings(value, location) { return array(value, location).map((item, index) => text(item, location + '[' + index + ']', true)); }
+    function uniqueIndex(items, location) {
+      const index = new Map();
+      items.forEach(item => { if (index.has(item.id)) throw new Error(location + ' 存在重复 ID：' + item.id); index.set(item.id, item); });
+      return index;
+    }
+    function links(value, location) {
+      return array(value, location).map((item, index) => {
+        const at = location + '[' + index + ']', link = record(item, at);
+        return { label: text(link.label, at + '.label', true), href: text(link.href, at + '.href', true) };
+      });
+    }
+    function entries(value, location) {
+      return array(value, location).map((item, index) => {
+        const at = location + '[' + index + ']', entry = record(item, at);
+        return { kind: text(entry.kind, at + '.kind', true), label: text(entry.label, at + '.label'), path: text(entry.path, at + '.path', true), href: text(entry.href, at + '.href') };
+      });
+    }
+    function resources(value, location) {
+      return array(value, location).map((item, index) => {
+        const at = location + '[' + index + ']', resource = record(item, at);
+        return { name: text(resource.name, at + '.name', true), owner: text(resource.owner, at + '.owner'), lifecycle: text(resource.lifecycle, at + '.lifecycle') };
+      });
+    }
+    function baseNode(value, location) {
+      const item = record(value, location);
+      return { id: text(item.id, location + '.id', true), name: text(item.name, location + '.name', true), summary: text(item.summary, location + '.summary'), entries: entries(item.entries, location + '.entries'), resources: resources(item.resources, location + '.resources'), constraints: strings(item.constraints, location + '.constraints'), links: links(item.links, location + '.links') };
+    }
+    function relationList(value, location, endpoints) {
+      const list = array(value, location).map((item, index) => {
+        const at = location + '[' + index + ']', edge = record(item, at);
+        const result = { id: text(edge.id, at + '.id', true), from: text(edge.from, at + '.from', true), to: text(edge.to, at + '.to', true), label: text(edge.label, at + '.label', true), kind: edge.kind === undefined ? 'call' : text(edge.kind, at + '.kind', true) };
+        if (!endpoints.has(result.from) || !endpoints.has(result.to)) throw new Error(at + ' 引用了不存在的端点');
+        if (!['call', 'read', 'write', 'compose', 'reference'].includes(result.kind)) throw new Error(at + '.kind 不受支持');
+        return result;
+      });
+      uniqueIndex(list, location);
+      return list;
+    }
+    function prepareData(raw) {
+      const root = record(raw, 'data'), project = record(root.project, 'project');
+      if (root.template !== false) throw new Error('正式产物必须将 template 设为 false');
+      const result = { project: { name: text(project.name, 'project.name', true), summary: text(project.summary, 'project.summary'), sourceNote: text(project.sourceNote, 'project.sourceNote'), links: links(project.links, 'project.links') } };
+      result.groups = array(root.groups, 'groups').map((item, index) => {
+        const at = 'groups[' + index + ']', group = record(item, at);
+        return { id: text(group.id, at + '.id', true), name: text(group.name, at + '.name', true) };
+      });
+      const groups = uniqueIndex(result.groups, 'groups');
+      result.modules = array(root.modules, 'modules').map((item, index) => {
+        const at = 'modules[' + index + ']', module = baseNode(item, at), groupId = text(item.groupId, at + '.groupId');
+        if (groupId && !groups.has(groupId)) throw new Error(at + '.groupId 不存在');
+        return { ...module, groupId: groupId || null, features: strings(item.features, at + '.features'), tags: strings(item.tags, at + '.tags') };
+      });
+      const modules = uniqueIndex(result.modules, 'modules');
+      result.relations = relationList(root.relations, 'relations', modules);
+      const relations = uniqueIndex(result.relations, 'relations');
+      const runtime = root.runtime === undefined ? {} : record(root.runtime, 'runtime');
+      result.runtime = { nodes: array(runtime.nodes, 'runtime.nodes').map((item, index) => {
+        const at = 'runtime.nodes[' + index + ']', node = baseNode(item, at), contains = strings(item.contains, at + '.contains');
+        contains.forEach(id => { if (!modules.has(id)) throw new Error(at + '.contains 引用了不存在的模块：' + id); });
+        return { ...node, kind: text(item.kind, at + '.kind', true), contains };
+      }) };
+      const units = uniqueIndex(result.runtime.nodes, 'runtime.nodes');
+      result.runtime.relations = relationList(runtime.relations, 'runtime.relations', units);
+      result.flows = array(root.flows, 'flows').map((item, index) => {
+        const at = 'flows[' + index + ']', flow = record(item, at);
+        const resultFlow = { id: text(flow.id, at + '.id', true), name: text(flow.name, at + '.name', true), summary: text(flow.summary, at + '.summary'), note: text(flow.note, at + '.note'), relationIds: strings(flow.relationIds, at + '.relationIds'), steps: array(flow.steps, at + '.steps').map((value, stepIndex) => {
+          const stepAt = at + '.steps[' + stepIndex + ']', step = record(value, stepAt), moduleIds = strings(step.moduleIds, stepAt + '.moduleIds');
+          moduleIds.forEach(id => { if (!modules.has(id)) throw new Error(stepAt + ' 引用了不存在的模块：' + id); });
+          return { title: text(step.title, stepAt + '.title', true), description: text(step.description, stepAt + '.description'), moduleIds };
+        }) };
+        resultFlow.relationIds.forEach(id => { if (!relations.has(id)) throw new Error(at + '.relationIds 不存在：' + id); });
+        const participants = new Set(resultFlow.steps.flatMap(step => step.moduleIds));
+        resultFlow.relationIds.forEach(id => { const edge = relations.get(id); if (!participants.has(edge.from) || !participants.has(edge.to)) throw new Error(at + ' 的关系端点不在步骤参与模块内：' + id); });
+        return resultFlow;
+      });
+      uniqueIndex(result.flows, 'flows');
+      result.flows = result.flows.filter(flow => flow.steps.length);
+      return result;
+    }
+
+    /** href 与显示路径分开；只接受相对路径或显式 HTTP(S)，禁用凭据和可执行协议。 */
+    function safeHref(value) {
+      if (!value || /[\u0000-\u001f\u007f\\]/.test(value)) return null;
+      const href = value.trim();
+      if (!href || href.startsWith('/') || /^[a-z]:/i.test(href)) return null;
+      if (/^[a-z][a-z\d+.-]*:/i.test(href) && !/^https?:\/\//i.test(href)) return null;
+      try {
+        const url = new URL(href, window.location.href);
+        if (!['http:', 'https:', 'file:'].includes(url.protocol) || url.username || url.password) return null;
+        return url.href;
+      } catch { return null; }
+    }
+    function textLink(label, href, className = '') {
+      const url = safeHref(href), node = element(url ? 'a' : 'span', className, label);
+      if (url) { node.href = url; node.target = '_blank'; node.rel = 'noopener noreferrer'; }
+      else { node.classList.add('disabled-link'); node.title = href ? '链接被安全规则禁用；仅展示位置' : '未提供跳转链接；仅展示位置'; }
+      return node;
+    }
+    function entryLink(entry) {
+      const node = textLink('', entry.href, 'file');
+      node.append(element('span', 'file-label', entry.kind + (entry.label ? ' · ' + entry.label : '')), element('code', '', entry.path));
+      if (!safeHref(entry.href)) node.append(element('span', 'link-state', entry.href ? '链接已禁用' : '仅展示路径'));
+      return node;
+    }
+    function selectionButton(id, kind, label, className = 'related-button') {
+      const button = element('button', className, label);
+      button.type = 'button'; button.dataset[kind] = id;
+      return button;
+    }
+    function section(title, children, className = '') {
+      const node = element('section', 'detail-section ' + className);
+      node.append(element('h3', '', title), ...children);
+      return node;
+    }
+    function bulletList(items) {
+      const list = element('ul', 'detail-list');
+      items.forEach(item => list.append(element('li', '', item)));
+      return list;
+    }
+    function groupIndex(module) { return visualGroups.findIndex(group => group.id === module.groupId); }
+    function matchingModules() {
+      const query = state.query.trim().toLocaleLowerCase();
+      return model.modules.filter(module => (state.scope === -1 || groupIndex(module) === state.scope) && (!query || JSON.stringify(module).toLocaleLowerCase().includes(query)));
+    }
+    function currentModule() { return state.selection?.kind === 'module' ? moduleIndex.get(state.selection.id) : null; }
+    function selectedIs(kind, id) { return state.selection?.kind === kind && state.selection.id === id; }
+
+    function renderNavigation() {
+      const matched = matchingModules(), list = $('module-list');
+      $('module-count').textContent = matched.length + ' / ' + model.modules.length;
+      list.replaceChildren();
+      matched.forEach(module => {
+        const button = selectionButton(module.id, 'module', '', 'module-button');
+        const dot = element('span', 'dot'); dot.style.backgroundColor = COLORS[groupIndex(module) % COLORS.length]; dot.setAttribute('aria-hidden', 'true');
+        button.append(dot, element('span', '', module.name)); button.setAttribute('aria-pressed', String(selectedIs('module', module.id))); list.append(button);
+      });
+      if (!matched.length) list.append(emptyText(model.modules.length ? '没有匹配项' : '未登记模块'));
+      $('reset').hidden = !state.query && state.scope === -1;
+    }
+
+    /** 基于分组和成员数排布，坐标只由渲染器计算，不属于项目数据。 */
+    function layout(nodes, groups, key) {
+      const used = groups.map(group => ({ ...group, members: nodes.filter(node => key(node) === group.id) })).filter(group => group.members.length);
+      const positions = new Map();
+      used.forEach((group, column) => group.members.forEach((node, row) => positions.set(node.id, { x:28 + column * 284, y:82 + row * 136, node, color:COLORS[column % COLORS.length] })));
+      return { groups:used, positions, width:Math.max(340, used.length * 284 + 56), height:Math.max(270, Math.max(0, ...used.map(group => group.members.length)) * 136 + 104) };
+    }
+    function wrappedText(value, units, lines = 1) {
+      const chars = Array.from(value.replace(/\s+/g, ' ')), result = [];
+      let index = 0;
+      for (let line = 0; line < lines && index < chars.length; line++) {
+        let row = '', width = 0;
+        while (index < chars.length) {
+          const weight = chars[index].codePointAt(0) > 255 ? 2 : 1;
+          if (width + weight > units) break;
+          row += chars[index++]; width += weight;
+        }
+        if (line === lines - 1 && index < chars.length) row = row.slice(0, Math.max(0, row.length - 1)) + '…';
+        result.push(row);
+      }
+      return result;
+    }
+    function edgePath(source, target) {
+      if (source === target) return `M${source.x + 220} ${source.y + 28}C${source.x + 280} ${source.y - 12},${source.x + 280} ${source.y + 112},${source.x + 223} ${source.y + 78}`;
+      if (source.x === target.x) return `M${source.x + 220} ${source.y + 56}C${source.x + 276} ${source.y + 56},${target.x + 276} ${target.y + 56},${target.x + 223} ${target.y + 56}`;
+      const forward = target.x > source.x, x1 = source.x + (forward ? 220 : 0), x2 = target.x + (forward ? -3 : 223), mid = (x1 + x2) / 2;
+      return `M${x1} ${source.y + 56}C${mid} ${source.y + 56},${mid} ${target.y + 56},${x2} ${target.y + 56}`;
+    }
+    function makeGraph(mode) {
+      const runtimeMode = mode === 'runtime', flowMode = mode === 'flow';
+      const nodes = runtimeMode ? model.runtime.nodes : model.modules;
+      if (!nodes.length) return emptyText('没有已登记的模块，参与者见步骤说明。');
+      const groups = runtimeMode ? [...new Set(nodes.map(node => node.kind))].map(kind => ({ id:kind, name:kind })) : visualGroups;
+      const diagram = layout(nodes, groups, node => runtimeMode ? node.kind : node.groupId), matched = new Set(matchingModules().map(module => module.id));
+      const flow = model.flows[state.flow], participants = new Set(flowMode ? flow.steps.flatMap(step => step.moduleIds) : []), active = new Set(flowMode ? flow.steps[state.step].moduleIds : []);
+      const module = currentModule();
+      const edges = runtimeMode ? model.runtime.relations : flowMode ? flow.relationIds.map(id => relationIndex.get(id)) : model.relations.filter(edge => edge.from === module?.id && matched.has(edge.from) && matched.has(edge.to));
+      const targets = new Set(edges.map(edge => edge.to));
+      const svg = svgElement('svg', { class:'map-svg', viewBox:`0 0 ${diagram.width} ${diagram.height}`, role:'group', 'aria-label':runtimeMode ? '运行与资源关系，可选择节点' : flowMode ? '场景模块关系，先后顺序见步骤' : '业务模块地图，可选择模块' });
+      const defs = svgElement('defs'), marker = svgElement('marker', { id:'arrow-' + mode, viewBox:'0 0 10 10', refX:9, refY:5, markerWidth:6, markerHeight:6, orient:'auto' });
+      marker.append(svgElement('path', { d:'M0 0 10 5 0 10Z', fill:'#97acda' })); defs.append(marker); svg.append(defs);
+      diagram.groups.forEach((group, index) => {
+        svg.append(svgElement('text', { x:28 + index * 284, y:37, class:'graph-group' }, wrappedText(group.name, 30)[0] || ''), svgElement('text', { x:28 + index * 284, y:58, class:'graph-count' }, String(group.members.length) + (runtimeMode ? ' 个节点' : ' 个模块')));
+      });
+      edges.forEach(edge => {
+        const path = svgElement('path', { d:edgePath(diagram.positions.get(edge.from), diagram.positions.get(edge.to)), class:'edge ' + edge.kind, 'marker-end':'url(#arrow-' + mode + ')' });
+        const index = runtimeMode ? runtimeIndex : moduleIndex;
+        path.append(svgElement('title', {}, index.get(edge.from).name + ' → ' + index.get(edge.to).name + '：' + edge.label)); svg.append(path);
+      });
+      diagram.positions.forEach(position => {
+        const node = position.node, filtered = !runtimeMode && !flowMode && !matched.has(node.id), muted = flowMode && !participants.has(node.id);
+        const selected = runtimeMode ? selectedIs('runtime', node.id) : flowMode ? active.has(node.id) : selectedIs('module', node.id);
+        const related = runtimeMode ? state.selection?.kind === 'module' && node.contains.includes(state.selection.id) : targets.has(node.id);
+        const className = ['node', selected ? 'selected' : related ? 'related' : '', filtered ? 'filtered' : '', muted ? 'muted' : ''].join(' ');
+        const group = svgElement('g', { transform:`translate(${position.x},${position.y})`, class:className, role:'button', tabindex:filtered ? -1 : 0, 'aria-disabled':String(filtered), 'aria-pressed':String(selected), 'aria-label':node.name + '：' + node.summary });
+        group.dataset[runtimeMode ? 'runtime' : 'module'] = node.id;
+        group.append(svgElement('title', {}, node.name + '\n' + node.id + '\n' + node.summary), svgElement('rect', { width:220, height:112, rx:8, class:'node-box' }), svgElement('rect', { x:14, y:17, width:4, height:17, rx:2, fill:position.color }), svgElement('text', { x:28, y:31, class:'node-name' }, wrappedText(node.name, 24)[0] || ''), svgElement('text', { x:15, y:53, class:'node-id' }, wrappedText(node.id, 29)[0] || ''));
+        wrappedText(node.summary, 34, 2).forEach((line, index) => group.append(svgElement('text', { x:15, y:76 + index * 16, class:'node-summary' }, line)));
+        svg.append(group);
+      });
+      return svg;
+    }
+    function relationSummary(target, edges, index) {
+      target.replaceChildren();
+      edges.forEach(edge => target.append(element('span', 'edge-chip', index.get(edge.from).name + ' → ' + index.get(edge.to).name + ' · ' + edge.label)));
+      if (!edges.length) target.append(element('p', 'small', '未显示关系不代表没有协作；只展示明确登记且在当前范围内的关系。'));
+    }
+    function renderMap() {
+      $('map-canvas').replaceChildren(makeGraph('map'));
+      const selected = currentModule(), matched = new Set(matchingModules().map(module => module.id));
+      $('map-caption').textContent = selected ? '当前模块：' + selected.name : '选择模块查看职责、入口与边界';
+      relationSummary($('edge-summary'), model.relations.filter(edge => edge.from === selected?.id && matched.has(edge.from) && matched.has(edge.to)), moduleIndex);
+      if (!matched.size) $('edge-summary').prepend(element('p', 'small', '没有匹配模块，可清除搜索与筛选。'));
+    }
+    function renderMatrix() {
+      const body = $('matrix-body'), matched = matchingModules(); body.replaceChildren(); $('matrix-empty').hidden = matched.length > 0;
+      matched.forEach(module => {
+        const row = element('tr', selectedIs('module', module.id) ? 'selected-row' : ''), name = element('td'), features = element('td'), entryCell = element('td'), resourceCell = element('td');
+        name.append(selectionButton(module.id, 'module', module.name, 'matrix-button'), element('span', 'matrix-id', module.id));
+        module.features.forEach(feature => features.append(element('p', '', feature)));
+        module.entries.forEach(entry => { const line = element('p'); line.append(element('span', 'file-label', entry.kind + (entry.label ? ' · ' + entry.label : '')), element('code', '', entry.path)); entryCell.append(line); });
+        module.resources.forEach(resource => resourceCell.append(element('p', '', resource.name)));
+        if (!module.features.length) features.append(element('span', 'small', '见模块说明'));
+        if (!module.entries.length) entryCell.append(element('span', 'small', '未登记入口'));
+        if (!module.resources.length) resourceCell.append(element('span', 'small', '未登记资源'));
+        row.append(name, features, entryCell, resourceCell); body.append(row);
+      });
+    }
+    function renderRuntime() {
+      $('runtime-canvas').replaceChildren(makeGraph('runtime'));
+      relationSummary($('runtime-edges'), model.runtime.relations, runtimeIndex);
+    }
+    function renderFlows() {
+      const flow = model.flows[state.flow]; if (!flow) return;
+      $('flow-name').textContent = flow.name; $('flow-summary').textContent = flow.summary;
+      $('flow-note').textContent = flow.note; $('flow-note').hidden = !flow.note;
+      $('flow-map-panel').hidden = !model.modules.length;
+      $('flow-canvas').replaceChildren(makeGraph('flow'));
+      relationSummary($('flow-edges'), flow.relationIds.map(id => relationIndex.get(id)), moduleIndex);
+      const list = $('flow-steps'); list.replaceChildren();
+      flow.steps.forEach((step, index) => {
+        const item = element('li'), number = element('span', 'step-number' + (index === state.step ? ' current' : ''), String(index + 1)), button = element('button', 'step');
+        number.setAttribute('aria-hidden', 'true'); button.type = 'button'; button.dataset.step = String(index);
+        if (index === state.step) button.setAttribute('aria-current', 'step');
+        button.append(element('strong', '', String(index + 1) + '. ' + step.title), element('p', '', step.description)); item.append(number, button); list.append(item);
+      });
+    }
+    function renderDetails() {
+      const kind = state.selection?.kind, index = kind === 'runtime' ? runtimeIndex : moduleIndex, node = index.get(state.selection?.id), detail = $('detail');
+      detail.replaceChildren();
+      if (!node) { detail.append(emptyText('选择模块或运行节点，查看职责、入口与来源。')); return; }
+      const overview = element('div', 'detail-overview');
+      overview.append(element('p', 'detail-id', node.id + ' / ' + (kind === 'runtime' ? node.kind : visualGroups[groupIndex(node)].name)), element('h2', '', node.name), element('p', 'detail-description', node.summary));
+      if (kind === 'module' && node.tags.length) { const tags = element('div', 'tags'); node.tags.forEach(tag => tags.append(element('span', 'tag', tag))); overview.append(tags); }
+      detail.append(overview);
+      if (kind === 'module' && node.features.length) detail.append(section('负责什么', [bulletList(node.features)]));
+      if (node.entries.length) detail.append(section('入口与实现位置', node.entries.map(entryLink)));
+      if (node.resources.length) detail.append(section('状态与资源', node.resources.map(resource => {
+        const item = element('div', 'resource'); item.append(element('strong', '', resource.name));
+        if (resource.owner) item.append(element('p', '', '维护方：' + resource.owner));
+        if (resource.lifecycle) item.append(element('p', '', resource.lifecycle)); return item;
+      })));
+      if (node.constraints.length) detail.append(section('关键边界', [bulletList(node.constraints)], 'boundary'));
+      if (kind === 'runtime' && node.contains.length) { const list = element('div', 'related-list'); node.contains.forEach(id => list.append(selectionButton(id, 'module', moduleIndex.get(id).name))); detail.append(section('包含的业务模块', [list])); }
+      const edges = kind === 'runtime' ? model.runtime.relations : model.relations;
+      const outgoing = edges.filter(edge => edge.from === node.id), incoming = edges.filter(edge => edge.to === node.id);
+      [['发起的关系', outgoing, 'to'], ['已登记的使用方', incoming, 'from']].forEach(([title, items, endpoint]) => {
+        if (!items.length) return;
+        const list = element('div', 'related-list'); items.forEach(edge => list.append(selectionButton(edge[endpoint], kind, edge.label + ' · ' + index.get(edge[endpoint]).name))); detail.append(section(title, [list]));
+      });
+      if (node.links.length) detail.append(section('继续读取', node.links.map(link => textLink(link.label + ' ↗', link.href, 'file'))));
+    }
+    function renderAll() { renderNavigation(); renderMap(); renderMatrix(); renderRuntime(); renderFlows(); renderDetails(); }
+    function announce(message) { $('announcement').textContent = message; }
+    function selectNode(kind, id) {
+      const index = kind === 'runtime' ? runtimeIndex : moduleIndex;
+      if (!index.has(id)) return;
+      state.selection = { kind, id }; renderAll(); announce('已选择' + index.get(id).name + '，详情已更新。');
+    }
+    function syncTabs() {
+      VIEW_IDS.forEach(id => { const active = id === state.view; $('tab-' + id).hidden = !availableViews.includes(id); $('tab-' + id).setAttribute('aria-selected', String(active)); $('tab-' + id).tabIndex = active ? 0 : -1; $('view-' + id).hidden = !active; });
+    }
+    function changeView(id, focus = false) {
+      if (!availableViews.includes(id)) return;
+      state.view = id;
+      if (id === 'map' || id === 'matrix') { const list = matchingModules(); if (!list.some(module => selectedIs('module', module.id))) state.selection = list.length ? { kind:'module', id:list[0].id } : null; }
+      if (id === 'runtime' && state.selection?.kind !== 'runtime') state.selection = { kind:'runtime', id:model.runtime.nodes[0].id };
+      if (id === 'flows') { const id = model.flows[state.flow].steps[state.step].moduleIds[0]; state.selection = id ? { kind:'module', id } : null; }
+      syncTabs(); renderAll(); if (focus) $('tab-' + id).focus();
+    }
+    function updateFilters() {
+      state.query = $('search').value; state.scope = Number($('scope').value);
+      const matched = matchingModules();
+      if (['map', 'matrix'].includes(state.view) && !matched.some(module => selectedIs('module', module.id))) state.selection = matched.length ? { kind:'module', id:matched[0].id } : null;
+      renderAll(); announce('找到 ' + matched.length + ' 个模块。');
+    }
+
+    /** 数据标识仅用于属性值；恢复焦点时不把它拼进 CSS 选择器。 */
+    function restoreFocus(scopeId, kind, id) {
+      const scope = $(scopeId), selector = kind === 'runtime' ? '[data-runtime]' : kind === 'module' ? '[data-module]' : '[data-step]';
+      const target = scope && Array.from(scope.querySelectorAll(selector)).find(node => node.dataset[kind] === String(id));
+      (target || $('inspector')).focus({ preventScroll:true });
+    }
+    function bindEvents() {
+      $('search').addEventListener('input', updateFilters); $('scope').addEventListener('change', updateFilters);
+      $('reset').addEventListener('click', () => { $('search').value = ''; $('scope').value = '-1'; updateFilters(); $('search').focus(); });
+      $('flow-select').addEventListener('change', event => { state.flow = Number(event.target.value); state.step = 0; const id = model.flows[state.flow].steps[0].moduleIds[0]; state.selection = id ? { kind:'module', id } : null; renderAll(); announce('已选择场景：' + model.flows[state.flow].name); });
+      document.addEventListener('click', event => {
+        const view = event.target.closest('[data-view]'); if (view) { changeView(view.dataset.view); return; }
+        const step = event.target.closest('[data-step]');
+        if (step) { state.step = Number(step.dataset.step); const current = model.flows[state.flow].steps[state.step], id = current.moduleIds[0]; state.selection = id ? { kind:'module', id } : null; renderAll(); restoreFocus('flow-steps', 'step', state.step); announce('步骤 ' + (state.step + 1) + '：' + current.title); return; }
+        const node = event.target.closest('[data-module], [data-runtime]');
+        if (node && node.getAttribute('aria-disabled') !== 'true') { const kind = node.hasAttribute('data-runtime') ? 'runtime' : 'module', id = node.dataset[kind], scopeId = node.closest('[data-focus-scope]')?.id || 'module-list'; selectNode(kind, id); restoreFocus(scopeId, kind, id); return; }
+        if (event.target.closest('[data-detail]')) { $('inspector').focus({ preventScroll:true }); $('inspector').scrollIntoView({ block:'start', behavior:'auto' }); }
+      });
+      document.addEventListener('keydown', event => {
+        const tab = event.target.closest('[role="tab"]');
+        if (tab && ['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) { event.preventDefault(); const index = availableViews.indexOf(state.view), next = event.key === 'Home' ? 0 : event.key === 'End' ? availableViews.length - 1 : (index + (event.key === 'ArrowRight' ? 1 : -1) + availableViews.length) % availableViews.length; changeView(availableViews[next], true); return; }
+        const node = event.target.closest('g[data-module], g[data-runtime]');
+        if (node && ['Enter', ' '].includes(event.key) && node.getAttribute('aria-disabled') !== 'true') { event.preventDefault(); const kind = node.hasAttribute('data-runtime') ? 'runtime' : 'module', id = node.dataset[kind], scopeId = node.closest('[data-focus-scope]').id; selectNode(kind, id); restoreFocus(scopeId, kind, id); }
+      });
+    }
+    function start(raw) {
+      if (raw?.template === true) return;
+      model = prepareData(raw); moduleIndex = uniqueIndex(model.modules, 'modules'); runtimeIndex = uniqueIndex(model.runtime.nodes, 'runtime.nodes'); relationIndex = uniqueIndex(model.relations, 'relations');
+      visualGroups = [...model.groups]; if (model.modules.some(module => module.groupId === null)) visualGroups.push({ id:null, name:'未分组' });
+      availableViews = [...(model.modules.length ? ['map', 'matrix'] : []), ...(model.runtime.nodes.length ? ['runtime'] : []), ...(model.flows.length ? ['flows'] : [])];
+      if (!availableViews.length) throw new Error('没有可展示的模块、运行节点或场景；请补充事实，或只交付已有文本资料');
+      document.title = model.project.name + ' · 项目地图'; $('brand-name').textContent = model.project.name + ' / 项目地图'; $('project-name').textContent = '从功能定位实现，从关系理解边界。'; $('project-summary').textContent = model.project.summary;
+      $('source-note').textContent = model.project.sourceNote || '结构快照，仅展示已登记事实，不是实时系统或完整依赖分析。';
+      model.project.links.forEach(link => $('project-links').append(textLink(link.label + ' ↗', link.href)));
+      const all = element('option', '', '全部模块'); all.value = '-1'; $('scope').append(all);
+      visualGroups.forEach((group, index) => { const option = element('option', '', group.name); option.value = String(index); $('scope').append(option); const item = element('span'), dot = element('i', 'dot'); dot.style.backgroundColor = COLORS[index % COLORS.length]; dot.setAttribute('aria-hidden', 'true'); item.append(dot, document.createTextNode(group.name)); $('legend').append(item); });
+      model.flows.forEach((flow, index) => { const option = element('option', '', flow.name); option.value = String(index); $('flow-select').append(option); });
+      $('notice').hidden = true; $('workspace').hidden = false; bindEvents(); changeView(availableViews[0]);
+    }
+    try { start(JSON.parse($('project-map-data').textContent)); }
+    catch (error) { $('workspace').hidden = true; $('notice').hidden = false; $('notice').setAttribute('role', 'alert'); $('notice-title').textContent = '无法显示项目地图'; $('notice-description').textContent = '请检查内嵌 project-map-data：\n' + (error instanceof Error ? error.message : '数据格式错误'); }
+  </script>
+</body>
+</html>
