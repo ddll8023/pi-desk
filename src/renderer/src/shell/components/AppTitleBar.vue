@@ -1,5 +1,6 @@
 <!-- 全宽顶部栏：自绘窗口标题栏，呈现侧栏开关、应用名、当前会话与项目、Runtime 状态与右侧面板开关；macOS 预留原生红绿灯位。模型选择已下沉到输入坞。
-     会话簇的第一行是对话内跳转入口：显示当前读到的那一轮，点开按文本列出本会话每一轮用户输入，选中后由消息区按既有定位规则滚动。
+     会话簇的第一行是对话导航入口：显示当前读到的那一轮与其位置（第几轮/共几轮），点开是一个浮层面板，
+     按新的在前列出本会话每一轮的用户输入（序号、摘要、发送时间、含几个生成式界面），选中后由消息区按既有定位规则滚动。
      设置页模式：两个面板都不渲染，两个开关随之隐藏，左侧是返回对话入口。 -->
 <script setup lang="ts">
 import { computed, nextTick, ref, useId, watch } from 'vue'
@@ -73,29 +74,48 @@ const runtimeStatus = computed(() => {
 })
 const projectPath = computed(() => currentProject.value?.path ?? '尚未选择项目')
 
+/**
+ * 浮层里的展示行：在入口基础上补真实轮次序号（按正文顺序从 1 起）。
+ * 序号只用于展示，跳转仍以 `id` 为准。
+ */
+interface ChatNavRow extends ChatNavEntry {
+  readonly ordinal: number
+}
+
 /** 当前所在轮的摘要；正文尚未算出位置时为空，触发键退回会话标题。 */
 const activeEntry = computed(() => (
   navEntries.value.find(entry => entry.id === navActiveId.value) ?? null
 ))
 /**
+ * 展示顺序：新的在前。降序与正文阅读顺序相反，面板头必须写明，否则用户会以为列表坏了；
+ * 序号取真实轮次，用户据此知道自己跳到的是第几轮、离最新还有几轮。
+ */
+const displayEntries = computed<readonly ChatNavRow[]>(() => (
+  navEntries.value.map((entry, index) => ({ ...entry, ordinal: index + 1 })).reverse()
+))
+/** 当前轮在全部轮次里的位置（1 起）；没有当前轮时为空，触发键就不显示位置小标。 */
+const activeOrdinal = computed(() => (
+  activeEntry.value === null ? null : navEntries.value.indexOf(activeEntry.value) + 1
+))
+/**
  * 触发键显示当前所在轮；没有可跳转轮次时退回会话标题，入口仍在但点开是空态。
- * 入口列表按正文顺序排列（与消息区一致），键盘上下键的方向与正文滚动同向。
+ * 浮层按新的在前排列，键盘上下键的方向也按这个顺序：向上更新、向下更旧。
  */
 const triggerLabel = computed(() => activeEntry.value?.label ?? sessionTitle.value)
 const triggerTitle = computed(() => (
   navEntries.value.length === 0
     ? `${sessionTitle.value}；本会话还没有可跳转的对话轮次`
-    : `${activeEntry.value?.label ?? sessionTitle.value}；点击查看本会话的对话跳转列表`
+    : `${activeEntry.value?.label ?? sessionTitle.value}；点击查看本会话的对话导航，新的在前`
 ))
 
 /** 跳转浮层：宽度固定、贴住触发键左缘，浮层内部自己滚动，不撑高顶部栏。 */
-const activeIndex = ref(0)
+const highlightedId = ref<string | null>(null)
 const anchoredPopup = useAnchoredPopup({
-  width: 420,
+  width: 460,
   minWidth: 320,
-  maxHeightCap: 460,
-  // 收起时（含点击外部）把高亮重置，下次打开重新落在当前轮。
-  onClose: () => { activeIndex.value = 0 }
+  maxHeightCap: 520,
+  // 收起时（含点击外部）清掉高亮，下次打开重新落在当前轮。
+  onClose: () => { highlightedId.value = null }
 })
 const { trigger, popup, isOpen: expanded, position: popupPosition } = anchoredPopup
 const listbox = ref<HTMLElement | null>(null)
@@ -114,30 +134,30 @@ function setEntryElement(id: string, element: unknown): void {
   else entryElements.delete(id)
 }
 
-/** 打开时把高亮落在当前轮上：用户多半想跳到相邻的一轮，而不是每次从第一条开始翻。 */
-function resetActiveIndex(): void {
-  const currentIndex = navEntries.value.findIndex(entry => entry.id === navActiveId.value)
-  activeIndex.value = currentIndex >= 0 ? currentIndex : 0
+/** 打开时把高亮落在当前轮上：用户多半想跳到相邻的一轮，而不是每次从最新一条开始翻。 */
+function resetHighlight(): void {
+  highlightedId.value = navActiveId.value ?? displayEntries.value[0]?.id ?? null
 }
 
-function scrollActiveEntryIntoView(): void {
-  const entry = navEntries.value[activeIndex.value]
-  if (entry !== undefined) entryElements.get(entry.id)?.scrollIntoView({ block: 'nearest' })
+/** 滚动与焦点都按高亮行的 id 取元素：降序后新轮次插在顶部，按索引取会漂到隔壁一轮。 */
+function scrollHighlightedIntoView(): void {
+  const id = highlightedId.value
+  if (id !== null) entryElements.get(id)?.scrollIntoView({ block: 'nearest' })
 }
-function focusActiveEntry(): void {
-  const entry = navEntries.value[activeIndex.value]
-  if (entry !== undefined) entryElements.get(entry.id)?.focus()
+function focusHighlighted(): void {
+  const id = highlightedId.value
+  if (id !== null) entryElements.get(id)?.focus()
 }
 
 function openPopup(): void {
   if (expanded.value) return
-  resetActiveIndex()
+  resetHighlight()
   anchoredPopup.open()
   // 条目要等浮层挂载后才有焦点对象；高亮项拿到焦点后方向键与 Enter 都在列表内完成。
   void nextTick(() => {
-    if (navEntries.value.length > 0) focusActiveEntry()
+    if (displayEntries.value.length > 0) focusHighlighted()
     else listbox.value?.focus()
-    scrollActiveEntryIntoView()
+    scrollHighlightedIntoView()
   })
 }
 
@@ -151,30 +171,38 @@ function togglePopup(): void {
   else openPopup()
 }
 
-function moveActive(direction: -1 | 1): void {
-  const count = navEntries.value.length
+/** 在展示顺序里移动高亮：向上是更新的一轮，向下是更旧的一轮，到头回绕。 */
+function moveHighlight(direction: -1 | 1): void {
+  const list = displayEntries.value
+  const count = list.length
   if (count === 0) return
-  const start = activeIndex.value < 0 ? (direction === 1 ? -1 : 0) : activeIndex.value
-  activeIndex.value = (start + direction + count) % count
+  const current = list.findIndex(entry => entry.id === highlightedId.value)
+  const start = current < 0 ? (direction === 1 ? -1 : 0) : current
+  const next = list[(start + direction + count) % count]
+  if (next === undefined) return
+  highlightedId.value = next.id
   void nextTick(() => {
-    focusActiveEntry()
-    scrollActiveEntryIntoView()
+    focusHighlighted()
+    scrollHighlightedIntoView()
   })
 }
 
-function moveToBoundary(boundary: 'first' | 'last'): void {
-  const count = navEntries.value.length
-  if (count === 0) return
-  activeIndex.value = boundary === 'first' ? 0 : count - 1
+/** Home 落最新一轮，End 落最早一轮：与列表的降序一致，不是按正文顺序。 */
+function moveToBoundary(boundary: 'newest' | 'oldest'): void {
+  const list = displayEntries.value
+  if (list.length === 0) return
+  const target = boundary === 'newest' ? list[0] : list[list.length - 1]
+  if (target === undefined) return
+  highlightedId.value = target.id
   void nextTick(() => {
-    focusActiveEntry()
-    scrollActiveEntryIntoView()
+    focusHighlighted()
+    scrollHighlightedIntoView()
   })
 }
 
 /** 选中一轮：把意图交给消息区（折叠轮由它先展开再定位），收起浮层并把焦点还给触发键。 */
-function chooseEntry(entry: ChatNavEntry): void {
-  chatNavigationStore.requestJump(sessionViewStore.key, entry.id)
+function chooseEntry(id: string): void {
+  chatNavigationStore.requestJump(sessionViewStore.key, id)
   closePopup(true)
 }
 
@@ -182,18 +210,17 @@ function chooseEntry(entry: ChatNavEntry): void {
 function onListKeydown(event: KeyboardEvent): void {
   if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
     event.preventDefault()
-    moveActive(event.key === 'ArrowDown' ? 1 : -1)
+    moveHighlight(event.key === 'ArrowDown' ? 1 : -1)
     return
   }
   if (event.key === 'Home' || event.key === 'End') {
     event.preventDefault()
-    moveToBoundary(event.key === 'Home' ? 'first' : 'last')
+    moveToBoundary(event.key === 'Home' ? 'newest' : 'oldest')
     return
   }
   if (event.key === 'Enter' || event.key === ' ') {
     event.preventDefault()
-    const entry = navEntries.value[activeIndex.value]
-    if (entry !== undefined) chooseEntry(entry)
+    if (highlightedId.value !== null) chooseEntry(highlightedId.value)
     return
   }
   if (event.key === 'Escape') {
@@ -208,28 +235,32 @@ function onListKeydown(event: KeyboardEvent): void {
   }
 }
 
-/** 条目收到焦点就同步高亮：鼠标点选与键盘移动用的是同一个高亮值。 */function onEntryFocus(index: number): void {
-  activeIndex.value = index
+/** 条目收到焦点就同步高亮：鼠标点选与键盘移动用的是同一个高亮值。 */
+function onEntryFocus(id: string): void {
+  highlightedId.value = id
 }
 
 /**
- * 列表挂载或更新后把高亮项滚进可视范围：长会话里当前轮往往不在前几条。
+ * 列表挂载或更新后把高亮项滚进可视范围：长会话里当前轮往往不在起始位置。
  * 列表容器本身不接管焦点（键盘事件由高亮条目冒泡上来），因此这里只管滚动。
  */
 function onListRef(element: unknown): void {
   listbox.value = element instanceof HTMLElement ? element : null
   if (listbox.value === null) return
-  scrollActiveEntryIntoView()
+  scrollHighlightedIntoView()
 }
 
-/** 列表随正文变化（新的一轮、历史回读）时保持高亮在范围内；当前会话没有入口就收起浮层。 */
+/**
+ * 列表随正文变化（新的一轮、历史回读）时校高亮：高亮行被丢弃时重新落回当前轮。
+ * 高亮按 id 保留，新轮次插到顶部时仍指着原来那一轮；没有入口了则收起浮层。
+ */
 watch(navEntries, () => {
   if (!expanded.value) return
   if (navEntries.value.length === 0) {
     closePopup(true)
     return
   }
-  if (activeIndex.value >= navEntries.value.length) activeIndex.value = navEntries.value.length - 1
+  if (!navEntries.value.some(entry => entry.id === highlightedId.value)) resetHighlight()
 })
 </script>
 
@@ -287,6 +318,11 @@ watch(navEntries, () => {
         @keydown.down.prevent="openPopup"
         @keydown.esc.prevent="closePopup(true)"
       >
+        <span
+          v-if="activeOrdinal !== null"
+          class="app-titlebar-session-count"
+          aria-hidden="true"
+        >{{ activeOrdinal }}/{{ navEntries.length }}</span>
         <span class="app-titlebar-session-text">{{ triggerLabel }}</span>
         <svg
           class="app-titlebar-session-chevron"
@@ -325,43 +361,58 @@ watch(navEntries, () => {
       </svg>
     </AppButton>
 
-    <!-- 跳转列表：浮在标题栏之上，内部自己滚动；条目是纯文本，当前轮高亮并标出含几个生成式界面。 -->
+    <!-- 对话导航浮层：标题栏说明排序与轮次数，列表按新的在前排列；条目是序号 + 摘要 + 元信息，当前轮带强调条与文字标记。 -->
     <Teleport to="body">
-      <div v-if="expanded" ref="popup" class="chat-nav-popup" :style="popupStyle">
-        <div
-          :id="listboxId"
-          :ref="onListRef"
-          class="chat-nav-list"
-          role="listbox"
-          aria-label="对话跳转"
-          :tabindex="navEntries.length === 0 ? 0 : -1"
-          @keydown="onListKeydown"
-        >
-          <div
-            v-for="(entry, index) in navEntries"
-            :id="`chat-nav-${entry.id}`"
-            :key="entry.id"
-            :ref="(element) => setEntryElement(entry.id, element)"
-            class="chat-nav-entry"
-            :class="{
-              'is-active': index === activeIndex,
-              'is-current': entry.id === navActiveId
-            }"
-            role="option"
-            :aria-selected="entry.id === navActiveId"
-            tabindex="-1"
-            @mousedown.prevent
-            @click="chooseEntry(entry)"
-            @focus="onEntryFocus(index)"
-          >
-            <span class="chat-nav-entry-text">{{ entry.label }}</span>
-            <span v-if="entry.uiCount > 0" class="chat-nav-entry-meta">含 {{ entry.uiCount }} 个生成式界面</span>
+      <Transition name="chat-nav">
+        <div v-if="expanded" ref="popup" class="chat-nav-popup" :style="popupStyle">
+          <div class="chat-nav-header">
+            <span class="chat-nav-header-title">对话导航</span>
+            <span v-if="navEntries.length > 0" class="chat-nav-header-meta">
+              共 {{ navEntries.length }} 轮 · 新的在前
+            </span>
           </div>
-          <p v-if="navEntries.length === 0" class="chat-nav-empty">
-            本会话还没有可跳转的对话轮次；发送第一条消息后这里会列出每一轮。
-          </p>
+          <div
+            :id="listboxId"
+            :ref="onListRef"
+            class="chat-nav-list"
+            role="listbox"
+            aria-label="对话导航"
+            :tabindex="displayEntries.length === 0 ? 0 : -1"
+            @keydown="onListKeydown"
+          >
+            <div
+              v-for="row in displayEntries"
+              :id="`chat-nav-${row.id}`"
+              :key="row.id"
+              :ref="(element) => setEntryElement(row.id, element)"
+              class="chat-nav-entry"
+              :class="{
+                'is-active': row.id === highlightedId,
+                'is-current': row.id === navActiveId
+              }"
+              role="option"
+              :aria-selected="row.id === navActiveId"
+              tabindex="-1"
+              @mousedown.prevent
+              @click="chooseEntry(row.id)"
+              @focus="onEntryFocus(row.id)"
+            >
+              <span class="chat-nav-entry-ordinal" aria-hidden="true">{{ row.ordinal }}</span>
+              <span class="chat-nav-entry-body">
+                <span class="chat-nav-entry-text">{{ row.label }}</span>
+                <span class="chat-nav-entry-meta">
+                  <span v-if="row.time !== null" class="chat-nav-entry-time">{{ row.time }}</span>
+                  <span v-if="row.uiCount > 0">含 {{ row.uiCount }} 个生成式界面</span>
+                  <span v-if="row.id === navActiveId" class="chat-nav-entry-current">当前</span>
+                </span>
+              </span>
+            </div>
+            <p v-if="displayEntries.length === 0" class="chat-nav-empty">
+              本会话还没有可跳转的对话轮次；发送第一条消息后这里会列出每一轮。
+            </p>
+          </div>
         </div>
-      </div>
+      </Transition>
     </Teleport>
   </header>
 </template>

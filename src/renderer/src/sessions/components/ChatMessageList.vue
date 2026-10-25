@@ -76,9 +76,15 @@ function isTurnExpanded(turn: ChatTurnView, index: number): boolean {
   return index >= turns.value.length - 2 ? true : sessionViewStore.historyExpanded
 }
 
-/** 顶部栏跳转列表的入口：以每轮的用户消息为落点，前置轮（没有用户消息）不参与。 */
+/**
+ * 顶部栏跳转列表的入口：以每轮的用户消息为落点，前置轮（没有用户消息）不参与。
+ * 顺序始终按正文（旧→新）；顶部栏要新的在前时由它自己倒序展示，这里不承担展示顺序。
+ * 时间只随摘要透传，缺失时为 null，不参与排序也不补造。
+ */
 const navEntries = computed(() => turns.value.flatMap(turn => (
-  turn.user === null ? [] : [{ id: turn.user.id, label: navLabel(turn.user), uiCount: turn.uiCount }]
+  turn.user === null
+    ? []
+    : [{ id: turn.user.id, label: navLabel(turn.user), time: turn.user.time, uiCount: turn.uiCount }]
 )))
 const runtimeInfo = computed(() => (
   runtimeView.value.phase === 'ready' ? runtimeView.value.snapshot.info : null

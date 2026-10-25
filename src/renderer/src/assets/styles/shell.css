@@ -285,6 +285,14 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+/* 触发键里的位置小标（当前第几轮 / 共几轮）：等宽数字，轮次变化时宽度不跳。 */
+.app-titlebar-session-count {
+    flex: none;
+    color: var(--color-desk-muted);
+    font-family: var(--font-mono);
+    font-size: var(--text-2xs);
+    font-variant-numeric: tabular-nums;
+  }
 .app-titlebar-session-chevron {
     flex: none;
     color: var(--color-desk-muted);
@@ -308,7 +316,7 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-/* 跳转列表：与标题栏同一套弹层视觉，内部只有一个滚动容器；条目是纯文本，当前轮高亮。 */
+/* 对话导航浮层：与标题栏同一套弹层视觉。面板头说明排序与轮次数，列表内部自己滚动，不撑高顶部栏。 */
 .chat-nav-popup {
     position: fixed;
     z-index: 1000;
@@ -316,10 +324,34 @@
     flex-direction: column;
     overflow: hidden;
     border: 1px solid var(--color-desk-line-strong);
-    border-radius: var(--radius-desk-md);
+    border-radius: var(--radius-desk-lg);
     background: var(--color-desk-surface);
     box-shadow: var(--shadow-desk-pop);
     color: var(--color-desk-ink);
+  }
+/* 头部是列表的读法说明：降序与正文相反，不写明「新的在前」，列表看起来就像排坏了。 */
+.chat-nav-header {
+    display: flex;
+    flex: none;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.75rem;
+    border-bottom: 1px solid var(--color-desk-line);
+    padding: 0.625rem 0.75rem 0.5rem;
+  }
+.chat-nav-header-title {
+    flex: none;
+    color: var(--color-desk-muted);
+    font-size: var(--text-2xs);
+    font-weight: 600;
+    letter-spacing: 0.04em;
+  }
+.chat-nav-header-meta {
+    overflow: hidden;
+    color: var(--color-desk-muted);
+    font-size: var(--text-2xs);
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 .chat-nav-list {
     min-height: 0;
@@ -328,23 +360,47 @@
     overscroll-behavior: contain;
     padding: 0.25rem;
   }
+/* 条目两列：序号栏等宽右对齐，内容列吃满剩余宽度；序号是真实轮次，不是装饰编号。
+   圆角按同心取：外层 lg 12px 减列表 4px 内缩，得 md 8px。 */
 .chat-nav-entry {
-    display: flex;
-    flex-direction: column;
-    gap: 0.125rem;
-    border-radius: var(--radius-desk-sm);
-    padding: 0.375rem 0.5rem;
+    display: grid;
+    grid-template-columns: 1.75rem minmax(0, 1fr);
+    align-items: start;
+    gap: 0.5rem;
+    border-left: 2px solid transparent;
+    border-radius: var(--radius-desk-md);
+    padding: 0.4375rem 0.5rem 0.4375rem 0.375rem;
     cursor: pointer;
   }
 .chat-nav-entry.is-active {
     background: var(--color-desk-surface-subtle);
   }
+/* 当前轮三通道：强调条 + 浅强调底 + 元信息里的「当前」文字，不只靠颜色深浅区分。 */
+.chat-nav-entry.is-current {
+    border-left-color: var(--color-desk-accent);
+    background: var(--color-desk-accent-soft);
+  }
 .chat-nav-entry:focus-visible {
     outline: 2px solid var(--color-desk-accent);
     outline-offset: -2px;
   }
-.chat-nav-entry.is-current .chat-nav-entry-text {
+.chat-nav-entry-ordinal {
+    padding-top: 1px;
+    color: var(--color-desk-muted);
+    font-family: var(--font-mono);
+    font-size: var(--text-2xs);
+    font-variant-numeric: tabular-nums;
+    line-height: 1.5;
+    text-align: right;
+  }
+.chat-nav-entry.is-current .chat-nav-entry-ordinal {
     color: var(--color-desk-accent);
+  }
+.chat-nav-entry-body {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 0.125rem;
   }
 .chat-nav-entry-text {
     display: -webkit-box;
@@ -355,16 +411,59 @@
     -webkit-box-orient: vertical;
     -webkit-line-clamp: 2;
   }
+.chat-nav-entry.is-current .chat-nav-entry-text {
+    color: var(--color-desk-accent);
+  }
+/* 元信息行：时间、界面数、当前标记共用一档小字；分隔符由相邻项生成，缺项时不留空档。 */
 .chat-nav-entry-meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
     color: var(--color-desk-muted);
     font-size: var(--text-2xs);
     line-height: 1.4;
   }
+.chat-nav-entry-meta > span + span::before {
+    content: "·";
+    margin: 0 0.375rem;
+    color: var(--color-desk-line-strong);
+  }
+.chat-nav-entry-time {
+    font-variant-numeric: tabular-nums;
+  }
+.chat-nav-entry-current {
+    font-weight: 600;
+    color: var(--color-desk-accent);
+  }
 .chat-nav-empty {
-    padding: 0.75rem 0.5rem;
+    padding: 1.5rem 0.75rem;
     color: var(--color-desk-muted);
     font-size: var(--text-2xs);
     line-height: 1.6;
+    text-align: center;
+  }
+/* 浮层进场：小距离位移用快档，进快退更快；降级动态效果时直接切换。 */
+.chat-nav-enter-active {
+    transition:
+      opacity var(--motion-duration-fast) var(--motion-ease-entrance),
+      transform var(--motion-duration-fast) var(--motion-ease-entrance);
+  }
+.chat-nav-leave-active {
+    transition:
+      opacity var(--motion-duration-fast) var(--motion-ease-exit),
+      transform var(--motion-duration-fast) var(--motion-ease-exit);
+    pointer-events: none;
+  }
+.chat-nav-enter-from,
+  .chat-nav-leave-to {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+@media (prefers-reduced-motion: reduce) {
+    .chat-nav-enter-active,
+    .chat-nav-leave-active {
+      transition: none;
+    }
   }
 .app-runtime-status {
     display: inline-flex;

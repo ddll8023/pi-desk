@@ -17,6 +17,11 @@ import { useSessionViewStore } from './session-view'
 export interface ChatNavEntry {
   readonly id: string
   readonly label: string
+  /**
+   * 该轮用户消息的发送时间；消息没有时间戳时为 null，列表里就不显示时间。
+   * 由消息区按投影字段透传，本模块不推算也不补造。
+   */
+  readonly time: string | null
   /** 本轮交付的生成式界面个数；大于 0 时列表里补一行说明。 */
   readonly uiCount: number
 }
