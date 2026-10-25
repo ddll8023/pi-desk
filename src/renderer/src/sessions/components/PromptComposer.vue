@@ -1,5 +1,5 @@
 <!-- 原位新建以独立草稿承接输入：旧实例结束期间可编辑但不发送，首次发送才建立新会话。
-     Prompt 输入坞：处理输入法组合态、Enter 发送与 Shift+Enter 换行、焦点回归与重复提交、响应侧栏「新建」的聚焦请求并给出一次性提示，并在 Agent 运行期间原位提供停止入口；同时承接 Extension 的 set_editor_text 填充文本、图片附件的选择/粘贴/拖拽三种入口、输入行按内容自动增高、快捷发送下拉（短语取自界面偏好，可在设置里增删改与排序）、Pi 命令的斜杠模糊补全（Runtime 就绪后用运行中的命令清单，未就绪时用主进程预读的技能清单，按类型分组并按匹配优先级排序；另含 Desktop 层自己拦截的界面命令）与 `@` 项目文件引用（只写入相对路径文本，不传文件内容）。底部工具条左侧是信息行：异常与进行中的状态文本、被收起的 Extension 对话入口与会话用量指标（缓存命中率、上下文占用与平均速率，点击开明细；累计 token 与费用只在明细浮层展示）；右侧是模型选择、附件、快捷发送与发送/停止按钮。Extension 的 setStatus 项不在输入区展示。 -->
+     Prompt 输入坞：处理输入法组合态、Enter 发送与 Shift+Enter 换行、焦点回归与重复提交、响应侧栏「新建」的聚焦请求并给出一次性提示，并在 Agent 运行期间原位提供停止入口；同时承接 Extension 的 set_editor_text 填充文本、图片附件的选择/粘贴/拖拽三种入口、输入行按内容自动增高、快捷发送下拉（短语取自界面偏好，可在设置里增删改与排序）、Pi 命令的斜杠模糊补全（Runtime 就绪后用运行中的命令清单，未就绪时用主进程预读的技能清单，按类型分组并按匹配优先级排序；另含 Desktop 层自己拦截的界面命令）与 `@` 项目文件引用（只写入相对路径文本，不传文件内容）；右侧文件树的行拖入坞内也走同一条相对路径引用规则。底部工具条左侧是信息行：异常与进行中的状态文本、被收起的 Extension 对话入口与会话用量指标（缓存命中率、上下文占用与平均速率，点击开明细；累计 token 与费用只在明细浮层展示）；右侧是模型选择、附件、快捷发送与发送/停止按钮。Extension 的 setStatus 项不在输入区展示。 -->
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
@@ -20,6 +20,7 @@ import { cacheHitRate, formatTokens } from '../usage-format'
 import AppButton from '../../ui/AppButton.vue'
 import RuntimeModelSelect from '../../providers/components/RuntimeModelSelect.vue'
 import UsageDetailDialog from './UsageDetailDialog.vue'
+import { hasProjectEntryDragData, projectEntryReferenceText, readProjectEntryDragData } from '../../ui/project-entry-drag'
 
 const runtimeStore = useRuntimeStore()
 const extensionStore = useExtensionUiStore()
@@ -294,6 +295,8 @@ const status = computed<{ readonly kind: 'info' | 'error'; readonly text: string
   if (commandHint.value !== null) return { kind: 'info', text: commandHint.value }
   // 回退交回的输入没能填入时的一次性说明。
   if (refillHint.value !== null) return { kind: 'info', text: refillHint.value }
+  // 跨项目拖动被拒绝时的一次性说明。
+  if (dropHint.value !== null) return { kind: 'info', text: dropHint.value }
   // 运行中不再占信息行：Agent 是否在跑由右下角的停止按钮表达。
   if (projectionSync.value !== 'synced') {
     return { kind: 'info', text: '消息仍在同步，稍后才能提交输入。' }
@@ -441,28 +444,91 @@ function carriesFiles(event: DragEvent): boolean {
   return types !== undefined && types.includes('Files')
 }
 
+/**
+ * 文件树拖入的落点状态：与图片拖拽分开，因为两条路径的合法性条件不同——
+ * 条目拖入只写路径文本，不读文件内容，因此不受图片类型、条数与大小限制。
+ */
+const entryDragging = ref(false)
+/** 跨项目拖动被拒绝时的一次性说明；与状态行共用位置，不常驻。 */
+const dropHint = ref<string | null>(null)
+let dropHintTimer: ReturnType<typeof setTimeout> | null = null
+
+function showDropHint(text: string): void {
+  dropHint.value = text
+  if (dropHintTimer !== null) clearTimeout(dropHintTimer)
+  dropHintTimer = setTimeout(() => {
+    dropHint.value = null
+    dropHintTimer = null
+  }, 4_000)
+}
+
 function onDragEnter(event: DragEvent): void {
+  // 右侧文件树的行拖入：与图片拖拽共用同一块高亮，但落点只插入相对路径文本。
+  if (hasProjectEntryDragData(event)) {
+    event.preventDefault()
+    entryDragging.value = true
+    return
+  }
   if (!carriesFiles(event) || attachDisabled.value) return
   event.preventDefault()
   dragDepth.value += 1
 }
 
 function onDragOver(event: DragEvent): void {
+  if (hasProjectEntryDragData(event)) {
+    event.preventDefault()
+    if (event.dataTransfer !== null) event.dataTransfer.dropEffect = 'copy'
+    return
+  }
   if (!carriesFiles(event) || attachDisabled.value) return
   event.preventDefault()
   if (event.dataTransfer !== null) event.dataTransfer.dropEffect = 'copy'
 }
 
-function onDragLeave(): void {
+function onDragLeave(event: DragEvent): void {
   dragDepth.value = Math.max(0, dragDepth.value - 1)
+  if (!entryDragging.value) return
+  // 在坞内的子元素之间移动也会触发 dragleave，因此只在真正离开坞时收起高亮。
+  const next = event.relatedTarget
+  if (next instanceof Node && event.currentTarget instanceof Node && event.currentTarget.contains(next)) return
+  entryDragging.value = false
 }
 
 function onDrop(event: DragEvent): void {
+  if (hasProjectEntryDragData(event)) {
+    event.preventDefault()
+    entryDragging.value = false
+    const payload = readProjectEntryDragData(event)
+    if (payload === null) return
+    // 载荷带项目根，落点复核这次拖动是否仍属于当前项目；跨项目只说明原因，不写入。
+    if (payload.projectPath !== (projectStore.currentProject?.path ?? null)) {
+      showDropHint('只能插入当前项目的文件。')
+      return
+    }
+    insertEntryReference(payload.path)
+    return
+  }
   if (!carriesFiles(event)) return
   event.preventDefault()
   dragDepth.value = 0
   if (attachDisabled.value) return
   addImageFiles(pickImageFiles([...(event.dataTransfer?.files ?? [])]))
+}
+
+/** 在光标处写入相对路径并补一个空格；选中了文字时替换选区，光标停在插入文本之后。 */
+function insertEntryReference(path: string): void {
+  const element = textarea.value
+  if (element === null) return
+  const inserted = projectEntryReferenceText(path)
+  const start = element.selectionStart ?? element.value.length
+  const end = element.selectionEnd ?? start
+  draft.value = `${draft.value.slice(0, start)}${inserted}${draft.value.slice(end)}`
+  element.focus()
+  void nextTick(() => {
+    const caret = start + inserted.length
+    element.setSelectionRange(caret, caret)
+    autoGrow()
+  })
 }
 
 function removeImage(objectUrl: string): void {
@@ -538,6 +604,7 @@ onUnmounted(() => {
   if (newSessionHintTimer !== null) clearTimeout(newSessionHintTimer)
   if (commandHintTimer !== null) clearTimeout(commandHintTimer)
   if (refillHintTimer !== null) clearTimeout(refillHintTimer)
+  if (dropHintTimer !== null) clearTimeout(dropHintTimer)
   // 会话与原位新建的输入分别留底；其他空闲输入没有归属，卸载时释放附件。
   if (isSavedInputKey(sessionViewStore.key)) {
     sessionViewStore.saveInput(sessionViewStore.key, { draft: draft.value, images: pendingImages.value })
@@ -1043,17 +1110,17 @@ function acceptFileSuggestion(path: string | undefined): void {
   const token = fileToken.value
   if (element === null || token === null || path === undefined) return
 
-  // 含空白的路径用双引号包起来；含引号的路径（Windows 文件名不允许）原样写入，不删改任何字符。
-  const inserted = /\s/.test(path) && !path.includes('"') ? `"${path}"` : path
+  // 与文件树拖入共用同一条路径引用规则：含空白的路径加双引号，末尾补一个空格。
+  const inserted = projectEntryReferenceText(path)
   const caret = element.selectionStart ?? element.value.length
-  draft.value = `${draft.value.slice(0, token.start)}${inserted} ${draft.value.slice(caret)}`
+  draft.value = `${draft.value.slice(0, token.start)}${inserted}${draft.value.slice(caret)}`
   fileToken.value = null
   filesDismissed.value = false
   cancelFileSearch()
   element.focus()
 
   void nextTick(() => {
-    const next = token.start + inserted.length + 1
+    const next = token.start + inserted.length
     element.setSelectionRange(next, next)
     autoGrow()
   })
@@ -1079,7 +1146,7 @@ onMounted(() => {
       <label for="prompt-input" class="sr-only">输入要发送给 Pi 的内容</label>
       <div
         class="prompt-composer-shell"
-        :class="dragging ? 'is-dragging' : ''"
+        :class="dragging || entryDragging ? 'is-dragging' : ''"
         @dragenter="onDragEnter"
         @dragover="onDragOver"
         @dragleave="onDragLeave"

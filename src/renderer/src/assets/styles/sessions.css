@@ -18,7 +18,7 @@
     outline: 2px solid var(--color-desk-accent);
     outline-offset: 2px;
   }
-/* 拖拽图片落到坞内时的落点提示；只改底色与描边，不加轮廓，免得看起来像已聚焦。 */
+/* 拖拽落到坞内时的落点提示（图片附件与右侧文件树的行共用）；只改底色与描边，不加轮廓，免得看起来像已聚焦。 */
 .prompt-composer-shell.is-dragging {
     border-color: var(--color-desk-accent);
     background: var(--color-desk-accent-soft);

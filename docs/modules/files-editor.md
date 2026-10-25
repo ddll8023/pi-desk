@@ -6,7 +6,7 @@
 
 负责项目内文件树、目录监听、`@` 文件引用检索、条目解析与系统文件管理器定位、文件内容读取／保存／磁盘基线，以及源码、图片、Markdown 预览与富文本编辑。
 
-入口为右侧文件树、文件菜单、输入坞文件引用、文件标签及 Markdown 文档链接。不执行 Agent 的文件工具，不拥有工作区标签顺序，不把桌面草稿当跨应用重启持久化。
+入口为右侧文件树、文件菜单、输入坞文件引用、文件标签及 Markdown 文档链接。输入坞可接受从文件树拖入的条目：只插入项目相对路径文本（目录同样插入路径），不读文件内容，跨项目拖动被拒绝。不执行 Agent 的文件工具，不拥有工作区标签顺序，不把桌面草稿当跨应用重启持久化。
 
 ## 专属文件
 
@@ -89,7 +89,7 @@
 ## 公共与跨模块引用
 
 - [F-assembly](shared.md#f-assembly进程与页面组装混合)：`registerProjectFileHandlers` 校验调用者和固定请求；文件面板由 `src/renderer/src/shell/components/WorkspaceView.vue` 渲染，脏文件关闭确认状态在 `src/renderer/src/workspace/stores/workspace-tabs.ts`，经 `src/renderer/src/shell/components/AppDialogHost.vue` 呈现。
-- [F-ui](shared.md#f-ui前端共享展示共享)：公共按钮、浮层、复制，`ui/markdown-shared.ts` 与 `ui/markdown-math.ts` 的共同排版能力，以及文件树与终端共用的 `ui/project-entry-drag.ts` 拖拽载荷和路径插入文本。
+- [F-ui](shared.md#f-ui前端共享展示共享)：公共按钮、浮层、复制，`ui/markdown-shared.ts` 与 `ui/markdown-math.ts` 的共同排版能力，以及文件树、输入坞与终端共用的 `ui/project-entry-drag.ts` 拖拽载荷、路径引用文本和路径插入文本。
 - [F-style](shared.md#f-style全局主题与业务样式混合)：`src/renderer/src/assets/styles/editor.css` 的文件编辑、Markdown、富文本和文件树样式，由 `src/renderer/src/assets/main.css` 统一加载。
 - [工作区](workspace-tabs.md)：打开／关闭文件标签和消费锚点请求；编辑状态归本模块，标签状态归工作区。
 - [项目](projects-trust.md)：普通树和检索跟随当前项目，文件内容与图片导入固定已登记的所属项目。

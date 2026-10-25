@@ -1,8 +1,9 @@
 /**
- * 右侧面板文件条目的拖拽载荷与「写入终端」前的转义。
+ * 右侧面板文件条目的拖拽载荷、路径引用文本与「写入终端」前的转义。
  *
  * 拖拽只在应用内成立：载荷写进自定义 MIME，不写 `text/plain`，因此拖到应用外不会带出路径，
  * 也不会被别的输入框当成文本收下。载荷里带上项目路径，落点可以复核这次拖动是否仍属于当前项目。
+ * 落点有两个：终端面板写入带引号的绝对路径，输入坞插入项目相对路径文本（不读文件内容）。
  *
  * 路径一律由主进程解析成绝对路径后才写入终端；这里的引号规则按终端实际启动的 shell 可执行名判定，
  * 因为终端的工作目录固定是项目根，但用户可能已经在里面切到别处，绝对路径不依赖当前目录。
@@ -61,6 +62,15 @@ export function readProjectEntryDragData(event: DragEvent): ProjectEntryDragPayl
     name: fields.name,
     kind: fields.kind as ProjectDirectoryEntryKind
   }
+}
+
+/**
+ * 项目内条目的路径引用文本：含空白且不含双引号的路径用双引号包起来（含引号的路径原样写入，不删改字符），
+ * 末尾补一个空格便于接着输入。输入坞的拖入落点与 `@` 补全共用这一条规则。
+ */
+export function projectEntryReferenceText(path: string): string {
+  const quoted = /\s/u.test(path) && !path.includes('"') ? `"${path}"` : path
+  return `${quoted} `
 }
 
 /** `cmd.exe` 不认单引号，只有它用双引号；zsh、bash 与 pwsh 都按 POSIX 单引号转义。 */

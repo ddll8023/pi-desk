@@ -42,7 +42,7 @@
 - [F-process](shared.md#f-process受管进程与-sdk-公共设施共享)：`process-tree-termination.ts` 收敛终端关联进程树。
 - [F-build](shared.md#f-build构建与发行上下文)：守护进程独立 CJS 构建及 PTY 权限准备；不将原生模块打入浏览器。
 - [工作区](workspace-tabs.md)：标签由真实终端清单派生；快捷命令经 `runQuickCommand` 创建新终端再写入。
-- [文件](files-editor.md)：`ui/project-entry-drag.ts` 提供拖拽载荷与路径插入文本。
+- [文件](files-editor.md)：`ui/project-entry-drag.ts` 提供拖拽载荷、路径引用文本与路径插入文本。
 - [项目](projects-trust.md)：终端 cwd 只能取已登记项目的规范路径，项目移除触发该项目终端关闭请求。
 
 ## 接回与生命周期

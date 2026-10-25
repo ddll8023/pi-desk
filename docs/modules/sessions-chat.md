@@ -70,7 +70,7 @@
 
 | 文件 | 用途 |
 | --- | --- |
-| `src/renderer/src/sessions/components/PromptComposer.vue` | 输入、附件、命令、补全与提交编排 |
+| `src/renderer/src/sessions/components/PromptComposer.vue` | 输入、附件、文件树拖入引用、命令、补全与提交编排 |
 | `src/renderer/src/sessions/components/ChatMessageList.vue` | 消息列表、历史加载、滚动与布局观察；向顶部栏发布对话跳转入口并执行跳转 |
 | `src/renderer/src/sessions/components/ChatTurnItem.vue` | 按轮摘要、展开与原文内容 |
 | `src/renderer/src/sessions/components/ChatMessageItem.vue` | 单消息、思考与工具展示 |

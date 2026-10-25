@@ -107,7 +107,7 @@
 | `src/renderer/src/ui/markdown.ts` | 聊天 Markdown 解析与清洗，供 Markdown 展示组件使用 |
 | `src/renderer/src/ui/markdown-shared.ts` | 代码、表格与 HTML 转义的共同渲染；聊天及文件 Markdown 消费 |
 | `src/renderer/src/ui/markdown-math.ts` | 数学解析与 KaTeX 渲染；聊天、文件预览及富文本公式消费 |
-| `src/renderer/src/ui/project-entry-drag.ts` | 项目条目拖拽载荷与终端插入文本；文件树与终端视图共用 |
+| `src/renderer/src/ui/project-entry-drag.ts` | 项目条目拖拽载荷、路径引用文本与终端插入文本；文件树、输入坞与终端视图共用 |
 | `src/renderer/src/ui/relative-time.ts` | 相对时间文案；侧栏会话行与提交历史共用 |
 | `src/renderer/src/ui/forked-sessions.ts` | 分叉会话折叠；侧栏项目树使用 |
 
