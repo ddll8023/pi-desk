@@ -1,7 +1,8 @@
 <!-- 通用工具卡片：默认折叠且仅手动开合，内联展示状态字形、工具名称、执行状态、Desktop 计算的耗时与参数摘要；
      文件类工具（edit / write）的摘要改为相对项目目录的路径与改动量，改动量不是真实 Diff 统计时带一个可见的「推断」标记。
      展开后先给带行号的变更行或写入内容预览，再给参数键值摘要与结果预览，参数原文与完整结果各自二级折叠并可一键复制，
-     结果被 Pi 截断时给出完整输出路径。状态字形只是第二通道：状态文案始终保留，读屏与色弱用户都不依赖形状或颜色。 -->
+     结果被 Pi 截断时给出完整输出路径。状态字形只是第二通道：状态文案始终保留，读屏与色弱用户都不依赖形状或颜色。
+     展开时只上报 `userExpand`：滚动位置与跟随由消息列表决定，摘要行留在原处，内容从它下面长出来。 -->
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import type {
@@ -50,7 +51,12 @@ const props = defineProps<{
   readonly historyMore?: string | null | undefined
   readonly historyError?: string | null | undefined
 }>()
-const emit = defineEmits<{ loadChunk: [chunk: HistoryChunk]; loadMore: [] }>()
+const emit = defineEmits<{
+  loadChunk: [chunk: HistoryChunk]
+  loadMore: []
+  /** 卡片被手动展开；消息列表据此停止粘底，本组件不处理滚动位置。 */
+  userExpand: []
+}>()
 const argsChunks = computed(() => (props.historyChunks ?? []).filter(chunk => chunk.field === 'arguments'))
 const outputChunks = computed(() => (props.historyChunks ?? []).filter(chunk => chunk.field === 'output'))
 
@@ -284,6 +290,17 @@ const textExpanded = ref(false)
 /** 失败输出与手动展开都显示全文，其余情况只显示预览。 */
 const showFullResult = computed(() => textExpanded.value || isFailure.value)
 
+/** 二级折叠同样会把摘要行顶走，展开前先上报。 */
+function expandArgs(): void {
+  emit('userExpand')
+  argsExpanded.value = true
+}
+
+function expandText(): void {
+  emit('userExpand')
+  textExpanded.value = true
+}
+
 /** 复制反馈与资源页一致：用最近一次复制目标标记，成功后保留可见结果。 */
 const copiedTarget = ref<CopyTarget | null>(null)
 const failedTarget = ref<CopyTarget | null>(null)
@@ -296,9 +313,15 @@ const nonTextNotice = computed(() => {
   return `含 ${current.nonTextBlocks} 个非文本内容块：${described.join('、')}。`
 })
 
-/** 点击与键盘激活共用同一开合状态，避免原生 details 与 Vue 状态不一致。 */
+/**
+ * 点击与键盘激活共用同一开合状态，避免原生 details 与 Vue 状态不一致。
+ * 只在展开时上报：摘要行留在原处、内容从它下面长出来；收起时位置由浏览器钳到新上限，与粘底结果一致。
+ * 失败首次出现时的自动展开由 watch 完成，不算用户动作，不上报。
+ */
 function toggleExpanded(): void {
-  expanded.value = !expanded.value
+  const next = !expanded.value
+  expanded.value = next
+  if (next) emit('userExpand')
 }
 
 function describeNonTextPart(part: ToolNonTextPart): string {
@@ -379,7 +402,7 @@ function copyLabel(target: CopyTarget): string {
               <dd class="tool-arg-value">{{ formatToolArgValue(entry.value) }}</dd>
             </template>
           </dl>
-          <AppButton variant="compact" @click="argsExpanded = true">显示原始参数</AppButton>
+          <AppButton variant="compact" @click="expandArgs">显示原始参数</AppButton>
         </template>
         <p v-else class="tool-output">{{ execution.argsText }}</p>
         <HistoryLoadSentinel
@@ -403,7 +426,7 @@ function copyLabel(target: CopyTarget): string {
              说明由 `resultPlainNote` 与预览一起给出，不另开一个「按纯文本展示」的提示分支。 -->
         <template v-if="expanded && resultJsonLabel !== null && !textExpanded">
           <p class="tool-note">{{ resultJsonLabel }}</p>
-          <AppButton variant="compact" @click="textExpanded = true">显示原文</AppButton>
+          <AppButton variant="compact" @click="expandText">显示原文</AppButton>
         </template>
         <template v-else>
           <p class="tool-output" :class="isFailure ? 'text-desk-danger' : ''">
@@ -411,7 +434,7 @@ function copyLabel(target: CopyTarget): string {
           </p>
           <div v-if="!showFullResult && resultPlainNote !== null" class="tool-fold-row">
             <p class="tool-note">{{ resultPlainNote }}</p>
-            <AppButton v-if="resultPreviewView.clipped" variant="compact" @click="textExpanded = true">显示全部</AppButton>
+            <AppButton v-if="resultPreviewView.clipped" variant="compact" @click="expandText">显示全部</AppButton>
           </div>
         </template>
         <HistoryLoadSentinel

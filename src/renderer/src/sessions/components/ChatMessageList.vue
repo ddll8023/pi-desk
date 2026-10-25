@@ -1,7 +1,9 @@
 <!-- 原位新建时保持消息区挂载与阅读留底，但隐藏旧内容、暂停旧会话操作并收起浮层。
      消息区：按投影渲染、粘底与对话内跳转；承接用户消息回退确认与修改提交，回退会新建会话（列表折叠为一条），项目文件不回退；回退把原消息文本与可还原的附件交回输入框，修改重试在没能重发时交回修改后的文本。
      每一轮的用户输入摘要与当前所在轮由这里发布给顶部栏的跳转列表，跳转意图也回到这里执行，滚动与折叠仍只有本组件一处权威。
-     渲染与折叠都以轮为单位：当前轮与上一轮始终完整展开，更早的轮次只留用户输入、其后的 AI 回答与过程压成一行摘要（见 ChatTurnItem）；开合状态按会话保存，顶部开关控制全局默认。 -->
+     渲染与折叠都以轮为单位：当前轮与上一轮始终完整展开，更早的轮次只留用户输入、其后的 AI 回答与过程压成一行摘要（见 ChatTurnItem）；开合状态按会话保存，顶部开关控制全局默认。
+     卡片（思考、工具、技能、压缩摘要、旧版界面）的手动展开由子组件上报，收到后停止粘底：摘要行留在原处，内容从它下面长出来，只有外层滚动范围变大。
+     滚动位置仍只由本组件决定，子组件不持有滚动逻辑。 -->
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
@@ -446,6 +448,16 @@ function jumpToBottom(): void {
   scheduleScrollToBottom()
 }
 
+/**
+ * 卡片被手动展开：停止粘底，让摘要行留在原处、内容从它下面长出来，只有滚动范围变大。
+ * 不在这里定位或补偿——展开不改变摘要行以上的高度；用户停在底部时位置几乎没变，
+ * 随后的布局变化会由 `reattachIfAtBottom` 立刻恢复跟随，不需要额外判断。
+ * 收起不上报：收起时位置由浏览器钳到新上限，结果与粘底一致。
+ */
+function pauseFollow(): void {
+  stickToBottom.value = false
+}
+
 /** 只有明确的手动滚动意图解除跳转保护与待恢复位置；单纯布局变化不代表用户要回到底部。 */
 function releaseNavigationJump(): void {
   pendingAnchor = undefined
@@ -827,6 +839,7 @@ onBeforeUnmount(() => {
           @load-detail="(more) => !props.hidden && turn.historyId && runtimeStore.loadHistoryTurn(turn.historyId, more)"
           @load-chunk="(chunk) => !props.hidden && turn.historyId && runtimeStore.loadHistoryChunk(turn.historyId, chunk)"
           @toggle="toggleTurn(turn, index)"
+          @user-expand="pauseFollow"
           @rewind="requestRewind"
           @submit-edit="handleSubmitEdit"
           @jump-latest="jumpToGenuiVersion"

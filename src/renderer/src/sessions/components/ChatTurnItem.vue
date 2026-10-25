@@ -1,5 +1,6 @@
 <!-- 一轮对话：用户消息始终可见，其后的 AI 回答与压缩记录整体折叠成一行摘要（条数、本轮响应耗时、最后一次调用的 token），点摘要行展开或收起。
-     折叠状态不在这里持有：开合由消息列表按会话写入 session-view，本组件只渲染给定状态并发出开合意图，因此定位与状态隔离都在同一处处理。 -->
+     折叠状态不在这里持有：开合由消息列表按会话写入 session-view，本组件只渲染给定状态并发出开合意图，因此定位与状态隔离都在同一处处理。
+     卡片的手动展开（思考、工具、技能、压缩摘要、旧版界面）只原样向上转发，滚动位置与跟随仍由消息列表决定。 -->
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { HistoryChunk } from '../../../../shared/runtime-api'
@@ -34,6 +35,8 @@ const emit = defineEmits<{
   submitEdit: [messageId: string, editedText: string]
   /** 旧版界面折叠行请求跳转到同一界面的最新版；定位在消息列表完成。 */
   jumpLatest: [documentId: string]
+  /** 某张卡片被手动展开；消息列表据此停止粘底，本组件不处理。 */
+  userExpand: []
 }>()
 
 /** 会话开头没有用户消息的前置轮：摘要文案要区分，不把历史残片说成某一轮回答。 */
@@ -143,6 +146,7 @@ const metaText = computed(() => [durationText.value, usageText.value].filter(par
       @rewind="emit('rewind', $event)"
       @submit-edit="(messageId, text) => emit('submitEdit', messageId, text)"
       @jump-latest="emit('jumpLatest', $event)"
+      @user-expand="emit('userExpand')"
     />
 
     <HistoryLoadSentinel
@@ -186,6 +190,7 @@ const metaText = computed(() => [durationText.value, usageText.value].filter(par
         @rewind="emit('rewind', $event)"
         @submit-edit="(messageId, text) => emit('submitEdit', messageId, text)"
         @jump-latest="emit('jumpLatest', $event)"
+        @user-expand="emit('userExpand')"
       />
       <HistoryLoadSentinel
         v-if="detail?.next && !live"

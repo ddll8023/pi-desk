@@ -5,7 +5,8 @@
      交付了生成式界面的工具调用改渲染界面本身，不再套折叠卡；界面按可见性挂载：远离视口的界面只留一行占位，展开全部轮次时不把每份界面都常驻。
      界面内的参数提交复用消息动作栏的禁用口径（运行中、未同步、正在发送等），不另做一套判断。用户消息下方使用细线图标操作栏，回退与修改后的重新发送由父级执行。
      早期轮次的整体收起由 ChatTurnItem 负责，这里只表达单条消息内部每项自己的开合；同一轮内的非首条 AI 消息用紧凑表头，不重复 π 标记与角色名。
-     被取代的旧版界面折叠成一行：整行点击跳转到新版（由消息列表定位），右侧小按钮展开查看旧版。 -->
+     被取代的旧版界面折叠成一行：整行点击跳转到新版（由消息列表定位），右侧小按钮展开查看旧版。
+     卡片的手动展开只上报 `userExpand`：消息列表据此停止粘底，展开的内容从摘要行下面长出来而不是把摘要行顶走；收起不上报。 -->
 <script setup lang="ts">
 import { computed, onUnmounted, reactive, ref, useId, watch } from 'vue'
 import { copyText } from '../../ui/clipboard'
@@ -47,6 +48,8 @@ const emit = defineEmits<{
   loadMore: []
   /** 旧版折叠行跳转到同一界面的最新版；定位由消息列表负责。 */
   jumpLatest: [documentId: string]
+  /** 某张卡片被手动展开；滚动位置与跟随由消息列表处理，本组件不持有滚动逻辑。 */
+  userExpand: []
 }>()
 
 /** 续载定位到原始块；工具结果按调用身份而不是助手消息的位置匹配。 */
@@ -129,10 +132,14 @@ const skillOverrides = reactive(new Map<string, boolean>())
 /** 被取代版本的只读展开状态；键为块 key，默认收起。跳到新版不影响它。 */
 const readonlyOpen = reactive(new Set<string>())
 
-/** 切换某个历史界面的展开状态；只影响查看，不改版本与参数。 */
+/** 切换某个历史界面的展开状态；只影响查看，不改版本与参数。展开时上报，让摘要行留在原处。 */
 function toggleReadonly(key: string): void {
-  if (readonlyOpen.has(key)) readonlyOpen.delete(key)
-  else readonlyOpen.add(key)
+  if (readonlyOpen.has(key)) {
+    readonlyOpen.delete(key)
+    return
+  }
+  readonlyOpen.add(key)
+  emit('userExpand')
 }
 
 const isUser = computed(() => props.message.role === 'user')
@@ -243,9 +250,11 @@ function isThinkingExpanded(key: string): boolean {
   return thinkingOverrides.get(key) ?? key === liveThinkingKey.value
 }
 
-/** 由摘要行点击统一控制开合，键盘激活同样生效；手动选择优先于自动开合。 */
+/** 由摘要行点击统一控制开合，键盘激活同样生效；手动选择优先于自动开合。展开时上报，收起不上报。 */
 function toggleThinking(key: string): void {
-  thinkingOverrides.set(key, !isThinkingExpanded(key))
+  const next = !isThinkingExpanded(key)
+  thinkingOverrides.set(key, next)
+  if (next) emit('userExpand')
 }
 
 /** 正在生成的那段思考是否展开：流式正文跟随只在它展开时生效。 */
@@ -325,9 +334,11 @@ function isSkillExpanded(key: string): boolean {
   return skillOverrides.get(key) ?? false
 }
 
-/** 由 summary 的点击统一控制开合，键盘激活同样生效。 */
+/** 由 summary 的点击统一控制开合，键盘激活同样生效；展开时上报，收起不上报。 */
 function toggleSkill(key: string): void {
-  skillOverrides.set(key, !isSkillExpanded(key))
+  const next = !isSkillExpanded(key)
+  skillOverrides.set(key, next)
+  if (next) emit('userExpand')
 }
 
 /** 本次模型调用的 token 花销；未上报或全零（失败调用）时为 null，整段不渲染。 */
@@ -384,7 +395,9 @@ function isCompactionExpanded(key: string): boolean {
 }
 
 function toggleCompaction(key: string): void {
-  compactionOverrides.set(key, !isCompactionExpanded(key))
+  const next = !isCompactionExpanded(key)
+  compactionOverrides.set(key, next)
+  if (next) emit('userExpand')
 }
 
 /** 进入编辑态：预填用户实际输入（技能消息还原为 `/skill:` 命令形态），聚焦输入框，禁用其他操作。 */
@@ -510,6 +523,7 @@ function onEditKeydown(event: KeyboardEvent): void {
           :history-error="historyError"
           @load-more="emit('loadMore')"
           @load-chunk="emit('loadChunk', $event)"
+          @user-expand="emit('userExpand')"
         />
       </section>
       <template v-else>
@@ -606,6 +620,7 @@ function onEditKeydown(event: KeyboardEvent): void {
             :history-error="historyError"
             @load-more="emit('loadMore')"
             @load-chunk="emit('loadChunk', $event)"
+            @user-expand="emit('userExpand')"
           />
         </template>
         <!-- 正文块保持原有样式：用户气泡、图片、技能卡与 AI 回答都不进折叠卡。 -->
