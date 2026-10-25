@@ -5,7 +5,7 @@
      三份数据各由各自的存储提供：凭据由 Pi 保存在 auth.json（内容不回读到页面），
      条目写 Pi 的 models.json，展示偏好写桌面端配置。 -->
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { storeToRefs } from 'pinia'
 import type { AuthError, AuthProviderStatus } from '../../../../shared/auth-api'
 import type { ModelsConfigProvider } from '../../../../shared/models-config-api'
@@ -48,8 +48,6 @@ const { availableModels, hiddenModels, modelDisplayLoaded, modelDisplayView } = 
 const query = ref('')
 /** 就地展开详情的供应商 id；null 表示都不展开。 */
 const expandedId = ref<string | null>(null)
-/** 清单容器；展开详情后用它把该行的详情滚到完全可见。 */
-const listElement = ref<HTMLElement | null>(null)
 /** 编辑器弹窗的目标；null 表示未打开。 */
 const editor = ref<{ mode: 'create' | 'edit'; providerId: string; initialRawText: string } | null>(null)
 /** 最近一次写成功的提示；只在本次停留期间展示。 */
@@ -198,15 +196,6 @@ function toggleRow(row: ProviderRow): void {
     return
   }
   expandedId.value = row.id
-  void revealExpanded(row.id)
-}
-
-/** 展开后确保详情完整落在视口内，不让用户自己往下滑。 */
-async function revealExpanded(id: string): Promise<void> {
-  await nextTick()
-  listElement.value
-    ?.querySelector<HTMLElement>(`[data-provider-detail="${CSS.escape(id)}"]`)
-    ?.scrollIntoView({ block: 'nearest' })
 }
 
 /** 打开编辑器弹窗：编辑既有条目，或按给定 ID 新建；未保存的改动由弹窗自己确认。 */
@@ -230,7 +219,6 @@ function onSaved(id: string): void {
   notice.value = `已保存供应商 ${id}；改动需要重新加载 Runtime 后才会反映到输入坞的模型列表。`
   editor.value = null
   expandedId.value = id
-  void revealExpanded(id)
 }
 
 function cancelEditor(): void {
@@ -410,7 +398,7 @@ onUnmounted(() => {
         {{ authProviders.length === 0 ? 'Pi 没有报告任何 Provider。' : '没有匹配的供应商；清空搜索可以看到全部已配置项。' }}
       </p>
 
-      <ul v-else ref="listElement" class="model-settings__provider-list">
+      <ul v-else class="model-settings__provider-list">
         <li v-for="row in providerRows" :key="row.id">
           <ProviderListItem
             :row="row"
