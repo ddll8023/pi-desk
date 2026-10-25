@@ -156,6 +156,7 @@ watch(() => sessionViewStore.requestedInput, applyRequestedInput)
 const quickSendMessages = computed(() => preferencesStore.quickSendMessages)
 const quickSendOpen = ref(false)
 const quickSendIndex = ref(0)
+const quickSendList = ref<HTMLElement | null>(null)
 /** 触发按钮上显示的当前短语；列表为空时为 undefined，此时按钮也是禁用的。 */
 const quickSendCurrent = computed(() => quickSendMessages.value[quickSendIndex.value])
 /** 下拉外层引用：用于判断一次点击是否落在下拉之外。 */
@@ -579,6 +580,17 @@ function moveQuickSend(step: number): void {
   quickSendIndex.value = (quickSendIndex.value + step + count) % count
 }
 
+/**
+ * 把列表里高亮的那一条带进可视范围。
+ * 键盘导航只改高亮、不接管焦点，列表本身不会自己滚；条数超出容器高度后高亮项会跑出视野。
+ * 行已可见时 scrollIntoView 不产生位移，因此可以每次高亮变化都调。
+ */
+function scrollActiveOptionIntoView(container: HTMLElement | null): void {
+  void nextTick(() => {
+    container?.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest' })
+  })
+}
+
 /** 快捷发送：把候选短语写进草稿后走与手动发送同一条提交路径，不改发送契约。 */
 function sendQuickMessage(index: number): void {
   const message = quickSendMessages.value[index]
@@ -895,6 +907,7 @@ const slashQuery = computed(() => {
 })
 const suggestionsDismissed = ref(false)
 const suggestionIndex = ref(0)
+const commandList = ref<HTMLElement | null>(null)
 
 /** 候选分组：`index` 是该条在扁平列表中的位置，键盘导航与选中态都按它对应。 */
 interface SuggestionGroup {
@@ -1008,6 +1021,12 @@ interface FileToken {
 }
 const fileToken = ref<FileToken | null>(null)
 const fileActiveIndex = ref(0)
+const fileList = ref<HTMLElement | null>(null)
+
+// 三个列表各自在键盘移动时跟随滚动；条数超限时高亮项不会被留在视野之外。
+watch(suggestionIndex, () => scrollActiveOptionIntoView(commandList.value))
+watch(fileActiveIndex, () => scrollActiveOptionIntoView(fileList.value))
+watch(quickSendIndex, () => scrollActiveOptionIntoView(quickSendList.value))
 const filesDismissed = ref(false)
 /** 防抖待发标志：这段时间里候选还是上一轮的，Enter 必须等结果而不是发送半截路径。 */
 const fileSearchScheduled = ref(false)
@@ -1156,6 +1175,7 @@ onMounted(() => {
         <ul
           v-if="visibleSuggestionGroups.length > 0"
           id="prompt-command-list"
+          ref="commandList"
           role="listbox"
           aria-label="可用命令"
           class="dialog-popover scroll-area bottom-full mb-1.5 max-h-64 w-full overflow-y-auto p-1"
@@ -1182,6 +1202,7 @@ onMounted(() => {
         <ul
           v-if="visibleFileEntries.length > 0"
           id="prompt-file-list"
+          ref="fileList"
           role="listbox"
           aria-label="项目文件"
           class="dialog-popover scroll-area bottom-full mb-1.5 max-h-64 w-full overflow-y-auto p-1"
@@ -1334,7 +1355,7 @@ onMounted(() => {
                 <span class="min-w-0 truncate text-xs">{{ quickSendCurrent }}</span>
                 <span aria-hidden="true">▾</span>
               </AppButton>
-              <div v-if="quickSendOpen" id="prompt-quick-send" role="listbox" aria-label="常用消息" class="prompt-composer-menu">
+              <div v-if="quickSendOpen" id="prompt-quick-send" ref="quickSendList" role="listbox" aria-label="常用消息" class="prompt-composer-menu">
                 <AppButton
                   v-for="(message, index) in quickSendMessages"
                   :key="index"

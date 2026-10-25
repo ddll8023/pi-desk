@@ -139,9 +139,10 @@
 .prompt-composer-attachments {
     @apply flex flex-wrap gap-2;
   }
-/* 快捷发送下拉：贴着触发键浮在工具条上方。按最长条目取宽但不超过上限，条目保持单行不折行。 */
+/* 快捷发送下拉：贴着触发键浮在工具条上方。按最长条目取宽但不超过上限，条目保持单行不折行；
+     条数由设置决定，超过高度上限时在浮层内滚动，键盘高亮才跟得上。 */
 .prompt-composer-menu {
-    @apply absolute right-0 bottom-full z-40 mb-2 w-max min-w-[7rem] max-w-[min(20rem,55vw)] rounded-desk-md border border-desk-line bg-desk-surface p-1 shadow-desk-pop;
+    @apply absolute right-0 bottom-full z-40 mb-2 max-h-64 w-max min-w-[7rem] max-w-[min(20rem,55vw)] overflow-y-auto rounded-desk-md border border-desk-line bg-desk-surface p-1 shadow-desk-pop;
   }
 /* 输入坞的补全条目：名称独占一行、说明另起一行，说明截断为单行，浮层不被长描述撑开；
      四组候选（界面命令 / 技能 / 模板 / 扩展命令）共用这套排版，名称长短不影响说明的起始位置。 */
