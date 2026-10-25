@@ -55,7 +55,7 @@
 | 供应商与认证 | 安装级设备标识、隐藏模型列表 |
 | 终端与快捷命令 | 全局与项目范围命令列表 |
 | 更新与生成式界面 | 扩展自动更新、生成式 UI 开关 |
-| 手机访问 | 手机设备凭证摘要与项目授权；代理入口配置不落盘 |
+| 手机访问 | 手机设备身份与凭证摘要；自动连接地址、监听状态与一次性连接码不落盘 |
 
 文件位于 `userData/desktop-config.json`。全部读写串行进行，保存前比对已加载的磁盘文件标识；读失败可进入只读降级，结构损坏走备份重建。其他服务通过同一个实例访问，不另行直接覆盖此文件。应用单实例锁由 `src/main/app-lifecycle.ts` 的 `acquireSingleInstance` 建立。
 
@@ -135,7 +135,7 @@
 | `vite.auth-helper.config.ts` | `src/auth-helper/index.ts` → `out/auth-helper/index.mjs` |
 | `vite.sdk-host.config.ts` | SDK 宿主、CLI、版本检查、扩展更新、运行时安装五入口 → `out/sdk-host/` 下各自 ESM 产物 |
 | `vite.terminal-daemon.config.ts` | `src/terminal-daemon/index.ts` → `out/terminal-daemon/index.cjs`；原生 PTY 与终端依赖保留外部引用 |
-| `vite.lan-mobile.config.ts` | `src/lan-mobile/index.html` → `out/lan-mobile/`；手机网页产物，供手机访问的本地回环服务读取 |
+| `vite.lan-mobile.config.ts` | `src/lan-mobile/index.html` → `out/lan-mobile/`；手机网页产物，供手机访问的局域网 HTTP 服务读取 |
 | `electron-builder.yml` | 随包文件、图标、平台发行目标与输出目录；生产依赖随应用分发 |
 | `scripts/start-dev.cmd` | 对应平台的开发启动包装 |
 | `scripts/start-dev.sh` | 对应平台的开发启动包装 |

@@ -1,4 +1,4 @@
-<!-- 手机对话外壳：通过 HTTPS 网页扫码配对后逐级进入项目与会话；不启动桌面 Store，不在重连时重放写操作。 -->
+<!-- 手机对话外壳：局域网扫码后自动连接并进入项目与会话；不启动桌面 Store，不在重连时重放写操作。 -->
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { LAN_REMOTE_MAX_MESSAGE_CHARS } from '../../shared/lan-remote-api'
@@ -9,8 +9,8 @@ import MobileInteractionPanel from './components/MobileInteractionPanel.vue'
 
 const {
   connection, sync, projects, sessions, selectedProject, selectedSession, projection, status, interaction,
-  loadingSessions, remainingSessions, sessionLimit, draft, error, notice, actionBusy, pendingWrite, pairBusy, pairCode, deviceName,
-  history, messages, tools, canSend, isRunning, pair, recover, chooseProject, chooseSession, back, loadSessions,
+  loadingSessions, remainingSessions, sessionLimit, draft, error, notice, actionBusy, pendingWrite, pairBusy,
+  history, messages, tools, canSend, isRunning, recover, chooseProject, chooseSession, back, loadSessions,
   loadEarlier, loadTurn, loadChunk, setHistoryVisibility, sessionKey, send, stop, respond, retryWrite, acknowledgeUnknown, visitPending
 } = useMobileSession()
 const input = ref<HTMLTextAreaElement | null>(null)
@@ -21,8 +21,8 @@ watch([() => selectedProject.value?.id, () => selectedSession.value?.sessionId, 
 const viewKey = computed(() => sessionKey())
 const currentQuestion = computed(() => interaction.value?.state.dialogs[0] ?? null)
 const title = computed(() => selectedSession.value ? '对话' : selectedProject.value?.name ?? '你的项目')
-const connectionLabel = computed(() => connection.value === 'checking' ? '连接中'
-  : connection.value === 'unpaired' ? '尚未配对' : connection.value === 'blocked' ? '需要更新'
+const connectionLabel = computed(() => connection.value === 'checking' || pairBusy.value ? '连接中'
+  : connection.value === 'unpaired' ? '未连接' : connection.value === 'blocked' ? '需要更新'
     : connection.value === 'offline' ? '连接中断' : sync.value === 'synced' ? '已同步'
       : sync.value === 'retrying' || sync.value === 'connecting' ? '同步中' : sync.value === 'paused' ? '已暂停同步' : '已连接')
 const runtimeLabel = computed(() => sync.value !== 'synced' ? '连接未同步，电脑上的任务状态待刷新'
@@ -61,30 +61,26 @@ onBeforeUnmount(() => {
       <details><summary class="mobile-link-button">我已核对电脑上的实际结果</summary><p>解除保护不会重新发送上一条操作。</p><button type="button" class="control-button" @click="acknowledgeUnknown">已核对结果，解除保护</button></details>
     </div>
 
-    <main v-if="connection === 'unpaired'" class="mobile-page scroll-area">
-      <section class="mobile-pair-panel">
-        <p class="mobile-eyebrow">连接你的电脑 · 任务在电脑上执行</p>
-        <h2>让对话留在手边</h2>
-        <p class="mobile-muted">在电脑「设置 → 手机访问」中配置可信 HTTPS 入口，选择允许访问的项目并生成配对二维码，用手机扫码后确认连接。不要跳过浏览器的证书警告。</p>
-        <form class="mobile-pair-form" :aria-busy="pairBusy" @submit.prevent="pair">
-          <label for="mobile-device-name" class="field-label">设备名称</label>
-          <input id="mobile-device-name" v-model="deviceName" class="text-control" maxlength="80" autocomplete="off" :disabled="pairBusy" />
-          <label for="mobile-pair-code" class="field-label">一次性配对码</label>
-          <input id="mobile-pair-code" v-model="pairCode" class="text-control" autocomplete="off" autocapitalize="off" spellcheck="false" :disabled="pairBusy" placeholder="扫码后自动填入，也可从配对链接复制 code 后的值" />
-          <p class="mobile-muted">配对链接包含一次性凭证，请勿转发给他人。页面不会读取或保存电脑的模型密钥。</p>
-          <button type="submit" class="control-button-primary" :disabled="pairBusy || !deviceName.trim() || !/^[A-Za-z0-9_-]{43}$/.test(pairCode.trim())">{{ pairBusy ? '正在配对…' : '连接这台电脑' }}</button>
-          <button type="button" class="mobile-link-button" :disabled="pairBusy" @click="recover">此浏览器已配对，直接连接</button>
-        </form>
+    <main v-if="connection === 'checking' || pairBusy" class="mobile-page mobile-connect-page" aria-busy="true">
+      <section class="mobile-connect-panel" role="status">
+        <h2>正在连接电脑…</h2>
+        <p class="mobile-muted">连接后自动进入项目页面，无需其他操作。</p>
+      </section>
+    </main>
+    <main v-else-if="connection === 'unpaired'" class="mobile-page scroll-area mobile-connect-page">
+      <section class="mobile-connect-panel">
+        <h2>扫描电脑上的二维码</h2>
+        <p class="mobile-muted">在电脑「设置 → 手机访问」中开启访问，手机与电脑连接同一 Wi-Fi 后扫码即可进入。</p>
       </section>
     </main>
     <main v-else-if="connection === 'blocked'" class="mobile-page scroll-area"><h2>需要更新连接页面</h2><p class="mobile-muted">请刷新手机页面；若桌面版本不匹配，请先更新桌面应用。</p><button type="button" class="control-button" @click="recover">重新检查连接</button></main>
-    <main v-else-if="!selectedSession" class="mobile-page scroll-area" :aria-busy="loadingSessions || connection === 'checking'">
+    <main v-else-if="!selectedSession" class="mobile-page scroll-area" :aria-busy="loadingSessions">
       <template v-if="!selectedProject">
-        <p class="mobile-section-intro">选择一个电脑上已授权的项目。</p>
+        <p class="mobile-section-intro">选择要继续的项目。</p>
         <p class="mobile-muted">电脑需保持开机，Pi Desk 与手机访问入口需保持开启。</p>
         <button v-for="project in projects" :key="project.id" type="button" class="mobile-list-row" :disabled="actionBusy" @click="chooseProject(project)"><span><strong>{{ project.name }}</strong><small>查看会话</small></span><span aria-hidden="true">›</span></button>
-        <div v-if="!projects.length" class="mobile-empty"><p>{{ connection === 'checking' ? '正在连接电脑…' : '当前设备没有可访问的项目。' }}</p><p class="mobile-muted">可在电脑的「手机访问」设置中调整项目授权。</p></div>
-        <button type="button" class="control-button" :disabled="actionBusy || connection === 'checking'" @click="recover">刷新项目</button>
+        <div v-if="!projects.length" class="mobile-empty"><p>{{ connection === 'connected' ? '电脑上还没有项目。' : '等待连接电脑后读取项目。' }}</p><p v-if="connection === 'connected'" class="mobile-muted">先在电脑添加项目，再刷新此页面。</p></div>
+        <button type="button" class="control-button" :disabled="actionBusy" @click="recover">刷新项目</button>
       </template>
       <template v-else>
         <div class="mobile-list-heading"><p class="mobile-section-intro">选择要继续的会话</p><button type="button" class="mobile-link-button" :disabled="loadingSessions" @click="loadSessions(false)">刷新</button></div>

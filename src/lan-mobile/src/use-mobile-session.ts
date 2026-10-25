@@ -1,4 +1,4 @@
-/** 手机会话状态：独立选择、权威快照与增量、历史缓存和弱网恢复；草稿与未知写请求只留在当前页面内存。 */
+/** 手机会话状态：扫码后自动连接、独立选择与实时同步；草稿和未知写请求只留在当前页面内存，重连不重放操作。 */
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef } from 'vue'
 import {
   isLanHistory, isLanInvalidation, isLanOpenedSession, isLanProjects, isLanSessions, isLanSnapshot,
@@ -45,8 +45,6 @@ export function useMobileSession() {
   const pendingWrite = shallowRef<PendingWrite | null>(null)
   const pairBusy = ref(false)
   const pairCode = ref(new URLSearchParams(location.hash.slice(1)).get('code') ?? '')
-  const deviceName = ref('我的手机')
-  if (location.hash) window.history.replaceState(null, '', `${location.pathname}${location.search}`)
   let alive = true
   let scope = 0
   let recoveringScope: number | null = null
@@ -107,7 +105,7 @@ export function useMobileSession() {
     projects.value = result.projects
     if (selectedProject.value && !result.projects.some(project => project.id === selectedProject.value?.id)) {
       resetView(); selectedProject.value = null; selectedSession.value = null; sessions.value = []
-      notice.value = '当前项目已被移除或不再授权，请选择其他项目。'
+      notice.value = '当前项目已被移除，请选择其他项目。'
     }
   }
   async function loadSessions(more = false): Promise<void> {
@@ -205,9 +203,19 @@ export function useMobileSession() {
     if (!alive || recoveringScope === own || document.hidden || !navigator.onLine) return
     recoveringScope = own; cancelRetry(); closeStream(); sync.value = selectedSession.value ? 'connecting' : 'idle'
     try {
-      await client.connect(controller.signal)
+      try {
+        // 已连接过的浏览器优先复用身份，重复扫码不再登记一台新设备。
+        await client.connect(controller.signal)
+      } catch (failure) {
+        if (!alive || own !== scope) return
+        if (!requiresPairing(failure) || !pairCode.value) throw failure
+        pairBusy.value = true
+        await client.pair(pairCode.value.trim(), controller.signal)
+      }
       if (!alive || own !== scope) return
       connection.value = 'connected'; pairCode.value = ''; error.value = ''
+      // 成功后再移除链接中的连接码，网络失败时刷新页面仍可继续自动连接。
+      if (location.hash) window.history.replaceState(null, '', `${location.pathname}${location.search}`)
       await loadProjects()
       if (!alive || own !== scope) return
       const project = selectedProject.value; const session = selectedSession.value
@@ -230,21 +238,9 @@ export function useMobileSession() {
       if (document.hidden || !navigator.onLine) { sync.value = 'paused'; return }
       subscribe(ref, own)
     } catch (failure) { if (alive && own === scope) markFailure(failure) }
-    finally { if (recoveringScope === own) recoveringScope = null }
-  }
-  async function pair(): Promise<void> {
-    if (pairBusy.value) return
-    pairBusy.value = true; error.value = ''
-    try {
-      await client.pair(pairCode.value.trim(), deviceName.value.trim())
-      if (!alive) return
-      pairCode.value = ''; connection.value = 'connected'; await recover()
-    } catch (failure) {
-      if (alive) {
-        if (failure instanceof LanClientError && failure.code === 'PROTOCOL_MISMATCH') markFailure(failure)
-        else { connection.value = 'unpaired'; error.value = errorMessage(failure) }
-      }
-    } finally { if (alive) pairBusy.value = false }
+    finally {
+      if (recoveringScope === own) { recoveringScope = null; if (alive) pairBusy.value = false }
+    }
   }
   function chooseProject(project: LanProjectSummary): void {
     if (actionBusy.value) return
@@ -313,7 +309,7 @@ export function useMobileSession() {
     if (actionBusy.value) return
     pendingWrite.value = null; error.value = ''; notice.value = '已解除保护；未重新发送上一条操作。'
   }
-  function resume(): void { if (!pairCode.value && connection.value !== 'unpaired' && connection.value !== 'blocked') void recover() }
+  function resume(): void { if ((pairCode.value || connection.value !== 'unpaired') && connection.value !== 'blocked') void recover() }
   function visibility(): void {
     if (document.hidden) { closeStream(); cancelRetry(); sync.value = 'paused' } else resume()
   }
@@ -322,8 +318,7 @@ export function useMobileSession() {
     document.addEventListener('visibilitychange', visibility)
     window.addEventListener('online', resume); window.addEventListener('offline', offline)
     watchdog = setInterval(() => { if (source && !document.hidden && Date.now() - lastEventAt > 45_000) scheduleRetry() }, 5_000)
-    if (pairCode.value) connection.value = 'unpaired'
-    else if (!navigator.onLine) offline()
+    if (!navigator.onLine) offline()
     else void recover()
   })
   onBeforeUnmount(() => {
@@ -334,8 +329,8 @@ export function useMobileSession() {
     pendingWrite.value = null; drafts.clear(); pairCode.value = ''
   })
   return { connection, sync, projects, sessions, selectedProject, selectedSession, projection, status, interaction,
-    loadingSessions, remainingSessions, sessionLimit, draft, error, notice, actionBusy, pendingWrite, pairBusy, pairCode, deviceName,
-    history, messages, tools, canSend, isRunning, pair, recover, chooseProject, chooseSession, back, loadSessions,
+    loadingSessions, remainingSessions, sessionLimit, draft, error, notice, actionBusy, pendingWrite, pairBusy,
+    history, messages, tools, canSend, isRunning, recover, chooseProject, chooseSession, back, loadSessions,
     loadEarlier: historyCache.loadEarlier, loadTurn: historyCache.loadTurn, loadChunk: historyCache.loadChunk,
     setHistoryVisibility: historyCache.setVisibility, sessionKey: key,
     send: () => act('prompt'), stop: () => act('abort'),

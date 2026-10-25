@@ -268,31 +268,31 @@
         "id": "lan-remote",
         "name": "手机访问",
         "groupId": "setting",
-        "summary": "手机访问本地回环入口的启停、一次性配对与设备授权，以及已授权项目与会话的受限远程接入；手机经用户配置的可信 HTTPS 代理访问，不另建会话运行时，默认不监听。",
+        "summary": "局域网手机访问入口的启停、扫码自动登记设备与手机网页会话接入；开启后自动显示二维码，手机扫码直接进入全部已登记项目，不另建会话运行时，默认不监听。",
         "features": [
-          "显式开启或关闭主进程中的回环 HTTP 入口",
-          "配置外部 HTTPS 来源与本地转发端口，配对链接使用外部来源",
-          "一次性配对码、设备凭证摘要与项目授权管理",
-          "手机网页挂载与已授权会话的后台接入",
+          "显式开启或关闭主进程中的局域网 HTTP 入口",
+          "自动识别局域网地址、分配端口并展示和更新二维码",
+          "一次性连接码、设备身份与凭证摘要管理及撤销",
+          "手机扫码自动连接、项目选择与会话后台接入",
           "每条连接独立同步，写请求结果未知时保留原请求等待显式重试"
         ],
-        "tags": ["Electron 主进程", "HTTPS 代理", "回环 HTTP", "Vue 页面", "设备授权"],
+        "tags": ["Electron 主进程", "局域网直连", "HTTP", "Vue 页面", "设备身份"],
         "entries": [
           {"kind": "关键实现", "label": "启停与设备管理", "path": "src/main/lan-remote/manager.ts"},
-          {"kind": "关键实现", "label": "回环 HTTP 与来源边界", "path": "src/main/lan-remote/server.ts"},
+          {"kind": "关键实现", "label": "局域网 HTTP 与来源边界", "path": "src/main/lan-remote/server.ts"},
           {"kind": "关键实现", "label": "受限远程能力", "path": "src/main/lan-remote/session-service.ts"},
           {"kind": "界面入口", "label": "手机访问设置", "path": "src/renderer/src/lan-remote/components/LanRemoteSettingsSection.vue"},
           {"kind": "页面入口", "label": "手机网页外壳", "path": "src/lan-mobile/src/App.vue"}
         ],
         "resources": [
-          {"name": "手机设备授权", "owner": "DesktopConfigStore", "lifecycle": "写入 userData/desktop-config.json，只保存凭证摘要与项目授权"},
-          {"name": "手机访问入口配置", "owner": "设置页表单与 LanRemoteManager", "lifecycle": "外部 HTTPS 来源与本地转发端口只保留在内存中，不落盘、不自动恢复监听"}
+          {"name": "手机设备身份", "owner": "DesktopConfigStore", "lifecycle": "保存设备身份与凭证摘要，不保存 Cookie 原文或逐项目授权"},
+          {"name": "手机访问入口状态", "owner": "LanRemoteManager 与设备管理器；设置页保存展示副本", "lifecycle": "地址与端口自动确定，监听状态与一次性连接码仅存内存，不自动恢复监听"}
         ],
         "constraints": [
           "默认不监听，每次启动应用都需要显式开启",
-          "HTTPS 代理由用户配置并保持运行，应用不自动部署隧道或申请证书",
-          "HTTPS 在代理处终止，代理可读取转发内容；本地入口就绪不代表外部地址可达",
-          "手机能驱动 Agent 执行操作，项目授权按项目最小化授予",
+          "手机与电脑需处于可互相访问的局域网，无需配置代理或证书",
+          "入口使用 HTTP，不提供传输加密或公网中继",
+          "已连接手机可访问全部已登记项目并驱动 Agent 执行操作，不是只读预览",
           "后台接入不参与桌面前台选择，也不释放桌面空白会话"
         ],
         "links": [
@@ -614,8 +614,8 @@
       {"id": "r-pf-shell-layout", "from": "preferences", "to": "app-shell", "label": "布局值由外壳消费", "kind": "call"},
       {"id": "r-genui-param-switch", "from": "genui", "to": "preferences", "label": "读写生成式开关", "kind": "write"},
       {"id": "r-lr-shell-settings", "from": "lan-remote", "to": "app-shell", "label": "设置页承载启停与设备管理", "kind": "compose"},
-      {"id": "r-lr-config-grant", "from": "lan-remote", "to": "projects-trust", "label": "按已登记项目复核授权", "kind": "call"},
-      {"id": "r-lr-session-access", "from": "lan-remote", "to": "sessions-chat", "label": "按设备授权后台接入会话", "kind": "call"}
+      {"id": "r-lr-config-grant", "from": "lan-remote", "to": "projects-trust", "label": "读取全部已登记项目并复核目标", "kind": "call"},
+      {"id": "r-lr-session-access", "from": "lan-remote", "to": "sessions-chat", "label": "校验设备身份后后台接入会话", "kind": "call"}
     ],
     "runtime": {
       "nodes": [
@@ -748,11 +748,11 @@
           "id": "lan-mobile",
           "name": "手机网页入口",
           "kind": "网页入口",
-          "summary": "主进程显式开启回环 HTTP 服务，静态提供手机页面并按设备授权处理受限会话请求与事件；手机网页经用户配置的可信 HTTPS 代理访问，不单独启动服务进程。",
+          "summary": "主进程显式开启局域网 HTTP 服务，自动确定地址与端口，静态提供手机页面并校验设备身份后处理受限会话请求与事件；手机扫码直接连接，不单独启动服务进程。",
           "contains": ["lan-remote"],
           "entries": [
             {"kind": "关键实现", "label": "手机访问启停编排", "path": "src/main/lan-remote/manager.ts"},
-            {"kind": "关键实现", "label": "本地回环 HTTP 服务", "path": "src/main/lan-remote/server.ts"},
+            {"kind": "关键实现", "label": "局域网 HTTP 服务", "path": "src/main/lan-remote/server.ts"},
             {"kind": "页面入口", "label": "手机网页入口", "path": "src/lan-mobile/index.html"}
           ],
           "resources": [
@@ -760,7 +760,7 @@
           ],
           "constraints": [
             "默认不监听，应用退出或关闭本地入口即断连",
-            "外部 HTTPS 代理需保留 Host、Origin、Cookie，并支持不缓存、不缓冲的 SSE 长连接",
+            "手机与电脑需处于可互相访问的局域网，设备身份通过扫码自动登记或复用",
             "只提供手机页面与受限会话接口，不代理文件、终端与设置"
           ],
           "links": [
@@ -872,7 +872,7 @@
         {"id": "rr-main-sdkhost", "from": "electron-main", "to": "sdk-host", "label": "utilityProcess 与 MessagePort", "kind": "call"},
         {"id": "rr-main-authhelper", "from": "electron-main", "to": "auth-helper", "label": "JSONL 请求与响应", "kind": "call"},
         {"id": "rr-main-terminal", "from": "electron-main", "to": "terminal-daemon", "label": "版本化端点与 token", "kind": "call"},
-        {"id": "rr-main-lanmobile", "from": "electron-main", "to": "lan-mobile", "label": "显式提供手机网页与回环接口", "kind": "call"},
+        {"id": "rr-main-lanmobile", "from": "electron-main", "to": "lan-mobile", "label": "显式提供手机网页与局域网接口", "kind": "call"},
         {"id": "rr-main-entries", "from": "electron-main", "to": "entries", "label": "启动固定产物", "kind": "call"},
         {"id": "rr-main-contracts", "from": "electron-main", "to": "contracts", "label": "引用契约与运行时解析", "kind": "reference"},
         {"id": "rr-sdkhost-contracts", "from": "sdk-host", "to": "contracts", "label": "宿主协议与投影契约", "kind": "reference"},
@@ -974,12 +974,12 @@
       {
         "id": "mobile-continue",
         "name": "手机继续对话",
-        "summary": "用户配置可信 HTTPS 代理并在桌面开启本地入口，手机扫码配对后按设备授权选择项目与会话，在电脑上继续执行。",
+        "summary": "桌面开启局域网入口后自动展示二维码，手机扫码自动连接并选择已登记项目与会话，在电脑上继续执行。",
         "note": "手机切换会话不改变桌面前台；断开不中断电脑上的任务，写请求结果未知时不自动重发。",
         "relationIds": ["r-lr-shell-settings", "r-lr-config-grant", "r-lr-session-access"],
         "steps": [
-          {"title": "配置入口并配对", "description": "用户配置外部 HTTPS 代理，桌面显式开启回环 HTTP 服务并按授权项目生成配对二维码；手机通过外部 HTTPS 地址扫码确认，凭证只通过带 Secure、HttpOnly 属性的 Cookie 回传。", "moduleIds": ["lan-remote", "app-shell"]},
-          {"title": "按授权选择目标", "description": "手机请求项目与会话，主进程按设备授权与已登记项目复核，未授权项目不可枚举。", "moduleIds": ["lan-remote", "projects-trust"]},
+          {"title": "开启并扫码", "description": "桌面显式开启局域网 HTTP 入口后自动确定地址与端口并展示二维码；手机扫码自动登记或复用设备身份，无需填写或确认，凭证通过 HttpOnly Cookie 回传。", "moduleIds": ["lan-remote", "app-shell"]},
+          {"title": "选择项目与会话", "description": "手机显示全部已登记项目，选择会话时主进程复核设备身份和目标项目，不维护逐项目设备授权。", "moduleIds": ["lan-remote", "projects-trust"]},
           {"title": "后台接入会话", "description": "后台打开复用会话打开链，只取得或恢复运行实例，不改变桌面前台，也不释放桌面空白会话。", "moduleIds": ["lan-remote", "sessions-chat"]},
           {"title": "独立同步", "description": "连接先建立事件观察再读取快照，之后按序号应用增量；每条连接各自维护水位，慢连接只影响自身。", "moduleIds": ["lan-remote"]},
           {"title": "提交与结果未知", "description": "发送、停止与回应固定会话与绑定代际并按身份去重；结果未知时保留原请求等待用户显式重试或核对。", "moduleIds": ["lan-remote", "sessions-chat"]}

@@ -77,7 +77,7 @@ export const sessionManager = new SessionManager({
   readGenuiEnabled: async () => (await configStore.readGenui()).enabled
 })
 
-/** 手机访问管理器只装配依赖；回环监听须显式开启，外部 HTTPS 代理由用户配置。 */
+/** 手机访问管理器只装配依赖；局域网入口须显式开启，地址与端口自动确定，无需外部代理。 */
 export const lanRemote = new LanRemoteManager(configStore, sessionManager, sdkRuntime)
 
 /** MCP 服务器探测与取消：与当前会话无关，只按项目跑一次性官方 CLI 进程。 */

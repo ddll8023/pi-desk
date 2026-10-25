@@ -112,7 +112,7 @@ interface StoredConfig {
   readonly extensionAutoUpdate: boolean
   /** 可选字段：生成式 UI 开关；缺失或非法按开启处理，保持该能力默认可用。 */
   readonly genuiEnabled: boolean
-  /** 手机设备只保存高熵凭证的摘要与项目授权，不保存 Cookie 原文。 */
+  /** 手机设备保存身份记录与高熵凭证摘要，不保存 Cookie 原文。 */
   readonly lanDevices: readonly LanStoredDevice[]
 }
 
@@ -153,7 +153,7 @@ function sanitizeLanDevices(value: unknown): LanStoredDevice[] {
     if (!isLanStoredDevice(entry) || seen.has(entry.id) || seen.has(entry.tokenHash)) continue
     seen.add(entry.id); seen.add(entry.tokenHash)
     devices.push({ id: entry.id, name: entry.name, tokenHash: entry.tokenHash,
-      projectIds: [...entry.projectIds], createdAt: entry.createdAt, expiresAt: entry.expiresAt })
+      createdAt: entry.createdAt, expiresAt: entry.expiresAt })
     if (devices.length >= LAN_REMOTE_MAX_DEVICES) break
   }
   return devices
@@ -450,8 +450,6 @@ export class DesktopConfigStore {
 
       const projects = this.projects.filter((project) => project.id !== projectId)
       const currentProjectId = this.currentProjectId === projectId ? null : this.currentProjectId
-      const lanDevices = this.lanDevices.map(device => ({ ...device,
-        projectIds: device.projectIds.filter(id => id !== projectId) }))
       const projectTrust = { ...this.projectTrust }
       delete projectTrust[removed.path]
       // 项目级命令随项目一起清除：范围键就是项目路径，留着的记录不会再被任何项目命中。
@@ -466,12 +464,10 @@ export class DesktopConfigStore {
           windowState: this.windowState,
           projectTrust,
           authDeviceId: this.deviceIdForPersist(),
-          quickCommands,
-          lanDevices
+          quickCommands
         })
       }
 
-      this.lanDevices = lanDevices
       this.projects = projects
       this.currentProjectId = currentProjectId
       this.projectTrust = projectTrust
@@ -657,11 +653,11 @@ export class DesktopConfigStore {
     })
   }
 
-  /** 凭证摘要和授权通过同一配置队列读取；不把可变数组交给调用方。 */
+  /** 设备身份通过同一配置队列读取；不把可变记录交给调用方。 */
   readLanDevices(): Promise<readonly LanStoredDevice[]> {
     return this.enqueue(async () => {
       await this.loadFromDisk()
-      return this.lanDevices.map(device => ({ ...device, projectIds: [...device.projectIds] }))
+      return this.lanDevices.map(device => ({ ...device }))
     })
   }
 
@@ -672,11 +668,10 @@ export class DesktopConfigStore {
       if (this.readOnly) throw new DesktopConfigStorageError('本地配置处于只读状态，设备授权未保存。')
       if (devices.length > LAN_REMOTE_MAX_DEVICES || !devices.every(isLanStoredDevice)
         || new Set(devices.map(device => device.id)).size !== devices.length
-        || new Set(devices.map(device => device.tokenHash)).size !== devices.length
-        || devices.some(device => device.projectIds.some(id => !this.projects.some(project => project.id === id)))) {
-        throw new DesktopConfigStorageError('局域网设备授权记录无效或项目已被移除。')
+        || new Set(devices.map(device => device.tokenHash)).size !== devices.length) {
+        throw new DesktopConfigStorageError('局域网设备记录无效。')
       }
-      const next = devices.map(device => ({ ...device, projectIds: [...device.projectIds] }))
+      const next = devices.map(device => ({ ...device }))
       await this.persist({ projects: this.projects, currentProjectId: this.currentProjectId,
         ui: this.ui, windowState: this.windowState, projectTrust: this.projectTrust,
         authDeviceId: this.deviceIdForPersist(), lanDevices: next })
@@ -893,8 +888,7 @@ export class DesktopConfigStore {
       extensionAutoUpdate: value.extensionAutoUpdate === true,
       // 缺失按开启：旧配置文件里没有这个字段，而生成式 UI 默认可用。
       genuiEnabled: value.genuiEnabled !== false,
-      lanDevices: sanitizeLanDevices(value.lanDevices).map(device => ({ ...device,
-        projectIds: device.projectIds.filter(id => projects.some(project => project.id === id)) })),
+      lanDevices: sanitizeLanDevices(value.lanDevices),
       window: sanitizeWindowState(value.window),
       projectTrust: sanitizeProjectTrust(value.projectTrust),
       authDeviceId: sanitizeAuthDeviceId(value.authDeviceId)
@@ -961,7 +955,7 @@ export class DesktopConfigStore {
         : next.quickCommands.map((command) => ({ ...command })),
       extensionAutoUpdate: next.extensionAutoUpdate === undefined ? this.extensionAutoUpdate : next.extensionAutoUpdate,
       genuiEnabled: next.genuiEnabled === undefined ? this.genuiEnabled : next.genuiEnabled,
-      lanDevices: (next.lanDevices ?? this.lanDevices).map(device => ({ ...device, projectIds: [...device.projectIds] }))
+      lanDevices: (next.lanDevices ?? this.lanDevices).map(device => ({ ...device }))
     }
     // 这份配置是整文件写入：磁盘在加载后被别的写入者改过时，宁可放弃本次保存，也不用过期内容覆盖。
     if (await this.stampOf(file) !== this.loadedStamp) {

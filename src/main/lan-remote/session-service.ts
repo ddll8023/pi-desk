@@ -1,4 +1,4 @@
-/** 远程会话能力白名单：按设备和项目重新授权，固定会话与绑定代际；不分发任意 IPC，不接受文件路径。 */
+/** 远程会话能力白名单：校验设备身份与已登记项目，固定会话与绑定代际；不分发任意 IPC，不接受文件路径。 */
 import { createHash } from 'node:crypto'
 import type { DesktopConfigStore } from '../config/desktop-config-store'
 import type { SessionManager } from '../sessions/session-manager'
@@ -32,10 +32,10 @@ export class LanSessionService {
   async authorizeProject(deviceId: string, projectId: string): Promise<Project> {
     this.requireActive()
     const { projects } = await this.store.list()
-    const device = await this.devices.requireDevice(deviceId)
+    await this.devices.requireDevice(deviceId)
     this.requireActive()
     const project = projects.find(entry => entry.id === projectId)
-    if (!project || !device.projectIds.includes(projectId)) throw new LanAccessError('FORBIDDEN', '设备没有该项目的访问权限。')
+    if (!project) throw new LanAccessError('FORBIDDEN', '项目已被移除，请刷新项目列表。')
     return project
   }
 
@@ -83,9 +83,9 @@ export class LanSessionService {
     this.requireActive()
     if (command.operation === 'projects') {
       const { projects } = await this.store.list()
-      const device = await this.devices.requireDevice(deviceId)
+      await this.devices.requireDevice(deviceId)
       this.requireActive()
-      return { projects: projects.filter(project => device.projectIds.includes(project.id)).map(project => ({ id: project.id, name: project.name })) }
+      return { projects: projects.map(project => ({ id: project.id, name: project.name })) }
     }
     if (command.operation === 'sessions') {
       const project = await this.authorizeProject(deviceId, command.projectId)

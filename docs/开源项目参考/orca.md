@@ -83,7 +83,7 @@
 | 能力 | 重叠环节 | 不可视作替代的原因 |
 | --- | --- | --- |
 | 多 Agent / 多会话 | 都能并行处理项目任务 | pi-desk 核心是 Pi SDK 多运行实例，不自动隔离项目文件；Orca 以工作树和多种 CLI Agent 组织任务 |
-| 手机继续对话 | 远程查看进展并回复 | pi-desk 是经用户配置的可信 HTTPS 代理访问的网页，本地只监听回环 HTTP，通过一次性配对与项目授权提供聊天及问题回应；Orca 是 iOS/Android Companion，包含多主机、终端、Git、账号和 Relay 路径 |
+| 手机继续对话 | 远程查看进展并回复 | pi-desk 是局域网 HTTP 直连的网页，桌面开启后自动显示二维码，手机扫码自动连接并访问全部已登记项目，提供聊天及问题回应；Orca 是 iOS/Android Companion，包含多主机、终端、Git、账号和 Relay 路径 |
 | 差异审阅 | 都能看到变更与行差异 | pi-desk 有 `GitDiffView`，但没有内置行级评论归集与批量发回 Agent 的闭环；Orca 的 Annotate AI Diff 还维护评论及处理状态 |
 | 供应商与用量 | 都能展示模型或用量信息 | pi-desk 管 Pi Provider 凭据与会话 token／费用；Orca 面向外部 Agent 账号及订阅限流，二者的统计对象与认证边界不同 |
 
@@ -113,7 +113,7 @@ pi-desk 的[声明式生成式界面][p-genui]含文档版本、节点补丁及�
 | 显示后台任务的创建中／失败／可取消状态 | 高 | 现有会话运行状态与 Vue 展示能覆盖状态表达，无须新增框架；这里只借鉴可见状态，不包含新增工作树创建能力 |
 | 任务级 Git worktree 隔离 | 低 | 系统 Git 已存在，但需要重新设计项目身份、文件根、会话／终端归属、共享目录与删除边界；已有 Git 依赖不代表引入成本低 |
 | 浏览器元素到 Agent 上下文 | 低 | Electron 具备页面载体基础，但需要独立浏览器生命周期、页面权限、调试通道及捕获／附件链，不是普通文件预览扩展 |
-| 先明确手机能力白名单，再考虑扩大入口 | 高 | 现有受限会话接口和项目授权已提供边界，可在当前契约上说明支持范围，无新增依赖；外部 HTTPS 代理由用户配置，内置公网 Relay、多主机和移动原生客户端不在该评级内 |
+| 先明确手机能力白名单，再考虑扩大入口 | 高 | 现有设备身份校验与受限会话接口已提供边界，可在当前契约上说明支持范围，无新增依赖；当前为局域网扫码直连，内置公网 Relay、多主机和移动原生客户端不在该评级内 |
 
 不照搬的结论：不把工作树说成沙箱，不把所有 CLI Agent 说成具有相同原生集成，不为“对齐 Orca”直接增加公网服务或第三方账号体系。
 
@@ -134,7 +134,7 @@ pi-desk 的[声明式生成式界面][p-genui]含文档版本、节点补丁及�
 - [终端模块][p-terminal]：PTY 守护进程、历史和全局／项目快捷命令。
 - [Git 模块][p-git]、[`src/main/git/git-command.ts`](../../src/main/git/git-command.ts)、[`src/shared/git-api.ts`](../../src/shared/git-api.ts)：`GitRunOptions`、固定 Git 通道和请求范围。
 - [会话模块][p-session]、[`src/sdk-host/session-runtime.ts`](../../src/sdk-host/session-runtime.ts)：Pi SDK 会话及内置工厂装配；[子代理初步设计](../subagents-design.md)不是实现清单。
-- [手机模块][p-mobile]、[`src/main/lan-remote/manager.ts`](../../src/main/lan-remote/manager.ts)、[`src/main/lan-remote/server.ts`](../../src/main/lan-remote/server.ts)、[`src/shared/lan-remote-api.ts`](../../src/shared/lan-remote-api.ts)：`LanRemoteManager`、`LanServer` 与 `LanStartOptions` 的外部 HTTPS 来源、回环监听及设备授权边界。
+- [手机模块][p-mobile]、[`src/main/lan-remote/manager.ts`](../../src/main/lan-remote/manager.ts)、[`src/main/lan-remote/server.ts`](../../src/main/lan-remote/server.ts)、[`src/shared/lan-remote-api.ts`](../../src/shared/lan-remote-api.ts)：`LanRemoteManager`、`LanServer` 与共享契约中的局域网入口、自动扫码连接及设备身份边界。
 - [生成式界面模块][p-genui]、[`package.json`](../../package.json)、[既有 Orca 许可声明](../../licenses/orca-MIT.txt)。
 
 [o-intro]: https://github.com/stablyai/orca/blob/main/docs/site/content/docs/index.mdx

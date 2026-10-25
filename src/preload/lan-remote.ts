@@ -1,4 +1,4 @@
-/** 手机访问的沙箱桥接：重建 HTTPS 代理控制请求并校验结果，不暴露网络服务或设备凭证。 */
+/** 手机访问的沙箱桥接：重建无配置启停和扫码请求并校验结果，不暴露设备凭证。 */
 import { ipcRenderer } from 'electron'
 import {
   LAN_REMOTE_CONTROL_CHANNEL, LAN_REMOTE_STATE_EVENT, isLanControlRequest, isLanControlResult, isLanRemoteState
@@ -7,9 +7,6 @@ import type { LanControlRequest, LanRemoteApi } from '../shared/lan-remote-api'
 
 function plainRequest(request: LanControlRequest): LanControlRequest {
   switch (request.action) {
-    case 'start': return { action: 'start', publicOrigin: request.publicOrigin, port: request.port }
-    case 'pair': return { action: 'pair', projectIds: [...request.projectIds] }
-    case 'grant': return { action: 'grant', deviceId: request.deviceId, projectIds: [...request.projectIds] }
     case 'revoke': return { action: 'revoke', deviceId: request.deviceId }
     default: return { action: request.action }
   }

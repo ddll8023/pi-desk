@@ -1,6 +1,6 @@
-/** 手机网络入口：仅访问当前可信 HTTPS 代理来源；HttpOnly Cookie 认证，写请求保留原身份且不自动重发。 */
+/** 手机网络入口：同源访问局域网 HTTP 服务，扫码自动登记与 Cookie 认证；写请求保留原身份且不自动重发。 */
 import {
-  isLanConnectionInfo, isLanEnvelope, isLanPairResult, isLanRequest, isLanSessionTarget, LAN_REMOTE_PROTOCOL_VERSION
+  isLanConnectionInfo, isLanEnvelope, isLanOrigin, isLanPairResult, isLanRequest, isLanSessionTarget, LAN_REMOTE_PROTOCOL_VERSION
 } from '../../shared/lan-remote-api'
 import type { LanConnectionInfo, LanOperation, LanPairResult, LanRequest, LanSessionTarget } from '../../shared/lan-remote-api'
 
@@ -28,8 +28,8 @@ export class MobileClient {
     this.deviceId = result.deviceId
     return result
   }
-  async pair(code: string, name: string): Promise<LanPairResult> {
-    const result = await this.fetchJson('/api/pair', { code, name }, isLanPairResult)
+  async pair(code: string, signal?: AbortSignal): Promise<LanPairResult> {
+    const result = await this.fetchJson('/api/pair', { code }, isLanPairResult, signal)
     checkVersion(result.protocolVersion)
     this.serverId = result.serverId
     this.deviceId = result.device.id
@@ -38,7 +38,9 @@ export class MobileClient {
   prepare(command: LanOperation): LanRequest {
     if (!this.serverId) throw new LanClientError('NOT_CONNECTED', '尚未连接电脑，请先重新连接。')
     // 网络载荷也从当前编辑状态分离，之后修改草稿不能改变待重试请求的正文。
-    const request: unknown = JSON.parse(JSON.stringify({ deviceId: this.deviceId, serverId: this.serverId, requestId: crypto.randomUUID(), command }))
+    // getRandomValues 可用于局域网 HTTP 页面，不依赖仅安全上下文可用的 randomUUID。
+    const requestId = Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, '0')).join('')
+    const request: unknown = JSON.parse(JSON.stringify({ deviceId: this.deviceId, serverId: this.serverId, requestId, command }))
     if (!isLanRequest(request)) throw new LanClientError('INVALID_REQUEST', '请求内容或目标身份无效。')
     return request
   }
@@ -63,7 +65,7 @@ export class MobileClient {
   }
 
   private async fetchJson<T>(path: string, body: unknown, accepts: (data: unknown) => data is T, signal?: AbortSignal): Promise<T> {
-    if (location.protocol !== 'https:') throw new LanClientError('HTTPS_REQUIRED', '请使用电脑配对二维码中的 HTTPS 地址，不要打开代理的本地 HTTP 转发地址。')
+    if (!isLanOrigin(location.origin)) throw new LanClientError('LAN_ADDRESS_REQUIRED', '请使用电脑二维码中的局域网地址连接。')
     const controller = new AbortController()
     const abort = (): void => controller.abort()
     signal?.addEventListener('abort', abort, { once: true })
@@ -71,7 +73,7 @@ export class MobileClient {
     const timer = setTimeout(abort, 30_000)
     try {
       const response = await fetch(path, { method: body === undefined ? 'GET' : 'POST',
-        credentials: 'same-origin', mode: 'same-origin', cache: 'no-store', redirect: 'error', signal: controller.signal,
+        credentials: 'same-origin', mode: 'same-origin', referrerPolicy: 'same-origin', cache: 'no-store', redirect: 'error', signal: controller.signal,
         ...(body === undefined ? {} : { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }) })
       const text = await response.text()
       if (text.length > 16 * 1024 * 1024) throw new LanClientError('PAYLOAD_TOO_LARGE', '响应过大，请在桌面查看。', response.status)
@@ -83,7 +85,7 @@ export class MobileClient {
       return value.data
     } catch (error) {
       if (error instanceof LanClientError) throw error
-      if (controller.signal.aborted) throw new LanClientError('INTERRUPTED', signal?.aborted ? '页面操作已取消。' : '连接超时，请检查电脑与 HTTPS 代理服务连接。')
+      if (controller.signal.aborted) throw new LanClientError('INTERRUPTED', signal?.aborted ? '页面操作已取消。' : '连接超时，请确认电脑上的手机访问已开启，手机和电脑连接同一网络。')
       throw new LanClientError('NETWORK_ERROR', `无法连接电脑：${errorMessage(error)}`)
     } finally { clearTimeout(timer); signal?.removeEventListener('abort', abort) }
   }

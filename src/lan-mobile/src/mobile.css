@@ -1,4 +1,4 @@
-/* 手机独立样式入口：沿用桌面主题、控件与安全 Markdown 排版，只为手机外壳增加局部规则。 */
+/* 手机独立样式入口：沿用桌面主题与 Markdown 排版，补充扫码自动连接、手机布局及触控规则。 */
 @import "tailwindcss";
 @import "katex/dist/katex.min.css";
 @import "../../renderer/src/assets/styles/base.css";
@@ -35,10 +35,10 @@ html, body, #app { height: 100%; overflow: hidden; }
 .mobile-list-row:disabled { opacity: .6; }
 .mobile-page > .control-button { display: flex; margin-top: 20px; }
 .mobile-empty { padding: 32px 0; color: var(--color-desk-muted); font-size: 15px; line-height: 1.7; }
-.mobile-pair-panel { padding-top: 24px; }
-.mobile-pair-panel h2 { margin: 8px 0 16px; }
-.mobile-pair-form { display: grid; gap: 12px; margin-top: 28px; }
-.mobile-pair-form > button { justify-self: start; margin-top: 4px; }
+.mobile-connect-page { display: grid; align-items: center; overflow-y: auto; }
+.mobile-connect-panel { width: 100%; max-width: 32rem; padding: 24px 0; text-align: center; }
+.mobile-connect-panel h2 { margin: 0 0 12px; }
+.mobile-connect-panel p { margin: 0; }
 .mobile-app .text-control { font-size: 16px; min-height: 44px; }
 .mobile-app .control-button, .mobile-app .control-button-primary { min-height: 44px; }
 .mobile-app button:disabled { cursor: not-allowed; }
@@ -88,5 +88,5 @@ html, body, #app { height: 100%; overflow: hidden; }
 .mobile-composer-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 8px; }
 .mobile-composer-actions > span { font-size: 11px; }
 .mobile-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
-@media (min-width: 48rem) { .mobile-page { padding-top: 32px; } .mobile-pair-panel { max-width: 32rem; } .mobile-messages { padding-top: 24px; } }
+@media (min-width: 48rem) { .mobile-page { padding-top: 32px; } .mobile-messages { padding-top: 24px; } }
 @media (prefers-reduced-motion: reduce) { .mobile-app *, .mobile-app *::before, .mobile-app *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; } }

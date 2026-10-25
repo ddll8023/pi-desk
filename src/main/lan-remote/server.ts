@@ -1,8 +1,8 @@
-/** 手机访问载体：仅监听回环 HTTP，手机经可信 HTTPS 代理访问；来源、同源和设备授权先于白名单业务分派。 */
+/** 手机访问载体：自动端口提供局域网 HTTP 直连，扫码自动登记设备，同源与设备身份校验先于业务分派。 */
 import { createServer } from 'node:http'
 import type { IncomingMessage, ServerResponse, Server } from 'node:http'
 import type { Socket } from 'node:net'
-import { isLanRecord, hasLanKeys, isLanRequest, isLanSessionTarget, LAN_REMOTE_PROTOCOL_VERSION } from '../../shared/lan-remote-api'
+import { isLanAddress, isLanRecord, hasLanKeys, isLanRequest, isLanSessionTarget, LAN_REMOTE_PROTOCOL_VERSION } from '../../shared/lan-remote-api'
 import { LanAccessError, LanDeviceManager, LAN_COOKIE_NAME, LAN_DEVICE_LIFETIME_SECONDS } from './device-manager'
 import type { LanSessionService } from './session-service'
 import { LanEventStream } from './event-stream'
@@ -13,7 +13,7 @@ const MAX_RESPONSE_BYTES = 16 * 1024 * 1024
 export class LanServer {
   private server: Server | null = null
   private readonly assets = new LanMobileAssets()
-  private origin = ''
+  private origins: readonly string[] = []
   private stopped = false
   private readonly sockets = new Set<Socket>()
   private readonly principals = new Map<Socket, string>()
@@ -22,13 +22,13 @@ export class LanServer {
   private readonly active = new Map<string, number>()
   private detachDevices: (() => void) | null = null
   constructor(
-    private readonly publicOrigin: string,
+    private readonly addresses: readonly string[],
     private readonly devices: LanDeviceManager,
     private readonly service: LanSessionService,
     private readonly onFailure: (error: Error) => void
   ) {}
 
-  async start(port: number): Promise<{ readonly origin: string; readonly localOrigin: string }> {
+  async start(): Promise<{ readonly origin: string; readonly origins: readonly string[] }> {
     await this.assets.prepare()
     if (this.stopped) throw new Error('手机访问监听已被取消。')
     const handleRequest = (request: IncomingMessage, response: ServerResponse): void => {
@@ -51,7 +51,7 @@ export class LanServer {
       const failed = (error: Error): void => { server.off('listening', ready); reject(error) }
       const ready = (): void => { server.off('error', failed); resolve() }
       server.once('error', failed); server.once('listening', ready)
-      server.listen(port, '127.0.0.1')
+      server.listen(0, '0.0.0.0')
     })
     server.on('error', (error: Error) => {
       console.error('[lan-remote] 监听服务错误：', error)
@@ -64,19 +64,21 @@ export class LanServer {
       await new Promise<void>(resolve => server.close(() => resolve()))
       throw new Error('手机访问监听未就绪或已被取消。')
     }
-    const localOrigin = `http://127.0.0.1:${address.port}`
-    this.origin = this.publicOrigin
+    const origins = this.addresses.map(host => `http://${host}:${address.port}`)
+    const origin = origins[0]
+    if (!origin) throw new Error('未找到可供手机连接的局域网地址。')
+    this.origins = [...origins, `http://127.0.0.1:${address.port}`]
     this.detachDevices = this.devices.onChanged(id => {
       if (id === null) return
       for (const stream of this.streams.get(id) ?? []) stream.close()
       for (const [socket, principal] of this.principals) if (principal === id) socket.destroy()
     })
-    return { origin: this.origin, localOrigin }
+    return { origin, origins }
   }
 
-  /** 只依据真实 socket 判来源；代理转发头不授予任何设备身份或来源豁免。 */
+  /** 只依据真实连接来源，不通过转发头向公网连接授予局域网身份。 */
   private acceptsPeer(peer: string | undefined): boolean {
-    return peer === '127.0.0.1' || peer === '::ffff:127.0.0.1'
+    return typeof peer === 'string' && isLanAddress(peer.startsWith('::ffff:') ? peer.slice(7) : peer)
   }
 
   private async handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
@@ -84,33 +86,37 @@ export class LanServer {
     response.setHeader('X-Content-Type-Options', 'nosniff')
     response.setHeader('Content-Security-Policy', "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
     response.setHeader('Referrer-Policy', 'no-referrer')
-    if (this.stopped || !this.origin || !this.acceptsPeer(request.socket.remoteAddress)) {
-      throw new LanAccessError('FORBIDDEN', '手机访问尚未就绪或请求不是来自本机代理。')
+    const origin = this.origins.find(value => new URL(value).host === request.headers.host)
+    if (this.stopped || !origin || !this.acceptsPeer(request.socket.remoteAddress)) {
+      throw new LanAccessError('FORBIDDEN', '手机访问尚未就绪，或请求不是来自局域网。')
     }
     const site = request.headers['sec-fetch-site']
-    if (request.headers.host !== new URL(this.origin).host
-      || (request.headers.origin !== undefined && request.headers.origin !== this.origin)
-      || (site !== undefined && site !== 'same-origin' && site !== 'none')
-      || (request.method === 'POST' && request.headers.origin !== this.origin)) {
+    if ((request.headers.origin !== undefined && request.headers.origin !== origin)
+      || (request.method === 'POST' && request.headers.origin !== origin)) {
       throw new LanAccessError('FORBIDDEN', '请求来源或页面来源不受信任。')
     }
     if (!request.url || request.url.length > 4096 || !request.url.startsWith('/')) throw new LanAccessError('INVALID_REQUEST', '请求地址无效。', 400)
-    const url = new URL(request.url, this.origin)
-    if (url.origin !== this.origin) throw new LanAccessError('FORBIDDEN', '不允许访问其他地址。')
-    // 代理汇聚多个设备到同一个回环来源：入口总量有界，认证后的业务限额仍按设备独立计算。
+    const url = new URL(request.url, origin)
+    if (url.origin !== origin) throw new LanAccessError('FORBIDDEN', '不允许访问其他地址。')
+    // 入口限额按真实来源计算，认证后的业务限额按设备独立计算。
     const peerKey = `peer:${request.socket.remoteAddress ?? ''}`
     this.admitRate(peerKey, 1200)
     if (!url.search && await this.assets.serve(url.pathname, request.method, response)) return
+    if (site !== undefined && site !== 'same-origin' && site !== 'none') {
+      throw new LanAccessError('FORBIDDEN', '请从手机访问页面发起操作。')
+    }
     if (request.method === 'POST' && url.pathname === '/api/pair' && !url.search) {
       this.admitRate(`pair:${peerKey}`, 10)
       const body = await this.body(request)
-      if (!isLanRecord(body) || !hasLanKeys(body, ['code', 'name']) || typeof body.code !== 'string'
-        || !/^[A-Za-z0-9_-]{43}$/.test(body.code) || typeof body.name !== 'string' || !body.name.trim() || body.name.length > 80) {
-        throw new LanAccessError('INVALID_REQUEST', '配对需要有效的一次性码与设备名称。', 400)
+      if (!isLanRecord(body) || !hasLanKeys(body, ['code']) || typeof body.code !== 'string'
+        || !/^[A-Za-z0-9_-]{43}$/.test(body.code)) {
+        throw new LanAccessError('INVALID_REQUEST', '连接链接无效，请重新扫描电脑上的二维码。', 400)
       }
-      const pairing = await this.devices.redeem(body.code, body.name)
+      const agent = request.headers['user-agent'] ?? ''
+      const name = /iPad/i.test(agent) ? 'iPad' : /iPhone/i.test(agent) ? 'iPhone' : /Android/i.test(agent) ? 'Android 手机' : '手机浏览器'
+      const pairing = await this.devices.redeem(body.code, name)
       if (this.stopped || response.destroyed) return
-      response.setHeader('Set-Cookie', `${LAN_COOKIE_NAME}=${pairing.token}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=${LAN_DEVICE_LIFETIME_SECONDS}`)
+      response.setHeader('Set-Cookie', `${LAN_COOKIE_NAME}=${pairing.token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${LAN_DEVICE_LIFETIME_SECONDS}`)
       this.json(response, 200, { ok: true, data: { device: pairing.device, serverId: this.service.serverId, protocolVersion: LAN_REMOTE_PROTOCOL_VERSION } })
       return
     }
