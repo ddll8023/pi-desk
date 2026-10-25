@@ -63,7 +63,7 @@
 | `src/renderer/src/sessions/chat-view.ts` | 将消息与工具投影组织为聊天展示模型 |
 | `src/renderer/src/sessions/clock.ts` | 聊天生成／工具计时与显示时钟 |
 | `src/renderer/src/sessions/usage-format.ts` | token、费用及用量展示格式 |
-| `src/renderer/src/sessions/tool-summary.ts` | 工具参数摘要展示 |
+| `src/renderer/src/sessions/tool-summary.ts` | 工具卡展示推导：参数摘要、路径相对化、改动量与结果预览 |
 | `src/renderer/src/sessions/extension-dialog-presentation.ts` | 扩展提示、选择及对话展示转换 |
 
 ### 界面
@@ -73,9 +73,9 @@
 | `src/renderer/src/sessions/components/PromptComposer.vue` | 输入、附件、文件树拖入引用、命令、补全与提交编排 |
 | `src/renderer/src/sessions/components/ChatMessageList.vue` | 消息列表、历史加载、滚动与布局观察；向顶部栏发布对话跳转入口并执行跳转 |
 | `src/renderer/src/sessions/components/ChatTurnItem.vue` | 按轮摘要、展开与原文内容 |
-| `src/renderer/src/sessions/components/ChatMessageItem.vue` | 单消息、思考与工具展示 |
+| `src/renderer/src/sessions/components/ChatMessageItem.vue` | 单消息、思考、工具归组面板与生成式界面分发 |
 | `src/renderer/src/sessions/components/HistoryLoadSentinel.vue` | 历史加载触发哨兵 |
-| `src/renderer/src/sessions/components/ToolCard.vue` | 工具参数、结果与状态卡片 |
+| `src/renderer/src/sessions/components/ToolCard.vue` | 工具卡：摘要行、变更 Diff、参数与结果二级折叠 |
 | `src/renderer/src/sessions/components/UsageDetailDialog.vue` | 用量明细 |
 | `src/renderer/src/sessions/components/SessionActivityBar.vue` | 会话活动摘要和明细 |
 | `src/renderer/src/sessions/components/ExtensionDialog.vue` | SDK 扩展交互队列的当前对话 |

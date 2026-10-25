@@ -885,6 +885,11 @@
     .markdown-code-block pre {
       padding: 0.875rem;
     }
+
+    /* 窄屏摘要行先舍耗时：它是辅助信息，而状态与路径是判断这条调用结果所需的内容。 */
+    .tool-duration {
+      display: none;
+    }
   }
 @media (prefers-reduced-motion: reduce) {
     .chat-thinking > summary,
@@ -894,7 +899,8 @@
     .chat-skill > summary,
     .chat-skill .disclosure,
     .chat-compaction > summary,
-    .chat-compaction .disclosure {
+    .chat-compaction .disclosure,
+    .tool-card > summary {
       transition: none;
     }
   }
@@ -907,6 +913,32 @@
   }
 .tool-card > summary:hover {
     @apply bg-desk-surface-subtle;
+  }
+/* 状态字形：与状态文案、颜色同时出现，只是第二通道，不单独承担语义。 */
+.tool-status-mark {
+    @apply inline-block w-3 text-center font-mono leading-none;
+  }
+/* 状态文案整段不拆行：窄窗口下「未确认结束」被拆成两行后，摘要行会失去可扫读性。 */
+.tool-phase-label {
+    @apply shrink-0 whitespace-nowrap;
+  }
+.tool-duration {
+    @apply shrink-0;
+  }
+/* 文件类工具的改动量：新增与删除各自着色，数值用等宽数字避免变化时抖动。
+     整组不拆行：窄消息列里 `+n −m` 与「推断」标记必须待在同一行，否则会读成两组数据。 */
+.tool-change-count {
+    @apply inline-flex shrink-0 items-baseline gap-1.5 font-mono whitespace-nowrap tabular-nums;
+  }
+.tool-change-add {
+    color: var(--color-desk-success);
+  }
+.tool-change-remove {
+    color: var(--color-desk-danger);
+  }
+/* 推断标记：改动量不是真实 Diff 统计时给一个可见的弱化标签，不只靠悬停提示。 */
+.tool-change-inferred {
+    @apply rounded-full border border-desk-line px-1.5 text-2xs text-desk-muted;
   }
 .tool-card-body {
     @apply space-y-2 border-t border-desk-line px-3 py-2.5;
@@ -933,21 +965,84 @@
 .tool-fold-row {
     @apply flex flex-wrap items-center justify-between gap-x-2 gap-y-1;
   }
+/*
+   * 变更区：行号列、符号列、内容列三段。内容用 pre 保留原始缩进，超宽由容器横向滚动，
+   * 行号与符号固定在左侧不跟着横滚，因此行本身用 max-content 宽度撑开而不是整块换行。
+   */
+.tool-diff {
+    @apply overflow-auto rounded-desk-sm border border-desk-line bg-desk-canvas-sunken py-1 font-mono text-xs leading-5;
+  }
+.tool-diff-line {
+    @apply flex w-max min-w-full items-baseline pr-2.5 pl-2.5;
+  }
+.tool-diff-number {
+    @apply w-10 shrink-0 pr-2 text-right tabular-nums;
+    color: var(--color-desk-muted);
+  }
+.tool-diff-sign {
+    @apply w-3 shrink-0;
+    color: var(--color-desk-muted);
+  }
+.tool-diff-text {
+    @apply shrink-0 whitespace-pre text-desk-ink;
+  }
 /* 工具 Diff 行：只按 Pi 已算出的变更语义着色，不重新计算差异。 */
-.tool-output p.tool-diff-add {
-    color: var(--color-desk-success);
+.tool-diff-line[data-kind="add"] {
     background: var(--color-desk-success-soft);
   }
-.tool-output p.tool-diff-remove {
-    color: var(--color-desk-danger);
+.tool-diff-line[data-kind="add"] .tool-diff-sign,
+  .tool-diff-line[data-kind="add"] .tool-diff-text {
+    color: var(--color-desk-success);
+  }
+.tool-diff-line[data-kind="remove"] {
     background: var(--color-desk-danger-soft);
   }
-.tool-output p.tool-diff-context {
+.tool-diff-line[data-kind="remove"] .tool-diff-sign,
+  .tool-diff-line[data-kind="remove"] .tool-diff-text {
+    color: var(--color-desk-danger);
+  }
+.tool-diff-line[data-kind="context"] .tool-diff-text {
     color: var(--color-desk-muted);
   }
-.tool-output p.tool-diff-fold {
+.tool-diff-line[data-kind="fold"] {
     color: var(--color-desk-muted);
     opacity: 0.6;
+  }
+/*
+   * 执行记录面板：只把相邻的工具调用归到一起并给一行统计，组内每条仍是独立折叠卡。
+   * 面板内卡片去掉自身描边与圆角，改用分隔线，避免两层框套在一起。
+   */
+.execution-panel {
+    @apply overflow-hidden rounded-desk-md border border-desk-line bg-desk-surface;
+  }
+.execution-panel-head {
+    @apply flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 border-b border-desk-line bg-desk-surface-subtle px-3 py-1.5 text-xs;
+  }
+.execution-panel-title {
+    @apply font-medium text-desk-ink;
+  }
+.execution-panel-stats {
+    @apply font-mono tabular-nums text-desk-muted;
+  }
+.execution-panel > .tool-card {
+    @apply rounded-none border-0 bg-transparent;
+  }
+.execution-panel > .tool-card + .tool-card {
+    @apply border-t border-desk-line;
+  }
+.execution-panel > .tool-card > summary {
+    @apply px-3;
+  }
+/*
+   * 面板内摘要行的悬停底色换成 canvas：面板头本身就是 surface-subtle，同色会把首条与标题粘成一块。
+   * 这条靠选择器优先级覆盖上面的 `.tool-card > summary:hover`，所以必须留在它之后；
+   * 不要把它拆到前面的基础规则块里，否则会被基础规则反过来盖掉。
+   */
+.execution-panel > .tool-card > summary:hover {
+    @apply bg-desk-canvas;
+  }
+.execution-panel > .tool-card > .tool-card-body {
+    @apply px-3;
   }
 /* Extension widget 文本块。 */
 .widget-block {

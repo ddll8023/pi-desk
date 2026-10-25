@@ -922,7 +922,7 @@ export class MessageProjection {
 
   /**
    * 丢弃旧 AI 消息的响应过程：Thinking 整块去掉，工具调用只保留名称与状态（参数文本清空）。
-   * 界面本来就把过程折叠展示，这部分体积最不影响阅读；工具条目本身由 ToolProjection 自己限界。
+   * 界面本来就把 Thinking 与工具调用各自折叠展示，这部分体积最不影响阅读；工具条目本身由 ToolProjection 自己限界。
    * 正在生成的消息不收缩：流式事件还会继续往它的块里追加，改它只会让块反复重建。
    */
   private shrinkProcessDetail(): boolean {

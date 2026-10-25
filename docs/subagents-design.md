@@ -36,12 +36,12 @@
 - 主进程在 `src/main/sessions/sdk-host-manager.ts` 监督 SDK 宿主，运行身份、绑定代际和会话占用由 `src/main/sessions/session-run-registry.ts` 统一登记。
 - 现有宿主与页面契约围绕会话运行实例建立，`src/sdk-host/protocol.ts` 和 `src/shared/runtime-api.ts` 尚未提供完整的父子任务归属与子任务展示契约。
 - `src/sdk-host/projection/tool-projection.ts` 将工具事件转换为有界展示条目；普通工具更新主要保留文本，不保留任意结构化结果详情。生成式 UI 载荷有单独识别逻辑，不能据此认为子代理详情已经能够透传。
-- `src/renderer/src/sessions/components/ChatMessageItem.vue` 逐项渲染思考块和工具调用；普通工具使用独立工具卡，生成式 UI 使用专用渲染分支。
+- `src/renderer/src/sessions/components/ChatMessageItem.vue` 逐项渲染思考块和工具调用；相邻普通工具归入执行记录面板，面板内每条仍是独立工具卡，生成式 UI 使用专用渲染分支。
 - `src/sdk-host/extension-ui-bridge.ts` 已有可取消的选择、确认、输入与编辑交互桥，但现有交互不自动具备子任务来源语义。
 - `src/main/trust/trust-manager.ts` 明确只管理项目资源信任，不提供 OS 沙箱或工具权限限制。
 - `src/shared-process/runtime.ts` 支持加载受管 SDK 运行时，因此实际 SDK 可能不同于编译期依赖；不能只根据依赖声明推断运行能力。
 - 项目记忆 `.agents/memory/topics/conventions/multi-session-scope.md` 明确：独立宿主只隔离进程与运行身份，同项目会话仍访问共享工作目录，不提供文件隔离、自动冲突解决或自动恢复全部运行任务。
-- 项目记忆 `.agents/memory/topics/conventions/projection-limits.md` 中的合并过程折叠描述，与当前 `ChatMessageItem.vue` 的逐项展示不一致。本设计以当前源码作为展示接入事实，不据旧描述决定交互，也不在本次修改项目记忆。
+- 项目记忆 `.agents/memory/topics/conventions/projection-limits.md` 与当前 `ChatMessageItem.vue` 一致：Thinking 与工具调用逐项展示、各自开合，只有相邻工具调用归组。
 
 ## 3. 调研结论与方案取舍
 
@@ -349,13 +349,6 @@ Project Trust 是项目资源加载的信任决定，不是逐任务写入授权
 - **证据**：完整子任务记录可能持续增长并包含文件正文和工具输出；反复放入父工具详情会放大传输和上下文负担。
 - **影响**：增加磁盘占用、敏感信息保留和页面内存开销。
 - **推荐处置**：独立记录、有界投影、按需读取，并在记录管理开发阶段明确访问边界和保留、删除语义。
-
-### 10.7 展示记忆与当前源码不一致
-
-- **位置**：`.agents/memory/topics/conventions/projection-limits.md`、`src/renderer/src/sessions/components/ChatMessageItem.vue`。
-- **证据**：记忆写明合并过程折叠，当前组件则逐项展示独立工具卡。
-- **影响**：按旧记忆设计会接入错误的展示结构。
-- **推荐处置**：本设计以当前源码作为接入事实，旧描述不作设计依据；本次不自动改写项目记忆。
 
 ## 11. 开发阶段方向
 

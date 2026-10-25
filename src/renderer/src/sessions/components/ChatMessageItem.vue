@@ -1,18 +1,23 @@
 <!-- 单条消息：按块展示正文、思考、工具卡、技能卡、压缩卡与计时（单条生成耗时与本轮响应耗时）与本次调用的 token 花销。
-     过程块逐项展示、互不合并：每段 Thinking 各自折叠成一行轻量摘要（生成中展开并跟随最新思考，结束后收起），每个工具调用就是一张独立折叠的 ToolCard，参数与结果在卡内二级折叠；交付了生成式界面的工具调用改渲染界面本身，不再套折叠卡；回答正文按原位置展示、始终可见。界面按可见性挂载：远离视口的界面只留一行占位，展开全部轮次时不把每份界面都常驻。界面内的参数提交复用消息动作栏的禁用口径（运行中、未同步、正在发送等），不另做一套判断。用户消息下方使用细线图标操作栏，回退与修改后的重新发送由父级执行。
+     过程块逐项展示：每段 Thinking 各自折叠成一行轻量摘要（生成中展开并跟随最新思考，结束后收起），正文按原位置展示、始终可见。
+     工具调用按块相邻关系归组：连续出现且都不是生成式界面的工具调用合成一个「执行记录」面板，面板内每条仍是一张独立折叠的 ToolCard；
+     单条工具不套面板，Thinking、正文与生成式界面都是分组分界，不会被归进工具面板。
+     交付了生成式界面的工具调用改渲染界面本身，不再套折叠卡；界面按可见性挂载：远离视口的界面只留一行占位，展开全部轮次时不把每份界面都常驻。
+     界面内的参数提交复用消息动作栏的禁用口径（运行中、未同步、正在发送等），不另做一套判断。用户消息下方使用细线图标操作栏，回退与修改后的重新发送由父级执行。
      早期轮次的整体收起由 ChatTurnItem 负责，这里只表达单条消息内部每项自己的开合；同一轮内的非首条 AI 消息用紧凑表头，不重复 π 标记与角色名。
      被取代的旧版界面折叠成一行：整行点击跳转到新版（由消息列表定位），右侧小按钮展开查看旧版。 -->
 <script setup lang="ts">
 import { computed, onUnmounted, reactive, ref, useId, watch } from 'vue'
 import { copyText } from '../../ui/clipboard'
 import { userMessagePayload } from '../chat-view'
-import type { ChatBlock, ChatMessageView } from '../chat-view'
+import type { ChatBlock, ChatMessageView, ChatToolBlock } from '../chat-view'
 import type { HistoryChunk } from '../../../../shared/runtime-api'
 import { historyChunkKey } from '../stores/runtime'
 import type { HistoryChunkLoadState } from '../stores/runtime'
 import HistoryLoadSentinel from './HistoryLoadSentinel.vue'
 import { formatDuration, useTickingNow } from '../clock'
 import { cacheHitRate, formatTokens } from '../usage-format'
+import { toolGroupStats } from '../tool-summary'
 import MarkdownContent from '../../ui/MarkdownContent.vue'
 import ToolCard from './ToolCard.vue'
 import GenuiMountGate from '../../genui/components/GenuiMountGate.vue'
@@ -131,6 +136,54 @@ function toggleReadonly(key: string): void {
 }
 
 const isUser = computed(() => props.message.role === 'user')
+
+/**
+ * 一条展示行：单个块，或一组相邻的工具调用。
+ * 归组只发生在连续且都没有生成式界面的工具调用之间；Thinking、正文与生成式界面都是分界，
+ * 因此收起或展开一个工具不会连带收起任何其它内容。
+ */
+type DisplayRow =
+  | { readonly kind: 'block'; readonly block: ChatBlock }
+  | { readonly kind: 'tools'; readonly key: string; readonly blocks: readonly ChatToolBlock[] }
+
+/**
+ * 归组键：优先用组内各调用的 `toolCallId`，而不是首个块的 `key`。
+ * 块的 key 含 contentIndex，投影增量使 contentIndex 变化时 key 会变，整组连同组内卡片的展开状态一起重建；
+ * toolCallId 在工具生命周期内稳定，因此用它作为组身份。缺少 id 时退回块 key。
+ */
+function groupKey(blocks: readonly ChatToolBlock[]): string {
+  const ids = blocks.map(block => block.toolCallId ?? block.key)
+  return `tools:${ids.join(',')}`
+}
+
+/** 面板头部统计：执行记录未到达的调用记为 null，不当成成功或失败。 */
+const displayRows = computed<readonly DisplayRow[]>(() => {
+  const rows: DisplayRow[] = []
+  let group: ChatToolBlock[] = []
+  const flush = (): void => {
+    const first = group[0]
+    // 单条工具不套面板：面板只在真有多条相邻调用时才有归组价值。
+    if (first !== undefined && group.length === 1) rows.push({ kind: 'block', block: first })
+    else if (first !== undefined) rows.push({ kind: 'tools', key: groupKey(group), blocks: group })
+    group = []
+  }
+  for (const block of props.message.blocks) {
+    if (block.kind === 'toolcall' && block.ui === null) {
+      group.push(block)
+      continue
+    }
+    flush()
+    rows.push({ kind: 'block', block })
+  }
+  flush()
+  return rows
+})
+
+/** 面板头部的一行统计：「N 个工具 · a 已完成 / b 失败」；状态只按已有执行记录统计。 */
+function groupStats(blocks: readonly ChatToolBlock[]): string {
+  return toolGroupStats(blocks.map(block => block.execution?.phase ?? null))
+}
+
 /** 只标记渲染入口，不改变界面版本、会话身份或消息的块顺序。 */
 const hasGenui = computed(() => props.message.blocks.some(block => block.kind === 'toolcall' && block.ui !== null))
 /** 压缩记录不是对话消息：不展示生成计时、用户操作栏与复制入口。 */
@@ -436,92 +489,18 @@ function onEditKeydown(event: KeyboardEvent): void {
       >{{ compactionNotice }}</p>
     </template>
 
-    <!-- 响应过程逐项展示：每段思考各自折叠成一行，每个工具调用一张独立的 ToolCard，互不合并；正文按原位置排在它们之间。 -->
-    <template v-for="block in message.blocks" :key="block.key">
-      <details
-        v-if="block.kind === 'thinking'"
-        class="chat-thinking self-start w-full"
-        :open="isThinkingExpanded(block.key)"
-      >
-        <summary @click.prevent="toggleThinking(block.key)">
-          <span class="disclosure"></span>
-          <span class="chat-thinking-label">Thinking</span>
-          <span v-if="block.key === liveThinkingKey" class="chat-thinking-hint">
-            <span class="status-dots text-desk-accent" aria-hidden="true"><span></span><span></span><span></span></span>
-            思考中
-          </span>
-        </summary>
-        <div
-          class="chat-thinking-body"
-          :ref="element => registerThinkingBody(block.key, element)"
-          @scroll.passive="onThinkingBodyScroll"
-          @wheel.passive="onThinkingBodyWheel"
-          @pointerdown.passive="onThinkingBodyPointerDown"
-        >
-          <MarkdownContent :text="block.text" />
-          <HistoryLoadSentinel
-            v-for="chunk in chunksFor(block)"
-            :key="historyChunkKey(chunk)"
-            :cursor="`${historyChunkKey(chunk)}:${chunk.offset}`"
-            :enabled="historyEnabled === true && isThinkingExpanded(block.key)"
-            :loading="historyBusy === true"
-            :error="chunkStates?.[historyChunkKey(chunk)]?.error"
-            @load="emit('loadChunk', chunk)"
-          />
-          <p v-if="block.truncated && chunksFor(block).length === 0" class="tool-note">此内容超出展示上限，已截断。</p>
+    <!-- 响应过程逐项展示：每段思考各自折叠成一行，正文按原位置排在各块之间；
+         连续且非生成式界面的工具调用归入一个执行记录面板，单条工具仍是一张独立折叠卡。 -->
+    <template v-for="row in displayRows" :key="row.kind === 'tools' ? row.key : row.block.key">
+      <!-- 工具组：面板只提供归组与统计，组内每条仍是一张独立折叠的 ToolCard。 -->
+      <section v-if="row.kind === 'tools'" class="execution-panel" aria-label="工具执行记录">
+        <div class="execution-panel-head">
+          <span class="execution-panel-title">执行记录</span>
+          <span class="execution-panel-stats">{{ groupStats(row.blocks) }}</span>
         </div>
-      </details>
-      <!-- 交付了生成式界面的工具调用直接渲染界面，不再套一层折叠卡；其余工具仍走通用 ToolCard。
-           同一份界面只有最高版本可交互：被取代的版本折叠成一行只读记录，展开后控件与提交都禁用。
-           按 documentId 作 key：文档被替换时整个界面连同内存参数一起重建。
-           界面由 GenuiMountGate 按可见性挂载：长会话里展开全部轮次时，不把每份界面的组件都常驻。
-           旧版折叠行的整行点击是「跳到新版」，右侧小按钮才是查看旧版，两种意图不混用。 -->
-      <template v-else-if="block.kind === 'toolcall'">
-        <!-- 被取代的旧版折叠成一行：整行是跳转到新版的按钮，右侧单独切换查看旧版。
-             两者分成两个按钮而不是套在 details 的 summary 里：点击意图不同，嵌套交互控件也不合语义。 -->
-        <template v-if="block.ui !== null && block.supersededBy !== null">
-          <div class="genui-history">
-            <button
-              type="button"
-              class="genui-history-main"
-              :title="`跳到《${block.ui.document.title}》第 ${block.supersededBy} 版`"
-              @click="emit('jumpLatest', block.ui.documentId)"
-            >
-              <span class="genui-history-label">历史界面</span>
-              <span class="genui-history-title">{{ block.ui.document.title }}</span>
-              <span class="genui-history-version">已被第 {{ block.supersededBy }} 版取代 · 跳到新版</span>
-            </button>
-            <button
-              type="button"
-              class="genui-history-toggle"
-              :aria-expanded="readonlyOpen.has(block.key)"
-              @click="toggleReadonly(block.key)"
-            >
-              {{ readonlyOpen.has(block.key) ? '收起' : '查看旧版' }}
-            </button>
-          </div>
-          <div v-if="readonlyOpen.has(block.key)" class="genui-history-body">
-            <GenuiMountGate :payload="block.ui">
-              <UiDocument
-                :key="block.ui.documentId"
-                :payload="block.ui"
-                :submit-disabled="actionsDisabled === true"
-                :submit-disabled-reason="disabledReason ?? null"
-                :superseded-by="block.supersededBy"
-              />
-            </GenuiMountGate>
-          </div>
-        </template>
-        <GenuiMountGate v-else-if="block.ui !== null" :payload="block.ui">
-          <UiDocument
-            :key="block.ui.documentId"
-            :payload="block.ui"
-            :submit-disabled="actionsDisabled === true"
-            :submit-disabled-reason="disabledReason ?? null"
-          />
-        </GenuiMountGate>
         <ToolCard
-          v-else
+          v-for="block in row.blocks"
+          :key="block.key"
           :block="block"
           :history-chunks="chunksFor(block)"
           :chunk-states="chunkStates"
@@ -532,51 +511,148 @@ function onEditKeydown(event: KeyboardEvent): void {
           @load-more="emit('loadMore')"
           @load-chunk="emit('loadChunk', $event)"
         />
-      </template>
-      <!-- 正文块保持原有样式：用户气泡、图片、技能卡与 AI 回答都不进折叠卡。 -->
-      <template v-else-if="block.kind === 'text'">
-        <!-- 图片附件仍只来自用户消息的本地附件，不交给 Markdown 解析。 -->
-        <img
-          v-if="block.image !== null"
-          :src="block.image.dataUrl"
-          :alt="`附件图片（${block.image.mimeType}）`"
-          class="max-h-48 self-end rounded-desk-md border border-desk-line object-contain"
-        />
-        <!-- 技能调用是被 Pi 展开的机器内容，单独折叠展示；用户追加文本仍走原气泡。 -->
+      </section>
+      <template v-else>
         <details
-          v-if="block.skill !== null"
-          class="chat-skill self-start w-full"
-          :open="isSkillExpanded(block.key)"
+          v-if="row.block.kind === 'thinking'"
+          class="chat-thinking self-start w-full"
+          :open="isThinkingExpanded(row.block.key)"
         >
-          <summary @click.prevent="toggleSkill(block.key)">
+          <summary @click.prevent="toggleThinking(row.block.key)">
             <span class="disclosure"></span>
-            <span class="chat-skill-label">技能</span>
-            <span class="chat-skill-name">{{ block.skill.name }}</span>
-            <span class="chat-skill-hint">技能正文</span>
+            <span class="chat-thinking-label">Thinking</span>
+            <span v-if="row.block.key === liveThinkingKey" class="chat-thinking-hint">
+              <span class="status-dots text-desk-accent" aria-hidden="true"><span></span><span></span><span></span></span>
+              思考中
+            </span>
           </summary>
-          <div class="chat-skill-body">
-            <MarkdownContent :text="block.skill.content" />
-            <p v-if="block.truncated && chunksFor(block).length === 0" class="tool-note">此内容超出展示上限，已截断。</p>
+          <div
+            class="chat-thinking-body"
+            :ref="element => registerThinkingBody(row.block.key, element)"
+            @scroll.passive="onThinkingBodyScroll"
+            @wheel.passive="onThinkingBodyWheel"
+            @pointerdown.passive="onThinkingBodyPointerDown"
+          >
+            <MarkdownContent :text="row.block.text" />
+            <HistoryLoadSentinel
+              v-for="chunk in chunksFor(row.block)"
+              :key="historyChunkKey(chunk)"
+              :cursor="`${historyChunkKey(chunk)}:${chunk.offset}`"
+              :enabled="historyEnabled === true && isThinkingExpanded(row.block.key)"
+              :loading="historyBusy === true"
+              :error="chunkStates?.[historyChunkKey(chunk)]?.error"
+              @load="emit('loadChunk', chunk)"
+            />
+            <p v-if="row.block.truncated && chunksFor(row.block).length === 0" class="tool-note">此内容超出展示上限，已截断。</p>
           </div>
         </details>
-        <!-- 图片块只渲染图片；空文本块（仅图片或仅技能调用的消息）不渲染气泡，避免多出一个空气泡。 -->
-        <div
-          v-if="block.text !== ''"
-          :class="isUser ? 'chat-bubble chat-bubble-user self-end' : 'chat-assistant-content'"
-        >
-          <p v-if="isUser">{{ block.text }}</p>
-          <MarkdownContent v-else :text="block.text" />
-          <p v-if="block.truncated && chunksFor(block).length === 0" class="chat-truncation-note">此内容超出展示上限，已截断。</p>
-        </div>
-        <HistoryLoadSentinel
-          v-for="chunk in chunksFor(block)"
-          :key="historyChunkKey(chunk)"
-          :cursor="`${historyChunkKey(chunk)}:${chunk.offset}`"
-          :enabled="historyEnabled === true"
-          :loading="historyBusy === true"
-          :error="chunkStates?.[historyChunkKey(chunk)]?.error"
-          @load="emit('loadChunk', chunk)"
-        />
+        <!-- 交付了生成式界面的工具调用直接渲染界面，不再套一层折叠卡；其余工具仍走通用 ToolCard。
+             同一份界面只有最高版本可交互：被取代的版本折叠成一行只读记录，展开后控件与提交都禁用。
+             按 documentId 作 key：文档被替换时整个界面连同内存参数一起重建。
+             界面由 GenuiMountGate 按可见性挂载：长会话里展开全部轮次时，不把每份界面的组件都常驻。
+             旧版折叠行的整行点击是「跳到新版」，右侧小按钮才是查看旧版，两种意图不混用。 -->
+        <template v-else-if="row.block.kind === 'toolcall'">
+          <!-- 被取代的旧版折叠成一行：整行是跳转到新版的按钮，右侧单独切换查看旧版。
+               两者分成两个按钮而不是套在 details 的 summary 里：点击意图不同，嵌套交互控件也不合语义。 -->
+          <template v-if="row.block.ui !== null && row.block.supersededBy !== null">
+            <div class="genui-history">
+              <button
+                type="button"
+                class="genui-history-main"
+                :title="`跳到《${row.block.ui.document.title}》第 ${row.block.supersededBy} 版`"
+                @click="emit('jumpLatest', row.block.ui.documentId)"
+              >
+                <span class="genui-history-label">历史界面</span>
+                <span class="genui-history-title">{{ row.block.ui.document.title }}</span>
+                <span class="genui-history-version">已被第 {{ row.block.supersededBy }} 版取代 · 跳到新版</span>
+              </button>
+              <button
+                type="button"
+                class="genui-history-toggle"
+                :aria-expanded="readonlyOpen.has(row.block.key)"
+                @click="toggleReadonly(row.block.key)"
+              >
+                {{ readonlyOpen.has(row.block.key) ? '收起' : '查看旧版' }}
+              </button>
+            </div>
+            <div v-if="readonlyOpen.has(row.block.key)" class="genui-history-body">
+              <GenuiMountGate :payload="row.block.ui">
+                <UiDocument
+                  :key="row.block.ui.documentId"
+                  :payload="row.block.ui"
+                  :submit-disabled="actionsDisabled === true"
+                  :submit-disabled-reason="disabledReason ?? null"
+                  :superseded-by="row.block.supersededBy"
+                />
+              </GenuiMountGate>
+            </div>
+          </template>
+          <GenuiMountGate v-else-if="row.block.ui !== null" :payload="row.block.ui">
+            <UiDocument
+              :key="row.block.ui.documentId"
+              :payload="row.block.ui"
+              :submit-disabled="actionsDisabled === true"
+              :submit-disabled-reason="disabledReason ?? null"
+            />
+          </GenuiMountGate>
+          <ToolCard
+            v-else
+            :block="row.block"
+            :history-chunks="chunksFor(row.block)"
+            :chunk-states="chunkStates"
+            :history-enabled="historyEnabled"
+            :history-busy="historyBusy"
+            :history-more="historyMore"
+            :history-error="historyError"
+            @load-more="emit('loadMore')"
+            @load-chunk="emit('loadChunk', $event)"
+          />
+        </template>
+        <!-- 正文块保持原有样式：用户气泡、图片、技能卡与 AI 回答都不进折叠卡。 -->
+        <template v-else-if="row.block.kind === 'text'">
+          <!-- 图片附件仍只来自用户消息的本地附件，不交给 Markdown 解析。 -->
+          <img
+            v-if="row.block.image !== null"
+            :src="row.block.image.dataUrl"
+            :alt="`附件图片（${row.block.image.mimeType}）`"
+            class="max-h-48 self-end rounded-desk-md border border-desk-line object-contain"
+          />
+          <!-- 技能调用是被 Pi 展开的机器内容，单独折叠展示；用户追加文本仍走原气泡。 -->
+          <details
+            v-if="row.block.skill !== null"
+            class="chat-skill self-start w-full"
+            :open="isSkillExpanded(row.block.key)"
+          >
+            <summary @click.prevent="toggleSkill(row.block.key)">
+              <span class="disclosure"></span>
+              <span class="chat-skill-label">技能</span>
+              <span class="chat-skill-name">{{ row.block.skill.name }}</span>
+              <span class="chat-skill-hint">技能正文</span>
+            </summary>
+            <div class="chat-skill-body">
+              <MarkdownContent :text="row.block.skill.content" />
+              <p v-if="row.block.truncated && chunksFor(row.block).length === 0" class="tool-note">此内容超出展示上限，已截断。</p>
+            </div>
+          </details>
+          <!-- 图片块只渲染图片；空文本块（仅图片或仅技能调用的消息）不渲染气泡，避免多出一个空气泡。 -->
+          <div
+            v-if="row.block.text !== ''"
+            :class="isUser ? 'chat-bubble chat-bubble-user self-end' : 'chat-assistant-content'"
+          >
+            <p v-if="isUser">{{ row.block.text }}</p>
+            <MarkdownContent v-else :text="row.block.text" />
+            <p v-if="row.block.truncated && chunksFor(row.block).length === 0" class="chat-truncation-note">此内容超出展示上限，已截断。</p>
+          </div>
+          <HistoryLoadSentinel
+            v-for="chunk in chunksFor(row.block)"
+            :key="historyChunkKey(chunk)"
+            :cursor="`${historyChunkKey(chunk)}:${chunk.offset}`"
+            :enabled="historyEnabled === true"
+            :loading="historyBusy === true"
+            :error="chunkStates?.[historyChunkKey(chunk)]?.error"
+            @load="emit('loadChunk', chunk)"
+          />
+        </template>
       </template>
     </template>
 

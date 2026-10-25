@@ -712,7 +712,8 @@ details[open] > summary .disclosure {
      于是上面那条通用规则也会给只横向溢出的代码块与表格留下纵向空档，右侧白占 8px、
      横向滚动条还短一截。这些容器显式退回 auto。 */
 .markdown-code-block pre.scroll-area,
-  .markdown-table-scroll.scroll-area {
+  .markdown-table-scroll.scroll-area,
+  .tool-diff.scroll-area {
     scrollbar-gutter: auto;
   }
 /* 细滚动条；不改变滚动行为，只避免默认滚动条压住内容。滚动容器一律适用——带 scroll-area 类的外壳、
