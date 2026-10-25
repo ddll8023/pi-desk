@@ -2,28 +2,28 @@
 @layer components {
 .project-sidebar-header {
     display: flex;
-    height: 32px;
+    height: 36px;
     flex: none;
     align-items: center;
     justify-content: space-between;
     gap: 8px;
-    padding: 0 10px 0 14px;
+    padding: 0 8px;
   }
 .project-sidebar-heading {
     color: var(--sidebar-muted);
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 600;
     line-height: 16px;
   }
 .project-sidebar-add {
     display: inline-flex;
-    min-height: 26px;
+    min-height: 32px;
     align-items: center;
     gap: 4px;
     border-radius: var(--radius-desk-sm);
-    padding: 3px 6px;
+    padding: 4px 8px;
     color: var(--sidebar-muted);
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 500;
     white-space: nowrap;
     transition: background-color var(--sidebar-duration-hover) ease, color var(--sidebar-duration-hover) ease;
@@ -34,13 +34,13 @@
   }
 .sidebar-icon {
     display: block;
-    width: 16px;
-    height: 16px;
+    width: 12px;
+    height: 12px;
     flex: none;
   }
 .project-sidebar-add .sidebar-icon {
-    width: 14px;
-    height: 14px;
+    width: 12px;
+    height: 12px;
   }
 /* 树只有一个滚动容器：项目与会话在同一列里滚动，切换项目不再让两个列表各自跳动。 */
 .sidebar-tree-scroll {
@@ -53,7 +53,7 @@
     overflow-y: auto;
     overscroll-behavior: contain;
     scrollbar-gutter: stable;
-    padding: 0 4px 6px 6px;
+    padding: 0 8px 8px;
   }
 .sidebar-tree,
   .sidebar-session-list {
@@ -62,10 +62,16 @@
     width: 100%;
     min-width: 0;
     grid-template-columns: minmax(0, 1fr);
-    gap: 1px;
+    gap: 0;
     margin: 0;
     padding: 0;
     list-style: none;
+  }
+.sidebar-tree {
+    gap: 8px;
+  }
+.sidebar-session-list {
+    gap: 4px;
   }
 .sidebar-tree > li,
   .sidebar-session-list > li {
@@ -98,17 +104,17 @@
     display: grid;
     min-width: 0;
     align-items: center;
-    border-radius: 5px;
-    padding-right: 2px;
+    border-radius: var(--radius-desk-sm);
+    padding-right: 4px;
     transition: background-color var(--sidebar-duration-hover) ease;
   }
 .sidebar-tree-row.is-project {
-    grid-template-columns: 14px minmax(0, 1fr) auto;
-    min-height: 30px;
+    grid-template-columns: 24px minmax(0, 1fr) auto;
+    min-height: 36px;
   }
 .sidebar-tree-row.is-session {
     grid-template-columns: 16px minmax(0, 1fr) auto;
-    min-height: 28px;
+    min-height: 32px;
   }
 .sidebar-tree-row:is(:hover, :focus-within, .is-menu-open) {
     background: var(--sidebar-hover);
@@ -122,8 +128,8 @@
 .sidebar-project-rail {
     position: absolute;
     z-index: -1;
-    top: 5px;
-    bottom: 5px;
+    top: 4px;
+    bottom: 4px;
     left: 0;
     width: 2px;
     border-radius: 9999px;
@@ -134,7 +140,7 @@
     position: absolute;
     z-index: -1;
     inset: 0;
-    border-radius: 5px;
+    border-radius: var(--radius-desk-sm);
     background: var(--sidebar-selected-strong);
     /* 选中靠底色与左竖条两条通道同时表达：只靠竖条时，长列表里很难一眼找到自己在哪里。 */
     box-shadow: inset 2px 0 0 0 var(--color-desk-accent);
@@ -150,8 +156,9 @@
 /* 展开控件与行本身是两个动作：它只控制展开折叠，不切换当前项目。 */
 .sidebar-chevron {
     display: flex;
-    width: 14px;
-    height: 24px;
+    width: 24px;
+    height: 100%;
+    min-height: 24px;
     align-items: center;
     justify-content: center;
     padding: 0;
@@ -175,22 +182,22 @@
     max-width: 100%;
     min-width: 0;
     align-items: center;
-    gap: 7px;
+    gap: 8px;
     border: 0;
-    border-radius: 5px;
+    border-radius: var(--radius-desk-sm);
     color: var(--sidebar-ink);
     text-align: left;
   }
 /* 行高给下限而不是定死：内容多出一行时行本身长高，选中底色与悬停底色始终盖住自己的文字。 */
 .sidebar-tree-item.is-project {
-    min-height: 30px;
-    padding: 4px 6px 4px 4px;
+    min-height: 36px;
+    padding: 4px 8px 4px 4px;
   }
 .sidebar-tree-item.is-session {
-    min-height: 28px;
+    min-height: 32px;
     /* 左侧 0：状态槽已经占位，再加内边距会把标题推得太远；右侧留给时间与悬停操作。 */
-    padding: 4px 6px 4px 0;
-    gap: 6px;
+    padding: 4px 8px 4px 0;
+    gap: 4px;
   }
 /* 状态槽：固定在行首 16px 列，会话标题无论多长都不遮挡状态。 */
 .sidebar-session-status {
@@ -202,7 +209,7 @@
   }
 /*
    * 运行状态标记：形状承担主要区分（旋转环／实心点／中性点），颜色是第二通道。
-   * 实心点用 20% 同色光晕，让它在 28px 行高里与旋转环的视觉重量相当。
+   * 实心点用 20% 同色光晕，让它在 32px 行高里与旋转环的视觉重量相当。
    */
 .sidebar-status-mark {
     display: inline-flex;
@@ -292,9 +299,9 @@
 .sidebar-tree-children-inner {
     min-height: 0;
     overflow: hidden;
-    margin-left: 13px;
+    margin-left: 11px;
     border-left: 1px solid var(--sidebar-line);
-    padding-left: 8px;
+    padding-left: 20px;
   }
 /*
    * 会话列表的高度上限：一个项目的会话再多也不会占满侧栏，超出部分在本项目内滚动。
@@ -323,7 +330,7 @@
 .sidebar-project-name {
     display: block;
     overflow: hidden;
-    font-size: 13px;
+    font-size: var(--text-md);
     font-weight: 500;
     line-height: 17px;
     text-overflow: ellipsis;
@@ -336,8 +343,8 @@
     display: block;
     overflow: hidden;
     color: var(--sidebar-muted);
-    font-size: 10px;
-    line-height: 13px;
+    font-size: var(--text-2xs);
+    line-height: 14px;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -360,9 +367,9 @@
    */
 .sidebar-session-chip {
     flex: none;
-    border-radius: 4px;
+    border-radius: var(--radius-desk-sm);
     padding: 0 4px;
-    font-size: 10px;
+    font-size: var(--text-2xs);
     font-weight: 500;
     line-height: 15px;
     white-space: nowrap;
@@ -401,7 +408,7 @@
 .sidebar-session-meta {
     overflow: hidden;
     color: var(--sidebar-muted);
-    font-size: 10px;
+    font-size: var(--text-2xs);
     line-height: 14px;
     font-variant-numeric: tabular-nums;
     text-overflow: ellipsis;
@@ -416,11 +423,11 @@
 /* 按钮槽始终占据同样宽度；不可见时不抢指针，键盘聚焦和浮层打开时仍可见。 */
 .sidebar-row-action {
     display: flex;
-    width: 22px;
-    height: 22px;
+    width: 24px;
+    height: 24px;
     align-items: center;
     justify-content: center;
-    border-radius: 4px;
+    border-radius: var(--radius-desk-sm);
     padding: 0;
     color: var(--sidebar-muted);
     opacity: 0;
@@ -436,14 +443,14 @@
     color: var(--sidebar-ink);
   }
 .sidebar-row-action .sidebar-icon {
-    width: 14px;
-    height: 14px;
+    width: 12px;
+    height: 12px;
   }
 .sidebar-empty,
   .sidebar-notice,
   .sidebar-list-notice {
     margin: 0;
-    padding: 6px 8px;
+    padding: 8px;
     color: var(--sidebar-muted);
     font-size: 11px;
     line-height: 18px;
@@ -456,10 +463,10 @@
 .sidebar-load-more {
     display: flex;
     width: 100%;
-    min-height: 26px;
+    min-height: 32px;
     align-items: center;
-    border-radius: 5px;
-    padding: 3px 6px;
+    border-radius: var(--radius-desk-sm);
+    padding: 4px 8px;
     color: var(--sidebar-muted);
     font-size: 11px;
     font-weight: 500;
@@ -482,12 +489,12 @@
     color: var(--color-desk-warning);
   }
 .sidebar-list-notice {
-    padding-top: 10px;
+    padding-top: 8px;
   }
 /* 缩进过的空态与提示：与同层会话行的左边界对齐，不额外占用引导线的位置。 */
 .sidebar-empty.is-nested,
   .sidebar-list-notice.is-nested {
-    padding-left: 6px;
+    padding-left: 8px;
   }
 .sidebar-list-notice > span {
     display: block;
@@ -501,7 +508,7 @@
 .project-sidebar-settings {
     display: flex;
     width: 100%;
-    height: 34px;
+    height: 36px;
     align-items: center;
     gap: 8px;
     border-radius: var(--radius-desk-sm);
@@ -535,7 +542,7 @@
     overscroll-behavior: contain;
     padding: 4px;
     border: 1px solid var(--sidebar-line);
-    border-radius: 9px;
+    border-radius: var(--radius-desk-md);
     background: var(--sidebar-surface);
     color: var(--sidebar-ink);
     box-shadow: var(--shadow-desk-pop);
@@ -581,11 +588,11 @@
 .project-sidebar-menu-item {
     display: flex;
     width: 100%;
-    min-height: 30px;
+    min-height: 32px;
     align-items: center;
     justify-content: flex-start;
     border-radius: var(--radius-desk-sm);
-    padding: 5px 8px;
+    padding: 4px 8px;
     color: var(--sidebar-ink);
     font-size: 12px;
     text-align: left;
@@ -616,7 +623,7 @@
     height: 100%;
     flex: none;
     flex-direction: column;
-    padding-top: 6px;
+    padding-top: 8px;
   }
 @media (hover: none) {
     .sidebar-row-action {

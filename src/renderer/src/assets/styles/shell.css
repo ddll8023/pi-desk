@@ -181,6 +181,11 @@
     flex-direction: column;
     overflow: hidden;
   }
+.app-workspace.is-workspace {
+    margin: 8px;
+    border: 1px solid var(--color-desk-line);
+    border-radius: var(--radius-desk-lg);
+  }
 /* 自绘窗口标题栏：整条默认不可拖动，只有中间的 .app-titlebar-drag 空白能拖窗口，
      控件与空白之间的缝隙不会把点击变成拖动或双击最大化；高度与主进程 TITLEBAR_HEIGHT 一致。 */
 .app-titlebar {
@@ -456,13 +461,19 @@
     min-height: 0;
     flex: none;
     overflow: hidden;
+    margin: 8px 0 8px 8px;
     border-right: 1px solid var(--sidebar-line);
+    border-radius: var(--radius-desk-lg);
     background: var(--sidebar-surface);
     color: var(--sidebar-ink);
-    transition: width var(--sidebar-duration-collapse) var(--sidebar-ease), border-right-width var(--sidebar-duration-collapse) var(--sidebar-ease);
+    transition:
+      width var(--sidebar-duration-collapse) var(--sidebar-ease),
+      margin var(--sidebar-duration-collapse) var(--sidebar-ease),
+      border-right-width var(--sidebar-duration-collapse) var(--sidebar-ease);
   }
 .app-sidebar.is-collapsed {
     width: 0;
+    margin: 0;
     border-right-width: 0;
   }
 @media (max-width: 799px) {
@@ -470,9 +481,10 @@
       --sidebar-width: min(260px, calc(100vw - 3.5rem));
       position: absolute;
       z-index: 30;
-      inset: 0 auto 0 0;
+      inset: 8px auto 8px 8px;
       width: var(--sidebar-width);
-      transform: translateX(-100%);
+      margin: 0;
+      transform: translateX(calc(-100% - 8px));
       box-shadow: none;
       transition: transform var(--sidebar-duration-collapse) var(--sidebar-ease);
     }
@@ -480,7 +492,7 @@
     .app-sidebar.is-collapsed {
       width: var(--sidebar-width);
       border-right-width: 1px;
-      transform: translateX(-100%);
+      transform: translateX(calc(-100% - 8px));
     }
 
     .app-sidebar.is-mobile-open {
@@ -545,15 +557,19 @@
     min-height: 0;
     flex: none;
     overflow: hidden;
+    margin: 8px 8px 8px 0;
     border-left: 1px solid var(--panel-line);
+    border-radius: var(--radius-desk-lg);
     background: var(--panel-surface);
     color: var(--panel-ink);
     transition:
       width var(--panel-duration-collapse) var(--panel-ease),
+      margin var(--panel-duration-collapse) var(--panel-ease),
       border-left-width var(--panel-duration-collapse) var(--panel-ease);
   }
 .app-right-panel.is-collapsed {
     width: 0;
+    margin: 0;
     border-left-width: 0;
   }
 /* 拖拽期间不接过渡：宽度必须跟手，不能滞后一帧。 */
@@ -580,20 +596,25 @@
     height: 15px;
     flex: none;
   }
+.app-right-panel .panel-icon {
+    width: 12px;
+    height: 12px;
+  }
 .right-panel-header {
     display: flex;
-    height: 34px;
+    height: 36px;
     flex: none;
     align-items: center;
     justify-content: space-between;
     gap: 8px;
-    padding: 0 8px 0 12px;
+    margin-top: 8px;
+    padding: 0 8px 0 14px;
   }
 .right-panel-project {
     display: flex;
     min-width: 0;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     color: var(--panel-ink);
     font-size: 12px;
     font-weight: 600;
@@ -609,12 +630,12 @@
 /* 面板头部的操作键：无边框方形键，悬停才显底色，与侧栏行内操作同一套节奏。 */
 .right-panel-action {
     display: flex;
-    width: 24px;
-    height: 24px;
+    width: 32px;
+    height: 32px;
     flex: none;
     align-items: center;
     justify-content: center;
-    border-radius: 5px;
+    border-radius: var(--radius-desk-sm);
     color: var(--panel-muted);
     transition: background-color var(--panel-duration) ease, color var(--panel-duration) ease;
   }
@@ -654,10 +675,11 @@
    */
 .right-panel-tabs {
     display: flex;
-    height: 28px;
+    height: 32px;
     flex: none;
     align-items: stretch;
-    gap: 2px;
+    gap: 4px;
+    margin-bottom: 8px;
     border-bottom: 1px solid var(--panel-line);
     padding: 0 6px;
   }
@@ -666,8 +688,8 @@
     min-width: 0;
     flex: 0 1 auto;
     align-items: center;
-    gap: 5px;
-    border-radius: 5px 5px 0 0;
+    gap: 8px;
+    border-radius: var(--radius-desk-sm) var(--radius-desk-sm) 0 0;
     padding: 0 8px;
     color: var(--panel-muted);
     font-size: 12px;
@@ -692,9 +714,9 @@
     flex: none;
     border-radius: 999px;
     background: var(--panel-selected);
-    padding: 0 5px;
+    padding: 0 4px;
     color: var(--color-desk-accent);
-    font-size: 10px;
+    font-size: var(--text-2xs);
     font-variant-numeric: tabular-nums;
     line-height: 14px;
   }

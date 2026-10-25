@@ -7,7 +7,7 @@
 -->
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import AppTitleBar from './AppTitleBar.vue'
 import ProjectSidebar from '../../projects/components/ProjectSidebar.vue'
 import RightPanel from './RightPanel.vue'
@@ -33,6 +33,44 @@ const mobileSidebarOpen = ref(false)
 /** 侧栏新建入口的聚焦请求；自增一次即一次请求，不表示执行会话已建立。 */
 const composerFocusToken = ref(0)
 let narrowWindowQuery: MediaQueryList | null = null
+const bodyElement = ref<HTMLElement | null>(null)
+const bodyWidth = ref(window.innerWidth)
+const sidebarOccupiedWidth = ref(0)
+let layoutObserver: ResizeObserver | null = null
+
+/** 工作区保留 320px；另扣除工作区两侧与右面板外侧的三段 8px 留白。 */
+const rightPanelAvailableWidth = computed(() => Math.max(
+  0,
+  bodyWidth.value - (isNarrowWindow.value ? 0 : sidebarOccupiedWidth.value) - 320 - 24
+))
+
+/** 按实际侧栏占宽计算，折叠过渡期间也逐帧跟随，不抢占中间工作区。 */
+function updateLayoutWidth(): void {
+  const body = bodyElement.value
+  if (body === null) return
+  bodyWidth.value = body.clientWidth
+  const sidebar = body.querySelector<HTMLElement>(':scope > .app-sidebar')
+  if (sidebar === null) {
+    sidebarOccupiedWidth.value = 0
+    return
+  }
+  const style = window.getComputedStyle(sidebar)
+  sidebarOccupiedWidth.value = sidebar.getBoundingClientRect().width
+    + Number.parseFloat(style.marginLeft) + Number.parseFloat(style.marginRight)
+}
+
+function observeBodyLayout(): void {
+  const body = bodyElement.value
+  if (body === null || layoutObserver === null) return
+  layoutObserver.disconnect()
+  layoutObserver.observe(body)
+  const sidebar = body.querySelector<HTMLElement>(':scope > .app-sidebar')
+  if (sidebar !== null) layoutObserver.observe(sidebar)
+  updateLayoutWidth()
+}
+
+// 两侧栏按偏好就绪与设置页状态挂载，需要重新接入实际存在的侧栏元素。
+watch([preferencesReady, settingsOpen], observeBodyLayout, { flush: 'post' })
 
 /** 窄窗口临时展开侧栏，不覆盖用户保存的桌面端折叠偏好。 */
 function onNarrowWindowChange(event: MediaQueryListEvent): void {
@@ -68,10 +106,13 @@ onMounted(() => {
   narrowWindowQuery = window.matchMedia('(max-width: 799px)')
   isNarrowWindow.value = narrowWindowQuery.matches
   narrowWindowQuery.addEventListener('change', onNarrowWindowChange)
+  layoutObserver = new ResizeObserver(updateLayoutWidth)
+  observeBodyLayout()
 })
 
 onUnmounted(() => {
   narrowWindowQuery?.removeEventListener('change', onNarrowWindowChange)
+  layoutObserver?.disconnect()
 })
 </script>
 
@@ -88,7 +129,7 @@ onUnmounted(() => {
       @exit-settings="settingsStore.closeSettings()"
     />
 
-    <div class="app-body">
+    <div ref="bodyElement" class="app-body">
       <button
         v-if="isNarrowWindow && !sidebarCollapsedForLayout && !settingsOpen"
         type="button"
@@ -109,7 +150,7 @@ onUnmounted(() => {
         @request-new-session="onRequestNewSession"
       />
 
-      <main class="app-workspace">
+      <main class="app-workspace" :class="{ 'is-workspace': !settingsOpen }">
         <SettingsView v-if="settingsOpen" />
         <div v-show="!settingsOpen" class="flex min-h-0 min-w-0 flex-1 flex-col">
           <WorkspaceView :composer-focus-token="composerFocusToken" />
@@ -117,7 +158,11 @@ onUnmounted(() => {
       </main>
 
       <!-- 右侧面板在非设置页常驻挂载；折叠只改变布局，不触碰文件树的读取缓存与 Runtime 生命周期。 -->
-      <RightPanel v-if="preferencesReady && !settingsOpen" :collapsed="!rightPanelOpen" />
+      <RightPanel
+        v-if="preferencesReady && !settingsOpen"
+        :collapsed="!rightPanelOpen"
+        :available-width="rightPanelAvailableWidth"
+      />
     </div>
   </div>
 </template>

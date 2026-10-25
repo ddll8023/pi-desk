@@ -116,8 +116,8 @@
 /* 关闭按钮只在悬停或活动标签上出现，标签条本身保持安静。 */
 .workspace-tab-close {
     display: flex;
-    width: 1.125rem;
-    height: 1.125rem;
+    width: 1.5rem;
+    height: 1.5rem;
     flex: none;
     align-items: center;
     justify-content: center;

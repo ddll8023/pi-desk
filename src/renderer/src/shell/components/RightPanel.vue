@@ -4,14 +4,15 @@
 
   折叠与宽度来自界面偏好：折叠时宽度归零并置 inert（与左侧栏同一手法），宽度在拖拽期间只在本组件内
   生效，松手或键盘调整结束才提交一次，避免每帧写配置。分隔条可拖拽也可用方向键调整，并作为分隔控件
-  进入无障碍树。窄窗口下整块不显示（见样式里的 799px 断点），因为右侧面板在窄窗会遮住正文。
+  进入无障碍树。实际宽度受外壳分配的可用空间限制；空间不足时临时收起，不覆盖偏好或卸载业务视图。
+  窄窗口下整块不显示（见样式里的 799px 断点），因为右侧面板在窄窗会遮住正文。
 
   页签选择同样存在界面偏好里（重启后保持）。头部只有一个刷新入口，按当前页签决定刷哪一份数据；
   源代码管理的状态跟踪与文件树的目录监听都在这里启动而不是在各自的页签里，这样未打开该页签时
   页签角标也能显示改动数，两个页签切换时自动刷新也不中断。
 -->
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { MAX_RIGHT_PANEL_WIDTH, MIN_RIGHT_PANEL_WIDTH } from '../../../../shared/preferences-api'
 import { usePreferencesStore } from '../../preferences/stores/preferences'
@@ -25,6 +26,7 @@ import { useGitStatusStore } from '../../git/stores/git-status'
 
 const props = defineProps<{
   readonly collapsed: boolean
+  readonly availableWidth: number
 }>()
 
 const preferencesStore = usePreferencesStore()
@@ -43,14 +45,27 @@ const refreshing = ref(false)
 /** 拖拽起点：指针横坐标与开始时的面板宽度；为空表示当前没有拖拽。 */
 let dragOrigin: { readonly pointerX: number; readonly width: number } | null = null
 
-const panelWidth = computed(() => draggingWidth.value ?? rightPanelWidth.value)
+const maximumWidth = computed(() => Math.max(
+  MIN_RIGHT_PANEL_WIDTH,
+  Math.min(MAX_RIGHT_PANEL_WIDTH, Math.floor(props.availableWidth))
+))
+const panelCollapsed = computed(() => props.collapsed || props.availableWidth < MIN_RIGHT_PANEL_WIDTH)
+const panelWidth = computed(() => clampWidth(draggingWidth.value ?? rightPanelWidth.value))
+
+// 空间不足或用户收起时取消拖拽，不把临时布局约束写回偏好。
+watch(panelCollapsed, (collapsed) => {
+  if (!collapsed) return
+  dragOrigin = null
+  draggingWidth.value = null
+  resizing.value = false
+})
 const projectName = computed(() => currentProject.value?.name ?? '未选择项目')
 const projectPath = computed(() => currentProject.value?.path ?? '尚未选择项目')
 const showingGit = computed(() => rightPanelTab.value === 'source-control')
 const refreshLabel = computed(() => (showingGit.value ? '刷新 Git 状态' : '刷新文件树'))
 
 function clampWidth(width: number): number {
-  return Math.min(MAX_RIGHT_PANEL_WIDTH, Math.max(MIN_RIGHT_PANEL_WIDTH, Math.round(width)))
+  return Math.min(maximumWidth.value, Math.max(MIN_RIGHT_PANEL_WIDTH, Math.round(width)))
 }
 
 function onResizeStart(event: PointerEvent): void {
@@ -74,17 +89,18 @@ function onResizeEnd(): void {
   resizing.value = false
   const width = draggingWidth.value
   draggingWidth.value = null
-  if (width !== null) void preferencesStore.setRightPanelWidth(width)
+  if (width !== null) void preferencesStore.setRightPanelWidth(clampWidth(width))
 }
 
 /** 键盘调整：方向键一次 16px，Home/End 直达边界；调整后立即提交。 */
 function onResizeKeydown(event: KeyboardEvent): void {
+  if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
+  event.preventDefault()
   const step = event.key === 'ArrowLeft' ? 16 : event.key === 'ArrowRight' ? -16 : 0
   const target = event.key === 'Home'
     ? MIN_RIGHT_PANEL_WIDTH
-    : event.key === 'End' ? MAX_RIGHT_PANEL_WIDTH : clampWidth(rightPanelWidth.value + step)
-  if (target === rightPanelWidth.value) return
-  event.preventDefault()
+    : event.key === 'End' ? maximumWidth.value : clampWidth(panelWidth.value + step)
+  if (target === panelWidth.value) return
   void preferencesStore.setRightPanelWidth(target)
 }
 
@@ -119,10 +135,13 @@ onBeforeUnmount(() => {
 <template>
   <aside
     class="app-right-panel"
-    :class="{ 'is-collapsed': props.collapsed, 'is-resizing': resizing }"
-    :style="{ '--panel-width': `${panelWidth}px` }"
-    :aria-hidden="props.collapsed"
-    :inert="props.collapsed"
+    :class="{ 'is-collapsed': panelCollapsed, 'is-resizing': resizing }"
+    :style="{
+      '--panel-width': `${panelWidth}px`,
+      maxWidth: `${Math.max(0, Math.floor(props.availableWidth))}px`
+    }"
+    :aria-hidden="panelCollapsed"
+    :inert="panelCollapsed"
     aria-label="项目面板"
   >
     <div class="right-panel-content">
@@ -157,7 +176,7 @@ onBeforeUnmount(() => {
       aria-label="调整面板宽度"
       :aria-valuenow="panelWidth"
       :aria-valuemin="MIN_RIGHT_PANEL_WIDTH"
-      :aria-valuemax="MAX_RIGHT_PANEL_WIDTH"
+      :aria-valuemax="maximumWidth"
       tabindex="0"
       @pointerdown="onResizeStart"
       @pointermove="onResizeMove"

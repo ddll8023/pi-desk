@@ -418,8 +418,8 @@
     --sidebar-muted: #737b83;
     --sidebar-line: #e6e8e7;
     --sidebar-focus: var(--color-desk-accent);
-    /* 单个项目的会话列表高度上限：8 行（8×28px 行高 + 7×1px 间隔）；超出在该项目内滚动。 */
-    --sidebar-session-list-max-height: 231px;
+    /* 单个项目的会话列表高度上限：8 行（8×32px 行高 + 7×4px 间隔）；超出在该项目内滚动。 */
+    --sidebar-session-list-max-height: 284px;
     --sidebar-duration-hover: 140ms;
     --sidebar-duration-collapse: 290ms;
     --sidebar-ease: cubic-bezier(0.22, 1, 0.36, 1);

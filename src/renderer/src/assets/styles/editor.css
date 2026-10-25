@@ -900,15 +900,15 @@
   }
 .file-tree-filter {
     display: flex;
-    height: 28px;
+    height: 32px;
     flex: none;
     align-items: center;
-    gap: 6px;
-    margin: 0 10px 8px;
+    gap: 8px;
+    margin: 0 14px 8px;
     border: 1px solid var(--color-desk-line);
     border-radius: var(--radius-desk-sm);
     background: var(--color-desk-surface-subtle);
-    padding: 0 6px;
+    padding: 0 8px;
     color: var(--panel-muted);
     transition: border-color var(--panel-duration) ease, background-color var(--panel-duration) ease;
   }
@@ -932,12 +932,12 @@
   }
 .file-tree-clear {
     display: flex;
-    width: 18px;
-    height: 18px;
+    width: 24px;
+    height: 24px;
     flex: none;
     align-items: center;
     justify-content: center;
-    border-radius: 4px;
+    border-radius: var(--radius-desk-sm);
     color: var(--panel-muted);
   }
 .file-tree-clear:hover {
@@ -957,7 +957,7 @@
     width: 100%;
     min-width: 0;
     grid-template-columns: minmax(0, 1fr);
-    gap: 1px;
+    gap: 4px;
     margin: 0;
     padding: 0;
     list-style: none;
@@ -970,13 +970,14 @@
     display: flex;
     width: 100%;
     min-width: 0;
-    height: 26px;
+    min-height: 32px;
     align-items: center;
-    gap: 6px;
-    border-radius: 5px;
-    padding: 0 6px 0 8px;
+    gap: 8px;
+    border-radius: var(--radius-desk-sm);
+    padding: 4px 8px;
     color: var(--panel-ink);
-    font-size: 12.5px;
+    font-size: 12px;
+    line-height: 16px;
     text-align: left;
     transition: background-color var(--panel-duration) ease;
   }
@@ -1012,15 +1013,15 @@
   }
 .file-tree-icon {
     display: flex;
-    width: 16px;
-    height: 16px;
+    width: 12px;
+    height: 12px;
     flex: none;
     align-items: center;
     justify-content: center;
   }
 .file-tree-icon svg {
-    width: 15px;
-    height: 15px;
+    width: 12px;
+    height: 12px;
   }
 .file-tree-icon.is-folder { color: var(--panel-tone-folder); }
 .file-tree-icon.is-code { color: var(--panel-tone-code); }
@@ -1052,16 +1053,16 @@
     flex: none;
     border: 1px solid var(--color-desk-line);
     border-radius: 999px;
-    padding: 0 5px;
+    padding: 0 4px;
     color: var(--panel-muted);
-    font-size: 10px;
-    line-height: 14px;
+    font-size: var(--text-2xs);
+    line-height: 16px;
   }
 /* 提示行与条目行同列缩进：加载中、空目录、读取失败与截断都就近显示在所属目录下。 */
 .file-tree-notice {
     margin: 4px 0;
     color: var(--panel-muted);
-    font-size: 11.5px;
+    font-size: var(--text-2xs);
     line-height: 16px;
     overflow-wrap: anywhere;
   }
