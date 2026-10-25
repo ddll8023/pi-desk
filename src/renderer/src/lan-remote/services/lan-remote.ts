@@ -1,9 +1,9 @@
-/** 手机访问设置的受限桌面调用；显式重建普通载荷，桥接失败保留原始原因，不持有证书或设备凭证。 */
+/** 手机访问设置的受限桌面调用：重建普通 HTTPS 代理配置载荷，桥接失败保留原始原因，不持有设备凭证。 */
 import type { LanControlData, LanControlRequest, LanRemoteState, LanResult } from '../../../../shared/lan-remote-api'
 
 function plain(request: LanControlRequest): LanControlRequest {
   switch (request.action) {
-    case 'start': return { action: 'start', address: request.address, port: request.port }
+    case 'start': return { action: 'start', publicOrigin: request.publicOrigin, port: request.port }
     case 'pair': return { action: 'pair', projectIds: [...request.projectIds] }
     case 'grant': return { action: 'grant', deviceId: request.deviceId, projectIds: [...request.projectIds] }
     case 'revoke': return { action: 'revoke', deviceId: request.deviceId }

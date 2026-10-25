@@ -1,4 +1,4 @@
-/** 主进程业务实例的唯一装配处：配置、项目、信任、会话、只读解析宿主池、终端、供应商、资源、更新、生成式界面与局域网访问各一份，按依赖顺序建立并互相注入回调。本文件只做实例化，不注册 IPC、不写业务判断；其中系统目录选择与终端守护状态广播经 window-channel.ts 提供，是本文件对窗口投递层的唯一依赖。 */
+/** 主进程业务实例的唯一装配处：配置、项目、信任、会话、只读解析宿主池、终端、供应商、资源、更新、生成式界面与手机访问各一份，按依赖顺序建立并互相注入回调。本文件只做实例化，不注册 IPC、不写业务判断；其中系统目录选择与终端守护状态广播经 window-channel.ts 提供，是本文件对窗口投递层的唯一依赖。 */
 
 import { app } from 'electron'
 import { PROJECT_DIRECTORY_CHANGED_EVENT } from '../shared/project-file-api'
@@ -77,7 +77,7 @@ export const sessionManager = new SessionManager({
   readGenuiEnabled: async () => (await configStore.readGenui()).enabled
 })
 
-/** 局域网管理器只装配依赖；不会自动监听、签发证书或修改系统信任。 */
+/** 手机访问管理器只装配依赖；回环监听须显式开启，外部 HTTPS 代理由用户配置。 */
 export const lanRemote = new LanRemoteManager(configStore, sessionManager, sdkRuntime)
 
 /** MCP 服务器探测与取消：与当前会话无关，只按项目跑一次性官方 CLI 进程。 */

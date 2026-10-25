@@ -9,9 +9,9 @@
 | `src/main/index.ts` | 只准备入口步骤：准备协议与应用目录、取单实例锁、注册生命周期，随后把启动编排交给 `app-lifecycle.ts`。不含业务逻辑 |
 | `src/main/app-lifecycle.ts` | 便携数据目录、登录 shell PATH、单实例锁、窗口就绪后按固定顺序调用各能力 `ipc.ts` 注册器、窗口全部关闭与退出链、启动时的扩展自动更新 |
 | `src/main/window.ts` | 唯一窗口的创建、主题与标题栏配色、导航与权限限制、单实例聚焦 |
-| `src/main/window-channel.ts` | 窗口引用、向页面投递事件与全部业务广播、系统目录与证书导出位置选择；不持有业务实例，终端状态来源由组合根注册 |
+| `src/main/window-channel.ts` | 窗口引用、向页面投递事件与全部业务广播、系统目录选择；不持有业务实例，终端状态来源由组合根注册 |
 | `src/main/asset-protocol.ts` | 应用协议注册、页面地址解析、目录越界判定与生产 CSP |
-| `src/main/services.ts` | 主进程业务实例的唯一装配处（配置、项目、信任、会话、终端、供应商、资源、更新、生成式界面、局域网访问） |
+| `src/main/services.ts` | 主进程业务实例的唯一装配处（配置、项目、信任、会话、终端、供应商、资源、更新、生成式界面、手机访问） |
 | `src/main/ipc/dispatch.ts` | IPC 注册包装、调用者校验、有界标识与 MCP 服务器名校验 |
 | `src/preload/index.ts` | 只合并各域 Api 并暴露 `window.desktop`，不含 channel 调用与校验 |
 | `src/preload/*.ts`（域文件） | 按业务域各一个文件（`desktop`、`projects`、`sessions`、`runtime`、`terminal`、`git`、`preferences`、`providers`、`updates`、`trust`、`genui`、`lan-remote`），各自承载固定 channel 调用、声明字段载荷重建、响应与事件校验、订阅释放 |
@@ -55,7 +55,7 @@
 | 供应商与认证 | 安装级设备标识、隐藏模型列表 |
 | 终端与快捷命令 | 全局与项目范围命令列表 |
 | 更新与生成式界面 | 扩展自动更新、生成式 UI 开关 |
-| 手机访问 | 局域网设备凭证摘要与项目授权 |
+| 手机访问 | 手机设备凭证摘要与项目授权；代理入口配置不落盘 |
 
 文件位于 `userData/desktop-config.json`。全部读写串行进行，保存前比对已加载的磁盘文件标识；读失败可进入只读降级，结构损坏走备份重建。其他服务通过同一个实例访问，不另行直接覆盖此文件。应用单实例锁由 `src/main/app-lifecycle.ts` 的 `acquireSingleInstance` 建立。
 
@@ -135,7 +135,7 @@
 | `vite.auth-helper.config.ts` | `src/auth-helper/index.ts` → `out/auth-helper/index.mjs` |
 | `vite.sdk-host.config.ts` | SDK 宿主、CLI、版本检查、扩展更新、运行时安装五入口 → `out/sdk-host/` 下各自 ESM 产物 |
 | `vite.terminal-daemon.config.ts` | `src/terminal-daemon/index.ts` → `out/terminal-daemon/index.cjs`；原生 PTY 与终端依赖保留外部引用 |
-| `vite.lan-mobile.config.ts` | `src/lan-mobile/index.html` → `out/lan-mobile/`；手机网页产物，供局域网入口读取 |
+| `vite.lan-mobile.config.ts` | `src/lan-mobile/index.html` → `out/lan-mobile/`；手机网页产物，供手机访问的本地回环服务读取 |
 | `electron-builder.yml` | 随包文件、图标、平台发行目标与输出目录；生产依赖随应用分发 |
 | `scripts/start-dev.cmd` | 对应平台的开发启动包装 |
 | `scripts/start-dev.sh` | 对应平台的开发启动包装 |

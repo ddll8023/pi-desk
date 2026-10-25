@@ -1,5 +1,5 @@
 /**
- * 渲染进程投递通道：唯一窗口引用、向页面发送事件、全部业务广播，以及系统目录与证书导出位置选择。
+ * 渲染进程投递通道：唯一窗口引用、向页面发送事件、全部业务广播，以及系统目录选择。
  *
  * 只依赖 Electron 与共享契约，不 import `services.ts`。窗口创建与业务实例分别在其他模块，
  * 两侧都只单向依赖本文件，因此这里不能反向读取任何业务管理器：需要业务数据的广播
@@ -68,18 +68,7 @@ export async function chooseDirectoryWithDialog(defaultPath: string): Promise<st
   return typeof selected === 'string' && selected.trim() !== '' ? selected : null
 }
 
-/** 根证书仅通过本机保存对话框导出；网页不能指定任意写入路径。 */
-export async function chooseCertificateExportPathWithDialog(): Promise<string | null> {
-  const target = mainWindow
-  if (target === null || target.isDestroyed()) throw new Error('没有可用的桌面窗口。')
-  const result = await dialog.showSaveDialog(target, {
-    title: '导出手机需要信任的局域网 CA 证书', defaultPath: 'pi-desk-lan-ca.cer',
-    filters: [{ name: 'CA 证书', extensions: ['cer'] }]
-  })
-  return result.canceled ? null : result.filePath ?? null
-}
-
-/** 局域网控制状态只投递可信桌面窗口，不包含设备凭证摘要或证书私钥。 */
+/** 手机访问控制状态只投递可信桌面窗口，不包含设备凭证摘要。 */
 export function broadcastLanRemoteState(state: LanRemoteState): void {
   sendToRenderer(LAN_REMOTE_STATE_EVENT, state)
 }

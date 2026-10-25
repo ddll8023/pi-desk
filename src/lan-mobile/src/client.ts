@@ -1,4 +1,4 @@
-/** 手机网络入口：只访问当前 HTTPS 来源，凭证由 HttpOnly Cookie 承载；写请求保留原身份供显式重试，不自动重发。 */
+/** 手机网络入口：仅访问当前可信 HTTPS 代理来源；HttpOnly Cookie 认证，写请求保留原身份且不自动重发。 */
 import {
   isLanConnectionInfo, isLanEnvelope, isLanPairResult, isLanRequest, isLanSessionTarget, LAN_REMOTE_PROTOCOL_VERSION
 } from '../../shared/lan-remote-api'
@@ -63,7 +63,7 @@ export class MobileClient {
   }
 
   private async fetchJson<T>(path: string, body: unknown, accepts: (data: unknown) => data is T, signal?: AbortSignal): Promise<T> {
-    if (location.protocol !== 'https:') throw new LanClientError('HTTPS_REQUIRED', '请使用桌面提供的 HTTPS 地址，并先在手机信任本机 CA。')
+    if (location.protocol !== 'https:') throw new LanClientError('HTTPS_REQUIRED', '请使用电脑配对二维码中的 HTTPS 地址，不要打开代理的本地 HTTP 转发地址。')
     const controller = new AbortController()
     const abort = (): void => controller.abort()
     signal?.addEventListener('abort', abort, { once: true })
@@ -83,7 +83,7 @@ export class MobileClient {
       return value.data
     } catch (error) {
       if (error instanceof LanClientError) throw error
-      if (controller.signal.aborted) throw new LanClientError('INTERRUPTED', signal?.aborted ? '页面操作已取消。' : '连接超时，请检查电脑与局域网连接。')
+      if (controller.signal.aborted) throw new LanClientError('INTERRUPTED', signal?.aborted ? '页面操作已取消。' : '连接超时，请检查电脑与 HTTPS 代理服务连接。')
       throw new LanClientError('NETWORK_ERROR', `无法连接电脑：${errorMessage(error)}`)
     } finally { clearTimeout(timer); signal?.removeEventListener('abort', abort) }
   }

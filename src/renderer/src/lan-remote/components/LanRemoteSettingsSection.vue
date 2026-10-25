@@ -1,7 +1,8 @@
-<!-- 手机访问设置：显式开启局域网 HTTPS、导出并核对 CA、选择配对授权项目和管理设备；二维码仅在本页内存中保存。 -->
+<!-- 手机访问设置：配置可信 HTTPS 代理，显式授权项目与管理设备；配对二维码仅存于本页内存。 -->
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef } from 'vue'
 import qrcode from 'qrcode-generator'
+import { isLanPublicOrigin } from '../../../../shared/lan-remote-api'
 import type { LanControlData, LanControlRequest, LanDevice, LanRemoteState } from '../../../../shared/lan-remote-api'
 import type { Project } from '../../../../shared/project-api'
 import { listProjects } from '../../projects/services/project'
@@ -12,7 +13,8 @@ import { controlLanRemote, subscribeLanRemote } from '../services/lan-remote'
 
 const state = shallowRef<LanRemoteState | null>(null)
 const projects = shallowRef<readonly Project[]>([])
-const selectedAddress = ref('')
+const publicOrigin = ref('')
+const proxyPort = ref<number | string>(48219)
 const selectedProjects = ref<string[]>([])
 const busy = ref(false)
 const loading = ref(true)
@@ -28,6 +30,9 @@ let revision = 0
 let release: (() => void) | null = null
 let clock: ReturnType<typeof setInterval> | null = null
 const running = computed(() => state.value?.phase === 'running')
+const validProxyPort = computed(() => Number.isInteger(Number(proxyPort.value))
+  && Number(proxyPort.value) >= 1024 && Number(proxyPort.value) <= 65535)
+const canStart = computed(() => isLanPublicOrigin(publicOrigin.value.trim()) && validProxyPort.value)
 const validPairing = computed(() => pairing.value !== null && pairing.value.expiresAt > now.value
   && pairing.value.serverId === state.value?.serverId && running.value ? pairing.value : null)
 const secondsLeft = computed(() => Math.max(0, Math.ceil(((validPairing.value?.expiresAt ?? now.value) - now.value) / 1000)))
@@ -45,9 +50,13 @@ function applyState(value: LanRemoteState): void {
   const previousIds = state.value ? new Set(state.value.devices.map(device => device.id)) : null
   const paired = previousIds !== null && value.devices.some(device => !previousIds.has(device.id))
   state.value = value
+  if (value.phase === 'running') {
+    publicOrigin.value = value.origin ?? ''
+    const port = value.localOrigin?.match(/^http:\/\/127\.0\.0\.1:(\d+)$/)?.[1]
+    if (port) proxyPort.value = Number(port)
+  }
   if (paired && pairing.value) { pairing.value = null; feedback.value = '手机已配对，项目授权已保存。' }
   if (value.phase !== 'running' || pairing.value?.serverId !== value.serverId) pairing.value = null
-  if (!value.addresses.some(entry => entry.address === selectedAddress.value)) selectedAddress.value = value.addresses[0]?.address ?? ''
   if (editingDevice.value !== null && !value.devices.some(device => device.id === editingDevice.value)) editingDevice.value = null
 }
 async function refresh(): Promise<void> {
@@ -76,16 +85,16 @@ async function run(request: LanControlRequest): Promise<LanControlData | null> {
     return result.data
   } finally { if (alive) busy.value = false }
 }
+async function start(): Promise<void> {
+  if (!canStart.value) return
+  await run({ action: 'start', publicOrigin: publicOrigin.value.trim(), port: Number(proxyPort.value) })
+}
 async function createPairing(): Promise<void> {
   const serverId = state.value?.serverId ?? null
   const result = await run({ action: 'pair', projectIds: selectedProjects.value })
   if (result?.kind === 'pairing' && state.value?.serverId === serverId && running.value) {
     pairing.value = { url: result.url, expiresAt: result.expiresAt, serverId }
   }
-}
-async function exportCertificate(): Promise<void> {
-  const result = await run({ action: 'export-certificate' })
-  if (result?.kind === 'certificate') feedback.value = result.exported ? '已导出公开 CA 证书；私钥仍留在电脑。' : '已取消导出。'
 }
 async function copy(value: string, label: string): Promise<void> {
   const copied = await copyText(value)
@@ -124,47 +133,54 @@ onBeforeUnmount(() => {
   <div class="space-y-4" :aria-busy="loading || busy">
     <header>
       <h1 class="text-xl font-semibold tracking-tight">手机访问</h1>
-      <p class="mt-1 text-sm text-desk-muted">在同一局域网内，用手机继续电脑上的对话。手机切换会话不会切换桌面前台。</p>
+      <p class="mt-1 text-sm text-desk-muted">用手机继续电脑上的对话。通过可信 HTTPS 入口扫码配对；手机切换会话不会切换桌面前台。</p>
     </header>
     <p v-if="error" role="alert" class="status-notice status-notice-error">{{ error }}</p>
     <p v-if="feedback" role="status" class="text-sm text-desk-muted">{{ feedback }}</p>
     <section class="settings-section" aria-labelledby="lan-listener-title">
       <div class="settings-section-heading">
-        <div><h2 id="lan-listener-title" class="settings-section-title">局域网连接</h2><p class="mt-1 text-xs text-desk-muted">每次启动应用默认关闭；关闭连接不会停止正在运行的 Agent。</p></div>
+        <div><h2 id="lan-listener-title" class="settings-section-title">HTTPS 连接</h2><p class="mt-1 text-xs text-desk-muted">每次启动应用默认关闭；关闭连接不会停止正在运行的 Agent。</p></div>
         <span class="chip" role="status">{{ phaseLabel }}</span>
       </div>
-      <label class="field-label" for="lan-address">电脑网卡地址</label>
-      <select id="lan-address" v-model="selectedAddress" class="text-control mt-2" :disabled="busy || loading || running">
-        <option v-if="!state?.addresses.length" value="">未找到可用的局域网 IPv4 地址</option>
-        <option v-for="address in state?.addresses ?? []" :key="address.address" :value="address.address">{{ address.name }} · {{ address.address }}</option>
-      </select>
+      <div class="mt-4 space-y-3">
+        <div>
+          <label class="field-label" for="lan-public-origin">手机访问的 HTTPS 地址</label>
+          <input id="lan-public-origin" v-model="publicOrigin" type="url" class="text-control mt-2" placeholder="https://你的代理域名" autocomplete="off" spellcheck="false" :disabled="busy || loading || running" aria-describedby="lan-public-origin-help" :aria-invalid="publicOrigin.trim() !== '' && !isLanPublicOrigin(publicOrigin.trim())" />
+          <p id="lan-public-origin-help" class="mt-2 text-xs leading-5 text-desk-muted">填写已配置隧道或反向代理的完整 HTTPS 来源地址，不带路径、查询参数或配对码。证书必须受手机浏览器信任；不要跳过证书警告。</p>
+        </div>
+        <div>
+          <label class="field-label" for="lan-proxy-port">本地转发端口</label>
+          <input id="lan-proxy-port" v-model="proxyPort" type="number" min="1024" max="65535" step="1" class="text-control mt-2" :disabled="busy || loading || running" aria-describedby="lan-proxy-help" :aria-invalid="!validProxyPort" />
+          <p id="lan-proxy-help" class="mt-2 text-xs leading-5 text-desk-muted">代理目标为 http://127.0.0.1:{{ proxyPort }}，只允许本机连接，不向局域网开放明文端口。配置不写入磁盘，停止服务并离开设置页后需重新填写。</p>
+        </div>
+        <details class="text-xs leading-5 text-desk-muted">
+          <summary class="cursor-pointer">首次配置与隐私边界</summary>
+          <ul class="mt-2 list-disc space-y-2 pl-5">
+            <li>本应用只提供本地转发入口，不会自动安装、启动隧道或申请证书；需先在电脑配置可信的代理服务。</li>
+            <li>代理必须提供独立的 HTTPS 来源根地址，保留手机访问的 Host 和 Origin，不改写 Cookie，并支持不缓存、不缓冲的 SSE 长连接。</li>
+            <li>HTTPS 在代理终止，代理服务可以读取转发内容。请只使用自己信任的服务；配对链接不要转发。</li>
+            <li>开启后只代表本地入口已就绪，不代表外部代理已可达；电脑与代理均需保持运行。更换 HTTPS 来源地址后，手机需重新扫码配对。</li>
+          </ul>
+        </details>
+      </div>
       <div class="mt-3 flex flex-wrap items-center gap-2">
-        <AppButton v-if="!running" variant="primary" :disabled="busy || loading || !selectedAddress" @click="run({ action: 'start', address: selectedAddress, port: 0 })">开启手机访问</AppButton>
+        <AppButton v-if="!running" variant="primary" :disabled="busy || loading || !canStart" @click="start">开启手机访问</AppButton>
         <AppButton v-else :disabled="busy" @click="run({ action: 'stop' })">关闭手机访问</AppButton>
         <AppButton variant="compact" :disabled="busy || loading" @click="refresh">刷新</AppButton>
       </div>
       <div v-if="state?.origin" class="mt-3 flex flex-wrap items-center gap-2">
-        <code class="break-all text-sm">{{ state.origin }}</code><AppButton variant="compact" @click="state?.origin && copy(state.origin, '连接地址')">复制地址</AppButton>
+        <code class="break-all text-sm">{{ state.origin }}</code><AppButton variant="compact" @click="state?.origin && copy(state.origin, '连接地址')">复制手机地址</AppButton>
+      </div>
+      <div v-if="state?.localOrigin" class="mt-3 space-y-2">
+        <p class="field-label">本机代理转发目标（不要在手机打开）</p>
+        <div class="flex flex-wrap items-center gap-2"><code class="break-all text-sm">{{ state.localOrigin }}</code><AppButton variant="compact" @click="state?.localOrigin && copy(state.localOrigin, '本地转发目标')">复制转发目标</AppButton></div>
+        <p class="text-xs leading-5 text-desk-muted">本地入口已就绪。外部 HTTPS 代理需自行配置并保持运行，然后在下方生成配对二维码。</p>
       </div>
       <p v-if="state?.lastError" role="alert" class="mt-3 text-sm text-desk-danger">{{ state.lastError }}</p>
     </section>
-    <section class="settings-section" aria-labelledby="lan-certificate-title">
-      <h2 id="lan-certificate-title" class="settings-section-title">首次连接</h2>
-      <ol class="mt-3 list-decimal space-y-2 pl-5 text-sm leading-6 text-desk-muted">
-        <li>导出本机专用 CA 证书，通过可信的文件传输方式发送到手机。</li>
-        <li>在手机系统中手动安装并信任该 CA。iPhone 还需在「设置 → 通用 → 关于本机 → 证书信任设置」中开启完全信任；Android 可在系统设置中搜索「安装 CA 证书」。</li>
-        <li>核对证书的 SHA-256 指纹，再选择下方允许访问的项目并扫码配对。扫码不能替代证书信任。</li>
-      </ol>
-      <p class="mt-3 text-xs leading-5 text-desk-muted">CA 会增加手机的证书信任。只安装自己电脑导出的证书，不向他人提供私钥；不再使用时，请从手机系统中移除该 CA。不同系统的菜单名称可能不同。</p>
-      <AppButton class="mt-3" :disabled="busy" @click="exportCertificate">导出 CA 证书</AppButton>
-      <div v-if="state?.certificate" class="mt-3 space-y-2">
-        <p class="field-label">本机 CA 的 SHA-256 指纹</p><code class="block break-all text-xs leading-6">{{ state.certificate.fingerprint }}</code>
-        <AppButton variant="compact" @click="state?.certificate && copy(state.certificate.fingerprint, '证书指纹')">复制指纹</AppButton>
-      </div>
-    </section>
     <section class="settings-section" aria-labelledby="lan-pair-title">
       <h2 id="lan-pair-title" class="settings-section-title">连接一台手机</h2>
-      <p class="mt-1 text-xs leading-5 text-desk-muted">只授权明确勾选的项目。手机发送消息能驱动电脑上的 Agent 执行操作，不是只读预览。</p>
+      <p class="mt-1 text-xs leading-5 text-desk-muted">选择允许访问的项目并生成二维码，手机扫码后确认连接；已配对的浏览器再次打开同一 HTTPS 地址即可访问。手机能驱动电脑上的 Agent 执行操作，不是只读预览。</p>
       <fieldset class="mt-3 space-y-2" :disabled="busy || loading">
         <legend class="field-label mb-2">这台手机可以访问的项目</legend>
         <label v-for="project in projects" :key="project.id" class="flex items-start gap-2 text-sm">

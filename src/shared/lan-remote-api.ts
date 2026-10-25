@@ -1,4 +1,4 @@
-/** 局域网控制与远程会话的白名单契约；设备凭证摘要仅供主进程存储，不进入桌面状态或网络响应。 */
+/** 手机访问控制与远程会话白名单契约：仅支持可信 HTTPS 代理接入，设备凭证摘要不进入响应。 */
 import { isHistoryData, isHistoryQuery, isProjectionResult, isRuntimeStatus, isRuntimeTarget } from './runtime-api'
 import type { HistoryData, HistoryQuery, ProjectionSnapshot, RuntimeStatus, RuntimeTarget } from './runtime-api'
 import { isExtensionDialogResponseInput, isExtensionUiSnapshot } from './extension-ui-api'
@@ -22,37 +22,30 @@ export interface LanStoredDevice {
   readonly expiresAt: number
 }
 export type LanDevice = Omit<LanStoredDevice, 'tokenHash'>
-export interface LanAddress {
-  readonly name: string
-  readonly address: string
-  readonly netmask: string
-}
-export interface LanCertificateInfo {
-  readonly fingerprint: string
-  readonly expiresAt: string
+export interface LanStartOptions {
+  readonly publicOrigin: string
+  readonly port: number
 }
 export interface LanRemoteState {
   readonly phase: 'stopped' | 'starting' | 'running' | 'stopping'
+  readonly localOrigin: string | null
   readonly origin: string | null
   readonly serverId: string | null
-  readonly addresses: readonly LanAddress[]
   readonly devices: readonly LanDevice[]
-  readonly certificate: LanCertificateInfo | null
   readonly lastError: string | null
 }
 export type LanResult<T> = { readonly ok: true; readonly data: T }
   | { readonly ok: false; readonly error: { readonly code: string; readonly message: string } }
 
 export type LanControlRequest =
-  | { readonly action: 'state' | 'stop' | 'export-certificate' }
-  | { readonly action: 'start'; readonly address: string; readonly port: number }
+  | { readonly action: 'state' | 'stop' }
+  | ({ readonly action: 'start' } & LanStartOptions)
   | { readonly action: 'pair'; readonly projectIds: readonly string[] }
   | { readonly action: 'revoke'; readonly deviceId: string }
   | { readonly action: 'grant'; readonly deviceId: string; readonly projectIds: readonly string[] }
 export type LanControlData =
   | { readonly kind: 'state'; readonly state: LanRemoteState }
   | { readonly kind: 'pairing'; readonly url: string; readonly expiresAt: number }
-  | { readonly kind: 'certificate'; readonly exported: boolean }
 export interface LanRemoteApi {
   readonly controlLanRemote: (request: LanControlRequest) => Promise<LanResult<LanControlData>>
   readonly onLanRemoteStateChanged: (listener: (state: LanRemoteState) => void) => () => void
@@ -101,14 +94,21 @@ export function isLanStoredDevice(value: unknown): value is LanStoredDevice {
     && typeof value.createdAt === 'number' && Number.isSafeInteger(value.createdAt) && value.createdAt > 0
     && typeof value.expiresAt === 'number' && Number.isSafeInteger(value.expiresAt) && value.expiresAt > value.createdAt
 }
+/** 只接受 HTTPS 来源根地址；不接收凭证、路径前缀或重定向配置，也不发起网络探测。 */
+export function isLanPublicOrigin(value: unknown): value is string {
+  if (typeof value !== 'string' || value.length > 2048 || value.trim() !== value || /[\s\\]/.test(value)) return false
+  try {
+    const url = new URL(value)
+    return /^https:\/\/[^/?#]+\/?$/i.test(value) && url.protocol === 'https:' && url.hostname !== ''
+      && url.username === '' && url.password === '' && url.pathname === '/' && url.search === '' && url.hash === ''
+  } catch { return false }
+}
 export function isLanControlRequest(value: unknown): value is LanControlRequest {
   if (!isLanRecord(value)) return false
   switch (value.action) {
-    case 'state': case 'stop': case 'export-certificate': return hasLanKeys(value, ['action'])
-    case 'start': return hasLanKeys(value, ['action', 'address', 'port'])
-      && typeof value.address === 'string' && value.address.length <= 45
-      && typeof value.port === 'number' && Number.isInteger(value.port)
-      && (value.port === 0 || (value.port >= 1024 && value.port <= 65535))
+    case 'state': case 'stop': return hasLanKeys(value, ['action'])
+    case 'start': return hasLanKeys(value, ['action', 'publicOrigin', 'port']) && isLanPublicOrigin(value.publicOrigin)
+      && typeof value.port === 'number' && Number.isInteger(value.port) && value.port >= 1024 && value.port <= 65535
     case 'pair': return hasLanKeys(value, ['action', 'projectIds']) && isLanProjectIds(value.projectIds) && value.projectIds.length > 0
     case 'revoke': return hasLanKeys(value, ['action', 'deviceId']) && isLanIdentifier(value.deviceId)
     case 'grant': return hasLanKeys(value, ['action', 'deviceId', 'projectIds'])
@@ -144,17 +144,14 @@ export function isLanRequest(value: unknown): value is LanRequest {
 export function isLanRemoteState(value: unknown): value is LanRemoteState {
   if (!isLanRecord(value) || typeof value.phase !== 'string'
     || !['stopped', 'starting', 'running', 'stopping'].includes(value.phase)) return false
-  return (value.origin === null || typeof value.origin === 'string')
+  return (value.localOrigin === null || typeof value.localOrigin === 'string')
+    && (value.origin === null || isLanPublicOrigin(value.origin))
     && (value.serverId === null || isLanIdentifier(value.serverId))
     && (value.lastError === null || typeof value.lastError === 'string')
-    && Array.isArray(value.addresses) && value.addresses.length <= 64 && value.addresses.every(entry =>
-      isLanRecord(entry) && typeof entry.name === 'string' && typeof entry.address === 'string' && typeof entry.netmask === 'string')
     && Array.isArray(value.devices) && value.devices.length <= LAN_REMOTE_MAX_DEVICES && value.devices.every(entry =>
       isLanRecord(entry) && isLanIdentifier(entry.id) && typeof entry.name === 'string' && isLanProjectIds(entry.projectIds)
       && typeof entry.createdAt === 'number' && Number.isFinite(entry.createdAt)
       && typeof entry.expiresAt === 'number' && Number.isFinite(entry.expiresAt) && !Object.hasOwn(entry, 'tokenHash'))
-    && (value.certificate === null || (isLanRecord(value.certificate)
-      && typeof value.certificate.fingerprint === 'string' && typeof value.certificate.expiresAt === 'string'))
 }
 export function isLanControlResult(value: unknown): value is LanResult<LanControlData> {
   if (!isLanRecord(value)) return false
@@ -162,8 +159,7 @@ export function isLanControlResult(value: unknown): value is LanResult<LanContro
   if (value.ok !== true || !isLanRecord(value.data)) return false
   const data = value.data
   if (data.kind === 'state') return isLanRemoteState(data.state)
-  if (data.kind === 'pairing') return typeof data.url === 'string' && typeof data.expiresAt === 'number' && Number.isFinite(data.expiresAt)
-  return data.kind === 'certificate' && typeof data.exported === 'boolean'
+  return data.kind === 'pairing' && typeof data.url === 'string' && typeof data.expiresAt === 'number' && Number.isFinite(data.expiresAt)
 }
 
 /** 手机仅接收已授权项目的显示身份，不接收主机绝对路径。 */

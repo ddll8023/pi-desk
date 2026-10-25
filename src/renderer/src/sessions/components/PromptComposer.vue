@@ -1355,7 +1355,7 @@ onMounted(() => {
                 <span class="min-w-0 truncate text-xs">{{ quickSendCurrent }}</span>
                 <span aria-hidden="true">▾</span>
               </AppButton>
-              <div v-if="quickSendOpen" id="prompt-quick-send" ref="quickSendList" role="listbox" aria-label="常用消息" class="prompt-composer-menu">
+              <div v-if="quickSendOpen" id="prompt-quick-send" ref="quickSendList" role="listbox" aria-label="常用消息" class="prompt-composer-menu scroll-area">
                 <AppButton
                   v-for="(message, index) in quickSendMessages"
                   :key="index"

@@ -1,4 +1,4 @@
-<!-- 手机对话外壳：配对、项目与会话逐级进入；底部输入位于可视视口内，不启动桌面 Store，不把写操作放进重连流程。 -->
+<!-- 手机对话外壳：通过 HTTPS 网页扫码配对后逐级进入项目与会话；不启动桌面 Store，不在重连时重放写操作。 -->
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { LAN_REMOTE_MAX_MESSAGE_CHARS } from '../../shared/lan-remote-api'
@@ -63,9 +63,9 @@ onBeforeUnmount(() => {
 
     <main v-if="connection === 'unpaired'" class="mobile-page scroll-area">
       <section class="mobile-pair-panel">
-        <p class="mobile-eyebrow">同一局域网 · 在电脑上执行</p>
+        <p class="mobile-eyebrow">连接你的电脑 · 任务在电脑上执行</p>
         <h2>让对话留在手边</h2>
-        <p class="mobile-muted">先在电脑「设置 → 手机访问」中导出 CA 并在手机系统手动信任，核对指纹后扫描配对二维码。</p>
+        <p class="mobile-muted">在电脑「设置 → 手机访问」中配置可信 HTTPS 入口，选择允许访问的项目并生成配对二维码，用手机扫码后确认连接。不要跳过浏览器的证书警告。</p>
         <form class="mobile-pair-form" :aria-busy="pairBusy" @submit.prevent="pair">
           <label for="mobile-device-name" class="field-label">设备名称</label>
           <input id="mobile-device-name" v-model="deviceName" class="text-control" maxlength="80" autocomplete="off" :disabled="pairBusy" />
