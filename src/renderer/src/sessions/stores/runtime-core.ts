@@ -36,7 +36,7 @@ import {
   subscribeRuntimeProjection,
   subscribeRuntimeStatus
 } from '../services/runtime'
-import { readSessionHistory } from '../services/session'
+import { readSessionHistory, readSessionFirstPage } from '../services/session'
 import { createHistoryCache, emptyHistory, messageKey, rememberUiRevisions } from './runtime-history'
 import type { HistoryCache, HistoryState } from './runtime-history'
 
@@ -559,7 +559,9 @@ export function createRuntimeCore(deps: RuntimeCoreDeps): RuntimeCore {
   /**
    * 历史读取：页面只给会话，绑定与否由主进程判定，两条路径返回同一套条目身份，
    * 缓存合并规则不需要区分来源。读取期间换目标或换会话就丢弃结果，不写进别的展示。
-   * 游标失效说明分支已变（回退、压缩或外部改写）：本页不再有效，按权威基准重建一次。
+   * 过期说明分支已变（回退、压缩、绑定代际变化或外部改写）：本页不再有效，按权威基准重建一次。
+   * 绑定路径与日志路径的过期在会话编排层归成 `HISTORY_STALE`，不混同「项目未登记」与「宿主未就绪」。
+   * 日志展示（尚未绑定）没有权威基准可重建，改为重读一次首页：仍失败才清空，避免文件被改写时历史整段消失。
    */
   async function requestHistory(query: HistoryQuery): Promise<HistoryData | null> {
     const target = historyTarget()
@@ -570,17 +572,37 @@ export function createRuntimeCore(deps: RuntimeCoreDeps): RuntimeCore {
     if (owner !== history.value || current === null
       || current.projectPath !== target.projectPath || current.sessionId !== target.sessionId) return null
     if (!result.ok) {
-      if (result.error.code === 'STALE_SESSION') {
+      if (result.error.code === 'HISTORY_STALE') {
         if (view.value.phase === 'ready') {
           baselineNeeded = true
           void syncProjection()
-        } else history.value = emptyHistory()
+          return null
+        }
+        // 未绑定：重读一次首页（内含一次过期重发），持续改写时不形成重试循环。
+        if (await reloadLogPage(target)) return null
+        history.value = emptyHistory()
         return null
       }
       throw new Error(result.error.message)
     }
     if (result.data.projectPath !== target.projectPath || result.data.sessionId !== target.sessionId) return null
     return result.data.data
+  }
+
+  /**
+   * 日志展示下的首页重读：读到新的一页就整页替换展示位（与首屏进入日志展示同一口径）。
+   * 日志文件已被改写，旧的更早分页与游标不再可信，因此随首页一起重置，而不是拼到旧分页后面。
+   * 过期重发一次由 `readSessionFirstPage` 统一处理，与打开会话时的首页读取共用同一入口。
+   */
+  async function reloadLogPage(target: { readonly projectPath: string; readonly sessionId: string }): Promise<boolean> {
+    const result = await readSessionFirstPage(target.projectPath, target.sessionId)
+    if (!result.ok || result.data.data.kind !== 'page') return false
+    if (result.data.projectPath !== target.projectPath || result.data.sessionId !== target.sessionId) return false
+    // 期间已换目标或已完成绑定：结果不再属于当前展示，交给原流程处理。
+    if (historyTarget()?.sessionId !== target.sessionId) return false
+    if (view.value.phase === 'ready') return false
+    applyLogPage(result.data.data, target)
+    return true
   }
 
   /**

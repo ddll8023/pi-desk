@@ -20,7 +20,7 @@ export const SESSION_DELETE_CHANNEL = 'desktop:session-delete'
  */
 export const SESSION_HISTORY_CHANNEL = 'desktop:session-history'
 
-/** 会话列表首屏条数与每次“加载更多”的增量；侧栏与选择弹层共用同一分页口径。 */
+/** 会话列表首屏条数与每次“加载更多”的增量；侧栏按它分页。 */
 export const SESSION_PAGE_SIZE = 30
 
 /** 列表窗口上界：页面最多加载这么多条，避免无界读取与无界渲染。 */
@@ -195,12 +195,18 @@ export function isSessionHistoryResult(value: unknown): value is SessionHistoryR
 }
 
 /** 复用 Runtime 错误码族，只追加 Session 专有错误码。 */
-export type SessionErrorCode = RuntimeErrorCode | 'SESSION_NOT_FOUND' | 'SESSION_SWITCH_BLOCKED'
+export type SessionErrorCode = RuntimeErrorCode | 'SESSION_NOT_FOUND' | 'SESSION_SWITCH_BLOCKED' | 'HISTORY_STALE'
 
 /** 打开会话可能被 Project Trust 拦截，错误码集合与 Runtime 族同步维护。 */
 const SESSION_EXTRA_ERROR_CODES: readonly string[] = [
   'SESSION_NOT_FOUND',
-  'SESSION_SWITCH_BLOCKED'
+  'SESSION_SWITCH_BLOCKED',
+  /**
+   * 历史读取的游标或绑定代际已不属于当前分支：请求本身合法，只是这一页已经过期。
+   * 单独成码而不复用 `RUNTIME_NOT_READY` 与 `INVALID_PROJECT_PATH`，后者分别表示宿主未就绪与项目未登记，
+   * 页面会把它们当成真实失败报出来。
+   */
+  'HISTORY_STALE'
 ]
 
 export interface SessionError {

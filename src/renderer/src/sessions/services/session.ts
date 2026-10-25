@@ -61,6 +61,24 @@ export async function readSessionHistory(
 }
 
 /**
+ * 历史首页读取：打开会话与日志展示过期后重读共用同一入口。
+ * 首页读到 `HISTORY_STALE`（读取期间日志被改写或绑定代际刚好变化）时重发一次：
+ * 主进程每次读取都会重新解析文件身份，重发能拿到新的文件戳；仍失败就把结果原样交给调用方，
+ * 由调用方决定是清空展示还是保持等待呈现。只重发一次，文件持续被改写时不形成重试循环。
+ *
+ * 本函数只管「同一查询立即重发」这一层，调用方再次调用它不算额外重试：
+ * 翻页或展开过期后改读首页是另一个查询，不属于退避重试，也不需要在这里计数。
+ */
+export async function readSessionFirstPage(
+  projectPath: string,
+  sessionId: string
+): Promise<SessionHistoryResult> {
+  const first = await readSessionHistory(projectPath, sessionId, { kind: 'page', before: null })
+  if (first.ok || first.error.code !== 'HISTORY_STALE') return first
+  return readSessionHistory(projectPath, sessionId, { kind: 'page', before: null })
+}
+
+/**
  * 打开会话；`sessionId` 为 null 表示新建。打开其他会话不中断任何正在运行的会话，
  * `allowInterrupt` 仅在用户已确认必须改变现有绑定时为真。
  * 新建会话的默认模型由 Pi 自己的 settings.json 决定，本服务不读取或传递模型覆盖。

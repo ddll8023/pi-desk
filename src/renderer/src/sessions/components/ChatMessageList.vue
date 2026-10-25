@@ -1,5 +1,6 @@
 <!-- 原位新建时保持消息区挂载与阅读留底，但隐藏旧内容、暂停旧会话操作并收起浮层。
-     消息区：按投影渲染、粘底与大纲导航；承接用户消息回退确认与修改提交，回退会新建会话（列表折叠为一条），项目文件不回退；回退把原消息文本与可还原的附件交回输入框，修改重试在没能重发时交回修改后的文本。
+     消息区：按投影渲染、粘底与对话内跳转；承接用户消息回退确认与修改提交，回退会新建会话（列表折叠为一条），项目文件不回退；回退把原消息文本与可还原的附件交回输入框，修改重试在没能重发时交回修改后的文本。
+     每一轮的用户输入摘要与当前所在轮由这里发布给顶部栏的跳转列表，跳转意图也回到这里执行，滚动与折叠仍只有本组件一处权威。
      渲染与折叠都以轮为单位：当前轮与上一轮始终完整展开，更早的轮次只留用户输入、其后的 AI 回答与过程压成一行摘要（见 ChatTurnItem）；开合状态按会话保存，顶部开关控制全局默认。 -->
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
@@ -10,23 +11,18 @@ import type { RuntimeRewindRequest } from '../../../../shared/runtime-api'
 import { useProjectStore } from '../../projects/stores/project'
 import { useRuntimeStore } from '../stores/runtime'
 import { useSessionStore } from '../stores/session'
+import { useChatNavigationStore } from '../stores/chat-navigation'
 import { isSessionKey, useSessionViewStore } from '../stores/session-view'
 import type { SessionReading } from '../stores/session-view'
 import ChatTurnItem from './ChatTurnItem.vue'
 import HistoryLoadSentinel from './HistoryLoadSentinel.vue'
-import ChatOutline from './ChatOutline.vue'
 import AppButton from '../../ui/AppButton.vue'
 import ConfirmDialog from '../../ui/ConfirmDialog.vue'
 
 /** 距底部多少像素内仍视为"停在底部"，避免流式更新时与用户上滚互相争夺。 */
 const STICK_THRESHOLD_PX = 24
-/** 大纲预留整个展开区域，而非只判断刻度是否放得下，避免浮层盖住正文。 */
-const OUTLINE_MIN_WIDTH_PX = 160
-const OUTLINE_MAX_WIDTH_PX = 200
-const OUTLINE_GAP_PX = 8
-const OUTLINE_EDGE_PX = 8
-const OUTLINE_MIN_HEIGHT_PX = 128
-const OUTLINE_SUMMARY_CHARS = 160
+/** 跳转列表里每轮摘要的字数上限；列表项是两行文字，超出按字符截断。 */
+const NAV_SUMMARY_CHARS = 160
 const READING_OFFSET_PX = 20
 
 const props = withDefaults(defineProps<{ readonly hidden?: boolean }>(), { hidden: false })
@@ -34,20 +30,19 @@ const projectStore = useProjectStore()
 const runtimeStore = useRuntimeStore()
 const sessionStore = useSessionStore()
 const sessionViewStore = useSessionViewStore()
+const chatNavigation = useChatNavigationStore()
 const { view: runtimeView, displayMessages: messages, displayTools: tools, history, projectionSync, projectionTruncated, droppedMessages, droppedTools,
   promptView, preparingPrompt, modelSwitchView, rewindView } = storeToRefs(runtimeStore)
 /** 会话视图的稳定键：宿主被回收（挂起）时仍指向同一会话，消息组件不重建。 */
 const conversationKey = computed(() => runtimeStore.conversationKey)
 
-const viewport = ref<HTMLElement | null>(null)
 const scroller = ref<HTMLElement | null>(null)
 const content = ref<HTMLElement | null>(null)
 const stickToBottom = ref(true)
 const historyIntent = ref(false)
-const activeOutlineId = ref<string | null>(null)
-const outlineLayout = ref<{ left: number; width: number } | null>(null)
-/** 大纲跳转与展开定位保持阅读位置，不被程序滚动或内容收缩产生的 scroll 事件重新开启粘底。 */
-let outlineTargetId: string | null = null
+const activeNavId = ref<string | null>(null)
+/** 跳转与展开定位保持阅读位置，不被程序滚动或内容收缩产生的 scroll 事件重新开启粘底。 */
+let navTargetId: string | null = null
 let lastScrollTop = 0
 /**
  * 用户滚动意图：滚轮与阅读键按方向记录一帧，拖动滚动条与触摸在整个手势期间有效。
@@ -61,7 +56,7 @@ let userScrollFrameHandle: number | null = null
 let pendingRestore: number | null = null
 let pendingAnchor: SessionReading['anchor'] = undefined
 let scrollFrame: number | null = null
-let outlineFrame: number | null = null
+let navFrame: number | null = null
 let resizeObserver: ResizeObserver | null = null
 /** 投影映射缓存：流式期间每个批次只重建真正变化的条目，见 chat-view.ts。 */
 const viewCache = createChatViewCache()
@@ -79,13 +74,10 @@ function isTurnExpanded(turn: ChatTurnView, index: number): boolean {
   return index >= turns.value.length - 2 ? true : sessionViewStore.historyExpanded
 }
 
-const outlineEntries = computed(() => turns.value.flatMap(turn => (
-  turn.user === null ? [] : [{ id: turn.user.id, label: outlineLabel(turn.user), uiCount: turn.uiCount }]
+/** 顶部栏跳转列表的入口：以每轮的用户消息为落点，前置轮（没有用户消息）不参与。 */
+const navEntries = computed(() => turns.value.flatMap(turn => (
+  turn.user === null ? [] : [{ id: turn.user.id, label: navLabel(turn.user), uiCount: turn.uiCount }]
 )))
-const outlineStyle = computed(() => ({
-  left: `${outlineLayout.value?.left ?? 0}px`,
-  width: `${outlineLayout.value?.width ?? 0}px`
-}))
 const runtimeInfo = computed(() => (
   runtimeView.value.phase === 'ready' ? runtimeView.value.snapshot.info : null
 ))
@@ -107,9 +99,9 @@ watch(() => props.hidden, (hidden) => {
   if (hidden) {
     pendingRewind.value = null
     historyIntent.value = false
-    activeOutlineId.value = null
-    outlineLayout.value = null
-  } else scheduleOutlineUpdate()
+    activeNavId.value = null
+    chatNavigation.clear(sessionViewStore.key)
+  } else scheduleNavigationUpdate()
 }, { flush: 'sync' })
 
 /**
@@ -280,7 +272,7 @@ const emptyState = computed(() => {
 })
 
 /** 摘要只取用户已有的文本，不解析 Markdown；技能调用、纯图片与没有可展示文本的消息分别标明。 */
-function outlineLabel(message: ChatMessageView): string {
+function navLabel(message: ChatMessageView): string {
   const parts: string[] = []
   const skillNames: string[] = []
   let hasImage = false
@@ -305,7 +297,7 @@ function outlineLabel(message: ChatMessageView): string {
     if (skillNames.length > 0) return `技能：${skillNames.join('、')}`
     return hasImage ? '图片消息' : '用户消息'
   }
-  return text.length > OUTLINE_SUMMARY_CHARS ? `${text.slice(0, OUTLINE_SUMMARY_CHARS)}…` : text
+  return text.length > NAV_SUMMARY_CHARS ? `${text.slice(0, NAV_SUMMARY_CHARS)}…` : text
 }
 
 /** 判断滚动位置距底部是否在粘底阈值内。 */
@@ -414,7 +406,7 @@ function onScroll(): void {
   if (element === null) return
   // 恢复期间的位置由目标值决定：不让中间态改写粘底判定，也不让被裁剪的位置覆盖目标。
   if (pendingRestore === null) {
-    if (outlineTargetId === null) {
+    if (navTargetId === null) {
       if (isNearBottom(element)) attachFollow()
       else if (userScrollFrame === 'down' && userScrollWasAtBottom) attachFollow()
       else if (isUserScrollUp(element)) stickToBottom.value = false
@@ -422,7 +414,7 @@ function onScroll(): void {
     // 始终记录实际位置：缓存过期会让程序滚动被误判成用户上滚。
     lastScrollTop = element.scrollTop
   }
-  scheduleOutlineUpdate()
+  scheduleNavigationUpdate()
 }
 
 /** 每帧最多粘底一次；写入前再检查上滚，避免排队中的布局回调抢走用户位置。 */
@@ -441,13 +433,13 @@ function scheduleScrollToBottom(): void {
     element.scrollTop = element.scrollHeight
     // 记录程序滚动后的实际位置，不让随后的 scroll 事件把内容增长误判成离开底部。
     lastScrollTop = element.scrollTop
-    scheduleOutlineUpdate()
+    scheduleNavigationUpdate()
   })
 }
 
 function jumpToBottom(): void {
   pendingAnchor = undefined
-  outlineTargetId = null
+  navTargetId = null
   pendingRestore = null
   stickToBottom.value = true
   lastScrollTop = scroller.value?.scrollTop ?? 0
@@ -455,9 +447,9 @@ function jumpToBottom(): void {
 }
 
 /** 只有明确的手动滚动意图解除跳转保护与待恢复位置；单纯布局变化不代表用户要回到底部。 */
-function releaseOutlineJump(): void {
+function releaseNavigationJump(): void {
   pendingAnchor = undefined
-  outlineTargetId = null
+  navTargetId = null
   pendingRestore = null
 }
 
@@ -465,14 +457,14 @@ function onWheel(event: WheelEvent): void {
   if (event.deltaY === 0) return
   if (event.deltaY < 0) historyIntent.value = true
   armUserScroll(event.deltaY < 0 ? 'up' : 'down')
-  releaseOutlineJump()
+  releaseNavigationJump()
 }
 
 function onScrollerPointerDown(event: PointerEvent): void {
   // 原生滚动条的指针事件落在滚动容器；点击正文或复制按钮不解除阅读保护。
   if (event.target !== event.currentTarget) return
   userGesture = true
-  releaseOutlineJump()
+  releaseNavigationJump()
 }
 
 /** 触摸手势期间同样按实际位移判定上滚，手势结束就收回许可。 */
@@ -493,15 +485,15 @@ function onReadingKey(event: KeyboardEvent): void {
   }
   else if (['ArrowDown', 'PageDown', 'End', ' '].includes(event.key)) armUserScroll('down')
   else return
-  releaseOutlineJump()
+  releaseNavigationJump()
 }
 
 /**
  * 把某个元素对齐到视口顶部：展开后刚出现的内容立刻可见，不用再往上拖。
- * 对齐点就是目标元素的开头；展开、大纲跳转与「跳到新版」共用这一套定位规则。
- * `outlineMessageId` 是要锁定的用户消息（没有时传 null，大纲保持原目标）。
+ * 对齐点就是目标元素的开头；展开、顶部栏跳转与「跳到新版」共用这一套定位规则。
+ * `navMessageId` 是要锁定的用户消息（没有时传 null，当前轮继续按位置重算）。
  */
-function scrollToElement(target: HTMLElement, outlineMessageId: string | null): void {
+function scrollToElement(target: HTMLElement, navMessageId: string | null): void {
   const element = scroller.value
   if (element === null) return
 
@@ -509,13 +501,13 @@ function scrollToElement(target: HTMLElement, outlineMessageId: string | null): 
   scrollFrame = null
   pendingRestore = null
   stickToBottom.value = false
-  // 大纲跟到这一轮：锁定到它的用户消息，用户上滚前不再按位置重算。
-  outlineTargetId = outlineMessageId
-  if (outlineMessageId !== null) activeOutlineId.value = outlineMessageId
+  // 跳转跟到这一轮：锁定到它的用户消息，用户上滚前不再按位置重算。
+  navTargetId = navMessageId
+  if (navMessageId !== null) activeNavId.value = navMessageId
   const top = element.scrollTop + target.getBoundingClientRect().top - element.getBoundingClientRect().top - READING_OFFSET_PX
   element.scrollTop = Math.max(0, top)
   lastScrollTop = element.scrollTop
-  scheduleOutlineUpdate()
+  scheduleNavigationUpdate()
 }
 
 /**
@@ -667,40 +659,20 @@ function toggleTurn(turn: ChatTurnView, index: number): void {
   })
 }
 
-/** 按实际正文右边界计算留白，扣除滚动条与安全间距；不挤占正文或输入区。 */
-function updateOutlineLayout(): void {
-  const host = viewport.value
-  const element = scroller.value
-  const body = content.value
-  if (host === null || element === null || body === null || outlineEntries.value.length === 0) {
-    outlineLayout.value = null
-    return
-  }
-
-  const hostRect = host.getBoundingClientRect()
-  const scrollRect = element.getBoundingClientRect()
-  const usableRight = scrollRect.left + element.clientWidth
-  const available = usableRight - body.getBoundingClientRect().right
-  const width = Math.min(OUTLINE_MAX_WIDTH_PX, available - OUTLINE_GAP_PX - OUTLINE_EDGE_PX)
-  outlineLayout.value = width >= OUTLINE_MIN_WIDTH_PX && hostRect.height >= OUTLINE_MIN_HEIGHT_PX
-    ? { left: usableRight - OUTLINE_EDGE_PX - width - hostRect.left, width }
-    : null
-}
-
 /** 正常阅读按视口顶部所属的用户输入定位；贴底时标记最新输入，跳转受限时仍保留点击目标。 */
-function updateActiveOutline(): void {
-  const entries = outlineEntries.value
-  if (outlineTargetId !== null && !entries.some(entry => entry.id === outlineTargetId)) outlineTargetId = null
-  if (outlineLayout.value === null || entries.length === 0) {
-    activeOutlineId.value = null
+function updateActiveNavigation(): void {
+  const entries = navEntries.value
+  if (navTargetId !== null && !entries.some(entry => entry.id === navTargetId)) navTargetId = null
+  if (entries.length === 0) {
+    activeNavId.value = null
     return
   }
-  if (outlineTargetId !== null) {
-    activeOutlineId.value = outlineTargetId
+  if (navTargetId !== null) {
+    activeNavId.value = navTargetId
     return
   }
   if (stickToBottom.value) {
-    activeOutlineId.value = entries[entries.length - 1]?.id ?? null
+    activeNavId.value = entries[entries.length - 1]?.id ?? null
     return
   }
 
@@ -713,25 +685,39 @@ function updateActiveOutline(): void {
     if (anchor.getBoundingClientRect().top > readingTop) break
     activeId = anchor.dataset.messageId ?? activeId
   }
-  activeOutlineId.value = activeId
+  activeNavId.value = activeId
 }
 
-/** 几何读取与当前位置更新每帧合并一次，避免在每个流式增量或 scroll 事件里重复读布局。 */
-function scheduleOutlineUpdate(): void {
-  if (outlineFrame !== null) return
-  outlineFrame = requestAnimationFrame(() => {
-    outlineFrame = null
-    updateOutlineLayout()
-    updateActiveOutline()
+/**
+ * 当前位置与入口列表每帧合并算一次，并把结果发布给顶部栏的跳转列表：
+ * 只算位置、不量留白，因此不需要关心面板宽度；同一帧内的流式增量与 scroll 事件只跑一次。
+ */
+function scheduleNavigationUpdate(): void {
+  if (navFrame !== null) return
+  navFrame = requestAnimationFrame(() => {
+    navFrame = null
+    updateActiveNavigation()
+    chatNavigation.publish(sessionViewStore.key, navEntries.value, activeNavId.value)
   })
 }
+
+/**
+ * 取走顶部栏发出的跳转意图。入口在发布之后才到的情况（新会话首轮、历史页刚回读）
+ * 由下一次发布重新调度，因此这里只消费一次，不在这里等待数据。
+ */
+function consumeNavigationJump(): void {
+  const messageId = chatNavigation.takeJump(sessionViewStore.key)
+  if (messageId !== null) jumpToMessage(messageId)
+}
+
+watch(() => chatNavigation.pending, consumeNavigationJump, { flush: 'post' })
 
 function onLayoutChange(): void {
   applyPendingRestore()
   // 内容或视口变化时重判：位置已在底部就恢复跟随，不依赖下一个 scroll 事件。
   reattachIfAtBottom()
   scheduleScrollToBottom()
-  scheduleOutlineUpdate()
+  scheduleNavigationUpdate()
 }
 
 function startNewSession(): void {
@@ -743,7 +729,7 @@ function startNewSession(): void {
 /** 回读详情替换摘要也会改变视口上方高度，DOM更新前保留稳定轮锚点。 */
 watch(turns, () => withAnchoredLayout(() => {}), { flush: 'pre' })
 
-/** DOM 更新与实际尺寸变化都同步粘底及大纲；会话切换清除上一次阅读目标。 */
+/** DOM 更新与实际尺寸变化都同步粘底与顶部栏跳转；会话切换清除上一次阅读目标。 */
 watch([turns, streaming, syncNotice, truncationNotice], onLayoutChange, { flush: 'post' })
 /**
  * 顶部开关改的是全局默认：在 DOM 更新前记下锚点、更新后补偿位置，一次展开或收起多轮也不跳屏。
@@ -757,10 +743,10 @@ watch(() => promptView.value.phase, (next, previous) => {
 watch(conversationKey, () => {
   historyIntent.value = false
   pendingRewind.value = null
-  activeOutlineId.value = null
+  activeNavId.value = null
   // 同一会话重绑（Runtime 代际变化）没有可恢复的位置：继续贴底，不停在历史开头。
   if (!stickToBottom.value && pendingRestore === null) jumpToBottom()
-  scheduleOutlineUpdate()
+  scheduleNavigationUpdate()
 }, { flush: 'post' })
 
 onMounted(() => {
@@ -783,14 +769,16 @@ onBeforeUnmount(() => {
   window.removeEventListener('pointerup', onUserGestureEnd)
   window.removeEventListener('pointercancel', onUserGestureEnd)
   if (scrollFrame !== null) cancelAnimationFrame(scrollFrame)
-  if (outlineFrame !== null) cancelAnimationFrame(outlineFrame)
+  if (navFrame !== null) cancelAnimationFrame(navFrame)
+  // 卸载（如切到设置页）时撤回登记，顶部栏不再列一个已经不在的会话的入口。
+  chatNavigation.clear(sessionViewStore.key)
   if (userScrollFrameHandle !== null) cancelAnimationFrame(userScrollFrameHandle)
   if (jumpHighlightTimer !== null) clearTimeout(jumpHighlightTimer)
 })
 </script>
 
 <template>
-  <section v-show="!props.hidden" ref="viewport" class="relative flex min-h-0 flex-1 flex-col bg-desk-canvas-sunken" :inert="props.hidden" :aria-hidden="props.hidden">
+  <section v-show="!props.hidden" class="relative flex min-h-0 flex-1 flex-col bg-desk-canvas-sunken" :inert="props.hidden" :aria-hidden="props.hidden">
     <div
       ref="scroller"
       class="scroll-area min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-6 [overflow-anchor:none]"
@@ -800,7 +788,7 @@ onBeforeUnmount(() => {
       @touchstart.passive="onUserGestureStart"
       @touchend.passive="onUserGestureEnd"
       @touchcancel.passive="onUserGestureEnd"
-      @touchmove.passive="releaseOutlineJump"
+      @touchmove.passive="releaseNavigationJump"
       @keydown="onReadingKey"
     >
       <div ref="content" class="chat-column mx-auto flex flex-col gap-5">
@@ -873,15 +861,6 @@ onBeforeUnmount(() => {
       confirm-label="确认回退"
       @confirm="confirmRewind"
       @cancel="pendingRewind = null"
-    />
-
-    <ChatOutline
-      v-if="!props.hidden && outlineLayout !== null && outlineEntries.length > 0"
-      :key="conversationKey"
-      :entries="outlineEntries"
-      :active-id="activeOutlineId"
-      :style="outlineStyle"
-      @navigate="jumpToMessage"
     />
 
     <div v-if="!stickToBottom" class="pointer-events-none absolute inset-x-0 bottom-3 flex justify-center">

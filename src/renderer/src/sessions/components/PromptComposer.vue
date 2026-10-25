@@ -805,7 +805,7 @@ interface DesktopCommandEntry {
 
 type ComposerSuggestion = PiResourceEntry | DesktopCommandEntry
 
-/** Desktop 层拦截的命令：`/compact` 走手动压缩，`/new` 在当前标签内就地新建对话；恢复会话由顶栏入口承担。 */
+/** Desktop 层拦截的命令：`/compact` 走手动压缩，`/new` 在当前标签内就地新建对话；恢复已回收的会话由侧栏打开会话，或在发送时自动恢复。 */
 const DESKTOP_COMMANDS: readonly DesktopCommandEntry[] = [
   { kind: 'desktop', name: 'compact', description: '压缩当前会话上下文（可跟摘要说明）' },
   { kind: 'desktop', name: 'new', description: '新建对话（结束当前对话）' }

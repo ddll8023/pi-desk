@@ -114,8 +114,6 @@
   :root {
     /* 会话列宽基准：窄窗口保持 62rem，宽屏随窗口放宽，超大屏封顶，避免正文行长失控。 */
     --chat-column-max: clamp(62rem, 68vw, 88rem);
-    /* 右侧为大纲刻度栏保留的留白：值需覆盖 ChatMessageList.vue 的大纲可用宽常量（OUTLINE_MIN_WIDTH_PX 加间距与边缘），列宽吃满该留白会让大纲因可用宽度不足而整条不显示。 */
-    --chat-column-reserve: 24rem;
     /* 可折叠卡片内容区的高度上限：跟随窗口高度，超出部分在卡片内部滚动，短内容仍按内容高度收缩。 */
     --chat-card-scroll-max-height: min(28rem, 60vh);
     /*

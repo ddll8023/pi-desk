@@ -12,7 +12,6 @@ import { storeToRefs } from 'pinia'
 import { computed } from 'vue'
 import ExtensionDialog from '../../sessions/components/ExtensionDialog.vue'
 import QuickCommandDialog from '../../preferences/components/QuickCommandDialog.vue'
-import SessionPickerDialog from '../../sessions/components/SessionPickerDialog.vue'
 import TrustDialog from '../../projects/components/TrustDialog.vue'
 import UpdateNoticeDialog from '../../updates/components/UpdateNoticeDialog.vue'
 import { useGitStatusStore } from '../../git/stores/git-status'
@@ -167,9 +166,6 @@ function onUpdateDetails(): void {
       @confirm="onConfirmFileClose"
       @cancel="workspaceTabsStore.cancelPendingClose()"
     />
-
-    <!-- 顶栏会话 chip 使用的会话选择弹层。 -->
-    <SessionPickerDialog :open="sessionStore.showSessionPicker" @close="sessionStore.closeSessionPicker()" />
 
     <!-- 快捷命令的新增与编辑；保存成功才关闭，失败保留已填内容并就地提示。 -->
     <QuickCommandDialog

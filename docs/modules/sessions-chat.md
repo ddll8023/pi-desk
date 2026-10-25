@@ -6,7 +6,7 @@
 
 负责按项目读取会话列表、打开／新建／重载／删除会话、按会话读取历史（页、轮次与原文续段），监督 SDK 宿主、维护运行身份与占用，发送与中止、回退、压缩，投影聊天／工具／历史／活动与用量，以及 SDK 扩展对话框、通知和 widget。
 
-入口为侧栏及会话选择器、输入坞、聊天消息动作和资源重载。文件编辑器、终端、MCP 配置与供应商持久化属于其他模块；会话内 Agent 自己读写项目文件也不等于桌面文件编辑接口。
+入口为侧栏、顶部栏的对话跳转入口、输入坞、聊天消息动作和资源重载。文件编辑器、终端、MCP 配置与供应商持久化属于其他模块；会话内 Agent 自己读写项目文件也不等于桌面文件编辑接口。
 
 ## 专属文件
 
@@ -54,6 +54,7 @@
 | `src/renderer/src/sessions/stores/session.ts` | 按项目的列表窗口与读取调度、串行打开／重载、按标签意图提交打开、删除与待确认目标 |
 | `src/renderer/src/sessions/stores/session-runs.ts` | 运行清单、副本状态、释放与结束 |
 | `src/renderer/src/sessions/stores/session-view.ts` | 会话输入、阅读与展开状态，原位新草稿的独立留底及附件回收 |
+| `src/renderer/src/sessions/stores/chat-navigation.ts` | 对话内跳转登记：按会话键发布轮次入口与当前轮，并转交一次性跳转意图 |
 | `src/renderer/src/sessions/stores/extension-ui.ts` | 运行目标的扩展对话、通知、widget 展示副本 |
 | `src/renderer/src/sessions/services/session.ts` | 会话请求桥接 |
 | `src/renderer/src/sessions/services/session-runs.ts` | 运行清单与生命周期桥接 |
@@ -70,15 +71,13 @@
 | 文件 | 用途 |
 | --- | --- |
 | `src/renderer/src/sessions/components/PromptComposer.vue` | 输入、附件、命令、补全与提交编排 |
-| `src/renderer/src/sessions/components/ChatMessageList.vue` | 消息列表、历史加载、滚动与布局观察 |
+| `src/renderer/src/sessions/components/ChatMessageList.vue` | 消息列表、历史加载、滚动与布局观察；向顶部栏发布对话跳转入口并执行跳转 |
 | `src/renderer/src/sessions/components/ChatTurnItem.vue` | 按轮摘要、展开与原文内容 |
 | `src/renderer/src/sessions/components/ChatMessageItem.vue` | 单消息、思考与工具展示 |
-| `src/renderer/src/sessions/components/ChatOutline.vue` | 对话大纲与定位 |
 | `src/renderer/src/sessions/components/HistoryLoadSentinel.vue` | 历史加载触发哨兵 |
 | `src/renderer/src/sessions/components/ToolCard.vue` | 工具参数、结果与状态卡片 |
 | `src/renderer/src/sessions/components/UsageDetailDialog.vue` | 用量明细 |
 | `src/renderer/src/sessions/components/SessionActivityBar.vue` | 会话活动摘要和明细 |
-| `src/renderer/src/sessions/components/SessionPickerDialog.vue` | 会话选择弹层 |
 | `src/renderer/src/sessions/components/ExtensionDialog.vue` | SDK 扩展交互队列的当前对话 |
 | `src/renderer/src/sessions/components/ExtensionNotificationBar.vue` | 扩展通知展示 |
 
@@ -115,6 +114,8 @@
 已有会话的聊天面板在活动标签与前台身份一致时显示，或在该标签有该会话的日志历史时显示：身份已匹配就先展示缓存内容，输入、回退与压缩另按交互状态门禁，不拿打开动作的收尾当可见条件。原位新草稿使用独立空态与输入身份，不以旧 Runtime 的就绪状态决定展示或发送目标；新建、失败恢复与首次发送流程见[工作区标签](workspace-tabs.md#关键流程)。
 
 历史读取按会话寻址：页面只给项目与会话，已由运行实例接管时由绑定路径读权威分支，未接管时由日志解析作答；两条路径返回同一套条目身份，缓存合并规则不区分来源。日志路径是展示副本，覆盖历史页、轮次页与原文续段，因此未绑定的会话也能查看与翻页；但在会话真正绑定前不能发送、回退或压缩。绑定到同一个会话时日志展示不提前清空：先取一次权威基准，应用成功后才交还展示位，交接中间不出现空白。日志读取失败、结果不属于请求目标或被更晚的选择取代时一律不写入，界面退回原来的等待呈现；文件戳在读取前后各复核一次，读取期间被改写按目标失效处理。
+
+两条路径的「这一页已经过期」（绑定代际变化、日志文件被改写或游标不再属于当前分支）在会话编排层统一归成 `HISTORY_STALE`，页面据此按权威基准重建一次，而不是当成项目未登记或宿主未就绪报错；其余失败仍按原分类上报。
 
 查看历史仍要有一个宿主进程承担解析。只读宿主池按项目保活这样的进程：它不承载会话、不登记运行实例、不进入页面运行清单，也不参与项目移除的活动判定。日志读取优先复用该会话仍可用的原服务宿主，再借同项目执行宿主，没有才用池中宿主；只有宿主失效才重选一次，文件版本、游标与解析错误不盲目重试。池中宿主在绑定时按原对象接管，接上运行身份与授权回路，进程内缓存无需搬运；读取不新增执行占用，也不因此改为共享多会话执行宿主或默认常驻。
 

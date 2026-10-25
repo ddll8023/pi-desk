@@ -3,7 +3,7 @@
  * 失败文案与 AI 消息生成计时只取投影已给的字段。
  *
  * 渲染项分两层：消息层按块展开（`toMessages`），轮层以用户消息为界把消息分组（`toTurns`）。
- * 折叠、展开与大纲跳转都以轮为单位，因此轮层一并算好条数、响应计时、最后一次调用的用量与
+ * 折叠、展开与对话跳转都以轮为单位，因此轮层一并算好条数、响应计时、最后一次调用的用量与
  * 本轮交付的界面数。
  *
  * 不猜测缺失内容，也不读取磁盘；来源为宿主实时投影与当前分支历史回读副本。投影按消息 copy-on-write
@@ -92,7 +92,7 @@ export interface ChatTurnView {
   readonly responses: readonly ChatMessageView[]
   /** 轮内 AI 消息条数；折叠摘要用它说明收起了几条。 */
   readonly responseCount: number
-  /** 本轮交付的界面个数（按块计，不是按文档去重）；大纲据此在刻度上标一枚圆点。 */
+  /** 本轮交付的界面个数（按块计，不是按文档去重）；顶部栏对话跳转据此标出本轮含几个界面。 */
   readonly uiCount: number
   /** 本轮响应计时（挂在用户消息上）；前置轮与历史轮次为 null。 */
   readonly turn: ChatMessageView['turn']

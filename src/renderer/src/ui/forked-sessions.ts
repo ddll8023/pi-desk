@@ -1,4 +1,4 @@
-/** 分叉会话折叠：回退（Pi 的 fork）保留来源文件，列表只展示链上最新一条；会话与会话选择器共用。 */
+/** 分叉会话折叠：回退（Pi 的 fork）保留来源文件，列表只展示链上最新一条；侧栏项目树使用。 */
 import type { SessionSummary } from '../../../shared/session-api'
 
 /**

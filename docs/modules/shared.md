@@ -18,7 +18,7 @@
 | `src/renderer/src/App.vue` | 页面组合根：只装配外壳骨架、弹层宿主与启动编排 |
 | `src/renderer/src/shell/components/AppShell.vue` | 布局骨架：顶部栏、侧栏与窄窗遮罩、工作区槽、右侧面板；持有窄窗与侧栏开合状态 |
 | `src/renderer/src/shell/components/WorkspaceView.vue` | 工作区：标签条、四条操作失败提示、对话／终端／文件面板层与空态 |
-| `src/renderer/src/shell/components/AppDialogHost.vue` | 弹层宿主：会话中断、信任、项目移除、会话删除、脏文件关闭、会话选择、快捷命令编辑与删除、Extension、更新提示 |
+| `src/renderer/src/shell/components/AppDialogHost.vue` | 弹层宿主：会话中断、信任、项目移除、会话删除、脏文件关闭、快捷命令编辑与删除、Extension、更新提示 |
 | `src/renderer/src/shell/use-app-startup.ts` | Store 初始化与释放顺序、打开意图的补提交、标签侧会话状态视图的注册、生成式参数持久化初始化与退出落盘、项目切换与会话落盘的补读 |
 | `src/renderer/src/env.d.ts` | 将各域 Api 合成为可缺失的 `Window.desktop`；仅环境类型，不承担业务请求 |
 
@@ -101,7 +101,7 @@
 | `src/renderer/src/ui/AppButton.vue` | 原生按钮及统一视觉变体；业务组件共用 |
 | `src/renderer/src/ui/AppSelect.vue` | 自定义选择器；业务表单共用 |
 | `src/renderer/src/ui/ConfirmDialog.vue` | 通用确认弹层；应用外壳、聊天列表、文件编辑、Git、供应商、资源、终端设置与快捷命令消费 |
-| `src/renderer/src/ui/anchored-popup.ts` | 浮层定位与生命周期；标签、菜单、文件编辑、Git、侧栏与基础选择器消费 |
+| `src/renderer/src/ui/anchored-popup.ts` | 浮层定位与生命周期；标签、菜单、文件编辑、Git、侧栏、顶部栏对话跳转与基础选择器消费 |
 | `src/renderer/src/ui/clipboard.ts` | 复制文本与错误结果；聊天、文件、供应商、资源、终端、更新与生成式界面消费 |
 | `src/renderer/src/ui/MarkdownContent.vue` | 安全 Markdown 展示、数学与代码／表格交互；聊天正文的 Thinking、回答与技能正文消费 |
 | `src/renderer/src/ui/markdown.ts` | 聊天 Markdown 解析与清洗，供 Markdown 展示组件使用 |
@@ -109,7 +109,7 @@
 | `src/renderer/src/ui/markdown-math.ts` | 数学解析与 KaTeX 渲染；聊天、文件预览及富文本公式消费 |
 | `src/renderer/src/ui/project-entry-drag.ts` | 项目条目拖拽载荷与终端插入文本；文件树与终端视图共用 |
 | `src/renderer/src/ui/relative-time.ts` | 相对时间文案；侧栏会话行与提交历史共用 |
-| `src/renderer/src/ui/forked-sessions.ts` | 分叉会话折叠；侧栏项目树与会话选择器共用 |
+| `src/renderer/src/ui/forked-sessions.ts` | 分叉会话折叠；侧栏项目树使用 |
 
 `src/renderer/src/ui/` 是共享展示目录，只收被多个能力重复使用的无业务状态代码：展示组件、Markdown 与数学渲染、剪贴板、浮层定位、相对时间与分叉折叠。仅服务单一能力的文件不因位置相同就视为共享：`sessions/clock.ts` 服务聊天计时，`editor/` 的富文本实现只服务文件编辑。
 

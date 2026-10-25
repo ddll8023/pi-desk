@@ -19,7 +19,7 @@ import { useTrustStore } from '../../projects/stores/trust'
 import { useProjectStore } from '../../projects/stores/project'
 import { usePreferencesStore } from '../../preferences/stores/preferences'
 import { useRuntimeStore } from './runtime'
-import { listSessions, openSession, reloadSession, deleteSession, readSessionHistory } from '../services/session'
+import { listSessions, openSession, reloadSession, deleteSession, readSessionFirstPage } from '../services/session'
 import { useWorkspaceTabsStore } from '../../workspace/stores/workspace-tabs'
 import type { ChatOpenIntent } from '../../workspace/stores/workspace-tabs'
 
@@ -104,21 +104,11 @@ export const useSessionStore = defineStore('session', () => {
   const listGenerations = new Map<string, number>()
   let listSequence = 0
 
-  /** 顶栏会话 chip 使用的会话选择弹层。 */
-  const showSessionPicker = ref(false)
   /** 待确认删除的会话：项目路径加摘要；确认后以 allowInterrupt 提交，取消不改动任何文件。 */
   const pendingRemoval = shallowRef<{
     readonly projectPath: string
     readonly session: SessionSummary
   } | null>(null)
-
-  function openSessionPicker(): void {
-    showSessionPicker.value = true
-  }
-
-  function closeSessionPicker(): void {
-    showSessionPicker.value = false
-  }
 
   function currentProjectPath(): string | null {
     return useProjectStore().currentProject?.path ?? null
@@ -147,7 +137,7 @@ export const useSessionStore = defineStore('session', () => {
     return { phase: 'idle' }
   }
 
-  /** 某个项目下被跳过的文件数、窗口外剩余的会话文件数与当前窗口大小；供侧栏与选择弹层展示分页状态。 */
+  /** 某个项目下被跳过的文件数、窗口外剩余的会话文件数与当前窗口大小；供侧栏展示分页状态。 */
   function countsOf(projectPath: string): {
     readonly skipped: number
     readonly remaining: number
@@ -186,7 +176,7 @@ export const useSessionStore = defineStore('session', () => {
     })
   }
 
-  /** 当前项目的会话列表分片；顶栏与会话选择弹层都读这一份。 */
+  /** 当前项目的会话列表分片；侧栏项目树读这一份。 */
   const sessions = computed<readonly SessionSummary[]>(() => {
     const projectPath = currentProjectPath()
     return projectPath === null ? [] : sliceOf(projectPath).sessions
@@ -203,7 +193,7 @@ export const useSessionStore = defineStore('session', () => {
     return projectPath === null ? 0 : sliceOf(projectPath).skipped
   })
 
-  /** 当前项目窗口外仍未读取的会话文件数；大于 0 时选择弹层提供“加载更多”。 */
+  /** 当前项目窗口外仍未读取的会话文件数；大于 0 时侧栏提供“加载更多”。 */
   const remaining = computed<number>(() => {
     const projectPath = currentProjectPath()
     return projectPath === null ? 0 : sliceOf(projectPath).remaining
@@ -447,6 +437,7 @@ export const useSessionStore = defineStore('session', () => {
    * 成功后展示目标固定为该项目与会话，后续翻页、展开轮次与续段由运行时按同一目标继续读取。
    * 读取只是可放弃的加速，失败、结果不属于请求目标或被更晚的选择取代时都不写入，
    * 界面退回原来的等待呈现；它不改变任何文件、占用或信任判定。
+   * 首页读到过期时由 `readSessionFirstPage` 重发一次，重发仍失败就静默降级。
    */
   async function loadLogPage(
     runtime: ReturnType<typeof useRuntimeStore>,
@@ -454,7 +445,7 @@ export const useSessionStore = defineStore('session', () => {
     sessionId: string,
     token: number
   ): Promise<void> {
-    const result = await readSessionHistory(projectPath, sessionId, { kind: 'page', before: null })
+    const result = await readSessionFirstPage(projectPath, sessionId)
     if (token !== logSequence || !result.ok) return
     if (result.data.projectPath !== projectPath || result.data.sessionId !== sessionId) return
     if (result.data.data.kind !== 'page') return
@@ -663,7 +654,6 @@ export const useSessionStore = defineStore('session', () => {
     awaitingInterrupt,
     awaitingTrust,
     pendingReload,
-    showSessionPicker,
     pendingRemoval,
     initialize,
     ensureLoaded,
@@ -682,8 +672,6 @@ export const useSessionStore = defineStore('session', () => {
     retryPendingAfterTrust,
     confirmPending,
     cancelPending,
-    openSessionPicker,
-    closeSessionPicker,
     requestRemoval,
     cancelRemoval,
     confirmRemoval

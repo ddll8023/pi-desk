@@ -54,6 +54,16 @@ class SessionFailure extends Error {
   }
 }
 
+/**
+ * 历史读取的过期失败：绑定路径在读取期间换绑（`STALE_SESSION`），
+ * 日志路径的文件戳被改写或游标已不在当前分支（`INVALID_SESSION_TARGET`）。
+ * 两者都是「这一页已经过期」，不是目标或授权错误，因此单独归成 `HISTORY_STALE`。
+ */
+function isStaleHistoryFailure(error: unknown): error is SdkHostError {
+  return error instanceof SdkHostError
+    && (error.code === 'STALE_SESSION' || error.code === 'INVALID_SESSION_TARGET')
+}
+
 export interface SessionManagerOptions {
   /**
    * 当前项目来源、已添加项目范围与配置；只用于列表校验与界面上下文，不作为运行实例的授权依据。
@@ -162,6 +172,11 @@ export class SessionManager {
       })
       return { ok: true, data: { projectPath, sessionId: identity.sessionId, data } }
     } catch (error) {
+      // 游标与绑定代际已失效不是读取失败：页面据此按权威基准重建一次，
+      // 因此不能落进 `INVALID_PROJECT_PATH`（项目未登记）或 `RUNTIME_NOT_READY`（宿主未就绪）的分类里。
+      if (isStaleHistoryFailure(error)) {
+        return { ok: false, error: { code: 'HISTORY_STALE', message: error.message } }
+      }
       return this.failure(error, {
         code: 'INTERNAL_ERROR',
         message: '读取会话历史时发生未预期的内部错误。'
