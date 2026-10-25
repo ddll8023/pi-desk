@@ -48,6 +48,11 @@ defineProps<{ readonly name: SettingsIconName }>()
       <circle cx="8" cy="12" r="2" />
     </template>
 
+    <template v-else-if="name === 'smartphone'">
+      <rect x="6" y="2" width="12" height="20" rx="2" />
+      <path d="M11 18h2" />
+    </template>
+
     <template v-else>
       <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
       <path d="M21 3v5h-5" />

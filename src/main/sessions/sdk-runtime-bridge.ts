@@ -10,6 +10,7 @@
  * 状态映射要点：页面 `runtimeId` 是注册表分配的应用级绑定代际（能力清单、投影快照与投影批次都按
  * 绑定代际对齐）；宿主就绪只代表 SDK 已加载，只有会话绑定完成才对页面表示 `ready`。
  *
+ * 后台接入已有会话只取得或恢复运行实例，不参与桌面前台选择，也不清扫或占用桌面空白会话。
  * 前台选择由项目切换驱动：当前项目变化时切到该项目最近一次前台的实例，未命中则清空前台。
  * 项目切换只改执行实例的展示归属，不建立执行宿主、不重绑会话、不中断任何后台实例。
  * 前台实例不参与空闲回收：切走或清空前台后才重新计时。
@@ -319,6 +320,8 @@ export interface SdkRuntimeBridgeOptions {
  */
 export class SdkRuntimeBridge {
   private readonly statusListeners = new Set<(status: RuntimeStatus) => void>()
+  private readonly runStatusListeners = new Set<(status: RuntimeStatus) => void>()
+  private readonly publishedRunStatuses = new Map<number, RuntimeStatus>()
   private readonly projectionListeners = new Set<(batch: ProjectionBatch) => void>()
   private readonly uiListeners = new Set<(snapshot: ExtensionUiSnapshot) => void>()
   private readonly runsListeners = new Set<(snapshot: SessionRunsSnapshot) => void>()
@@ -402,7 +405,7 @@ export class SdkRuntimeBridge {
     const offStatus = host.onStatusChanged(status => {
       // 未确认退出的运行实例保留占用，未确认前不建立替代实例。
       if (status.state === 'failed') this.options.runs.markUnconfirmed(runId)
-      this.publishStatus()
+      this.publishState()
       this.scheduleReclaim(runId)
     })
     const offSession = host.onSessionChanged(() => {
@@ -756,7 +759,7 @@ export class SdkRuntimeBridge {
   }
 
   /**
-   * 已占用会话的宿主：命中时由调用方转前台复用。退出未确认的实例仍保留占用，
+   * 已占用会话的宿主：命中时由调用方按打开方式复用。退出未确认的实例仍保留占用，
    * 既不转前台也不允许重复接管，直到确认收敛。
    */
   private reuseOccupied(owner: SessionOwner): SessionRunRecord<SdkHostManager> | null {
@@ -771,33 +774,25 @@ export class SdkRuntimeBridge {
   }
 
   /**
-   * 运行实例选择与建立：已被占用或可承接的实例直接复用，都不命中才建立新宿主并切前台。
+   * 只取得或建立运行实例，不选择桌面前台；已占用的目标会话优先复用，避免重复接管。
+   * reservedRunId 保留给桌面：后台打开其他会话不能复用桌面尚未绑定的空白实例。
    * 应用退出编排开始后不再建立宿主。
    */
-  private ensureRun(owner: SessionOwner): SessionRunRecord<SdkHostManager> {
+  private ensureRun(owner: SessionOwner, reservedRunId: number | null): SessionRunRecord<SdkHostManager> {
     if (this.shuttingDown) throw new SdkHostError('HOST_CLOSED', '应用正在退出，不能建立 SDK 宿主。')
     const occupied = this.reuseOccupied(owner)
-    if (occupied !== null) {
-      this.focusRun(occupied.runId)
-      return occupied
-    }
+    if (occupied !== null) return occupied
     // 优先复用原日志宿主：首页与稳定活动分别校验复用，但都不能替代 SDK 打开会话文件。
     const preferred = this.logHostOf(owner)
-    if (preferred !== null) {
-      this.focusRun(preferred.runId)
-      return preferred
-    }
-    const reusable = this.options.runs.allRuns().find(run => this.canReuse(run, owner.projectPath))
-    if (reusable !== undefined) {
-      this.focusRun(reusable.runId)
-      return reusable
-    }
+    if (preferred !== null && preferred.runId !== reservedRunId) return preferred
+    const reusable = this.options.runs.allRuns().find(run =>
+      run.runId !== reservedRunId && this.canReuse(run, owner.projectPath))
+    if (reusable !== undefined) return reusable
     const runId = this.options.runs.allocateRunId()
     const host = this.options.createHost(runId)
     this.options.prepareHost(host)
     const record = this.options.runs.registerRun(runId, host)
     this.attachRun(runId, host)
-    this.focusRun(runId)
     return record
   }
 
@@ -818,6 +813,18 @@ export class SdkRuntimeBridge {
   /** 状态查询不建立宿主，也不触发任何会话操作；只映射前台实例的当前状态。 */
   getStatus(): RuntimeResult {
     return { ok: true, data: this.foregroundStatus() }
+  }
+
+  /** 按实例查询完整状态，不改变前台、不建立宿主；网络调用方须先复核项目与会话授权。 */
+  getStatusOfRun(runId: number): RuntimeStatus | null {
+    const run = this.runOf(runId)
+    return run === null ? null : mapStatus(run.owner.getStatus(), run.owner.getSessionStatus(), runId)
+  }
+
+  /** 后台实例也发布完整状态；与仅表达桌面前台的 onStatusChanged 分离。 */
+  onRunStatusChanged(listener: (status: RuntimeStatus) => void): () => void {
+    this.runStatusListeners.add(listener)
+    return () => this.runStatusListeners.delete(listener)
   }
 
   /** 状态广播只在映射结果变化时发给页面；前台实例变化一定触发。 */
@@ -1179,33 +1186,52 @@ export class SdkRuntimeBridge {
   }
 
   /**
-   * 会话切换提交：目标、归属项目与会话身份在提交前固定，调用方只表达目标与是否允许中断。
-   * 已由某实例承载的命名会话只转前台复用，不重绑；其余情况先在选定的实例上登记占位，
-   * 宿主侧实际重绑前的代际由主进程在授权应答中分配。
+   * 会话打开与重载共用登记、绑定和恢复链；selection 为 null 时只后台接入已有会话，不允许中断。
+   * 只有桌面请求清扫空会话并参与前台选择；后台请求不改变选择序号或前台顺序。
+   * 已绑定且生命周期收敛的目标直接复用，其余情况先登记占位，再由授权应答分配实际绑定代际。
    */
   async switchSession(
     action: SessionSwitchAction,
     reference: SdkSessionReference,
     allowInterrupt: boolean,
     owner: SessionOwner,
-    selection: number
+    selection: number | null
   ): Promise<{ readonly cancelled: boolean; readonly runId: number }> {
+    if (this.shuttingDown) throw new SdkHostError('HOST_CLOSED', '应用正在退出，不能打开或恢复会话。')
+    if (selection === null && (action !== 'open' || allowInterrupt || reference.kind !== 'id'
+      || owner.sessionId === null || reference.sessionId !== owner.sessionId)) {
+      throw new SdkHostError('INVALID_SESSION_TARGET', '后台只能接入指定的已有会话，不能新建、重载或中断。')
+    }
     if (action !== 'reload') {
-      // 切换前先清扫其他实例上的空会话占用：释放后的空闲实例正好成为本次切换的复用目标。
-      this.releaseEmptySessionRuns()
-      const occupied = this.reuseOccupied(owner)
+      // 只让桌面切换清扫空会话；手机接入不能释放桌面仍在准备的空白对话。
+      if (selection !== null) this.releaseEmptySessionRuns()
+      let occupied = this.reuseOccupied(owner)
       if (occupied !== null) {
-        // 回收可能正在进行：等它收敛后再决定是复用还是重绑，不与释放竞争。
+        // 等回收收敛后重新查占用，不能把等待期间已释放或换绑的旧对象当作目标。
         await this.awaitReclaim(occupied.runId)
-        if (!this.runNeedsRebind(occupied)) {
-          this.focusRun(occupied.runId)
-          this.settleSelection(selection, owner)
-          return { cancelled: false, runId: occupied.runId }
+        if (this.shuttingDown) throw new SdkHostError('HOST_CLOSED', '应用正在退出，不能打开或恢复会话。')
+        occupied = this.reuseOccupied(owner)
+        if (occupied !== null) {
+          if (occupied.phase !== 'running') {
+            throw new SdkHostError('SESSION_OPERATION_CONFLICT', '该会话正在打开或关闭，请等操作结束后重试。')
+          }
+          const session = occupied.owner.getSessionStatus()
+          if (!this.runNeedsRebind(occupied) && session.phase === 'bound'
+            && session.bindingId !== null && session.sessionId === owner.sessionId) {
+            if (selection !== null) {
+              this.focusRun(occupied.runId)
+              this.settleSelection(selection, owner)
+            } else {
+              this.keepAlive(occupied.runId)
+            }
+            return { cancelled: false, runId: occupied.runId }
+          }
         }
       }
     }
 
-    const run = this.ensureRun(owner)
+    const run = this.ensureRun(owner, selection === null ? this.foregroundRunId() : null)
+    if (selection !== null) this.focusRun(run.runId)
     try {
       this.options.runs.beginOpen(run.runId, owner.projectPath, owner.sessionId)
     } catch (error) {
@@ -1215,6 +1241,7 @@ export class SdkRuntimeBridge {
       }
       throw error
     }
+    this.cancelReclaim(run.runId)
     const host = run.owner
     try {
       if (host.getSessionStatus().needsHostRebuild) await host.resetSessionHost()
@@ -1225,12 +1252,15 @@ export class SdkRuntimeBridge {
       const result = await host.runSessionAction(action, reference, host.getSessionIdentity(), interrupt)
       this.options.runs.settleOpen(run.runId, host.getSessionStatus().sessionId)
       this.publishState()
-      this.settleSelection(selection, owner)
+      if (selection !== null) this.settleSelection(selection, owner)
       return { cancelled: result.cancelled, runId: run.runId }
     } catch (error) {
       this.options.runs.failOpen(run.runId)
       this.publishRuns()
       throw error
+    } finally {
+      // 后台实例没有前台切换来安排回收，恢复或失败收尾后主动交还原有空闲回收规则。
+      if (selection === null) this.scheduleReclaim(run.runId)
     }
   }
 
@@ -1262,10 +1292,19 @@ export class SdkRuntimeBridge {
     if (failures.length > 0) throw failures[0]
   }
 
-  /** 任一实例状态变化后的统一广播入口：前台状态与运行实例列表各自去重。 */
+  /** 任一实例状态变化后的统一广播入口：前台状态、运行实例列表与按实例完整状态各自去重。 */
   private publishState(): void {
     this.publishStatus()
     this.publishRuns()
+    for (const run of this.options.runs.allRuns()) {
+      const status = mapStatus(run.owner.getStatus(), run.owner.getSessionStatus(), run.runId)
+      const previous = this.publishedRunStatuses.get(run.runId)
+      if (previous !== undefined && sameStatus(previous, status)) continue
+      this.publishedRunStatuses.set(run.runId, status)
+      for (const listener of [...this.runStatusListeners]) {
+        try { listener({ ...status }) } catch { /* 远程消费者不能影响宿主监督。 */ }
+      }
+    }
   }
 
   /** 映射结果变化时广播副本；订阅者异常不能改变宿主生命周期。 */

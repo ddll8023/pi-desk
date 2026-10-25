@@ -5,7 +5,8 @@
  * `desktop`（应用信息与外链）、`projects`（项目与项目文件）、`sessions`（会话与运行状态）、
  * `runtime`（Runtime、模型能力、资源与 MCP）、`terminal`（终端与守护进程）、`git`（源代码管理）、
  * `preferences`（界面偏好与快捷命令）、`providers`（认证、供应商与 Pi 默认模型）、
- * `updates`（版本检查与更新）、`trust`（Project Trust）、`genui`（生成式界面参数与 Extension UI）。
+ * `updates`（版本检查与更新）、`trust`（Project Trust）、`genui`（生成式界面参数与 Extension UI）、
+ * `lan-remote`（局域网访问控制与设备授权）。
  *
  * 不暴露 Electron、任意 channel 或系统能力；沙箱不能 require 拆分模块，构建侧保持单产物。
  */
@@ -27,6 +28,7 @@ import type { AuthApi } from '../shared/auth-api'
 import type { ModelsConfigApi } from '../shared/models-config-api'
 import type { UpdatesApi } from '../shared/updates-api'
 import type { GitApi } from '../shared/git-api'
+import type { LanRemoteApi } from '../shared/lan-remote-api'
 import { desktopApi } from './desktop'
 import { genuiApi } from './genui'
 import { gitApi } from './git'
@@ -38,9 +40,10 @@ import { sessionsApi } from './sessions'
 import { terminalApi } from './terminal'
 import { trustApi } from './trust'
 import { updatesApi } from './updates'
+import { lanRemoteApi } from './lan-remote'
 
 /** 合并后的桥接对象：各域键互不重叠，平铺后仍是页面看到的同一份 `DesktopApi` 契约。 */
-const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionApi & SessionRunApi & TerminalApi & PreferencesApi & QuickCommandsApi & GenuiParamsApi & PiSettingsApi & TrustApi & ExtensionUiApi & AuthApi & ModelsConfigApi & UpdatesApi & GitApi = {
+const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionApi & SessionRunApi & TerminalApi & PreferencesApi & QuickCommandsApi & GenuiParamsApi & PiSettingsApi & TrustApi & ExtensionUiApi & AuthApi & ModelsConfigApi & UpdatesApi & GitApi & LanRemoteApi = {
   ...desktopApi,
   ...projectsApi,
   ...sessionsApi,
@@ -51,7 +54,8 @@ const desktop: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionAp
   ...providersApi,
   ...updatesApi,
   ...trustApi,
-  ...genuiApi
+  ...genuiApi,
+  ...lanRemoteApi
 }
 
 contextBridge.exposeInMainWorld('desktop', desktop)

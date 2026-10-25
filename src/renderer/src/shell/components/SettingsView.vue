@@ -16,6 +16,7 @@ import ResourceView from '../../resources/components/ResourceView.vue'
 import GenuiSettingsSection from '../../genui/components/GenuiSettingsSection.vue'
 import SettingsNavIcon from './SettingsNavIcon.vue'
 import VersionUpdateSection from '../../updates/components/VersionUpdateSection.vue'
+import LanRemoteSettingsSection from '../../lan-remote/components/LanRemoteSettingsSection.vue'
 
 const preferencesStore = usePreferencesStore()
 const settingsStore = useSettingsStore()
@@ -127,6 +128,7 @@ const markdownViewOptions = [
         <QuickSendSection v-else-if="activeSection === 'quick-send'" />
         <QuickCommandsSection v-else-if="activeSection === 'quick-commands'" />
         <TerminalSettingsSection v-else-if="activeSection === 'terminal'" />
+        <LanRemoteSettingsSection v-else-if="activeSection === 'lan-remote'" />
         <ModelSettingsView v-else-if="activeSection === 'model'" />
         <ResourceView v-else-if="activeSection === 'resources'" />
         <GenuiSettingsSection v-else-if="activeSection === 'features'" />

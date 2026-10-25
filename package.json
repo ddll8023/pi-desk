@@ -8,9 +8,9 @@
   "main": "out/main/index.cjs",
   "packageManager": "npm@11.16.0",
   "scripts": {
-    "dev": "npm run fix:pty-permissions && npm run auth-helper:build && npm run sdk-host:build && npm run terminal-daemon:build && electron-vite dev",
-    "build": "npm run auth-helper:build && npm run sdk-host:build && npm run terminal-daemon:build && electron-vite build",
-    "start": "npm run fix:pty-permissions && npm run terminal-daemon:build && electron-vite preview",
+    "dev": "npm run fix:pty-permissions && npm run auth-helper:build && npm run sdk-host:build && npm run terminal-daemon:build && npm run lan-mobile:build && electron-vite dev",
+    "build": "npm run auth-helper:build && npm run sdk-host:build && npm run terminal-daemon:build && npm run lan-mobile:build && electron-vite build",
+    "start": "npm run fix:pty-permissions && npm run terminal-daemon:build && npm run lan-mobile:build && electron-vite preview",
     "fix:pty-permissions": "node scripts/fix-node-pty-permissions.mjs",
     "auth-helper:build": "vite build --config vite.auth-helper.config.ts",
     "sdk-host:build": "vite build --config vite.sdk-host.config.ts",
@@ -21,7 +21,8 @@
     "package:portable": "npm run build && node scripts/package-portable.mjs",
     "package:win": "npm run build && node scripts/package-portable.mjs --win",
     "package:mac": "npm run build && node scripts/package-portable.mjs --mac",
-    "terminal-daemon:build": "vite build --config vite.terminal-daemon.config.ts"
+    "terminal-daemon:build": "vite build --config vite.terminal-daemon.config.ts",
+    "lan-mobile:build": "vite build --config vite.lan-mobile.config.ts"
   },
   "dependencies": {
     "@codemirror/commands": "6.11.1",
@@ -31,6 +32,7 @@
     "@codemirror/view": "6.43.14",
     "@earendil-works/pi-coding-agent": "1.2.0",
     "@lezer/highlight": "1.2.5",
+    "@peculiar/x509": "2.2.0",
     "@sanity/diff-match-patch": "3.2.1",
     "@tiptap/core": "3.31.3",
     "@tiptap/extension-code": "3.31.3",
@@ -69,6 +71,8 @@
     "motion-v": "2.6.0",
     "node-pty": "1.1.0",
     "pinia": "4.0.3",
+    "qrcode-generator": "2.0.4",
+    "reflect-metadata": "0.2.2",
     "vue": "3.5.43"
   },
   "overrides": {

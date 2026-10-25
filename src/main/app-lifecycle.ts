@@ -1,5 +1,5 @@
 /**
- * 应用级生命周期：便携数据目录、登录 shell PATH、单实例锁、窗口全部关闭与退出链。
+ * 应用级生命周期：便携数据目录、登录 shell PATH、单实例锁、窗口全部关闭与退出链（先收敛局域网入口）。
  *
  * 退出链在预算内走完即退出，超时强制退出，不把应用挂死；终端的 PTY 由独立守护进程持有，
  * 这里只断开连接，下次启动按同一端点接回。
@@ -10,6 +10,7 @@ import { dirname, join, resolve } from 'node:path'
 import { applyLoginShellPath } from './shared/shell-path'
 import {
   authManager,
+  lanRemote,
   packageUpdater,
   piAgentUpdater,
   preferencesManager,
@@ -24,6 +25,7 @@ import {
   broadcastAgentInstallProgress,
   broadcastAuthFlow,
   broadcastExtensionUi,
+  broadcastLanRemoteState,
   broadcastPackageUpdateOutcome,
   broadcastPackageUpdateProgress,
   broadcastRuntimeProjection,
@@ -51,6 +53,7 @@ import {
   registerPiSettingsHandlers,
 } from './providers/ipc'
 import { registerUpdatesHandlers } from './updates/ipc'
+import { registerLanRemoteHandlers } from './lan-remote/ipc'
 
 /** 应用退出时等待关闭链的总预算；覆盖各平台兜底阶段后强制退出。 */
 const QUIT_DEADLINE_MS = 10_000
@@ -145,6 +148,10 @@ export function registerLifecycle(): void {
     if (quittingAfterShutdown) return
     event.preventDefault()
     quittingAfterShutdown = true
+    // 先撤销网络入口：停止接收远程操作并断开手机，再并行关闭会话宿主。
+    const lanShutdown = lanRemote.shutdown().catch(error => {
+      console.error('[lan-remote] 退出清理失败：', error)
+    })
     // 退出意图立即阻止恢复，不等其他关闭链结束后才停止重建。
     sdkRuntime.beginShutdown()
     // 全部宿主关闭与其他关闭链并行开始，不因其它链的失败而遗留仍受管的 SDK 进程。
@@ -161,7 +168,7 @@ export function registerLifecycle(): void {
       await Promise.race([windowState.flush(), wait(WINDOW_STATE_FLUSH_MS)])
       // 认证辅助进程没有自己的业务状态，只按关闭链终止。
       await Promise.race([authManager.stop(), wait(QUIT_DEADLINE_MS)])
-      await Promise.race([sdkShutdown, wait(QUIT_DEADLINE_MS)])
+      await Promise.race([Promise.all([sdkShutdown, lanShutdown]), wait(QUIT_DEADLINE_MS)])
       app.exit(0)
     })()
   })
@@ -191,12 +198,14 @@ export async function startApplication(): Promise<void> {
   registerModelsConfigHandlers(pageUrl)
   registerAuthHandlers(pageUrl)
   registerUpdatesHandlers(pageUrl)
+  registerLanRemoteHandlers(pageUrl)
 
   // 事件订阅：全部只投递给当前唯一可信窗口。
   sdkRuntime.onStatusChanged(broadcastRuntimeStatus)
   sdkRuntime.onProjectionBatch(broadcastRuntimeProjection)
   sdkRuntime.onExtensionUi(broadcastExtensionUi)
   sdkRuntime.onRunsChanged(broadcastSessionRuns)
+  lanRemote.onChanged(broadcastLanRemoteState)
   authManager.onFlowChanged(broadcastAuthFlow)
   updateChecker.onChanged(broadcastUpdates)
   packageUpdater.onProgress(broadcastPackageUpdateProgress)

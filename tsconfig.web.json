@@ -9,7 +9,9 @@
   "include": [
     "src/renderer/src/**/*.ts",
     "src/renderer/src/**/*.vue",
-    "src/shared/**/*.ts"
+    "src/shared/**/*.ts",
+    "src/lan-mobile/src/**/*.ts",
+    "src/lan-mobile/src/**/*.vue"
   ],
   "exclude": [
     "src/renderer/src/**/*.test.ts"

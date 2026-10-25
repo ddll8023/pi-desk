@@ -1,5 +1,6 @@
 /**
  * 会话列表、打开、重新加载、删除与历史读取编排的所有者：选择、新建、恢复、重载与删除会话。
+ * 后台打开已有会话不依赖桌面当前项目，也不修改桌面前台；登记、归属与信任仍由同一条授权链复核。
  * 历史读取按会话分流：已由运行实例接管时读权威分支，未接管时读会话日志文件，两条路径返回同一套条目身份。
  *
  * 列表来自 Pi 管理的会话文件（session-store），按调用方显式给出的项目读取并只读取窗口内的文件：
@@ -28,6 +29,7 @@ import type {
   SessionHistoryRequest,
   SessionHistoryResult
 } from '../../shared/session-api'
+import { isSessionOpenRequest } from '../../shared/session-api'
 import type { RuntimeStatus } from '../../shared/runtime-api'
 import type { ProjectManager } from '../projects/project-manager'
 import { SdkHostError } from './sdk-host-manager'
@@ -199,28 +201,53 @@ export class SessionManager {
     }
   }
 
+  /** 后台只接入已有会话，不允许新建、中断或修改项目信任；网络调用方仍须独立完成设备与项目授权。 */
+  async openBackground(projectPath: string, sessionId: string): Promise<SessionOpenResult> {
+    const request: SessionOpenRequest = { projectPath, sessionId, allowInterrupt: false }
+    if (typeof sessionId !== 'string' || !isSessionOpenRequest(request)) {
+      return { ok: false, error: { code: 'INVALID_REQUEST', message: '后台打开必须给出有效的项目路径与已有会话身份。' } }
+    }
+    try {
+      return { ok: true, data: await this.applyOpen(request, 'background') }
+    } catch (error) {
+      return this.failure(error, {
+        code: 'INTERNAL_ERROR',
+        message: '后台打开会话时发生未预期的内部错误。'
+      })
+    }
+  }
+
   /**
-   * 新建与打开的公共门禁：请求的会话与前台实例已就绪会话一致时幂等返回，其余交给会话后端。
-   * 多运行实例下打开其他会话不会中断任何正在运行的会话，因此这里不再要求中断确认；
-   * `allowInterrupt` 仍在契约中保留，供后端在必须改变现有绑定且用户已确认时使用。
+   * 新建与打开的公共门禁：登记与会话归属共用，只有桌面打开要求当前项目并参与前台选择。
+   * 后台打开先刷新项目资源与信任，缺少决定时拒绝，不代替用户授予信任；实际绑定仍经 SDK 授权链复核。
+   * 多运行实例下打开其他会话不会中断正在运行的会话；后台入口固定不允许中断。
    */
-  private async applyOpen(request: SessionOpenRequest): Promise<SessionOpenData> {
-    // 选择序号在主进程分配：后到的打开不论谁先完成，前台都归于最后一次选择。
-    const selection = this.options.sdk.beginSelection()
+  private async applyOpen(
+    request: SessionOpenRequest, placement: 'foreground' | 'background' = 'foreground'
+  ): Promise<SessionOpenData> {
+    // 后台请求不分配选择序号，避免打断尚未完成的桌面前台选择。
+    const selection = placement === 'foreground' ? this.options.sdk.beginSelection() : null
     const projectPath = await normalizeProjectPath(request.projectPath)
     if (!await this.options.projects.hasProject(projectPath)) {
       throw new SessionFailure('INVALID_PROJECT_PATH', '只能打开已添加项目的会话。')
     }
-    if (this.options.projects.currentProjectPath() !== projectPath) {
-      throw new SessionFailure('RUNTIME_COMMAND_REJECTED', '项目已切换，未打开旧项目的会话。')
+    if (selection !== null) {
+      if (this.options.projects.currentProjectPath() !== projectPath) {
+        throw new SessionFailure('RUNTIME_COMMAND_REJECTED', '项目已切换，未打开旧项目的会话。')
+      }
+      const status = this.backendStatus()
+      const bound = this.boundSessionOfForeground()
+      if (request.sessionId !== null && status.state === 'ready' && status.runId !== null
+        && bound?.projectPath === projectPath && status.info?.sessionId === request.sessionId) {
+        return this.openData(projectPath, status.runId, request.sessionId)
+      }
+    } else {
+      const trust = await this.options.projectsTrust.refreshStatusOf(projectPath)
+      if (trust.resources.length > 0 && trust.decision === null) {
+        throw new SessionFailure('TRUST_REQUIRED', '该项目包含需要在桌面端作出信任决定的资源。')
+      }
     }
-    const status = this.backendStatus()
-    const bound = this.boundSessionOfForeground()
-    if (request.sessionId !== null && status.state === 'ready' && status.runId !== null
-      && bound?.projectPath === projectPath && status.info?.sessionId === request.sessionId) {
-      return this.openData(projectPath, status.runId, request.sessionId)
-    }
-    // 已由某个运行实例承载的会话交给后端转前台复用：此时会话文件可能尚未落盘，不能当作列表过期。
+    // 已占用的会话可复用实际实例，即使会话文件尚未落盘也不视为列表过期。
     if (request.sessionId !== null && !this.isSessionOccupied(projectPath, request.sessionId)
       && await resolveSessionFile(projectPath, request.sessionId) === null) {
       throw new SessionFailure('SESSION_NOT_FOUND', '当前项目下找不到该会话；列表可能已过期。')
@@ -239,7 +266,7 @@ export class SessionManager {
    * 这里只复核实际打开的会话；成功后的状态经事件收敛。
    */
   private async openWithSdk(
-    projectPath: string, request: SessionOpenRequest, selection: number
+    projectPath: string, request: SessionOpenRequest, selection: number | null
   ): Promise<SessionOpenData> {
     const switched = await this.options.sdk.switchSession(
       request.sessionId === null ? 'new' : 'open',
@@ -256,11 +283,14 @@ export class SessionManager {
       // 目标一致性由宿主预检保证；这里只复核实际打开的会话，不删除任何文件。
       throw new SessionFailure('SESSION_NOT_FOUND', '实际打开的会话与请求不一致；未改动任何已有文件。')
     }
-    return this.openData(projectPath, switched.runId, openedSessionId)
+    // 后台结果不走桌面的前台归属收敛，不能因桌面正在显示其他项目而触发 focusProject。
+    return selection === null
+      ? { projectPath, runId: switched.runId, openedSessionId }
+      : this.openData(projectPath, switched.runId, openedSessionId)
   }
 
   /**
-   * 打开结果的固定内容：实际归属项目、运行实例与实际会话身份。
+   * 桌面打开结果与前台归属收敛：实际归属项目、运行实例与实际会话身份。
    * 不再附带回传会话列表：列表由页面按自己的窗口节奏单独读取，打开链不等目录扫描。
    * 列表读取可能晚于前台切换，因此实际打开身份必须在读取前固定。
    */

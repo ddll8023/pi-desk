@@ -17,6 +17,7 @@
     "vite.auth-helper.config.ts",
     "vite.sdk-host.config.ts",
     "vite.terminal-daemon.config.ts",
+    "vite.lan-mobile.config.ts",
     "src/main/**/*.ts",
     "src/preload/**/*.ts",
     "src/shared/**/*.ts",

@@ -9,12 +9,12 @@
 | `src/main/index.ts` | 只准备入口步骤：准备协议与应用目录、取单实例锁、注册生命周期，随后把启动编排交给 `app-lifecycle.ts`。不含业务逻辑 |
 | `src/main/app-lifecycle.ts` | 便携数据目录、登录 shell PATH、单实例锁、窗口就绪后按固定顺序调用各能力 `ipc.ts` 注册器、窗口全部关闭与退出链、启动时的扩展自动更新 |
 | `src/main/window.ts` | 唯一窗口的创建、主题与标题栏配色、导航与权限限制、单实例聚焦 |
-| `src/main/window-channel.ts` | 窗口引用、向页面投递事件与全部业务广播、系统目录选择；不持有业务实例，终端状态来源由组合根注册 |
+| `src/main/window-channel.ts` | 窗口引用、向页面投递事件与全部业务广播、系统目录与证书导出位置选择；不持有业务实例，终端状态来源由组合根注册 |
 | `src/main/asset-protocol.ts` | 应用协议注册、页面地址解析、目录越界判定与生产 CSP |
-| `src/main/services.ts` | 主进程业务实例的唯一装配处（配置、项目、信任、会话、终端、供应商、资源、更新、生成式界面） |
+| `src/main/services.ts` | 主进程业务实例的唯一装配处（配置、项目、信任、会话、终端、供应商、资源、更新、生成式界面、局域网访问） |
 | `src/main/ipc/dispatch.ts` | IPC 注册包装、调用者校验、有界标识与 MCP 服务器名校验 |
 | `src/preload/index.ts` | 只合并各域 Api 并暴露 `window.desktop`，不含 channel 调用与校验 |
-| `src/preload/*.ts`（域文件） | 按业务域各一个文件（`desktop`、`projects`、`sessions`、`runtime`、`terminal`、`git`、`preferences`、`providers`、`updates`、`trust`、`genui`），各自承载固定 channel 调用、声明字段载荷重建、响应与事件校验、订阅释放 |
+| `src/preload/*.ts`（域文件） | 按业务域各一个文件（`desktop`、`projects`、`sessions`、`runtime`、`terminal`、`git`、`preferences`、`providers`、`updates`、`trust`、`genui`、`lan-remote`），各自承载固定 channel 调用、声明字段载荷重建、响应与事件校验、订阅释放 |
 | `src/renderer/src/App.vue` | 页面组合根：只装配外壳骨架、弹层宿主与启动编排 |
 | `src/renderer/src/shell/components/AppShell.vue` | 布局骨架：顶部栏、侧栏与窄窗遮罩、工作区槽、右侧面板；持有窄窗与侧栏开合状态 |
 | `src/renderer/src/shell/components/WorkspaceView.vue` | 工作区：标签条、四条操作失败提示、对话／终端／文件面板层与空态 |
@@ -39,6 +39,7 @@
 | `src/shared/runtime/models.ts` | 模型标识、摘要与 agent 能力清单 |
 | `src/shared/runtime/resources.ts` | 资源预读、诊断与 MCP 状态、探测、配置、命令 |
 | `src/shared/runtime/api.ts` | `RuntimeApi` 桥接接口：聚合上述四组方法，跨域类型在此引用 |
+| `src/shared/runtime/projection-reducer.ts` | 桌面与手机共用的纯投影增量合并；长度或消息身份不符时返回 null，由调用方转快照 |
 
 请求目标的运行实例与绑定代际由主进程登记，不等同于标签键或可变的当前项目；按会话读取历史不带这两项，由主进程判定该会话走绑定路径还是日志路径。后台投影留底是页面展示缓存，SDK 会话和历史文件仍是另一层生命周期。`stores/runtime.ts` 只是装配门面：会话运行、历史缓存、模型能力与模型展示偏好分别落在 `runtime-core`、`runtime-history`、`runtime-models`、`runtime-model-display`，门面保留原有公开成员与历史类型再导出，消费者不需要改调用点。
 
@@ -54,6 +55,7 @@
 | 供应商与认证 | 安装级设备标识、隐藏模型列表 |
 | 终端与快捷命令 | 全局与项目范围命令列表 |
 | 更新与生成式界面 | 扩展自动更新、生成式 UI 开关 |
+| 手机访问 | 局域网设备凭证摘要与项目授权 |
 
 文件位于 `userData/desktop-config.json`。全部读写串行进行，保存前比对已加载的磁盘文件标识；读失败可进入只读降级，结构损坏走备份重建。其他服务通过同一个实例访问，不另行直接覆盖此文件。应用单实例锁由 `src/main/app-lifecycle.ts` 的 `acquireSingleInstance` 建立。
 
@@ -103,7 +105,7 @@
 | `src/renderer/src/ui/ConfirmDialog.vue` | 通用确认弹层；应用外壳、聊天列表、文件编辑、Git、供应商、资源、终端设置与快捷命令消费 |
 | `src/renderer/src/ui/anchored-popup.ts` | 浮层定位与生命周期；标签、菜单、文件编辑、Git、侧栏、顶部栏对话跳转与基础选择器消费 |
 | `src/renderer/src/ui/clipboard.ts` | 复制文本与错误结果；聊天、文件、供应商、资源、终端、更新与生成式界面消费 |
-| `src/renderer/src/ui/MarkdownContent.vue` | 安全 Markdown 展示、数学与代码／表格交互；聊天正文的 Thinking、回答与技能正文消费 |
+| `src/renderer/src/ui/MarkdownContent.vue` | 安全 Markdown 展示、数学与代码／表格交互；聊天正文的 Thinking、回答与技能正文以及手机网页消息消费 |
 | `src/renderer/src/ui/markdown.ts` | 聊天 Markdown 解析与清洗，供 Markdown 展示组件使用 |
 | `src/renderer/src/ui/markdown-shared.ts` | 代码、表格与 HTML 转义的共同渲染；聊天及文件 Markdown 消费 |
 | `src/renderer/src/ui/markdown-math.ts` | 数学解析与 KaTeX 渲染；聊天、文件预览及富文本公式消费 |
@@ -117,6 +119,7 @@
 
 页面样式入口为 `src/renderer/src/assets/main.css`，负责引入 Tailwind、KaTeX、本地基础样式及能力样式。主题令牌与基础规则归 `src/renderer/src/assets/styles/base.css`；能力规则按样式归属分别位于 `src/renderer/src/assets/styles/editor.css`、`sessions.css`、`git.css`、`shell.css`、`projects.css`、`workspace.css`、`preferences.css` 与 `ui.css`。这些样式均由页面入口统一加载，不由各能力组件重复导入。
 
+手机网页有独立样式入口 `src/lan-mobile/src/mobile.css`：复用基础令牌与共享组件样式后追加窄屏规则，不重复定义主题。
 `src/renderer/src/assets/genui.css` 仍由生成式界面模块独立维护。全局主题与主进程窗口背景／覆盖层颜色存在同步关系，改动不只影响单个组件。
 
 ## F-build：构建与发行上下文
@@ -127,11 +130,12 @@
 | `package-lock.json` | npm 解析结果；与依赖声明共同确定安装内容 |
 | `tsconfig.json` | Node 与页面共享的严格类型选项 |
 | `tsconfig.node.json` | 主进程、preload、宿主、终端守护进程、跨进程设施、一次性入口、共享契约与现有 TS 测试的检查范围 |
-| `tsconfig.web.json` | Vue 页面与共享契约的浏览器检查范围 |
+| `tsconfig.web.json` | Vue 页面、共享契约与手机网页的浏览器检查范围 |
 | `electron.vite.config.ts` | `src/main/index.ts` → `out/main/index.cjs`；`src/preload/index.ts` → `out/preload/index.cjs`；`src/renderer/index.html` → 页面产物 |
 | `vite.auth-helper.config.ts` | `src/auth-helper/index.ts` → `out/auth-helper/index.mjs` |
 | `vite.sdk-host.config.ts` | SDK 宿主、CLI、版本检查、扩展更新、运行时安装五入口 → `out/sdk-host/` 下各自 ESM 产物 |
 | `vite.terminal-daemon.config.ts` | `src/terminal-daemon/index.ts` → `out/terminal-daemon/index.cjs`；原生 PTY 与终端依赖保留外部引用 |
+| `vite.lan-mobile.config.ts` | `src/lan-mobile/index.html` → `out/lan-mobile/`；手机网页产物，供局域网入口读取 |
 | `electron-builder.yml` | 随包文件、图标、平台发行目标与输出目录；生产依赖随应用分发 |
 | `scripts/start-dev.cmd` | 对应平台的开发启动包装 |
 | `scripts/start-dev.sh` | 对应平台的开发启动包装 |

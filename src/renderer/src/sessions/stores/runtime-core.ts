@@ -1,20 +1,19 @@
 /**
  * 会话运行与投影状态：前台实例身份、Prompt/回退/中止/压缩等动作状态、投影分片与后台留底。
  * 同时持有日志展示：会话未绑定时先展示按会话读到的历史，绑定后等权威基准落位再交还展示位。
- * 历史读取按会话寻址，读取目标由本切片给出；历史缓存是纯函数模块、由本切片组合；
- * 模型能力、模型切换与展示偏好由 `runtime-models` 与 `runtime-model-display` 持有，
- * 本切片只经 `bindStatusEffects` 在状态收敛时通知它们。
+ * 历史读取按会话寻址，读取目标由本切片给出；历史缓存与投影增量合并都是纯函数模块，由本切片组合，
+ * 其中增量合并（`shared/runtime/projection-reducer.ts`）与手机网页共用；模型能力、模型切换与展示偏好
+ * 由 `runtime-models` 与 `runtime-model-display` 持有，本切片只经 `bindStatusEffects` 在状态收敛时通知它们。
  */
 import { computed, ref, shallowRef } from 'vue'
+import { applyProjectionUpdates as applyUpdates } from '../../../../shared/runtime/projection-reducer'
 import type { ComputedRef, Ref } from 'vue'
 import type {
   HistoryChunk,
   HistoryData,
   HistoryQuery,
   ProjectionBatch,
-  ProjectionBlock,
   ProjectionMessage,
-  ProjectionUpdate,
   PromptDisposition,
   PromptImageInput,
   RuntimeError,
@@ -116,77 +115,6 @@ export interface StatusTransitionContext {
   previousStreaming: boolean
   /** 本轮状态是否不带任何会话身份；仅此时模型侧清空能力清单。 */
   sessionAbsent: boolean
-}
-
-/** 块级幂等替换；新块按 contentIndex 顺序插入。 */
-function replaceBlock(blocks: readonly ProjectionBlock[], block: ProjectionBlock): ProjectionBlock[] {
-  const index = blocks.findIndex((candidate) => candidate.contentIndex === block.contentIndex)
-  if (index < 0) {
-    return [...blocks, block].sort((left, right) => left.contentIndex - right.contentIndex)
-  }
-  const next = [...blocks]
-  next[index] = block
-  return next
-}
-
-/** 追加要求长度不变式成立；不符时返回 null，由调用方转快照重同步，不猜测补齐。 */
-function appendBlock(
-  blocks: readonly ProjectionBlock[],
-  contentIndex: number,
-  text: string,
-  length: number
-): ProjectionBlock[] | null {
-  const index = blocks.findIndex((candidate) => candidate.contentIndex === contentIndex)
-  const target = index < 0 ? undefined : blocks[index]
-  if (target === undefined) return null
-
-  const nextText = target.text + text
-  if (nextText.length !== length) return null
-  const next = [...blocks]
-  next[index] = { ...target, text: nextText }
-  return next
-}
-
-/** 应用一批更新；遇到未知消息或长度不符时返回 null，表示必须整表重同步。 */
-function applyUpdates(
-  messages: readonly ProjectionMessage[],
-  tools: readonly ToolExecution[],
-  updates: readonly ProjectionUpdate[]
-): { messages: ProjectionMessage[]; tools: ToolExecution[] } | null {
-  let nextMessages = [...messages]
-  let nextTools = [...tools]
-  for (const update of updates) {
-    if (update.kind === 'activity') continue
-    if (update.kind === 'tool') {
-      const incoming = update.tool
-      // 工具条目本身是权威内容：未知 toolCallId 也直接收录，不做猜测。
-      const known = nextTools.some((tool) => tool.toolCallId === incoming.toolCallId)
-      nextTools = known
-        ? nextTools.map((tool) => (tool.toolCallId === incoming.toolCallId ? incoming : tool))
-        : [...nextTools, incoming]
-      continue
-    }
-    if (update.kind === 'message') {
-      const incoming = update.message
-      const messageIndex = nextMessages.findIndex((message) => message.id === incoming.id)
-      nextMessages = messageIndex < 0
-        ? [...nextMessages, incoming]
-        : nextMessages.map((message) => (message.id === incoming.id ? incoming : message))
-      continue
-    }
-
-    const messageId = update.messageId
-    const index = nextMessages.findIndex((message) => message.id === messageId)
-    const target = index < 0 ? undefined : nextMessages[index]
-    if (target === undefined) return null
-
-    const blocks = update.kind === 'block'
-      ? replaceBlock(target.blocks, update.block)
-      : appendBlock(target.blocks, update.contentIndex, update.text, update.length)
-    if (blocks === null) return null
-    nextMessages[index] = { ...target, blocks }
-  }
-  return { messages: nextMessages, tools: nextTools }
 }
 
 /** 页面每次 `dispose` 都递增；在途读取据此丢弃迟到结果。 */
