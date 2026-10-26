@@ -10,8 +10,8 @@
   更多操作与详情通过悬停菜单或右键菜单完成。展开折叠用 grid-template-rows 过渡，不测高、无脚本动画。
 
   单个项目的会话列表有高度上限（见 --sidebar-session-list-max-height）：超出部分在该项目内滚动，
-  一个项目不会占满整个侧栏；上限带来当前会话可能落在可视区外，因此展开、切项目、切会话后
-  会把当前会话滚进视野。
+  一个项目不会占满整个侧栏；每个项目默认最多展示 3 条会话，超出部分提供「展开更多」与「收起会话」；
+  当前会话落在第 3 条之后时自动展开该项目会话，并在展开、切项目、切会话后把当前会话滚进视野。
 
   会话列表是“最近 N 条”的分页窗口（首屏一页，滚动到底或点“加载更多”再取一页，上限见 MAX_SESSION_WINDOW）：
   一个项目的会话再多也不会一次性读入与渲染；分页状态来自 store，组件只负责触发加载与展示入口。
@@ -114,10 +114,98 @@ const nodes = computed<readonly SidebarProjectNode[]>(() => buildSidebarTree({
   now: now.value
 }))
 
+/** 每个项目默认展示的会话数量上限；超出时默认折叠并提供展开入口。 */
+const DEFAULT_VISIBLE_SESSIONS = 3
+
+/** 展开会话列表的项目 ID 集合；不在集合内的项目默认只展示前 DEFAULT_VISIBLE_SESSIONS 条。 */
+const expandedSessionProjects = ref<Set<string>>(new Set())
+
+function isSessionListExpanded(node: SidebarProjectNode): boolean {
+  return expandedSessionProjects.value.has(node.project.id)
+}
+
+function expandSessions(projectId: string): void {
+  const next = new Set(expandedSessionProjects.value)
+  next.add(projectId)
+  expandedSessionProjects.value = next
+}
+
+function collapseSessions(projectId: string): void {
+  const next = new Set(expandedSessionProjects.value)
+  next.delete(projectId)
+  expandedSessionProjects.value = next
+  const scroller = sessionScrollers.get(projectId)
+  if (scroller !== undefined) {
+    scroller.scrollTop = 0
+  }
+}
+
+/** 某个项目当前可见的会话行：折叠时最多只取前 DEFAULT_VISIBLE_SESSIONS 条。 */
+function visibleSessionsOf(node: SidebarProjectNode): {
+  readonly sessions: readonly SidebarSessionRow[]
+  readonly unboundRuns: readonly SidebarUnboundRow[]
+} {
+  const total = node.sessions.length + node.unboundRuns.length
+  if (isSessionListExpanded(node) || total <= DEFAULT_VISIBLE_SESSIONS) {
+    return {
+      sessions: node.sessions,
+      unboundRuns: node.unboundRuns
+    }
+  }
+  const sessions = node.sessions.slice(0, DEFAULT_VISIBLE_SESSIONS)
+  const remainingSlots = Math.max(0, DEFAULT_VISIBLE_SESSIONS - sessions.length)
+  const unboundRuns = remainingSlots > 0 ? node.unboundRuns.slice(0, remainingSlots) : []
+  return { sessions, unboundRuns }
+}
+
+function canExpandSessions(node: SidebarProjectNode): boolean {
+  const total = node.sessions.length + node.unboundRuns.length
+  return total > DEFAULT_VISIBLE_SESSIONS && !isSessionListExpanded(node)
+}
+
+function canCollapseSessions(node: SidebarProjectNode): boolean {
+  const total = node.sessions.length + node.unboundRuns.length
+  return total > DEFAULT_VISIBLE_SESSIONS && isSessionListExpanded(node)
+}
+
+function hiddenSessionCount(node: SidebarProjectNode): number {
+  const total = node.sessions.length + node.unboundRuns.length
+  return Math.max(0, total - DEFAULT_VISIBLE_SESSIONS)
+}
+
+/** 若当前活动会话在某个项目中排在第 3 条之后，确保自动展开该项目会话以保持选中可见。 */
+function ensureActiveSessionVisible(): void {
+  const projectId = currentProjectId.value
+  const sessionId = currentSessionId.value
+  if (projectId === null || sessionId === null) return
+  const currentNode = nodes.value.find(n => n.project.id === projectId)
+  if (!currentNode) return
+  const activeIndex = currentNode.sessions.findIndex(s => s.session.sessionId === sessionId)
+  if (activeIndex >= DEFAULT_VISIBLE_SESSIONS && !expandedSessionProjects.value.has(projectId)) {
+    expandSessions(projectId)
+  }
+}
+
+watch(
+  [currentSessionId, currentProjectId, () => sessionStore.viewOf(projectStore.currentProject?.path ?? '').phase],
+  () => {
+    ensureActiveSessionVisible()
+  },
+  { immediate: true }
+)
+
 /** 展开的项目懒读取会话列表；已读过或正在读取的项目会被 store 直接跳过。 */
 watch(nodes, (list) => {
   for (const node of list) {
     if (node.expanded) void sessionStore.ensureLoaded(node.project.path)
+  }
+  const projectIds = new Set(list.map(node => node.project.id))
+  for (const id of expandedSessionProjects.value) {
+    if (!projectIds.has(id)) {
+      const next = new Set(expandedSessionProjects.value)
+      next.delete(id)
+      expandedSessionProjects.value = next
+    }
   }
 }, { immediate: true })
 
@@ -163,8 +251,9 @@ async function loadMoreUntilFilled(projectPath: string, projectId: string): Prom
   }
 }
 
-/** 会话列表滚到接近底部时自动取下一页；没有更多时 `loadMore` 自己会跳过。 */
+/** 会话列表滚到接近底部时自动取下一页；折叠只显示 3 条时不触发，没有更多时 `loadMore` 自己会跳过。 */
 function onSessionScroll(node: SidebarProjectNode): void {
+  if (!isSessionListExpanded(node)) return
   if (!atSessionListBottom(node.project.id)) return
   void loadMoreUntilFilled(node.project.path, node.project.id)
 }
@@ -179,7 +268,7 @@ function requestMoreSessions(node: SidebarProjectNode): void {
  * 用户在侧栏看不到自己在哪一条。展开、切项目、切会话后把它滚进视野，位置已可见时不动。
  */
 watch(
-  [currentSessionId, currentProjectId, () => preferencesStore.expandedProjects],
+  [currentSessionId, currentProjectId, () => preferencesStore.expandedProjects, () => expandedSessionProjects.value],
   async () => {
     await nextTick()
     const projectId = currentProjectId.value
@@ -558,7 +647,7 @@ onBeforeUnmount(() => {
                     还没有保存的会话，开始对话后会显示在这里。
                   </p>
                   <ul v-if="hasSessionRows(node)" class="sidebar-session-list sidebar-session-scroll scroll-area" :ref="element => registerSessionScroller(node.project.id, element)" @scroll="onSessionScroll(node)">
-                    <li v-for="row in node.sessions" :key="row.session.sessionId">
+                    <li v-for="row in visibleSessionsOf(node).sessions" :key="row.session.sessionId">
                       <SessionRow
                         :title="row.title" :meta="row.meta" :badge="row.badge" :chip="row.chip"
                         :forked-from="row.forkedFrom" :current="isCurrentSession(node, row.session)"
@@ -572,7 +661,7 @@ onBeforeUnmount(() => {
                       />
                     </li>
                     <!-- 尚未绑定会话的运行实例：没有会话身份也没有文件条目，单独列一行才能被看到和切回。 -->
-                    <li v-for="run in node.unboundRuns" :key="`unbound-${run.runId}`">
+                    <li v-for="run in visibleSessionsOf(node).unboundRuns" :key="`unbound-${run.runId}`">
                       <SessionRow
                         :title="run.title" :meta="run.meta" :badge="run.badge" :chip="run.chip"
                         :forked-from="null" :current="false"
@@ -586,19 +675,37 @@ onBeforeUnmount(() => {
                   <p v-if="node.skipped > 0" role="status" class="sidebar-list-notice is-nested">
                     已跳过 {{ node.skipped }} 个无法读取或不属于该项目的文件。
                   </p>
-                  <!-- 列表是“最近 N 条”的窗口：还有更早的会话时给一个常驻入口，滚动到底也会自动加载。 -->
+                  <!-- 默认折叠态的展开入口：超过 3 条且未展开时显示 -->
                   <AppButton
-                    v-if="node.remaining > 0 && !node.windowFull"
+                    v-if="canExpandSessions(node)"
                     variant="unstyled" class="sidebar-load-more"
-                    :disabled="node.loadingMore"
-                    @click="requestMoreSessions(node)"
+                    @click="expandSessions(node.project.id)"
                   >
-                    {{ node.loadingMore ? '正在加载…' : `还有 ${node.remaining} 条更早的会话` }}
+                    展开更多 (还有 {{ hiddenSessionCount(node) }} 条)
                   </AppButton>
-                  <!-- 到窗口上限后不再加载：把原因写清楚，不让入口默默失效。 -->
-                  <p v-else-if="node.remaining > 0" role="status" class="sidebar-list-notice is-nested">
-                    已加载最近 {{ MAX_SESSION_WINDOW }} 条会话，更早的会话未加载。
-                  </p>
+                  <!-- 本地会话已全部展示后（包括总数 ≤ 3 或已展开）：更早会话的分页加载入口 -->
+                  <template v-if="!canExpandSessions(node)">
+                    <AppButton
+                      v-if="node.remaining > 0 && !node.windowFull"
+                      variant="unstyled" class="sidebar-load-more"
+                      :disabled="node.loadingMore"
+                      @click="requestMoreSessions(node)"
+                    >
+                      {{ node.loadingMore ? '正在加载…' : `还有 ${node.remaining} 条更早的会话` }}
+                    </AppButton>
+                    <!-- 到窗口上限后不再加载：把原因写清楚，不让入口默默失效。 -->
+                    <p v-else-if="node.remaining > 0" role="status" class="sidebar-list-notice is-nested">
+                      已加载最近 {{ MAX_SESSION_WINDOW }} 条会话，更早的会话未加载。
+                    </p>
+                    <!-- 展开后如果会话数超过 3 条，提供收起入口 -->
+                    <AppButton
+                      v-if="canCollapseSessions(node)"
+                      variant="unstyled" class="sidebar-load-more"
+                      @click="collapseSessions(node.project.id)"
+                    >
+                      收起会话
+                    </AppButton>
+                  </template>
                 </div>
               </div>
             </li>
