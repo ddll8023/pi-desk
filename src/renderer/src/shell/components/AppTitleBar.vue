@@ -1,7 +1,7 @@
-<!-- 全宽顶部栏：自绘窗口标题栏，呈现侧栏开关、应用名、当前会话与项目、Runtime 状态与右侧面板开关；macOS 预留原生红绿灯位。模型选择已下沉到输入坞。
-     会话簇的第一行是对话导航入口：显示当前读到的那一轮与其位置（第几轮/共几轮），点开是一个模态弹窗，
+<!-- 全宽顶部栏：自绘窗口标题栏，呈现侧栏开关、应用名、居中上下文胶囊（项目与当前会话导航）、Runtime 状态与右侧面板开关；macOS 预留原生红绿灯位。模型选择已下沉到输入坞。
+     居中胶囊是对话导航入口：单行呈现项目名与当前会话，显示当前读到的那一轮与其位置（第几轮/共几轮），点开是一个模态弹窗，
      按新的在前列出本会话每一轮的用户输入（序号、摘要、发送时间、含几个生成式界面），选中后由消息区按既有定位规则滚动。
-     弹窗与其余应用级对话框同一套外壳（遮罩、居中面板、Escape 关闭），收起方式为点遮罩或 Esc，列表内部自己滚动。
+     弹窗为专用对话导航面板外壳（遮罩、居中轻量面板、Escape 关闭），收起方式为点遮罩或 Esc，列表内部自己滚动。
      设置页模式：两个面板都不渲染，两个开关随之隐藏，左侧是返回对话入口。 -->
 <script setup lang="ts">
 import { computed, nextTick, ref, useId, watch } from 'vue'
@@ -72,6 +72,7 @@ const runtimeStatus = computed(() => {
   if (runtime.phase === 'ready') return { label: 'Pi 就绪', kind: 'ready' }
   return { label: 'Pi 未启动', kind: 'idle' }
 })
+const projectName = computed(() => currentProject.value?.name ?? null)
 const projectPath = computed(() => currentProject.value?.path ?? '尚未选择项目')
 
 /**
@@ -109,8 +110,8 @@ const triggerTitle = computed(() => (
 ))
 
 /**
- * 跳转弹窗：外壳复用通用弹窗（.dialog-overlay / .dialog-panel），宽度取 max-w-xl，列表自己滚动，
- * 弹窗高度不随轮次增长。收起方式为点遮罩、Esc 或底部关闭按钮，收起后焦点还给触发键。
+ * 跳转弹窗：专用面板外壳（.chat-nav-overlay / .chat-nav-panel），宽度上限 32rem，列表内部滚动，
+ * 弹窗高度受视口约束。收起方式为点遮罩或 Esc，收起后焦点还给触发键。
  */
 const highlightedId = ref<string | null>(null)
 const navOpen = ref(false)
@@ -260,49 +261,54 @@ watch(navEntries, () => {
 
 <template>
   <header class="app-titlebar">
-    <!-- 红绿灯占位：只作布局留白，不接收指针事件，也不进入无障碍树。 -->
-    <span v-if="reservesTrafficLights" class="app-titlebar-traffic-pad" aria-hidden="true"></span>
+    <div class="app-titlebar-start">
+      <!-- 红绿灯占位：只作布局留白，不接收指针事件，也不进入无障碍树。 -->
+      <span v-if="reservesTrafficLights" class="app-titlebar-traffic-pad" aria-hidden="true"></span>
 
-    <!-- 设置页没有侧栏：这个位置是返回对话入口，设置页内不另设返回按钮。 -->
-    <AppButton
-      v-if="settingsMode"
-      variant="unstyled"
-      class="app-titlebar-back"
-      title="返回对话"
-      @click="emit('exitSettings')"
-    >
-      <svg class="panel-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-        <path d="m10 6-6 6 6 6M4 12h16" />
-      </svg>
-      返回对话
-    </AppButton>
+      <!-- 设置页没有侧栏：这个位置是返回对话入口，设置页内不另设返回按钮。 -->
+      <AppButton
+        v-if="settingsMode"
+        variant="unstyled"
+        class="app-titlebar-back"
+        title="返回对话"
+        @click="emit('exitSettings')"
+      >
+        <svg class="panel-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="m10 6-6 6 6 6M4 12h16" />
+        </svg>
+        返回对话
+      </AppButton>
 
-    <AppButton
-      v-else
-      variant="icon"
-      class="app-titlebar-toggle"
-      :aria-expanded="!sidebarCollapsed"
-      :aria-label="sidebarCollapsed ? '展开导航栏' : '收起导航栏'"
-      :title="sidebarCollapsed ? '展开导航栏' : '收起导航栏'"
-      :disabled="sidebarToggleDisabled"
-      @click="emit('toggleSidebar')"
-    >
-      <!-- 导航栏图标：外框加左列，展开时左列填实；与右侧面板开关同一套画法，左右对称。 -->
-      <svg class="panel-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-        <rect v-if="!sidebarCollapsed" x="4" y="6" width="4.4" height="12" rx="1" fill="currentColor" stroke="none" />
-        <rect x="3" y="4" width="18" height="16" rx="2.5" />
-        <path d="M9 4v16" />
-      </svg>
-    </AppButton>
+      <AppButton
+        v-else
+        variant="unstyled"
+        class="app-titlebar-toggle"
+        :aria-expanded="!sidebarCollapsed"
+        :aria-label="sidebarCollapsed ? '展开导航栏' : '收起导航栏'"
+        :title="sidebarCollapsed ? '展开导航栏' : '收起导航栏'"
+        :disabled="sidebarToggleDisabled"
+        @click="emit('toggleSidebar')"
+      >
+        <!-- 导航栏图标：外框加左列，展开时左列填实；与右侧面板开关同一套画法，左右对称。 -->
+        <svg class="panel-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <rect v-if="!sidebarCollapsed" x="4" y="6" width="4.4" height="12" rx="1" fill="currentColor" stroke="none" />
+          <rect x="3" y="4" width="18" height="16" rx="2.5" />
+          <path d="M9 4v16" />
+        </svg>
+      </AppButton>
 
-    <span class="app-titlebar-app-name">Pi Desktop</span>
+      <span class="app-titlebar-app-name">Pi Desktop</span>
+    </div>
 
-    <!-- 会话与项目簇只描述对话上下文：设置页不显示它，也不留一个会切换会话的入口。 -->
-    <div v-if="!settingsMode" class="app-titlebar-context">
+    <!-- 窗口拖动区：弹性平分控件之间的空白，控件群周围不再顺带可拖动，避免误拖与误双击最大化。 -->
+    <span class="app-titlebar-drag" aria-hidden="true"></span>
+
+    <!-- 居中上下文胶囊：只描述对话上下文；设置页不显示它，也不留一个会切换会话的入口。 -->
+    <div v-if="!settingsMode" class="app-titlebar-center">
       <button
         ref="trigger"
         type="button"
-        class="app-titlebar-session"
+        class="app-titlebar-pill"
         :title="triggerTitle"
         :disabled="currentProject === null"
         aria-haspopup="dialog"
@@ -312,6 +318,16 @@ watch(navEntries, () => {
         @keydown.down.prevent="openPopup"
         @keydown.esc.prevent="closePopup(true)"
       >
+        <span
+          v-if="projectName"
+          class="app-titlebar-pill-project"
+          :title="projectPath"
+        >{{ projectName }}</span>
+        <span
+          v-if="projectName"
+          class="app-titlebar-pill-sep"
+          aria-hidden="true"
+        >/</span>
         <span
           v-if="activeOrdinal !== null"
           class="app-titlebar-session-count"
@@ -326,105 +342,108 @@ watch(navEntries, () => {
           <path d="M2 3.5L5 6.5L8 3.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
         </svg>
       </button>
-      <span class="app-titlebar-project" :title="projectPath">{{ projectPath }}</span>
     </div>
 
-    <!-- 窗口拖动区：只占控件之间的空白，控件群周围不再顺带可拖动，避免误拖与误双击最大化。 -->
+    <!-- 窗口拖动区：弹性平分控件之间的空白。 -->
     <span class="app-titlebar-drag" aria-hidden="true"></span>
 
-    <span v-if="runtimeStatus.kind !== 'idle'" class="app-runtime-status" :class="`is-${runtimeStatus.kind}`" role="status">
-      <span class="app-runtime-status-dot" aria-hidden="true"></span>
-      {{ runtimeStatus.label }}
-    </span>
+    <div class="app-titlebar-end">
+      <span v-if="runtimeStatus.kind !== 'idle'" class="app-runtime-status" :class="`is-${runtimeStatus.kind}`" role="status">
+        <span class="app-runtime-status-dot" aria-hidden="true"></span>
+        {{ runtimeStatus.label }}
+      </span>
 
-    <AppButton
-      v-if="!settingsMode"
-      variant="icon"
-      class="app-titlebar-toggle"
-      :aria-expanded="rightPanelOpen"
-      :aria-label="rightPanelOpen ? '收起右侧面板' : '展开右侧面板'"
-      :title="rightPanelOpen ? '收起右侧面板' : '展开右侧面板'"
-      :disabled="sidebarToggleDisabled"
-      @click="emit('toggleRightPanel')"
-    >
-      <!-- 右侧面板图标：外框加右列，展开时右列填实；与左侧导航栏图标同一套画法，一眼看出管的是哪一侧。 -->
-      <svg class="panel-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-        <rect v-if="rightPanelOpen" x="15.6" y="6" width="4.4" height="12" rx="1" fill="currentColor" stroke="none" />
-        <rect x="3" y="4" width="18" height="16" rx="2.5" />
-        <path d="M15 4v16" />
-      </svg>
-    </AppButton>
+      <AppButton
+        v-if="!settingsMode"
+        variant="unstyled"
+        class="app-titlebar-toggle"
+        :aria-expanded="rightPanelOpen"
+        :aria-label="rightPanelOpen ? '收起右侧面板' : '展开右侧面板'"
+        :title="rightPanelOpen ? '收起右侧面板' : '展开右侧面板'"
+        :disabled="sidebarToggleDisabled"
+        @click="emit('toggleRightPanel')"
+      >
+        <!-- 右侧面板图标：外框加右列，展开时右列填实；与左侧导航栏图标同一套画法，一眼看出管的是哪一侧。 -->
+        <svg class="panel-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <rect v-if="rightPanelOpen" x="15.6" y="6" width="4.4" height="12" rx="1" fill="currentColor" stroke="none" />
+          <rect x="3" y="4" width="18" height="16" rx="2.5" />
+          <path d="M15 4v16" />
+        </svg>
+      </AppButton>
+    </div>
 
-    <!-- 对话导航弹窗：外壳与其余应用级对话框一致，点遮罩、Esc 或底部关闭按钮收起；标题栏说明排序与轮次数，
-         列表按新的在前排列；条目是序号 + 摘要 + 元信息，当前轮带强调条与文字标记。 -->
+    <!-- 对话导航面板：顶栏下挂式命令面板，点遮罩或 Esc 收起；按新的在前列出本会话每一轮用户输入，
+         条目是序号徽标 + 摘要 + 元信息，当前轮高亮强调；底部呈现原生快捷键提示。 -->
     <Teleport to="body">
       <Transition name="dialog-fade">
-        <div v-if="navOpen" class="dialog-overlay" @click.self="closePopup(true)">
-          <Transition name="dialog-panel-motion" appear>
+        <div v-if="navOpen" class="chat-nav-overlay" @click.self="closePopup(true)">
+          <Transition name="chat-nav-motion" appear>
             <div
               ref="panel"
               role="dialog"
               aria-modal="true"
               :aria-labelledby="`${listboxId}-title`"
               tabindex="-1"
-              class="dialog-panel max-w-xl"
+              class="chat-nav-panel"
               @keydown.esc.prevent="closePopup(true)"
             >
-              <div class="dialog-header">
-                <div class="chat-nav-header">
-                  <h2 :id="`${listboxId}-title`" class="dialog-title">对话导航</h2>
-                  <span v-if="navEntries.length > 0" class="chat-nav-header-meta">
-                    共 {{ navEntries.length }} 轮 · 新的在前
+              <div class="chat-nav-header">
+                <div class="chat-nav-title-group">
+                  <h2 :id="`${listboxId}-title`" class="chat-nav-title">对话导航</h2>
+                  <span v-if="navEntries.length > 0" class="chat-nav-badge">
+                    共 {{ navEntries.length }} 轮
                   </span>
                 </div>
+                <span v-if="navEntries.length > 0" class="chat-nav-order-hint">新的在前</span>
               </div>
-              <div class="dialog-body">
+
+              <div
+                :id="listboxId"
+                :ref="onListRef"
+                class="chat-nav-list scroll-area"
+                role="listbox"
+                aria-label="对话导航"
+                :tabindex="displayEntries.length === 0 ? 0 : -1"
+                @keydown="onListKeydown"
+              >
                 <div
-                  :id="listboxId"
-                  :ref="onListRef"
-                  class="chat-nav-list scroll-area"
-                  role="listbox"
-                  aria-label="对话导航"
-                  :tabindex="displayEntries.length === 0 ? 0 : -1"
-                  @keydown="onListKeydown"
+                  v-for="row in displayEntries"
+                  :id="`chat-nav-${row.id}`"
+                  :key="row.id"
+                  :ref="(element) => setEntryElement(row.id, element)"
+                  class="chat-nav-entry"
+                  :class="{
+                    'is-active': row.id === highlightedId,
+                    'is-current': row.id === navActiveId
+                  }"
+                  role="option"
+                  :aria-selected="row.id === navActiveId"
+                  tabindex="-1"
+                  @mousedown.prevent
+                  @click="chooseEntry(row.id)"
+                  @focus="onEntryFocus(row.id)"
                 >
-                  <div
-                    v-for="row in displayEntries"
-                    :id="`chat-nav-${row.id}`"
-                    :key="row.id"
-                    :ref="(element) => setEntryElement(row.id, element)"
-                    class="chat-nav-entry"
-                    :class="{
-                      'is-active': row.id === highlightedId,
-                      'is-current': row.id === navActiveId
-                    }"
-                    role="option"
-                    :aria-selected="row.id === navActiveId"
-                    tabindex="-1"
-                    @mousedown.prevent
-                    @click="chooseEntry(row.id)"
-                    @focus="onEntryFocus(row.id)"
-                  >
-                    <span class="chat-nav-entry-ordinal" aria-hidden="true">{{ row.ordinal }}</span>
-                    <span class="chat-nav-entry-body">
-                      <span class="chat-nav-entry-text">{{ row.label }}</span>
-                      <span class="chat-nav-entry-meta">
-                        <span v-if="row.time !== null" class="chat-nav-entry-time">{{ row.time }}</span>
-                        <span v-if="row.uiCount > 0">含 {{ row.uiCount }} 个生成式界面</span>
-                        <span v-if="row.id === navActiveId" class="chat-nav-entry-current">当前</span>
-                      </span>
+                  <span class="chat-nav-entry-ordinal" aria-hidden="true">{{ row.ordinal }}</span>
+                  <span class="chat-nav-entry-body">
+                    <span class="chat-nav-entry-text">{{ row.label }}</span>
+                    <span class="chat-nav-entry-meta">
+                      <span v-if="row.time !== null" class="chat-nav-entry-time">{{ row.time }}</span>
+                      <span v-if="row.uiCount > 0">含 {{ row.uiCount }} 个生成式界面</span>
+                      <span v-if="row.id === navActiveId" class="chat-nav-entry-current">当前</span>
                     </span>
-                  </div>
-                  <p v-if="displayEntries.length === 0" class="chat-nav-empty">
-                    本会话还没有可跳转的对话轮次；发送第一条消息后这里会列出每一轮。
-                  </p>
+                  </span>
                 </div>
-              </div>
-              <div class="dialog-footer">
-                <p class="mr-auto self-center text-2xs text-desk-muted">
-                  ↑↓ 移动 · Enter 跳转 · Esc 关闭
+                <p v-if="displayEntries.length === 0" class="chat-nav-empty">
+                  本会话还没有可跳转的对话轮次；发送第一条消息后这里会列出每一轮。
                 </p>
-                <AppButton @click="closePopup(true)">关闭</AppButton>
+              </div>
+
+              <div class="chat-nav-footer">
+                <span class="chat-nav-shortcut"><kbd>↑</kbd><kbd>↓</kbd> 移动</span>
+                <span class="chat-nav-shortcut-sep" aria-hidden="true">·</span>
+                <span class="chat-nav-shortcut"><kbd>↵</kbd> 跳转</span>
+                <span class="chat-nav-shortcut-sep" aria-hidden="true">·</span>
+                <span class="chat-nav-shortcut"><kbd>Esc</kbd> 关闭</span>
               </div>
             </div>
           </Transition>

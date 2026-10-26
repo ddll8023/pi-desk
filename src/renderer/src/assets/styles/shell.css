@@ -190,6 +190,7 @@
      控件与空白之间的缝隙不会把点击变成拖动或双击最大化；高度与主进程 TITLEBAR_HEIGHT 一致。 */
 .app-titlebar {
     -webkit-app-region: no-drag;
+    position: relative;
     z-index: 40;
     display: flex;
     min-width: 0;
@@ -203,11 +204,40 @@
     /* 右侧另留出窗口按钮覆盖区与一段间距，否则面板开关会被压在最小化/关闭按钮下面、两者也容易点错。 */
     padding-right: calc(1.25rem + var(--titlebar-controls-reserve, 0px));
   }
-/* 标题栏唯一的拖动区：占满控件之间的空白，窗口仍然好拖，但控件附近不再可拖。 */
+/* 标题栏布局三段：两侧区域按内容自适应，中间胶囊绝对居中，空白处全部分配给拖动区。 */
+.app-titlebar-start {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex: none;
+    position: relative;
+    z-index: 1;
+  }
+.app-titlebar-center {
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 0;
+    max-width: min(32rem, calc(100vw - 22rem));
+    z-index: 2;
+    pointer-events: auto;
+  }
+.app-titlebar-end {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex: none;
+    position: relative;
+    z-index: 1;
+  }
+/* 标题栏拖动区：弹性平分控件之间的空白，窗口好拖，但控件本身不被拖动覆盖。 */
 .app-titlebar-drag {
     -webkit-app-region: drag;
-    min-width: 3rem;
-    flex: 1 1 auto;
+    min-width: 1.5rem;
+    flex: 1 1 0;
     align-self: stretch;
   }
 .app-titlebar button,
@@ -221,8 +251,35 @@
     width: 4.125rem;
     flex: none;
   }
+/* 标题栏面板开关：28px 幽灵按钮，悬停浅底，与设置页返回按钮完全平齐。 */
 .app-titlebar-toggle {
+    display: inline-flex;
+    width: 28px;
+    height: 28px;
     flex: none;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--radius-desk-sm);
+    color: var(--color-desk-muted);
+    background: transparent;
+    border: 1px solid transparent;
+    cursor: pointer;
+    transition: background-color var(--default-transition-duration) ease,
+                color var(--default-transition-duration) ease;
+  }
+.app-titlebar-toggle:not(:disabled):hover {
+    background: var(--color-desk-surface-subtle);
+    color: var(--color-desk-ink);
+  }
+.app-titlebar-toggle:not(:disabled):active {
+    background: var(--color-desk-canvas-sunken);
+  }
+.app-titlebar-toggle[aria-expanded='true'] {
+    color: var(--color-desk-ink);
+  }
+.app-titlebar-toggle:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
   }
 /* 设置页的返回入口：占侧栏开关的位置，用文字说明去往哪里；高度与面板开关一致，不让标题栏跳动。 */
 .app-titlebar-back {
@@ -249,44 +306,57 @@
     font-weight: 600;
     letter-spacing: 0.02em;
   }
-/* 会话与项目簇按内容宽度排（上限 28rem，超长标题截断），剩余宽度交给拖动区，所以这里不吃满空间。 */
-.app-titlebar-context {
-    display: flex;
-    min-width: 0;
-    max-width: 28rem;
-    flex: 0 1 auto;
-    flex-direction: column;
-    justify-content: center;
-    gap: 1px;
-  }
-/* 对话跳转触发键：一行当前轮摘要加一枚展开箭头；悬停与展开时给浅底，表明它是个可点的入口。 */
-.app-titlebar-session {
-    display: flex;
+/* 居中上下文胶囊：单行整合项目名、会话轮次与标题；平滑圆角，细线边框，悬停浅底。 */
+.app-titlebar-pill {
+    display: inline-flex;
     max-width: 100%;
     min-width: 0;
+    height: 28px;
     align-items: center;
-    gap: 0.25rem;
-    overflow: hidden;
-    border-radius: var(--radius-desk-sm);
-    padding: 0 0.25rem;
-    margin-left: -0.25rem;
-    text-align: left;
-    font-size: 0.875rem;
-    font-weight: 600;
+    gap: 0.375rem;
+    border: 1px solid var(--color-desk-line);
+    border-radius: 9999px;
+    background: var(--color-desk-canvas);
+    padding: 0 0.625rem;
+    color: var(--color-desk-ink);
+    font-size: 0.75rem;
+    font-weight: 500;
     cursor: pointer;
-    transition: background-color var(--default-transition-duration) ease;
+    user-select: none;
+    transition: background-color var(--default-transition-duration) ease,
+                border-color var(--default-transition-duration) ease,
+                color var(--default-transition-duration) ease;
   }
-.app-titlebar-session:hover,
-  .app-titlebar-session[aria-expanded='true'] {
+.app-titlebar-pill:hover,
+  .app-titlebar-pill[aria-expanded='true'] {
     background: var(--color-desk-surface-subtle);
+    border-color: var(--color-desk-line-strong);
   }
-.app-titlebar-session:disabled {
+.app-titlebar-pill:disabled {
     cursor: default;
+    border-color: transparent;
     background: transparent;
+    color: var(--color-desk-muted);
+  }
+.app-titlebar-pill-project {
+    flex: none;
+    max-width: 10rem;
+    overflow: hidden;
+    color: var(--color-desk-muted);
+    font-weight: 500;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+.app-titlebar-pill-sep {
+    flex: none;
+    color: var(--color-desk-line-strong);
+    font-size: 0.6875rem;
   }
 .app-titlebar-session-text {
     min-width: 0;
+    max-width: 14rem;
     overflow: hidden;
+    font-weight: 600;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -307,99 +377,172 @@
     transform: rotate(180deg);
   }
 @media (prefers-reduced-motion: reduce) {
-    .app-titlebar-session,
+    .app-titlebar-pill,
     .app-titlebar-session-chevron {
       transition: none;
     }
   }
-.app-titlebar-project {
-    display: block;
-    overflow: hidden;
-    color: var(--color-desk-muted);
-    font-size: 0.6875rem;
-    line-height: 1.35;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+/* 对话导航面板：屏幕正中呼出，兼顾大屏与小屏的对称视距。 */
+.chat-nav-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 50;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    padding: 1.5rem;
+    background: var(--color-desk-overlay);
+    contain: paint;
   }
-/* 对话导航弹窗：外壳复用通用弹窗（.dialog-overlay / .dialog-panel / .dialog-body），
-     这里只补面板头与列表的排版。头部是列表的读法说明：降序与正文相反，不写明「新的在前」，
-     列表看起来就像排坏了。 */
+.chat-nav-panel {
+    display: flex;
+    flex-direction: column;
+    width: calc(100vw - 2rem);
+    max-width: 32rem;
+    max-height: min(75vh, 32rem);
+    border-radius: var(--radius-desk-lg);
+    border: 1px solid var(--color-desk-line-strong);
+    background: var(--color-desk-surface);
+    box-shadow: var(--shadow-desk-pop);
+    overflow: hidden;
+    outline: none;
+  }
+/* 面板进退场动效：正中微缩放与微位移淡入。 */
+.chat-nav-motion-enter-active {
+    transition:
+      opacity var(--motion-duration-base) var(--motion-ease-entrance),
+      transform var(--motion-duration-slow) var(--motion-ease-entrance);
+  }
+.chat-nav-motion-leave-active {
+    transition:
+      opacity var(--motion-duration-fast) var(--motion-ease-exit),
+      transform var(--motion-duration-fast) var(--motion-ease-exit);
+  }
+.chat-nav-motion-enter-from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.96);
+  }
+.chat-nav-motion-leave-to {
+    opacity: 0;
+    transform: translateY(4px) scale(0.98);
+  }
+@media (prefers-reduced-motion: reduce) {
+    .chat-nav-motion-enter-active,
+    .chat-nav-motion-leave-active {
+      transition: none;
+    }
+  }
+
+/* 面板头部：紧凑单行，展示标题、轮次微徽标与说明。 */
 .chat-nav-header {
     display: flex;
-    flex-wrap: wrap;
-    align-items: baseline;
+    align-items: center;
     justify-content: space-between;
-    gap: 0.25rem 0.75rem;
+    gap: 0.75rem;
+    padding: 0.75rem 1rem 0.625rem;
+    border-bottom: 1px solid var(--color-desk-line);
   }
-.chat-nav-header-meta {
-    overflow: hidden;
+.chat-nav-title-group {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+.chat-nav-title {
+    font-size: 0.8125rem;
+    font-weight: 600;
+    color: var(--color-desk-ink);
+    letter-spacing: -0.01em;
+  }
+.chat-nav-badge {
+    padding: 1px 6px;
+    border-radius: 9999px;
+    background: var(--color-desk-canvas);
+    border: 1px solid var(--color-desk-line);
+    color: var(--color-desk-muted);
+    font-family: var(--font-mono);
+    font-size: var(--text-2xs);
+    font-variant-numeric: tabular-nums;
+  }
+.chat-nav-order-hint {
     color: var(--color-desk-muted);
     font-size: var(--text-2xs);
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
-/* 列表自己滚动、高度受弹窗体上限约束：轮次多时滚动条出现在列表内，弹窗头与底部操作不跟着滚。 */
+
+/* 列表容器：贴合面板内壁，自身滚动。 */
 .chat-nav-list {
-    max-height: min(52vh, 30rem);
+    flex: 1 1 auto;
+    min-height: 0;
+    max-height: min(58vh, 26rem);
     overflow-y: auto;
     overscroll-behavior: contain;
-    padding: 0.25rem;
+    padding: 0.375rem;
   }
-/* 条目两列：序号栏等宽右对齐，内容列吃满剩余宽度；序号是真实轮次，不是装饰编号。
-   圆角取 md：条目直接嵌在弹窗体的内边距里，不与面板边缘相邻，因此不按面板半径做同心推导。 */
+
+/* 条目两列：左侧为等宽微圆角数字徽标，右侧为主体内容。 */
 .chat-nav-entry {
     display: grid;
-    grid-template-columns: 1.75rem minmax(0, 1fr);
+    grid-template-columns: auto minmax(0, 1fr);
     align-items: start;
-    gap: 0.5rem;
-    border-left: 2px solid transparent;
+    gap: 0.625rem;
     border-radius: var(--radius-desk-md);
-    padding: 0.4375rem 0.5rem 0.4375rem 0.375rem;
+    padding: 0.5rem 0.625rem;
     cursor: pointer;
+    transition: background-color var(--default-transition-duration) ease;
   }
 .chat-nav-entry.is-active {
     background: var(--color-desk-surface-subtle);
   }
-/* 当前轮三通道：强调条 + 浅强调底 + 元信息里的「当前」文字，不只靠颜色深浅区分。 */
+/* 当前轮整行柔和底色高亮。 */
 .chat-nav-entry.is-current {
-    border-left-color: var(--color-desk-accent);
     background: var(--color-desk-accent-soft);
   }
 .chat-nav-entry:focus-visible {
     outline: 2px solid var(--color-desk-accent);
     outline-offset: -2px;
   }
+/* 序号徽标：方圆徽标，当前轮反白为强调色。 */
 .chat-nav-entry-ordinal {
-    padding-top: 1px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 1.5rem;
+    height: 1.25rem;
+    border-radius: var(--radius-desk-sm);
+    background: var(--color-desk-canvas);
     color: var(--color-desk-muted);
     font-family: var(--font-mono);
     font-size: var(--text-2xs);
     font-variant-numeric: tabular-nums;
-    line-height: 1.5;
-    text-align: right;
+    font-weight: 600;
+    line-height: 1;
+    margin-top: 1px;
+    padding: 0 0.25rem;
   }
 .chat-nav-entry.is-current .chat-nav-entry-ordinal {
-    color: var(--color-desk-accent);
+    background: var(--color-desk-accent);
+    color: var(--color-desk-on-accent);
   }
 .chat-nav-entry-body {
     display: flex;
     min-width: 0;
     flex-direction: column;
-    gap: 0.125rem;
+    gap: 0.1875rem;
   }
 .chat-nav-entry-text {
     display: -webkit-box;
     overflow: hidden;
     overflow-wrap: anywhere;
     font-size: var(--text-md);
-    line-height: 1.5;
+    line-height: 1.45;
+    font-weight: 500;
+    color: var(--color-desk-ink);
     -webkit-box-orient: vertical;
     -webkit-line-clamp: 2;
   }
 .chat-nav-entry.is-current .chat-nav-entry-text {
     color: var(--color-desk-accent);
+    font-weight: 600;
   }
-/* 元信息行：时间、界面数、当前标记共用一档小字；分隔符由相邻项生成，缺项时不留空档。 */
 .chat-nav-entry-meta {
     display: flex;
     flex-wrap: wrap;
@@ -421,11 +564,48 @@
     color: var(--color-desk-accent);
   }
 .chat-nav-empty {
-    padding: 1.5rem 0.75rem;
+    padding: 2rem 1rem;
     color: var(--color-desk-muted);
-    font-size: var(--text-2xs);
+    font-size: 0.75rem;
     line-height: 1.6;
     text-align: center;
+  }
+
+/* 底部轻量快捷键提示条。 */
+.chat-nav-footer {
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 0.5rem;
+    padding: 0.5rem 0.875rem;
+    border-top: 1px solid var(--color-desk-line);
+    background: var(--color-desk-surface-subtle);
+    color: var(--color-desk-muted);
+    font-size: var(--text-2xs);
+  }
+.chat-nav-shortcut {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+  }
+.chat-nav-shortcut kbd {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 1.125rem;
+    height: 1.125rem;
+    padding: 0 0.25rem;
+    border-radius: 3px;
+    border: 1px solid var(--color-desk-line-strong);
+    background: var(--color-desk-surface);
+    color: var(--color-desk-ink);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    line-height: 1;
+    box-shadow: 0 1px 0 rgba(0, 0, 0, 0.05);
+  }
+.chat-nav-shortcut-sep {
+    color: var(--color-desk-line-strong);
   }
 .app-runtime-status {
     display: inline-flex;
@@ -517,7 +697,8 @@
     }
 
     .app-titlebar-app-name,
-    .app-titlebar-project {
+    .app-titlebar-pill-project,
+    .app-titlebar-pill-sep {
       display: none;
     }
 
