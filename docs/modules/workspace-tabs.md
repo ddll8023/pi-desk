@@ -4,9 +4,9 @@
 
 ## 职责与入口
 
-负责按项目分组的对话、终端、文件标签，活动标签、排序、标题与后台回复标记，以及选择、新建和关闭的页面编排。需要打开会话时产出意图，由会话能力与外层编排提交；结束实例经会话运行清单能力执行，原位新建另维护空白展示、独立草稿身份与失败恢复。入口为工作区标签条、侧栏打开会话、新建对话、文件打开及快捷命令运行。
+负责按项目分组的对话、终端、文件与内置浏览器标签，活动标签、排序、标题与后台回复标记，以及选择、新建和关闭的页面编排。需要打开会话时产出意图，由会话能力与外层编排提交；结束实例经会话运行清单能力执行，原位新建另维护空白展示、独立草稿身份与失败恢复。入口为工作区标签条、侧栏打开会话、新建对话、文件打开、新建浏览器及快捷命令运行。
 
-标签不执行 Agent，不持有 PTY，也不直接保存文件正文。对话标签关联运行实例，终端标签由终端清单派生，文件标签关联编辑记录。
+标签不执行 Agent，不持有 PTY，不直接保存文件正文，也不直接持有网页实例。对话标签关联运行实例，终端标签由终端清单派生，文件标签关联编辑记录，浏览器标签关联页面状态。
 
 ## 专属文件
 
@@ -26,6 +26,7 @@
 - [会话](sessions-chat.md)：会话状态经 `src/renderer/src/workspace/stores/session-tab-bridge.ts` 的只读视图读取（`opening`、`openingProjectPath`、`loadedSessionIds`、`sessionsOf`、`actionError`、`awaitingTrust`、`awaitingInterrupt`、`waitForOpenActions`、`invalidateOpenSelection`），提供者由 `src/renderer/src/shell/use-app-startup.ts` 注册；打开请求由 `src/renderer/src/sessions/stores/session.ts` 的 `open`、`openIntent` 承接，`ChatOpenIntent` 定义于 `src/renderer/src/workspace/stores/workspace-tabs.ts`；`src/renderer/src/sessions/stores/session-runs.ts` 提供运行清单与结束动作；`src/renderer/src/sessions/stores/session-view.ts` 消费新草稿身份与绑定映射，负责输入留底及附件回收。
 - [文件](files-editor.md)：`src/renderer/src/editor/stores/project-editor.ts` 拥有编辑记录，标签只引用其 key 与脏状态。
 - [终端](terminal-commands.md)：`src/renderer/src/workspace/stores/terminal.ts` 提供真实清单、创建、关闭、命名与写入；快捷命令每次创建新终端标签。
+- 浏览器：`src/renderer/src/browser/stores/browser.ts` 提供浏览器状态管理，标签条提供「新建浏览器」动作与专用标签图标，面板层通过 `src/renderer/src/browser/components/BrowserView.vue` 承载受限 webview 渲染。
 - [F-ui](shared.md#f-ui前端共享展示共享)、[F-style](shared.md#f-style全局主题与业务样式混合)：标签菜单浮层、公共按钮与全局标签样式。
 
 `workspace-tabs.ts` 不再调用会话的打开动作：标签只计算 `ChatOpenIntent` 并接收绑定结果，提交由 `session.ts` 的 `openIntent` 与 `shell/use-app-startup.ts` 的补提交执行；读取会话状态经 `session-tab-bridge.ts` 的只读视图而不是直接 import 会话 Store，两者之间因此不再构成模块环（会话侧仍会调用标签的准备与删除去标签动作）。
@@ -34,9 +35,9 @@
 
 1. 进入项目切换到该项目保留的活动标签，没有标签时显示新建入口，不自动建立空对话标签；标签由新建或打开入口建立，空闲态不因建立标签就启动 SDK。
 2. 打开会话先确定目标项目与标签 key；会话结果只能绑定原标签，过期结果不抢占当前选择。
-3. 选择对话标签时按需要返回打开意图，由外层提交打开链切前台；选择文件或终端只改变展示，不中断后台会话。
+3. 选择对话标签时按需要返回打开意图，由外层提交打开链切前台；选择文件、终端或浏览器只改变展示，不中断后台会话。
 4. 关闭对话标签等待打开与原位新建任务收敛后，再结束当前关联实例，保留会话历史；关闭失败保留标签。
-5. 关闭终端标签结束该终端；关闭文件标签清除内存编辑记录，脏文件先由弹层宿主确认，不隐式保存。
+5. 关闭终端标签结束该终端；关闭浏览器标签清理该标签的前端页面与导航状态；关闭文件标签清除内存编辑记录，脏文件先由弹层宿主确认，不隐式保存。
 6. `/new` 先在当前标签展示空白对话，标签位置与顺序不变；旧实例按标签单飞结束，期间可编辑草稿但禁止发送。结束成功后不补开 SDK 会话，首次发送先固定输入并立即展示本地待发送消息，再经会话打开链准备新目标；实际绑定、运行清单与前台状态确认且投影同步后，才向 SDK 提交固定快照。待发送交接、失败恢复与启动期间切走的处理见[会话状态与边界](sessions-chat.md#状态与边界)。侧栏和标签条的新建入口仍打开或聚焦空对话标签。
 
 ## 状态与边界

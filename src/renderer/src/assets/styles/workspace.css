@@ -1,6 +1,6 @@
 /* 归集工作区标签与终端相关的组件样式。 */
 @layer components {
-/* 工作区标签条：对话、终端与文件标签同处一组；标签横向滚动不换行，新建按钮跟在最后一个标签之后。 */
+/* 工作区标签条：对话、终端、文件与浏览器标签同处一组；标签横向滚动不换行，新建按钮跟在最后一个标签之后。 */
 .workspace-tabs {
     display: flex;
     min-width: 0;
@@ -169,7 +169,7 @@
 .workspace-tab-command-label {
     flex: none;
   }
-/* 面板层：对话、终端与文件面板叠放在标签条之下的同一区域，只显示活动标签。 */
+/* 面板层：对话、终端、文件与浏览器面板叠放在标签条之下的同一区域，只显示活动标签。 */
 .workspace-panes {
     position: relative;
     display: flex;

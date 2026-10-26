@@ -18,7 +18,8 @@ export const productionCsp = [
   "img-src 'self' data: blob:",
   "font-src 'self'",
   "object-src 'none'",
-  "frame-src 'none'",
+  // frame-src 允许嵌入受限的 webview 网页容器，支持 http/https/about 外部页面。
+  "frame-src 'self' http: https: about: data:",
   "frame-ancestors 'none'",
   "base-uri 'none'",
   "form-action 'none'"

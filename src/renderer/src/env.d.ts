@@ -26,4 +26,10 @@ declare global {
   }
 }
 
+declare module 'vue' {
+  export interface GlobalComponents {
+    webview: any
+  }
+}
+
 export {}

@@ -82,13 +82,16 @@ export function titleBarWindowOptions(): Pick<BrowserWindowConstructorOptions, '
   }
 }
 
-/** 应用级权限收紧：拒绝页面发起的一切权限请求，并阻止下载。 */
+/** 应用级权限收紧：拒绝主会话与内置浏览器发起的一切敏感权限请求，并阻止下载。 */
 export function restrictSession(): void {
-  session.defaultSession.setPermissionCheckHandler(() => false)
-  session.defaultSession.setPermissionRequestHandler((_contents, _permission, callback) => {
-    callback(false)
-  })
-  session.defaultSession.on('will-download', (event) => event.preventDefault())
+  const sessions = [session.defaultSession, session.fromPartition('persist:desktop-browser')]
+  for (const s of sessions) {
+    s.setPermissionCheckHandler(() => false)
+    s.setPermissionRequestHandler((_contents, _permission, callback) => {
+      callback(false)
+    })
+    s.on('will-download', (event) => event.preventDefault())
+  }
 }
 
 /**
@@ -127,7 +130,7 @@ export async function createWindow(pageUrl: string): Promise<void> {
       contextIsolation: true,
       nodeIntegration: false,
       webSecurity: true,
-      webviewTag: false
+      webviewTag: true
     }
   })
   if (restored.maximized) window.maximize()
@@ -135,7 +138,16 @@ export async function createWindow(pageUrl: string): Promise<void> {
   const contents = window.webContents
   const rememberWindowState = (): void => windowState.notifyChanged(window)
   contents.setWindowOpenHandler(() => ({ action: 'deny' }))
-  contents.on('will-attach-webview', (event) => event.preventDefault())
+  contents.on('will-attach-webview', (_event, webPreferences) => {
+    // 强制隔离内置浏览器 webview，彻底剥离主应用能力与 Node 环境
+    webPreferences.nodeIntegration = false
+    webPreferences.nodeIntegrationInSubFrames = false
+    webPreferences.contextIsolation = true
+    webPreferences.sandbox = true
+    webPreferences.webSecurity = true
+    delete webPreferences.preload
+    webPreferences.partition = 'persist:desktop-browser'
+  })
   contents.on('will-frame-navigate', (event) => {
     if (!event.isMainFrame || event.frame !== contents.mainFrame || event.url !== pageUrl) {
       event.preventDefault()

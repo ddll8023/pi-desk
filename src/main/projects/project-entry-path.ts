@@ -7,8 +7,8 @@
  */
 import { realpath } from 'node:fs/promises'
 import { isAbsolute, join, sep } from 'node:path'
-import type { DesktopError } from '../../shared/desktop-api'
-import { PROJECT_DIRECTORY_PATH_MAX_CHARS } from '../../shared/project-file-api'
+import type { DesktopError } from '../../shared/desktop-api.ts'
+import { PROJECT_DIRECTORY_PATH_MAX_CHARS } from '../../shared/project-file-api.ts'
 
 /** 条目路径解析结果：成功同时给出规范化相对路径与绝对路径，失败带可展示原因。 */
 export type ProjectEntryResolution =

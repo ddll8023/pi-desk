@@ -1,11 +1,11 @@
 <!--
-  工作区标签条：对话、终端与文件标签同处一组，顺序可拖动调整，横向滚动不换行，新建按钮紧跟最后一个标签。
+  工作区标签条：对话、终端、文件与浏览器标签同处一组，顺序可拖动调整，横向滚动不换行，新建按钮紧跟最后一个标签。
 
   标签只负责展示与派发意图：标签清单、活动标签、顺序与标题都来自工作区标签状态。顺序与对话/文件
   标签的重命名只在页面内生效；终端标签的重命名由守护进程随会话记录落盘，重启应用后仍保留。
   重命名有两个入口：双击标签，或右键标签打开菜单选「重命名」；编辑态用
   输入框替换按钮（避免把输入框嵌在按钮里），Enter 或失焦提交、Esc 取消。
-  拖动调整先后顺序（落点显示在目标标签左侧）；「+」按类型新建对话或终端，位置跟在标签之后（与 Orca 一致）。
+  拖动调整先后顺序（落点显示在目标标签左侧）；「+」按类型新建对话、浏览器或终端，位置跟在标签之后（与 Orca 一致）。
   后台对话结束一轮回复时，它的标签用强调色标题加一个圆点提示「有新回复」，切到该标签即清除。
   方向键与 Home/End 在同组标签间移动活动标签，顺序与视觉顺序一致。
   「命令」按钮固定在标签条右端（与 Orca 同侧）打开快捷命令菜单：菜单数据由父级传入，运行、编辑、删除、添加与管理都上抛。
@@ -253,6 +253,7 @@ function onTablistKeydown(event: KeyboardEvent): void {
 /** 标签类型的读屏文案；重命名输入框与标签本身共用。 */
 function kindLabel(kind: WorkspaceTabView['kind']): string {
   if (kind === 'chat') return '对话'
+  if (kind === 'browser') return '浏览器'
   return kind === 'terminal' ? '终端' : '文件'
 }
 
@@ -320,7 +321,7 @@ function onMenuKeydown(event: KeyboardEvent, close: () => void, popup: HTMLEleme
             @click="emit('select', tab.id)"
             @dblclick="startRename(tab)"
           >
-            <!-- 对话标签用气泡图标，终端标签用运行状态点，文件标签用文档图标：三类标签在同一组里仍能一眼区分。 -->
+            <!-- 对话标签用气泡图标，文件标签用文档图标，浏览器标签用地球图标，终端标签用运行状态点：四类标签在同一组里仍能一眼区分。 -->
             <svg
               v-if="tab.kind === 'chat'"
               class="workspace-tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -331,6 +332,15 @@ function onMenuKeydown(event: KeyboardEvent, close: () => void, popup: HTMLEleme
               class="workspace-tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"
               stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"
             ><path d="M14 3v5h5" /><path d="M6 3h8l5 5v13H6z" /></svg>
+            <svg
+              v-else-if="tab.kind === 'browser'"
+              class="workspace-tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+              stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"
+            >
+              <circle cx="12" cy="12" r="10" />
+              <path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20" />
+              <path d="M2 12h20" />
+            </svg>
             <span
               v-else
               class="workspace-tab-dot"
@@ -413,6 +423,9 @@ function onMenuKeydown(event: KeyboardEvent, close: () => void, popup: HTMLEleme
       >
         <AppButton variant="unstyled" class="project-sidebar-menu-item" role="menuitem" @click="createTab('chat')">
           新建对话
+        </AppButton>
+        <AppButton variant="unstyled" class="project-sidebar-menu-item" role="menuitem" @click="createTab('browser')">
+          新建浏览器
         </AppButton>
         <AppButton
           variant="unstyled" class="project-sidebar-menu-item" role="menuitem"

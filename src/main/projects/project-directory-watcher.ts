@@ -15,12 +15,12 @@ import { watch } from 'node:fs'
 import type { FSWatcher } from 'node:fs'
 import { stat } from 'node:fs/promises'
 import { join } from 'node:path'
-import { PROJECT_DIRECTORY_WATCH_LIMIT } from '../../shared/project-file-api'
+import { PROJECT_DIRECTORY_WATCH_LIMIT } from '../../shared/project-file-api.ts'
 import type {
   ProjectDirectoryChange,
   ProjectDirectoryWatchResult
-} from '../../shared/project-file-api'
-import { normalizeRelativeDirectory } from './project-entry-path'
+} from '../../shared/project-file-api.ts'
+import { normalizeRelativeDirectory } from './project-entry-path.ts'
 
 /** 连续事件的合并窗口：最后一条事件之后等这么久再发，把一次批量写盘收成一条。 */
 const WATCH_TRAILING_MS = 150
@@ -183,9 +183,11 @@ export class ProjectDirectoryWatcher {
   private readonly entries = new Map<string, FSWatcher>()
   /** 系统级监听额度用尽后本次登记周期内不再尝试，避免反复失败抖动。 */
   private degraded = false
+  private readonly options: ProjectDirectoryWatcherOptions
   private readonly batcher: DirectoryBatcher
 
-  constructor(private readonly options: ProjectDirectoryWatcherOptions) {
+  constructor(options: ProjectDirectoryWatcherOptions) {
+    this.options = options
     this.batcher = createDirectoryBatcher({
       trailingMs: WATCH_TRAILING_MS,
       maxWaitMs: WATCH_MAX_WAIT_MS,

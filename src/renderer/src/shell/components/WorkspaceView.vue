@@ -3,7 +3,7 @@
 
   面板层只显示活动标签，隐藏用 visibility 而不是 display：面板始终保持真实尺寸，
   输入框量高与终端尺寸测量在隐藏状态下也成立。运行中终端跨项目保留视图，
-  退出终端仅在查看时恢复画面；文件面板各自保持挂载，切回来仍是同一份编辑内容与撤销历史。
+  退出终端仅在查看时恢复画面；文件与浏览器面板各自保持挂载，切回来仍是同一份编辑内容或页面渲染状态。
   标签与命令的意图在这里转交工作区标签、快捷命令与设置三个 Store；需要打开会话时取标签给出的打开意图，交给会话 Store 提交。本组件不判断归属。
 -->
 <script setup lang="ts">
@@ -12,6 +12,7 @@ import { computed } from 'vue'
 import ChatMessageList from '../../sessions/components/ChatMessageList.vue'
 import ExtensionNotificationBar from '../../sessions/components/ExtensionNotificationBar.vue'
 import FileEditorView from '../../editor/components/FileEditorView.vue'
+import BrowserView from '../../browser/components/BrowserView.vue'
 import PromptComposer from '../../sessions/components/PromptComposer.vue'
 import SessionActivityBar from '../../sessions/components/SessionActivityBar.vue'
 import TerminalView from '../../workspace/components/TerminalView.vue'
@@ -100,6 +101,10 @@ async function onCreateTab(kind: WorkspaceTabKind): Promise<void> {
     submitOpen(await workspaceTabsStore.openNewChatTab())
     return
   }
+  if (kind === 'browser') {
+    await workspaceTabsStore.openBrowserTab()
+    return
+  }
   await workspaceTabsStore.createTerminalTab()
 }
 
@@ -181,7 +186,7 @@ function openCommandSettings(): void {
     <AppButton variant="unstyled" class="workspace-notice-close" aria-label="关闭提示" @click="sessionRunsStore.clearCloseError()">关闭</AppButton>
   </p>
 
-  <!-- 面板层：对话、终端与文件面板叠放在同一区域，只显示活动标签。
+  <!-- 面板层：对话、终端、文件与浏览器面板叠放在同一区域，只显示活动标签。
        隐藏用 visibility 而不是 display：面板始终保持真实尺寸，输入框量高与终端尺寸测量在隐藏时也成立。 -->
   <div class="workspace-panes">
     <div
@@ -244,6 +249,18 @@ function openCommandSettings(): void {
       :aria-hidden="workspaceTabsStore.activeTab !== file.key"
     >
       <FileEditorView :tab-key="file.key" :active="!settingsOpen && workspaceTabsStore.activeTab === file.key" />
+    </div>
+
+    <!-- 浏览器面板：当前项目已打开的内置浏览器各自保持挂载，非活动标签只隐藏，切回来仍保留页面与运行状态。 -->
+    <div
+      v-for="browser in workspaceTabsStore.openBrowsers"
+      :key="browser.key"
+      class="workspace-pane"
+      :class="{ 'is-hidden': workspaceTabsStore.activeTab !== browser.key }"
+      :inert="workspaceTabsStore.activeTab !== browser.key"
+      :aria-hidden="workspaceTabsStore.activeTab !== browser.key"
+    >
+      <BrowserView :tab-key="browser.key" :active="!settingsOpen && workspaceTabsStore.activeTab === browser.key" />
     </div>
 
     <!-- 非新草稿、身份不匹配且无日志历史与本地待发送消息时才占位；待发送内容可独立保持面板可见。 -->

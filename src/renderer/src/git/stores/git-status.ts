@@ -278,19 +278,22 @@ export const useGitStatusStore = defineStore('git-status', () => {
 
   function stagePaths(paths: readonly string[]): Promise<void> {
     if (paths.length === 0) return Promise.resolve()
-    if (paths.length === 1) return stage({ path: paths[0] })
+    const firstPath = paths[0]
+    if (paths.length === 1 && firstPath !== undefined) return stage({ path: firstPath })
     return runAction('*', () => stageGitPaths(paths), `已暂存 ${paths.length} 项更改`)
   }
 
   function unstagePaths(paths: readonly string[]): Promise<void> {
     if (paths.length === 0) return Promise.resolve()
-    if (paths.length === 1) return unstage({ path: paths[0] })
+    const firstPath = paths[0]
+    if (paths.length === 1 && firstPath !== undefined) return unstage({ path: firstPath })
     return runAction('*', () => unstageGitPaths(paths), `已取消暂存 ${paths.length} 项更改`)
   }
 
   function discardPaths(paths: readonly string[]): Promise<void> {
     if (paths.length === 0) return Promise.resolve()
-    if (paths.length === 1) return discard({ path: paths[0] })
+    const firstPath = paths[0]
+    if (paths.length === 1 && firstPath !== undefined) return discard({ path: firstPath })
     return runAction('*', () => discardGitPaths(paths), `已丢弃 ${paths.length} 项改动`)
   }
 

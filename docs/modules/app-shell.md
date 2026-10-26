@@ -19,7 +19,7 @@
 | `src/renderer/src/main.ts` | 创建 Vue、Pinia 并加载全局样式 |
 | `src/renderer/src/App.vue` | 页面组合根：装配外壳骨架、弹层宿主与启动编排，不含业务逻辑 |
 | `src/renderer/src/shell/components/AppShell.vue` | 布局骨架：顶部栏、侧栏与窄窗遮罩、工作区槽、右侧面板，持有窄窗与侧栏开合状态 |
-| `src/renderer/src/shell/components/WorkspaceView.vue` | 工作区：标签条、操作失败提示条、对话／终端／文件面板层与空态 |
+| `src/renderer/src/shell/components/WorkspaceView.vue` | 工作区：标签条、操作失败提示条、对话／终端／文件／浏览器面板层与空态 |
 | `src/renderer/src/shell/components/AppDialogHost.vue` | 应用级弹层宿主：把各 Store 的待确认目标渲染成对话框，并按来源分派确认结果 |
 | `src/renderer/src/shell/use-app-startup.ts` | 展示 Store 的初始化与释放顺序、生成式参数持久化与退出落盘、项目切换与会话落盘后的补读 |
 | `src/renderer/src/shell/components/AppTitleBar.vue` | 自绘标题栏、项目与会话信息、对话导航弹窗与布局切换入口 |

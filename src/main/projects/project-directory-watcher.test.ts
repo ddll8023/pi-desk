@@ -8,7 +8,7 @@
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { PROJECT_DIRECTORY_WATCH_LIMIT } from '../../shared/project-file-api'
+import { PROJECT_DIRECTORY_WATCH_LIMIT } from '../../shared/project-file-api.ts'
 import {
   createDirectoryBatcher,
   normalizeWatchDirectories,

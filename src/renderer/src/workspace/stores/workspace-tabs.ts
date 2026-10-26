@@ -1,8 +1,8 @@
 /**
- * 工作区标签状态：按项目分组的对话、终端与文件标签，活动标签、标签顺序与标题覆盖。
+ * 工作区标签状态：按项目分组的对话、终端、文件与浏览器标签，活动标签、标签顺序与标题覆盖。
  *
  * 标签是页面内的展示编排：活动的对话标签就是前台运行实例，其余对话标签由后台分片留底，
- * 因此切标签就是切前台；切项目换一组标签（对话、终端与文件一起换），每个项目各自记住上次的活动标签。
+ * 因此切标签就是切前台；切项目换一组标签（对话、终端、文件与浏览器一起换），每个项目各自记住上次的活动标签。
  * 会话尚未绑定时，活动标签可以先展示该会话的日志历史；`/new` 的空白视图独立于旧实例状态，
  * 原实例结束后才允许首次发送，新会话实际绑定前不因标签聚焦预建宿主。
  * 标签只计算打开意图（`ChatOpenIntent`），实际提交由会话能力（`session.openIntent`）与外层编排执行，
@@ -11,8 +11,8 @@
  * 项目切换时不自动补建空对话标签。终端标签的命名是例外：它交给守护进程随会话记录落盘。
  *
  * 标签键是页面内编号，只在渲染端有效：对话标签记会话身份与它承载的运行实例，终端标签记终端标识，
- * 文件标签记一个编号（路径与编辑状态由 `project-editor` 持有）。终端清单是主进程的真相，因此终端标签
- * 按清单派生（已消失的不再展示、新出现的追加到末尾）；对话与文件标签需要在这里登记。
+ * 文件标签记一个编号（路径与编辑状态由 `project-editor` 持有），浏览器标签记一个唯一键（页面与导航状态由 `browserStore` 持有）。
+ * 终端清单是主进程的真相，因此终端标签按清单派生（已消失的不再展示、新出现的追加到末尾）；对话、文件与浏览器标签需要在这里登记。
  * 文件标签只能由打开文件产生，不进入「新建」菜单；关闭脏文件前先置待确认状态，用户确认后才丢弃未保存修改。
  * 后台实例回复结束时给它的对话标签打「有新回复」标记，切到该标签即清除。
  * 新建对话的入口分两类：标签条与侧栏新建一个对话标签，`/new` 则在当前标签内就地替换
@@ -25,6 +25,8 @@ import type { WatchStopHandle } from 'vue'
 import type { SessionRunState } from '../../../../shared/session-run-api'
 import type { QuickCommand } from '../../../../shared/quick-commands-api'
 import type { TerminalSessionInfo } from '../../../../shared/terminal-api'
+import { BLANK_PAGE_URL, BROWSER_KEY_PREFIX, DEFAULT_BROWSER_TITLE } from '../../../../shared/browser-api'
+import { useBrowserStore } from '../../browser/stores/browser'
 import { useProjectStore } from '../../projects/stores/project'
 import { useProjectEditorStore } from '../../editor/stores/project-editor'
 import type { FileEditorMode, FileEditorRecord } from '../../editor/stores/project-editor'
@@ -33,7 +35,7 @@ import { useSessionRunsStore } from '../../sessions/stores/session-runs'
 import { sessionTabState } from './session-tab-bridge'
 import { useTerminalStore } from './terminal'
 
-/** 对话标签键前缀；终端标签键是 `term:<终端标识>`，文件标签键是 `file:<编号>`。 */
+/** 对话标签键前缀；终端标签键是 `term:<终端标识>`，文件标签键是 `file:<编号>`，浏览器标签键是 `browser:<随机标识>`。 */
 const CHAT_KEY_PREFIX = 'chat:'
 const TERMINAL_KEY_PREFIX = 'term:'
 const FILE_KEY_PREFIX = 'file:'
@@ -41,7 +43,13 @@ const FILE_KEY_PREFIX = 'file:'
 export const NEW_CHAT_INPUT_PREFIX = 'new-chat:'
 
 /** 可通过「新建」菜单主动创建的类型；文件标签只能由打开文件产生，不在新建入口里。 */
-export type WorkspaceTabKind = 'chat' | 'terminal'
+export type WorkspaceTabKind = 'chat' | 'terminal' | 'browser'
+
+/** 当前项目打开的内置浏览器标签模型。 */
+export interface OpenBrowserTab {
+  readonly key: string
+  readonly projectPath: string
+}
 
 /**
  * 一次「把某个对话标签的实例切到前台」的打开意图。
@@ -106,6 +114,7 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
   const session = sessionTabState()
   const terminalStore = useTerminalStore()
   const editorStore = useProjectEditorStore()
+  const browserStore = useBrowserStore()
 
   /** 按项目保存的标签键顺序；数组顺序即标签顺序。 */
   const orders = ref<Readonly<Record<string, readonly string[]>>>({})
@@ -232,6 +241,17 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
   })
 
   /**
+   * 当前项目已打开的内置浏览器标签，顺序与标签条一致；各面板保持挂载以维持 DOM 与页面状态。
+   */
+  const openBrowsers = computed<readonly OpenBrowserTab[]>(() => {
+    const projectPath = currentProjectPath.value
+    if (projectPath === null) return []
+    return projectKeys.value
+      .filter(isBrowserKey)
+      .map(key => ({ key, projectPath }))
+  })
+
+  /**
    * 活动对话标签正在展示的会话身份；活动标签是终端或文件标签、或该标签的实例尚未建立时为空。
    * 与 `focusIntent` 取同一个口径（未落盘的新会话取实例报告的会话），界面据此判断会话是否已展示。
    */
@@ -324,6 +344,19 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     appendKey(projectPath, key)
     if (version === selectionVersion && currentProjectPath.value === projectPath) selectLocal(projectPath, key)
     return terminalId
+  }
+
+  /**
+   * 新建一个浏览器标签：在当前项目下创建空白标签并激活。
+   */
+  async function openBrowserTab(initialUrl?: string): Promise<string> {
+    const projectPath = currentProjectPath.value
+    if (projectPath === null) return ''
+    const key = `${BROWSER_KEY_PREFIX}${Date.now()}_${Math.random().toString(36).slice(2, 6)}`
+    browserStore.ensureTab(key, projectPath, initialUrl)
+    appendKey(projectPath, key)
+    selectLocal(projectPath, key)
+    return key
   }
 
   /**
@@ -454,6 +487,7 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     if (activeTabs.value[projectPath] === key) session.invalidateOpenSelection()
     try {
       if (isFileKey(key)) editorStore.close(key)
+      else if (isBrowserKey(key)) browserStore.removeTab(key)
       else if (isChatKey(key)) {
         // 打开尚未返回时先保留标签，等实际身份绑定后再关闭；失败时仍能保留原标签。
         await session.waitForOpenActions()
@@ -640,6 +674,7 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
   function dropProject(projectPath: string): void {
     for (const key of orders.value[projectPath] ?? []) {
       if (isChatKey(key)) forgetChatTab(key)
+      if (isBrowserKey(key)) browserStore.removeTab(key)
     }
     editorStore.closeProject(projectPath)
     const nextOrders = { ...orders.value }
@@ -667,6 +702,8 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
       } else if (isFileKey(key)) {
         // 文件标签的有效性由编辑记录决定：记录被关闭后，登记过的键自然失效。
         if (editorStore.recordOf(key) === null) continue
+      } else if (isBrowserKey(key)) {
+        if (browserStore.tabs[key] === undefined) continue
       } else if (!alive.has(key)) {
         continue
       }
@@ -706,6 +743,20 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
         terminalStatus: null,
         unseenCompletion: false,
         dirty: record.dirty
+      }
+    }
+    if (isBrowserKey(key)) {
+      const record = browserStore.tabs[key]
+      const title = renames.value[key] ?? record?.title ?? DEFAULT_BROWSER_TITLE
+      const url = record?.url ?? BLANK_PAGE_URL
+      return {
+        id: key,
+        kind: 'browser',
+        title,
+        tooltip: `${title}\n${url}`,
+        terminalStatus: null,
+        unseenCompletion: false,
+        dirty: false
       }
     }
     const session = terminalOf(key)
@@ -1030,6 +1081,10 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     return key.startsWith(FILE_KEY_PREFIX)
   }
 
+  function isBrowserKey(key: string): boolean {
+    return key.startsWith(BROWSER_KEY_PREFIX)
+  }
+
   function terminalIdOf(key: string): string | null {
     return key.startsWith(TERMINAL_KEY_PREFIX) ? key.slice(TERMINAL_KEY_PREFIX.length) : null
   }
@@ -1057,6 +1112,9 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     newChatInputBindings,
     newChatError,
     openFiles,
+    openBrowsers,
+    openBrowserTab,
+    isBrowserKey,
     terminalTabId,
     initialize,
     dispose,
