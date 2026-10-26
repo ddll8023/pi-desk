@@ -1,6 +1,7 @@
 <!-- 供应商模型可见性区块：按单个模型控制它是否出现在输入坞模型选择器里。
      只写桌面端的展示偏好，不读取也不修改 Pi 的模型与认证配置；
-     开关是乐观更新——界面先变，落盘失败由 store 回滚，因此勾选期间不禁用。 -->
+     开关是乐观更新——界面先变，落盘失败由 store 回滚，因此勾选期间不禁用；
+     显示与隐藏同时用复选框、文字和行样式区分，不把隐藏误表达为模型不可用。 -->
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import type { ModelSummary } from '../../../../shared/runtime-api'
@@ -52,6 +53,7 @@ function toggle(model: ModelSummary): void {
         v-model="query"
         type="search"
         placeholder="按模型 id 或显示名过滤"
+        aria-label="搜索这个供应商的模型"
         class="text-control provider-visibility__search"
       >
       <span class="provider-visibility__count">已隐藏 <strong>{{ hiddenCount }}</strong> / {{ models.length }}</span>
@@ -61,7 +63,10 @@ function toggle(model: ModelSummary): void {
     </p>
     <ul v-else class="provider-visibility__list">
       <li v-for="model in filteredModels" :key="model.id">
-        <label class="provider-visibility__row">
+        <label
+          class="provider-visibility__row"
+          :class="{ 'is-hidden': hiddenModelIds.has(model.id), 'is-disabled': disabled }"
+        >
           <input
             type="checkbox"
             class="provider-visibility__checkbox"
@@ -73,6 +78,7 @@ function toggle(model: ModelSummary): void {
             <span class="provider-visibility__name">{{ model.name ?? model.id }}</span>
             <span class="provider-visibility__id">{{ model.id }}</span>
           </span>
+          <span class="provider-visibility__state">{{ hiddenModelIds.has(model.id) ? '隐藏' : '显示' }}</span>
         </label>
       </li>
     </ul>
@@ -117,29 +123,56 @@ function toggle(model: ModelSummary): void {
 .provider-visibility__list {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
-.provider-visibility__row {
-  display: flex;
+.provider-visibility__list > li {
   min-width: 0;
-  align-items: flex-start;
-  gap: 0.625rem;
-  border-top: 1px solid var(--color-desk-line);
-  padding: 0.625rem 0.5rem;
-  cursor: pointer;
 }
 
-.provider-visibility__row:hover {
+.provider-visibility__row {
+  display: grid;
+  height: 100%;
+  min-width: 0;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.625rem;
+  border: 1px solid var(--color-desk-line);
+  border-radius: var(--radius-desk-sm);
+  background: var(--color-desk-surface);
+  padding: 0.75rem;
+  cursor: pointer;
+  transition: background-color var(--default-transition-duration) ease, border-color var(--default-transition-duration) ease;
+}
+
+.provider-visibility__row.is-hidden {
   background: var(--color-desk-surface-subtle);
 }
 
+.provider-visibility__row:not(.is-disabled):hover {
+  border-color: var(--color-desk-line-strong);
+  background: var(--color-desk-accent-soft);
+}
+
+.provider-visibility__row:has(input:focus-visible) {
+  outline: 2px solid var(--color-desk-accent);
+  outline-offset: 1px;
+}
+
+.provider-visibility__row.is-disabled {
+  border-style: dashed;
+  cursor: not-allowed;
+}
+
 .provider-visibility__checkbox {
-  flex: none;
-  margin-top: 0.1875rem;
+  width: 1rem;
+  height: 1rem;
+  margin: 0;
   accent-color: var(--color-desk-accent);
+  cursor: inherit;
 }
 
 .provider-visibility__checkbox:focus-visible {
@@ -155,21 +188,53 @@ function toggle(model: ModelSummary): void {
 
 .provider-visibility__name {
   overflow-wrap: anywhere;
+  color: var(--color-desk-ink);
   font-size: 0.75rem;
+  font-weight: 500;
   line-height: 1.45;
+}
+
+.is-hidden .provider-visibility__name {
+  color: var(--color-desk-muted);
+  font-weight: 400;
 }
 
 .provider-visibility__id {
   overflow-wrap: anywhere;
   color: var(--color-desk-muted);
   font-family: var(--font-mono);
-  font-size: 0.625rem;
+  font-size: 0.6875rem;
   line-height: 1.45;
+}
+
+.provider-visibility__state {
+  border-radius: var(--radius-desk-sm);
+  background: var(--color-desk-accent-soft);
+  padding: 0.125rem 0.375rem;
+  color: var(--color-desk-accent);
+  font-size: 0.6875rem;
+  white-space: nowrap;
+}
+
+.is-hidden .provider-visibility__state {
+  background: var(--color-desk-canvas-sunken);
+  color: var(--color-desk-muted);
+}
+
+.is-disabled .provider-visibility__state {
+  background: var(--color-desk-canvas);
+  color: var(--color-desk-muted);
 }
 
 @media (max-width: 700px) {
   .provider-visibility__list {
     grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .provider-visibility__row {
+    transition: none;
   }
 }
 </style>

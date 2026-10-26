@@ -1,8 +1,8 @@
 <!-- 供应商清单行：行内给出身份与三份数据的汇总，就地展开凭据、条目摘要与对话页可见性。
      展开内容留在被点的那一行下面，展开状态由页面持有且不主动调整页面滚动位置；
-     凭据与可见性各自的写入状态由对应区块自己处理，这里只转发页面级动作。 -->
+     认证由页面编排并在独立弹窗中呈现，可见性写入由对应区块处理；这里转发页面级动作。 -->
 <script lang="ts">
-import type { AuthProviderStatus } from '../../../../shared/auth-api'
+import type { AuthMethod, AuthProviderStatus } from '../../../../shared/auth-api'
 import type { ModelsConfigProvider } from '../../../../shared/models-config-api'
 import type { ModelSummary } from '../../../../shared/runtime-api'
 
@@ -64,6 +64,8 @@ const emit = defineEmits<{
   create: []
   removeEntry: []
   requestRemoveCredential: []
+  login: [method: AuthMethod]
+  resumeAuth: []
 }>()
 
 const runtimeStore = useRuntimeStore()
@@ -89,7 +91,7 @@ function setAllVisible(visible: boolean): void {
 </script>
 
 <template>
-  <div class="provider-row">
+  <div class="provider-row" :class="{ 'is-expanded': expanded }">
     <button
       type="button"
       class="provider-row-trigger"
@@ -99,28 +101,40 @@ function setAllVisible(visible: boolean): void {
       @click="emit('toggle')"
     >
       <span class="provider-row-trigger__identity">
-        <span class="provider-row-trigger__name">{{ row.name }}</span>
-        <span class="provider-row-trigger__id">{{ row.id }}</span>
-        <span v-if="row.custom" class="provider-row-trigger__custom">
-          自定义<span v-if="row.hasApiKey"> · 已配置密钥</span>
+        <span class="provider-row-trigger__headline">
+          <span class="provider-row-trigger__name" :title="row.name">{{ row.name }}</span>
+          <span v-if="row.custom" class="provider-row-trigger__custom" :title="row.hasApiKey ? 'models.json 内已配置密钥' : 'models.json 自定义条目'">自定义</span>
         </span>
+        <span class="provider-row-trigger__id" :title="row.id">{{ row.id }}</span>
       </span>
-      <span class="provider-row-trigger__summary">
-        <span>{{ row.status }}</span>
+      <span class="provider-row-trigger__status" :class="{ 'is-configured': row.configured }" :title="row.status">
+        <span class="provider-row-trigger__status-dot" aria-hidden="true" />
+        <span class="provider-row-trigger__status-text">{{ row.status }}</span>
+      </span>
+      <span class="provider-row-trigger__models" title="Pi 报告的已知模型数量，不代表凭据已通过上游认证">
         <span>{{ row.modelCount }} 个模型</span>
-        <span v-if="row.hiddenCount > 0">隐藏 {{ row.hiddenCount }}</span>
+        <span v-if="row.hiddenCount > 0" class="provider-row-trigger__hidden">隐藏 {{ row.hiddenCount }}</span>
       </span>
-      <span class="provider-row-trigger__action">{{ expanded ? '收起' : '详情' }}</span>
+      <span class="provider-row-trigger__action">
+        {{ expanded ? '收起' : '详情' }}
+        <svg class="provider-row-trigger__chevron" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+          <path d="m6 3 5 5-5 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+      </span>
     </button>
 
     <!-- 详情仍在供应商上下文内展开，各类操作用分隔与标题表达层级。 -->
     <div v-if="expanded" :id="detailId" :data-provider-detail="row.id" class="provider-detail">
       <section class="provider-detail-section">
-        <h3 class="provider-detail-section__title">凭据</h3>
+        <div class="provider-detail-section__heading">
+          <h3 class="provider-detail-section__title">凭据</h3>
+        </div>
         <ProviderCredentialSection
           :provider="row.authStatus"
           :runtime-model-providers="runtimeModelProviders"
           @request-remove="emit('requestRemoveCredential')"
+          @login="emit('login', $event)"
+          @resume="emit('resumeAuth')"
         />
       </section>
 
@@ -139,20 +153,14 @@ function setAllVisible(visible: boolean): void {
           @edit="emit('edit')"
           @create="emit('create')"
         />
-        <!-- 删除是本区块的最后一个动作，单独占一行，不与编辑入口抢同一行。 -->
-        <div v-if="row.entry !== null" class="provider-detail__danger">
-          <AppButton variant="quiet-danger" :disabled="configBusy" @click="emit('removeEntry')">
-            删除这个自定义供应商
-          </AppButton>
-          <p class="provider-detail__danger-hint">
-            只从 models.json 移除这一个条目，不影响其他供应商；Pi 内置或扩展提供的供应商无法在这里删除。
-          </p>
-        </div>
       </section>
 
       <section class="provider-detail-section">
         <div class="provider-detail-section__heading">
-          <h3 class="provider-detail-section__title">在对话页显示</h3>
+          <div class="provider-detail-section__heading-text">
+            <h3 class="provider-detail-section__title">在对话页显示</h3>
+            <span class="provider-detail-section__scope">仅影响模型选择器</span>
+          </div>
           <div class="provider-detail__bulk-actions">
             <AppButton
               variant="compact"
@@ -185,6 +193,12 @@ function setAllVisible(visible: boolean): void {
           :disabled="!canToggle"
         />
       </section>
+
+      <!-- 破坏性操作收在详情末尾，不与认证、编辑和可见性操作混排。 -->
+      <div v-if="row.entry !== null" class="provider-detail__danger">
+        <AppButton variant="quiet-danger" :disabled="configBusy" @click="emit('removeEntry')">删除这个自定义供应商</AppButton>
+        <p class="provider-detail__danger-hint">只移除 models.json 中的这个条目，不影响凭据及其他供应商。</p>
+      </div>
     </div>
   </div>
 </template>
@@ -197,20 +211,27 @@ function setAllVisible(visible: boolean): void {
 .provider-row-trigger {
   display: grid;
   width: 100%;
-  grid-template-columns: minmax(12rem, 1fr) auto auto;
+  min-height: 3.75rem;
+  grid-template-columns: minmax(0, 1fr) minmax(7rem, 0.65fr) 5.5rem 3.5rem;
   align-items: center;
-  gap: 0.75rem 1rem;
-  border-left: 2px solid transparent;
-  padding: 0.75rem 0.625rem;
+  gap: 0.75rem;
+  padding: 0.625rem 0.875rem;
   color: var(--color-desk-ink);
   text-align: left;
-  transition: background-color var(--default-transition-duration) ease, border-color var(--default-transition-duration) ease;
+  cursor: pointer;
+  transition: background-color var(--default-transition-duration) ease;
 }
 
-.provider-row-trigger:hover,
+.provider-row-trigger:hover {
+  background: var(--color-desk-surface-subtle);
+}
+
 .provider-row-trigger.is-expanded {
-  border-left-color: var(--color-desk-accent);
-  background: var(--color-desk-accent-soft);
+  box-shadow: inset 2px 0 0 var(--color-desk-accent);
+}
+
+.provider-row-trigger.is-expanded .provider-row-trigger__name {
+  color: var(--color-desk-accent);
 }
 
 .provider-row-trigger:focus-visible {
@@ -219,74 +240,136 @@ function setAllVisible(visible: boolean): void {
 }
 
 .provider-row-trigger__identity,
-.provider-row-trigger__summary {
+.provider-row-trigger__models {
+  display: grid;
+  min-width: 0;
+  gap: 0.125rem;
+}
+
+.provider-row-trigger__headline {
   display: flex;
   min-width: 0;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 0.375rem 0.75rem;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.provider-row-trigger__name,
+.provider-row-trigger__id,
+.provider-row-trigger__status-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .provider-row-trigger__name {
-  font-size: 0.875rem;
-  font-weight: 650;
-  line-height: 1.4;
+  min-width: 0;
+  font-size: 0.8125rem;
+  font-weight: 600;
 }
 
 .provider-row-trigger__id {
-  overflow-wrap: anywhere;
   color: var(--color-desk-muted);
   font-family: var(--font-mono);
   font-size: 0.6875rem;
 }
 
 .provider-row-trigger__custom {
-  color: var(--color-desk-accent);
+  flex: none;
+  color: var(--color-desk-muted);
   font-size: 0.6875rem;
 }
 
-.provider-row-trigger__summary {
-  justify-content: flex-end;
+.provider-row-trigger__status {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.375rem;
   color: var(--color-desk-muted);
-  font-size: 0.6875rem;
+  font-size: 0.75rem;
+}
+
+.provider-row-trigger__status-dot {
+  width: 0.375rem;
+  height: 0.375rem;
+  flex: none;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+}
+
+.is-configured .provider-row-trigger__status-dot {
+  border-color: var(--color-desk-success);
+  background: var(--color-desk-success);
+}
+
+.provider-row-trigger__models {
+  justify-items: end;
+  color: var(--color-desk-muted);
+  font-size: 0.75rem;
   font-variant-numeric: tabular-nums;
 }
 
-.provider-row-trigger__action {
-  color: var(--color-desk-accent);
+.provider-row-trigger__hidden {
   font-size: 0.6875rem;
-  font-weight: 600;
+}
+
+.provider-row-trigger__action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.25rem;
+  color: var(--color-desk-accent);
+  font-size: 0.75rem;
   white-space: nowrap;
+}
+
+.provider-row-trigger__chevron {
+  width: 0.875rem;
+  height: 0.875rem;
+  flex: none;
+}
+
+.is-expanded > .provider-row-trigger .provider-row-trigger__chevron {
+  transform: rotate(90deg);
 }
 
 .provider-detail {
   display: grid;
-  gap: 0;
-  padding: 0 0.625rem 0.75rem 1rem;
+  padding: 0.5rem 0.875rem 1rem;
 }
 
 .provider-detail-section {
   min-width: 0;
-  padding: 0.875rem 0;
 }
 
-.provider-detail-section + .provider-detail-section {
+.provider-detail-section + .provider-detail-section,
+.provider-detail__danger {
+  margin-top: 1rem;
   border-top: 1px solid var(--color-desk-line);
+  padding-top: 0.875rem;
 }
 
-.provider-detail-section__heading {
+.provider-detail-section__heading,
+.provider-detail-section__heading-text {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
+  gap: 0.375rem 0.75rem;
+}
+
+.provider-detail-section__heading {
   justify-content: space-between;
-  gap: 0.5rem 1rem;
-  margin-bottom: 0.625rem;
+  margin-bottom: 0.5rem;
 }
 
 .provider-detail-section__title {
   margin: 0;
   font-size: 0.75rem;
-  font-weight: 650;
+  font-weight: 600;
+}
+
+.provider-detail-section__scope {
+  color: var(--color-desk-muted);
+  font-size: 0.6875rem;
 }
 
 .provider-detail__bulk-actions {
@@ -298,15 +381,11 @@ function setAllVisible(visible: boolean): void {
 .provider-detail__danger {
   display: flex;
   flex-wrap: wrap;
-  align-items: baseline;
-  gap: 0.5rem 0.75rem;
-  margin-top: 0.75rem;
-  border-top: 1px solid var(--color-desk-line);
-  padding-top: 0.75rem;
+  align-items: center;
+  gap: 0.375rem 0.75rem;
 }
 
 .provider-detail__danger-hint {
-  flex: 1 1 20rem;
   margin: 0;
   color: var(--color-desk-muted);
   font-size: 0.6875rem;
@@ -325,22 +404,57 @@ function setAllVisible(visible: boolean): void {
 
 @media (max-width: 700px) {
   .provider-row-trigger {
-    grid-template-columns: minmax(0, 1fr) auto;
-    gap: 0.5rem;
+    grid-template-columns: minmax(0, 1fr) 5.5rem 3.5rem;
+    gap: 0.25rem 0.625rem;
   }
 
-  .provider-row-trigger__summary {
+  .provider-row-trigger__identity {
     grid-column: 1;
-    justify-content: flex-start;
+    grid-row: 1;
   }
 
-  .provider-row-trigger__action {
+  .provider-row-trigger__status {
+    grid-column: 1;
+    grid-row: 2;
+  }
+
+  .provider-row-trigger__models {
     grid-column: 2;
     grid-row: 1 / span 2;
   }
 
-  .provider-detail {
-    padding-left: 0.75rem;
+  .provider-row-trigger__action {
+    grid-column: 3;
+    grid-row: 1 / span 2;
+  }
+}
+
+@media (max-width: 440px) {
+  .provider-row-trigger {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .provider-row-trigger__status {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+
+  .provider-row-trigger__models {
+    grid-column: 1;
+    grid-row: 3;
+    display: flex;
+    gap: 0.5rem;
+  }
+
+  .provider-row-trigger__action {
+    grid-column: 2;
+    grid-row: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .provider-row-trigger {
+    transition: none;
   }
 }
 </style>

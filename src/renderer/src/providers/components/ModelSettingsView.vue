@@ -1,13 +1,13 @@
 <!-- 模型设置：以供应商为主线的一页，把「能不能用」（凭据）、「指向哪里与有哪些模型」（models.json 条目）
      和「对话页显示哪些」（桌面端展示偏好）收在同一个供应商上下文里。
      页面只做编排：清单行就地展开凭据与可见性，models.json 条目在弹窗里编辑；
-     登录流程固定在粘性顶部条，滚到任何位置都能看到进度与重载入口。
+     登录输入与授权细节由页面级弹窗承载，粘性顶部条只保留紧凑状态与继续、重载入口。
      三份数据各由各自的存储提供：凭据由 Pi 保存在 auth.json（内容不回读到页面），
      条目写 Pi 的 models.json，展示偏好写桌面端配置。 -->
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { storeToRefs } from 'pinia'
-import type { AuthError, AuthProviderStatus } from '../../../../shared/auth-api'
+import type { AuthError, AuthMethod, AuthProviderStatus } from '../../../../shared/auth-api'
 import type { ModelsConfigProvider } from '../../../../shared/models-config-api'
 import type { ModelSummary } from '../../../../shared/runtime-api'
 import { useAuthStore } from '../stores/auth'
@@ -18,6 +18,7 @@ import { copyText } from '../../ui/clipboard'
 import { providerStatusLabel } from '../provider-status'
 import AppButton from '../../ui/AppButton.vue'
 import AuthFlowBanner from './AuthFlowBanner.vue'
+import AuthFlowDialog from './AuthFlowDialog.vue'
 import ConfirmDialog from '../../ui/ConfirmDialog.vue'
 import ProviderEditorDialog from './ProviderEditorDialog.vue'
 import ProviderListItem, { type ProviderRow } from './ProviderListItem.vue'
@@ -50,6 +51,17 @@ const query = ref('')
 const expandedId = ref<string | null>(null)
 /** 编辑器弹窗的目标；null 表示未打开。 */
 const editor = ref<{ mode: 'create' | 'edit'; providerId: string; initialRawText: string } | null>(null)
+/** 认证目标独立于展开行，收起详情或过滤清单不会丢失正在进行的认证入口。 */
+const authTarget = ref<{ providerId: string; name: string; method: AuthMethod } | null>(null)
+const authDialogOpen = ref(false)
+const authStarting = ref(false)
+const authStartFailed = ref(false)
+const authFlowName = computed(() => {
+  const current = flow.value
+  if (authStarting.value || authStartFailed.value || current === null) return authTarget.value?.name ?? ''
+  return authProviders.value.find((provider) => provider.providerId === current.providerId)?.name ?? current.providerId
+})
+
 /** 最近一次写成功的提示；只在本次停留期间展示。 */
 const notice = ref<string | null>(null)
 /** 待确认的凭据删除目标；确认后才发出退出登录请求。 */
@@ -125,7 +137,7 @@ function toRow(provider: AuthProviderStatus): ProviderRow {
 
 /**
  * 清单：默认只列「已配置凭据 / 有已知模型 / 是 models.json 自定义条目」的供应商，
- * 其余内置未配置的收进搜索——命中的行不受这条限制，未配置的供应商仍能被搜到并录入密钥。
+ * 有搜索词时只显示匹配项，不受默认清单范围限制，未配置的供应商仍能被搜到并录入密钥。
  * 排序沿用既有口径：自定义在前、未配置在后，其余按名称升序。
  */
 const providerRows = computed<ProviderRow[]>(() => {
@@ -133,7 +145,7 @@ const providerRows = computed<ProviderRow[]>(() => {
   return authProviders.value
     .map(toRow)
     .filter((row) => {
-      if (keyword !== '' && matches(row, keyword)) return true
+      if (keyword !== '') return matches(row, keyword)
       return row.configured || row.modelCount > 0 || row.custom
     })
     .sort((left, right) => {
@@ -168,11 +180,13 @@ const configLoading = computed(() => configView.value.phase === 'loading' || con
 /** models.json 写动作错误：就近展示在触发它的条目区块，不放到页面顶部。 */
 const configActionError = computed(() => actionError.value?.message ?? null)
 
-/** 本页要展示的认证错误：状态读取、登录流程操作与退出登录各自保留错误。 */
+/** 流程错误在认证弹窗内展示；没有可恢复目标的历史启动错误仍在页面保留。 */
 const authErrors = computed(() => {
   const entries: { readonly key: string; readonly error: AuthError }[] = []
   if (statusView.value.phase === 'error') entries.push({ key: 'status', error: statusView.value.error })
-  if (flowAction.value.phase === 'error') entries.push({ key: 'flow', error: flowAction.value.error })
+  if (flowAction.value.phase === 'error' && authTarget.value === null && flow.value === null) {
+    entries.push({ key: 'flow', error: flowAction.value.error })
+  }
   if (logoutAction.value.phase === 'error') entries.push({ key: 'logout', error: logoutAction.value.error })
   return entries
 })
@@ -196,6 +210,52 @@ function toggleRow(row: ProviderRow): void {
     return
   }
   expandedId.value = row.id
+}
+
+/** 发起认证时先打开弹窗显示启动中状态，旧流程快照不会被当作本次结果。 */
+async function beginAuth(target: { providerId: string; name: string; method: AuthMethod }): Promise<void> {
+  if (authStarting.value || flowAction.value.phase === 'sending') return
+  if (authStore.activeFlow !== null) {
+    resumeAuth()
+    return
+  }
+  authTarget.value = target
+  authStartFailed.value = false
+  authStarting.value = true
+  authDialogOpen.value = true
+  try {
+    await authStore.login(target.providerId, target.method)
+    authStartFailed.value = flowAction.value.phase === 'error'
+  } finally {
+    authStarting.value = false
+  }
+}
+
+function startAuth(provider: AuthProviderStatus, method: AuthMethod): void {
+  void beginAuth({ providerId: provider.providerId, name: provider.name, method })
+}
+
+function retryAuth(): void {
+  if (authTarget.value !== null) void beginAuth(authTarget.value)
+}
+
+/** 收起不终止流程；重新打开时按当前快照恢复目标，而不是依赖清单仍在展开。 */
+function resumeAuth(): void {
+  const current = flow.value
+  if (!authStarting.value && !authStartFailed.value && current !== null) {
+    authTarget.value = {
+      providerId: current.providerId,
+      name: authProviders.value.find((provider) => provider.providerId === current.providerId)?.name ?? current.providerId,
+      method: current.method
+    }
+  }
+  if (authTarget.value !== null) authDialogOpen.value = true
+}
+
+/** 先收起认证弹窗再进入既有的会话中断确认链，不叠加两套焦点约束。 */
+function reloadFromAuth(): void {
+  authDialogOpen.value = false
+  void nextTick(reloadRuntime)
 }
 
 /** 打开编辑器弹窗：编辑既有条目，或按给定 ID 新建；未保存的改动由弹窗自己确认。 */
@@ -283,12 +343,16 @@ onUnmounted(() => {
       </p>
     </header>
 
-    <!-- 流程条固定在顶部：滚到清单中部发起登录时，进度与重载入口仍在视野内。 -->
-    <div
-      v-if="flow !== null"
-      class="model-settings__flow-sticky"
-    >
-      <AuthFlowBanner :reloading="sessionStore.opening" @reload="reloadRuntime" />
+    <!-- 摘要始终可继续，完整表单不再占用列表上方的页面空间。 -->
+    <div v-if="flow !== null || authStarting || authStartFailed" class="model-settings__flow-sticky">
+      <AuthFlowBanner
+        :provider-name="authFlowName"
+        :starting="authStarting"
+        :start-failed="authStartFailed"
+        :reloading="sessionStore.opening"
+        @resume="resumeAuth"
+        @reload="reloadRuntime"
+      />
     </div>
 
     <!-- 错误分层：结论在上一层，原始文本与辅助进程诊断收在可复制的细节里。 -->
@@ -349,45 +413,30 @@ onUnmounted(() => {
           class="text-control"
         >
       </label>
-      <div class="model-settings__toolbar-meta">
-        <span v-if="statusView.phase === 'ready'" class="model-settings__stat">
-          已配置 <strong>{{ configuredCount }}</strong><span class="model-settings__stat-total">/ {{ authProviders.length }}</span>
-        </span>
-        <span class="model-settings__stat">
-          隐藏模型 <strong>{{ totalHiddenCount }}</strong>
-        </span>
-      </div>
-      <div class="model-settings__actions">
-        <AppButton
-          variant="compact"
-          :disabled="!canToggle || totalHiddenCount === 0"
-          @click="showAll"
-        >
-          恢复全部显示
-        </AppButton>
-        <AppButton
-          variant="compact"
-          :disabled="configBusy || statusView.phase === 'loading'"
-          @click="refreshAll"
-        >
-          重新读取
-        </AppButton>
-        <AppButton
-          variant="primary"
-          :disabled="configBusy || parseError !== null"
-          @click="startCreate()"
-        >
-          添加自定义供应商
-        </AppButton>
+      <AppButton
+        variant="primary"
+        class="model-settings__add"
+        :disabled="configBusy || parseError !== null"
+        @click="startCreate()"
+      >添加自定义供应商</AppButton>
+      <div class="model-settings__auxiliary">
+        <div class="model-settings__toolbar-meta">
+          <span v-if="statusView.phase === 'ready'" class="model-settings__stat">
+            已配置 <strong>{{ configuredCount }}</strong><span class="model-settings__stat-total">/ {{ authProviders.length }}</span>
+          </span>
+          <span class="model-settings__stat">隐藏模型 <strong>{{ totalHiddenCount }}</strong></span>
+        </div>
+        <div class="model-settings__actions">
+          <AppButton variant="ghost" :disabled="!canToggle || totalHiddenCount === 0" @click="showAll">恢复全部显示</AppButton>
+          <AppButton variant="ghost" :disabled="configBusy || statusView.phase === 'loading'" @click="refreshAll">重新读取</AppButton>
+        </div>
       </div>
     </div>
-
-    <p v-if="snapshot !== null" class="font-mono text-2xs text-desk-muted">{{ snapshot.filePath }}</p>
     <p v-if="snapshot?.truncated === true" class="status-notice status-notice-warn">
       条目过多，这里只展示了一部分；其余条目仍保留在文件里。
     </p>
 
-    <section class="model-settings__providers">
+    <section class="model-settings__providers" :aria-busy="statusView.phase === 'loading'">
       <div class="model-settings__section-heading">
         <h2>供应商</h2>
         <span>{{ providerRows.length }} 项</span>
@@ -415,10 +464,25 @@ onUnmounted(() => {
             @create="startCreate(row.id)"
             @remove-entry="pendingDelete = row.id"
             @request-remove-credential="pendingCredentialRemoval = row.authStatus"
+            @login="startAuth(row.authStatus, $event)"
+            @resume-auth="resumeAuth"
           />
         </li>
       </ul>
     </section>
+
+    <AuthFlowDialog
+      :open="authDialogOpen"
+      :provider-id="authTarget?.providerId ?? ''"
+      :provider-name="authTarget?.name ?? ''"
+      :method="authTarget?.method ?? 'api_key'"
+      :starting="authStarting"
+      :start-failed="authStartFailed"
+      :reloading="sessionStore.opening"
+      @close="authDialogOpen = false"
+      @retry="retryAuth"
+      @reload="reloadFromAuth"
+    />
 
     <ProviderEditorDialog
       :open="editor !== null"
@@ -432,6 +496,7 @@ onUnmounted(() => {
 
     <details class="model-settings__boundaries">
       <summary>凭据与模型配置说明</summary>
+      <p v-if="snapshot !== null" class="model-settings__config-path font-mono text-2xs text-desk-muted">{{ snapshot.filePath }}</p>
       <ul class="model-settings__boundary-list">
         <li>提交的密钥只经一次受限通道交给 Pi，不进入聊天、提示词、偏好或日志；已保存的凭据不会回传到页面。</li>
         <li>退出登录只删除 Pi 保存在 auth.json 里的凭据，不影响环境变量与 models.json 里配置的凭据或密钥命令。</li>
@@ -470,7 +535,7 @@ onUnmounted(() => {
 <style scoped>
 .model-settings {
   display: grid;
-  gap: 1.25rem;
+  gap: 1rem;
   color: var(--color-desk-ink);
 }
 
@@ -498,24 +563,38 @@ onUnmounted(() => {
   position: sticky;
   z-index: 10;
   top: 0;
-  margin-inline: -1.5rem;
-  border-bottom: 1px solid var(--color-desk-line);
   background: var(--color-desk-canvas);
-  padding: 0.75rem 1.5rem;
 }
 
 .model-settings__toolbar {
   display: grid;
-  grid-template-columns: minmax(12rem, 1fr) auto auto;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  gap: 0.75rem 1rem;
-  border-block: 1px solid var(--color-desk-line);
-  padding-block: 0.75rem;
+  gap: 0.5rem 0.75rem;
 }
 
 .model-settings__search {
   min-width: 0;
-  max-width: 24rem;
+}
+
+.model-settings__search .text-control {
+  padding-block: 0.4375rem;
+  font-size: 0.8125rem;
+}
+
+.model-settings__add {
+  padding-block: 0.4375rem;
+  font-size: 0.8125rem;
+}
+
+.model-settings__auxiliary {
+  display: flex;
+  grid-column: 1 / -1;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.375rem 1rem;
 }
 
 .model-settings__toolbar-meta,
@@ -544,7 +623,7 @@ onUnmounted(() => {
 }
 
 .model-settings__actions {
-  justify-content: flex-end;
+  margin-left: auto;
 }
 
 .model-settings__providers {
@@ -556,8 +635,7 @@ onUnmounted(() => {
   align-items: baseline;
   justify-content: space-between;
   gap: 1rem;
-  border-bottom: 1px solid var(--color-desk-line-strong);
-  padding: 0.25rem 0 0.625rem;
+  padding: 0.25rem 0 0.75rem;
 }
 
 .model-settings__section-heading h2 {
@@ -574,8 +652,14 @@ onUnmounted(() => {
 
 .model-settings__provider-list {
   margin: 0;
+  border-block: 1px solid var(--color-desk-line);
+  background: var(--color-desk-surface);
   padding: 0;
   list-style: none;
+}
+
+.model-settings__provider-list > li {
+  min-width: 0;
 }
 
 .model-settings__provider-list > li + li {
@@ -604,39 +688,27 @@ onUnmounted(() => {
   line-height: 1.6;
 }
 
+.model-settings__config-path {
+  margin-top: 0.625rem;
+  overflow-wrap: anywhere;
+}
+
 .model-settings__boundaries summary:focus-visible {
   outline: 2px solid var(--color-desk-accent);
   outline-offset: 3px;
 }
 
-@media (max-width: 900px) {
-  .model-settings__toolbar {
-    grid-template-columns: minmax(12rem, 1fr) auto;
-  }
-
-  .model-settings__actions {
-    grid-column: 1 / -1;
-    justify-content: flex-start;
-  }
-}
-
-@media (max-width: 560px) {
-  .model-settings {
-    gap: 1rem;
-  }
-
-  .model-settings__flow-sticky {
-    margin-inline: -1.5rem;
-    padding-inline: 1rem;
-  }
-
+@media (max-width: 440px) {
   .model-settings__toolbar {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .model-settings__toolbar-meta,
+  .model-settings__add {
+    justify-self: start;
+  }
+
   .model-settings__actions {
-    justify-content: flex-start;
+    margin-left: 0;
   }
 }
 </style>

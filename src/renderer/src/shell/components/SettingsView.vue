@@ -1,7 +1,7 @@
 <!-- 设置页：左栏是按分组排列的分节导航，右栏是当前分节的内容；两栏各自滚动，页面本身不滚动。
      分节清单来自 settings-navigation，这里只做「渲染导航 + 按 id 分发内容」，新增设置项不必改模板结构；
-     页面标题在左栏顶部，内容区每个分节自带一层页头（h1 加一句描述），其后才是按分节需要排布的卡片。
-     内容区沿用统一的水平内边距（p-6 / sm:p-8）：ModelSettingsView 的粘性流程条用负边距抵消它来贴边。 -->
+     页面标题在左栏顶部，内容区每个分节自带一层页头（h1 加一句描述），其后按分节需要组织内容。
+     内容区沿用统一的水平内边距，模型页的粘性认证摘要与正文在同一内容列对齐。 -->
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
 import { usePreferencesStore } from '../../preferences/stores/preferences'

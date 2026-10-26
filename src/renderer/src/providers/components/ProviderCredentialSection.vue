@@ -1,70 +1,62 @@
-<!-- Provider 凭据区块：展示一个 Provider 的凭据可用性，并提供录入 API Key、账户登录与删除已保存凭据的入口。
-     供应商名称、id 与凭据状态由所在清单行给出，这里只补充行上没有的可用性提示与动作；
-     只读 Pi 报告的凭据状态，不回传任何凭据内容；删除不可逆，确认对话框由父级持有。 -->
+<!-- 供应商凭据摘要与入口：只展示可用性提示，认证输入和过程反馈交给页面级认证弹窗。
+     已有流程提供继续入口；这里不直接启动认证，不持有密钥，删除仍由父级确认。 -->
 <script setup lang="ts">
+import { computed } from 'vue'
 import type { AuthMethod, AuthProviderStatus } from '../../../../shared/auth-api'
 import { useAuthStore } from '../stores/auth'
 import AppButton from '../../ui/AppButton.vue'
 
 const props = defineProps<{
-  /** 要展示的 Provider 状态；不含凭据内容。 */
-  provider: AuthProviderStatus
-  /** Runtime 能力快照里已有模型的 Provider；null 表示能力未就绪，此时不给可用性提示。 */
-  runtimeModelProviders: ReadonlySet<string> | null
+  readonly provider: AuthProviderStatus
+  readonly runtimeModelProviders: ReadonlySet<string> | null
 }>()
 
-const emit = defineEmits<{ (event: 'request-remove'): void }>()
-
+const emit = defineEmits<{
+  login: [method: AuthMethod]
+  resume: []
+  'request-remove': []
+}>()
 const authStore = useAuthStore()
+const hasCurrentFlow = computed(() => authStore.activeFlow?.providerId === props.provider.providerId)
 
-function methodLabel(provider: AuthProviderStatus, method: AuthMethod): string {
-  if (method === 'oauth') return provider.oauthLoginLabel ?? '账户登录'
-  return '录入 API Key'
-}
-
-/** 模型可用性提示：只说明当前 Runtime 的快照里有没有该 Provider 的模型。 */
-function availabilityLabel(): string | null {
+/** 只描述当前 Runtime 模型目录，不把已知模型数当作可用模型数。 */
+const availabilityLabel = computed(() => {
   if (props.runtimeModelProviders === null) return null
-  if (props.runtimeModelProviders.has(props.provider.providerId)) {
-    return `Runtime 里已有 ${props.provider.modelCount} 个可用模型`
-  }
-  if (!props.provider.configured) return null
-  return 'Runtime 里还没有它的可用模型；可能需要重新加载'
+  if (props.runtimeModelProviders.has(props.provider.providerId)) return '当前会话的模型目录已包含这个供应商。'
+  return props.provider.configured ? '当前会话尚未加载这个供应商的模型，配置后需重新加载。' : null
+})
+
+function actionLabel(method: AuthMethod): string {
+  if (method === 'oauth') return `登录：${props.provider.oauthLoginLabel ?? '账户登录'}`
+  return '录入 API Key'
 }
 </script>
 
 <template>
   <div class="provider-credential">
-    <p v-if="availabilityLabel() !== null" class="provider-credential__note">
-      {{ availabilityLabel() }}
-    </p>
-    <p v-if="provider.subscription" class="provider-credential__note">
-      账户登录由 Provider 订阅支撑。
-    </p>
-
-    <div v-if="provider.authTypes.length > 0" class="provider-credential__actions">
-      <AppButton
-        v-for="method in provider.authTypes"
-        :key="`${provider.providerId}-${method}`"
-        variant="compact"
-        :disabled="authStore.flowAction.phase === 'sending' || authStore.activeFlow !== null"
-        @click="authStore.login(provider.providerId, method)"
-      >
-        {{ method === 'oauth' ? `登录：${methodLabel(provider, method)}` : '录入 API Key' }}
-      </AppButton>
-      <AppButton
-        v-if="provider.storedType !== null"
-        variant="quiet-danger"
-        class="ml-auto"
-        :disabled="authStore.logoutAction.phase === 'sending'"
-        @click="emit('request-remove')"
-      >
-        删除已保存凭据
-      </AppButton>
+    <div v-if="availabilityLabel !== null || provider.subscription" class="provider-credential__notes">
+      <p v-if="availabilityLabel !== null">{{ availabilityLabel }}</p>
+      <p v-if="provider.subscription">账户登录由 Provider 订阅支撑。</p>
     </div>
-    <p v-else class="provider-credential__note">
-      这个 Provider 的凭据只能在 Pi 外部配置；这里只展示状态。
-    </p>
+    <div v-if="provider.authTypes.length > 0 || hasCurrentFlow" class="provider-credential__actions">
+      <AppButton v-if="hasCurrentFlow" variant="compact" @click="emit('resume')">继续认证</AppButton>
+      <template v-else>
+        <AppButton
+          v-for="method in provider.authTypes"
+          :key="`${provider.providerId}-${method}`"
+          variant="compact"
+          class="provider-credential__login-button"
+          :disabled="authStore.flowAction.phase === 'sending' || authStore.activeFlow !== null"
+          @click="emit('login', method)"
+        >{{ actionLabel(method) }}</AppButton>
+      </template>
+      <div v-if="provider.storedType !== null" class="provider-credential__removal">
+        <AppButton variant="quiet-danger" :disabled="authStore.logoutAction.phase === 'sending'" @click="emit('request-remove')">
+          删除已保存凭据
+        </AppButton>
+      </div>
+    </div>
+    <p v-else class="provider-credential__external">这个 Provider 的凭据只能在 Pi 外部配置；这里只展示状态。</p>
   </div>
 </template>
 
@@ -73,32 +65,41 @@ function availabilityLabel(): string | null {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
+  justify-content: space-between;
   gap: 0.5rem 1rem;
 }
 
-.provider-credential__note {
+.provider-credential__notes {
+  min-width: 0;
   flex: 1 1 18rem;
+}
+
+.provider-credential__notes p,
+.provider-credential__external {
   margin: 0;
   color: var(--color-desk-muted);
-  font-size: 0.6875rem;
-  line-height: 1.55;
+  font-size: 0.75rem;
+  line-height: 1.6;
 }
 
 .provider-credential__actions {
   display: flex;
-  flex: 0 1 auto;
+  min-width: 0;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.375rem;
+  gap: 0.5rem;
 }
 
-.provider-credential__actions :deep(.control-button-quiet-danger) {
-  margin-left: 0.25rem;
+.provider-credential__login-button {
+  max-width: 100%;
+  height: auto;
+  min-height: 2rem;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
-@media (max-width: 600px) {
-  .provider-credential__actions {
-    flex-basis: 100%;
-  }
+.provider-credential__removal {
+  border-left: 1px solid var(--color-desk-line);
+  padding-left: 0.5rem;
 }
 </style>

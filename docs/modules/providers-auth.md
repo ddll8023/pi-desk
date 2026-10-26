@@ -4,7 +4,7 @@
 
 ## 职责与入口
 
-负责模型设置页里的供应商凭据、API Key／OAuth 登录退出、自定义 `models.json` 条目，以及默认模型、当前会话模型选择和对话页模型可见性。入口为设置页“模型”、登录流程条与聊天输入区模型选择器。
+负责模型设置页里的供应商凭据、API Key／OAuth 登录退出、自定义 `models.json` 条目，以及默认模型、当前会话模型选择和对话页模型可见性。入口为设置页“模型”、认证弹窗与聊天输入区模型选择器。模型页的粘性摘要条只保留认证状态、继续认证与会话重载入口；密钥、验证码、设备授权及认证结果由独立弹窗承载。
 
 凭据、供应商定义、默认模型和桌面展示偏好是四类数据，页面按供应商聚合展示不代表它们共享存储。SDK 会话执行及资源重载由会话模块处理，SDK 安装由更新模块处理。
 
@@ -27,11 +27,12 @@
 | `src/renderer/src/providers/services/models-config.ts` | 供应商定义桥接 |
 | `src/renderer/src/providers/services/pi-settings.ts` | 默认模型桥接 |
 | `src/renderer/src/providers/provider-status.ts` | 供应商配置／认证状态文案 |
-| `src/renderer/src/providers/components/ModelSettingsView.vue` | 按供应商聚合清单、搜索、凭据、定义与可见性 |
-| `src/renderer/src/providers/components/AuthFlowBanner.vue` | 登录流程、提示与资源重载入口 |
+| `src/renderer/src/providers/components/ModelSettingsView.vue` | 按供应商聚合清单、搜索、定义与可见性，编排认证弹窗及会话重载 |
+| `src/renderer/src/providers/components/AuthFlowBanner.vue` | 紧凑认证状态摘要、继续认证与会话重载入口 |
+| `src/renderer/src/providers/components/AuthFlowDialog.vue` | 密钥与验证码输入、设备授权、认证结果、错误与重试及弹窗焦点管理 |
 | `src/renderer/src/providers/components/ProviderListItem.vue` | 供应商清单行与展开区编排 |
 | `src/renderer/src/providers/components/ProviderEntrySummary.vue` | 自定义条目摘要 |
-| `src/renderer/src/providers/components/ProviderCredentialSection.vue` | 凭据配置及登录／退出入口 |
+| `src/renderer/src/providers/components/ProviderCredentialSection.vue` | 凭据摘要、发起／继续认证与删除已保存凭据入口 |
 | `src/renderer/src/providers/components/ProviderDefinitionSection.vue` | 供应商定义与模型条目编辑 |
 | `src/renderer/src/providers/components/ProviderVisibilitySection.vue` | 对话页模型展示开关 |
 | `src/renderer/src/providers/components/ProviderEditorDialog.vue` | 自定义供应商新增／编辑弹层 |
@@ -53,7 +54,7 @@
 
 | 动作 | 路径 | 存储 |
 | --- | --- | --- |
-| 登录／退出 | 模型页 → auth Store／服务 → IPC → AuthManager → 辅助进程 → 官方 SDK | agent 目录 `auth.json`；页面只接收状态与提示 |
+| 登录／退出 | 模型页／认证弹窗 → auth Store／服务 → IPC → AuthManager → 辅助进程 → 官方 SDK | agent 目录 `auth.json`；页面只接收状态与提示 |
 | 定义供应商 | 条目弹层 → models-config Store／服务 → IPC → ModelsConfigManager | agent 目录 `models.json`；按单个 provider 修改 |
 | 删除供应商 | 展开区危险操作 → 确认对话框 → models-config Store／服务 → IPC → ModelsConfigManager | agent 目录 `models.json`；只删该 provider 的条目 |
 | 默认模型 | 选择器 → Runtime Store → pi-settings 服务 → PiSettingsManager | agent 目录 `settings.json` 的默认模型字段 |
@@ -62,6 +63,8 @@
 
 ## 生命周期与安全边界
 
-模型设置页挂载时初始化认证与供应商快照，卸载时释放认证订阅。密钥和验证码输入只在认证交互窗口存在，不作为 Provider 状态快照回传；自定义配置中的真实密钥使用哨兵显示，保存由主进程按位置还原。
+模型设置页挂载时初始化认证与供应商快照，卸载时释放认证订阅。认证弹窗的目标独立于供应商展开行，收起详情或过滤清单不影响流程；收起弹窗会清空未提交的输入，但不取消认证，可由摘要条或对应供应商的“继续认证”入口重新打开，只有明确点击“取消认证”才请求终止流程。密钥和验证码不作为 Provider 状态快照回传；自定义配置中的真实密钥使用哨兵显示，保存由主进程按位置还原。
+
+认证完成不自动重载运行中的会话。弹窗内发起会话重载时，先关闭认证弹窗，再进入既有的会话重载与中断确认链，避免叠加焦点约束。
 
 preload 与服务传递明确字段和普通对象，主进程决定辅助入口与授权地址。默认模型保存不修改当前会话；当前模型切换不隐式修改全局默认。选择器按当前对话的实际绑定状态决定操作目标：原位新草稿使用默认模型预读，不因旧 Runtime 仍就绪就操作旧会话；旧实例结束或新绑定尚在确认时禁用改选与手动刷新，当前模型切换反馈以实际运行状态为准。配置写入需要文件锁及已有基线，不通过第二个 Desktop 配置写入者绕过统一存储。
