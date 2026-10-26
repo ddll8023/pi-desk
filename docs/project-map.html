@@ -204,6 +204,7 @@
           "历史按会话寻址：已绑定读权威分支，未绑定由日志解析作答",
           "运行注册表管理运行身份、绑定代际与占用",
           "消息、工具、历史、活动与用量投影",
+          "点击立即展示本地待发送消息，后台就绪后提交固定输入",
           "SDK 扩展对话框、通知与 widget"
         ],
         "tags": ["Vue 页面", "SDK 宿主", "运行注册表"],
@@ -221,7 +222,7 @@
           {"name": "页面投影留底与历史缓存", "owner": "renderer Runtime Store", "lifecycle": "展示缓存，不替代会话历史存储"}
         ],
         "constraints": [
-          "会话真正绑定前不能发送、回退或压缩",
+          "本地待发送展示不代表执行；会话真正绑定前不向 SDK 提交输入，也不能回退或压缩",
           "历史读取只接受项目与会话，不接受任意文件路径",
           "关闭标签保留历史，与删除会话不同"
         ],
@@ -890,15 +891,15 @@
       {
         "id": "send-message",
         "name": "发送消息",
-        "summary": "页面提交输入，主进程定位 SDK 宿主，宿主执行并把 SDK 事件投影回页面。",
-        "note": "投影到达与 SDK 请求成功收敛不是同一个时点；页面按代际与序号校验后才应用增量。",
+        "summary": "页面立即展示固定输入的本地待发送消息，后台就绪后提交，宿主执行并把 SDK 事件投影回页面。",
+        "note": "本地待发送、SDK 受理与正式投影到达是不同阶段；失败按原归属恢复输入，正式用户消息接替待发送展示，页面仍按代际与序号校验增量。",
         "relationIds": ["r-wt-open-intent", "r-sc-project-guard", "r-genui-session-tools"],
         "steps": [
-          {"title": "准备输入与附件", "description": "输入坞准备文本、附件与文件引用，打开意图固定目标项目与标签；选择本身立即落到标签，不等打开动作整体收尾。", "moduleIds": ["sessions-chat", "workspace-tabs"]},
-          {"title": "提交 Runtime 请求", "description": "Runtime 服务经桥接把运行实例与绑定代际交给主进程，页面不自行决定授权目标。", "moduleIds": ["sessions-chat"]},
+          {"title": "固定输入并立即展示", "description": "输入坞固定本次文本与附件、清空输入区并按原标签显示本地待发送消息；后续编辑不混入本次提交，目标未就绪时先走会话打开链。", "moduleIds": ["sessions-chat", "workspace-tabs"]},
+          {"title": "提交 Runtime 请求", "description": "目标就绪且投影同步后，Runtime 服务经桥接把运行实例、绑定代际与固定输入交给主进程，页面不自行决定授权目标。", "moduleIds": ["sessions-chat"]},
           {"title": "定位宿主并执行", "description": "主进程复核登记项目与信任，注册表决定复用、切前台或建立宿主；宿主请求会话目标准备后调用官方 SDK。", "moduleIds": ["projects-trust", "sessions-chat"]},
           {"title": "生成有界投影", "description": "宿主把 SDK 事件转换为消息、工具、历史与活动投影，生成式界面载荷随工具结果一并识别。", "moduleIds": ["sessions-chat", "genui"]},
-          {"title": "页面应用增量", "description": "页面校验代际与序号后应用增量，聊天组件渲染；切回已缓存实例时直接复用分片。", "moduleIds": ["sessions-chat", "workspace-tabs"]}
+          {"title": "页面应用增量", "description": "页面校验代际与序号后应用增量，正式用户消息接替本地待发送展示；切回已缓存实例时直接复用分片。", "moduleIds": ["sessions-chat", "workspace-tabs"]}
         ]
       },
       {

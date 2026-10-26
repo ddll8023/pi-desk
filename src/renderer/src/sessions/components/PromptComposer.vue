@@ -1,4 +1,5 @@
-<!-- 原位新建以独立草稿承接输入：旧实例结束期间可编辑但不发送，首次发送才建立新会话。
+<!-- 点击发送即固定文字与附件并显示待发送消息，后台就绪后提交；失败恢复输入，不覆盖期间的新草稿。
+     原位新建以独立草稿承接输入：旧实例结束期间可编辑但不发送，首次发送才建立新会话。
      Prompt 输入坞：处理输入法组合态、Enter 发送与 Shift+Enter 换行、焦点回归与重复提交、响应侧栏「新建」的聚焦请求并给出一次性提示，并在 Agent 运行期间原位提供停止入口；同时承接 Extension 的 set_editor_text 填充文本、图片附件的选择/粘贴/拖拽三种入口、输入行按内容自动增高、快捷发送下拉（短语取自界面偏好，可在设置里增删改与排序）、Pi 命令的斜杠模糊补全（Runtime 就绪后用运行中的命令清单，未就绪时用主进程预读的技能清单，按类型分组并按匹配优先级排序；另含 Desktop 层自己拦截的界面命令）与 `@` 项目文件引用（只写入相对路径文本，不传文件内容）；右侧文件树的行拖入坞内也走同一条相对路径引用规则。底部工具条左侧是信息行：异常与进行中的状态文本、被收起的 Extension 对话入口与会话用量指标（缓存命中率、上下文占用与平均速率，点击开明细；累计 token 与费用只在明细浮层展示）；右侧是模型选择、附件、快捷发送与发送/停止按钮。Extension 的 setStatus 项不在输入区展示。 -->
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
@@ -38,8 +39,10 @@ const { editorText, editorTextVersion } = storeToRefs(extensionStore)
 const props = defineProps<{ readonly focusToken: number; readonly active: boolean }>()
 
 const draft = ref('')
-/** 首次提交只启动 Runtime；就绪且投影同步后自动补发输入，启动期间用户仍可继续编辑。 */
+/** 首次提交固定一份待发送输入；就绪后只补发该快照，后续编辑属于新草稿。 */
 const startupRequested = ref(false)
+let startupPromptId: number | null = null
+let mounted = true
 let startupProjectPath: string | null = null
 let startupTabKey: string | null = null
 const submitting = ref(false)
@@ -89,7 +92,8 @@ const imageInput = ref<HTMLInputElement | null>(null)
 
 /**
  * 草稿与附件按会话或原位新建的输入身份保存，旧实例收尾不改变新草稿归属。
- * 首次发送的输入随新会话建立原样带走；其他空闲与未绑定状态仍不单独留底。
+ * 启动期间保留后续编辑的草稿；本次提交由按标签固定的待发送快照承接，不从草稿重新取值。
+ * 未提交的普通空闲与未绑定草稿仍不单独留底。
  */
 function applySessionInput(nextKey: string, previousKey: string | null): void {
   if (startupRequested.value) return
@@ -208,6 +212,7 @@ const canSubmit = computed(() => {
 /** 提交要求文本与附件至少有一项：只发图片不带文字也是合法输入；快捷发送直接用偏好里的短语，因此不看这一条。 */
 const canSend = computed(() => (
   (draft.value.trim() !== '' || pendingImages.value.length > 0) && canSubmit.value
+    && sessionViewStore.pendingPrompt === null
 ))
 /** 图片入口（选择、粘贴、拖拽）共用同一套禁用条件，避免三条路径行为不一致。 */
 const attachDisabled = computed(() => (
@@ -232,7 +237,7 @@ const status = computed<{ readonly kind: 'info' | 'error'; readonly text: string
     if (sessionStore.awaitingTrust) return { kind: 'info', text: '请先完成项目信任确认；新草稿会保留。' }
     if (sessionStore.awaitingInterrupt) return { kind: 'info', text: '请先处理操作确认；新草稿会保留。' }
     if (sessionStore.opening || workspaceTabsStore.isChatBinding || startupRequested.value) {
-      return { kind: 'info', text: '正在准备新会话；输入已保留，就绪后自动发送。' }
+      return { kind: 'info', text: '正在准备新会话；待发送消息已固定，可以继续编辑下一条。' }
     }
     return { kind: 'info', text: commandHint.value ?? '发送后开始新会话。' }
   }
@@ -276,7 +281,7 @@ const status = computed<{ readonly kind: 'info' | 'error'; readonly text: string
       return { kind: 'error', text: `${runtimeView.value.error.message}；可再次点击发送重试启动。` }
     }
     if (runtimeView.value.phase === 'starting') {
-      return { kind: 'info', text: '正在启动 Pi；输入已保留，就绪后自动发送。' }
+      return { kind: 'info', text: '正在启动 Pi；待发送消息已固定，可以继续编辑下一条。' }
     }
     // 侧栏「新建」只聚焦输入框：用一次性提示说明要发送才会开始会话。
     if (newSessionHint.value && canStartRuntime.value) return { kind: 'info', text: '发送后开始新会话。' }
@@ -597,7 +602,7 @@ function sendQuickMessage(index: number): void {
   if (message === undefined) return
   quickSendIndex.value = index
   quickSendOpen.value = false
-  if (!canSubmit.value) return
+  if (!canSubmit.value || sessionViewStore.pendingPrompt !== null) return
   draft.value = message
   textarea.value?.focus()
   void submit()
@@ -612,6 +617,8 @@ function onDocumentPointerDown(event: PointerEvent): void {
 }
 
 onUnmounted(() => {
+  cancelStartup(true)
+  mounted = false
   cancelFileSearch()
   if (newSessionHintTimer !== null) clearTimeout(newSessionHintTimer)
   if (commandHintTimer !== null) clearTimeout(commandHintTimer)
@@ -723,19 +730,25 @@ function onKeydown(event: KeyboardEvent): void {
 }
 
 /**
- * 界面命令 `/compact`、`/new` 在启动分支与发送门禁之前拦截：被门禁拦下时也要说明原因，不能让命令文本静默留在输入框；
- * 未就绪时只保留草稿、不启动 Runtime。
- * 其余输入在 Runtime 未就绪时只启动并保留，就绪后提交，只有请求被接受时才清空且不覆盖新输入。
+ * 在途提交先拦住界面命令并保留草稿；无在途提交时，`/compact`、`/new` 在启动分支与普通发送门禁之前处理。
+ * 命令被拦下时说明原因；未就绪的压缩只保留草稿、不启动 Runtime。
+ * 其余输入点击即移交待发送展示，Runtime 未就绪时先启动，就绪后提交固定快照；失败交回输入。
  */
 async function submit(): Promise<void> {
+  if (submitting.value || sessionViewStore.pendingPrompt !== null) {
+    if (draft.value.trim() === '/new' || draft.value === '/compact' || draft.value.startsWith('/compact ')) {
+      showCommandHint('消息正在提交，稍后再执行界面命令；当前草稿已保留。')
+    }
+    return
+  }
   // 新建对话由 Desktop 发起：在当前标签内就地替换，结束原实例并清空它的会话身份。
   // 判定用 trim：斜杠补全写入的候选带一个尾随空格，命令文本不能因此被当成普通输入发给模型。
   if (draft.value.trim() === '/new') {
     const projectPath = projectStore.currentProject?.path ?? null
     const tabKey = workspaceTabsStore.activeTab
     draft.value = ''
-    // 命令的含义是重开一段对话：上一次「首次发送只启动 Runtime」的待补发意图随之作废。
-    startupRequested.value = false
+    // 新建不继承任何旧的自动发送意图。
+    cancelStartup()
     // 新建只收敛原标签；不在旧实例结束后补开会话，首次发送时才创建执行目标。
     const { outcome } = await workspaceTabsStore.startNewChatInTab()
     if (projectPath !== (projectStore.currentProject?.path ?? null) || tabKey !== workspaceTabsStore.activeTab) return
@@ -773,58 +786,130 @@ async function submit(): Promise<void> {
 
   if (!canSend.value) return
 
+  const projectPath = projectStore.currentProject?.path ?? null
+  const tabKey = workspaceTabsStore.activeTab
+  if (projectPath === null || tabKey === null) return
+  const pending = sessionViewStore.beginPendingPrompt(projectPath, tabKey, sessionViewStore.key,
+    { draft: draft.value, images: [...pendingImages.value] })
+  if (pending === null) return
+  draft.value = ''
+  pendingImages.value = []
+
   if (!runtimeReady.value) {
-    // 首次发送先准备当前对话的执行目标；文字与附件保留到就绪且投影同步后再补发。
-    // 原位新草稿不从旧挂起身份恢复；其他已有挂起会话仍按原身份恢复。
-    startupProjectPath = projectStore.currentProject?.path ?? null
-    startupTabKey = workspaceTabsStore.activeTab
+    // 原位新草稿不从旧挂起身份恢复；启动完成后只补发上面固定的快照。
+    startupProjectPath = projectPath
+    startupTabKey = tabKey
+    startupPromptId = pending.id
     startupRequested.value = true
-    await sessionStore.open(workspaceTabsStore.isChatNewDraft ? null : runtimeStore.suspendedSessionId,
-      false, startupProjectPath ?? undefined, startupTabKey)
-    if (sessionStore.actionError !== null) startupRequested.value = false
+    try {
+      await sessionStore.open(workspaceTabsStore.isChatNewDraft ? null : runtimeStore.suspendedSessionId,
+        false, projectPath, tabKey)
+      if (startupPromptId === pending.id && sessionStore.actionError !== null) cancelStartup()
+    } catch (error) {
+      if (startupPromptId === pending.id) {
+        cancelStartup()
+        showCommandHint(error instanceof Error ? error.message : '启动失败，输入已恢复。')
+      }
+    }
     return
   }
+  await dispatchPendingPrompt(pending.id)
+}
 
-  if (runtimeView.value.phase !== 'ready') return
+/** 恢复时合并后续草稿；离开原标签后的迟到失败只能写回原输入身份。 */
+function restorePendingPrompt(id: number): void {
+  const pending = sessionViewStore.takePendingPrompt(id)
+  if (pending === null) return
+  if (!workspaceTabsStore.hasChatTabKey(pending.projectPath, pending.tabKey)) {
+    sessionViewStore.releaseImages(pending.input.images)
+    return
+  }
+  if (mounted && workspaceTabsStore.activeTab === pending.tabKey
+    && projectStore.currentProject?.path === pending.projectPath
+    && (pending.phase === 'starting' || pending.phase === 'cancelled' || sessionViewStore.key === pending.inputKey)) {
+    draft.value = [pending.input.draft, draft.value].filter(Boolean).join('\n')
+    pendingImages.value = [...pending.input.images, ...pendingImages.value]
+  } else {
+    const sessionId = workspaceTabsStore.sessionIdForTab(pending.projectPath, pending.tabKey)
+    sessionViewStore.restoreInput(sessionId === null ? pending.inputKey : `session:${sessionId}`, pending.input)
+  }
+}
+
+function cancelStartup(beforeInputSwitch = false): void {
+  const id = startupPromptId
+  startupPromptId = null
+  startupRequested.value = false
+  if (id === null) return
+  const pending = sessionViewStore.getPendingPrompt(id)
+  if (pending === null) return
+  if (beforeInputSwitch) {
+    // 首次绑定之前可能只有 idle/run 身份，不能把恢复内容留在公共输入框里带进另一标签。
+    // 连同启动期间的新草稿一起留在原标签，回来后再交回输入；不再自动发送。
+    sessionViewStore.updatePendingPrompt(id, { phase: 'cancelled', input: {
+      draft: [pending.input.draft, draft.value].filter(Boolean).join('\n'),
+      images: [...pending.input.images, ...pendingImages.value]
+    } })
+    draft.value = ''
+    pendingImages.value = []
+  } else restorePendingPrompt(id)
+}
+
+/** 提交固定输入，不重新读取草稿；受理结果与展示身份分开，切走后也能收敛原消息。 */
+async function dispatchPendingPrompt(id: number): Promise<void> {
+  const pending = sessionViewStore.pendingPrompt
+  if (pending?.id !== id || runtimeView.value.phase !== 'ready') {
+    restorePendingPrompt(id)
+    return
+  }
   const target = runtimeView.value.snapshot
-  // 提交固定来源会话：附件读取期间切走时，迟到结果只能落在原会话上。
   const originKey = sessionViewStore.key
-  const originTab = workspaceTabsStore.activeTab
-  const message = draft.value
-  const attachments = [...pendingImages.value]
+  sessionViewStore.updatePendingPrompt(id, { phase: 'sending', inputKey: originKey,
+    target: target.runId === null ? null : { runId: target.runId, runtimeId: target.runtimeId },
+    previousUserIds: runtimeStore.messages.filter(message => message.role === 'user').map(message => message.id) })
   submitting.value = true
   preparingPrompt.value = true
+  // 在切走前记住权威消息已经到达，迟到的失败不能把已发送输入恢复成可重复发送的草稿。
+  let projected = false
+  const stopProjectionWatch = watch(() => {
+    const current = sessionViewStore.getPendingPrompt(id)
+    return current !== null && sessionViewStore.hasPendingMessage(current)
+  }, present => { projected ||= present }, { immediate: true, flush: 'sync' })
   try {
     const images: PromptImageInput[] = []
-    for (const entry of attachments) {
+    for (const entry of pending.input.images) {
       images.push({ name: entry.file.name, mimeType: entry.file.type, data: await readAsBase64(entry.file) })
     }
-    // 附件读取期间允许继续编辑草稿，但不允许把旧提交送入已切换的实例或会话。
-    if (runtimeView.value.phase !== 'ready' || runtimeView.value.snapshot.runId !== target.runId
+    // 附件读取期间切走、关闭标签或卸载，不再发出请求，输入回到原归属。
+    if (!mounted || runtimeView.value.phase !== 'ready' || runtimeView.value.snapshot.runId !== target.runId
       || runtimeView.value.snapshot.runtimeId !== target.runtimeId
       || runtimeView.value.snapshot.info?.sessionId !== target.info?.sessionId
-      || sessionViewStore.key !== originKey || workspaceTabsStore.activeTab !== originTab
-      || !props.active || sessionStore.opening) return
-    const before = promptView.value
-    await runtimeStore.send(message, images)
-    if (promptView.value === before || promptView.value.phase !== 'accepted') return
-
-    startupRequested.value = false
-    if (draft.value === message) draft.value = ''
-    // 只丢弃本次提交的附件：提交期间新加的图片不属于这次发送。
-    const sent = new Set(attachments.map(entry => entry.objectUrl))
-    sessionViewStore.releaseImages(attachments)
-    pendingImages.value = pendingImages.value.filter(entry => !sent.has(entry.objectUrl))
-    if (props.active) textarea.value?.focus()
+      || sessionViewStore.key !== originKey || workspaceTabsStore.activeTab !== pending.tabKey
+      || !props.active || sessionStore.opening) {
+      restorePendingPrompt(id)
+      return
+    }
+    const result = await runtimeStore.send(pending.input.draft, images)
+    if (result?.ok) {
+      if (result.data.disposition === 'started' && !projected) sessionViewStore.updatePendingPrompt(id, { phase: 'accepted' })
+      else sessionViewStore.finishPendingPrompt(id)
+    } else {
+      if (projected) sessionViewStore.finishPendingPrompt(id)
+      else restorePendingPrompt(id)
+    }
+    if (mounted && props.active && workspaceTabsStore.activeTab === pending.tabKey) textarea.value?.focus()
   } catch (error) {
-    if (runtimeView.value.phase === 'ready' && runtimeView.value.snapshot.runId === target.runId
+    if (projected) sessionViewStore.finishPendingPrompt(id)
+    else restorePendingPrompt(id)
+    if (mounted && runtimeView.value.phase === 'ready' && runtimeView.value.snapshot.runId === target.runId
       && runtimeView.value.snapshot.runtimeId === target.runtimeId
       && runtimeView.value.snapshot.info?.sessionId === target.info?.sessionId) {
-      promptView.value = { phase: 'error', error: { code: 'INVALID_REQUEST', message: error instanceof Error ? error.message : '读取图片失败；草稿和附件已保留。' } }
+      promptView.value = { phase: 'error', error: { code: 'INVALID_REQUEST', message: error instanceof Error ? error.message : '读取图片失败；输入已恢复。' } }
     }
   } finally {
+    stopProjectionWatch()
     submitting.value = false
-    preparingPrompt.value = false
+    if (runtimeView.value.phase === 'ready' && runtimeView.value.snapshot.runId === target.runId
+      && runtimeView.value.snapshot.runtimeId === target.runtimeId) preparingPrompt.value = false
   }
 }
 
@@ -837,26 +922,33 @@ watch(
   () => startupRequested.value && runtimeReady.value && projectionSync.value === 'synced'
     && !sessionStore.opening && !sessionStore.awaitingTrust && !sessionStore.awaitingInterrupt
     && props.active && workspaceTabsStore.activeTab === startupTabKey
-    && (draft.value.trim() === '' || canSend.value),
+    && canSubmit.value,
   (pending) => {
-    if (!pending) return
+    if (!pending || startupPromptId === null) return
+    const id = startupPromptId
+    startupPromptId = null
     startupRequested.value = false
-    void submit()
+    void dispatchPendingPrompt(id)
   }
 )
 
 /** 换项目、启动失败或取消信任确认时作废自动发送意图，不让它泄漏到其他会话。 */
 watch(() => [projectStore.currentProject?.path ?? null, workspaceTabsStore.activeTab] as const, ([path, key]) => {
-  if (path !== startupProjectPath || key !== startupTabKey) startupRequested.value = false
+  if (path !== startupProjectPath || key !== startupTabKey) cancelStartup(true)
 }, { flush: 'sync' })
 watch(() => runtimeView.value.phase, (phase) => {
   // 新草稿不接受旧实例的关闭状态；新会话启动失败由打开请求的实际结果收敛。
   if (workspaceTabsStore.isChatNewDraft) return
-  if (phase === 'failed' || phase === 'closed' || phase === 'stopping') startupRequested.value = false
+  if (phase === 'failed' || phase === 'closed' || phase === 'stopping') cancelStartup()
 })
 watch(() => sessionStore.awaitingTrust || sessionStore.awaitingInterrupt, (awaiting, previous) => {
-  if (previous && !awaiting && !sessionStore.opening && !runtimeReady.value) startupRequested.value = false
+  if (previous && !awaiting && !sessionStore.opening && !runtimeReady.value) cancelStartup()
 })
+
+/** 切回启动已取消的原标签后才恢复输入，避免尚未绑定的草稿串到其他标签。 */
+watch(() => sessionViewStore.pendingPrompt, pending => {
+  if (pending?.phase === 'cancelled') restorePendingPrompt(pending.id)
+}, { flush: 'post' })
 
 /** Extension 填充文本到达时写入：只在用户未输入时覆盖，否则保留用户内容并提示。 */
 watch(editorTextVersion, () => {
@@ -1152,6 +1244,8 @@ onMounted(() => {
     draft.value = restored.draft
     pendingImages.value = restored.images
   }
+  const pending = sessionViewStore.pendingPrompt
+  if (pending?.phase === 'cancelled') restorePendingPrompt(pending.id)
   if (props.active) textarea.value?.focus()
   autoGrow()
   document.addEventListener('pointerdown', onDocumentPointerDown)
@@ -1343,7 +1437,7 @@ onMounted(() => {
               <AppButton
                 variant="icon"
                 class="w-auto max-w-[min(12rem,40vw)] gap-1 px-2.5"
-                :disabled="!canSubmit || quickSendMessages.length === 0"
+                :disabled="!canSubmit || sessionViewStore.pendingPrompt !== null || quickSendMessages.length === 0"
                 aria-haspopup="listbox"
                 :aria-expanded="quickSendOpen"
                 aria-controls="prompt-quick-send"

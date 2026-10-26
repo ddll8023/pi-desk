@@ -1,4 +1,5 @@
-<!-- 原位新建时保持消息区挂载与阅读留底，但隐藏旧内容、暂停旧会话操作并收起浮层。
+<!-- 待发送消息独立于权威投影展示；首次启动也立即呈现输入，收到正式用户消息后交接，不提供历史操作。
+     原位新建时保持消息区挂载与阅读留底，但隐藏旧内容、暂停旧会话操作并收起浮层。
      消息区：按投影渲染、粘底与对话内跳转；承接用户消息回退确认与修改提交，回退会新建会话（列表折叠为一条），项目文件不回退；回退把原消息文本与可还原的附件交回输入框，修改重试在没能重发时交回修改后的文本。
      每一轮的用户输入摘要与当前所在轮由这里发布给顶部栏的跳转列表，跳转意图也回到这里执行，滚动与折叠仍只有本组件一处权威。
      渲染与折叠都以轮为单位：当前轮与上一轮始终完整展开，更早的轮次只留用户输入、其后的 AI 回答与过程压成一行摘要（见 ChatTurnItem）；开合状态按会话保存，顶部开关控制全局默认。
@@ -64,6 +65,9 @@ let resizeObserver: ResizeObserver | null = null
 const viewCache = createChatViewCache()
 
 const turns = computed(() => viewCache.toTurns(messages.value, tools.value))
+const pendingPrompt = computed(() => sessionViewStore.pendingPrompt)
+const showPendingPrompt = computed(() => pendingPrompt.value !== null
+  && !sessionViewStore.hasPendingMessage(pendingPrompt.value))
 
 /**
  * 一轮是否展开：手动开合优先，其次是默认——当前轮与上一轮始终展开，更早的轮次看顶部全局开关。
@@ -754,6 +758,9 @@ watch([turns, streaming, syncNotice, truncationNotice], onLayoutChange, { flush:
  * 用 pre 才能在补丁前量到旧位置。
  */
 watch(() => sessionViewStore.historyExpanded, () => withAnchoredLayout(() => {}), { flush: 'pre' })
+/** 点击发送即回到底部，不再等首次启动或 Pi 受理回执。 */
+watch(() => pendingPrompt.value?.id, (id) => { if (id !== undefined) jumpToBottom() }, { flush: 'post' })
+watch(showPendingPrompt, onLayoutChange, { flush: 'post' })
 /** 用户消息被受理即回到底部：发送后不再停在旧阅读位置，随后的流式内容继续跟随。 */
 watch(() => promptView.value.phase, (next, previous) => {
   if (next === 'accepted' && previous === 'sending') jumpToBottom()
@@ -796,7 +803,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <section v-show="!props.hidden" class="relative flex min-h-0 flex-1 flex-col bg-desk-canvas-sunken" :inert="props.hidden" :aria-hidden="props.hidden">
+  <section v-show="!props.hidden || pendingPrompt !== null" class="relative flex min-h-0 flex-1 flex-col bg-desk-canvas-sunken" :inert="props.hidden && pendingPrompt === null" :aria-hidden="props.hidden && pendingPrompt === null">
     <div
       ref="scroller"
       class="scroll-area min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-6 [overflow-anchor:none]"
@@ -810,6 +817,7 @@ onBeforeUnmount(() => {
       @keydown="onReadingKey"
     >
       <div ref="content" class="chat-column mx-auto flex flex-col gap-5">
+        <div v-show="!props.hidden" class="contents">
         <p v-if="syncNotice" role="status" class="status-notice status-notice-info">{{ syncNotice }}</p>
         <p v-if="truncationNotice" role="status" class="status-notice">{{ truncationNotice }}</p>
         <p v-if="logActive" role="status" class="status-notice status-notice-info">
@@ -851,7 +859,7 @@ onBeforeUnmount(() => {
           @jump-latest="jumpToGenuiVersion"
         />
 
-        <div v-if="turns.length === 0" class="empty-state">
+        <div v-if="turns.length === 0 && pendingPrompt === null" class="empty-state">
           <p class="empty-state-title">{{ emptyState.title }}</p>
           <p class="empty-state-text">{{ emptyState.description }}</p>
           <div v-if="emptyState.action === 'new-session'" class="mt-2 flex flex-wrap items-center justify-center gap-2">
@@ -869,6 +877,17 @@ onBeforeUnmount(() => {
           <span class="status-dots text-desk-accent" aria-hidden="true"><span></span><span></span><span></span></span>
           <span>{{ compacting ? '正在压缩上下文；需要中断时在下方停止。' : 'Agent 正在运行；需要中断时在下方停止。' }}</span>
         </p>
+        </div>
+
+        <article v-if="showPendingPrompt && pendingPrompt !== null" class="chat-message chat-message-user" aria-label="待发送消息" :aria-busy="pendingPrompt.phase !== 'cancelled'">
+          <div v-for="image in pendingPrompt.input.images" :key="image.objectUrl" class="self-end">
+            <img :src="image.objectUrl" :alt="image.file.name" class="max-h-64 max-w-full rounded-desk-lg" />
+          </div>
+          <div v-if="pendingPrompt.input.draft !== ''" class="chat-bubble chat-bubble-user self-end">{{ pendingPrompt.input.draft }}</div>
+          <p class="self-end text-xs text-desk-muted" role="status">
+            {{ pendingPrompt.phase === 'starting' ? '待发送 · 正在准备会话…' : pendingPrompt.phase === 'sending' ? '正在发送…' : pendingPrompt.phase === 'cancelled' ? '已取消自动发送，正在恢复输入…' : '已提交 · 等待消息同步…' }}
+          </p>
+        </article>
       </div>
     </div>
 

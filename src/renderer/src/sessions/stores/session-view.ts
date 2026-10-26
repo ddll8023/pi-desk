@@ -1,11 +1,12 @@
 /**
  * 按会话保存输入与阅读状态：草稿、待发送附件、粘底与滚动位置。
  *
+ * 待发送消息按标签保存，独立于权威投影；点击即显示，失败时交回输入，启动期间的新草稿不混入提交。
  * 状态只在内存中保留，不写磁盘；渲染层同一时刻只显示当前会话的那一份，离开会话时写入、
  * 切回时取走，因此切换会话不会把上一个会话的草稿、附件或阅读位置带进下一个会话。
  *
  * 已绑定会话与 `/new` 的独立草稿分别留底；新草稿不随旧实例的关闭状态变化，失败后可再次取回。
- * 其他空闲与未绑定实例仍由视图原样带走输入。附件的 objectUrl 由本模块创建与释放：
+ * 未提交的普通空闲与未绑定草稿仍由视图原样带走。附件的 objectUrl 由本模块创建与释放：
  * 应用关闭、状态替换或新草稿所属标签消失时统一释放，视图暂时卸载不使预览失效。
  *
  * 会话键取自前台实例报告的会话身份，并在同一实例暂时失去会话身份（宿主失败、关闭中）时沿用上一次：
@@ -20,11 +21,11 @@
 import { defineStore } from 'pinia'
 import { computed, reactive, ref, watch } from 'vue'
 import type { WatchStopHandle } from 'vue'
-import type { PromptImageInput } from '../../../../shared/runtime-api'
+import type { PromptImageInput, RuntimeTarget } from '../../../../shared/runtime-api'
 import { useRuntimeStore } from './runtime'
 import { NEW_CHAT_INPUT_PREFIX, useWorkspaceTabsStore } from '../../workspace/stores/workspace-tabs'
 
-/** 待发送的图片附件：objectUrl 只用于本地预览，发送时读取 base64 并释放。 */
+/** 图片附件：发送前读取 base64；objectUrl 随输入移交待发送状态，结束时释放，恢复输入时移交而不释放。 */
 export interface PendingImage {
   readonly file: File
   readonly objectUrl: string
@@ -34,6 +35,18 @@ export interface PendingImage {
 export interface SessionInput {
   readonly draft: string
   readonly images: PendingImage[]
+}
+
+/** 点击发送时固定的输入；只用于本地待发送展示，不生成投影消息或历史身份。 */
+export interface PendingPrompt {
+  readonly id: number
+  readonly projectPath: string
+  readonly tabKey: string
+  readonly inputKey: string
+  readonly input: SessionInput
+  readonly phase: 'starting' | 'sending' | 'accepted' | 'cancelled'
+  readonly target: RuntimeTarget | null
+  readonly previousUserIds: readonly string[]
 }
 
 /** 一个会话的阅读状态：粘底时不需要滚动位置，离开底部时按保存的像素位置恢复。 */
@@ -66,6 +79,9 @@ export const useSessionViewStore = defineStore('session-view', () => {
   /** 会话与独立新草稿的输入留底；阅读状态只按实际会话保存，切回时取走。 */
   const inputs = new Map<string, SessionInput>()
   const readings = new Map<string, SessionReading>()
+  const pendingPrompts = ref<readonly PendingPrompt[]>([])
+  let promptSequence = 0
+  const pendingPrompt = computed(() => pendingPrompts.value.find(prompt => prompt.tabKey === workspace.activeTab) ?? null)
   /**
    * 由界面动作（回退、修改重试未被受理）交回输入区的待填内容。
    * 它跨越会话身份变化（回退会新建会话），因此不挂在会话键上；输入区消费一次后不再保留。
@@ -83,6 +99,7 @@ export const useSessionViewStore = defineStore('session-view', () => {
   const turnExpansions = reactive(new Map<string, Map<string, boolean>>())
   let stopRuntimeWatch: WatchStopHandle | null = null
   let stopDraftWatch: WatchStopHandle | null = null
+  let stopPendingWatch: WatchStopHandle | null = null
 
   /** 前台实例报告的会话身份；未就绪或宿主失败时为空。 */
   const reportedSessionId = computed(() => (
@@ -106,6 +123,12 @@ export const useSessionViewStore = defineStore('session-view', () => {
         inputs.delete(inputKey)
       }
     }, { flush: 'post' })
+    stopPendingWatch = watch(() => [runtime.messages, runtime.foregroundRunId, pendingPrompts.value, workspace.tabs] as const, () => {
+      for (const prompt of pendingPrompts.value) {
+        if (!workspace.hasChatTabKey(prompt.projectPath, prompt.tabKey)
+          || (prompt.phase === 'accepted' && hasPendingMessage(prompt))) finishPendingPrompt(prompt.id)
+      }
+    }, { flush: 'post' })
   }
 
   /** 页面卸载时释放订阅与全部附件预览地址。 */
@@ -114,6 +137,10 @@ export const useSessionViewStore = defineStore('session-view', () => {
     stopRuntimeWatch = null
     stopDraftWatch?.()
     stopDraftWatch = null
+    stopPendingWatch?.()
+    stopPendingWatch = null
+    for (const prompt of pendingPrompts.value) releaseImages(prompt.input.images)
+    pendingPrompts.value = []
     for (const input of inputs.values()) releaseImages(input.images)
     inputs.clear()
     readings.clear()
@@ -165,6 +192,51 @@ export const useSessionViewStore = defineStore('session-view', () => {
     const previous = inputs.get(sessionKey)
     if (previous !== undefined) releaseImages(previous.images)
     inputs.set(sessionKey, input)
+  }
+
+  /** 同一标签只允许一份在途输入；附件预览的所有权随输入一起从输入框移交。 */
+  function beginPendingPrompt(projectPath: string, tabKey: string, inputKey: string, input: SessionInput): PendingPrompt | null {
+    if (pendingPrompts.value.some(prompt => prompt.tabKey === tabKey)) return null
+    const prompt: PendingPrompt = { id: ++promptSequence, projectPath, tabKey, inputKey, input,
+      phase: 'starting', target: null, previousUserIds: [] }
+    pendingPrompts.value = [...pendingPrompts.value, prompt]
+    return prompt
+  }
+
+  function updatePendingPrompt(id: number, update: Partial<Pick<PendingPrompt, 'phase' | 'input' | 'inputKey' | 'target' | 'previousUserIds'>>): void {
+    pendingPrompts.value = pendingPrompts.value.map(prompt => prompt.id === id ? { ...prompt, ...update } : prompt)
+  }
+
+  /** 只按原有投影身份判断交接，不拿文本比较或伪造的消息 id 去重。 */
+  function hasPendingMessage(prompt: PendingPrompt): boolean {
+    const target = prompt.target
+    if (target === null || runtime.view.phase !== 'ready'
+      || runtime.view.snapshot.runId !== target.runId || runtime.view.snapshot.runtimeId !== target.runtimeId) return false
+    const previous = new Set(prompt.previousUserIds)
+    return runtime.messages.some(message => message.role === 'user' && !previous.has(message.id))
+  }
+
+  function getPendingPrompt(id: number): PendingPrompt | null {
+    return pendingPrompts.value.find(prompt => prompt.id === id) ?? null
+  }
+
+  /** 移除后由调用方接管附件，用于失败恢复而不是释放。 */
+  function takePendingPrompt(id: number): PendingPrompt | null {
+    const prompt = getPendingPrompt(id)
+    pendingPrompts.value = pendingPrompts.value.filter(candidate => candidate.id !== id)
+    return prompt
+  }
+
+  function finishPendingPrompt(id: number): void {
+    const prompt = takePendingPrompt(id)
+    if (prompt !== null) releaseImages(prompt.input.images)
+  }
+
+  /** 后台失败恢复到原输入身份；已有草稿与新附件均保留，不被旧提交覆盖。 */
+  function restoreInput(inputKey: string, input: SessionInput): void {
+    const current = inputs.get(inputKey)
+    inputs.set(inputKey, { draft: [input.draft, current?.draft ?? ''].filter(Boolean).join('\n'),
+      images: [...input.images, ...(current?.images ?? [])] })
   }
 
   /** 取走某个会话的阅读状态；未记录过时为 null，调用方按默认粘底处理。 */
@@ -234,6 +306,14 @@ export const useSessionViewStore = defineStore('session-view', () => {
   return {
     key,
     requestedInput,
+    pendingPrompt,
+    beginPendingPrompt,
+    updatePendingPrompt,
+    hasPendingMessage,
+    getPendingPrompt,
+    takePendingPrompt,
+    finishPendingPrompt,
+    restoreInput,
     historyExpanded,
     initialize,
     dispose,

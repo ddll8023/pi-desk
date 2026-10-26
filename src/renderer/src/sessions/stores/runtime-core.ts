@@ -16,6 +16,7 @@ import type {
   ProjectionMessage,
   PromptDisposition,
   PromptImageInput,
+  PromptResult,
   RuntimeError,
   RuntimeRewindRequest,
   RuntimeStatus,
@@ -173,7 +174,7 @@ export interface RuntimeCore {
   setHistoryVisibility(turnId: string, visible: boolean, ownerKey: string): void
   currentTarget(): RuntimeTarget | null
   rewindBlocksWrites(): boolean
-  send(message: string, images?: readonly PromptImageInput[]): Promise<void>
+  send(message: string, images?: readonly PromptImageInput[]): Promise<PromptResult | null>
   rewind(request: RuntimeRewindRequest): Promise<boolean>
   compact(instructions: string | null): Promise<CompactOutcome>
   stopOperation(): Promise<void>
@@ -369,21 +370,22 @@ export function createRuntimeCore(deps: RuntimeCoreDeps): RuntimeCore {
       || (rewindView.value.phase === 'error' && rewindView.value.blocked)
   }
 
-  /** 提交 Prompt；旧实例或旧会话的迟到结果不能清空或改写当前输入。 */
-  async function send(message: string, images: readonly PromptImageInput[] = []): Promise<void> {
+  /** 未派发返回 null；已派发的受理结果仍交回原调用方，只有仍属当前绑定时才改写前台动作状态。 */
+  async function send(message: string, images: readonly PromptImageInput[] = []): Promise<PromptResult | null> {
     if (view.value.phase !== 'ready' || promptView.value.phase === 'sending'
-      || modelSwitchView.value.phase === 'switching' || rewindBlocksWrites()) return
+      || modelSwitchView.value.phase === 'switching' || rewindBlocksWrites()) return null
     const target = currentTarget()
-    if (target === null) return
+    if (target === null) return null
     const sessionId = view.value.snapshot.info?.sessionId ?? null
     promptView.value = { phase: 'sending' }
     const result = await sendPrompt(target, message, images)
     if (view.value.phase !== 'ready' || view.value.snapshot.runId !== target.runId
       || view.value.snapshot.runtimeId !== target.runtimeId
-      || (view.value.snapshot.info?.sessionId ?? null) !== sessionId) return
+      || (view.value.snapshot.info?.sessionId ?? null) !== sessionId) return result
     promptView.value = result.ok
       ? { phase: 'accepted', disposition: result.data.disposition }
       : { phase: 'error', error: result.error }
+    return result
   }
 
   /** 显式确认后回退；成功时同步投影。 */

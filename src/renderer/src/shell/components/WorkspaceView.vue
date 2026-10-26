@@ -1,5 +1,5 @@
 <!--
-  工作区视图：标签条、操作失败提示条与面板层；原位新建直接展示空白对话，旧实例收尾不切到整页占位。
+  工作区视图：标签条、操作失败提示条与面板层；原位新建直接展示空白对话，提交后立即展示待发送消息，旧实例收尾不切到整页占位。
 
   面板层只显示活动标签，隐藏用 visibility 而不是 display：面板始终保持真实尺寸，
   输入框量高与终端尺寸测量在隐藏状态下也成立。运行中终端跨项目保留视图，
@@ -21,6 +21,7 @@ import { useProjectStore } from '../../projects/stores/project'
 import { useQuickCommandsStore } from '../../preferences/stores/quick-commands'
 import { useSessionRunsStore } from '../../sessions/stores/session-runs'
 import { useSessionStore } from '../../sessions/stores/session'
+import { useSessionViewStore } from '../../sessions/stores/session-view'
 import { useSettingsStore } from '../stores/settings'
 import { useTerminalStore } from '../../workspace/stores/terminal'
 import { useWorkspaceTabsStore } from '../../workspace/stores/workspace-tabs'
@@ -38,6 +39,7 @@ const extensionStore = useExtensionUiStore()
 const projectStore = useProjectStore()
 const quickCommandsStore = useQuickCommandsStore()
 const sessionStore = useSessionStore()
+const sessionViewStore = useSessionViewStore()
 const sessionRunsStore = useSessionRunsStore()
 const settingsStore = useSettingsStore()
 const terminalStore = useTerminalStore()
@@ -54,10 +56,14 @@ const quickCommandError = computed(() => (
   quickCommandsStore.view.phase === 'error' ? quickCommandsStore.view.error : null
 ))
 
-/** 空白新草稿可以立即显示；已有会话仍要求绑定身份匹配或已有日志历史。 */
+/** 待发送输入也保持面板可见，不在首次启动的身份交接期间退回整页占位。 */
 const chatVisible = computed(() => (
   workspaceTabsStore.isChatNewDraft || workspaceTabsStore.isChatReady || workspaceTabsStore.isChatLogPreview
+    || sessionViewStore.pendingPrompt !== null
 ))
+/** 本地待发送内容可以先显示；原会话内容仍按身份或日志来源门禁。 */
+const chatContentHidden = computed(() => workspaceTabsStore.isChatNewDraft
+  || (!workspaceTabsStore.isChatReady && !workspaceTabsStore.isChatLogPreview))
 
 /** 后台运行终端仍保持挂载，但不能接收焦点与菜单交互。 */
 function isTerminalActive(session: TerminalSessionInfo): boolean {
@@ -185,11 +191,11 @@ function openCommandSettings(): void {
       :aria-hidden="settingsOpen || !chatVisible"
       :aria-busy="chatVisible && sessionStore.opening"
     >
-      <ExtensionNotificationBar v-if="!workspaceTabsStore.isChatNewDraft" />
+      <ExtensionNotificationBar v-if="!chatContentHidden" />
       <!-- 原位新建不展示旧会话活动与浮层；消息区保持挂载以保留失败时的阅读状态。 -->
-      <SessionActivityBar v-if="!workspaceTabsStore.isChatNewDraft" />
-      <ChatMessageList :hidden="workspaceTabsStore.isChatNewDraft" />
-      <div v-if="workspaceTabsStore.isChatNewDraft" class="empty-state flex-1 justify-center" role="status">
+      <SessionActivityBar v-if="!chatContentHidden" />
+      <ChatMessageList :hidden="chatContentHidden" />
+      <div v-if="workspaceTabsStore.isChatNewDraft && sessionViewStore.pendingPrompt === null" class="empty-state flex-1 justify-center" role="status">
         <p class="empty-state-title">新对话</p>
         <p class="empty-state-text">在下方编辑草稿，发送后开始新的对话。</p>
       </div>
@@ -240,7 +246,7 @@ function openCommandSettings(): void {
       <FileEditorView :tab-key="file.key" :active="!settingsOpen && workspaceTabsStore.activeTab === file.key" />
     </div>
 
-    <!-- 已有会话身份不匹配且无日志历史时才占位；原位新草稿走独立空态，不经过这里。 -->
+    <!-- 非新草稿、身份不匹配且无日志历史与本地待发送消息时才占位；待发送内容可独立保持面板可见。 -->
     <div v-if="workspaceTabsStore.isChatActive && !chatVisible" class="workspace-pane" :aria-busy="sessionStore.opening">
       <div class="empty-state flex-1 justify-center" role="status">
         <p class="empty-state-title">{{ sessionStore.opening || projectStore.switching ? '正在切换会话…' : '当前标签尚未连接到会话' }}</p>
