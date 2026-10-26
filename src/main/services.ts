@@ -78,7 +78,7 @@ export const sessionManager = new SessionManager({
 })
 
 /** 手机访问管理器只装配依赖；局域网入口须显式开启，地址与端口自动确定，无需外部代理。 */
-export const lanRemote = new LanRemoteManager(configStore, sessionManager, sdkRuntime)
+export const lanRemote = new LanRemoteManager(configStore, sessionManager, sdkRuntime, trustManager)
 
 /** MCP 服务器探测与取消：与当前会话无关，只按项目跑一次性官方 CLI 进程。 */
 export const mcpInspection = new McpInspectionManager()

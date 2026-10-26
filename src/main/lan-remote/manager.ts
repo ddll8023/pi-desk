@@ -4,6 +4,7 @@ import { networkInterfaces } from 'node:os'
 import type { DesktopConfigStore } from '../config/desktop-config-store'
 import type { SessionManager } from '../sessions/session-manager'
 import type { SdkRuntimeBridge } from '../sessions/sdk-runtime-bridge'
+import type { TrustManager } from '../trust/trust-manager'
 import { isLanAddress } from '../../shared/lan-remote-api'
 import type { LanControlData, LanControlRequest, LanRemoteState } from '../../shared/lan-remote-api'
 import { LanAccessError, LanDeviceManager } from './device-manager'
@@ -39,7 +40,8 @@ export class LanRemoteManager {
   constructor(
     private readonly store: DesktopConfigStore,
     private readonly sessions: SessionManager,
-    private readonly runtime: SdkRuntimeBridge
+    private readonly runtime: SdkRuntimeBridge,
+    private readonly trust: TrustManager
   ) {
     this.devices = new LanDeviceManager(store)
     this.detachDevices = this.devices.onChanged(() => this.publish())
@@ -95,7 +97,7 @@ export class LanRemoteManager {
       const addresses = localAddresses()
       if (!addresses.length) throw new Error('未找到局域网连接，请先让电脑连接 Wi-Fi 或有线网络，再重新开启。')
       const serverId = randomUUID()
-      const service = new LanSessionService(serverId, this.store, this.devices, this.sessions, this.runtime)
+      const service = new LanSessionService(serverId, this.store, this.devices, this.sessions, this.runtime, this.trust)
       const server: LanServer = new LanServer(addresses, this.devices, service, error => {
         if (this.server !== server) return
         this.lastError = `手机访问监听失败：${error.message}`

@@ -1,8 +1,9 @@
-<!-- 手机对话外壳：扫码连接后选择已有会话或新建空白对话，首条消息触发后台创建；不启动桌面 Store，不在重连时重放写操作。 -->
+<!-- 手机对话外壳：扫码、会话选择与后台新建，输入坞提供斜杠候选及界面命令；不启动桌面 Store，不在重连时重放写操作。 -->
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { LAN_REMOTE_MAX_MESSAGE_CHARS } from '../../shared/lan-remote-api'
 import { MAX_SESSION_WINDOW } from '../../shared/session-api'
+import type { LanCommandEntry } from '../../shared/lan-remote-api'
 import { useMobileSession } from './use-mobile-session'
 import MobileMessageList from './components/MobileMessageList.vue'
 import MobileInteractionPanel from './components/MobileInteractionPanel.vue'
@@ -10,7 +11,7 @@ import MobileInteractionPanel from './components/MobileInteractionPanel.vue'
 const {
   connection, sync, projects, sessions, selectedProject, selectedSession, projection, status, interaction,
   loadingSessions, remainingSessions, sessionLimit, draft, error, notice, actionBusy, pendingWrite, pairBusy,
-  newSessionDraft, canCreateSession, startNewSession,
+  newSessionDraft, canCreateSession, startNewSession, commands, commandsLoading, commandsError, commandsTruncated, loadCommands,
   history, messages, tools, canSend, isRunning, recover, chooseProject, chooseSession, back, loadSessions,
   loadEarlier, loadTurn, loadChunk, setHistoryVisibility, sessionKey, send, stop, respond, retryWrite, acknowledgeUnknown, visitPending
 } = useMobileSession()
@@ -28,7 +29,8 @@ const connectionLabel = computed(() => connection.value === 'checking' || pairBu
       : sync.value === 'retrying' || sync.value === 'connecting' ? '同步中' : sync.value === 'paused' ? '已暂停同步' : '已连接')
 const runtimeLabel = computed(() => newSessionDraft.value ? (actionBusy.value ? '正在创建会话并提交首条消息…' : '发送第一条消息后开始新会话')
   : sync.value !== 'synced' ? '连接未同步，电脑上的任务状态待刷新'
-  : isRunning.value ? 'Agent 正在运行' : currentQuestion.value ? '等待你的回应' : '可以继续对话')
+  : pendingWrite.value?.request.command.operation === 'compact' || status.value?.info?.isCompacting ? '正在压缩上下文'
+    : isRunning.value ? 'Agent 正在运行' : currentQuestion.value ? '等待你的回应' : '可以继续对话')
 function resizeInput(): void {
   const element = input.value
   if (!element) return
@@ -36,6 +38,85 @@ function resizeInput(): void {
   element.style.height = `${Math.min(element.scrollHeight, 160)}px`
 }
 watch(draft, () => { void nextTick(resizeInput) })
+
+type MobileSuggestion = LanCommandEntry | { readonly kind: 'local'; readonly name: string; readonly description: string }
+const localCommands: readonly MobileSuggestion[] = [
+  { kind: 'local', name: 'new', description: '进入新对话，保留原会话和电脑上的任务' },
+  { kind: 'local', name: 'compact', description: '压缩当前会话上下文，可追加摘要说明' }
+]
+const commandKinds = { local: '界面命令', skill: '技能', prompt: '模板', extension: '扩展命令' }
+const commandOrder: readonly MobileSuggestion['kind'][] = ['local', 'skill', 'prompt', 'extension']
+const slashQuery = computed(() => draft.value.startsWith('/') && !/\s/.test(draft.value) ? draft.value.slice(1).toLowerCase() : null)
+const commandsDismissed = ref(false)
+const commandIndex = ref(0)
+const commandMenu = ref<HTMLElement | null>(null)
+
+/** 与桌面一致地优先名称匹配，再匹配非连续字符和描述；skill: 查询不混入其他类型。 */
+function commandRank(entry: MobileSuggestion, query: string): number | null {
+  const skillOnly = query.startsWith('skill:')
+  if (skillOnly && entry.kind !== 'skill') return null
+  const needle = skillOnly ? query.slice('skill:'.length) : query
+  if (needle === '') return 0
+  const name = entry.name.toLowerCase()
+  const names = entry.kind === 'skill' && name.startsWith('skill:') ? [name.slice('skill:'.length), name] : [name]
+  if (names.some(value => value === needle)) return 0
+  if (names.some(value => value.startsWith(needle))) return 1
+  if (names.some(value => value.includes(needle))) return 2
+  for (const value of names) {
+    let position = 0
+    let matched = true
+    for (const character of needle) {
+      const found = value.indexOf(character, position)
+      if (found < 0) { matched = false; break }
+      position = found + character.length
+    }
+    if (matched) return 3
+  }
+  return entry.description?.toLowerCase().includes(needle) ? 4 : null
+}
+const commandSuggestions = computed<readonly MobileSuggestion[]>(() => {
+  const query = slashQuery.value
+  if (query === null) return []
+  const resources = connection.value === 'connected' && (newSessionDraft.value || sync.value === 'synced') ? commands.value : []
+  const entries = [...localCommands, ...resources.filter(entry => entry.name !== 'new' && entry.name !== 'compact')]
+  return commandOrder.flatMap(kind => entries.filter(entry => entry.kind === kind).flatMap(entry => {
+    const rank = commandRank(entry, query)
+    return rank === null ? [] : [{ entry, rank }]
+  }).sort((left, right) => left.rank - right.rank).slice(0, 8).map(item => item.entry))
+})
+const showCommandMenu = computed(() => slashQuery.value !== null && !commandsDismissed.value && !actionBusy.value
+  && (newSessionDraft.value || selectedSession.value !== null))
+watch(slashQuery, () => { commandsDismissed.value = false; commandIndex.value = 0 })
+watch(commandSuggestions, () => { commandIndex.value = 0 })
+watch([slashQuery, viewKey, sync, connection, () => status.value?.runtimeId], () => {
+  if (slashQuery.value !== null) void loadCommands()
+})
+
+/** 接受候选只填充命令，不直接执行；保留尾随空格供追加参数。 */
+function acceptCommand(entry: MobileSuggestion | undefined): void {
+  if (!entry) return
+  const name = entry.kind === 'skill' && !entry.name.startsWith('skill:') ? `skill:${entry.name}` : entry.name
+  draft.value = `/${name} `; commandsDismissed.value = true
+  void nextTick(() => { input.value?.focus(); input.value?.setSelectionRange(draft.value.length, draft.value.length); resizeInput() })
+}
+function onPromptKeydown(event: KeyboardEvent): void {
+  if (event.isComposing || event.keyCode === 229) return
+  if (showCommandMenu.value) {
+    if (event.key === 'Escape') { event.preventDefault(); commandsDismissed.value = true; return }
+    if (commandSuggestions.value.length > 0 && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
+      event.preventDefault()
+      const count = commandSuggestions.value.length
+      commandIndex.value = (commandIndex.value + (event.key === 'ArrowDown' ? 1 : -1) + count) % count
+      void nextTick(() => commandMenu.value?.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest' }))
+      return
+    }
+    if (event.key === 'Tab' && commandSuggestions.value.length > 0) {
+      event.preventDefault(); acceptCommand(commandSuggestions.value[commandIndex.value]); return
+    }
+  }
+  // 手机回车仍用于换行，外接键盘的 Ctrl+Enter 才提交。
+  if (event.key === 'Enter' && event.ctrlKey) { event.preventDefault(); void send() }
+}
 function fitViewport(): void {
   document.documentElement.style.setProperty('--mobile-height', `${window.visualViewport?.height ?? window.innerHeight}px`)
 }
@@ -99,10 +180,23 @@ onBeforeUnmount(() => {
       <MobileMessageList v-else :key="viewKey" :messages="messages" :tools="tools" :history="history" :session-key="viewKey" :syncing="sync !== 'synced'" :truncated="projection?.truncated ?? false" @earlier="loadEarlier" @turn="loadTurn" @chunk="loadChunk" @visibility="setHistoryVisibility" />
       <MobileInteractionPanel v-if="currentQuestion" :key="`${viewKey}-${status?.runId}-${status?.runtimeId}-${currentQuestion.id}`" :dialog="currentQuestion" :busy="actionBusy" :blocked="sync !== 'synced' || pendingWrite !== null" @respond="respond" />
       <footer class="mobile-composer-area">
+        <div v-if="showCommandMenu" ref="commandMenu" class="mobile-command-menu scroll-area">
+          <div class="mobile-command-heading"><span>命令</span><button type="button" class="mobile-link-button" :disabled="commandsLoading || connection !== 'connected'" @click="loadCommands(true)">刷新候选</button></div>
+          <p v-if="commandsLoading" class="mobile-command-note" role="status">正在读取命令候选…</p>
+          <p v-if="commandsError" class="mobile-command-note mobile-error" role="alert">{{ commandsError }}</p>
+          <p v-if="newSessionDraft" class="mobile-command-note">新对话先预读技能；模板和扩展命令在会话建立后提供。</p>
+          <p v-if="commandsTruncated" class="mobile-command-note">部分资源未列出，可输入完整命令。</p>
+          <div id="mobile-command-list" role="listbox" aria-label="命令候选">
+            <button v-for="(entry, index) in commandSuggestions" :id="`mobile-command-${index}`" :key="`${entry.kind}:${entry.name}`" type="button" role="option" :aria-selected="index === commandIndex" class="mobile-command-option" @mousedown.prevent @click="acceptCommand(entry)">
+              <span><strong>/{{ entry.name }}</strong><small v-if="entry.description">{{ entry.description }}</small></span><span class="mobile-command-kind">{{ commandKinds[entry.kind] }}</span>
+            </button>
+          </div>
+          <p v-if="!commandsLoading && commandSuggestions.length === 0" class="mobile-command-note">没有匹配的命令。</p>
+        </div>
         <p class="mobile-runtime-status" role="status">{{ runtimeLabel }}<span v-if="status?.info?.modelId"> · {{ status.info.modelId }}</span></p>
         <form class="mobile-composer" @submit.prevent="send">
           <label for="mobile-prompt" class="mobile-sr-only">发送到当前会话的消息</label>
-          <textarea id="mobile-prompt" ref="input" v-model="draft" class="scroll-area" rows="2" :maxlength="LAN_REMOTE_MAX_MESSAGE_CHARS" :placeholder="newSessionDraft ? '输入第一条消息…' : '继续这段对话…'" :disabled="actionBusy" @input="resizeInput" @keydown.ctrl.enter.prevent="send" />
+          <textarea id="mobile-prompt" ref="input" v-model="draft" class="scroll-area" rows="2" :maxlength="LAN_REMOTE_MAX_MESSAGE_CHARS" :placeholder="newSessionDraft ? '输入第一条消息…' : '继续这段对话…'" :disabled="actionBusy" aria-autocomplete="list" :aria-expanded="showCommandMenu" :aria-controls="showCommandMenu ? 'mobile-command-list' : undefined" :aria-activedescendant="showCommandMenu && commandSuggestions.length ? `mobile-command-${commandIndex}` : undefined" @input="resizeInput" @keydown="onPromptKeydown" />
           <div class="mobile-composer-actions"><span class="mobile-muted">{{ draft.length }}/{{ LAN_REMOTE_MAX_MESSAGE_CHARS }}</span><div class="mobile-actions"><button v-if="isRunning" type="button" class="control-button" :disabled="actionBusy || pendingWrite !== null || sync !== 'synced'" @click="stop">停止生成</button><button type="submit" class="control-button-primary" :disabled="!canSend">{{ actionBusy ? '提交中…' : '发送' }}</button></div></div>
         </form>
       </footer>

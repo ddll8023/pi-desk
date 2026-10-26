@@ -21,7 +21,7 @@ function checkVersion(version: number): void {
 }
 export function isWrite(command: LanOperation): boolean {
   return command.operation === 'open' || command.operation === 'create' || command.operation === 'prompt'
-    || command.operation === 'abort' || command.operation === 'respond'
+    || command.operation === 'abort' || command.operation === 'respond' || command.operation === 'compact'
 }
 
 export class MobileClient {

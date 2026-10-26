@@ -1,9 +1,11 @@
-/** 远程会话能力白名单：校验设备与项目，后台新建及首条消息共用去重身份，其余写操作固定会话与绑定代际；不接受任意 IPC 或文件路径。 */
+/** 远程能力白名单：设备与项目授权先于后台会话、命令候选及压缩；候选去除资源路径，写请求固定身份并去重。 */
 import { createHash } from 'node:crypto'
 import type { DesktopConfigStore } from '../config/desktop-config-store'
 import type { SessionManager } from '../sessions/session-manager'
 import type { SdkRuntimeBridge } from '../sessions/sdk-runtime-bridge'
-import type { LanCreatedSession, LanOperation, LanRequest, LanResult, LanSessionTarget } from '../../shared/lan-remote-api'
+import type { LanCommands, LanCreatedSession, LanOperation, LanRequest, LanResult, LanSessionTarget } from '../../shared/lan-remote-api'
+import type { TrustManager } from '../trust/trust-manager'
+import { previewProjectResources, ResourcePreviewError } from '../resources/resource-preview'
 import type { Project } from '../../shared/project-api'
 import { LanAccessError, LanDeviceManager } from './device-manager'
 
@@ -11,6 +13,13 @@ const MAX_WRITE_RECORDS = 1024
 function unwrap<T>(result: LanResult<T>): T {
   if (!result.ok) throw new LanAccessError(result.error.code, result.error.message, 409)
   return result.data
+}
+
+/** 旧手机页面不能把界面命令当作模型输入；压缩必须走固定目标的受限操作。 */
+function rejectBuiltinPrompt(message: string): void {
+  if (/^\/(?:new|compact)(?:\s|$)/.test(message.trim())) {
+    throw new LanAccessError('INVALID_REQUEST', '请刷新手机页面，通过命令入口执行 /new 或 /compact；命令未作为普通消息发送。', 400)
+  }
 }
 
 export class LanSessionService {
@@ -22,7 +31,8 @@ export class LanSessionService {
     private readonly store: DesktopConfigStore,
     private readonly devices: LanDeviceManager,
     private readonly sessions: SessionManager,
-    readonly runtime: SdkRuntimeBridge
+    readonly runtime: SdkRuntimeBridge,
+    private readonly trust: TrustManager
   ) {}
 
   stop(): void { this.stopped = true; this.writes.clear() }
@@ -64,7 +74,8 @@ export class LanSessionService {
     if (request.serverId !== this.serverId) throw new LanAccessError('SERVER_CHANGED', '局域网服务已重启；旧写请求不会重新执行，请刷新连接。', 409)
     const command = request.command
     if (command.operation === 'projects' || command.operation === 'sessions'
-      || command.operation === 'history' || command.operation === 'snapshot') return this.dispatch(deviceId, command)
+      || command.operation === 'history' || command.operation === 'snapshot'
+      || command.operation === 'commandPreview' || command.operation === 'commands') return this.dispatch(deviceId, command)
     const key = `${deviceId}:${request.requestId}`
     const fingerprint = createHash('sha256').update(JSON.stringify(command)).digest('hex')
     const previous = this.writes.get(key)
@@ -93,6 +104,33 @@ export class LanSessionService {
       await this.authorizeProject(deviceId, command.projectId)
       return { projectId: command.projectId, sessions: list.sessions, remaining: list.remaining, skipped: list.skipped, limit: list.limit }
     }
+    if (command.operation === 'commandPreview') {
+      const project = await this.authorizeProject(deviceId, command.projectId)
+      const outcome = await this.trust.resolveLaunchDecision(project.path)
+      try {
+        const preview = await previewProjectResources(project.path, outcome.requiresPrompt ? 'untrusted' : outcome.decision, command.force)
+        await this.authorizeProject(deviceId, command.projectId)
+        if (preview.entriesError !== null) throw new LanAccessError('RESOURCE_READ_FAILED', preview.entriesError, 409)
+        const data: LanCommands = { projectId: command.projectId, sessionId: null, runtimeId: null, truncated: null,
+          entries: preview.entries.filter(entry => entry.kind === 'skill').map(entry => (
+            { kind: entry.kind, name: entry.name, description: entry.description })) }
+        return data
+      } catch (error) {
+        if (error instanceof ResourcePreviewError) throw new LanAccessError(error.code, error.message, 409)
+        throw error
+      }
+    }
+    if (command.operation === 'commands') {
+      await this.authorizeTarget(deviceId, command)
+      const resources = unwrap(await this.runtime.readResources(command.target))
+      await this.authorizeTarget(deviceId, command)
+      if (resources.runtimeId !== command.target.runtimeId) throw new LanAccessError('TARGET_CHANGED', '命令清单所属会话已换代，请重新连接。', 409)
+      if (resources.error !== null) throw new LanAccessError('RESOURCE_READ_FAILED', resources.error, 409)
+      const data: LanCommands = { projectId: command.projectId, sessionId: command.sessionId, runtimeId: resources.runtimeId,
+        truncated: resources.truncated, entries: resources.entries.map(entry => (
+          { kind: entry.kind, name: entry.name, description: entry.description })) }
+      return data
+    }
     if (command.operation === 'history') {
       const project = await this.authorizeProject(deviceId, command.projectId)
       const result = unwrap(await this.sessions.readHistory({ projectPath: project.path, sessionId: command.sessionId, query: command.query }))
@@ -108,6 +146,7 @@ export class LanSessionService {
     }
     if (command.operation === 'create') {
       const project = await this.authorizeProject(deviceId, command.projectId)
+      rejectBuiltinPrompt(command.message)
       const opened = unwrap(await this.sessions.createBackground(project.path))
       await this.authorizeProject(deviceId, command.projectId)
       const sessionId = opened.openedSessionId
@@ -124,7 +163,11 @@ export class LanSessionService {
     if (command.operation === 'snapshot') return this.snapshot(deviceId, command)
     await this.authorizeTarget(deviceId, command)
     switch (command.operation) {
-      case 'prompt': return unwrap(await this.runtime.prompt(command.target, command.message, []))
+      case 'prompt': {
+        rejectBuiltinPrompt(command.message)
+        return unwrap(await this.runtime.prompt(command.target, command.message, []))
+      }
+      case 'compact': return unwrap(await this.runtime.compact({ ...command.target, sessionId: command.sessionId, instructions: command.instructions }))
       case 'abort': return unwrap(await this.runtime.abort(command.target))
       case 'respond': {
         const response = await this.runtime.respondExtensionDialog(command.target, command.dialogId, command.response)

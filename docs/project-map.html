@@ -269,13 +269,15 @@
         "id": "lan-remote",
         "name": "手机访问",
         "groupId": "setting",
-        "summary": "局域网手机访问入口的启停、扫码自动登记设备与手机网页会话新建及接入；开启后自动显示二维码，手机扫码直接进入全部已登记项目，不另建会话运行时，默认不监听。",
+        "summary": "局域网手机访问入口的启停、扫码自动登记设备与手机网页会话新建、接入及命令补全；开启后自动显示二维码，手机扫码直接进入全部已登记项目，不另建会话运行时，默认不监听。",
         "features": [
           "显式开启或关闭主进程中的局域网 HTTP 入口",
           "自动识别局域网地址、分配端口并展示和更新二维码",
           "一次性连接码、设备身份与凭证摘要管理及撤销",
           "手机扫码自动连接、项目选择与会话后台接入",
-          "新建空白对话，首次发送才在电脑后台创建并提交首条消息",
+          "新建空白对话，首次提交对话输入才在电脑后台创建并提交首条消息",
+          "斜杠候选按阶段复用技能预读或绑定资源，选择只填充不执行",
+          "本地 /new 保留原任务，/compact 对已同步空闲会话执行受限压缩",
           "每条连接独立同步，写请求结果未知时保留原请求等待显式重试"
         ],
         "tags": ["Electron 主进程", "局域网直连", "HTTP", "Vue 页面", "设备身份"],
@@ -295,7 +297,8 @@
           "手机与电脑需处于可互相访问的局域网，无需配置代理或证书",
           "入口使用 HTTP，不提供传输加密或公网中继",
           "已连接手机可访问全部已登记项目并驱动 Agent 执行操作，不是只读预览",
-          "后台新建与接入不参与桌面前台选择，也不清扫或占用桌面空白会话"
+          "后台新建与接入不参与桌面前台选择，也不清扫或占用桌面空白会话",
+          "命令候选不携带资源文件路径，界面命令不作为普通消息提交"
         ],
         "links": [
           {"label": "模块文档：手机访问", "href": "modules/lan-remote.md"},
@@ -617,7 +620,8 @@
       {"id": "r-genui-param-switch", "from": "genui", "to": "preferences", "label": "读写生成式开关", "kind": "write"},
       {"id": "r-lr-shell-settings", "from": "lan-remote", "to": "app-shell", "label": "设置页承载启停与设备管理", "kind": "compose"},
       {"id": "r-lr-config-grant", "from": "lan-remote", "to": "projects-trust", "label": "读取全部已登记项目并复核目标", "kind": "call"},
-      {"id": "r-lr-session-access", "from": "lan-remote", "to": "sessions-chat", "label": "校验设备与项目后后台新建或接入会话", "kind": "call"}
+      {"id": "r-lr-session-access", "from": "lan-remote", "to": "sessions-chat", "label": "授权后后台新建／接入、读取绑定资源与压缩", "kind": "call"},
+      {"id": "r-lr-resource-completion", "from": "lan-remote", "to": "resources-mcp", "label": "复用按项目信任决定的技能预读", "kind": "read"}
     ],
     "runtime": {
       "nodes": [
@@ -978,13 +982,14 @@
         "name": "手机继续对话",
         "summary": "桌面开启局域网入口后自动展示二维码，手机扫码自动连接并选择已登记项目，新建或继续会话，在电脑上执行。",
         "note": "手机新建与切换会话不改变桌面前台；新建及首条消息按原请求去重，断开不中断电脑上的任务，结果未知时不自动重发。",
-        "relationIds": ["r-lr-shell-settings", "r-lr-config-grant", "r-lr-session-access"],
+        "relationIds": ["r-lr-shell-settings", "r-lr-config-grant", "r-lr-session-access", "r-lr-resource-completion"],
         "steps": [
           {"title": "开启并扫码", "description": "桌面显式开启局域网 HTTP 入口后自动确定地址与端口并展示二维码；手机扫码自动登记或复用设备身份，无需填写或确认，凭证通过 HttpOnly Cookie 回传。", "moduleIds": ["lan-remote", "app-shell"]},
           {"title": "选择项目与对话", "description": "手机显示全部已登记项目，可选择已有会话或进入新建空白对话；点击新建只保留页面草稿，不维护逐项目设备授权。", "moduleIds": ["lan-remote", "projects-trust"]},
-          {"title": "后台新建或接入", "description": "首次发送才后台创建新会话并提交首条消息；已有会话走后台打开链。两者均复核设备、项目与信任，不改变桌面前台，也不清扫或占用桌面空白会话。", "moduleIds": ["lan-remote", "sessions-chat"]},
+          {"title": "后台新建或接入", "description": "首次提交对话输入才后台创建新会话并提交首条消息；已有会话走后台打开链。两者均复核设备、项目与信任，不改变桌面前台，也不清扫或占用桌面空白会话。", "moduleIds": ["lan-remote", "sessions-chat"]},
           {"title": "独立同步", "description": "连接先建立事件观察再读取快照，之后按序号应用增量；每条连接各自维护水位，慢连接只影响自身。", "moduleIds": ["lan-remote"]},
-          {"title": "提交与结果未知", "description": "新建及首条消息共用去重身份；已创建但消息被拒绝时保留实际会话与输入。其余发送、停止与回应固定会话与绑定代际；结果未知时保留原请求等待显式重试或核对。", "moduleIds": ["lan-remote", "sessions-chat"]}
+          {"title": "命令补全与分流", "description": "输入坞按阶段读取技能预读或绑定资源，候选不含资源路径，选择只填充；/new 本地进入空白对话并保留原任务，/compact 对已同步空闲会话调用 SDK 压缩。", "moduleIds": ["lan-remote", "resources-mcp", "sessions-chat"]},
+          {"title": "提交与结果未知", "description": "新建及首条消息共用去重身份；已创建但消息被拒绝时保留实际会话与输入。其余发送、停止、压缩与回应固定会话与绑定代际；结果未知时保留原请求等待显式重试或核对。", "moduleIds": ["lan-remote", "sessions-chat"]}
         ]
       }
     ]

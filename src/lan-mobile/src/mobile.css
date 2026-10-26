@@ -1,4 +1,4 @@
-/* 手机独立样式入口：沿用桌面主题与 Markdown 排版，补充扫码自动连接、手机布局及触控规则。 */
+/* 手机样式入口：沿用桌面主题与 Markdown，补充扫码连接、触控布局、安全区域及输入坞命令候选。 */
 @import "tailwindcss";
 @import "katex/dist/katex.min.css";
 @import "../../renderer/src/assets/styles/base.css";
@@ -80,6 +80,16 @@ html, body, #app { height: 100%; overflow: hidden; }
 .mobile-option small { display: block; margin-top: 4px; color: var(--color-desk-muted); font-size: 12px; }
 .mobile-option[aria-pressed="true"] { border-color: var(--color-desk-accent); box-shadow: inset 3px 0 var(--color-desk-accent); }
 .mobile-option:disabled { opacity: .55; }
+.mobile-command-menu { max-width: 48rem; max-height: min(14rem, 30dvh); overflow-y: auto; margin: 0 auto 10px; border: 1px solid var(--color-desk-line-strong); border-radius: var(--radius-desk-lg); background: var(--color-desk-surface); }
+.mobile-command-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 12px; color: var(--color-desk-muted); font-size: 12px; }
+.mobile-command-note { margin: 0; padding: 6px 12px; color: var(--color-desk-muted); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.mobile-command-note.mobile-error { color: var(--color-desk-danger); }
+.mobile-command-option { display: flex; align-items: center; width: 100%; min-height: 48px; gap: 12px; padding: 10px 12px; border: 0; border-top: 1px solid var(--color-desk-line); background: transparent; color: var(--color-desk-ink); text-align: left; }
+.mobile-command-option[aria-selected="true"], .mobile-command-option:active { background: var(--color-desk-accent-soft); }
+.mobile-command-option > span:first-child { min-width: 0; flex: 1; }
+.mobile-command-option strong { display: block; font-family: var(--font-mono); font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
+.mobile-command-option small { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; margin-top: 4px; color: var(--color-desk-muted); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.mobile-command-kind { flex: none; color: var(--color-desk-muted); font-size: 11px; }
 .mobile-composer-area { flex: none; padding: 8px max(12px, env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left)); border-top: 1px solid var(--color-desk-line); background: var(--color-desk-surface); }
 .mobile-runtime-status { max-width: 48rem; margin: 0 auto 8px; color: var(--color-desk-muted); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
 .mobile-composer { max-width: 48rem; margin: 0 auto; padding: 8px 12px; border: 1px solid var(--color-desk-line-strong); border-radius: var(--radius-desk-lg); background: var(--color-desk-surface); }

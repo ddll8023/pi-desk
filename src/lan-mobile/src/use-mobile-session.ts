@@ -1,11 +1,11 @@
-/** 手机会话状态：扫码连接、独立选择与实时同步；新对话在首条消息发送时后台创建，草稿与未知写请求仅存页面内存，重连不重放操作。 */
+/** 手机会话状态：扫码、后台新建与同步，按目标读取命令候选并处理本地新建／受限压缩；草稿与未知写请求仅存页面内存，重连不重放。 */
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef } from 'vue'
 import {
-  isLanCreatedSession, isLanHistory, isLanInvalidation, isLanOpenedSession, isLanProjects, isLanSessions, isLanSnapshot,
+  isLanCommands, isLanCreatedSession, isLanHistory, isLanInvalidation, isLanOpenedSession, isLanProjects, isLanSessions, isLanSnapshot,
   isLanRecord, LAN_REMOTE_MAX_MESSAGE_CHARS
 } from '../../shared/lan-remote-api'
-import type { LanCreatedSession, LanProjectSummary, LanRequest, LanSessionTarget, LanSnapshot } from '../../shared/lan-remote-api'
-import { isProjectionBatch, isPromptResult, isRuntimeStatus } from '../../shared/runtime-api'
+import type { LanCommandEntry, LanCreatedSession, LanProjectSummary, LanRequest, LanSessionTarget, LanSnapshot } from '../../shared/lan-remote-api'
+import { COMPACT_INSTRUCTIONS_MAX_CHARS, isProjectionBatch, isPromptResult, isRuntimeStatus } from '../../shared/runtime-api'
 import type { HistoryQuery, ProjectionMessage, ProjectionSnapshot, RuntimeStatus, ToolExecution } from '../../shared/runtime-api'
 import { isExtensionUiSnapshot } from '../../shared/extension-ui-api'
 import type { ExtensionDialogResponseInput, ExtensionUiSnapshot } from '../../shared/extension-ui-api'
@@ -25,6 +25,8 @@ interface PendingWrite {
   readonly project: LanProjectSummary
   readonly session: MobileSession | null
   readonly uncertain: boolean
+  /** 压缩保留原命令文本，只有本次操作成功且输入未变化时才清空。 */
+  readonly inputDraft?: string
 }
 export function useMobileSession() {
   const client = new MobileClient()
@@ -42,6 +44,12 @@ export function useMobileSession() {
   const loadingSessions = ref(false)
   const remainingSessions = ref(0)
   const sessionLimit = ref(SESSION_PAGE_SIZE)
+  const commands = shallowRef<readonly LanCommandEntry[]>([])
+  const commandsLoading = ref(false)
+  const commandsError = ref('')
+  const commandsTruncated = ref<boolean | null>(null)
+  let commandsContext: string | null = null
+  let commandsSequence = 0
   const draft = ref('')
   const error = ref('')
   const notice = ref('')
@@ -73,7 +81,7 @@ export function useMobileSession() {
   const canCreateSession = computed(() => connection.value === 'connected' && selectedProject.value !== null
     && !actionBusy.value && pendingWrite.value === null)
   const canSend = computed(() => connection.value === 'connected'
-    && (newSessionDraft.value || (sync.value === 'synced' && target.value !== null))
+    && (draft.value.trim() === '/new' || newSessionDraft.value || (sync.value === 'synced' && target.value !== null))
     && !actionBusy.value && pendingWrite.value === null && draft.value.trim() !== '' && draft.value.length <= LAN_REMOTE_MAX_MESSAGE_CHARS)
   const isRunning = computed(() => status.value?.info?.isStreaming === true)
 
@@ -82,6 +90,7 @@ export function useMobileSession() {
   function keepDraft(): void { if (selectedSession.value || newSessionDraft.value) drafts.set(key(), draft.value) }
   function resetView(): void {
     keepDraft(); scope += 1; listSequence += 1; loadingSessions.value = false
+    commandsSequence += 1; commandsContext = null; commands.value = []; commandsError.value = ''; commandsLoading.value = false; commandsTruncated.value = null
     controller.abort(); controller = new AbortController()
     closeStream(); cancelRetry(); target.value = null; projection.value = null; status.value = null; interaction.value = null
     history.value = emptyHistory(); sync.value = 'idle'; error.value = ''; notice.value = ''; retryCount = 0
@@ -130,6 +139,32 @@ export function useMobileSession() {
       sessions.value = result.sessions; remainingSessions.value = result.remaining; sessionLimit.value = result.limit
     } catch (failure) { if (alive && sequence === listSequence && selectedProject.value?.id === project.id) markFailure(failure) }
     finally { if (alive && sequence === listSequence) loadingSessions.value = false }
+  }
+  /** 预读只提供技能，绑定后替换为会话实际资源；同一目标不随每个输入字符重复读取。 */
+  async function loadCommands(force = false): Promise<void> {
+    const project = selectedProject.value
+    if (!alive || !project || connection.value !== 'connected' || (!newSessionDraft.value && !selectedSession.value)) return
+    const ref = newSessionDraft.value ? null : target.value
+    if (!newSessionDraft.value && (!ref || sync.value !== 'synced')) return
+    const context = ref ? `${project.id}:${ref.sessionId}:${ref.target.runId}:${ref.target.runtimeId}` : `${project.id}:preview`
+    if (!force && commandsContext === context) return
+    const own = scope; const sequence = ++commandsSequence
+    commandsContext = context; commandsLoading.value = true; commandsError.value = ''; commands.value = []; commandsTruncated.value = null
+    try {
+      const command = ref ? { operation: 'commands' as const, ...ref }
+        : { operation: 'commandPreview' as const, projectId: project.id, force }
+      const result = await client.request(client.prepare(command), isLanCommands, controller.signal)
+      if (!alive || own !== scope || sequence !== commandsSequence) return
+      if (ref && (target.value?.sessionId !== ref.sessionId || target.value.target.runId !== ref.target.runId
+        || target.value.target.runtimeId !== ref.target.runtimeId)) return
+      if (result.projectId !== project.id || result.sessionId !== (ref?.sessionId ?? null)
+        || result.runtimeId !== (ref?.target.runtimeId ?? null)) throw new LanClientError('INVALID_RESPONSE', '命令清单目标不匹配，请刷新候选。')
+      commands.value = result.entries; commandsTruncated.value = result.truncated
+    } catch (failure) {
+      if (!alive || own !== scope || sequence !== commandsSequence) return
+      commandsError.value = errorMessage(failure)
+      if (requiresPairing(failure)) markFailure(failure)
+    } finally { if (alive && own === scope && sequence === commandsSequence) commandsLoading.value = false }
   }
   async function readHistory(query: HistoryQuery) {
     const project = selectedProject.value; const session = selectedSession.value
@@ -314,13 +349,15 @@ export function useMobileSession() {
         return
       }
       if (command.operation === 'prompt') await client.request(pending.request, acceptPromptData)
-      else if (command.operation === 'abort') await client.request(pending.request, isRuntimeStatus)
+      else if (command.operation === 'abort' || command.operation === 'compact') await client.request(pending.request, isRuntimeStatus)
       else if (command.operation === 'respond') await client.request(pending.request, isExtensionUiSnapshot)
       else throw new LanClientError('INVALID_REQUEST', '待确认操作类型无效。')
       if (!alive) return
-      if (command.operation === 'prompt' && pending.sessionKey === key() && draft.value === command.message) draft.value = ''
+      if (pending.sessionKey === key() && ((command.operation === 'prompt' && draft.value === command.message)
+        || (command.operation === 'compact' && draft.value === pending.inputDraft))) draft.value = ''
       pendingWrite.value = null
-      notice.value = `${pending.sessionKey === key() ? '' : `${pending.project.name} 的原会话：`}${pending.label}已受理，实际进展以会话消息为准。`
+      notice.value = command.operation === 'compact' ? '压缩操作已结束，结果以会话中的压缩记录为准。'
+        : `${pending.sessionKey === key() ? '' : `${pending.project.name} 的原会话：`}${pending.label}已受理，实际进展以会话消息为准。`
     } catch (failure) {
       if (!alive) return
       if (pending.uncertain || (failure instanceof LanClientError && failure.uncertain)) pendingWrite.value = { ...pending, uncertain: true }
@@ -352,6 +389,45 @@ export function useMobileSession() {
         label: '新建会话', sessionKey: key(), project, session: null, uncertain: false }
       pendingWrite.value = pending; await sendPending(pending)
     } catch (failure) { error.value = errorMessage(failure) }
+  }
+  /** 界面命令不进入模型消息；手机新建只离开当前展示，不结束可能被桌面使用的原会话。 */
+  async function submitInput(): Promise<void> {
+    const text = draft.value.trim()
+    if (/^\/(?:new|compact)(?:\s|$)/.test(text)) {
+      if (actionBusy.value || pendingWrite.value || connection.value !== 'connected') {
+        notice.value = '当前操作尚未收敛或连接已中断，命令未执行，输入已保留。'
+        return
+      }
+      if (/^\/new(?:\s|$)/.test(text)) {
+        if (text !== '/new') { notice.value = '/new 不接受参数；输入已保留。'; return }
+        if (newSessionDraft.value) { draft.value = ''; notice.value = '当前已经是新对话。'; return }
+        if (!canCreateSession.value) return
+        draft.value = ''; startNewSession(); notice.value = '已进入新对话；原会话及电脑上的任务保持不变。'
+        return
+      }
+      const ref = target.value; const project = selectedProject.value; const session = selectedSession.value
+      if (newSessionDraft.value || !ref || !project || !session) {
+        notice.value = '压缩需要已有会话上下文；先发送一条消息开始对话。'
+        return
+      }
+      if (sync.value !== 'synced' || isRunning.value || status.value?.info?.isCompacting) {
+        notice.value = '当前会话不空闲或尚未同步，压缩未发起；输入已保留。'
+        return
+      }
+      const instructions = text.slice('/compact'.length).trim()
+      if (instructions.length > COMPACT_INSTRUCTIONS_MAX_CHARS) {
+        notice.value = '压缩说明过长，请缩短后重试；输入已保留。'
+        return
+      }
+      try {
+        const pending: PendingWrite = { request: client.prepare({ operation: 'compact', ...ref, instructions: instructions || null }),
+          label: '上下文压缩', sessionKey: key(), project, session, uncertain: false, inputDraft: draft.value }
+        pendingWrite.value = pending; await sendPending(pending)
+      } catch (failure) { error.value = errorMessage(failure) }
+      return
+    }
+    if (newSessionDraft.value) await createSession()
+    else await act('prompt')
   }
   function visitPending(): void {
     const pending = pendingWrite.value
@@ -385,11 +461,11 @@ export function useMobileSession() {
   })
   return { connection, sync, projects, sessions, selectedProject, selectedSession, projection, status, interaction,
     loadingSessions, remainingSessions, sessionLimit, draft, error, notice, actionBusy, pendingWrite, pairBusy,
-    newSessionDraft, canCreateSession, startNewSession,
+    newSessionDraft, canCreateSession, startNewSession, commands, commandsLoading, commandsError, commandsTruncated, loadCommands,
     history, messages, tools, canSend, isRunning, recover, chooseProject, chooseSession, back, loadSessions,
     loadEarlier: historyCache.loadEarlier, loadTurn: historyCache.loadTurn, loadChunk: historyCache.loadChunk,
     setHistoryVisibility: historyCache.setVisibility, sessionKey: key,
-    send: () => newSessionDraft.value ? createSession() : act('prompt'), stop: () => act('abort'),
+    send: submitInput, stop: () => act('abort'),
     respond: (dialogId: string, value: ExtensionDialogResponseInput) => act('respond', { dialogId, value }),
     retryWrite: () => pendingWrite.value ? sendPending(pendingWrite.value) : Promise.resolve(), acknowledgeUnknown, visitPending }
 }
