@@ -80,23 +80,37 @@ html, body, #app { height: 100%; overflow: hidden; }
 .mobile-option small { display: block; margin-top: 4px; color: var(--color-desk-muted); font-size: 12px; }
 .mobile-option[aria-pressed="true"] { border-color: var(--color-desk-accent); box-shadow: inset 3px 0 var(--color-desk-accent); }
 .mobile-option:disabled { opacity: .55; }
-.mobile-command-menu { max-width: 48rem; max-height: min(14rem, 30dvh); overflow-y: auto; margin: 0 auto 10px; border: 1px solid var(--color-desk-line-strong); border-radius: var(--radius-desk-lg); background: var(--color-desk-surface); }
-.mobile-command-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 12px; color: var(--color-desk-muted); font-size: 12px; }
-.mobile-command-note { margin: 0; padding: 6px 12px; color: var(--color-desk-muted); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+/* 候选与输入坞共用主题层级；高度跟随已有可视视口变量，为软键盘让出空间。 */
+.mobile-command-menu { max-width: 48rem; max-height: min(14rem, calc(var(--mobile-height, 100dvh) * .3)); overflow-y: auto; margin: 0 auto 12px; border: 1px solid var(--color-desk-line-strong); border-radius: var(--radius-desk-lg); background: var(--color-desk-surface); box-shadow: var(--shadow-desk-pop); }
+.mobile-command-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 44px; padding: 0 12px; background: var(--color-desk-surface-subtle); color: var(--color-desk-muted); font-size: 12px; }
+.mobile-command-heading > span { font-weight: 600; }
+.mobile-command-note { margin: 0; padding: 8px 12px; color: var(--color-desk-muted); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
 .mobile-command-note.mobile-error { color: var(--color-desk-danger); }
-.mobile-command-option { display: flex; align-items: center; width: 100%; min-height: 48px; gap: 12px; padding: 10px 12px; border: 0; border-top: 1px solid var(--color-desk-line); background: transparent; color: var(--color-desk-ink); text-align: left; }
+.mobile-command-option { display: flex; align-items: center; width: 100%; min-height: 48px; gap: 12px; padding: 12px; border: 0; border-top: 1px solid var(--color-desk-line); background: transparent; color: var(--color-desk-ink); text-align: left; transition: background-color var(--default-transition-duration) ease; }
 .mobile-command-option[aria-selected="true"], .mobile-command-option:active { background: var(--color-desk-accent-soft); }
+.mobile-command-option[aria-selected="true"] { box-shadow: inset 2px 0 var(--color-desk-accent); }
+.mobile-command-option:focus-visible { outline-offset: -2px; }
 .mobile-command-option > span:first-child { min-width: 0; flex: 1; }
-.mobile-command-option strong { display: block; font-family: var(--font-mono); font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
+.mobile-command-option strong { display: block; font-family: var(--font-mono); font-size: 13px; font-weight: 600; line-height: 1.5; overflow-wrap: anywhere; }
 .mobile-command-option small { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; margin-top: 4px; color: var(--color-desk-muted); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
-.mobile-command-kind { flex: none; color: var(--color-desk-muted); font-size: 11px; }
-.mobile-composer-area { flex: none; padding: 8px max(12px, env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left)); border-top: 1px solid var(--color-desk-line); background: var(--color-desk-surface); }
-.mobile-runtime-status { max-width: 48rem; margin: 0 auto 8px; color: var(--color-desk-muted); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
-.mobile-composer { max-width: 48rem; margin: 0 auto; padding: 8px 12px; border: 1px solid var(--color-desk-line-strong); border-radius: var(--radius-desk-lg); background: var(--color-desk-surface); }
-.mobile-composer:focus-within { border-color: var(--color-desk-accent); }
-.mobile-composer textarea { display: block; width: 100%; min-height: 48px; max-height: 160px; resize: none; overflow-y: auto; padding: 4px 0; border: 0; border-radius: 0; outline-offset: 2px; background: transparent; color: var(--color-desk-ink); font-family: inherit; font-size: 16px; line-height: 1.6; }
-.mobile-composer-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 8px; }
-.mobile-composer-actions > span { font-size: 11px; }
+.mobile-command-kind { flex: none; padding: 2px 6px; border: 1px solid var(--color-desk-line); border-radius: var(--radius-desk-sm); background: var(--color-desk-surface-subtle); color: var(--color-desk-muted); font-size: var(--text-2xs); line-height: 1.5; white-space: nowrap; }
+.mobile-composer-area { flex: none; padding: 8px max(12px, env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left)); background: var(--color-desk-canvas); }
+.mobile-runtime-status { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; max-width: 48rem; margin: 0 auto 8px; color: var(--color-desk-muted); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.mobile-runtime-label { min-width: 0; color: var(--color-desk-ink); }
+.mobile-runtime-model { min-width: 0; max-width: 100%; font-family: var(--font-mono); font-size: var(--text-2xs); }
+.mobile-composer { max-width: 48rem; margin: 0 auto; padding: 12px; border: 1px solid var(--color-desk-line-strong); border-radius: var(--radius-desk-lg); background: var(--color-desk-surface); box-shadow: var(--shadow-desk-dock); transition: border-color var(--default-transition-duration) ease; }
+.mobile-composer:focus-within { border-color: var(--color-desk-accent); outline: 2px solid var(--color-desk-accent); outline-offset: 2px; }
+.mobile-composer-input { display: block; width: 100%; min-height: 48px; max-height: 160px; resize: none; overflow-y: auto; padding: 4px 0; border: 0; border-radius: var(--radius-desk-sm); background: transparent; color: var(--color-desk-ink); font-family: inherit; font-size: 16px; line-height: 1.6; }
+.mobile-composer-input::placeholder { color: var(--color-desk-muted); }
+/* 焦点由整个输入坞承接，避免 textarea 再画一层内框；按钮保留自己的键盘焦点环。 */
+.mobile-composer-input:focus-visible { outline: none; }
+.mobile-composer-input:disabled { color: var(--color-desk-muted); }
+.mobile-composer-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin: 8px -12px -12px; padding: 8px 12px; border-top: 1px solid var(--color-desk-line); border-radius: 0 0 var(--radius-desk-lg) var(--radius-desk-lg); background: var(--color-desk-surface-subtle); }
+.mobile-composer-count { flex: none; font-family: var(--font-mono); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.mobile-composer-buttons { min-width: 0; max-width: 100%; justify-content: flex-end; margin-left: auto; }
+.mobile-composer-send, .mobile-composer-stop { border-radius: var(--radius-desk-md); }
+.mobile-composer-send { min-width: 72px; padding: 8px 16px; font-weight: 600; }
+.mobile-composer-stop { font-size: 13px; }
 .mobile-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 @media (min-width: 48rem) { .mobile-page { padding-top: 32px; } .mobile-messages { padding-top: 24px; } }
 @media (prefers-reduced-motion: reduce) { .mobile-app *, .mobile-app *::before, .mobile-app *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; } }

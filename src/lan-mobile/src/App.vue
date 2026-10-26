@@ -193,11 +193,20 @@ onBeforeUnmount(() => {
           </div>
           <p v-if="!commandsLoading && commandSuggestions.length === 0" class="mobile-command-note">没有匹配的命令。</p>
         </div>
-        <p class="mobile-runtime-status" role="status">{{ runtimeLabel }}<span v-if="status?.info?.modelId"> · {{ status.info.modelId }}</span></p>
+        <p class="mobile-runtime-status" role="status">
+          <span class="mobile-runtime-label">{{ runtimeLabel }}</span>
+          <span v-if="status?.info?.modelId" class="mobile-runtime-model"> · {{ status.info.modelId }}</span>
+        </p>
         <form class="mobile-composer" @submit.prevent="send">
           <label for="mobile-prompt" class="mobile-sr-only">发送到当前会话的消息</label>
-          <textarea id="mobile-prompt" ref="input" v-model="draft" class="scroll-area" rows="2" :maxlength="LAN_REMOTE_MAX_MESSAGE_CHARS" :placeholder="newSessionDraft ? '输入第一条消息…' : '继续这段对话…'" :disabled="actionBusy" aria-autocomplete="list" :aria-expanded="showCommandMenu" :aria-controls="showCommandMenu ? 'mobile-command-list' : undefined" :aria-activedescendant="showCommandMenu && commandSuggestions.length ? `mobile-command-${commandIndex}` : undefined" @input="resizeInput" @keydown="onPromptKeydown" />
-          <div class="mobile-composer-actions"><span class="mobile-muted">{{ draft.length }}/{{ LAN_REMOTE_MAX_MESSAGE_CHARS }}</span><div class="mobile-actions"><button v-if="isRunning" type="button" class="control-button" :disabled="actionBusy || pendingWrite !== null || sync !== 'synced'" @click="stop">停止生成</button><button type="submit" class="control-button-primary" :disabled="!canSend">{{ actionBusy ? '提交中…' : '发送' }}</button></div></div>
+          <textarea id="mobile-prompt" ref="input" v-model="draft" class="mobile-composer-input scroll-area" rows="2" :maxlength="LAN_REMOTE_MAX_MESSAGE_CHARS" :placeholder="newSessionDraft ? '输入第一条消息…' : '继续这段对话…'" :disabled="actionBusy" aria-autocomplete="list" :aria-expanded="showCommandMenu" :aria-controls="showCommandMenu ? 'mobile-command-list' : undefined" :aria-activedescendant="showCommandMenu && commandSuggestions.length ? `mobile-command-${commandIndex}` : undefined" @input="resizeInput" @keydown="onPromptKeydown" />
+          <div class="mobile-composer-actions">
+            <span class="mobile-muted mobile-composer-count">{{ draft.length }}/{{ LAN_REMOTE_MAX_MESSAGE_CHARS }}</span>
+            <div class="mobile-actions mobile-composer-buttons">
+              <button v-if="isRunning" type="button" class="control-button mobile-composer-stop" :disabled="actionBusy || pendingWrite !== null || sync !== 'synced'" @click="stop">停止生成</button>
+              <button type="submit" class="control-button-primary mobile-composer-send" :disabled="!canSend">{{ actionBusy ? '提交中…' : '发送' }}</button>
+            </div>
+          </div>
         </form>
       </footer>
     </template>
