@@ -1,6 +1,6 @@
 /**
  * 会话列表、打开、重新加载、删除与历史读取编排的所有者：选择、新建、恢复、重载与删除会话。
- * 后台打开已有会话不依赖桌面当前项目，也不修改桌面前台；登记、归属与信任仍由同一条授权链复核。
+ * 后台新建与打开已有会话不依赖桌面当前项目，也不修改桌面前台；登记、归属与信任仍由同一条授权链复核。
  * 历史读取按会话分流：已由运行实例接管时读权威分支，未接管时读会话日志文件，两条路径返回同一套条目身份。
  *
  * 列表来自 Pi 管理的会话文件（session-store），按调用方显式给出的项目读取并只读取窗口内的文件：
@@ -217,9 +217,25 @@ export class SessionManager {
     }
   }
 
+  /** 后台新建仅允许已登记项目，沿用信任与目标准备门禁，不抢桌面前台或中断已有任务。 */
+  async createBackground(projectPath: string): Promise<SessionOpenResult> {
+    const request: SessionOpenRequest = { projectPath, sessionId: null, allowInterrupt: false }
+    if (!isSessionOpenRequest(request)) {
+      return { ok: false, error: { code: 'INVALID_REQUEST', message: '后台新建必须给出有效的项目路径。' } }
+    }
+    try {
+      return { ok: true, data: await this.applyOpen(request, 'background') }
+    } catch (error) {
+      return this.failure(error, {
+        code: 'INTERNAL_ERROR',
+        message: '后台新建会话时发生未预期的内部错误。'
+      })
+    }
+  }
+
   /**
    * 新建与打开的公共门禁：登记与会话归属共用，只有桌面打开要求当前项目并参与前台选择。
-   * 后台打开先刷新项目资源与信任，缺少决定时拒绝，不代替用户授予信任；实际绑定仍经 SDK 授权链复核。
+   * 后台新建与打开先刷新项目资源与信任，缺少决定时拒绝，不代替用户授予信任；实际绑定仍经 SDK 授权链复核。
    * 多运行实例下打开其他会话不会中断正在运行的会话；后台入口固定不允许中断。
    */
   private async applyOpen(

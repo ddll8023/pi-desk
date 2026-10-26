@@ -1,9 +1,9 @@
-/** 远程会话能力白名单：校验设备身份与已登记项目，固定会话与绑定代际；不分发任意 IPC，不接受文件路径。 */
+/** 远程会话能力白名单：校验设备与项目，后台新建及首条消息共用去重身份，其余写操作固定会话与绑定代际；不接受任意 IPC 或文件路径。 */
 import { createHash } from 'node:crypto'
 import type { DesktopConfigStore } from '../config/desktop-config-store'
 import type { SessionManager } from '../sessions/session-manager'
 import type { SdkRuntimeBridge } from '../sessions/sdk-runtime-bridge'
-import type { LanOperation, LanRequest, LanResult, LanSessionTarget } from '../../shared/lan-remote-api'
+import type { LanCreatedSession, LanOperation, LanRequest, LanResult, LanSessionTarget } from '../../shared/lan-remote-api'
 import type { Project } from '../../shared/project-api'
 import { LanAccessError, LanDeviceManager } from './device-manager'
 
@@ -105,6 +105,21 @@ export class LanSessionService {
       await this.authorizeProject(deviceId, command.projectId)
       return { projectId: command.projectId, sessionId: opened.openedSessionId,
         target: { runId: opened.runId, runtimeId: this.runtime.getStatusOfRun(opened.runId)?.runtimeId ?? null } }
+    }
+    if (command.operation === 'create') {
+      const project = await this.authorizeProject(deviceId, command.projectId)
+      const opened = unwrap(await this.sessions.createBackground(project.path))
+      await this.authorizeProject(deviceId, command.projectId)
+      const sessionId = opened.openedSessionId
+      if (sessionId === null) throw new LanAccessError('INVALID_RESPONSE', '新建会话未返回实际会话身份，请先核对电脑上的结果。', 409)
+      const status = this.runtime.getStatusOfRun(opened.runId)
+      const target = { runId: opened.runId, runtimeId: status?.sessionId === sessionId ? status.runtimeId : null }
+      // 会话已经创建：首条消息失败也返回原身份，手机后续只能重试发送，不再重新新建。
+      const created: LanCreatedSession = { projectId: command.projectId, sessionId, target,
+        prompt: target.runtimeId === null
+          ? { ok: false, error: { code: 'RUNTIME_NOT_READY', message: '会话已创建但运行目标尚未就绪，请重新连接后发送。' } }
+          : await this.runtime.prompt(target, command.message, []) }
+      return created
     }
     if (command.operation === 'snapshot') return this.snapshot(deviceId, command)
     await this.authorizeTarget(deviceId, command)

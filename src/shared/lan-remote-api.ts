@@ -1,6 +1,6 @@
-/** 局域网手机访问契约：自动发现连接地址与扫码登记，设备凭证摘要不进入响应。 */
-import { isHistoryData, isHistoryQuery, isProjectionResult, isRuntimeStatus, isRuntimeTarget } from './runtime-api'
-import type { HistoryData, HistoryQuery, ProjectionSnapshot, RuntimeStatus, RuntimeTarget } from './runtime-api'
+/** 局域网手机访问契约：扫码登记、已有会话接入与首条消息触发后台新建；设备凭证摘要不进入响应。 */
+import { isHistoryData, isHistoryQuery, isProjectionResult, isPromptResult, isRuntimeStatus, isRuntimeTarget } from './runtime-api'
+import type { HistoryData, HistoryQuery, ProjectionSnapshot, PromptResult, RuntimeStatus, RuntimeTarget } from './runtime-api'
 import { isExtensionDialogResponseInput, isExtensionUiSnapshot } from './extension-ui-api'
 import type { ExtensionDialogResponseInput, ExtensionUiSnapshot } from './extension-ui-api'
 import { isSessionListResult, MAX_SESSION_WINDOW } from './session-api'
@@ -53,6 +53,7 @@ export type LanOperation =
   | { readonly operation: 'sessions'; readonly projectId: string; readonly limit: number }
   | ({ readonly operation: 'history'; readonly query: HistoryQuery } & LanSessionRef)
   | ({ readonly operation: 'open' } & LanSessionRef)
+  | { readonly operation: 'create'; readonly projectId: string; readonly message: string }
   | ({ readonly operation: 'snapshot' | 'abort' } & LanSessionTarget)
   | ({ readonly operation: 'prompt'; readonly message: string } & LanSessionTarget)
   | ({ readonly operation: 'respond'; readonly dialogId: string; readonly response: ExtensionDialogResponseInput } & LanSessionTarget)
@@ -122,6 +123,8 @@ export function isLanRequest(value: unknown): value is LanRequest {
       && isLanIdentifier(command.projectId) && isLanIdentifier(command.sessionId) && isHistoryQuery(command.query)
     case 'open': return hasLanKeys(command, ['operation', 'projectId', 'sessionId'])
       && isLanIdentifier(command.projectId) && isLanIdentifier(command.sessionId)
+    case 'create': return hasLanKeys(command, ['operation', 'projectId', 'message']) && isLanIdentifier(command.projectId)
+      && typeof command.message === 'string' && command.message.trim() !== '' && command.message.length <= LAN_REMOTE_MAX_MESSAGE_CHARS
     case 'snapshot': case 'abort': return hasLanKeys(command, ['operation', 'projectId', 'sessionId', 'target']) && isLanSessionTarget(command)
     case 'prompt': return hasLanKeys(command, ['operation', 'projectId', 'sessionId', 'target', 'message'])
       && isLanSessionTarget(command) && typeof command.message === 'string'
@@ -175,6 +178,8 @@ export interface LanPairResult {
   readonly device: LanDevice
 }
 export interface LanOpenedSession extends LanSessionRef { readonly target: RuntimeTarget }
+/** 创建与首条消息共用去重身份；即使消息被拒绝，也交回已创建会话，避免重试时重复创建。 */
+export interface LanCreatedSession extends LanOpenedSession { readonly prompt: PromptResult }
 export interface LanHistory extends LanSessionRef { readonly data: HistoryData }
 export interface LanSnapshot {
   readonly status: RuntimeStatus
@@ -214,6 +219,10 @@ export function isLanPairResult(value: unknown): value is LanPairResult {
 }
 export function isLanOpenedSession(value: unknown): value is LanOpenedSession {
   return isLanRecord(value) && isLanIdentifier(value.projectId) && isLanIdentifier(value.sessionId) && isRuntimeTarget(value.target)
+}
+export function isLanCreatedSession(value: unknown): value is LanCreatedSession {
+  return isLanOpenedSession(value) && isLanRecord(value) && isPromptResult(value.prompt)
+    && (value.target.runtimeId !== null || !value.prompt.ok)
 }
 export function isLanHistory(value: unknown): value is LanHistory {
   return isLanRecord(value) && isLanIdentifier(value.projectId) && isLanIdentifier(value.sessionId) && isHistoryData(value.data)

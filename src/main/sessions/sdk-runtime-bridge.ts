@@ -10,7 +10,7 @@
  * 状态映射要点：页面 `runtimeId` 是注册表分配的应用级绑定代际（能力清单、投影快照与投影批次都按
  * 绑定代际对齐）；宿主就绪只代表 SDK 已加载，只有会话绑定完成才对页面表示 `ready`。
  *
- * 后台接入已有会话只取得或恢复运行实例，不参与桌面前台选择，也不清扫或占用桌面空白会话。
+ * 后台新建或接入已有会话按目标取得、建立或恢复运行实例，不参与桌面前台选择，也不清扫或占用桌面空白会话。
  * 前台选择由项目切换驱动：当前项目变化时切到该项目最近一次前台的实例，未命中则清空前台。
  * 项目切换只改执行实例的展示归属，不建立执行宿主、不重绑会话、不中断任何后台实例。
  * 前台实例不参与空闲回收：切走或清空前台后才重新计时。
@@ -775,7 +775,7 @@ export class SdkRuntimeBridge {
 
   /**
    * 只取得或建立运行实例，不选择桌面前台；已占用的目标会话优先复用，避免重复接管。
-   * reservedRunId 保留给桌面：后台打开其他会话不能复用桌面尚未绑定的空白实例。
+   * reservedRunId 保留给桌面：后台新建或打开其他会话不能复用桌面尚未绑定的空白实例。
    * 应用退出编排开始后不再建立宿主。
    */
   private ensureRun(owner: SessionOwner, reservedRunId: number | null): SessionRunRecord<SdkHostManager> {
@@ -1186,7 +1186,7 @@ export class SdkRuntimeBridge {
   }
 
   /**
-   * 会话打开与重载共用登记、绑定和恢复链；selection 为 null 时只后台接入已有会话，不允许中断。
+   * 会话新建、打开与重载共用登记、绑定和恢复链；selection 为 null 时可后台新建或接入已有会话，不允许重载与中断。
    * 只有桌面请求清扫空会话并参与前台选择；后台请求不改变选择序号或前台顺序。
    * 已绑定且生命周期收敛的目标直接复用，其余情况先登记占位，再由授权应答分配实际绑定代际。
    */
@@ -1198,9 +1198,13 @@ export class SdkRuntimeBridge {
     selection: number | null
   ): Promise<{ readonly cancelled: boolean; readonly runId: number }> {
     if (this.shuttingDown) throw new SdkHostError('HOST_CLOSED', '应用正在退出，不能打开或恢复会话。')
-    if (selection === null && (action !== 'open' || allowInterrupt || reference.kind !== 'id'
-      || owner.sessionId === null || reference.sessionId !== owner.sessionId)) {
-      throw new SdkHostError('INVALID_SESSION_TARGET', '后台只能接入指定的已有会话，不能新建、重载或中断。')
+    if (selection === null) {
+      const openingExisting = action === 'open' && reference.kind === 'id'
+        && owner.sessionId !== null && reference.sessionId === owner.sessionId
+      const creatingNew = action === 'new' && reference.kind === 'new' && owner.sessionId === null
+      if (allowInterrupt || (!openingExisting && !creatingNew)) {
+        throw new SdkHostError('INVALID_SESSION_TARGET', '后台只能新建或接入指定会话，不能重载、中断或使用不匹配的会话身份。')
+      }
     }
     if (action !== 'reload') {
       // 只让桌面切换清扫空会话；手机接入不能释放桌面仍在准备的空白对话。

@@ -11,11 +11,17 @@ export function errorMessage(error: unknown): string { return error instanceof E
 export function requiresPairing(error: unknown): boolean {
   return error instanceof LanClientError && (error.status === 401 || error.code === 'UNAUTHENTICATED')
 }
+/** 网络中断或宿主未确认终态时，写请求必须保留原身份；创建响应中的首条消息也使用同一口径。 */
+export function isUncertainWriteFailure(error: unknown): error is LanClientError {
+  return error instanceof LanClientError && (error.status === 0 || error.status >= 500
+    || ['DEVICE_CHANGED', 'SERVER_CHANGED', 'INVALID_RESPONSE', 'PAYLOAD_TOO_LARGE', 'RUNTIME_TIMEOUT', 'RUNTIME_EXITED', 'RUNTIME_PROTOCOL_ERROR'].includes(error.code))
+}
 function checkVersion(version: number): void {
   if (version !== LAN_REMOTE_PROTOCOL_VERSION) throw new LanClientError('PROTOCOL_MISMATCH', '手机页面与桌面协议不一致，请刷新页面；仍不一致时更新桌面应用。')
 }
 export function isWrite(command: LanOperation): boolean {
-  return command.operation === 'open' || command.operation === 'prompt' || command.operation === 'abort' || command.operation === 'respond'
+  return command.operation === 'open' || command.operation === 'create' || command.operation === 'prompt'
+    || command.operation === 'abort' || command.operation === 'respond'
 }
 
 export class MobileClient {
@@ -50,8 +56,7 @@ export class MobileClient {
       throw new LanClientError('DEVICE_CHANGED', '设备配对身份已变化，请核对原会话结果后解除保护。', 409, true)
     }
     try { return await this.fetchJson('/api/request', request, accepts, signal) } catch (error) {
-      if (isWrite(request.command) && (error instanceof LanClientError)
-        && (error.status === 0 || error.status >= 500 || ['DEVICE_CHANGED', 'SERVER_CHANGED', 'INVALID_RESPONSE', 'PAYLOAD_TOO_LARGE', 'RUNTIME_TIMEOUT', 'RUNTIME_EXITED', 'RUNTIME_PROTOCOL_ERROR'].includes(error.code))) {
+      if (isWrite(request.command) && isUncertainWriteFailure(error)) {
         throw new LanClientError(error.code, `${error.message} 操作结果尚不能确认；不会自动重新发送。`, error.status, true)
       }
       throw error
