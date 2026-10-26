@@ -3,9 +3,9 @@
  * 暂存/取消暂存/丢弃/提交四类写操作与拉取/推送两条远端操作。
  *
  * 与项目文件契约同一口径：页面只给项目内相对路径，项目根与仓库根由主进程解析，页面不能指定仓库、
- * 不能传入任何 git 参数。状态读取不带参数，历史按条数/偏移与可选过滤路径读取；写操作成功后直接回传
- * 新的状态，避免「写完再拉一次」的竞态。远端操作同样不接受参数：远端、分支与推送策略全部由主进程
- * 从仓库现状与用户自己的 git 配置得出。
+ * 不能传入任何 git 参数。暂存/取消暂存/丢弃支持单个相对路径或批量相对路径（`GitWritePathRequest`）。
+ * 状态读取不带参数，历史按条数/偏移与可选过滤路径读取；写操作成功后直接回传新的状态，避免「写完再拉一次」的竞态。
+ * 远端操作同样不接受参数：远端、分支与推送策略全部由主进程从仓库现状与用户自己的 git 配置得出。
  * 写操作会执行仓库里的 filter 与 hook，因此项目尚无信任决定或被标记为未信任时返回 `TRUST_REQUIRED`；
  * 读操作（状态、差异、历史）不执行仓库代码，不做信任拦截。
  * 「不是 Git 仓库」是正常结果（`isRepository: false`）而不是错误，界面据此显示空态。
@@ -245,6 +245,14 @@ export interface GitPathRequest {
   readonly path: string
 }
 
+/** 多文件写操作请求：支持批量传递项目内相对路径。 */
+export interface GitPathsRequest {
+  readonly paths: readonly string[]
+}
+
+/** 写操作请求：支持单个相对路径或批量相对路径。 */
+export type GitWritePathRequest = GitPathRequest | GitPathsRequest
+
 /** 提交请求：只接受提交信息，选项与作者一律沿用用户自己的 git 配置。 */
 export interface GitCommitRequest {
   readonly message: string
@@ -253,9 +261,9 @@ export interface GitCommitRequest {
 export interface GitApi {
   readonly getGitStatus: () => Promise<GitStatusResult>
   readonly getGitDiff: (request: GitDiffRequest) => Promise<GitDiffResult>
-  readonly stageGitPaths: (request: GitPathRequest) => Promise<GitOperationResult>
-  readonly unstageGitPaths: (request: GitPathRequest) => Promise<GitOperationResult>
-  readonly discardGitPath: (request: GitPathRequest) => Promise<GitOperationResult>
+  readonly stageGitPaths: (request: GitWritePathRequest) => Promise<GitOperationResult>
+  readonly unstageGitPaths: (request: GitWritePathRequest) => Promise<GitOperationResult>
+  readonly discardGitPath: (request: GitWritePathRequest) => Promise<GitOperationResult>
   readonly commitGitStaged: (request: GitCommitRequest) => Promise<GitOperationResult>
   readonly pullGit: () => Promise<GitOperationResult>
   readonly pushGit: () => Promise<GitOperationResult>
@@ -456,6 +464,19 @@ export function isGitPathRequest(value: unknown): value is GitPathRequest {
   if (!isRecord(value)) return false
   if (Object.keys(value).some((key) => key !== 'path')) return false
   return typeof value.path === 'string' && value.path !== '' && value.path.length <= MAX_PATH_CHARS
+}
+
+/** 批量写操作请求校验：接受非空相对路径数组。 */
+export function isGitPathsRequest(value: unknown): value is GitPathsRequest {
+  if (!isRecord(value)) return false
+  if (Object.keys(value).some((key) => key !== 'paths')) return false
+  if (!Array.isArray(value.paths) || value.paths.length === 0 || value.paths.length > GIT_STATUS_LIMIT) return false
+  return value.paths.every((p) => typeof p === 'string' && p !== '' && p.length <= MAX_PATH_CHARS)
+}
+
+/** 写操作请求校验：接受单个路径或非空相对路径数组。 */
+export function isGitWritePathRequest(value: unknown): value is GitWritePathRequest {
+  return isGitPathRequest(value) || isGitPathsRequest(value)
 }
 
 /** diff 请求校验：路径 + 区域，字段之外一律拒绝。 */

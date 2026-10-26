@@ -19,7 +19,7 @@ import {
   isGitCommitRequest,
   isGitDiffRequest,
   isGitHistoryRequest,
-  isGitPathRequest
+  isGitWritePathRequest
 } from '../../shared/git-api'
 import type {
   GitCommitDetailResult,
@@ -57,7 +57,7 @@ export function gitCommitDiffFailure(code: DesktopErrorCode, message: string): G
 /**
  * 源代码管理通道：状态读取不带参数；diff 只接受「项目内相对路径 + 区域」；历史接受可选的条数、偏移与
  * 过滤路径；提交详情只接受提交标识；提交内差异接受提交标识与路径（重命名条目另带原路径）；写操作只接受
- * 一个路径，提交额外只接受提交信息；拉取与推送都不接受参数。页面不能指定仓库根，也不能传入任何 git
+ * 单个或批量项目内相对路径，提交额外只接受提交信息；拉取与推送都不接受参数。页面不能指定仓库根，也不能传入任何 git
  * 参数：命令组装、仓库定位与路径折算都在主进程，写操作成功时直接回传新状态，避免「写完再拉一次」的竞态。
  *
  * 写操作需要项目信任：暂存、取消暂存与恢复会跑仓库配置的 clean/smudge filter，提交会跑 pre-commit hook，
@@ -97,8 +97,8 @@ export function registerGitHandlers(pageUrl: string): void {
       if (!isTrustedCaller(event, pageUrl)) {
         return gitStatusFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
       }
-      if (args.length !== 1 || !isGitPathRequest(args[0])) {
-        return gitStatusFailure('INVALID_REQUEST', '暂存只接受一个项目内相对路径请求。')
+      if (args.length !== 1 || !isGitWritePathRequest(args[0])) {
+        return gitStatusFailure('INVALID_REQUEST', '暂存只接受项目内相对路径请求。')
       }
       const blocked = await requireGitWriteTrust()
       if (blocked !== null) return { ok: false, error: blocked }
@@ -112,8 +112,8 @@ export function registerGitHandlers(pageUrl: string): void {
       if (!isTrustedCaller(event, pageUrl)) {
         return gitStatusFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
       }
-      if (args.length !== 1 || !isGitPathRequest(args[0])) {
-        return gitStatusFailure('INVALID_REQUEST', '取消暂存只接受一个项目内相对路径请求。')
+      if (args.length !== 1 || !isGitWritePathRequest(args[0])) {
+        return gitStatusFailure('INVALID_REQUEST', '取消暂存只接受项目内相对路径请求。')
       }
       const blocked = await requireGitWriteTrust()
       if (blocked !== null) return { ok: false, error: blocked }
@@ -127,8 +127,8 @@ export function registerGitHandlers(pageUrl: string): void {
       if (!isTrustedCaller(event, pageUrl)) {
         return gitStatusFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
       }
-      if (args.length !== 1 || !isGitPathRequest(args[0])) {
-        return gitStatusFailure('INVALID_REQUEST', '丢弃改动只接受一个项目内相对路径请求。')
+      if (args.length !== 1 || !isGitWritePathRequest(args[0])) {
+        return gitStatusFailure('INVALID_REQUEST', '丢弃改动只接受项目内相对路径请求。')
       }
       const blocked = await requireGitWriteTrust()
       if (blocked !== null) return { ok: false, error: blocked }

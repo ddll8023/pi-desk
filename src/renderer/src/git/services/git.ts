@@ -1,4 +1,7 @@
-/** 作为渲染端源代码管理的入口，收敛桥接缺失与通信异常；失败一律回契约里的错误结构。 */
+/**
+ * 作为渲染端源代码管理的入口，收敛桥接缺失与通信异常；失败一律回契约里的错误结构。
+ * 支持单文件与批量写操作（暂存/取消暂存/丢弃），保持与主进程 IPC 契约一致。
+ */
 import type { DesktopError } from '../../../../shared/desktop-api'
 import type {
   GitArea,
@@ -50,10 +53,15 @@ export async function getGitDiff(path: string, area: GitArea): Promise<GitDiffRe
 
 /** 暂存一个条目；成功后返回新的状态快照。 */
 export async function stageGitPath(path: string): Promise<GitOperationResult> {
+  return stageGitPaths([path])
+}
+
+/** 批量暂存条目；成功后返回新的状态快照。 */
+export async function stageGitPaths(paths: readonly string[]): Promise<GitOperationResult> {
   const bridge = window.desktop
   if (!bridge || typeof bridge.stageGitPaths !== 'function') return unavailable()
   try {
-    return await bridge.stageGitPaths({ path })
+    return await bridge.stageGitPaths({ paths })
   } catch (error) {
     return callFailed(error)
   }
@@ -61,10 +69,15 @@ export async function stageGitPath(path: string): Promise<GitOperationResult> {
 
 /** 取消暂存一个条目；成功后返回新的状态快照。 */
 export async function unstageGitPath(path: string): Promise<GitOperationResult> {
+  return unstageGitPaths([path])
+}
+
+/** 批量取消暂存条目；成功后返回新的状态快照。 */
+export async function unstageGitPaths(paths: readonly string[]): Promise<GitOperationResult> {
   const bridge = window.desktop
   if (!bridge || typeof bridge.unstageGitPaths !== 'function') return unavailable()
   try {
-    return await bridge.unstageGitPaths({ path })
+    return await bridge.unstageGitPaths({ paths })
   } catch (error) {
     return callFailed(error)
   }
@@ -72,10 +85,15 @@ export async function unstageGitPath(path: string): Promise<GitOperationResult> 
 
 /** 丢弃一个条目的改动；已跟踪文件恢复工作区，未跟踪文件被删除。 */
 export async function discardGitPath(path: string): Promise<GitOperationResult> {
+  return discardGitPaths([path])
+}
+
+/** 批量丢弃条目的改动；已跟踪文件恢复工作区，未跟踪文件被删除。 */
+export async function discardGitPaths(paths: readonly string[]): Promise<GitOperationResult> {
   const bridge = window.desktop
   if (!bridge || typeof bridge.discardGitPath !== 'function') return unavailable()
   try {
-    return await bridge.discardGitPath({ path })
+    return await bridge.discardGitPath({ paths })
   } catch (error) {
     return callFailed(error)
   }

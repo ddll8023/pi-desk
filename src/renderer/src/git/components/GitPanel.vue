@@ -1,12 +1,14 @@
 <!--
-  源代码管理面板：分支与远端状态、提交框、按区域分组的改动列表、单条目差异。
+  源代码管理面板：分支与远端状态、提交框、按区域分组的改动列表、单条目差异与批量操作。
 
   数据全部来自主进程（`git/stores/git-status`）：本组件只负责展示与派发意图，不拼命令、不读磁盘。
   改动分四组：冲突、更改（工作区）、已暂存的更改、未跟踪文件；空组不出现，组内按路径排序。
+  支持组级批量操作：一键暂存组内全部文件、一键取消暂存、一键丢弃工作区更改或删除未跟踪文件。
   行上的操作按区域给：工作区可暂存/丢弃，已暂存可取消暂存，未跟踪可暂存/删除，冲突可「标记为已解决」。
   丢弃是不可恢复的，必须过一次确认对话框；确认后仍由主进程再校验路径与文件类型。
 
   差异不另开标签页，而是就地替换列表：面板本身很窄，跳来跳去会丢掉「刚才在看哪个文件」的上下文。
+  差异视图支持就地暂存/取消暂存/丢弃，并提供快捷上下遍历 (Alt+↑/↓) 与快速返回 (Esc)。
   需要编辑时用差异视图右上角的「打开文件」把用户带到工作区的文件标签。
 
   视图分「未提交」与「历史」两个：前者是本工作区还没提交的改动，后者是已经提交的记录（含未推送标记）。
@@ -25,7 +27,7 @@ import { storeToRefs } from 'pinia'
 import { GIT_STATUS_LIMIT } from '../../../../shared/git-api'
 import type { GitChangeEntry, GitChangeStatus, GitConflictKind, GitConflictOperation } from '../../../../shared/git-api'
 import { useGitHistoryStore } from '../stores/git-history'
-import { useGitStatusStore } from '../stores/git-status'
+import { useGitStatusStore, type GitGroup } from '../stores/git-status'
 import { useProjectStore } from '../../projects/stores/project'
 import { useWorkspaceTabsStore } from '../../workspace/stores/workspace-tabs'
 import AppButton from '../../ui/AppButton.vue'
@@ -78,8 +80,23 @@ const upstream = computed(() => status.value?.upstream ?? null)
 const remotes = computed<readonly string[]>(() => status.value?.remotes ?? [])
 const { currentProject } = storeToRefs(projectStore)
 
-/** 等待确认的丢弃条目；null 表示对话框关闭。 */
-const pendingDiscard = ref<GitChangeEntry | null>(null)
+interface DiscardTargetSingle {
+  readonly kind: 'single'
+  readonly entry: GitChangeEntry
+}
+
+interface DiscardTargetBatch {
+  readonly kind: 'batch'
+  readonly title: string
+  readonly description: string
+  readonly detail: string
+  readonly paths: readonly string[]
+}
+
+type DiscardTarget = DiscardTargetSingle | DiscardTargetBatch
+
+/** 等待确认的丢弃目标（单个条目或批量条目）；null 表示对话框关闭。 */
+const pendingDiscard = ref<DiscardTarget | null>(null)
 /** 当前视图：未提交的更改，或已提交的历史。 */
 const view = ref<'changes' | 'history'>('changes')
 
@@ -117,7 +134,7 @@ function conflictLabel(entry: GitChangeEntry): string | null {
 }
 
 function isBusy(entry: GitChangeEntry): boolean {
-  return busyPath.value === entry.path
+  return busyPath.value === '*' || busyPath.value === entry.path
 }
 
 /** 该条目是否可在当前区域执行「暂存」；冲突条目的暂存等于标记为已解决。 */
@@ -141,29 +158,129 @@ function openSelected(): void {
 }
 
 function requestDiscard(entry: GitChangeEntry): void {
-  pendingDiscard.value = entry
+  pendingDiscard.value = { kind: 'single', entry }
+}
+
+function requestDiscardBatch(target: { title: string; description: string; detail: string; paths: readonly string[] }): void {
+  if (target.paths.length === 0) return
+  pendingDiscard.value = { kind: 'batch', ...target }
 }
 
 function confirmDiscard(): void {
-  const entry = pendingDiscard.value
+  const target = pendingDiscard.value
   pendingDiscard.value = null
-  if (entry === null) return
-  void gitStore.discard(entry)
+  if (target === null) return
+  if (target.kind === 'single') {
+    void gitStore.discard(target.entry)
+  } else {
+    void gitStore.discardPaths(target.paths)
+  }
 }
 
 const discardTitle = computed(() => {
-  const entry = pendingDiscard.value
-  if (entry === null) return '丢弃改动？'
-  return entry.area === 'untracked' ? '删除未跟踪的文件？' : '丢弃这个文件的改动？'
+  const target = pendingDiscard.value
+  if (target === null) return '丢弃改动？'
+  if (target.kind === 'batch') return target.title
+  return target.entry.area === 'untracked' ? '删除未跟踪的文件？' : '丢弃这个文件的改动？'
 })
 
 const discardDescription = computed(() => {
-  const entry = pendingDiscard.value
-  if (entry === null) return ''
-  return entry.area === 'untracked'
+  const target = pendingDiscard.value
+  if (target === null) return ''
+  if (target.kind === 'batch') return target.description
+  return target.entry.area === 'untracked'
     ? '文件会被直接删除，无法恢复。'
     : '工作区内容会恢复到已暂存（或已提交）的版本，未保存的修改会丢失，无法恢复。'
 })
+
+const discardDetail = computed(() => {
+  const target = pendingDiscard.value
+  if (target === null) return ''
+  if (target.kind === 'batch') return target.detail
+  return target.entry.path
+})
+
+function stageGroup(group: GitGroup): void {
+  const paths = group.entries.map((e) => e.path)
+  void gitStore.stagePaths(paths)
+}
+
+function unstageGroup(group: GitGroup): void {
+  const paths = group.entries.map((e) => e.path)
+  void gitStore.unstagePaths(paths)
+}
+
+function requestDiscardGroup(group: GitGroup): void {
+  const paths = group.entries.map((e) => e.path)
+  if (paths.length === 0) return
+  if (group.key === 'untracked') {
+    requestDiscardBatch({
+      title: `删除全部 ${paths.length} 个未跟踪的文件？`,
+      description: '所有选中的未跟踪文件都将被永久删除，无法恢复。',
+      detail: paths.slice(0, 5).join('\n') + (paths.length > 5 ? `\n... 等共 ${paths.length} 个文件` : ''),
+      paths
+    })
+  } else if (group.key === 'unstaged') {
+    requestDiscardBatch({
+      title: `丢弃全部 ${paths.length} 项工作区更改？`,
+      description: '工作区中的所有未暂存改动都将被丢弃，恢复至 HEAD/索引状态，无法恢复。',
+      detail: paths.slice(0, 5).join('\n') + (paths.length > 5 ? `\n... 等共 ${paths.length} 个文件` : ''),
+      paths
+    })
+  }
+}
+
+const currentSelectedEntry = computed<GitChangeEntry | null>(() => {
+  const current = selection.value
+  if (current === null) return null
+  return entries.value.find((entry) => entry.path === current.path && entry.area === current.area) ?? null
+})
+
+const currentDiffIndexLabel = computed(() => {
+  const total = gitStore.flatEntries.length
+  const idx = gitStore.currentEntryIndex
+  if (idx < 0 || total === 0) return ''
+  return `${idx + 1} / ${total}`
+})
+
+const canStageSelected = computed(() => {
+  return currentSelectedEntry.value !== null && currentSelectedEntry.value.area !== 'staged'
+})
+
+const canUnstageSelected = computed(() => {
+  return currentSelectedEntry.value !== null && currentSelectedEntry.value.area === 'staged'
+})
+
+const canDiscardSelected = computed(() => {
+  return (
+    currentSelectedEntry.value !== null &&
+    currentSelectedEntry.value.area !== 'staged' &&
+    currentSelectedEntry.value.conflictKind === undefined
+  )
+})
+
+const isCurrentSelectedBusy = computed(() => {
+  if (selection.value === null) return false
+  return busyPath.value === selection.value.path || busyPath.value === '*'
+})
+
+function stageSelected(): void {
+  if (currentSelectedEntry.value !== null) {
+    void gitStore.stage(currentSelectedEntry.value)
+  }
+}
+
+function unstageSelected(): void {
+  if (currentSelectedEntry.value !== null) {
+    void gitStore.unstage(currentSelectedEntry.value)
+  }
+}
+
+function discardSelected(): void {
+  if (currentSelectedEntry.value !== null) {
+    requestDiscard(currentSelectedEntry.value)
+  }
+}
 
 /** 切换视图：离开历史时回到列表；历史自己的首次读取由该视图在挂载时完成。 */
 function selectView(next: 'changes' | 'history'): void {
@@ -256,8 +373,20 @@ async function refreshHistory(): Promise<void> {
       :phase="diffPhase"
       :diff="diff"
       :error="diffError"
+      :has-next="gitStore.hasNextEntry"
+      :has-prev="gitStore.hasPrevEntry"
+      :index-label="currentDiffIndexLabel"
+      :can-stage="canStageSelected"
+      :can-unstage="canUnstageSelected"
+      :can-discard="canDiscardSelected"
+      :busy="isCurrentSelectedBusy"
       @back="gitStore.clearSelection()"
       @open="openSelected"
+      @next="gitStore.selectNext()"
+      @prev="gitStore.selectPrevious()"
+      @stage="stageSelected"
+      @unstage="unstageSelected"
+      @discard="discardSelected"
     />
 
     <GitHistoryView v-else-if="view === 'history'" />
@@ -308,8 +437,87 @@ async function refreshHistory(): Promise<void> {
 
         <section v-for="group in groups" :key="group.key" class="git-group">
           <header class="git-group-header">
-            <span class="git-group-title">{{ group.title }}</span>
-            <span class="git-group-count">{{ group.entries.length }}</span>
+            <div class="git-group-info">
+              <span class="git-group-title">{{ group.title }}</span>
+              <span class="git-group-count">{{ group.entries.length }}</span>
+            </div>
+
+            <div class="git-group-actions">
+              <!-- 已暂存组：取消暂存所有 -->
+              <AppButton
+                v-if="group.key === 'staged'"
+                variant="unstyled"
+                class="git-group-action"
+                :disabled="busyPath !== null"
+                title="取消暂存所有更改"
+                aria-label="取消暂存所有更改"
+                @click.stop="unstageGroup(group)"
+              >
+                <svg class="panel-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true"><path d="M5 12h14" /></svg>
+              </AppButton>
+
+              <!-- 未暂存更改组：全部暂存 / 全部丢弃 -->
+              <template v-else-if="group.key === 'unstaged'">
+                <AppButton
+                  variant="unstyled"
+                  class="git-group-action"
+                  :disabled="busyPath !== null"
+                  title="暂存所有更改"
+                  aria-label="暂存所有更改"
+                  @click.stop="stageGroup(group)"
+                >
+                  <svg class="panel-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
+                </AppButton>
+                <AppButton
+                  variant="unstyled"
+                  class="git-group-action is-danger"
+                  :disabled="busyPath !== null"
+                  title="丢弃所有更改"
+                  aria-label="丢弃所有更改"
+                  @click.stop="requestDiscardGroup(group)"
+                >
+                  <svg class="panel-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16" /><path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" /><path d="M6 7l1 13h10l1-13" /></svg>
+                </AppButton>
+              </template>
+
+              <!-- 未跟踪组：全部暂存 / 全部删除 -->
+              <template v-else-if="group.key === 'untracked'">
+                <AppButton
+                  variant="unstyled"
+                  class="git-group-action"
+                  :disabled="busyPath !== null"
+                  title="暂存所有未跟踪文件"
+                  aria-label="暂存所有未跟踪文件"
+                  @click.stop="stageGroup(group)"
+                >
+                  <svg class="panel-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
+                </AppButton>
+                <AppButton
+                  variant="unstyled"
+                  class="git-group-action is-danger"
+                  :disabled="busyPath !== null"
+                  title="删除所有未跟踪文件"
+                  aria-label="删除所有未跟踪文件"
+                  @click.stop="requestDiscardGroup(group)"
+                >
+                  <svg class="panel-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16" /><path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" /><path d="M6 7l1 13h10l1-13" /></svg>
+                </AppButton>
+              </template>
+
+              <!-- 冲突组：将所有标记为已解决 -->
+              <template v-else-if="group.key === 'conflict'">
+                <AppButton
+                  variant="unstyled"
+                  class="git-group-action"
+                  :disabled="busyPath !== null"
+                  title="全部标记为已解决（暂存）"
+                  aria-label="全部标记为已解决"
+                  @click.stop="stageGroup(group)"
+                >
+                  <svg class="panel-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
+                </AppButton>
+              </template>
+            </div>
           </header>
 
           <ul class="git-list">
@@ -397,7 +605,7 @@ async function refreshHistory(): Promise<void> {
         :open="pendingDiscard !== null"
         :title="discardTitle"
         :description="discardDescription"
-        :detail="pendingDiscard?.path ?? ''"
+        :detail="discardDetail"
         confirm-label="确认丢弃"
         confirm-variant="danger"
         @confirm="confirmDiscard"

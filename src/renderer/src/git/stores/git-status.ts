@@ -1,10 +1,11 @@
 /**
  * 右侧面板「源代码管理」的展示状态：状态快照、分组、选中条目与其差异、提交草稿。
  *
- * 只做三件事，其余交给主进程：
+ * 核心职责：
  * 1. 拉状态并丢弃过期响应（序号令牌）：切项目、连点刷新、写操作与轮询都可能同时在飞；
- * 2. 把条目按「冲突 → 更改 → 已暂存 → 未跟踪」分组，供面板直接渲染；
- * 3. 把写操作的结果（新的状态快照）直接落地，不再补一次读取。
+ * 2. 把条目按「冲突 → 更改 → 已暂存 → 未跟踪」分组，支持单项与整组批量暂存/取消暂存/丢弃；
+ * 3. 维护改动条目的扁平列表与顺序索引，支持差异视图就地快捷前后切换；
+ * 4. 把写操作的结果（新的状态快照）直接落地，平滑处理当前选中项的区域流转，不再补一次读取。
  *
  * 刷新时机刻意保守：切项目、面板出现、窗口重新获得焦点、页面重新可见、用户点刷新、写操作之后，
  * 以及主进程目录监听回报「已加载的目录变了」；没有定时轮询。目录监听只覆盖已展开的层，
@@ -19,7 +20,19 @@ import { defineStore } from 'pinia'
 import { computed, ref, watch } from 'vue'
 import type { DesktopError } from '../../../../shared/desktop-api'
 import type { GitArea, GitChangeEntry, GitDiff, GitOperationResult, GitStatus } from '../../../../shared/git-api'
-import { commitGitStaged, discardGitPath, getGitDiff, getGitStatus, pullGit, pushGit, stageGitPath, unstageGitPath } from '../services/git'
+import {
+  commitGitStaged,
+  discardGitPath,
+  discardGitPaths,
+  getGitDiff,
+  getGitStatus,
+  pullGit,
+  pushGit,
+  stageGitPath,
+  stageGitPaths,
+  unstageGitPath,
+  unstageGitPaths
+} from '../services/git'
 import { onProjectDirectoryChanged } from '../../editor/services/project-file'
 import { useProjectStore } from '../../projects/stores/project'
 import { useTrustStore } from '../../projects/stores/trust'
@@ -133,8 +146,18 @@ export const useGitStatusStore = defineStore('git-status', () => {
     status.value = next
     phase.value = 'ready'
     error.value = null
-    // 条目可能已经被暂存/丢弃掉：选中项消失时回到列表，避免继续展示过期差异。
-    if (!selectionStillExists()) clearSelection()
+    // 若当前有选中条目：如果该文件仍有改动但区域变化（例如由工作区暂存为已暂存），平滑保留选中并切到新区域；完全无改动则清空。
+    const current = selection.value
+    if (current !== null) {
+      const match = next.entries.find((entry) => entry.path === current.path)
+      if (match !== undefined) {
+        if (match.area !== current.area) {
+          selection.value = { path: match.path, area: match.area }
+        }
+      } else {
+        clearSelection()
+      }
+    }
   }
 
   /** 读取状态；`silent` 用于焦点与可见性触发的刷新，不把已有内容切回加载态。 */
@@ -173,6 +196,41 @@ export const useGitStatusStore = defineStore('git-status', () => {
     diffPhase.value = 'ready'
   }
 
+  /** 所有分组按顺序展开的扁平条目列表，供差异视图快速上一个/下一个遍历。 */
+  const flatEntries = computed<readonly GitChangeEntry[]>(() => {
+    return groups.value.flatMap((group) => group.entries)
+  })
+
+  /** 当前查看条目在扁平列表中的下标；-1 表示未选中。 */
+  const currentEntryIndex = computed(() => {
+    const current = selection.value
+    if (current === null) return -1
+    return flatEntries.value.findIndex((entry) => entry.path === current.path && entry.area === current.area)
+  })
+
+  const hasNextEntry = computed(() => {
+    const idx = currentEntryIndex.value
+    return idx >= 0 && idx < flatEntries.value.length - 1
+  })
+
+  const hasPrevEntry = computed(() => {
+    return currentEntryIndex.value > 0
+  })
+
+  async function selectNext(): Promise<void> {
+    const idx = currentEntryIndex.value
+    if (idx < 0 || idx >= flatEntries.value.length - 1) return
+    const next = flatEntries.value[idx + 1]
+    if (next) await select(next)
+  }
+
+  async function selectPrevious(): Promise<void> {
+    const idx = currentEntryIndex.value
+    if (idx <= 0) return
+    const prev = flatEntries.value[idx - 1]
+    if (prev) await select(prev)
+  }
+
   /** 写操作统一入口：同一时刻只跑一个，成功后直接用返回的状态快照落地。 */
   async function runAction(
     path: string,
@@ -196,9 +254,11 @@ export const useGitStatusStore = defineStore('git-status', () => {
       }
       applyStatus(result.data)
       actionNotice.value = successNotice
-      // 选中的就是这个条目：内容变了，重新读一次差异。
+      // 选中的就是这个条目或进行了批量操作：内容变了，重新读一次差异。
       const current = selection.value
-      if (current !== null && current.path === path) await select(current)
+      if (current !== null && (path === '*' || current.path === path)) {
+        await select(current)
+      }
     } finally {
       busyPath.value = null
     }
@@ -214,6 +274,34 @@ export const useGitStatusStore = defineStore('git-status', () => {
 
   function discard(entry: { readonly path: string }): Promise<void> {
     return runAction(entry.path, () => discardGitPath(entry.path), '已丢弃改动')
+  }
+
+  function stagePaths(paths: readonly string[]): Promise<void> {
+    if (paths.length === 0) return Promise.resolve()
+    if (paths.length === 1) return stage({ path: paths[0] })
+    return runAction('*', () => stageGitPaths(paths), `已暂存 ${paths.length} 项更改`)
+  }
+
+  function unstagePaths(paths: readonly string[]): Promise<void> {
+    if (paths.length === 0) return Promise.resolve()
+    if (paths.length === 1) return unstage({ path: paths[0] })
+    return runAction('*', () => unstageGitPaths(paths), `已取消暂存 ${paths.length} 项更改`)
+  }
+
+  function discardPaths(paths: readonly string[]): Promise<void> {
+    if (paths.length === 0) return Promise.resolve()
+    if (paths.length === 1) return discard({ path: paths[0] })
+    return runAction('*', () => discardGitPaths(paths), `已丢弃 ${paths.length} 项改动`)
+  }
+
+  function stageAll(): Promise<void> {
+    const paths = entries.value.filter((entry) => entry.area !== 'staged').map((entry) => entry.path)
+    return stagePaths(paths)
+  }
+
+  function unstageAll(): Promise<void> {
+    const paths = entries.value.filter((entry) => entry.area === 'staged').map((entry) => entry.path)
+    return unstagePaths(paths)
   }
 
   /** 提交已暂存的改动；成功后清空草稿，失败保留草稿并把原因交给面板展示。 */
@@ -420,12 +508,23 @@ export const useGitStatusStore = defineStore('git-status', () => {
     hasChanges,
     stagedCount,
     groups,
+    flatEntries,
+    currentEntryIndex,
+    hasNextEntry,
+    hasPrevEntry,
+    selectNext,
+    selectPrevious,
     refresh,
     select,
     clearSelection,
     stage,
     unstage,
     discard,
+    stagePaths,
+    unstagePaths,
+    discardPaths,
+    stageAll,
+    unstageAll,
     commit,
     pull,
     push,

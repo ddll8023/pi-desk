@@ -206,20 +206,78 @@
 .git-group + .git-group {
     margin-top: 12px;
   }
-/* 分组头：小字号标题 + 数量，不用折叠箭头（列表本来就不长）。 */
+/* 分组头：小字号标题 + 数量，操作按钮悬停时浮出。 */
 .git-group-header {
     display: flex;
-    height: 24px;
+    height: 26px;
     align-items: center;
-    gap: 8px;
-    padding: 0 6px;
+    justify-content: space-between;
+    gap: 6px;
+    padding: 0 4px 0 6px;
     color: var(--panel-muted);
     font-size: 11px;
     font-weight: 600;
   }
+.git-group-info {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+  }
+.git-group-title {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
 .git-group-count {
     font-variant-numeric: tabular-nums;
     font-weight: 400;
+  }
+.git-group-actions {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    opacity: 0;
+    transition: opacity var(--panel-duration) ease;
+  }
+.git-group-header:hover .git-group-actions,
+  .git-group-header:focus-within .git-group-actions {
+    opacity: 1;
+  }
+@media (hover: none) {
+    .git-group-actions {
+      opacity: 1;
+    }
+  }
+.git-group-action {
+    display: flex;
+    width: 22px;
+    height: 22px;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--radius-desk-sm);
+    color: var(--panel-muted);
+    transition: background-color var(--panel-duration) ease, color var(--panel-duration) ease;
+  }
+.git-group-action:not(:disabled):hover {
+    background: var(--panel-hover);
+    color: var(--panel-ink);
+  }
+.git-group-action:not(:disabled):active {
+    background: color-mix(in srgb, var(--color-desk-ink) 12%, transparent);
+    color: var(--panel-ink);
+  }
+.git-group-action:focus-visible {
+    outline: 2px solid var(--color-desk-accent);
+    outline-offset: -1px;
+  }
+.git-group-action.is-danger:not(:disabled):hover {
+    background: var(--color-desk-danger-soft);
+    color: var(--color-desk-danger);
+  }
+.git-group-action:disabled {
+    opacity: 0.4;
+    cursor: default;
   }
 .git-list {
     display: grid;
@@ -640,25 +698,86 @@
     height: 32px;
     flex: none;
     align-items: center;
-    gap: 4px;
-    /* 返回键图标与正文保持接近的左缩进，标题单独占据剩余宽度。 */
-    padding: 0 8px 0 10px;
+    gap: 6px;
+    /* 导航键与标题、操作区分散对齐 */
+    padding: 0 8px 0 6px;
+  }
+.git-diff-nav {
+    display: flex;
+    align-items: center;
+    gap: 1px;
+    flex: none;
   }
 .git-diff-back,
-  .git-diff-open {
+  .git-diff-nav-btn {
     display: flex;
-    width: 24px;
-    height: 24px;
+    width: 22px;
+    height: 22px;
     flex: none;
     align-items: center;
     justify-content: center;
     border-radius: var(--radius-desk-sm);
     color: var(--panel-muted);
+    transition: background-color var(--panel-duration) ease, color var(--panel-duration) ease;
   }
-.git-diff-back:hover,
-  .git-diff-open:hover {
+.git-diff-back:not(:disabled):hover,
+  .git-diff-nav-btn:not(:disabled):hover {
     background: var(--panel-hover);
     color: var(--panel-ink);
+  }
+.git-diff-nav-btn:disabled {
+    opacity: 0.3;
+    cursor: default;
+  }
+.git-diff-nav-count {
+    padding: 0 2px;
+    color: var(--panel-muted);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    user-select: none;
+  }
+.git-diff-actions {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    flex: none;
+  }
+.git-diff-action-btn,
+  .git-diff-open {
+    display: flex;
+    width: 22px;
+    height: 22px;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--radius-desk-sm);
+    color: var(--panel-muted);
+    transition: background-color var(--panel-duration) ease, color var(--panel-duration) ease;
+  }
+.git-diff-action-btn:not(:disabled):hover,
+  .git-diff-open:not(:disabled):hover {
+    background: var(--panel-hover);
+    color: var(--panel-ink);
+  }
+.git-diff-action-btn:not(:disabled):active,
+  .git-diff-open:not(:disabled):active {
+    background: color-mix(in srgb, var(--color-desk-ink) 12%, transparent);
+    color: var(--panel-ink);
+  }
+.git-diff-action-btn:focus-visible,
+  .git-diff-open:focus-visible {
+    outline: 2px solid var(--color-desk-accent);
+    outline-offset: -1px;
+  }
+.git-diff-action-btn.is-danger:not(:disabled):hover {
+    background: var(--color-desk-danger-soft);
+    color: var(--color-desk-danger);
+  }
+.git-diff-action-btn:disabled {
+    opacity: 0.4;
+    cursor: default;
   }
 .git-diff-title {
     display: flex;

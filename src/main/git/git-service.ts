@@ -7,6 +7,7 @@
  * - **写后不复用旧结果**：每次写操作成功后递增代际，读取过程中发生过写就重读一次，避免把写之前的快照
  *   回给界面（表现为「暂存成功但列表没变」）。
  * - **写操作串行**：同一个仓库的写操作排队执行；git 自己的 index.lock 一旦被并发命令撞上就会失败。
+ *   暂存、取消暂存与丢弃改动支持单路径与批量路径，批量在单次 git 命令中执行，避免重复锁冲突与多次触发状态回传。
  * - **丢弃未跟踪文件自己删**：不用 `git clean`（范围过大且会连带忽略规则），删前用 realpath 校验仍在项目内。
  * - **提交信息走 stdin**：`git commit -F -`，不拼接 shell，也不受引号、换行与长度影响。
  * - **远端操作不猜策略**：pull 直接沿用用户自己的 `pull.rebase` / `pull.ff`；push 有上游就推当前上游，
@@ -40,7 +41,8 @@ import type {
   GitPathRequest,
   GitStatus,
   GitStatusResult,
-  GitTextDiff
+  GitTextDiff,
+  GitWritePathRequest
 } from '../../shared/git-api'
 import { GIT_NETWORK_TIMEOUT_MS, GIT_READ_TIMEOUT_MS, GitCommandError, runGit, runGitBuffer, streamGit } from './git-command'
 import {
@@ -97,6 +99,22 @@ type PreparedPath =
     readonly relativePath: string
     readonly absolutePath: string
     readonly repoPath: string
+  }
+  | { readonly ok: false; readonly error: DesktopError }
+
+interface PreparedPathItem {
+  readonly relativePath: string
+  readonly absolutePath: string
+  readonly repoPath: string
+}
+
+type PreparedPaths =
+  | {
+    readonly ok: true
+    readonly repository: GitRepository
+    readonly projectRoot: string
+    readonly reportedProjectRoot: string
+    readonly items: readonly PreparedPathItem[]
   }
   | { readonly ok: false; readonly error: DesktopError }
 
@@ -166,25 +184,31 @@ export class GitService {
     }
   }
 
-  /** 暂存一个路径（含删除）；成功后回传最新状态。 */
-  async stage(request: GitPathRequest): Promise<GitOperationResult> {
-    const prepared = await this.prepare(request.path)
+  /** 暂存一个或多个路径（含删除）；成功后回传最新状态。 */
+  async stage(request: GitWritePathRequest): Promise<GitOperationResult> {
+    const paths = 'paths' in request ? request.paths : [request.path]
+    if (paths.length === 0) return this.status()
+    const prepared = await this.prepareMany(paths)
     if (!prepared.ok) return prepared
+    const repoPaths = prepared.items.map((item) => item.repoPath)
     return this.mutate(prepared, async () => {
-      await runGit(['add', '-A', '--', prepared.repoPath], { cwd: prepared.repository.root })
+      await runGit(['add', '-A', '--', ...repoPaths], { cwd: prepared.repository.root })
     }, '暂存失败。')
   }
 
-  /** 取消暂存一个路径；老版本 git 没有 `restore` 时退回 `reset`。 */
-  async unstage(request: GitPathRequest): Promise<GitOperationResult> {
-    const prepared = await this.prepare(request.path)
+  /** 取消暂存一个或多个路径；老版本 git 没有 `restore` 时退回 `reset`。 */
+  async unstage(request: GitWritePathRequest): Promise<GitOperationResult> {
+    const paths = 'paths' in request ? request.paths : [request.path]
+    if (paths.length === 0) return this.status()
+    const prepared = await this.prepareMany(paths)
     if (!prepared.ok) return prepared
+    const repoPaths = prepared.items.map((item) => item.repoPath)
     return this.mutate(prepared, async () => {
       try {
-        await runGit(['restore', '--staged', '--', prepared.repoPath], { cwd: prepared.repository.root })
+        await runGit(['restore', '--staged', '--', ...repoPaths], { cwd: prepared.repository.root })
       } catch (error) {
         if (!isMissingRestore(error)) throw error
-        await runGit(['reset', '-q', 'HEAD', '--', prepared.repoPath], { cwd: prepared.repository.root })
+        await runGit(['reset', '-q', 'HEAD', '--', ...repoPaths], { cwd: prepared.repository.root })
       }
     }, '取消暂存失败。')
   }
@@ -193,31 +217,45 @@ export class GitService {
    * 丢弃改动：已跟踪文件恢复工作区内容，未跟踪文件直接删除。
    * 尚未提交过的文件（只在索引里）不做处理：此时「丢弃」既不是恢复也不是删除，交给用户先取消暂存。
    */
-  async discard(request: GitPathRequest): Promise<GitOperationResult> {
-    const prepared = await this.prepare(request.path)
+  async discard(request: GitWritePathRequest): Promise<GitOperationResult> {
+    const paths = 'paths' in request ? request.paths : [request.path]
+    if (paths.length === 0) return this.status()
+    const prepared = await this.prepareMany(paths)
     if (!prepared.ok) return prepared
 
     return this.mutate(prepared, async () => {
-      if (await this.isTracked(prepared)) {
-        if (!(await this.existsInHead(prepared))) {
-          throw new GitCommandError('failed', '该文件尚未提交过，请先取消暂存，再删除它。', { subcommand: 'discard' })
+      const trackedRepoPaths: string[] = []
+      const untrackedItems: PreparedPathItem[] = []
+
+      for (const item of prepared.items) {
+        const target = { repository: prepared.repository, repoPath: item.repoPath }
+        if (await this.isTracked(target)) {
+          if (!(await this.existsInHead(target))) {
+            throw new GitCommandError('failed', `文件 ${item.relativePath} 尚未提交过，请先取消暂存，再删除它。`, { subcommand: 'discard' })
+          }
+          trackedRepoPaths.push(item.repoPath)
+        } else {
+          untrackedItems.push(item)
         }
-        try {
-          await runGit(['restore', '--worktree', '--', prepared.repoPath], { cwd: prepared.repository.root })
-        } catch (error) {
-          if (!isMissingRestore(error)) throw error
-          await runGit(['checkout', '--', prepared.repoPath], { cwd: prepared.repository.root })
-        }
-        return
       }
 
-      // 未跟踪：删除文件本身（不跟随符号链接），路径已由 realpath 校验在项目内。
-      const info = await lstat(prepared.absolutePath).catch(() => null)
-      if (info === null) return
-      if (info.isDirectory()) {
-        throw new GitCommandError('failed', '目录不提供整体删除，请先展开到具体文件。', { subcommand: 'discard' })
+      if (trackedRepoPaths.length > 0) {
+        try {
+          await runGit(['restore', '--worktree', '--', ...trackedRepoPaths], { cwd: prepared.repository.root })
+        } catch (error) {
+          if (!isMissingRestore(error)) throw error
+          await runGit(['checkout', '--', ...trackedRepoPaths], { cwd: prepared.repository.root })
+        }
       }
-      await unlink(prepared.absolutePath)
+
+      for (const item of untrackedItems) {
+        const info = await lstat(item.absolutePath).catch(() => null)
+        if (info === null) continue
+        if (info.isDirectory()) {
+          throw new GitCommandError('failed', '目录不提供整体删除，请先展开到具体文件。', { subcommand: 'discard' })
+        }
+        await unlink(item.absolutePath)
+      }
     }, '丢弃改动失败。')
   }
 
@@ -613,7 +651,7 @@ export class GitService {
 
   /** 写操作：同仓库串行执行，成功后递增代际并回传最新状态。 */
   private async mutate(
-    prepared: Extract<PreparedPath, { ok: true }>,
+    prepared: { readonly repository: GitRepository; readonly projectRoot: string; readonly reportedProjectRoot: string },
     run: () => Promise<void>,
     fallbackMessage: string
   ): Promise<GitOperationResult> {
@@ -663,6 +701,32 @@ export class GitService {
     }
   }
 
+  private async prepareMany(paths: readonly string[]): Promise<PreparedPaths> {
+    const roots = await this.resolveRoots()
+    if (!roots.ok) return roots
+    const prepared = await this.prepareRoot(roots.roots)
+    if (!prepared.ok) return prepared
+
+    const items: PreparedPathItem[] = []
+    for (const path of paths) {
+      const resolved = await resolveProjectEntryAbsolute(roots.roots.canonical, path)
+      if (!resolved.ok) return resolved
+      items.push({
+        relativePath: resolved.relativePath,
+        absolutePath: resolved.absolutePath,
+        repoPath: projectPathToRepoPath(prepared.repository, roots.roots.canonical, resolved.relativePath)
+      })
+    }
+
+    return {
+      ok: true,
+      repository: prepared.repository,
+      projectRoot: roots.roots.canonical,
+      reportedProjectRoot: roots.roots.reported,
+      items
+    }
+  }
+
   private async prepareRoot(roots: ProjectRoots): Promise<PreparedPath> {
     try {
       const repository = await resolveGitRepository(roots.canonical)
@@ -689,7 +753,7 @@ export class GitService {
   }
 
   /** 该路径是否已纳入索引（`--error-unmatch` 用退出码回答）。 */
-  private async isTracked(prepared: Extract<PreparedPath, { ok: true }>): Promise<boolean> {
+  private async isTracked(prepared: { readonly repository: GitRepository; readonly repoPath: string }): Promise<boolean> {
     try {
       await runGit(['ls-files', '--error-unmatch', '--', prepared.repoPath], {
         cwd: prepared.repository.root,
@@ -703,7 +767,7 @@ export class GitService {
   }
 
   /** HEAD 里是否存在该路径；空仓库（没有 HEAD）一律视为不存在。 */
-  private async existsInHead(prepared: Extract<PreparedPath, { ok: true }>): Promise<boolean> {
+  private async existsInHead(prepared: { readonly repository: GitRepository; readonly repoPath: string }): Promise<boolean> {
     try {
       await runGit(['cat-file', '-e', `HEAD:${prepared.repoPath}`], {
         cwd: prepared.repository.root,

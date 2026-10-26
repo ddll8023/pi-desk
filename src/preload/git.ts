@@ -2,7 +2,7 @@
 
 import { ipcRenderer } from 'electron'
 import { GIT_COMMIT_CHANNEL, GIT_COMMIT_DETAIL_CHANNEL, GIT_COMMIT_DIFF_CHANNEL, GIT_DIFF_CHANNEL, GIT_DISCARD_CHANNEL, GIT_HISTORY_CHANNEL, GIT_PULL_CHANNEL, GIT_PUSH_CHANNEL, GIT_STAGE_CHANNEL, GIT_STATUS_CHANNEL, GIT_UNSTAGE_CHANNEL, isGitCommitDetailResult, isGitCommitDiffResult, isGitDiffResult, isGitHistoryResult, isGitStatusResult } from '../shared/git-api'
-import type { GitCommitDetailRequest, GitCommitDetailResult, GitCommitDiffRequest, GitCommitDiffResult, GitCommitRequest, GitDiffRequest, GitDiffResult, GitHistoryRequest, GitHistoryResult, GitOperationResult, GitPathRequest, GitStatusResult } from '../shared/git-api'
+import type { GitCommitDetailRequest, GitCommitDetailResult, GitCommitDiffRequest, GitCommitDiffResult, GitCommitRequest, GitDiffRequest, GitDiffResult, GitHistoryRequest, GitHistoryResult, GitOperationResult, GitStatusResult, GitWritePathRequest } from '../shared/git-api'
 import type { GitApi } from '../shared/git-api'
 
 const INVALID_GIT_RESPONSE = '桌面接口返回了无法识别的 Git 结果。'
@@ -38,18 +38,21 @@ export const gitApi = {
     return isGitDiffResult(response) ? response : invalidGitDiffResponse()
   },
 
-  async stageGitPaths(request: GitPathRequest): Promise<GitOperationResult> {
-    const response: unknown = await ipcRenderer.invoke(GIT_STAGE_CHANNEL, { path: request.path })
+  async stageGitPaths(request: GitWritePathRequest): Promise<GitOperationResult> {
+    const payload = 'paths' in request ? { paths: request.paths } : { path: request.path }
+    const response: unknown = await ipcRenderer.invoke(GIT_STAGE_CHANNEL, payload)
     return isGitStatusResult(response) ? response : invalidGitStatusResponse()
   },
 
-  async unstageGitPaths(request: GitPathRequest): Promise<GitOperationResult> {
-    const response: unknown = await ipcRenderer.invoke(GIT_UNSTAGE_CHANNEL, { path: request.path })
+  async unstageGitPaths(request: GitWritePathRequest): Promise<GitOperationResult> {
+    const payload = 'paths' in request ? { paths: request.paths } : { path: request.path }
+    const response: unknown = await ipcRenderer.invoke(GIT_UNSTAGE_CHANNEL, payload)
     return isGitStatusResult(response) ? response : invalidGitStatusResponse()
   },
 
-  async discardGitPath(request: GitPathRequest): Promise<GitOperationResult> {
-    const response: unknown = await ipcRenderer.invoke(GIT_DISCARD_CHANNEL, { path: request.path })
+  async discardGitPath(request: GitWritePathRequest): Promise<GitOperationResult> {
+    const payload = 'paths' in request ? { paths: request.paths } : { path: request.path }
+    const response: unknown = await ipcRenderer.invoke(GIT_DISCARD_CHANNEL, payload)
     return isGitStatusResult(response) ? response : invalidGitStatusResponse()
   },
 
