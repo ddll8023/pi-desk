@@ -1,5 +1,5 @@
 <!--
-  内置浏览器工具栏：后退、前进、刷新/停止、地址栏输入、打开开发者工具与系统浏览器打开。
+  内置浏览器工具栏：导航、地址输入、截图标注、元素选择／取消、开发者工具与系统浏览器入口。
 
   地址栏输入由父级状态管理；回车触发导航，Esc 还原当前已加载网址，空白新建时自动聚焦。
 -->
@@ -15,6 +15,8 @@ const props = defineProps<{
   readonly url: string
   readonly inputUrl: string
   readonly active: boolean
+  readonly hasAnnotation: boolean
+  readonly pickingElement: boolean
 }>()
 
 const emit = defineEmits<{
@@ -26,6 +28,8 @@ const emit = defineEmits<{
   openDevTools: []
   openExternal: []
   inputChange: [value: string]
+  annotate: []
+  pickElement: []
 }>()
 
 const inputRef = ref<HTMLInputElement | null>(null)
@@ -133,6 +137,10 @@ defineExpose({
         @keydown.esc.prevent="onCancel"
       />
     </div>
+
+    <AppButton variant="unstyled" class="browser-toolbar-btn p-1.5 rounded-md text-xs text-[var(--color-desk-ink-muted)] hover:bg-[var(--color-desk-panel)] disabled:opacity-30" :disabled="(!props.url || props.url === 'about:blank' || props.loading) && !props.hasAnnotation" aria-label="标注网页" title="标注网页" @click="emit('annotate')">标注</AppButton>
+
+    <AppButton variant="unstyled" class="browser-toolbar-btn p-1.5 rounded-md text-xs text-[var(--color-desk-ink-muted)] hover:bg-[var(--color-desk-panel)] disabled:opacity-30" :disabled="!props.pickingElement && (!props.url || props.url === 'about:blank' || props.loading)" :aria-label="props.pickingElement ? '取消元素选择' : '选择网页元素'" @click="emit('pickElement')">{{ props.pickingElement ? '取消选择' : '选择元素' }}</AppButton>
 
     <!-- 打开 Chromium 开发者工具 -->
     <AppButton

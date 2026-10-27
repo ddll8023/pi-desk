@@ -82,13 +82,14 @@
 | --- | --- | --- |
 | 结构化交互与消除歧义 | 用户与 Agent 之间的结构化意图传递 | pi-desk 的生成式界面（GenUI）由 Agent 主动生成声明式文档让用户填写参数回填；EditHere 是由用户在已有界面截图上圈画、位移并生成结构化 JSON 反馈给 Agent。传递方向相反，不能互相替代。见[生成式界面模块][p-genui] |
 | 远程与移动访问 | 跨设备或轻量化访问 | pi-desk 内置局域网 HTTP 扫码服务，手机直接连接并访问完整会话；EditHere 网页版是单文件静态 Canvas 工具与 MCP 嵌入页，不具备会话宿主或局域网配对网络服务。见[手机访问模块][p-mobile] |
+| 视觉批注 | 点／框定位、编号意见及图片交给 AI | pi-desk 限于内置浏览器的固定画面与网页元素，意见在原位悬浮编辑并加入指定对话草稿；不提供通用图片导入批注、图像分块和布局拖拽，也不实现 EditHere 的反馈格式。见[工作区批注][p-workspace] |
 
 ### 对方独有
 
 | 类别 | EditHere 已公开能力 | pi-desk 当前边界 |
 | --- | --- | --- |
-| 原生屏幕捕获与长截图 | 跨平台系统底层抓屏、滚动拼图、全局快捷键、像素级放大镜取色 | pi-desk 无内置截图引擎，仅支持常规图片文件拖入或粘贴。 |
-| 视觉批注与大爆炸拖拽 | 图像分块识别、点/框批注定位、组件位移向量计算与留空导出 | pi-desk 仅展示图片附件，无内置图片圈画与图层拖拽调整能力。 |
+| 原生屏幕捕获与长截图 | 跨平台系统底层抓屏、滚动拼图、全局快捷键、像素级放大镜取色 | pi-desk 仅内置网页可见区域截图，不包含系统抓屏、长截图与取色；常规图片仍可作为对话附件导入。 |
+| 图像分块与大爆炸拖拽 | 图像分块识别、组件位移向量计算与留空导出 | pi-desk 的浏览器点框批注不拆解图像图层，也不提供组件拖拽、缩放与布局重建。 |
 | 本地离线 OCR | 调用系统原生 Vision / Windows.Media 离线提取图像文字并回填 | pi-desk 无内置图像 OCR 文字识别引擎。 |
 | 视频时间轴标注 | 逐帧播放暂停、多时间戳打点及视频复合反馈 JSON | pi-desk 不含视频时间轴标注与帧管理功能。 |
 
@@ -98,7 +99,7 @@
 | --- | --- | --- |
 | Coding Agent 完整工作台 | Pi SDK UtilityProcess 隔离宿主、多项目信任、多会话并行与活动投影 | EditHere 自身不调用大模型，不编排 Agent 生命周期。 |
 | 常驻终端与流控接回 | 独立 PTY 守护进程、历史快照恢复、序号流控 | EditHere 无终端仿真与命令行执行宿主能力。 |
-| 代码与富文本编辑 | Monaco/CodeMirror 源码高亮编辑、Tiptap 富 Markdown 回写 | EditHere 专注于像素画布与批注，不提供源代码阅读与编辑。 |
+| 代码与富文本编辑 | CodeMirror 源码高亮编辑、Tiptap 富 Markdown 回写 | EditHere 专注于像素画布与批注，不提供源代码阅读与编辑。 |
 | 版本控制 (Git) | 工作区状态、差异审阅、暂存、提交、拉取与推送 | EditHere 无 Git 仓库管理能力。 |
 | 供应商与模型凭据管理 | 统一管理 Pi Provider 鉴权、密钥与默认模型切换 | EditHere 不涉及模型服务凭据。 |
 
@@ -112,9 +113,9 @@
 
 | 方向 | 可行性 | 依据与依赖代价 |
 | --- | :---: | --- |
-| **将 EditHere 作为外部 MCP 挂载到 pi-desk** | **高** | pi-desk 现有 MCP 架构完全支持 stdio 协议。用户只需在 `desktop-config.json` 或设置中添加 `edithere-mcp`，会话即可直接调用 `edithere_annotate` 等工具唤起标注。无须改动主干架构，无许可证兼容风险。 |
+| **将 EditHere 作为外部 MCP 挂载到 pi-desk** | **高** | 通过 Pi 的 MCP 配置接入 stdio 服务，配置来源及信任边界见[资源与 MCP 模块][p-resources]；Desktop 设置只列举配置并提供探测与会话动作，不编辑 MCP 配置，`desktop-config.json` 不是服务器配置入口。独立使用仍须遵守上文的使用许可，不代表可移植其主体实现。 |
 | **输入区解析与结构化反馈卡片化渲染** | **中** | 在 `PromptComposer` 或会话列表中，针对 `feedback-minimal-4` 的 JSON 数据和配套图片进行结构化识别，以卡片形式展示“批注列表”、“位移变更”、“目标原图”，提高视觉走查的可读性；仅需前端解析展示逻辑。 |
-| **在 Electron 中内置实现底层截屏与批注画板** | **低（不建议）** | 涉及底层屏幕捕获权限、滚动拼图算法及复杂的 Canvas 矩形变换引擎。由于 EditHere 属于 PolyForm Noncommercial 协议，无法复用其现有 C++ 源码，自研工程代价高，建议保持外部工具协作定位。 |
+| **将浏览器批注扩展为系统抓屏与布局画板** | **低（不建议）** | 现有内置浏览器已有截图与点框批注，但系统捕获权限、滚动拼图和图层变换仍是独立能力。EditHere 主体的非商业许可不授权本项目自由移植其实现，不把浏览器标注视作通用截图工具的替代。 |
 
 ## 信息来源
 
@@ -128,7 +129,8 @@
 
 ### 本项目事实出处
 
-- [资源与 MCP 模块][p-resources]、[`src/main/resources/mcp-manager.ts`](../../src/main/resources/mcp-manager.ts)：MCP 服务生命周期与工具发现。
+- [资源与 MCP 模块][p-resources]、[`src/main/resources/ipc.ts`](../../src/main/resources/ipc.ts)：MCP 配置列举、探测与运行中会话的受限动作；连接与工具执行由实际 SDK／服务器承担。
+- [工作区批注][p-workspace]、[`src/main/browser/ipc.ts`](../../src/main/browser/ipc.ts)、[`BrowserAnnotationPanel.vue`](../../src/renderer/src/browser/components/BrowserAnnotationPanel.vue)：网页截图、元素采集、点框意见与草稿交付。
 - [生成式界面模块][p-genui]、[`src/shared/genui-contract.ts`](../../src/shared/genui-contract.ts)：声明式 UI 协议与参数回填。
 - [会话模块][p-session]、[`src/main/sessions/session-manager.ts`](../../src/main/sessions/session-manager.ts)：Pi SDK 宿主与执行流。
 - [手机访问模块][p-mobile]、[`src/lan-mobile/`](../../src/lan-mobile/)：局域网 HTTP 扫码直连与受限会话。
@@ -153,3 +155,4 @@
 [p-session]: ../modules/sessions-chat.md
 [p-mobile]: ../modules/lan-remote.md
 [p-terminal]: ../modules/terminal-commands.md
+[p-workspace]: ../modules/workspace-tabs.md#浏览器批注

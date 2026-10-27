@@ -4,15 +4,17 @@
   面板层只显示活动标签，隐藏用 visibility 而不是 display：面板始终保持真实尺寸，
   输入框量高与终端尺寸测量在隐藏状态下也成立。运行中终端跨项目保留视图，
   退出终端仅在查看时恢复画面；文件与浏览器面板各自保持挂载，切回来仍是同一份编辑内容或页面渲染状态。
-  标签与命令的意图在这里转交工作区标签、快捷命令与设置三个 Store；需要打开会话时取标签给出的打开意图，交给会话 Store 提交。本组件不判断归属。
+  标签与命令的意图在这里转交对应 Store；打开会话仍经标签意图交给会话 Store。
+  浏览器批注交付在这里核对来源、目标项目与标签身份，切到目标后由输入坞复核并合并草稿，不自动发送。
 -->
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
-import { computed } from 'vue'
+import { computed, nextTick, ref } from 'vue'
 import ChatMessageList from '../../sessions/components/ChatMessageList.vue'
 import ExtensionNotificationBar from '../../sessions/components/ExtensionNotificationBar.vue'
 import FileEditorView from '../../editor/components/FileEditorView.vue'
 import BrowserView from '../../browser/components/BrowserView.vue'
+import { useBrowserAnnotationsStore } from '../../browser/stores/browser-annotations'
 import PromptComposer from '../../sessions/components/PromptComposer.vue'
 import SessionActivityBar from '../../sessions/components/SessionActivityBar.vue'
 import TerminalView from '../../workspace/components/TerminalView.vue'
@@ -45,6 +47,10 @@ const sessionRunsStore = useSessionRunsStore()
 const settingsStore = useSettingsStore()
 const terminalStore = useTerminalStore()
 const workspaceTabsStore = useWorkspaceTabsStore()
+const browserAnnotations = useBrowserAnnotationsStore()
+const composerRef = ref<InstanceType<typeof PromptComposer> | null>(null)
+const annotationDeliveryError = ref<string | null>(null)
+let annotationDeliveryPending = false
 const { currentProject } = storeToRefs(projectStore)
 const { open: settingsOpen } = storeToRefs(settingsStore)
 
@@ -89,6 +95,47 @@ function submitOpen(intent: ChatOpenIntent | null): void {
 
 async function onSelectTab(key: string): Promise<void> {
   submitOpen(await workspaceTabsStore.activateTab(key))
+}
+
+const annotationTargets = computed(() => workspaceTabsStore.tabs
+  .filter(tab => tab.kind === 'chat').map(tab => ({ id: tab.id, title: tab.title })))
+
+/** 切换目标后由实际输入区核对身份并合并，不向后台草稿直接写入。 */
+async function onDeliverAnnotation(source: string, target: string, text: string, file: File): Promise<void> {
+  if (annotationDeliveryPending) return
+  annotationDeliveryError.value = null
+  const project = projectPath.value
+  const document = browserAnnotations.documents[source]
+  const fingerprint = browserAnnotations.fingerprint(source)
+  if (!project || workspaceTabsStore.activeTab !== source || !document || !fingerprint) {
+    annotationDeliveryError.value = '来源浏览器已变化，批注未交付。'
+    return
+  }
+  const identity = workspaceTabsStore.annotationTargetIdentity(project, target)
+  if (identity === null) {
+    annotationDeliveryError.value = '目标对话已关闭，批注未交付。'
+    return
+  }
+  annotationDeliveryPending = true
+  try {
+    const intent = await workspaceTabsStore.activateTab(target)
+    if (intent !== null) await sessionStore.openIntent(intent)
+    await nextTick()
+    if (projectPath.value !== project || workspaceTabsStore.activeTab !== target
+      || workspaceTabsStore.annotationTargetIdentity(project, target) !== identity
+      || browserAnnotations.documents[source] !== document || browserAnnotations.fingerprint(source) !== fingerprint) {
+      throw new Error('对话或批注已变化，批注未交付。')
+    }
+    const composer = composerRef.value
+    if (!composer) throw new Error('目标输入区不可用，批注未交付。')
+    const error = composer.mergeBrowserAnnotation(project, target, identity, sessionViewStore.key, text, file)
+    if (error) throw new Error(error)
+    browserAnnotations.markSubmitted(source, fingerprint)
+  } catch (error) {
+    annotationDeliveryError.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    annotationDeliveryPending = false
+  }
 }
 
 async function onCloseTab(key: string): Promise<void> {
@@ -168,6 +215,11 @@ function openCommandSettings(): void {
     <AppButton variant="unstyled" class="workspace-notice-close" aria-label="关闭提示" @click="sessionStore.actionError = null">关闭</AppButton>
   </p>
 
+  <p v-if="annotationDeliveryError" class="workspace-notice" role="alert">
+    <span class="min-w-0 flex-1">{{ annotationDeliveryError }}</span>
+    <AppButton variant="unstyled" class="workspace-notice-close" @click="annotationDeliveryError = null">关闭</AppButton>
+  </p>
+
   <!-- 终端操作失败只提示，不改变已建立的标签；关闭后不再重复展示。 -->
   <p v-if="terminalStore.error !== null" class="workspace-notice" role="status">
     <span class="min-w-0 flex-1">{{ terminalStore.error }}</span>
@@ -209,6 +261,7 @@ function openCommandSettings(): void {
         <pre class="chat-column mx-auto widget-block">{{ widget.lines.join('\n') }}</pre>
       </div>
       <PromptComposer
+        ref="composerRef"
         :focus-token="props.composerFocusToken"
         :active="!settingsOpen && (workspaceTabsStore.isChatNewDraft || workspaceTabsStore.isChatReady)"
       />
@@ -260,7 +313,7 @@ function openCommandSettings(): void {
       :inert="workspaceTabsStore.activeTab !== browser.key"
       :aria-hidden="workspaceTabsStore.activeTab !== browser.key"
     >
-      <BrowserView :tab-key="browser.key" :active="!settingsOpen && workspaceTabsStore.activeTab === browser.key" />
+      <BrowserView :tab-key="browser.key" :active="!settingsOpen && workspaceTabsStore.activeTab === browser.key" :targets="annotationTargets" :delivery-error="annotationDeliveryError" @deliver="onDeliverAnnotation" />
     </div>
 
     <!-- 非新草稿、身份不匹配且无日志历史与本地待发送消息时才占位；待发送内容可独立保持面板可见。 -->

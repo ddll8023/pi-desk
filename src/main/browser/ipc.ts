@@ -1,0 +1,92 @@
+/** 内置浏览器截图与元素选择：只允许可信主窗口操作其所属的受限 webview。 */
+import { webContents } from 'electron'
+import type { IpcMainInvokeEvent, WebContents } from 'electron'
+import { BROWSER_CANCEL_PICK_CHANNEL, BROWSER_CAPTURE_CHANNEL, BROWSER_PICK_ELEMENT_CHANNEL, isBrowserElementContext } from '../../shared/browser-api'
+import type { BrowserCaptureResult, BrowserElementPickResult } from '../../shared/browser-api'
+import { handle, isTrustedCaller } from '../ipc/dispatch'
+import { ELEMENT_PICKER_CANCEL, ELEMENT_PICKER_CHECK, ELEMENT_PICKER_START, ELEMENT_PICKER_WORLD } from './element-picker'
+
+interface PickOperation { cancelled: boolean }
+const picking = new Map<number, PickOperation>()
+
+/** 不能凭页面提交的 ID 访问其他窗口或普通 webContents。 */
+function browserTarget(event: IpcMainInvokeEvent, args: unknown[], pageUrl: string): WebContents | null {
+  if (!isTrustedCaller(event, pageUrl)) return null
+  const id = args[0]
+  if (args.length !== 1 || typeof id !== 'number' || !Number.isSafeInteger(id) || id <= 0) return null
+  const target = webContents.fromId(id)
+  return target && !target.isDestroyed() && target.getType() === 'webview' && target.hostWebContents === event.sender
+    ? target : null
+}
+
+async function pickerScript(target: WebContents, code: string): Promise<unknown> {
+  return target.executeJavaScriptInIsolatedWorld(ELEMENT_PICKER_WORLD, [{ code }])
+}
+
+async function cancelPick(target: WebContents): Promise<void> {
+  const operation = picking.get(target.id)
+  if (!operation) return
+  operation.cancelled = true
+  if (!target.isDestroyed()) {
+    try { await pickerScript(target, ELEMENT_PICKER_CANCEL) } catch { /* 导航或销毁也会结束页面内监听。 */ }
+  }
+}
+
+export function registerBrowserHandlers(pageUrl: string): void {
+  handle(BROWSER_CAPTURE_CHANNEL, async (event, ...args: unknown[]): Promise<BrowserCaptureResult> => {
+    const target = browserTarget(event, args, pageUrl)
+    if (!target) return { ok: false, error: '浏览器页面不存在、参数无效或不属于当前窗口。' }
+    try {
+      const image = await target.capturePage()
+      if (target.isDestroyed() || image.isEmpty()) return { ok: false, error: '网页截图为空或页面已关闭。' }
+      return { ok: true, dataUrl: image.toDataURL() }
+    } catch (error) {
+      return { ok: false, error: `网页截图失败：${error instanceof Error ? error.message : String(error)}` }
+    }
+  })
+
+  handle(BROWSER_CANCEL_PICK_CHANNEL, async (event, ...args: unknown[]): Promise<void> => {
+    const target = browserTarget(event, args, pageUrl)
+    if (target) await cancelPick(target)
+  })
+
+  handle(BROWSER_PICK_ELEMENT_CHANNEL, async (event, ...args: unknown[]): Promise<BrowserElementPickResult> => {
+    const target = browserTarget(event, args, pageUrl)
+    if (!target) return { ok: false, error: '浏览器页面不存在、参数无效或不属于当前窗口。' }
+    if (picking.has(target.id)) return { ok: false, error: '当前页面已有元素选取操作。' }
+    const operation: PickOperation = { cancelled: false }
+    picking.set(target.id, operation)
+    const cancelForNavigation = (): void => { void cancelPick(target) }
+    target.on('did-start-navigation', cancelForNavigation)
+    target.on('destroyed', cancelForNavigation)
+    try {
+      const selected = await pickerScript(target, ELEMENT_PICKER_START)
+      if (operation.cancelled || target.isDestroyed()) return { ok: false, error: '元素选择已取消。', cancelled: true }
+      if (typeof selected !== 'object' || selected === null || Array.isArray(selected)) {
+        return { ok: false, error: '网页返回了无法识别的元素信息。' }
+      }
+      const result = selected as Record<string, unknown>
+      if (result.ok === false) return { ok: false, error: typeof result.error === 'string' ? result.error : '元素选择失败。', cancelled: result.cancelled === true }
+      if (result.ok !== true || !isBrowserElementContext(result.element)) return { ok: false, error: '网页返回了无效的元素信息。' }
+      const image = await target.capturePage()
+      if (operation.cancelled || target.isDestroyed()) return { ok: false, error: '元素选择已取消。', cancelled: true }
+      const comparison = await target.capturePage()
+      if (operation.cancelled || target.isDestroyed()) return { ok: false, error: '元素选择已取消。', cancelled: true }
+      const unchanged = await pickerScript(target, ELEMENT_PICKER_CHECK)
+      if (operation.cancelled || unchanged !== true || image.isEmpty() || comparison.isEmpty()
+        || !image.toPNG().equals(comparison.toPNG())) return { ok: false, error: '采集期间页面发生变化，请重新选择。' }
+      return { ok: true, dataUrl: image.toDataURL(), element: result.element }
+    } catch (error) {
+      return operation.cancelled
+        ? { ok: false, error: '元素选择已取消。', cancelled: true }
+        : { ok: false, error: `元素选择失败：${error instanceof Error ? error.message : String(error)}` }
+    } finally {
+      target.removeListener('did-start-navigation', cancelForNavigation)
+      target.removeListener('destroyed', cancelForNavigation)
+      if (!target.isDestroyed()) {
+        try { await pickerScript(target, ELEMENT_PICKER_CANCEL) } catch { /* 页面已导航时无遗留监听。 */ }
+      }
+      if (picking.get(target.id) === operation) picking.delete(target.id)
+    }
+  })
+}

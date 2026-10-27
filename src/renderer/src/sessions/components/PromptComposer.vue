@@ -401,6 +401,22 @@ const pendingTitle = computed(() => {
 const IMAGE_MIME_TYPES: readonly string[] = ['image/png', 'image/jpeg', 'image/gif', 'image/webp']
 const MAX_IMAGE_COUNT = 4
 const MAX_IMAGE_BYTES = 3 * 1024 * 1024
+
+/** 在目标输入区就绪后原子合并；任何校验失败均不改动现有草稿。 */
+function mergeBrowserAnnotation(projectPath: string, tabKey: string, identity: string, inputKey: string, text: string, file: File): string | null {
+  if (!props.active || projectStore.currentProject?.path !== projectPath
+    || !sessionViewStore.annotationTargetMatches(projectPath, tabKey, identity, inputKey)) return '目标对话已变化，批注未交付。'
+  if (startupRequested.value || !canSubmit.value) return '目标对话暂不可编辑，请稍后重试。'
+  if (imageSupported.value === false) return '当前模型不支持图片附件。'
+  if (file.type !== 'image/png' || file.size > MAX_IMAGE_BYTES) return '批注截图超过图片附件大小上限（3 MiB）。'
+  if (pendingImages.value.length >= MAX_IMAGE_COUNT) return `目标对话最多携带 ${MAX_IMAGE_COUNT} 张图片。`
+  const entry = sessionViewStore.createImage(file)
+  draft.value = [draft.value, text].filter(Boolean).join('\n\n')
+  pendingImages.value = [...pendingImages.value, entry]
+  return null
+}
+defineExpose({ mergeBrowserAnnotation })
+
 /** 输入行自动增高的静态上限；实际上限再取窗口高度的 40%。与 .prompt-composer-input 的 max-height 保持一致。 */
 const MAX_INPUT_HEIGHT = 200
 
@@ -417,7 +433,7 @@ function pickImageFiles(files: readonly File[]): readonly File[] {
   return files.filter((file) => IMAGE_MIME_TYPES.includes(file.type))
 }
 
-/** 图片入口的唯一校验点：选择、粘贴、拖拽三条路径共用。 */
+/** 文件选择、粘贴与拖拽的共用图片校验；浏览器批注由合并入口单独核对目标及附件限制。 */
 function addImageFiles(files: readonly File[]): void {
   for (const file of files) {
     if (!IMAGE_MIME_TYPES.includes(file.type)) {

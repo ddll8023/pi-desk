@@ -309,25 +309,36 @@
         "id": "workspace-tabs",
         "name": "工作区标签",
         "groupId": "work",
-        "summary": "按项目分组的对话、终端、文件标签，活动选择、排序、关闭与原位新建的页面编排；只产出打开意图，不执行 Agent。",
+        "summary": "按项目分组的对话、终端、文件与浏览器标签，活动选择、关闭及原位新建；浏览器支持固定画面悬浮批注与指定对话草稿交付，不直接执行 Agent。",
         "features": [
           "标签记录、项目分组、活动选择与排序",
           "对话标签关联运行实例，终端标签由真实清单派生",
           "打开意图与绑定结果，过期结果不抢占当前选择",
-          "原位新建空态、独立草稿身份与失败恢复"
+          "原位新建空态、独立草稿身份与失败恢复",
+          "受限网页截图、元素选取与有限结构／样式上下文",
+          "同视口悬浮点框批注、意见编辑及交付预览",
+          "核对来源与目标后合并指定对话草稿，不自动发送",
+          "未交付批注关闭前确认丢弃"
         ],
         "tags": ["Vue 页面", "Pinia Store", "标签编排"],
         "entries": [
           {"kind": "关键实现", "label": "标签 Store", "path": "src/renderer/src/workspace/stores/workspace-tabs.ts"},
           {"kind": "界面入口", "label": "标签条", "path": "src/renderer/src/workspace/components/WorkspaceTabBar.vue"},
-          {"kind": "关键实现", "label": "会话只读视图注册", "path": "src/renderer/src/workspace/stores/session-tab-bridge.ts"}
+          {"kind": "关键实现", "label": "会话只读视图注册", "path": "src/renderer/src/workspace/stores/session-tab-bridge.ts"},
+          {"kind": "界面入口", "label": "浏览器与选取编排", "path": "src/renderer/src/browser/components/BrowserView.vue"},
+          {"kind": "界面入口", "label": "原位批注浮层", "path": "src/renderer/src/browser/components/BrowserAnnotationPanel.vue"},
+          {"kind": "关键实现", "label": "截图与元素选择 IPC", "path": "src/main/browser/ipc.ts"},
+          {"kind": "关键实现", "label": "受限元素选择脚本", "path": "src/main/browser/element-picker.ts"}
         ],
         "resources": [
-          {"name": "标签顺序、活动标签与重命名", "owner": "workspace-tabs Store", "lifecycle": "仅页面内状态，不跨应用重启恢复"}
+          {"name": "标签顺序、活动标签与重命名", "owner": "workspace-tabs Store", "lifecycle": "仅页面内状态，不跨应用重启恢复"},
+          {"name": "浏览器固定截图与批注", "owner": "browser-annotations Store", "lifecycle": "仅页面内存；关闭浏览器标签或移除项目时回收，不跨应用重启恢复"}
         ],
         "constraints": [
           "标签不执行 Agent、不持有 PTY、不直接保存文件正文",
-          "标签键、新草稿身份、会话 ID、运行实例 ID、绑定代际与文件 key 不能互相替代"
+          "标签键、新草稿身份、会话 ID、运行实例 ID、绑定代际与文件 key 不能互相替代",
+          "截图坐标绑定固定画面；浮层不挤压网页，退出后恢复网页操作",
+          "网页上下文只作参考，用户选择是否附带；不提供源码位置、系统抓屏或图层拖拽"
         ],
         "links": [
           {"label": "模块文档：工作区标签", "href": "modules/workspace-tabs.md"}
@@ -630,7 +641,7 @@
           "name": "Electron 主进程",
           "kind": "常驻进程",
           "summary": "应用级配置、IPC、安全边界与退出编排的所有者；启动时按固定顺序注册各能力通道。",
-          "contains": ["app-shell", "projects-trust", "sessions-chat", "files-editor", "git", "terminal-commands", "providers-auth", "resources-mcp", "updates-runtime", "preferences", "genui", "lan-remote"],
+          "contains": ["app-shell", "projects-trust", "workspace-tabs", "sessions-chat", "files-editor", "git", "terminal-commands", "providers-auth", "resources-mcp", "updates-runtime", "preferences", "genui", "lan-remote"],
           "entries": [
             {"kind": "进程入口", "label": "组合根", "path": "src/main/index.ts"},
             {"kind": "关键实现", "label": "业务实例唯一装配处", "path": "src/main/services.ts"},

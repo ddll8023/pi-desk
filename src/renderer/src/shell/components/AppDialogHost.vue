@@ -3,7 +3,7 @@
   进出由各自内部的 Transition 驱动。
 
   这里只持有弹层的展示派生值与「决定后做什么」：待确认目标本身由各能力 Store 持有
-  （项目移除在项目 Store、会话删除与会话切换在会话 Store、脏文件关闭在标签 Store、
+  （项目移除在项目 Store、会话删除与会话切换在会话 Store、文件／浏览器丢弃关闭在标签 Store、
   快捷命令的编辑与删除在快捷命令 Store），宿主不另存一份，避免两处状态不同步。
   信任决定的结果按候选项目、会话打开或 Git 写操作三种来源分派，取消则各回到原状。
 -->
@@ -58,7 +58,7 @@ const sessionConfirmDescription = computed(() => (
 ))
 const sessionConfirmLabel = computed(() => (pendingReload.value ? '停止并重新加载' : '停止并切换'))
 
-/** 待确认关闭的脏文件标签标题；标签消失时退化为空串。 */
+/** 待确认关闭的文件或浏览器标签标题；标签消失时退化为空串。 */
 const pendingFileCloseTitle = computed(() => (
   workspaceTabsStore.tabs.find(tab => tab.id === workspaceTabsStore.pendingCloseKey)?.title ?? ''
 ))
@@ -104,7 +104,7 @@ function onTrustCancelled(): void {
   gitStore.cancelPendingTrust()
 }
 
-/** 确认丢弃未保存修改并关标签：关闭后落到的相邻对话标签需要补打开时在这里提交意图。 */
+/** 确认丢弃修改或批注并关标签：关闭后落到的相邻对话标签需要补打开时在这里提交意图。 */
 async function onConfirmFileClose(): Promise<void> {
   const intent = await workspaceTabsStore.confirmPendingClose()
   if (intent !== null) void sessionStore.openIntent(intent)
@@ -156,11 +156,11 @@ function onUpdateDetails(): void {
       @cancel="sessionStore.cancelRemoval()"
     />
 
-    <!-- 脏文件标签关闭前确认：确认后丢弃未保存修改并关闭，不可恢复。 -->
+    <!-- 文件或浏览器关闭前确认：丢弃未保存修改或未交付批注后关闭，不可恢复。 -->
     <ConfirmDialog
       :open="workspaceTabsStore.pendingCloseKey !== null"
-      title="关闭文件会丢弃未保存的修改"
-      description="该文件有未保存的修改，关闭标签后不可恢复。需要保留时先取消并保存。"
+      :title="workspaceTabsStore.isBrowserKey(workspaceTabsStore.pendingCloseKey ?? '') ? '关闭浏览器会丢弃未交付的批注' : '关闭文件会丢弃未保存的修改'"
+      :description="workspaceTabsStore.isBrowserKey(workspaceTabsStore.pendingCloseKey ?? '') ? '关闭标签后截图和批注不可恢复。' : '该文件有未保存的修改，关闭标签后不可恢复。需要保留时先取消并保存。'"
       :detail="pendingFileCloseTitle"
       confirm-label="丢弃并关闭"
       @confirm="onConfirmFileClose"

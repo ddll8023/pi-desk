@@ -13,7 +13,7 @@
  * 标签键是页面内编号，只在渲染端有效：对话标签记会话身份与它承载的运行实例，终端标签记终端标识，
  * 文件标签记一个编号（路径与编辑状态由 `project-editor` 持有），浏览器标签记一个唯一键（页面与导航状态由 `browserStore` 持有）。
  * 终端清单是主进程的真相，因此终端标签按清单派生（已消失的不再展示、新出现的追加到末尾）；对话、文件与浏览器标签需要在这里登记。
- * 文件标签只能由打开文件产生，不进入「新建」菜单；关闭脏文件前先置待确认状态，用户确认后才丢弃未保存修改。
+ * 文件标签只能由打开文件产生，不进入「新建」菜单；脏文件或含未交付批注的浏览器关闭前先确认，确认后才丢弃对应内容。
  * 后台实例回复结束时给它的对话标签打「有新回复」标记，切到该标签即清除。
  * 新建对话的入口分两类：标签条与侧栏新建一个对话标签，`/new` 则在当前标签内就地替换
  * （结束原实例、清空会话身份与重命名，标签位置与顺序不变）。
@@ -27,6 +27,7 @@ import type { QuickCommand } from '../../../../shared/quick-commands-api'
 import type { TerminalSessionInfo } from '../../../../shared/terminal-api'
 import { BLANK_PAGE_URL, BROWSER_KEY_PREFIX, DEFAULT_BROWSER_TITLE } from '../../../../shared/browser-api'
 import { useBrowserStore } from '../../browser/stores/browser'
+import { useBrowserAnnotationsStore } from '../../browser/stores/browser-annotations'
 import { useProjectStore } from '../../projects/stores/project'
 import { useProjectEditorStore } from '../../editor/stores/project-editor'
 import type { FileEditorMode, FileEditorRecord } from '../../editor/stores/project-editor'
@@ -115,6 +116,7 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
   const terminalStore = useTerminalStore()
   const editorStore = useProjectEditorStore()
   const browserStore = useBrowserStore()
+  const browserAnnotations = useBrowserAnnotationsStore()
 
   /** 按项目保存的标签键顺序；数组顺序即标签顺序。 */
   const orders = ref<Readonly<Record<string, readonly string[]>>>({})
@@ -129,7 +131,7 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
   const renames = ref<Readonly<Record<string, string>>>({})
   /** 已结束回复但用户还没看过的对话标签键；只在内存里，不跨应用重启恢复。 */
   const unseenCompletions = ref<ReadonlySet<string>>(new Set())
-  /** 待确认关闭的脏文件标签键；确认前标签与未保存内容都保留。 */
+  /** 待确认关闭的文件或浏览器标签键；确认前保留未保存修改或未交付批注。 */
   const pendingCloseKey = ref<string | null>(null)
   /** 上一次广播时正在执行的实例：只有由执行中变为已结束才算一轮回复完成，初始快照不产生标记。 */
   let streamingRunIds = new Set<number>()
@@ -472,7 +474,8 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
 
   /**
    * 关闭标签：对话标签结束它承载的运行实例（中断在途操作、解除占用、关闭宿主，保留会话历史文件），
-   * 终端标签关掉那个终端进程，文件标签只清内存编辑记录、不改动磁盘（有未保存修改时由界面先确认）。
+   * 终端标签关掉那个终端进程；文件清内存编辑记录、不改动磁盘，浏览器清导航与批注状态。
+   * 未保存文件修改与未交付浏览器批注的丢弃确认由 requestClose 入口处理。
    * 任一步失败都保留标签，避免出现「实例还在、标签已消失」。
    * 关闭后需要把落到的相邻对话标签切到前台时返回打开意图，由调用方提交。
    */
@@ -487,7 +490,10 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     if (activeTabs.value[projectPath] === key) session.invalidateOpenSelection()
     try {
       if (isFileKey(key)) editorStore.close(key)
-      else if (isBrowserKey(key)) browserStore.removeTab(key)
+      else if (isBrowserKey(key)) {
+        browserStore.removeTab(key)
+        browserAnnotations.remove(key)
+      }
       else if (isChatKey(key)) {
         // 打开尚未返回时先保留标签，等实际身份绑定后再关闭；失败时仍能保留原标签。
         await session.waitForOpenActions()
@@ -512,19 +518,19 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
   }
 
   /**
-   * 关闭入口：有未保存修改的文件标签先置待确认状态，其余直接走关闭链；
+   * 关闭入口：有未保存修改的文件或未交付批注的浏览器先置待确认状态，其余直接走关闭链；
    * 关闭后需要补打开的相邻对话标签由返回值交给调用方提交。
    */
   async function requestClose(key: string): Promise<ChatOpenIntent | null> {
     const tab = tabs.value.find(candidate => candidate.id === key)
-    if (tab !== undefined && tab.dirty) {
+    if (tab !== undefined && (tab.dirty || (isBrowserKey(key) && browserAnnotations.hasUnsubmitted(key)))) {
       pendingCloseKey.value = key
       return null
     }
     return closeTab(key)
   }
 
-  /** 确认丢弃未保存修改并关闭；标签已消失时无副作用。 */
+  /** 确认丢弃未保存修改或未交付批注并关闭；标签已消失时无副作用。 */
   async function confirmPendingClose(): Promise<ChatOpenIntent | null> {
     const key = pendingCloseKey.value
     pendingCloseKey.value = null
@@ -650,6 +656,13 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     return isChatKey(key) && chatTabs.value[key] !== undefined && (orders.value[projectPath] ?? []).includes(key)
   }
 
+  /** 交付批注前后核对标签内容身份，避免原位新建导致投递到另一个对话。 */
+  function annotationTargetIdentity(projectPath: string, key: string): string | null {
+    if (!hasChatTabKey(projectPath, key)) return null
+    const record = chatTabs.value[key]
+    return JSON.stringify([record?.sessionId ?? sessionIdOfRun(record?.runId ?? null), newChats.value[key]?.inputKey ?? null])
+  }
+
   function hasRunTab(runId: number): boolean {
     return Object.values(chatTabs.value).some(record => record.runId === runId)
   }
@@ -674,7 +687,10 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
   function dropProject(projectPath: string): void {
     for (const key of orders.value[projectPath] ?? []) {
       if (isChatKey(key)) forgetChatTab(key)
-      if (isBrowserKey(key)) browserStore.removeTab(key)
+      if (isBrowserKey(key)) {
+        browserStore.removeTab(key)
+        browserAnnotations.remove(key)
+      }
     }
     editorStore.closeProject(projectPath)
     const nextOrders = { ...orders.value }
@@ -1136,6 +1152,7 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     syncOpenTab,
     prepareOpenTab,
     hasChatTabKey,
+    annotationTargetIdentity,
     hasRunTab,
     closeChatRun,
     sessionIdForTab,

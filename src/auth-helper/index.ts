@@ -460,7 +460,7 @@ async function handleRequest(request: AuthHelperRequest): Promise<void> {
           const result = await mr.refresh({
             allowNetwork: true,
             force: true,
-            providers: request.providerId ? [request.providerId] : undefined,
+            ...(request.providerId ? { providers: [request.providerId] } : {}),
             signal: controller.signal
           })
           if (result.aborted) {

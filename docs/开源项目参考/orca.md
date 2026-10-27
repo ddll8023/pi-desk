@@ -86,6 +86,7 @@
 | 手机继续对话 | 远程查看进展并回复 | pi-desk 是局域网 HTTP 直连的网页，桌面开启后自动显示二维码，手机扫码自动连接并访问全部已登记项目，提供聊天及问题回应；Orca 是 iOS/Android Companion，包含多主机、终端、Git、账号和 Relay 路径 |
 | 差异审阅 | 都能看到变更与行差异 | pi-desk 有 `GitDiffView`，但没有内置行级评论归集与批量发回 Agent 的闭环；Orca 的 Annotate AI Diff 还维护评论及处理状态 |
 | 供应商与用量 | 都能展示模型或用量信息 | pi-desk 管 Pi Provider 凭据与会话 token／费用；Orca 面向外部 Agent 账号及订阅限流，二者的统计对象与认证边界不同 |
+| 浏览器与设计上下文 | 网页元素选取、结构与样式、截图反馈给 Agent | pi-desk 在固定网页画面上悬浮编辑点框意见，可选择附带有限 HTML 与计算样式，加入同项目指定对话草稿而不自动发送；不提供 Orca 文档所述的局部裁图与源码位置。见[工作区批注][p-workspace] |
 
 ### 对方独有
 
@@ -93,7 +94,6 @@
 | --- | --- | --- |
 | 工作树编排 | 创建、分支、任务来源、归档／休眠／删除、结果审阅 | 内置工作树管理无；现有 Git 模块明确不创建隔离工作树 |
 | 跨主机执行 | SSH 工作树、Server、远程文件与终端 | 无等价内置执行后端；手机入口仍驱动当前电脑，不是远程项目宿主 |
-| 浏览器与设计上下文 | Browser / Design Mode | pi-desk 现已支持内置浏览器工作区标签、导航控制与 DevTools 调试；点击选取页面元素并直传 Agent 上下文的 Design Mode 暂未内置 |
 | 第三方任务集成 | GitHub / Linear 等任务与工作树、PR 关联 | 内置任务提供商与 PR 工作台无；系统 Git 的 pull/push 不等于这些集成 |
 | 产品自动化 CLI | 操作 Orca 工作树、浏览器和可见界面 | pi-desk 没有等价的对外工作台 CLI；Pi Agent 工具不等于桌面自动化协议 |
 
@@ -112,7 +112,7 @@ pi-desk 的[声明式生成式界面][p-genui]含文档版本、节点补丁及�
 | 将差异评论批量组织成修改请求 | 低 | 已有差异展示和发送消息基础，但缺评论身份、变更后锚点、批次和处理状态，需独立审阅产品设计；不必为此更换 CodeMirror |
 | 显示后台任务的创建中／失败／可取消状态 | 高 | 现有会话运行状态与 Vue 展示能覆盖状态表达，无须新增框架；这里只借鉴可见状态，不包含新增工作树创建能力 |
 | 任务级 Git worktree 隔离 | 低 | 系统 Git 已存在，但需要重新设计项目身份、文件根、会话／终端归属、共享目录与删除边界；已有 Git 依赖不代表引入成本低 |
-| 浏览器元素到 Agent 上下文 | 低 | Electron 具备页面载体基础，但需要独立浏览器生命周期、页面权限、调试通道及捕获／附件链，不是普通文件预览扩展 |
+| 浏览器元素到 Agent 上下文 | 高 | 现有受限 webview、隔离世界选取、截图批注与目标草稿合并链可承接该交互；维持显式选择上下文和不自动发送的边界，不将源码定位或局部裁图视为已有能力 |
 | 先明确手机能力白名单，再考虑扩大入口 | 高 | 现有设备身份校验与受限会话接口已提供边界，可在当前契约上说明支持范围，无新增依赖；当前为局域网扫码直连，内置公网 Relay、多主机和移动原生客户端不在该评级内 |
 
 不照搬的结论：不把工作树说成沙箱，不把所有 CLI Agent 说成具有相同原生集成，不为“对齐 Orca”直接增加公网服务或第三方账号体系。
@@ -131,6 +131,7 @@ pi-desk 的[声明式生成式界面][p-genui]含文档版本、节点补丁及�
 ### 本项目事实出处
 
 - [文件模块][p-files]、[`CodeMirrorEditor.vue`](../../src/renderer/src/editor/components/CodeMirrorEditor.vue)：编辑器和文件操作边界。
+- [工作区批注][p-workspace]、[`src/main/browser/ipc.ts`](../../src/main/browser/ipc.ts)、[`BrowserAnnotationPanel.vue`](../../src/renderer/src/browser/components/BrowserAnnotationPanel.vue)：受限元素采集、固定画面悬浮批注与草稿交付。
 - [终端模块][p-terminal]：PTY 守护进程、历史和全局／项目快捷命令。
 - [Git 模块][p-git]、[`src/main/git/git-command.ts`](../../src/main/git/git-command.ts)、[`src/shared/git-api.ts`](../../src/shared/git-api.ts)：`GitRunOptions`、固定 Git 通道和请求范围。
 - [会话模块][p-session]、[`src/sdk-host/session-runtime.ts`](../../src/sdk-host/session-runtime.ts)：Pi SDK 会话及内置工厂装配；[子代理初步设计](../subagents-design.md)不是实现清单。
@@ -154,3 +155,4 @@ pi-desk 的[声明式生成式界面][p-genui]含文档版本、节点补丁及�
 [p-session]: ../modules/sessions-chat.md
 [p-mobile]: ../modules/lan-remote.md
 [p-genui]: ../modules/genui.md
+[p-workspace]: ../modules/workspace-tabs.md#浏览器批注

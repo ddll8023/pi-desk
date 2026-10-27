@@ -53,7 +53,7 @@
 | --- | --- |
 | `src/renderer/src/sessions/stores/session.ts` | 按项目的列表窗口与读取调度、串行打开／重载、按标签意图提交打开、删除与待确认目标 |
 | `src/renderer/src/sessions/stores/session-runs.ts` | 运行清单、副本状态、释放与结束 |
-| `src/renderer/src/sessions/stores/session-view.ts` | 会话输入、阅读与展开状态，按标签保存待发送快照，原位新草稿的独立留底及附件移交与回收 |
+| `src/renderer/src/sessions/stores/session-view.ts` | 会话输入、阅读与展开状态，按标签保存待发送快照，原位新草稿的独立留底、批注交付目标身份核对及附件移交与回收 |
 | `src/renderer/src/sessions/stores/chat-navigation.ts` | 对话内跳转登记：按会话键发布轮次入口与当前轮，并转交一次性跳转意图 |
 | `src/renderer/src/sessions/stores/extension-ui.ts` | 运行目标的扩展对话、通知、widget 展示副本 |
 | `src/renderer/src/sessions/services/session.ts` | 会话请求桥接 |
@@ -70,7 +70,7 @@
 
 | 文件 | 用途 |
 | --- | --- |
-| `src/renderer/src/sessions/components/PromptComposer.vue` | 输入、附件、文件树拖入引用、命令与补全；点击固定待发送快照、后台提交及失败恢复 |
+| `src/renderer/src/sessions/components/PromptComposer.vue` | 输入、附件、文件树拖入引用、命令与补全；浏览器批注草稿合并；点击固定待发送快照、后台提交及失败恢复 |
 | `src/renderer/src/sessions/components/ChatMessageList.vue` | 本地待发送展示与权威消息交接、历史加载、滚动与布局观察；向顶部栏发布对话跳转入口并执行跳转 |
 | `src/renderer/src/sessions/components/ChatTurnItem.vue` | 按轮摘要、展开与原文内容 |
 | `src/renderer/src/sessions/components/ChatMessageItem.vue` | 单消息、思考、工具归组面板与生成式界面分发 |
@@ -90,7 +90,7 @@
 - [F-sidebar](shared.md#f-sidebar项目会话树混合)：项目树中的会话与运行状态。
 - [F-process](shared.md#f-process受管进程与-sdk-公共设施共享)：SDK 定位、固定环境与进程终止。SDK 动态加载不代表宿主可自行选择任意授权目录。
 - [F-ui](shared.md#f-ui前端共享展示共享)、[F-style](shared.md#f-style全局主题与业务样式混合)：Markdown、数学、复制、浮层和聊天样式。
-- [项目与信任](projects-trust.md)：登记项目与目标授权；[工作区](workspace-tabs.md)：原标签绑定、选择与关闭；两者不拥有 SDK 分配权。
+- [项目与信任](projects-trust.md)：登记项目与目标授权；[工作区](workspace-tabs.md)：原标签绑定、选择与关闭，以及浏览器批注的来源固定和目标切换编排。输入坞的 `mergeBrowserAnnotation` 在目标就绪后复核身份并合并草稿，两模块不拥有 SDK 分配权。
 - [供应商](providers-auth.md)：`RuntimeModelSelect.vue` 提供模型选择，持久默认模型不等于当前会话模型。
 - [文件](files-editor.md)：`project-file` Store 提供 `@` 文件候选；[资源](resources-mcp.md) 提供技能和命令补全；[偏好](preferences.md) 提供快捷输入。
 - [生成式界面](genui.md)：宿主注册内置扩展，工具投影识别其载荷，消息组件分发到专用渲染器。
@@ -126,5 +126,7 @@
 历史读取由池租约或管理器读取计数保护，在途读取不被自动回收；读取结束后按宿主当前归属重新安排回收。池内空闲计时从最后一次读取结束起算，确认回收后才移出登记，关闭未确认时保留监督并禁止借用或接管。显式关闭与应用退出不受读取保护阻挡。
 
 日志解析结果在宿主内按项目、会话、规范文件与文件版本有界复用，同版本并发共用解析，不保留原始日志文本。首页与稳定活动检查点彼此独立，也不落盘或跨进程传递：首页按文件戳与分支尾匹配；稳定活动从官方分支累计，与实时工具状态分开，恢复时核对完整前缀及投影版本，绑定时再核对实际 SDK 分支。同一 manager 的连续追加只累计新增条目，无事实变化时复用视图；分支不匹配则重建。检查点命中不能省去 SDK 打开会话文件，也不能把旧绑定的实时状态当作恢复基准。
+
+浏览器批注交付只在指定项目、标签内容与输入身份匹配且输入坞可编辑时合并；模型图片能力与附件限制仍由输入坞核对，拒绝时不改动原草稿。成功时追加批注文字与图片，不自动提交给 SDK；浏览器采集、悬浮编辑与关闭边界见[工作区批注](workspace-tabs.md#浏览器批注)。
 
 输入、附件和阅读状态只保留页面内；空闲回收后的会话可在发送时恢复，不意味着应用重启后恢复所有运行任务。应用退出关闭 SDK 宿主，终端常驻是另一条生命周期。独立宿主不隔离项目文件，多会话不承诺自动解决并行文件修改。

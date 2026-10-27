@@ -19,10 +19,11 @@ import type { TerminalApi } from '../../shared/terminal-api'
 import type { TrustApi } from '../../shared/trust-api'
 import type { UpdatesApi } from '../../shared/updates-api'
 import type { LanRemoteApi } from '../../shared/lan-remote-api'
+import type { BrowserCaptureApi } from '../../shared/browser-api'
 
 declare global {
   interface Window {
-    readonly desktop?: DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionApi & SessionRunApi & TerminalApi & PreferencesApi & QuickCommandsApi & GenuiParamsApi & PiSettingsApi & TrustApi & ExtensionUiApi & AuthApi & ModelsConfigApi & UpdatesApi & GitApi & LanRemoteApi
+    readonly desktop?: BrowserCaptureApi & DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionApi & SessionRunApi & TerminalApi & PreferencesApi & QuickCommandsApi & GenuiParamsApi & PiSettingsApi & TrustApi & ExtensionUiApi & AuthApi & ModelsConfigApi & UpdatesApi & GitApi & LanRemoteApi
   }
 }
 

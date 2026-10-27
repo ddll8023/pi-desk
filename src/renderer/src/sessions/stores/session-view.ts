@@ -232,6 +232,13 @@ export const useSessionViewStore = defineStore('session-view', () => {
     if (prompt !== null) releaseImages(prompt.input.images)
   }
 
+  /** 核对批注交付目标的标签、内容与输入身份；仅返回匹配结果，不写入草稿。 */
+  function annotationTargetMatches(projectPath: string, tabKey: string, identity: string, inputKey: string): boolean {
+    return workspace.activeTab === tabKey && workspace.hasChatTabKey(projectPath, tabKey)
+      && workspace.isChatInteractive && workspace.annotationTargetIdentity(projectPath, tabKey) === identity
+      && key.value === inputKey
+  }
+
   /** 后台失败恢复到原输入身份；已有草稿与新附件均保留，不被旧提交覆盖。 */
   function restoreInput(inputKey: string, input: SessionInput): void {
     const current = inputs.get(inputKey)
@@ -314,6 +321,7 @@ export const useSessionViewStore = defineStore('session-view', () => {
     takePendingPrompt,
     finishPendingPrompt,
     restoreInput,
+    annotationTargetMatches,
     historyExpanded,
     initialize,
     dispose,

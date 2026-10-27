@@ -35,6 +35,7 @@ import {
 } from './window-channel'
 import { getPageUrl, registerAssetProtocol, registerAssetScheme } from './asset-protocol'
 import { registerAppInfoHandler, registerOpenExternalUrlHandler } from './shell/ipc'
+import { registerBrowserHandlers } from './browser/ipc'
 import { registerProjectHandlers, registerProjectFileHandlers } from './projects/ipc'
 import { registerGitHandlers } from './git/ipc'
 import { registerSessionHandlers, registerSessionRunHandlers } from './sessions/ipc'
@@ -180,6 +181,7 @@ export async function startApplication(): Promise<void> {
   restrictSession()
   registerAssetProtocol()
 
+  registerBrowserHandlers(pageUrl)
   registerAppInfoHandler(pageUrl)
   registerOpenExternalUrlHandler(pageUrl)
   registerRuntimeHandlers(pageUrl)
