@@ -1,5 +1,5 @@
 <!-- models.json 条目摘要：只展示「指向哪里、有哪些模型」的关键字段与写入入口，完整编辑在弹窗里进行。
-     条目的 JSON 文本来自 models.json 快照，密钥已由主进程替换为哨兵，这里只报告有无，不解析密钥值。 -->
+     内置供应商提供覆盖配置入口，条目文本来自 models.json 快照。 -->
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { ModelsConfigProvider } from '../../../../shared/models-config-api'
@@ -53,12 +53,14 @@ const summary = computed(() => {
       models.json 目前无法解析，先在外部修正文件再点「重新读取」，这里才会显示它的条目。
     </p>
     <template v-else-if="summary === null">
-      <p class="provider-entry-summary__message">
-        这个供应商不在 models.json 的 providers 里，用的是 Pi 内置定义，无法在应用内删除。还没有 models.json 时，新增供应商会创建它。
-      </p>
-      <AppButton variant="compact" :disabled="busy" @click="emit('create')">
-        添加到 models.json
-      </AppButton>
+      <div class="provider-entry-summary__builtin">
+        <p class="provider-entry-summary__message">
+          使用 Pi 内置默认端点与模型定义。如需覆盖 Base URL 或模型列表，可添加自定义配置。
+        </p>
+        <AppButton variant="ghost" :disabled="busy" @click="emit('create')">
+          自定义端点配置
+        </AppButton>
+      </div>
     </template>
     <template v-else>
       <dl class="provider-entry-summary__fields">
@@ -95,6 +97,13 @@ const summary = computed(() => {
   color: var(--color-desk-muted);
   font-size: 0.75rem;
   line-height: 1.6;
+}
+
+.provider-entry-summary__builtin {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1rem;
 }
 
 .provider-entry-summary__fields {

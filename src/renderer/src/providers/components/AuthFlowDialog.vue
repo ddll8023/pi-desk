@@ -1,5 +1,5 @@
 <!-- 供应商认证弹窗：集中呈现密钥、验证码、设备授权与认证结果，复用认证 Store 的单一流程。
-     收起只清空尚未提交的输入，不取消流程；取消认证必须由用户明确触发。
+     OAuth 模式收起只清空未提交输入且不取消流程；API Key 模式取消即退出流程并关闭，保存完成后自动关闭。
      以目标供应商、方式和启动状态隔离旧快照，避免新请求期间显示上一次认证的结果。 -->
 <script setup lang="ts">
 import { computed, nextTick, onUnmounted, ref, useId, watch } from 'vue'
@@ -37,6 +37,12 @@ const formId = useId()
 const detailCopyLabel = ref('复制技术细节')
 let opener: HTMLElement | null = null
 let openerFallback: HTMLElement | null = null
+let autoCloseTimer: ReturnType<typeof setTimeout> | null = null
+
+const subtitle = computed(() => {
+  if (props.method === 'api_key') return '输入密钥并保存后即可使用。'
+  return '收起后可以继续认证；未提交的输入不会保留。'
+})
 
 const snapshot = computed(() => {
   if (props.starting || props.startFailed) return null
@@ -76,6 +82,10 @@ const phaseLabel = computed(() => {
 })
 
 function clearInput(): void {
+  if (autoCloseTimer !== null) {
+    clearTimeout(autoCloseTimer)
+    autoCloseTimer = null
+  }
   secretInput.value = ''
   selectInput.value = ''
 }
@@ -83,6 +93,11 @@ function clearInput(): void {
 function close(): void {
   clearInput()
   emit('close')
+}
+
+async function cancelApiKey(): Promise<void> {
+  await authStore.cancel()
+  close()
 }
 
 async function respond(): Promise<void> {
@@ -176,6 +191,17 @@ watch(() => error.value?.detail, () => {
   detailCopyLabel.value = '复制技术细节'
 })
 
+watch(() => snapshot.value?.phase, (phase) => {
+  if (props.open && props.method === 'api_key' && phase === 'completed') {
+    if (autoCloseTimer !== null) clearTimeout(autoCloseTimer)
+    autoCloseTimer = setTimeout(() => {
+      if (props.open && snapshot.value?.phase === 'completed') {
+        close()
+      }
+    }, 600)
+  }
+})
+
 onUnmounted(() => {
   clearInput()
   window.removeEventListener('keydown', onKeydown, true)
@@ -199,7 +225,7 @@ onUnmounted(() => {
             <header class="dialog-header">
               <div class="auth-dialog__heading">
                 <h2 :id="titleId" class="dialog-title">{{ providerName || providerId }} · {{ method === 'oauth' ? '账户登录' : 'API Key' }}</h2>
-                <p :id="descriptionId" class="dialog-subtitle">收起后可以继续认证；未提交的输入不会保留。</p>
+                <p :id="descriptionId" class="dialog-subtitle">{{ subtitle }}</p>
               </div>
               <AppButton variant="icon" aria-label="收起认证弹窗" @click="close">×</AppButton>
             </header>
@@ -276,23 +302,42 @@ onUnmounted(() => {
             </div>
 
             <footer class="dialog-footer auth-dialog__footer">
-              <AppButton
-                v-if="active"
-                variant="quiet-danger"
-                class="auth-dialog__cancel"
-                :disabled="sending || snapshot?.phase === 'cancelling'"
-                @click="authStore.cancel()"
-              >取消认证</AppButton>
-              <AppButton @click="close">{{ active || starting ? '收起' : '关闭' }}</AppButton>
-              <AppButton v-if="active && prompt !== null" type="submit" :form="formId" variant="primary" :disabled="!canRespond">
-                {{ sending ? '正在提交…' : method === 'api_key' ? '保存密钥' : '继续认证' }}
-              </AppButton>
-              <AppButton v-else-if="showReload" variant="primary" :disabled="reloading" @click="emit('reload')">
-                {{ reloading ? '正在重新加载…' : '重新加载会话' }}
-              </AppButton>
-              <AppButton v-else-if="!active && !starting && snapshot?.phase !== 'completed'" variant="primary" :disabled="!canRetry" @click="emit('retry')">
-                重新认证
-              </AppButton>
+              <template v-if="method === 'api_key'">
+                <AppButton
+                  v-if="active"
+                  :disabled="sending || snapshot?.phase === 'cancelling'"
+                  @click="cancelApiKey"
+                >取消</AppButton>
+                <AppButton v-else @click="close">关闭</AppButton>
+                <AppButton v-if="active && prompt !== null" type="submit" :form="formId" variant="primary" :disabled="!canRespond">
+                  {{ sending ? '正在提交…' : '保存密钥' }}
+                </AppButton>
+                <AppButton v-else-if="showReload" variant="primary" :disabled="reloading" @click="emit('reload')">
+                  {{ reloading ? '正在重新加载…' : '重新加载会话' }}
+                </AppButton>
+                <AppButton v-else-if="!active && !starting && snapshot?.phase !== 'completed'" variant="primary" :disabled="!canRetry" @click="emit('retry')">
+                  重新认证
+                </AppButton>
+              </template>
+              <template v-else>
+                <AppButton
+                  v-if="active"
+                  variant="quiet-danger"
+                  class="auth-dialog__cancel"
+                  :disabled="sending || snapshot?.phase === 'cancelling'"
+                  @click="authStore.cancel()"
+                >取消认证</AppButton>
+                <AppButton @click="close">{{ active || starting ? '收起' : '关闭' }}</AppButton>
+                <AppButton v-if="active && prompt !== null" type="submit" :form="formId" variant="primary" :disabled="!canRespond">
+                  {{ sending ? '正在提交…' : '继续认证' }}
+                </AppButton>
+                <AppButton v-else-if="showReload" variant="primary" :disabled="reloading" @click="emit('reload')">
+                  {{ reloading ? '正在重新加载…' : '重新加载会话' }}
+                </AppButton>
+                <AppButton v-else-if="!active && !starting && snapshot?.phase !== 'completed'" variant="primary" :disabled="!canRetry" @click="emit('retry')">
+                  重新认证
+                </AppButton>
+              </template>
             </footer>
           </section>
         </Transition>

@@ -1,6 +1,5 @@
-<!-- 供应商清单行：行内给出身份与三份数据的汇总，就地展开凭据、条目摘要与对话页可见性。
-     展开内容留在被点的那一行下面，展开状态由页面持有且不主动调整页面滚动位置；
-     认证由页面编排并在独立弹窗中呈现，可见性写入由对应区块处理；这里转发页面级动作。 -->
+<!-- 供应商清单行：展示当前状态、模型统计并承载展开区。
+     行头提供直接编辑或录入的快捷入口；展开区就地组织凭据、定义摘要与模型展示偏好。 -->
 <script lang="ts">
 import type { AuthMethod, AuthProviderStatus } from '../../../../shared/auth-api'
 import type { ModelsConfigProvider } from '../../../../shared/models-config-api'
@@ -80,6 +79,15 @@ const runtimeModelProviders = computed<ReadonlySet<string> | null>(() => {
 /** 展开区的 id：供行的 aria-controls 指向被展开的内容。 */
 const detailId = computed(() => `provider-detail-${props.row.id}`)
 
+/** 未配置时的首选快捷认证方式；优先 api_key，仅支持 oauth 时为 oauth。 */
+const quickAuthMethod = computed<AuthMethod | null>(() => {
+  if (props.row.configured) return null
+  const types = props.row.authStatus.authTypes
+  if (types.length === 1) return types[0] ?? null
+  if (types.includes('api_key')) return 'api_key'
+  return null
+})
+
 /** 供应商级批量：把该行在当前模型目录里的全部模型设为显示或隐藏。 */
 function setAllVisible(visible: boolean): void {
   if (!props.canToggle || props.row.models.length === 0) return
@@ -92,36 +100,63 @@ function setAllVisible(visible: boolean): void {
 
 <template>
   <div class="provider-row" :class="{ 'is-expanded': expanded }">
-    <button
-      type="button"
-      class="provider-row-trigger"
-      :class="expanded ? 'is-expanded' : ''"
-      :aria-expanded="expanded"
-      :aria-controls="detailId"
-      @click="emit('toggle')"
-    >
-      <span class="provider-row-trigger__identity">
-        <span class="provider-row-trigger__headline">
-          <span class="provider-row-trigger__name" :title="row.name">{{ row.name }}</span>
-          <span v-if="row.custom" class="provider-row-trigger__custom" :title="row.hasApiKey ? 'models.json 内已配置密钥' : 'models.json 自定义条目'">自定义</span>
+    <div class="provider-row-header" :class="{ 'is-expanded': expanded }">
+      <button
+        type="button"
+        class="provider-row-trigger"
+        :aria-expanded="expanded"
+        :aria-controls="detailId"
+        @click="emit('toggle')"
+      >
+        <span class="provider-row-trigger__identity">
+          <span class="provider-row-trigger__headline">
+            <span class="provider-row-trigger__name" :title="row.name">{{ row.name }}</span>
+            <span v-if="row.custom" class="provider-row-trigger__custom" :title="row.hasApiKey ? 'models.json 内已配置密钥' : 'models.json 自定义条目'">自定义</span>
+          </span>
+          <span class="provider-row-trigger__id" :title="row.id">{{ row.id }}</span>
         </span>
-        <span class="provider-row-trigger__id" :title="row.id">{{ row.id }}</span>
-      </span>
-      <span class="provider-row-trigger__status" :class="{ 'is-configured': row.configured }" :title="row.status">
-        <span class="provider-row-trigger__status-dot" aria-hidden="true" />
-        <span class="provider-row-trigger__status-text">{{ row.status }}</span>
-      </span>
-      <span class="provider-row-trigger__models" title="Pi 报告的已知模型数量，不代表凭据已通过上游认证">
-        <span>{{ row.modelCount }} 个模型</span>
-        <span v-if="row.hiddenCount > 0" class="provider-row-trigger__hidden">隐藏 {{ row.hiddenCount }}</span>
-      </span>
-      <span class="provider-row-trigger__action">
-        {{ expanded ? '收起' : '详情' }}
-        <svg class="provider-row-trigger__chevron" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-          <path d="m6 3 5 5-5 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
-        </svg>
-      </span>
-    </button>
+        <span class="provider-row-trigger__status" :class="{ 'is-configured': row.configured }" :title="row.status">
+          <span class="provider-row-trigger__status-dot" aria-hidden="true" />
+          <span class="provider-row-trigger__status-text">{{ row.status }}</span>
+        </span>
+        <span class="provider-row-trigger__models" title="Pi 报告的已知模型数量，不代表凭据已通过上游认证">
+          <span>{{ row.modelCount }} 个模型</span>
+          <span v-if="row.hiddenCount > 0" class="provider-row-trigger__hidden">隐藏 {{ row.hiddenCount }}</span>
+        </span>
+      </button>
+
+      <div class="provider-row-actions">
+        <AppButton
+          v-if="row.custom"
+          variant="compact"
+          class="provider-row-actions__quick"
+          @click="emit('edit')"
+        >
+          编辑
+        </AppButton>
+        <AppButton
+          v-else-if="quickAuthMethod !== null"
+          variant="compact"
+          class="provider-row-actions__quick"
+          @click="emit('login', quickAuthMethod)"
+        >
+          {{ quickAuthMethod === 'oauth' ? '登录' : '录入 Key' }}
+        </AppButton>
+        <button
+          type="button"
+          class="provider-row-toggle-btn"
+          :aria-expanded="expanded"
+          :aria-controls="detailId"
+          :aria-label="expanded ? `收起 ${row.name} 详情` : `展开 ${row.name} 详情`"
+          @click="emit('toggle')"
+        >
+          <span>{{ expanded ? '收起' : '详情' }}</span>
+          <svg class="provider-row-trigger__chevron" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <path d="m6 3 5 5-5 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+        </button>
+      </div>
+    </div>
 
     <!-- 详情仍在供应商上下文内展开，各类操作用分隔与标题表达层级。 -->
     <div v-if="expanded" :id="detailId" :data-provider-detail="row.id" class="provider-detail">
@@ -208,35 +243,75 @@ function setAllVisible(visible: boolean): void {
   min-width: 0;
 }
 
+.provider-row-header {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  transition: background-color var(--default-transition-duration) ease;
+}
+
+.provider-row-header:hover {
+  background: var(--color-desk-surface-subtle);
+}
+
+.provider-row-header.is-expanded {
+  box-shadow: inset 2px 0 0 var(--color-desk-accent);
+}
+
+.provider-row-header.is-expanded .provider-row-trigger__name {
+  color: var(--color-desk-accent);
+}
+
 .provider-row-trigger {
   display: grid;
-  width: 100%;
+  min-width: 0;
+  flex: 1 1 auto;
   min-height: 3.75rem;
-  grid-template-columns: minmax(0, 1fr) minmax(7rem, 0.65fr) 5.5rem 3.5rem;
+  grid-template-columns: minmax(0, 1fr) minmax(7rem, 0.65fr) 5.5rem;
   align-items: center;
   gap: 0.75rem;
   padding: 0.625rem 0.875rem;
   color: var(--color-desk-ink);
   text-align: left;
   cursor: pointer;
-  transition: background-color var(--default-transition-duration) ease;
-}
-
-.provider-row-trigger:hover {
-  background: var(--color-desk-surface-subtle);
-}
-
-.provider-row-trigger.is-expanded {
-  box-shadow: inset 2px 0 0 var(--color-desk-accent);
-}
-
-.provider-row-trigger.is-expanded .provider-row-trigger__name {
-  color: var(--color-desk-accent);
+  background: transparent;
+  border: none;
 }
 
 .provider-row-trigger:focus-visible {
   outline: 2px solid var(--color-desk-accent);
   outline-offset: -2px;
+}
+
+.provider-row-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 0.5rem;
+  padding-right: 0.875rem;
+}
+
+.provider-row-actions__quick {
+  font-size: 0.75rem;
+}
+
+.provider-row-toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.375rem 0.25rem;
+  background: transparent;
+  border: none;
+  color: var(--color-desk-accent);
+  font-size: 0.75rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.provider-row-toggle-btn:focus-visible {
+  outline: 2px solid var(--color-desk-accent);
+  outline-offset: 2px;
 }
 
 .provider-row-trigger__identity,
@@ -312,23 +387,14 @@ function setAllVisible(visible: boolean): void {
   font-size: 0.6875rem;
 }
 
-.provider-row-trigger__action {
-  display: inline-flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 0.25rem;
-  color: var(--color-desk-accent);
-  font-size: 0.75rem;
-  white-space: nowrap;
-}
-
 .provider-row-trigger__chevron {
   width: 0.875rem;
   height: 0.875rem;
   flex: none;
+  transition: transform var(--default-transition-duration) ease;
 }
 
-.is-expanded > .provider-row-trigger .provider-row-trigger__chevron {
+.is-expanded .provider-row-trigger__chevron {
   transform: rotate(90deg);
 }
 
@@ -404,7 +470,7 @@ function setAllVisible(visible: boolean): void {
 
 @media (max-width: 700px) {
   .provider-row-trigger {
-    grid-template-columns: minmax(0, 1fr) 5.5rem 3.5rem;
+    grid-template-columns: minmax(0, 1fr) 5.5rem;
     gap: 0.25rem 0.625rem;
   }
 
@@ -422,38 +488,39 @@ function setAllVisible(visible: boolean): void {
     grid-column: 2;
     grid-row: 1 / span 2;
   }
-
-  .provider-row-trigger__action {
-    grid-column: 3;
-    grid-row: 1 / span 2;
-  }
 }
 
-@media (max-width: 440px) {
+@media (max-width: 480px) {
+  .provider-row-header {
+    flex-wrap: wrap;
+  }
+
   .provider-row-trigger {
-    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .provider-row-trigger__status {
-    grid-column: 1 / -1;
+    grid-column: 1;
     grid-row: 2;
   }
 
   .provider-row-trigger__models {
     grid-column: 1;
     grid-row: 3;
+    justify-items: start;
     display: flex;
     gap: 0.5rem;
   }
 
-  .provider-row-trigger__action {
-    grid-column: 2;
-    grid-row: 1;
+  .provider-row-actions {
+    width: 100%;
+    justify-content: flex-end;
+    padding: 0 0.875rem 0.5rem;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .provider-row-trigger {
+  .provider-row-header {
     transition: none;
   }
 }

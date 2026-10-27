@@ -1,7 +1,7 @@
 <!-- 模型设置：以供应商为主线的一页，把「能不能用」（凭据）、「指向哪里与有哪些模型」（models.json 条目）
      和「对话页显示哪些」（桌面端展示偏好）收在同一个供应商上下文里。
      页面只做编排：清单行就地展开凭据与可见性，models.json 条目在弹窗里编辑；
-     登录输入与授权细节由页面级弹窗承载，粘性顶部条只保留紧凑状态与继续、重载入口。
+     登录输入与授权细节由页面级弹窗承载。
      三份数据各由各自的存储提供：凭据由 Pi 保存在 auth.json（内容不回读到页面），
      条目写 Pi 的 models.json，展示偏好写桌面端配置。 -->
 <script setup lang="ts">
@@ -17,7 +17,6 @@ import { useSessionStore } from '../../sessions/stores/session'
 import { copyText } from '../../ui/clipboard'
 import { providerStatusLabel } from '../provider-status'
 import AppButton from '../../ui/AppButton.vue'
-import AuthFlowBanner from './AuthFlowBanner.vue'
 import AuthFlowDialog from './AuthFlowDialog.vue'
 import ConfirmDialog from '../../ui/ConfirmDialog.vue'
 import ProviderEditorDialog from './ProviderEditorDialog.vue'
@@ -56,11 +55,6 @@ const authTarget = ref<{ providerId: string; name: string; method: AuthMethod } 
 const authDialogOpen = ref(false)
 const authStarting = ref(false)
 const authStartFailed = ref(false)
-const authFlowName = computed(() => {
-  const current = flow.value
-  if (authStarting.value || authStartFailed.value || current === null) return authTarget.value?.name ?? ''
-  return authProviders.value.find((provider) => provider.providerId === current.providerId)?.name ?? current.providerId
-})
 
 /** 最近一次写成功的提示；只在本次停留期间展示。 */
 const notice = ref<string | null>(null)
@@ -343,18 +337,6 @@ onUnmounted(() => {
       </p>
     </header>
 
-    <!-- 摘要始终可继续，完整表单不再占用列表上方的页面空间。 -->
-    <div v-if="flow !== null || authStarting || authStartFailed" class="model-settings__flow-sticky">
-      <AuthFlowBanner
-        :provider-name="authFlowName"
-        :starting="authStarting"
-        :start-failed="authStartFailed"
-        :reloading="sessionStore.opening"
-        @resume="resumeAuth"
-        @reload="reloadRuntime"
-      />
-    </div>
-
     <!-- 错误分层：结论在上一层，原始文本与辅助进程诊断收在可复制的细节里。 -->
     <div
       v-for="entry in authErrors"
@@ -557,13 +539,6 @@ onUnmounted(() => {
   color: var(--color-desk-muted);
   font-size: 0.8125rem;
   line-height: 1.65;
-}
-
-.model-settings__flow-sticky {
-  position: sticky;
-  z-index: 10;
-  top: 0;
-  background: var(--color-desk-canvas);
 }
 
 .model-settings__toolbar {
