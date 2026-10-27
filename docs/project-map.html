@@ -204,6 +204,7 @@
           "历史按会话寻址：已绑定读权威分支，未绑定由日志解析作答",
           "运行注册表管理运行身份、绑定代际与占用",
           "消息、工具、历史、活动与用量投影",
+          "用量弹窗展示会话统计与独立的 Codex 账户额度，支持刷新",
           "点击立即展示本地待发送消息，后台就绪后提交固定输入",
           "SDK 扩展对话框、通知与 widget"
         ],
@@ -215,6 +216,7 @@
           {"kind": "关键实现", "label": "官方 SDK 会话", "path": "src/sdk-host/session-runtime.ts"},
           {"kind": "关键实现", "label": "消息与工具投影", "path": "src/sdk-host/projection/message-projection.ts"},
           {"kind": "界面入口", "label": "输入坞", "path": "src/renderer/src/sessions/components/PromptComposer.vue"},
+          {"kind": "界面入口", "label": "用量与额度弹窗", "path": "src/renderer/src/sessions/components/UsageDetailDialog.vue"},
           {"kind": "关键实现", "label": "Runtime 展示状态", "path": "src/renderer/src/sessions/stores/runtime-core.ts"}
         ],
         "resources": [
@@ -473,9 +475,10 @@
         "id": "providers-auth",
         "name": "供应商与认证",
         "groupId": "model",
-        "summary": "供应商凭据与 OAuth 登录退出、自定义 models.json 条目、默认模型与当前会话模型选择，以及对话页模型可见性。",
+        "summary": "供应商凭据与 OAuth 登录退出、Codex 账户额度查询、自定义 models.json 条目、默认模型与当前会话模型选择，以及对话页模型可见性。",
         "features": [
           "认证状态、登录流程与提示回应",
+          "复用已有 Codex 账户凭据查询额度，缓存与手动刷新",
           "认证辅助进程的 JSONL 通信与关闭",
           "自定义供应商条目的脱敏与单条保存",
           "默认模型定点写入与当前会话模型切换",
@@ -485,6 +488,7 @@
         "entries": [
           {"kind": "关键实现", "label": "认证状态与流程", "path": "src/main/providers/auth-manager.ts"},
           {"kind": "关键实现", "label": "认证辅助入口", "path": "src/auth-helper/index.ts"},
+          {"kind": "关键实现", "label": "Codex 账户额度查询", "path": "src/auth-helper/codex-usage.ts"},
           {"kind": "关键实现", "label": "自定义供应商配置", "path": "src/main/providers/models-config-manager.ts"},
           {"kind": "界面入口", "label": "模型设置页", "path": "src/renderer/src/providers/components/ModelSettingsView.vue"},
           {"kind": "界面入口", "label": "聊天模型选择器", "path": "src/renderer/src/providers/components/RuntimeModelSelect.vue"}
@@ -496,7 +500,8 @@
         "constraints": [
           "凭据、供应商定义、默认模型与展示偏好是四类数据，不共享存储",
           "默认模型保存不修改当前会话；当前模型切换不隐式改全局默认",
-          "登录成功不意味着已有会话自动加载新凭据"
+          "登录成功不意味着已有会话自动加载新凭据",
+          "Codex 额度独立于当前会话模型；凭据留在辅助进程，查询依赖非公开接口"
         ],
         "links": [
           {"label": "模块文档：供应商与认证", "href": "modules/providers-auth.md"}
@@ -605,7 +610,7 @@
       {"id": "r-sc-project-guard", "from": "sessions-chat", "to": "projects-trust", "label": "复核登记项目与信任", "kind": "call"},
       {"id": "r-pr-session-occupancy", "from": "projects-trust", "to": "sessions-chat", "label": "查询占用与项目范围关闭", "kind": "call"},
       {"id": "r-pr-terminal-close", "from": "projects-trust", "to": "terminal-commands", "label": "项目移除后关闭该项目终端", "kind": "call"},
-      {"id": "r-sc-model-candidates", "from": "sessions-chat", "to": "providers-auth", "label": "读取模型候选与默认模型", "kind": "read"},
+      {"id": "r-sc-model-candidates", "from": "sessions-chat", "to": "providers-auth", "label": "读取模型候选、默认模型与 Codex 账户额度", "kind": "read"},
       {"id": "r-sc-resource-completion", "from": "sessions-chat", "to": "resources-mcp", "label": "读取技能与命令补全", "kind": "read"},
       {"id": "r-sc-genui-payload", "from": "sessions-chat", "to": "genui", "label": "分发生成式界面载荷", "kind": "compose"},
       {"id": "r-genui-session-tools", "from": "genui", "to": "sessions-chat", "label": "注册内置工具并回传结果", "kind": "compose"},
@@ -725,7 +730,7 @@
           "id": "auth-helper",
           "name": "认证辅助进程",
           "kind": "受管进程",
-          "summary": "用 stdin／stdout JSONL 与主进程通信，调用官方 SDK 完成 Provider 认证并脱敏提示。",
+          "summary": "用 stdin／stdout JSONL 与主进程通信，调用官方 SDK 完成 Provider 认证并脱敏提示；复用已有凭据查询 Codex 账户额度，只回传展示数据。",
           "contains": ["providers-auth"],
           "entries": [
             {"kind": "进程入口", "label": "认证辅助入口", "path": "src/auth-helper/index.ts"},

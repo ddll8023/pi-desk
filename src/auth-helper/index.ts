@@ -1,6 +1,6 @@
 /**
  * 认证辅助进程入口：复用官方 SDK 的 `ModelRuntime` 完成 Provider 认证状态读取、API Key 与 OAuth
- * 登录流程、退出登录，凭据读写仍由官方实现落在 `<agent-dir>/auth.json`。
+ * 登录流程、退出登录与 Codex 账户额度查询，凭据读写仍由官方实现落在 `<agent-dir>/auth.json`。
  *
  * 进程由主进程用 `ELECTRON_RUN_AS_NODE` 启动，只通过 stdin/stdout 的 JSONL 帧通信，不监听网络、
  * 不接受外部参数、不启动 Pi。约定：
@@ -8,7 +8,8 @@
  *   在导入时改写 `process.stdout` 影响帧通道。
  * - 常规实例固定 `allowModelNetwork: false` 与 `refreshOnCreate: false`，日常状态读取不发起模型目录的网络请求；
  *   仅在收到显式 `refresh-models` 请求时建立允许网络的临时实例，强制从云端同步模型目录并持久化写入 `<agent-dir>/models-store.json`。
- * - 帧里只出现认证状态、提示形态与进度文本；密钥只在内存中用于本次登录，并作为脱敏词表使用，
+ * - 额度查询只在显式请求时访问官方接口；已有 OAuth 凭据由 SDK 解析与续期，不传出本进程。
+ * - 帧里只出现认证状态、提示形态、进度文本与额度展示数据；密钥只在内存中用于本次登录，并作为脱敏词表使用，
  *   既不写入日志也不进入 stderr。
  */
 import { randomUUID } from 'node:crypto'
@@ -16,6 +17,7 @@ import { join } from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
 import type { CreateModelRuntimeOptions, ModelRuntime } from '@earendil-works/pi-coding-agent'
 import { loadSdkModule } from '../shared-process/runtime'
+import { CodexUsageReader } from './codex-usage'
 import type { AuthMethod, AuthPrompt, AuthProviderStatus } from '../shared/auth-api'
 import {
   AUTH_HELPER_MAX_RECORD_CHARS,
@@ -79,6 +81,7 @@ const writeStderr = process.stderr.write.bind(process.stderr)
 
 const decoder = new StringDecoder('utf8')
 const flows = new Map<string, LoginFlow>()
+const codexUsageReader = new CodexUsageReader()
 let sdk: typeof import('@earendil-works/pi-coding-agent') | null = null
 let runtime: ModelRuntime | null = null
 let statusReady = false
@@ -248,6 +251,7 @@ function startLogin(
       prompt: null,
       secrets: []
     }
+    if (request.providerId === 'openai-codex') codexUsageReader.clear()
     flows.set(flow.flowId, flow)
     void runLogin(active, flow, request).catch(() => undefined)
     return {}
@@ -289,6 +293,7 @@ async function runLogin(
       message = redact(flow, raw)
     }
   } finally {
+    if (request.providerId === 'openai-codex') codexUsageReader.clear()
     settlePrompt(flow, null)
     flows.delete(flow.flowId)
     writeFrame({
@@ -397,6 +402,15 @@ async function handleRequest(request: AuthHelperRequest): Promise<void> {
       }
       return
     }
+    case 'codex-usage': {
+      try {
+        respondOk(request.id, await codexUsageReader.read(await modelRuntime(), request.refresh))
+      } catch (error) {
+        // 额度模块只抛出固定安全文案，不附带令牌、原始响应体或 SDK 刷新异常。
+        respondError(request.id, 'AUTH_HELPER_ERROR', describeError(error))
+      }
+      return
+    }
     case 'login': {
       try {
         const failure = await startLogin(request)
@@ -436,7 +450,12 @@ async function handleRequest(request: AuthHelperRequest): Promise<void> {
           respondError(request.id, 'AUTH_PROVIDER_UNKNOWN', `Pi 不认识 Provider「${request.providerId}」。`)
           return
         }
-        await active.logout(request.providerId, { signal: AbortSignal.timeout(LOGOUT_TIMEOUT_MS) })
+        if (request.providerId === 'openai-codex') codexUsageReader.clear()
+        try {
+          await active.logout(request.providerId, { signal: AbortSignal.timeout(LOGOUT_TIMEOUT_MS) })
+        } finally {
+          if (request.providerId === 'openai-codex') codexUsageReader.clear()
+        }
         statusReady = false
         respondOk(request.id, { loggedOut: true })
       } catch (error) {

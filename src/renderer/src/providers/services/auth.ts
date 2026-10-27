@@ -1,10 +1,11 @@
 /**
- * 作为渲染端认证状态、Provider 登录流程与退出登录的调用入口，
+ * 作为渲染端认证状态、Provider 登录流程、退出登录与 Codex 额度的调用入口，
  * 把桥接缺失与通信异常转换为安全的展示结果。
  *
  * 密钥只经 `respondAuthLogin` 单向提交；这里不缓存、不记录也不展示它。
  */
 import type {
+  AuthCodexUsageResult,
   AuthError,
   AuthFlowResult,
   AuthFlowSnapshot,
@@ -46,6 +47,17 @@ export async function getAuthStatus(): Promise<AuthStatusResult> {
   if (!bridge || typeof bridge.getAuthStatus !== 'function') return unavailable()
   try {
     return await bridge.getAuthStatus()
+  } catch (error) {
+    return callFailed(error)
+  }
+}
+
+/** 查询 Codex 账户额度；组件只传刷新意图，不接触凭据或远程请求。 */
+export async function getAuthCodexUsage(refresh = false): Promise<AuthCodexUsageResult> {
+  const bridge = window.desktop
+  if (!bridge || typeof bridge.getAuthCodexUsage !== 'function') return unavailable()
+  try {
+    return await bridge.getAuthCodexUsage(refresh)
   } catch (error) {
     return callFailed(error)
   }

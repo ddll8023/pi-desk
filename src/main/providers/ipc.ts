@@ -1,8 +1,9 @@
-/** 供应商与认证的 IPC：认证状态、云端模型目录刷新与登录流程（开始、应答、取消、打开授权地址、退出）、自定义供应商配置读写、Pi 默认模型读写。密钥只经登录应答单向提交，之后不保留任何副本。 */
+/** 供应商与认证的 IPC：认证状态、Codex 额度、云端模型目录刷新与登录流程（开始、应答、取消、打开授权地址、退出）、自定义供应商配置读写、Pi 默认模型读写。密钥只经登录应答单向提交，之后不保留任何副本。 */
 
 import type { IpcMainInvokeEvent } from 'electron'
 import type { DesktopErrorCode } from '../../shared/desktop-api'
 import {
+  AUTH_CODEX_USAGE_CHANNEL,
   AUTH_LOGIN_CANCEL_CHANNEL,
   AUTH_LOGIN_RESPOND_CHANNEL,
   AUTH_LOGIN_START_CHANNEL,
@@ -13,11 +14,13 @@ import {
   AUTH_OPEN_URL_CHANNEL,
   AUTH_REFRESH_MODELS_CHANNEL,
   AUTH_STATUS_CHANNEL,
+  isAuthCodexUsageRequest,
   isAuthLoginRespondRequest,
   isAuthLoginStartRequest,
   isAuthRefreshModelsRequest
 } from '../../shared/auth-api'
 import type {
+  AuthCodexUsageResult,
   AuthErrorCode,
   AuthFlowResult,
   AuthLogoutResult,
@@ -194,10 +197,27 @@ export function registerModelsConfigHandlers(pageUrl: string): void {
 }
 
 /**
- * 认证状态读取、Provider 登录流程（API Key 与 OAuth）、退出登录与外链打开。
+ * 认证状态与 Codex 额度读取、Provider 登录流程（API Key 与 OAuth）、退出登录与外链打开。
  * 登录流程与密钥只经固定业务方法传递：页面不能指定辅助进程路径、命令文本或要打开的 URL。
  */
 export function registerAuthHandlers(pageUrl: string): void {
+  handle(
+    AUTH_CODEX_USAGE_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<AuthCodexUsageResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return { ok: false, error: { code: 'FORBIDDEN', message: '不允许此页面调用桌面接口。', detail: null } }
+      }
+      if (args.length !== 1 || !isAuthCodexUsageRequest(args[0])) {
+        return { ok: false, error: { code: 'INVALID_REQUEST', message: '额度查询只接受 refresh 布尔参数。', detail: null } }
+      }
+      try {
+        return { ok: true, data: await authManager.readCodexUsage(args[0].refresh) }
+      } catch (error) {
+        return { ok: false, error: authErrorOf(error) }
+      }
+    }
+  )
+
   handle(
     AUTH_STATUS_CHANNEL,
     async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<AuthStatusResult> => {

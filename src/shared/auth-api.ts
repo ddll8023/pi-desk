@@ -1,5 +1,5 @@
 /**
- * 只定义认证状态读取、Provider 登录流程（API Key 与 OAuth）、退出登录与外链打开的固定通道、
+ * 定义认证状态读取、Provider 登录流程（API Key 与 OAuth）、退出登录、Codex 额度与外链打开的固定通道、
  * 请求与结果类型、登录流程快照与跨进程校验。
  *
  * 凭据本身从不进入本契约：状态只描述「是否已配置、来源与类型」，流程快照只描述输入形态与进度；
@@ -9,6 +9,8 @@ import type { DesktopErrorCode } from './desktop-api'
 
 /** 零参数：读取 Provider 列表与认证状态（含当前登录流程快照）。 */
 export const AUTH_STATUS_CHANNEL = 'desktop:auth-status'
+/** 只接受 `{ refresh: boolean }`：查询已登录 Codex 账户的额度，不接受地址或凭据。 */
+export const AUTH_CODEX_USAGE_CHANNEL = 'desktop:auth-codex-usage'
 /** 只接受 `{ providerId, method }`：启动一次官方登录流程。 */
 export const AUTH_LOGIN_START_CHANNEL = 'desktop:auth-login-start'
 /** 只接受 `{ flowId, promptId, value }`：回应流程中的当前提示（密钥由此单向提交）。 */
@@ -159,6 +161,33 @@ export type AuthLogoutResult =
   | { readonly ok: true; readonly data: AuthStatus }
   | { readonly ok: false; readonly error: AuthError }
 
+/** Codex 账户额度窗口；剩余比例来自上游已用比例，不从会话 token 推算。 */
+export interface CodexUsageWindow {
+  readonly id: 'primary_window' | 'secondary_window'
+  readonly seconds: number
+  readonly remainingPercent: number
+  /** 毫秒时间戳；上游未提供时为 null。 */
+  readonly resetAt: number | null
+}
+
+/** 只包含展示数据，不包含账户令牌或原始接口响应。 */
+export interface CodexUsageSnapshot {
+  readonly windows: readonly CodexUsageWindow[]
+  /** 上游 credits 余额原文，不自行添加币种或换算金额。 */
+  readonly credits: string | null
+  readonly unlimited: boolean
+  readonly limitReached: boolean
+  readonly fetchedAt: number
+}
+
+export type AuthCodexUsageResult =
+  | { readonly ok: true; readonly data: CodexUsageSnapshot }
+  | { readonly ok: false; readonly error: AuthError }
+
+export interface AuthCodexUsageRequest {
+  readonly refresh: boolean
+}
+
 export interface AuthRefreshModelsPayload {
   readonly count: number
   readonly providerId?: string
@@ -195,6 +224,8 @@ export interface AuthOpenUrlRequest {
 export interface AuthApi {
   /** 读取 Provider 与认证状态；不返回任何已有凭据内容。 */
   readonly getAuthStatus: () => Promise<AuthStatusResult>
+  /** 查询已有 Codex 账户的额度；refresh 为 true 时绕过短期缓存。 */
+  readonly getAuthCodexUsage: (refresh: boolean) => Promise<AuthCodexUsageResult>
   /** 启动官方登录流程；成功只表示流程已开始，结果以流程快照收敛。 */
   readonly startAuthLogin: (providerId: string, method: AuthMethod) => Promise<AuthFlowResult>
   /** 回应流程中的当前提示；密钥只经此单向提交。 */
@@ -343,6 +374,39 @@ export function isAuthLogoutResult(value: unknown): value is AuthLogoutResult {
   if (!isRecord(value)) return false
   if (value.ok === true) return isAuthStatus(value.data)
   return isAuthErrorResult(value)
+}
+
+/** 额度窗口只放行有效比例、正窗口时长与可表示的重置时间。 */
+function isCodexUsageWindow(value: unknown): value is CodexUsageWindow {
+  if (!isRecord(value)) return false
+  return (value.id === 'primary_window' || value.id === 'secondary_window')
+    && typeof value.seconds === 'number' && Number.isFinite(value.seconds) && value.seconds > 0
+    && typeof value.remainingPercent === 'number' && Number.isFinite(value.remainingPercent)
+    && value.remainingPercent >= 0 && value.remainingPercent <= 100
+    && (value.resetAt === null || (typeof value.resetAt === 'number'
+      && Number.isFinite(value.resetAt) && value.resetAt > 0 && value.resetAt <= 8.64e15))
+}
+
+export function isCodexUsageSnapshot(value: unknown): value is CodexUsageSnapshot {
+  if (!isRecord(value)) return false
+  if (!Array.isArray(value.windows) || value.windows.length > 2 || !value.windows.every(isCodexUsageWindow)) return false
+  if (new Set(value.windows.map((window) => window.id)).size !== value.windows.length) return false
+  return (value.credits === null || (typeof value.credits === 'string' && value.credits.length > 0 && value.credits.length <= 128))
+    && typeof value.unlimited === 'boolean'
+    && typeof value.limitReached === 'boolean'
+    && typeof value.fetchedAt === 'number' && Number.isFinite(value.fetchedAt)
+    && value.fetchedAt > 0 && value.fetchedAt <= 8.64e15
+}
+
+export function isAuthCodexUsageResult(value: unknown): value is AuthCodexUsageResult {
+  if (!isRecord(value)) return false
+  if (value.ok === true) return isCodexUsageSnapshot(value.data)
+  return isAuthErrorResult(value)
+}
+
+/** 页面只能决定是否刷新；不接受任意供应商、地址或认证字段。 */
+export function isAuthCodexUsageRequest(value: unknown): value is AuthCodexUsageRequest {
+  return isRecord(value) && Object.keys(value).length === 1 && typeof value.refresh === 'boolean'
 }
 
 function isAuthRefreshModelsPayload(value: unknown): value is AuthRefreshModelsPayload {

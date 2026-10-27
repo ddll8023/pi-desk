@@ -1,13 +1,13 @@
-/** 认证、自定义供应商与 Pi 默认模型：preload 的 providers 域，只经固定 channel 与主进程通信，载荷与响应在此重建与校验。 */
+/** 认证、Codex 额度、自定义供应商与 Pi 默认模型：preload 的 providers 域，只经固定 channel 与主进程通信，载荷与响应在此重建与校验。 */
 
 import { ipcRenderer } from 'electron'
 import type { IpcRendererEvent } from 'electron'
 import { PI_SETTINGS_GET_DEFAULT_MODEL_CHANNEL, PI_SETTINGS_SET_DEFAULT_MODEL_CHANNEL, isPiDefaultModelResult } from '../shared/pi-settings-api'
 import { MODELS_CONFIG_DELETE_PROVIDER_CHANNEL, MODELS_CONFIG_GET_CHANNEL, MODELS_CONFIG_SAVE_PROVIDER_CHANNEL, isModelsConfigDeleteRequest, isModelsConfigResult, isModelsConfigSaveRequest } from '../shared/models-config-api'
-import { AUTH_FLOW_EVENT, AUTH_LOGIN_CANCEL_CHANNEL, AUTH_LOGIN_RESPOND_CHANNEL, AUTH_LOGIN_START_CHANNEL, AUTH_LOGOUT_CHANNEL, AUTH_OPEN_URL_CHANNEL, AUTH_REFRESH_MODELS_CHANNEL, AUTH_STATUS_CHANNEL, isAuthFlowResult, isAuthFlowSnapshot, isAuthLogoutResult, isAuthRefreshModelsResult, isAuthStatusResult } from '../shared/auth-api'
+import { AUTH_CODEX_USAGE_CHANNEL, isAuthCodexUsageResult, AUTH_FLOW_EVENT, AUTH_LOGIN_CANCEL_CHANNEL, AUTH_LOGIN_RESPOND_CHANNEL, AUTH_LOGIN_START_CHANNEL, AUTH_LOGOUT_CHANNEL, AUTH_OPEN_URL_CHANNEL, AUTH_REFRESH_MODELS_CHANNEL, AUTH_STATUS_CHANNEL, isAuthFlowResult, isAuthFlowSnapshot, isAuthLogoutResult, isAuthRefreshModelsResult, isAuthStatusResult } from '../shared/auth-api'
 import type { PiDefaultModelResult } from '../shared/pi-settings-api'
 import type { ModelsConfigDeleteRequest, ModelsConfigResult, ModelsConfigSaveRequest } from '../shared/models-config-api'
-import type { AuthFlowResult, AuthFlowSnapshot, AuthLogoutResult, AuthMethod, AuthRefreshModelsResult, AuthStatusResult } from '../shared/auth-api'
+import type { AuthCodexUsageResult, AuthFlowResult, AuthFlowSnapshot, AuthLogoutResult, AuthMethod, AuthRefreshModelsResult, AuthStatusResult } from '../shared/auth-api'
 import type { ModelIdentity } from '../shared/runtime-api'
 import type { PiSettingsApi } from '../shared/pi-settings-api'
 import type { ModelsConfigApi } from '../shared/models-config-api'
@@ -79,6 +79,17 @@ export const providersApi = {
   async getAuthStatus(): Promise<AuthStatusResult> {
     const response: unknown = await ipcRenderer.invoke(AUTH_STATUS_CHANNEL)
     return isAuthStatusResult(response) ? response : invalidAuthStatusResponse()
+  },
+
+  async getAuthCodexUsage(refresh: boolean): Promise<AuthCodexUsageResult> {
+    if (typeof refresh !== 'boolean') {
+      return { ok: false, error: { code: 'INVALID_REQUEST', message: '额度刷新参数必须是布尔值。', detail: null } }
+    }
+    const response: unknown = await ipcRenderer.invoke(AUTH_CODEX_USAGE_CHANNEL, { refresh })
+    return isAuthCodexUsageResult(response) ? response : {
+      ok: false,
+      error: { code: 'INVALID_RESPONSE', message: '桌面接口返回了无法识别的 Codex 额度。', detail: null }
+    }
   },
 
   async startAuthLogin(providerId: string, method: AuthMethod): Promise<AuthFlowResult> {

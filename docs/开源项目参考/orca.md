@@ -85,7 +85,7 @@
 | 多 Agent / 多会话 | 都能并行处理项目任务 | pi-desk 核心是 Pi SDK 多运行实例，不自动隔离项目文件；Orca 以工作树和多种 CLI Agent 组织任务 |
 | 手机继续对话 | 远程查看进展并回复 | pi-desk 是局域网 HTTP 直连的网页，桌面开启后自动显示二维码，手机扫码自动连接并访问全部已登记项目，提供聊天及问题回应；Orca 是 iOS/Android Companion，包含多主机、终端、Git、账号和 Relay 路径 |
 | 差异审阅 | 都能看到变更与行差异 | pi-desk 有 `GitDiffView`，但没有内置行级评论归集与批量发回 Agent 的闭环；Orca 的 Annotate AI Diff 还维护评论及处理状态 |
-| 供应商与用量 | 都能展示模型或用量信息 | pi-desk 管 Pi Provider 凭据与会话 token／费用；Orca 面向外部 Agent 账号及订阅限流，二者的统计对象与认证边界不同 |
+| 供应商与用量 | 模型、会话用量及账户额度展示部分重合 | pi-desk 管 Pi Provider 凭据、会话 token／费用，并可复用已有 Codex 登录查询账户额度；Orca 面向多种外部 Agent 的账号及订阅限流，账号覆盖面与认证集成边界不同 |
 | 浏览器与设计上下文 | 网页元素选取、结构与样式、截图反馈给 Agent | pi-desk 在固定网页画面上悬浮编辑点框意见，可选择附带有限 HTML 与计算样式，加入同项目指定对话草稿而不自动发送；不提供 Orca 文档所述的局部裁图与源码位置。见[工作区批注][p-workspace] |
 
 ### 对方独有

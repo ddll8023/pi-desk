@@ -2,7 +2,7 @@
  * 认证辅助进程与主进程之间的 JSONL 帧定义与形状校验。
  *
  * 只描述帧结构，不引入官方 SDK，便于主进程打包与辅助进程构建共用同一份契约；
- * 帧的载荷只包含认证状态、提示形态与进度文本，凭据内容从不进入任何帧。
+ * 帧的载荷只包含认证状态、提示形态、进度文本与额度展示数据，凭据内容从不进入任何帧。
  */
 import type { AuthFlowDeviceCode, AuthMethod, AuthPrompt, AuthPromptKind, AuthPromptOption, AuthProviderStatus, AuthSource } from '../shared/auth-api'
 
@@ -12,6 +12,7 @@ export const AUTH_HELPER_MAX_RECORD_CHARS = 1_048_576
 /** 主进程 → 辅助进程的请求。 */
 export type AuthHelperRequest =
   | { readonly id: string; readonly type: 'status' }
+  | { readonly id: string; readonly type: 'codex-usage'; readonly refresh: boolean }
   | {
     readonly id: string
     readonly type: 'login'
@@ -193,6 +194,8 @@ export function isAuthHelperRequest(value: unknown): value is AuthHelperRequest 
     case 'status':
     case 'shutdown':
       return true
+    case 'codex-usage':
+      return typeof value.refresh === 'boolean'
     case 'login':
       return isIdentifier(value.flowId)
         && isIdentifier(value.providerId)
