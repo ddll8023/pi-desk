@@ -19,6 +19,7 @@ import {
   getAuthStatus,
   logoutAuthProvider,
   openAuthFlowUrl,
+  refreshAuthProviderModels,
   respondAuthLogin,
   startAuthLogin,
   subscribeAuthFlow
@@ -47,6 +48,7 @@ export const useAuthStore = defineStore('auth', () => {
   const flow = ref<AuthFlowSnapshot | null>(null)
   const flowAction = ref<FlowActionState>({ phase: 'idle' })
   const logoutAction = ref<FlowActionState>({ phase: 'idle' })
+  const refreshModelsAction = ref<FlowActionState>({ phase: 'idle' })
   /** 密钥与验证码输入；提交或取消后立即清空。 */
   const secretInput = ref('')
   /** select 提示的选中项；与密钥输入分开保存。 */
@@ -164,6 +166,30 @@ export const useAuthStore = defineStore('auth', () => {
     await refresh()
   }
 
+  /** 从云端刷新指定或全部 Provider 的模型目录并更新本地持久化缓存。 */
+  async function refreshModels(providerId?: string): Promise<{ ok: boolean; count?: number; message?: string }> {
+    if (refreshModelsAction.value.phase === 'sending') return { ok: false, message: '正在从云端刷新中，请稍候…' }
+    refreshModelsAction.value = { phase: 'sending' }
+    try {
+      const result = await refreshAuthProviderModels(providerId)
+      if (!result.ok) {
+        refreshModelsAction.value = { phase: 'error', error: result.error }
+        return { ok: false, message: result.error.message }
+      }
+      refreshModelsAction.value = { phase: 'idle' }
+      await refresh()
+      return { ok: true, count: result.data.count }
+    } catch (error) {
+      const authError: AuthError = {
+        code: 'INTERNAL_ERROR',
+        message: '从云端刷新模型时发生异常',
+        detail: error instanceof Error ? error.message : String(error)
+      }
+      refreshModelsAction.value = { phase: 'error', error: authError }
+      return { ok: false, message: authError.message }
+    }
+  }
+
   /** 提示变化时清空输入，避免上一轮的密钥留在输入框中。 */
   function applyFlow(next: AuthFlowSnapshot | null): void {
     const previousPromptId = flow.value?.prompt?.promptId ?? null
@@ -185,6 +211,7 @@ export const useAuthStore = defineStore('auth', () => {
     activeFlow,
     flowAction,
     logoutAction,
+    refreshModelsAction,
     secretInput,
     selectInput,
     configuredCount,
@@ -195,6 +222,7 @@ export const useAuthStore = defineStore('auth', () => {
     respond,
     cancel,
     openUrl,
-    logout
+    logout,
+    refreshModels
   }
 })

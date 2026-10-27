@@ -55,6 +55,8 @@ const authTarget = ref<{ providerId: string; name: string; method: AuthMethod } 
 const authDialogOpen = ref(false)
 const authStarting = ref(false)
 const authStartFailed = ref(false)
+/** 正在从云端刷新模型的供应商 ID；null 表示当前没有刷新进行中。 */
+const refreshingProviderId = ref<string | null>(null)
 
 /** 最近一次写成功的提示；只在本次停留期间展示。 */
 const notice = ref<string | null>(null)
@@ -287,6 +289,25 @@ function refreshAll(): void {
   void authStore.refresh()
 }
 
+/** 从云端刷新指定供应商的模型目录。 */
+async function onRefreshModels(row: ProviderRow): Promise<void> {
+  if (refreshingProviderId.value !== null) return
+  refreshingProviderId.value = row.id
+  notice.value = null
+  try {
+    const result = await authStore.refreshModels(row.id)
+    if (result.ok) {
+      notice.value = `已从云端刷新 ${row.name} 的模型目录（共 ${result.count ?? row.modelCount} 个模型）；改动需要重新加载 Runtime 后才会反映到输入坞。`
+      // 立即热更新当前界面的候选项预读
+      await runtimeStore.refreshModelPreview(true)
+    } else {
+      notice.value = `从云端刷新 ${row.name} 模型失败：${result.message ?? '未知错误'}`
+    }
+  } finally {
+    refreshingProviderId.value = null
+  }
+}
+
 /** 退出登录不可逆：先经确认对话框，确认后才把请求交给主进程。 */
 function confirmCredentialRemoval(): void {
   const provider = pendingCredentialRemoval.value
@@ -441,6 +462,7 @@ onUnmounted(() => {
             :parse-error="parseError"
             :config-busy="configBusy"
             :action-error="configActionError"
+            :refreshing-models="refreshingProviderId === row.id"
             @toggle="toggleRow(row)"
             @edit="startEdit(row)"
             @create="startCreate(row.id)"
@@ -448,6 +470,7 @@ onUnmounted(() => {
             @request-remove-credential="pendingCredentialRemoval = row.authStatus"
             @login="startAuth(row.authStatus, $event)"
             @resume-auth="resumeAuth"
+            @refresh-models="onRefreshModels(row)"
           />
         </li>
       </ul>

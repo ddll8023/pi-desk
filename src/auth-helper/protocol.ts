@@ -24,6 +24,7 @@ export type AuthHelperRequest =
   | { readonly id: string; readonly type: 'prompt-response'; readonly flowId: string; readonly promptId: string; readonly value: string | null }
   | { readonly id: string; readonly type: 'cancel'; readonly flowId: string }
   | { readonly id: string; readonly type: 'logout'; readonly providerId: string }
+  | { readonly id: string; readonly type: 'refresh-models'; readonly providerId?: string }
   | { readonly id: string; readonly type: 'shutdown' }
 
 /** 辅助进程 → 主进程的登录进度事件；与官方通知类型一一对应，不含凭据内容。 */
@@ -205,6 +206,8 @@ export function isAuthHelperRequest(value: unknown): value is AuthHelperRequest 
       return isIdentifier(value.flowId)
     case 'logout':
       return isIdentifier(value.providerId)
+    case 'refresh-models':
+      return value.providerId === undefined || isIdentifier(value.providerId)
     default:
       return false
   }

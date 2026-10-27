@@ -19,6 +19,8 @@ export const AUTH_LOGIN_CANCEL_CHANNEL = 'desktop:auth-login-cancel'
 export const AUTH_OPEN_URL_CHANNEL = 'desktop:auth-open-url'
 /** 只接受 `{ providerId }`：删除该 Provider 已保存的凭据。 */
 export const AUTH_LOGOUT_CHANNEL = 'desktop:auth-logout'
+/** 只接受 `{ providerId?: string }`：从云端刷新指定或全部 Provider 的模型目录。 */
+export const AUTH_REFRESH_MODELS_CHANNEL = 'desktop:auth-refresh-models'
 /** 主进程到渲染进程的单向登录流程通知，payload 是 AuthFlowSnapshot。 */
 export const AUTH_FLOW_EVENT = 'desktop:auth-flow-changed'
 
@@ -157,6 +159,19 @@ export type AuthLogoutResult =
   | { readonly ok: true; readonly data: AuthStatus }
   | { readonly ok: false; readonly error: AuthError }
 
+export interface AuthRefreshModelsPayload {
+  readonly count: number
+  readonly providerId?: string
+}
+
+export type AuthRefreshModelsResult =
+  | { readonly ok: true; readonly data: AuthRefreshModelsPayload }
+  | { readonly ok: false; readonly error: AuthError }
+
+export interface AuthRefreshModelsRequest {
+  readonly providerId?: string
+}
+
 export interface AuthLoginStartRequest {
   readonly providerId: string
   readonly method: AuthMethod
@@ -190,6 +205,8 @@ export interface AuthApi {
   readonly openAuthFlowUrl: (flowId: string) => Promise<AuthFlowResult>
   /** 删除已保存的凭据（不影响环境变量与 models.json 配置）；成功返回刷新后的状态。 */
   readonly logoutAuthProvider: (providerId: string) => Promise<AuthLogoutResult>
+  /** 从云端刷新指定或全部 Provider 的模型目录并更新本地持久化缓存。 */
+  readonly refreshAuthProviderModels: (providerId?: string) => Promise<AuthRefreshModelsResult>
   /** 订阅登录流程变化；返回释放函数，页面卸载时必须调用。 */
   readonly onAuthFlowChanged: (listener: (snapshot: AuthFlowSnapshot) => void) => () => void
 }
@@ -326,6 +343,25 @@ export function isAuthLogoutResult(value: unknown): value is AuthLogoutResult {
   if (!isRecord(value)) return false
   if (value.ok === true) return isAuthStatus(value.data)
   return isAuthErrorResult(value)
+}
+
+function isAuthRefreshModelsPayload(value: unknown): value is AuthRefreshModelsPayload {
+  if (!isRecord(value)) return false
+  if (typeof value.count !== 'number' || !Number.isInteger(value.count) || value.count < 0) return false
+  return value.providerId === undefined || isBoundedString(value.providerId, AUTH_MAX_PROVIDER_ID_CHARS)
+}
+
+export function isAuthRefreshModelsResult(value: unknown): value is AuthRefreshModelsResult {
+  if (!isRecord(value)) return false
+  if (value.ok === true) return isAuthRefreshModelsPayload(value.data)
+  return isAuthErrorResult(value)
+}
+
+export function isAuthRefreshModelsRequest(value: unknown): value is AuthRefreshModelsRequest {
+  if (!isRecord(value)) return false
+  if (!('providerId' in value)) return true
+  const candidate = (value as { providerId?: unknown }).providerId
+  return candidate === undefined || isBoundedString(candidate, AUTH_MAX_PROVIDER_ID_CHARS)
 }
 
 /** 启动请求只校验形状；长度上限与字符集由主进程校验。 */

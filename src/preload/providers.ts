@@ -4,10 +4,10 @@ import { ipcRenderer } from 'electron'
 import type { IpcRendererEvent } from 'electron'
 import { PI_SETTINGS_GET_DEFAULT_MODEL_CHANNEL, PI_SETTINGS_SET_DEFAULT_MODEL_CHANNEL, isPiDefaultModelResult } from '../shared/pi-settings-api'
 import { MODELS_CONFIG_DELETE_PROVIDER_CHANNEL, MODELS_CONFIG_GET_CHANNEL, MODELS_CONFIG_SAVE_PROVIDER_CHANNEL, isModelsConfigDeleteRequest, isModelsConfigResult, isModelsConfigSaveRequest } from '../shared/models-config-api'
-import { AUTH_FLOW_EVENT, AUTH_LOGIN_CANCEL_CHANNEL, AUTH_LOGIN_RESPOND_CHANNEL, AUTH_LOGIN_START_CHANNEL, AUTH_LOGOUT_CHANNEL, AUTH_OPEN_URL_CHANNEL, AUTH_STATUS_CHANNEL, isAuthFlowResult, isAuthFlowSnapshot, isAuthLogoutResult, isAuthStatusResult } from '../shared/auth-api'
+import { AUTH_FLOW_EVENT, AUTH_LOGIN_CANCEL_CHANNEL, AUTH_LOGIN_RESPOND_CHANNEL, AUTH_LOGIN_START_CHANNEL, AUTH_LOGOUT_CHANNEL, AUTH_OPEN_URL_CHANNEL, AUTH_REFRESH_MODELS_CHANNEL, AUTH_STATUS_CHANNEL, isAuthFlowResult, isAuthFlowSnapshot, isAuthLogoutResult, isAuthRefreshModelsResult, isAuthStatusResult } from '../shared/auth-api'
 import type { PiDefaultModelResult } from '../shared/pi-settings-api'
 import type { ModelsConfigDeleteRequest, ModelsConfigResult, ModelsConfigSaveRequest } from '../shared/models-config-api'
-import type { AuthFlowResult, AuthFlowSnapshot, AuthLogoutResult, AuthMethod, AuthStatusResult } from '../shared/auth-api'
+import type { AuthFlowResult, AuthFlowSnapshot, AuthLogoutResult, AuthMethod, AuthRefreshModelsResult, AuthStatusResult } from '../shared/auth-api'
 import type { ModelIdentity } from '../shared/runtime-api'
 import type { PiSettingsApi } from '../shared/pi-settings-api'
 import type { ModelsConfigApi } from '../shared/models-config-api'
@@ -31,6 +31,10 @@ function invalidAuthFlowResponse(): AuthFlowResult {
 
 function invalidAuthLogoutResponse(): AuthLogoutResult {
   return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_AUTH_STATUS_RESPONSE, detail: null } }
+}
+
+function invalidAuthRefreshModelsResponse(): AuthRefreshModelsResult {
+  return { ok: false, error: { code: 'INVALID_RESPONSE', message: '桌面接口返回了无法识别的模型刷新结果。', detail: null } }
 }
 
 export const providersApi = {
@@ -100,6 +104,11 @@ export const providersApi = {
   async logoutAuthProvider(providerId: string): Promise<AuthLogoutResult> {
     const response: unknown = await ipcRenderer.invoke(AUTH_LOGOUT_CHANNEL, { providerId })
     return isAuthLogoutResult(response) ? response : invalidAuthLogoutResponse()
+  },
+
+  async refreshAuthProviderModels(providerId?: string): Promise<AuthRefreshModelsResult> {
+    const response: unknown = await ipcRenderer.invoke(AUTH_REFRESH_MODELS_CHANNEL, { providerId })
+    return isAuthRefreshModelsResult(response) ? response : invalidAuthRefreshModelsResponse()
   },
 
   onAuthFlowChanged(listener: (snapshot: AuthFlowSnapshot) => void) {

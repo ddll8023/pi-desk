@@ -47,6 +47,11 @@ export class ResourcePreviewError extends Error {
 const previewCache = new Map<string, PreviewSnapshot>()
 const inFlight = new Map<string, Promise<PreviewSnapshot>>()
 
+/** 清空预读缓存；在从云端刷新模型后调用，确保后续预读不使用过期快照。 */
+export function clearResourcePreviewCache(): void {
+  previewCache.clear()
+}
+
 /** 两种范围共用同一份缓存与并发合并；只有全部命令成功的结果才进缓存。 */
 function runCachedPreview(
   key: string,

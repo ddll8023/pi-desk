@@ -6,12 +6,13 @@
  * 不接受外部参数、不启动 Pi。约定：
  * - 不在启动期加载 SDK：先取得原始 stdout 写入引用，再用动态 import 加载官方包，避免第三方模块
  *   在导入时改写 `process.stdout` 影响帧通道。
- * - 建实例时固定 `allowModelNetwork: false` 与 `refreshOnCreate: false`，并使用内存型模型目录缓存，
- *   因此状态读取不发起模型目录的网络请求，也不写 Pi 的模型缓存（环境凭据仍由官方实现按本地规则解析）。
+ * - 常规实例固定 `allowModelNetwork: false` 与 `refreshOnCreate: false`，日常状态读取不发起模型目录的网络请求；
+ *   仅在收到显式 `refresh-models` 请求时建立允许网络的临时实例，强制从云端同步模型目录并持久化写入 `<agent-dir>/models-store.json`。
  * - 帧里只出现认证状态、提示形态与进度文本；密钥只在内存中用于本次登录，并作为脱敏词表使用，
  *   既不写入日志也不进入 stderr。
  */
 import { randomUUID } from 'node:crypto'
+import { join } from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
 import type { CreateModelRuntimeOptions, ModelRuntime } from '@earendil-works/pi-coding-agent'
 import { loadSdkModule } from '../shared-process/runtime'
@@ -123,8 +124,10 @@ async function loadSdk(): Promise<typeof import('@earendil-works/pi-coding-agent
 async function modelRuntime(): Promise<ModelRuntime> {
   if (runtime !== null) return runtime
   const loaded = await loadSdk()
+  const agentDir = loaded.getAgentDir()
   runtime = await loaded.ModelRuntime.create({
-    modelsStore: new InMemoryModelsStore(),
+    authPath: join(agentDir, 'auth.json'),
+    modelsPath: join(agentDir, 'models.json'),
     allowModelNetwork: false,
     refreshOnCreate: false
   })
@@ -436,6 +439,44 @@ async function handleRequest(request: AuthHelperRequest): Promise<void> {
         await active.logout(request.providerId, { signal: AbortSignal.timeout(LOGOUT_TIMEOUT_MS) })
         statusReady = false
         respondOk(request.id, { loggedOut: true })
+      } catch (error) {
+        respondError(request.id, 'AUTH_HELPER_ERROR', describeError(error))
+      }
+      return
+    }
+    case 'refresh-models': {
+      try {
+        const loaded = await loadSdk()
+        const agentDir = loaded.getAgentDir()
+        const controller = new AbortController()
+        const timeout = setTimeout(() => controller.abort(), STATUS_TIMEOUT_MS)
+        try {
+          const mr = await loaded.ModelRuntime.create({
+            authPath: join(agentDir, 'auth.json'),
+            modelsPath: join(agentDir, 'models.json'),
+            allowModelNetwork: true,
+            signal: controller.signal
+          })
+          const result = await mr.refresh({
+            allowNetwork: true,
+            force: true,
+            providers: request.providerId ? [request.providerId] : undefined,
+            signal: controller.signal
+          })
+          if (result.aborted) {
+            throw new Error('从云端刷新模型目录超时，请检查网络连接。')
+          }
+          if (result.errors.size > 0) {
+            const details = Array.from(result.errors, ([provider, error]) => `${provider}: ${error.message}`).join('; ')
+            throw new Error(`从云端刷新模型目录失败：${details}`)
+          }
+          runtime = null
+          statusReady = false
+          const count = request.providerId ? mr.getModels(request.providerId).length : mr.getModels().length
+          respondOk(request.id, { count, providerId: request.providerId })
+        } finally {
+          clearTimeout(timeout)
+        }
       } catch (error) {
         respondError(request.id, 'AUTH_HELPER_ERROR', describeError(error))
       }

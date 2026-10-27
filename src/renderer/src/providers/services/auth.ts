@@ -10,6 +10,7 @@ import type {
   AuthFlowSnapshot,
   AuthLogoutResult,
   AuthMethod,
+  AuthRefreshModelsResult,
   AuthStatusResult
 } from '../../../../shared/auth-api'
 
@@ -104,6 +105,17 @@ export async function logoutAuthProvider(providerId: string): Promise<AuthLogout
   if (!bridge || typeof bridge.logoutAuthProvider !== 'function') return unavailable()
   try {
     return await bridge.logoutAuthProvider(providerId)
+  } catch (error) {
+    return callFailed(error)
+  }
+}
+
+/** 从云端刷新指定或全部 Provider 的模型目录并更新本地持久化缓存。 */
+export async function refreshAuthProviderModels(providerId?: string): Promise<AuthRefreshModelsResult> {
+  const bridge = window.desktop
+  if (!bridge || typeof bridge.refreshAuthProviderModels !== 'function') return unavailable()
+  try {
+    return await bridge.refreshAuthProviderModels(providerId)
   } catch (error) {
     return callFailed(error)
   }

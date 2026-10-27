@@ -12,9 +12,9 @@
 
 | 文件 | 用途 |
 | --- | --- |
-| `src/main/providers/auth-manager.ts` | 认证状态、登录流程、提示回应、取消、退出与受控授权地址 |
+| `src/main/providers/auth-manager.ts` | 认证状态、登录流程、提示回应、取消、退出、受控授权地址与云端模型目录刷新 |
 | `src/main/providers/auth-helper-process.ts` | 认证辅助进程启动、JSONL 通信与关闭 |
-| `src/auth-helper/index.ts` | 官方 ModelRuntime 认证适配、提示与敏感信息脱敏 |
+| `src/auth-helper/index.ts` | 官方 ModelRuntime 认证适配、提示、敏感信息脱敏与受控云端模型目录刷新 |
 | `src/auth-helper/protocol.ts` | 辅助进程请求、响应和事件帧 |
 | `src/main/providers/models-config-manager.ts` | 自定义供应商快照、脱敏、单条保存／删除与并发基线 |
 | `src/main/providers/pi-settings-manager.ts` | Pi 默认模型读取与定点写入 |
@@ -31,7 +31,7 @@
 | `src/renderer/src/providers/components/AuthFlowDialog.vue` | 密钥与验证码输入、设备授权、认证结果、错误与重试及弹窗焦点管理 |
 | `src/renderer/src/providers/components/ProviderListItem.vue` | 供应商清单行、快捷操作与展开区编排 |
 | `src/renderer/src/providers/components/ProviderEntrySummary.vue` | 自定义条目摘要 |
-| `src/renderer/src/providers/components/ProviderCredentialSection.vue` | 凭据摘要、发起／继续认证与删除已保存凭据入口 |
+| `src/renderer/src/providers/components/ProviderCredentialSection.vue` | 凭据摘要、发起／继续认证、云端模型刷新与删除已保存凭据入口 |
 | `src/renderer/src/providers/components/ProviderDefinitionSection.vue` | 供应商定义与模型条目编辑 |
 | `src/renderer/src/providers/components/ProviderVisibilitySection.vue` | 对话页模型展示开关 |
 | `src/renderer/src/providers/components/ProviderEditorDialog.vue` | 自定义供应商新增／编辑弹层 |
@@ -59,6 +59,7 @@
 | 默认模型 | 选择器 → Runtime Store → pi-settings 服务 → PiSettingsManager | agent 目录 `settings.json` 的默认模型字段 |
 | 当前模型 | 选择器 → Runtime 命令 → 主进程 → 已绑定 SDK 会话 | 当前会话状态，不等同于写默认模型 |
 | 显示／隐藏 | 供应商展开区 → Runtime Store → preferences 服务／管理器 | Desktop 配置的隐藏模型列表 |
+| 刷新模型目录 | 供应商展开区 → auth Store／服务 → IPC → AuthManager → 辅助进程 → 官方 SDK | agent 目录 `models-store.json`；更新后清理主进程资源预读缓存 |
 
 ## 生命周期与安全边界
 

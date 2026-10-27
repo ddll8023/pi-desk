@@ -1,4 +1,4 @@
-/** 供应商与认证的 IPC：认证状态与登录流程（开始、应答、取消、打开授权地址、退出）、自定义供应商配置读写、Pi 默认模型读写。密钥只经登录应答单向提交，之后不保留任何副本。 */
+/** 供应商与认证的 IPC：认证状态、云端模型目录刷新与登录流程（开始、应答、取消、打开授权地址、退出）、自定义供应商配置读写、Pi 默认模型读写。密钥只经登录应答单向提交，之后不保留任何副本。 */
 
 import type { IpcMainInvokeEvent } from 'electron'
 import type { DesktopErrorCode } from '../../shared/desktop-api'
@@ -11,14 +11,18 @@ import {
   AUTH_MAX_PROVIDER_ID_CHARS,
   AUTH_MAX_SECRET_CHARS,
   AUTH_OPEN_URL_CHANNEL,
+  AUTH_REFRESH_MODELS_CHANNEL,
   AUTH_STATUS_CHANNEL,
   isAuthLoginRespondRequest,
-  isAuthLoginStartRequest
+  isAuthLoginStartRequest,
+  isAuthRefreshModelsRequest
 } from '../../shared/auth-api'
 import type {
   AuthErrorCode,
   AuthFlowResult,
   AuthLogoutResult,
+  AuthRefreshModelsRequest,
+  AuthRefreshModelsResult,
   AuthStatusResult
 } from '../../shared/auth-api'
 import {
@@ -79,6 +83,10 @@ export function authFlowFailure(code: AuthErrorCode, message: string, detail: st
 }
 
 export function authLogoutFailure(code: AuthErrorCode, message: string, detail: string | null = null): AuthLogoutResult {
+  return { ok: false, error: { code, message, detail } }
+}
+
+export function authRefreshModelsFailure(code: AuthErrorCode, message: string, detail: string | null = null): AuthRefreshModelsResult {
   return { ok: false, error: { code, message, detail } }
 }
 
@@ -359,6 +367,26 @@ export function registerAuthHandlers(pageUrl: string): void {
       } catch (error) {
         const failure = authErrorOf(error)
         return authLogoutFailure(failure.code, failure.message)
+      }
+    }
+  )
+
+  handle(
+    AUTH_REFRESH_MODELS_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<AuthRefreshModelsResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return authRefreshModelsFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length > 1 || (args.length === 1 && !isAuthRefreshModelsRequest(args[0]))) {
+        return authRefreshModelsFailure('INVALID_REQUEST', '刷新模型参数格式不正确。')
+      }
+      const request = (args[0] as AuthRefreshModelsRequest | undefined) ?? {}
+      try {
+        const data = await authManager.refreshModels(request.providerId)
+        return { ok: true, data }
+      } catch (error) {
+        const failure = authErrorOf(error)
+        return authRefreshModelsFailure(failure.code, failure.message, failure.detail)
       }
     }
   )

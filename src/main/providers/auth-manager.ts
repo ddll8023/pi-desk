@@ -1,6 +1,6 @@
 /**
  * 认证执行端的唯一持有者：懒启动并管理认证辅助进程，把辅助进程的帧投影为 Provider 状态与登录流程
- * 快照，编排登录、提示回应、取消、退出登录与外链打开。
+ * 快照，编排登录、提示回应、取消、退出登录、外链打开与受控的云端模型目录刷新。
  *
  * 边界：
  * - 凭据内容全部由官方 SDK 在辅助进程内读写，落在 `<agent-dir>/auth.json`；主进程不读取任何已有凭据
@@ -22,6 +22,7 @@ import type {
   AuthFlowSnapshot,
   AuthMethod,
   AuthPrompt,
+  AuthRefreshModelsPayload,
   AuthStatus
 } from '../../shared/auth-api'
 import { AUTH_MAX_SECRET_CHARS, AUTH_MAX_SELECT_VALUE_CHARS } from '../../shared/auth-api'
@@ -31,6 +32,7 @@ import { AuthHelperProcess, AuthHelperProcessError } from './auth-helper-process
 import type { DesktopConfigStore } from '../config/desktop-config-store'
 import { ExternalUrlError, isOpenableAuthUrl, openAuthUrl } from '../shared/external-url'
 import { getPiAgentDir } from '../shared/pi-paths'
+import { clearResourcePreviewCache } from '../resources/resource-preview'
 
 /** 与官方 SDK 一致：凭据文件固定在 agent 目录下的 auth.json。 */
 const AUTH_FILE_NAME = 'auth.json'
@@ -333,6 +335,24 @@ export class AuthManager {
     const outcome = await this.request({ type: 'logout', providerId }, LOGOUT_TIMEOUT_MS)
     if (!outcome.ok) throw new AuthManagerError(outcome.code, outcome.message)
     return this.readStatus()
+  }
+
+  /** 从云端刷新指定或全部 Provider 的模型目录并更新本地持久化缓存。 */
+  async refreshModels(providerId?: string): Promise<AuthRefreshModelsPayload> {
+    const outcome = await this.request(
+      providerId !== undefined ? { type: 'refresh-models', providerId } : { type: 'refresh-models' },
+      STATUS_TIMEOUT_MS
+    )
+    if (!outcome.ok) {
+      throw new AuthManagerError(outcome.code, outcome.message, outcome.detail)
+    }
+    const data = outcome.data
+    if (typeof data !== 'object' || data === null || typeof (data as { count?: unknown }).count !== 'number') {
+      throw new AuthManagerError('AUTH_UNAVAILABLE', '认证辅助进程返回了非法的刷新结果。')
+    }
+    // 刷新成功后清空预读缓存，使下一次候选预读拉取到最新写入的 models-store.json
+    clearResourcePreviewCache()
+    return data as AuthRefreshModelsPayload
   }
 
   /** 应用退出时使用：先请辅助进程自行退出，超时后按平台兜底终止。 */

@@ -38,24 +38,31 @@ import ProviderCredentialSection from './ProviderCredentialSection.vue'
 import ProviderEntrySummary from './ProviderEntrySummary.vue'
 import ProviderVisibilitySection from './ProviderVisibilitySection.vue'
 
-const props = defineProps<{
-  readonly row: ProviderRow
-  /** 该行是否已展开详情；同一时刻只有一行展开。 */
-  readonly expanded: boolean
-  /** 展示偏好是否可写；为假时可见性开关禁用。 */
-  readonly canToggle: boolean
-  /** 展示偏好正在读取；与「这个供应商没有模型」区分。 */
-  readonly displayLoading: boolean
-  readonly displayError: string | null
-  /** models.json 尚未读完。 */
-  readonly configLoading: boolean
-  /** models.json 无法解析的原因。 */
-  readonly parseError: string | null
-  /** models.json 写动作进行中。 */
-  readonly configBusy: boolean
-  /** models.json 写动作的错误；就近展示在条目区块，不放到页面顶部。 */
-  readonly actionError: string | null
-}>()
+const props = withDefaults(
+  defineProps<{
+    readonly row: ProviderRow
+    /** 该行是否已展开详情；同一时刻只有一行展开。 */
+    readonly expanded: boolean
+    /** 展示偏好是否可写；为假时可见性开关禁用。 */
+    readonly canToggle: boolean
+    /** 展示偏好正在读取；与「这个供应商没有模型」区分。 */
+    readonly displayLoading: boolean
+    readonly displayError: string | null
+    /** models.json 尚未读完。 */
+    readonly configLoading: boolean
+    /** models.json 无法解析的原因。 */
+    readonly parseError: string | null
+    /** models.json 写动作进行中。 */
+    readonly configBusy: boolean
+    /** models.json 写动作的错误；就近展示在条目区块，不放到页面顶部。 */
+    readonly actionError: string | null
+    /** 是否正在从云端刷新该供应商的模型。 */
+    readonly refreshingModels?: boolean
+  }>(),
+  {
+    refreshingModels: false
+  }
+)
 
 const emit = defineEmits<{
   toggle: []
@@ -65,6 +72,7 @@ const emit = defineEmits<{
   requestRemoveCredential: []
   login: [method: AuthMethod]
   resumeAuth: []
+  'refresh-models': []
 }>()
 
 const runtimeStore = useRuntimeStore()
@@ -167,9 +175,11 @@ function setAllVisible(visible: boolean): void {
         <ProviderCredentialSection
           :provider="row.authStatus"
           :runtime-model-providers="runtimeModelProviders"
+          :refreshing="refreshingModels"
           @request-remove="emit('requestRemoveCredential')"
           @login="emit('login', $event)"
           @resume="emit('resumeAuth')"
+          @refresh-models="emit('refresh-models')"
         />
       </section>
 
