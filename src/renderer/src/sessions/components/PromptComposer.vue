@@ -933,17 +933,26 @@ function stop(): void {
   void runtimeStore.stopOperation()
 }
 
-/** 全部发送条件满足才消费首次提交意图；不能在会话还处于 opening 时提前丢弃。 */
+/** 全部发送条件满足才消费首次提交意图；若草稿挑选了临时模型，首次发送前先切换为目标模型再提交，并清空草稿记录；不能在会话还处于 opening 时提前丢弃。 */
 watch(
   () => startupRequested.value && runtimeReady.value && projectionSync.value === 'synced'
     && !sessionStore.opening && !sessionStore.awaitingTrust && !sessionStore.awaitingInterrupt
     && props.active && workspaceTabsStore.activeTab === startupTabKey
     && canSubmit.value,
-  (pending) => {
+  async (pending) => {
     if (!pending || startupPromptId === null) return
     const id = startupPromptId
     startupPromptId = null
     startupRequested.value = false
+    const pendingPrompt = sessionViewStore.getPendingPrompt(id)
+    const draftModel = pendingPrompt ? sessionViewStore.getDraftModel(pendingPrompt.inputKey) : null
+    if (draftModel !== null) {
+      const info = runtimeView.value.phase === 'ready' ? runtimeView.value.snapshot.info : null
+      if (info && (info.modelProvider !== draftModel.provider || info.modelId !== draftModel.modelId)) {
+        await runtimeStore.switchModel(draftModel.provider, draftModel.modelId)
+      }
+      if (pendingPrompt) sessionViewStore.clearDraftModel(pendingPrompt.inputKey)
+    }
     void dispatchPendingPrompt(id)
   }
 )
@@ -1421,7 +1430,7 @@ onMounted(() => {
             </button>
           </div>
           <div class="flex flex-none items-center gap-1.5">
-            <!-- 未绑定或原位新草稿选择 Pi 默认模型；实际绑定后才切当前会话模型，另设默认走次级动作。 -->
+            <!-- 未绑定或原位新草稿选择草稿模型；实际绑定后才切当前会话模型，另设全局默认走次级动作。 -->
             <RuntimeModelSelect
               :new-conversation="workspaceTabsStore.isChatNewDraft"
               :resetting="workspaceTabsStore.isChatResetting || workspaceTabsStore.isChatBinding"

@@ -1,11 +1,12 @@
 <!-- 原位新建使用默认模型预读，不把旧实例的模型当作新会话模型；结束旧实例期间禁止模型操作。
-     输入坞模型选择器：未选项目时也读全局模型目录；Pi 未启动时选中即写为 Pi 自身默认模型（settings.json），就绪时选中只切换当前会话、候选项里的「设为默认」才写默认模型，会话切换与默认模型写入互不联动；候选项排除设置中隐藏的模型。 -->
+     输入坞模型选择器：未选项目时也读全局模型目录；选中只切换当前会话或草稿模型，候选项里的「设为默认」才写 Pi 自身默认模型（settings.json），会话切换与默认模型写入互不联动；候选项排除设置中隐藏的模型。 -->
 <script setup lang="ts">
 import { computed, onUnmounted, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useProjectStore } from '../../projects/stores/project'
 import { useRuntimeStore } from '../../sessions/stores/runtime'
 import { useSessionStore } from '../../sessions/stores/session'
+import { useSessionViewStore } from '../../sessions/stores/session-view'
 import AppButton from '../../ui/AppButton.vue'
 import AppSelect from '../../ui/AppSelect.vue'
 
@@ -18,6 +19,7 @@ const props = withDefaults(defineProps<{
 
 const runtimeStore = useRuntimeStore()
 const sessionStore = useSessionStore()
+const sessionViewStore = useSessionViewStore()
 const projectStore = useProjectStore()
 const {
   view, capabilitiesView, modelSwitchView, promptView,
@@ -43,8 +45,9 @@ const identity = computed(() => {
     return info.value?.modelProvider && info.value.modelId
       ? { provider: info.value.modelProvider, modelId: info.value.modelId } : null
   }
-  // 未就绪时优先展示已设置的 Pi 默认；未设置时退回 Pi 自动选择的结果，仅作展示。
-  return canPrepare.value ? piDefaultModel.value ?? preview.value?.defaultModel ?? null : null
+  // 未就绪时：优先展示当前草稿所选模型；未选时展示 Pi 默认；再未设置时退回 Pi 自动选择的结果，仅作展示。
+  return sessionViewStore.currentDraftModel
+    ?? (canPrepare.value ? piDefaultModel.value ?? preview.value?.defaultModel ?? null : null)
 })
 
 /** 用元组编码复合身份，避免供应商和模型名称含分隔符时串选。 */
@@ -92,8 +95,8 @@ const currentLabel = computed(() => {
 })
 const currentIdentity = computed(() => identity.value
   ? `${identity.value.provider} / ${identity.value.modelId}` : currentLabel.value)
-/** 就绪时也能写 Pi 默认模型（只影响以后新建的会话）；默认模型没读到或正在保存时不给这个动作。 */
-const canSetDefault = computed(() => ready.value && piDefaultModelLoaded.value
+/** 无论会话是否就绪均可写 Pi 默认模型（只影响新建会话）；默认模型没读到或正在保存时不给这个动作。 */
+const canSetDefault = computed(() => piDefaultModelLoaded.value
   && piDefaultModelView.value.phase !== 'saving')
 const groups = computed(() => {
   type Option = {
@@ -208,8 +211,8 @@ const busy = computed(() => props.resetting || (ready.value && modelSwitchView.v
 /**
  * 模型选择按当前对话的实际绑定状态决定写入目标：
  * 已绑定时只切当前会话模型，不隐式持久化全局默认；
- * 未绑定或原位新草稿写入 Pi 自身默认模型，不操作仍在收尾的旧实例；
- * 已绑定后另设默认走候选项的次级动作（见 chooseDefaultModel），不动当前会话。
+ * 未绑定或原位新草稿记录为当前草稿的选择，不改动全局默认配置；
+ * 另设全局默认均走候选项的次级动作（见 chooseDefaultModel）。
  * 反馈以实际结果为准，不在请求提交时宣告切换成功。
  */
 async function chooseModel(value: string): Promise<void> {
@@ -220,21 +223,23 @@ async function chooseModel(value: string): Promise<void> {
     void runtimeStore.switchModel(model.provider, model.id)
     return
   }
-  const result = await runtimeStore.setPiDefaultModel({ provider: model.provider, modelId: model.id })
-  if (result.ok) showNotice('success', `已设为 Pi 默认模型：${model.name ?? model.id}`)
-  else showNotice('error', result.message)
+  // 未就绪或新草稿时：仅记录为当前草稿的选择，绝不调用 setPiDefaultModel 写全局配置。
+  sessionViewStore.setDraftModel(sessionViewStore.key, { provider: model.provider, modelId: model.id })
 }
 
 /**
  * 候选项里的「设为默认」：只写 Pi 默认模型（settings.json），不切换当前会话；
- * 影响的是以后新建的会话，因此提示里点明当前会话不变。
+ * 影响的是以后新建且未单独指定模型的会话。
  */
 async function chooseDefaultModel(value: string): Promise<void> {
   const model = models.value.find(candidate => modelKey(candidate.provider, candidate.id) === value)
   if (model === undefined || !canSetDefault.value) return
   const result = await runtimeStore.setPiDefaultModel({ provider: model.provider, modelId: model.id })
-  if (result.ok) showNotice('success', `已设为 Pi 默认模型：${model.name ?? model.id}（当前会话不变）`)
-  else showNotice('error', result.message)
+  if (result.ok) {
+    showNotice('success', `已设为 Pi 默认模型：${model.name ?? model.id}${ready.value ? '（当前会话不变）' : ''}`)
+  } else {
+    showNotice('error', result.message)
+  }
 }
 
 /** 设置默认的可见反馈：成功短暂提示，失败显示原因；不占布局，靠浮层呈现。 */
@@ -276,15 +281,15 @@ function refreshModels(): void {
     <div class="runtime-model-control">
       <AppSelect
         id="runtime-model-select"
-        :label="ready ? '当前会话模型' : 'Pi 默认模型'"
+        :label="ready ? '当前会话模型' : '新会话模型'"
         :groups="groups"
         :model-value="currentKey"
         :empty-label="currentLabel"
         :selected-meta="currentKey ? identity?.provider : undefined"
         :selected-badge="currentKey && identity ? providerBadge(identity.provider) : undefined"
         :disabled="disabledReason !== null"
-        :title="error ? `${currentIdentity}；${error}` : disabledReason ? `${currentIdentity}；${disabledReason}` : `${ready ? '当前会话模型' : 'Pi 默认模型'}：${currentIdentity}；点击选择${ready ? '，只切换当前会话，改默认模型在候选项里' : '，选中即设为 Pi 默认模型'}`"
-        :aria-label="`${ready ? '当前会话模型' : 'Pi 默认模型'}：${currentIdentity}`"
+        :title="error ? `${currentIdentity}；${error}` : disabledReason ? `${currentIdentity}；${disabledReason}` : `${ready ? '当前会话模型' : '新会话模型'}：${currentIdentity}；点击选择模型，设为默认请点击候选项右侧按钮`"
+        :aria-label="`${ready ? '当前会话模型' : '新会话模型'}：${currentIdentity}`"
         :aria-describedby="error ? 'runtime-model-error' : progress ? 'runtime-model-progress' : undefined"
         searchable
         search-placeholder="搜索供应商或模型…"

@@ -1,7 +1,8 @@
 /**
- * 按会话保存输入与阅读状态：草稿、待发送附件、粘底与滚动位置。
+ * 按会话保存输入与阅读状态：草稿、待发送附件、粘底与滚动位置，以及未绑定草稿时挑选的目标模型。
  *
  * 待发送消息按标签保存，独立于权威投影；点击即显示，失败时交回输入，启动期间的新草稿不混入提交。
+ * 草稿选中的模型按输入键隔离，不写入全局 settings.json，新会话绑定就绪后才应用并清空。
  * 状态只在内存中保留，不写磁盘；渲染层同一时刻只显示当前会话的那一份，离开会话时写入、
  * 切回时取走，因此切换会话不会把上一个会话的草稿、附件或阅读位置带进下一个会话。
  *
@@ -21,7 +22,7 @@
 import { defineStore } from 'pinia'
 import { computed, reactive, ref, watch } from 'vue'
 import type { WatchStopHandle } from 'vue'
-import type { PromptImageInput, RuntimeTarget } from '../../../../shared/runtime-api'
+import type { ModelIdentity, PromptImageInput, RuntimeTarget } from '../../../../shared/runtime-api'
 import { useRuntimeStore } from './runtime'
 import { NEW_CHAT_INPUT_PREFIX, useWorkspaceTabsStore } from '../../workspace/stores/workspace-tabs'
 
@@ -78,6 +79,10 @@ export const useSessionViewStore = defineStore('session-view', () => {
   const boundSessionId = ref<string | null>(null)
   /** 会话与独立新草稿的输入留底；阅读状态只按实际会话保存，切回时取走。 */
   const inputs = new Map<string, SessionInput>()
+  /** 用户在未绑定或新草稿状态挑选的临时模型；按输入键隔离，不修改全局默认。 */
+  const draftModels = ref<Record<string, ModelIdentity>>({})
+  /** 当前活动输入上下文选中的草稿模型；未显式选过时为 null。 */
+  const currentDraftModel = computed<ModelIdentity | null>(() => draftModels.value[key.value] ?? null)
   const readings = new Map<string, SessionReading>()
   const pendingPrompts = ref<readonly PendingPrompt[]>([])
   let promptSequence = 0
@@ -122,6 +127,10 @@ export const useSessionViewStore = defineStore('session-view', () => {
         releaseImages(input.images)
         inputs.delete(inputKey)
       }
+      for (const inputKey of Object.keys(draftModels.value)) {
+        if (!inputKey.startsWith(NEW_CHAT_INPUT_PREFIX) || keys.has(inputKey)) continue
+        clearDraftModel(inputKey)
+      }
     }, { flush: 'post' })
     stopPendingWatch = watch(() => [runtime.messages, runtime.foregroundRunId, pendingPrompts.value, workspace.tabs] as const, () => {
       for (const prompt of pendingPrompts.value) {
@@ -143,6 +152,7 @@ export const useSessionViewStore = defineStore('session-view', () => {
     pendingPrompts.value = []
     for (const input of inputs.values()) releaseImages(input.images)
     inputs.clear()
+    draftModels.value = {}
     readings.clear()
     if (requestedInput.value !== null) {
       releaseImages(requestedInput.value.images)
@@ -237,6 +247,26 @@ export const useSessionViewStore = defineStore('session-view', () => {
     return workspace.activeTab === tabKey && workspace.hasChatTabKey(projectPath, tabKey)
       && workspace.isChatInteractive && workspace.annotationTargetIdentity(projectPath, tabKey) === identity
       && key.value === inputKey
+  }
+
+  function getDraftModel(inputKey: string): ModelIdentity | null {
+    return draftModels.value[inputKey] ?? null
+  }
+
+  function setDraftModel(inputKey: string, model: ModelIdentity | null): void {
+    if (model === null) {
+      if (draftModels.value[inputKey] !== undefined) {
+        const next = { ...draftModels.value }
+        delete next[inputKey]
+        draftModels.value = next
+      }
+    } else {
+      draftModels.value = { ...draftModels.value, [inputKey]: model }
+    }
+  }
+
+  function clearDraftModel(inputKey: string): void {
+    setDraftModel(inputKey, null)
   }
 
   /** 后台失败恢复到原输入身份；已有草稿与新附件均保留，不被旧提交覆盖。 */
@@ -335,6 +365,11 @@ export const useSessionViewStore = defineStore('session-view', () => {
     turnExpansion,
     setTurnExpansion,
     createImage,
-    releaseImages
+    releaseImages,
+    draftModels,
+    currentDraftModel,
+    getDraftModel,
+    setDraftModel,
+    clearDraftModel
   }
 })

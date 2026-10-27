@@ -36,7 +36,7 @@
 | `src/renderer/src/providers/components/ProviderDefinitionSection.vue` | 供应商定义与模型条目编辑 |
 | `src/renderer/src/providers/components/ProviderVisibilitySection.vue` | 对话页模型展示开关 |
 | `src/renderer/src/providers/components/ProviderEditorDialog.vue` | 自定义供应商新增／编辑弹层 |
-| `src/renderer/src/providers/components/RuntimeModelSelect.vue` | 聊天模型候选、实际绑定会话模型与未绑定／新草稿默认模型选择 |
+| `src/renderer/src/providers/components/RuntimeModelSelect.vue` | 聊天模型候选、会话/草稿模型切换与候选项独立设为默认 |
 
 认证 Store、模型页编排、服务及辅助入口已读；子组件和配置管理的关联按调用与契约定位。登录方法和供应商支持范围来自运行期 SDK，不在本文固定枚举。
 
@@ -73,4 +73,4 @@ Codex 额度是已登录账户的统计，不是本会话 token／费用，也�
 
 额度缓存按凭据指纹隔离，同一凭据的在途查询合并；手动刷新绕过有效缓存，Codex 登录开始、结束及退出使缓存和旧查询失效。响应返回后再次核对凭据，避免返回旧账户的数据。凭据不进入主进程或页面，额度快照不写入会话历史或 Desktop 配置；必要的凭据续期仍由 SDK 写入认证存储。
 
-preload 与服务传递明确字段和普通对象，主进程决定辅助入口与授权地址。默认模型保存不修改当前会话；当前模型切换不隐式修改全局默认。选择器按当前对话的实际绑定状态决定操作目标：原位新草稿使用默认模型预读，不因旧 Runtime 仍就绪就操作旧会话；旧实例结束或新绑定尚在确认时禁用改选与手动刷新，当前模型切换反馈以实际运行状态为准。配置写入需要文件锁及已有基线，不通过第二个 Desktop 配置写入者绕过统一存储。
+preload 与服务传递明确字段和普通对象，主进程决定辅助入口与授权地址。默认模型保存不修改当前会话；当前模型切换不隐式修改全局默认。选择器按当前对话的实际绑定状态决定操作目标：未绑定或原位新草稿选择草稿模型，不改写 Pi 全局默认模型；另设全局默认走候选项的次级动作；旧实例结束或新绑定尚在确认时禁用改选与手动刷新，当前模型切换反馈以实际运行状态为准。配置写入需要文件锁及已有基线，不通过第二个 Desktop 配置写入者绕过统一存储。
