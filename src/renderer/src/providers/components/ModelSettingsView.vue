@@ -270,11 +270,16 @@ function startEdit(row: ProviderRow): void {
   openEditor({ mode: 'edit', providerId: row.id, initialRawText: row.entry.json })
 }
 
-/** 保存成功：给出提示与重载入口，关掉弹窗并让刚保存的供应商就地展开。 */
-function onSaved(id: string): void {
-  notice.value = `已保存供应商 ${id}；改动需要重新加载 Runtime 后才会反映到输入坞的模型列表。`
+/** 保存成功：关掉弹窗并让刚保存的供应商就地展开；空闲时自动重新加载会话。 */
+async function onSaved(id: string): Promise<void> {
+  notice.value = null
   editor.value = null
   expandedId.value = id
+  await runtimeStore.refreshModelPreview(true)
+  const reloaded = await sessionStore.reloadCurrent()
+  if (!reloaded) {
+    notice.value = `已保存供应商 ${id}；改动将在重新加载当前会话后生效。`
+  }
 }
 
 function cancelEditor(): void {
@@ -289,7 +294,7 @@ function refreshAll(): void {
   void authStore.refresh()
 }
 
-/** 从云端刷新指定供应商的模型目录。 */
+/** 从云端刷新指定供应商的模型目录；空闲时自动热更新当前会话。 */
 async function onRefreshModels(row: ProviderRow): Promise<void> {
   if (refreshingProviderId.value !== null) return
   refreshingProviderId.value = row.id
@@ -297,9 +302,11 @@ async function onRefreshModels(row: ProviderRow): Promise<void> {
   try {
     const result = await authStore.refreshModels(row.id)
     if (result.ok) {
-      notice.value = `已从云端刷新 ${row.name} 的模型目录（共 ${result.count ?? row.modelCount} 个模型）；改动需要重新加载 Runtime 后才会反映到输入坞。`
-      // 立即热更新当前界面的候选项预读
       await runtimeStore.refreshModelPreview(true)
+      const reloaded = await sessionStore.reloadCurrent()
+      if (!reloaded) {
+        notice.value = `已从云端刷新 ${row.name} 的模型目录（共 ${result.count ?? row.modelCount} 个模型）；会话空闲时重新加载即可在对话中使用。`
+      }
     } else {
       notice.value = `从云端刷新 ${row.name} 模型失败：${result.message ?? '未知错误'}`
     }
@@ -322,8 +329,12 @@ async function confirmDelete(): Promise<void> {
   const removed = await modelsConfigStore.remove(id)
   pendingDelete.value = null
   if (!removed) return
-  notice.value = `已删除供应商 ${id} 的 models.json 条目；若它还有保存在 auth.json 里的凭据，仍会留在清单上。改动需要重新加载 Runtime 后才会生效。`
   if (expandedId.value === id) expandedId.value = null
+  await runtimeStore.refreshModelPreview(true)
+  const reloaded = await sessionStore.reloadCurrent()
+  if (!reloaded) {
+    notice.value = `已删除供应商 ${id}；改动将在重新加载当前会话后生效。`
+  }
 }
 
 /** 重新加载 Runtime：复用既有重启式重载与中断确认链，让 Pi 重新读取凭据与模型目录。 */
@@ -402,7 +413,7 @@ onUnmounted(() => {
         :disabled="sessionStore.opening"
         @click="reloadRuntime"
       >
-        {{ sessionStore.opening ? '正在重新加载…' : '重新加载 Runtime（保留会话）' }}
+        {{ sessionStore.opening ? '正在重新加载…' : '重新加载当前会话' }}
       </AppButton>
     </div>
 

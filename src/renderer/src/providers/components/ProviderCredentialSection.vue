@@ -1,4 +1,4 @@
-<!-- 供应商凭据摘要与入口：展示可用性提示与从云端刷新模型入口，认证输入和过程反馈交给页面级认证弹窗。
+<!-- 供应商凭据摘要与入口：展示可用性提示与认证入口，认证输入和过程反馈交给页面级认证弹窗。
      已有流程提供继续入口；这里不直接启动认证，不持有密钥，删除仍由父级确认。 -->
 <script setup lang="ts">
 import { computed } from 'vue'
@@ -6,22 +6,15 @@ import type { AuthMethod, AuthProviderStatus } from '../../../../shared/auth-api
 import { useAuthStore } from '../stores/auth'
 import AppButton from '../../ui/AppButton.vue'
 
-const props = withDefaults(
-  defineProps<{
-    readonly provider: AuthProviderStatus
-    readonly runtimeModelProviders: ReadonlySet<string> | null
-    readonly refreshing?: boolean
-  }>(),
-  {
-    refreshing: false
-  }
-)
+const props = defineProps<{
+  readonly provider: AuthProviderStatus
+  readonly runtimeModelProviders: ReadonlySet<string> | null
+}>()
 
 const emit = defineEmits<{
   login: [method: AuthMethod]
   resume: []
   'request-remove': []
-  'refresh-models': []
 }>()
 const authStore = useAuthStore()
 const hasCurrentFlow = computed(() => authStore.activeFlow?.providerId === props.provider.providerId)
@@ -57,13 +50,6 @@ function actionLabel(method: AuthMethod): string {
           @click="emit('login', method)"
         >{{ actionLabel(method) }}</AppButton>
       </template>
-      <AppButton
-        v-if="provider.configured || provider.storedType !== null || provider.authTypes.includes('oauth')"
-        variant="compact"
-        class="provider-credential__refresh-button"
-        :disabled="props.refreshing || authStore.flowAction.phase === 'sending'"
-        @click="emit('refresh-models')"
-      >{{ props.refreshing ? '正在刷新…' : '从云端刷新模型' }}</AppButton>
       <div v-if="provider.storedType !== null" class="provider-credential__removal">
         <AppButton variant="quiet-danger" :disabled="authStore.logoutAction.phase === 'sending'" @click="emit('request-remove')">
           删除已保存凭据

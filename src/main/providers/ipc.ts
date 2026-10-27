@@ -30,12 +30,19 @@ import type {
 } from '../../shared/auth-api'
 import {
   MODELS_CONFIG_DELETE_PROVIDER_CHANNEL,
+  MODELS_CONFIG_FETCH_ENDPOINT_MODELS_CHANNEL,
   MODELS_CONFIG_GET_CHANNEL,
   MODELS_CONFIG_SAVE_PROVIDER_CHANNEL,
   isModelsConfigDeleteRequest,
+  isModelsConfigFetchEndpointModelsRequest,
   isModelsConfigSaveRequest
 } from '../../shared/models-config-api'
-import type { ModelsConfigErrorCode, ModelsConfigResult } from '../../shared/models-config-api'
+import type {
+  ModelsConfigErrorCode,
+  ModelsConfigFetchEndpointModelsRequest,
+  ModelsConfigFetchEndpointModelsResult,
+  ModelsConfigResult
+} from '../../shared/models-config-api'
 import {
   PI_SETTINGS_GET_DEFAULT_MODEL_CHANNEL,
   PI_SETTINGS_SET_DEFAULT_MODEL_CHANNEL,
@@ -191,6 +198,27 @@ export function registerModelsConfigHandlers(pageUrl: string): void {
         return { ok: true, data: await modelsConfigManager.deleteProvider(request.providerId) }
       } catch (error) {
         return modelsConfigFailureOf(error, '删除自定义供应商时发生未预期的内部错误。')
+      }
+    }
+  )
+
+  handle(
+    MODELS_CONFIG_FETCH_ENDPOINT_MODELS_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<ModelsConfigFetchEndpointModelsResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return { ok: false, error: { code: 'FORBIDDEN', message: '不允许此页面调用桌面接口。' } }
+      }
+      if (args.length !== 1 || !isModelsConfigFetchEndpointModelsRequest(args[0])) {
+        return { ok: false, error: { code: 'INVALID_REQUEST', message: '探测端点模型参数格式不正确。' } }
+      }
+      try {
+        const models = await modelsConfigManager.fetchEndpointModels(args[0] as ModelsConfigFetchEndpointModelsRequest)
+        return { ok: true, models }
+      } catch (error) {
+        if (error instanceof ModelsConfigError) {
+          return { ok: false, error: { code: error.code, message: error.message } }
+        }
+        return { ok: false, error: { code: 'INTERNAL_ERROR', message: '探测端点模型时发生未预期的内部错误。' } }
       }
     }
   )

@@ -1,24 +1,32 @@
-<!-- models.json 条目摘要：只展示「指向哪里、有哪些模型」的关键字段与写入入口，完整编辑在弹窗里进行。
-     内置供应商提供覆盖配置入口，条目文本来自 models.json 快照。 -->
+<!-- models.json 条目摘要：展示「指向哪里、有哪些模型」的关键字段并提供编辑与从云端刷新模型入口，
+     完整编辑在弹窗里进行。内置供应商提供覆盖配置入口，条目文本来自 models.json 快照。 -->
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { ModelsConfigProvider } from '../../../../shared/models-config-api'
 import AppButton from '../../ui/AppButton.vue'
 
-const props = defineProps<{
-  /** 当前供应商在 models.json 里的条目；null 表示它用的是 Pi 内置定义。 */
-  readonly entry: ModelsConfigProvider | null
-  /** models.json 尚未读完；为真时不判定「没有条目」。 */
-  readonly loading: boolean
-  /** models.json 无法解析的原因；非空时暂停写入入口。 */
-  readonly parseError: string | null
-  /** 写动作进行中；用于禁用入口，避免重复提交。 */
-  readonly busy: boolean
-}>()
+const props = withDefaults(
+  defineProps<{
+    /** 当前供应商在 models.json 里的条目；null 表示它用的是 Pi 内置定义。 */
+    readonly entry: ModelsConfigProvider | null
+    /** models.json 尚未读完；为真时不判定「没有条目」。 */
+    readonly loading: boolean
+    /** models.json 无法解析的原因；非空时暂停写入入口。 */
+    readonly parseError: string | null
+    /** 写动作进行中；用于禁用入口，避免重复提交。 */
+    readonly busy: boolean
+    /** 是否正在从云端刷新模型。 */
+    readonly refreshing?: boolean
+  }>(),
+  {
+    refreshing: false
+  }
+)
 
 const emit = defineEmits<{
   edit: []
   create: []
+  'refresh-models': []
 }>()
 
 /**
@@ -77,9 +85,18 @@ const summary = computed(() => {
           <dd>{{ summary.modelCount }} 个条目<span v-if="summary.hasApiKey"> · 已配置密钥</span></dd>
         </div>
       </dl>
-      <AppButton variant="compact" :disabled="busy" @click="emit('edit')">
-        编辑条目
-      </AppButton>
+      <div class="provider-entry-summary__actions">
+        <AppButton variant="compact" :disabled="busy" @click="emit('edit')">
+          编辑条目
+        </AppButton>
+        <AppButton
+          variant="compact"
+          :disabled="busy || props.refreshing"
+          @click="emit('refresh-models')"
+        >
+          {{ props.refreshing ? '正在刷新…' : '从云端刷新模型' }}
+        </AppButton>
+      </div>
     </template>
   </div>
 </template>
@@ -89,6 +106,12 @@ const summary = computed(() => {
   display: grid;
   justify-items: start;
   gap: 0.625rem;
+}
+
+.provider-entry-summary__actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
 }
 
 .provider-entry-summary__message {

@@ -31,9 +31,9 @@
 | `src/renderer/src/providers/components/ModelSettingsView.vue` | 按供应商聚合清单、搜索、定义与可见性，编排认证弹窗及会话重载 |
 | `src/renderer/src/providers/components/AuthFlowDialog.vue` | 密钥与验证码输入、设备授权、认证结果、错误与重试及弹窗焦点管理 |
 | `src/renderer/src/providers/components/ProviderListItem.vue` | 供应商清单行、快捷操作与展开区编排 |
-| `src/renderer/src/providers/components/ProviderEntrySummary.vue` | 自定义条目摘要 |
-| `src/renderer/src/providers/components/ProviderCredentialSection.vue` | 凭据摘要、发起／继续认证、云端模型刷新与删除已保存凭据入口 |
-| `src/renderer/src/providers/components/ProviderDefinitionSection.vue` | 供应商定义与模型条目编辑 |
+| `src/renderer/src/providers/components/ProviderEntrySummary.vue` | 自定义条目摘要与从云端刷新模型入口 |
+| `src/renderer/src/providers/components/ProviderCredentialSection.vue` | 凭据摘要、发起／继续认证与删除已保存凭据入口 |
+| `src/renderer/src/providers/components/ProviderDefinitionSection.vue` | 供应商定义与模型条目编辑，支持从端点拉取模型 |
 | `src/renderer/src/providers/components/ProviderVisibilitySection.vue` | 对话页模型展示开关 |
 | `src/renderer/src/providers/components/ProviderEditorDialog.vue` | 自定义供应商新增／编辑弹层 |
 | `src/renderer/src/providers/components/RuntimeModelSelect.vue` | 聊天模型候选、会话/草稿模型切换与候选项独立设为默认 |
@@ -57,6 +57,7 @@
 | 登录／退出 | 模型页／认证弹窗 → auth Store／服务 → IPC → AuthManager → 辅助进程 → 官方 SDK | agent 目录 `auth.json`；页面只接收状态与提示 |
 | 查询 Codex 额度 | 用量与额度弹窗 → auth 服务 → IPC → AuthManager → 辅助进程 → 官方额度接口 | 展示快照仅在内存短期缓存；OAuth 续期仍由 SDK 管理 |
 | 定义供应商 | 条目弹层 → models-config Store／服务 → IPC → ModelsConfigManager | agent 目录 `models.json`；按单个 provider 修改 |
+| 探测端点模型 | 条目编辑弹窗 → models-config 服务 → IPC → ModelsConfigManager → 端点 `/models` 探测 | 仅在表单草稿填充，保存后写入 models.json |
 | 删除供应商 | 展开区危险操作 → 确认对话框 → models-config Store／服务 → IPC → ModelsConfigManager | agent 目录 `models.json`；只删该 provider 的条目 |
 | 默认模型 | 选择器 → Runtime Store → pi-settings 服务 → PiSettingsManager | agent 目录 `settings.json` 的默认模型字段 |
 | 当前模型 | 选择器 → Runtime 命令 → 主进程 → 已绑定 SDK 会话 | 当前会话状态，不等同于写默认模型 |

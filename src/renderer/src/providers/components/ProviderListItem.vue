@@ -175,11 +175,9 @@ function setAllVisible(visible: boolean): void {
         <ProviderCredentialSection
           :provider="row.authStatus"
           :runtime-model-providers="runtimeModelProviders"
-          :refreshing="refreshingModels"
           @request-remove="emit('requestRemoveCredential')"
           @login="emit('login', $event)"
           @resume="emit('resumeAuth')"
-          @refresh-models="emit('refresh-models')"
         />
       </section>
 
@@ -195,8 +193,10 @@ function setAllVisible(visible: boolean): void {
           :loading="configLoading"
           :parse-error="parseError"
           :busy="configBusy"
+          :refreshing="refreshingModels"
           @edit="emit('edit')"
           @create="emit('create')"
+          @refresh-models="emit('refresh-models')"
         />
       </section>
 
@@ -207,6 +207,14 @@ function setAllVisible(visible: boolean): void {
             <span class="provider-detail-section__scope">仅影响模型选择器</span>
           </div>
           <div class="provider-detail__bulk-actions">
+            <AppButton
+              v-if="row.entry === null && (row.configured || row.authStatus.storedType !== null || row.authStatus.authTypes.includes('oauth'))"
+              variant="compact"
+              :disabled="refreshingModels"
+              @click="emit('refresh-models')"
+            >
+              {{ refreshingModels ? '正在刷新…' : '从云端刷新模型' }}
+            </AppButton>
             <AppButton
               variant="compact"
               :disabled="!canToggle || row.models.length === 0 || row.hiddenIds.size === 0"

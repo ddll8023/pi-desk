@@ -1,5 +1,6 @@
 <!-- 自定义供应商条目编辑器：编辑 Pi 的 models.json 里 `providers` 下的一个供应商条目，作为弹窗内容挂载。
      表单与「原始 JSON」是同一份内容的两种视图：原始 JSON 文本是唯一事实来源，表单字段读写它。
+     支持依据当前填写的 Base URL 与 API Key 向兼容端点探测并自动填充模型列表。
      密钥不回显：apiKey 与 headers 的值由主进程以哨兵文本回传，保存时按位置还原为磁盘上的原值。
      本区块只提交这一个条目，不提供 modelOverrides 的专用表单（仍可在原始 JSON 里编辑）；
      保存与取消按钮由弹窗 footer 承载，这里把提交入口、校验结论与脏状态暴露给弹窗。 -->
@@ -8,6 +9,7 @@ import { computed, ref } from 'vue'
 import { storeToRefs } from 'pinia'
 import { MODELS_CONFIG_SECRET_SENTINEL } from '../../../../shared/models-config-api'
 import { useModelsConfigStore } from '../stores/models-config'
+import { fetchEndpointModels } from '../services/models-config'
 import AppButton from '../../ui/AppButton.vue'
 import AppSelect from '../../ui/AppSelect.vue'
 
@@ -41,6 +43,13 @@ const API_GROUPS = [{ options: API_OPTIONS }]
 
 const store = useModelsConfigStore()
 const { busy } = storeToRefs(store)
+
+/** 正在从端点探测/拉取模型列表。 */
+const fetchingModels = ref(false)
+/** 拉取模型的轻量成功反馈。 */
+const fetchModelsNotice = ref<string | null>(null)
+/** 拉取模型失败的错误反馈。 */
+const fetchModelsError = ref<string | null>(null)
 
 /** 供应商 ID；只有新建时可改。 */
 const providerId = ref(props.providerId)
@@ -252,6 +261,71 @@ function removeModel(index: number): void {
   })
 }
 
+/** 从端点自动探测并填充模型列表。 */
+async function onFetchEndpointModels(): Promise<void> {
+  const url = baseUrl.value.trim()
+  if (url === '') {
+    fetchModelsError.value = '请先输入 Base URL，再拉取模型。'
+    fetchModelsNotice.value = null
+    return
+  }
+  fetchingModels.value = true
+  fetchModelsNotice.value = null
+  fetchModelsError.value = null
+
+  const headersObj: Record<string, string> = {}
+  for (const row of headerDraft.value) {
+    if (row.name.trim() !== '') headersObj[row.name.trim()] = row.value
+  }
+
+  const result = await fetchEndpointModels({
+    baseUrl: url,
+    apiKey: apiKeyInput.value !== '' ? apiKeyInput.value : undefined,
+    headers: Object.keys(headersObj).length > 0 ? headersObj : undefined,
+    providerId: props.mode === 'edit' ? props.providerId : providerId.value.trim() || undefined
+  })
+
+  fetchingModels.value = false
+  if (!result.ok) {
+    fetchModelsError.value = result.error.message
+    return
+  }
+
+  if (result.models.length === 0) {
+    fetchModelsError.value = '端点未返回任何可用模型。'
+    return
+  }
+
+  updateDraft((draft) => {
+    const existingList = Array.isArray(draft.models) ? [...draft.models] : []
+    const existingMap = new Map<string, Record<string, unknown>>()
+    for (const item of existingList) {
+      if (isRecord(item) && typeof item.id === 'string' && item.id.trim() !== '') {
+        existingMap.set(item.id.trim(), item)
+      }
+    }
+    const nextList: Record<string, unknown>[] = []
+    for (const fetched of result.models) {
+      const prev = existingMap.get(fetched.id)
+      if (prev !== undefined) {
+        nextList.push(prev)
+        existingMap.delete(fetched.id)
+      } else {
+        nextList.push({
+          id: fetched.id,
+          ...(fetched.name ? { name: fetched.name } : {})
+        })
+      }
+    }
+    for (const remaining of existingMap.values()) {
+      nextList.push(remaining)
+    }
+    draft.models = nextList
+  })
+
+  fetchModelsNotice.value = `已成功拉取 ${result.models.length} 个模型。`
+}
+
 function readHeaderRows(): { name: string; value: string }[] {
   const value = parsedDraft.value?.headers
   if (!isRecord(value)) return []
@@ -431,8 +505,23 @@ defineExpose({ submit, canSave, saveBlockReason, dirty })
     <div class="provider-definition__block">
       <div class="provider-definition__block-heading">
         <h3 class="provider-definition__block-title">模型</h3>
-        <AppButton variant="compact" :disabled="!formReady" @click="addModel">添加模型</AppButton>
+        <div class="flex items-center gap-2">
+          <AppButton
+            variant="compact"
+            :disabled="!formReady || fetchingModels"
+            @click="onFetchEndpointModels"
+          >
+            {{ fetchingModels ? '正在拉取…' : '从端点拉取模型' }}
+          </AppButton>
+          <AppButton variant="compact" :disabled="!formReady" @click="addModel">添加模型</AppButton>
+        </div>
       </div>
+      <p v-if="fetchModelsNotice !== null" class="hint-text text-desk-accent mb-2">
+        {{ fetchModelsNotice }}
+      </p>
+      <p v-if="fetchModelsError !== null" role="alert" class="status-notice status-notice-error mb-2">
+        {{ fetchModelsError }}
+      </p>
       <p v-if="modelList.length === 0" class="hint-text">还没有模型；一个供应商至少需要一个模型。</p>
       <div
         v-for="index in modelIndexes"

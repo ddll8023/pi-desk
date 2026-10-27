@@ -5,6 +5,8 @@
 import type {
   ModelsConfigDeleteRequest,
   ModelsConfigError,
+  ModelsConfigFetchEndpointModelsRequest,
+  ModelsConfigFetchEndpointModelsResult,
   ModelsConfigResult,
   ModelsConfigSaveRequest
 } from '../../../../shared/models-config-api'
@@ -57,6 +59,19 @@ export async function deleteModelsConfigProvider(providerId: string): Promise<Mo
   const request: ModelsConfigDeleteRequest = { providerId }
   try {
     return await bridge.deleteModelsConfigProvider(request)
+  } catch (error) {
+    return callFailed(error)
+  }
+}
+
+/** 向指定 Base URL 探测可用模型列表。 */
+export async function fetchEndpointModels(
+  request: ModelsConfigFetchEndpointModelsRequest
+): Promise<ModelsConfigFetchEndpointModelsResult> {
+  const bridge = window.desktop
+  if (!bridge || typeof bridge.fetchEndpointModels !== 'function') return unavailable()
+  try {
+    return await bridge.fetchEndpointModels(request)
   } catch (error) {
     return callFailed(error)
   }

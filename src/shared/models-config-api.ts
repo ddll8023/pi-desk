@@ -13,6 +13,8 @@ export const MODELS_CONFIG_GET_CHANNEL = 'desktop:models-config-get'
 export const MODELS_CONFIG_SAVE_PROVIDER_CHANNEL = 'desktop:models-config-save-provider'
 /** 只接受 `{ providerId }`：删除一个供应商条目。 */
 export const MODELS_CONFIG_DELETE_PROVIDER_CHANNEL = 'desktop:models-config-delete-provider'
+/** 接受 `{ baseUrl, apiKey?, headers?, providerId? }`：向端点拉取可用模型列表。 */
+export const MODELS_CONFIG_FETCH_ENDPOINT_MODELS_CHANNEL = 'desktop:models-config-fetch-endpoint-models'
 
 /**
  * 密钥占位文本。页面看到的 `apiKey` 与 `headers` 值都是它；保存时主进程按位置换回磁盘上的原值，
@@ -75,6 +77,24 @@ export interface ModelsConfigDeleteRequest {
   readonly providerId: string
 }
 
+/** 从端点探测拉取到的模型项。 */
+export interface ModelsConfigFetchedModel {
+  readonly id: string
+  readonly name?: string
+}
+
+/** 探测端点可用模型的请求。 */
+export interface ModelsConfigFetchEndpointModelsRequest {
+  readonly baseUrl: string
+  readonly apiKey?: string
+  readonly headers?: Record<string, string>
+  readonly providerId?: string
+}
+
+export type ModelsConfigFetchEndpointModelsResult =
+  | { readonly ok: true; readonly models: readonly ModelsConfigFetchedModel[] }
+  | { readonly ok: false; readonly error: ModelsConfigError }
+
 export interface ModelsConfigApi {
   /** 读取供应商快照；每次调用都重新读盘，并把它作为后续保存的比对基线。 */
   readonly getModelsConfig: () => Promise<ModelsConfigResult>
@@ -82,6 +102,8 @@ export interface ModelsConfigApi {
   readonly saveModelsConfigProvider: (request: ModelsConfigSaveRequest) => Promise<ModelsConfigResult>
   /** 删除一个供应商条目；条目不存在时不写文件，直接返回当前快照。 */
   readonly deleteModelsConfigProvider: (request: ModelsConfigDeleteRequest) => Promise<ModelsConfigResult>
+  /** 向端点探测并拉取可用模型列表。 */
+  readonly fetchEndpointModels: (request: ModelsConfigFetchEndpointModelsRequest) => Promise<ModelsConfigFetchEndpointModelsResult>
 }
 
 // 与 desktop-api.ts 的共享错误码保持一致；本契约不追加专有错误码。
@@ -149,3 +171,32 @@ export function isModelsConfigDeleteRequest(value: unknown): value is ModelsConf
   if (!Object.keys(value).every((key) => key === 'providerId')) return false
   return isBoundedString(value.providerId, MODELS_CONFIG_MAX_PROVIDER_ID_CHARS)
 }
+
+export function isModelsConfigFetchEndpointModelsRequest(value: unknown): value is ModelsConfigFetchEndpointModelsRequest {
+  if (!isRecord(value)) return false
+  if (typeof value.baseUrl !== 'string' || value.baseUrl.trim() === '' || value.baseUrl.length > 2048) return false
+  if (value.apiKey !== undefined && (typeof value.apiKey !== 'string' || value.apiKey.length > 4096)) return false
+  if (value.providerId !== undefined && !isBoundedString(value.providerId, MODELS_CONFIG_MAX_PROVIDER_ID_CHARS)) return false
+  if (value.headers !== undefined) {
+    if (!isRecord(value.headers)) return false
+    for (const [k, v] of Object.entries(value.headers)) {
+      if (typeof k !== 'string' || typeof v !== 'string' || k.length > 256 || v.length > 2048) return false
+    }
+  }
+  return true
+}
+
+export function isModelsConfigFetchEndpointModelsResult(value: unknown): value is ModelsConfigFetchEndpointModelsResult {
+  if (!isRecord(value)) return false
+  if (value.ok === true) {
+    return Array.isArray(value.models) && value.models.every((m: unknown) => (
+      isRecord(m) && typeof m.id === 'string' && m.id.trim() !== '' && (m.name === undefined || typeof m.name === 'string')
+    ))
+  }
+  if (value.ok !== false || !isRecord(value.error)) return false
+  const { code, message } = value.error
+  return typeof message === 'string'
+    && typeof code === 'string'
+    && MODELS_CONFIG_ERROR_CODES.includes(code)
+}
+

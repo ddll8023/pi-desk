@@ -1,6 +1,6 @@
 /**
  * 第三方自定义供应商的唯一读写者：读取 Pi 的 `<agent-dir>/models.json`、按单个条目新增或替换、
- * 删除条目，并把结果投影成页面契约（`shared/models-config-api.ts`）。
+ * 删除条目，向端点探测可用模型列表，并把结果投影成页面契约（`shared/models-config-api.ts`）。
  *
  * 边界：
  * - 只处理顶层 `providers` 映射。其他顶层键、其他供应商条目、以及被编辑条目里未涉及的字段
@@ -18,7 +18,13 @@
  */
 import { chmod, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import type { ModelsConfigErrorCode, ModelsConfigProvider, ModelsConfigSnapshot } from '../../shared/models-config-api'
+import type {
+  ModelsConfigErrorCode,
+  ModelsConfigFetchedModel,
+  ModelsConfigFetchEndpointModelsRequest,
+  ModelsConfigProvider,
+  ModelsConfigSnapshot
+} from '../../shared/models-config-api'
 import { MODELS_CONFIG_MAX_PROVIDERS, MODELS_CONFIG_SECRET_SENTINEL } from '../../shared/models-config-api'
 import { FileLockError, withFileLock } from '../shared/file-lock'
 import { getPiAgentDir } from '../shared/pi-paths'
@@ -321,4 +327,128 @@ export class ModelsConfigManager {
   private filePath(): string {
     return join(getPiAgentDir(), CONFIG_FILE_NAME)
   }
+
+  /**
+   * 向指定 Base URL 探测可用模型列表（例如兼容 OpenAI 的 `/models` 端点）。
+   * 若密钥为哨兵且提供了 providerId，则还原为磁盘上已保存的真实密钥。
+   */
+  async fetchEndpointModels(request: ModelsConfigFetchEndpointModelsRequest): Promise<ModelsConfigFetchedModel[]> {
+    const rawUrl = request.baseUrl.trim()
+    if (!rawUrl.startsWith('http://') && !rawUrl.startsWith('https://')) {
+      throw new ModelsConfigError('INVALID_REQUEST', 'Base URL 必须以 http:// 或 https:// 开头。')
+    }
+
+    // 解析出实际密钥
+    let apiKey = request.apiKey?.trim()
+    if ((apiKey === undefined || apiKey === '' || apiKey === MODELS_CONFIG_SECRET_SENTINEL) && request.providerId) {
+      // 尝试从已解析的 providers 中恢复
+      if (this.parsed === null) await this.load()
+      if (this.parsed && isRecord(this.parsed.providers)) {
+        const existing = this.parsed.providers[request.providerId]
+        if (isRecord(existing) && typeof existing.apiKey === 'string') {
+          apiKey = existing.apiKey
+        }
+      }
+    }
+    if (apiKey === MODELS_CONFIG_SECRET_SENTINEL) apiKey = undefined
+
+    // 组合请求头
+    const headers: Record<string, string> = {
+      Accept: 'application/json'
+    }
+    if (apiKey && apiKey !== '') {
+      headers.Authorization = `Bearer ${apiKey}`
+    }
+    if (request.headers) {
+      for (const [name, value] of Object.entries(request.headers)) {
+        if (value !== MODELS_CONFIG_SECRET_SENTINEL) {
+          headers[name] = value
+        } else if (request.providerId && this.parsed && isRecord(this.parsed.providers)) {
+          const existing = this.parsed.providers[request.providerId]
+          if (isRecord(existing) && isRecord(existing.headers) && typeof existing.headers[name] === 'string') {
+            headers[name] = existing.headers[name]
+          }
+        }
+      }
+    }
+
+    const cleanBase = rawUrl.replace(/\/+$/, '')
+    // 优先探测 `/models`；若基础 URL 尚未包含 /v1 且第一次失败，可兜底探测 /v1/models
+    const candidateUrls = cleanBase.endsWith('/models')
+      ? [cleanBase]
+      : cleanBase.endsWith('/v1')
+        ? [`${cleanBase}/models`]
+        : [`${cleanBase}/models`, `${cleanBase}/v1/models`]
+
+    let lastError: string | null = null
+    for (const targetUrl of candidateUrls) {
+      const controller = new AbortController()
+      const timer = setTimeout(() => controller.abort(), 10_000)
+      try {
+        const response = await fetch(targetUrl, {
+          method: 'GET',
+          headers,
+          signal: controller.signal
+        })
+        if (!response.ok) {
+          lastError = `端点返回 HTTP ${response.status} (${response.statusText})`
+          continue
+        }
+        const data: unknown = await response.json()
+        const models = parseModelsFromResponse(data)
+        if (models.length > 0) return models
+        lastError = '端点未返回任何模型项。'
+      } catch (err) {
+        if (err instanceof Error && err.name === 'AbortError') {
+          lastError = '连接端点超时（10秒），请检查网络连接或 Base URL。'
+        } else {
+          lastError = `请求端点失败：${describeError(err)}`
+        }
+      } finally {
+        clearTimeout(timer)
+      }
+    }
+
+    throw new ModelsConfigError('INTERNAL_ERROR', lastError ?? '无法从端点获取模型列表。')
+  }
+}
+
+/** 从端点返回的 JSON 中提取模型列表（兼容 OpenAI 与 Ollama 格式）。 */
+function parseModelsFromResponse(data: unknown): ModelsConfigFetchedModel[] {
+  if (!isRecord(data)) return []
+  const list: ModelsConfigFetchedModel[] = []
+  const seen = new Set<string>()
+
+  // OpenAI: { data: [{ id: "...", name?: "..." }] }
+  if (Array.isArray(data.data)) {
+    for (const item of data.data) {
+      if (isRecord(item) && typeof item.id === 'string' && item.id.trim() !== '') {
+        const id = item.id.trim()
+        if (!seen.has(id)) {
+          seen.add(id)
+          const name = typeof item.name === 'string' && item.name.trim() !== '' ? item.name.trim() : undefined
+          list.push({ id, ...(name ? { name } : {}) })
+        }
+      }
+    }
+  }
+
+  // Ollama: { models: [{ name: "...", model: "..." }] }
+  if (list.length === 0 && Array.isArray(data.models)) {
+    for (const item of data.models) {
+      if (isRecord(item)) {
+        const rawId = typeof item.name === 'string' && item.name.trim() !== ''
+          ? item.name.trim()
+          : typeof item.model === 'string' && item.model.trim() !== ''
+            ? item.model.trim()
+            : null
+        if (rawId && !seen.has(rawId)) {
+          seen.add(rawId)
+          list.push({ id: rawId })
+        }
+      }
+    }
+  }
+
+  return list
 }
