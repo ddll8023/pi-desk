@@ -53,7 +53,7 @@
 | --- | --- |
 | `src/renderer/src/sessions/stores/session.ts` | 按项目的列表窗口与读取调度、串行打开／重载、按标签意图提交打开、删除与待确认目标 |
 | `src/renderer/src/sessions/stores/session-runs.ts` | 运行清单、副本状态、释放与结束 |
-| `src/renderer/src/sessions/stores/session-view.ts` | 会话输入、阅读与展开状态，按标签保存待发送快照，原位新草稿的独立留底、批注交付目标身份核对及附件移交与回收 |
+| `src/renderer/src/sessions/stores/session-view.ts` | 会话输入、阅读与展开状态，按标签保存待发送快照、核对同步并保留未确认输入，原位新草稿的独立留底、批注交付目标身份核对及附件移交与回收 |
 | `src/renderer/src/sessions/stores/chat-navigation.ts` | 对话内跳转登记：按会话键发布轮次入口与当前轮，并转交一次性跳转意图 |
 | `src/renderer/src/sessions/stores/extension-ui.ts` | 运行目标的扩展对话、通知、widget 展示副本 |
 | `src/renderer/src/sessions/services/session.ts` | 会话请求桥接 |
@@ -70,8 +70,8 @@
 
 | 文件 | 用途 |
 | --- | --- |
-| `src/renderer/src/sessions/components/PromptComposer.vue` | 输入、附件、文件树拖入引用、命令与补全；浏览器批注草稿合并；点击固定待发送快照、后台提交及失败恢复 |
-| `src/renderer/src/sessions/components/ChatMessageList.vue` | 本地待发送展示与权威消息交接、历史加载、滚动与布局观察；向顶部栏发布对话跳转入口并执行跳转 |
+| `src/renderer/src/sessions/components/PromptComposer.vue` | 输入、附件、文件树拖入引用、命令与补全；浏览器批注草稿合并；点击固定待发送快照、后台提交及失败恢复；显式同步与确认结束原运行后的输入恢复 |
+| `src/renderer/src/sessions/components/ChatMessageList.vue` | 本地待发送／结果未确认状态展示与权威消息交接、历史加载、滚动与布局观察；向顶部栏发布对话跳转入口并执行跳转 |
 | `src/renderer/src/sessions/components/ChatTurnItem.vue` | 按轮摘要、展开与原文内容 |
 | `src/renderer/src/sessions/components/ChatMessageItem.vue` | 单消息、思考、工具归组面板与生成式界面分发 |
 | `src/renderer/src/sessions/components/HistoryLoadSentinel.vue` | 历史加载触发哨兵 |
@@ -116,6 +116,10 @@
 已有会话的聊天面板在活动标签与前台身份一致时显示，或在该标签有该会话的日志历史时显示：身份已匹配就先展示缓存内容，输入、回退与压缩另按交互状态门禁，不拿打开动作的收尾当可见条件。本地待发送消息也能独立保持面板可见，身份未匹配时仍隐藏原会话内容，不退回整页占位。原位新草稿使用独立空态与输入身份，提交后由待发送展示接替空态，不以旧 Runtime 的就绪状态决定展示或发送目标；新建流程见[工作区标签](workspace-tabs.md#关键流程)。
 
 本地待发送状态固定原项目、标签与本次输入，独立于权威投影，不生成历史身份，也不提供回退操作；后续编辑属于下一份草稿，不混入当前提交。同一标签有待发送消息时不重复提交，界面命令也先保留草稿并拒绝穿插。正式用户消息到达后交还展示位；请求受理不等于正式投影已同步，待发送气泡也不代表 SDK 已执行或历史已落盘。
+
+请求受理后安排一次有限的同步核对；仅在原标签仍展示原绑定时补读权威投影。原目标未连接、绑定变化、同步未完成或未发现正式用户消息时，保留为「结果未确认」，不据此判定输入未执行。输入坞的「重新同步」只核对投影，不再次提交输入；等待边界以 `src/renderer/src/sessions/stores/session-view.ts` 为准。
+
+「结束原运行并恢复输入」须显式确认，先重新核对消息，再按原目标结束运行；原槽位已确认释放且标签仍为空白时可直接恢复。结束未确认或目标变化时保留原输入，后续草稿仍按原归属交回。恢复保留文字、附件及后续草稿，不自动发送；关闭期间已观察到正式消息时只交回后续草稿，不重复恢复原输入。切走或卸载后的恢复快照留在原标签，重新进入时才交回输入，不转投其他标签。
 
 启动或提交失败时，输入按原归属合并恢复，保留后续草稿和新附件；已观察到正式用户消息时，不再把同一输入恢复成可重复发送的草稿。启动等待期间切换项目、标签或卸载输入组件会取消自动发送，将快照连同后续草稿保留在原标签，重新进入后恢复输入而不自动重发；标签关闭时回收附件。请求已经发出后切换展示不撤销执行，迟到结果只收敛原请求与输入归属。
 

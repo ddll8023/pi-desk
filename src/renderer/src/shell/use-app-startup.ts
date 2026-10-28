@@ -40,6 +40,8 @@ export function useAppStartup(): void {
       get awaitingInterrupt() { return session.awaitingInterrupt },
       get loadedSessionIds() { return session.loadedSessionIds },
       sessionsOf: projectPath => session.sessionsOf(projectPath),
+      // 延迟读取，避免标签与输入状态在 Store 初始化期间互相实例化。
+      hasPendingPrompt: (projectPath, tabKey) => useSessionViewStore().hasPendingPrompt(projectPath, tabKey),
       waitForOpenActions: () => session.waitForOpenActions(),
       invalidateOpenSelection: () => session.invalidateOpenSelection()
     }

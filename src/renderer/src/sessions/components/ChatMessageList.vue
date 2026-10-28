@@ -1,4 +1,4 @@
-<!-- 待发送消息独立于权威投影展示；首次启动也立即呈现输入，收到正式用户消息后交接，不提供历史操作。
+<!-- 待发送消息独立于权威投影展示；有限核对后区分等待与结果未确认，保留原输入并在正式消息到达后交接。
      原位新建时保持消息区挂载与阅读留底，但隐藏旧内容、暂停旧会话操作并收起浮层。
      消息区：按投影渲染、粘底与对话内跳转；承接用户消息回退确认与修改提交，回退会新建会话（列表折叠为一条），项目文件不回退；回退把原消息文本与可还原的附件交回输入框，修改重试在没能重发时交回修改后的文本。
      每一轮的用户输入摘要与当前所在轮由这里发布给顶部栏的跳转列表，跳转意图也回到这里执行，滚动与折叠仍只有本组件一处权威。
@@ -68,6 +68,19 @@ const turns = computed(() => viewCache.toTurns(messages.value, tools.value))
 const pendingPrompt = computed(() => sessionViewStore.pendingPrompt)
 const showPendingPrompt = computed(() => pendingPrompt.value !== null
   && !sessionViewStore.hasPendingMessage(pendingPrompt.value))
+const pendingPromptText = computed(() => {
+  const pending = pendingPrompt.value
+  if (pending === null) return ''
+  if (pending.checking) return '正在核对消息同步…'
+  switch (pending.phase) {
+    case 'starting': return '待发送 · 正在准备会话…'
+    case 'sending': return '正在发送…'
+    case 'cancelled': return '正在恢复输入，不会自动发送…'
+    case 'recovering': return '正在结束原运行并恢复输入…'
+    case 'unconfirmed': return pending.notice ?? '提交结果未确认；原输入已保留，不会自动重发。'
+    case 'accepted': return '已提交 · 等待消息同步…'
+  }
+})
 
 /**
  * 一轮是否展开：手动开合优先，其次是默认——当前轮与上一轮始终展开，更早的轮次看顶部全局开关。
@@ -879,13 +892,13 @@ onBeforeUnmount(() => {
         </p>
         </div>
 
-        <article v-if="showPendingPrompt && pendingPrompt !== null" class="chat-message chat-message-user" aria-label="待发送消息" :aria-busy="pendingPrompt.phase !== 'cancelled'">
+        <article v-if="showPendingPrompt && pendingPrompt !== null" class="chat-message chat-message-user" aria-label="待发送消息" :aria-busy="pendingPrompt.checking || (pendingPrompt.phase !== 'cancelled' && pendingPrompt.phase !== 'unconfirmed')">
           <div v-for="image in pendingPrompt.input.images" :key="image.objectUrl" class="self-end">
             <img :src="image.objectUrl" :alt="image.file.name" class="max-h-64 max-w-full rounded-desk-lg" />
           </div>
           <div v-if="pendingPrompt.input.draft !== ''" class="chat-bubble chat-bubble-user self-end">{{ pendingPrompt.input.draft }}</div>
           <p class="self-end text-xs text-desk-muted" role="status">
-            {{ pendingPrompt.phase === 'starting' ? '待发送 · 正在准备会话…' : pendingPrompt.phase === 'sending' ? '正在发送…' : pendingPrompt.phase === 'cancelled' ? '已取消自动发送，正在恢复输入…' : '已提交 · 等待消息同步…' }}
+            {{ pendingPromptText }}
           </p>
         </article>
       </div>

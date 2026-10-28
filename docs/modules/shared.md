@@ -102,7 +102,7 @@
 | --- | --- |
 | `src/renderer/src/ui/AppButton.vue` | 原生按钮及统一视觉变体；业务组件共用 |
 | `src/renderer/src/ui/AppSelect.vue` | 自定义选择器；业务表单共用 |
-| `src/renderer/src/ui/ConfirmDialog.vue` | 通用确认弹层；应用外壳、聊天列表、文件编辑、Git、供应商、资源、终端设置与快捷命令消费 |
+| `src/renderer/src/ui/ConfirmDialog.vue` | 通用确认弹层；应用外壳、聊天列表、聊天输入坞、文件编辑、Git、供应商、资源、终端设置与快捷命令消费 |
 | `src/renderer/src/ui/anchored-popup.ts` | 浮层定位与生命周期；标签、菜单、文件编辑、Git、侧栏与基础选择器消费 |
 | `src/renderer/src/ui/clipboard.ts` | 复制文本与错误结果；聊天、文件、供应商、资源、终端、更新与生成式界面消费 |
 | `src/renderer/src/ui/MarkdownContent.vue` | 安全 Markdown 展示、数学与代码／表格交互；聊天正文的 Thinking、回答与技能正文以及手机网页消息消费 |

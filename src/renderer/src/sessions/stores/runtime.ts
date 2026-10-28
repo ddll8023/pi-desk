@@ -142,6 +142,7 @@ export const useRuntimeStore = defineStore('runtime', () => {
     initialize,
     dispose,
     send: core.send,
+    syncProjection: core.syncProjection,
     rewind: core.rewind,
     compact: core.compact,
     switchModel: modelSlice.switchModel,

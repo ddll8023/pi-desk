@@ -1,4 +1,4 @@
-<!-- 点击发送即固定文字与附件并显示待发送消息，后台就绪后提交；失败恢复输入，不覆盖期间的新草稿。
+<!-- 点击发送即固定文字与附件并显示待发送消息；结果未确认时可补读同步，确认结束原运行后恢复输入，不自动重发。
      原位新建以独立草稿承接输入：旧实例结束期间可编辑但不发送，首次发送才建立新会话。
      Prompt 输入坞：处理输入法组合态、Enter 发送与 Shift+Enter 换行、焦点回归与重复提交、响应侧栏「新建」的聚焦请求并给出一次性提示，并在 Agent 运行期间原位提供停止入口；同时承接 Extension 的 set_editor_text 填充文本、图片附件的选择/粘贴/拖拽三种入口、输入行按内容自动增高、快捷发送下拉（短语取自界面偏好，可在设置里增删改与排序）、Pi 命令的斜杠模糊补全（Runtime 就绪后用运行中的命令清单，未就绪时用主进程预读的技能清单，按类型分组并按匹配优先级排序；另含 Desktop 层自己拦截的界面命令）与 `@` 项目文件引用（只写入相对路径文本，不传文件内容）；右侧文件树的行拖入坞内也走同一条相对路径引用规则。底部工具条左侧是信息行：异常与进行中的状态文本、被收起的 Extension 对话入口与会话用量指标（缓存命中率、上下文占用与平均速率，点击开明细；累计 token 与费用只在明细浮层展示）；右侧是模型选择、附件、快捷发送与发送/停止按钮。Extension 的 setStatus 项不在输入区展示。 -->
 <script setup lang="ts">
@@ -14,11 +14,12 @@ import { useProjectStore } from '../../projects/stores/project'
 import { useRuntimeStore } from '../stores/runtime'
 import { useSessionStore } from '../stores/session'
 import { isSavedInputKey, useSessionViewStore } from '../stores/session-view'
-import type { PendingImage } from '../stores/session-view'
+import type { PendingImage, SessionInput } from '../stores/session-view'
 import { useWorkspaceTabsStore } from '../../workspace/stores/workspace-tabs'
 import { parseDialogTitle } from '../extension-dialog-presentation'
 import { cacheHitRate, formatTokens } from '../usage-format'
 import AppButton from '../../ui/AppButton.vue'
+import ConfirmDialog from '../../ui/ConfirmDialog.vue'
 import RuntimeModelSelect from '../../providers/components/RuntimeModelSelect.vue'
 import UsageDetailDialog from './UsageDetailDialog.vue'
 import { hasProjectEntryDragData, projectEntryReferenceText, readProjectEntryDragData } from '../../ui/project-entry-drag'
@@ -46,6 +47,15 @@ let mounted = true
 let startupProjectPath: string | null = null
 let startupTabKey: string | null = null
 const submitting = ref(false)
+const pendingRecoveryId = ref<number | null>(null)
+const pendingSyncPrompt = computed(() => {
+  const pending = sessionViewStore.pendingPrompt
+  return props.active && pending !== null && (pending.phase === 'accepted' || pending.phase === 'unconfirmed')
+    ? pending : null
+})
+// 确认只属于弹出时的项目、标签与消息；切走后不能用旧确认结束别的会话。
+watch(() => [workspaceTabsStore.activeTab, projectStore.currentProject?.path, props.active,
+  sessionViewStore.pendingPrompt?.id] as const, () => { pendingRecoveryId.value = null })
 /** 输入法组合态：此期间的 Enter 只确认候选词，不能当发送。 */
 const composing = ref(false)
 const textarea = ref<HTMLTextAreaElement | null>(null)
@@ -199,7 +209,8 @@ const stopVisible = computed(() => (
 const canSubmit = computed(() => {
   // 交互条件比“可见”严：内容可以先展示，向尚未确认的目标提交则不行。
   if (!props.active || !workspaceTabsStore.isChatInteractive) return false
-  if (submitting.value || sessionStore.opening || sessionStore.awaitingTrust || sessionStore.awaitingInterrupt) return false
+  if (submitting.value || sessionViewStore.pendingPrompt?.phase === 'recovering'
+    || sessionStore.opening || sessionStore.awaitingTrust || sessionStore.awaitingInterrupt) return false
   if (workspaceTabsStore.isChatNewDraft) return canStartRuntime.value && projectStore.currentProject !== null
   if (sending.value || preparingPrompt.value || modelSwitchView.value.phase === 'switching'
     || rewindView.value.phase === 'requesting' || compactView.value.phase === 'requesting'
@@ -881,6 +892,7 @@ async function dispatchPendingPrompt(id: number): Promise<void> {
   const originKey = sessionViewStore.key
   sessionViewStore.updatePendingPrompt(id, { phase: 'sending', inputKey: originKey,
     target: target.runId === null ? null : { runId: target.runId, runtimeId: target.runtimeId },
+    sessionId: target.info?.sessionId ?? null,
     previousUserIds: runtimeStore.messages.filter(message => message.role === 'user').map(message => message.id) })
   submitting.value = true
   preparingPrompt.value = true
@@ -929,6 +941,102 @@ async function dispatchPendingPrompt(id: number): Promise<void> {
   }
 }
 
+/** 恢复失败时只交回期间留底的后续草稿，不把结果未知的原输入当成未发送。 */
+async function restoreFollowingInput(projectPath: string, tabKey: string, inputKey: string, input: SessionInput): Promise<void> {
+  // 原位新建会改变输入身份，先让现有的输入留底 watch 完成，避免回填又被清空。
+  await nextTick()
+  if (!workspaceTabsStore.hasChatTabKey(projectPath, tabKey)) {
+    sessionViewStore.releaseImages(input.images)
+  } else if (mounted && workspaceTabsStore.activeTab === tabKey && projectStore.currentProject?.path === projectPath) {
+    draft.value = [input.draft, draft.value].filter(Boolean).join('\n')
+    pendingImages.value = [...input.images, ...pendingImages.value]
+  } else {
+    const sessionId = workspaceTabsStore.sessionIdForTab(projectPath, tabKey)
+    sessionViewStore.restoreInput(sessionId === null ? inputKey : `session:${sessionId}`, input)
+  }
+}
+
+/** 用户确认后先核对同步，再结束原运行；关闭未确认时不恢复原输入，更不自动重发。 */
+async function confirmPendingRecovery(): Promise<void> {
+  const id = pendingRecoveryId.value
+  pendingRecoveryId.value = null
+  if (id === null || !mounted || !props.active || submitting.value || sessionStore.opening) return
+  const selected = sessionViewStore.pendingPrompt
+  if (selected?.id !== id || selected.phase !== 'unconfirmed' || selected.checking) return
+  await sessionViewStore.checkPendingPrompt(id)
+  const pending = sessionViewStore.getPendingPrompt(id)
+  if (pending === null || pending.phase !== 'unconfirmed' || pending.checking || pending.target === null
+    || !mounted || !props.active || sessionStore.opening || workspaceTabsStore.activeTab !== pending.tabKey
+    || projectStore.currentProject?.path !== pending.projectPath) return
+
+  const following: SessionInput = { draft: draft.value, images: [...pendingImages.value] }
+  const originKey = sessionViewStore.key
+  draft.value = ''
+  pendingImages.value = []
+  sessionViewStore.updatePendingPrompt(id, { phase: 'recovering', notice: null })
+  let followingOwned = true
+  const returnFollowing = async (): Promise<void> => {
+    if (!followingOwned) return
+    followingOwned = false
+    await restoreFollowingInput(pending.projectPath, pending.tabKey, originKey, following)
+  }
+  // 结束动作会清空旧投影；同步记住关闭期间到达的正式消息，不能据清空后的视图恢复同一输入。
+  const stopProjectionWatch = watch(() => {
+    const current = sessionViewStore.getPendingPrompt(id)
+    return current !== null && sessionViewStore.hasPendingMessage(current)
+  }, present => {
+    const current = sessionViewStore.getPendingPrompt(id)
+    if (present && current !== null && !current.projected) sessionViewStore.updatePendingPrompt(id, { projected: true })
+  }, { immediate: true, flush: 'sync' })
+  try {
+    if (sessionViewStore.hasPendingMessage(sessionViewStore.getPendingPrompt(id) ?? pending)) {
+      sessionViewStore.finishPendingPrompt(id)
+      await returnFollowing()
+      return
+    }
+    const { outcome } = await workspaceTabsStore.startNewChatInTab({
+      projectPath: pending.projectPath, tabKey: pending.tabKey, runId: pending.target.runId,
+      runtimeId: pending.target.runtimeId, sessionId: pending.sessionId
+    })
+    const current = sessionViewStore.getPendingPrompt(id)
+    if (current === null) {
+      sessionViewStore.releaseImages(following.images)
+      followingOwned = false
+      return
+    }
+    if (outcome === 'started' || outcome === 'already-new') {
+      const projected = sessionViewStore.hasPendingMessage(current)
+      if (projected) sessionViewStore.releaseImages(current.input.images)
+      followingOwned = false
+      sessionViewStore.updatePendingPrompt(id, { phase: 'cancelled', checking: false, projected: false,
+        input: projected ? following : {
+          draft: [current.input.draft, following.draft].filter(Boolean).join('\n'),
+          images: [...current.input.images, ...following.images]
+        } })
+      // 复用按原标签恢复的通道；切走或卸载时保留到下次进入，不跨标签回填。
+      return
+    }
+    await returnFollowing()
+    const remaining = sessionViewStore.getPendingPrompt(id)
+    if (remaining !== null) {
+      if (sessionViewStore.hasPendingMessage(remaining)) sessionViewStore.finishPendingPrompt(id)
+      else sessionViewStore.updatePendingPrompt(id, { phase: 'unconfirmed', notice: outcome === 'refused'
+        ? '结束原运行未确认；原输入已保留，未自动重发。'
+        : '原目标已变化或正在处理会话操作；原输入已保留，请重新核对。' })
+    }
+  } catch (error) {
+    await returnFollowing()
+    const remaining = sessionViewStore.getPendingPrompt(id)
+    if (remaining !== null) {
+      if (sessionViewStore.hasPendingMessage(remaining)) sessionViewStore.finishPendingPrompt(id)
+      else sessionViewStore.updatePendingPrompt(id, { phase: 'unconfirmed',
+        notice: `恢复输入未完成：${error instanceof Error ? error.message : String(error)}；原输入已保留。` })
+    }
+  } finally {
+    stopProjectionWatch()
+  }
+}
+
 function stop(): void {
   void runtimeStore.stopOperation()
 }
@@ -970,7 +1078,7 @@ watch(() => sessionStore.awaitingTrust || sessionStore.awaitingInterrupt, (await
   if (previous && !awaiting && !sessionStore.opening && !runtimeReady.value) cancelStartup()
 })
 
-/** 切回启动已取消的原标签后才恢复输入，避免尚未绑定的草稿串到其他标签。 */
+/** 启动取消或显式恢复后的快照只交回原标签，合并后续草稿，不自动发送。 */
 watch(() => sessionViewStore.pendingPrompt, pending => {
   if (pending?.phase === 'cancelled') restorePendingPrompt(pending.id)
 }, { flush: 'post' })
@@ -1281,6 +1389,18 @@ onMounted(() => {
   <!-- 与消息区同色，输入坞靠描边与阴影浮起；不再用顶部分隔线切开两块。 -->
   <section class="bg-desk-canvas-sunken px-4 py-3 sm:px-6">
     <div class="chat-column mx-auto">
+      <div v-if="pendingSyncPrompt !== null" class="mb-2 flex flex-wrap items-center gap-2">
+        <p v-if="pendingSyncPrompt.phase === 'unconfirmed'" class="text-xs text-desk-muted" role="status">提交结果未确认，文字和附件已保留。</p>
+        <AppButton variant="compact" :disabled="pendingSyncPrompt.checking || submitting || sessionStore.opening"
+          @click="sessionViewStore.checkPendingPrompt(pendingSyncPrompt.id)">
+          {{ pendingSyncPrompt.checking ? '正在核对…' : '重新同步' }}
+        </AppButton>
+        <AppButton v-if="pendingSyncPrompt.phase === 'unconfirmed'" variant="compact"
+          :disabled="pendingSyncPrompt.checking || submitting || sessionStore.opening"
+          @click="pendingRecoveryId = pendingSyncPrompt.id">
+          结束原运行并恢复输入
+        </AppButton>
+      </div>
       <label for="prompt-input" class="sr-only">输入要发送给 Pi 的内容</label>
       <div
         class="prompt-composer-shell"
@@ -1521,6 +1641,15 @@ onMounted(() => {
 
     <!-- 用量明细与其它弹层一致：Teleport 到 body，不受输入坞的层叠上下文限制。 -->
     <Teleport to="body">
+      <ConfirmDialog
+        :open="props.active && pendingRecoveryId !== null"
+        title="结束原运行并恢复输入？"
+        description="只结束这条消息所属的运行，保留会话历史；结束成功后恢复文字和附件，并保留后续草稿。"
+        detail="当前提交结果未确认。会先重新核对消息同步；已观察到正式消息时不重复恢复原输入，恢复后也不会自动发送。"
+        confirm-label="结束并恢复输入"
+        @confirm="confirmPendingRecovery"
+        @cancel="pendingRecoveryId = null"
+      />
       <UsageDetailDialog
         :open="usageOpen"
         :usage="usage"

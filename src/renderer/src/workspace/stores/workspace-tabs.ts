@@ -398,7 +398,7 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
   }
 
   /**
-   * 新建对话标签：同一项目内至多一个未落盘的新对话标签，重复点击聚焦已有的那个。
+   * 新建对话标签：优先复用本项目无正式消息且无待提交输入的空白标签，否则新建；待提交标签独立保留。
    * Runtime 闲置时只建立标签、不提交打开请求，空对话本来就能直接输入；
    * 需要打开时返回意图，由调用方交给会话能力提交。
    * `projectPath` 由调用方给出时按它建标签（侧栏可能刚切项目，不等切换完成也能落到正确项目）。
@@ -417,8 +417,15 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
   /**
    * 原位新建先展示独立空白视图，再按原标签结束实例；期间只允许编辑，首次发送才建立新会话。
    * 每个标签只运行一份结束任务，迟到结果只收敛原标签；失败恢复原会话，新草稿留待重试。
+   * 恢复入口用 expected 指定原目标；建立新任务前拒绝换绑，原槽位已释放且空闲时允许恢复。
    */
-  async function startNewChatInTab(): Promise<NewChatInTabResult> {
+  async function startNewChatInTab(expected?: {
+    readonly projectPath: string
+    readonly tabKey: string
+    readonly runId: number
+    readonly runtimeId: number | null
+    readonly sessionId: string | null
+  }): Promise<NewChatInTabResult> {
     const projectPath = currentProjectPath.value
     const key = activeTab.value
     if (projectPath === null || key === null || !isChatKey(key)) return { outcome: 'unavailable', intent: null }
@@ -430,6 +437,19 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
       return { outcome: 'busy', intent: null }
     }
     const runId = resolveRunId(projectPath, key)
+    // 恢复输入前的确认只授权原目标；同步核对期间换标签或换绑后不能结束新目标。
+    if (expected !== undefined) {
+      const view = runtimeStore.view
+      const run = sessionRunsStore.runs.find(candidate => candidate.runId === expected.runId)
+      // 切到另一标签可能已经释放空会话；仅原槽位确实空闲且无绑定时允许恢复，不能接管已换绑的实例。
+      const released = run?.phase === 'idle' && run.sessionId === null && !run.isStreaming && run.waitingDialogs === 0
+      const releasedTab = released && runId === null && record.sessionId === null
+      if (expected.projectPath !== projectPath || expected.tabKey !== key || (expected.runId !== runId && !releasedTab)
+        || (!released && (expected.sessionId !== (record.sessionId ?? sessionIdOfRun(runId))
+          || (view.phase === 'ready' && view.snapshot.runId === runId && view.snapshot.runtimeId !== expected.runtimeId)))) {
+        return { outcome: 'unavailable', intent: null }
+      }
+    }
     const previous = newChats.value[key]
     if (runId === null && record.sessionId === null && previous?.phase !== 'failed') {
       return { outcome: 'already-new', intent: null }
@@ -931,7 +951,7 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
   }
 
   /**
-   * 命名会话按实际身份匹配，null 则只匹配尚无消息的空白标签，不受列表刷新进度影响。
+   * 命名会话按实际身份匹配，null 则只匹配没有正式消息和待提交输入的空白标签。
    * 同一项目已有空标签时优先取活动的那个，
    * 否则新建与打开意图会落到用户看不见的那个标签上。
    */
@@ -942,6 +962,7 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
       const record = chatTabs.value[key]
       if (record === undefined) return false
       if (sessionId !== null) return record.sessionId === sessionId || sessionIdOfRun(record.runId) === sessionId
+      if (session.hasPendingPrompt(projectPath, key)) return false
       const newChat = newChats.value[key]
       if (newChat?.phase === 'closing' || newChat?.phase === 'draft' || newChat?.phase === 'binding') return true
       const run = sessionRunsStore.runs.find(candidate => candidate.runId === record.runId)

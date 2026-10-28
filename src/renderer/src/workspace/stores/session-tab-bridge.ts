@@ -20,6 +20,8 @@ export interface SessionTabState {
   /** 已落盘的会话身份；未落盘的新会话不作为标签身份。 */
   readonly loadedSessionIds: ReadonlySet<string>
   sessionsOf(projectPath: string): readonly SessionSummary[]
+  /** 本地已提交但未交接的输入也占用标签，不能作为空白标签复用。 */
+  hasPendingPrompt(projectPath: string, tabKey: string): boolean
   /** 等待已提交的打开动作收敛并给出实际实例身份。 */
   waitForOpenActions(): Promise<void>
   /** 撤销标签侧的选择意图，不中断已发送的宿主动作。 */

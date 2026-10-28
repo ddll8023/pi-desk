@@ -1,7 +1,8 @@
 /**
  * 按会话保存输入与阅读状态：草稿、待发送附件、粘底与滚动位置，以及未绑定草稿时挑选的目标模型。
  *
- * 待发送消息按标签保存，独立于权威投影；点击即显示，失败时交回输入，启动期间的新草稿不混入提交。
+ * 待发送消息按标签保存，独立于权威投影；受理后有限核对同步，未确认时保留输入，不自动重发。
+ * 恢复期间锁定原目标并记住正式消息是否到达，避免结束运行后把已发送内容重复交回输入。
  * 草稿选中的模型按输入键隔离，不写入全局 settings.json，新会话绑定就绪后才应用并清空。
  * 状态只在内存中保留，不写磁盘；渲染层同一时刻只显示当前会话的那一份，离开会话时写入、
  * 切回时取走，因此切换会话不会把上一个会话的草稿、附件或阅读位置带进下一个会话。
@@ -38,16 +39,21 @@ export interface SessionInput {
   readonly images: PendingImage[]
 }
 
-/** 点击发送时固定的输入；只用于本地待发送展示，不生成投影消息或历史身份。 */
+/** 点击发送时固定的本地提交、同步核对与恢复快照；不生成正式投影消息或历史身份。 */
 export interface PendingPrompt {
   readonly id: number
   readonly projectPath: string
   readonly tabKey: string
   readonly inputKey: string
   readonly input: SessionInput
-  readonly phase: 'starting' | 'sending' | 'accepted' | 'cancelled'
+  readonly phase: 'starting' | 'sending' | 'accepted' | 'unconfirmed' | 'recovering' | 'cancelled'
   readonly target: RuntimeTarget | null
+  readonly sessionId: string | null
   readonly previousUserIds: readonly string[]
+  readonly checking: boolean
+  readonly notice: string | null
+  /** 恢复期间即使原投影被清空，也不能忘记已经观察到的正式消息。 */
+  readonly projected: boolean
 }
 
 /** 一个会话的阅读状态：粘底时不需要滚动位置，离开底部时按保存的像素位置恢复。 */
@@ -60,6 +66,8 @@ export interface SessionReading {
 
 /** 会话键前缀；只有这类键的状态需要按会话留底，空闲与未绑定实例的键不带前缀。 */
 const SESSION_KEY_PREFIX = 'session:'
+/** 受理后只安排一次补读；等待到期只表示结果未确认，不表示输入未执行。 */
+const PENDING_SYNC_WAIT_MS = 10_000
 
 /** 该键是否代表一个已绑定会话；空闲与未绑定实例的键不是会话键。 */
 export function isSessionKey(key: string): boolean {
@@ -86,6 +94,8 @@ export const useSessionViewStore = defineStore('session-view', () => {
   const readings = new Map<string, SessionReading>()
   const pendingPrompts = ref<readonly PendingPrompt[]>([])
   let promptSequence = 0
+  const pendingSyncTimers = new Map<number, ReturnType<typeof setTimeout>>()
+  const pendingSyncCancels = new Map<number, () => void>()
   const pendingPrompt = computed(() => pendingPrompts.value.find(prompt => prompt.tabKey === workspace.activeTab) ?? null)
   /**
    * 由界面动作（回退、修改重试未被受理）交回输入区的待填内容。
@@ -132,10 +142,17 @@ export const useSessionViewStore = defineStore('session-view', () => {
         clearDraftModel(inputKey)
       }
     }, { flush: 'post' })
-    stopPendingWatch = watch(() => [runtime.messages, runtime.foregroundRunId, pendingPrompts.value, workspace.tabs] as const, () => {
+    stopPendingWatch = watch(() => [runtime.messages, runtime.view, pendingPrompts.value, workspace.tabs] as const, () => {
       for (const prompt of pendingPrompts.value) {
-        if (!workspace.hasChatTabKey(prompt.projectPath, prompt.tabKey)
-          || (prompt.phase === 'accepted' && hasPendingMessage(prompt))) finishPendingPrompt(prompt.id)
+        if (!workspace.hasChatTabKey(prompt.projectPath, prompt.tabKey)) {
+          finishPendingPrompt(prompt.id)
+        } else if (hasPendingMessage(prompt)) {
+          if (prompt.phase === 'recovering') {
+            if (!prompt.projected) updatePendingPrompt(prompt.id, { projected: true })
+          } else if (prompt.phase === 'accepted' || prompt.phase === 'unconfirmed') {
+            finishPendingPrompt(prompt.id)
+          }
+        }
       }
     }, { flush: 'post' })
   }
@@ -148,6 +165,9 @@ export const useSessionViewStore = defineStore('session-view', () => {
     stopDraftWatch = null
     stopPendingWatch?.()
     stopPendingWatch = null
+    for (const timer of pendingSyncTimers.values()) clearTimeout(timer)
+    pendingSyncTimers.clear()
+    for (const cancel of [...pendingSyncCancels.values()]) cancel()
     for (const prompt of pendingPrompts.value) releaseImages(prompt.input.images)
     pendingPrompts.value = []
     for (const input of inputs.values()) releaseImages(input.images)
@@ -208,17 +228,30 @@ export const useSessionViewStore = defineStore('session-view', () => {
   function beginPendingPrompt(projectPath: string, tabKey: string, inputKey: string, input: SessionInput): PendingPrompt | null {
     if (pendingPrompts.value.some(prompt => prompt.tabKey === tabKey)) return null
     const prompt: PendingPrompt = { id: ++promptSequence, projectPath, tabKey, inputKey, input,
-      phase: 'starting', target: null, previousUserIds: [] }
+      phase: 'starting', target: null, sessionId: null, previousUserIds: [], checking: false, notice: null, projected: false }
     pendingPrompts.value = [...pendingPrompts.value, prompt]
     return prompt
   }
 
-  function updatePendingPrompt(id: number, update: Partial<Pick<PendingPrompt, 'phase' | 'input' | 'inputKey' | 'target' | 'previousUserIds'>>): void {
+  function updatePendingPrompt(id: number, update: Partial<Pick<PendingPrompt,
+    'phase' | 'input' | 'inputKey' | 'target' | 'sessionId' | 'previousUserIds' | 'checking' | 'notice' | 'projected'>>): void {
     pendingPrompts.value = pendingPrompts.value.map(prompt => prompt.id === id ? { ...prompt, ...update } : prompt)
+    if (update.phase === 'accepted' && getPendingPrompt(id) !== null && !pendingSyncTimers.has(id)) {
+      pendingSyncTimers.set(id, setTimeout(() => {
+        pendingSyncTimers.delete(id)
+        void checkPendingPrompt(id)
+      }, PENDING_SYNC_WAIT_MS))
+    }
+  }
+
+  /** 本地待提交输入也占用原标签，不依赖正式消息是否已经写入投影。 */
+  function hasPendingPrompt(projectPath: string, tabKey: string): boolean {
+    return pendingPrompts.value.some(prompt => prompt.projectPath === projectPath && prompt.tabKey === tabKey)
   }
 
   /** 只按原有投影身份判断交接，不拿文本比较或伪造的消息 id 去重。 */
   function hasPendingMessage(prompt: PendingPrompt): boolean {
+    if (prompt.projected) return true
     const target = prompt.target
     if (target === null || runtime.view.phase !== 'ready'
       || runtime.view.snapshot.runId !== target.runId || runtime.view.snapshot.runtimeId !== target.runtimeId) return false
@@ -230,9 +263,63 @@ export const useSessionViewStore = defineStore('session-view', () => {
     return pendingPrompts.value.find(prompt => prompt.id === id) ?? null
   }
 
+  /** 只核对原标签正在展示的原绑定，切走后不把其他会话的快照当作提交结果。 */
+  function pendingTargetIsCurrent(prompt: PendingPrompt): boolean {
+    const view = runtime.view
+    return prompt.target !== null && workspace.activeTab === prompt.tabKey
+      && workspace.hasChatTabKey(prompt.projectPath, prompt.tabKey) && view.phase === 'ready'
+      && view.snapshot.runId === prompt.target.runId && view.snapshot.runtimeId === prompt.target.runtimeId
+      && (view.snapshot.info?.sessionId ?? null) === prompt.sessionId
+  }
+
+  /** 补读只重同步投影，不再次提交输入；超时或无正式消息都保留为未确认。 */
+  async function checkPendingPrompt(id: number): Promise<void> {
+    const prompt = getPendingPrompt(id)
+    if (prompt === null || prompt.checking || (prompt.phase !== 'accepted' && prompt.phase !== 'unconfirmed')) return
+    const timer = pendingSyncTimers.get(id)
+    if (timer !== undefined) clearTimeout(timer)
+    pendingSyncTimers.delete(id)
+    if (hasPendingMessage(prompt)) {
+      finishPendingPrompt(id)
+      return
+    }
+    if (!pendingTargetIsCurrent(prompt)) {
+      updatePendingPrompt(id, { phase: 'unconfirmed', notice: '原会话未连接或绑定已变化；输入已保留，不会自动重发。' })
+      return
+    }
+    updatePendingPrompt(id, { checking: true, notice: null })
+    const completed = await new Promise<boolean>(resolve => {
+      let finished = false
+      const finish = (value: boolean): void => {
+        if (finished) return
+        finished = true
+        clearTimeout(timeout)
+        pendingSyncCancels.delete(id)
+        resolve(value)
+      }
+      const timeout = setTimeout(() => finish(false), PENDING_SYNC_WAIT_MS)
+      pendingSyncCancels.set(id, () => finish(false))
+      void runtime.syncProjection(prompt.target?.runtimeId ?? undefined).then(() => finish(true), () => finish(false))
+    })
+    const current = getPendingPrompt(id)
+    if (current === null || (current.phase !== 'accepted' && current.phase !== 'unconfirmed')) return
+    if (hasPendingMessage(current)) {
+      finishPendingPrompt(id)
+      return
+    }
+    const synced = completed && pendingTargetIsCurrent(current) && runtime.projectionSync === 'synced'
+    updatePendingPrompt(id, { phase: 'unconfirmed', checking: false, notice: synced
+      ? '尚未找到这条正式消息，提交结果未确认；原输入已保留，不会自动重发。'
+      : '消息同步未完成，提交结果未确认；可重新同步，或结束原运行后恢复输入。' })
+  }
+
   /** 移除后由调用方接管附件，用于失败恢复而不是释放。 */
   function takePendingPrompt(id: number): PendingPrompt | null {
     const prompt = getPendingPrompt(id)
+    const timer = pendingSyncTimers.get(id)
+    if (timer !== undefined) clearTimeout(timer)
+    pendingSyncTimers.delete(id)
+    pendingSyncCancels.get(id)?.()
     pendingPrompts.value = pendingPrompts.value.filter(candidate => candidate.id !== id)
     return prompt
   }
@@ -344,6 +431,8 @@ export const useSessionViewStore = defineStore('session-view', () => {
     key,
     requestedInput,
     pendingPrompt,
+    hasPendingPrompt,
+    checkPendingPrompt,
     beginPendingPrompt,
     updatePendingPrompt,
     hasPendingMessage,

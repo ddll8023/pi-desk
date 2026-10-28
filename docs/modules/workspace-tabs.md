@@ -13,7 +13,7 @@
 | 文件 | 用途 |
 | --- | --- |
 | `src/renderer/src/workspace/stores/workspace-tabs.ts` | 标签记录、项目分组、活动选择、打开意图与绑定、原位新建与失败恢复、关闭链、排序与新回复标记 |
-| `src/renderer/src/workspace/stores/session-tab-bridge.ts` | 标签读取会话状态的只读视图与提供者注册；标签不直接 import 会话 Store |
+| `src/renderer/src/workspace/stores/session-tab-bridge.ts` | 标签读取会话状态与原标签待提交输入的只读视图及提供者注册；标签不直接 import 会话 Store |
 | `src/renderer/src/workspace/components/WorkspaceTabBar.vue` | 标签渲染、选择／关闭／重命名／排序事件与新建菜单 |
 | `src/main/browser/element-picker.ts` | 在隔离世界运行的固定元素选择脚本、悬停高亮、有限上下文采集、取消与画面变化检查 |
 | `src/shared/browser-api.ts` | 浏览器标签与 URL 工具、截图／元素选择／取消契约及结果校验 |
@@ -33,7 +33,7 @@
 - [F-assembly](shared.md#f-assembly进程与页面组装混合)：`src/renderer/src/shell/components/WorkspaceView.vue` 挂载面板并编排浏览器批注向对话草稿的交付；脏文件与未交付批注的关闭确认状态由工作区标签 Store 持有，经 `src/renderer/src/shell/components/AppDialogHost.vue` 展示，快捷命令弹层由快捷命令 Store 持有。
 - [F-runtime-state](shared.md#f-runtime-state综合-runtime-状态混合)：`src/renderer/src/sessions/stores/runtime-core.ts` 提供前台运行身份、就绪情况，以及会话日志历史的展示与退场交接，经 `src/renderer/src/sessions/stores/runtime.ts` 门面暴露。
 - [项目](projects-trust.md)：`src/renderer/src/projects/stores/project.ts` 提供当前项目与选择来源。
-- [会话](sessions-chat.md)：会话状态经 `src/renderer/src/workspace/stores/session-tab-bridge.ts` 的只读视图读取（`opening`、`openingProjectPath`、`loadedSessionIds`、`sessionsOf`、`actionError`、`awaitingTrust`、`awaitingInterrupt`、`waitForOpenActions`、`invalidateOpenSelection`），提供者由 `src/renderer/src/shell/use-app-startup.ts` 注册；打开请求由 `src/renderer/src/sessions/stores/session.ts` 的 `open`、`openIntent` 承接，`ChatOpenIntent` 定义于 `src/renderer/src/workspace/stores/workspace-tabs.ts`；`src/renderer/src/sessions/stores/session-runs.ts` 提供运行清单与结束动作；`src/renderer/src/sessions/stores/session-view.ts` 消费新草稿身份与绑定映射，负责输入留底及附件回收。
+- [会话](sessions-chat.md)：会话打开与列表状态、原标签的待提交输入经 `src/renderer/src/workspace/stores/session-tab-bridge.ts` 的视图读取，打开链收敛动作也由该视图转交；接口以该文件的 `SessionTabState` 为准，提供者由 `src/renderer/src/shell/use-app-startup.ts` 注册；打开请求由 `src/renderer/src/sessions/stores/session.ts` 的 `open`、`openIntent` 承接，`ChatOpenIntent` 定义于 `src/renderer/src/workspace/stores/workspace-tabs.ts`；`src/renderer/src/sessions/stores/session-runs.ts` 提供运行清单与结束动作；`src/renderer/src/sessions/stores/session-view.ts` 消费新草稿身份与绑定映射，负责输入留底及附件回收。
 - [文件](files-editor.md)：`src/renderer/src/editor/stores/project-editor.ts` 拥有编辑记录，标签只引用其 key 与脏状态。
 - [终端](terminal-commands.md)：`src/renderer/src/workspace/stores/terminal.ts` 提供真实清单、创建、关闭、命名与写入；快捷命令每次创建新终端标签。
 - 浏览器主进程与桥接：`src/main/browser/ipc.ts` 的 `registerBrowserHandlers` 由 `src/main/app-lifecycle.ts` 注册；可信主窗口只能操作自己所属的 webview。`src/preload/browser.ts` 提供固定截图、元素选择与取消方法，不暴露任意脚本执行；页面接口并入公共桥接与环境声明。
@@ -49,7 +49,7 @@
 3. 选择对话标签时按需要返回打开意图，由外层提交打开链切前台；选择文件、终端或浏览器只改变展示，不中断后台会话。
 4. 关闭对话标签等待打开与原位新建任务收敛后，再结束当前关联实例，保留会话历史；关闭失败保留标签。
 5. 关闭终端标签结束该终端；关闭浏览器标签清理该标签的页面、导航与批注状态，有未交付批注时先确认丢弃；关闭文件标签清除内存编辑记录，脏文件先由弹层宿主确认，不隐式保存。
-6. `/new` 先在当前标签展示空白对话，标签位置与顺序不变；旧实例按标签单飞结束，期间可编辑草稿但禁止发送。结束成功后不补开 SDK 会话，首次发送先固定输入并立即展示本地待发送消息，再经会话打开链准备新目标；实际绑定、运行清单与前台状态确认且投影同步后，才向 SDK 提交固定快照。待发送交接、失败恢复与启动期间切走的处理见[会话状态与边界](sessions-chat.md#状态与边界)。侧栏和标签条的新建入口仍打开或聚焦空对话标签。
+6. `/new` 先在当前标签展示空白对话，标签位置与顺序不变；旧实例按标签单飞结束，期间可编辑草稿但禁止发送。结束成功后不补开 SDK 会话，首次发送先固定输入并立即展示本地待发送消息，再经会话打开链准备新目标；实际绑定、运行清单与前台状态确认且投影同步后，才向 SDK 提交固定快照。待发送交接、失败恢复与启动期间切走的处理见[会话状态与边界](sessions-chat.md#状态与边界)。侧栏和标签条的新建入口打开或聚焦空对话标签；已有待提交输入的标签不作为空白标签复用，原输入继续留在原标签，不阻止另建或聚焦其他空白对话。
 7. 终端链接唤起浏览器：终端内点击 HTTP/HTTPS 链接时，可按偏好设置或操作气泡选择在当前项目新开内置浏览器标签（调用 `openBrowserTab(initialUrl)`），自动激活新标签并加载目标地址，与从标签栏新建浏览器共用导航及生命周期。
 
 ### 浏览器批注
