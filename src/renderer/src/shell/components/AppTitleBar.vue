@@ -1,4 +1,5 @@
 <!-- 全宽顶部栏：自绘窗口标题栏，呈现侧栏开关、应用名、居中上下文胶囊（项目与当前会话导航）、Runtime 状态与右侧面板开关；macOS 预留原生红绿灯位。模型选择已下沉到输入坞。
+     标题栏采用三列 Grid 布局（minmax(0, 1fr) auto minmax(0, 1fr)），左右拖动区分别收敛在两侧列内，避免与中列交互发生几何重叠。
      居中胶囊是对话导航入口：单行呈现项目名与当前会话，显示当前读到的那一轮与其位置（第几轮/共几轮），点开是一个模态弹窗，
      按新的在前列出本会话每一轮的用户输入（序号、摘要、发送时间、含几个生成式界面），选中后由消息区按既有定位规则滚动。
      弹窗为专用对话导航面板外壳（遮罩、居中轻量面板、Escape 关闭），收起方式为点遮罩或 Esc，列表内部自己滚动。
@@ -298,10 +299,10 @@ watch(navEntries, () => {
       </AppButton>
 
       <span class="app-titlebar-app-name">Pi Desktop</span>
-    </div>
 
-    <!-- 窗口拖动区：弹性平分控件之间的空白，控件群周围不再顺带可拖动，避免误拖与误双击最大化。 -->
-    <span class="app-titlebar-drag" aria-hidden="true"></span>
+      <!-- 窗口拖动区：收敛在左列末尾，填满控件到胶囊左侧的空白。 -->
+      <span class="app-titlebar-drag" aria-hidden="true"></span>
+    </div>
 
     <!-- 居中上下文胶囊：只描述对话上下文；设置页不显示它，也不留一个会切换会话的入口。 -->
     <div v-if="!settingsMode" class="app-titlebar-center">
@@ -343,11 +344,13 @@ watch(navEntries, () => {
         </svg>
       </button>
     </div>
-
-    <!-- 窗口拖动区：弹性平分控件之间的空白。 -->
-    <span class="app-titlebar-drag" aria-hidden="true"></span>
+    <!-- 设置页占位：保持三列网格对齐，不漂移右侧控件。 -->
+    <div v-else class="app-titlebar-center is-placeholder" aria-hidden="true"></div>
 
     <div class="app-titlebar-end">
+      <!-- 窗口拖动区：收敛在右列首部，填满胶囊右侧到控件之间的空白。 -->
+      <span class="app-titlebar-drag" aria-hidden="true"></span>
+
       <span v-if="runtimeStatus.kind !== 'idle'" class="app-runtime-status" :class="`is-${runtimeStatus.kind}`" role="status">
         <span class="app-runtime-status-dot" aria-hidden="true"></span>
         {{ runtimeStatus.label }}

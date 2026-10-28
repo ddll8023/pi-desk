@@ -186,52 +186,56 @@
     border: 1px solid var(--color-desk-line);
     border-radius: var(--radius-desk-lg);
   }
-/* 自绘窗口标题栏：整条默认不可拖动，只有中间的 .app-titlebar-drag 空白能拖窗口，
-     控件与空白之间的缝隙不会把点击变成拖动或双击最大化；高度与主进程 TITLEBAR_HEIGHT 一致。 */
+/* 自绘窗口标题栏：三列网格布局，左右等宽（1fr），中间自适应（auto）；
+   整条标题栏默认不可拖动，拖动区严格收敛在左列与右列内部，绝不越过中列边界，
+   彻底避免拖拽区（-webkit-app-region: drag）与居中胶囊按钮发生几何重叠而吞掉点击；
+   高度与主进程 TITLEBAR_HEIGHT 一致。 */
 .app-titlebar {
     -webkit-app-region: no-drag;
     position: relative;
     z-index: 40;
-    display: flex;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
     min-width: 0;
     height: 44px;
     flex: none;
     align-items: center;
-    gap: 0.5rem;
     border-bottom: 1px solid var(--color-desk-line);
     background: var(--color-desk-surface);
     padding: 0 0.75rem;
-    /* 右侧另留出窗口按钮覆盖区与一段间距，否则面板开关会被压在最小化/关闭按钮下面、两者也容易点错。 */
-    padding-right: calc(1.25rem + var(--titlebar-controls-reserve, 0px));
   }
-/* 标题栏布局三段：两侧区域按内容自适应，中间胶囊绝对居中，空白处全部分配给拖动区。 */
+/* 标题栏布局三段：左列与右列自适应且等宽，中列胶囊严格居中于视口，空白处全部分配给两侧的拖动区。 */
 .app-titlebar-start {
     display: flex;
     align-items: center;
     gap: 0.5rem;
-    flex: none;
+    min-width: 0;
+    height: 100%;
     position: relative;
     z-index: 1;
   }
 .app-titlebar-center {
-    position: absolute;
-    left: 50%;
-    transform: translateX(-50%);
+    -webkit-app-region: no-drag;
     display: flex;
     align-items: center;
     justify-content: center;
     min-width: 0;
     max-width: min(32rem, calc(100vw - 22rem));
+    height: 100%;
     z-index: 2;
     pointer-events: auto;
   }
 .app-titlebar-end {
     display: flex;
     align-items: center;
+    justify-content: flex-end;
     gap: 0.5rem;
-    flex: none;
+    min-width: 0;
+    height: 100%;
     position: relative;
     z-index: 1;
+    /* 右侧另留出窗口按钮覆盖区与一段间距，否则面板开关会被压在最小化/关闭按钮下面、两者也容易点错。 */
+    padding-right: calc(0.5rem + var(--titlebar-controls-reserve, 0px));
   }
 /* 标题栏拖动区：弹性平分控件之间的空白，窗口好拖，但控件本身不被拖动覆盖。 */
 .app-titlebar-drag {
@@ -691,9 +695,11 @@
 
     /* 窄窗口顶部栏保持单行：应用名与项目路径让位给会话标题与运行状态。 */
     .app-titlebar {
-      gap: 0.375rem;
       padding: 0 0.625rem;
-      padding-right: calc(1rem + var(--titlebar-controls-reserve, 0px));
+    }
+
+    .app-titlebar-end {
+      padding-right: calc(0.375rem + var(--titlebar-controls-reserve, 0px));
     }
 
     .app-titlebar-app-name,
