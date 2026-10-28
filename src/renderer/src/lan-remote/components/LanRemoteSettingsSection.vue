@@ -153,7 +153,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="space-y-4" :aria-busy="loading || busy">
+  <div class="settings-section-stack" :aria-busy="loading || busy">
     <header>
       <h1 class="text-xl font-semibold tracking-tight">手机访问</h1>
       <p class="mt-1 text-sm text-desk-muted">手机与电脑连接同一 Wi-Fi，扫码继续对话。</p>

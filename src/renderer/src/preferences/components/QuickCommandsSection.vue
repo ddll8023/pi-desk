@@ -164,7 +164,7 @@ async function confirmRemoval(): Promise<void> {
 </script>
 
 <template>
-  <div class="space-y-4">
+  <div class="settings-section-stack">
     <header>
       <h1 class="text-xl font-semibold tracking-tight">快捷命令</h1>
       <p class="mt-1 text-sm text-desk-muted">

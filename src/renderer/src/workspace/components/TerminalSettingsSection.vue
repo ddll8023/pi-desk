@@ -98,7 +98,7 @@ async function stopDaemon(): Promise<void> {
 </script>
 
 <template>
-  <div>
+  <div class="settings-section-stack">
     <header>
       <h1 class="text-xl font-semibold tracking-tight">终端</h1>
       <p class="mt-1 text-sm text-desk-muted">

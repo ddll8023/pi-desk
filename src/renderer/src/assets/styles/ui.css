@@ -466,7 +466,7 @@
   }
 .segment-option.is-selected,
   .segment-option.is-selected:not(:disabled):hover {
-    @apply border-desk-line-strong bg-desk-surface text-desk-ink;
+    @apply border-desk-line-strong bg-desk-surface text-desk-ink shadow-desk-raise;
   }
 /* 分段标签里的元信息：计数等次级信息，不参与选中态。 */
 .segment-option-meta {

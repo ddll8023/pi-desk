@@ -370,7 +370,7 @@ const resourceActionsDisabled = computed(() => currentProject.value === null)
 </script>
 
 <template>
-  <div class="space-y-4">
+  <div class="settings-section-stack">
     <header>
       <h1 class="text-xl font-semibold tracking-tight">Pi 资源</h1>
       <p class="mt-1 text-sm text-desk-muted">
@@ -379,7 +379,7 @@ const resourceActionsDisabled = computed(() => currentProject.value === null)
     </header>
 
     <!-- 资源：清单来源与 MCP 一样只有一个当前生效的口径，未启动时才降级为磁盘预读。 -->
-    <section class="panel-section" aria-labelledby="resource-list-title">
+    <section class="settings-section space-y-4" aria-labelledby="resource-list-title">
       <div class="flex flex-wrap items-center justify-between gap-2">
         <h2 id="resource-list-title" class="panel-section-title">资源</h2>
         <div class="flex flex-wrap items-center gap-1.5">
@@ -492,7 +492,7 @@ const resourceActionsDisabled = computed(() => currentProject.value === null)
     </section>
 
     <!-- MCP：列表骨架来自配置文件，连接状态来自探测；两者职责分开，不再并列两套口径。 -->
-    <section class="panel-section" aria-labelledby="mcp-list-title">
+    <section class="settings-section space-y-4" aria-labelledby="mcp-list-title">
       <div class="flex flex-wrap items-center justify-between gap-2">
         <h2 id="mcp-list-title" class="panel-section-title">MCP 服务器</h2>
         <div class="flex flex-wrap items-center gap-1.5">

@@ -225,7 +225,7 @@ function toggleAutoUpdate(enabled: boolean): void {
 </script>
 
 <template>
-  <div class="space-y-4">
+  <div class="settings-section-stack">
     <header>
       <h1 id="settings-versions-title" class="text-xl font-semibold tracking-tight">版本与更新</h1>
       <p class="mt-1 text-sm text-desk-muted">

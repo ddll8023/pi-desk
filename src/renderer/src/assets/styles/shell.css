@@ -1,7 +1,10 @@
 /* 归集应用外壳与右侧面板相关的组件样式。 */
 @layer components {
 .settings-page-content {
-    @apply mx-auto w-full max-w-4xl space-y-4 p-6 sm:p-8;
+    @apply mx-auto w-full max-w-4xl space-y-6 p-6 sm:p-8;
+  }
+.settings-section-stack {
+    @apply space-y-6;
   }
 /* 设置页：左栏固定宽度的分节导航，右栏是当前分节的内容；两栏各自滚动，页面本身不滚动。 */
 .settings-page {
@@ -39,7 +42,7 @@
 /* 分节条目：图标加文案；选中态用「浅强调底色 + 2px 强调竖条」，与 .list-item-active 的当前行标记一致。
      只靠底色不足以区分：accent-soft 与导航底色在亮色下约 1.09:1、暗色下约 1.03:1，竖条才是有对比的那一层。 */
 .settings-nav-item {
-    @apply flex w-full items-center gap-2 rounded-desk-sm px-2 py-1.5 text-xs font-medium text-desk-muted transition-colors;
+    @apply flex w-full items-center gap-2 rounded-desk-sm px-2.5 py-2 text-xs font-medium text-desk-muted transition-colors;
   }
 .settings-nav-item:not(:disabled):hover {
     @apply bg-desk-surface text-desk-ink;
@@ -111,7 +114,7 @@
     }
   }
 .settings-section {
-    @apply rounded-desk-lg border border-desk-line bg-desk-surface p-5;
+    @apply rounded-desk-lg border border-desk-line bg-desk-surface p-5 shadow-desk-raise sm:p-6;
   }
 .settings-section-heading {
     @apply flex flex-wrap items-center justify-between gap-4;
@@ -124,7 +127,7 @@
     @apply inline-flex items-center gap-2 text-xs font-semibold;
   }
 .settings-row {
-    @apply mt-4 flex flex-wrap items-center justify-between gap-4 border-t border-desk-line pt-4;
+    @apply mt-5 flex flex-wrap items-center justify-between gap-4 border-t border-desk-line pt-5;
   }
 /* 运行中指示：三点错峰跳动。点色取文字色，模板用 text-desk-accent 指定。
      与 .status-dot 的分工是：静态点只表达状态，这里表达「正在进行」，

@@ -106,7 +106,7 @@ async function clearParams(): Promise<void> {
 </script>
 
 <template>
-  <div class="space-y-4">
+  <div class="settings-section-stack">
     <header>
       <h1 class="text-xl font-semibold tracking-tight">功能</h1>
       <p class="mt-1 text-sm text-desk-muted">

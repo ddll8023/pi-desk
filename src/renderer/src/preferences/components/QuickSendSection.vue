@@ -76,7 +76,7 @@ async function save(): Promise<void> {
 </script>
 
 <template>
-  <div class="space-y-4">
+  <div class="settings-section-stack">
     <header>
       <h1 class="text-xl font-semibold tracking-tight">快捷输入</h1>
       <p class="mt-1 text-sm text-desk-muted">输入坞快捷发送下拉里的短语，点一下就用该短语直接发送。</p>
