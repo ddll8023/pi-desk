@@ -479,6 +479,8 @@ function onListboxKeydown(event: KeyboardEvent): void {
   white-space: nowrap;
   font-family: var(--font-mono);
   font-size: 0.71875rem;
+  font-weight: 500;
+  color: var(--color-desk-ink);
 }
 
 .app-select-badge {
@@ -600,6 +602,12 @@ function onListboxKeydown(event: KeyboardEvent): void {
   padding: 0.25rem;
 }
 
+.app-select-group + .app-select-group {
+  margin-top: 0.35rem;
+  padding-top: 0.35rem;
+  border-top: 1px solid var(--color-desk-line);
+}
+
 .app-select-group-label {
   position: sticky;
   top: -0.25rem;
@@ -691,10 +699,16 @@ function onListboxKeydown(event: KeyboardEvent): void {
 .app-select-option.is-selected {
   background: var(--color-desk-accent-soft);
   color: var(--color-desk-accent);
+  box-shadow: inset 3px 0 0 0 var(--color-desk-accent);
 }
 
 .app-select-option.is-selected .app-select-option-label {
   font-weight: 600;
+  color: var(--color-desk-accent);
+}
+
+.app-select-option.is-selected .app-select-option-desc {
+  color: color-mix(in srgb, var(--color-desk-accent) 70%, var(--color-desk-muted));
 }
 
 .app-select-option.is-selected .app-select-check {

@@ -341,20 +341,33 @@ function refreshModels(): void {
   align-items: center;
   gap: 0.25rem;
 }
-/* 输入坞里的紧凑胶囊：无边框、圆角，不占背景色，只靠悬停反馈。 */
+/* 输入坞里的实体胶囊：高度与图标按钮对齐，具备独立卡片底色、描边与悬停/展开反馈。 */
 .runtime-model-control :deep(.app-select-trigger) {
   min-width: 0;
-  border-color: transparent;
+  height: 28px;
+  border: 1px solid var(--color-desk-line-strong);
   border-radius: 999px;
-  background: transparent;
-  padding: 0.3rem 0.6rem;
+  background: var(--color-desk-surface);
+  box-shadow: var(--shadow-desk-raise);
+  padding: 0 0.55rem;
   font-size: 0.75rem;
+  transition: border-color var(--default-transition-duration) ease,
+    background-color var(--default-transition-duration) ease,
+    box-shadow var(--default-transition-duration) ease;
 }
 .runtime-model-control :deep(.app-select-trigger:not(:disabled):hover) {
+  border-color: color-mix(in srgb, var(--color-desk-accent) 45%, var(--color-desk-line-strong));
   background: var(--color-desk-surface-subtle);
 }
+.runtime-model-control :deep(.app-select-trigger[aria-expanded="true"]) {
+  border-color: var(--color-desk-accent);
+  box-shadow: var(--shadow-desk-raise), 0 0 0 1px var(--color-desk-accent);
+}
 .runtime-model-control :deep(.app-select-trigger:disabled) {
+  cursor: not-allowed;
+  border-color: var(--color-desk-line);
   background: transparent;
+  opacity: 0.6;
 }
 /* 读取进度与错误并入触发键文案，不设独立状态行，输入坞高度保持恒定。 */
 .app-runtime-model.is-error :deep(.app-select-name) {
