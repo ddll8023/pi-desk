@@ -2,7 +2,7 @@
 
 ### Pi 配置改动只靠重启 Runtime 生效
 
-约定：写 Pi 配置（models.json、mcp.json 等）的界面只提示「需要重启 Runtime 才会生效」，不设常驻的重载按钮；确需重载时复用会话重开链路（`sessionStore.reloadCurrent()`），现有入口是资源页的「重启 Runtime 以重新加载」按钮，以及模型页的「重新加载 Runtime（保留会话）」按钮（出现在登录流程结束后，以及 models.json 条目保存或删除后的提示里）。例外是 Pi 默认模型：输入坞选择器里切当前会话与写 `settings.json` 互不联动，而新建会话本就会重启 Runtime 并重读配置，因此不提示重启。
+约定：写 Pi 配置（models.json、mcp.json 等）的界面不设常驻的重载按钮；确需重载时复用会话重开链路（`sessionStore.reloadCurrent()`）。资源页保留「重启 Runtime 以重新加载」入口；模型设置页在保存、删除自定义条目或从云端刷新模型时，若当前会话空闲则自动调用会话重载热更新无缝生效，仅在会话忙碌时就地提示待空闲后生效。例外是 Pi 默认模型：输入坞选择器里切当前会话与写 `settings.json` 互不联动，而新建会话本就会重启 Runtime 并重读配置，因此不提示重启。
 
 适用：新增任何写 Pi 配置文件的入口时。
 
