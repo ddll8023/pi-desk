@@ -1,4 +1,4 @@
-/** 唯一桌面窗口的创建与外观：窗口创建、原生主题与标题栏配色、导航与权限限制、单实例聚焦。窗口引用由 window-channel.ts 持有，业务实例由 services.ts 注入；投递与广播在同目录的 window-channel.ts，退出时的落盘由 app-lifecycle.ts 驱动。 */
+/** 唯一桌面窗口的创建与外观：窗口创建、原生主题与标题栏配色、导航与权限限制、单实例聚焦及关闭拦截（关闭时检测终端任务并提供终止/后台常驻选择，无活跃任务时自动收尾守护进程释放文件锁）。窗口引用由 window-channel.ts 持有，业务实例由 services.ts 注入；投递与广播在同目录的 window-channel.ts，退出时的落盘由 app-lifecycle.ts 驱动。 */
 
 import { resolve } from 'node:path'
 import { app, BrowserWindow, dialog, nativeTheme, session } from 'electron'
@@ -163,7 +163,67 @@ export async function createWindow(pageUrl: string): Promise<void> {
   window.on('move', rememberWindowState)
   window.on('maximize', rememberWindowState)
   window.on('unmaximize', rememberWindowState)
-  window.on('close', () => windowState.captureBeforeClose(window))
+
+  let isConfirmedToClose = false
+  let isCheckingClose = false
+  window.on('close', (event) => {
+    if (isConfirmedToClose) {
+      windowState.captureBeforeClose(window)
+      return
+    }
+
+    event.preventDefault()
+    if (isCheckingClose) return
+    isCheckingClose = true
+
+    void (async () => {
+      try {
+        if (!terminals.hasLiveProcess) {
+          isConfirmedToClose = true
+          if (!window.isDestroyed()) window.close()
+          return
+        }
+
+        const statusResult = await terminals.status()
+        const runningCount = statusResult.ok ? statusResult.data.runningCount : 0
+
+        if (runningCount > 0) {
+          if (window.isDestroyed()) return
+          const { response } = await dialog.showMessageBox(window, {
+            type: 'question',
+            buttons: ['终止终端并退出', '后台保持运行', '取消'],
+            defaultId: 0,
+            cancelId: 2,
+            title: '退出确认',
+            message: `当前有 ${runningCount} 个终端任务正在运行，是否终止？`,
+            detail: '终止终端：结束所有终端进程并释放程序文件，适合准备覆盖更新；\n后台运行：终端在后台继续执行，下次启动可接回终端；\n取消：留在应用中。',
+            noLink: true
+          })
+
+          if (response === 0) {
+            await terminals.stopDaemon()
+            isConfirmedToClose = true
+            if (!window.isDestroyed()) window.close()
+          } else if (response === 1) {
+            isConfirmedToClose = true
+            if (!window.isDestroyed()) window.close()
+          }
+          // response === 2 即取消，保持窗口打开
+        } else {
+          // 守护进程存活但已无运行中的终端任务，优雅停止以避免空闲锁定可执行文件
+          await terminals.stopDaemon()
+          isConfirmedToClose = true
+          if (!window.isDestroyed()) window.close()
+        }
+      } catch (error) {
+        console.error('窗口关闭检查失败：', error)
+        isConfirmedToClose = true
+        if (!window.isDestroyed()) window.close()
+      } finally {
+        isCheckingClose = false
+      }
+    })()
+  })
   // 跟随系统主题时，OS 切换会让原生窗口背景与页面重绘短暂脱节；这里同步收敛背景色与覆盖层配色。
   nativeTheme.on('updated', () => {
     const target = mainWindow

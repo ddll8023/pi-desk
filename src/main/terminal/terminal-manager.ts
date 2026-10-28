@@ -7,7 +7,7 @@
  * 页面暂时不在（重载、窗口关闭）时不保留输出：守护进程的画面状态是权威来源，重新挂载后按快照补齐；
  * 这里只需立刻回报消费量，让守护进程继续下发，不把额度耗在没人接收的数据上。
  *
- * 应用退出只断开连接，不终止终端；关闭终端、关闭全部终端与结束旧版本守护进程都是用户显式动作。
+ * 窗口关闭时若有运行中终端可由用户选择终止或继续后台常驻；无活跃任务时自动收尾守护进程释放文件锁；仅选择后台常驻时退出才只断开连接。关闭终端、关闭全部终端与结束旧版本守护进程都是用户显式动作。
  */
 import type {
   TerminalCommandResult,
@@ -72,6 +72,11 @@ export class TerminalManager {
       },
       onConnectionChange: () => this.options.onStatusChange()
     })
+  }
+
+  /** 是否存在运行中的守护进程；用于退出前快速判断是否需要查询状态。 */
+  get hasLiveProcess(): boolean {
+    return this.client.hasLiveProcess
   }
 
   /** 在已登记项目内新建终端；未登记的项目回可展示的原因。 */
