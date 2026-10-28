@@ -28,6 +28,7 @@
 | `src/renderer/src/workspace/services/terminal.ts` | 终端固定桥接及输出／退出事件 |
 | `src/renderer/src/preferences/services/quick-commands.ts` | 命令清单读写桥接 |
 | `src/renderer/src/workspace/components/TerminalView.vue` | xterm 视图、输入、尺寸、恢复确认、链接及路径拖入 |
+| `src/renderer/src/workspace/components/TerminalLinkActionMenu.vue` | 终端链接操作气泡：在内置浏览器打开、默认浏览器打开与复制链接 |
 | `src/renderer/src/workspace/components/TerminalSettingsSection.vue` | 守护进程状态与停止／清理入口 |
 | `src/renderer/src/preferences/components/QuickCommandDialog.vue` | 命令新增、编辑、范围和执行选项 |
 | `src/renderer/src/preferences/components/QuickCommandMenu.vue` | 当前项目可用命令菜单 |
@@ -41,7 +42,8 @@
 - [F-config](shared.md#f-configdesktop-配置混合)：命令清单写 Desktop 配置；[偏好](preferences.md) 的 `PreferencesManager` 提供相关配置适配。
 - [F-process](shared.md#f-process受管进程与-sdk-公共设施共享)：`process-tree-termination.ts` 收敛终端关联进程树。
 - [F-build](shared.md#f-build构建与发行上下文)：守护进程独立 CJS 构建及 PTY 权限准备；不将原生模块打入浏览器。
-- [工作区](workspace-tabs.md)：标签由真实终端清单派生；快捷命令经 `runQuickCommand` 创建新终端再写入。
+- [工作区](workspace-tabs.md)：标签由真实终端清单派生；快捷命令经 `runQuickCommand` 创建新终端再写入；终端内点击链接可调用 `openBrowserTab` 在当前项目新开内置浏览器。
+- [浏览器与外部 URL](workspace-tabs.md)：终端链接通过偏好配置与气泡动作分别路由至工作区内置浏览器或系统默认浏览器（`openExternalUrl`）。
 - [文件](files-editor.md)：`ui/project-entry-drag.ts` 提供拖拽载荷、路径引用文本与路径插入文本。
 - [项目](projects-trust.md)：终端 cwd 只能取已登记项目的规范路径，项目移除触发该项目终端关闭请求。
 
@@ -57,6 +59,13 @@
 ## 快捷命令与存储
 
 命令按全局或项目范围保存于 `desktop-config.json`。运行目标始终是新建终端，不复用可能被前台程序占用的现有 shell。执行选项控制是否补回车；命令内容不被解释成安全的固定参数 API。
+
+## 终端链接与路由
+
+终端内 HTTP/HTTPS 链接点击支持按偏好设置进行路由分发：
+1. 模式分为「每次询问（默认）」「内置浏览器」「默认浏览器」；
+2. 默认模式下在光标处弹出操作气泡，可选择在工作区内置浏览器标签中打开、系统默认浏览器中打开或复制链接；
+3. 支持 `Ctrl+单击`（macOS 为 `Cmd+单击`）快捷键直达或反转默认偏好；非 Web 协议链接直接复制地址并提示。
 
 终端数据由 `userData` 下的终端守护数据区持有，端点与持久化按协议版本隔离。原始输出、会话元数据及退出后的 `.screen.json` 画面均可落盘，活动快照还用于实时接回。开发／便携数据区分开，不能通过删除 `out/` 清理终端历史，也不能将便携版 `data/` 当缓存。
 

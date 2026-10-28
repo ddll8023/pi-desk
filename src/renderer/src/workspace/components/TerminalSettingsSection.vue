@@ -1,19 +1,30 @@
-<!-- 设置页的终端分节：展示常驻终端守护进程的状态，并提供明确的清理入口。
+<!-- 设置页的终端分节：展示常驻终端守护进程的状态、提供明确的清理入口，并配置终端点击链接的打开行为。
 
      终端由独立守护进程持有，关闭应用窗口不会结束终端与其中运行的命令；因此这里必须能看清「还有几个终端在跑」，
      并提供一次结束全部终端的动作。清理是不可逆的破坏性操作，走确认对话框，不就地二次点击。
+     终端点击链接打开模式（每次询问 / 内置浏览器 / 默认浏览器）随整体 UI 偏好持久化，在终端中生效。
 
      状态在进入本页时读取一次，并随守护进程状态事件更新；读取失败只就地展示原因，不清空上一次的结果。
      旧版本守护进程（协议版本不符）单独提示：它的终端当前版本接不回来，结束它需要用户显式操作。 -->
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
+import type { TerminalLinkOpenMode } from '../../../../shared/preferences-api'
+import { usePreferencesStore } from '../../preferences/stores/preferences'
 import { useTerminalStore } from '../stores/terminal'
 import AppButton from '../../ui/AppButton.vue'
 import ConfirmDialog from '../../ui/ConfirmDialog.vue'
 
 const terminalStore = useTerminalStore()
+const preferencesStore = usePreferencesStore()
 const { daemonStatus, error } = storeToRefs(terminalStore)
+const { terminalLinkOpenMode } = storeToRefs(preferencesStore)
+
+const linkOpenOptions: readonly { readonly value: TerminalLinkOpenMode; readonly label: string }[] = [
+  { value: 'ask', label: '每次询问' },
+  { value: 'browser', label: '内置浏览器' },
+  { value: 'system', label: '默认浏览器' }
+]
 
 /** 关闭全部终端的确认框；清理会结束进程，必须显式确认。 */
 const confirmOpen = ref(false)
@@ -94,6 +105,34 @@ async function stopDaemon(): Promise<void> {
         终端由独立守护进程持有，关闭应用窗口不会结束终端与其中运行的命令；重新打开应用时会接回原来的终端与保留窗口内的滚动历史。
       </p>
     </header>
+
+    <section class="settings-section" aria-labelledby="settings-terminal-link-title">
+      <div class="settings-section-heading">
+        <div>
+          <h2 id="settings-terminal-link-title" class="settings-section-title">终端链接</h2>
+          <p class="mt-1 text-xs text-desk-muted">
+            在终端中点击 HTTP/HTTPS 链接时的打开行为；按住 Ctrl/Cmd 单击可快捷反转路由。
+          </p>
+        </div>
+      </div>
+      <div class="settings-row">
+        <span class="text-sm font-medium">点击链接行为</span>
+        <div class="segment w-full sm:w-80" role="group" aria-label="点击链接行为">
+          <AppButton
+            v-for="option in linkOpenOptions"
+            :key="option.value"
+            variant="unstyled"
+            class="segment-option"
+            :class="terminalLinkOpenMode === option.value ? 'is-selected' : ''"
+            :aria-pressed="terminalLinkOpenMode === option.value"
+            :disabled="!preferencesStore.ready"
+            @click="preferencesStore.setTerminalLinkOpenMode(option.value)"
+          >
+            {{ option.label }}
+          </AppButton>
+        </div>
+      </div>
+    </section>
 
     <section class="settings-section" aria-labelledby="settings-terminal-daemon-title">
       <div class="settings-section-heading">

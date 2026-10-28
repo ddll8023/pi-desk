@@ -1,8 +1,8 @@
 /**
- * 保存侧栏与右侧面板的界面偏好（含侧栏展开的项目路径）、Markdown 默认视图、快捷发送短语、
+ * 保存侧栏与右侧面板的界面偏好（含侧栏展开的项目路径）、Markdown 默认视图、终端链接打开模式、快捷发送短语、
  * 扩展自动更新开关与生成式 UI 开关；窗口状态由主进程独占，不保存 Runtime 数据或单个消息块的临时开合状态。
  *
- * 界面偏好是一份整体载荷：折叠状态、主题、展开的项目路径、右侧面板开合/宽度/页签与 Markdown 默认视图
+ * 界面偏好是一份整体载荷：折叠状态、主题、展开的项目路径、右侧面板开合/宽度/页签、Markdown 默认视图与终端链接打开模式
  * 一起写入，任一变化都保存当前完整值，避免分字段保存互相覆盖；保存单飞，保存期间的新变化在收敛后补写一次。
  * 展开的项目路径只记录哪些项目展开过，顺序不参与展示；右侧面板宽度对同一窗口只有一个值，不按项目区分。
  * 自动更新开关默认关，只有用户显式打开后主进程才会在启动检查后自动更新扩展。
@@ -17,7 +17,7 @@ import {
   MAX_RIGHT_PANEL_WIDTH,
   MIN_RIGHT_PANEL_WIDTH
 } from '../../../../shared/preferences-api'
-import type { PreferencesError, MarkdownDefaultView, RightPanelTab, UiPreferences, UiTheme } from '../../../../shared/preferences-api'
+import type { PreferencesError, MarkdownDefaultView, RightPanelTab, TerminalLinkOpenMode, UiPreferences, UiTheme } from '../../../../shared/preferences-api'
 import { getAutoUpdate, getGenui, getPreferences, getQuickSend, setAutoUpdate, setGenui, setQuickSend, setUiPreferences } from '../services/preferences'
 
 /** 快捷发送短语的保存状态；失败保留原列表并把原因交给设置页展示。 */
@@ -51,6 +51,8 @@ export const usePreferencesStore = defineStore('preferences', () => {
   const rightPanelTab = ref<RightPanelTab>('files')
   /** Markdown 文件新标签的默认视图；只影响新打开的标签，已打开的保持各自当前视图。 */
   const markdownDefaultView = ref<MarkdownDefaultView>('preview')
+  /** 终端点击链接时的打开方式；默认每次弹窗选择。 */
+  const terminalLinkOpenMode = ref<TerminalLinkOpenMode>('ask')
   /** 快捷发送下拉的候选短语；顺序即展示顺序，读取失败或非法时为默认列表。 */
   const quickSendMessages = ref<string[]>([...DEFAULT_QUICK_SEND_MESSAGES])
   const quickSendView = ref<QuickSendView>({ phase: 'idle' })
@@ -94,6 +96,7 @@ export const usePreferencesStore = defineStore('preferences', () => {
       rightPanelWidth.value = result.data.rightPanelWidth
       rightPanelTab.value = result.data.rightPanelTab
       markdownDefaultView.value = result.data.markdownDefaultView
+      terminalLinkOpenMode.value = result.data.terminalLinkOpenMode
     } else actionError.value = result.error
     if (quickSend.ok) quickSendMessages.value = [...quickSend.data.messages]
     if (autoUpdate.ok) extensionAutoUpdate.value = autoUpdate.data.enabled
@@ -143,7 +146,8 @@ export const usePreferencesStore = defineStore('preferences', () => {
       rightPanelOpen: rightPanelOpen.value,
       rightPanelWidth: rightPanelWidth.value,
       rightPanelTab: rightPanelTab.value,
-      markdownDefaultView: markdownDefaultView.value
+      markdownDefaultView: markdownDefaultView.value,
+      terminalLinkOpenMode: terminalLinkOpenMode.value
     }
     const pending = (async () => {
       const result = await setUiPreferences(payload)
@@ -158,6 +162,7 @@ export const usePreferencesStore = defineStore('preferences', () => {
       rightPanelWidth.value = result.data.rightPanelWidth
       rightPanelTab.value = result.data.rightPanelTab
       markdownDefaultView.value = result.data.markdownDefaultView
+      terminalLinkOpenMode.value = result.data.terminalLinkOpenMode
     })()
     saving = pending
     await pending
@@ -227,6 +232,14 @@ export const usePreferencesStore = defineStore('preferences', () => {
     if (markdownDefaultView.value === next) return
 
     markdownDefaultView.value = next
+    await persistUi()
+  }
+
+  /** 切换终端链接打开模式；本地立即生效并持久化，保存失败只提示，不回滚用户操作。 */
+  async function setTerminalLinkOpenMode(next: TerminalLinkOpenMode): Promise<void> {
+    if (terminalLinkOpenMode.value === next) return
+
+    terminalLinkOpenMode.value = next
     await persistUi()
   }
 
@@ -301,6 +314,7 @@ export const usePreferencesStore = defineStore('preferences', () => {
     rightPanelWidth,
     rightPanelTab,
     markdownDefaultView,
+    terminalLinkOpenMode,
     quickSendMessages,
     quickSendView,
     extensionAutoUpdate,
@@ -323,6 +337,7 @@ export const usePreferencesStore = defineStore('preferences', () => {
     setRightPanelTab,
     setTheme,
     setMarkdownDefaultView,
+    setTerminalLinkOpenMode,
     saveQuickSendMessages,
     saveExtensionAutoUpdate,
     saveGenuiEnabled,

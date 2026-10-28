@@ -11,8 +11,8 @@
   多标签时不会因超出浏览器上下文上限被淘汰成空白画面；上下文丢失或窗口从隐藏恢复时降级/重建
   渲染器并强制整屏重绘，终端实例与进程都不受影响。
 
-  安全与习惯：终端输出只作为文本写入 xterm，不解析 HTML；链接点击只复制地址，不打开浏览器（页面没有
-  打开任意地址的权限，只有认证流程能经主进程打开 URL）；多行粘贴先确认，避免一次误粘贴直接执行命令。
+  安全与习惯：终端输出只作为文本写入 xterm，不解析 HTML；链接点击支持按偏好弹窗或快捷键直达，
+  在内置浏览器标签、系统默认浏览器中打开或复制地址；多行粘贴先确认，避免一次误粘贴直接执行命令。
 
   落点：右侧面板的文件行拖到本面板时，把该文件的绝对路径写入本终端（不回车，只补一个空格），
   由用户自己接着补命令；绝对路径经主进程解析，这里只做载荷归属校验与转义。
@@ -37,8 +37,12 @@ import { resolveProjectEntryPath } from '../../editor/services/project-file'
 import { resizeTerminal, writeTerminal } from '../services/terminal'
 import { useProjectStore } from '../../projects/stores/project'
 import { useTerminalStore } from '../stores/terminal'
+import { useWorkspaceTabsStore } from '../stores/workspace-tabs'
+import { openExternalUrl } from '../../editor/services/external-url'
+import { usePreferencesStore } from '../../preferences/stores/preferences'
 import AppButton from '../../ui/AppButton.vue'
 import QuickCommandMenu from '../../preferences/components/QuickCommandMenu.vue'
+import TerminalLinkActionMenu from './TerminalLinkActionMenu.vue'
 
 const props = defineProps<{
   readonly session: TerminalSessionInfo
@@ -60,6 +64,8 @@ const emit = defineEmits<{
 
 const terminalStore = useTerminalStore()
 const projectStore = useProjectStore()
+const workspaceTabsStore = useWorkspaceTabsStore()
+const preferencesStore = usePreferencesStore()
 /** 当前项目名：快捷菜单的项目组标题用它；项目不在列表里时为空，由菜单退回「当前项目」。 */
 const projectName = computed(() => (
   projectStore.projects.find((project) => project.path === props.projectPath)?.name ?? null
@@ -73,6 +79,8 @@ const notice = ref<string | null>(null)
 const dropActive = ref(false)
 /** 快捷命令菜单；右键时在指针位置打开。 */
 const commandMenu = ref<InstanceType<typeof QuickCommandMenu> | null>(null)
+/** 终端链接操作气泡；点击普通链接时弹出。 */
+const linkActionMenu = ref<InstanceType<typeof TerminalLinkActionMenu> | null>(null)
 
 /** 回滚缓冲行数；与 Orca 同量级，足够翻回构建日志。 */
 const SCROLLBACK_LINES = 5000
@@ -197,8 +205,8 @@ function mountTerminal(): void {
 
   fitAddon = new FitAddon()
   terminal.loadAddon(fitAddon)
-  terminal.loadAddon(new WebLinksAddon((_event, uri) => {
-    void copyLink(uri)
+  terminal.loadAddon(new WebLinksAddon((event, uri) => {
+    onLinkClick(event, uri)
   }))
 
   suppressProtocolReplies(terminal)
@@ -473,7 +481,61 @@ async function confirmPaste(): Promise<void> {
   if (!result.ok) terminalStore.reportError(result.error.message)
 }
 
-/** 链接点击只复制地址：页面没有打开任意 URL 的权限，只有认证流程能经主进程打开地址。 */
+/**
+ * 链接点击处理：
+ * 非 HTTP/HTTPS 协议直接复制；
+ * 若按下修饰键（Ctrl/Cmd）则反向直达（配置为系统浏览器时转内置，其余转默认浏览器）；
+ * 否则按偏好设置直达或弹出操作气泡选择。
+ */
+function onLinkClick(event: MouseEvent, uri: string): void {
+  if (!/^https?:\/\//i.test(uri)) {
+    void copyLink(uri)
+    return
+  }
+
+  const mode = preferencesStore.terminalLinkOpenMode
+  const modifier = event.ctrlKey || event.metaKey
+
+  if (modifier) {
+    if (mode === 'system') {
+      void openInBuiltinBrowser(uri)
+    } else {
+      void openInDefaultBrowser(uri)
+    }
+    return
+  }
+
+  if (mode === 'browser') {
+    void openInBuiltinBrowser(uri)
+    return
+  }
+
+  if (mode === 'system') {
+    void openInDefaultBrowser(uri)
+    return
+  }
+
+  // 默认模式 'ask'：在点击位置呼出操作气泡
+  linkActionMenu.value?.openAtPoint(event.clientX, event.clientY, uri)
+}
+
+/** 在工作区内置浏览器标签中打开 */
+async function openInBuiltinBrowser(uri: string): Promise<void> {
+  const tabKey = await workspaceTabsStore.openBrowserTab(uri)
+  if (!tabKey) {
+    showNotice('无法在内置浏览器中打开标签。')
+  }
+}
+
+/** 在系统默认浏览器中打开 */
+async function openInDefaultBrowser(uri: string): Promise<void> {
+  const result = await openExternalUrl(uri)
+  if (!result.ok) {
+    showNotice(`打开默认浏览器失败：${result.error.message}`)
+  }
+}
+
+/** 链接复制地址并提示。 */
 async function copyLink(uri: string): Promise<void> {
   const copied = await copyText(uri)
   showNotice(copied ? `已复制链接：${uri}` : '复制链接失败。')
@@ -602,5 +664,13 @@ function readVariable(styles: CSSStyleDeclaration, name: string): string {
     @add="emit('addCommand', $event)"
     @manage="emit('manageCommands')"
     @close-all="closeAllTerminals"
+  />
+
+  <!-- 终端链接操作气泡：在点击终端链接时根据偏好弹出选择操作 -->
+  <TerminalLinkActionMenu
+    ref="linkActionMenu"
+    @open-browser="openInBuiltinBrowser"
+    @open-default="openInDefaultBrowser"
+    @copy-link="copyLink"
   />
 </template>

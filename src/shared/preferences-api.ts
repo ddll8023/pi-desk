@@ -35,6 +35,20 @@ export function isMarkdownDefaultView(value: unknown): value is MarkdownDefaultV
   return typeof value === 'string' && MARKDOWN_DEFAULT_VIEWS.includes(value as MarkdownDefaultView)
 }
 
+/**
+ * 终端链接打开模式：
+ * - `ask`：点击普通链接时弹出操作气泡供用户选择（默认）
+ * - `browser`：直接在工作区内置浏览器标签中打开
+ * - `system`：直接在系统默认外部浏览器中打开
+ */
+export type TerminalLinkOpenMode = 'ask' | 'browser' | 'system'
+
+const TERMINAL_LINK_OPEN_MODES: readonly TerminalLinkOpenMode[] = ['ask', 'browser', 'system']
+
+export function isTerminalLinkOpenMode(value: unknown): value is TerminalLinkOpenMode {
+  return typeof value === 'string' && TERMINAL_LINK_OPEN_MODES.includes(value as TerminalLinkOpenMode)
+}
+
 /** 侧栏展开状态的上限；超出按最早记录丢弃，避免配置文件无界增长。 */
 export const MAX_EXPANDED_PROJECTS = 50
 
@@ -83,6 +97,8 @@ export interface UiPreferences {
   readonly rightPanelTab: RightPanelTab
   /** Markdown 文件新标签的默认视图；已打开的标签保持它自己的当前视图。 */
   readonly markdownDefaultView: MarkdownDefaultView
+  /** 终端点击链接时的打开方式；默认弹窗询问。 */
+  readonly terminalLinkOpenMode: TerminalLinkOpenMode
 }
 
 /** 右侧面板宽度是否在存储边界内；非整数与越界值一律拒绝。 */
@@ -97,12 +113,13 @@ export function isUiPreferences(value: unknown): value is UiPreferences {
   if (!Object.keys(value).every((key) => (
     key === 'sidebarCollapsed' || key === 'theme' || key === 'expandedProjects'
       || key === 'rightPanelOpen' || key === 'rightPanelWidth' || key === 'rightPanelTab'
-      || key === 'markdownDefaultView'
+      || key === 'markdownDefaultView' || key === 'terminalLinkOpenMode'
   ))) return false
   if (typeof value.sidebarCollapsed !== 'boolean' || !isUiTheme(value.theme)) return false
   if (typeof value.rightPanelOpen !== 'boolean' || !isRightPanelWidth(value.rightPanelWidth)) return false
   if (!isRightPanelTab(value.rightPanelTab)) return false
   if (!isMarkdownDefaultView(value.markdownDefaultView)) return false
+  if (!isTerminalLinkOpenMode(value.terminalLinkOpenMode)) return false
   if (!Array.isArray(value.expandedProjects) || value.expandedProjects.length > MAX_EXPANDED_PROJECTS) {
     return false
   }

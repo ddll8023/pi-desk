@@ -19,7 +19,7 @@ import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join } from 'node:path'
 import { app } from 'electron'
-import { isMarkdownDefaultView, isRightPanelTab } from '../../shared/preferences-api'
+import { isMarkdownDefaultView, isRightPanelTab, isTerminalLinkOpenMode } from '../../shared/preferences-api'
 import type { AutoUpdatePreference, GenuiPreference, ModelDisplayPreference, QuickSendPreference, UiPreferences, UiTheme } from '../../shared/preferences-api'
 import {
   DEFAULT_QUICK_SEND_MESSAGES,
@@ -68,7 +68,9 @@ export const DEFAULT_UI_PREFERENCES: UiPreferences = {
   rightPanelWidth: DEFAULT_RIGHT_PANEL_WIDTH,
   rightPanelTab: 'files',
   // Markdown 默认进预览：打开文件的主要目的是阅读，需要改结构时再切到源码。
-  markdownDefaultView: 'preview'
+  markdownDefaultView: 'preview',
+  // 终端点击链接默认每次弹窗询问选择。
+  terminalLinkOpenMode: 'ask'
 }
 
 /** 窗口状态默认值；位置为 null 表示交给窗口自行居中。 */
@@ -188,7 +190,10 @@ function sanitizeUiPreferences(value: unknown): UiPreferences {
       : DEFAULT_UI_PREFERENCES.rightPanelTab,
     markdownDefaultView: isMarkdownDefaultView(value.markdownDefaultView)
       ? value.markdownDefaultView
-      : DEFAULT_UI_PREFERENCES.markdownDefaultView
+      : DEFAULT_UI_PREFERENCES.markdownDefaultView,
+    terminalLinkOpenMode: isTerminalLinkOpenMode(value.terminalLinkOpenMode)
+      ? value.terminalLinkOpenMode
+      : DEFAULT_UI_PREFERENCES.terminalLinkOpenMode
   }
 }
 
