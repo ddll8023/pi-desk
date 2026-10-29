@@ -10,6 +10,7 @@
  *   暂存、取消暂存与丢弃改动支持单路径与批量路径，批量在单次 git 命令中执行，避免重复锁冲突与多次触发状态回传。
  * - **丢弃未跟踪文件自己删**：不用 `git clean`（范围过大且会连带忽略规则），删前用 realpath 校验仍在项目内。
  * - **提交信息走 stdin**：`git commit -F -`，不拼接 shell，也不受引号、换行与长度影响。
+ * - **子目录项目防误提交**：当项目为仓库子目录时，提交前校验暂存区，若存在项目外已暂存的改动则阻断提交，防止静默连带提交仓库内其他项目的改动。
  * - **远端操作不猜策略**：pull 直接沿用用户自己的 `pull.rebase` / `pull.ff`；push 有上游就推当前上游，
  *   没有上游时只在「恰好一个远端」的情况下自动 `--set-upstream`，多个远端一律交回用户决定。
  *   网络命令必须带超时，否则 ssh 口令提示或断网会让命令永久挂着。
@@ -259,7 +260,7 @@ export class GitService {
     }, '丢弃改动失败。')
   }
 
-  /** 提交已暂存的改动；提交信息走 stdin，作者与签名沿用用户自己的 git 配置。 */
+  /** 提交已暂存的改动；提交信息走 stdin，作者与签名沿用用户自己的 git 配置。当项目为仓库子目录时，若暂存区包含项目外文件则阻断。 */
   async commit(request: GitCommitRequest): Promise<GitOperationResult> {
     const message = request.message.trim() === '' ? '' : request.message
     if (message === '') return failure('INVALID_REQUEST', '提交信息不能为空。')
@@ -270,6 +271,25 @@ export class GitService {
     if (!prepared.ok) return prepared
 
     return this.mutate(prepared, async () => {
+      // 子项目场景：提交前核对暂存区，若有项目外的已暂存改动则明确阻断，避免静默连带提交。
+      if (prepared.repository.root !== roots.roots.canonical) {
+        const { stdout } = await runGit(['diff', '--cached', '--name-only', '-z'], {
+          cwd: prepared.repository.root,
+          timeoutMs: GIT_READ_TIMEOUT_MS
+        })
+        const stagedRepoPaths = stdout.split('\0').filter((p) => p !== '')
+        const hasExternal = stagedRepoPaths.some(
+          (repoPath) => repoPathToProjectPath(prepared.repository, roots.roots.canonical, repoPath) === null
+        )
+        if (hasExternal) {
+          throw new GitCommandError(
+            'failed',
+            '仓库内其他项目或目录存在已暂存更改；为避免误提交，请在完整仓库视图中提交或先取消暂存外部文件。',
+            { subcommand: 'commit' }
+          )
+        }
+      }
+
       try {
         await runGit(['commit', '-F', '-'], {
           cwd: prepared.repository.root,
@@ -687,7 +707,7 @@ export class GitService {
     const prepared = await this.prepareRoot(roots.roots)
     if (!prepared.ok) return prepared
 
-    const resolved = await resolveProjectEntryAbsolute(roots.roots.canonical, path)
+    const resolved = await resolveProjectEntryAbsolute(roots.roots.canonical, path, { allowNonExistent: true })
     if (!resolved.ok) return resolved
 
     return {
@@ -709,7 +729,7 @@ export class GitService {
 
     const items: PreparedPathItem[] = []
     for (const path of paths) {
-      const resolved = await resolveProjectEntryAbsolute(roots.roots.canonical, path)
+      const resolved = await resolveProjectEntryAbsolute(roots.roots.canonical, path, { allowNonExistent: true })
       if (!resolved.ok) return resolved
       items.push({
         relativePath: resolved.relativePath,

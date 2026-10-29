@@ -4,18 +4,20 @@
  * 三层结构对应界面上的三次点击：列表 → 提交详情 → 文件差异。层级由状态本身表达（`detail` / `fileSelection`
  * 是否有值），不再另存一个 level 字段，避免两者不一致。
  *
- * 每次读取都带序号：翻页、切过滤路径、连点提交都可能同时在飞，过期响应一律丢弃。
- * 历史只在用户打开「历史」视图时才读；提交成功后会重置，让新提交立刻出现在最上面。
+ * 每次读取都带序号并核验归属项目：翻页、切过滤路径、连点提交与切项目都可能同时在飞，过期与跨项目响应一律丢弃。
+ * 监听项目切换自动重置全部状态；历史只在用户打开「历史」视图时才读；提交成功后重置，让新提交立刻出现在最上面。
  */
 import { defineStore } from 'pinia'
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import type { DesktopError } from '../../../../shared/desktop-api'
 import type { GitCommitDetail, GitCommitFile, GitCommitSummary, GitTextDiff } from '../../../../shared/git-api'
 import { getGitCommitDetail, getGitCommitDiff, getGitHistory, getGitHistoryPage } from '../services/git'
+import { useProjectStore } from '../../projects/stores/project'
 
 type Phase = 'idle' | 'loading' | 'ready' | 'error'
 
 export const useGitHistoryStore = defineStore('git-history', () => {
+  const projectStore = useProjectStore()
   const commits = ref<readonly GitCommitSummary[]>([])
   const hasMore = ref(false)
   const upstreamName = ref<string | null>(null)
@@ -77,6 +79,8 @@ export const useGitHistoryStore = defineStore('git-history', () => {
     phase.value = commits.value.length === 0 ? 'loading' : phase.value
     const result = await getGitHistory(path ?? undefined)
     if (ticket !== listSeq) return
+    const currentPath = projectStore.currentProject?.path ?? null
+    if (currentPath === null || result.data.projectPath !== currentPath) return
 
     if (!result.ok) {
       error.value = result.error
@@ -99,6 +103,8 @@ export const useGitHistoryStore = defineStore('git-history', () => {
     const result = await getGitHistoryPage(commits.value.length, filterPath.value)
     loadingMore.value = false
     if (ticket !== listSeq) return
+    const currentPath = projectStore.currentProject?.path ?? null
+    if (currentPath === null || result.data.projectPath !== currentPath) return
 
     if (!result.ok) {
       error.value = result.error
@@ -167,6 +173,14 @@ export const useGitHistoryStore = defineStore('git-history', () => {
   function backToList(): void {
     resetDetail()
   }
+
+  /** 切换项目时重置历史与详情，避免显示上一项目的提交记录。 */
+  watch(
+    () => projectStore.currentProject?.path ?? null,
+    () => {
+      resetList()
+    }
+  )
 
   return {
     commits,

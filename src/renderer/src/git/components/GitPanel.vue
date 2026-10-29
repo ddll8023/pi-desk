@@ -13,6 +13,7 @@
 
   视图分「未提交」与「历史」两个：前者是本工作区还没提交的改动，后者是已经提交的记录（含未推送标记）。
   行上的「查看此文件的历史」把历史视图切到该路径的过滤模式，用户不必再自己找文件名。
+  项目切换时自动归位到「未提交」更改视图，并重置丢弃确认弹层状态。
 
   分支行只读：分支名、分离 HEAD 与与上游的领先/落后；拉取与推送放在提交区的动作组里（`GitCommitActions`），
   与 Orca 同一分工：分支行不因按钮而挤掉分支名的可用宽度，动作集中在一处也不用来回找。
@@ -22,7 +23,7 @@
   目录列起点逐行一致，行操作浮在右侧不挤文字。
 -->
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { GIT_STATUS_LIMIT } from '../../../../shared/git-api'
 import type { GitChangeEntry, GitChangeStatus, GitConflictKind, GitConflictOperation } from '../../../../shared/git-api'
@@ -99,6 +100,12 @@ type DiscardTarget = DiscardTargetSingle | DiscardTargetBatch
 const pendingDiscard = ref<DiscardTarget | null>(null)
 /** 当前视图：未提交的更改，或已提交的历史。 */
 const view = ref<'changes' | 'history'>('changes')
+
+// 切项目时归位到未提交更改视图，并重置弹窗状态
+watch(() => currentProject.value?.path, () => {
+  view.value = 'changes'
+  pendingDiscard.value = null
+})
 
 const selectionLabel = computed(() => (
   selection.value === null ? '' : AREA_LABELS[selection.value.area]

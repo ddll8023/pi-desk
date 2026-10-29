@@ -2,14 +2,14 @@
  * 右侧面板「源代码管理」的展示状态：状态快照、分组、选中条目与其差异、提交草稿。
  *
  * 核心职责：
- * 1. 拉状态并丢弃过期响应（序号令牌）：切项目、连点刷新、写操作与轮询都可能同时在飞；
+ * 1. 拉状态并丢弃过期响应（序号令牌与项目路径）：切项目、连点刷新、写操作与轮询都可能同时在飞，跨项目迟到快照一律丢弃；
  * 2. 把条目按「冲突 → 更改 → 已暂存 → 未跟踪」分组，支持单项与整组批量暂存/取消暂存/丢弃；
  * 3. 维护改动条目的扁平列表与顺序索引，支持差异视图就地快捷前后切换；
  * 4. 把写操作的结果（新的状态快照）直接落地，平滑处理当前选中项的区域流转，不再补一次读取。
  *
  * 刷新时机刻意保守：切项目、面板出现、窗口重新获得焦点、页面重新可见、用户点刷新、写操作之后，
  * 以及主进程目录监听回报「已加载的目录变了」；没有定时轮询。目录监听只覆盖已展开的层，
- * 未展开目录里的改动靠聚焦与手动刷新兜底。
+ * 未展开目录里的改动靠聚焦与手动刷新兜底；自动刷新按 1500ms 节流，并设 trailing 定时器兜底，避免连续保存丢失末次变动。
  *
  * 远端操作（拉取/推送）与提交互斥：它们都会改写仓库状态，同时进行只会让两边都在等锁。
  *
@@ -143,6 +143,10 @@ export const useGitStatusStore = defineStore('git-status', () => {
   }
 
   function applyStatus(next: GitStatus): void {
+    const currentProjectPath = projectStore.currentProject?.path ?? null
+    // 迟到响应丢弃：若返回的状态属于上一个项目，直接忽略，避免切项目竞态覆写。
+    if (currentProjectPath === null || next.projectPath !== currentProjectPath) return
+
     status.value = next
     phase.value = 'ready'
     error.value = null
@@ -434,12 +438,33 @@ export const useGitStatusStore = defineStore('git-status', () => {
     awaitingTrust.value = false
   }
 
-  /** 焦点/可见性触发的自动刷新：按最短间隔合并，避免一次切换窗口连发多次。 */
+  let autoRefreshTimer: ReturnType<typeof setTimeout> | null = null
+
+  function clearAutoRefreshTimer(): void {
+    if (autoRefreshTimer !== null) {
+      clearTimeout(autoRefreshTimer)
+      autoRefreshTimer = null
+    }
+  }
+
+  /** 焦点/可见性触发的自动刷新：1500ms 窗口期内首个事件立即执行，后续事件通过 trailing 定时器兜底。 */
   function autoRefresh(): void {
     const now = Date.now()
-    if (now - lastAutoRefreshAt < MIN_AUTO_REFRESH_MS) return
-    lastAutoRefreshAt = now
-    void refresh(true)
+    const elapsed = now - lastAutoRefreshAt
+    if (elapsed >= MIN_AUTO_REFRESH_MS) {
+      clearAutoRefreshTimer()
+      lastAutoRefreshAt = now
+      void refresh(true)
+      return
+    }
+
+    if (autoRefreshTimer === null) {
+      autoRefreshTimer = setTimeout(() => {
+        autoRefreshTimer = null
+        lastAutoRefreshAt = Date.now()
+        void refresh(true)
+      }, MIN_AUTO_REFRESH_MS - elapsed)
+    }
   }
 
   /**
@@ -453,6 +478,7 @@ export const useGitStatusStore = defineStore('git-status', () => {
     const stopProjectWatch = watch(
       () => projectStore.currentProject?.path ?? null,
       () => {
+        clearAutoRefreshTimer()
         status.value = null
         phase.value = 'idle'
         error.value = null
@@ -477,6 +503,7 @@ export const useGitStatusStore = defineStore('git-status', () => {
     const stopDirectoryWatch = onProjectDirectoryChanged(() => autoRefresh())
 
     detach = () => {
+      clearAutoRefreshTimer()
       stopProjectWatch()
       stopDirectoryWatch()
       window.removeEventListener('focus', onFocus)
@@ -487,6 +514,7 @@ export const useGitStatusStore = defineStore('git-status', () => {
   function dispose(): void {
     if (!attached) return
     attached = false
+    clearAutoRefreshTimer()
     detach?.()
     detach = null
   }

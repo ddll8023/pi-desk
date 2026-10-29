@@ -39,18 +39,31 @@ export function normalizeRelativeDirectory(input: string): string | null {
   return segments.join('/')
 }
 
-/** 目标目录必须落在项目根内：realpath 结果与根相同，或以「根 + 分隔符」开头。 */
+/** 目标目录必须落在项目根内：realpath 结果与根相同，或以「根 + 分隔符」开头。Windows 下折叠大小写比对。 */
 export function isInsideRoot(root: string, resolved: string): boolean {
-  if (resolved === root) return true
-  const prefix = root.endsWith(sep) ? root : root + sep
-  return resolved.startsWith(prefix)
+  const normRoot = process.platform === 'win32' ? root.toLowerCase() : root
+  const normResolved = process.platform === 'win32' ? resolved.toLowerCase() : resolved
+  if (normResolved === normRoot) return true
+  const prefix = normRoot.endsWith(sep) ? normRoot : normRoot + sep
+  return normResolved.startsWith(prefix)
+}
+
+export interface ProjectEntryResolveOptions {
+  /** 允许父目录在物理磁盘上尚不存在（如已删除条目或未落盘路径）；仍会向上校验现存祖先不越界。 */
+  readonly allowNonExistent?: boolean
 }
 
 /**
  * 把项目内相对条目路径解析为绝对路径。
  * 只对父目录做 realpath 与包含性校验，最后一段按原名拼回，因此不跟随条目自身的符号链接。
+ * 当指定 `allowNonExistent: true` 时，允许父目录在物理磁盘上尚不存在（如已删除条目），
+ * 此时向上回溯至首个现存祖先目录校验包含性，放行合法逻辑路径。
  */
-export async function resolveProjectEntryAbsolute(root: string, input: string): Promise<ProjectEntryResolution> {
+export async function resolveProjectEntryAbsolute(
+  root: string,
+  input: string,
+  options: ProjectEntryResolveOptions = {}
+): Promise<ProjectEntryResolution> {
   const relativePath = normalizeRelativeDirectory(input)
   if (relativePath === null || relativePath === '') {
     return entryFailure('INVALID_REQUEST', '条目路径必须是项目内的相对路径。')
@@ -65,12 +78,56 @@ export async function resolveProjectEntryAbsolute(root: string, input: string): 
   try {
     resolvedParent = await realpath(parentAbsolute)
   } catch (error) {
-    return entryFailure('INTERNAL_ERROR', readFailureMessage(error, parentRelative))
+    const code = typeof error === 'object' && error !== null ? (error as NodeJS.ErrnoException).code : undefined
+    if (options.allowNonExistent && code === 'ENOENT') {
+      const fallback = await resolveNonExistentParent(root, parentRelative)
+      if (!fallback.ok) return fallback
+      resolvedParent = fallback.resolvedParent
+    } else {
+      return entryFailure('INTERNAL_ERROR', readFailureMessage(error, parentRelative))
+    }
   }
   if (!isInsideRoot(root, resolvedParent)) {
     return entryFailure('INVALID_REQUEST', '条目路径超出当前项目范围。')
   }
   return { ok: true, relativePath, absolutePath: join(resolvedParent, name) }
+}
+
+/** 向上回溯到真实存在的祖先目录并校验包含性，把不存在的相对段重新拼回。 */
+async function resolveNonExistentParent(
+  root: string,
+  parentRelative: string
+): Promise<{ ok: true; resolvedParent: string } | { ok: false; error: DesktopError }> {
+  const segments = parentRelative === '' ? [] : parentRelative.split('/')
+  const remaining: string[] = []
+
+  while (segments.length > 0) {
+    remaining.unshift(segments.pop()!)
+    const currentRelative = segments.join('/')
+    const currentAbsolute = currentRelative === '' ? root : join(root, ...segments)
+    try {
+      const resolvedAncestor = await realpath(currentAbsolute)
+      if (!isInsideRoot(root, resolvedAncestor)) {
+        return entryFailure('INVALID_REQUEST', '条目路径超出当前项目范围。')
+      }
+      return { ok: true, resolvedParent: join(resolvedAncestor, ...remaining) }
+    } catch (err) {
+      const code = typeof err === 'object' && err !== null ? (err as NodeJS.ErrnoException).code : undefined
+      if (code !== 'ENOENT') {
+        return entryFailure('INTERNAL_ERROR', readFailureMessage(err, currentRelative))
+      }
+    }
+  }
+
+  try {
+    const resolvedRoot = await realpath(root)
+    if (!isInsideRoot(root, resolvedRoot)) {
+      return entryFailure('INVALID_REQUEST', '条目路径超出当前项目范围。')
+    }
+    return { ok: true, resolvedParent: join(resolvedRoot, ...remaining) }
+  } catch (err) {
+    return entryFailure('INTERNAL_ERROR', readFailureMessage(err, ''))
+  }
 }
 
 /** 读取失败的可展示原因：区分不存在、不是目录与没有权限，其余归为通用失败。 */
