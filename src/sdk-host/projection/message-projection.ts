@@ -34,6 +34,8 @@ import type {
   TurnTiming
 } from '../../shared/runtime-api'
 import { ToolProjection, serializeToolArguments } from './tool-projection'
+import { parseImageAnnotationAttachments, readImageAnnotationMessage } from '../../shared/image-annotation'
+import type { ImageAnnotationAttachment } from '../../shared/image-annotation'
 import { toUserMessageIdentity } from './identity'
 import type { UserMessageIdentity } from './identity'
 
@@ -84,6 +86,7 @@ interface MutableBlock {
 }
 
 interface MutableMessage {
+  imageAnnotations?: readonly ImageAnnotationAttachment[]
   /** 来源身份只在主进程核对，不跨 IPC 暴露摘要。 */
   sourceIdentity: UserMessageIdentity | null
   /** 官方会话条目 ID；解析不到时为空，不用摘要或位置猜测。 */
@@ -546,6 +549,11 @@ export class MessageProjection {
     entryId: string | null = null
   ): MutableMessage | null {
     if (!isRecord(value)) return null
+    // 独立资料消息只补充所属图片，不新建用户轮次，也不借用它的历史条目身份。
+    if (value.role === 'custom') {
+      this.applyImageAnnotations(value)
+      return null
+    }
     // 历史压缩条目带自己的摘要与压缩前 token 数；触发原因与压缩后 token 数条目里没有，保持 null。
     if (value.role === 'compactionSummary') return this.applyCompactionSummary(value, entryId)
     const role = readRole(value.role)
@@ -567,6 +575,17 @@ export class MessageProjection {
     this.finishGeneration(target, interrupted ? 'interrupted' : 'completed')
     this.queueUpdate({ kind: 'message', message: this.toPublicMessage(target) })
     return target
+  }
+
+  /** 自定义资料紧随本轮用户消息；不跨过助手回复去猜测另一条消息的归属。 */
+  private applyImageAnnotations(value: unknown): void {
+    const feedback = readImageAnnotationMessage(value)
+    const target = this.messages.at(-1)
+    if (feedback === null || target?.role !== 'user') return
+    const imageCount = target.blocks.filter(block => block.image !== null || block.notice).length
+    if (imageCount !== feedback.imageCount) return
+    target.imageAnnotations = feedback.attachments
+    this.queueUpdate({ kind: 'message', message: this.toPublicMessage(target) })
   }
 
   /** 历史压缩条目按整条收录；与实时压缩记录共用同一展示形状，顺序按基线给定的位置。 */
@@ -1009,7 +1028,9 @@ export class MessageProjection {
   }
 
   private createMessage(role: ProjectedRole, value: Record<string, unknown>): MutableMessage {
+    const annotations = role === 'user' ? parseImageAnnotationAttachments(value.imageAnnotations) : null
     return {
+      ...(annotations === null || annotations.length === 0 ? {} : { imageAnnotations: annotations }),
       sourceIdentity: toUserMessageIdentity(value),
       id: this.nextMessageId(),
       role,
@@ -1039,6 +1060,7 @@ export class MessageProjection {
 
   private toPublicMessage(message: MutableMessage): ProjectionMessage {
     return {
+      ...(message.imageAnnotations === undefined ? {} : { imageAnnotations: message.imageAnnotations }),
       id: message.id,
       role: message.role,
       blocks: message.blocks.map((block) => this.toPublicBlock(block)),

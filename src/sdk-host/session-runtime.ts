@@ -5,6 +5,8 @@ import { readFile, realpath, stat } from 'node:fs/promises'
 import { dirname, isAbsolute, resolve } from 'node:path'
 import type { AgentSession, AgentSessionEvent, AgentSessionRuntime, ExtensionCommandContextActions, ExtensionFactory, SessionStats } from '@earendil-works/pi-coding-agent'
 import { ExtensionUiBridge } from './extension-ui-bridge'
+import { ImageAnnotationContext } from './image-annotations'
+import type { ImageAnnotationDocument } from '../shared/image-annotation'
 import { createGenuiExtension, GENUI_EXTENSION_NAME } from './genui/index'
 import { MessageProjection } from './projection/message-projection'
 import { ActivityProjection, matchesActivityPrefix } from './projection/activity-projection'
@@ -255,6 +257,7 @@ export class SdkSessionRuntime {
   private extensionErrors: ExtensionErrorEntry[] = []
   /** Prompt 提交与 MCP 调用互斥：同一时刻只允许一个 prompt 请求。 */
   private promptInFlight = false
+  private readonly imageAnnotations = new ImageAnnotationContext()
 
   constructor(private readonly sdk: Sdk, private readonly options: RuntimeOptions) {}
 
@@ -449,12 +452,14 @@ export class SdkSessionRuntime {
 
   /**
    * 提交只返回接受、排队或已处理：本轮完成由官方事件表达，不把回答结束当作提交成功。
-   * 运行中不排队，保持桌面既有语义；图片只按线格式转交官方输入。
+   * 运行中不排队，保持桌面既有语义；图片本体按线格式转交官方输入。
+   * 标注通过本轮独立资料消息附带，不并入提示词，也不作为命令或模板的文字参数。
    *
    * 接受回执可能晚于扩展钩子与凭据校验，因此等待期限只是兜底：
    * 到期时若会话已在运行，说明 Prompt 已被接受，只按已开始回报，不误报冲突。
    */
-  async submit(bindingId: number, message: string, images: readonly { readonly data: string; readonly mimeType: string }[]): Promise<'started' | 'queued' | 'handled'> {
+  async submit(bindingId: number, message: string, images: readonly { readonly data: string; readonly mimeType: string;
+    readonly annotations?: ImageAnnotationDocument }[]): Promise<'started' | 'queued' | 'handled'> {
     const session = this.requireBoundSession(bindingId)
     if (this.needsHostRebuild || this.operationId !== null) throw new SdkSessionFailure('SESSION_BUSY')
     if (this.promptInFlight || this.isBusy()) throw new SdkSessionFailure('SESSION_BUSY')
@@ -464,12 +469,12 @@ export class SdkSessionRuntime {
     const accepted = new Promise<void>(resolvePromise => { reportAccepted = resolvePromise })
     this.promptInFlight = true
     try {
-      const prompt = session.prompt(message, {
+      const prompt = this.imageAnnotations.run(images, () => session.prompt(message, {
         images: images.map(image => ({ type: 'image' as const, data: image.data, mimeType: image.mimeType })),
         source: 'rpc',
         // 接受结果与拒绝都以官方回调为准；原始错误不外传，只映射到既有分类。
         preflightResult: value => { disposition = value; reportAccepted() }
-      })
+      }))
       // 执行失败与结果未知都不重发，由状态与事件收敛。
       await Promise.race([accepted, prompt.then(() => undefined, (error: unknown) => { rejection = error }),
         new Promise<void>(resolvePromise => setTimeout(resolvePromise, PROMPT_ACCEPT_TIMEOUT_MS))])
@@ -794,6 +799,8 @@ export class SdkSessionRuntime {
           ...(target.genui
             ? [{ name: GENUI_EXTENSION_NAME, factory: createGenuiExtension(), builtin: true, replaceable: true }]
             : []),
+          // 图片资料是独立上下文消息，不改写提示词，也不提供新的模型工具。
+          this.imageAnnotations.extension,
           bindingGuard
         ] } })
       if (this.closing) throw new SdkSessionFailure('HOST_NOT_READY')

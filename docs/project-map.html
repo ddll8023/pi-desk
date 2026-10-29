@@ -198,7 +198,7 @@
         "id": "sessions-chat",
         "name": "会话与聊天",
         "groupId": "chat",
-        "summary": "会话生命周期、SDK 宿主监督、运行身份与占用、聊天与历史投影、扩展交互；不拥有文件编辑、终端与供应商持久化。",
+        "summary": "会话生命周期、SDK 宿主监督、运行身份与占用、聊天与历史投影、独立图片资料及编号标注、扩展交互；不拥有文件编辑、终端与供应商持久化。",
         "features": [
           "按项目读取会话列表，打开／新建／重载／删除会话",
           "历史按会话寻址：已绑定读权威分支，未绑定由日志解析作答",
@@ -206,6 +206,7 @@
           "消息、工具、历史、活动与用量投影",
           "用量弹窗展示会话统计与独立的 Codex 账户额度，支持刷新",
           "点击立即展示本地待发送消息，后台就绪后提交固定输入",
+          "独立图片资料区提供点框编号与绑定说明，随提示词提交但不拼入提示词",
           "受理后有限同步核对，支持重新同步及确认结束原运行后的输入恢复",
           "SDK 扩展对话框、通知与 widget"
         ],
@@ -217,16 +218,21 @@
           {"kind": "关键实现", "label": "官方 SDK 会话", "path": "src/sdk-host/session-runtime.ts"},
           {"kind": "关键实现", "label": "消息与工具投影", "path": "src/sdk-host/projection/message-projection.ts"},
           {"kind": "界面入口", "label": "输入坞", "path": "src/renderer/src/sessions/components/PromptComposer.vue"},
+          {"kind": "界面入口", "label": "独立图片资料区", "path": "src/renderer/src/sessions/components/PromptImageMaterials.vue"},
+          {"kind": "界面入口", "label": "图片标注面板", "path": "src/renderer/src/sessions/components/ImageAnnotationPanel.vue"},
+          {"kind": "关键实现", "label": "图片独立资料消息", "path": "src/sdk-host/image-annotations.ts"},
           {"kind": "界面入口", "label": "用量与额度弹窗", "path": "src/renderer/src/sessions/components/UsageDetailDialog.vue"},
           {"kind": "关键实现", "label": "Runtime 展示状态", "path": "src/renderer/src/sessions/stores/runtime-core.ts"}
         ],
         "resources": [
           {"name": "会话历史文件", "owner": "官方 SDK", "lifecycle": "位于 Pi agent 目录下的项目会话文件；应用内占用由主进程注册表维护"},
-          {"name": "页面投影留底与历史缓存", "owner": "renderer Runtime Store", "lifecycle": "展示缓存，不替代会话历史存储"}
+          {"name": "页面投影留底与历史缓存", "owner": "renderer Runtime Store", "lifecycle": "展示缓存，不替代会话历史存储"},
+          {"name": "图片标注资料", "owner": "会话输入状态与官方 SDK", "lifecycle": "未提交草稿按原输入身份留在页面内存；已提交资料随会话历史保存，投影按所属图片还原"}
         ],
         "constraints": [
           "本地待发送展示不代表执行；会话真正绑定前不向 SDK 提交输入，也不能回退或压缩",
           "提交结果未确认时保留输入和附件；恢复不自动重发，已观察到正式消息时不重复恢复原输入",
+          "图片编号、位置与说明绑定，不改写原图像素；说明由 SDK 附属消息提供，不参与提示词命令或模板处理",
           "历史读取只接受项目与会话，不接受任意文件路径",
           "关闭标签保留历史，与删除会话不同"
         ],
@@ -282,6 +288,7 @@
           "新建空白对话，首次提交对话输入才在电脑后台创建并提交首条消息",
           "斜杠候选按阶段复用技能预读或绑定资源，选择只填充不执行",
           "本地 /new 保留原任务，/compact 对已同步空闲会话执行受限压缩",
+          "只读展示会话图片上的编号、整图说明及各标记的绑定说明",
           "每条连接独立同步，写请求结果未知时保留原请求等待显式重试"
         ],
         "tags": ["Electron 主进程", "局域网直连", "HTTP", "Vue 页面", "设备身份"],
@@ -290,7 +297,8 @@
           {"kind": "关键实现", "label": "局域网 HTTP 与来源边界", "path": "src/main/lan-remote/server.ts"},
           {"kind": "关键实现", "label": "受限远程能力", "path": "src/main/lan-remote/session-service.ts"},
           {"kind": "界面入口", "label": "手机访问设置", "path": "src/renderer/src/lan-remote/components/LanRemoteSettingsSection.vue"},
-          {"kind": "页面入口", "label": "手机网页外壳", "path": "src/lan-mobile/src/App.vue"}
+          {"kind": "页面入口", "label": "手机网页外壳", "path": "src/lan-mobile/src/App.vue"},
+          {"kind": "界面入口", "label": "消息与图片批注阅读", "path": "src/lan-mobile/src/components/MobileMessageList.vue"}
         ],
         "resources": [
           {"name": "手机设备身份", "owner": "DesktopConfigStore", "lifecycle": "保存设备身份与凭证摘要，不保存 Cookie 原文或逐项目授权"},
@@ -302,7 +310,8 @@
           "入口使用 HTTP，不提供传输加密或公网中继",
           "已连接手机可访问全部已登记项目并驱动 Agent 执行操作，不是只读预览",
           "后台新建与接入不参与桌面前台选择，也不清扫或占用桌面空白会话",
-          "命令候选不携带资源文件路径，界面命令不作为普通消息提交"
+          "命令候选不携带资源文件路径，界面命令不作为普通消息提交",
+          "图片批注只读展示，不提供标注编辑入口"
         ],
         "links": [
           {"label": "模块文档：手机访问", "href": "modules/lan-remote.md"},
@@ -928,10 +937,10 @@
         "note": "本地待发送、SDK 受理与正式投影到达是不同阶段；失败按原归属恢复输入，正式用户消息接替待发送展示，页面仍按代际与序号校验增量。",
         "relationIds": ["r-wt-open-intent", "r-sc-project-guard", "r-genui-session-tools"],
         "steps": [
-          {"title": "固定输入并立即展示", "description": "输入坞固定本次文本与附件、清空输入区并按原标签显示本地待发送消息；后续编辑不混入本次提交，目标未就绪时先走会话打开链。", "moduleIds": ["sessions-chat", "workspace-tabs"]},
+          {"title": "固定输入并立即展示", "description": "输入坞固定本次提示词、图片及绑定标注，清空本次输入并按原标签显示本地待发送消息；后续编辑不混入本次提交，目标未就绪时先走会话打开链。", "moduleIds": ["sessions-chat", "workspace-tabs"]},
           {"title": "提交 Runtime 请求", "description": "目标就绪且投影同步后，Runtime 服务经桥接把运行实例、绑定代际与固定输入交给主进程，页面不自行决定授权目标。", "moduleIds": ["sessions-chat"]},
-          {"title": "定位宿主并执行", "description": "主进程复核登记项目与信任，注册表决定复用、切前台或建立宿主；宿主请求会话目标准备后调用官方 SDK。", "moduleIds": ["projects-trust", "sessions-chat"]},
-          {"title": "生成有界投影", "description": "宿主把 SDK 事件转换为消息、工具、历史与活动投影，生成式界面载荷随工具结果一并识别。", "moduleIds": ["sessions-chat", "genui"]},
+          {"title": "定位宿主并执行", "description": "主进程复核登记项目与信任，注册表决定复用、切前台或建立宿主；宿主准备会话后调用官方 SDK，图片说明作为本轮独立附属消息提供，不拼入提示词或命令参数。", "moduleIds": ["projects-trust", "sessions-chat"]},
+          {"title": "生成有界投影", "description": "宿主把 SDK 事件转换为消息、工具、历史与活动投影，将标注附属资料关联回所属用户图片；生成式界面载荷随工具结果一并识别。", "moduleIds": ["sessions-chat", "genui"]},
           {"title": "页面应用增量", "description": "页面校验代际与序号后应用增量，正式用户消息接替本地待发送展示；切回已缓存实例时直接复用分片。", "moduleIds": ["sessions-chat", "workspace-tabs"]}
         ]
       },

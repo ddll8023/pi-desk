@@ -24,6 +24,7 @@ import ToolCard from './ToolCard.vue'
 import GenuiMountGate from '../../genui/components/GenuiMountGate.vue'
 import UiDocument from '../../genui/components/UiDocument.vue'
 import AppButton from '../../ui/AppButton.vue'
+import ImageAnnotationCanvas from './ImageAnnotationCanvas.vue'
 
 const props = defineProps<{
   readonly message: ChatMessageView
@@ -70,6 +71,7 @@ let mounted = true
 const editing = ref(false)
 const editDraft = ref('')
 const editTextarea = ref<HTMLTextAreaElement | null>(null)
+const selectedImageAnnotations = reactive(new Map<string, number>())
 
 /** 切换会话后清理反馈计时器，迟到的剪贴板结果不再写入旧消息组件。 */
 onUnmounted(() => {
@@ -626,12 +628,29 @@ function onEditKeydown(event: KeyboardEvent): void {
         <!-- 正文块保持原有样式：用户气泡、图片、技能卡与 AI 回答都不进折叠卡。 -->
         <template v-else-if="row.block.kind === 'text'">
           <!-- 图片附件仍只来自用户消息的本地附件，不交给 Markdown 解析。 -->
+          <div v-if="row.block.image !== null && row.block.annotations !== undefined" class="max-w-full self-end">
+            <ImageAnnotationCanvas :src="row.block.image.dataUrl" alt="带编号标注的图片附件" :document="row.block.annotations"
+              :selected-id="selectedImageAnnotations.get(row.block.key) ?? null" max-height="24rem"
+              @select="selectedImageAnnotations.set(row.block.key, $event)" />
+          </div>
           <img
-            v-if="row.block.image !== null"
+            v-else-if="row.block.image !== null"
             :src="row.block.image.dataUrl"
             :alt="`附件图片（${row.block.image.mimeType}）`"
             class="max-h-48 self-end rounded-desk-md border border-desk-line object-contain"
           />
+          <section v-if="row.block.annotations !== undefined" class="w-full max-w-xl self-end rounded-desk-md border border-desk-line bg-desk-surface p-3 text-xs" aria-label="对应图片的标注说明">
+            <p class="mb-2 font-medium">图片标注说明</p>
+            <p v-if="row.block.annotations.overview" class="mb-2 whitespace-pre-wrap break-words">整图：{{ row.block.annotations.overview }}</p>
+            <ol class="space-y-1">
+              <li v-for="annotation in row.block.annotations.annotations" :key="annotation.id">
+                <button type="button" class="block w-full rounded-desk-sm p-2 text-left whitespace-pre-wrap break-words"
+                  :class="selectedImageAnnotations.get(row.block.key) === annotation.id ? 'bg-desk-accent-soft text-desk-accent' : 'hover:bg-desk-surface-subtle'"
+                  :aria-pressed="selectedImageAnnotations.get(row.block.key) === annotation.id"
+                  @click="selectedImageAnnotations.set(row.block.key, annotation.id)"><span class="font-semibold">{{ annotation.id }} · </span>{{ annotation.text }}</button>
+              </li>
+            </ol>
+          </section>
           <!-- 技能调用是被 Pi 展开的机器内容，单独折叠展示；用户追加文本仍走原气泡。 -->
           <details
             v-if="row.block.skill !== null"

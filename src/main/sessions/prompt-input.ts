@@ -5,6 +5,8 @@
  */
 import { PROMPT_IMAGE_MAX_CHARS, PROMPT_IMAGE_MAX_COUNT } from '../../shared/runtime-api'
 import type { PromptImageInput } from '../../shared/runtime-api'
+import { imageAnnotationError, parseImageAnnotations } from '../../shared/image-annotation'
+import type { ImageAnnotationDocument } from '../../shared/image-annotation'
 
 /** prompt 文本上限，按 UTF-8 字节计。 */
 const PROMPT_MAX_BYTES = 1_048_576
@@ -15,7 +17,8 @@ const PROMPT_IMAGE_MIME_TYPES: readonly string[] = ['image/png', 'image/jpeg', '
 export function validatePromptInput(
   message: string,
   images: readonly PromptImageInput[]
-): { readonly ok: true; readonly images: readonly { readonly type: 'image'; readonly data: string; readonly mimeType: string }[] }
+): { readonly ok: true; readonly images: readonly { readonly type: 'image'; readonly data: string; readonly mimeType: string;
+    readonly annotations?: ImageAnnotationDocument }[] }
   | { readonly ok: false; readonly message: string } {
   if (message.trim() === '' && images.length === 0) {
     return { ok: false, message: 'Prompt 内容与图片不能同时为空。' }
@@ -26,7 +29,7 @@ export function validatePromptInput(
   if (images.length > PROMPT_IMAGE_MAX_COUNT) {
     return { ok: false, message: `单条 Prompt 最多携带 ${PROMPT_IMAGE_MAX_COUNT} 张图片。` }
   }
-  const wireImages: { type: 'image'; data: string; mimeType: string }[] = []
+  const wireImages: { type: 'image'; data: string; mimeType: string; annotations?: ImageAnnotationDocument }[] = []
   for (const image of images) {
     if (!PROMPT_IMAGE_MIME_TYPES.includes(image.mimeType)) {
       return { ok: false, message: `不支持的图片类型：${image.mimeType}。` }
@@ -34,7 +37,12 @@ export function validatePromptInput(
     if (image.data.length === 0 || image.data.length > PROMPT_IMAGE_MAX_CHARS) {
       return { ok: false, message: `图片「${image.name}」超出编码后大小上限。` }
     }
-    wireImages.push({ type: 'image', data: image.data, mimeType: image.mimeType })
+    const annotations = image.annotations === undefined ? undefined : parseImageAnnotations(image.annotations)
+    if (annotations === null) return { ok: false, message: `图片「${image.name}」的标注格式不正确。` }
+    const annotationError = imageAnnotationError(annotations)
+    if (annotationError !== null) return { ok: false, message: `图片「${image.name}」：${annotationError}` }
+    wireImages.push({ type: 'image', data: image.data, mimeType: image.mimeType,
+      ...(annotations === undefined ? {} : { annotations }) })
   }
   return { ok: true, images: wireImages }
 }

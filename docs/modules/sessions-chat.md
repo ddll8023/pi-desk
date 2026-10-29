@@ -4,9 +4,9 @@
 
 ## 职责与入口
 
-负责按项目读取会话列表、打开／新建／重载／删除会话、按会话读取历史（页、轮次与原文续段），监督 SDK 宿主、维护运行身份与占用，发送与中止、回退、压缩，投影聊天／工具／历史／活动与用量，以及 SDK 扩展对话框、通知和 widget。
+负责按项目读取会话列表、打开／新建／重载／删除会话、按会话读取历史（页、轮次与原文续段），监督 SDK 宿主、维护运行身份与占用，发送与中止、回退、压缩，投影聊天／工具／历史／活动与用量，管理独立图片资料与编号标注，以及 SDK 扩展对话框、通知和 widget。
 
-入口为侧栏、顶部栏的对话跳转入口、输入坞、聊天消息动作和资源重载。文件编辑器、终端、MCP 配置与供应商持久化属于其他模块；会话内 Agent 自己读写项目文件也不等于桌面文件编辑接口。
+入口为侧栏、顶部栏的对话跳转入口、输入坞及其独立图片资料区、聊天消息动作和资源重载。文件编辑器、终端、MCP 配置与供应商持久化属于其他模块；会话内 Agent 自己读写项目文件也不等于桌面文件编辑接口。
 
 ## 专属文件
 
@@ -21,13 +21,14 @@
 | `src/main/sessions/sdk-runtime-bridge.ts` | 多实例运行选择、请求分发、状态与宿主生命周期适配；按实例查询与订阅完整状态 |
 | `src/main/sessions/sdk-host-manager.ts` | utilityProcess 启动、协议请求、超时、身份和退出监督 |
 | `src/main/sessions/extension-ui-manager.ts` | 扩展 UI 投影、等待与回应管理 |
-| `src/main/sessions/prompt-input.ts` | Prompt 与图片附件边界处理 |
+| `src/main/sessions/prompt-input.ts` | Prompt、图片及绑定标注的校验与受限载荷重建 |
 | `src/main/sessions/ipc.ts` | 会话列表、打开、重载、删除、按会话读取历史，以及运行清单查询、释放与结束的通道注册 |
 | `src/main/sessions/runtime-ipc.ts` | 执行主链通道注册：状态、中止、回退、模型、压缩、Prompt、投影快照与确认 |
 | `src/main/sessions/extension-ui-ipc.ts` | 扩展交互通道注册：对话、通知与 widget 快照读取及应答提交 |
 | `src/sdk-host/index.ts` | 宿主入口、初始化、授权回应与控制／生命周期分派 |
 | `src/sdk-host/protocol.ts` | 主进程和 SDK 宿主的版本化消息、请求与目标校验 |
 | `src/sdk-host/session-runtime.ts` | 官方 SDK 会话、运行请求、订阅、回退／压缩及内置扩展装配 |
+| `src/sdk-host/image-annotations.ts` | 按提交的异步作用域附带本轮独立图片说明消息，不改写提示词或预先排入下一轮 |
 | `src/sdk-host/log-reader.ts` | 日志读取：把已授权的会话文件按查询解析成历史页、轮次页或原文续段，不建会话、不加载扩展与 MCP；按文件版本有界复用多个会话的解析结果，并把最新首页写入检查点 |
 | `src/sdk-host/extension-ui-bridge.ts` | SDK UI 回调到宿主消息的适配及取消 |
 
@@ -35,9 +36,9 @@
 
 | 文件 | 用途 |
 | --- | --- |
-| `src/sdk-host/projection/message-projection.ts` | 有界消息／工具聚合、序号、批次与确认 |
+| `src/sdk-host/projection/message-projection.ts` | 有界消息／工具聚合、序号、批次与确认，将图片标注附属资料关联回原用户消息 |
 | `src/sdk-host/projection/tool-projection.ts` | 工具生命周期、参数／结果摘要与生成式界面载荷接入 |
-| `src/sdk-host/projection/history-projection.ts` | 当前分支按轮历史与原文续段 |
+| `src/sdk-host/projection/history-projection.ts` | 当前分支按轮历史与原文续段，从附属条目还原图片与标注关系 |
 | `src/sdk-host/projection/activity-projection.ts` | 从官方分支累计稳定活动事实，以实时工具状态补充展示，支持检查点恢复与连续追加复用 |
 | `src/sdk-host/projection/identity.ts` | 用户消息规范化摘要身份；不替代官方回退条目 ID |
 | `src/sdk-host/projection/output-rate.ts` | 模型输出速率计算 |
@@ -46,6 +47,7 @@
 | `src/shared/session-run-api.ts` | 应用级运行清单、释放／结束与事件契约 |
 | `src/shared/extension-ui-api.ts` | 扩展对话、通知、widget 与回应形态 |
 | `src/shared/user-message-text.ts` | 用户消息里的技能块与图片标记处理，供摘要和展示共用 |
+| `src/shared/image-annotation.ts` | 图片标注的编号、归一化位置、说明与整图意见契约，以及附属资料识别和校验 |
 
 ### 前端状态与服务
 
@@ -53,14 +55,14 @@
 | --- | --- |
 | `src/renderer/src/sessions/stores/session.ts` | 按项目的列表窗口与读取调度、串行打开／重载、按标签意图提交打开、删除与待确认目标 |
 | `src/renderer/src/sessions/stores/session-runs.ts` | 运行清单、副本状态、释放与结束 |
-| `src/renderer/src/sessions/stores/session-view.ts` | 会话输入、阅读与展开状态，按标签保存待发送快照、核对同步并保留未确认输入，原位新草稿的独立留底、批注交付目标身份核对及附件移交与回收 |
+| `src/renderer/src/sessions/stores/session-view.ts` | 会话输入、阅读与展开状态，按标签保存待发送快照、核对同步并保留未确认输入，原位新草稿的独立留底、浏览器批注交付目标身份核对及图片与绑定标注的移交、还原与回收 |
 | `src/renderer/src/sessions/stores/chat-navigation.ts` | 对话内跳转登记：按会话键发布轮次入口与当前轮，并转交一次性跳转意图 |
 | `src/renderer/src/sessions/stores/extension-ui.ts` | 运行目标的扩展对话、通知、widget 展示副本 |
 | `src/renderer/src/sessions/services/session.ts` | 会话请求桥接 |
 | `src/renderer/src/sessions/services/session-runs.ts` | 运行清单与生命周期桥接 |
 | `src/renderer/src/sessions/services/runtime.ts` | Runtime 状态、Prompt、回退、压缩、模型命令与投影桥接 |
 | `src/renderer/src/sessions/services/extension-ui.ts` | 扩展快照订阅与对话回应桥接 |
-| `src/renderer/src/sessions/chat-view.ts` | 将消息与工具投影组织为聊天展示模型 |
+| `src/renderer/src/sessions/chat-view.ts` | 将消息与工具投影组织为聊天展示模型，保留图片与标注关系并还原可重发输入 |
 | `src/renderer/src/sessions/clock.ts` | 聊天生成／工具计时与显示时钟 |
 | `src/renderer/src/sessions/usage-format.ts` | token、费用及用量展示格式 |
 | `src/renderer/src/sessions/tool-summary.ts` | 工具卡展示推导：参数摘要、路径相对化、改动量与结果预览 |
@@ -70,10 +72,13 @@
 
 | 文件 | 用途 |
 | --- | --- |
-| `src/renderer/src/sessions/components/PromptComposer.vue` | 输入、附件、文件树拖入引用、命令与补全；浏览器批注草稿合并；点击固定待发送快照、后台提交及失败恢复；显式同步与确认结束原运行后的输入恢复 |
-| `src/renderer/src/sessions/components/ChatMessageList.vue` | 本地待发送／结果未确认状态展示与权威消息交接、历史加载、滚动与布局观察；向顶部栏发布对话跳转入口并执行跳转 |
+| `src/renderer/src/sessions/components/PromptComposer.vue` | 提示词与独立图片资料编排、文件树拖入引用、命令与补全；浏览器批注草稿合并；固定提示词、图片及标注快照、后台提交与失败恢复；显式同步及确认结束原运行后的输入恢复 |
+| `src/renderer/src/sessions/components/PromptImageMaterials.vue` | 输入框外的图片资料区：导入、移除、标注数量与独立编辑入口 |
+| `src/renderer/src/sessions/components/ImageAnnotationPanel.vue` | 左图右说明的独立标注面板、编号双向定位、同步删除与键盘调整入口 |
+| `src/renderer/src/sessions/components/ImageAnnotationCanvas.vue` | 共用原图坐标系的编号与点框叠加层，支持编辑及桌面／手机只读展示，不修改图片像素 |
+| `src/renderer/src/sessions/components/ChatMessageList.vue` | 本地待发送／结果未确认状态及绑定图片标注展示、权威消息交接、历史加载、滚动与布局观察；向顶部栏发布对话跳转入口并执行跳转 |
 | `src/renderer/src/sessions/components/ChatTurnItem.vue` | 按轮摘要、展开与原文内容 |
-| `src/renderer/src/sessions/components/ChatMessageItem.vue` | 单消息、思考、工具归组面板与生成式界面分发 |
+| `src/renderer/src/sessions/components/ChatMessageItem.vue` | 单消息、图片编号及对应说明、思考、工具归组面板与生成式界面分发 |
 | `src/renderer/src/sessions/components/HistoryLoadSentinel.vue` | 历史加载触发哨兵 |
 | `src/renderer/src/sessions/components/ToolCard.vue` | 工具卡：摘要行、变更 Diff、参数与结果二级折叠 |
 | `src/renderer/src/sessions/components/UsageDetailDialog.vue` | 会话用量明细与独立的 Codex 账户额度展示、按需读取与手动刷新 |
@@ -102,7 +107,7 @@
 1. 页面表达打开意图：标签 Store 计算 `ChatOpenIntent`，`session` Store 固定项目与标签并串行提交；选择本身立即落到标签，不等打开动作整体收尾。打开已有会话前先按会话读取首页历史并显示出来，未绑定时可继续翻页、展开轮次与续段；历史读取不排队，失败即降级。页面只给项目与会话，由主进程判定该会话当前走绑定路径还是日志解析。
 2. 主进程校验登记项目与信任，注册表管理占用，Runtime 桥决定复用、切前台或建立宿主；前台选择按主进程分配的序号收敛，先提交后完成的旧选择不会把前台改回旧目标。项目成为当前项目时预热只读池中的一个解析宿主，供查看历史与随后的绑定共用。
 3. 宿主请求会话目标准备，主进程按来源实例的归属项目复核目标，再返回绑定代际与目录；宿主不能自行编号授权。
-4. 输入坞点击发送即固定本次文本与附件、清空输入区，并按原标签显示本地待发送消息；目标未就绪时先走会话打开链，就绪且投影同步后经 Runtime 服务提交固定目标与输入快照。SDK 事件转换成消息、工具与活动投影，主进程广播到可信页面；本地待发送展示与 SDK 受理、正式投影到达是不同阶段。
+4. 输入坞点击发送即固定本次提示词、图片及绑定标注、清空本次输入，并按原标签显示本地待发送消息；目标未就绪时先走会话打开链，就绪且投影同步后经 Runtime 服务提交固定目标与输入快照。提示词照常进入命令、输入处理器与模板管线，图片说明在实际启动用户轮次时作为 SDK 独立附属消息提供。SDK 事件转换成消息、工具与活动投影，图片标注关联回原用户消息；主进程广播到可信页面。本地待发送展示与 SDK 受理、正式投影到达是不同阶段。
 5. 页面校验代际／序号并应用增量；切回已缓存的实例时直接复用分片与模型清单，仅在换代、缺基准、序号断档或宿主失效时取快照；同一绑定的快照水位不倒退；早期历史和超长正文按会话读取当前分支，不接受任意文件路径，分支已变时按权威基准重建一次。
 6. 回退基于官方条目身份建立新分支；压缩由 SDK 处理。成功请求和最终展示收敛不是同一个时点。
 7. 删除会话先按登记占用结束或释放实例，再删除受限会话文件并刷新列表。关闭标签保留历史，与删除不同。
@@ -133,6 +138,10 @@
 
 日志解析结果在宿主内按项目、会话、规范文件与文件版本有界复用，同版本并发共用解析，不保留原始日志文本。首页与稳定活动检查点彼此独立，也不落盘或跨进程传递：首页按文件戳与分支尾匹配；稳定活动从官方分支累计，与实时工具状态分开，恢复时核对完整前缀及投影版本，绑定时再核对实际 SDK 分支。同一 manager 的连续追加只累计新增条目，无事实变化时复用视图；分支不匹配则重建。检查点命中不能省去 SDK 打开会话文件，也不能把旧绑定的实时状态当作恢复基准。
 
+桌面图片通过提示词输入框外的「图片资料」区导入、粘贴或拖入，点击图片进入独立标注面板。点标记或矩形区域与各自的编号、说明绑定，支持整图说明；图上编号与说明双向定位，删除时一起删除，不重新排列其他编号。画面只叠加标记，不改写原图像素；存在未填写说明的标记时不提交，类型和内容边界见 `src/shared/image-annotation.ts` 与 `src/main/sessions/prompt-input.ts`。
+
+发送时图片及标注与提示词一起固定，但说明不拼入提示词，也不作为命令或模板的文字参数。模型接收图片本体及独立的编号、比例坐标和说明；结构化资料随 SDK 会话历史保存，实时与历史投影按原用户消息中的图片顺序还原，不另建用户轮次或回退身份。失败恢复及修改重试保留可还原图片与绑定说明，提示词回到输入框，图片资料回到独立区域；处理器消费输入但未走常规提交时保留图片资料，不自动重发。
+
 浏览器批注交付只在指定项目、标签内容与输入身份匹配且输入坞可编辑时合并；模型图片能力与附件限制仍由输入坞核对，拒绝时不改动原草稿。成功时追加批注文字与图片，不自动提交给 SDK；浏览器采集、悬浮编辑与关闭边界见[工作区批注](workspace-tabs.md#浏览器批注)。
 
-输入、附件和阅读状态只保留页面内；空闲回收后的会话可在发送时恢复，不意味着应用重启后恢复所有运行任务。应用退出关闭 SDK 宿主，终端常驻是另一条生命周期。独立宿主不隔离项目文件，多会话不承诺自动解决并行文件修改。
+未提交的提示词、图片及标注草稿和阅读状态只保留页面内；空闲回收后的会话可在发送时恢复，不意味着应用重启后恢复所有运行任务。应用退出关闭 SDK 宿主，终端常驻是另一条生命周期。独立宿主不隔离项目文件，多会话不承诺自动解决并行文件修改。

@@ -4,6 +4,8 @@ import type { HistoryChunk, HistoryData, HistoryPage, HistoryQuery, ProjectionMe
 import { MessageProjection } from './message-projection'
 import { summarizeToolArguments } from './tool-projection'
 import { parseGenuiPayload } from '../../shared/genui-api'
+import { readImageAnnotationMessage } from '../../shared/image-annotation'
+import type { ImageAnnotationAttachment } from '../../shared/image-annotation'
 
 const PAGE_TURNS = 8
 const DETAIL_ENTRIES = 32
@@ -116,6 +118,24 @@ export function readBranchHistory(branch: readonly SessionEntry[], query: Histor
     selected = remaining.slice(0, DETAIL_ENTRIES)
     next = remaining.length > selected.length ? selected.at(-1)?.id ?? null : null
   }
+  // 附属资料不参与轮次、分页游标与回退身份；从完整当前分支关联到原用户条目。
+  const annotationsByUser = new Map<string, readonly ImageAnnotationAttachment[]>()
+  let annotationOwner: string | null = null
+  let ownerImageCount = 0
+  for (const entry of branch) {
+    if (entry.type === 'message' && entry.message.role === 'user') {
+      annotationOwner = entry.id
+      ownerImageCount = Array.isArray(entry.message.content)
+        ? entry.message.content.filter(part => part.type === 'image').length : 0
+    } else if (entry.type === 'message' && entry.message.role === 'assistant') {
+      annotationOwner = null
+    } else if (annotationOwner !== null) {
+      const feedback = readImageAnnotationMessage(entry)
+      if (feedback !== null && feedback.imageCount === ownerImageCount) {
+        annotationsByUser.set(annotationOwner, feedback.attachments)
+      }
+    }
+  }
   const chunks: HistoryChunk[] = []
   let budget = PAGE_CHARS
   const clip = (entry: SessionEntry, contentIndex: number, field: HistoryChunk['field'], text: string, limit = BLOCK_CHARS): string => {
@@ -130,6 +150,8 @@ export function readBranchHistory(branch: readonly SessionEntry[], query: Histor
     const message = messageOf(entry)
     if (message === null) continue
     const prepared = { ...message }
+    const annotations = annotationsByUser.get(entry.id)
+    if (annotations !== undefined) prepared.imageAnnotations = annotations
     if (typeof message.summary === 'string') prepared.summary = clip(entry, 0, 'summary', message.summary)
     if (typeof message.content === 'string') prepared.content = clip(entry, 0,
       message.role === 'toolResult' ? 'output' : 'text', message.content)

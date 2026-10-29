@@ -1,6 +1,6 @@
 <!-- 待发送消息独立于权威投影展示；有限核对后区分等待与结果未确认，保留原输入并在正式消息到达后交接。
      原位新建时保持消息区挂载与阅读留底，但隐藏旧内容、暂停旧会话操作并收起浮层。
-     消息区：按投影渲染、粘底与对话内跳转；承接用户消息回退确认与修改提交，回退会新建会话（列表折叠为一条），项目文件不回退；回退把原消息文本与可还原的附件交回输入框，修改重试在没能重发时交回修改后的文本。
+     消息区：按投影渲染、粘底与对话内跳转；承接用户消息回退确认与修改提交，回退会新建会话（列表折叠为一条），项目文件不回退；回退将提示词回填输入框，图片及绑定说明恢复到独立资料区；修改重试在没能重发时交回修改后的提示词与原图片资料。
      每一轮的用户输入摘要与当前所在轮由这里发布给顶部栏的跳转列表，跳转意图也回到这里执行，滚动与折叠仍只有本组件一处权威。
      渲染与折叠都以轮为单位：当前轮与上一轮始终完整展开，更早的轮次只留用户输入、其后的 AI 回答与过程压成一行摘要（见 ChatTurnItem）；开合状态按会话保存，顶部开关控制全局默认。
      卡片（思考、工具、技能、压缩摘要、旧版界面）的手动展开由子组件上报，收到后停止粘底：摘要行留在原处，内容从它下面长出来，只有外层滚动范围变大。
@@ -21,6 +21,7 @@ import ChatTurnItem from './ChatTurnItem.vue'
 import HistoryLoadSentinel from './HistoryLoadSentinel.vue'
 import AppButton from '../../ui/AppButton.vue'
 import ConfirmDialog from '../../ui/ConfirmDialog.vue'
+import ImageAnnotationCanvas from './ImageAnnotationCanvas.vue'
 
 /** 距底部多少像素内仍视为"停在底部"，避免流式更新时与用户上滚互相争夺。 */
 const STICK_THRESHOLD_PX = 24
@@ -164,7 +165,7 @@ function userMessagePayloadOf(messageId: string): UserMessagePayload | null {
 }
 
 /**
- * 把回退拿回的消息内容交回输入框；无法还原的附件只在这里说明，不静默丢。
+ * 请求将回退所得提示词回填输入框，图片及说明恢复到独立资料区；无法还原的附件在这里明确说明。
  * `action` 决定文案说的是回退还是修改重试。
  */
 function handBack(refill: UserMessagePayload, action: '回退' | '修改重试'): void {
@@ -179,7 +180,7 @@ function handBack(refill: UserMessagePayload, action: '回退' | '修改重试')
   }, 8_000)
 }
 
-/** 发起确认时固定目标（运行实例、代际与会话）并捕获要交回输入框的原消息内容；用户确认前不会改变历史。 */
+/** 发起确认时固定目标（运行实例、代际与会话），分别捕获提示词与图片资料；用户确认前不会改变历史。 */
 function requestRewind(messageId: string): void {
   if (!canRewind.value || runtimeView.value.phase !== 'ready') return
   const runId = runtimeView.value.snapshot.runId
@@ -191,7 +192,7 @@ function requestRewind(messageId: string): void {
   pendingRewind.value = { request: { runId, runtimeId, sessionId, messageId }, refill }
 }
 
-/** 直接回退：成功后把原消息内容交回输入框；仅权威成功才刷新会话列表。 */
+/** 直接回退：成功后按提示词与图片资料各自的编辑位置交回原输入；仅权威成功才刷新会话列表。 */
 async function confirmRewind(): Promise<void> {
   const pending = pendingRewind.value
   pendingRewind.value = null
@@ -203,8 +204,8 @@ async function confirmRewind(): Promise<void> {
 }
 
 /**
- * 修改提交：回退成功后立即用修改后的文本与原附件重发；
- * 发送没被受理、或回退返回失败但分叉确已发生时，把内容交回输入框，不让已从分支移除的消息成为唯一副本。
+ * 修改提交：回退成功后立即用修改后的提示词与原图片及标注重发；
+ * 未能重发但分叉确已发生时，提示词与图片资料分别交回原输入，避免只留在已从分支移除的消息中。
  */
 async function handleSubmitEdit(messageId: string, text: string): Promise<void> {
   if (!canRewind.value || runtimeView.value.phase !== 'ready') return
@@ -893,8 +894,15 @@ onBeforeUnmount(() => {
         </div>
 
         <article v-if="showPendingPrompt && pendingPrompt !== null" class="chat-message chat-message-user" aria-label="待发送消息" :aria-busy="pendingPrompt.checking || (pendingPrompt.phase !== 'cancelled' && pendingPrompt.phase !== 'unconfirmed')">
-          <div v-for="image in pendingPrompt.input.images" :key="image.objectUrl" class="self-end">
-            <img :src="image.objectUrl" :alt="image.file.name" class="max-h-64 max-w-full rounded-desk-lg" />
+          <div v-for="image in pendingPrompt.input.images" :key="image.objectUrl" class="max-w-full self-end">
+            <template v-if="image.annotations !== undefined">
+              <ImageAnnotationCanvas :src="image.objectUrl" :alt="image.file.name" :document="image.annotations" max-height="16rem" />
+              <div class="mt-2 max-w-xl rounded-desk-md border border-desk-line bg-desk-surface p-3 text-xs" aria-label="待发送图片的标注说明">
+                <p v-if="image.annotations.overview" class="mb-2 whitespace-pre-wrap break-words">整图：{{ image.annotations.overview }}</p>
+                <ol class="space-y-2"><li v-for="annotation in image.annotations.annotations" :key="annotation.id" class="whitespace-pre-wrap break-words"><span class="font-semibold">{{ annotation.id }} · </span>{{ annotation.text }}</li></ol>
+              </div>
+            </template>
+            <img v-if="image.annotations === undefined" :src="image.objectUrl" :alt="image.file.name" class="max-h-64 max-w-full rounded-desk-lg" />
           </div>
           <div v-if="pendingPrompt.input.draft !== ''" class="chat-bubble chat-bubble-user self-end">{{ pendingPrompt.input.draft }}</div>
           <p class="self-end text-xs text-desk-muted" role="status">

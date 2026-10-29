@@ -7,6 +7,7 @@ import { historyChunkKey } from '../../../renderer/src/sessions/stores/runtime-h
 import { createChatViewCache } from '../../../renderer/src/sessions/chat-view'
 import type { ChatTurnView } from '../../../renderer/src/sessions/chat-view'
 import MarkdownContent from '../../../renderer/src/ui/MarkdownContent.vue'
+import ImageAnnotationCanvas from '../../../renderer/src/sessions/components/ImageAnnotationCanvas.vue'
 
 const props = defineProps<{
   readonly messages: readonly ProjectionMessage[]
@@ -80,7 +81,14 @@ onMounted(() => { void nextTick(() => { if (scroller.value) scroller.value.scrol
           <template v-if="message.compaction"><p class="mobile-muted">{{ message.compaction.summary }}</p></template>
           <template v-for="block in message.blocks" :key="block.key">
             <template v-if="block.kind === 'text'">
-              <img v-if="block.image" :src="block.image.dataUrl" alt="对话中的图片附件" class="mobile-message-image" loading="lazy" />
+              <ImageAnnotationCanvas v-if="block.image && block.annotations !== undefined" :src="block.image.dataUrl"
+                alt="对话中的标注图片" :document="block.annotations" max-height="20rem" />
+              <img v-else-if="block.image" :src="block.image.dataUrl" alt="对话中的图片附件" class="mobile-message-image" loading="lazy" />
+              <section v-if="block.annotations !== undefined" class="mobile-detail" aria-label="图片标注说明">
+                <p class="mobile-detail-label">图片标注说明</p>
+                <p v-if="block.annotations.overview" style="white-space: pre-wrap; overflow-wrap: anywhere">整图：{{ block.annotations.overview }}</p>
+                <ol style="list-style: none; padding: 0"><li v-for="annotation in block.annotations.annotations" :key="annotation.id" style="white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 8px"><strong>{{ annotation.id }} · </strong>{{ annotation.text }}</li></ol>
+              </section>
               <details v-if="block.skill" class="mobile-detail"><summary>技能 · {{ block.skill.name }}</summary><pre class="scroll-area">{{ block.skill.content }}</pre></details>
               <MarkdownContent v-if="block.text" :text="block.text" />
               <p v-if="block.truncated" class="mobile-muted">此段正文已截断，可展开这一轮原文。</p>

@@ -1,10 +1,13 @@
-<!-- 点击发送即固定文字与附件并显示待发送消息；结果未确认时可补读同步，确认结束原运行后恢复输入，不自动重发。
+<!-- 图片与编号说明在输入框外独立管理；点击发送即固定提示词、图片及标注快照，说明由 SDK 独立资料消息承接。
+     结果未确认时可补读同步，确认结束原运行后恢复输入，不自动重发。
      原位新建以独立草稿承接输入：旧实例结束期间可编辑但不发送，首次发送才建立新会话。
      Prompt 输入坞：处理输入法组合态、Enter 发送与 Shift+Enter 换行、焦点回归与重复提交、响应侧栏「新建」的聚焦请求并给出一次性提示，并在 Agent 运行期间原位提供停止入口；同时承接 Extension 的 set_editor_text 填充文本、图片附件的选择/粘贴/拖拽三种入口、输入行按内容自动增高、快捷发送下拉（短语取自界面偏好，可在设置里增删改与排序）、Pi 命令的斜杠模糊补全（Runtime 就绪后用运行中的命令清单，未就绪时用主进程预读的技能清单，按类型分组并按匹配优先级排序；另含 Desktop 层自己拦截的界面命令）与 `@` 项目文件引用（只写入相对路径文本，不传文件内容）；右侧文件树的行拖入坞内也走同一条相对路径引用规则。底部工具条左侧是信息行：异常与进行中的状态文本、被收起的 Extension 对话入口与会话用量指标（缓存命中率、上下文占用与平均速率，点击开明细；累计 token 与费用只在明细浮层展示）；右侧是模型选择、附件、快捷发送与发送/停止按钮。Extension 的 setStatus 项不在输入区展示。 -->
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { PROJECT_FILE_QUERY_MAX_CHARS } from '../../../../shared/project-file-api'
+import { cloneImageAnnotations, imageAnnotationError } from '../../../../shared/image-annotation'
+import type { ImageAnnotationDocument } from '../../../../shared/image-annotation'
 import type { OutputRate, PiResourceEntry, PiResourceKind, PromptDisposition, PromptImageInput } from '../../../../shared/runtime-api'
 import { useExtensionUiStore } from '../stores/extension-ui'
 import { usePreferencesStore } from '../../preferences/stores/preferences'
@@ -22,6 +25,7 @@ import AppButton from '../../ui/AppButton.vue'
 import ConfirmDialog from '../../ui/ConfirmDialog.vue'
 import RuntimeModelSelect from '../../providers/components/RuntimeModelSelect.vue'
 import UsageDetailDialog from './UsageDetailDialog.vue'
+import PromptImageMaterials from './PromptImageMaterials.vue'
 import { hasProjectEntryDragData, projectEntryReferenceText, readProjectEntryDragData } from '../../ui/project-entry-drag'
 
 const runtimeStore = useRuntimeStore()
@@ -98,7 +102,8 @@ watch(() => props.focusToken, () => {
 
 /** 待发送的图片附件；预览地址的创建与释放都经会话状态，见 sessions/stores/session-view.ts。 */
 const pendingImages = ref<PendingImage[]>([])
-const imageInput = ref<HTMLInputElement | null>(null)
+const imageMaterials = ref<InstanceType<typeof PromptImageMaterials> | null>(null)
+const incompleteImageAnnotations = computed(() => pendingImages.value.some(image => imageAnnotationError(image.annotations) !== null))
 
 /**
  * 草稿与附件按会话或原位新建的输入身份保存，旧实例收尾不改变新草稿归属。
@@ -223,6 +228,7 @@ const canSubmit = computed(() => {
 /** 提交要求文本与附件至少有一项：只发图片不带文字也是合法输入；快捷发送直接用偏好里的短语，因此不看这一条。 */
 const canSend = computed(() => (
   (draft.value.trim() !== '' || pendingImages.value.length > 0) && canSubmit.value
+    && !incompleteImageAnnotations.value && (pendingImages.value.length === 0 || imageSupported.value !== false)
     && sessionViewStore.pendingPrompt === null
 ))
 /** 图片入口（选择、粘贴、拖拽）共用同一套禁用条件，避免三条路径行为不一致。 */
@@ -238,6 +244,9 @@ const compactErrorText = computed(() => {
 })
 
 const status = computed<{ readonly kind: 'info' | 'error'; readonly text: string } | null>(() => {
+  if (pendingImages.value.length > 0 && imageSupported.value === false) {
+    return { kind: 'error', text: '当前模型不支持图片，请切换支持图片的模型或移除图片资料。' }
+  }
   if (workspaceTabsStore.newChatError !== null) {
     return { kind: 'error', text: `${workspaceTabsStore.newChatError} 原会话已保留，新草稿会在重试 /new 时恢复。` }
   }
@@ -431,12 +440,11 @@ defineExpose({ mergeBrowserAnnotation })
 /** 输入行自动增高的静态上限；实际上限再取窗口高度的 40%。与 .prompt-composer-input 的 max-height 保持一致。 */
 const MAX_INPUT_HEIGHT = 200
 
-/** 选择图片：只接受白名单类型，超出条数上限时截断并提示。 */
-function onPickImages(event: Event): void {
-  const input = event.target as HTMLInputElement
-  const files = [...(input.files ?? [])]
-  input.value = ''
-  addImageFiles(files)
+/** 标注只更新所属图片资料；提示词草稿保持原样，迟到的弹层更新不能创建附件。 */
+function updateImageAnnotations(objectUrl: string, annotations: ImageAnnotationDocument): void {
+  if (!canSubmit.value) return
+  pendingImages.value = pendingImages.value.map(image => image.objectUrl === objectUrl
+    ? { ...image, annotations: cloneImageAnnotations(annotations) } : image)
 }
 
 /** 粘贴与拖拽图片：只提取白名单内的图片文件，文本粘贴仍走浏览器默认行为。 */
@@ -446,6 +454,7 @@ function pickImageFiles(files: readonly File[]): readonly File[] {
 
 /** 文件选择、粘贴与拖拽的共用图片校验；浏览器批注由合并入口单独核对目标及附件限制。 */
 function addImageFiles(files: readonly File[]): void {
+  if (attachDisabled.value) return
   for (const file of files) {
     if (!IMAGE_MIME_TYPES.includes(file.type)) {
       promptView.value = { phase: 'error', error: { code: 'INVALID_REQUEST', message: `不支持的图片类型：${file.name}` } }
@@ -584,12 +593,6 @@ function readAsBase64(file: File): Promise<string> {
   })
 }
 
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
-}
-
 /** 输入行按内容自动增高：未到上限不出现滚动条，上限同时受窗口高度约束，矮窗口下不吃掉消息区。 */
 function autoGrow(): void {
   const element = textarea.value
@@ -629,7 +632,8 @@ function sendQuickMessage(index: number): void {
   if (message === undefined) return
   quickSendIndex.value = index
   quickSendOpen.value = false
-  if (!canSubmit.value || sessionViewStore.pendingPrompt !== null) return
+  if (!canSubmit.value || sessionViewStore.pendingPrompt !== null || incompleteImageAnnotations.value
+    || (pendingImages.value.length > 0 && imageSupported.value === false)) return
   draft.value = message
   textarea.value?.focus()
   void submit()
@@ -794,7 +798,7 @@ async function submit(): Promise<void> {
       return
     }
     // 会话不空闲或投影未同步时请求根本不会发出：保留命令并说明原因，而不是按了 Enter 毫无反应。
-    if (!canSend.value) {
+    if (!canSubmit.value) {
       showCommandHint(COMPACT_HINT_BLOCKED)
       return
     }
@@ -888,6 +892,11 @@ async function dispatchPendingPrompt(id: number): Promise<void> {
     restorePendingPrompt(id)
     return
   }
+  if (pending.input.images.length > 0 && imageSupported.value === false) {
+    restorePendingPrompt(id)
+    showCommandHint('当前模型不支持图片，提示词和图片资料已保留。')
+    return
+  }
   const target = runtimeView.value.snapshot
   const originKey = sessionViewStore.key
   sessionViewStore.updatePendingPrompt(id, { phase: 'sending', inputKey: originKey,
@@ -905,7 +914,8 @@ async function dispatchPendingPrompt(id: number): Promise<void> {
   try {
     const images: PromptImageInput[] = []
     for (const entry of pending.input.images) {
-      images.push({ name: entry.file.name, mimeType: entry.file.type, data: await readAsBase64(entry.file) })
+      images.push({ name: entry.file.name, mimeType: entry.file.type, data: await readAsBase64(entry.file),
+        ...(entry.annotations === undefined ? {} : { annotations: cloneImageAnnotations(entry.annotations) }) })
     }
     // 附件读取期间切走、关闭标签或卸载，不再发出请求，输入回到原归属。
     if (!mounted || runtimeView.value.phase !== 'ready' || runtimeView.value.snapshot.runId !== target.runId
@@ -918,7 +928,12 @@ async function dispatchPendingPrompt(id: number): Promise<void> {
     }
     const result = await runtimeStore.send(pending.input.draft, images)
     if (result?.ok) {
-      if (result.data.disposition === 'started' && !projected) sessionViewStore.updatePendingPrompt(id, { phase: 'accepted' })
+      if (result.data.disposition === 'handled' && pending.input.images.length > 0) {
+        // 命令已消费提示词，但没有启动本轮；图片资料不因此被清空或成为命令参数。
+        const retained = sessionViewStore.takePendingPrompt(id)
+        if (retained !== null) await restoreFollowingInput(retained.projectPath, retained.tabKey,
+          retained.inputKey, { draft: '', images: retained.input.images })
+      } else if (result.data.disposition === 'started' && !projected) sessionViewStore.updatePendingPrompt(id, { phase: 'accepted' })
       else sessionViewStore.finishPendingPrompt(id)
     } else {
       if (projected) sessionViewStore.finishPendingPrompt(id)
@@ -1401,7 +1416,10 @@ onMounted(() => {
           结束原运行并恢复输入
         </AppButton>
       </div>
-      <label for="prompt-input" class="sr-only">输入要发送给 Pi 的内容</label>
+      <PromptImageMaterials ref="imageMaterials" :images="pendingImages" :input-key="sessionViewStore.key"
+        :active="props.active" :disabled="!canSubmit" :attach-disabled="attachDisabled"
+        @add="addImageFiles" @remove="removeImage" @change="updateImageAnnotations" />
+      <label for="prompt-input" class="sr-only">输入要发送给 Pi 的提示词</label>
       <div
         class="prompt-composer-shell"
         :class="dragging || entryDragging ? 'is-dragging' : ''"
@@ -1461,36 +1479,13 @@ onMounted(() => {
           </li>
         </ul>
 
-        <!-- 附件预览行：缩略图经 blob: URL 展示，可逐个移除。 -->
-        <div v-if="pendingImages.length > 0" class="prompt-composer-attachments">
-          <div v-for="entry in pendingImages" :key="entry.objectUrl" class="prompt-composer-attachment">
-            <img :src="entry.objectUrl" :alt="entry.file.name" class="prompt-composer-attachment-thumb" />
-            <span class="min-w-0 flex-1">
-              <span class="block truncate text-xs text-desk-ink">{{ entry.file.name }}</span>
-              <span class="block text-2xs text-desk-muted">{{ formatBytes(entry.file.size) }}</span>
-            </span>
-            <AppButton
-              variant="ghost"
-              class="shrink-0"
-              :aria-label="`移除图片 ${entry.file.name}`"
-              :title="`移除图片 ${entry.file.name}`"
-              @click="removeImage(entry.objectUrl)"
-            >
-              <!-- 图标：纯图形按钮，语义靠按钮的 aria-label 表达。 -->
-              <svg viewBox="0 0 16 16" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true">
-                <path d="M4.5 4.5l7 7M11.5 4.5l-7 7" />
-              </svg>
-            </AppButton>
-          </div>
-        </div>
-
         <textarea
           id="prompt-input"
           ref="textarea"
           v-model="draft"
           rows="1"
           class="text-control prompt-composer-input resize-none"
-          placeholder="输入要发送给 Pi 的内容（可粘贴或拖入图片）"
+          placeholder="输入要发送给 Pi 的提示词"
           autocomplete="off"
           spellcheck="false"
           :aria-describedby="statusText !== null ? 'prompt-status' : undefined"
@@ -1556,23 +1551,14 @@ onMounted(() => {
               :resetting="workspaceTabsStore.isChatResetting || workspaceTabsStore.isChatBinding"
             />
 
-            <!-- 图片选择：与粘贴、拖拽共用同一套禁用条件；当前模型明确不支持时同样禁用。 -->
-            <input
-              ref="imageInput"
-              type="file"
-              accept="image/png,image/jpeg,image/gif,image/webp"
-              multiple
-              class="sr-only"
-              aria-label="选择图片附件"
-              @change="onPickImages"
-            />
+            <!-- 图片导入交给上方独立资料区，不把图片说明写进提示词。 -->
             <AppButton
               variant="icon"
               class="prompt-composer-char"
               :disabled="attachDisabled"
               aria-label="添加图片"
               title="添加图片（也可粘贴或拖入）"
-              @click="imageInput?.click()"
+              @click="imageMaterials?.openPicker()"
             >
               ＋
             </AppButton>
@@ -1582,7 +1568,7 @@ onMounted(() => {
               <AppButton
                 variant="icon"
                 class="w-auto max-w-[min(12rem,40vw)] gap-1 px-2.5"
-                :disabled="!canSubmit || sessionViewStore.pendingPrompt !== null || quickSendMessages.length === 0"
+                :disabled="!canSubmit || sessionViewStore.pendingPrompt !== null || incompleteImageAnnotations || (pendingImages.length > 0 && imageSupported === false) || quickSendMessages.length === 0"
                 aria-haspopup="listbox"
                 :aria-expanded="quickSendOpen"
                 aria-controls="prompt-quick-send"

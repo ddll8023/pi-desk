@@ -1,4 +1,5 @@
 /** 渲染端 Runtime 状态、模型选择、Prompt、回退、手动压缩与投影同步的受限桥接入口；通信异常转换为安全的展示结果。 */
+import { cloneImageAnnotations } from '../../../../shared/image-annotation'
 import type {
   CapabilitiesResult,
   ProjectionBatch,
@@ -64,7 +65,8 @@ export async function sendPrompt(
     return await bridge.sendPrompt(
       { runId: target.runId, runtimeId: target.runtimeId },
       message,
-      images.map((image) => ({ name: image.name, mimeType: image.mimeType, data: image.data }))
+      images.map((image) => ({ name: image.name, mimeType: image.mimeType, data: image.data,
+        ...(image.annotations === undefined ? {} : { annotations: cloneImageAnnotations(image.annotations) }) }))
     )
   } catch (error) {
     return callFailed(error)

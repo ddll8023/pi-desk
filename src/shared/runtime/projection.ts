@@ -2,6 +2,7 @@
 
 import type { RuntimeError } from './status'
 import type { GenuiPayload } from '../genui-api'
+import type { ImageAnnotationAttachment } from '../image-annotation'
 
 
 /**
@@ -201,6 +202,8 @@ export interface MessageUsage {
 
 /** `id` 由 Desktop 生成，不冒充 Pi 消息字段。 */
 export interface ProjectionMessage {
+  /** 只属于本条用户消息的图片资料；图片序号与原始内容块中的图片顺序一致。 */
+  readonly imageAnnotations?: readonly ImageAnnotationAttachment[]
   readonly id: string
   readonly role: 'user' | 'assistant' | 'compaction'
   readonly blocks: readonly ProjectionBlock[]

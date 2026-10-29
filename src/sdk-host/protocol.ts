@@ -1,5 +1,7 @@
 /** SDK 宿主内部生命周期、目标授权、日志读取与交互契约；不引入 SDK，不开放任意调用或凭据快照。 */
 import { isExtensionDialogResponseInput, projectExtensionUiRequest } from '../shared/extension-ui-api'
+import { parseImageAnnotations } from '../shared/image-annotation'
+import type { ImageAnnotationDocument } from '../shared/image-annotation'
 import {
   COMPACT_INSTRUCTIONS_MAX_CHARS,
   isCapabilitiesResult, isMcpCommandResult, isMcpStatusResult, isOutputRate, isProjectionBatch,
@@ -11,7 +13,7 @@ import type {
   RuntimeDiagnostics, SessionUsage, HistoryQuery, HistoryData
 } from '../shared/runtime-api'
 
-export const SDK_HOST_PROTOCOL_VERSION = 7
+export const SDK_HOST_PROTOCOL_VERSION = 8
 /**
  * `hostId` 是主进程注册表分配的应用级运行身份；宿主不能自行编号，重启后也不会复用旧值。
  */
@@ -130,7 +132,8 @@ export type SdkHostRequest =
   | (RequestEnvelope & { readonly type: 'session-abort'; readonly bindingId: number })
   /** 提交只表达是否被接受；本轮结束不属于提交响应。 */
   | (RequestEnvelope & { readonly type: 'prompt'; readonly bindingId: number; readonly message: string;
-      readonly images: readonly { readonly type: 'image'; readonly data: string; readonly mimeType: string }[] })
+      readonly images: readonly { readonly type: 'image'; readonly data: string; readonly mimeType: string;
+        readonly annotations?: ImageAnnotationDocument }[] })
   | (RequestEnvelope & { readonly type: 'set-model'; readonly bindingId: number; readonly provider: string;
       readonly modelId: string })
   /** 回退只回退对话分支；目标由官方条目 ID 定位，不接受任意条目或会话路径。 */
@@ -314,7 +317,9 @@ export function isSdkHostRequest(value: unknown): value is SdkHostRequest {
     case 'prompt': return isIdentity(value.bindingId) && typeof value.message === 'string'
       && Array.isArray(value.images) && value.images.every(entry =>
         isRecord(entry) && entry.type === 'image' && typeof entry.data === 'string'
-        && typeof entry.mimeType === 'string' && hasKeys(entry, ['type', 'data', 'mimeType']))
+        && typeof entry.mimeType === 'string'
+        && (entry.annotations === undefined || parseImageAnnotations(entry.annotations) !== null)
+        && hasKeys(entry, ['type', 'data', 'mimeType', 'annotations']))
       && requestKeys(value, ['bindingId', 'message', 'images'])
     case 'set-model': return isIdentity(value.bindingId) && isIdentifier(value.provider)
       && isIdentifier(value.modelId) && requestKeys(value, ['bindingId', 'provider', 'modelId'])

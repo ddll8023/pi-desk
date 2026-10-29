@@ -24,6 +24,8 @@ import { defineStore } from 'pinia'
 import { computed, reactive, ref, watch } from 'vue'
 import type { WatchStopHandle } from 'vue'
 import type { ModelIdentity, PromptImageInput, RuntimeTarget } from '../../../../shared/runtime-api'
+import { cloneImageAnnotations } from '../../../../shared/image-annotation'
+import type { ImageAnnotationDocument } from '../../../../shared/image-annotation'
 import { useRuntimeStore } from './runtime'
 import { NEW_CHAT_INPUT_PREFIX, useWorkspaceTabsStore } from '../../workspace/stores/workspace-tabs'
 
@@ -31,6 +33,7 @@ import { NEW_CHAT_INPUT_PREFIX, useWorkspaceTabsStore } from '../../workspace/st
 export interface PendingImage {
   readonly file: File
   readonly objectUrl: string
+  readonly annotations?: ImageAnnotationDocument
 }
 
 /** 一个会话的输入状态；`images` 随取走交给调用方接管，因此不是只读数组。 */
@@ -227,7 +230,10 @@ export const useSessionViewStore = defineStore('session-view', () => {
   /** 同一标签只允许一份在途输入；附件预览的所有权随输入一起从输入框移交。 */
   function beginPendingPrompt(projectPath: string, tabKey: string, inputKey: string, input: SessionInput): PendingPrompt | null {
     if (pendingPrompts.value.some(prompt => prompt.tabKey === tabKey)) return null
-    const prompt: PendingPrompt = { id: ++promptSequence, projectPath, tabKey, inputKey, input,
+    // 标注也必须固定快照，后续编辑不能改变已经点击发送的这份资料。
+    const snapshot: SessionInput = { draft: input.draft, images: input.images.map(image => ({ ...image,
+      ...(image.annotations === undefined ? {} : { annotations: cloneImageAnnotations(image.annotations) }) })) }
+    const prompt: PendingPrompt = { id: ++promptSequence, projectPath, tabKey, inputKey, input: snapshot,
       phase: 'starting', target: null, sessionId: null, previousUserIds: [], checking: false, notice: null, projected: false }
     pendingPrompts.value = [...pendingPrompts.value, prompt]
     return prompt
@@ -376,8 +382,9 @@ export const useSessionViewStore = defineStore('session-view', () => {
   }
 
   /** 建立一份待发送附件：预览地址与附件条目一起交给调用方，释放也经本模块。 */
-  function createImage(file: File): PendingImage {
-    return { file, objectUrl: URL.createObjectURL(file) }
+  function createImage(file: File, annotations?: ImageAnnotationDocument): PendingImage {
+    return { file, objectUrl: URL.createObjectURL(file),
+      ...(annotations === undefined ? {} : { annotations: cloneImageAnnotations(annotations) }) }
   }
 
   /**
@@ -419,7 +426,7 @@ export const useSessionViewStore = defineStore('session-view', () => {
     const binary = atob(image.data)
     const bytes = new Uint8Array(binary.length)
     for (let offset = 0; offset < binary.length; offset += 1) bytes[offset] = binary.charCodeAt(offset)
-    return createImage(new File([bytes], image.name === '' ? `附件${index + 1}` : image.name, { type: image.mimeType }))
+    return createImage(new File([bytes], image.name === '' ? `附件${index + 1}` : image.name, { type: image.mimeType }), image.annotations)
   }
 
   /** 释放附件预览地址；重复释放同一地址没有副作用。 */

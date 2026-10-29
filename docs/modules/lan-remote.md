@@ -45,7 +45,7 @@
 | `src/lan-mobile/src/App.vue` | 自动连接状态、项目与会话导航、新建空白对话、斜杠候选与键盘选择、消息区与输入外壳 |
 | `src/lan-mobile/src/client.ts` | 同源请求、响应校验、协议检查与写请求身份 |
 | `src/lan-mobile/src/use-mobile-session.ts` | 扫码连接、会话与草稿、首次创建、命令候选读取与界面命令分流、消息与历史同步、重连及结果未知保护 |
-| `src/lan-mobile/src/components/MobileMessageList.vue` | 消息阅读、工具详情与历史原文展开 |
+| `src/lan-mobile/src/components/MobileMessageList.vue` | 消息阅读、图片编号及绑定说明的只读展示、工具详情与历史原文展开 |
 | `src/lan-mobile/src/components/MobileInteractionPanel.vue` | 选择、确认、文本与编辑四类问题的回应 |
 | `src/lan-mobile/src/mobile.css` | 手机样式入口：复用基础令牌与共享组件样式，追加窄屏与安全区域规则 |
 
@@ -57,7 +57,7 @@
 - [F-assembly](shared.md#f-assembly进程与页面组装混合)：`src/main/services.ts` 建立管理器，`src/main/app-lifecycle.ts` 注册控制通道、订阅状态并在退出链先收敛手机访问入口，`src/main/window-channel.ts` 提供状态广播。
 - [F-runtime-state](shared.md#f-runtime-state综合-runtime-状态混合)：`src/shared/runtime/projection-reducer.ts` 的增量合并算法由桌面与手机共用，`src/renderer/src/sessions/stores/runtime-core.ts` 与手机状态机各自组合。
 - [F-ui](shared.md#f-ui前端共享展示共享)：手机消息复用 `MarkdownContent.vue` 的安全 Markdown 渲染。
-- [会话与聊天](sessions-chat.md)：复用会话列表、历史读取、后台新建／打开链、绑定资源与压缩，以及运行实例状态查询与订阅。
+- [会话与聊天](sessions-chat.md)：复用会话列表、历史读取、后台新建／打开链、绑定资源与压缩，以及运行实例状态查询与订阅；图片标注只读展示复用该模块的 `ImageAnnotationCanvas.vue` 与聊天投影映射。
 - [资源与 MCP](resources-mcp.md)：启动前候选复用按项目信任决定的资源预读；绑定后读取实际会话资源，不把预读与绑定清单合并。
 - [项目与信任](projects-trust.md)：手机显示全部已登记项目，请求时重新复核项目是否仍存在；不维护设备级项目授权。
 - [应用外壳](app-shell.md)：设置页提供本模块的启停与设备管理入口。
@@ -76,6 +76,8 @@
 设备身份是访问控制真源：撤销立即关闭该设备的连接与事件流，重新配对会改变请求去重所依据的设备身份，旧写请求不会迁到新身份执行。已连接设备可访问全部已登记项目，但不能指定任意会话文件或主机路径。
 
 手机页面是独立的页面入口，只经同源局域网 HTTP 接口工作，不加载 Electron 桥接，也不把桌面 Store 当作状态源。每条连接各自维护同步水位，慢连接只影响自身，通过背压与断流收敛，不阻塞桌面对同一会话的展示。会话本身仍由 SDK 与主进程持有；手机断开不中断正在运行的任务，重新连接后按权威快照重建。
+
+手机可阅读会话图片上的编号、整图说明及各标记的绑定说明，不提供图片标注编辑入口；资料的提交与历史归属见[会话与聊天](sessions-chat.md#状态与边界)。
 
 新对话草稿在当前页面按项目保留，点击新建本身不建立执行占用；首次提交对话输入时才创建真实会话。创建成功后即使首条消息明确被拒绝，也返回实际会话身份并保留输入，后续只向已创建会话重试发送，不再次新建；首条消息结果仍不确定时继续保护原请求。尚未拿到实际身份时可查看原项目会话列表，已知身份后可查看原会话；重试复用原请求，核对后解除保护不会自动重发。草稿与待核对请求只保留页面内存，不跨刷新或应用重启恢复。
 

@@ -28,6 +28,8 @@ import { PROMPT_IMAGE_MAX_CHARS, PROMPT_IMAGE_MAX_COUNT } from '../../../shared/
 import type { MessageUsage, ProjectionBlock, ProjectionCompaction, ProjectionMessage, PromptImageInput, ToolExecution } from '../../../shared/runtime-api'
 import type { GenuiPayload } from '../../../shared/genui-api'
 import { parseSkillBlock, stripImageMarkerLines } from '../../../shared/user-message-text'
+import { cloneImageAnnotations } from '../../../shared/image-annotation'
+import type { ImageAnnotationDocument } from '../../../shared/image-annotation'
 
 /** 工具调用块的渲染项；`execution` 为 null 表示该工具调用没有对应执行条目（尚未到达或历史中没有结果）。 */
 export interface ChatToolBlock {
@@ -50,6 +52,8 @@ export interface ChatToolBlock {
 }
 
 export interface ChatTextBlock {
+  /** 图片说明独立于正文；历史图片暂未载入时也保留对应说明。 */
+  readonly annotations?: ImageAnnotationDocument
   readonly contentIndex: number
   readonly kind: 'text'
   readonly key: string
@@ -142,7 +146,8 @@ export function userMessagePayload(message: ChatMessageView): UserMessagePayload
     if (block.image !== null) {
       const data = base64OfDataUrl(block.image.dataUrl)
       if (images.length < PROMPT_IMAGE_MAX_COUNT && data.length <= PROMPT_IMAGE_MAX_CHARS) {
-        images.push({ name: `附件${images.length + 1}.${extensionOf(block.image.mimeType)}`, mimeType: block.image.mimeType, data })
+        images.push({ name: `附件${images.length + 1}.${extensionOf(block.image.mimeType)}`, mimeType: block.image.mimeType, data,
+          ...(block.annotations === undefined ? {} : { annotations: cloneImageAnnotations(block.annotations) }) })
       } else {
         skippedImages += 1
       }
@@ -457,9 +462,16 @@ function buildMessageView(
 ): BuiltMessage {
   const toolRefs: ToolRef[] = []
   // 投影本身按 contentIndex 排序；这里再排一次，保证渲染顺序不依赖上游的插入方式。
+  let imageIndex = 0
   const blocks = [...message.blocks]
     .sort((left, right) => left.contentIndex - right.contentIndex)
-    .map((block) => toChatBlock(message, block, toolsById, toolRefs, uiRefs))
+    .map((block) => {
+      const view = toChatBlock(message, block, toolsById, toolRefs, uiRefs)
+      if (message.role !== 'user' || view.kind !== 'text' || (view.image === null && !view.notice)) return view
+      const annotations = message.imageAnnotations?.find(item => item.imageIndex === imageIndex)?.document
+      imageIndex++
+      return annotations === undefined ? view : { ...view, annotations }
+    })
 
   return {
     view: {

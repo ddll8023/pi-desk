@@ -5,6 +5,7 @@ import type { PromptDisposition, PromptResult, RuntimeCompactRequest, RuntimeDia
 import type { AgentCapabilities, CapabilitiesResult, ModelIdentity, ModelSummary } from './models'
 import type { ContextUsage, ExtensionErrorEntry, HistoryChunk, HistoryData, HistoryQuery, MessageGeneration, MessageUsage, OutputRate, ProjectionBatch, ProjectionBlock, ProjectionBlockKind, ProjectionCompaction, ProjectionMessage, ProjectionResult, ProjectionSnapshot, ProjectionUpdate, SessionActivity, SessionUsage, ToolArgSummaryEntry, ToolDiff, ToolDiffLine, ToolDiffLineKind, ToolExecution, ToolExecutionPhase, ToolExecutionTextKind, ToolNonTextPart } from './projection'
 import { isGenuiPayload } from '../genui-api'
+import { parseImageAnnotationAttachments } from '../image-annotation'
 
 
 /** 二维目标只放行安全整数；`runtimeId` 为 null 表示该运行实例尚未绑定会话。 */
@@ -426,6 +427,8 @@ function isProjectionMessage(value: unknown): value is ProjectionMessage {
     && (value.entryId === undefined || value.entryId === null || isHistoryId(value.entryId))
     && (value.recoverable === undefined || typeof value.recoverable === 'boolean')
     && (value.turnEntryId === undefined || isHistoryId(value.turnEntryId))
+    && (value.imageAnnotations === undefined || (value.role === 'user'
+      && parseImageAnnotationAttachments(value.imageAnnotations) !== null))
     && compaction
     && Array.isArray(value.blocks)
     && value.blocks.every(isProjectionBlock)

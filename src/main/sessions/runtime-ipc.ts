@@ -1,6 +1,7 @@
 /** 会话执行主链的 IPC：状态查询、中止、回退、可用模型与切换、手动压缩、Prompt 提交、投影快照与确认。目标身份、绑定代际与会话归属全部由主进程核对，页面不能指定任意会话文件或 Pi 条目；历史读取走会话通道。 */
 
 import type { IpcMainInvokeEvent } from 'electron'
+import { parseImageAnnotations } from '../../shared/image-annotation'
 import {
   RUNTIME_ABORT_CHANNEL,
   RUNTIME_CAPABILITIES_CHANNEL,
@@ -152,7 +153,7 @@ export function registerRuntimeHandlers(pageUrl: string): void {
       if (typeof message !== 'string') {
         return promptFailure('INVALID_REQUEST', 'Prompt 内容必须是字符串。')
       }
-      // 图片附件逐字段校验后重建：name 受控，mimeType 与 data 只接受字符串；其他字段丢弃。
+      // 图片及独立标注逐字段校验后重建；未声明字段直接拒绝，不作为扩展参数透传。
       const images: PromptImageInput[] = []
       if (fields.images !== undefined) {
         if (!Array.isArray(fields.images) || fields.images.length > 4) {
@@ -163,7 +164,7 @@ export function registerRuntimeHandlers(pageUrl: string): void {
             return promptFailure('INVALID_REQUEST', '图片附件格式不正确。')
           }
           const item = entry as Record<string, unknown>
-          if (Object.keys(item).some((key) => key !== 'name' && key !== 'mimeType' && key !== 'data')) {
+          if (Object.keys(item).some((key) => key !== 'name' && key !== 'mimeType' && key !== 'data' && key !== 'annotations')) {
             return promptFailure('INVALID_REQUEST', '图片附件包含未支持的字段。')
           }
           if (typeof item.name !== 'string' || item.name === '' || item.name.length > 256) {
@@ -175,7 +176,10 @@ export function registerRuntimeHandlers(pageUrl: string): void {
           if (typeof item.data !== 'string' || item.data === '') {
             return promptFailure('INVALID_REQUEST', '图片数据必须是非空字符串。')
           }
-          images.push({ name: item.name, mimeType: item.mimeType, data: item.data })
+          const annotations = item.annotations === undefined ? undefined : parseImageAnnotations(item.annotations)
+          if (annotations === null) return promptFailure('INVALID_REQUEST', '图片标注格式不正确。')
+          images.push({ name: item.name, mimeType: item.mimeType, data: item.data,
+            ...(annotations === undefined ? {} : { annotations }) })
         }
       }
       return sdkRuntime.prompt(target, message, images)

@@ -2,6 +2,7 @@
 
 import type { ExtensionErrorEntry, OutputRate, ProjectionBatch, SessionUsage } from './projection'
 import type { DesktopErrorCode } from '../desktop-api'
+import type { ImageAnnotationDocument } from '../image-annotation'
 
 export const RUNTIME_STATUS_CHANNEL = 'desktop:runtime-status'
 export const RUNTIME_PROMPT_CHANNEL = 'desktop:runtime-prompt'
@@ -156,12 +157,15 @@ export type PromptDisposition = 'started' | 'queued' | 'handled'
 
 /**
  * 随 Prompt 提交的图片附件：`data` 是 base64 编码的图片本体。
- * MIME 白名单、大小与条数上限由主进程校验；页面传入的其他字段一律丢弃。
+ * 图片与标注由主进程校验后按声明重建；未声明的图片字段由 IPC 拒绝。
+ * MIME 白名单、大小与条数边界以主进程校验及对应常量为准。
  */
 export interface PromptImageInput {
   readonly name: string
   readonly mimeType: string
   readonly data: string
+  /** 与图片一起保存和提交，不并入提示词。 */
+  readonly annotations?: ImageAnnotationDocument
 }
 
 /**
