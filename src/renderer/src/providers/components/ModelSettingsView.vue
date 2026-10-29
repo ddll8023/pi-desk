@@ -138,9 +138,47 @@ function toRow(provider: AuthProviderStatus): ProviderRow {
  */
 const providerRows = computed<ProviderRow[]>(() => {
   const keyword = query.value.trim().toLocaleLowerCase()
-  return authProviders.value
-    .map(toRow)
+  const rows = authProviders.value.map(toRow)
+
+  // 补齐 customProviders 中已在 models.json 存在但尚未被 authProviders 覆盖的条目
+  const knownIds = new Set(authProviders.value.map((provider) => provider.providerId))
+  for (const custom of customProviders.value) {
+    if (knownIds.has(custom.id)) continue
+    const models = modelsByProvider.value.get(custom.id) ?? []
+    const hiddenIds = hiddenIdsOf(custom.id)
+    rows.push({
+      id: custom.id,
+      name: custom.name,
+      status: custom.hasApiKey ? '已配置 Key' : '未配置凭据',
+      modelCount: custom.models.length,
+      hiddenCount: hiddenCountFor(models, hiddenIds, catalogLoaded.value),
+      custom: true,
+      hasApiKey: custom.hasApiKey,
+      configured: custom.hasApiKey,
+      authStatus: {
+        providerId: custom.id,
+        name: custom.name,
+        authTypes: [],
+        subscription: false,
+        oauthLoginLabel: null,
+        configured: custom.hasApiKey,
+        source: custom.hasApiKey ? 'config' : null,
+        sourceLabel: custom.hasApiKey ? 'models.json' : null,
+        storedType: null,
+        modelCount: custom.models.length
+      },
+      entry: custom,
+      models,
+      hiddenIds
+    })
+  }
+
+  return rows
     .filter((row) => {
+      // 既非自定义供应商、也未配置凭据，且官方不支持任何交互式认证方式的项属于失效残留，不予展示
+      if (!row.custom && !row.configured && row.authStatus.authTypes.length === 0) {
+        return false
+      }
       if (keyword !== '') return matches(row, keyword)
       return row.configured || row.modelCount > 0 || row.custom
     })
@@ -275,7 +313,10 @@ async function onSaved(id: string): Promise<void> {
   notice.value = null
   editor.value = null
   expandedId.value = id
-  await runtimeStore.refreshModelPreview(true)
+  await Promise.all([
+    authStore.refresh(),
+    runtimeStore.refreshModelPreview(true)
+  ])
   const reloaded = await sessionStore.reloadCurrent()
   if (!reloaded) {
     notice.value = `已保存供应商 ${id}；改动将在重新加载当前会话后生效。`
@@ -330,7 +371,10 @@ async function confirmDelete(): Promise<void> {
   pendingDelete.value = null
   if (!removed) return
   if (expandedId.value === id) expandedId.value = null
-  await runtimeStore.refreshModelPreview(true)
+  await Promise.all([
+    authStore.refresh(),
+    runtimeStore.refreshModelPreview(true)
+  ])
   const reloaded = await sessionStore.reloadCurrent()
   if (!reloaded) {
     notice.value = `已删除供应商 ${id}；改动将在重新加载当前会话后生效。`

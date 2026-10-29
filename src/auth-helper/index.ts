@@ -9,10 +9,12 @@
  * - 常规实例固定 `allowModelNetwork: false` 与 `refreshOnCreate: false`，日常状态读取不发起模型目录的网络请求；
  *   仅在收到显式 `refresh-models` 请求时建立允许网络的临时实例，强制从云端同步模型目录并持久化写入 `<agent-dir>/models-store.json`。
  * - 额度查询只在显式请求时访问官方接口；已有 OAuth 凭据由 SDK 解析与续期，不传出本进程。
+ * - 常驻 ModelRuntime 实例在每次获取时比对 models.json 的修改戳（mtime 与大小），文件变动时重置实例并重新读取，确保自定义供应商的增删改实时反映到状态查询中。
  * - 帧里只出现认证状态、提示形态、进度文本与额度展示数据；密钥只在内存中用于本次登录，并作为脱敏词表使用，
  *   既不写入日志也不进入 stderr。
  */
 import { randomUUID } from 'node:crypto'
+import { stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
 import type { CreateModelRuntimeOptions, ModelRuntime } from '@earendil-works/pi-coding-agent'
@@ -85,6 +87,7 @@ const codexUsageReader = new CodexUsageReader()
 let sdk: typeof import('@earendil-works/pi-coding-agent') | null = null
 let runtime: ModelRuntime | null = null
 let statusReady = false
+let lastModelsConfigStamp: string | null = null
 let inputBuffer = ''
 let shuttingDown = false
 
@@ -118,19 +121,40 @@ type AuthHelperFrameResponseCode =
   | 'INVALID_REQUEST'
   | 'AUTH_HELPER_ERROR'
 
+/** 计算 models.json 修改戳；文件不存在时返回 null。用于检测配置变化并重置 ModelRuntime。 */
+async function getModelsConfigStamp(filePath: string): Promise<string | null> {
+  try {
+    const info = await stat(filePath)
+    return `${info.mtimeMs}:${info.size}`
+  } catch {
+    return null
+  }
+}
+
 /** 官方 SDK 按需加载；失败时按辅助进程不可用如实上报，不静默降级。 */
 async function loadSdk(): Promise<typeof import('@earendil-works/pi-coding-agent')> {
   sdk ??= await loadSdkModule()
   return sdk
 }
 
+/** 获取常驻 ModelRuntime；若检测到 models.json 被修改则重置旧实例并重新创建。 */
 async function modelRuntime(): Promise<ModelRuntime> {
-  if (runtime !== null) return runtime
   const loaded = await loadSdk()
   const agentDir = loaded.getAgentDir()
+  const modelsPath = join(agentDir, 'models.json')
+  const currentStamp = await getModelsConfigStamp(modelsPath)
+
+  if (runtime !== null && currentStamp !== lastModelsConfigStamp) {
+    runtime = null
+    statusReady = false
+  }
+
+  if (runtime !== null) return runtime
+
+  lastModelsConfigStamp = currentStamp
   runtime = await loaded.ModelRuntime.create({
     authPath: join(agentDir, 'auth.json'),
-    modelsPath: join(agentDir, 'models.json'),
+    modelsPath,
     allowModelNetwork: false,
     refreshOnCreate: false
   })
