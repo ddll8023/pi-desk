@@ -10,6 +10,11 @@ import type { ProjectAddRequest, ProjectListResult, ProjectPathResult, ProjectRe
 import type { ProjectDirectoryChange, ProjectDirectoryListRequest, ProjectDirectoryListResult, ProjectDirectoryWatchRequest, ProjectDirectoryWatchResult, ProjectEntryPathRequest, ProjectEntryPathResult, ProjectEntryRevealResult, ProjectFileReadRequest, ProjectFileReadResult, ProjectFileSearchResult, ProjectFileStatRequest, ProjectFileStatResult, ProjectFileWriteRequest, ProjectFileWriteResult } from '../shared/project-file-api'
 import type { ProjectApi } from '../shared/project-api'
 import type { ProjectFileApi } from '../shared/project-file-api'
+import {
+  PROJECT_HTML_PREVIEW_PREPARE_CHANNEL, PROJECT_HTML_PREVIEW_RELEASE_CHANNEL,
+  isProjectHtmlPreviewResult, isProjectHtmlPreviewReleaseResult
+} from '../shared/project-file-api'
+import type { ProjectHtmlPreviewRequest, ProjectHtmlPreviewReleaseRequest } from '../shared/project-file-api'
 
 const INVALID_PROJECT_PATH_RESPONSE = '桌面接口返回了无法识别的目录选择结果。'
 const INVALID_PROJECT_LIST_RESPONSE = '桌面接口返回了无法识别的项目列表。'
@@ -63,6 +68,23 @@ function invalidProjectFileStatResponse(): ProjectFileStatResult {
 }
 
 export const projectsApi = {
+  async prepareProjectHtmlPreview(request: ProjectHtmlPreviewRequest) {
+    const payload: ProjectHtmlPreviewRequest = {
+      projectPath: request.projectPath, path: request.path, text: request.text, previewId: request.previewId
+    }
+    const response: unknown = await ipcRenderer.invoke(PROJECT_HTML_PREVIEW_PREPARE_CHANNEL, payload)
+    return isProjectHtmlPreviewResult(response) ? response : {
+      ok: false as const, error: { code: 'INVALID_RESPONSE' as const, message: '桌面接口返回了无法识别的 HTML 预览结果。' }
+    }
+  },
+
+  async releaseProjectHtmlPreview(request: ProjectHtmlPreviewReleaseRequest) {
+    const response: unknown = await ipcRenderer.invoke(PROJECT_HTML_PREVIEW_RELEASE_CHANNEL, { previewId: request.previewId })
+    return isProjectHtmlPreviewReleaseResult(response) ? response : {
+      ok: false as const, error: { code: 'INVALID_RESPONSE' as const, message: '桌面接口返回了无法识别的预览释放结果。' }
+    }
+  },
+
   async chooseProjectDirectory() {
     const response: unknown = await ipcRenderer.invoke(PROJECT_CHOOSE_DIRECTORY_CHANNEL)
     return isProjectPathResult(response) ? response : invalidProjectPathResponse()

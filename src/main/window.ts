@@ -6,6 +6,7 @@ import type { BrowserWindowConstructorOptions } from 'electron'
 import type { UiTheme } from '../shared/preferences-api'
 import { TERMINAL_DAEMON_STATUS_EVENT } from '../shared/terminal-api'
 import { SESSION_RUNS_EVENT } from '../shared/session-run-api'
+import { PROJECT_HTML_PREVIEW_PARTITION_PREFIX, PROJECT_HTML_PREVIEW_SCHEME } from '../shared/project-file-api'
 import type { SessionRunsSnapshot } from '../shared/session-run-api'
 import { EXTENSION_UI_EVENT } from '../shared/extension-ui-api'
 import type { ExtensionUiSnapshot } from '../shared/extension-ui-api'
@@ -29,6 +30,7 @@ import { MIN_WINDOW_HEIGHT, MIN_WINDOW_WIDTH } from './window-state'
 import {
   configStore,
   projectDirectoryWatcher,
+  projectHtmlPreview,
   sdkRuntime,
   terminals,
   windowState,
@@ -136,9 +138,17 @@ export async function createWindow(pageUrl: string): Promise<void> {
   if (restored.maximized) window.maximize()
   setMainWindow(window)
   const contents = window.webContents
+  const previewOwnerId = contents.id
   const rememberWindowState = (): void => windowState.notifyChanged(window)
   contents.setWindowOpenHandler(() => ({ action: 'deny' }))
-  contents.on('will-attach-webview', (_event, webPreferences) => {
+  contents.on('will-attach-webview', (event, webPreferences, params) => {
+    const partition = params.partition ?? webPreferences.partition ?? ''
+    const htmlPreview = partition.startsWith(PROJECT_HTML_PREVIEW_PARTITION_PREFIX)
+      || (params.src ?? '').startsWith(`${PROJECT_HTML_PREVIEW_SCHEME}:`)
+    if (htmlPreview) {
+      if (!projectHtmlPreview.configureWebview(previewOwnerId, webPreferences, params)) event.preventDefault()
+      return
+    }
     // 强制隔离内置浏览器 webview，彻底剥离主应用能力与 Node 环境
     webPreferences.nodeIntegration = false
     webPreferences.nodeIntegrationInSubFrames = false
@@ -148,6 +158,11 @@ export async function createWindow(pageUrl: string): Promise<void> {
     delete webPreferences.preload
     webPreferences.partition = 'persist:desktop-browser'
   })
+  contents.on('did-attach-webview', (_event, guest) => projectHtmlPreview.attachGuest(previewOwnerId, guest))
+  contents.on('did-start-navigation', event => {
+    if (event.isMainFrame && event.frame === contents.mainFrame && !event.isSameDocument) projectHtmlPreview.releaseOwner(previewOwnerId)
+  })
+  contents.on('render-process-gone', () => projectHtmlPreview.releaseOwner(previewOwnerId))
   contents.on('will-frame-navigate', (event) => {
     if (!event.isMainFrame || event.frame !== contents.mainFrame || event.url !== pageUrl) {
       event.preventDefault()
@@ -244,6 +259,7 @@ export async function createWindow(pageUrl: string): Promise<void> {
     terminals.resetDelivery()
     // 目录监听只服务于这个窗口，窗口关掉就没有接收方了。
     projectDirectoryWatcher.dispose()
+    projectHtmlPreview.releaseOwner(previewOwnerId)
     windowState.dispose()
     setMainWindow(null)
   })

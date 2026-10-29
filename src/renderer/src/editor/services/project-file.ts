@@ -1,4 +1,4 @@
-/** 项目文件与 Markdown 资源的渲染端服务入口：重建普通请求载荷，收敛桥接缺失并保留通信错误。 */
+/** 项目文件、HTML 预览与 Markdown 资源的渲染端服务入口：重建普通请求载荷，收敛桥接缺失并保留通信错误。 */
 import type { DesktopError } from '../../../../shared/desktop-api'
 import type { ProjectMarkdownDocumentsResult, ProjectMarkdownImageResult } from '../../../../shared/project-file-api'
 
@@ -11,7 +11,9 @@ import type {
   ProjectFileReadResult,
   ProjectFileSearchResult,
   ProjectFileStatResult,
-  ProjectFileWriteResult
+  ProjectFileWriteResult,
+  ProjectHtmlPreviewResult,
+  ProjectHtmlPreviewReleaseResult
 } from '../../../../shared/project-file-api'
 
 function unavailable(): { ok: false; error: DesktopError } {
@@ -28,6 +30,19 @@ function callFailed(error: unknown): { ok: false; error: DesktopError } {
     ok: false,
     error: { code: 'BRIDGE_CALL_FAILED', message: `桌面桥接调用失败，可以重试：${detail}` }
   }
+}
+
+/** HTML 草稿仅登记到主进程内存，不经文件保存接口；每次调用重建普通对象。 */
+export async function prepareProjectHtmlPreview(projectPath: string, path: string, text: string, previewId: string | null): Promise<ProjectHtmlPreviewResult> {
+  if (!window.desktop?.prepareProjectHtmlPreview) return unavailable()
+  try { return await window.desktop.prepareProjectHtmlPreview({ projectPath, path, text, previewId }) }
+  catch (error) { return callFailed(error) }
+}
+
+export async function releaseProjectHtmlPreview(previewId: string): Promise<ProjectHtmlPreviewReleaseResult> {
+  if (!window.desktop?.releaseProjectHtmlPreview) return unavailable()
+  try { return await window.desktop.releaseProjectHtmlPreview({ previewId }) }
+  catch (error) { return callFailed(error) }
 }
 
 /** 固定文档所属项目，不使用可变的当前项目信息解释迟到响应。 */

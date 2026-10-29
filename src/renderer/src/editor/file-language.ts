@@ -20,8 +20,13 @@ export function languageDescriptionForPath(path: string): LanguageDescription | 
   return LanguageDescription.matchFilename(languages, name)
 }
 
+/** 不根据框架或构建配置猜测页面能否直接运行，所有 HTML 都提供页面视图。 */
+export function isHtmlPath(path: string): boolean {
+  return /\.html?$/i.test(fileNameOf(path))
+}
+
 /**
- * Markdown 文件才提供「源码 / 预览」切换；其余文件只有代码视图。
+ * Markdown 文件提供排版预览；HTML 的独立页面预览另行按扩展名识别。
  * `.mdx` 不在此列：它允许 JSX 与 import，marked 会把它们当普通文本渲染，预览结果与实际不符。
  */
 export function isMarkdownPath(path: string): boolean {

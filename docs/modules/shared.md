@@ -10,7 +10,7 @@
 | `src/main/app-lifecycle.ts` | 便携数据目录、登录 shell PATH、单实例锁、窗口就绪后按固定顺序调用各能力 `ipc.ts` 注册器、窗口全部关闭与退出链、启动时的扩展自动更新 |
 | `src/main/window.ts` | 唯一窗口的创建、主题与标题栏配色、导航与权限限制、单实例聚焦 |
 | `src/main/window-channel.ts` | 窗口引用、向页面投递事件与全部业务广播、系统目录选择；不持有业务实例，终端状态来源由组合根注册 |
-| `src/main/asset-protocol.ts` | 应用协议注册、页面地址解析、目录越界判定与生产 CSP |
+| `src/main/asset-protocol.ts` | 应用与 HTML 预览协议注册、应用资产处理、页面地址解析、目录越界判定与生产 CSP；预览资源处理归[文件模块](files-editor.md)的独立会话 |
 | `src/main/services.ts` | 主进程业务实例的唯一装配处（配置、项目、信任、会话、终端、供应商、资源、更新、生成式界面、手机访问） |
 | `src/main/ipc/dispatch.ts` | IPC 注册包装、调用者校验、有界标识与 MCP 服务器名校验 |
 | `src/preload/index.ts` | 只合并各域 Api 并暴露 `window.desktop`，不含 channel 调用与校验 |

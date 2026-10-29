@@ -1,4 +1,4 @@
-/** 项目登记与项目文件的 IPC：目录选择、列表、添加、移除、切换当前项目，以及文件检索、目录列举与监听、条目路径解析与显示、文件内容读写、Markdown 文档与图片导入。所有入口先校验调用者，再逐字段校验载荷。 */
+/** 项目登记与项目文件的 IPC：目录选择、列表、添加、移除、切换当前项目，以及文件检索、目录列举与监听、条目路径解析与显示、文件内容读写、HTML 隔离预览、Markdown 文档与图片导入。所有入口先校验调用者，再逐字段校验载荷。 */
 
 import { BrowserWindow } from 'electron'
 import { ProjectMarkdownAssets } from './project-markdown-assets'
@@ -33,6 +33,10 @@ import {
   PROJECT_FILE_SEARCH_CHANNEL,
   PROJECT_FILE_STAT_CHANNEL,
   PROJECT_FILE_WRITE_CHANNEL,
+  PROJECT_HTML_PREVIEW_PREPARE_CHANNEL,
+  PROJECT_HTML_PREVIEW_RELEASE_CHANNEL,
+  isProjectHtmlPreviewRequest,
+  isProjectHtmlPreviewReleaseRequest,
   isProjectDirectoryWatchRequest,
   isProjectEntryPathRequest,
   isProjectFileReadRequest,
@@ -53,7 +57,7 @@ import { handle } from '../ipc/dispatch'
 import { isTrustedCaller } from '../ipc/dispatch'
 import {
   projectManager, terminals, projectFileIndex, projectDirectory, projectDirectoryWatcher,
-  projectFileContent, resolveRegisteredProjectPath, registeredProjectPathById
+  projectFileContent, projectHtmlPreview, resolveRegisteredProjectPath, registeredProjectPathById
 } from '../services'
 
 export function projectPathFailure(code: ProjectErrorCode, message: string): ProjectPathResult {
@@ -182,7 +186,10 @@ export function registerProjectHandlers(pageUrl: string): void {
       // 项目移除后它的终端不再有意义：先取规范路径，移除成功后一并收敛该项目终端。
       const terminalProjectPath = await registeredProjectPathById(projectId)
       const result = await projectManager.remove(request as ProjectRemoveRequest)
-      if (result.ok && terminalProjectPath !== null) void terminals.closeProject(terminalProjectPath)
+      if (result.ok && terminalProjectPath !== null) {
+        void terminals.closeProject(terminalProjectPath)
+        projectHtmlPreview.releaseProject(terminalProjectPath)
+      }
       return result
     }
   )
@@ -222,6 +229,16 @@ export function registerProjectHandlers(pageUrl: string): void {
  * 解析与「在文件管理器中显示」共用同一个条目解析：越界、绝对路径与非法段一律拒绝。
  */
 export function registerProjectFileHandlers(pageUrl: string): void {
+  handle(PROJECT_HTML_PREVIEW_PREPARE_CHANNEL, async (event, ...args: unknown[]) => {
+    if (!isTrustedCaller(event, pageUrl)) return projectFileFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+    if (args.length !== 1 || !isProjectHtmlPreviewRequest(args[0])) return projectFileFailure('INVALID_REQUEST', 'HTML 预览必须给出所属项目、文档与有界文本快照。')
+    return projectHtmlPreview.prepare(event.sender, args[0])
+  })
+  handle(PROJECT_HTML_PREVIEW_RELEASE_CHANNEL, (event, ...args: unknown[]) => {
+    if (!isTrustedCaller(event, pageUrl)) return projectFileFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+    if (args.length !== 1 || !isProjectHtmlPreviewReleaseRequest(args[0])) return projectFileFailure('INVALID_REQUEST', '释放预览必须给出有效的预览身份。')
+    return projectHtmlPreview.release(event.sender.id, args[0].previewId)
+  })
   const assets = new ProjectMarkdownAssets(resolveRegisteredProjectPath)
   handle(PROJECT_MARKDOWN_DOCUMENTS_CHANNEL, async (event: IpcMainInvokeEvent, ...args: unknown[]) => {
     if (!isTrustedCaller(event, pageUrl)) return projectFileFailure('FORBIDDEN', '不允许此页面调用桌面接口。')

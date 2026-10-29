@@ -4,7 +4,7 @@
 
 ## 职责与入口
 
-负责项目内文件树、目录监听、`@` 文件引用检索、条目解析与系统文件管理器定位、文件内容读取／保存／磁盘基线，以及源码、图片、Markdown 预览与富文本编辑。
+负责项目内文件树、目录监听、`@` 文件引用检索、条目解析与系统文件管理器定位、文件内容读取／保存／磁盘基线，以及源码编辑、图片预览、Markdown 预览与富文本编辑、HTML 页面预览。
 
 入口为右侧文件树、文件菜单、输入坞文件引用、文件标签及 Markdown 文档链接。输入坞可接受从文件树拖入的条目：只插入项目相对路径文本（目录同样插入路径），不读文件内容，跨项目拖动被拒绝。不执行 Agent 的文件工具，不拥有工作区标签顺序，不把桌面草稿当跨应用重启持久化。
 
@@ -20,8 +20,9 @@
 | `src/main/projects/project-entry-path.ts` | 相对条目路径规范化、真实路径与项目边界 |
 | `src/main/projects/project-file-index.ts` | 项目文件检索与 Markdown 文档候选 |
 | `src/main/projects/project-file-content.ts` | 内容分类、文本／图片读取、磁盘基线与原子保存 |
+| `src/main/projects/project-html-preview.ts` | HTML 内存快照、隔离会话、项目内网页资源读取与预览释放 |
 | `src/main/projects/project-markdown-assets.ts` | 为所属 Markdown 文档导入本地或剪贴板图片 |
-| `src/shared/project-file-api.ts` | 目录、条目、文件读写、监听与 Markdown 资产契约 |
+| `src/shared/project-file-api.ts` | 目录、条目、文件读写、监听、HTML 预览与 Markdown 资产契约 |
 
 ### 前端状态与主界面
 
@@ -32,12 +33,13 @@
 | `src/renderer/src/editor/stores/project-editor.ts` | 按项目与文件保存编辑记录、脏状态、磁盘基线与草稿 |
 | `src/renderer/src/editor/file-document-session.ts` | 源码与排版编辑面的提交、保存及视图切换协调 |
 | `src/renderer/src/editor/file-markdown-view.ts` | Markdown 编辑能力、格式、查找及渲染适配器契约 |
-| `src/renderer/src/editor/services/project-file.ts` | 文件／目录／图片导入固定桥接与事件 |
+| `src/renderer/src/editor/services/project-file.ts` | 文件／目录／图片导入／HTML 预览固定桥接与事件 |
 | `src/renderer/src/editor/services/external-url.ts` | 文件内文档链接的外链打开封装；主进程执行协议与凭据检查 |
 | `src/renderer/src/editor/components/FileTreeView.vue` | 文件树展示、打开及拖拽入口 |
 | `src/renderer/src/editor/components/FileTreeMenu.vue` | 条目菜单、复制、定位、打开及插入终端 |
 | `src/renderer/src/editor/components/FileEditorView.vue` | 文件标签面板、视图切换、保存与冲突交互 |
 | `src/renderer/src/editor/components/CodeMirrorEditor.vue` | 源码编辑器及对外编辑接口 |
+| `src/renderer/src/editor/components/FileHtmlPreview.vue` | HTML 隔离页面、快照刷新、加载与错误状态、容器释放 |
 | `src/renderer/src/editor/components/FileMarkdownView.vue` | Markdown 预览／可编辑排版、目录、查找及只读降级 |
 | `src/renderer/src/editor/components/FileMarkdownPreview.vue` | 只读安全 DOM、资源及阅读交互适配 |
 | `src/renderer/src/editor/components/FileMarkdownToolbar.vue` | 文档工具区、编辑能力提示与阅读选项 |
@@ -49,7 +51,7 @@
 
 | 文件 | 用途 |
 | --- | --- |
-| `src/renderer/src/editor/file-language.ts` | 文件名、语言与 Markdown 类型识别 |
+| `src/renderer/src/editor/file-language.ts` | 文件名、语言、Markdown 与 HTML 类型识别 |
 | `src/renderer/src/editor/file-code-highlight.ts` | 文件代码高亮与语言加载 |
 | `src/renderer/src/editor/file-images.ts` | 项目内 Markdown 图片读取和显示地址管理 |
 | `src/renderer/src/editor/file-markdown.ts` | 文件 Markdown 只读解析、安全渲染与预览支持判定 |
@@ -88,11 +90,11 @@
 
 ## 公共与跨模块引用
 
-- [F-assembly](shared.md#f-assembly进程与页面组装混合)：`registerProjectFileHandlers` 校验调用者和固定请求；文件面板由 `src/renderer/src/shell/components/WorkspaceView.vue` 渲染，脏文件关闭确认状态在 `src/renderer/src/workspace/stores/workspace-tabs.ts`，经 `src/renderer/src/shell/components/AppDialogHost.vue` 呈现。
+- [F-assembly](shared.md#f-assembly进程与页面组装混合)：`registerProjectFileHandlers` 校验调用者和固定请求；文件面板由 `src/renderer/src/shell/components/WorkspaceView.vue` 渲染，脏文件关闭确认状态在 `src/renderer/src/workspace/stores/workspace-tabs.ts`，经 `src/renderer/src/shell/components/AppDialogHost.vue` 呈现。HTML 预览协议由 `src/main/asset-protocol.ts` 注册，容器校验与窗口级清理由 `src/main/window.ts` 接线。
 - [F-ui](shared.md#f-ui前端共享展示共享)：公共按钮、浮层、复制，`ui/markdown-shared.ts` 与 `ui/markdown-math.ts` 的共同排版能力，以及文件树、输入坞与终端共用的 `ui/project-entry-drag.ts` 拖拽载荷、路径引用文本和路径插入文本。
 - [F-style](shared.md#f-style全局主题与业务样式混合)：`src/renderer/src/assets/styles/editor.css` 的文件编辑、Markdown、富文本和文件树样式，由 `src/renderer/src/assets/main.css` 统一加载。
 - [工作区](workspace-tabs.md)：打开／关闭文件标签和消费锚点请求；编辑状态归本模块，标签状态归工作区。
-- [项目](projects-trust.md)：普通树和检索跟随当前项目，文件内容与图片导入固定已登记的所属项目。
+- [项目](projects-trust.md)：普通树和检索跟随当前项目，文件内容、HTML 预览与图片导入固定已登记的所属项目。
 - [终端](terminal-commands.md)：文件菜单与拖拽向活动终端插入路径，不在文件模块执行 shell。
 - [偏好](preferences.md)：Markdown 默认视图只决定新打开文件的初始模式。
 
@@ -110,10 +112,20 @@
 10. 保存携带文本、换行／BOM 语义与磁盘基线。主进程复核路径与符号链接，冲突返回给界面，明确覆盖才允许不带旧基线写入。
 11. 图片导入创建文档所属项目内的新资产，正文仍需显式保存；期间项目切换不应将旧结果解释为新项目同名路径。
 
+### HTML 页面预览
+
+HTML 文件默认显示「页面」，可切回「源码」编辑；类型识别由 `file-language.ts` 决定，不按 Vue／React 或构建配置拦截。预览不启动开发服务、不编译源码；依赖构建或服务的页面需通过服务地址打开。
+
+`FileHtmlPreview.vue` 经 `prepareProjectHtmlPreview` 将当前源文快照交给 `ProjectHtmlPreview`；快照可以包含未保存的编辑，不写入文件。主进程固定文档所属的已登记项目，为预览建立独立内存会话，主文档取内存快照，相对资源经预览专用协议读取项目内的普通文件。
+
+活动页面在源文变化或显式刷新时重建；普通标签切换复用已挂载页面，文件重新载入则重建预览。组件卸载经 `releaseProjectHtmlPreview` 释放预览，项目移除时主进程按项目清理。主窗口文档导航、渲染进程退出或窗口关闭时，主进程清理窗口所属预览，并使旧代际的在途登记失效。
+
 ## 数据与安全边界
 
 项目文件是真实外部数据。内容写入使用同目录临时文件与 rename，编辑器草稿和撤销在页面内；关闭脏标签前先确认，关闭不等于保存。目录检索索引与树缓存可再生，不拥有文件真源。
 
 页面只提交契约允许的项目与相对路径，主进程执行项目登记及真实路径边界检查；链接、HTML、图片、数学和代码片段各有渲染入口，不能将可信 UI 组件等同于可信文件内容。
+
+HTML 脚本只在独立沙箱容器运行，不向预览暴露桌面桥接、Node 或本地写入能力。资源条目自身的符号链接、真实路径越界和不支持的资源请求被拒绝；本地资源类型、读取上限和预览 CSP 以 `project-html-preview.ts` 与共享契约定义为准。网络资源仍遵守 Chromium 的跨域与混合内容限制，不因文件预览关闭安全机制；预览禁止弹窗、下载和敏感权限请求。
 
 

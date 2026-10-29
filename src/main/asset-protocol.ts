@@ -1,10 +1,11 @@
-/** 本地资产边界：应用协议注册、页面地址解析、目录越界判定与生产 CSP。页面只能读到构建产出的 index.html 与 assets/ 下文件，realpath 后再判一次越界以防符号链接逃逸。 */
+/** 本地资产边界：注册应用及 HTML 预览协议，解析应用页面地址并定义生产 CSP；应用协议只提供构建资产，预览协议的处理器仅登记到独立会话。 */
 
 import { realpath } from 'node:fs/promises'
 import { extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { app, net, protocol } from 'electron'
 import { devServerPortFromEnv } from '../shared/dev-server'
+import { PROJECT_HTML_PREVIEW_SCHEME } from '../shared/project-file-api'
 
 export const rendererRoot = resolve(__dirname, '../renderer')
 export const productionCsp = [
@@ -39,7 +40,9 @@ export const APPLICATION_PAGE_URL = 'app://desktop/index.html'
 /** 必须在 ready 前注册；不赋予绕过 CSP 或运行 Service Worker 的权限。 */
 export function registerAssetScheme(): void {
   protocol.registerSchemesAsPrivileged([
-    { scheme: 'app', privileges: { standard: true, secure: true } }
+    { scheme: 'app', privileges: { standard: true, secure: true } },
+    // 仅预览独立 session 注册处理器；标准地址支持相对资源，不赋予 CSP 绕过或 Service Worker 权限。
+    { scheme: PROJECT_HTML_PREVIEW_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } }
   ])
 }
 

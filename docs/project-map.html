@@ -384,30 +384,36 @@
         "id": "files-editor",
         "name": "文件与编辑器",
         "groupId": "work",
-        "summary": "项目文件树、目录监听、引用检索、内容读写与磁盘基线，以及源码、图片、Markdown 预览与富文本编辑；不执行 Agent 的文件工具。",
+        "summary": "项目文件树、目录监听、引用检索、内容读写与磁盘基线，以及源码编辑、图片预览、Markdown 预览与富文本编辑、HTML 页面预览；不执行 Agent 的文件工具。",
         "features": [
           "目录分层列举、监听与变化合并",
           "文件引用检索与条目拖拽引用",
           "文本／图片读取、磁盘基线与原子保存",
           "Markdown 富文本往返证明与结构草稿恢复",
+          "HTML 页面／源码切换、未保存快照预览与刷新",
           "文档链接外链与图片导入"
         ],
         "tags": ["Electron 主进程", "Vue 页面", "CodeMirror", "Tiptap"],
         "entries": [
           {"kind": "关键实现", "label": "内容分类与原子保存", "path": "src/main/projects/project-file-content.ts"},
+          {"kind": "关键实现", "label": "HTML 快照、隔离会话与资源边界", "path": "src/main/projects/project-html-preview.ts"},
           {"kind": "关键实现", "label": "目录列举与条目解析", "path": "src/main/projects/project-directory.ts"},
           {"kind": "关键实现", "label": "编辑记录与草稿", "path": "src/renderer/src/editor/stores/project-editor.ts"},
           {"kind": "界面入口", "label": "文件面板", "path": "src/renderer/src/editor/components/FileEditorView.vue"},
+          {"kind": "界面入口", "label": "HTML 页面预览", "path": "src/renderer/src/editor/components/FileHtmlPreview.vue"},
           {"kind": "界面入口", "label": "富文本编辑", "path": "src/renderer/src/editor/components/FileRichMarkdownEditor.vue"}
         ],
         "resources": [
           {"name": "项目文件", "owner": "项目目录（外部真实数据）", "lifecycle": "同目录临时文件加 rename 写入；页面草稿与撤销只在内存"},
-          {"name": "目录树缓存与检索索引", "owner": "files-editor Store", "lifecycle": "可再生，不拥有文件真源"}
+          {"name": "目录树缓存与检索索引", "owner": "files-editor Store", "lifecycle": "可再生，不拥有文件真源"},
+          {"name": "HTML 预览快照与隔离会话", "owner": "ProjectHtmlPreview", "lifecycle": "仅在内存；组件卸载、项目移除、主窗口文档导航、渲染进程退出或窗口关闭时释放"}
         ],
         "constraints": [
           "页面只提交契约允许的项目与相对路径，主进程执行真实路径边界检查",
           "关闭脏标签不等于保存",
-          "已编辑文档无法证明安全序列化时保留结构草稿并阻止保存"
+          "已编辑文档无法证明安全序列化时保留结构草稿并阻止保存",
+          "HTML 脚本只在独立沙箱内运行，不暴露桌面桥接、Node 或本地写入；本地资源限定所属项目，网络资源遵守 Chromium 安全规则",
+          "HTML 预览不判断框架、不启动开发服务、不编译源码；依赖构建或服务的页面需通过服务地址打开"
         ],
         "links": [
           {"label": "模块文档：文件与编辑器", "href": "modules/files-editor.md"}
@@ -937,7 +943,7 @@
         "steps": [
           {"title": "打开条目并登记标签", "description": "工作区先登记文件标签，再由编辑模块读取固定项目内的文件。", "moduleIds": ["files-editor", "workspace-tabs"]},
           {"title": "分类并读取内容", "description": "主进程复核已登记项目、相对路径与文件类型，内容分为文本、图片或不支持。", "moduleIds": ["files-editor", "projects-trust"]},
-          {"title": "编辑与视图切换", "description": "源码与排版视图共用编辑记录；富文本会话完成序列化往返证明后才接管实例。", "moduleIds": ["files-editor"]},
+          {"title": "编辑与视图切换", "description": "源码、Markdown 排版与 HTML 页面使用同一份编辑记录；HTML 默认页面并以当前源文快照预览，富文本会话完成序列化往返证明后才接管实例。", "moduleIds": ["files-editor"]},
           {"title": "保存并判定冲突", "description": "保存携带文本、换行语义与磁盘基线；主进程复核真实路径，同目录临时文件加 rename 原子替换。", "moduleIds": ["files-editor"]},
           {"title": "脏标签关闭确认", "description": "关闭前由应用级弹层宿主确认，脏文件不隐式保存。", "moduleIds": ["app-shell", "workspace-tabs"]}
         ]

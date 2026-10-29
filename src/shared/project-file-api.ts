@@ -3,6 +3,7 @@
  * 目录操作以当前项目为根；文件内容和 Markdown 资源固定请求所属的已登记项目，绝对路径与越界路径由主进程拒绝；
  * 需要绝对路径时（复制、写入终端、在文件管理器中显示）一律由主进程解析后回传，页面不自行拼接。
  * 普通文件读返回文本、图片或「不支持」，保存只接受文本并带回磁盘基线；图片导入走独立受限通道，不暴露任意二进制写入。
+ * HTML 预览只登记当前文档快照与隔离容器身份，页面资源由主进程限定在所属项目内提供，不落盘草稿。
  * 目录监听是本契约里唯一的推送通道：页面提交「已加载的目录集合」，主进程只回报这些层里发生的变化。
  */
 import type { DesktopError } from './desktop-api'
@@ -14,6 +15,10 @@ export const PROJECT_ENTRY_REVEAL_CHANNEL = 'desktop:project-entry-reveal'
 export const PROJECT_FILE_READ_CHANNEL = 'desktop:project-file-read'
 export const PROJECT_FILE_WRITE_CHANNEL = 'desktop:project-file-write'
 export const PROJECT_FILE_STAT_CHANNEL = 'desktop:project-file-stat'
+export const PROJECT_HTML_PREVIEW_PREPARE_CHANNEL = 'desktop:project-html-preview-prepare'
+export const PROJECT_HTML_PREVIEW_RELEASE_CHANNEL = 'desktop:project-html-preview-release'
+export const PROJECT_HTML_PREVIEW_SCHEME = 'project-preview'
+export const PROJECT_HTML_PREVIEW_PARTITION_PREFIX = 'desktop-html-preview-'
 export const PROJECT_DIRECTORY_WATCH_CHANNEL = 'desktop:project-directory-watch'
 export const PROJECT_DIRECTORY_CHANGED_EVENT = 'desktop:project-directory-changed'
 
@@ -262,7 +267,65 @@ export function isProjectMarkdownDocumentsResult(value: unknown): value is Proje
     && value.data.entries.length <= 20000 && value.data.entries.every(entry => typeof entry === 'string' && entry.length <= PROJECT_DIRECTORY_PATH_MAX_CHARS)
 }
 
+/** 预览只接收已读取的 HTML 快照；previewId 为 null 时建立隔离身份，否则更新原预览。 */
+export interface ProjectHtmlPreviewRequest extends ProjectFileReadRequest {
+  readonly text: string
+  readonly previewId: string | null
+}
+
+export interface ProjectHtmlPreviewData {
+  readonly previewId: string
+  readonly partition: string
+  readonly url: string
+}
+
+export type ProjectHtmlPreviewResult =
+  | { readonly ok: true; readonly data: ProjectHtmlPreviewData }
+  | { readonly ok: false; readonly error: DesktopError }
+
+export interface ProjectHtmlPreviewReleaseRequest {
+  readonly previewId: string
+}
+
+export type ProjectHtmlPreviewReleaseResult =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly error: DesktopError }
+
+function isPreviewId(value: unknown): value is string {
+  return typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value)
+}
+
+export function isProjectHtmlPreviewRequest(value: unknown): value is ProjectHtmlPreviewRequest {
+  if (!isRecord(value) || Object.keys(value).some(key => !['projectPath', 'path', 'text', 'previewId'].includes(key))) return false
+  return isProjectFileReadRequest({ projectPath: value.projectPath, path: value.path })
+    && typeof value.path === 'string' && /\.html?$/i.test(value.path)
+    && typeof value.text === 'string' && value.text.length <= PROJECT_FILE_TEXT_MAX_BYTES
+    && (value.previewId === null || isPreviewId(value.previewId))
+}
+
+export function isProjectHtmlPreviewReleaseRequest(value: unknown): value is ProjectHtmlPreviewReleaseRequest {
+  return isRecord(value) && Object.keys(value).every(key => key === 'previewId') && isPreviewId(value.previewId)
+}
+
+export function isProjectHtmlPreviewResult(value: unknown): value is ProjectHtmlPreviewResult {
+  if (!isRecord(value)) return false
+  if (value.ok === false) return isProjectFileSearchResult(value)
+  if (value.ok !== true || !isRecord(value.data)) return false
+  const data = value.data
+  if (!isPreviewId(data.previewId) || data.partition !== `${PROJECT_HTML_PREVIEW_PARTITION_PREFIX}${data.previewId}` || typeof data.url !== 'string') return false
+  try {
+    const url = new URL(data.url)
+    return url.protocol === `${PROJECT_HTML_PREVIEW_SCHEME}:` && url.hostname === data.previewId && !url.port && !url.username && !url.password
+  } catch { return false }
+}
+
+export function isProjectHtmlPreviewReleaseResult(value: unknown): value is ProjectHtmlPreviewReleaseResult {
+  return isRecord(value) && (value.ok === true || (value.ok === false && isProjectFileSearchResult(value)))
+}
+
 export interface ProjectFileApi {
+  readonly prepareProjectHtmlPreview: (request: ProjectHtmlPreviewRequest) => Promise<ProjectHtmlPreviewResult>
+  readonly releaseProjectHtmlPreview: (request: ProjectHtmlPreviewReleaseRequest) => Promise<ProjectHtmlPreviewReleaseResult>
   readonly listMarkdownDocuments: (request: ProjectFileReadRequest) => Promise<ProjectMarkdownDocumentsResult>
   readonly importMarkdownImage: (request: ProjectMarkdownImageRequest) => Promise<ProjectMarkdownImageResult>
   /** 在当前项目内按查询串检索文件路径；不接受目录参数，根路径由主进程决定。 */

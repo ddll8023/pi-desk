@@ -6,7 +6,7 @@
  * 且超过可编辑上限的文本只读：这类记录不会变脏，也不接受保存。
  *
  * 打开时的默认模式按文件类型与偏好决定：Markdown 按设置里的默认视图（默认预览，阅读是主要用途），
- * 其余文本进源码；用户在标签内切换后，同一个标签保持该选择，不会每次重读都跳回默认值。
+ * HTML 默认页面预览，其余文本进源码；用户在标签内切换后，同一个标签保持该选择，不会每次重读都跳回默认值。
  *
  * 脏标记由编辑器上报，保存时把当前文本交给主进程，并把返回的新磁盘基线写回记录；
  * 外部改动通过 `stat` 比对 size/mtimeMs 发现：未修改的文件自动重新载入，有未保存修改时
@@ -26,11 +26,11 @@ import type {
   ProjectFileTextContent,
   ProjectFileUnsupportedContent
 } from '../../../../shared/project-file-api'
-import { fileNameOf, isMarkdownPath } from '../file-language'
+import { fileNameOf, isHtmlPath, isMarkdownPath } from '../file-language'
 import { readProjectFile, statProjectFile, writeProjectFile } from '../services/project-file'
 import { usePreferencesStore } from '../../preferences/stores/preferences'
 
-/** 文件标签的展示模式：代码视图与 Markdown 预览；只有 Markdown 文件能切到预览。 */
+/** 文件标签的展示模式：源码与预览；Markdown 为排版编辑，HTML 为隔离页面。 */
 export type FileEditorMode = 'code' | 'preview'
 
 /** 预览字号档位：只给四档，避免任意值把阅读排版拉坏。 */
@@ -124,7 +124,7 @@ export const useProjectEditorStore = defineStore('project-editor', () => {
   /**
    * 打开一个文件：同项目同路径已打开时直接返回原键，由调用方聚焦该标签。
    * 新键先登记为读取中并立即返回，让标签先出现，读取结果随后写入；读取失败保留错误状态，
-   * 不建立可编辑的假内容。Markdown 按偏好取默认视图，其余文本进源码。
+   * 不建立可编辑的假内容。Markdown 按偏好取默认视图，HTML 默认页面，其余文本进源码。
    */
   function open(projectPath: string, path: string): string {
     const existing = keyOf(projectPath, path)
@@ -141,7 +141,7 @@ export const useProjectEditorStore = defineStore('project-editor', () => {
       markdown,
       load: { phase: 'loading' },
       loadRevision: 0,
-      mode: markdown ? preferencesStore.markdownDefaultView : 'code',
+      mode: markdown ? preferencesStore.markdownDefaultView : isHtmlPath(path) ? 'preview' : 'code',
       dirty: false,
       draft: null,
       richDraft: null,
@@ -263,10 +263,10 @@ export const useProjectEditorStore = defineStore('project-editor', () => {
     codeWrap.value = value
   }
 
-  /** 切换代码视图与 Markdown 预览；非 Markdown 文件忽略该动作。 */
+  /** 只有 Markdown 与 HTML 提供视图切换；重新读取文件不重置用户选择。 */
   function setMode(key: string, mode: FileEditorMode): void {
     const record = records.value[key]
-    if (record === undefined || !record.markdown) return
+    if (record === undefined || (!record.markdown && !isHtmlPath(record.path))) return
     if (record.mode === mode) return
     update(key, { mode })
   }

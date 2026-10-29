@@ -12,6 +12,7 @@ import { GenuiParamStore } from './genui/genui-param-store'
 import { ProjectDirectoryReader } from './projects/project-directory'
 import { ProjectDirectoryWatcher } from './projects/project-directory-watcher'
 import { ProjectFileContent } from './projects/project-file-content'
+import { ProjectHtmlPreview } from './projects/project-html-preview'
 import { ProjectFileIndex } from './projects/project-file-index'
 import { GitService } from './git/git-service'
 import { ProjectManager } from './projects/project-manager'
@@ -121,6 +122,9 @@ export const projectFileContent = new ProjectFileContent({
   resolveProjectPath: resolveRegisteredProjectPath
 })
 
+/** HTML 草稿与预览隔离身份只存内存，资源请求继续复核所属项目的登记状态。 */
+export const projectHtmlPreview = new ProjectHtmlPreview(resolveRegisteredProjectPath)
+
 /** 源代码管理：状态、差异、历史与暂存/提交；仓库根与路径折算全在主进程，页面只给项目内相对路径。 */
 export const gitService = new GitService({
   currentProjectPath: () => projectManager.currentProjectPath()
@@ -166,7 +170,7 @@ export async function resolveRegisteredProjectPath(requested: string): Promise<s
   return match?.path ?? null
 }
 
-/** 按项目 id 取规范路径；只用于项目移除时收敛它的终端，找不到返回 null。 */
+/** 按项目 id 取规范路径，供项目移除后清理所属终端与 HTML 预览；找不到返回 null。 */
 export async function registeredProjectPathById(projectId: string): Promise<string | null> {
   const list = await configStore.list()
   return list.projects.find((project) => project.id === projectId)?.path ?? null

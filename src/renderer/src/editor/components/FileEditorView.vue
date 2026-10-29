@@ -1,10 +1,11 @@
-<!-- 文件工作台外壳：紧凑展示文件身份、保存与编辑能力，文档会话负责源码和排版视图的提交与切换。 -->
+<!-- 文件工作台外壳：展示文件身份、保存与视图切换；Markdown 由文档会话协调排版编辑，HTML 交给独立沙箱预览。 -->
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { PROJECT_FILE_EDIT_MAX_BYTES } from '../../../../shared/project-file-api'
 import type { ProjectFileTextContent } from '../../../../shared/project-file-api'
 import { copyText } from '../../ui/clipboard'
 import { canPreviewFileMarkdown } from '../file-markdown'
+import { isHtmlPath } from '../file-language'
 import { useFileDocumentSession } from '../file-document-session'
 import type { FileEditorMode } from '../stores/project-editor'
 import { useProjectEditorStore } from '../stores/project-editor'
@@ -12,6 +13,7 @@ import AppButton from '../../ui/AppButton.vue'
 import CodeMirrorEditor from './CodeMirrorEditor.vue'
 import ConfirmDialog from '../../ui/ConfirmDialog.vue'
 import FileMarkdownView from './FileMarkdownView.vue'
+import FileHtmlPreview from './FileHtmlPreview.vue'
 
 const props = defineProps<{ readonly tabKey: string; readonly active: boolean }>()
 const editorStore = useProjectEditorStore()
@@ -56,7 +58,9 @@ const conflict = computed(() => record.value?.conflict === true)
 const saveError = computed(() => record.value?.saveError ?? null)
 const requestedMode = computed(() => record.value?.mode ?? 'code')
 const markdown = computed(() => record.value?.markdown === true)
-const previewAllowed = computed(() => canPreviewFileMarkdown(documentText.value))
+const html = computed(() => isHtmlPath(record.value?.path ?? ''))
+const hasPreview = computed(() => markdown.value || html.value)
+const previewAllowed = computed(() => html.value || canPreviewFileMarkdown(documentText.value))
 const sourceFallback = computed(() => markdown.value && requestedMode.value === 'preview' && !previewAllowed.value)
 const mode = computed<FileEditorMode>(() => sourceFallback.value ? 'code' : requestedMode.value)
 const previewEditingAllowed = computed(() => editable.value && previewAllowed.value)
@@ -70,6 +74,7 @@ const editingCapability = computed(() => {
       ? { kind: 'readonly', label: '草稿待恢复', detail: '富文本草稿尚未恢复，未开放源码覆盖。' }
       : { kind: 'ready', label: '可编辑', detail: '当前为源码编辑。' }
   }
+  if (html.value) return { kind: 'readonly', label: '页面预览', detail: '页面在独立容器内运行；修改文件请切回源码。' }
   const current = previewState.value
   switch (current.phase) {
     case 'initializing': return { kind: 'waiting', label: '准备中', detail: '编辑器准备完成后才能输入。' }
@@ -156,24 +161,24 @@ onBeforeUnmount(() => {
           <span class="file-editor-path-name">{{ record?.name ?? '文件' }}</span>
         </button>
         <span v-if="pathNotice" class="file-editor-path-toast" role="status">{{ pathNotice }}</span>
-        <span v-if="readOnlyNote && !markdown" class="file-editor-badge" role="status" :title="readOnlyNote">只读</span>
+        <span v-if="readOnlyNote && !hasPreview" class="file-editor-badge" role="status" :title="readOnlyNote">只读</span>
       </div>
       <div class="file-editor-actions">
         <span
-          v-if="markdown && editingCapability"
+          v-if="hasPreview && editingCapability"
           class="file-editor-capability"
           :class="`is-${editingCapability.kind}`"
           :title="editingCapability.detail"
           role="status"
         >{{ editingCapability.label }}</span>
-        <span v-if="markdown && textContent" class="file-reader-save-state" :class="{ 'is-dirty': dirty }" role="status">{{ savedState }}</span>
-        <div v-if="markdown && textContent" class="file-editor-mode" role="radiogroup" aria-label="显示方式" @keydown="onModeKeydown">
+        <span v-if="hasPreview && textContent" class="file-reader-save-state" :class="{ 'is-dirty': dirty }" role="status">{{ savedState }}</span>
+        <div v-if="hasPreview && textContent" class="file-editor-mode" role="radiogroup" aria-label="显示方式" @keydown="onModeKeydown">
           <span class="file-editor-mode-thumb" :class="{ 'is-preview': mode === 'preview' }" aria-hidden="true"></span>
           <button type="button" role="radio" class="file-editor-mode-item" :class="{ 'is-active': mode === 'code' }" :aria-checked="mode === 'code'" :tabindex="mode === 'code' ? 0 : -1" @click="setMode('code')">
             <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5.5 4.5L2 8l3.5 3.5M10.5 4.5L14 8l-3.5 3.5" /></svg><span>源码</span>
           </button>
           <button type="button" role="radio" class="file-editor-mode-item" :class="{ 'is-active': mode === 'preview' }" :aria-checked="mode === 'preview'" :tabindex="mode === 'preview' ? 0 : -1" @click="setMode('preview')">
-            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5h5l3 3v8H4zM9 2.5v3h3M6 8h4M6 10.5h4" /></svg><span>排版</span>
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5h5l3 3v8H4zM9 2.5v3h3M6 8h4M6 10.5h4" /></svg><span>{{ html ? '页面' : '排版' }}</span>
           </button>
         </div>
       </div>
@@ -224,6 +229,15 @@ onBeforeUnmount(() => {
             @font-size="editorStore.setPreviewFontSize($event)"
             @frontmatter="editorStore.setShowFrontmatter($event)"
             @source="setMode('code')"
+          />
+        </div>
+        <div v-if="html && previewVisited" class="file-editor-layer file-editor-preview" :class="{ 'is-hidden': mode !== 'preview' }" :inert="mode !== 'preview'" :aria-hidden="mode !== 'preview'">
+          <FileHtmlPreview
+            :key="`${tabKey}:${record?.loadRevision ?? 0}`"
+            :text="documentText"
+            :path="record?.path ?? ''"
+            :project-path="record?.projectPath ?? ''"
+            :active="active && mode === 'preview'"
           />
         </div>
       </div>
