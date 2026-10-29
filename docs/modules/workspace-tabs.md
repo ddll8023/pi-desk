@@ -35,7 +35,7 @@
 - [项目](projects-trust.md)：`src/renderer/src/projects/stores/project.ts` 提供当前项目与选择来源。
 - [会话](sessions-chat.md)：会话打开与列表状态、原标签的待提交输入经 `src/renderer/src/workspace/stores/session-tab-bridge.ts` 的视图读取，打开链收敛动作也由该视图转交；接口以该文件的 `SessionTabState` 为准，提供者由 `src/renderer/src/shell/use-app-startup.ts` 注册；打开请求由 `src/renderer/src/sessions/stores/session.ts` 的 `open`、`openIntent` 承接，`ChatOpenIntent` 定义于 `src/renderer/src/workspace/stores/workspace-tabs.ts`；`src/renderer/src/sessions/stores/session-runs.ts` 提供运行清单与结束动作；`src/renderer/src/sessions/stores/session-view.ts` 消费新草稿身份与绑定映射，负责输入留底及附件回收。
 - [文件](files-editor.md)：`src/renderer/src/editor/stores/project-editor.ts` 拥有编辑记录，标签只引用其 key 与脏状态。
-- [终端](terminal-commands.md)：`src/renderer/src/workspace/stores/terminal.ts` 提供真实清单、创建、关闭、命名与写入；快捷命令在当前活动终端运行中时复用写入，否则创建新终端标签。
+- [终端](terminal-commands.md)：`src/renderer/src/workspace/stores/terminal.ts` 提供真实清单、创建、关闭、命名与写入；快捷命令经 `runQuickCommand` 始终创建新终端标签再写入，不复用现有终端。
 - 浏览器主进程与桥接：`src/main/browser/ipc.ts` 的 `registerBrowserHandlers` 由 `src/main/app-lifecycle.ts` 注册；可信主窗口只能操作自己所属的 webview。`src/preload/browser.ts` 提供固定截图、元素选择与取消方法，不暴露任意脚本执行；页面接口并入公共桥接与环境声明。
 - 批注输入交接：[会话输入](sessions-chat.md)中的 `PromptComposer.vue` 通过 `mergeBrowserAnnotation` 复核输入状态、模型图片能力与附件限制，`session-view.ts` 的 `annotationTargetMatches` 只负责身份核对；工作区不直接覆盖后台草稿。
 - [F-ui](shared.md#f-ui前端共享展示共享)、[F-style](shared.md#f-style全局主题与业务样式混合)：标签菜单浮层、公共按钮与全局标签样式。

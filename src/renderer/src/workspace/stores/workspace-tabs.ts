@@ -17,7 +17,7 @@
  * 后台实例回复结束时给它的对话标签打「有新回复」标记，切到该标签即清除。
  * 新建对话的入口分两类：标签条与侧栏新建一个对话标签，`/new` 则在当前标签内就地替换
  * （结束原实例、清空会话身份与重命名，标签位置与顺序不变）。
- * 快捷命令的运行目标也是标签：活动标签是仍在运行的终端就写进它，否则先新建一个终端再写入。
+ * 快捷命令的运行目标也是标签：始终在当前项目新建终端标签再写入，不复用可能被前台程序占用的现有 shell。
  */
 import { defineStore } from 'pinia'
 import { computed, ref, watch } from 'vue'
@@ -362,8 +362,7 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
   }
 
   /**
-   * 运行一条快捷命令：活动标签是仍在运行的终端就写进它，否则先在当前项目新建终端再写入。
-   * 已退出的终端不能再输入（主进程会拒绝），因此和「没有终端」走同一条新建路径。
+   * 运行一条快捷命令：始终在当前项目新建终端标签再写入，不复用可能被前台程序占用的现有 shell。
    * 命令文本不做解析或转义（它就是要交给 shell 的输入）；`appendEnter` 为真时补一个回车立即执行。
    * 回车一律用 CR：多行命令里的 LF 在 PowerShell/PSReadLine 里不是 Enter，只当作输入缓冲里的换行，
    * 整段会被攒成一条待提交的多行输入，行的先后顺序就不再是逐条执行的顺序（例如 `cd` 反而落在后面的命令之后）。
@@ -372,13 +371,6 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
    */
   async function runQuickCommand(command: QuickCommand): Promise<void> {
     const text = command.appendEnter ? `${command.command.replace(/\r\n|\r|\n/g, '\r')}\r` : command.command
-    const active = activeTerminalId.value
-    const activeRunning = active !== null
-      && terminalStore.sessions.some((session) => session.id === active && session.status === 'running')
-    if (active !== null && activeRunning) {
-      await terminalStore.insertText(active, text)
-      return
-    }
     const created = await createTerminalTab()
     if (created === null) return
     await terminalStore.insertText(created, text)
