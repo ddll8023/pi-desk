@@ -165,7 +165,7 @@ async function onNewChatTab(): Promise<void> {
   submitOpen(await workspaceTabsStore.openNewChatTab())
 }
 
-/** 菜单里运行一条命令：每次新开一个终端标签再写入，失败留在终端提示条里。 */
+/** 菜单里运行一条命令：活动标签为运行中终端时直接写入，否则新建终端标签写入，失败留在终端提示条里。 */
 function runQuickCommand(command: QuickCommand): void {
   void workspaceTabsStore.runQuickCommand(command)
 }

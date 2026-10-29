@@ -42,7 +42,7 @@
 - [F-config](shared.md#f-configdesktop-配置混合)：命令清单写 Desktop 配置；[偏好](preferences.md) 的 `PreferencesManager` 提供相关配置适配。
 - [F-process](shared.md#f-process受管进程与-sdk-公共设施共享)：`process-tree-termination.ts` 收敛终端关联进程树。
 - [F-build](shared.md#f-build构建与发行上下文)：守护进程独立 CJS 构建及 PTY 权限准备；不将原生模块打入浏览器。
-- [工作区](workspace-tabs.md)：标签由真实终端清单派生；快捷命令经 `runQuickCommand` 创建新终端再写入；终端内点击链接可调用 `openBrowserTab` 在当前项目新开内置浏览器。
+- [工作区](workspace-tabs.md)：标签由真实终端清单派生；快捷命令经 `runQuickCommand` 优先复用当前运行中终端或新建终端写入；终端内点击链接可调用 `openBrowserTab` 在当前项目新开内置浏览器。
 - [浏览器与外部 URL](workspace-tabs.md)：终端链接通过偏好配置与气泡动作分别路由至工作区内置浏览器或系统默认浏览器（`openExternalUrl`）。
 - [文件](files-editor.md)：`ui/project-entry-drag.ts` 提供拖拽载荷、路径引用文本与路径插入文本。
 - [项目](projects-trust.md)：终端 cwd 只能取已登记项目的规范路径，项目移除触发该项目终端关闭请求。
