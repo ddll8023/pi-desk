@@ -1,6 +1,6 @@
 /**
- * 定义项目文件检索、单层目录列举、目录监听、条目路径解析与文件内容读写的 IPC 契约及跨进程响应校验。
- * 目录操作以当前项目为根；文件内容和 Markdown 资源固定请求所属的已登记项目，绝对路径与越界路径由主进程拒绝；
+ * 定义项目文件检索、单层目录列举、目录监听、条目路径解析、条目删除（移入系统废纸篓）与文件内容读写的 IPC 契约及跨进程响应校验。
+ * 目录操作与条目删除以当前项目为根；文件内容和 Markdown 资源固定请求所属的已登记项目，绝对路径与越界路径由主进程拒绝；
  * 需要绝对路径时（复制、写入终端、在文件管理器中显示）一律由主进程解析后回传，页面不自行拼接。
  * 普通文件读返回文本、图片或「不支持」，保存只接受文本并带回磁盘基线；图片导入走独立受限通道，不暴露任意二进制写入。
  * HTML 预览只登记当前文档快照与隔离容器身份，页面资源由主进程限定在所属项目内提供，不落盘草稿。
@@ -12,6 +12,7 @@ export const PROJECT_FILE_SEARCH_CHANNEL = 'desktop:project-file-search'
 export const PROJECT_DIRECTORY_LIST_CHANNEL = 'desktop:project-directory-list'
 export const PROJECT_ENTRY_RESOLVE_CHANNEL = 'desktop:project-entry-resolve'
 export const PROJECT_ENTRY_REVEAL_CHANNEL = 'desktop:project-entry-reveal'
+export const PROJECT_ENTRY_DELETE_CHANNEL = 'desktop:project-entry-delete'
 export const PROJECT_FILE_READ_CHANNEL = 'desktop:project-file-read'
 export const PROJECT_FILE_WRITE_CHANNEL = 'desktop:project-file-write'
 export const PROJECT_FILE_STAT_CHANNEL = 'desktop:project-file-stat'
@@ -145,6 +146,11 @@ export type ProjectEntryPathResult =
 
 /** 在系统文件管理器中显示条目；成功不回传数据，失败带可展示的原因。 */
 export type ProjectEntryRevealResult =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly error: DesktopError }
+
+/** 删除条目（移入系统废纸篓）；成功不回传数据，失败带可展示的原因。 */
+export type ProjectEntryDeleteResult =
   | { readonly ok: true }
   | { readonly ok: false; readonly error: DesktopError }
 
@@ -340,6 +346,8 @@ export interface ProjectFileApi {
   readonly resolveProjectEntryPath: (request: ProjectEntryPathRequest) => Promise<ProjectEntryPathResult>
   /** 在系统文件管理器中显示一个项目内条目；条目已不存在时回可展示的原因。 */
   readonly revealProjectEntry: (request: ProjectEntryPathRequest) => Promise<ProjectEntryRevealResult>
+  /** 删除项目内文件或目录（移入系统废纸篓）；条目不存在或删除失败时回可展示的原因。 */
+  readonly deleteProjectEntry: (request: ProjectEntryPathRequest) => Promise<ProjectEntryDeleteResult>
   /** 读取项目内文件内容；文本、图片与不支持三类结果由主进程判定。 */
   readonly readProjectFile: (request: ProjectFileReadRequest) => Promise<ProjectFileReadResult>
   /** 写入项目内文本文件；磁盘基线不一致时回 CONFLICT，由界面提示用户继续编辑或覆盖保存。 */
@@ -473,6 +481,16 @@ export function isProjectEntryPathResult(value: unknown): value is ProjectEntryP
 
 /** 显示结果只区分成功与失败：成功没有数据，失败沿用同一份错误结构。 */
 export function isProjectEntryRevealResult(value: unknown): value is ProjectEntryRevealResult {
+  if (!isRecord(value)) return false
+  if (value.ok === true) return true
+  if (value.ok !== false || !isRecord(value.error)) return false
+
+  const { code, message } = value.error
+  return typeof code === 'string' && typeof message === 'string'
+}
+
+/** 删除结果只区分成功与失败：成功没有数据，失败沿用同一份错误结构。 */
+export function isProjectEntryDeleteResult(value: unknown): value is ProjectEntryDeleteResult {
   if (!isRecord(value)) return false
   if (value.ok === true) return true
   if (value.ok !== false || !isRecord(value.error)) return false

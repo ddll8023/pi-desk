@@ -4,10 +4,10 @@ import { ipcRenderer } from 'electron'
 import type { IpcRendererEvent } from 'electron'
 import { PROJECT_MARKDOWN_DOCUMENTS_CHANNEL, PROJECT_MARKDOWN_IMAGE_CHANNEL, isProjectMarkdownDocumentsResult, isProjectMarkdownImageResult } from '../shared/project-file-api'
 import { PROJECT_ADD_CHANNEL, PROJECT_CHOOSE_DIRECTORY_CHANNEL, PROJECT_LIST_CHANNEL, PROJECT_REMOVE_CHANNEL, PROJECT_SET_CURRENT_CHANNEL, isProjectListResult, isProjectPathResult } from '../shared/project-api'
-import { PROJECT_DIRECTORY_CHANGED_EVENT, PROJECT_DIRECTORY_LIST_CHANNEL, PROJECT_DIRECTORY_WATCH_CHANNEL, PROJECT_ENTRY_RESOLVE_CHANNEL, PROJECT_ENTRY_REVEAL_CHANNEL, PROJECT_FILE_READ_CHANNEL, PROJECT_FILE_SEARCH_CHANNEL, PROJECT_FILE_STAT_CHANNEL, PROJECT_FILE_WRITE_CHANNEL, isProjectDirectoryChange, isProjectDirectoryListResult, isProjectDirectoryWatchResult, isProjectEntryPathResult, isProjectEntryRevealResult, isProjectFileReadResult, isProjectFileSearchResult, isProjectFileStatResult, isProjectFileWriteResult } from '../shared/project-file-api'
+import { PROJECT_DIRECTORY_CHANGED_EVENT, PROJECT_DIRECTORY_LIST_CHANNEL, PROJECT_DIRECTORY_WATCH_CHANNEL, PROJECT_ENTRY_DELETE_CHANNEL, PROJECT_ENTRY_RESOLVE_CHANNEL, PROJECT_ENTRY_REVEAL_CHANNEL, PROJECT_FILE_READ_CHANNEL, PROJECT_FILE_SEARCH_CHANNEL, PROJECT_FILE_STAT_CHANNEL, PROJECT_FILE_WRITE_CHANNEL, isProjectDirectoryChange, isProjectDirectoryListResult, isProjectDirectoryWatchResult, isProjectEntryDeleteResult, isProjectEntryPathResult, isProjectEntryRevealResult, isProjectFileReadResult, isProjectFileSearchResult, isProjectFileStatResult, isProjectFileWriteResult } from '../shared/project-file-api'
 import type { ProjectMarkdownImageRequest, ProjectFileReadRequest as MarkdownOwnerRequest } from '../shared/project-file-api'
 import type { ProjectAddRequest, ProjectListResult, ProjectPathResult, ProjectRemoveRequest, ProjectSetCurrentRequest } from '../shared/project-api'
-import type { ProjectDirectoryChange, ProjectDirectoryListRequest, ProjectDirectoryListResult, ProjectDirectoryWatchRequest, ProjectDirectoryWatchResult, ProjectEntryPathRequest, ProjectEntryPathResult, ProjectEntryRevealResult, ProjectFileReadRequest, ProjectFileReadResult, ProjectFileSearchResult, ProjectFileStatRequest, ProjectFileStatResult, ProjectFileWriteRequest, ProjectFileWriteResult } from '../shared/project-file-api'
+import type { ProjectDirectoryChange, ProjectDirectoryListRequest, ProjectDirectoryListResult, ProjectDirectoryWatchRequest, ProjectDirectoryWatchResult, ProjectEntryDeleteResult, ProjectEntryPathRequest, ProjectEntryPathResult, ProjectEntryRevealResult, ProjectFileReadRequest, ProjectFileReadResult, ProjectFileSearchResult, ProjectFileStatRequest, ProjectFileStatResult, ProjectFileWriteRequest, ProjectFileWriteResult } from '../shared/project-file-api'
 import type { ProjectApi } from '../shared/project-api'
 import type { ProjectFileApi } from '../shared/project-file-api'
 import {
@@ -23,6 +23,7 @@ const INVALID_PROJECT_DIRECTORY_RESPONSE = '桌面接口返回了无法识别的
 const INVALID_PROJECT_DIRECTORY_WATCH_RESPONSE = '桌面接口返回了无法识别的目录监听登记结果。'
 const INVALID_PROJECT_ENTRY_PATH_RESPONSE = '桌面接口返回了无法识别的条目路径解析结果。'
 const INVALID_PROJECT_ENTRY_REVEAL_RESPONSE = '桌面接口返回了无法识别的显示文件位置结果。'
+const INVALID_PROJECT_ENTRY_DELETE_RESPONSE = '桌面接口返回了无法识别的删除文件结果。'
 const INVALID_PROJECT_FILE_READ_RESPONSE = '桌面接口返回了无法识别的文件读取结果。'
 const INVALID_PROJECT_FILE_WRITE_RESPONSE = '桌面接口返回了无法识别的文件保存结果。'
 const INVALID_PROJECT_FILE_STAT_RESPONSE = '桌面接口返回了无法识别的文件状态结果。'
@@ -53,6 +54,10 @@ function invalidProjectEntryPathResponse(): ProjectEntryPathResult {
 
 function invalidProjectEntryRevealResponse(): ProjectEntryRevealResult {
   return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_PROJECT_ENTRY_REVEAL_RESPONSE } }
+}
+
+function invalidProjectEntryDeleteResponse(): ProjectEntryDeleteResult {
+  return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_PROJECT_ENTRY_DELETE_RESPONSE } }
 }
 
 function invalidProjectFileReadResponse(): ProjectFileReadResult {
@@ -152,6 +157,12 @@ export const projectsApi = {
     const payload: ProjectEntryPathRequest = { path: request.path }
     const response: unknown = await ipcRenderer.invoke(PROJECT_ENTRY_REVEAL_CHANNEL, payload)
     return isProjectEntryRevealResult(response) ? response : invalidProjectEntryRevealResponse()
+  },
+
+  async deleteProjectEntry(request: ProjectEntryPathRequest) {
+    const payload: ProjectEntryPathRequest = { path: request.path }
+    const response: unknown = await ipcRenderer.invoke(PROJECT_ENTRY_DELETE_CHANNEL, payload)
+    return isProjectEntryDeleteResult(response) ? response : invalidProjectEntryDeleteResponse()
   },
 
   async readProjectFile(request: ProjectFileReadRequest) {

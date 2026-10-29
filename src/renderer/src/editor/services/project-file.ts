@@ -6,6 +6,7 @@ import type {
   ProjectDirectoryChange,
   ProjectDirectoryListResult,
   ProjectDirectoryWatchResult,
+  ProjectEntryDeleteResult,
   ProjectEntryPathResult,
   ProjectEntryRevealResult,
   ProjectFileReadResult,
@@ -132,6 +133,17 @@ export async function revealProjectEntry(path: string): Promise<ProjectEntryReve
   if (!bridge || typeof bridge.revealProjectEntry !== 'function') return unavailable()
   try {
     return await bridge.revealProjectEntry({ path })
+  } catch (error) {
+    return callFailed(error)
+  }
+}
+
+/** 将一个项目内条目移入系统废纸篓；条目已不存在或底层错误时回可展示的原因。 */
+export async function deleteProjectEntry(path: string): Promise<ProjectEntryDeleteResult> {
+  const bridge = window.desktop
+  if (!bridge || typeof bridge.deleteProjectEntry !== 'function') return unavailable()
+  try {
+    return await bridge.deleteProjectEntry({ path })
   } catch (error) {
     return callFailed(error)
   }

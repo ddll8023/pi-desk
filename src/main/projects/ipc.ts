@@ -1,4 +1,4 @@
-/** 项目登记与项目文件的 IPC：目录选择、列表、添加、移除、切换当前项目，以及文件检索、目录列举与监听、条目路径解析与显示、文件内容读写、HTML 隔离预览、Markdown 文档与图片导入。所有入口先校验调用者，再逐字段校验载荷。 */
+/** 项目登记与项目文件的 IPC：目录选择、列表、添加、移除、切换当前项目，以及文件检索、目录列举与监听、条目路径解析、显示与删除（移入废纸篓）、文件内容读写、HTML 隔离预览、Markdown 文档与图片导入。所有入口先校验调用者，再逐字段校验载荷。 */
 
 import { BrowserWindow } from 'electron'
 import { ProjectMarkdownAssets } from './project-markdown-assets'
@@ -28,6 +28,7 @@ import {
   PROJECT_DIRECTORY_WATCH_CHANNEL,
   PROJECT_ENTRY_RESOLVE_CHANNEL,
   PROJECT_ENTRY_REVEAL_CHANNEL,
+  PROJECT_ENTRY_DELETE_CHANNEL,
   PROJECT_FILE_QUERY_MAX_CHARS,
   PROJECT_FILE_READ_CHANNEL,
   PROJECT_FILE_SEARCH_CHANNEL,
@@ -47,6 +48,7 @@ import type {
   ProjectDirectoryWatchResult,
   ProjectEntryPathResult,
   ProjectEntryRevealResult,
+  ProjectEntryDeleteResult,
   ProjectFileReadResult,
   ProjectFileSearchResult,
   ProjectFileStatResult,
@@ -85,6 +87,10 @@ export function projectEntryPathFailure(code: DesktopErrorCode, message: string)
 }
 
 export function projectEntryRevealFailure(code: DesktopErrorCode, message: string): ProjectEntryRevealResult {
+  return { ok: false, error: { code, message } }
+}
+
+export function projectEntryDeleteFailure(code: DesktopErrorCode, message: string): ProjectEntryDeleteResult {
   return { ok: false, error: { code, message } }
 }
 
@@ -340,6 +346,19 @@ export function registerProjectFileHandlers(pageUrl: string): void {
         return projectEntryRevealFailure('INVALID_REQUEST', '显示文件位置只接受一个项目内相对路径请求。')
       }
       return projectDirectory.revealEntry(args[0].path)
+    }
+  )
+
+  handle(
+    PROJECT_ENTRY_DELETE_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<ProjectEntryDeleteResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return projectEntryDeleteFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 1 || !isProjectEntryPathRequest(args[0])) {
+        return projectEntryDeleteFailure('INVALID_REQUEST', '删除文件只接受一个项目内相对路径请求。')
+      }
+      return projectDirectory.deleteEntry(args[0].path)
     }
   )
 

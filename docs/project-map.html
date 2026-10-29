@@ -387,6 +387,7 @@
         "summary": "项目文件树、目录监听、引用检索、内容读写与磁盘基线，以及源码编辑、图片预览、Markdown 预览与富文本编辑、HTML 页面预览；不执行 Agent 的文件工具。",
         "features": [
           "目录分层列举、监听与变化合并",
+          "条目安全删除（移入系统废纸篓）与打开标签联动关闭",
           "文件引用检索与条目拖拽引用",
           "文本／图片读取、磁盘基线与原子保存",
           "Markdown 富文本往返证明与结构草稿恢复",
@@ -397,7 +398,7 @@
         "entries": [
           {"kind": "关键实现", "label": "内容分类与原子保存", "path": "src/main/projects/project-file-content.ts"},
           {"kind": "关键实现", "label": "HTML 快照、隔离会话与资源边界", "path": "src/main/projects/project-html-preview.ts"},
-          {"kind": "关键实现", "label": "目录列举与条目解析", "path": "src/main/projects/project-directory.ts"},
+          {"kind": "关键实现", "label": "目录列举、条目解析与安全删除", "path": "src/main/projects/project-directory.ts"},
           {"kind": "关键实现", "label": "编辑记录与草稿", "path": "src/renderer/src/editor/stores/project-editor.ts"},
           {"kind": "界面入口", "label": "文件面板", "path": "src/renderer/src/editor/components/FileEditorView.vue"},
           {"kind": "界面入口", "label": "HTML 页面预览", "path": "src/renderer/src/editor/components/FileHtmlPreview.vue"},

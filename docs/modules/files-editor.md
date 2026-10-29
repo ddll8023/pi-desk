@@ -4,7 +4,7 @@
 
 ## 职责与入口
 
-负责项目内文件树、目录监听、`@` 文件引用检索、条目解析与系统文件管理器定位、文件内容读取／保存／磁盘基线，以及源码编辑、图片预览、Markdown 预览与富文本编辑、HTML 页面预览。
+负责项目内文件树、目录监听、`@` 文件引用检索、条目解析与系统文件管理器定位、条目安全删除（移入系统废纸篓）、文件内容读取／保存／磁盘基线，以及源码编辑、图片预览、Markdown 预览与富文本编辑、HTML 页面预览。
 
 入口为右侧文件树、文件菜单、输入坞文件引用、文件标签及 Markdown 文档链接。输入坞可接受从文件树拖入的条目：只插入项目相对路径文本（目录同样插入路径），不读文件内容，跨项目拖动被拒绝。不执行 Agent 的文件工具，不拥有工作区标签顺序，不把桌面草稿当跨应用重启持久化。
 
@@ -14,7 +14,7 @@
 
 | 文件 | 用途 |
 | --- | --- |
-| `src/main/projects/project-directory.ts` | 按层列举目录、解析条目与文件管理器定位 |
+| `src/main/projects/project-directory.ts` | 按层列举目录、解析条目、文件管理器定位及安全删除（移入废纸篓） |
 | `src/main/projects/project-directory-watcher.ts` | 已加载目录层的监听集合、变化合并与 overflow |
 | `src/main/projects/project-directory-watcher.test.ts` | 现有目录归一、差异与批次调度用例 |
 | `src/main/projects/project-entry-path.ts` | 相对条目路径规范化、真实路径与项目边界 |
@@ -35,8 +35,8 @@
 | `src/renderer/src/editor/file-markdown-view.ts` | Markdown 编辑能力、格式、查找及渲染适配器契约 |
 | `src/renderer/src/editor/services/project-file.ts` | 文件／目录／图片导入／HTML 预览固定桥接与事件 |
 | `src/renderer/src/editor/services/external-url.ts` | 文件内文档链接的外链打开封装；主进程执行协议与凭据检查 |
-| `src/renderer/src/editor/components/FileTreeView.vue` | 文件树展示、打开及拖拽入口 |
-| `src/renderer/src/editor/components/FileTreeMenu.vue` | 条目菜单、复制、定位、打开及插入终端 |
+| `src/renderer/src/editor/components/FileTreeView.vue` | 文件树展示、打开、拖拽入口与删除确认交互 |
+| `src/renderer/src/editor/components/FileTreeMenu.vue` | 条目菜单、复制、定位、打开、插入终端与移至废纸篓 |
 | `src/renderer/src/editor/components/FileEditorView.vue` | 文件标签面板、视图切换、保存与冲突交互 |
 | `src/renderer/src/editor/components/CodeMirrorEditor.vue` | 源码编辑器及对外编辑接口 |
 | `src/renderer/src/editor/components/FileHtmlPreview.vue` | HTML 隔离页面、快照刷新、加载与错误状态、容器释放 |
@@ -111,6 +111,7 @@
 9. 活动排版视图可查找时，通过 `Cmd/Ctrl + F` 唤起并聚焦共用查找栏，顶部工具区不提供查找按钮；查找栏内按 `Esc` 关闭并返回当前视图。只读视图按 DOM 匹配，富文本视图按 ProseMirror 文档查找并在编辑能力允许时提供替换。
 10. 保存携带文本、换行／BOM 语义与磁盘基线。主进程复核路径与符号链接，冲突返回给界面，明确覆盖才允许不带旧基线写入。
 11. 图片导入创建文档所属项目内的新资产，正文仍需显式保存；期间项目切换不应将旧结果解释为新项目同名路径。
+12. 文件或目录删除由右键菜单或选中行快捷键（Delete / Backspace）触发破坏性二次确认；主进程严格限制在当前项目内并通过 `shell.trashItem` 安全移入系统废纸篓，成功后联动关闭工作区内所有已打开的受影响标签，清空选中状态并主动重载父目录。
 
 ### HTML 页面预览
 

@@ -1,11 +1,13 @@
 /**
- * 项目目录单层读取与条目路径解析：为右侧面板的文件树提供「一层目录的条目」，并把相对条目路径还原为绝对路径。
+ * 项目目录单层读取、条目路径解析与安全删除：为右侧面板的文件树提供「一层目录的条目」，
+ * 把相对条目路径还原为绝对路径，并将指定条目移入系统废纸篓。
  *
  * 只接受项目内相对路径，项目根由调用方注入，页面无法指定绝对路径；读取与解析前都用 `realpath` 复核
  * 目标仍在项目内，且符号链接不跟随，因此链接不会把访问带出项目。列举只回传条目名与类型：不读文件内容、
  * 不递归、不做 git 过滤（只跳过 `.git`），单层条目超过上限时截断并如实标记。
  * 解析只对父目录做 realpath：最后一段按原名拼回，因此符号链接条目解析为链接本身而不是它指向的目标；
- * 复制路径不需要条目仍存在，在文件管理器中显示则先 `lstat` 确认存在，否则回可展示的原因。
+ * 复制路径不需要条目仍存在，在文件管理器中显示与删除则先 `lstat` 确认存在，否则回可展示的原因；
+ * 删除通过 Electron 的 `shell.trashItem` 安全移入系统废纸篓，并拒绝删除项目根目录自身。
  * 目录不存在、不可读、越界与条目已删除都回可展示的原因，由界面就近提示。
  */
 import type { Dirent } from 'node:fs'
@@ -17,6 +19,7 @@ import type {
   ProjectDirectoryEntry,
   ProjectDirectoryEntryKind,
   ProjectDirectoryListResult,
+  ProjectEntryDeleteResult,
   ProjectEntryPathResult,
   ProjectEntryRevealResult
 } from '../../shared/project-file-api'
@@ -72,6 +75,38 @@ export class ProjectDirectoryReader {
       shell.showItemInFolder(resolved.absolutePath)
     } catch {
       return { ok: false, error: { code: 'INTERNAL_ERROR', message: `无法在文件管理器中显示：${resolved.relativePath}` } }
+    }
+    return { ok: true }
+  }
+
+  /**
+   * 将一个项目内条目移入系统废纸篓：解析通过且在项目内，条目存在时交给 Electron 的 `shell.trashItem`。
+   * 不允许删除项目根目录自身。
+   */
+  async deleteEntry(path: string): Promise<ProjectEntryDeleteResult> {
+    const root = this.options.currentProjectPath()
+    if (root === null) {
+      return { ok: false, error: { code: 'INVALID_REQUEST', message: '尚未选择项目，无法删除文件。' } }
+    }
+    const resolved = await resolveProjectEntryAbsolute(root, path)
+    if (!resolved.ok) return resolved
+    if (resolved.relativePath === '' || resolved.relativePath === '.') {
+      return { ok: false, error: { code: 'INVALID_REQUEST', message: '不允许删除项目根目录。' } }
+    }
+    try {
+      await lstat(resolved.absolutePath)
+    } catch (error) {
+      const code = typeof error === 'object' && error !== null ? (error as NodeJS.ErrnoException).code : undefined
+      if (code === 'ENOENT') {
+        return { ok: false, error: { code: 'INVALID_REQUEST', message: `文件不存在，可能已被移动或删除：${resolved.relativePath}` } }
+      }
+      return { ok: false, error: { code: 'INTERNAL_ERROR', message: `无法读取文件信息：${resolved.relativePath}` } }
+    }
+    try {
+      await shell.trashItem(resolved.absolutePath)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      return { ok: false, error: { code: 'INTERNAL_ERROR', message: `移入废纸篓失败：${message}` } }
     }
     return { ok: true }
   }

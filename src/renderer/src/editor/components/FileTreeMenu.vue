@@ -1,12 +1,13 @@
 <!--
-  右侧面板文件行的操作菜单：打开、以另一种视图打开 Markdown、插入到终端、复制路径、复制文件名与在系统文件管理器中显示。
+  右侧面板文件行的操作菜单：打开、以另一种视图打开 Markdown、插入到终端、复制路径、复制文件名、在系统文件管理器中显示与移至废纸篓。
 
   菜单由文件树行按需打开（右键或键盘菜单键），锚点就是那一行，定位、翻转与收边都交给共用的锚定浮层；
   样式直接复用侧栏菜单的类，与左侧项目/会话菜单同一套令牌与层级。动作都只派发一次：
   「打开」把项目内相对路径交给工作区文件标签（Markdown 按设置里的默认视图打开）；Markdown 额外提供
   一个与默认视图相反的入口（默认预览时是「以源码模式打开」，反之亦然）；「插入到终端」写入当前活动终端
   （活动标签不是终端时禁用并写明原因），复制与显示所需的绝对路径一律经主进程解析，页面不自行拼接路径。
-  复制、插入与显示动作的成败用面板内的一次性提示回报；打开动作的结果由文件标签自己展示。
+  「移至废纸篓」向外派发删除请求由宿主进行破坏性确认；复制、插入与显示动作的成败用面板内的一次性提示回报；
+  打开动作的结果由文件标签自己展示。
 -->
 <script setup lang="ts">
 import { computed, nextTick, ref } from 'vue'
@@ -24,7 +25,7 @@ import { useWorkspaceTabsStore } from '../../workspace/stores/workspace-tabs'
 import AppButton from '../../ui/AppButton.vue'
 
 /** 菜单指向的条目；只保留展示与动作需要的最小信息。 */
-interface FileTreeMenuTarget {
+export interface FileTreeMenuTarget {
   readonly path: string
   readonly name: string
   readonly kind: ProjectDirectoryEntryKind
@@ -38,6 +39,7 @@ interface FileTreeMenuNotice {
 
 const emit = defineEmits<{
   notice: [notice: FileTreeMenuNotice]
+  'request-delete': [target: FileTreeMenuTarget]
 }>()
 
 const desktopStore = useDesktopStore()
@@ -225,6 +227,13 @@ async function runReveal(entry: FileTreeMenuTarget): Promise<void> {
   emitNotice(`已在文件管理器中定位：${entry.name}`, 'muted')
 }
 
+function requestDelete(): void {
+  const entry = target.value
+  closeMenu()
+  if (entry === null) return
+  emit('request-delete', entry)
+}
+
 function emitNotice(text: string, tone: 'muted' | 'error'): void {
   emit('notice', { text, tone })
 }
@@ -312,6 +321,14 @@ function onMenuKeydown(event: KeyboardEvent): void {
         </AppButton>
         <AppButton variant="unstyled" class="project-sidebar-menu-item" @click="revealInFileManager">
           {{ revealLabel }}
+        </AppButton>
+        <AppButton
+          variant="unstyled"
+          class="project-sidebar-menu-item is-danger"
+          title="移至系统废纸篓"
+          @click="requestDelete"
+        >
+          移至废纸篓
         </AppButton>
       </div>
     </Transition>

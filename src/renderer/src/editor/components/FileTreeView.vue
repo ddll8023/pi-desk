@@ -1,5 +1,5 @@
 <!--
-  文件树视图：查找输入、目录树与检索结果共用一列滚动容器；本组件不修改磁盘，打开文件交给工作区文件标签。
+  文件树视图：查找输入、目录树与检索结果共用一列滚动容器；提供文件/目录浏览、拖拽、打开与移至废纸篓删除。
 
   输入非空时改由主进程的文件检索给出候选（最多 50 条），清空即回到目录树；目录树按层懒读取，
   展开状态与读取缓存由 store 持有，本组件只负责触发与展示。行点击对目录是展开折叠、对文件是在工作区
@@ -8,8 +8,8 @@
   只用于快速辨认类型。
 
   拖动只在应用内成立（自定义 MIME，不写 text/plain），落点是终端面板与输入坞：终端写入绝对路径，
-  输入坞插入项目相对路径文本；右键与键盘菜单键打开操作菜单，
-  菜单项与动作在 FileTreeMenu 里，本组件只负责把被指向的那一行交给它，并在面板内回报一次性结果。
+  输入坞插入项目相对路径文本；右键与键盘菜单键打开操作菜单；支持通过菜单或 Delete 快捷键触发安全删除，
+  经二次确认后移入系统废纸篓，并自动关闭已打开的悬空标签。
 -->
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
@@ -19,9 +19,13 @@ import { setProjectEntryDragData } from '../../ui/project-entry-drag'
 import { useProjectDirectoryStore } from '../stores/project-directory'
 import type { FileTreeRow } from '../stores/project-directory'
 import { useProjectStore } from '../../projects/stores/project'
+import { useProjectEditorStore } from '../stores/project-editor'
 import { useWorkspaceTabsStore } from '../../workspace/stores/workspace-tabs'
 import AppButton from '../../ui/AppButton.vue'
+import ConfirmDialog from '../../ui/ConfirmDialog.vue'
 import FileTreeMenu from './FileTreeMenu.vue'
+import type { FileTreeMenuTarget } from './FileTreeMenu.vue'
+import { deleteProjectEntry } from '../services/project-file'
 
 /** 连续输入合并窗口：主进程每次检索都要遍历项目文件索引，不能逐字发起。 */
 const SEARCH_DEBOUNCE_MS = 180
@@ -51,6 +55,7 @@ const MARKUP_EXTENSIONS = new Set(['html', 'htm', 'css', 'scss', 'sass', 'less',
 
 const projectStore = useProjectStore()
 const directoryStore = useProjectDirectoryStore()
+const editorStore = useProjectEditorStore()
 const workspaceTabsStore = useWorkspaceTabsStore()
 const { currentProject } = storeToRefs(projectStore)
 const { rows, searchView, selectedPath } = storeToRefs(directoryStore)
@@ -64,6 +69,10 @@ let noticeTimer: ReturnType<typeof setTimeout> | null = null
 const menu = ref<InstanceType<typeof FileTreeMenu> | null>(null)
 /** 正在拖动的那一行；只用于给拖动中的行降透明度。 */
 const draggingPath = ref<string | null>(null)
+
+/** 待删除的条目目标；非空时唤起二次确认弹窗。 */
+const pendingDelete = ref<FileTreeMenuTarget | null>(null)
+const deleting = ref(false)
 
 const filtering = computed(() => query.value.trim() !== '')
 const rootView = computed(() => (
@@ -226,18 +235,106 @@ function isMenuKey(event: KeyboardEvent): boolean {
   return event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')
 }
 
+function requestDeleteEntry(target: FileTreeMenuTarget): void {
+  pendingDelete.value = target
+}
+
+const deleteDialogTitle = computed(() => {
+  if (pendingDelete.value === null) return ''
+  const typeText = pendingDelete.value.kind === 'directory' ? '目录' : '文件'
+  return `确定要将${typeText}「${pendingDelete.value.name}」移至废纸篓吗？`
+})
+
+const deleteDialogDescription = computed(() => {
+  if (pendingDelete.value === null) return ''
+  return pendingDelete.value.kind === 'directory'
+    ? `目录「${pendingDelete.value.path}」及其内部所有内容将被移入系统废纸篓。`
+    : `文件「${pendingDelete.value.path}」将被移入系统废纸篓。`
+})
+
+/** 二次确认后将条目移至废纸篓，并清理已打开的受影响标签。 */
+async function confirmDelete(): Promise<void> {
+  const target = pendingDelete.value
+  if (target === null || deleting.value) return
+  const projectPath = currentProject.value?.path
+  if (!projectPath) {
+    pendingDelete.value = null
+    return
+  }
+
+  deleting.value = true
+  try {
+    const result = await deleteProjectEntry(target.path)
+    if (!result.ok) {
+      showNotice({ text: result.error.message, tone: 'error' })
+      return
+    }
+
+    // 关闭工作区中对应已打开的文件标签：文件精确匹配，目录匹配前缀。
+    const targetPath = target.path
+    const isDir = target.kind === 'directory'
+    const records = Object.values(editorStore.records)
+    for (const record of records) {
+      if (record.projectPath !== projectPath) continue
+      const shouldClose = isDir
+        ? record.path === targetPath || record.path.startsWith(`${targetPath}/`)
+        : record.path === targetPath
+      if (shouldClose) {
+        void workspaceTabsStore.closeTab(record.key)
+      }
+    }
+
+    // 若当前高亮选中的条目正好是被删除的目标或其子条目，清空高亮。
+    if (selectedPath.value !== null) {
+      const selected = selectedPath.value
+      if (selected === targetPath || (isDir && selected.startsWith(`${targetPath}/`))) {
+        directoryStore.select(null)
+      }
+    }
+
+    // 主动重载父目录，配合主进程目录监听 watcher 保持界面及时收敛。
+    const slash = targetPath.lastIndexOf('/')
+    const parentDirectory = slash < 0 ? '' : targetPath.slice(0, slash)
+    void directoryStore.reloadDirectory(projectPath, parentDirectory)
+
+    showNotice({ text: `已移至废纸篓：${target.name}`, tone: 'muted' })
+  } finally {
+    deleting.value = false
+    pendingDelete.value = null
+  }
+}
+
+function cancelDelete(): void {
+  if (deleting.value) return
+  pendingDelete.value = null
+}
+
 function onRowMenuKeydown(row: FileTreeRow, event: KeyboardEvent): void {
-  if (!isMenuKey(event)) return
-  event.preventDefault()
-  event.stopPropagation()
-  onRowMenu(row, event)
+  if (isMenuKey(event)) {
+    event.preventDefault()
+    event.stopPropagation()
+    onRowMenu(row, event)
+    return
+  }
+  if (row.type === 'entry' && (event.key === 'Delete' || (event.key === 'Backspace' && event.metaKey))) {
+    event.preventDefault()
+    event.stopPropagation()
+    requestDeleteEntry({ path: row.path, name: row.name, kind: row.kind })
+  }
 }
 
 function onSearchRowMenuKeydown(row: { readonly path: string; readonly name: string }, event: KeyboardEvent): void {
-  if (!isMenuKey(event)) return
-  event.preventDefault()
-  event.stopPropagation()
-  onSearchRowMenu(row, event)
+  if (isMenuKey(event)) {
+    event.preventDefault()
+    event.stopPropagation()
+    onSearchRowMenu(row, event)
+    return
+  }
+  if (event.key === 'Delete' || (event.key === 'Backspace' && event.metaKey)) {
+    event.preventDefault()
+    event.stopPropagation()
+    requestDeleteEntry({ path: row.path, name: row.name, kind: 'file' })
+  }
 }
 
 /** 面板内一次性提示：复制结果与路径解析失败都就近回报，不静默失败。 */
@@ -349,6 +446,18 @@ onBeforeUnmount(() => {
     </div>
 
     <!-- 操作菜单渲染到 body：锚点是被右键的那一行，位置与收起由菜单自己管。 -->
-    <FileTreeMenu ref="menu" @notice="showNotice" />
+    <FileTreeMenu ref="menu" @notice="showNotice" @request-delete="requestDeleteEntry" />
+
+    <!-- 移至废纸篓二次确认弹窗 -->
+    <ConfirmDialog
+      :open="pendingDelete !== null"
+      :title="deleteDialogTitle"
+      :description="deleteDialogDescription"
+      detail="可以随时在操作系统的废纸篓/回收站中恢复。"
+      confirm-label="移至废纸篓"
+      confirm-variant="danger"
+      @confirm="confirmDelete"
+      @cancel="cancelDelete"
+    />
   </div>
 </template>
