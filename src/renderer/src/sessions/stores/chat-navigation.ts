@@ -34,6 +34,25 @@ export interface ChatNavJump {
 
 const NO_ENTRIES: readonly ChatNavEntry[] = []
 
+/** 比较两个导航条目列表是否一致，避免流式对话期间因数组实例重建而触发无意义的响应式更新。 */
+function sameNavEntries(a: readonly ChatNavEntry[], b: readonly ChatNavEntry[]): boolean {
+  if (a === b) return true
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i++) {
+    const left = a[i]
+    const right = b[i]
+    if (
+      left.id !== right.id ||
+      left.label !== right.label ||
+      left.time !== right.time ||
+      left.uiCount !== right.uiCount
+    ) {
+      return false
+    }
+  }
+  return true
+}
+
 export const useChatNavigationStore = defineStore('chat-navigation', () => {
   const sessionView = useSessionViewStore()
   /** 登记所属的会话键；与当前会话不一致时对外视为没有登记。 */
@@ -58,7 +77,7 @@ export const useChatNavigationStore = defineStore('chat-navigation', () => {
     if (ownerKey.value !== key) {
       ownerKey.value = key
       publishedEntries.value = nextEntries
-    } else if (publishedEntries.value !== nextEntries) {
+    } else if (!sameNavEntries(publishedEntries.value, nextEntries)) {
       publishedEntries.value = nextEntries
     }
     if (publishedActiveId.value !== nextActiveId) publishedActiveId.value = nextActiveId

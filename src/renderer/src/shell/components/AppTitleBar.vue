@@ -237,16 +237,6 @@ function onEntryFocus(id: string): void {
 }
 
 /**
- * 列表挂载或更新后把高亮项滚进可视范围：长会话里当前轮往往不在起始位置。
- * 列表容器本身不接管焦点（键盘事件由高亮条目冒泡上来），因此这里只管滚动。
- */
-function onListRef(element: unknown): void {
-  listbox.value = element instanceof HTMLElement ? element : null
-  if (listbox.value === null) return
-  scrollHighlightedIntoView()
-}
-
-/**
  * 列表随正文变化（新的一轮、历史回读）时校高亮：高亮行被丢弃时重新落回当前轮。
  * 高亮按 id 保留，新轮次插到顶部时仍指着原来那一轮；没有入口了则收起弹窗。
  */
@@ -402,7 +392,7 @@ watch(navEntries, () => {
 
               <div
                 :id="listboxId"
-                :ref="onListRef"
+                ref="listbox"
                 class="chat-nav-list scroll-area"
                 role="listbox"
                 aria-label="对话导航"
