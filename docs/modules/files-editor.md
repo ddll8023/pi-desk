@@ -35,8 +35,10 @@
 | `src/renderer/src/editor/file-markdown-view.ts` | Markdown 编辑能力、格式、查找及渲染适配器契约 |
 | `src/renderer/src/editor/services/project-file.ts` | 文件／目录／图片导入／HTML 预览固定桥接与事件 |
 | `src/renderer/src/editor/services/external-url.ts` | 文件内文档链接的外链打开封装；主进程执行协议与凭据检查 |
-| `src/renderer/src/editor/components/FileTreeView.vue` | 文件树展示、打开、拖拽入口与删除确认交互 |
-| `src/renderer/src/editor/components/FileTreeMenu.vue` | 条目菜单、复制、定位、打开、插入终端与移至废纸篓 |
+| `src/renderer/src/editor/file-exclude.ts` | 文件树条目排除规则匹配与通配符解析工具 |
+| `src/renderer/src/editor/components/FileTreeView.vue` | 文件树展示、打开、拖拽入口、显隐切换与删除确认交互 |
+| `src/renderer/src/editor/components/FileTreeMenu.vue` | 条目菜单、复制、定位、打开、隐藏/取消隐藏、插入终端与移至废纸篓 |
+| `src/renderer/src/editor/components/FileSettingsSection.vue` | 设置页文件管理分节：排除规则维护、显隐模式与 Markdown 默认视图 |
 | `src/renderer/src/editor/components/FileEditorView.vue` | 文件标签面板、视图切换、保存与冲突交互 |
 | `src/renderer/src/editor/components/CodeMirrorEditor.vue` | 源码编辑器及对外编辑接口 |
 | `src/renderer/src/editor/components/FileHtmlPreview.vue` | HTML 隔离页面、快照刷新、加载与错误状态、容器释放 |
@@ -112,6 +114,7 @@
 10. 保存携带文本、换行／BOM 语义与磁盘基线。主进程复核路径与符号链接，冲突返回给界面，明确覆盖才允许不带旧基线写入。
 11. 图片导入创建文档所属项目内的新资产，正文仍需显式保存；期间项目切换不应将旧结果解释为新项目同名路径。
 12. 文件或目录删除由右键菜单或选中行快捷键（Delete / Backspace）触发破坏性二次确认；主进程严格限制在当前项目内并通过 `shell.trashItem` 安全移入系统废纸篓，成功后联动关闭工作区内所有已打开的受影响标签，清空选中状态并主动重载父目录。
+13. 文件排除规则通过设置页「文件」分节（`FileSettingsSection.vue`）或文件树条目右键菜单（`FileTreeMenu.vue`）统一维护，在偏好设置（`UiPreferences`）中持久化；由 `file-exclude.ts` 纯函数在文件树展平与检索阶段统一过滤，支持通过文件树顶部眼睛按钮即时切换显隐。
 
 ### HTML 页面预览
 

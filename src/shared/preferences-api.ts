@@ -72,6 +72,21 @@ export function isRightPanelTab(value: unknown): value is RightPanelTab {
 /** 路径长度上限；只用于拒绝明显异常的值，不做真实路径校验。 */
 const MAX_STORED_PATH_LENGTH = 4096
 
+/** 文件排除/隐藏规则默认列表；涵盖常见构建产物与开发临时文件。 */
+export const DEFAULT_FILE_EXCLUDE_PATTERNS: readonly string[] = [
+  'node_modules',
+  '.git',
+  'dist',
+  'build',
+  '.DS_Store',
+  '*.log',
+  '.cache'
+]
+
+/** 文件排除规则条数上限与单条字符数上限。 */
+export const MAX_FILE_EXCLUDE_PATTERNS = 100
+export const MAX_FILE_EXCLUDE_PATTERN_LENGTH = 128
+
 /**
  * 界面偏好的路径字段只接受绝对路径：Windows 盘符或 POSIX 根开头。
  * 共享模块同时被主进程与沙箱页面加载，因此不引入 `node:path`。
@@ -99,6 +114,10 @@ export interface UiPreferences {
   readonly markdownDefaultView: MarkdownDefaultView
   /** 终端点击链接时的打开方式；默认弹窗询问。 */
   readonly terminalLinkOpenMode: TerminalLinkOpenMode
+  /** 是否在右侧文件树中显示已被排除/隐藏的文件；默认 false（隐藏）。 */
+  readonly showHiddenFiles: boolean
+  /** 文件排除/隐藏规则列表（名称、相对路径或通配符）。 */
+  readonly fileExcludePatterns: readonly string[]
 }
 
 /** 右侧面板宽度是否在存储边界内；非整数与越界值一律拒绝。 */
@@ -114,8 +133,10 @@ export function isUiPreferences(value: unknown): value is UiPreferences {
     key === 'sidebarCollapsed' || key === 'theme' || key === 'expandedProjects'
       || key === 'rightPanelOpen' || key === 'rightPanelWidth' || key === 'rightPanelTab'
       || key === 'markdownDefaultView' || key === 'terminalLinkOpenMode'
+      || key === 'showHiddenFiles' || key === 'fileExcludePatterns'
   ))) return false
   if (typeof value.sidebarCollapsed !== 'boolean' || !isUiTheme(value.theme)) return false
+  if (typeof value.showHiddenFiles !== 'boolean') return false
   if (typeof value.rightPanelOpen !== 'boolean' || !isRightPanelWidth(value.rightPanelWidth)) return false
   if (!isRightPanelTab(value.rightPanelTab)) return false
   if (!isMarkdownDefaultView(value.markdownDefaultView)) return false
@@ -123,8 +144,16 @@ export function isUiPreferences(value: unknown): value is UiPreferences {
   if (!Array.isArray(value.expandedProjects) || value.expandedProjects.length > MAX_EXPANDED_PROJECTS) {
     return false
   }
-  return value.expandedProjects.every((path) => (
+  if (!value.expandedProjects.every((path) => (
     typeof path === 'string' && path !== '' && path.length <= MAX_STORED_PATH_LENGTH && isAbsolutePathLike(path)
+  ))) {
+    return false
+  }
+  if (!Array.isArray(value.fileExcludePatterns) || value.fileExcludePatterns.length > MAX_FILE_EXCLUDE_PATTERNS) {
+    return false
+  }
+  return value.fileExcludePatterns.every((pattern) => (
+    typeof pattern === 'string' && pattern.trim() !== '' && pattern.length <= MAX_FILE_EXCLUDE_PATTERN_LENGTH
   ))
 }
 

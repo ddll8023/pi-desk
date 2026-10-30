@@ -12,8 +12,11 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import {
+  DEFAULT_FILE_EXCLUDE_PATTERNS,
   DEFAULT_QUICK_SEND_MESSAGES,
   DEFAULT_RIGHT_PANEL_WIDTH,
+  MAX_FILE_EXCLUDE_PATTERNS,
+  MAX_FILE_EXCLUDE_PATTERN_LENGTH,
   MAX_RIGHT_PANEL_WIDTH,
   MIN_RIGHT_PANEL_WIDTH
 } from '../../../../shared/preferences-api'
@@ -53,6 +56,10 @@ export const usePreferencesStore = defineStore('preferences', () => {
   const markdownDefaultView = ref<MarkdownDefaultView>('preview')
   /** 终端点击链接时的打开方式；默认每次弹窗选择。 */
   const terminalLinkOpenMode = ref<TerminalLinkOpenMode>('ask')
+  /** 是否在右侧文件树中显示已被排除/隐藏的文件；默认隐藏。 */
+  const showHiddenFiles = ref(false)
+  /** 文件排除/隐藏规则列表。 */
+  const fileExcludePatterns = ref<readonly string[]>([...DEFAULT_FILE_EXCLUDE_PATTERNS])
   /** 快捷发送下拉的候选短语；顺序即展示顺序，读取失败或非法时为默认列表。 */
   const quickSendMessages = ref<string[]>([...DEFAULT_QUICK_SEND_MESSAGES])
   const quickSendView = ref<QuickSendView>({ phase: 'idle' })
@@ -97,6 +104,8 @@ export const usePreferencesStore = defineStore('preferences', () => {
       rightPanelTab.value = result.data.rightPanelTab
       markdownDefaultView.value = result.data.markdownDefaultView
       terminalLinkOpenMode.value = result.data.terminalLinkOpenMode
+      showHiddenFiles.value = result.data.showHiddenFiles
+      fileExcludePatterns.value = [...result.data.fileExcludePatterns]
     } else actionError.value = result.error
     if (quickSend.ok) quickSendMessages.value = [...quickSend.data.messages]
     if (autoUpdate.ok) extensionAutoUpdate.value = autoUpdate.data.enabled
@@ -147,7 +156,9 @@ export const usePreferencesStore = defineStore('preferences', () => {
       rightPanelWidth: rightPanelWidth.value,
       rightPanelTab: rightPanelTab.value,
       markdownDefaultView: markdownDefaultView.value,
-      terminalLinkOpenMode: terminalLinkOpenMode.value
+      terminalLinkOpenMode: terminalLinkOpenMode.value,
+      showHiddenFiles: showHiddenFiles.value,
+      fileExcludePatterns: [...fileExcludePatterns.value]
     }
     const pending = (async () => {
       const result = await setUiPreferences(payload)
@@ -163,6 +174,8 @@ export const usePreferencesStore = defineStore('preferences', () => {
       rightPanelTab.value = result.data.rightPanelTab
       markdownDefaultView.value = result.data.markdownDefaultView
       terminalLinkOpenMode.value = result.data.terminalLinkOpenMode
+      showHiddenFiles.value = result.data.showHiddenFiles
+      fileExcludePatterns.value = [...result.data.fileExcludePatterns]
     })()
     saving = pending
     await pending
@@ -243,6 +256,56 @@ export const usePreferencesStore = defineStore('preferences', () => {
     await persistUi()
   }
 
+  /** 切换是否在文件树中展示已被排除/隐藏的文件。 */
+  async function setShowHiddenFiles(next: boolean): Promise<void> {
+    if (showHiddenFiles.value === next) return
+
+    showHiddenFiles.value = next
+    await persistUi()
+  }
+
+  /** 整体更新文件排除规则清单。 */
+  async function setFileExcludePatterns(patterns: readonly string[]): Promise<void> {
+    const accepted: string[] = []
+    const seen = new Set<string>()
+    for (const entry of patterns) {
+      const trimmed = entry.trim()
+      if (trimmed === '' || trimmed.length > MAX_FILE_EXCLUDE_PATTERN_LENGTH || seen.has(trimmed)) continue
+      seen.add(trimmed)
+      accepted.push(trimmed)
+      if (accepted.length >= MAX_FILE_EXCLUDE_PATTERNS) break
+    }
+    fileExcludePatterns.value = accepted
+    await persistUi()
+  }
+
+  /** 向排除规则清单中添加一条规则；若已存在则直接返回成功。 */
+  async function addFileExcludePattern(pattern: string): Promise<boolean> {
+    const trimmed = pattern.trim()
+    if (trimmed === '' || trimmed.length > MAX_FILE_EXCLUDE_PATTERN_LENGTH) return false
+    if (fileExcludePatterns.value.includes(trimmed)) return true
+    if (fileExcludePatterns.value.length >= MAX_FILE_EXCLUDE_PATTERNS) return false
+    await setFileExcludePatterns([...fileExcludePatterns.value, trimmed])
+    return true
+  }
+
+  /** 从排除规则清单中移除一条规则。 */
+  async function removeFileExcludePattern(pattern: string): Promise<void> {
+    const next = fileExcludePatterns.value.filter((item) => item !== pattern)
+    if (next.length !== fileExcludePatterns.value.length) {
+      await setFileExcludePatterns(next)
+    }
+  }
+
+  /** 启闭某项排除规则。 */
+  async function toggleFileExcludePattern(pattern: string): Promise<void> {
+    if (fileExcludePatterns.value.includes(pattern)) {
+      await removeFileExcludePattern(pattern)
+    } else {
+      await addFileExcludePattern(pattern)
+    }
+  }
+
   /**
    * 保存快捷发送短语：保存成功才用主进程规范化后的列表覆盖当前值，失败保留原值并暴露错误；
    * 返回是否成功，供设置页决定要不要丢弃本地草稿。
@@ -315,6 +378,8 @@ export const usePreferencesStore = defineStore('preferences', () => {
     rightPanelTab,
     markdownDefaultView,
     terminalLinkOpenMode,
+    showHiddenFiles,
+    fileExcludePatterns,
     quickSendMessages,
     quickSendView,
     extensionAutoUpdate,
@@ -338,6 +403,11 @@ export const usePreferencesStore = defineStore('preferences', () => {
     setTheme,
     setMarkdownDefaultView,
     setTerminalLinkOpenMode,
+    setShowHiddenFiles,
+    setFileExcludePatterns,
+    addFileExcludePattern,
+    removeFileExcludePattern,
+    toggleFileExcludePattern,
     saveQuickSendMessages,
     saveExtensionAutoUpdate,
     saveGenuiEnabled,

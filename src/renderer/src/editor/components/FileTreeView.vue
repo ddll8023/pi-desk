@@ -1,15 +1,16 @@
 <!--
-  文件树视图：查找输入、目录树与检索结果共用一列滚动容器；提供文件/目录浏览、拖拽、打开与移至废纸篓删除。
+  文件树视图：查找输入、目录树与检索结果共用一列滚动容器；提供文件/目录浏览、拖拽、打开、移至废纸篓删除与排除规则显隐控制。
 
   输入非空时改由主进程的文件检索给出候选（最多 50 条），清空即回到目录树；目录树按层懒读取，
-  展开状态与读取缓存由 store 持有，本组件只负责触发与展示。行点击对目录是展开折叠、对文件是在工作区
-  打开文件标签（预览与编辑），符号链接与其他特殊文件不提供打开。行上另有拖动与右键菜单，两者都只把
-  项目内相对路径交给下游，绝对路径、越界判定与平台分隔符一律由主进程解析。文件图标按扩展名分组着色，
-  只用于快速辨认类型。
+  展开状态与读取缓存由 store 持有，本组件只负责触发与展示。支持基于偏好设置的排除规则对文件与目录进行过滤，
+  顶部提供眼睛按钮切换是否展示已被排除的条目；展示时被排除条目以半透明及「已隐藏」标记呈现。
+  行点击对目录是展开折叠、对文件是在工作区打开文件标签（预览与编辑），符号链接与其他特殊文件不提供打开。
+  行上另有拖动与右键菜单，两者都只把项目内相对路径交给下游，绝对路径、越界判定与平台分隔符一律由主进程解析。
+  文件图标按扩展名分组着色，只用于快速辨认类型。
 
   拖动只在应用内成立（自定义 MIME，不写 text/plain），落点是终端面板与输入坞：终端写入绝对路径，
-  输入坞插入项目相对路径文本；右键与键盘菜单键打开操作菜单；支持通过菜单或 Delete 快捷键触发安全删除，
-  经二次确认后移入系统废纸篓，并自动关闭已打开的悬空标签。
+  输入坞插入项目相对路径文本；右键与键盘菜单键打开操作菜单（含隐藏/取消隐藏条目）；支持通过菜单或
+  Delete 快捷键触发安全删除，经二次确认后移入系统废纸篓，并自动关闭已打开的悬空标签。
 -->
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
@@ -21,6 +22,8 @@ import type { FileTreeRow } from '../stores/project-directory'
 import { useProjectStore } from '../../projects/stores/project'
 import { useProjectEditorStore } from '../stores/project-editor'
 import { useWorkspaceTabsStore } from '../../workspace/stores/workspace-tabs'
+import { usePreferencesStore } from '../../preferences/stores/preferences'
+import { isFileExcluded } from '../file-exclude'
 import AppButton from '../../ui/AppButton.vue'
 import ConfirmDialog from '../../ui/ConfirmDialog.vue'
 import FileTreeMenu from './FileTreeMenu.vue'
@@ -57,8 +60,10 @@ const projectStore = useProjectStore()
 const directoryStore = useProjectDirectoryStore()
 const editorStore = useProjectEditorStore()
 const workspaceTabsStore = useWorkspaceTabsStore()
+const preferencesStore = usePreferencesStore()
 const { currentProject } = storeToRefs(projectStore)
 const { rows, searchView, selectedPath } = storeToRefs(directoryStore)
+const { showHiddenFiles, fileExcludePatterns } = storeToRefs(preferencesStore)
 
 const query = ref('')
 let searchTimer: ReturnType<typeof setTimeout> | null = null
@@ -93,18 +98,25 @@ const searchError = computed(() => (
   searchView.value.phase === 'error' ? searchView.value.error.message : null
 ))
 
-/** 检索结果按路径拆成「名称 + 所在目录」两段，名称优先、目录作为尾部提示。 */
+/** 检索结果按路径拆成「名称 + 所在目录」两段，并遵循隐藏规则过滤与标记。 */
 const searchRows = computed(() => {
   const view = searchView.value
   if (view.phase !== 'ready') return []
-  return view.entries.map((path) => {
+  const result: Array<{
+    readonly path: string
+    readonly name: string
+    readonly directory: string
+    readonly hidden: boolean
+  }> = []
+  for (const path of view.entries) {
     const slash = path.lastIndexOf('/')
-    return {
-      path,
-      name: slash < 0 ? path : path.slice(slash + 1),
-      directory: slash < 0 ? '' : path.slice(0, slash)
-    }
-  })
+    const name = slash < 0 ? path : path.slice(slash + 1)
+    const directory = slash < 0 ? '' : path.slice(0, slash)
+    const hidden = isFileExcluded(path, name, false, fileExcludePatterns.value)
+    if (hidden && !showHiddenFiles.value) continue
+    result.push({ path, name, directory, hidden })
+  }
+  return result
 })
 
 function toneOf(kind: ProjectDirectoryEntryKind, name: string): FileTone {
@@ -118,6 +130,10 @@ function toneOf(kind: ProjectDirectoryEntryKind, name: string): FileTone {
   if (DOC_EXTENSIONS.has(extension)) return 'doc'
   if (MARKUP_EXTENSIONS.has(extension)) return 'markup'
   return 'plain'
+}
+
+function toggleShowHidden(): void {
+  void preferencesStore.setShowHiddenFiles(!showHiddenFiles.value)
 }
 
 function indent(depth: number): string {
@@ -214,20 +230,21 @@ function openEntryMenu(
   event: MouseEvent | KeyboardEvent,
   path: string,
   name: string,
-  kind: ProjectDirectoryEntryKind
+  kind: ProjectDirectoryEntryKind,
+  hidden = false
 ): void {
   const host = event.currentTarget
   if (!(host instanceof HTMLElement)) return
-  menu.value?.open({ path, name, kind }, host)
+  menu.value?.open({ path, name, kind, hidden }, host)
 }
 
 function onRowMenu(row: FileTreeRow, event: MouseEvent | KeyboardEvent): void {
   if (row.type !== 'entry') return
-  openEntryMenu(event, row.path, row.name, row.kind)
+  openEntryMenu(event, row.path, row.name, row.kind, row.hidden)
 }
 
-function onSearchRowMenu(row: { readonly path: string; readonly name: string }, event: MouseEvent | KeyboardEvent): void {
-  openEntryMenu(event, row.path, row.name, 'file')
+function onSearchRowMenu(row: { readonly path: string; readonly name: string; readonly hidden: boolean }, event: MouseEvent | KeyboardEvent): void {
+  openEntryMenu(event, row.path, row.name, 'file', row.hidden)
 }
 
 /** 菜单键与 Shift+F10 是右键的键盘等价入口；其余按键交给行本身的点击行为。 */
@@ -370,6 +387,17 @@ onBeforeUnmount(() => {
       <AppButton v-if="query !== ''" variant="unstyled" class="file-tree-clear" aria-label="清除查找" @click="clearQuery">
         <svg class="panel-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" /></svg>
       </AppButton>
+      <AppButton
+        variant="unstyled"
+        class="file-tree-toggle-hidden"
+        :class="{ 'is-active': showHiddenFiles }"
+        :aria-label="showHiddenFiles ? '隐藏已排除条目' : '显示已排除条目'"
+        :title="showHiddenFiles ? '当前显示已排除条目，点击隐藏' : '当前隐藏已排除条目，点击显示'"
+        @click="toggleShowHidden"
+      >
+        <svg v-if="showHiddenFiles" class="panel-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z" /><circle cx="12" cy="12" r="3" /></svg>
+        <svg v-else class="panel-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.88 9.88a3 3 0 1 0 4.24 4.24" /><path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68" /><path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61" /><line x1="2" x2="22" y1="2" y2="22" /></svg>
+      </AppButton>
     </div>
 
     <div class="file-tree-scroll scroll-area" :aria-busy="busy">
@@ -387,8 +415,8 @@ onBeforeUnmount(() => {
             <button
               type="button"
               class="file-tree-row"
-              :class="{ 'is-selected': row.path === selectedPath, 'is-dragging': draggingPath === row.path }"
-              :title="row.path"
+              :class="{ 'is-selected': row.path === selectedPath, 'is-dragging': draggingPath === row.path, 'is-hidden': row.hidden }"
+              :title="row.hidden ? `${row.path}（已隐藏）` : row.path"
               draggable="true"
               @click="onSearchRowClick(row.path)"
               @dragstart="onSearchRowDragStart(row, $event)"
@@ -401,6 +429,7 @@ onBeforeUnmount(() => {
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3v5h5" /><path d="M6 3h8l5 5v13H6z" /></svg>
               </span>
               <span class="file-tree-name">{{ row.name }}</span>
+              <span v-if="row.hidden" class="file-tree-tag is-hidden">已隐藏</span>
               <span v-if="row.directory !== ''" class="file-tree-dir">{{ row.directory }}</span>
             </button>
           </li>
@@ -416,11 +445,12 @@ onBeforeUnmount(() => {
             :class="{
               'is-selected': row.path === selectedPath,
               'is-directory': row.kind === 'directory',
-              'is-dragging': draggingPath === row.path
+              'is-dragging': draggingPath === row.path,
+              'is-hidden': row.hidden
             }"
             :style="{ paddingLeft: indent(row.depth) }"
             :aria-expanded="row.kind === 'directory' ? row.expanded : undefined"
-            :title="row.path"
+            :title="row.hidden ? `${row.path}（已隐藏）` : row.path"
             draggable="true"
             @click="onRowClick(row)"
             @dragstart="onRowDragStart(row, $event)"
@@ -436,6 +466,7 @@ onBeforeUnmount(() => {
               <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3v5h5" /><path d="M6 3h8l5 5v13H6z" /></svg>
             </span>
             <span class="file-tree-name">{{ row.name }}</span>
+            <span v-if="row.hidden" class="file-tree-tag is-hidden">已隐藏</span>
             <span v-if="row.symlink" class="file-tree-tag">链接</span>
           </button>
           <p v-else class="file-tree-notice" :class="`is-${row.tone}`" :style="{ paddingLeft: indent(row.depth) }">

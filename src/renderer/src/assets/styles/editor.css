@@ -944,6 +944,24 @@
     background: color-mix(in srgb, var(--color-desk-ink) 8%, transparent);
     color: var(--panel-ink);
   }
+.file-tree-toggle-hidden {
+    display: flex;
+    width: 24px;
+    height: 24px;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--radius-desk-sm);
+    color: var(--panel-muted);
+    transition: color var(--panel-duration) ease, background-color var(--panel-duration) ease;
+  }
+.file-tree-toggle-hidden:hover {
+    background: color-mix(in srgb, var(--color-desk-ink) 8%, transparent);
+    color: var(--panel-ink);
+  }
+.file-tree-toggle-hidden.is-active {
+    color: var(--color-desk-accent);
+  }
 .file-tree-scroll {
     min-height: 0;
     flex: 1;
@@ -992,6 +1010,13 @@
 /* 正在拖动的那一行：降透明度表示它已经在鼠标上，拖拽结束后恢复。 */
 .file-tree-row.is-dragging {
     opacity: 0.45;
+  }
+/* 已排除/隐藏的条目在显式展示时降透明度，悬浮时稍微提亮以便操作。 */
+.file-tree-row.is-hidden {
+    opacity: 0.5;
+  }
+.file-tree-row.is-hidden:hover {
+    opacity: 0.85;
   }
 /* 展开箭头只占 12px 一列：文件行留同样宽的空位，名称因此始终对齐。 */
 .file-tree-chevron {
@@ -1058,6 +1083,10 @@
     font-size: var(--text-2xs);
     line-height: 16px;
   }
+.file-tree-tag.is-hidden {
+    border-color: color-mix(in srgb, var(--color-desk-accent) 40%, transparent);
+    color: var(--color-desk-accent);
+  }
 /* 提示行与条目行同列缩进：加载中、空目录、读取失败与截断都就近显示在所属目录下。 */
 .file-tree-notice {
     margin: 4px 0;
@@ -1068,5 +1097,36 @@
   }
 .file-tree-notice.is-error {
     color: var(--color-desk-danger);
+  }
+
+/* 设置页中预设文件排除项药丸徽章 */
+.file-preset-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    border: 1px solid var(--color-desk-line);
+    background: var(--color-desk-panel);
+    color: var(--color-desk-muted);
+    font-size: 12px;
+    font-family: var(--font-mono);
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+.file-preset-badge:hover {
+    border-color: var(--color-desk-accent);
+    color: var(--color-desk-ink);
+  }
+.file-preset-badge.is-active {
+    background: color-mix(in srgb, var(--color-desk-accent) 12%, transparent);
+    border-color: var(--color-desk-accent);
+    color: var(--color-desk-accent);
+  }
+.file-preset-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: currentColor;
   }
 }

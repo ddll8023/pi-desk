@@ -1,5 +1,6 @@
 <!-- 设置页：左栏是按分组排列的分节导航，右栏是当前分节的内容；两栏各自滚动，页面本身不滚动。
      分节清单来自 settings-navigation，这里只做「渲染导航 + 按 id 分发内容」，新增设置项不必改模板结构；
+     外观分节聚焦颜色主题，文件树排除规则与文件打开视图集中由文件分节（FileSettingsSection）管理；
      页面标题在左栏顶部，内容区每个分节自带一层页头（h1 加一句描述），其后按分节需要组织内容。
      内容区沿用统一的水平内边距，模型页的粘性认证摘要与正文在同一内容列对齐。 -->
 <script setup lang="ts">
@@ -15,6 +16,7 @@ import TerminalSettingsSection from '../../workspace/components/TerminalSettings
 import ResourceView from '../../resources/components/ResourceView.vue'
 import GenuiSettingsSection from '../../genui/components/GenuiSettingsSection.vue'
 import SettingsNavIcon from './SettingsNavIcon.vue'
+import FileSettingsSection from '../../editor/components/FileSettingsSection.vue'
 import VersionUpdateSection from '../../updates/components/VersionUpdateSection.vue'
 import LanRemoteSettingsSection from '../../lan-remote/components/LanRemoteSettingsSection.vue'
 
@@ -64,7 +66,7 @@ const markdownViewOptions = [
         <template v-if="activeSection === 'appearance'">
           <header>
             <h1 class="text-xl font-semibold tracking-tight">外观</h1>
-            <p class="mt-1 text-sm text-desk-muted">选择界面的颜色主题，以及 Markdown 文件默认打开的视图。</p>
+            <p class="mt-1 text-sm text-desk-muted">选择界面的颜色主题与视觉偏好。</p>
           </header>
 
           <section class="settings-section" aria-labelledby="settings-theme-title">
@@ -95,35 +97,9 @@ const markdownViewOptions = [
               {{ preferencesStore.actionError.message }}
             </p>
           </section>
-
-          <section class="settings-section" aria-labelledby="settings-markdown-view-title">
-            <div class="settings-section-heading">
-              <div>
-                <h2 id="settings-markdown-view-title" class="settings-section-title">文件预览</h2>
-                <p class="mt-1 text-xs text-desk-muted">
-                  打开 Markdown 文件时默认进入哪个视图；已打开的标签保持它当前的视图，不受影响。
-                </p>
-              </div>
-            </div>
-            <div class="settings-row">
-              <span class="text-sm font-medium">Markdown 默认视图</span>
-              <div class="segment w-full sm:w-80" role="group" aria-label="Markdown 默认视图">
-                <AppButton
-                  v-for="option in markdownViewOptions"
-                  :key="option.value"
-                  variant="unstyled"
-                  class="segment-option"
-                  :class="markdownDefaultView === option.value ? 'is-selected' : ''"
-                  :aria-pressed="markdownDefaultView === option.value"
-                  :disabled="!preferencesStore.ready"
-                  @click="preferencesStore.setMarkdownDefaultView(option.value)"
-                >
-                  {{ option.label }}
-                </AppButton>
-              </div>
-            </div>
-          </section>
         </template>
+
+        <FileSettingsSection v-else-if="activeSection === 'files'" />
 
         <QuickSendSection v-else-if="activeSection === 'quick-send'" />
         <QuickCommandsSection v-else-if="activeSection === 'quick-commands'" />

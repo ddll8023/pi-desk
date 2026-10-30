@@ -463,6 +463,7 @@
         "summary": "项目文件树、目录监听、引用检索、内容读写与磁盘基线，以及源码编辑、图片预览、Markdown 预览与富文本编辑、HTML 页面预览；不执行 Agent 的文件工具。",
         "features": [
           "目录分层列举、监听与变化合并",
+          "文件树排除规则匹配、行级隐藏标记与显隐切换",
           "条目安全删除（移入系统废纸篓）与打开标签联动关闭",
           "文件引用检索与条目拖拽引用",
           "文本／图片读取、磁盘基线与原子保存",
@@ -475,8 +476,10 @@
           {"kind": "关键实现", "label": "内容分类与原子保存", "path": "src/main/projects/project-file-content.ts"},
           {"kind": "关键实现", "label": "HTML 快照、隔离会话与资源边界", "path": "src/main/projects/project-html-preview.ts"},
           {"kind": "关键实现", "label": "目录列举、条目解析与安全删除", "path": "src/main/projects/project-directory.ts"},
+          {"kind": "关键实现", "label": "文件排除规则匹配", "path": "src/renderer/src/editor/file-exclude.ts"},
           {"kind": "关键实现", "label": "编辑记录与草稿", "path": "src/renderer/src/editor/stores/project-editor.ts"},
           {"kind": "界面入口", "label": "文件面板", "path": "src/renderer/src/editor/components/FileEditorView.vue"},
+          {"kind": "界面入口", "label": "文件设置分节", "path": "src/renderer/src/editor/components/FileSettingsSection.vue"},
           {"kind": "界面入口", "label": "HTML 页面预览", "path": "src/renderer/src/editor/components/FileHtmlPreview.vue"},
           {"kind": "界面入口", "label": "富文本编辑", "path": "src/renderer/src/editor/components/FileRichMarkdownEditor.vue"}
         ],
@@ -667,6 +670,7 @@
         "summary": "界面主题、侧栏与右侧面板、Markdown 默认视图、快捷输入短语，以及统一偏好服务对模型展示、快捷命令与功能开关的适配。",
         "features": [
           "主题、布局与 Markdown 默认视图读写",
+          "文件排除规则与显隐模式偏好持久化",
           "快捷输入短语管理",
           "隐藏模型、快捷命令与功能开关的配置适配",
           "已保存值与待应用状态的区分"

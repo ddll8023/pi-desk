@@ -22,9 +22,12 @@ import { app } from 'electron'
 import { isMarkdownDefaultView, isRightPanelTab, isTerminalLinkOpenMode } from '../../shared/preferences-api'
 import type { AutoUpdatePreference, GenuiPreference, ModelDisplayPreference, QuickSendPreference, UiPreferences, UiTheme } from '../../shared/preferences-api'
 import {
+  DEFAULT_FILE_EXCLUDE_PATTERNS,
   DEFAULT_QUICK_SEND_MESSAGES,
   DEFAULT_RIGHT_PANEL_WIDTH,
   MAX_EXPANDED_PROJECTS,
+  MAX_FILE_EXCLUDE_PATTERNS,
+  MAX_FILE_EXCLUDE_PATTERN_LENGTH,
   MAX_QUICK_SEND_MESSAGES,
   MAX_QUICK_SEND_MESSAGE_LENGTH,
   isRightPanelWidth
@@ -70,7 +73,10 @@ export const DEFAULT_UI_PREFERENCES: UiPreferences = {
   // Markdown 默认进预览：打开文件的主要目的是阅读，需要改结构时再切到源码。
   markdownDefaultView: 'preview',
   // 终端点击链接默认每次弹窗询问选择。
-  terminalLinkOpenMode: 'ask'
+  terminalLinkOpenMode: 'ask',
+  // 右侧文件树默认过滤隐藏项。
+  showHiddenFiles: false,
+  fileExcludePatterns: DEFAULT_FILE_EXCLUDE_PATTERNS
 }
 
 /** 窗口状态默认值；位置为 null 表示交给窗口自行居中。 */
@@ -193,8 +199,31 @@ function sanitizeUiPreferences(value: unknown): UiPreferences {
       : DEFAULT_UI_PREFERENCES.markdownDefaultView,
     terminalLinkOpenMode: isTerminalLinkOpenMode(value.terminalLinkOpenMode)
       ? value.terminalLinkOpenMode
-      : DEFAULT_UI_PREFERENCES.terminalLinkOpenMode
+      : DEFAULT_UI_PREFERENCES.terminalLinkOpenMode,
+    showHiddenFiles: typeof value.showHiddenFiles === 'boolean'
+      ? value.showHiddenFiles
+      : DEFAULT_UI_PREFERENCES.showHiddenFiles,
+    fileExcludePatterns: sanitizeFileExcludePatterns(value.fileExcludePatterns)
   }
+}
+
+/**
+ * 文件排除/隐藏规则列表清洗：只保留非空合法字符串，去重并截断到上限；
+ * 缺失或非数组时回退到默认排除规则。
+ */
+function sanitizeFileExcludePatterns(value: unknown): readonly string[] {
+  if (!Array.isArray(value)) return DEFAULT_UI_PREFERENCES.fileExcludePatterns
+  const accepted: string[] = []
+  const seen = new Set<string>()
+  for (const entry of value) {
+    if (typeof entry !== 'string') continue
+    const trimmed = entry.trim()
+    if (trimmed === '' || trimmed.length > MAX_FILE_EXCLUDE_PATTERN_LENGTH || seen.has(trimmed)) continue
+    seen.add(trimmed)
+    accepted.push(trimmed)
+    if (accepted.length >= MAX_FILE_EXCLUDE_PATTERNS) break
+  }
+  return accepted
 }
 
 /**

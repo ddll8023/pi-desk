@@ -4,7 +4,8 @@
  * 目录列举由主进程按当前项目完成，这里只保存结果：缓存键含项目路径，因此切换项目不会命中上一个
  * 项目的同层目录，迟到的成功响应也按响应自带的项目根复核后再写入（失败响应没有项目根，只在仍是
  * 同一项目时写入）。展开集合只在内存里，不持久化：目录数量会随项目增长，没有对应的配置边界。
- * 树的可见行由 `rows` 展平输出，加载中、空目录、读取失败与截断都作为同级提示行插入，界面只需渲染一列。
+ * 树的可见行由 `rows` 展平输出，加载中、空目录、读取失败与截断都作为同级提示行插入，界面只需渲染一列；
+ * 展平与检索时接入基于偏好设置的排除过滤，开启显示排除项时为行打上 `hidden: true`，关闭时直接跳过且不递归子目录。
  * 过滤输入非空时改由主进程的文件检索给出候选，此时不读目录、也不改变展开集合。
  *
  * 自动刷新靠主进程的目录监听：这里把「根 + 已展开的层」登记给主进程，变化回来时只重读命中的层，
@@ -28,6 +29,8 @@ import {
 } from '../services/project-file'
 import { useProjectEditorStore } from './project-editor'
 import { useProjectStore } from '../../projects/stores/project'
+import { usePreferencesStore } from '../../preferences/stores/preferences'
+import { isFileExcluded } from '../file-exclude'
 
 /** 一层目录的读取状态；失败只影响该层，其他层继续可用。 */
 type DirectoryView =
@@ -54,6 +57,7 @@ export type FileTreeRow =
     readonly kind: ProjectDirectoryEntryKind
     readonly symlink: boolean
     readonly expanded: boolean
+    readonly hidden: boolean
   }
   | {
     readonly type: 'notice'
@@ -354,7 +358,14 @@ export const useProjectDirectoryStore = defineStore('project-directory', () => {
       return
     }
 
+    const preferencesStore = usePreferencesStore()
+    const showHidden = preferencesStore.showHiddenFiles
+    const patterns = preferencesStore.fileExcludePatterns
+
     for (const entry of view.entries) {
+      const isExcluded = isFileExcluded(entry.path, entry.name, entry.kind === 'directory', patterns)
+      if (isExcluded && !showHidden) continue
+
       const expandedHere = entry.kind === 'directory' && isExpanded(projectPath, entry.path)
       collected.push({
         type: 'entry',
@@ -364,7 +375,8 @@ export const useProjectDirectoryStore = defineStore('project-directory', () => {
         depth,
         kind: entry.kind,
         symlink: entry.symlink,
-        expanded: expandedHere
+        expanded: expandedHere,
+        hidden: isExcluded
       })
       if (expandedHere) collect(projectPath, entry.path, depth + 1, collected)
     }

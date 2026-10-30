@@ -4,7 +4,7 @@
 
 ## 职责与入口
 
-负责界面主题、侧栏与右侧面板、Markdown 默认视图、终端链接打开模式、快捷输入短语，以及统一偏好服务对模型展示、快捷命令和功能开关的适配。入口为设置页“外观”“快捷输入”“终端”和使用相应偏好的布局与终端控件。
+负责界面主题、侧栏与右侧面板、Markdown 默认视图、文件排除规则与显隐模式、终端链接打开模式、快捷输入短语，以及统一偏好服务对模型展示、快捷命令和功能开关的适配。入口为设置页“外观”“文件”“快捷输入”“终端”和使用相应偏好的布局与终端控件。
 
 设置页导航不是设置值存储；窗口位置、项目列表、认证秘密和 Pi 自己的默认模型不归此模块独立写入。业务开关由本模块提供配置入口，实际运行行为由对应模块持有。
 
@@ -13,7 +13,7 @@
 | 文件 | 用途 |
 | --- | --- |
 | `src/main/preferences/preferences-manager.ts` | 通过共享配置实例读取／保存偏好，返回页面结果 |
-| `src/shared/preferences-api.ts` | 主题、布局、终端链接模式、模型显示、快捷输入、自动更新、生成式开关的契约及校验 |
+| `src/shared/preferences-api.ts` | 主题、布局、终端链接模式、文件排除与显隐、模型显示、快捷输入、自动更新、生成式开关的契约及校验 |
 | `src/renderer/src/preferences/stores/preferences.ts` | 偏好展示与动作状态、布局修改及已保存／待应用的功能开关状态 |
 | `src/renderer/src/preferences/services/preferences.ts` | 固定偏好桥接与普通载荷重建 |
 | `src/renderer/src/preferences/components/QuickSendSection.vue` | 快捷发送短语管理 |

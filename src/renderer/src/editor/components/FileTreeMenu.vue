@@ -1,12 +1,13 @@
 <!--
-  右侧面板文件行的操作菜单：打开、以另一种视图打开 Markdown、插入到终端、复制路径、复制文件名、在系统文件管理器中显示与移至废纸篓。
+  右侧面板文件行的操作菜单：打开、以另一种视图打开 Markdown、插入到终端、复制路径、复制文件名、在系统文件管理器中显示、隐藏/取消隐藏与移至废纸篓。
 
   菜单由文件树行按需打开（右键或键盘菜单键），锚点就是那一行，定位、翻转与收边都交给共用的锚定浮层；
   样式直接复用侧栏菜单的类，与左侧项目/会话菜单同一套令牌与层级。动作都只派发一次：
   「打开」把项目内相对路径交给工作区文件标签（Markdown 按设置里的默认视图打开）；Markdown 额外提供
   一个与默认视图相反的入口（默认预览时是「以源码模式打开」，反之亦然）；「插入到终端」写入当前活动终端
   （活动标签不是终端时禁用并写明原因），复制与显示所需的绝对路径一律经主进程解析，页面不自行拼接路径。
-  「移至废纸篓」向外派发删除请求由宿主进行破坏性确认；复制、插入与显示动作的成败用面板内的一次性提示回报；
+  「隐藏此项/取消隐藏」直接同步偏好设置中的排除规则；
+  「移至废纸篓」向外派发删除请求由宿主进行破坏性确认；复制、插入、隐藏与显示动作的成败用面板内的一次性提示回报；
   打开动作的结果由文件标签自己展示。
 -->
 <script setup lang="ts">
@@ -29,6 +30,7 @@ export interface FileTreeMenuTarget {
   readonly path: string
   readonly name: string
   readonly kind: ProjectDirectoryEntryKind
+  readonly hidden?: boolean
 }
 
 /** 动作结果的一次性提示；由文件树在面板内展示，不在这里自行渲染。 */
@@ -218,6 +220,37 @@ function revealInFileManager(): void {
   void runReveal(entry)
 }
 
+/** 隐藏此项：以相对路径或文件名写入偏好设置的排除规则。 */
+function hideEntry(): void {
+  const entry = target.value
+  closeMenu()
+  if (entry === null) return
+  const pattern = entry.path.includes('/') ? entry.path : entry.name
+  void preferencesStore.addFileExcludePattern(pattern).then((ok) => {
+    if (ok) {
+      emitNotice(`已隐藏${entry.kind === 'directory' ? '文件夹' : '文件'}：${entry.name}`, 'muted')
+    } else {
+      emitNotice('已达到排除规则条目上限（100 条）。', 'error')
+    }
+  })
+}
+
+/** 取消隐藏此项：尝试从排除列表中移除该路径或该名称的规则。 */
+function unhideEntry(): void {
+  const entry = target.value
+  closeMenu()
+  if (entry === null) return
+  const patterns = preferencesStore.fileExcludePatterns
+  const matched = patterns.filter((p) => p === entry.path || p === entry.name || p === `${entry.path}/`)
+  if (matched.length > 0) {
+    void Promise.all(matched.map((p) => preferencesStore.removeFileExcludePattern(p))).then(() => {
+      emitNotice(`已取消隐藏：${entry.name}`, 'muted')
+    })
+  } else {
+    emitNotice('条目由通配符或预设规则匹配，可在设置中调整规则。', 'muted')
+  }
+}
+
 async function runReveal(entry: FileTreeMenuTarget): Promise<void> {
   const result = await revealProjectEntry(entry.path)
   if (!result.ok) {
@@ -321,6 +354,22 @@ function onMenuKeydown(event: KeyboardEvent): void {
         </AppButton>
         <AppButton variant="unstyled" class="project-sidebar-menu-item" @click="revealInFileManager">
           {{ revealLabel }}
+        </AppButton>
+        <AppButton
+          v-if="target.hidden"
+          variant="unstyled"
+          class="project-sidebar-menu-item"
+          @click="unhideEntry"
+        >
+          取消隐藏
+        </AppButton>
+        <AppButton
+          v-else
+          variant="unstyled"
+          class="project-sidebar-menu-item"
+          @click="hideEntry"
+        >
+          {{ target.kind === 'directory' ? '隐藏此文件夹' : '隐藏此文件' }}
         </AppButton>
         <AppButton
           variant="unstyled"

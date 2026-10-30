@@ -19,6 +19,12 @@ defineProps<{ readonly name: SettingsIconName }>()
       <circle cx="8.5" cy="7.5" r=".5" fill="currentColor" />
     </template>
 
+    <template v-else-if="name === 'files'">
+      <path d="M20 7h-3a2 2 0 0 1-2-2V2" />
+      <path d="M9 18a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h7l4 4v10a2 2 0 0 1-2 2Z" />
+      <path d="M3 7.6v12.8A1.6 1.6 0 0 0 4.6 22h11" />
+    </template>
+
     <path
       v-else-if="name === 'zap'"
       d="M15.914 4a1.5 1.5 0 0 0-2.474-1.561l-9 9A1.5 1.5 0 0 0 5.5 14h4.002a.5.5 0 0 1 .471.666L8.086 20a1.5 1.5 0 0 0 2.475 1.56l9-9A1.5 1.5 0 0 0 18.5 10h-3.997a.5.5 0 0 1-.472-.667z"
