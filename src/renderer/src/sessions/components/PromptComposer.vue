@@ -1,4 +1,4 @@
-<!-- 图片与编号说明在输入框外独立管理；点击发送即固定提示词、图片及标注快照，说明由 SDK 独立资料消息承接。
+<!-- 图片与编号说明由坞内附件区独立管理；点击发送即固定提示词、图片及标注快照，说明由 SDK 独立资料消息承接。
      结果未确认时可补读同步，确认结束原运行后恢复输入，不自动重发。
      原位新建以独立草稿承接输入：旧实例结束期间可编辑但不发送，首次发送才建立新会话。
      Prompt 输入坞：处理输入法组合态、Enter 发送与 Shift+Enter 换行、焦点回归与重复提交、响应侧栏「新建」的聚焦请求并给出一次性提示，并在 Agent 运行期间原位提供停止入口；同时承接 Extension 的 set_editor_text 填充文本、图片附件的选择/粘贴/拖拽三种入口、输入行按内容自动增高、快捷发送下拉（短语取自界面偏好，可在设置里增删改与排序）、Pi 命令的斜杠模糊补全（Runtime 就绪后用运行中的命令清单，未就绪时用主进程预读的技能清单，按类型分组并按匹配优先级排序；另含 Desktop 层自己拦截的界面命令）与 `@` 项目文件引用（只写入相对路径文本，不传文件内容）；右侧文件树的行拖入坞内也走同一条相对路径引用规则。底部工具条左侧是信息行：异常与进行中的状态文本、被收起的 Extension 对话入口与会话用量指标（缓存命中率、上下文占用与平均速率，点击开明细；累计 token 与费用只在明细浮层展示）；右侧是模型选择、附件、快捷发送与发送/停止按钮。Extension 的 setStatus 项不在输入区展示。 -->
@@ -1416,9 +1416,6 @@ onMounted(() => {
           结束原运行并恢复输入
         </AppButton>
       </div>
-      <PromptImageMaterials ref="imageMaterials" :images="pendingImages" :input-key="sessionViewStore.key"
-        :active="props.active" :disabled="!canSubmit" :attach-disabled="attachDisabled"
-        @add="addImageFiles" @remove="removeImage" @change="updateImageAnnotations" />
       <label for="prompt-input" class="sr-only">输入要发送给 Pi 的提示词</label>
       <div
         class="prompt-composer-shell"
@@ -1479,13 +1476,26 @@ onMounted(() => {
           </li>
         </ul>
 
+        <!-- 图片附件行：位于坞内输入框上方，支持点击图片弹出独立标注，无附件时不占位。 -->
+        <PromptImageMaterials
+          ref="imageMaterials"
+          :images="pendingImages"
+          :input-key="sessionViewStore.key"
+          :active="props.active"
+          :disabled="!canSubmit"
+          :attach-disabled="attachDisabled"
+          @add="addImageFiles"
+          @remove="removeImage"
+          @change="updateImageAnnotations"
+        />
+
         <textarea
           id="prompt-input"
           ref="textarea"
           v-model="draft"
           rows="1"
           class="text-control prompt-composer-input resize-none"
-          placeholder="输入要发送给 Pi 的提示词"
+          placeholder="输入要发送给 Pi 的内容（可粘贴或拖入图片）"
           autocomplete="off"
           spellcheck="false"
           :aria-describedby="statusText !== null ? 'prompt-status' : undefined"
@@ -1551,7 +1561,7 @@ onMounted(() => {
               :resetting="workspaceTabsStore.isChatResetting || workspaceTabsStore.isChatBinding"
             />
 
-            <!-- 图片导入交给上方独立资料区，不把图片说明写进提示词。 -->
+            <!-- 触发图片附件选择；图片说明由附件区独立标注，不进入提示词。 -->
             <AppButton
               variant="icon"
               class="prompt-composer-char"
