@@ -24,3 +24,4 @@
 | Orca | [stablyai/orca](https://github.com/stablyai/orca) | 以工作树为中心的多编码 Agent 工作台 | Git、编辑器、终端与手机对话部分重合；工作树、远程执行和审阅闭环超出现状 | [orca.md](orca.md) |
 | EvoFlow | [EvovexAI/EvoFlow](https://github.com/EvovexAI/EvoFlow) | 面向长任务的 Agent Runtime 与控制平面；主体为非商业源码可见许可 | 聊天和资源配置重合；Plan/Goal、团队、工作流和岗位调度属于不同产品范围 | [evoflow.md](evoflow.md) |
 | EditHere | [Inginnng/EditHere](https://github.com/Inginnng/EditHere) | 截图、批注与组件调整的本地 AI 反馈工具；主体为非商业源码可用许可 | 外部工具协议与通用图片点框批注部分重合；系统抓屏、OCR、大爆炸布局拖拽与视频打点超出当前内置能力 | [edithere.md](edithere.md) |
+| CoWork OS | [CoWork-OS/CoWork-OS](https://github.com/CoWork-OS/CoWork-OS) | 面向编码、知识工作与自动化的本地优先个人 Agent 桌面应用 | 桌面工作区与终端部分重合；CDP 浏览器自动操控与人机接管超出现状 | [cowork-os.md](cowork-os.md) |
