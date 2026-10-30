@@ -63,6 +63,21 @@ export interface SdkLogTarget {
 /** 宿主内 MCP 动作；与页面契约 `McpCommandAction` 同集合，enable/disable 不在范围内。 */
 export type SdkMcpCommandAction = 'login' | 'logout' | 'reconnect'
 
+/** 宿主向主进程申请执行的浏览器操作判别联合。 */
+export type SdkBrowserOperation =
+  | { readonly kind: 'snapshot' }
+  | { readonly kind: 'get-content' }
+  | { readonly kind: 'navigate'; readonly url: string }
+  | { readonly kind: 'click'; readonly refId: number }
+  | { readonly kind: 'fill'; readonly refId: number; readonly text: string }
+  | { readonly kind: 'press'; readonly key: string }
+  | { readonly kind: 'scroll'; readonly deltaX?: number; readonly deltaY?: number }
+
+/** 主进程返回给宿主的浏览器操作结果。 */
+export type SdkBrowserOperationResult =
+  | { readonly ok: true; readonly data: unknown }
+  | { readonly ok: false; readonly error: string; readonly notBound?: boolean; readonly paused?: boolean }
+
 export type SdkHostFailureCode =
   | 'SDK_LOAD_FAILED' | 'AGENT_DIR_MISMATCH' | 'HOST_NOT_READY'
   | 'INVALID_SESSION_TARGET' | 'TRUST_REQUIRED' | 'SESSION_NOT_FOUND'
@@ -161,6 +176,8 @@ export type SdkHostRequest =
   | (RequestEnvelope & { readonly type: 'authorization-result'; readonly bindingId: number | null;
       readonly target: SdkSessionTarget | null; readonly error: SdkHostFailureCode | null;
       readonly generation: number | null })
+  | (RequestEnvelope & { readonly type: 'browser-operation-result'; readonly bindingId: number;
+      readonly result: SdkBrowserOperationResult })
 
 export type SdkHostFrame =
   | (RequestEnvelope & { readonly type: 'ready'; readonly agentDir: string; readonly sdkVersion: string })
@@ -195,6 +212,8 @@ export type SdkHostEvent =
       readonly dialogId: string })
   | (RequestEnvelope & { readonly type: 'authorize-target'; readonly bindingId: number | null;
       readonly projectPath: string | null; readonly reference: SdkSessionReference })
+  | (RequestEnvelope & { readonly type: 'browser-operation'; readonly seq: number; readonly bindingId: number;
+      readonly operation: SdkBrowserOperation })
 
 const FAILURE_CODES: readonly SdkHostFailureCode[] = [
   'SDK_LOAD_FAILED', 'AGENT_DIR_MISMATCH', 'HOST_NOT_READY', 'INVALID_SESSION_TARGET',
@@ -346,6 +365,8 @@ export function isSdkHostRequest(value: unknown): value is SdkHostRequest {
       && ((isSdkSessionTarget(value.target) && value.error === null && isIdentity(value.generation))
         || (value.target === null && isSdkHostFailureCode(value.error) && value.generation === null))
       && requestKeys(value, ['bindingId', 'target', 'error', 'generation'])
+    case 'browser-operation-result': return isIdentity(value.bindingId)
+      && isSdkBrowserOperationResult(value.result) && requestKeys(value, ['bindingId', 'result'])
     default: return false
   }
 }
@@ -392,6 +413,10 @@ export function isSdkHostEvent(value: unknown): value is SdkHostEvent {
       && (value.projectPath === null || isPath(value.projectPath)) && isSdkSessionReference(value.reference)
       && requestKeys(value, ['bindingId', 'projectPath', 'reference'])
   }
+  if (value.type === 'browser-operation') {
+    return isRequest(value) && isIdentity(value.seq) && isIdentity(value.bindingId)
+      && isSdkBrowserOperation(value.operation) && requestKeys(value, ['seq', 'bindingId', 'operation'])
+  }
   if (!isIdentity(value.seq)) return false
   if (value.type === 'session-state') return isSdkSessionStatus(value.status) && eventKeys(value, ['status'])
   if (value.type === 'entry-map') {
@@ -406,4 +431,27 @@ export function isSdkHostEvent(value: unknown): value is SdkHostEvent {
     && eventKeys(value, ['bindingId', 'dialogId'])
   return value.type === 'ui-request' && isIdentity(value.bindingId) && isRecord(value.payload)
     && projectExtensionUiRequest(value.payload) !== null && eventKeys(value, ['bindingId', 'payload'])
+}
+
+/** 浏览器操作载荷校验。 */
+export function isSdkBrowserOperation(value: unknown): value is SdkBrowserOperation {
+  if (!isRecord(value)) return false
+  if (value.kind === 'snapshot' || value.kind === 'get-content') return hasKeys(value, ['kind'])
+  if (value.kind === 'navigate') return typeof value.url === 'string' && value.url.length <= 4096 && hasKeys(value, ['kind', 'url'])
+  if (value.kind === 'click') return isIdentity(value.refId) && hasKeys(value, ['kind', 'refId'])
+  if (value.kind === 'fill') return isIdentity(value.refId) && typeof value.text === 'string' && hasKeys(value, ['kind', 'refId', 'text'])
+  if (value.kind === 'press') return typeof value.key === 'string' && value.key.length <= 64 && hasKeys(value, ['kind', 'key'])
+  if (value.kind === 'scroll') return (value.deltaX === undefined || typeof value.deltaX === 'number')
+    && (value.deltaY === undefined || typeof value.deltaY === 'number') && hasKeys(value, ['kind', 'deltaX', 'deltaY'])
+  return false
+}
+
+/** 浏览器操作结果校验。 */
+export function isSdkBrowserOperationResult(value: unknown): value is SdkBrowserOperationResult {
+  if (!isRecord(value)) return false
+  if (value.ok === true) return hasKeys(value, ['ok', 'data'])
+  return value.ok === false && typeof value.error === 'string'
+    && (value.notBound === undefined || typeof value.notBound === 'boolean')
+    && (value.paused === undefined || typeof value.paused === 'boolean')
+    && hasKeys(value, ['ok', 'error', 'notBound', 'paused'])
 }

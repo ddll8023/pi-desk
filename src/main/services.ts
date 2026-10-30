@@ -30,6 +30,7 @@ import { PiAgentUpdater } from './updates/pi-agent-updater'
 import { getRuntimeRoot } from './updates/pi-runtime'
 import { WindowState } from './window-state'
 import { LanRemoteManager } from './lan-remote/manager'
+import { BrowserSessionService } from './browser/browser-session-service'
 import {
   broadcastTerminalDaemonStatus,
   chooseDirectoryWithDialog,
@@ -53,7 +54,7 @@ export const sdkRuntime = new SdkRuntimeBridge({
   prepareHost: (host) => {
     host.setSessionAuthority((reference, ownerProjectPath) => sessionManager.prepareSdkTarget(reference, ownerProjectPath))
   },
-  createHost: (runId) => new SdkHostManager({ runId, runs: sessionRuns })
+  createHost: (runId) => new SdkHostManager({ runId, runs: sessionRuns, browserSessionService })
 })
 
 /** 本地配置文件的唯一读写者；本文件的所有字段共用同一份配置与写入队列。 */
@@ -145,6 +146,9 @@ export const modelsConfigManager = new ModelsConfigManager()
 export const piSettingsManager = new PiSettingsManager()
 
 export const windowState = new WindowState({ store: configStore })
+
+/** 受管浏览器会话与控制权服务：管理 webview 实例登记、项目分区隔离及独占控制权。 */
+export const browserSessionService = new BrowserSessionService()
 
 /** 内置终端适配：PTY、画面与流控由独立守护进程持有，主进程只转发受限协议。 */
 export const terminals = new TerminalManager({

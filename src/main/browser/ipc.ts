@@ -1,8 +1,38 @@
 /** 内置浏览器截图与元素选择：只允许可信主窗口操作其所属的受限 webview。 */
 import { webContents } from 'electron'
 import type { IpcMainInvokeEvent, WebContents } from 'electron'
-import { BROWSER_CANCEL_PICK_CHANNEL, BROWSER_CAPTURE_CHANNEL, BROWSER_PICK_ELEMENT_CHANNEL, isBrowserElementContext } from '../../shared/browser-api'
+import {
+  BROWSER_CANCEL_PICK_CHANNEL,
+  BROWSER_CAPTURE_CHANNEL,
+  BROWSER_PICK_ELEMENT_CHANNEL,
+  isBrowserElementContext
+} from '../../shared/browser-api'
 import type { BrowserCaptureResult, BrowserElementPickResult } from '../../shared/browser-api'
+import {
+  BROWSER_BIND_SESSION_CHANNEL,
+  BROWSER_DISPATCH_ACTION_CHANNEL,
+  BROWSER_GET_CONTENT_CHANNEL,
+  BROWSER_QUERY_STATE_CHANNEL,
+  BROWSER_REGISTER_INSTANCE_CHANNEL,
+  BROWSER_RELEASE_SESSION_CHANNEL,
+  BROWSER_RESUME_CHANNEL,
+  BROWSER_TAKE_SNAPSHOT_CHANNEL,
+  BROWSER_TAKEOVER_CHANNEL,
+  BROWSER_UNREGISTER_INSTANCE_CHANNEL,
+  isBrowserActionRequest,
+  isBrowserBindRequest,
+  isBrowserInstanceRegistration
+} from '../../shared/browser-session-api'
+import type {
+  BrowserActionResult,
+  BrowserBindResult,
+  BrowserContentResult,
+  BrowserControlState,
+  BrowserOperationResult,
+  BrowserRegisterResult,
+  BrowserSnapshotResult
+} from '../../shared/browser-session-api'
+import { browserSessionService } from '../services'
 import { handle, isTrustedCaller } from '../ipc/dispatch'
 import { ELEMENT_PICKER_CANCEL, ELEMENT_PICKER_CHECK, ELEMENT_PICKER_START, ELEMENT_PICKER_WORLD } from './element-picker'
 
@@ -88,5 +118,76 @@ export function registerBrowserHandlers(pageUrl: string): void {
       }
       if (picking.get(target.id) === operation) picking.delete(target.id)
     }
+  })
+
+  handle(BROWSER_REGISTER_INSTANCE_CHANNEL, async (event, ...args: unknown[]): Promise<BrowserRegisterResult> => {
+    if (!isTrustedCaller(event, pageUrl)) return { ok: false, error: '非受信任调用来源。' }
+    const payload = args[0]
+    if (!isBrowserInstanceRegistration(payload)) return { ok: false, error: '实例登记参数不符合契约。' }
+    return browserSessionService.registerInstance(payload, event.sender)
+  })
+
+  handle(BROWSER_UNREGISTER_INSTANCE_CHANNEL, async (event, ...args: unknown[]): Promise<BrowserOperationResult> => {
+    if (!isTrustedCaller(event, pageUrl)) return { ok: false, error: '非受信任调用来源。' }
+    const instanceId = args[0]
+    if (typeof instanceId !== 'string' || !instanceId) return { ok: false, error: '实例标识无效。' }
+    return browserSessionService.unregisterInstance(instanceId)
+  })
+
+  handle(BROWSER_BIND_SESSION_CHANNEL, async (event, ...args: unknown[]): Promise<BrowserBindResult> => {
+    if (!isTrustedCaller(event, pageUrl)) return { ok: false, error: '非受信任调用来源。' }
+    const payload = args[0]
+    if (!isBrowserBindRequest(payload)) return { ok: false, error: '会话绑定参数不符合契约。' }
+    return browserSessionService.bindSession(payload)
+  })
+
+  handle(BROWSER_RELEASE_SESSION_CHANNEL, async (event, ...args: unknown[]): Promise<BrowserOperationResult> => {
+    if (!isTrustedCaller(event, pageUrl)) return { ok: false, error: '非受信任调用来源。' }
+    const [instanceId, sessionId] = args
+    if (typeof instanceId !== 'string' || typeof sessionId !== 'string') return { ok: false, error: '解绑参数无效。' }
+    return browserSessionService.releaseSession(instanceId, sessionId)
+  })
+
+  handle(BROWSER_TAKEOVER_CHANNEL, async (event, ...args: unknown[]): Promise<BrowserOperationResult> => {
+    if (!isTrustedCaller(event, pageUrl)) return { ok: false, error: '非受信任调用来源。' }
+    const [instanceId, reason] = args
+    if (typeof instanceId !== 'string') return { ok: false, error: '实例标识无效。' }
+    const optReason = typeof reason === 'string' ? reason : undefined
+    return browserSessionService.takeover(instanceId, optReason)
+  })
+
+  handle(BROWSER_RESUME_CHANNEL, async (event, ...args: unknown[]): Promise<BrowserOperationResult> => {
+    if (!isTrustedCaller(event, pageUrl)) return { ok: false, error: '非受信任调用来源。' }
+    const instanceId = args[0]
+    if (typeof instanceId !== 'string') return { ok: false, error: '实例标识无效。' }
+    return browserSessionService.resume(instanceId)
+  })
+
+  handle(BROWSER_QUERY_STATE_CHANNEL, async (event, ...args: unknown[]): Promise<BrowserControlState | null> => {
+    if (!isTrustedCaller(event, pageUrl)) return null
+    const instanceId = args[0]
+    if (typeof instanceId !== 'string') return null
+    return browserSessionService.queryControlState(instanceId)
+  })
+
+  handle(BROWSER_TAKE_SNAPSHOT_CHANNEL, async (event, ...args: unknown[]): Promise<BrowserSnapshotResult> => {
+    if (!isTrustedCaller(event, pageUrl)) return { ok: false, error: '非受信任调用来源。' }
+    const instanceId = args[0]
+    if (typeof instanceId !== 'string' || !instanceId) return { ok: false, error: '实例标识无效。' }
+    return browserSessionService.takeSnapshot(instanceId)
+  })
+
+  handle(BROWSER_GET_CONTENT_CHANNEL, async (event, ...args: unknown[]): Promise<BrowserContentResult> => {
+    if (!isTrustedCaller(event, pageUrl)) return { ok: false, error: '非受信任调用来源。' }
+    const instanceId = args[0]
+    if (typeof instanceId !== 'string' || !instanceId) return { ok: false, error: '实例标识无效。' }
+    return browserSessionService.getContent(instanceId)
+  })
+
+  handle(BROWSER_DISPATCH_ACTION_CHANNEL, async (event, ...args: unknown[]): Promise<BrowserActionResult> => {
+    if (!isTrustedCaller(event, pageUrl)) return { ok: false, error: '非受信任调用来源。' }
+    const payload = args[0]
+    if (!isBrowserActionRequest(payload)) return { ok: false, error: '动作请求参数不符合契约。' }
+    return browserSessionService.dispatchAction(payload)
   })
 }

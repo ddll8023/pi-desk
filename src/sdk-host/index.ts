@@ -2,7 +2,16 @@
 import { randomUUID } from 'node:crypto'
 import { isAbsolute, resolve } from 'node:path'
 import { SDK_HOST_PROTOCOL_VERSION, isSdkHostRequest } from './protocol'
-import type { SdkHostFrame, SdkHostEvent, SdkHostRequest, SdkHostFailureCode, SdkSessionAuthorization, SdkSessionReference } from './protocol'
+import type {
+  SdkBrowserOperation,
+  SdkBrowserOperationResult,
+  SdkHostEvent,
+  SdkHostFailureCode,
+  SdkHostFrame,
+  SdkHostRequest,
+  SdkSessionAuthorization,
+  SdkSessionReference
+} from './protocol'
 import { loadSdkModule } from '../shared-process/runtime'
 import type { SdkModule } from '../shared-process/runtime'
 import { SdkSessionFailure, SdkSessionRuntime } from './session-runtime'
@@ -12,6 +21,7 @@ import { ProjectionCheckpoints } from './projection/checkpoint'
 const parentPort = process.parentPort
 const INITIALIZE_WAIT_MS = 30_000
 const AUTHORIZATION_WAIT_MS = 15_000
+const BROWSER_OPERATION_WAIT_MS = 30_000
 let hostId: number | null = null
 let initializing = false
 let ready = false
@@ -28,6 +38,11 @@ const authorizations = new Map<string, {
   readonly timer: ReturnType<typeof setTimeout>
   readonly resolve: (authorization: SdkSessionAuthorization) => void
   readonly reject: (error: SdkSessionFailure) => void
+}>()
+const browserOperations = new Map<string, {
+  readonly bindingId: number
+  readonly timer: ReturnType<typeof setTimeout>
+  readonly resolve: (result: SdkBrowserOperationResult) => void
 }>()
 
 /** 通信只发送声明的投影，原始 SDK 异常与环境变量不进入通道。 */
@@ -70,6 +85,37 @@ function cancelAuthorizations(bindingId?: number | null): void {
     authorizations.delete(id)
     pending.reject(new SdkSessionFailure('STALE_SESSION'))
   }
+  for (const [id, pending] of browserOperations) {
+    if (bindingId !== undefined && bindingId !== null && pending.bindingId !== bindingId) continue
+    clearTimeout(pending.timer)
+    browserOperations.delete(id)
+    pending.resolve({ ok: false, error: '会话已重置或换代，浏览器操作已取消。' })
+  }
+}
+
+/** 向主进程派发浏览器操作并等待结果。 */
+function dispatchBrowserOperation(bindingId: number, operation: SdkBrowserOperation): Promise<SdkBrowserOperationResult> {
+  const currentHostId = hostId
+  if (currentHostId === null || closing) {
+    return Promise.resolve({ ok: false, error: '宿主未就绪或正在关闭。' })
+  }
+  const requestId = randomUUID()
+  return new Promise((resolvePromise) => {
+    const timer = setTimeout(() => {
+      browserOperations.delete(requestId)
+      resolvePromise({ ok: false, error: '浏览器操作等待超时 (30s)。' })
+    }, BROWSER_OPERATION_WAIT_MS)
+    browserOperations.set(requestId, { bindingId, timer, resolve: resolvePromise })
+    send({
+      version: SDK_HOST_PROTOCOL_VERSION,
+      hostId: currentHostId,
+      type: 'browser-operation',
+      seq: ++seq,
+      requestId,
+      bindingId,
+      operation
+    })
+  })
 }
 
 /** 官方包按需加载；只有独立的后续生命周期请求才会建立 services 与 Agent。 */
@@ -90,7 +136,7 @@ async function initialize(request: Extract<SdkHostRequest, { type: 'initialize' 
       fail(request, 'AGENT_DIR_MISMATCH'); return
     }
     sessions = new SdkSessionRuntime(sdk, {
-      hostId: request.hostId, agentDir: actualAgentDir, authorize, checkpoints,
+      hostId: request.hostId, agentDir: actualAgentDir, authorize, checkpoints, browserOperator: dispatchBrowserOperation,
       onState: status => {
         if (status.phase === 'invalid') cancelAuthorizations(status.bindingId)
         send({ version: SDK_HOST_PROTOCOL_VERSION, hostId: request.hostId, type: 'session-state', seq: ++seq, status })
@@ -144,6 +190,14 @@ async function dispatch(request: SdkHostRequest): Promise<void> {
     } else {
       pending.reject(new SdkSessionFailure(request.error ?? 'AUTHORIZATION_FAILED'))
     }
+    return
+  }
+  if (request.type === 'browser-operation-result') {
+    const pending = browserOperations.get(request.requestId)
+    if (pending === undefined || pending.bindingId !== request.bindingId) return
+    browserOperations.delete(request.requestId)
+    clearTimeout(pending.timer)
+    pending.resolve(request.result)
     return
   }
   const runtime = sessions

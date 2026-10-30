@@ -2,7 +2,8 @@
 
 import { resolve } from 'node:path'
 import { app, BrowserWindow, dialog, nativeTheme, session } from 'electron'
-import type { BrowserWindowConstructorOptions } from 'electron'
+import type { BrowserWindowConstructorOptions, Session } from 'electron'
+import { PROJECT_BROWSER_PARTITION_PREFIX } from '../shared/browser-session-api'
 import type { UiTheme } from '../shared/preferences-api'
 import { TERMINAL_DAEMON_STATUS_EVENT } from '../shared/terminal-api'
 import { SESSION_RUNS_EVENT } from '../shared/session-run-api'
@@ -84,15 +85,20 @@ export function titleBarWindowOptions(): Pick<BrowserWindowConstructorOptions, '
   }
 }
 
+/** 单个会话分区的权限收紧：拒绝一切敏感权限请求并阻止下载。 */
+export function restrictBrowserPartitionSession(s: Session): void {
+  s.setPermissionCheckHandler(() => false)
+  s.setPermissionRequestHandler((_contents, _permission, callback) => {
+    callback(false)
+  })
+  s.on('will-download', (event) => event.preventDefault())
+}
+
 /** 应用级权限收紧：拒绝主会话与内置浏览器发起的一切敏感权限请求，并阻止下载。 */
 export function restrictSession(): void {
   const sessions = [session.defaultSession, session.fromPartition('persist:desktop-browser')]
   for (const s of sessions) {
-    s.setPermissionCheckHandler(() => false)
-    s.setPermissionRequestHandler((_contents, _permission, callback) => {
-      callback(false)
-    })
-    s.on('will-download', (event) => event.preventDefault())
+    restrictBrowserPartitionSession(s)
   }
 }
 
@@ -156,7 +162,12 @@ export async function createWindow(pageUrl: string): Promise<void> {
     webPreferences.sandbox = true
     webPreferences.webSecurity = true
     delete webPreferences.preload
-    webPreferences.partition = 'persist:desktop-browser'
+
+    // 优先采用项目级专属存储分区，并同步收紧该分区的安全权限
+    const isProjectPartition = partition.startsWith(PROJECT_BROWSER_PARTITION_PREFIX)
+    const targetPartition = isProjectPartition ? partition : 'persist:desktop-browser'
+    webPreferences.partition = targetPartition
+    restrictBrowserPartitionSession(session.fromPartition(targetPartition))
   })
   contents.on('did-attach-webview', (_event, guest) => projectHtmlPreview.attachGuest(previewOwnerId, guest))
   contents.on('did-start-navigation', event => {

@@ -13,6 +13,7 @@
 import { contextBridge } from 'electron'
 import type { DesktopApi } from '../shared/desktop-api'
 import type { BrowserCaptureApi } from '../shared/browser-api'
+import type { BrowserSessionApi } from '../shared/browser-session-api'
 import { browserApi } from './browser'
 import type { ProjectApi } from '../shared/project-api'
 import type { ProjectFileApi } from '../shared/project-file-api'
@@ -45,7 +46,7 @@ import { updatesApi } from './updates'
 import { lanRemoteApi } from './lan-remote'
 
 /** 合并后的桥接对象：各域键互不重叠，平铺后仍是页面看到的同一份 `DesktopApi` 契约。 */
-const desktop: BrowserCaptureApi & DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionApi & SessionRunApi & TerminalApi & PreferencesApi & QuickCommandsApi & GenuiParamsApi & PiSettingsApi & TrustApi & ExtensionUiApi & AuthApi & ModelsConfigApi & UpdatesApi & GitApi & LanRemoteApi = {
+const desktop: BrowserCaptureApi & BrowserSessionApi & DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionApi & SessionRunApi & TerminalApi & PreferencesApi & QuickCommandsApi & GenuiParamsApi & PiSettingsApi & TrustApi & ExtensionUiApi & AuthApi & ModelsConfigApi & UpdatesApi & GitApi & LanRemoteApi = {
   ...desktopApi,
   ...browserApi,
   ...projectsApi,

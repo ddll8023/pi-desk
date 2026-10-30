@@ -22,6 +22,7 @@ import type {
   AgentCapabilities, McpStatus, PiResources, ProjectionBatch, ProjectionSnapshot, PromptImageInput,
   RuntimeDiagnostics, HistoryData, HistoryQuery
 } from '../../shared/runtime-api'
+import type { BrowserSessionService } from '../browser/browser-session-service'
 import { ExtensionUiManager } from './extension-ui-manager'
 import type { ExtensionDialogResponseInput, ExtensionUiSnapshot } from '../../shared/extension-ui-api'
 import { getPiAgentDir, getPiProcessEnvironment } from '../shared/pi-paths'
@@ -81,7 +82,8 @@ const EXPECTED_REPLIES: Record<SdkHostRequest['type'], SdkHostFrame['type'] | nu
   'projection-ack': 'ack-result',
   'session-log': 'log-result',
   'ui-response': 'ui-result',
-  'authorization-result': null
+  'authorization-result': null,
+  'browser-operation-result': null
 }
 
 /**
@@ -229,6 +231,8 @@ export interface SdkHostManagerOptions {
   runId: number
   /** 运行实例登记与绑定代际分配；归属项目只以登记结果为准。只读宿主使用拒绝式实现。 */
   runs: SdkHostRunRegistry
+  /** 受管浏览器会话服务实例。 */
+  browserSessionService?: BrowserSessionService
 }
 
 /**
@@ -935,6 +939,10 @@ export class SdkHostManager {
       void this.authorizeTarget(record, event)
       return
     }
+    if (event.type === 'browser-operation') {
+      void this.handleBrowserOperation(record, event)
+      return
+    }
     if (event.seq <= record.eventSeq) return
     if (event.type === 'session-state') {
       this.applySessionState(record, event.status, event.seq)
@@ -1011,6 +1019,97 @@ export class SdkHostManager {
   private authorizationFailure(error: unknown): SdkHostFailureCode {
     if (typeof error === 'object' && error !== null && 'code' in error && isSdkHostFailureCode(error.code)) return error.code
     return 'AUTHORIZATION_FAILED'
+  }
+
+  /** 处理宿主反向发起的浏览器操作。 */
+  private async handleBrowserOperation(
+    record: HostRecord,
+    event: Extract<SdkHostEvent, { type: 'browser-operation' }>
+  ): Promise<void> {
+    const service = this.options.browserSessionService
+    let result: SdkBrowserOperationResult
+
+    try {
+      if (record.closing || event.bindingId !== this.sessionSnapshot.bindingId) {
+        throw new Error('会话代际不匹配或宿主正在关闭。')
+      }
+      if (!service) {
+        throw new Error('主进程浏览器服务不可用。')
+      }
+
+      const sessionId = this.sessionSnapshot.sessionId
+      if (!sessionId) {
+        throw new Error('当前会话尚未建立有效标识。')
+      }
+
+      const boundInstance = service.findBoundInstanceForSession(
+        sessionId,
+        this.options.runId,
+        event.bindingId
+      )
+
+      if (!boundInstance) {
+        result = {
+          ok: false,
+          error: '当前会话尚未绑定内置浏览器。请先在工作区浏览器中绑定本会话。',
+          notBound: true
+        }
+      } else {
+        const control = service.queryControlState(boundInstance.instanceId)
+        if (control && (control.phase === 'takeover' || control.phase === 'paused')) {
+          result = {
+            ok: false,
+            error: `浏览器处于挂起状态 (${control.pausedReason ?? control.phase})，无法执行操作。`,
+            paused: true
+          }
+        } else {
+          const op = event.operation
+          if (op.kind === 'snapshot') {
+            const snap = await service.takeSnapshot(boundInstance.instanceId)
+            result = snap.ok ? { ok: true, data: snap.snapshot } : { ok: false, error: snap.error }
+          } else if (op.kind === 'get-content') {
+            const content = await service.getContent(boundInstance.instanceId)
+            result = content.ok ? { ok: true, data: content } : { ok: false, error: content.error }
+          } else if (op.kind === 'navigate') {
+            const nav = await service.navigate(boundInstance.instanceId, op.url)
+            result = nav.ok ? { ok: true, data: nav } : { ok: false, error: nav.error }
+          } else if (op.kind === 'click') {
+            const res = await service.dispatchAction({ type: 'click', instanceId: boundInstance.instanceId, refId: op.refId })
+            result = res.ok ? { ok: true, data: res } : { ok: false, error: res.error }
+          } else if (op.kind === 'fill') {
+            const res = await service.dispatchAction({ type: 'fill', instanceId: boundInstance.instanceId, refId: op.refId, text: op.text })
+            result = res.ok ? { ok: true, data: res } : { ok: false, error: res.error }
+          } else if (op.kind === 'press') {
+            const res = await service.dispatchAction({ type: 'press', instanceId: boundInstance.instanceId, key: op.key })
+            result = res.ok ? { ok: true, data: res } : { ok: false, error: res.error }
+          } else if (op.kind === 'scroll') {
+            const res = await service.dispatchAction({ type: 'scroll', instanceId: boundInstance.instanceId, deltaX: op.deltaX, deltaY: op.deltaY })
+            result = res.ok ? { ok: true, data: res } : { ok: false, error: res.error }
+          } else {
+            result = { ok: false, error: '不支持的操作类型。' }
+          }
+        }
+      }
+    } catch (failure) {
+      result = { ok: false, error: failure instanceof Error ? failure.message : String(failure) }
+    }
+
+    if (this.active !== record || record.exited || record.closing || event.bindingId !== this.sessionSnapshot.bindingId) {
+      return
+    }
+
+    try {
+      record.child.postMessage({
+        version: SDK_HOST_PROTOCOL_VERSION,
+        hostId: record.hostId,
+        requestId: event.requestId,
+        type: 'browser-operation-result',
+        bindingId: event.bindingId,
+        result
+      } satisfies SdkHostRequest)
+    } catch {
+      this.failTransport(record, '无法向宿主发送浏览器操作结果')
+    }
   }
 
   /**

@@ -1,17 +1,31 @@
 <!--
   内置浏览器面板：工具栏、空白起始页、受限 webview，以及与网页共用视口的固定画面批注浮层。
-  编排截图、元素选择及切走／导航时的取消；批注交付意图由工作区接线到目标对话。
+  编排截图、元素选择、项目级存储分区隔离与主进程受管实例登记；批注交付意图由工作区接线到目标对话。
 
   面板与对话/终端/文件视图混排在同一工作区面板层，保持挂载以避免切换时页面 DOM 和 JavaScript 状态丢失。
 -->
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { BLANK_PAGE_URL, normalizeBrowserUrl } from '../../../../shared/browser-api'
+import { getProjectBrowserPartition } from '../../../../shared/browser-session-api'
+import type { BrowserControlState } from '../../../../shared/browser-session-api'
 import { useBrowserStore } from '../stores/browser'
 import { useBrowserAnnotationsStore } from '../stores/browser-annotations'
-import { cancelBrowserElementPick, captureBrowser, pickBrowserElement } from '../services/capture'
+import {
+  bindBrowserSession,
+  cancelBrowserElementPick,
+  captureBrowser,
+  pickBrowserElement,
+  queryBrowserState,
+  registerBrowserInstance,
+  releaseBrowserSession,
+  resumeBrowser,
+  takeoverBrowser,
+  unregisterBrowserInstance
+} from '../services/capture'
 import type { BrowserAnnotationDocument } from '../stores/browser-annotations'
 import BrowserAnnotationPanel from './BrowserAnnotationPanel.vue'
+import BrowserControlBanner from './BrowserControlBanner.vue'
 import ConfirmDialog from '../../ui/ConfirmDialog.vue'
 import { openExternalUrl } from '../../editor/services/external-url'
 import BrowserToolbar from './BrowserToolbar.vue'
@@ -40,6 +54,16 @@ let pickPreviousVisible = false
 const browserStore = useBrowserStore()
 const toolbarRef = ref<InstanceType<typeof BrowserToolbar> | null>(null)
 const webviewRef = ref<any>(null)
+const controlState = ref<BrowserControlState | null>(null)
+
+/** 刷新当前浏览器实例的控制权与接管状态。 */
+async function refreshControlState(): Promise<void> {
+  try {
+    controlState.value = await queryBrowserState(props.tabKey)
+  } catch {
+    // 忽略刷新异常
+  }
+}
 
 /** 当前标签状态；若缺失由 store 立即初始化。 */
 const tabState = computed(() => {
@@ -49,6 +73,30 @@ const tabState = computed(() => {
 const isBlank = computed(() => {
   return !tabState.value.url || tabState.value.url === BLANK_PAGE_URL
 })
+
+/** 按所属项目派生的独立持久存储分区。 */
+const partition = computed(() => getProjectBrowserPartition(tabState.value.projectPath))
+
+/** 将 webview 实例与主进程权威注册表同步。 */
+async function syncInstanceRegistration(): Promise<void> {
+  const webview = webviewRef.value
+  if (!webview || typeof webview.getWebContentsId !== 'function') return
+  try {
+    const webContentsId = webview.getWebContentsId()
+    if (webContentsId && webContentsId > 0) {
+      await registerBrowserInstance({
+        instanceId: props.tabKey,
+        projectPath: tabState.value.projectPath,
+        webContentsId,
+        url: tabState.value.url,
+        title: tabState.value.title
+      })
+      await refreshControlState()
+    }
+  } catch {
+    // webview 销毁或未完全初始化时静默忽略
+  }
+}
 
 async function takeScreenshot(): Promise<void> {
   if (capturing.value || !props.active) return
@@ -78,6 +126,10 @@ async function takeScreenshot(): Promise<void> {
 }
 
 function onAnnotate(): void {
+  // 进入批注前暂停自动化交互，防止画面与输入分叉
+  if (controlState.value && (controlState.value.phase === 'attached' || controlState.value.phase === 'running')) {
+    void takeoverBrowser(props.tabKey, '用户正在进行截图标注').then(() => refreshControlState())
+  }
   if (pickingElement.value) cancelElementPick()
   if (annotationDocument.value) annotationDocument.value.visible = true
   else void takeScreenshot()
@@ -106,6 +158,10 @@ function cancelElementPick(): void {
 
 async function startElementPick(): Promise<void> {
   if (capturing.value || pickingElement.value || !props.active || isBlank.value || tabState.value.loading) return
+  // 进入元素拾取前暂停自动化交互
+  if (controlState.value && (controlState.value.phase === 'attached' || controlState.value.phase === 'running')) {
+    void takeoverBrowser(props.tabKey, '用户正在进行元素选取').then(() => refreshControlState())
+  }
   captureError.value = null
   pickingElement.value = true
   const sequence = ++pickSequence
@@ -239,17 +295,24 @@ function bindWebviewEvents(webview: any): void {
     browserStore.updateNavigationState(props.tabKey, { loading: false, canGoBack, canGoForward })
   })
 
+  webview.addEventListener('dom-ready', () => {
+    void syncInstanceRegistration()
+  })
+
   webview.addEventListener('did-navigate', (event: any) => {
     browserStore.updateNavigationState(props.tabKey, { url: event.url, error: null })
+    void syncInstanceRegistration()
   })
 
   webview.addEventListener('did-navigate-in-page', (event: any) => {
     if (pickingElement.value) cancelElementPick()
     browserStore.updateNavigationState(props.tabKey, { url: event.url })
+    void syncInstanceRegistration()
   })
 
   webview.addEventListener('page-title-updated', (event: any) => {
     browserStore.updateNavigationState(props.tabKey, { title: event.title })
+    void syncInstanceRegistration()
   })
 
   webview.addEventListener('did-fail-load', (event: any) => {
@@ -273,10 +336,52 @@ watch(webviewRef, (el) => {
   if (el) bindWebviewEvents(el)
 })
 
+async function onBannerBind(sessionId: string): Promise<void> {
+  captureError.value = null
+  const res = await bindBrowserSession({
+    instanceId: props.tabKey,
+    sessionId,
+    runId: 1,
+    generation: 1
+  })
+  if (res.ok) {
+    controlState.value = res.state
+  } else {
+    captureError.value = res.error
+  }
+}
+
+async function onBannerRelease(): Promise<void> {
+  const sessionId = controlState.value?.sessionId
+  if (!sessionId) return
+  await releaseBrowserSession(props.tabKey, sessionId)
+  await refreshControlState()
+}
+
+async function onBannerTakeover(): Promise<void> {
+  await takeoverBrowser(props.tabKey, '用户手动接管')
+  await refreshControlState()
+}
+
+async function onBannerResume(): Promise<void> {
+  await resumeBrowser(props.tabKey)
+  await refreshControlState()
+}
+
+watch(() => props.active, (active) => {
+  if (active) void refreshControlState()
+})
+
 onMounted(() => {
   if (webviewRef.value) {
     bindWebviewEvents(webviewRef.value)
+    void syncInstanceRegistration()
   }
+  void refreshControlState()
+})
+
+onUnmounted(() => {
+  void unregisterBrowserInstance(props.tabKey)
 })
 </script>
 
@@ -305,6 +410,18 @@ onMounted(() => {
       @input-change="onInputChange"
       @annotate="onAnnotate"
     />
+
+    <!-- 自动化控制状态与人工接管/恢复横幅 -->
+    <BrowserControlBanner
+      :tab-key="props.tabKey"
+      :control-state="controlState"
+      :targets="props.targets"
+      @bind="onBannerBind"
+      @release="onBannerRelease"
+      @takeover="onBannerTakeover"
+      @resume="onBannerResume"
+    />
+
     <p v-if="captureError" class="p-2 text-xs text-red-500" role="alert">{{ captureError }}</p>
     <p v-if="pickingElement" class="p-2 text-xs" role="status">悬停高亮网页元素，点击选择；按 Esc 或点击取消退出。</p>
 
@@ -370,7 +487,7 @@ onMounted(() => {
       :inert="annotationDocument?.visible"
       :aria-hidden="annotationDocument?.visible"
       :src="tabState.url"
-      partition="persist:desktop-browser"
+      :partition="partition"
     />
     <BrowserAnnotationPanel v-if="annotationDocument?.visible" :document="annotationDocument" :targets="props.targets" :error="props.deliveryError" @close="annotationDocument.visible = false" @recapture="onRecapture" @deliver="(target, text, file) => emit('deliver', props.tabKey, target, text, file)" />
     </div>

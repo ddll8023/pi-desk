@@ -31,6 +31,8 @@
 | `src/sdk-host/image-annotations.ts` | 按提交的异步作用域附带本轮独立图片说明消息，不改写提示词或预先排入下一轮 |
 | `src/sdk-host/log-reader.ts` | 日志读取：把已授权的会话文件按查询解析成历史页、轮次页或原文续段，不建会话、不加载扩展与 MCP；按文件版本有界复用多个会话的解析结果，并把最新首页写入检查点 |
 | `src/sdk-host/extension-ui-bridge.ts` | SDK UI 回调到宿主消息的适配及取消 |
+| `src/sdk-host/browser/tools.ts` | 内置浏览器操控工具定义（快照、正文、导航、点击、输入、按键、滚动）与 A11y 树格式化 |
+| `src/sdk-host/browser/index.ts` | 内置浏览器扩展工厂接入 |
 
 ### 会话投影与契约
 
@@ -99,6 +101,7 @@
 - [供应商](providers-auth.md)：`RuntimeModelSelect.vue` 提供模型选择，持久默认模型不等于当前会话模型；`UsageDetailDialog.vue` 经认证服务读取 Codex 账户额度，查询机制与凭据边界由供应商模块维护。
 - [文件](files-editor.md)：`project-file` Store 提供 `@` 文件候选；[资源](resources-mcp.md) 提供技能和命令补全；[偏好](preferences.md) 提供快捷输入。
 - [生成式界面](genui.md)：宿主注册内置扩展，工具投影识别其载荷，消息组件分发到专用渲染器。
+- [工作区标签](workspace-tabs.md)：宿主挂载内置浏览器扩展，通过 `browser-operation` 反向协议由主进程 `BrowserSessionService` 复核会话代际并派发动作，驱动绑定的受管浏览器实例。
 
 ## 关键调用链
 

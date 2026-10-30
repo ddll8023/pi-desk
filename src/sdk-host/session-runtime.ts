@@ -8,6 +8,7 @@ import { ExtensionUiBridge } from './extension-ui-bridge'
 import { ImageAnnotationContext } from './image-annotations'
 import type { ImageAnnotationDocument } from '../shared/image-annotation'
 import { createGenuiExtension, GENUI_EXTENSION_NAME } from './genui/index'
+import { createBrowserExtension, BROWSER_EXTENSION_NAME } from './browser/index'
 import { MessageProjection } from './projection/message-projection'
 import { ActivityProjection, matchesActivityPrefix } from './projection/activity-projection'
 import type { ActivityCheckpointState } from './projection/activity-projection'
@@ -17,6 +18,7 @@ import type { ActivityCheckpointIdentity, ProjectionCheckpoints } from './projec
 import { OutputRateTracker } from './projection/output-rate'
 import { SDK_HOST_PROTOCOL_VERSION } from './protocol'
 import type {
+  SdkBrowserOperation, SdkBrowserOperationResult,
   SdkHostFailureCode, SdkMcpCommandAction, SdkSessionAuthorization, SdkSessionReference, SdkSessionRequest,
   SdkSessionStatus, SdkSessionTarget
 } from './protocol'
@@ -39,6 +41,8 @@ interface RuntimeOptions {
   readonly onEntryMap: (bindingId: number, messageId: string, entryId: string) => void
   /** 进程内检查点：首页由日志读取提供，稳定活动由绑定累计；两类状态分别复用。 */
   readonly checkpoints: ProjectionCheckpoints
+  /** 浏览器操作派发函数。 */
+  readonly browserOperator?: (bindingId: number, operation: SdkBrowserOperation) => Promise<SdkBrowserOperationResult>
 }
 const SETTLE_TIMEOUT_MS = 5_000
 /** 会话统计补读的最小间隔：状态推送频繁，不能每次取状态都遍历会话条目。 */
@@ -798,6 +802,20 @@ export class SdkSessionRuntime {
           // 用户关掉开关时直接不注册，而不是注册后再报错：这样模型完全看不到这几个工具。
           ...(target.genui
             ? [{ name: GENUI_EXTENSION_NAME, factory: createGenuiExtension(), builtin: true, replaceable: true }]
+            : []),
+          // 内置浏览器自动化工具扩展
+          ...(this.options.browserOperator
+            ? [{
+                name: BROWSER_EXTENSION_NAME,
+                factory: createBrowserExtension((op) => {
+                  if (!this.valid || this.bindingId === null) {
+                    return Promise.resolve({ ok: false, error: '当前会话未建立有效绑定。' })
+                  }
+                  return this.options.browserOperator!(this.bindingId, op)
+                }),
+                builtin: true,
+                replaceable: true
+              }]
             : []),
           // 图片资料是独立上下文消息，不改写提示词，也不提供新的模型工具。
           this.imageAnnotations.extension,

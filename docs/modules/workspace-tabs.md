@@ -16,11 +16,15 @@
 | `src/renderer/src/workspace/stores/session-tab-bridge.ts` | 标签读取会话状态与原标签待提交输入的只读视图及提供者注册；标签不直接 import 会话 Store |
 | `src/renderer/src/workspace/components/WorkspaceTabBar.vue` | 标签渲染、选择／关闭／重命名／排序事件与新建菜单 |
 | `src/main/browser/element-picker.ts` | 在隔离世界运行的固定元素选择脚本、悬停高亮、有限上下文采集、取消与画面变化检查 |
+| `src/main/browser/browser-session-service.ts` | 主进程浏览器会话服务，管理受管实例注册表、独占绑定租约与人工接管状态机 |
+| `src/main/browser/browser-cdp-adapter.ts` | CDP 协议适配器，负责基于 webContents.debugger 的无障碍快照、正文提取、动态盒模型定位与点击/填充/按键/滚动事件派发 |
 | `src/shared/browser-api.ts` | 浏览器标签与 URL 工具、截图／元素选择／取消契约及结果校验 |
+| `src/shared/browser-session-api.ts` | 受管浏览器实例登记、项目存储分区派生、会话独占控制权与接管状态机契约及校验 |
 | `src/renderer/src/browser/stores/browser.ts` | 各浏览器标签的导航、地址输入与加载状态 |
 | `src/renderer/src/browser/stores/browser-annotations.ts` | 按标签保存固定截图、元素上下文、批注及交付指纹，判断未交付内容并回收状态 |
 | `src/renderer/src/browser/services/capture.ts` | 截图、元素选择与取消的受限桥接调用及异常展示 |
 | `src/renderer/src/browser/components/BrowserView.vue` | webview、截图与元素选择编排、原位批注浮层及替换确认 |
+| `src/renderer/src/browser/components/BrowserControlBanner.vue` | 浏览器控制权状态与人工接管/恢复横幅，提供会话绑定选择、一键接管与恢复控制 |
 | `src/renderer/src/browser/components/BrowserToolbar.vue` | 导航、地址输入、标注／元素选择与取消、DevTools 及外链入口 |
 | `src/renderer/src/browser/components/BrowserAnnotationPanel.vue` | 同视口固定画面、点框编号、悬浮意见编辑与列表、键盘调整、上下文及草稿交付预览 |
 | `src/renderer/src/browser/browser-api.test.ts` | URL 规范化的测试源码 |
@@ -36,7 +40,7 @@
 - [会话](sessions-chat.md)：会话打开与列表状态、原标签的待提交输入经 `src/renderer/src/workspace/stores/session-tab-bridge.ts` 的视图读取，打开链收敛动作也由该视图转交；接口以该文件的 `SessionTabState` 为准，提供者由 `src/renderer/src/shell/use-app-startup.ts` 注册；打开请求由 `src/renderer/src/sessions/stores/session.ts` 的 `open`、`openIntent` 承接，`ChatOpenIntent` 定义于 `src/renderer/src/workspace/stores/workspace-tabs.ts`；`src/renderer/src/sessions/stores/session-runs.ts` 提供运行清单与结束动作；`src/renderer/src/sessions/stores/session-view.ts` 消费新草稿身份与绑定映射，负责输入留底及附件回收。
 - [文件](files-editor.md)：`src/renderer/src/editor/stores/project-editor.ts` 拥有编辑记录，标签只引用其 key 与脏状态。
 - [终端](terminal-commands.md)：`src/renderer/src/workspace/stores/terminal.ts` 提供真实清单、创建、关闭、命名与写入；快捷命令经 `runQuickCommand` 始终创建新终端标签再写入，不复用现有终端。
-- 浏览器主进程与桥接：`src/main/browser/ipc.ts` 的 `registerBrowserHandlers` 由 `src/main/app-lifecycle.ts` 注册；可信主窗口只能操作自己所属的 webview。`src/preload/browser.ts` 提供固定截图、元素选择与取消方法，不暴露任意脚本执行；页面接口并入公共桥接与环境声明。
+- 浏览器主进程与桥接：`src/main/browser/ipc.ts` 的 `registerBrowserHandlers` 由 `src/main/app-lifecycle.ts` 注册；主进程 `src/main/browser/browser-session-service.ts` 维护受管 webview 实例注册表与独占会话租约，通过 `src/main/browser/browser-cdp-adapter.ts` 提供有界无障碍快照、正文提取与有限动作派发，可信主窗口只能操作自己所属的 webview；`src/main/window.ts` 动态应用按项目派生的独立持久分区并实施安全收紧。`src/preload/browser.ts` 提供截图、元素选择、实例登记、会话绑定、接管、恢复、页面快照、正文与动作派发方法，不暴露任意脚本执行；渲染端通过 `BrowserControlBanner.vue` 与 `BrowserView.vue` 呈现控制状态并响应人工接管与恢复，并在发起截图标注时主动挂起自动化操控；页面接口并入公共桥接与环境声明。
 - 批注输入交接：[会话输入](sessions-chat.md)中的 `PromptComposer.vue` 通过 `mergeBrowserAnnotation` 复核输入状态、模型图片能力与附件限制，`session-view.ts` 的 `annotationTargetMatches` 只负责身份核对；工作区不直接覆盖后台草稿。
 - [F-ui](shared.md#f-ui前端共享展示共享)、[F-style](shared.md#f-style全局主题与业务样式混合)：标签菜单浮层、公共按钮与全局标签样式。
 
