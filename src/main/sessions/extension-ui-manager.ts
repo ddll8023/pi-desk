@@ -4,8 +4,8 @@
  * 只消费已分类的 `extension_ui_request` 记录与页面提交的 dialog 响应，按代际持有状态并广播快照；
  * 不持有进程，不解析其他记录族，dialog 响应写回由持有者负责（SDK 宿主的 `respondDialog`）。
  * 随会话代际退出或切换清空，不持久化。`setTitle` 无桌面等价物，只计数不展示。
- * 所有进入状态的展示文本都在这里先剥 ANSI 转义序列再截断：Extension 常给文本上色，
- * 页面按纯文本插值，否则转义序列会变成可见字符，截断也会切出半截序列。
+ * 普通展示文本先剥 ANSI 再截断；确认正文例外，必须在协议上限内原样保留，
+ * 页面按纯文本插值并滚动展示，不能批准一份已经截断或改写的审批正文。
  */
 import type {
   ExtensionDialogRequest,
@@ -19,7 +19,7 @@ import { projectExtensionUiRequest } from '../../shared/extension-ui-api'
 
 /** 通知列表条数上限；超出丢弃最旧条目。 */
 const MAX_NOTIFICATIONS = 10
-/** 单条 Extension 展示文本（通知、状态、widget 行、对话框字段与编辑器填充）的上限；超出截断并如实使用截断文本。 */
+/** 普通 Extension 展示文本上限；确认正文使用协议上限，不在此截断。 */
 const MAX_TEXT_CHARS = 4_000
 /** status 条目数上限；超出丢弃最旧 key。 */
 const MAX_STATUSES = 16
@@ -58,13 +58,14 @@ function sanitizeText(text: string): string {
   return truncate(text.replace(ANSI_ESCAPE, ''), MAX_TEXT_CHARS)
 }
 
-/** dialog 的展示字段逐项清洗；id、method 与 timeoutMs 是协议字段，原样保留。 */
+/** 普通字段逐项清洗；confirm 正文及身份字段原样保留，上限由协议投影校验。 */
 function sanitizeDialog(dialog: ExtensionDialogRequest): ExtensionDialogRequest {
   return {
     ...dialog,
     title: sanitizeText(dialog.title),
     options: dialog.options.map((option) => sanitizeText(option)),
-    message: dialog.message === null ? null : sanitizeText(dialog.message),
+    message: dialog.method === 'confirm' ? dialog.message
+      : dialog.message === null ? null : sanitizeText(dialog.message),
     placeholder: dialog.placeholder === null ? null : sanitizeText(dialog.placeholder),
     prefill: dialog.prefill === null ? null : sanitizeText(dialog.prefill)
   }

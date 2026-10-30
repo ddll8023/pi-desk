@@ -26,8 +26,17 @@ function displayText(text: string): string {
   return text.replace(/\u001b\[[0-9;]*m/g, '').slice(0, MAX_DISPLAY_CHARS)
 }
 
+/** 宿主侧能力扩展，不修改 SDK 类型；两版 SDK 的 UI 包装均保留可枚举字段。 */
+interface DesktopExtensionUi extends ExtensionUIContext {
+  readonly piDeskConfirmCapabilities: () => {
+    readonly version: 1
+    readonly fullText: true
+    readonly maxMessageChars: number
+  } | null
+}
+
 export class ExtensionUiBridge {
-  readonly ui: ExtensionUIContext
+  readonly ui: DesktopExtensionUi
   private readonly pending = new Map<string, PendingDialog>()
   private active = true
   private suspended = false
@@ -39,6 +48,10 @@ export class ExtensionUiBridge {
     // 官方默认上下文保留 theme 和 TUI-only 的现有降级行为，不导入未公开的 SDK 深路径。
     this.ui = {
       ...base,
+      // 仅声明完整正文展示能力，不是用户批准，也不为其他 RPC 客户端作保证。
+      piDeskConfirmCapabilities: () => this.active && !this.suspended
+        ? { version: 1, fullText: true, maxMessageChars: EXTENSION_CONFIRM_MESSAGE_MAX_CHARS }
+        : null,
       select: async (title, choices, opts) => {
         const values = new Map(choices.map(value => [displayText(value), value]))
         if (values.size !== choices.length) throw this.unavailable('选项清洗后身份不唯一，无法安全显示。')
