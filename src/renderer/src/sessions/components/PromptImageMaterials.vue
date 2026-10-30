@@ -1,4 +1,4 @@
-<!-- 输入坞内图片附件展示与独立标注：支持点击图片进入标注面板，空状态不占位。 -->
+<!-- 输入坞内图片附件展示与独立标注：缩略图与独立标注按钮均支持进入标注面板，在非破坏性操作期间保持可用，空状态不占位。 -->
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { emptyImageAnnotations, imageAnnotationError } from '../../../../shared/image-annotation'
@@ -133,6 +133,19 @@ watch(selected, image => {
           >{{ formatBytes(image.file.size) }} · 点击标注</span>
         </span>
       </button>
+      <AppButton
+        variant="ghost"
+        class="shrink-0 text-desk-muted hover:text-desk-accent px-1.5 py-0.5 text-2xs h-auto flex items-center gap-1"
+        :disabled="disabled"
+        :aria-label="`标注图片 ${image.file.name}`"
+        :title="`打开标注面板：${image.file.name}`"
+        @click="edit(image)"
+      >
+        <svg viewBox="0 0 16 16" class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M11.5 2.5l2 2-8 8H3.5v-2zM9.5 4.5l2 2" />
+        </svg>
+        <span>标注</span>
+      </AppButton>
       <AppButton
         variant="ghost"
         class="shrink-0 text-desk-muted hover:text-desk-ink"

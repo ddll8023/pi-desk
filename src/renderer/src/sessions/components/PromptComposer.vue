@@ -1,7 +1,7 @@
 <!-- 图片与编号说明由坞内附件区独立管理；点击发送即固定提示词、图片及标注快照，说明由 SDK 独立资料消息承接。
      结果未确认时可补读同步，确认结束原运行后恢复输入，不自动重发。
      原位新建以独立草稿承接输入：旧实例结束期间可编辑但不发送，首次发送才建立新会话。
-     Prompt 输入坞：处理输入法组合态、Enter 发送与 Shift+Enter 换行、焦点回归与重复提交、响应侧栏「新建」的聚焦请求并给出一次性提示，并在 Agent 运行期间原位提供停止入口；同时承接 Extension 的 set_editor_text 填充文本、图片附件的选择/粘贴/拖拽三种入口、输入行按内容自动增高、快捷发送下拉（短语取自界面偏好，可在设置里增删改与排序）、Pi 命令的斜杠模糊补全（Runtime 就绪后用运行中的命令清单，未就绪时用主进程预读的技能清单，按类型分组并按匹配优先级排序；另含 Desktop 层自己拦截的界面命令）与 `@` 项目文件引用（只写入相对路径文本，不传文件内容）；右侧文件树的行拖入坞内也走同一条相对路径引用规则。底部工具条左侧是信息行：异常与进行中的状态文本、被收起的 Extension 对话入口与会话用量指标（缓存命中率、上下文占用与平均速率，点击开明细；累计 token 与费用只在明细浮层展示）；右侧是模型选择、附件、快捷发送与发送/停止按钮。Extension 的 setStatus 项不在输入区展示。 -->
+     Prompt 输入坞：处理输入法组合态、Enter 发送与 Shift+Enter 换行、焦点回归与重复提交、响应侧栏「新建」的聚焦请求并给出一次性提示，并在 Agent 运行期间原位提供停止入口；在 Agent 运行与流式响应期间草稿文本、图片附件与标注编辑保持可用，点击发送时才校验会话空闲；同时承接 Extension 的 set_editor_text 填充文本、图片附件的选择/文本框与活动视窗全局快捷粘贴（兼容系统截图提取）/拖拽入口、输入行按内容自动增高、快捷发送下拉（短语取自界面偏好，可在设置里增删改与排序）、Pi 命令的斜杠模糊补全（Runtime 就绪后用运行中的命令清单，未就绪时用主进程预读的技能清单，按类型分组并按匹配优先级排序；另含 Desktop 层自己拦截的界面命令）与 `@` 项目文件引用（只写入相对路径文本，不传文件内容）；右侧文件树的行拖入坞内也走同一条相对路径引用规则。底部工具条左侧是信息行：异常与进行中的状态文本、被收起的 Extension 对话入口与会话用量指标（缓存命中率、上下文占用与平均速率，点击开明细；累计 token 与费用只在明细浮层展示）；右侧是模型选择、附件、快捷发送与发送/停止按钮。Extension 的 setStatus 项不在输入区展示。 -->
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
@@ -231,9 +231,24 @@ const canSend = computed(() => (
     && !incompleteImageAnnotations.value && (pendingImages.value.length === 0 || imageSupported.value !== false)
     && sessionViewStore.pendingPrompt === null
 ))
-/** 图片入口（选择、粘贴、拖拽）共用同一套禁用条件，避免三条路径行为不一致。 */
+/**
+ * 附件草稿与标注编辑的禁用条件：与发送动作（canSubmit）解耦。
+ * 在 Agent 流式输出或执行工具期间仍允许用户上传、粘贴和标注图片草稿；
+ * 仅在破坏性生命周期操作（回退、压缩、切换模型、正在准备提交等）或项目未就绪时禁用。
+ */
+const imageMaterialDisabled = computed(() => {
+  if (!props.active || projectStore.currentProject === null) return true
+  if (sessionViewStore.pendingPrompt?.phase === 'recovering' || preparingPrompt.value) return true
+  if (modelSwitchView.value.phase === 'switching' || rewindView.value.phase === 'requesting'
+    || compactView.value.phase === 'requesting' || (rewindView.value.phase === 'error' && rewindView.value.blocked)) {
+    return true
+  }
+  return false
+})
+
+/** 图片入口（选择、粘贴、拖拽）共用同一套禁用条件：在 material 禁用的基础上加上模型支持和张数限制。 */
 const attachDisabled = computed(() => (
-  !canSubmit.value || imageSupported.value === false || pendingImages.value.length >= MAX_IMAGE_COUNT
+  imageMaterialDisabled.value || imageSupported.value === false || pendingImages.value.length >= MAX_IMAGE_COUNT
 ))
 
 /** 官方拒绝（上下文太小、刚压缩过、被取消）的真实原因由聊天里的压缩记录表达，只有传输级失败才占用信息行。 */
@@ -442,7 +457,7 @@ const MAX_INPUT_HEIGHT = 200
 
 /** 标注只更新所属图片资料；提示词草稿保持原样，迟到的弹层更新不能创建附件。 */
 function updateImageAnnotations(objectUrl: string, annotations: ImageAnnotationDocument): void {
-  if (!canSubmit.value) return
+  if (imageMaterialDisabled.value) return
   pendingImages.value = pendingImages.value.map(image => image.objectUrl === objectUrl
     ? { ...image, annotations: cloneImageAnnotations(annotations) } : image)
 }
@@ -450,6 +465,37 @@ function updateImageAnnotations(objectUrl: string, annotations: ImageAnnotationD
 /** 粘贴与拖拽图片：只提取白名单内的图片文件，文本粘贴仍走浏览器默认行为。 */
 function pickImageFiles(files: readonly File[]): readonly File[] {
   return files.filter((file) => IMAGE_MIME_TYPES.includes(file.type))
+}
+
+/**
+ * 从剪贴板提取图片文件，兼容 items 与 files 两种途径。
+ * 截图软件或内存位图常存在于 DataTransferItem，且可能无明确文件名。
+ */
+function extractClipboardImages(clipboardData: DataTransfer | null): File[] {
+  if (!clipboardData) return []
+  const files: File[] = []
+  const items = clipboardData.items
+  if (items && items.length > 0) {
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i]
+      if (item.kind === 'file' && item.type.startsWith('image/')) {
+        const file = item.getAsFile()
+        if (file && IMAGE_MIME_TYPES.includes(file.type)) {
+          const ext = file.type.split('/')[1] || 'png'
+          const name = file.name && file.name.trim() !== '' && file.name !== 'image.png'
+            ? file.name
+            : `screenshot-${new Date().toISOString().replace(/[-:T.]/g, '').slice(0, 14)}.${ext}`
+          const normalizedFile = file.name === name ? file : new File([file], name, { type: file.type })
+          files.push(normalizedFile)
+        }
+      }
+    }
+  }
+  if (files.length === 0 && clipboardData.files && clipboardData.files.length > 0) {
+    const fromFiles = pickImageFiles([...clipboardData.files])
+    files.push(...fromFiles)
+  }
+  return files
 }
 
 /** 文件选择、粘贴与拖拽的共用图片校验；浏览器批注由合并入口单独核对目标及附件限制。 */
@@ -473,11 +519,29 @@ function addImageFiles(files: readonly File[]): void {
 }
 
 function onPaste(event: ClipboardEvent): void {
-  const files = pickImageFiles([...(event.clipboardData?.files ?? [])])
+  const files = extractClipboardImages(event.clipboardData)
   if (files.length === 0 || attachDisabled.value) return
   // 命中图片时必须拦下默认行为，否则剪贴板里的文件名会被当文本插进草稿。
   event.preventDefault()
   addImageFiles(files)
+}
+
+/**
+ * 视窗全局快捷粘贴：当当前对话激活且焦点未在其他输入控件时，捕获粘贴的图片并自动聚焦输入坞。
+ */
+function onGlobalPaste(event: ClipboardEvent): void {
+  if (!props.active || attachDisabled.value) return
+  const target = event.target
+  if (target === textarea.value) return
+  if (target instanceof HTMLInputElement || (target instanceof HTMLTextAreaElement && target !== textarea.value)
+    || (target instanceof HTMLElement && target.isContentEditable)) {
+    return
+  }
+  const files = extractClipboardImages(event.clipboardData)
+  if (files.length === 0) return
+  event.preventDefault()
+  addImageFiles(files)
+  textarea.value?.focus()
 }
 
 /** 数据里带文件才认作附件拖拽，普通文本拖拽仍交给浏览器处理。 */
@@ -662,6 +726,7 @@ onUnmounted(() => {
     sessionViewStore.releaseImages(pendingImages.value)
   }
   document.removeEventListener('pointerdown', onDocumentPointerDown)
+  window.removeEventListener('paste', onGlobalPaste)
 })
 
 /** 草稿的每一次写入都重算高度与 `@` 引用：用户输入、Extension 填充、补全写入与命令清空都经这里。 */
@@ -1397,6 +1462,7 @@ onMounted(() => {
   if (props.active) textarea.value?.focus()
   autoGrow()
   document.addEventListener('pointerdown', onDocumentPointerDown)
+  window.addEventListener('paste', onGlobalPaste)
 })
 </script>
 
@@ -1482,7 +1548,7 @@ onMounted(() => {
           :images="pendingImages"
           :input-key="sessionViewStore.key"
           :active="props.active"
-          :disabled="!canSubmit"
+          :disabled="imageMaterialDisabled"
           :attach-disabled="attachDisabled"
           @add="addImageFiles"
           @remove="removeImage"
