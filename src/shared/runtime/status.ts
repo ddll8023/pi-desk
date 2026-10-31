@@ -134,6 +134,8 @@ export interface RuntimeRewindRequest {
   readonly runtimeId: number
   readonly sessionId: string
   readonly messageId: string
+  /** 是否联动将代码重置回该轮消息发起前的状态（仅在工作树隔离会话下生效）。 */
+  readonly revertCode?: boolean
 }
 
 /** text 是 Pi 返回的完整原文；渲染端当前不消费该字段，回退与重新发送均使用页面编辑框内的文本。 */

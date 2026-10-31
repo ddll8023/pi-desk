@@ -46,7 +46,7 @@ const FILE_KEY_PREFIX = 'file:'
 export const NEW_CHAT_INPUT_PREFIX = 'new-chat:'
 
 /** 可通过「新建」菜单主动创建的类型；文件标签只能由打开文件产生，不在新建入口里。 */
-export type WorkspaceTabKind = 'chat' | 'terminal' | 'browser'
+export type WorkspaceTabKind = 'chat' | 'worktree-chat' | 'terminal' | 'browser'
 
 /** 当前项目打开的内置浏览器标签模型。 */
 export interface OpenBrowserTab {
@@ -133,6 +133,14 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
   const renames = ref<Readonly<Record<string, string>>>({})
   /** 已结束回复但用户还没看过的对话标签键；只在内存里，不跨应用重启恢复。 */
   const unseenCompletions = ref<ReadonlySet<string>>(new Set())
+  /** 标签绑定的独立隔离工作树映射（key -> { path, branch }） */
+  const tabWorktrees = ref<Record<string, { path: string; branch: string }>>({})
+
+  const activeWorktree = computed(() => {
+    const key = activeTab.value
+    if (key === null) return null
+    return tabWorktrees.value[key] ?? null
+  })
   /** 待确认关闭的文件或浏览器标签键；确认前保留未保存修改或未交付批注。 */
   const pendingCloseKey = ref<string | null>(null)
   /** 上一次广播时正在执行的实例：只有由执行中变为已结束才算一轮回复完成，初始快照不产生标记。 */
@@ -484,6 +492,35 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     if (projectPath !== currentProjectPath.value) await projectStore.select(projectPath, false, 'session')
     if (version !== selectionVersion || projectPath !== currentProjectPath.value || !hasChatTabKey(projectPath, key)) return null
     return focusIntent(projectPath, key)
+  }
+
+  /**
+   * 新建一个隔离工作树对话标签：
+   * 自动在主进程创建独立 Git 工作树（.pi/worktrees/task-xxx），并建立关联对话标签。
+   */
+  async function openNewWorktreeChatTab(projectPath: string | null = currentProjectPath.value): Promise<ChatOpenIntent | null> {
+    if (projectPath === null) return null
+    const branchName = `task-${Date.now().toString().slice(-6)}`
+    if (window.desktop) {
+      const createRes = await window.desktop.createWorktree({ branchName })
+      if (!createRes.ok) {
+        console.error('创建隔离工作树失败：', createRes.error.message)
+        return null
+      }
+      const key = createChatTab(projectPath)
+      tabWorktrees.value[key] = {
+        path: createRes.worktree.path,
+        branch: createRes.worktree.branch ?? branchName
+      }
+      appendKey(projectPath, key)
+      selectLocal(projectPath, key)
+      return focusIntent(projectPath, key)
+    }
+    return openNewChatTab(projectPath)
+  }
+
+  function clearWorktreeOfTab(key: string): void {
+    delete tabWorktrees.value[key]
   }
 
   /**
@@ -1235,6 +1272,10 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     createTerminalTab,
     runQuickCommand,
     openNewChatTab,
+    openNewWorktreeChatTab,
+    activeWorktree,
+    tabWorktrees,
+    clearWorktreeOfTab,
     openFileTab,
     startNewChatInTab,
     closeTab,

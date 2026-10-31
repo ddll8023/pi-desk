@@ -31,10 +31,12 @@ import type { AuthApi } from '../shared/auth-api'
 import type { ModelsConfigApi } from '../shared/models-config-api'
 import type { UpdatesApi } from '../shared/updates-api'
 import type { GitApi } from '../shared/git-api'
+import type { WorktreeApi } from '../shared/worktree-api'
 import type { LanRemoteApi } from '../shared/lan-remote-api'
 import { desktopApi } from './desktop'
 import { genuiApi } from './genui'
 import { gitApi } from './git'
+import { worktreeApi } from './worktree'
 import { preferencesApi } from './preferences'
 import { projectsApi } from './projects'
 import { providersApi } from './providers'
@@ -46,7 +48,7 @@ import { updatesApi } from './updates'
 import { lanRemoteApi } from './lan-remote'
 
 /** 合并后的桥接对象：各域键互不重叠，平铺后仍是页面看到的同一份 `DesktopApi` 契约。 */
-const desktop: BrowserCaptureApi & BrowserSessionApi & DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionApi & SessionRunApi & TerminalApi & PreferencesApi & QuickCommandsApi & GenuiParamsApi & PiSettingsApi & TrustApi & ExtensionUiApi & AuthApi & ModelsConfigApi & UpdatesApi & GitApi & LanRemoteApi = {
+const desktop: BrowserCaptureApi & BrowserSessionApi & DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionApi & SessionRunApi & TerminalApi & PreferencesApi & QuickCommandsApi & GenuiParamsApi & PiSettingsApi & TrustApi & ExtensionUiApi & AuthApi & ModelsConfigApi & UpdatesApi & GitApi & WorktreeApi & LanRemoteApi = {
   ...desktopApi,
   ...browserApi,
   ...projectsApi,
@@ -54,6 +56,7 @@ const desktop: BrowserCaptureApi & BrowserSessionApi & DesktopApi & RuntimeApi &
   ...runtimeApi,
   ...terminalApi,
   ...gitApi,
+  ...worktreeApi,
   ...preferencesApi,
   ...providersApi,
   ...updatesApi,

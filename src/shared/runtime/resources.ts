@@ -246,11 +246,13 @@ export function isRuntimeSetModelRequest(value: unknown): value is RuntimeSetMod
 /** 回退只接受明确的运行实例、Runtime、会话和投影消息身份。 */
 export function isRuntimeRewindRequest(value: unknown): value is RuntimeRewindRequest {
   if (!isRecord(value)) return false
+  const revertCodeOk = value.revertCode === undefined || typeof value.revertCode === 'boolean'
   return typeof value.runId === 'number' && Number.isSafeInteger(value.runId) && value.runId > 0
     && typeof value.runtimeId === 'number' && Number.isSafeInteger(value.runtimeId) && value.runtimeId > 0
     && typeof value.sessionId === 'string' && value.sessionId.trim() !== '' && value.sessionId.length <= 256
     && typeof value.messageId === 'string' && value.messageId.trim() !== '' && value.messageId.length <= 128
-    && Object.keys(value).every(key => key === 'runId' || key === 'runtimeId' || key === 'sessionId' || key === 'messageId')
+    && revertCodeOk
+    && Object.keys(value).every(key => key === 'runId' || key === 'runtimeId' || key === 'sessionId' || key === 'messageId' || key === 'revertCode')
 }
 
 /** 压缩只接受明确的运行实例、Runtime、会话身份，以及有界或缺失的说明文本。 */

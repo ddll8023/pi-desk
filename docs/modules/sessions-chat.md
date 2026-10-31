@@ -58,6 +58,7 @@
 | `src/renderer/src/sessions/stores/session.ts` | 按项目的列表窗口与读取调度、串行打开／重载、按标签意图提交打开、删除与待确认目标 |
 | `src/renderer/src/sessions/stores/session-runs.ts` | 运行清单、副本状态、释放与结束 |
 | `src/renderer/src/sessions/stores/session-view.ts` | 会话输入、阅读与展开状态，按标签保存待发送快照、核对同步并保留未确认输入，原位新草稿的独立留底、浏览器批注交付目标身份核对及图片与绑定标注的移交、还原与回收 |
+| `src/renderer/src/sessions/stores/session-branch.ts` | 会话多分支历史归档、按轮分支状态与索引切换 |
 | `src/renderer/src/sessions/stores/chat-navigation.ts` | 对话内跳转登记：按会话键发布轮次入口与当前轮，并转交一次性跳转意图 |
 | `src/renderer/src/sessions/stores/extension-ui.ts` | 运行目标的扩展对话、通知、widget 展示副本 |
 | `src/renderer/src/sessions/services/session.ts` | 会话请求桥接 |
@@ -78,8 +79,10 @@
 | `src/renderer/src/sessions/components/PromptImageMaterials.vue` | 输入坞内图片附件行：导入、移除、缩略图与独立标注按钮双入口、标注数量展示 |
 | `src/renderer/src/sessions/components/ImageAnnotationPanel.vue` | 左图右说明的独立标注面板、编号双向定位、同步删除与键盘调整入口 |
 | `src/renderer/src/sessions/components/ImageAnnotationCanvas.vue` | 共用原图坐标系的编号与点框叠加层，支持编辑及桌面／手机只读展示，不修改图片像素 |
-| `src/renderer/src/sessions/components/ChatMessageList.vue` | 本地待发送／结果未确认状态及绑定图片标注展示、权威消息交接、历史加载、滚动与布局观察；向顶部栏发布对话跳转入口并执行跳转 |
-| `src/renderer/src/sessions/components/ChatTurnItem.vue` | 按轮摘要、展开与原文内容 |
+| `src/renderer/src/sessions/components/ChatMessageList.vue` | 本地待发送／结果未确认状态及绑定图片标注展示、权威消息交接、历史加载、滚动与布局观察；向顶部栏发布对话跳转入口并执行跳转；承接工作树隔离任务横幅挂载 |
+| `src/renderer/src/sessions/components/ChatTurnItem.vue` | 按轮摘要、展开与原文内容，以及轮次多分支切换器的挂载与响应渲染 |
+| `src/renderer/src/sessions/components/TurnBranchSwitcher.vue` | 轮次多分支微型切换器（`‹ 1 / 2 ›`） |
+| `src/renderer/src/sessions/components/WorktreeTaskBanner.vue` | 隔离工作树任务状态底栏、审阅合并（支持 Squash 与自动清理）与放弃删除流程 |
 | `src/renderer/src/sessions/components/ChatMessageItem.vue` | 单消息、图片编号及对应说明、思考、工具归组面板与生成式界面分发 |
 | `src/renderer/src/sessions/components/HistoryLoadSentinel.vue` | 历史加载触发哨兵 |
 | `src/renderer/src/sessions/components/ToolCard.vue` | 工具卡：摘要行、变更 Diff、参数与结果二级折叠 |
@@ -112,7 +115,7 @@
 3. 宿主请求会话目标准备，主进程按来源实例的归属项目复核目标，再返回绑定代际与目录；宿主不能自行编号授权。
 4. 输入坞点击发送即固定本次提示词、图片及绑定标注、清空本次输入，并按原标签显示本地待发送消息；目标未就绪时先走会话打开链，就绪且投影同步后经 Runtime 服务提交固定目标与输入快照。提示词照常进入命令、输入处理器与模板管线，图片说明在实际启动用户轮次时作为 SDK 独立附属消息提供。SDK 事件转换成消息、工具与活动投影，图片标注关联回原用户消息；主进程广播到可信页面。本地待发送展示与 SDK 受理、正式投影到达是不同阶段。
 5. 页面校验代际／序号并应用增量；切回已缓存的实例时直接复用分片与模型清单，仅在换代、缺基准、序号断档或宿主失效时取快照；同一绑定的快照水位不倒退；早期历史和超长正文按会话读取当前分支，不接受任意文件路径，分支已变时按权威基准重建一次。
-6. 回退基于官方条目身份建立新分支；压缩由 SDK 处理。成功请求和最终展示收敛不是同一个时点。
+6. 回退基于官方条目身份建立新分支，并在执行前将当前分支的回复归档至多分支历史栈；处于隔离工作树时，Rewind 支持联动将工作树代码硬重置至提问发起前的基准状态，实现代码时光倒流；压缩由 SDK 处理。成功请求和最终展示收敛不是同一个时点。
 7. 删除会话先按登记占用结束或释放实例，再删除受限会话文件并刷新列表。关闭标签保留历史，与删除不同。
 
 ## 状态与边界

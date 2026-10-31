@@ -10,6 +10,8 @@ import type { ChatMessageView, ChatTurnView } from '../chat-view'
 import { formatDuration, useTickingNow } from '../clock'
 import { formatTokens } from '../usage-format'
 import ChatMessageItem from './ChatMessageItem.vue'
+import { useSessionBranchStore } from '../stores/session-branch'
+import TurnBranchSwitcher from './TurnBranchSwitcher.vue'
 
 const props = defineProps<{
   readonly turn: ChatTurnView
@@ -39,9 +41,19 @@ const emit = defineEmits<{
   userExpand: []
 }>()
 
+const sessionBranchStore = useSessionBranchStore()
+const branchState = computed(() => {
+  return sessionBranchStore.getBranchState(props.ownerKey, props.turn.key, props.turn.responses)
+})
+const displayedResponses = computed(() => branchState.value.displayedResponses)
+
+function handleSelectBranch(index: number): void {
+  sessionBranchStore.selectBranch(props.ownerKey, props.turn.key, index)
+}
+
 /** 会话开头没有用户消息的前置轮：摘要文案要区分，不把历史残片说成某一轮回答。 */
 const isLead = computed(() => props.turn.user === null)
-const hasResponses = computed(() => props.turn.responseCount > 0)
+const hasResponses = computed(() => displayedResponses.value.length > 0)
 /**
  * 摘要行同时是收起与展开的入口：历史轮始终显示；当前轮展开时隐藏，
  * 否则会在回答正文上方多出一层无意义的标题。
@@ -103,7 +115,7 @@ const summaryTitle = computed(() => {
 })
 
 /** 多条 AI 消息（工具往返）时说明条数，单条不显示冗余的「1 条」。 */
-const countText = computed(() => (props.turn.responseCount > 1 ? `${props.turn.responseCount} 条` : null))
+const countText = computed(() => (displayedResponses.value.length > 1 ? `${displayedResponses.value.length} 条` : null))
 
 /**
  * 本轮响应耗时：与消息头部同一口径，取自用户消息上的本轮计时。
@@ -149,6 +161,13 @@ const metaText = computed(() => [durationText.value, usageText.value].filter(par
       @user-expand="emit('userExpand')"
     />
 
+    <TurnBranchSwitcher
+      v-if="turn.user !== null"
+      :current-index="branchState.currentIndex"
+      :total="branchState.total"
+      @select="handleSelectBranch"
+    />
+
     <HistoryLoadSentinel
       v-if="needsInitialDetails && detail?.error"
       :cursor="turn.historyId ?? turn.key"
@@ -173,7 +192,7 @@ const metaText = computed(() => [durationText.value, usageText.value].filter(par
 
     <template v-if="expanded">
       <ChatMessageItem
-        v-for="(message, responseIndex) in turn.responses"
+        v-for="(message, responseIndex) in displayedResponses"
         :key="message.id"
         :message="message"
         :compact-header="responseIndex > 0"

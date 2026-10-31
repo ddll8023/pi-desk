@@ -22,6 +22,7 @@
  */
 import { HOST_IDLE_RECLAIM_MS, SdkHostError, SDK_HOST_FAILURE_MESSAGES } from './sdk-host-manager'
 import type { SdkHostErrorCode, SdkHostManager, SdkHostStatus } from './sdk-host-manager'
+import { turnSnapshotService } from '../services'
 import { isSdkHostFailureCode, emptySdkSessionStatus } from '../../sdk-host/protocol'
 import type {
   SdkInterruptConfirmation, SdkLogTarget, SdkSessionReference, SdkSessionStatus
@@ -1077,6 +1078,10 @@ export class SdkRuntimeBridge {
     }
     this.keepAlive(matched.run.runId)
     const host = matched.run.owner
+    const worktreePath = host.getCurrentTarget()?.worktreePath
+    if (request.revertCode === true && worktreePath) {
+      await turnSnapshotService.revertToTurnSnapshot(worktreePath, request.messageId)
+    }
     try {
       const result = await host.rewind(request.messageId)
       // 宿主在结果帧之前已发布回退后的会话状态，因此这里读到的是权威实际状态。

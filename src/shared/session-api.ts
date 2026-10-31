@@ -122,17 +122,22 @@ export interface SessionOpenRequest {
   readonly projectPath: string
   readonly sessionId: string | null
   readonly allowInterrupt: boolean
+  /** 可选的隔离工作树路径；指定时该会话的 SDK 宿主工具以此工作树作为 CWD 执行。 */
+  readonly worktreePath?: string | null
 }
 
 /** 打开请求固定项目归属，不允许在异步信任检查后重新解释当前项目。 */
 export function isSessionOpenRequest(value: unknown): value is SessionOpenRequest {
   if (!isRecord(value)) return false
-  if (Object.keys(value).some(key => !['projectPath', 'sessionId', 'allowInterrupt'].includes(key))) return false
+  if (Object.keys(value).some(key => !['projectPath', 'sessionId', 'allowInterrupt', 'worktreePath'].includes(key))) return false
+  const worktreePathOk = value.worktreePath === undefined || value.worktreePath === null
+    || (typeof value.worktreePath === 'string' && value.worktreePath.trim() !== '' && value.worktreePath.length <= MAX_PROJECT_PATH_LENGTH)
   return typeof value.projectPath === 'string' && value.projectPath.trim() !== ''
     && value.projectPath.length <= MAX_PROJECT_PATH_LENGTH
     && (value.sessionId === null || (typeof value.sessionId === 'string'
       && value.sessionId.trim() !== '' && value.sessionId.length <= 255))
     && typeof value.allowInterrupt === 'boolean'
+    && worktreePathOk
 }
 
 /**

@@ -87,12 +87,18 @@ export async function readSessionFirstPage(
 export async function openSession(
   projectPath: string,
   sessionId: string | null,
-  allowInterrupt: boolean
+  allowInterrupt: boolean,
+  worktreePath?: string | null
 ): Promise<SessionOpenResult> {
   const bridge = window.desktop
   if (!bridge || typeof bridge.openSession !== 'function') return unavailable()
   try {
-    const request: SessionOpenRequest = { projectPath, sessionId, allowInterrupt }
+    const request: SessionOpenRequest = {
+      projectPath,
+      sessionId,
+      allowInterrupt,
+      ...(worktreePath ? { worktreePath } : {})
+    }
     return await bridge.openSession(request)
   } catch (error) {
     return callFailed(error)

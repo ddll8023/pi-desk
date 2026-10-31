@@ -155,6 +155,10 @@ async function onCreateTab(kind: WorkspaceTabKind): Promise<void> {
     submitOpen(await workspaceTabsStore.openNewChatTab())
     return
   }
+  if (kind === 'worktree-chat') {
+    submitOpen(await workspaceTabsStore.openNewWorktreeChatTab())
+    return
+  }
   if (kind === 'browser') {
     await workspaceTabsStore.openBrowserTab()
     return

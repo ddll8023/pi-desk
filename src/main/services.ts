@@ -15,6 +15,8 @@ import { ProjectFileContent } from './projects/project-file-content'
 import { ProjectHtmlPreview } from './projects/project-html-preview'
 import { ProjectFileIndex } from './projects/project-file-index'
 import { GitService } from './git/git-service'
+import { WorktreeService } from './git/worktree-service'
+import { TurnSnapshotService } from './git/turn-snapshot-service'
 import { ProjectManager } from './projects/project-manager'
 import { McpInspectionManager } from './resources/mcp-inspection'
 import { createReadOnlyHost, SdkHostManager } from './sessions/sdk-host-manager'
@@ -130,6 +132,14 @@ export const projectHtmlPreview = new ProjectHtmlPreview(resolveRegisteredProjec
 export const gitService = new GitService({
   currentProjectPath: () => projectManager.currentProjectPath()
 })
+
+/** Git 工作树隔离管理服务：多工作树列举、隔离工作树创建、依赖软链接编排与安全清理。 */
+export const worktreeService = new WorktreeService({
+  currentProjectPath: () => projectManager.currentProjectPath()
+})
+
+/** Turn 代码快照服务：工作树隔离会话下的轮次快照打标与 Rewind 精确时光倒流。 */
+export const turnSnapshotService = new TurnSnapshotService()
 
 /** 认证执行端：管理认证辅助进程，凭据读写全在官方实现内完成。 */
 export const authManager = new AuthManager({ store: configStore, isPackaged: app.isPackaged })

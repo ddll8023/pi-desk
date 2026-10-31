@@ -88,6 +88,8 @@ export interface SessionManagerOptions {
 }
 
 export class SessionManager {
+  private readonly pendingWorktreePaths = new Map<string, string>()
+
   constructor(private readonly options: SessionManagerOptions) {}
 
   /**
@@ -104,8 +106,10 @@ export class SessionManager {
       if (trust.resources.length > 0 && trust.decision === null) throw new SdkTargetFailure('TRUST_REQUIRED')
       const identity = reference.kind === 'new' ? null : await resolveSdkSessionFile(projectPath, reference)
       if (!this.options.ownership.isProjectActive(projectPath)) throw new SdkTargetFailure('STALE_SESSION')
+      const worktreePath = this.pendingWorktreePaths.get(projectPath) ?? null
       return { projectPath, sessionDir: getProjectSessionDir(projectPath), trusted: trust.decision === 'trusted',
         genui: await this.genuiEnabled(),
+        worktreePath,
         sessionId: identity?.sessionId ?? null, sessionFile: identity?.sessionFile ?? null,
         fileStamp: identity?.fileStamp ?? null }
     } catch (error) {
@@ -244,6 +248,11 @@ export class SessionManager {
     // 后台请求不分配选择序号，避免打断尚未完成的桌面前台选择。
     const selection = placement === 'foreground' ? this.options.sdk.beginSelection() : null
     const projectPath = await normalizeProjectPath(request.projectPath)
+    if (request.worktreePath) {
+      this.pendingWorktreePaths.set(projectPath, request.worktreePath)
+    } else {
+      this.pendingWorktreePaths.delete(projectPath)
+    }
     if (!await this.options.projects.hasProject(projectPath)) {
       throw new SessionFailure('INVALID_PROJECT_PATH', '只能打开已添加项目的会话。')
     }

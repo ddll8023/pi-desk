@@ -323,18 +323,21 @@ export class SdkSessionRuntime {
         if (request.action === 'reload') await this.reload(fresh)
         else {
           this.factoryTarget = fresh
+          const effectiveCwd = (typeof fresh.worktreePath === 'string' && fresh.worktreePath.trim() !== '')
+            ? fresh.worktreePath.trim()
+            : fresh.projectPath
           if (request.action === 'open') {
             if (fresh.sessionFile === null) throw new SdkSessionFailure('INVALID_SESSION_TARGET')
             if (this.runtime !== null && this.valid) {
-              const result = await this.runtime.switchSession(fresh.sessionFile, { cwdOverride: fresh.projectPath })
+              const result = await this.runtime.switchSession(fresh.sessionFile, { cwdOverride: effectiveCwd })
               cancelled = result.cancelled
-            } else await this.createInitial(this.sdk.SessionManager.open(fresh.sessionFile, fresh.sessionDir, fresh.projectPath))
-          } else if (this.runtime !== null && this.valid && samePath(this.runtime.cwd, fresh.projectPath)) {
+            } else await this.createInitial(this.sdk.SessionManager.open(fresh.sessionFile, fresh.sessionDir, effectiveCwd))
+          } else if (this.runtime !== null && this.valid && samePath(this.runtime.cwd, effectiveCwd)) {
             const result = await this.runtime.newSession()
             cancelled = result.cancelled
           } else {
             await this.closeCurrent()
-            await this.createInitial(this.sdk.SessionManager.create(fresh.projectPath, fresh.sessionDir))
+            await this.createInitial(this.sdk.SessionManager.create(effectiveCwd, fresh.sessionDir))
           }
         }
       } else {
@@ -843,8 +846,11 @@ export class SdkSessionRuntime {
   private async createInitial(manager: AgentSession['sessionManager'], reason: 'startup' | 'reload' = 'startup'): Promise<void> {
     const target = this.factoryTarget
     if (target === null) throw new SdkSessionFailure('INVALID_SESSION_TARGET')
+    const effectiveCwd = (typeof target.worktreePath === 'string' && target.worktreePath.trim() !== '')
+      ? target.worktreePath.trim()
+      : target.projectPath
     this.runtime = await this.sdk.createAgentSessionRuntime(this.createRuntime, {
-      cwd: target.projectPath, agentDir: this.options.agentDir, sessionManager: manager,
+      cwd: effectiveCwd, agentDir: this.options.agentDir, sessionManager: manager,
       ...(reason === 'reload' ? { sessionStartEvent: { type: 'session_start' as const, reason: 'reload' as const } } : {})
     })
     this.runtime.setBeforeSessionInvalidate(() => this.invalidateCurrent())
@@ -1192,7 +1198,10 @@ export class SdkSessionRuntime {
       fresh = authorized.target
       this.pendingGeneration = authorized.generation
       await this.precheck(fresh)
-      manager = this.sdk.SessionManager.open(fresh.sessionFile ?? session.sessionFile, fresh.sessionDir, fresh.projectPath)
+      const effectiveCwd = (typeof fresh.worktreePath === 'string' && fresh.worktreePath.trim() !== '')
+        ? fresh.worktreePath.trim()
+        : fresh.projectPath
+      manager = this.sdk.SessionManager.open(fresh.sessionFile ?? session.sessionFile, fresh.sessionDir, effectiveCwd)
     } else if (session.messages.some(message => message.role === 'user' || message.role === 'assistant')) {
       throw new SdkSessionFailure('SESSION_NOT_FOUND')
     }

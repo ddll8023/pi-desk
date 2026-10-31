@@ -4,9 +4,9 @@
 
 ## 职责与入口
 
-负责当前项目对应仓库的状态、工作区／暂存区差异、提交历史、提交详情与差异、单条目及批量暂存／取消暂存／丢弃（含整组快捷操作与差异视图就地操作）、提交、拉取和推送。入口为右侧“源代码管理”页签、文件动作和历史视图。
+负责当前项目对应仓库的状态、工作区／暂存区差异、提交历史、提交详情与差异、单条目及批量暂存／取消暂存／丢弃（含整组快捷操作与差异视图就地操作）、提交、拉取和推送，以及任务维度的 Git Worktree 物理隔离、多工作树列举、依赖软链接编排、主分支安全合入与清理、轮次代码快照与 Rewind 硬重置。入口为右侧“源代码管理”页签、文件动作、历史视图及会话工作树操作条。
 
-不自行实现 Git 存储，不创建隔离工作树，不替 Agent 的 Git 操作做事务管理。项目目录与仓库根可能不同，路径折算由主进程完成。
+不自行实现 Git 存储，不替 Agent 的常规 Git 操作做外部事务管理。项目目录与仓库根可能不同，路径折算由主进程完成。
 
 ## 专属文件
 
@@ -15,11 +15,18 @@
 | `src/main/git/git-service.ts` | 仓库操作用例、路径折算、状态／差异／历史及写动作结果 |
 | `src/main/git/git-command.ts` | 固定命令参数、外部 git 执行、输出限制、超时与错误 |
 | `src/main/git/git-repository.ts` | 仓库根与上下文、仓库状态和项目路径边界 |
+| `src/main/git/worktree-service.ts` | 多工作树列举、创建、合入、清理及依赖软链接编排 |
+| `src/main/git/worktree-service.test.ts` | 工作树 porcelain 解析单元测试 |
+| `src/main/git/worktree-ipc.ts` | 工作树 IPC 注册与信任门禁 |
+| `src/main/git/turn-snapshot-service.ts` | 轮次代码快照提交与 Rewind 硬重置 |
+| `src/main/git/turn-snapshot-service.test.ts` | 快照提交提取与回退目标计算单元测试 |
 | `src/main/git/git-status-parser.ts` | porcelain v2 增量状态解析 |
 | `src/main/git/git-status-parser.test.ts` | 现有分块、重命名、冲突与路径解析用例 |
 | `src/main/git/git-history-parser.ts` | 提交历史及提交文件清单解析 |
 | `src/main/git/git-history-parser.test.ts` | 现有历史字段、重命名和二进制记录用例 |
 | `src/shared/git-api.ts` | 状态、差异、历史、写操作请求及校验 |
+| `src/shared/worktree-api.ts` | 工作树数据模型、合并契约与类型守卫 |
+| `src/preload/worktree.ts` | 工作树 preload 桥接与响应校验 |
 | `src/renderer/src/git/stores/git-status.ts` | 状态跟踪、差异、写动作及待信任重试 |
 | `src/renderer/src/git/stores/git-history.ts` | 历史分页、提交详情与提交内差异 |
 | `src/renderer/src/git/services/git.ts` | Git 固定桥接方法 |
@@ -46,6 +53,7 @@
 2. 服务传递单路径或批量项目内相对路径、差异区域或受限提交标识，主进程定位仓库并折算路径，页面不提交任意 git 参数。
 3. 读取状态／差异／历史走各自解析和展示模型；写动作成功返回新的状态，页面不自行拼凑仓库真相；前端状态落地与历史加载核验当前项目归属，丢弃跨项目切换时的迟到快照。
 4. 写动作遇到信任拦截时保留意图，通过统一信任交互决定后重试；错误通过动作状态展示。
+5. 工作树隔离链路：在 `.pi/worktrees/` 下建立带分支的独立工作树并自动追加 `.gitignore` 规则，复用依赖软链接；会话交互完成时打标快照提交（`pi-desk: turn-<msgId>`），并在 Rewind 确认时联动执行工作树硬重置；任务交付后提供合入主分支（支持 Squash）与级联删除临时工作树的保护闭环。
 
 ## 数据与安全边界
 

@@ -24,6 +24,7 @@ import type {
 } from '../../shared/runtime-api'
 import type { BrowserSessionService } from '../browser/browser-session-service'
 import { sendToRenderer } from '../window-channel'
+import { turnSnapshotService } from '../services'
 import { BROWSER_AUTO_ATTACH_EVENT } from '../../shared/browser-session-api'
 import type { BrowserAutoAttachPayload } from '../../shared/browser-session-api'
 import { ExtensionUiManager } from './extension-ui-manager'
@@ -263,6 +264,8 @@ export class SdkHostManager {
   private recoveryTimer: ReturnType<typeof setTimeout> | null = null
   private readonly listeners = new Set<(status: SdkHostStatus) => void>()
   private authority: SdkSessionAuthority | null = null
+  private currentTarget: SdkSessionTarget | null = null
+  private lastUserMessageId: string | null = null
   private sessionSnapshot = emptySdkSessionStatus()
   private sessionSubmission: string | null = null
   private uncertainOperationId: string | null = null
@@ -308,6 +311,7 @@ export class SdkHostManager {
   }
 
   /** 主进程提供唯一目标授权；不让宿主自行决定项目、信任或任意路径。 */
+  getCurrentTarget(): SdkSessionTarget | null { return this.currentTarget }
   setSessionAuthority(authority: SdkSessionAuthority): void { this.authority = authority }
 
   /**
@@ -599,6 +603,7 @@ export class SdkHostManager {
         target = await this.authority(action === 'open' ? reference : { kind: 'new' },
           this.requireOwnerProject())
         if (!isSdkSessionTarget(target)) throw new SdkHostError('INVALID_SESSION_TARGET', FAILURE_MESSAGES.INVALID_SESSION_TARGET)
+        this.currentTarget = target
       }
       if (this.active !== record || record.closing || expected.bindingId !== this.sessionSnapshot.bindingId) {
         throw new SdkHostError('STALE_SESSION', FAILURE_MESSAGES.STALE_SESSION)
@@ -981,6 +986,9 @@ export class SdkHostManager {
     // 宿主当前不再报告该操作在执行即视为已收敛，不依赖中间是否见过开始事件。
     if (this.uncertainOperationId !== null
       && status.operationId !== this.uncertainOperationId) this.uncertainOperationId = null
+    if (previous.phase === 'busy' && status.phase === 'ready' && this.currentTarget?.worktreePath && this.lastUserMessageId !== null) {
+      void turnSnapshotService.createTurnSnapshot(this.currentTarget.worktreePath, this.lastUserMessageId)
+    }
     this.publishSession()
   }
 
@@ -1005,6 +1013,7 @@ export class SdkHostManager {
       }
       target = await this.authority(event.reference, ownerProjectPath)
       if (!isSdkSessionTarget(target)) throw new SdkHostError('INVALID_SESSION_TARGET', FAILURE_MESSAGES.INVALID_SESSION_TARGET)
+      this.currentTarget = target
       // 代际紧邻实际重绑前分配；授权失败不分配，编号缺口不影响唯一性。
       generation = this.options.runs.allocateGeneration(this.options.runId)
     } catch (failure) { error = this.authorizationFailure(failure); target = null; generation = null }
@@ -1160,6 +1169,11 @@ export class SdkHostManager {
 
   /** 批次只转发给订阅方；主进程不重算投影，也不重发旧代际批次。 */
   private publishProjection(batch: ProjectionBatch): void {
+    for (const msg of batch.messages) {
+      if (msg.role === 'user') {
+        this.lastUserMessageId = msg.id
+      }
+    }
     for (const listener of [...this.projectionListeners]) {
       try { listener(batch) } catch { /* 展示消费者不能改变会话所有权。 */ }
     }

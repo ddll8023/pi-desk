@@ -424,6 +424,9 @@ function onMenuKeydown(event: KeyboardEvent, close: () => void, popup: HTMLEleme
         <AppButton variant="unstyled" class="project-sidebar-menu-item" role="menuitem" @click="createTab('chat')">
           新建对话
         </AppButton>
+        <AppButton variant="unstyled" class="project-sidebar-menu-item" role="menuitem" @click="createTab('worktree-chat')">
+          新建隔离工作树对话
+        </AppButton>
         <AppButton variant="unstyled" class="project-sidebar-menu-item" role="menuitem" @click="createTab('browser')">
           新建浏览器
         </AppButton>

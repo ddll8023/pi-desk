@@ -22,6 +22,8 @@ import HistoryLoadSentinel from './HistoryLoadSentinel.vue'
 import AppButton from '../../ui/AppButton.vue'
 import ConfirmDialog from '../../ui/ConfirmDialog.vue'
 import ImageAnnotationCanvas from './ImageAnnotationCanvas.vue'
+import WorktreeTaskBanner from './WorktreeTaskBanner.vue'
+import { useSessionBranchStore } from '../stores/session-branch'
 
 /** 距底部多少像素内仍视为"停在底部"，避免流式更新时与用户上滚互相争夺。 */
 const STICK_THRESHOLD_PX = 24
@@ -35,6 +37,7 @@ const runtimeStore = useRuntimeStore()
 const sessionStore = useSessionStore()
 const sessionViewStore = useSessionViewStore()
 const chatNavigation = useChatNavigationStore()
+const sessionBranchStore = useSessionBranchStore()
 const { view: runtimeView, displayMessages: messages, displayTools: tools, history, projectionSync, projectionTruncated, droppedMessages, droppedTools,
   promptView, preparingPrompt, modelSwitchView, rewindView } = storeToRefs(runtimeStore)
 /** 会话视图的稳定键：宿主被回收（挂起）时仍指向同一会话，消息组件不重建。 */
@@ -151,7 +154,7 @@ const rewindBlockReason = computed<string | null>(() => {
   return null
 })
 const canRewind = computed(() => rewindBlockReason.value === null)
-const rewindDetail = computed(() => '回退会新建一条会话继续，原会话保留在本机但不再单独列出。仅回退对话，不撤销项目文件改动；原消息文本会回到输入框。')
+const rewindDetail = computed(() => '回退会新建一条会话分支继续，原消息文本将恢复至输入框。若当前会话处于隔离工作树，将联动撤销该轮及后续的代码改动，使工作区精确还原到提问发起前的状态。')
 
 /** 目标消息的可提交内容（文本与可还原附件）；目标已不在投影里时返回 null，调用方据此不发起回退。 */
 function userMessagePayloadOf(messageId: string): UserMessagePayload | null {
@@ -189,14 +192,29 @@ function requestRewind(messageId: string): void {
   if (runId === null || runtimeId === null || sessionId == null) return
   const refill = userMessagePayloadOf(messageId)
   if (refill === null) return
-  pendingRewind.value = { request: { runId, runtimeId, sessionId, messageId }, refill }
+  pendingRewind.value = { request: { runId, runtimeId, sessionId, messageId, revertCode: true }, refill }
 }
 
 /** 直接回退：成功后按提示词与图片资料各自的编辑位置交回原输入；仅权威成功才刷新会话列表。 */
+function archiveAffectedBranches(targetMessageId: string): void {
+  const currentKey = activeKey.value
+  if (!currentKey) return
+  let found = false
+  for (const turn of turns.value) {
+    if (turn.user?.id === targetMessageId) {
+      found = true
+    }
+    if (found && turn.responses.length > 0) {
+      sessionBranchStore.archiveBranch(currentKey, turn.key, turn.responses)
+    }
+  }
+}
+
 async function confirmRewind(): Promise<void> {
   const pending = pendingRewind.value
   pendingRewind.value = null
   if (pending === null || !canRewind.value) return
+  archiveAffectedBranches(pending.request.messageId)
   const version = displayVersion
   if (!await runtimeStore.rewind(pending.request) || version !== displayVersion) return
   handBack(pending.refill, '回退')
@@ -215,8 +233,9 @@ async function handleSubmitEdit(messageId: string, text: string): Promise<void> 
   if (runId === null || runtimeId === null || sessionId == null) return
   const refill = userMessagePayloadOf(messageId)
   if (refill === null) return
-  const request: RuntimeRewindRequest = { runId, runtimeId, sessionId, messageId }
+  const request: RuntimeRewindRequest = { runId, runtimeId, sessionId, messageId, revertCode: true }
   const version = displayVersion
+  archiveAffectedBranches(messageId)
   pendingEdit.value = true
   try {
     // 回退失败时保持编辑态，用户可再次尝试；但会话身份已变说明分叉确已发生，
@@ -911,6 +930,8 @@ onBeforeUnmount(() => {
         </article>
       </div>
     </div>
+
+    <WorktreeTaskBanner />
 
     <ConfirmDialog
       :open="!props.hidden && pendingRewind !== null"

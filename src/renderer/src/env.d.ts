@@ -5,6 +5,7 @@ import type { DesktopApi } from '../../shared/desktop-api'
 import type { AuthApi } from '../../shared/auth-api'
 import type { ExtensionUiApi } from '../../shared/extension-ui-api'
 import type { GitApi } from '../../shared/git-api'
+import type { WorktreeApi } from '../../shared/worktree-api'
 import type { GenuiParamsApi } from '../../shared/genui-params-api'
 import type { ModelsConfigApi } from '../../shared/models-config-api'
 import type { PiSettingsApi } from '../../shared/pi-settings-api'
@@ -23,7 +24,7 @@ import type { BrowserCaptureApi } from '../../shared/browser-api'
 
 declare global {
   interface Window {
-    readonly desktop?: BrowserCaptureApi & DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionApi & SessionRunApi & TerminalApi & PreferencesApi & QuickCommandsApi & GenuiParamsApi & PiSettingsApi & TrustApi & ExtensionUiApi & AuthApi & ModelsConfigApi & UpdatesApi & GitApi & LanRemoteApi
+    readonly desktop?: BrowserCaptureApi & DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionApi & SessionRunApi & TerminalApi & PreferencesApi & QuickCommandsApi & GenuiParamsApi & PiSettingsApi & TrustApi & ExtensionUiApi & AuthApi & ModelsConfigApi & UpdatesApi & GitApi & WorktreeApi & LanRemoteApi
   }
 }
 

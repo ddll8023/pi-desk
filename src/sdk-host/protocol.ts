@@ -45,6 +45,8 @@ export interface SdkSessionTarget {
   readonly trusted: boolean
   /** 是否注册生成式 UI 内置扩展；由主进程按用户开关给出，宿主只负责据此决定注册与否。 */
   readonly genui: boolean
+  /** 可选的隔离工作树路径；若存在则会话工具的 CWD 重定向至此隔离目录。 */
+  readonly worktreePath?: string | null
 }
 
 /**

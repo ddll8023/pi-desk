@@ -387,7 +387,8 @@ export const useSessionStore = defineStore('session', () => {
       }
       // 同一空标签的前一次打开可能刚收敛；此时复用实际身份，不能再次按 null 新建并遗留旧实例。
       const requestedSessionId = sessionId ?? tabs.sessionIdForTab(targetPath, key)
-      const result = await openSession(targetPath, requestedSessionId, allowInterrupt)
+      const worktreePath = tabs.tabWorktrees[key]?.path ?? null
+      const result = await openSession(targetPath, requestedSessionId, allowInterrupt, worktreePath)
       if (result.ok) {
         if (result.data.projectPath !== targetPath) {
           if (sequence === openSequence) actionError.value = {
