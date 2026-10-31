@@ -9,7 +9,7 @@ import MobileMessageList from './components/MobileMessageList.vue'
 import MobileInteractionPanel from './components/MobileInteractionPanel.vue'
 
 const {
-  connection, sync, projects, sessions, selectedProject, selectedSession, projection, status, interaction,
+  connection, sync, projects, sessions, activeSessions, selectedProject, selectedSession, projection, status, interaction,
   loadingSessions, remainingSessions, sessionLimit, draft, error, notice, actionBusy, pendingWrite, pairBusy,
   newSessionDraft, canCreateSession, startNewSession, commands, commandsLoading, commandsError, commandsTruncated, loadCommands,
   history, messages, tools, canSend, isRunning, recover, chooseProject, chooseSession, back, loadSessions,
@@ -22,6 +22,21 @@ watch([() => selectedProject.value?.id, () => selectedSession.value?.sessionId, 
 })
 const viewKey = computed(() => sessionKey())
 const currentQuestion = computed(() => interaction.value?.state.dialogs[0] ?? null)
+const runningProject = computed(() => projects.value.find(project => project.activeState === 'running') ?? null)
+/** 获取当前会话在后台的运行状态；空闲时返回 null。 */
+function sessionActiveState(sessionId: string): 'running' | 'waiting' | null {
+  return activeSessions.value.find(item => item.sessionId === sessionId)?.state ?? null
+}
+/** 一键直达正在执行的项目及具体活跃会话。 */
+function jumpToActiveProject(project: typeof projects.value[number]): void {
+  if (actionBusy.value) return
+  if (project.activeSessionId) {
+    chooseProject(project)
+    chooseSession({ sessionId: project.activeSessionId })
+  } else {
+    chooseProject(project)
+  }
+}
 const title = computed(() => newSessionDraft.value ? '新对话' : selectedSession.value ? '对话' : selectedProject.value?.name ?? '你的项目')
 const connectionLabel = computed(() => connection.value === 'checking' || pairBusy.value ? '连接中'
   : connection.value === 'unpaired' ? '未连接' : connection.value === 'blocked' ? '需要更新'
@@ -159,16 +174,47 @@ onBeforeUnmount(() => {
     <main v-else-if="connection === 'blocked'" class="mobile-page scroll-area"><h2>需要更新连接页面</h2><p class="mobile-muted">请刷新手机页面；若桌面版本不匹配，请先更新桌面应用。</p><button type="button" class="control-button" @click="recover">重新检查连接</button></main>
     <main v-else-if="!selectedSession && !newSessionDraft" class="mobile-page scroll-area" :aria-busy="loadingSessions">
       <template v-if="!selectedProject">
+        <div v-if="runningProject" class="mobile-active-banner">
+          <div class="mobile-active-banner-info">
+            <span class="mobile-status-dot is-running" aria-hidden="true" />
+            <span><strong>{{ runningProject.name }}</strong> 正在执行会话</span>
+          </div>
+          <button type="button" class="control-button-primary mobile-active-banner-btn" :disabled="actionBusy" @click="jumpToActiveProject(runningProject)">进入</button>
+        </div>
         <p class="mobile-section-intro">选择要继续的项目。</p>
         <p class="mobile-muted">电脑需保持开机，Pi Desk 与手机访问入口需保持开启。</p>
-        <button v-for="project in projects" :key="project.id" type="button" class="mobile-list-row" :disabled="actionBusy" @click="chooseProject(project)"><span><strong>{{ project.name }}</strong><small>查看会话</small></span><span aria-hidden="true">›</span></button>
+        <button v-for="project in projects" :key="project.id" type="button" class="mobile-list-row" :disabled="actionBusy" @click="chooseProject(project)">
+          <span>
+            <div class="mobile-item-title-row">
+              <strong>{{ project.name }}</strong>
+              <span v-if="project.activeState" class="mobile-status-badge" :class="`is-${project.activeState}`">
+                <span class="mobile-status-dot" :class="`is-${project.activeState}`" aria-hidden="true" />
+                {{ project.activeState === 'running' ? '正在执行' : '等待回应' }}
+              </span>
+            </div>
+            <small>{{ project.activeState === 'running' ? (project.activeCount && project.activeCount > 1 ? `有 ${project.activeCount} 个会话正在进行中…` : '有会话正在进行中…') : project.activeState === 'waiting' ? '有会话等待你的回应' : '查看会话' }}</small>
+          </span>
+          <span aria-hidden="true">›</span>
+        </button>
         <div v-if="!projects.length" class="mobile-empty"><p>{{ connection === 'connected' ? '电脑上还没有项目。' : '等待连接电脑后读取项目。' }}</p><p v-if="connection === 'connected'" class="mobile-muted">先在电脑添加项目，再刷新此页面。</p></div>
         <button type="button" class="control-button" :disabled="actionBusy" @click="recover">刷新项目</button>
       </template>
       <template v-else>
         <div class="mobile-list-heading"><p class="mobile-section-intro">选择会话，或开始新的对话</p><button type="button" class="mobile-link-button" :disabled="loadingSessions || actionBusy" @click="loadSessions(false)">刷新</button></div>
         <button type="button" class="control-button-primary mb-4 w-full" :disabled="!canCreateSession" @click="startNewSession">新建会话</button>
-        <button v-for="session in sessions" :key="session.sessionId" type="button" class="mobile-list-row" :disabled="actionBusy" @click="chooseSession(session)"><span><strong>{{ session.preview || '未命名会话' }}</strong><small>{{ new Date(session.updatedAt).toLocaleString() }}</small></span><span aria-hidden="true">›</span></button>
+        <button v-for="session in sessions" :key="session.sessionId" type="button" class="mobile-list-row" :disabled="actionBusy" @click="chooseSession(session)">
+          <span>
+            <div class="mobile-item-title-row">
+              <strong>{{ session.preview || '未命名会话' }}</strong>
+              <span v-if="sessionActiveState(session.sessionId)" class="mobile-status-badge" :class="`is-${sessionActiveState(session.sessionId)}`">
+                <span class="mobile-status-dot" :class="`is-${sessionActiveState(session.sessionId)}`" aria-hidden="true" />
+                {{ sessionActiveState(session.sessionId) === 'running' ? '正在执行' : '等待回应' }}
+              </span>
+            </div>
+            <small>{{ new Date(session.updatedAt).toLocaleString() }}</small>
+          </span>
+          <span aria-hidden="true">›</span>
+        </button>
         <p v-if="!sessions.length" class="mobile-empty">{{ loadingSessions ? '正在读取会话…' : '该项目还没有会话，点击“新建会话”开始对话。' }}</p>
         <button v-if="remainingSessions > 0 && sessionLimit < MAX_SESSION_WINDOW" type="button" class="control-button" :disabled="loadingSessions" @click="loadSessions(true)">加载更多会话</button>
       </template>

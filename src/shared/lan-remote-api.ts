@@ -165,15 +165,27 @@ export function isLanControlResult(value: unknown): value is LanResult<LanContro
     && typeof data.expiresAt === 'number' && Number.isFinite(data.expiresAt)
 }
 
-/** 手机仅接收已登记项目的显示身份，不接收主机绝对路径。 */
-export interface LanProjectSummary { readonly id: string; readonly name: string }
+/** 手机仅接收已登记项目的显示身份与运行状态，不接收主机绝对路径。 */
+export type LanProjectActiveState = 'running' | 'waiting'
+export interface LanProjectSummary {
+  readonly id: string
+  readonly name: string
+  readonly activeState?: LanProjectActiveState | null
+  readonly activeCount?: number
+  readonly activeSessionId?: string | null
+}
 export interface LanProjects { readonly projects: readonly LanProjectSummary[] }
+export interface LanSessionActiveInfo {
+  readonly sessionId: string
+  readonly state: LanProjectActiveState
+}
 export interface LanSessions {
   readonly projectId: string
   readonly sessions: readonly SessionSummary[]
   readonly remaining: number
   readonly skipped: number
   readonly limit: number
+  readonly activeSessions?: readonly LanSessionActiveInfo[]
 }
 export interface LanConnectionInfo {
   readonly serverId: string
@@ -220,12 +232,17 @@ export function isLanDevice(value: unknown): value is LanDevice {
 }
 export function isLanProjects(value: unknown): value is LanProjects {
   return isLanRecord(value) && Array.isArray(value.projects)
-    && value.projects.every(project => isLanRecord(project) && isLanIdentifier(project.id) && typeof project.name === 'string')
+    && value.projects.every(project => isLanRecord(project) && isLanIdentifier(project.id) && typeof project.name === 'string'
+      && (project.activeState === undefined || project.activeState === null || project.activeState === 'running' || project.activeState === 'waiting')
+      && (project.activeCount === undefined || (typeof project.activeCount === 'number' && Number.isSafeInteger(project.activeCount) && project.activeCount >= 0))
+      && (project.activeSessionId === undefined || project.activeSessionId === null || isLanIdentifier(project.activeSessionId)))
 }
 export function isLanSessions(value: unknown): value is LanSessions {
   return isLanRecord(value) && isLanIdentifier(value.projectId)
     && isSessionListResult({ ok: true, data: { sessions: value.sessions, remaining: value.remaining,
       skipped: value.skipped, limit: value.limit, projectPath: null } })
+    && (value.activeSessions === undefined || (Array.isArray(value.activeSessions) && value.activeSessions.every(entry =>
+      isLanRecord(entry) && isLanIdentifier(entry.sessionId) && (entry.state === 'running' || entry.state === 'waiting'))))
 }
 export function isLanConnectionInfo(value: unknown): value is LanConnectionInfo {
   return isLanRecord(value) && isLanIdentifier(value.serverId) && isLanIdentifier(value.deviceId)

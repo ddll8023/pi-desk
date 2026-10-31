@@ -3,7 +3,10 @@ import { createHash } from 'node:crypto'
 import type { DesktopConfigStore } from '../config/desktop-config-store'
 import type { SessionManager } from '../sessions/session-manager'
 import type { SdkRuntimeBridge } from '../sessions/sdk-runtime-bridge'
-import type { LanCommands, LanCreatedSession, LanOperation, LanRequest, LanResult, LanSessionTarget } from '../../shared/lan-remote-api'
+import type {
+  LanCommands, LanCreatedSession, LanOperation, LanProjectActiveState, LanRequest, LanResult, LanSessionActiveInfo, LanSessionTarget
+} from '../../shared/lan-remote-api'
+import type { SessionRunState } from '../../shared/session-run-api'
 import type { TrustManager } from '../trust/trust-manager'
 import { previewProjectResources, ResourcePreviewError } from '../resources/resource-preview'
 import type { Project } from '../../shared/project-api'
@@ -90,19 +93,73 @@ export class LanSessionService {
     return result
   }
 
+  /** 按项目路径归一化匹配运行实例，提取正在执行（优先）或等待回应的活跃状态与首个会话 ID。 */
+  private getProjectActiveInfo(projectPath: string, runs: readonly SessionRunState[]): {
+    readonly activeState: LanProjectActiveState | null
+    readonly activeCount: number
+    readonly activeSessionId: string | null
+  } {
+    let hasRunning = false
+    let hasWaiting = false
+    let activeCount = 0
+    let activeSessionId: string | null = null
+    const target = projectPath.toLowerCase()
+    for (const run of runs) {
+      if (!run.projectPath || run.projectPath.toLowerCase() !== target) continue
+      if (run.isStreaming) {
+        hasRunning = true
+        activeCount++
+        if (!activeSessionId && run.sessionId) activeSessionId = run.sessionId
+      } else if (run.waitingDialogs > 0) {
+        hasWaiting = true
+        activeCount++
+        if (!activeSessionId && run.sessionId) activeSessionId = run.sessionId
+      }
+    }
+    return {
+      activeState: hasRunning ? 'running' : hasWaiting ? 'waiting' : null,
+      activeCount,
+      activeSessionId
+    }
+  }
+
   private async dispatch(deviceId: string, command: LanOperation): Promise<unknown> {
     this.requireActive()
     if (command.operation === 'projects') {
       const { projects } = await this.store.list()
       await this.devices.requireDevice(deviceId)
       this.requireActive()
-      return { projects: projects.map(project => ({ id: project.id, name: project.name })) }
+      const runs = this.runtime.listRunStates()
+      return {
+        projects: projects.map(project => {
+          const { activeState, activeCount, activeSessionId } = this.getProjectActiveInfo(project.path, runs)
+          return { id: project.id, name: project.name, activeState, activeCount, activeSessionId }
+        })
+      }
     }
     if (command.operation === 'sessions') {
       const project = await this.authorizeProject(deviceId, command.projectId)
       const list = unwrap(await this.sessions.list(project.path, command.limit))
       await this.authorizeProject(deviceId, command.projectId)
-      return { projectId: command.projectId, sessions: list.sessions, remaining: list.remaining, skipped: list.skipped, limit: list.limit }
+      const runs = this.runtime.listRunStates()
+      const target = project.path.toLowerCase()
+      const activeSessions: LanSessionActiveInfo[] = []
+      for (const run of runs) {
+        if (!run.projectPath || run.projectPath.toLowerCase() !== target || !run.sessionId) continue
+        if (run.isStreaming) {
+          activeSessions.push({ sessionId: run.sessionId, state: 'running' })
+        } else if (run.waitingDialogs > 0) {
+          activeSessions.push({ sessionId: run.sessionId, state: 'waiting' })
+        }
+      }
+      return {
+        projectId: command.projectId,
+        sessions: list.sessions,
+        remaining: list.remaining,
+        skipped: list.skipped,
+        limit: list.limit,
+        activeSessions
+      }
     }
     if (command.operation === 'commandPreview') {
       const project = await this.authorizeProject(deviceId, command.projectId)

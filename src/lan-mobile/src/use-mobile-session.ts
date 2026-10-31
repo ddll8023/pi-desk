@@ -4,7 +4,7 @@ import {
   isLanCommands, isLanCreatedSession, isLanHistory, isLanInvalidation, isLanOpenedSession, isLanProjects, isLanSessions, isLanSnapshot,
   isLanRecord, LAN_REMOTE_MAX_MESSAGE_CHARS
 } from '../../shared/lan-remote-api'
-import type { LanCommandEntry, LanCreatedSession, LanProjectSummary, LanRequest, LanSessionTarget, LanSnapshot } from '../../shared/lan-remote-api'
+import type { LanCommandEntry, LanCreatedSession, LanProjectSummary, LanRequest, LanSessionActiveInfo, LanSessionTarget, LanSnapshot } from '../../shared/lan-remote-api'
 import { COMPACT_INSTRUCTIONS_MAX_CHARS, isProjectionBatch, isPromptResult, isRuntimeStatus } from '../../shared/runtime-api'
 import type { HistoryQuery, ProjectionMessage, ProjectionSnapshot, RuntimeStatus, ToolExecution } from '../../shared/runtime-api'
 import { isExtensionUiSnapshot } from '../../shared/extension-ui-api'
@@ -34,6 +34,7 @@ export function useMobileSession() {
   const sync = ref<'idle' | 'connecting' | 'synced' | 'retrying' | 'paused'>('idle')
   const projects = shallowRef<readonly LanProjectSummary[]>([])
   const sessions = shallowRef<readonly SessionSummary[]>([])
+  const activeSessions = shallowRef<readonly LanSessionActiveInfo[]>([])
   const selectedProject = shallowRef<LanProjectSummary | null>(null)
   const selectedSession = shallowRef<MobileSession | null>(null)
   const newSessionDraft = ref(false)
@@ -89,7 +90,7 @@ export function useMobileSession() {
   function cancelRetry(): void { if (retry) clearTimeout(retry); retry = null }
   function keepDraft(): void { if (selectedSession.value || newSessionDraft.value) drafts.set(key(), draft.value) }
   function resetView(): void {
-    keepDraft(); scope += 1; listSequence += 1; loadingSessions.value = false
+    keepDraft(); scope += 1; listSequence += 1; loadingSessions.value = false; activeSessions.value = []
     commandsSequence += 1; commandsContext = null; commands.value = []; commandsError.value = ''; commandsLoading.value = false; commandsTruncated.value = null
     controller.abort(); controller = new AbortController()
     closeStream(); cancelRetry(); target.value = null; projection.value = null; status.value = null; interaction.value = null
@@ -116,29 +117,37 @@ export function useMobileSession() {
     const delay = Math.min(10_000, 500 * 2 ** Math.min(retryCount++, 5)) * (0.75 + Math.random() * 0.25)
     retry = setTimeout(() => { retry = null; void recover() }, delay)
   }
-  async function loadProjects(): Promise<void> {
+  async function loadProjects(silent = false): Promise<void> {
     const own = scope
-    const result = await client.request(client.prepare({ operation: 'projects' }), isLanProjects, controller.signal)
-    if (!alive || own !== scope) return
-    projects.value = result.projects
-    if (selectedProject.value && !result.projects.some(project => project.id === selectedProject.value?.id)) {
-      resetView(); selectedProject.value = null; selectedSession.value = null; newSessionDraft.value = false; sessions.value = []
-      notice.value = '当前项目已被移除，请选择其他项目。'
+    try {
+      const result = await client.request(client.prepare({ operation: 'projects' }), isLanProjects, controller.signal)
+      if (!alive || own !== scope) return
+      projects.value = result.projects
+      if (selectedProject.value && !result.projects.some(project => project.id === selectedProject.value?.id)) {
+        resetView(); selectedProject.value = null; selectedSession.value = null; newSessionDraft.value = false; sessions.value = []
+        notice.value = '当前项目已被移除，请选择其他项目。'
+      }
+    } catch (failure) {
+      if (!silent) markFailure(failure)
     }
   }
-  async function loadSessions(more = false): Promise<void> {
+  async function loadSessions(more = false, silent = false): Promise<void> {
     const project = selectedProject.value
     if (!project) return
     const sequence = ++listSequence
     const limit = more ? Math.min(MAX_SESSION_WINDOW, sessionLimit.value + SESSION_PAGE_SIZE) : sessionLimit.value
-    loadingSessions.value = true
+    if (!silent) loadingSessions.value = true
     try {
       const result = await client.request(client.prepare({ operation: 'sessions', projectId: project.id, limit }), isLanSessions, controller.signal)
       if (!alive || sequence !== listSequence || selectedProject.value?.id !== project.id) return
       if (result.projectId !== project.id) throw new LanClientError('INVALID_RESPONSE', '会话列表目标不匹配。')
       sessions.value = result.sessions; remainingSessions.value = result.remaining; sessionLimit.value = result.limit
-    } catch (failure) { if (alive && sequence === listSequence && selectedProject.value?.id === project.id) markFailure(failure) }
-    finally { if (alive && sequence === listSequence) loadingSessions.value = false }
+      activeSessions.value = result.activeSessions ?? []
+    } catch (failure) {
+      if (!silent && alive && sequence === listSequence && selectedProject.value?.id === project.id) markFailure(failure)
+    } finally {
+      if (!silent && alive && sequence === listSequence) loadingSessions.value = false
+    }
   }
   /** 预读只提供技能，绑定后替换为会话实际资源；同一目标不随每个输入字符重复读取。 */
   async function loadCommands(force = false): Promise<void> {
@@ -440,26 +449,44 @@ export function useMobileSession() {
     if (actionBusy.value) return
     pendingWrite.value = null; error.value = ''; notice.value = '已解除保护；未重新发送上一条操作。'
   }
-  function resume(): void { if ((pairCode.value || connection.value !== 'unpaired') && connection.value !== 'blocked') void recover() }
-  function visibility(): void {
-    if (document.hidden) { closeStream(); cancelRetry(); sync.value = 'paused' } else resume()
+  let pollTimer: ReturnType<typeof setInterval> | null = null
+  function stopPoll(): void {
+    if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
   }
-  function offline(): void { closeStream(); cancelRetry(); connection.value = 'offline'; sync.value = 'paused'; error.value = '手机已离线；断开不会中断电脑上的任务。' }
+  /** 仅在停留在列表页（项目或会话列表）且页面处于前台可见时静默轮询运行状态，离开列表或切入后台时停止。 */
+  function startPoll(): void {
+    stopPoll()
+    pollTimer = setInterval(() => {
+      if (!alive || document.hidden || !navigator.onLine || connection.value !== 'connected' || actionBusy.value) return
+      if (selectedSession.value || newSessionDraft.value) return
+      if (selectedProject.value) void loadSessions(false, true)
+      else void loadProjects(true)
+    }, 4_000)
+  }
+  function resume(): void {
+    if ((pairCode.value || connection.value !== 'unpaired') && connection.value !== 'blocked') void recover()
+  }
+  function visibility(): void {
+    if (document.hidden) { closeStream(); cancelRetry(); sync.value = 'paused'; stopPoll() }
+    else { resume(); startPoll() }
+  }
+  function offline(): void { closeStream(); cancelRetry(); stopPoll(); connection.value = 'offline'; sync.value = 'paused'; error.value = '手机已离线；断开不会中断电脑上的任务。' }
   onMounted(() => {
     document.addEventListener('visibilitychange', visibility)
     window.addEventListener('online', resume); window.addEventListener('offline', offline)
     watchdog = setInterval(() => { if (source && !document.hidden && Date.now() - lastEventAt > 45_000) scheduleRetry() }, 5_000)
+    startPoll()
     if (!navigator.onLine) offline()
     else void recover()
   })
   onBeforeUnmount(() => {
-    alive = false; controller.abort(); closeStream(); cancelRetry()
+    alive = false; controller.abort(); closeStream(); cancelRetry(); stopPoll()
     if (watchdog) clearInterval(watchdog)
     document.removeEventListener('visibilitychange', visibility)
     window.removeEventListener('online', resume); window.removeEventListener('offline', offline)
     pendingWrite.value = null; drafts.clear(); pairCode.value = ''
   })
-  return { connection, sync, projects, sessions, selectedProject, selectedSession, projection, status, interaction,
+  return { connection, sync, projects, sessions, activeSessions, selectedProject, selectedSession, projection, status, interaction,
     loadingSessions, remainingSessions, sessionLimit, draft, error, notice, actionBusy, pendingWrite, pairBusy,
     newSessionDraft, canCreateSession, startNewSession, commands, commandsLoading, commandsError, commandsTruncated, loadCommands,
     history, messages, tools, canSend, isRunning, recover, chooseProject, chooseSession, back, loadSessions,
