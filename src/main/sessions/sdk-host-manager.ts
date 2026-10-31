@@ -265,6 +265,7 @@ export class SdkHostManager {
   private readonly listeners = new Set<(status: SdkHostStatus) => void>()
   private authority: SdkSessionAuthority | null = null
   private currentTarget: SdkSessionTarget | null = null
+  /** 当前会话最新用户消息 ID；用于在会话轮次收敛（busy 变为 ready）时为隔离工作树记录快照。 */
   private lastUserMessageId: string | null = null
   private sessionSnapshot = emptySdkSessionStatus()
   private sessionSubmission: string | null = null
@@ -536,7 +537,12 @@ export class SdkHostManager {
     const frame = await this.request(record, { version: SDK_HOST_PROTOCOL_VERSION, hostId: record.hostId,
       requestId: randomUUID(), type: 'projection-snapshot', bindingId }, SESSION_TIMEOUT_MS)
     if (frame.type !== 'projection-result') throw new SdkHostError('HOST_PROTOCOL_ERROR', 'SDK 投影快照不符合契约。')
-    if (this.sessionSnapshot.bindingId === bindingId) this.projection = frame.projection
+    if (this.sessionSnapshot.bindingId === bindingId) {
+      this.projection = frame.projection
+      for (const msg of frame.projection.messages) {
+        if (msg.role === 'user') this.lastUserMessageId = msg.id
+      }
+    }
     return frame.projection
   }
 
@@ -1162,16 +1168,19 @@ export class SdkHostManager {
       bindingId: dropBinding ? null : this.sessionSnapshot.bindingId,
       isIdle: false, isCompacting: false, waitingDialogs: 0, needsHostRebuild: true, lastError: null }
     this.projection = null
+    this.lastUserMessageId = null
     this.entryIds.clear()
     this.ui.beginGeneration(null)
     this.publishSession()
   }
 
-  /** 批次只转发给订阅方；主进程不重算投影，也不重发旧代际批次。 */
+  /** 批次转发给订阅方并记录最新用户消息身份；主进程不重算投影，也不重发旧代际批次。 */
   private publishProjection(batch: ProjectionBatch): void {
-    for (const msg of batch.messages) {
-      if (msg.role === 'user') {
-        this.lastUserMessageId = msg.id
+    if (Array.isArray(batch.updates)) {
+      for (const update of batch.updates) {
+        if (update.kind === 'message' && update.message.role === 'user') {
+          this.lastUserMessageId = update.message.id
+        }
       }
     }
     for (const listener of [...this.projectionListeners]) {

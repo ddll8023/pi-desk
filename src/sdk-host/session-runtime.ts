@@ -949,7 +949,10 @@ export class SdkSessionRuntime {
         await this.precheck(authorized.target)
         this.factoryTarget = authorized.target
         this.pendingGeneration = authorized.generation
-        return this.runtimeRequired().switchSession(authorized.target.sessionFile ?? path, { ...options, cwdOverride: authorized.target.projectPath })
+        const effectiveCwd = (typeof authorized.target.worktreePath === 'string' && authorized.target.worktreePath.trim() !== '')
+          ? authorized.target.worktreePath.trim()
+          : authorized.target.projectPath
+        return this.runtimeRequired().switchSession(authorized.target.sessionFile ?? path, { ...options, cwdOverride: effectiveCwd })
       }),
       fork: (entryId, options) => this.extensionAction(async () => this.runtimeRequired().fork(entryId, options)),
       navigateTree: (entryId, options) => this.extensionAction(async () => {

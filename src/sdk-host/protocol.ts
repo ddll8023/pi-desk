@@ -277,14 +277,15 @@ export function isSdkSessionReference(value: unknown): value is SdkSessionRefere
   if (value.kind === 'id') return isIdentifier(value.sessionId) && hasKeys(value, ['kind', 'sessionId'])
   return value.kind === 'file' && isPath(value.sessionFile) && hasKeys(value, ['kind', 'sessionFile'])
 }
-/** 新建目标与恢复目标的文件、身份和读取标识必须一致存在。 */
+/** 新建目标与恢复目标的文件、身份和读取标识必须一致存在；可选的工作树隔离路径必须合法。 */
 export function isSdkSessionTarget(value: unknown): value is SdkSessionTarget {
   if (!isRecord(value) || !isPath(value.projectPath) || !isPath(value.sessionDir)
     || typeof value.trusted !== 'boolean' || typeof value.genui !== 'boolean') return false
   const targetValid = value.sessionFile === null
     ? value.sessionId === null && value.fileStamp === null
     : isPath(value.sessionFile) && isIdentifier(value.sessionId) && isIdentifier(value.fileStamp)
-  return targetValid && hasKeys(value, ['projectPath', 'sessionDir', 'sessionId', 'sessionFile', 'fileStamp', 'trusted', 'genui'])
+  const worktreeValid = value.worktreePath === undefined || value.worktreePath === null || isPath(value.worktreePath)
+  return targetValid && worktreeValid && hasKeys(value, ['projectPath', 'sessionDir', 'sessionId', 'sessionFile', 'fileStamp', 'trusted', 'genui', 'worktreePath'])
 }
 /** 日志目标只接受绝对路径、会话身份、文件戳与已声明的历史查询；不带信任或功能开关，避免被当成绑定目标。 */
 export function isSdkLogTarget(value: unknown): value is SdkLogTarget {
