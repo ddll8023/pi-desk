@@ -101,7 +101,7 @@
 - [供应商](providers-auth.md)：`RuntimeModelSelect.vue` 提供模型选择，持久默认模型不等于当前会话模型；`UsageDetailDialog.vue` 经认证服务读取 Codex 账户额度，查询机制与凭据边界由供应商模块维护。
 - [文件](files-editor.md)：`project-file` Store 提供 `@` 文件候选；[资源](resources-mcp.md) 提供技能和命令补全；[偏好](preferences.md) 提供快捷输入。
 - [生成式界面](genui.md)：宿主注册内置扩展，工具投影识别其载荷，消息组件分发到专用渲染器。
-- [工作区标签](workspace-tabs.md)：宿主挂载内置浏览器扩展，通过 `browser-operation` 反向协议由主进程 `BrowserSessionService` 复核会话代际并派发动作，驱动绑定的受管浏览器实例。
+- [工作区标签](workspace-tabs.md)：宿主挂载内置浏览器扩展，通过 `browser-operation` 反向协议由主进程 `BrowserSessionService` 复核会话代际并派发动作；未绑定实例时主进程自动派发 `browser:auto-attach` 事件通知工作区开辟分屏并完成 1:1 静默绑定，驱动受管浏览器。
 
 ## 关键调用链
 

@@ -24,7 +24,7 @@
 | `src/renderer/src/browser/stores/browser-annotations.ts` | 按标签保存固定截图、元素上下文、批注及交付指纹，判断未交付内容并回收状态 |
 | `src/renderer/src/browser/services/capture.ts` | 截图、元素选择与取消的受限桥接调用及异常展示 |
 | `src/renderer/src/browser/components/BrowserView.vue` | webview、截图与元素选择编排、原位批注浮层及替换确认 |
-| `src/renderer/src/browser/components/BrowserControlBanner.vue` | 浏览器控制权状态与人工接管/恢复横幅，提供会话绑定选择、一键接管与恢复控制 |
+| `src/renderer/src/browser/components/BrowserControlBanner.vue` | 浏览器控制权状态与人工接管/恢复横幅，提供一键接管、恢复及分屏展开与退出控制 |
 | `src/renderer/src/browser/components/BrowserToolbar.vue` | 导航、地址输入、标注／元素选择与取消、DevTools 及外链入口 |
 | `src/renderer/src/browser/components/BrowserAnnotationPanel.vue` | 同视口固定画面、点框编号、悬浮意见编辑与列表、键盘调整、上下文及草稿交付预览 |
 | `src/renderer/src/browser/browser-api.test.ts` | URL 规范化的测试源码 |
@@ -55,6 +55,7 @@
 5. 关闭终端标签结束该终端；关闭浏览器标签清理该标签的页面、导航与批注状态，有未交付批注时先确认丢弃；关闭文件标签清除内存编辑记录，脏文件先由弹层宿主确认，不隐式保存。
 6. `/new` 先在当前标签展示空白对话，标签位置与顺序不变；旧实例按标签单飞结束，期间可编辑草稿但禁止发送。结束成功后不补开 SDK 会话，首次发送先固定输入并立即展示本地待发送消息，再经会话打开链准备新目标；实际绑定、运行清单与前台状态确认且投影同步后，才向 SDK 提交固定快照。待发送交接、失败恢复与启动期间切走的处理见[会话状态与边界](sessions-chat.md#状态与边界)。侧栏和标签条的新建入口打开或聚焦空对话标签；已有待提交输入的标签不作为空白标签复用，原输入继续留在原标签，不阻止另建或聚焦其他空白对话。
 7. 终端链接唤起浏览器：终端内点击 HTTP/HTTPS 链接时，可按偏好设置或操作气泡选择在当前项目新开内置浏览器标签（调用 `openBrowserTab(initialUrl)`），自动激活新标签并加载目标地址，与从标签栏新建浏览器共用导航及生命周期。
+8. AI 自动化双屏分屏与自动绑定：当前会话发起受管浏览器操作且未绑定实例时，主进程向渲染进程广播 `browser:auto-attach` 事件，工作区 Store 自动唤起右侧分屏（`splitBrowserKey`）并开辟/吸附受管浏览器标签；浏览器常驻挂载并上报主进程后，自动完成会话 1:1 静默绑定，工作区呈现左侧会话、右侧浏览器的双栏视图，支持随时一键人工接管或退出分屏。
 
 ### 浏览器批注
 

@@ -27,6 +27,25 @@ export const BROWSER_TAKE_SNAPSHOT_CHANNEL = 'browser:take-snapshot'
 export const BROWSER_GET_CONTENT_CHANNEL = 'browser:get-content'
 /** 派发有限输入动作通道。 */
 export const BROWSER_DISPATCH_ACTION_CHANNEL = 'browser:dispatch-action'
+/** 主进程向渲染进程请求自动唤起并分屏绑定浏览器的事件通道。 */
+export const BROWSER_AUTO_ATTACH_EVENT = 'browser:auto-attach'
+
+/** 自动唤起并分屏绑定的载荷契约。 */
+export interface BrowserAutoAttachPayload {
+  readonly sessionId: string
+  readonly runId: number
+  readonly generation: number
+  readonly projectPath: string
+}
+
+export function isBrowserAutoAttachPayload(value: unknown): value is BrowserAutoAttachPayload {
+  if (typeof value !== 'object' || value === null) return false
+  const r = value as Record<string, unknown>
+  return typeof r.sessionId === 'string'
+    && typeof r.runId === 'number'
+    && typeof r.generation === 'number'
+    && typeof r.projectPath === 'string'
+}
 
 /** 受管浏览器实例的运行状态。 */
 export type BrowserInstanceStatus = 'ready' | 'navigating' | 'destroyed'
@@ -151,6 +170,7 @@ export interface BrowserSessionApi {
   readonly takeBrowserSnapshot: (instanceId: string) => Promise<BrowserSnapshotResult>
   readonly getBrowserContent: (instanceId: string) => Promise<BrowserContentResult>
   readonly dispatchBrowserAction: (request: BrowserActionRequest) => Promise<BrowserActionResult>
+  readonly onBrowserAutoAttach: (listener: (payload: BrowserAutoAttachPayload) => void) => () => void
 }
 
 /** 标准化项目路径，统一斜杠并去掉末尾多余斜杠。 */

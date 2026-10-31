@@ -4,6 +4,7 @@
   面板层只显示活动标签，隐藏用 visibility 而不是 display：面板始终保持真实尺寸，
   输入框量高与终端尺寸测量在隐藏状态下也成立。运行中终端跨项目保留视图，
   退出终端仅在查看时恢复画面；文件与浏览器面板各自保持挂载，切回来仍是同一份编辑内容或页面渲染状态。
+  支持左右双屏分栏模式：受管浏览器处于分屏时，左侧固定保持当前会话活跃，右侧渲染浏览器工作台。
   标签与命令的意图在这里转交对应 Store；打开会话仍经标签意图交给会话 Store。
   浏览器批注交付在这里核对来源、目标项目与标签身份，切到目标后由输入坞复核并合并草稿，不自动发送。
 -->
@@ -71,6 +72,12 @@ const chatVisible = computed(() => (
 /** 本地待发送内容可以先显示；原会话内容仍按身份或日志来源门禁。 */
 const chatContentHidden = computed(() => workspaceTabsStore.isChatNewDraft
   || (!workspaceTabsStore.isChatReady && !workspaceTabsStore.isChatLogPreview))
+
+/** 是否处于左右分屏模式：分屏展示浏览器，左侧同时固定展示会话。 */
+const isSplit = computed(() => (
+  workspaceTabsStore.splitBrowserKey !== null && !settingsOpen.value
+))
+const splitBrowserKey = computed(() => workspaceTabsStore.splitBrowserKey)
 
 /** 后台运行终端仍保持挂载，但不能接收焦点与菜单交互。 */
 function isTerminalActive(session: TerminalSessionInfo): boolean {
@@ -243,9 +250,10 @@ function openCommandSettings(): void {
   <div class="workspace-panes">
     <div
       class="workspace-pane"
-      :class="{ 'is-hidden': !chatVisible }"
-      :inert="settingsOpen || !chatVisible"
-      :aria-hidden="settingsOpen || !chatVisible"
+      :class="{ 'is-hidden': !isSplit && !chatVisible }"
+      :style="isSplit ? 'right: 50%; border-right: 1px solid var(--color-desk-border);' : ''"
+      :inert="settingsOpen || (!isSplit && !chatVisible)"
+      :aria-hidden="settingsOpen || (!isSplit && !chatVisible)"
       :aria-busy="chatVisible && sessionStore.opening"
     >
       <ExtensionNotificationBar v-if="!chatContentHidden" />
@@ -309,11 +317,14 @@ function openCommandSettings(): void {
       v-for="browser in workspaceTabsStore.openBrowsers"
       :key="browser.key"
       class="workspace-pane"
-      :class="{ 'is-hidden': workspaceTabsStore.activeTab !== browser.key }"
-      :inert="workspaceTabsStore.activeTab !== browser.key"
-      :aria-hidden="workspaceTabsStore.activeTab !== browser.key"
+      :class="{
+        'is-hidden': isSplit ? splitBrowserKey !== browser.key : workspaceTabsStore.activeTab !== browser.key
+      }"
+      :style="isSplit && splitBrowserKey === browser.key ? 'left: 50%;' : ''"
+      :inert="isSplit ? splitBrowserKey !== browser.key : workspaceTabsStore.activeTab !== browser.key"
+      :aria-hidden="isSplit ? splitBrowserKey !== browser.key : workspaceTabsStore.activeTab !== browser.key"
     >
-      <BrowserView :tab-key="browser.key" :active="!settingsOpen && workspaceTabsStore.activeTab === browser.key" :targets="annotationTargets" :delivery-error="annotationDeliveryError" @deliver="onDeliverAnnotation" />
+      <BrowserView :tab-key="browser.key" :active="!settingsOpen && (isSplit ? splitBrowserKey === browser.key : workspaceTabsStore.activeTab === browser.key)" :targets="annotationTargets" :delivery-error="annotationDeliveryError" @deliver="onDeliverAnnotation" />
     </div>
 
     <!-- 非新草稿、身份不匹配且无日志历史与本地待发送消息时才占位；待发送内容可独立保持面板可见。 -->

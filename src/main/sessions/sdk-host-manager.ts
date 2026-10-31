@@ -16,13 +16,16 @@ import {
 import type {
   SdkHostFrame, SdkHostRequest, SdkHostFailureCode, SdkHostEvent, SdkMcpCommandAction, SdkSessionStatus,
   SdkSessionReference, SdkSessionTarget, SdkSessionAction, SdkInterruptConfirmation, SdkSessionIdentity,
-  SdkLogTarget
+  SdkLogTarget, SdkBrowserOperationResult
 } from '../../sdk-host/protocol'
 import type {
   AgentCapabilities, McpStatus, PiResources, ProjectionBatch, ProjectionSnapshot, PromptImageInput,
   RuntimeDiagnostics, HistoryData, HistoryQuery
 } from '../../shared/runtime-api'
 import type { BrowserSessionService } from '../browser/browser-session-service'
+import { sendToRenderer } from '../window-channel'
+import { BROWSER_AUTO_ATTACH_EVENT } from '../../shared/browser-session-api'
+import type { BrowserAutoAttachPayload } from '../../shared/browser-session-api'
 import { ExtensionUiManager } from './extension-ui-manager'
 import type { ExtensionDialogResponseInput, ExtensionUiSnapshot } from '../../shared/extension-ui-api'
 import { getPiAgentDir, getPiProcessEnvironment } from '../shared/pi-paths'
@@ -1042,16 +1045,39 @@ export class SdkHostManager {
         throw new Error('当前会话尚未建立有效标识。')
       }
 
-      const boundInstance = service.findBoundInstanceForSession(
+      let boundInstance = service.findBoundInstanceForSession(
         sessionId,
         this.options.runId,
         event.bindingId
       )
 
       if (!boundInstance) {
+        // 向渲染进程派发自动开辟并绑定事件
+        const projectPath = this.sessionSnapshot.target?.projectPath ?? ''
+        sendToRenderer(BROWSER_AUTO_ATTACH_EVENT, {
+          sessionId,
+          runId: this.options.runId,
+          generation: event.bindingId,
+          projectPath
+        } satisfies BrowserAutoAttachPayload)
+
+        // 轮询等待最多 5 秒
+        const timeout = 5000
+        const start = Date.now()
+        while (!boundInstance && Date.now() - start < timeout && !record.closing) {
+          await new Promise((resolve) => setTimeout(resolve, 100))
+          boundInstance = service.findBoundInstanceForSession(
+            sessionId,
+            this.options.runId,
+            event.bindingId
+          )
+        }
+      }
+
+      if (!boundInstance) {
         result = {
           ok: false,
-          error: '当前会话尚未绑定内置浏览器。请先在工作区浏览器中绑定本会话。',
+          error: '自动拉起内置浏览器超时或未完成绑定，请在工作区确认。',
           notBound: true
         }
       } else {
@@ -1083,7 +1109,12 @@ export class SdkHostManager {
             const res = await service.dispatchAction({ type: 'press', instanceId: boundInstance.instanceId, key: op.key })
             result = res.ok ? { ok: true, data: res } : { ok: false, error: res.error }
           } else if (op.kind === 'scroll') {
-            const res = await service.dispatchAction({ type: 'scroll', instanceId: boundInstance.instanceId, deltaX: op.deltaX, deltaY: op.deltaY })
+            const res = await service.dispatchAction({
+              type: 'scroll',
+              instanceId: boundInstance.instanceId,
+              ...(op.deltaX !== undefined ? { deltaX: op.deltaX } : {}),
+              ...(op.deltaY !== undefined ? { deltaY: op.deltaY } : {})
+            })
             result = res.ok ? { ok: true, data: res } : { ok: false, error: res.error }
           } else {
             result = { ok: false, error: '不支持的操作类型。' }

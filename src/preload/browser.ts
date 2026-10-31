@@ -1,5 +1,6 @@
 /** 浏览器受限桥接：截图、元素选择与取消，以及受管实例登记与独占控制权桥接，结果经契约校验。 */
 import { ipcRenderer } from 'electron'
+import type { IpcRendererEvent } from 'electron'
 import {
   BROWSER_CANCEL_PICK_CHANNEL,
   BROWSER_CAPTURE_CHANNEL,
@@ -19,7 +20,9 @@ import {
   BROWSER_TAKE_SNAPSHOT_CHANNEL,
   BROWSER_TAKEOVER_CHANNEL,
   BROWSER_UNREGISTER_INSTANCE_CHANNEL,
+  BROWSER_AUTO_ATTACH_EVENT,
   isBrowserActionResult,
+  isBrowserAutoAttachPayload,
   isBrowserBindResult,
   isBrowserContentResult,
   isBrowserControlState,
@@ -80,5 +83,14 @@ export const browserApi: BrowserCaptureApi & BrowserSessionApi = {
   async dispatchBrowserAction(request) {
     const result: unknown = await ipcRenderer.invoke(BROWSER_DISPATCH_ACTION_CHANNEL, request)
     return isBrowserActionResult(result) ? result : { ok: false, error: '动作执行返回了无法识别的结果。' }
+  },
+  onBrowserAutoAttach(listener) {
+    const handler = (_event: IpcRendererEvent, payload: unknown): void => {
+      if (isBrowserAutoAttachPayload(payload)) listener(payload)
+    }
+    ipcRenderer.on(BROWSER_AUTO_ATTACH_EVENT, handler)
+    return () => {
+      ipcRenderer.removeListener(BROWSER_AUTO_ATTACH_EVENT, handler)
+    }
   }
 }

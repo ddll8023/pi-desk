@@ -3,6 +3,7 @@ import type { BrowserCaptureResult, BrowserElementPickResult } from '../../../..
 import type {
   BrowserActionRequest,
   BrowserActionResult,
+  BrowserAutoAttachPayload,
   BrowserBindRequest,
   BrowserBindResult,
   BrowserContentResult,
@@ -129,4 +130,12 @@ export async function dispatchBrowserAction(request: BrowserActionRequest): Prom
   } catch (error) {
     return { ok: false, error: `派发交互动作失败：${error instanceof Error ? error.message : String(error)}` }
   }
+}
+
+/** 监听主进程派发的受管浏览器自动唤起与分屏绑定事件；返回取消订阅回调。 */
+export function onBrowserAutoAttach(
+  listener: (payload: BrowserAutoAttachPayload) => void
+): () => void {
+  if (!window.desktop) return () => {}
+  return window.desktop.onBrowserAutoAttach(listener)
 }

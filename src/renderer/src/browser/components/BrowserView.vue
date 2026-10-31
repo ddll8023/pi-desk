@@ -376,6 +376,22 @@ onMounted(() => {
   if (webviewRef.value) {
     bindWebviewEvents(webviewRef.value)
     void syncInstanceRegistration()
+    let attempts = 0
+    const checkTimer = setInterval(() => {
+      attempts++
+      if (webviewRef.value && typeof webviewRef.value.getWebContentsId === 'function') {
+        try {
+          const id = webviewRef.value.getWebContentsId()
+          if (id && id > 0) {
+            void syncInstanceRegistration()
+            clearInterval(checkTimer)
+          }
+        } catch {
+          // 忽略初始化未就绪
+        }
+      }
+      if (attempts >= 20) clearInterval(checkTimer)
+    }, 50)
   }
   void refreshControlState()
 })
@@ -446,50 +462,50 @@ onUnmounted(() => {
 
     <!-- 网页与批注共享同一尺寸；浮层不参与网页的宽高分配。 -->
     <div class="relative flex flex-1 min-h-0 min-w-0 overflow-hidden">
-    <!-- 纯净空白起始页视图 -->
-    <div
-      v-if="isBlank"
-      v-show="!annotationDocument?.visible"
-      class="flex-1 flex flex-col items-center justify-center p-6 text-center select-none"
-    >
-      <div class="w-12 h-12 rounded-2xl bg-[var(--color-desk-panel)] border border-[var(--color-desk-border)] flex items-center justify-center text-[var(--color-desk-ink-muted)] mb-4">
-        <svg class="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <circle cx="12" cy="12" r="10" />
-          <path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20" />
-          <path d="M2 12h20" />
-        </svg>
-      </div>
-      <h3 class="text-sm font-medium text-[var(--color-desk-ink)] mb-1">内置浏览器</h3>
-      <p class="text-xs text-[var(--color-desk-ink-muted)] max-w-sm mb-6">
-        在上方地址栏输入网址或本地开发端口（如 localhost:5173）并按回车以访问。
-      </p>
+      <!-- Chromium Webview 容器始终挂载以建立主进程登记与 CDP 调试通道 -->
+      <webview
+        ref="webviewRef"
+        class="w-full h-full flex-1 border-none"
+        :class="{ invisible: annotationDocument?.visible || isBlank }"
+        :inert="annotationDocument?.visible || isBlank"
+        :aria-hidden="annotationDocument?.visible || isBlank"
+        :src="tabState.url || 'about:blank'"
+        :partition="partition"
+      />
 
-      <!-- 常用本地服务快捷卡片 -->
-      <div class="flex flex-wrap items-center justify-center gap-2 max-w-md">
-        <AppButton
-          v-for="item in quickDevUrls"
-          :key="item.url"
-          variant="default"
-          class="text-xs px-3 py-1.5"
-          @click="onNavigate(item.url)"
-        >
-          {{ item.label }}
-        </AppButton>
-      </div>
-    </div>
+      <!-- 纯净空白起始页视图覆盖在上层 -->
+      <div
+        v-if="isBlank"
+        v-show="!annotationDocument?.visible"
+        class="absolute inset-0 flex-1 flex flex-col items-center justify-center p-6 text-center select-none bg-[var(--color-desk-canvas)] z-10"
+      >
+        <div class="w-12 h-12 rounded-2xl bg-[var(--color-desk-panel)] border border-[var(--color-desk-border)] flex items-center justify-center text-[var(--color-desk-ink-muted)] mb-4">
+          <svg class="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="10" />
+            <path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20" />
+            <path d="M2 12h20" />
+          </svg>
+        </div>
+        <h3 class="text-sm font-medium text-[var(--color-desk-ink)] mb-1">内置浏览器</h3>
+        <p class="text-xs text-[var(--color-desk-ink-muted)] max-w-sm mb-6">
+          在上方地址栏输入网址或本地开发端口（如 localhost:5173）并按回车以访问。
+        </p>
 
-    <!-- Chromium Webview 容器 -->
-    <webview
-      v-else
-      ref="webviewRef"
-      class="w-full h-full flex-1 border-none"
-      :class="{ invisible: annotationDocument?.visible }"
-      :inert="annotationDocument?.visible"
-      :aria-hidden="annotationDocument?.visible"
-      :src="tabState.url"
-      :partition="partition"
-    />
-    <BrowserAnnotationPanel v-if="annotationDocument?.visible" :document="annotationDocument" :targets="props.targets" :error="props.deliveryError" @close="annotationDocument.visible = false" @recapture="onRecapture" @deliver="(target, text, file) => emit('deliver', props.tabKey, target, text, file)" />
+        <!-- 常用本地服务快捷卡片 -->
+        <div class="flex flex-wrap items-center justify-center gap-2 max-w-md">
+          <AppButton
+            v-for="item in quickDevUrls"
+            :key="item.url"
+            variant="default"
+            class="text-xs px-3 py-1.5"
+            @click="onNavigate(item.url)"
+          >
+            {{ item.label }}
+          </AppButton>
+        </div>
+      </div>
+
+      <BrowserAnnotationPanel v-if="annotationDocument?.visible" :document="annotationDocument" :targets="props.targets" :error="props.deliveryError" @close="annotationDocument.visible = false" @recapture="onRecapture" @deliver="(target, text, file) => emit('deliver', props.tabKey, target, text, file)" />
     </div>
     <ConfirmDialog :open="confirmCapture" title="重新截图会丢弃现有批注" description="当前截图的批注尚未交付，重新截图后不可恢复。" detail="" confirm-label="丢弃并截图" @cancel="confirmCapture = false" @confirm="confirmCapture = false; takeScreenshot()" />
     <ConfirmDialog :open="confirmElementPick" title="选择元素会替换现有批注" description="只有成功选取并截图后才替换；取消或失败会保留现有批注。" detail="" confirm-label="继续选择" @cancel="confirmElementPick = false" @confirm="confirmElementPick = false; startElementPick()" />

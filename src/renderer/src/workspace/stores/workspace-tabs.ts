@@ -18,6 +18,7 @@
  * 新建对话的入口分两类：标签条与侧栏新建一个对话标签，`/new` 则在当前标签内就地替换
  * （结束原实例、清空会话身份与重命名，标签位置与顺序不变）。
  * 快捷命令的运行目标也是标签：始终在当前项目新建终端标签再写入，不复用可能被前台程序占用的现有 shell。
+ * 受管浏览器支持分屏（splitBrowserKey），在当前会话触发自动化操作时自动开辟分屏并完成 1:1 静默绑定。
  */
 import { defineStore } from 'pinia'
 import { computed, ref, watch } from 'vue'
@@ -35,6 +36,7 @@ import { useRuntimeStore } from '../../sessions/stores/runtime'
 import { useSessionRunsStore } from '../../sessions/stores/session-runs'
 import { sessionTabState } from './session-tab-bridge'
 import { useTerminalStore } from './terminal'
+import { bindBrowserSession, onBrowserAutoAttach } from '../../browser/services/capture'
 
 /** 对话标签键前缀；终端标签键是 `term:<终端标识>`，文件标签键是 `file:<编号>`，浏览器标签键是 `browser:<随机标识>`。 */
 const CHAT_KEY_PREFIX = 'chat:'
@@ -146,6 +148,7 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
   let stopRunsWatch: WatchStopHandle | null = null
   let stopSessionsWatch: WatchStopHandle | null = null
   let stopNewChatWatch: WatchStopHandle | null = null
+  let stopBrowserAutoAttach: (() => void) | null = null
   const currentProjectPath = computed(() => projectStore.currentProject?.path ?? null)
 
   /** 当前项目按顺序展开后的标签键：跳过失效的对话标签与已消失的终端，新终端追加到末尾。 */
@@ -304,6 +307,28 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
       stopNewChatWatch = watch(() => [runtimeStore.view, sessionRunsStore.runs, currentProjectPath.value, activeTab.value, newChats.value],
         settleNewChatBindings, { flush: 'sync' })
     }
+    if (stopBrowserAutoAttach === null) {
+      stopBrowserAutoAttach = onBrowserAutoAttach(async (payload) => {
+        const tabKey = await openBrowserInSplit()
+        if (tabKey) {
+          const start = Date.now()
+          let bound = false
+          while (!bound && Date.now() - start < 3000) {
+            const res = await bindBrowserSession({
+              instanceId: tabKey,
+              sessionId: payload.sessionId,
+              runId: payload.runId,
+              generation: payload.generation
+            })
+            if (res.ok) {
+              bound = true
+              break
+            }
+            await new Promise((resolve) => setTimeout(resolve, 50))
+          }
+        }
+      })
+    }
   }
 
   /** 页面卸载时释放订阅；标签只留在内存里，重新挂载后不恢复标签。 */
@@ -316,6 +341,8 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     stopSessionsWatch = null
     stopNewChatWatch?.()
     stopNewChatWatch = null
+    stopBrowserAutoAttach?.()
+    stopBrowserAutoAttach = null
     newChats.value = {}
     newChatRequests.clear()
   }
@@ -346,6 +373,54 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     appendKey(projectPath, key)
     if (version === selectionVersion && currentProjectPath.value === projectPath) selectLocal(projectPath, key)
     return terminalId
+  }
+
+  /** 分屏展示的受管浏览器标签键；为 null 时表示普通全宽视图。 */
+  const splitBrowserKey = ref<string | null>(null)
+
+  /** 退出分屏状态，恢复单栏。 */
+  function closeSplitBrowser(): void {
+    splitBrowserKey.value = null
+  }
+
+  /** 将分屏浏览器最大化为普通激活标签，并退出分屏。 */
+  function expandSplitToFull(): void {
+    const key = splitBrowserKey.value
+    if (key !== null) {
+      const projectPath = currentProjectPath.value
+      if (projectPath !== null) {
+        selectLocal(projectPath, key)
+      }
+      splitBrowserKey.value = null
+    }
+  }
+
+  /**
+   * 在右侧分屏中打开或唤起一个受管浏览器：
+   * 优先复用当前项目已打开但空闲的浏览器标签，否则新建一个浏览器标签，
+   * 保持左侧会话标签继续活跃，并将该浏览器置于右侧分屏中。
+   */
+  async function openBrowserInSplit(url?: string): Promise<string> {
+    const projectPath = currentProjectPath.value
+    if (projectPath === null) return ''
+
+    if (splitBrowserKey.value !== null && projectKeys.value.includes(splitBrowserKey.value)) {
+      if (url) browserStore.navigate(splitBrowserKey.value, url)
+      return splitBrowserKey.value
+    }
+
+    const existing = openBrowsers.value.find(b => b.key !== activeTab.value)
+    if (existing) {
+      splitBrowserKey.value = existing.key
+      if (url) browserStore.navigate(existing.key, url)
+      return existing.key
+    }
+
+    const key = `${BROWSER_KEY_PREFIX}${Date.now()}_${Math.random().toString(36).slice(2, 6)}`
+    browserStore.ensureTab(key, projectPath, url)
+    appendKey(projectPath, key)
+    splitBrowserKey.value = key
+    return key
   }
 
   /**
@@ -1148,6 +1223,10 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     openFiles,
     openBrowsers,
     openBrowserTab,
+    splitBrowserKey,
+    closeSplitBrowser,
+    expandSplitToFull,
+    openBrowserInSplit,
     isBrowserKey,
     terminalTabId,
     initialize,

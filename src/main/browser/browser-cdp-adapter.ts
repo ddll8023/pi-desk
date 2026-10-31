@@ -173,16 +173,17 @@ export class BrowserCdpAdapter {
           }
         }
 
-        a11yNodes.push({
+        const a11yNode: BrowserA11yNode = {
           refId,
           role,
           name,
-          value,
-          description,
-          disabled,
-          focused,
-          checked
-        })
+          ...(value !== undefined ? { value } : {}),
+          ...(description !== undefined ? { description } : {}),
+          ...(disabled !== undefined ? { disabled } : {}),
+          ...(focused !== undefined ? { focused } : {}),
+          ...(checked !== undefined ? { checked } : {})
+        }
+        a11yNodes.push(a11yNode)
       }
 
       const snapshotId = `snap_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
@@ -237,9 +238,19 @@ export class BrowserCdpAdapter {
       const border = boxResult.model?.border
       if (!Array.isArray(border) || border.length < 8) return null
 
+      const [x0, y0, x1, y1, x2, y2, x3, y3] = border
+      if (
+        x0 === undefined || y0 === undefined ||
+        x1 === undefined || y1 === undefined ||
+        x2 === undefined || y2 === undefined ||
+        x3 === undefined || y3 === undefined
+      ) {
+        return null
+      }
+
       // 取四角多边形的几何中心点
-      const x = (border[0] + border[2] + border[4] + border[6]) / 4
-      const y = (border[1] + border[3] + border[5] + border[7]) / 4
+      const x = (x0 + x1 + x2 + x3) / 4
+      const y = (y0 + y1 + y2 + y3) / 4
 
       return { x: Math.round(x), y: Math.round(y) }
     } catch {
@@ -291,7 +302,23 @@ export class BrowserCdpAdapter {
     try {
       // 先点击获取焦点
       await this.clickNode(backendNodeId)
-      // 全选已有文本并删除
+
+      // 全选已有文本并删除清空（macOS 使用 Meta+A，其他系统使用 Ctrl+A）
+      const selectAllModifiers = process.platform === 'darwin' ? 4 : 2
+      await this.target.debugger.sendCommand('Input.dispatchKeyEvent', {
+        type: 'rawKeyDown',
+        key: 'a',
+        code: 'KeyA',
+        windowsVirtualKeyCode: 65,
+        modifiers: selectAllModifiers
+      })
+      await this.target.debugger.sendCommand('Input.dispatchKeyEvent', {
+        type: 'keyUp',
+        key: 'a',
+        code: 'KeyA',
+        windowsVirtualKeyCode: 65,
+        modifiers: selectAllModifiers
+      })
       await this.pressKey('Backspace')
 
       // 逐字符派发字符事件
