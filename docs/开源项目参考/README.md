@@ -29,3 +29,4 @@
 | EditHere | [Inginnng/EditHere](https://github.com/Inginnng/EditHere) | 截图、批注与组件调整的本地 AI 反馈工具；主体为非商业源码可用许可 | 外部工具协议与通用图片点框批注部分重合；系统抓屏、OCR、大爆炸布局拖拽与视频打点超出当前内置能力 | [edithere.md](edithere.md) |
 | CoWork OS | [CoWork-OS/CoWork-OS](https://github.com/CoWork-OS/CoWork-OS) | 面向编码、知识工作与自动化的本地优先个人 Agent 桌面应用 | 桌面工作区与终端部分重合；CDP 浏览器自动操控与人机接管超出现状 | [cowork-os.md](cowork-os.md) |
 | Lancer | [raylee-ai/lancer](https://github.com/raylee-ai/lancer) | 基于 pi-gui 和 pi 的桌面 AI 工作区，聚焦会话并行分支、事件拓扑图与交付物追溯 | Pi 接入与多分支管理实质重合；GitTree、Turn 快照、本地控制 API 与扩展前端沙箱超出现状；局域网手机扫码与常驻终端守护为本项目独有 | [lancer.md](lancer.md) |
+| OpenBitFun | [GCWing/OpenBitFun](https://github.com/GCWing/OpenBitFun) | 基于 Rust Agent Runtime 与 Tauri 的开源多模式 Agent 工作台 | 会话、终端、Git 与 MCP 实质重合；Mini App、多模式 Harness、跨网多设备切换与 Computer Use 超出当前内置能力；内置受管浏览器与局域网免配置直连为本项目独有 | [openbitfun.md](openbitfun.md) |
