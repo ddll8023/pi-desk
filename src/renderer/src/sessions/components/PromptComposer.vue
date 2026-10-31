@@ -8,6 +8,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { PROJECT_FILE_QUERY_MAX_CHARS } from '../../../../shared/project-file-api'
 import { cloneImageAnnotations, imageAnnotationError } from '../../../../shared/image-annotation'
 import type { ImageAnnotationDocument } from '../../../../shared/image-annotation'
+import { PROMPT_IMAGE_MAX_COUNT } from '../../../../shared/runtime-api'
 import type { OutputRate, PiResourceEntry, PiResourceKind, PromptDisposition, PromptImageInput } from '../../../../shared/runtime-api'
 import { useExtensionUiStore } from '../stores/extension-ui'
 import { usePreferencesStore } from '../../preferences/stores/preferences'
@@ -434,8 +435,8 @@ const pendingTitle = computed(() => {
 
 /** 与主进程一致的图片 MIME 白名单；选择器另加 accept，双保险。 */
 const IMAGE_MIME_TYPES: readonly string[] = ['image/png', 'image/jpeg', 'image/gif', 'image/webp']
-const MAX_IMAGE_COUNT = 4
-const MAX_IMAGE_BYTES = 3 * 1024 * 1024
+const MAX_IMAGE_COUNT = PROMPT_IMAGE_MAX_COUNT
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024
 
 /** 在目标输入区就绪后原子合并；任何校验失败均不改动现有草稿。 */
 function mergeBrowserAnnotation(projectPath: string, tabKey: string, identity: string, inputKey: string, text: string, file: File): string | null {
@@ -443,7 +444,7 @@ function mergeBrowserAnnotation(projectPath: string, tabKey: string, identity: s
     || !sessionViewStore.annotationTargetMatches(projectPath, tabKey, identity, inputKey)) return '目标对话已变化，批注未交付。'
   if (startupRequested.value || !canSubmit.value) return '目标对话暂不可编辑，请稍后重试。'
   if (imageSupported.value === false) return '当前模型不支持图片附件。'
-  if (file.type !== 'image/png' || file.size > MAX_IMAGE_BYTES) return '批注截图超过图片附件大小上限（3 MiB）。'
+  if (file.type !== 'image/png' || file.size > MAX_IMAGE_BYTES) return '批注截图超过图片附件大小上限（5 MiB）。'
   if (pendingImages.value.length >= MAX_IMAGE_COUNT) return `目标对话最多携带 ${MAX_IMAGE_COUNT} 张图片。`
   const entry = sessionViewStore.createImage(file)
   draft.value = [draft.value, text].filter(Boolean).join('\n\n')

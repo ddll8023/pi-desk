@@ -171,10 +171,10 @@ export interface PromptImageInput {
 /**
  * 单条 Prompt 的图片条数上限；主进程校验与渲染端还原历史附件共用同一份，避免两处上限漂移。
  */
-export const PROMPT_IMAGE_MAX_COUNT = 4
+export const PROMPT_IMAGE_MAX_COUNT = 5
 
-/** 单张图片 base64 编码后的字符数上限；主进程校验与渲染端还原历史附件共用同一份。 */
-export const PROMPT_IMAGE_MAX_CHARS = 4_194_304
+/** 单张图片 base64 编码后的字符数上限（7 MiB 字符，满足 5 MiB 原图编码扩增）；主进程校验与渲染端还原历史附件共用同一份。 */
+export const PROMPT_IMAGE_MAX_CHARS = 7_340_032
 
 /** prompt 结果只表达请求被接受、排队或被处理，不等待 Agent 执行结束。 */
 export type PromptResult =

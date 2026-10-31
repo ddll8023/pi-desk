@@ -25,6 +25,8 @@ export const IMAGE_ANNOTATION_CUSTOM_TYPE = 'pi-desk:image-annotations'
 export const IMAGE_ANNOTATION_MAX_COUNT = 64
 export const IMAGE_ANNOTATION_TEXT_MAX_CHARS = 2_000
 export const IMAGE_ANNOTATION_OVERVIEW_MAX_CHARS = 4_000
+/** 单条提交中可挂载标注的图片附件张数上限；与 Prompt 图片条数上限保持一致。 */
+export const IMAGE_ANNOTATION_ATTACHMENT_MAX_COUNT = 5
 const MAX_DOCUMENT_CHARS = 32_000
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -88,13 +90,13 @@ export function imageAnnotationError(value: ImageAnnotationDocument | undefined)
 }
 
 export function parseImageAnnotationAttachments(value: unknown): readonly ImageAnnotationAttachment[] | null {
-  if (!Array.isArray(value) || value.length > 4) return null
+  if (!Array.isArray(value) || value.length > IMAGE_ANNOTATION_ATTACHMENT_MAX_COUNT) return null
   const result: ImageAnnotationAttachment[] = []
   const indexes = new Set<number>()
   for (const item of value) {
     if (!record(item) || !keys(item, ['imageIndex', 'document'])
       || typeof item.imageIndex !== 'number' || !Number.isInteger(item.imageIndex)
-      || item.imageIndex < 0 || item.imageIndex >= 4 || indexes.has(item.imageIndex)) return null
+      || item.imageIndex < 0 || item.imageIndex >= IMAGE_ANNOTATION_ATTACHMENT_MAX_COUNT || indexes.has(item.imageIndex)) return null
     const document = parseImageAnnotations(item.document)
     if (document === null || imageAnnotationError(document) !== null || !hasImageAnnotations(document)) return null
     indexes.add(item.imageIndex)
@@ -113,7 +115,7 @@ export function readImageAnnotationMessage(value: unknown): {
   const details = value.details
   if (!keys(details, ['version', 'imageCount', 'attachments']) || details.version !== 1
     || typeof details.imageCount !== 'number' || !Number.isInteger(details.imageCount)
-    || details.imageCount < 1 || details.imageCount > 4) return null
+    || details.imageCount < 1 || details.imageCount > IMAGE_ANNOTATION_ATTACHMENT_MAX_COUNT) return null
   const imageCount = details.imageCount
   const attachments = parseImageAnnotationAttachments(details.attachments)
   if (attachments === null || attachments.length === 0
