@@ -1,5 +1,5 @@
-<!-- 通用工具卡片：默认折叠且仅手动开合，内联展示状态字形、工具名称、执行状态、Desktop 计算的耗时与参数摘要；
-     文件类工具（edit / write）的摘要改为相对项目目录的路径与改动量，改动量不是真实 Diff 统计时带一个可见的「推断」标记。
+<!-- 通用工具卡片：默认折叠且仅手动开合，内联展示状态字形、工具操作语义徽章、高亮目标路径与关键参数、执行状态、Desktop 计算的耗时与状态微胶囊；
+     文件类工具（edit / write）的摘要改为相对项目目录的高亮路径与改动量徽章，改动量不是真实 Diff 统计时带一个可见的「推断」标记；已有明确分类徽章时隐藏重复的小写工具名称。
      展开后先给带行号的变更行或写入内容预览，再给参数键值摘要与结果预览，参数原文与完整结果各自二级折叠并可一键复制，
      结果被 Pi 截断时给出完整输出路径。状态字形只是第二通道：状态文案始终保留，读屏与色弱用户都不依赖形状或颜色。
      展开时只上报 `userExpand`：滚动位置与跟随由消息列表决定，摘要行留在原处，内容从它下面长出来。 -->
@@ -106,6 +106,27 @@ const durationText = computed(() => {
 /** 折叠时只看关键参数（路径、命令、pattern 等），保持一行可扫读；完整参数在展开后显示。 */
 const argsSummary = computed<readonly ToolArgSummaryEntry[] | null>(() => execution.value?.argsSummary ?? null)
 const argsPreview = computed(() => toolCallPreview(props.block.toolName, argsSummary.value, execution.value?.argsText ?? null))
+
+/** 工具分类徽章（操作语义区分）。 */
+const toolBadge = computed(() => {
+  const name = props.block.toolName.toLowerCase()
+  if (name.includes('read') || name.includes('fetch') || name.includes('get') || name.includes('cat')) {
+    return { label: 'READ', class: 'tool-badge-read' }
+  }
+  if (name.includes('edit') || name.includes('patch')) {
+    return { label: 'EDIT', class: 'tool-badge-edit' }
+  }
+  if (name.includes('write') || name.includes('save') || name.includes('create')) {
+    return { label: 'WRITE', class: 'tool-badge-write' }
+  }
+  if (name.includes('bash') || name.includes('shell') || name.includes('terminal') || name.includes('cmd')) {
+    return { label: 'BASH', class: 'tool-badge-bash' }
+  }
+  if (name.startsWith('mcp') || name.includes('mcp')) {
+    return { label: 'MCP', class: 'tool-badge-mcp' }
+  }
+  return { label: 'TOOL', class: 'tool-badge-default' }
+})
 
 /**
  * 文件类工具在摘要行显示路径而不是参数摘要：路径取自投影已算好的参数摘要，
@@ -343,31 +364,35 @@ function copyLabel(target: CopyTarget): string {
 </script>
 
 <template>
-  <details v-if="execution" :open="expanded" class="tool-card">
+  <details v-if="execution" :open="expanded" class="tool-card" :class="{ 'is-running': isRunning }">
     <summary @click.prevent="toggleExpanded">
       <span class="disclosure" aria-hidden="true"></span>
-      <span class="tool-status-mark" :class="phaseClass" aria-hidden="true">{{ phaseMark }}</span>
-      <!-- 工具名是摘要行里最长的一项（MCP 工具名可达几十字符），限宽截断才能把宽度让给路径与参数摘要。 -->
-      <span class="max-w-[40%] shrink-0 truncate font-mono text-desk-ink" :title="block.toolName">{{ block.toolName }}</span>
-      <span class="tool-phase-label" :class="phaseClass">{{ phaseLabel }}</span>
-      <span
-        v-if="durationText"
-        class="tool-duration font-mono text-desk-muted"
-        title="客户端收到工具开始与结束事件的间隔"
-      >{{ durationText }}</span>
-      <!-- 文件类工具先给路径与改动量，其余工具给参数摘要；两者都不可得时这一格留空。 -->
+      <span class="tool-badge" :class="toolBadge.class">{{ toolBadge.label }}</span>
+      <!-- 当已有明确徽章且有目标路径或参数时，隐藏重复的小写工具名，将空间留给路径 -->
+      <span v-if="filePathText === null && !argsPreview" class="tool-name font-mono" :title="block.toolName">{{ block.toolName }}</span>
+      <!-- 文件类工具高亮展示路径与改动量，其余工具展示参数摘要 -->
       <span
         v-if="filePathText !== null"
-        class="min-w-0 flex-1 truncate font-mono text-desk-muted"
+        class="tool-target-path font-mono"
         :title="filePath ?? filePathText"
       >{{ filePathText }}</span>
+      <span v-else-if="argsPreview" class="tool-target-args font-mono truncate" :title="argsPreview">{{ argsPreview }}</span>
+
       <span v-if="changeCounts !== null" class="tool-change-count" :title="changeCountsTitle">
         <span class="tool-change-add">+{{ changeCounts.add }}</span>
         <span class="tool-change-remove">−{{ changeCounts.remove }}</span>
-        <!-- 推断值不能只靠悬停提示表达：可见的「推断」二字是主通道，title 只是补充口径。 -->
         <span v-if="changeCountsInferred" class="tool-change-inferred">推断</span>
       </span>
-      <span v-else-if="filePathText === null && argsPreview" class="min-w-0 flex-1 truncate text-desk-muted">{{ argsPreview }}</span>
+
+      <!-- 右侧整合的状态与耗时微胶囊 -->
+      <span class="tool-status-pill ml-auto" :class="phaseClass">
+        <svg v-if="isRunning" class="tool-spinner inline-block size-3 shrink-0" viewBox="0 0 24 24" fill="none">
+          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3"></circle>
+          <path class="opacity-85" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+        </svg>
+        <span v-else class="tool-status-icon font-mono">{{ phaseMark }}</span>
+        <span class="tool-status-text font-mono">{{ durationText ?? phaseLabel }}</span>
+      </span>
     </summary>
     <div class="tool-card-body">
       <!-- 变更先于参数：真实 Diff 带行号，write 没有 Diff 时给内容预览；两者都不可得时只给一句说明。 -->
@@ -456,21 +481,15 @@ function copyLabel(target: CopyTarget): string {
 
   <!-- 没有对应工具条目时的占位：只显示消息块已有的名称与状态，不猜测参数或结果。
        同样带 `tool-card` 类，才能在执行记录面板里与相邻卡片共用分隔线与内边距。 -->
-  <div v-else class="tool-card">
-    <div class="tool-card-body border-t-0">
-      <p class="flex flex-wrap items-baseline gap-2 px-1 text-xs">
-        <span class="font-mono">{{ block.toolName }}</span>
-        <span :class="phaseClass">{{ historyEnabled ? (historyError ? '历史内容暂不可用' : historyMore ? '正在加载历史记录…' : '未记录执行结果') : phaseLabel }}</span>
-      </p>
-      <HistoryLoadSentinel
-        v-if="historyMore"
-        :cursor="`tool:${block.toolCallId}:${historyMore}`"
-        :enabled="historyEnabled === true"
-        :loading="historyBusy === true"
-        :error="historyError"
-        quiet-error
-        @load="emit('loadMore')"
-      />
+  <div v-else class="tool-card" :class="{ 'is-running': !historyEnabled && block.execution?.phase === 'running' }">
+    <div class="tool-card-body border-t-0 flex items-center justify-between py-2 px-3">
+      <div class="flex items-center gap-2 min-w-0">
+        <span class="tool-badge" :class="toolBadge.class">{{ toolBadge.label }}</span>
+        <span class="font-mono text-xs text-desk-ink truncate">{{ block.toolName }}</span>
+      </div>
+      <span class="tool-status-pill" :class="phaseClass">
+        {{ historyEnabled ? (historyError ? '历史不可用' : historyMore ? '加载历史…' : '未记录结果') : phaseLabel }}
+      </span>
     </div>
   </div>
 </template>

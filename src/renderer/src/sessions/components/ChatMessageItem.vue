@@ -1,5 +1,6 @@
 <!-- 单条消息：按块展示正文、思考、工具卡、技能卡、压缩卡与计时（单条生成耗时与本轮响应耗时）与本次调用的 token 花销。
-     过程块逐项展示：每段 Thinking 各自折叠成一行轻量摘要（生成中展开并跟随最新思考，结束后收起），正文按原位置展示、始终可见。
+     纯过程消息（仅含工具调用或思考且无正文）自动绑定 .chat-message-process，消除多余外层边框与空旷间距，融入一体化执行流；
+     过程块逐项展示：每段 Thinking 折叠成带思维图标与状态胶囊的轻量抽屉（生成中展开微光流动并跟随最新思考，结束后收起），正文按原位置展示并支持流式呼吸打字光标。
      工具调用按块相邻关系归组：连续出现且都不是生成式界面的工具调用合成一个「执行记录」面板，面板内每条仍是一张独立折叠的 ToolCard；
      单条工具不套面板，Thinking、正文与生成式界面都是分组分界，不会被归进工具面板。
      交付了生成式界面的工具调用改渲染界面本身，不再套折叠卡；界面按可见性挂载：远离视口的界面只留一行占位，展开全部轮次时不把每份界面都常驻。
@@ -195,6 +196,9 @@ function groupStats(blocks: readonly ChatToolBlock[]): string {
 
 /** 只标记渲染入口，不改变界面版本、会话身份或消息的块顺序。 */
 const hasGenui = computed(() => props.message.blocks.some(block => block.kind === 'toolcall' && block.ui !== null))
+/** 纯过程消息：既不是用户消息也不是压缩记录，并且只有工具调用或思考，没有非空正文文本和生成式界面。 */
+const hasContentText = computed(() => props.message.blocks.some(block => block.kind === 'text' && block.text.trim() !== ''))
+const isProcessOnly = computed(() => !isUser.value && !isCompaction.value && !hasGenui.value && !hasContentText.value)
 /** 压缩记录不是对话消息：不展示生成计时、用户操作栏与复制入口。 */
 const isCompaction = computed(() => props.message.role === 'compaction')
 const compaction = computed(() => props.message.compaction)
@@ -234,6 +238,15 @@ const liveThinkingKey = computed(() => {
   if (props.message.role !== 'assistant' || generation.value?.phase !== 'running') return null
   const last = props.message.blocks[props.message.blocks.length - 1]
   return last !== undefined && last.kind === 'thinking' ? last.key : null
+})
+
+/**
+ * 正在流式生成的正文文本块：消息处于运行中且该块是最后一个块。
+ */
+const liveTextKey = computed(() => {
+  if (props.message.role !== 'assistant' || generation.value?.phase !== 'running') return null
+  const last = props.message.blocks[props.message.blocks.length - 1]
+  return last !== undefined && last.kind === 'text' ? last.key : null
 })
 
 /** 流式 Thinking 的正文；跟随滚动只在这块存在且它自己展开时生效。 */
@@ -441,15 +454,15 @@ function onEditKeydown(event: KeyboardEvent): void {
 <template>
   <article class="chat-message" :class="[
     isUser ? 'chat-message-user' : isCompaction ? 'chat-message-compaction' : 'chat-message-assistant',
-    { 'chat-message-has-genui': hasGenui }
+    { 'chat-message-has-genui': hasGenui, 'chat-message-process': isProcessOnly }
   ]">
-    <header class="chat-meta" :class="{ 'chat-meta-continued': compactHeader === true }">
+    <header class="chat-meta" :class="{ 'chat-meta-continued': compactHeader === true, 'chat-meta-process': isProcessOnly }">
       <span v-if="!isUser && !isCompaction && compactHeader !== true" class="chat-role-mark" aria-hidden="true">π</span>
       <span v-if="compactHeader !== true" class="chat-role">{{ roleLabel }}</span>
       <span v-if="message.time || turnText !== null || (!isUser && !isCompaction)" class="chat-time inline-flex flex-wrap items-center gap-x-3 gap-y-1">
-        <span v-if="message.time">{{ message.time }}</span>
+        <span v-if="message.time && (!compactHeader || !isProcessOnly)">{{ message.time }}</span>
         <span
-          v-if="!isUser && !isCompaction"
+          v-if="!isUser && !isCompaction && (!compactHeader || !isProcessOnly)"
           class="font-mono"
           title="按客户端事件计时；生成中更新，消息结束、事件配对中断或 Agent 收敛时固定；历史无记录不推算。"
         >{{ generationText }}</span>
@@ -459,12 +472,12 @@ function onEditKeydown(event: KeyboardEvent): void {
           title="从提交到本轮结束（含工具执行与等待），按客户端事件计时；历史轮次无记录。"
         >{{ turnText }}</span>
         <span
-          v-if="usageText !== null"
+          v-if="usageText !== null && (!compactHeader || !isProcessOnly)"
           class="font-mono"
           title="本次模型调用的输入 / 输出 tokens；由模型上报，未上报或全零不显示。"
         >{{ usageText }}</span>
         <span
-          v-if="cacheHitText !== null"
+          v-if="cacheHitText !== null && (!compactHeader || !isProcessOnly)"
           class="font-mono"
           title="单轮缓存命中率：缓存读 /（输入 + 缓存读 + 缓存写），本次模型调用。"
         >{{ cacheHitText }}</span>
@@ -536,14 +549,23 @@ function onEditKeydown(event: KeyboardEvent): void {
         >
           <summary @click.prevent="toggleThinking(row.block.key)">
             <span class="disclosure"></span>
-            <span class="chat-thinking-label">Thinking</span>
+            <span class="chat-thinking-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" class="size-3.5 fill-none stroke-current" stroke-width="1.75">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M12 18v-5.25m0 0a6.01 6.01 0 0 0 1.5-.189m-1.5.189a6.01 6.01 0 0 1-1.5-.189m3.75 7.478a12.06 12.06 0 0 1-4.5 0m3.75 2.383a14.406 14.406 0 0 1-3 0M14.25 18v-.192c0-.983.658-1.823 1.508-2.316a7.5 7.5 0 1 0-7.516 0c.85.493 1.508 1.333 1.508 2.316V18" />
+              </svg>
+            </span>
+            <span class="chat-thinking-label">思考过程</span>
             <span v-if="row.block.key === liveThinkingKey" class="chat-thinking-hint">
-              <span class="status-dots text-desk-accent" aria-hidden="true"><span></span><span></span><span></span></span>
+              <span class="running-wave-bars text-desk-accent" aria-hidden="true"><span></span><span></span><span></span></span>
               思考中
+            </span>
+            <span v-else class="chat-thinking-hint chat-thinking-hint-done">
+              {{ isThinkingExpanded(row.block.key) ? '收起' : '已完成' }}
             </span>
           </summary>
           <div
             class="chat-thinking-body"
+            :class="{ 'is-live': row.block.key === liveThinkingKey }"
             :ref="element => registerThinkingBody(row.block.key, element)"
             @scroll.passive="onThinkingBodyScroll"
             @wheel.passive="onThinkingBodyWheel"
@@ -674,7 +696,7 @@ function onEditKeydown(event: KeyboardEvent): void {
             :class="isUser ? 'chat-bubble chat-bubble-user self-end' : 'chat-assistant-content'"
           >
             <p v-if="isUser">{{ row.block.text }}</p>
-            <MarkdownContent v-else :text="row.block.text" />
+            <MarkdownContent v-else :text="row.block.text" :streaming="row.block.key === liveTextKey" />
             <p v-if="row.block.truncated && chunksFor(row.block).length === 0" class="chat-truncation-note">此内容超出展示上限，已截断。</p>
           </div>
           <HistoryLoadSentinel

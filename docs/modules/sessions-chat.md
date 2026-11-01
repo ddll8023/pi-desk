@@ -68,7 +68,7 @@
 | `src/renderer/src/sessions/chat-view.ts` | 将消息与工具投影组织为聊天展示模型，保留图片与标注关系并还原可重发输入 |
 | `src/renderer/src/sessions/clock.ts` | 聊天生成／工具计时与显示时钟 |
 | `src/renderer/src/sessions/usage-format.ts` | token、费用及用量展示格式 |
-| `src/renderer/src/sessions/tool-summary.ts` | 工具卡展示推导：参数摘要、路径相对化、改动量与结果预览 |
+| `src/renderer/src/sessions/tool-summary.ts` | 工具卡展示推导：参数与结构化 JSON 语义提炼、路径相对化、改动量与结果预览 |
 | `src/renderer/src/sessions/extension-dialog-presentation.ts` | 扩展提示、选择及对话展示转换 |
 
 ### 界面
@@ -80,12 +80,12 @@
 | `src/renderer/src/sessions/components/ImageAnnotationPanel.vue` | 左图右说明的独立标注面板、编号双向定位、同步删除与键盘调整入口 |
 | `src/renderer/src/sessions/components/ImageAnnotationCanvas.vue` | 共用原图坐标系的编号与点框叠加层，支持编辑及桌面／手机只读展示，不修改图片像素 |
 | `src/renderer/src/sessions/components/ChatMessageList.vue` | 本地待发送／结果未确认状态及绑定图片标注展示、权威消息交接、历史加载、滚动与布局观察；向顶部栏发布对话跳转入口并执行跳转；承接工作树隔离任务横幅挂载 |
-| `src/renderer/src/sessions/components/ChatTurnItem.vue` | 按轮摘要、展开与原文内容，以及轮次多分支切换器的挂载与响应渲染 |
+| `src/renderer/src/sessions/components/ChatTurnItem.vue` | 按轮摘要、展开与原文内容、多分支切换，以及同轮助手响应流与多步骤执行过程抽屉（Process Drawer）管理 |
 | `src/renderer/src/sessions/components/TurnBranchSwitcher.vue` | 轮次多分支微型切换器（`‹ 1 / 2 ›`） |
 | `src/renderer/src/sessions/components/WorktreeTaskBanner.vue` | 任务工作区状态底栏、固定目标与审阅合并（支持 Squash 与自动清理）、运行终端关闭确认与放弃删除流程 |
-| `src/renderer/src/sessions/components/ChatMessageItem.vue` | 单消息、图片编号及对应说明、思考、工具归组面板与生成式界面分发 |
+| `src/renderer/src/sessions/components/ChatMessageItem.vue` | 单消息、图片编号及说明、思考抽屉、纯过程紧凑步骤、流式打字光标、工具归组面板与生成式界面分发 |
 | `src/renderer/src/sessions/components/HistoryLoadSentinel.vue` | 历史加载触发哨兵 |
-| `src/renderer/src/sessions/components/ToolCard.vue` | 工具卡：摘要行、变更 Diff、参数与结果二级折叠 |
+| `src/renderer/src/sessions/components/ToolCard.vue` | 工具卡：语义徽章与路径高亮摘要行、变更 Diff、参数与结果二级折叠及状态微胶囊 |
 | `src/renderer/src/sessions/components/UsageDetailDialog.vue` | 会话用量明细与独立的 Codex 账户额度展示、按需读取与手动刷新 |
 | `src/renderer/src/sessions/components/SessionActivityBar.vue` | 会话活动摘要和明细 |
 | `src/renderer/src/sessions/components/ExtensionDialog.vue` | SDK 扩展交互队列的当前对话 |

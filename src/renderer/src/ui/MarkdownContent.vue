@@ -1,4 +1,4 @@
-<!-- 消息、Thinking 与技能卡正文共用的安全 Markdown 展示，公式在清洗后由 KaTeX 就地渲染；复制代码或链接就地反馈，不导航、不调用桌面桥接。 -->
+<!-- 消息、Thinking 与技能卡正文共用的安全 Markdown 展示，公式在清洗后由 KaTeX 就地渲染；流式输出时支持挂载呼吸打字光标；复制代码或链接就地反馈，不导航、不调用桌面桥接。 -->
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { copyText } from './clipboard'
@@ -7,6 +7,7 @@ import { renderMathInto } from './markdown-math'
 
 const props = defineProps<{
   readonly text: string
+  readonly streaming?: boolean
 }>()
 
 const html = computed(() => renderMarkdown(props.text))
@@ -71,7 +72,7 @@ async function onContentClick(event: MouseEvent): Promise<void> {
 </script>
 
 <template>
-  <div class="markdown-content">
+  <div class="markdown-content" :class="{ 'is-streaming': streaming }">
     <!-- 唯一 HTML 注入点：只接收 renderMarkdown 经白名单清洗后的结果；公式节点由 KaTeX 就地构建，不经字符串注入。 -->
     <div v-if="html !== null" ref="body" class="markdown-body" @click="onContentClick" v-html="html"></div>
     <p v-else class="markdown-fallback">{{ text }}</p>

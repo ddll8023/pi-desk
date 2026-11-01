@@ -1,8 +1,9 @@
 <!-- 一轮对话：用户消息始终可见，其后的 AI 回答与压缩记录整体折叠成一行摘要（条数、本轮响应耗时、最后一次调用的 token），点摘要行展开或收起。
+     同轮次内的多个助手响应组织在 .chat-turn-responses 流中；连续的纯过程消息（工具调用与思考）整体收纳为可折叠的执行过程抽屉（Process Drawer），运行中自适应展开查看流水线，结束后默认收起以突出最终回答正文。
      折叠状态不在这里持有：开合由消息列表按会话写入 session-view，本组件只渲染给定状态并发出开合意图，因此定位与状态隔离都在同一处处理。
      卡片的手动展开（思考、工具、技能、压缩摘要、旧版界面）只原样向上转发，滚动位置与跟随仍由消息列表决定。 -->
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import type { HistoryChunk } from '../../../../shared/runtime-api'
 import type { HistoryTurnState } from '../stores/runtime'
 import HistoryLoadSentinel from './HistoryLoadSentinel.vue'
@@ -137,6 +138,96 @@ const usageText = computed(() => {
 
 /** 摘要行右侧的次要信息：耗时与用量，都缺失时整段为空。 */
 const metaText = computed(() => [durationText.value, usageText.value].filter(part => part !== null).join(' · '))
+
+/** 判断一条助手消息是否为纯过程消息（只有工具调用或思考，没有正文文本，也没有生成式界面）。 */
+function isMessageProcessOnly(msg: ChatMessageView): boolean {
+  if (msg.role !== 'assistant') return false
+  const hasText = msg.blocks.some(b => b.kind === 'text' && b.text.trim() !== '')
+  const hasGenui = msg.blocks.some(b => b.kind === 'toolcall' && b.ui !== null)
+  return !hasText && !hasGenui
+}
+
+interface ResponseGroup {
+  readonly kind: 'process' | 'content'
+  readonly key: string
+  readonly messages: readonly ChatMessageView[]
+}
+
+/** 将同轮内的响应分组：连续的纯过程消息归入抽屉收纳，交付内容的响应直接呈现。 */
+const responseGroups = computed<readonly ResponseGroup[]>(() => {
+  const groups: ResponseGroup[] = []
+  let currentProcess: ChatMessageView[] = []
+
+  const flushProcess = (): void => {
+    if (currentProcess.length > 0) {
+      groups.push({
+        kind: 'process',
+        key: `process:${currentProcess.map(m => m.id).join(',')}`,
+        messages: [...currentProcess]
+      })
+      currentProcess = []
+    }
+  }
+
+  for (const msg of displayedResponses.value) {
+    if (isMessageProcessOnly(msg)) {
+      currentProcess.push(msg)
+    } else {
+      flushProcess()
+      groups.push({
+        kind: 'content',
+        key: `content:${msg.id}`,
+        messages: [msg]
+      })
+    }
+  }
+  flushProcess()
+  return groups
+})
+
+/** 手动控制执行过程抽屉的开合；未手动干预时：运行中默认展开，结束后默认收起归整。 */
+const processOverrides = reactive(new Map<string, boolean>())
+
+function isProcessGroupOpen(key: string): boolean {
+  const manual = processOverrides.get(key)
+  if (manual !== undefined) return manual
+  return live.value
+}
+
+function toggleProcessGroup(key: string): void {
+  const next = !isProcessGroupOpen(key)
+  processOverrides.set(key, next)
+  if (next) emit('userExpand')
+}
+
+function processGroupStats(messages: readonly ChatMessageView[]): string {
+  let reads = 0
+  let edits = 0
+  let bashes = 0
+  let others = 0
+  let thinkings = 0
+  for (const msg of messages) {
+    for (const b of msg.blocks) {
+      if (b.kind === 'thinking') {
+        thinkings += 1
+      } else if (b.kind === 'toolcall') {
+        const name = b.toolName.toLowerCase()
+        if (name.includes('read') || name.includes('fetch') || name.includes('get')) reads += 1
+        else if (name.includes('edit') || name.includes('write') || name.includes('patch')) edits += 1
+        else if (name.includes('bash') || name.includes('terminal') || name.includes('cmd')) bashes += 1
+        else others += 1
+      }
+    }
+  }
+  const parts: string[] = []
+  if (reads > 0) parts.push(`${reads} 读取`)
+  if (edits > 0) parts.push(`${edits} 编辑`)
+  if (bashes > 0) parts.push(`${bashes} 终端`)
+  if (others > 0) parts.push(`${others} 工具`)
+  if (thinkings > 0) parts.push(`${thinkings} 思考`)
+  const total = reads + edits + bashes + others + thinkings
+  return `${total} 项操作${parts.length > 0 ? ` · ${parts.join(' / ')}` : ''}`
+}
 </script>
 
 <template>
@@ -191,26 +282,79 @@ const metaText = computed(() => [durationText.value, usageText.value].filter(par
     </button>
 
     <template v-if="expanded">
-      <ChatMessageItem
-        v-for="(message, responseIndex) in displayedResponses"
-        :key="message.id"
-        :message="message"
-        :compact-header="responseIndex > 0"
-        :actions-disabled="actionsDisabled"
-        :disabled-reason="disabledReason"
-        :history-chunks="chunksOf(message)"
-        :chunk-states="detail?.chunkStates"
-        :history-enabled="canLoadHistory"
-        :history-busy="detail?.loading"
-        :history-more="detail?.next"
-        :history-error="detail?.error"
-        @load-more="emit('loadDetail', true)"
-        @load-chunk="emit('loadChunk', $event)"
-        @rewind="emit('rewind', $event)"
-        @submit-edit="(messageId, text) => emit('submitEdit', messageId, text)"
-        @jump-latest="emit('jumpLatest', $event)"
-        @user-expand="emit('userExpand')"
-      />
+      <div v-if="hasResponses" class="chat-turn-responses">
+        <template v-for="group in responseGroups" :key="group.key">
+          <!-- 多个纯过程步骤整体收纳进执行过程抽屉，避免散落霸屏 -->
+          <div v-if="group.kind === 'process' && group.messages.length > 1" class="turn-process-drawer">
+            <button
+              type="button"
+              class="turn-process-header"
+              :aria-expanded="isProcessGroupOpen(group.key)"
+              @click="toggleProcessGroup(group.key)"
+            >
+              <span class="disclosure" :class="{ 'is-open': isProcessGroupOpen(group.key) }" aria-hidden="true"></span>
+              <span class="turn-process-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" class="size-3.5 fill-none stroke-current" stroke-width="2">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z" />
+                </svg>
+              </span>
+              <span class="turn-process-title">执行过程</span>
+              <span class="turn-process-stats">{{ processGroupStats(group.messages) }}</span>
+              <span class="turn-process-hint ml-auto">
+                <span v-if="live && isProcessGroupOpen(group.key)" class="running-wave-bars text-desk-accent mr-1">
+                  <span></span><span></span><span></span>
+                </span>
+                {{ isProcessGroupOpen(group.key) ? '收起步骤' : '展开查看' }}
+              </span>
+            </button>
+            <div v-if="isProcessGroupOpen(group.key)" class="turn-process-body">
+              <ChatMessageItem
+                v-for="message in group.messages"
+                :key="message.id"
+                :message="message"
+                :compact-header="true"
+                :actions-disabled="actionsDisabled"
+                :disabled-reason="disabledReason"
+                :history-chunks="chunksOf(message)"
+                :chunk-states="detail?.chunkStates"
+                :history-enabled="canLoadHistory"
+                :history-busy="detail?.loading"
+                :history-more="detail?.next"
+                :history-error="detail?.error"
+                @load-more="emit('loadDetail', true)"
+                @load-chunk="emit('loadChunk', $event)"
+                @rewind="emit('rewind', $event)"
+                @submit-edit="(messageId, text) => emit('submitEdit', messageId, text)"
+                @jump-latest="emit('jumpLatest', $event)"
+                @user-expand="emit('userExpand')"
+              />
+            </div>
+          </div>
+          <!-- 单个步骤或最终内容回复直接渲染 -->
+          <template v-else>
+            <ChatMessageItem
+              v-for="(message, responseIndex) in group.messages"
+              :key="message.id"
+              :message="message"
+              :compact-header="responseIndex > 0 || group.kind === 'process'"
+              :actions-disabled="actionsDisabled"
+              :disabled-reason="disabledReason"
+              :history-chunks="chunksOf(message)"
+              :chunk-states="detail?.chunkStates"
+              :history-enabled="canLoadHistory"
+              :history-busy="detail?.loading"
+              :history-more="detail?.next"
+              :history-error="detail?.error"
+              @load-more="emit('loadDetail', true)"
+              @load-chunk="emit('loadChunk', $event)"
+              @rewind="emit('rewind', $event)"
+              @submit-edit="(messageId, text) => emit('submitEdit', messageId, text)"
+              @jump-latest="emit('jumpLatest', $event)"
+              @user-expand="emit('userExpand')"
+            />
+          </template>
+        </template>
+      </div>
       <HistoryLoadSentinel
         v-if="detail?.next && !live"
         :cursor="`${turn.historyId}:${detail.next}`"

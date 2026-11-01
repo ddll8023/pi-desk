@@ -907,10 +907,14 @@ onBeforeUnmount(() => {
           </div>
         </div>
 
-        <p v-if="streaming" role="status" class="status-notice status-notice-info flex items-center gap-2">
-          <span class="status-dots text-desk-accent" aria-hidden="true"><span></span><span></span><span></span></span>
-          <span>{{ compacting ? '正在压缩上下文；需要中断时在下方停止。' : 'Agent 正在运行；需要中断时在下方停止。' }}</span>
-        </p>
+        <div v-if="streaming" role="status" class="chat-running-banner">
+          <span class="running-wave-bars text-desk-accent" aria-hidden="true">
+            <span></span><span></span><span></span>
+          </span>
+          <span class="chat-running-text">
+            {{ compacting ? '正在压缩上下文；需要中断时在下方停止。' : 'Agent 正在运行；需要中断时在下方停止。' }}
+          </span>
+        </div>
         </div>
 
         <article v-if="showPendingPrompt && pendingPrompt !== null" class="chat-message chat-message-user" aria-label="待发送消息" :aria-busy="pendingPrompt.checking || (pendingPrompt.phase !== 'cancelled' && pendingPrompt.phase !== 'unconfirmed')">

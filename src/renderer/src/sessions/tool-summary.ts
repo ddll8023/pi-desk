@@ -1,8 +1,9 @@
 /**
  * 工具卡片的展示推导：摘要行内容、变更展示与结果预览。
  *
- * 只做展示层计算，不改变投影数据。涵盖五类：
- * 参数摘要与参数值文案（长文本、数组与嵌套对象只给规模）；文件路径相对化与 `write` 内容预览；
+ * 只做展示层计算，不改变投影数据。涵盖六类：
+ * 参数摘要与参数值文案（长文本、数组与嵌套对象只给规模，支持结构化 JSON 与 skill_guard_select 的人道化语义提炼）；
+ * 文件路径相对化与 `write` 内容预览；
  * Diff 增删行统计与工具组状态统计；结果规模测量与预览裁剪（按行数、按字符两种裁剪原因分开）；
  * 结果整体是 JSON 时的结构摘要。为不在渲染线程解析大文本，JSON 判定同时限制长度。
  */
@@ -138,6 +139,31 @@ function joinFallbackArgs(summary: readonly ToolArgSummaryEntry[]): string | nul
   return parts.length === 0 ? null : parts.join(' ')
 }
 
+/** 尝试从 JSON 参数中提炼出易读的摘要键值，避免在卡片标题行直接展示大括号原生 JSON。 */
+function formatJsonArgsPreview(argsText: string): string | null {
+  try {
+    const obj: unknown = JSON.parse(argsText)
+    if (typeof obj !== 'object' || obj === null) return null
+    if (Array.isArray(obj)) return `JSON 数组 (${obj.length} 项)`
+    const record = obj as Record<string, unknown>
+    // 优先提取最有语义的关键字段
+    const candidateKeys = ['query', 'pattern', 'command', 'action', 'message', 'prompt', 'url', 'path', 'title', 'name']
+    for (const key of candidateKeys) {
+      const val = record[key]
+      if (typeof val === 'string' && val.trim() !== '') {
+        return `${key}: ${val.trim()}`
+      }
+    }
+    const keys = Object.keys(record)
+    if (keys.length > 0) {
+      return `结构化参数 · ${keys.slice(0, 3).join(', ')}${keys.length > 3 ? '…' : ''}`
+    }
+    return '参数对象'
+  } catch {
+    return null
+  }
+}
+
 /**
  * 折叠状态那一行的摘要：内置工具按优先级取路径、命令或 pattern；未知工具（含 MCP）取前两个
  * 短参数；摘要不可得时回退到参数文本首行。都不成立时返回 null，不显示摘要。
@@ -147,13 +173,37 @@ export function toolCallPreview(
   summary: readonly ToolArgSummaryEntry[] | null,
   argsText: string | null
 ): string | null {
+  if (toolName === 'skill_guard_select' && argsText !== null) {
+    try {
+      const parsed: unknown = JSON.parse(argsText)
+      if (parsed && typeof parsed === 'object' && Array.isArray((parsed as Record<string, unknown>).skills)) {
+        const names = ((parsed as Record<string, unknown>).skills as readonly Record<string, unknown>[])
+          .map(s => String(s.name ?? ''))
+          .filter(Boolean)
+        if (names.length > 0) return clipPreview(`选择规范: ${names.join(', ')}`)
+      }
+    } catch {
+      // 忽略，走常规逻辑
+    }
+  }
+
   if (summary !== null && summary.length > 0) {
     const keys = PREVIEW_ARG_KEYS[toolName]
     const preferred = keys === undefined ? joinFallbackArgs(summary) : findPreviewArg(summary, keys)
     if (preferred !== null) return clipPreview(preferred)
   }
-  const firstLine = argsText?.split('\n', 1)[0]?.trim() ?? ''
-  return firstLine === '' ? null : clipPreview(firstLine)
+
+  if (argsText !== null) {
+    const trimmed = argsText.trim()
+    if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+      const jsonPreview = formatJsonArgsPreview(trimmed)
+      if (jsonPreview !== null) return clipPreview(jsonPreview)
+    }
+    const firstLine = argsText.split('\n', 1)[0]?.trim() ?? ''
+    return firstLine === '' ? null : clipPreview(firstLine)
+  }
+
+  return null
 }
 
 /**
