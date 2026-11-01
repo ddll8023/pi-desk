@@ -1,4 +1,6 @@
-<!-- 设置页的 Git 清理分节：盘点当前项目的仓库体积、托管任务工作树与临时任务分支，并提供修剪、清理与垃圾回收。
+<!-- 设置页的 Git 分节：盘点某个项目的仓库体积、托管任务工作树与临时任务分支，并提供修剪、清理与垃圾回收。
+     盘点的项目由本节顶部的项目选择器决定，默认跟随左侧当前项目；在这里切换查看目标只改变本分节的盘点对象，
+     不改变应用当前项目，因此不必为了清另一个仓库先去侧边栏切换项目。
      清理对象只限应用自己建在 `<仓库根>/.pi/worktrees/` 下的工作树与 `pi/task-*` 分支；主进程会再校验一次，
      页面全选也只覆盖这些范围。含未提交改动的工作树必须显式强制才能清理，因此单独走确认弹窗。
      页面只提交「要清理哪些」，不构造 git 参数；每次清理完成后重新盘点，用主进程结果覆盖本地展示。 -->
@@ -9,6 +11,7 @@ import type { TaskBranchCleanItem, TaskWorktreeCleanItem } from '../../../../sha
 import { useProjectStore } from '../../projects/stores/project'
 import { usePreferencesStore } from '../../preferences/stores/preferences'
 import AppButton from '../../ui/AppButton.vue'
+import AppSelect from '../../ui/AppSelect.vue'
 import ConfirmDialog from '../../ui/ConfirmDialog.vue'
 
 const projectStore = useProjectStore()
@@ -37,7 +40,25 @@ const actionNotice = ref('')
 /** 强制清理含未提交改动的确认目标；null 表示弹窗关闭。 */
 const forceTargets = shallowRef<readonly TaskWorktreeCleanItem[] | null>(null)
 
-const projectPath = computed(() => projectStore.currentProject?.path ?? '')
+/** 本节盘点的项目路径；由顶部选择器决定，默认跟随应用当前项目。 */
+const selectedPath = ref(projectStore.currentProject?.path ?? '')
+/** 用户是否在本节手动选过项目：手动选过之后不再跟着左侧当前项目跳动。 */
+const pickedByUser = ref(false)
+
+/** 选择器的候选项来自同一份项目列表；已选项目被移除时补一条，避免选中值退化成空标签。 */
+const projectGroups = computed(() => {
+  const options = projectStore.projects.map((project) => ({
+    value: project.path,
+    label: project.name,
+    description: project.path
+  }))
+  if (selectedPath.value !== '' && !options.some((option) => option.value === selectedPath.value)) {
+    options.push({ value: selectedPath.value, label: selectedPath.value, description: '该项目已不在侧栏列表中' })
+  }
+  return [{ options }]
+})
+
+const projectPath = computed(() => selectedPath.value)
 const inFlight = computed(() => busy.value)
 
 /** 已合入或孤立的干净工作树：可以被「一键清理」直接覆盖的安全子集。 */
@@ -276,7 +297,18 @@ async function runGc(): Promise<void> {
   })
 }
 
-// 换项目就重新盘点：清单永远对应当前项目，不沿用上一个仓库的数字。
+// 本项目选择器手动选过之后不再跟随左侧当前项目；否则保持「默认看当前项目」。
+watch(selectedPath, (value) => {
+  if (value !== (projectStore.currentProject?.path ?? '')) pickedByUser.value = true
+})
+
+// 左侧切换当前项目：用户没在本节手动选过时跟着看新项目，选过就保持他自己的选择。
+watch(() => projectStore.currentProject?.path ?? '', (path) => {
+  if (pickedByUser.value || path === '') return
+  selectedPath.value = path
+})
+
+// 换项目就重新盘点：清单永远对应所选项目，不沿用上一个仓库的数字。
 watch(projectPath, () => {
   selectedWorktrees.value = []
   selectedBranches.value = []
@@ -299,13 +331,43 @@ onMounted(() => {
       </p>
     </header>
 
+    <!-- 0. 盘点目标项目 -->
+    <section class="settings-section" aria-labelledby="settings-git-target-title">
+      <div class="settings-section-heading">
+        <div>
+          <h2 id="settings-git-target-title" class="settings-section-title">当前查看的项目</h2>
+          <p class="mt-1 text-xs text-desk-muted">
+            选择要盘点的项目；这里切换只改变本页的清理对象，不改变应用当前项目。
+          </p>
+        </div>
+      </div>
+
+      <p v-if="projectStore.projects.length === 0" class="mt-4 text-xs text-desk-muted" role="status">
+        还没有任何项目，请先在左侧添加项目。
+      </p>
+      <div v-else class="mt-4 space-y-1">
+        <span class="field-label">项目</span>
+        <AppSelect
+          id="git-cleanup-project"
+          v-model="selectedPath"
+          label="项目"
+          searchable
+          search-placeholder="搜索项目…"
+          empty-label="选择项目"
+          empty-results-label="没有匹配的项目"
+          :groups="projectGroups"
+          :disabled="inFlight"
+        />
+      </div>
+    </section>
+
     <!-- 1. 仓库概览 -->
     <section class="settings-section" aria-labelledby="settings-git-overview-title" :aria-busy="inFlight">
       <div class="settings-section-heading">
         <div>
           <h2 id="settings-git-overview-title" class="settings-section-title">仓库概览</h2>
           <p class="mt-1 text-xs text-desk-muted">
-            当前项目：<code class="font-mono">{{ projectPath === '' ? '未选择项目' : projectPath }}</code>
+            盘点项目：<code class="font-mono">{{ projectPath === '' ? '未选择项目' : projectPath }}</code>
           </p>
         </div>
         <AppButton variant="compact" :disabled="inFlight || projectPath === ''" @click="refresh">刷新</AppButton>
@@ -317,7 +379,7 @@ onMounted(() => {
       </p>
       <p v-else-if="view.phase === 'error'" class="mt-4 text-xs text-desk-danger" role="alert">{{ view.message }}</p>
       <p v-else-if="view.phase === 'not-repository'" class="mt-4 text-xs text-desk-muted" role="status">
-        {{ projectPath === '' ? '请先在左侧选择一个项目。' : '当前项目不是 Git 仓库，没有可清理的资源。' }}
+        {{ projectPath === '' ? '请先在顶部选择要盘点的项目。' : '所选项目不是 Git 仓库，没有可清理的资源。' }}
       </p>
       <template v-else-if="summary !== null">
         <dl class="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
