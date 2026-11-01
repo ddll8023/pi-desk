@@ -54,6 +54,13 @@ defineProps<{ readonly name: SettingsIconName }>()
       <circle cx="8" cy="12" r="2" />
     </template>
 
+    <template v-else-if="name === 'git-branch'">
+      <path d="M6 3v12" />
+      <circle cx="18" cy="6" r="3" />
+      <circle cx="6" cy="18" r="3" />
+      <path d="M18 9a9 9 0 0 1-9 9" />
+    </template>
+
     <template v-else-if="name === 'smartphone'">
       <rect x="6" y="2" width="12" height="20" rx="2" />
       <path d="M11 18h2" />

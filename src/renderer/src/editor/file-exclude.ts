@@ -22,6 +22,8 @@ function compileGlob(pattern: string): RegExp | null {
   let i = 0
   while (i < pattern.length) {
     const char = pattern[i]
+    // 下标受长度约束，但严格模式下仍视为可能缺失；耗尽即结束。
+    if (char === undefined) break
     if (char === '*') {
       if (pattern[i + 1] === '*') {
         // ** 匹配任意字符包含 /

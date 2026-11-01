@@ -13,6 +13,7 @@
  * 多运行实例下打开其他会话不中断任何正在运行的会话；重载以目标会话自己的项目做信任复核。
  * 删除以显式项目路径定位文件：先按与项目移除同一套门禁收敛占用（opening/closing 拒绝、在途工作
  * 需显式中断确认），释放成功后才删文件；任一步失败都会保留会话原样，不产生半删状态。
+ * 会话文件删除后，按界面偏好清理该会话独占且无未提交改动的任务工作树；清理失败不回滚删除，也不影响列表返回。
  * 有活动操作而重载请求未确认时直接拒绝，不自动中断、不排队、不重放已提交的内容。
  * 生成式 UI 开关在每次授权时读一次并随目标下发给宿主；读失败按开启处理，不让偏好故障阻断会话。
  * IPC 契约与校验在 shared/session-api.ts。
@@ -90,6 +91,10 @@ export interface SessionManagerOptions {
   }
   /** 生成式 UI 开关：由主进程读配置后交给宿主决定是否注册该内置扩展。 */
   readonly readGenuiEnabled: () => Promise<boolean>
+  /** 删除会话后是否清理该会话关联且无未提交改动的工作树；由界面偏好决定，读不到时按不清理处理。 */
+  readonly readCleanupOnSessionDelete?: () => Promise<boolean>
+  /** 按会话清理其独占的工作树；实现自己负责跳过共享、脏工作树等情况。 */
+  readonly cleanupSessionWorkspace?: (projectPath: string, sessionId: string) => Promise<boolean>
 }
 
 export class SessionManager {
@@ -364,12 +369,30 @@ export class SessionManager {
         }
       }
       await deleteSessionFile(projectPath, request.sessionId)
+      // 会话已删：按偏好清理它独占且无改动的任务工作树。清理失败不回滚删除，也不影响列表返回。
+      await this.cleanupWorkspaceAfterDelete(projectPath, request.sessionId)
       return { ok: true, data: await listSessions(projectPath, request.listLimit) }
     } catch (error) {
       return this.failure(error, {
         code: 'INTERNAL_ERROR',
         message: '删除会话时发生未预期的内部错误。'
       })
+    }
+  }
+
+  /**
+   * 删除会话后的工作树清理：偏好关闭或未注入实现时什么都不做；异常不外抛，
+   * 否则会把已完成的删除报成失败，让用户误以为会话还在。
+   */
+  private async cleanupWorkspaceAfterDelete(projectPath: string, sessionId: string): Promise<void> {
+    const read = this.options.readCleanupOnSessionDelete
+    const cleanup = this.options.cleanupSessionWorkspace
+    if (read === undefined || cleanup === undefined) return
+    try {
+      if (!await read()) return
+      await cleanup(projectPath, sessionId)
+    } catch (error) {
+      console.warn('[session] 删除会话后清理工作树失败：', error)
     }
   }
 

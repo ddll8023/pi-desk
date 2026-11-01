@@ -41,6 +41,8 @@ function sameNavEntries(a: readonly ChatNavEntry[], b: readonly ChatNavEntry[]):
   for (let i = 0; i < a.length; i++) {
     const left = a[i]
     const right = b[i]
+    // 下标受长度约束，但严格模式下仍视为可能缺失；缺一项即说明列表不同。
+    if (left === undefined || right === undefined) return false
     if (
       left.id !== right.id ||
       left.label !== right.label ||

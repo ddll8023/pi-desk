@@ -1,6 +1,7 @@
 <!-- 设置页：左栏是按分组排列的分节导航，右栏是当前分节的内容；两栏各自滚动，页面本身不滚动。
      分节清单来自 settings-navigation，这里只做「渲染导航 + 按 id 分发内容」，新增设置项不必改模板结构；
      外观分节聚焦颜色主题，文件树排除规则与文件打开视图集中由文件分节（FileSettingsSection）管理；
+     Git 分节（GitSettingsSection）管理任务工作树与临时分支的残留清理；
      页面标题在左栏顶部，内容区每个分节自带一层页头（h1 加一句描述），其后按分节需要组织内容。
      内容区沿用统一的水平内边距，模型页的粘性认证摘要与正文在同一内容列对齐。 -->
 <script setup lang="ts">
@@ -17,6 +18,7 @@ import ResourceView from '../../resources/components/ResourceView.vue'
 import GenuiSettingsSection from '../../genui/components/GenuiSettingsSection.vue'
 import SettingsNavIcon from './SettingsNavIcon.vue'
 import FileSettingsSection from '../../editor/components/FileSettingsSection.vue'
+import GitSettingsSection from '../../git/components/GitSettingsSection.vue'
 import VersionUpdateSection from '../../updates/components/VersionUpdateSection.vue'
 import LanRemoteSettingsSection from '../../lan-remote/components/LanRemoteSettingsSection.vue'
 
@@ -104,6 +106,7 @@ const markdownViewOptions = [
         <QuickSendSection v-else-if="activeSection === 'quick-send'" />
         <QuickCommandsSection v-else-if="activeSection === 'quick-commands'" />
         <TerminalSettingsSection v-else-if="activeSection === 'terminal'" />
+        <GitSettingsSection v-else-if="activeSection === 'git'" />
         <LanRemoteSettingsSection v-else-if="activeSection === 'lan-remote'" />
         <ModelSettingsView v-else-if="activeSection === 'model'" />
         <ResourceView v-else-if="activeSection === 'resources'" />

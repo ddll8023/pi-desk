@@ -1,4 +1,4 @@
-/** 主进程任务工作区所有者：持久身份、会话绑定、托管路径授权及生命周期；不从前台项目或临时标签推断执行目录。 */
+/** 主进程任务工作区所有者：持久身份、会话绑定、托管路径授权及生命周期，包括删除会话后的可选工作树清理；不从前台项目或临时标签推断执行目录。 */
 import { randomUUID } from 'node:crypto'
 import { relative, isAbsolute } from 'node:path'
 import type { DesktopError } from '../../shared/desktop-api'
@@ -102,6 +102,34 @@ export class WorkspaceManager {
     const catalog = await this.options.store.read()
     const binding = catalog.bindings.find(item => item.projectPath === project && item.sessionId === sessionId)
     return binding ? this.get(project, binding.workspaceId) : this.resolveForSession(project, null)
+  }
+  /**
+   * 会话被删除后的可选清理：只处理该会话独占且无未提交改动的工作树。
+   * 以下情况一律跳过而不是报错：没有绑定、绑的是项目默认工作区、工作树已被其他会话共享、
+   * 或仍有未提交改动——删会话不得连带丢掉代码或断掉其他会话的执行目录。
+   * 返回是否真的清理了一个工作树，供调用方按需提示。
+   */
+  async cleanupForDeletedSession(projectPath: string, sessionId: string): Promise<boolean> {
+    const project = await normalizeProjectPath(projectPath)
+    const catalog = await this.options.store.read()
+    const binding = catalog.bindings.find(item => item.projectPath === project && item.sessionId === sessionId)
+    if (!binding) return false
+    const workspace = catalog.workspaces.find(item => item.id === binding.workspaceId)
+    if (!workspace || workspace.kind !== 'task' || workspace.phase !== 'ready') return false
+    // 还有其他会话绑着同一个工作树时不能删，否则会把仍在用的执行目录拔掉。
+    if (catalog.bindings.some(item => item.workspaceId === workspace.id && !(item.projectPath === project && item.sessionId === sessionId))) return false
+    try {
+      const status = await this.options.worktrees.checkWorktreeStatus(workspace)
+      if (!status.isClean) return false
+      const result = await this.removeWorktree({
+        projectPath: workspace.projectPath, workspaceId: workspace.id, deleteBranch: true, closeTerminals: false
+      })
+      return result.ok
+    } catch (error) {
+      // 清理失败不能回滚会话删除；保留问题到工作区记录里，下次可在设置页重试。
+      console.warn('[workspace] 删除会话时清理工作树失败：', error)
+      return false
+    }
   }
   async contextFor(target: WorkspaceTarget, mode: 'read' | 'write' | 'run' = 'read'): Promise<WorkspaceContext> {
     const allowed = (workspace: WorkspaceContext): boolean => (workspace.phase === 'ready' || mode === 'read' && workspace.phase === 'merged')

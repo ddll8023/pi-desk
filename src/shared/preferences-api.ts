@@ -1,4 +1,4 @@
-/** 定义界面偏好、对话页模型展示偏好、快捷发送短语、扩展自动更新开关与生成式 UI 开关的受限 IPC；窗口状态由主进程独占，不经过 IPC。 */
+/** 定义界面偏好（含文件排除规则、显隐模式与 Git 清理策略）、对话页模型展示偏好、快捷发送短语、扩展自动更新开关与生成式 UI 开关的受限 IPC；窗口状态由主进程独占，不经过 IPC。 */
 import type { DesktopErrorCode } from './desktop-api'
 import type { ModelIdentity } from './runtime-api'
 import { isModelIdentity } from './runtime-api'
@@ -118,6 +118,10 @@ export interface UiPreferences {
   readonly showHiddenFiles: boolean
   /** 文件排除/隐藏规则列表（名称、相对路径或通配符）。 */
   readonly fileExcludePatterns: readonly string[]
+  /** 任务合入后是否默认一并清理工作树；默认开。 */
+  readonly gitAutoCleanWorktreeOnMerge: boolean
+  /** 删除会话时是否清理该会话关联且无未提交改动的工作树；默认开。 */
+  readonly gitAutoCleanWorktreeOnSessionDelete: boolean
 }
 
 /** 右侧面板宽度是否在存储边界内；非整数与越界值一律拒绝。 */
@@ -134,9 +138,12 @@ export function isUiPreferences(value: unknown): value is UiPreferences {
       || key === 'rightPanelOpen' || key === 'rightPanelWidth' || key === 'rightPanelTab'
       || key === 'markdownDefaultView' || key === 'terminalLinkOpenMode'
       || key === 'showHiddenFiles' || key === 'fileExcludePatterns'
+      || key === 'gitAutoCleanWorktreeOnMerge' || key === 'gitAutoCleanWorktreeOnSessionDelete'
   ))) return false
   if (typeof value.sidebarCollapsed !== 'boolean' || !isUiTheme(value.theme)) return false
   if (typeof value.showHiddenFiles !== 'boolean') return false
+  if (typeof value.gitAutoCleanWorktreeOnMerge !== 'boolean') return false
+  if (typeof value.gitAutoCleanWorktreeOnSessionDelete !== 'boolean') return false
   if (typeof value.rightPanelOpen !== 'boolean' || !isRightPanelWidth(value.rightPanelWidth)) return false
   if (!isRightPanelTab(value.rightPanelTab)) return false
   if (!isMarkdownDefaultView(value.markdownDefaultView)) return false

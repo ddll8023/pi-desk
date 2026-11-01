@@ -1,4 +1,4 @@
-/** 主进程业务实例的唯一装配处：配置、项目、信任、会话、只读解析宿主池、终端、供应商、资源、更新、生成式界面与手机访问各一份，按依赖顺序建立并互相注入回调。本文件只做实例化，不注册 IPC、不写业务判断；其中系统目录选择与终端守护状态广播经 window-channel.ts 提供，是本文件对窗口投递层的唯一依赖。 */
+/** 主进程业务实例的唯一装配处：配置、项目、信任、会话、只读解析宿主池、终端、供应商、资源、更新、生成式界面、Git 清理与手机访问各一份，按依赖顺序建立并互相注入回调。本文件只做实例化，不注册 IPC、不写业务判断；其中系统目录选择与终端守护状态广播经 window-channel.ts 提供，是本文件对窗口投递层的唯一依赖。 */
 
 import { app } from 'electron'
 import { join } from 'node:path'
@@ -20,6 +20,7 @@ import { ProjectFileIndex } from './projects/project-file-index'
 import { GitService } from './git/git-service'
 import { WorktreeService } from './git/worktree-service'
 import { TurnSnapshotService } from './git/turn-snapshot-service'
+import { GitCleanupService } from './git/git-cleanup-service'
 import { ProjectManager } from './projects/project-manager'
 import { McpInspectionManager } from './resources/mcp-inspection'
 import { createReadOnlyHost, SdkHostManager } from './sessions/sdk-host-manager'
@@ -94,7 +95,16 @@ export const sessionManager = new SessionManager({
   ownership: sessionRuns,
   workspaces: workspaceManager,
   // 生成式 UI 开关在会话创建期读取；读失败按开启处理，不因偏好故障阻断会话。
-  readGenuiEnabled: async () => (await configStore.readGenui()).enabled
+  readGenuiEnabled: async () => (await configStore.readGenui()).enabled,
+  // 删除会话后是否级联清理工作树，由界面偏好决定；读失败按不清理处理，不自作主张删目录。
+  readCleanupOnSessionDelete: async () => {
+    try {
+      return (await configStore.readUiPreferences()).gitAutoCleanWorktreeOnSessionDelete
+    } catch {
+      return false
+    }
+  },
+  cleanupSessionWorkspace: (projectPath, sessionId) => workspaceManager.cleanupForDeletedSession(projectPath, sessionId)
 })
 
 /** 手机访问管理器只装配依赖；局域网入口须显式开启，地址与端口自动确定，无需外部代理。 */
@@ -144,6 +154,17 @@ export const gitService = new GitService({
 
 /** 工作树的提交式快照与恢复服务；服务本身不代表桌面轮次捕获及代码回退链已贯通。 */
 export const turnSnapshotService = new TurnSnapshotService()
+
+/** Git 清理与维护：盘点托管工作树与临时分支，修剪失效登记、移除残留与仓库垃圾回收。 */
+export const gitCleanupService = new GitCleanupService({
+  worktrees: worktreeService,
+  readWorkspaces: async () => (await workspaceStore.read()).workspaces,
+  // 已登记工作树经工作区管理器清理，由它同步相位并释放终端与视图。
+  // 该入口会抛异常而不是返回失败结果，因此直接 await 即可。
+  removeRegisteredWorkspace: async (request) => {
+    await workspaceManager.removeWorktree(request)
+  }
+})
 
 /** 认证执行端：管理认证辅助进程，凭据读写全在官方实现内完成。 */
 export const authManager = new AuthManager({ store: configStore, isPackaged: app.isPackaged })

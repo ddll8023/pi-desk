@@ -7,10 +7,10 @@
  */
 
 /** 设置页的分节标识；也是内容分发与深链跳转的唯一键。 */
-export type SettingsSectionId = 'appearance' | 'files' | 'quick-send' | 'quick-commands' | 'terminal' | 'lan-remote' | 'model' | 'resources' | 'features' | 'version'
+export type SettingsSectionId = 'appearance' | 'files' | 'quick-send' | 'quick-commands' | 'terminal' | 'git' | 'lan-remote' | 'model' | 'resources' | 'features' | 'version'
 
 /** 导航条目可用的图标名；每个名字对应 SettingsNavIcon 里的一段内联 Lucide 路径。 */
-export type SettingsIconName = 'palette' | 'files' | 'zap' | 'terminal' | 'bot' | 'blocks' | 'toggle-left' | 'refresh-cw' | 'smartphone'
+export type SettingsIconName = 'palette' | 'files' | 'zap' | 'terminal' | 'bot' | 'blocks' | 'toggle-left' | 'refresh-cw' | 'smartphone' | 'git-branch'
 
 /** 一个分节条目：标签是导航上显示的名字，关键词除标签本身外补上用户可能输入的别名。 */
 export interface SettingsNavItem {
@@ -38,6 +38,7 @@ export const SETTINGS_NAV_GROUPS: readonly SettingsNavGroup[] = [
       { id: 'quick-send', label: '快捷输入', icon: 'zap', keywords: ['短语', '发送', 'quick send'] },
       { id: 'quick-commands', label: '快捷命令', icon: 'terminal', keywords: ['命令', '终端', '快捷命令', 'command'] },
       { id: 'terminal', label: '终端', icon: 'terminal', keywords: ['终端', '常驻', '守护进程', 'terminal', 'daemon', '滚动历史'] },
+      { id: 'git', label: 'Git', icon: 'git-branch', keywords: ['git', '工作树', 'worktree', '分支', 'branch', '清理', '回收', 'gc', '垃圾', '临时分支'] },
       { id: 'lan-remote', label: '手机访问', icon: 'smartphone', keywords: ['手机', '移动端', '局域网', '配对', '证书', '远程', 'mobile', 'LAN'] }
     ]
   },

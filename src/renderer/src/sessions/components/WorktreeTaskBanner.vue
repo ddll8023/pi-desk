@@ -1,4 +1,4 @@
-<!-- 任务生命周期入口：固定目标、阻止未保存编辑被清理，并单独确认受影响的运行终端。 -->
+<!-- 任务生命周期入口：固定目标、阻止未保存编辑被清理，并单独确认受影响的运行终端；合入弹窗的默认清理勾选跟随偏好。 -->
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import type { WorkspaceContext } from '../../../../shared/workspace-api'
@@ -6,11 +6,13 @@ import { useWorkspaceTabsStore } from '../../workspace/stores/workspace-tabs'
 import { useTaskWorkspacesStore } from '../../workspace/stores/task-workspaces'
 import { useTerminalStore } from '../../workspace/stores/terminal'
 import { useProjectEditorStore } from '../../editor/stores/project-editor'
+import { usePreferencesStore } from '../../preferences/stores/preferences'
 import { useSessionStore } from '../stores/session'
 import AppButton from '../../ui/AppButton.vue'
 import ConfirmDialog from '../../ui/ConfirmDialog.vue'
 
 const tabs = useWorkspaceTabsStore(), workspaces = useTaskWorkspacesStore(), terminals = useTerminalStore(), editors = useProjectEditorStore()
+const preferences = usePreferencesStore()
 const activeWorktree = computed(() => tabs.activeWorktree)
 const mergeTarget = ref<WorkspaceContext | null>(null), discardTarget = ref<WorkspaceContext | null>(null)
 const mergeDialogOpen = ref(false), discardDialogOpen = ref(false), busy = ref(false)
@@ -47,6 +49,8 @@ async function openMergeDialog(): Promise<void> {
   const target = activeWorktree.value
   if (!target || target.phase !== 'ready' || busy.value) return
   mergeTarget.value = target; mergeError.value = null; worktreeStatus.value = null; closeMergeTerminals.value = false
+  // 默认勾选值跟随设置页的偏好；用户仍可在本次弹窗里改回，改动不回写偏好。
+  deleteAfterMerge.value = preferences.gitAutoCleanWorktreeOnMerge
   discardDialogOpen.value = false; mergeDialogOpen.value = true
   await loadStatus(target, 'merge')
 }

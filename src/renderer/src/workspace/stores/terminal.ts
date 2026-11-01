@@ -289,7 +289,7 @@ export const useTerminalStore = defineStore('terminal', () => {
   }
   return {
     sessions, titles, error, creating, insertFocus, daemonStatus, recoveryEpoch,
-    initialize, dispose, createTerminal, closeTerminal, closeAllTerminals, applyTerminalTitle, renameTerminal,
+    initialize, ensureLoaded, dispose, createTerminal, closeTerminal, closeAllTerminals, applyTerminalTitle, renameTerminal,
     registerWriter, unregisterWriter, loadSnapshot, finishRecovery, reportError, insertText,
     refreshDaemonStatus, stopStaleDaemon, stopDaemon, clearError
   }

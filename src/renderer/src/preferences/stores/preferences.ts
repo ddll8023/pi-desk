@@ -1,9 +1,11 @@
 /**
- * 保存侧栏与右侧面板的界面偏好（含侧栏展开的项目路径）、Markdown 默认视图、终端链接打开模式、快捷发送短语、
- * 扩展自动更新开关与生成式 UI 开关；窗口状态由主进程独占，不保存 Runtime 数据或单个消息块的临时开合状态。
+ * 保存侧栏与右侧面板的界面偏好（含侧栏展开的项目路径与文件树排除规则）、Markdown 默认视图、终端链接打开模式、
+ * 快捷发送短语、扩展自动更新开关与生成式 UI 开关；窗口状态由主进程独占，不保存 Runtime 数据或单个消息块的临时开合状态。
  *
- * 界面偏好是一份整体载荷：折叠状态、主题、展开的项目路径、右侧面板开合/宽度/页签、Markdown 默认视图与终端链接打开模式
- * 一起写入，任一变化都保存当前完整值，避免分字段保存互相覆盖；保存单飞，保存期间的新变化在收敛后补写一次。
+ * 界面偏好是一份整体载荷：折叠状态、主题、展开的项目路径、右侧面板开合/宽度/页签、Markdown 默认视图、
+ * 终端链接打开模式、文件树排除规则与两个 Git 清理策略一起写入，任一变化都保存当前完整值，避免分字段保存互相覆盖；
+ * 保存单飞，保存期间的新变化在收敛后补写一次。
+ * 两个 Git 清理策略只是合入弹窗与删除会话时的默认勾选，不代替这两处的确认。
  * 展开的项目路径只记录哪些项目展开过，顺序不参与展示；右侧面板宽度对同一窗口只有一个值，不按项目区分。
  * 自动更新开关默认关，只有用户显式打开后主进程才会在启动检查后自动更新扩展。
  * 生成式 UI 开关区分「最近保存值」与「当前会话已生效值」：它在会话创建期读取，保存本身不重建会话，
@@ -60,6 +62,10 @@ export const usePreferencesStore = defineStore('preferences', () => {
   const showHiddenFiles = ref(false)
   /** 文件排除/隐藏规则列表。 */
   const fileExcludePatterns = ref<readonly string[]>([...DEFAULT_FILE_EXCLUDE_PATTERNS])
+  /** 任务合入后是否默认一并清理工作树；默认开，与合入弹窗的既有默认一致。 */
+  const gitAutoCleanWorktreeOnMerge = ref(true)
+  /** 删除会话时是否清理关联且无未提交改动的工作树；默认开，避免残留堆积。 */
+  const gitAutoCleanWorktreeOnSessionDelete = ref(true)
   /** 快捷发送下拉的候选短语；顺序即展示顺序，读取失败或非法时为默认列表。 */
   const quickSendMessages = ref<string[]>([...DEFAULT_QUICK_SEND_MESSAGES])
   const quickSendView = ref<QuickSendView>({ phase: 'idle' })
@@ -106,6 +112,8 @@ export const usePreferencesStore = defineStore('preferences', () => {
       terminalLinkOpenMode.value = result.data.terminalLinkOpenMode
       showHiddenFiles.value = result.data.showHiddenFiles
       fileExcludePatterns.value = [...result.data.fileExcludePatterns]
+      gitAutoCleanWorktreeOnMerge.value = result.data.gitAutoCleanWorktreeOnMerge
+      gitAutoCleanWorktreeOnSessionDelete.value = result.data.gitAutoCleanWorktreeOnSessionDelete
     } else actionError.value = result.error
     if (quickSend.ok) quickSendMessages.value = [...quickSend.data.messages]
     if (autoUpdate.ok) extensionAutoUpdate.value = autoUpdate.data.enabled
@@ -158,7 +166,9 @@ export const usePreferencesStore = defineStore('preferences', () => {
       markdownDefaultView: markdownDefaultView.value,
       terminalLinkOpenMode: terminalLinkOpenMode.value,
       showHiddenFiles: showHiddenFiles.value,
-      fileExcludePatterns: [...fileExcludePatterns.value]
+      fileExcludePatterns: [...fileExcludePatterns.value],
+      gitAutoCleanWorktreeOnMerge: gitAutoCleanWorktreeOnMerge.value,
+      gitAutoCleanWorktreeOnSessionDelete: gitAutoCleanWorktreeOnSessionDelete.value
     }
     const pending = (async () => {
       const result = await setUiPreferences(payload)
@@ -176,6 +186,8 @@ export const usePreferencesStore = defineStore('preferences', () => {
       terminalLinkOpenMode.value = result.data.terminalLinkOpenMode
       showHiddenFiles.value = result.data.showHiddenFiles
       fileExcludePatterns.value = [...result.data.fileExcludePatterns]
+      gitAutoCleanWorktreeOnMerge.value = result.data.gitAutoCleanWorktreeOnMerge
+      gitAutoCleanWorktreeOnSessionDelete.value = result.data.gitAutoCleanWorktreeOnSessionDelete
     })()
     saving = pending
     await pending
@@ -261,6 +273,22 @@ export const usePreferencesStore = defineStore('preferences', () => {
     if (showHiddenFiles.value === next) return
 
     showHiddenFiles.value = next
+    await persistUi()
+  }
+
+  /** 切换合入后是否默认一并清理工作树。 */
+  async function setGitAutoCleanWorktreeOnMerge(next: boolean): Promise<void> {
+    if (gitAutoCleanWorktreeOnMerge.value === next) return
+
+    gitAutoCleanWorktreeOnMerge.value = next
+    await persistUi()
+  }
+
+  /** 切换删除会话时是否清理关联且无未提交改动的工作树。 */
+  async function setGitAutoCleanWorktreeOnSessionDelete(next: boolean): Promise<void> {
+    if (gitAutoCleanWorktreeOnSessionDelete.value === next) return
+
+    gitAutoCleanWorktreeOnSessionDelete.value = next
     await persistUi()
   }
 
@@ -380,6 +408,8 @@ export const usePreferencesStore = defineStore('preferences', () => {
     terminalLinkOpenMode,
     showHiddenFiles,
     fileExcludePatterns,
+    gitAutoCleanWorktreeOnMerge,
+    gitAutoCleanWorktreeOnSessionDelete,
     quickSendMessages,
     quickSendView,
     extensionAutoUpdate,
@@ -404,6 +434,8 @@ export const usePreferencesStore = defineStore('preferences', () => {
     setMarkdownDefaultView,
     setTerminalLinkOpenMode,
     setShowHiddenFiles,
+    setGitAutoCleanWorktreeOnMerge,
+    setGitAutoCleanWorktreeOnSessionDelete,
     setFileExcludePatterns,
     addFileExcludePattern,
     removeFileExcludePattern,

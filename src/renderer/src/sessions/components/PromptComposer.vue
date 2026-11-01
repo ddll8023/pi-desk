@@ -479,6 +479,8 @@ function extractClipboardImages(clipboardData: DataTransfer | null): File[] {
   if (items && items.length > 0) {
     for (let i = 0; i < items.length; i++) {
       const item = items[i]
+      // 下标受长度约束，但严格模式下仍视为可能缺失；跳过而非中途报错。
+      if (item === undefined) continue
       if (item.kind === 'file' && item.type.startsWith('image/')) {
         const file = item.getAsFile()
         if (file && IMAGE_MIME_TYPES.includes(file.type)) {

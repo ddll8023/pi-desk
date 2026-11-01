@@ -6,6 +6,7 @@ import type { AuthApi } from '../../shared/auth-api'
 import type { ExtensionUiApi } from '../../shared/extension-ui-api'
 import type { GitApi } from '../../shared/git-api'
 import type { WorktreeApi } from '../../shared/worktree-api'
+import type { GitCleanupApi } from '../../shared/git-cleanup-api'
 import type { GenuiParamsApi } from '../../shared/genui-params-api'
 import type { ModelsConfigApi } from '../../shared/models-config-api'
 import type { PiSettingsApi } from '../../shared/pi-settings-api'
@@ -21,10 +22,11 @@ import type { TrustApi } from '../../shared/trust-api'
 import type { UpdatesApi } from '../../shared/updates-api'
 import type { LanRemoteApi } from '../../shared/lan-remote-api'
 import type { BrowserCaptureApi } from '../../shared/browser-api'
+import type { BrowserSessionApi } from '../../shared/browser-session-api'
 
 declare global {
   interface Window {
-    readonly desktop?: BrowserCaptureApi & DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionApi & SessionRunApi & TerminalApi & PreferencesApi & QuickCommandsApi & GenuiParamsApi & PiSettingsApi & TrustApi & ExtensionUiApi & AuthApi & ModelsConfigApi & UpdatesApi & GitApi & WorktreeApi & LanRemoteApi
+    readonly desktop?: BrowserCaptureApi & BrowserSessionApi & DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionApi & SessionRunApi & TerminalApi & PreferencesApi & QuickCommandsApi & GenuiParamsApi & PiSettingsApi & TrustApi & ExtensionUiApi & AuthApi & ModelsConfigApi & UpdatesApi & GitApi & WorktreeApi & GitCleanupApi & LanRemoteApi
   }
 }
 

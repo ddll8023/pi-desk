@@ -117,7 +117,7 @@ export const preferencesApi = {
   },
 
   async setUiPreferences(ui: UiPreferences) {
-    // 只搬运已声明的字段，不把页面传入的整个对象转交给主进程。
+    // 整份载荷逐字段搬运：界面偏好是一份整体保存的契约，漏搬任何一个字段都会在保存时静默把它恢复成默认值。
     const request: UiPreferences = {
       sidebarCollapsed: ui.sidebarCollapsed,
       theme: ui.theme,
@@ -125,7 +125,12 @@ export const preferencesApi = {
       rightPanelOpen: ui.rightPanelOpen,
       rightPanelWidth: ui.rightPanelWidth,
       rightPanelTab: ui.rightPanelTab,
-      markdownDefaultView: ui.markdownDefaultView
+      markdownDefaultView: ui.markdownDefaultView,
+      terminalLinkOpenMode: ui.terminalLinkOpenMode,
+      showHiddenFiles: ui.showHiddenFiles,
+      fileExcludePatterns: [...ui.fileExcludePatterns],
+      gitAutoCleanWorktreeOnMerge: ui.gitAutoCleanWorktreeOnMerge,
+      gitAutoCleanWorktreeOnSessionDelete: ui.gitAutoCleanWorktreeOnSessionDelete
     }
     const response: unknown = await ipcRenderer.invoke(PREFERENCES_SET_UI_CHANNEL, request)
     return isPreferencesResult(response) ? response : invalidPreferencesResponse()

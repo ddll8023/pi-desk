@@ -277,12 +277,14 @@ async function onFetchEndpointModels(): Promise<void> {
   for (const row of headerDraft.value) {
     if (row.name.trim() !== '') headersObj[row.name.trim()] = row.value
   }
+  const requestedProviderId = props.mode === 'edit' ? props.providerId : providerId.value.trim()
 
   const result = await fetchEndpointModels({
     baseUrl: url,
-    apiKey: apiKeyInput.value !== '' ? apiKeyInput.value : undefined,
-    headers: Object.keys(headersObj).length > 0 ? headersObj : undefined,
-    providerId: props.mode === 'edit' ? props.providerId : providerId.value.trim() || undefined
+    // 可选字段在 exactOptionalPropertyTypes 下不能显式传 undefined，只能整个键缺席。
+    ...(apiKeyInput.value !== '' ? { apiKey: apiKeyInput.value } : {}),
+    ...(Object.keys(headersObj).length > 0 ? { headers: headersObj } : {}),
+    ...(requestedProviderId !== '' ? { providerId: requestedProviderId } : {})
   })
 
   fetchingModels.value = false

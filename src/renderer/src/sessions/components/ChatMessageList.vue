@@ -197,7 +197,8 @@ function requestRewind(messageId: string): void {
 
 /** 直接回退：成功后按提示词与图片资料各自的编辑位置交回原输入；仅权威成功才刷新会话列表。 */
 function archiveAffectedBranches(targetMessageId: string): void {
-  const currentKey = activeKey.value
+  // 分支归档的会话键必须与渲染时传给 ChatTurnItem 的 ownerKey 一致，否则归档与读取落在两套键上。
+  const currentKey = conversationKey.value
   if (!currentKey) return
   let found = false
   for (const turn of turns.value) {

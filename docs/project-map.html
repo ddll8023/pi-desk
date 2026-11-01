@@ -503,26 +503,32 @@
         "id": "git",
         "name": "Git",
         "groupId": "work",
-        "summary": "当前项目仓库的状态、差异、提交历史与暂存／提交／拉取／推送；不自行实现 Git 存储，不创建隔离工作树。",
+        "summary": "当前项目仓库的状态、差异、提交历史与暂存／提交／拉取／推送，以及任务工作树隔离、合入与清理；不自行实现 Git 存储。",
         "features": [
           "porcelain v2 增量状态解析与路径折算",
           "工作区／暂存区差异、提交历史与提交内差异",
           "暂存、取消暂存、恢复、提交、拉取与推送",
-          "写动作的信任拦截与待信任重试"
+          "写动作的信任拦截与待信任重试",
+          "任务工作树创建、合入与提交式轮次快照",
+          "托管工作树与临时分支盘点、修剪与清理",
+          "仓库垃圾回收与体积回收测算"
         ],
         "tags": ["Electron 主进程", "Vue 页面", "外部 git"],
         "entries": [
           {"kind": "关键实现", "label": "仓库操作用例", "path": "src/main/git/git-service.ts"},
           {"kind": "关键实现", "label": "固定命令与输出限制", "path": "src/main/git/git-command.ts"},
+          {"kind": "关键实现", "label": "清理与维护服务", "path": "src/main/git/git-cleanup-service.ts"},
           {"kind": "关键实现", "label": "状态跟踪与写动作", "path": "src/renderer/src/git/stores/git-status.ts"},
-          {"kind": "界面入口", "label": "源代码管理面板", "path": "src/renderer/src/git/components/GitPanel.vue"}
+          {"kind": "界面入口", "label": "源代码管理面板", "path": "src/renderer/src/git/components/GitPanel.vue"},
+          {"kind": "界面入口", "label": "设置页 Git 分节", "path": "src/renderer/src/git/components/GitSettingsSection.vue"}
         ],
         "resources": [
           {"name": "仓库状态与差异模型", "owner": "git Store", "lifecycle": "内存缓存；真源是项目所在仓库"}
         ],
         "constraints": [
           "写操作可能执行仓库 filter、hook 或 merge driver，因此在主进程做信任拦截",
-          "信任不提供并发隔离，同项目其他会话与外部程序仍可修改仓库"
+          "信任不提供并发隔离，同项目其他会话与外部程序仍可修改仓库",
+          "设置页清理只处理 .pi/worktrees/ 下的工作树与 pi/task-* 分支，含未提交改动需显式强制"
         ],
         "links": [
           {"label": "模块文档：Git", "href": "modules/git.md"}
@@ -667,11 +673,12 @@
         "id": "preferences",
         "name": "偏好",
         "groupId": "setting",
-        "summary": "界面主题、侧栏与右侧面板、Markdown 默认视图、快捷输入短语，以及统一偏好服务对模型展示、快捷命令与功能开关的适配。",
+        "summary": "界面主题、侧栏与右侧面板、Markdown 默认视图、快捷输入短语、Git 清理策略，以及统一偏好服务对模型展示、快捷命令与功能开关的适配。",
         "features": [
           "主题、布局与 Markdown 默认视图读写",
           "文件排除规则与显隐模式偏好持久化",
           "快捷输入短语管理",
+          "合入后与删除会话时的 Git 清理策略",
           "隐藏模型、快捷命令与功能开关的配置适配",
           "已保存值与待应用状态的区分"
         ],

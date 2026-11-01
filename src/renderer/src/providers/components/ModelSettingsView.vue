@@ -89,6 +89,23 @@ const customProviderById = computed<ReadonlyMap<string, ModelsConfigProvider>>((
   return entries
 })
 
+/**
+ * 条目展示名：契约只投影 id 与原始 JSON；名称从 JSON 的 name 字段取，
+ * 缺失或形状不对时退回 id，不把「未指定」伪装成一个名字。
+ */
+function providerDisplayName(entry: ModelsConfigProvider): string {
+  try {
+    const parsed: unknown = JSON.parse(entry.json)
+    if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+      const name = (parsed as Record<string, unknown>).name
+      if (typeof name === 'string' && name.trim() !== '') return name.trim()
+    }
+  } catch {
+    // 条目 JSON 不可解析时只用 id，不猜字段。
+  }
+  return entry.id
+}
+
 function hiddenIdsOf(provider: string): ReadonlySet<string> {
   return new Set(
     hiddenModels.value
@@ -146,18 +163,19 @@ const providerRows = computed<ProviderRow[]>(() => {
     if (knownIds.has(custom.id)) continue
     const models = modelsByProvider.value.get(custom.id) ?? []
     const hiddenIds = hiddenIdsOf(custom.id)
+    const displayName = providerDisplayName(custom)
     rows.push({
       id: custom.id,
-      name: custom.name,
+      name: displayName,
       status: custom.hasApiKey ? '已配置 Key' : '未配置凭据',
-      modelCount: custom.models.length,
+      modelCount: custom.modelCount,
       hiddenCount: hiddenCountFor(models, hiddenIds, catalogLoaded.value),
       custom: true,
       hasApiKey: custom.hasApiKey,
       configured: custom.hasApiKey,
       authStatus: {
         providerId: custom.id,
-        name: custom.name,
+        name: displayName,
         authTypes: [],
         subscription: false,
         oauthLoginLabel: null,
@@ -165,7 +183,7 @@ const providerRows = computed<ProviderRow[]>(() => {
         source: custom.hasApiKey ? 'config' : null,
         sourceLabel: custom.hasApiKey ? 'models.json' : null,
         storedType: null,
-        modelCount: custom.models.length
+        modelCount: custom.modelCount
       },
       entry: custom,
       models,

@@ -300,7 +300,8 @@ export function useMobileSession() {
     resetView(); selectedProject.value = project; selectedSession.value = null; newSessionDraft.value = false; sessions.value = []; sessionLimit.value = SESSION_PAGE_SIZE; remainingSessions.value = 0; draft.value = ''
     void recover()
   }
-  function chooseSession(session: SessionSummary): void {
+  /** 选择项目下的某个会话；这里只需要会话身份，不要求整份列表摘要。 */
+  function chooseSession(session: MobileSession): void {
     if (actionBusy.value || !selectedProject.value) return
     resetView(); selectedSession.value = session; newSessionDraft.value = false; draft.value = drafts.get(key()) ?? ''
     void recover()

@@ -76,7 +76,11 @@ export const DEFAULT_UI_PREFERENCES: UiPreferences = {
   terminalLinkOpenMode: 'ask',
   // 右侧文件树默认过滤隐藏项。
   showHiddenFiles: false,
-  fileExcludePatterns: DEFAULT_FILE_EXCLUDE_PATTERNS
+  fileExcludePatterns: DEFAULT_FILE_EXCLUDE_PATTERNS,
+  // 合入后默认清理工作树：与既有合入弹窗的默认勾选一致，不改变已有行为；弹窗里仍可改。
+  gitAutoCleanWorktreeOnMerge: true,
+  // 删除会话时只清理无未提交改动的关联工作树，默认开启以免残留堆积。
+  gitAutoCleanWorktreeOnSessionDelete: true
 }
 
 /** 窗口状态默认值；位置为 null 表示交给窗口自行居中。 */
@@ -203,7 +207,13 @@ function sanitizeUiPreferences(value: unknown): UiPreferences {
     showHiddenFiles: typeof value.showHiddenFiles === 'boolean'
       ? value.showHiddenFiles
       : DEFAULT_UI_PREFERENCES.showHiddenFiles,
-    fileExcludePatterns: sanitizeFileExcludePatterns(value.fileExcludePatterns)
+    fileExcludePatterns: sanitizeFileExcludePatterns(value.fileExcludePatterns),
+    gitAutoCleanWorktreeOnMerge: typeof value.gitAutoCleanWorktreeOnMerge === 'boolean'
+      ? value.gitAutoCleanWorktreeOnMerge
+      : DEFAULT_UI_PREFERENCES.gitAutoCleanWorktreeOnMerge,
+    gitAutoCleanWorktreeOnSessionDelete: typeof value.gitAutoCleanWorktreeOnSessionDelete === 'boolean'
+      ? value.gitAutoCleanWorktreeOnSessionDelete
+      : DEFAULT_UI_PREFERENCES.gitAutoCleanWorktreeOnSessionDelete
   }
 }
 

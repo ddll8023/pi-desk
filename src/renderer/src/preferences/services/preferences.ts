@@ -53,7 +53,12 @@ export async function setUiPreferences(ui: UiPreferences): Promise<PreferencesRe
       rightPanelOpen: ui.rightPanelOpen,
       rightPanelWidth: ui.rightPanelWidth,
       rightPanelTab: ui.rightPanelTab,
-      markdownDefaultView: ui.markdownDefaultView
+      markdownDefaultView: ui.markdownDefaultView,
+      terminalLinkOpenMode: ui.terminalLinkOpenMode,
+      showHiddenFiles: ui.showHiddenFiles,
+      fileExcludePatterns: [...ui.fileExcludePatterns],
+      gitAutoCleanWorktreeOnMerge: ui.gitAutoCleanWorktreeOnMerge,
+      gitAutoCleanWorktreeOnSessionDelete: ui.gitAutoCleanWorktreeOnSessionDelete
     })
   } catch (error) {
     return callFailed(error)

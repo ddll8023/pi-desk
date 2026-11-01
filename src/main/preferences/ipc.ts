@@ -197,10 +197,11 @@ export function registerPreferencesHandlers(pageUrl: string): void {
       if (!isUiPreferences(request)) {
         return preferencesFailure('INVALID_REQUEST', '界面偏好必须包含折叠状态、合法主题、展开的项目路径列表、右侧面板状态与 Markdown 默认视图。')
       }
-      const { sidebarCollapsed, theme, expandedProjects, rightPanelOpen, rightPanelWidth, rightPanelTab, markdownDefaultView } = request
+      const { theme } = request
       // 主题在参数合法后立即生效：只读降级时同样切换本次运行的主题，与页面本地生效保持一致。
       applyNativeTheme(theme)
-      return preferencesManager.setUi({ sidebarCollapsed, theme, expandedProjects, rightPanelOpen, rightPanelWidth, rightPanelTab, markdownDefaultView })
+      // 整份载荷交给存储：逐字段搬运会在新增偏好字段时静默丢值。
+      return preferencesManager.setUi(request)
     }
   )
 }
