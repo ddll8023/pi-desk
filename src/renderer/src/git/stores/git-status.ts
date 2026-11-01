@@ -49,6 +49,8 @@ export const useGitStatusStore = defineStore('git-status', () => {
   const hasNextEntry = computed(() => currentEntryIndex.value >= 0 && currentEntryIndex.value < flatEntries.value.length - 1)
   const hasPrevEntry = computed(() => currentEntryIndex.value > 0)
   function isCurrent(target: WorkspaceTarget): boolean { return projects.currentProject?.path === target.projectPath && context.value?.id === target.workspaceId }
+  /** 提取纯净的目标工作区对象，避免将携带大量条目与响应式代理的 GitStatus 下发至下游与桥接层。 */
+  function toTarget(target: WorkspaceTarget): WorkspaceTarget { return { projectPath: target.projectPath, workspaceId: target.workspaceId } }
   function isBusy(): boolean { return busyPath.value !== null || committing.value || remoteBusy.value !== null }
   function clearSelection(): void { diffSeq += 1; selection.value = null; diff.value = null; diffPhase.value = 'idle'; diffError.value = null }
   function applyStatus(next: GitStatus): void {
@@ -80,8 +82,9 @@ export const useGitStatusStore = defineStore('git-status', () => {
     } catch (caught) { if (ticket === statusSeq) { error.value = { code: 'BRIDGE_CALL_FAILED', message: caught instanceof Error ? caught.message : '解析 Git 工作区失败。' }; phase.value = 'error' } }
   }
   async function select(entry: { readonly path: string; readonly area: GitArea }): Promise<void> {
-    const target = status.value
-    if (!target || !isCurrent(target)) return
+    const rawTarget = status.value
+    if (!rawTarget || !isCurrent(rawTarget)) return
+    const target = toTarget(rawTarget)
     selection.value = { path: entry.path, area: entry.area }; diff.value = null; diffError.value = null; diffPhase.value = 'loading'
     const ticket = ++diffSeq
     const result = await getGitDiff(target, entry.path, entry.area)
@@ -127,8 +130,9 @@ export const useGitStatusStore = defineStore('git-status', () => {
     }
   }
   function change(paths: readonly string[], kind: 'stage' | 'unstage' | 'discard'): Promise<void> {
-    const target = status.value
-    if (!paths.length || !target) return Promise.resolve()
+    const rawTarget = status.value
+    if (!paths.length || !rawTarget) return Promise.resolve()
+    const target = toTarget(rawTarget)
     const copied = [...paths]
     const run = kind === 'stage' ? () => stageGitPaths(target, copied) : kind === 'unstage' ? () => unstageGitPaths(target, copied) : () => discardGitPaths(target, copied)
     const label = kind === 'stage' ? '已暂存' : kind === 'unstage' ? '已取消暂存' : '已丢弃改动'
@@ -143,22 +147,25 @@ export const useGitStatusStore = defineStore('git-status', () => {
   function stageAll(): Promise<void> { return stagePaths(entries.value.filter(entry => entry.area !== 'staged').map(entry => entry.path)) }
   function unstageAll(): Promise<void> { return unstagePaths(entries.value.filter(entry => entry.area === 'staged').map(entry => entry.path)) }
   async function commit(): Promise<boolean> {
-    const target = status.value, message = commitMessage.value
-    if (!target) return false
+    const rawTarget = status.value, message = commitMessage.value
+    if (!rawTarget) return false
+    const target = toTarget(rawTarget)
     if (!message.trim()) { actionError.value = { code: 'INVALID_REQUEST', message: '提交信息不能为空。' }; return false }
     return perform(target, '*', () => commitGitStaged(target, message), '已提交', 'commit', () => {
       if (drafts.value[target.workspaceId] === message) drafts.value = { ...drafts.value, [target.workspaceId]: '' }
     })
   }
   function setCommitMessage(value: string): void { commitMessage.value = value }
-  function runRemote(kind: 'pull' | 'push', target: WorkspaceTarget | null = status.value): Promise<boolean> {
-    return target ? perform(target, '*', () => kind === 'pull' ? pullGit(target) : pushGit(target), kind === 'pull' ? '已拉取' : '已推送', kind) : Promise.resolve(false)
+  function runRemote(kind: 'pull' | 'push', target: WorkspaceTarget | null = status.value ? toTarget(status.value) : null): Promise<boolean> {
+    const cleaned = target ? toTarget(target) : null
+    return cleaned ? perform(cleaned, '*', () => kind === 'pull' ? pullGit(cleaned) : pushGit(cleaned), kind === 'pull' ? '已拉取' : '已推送', kind) : Promise.resolve(false)
   }
   function pull(): Promise<boolean> { return runRemote('pull') }
   function push(): Promise<boolean> { return runRemote('push') }
   async function commitAndPush(): Promise<boolean> {
-    const target = status.value
-    if (!target || !isCurrent(target)) return false
+    const rawTarget = status.value
+    if (!rawTarget || !isCurrent(rawTarget)) return false
+    const target = toTarget(rawTarget)
     if (!await commit()) {
       if (isCurrent(target) && awaitingTrust.value) pendingTrustRetry = async () => { if (isCurrent(target)) await commitAndPush() }
       return false

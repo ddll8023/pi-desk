@@ -161,15 +161,16 @@ export const useGitHistoryStore = defineStore('git-history', () => {
     diffPhase.value = 'loading'
 
     const ticket = ++diffSeq
-    const result = await getGitCommitDiff(current, current.oid, file.path, file.oldPath)
-    if (ticket !== diffSeq || !isCurrent(current)) return
+    const target: WorkspaceTarget = { projectPath: current.projectPath, workspaceId: current.workspaceId }
+    const result = await getGitCommitDiff(target, current.oid, file.path, file.oldPath)
+    if (ticket !== diffSeq || !isCurrent(target)) return
 
     if (!result.ok) {
       diffError.value = result.error
       diffPhase.value = 'error'
       return
     }
-    if (result.data.workspaceId !== current.workspaceId || result.data.projectPath !== current.projectPath) return
+    if (result.data.workspaceId !== target.workspaceId || result.data.projectPath !== target.projectPath) return
     diff.value = result.data
     diffPhase.value = 'ready'
   }

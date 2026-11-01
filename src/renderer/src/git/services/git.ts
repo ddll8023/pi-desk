@@ -30,12 +30,20 @@ function callFailed(error: unknown): { ok: false; error: DesktopError } {
   }
 }
 
+/** 规范化目标工作区对象：仅提取契约字段，阻断 Vue 响应式代理或多余字段跨 contextBridge 克隆失败。 */
+function toPlainTarget(target: WorkspaceTarget): WorkspaceTarget {
+  return {
+    projectPath: target.projectPath,
+    workspaceId: target.workspaceId
+  }
+}
+
 /** 读取显式目标工作区的 Git 状态；环境失效或非仓库由主进程表达，不改用其他目录。 */
 export async function getGitStatus(target: WorkspaceTarget): Promise<GitStatusResult> {
   const bridge = window.desktop
   if (!bridge || typeof bridge.getGitStatus !== 'function') return unavailable()
   try {
-    return await bridge.getGitStatus(target)
+    return await bridge.getGitStatus(toPlainTarget(target))
   } catch (error) {
     return callFailed(error)
   }
@@ -46,7 +54,7 @@ export async function getGitDiff(target: WorkspaceTarget, path: string, area: Gi
   const bridge = window.desktop
   if (!bridge || typeof bridge.getGitDiff !== 'function') return unavailable()
   try {
-    return await bridge.getGitDiff({ ...target, path, area })
+    return await bridge.getGitDiff({ ...toPlainTarget(target), path, area })
   } catch (error) {
     return callFailed(error)
   }
@@ -62,7 +70,7 @@ export async function stageGitPaths(target: WorkspaceTarget, paths: readonly str
   const bridge = window.desktop
   if (!bridge || typeof bridge.stageGitPaths !== 'function') return unavailable()
   try {
-    return await bridge.stageGitPaths({ ...target, paths })
+    return await bridge.stageGitPaths({ ...toPlainTarget(target), paths: [...paths] })
   } catch (error) {
     return callFailed(error)
   }
@@ -78,7 +86,7 @@ export async function unstageGitPaths(target: WorkspaceTarget, paths: readonly s
   const bridge = window.desktop
   if (!bridge || typeof bridge.unstageGitPaths !== 'function') return unavailable()
   try {
-    return await bridge.unstageGitPaths({ ...target, paths })
+    return await bridge.unstageGitPaths({ ...toPlainTarget(target), paths: [...paths] })
   } catch (error) {
     return callFailed(error)
   }
@@ -94,7 +102,7 @@ export async function discardGitPaths(target: WorkspaceTarget, paths: readonly s
   const bridge = window.desktop
   if (!bridge || typeof bridge.discardGitPath !== 'function') return unavailable()
   try {
-    return await bridge.discardGitPath({ ...target, paths })
+    return await bridge.discardGitPath({ ...toPlainTarget(target), paths: [...paths] })
   } catch (error) {
     return callFailed(error)
   }
@@ -105,7 +113,7 @@ export async function commitGitStaged(target: WorkspaceTarget, message: string):
   const bridge = window.desktop
   if (!bridge || typeof bridge.commitGitStaged !== 'function') return unavailable()
   try {
-    return await bridge.commitGitStaged({ ...target, message })
+    return await bridge.commitGitStaged({ ...toPlainTarget(target), message })
   } catch (error) {
     return callFailed(error)
   }
@@ -116,7 +124,7 @@ export async function pullGit(target: WorkspaceTarget): Promise<GitOperationResu
   const bridge = window.desktop
   if (!bridge || typeof bridge.pullGit !== 'function') return unavailable()
   try {
-    return await bridge.pullGit(target)
+    return await bridge.pullGit(toPlainTarget(target))
   } catch (error) {
     return callFailed(error)
   }
@@ -127,7 +135,7 @@ export async function pushGit(target: WorkspaceTarget): Promise<GitOperationResu
   const bridge = window.desktop
   if (!bridge || typeof bridge.pushGit !== 'function') return unavailable()
   try {
-    return await bridge.pushGit(target)
+    return await bridge.pushGit(toPlainTarget(target))
   } catch (error) {
     return callFailed(error)
   }
@@ -139,7 +147,7 @@ export async function getGitHistory(target: WorkspaceTarget, path?: string, limi
   if (!bridge || typeof bridge.getGitHistory !== 'function') return unavailable()
   try {
     return await bridge.getGitHistory({
-      ...target,
+      ...toPlainTarget(target),
       ...(path === undefined ? {} : { path }),
       ...(limit === undefined ? {} : { limit })
     })
@@ -154,7 +162,7 @@ export async function getGitHistoryPage(target: WorkspaceTarget, skip: number, p
   if (!bridge || typeof bridge.getGitHistory !== 'function') return unavailable()
   try {
     return await bridge.getGitHistory({
-      ...target,
+      ...toPlainTarget(target),
       skip,
       ...(path === null ? {} : { path })
     })
@@ -168,7 +176,7 @@ export async function getGitCommitDetail(target: WorkspaceTarget, oid: string): 
   const bridge = window.desktop
   if (!bridge || typeof bridge.getGitCommitDetail !== 'function') return unavailable()
   try {
-    return await bridge.getGitCommitDetail({ ...target, oid })
+    return await bridge.getGitCommitDetail({ ...toPlainTarget(target), oid })
   } catch (error) {
     return callFailed(error)
   }
@@ -180,7 +188,7 @@ export async function getGitCommitDiff(target: WorkspaceTarget, oid: string, pat
   if (!bridge || typeof bridge.getGitCommitDiff !== 'function') return unavailable()
   try {
     return await bridge.getGitCommitDiff({
-      ...target,
+      ...toPlainTarget(target),
       oid,
       path,
       ...(oldPath === undefined ? {} : { oldPath })
