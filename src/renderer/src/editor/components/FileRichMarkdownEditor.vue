@@ -29,6 +29,8 @@ const props = defineProps<{
   readonly text: string
   readonly path: string
   readonly projectPath: string
+  readonly workspaceId: string
+  readonly editable: boolean
   readonly active: boolean
   readonly showFrontmatter: boolean
   readonly searching: boolean
@@ -118,13 +120,13 @@ function updateSuggestions(): void {
 async function loadDocuments(): Promise<void> {
   if (documentsLoading.value || Date.now() - docsReadAt < 3000) return
   const version = ++docsVersion
-  const project = props.projectPath; const path = props.path
+  const project = props.projectPath; const path = props.path; const workspaceId = props.workspaceId
   documentsLoading.value = true
-  const result = await listMarkdownDocuments(project, path)
-  if (disposed || version !== docsVersion || props.projectPath !== project || props.path !== path) return
+  const result = await listMarkdownDocuments(project, path, workspaceId)
+  if (disposed || version !== docsVersion || props.projectPath !== project || props.path !== path || props.workspaceId !== workspaceId) return
   documentsLoading.value = false; docsReadAt = Date.now()
   if (!result.ok) { documentsMessage.value = result.error.message; return }
-  if (result.data.projectPath !== project) return
+  if (result.data.projectPath !== project || result.data.workspaceId !== workspaceId) return
   catalog.entries = result.data.entries; catalog.loaded = true; catalog.truncated = result.data.truncated
   documentsMessage.value = catalog.truncated ? '项目索引未完整，未命中不代表文件不存在。' : ''
   emit('documents', { entries: [...catalog.entries], loaded: catalog.loaded, truncated: catalog.truncated })
@@ -144,7 +146,7 @@ function image(bytes?: () => Promise<Uint8Array>): void {
   if (!current) return
   closeSuggestions()
   const epoch = generation
-  insertRichImage(current, props.projectPath, props.path, () => !disposed && props.active && generation === epoch && editor.value === current, message => { if (disposed || !props.active) reportAssetNotice?.(message); else error(message) }, bytes)
+  insertRichImage(current, props.projectPath, props.workspaceId, props.path, () => !disposed && props.active && props.editable && generation === epoch && editor.value === current, message => { if (disposed || !props.active) reportAssetNotice?.(message); else error(message) }, bytes)
 }
 function command(id: RichCommandId): boolean {
   const current = editor.value
@@ -251,12 +253,13 @@ onMounted(() => {
   window.addEventListener('scroll', onViewportScroll, true)
   window.addEventListener('resize', onViewportScroll)
   try {
-    const options = richEditorOptions({ codec, keyboard, catalog, editor: () => editor.value, path: () => props.path, projectPath: () => props.projectPath, editMath, error, contentFailure: session.operationFailure, copy: text => emit('copy', text), keydown, openLink, pasteImage: file => image(() => file.arrayBuffer().then(buffer => new Uint8Array(buffer))) })
+    const options = richEditorOptions({ codec, keyboard, catalog, editor: () => editor.value, path: () => props.path, projectPath: () => props.projectPath, workspaceId: () => props.workspaceId, editMath, error, contentFailure: session.operationFailure, copy: text => emit('copy', text), keydown, openLink, pasteImage: file => image(() => file.arrayBuffer().then(buffer => new Uint8Array(buffer))) })
     const current = new Editor({
       ...options, content: { type: 'doc', content: [{ type: 'paragraph' }] }, contentType: 'json', editable: false, enableContentCheck: true,
       onCreate: ({ editor: created }) => {
         if (disposed || !session.initialize(created)) return
         if (!session.syncText(props.text)) return
+        if (!props.editable) created.setEditable(false, false)
         void loadDocuments()
         void nextTick(() => { if (!disposed) emit('updated') })
       },
@@ -286,11 +289,12 @@ watch([suggestion, suggestionIndex, items], () => {
   if (suggestion.value && items.value.length) { root.setAttribute('aria-controls', menuId); root.setAttribute('aria-activedescendant', `${menuId}-${suggestionIndex.value}`) }
   else { root.removeAttribute('aria-controls'); root.removeAttribute('aria-activedescendant') }
 })
-watch(() => props.text, text => { if (props.active) session.syncText(text) })
+watch(() => props.text, text => { if (props.active) { session.syncText(text); if (!props.editable) editor.value?.setEditable(false, false) } })
+watch(() => props.editable, editable => { editor.value?.setEditable(editable, false); if (!editable) { generation += 1; closeTransient() } }, { flush: 'sync' })
 watch(() => props.searching, value => { if (value) { closeSuggestions(); linkOpen.value = false; emojiOpen.value = false } })
 watch(() => props.active, active => {
   if (!active) { session.flushEdit(); closeTransient(); mathDialog.value?.close(); mathEdit.value = null }
-  else session.syncText(props.text)
+  else { session.syncText(props.text); if (!props.editable) editor.value?.setEditable(false, false) }
 })
 onBeforeUnmount(() => {
   disposed = true; generation += 1; docsVersion += 1

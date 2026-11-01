@@ -25,6 +25,7 @@ const props = defineProps<{
   readonly text: string
   readonly path: string
   readonly projectPath: string
+  readonly workspaceId: string
   readonly fontSize: number
   readonly showFrontmatter: boolean
   readonly active: boolean
@@ -233,14 +234,14 @@ async function onContentClick(event: MouseEvent): Promise<void> {
       if (!link) { showNotice(documents.value.truncated ? '索引尚未完整，无法确认文档目标。' : '文档不存在或名称有歧义，请使用完整项目相对路径。', true); return }
       let anchor = link.anchor
       if (anchor) { try { anchor = decodeURIComponent(anchor) } catch { /* 无效编码按原文处理。 */ } }
-      tabs.openFileTab(link.path, 'preview', anchor ? headingSlug(anchor) : null, props.projectPath)
+      tabs.openFileTab(link.path, 'preview', anchor ? headingSlug(anchor) : null, { projectPath: props.projectPath, workspaceId: props.workspaceId })
       return
     }
     case 'file': {
       const link = resolveFileMarkdownLink(address, props.path)
       if (!link) { showNotice('链接目标不在项目内，未打开。', true); return }
       if (!/\.(md|markdown)$/i.test(link.path)) { showNotice(`链接目标是 ${link.path}，可在文件树中打开。`, true); return }
-      tabs.openFileTab(link.path, 'preview', link.anchor, props.projectPath)
+      tabs.openFileTab(link.path, 'preview', link.anchor, { projectPath: props.projectPath, workspaceId: props.workspaceId })
       return
     }
     case 'external': {
@@ -270,7 +271,7 @@ watch([() => props.text, () => props.editable], () => {
   }
   onSurfaceUpdated()
 })
-watch([() => props.path, () => props.projectPath], () => {
+watch([() => props.path, () => props.projectPath, () => props.workspaceId], () => {
   viewGeneration += 1; handledAnchor = 0
   closeSearch(false); notice.value = null
   documents.value = { entries: [], loaded: false, truncated: false }
@@ -350,11 +351,13 @@ defineExpose(surface)
         <div ref="body" class="file-rich-container" @click="onContentClick" @dblclick="onDoubleClick" @keydown="onContentKeydown" @toggle.capture="updateActiveHeading">
           <FileRichMarkdownEditor
             v-if="richEnabled"
-            :key="`${projectPath}\n${path}`"
+            :key="`${workspaceId}\n${projectPath}\n${path}`"
             ref="rich"
             :text="text"
             :path="path"
             :project-path="projectPath"
+            :workspace-id="workspaceId"
+            :editable="editable"
             :active="active"
             :show-frontmatter="showFrontmatter"
             :searching="searchOpen"
@@ -377,6 +380,7 @@ defineExpose(surface)
             :text="text"
             :path="path"
             :project-path="projectPath"
+            :workspace-id="workspaceId"
             :active="active"
             :show-frontmatter="showFrontmatter"
             @updated="onSurfaceUpdated"

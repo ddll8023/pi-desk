@@ -26,7 +26,7 @@
 
 根许可未列产品目录例外，但本次没有逐项审计 vendored 内容与全部依赖，不把 MIT 扩展为代理订阅、远端模型服务、品牌或第三方资产的授权。
 
-**与本项目已有复用的关系**：pi-desk 的 [`licenses/orca-MIT.txt`](../../licenses/orca-MIT.txt) 明确记录部分富 Markdown 编辑实现改编自 Orca，并保留 MIT 文本。这是已存在的代码来源声明，不表示本项目已集成 Orca 工作树或多 Agent 编排，也不表示本次复制了外部代码。
+**与本项目已有复用的关系**：pi-desk 的 [`licenses/orca-MIT.txt`](../../licenses/orca-MIT.txt) 明确记录部分富 Markdown 编辑实现改编自 Orca，并保留 MIT 文本。这是已存在的代码来源声明，不表示本项目直接复用了 Orca 工作树或多 Agent 编排实现，也不表示本次复制了外部代码。
 
 ## 技术栈
 
@@ -83,7 +83,7 @@
 
 | 能力 | 重叠环节 | 不可视作替代的原因 |
 | --- | --- | --- |
-| 多 Agent / 多会话 | 都能并行处理项目任务 | pi-desk 核心是 Pi SDK 多运行实例，不自动隔离项目文件；Orca 以工作树和多种 CLI Agent 组织任务 |
+| 多 Agent / 多会话 | 都能并行处理项目任务 | pi-desk 核心是 Pi SDK 多运行实例，主进程持久持有任务工作区及会话绑定；新对话继承当前工作区，对话标签菜单显式新建并行任务，文件、Git、资源预览和终端固定同一工作区身份。Orca 官方文档将 Agent、文件与终端组织在任务工作区内，并另有任务来源及远程入口 |
 | 手机继续对话 | 远程查看进展并回复 | pi-desk 是局域网 HTTP 直连的网页，桌面开启后自动显示二维码，手机扫码自动连接并访问全部已登记项目，提供聊天及问题回应；Orca 是 iOS/Android Companion，包含多主机、终端、Git、账号和 Relay 路径 |
 | 差异审阅 | 都能看到变更与行差异 | pi-desk 有 `GitDiffView`，但没有内置行级评论归集与批量发回 Agent 的闭环；Orca 的 Annotate AI Diff 还维护评论及处理状态 |
 | 供应商与用量 | 模型、会话用量及账户额度展示部分重合 | pi-desk 管 Pi Provider 凭据、会话 token／费用，并可复用已有 Codex 登录查询账户额度；Orca 面向多种外部 Agent 的账号及订阅限流，账号覆盖面与认证集成边界不同 |
@@ -93,7 +93,7 @@
 
 | 类别 | Orca 已公开能力 | pi-desk 当前边界 |
 | --- | --- | --- |
-| 工作树编排 | 创建、分支、任务来源、归档／休眠／删除、结果审阅 | 内置工作树管理无；现有 Git 模块明确不创建隔离工作树 |
+| 工作树完整工作流 | 任务来源、归档／休眠及工作区内结果审阅 | 已有稳定工作区身份、会话绑定、统一文件/Git/终端执行上下文，以及合入清理时的在途占用、未保存编辑和终端关闭确认；仍缺任务来源集成、归档/休眠和完整累计差异审阅 |
 | 跨主机执行 | SSH 工作树、Server、远程文件与终端 | 无等价内置执行后端；手机入口仍驱动当前电脑，不是远程项目宿主 |
 | 第三方任务集成 | GitHub / Linear 等任务与工作树、PR 关联 | 内置任务提供商与 PR 工作台无；系统 Git 的 pull/push 不等于这些集成 |
 | 产品自动化 CLI | 操作 Orca 工作树、浏览器和可见界面 | pi-desk 没有等价的对外工作台 CLI；Pi Agent 工具不等于桌面自动化协议 |
@@ -112,7 +112,7 @@ pi-desk 的[声明式生成式界面][p-genui]含文档版本、节点补丁及�
 | --- | --- | --- |
 | 将差异评论批量组织成修改请求 | 低 | 已有差异展示和发送消息基础，但缺评论身份、变更后锚点、批次和处理状态，需独立审阅产品设计；不必为此更换 CodeMirror |
 | 显示后台任务的创建中／失败／可取消状态 | 高 | 现有会话运行状态与 Vue 展示能覆盖状态表达，无须新增框架；这里只借鉴可见状态，不包含新增工作树创建能力 |
-| 任务级 Git worktree 隔离 | 低 | 系统 Git 已存在，但需要重新设计项目身份、文件根、会话／终端归属、共享目录与删除边界；已有 Git 依赖不代表引入成本低 |
+| 扩展任务级执行环境编排 | 中 | 现有系统 Git 与持久工作区身份已贯通文件树、编辑器、Markdown/HTML 资源、Git 和终端；执行根由主进程解析，失效任务不静默切回主目录。终端协议按版本隔离，旧进程不自动关闭或迁移；任务来源、归档和远程执行仍需独立设计，不整体搬入 Orca 的编排模型 |
 | 浏览器元素到 Agent 上下文 | 高 | 现有受限 webview、隔离世界选取、截图批注与目标草稿合并链可承接该交互；维持显式选择上下文和不自动发送的边界，不将源码定位或局部裁图视为已有能力 |
 | 终端链接动作气泡与路由偏好 | 已落地 | 借鉴 Orca 动作气泡（内置浏览器 / 系统默认浏览器 / 复制链接）与偏好分流，依托现有 `openBrowserTab` 与 `openExternalUrl` 实现光标处菜单选择与修饰键快捷直达 |
 | 文件树排除规则与设置管理 | 已落地 | 借鉴文件树条目排除与工作区配置管理，通过独立设置分节（`FileSettingsSection`）、右键快捷隐藏与顶部眼睛开关实现纯前端即时过滤响应 |
@@ -137,6 +137,7 @@ pi-desk 的[声明式生成式界面][p-genui]含文档版本、节点补丁及�
 - [工作区批注][p-workspace]、[`src/main/browser/ipc.ts`](../../src/main/browser/ipc.ts)、[`BrowserAnnotationPanel.vue`](../../src/renderer/src/browser/components/BrowserAnnotationPanel.vue)：受限元素采集、固定画面悬浮批注与草稿交付。
 - [终端模块][p-terminal]：PTY 守护进程、历史和全局／项目快捷命令。
 - [Git 模块][p-git]、[`src/main/git/git-command.ts`](../../src/main/git/git-command.ts)、[`src/shared/git-api.ts`](../../src/shared/git-api.ts)：`GitRunOptions`、固定 Git 通道和请求范围。
+- [`workspace-manager.ts`](../../src/main/workspaces/workspace-manager.ts)、[`workspace-store.ts`](../../src/main/workspaces/workspace-store.ts)、[`workspace-api.ts`](../../src/shared/workspace-api.ts)、[`worktree-service.ts`](../../src/main/git/worktree-service.ts)及 [`projects/ipc.ts`](../../src/main/projects/ipc.ts)、[`git/ipc.ts`](../../src/main/git/ipc.ts)、[`terminal-manager.ts`](../../src/main/terminal/terminal-manager.ts)、[`workspace-tabs.ts`](../../src/renderer/src/workspace/stores/workspace-tabs.ts)：工作区身份、会话绑定、执行上下文与生命周期；`task-workspaces.json` 按需保存在应用数据目录，不导入未登记的外部工作树。
 - [会话模块][p-session]、[`src/sdk-host/session-runtime.ts`](../../src/sdk-host/session-runtime.ts)：Pi SDK 会话及内置工厂装配；[子代理初步设计](../subagents-design.md)不是实现清单。
 - [手机模块][p-mobile]、[`src/main/lan-remote/manager.ts`](../../src/main/lan-remote/manager.ts)、[`src/main/lan-remote/server.ts`](../../src/main/lan-remote/server.ts)、[`src/shared/lan-remote-api.ts`](../../src/shared/lan-remote-api.ts)：`LanRemoteManager`、`LanServer` 与共享契约中的局域网入口、自动扫码连接及设备身份边界。
 - [生成式界面模块][p-genui]、[`package.json`](../../package.json)、[既有 Orca 许可声明](../../licenses/orca-MIT.txt)。

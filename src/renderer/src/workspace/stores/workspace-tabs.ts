@@ -36,7 +36,10 @@ import { useRuntimeStore } from '../../sessions/stores/runtime'
 import { useSessionRunsStore } from '../../sessions/stores/session-runs'
 import { sessionTabState } from './session-tab-bridge'
 import { useTerminalStore } from './terminal'
+import { useTaskWorkspacesStore } from './task-workspaces'
 import { bindBrowserSession, onBrowserAutoAttach } from '../../browser/services/capture'
+import { createParallelWorkspace } from '../services/task-workspaces'
+import type { WorkspaceTarget } from '../../../../shared/workspace-api'
 
 /** 对话标签键前缀；终端标签键是 `term:<终端标识>`，文件标签键是 `file:<编号>`，浏览器标签键是 `browser:<随机标识>`。 */
 const CHAT_KEY_PREFIX = 'chat:'
@@ -46,7 +49,7 @@ const FILE_KEY_PREFIX = 'file:'
 export const NEW_CHAT_INPUT_PREFIX = 'new-chat:'
 
 /** 可通过「新建」菜单主动创建的类型；文件标签只能由打开文件产生，不在新建入口里。 */
-export type WorkspaceTabKind = 'chat' | 'worktree-chat' | 'terminal' | 'browser'
+export type WorkspaceTabKind = 'chat' | 'terminal' | 'browser'
 
 /** 当前项目打开的内置浏览器标签模型。 */
 export interface OpenBrowserTab {
@@ -116,6 +119,7 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
   const sessionRunsStore = useSessionRunsStore()
   const session = sessionTabState()
   const terminalStore = useTerminalStore()
+  const taskWorkspaces = useTaskWorkspacesStore()
   const editorStore = useProjectEditorStore()
   const browserStore = useBrowserStore()
   const browserAnnotations = useBrowserAnnotationsStore()
@@ -133,14 +137,13 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
   const renames = ref<Readonly<Record<string, string>>>({})
   /** 已结束回复但用户还没看过的对话标签键；只在内存里，不跨应用重启恢复。 */
   const unseenCompletions = ref<ReadonlySet<string>>(new Set())
-  /** 标签绑定的独立隔离工作树映射（key -> { path, branch }） */
-  const tabWorktrees = ref<Record<string, { path: string; branch: string }>>({})
-
-  const activeWorktree = computed(() => {
-    const key = activeTab.value
-    if (key === null) return null
-    return tabWorktrees.value[key] ?? null
-  })
+  /** 标签只保存工作区引用；目录、分支及持久会话归属来自主进程。 */
+  const tabWorkspaceIds = ref<Readonly<Record<string, string>>>({})
+  let creatingWorktree = false
+  const activeWorkspace = computed(() => taskWorkspaces.selected(currentProjectPath.value))
+  const activeWorktree = computed(() => activeWorkspace.value?.kind === 'task' ? activeWorkspace.value : null)
+  let workspaceSelection = 0
+  let stopWorkspaceWatch: WatchStopHandle | null = null
   /** 待确认关闭的文件或浏览器标签键；确认前保留未保存修改或未交付批注。 */
   const pendingCloseKey = ref<string | null>(null)
   /** 上一次广播时正在执行的实例：只有由执行中变为已结束才算一轮回复完成，初始快照不产生标记。 */
@@ -239,6 +242,7 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
   const isChatInteractive = computed(() => (
     (isChatReady.value || isChatNewDraft.value) && !isChatResetting.value && !isChatBinding.value
       && !session.opening && !projectStore.switching
+      && activeWorkspace.value?.phase === 'ready' && !taskWorkspaces.isLocked(activeWorkspace.value.id)
   ))
 
   /**
@@ -297,6 +301,10 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
    * 取意图后交给会话能力，标签只负责计算。
    */
   function initialize(): void {
+    if (stopWorkspaceWatch === null) stopWorkspaceWatch = watch(() => {
+      const project = currentProjectPath.value, key = activeTab.value
+      return [project, key, project && key ? workspaceIdForTab(project, key) : null]
+    }, () => { void syncSelectedWorkspace() }, { immediate: true, flush: 'sync' })
     if (stopProjectsWatch === null) {
       stopProjectsWatch = watch(() => projectStore.projects.map(project => project.path), dropMissingProjects)
     }
@@ -341,6 +349,8 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
 
   /** 页面卸载时释放订阅；标签只留在内存里，重新挂载后不恢复标签。 */
   function dispose(): void {
+    workspaceSelection += 1
+    stopWorkspaceWatch?.(); stopWorkspaceWatch = null
     stopProjectsWatch?.()
     stopProjectsWatch = null
     stopRunsWatch?.()
@@ -365,7 +375,7 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
   }
 
   /**
-   * 新建一个终端标签：对话标签不走这里，由 `openNewChatTab` 建立并返回打开意图。
+   * 新建一个终端标签：继承当前工作区环境；对话标签不走这里，由 `openNewChatTab` 建立并返回打开意图。
    * 终端创建失败时保留原因由终端 store 提示，不建立空标签。
    */
   async function createTerminalTab(): Promise<string | null> {
@@ -375,7 +385,9 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
       return null
     }
     const version = selectionVersion
-    const terminalId = await terminalStore.createTerminal(projectPath)
+    const workspaceId = taskWorkspaces.selected(projectPath)?.id
+    if (taskWorkspaces.pendingProjects.includes(projectPath)) { taskWorkspaces.fail('原标签工作区尚未解析，未新建终端。'); return null }
+    const terminalId = await terminalStore.createTerminal(projectPath, workspaceId)
     if (terminalId === null) return null
     const key = terminalTabId(terminalId)
     appendKey(projectPath, key)
@@ -426,6 +438,8 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
 
     const key = `${BROWSER_KEY_PREFIX}${Date.now()}_${Math.random().toString(36).slice(2, 6)}`
     browserStore.ensureTab(key, projectPath, url)
+    const workspace = taskWorkspaces.selected(projectPath)
+    if (workspace) tabWorkspaceIds.value = { ...tabWorkspaceIds.value, [key]: workspace.id }
     appendKey(projectPath, key)
     splitBrowserKey.value = key
     return key
@@ -439,13 +453,15 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     if (projectPath === null) return ''
     const key = `${BROWSER_KEY_PREFIX}${Date.now()}_${Math.random().toString(36).slice(2, 6)}`
     browserStore.ensureTab(key, projectPath, initialUrl)
+    const workspace = taskWorkspaces.selected(projectPath)
+    if (workspace) tabWorkspaceIds.value = { ...tabWorkspaceIds.value, [key]: workspace.id }
     appendKey(projectPath, key)
     selectLocal(projectPath, key)
     return key
   }
 
   /**
-   * 运行一条快捷命令：始终在当前项目新建终端标签再写入，不复用可能被前台程序占用的现有 shell。
+   * 运行一条快捷命令：在当前工作区环境新建终端标签再写入，不复用可能被前台程序占用的现有 shell。
    * 命令文本不做解析或转义（它就是要交给 shell 的输入）；`appendEnter` 为真时补一个回车立即执行。
    * 回车一律用 CR：多行命令里的 LF 在 PowerShell/PSReadLine 里不是 Enter，只当作输入缓冲里的换行，
    * 整段会被攒成一条待提交的多行输入，行的先后顺序就不再是逐条执行的顺序（例如 `cd` 反而落在后面的命令之后）。
@@ -460,17 +476,18 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
   }
 
   /**
-   * 打开一个项目内文件：已打开时聚焦已有标签，否则新建文件标签并切过去。
+   * 打开一个文件：固定目标工作区身份（未给出时继承当前活动工作区），已打开时聚焦已有标签，否则新建文件标签并切过去。
    * 不传 `mode` 时按文件类型与设置里的默认视图决定（Markdown 取偏好，其余进源码）；传了则以该模式打开，
    * 用于右键菜单里与默认视图相反的那个入口。非 Markdown 文件会忽略预览模式。
    * `anchor` 指定 Markdown 标题：请求留在目标文件记录内，等待正文呈现后消费。
    * 读取由编辑记录异步完成，标签先出现并展示读取中状态。
    */
-  function openFileTab(path: string, mode?: FileEditorMode, anchor?: string | null, expectedProjectPath?: string): void {
-    const projectPath = currentProjectPath.value
-    // 异步文档候选只能打开原项目，不能在切换后把同名路径解释为新项目的文件。
-    if (projectPath === null || (expectedProjectPath !== undefined && expectedProjectPath !== projectPath)) return
-    const key = editorStore.open(projectPath, path)
+  function openFileTab(path: string, mode?: FileEditorMode, anchor?: string | null, target?: WorkspaceTarget): void {
+    const current = activeWorkspace.value
+    const origin = target ?? (current ? { projectPath: current.projectPath, workspaceId: current.id } : null)
+    if (!origin || origin.projectPath !== currentProjectPath.value) return
+    const projectPath = origin.projectPath
+    const key = editorStore.open(projectPath, path, origin.workspaceId)
     if (mode !== undefined) editorStore.setMode(key, mode)
     if (anchor !== undefined && anchor !== null) editorStore.requestAnchor(key, anchor)
     appendKey(projectPath, key)
@@ -478,14 +495,20 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
   }
 
   /**
-   * 新建对话标签：优先复用本项目无正式消息且无待提交输入的空白标签，否则新建；待提交标签独立保留。
+   * 新建对话标签：默认继承当前工作区（也可显式指定目标环境），优先复用同环境下无正式消息且无待提交输入的空白标签，否则新建；待提交标签独立保留。
    * Runtime 闲置时只建立标签、不提交打开请求，空对话本来就能直接输入；
    * 需要打开时返回意图，由调用方交给会话能力提交。
    * `projectPath` 由调用方给出时按它建标签（侧栏可能刚切项目，不等切换完成也能落到正确项目）。
    */
-  async function openNewChatTab(projectPath: string | null = currentProjectPath.value): Promise<ChatOpenIntent | null> {
+  async function openNewChatTab(projectPath: string | null = currentProjectPath.value, requestedWorkspaceId?: string | null): Promise<ChatOpenIntent | null> {
     if (projectPath === null) return null
-    const key = findChatKey(projectPath, null) ?? createChatTab(projectPath)
+    const versionBeforeResolve = selectionVersion, initialProjectPath = currentProjectPath.value
+    let workspace
+    try { workspace = await taskWorkspaces.ensure(projectPath, requestedWorkspaceId) }
+    catch (error) { taskWorkspaces.fail(error instanceof Error ? error.message : '无法确定新对话工作区。'); return null }
+    if (versionBeforeResolve !== selectionVersion || currentProjectPath.value !== initialProjectPath) return null
+    if (workspace.phase !== 'ready') { taskWorkspaces.fail('当前任务环境已结束，请切到可用工作区后新建对话。'); return null }
+    const key = findChatKey(projectPath, null, workspace.id) ?? createChatTab(projectPath, null, workspace.id)
     appendKey(projectPath, key)
     selectLocal(projectPath, key)
     const version = selectionVersion
@@ -494,33 +517,67 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     return focusIntent(projectPath, key)
   }
 
-  /**
-   * 新建一个隔离工作树对话标签：
-   * 自动在主进程创建独立 Git 工作树（.pi/worktrees/task-xxx），并建立关联对话标签。
-   */
-  async function openNewWorktreeChatTab(projectPath: string | null = currentProjectPath.value): Promise<ChatOpenIntent | null> {
-    if (projectPath === null) return null
-    const branchName = `task-${Date.now().toString().slice(-6)}`
-    if (window.desktop) {
-      const createRes = await window.desktop.createWorktree({ branchName })
-      if (!createRes.ok) {
-        console.error('创建隔离工作树失败：', createRes.error.message)
-        return null
-      }
+  /** 对话标签菜单发起独立并行任务；不复制消息，不迁移或改绑来源会话。 */
+  async function openParallelTask(sourceKey: string): Promise<ChatOpenIntent | null> {
+    const projectPath = locate(sourceKey)?.projectPath ?? null
+    if (projectPath === null || !isChatKey(sourceKey) || !hasChatTabKey(projectPath, sourceKey) || creatingWorktree) return null
+    creatingWorktree = true
+    const version = selectionVersion
+    taskWorkspaces.clearError()
+    try {
+      const result = await createParallelWorkspace(projectPath)
+      if (!result.ok) { taskWorkspaces.fail(result.error.message); return null }
+      taskWorkspaces.accept(result.workspace)
+      if (!projectStore.projects.some(project => project.path === projectPath)) return null
       const key = createChatTab(projectPath)
-      tabWorktrees.value[key] = {
-        path: createRes.worktree.path,
-        branch: createRes.worktree.branch ?? branchName
-      }
+      tabWorkspaceIds.value = { ...tabWorkspaceIds.value, [key]: result.workspace.id }
       appendKey(projectPath, key)
+      if (version !== selectionVersion || currentProjectPath.value !== projectPath) return null
       selectLocal(projectPath, key)
       return focusIntent(projectPath, key)
-    }
-    return openNewChatTab(projectPath)
+    } catch (error) {
+      const detail = error instanceof Error ? `：${error.message}` : '。'
+      taskWorkspaces.fail(`工作区创建结果未知，未自动重试${detail}`)
+      return null
+    } finally { creatingWorktree = false }
   }
 
-  function clearWorktreeOfTab(key: string): void {
-    delete tabWorktrees.value[key]
+  function workspaceIdForTab(projectPath: string, key: string): string | null {
+    if (isFileKey(key)) return editorStore.recordOf(key)?.workspaceId ?? null
+    if (terminalIdOf(key) !== null) return terminalOf(key)?.workspaceId ?? null
+    const record = chatTabs.value[key]
+    const stored = tabWorkspaceIds.value[key]
+    if (stored !== undefined) return stored
+    const run = record === undefined ? undefined : sessionRunsStore.runs.find(item => item.runId === resolveRunId(projectPath, key)
+      && item.projectPath === projectPath && (record.sessionId === null || item.sessionId === record.sessionId))
+    return run?.workspaceId ?? null
+  }
+
+  function bindWorkspace(projectPath: string, key: string, workspaceId: string): void {
+    if (!hasChatTabKey(projectPath, key)) return
+    const previous = tabWorkspaceIds.value[key]
+    if (previous && previous !== workspaceId) { taskWorkspaces.fail('标签已有不同的工作区归属，未静默改绑。'); return }
+    tabWorkspaceIds.value = { ...tabWorkspaceIds.value, [key]: workspaceId }
+  }
+
+  async function syncSelectedWorkspace(): Promise<void> {
+    const ticket = ++workspaceSelection
+    const project = currentProjectPath.value, key = activeTab.value
+    if (!project) return
+    const id = key ? workspaceIdForTab(project, key) : taskWorkspaces.selected(project)?.id ?? null
+    const record = key ? chatTabs.value[key] : undefined
+    if (id === null && record && (record.sessionId !== null || record.runId !== null)) { taskWorkspaces.selectPending(project); return }
+    const terminal = key ? terminalOf(key) : null
+    if (terminal && terminal.workspaceId === null && terminal.cwd !== terminal.projectPath) { taskWorkspaces.selectPending(project); return }
+    const known = taskWorkspaces.of(id)
+    if (known && known.projectPath === project) { taskWorkspaces.select(known); return }
+    taskWorkspaces.selectPending(project)
+    try {
+      const workspace = await taskWorkspaces.ensure(project, id)
+      if (ticket !== workspaceSelection || currentProjectPath.value !== project || activeTab.value !== key) return
+      if (key && (isChatKey(key) || isBrowserKey(key)) && id === null) tabWorkspaceIds.value = { ...tabWorkspaceIds.value, [key]: workspace.id }
+      taskWorkspaces.select(workspace)
+    } catch (error) { if (ticket === workspaceSelection) taskWorkspaces.fail(error instanceof Error ? error.message : '解析标签工作区失败。') }
   }
 
   /**
@@ -1051,26 +1108,30 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
   }
 
   /** 新建一个对话标签记录并返回它的键；标签本身的位置由调用方决定。 */
-  function createChatTab(projectPath: string, sessionId: string | null = null): string {
+  function createChatTab(projectPath: string, sessionId: string | null = null, workspaceId?: string): string {
     const key = `${CHAT_KEY_PREFIX}${nextChatTabId}`
     nextChatTabId += 1
     chatTabs.value = { ...chatTabs.value, [key]: { sessionId, runId: null, hasMessages: sessionId !== null } }
+    const inheritedId = workspaceId ?? (sessionId === null ? taskWorkspaces.selected(projectPath)?.id : undefined)
+    if (inheritedId) tabWorkspaceIds.value = { ...tabWorkspaceIds.value, [key]: inheritedId }
     bindRun(projectPath, key)
     return key
   }
 
   /**
-   * 命名会话按实际身份匹配，null 则只匹配没有正式消息和待提交输入的空白标签。
-   * 同一项目已有空标签时优先取活动的那个，
+   * 命名会话按实际身份匹配，null 则只匹配同工作区环境下没有正式消息和待提交输入的空白标签。
+   * 同一项目和环境已有空标签时优先取活动的那个，
    * 否则新建与打开意图会落到用户看不见的那个标签上。
    */
-  function findChatKey(projectPath: string, sessionId: string | null): string | null {
+  function findChatKey(projectPath: string, sessionId: string | null, requestedWorkspaceId: string | null = taskWorkspaces.selected(projectPath)?.id ?? null): string | null {
     const keys = orders.value[projectPath] ?? []
     const active = activeTabs.value[projectPath] ?? null
     const matches = (key: string): boolean => {
       const record = chatTabs.value[key]
       if (record === undefined) return false
       if (sessionId !== null) return record.sessionId === sessionId || sessionIdOfRun(record.runId) === sessionId
+      const workspaceId = workspaceIdForTab(projectPath, key)
+      if (workspaceId !== requestedWorkspaceId) return false
       if (session.hasPendingPrompt(projectPath, key)) return false
       const newChat = newChats.value[key]
       if (newChat?.phase === 'closing' || newChat?.phase === 'draft' || newChat?.phase === 'binding') return true
@@ -1178,6 +1239,11 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
   }
 
   function forgetChatTab(key: string): void {
+    if (tabWorkspaceIds.value[key] !== undefined) {
+      const next = { ...tabWorkspaceIds.value }
+      delete next[key]
+      tabWorkspaceIds.value = next
+    }
     if (newChats.value[key] !== undefined) {
       const nextNewChats = { ...newChats.value }
       delete nextNewChats[key]
@@ -1272,10 +1338,11 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     createTerminalTab,
     runQuickCommand,
     openNewChatTab,
-    openNewWorktreeChatTab,
+    openParallelTask,
+    activeWorkspace,
     activeWorktree,
-    tabWorktrees,
-    clearWorktreeOfTab,
+    workspaceIdForTab,
+    bindWorkspace,
     openFileTab,
     startNewChatInTab,
     closeTab,

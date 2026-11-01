@@ -17,6 +17,7 @@
  */
 import { lstat, readFile, unlink } from 'node:fs/promises'
 import type { DesktopError, DesktopErrorCode } from '../../shared/desktop-api'
+import type { WorkspaceContext, WorkspaceTarget } from '../../shared/workspace-api'
 import {
   GIT_COMMIT_FILES_LIMIT,
   GIT_DIFF_MAX_BYTES,
@@ -39,7 +40,6 @@ import type {
   GitHistoryRequest,
   GitHistoryResult,
   GitOperationResult,
-  GitPathRequest,
   GitStatus,
   GitStatusResult,
   GitTextDiff,
@@ -80,12 +80,13 @@ const LOG_ARGS = [
 ] as const
 
 export interface GitServiceOptions {
-  /** 当前项目路径的内存快照；未选择项目时为 null，不触发磁盘访问。 */
-  readonly currentProjectPath: () => string | null
+  /** 每个请求解析其明确工作区；不读取前台项目或可变 cwd。 */
+  readonly resolveWorkspace: (target: WorkspaceTarget) => Promise<WorkspaceContext>
 }
 
-/** 项目根的两个视角：`reported` 是登记时的写法（回给页面复核），`canonical` 是解析后的真实路径（参与路径运算）。 */
+/** 逻辑项目归属与执行根分开保存：reported 回给页面复核，canonical 参与当前工作区的路径运算。 */
 interface ProjectRoots {
+  readonly workspaceId: string
   readonly reported: string
   readonly canonical: string
 }
@@ -97,6 +98,7 @@ type PreparedPath =
     readonly repository: GitRepository
     readonly projectRoot: string
     readonly reportedProjectRoot: string
+    readonly workspaceId: string
     readonly relativePath: string
     readonly absolutePath: string
     readonly repoPath: string
@@ -115,6 +117,7 @@ type PreparedPaths =
     readonly repository: GitRepository
     readonly projectRoot: string
     readonly reportedProjectRoot: string
+    readonly workspaceId: string
     readonly items: readonly PreparedPathItem[]
   }
   | { readonly ok: false; readonly error: DesktopError }
@@ -122,19 +125,19 @@ type PreparedPaths =
 export class GitService {
   /** 每个仓库一条写操作队列；值为队尾。 */
   private readonly lanes = new Map<string, Promise<void>>()
-  /** 同一项目的在途状态读；共享给并发调用方。 */
+  /** 同一工作区的在途状态读共享给并发调用方，不跨同项目的不同工作区复用。 */
   private readonly statusInFlight = new Map<string, Promise<GitStatusResult>>()
   /** 写操作代际：读取过程中代际变化说明结果可能已过期。 */
   private mutationSeq = 0
 
   constructor(private readonly options: GitServiceOptions) {}
 
-  /** 读取当前项目的状态；未选择项目时回错误，不是仓库时回 `isRepository: false`。 */
-  async status(): Promise<GitStatusResult> {
-    const roots = await this.resolveRoots()
+  /** 读取明确工作区的状态；不属于仓库时回 isRepository: false，不更换执行目录。 */
+  async status(target: WorkspaceTarget): Promise<GitStatusResult> {
+    const roots = await this.resolveRoots(target)
     if (!roots.ok) return roots
 
-    const key = roots.roots.reported
+    const key = roots.roots.workspaceId
     const inFlight = this.statusInFlight.get(key)
     if (inFlight !== undefined) return inFlight
 
@@ -149,7 +152,7 @@ export class GitService {
 
   /** 单文件差异；两侧内容由主进程给出，页面只负责渲染。 */
   async diff(request: GitDiffRequest): Promise<GitDiffResult> {
-    const prepared = await this.prepare(request.path)
+    const prepared = await this.prepare(request, request.path)
     if (!prepared.ok) return prepared
 
     try {
@@ -161,6 +164,7 @@ export class GitService {
       return {
         ok: true,
         data: {
+          projectPath: prepared.reportedProjectRoot, workspaceId: prepared.workspaceId,
           path: prepared.relativePath,
           area: request.area,
           ...this.toTextDiff(original, modified)
@@ -188,8 +192,8 @@ export class GitService {
   /** 暂存一个或多个路径（含删除）；成功后回传最新状态。 */
   async stage(request: GitWritePathRequest): Promise<GitOperationResult> {
     const paths = 'paths' in request ? request.paths : [request.path]
-    if (paths.length === 0) return this.status()
-    const prepared = await this.prepareMany(paths)
+    if (paths.length === 0) return this.status(request)
+    const prepared = await this.prepareMany(request, paths)
     if (!prepared.ok) return prepared
     const repoPaths = prepared.items.map((item) => item.repoPath)
     return this.mutate(prepared, async () => {
@@ -200,8 +204,8 @@ export class GitService {
   /** 取消暂存一个或多个路径；老版本 git 没有 `restore` 时退回 `reset`。 */
   async unstage(request: GitWritePathRequest): Promise<GitOperationResult> {
     const paths = 'paths' in request ? request.paths : [request.path]
-    if (paths.length === 0) return this.status()
-    const prepared = await this.prepareMany(paths)
+    if (paths.length === 0) return this.status(request)
+    const prepared = await this.prepareMany(request, paths)
     if (!prepared.ok) return prepared
     const repoPaths = prepared.items.map((item) => item.repoPath)
     return this.mutate(prepared, async () => {
@@ -220,8 +224,8 @@ export class GitService {
    */
   async discard(request: GitWritePathRequest): Promise<GitOperationResult> {
     const paths = 'paths' in request ? request.paths : [request.path]
-    if (paths.length === 0) return this.status()
-    const prepared = await this.prepareMany(paths)
+    if (paths.length === 0) return this.status(request)
+    const prepared = await this.prepareMany(request, paths)
     if (!prepared.ok) return prepared
 
     return this.mutate(prepared, async () => {
@@ -265,7 +269,7 @@ export class GitService {
     const message = request.message.trim() === '' ? '' : request.message
     if (message === '') return failure('INVALID_REQUEST', '提交信息不能为空。')
 
-    const roots = await this.resolveRoots()
+    const roots = await this.resolveRoots(request)
     if (!roots.ok) return roots
     const prepared = await this.prepareRoot(roots.roots)
     if (!prepared.ok) return prepared
@@ -320,8 +324,8 @@ export class GitService {
    * 拉取当前分支的上游。策略沿用用户自己的 git 配置（`pull.rebase` / `pull.ff`），不替用户选合并还是变基；
    * 分叉且未配置策略时 git 会拒绝并给出可读原因，由界面展示。
    */
-  async pull(): Promise<GitOperationResult> {
-    const roots = await this.resolveRoots()
+  async pull(target: WorkspaceTarget): Promise<GitOperationResult> {
+    const roots = await this.resolveRoots(target)
     if (!roots.ok) return roots
     const prepared = await this.prepareRoot(roots.roots)
     if (!prepared.ok) return prepared
@@ -342,8 +346,8 @@ export class GitService {
    * 推送当前分支：有上游就直接推；没有上游且仓库只有一个远端时自动 `--set-upstream` 发布分支。
    * 多个远端、分离 HEAD、没有远端都直接拒绝，不替用户猜该推到哪。
    */
-  async push(): Promise<GitOperationResult> {
-    const roots = await this.resolveRoots()
+  async push(target: WorkspaceTarget): Promise<GitOperationResult> {
+    const roots = await this.resolveRoots(target)
     if (!roots.ok) return roots
     const prepared = await this.prepareRoot(roots.roots)
     if (!prepared.ok) return prepared
@@ -390,7 +394,7 @@ export class GitService {
    * `pushed` 依据上游的 `@{u}..HEAD` 判定：没有上游时这些提交确实还没推到任何地方，因此一律标为未推送。
    */
   async history(request: GitHistoryRequest): Promise<GitHistoryResult> {
-    const roots = await this.resolveRoots()
+    const roots = await this.resolveRoots(request)
     if (!roots.ok) return roots
 
     // null 表示「不过滤」；只有页面确实给了路径却不合法时才拒绝。
@@ -401,7 +405,7 @@ export class GitService {
 
     try {
       const repository = await resolveGitRepository(roots.roots.canonical)
-      if (repository === null) return { ok: true, data: emptyHistory(roots.roots.reported, filterPath) }
+      if (repository === null) return { ok: true, data: emptyHistory(roots.roots, filterPath) }
 
       const limit = Math.min(request.limit ?? GIT_HISTORY_LIMIT, GIT_HISTORY_MAX_LIMIT)
       const skip = request.skip ?? 0
@@ -429,6 +433,7 @@ export class GitService {
         ok: true,
         data: {
           projectPath: roots.roots.reported,
+          workspaceId: roots.roots.workspaceId,
           isRepository: true,
           upstreamName: upstream?.name ?? null,
           aheadCount: upstream?.ahead ?? 0,
@@ -448,7 +453,7 @@ export class GitService {
 
   /** 读取一个提交的元信息与改动文件清单；文件带该次提交的行数增减。 */
   async commitDetail(request: GitCommitDetailRequest): Promise<GitCommitDetailResult> {
-    const roots = await this.resolveRoots()
+    const roots = await this.resolveRoots(request)
     if (!roots.ok) return roots
 
     try {
@@ -484,6 +489,7 @@ export class GitService {
       }
 
       const detail: GitCommitDetail = {
+        projectPath: roots.roots.reported, workspaceId: roots.roots.workspaceId,
         oid: meta.oid,
         shortOid: meta.shortOid,
         subject: meta.subject,
@@ -504,7 +510,7 @@ export class GitService {
 
   /** 读取一个提交内某个文件的差异：原内容取父提交，新内容取该提交。 */
   async commitDiff(request: GitCommitDiffRequest): Promise<GitCommitDiffResult> {
-    const roots = await this.resolveRoots()
+    const roots = await this.resolveRoots(request)
     if (!roots.ok) return roots
 
     const relativePath = normalizeRelativeDirectory(request.path)
@@ -529,7 +535,7 @@ export class GitService {
       const modified = await this.readBlob(repository, `${oid}:${repoPath}`)
       return {
         ok: true,
-        data: { oid, path: relativePath, ...this.toTextDiff(original, modified) }
+        data: { projectPath: roots.roots.reported, workspaceId: roots.roots.workspaceId, oid, path: relativePath, ...this.toTextDiff(original, modified) }
       }
     } catch (error) {
       return { ok: false, error: gitError(error, '读取提交差异失败。') }
@@ -625,7 +631,7 @@ export class GitService {
   private async loadStatus(roots: ProjectRoots): Promise<GitStatusResult> {
     try {
       const repository = await resolveGitRepository(roots.canonical)
-      if (repository === null) return { ok: true, data: emptyStatus(roots.reported) }
+      if (repository === null) return { ok: true, data: emptyStatus(roots) }
 
       const parser = createGitStatusParser(GIT_STATUS_LIMIT)
       // 远端名与状态读取并行：它很便宜，但没必要再串一次子进程。
@@ -650,6 +656,7 @@ export class GitService {
         ok: true,
         data: {
           projectPath: roots.reported,
+          workspaceId: roots.workspaceId,
           isRepository: true,
           repositoryRoot: repository.root,
           head: snapshot.head,
@@ -671,7 +678,7 @@ export class GitService {
 
   /** 写操作：同仓库串行执行，成功后递增代际并回传最新状态。 */
   private async mutate(
-    prepared: { readonly repository: GitRepository; readonly projectRoot: string; readonly reportedProjectRoot: string },
+    prepared: { readonly repository: GitRepository; readonly projectRoot: string; readonly reportedProjectRoot: string; readonly workspaceId: string },
     run: () => Promise<void>,
     fallbackMessage: string
   ): Promise<GitOperationResult> {
@@ -682,8 +689,9 @@ export class GitService {
     }
     this.mutationSeq += 1
     // 写之前的在途读不能再回给界面：丢掉它，重新读一次。
-    this.statusInFlight.delete(prepared.reportedProjectRoot)
+    this.statusInFlight.delete(prepared.workspaceId)
     return this.loadStatus({
+      workspaceId: prepared.workspaceId,
       reported: prepared.reportedProjectRoot,
       canonical: prepared.projectRoot
     })
@@ -701,8 +709,8 @@ export class GitService {
     return result
   }
 
-  private async prepare(path: string): Promise<PreparedPath> {
-    const roots = await this.resolveRoots()
+  private async prepare(target: WorkspaceTarget, path: string): Promise<PreparedPath> {
+    const roots = await this.resolveRoots(target)
     if (!roots.ok) return roots
     const prepared = await this.prepareRoot(roots.roots)
     if (!prepared.ok) return prepared
@@ -715,14 +723,15 @@ export class GitService {
       repository: prepared.repository,
       projectRoot: roots.roots.canonical,
       reportedProjectRoot: roots.roots.reported,
+      workspaceId: roots.roots.workspaceId,
       relativePath: resolved.relativePath,
       absolutePath: resolved.absolutePath,
       repoPath: projectPathToRepoPath(prepared.repository, roots.roots.canonical, resolved.relativePath)
     }
   }
 
-  private async prepareMany(paths: readonly string[]): Promise<PreparedPaths> {
-    const roots = await this.resolveRoots()
+  private async prepareMany(target: WorkspaceTarget, paths: readonly string[]): Promise<PreparedPaths> {
+    const roots = await this.resolveRoots(target)
     if (!roots.ok) return roots
     const prepared = await this.prepareRoot(roots.roots)
     if (!prepared.ok) return prepared
@@ -743,6 +752,7 @@ export class GitService {
       repository: prepared.repository,
       projectRoot: roots.roots.canonical,
       reportedProjectRoot: roots.roots.reported,
+      workspaceId: roots.roots.workspaceId,
       items
     }
   }
@@ -756,6 +766,7 @@ export class GitService {
         repository,
         projectRoot: roots.canonical,
         reportedProjectRoot: roots.reported,
+        workspaceId: roots.workspaceId,
         relativePath: '',
         absolutePath: roots.canonical,
         repoPath: ''
@@ -765,11 +776,10 @@ export class GitService {
     }
   }
 
-  /** 当前项目的两个路径视角；未选择项目时回错误。 */
-  private async resolveRoots(): Promise<{ ok: true; roots: ProjectRoots } | { ok: false; error: DesktopError }> {
-    const reported = this.options.currentProjectPath()
-    if (reported === null) return failure('INVALID_REQUEST', '尚未选择项目，无法操作 Git。')
-    return { ok: true, roots: { reported, canonical: await canonicalProjectRoot(reported) } }
+  /** 项目是逻辑归属，执行根来自明确工作区；两个目录不再混用。 */
+  private async resolveRoots(target: WorkspaceTarget): Promise<{ ok: true; roots: ProjectRoots } | { ok: false; error: DesktopError }> {
+    const context = await this.options.resolveWorkspace(target)
+    return { ok: true, roots: { workspaceId: context.id, reported: context.projectPath, canonical: await canonicalProjectRoot(context.rootPath) } }
   }
 
   /** 该路径是否已纳入索引（`--error-unmatch` 用退出码回答）。 */
@@ -853,9 +863,9 @@ function mapEntries(
 }
 
 /** 非仓库时的状态：空列表 + `isRepository: false`，界面显示空态而不是报错。 */
-function emptyStatus(projectPath: string): GitStatus {
+function emptyStatus(roots: ProjectRoots): GitStatus {
   return {
-    projectPath,
+    projectPath: roots.reported, workspaceId: roots.workspaceId,
     isRepository: false,
     repositoryRoot: null,
     head: null,
@@ -957,9 +967,9 @@ function tooLargeDiff(): GitTextDiff {
 }
 
 /** 非仓库时的历史：空列表 + `isRepository: false`，与状态读取保持同一口径。 */
-function emptyHistory(projectPath: string, path: string | null): GitHistory {
+function emptyHistory(roots: ProjectRoots, path: string | null): GitHistory {
   return {
-    projectPath,
+    projectPath: roots.reported, workspaceId: roots.workspaceId,
     isRepository: false,
     upstreamName: null,
     aheadCount: 0,

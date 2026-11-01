@@ -9,7 +9,7 @@ import type { ProjectMarkdownImageRequest, ProjectFileReadRequest as MarkdownOwn
 import type { ProjectAddRequest, ProjectListResult, ProjectPathResult, ProjectRemoveRequest, ProjectSetCurrentRequest } from '../shared/project-api'
 import type { ProjectDirectoryChange, ProjectDirectoryListRequest, ProjectDirectoryListResult, ProjectDirectoryWatchRequest, ProjectDirectoryWatchResult, ProjectEntryDeleteResult, ProjectEntryPathRequest, ProjectEntryPathResult, ProjectEntryRevealResult, ProjectFileReadRequest, ProjectFileReadResult, ProjectFileSearchResult, ProjectFileStatRequest, ProjectFileStatResult, ProjectFileWriteRequest, ProjectFileWriteResult } from '../shared/project-file-api'
 import type { ProjectApi } from '../shared/project-api'
-import type { ProjectFileApi } from '../shared/project-file-api'
+import type { ProjectFileApi, ProjectFileSearchRequest } from '../shared/project-file-api'
 import {
   PROJECT_HTML_PREVIEW_PREPARE_CHANNEL, PROJECT_HTML_PREVIEW_RELEASE_CHANNEL,
   isProjectHtmlPreviewResult, isProjectHtmlPreviewReleaseResult
@@ -75,7 +75,7 @@ function invalidProjectFileStatResponse(): ProjectFileStatResult {
 export const projectsApi = {
   async prepareProjectHtmlPreview(request: ProjectHtmlPreviewRequest) {
     const payload: ProjectHtmlPreviewRequest = {
-      projectPath: request.projectPath, path: request.path, text: request.text, previewId: request.previewId
+      projectPath: request.projectPath, workspaceId: request.workspaceId, path: request.path, text: request.text, previewId: request.previewId
     }
     const response: unknown = await ipcRenderer.invoke(PROJECT_HTML_PREVIEW_PREPARE_CHANNEL, payload)
     return isProjectHtmlPreviewResult(response) ? response : {
@@ -118,20 +118,20 @@ export const projectsApi = {
     return isProjectListResult(response) ? response : invalidProjectListResponse()
   },
 
-  async searchProjectFiles(query: string) {
-    const request = { query }
+  async searchProjectFiles(input: ProjectFileSearchRequest) {
+    const request: ProjectFileSearchRequest = { projectPath: input.projectPath, workspaceId: input.workspaceId, query: input.query }
     const response: unknown = await ipcRenderer.invoke(PROJECT_FILE_SEARCH_CHANNEL, request)
     return isProjectFileSearchResult(response) ? response : invalidProjectFileResponse()
   },
 
   async listProjectDirectory(request: ProjectDirectoryListRequest) {
-    const payload: ProjectDirectoryListRequest = { directory: request.directory }
+    const payload: ProjectDirectoryListRequest = { projectPath: request.projectPath, workspaceId: request.workspaceId, directory: request.directory }
     const response: unknown = await ipcRenderer.invoke(PROJECT_DIRECTORY_LIST_CHANNEL, payload)
     return isProjectDirectoryListResult(response) ? response : invalidProjectDirectoryResponse()
   },
 
   async watchProjectDirectories(request: ProjectDirectoryWatchRequest) {
-    const payload: ProjectDirectoryWatchRequest = { directories: request.directories }
+    const payload: ProjectDirectoryWatchRequest = { projectPath: request.projectPath, workspaceId: request.workspaceId, directories: [...request.directories] }
     const response: unknown = await ipcRenderer.invoke(PROJECT_DIRECTORY_WATCH_CHANNEL, payload)
     return isProjectDirectoryWatchResult(response) ? response : invalidProjectDirectoryWatchResponse()
   },
@@ -148,25 +148,25 @@ export const projectsApi = {
   },
 
   async resolveProjectEntryPath(request: ProjectEntryPathRequest) {
-    const payload: ProjectEntryPathRequest = { path: request.path }
+    const payload: ProjectEntryPathRequest = { projectPath: request.projectPath, workspaceId: request.workspaceId, path: request.path }
     const response: unknown = await ipcRenderer.invoke(PROJECT_ENTRY_RESOLVE_CHANNEL, payload)
     return isProjectEntryPathResult(response) ? response : invalidProjectEntryPathResponse()
   },
 
   async revealProjectEntry(request: ProjectEntryPathRequest) {
-    const payload: ProjectEntryPathRequest = { path: request.path }
+    const payload: ProjectEntryPathRequest = { projectPath: request.projectPath, workspaceId: request.workspaceId, path: request.path }
     const response: unknown = await ipcRenderer.invoke(PROJECT_ENTRY_REVEAL_CHANNEL, payload)
     return isProjectEntryRevealResult(response) ? response : invalidProjectEntryRevealResponse()
   },
 
   async deleteProjectEntry(request: ProjectEntryPathRequest) {
-    const payload: ProjectEntryPathRequest = { path: request.path }
+    const payload: ProjectEntryPathRequest = { projectPath: request.projectPath, workspaceId: request.workspaceId, path: request.path }
     const response: unknown = await ipcRenderer.invoke(PROJECT_ENTRY_DELETE_CHANNEL, payload)
     return isProjectEntryDeleteResult(response) ? response : invalidProjectEntryDeleteResponse()
   },
 
   async readProjectFile(request: ProjectFileReadRequest) {
-    const payload: ProjectFileReadRequest = { projectPath: request.projectPath, path: request.path }
+    const payload: ProjectFileReadRequest = { projectPath: request.projectPath, workspaceId: request.workspaceId, path: request.path }
     const response: unknown = await ipcRenderer.invoke(PROJECT_FILE_READ_CHANNEL, payload)
     return isProjectFileReadResult(response) ? response : invalidProjectFileReadResponse()
   },
@@ -174,6 +174,7 @@ export const projectsApi = {
   async writeProjectFile(request: ProjectFileWriteRequest) {
     const payload: ProjectFileWriteRequest = {
       projectPath: request.projectPath,
+      workspaceId: request.workspaceId,
       path: request.path,
       text: request.text,
       eol: request.eol,
@@ -187,20 +188,20 @@ export const projectsApi = {
   },
 
   async listMarkdownDocuments(request: MarkdownOwnerRequest) {
-    const response: unknown = await ipcRenderer.invoke(PROJECT_MARKDOWN_DOCUMENTS_CHANNEL, { projectPath: request.projectPath, path: request.path })
+    const response: unknown = await ipcRenderer.invoke(PROJECT_MARKDOWN_DOCUMENTS_CHANNEL, { projectPath: request.projectPath, workspaceId: request.workspaceId, path: request.path })
     return isProjectMarkdownDocumentsResult(response) ? response : { ok: false as const, error: { code: 'INVALID_RESPONSE' as const, message: '文档索引响应无效。' } }
   },
 
   async importMarkdownImage(request: ProjectMarkdownImageRequest) {
     const payload: ProjectMarkdownImageRequest = request.source === 'pick'
-      ? { projectPath: request.projectPath, path: request.path, source: 'pick' }
-      : { projectPath: request.projectPath, path: request.path, source: 'clipboard', bytes: new Uint8Array(request.bytes) }
+      ? { projectPath: request.projectPath, workspaceId: request.workspaceId, path: request.path, source: 'pick' }
+      : { projectPath: request.projectPath, workspaceId: request.workspaceId, path: request.path, source: 'clipboard', bytes: new Uint8Array(request.bytes) }
     const response: unknown = await ipcRenderer.invoke(PROJECT_MARKDOWN_IMAGE_CHANNEL, payload)
     return isProjectMarkdownImageResult(response) ? response : { ok: false as const, error: { code: 'INVALID_RESPONSE' as const, message: '图片导入响应无效。' } }
   },
 
   async statProjectFile(request: ProjectFileStatRequest) {
-    const payload: ProjectFileStatRequest = { projectPath: request.projectPath, path: request.path }
+    const payload: ProjectFileStatRequest = { projectPath: request.projectPath, workspaceId: request.workspaceId, path: request.path }
     const response: unknown = await ipcRenderer.invoke(PROJECT_FILE_STAT_CHANNEL, payload)
     return isProjectFileStatResult(response) ? response : invalidProjectFileStatResponse()
   }

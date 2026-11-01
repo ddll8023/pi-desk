@@ -5,7 +5,7 @@
   样式直接复用侧栏菜单的类，与左侧项目/会话菜单同一套令牌与层级。动作都只派发一次：
   「打开」把项目内相对路径交给工作区文件标签（Markdown 按设置里的默认视图打开）；Markdown 额外提供
   一个与默认视图相反的入口（默认预览时是「以源码模式打开」，反之亦然）；「插入到终端」写入当前活动终端
-  （活动标签不是终端时禁用并写明原因），复制与显示所需的绝对路径一律经主进程解析，页面不自行拼接路径。
+  （活动标签不是同工作区运行终端时禁用并写明原因），复制与显示所需的绝对路径一律经主进程解析，页面不自行拼接路径。
   「隐藏此项/取消隐藏」直接同步偏好设置中的排除规则；
   「移至废纸篓」向外派发删除请求由宿主进行破坏性确认；复制、插入、隐藏与显示动作的成败用面板内的一次性提示回报；
   打开动作的结果由文件标签自己展示。
@@ -13,6 +13,8 @@
 <script setup lang="ts">
 import { computed, nextTick, ref } from 'vue'
 import type { ProjectDirectoryEntryKind } from '../../../../shared/project-file-api'
+import type { WorkspaceTarget } from '../../../../shared/workspace-api'
+import type { TerminalSessionInfo } from '../../../../shared/terminal-api'
 import { useAnchoredPopup } from '../../ui/anchored-popup'
 import { copyText } from '../../ui/clipboard'
 import { isMarkdownPath } from '../file-language'
@@ -26,7 +28,7 @@ import { useWorkspaceTabsStore } from '../../workspace/stores/workspace-tabs'
 import AppButton from '../../ui/AppButton.vue'
 
 /** 菜单指向的条目；只保留展示与动作需要的最小信息。 */
-export interface FileTreeMenuTarget {
+export interface FileTreeMenuTarget extends WorkspaceTarget {
   readonly path: string
   readonly name: string
   readonly kind: ProjectDirectoryEntryKind
@@ -74,15 +76,16 @@ const menuStyle = computed(() => {
   }
 })
 
-/** 当前活动终端；活动标签不是终端或终端已消失时为空，「插入到终端」据此禁用。 */
+/** 当前活动终端；只有活动标签为同工作区且运行中的终端时可用，「插入到终端」据此禁用。 */
 const activeTerminal = computed(() => {
-  const id = workspaceTabsStore.activeTerminalId
-  if (id === null) return null
-  return terminalStore.sessions.find(session => session.id === id) ?? null
+  const id = workspaceTabsStore.activeTerminalId, origin = target.value
+  if (id === null || origin === null) return null
+  return terminalStore.sessions.find(session => session.id === id && session.status === 'running'
+    && session.workspaceId === origin.workspaceId && session.projectPath === origin.projectPath) ?? null
 })
 const insertHint = computed(() => (
   activeTerminal.value === null
-    ? '当前标签不是终端，先切到一个终端标签'
+    ? '当前标签不是同工作区的运行中终端，先切到对应终端标签'
     : '把绝对路径插入当前终端，不回车执行'
 ))
 /** 各平台的文案：macOS 是访达，Windows 是资源管理器，其余归为所在文件夹。 */
@@ -147,7 +150,7 @@ function openEntry(): void {
   const entry = target.value
   closeMenu()
   if (entry === null || entry.kind !== 'file') return
-  workspaceTabsStore.openFileTab(entry.path)
+  workspaceTabsStore.openFileTab(entry.path, undefined, undefined, entry)
 }
 
 /** 以与默认视图相反的视图打开；默认视图由设置页决定，这里只给显式覆盖入口。 */
@@ -155,7 +158,7 @@ function openMarkdownAlternate(): void {
   const entry = target.value
   closeMenu()
   if (entry === null || entry.kind !== 'file') return
-  workspaceTabsStore.openFileTab(entry.path, alternateMode.value)
+  workspaceTabsStore.openFileTab(entry.path, alternateMode.value, undefined, entry)
 }
 
 /** 插入到当前活动终端：绝对路径由主进程解析，写入只补一个空格，不隐式回车。 */
@@ -167,14 +170,15 @@ function insertIntoTerminal(): void {
   void runInsert(entry, session)
 }
 
-async function runInsert(entry: FileTreeMenuTarget, session: { readonly id: string; readonly shell: string }): Promise<void> {
-  const resolved = await resolveProjectEntryPath(entry.path)
+async function runInsert(entry: FileTreeMenuTarget, session: TerminalSessionInfo): Promise<void> {
+  if (session.workspaceId !== entry.workspaceId || session.projectPath !== entry.projectPath) return
+  const resolved = await resolveProjectEntryPath(entry.path, entry)
   if (!resolved.ok) {
     emitNotice(resolved.error.message, 'error')
     return
   }
-  await terminalStore.insertText(session.id, projectEntryInsertText(session.shell, resolved.data.absolutePath))
-  emitNotice(`已插入到终端：${entry.name}`, 'muted')
+  if (resolved.data.workspaceId !== session.workspaceId || resolved.data.projectPath !== session.projectPath) return
+  if (await terminalStore.insertText(session.id, projectEntryInsertText(session.shell, resolved.data.absolutePath))) emitNotice(`已插入到终端：${entry.name}`, 'muted')
 }
 
 function copyRelativePath(): void {
@@ -200,7 +204,7 @@ function copyAbsolutePath(): void {
 }
 
 async function runCopyAbsolute(entry: FileTreeMenuTarget): Promise<void> {
-  const resolved = await resolveProjectEntryPath(entry.path)
+  const resolved = await resolveProjectEntryPath(entry.path, entry)
   if (!resolved.ok) {
     emitNotice(resolved.error.message, 'error')
     return
@@ -252,7 +256,7 @@ function unhideEntry(): void {
 }
 
 async function runReveal(entry: FileTreeMenuTarget): Promise<void> {
-  const result = await revealProjectEntry(entry.path)
+  const result = await revealProjectEntry(entry.path, entry)
   if (!result.ok) {
     emitNotice(result.error.message, 'error')
     return

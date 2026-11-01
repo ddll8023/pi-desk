@@ -29,6 +29,7 @@ import { useSessionViewStore } from '../../sessions/stores/session-view'
 import { useSettingsStore } from '../stores/settings'
 import { useTerminalStore } from '../../workspace/stores/terminal'
 import { useWorkspaceTabsStore } from '../../workspace/stores/workspace-tabs'
+import { useTaskWorkspacesStore } from '../../workspace/stores/task-workspaces'
 import type { ChatOpenIntent, WorkspaceTabKind } from '../../workspace/stores/workspace-tabs'
 import AppButton from '../../ui/AppButton.vue'
 import type { QuickCommand, QuickCommandScope } from '../../../../shared/quick-commands-api'
@@ -48,6 +49,7 @@ const sessionRunsStore = useSessionRunsStore()
 const settingsStore = useSettingsStore()
 const terminalStore = useTerminalStore()
 const workspaceTabsStore = useWorkspaceTabsStore()
+const taskWorkspacesStore = useTaskWorkspacesStore()
 const browserAnnotations = useBrowserAnnotationsStore()
 const composerRef = ref<InstanceType<typeof PromptComposer> | null>(null)
 const annotationDeliveryError = ref<string | null>(null)
@@ -55,7 +57,7 @@ let annotationDeliveryPending = false
 const { currentProject } = storeToRefs(projectStore)
 const { open: settingsOpen } = storeToRefs(settingsStore)
 
-/** 当前项目路径；终端、快捷命令、文件树与文件标签都用它作为上下文。 */
+/** 项目路径只用于分组与设置；执行目录由各资源持有的工作区身份决定。 */
 const projectPath = computed(() => currentProject.value?.path ?? null)
 /** 当前项目可用的快捷命令：项目命令在前，全局命令在后。 */
 const quickCommandsForProject = computed(() => quickCommandsStore.commandsForProject(projectPath.value))
@@ -155,15 +157,15 @@ async function onCreateTab(kind: WorkspaceTabKind): Promise<void> {
     submitOpen(await workspaceTabsStore.openNewChatTab())
     return
   }
-  if (kind === 'worktree-chat') {
-    submitOpen(await workspaceTabsStore.openNewWorktreeChatTab())
-    return
-  }
   if (kind === 'browser') {
     await workspaceTabsStore.openBrowserTab()
     return
   }
   await workspaceTabsStore.createTerminalTab()
+}
+
+async function onParallelTask(sourceKey: string): Promise<void> {
+  submitOpen(await workspaceTabsStore.openParallelTask(sourceKey))
 }
 
 /** 重新打开当前对话标签：标签未接上实例时重新提交打开意图。 */
@@ -212,6 +214,7 @@ function openCommandSettings(): void {
     @select="onSelectTab"
     @close="onCloseTab"
     @create="onCreateTab"
+    @parallel-task="onParallelTask"
     @rename="workspaceTabsStore.renameTab"
     @move="workspaceTabsStore.moveTab"
     @run-command="runQuickCommand"
@@ -224,6 +227,12 @@ function openCommandSettings(): void {
   <p v-if="sessionStore.actionError !== null" class="workspace-notice" role="alert">
     <span class="min-w-0 flex-1">{{ sessionStore.actionError.message }}</span>
     <AppButton variant="unstyled" class="workspace-notice-close" aria-label="关闭提示" @click="sessionStore.actionError = null">关闭</AppButton>
+  </p>
+
+  <!-- 任务错误属于工作区壳层，无对话或切到其他面板时也必须可见。 -->
+  <p v-if="taskWorkspacesStore.actionError !== null" class="workspace-notice" role="alert">
+    <span class="min-w-0 flex-1">{{ taskWorkspacesStore.actionError }}</span>
+    <AppButton variant="unstyled" class="workspace-notice-close" aria-label="关闭工作区提示" @click="taskWorkspacesStore.clearError()">关闭</AppButton>
   </p>
 
   <p v-if="annotationDeliveryError" class="workspace-notice" role="alert">

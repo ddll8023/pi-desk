@@ -16,12 +16,15 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import type { ProjectDirectoryEntryKind } from '../../../../shared/project-file-api'
+import type { WorkspaceTarget } from '../../../../shared/workspace-api'
+type SearchRow = WorkspaceTarget & { readonly path: string; readonly name: string; readonly directory: string; readonly hidden: boolean }
 import { setProjectEntryDragData } from '../../ui/project-entry-drag'
 import { useProjectDirectoryStore } from '../stores/project-directory'
 import type { FileTreeRow } from '../stores/project-directory'
 import { useProjectStore } from '../../projects/stores/project'
 import { useProjectEditorStore } from '../stores/project-editor'
 import { useWorkspaceTabsStore } from '../../workspace/stores/workspace-tabs'
+import { useTaskWorkspacesStore } from '../../workspace/stores/task-workspaces'
 import { usePreferencesStore } from '../../preferences/stores/preferences'
 import { isFileExcluded } from '../file-exclude'
 import AppButton from '../../ui/AppButton.vue'
@@ -60,6 +63,7 @@ const projectStore = useProjectStore()
 const directoryStore = useProjectDirectoryStore()
 const editorStore = useProjectEditorStore()
 const workspaceTabsStore = useWorkspaceTabsStore()
+const workspaces = useTaskWorkspacesStore()
 const preferencesStore = usePreferencesStore()
 const { currentProject } = storeToRefs(projectStore)
 const { rows, searchView, selectedPath } = storeToRefs(directoryStore)
@@ -81,7 +85,7 @@ const deleting = ref(false)
 
 const filtering = computed(() => query.value.trim() !== '')
 const rootView = computed(() => (
-  currentProject.value === null ? null : directoryStore.directoryView(currentProject.value.path, '')
+  directoryStore.context === null ? null : directoryStore.directoryView(directoryStore.context.id, '')
 ))
 /**
  * 检索是否还没出结果：击键到防抖到期之间 store 仍是 idle，此时同样按「正在查找」展示，
@@ -102,19 +106,14 @@ const searchError = computed(() => (
 const searchRows = computed(() => {
   const view = searchView.value
   if (view.phase !== 'ready') return []
-  const result: Array<{
-    readonly path: string
-    readonly name: string
-    readonly directory: string
-    readonly hidden: boolean
-  }> = []
+  const result: SearchRow[] = []
   for (const path of view.entries) {
     const slash = path.lastIndexOf('/')
     const name = slash < 0 ? path : path.slice(slash + 1)
     const directory = slash < 0 ? '' : path.slice(0, slash)
     const hidden = isFileExcluded(path, name, false, fileExcludePatterns.value)
     if (hidden && !showHiddenFiles.value) continue
-    result.push({ path, name, directory, hidden })
+    result.push({ ...view.target, path, name, directory, hidden })
   }
   return result
 })
@@ -170,55 +169,54 @@ function clearQuery(): void {
  */
 function onRowClick(row: FileTreeRow): void {
   if (row.type !== 'entry') return
-  const projectPath = currentProject.value?.path
-  if (projectPath === undefined) return
+  if (row.projectPath !== currentProject.value?.path || directoryStore.context?.id !== row.workspaceId) return
   if (row.kind === 'directory') {
-    directoryStore.toggleDirectory(projectPath, row.path)
+    directoryStore.toggleDirectory(row.workspaceId, row.path)
     return
   }
   directoryStore.select(row.path)
   if (row.kind === 'file') {
-    workspaceTabsStore.openFileTab(row.path)
+    workspaceTabsStore.openFileTab(row.path, undefined, undefined, row)
     return
   }
   showNotice({ text: '符号链接或特殊文件不提供预览与编辑。', tone: 'muted' })
 }
 
 /** 检索结果都是文件：点击直接在工作区打开。 */
-function onSearchRowClick(path: string): void {
-  directoryStore.select(path)
-  workspaceTabsStore.openFileTab(path)
+function onSearchRowClick(row: SearchRow): void {
+  directoryStore.select(row.path)
+  workspaceTabsStore.openFileTab(row.path, undefined, undefined, row)
 }
 
-/** 切换项目时清掉上一个项目的查询串与选中行，并读取新项目的根层。 */
-watch(() => currentProject.value?.path ?? null, (path) => {
+/** 切换工作区环境时清空查询串并收起菜单，读取新工作区的根层；各环境的选中行在 Store 中分区保留。 */
+watch(() => directoryStore.context?.id ?? null, (id) => {
   clearQuery()
-  directoryStore.select(null)
-  if (path !== null) void directoryStore.ensureLoaded(path, '')
+  menu.value?.close()
+  if (!deleting.value) pendingDelete.value = null
+  if (id !== null) void directoryStore.ensureLoaded(id, '')
 }, { immediate: true })
 
 /**
- * 拖动开始：载荷只带项目根、项目内相对路径与条目类型，绝对路径留到落点或菜单动作时由主进程解析。
- * 未选择项目时不给载荷，拖动自然失效。
+ * 拖动开始：载荷固定所属项目与工作区身份，相对路径由落点复核是否属于同一环境并由主进程解析。
+ * 缺少环境或不属于当前环境时不给载荷，拖动自然失效。
  */
-function startEntryDrag(event: DragEvent, path: string, name: string, kind: ProjectDirectoryEntryKind): void {
-  const projectPath = currentProject.value?.path ?? null
-  if (projectPath === null) {
+function startEntryDrag(event: DragEvent, path: string, name: string, kind: ProjectDirectoryEntryKind, target: WorkspaceTarget): void {
+  if (directoryStore.context?.id !== target.workspaceId) {
     event.preventDefault()
     return
   }
   draggingPath.value = path
-  setProjectEntryDragData(event, { projectPath, path, name, kind })
+  setProjectEntryDragData(event, { ...target, path, name, kind })
 }
 
 function onRowDragStart(row: FileTreeRow, event: DragEvent): void {
   if (row.type !== 'entry') return
-  startEntryDrag(event, row.path, row.name, row.kind)
+  startEntryDrag(event, row.path, row.name, row.kind, row)
 }
 
 /** 检索结果都是文件：主进程的检索只回文件路径，不含目录。 */
-function onSearchRowDragStart(row: { readonly path: string; readonly name: string }, event: DragEvent): void {
-  startEntryDrag(event, row.path, row.name, 'file')
+function onSearchRowDragStart(row: SearchRow, event: DragEvent): void {
+  startEntryDrag(event, row.path, row.name, 'file', row)
 }
 
 function endEntryDrag(): void {
@@ -231,20 +229,21 @@ function openEntryMenu(
   path: string,
   name: string,
   kind: ProjectDirectoryEntryKind,
-  hidden = false
+  hidden: boolean,
+  target: WorkspaceTarget
 ): void {
   const host = event.currentTarget
   if (!(host instanceof HTMLElement)) return
-  menu.value?.open({ path, name, kind, hidden }, host)
+  menu.value?.open({ ...target, path, name, kind, hidden }, host)
 }
 
 function onRowMenu(row: FileTreeRow, event: MouseEvent | KeyboardEvent): void {
   if (row.type !== 'entry') return
-  openEntryMenu(event, row.path, row.name, row.kind, row.hidden)
+  openEntryMenu(event, row.path, row.name, row.kind, row.hidden, row)
 }
 
-function onSearchRowMenu(row: { readonly path: string; readonly name: string; readonly hidden: boolean }, event: MouseEvent | KeyboardEvent): void {
-  openEntryMenu(event, row.path, row.name, 'file', row.hidden)
+function onSearchRowMenu(row: SearchRow, event: MouseEvent | KeyboardEvent): void {
+  openEntryMenu(event, row.path, row.name, 'file', row.hidden, row)
 }
 
 /** 菜单键与 Shift+F10 是右键的键盘等价入口；其余按键交给行本身的点击行为。 */
@@ -269,19 +268,19 @@ const deleteDialogDescription = computed(() => {
     : `文件「${pendingDelete.value.path}」将被移入系统废纸篓。`
 })
 
-/** 二次确认后将条目移至废纸篓，并清理已打开的受影响标签。 */
+/** 二次确认并检查未保存/在途操作后将条目移至废纸篓，清理该工作区中已打开的受影响标签。 */
 async function confirmDelete(): Promise<void> {
   const target = pendingDelete.value
   if (target === null || deleting.value) return
-  const projectPath = currentProject.value?.path
-  if (!projectPath) {
-    pendingDelete.value = null
-    return
-  }
+  const projectPath = target.projectPath
+  const affected = Object.values(editorStore.records).filter(record => record.workspaceId === target.workspaceId
+    && (record.path === target.path || target.kind === 'directory' && record.path.startsWith(`${target.path}/`)))
+  if (affected.some(record => record.dirty || record.saving)) { showNotice({ text: '目标包含未保存或正在保存的编辑，请先保存或关闭这些文件。', tone: 'error' }); return }
 
+  if (!workspaces.beginOperation([target.workspaceId])) { showNotice({ text: '工作区正在收敛，请稍后操作。', tone: 'error' }); return }
   deleting.value = true
   try {
-    const result = await deleteProjectEntry(target.path)
+    const result = await deleteProjectEntry(target.path, target)
     if (!result.ok) {
       showNotice({ text: result.error.message, tone: 'error' })
       return
@@ -292,7 +291,7 @@ async function confirmDelete(): Promise<void> {
     const isDir = target.kind === 'directory'
     const records = Object.values(editorStore.records)
     for (const record of records) {
-      if (record.projectPath !== projectPath) continue
+      if (record.projectPath !== projectPath || record.workspaceId !== target.workspaceId) continue
       const shouldClose = isDir
         ? record.path === targetPath || record.path.startsWith(`${targetPath}/`)
         : record.path === targetPath
@@ -302,7 +301,7 @@ async function confirmDelete(): Promise<void> {
     }
 
     // 若当前高亮选中的条目正好是被删除的目标或其子条目，清空高亮。
-    if (selectedPath.value !== null) {
+    if (directoryStore.context?.id === target.workspaceId && selectedPath.value !== null) {
       const selected = selectedPath.value
       if (selected === targetPath || (isDir && selected.startsWith(`${targetPath}/`))) {
         directoryStore.select(null)
@@ -312,10 +311,11 @@ async function confirmDelete(): Promise<void> {
     // 主动重载父目录，配合主进程目录监听 watcher 保持界面及时收敛。
     const slash = targetPath.lastIndexOf('/')
     const parentDirectory = slash < 0 ? '' : targetPath.slice(0, slash)
-    void directoryStore.reloadDirectory(projectPath, parentDirectory)
+    void directoryStore.reloadDirectory(target.workspaceId, parentDirectory)
 
     showNotice({ text: `已移至废纸篓：${target.name}`, tone: 'muted' })
   } finally {
+    workspaces.endOperation([target.workspaceId])
     deleting.value = false
     pendingDelete.value = null
   }
@@ -336,11 +336,11 @@ function onRowMenuKeydown(row: FileTreeRow, event: KeyboardEvent): void {
   if (row.type === 'entry' && (event.key === 'Delete' || (event.key === 'Backspace' && event.metaKey))) {
     event.preventDefault()
     event.stopPropagation()
-    requestDeleteEntry({ path: row.path, name: row.name, kind: row.kind })
+    requestDeleteEntry(row)
   }
 }
 
-function onSearchRowMenuKeydown(row: { readonly path: string; readonly name: string }, event: KeyboardEvent): void {
+function onSearchRowMenuKeydown(row: SearchRow, event: KeyboardEvent): void {
   if (isMenuKey(event)) {
     event.preventDefault()
     event.stopPropagation()
@@ -350,7 +350,7 @@ function onSearchRowMenuKeydown(row: { readonly path: string; readonly name: str
   if (event.key === 'Delete' || (event.key === 'Backspace' && event.metaKey)) {
     event.preventDefault()
     event.stopPropagation()
-    requestDeleteEntry({ path: row.path, name: row.name, kind: 'file' })
+    requestDeleteEntry({ ...row, kind: 'file' })
   }
 }
 
@@ -418,7 +418,7 @@ onBeforeUnmount(() => {
               :class="{ 'is-selected': row.path === selectedPath, 'is-dragging': draggingPath === row.path, 'is-hidden': row.hidden }"
               :title="row.hidden ? `${row.path}（已隐藏）` : row.path"
               draggable="true"
-              @click="onSearchRowClick(row.path)"
+              @click="onSearchRowClick(row)"
               @dragstart="onSearchRowDragStart(row, $event)"
               @dragend="endEntryDrag"
               @contextmenu.prevent="onSearchRowMenu(row, $event)"

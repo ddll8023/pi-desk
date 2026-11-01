@@ -1,135 +1,56 @@
-/**
- * Git Worktree 跨进程 IPC：多工作树列举、隔离工作树创建、工作树及分支移除、干净状态检查。
- * 所有路径由主进程解析，写操作统一经过项目信任门禁与可信调用者核验。
- */
-import type { IpcMainInvokeEvent } from 'electron'
-import type { DesktopErrorCode } from '../../shared/desktop-api'
+/** 工作树 IPC 仅接受显式项目与托管工作区身份；项目授权、信任和资源生命周期统一交给工作区管理器。 */
+import type { DesktopError } from '../../shared/desktop-api'
 import {
-  WORKTREE_CREATE_CHANNEL,
-  WORKTREE_LIST_CHANNEL,
-  WORKTREE_MERGE_CHANNEL,
-  WORKTREE_REMOVE_CHANNEL,
-  WORKTREE_STATUS_CHANNEL,
-  isCreateWorktreeRequest,
-  isMergeWorktreeRequest,
-  isRemoveWorktreeRequest,
-  isWorktreeStatusRequest
+  WORKTREE_CREATE_CHANNEL, WORKTREE_LIST_CHANNEL, WORKTREE_MERGE_CHANNEL,
+  WORKTREE_REMOVE_CHANNEL, WORKTREE_STATUS_CHANNEL, isCreateWorktreeRequest,
+  isMergeWorktreeRequest, isRemoveWorktreeRequest, isWorktreeListRequest, isWorktreeStatusRequest
 } from '../../shared/worktree-api'
-import type {
-  CreateWorktreeResult,
-  MergeWorktreeResult,
-  RemoveWorktreeResult,
-  WorktreeListResult,
-  WorktreeStatusResult
-} from '../../shared/worktree-api'
+import { WORKSPACE_RESOLVE_CHANNEL, isWorkspaceResolveRequest } from '../../shared/workspace-api'
 import { handle, isTrustedCaller } from '../ipc/dispatch'
-import { worktreeService } from '../services'
-import { requireGitWriteTrust } from '../trust/guards'
+import { workspaceManager } from '../services'
+import { workspaceError } from '../workspaces/workspace-manager'
 
-function worktreeListFailure(code: DesktopErrorCode, message: string): WorktreeListResult {
-  return { ok: false, error: { code, message } }
+type Failure = { readonly ok: false; readonly error: DesktopError }
+function forbidden(): Failure { return { ok: false, error: { code: 'FORBIDDEN', message: '不允许此页面调用桌面接口。' } } }
+function invalid(): Failure { return { ok: false, error: { code: 'INVALID_REQUEST', message: '工作区请求必须固定所属项目及托管身份。' } } }
+async function attempt<T>(operation: () => Promise<T>): Promise<T | Failure> {
+  try { return await operation() } catch (error) { return { ok: false, error: workspaceError(error) } }
 }
-
-function createWorktreeFailure(code: DesktopErrorCode, message: string): CreateWorktreeResult {
-  return { ok: false, error: { code, message } }
-}
-
-function removeWorktreeFailure(code: DesktopErrorCode, message: string): RemoveWorktreeResult {
-  return { ok: false, error: { code, message } }
-}
-
-function mergeWorktreeFailure(code: DesktopErrorCode, message: string): MergeWorktreeResult {
-  return { ok: false, error: { code, message } }
-}
-
-function worktreeStatusFailure(code: DesktopErrorCode, message: string): WorktreeStatusResult {
-  return { ok: false, error: { code, message } }
-}
-
 export function registerWorktreeHandlers(pageUrl: string): void {
-  // 1. 列举当前项目仓库的工作树
-  handle(
-    WORKTREE_LIST_CHANNEL,
-    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<WorktreeListResult> => {
-      if (!isTrustedCaller(event, pageUrl)) {
-        return worktreeListFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
-      }
-      if (args.length !== 0) {
-        return worktreeListFailure('INVALID_REQUEST', '工作树列表接口不接受参数。')
-      }
-      return worktreeService.listWorktrees()
-    }
-  )
-
-  // 2. 检测指定工作树的未提交改动状态
-  handle(
-    WORKTREE_STATUS_CHANNEL,
-    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<WorktreeStatusResult> => {
-      if (!isTrustedCaller(event, pageUrl)) {
-        return worktreeStatusFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
-      }
-      const request = args[0]
-      if (!isWorktreeStatusRequest(request)) {
-        return worktreeStatusFailure('INVALID_REQUEST', '工作树状态检测请求参数非法。')
-      }
-      return worktreeService.checkWorktreeStatus(request)
-    }
-  )
-
-  // 3. 创建隔离工作树（写操作，受项目信任约束）
-  handle(
-    WORKTREE_CREATE_CHANNEL,
-    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<CreateWorktreeResult> => {
-      if (!isTrustedCaller(event, pageUrl)) {
-        return createWorktreeFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
-      }
-      const trustError = await requireGitWriteTrust()
-      if (trustError !== null) {
-        return createWorktreeFailure(trustError.code, trustError.message)
-      }
-      const request = args[0]
-      if (!isCreateWorktreeRequest(request)) {
-        return createWorktreeFailure('INVALID_REQUEST', '创建工作树请求参数非法。')
-      }
-      return worktreeService.createWorktree(request)
-    }
-  )
-
-  // 4. 移除指定工作树（写操作，受项目信任约束）
-  handle(
-    WORKTREE_REMOVE_CHANNEL,
-    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<RemoveWorktreeResult> => {
-      if (!isTrustedCaller(event, pageUrl)) {
-        return removeWorktreeFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
-      }
-      const trustError = await requireGitWriteTrust()
-      if (trustError !== null) {
-        return removeWorktreeFailure(trustError.code, trustError.message)
-      }
-      const request = args[0]
-      if (!isRemoveWorktreeRequest(request)) {
-        return removeWorktreeFailure('INVALID_REQUEST', '移除工作树请求参数非法。')
-      }
-      return worktreeService.removeWorktree(request)
-    }
-  )
-
-  // 5. 合并工作树分支（写操作，受项目信任约束）
-  handle(
-    WORKTREE_MERGE_CHANNEL,
-    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<MergeWorktreeResult> => {
-      if (!isTrustedCaller(event, pageUrl)) {
-        return mergeWorktreeFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
-      }
-      const trustError = await requireGitWriteTrust()
-      if (trustError !== null) {
-        return mergeWorktreeFailure(trustError.code, trustError.message)
-      }
-      const request = args[0]
-      if (!isMergeWorktreeRequest(request)) {
-        return mergeWorktreeFailure('INVALID_REQUEST', '合并工作树请求参数非法。')
-      }
-      return worktreeService.mergeWorktree(request)
-    }
-  )
+  handle(WORKSPACE_RESOLVE_CHANNEL, async (event, ...args: unknown[]) => {
+    if (!isTrustedCaller(event, pageUrl)) return forbidden()
+    const request = args[0]
+    if (args.length !== 1 || !isWorkspaceResolveRequest(request)) return invalid()
+    return attempt(async () => ({ ok: true as const, workspace: await workspaceManager.resolveWorkspace(request) }))
+  })
+  handle(WORKTREE_LIST_CHANNEL, async (event, ...args: unknown[]) => {
+    if (!isTrustedCaller(event, pageUrl)) return forbidden()
+    const request = args[0]
+    if (args.length !== 1 || !isWorktreeListRequest(request)) return invalid()
+    return attempt(() => workspaceManager.listWorktrees(request))
+  })
+  handle(WORKTREE_CREATE_CHANNEL, async (event, ...args: unknown[]) => {
+    if (!isTrustedCaller(event, pageUrl)) return forbidden()
+    const request = args[0]
+    if (args.length !== 1 || !isCreateWorktreeRequest(request)) return invalid()
+    return attempt(() => workspaceManager.createWorktree(request))
+  })
+  handle(WORKTREE_STATUS_CHANNEL, async (event, ...args: unknown[]) => {
+    if (!isTrustedCaller(event, pageUrl)) return forbidden()
+    const request = args[0]
+    if (args.length !== 1 || !isWorktreeStatusRequest(request)) return invalid()
+    return attempt(() => workspaceManager.checkWorktreeStatus(request))
+  })
+  handle(WORKTREE_REMOVE_CHANNEL, async (event, ...args: unknown[]) => {
+    if (!isTrustedCaller(event, pageUrl)) return forbidden()
+    const request = args[0]
+    if (args.length !== 1 || !isRemoveWorktreeRequest(request)) return invalid()
+    return attempt(() => workspaceManager.removeWorktree(request))
+  })
+  handle(WORKTREE_MERGE_CHANNEL, async (event, ...args: unknown[]) => {
+    if (!isTrustedCaller(event, pageUrl)) return forbidden()
+    const request = args[0]
+    if (args.length !== 1 || !isMergeWorktreeRequest(request)) return invalid()
+    return attempt(() => workspaceManager.mergeWorktree(request))
+  })
 }

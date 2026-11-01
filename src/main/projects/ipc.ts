@@ -8,7 +8,10 @@ import {
   isProjectMarkdownImageRequest
 } from '../../shared/project-file-api'
 import type { IpcMainInvokeEvent } from 'electron'
-import type { DesktopErrorCode } from '../../shared/desktop-api'
+import type { DesktopError, DesktopErrorCode } from '../../shared/desktop-api'
+import { isWorkspaceTarget, workspaceTarget } from '../../shared/workspace-api'
+import type { WorkspaceContext, WorkspaceTarget } from '../../shared/workspace-api'
+import { workspaceError } from '../workspaces/workspace-manager'
 import {
   PROJECT_ADD_CHANNEL,
   PROJECT_CHOOSE_DIRECTORY_CHANNEL,
@@ -29,7 +32,6 @@ import {
   PROJECT_ENTRY_RESOLVE_CHANNEL,
   PROJECT_ENTRY_REVEAL_CHANNEL,
   PROJECT_ENTRY_DELETE_CHANNEL,
-  PROJECT_FILE_QUERY_MAX_CHARS,
   PROJECT_FILE_READ_CHANNEL,
   PROJECT_FILE_SEARCH_CHANNEL,
   PROJECT_FILE_STAT_CHANNEL,
@@ -39,6 +41,8 @@ import {
   isProjectHtmlPreviewRequest,
   isProjectHtmlPreviewReleaseRequest,
   isProjectDirectoryWatchRequest,
+  isProjectDirectoryListRequest,
+  isProjectFileSearchRequest,
   isProjectEntryPathRequest,
   isProjectFileReadRequest,
   isProjectFileWriteRequest
@@ -59,7 +63,7 @@ import { handle } from '../ipc/dispatch'
 import { isTrustedCaller } from '../ipc/dispatch'
 import {
   projectManager, terminals, projectFileIndex, projectDirectory, projectDirectoryWatcher,
-  projectFileContent, projectHtmlPreview, resolveRegisteredProjectPath, registeredProjectPathById
+  projectFileContent, projectHtmlPreview, workspaceManager, registeredProjectPathById
 } from '../services'
 
 export function projectPathFailure(code: ProjectErrorCode, message: string): ProjectPathResult {
@@ -230,34 +234,40 @@ export function registerProjectHandlers(pageUrl: string): void {
 }
 
 /**
- * 普通文件检索、目录与条目解析跟随当前项目；Markdown 文档候选与图片导入固定所属的已登记项目，页面不能指定外部路径。
+ * 文件检索、目录、条目、Markdown 与预览全部固定请求工作区，页面不能指定外部执行路径。
  * 文件内容读写同样只接受项目内相对路径：读返回文本/图片/不支持三类结果，写只接受文本并比对磁盘基线；
  * 解析与「在文件管理器中显示」共用同一个条目解析：越界、绝对路径与非法段一律拒绝。
  */
+async function scopedFile<T>(target: WorkspaceTarget, mode: 'read' | 'write', operation: (context: WorkspaceContext) => Promise<T>): Promise<T | { ok: false; error: DesktopError }> {
+  try { return await workspaceManager.use(target, mode, operation) }
+  catch (error) { return { ok: false, error: workspaceError(error) } }
+}
+
 export function registerProjectFileHandlers(pageUrl: string): void {
   handle(PROJECT_HTML_PREVIEW_PREPARE_CHANNEL, async (event, ...args: unknown[]) => {
     if (!isTrustedCaller(event, pageUrl)) return projectFileFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
     if (args.length !== 1 || !isProjectHtmlPreviewRequest(args[0])) return projectFileFailure('INVALID_REQUEST', 'HTML 预览必须给出所属项目、文档与有界文本快照。')
-    return projectHtmlPreview.prepare(event.sender, args[0])
+    const request = args[0]
+    return scopedFile(request, 'read', context => projectHtmlPreview.prepare(event.sender, request, context))
   })
   handle(PROJECT_HTML_PREVIEW_RELEASE_CHANNEL, (event, ...args: unknown[]) => {
     if (!isTrustedCaller(event, pageUrl)) return projectFileFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
     if (args.length !== 1 || !isProjectHtmlPreviewReleaseRequest(args[0])) return projectFileFailure('INVALID_REQUEST', '释放预览必须给出有效的预览身份。')
     return projectHtmlPreview.release(event.sender.id, args[0].previewId)
   })
-  const assets = new ProjectMarkdownAssets(resolveRegisteredProjectPath)
+  const assets = new ProjectMarkdownAssets(context => workspaceManager.contextFor(workspaceTarget(context), 'write'))
   handle(PROJECT_MARKDOWN_DOCUMENTS_CHANNEL, async (event: IpcMainInvokeEvent, ...args: unknown[]) => {
     if (!isTrustedCaller(event, pageUrl)) return projectFileFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
     if (args.length !== 1 || !isProjectFileReadRequest(args[0])) return projectFileFailure('INVALID_REQUEST', '文档补全必须固定所属项目和文档。')
-    const root = await resolveRegisteredProjectPath(args[0].projectPath)
-    if (!root) return projectFileFailure('INVALID_REQUEST', '所属项目已移除。')
-    return projectFileIndex.markdownDocuments(root)
+    const request = args[0]
+    return scopedFile(request, 'read', context => projectFileIndex.markdownDocuments(context))
   })
   handle(PROJECT_MARKDOWN_IMAGE_CHANNEL, async (event: IpcMainInvokeEvent, ...args: unknown[]) => {
     if (!isTrustedCaller(event, pageUrl)) return projectFileFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
     if (args.length !== 1 || !isProjectMarkdownImageRequest(args[0])) return projectFileFailure('INVALID_REQUEST', '图片导入参数无效。')
-    const result = await assets.import(args[0], BrowserWindow.fromWebContents(event.sender))
-    if (result.ok && result.data.path) projectFileIndex.invalidate()
+    const request = args[0]
+    const result = await scopedFile(request, 'write', context => assets.import(context, request, BrowserWindow.fromWebContents(event.sender)))
+    if (result.ok && result.data.path) projectFileIndex.invalidate(result.data.workspaceId)
     return result
   })
   handle(
@@ -266,22 +276,9 @@ export function registerProjectFileHandlers(pageUrl: string): void {
       if (!isTrustedCaller(event, pageUrl)) {
         return projectFileFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
       }
-      if (args.length !== 1) {
-        return projectFileFailure('INVALID_REQUEST', '文件检索接口只接受一个请求对象。')
-      }
       const request = args[0]
-      if (typeof request !== 'object' || request === null || Array.isArray(request)) {
-        return projectFileFailure('INVALID_REQUEST', '文件检索参数格式不正确。')
-      }
-      const fields = request as Record<string, unknown>
-      if (Object.keys(fields).some((key) => key !== 'query')) {
-        return projectFileFailure('INVALID_REQUEST', '文件检索参数包含未支持的字段。')
-      }
-      const { query } = fields
-      if (typeof query !== 'string' || query.length > PROJECT_FILE_QUERY_MAX_CHARS) {
-        return projectFileFailure('INVALID_REQUEST', '文件检索查询串无效。')
-      }
-      return projectFileIndex.search(query)
+      if (args.length !== 1 || !isProjectFileSearchRequest(request)) return projectFileFailure('INVALID_REQUEST', '文件检索必须固定工作区和有界查询。')
+      return scopedFile(request, 'read', context => projectFileIndex.search(context, request.query))
     }
   )
 
@@ -291,22 +288,9 @@ export function registerProjectFileHandlers(pageUrl: string): void {
       if (!isTrustedCaller(event, pageUrl)) {
         return projectDirectoryFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
       }
-      if (args.length !== 1) {
-        return projectDirectoryFailure('INVALID_REQUEST', '目录列举接口只接受一个请求对象。')
-      }
       const request = args[0]
-      if (typeof request !== 'object' || request === null || Array.isArray(request)) {
-        return projectDirectoryFailure('INVALID_REQUEST', '目录列举参数格式不正确。')
-      }
-      const fields = request as Record<string, unknown>
-      if (Object.keys(fields).some((key) => key !== 'directory')) {
-        return projectDirectoryFailure('INVALID_REQUEST', '目录列举参数包含未支持的字段。')
-      }
-      const { directory } = fields
-      if (typeof directory !== 'string') {
-        return projectDirectoryFailure('INVALID_REQUEST', '目录列举必须给出相对目录路径字符串。')
-      }
-      return projectDirectory.list(directory)
+      if (args.length !== 1 || !isProjectDirectoryListRequest(request)) return projectDirectoryFailure('INVALID_REQUEST', '目录列举必须固定工作区和相对目录。')
+      return scopedFile(request, 'read', context => projectDirectory.list(context, request.directory))
     }
   )
 
@@ -319,7 +303,11 @@ export function registerProjectFileHandlers(pageUrl: string): void {
       if (args.length !== 1 || !isProjectDirectoryWatchRequest(args[0])) {
         return projectDirectoryWatchFailure('INVALID_REQUEST', '目录监听只接受一个目录路径数组。')
       }
-      return projectDirectoryWatcher.sync(args[0].directories)
+      const request = args[0]
+      const ticket = projectDirectoryWatcher.beginRequest()
+      return isWorkspaceTarget(request)
+        ? scopedFile(request, 'read', context => projectDirectoryWatcher.sync(context, request.directories, ticket))
+        : projectDirectoryWatcher.sync(null, [], ticket)
     }
   )
 
@@ -332,7 +320,8 @@ export function registerProjectFileHandlers(pageUrl: string): void {
       if (args.length !== 1 || !isProjectEntryPathRequest(args[0])) {
         return projectEntryPathFailure('INVALID_REQUEST', '路径解析只接受一个项目内相对路径请求。')
       }
-      return projectDirectory.resolveEntry(args[0].path)
+      const request = args[0]
+      return scopedFile(request, 'read', context => projectDirectory.resolveEntry(context, request.path))
     }
   )
 
@@ -345,7 +334,8 @@ export function registerProjectFileHandlers(pageUrl: string): void {
       if (args.length !== 1 || !isProjectEntryPathRequest(args[0])) {
         return projectEntryRevealFailure('INVALID_REQUEST', '显示文件位置只接受一个项目内相对路径请求。')
       }
-      return projectDirectory.revealEntry(args[0].path)
+      const request = args[0]
+      return scopedFile(request, 'read', context => projectDirectory.revealEntry(context, request.path))
     }
   )
 
@@ -358,7 +348,8 @@ export function registerProjectFileHandlers(pageUrl: string): void {
       if (args.length !== 1 || !isProjectEntryPathRequest(args[0])) {
         return projectEntryDeleteFailure('INVALID_REQUEST', '删除文件只接受一个项目内相对路径请求。')
       }
-      return projectDirectory.deleteEntry(args[0].path)
+      const request = args[0]
+      return scopedFile(request, 'write', context => projectDirectory.deleteEntry(context, request.path))
     }
   )
 
@@ -371,7 +362,8 @@ export function registerProjectFileHandlers(pageUrl: string): void {
       if (args.length !== 1 || !isProjectFileReadRequest(args[0])) {
         return projectFileReadFailure('INVALID_REQUEST', '读取文件必须给出所属项目和项目内相对路径。')
       }
-      return projectFileContent.read(args[0])
+      const request = args[0]
+      return scopedFile(request, 'read', context => projectFileContent.read(context, request))
     }
   )
 
@@ -384,7 +376,8 @@ export function registerProjectFileHandlers(pageUrl: string): void {
       if (args.length !== 1 || !isProjectFileWriteRequest(args[0])) {
         return projectFileWriteFailure('INVALID_REQUEST', '保存文件只接受一个项目内相对路径、文本与磁盘基线请求。')
       }
-      return projectFileContent.write(args[0])
+      const request = args[0]
+      return scopedFile(request, 'write', context => projectFileContent.write(context, request))
     }
   )
 
@@ -397,7 +390,8 @@ export function registerProjectFileHandlers(pageUrl: string): void {
       if (args.length !== 1 || !isProjectFileReadRequest(args[0])) {
         return projectFileStatFailure('INVALID_REQUEST', '读取文件状态必须给出所属项目和项目内相对路径。')
       }
-      return projectFileContent.stat(args[0])
+      const request = args[0]
+      return scopedFile(request, 'read', context => projectFileContent.stat(context, request))
     }
   )
 }

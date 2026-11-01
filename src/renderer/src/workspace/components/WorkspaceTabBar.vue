@@ -37,6 +37,7 @@ const emit = defineEmits<{
   select: [id: string]
   close: [id: string]
   create: [kind: WorkspaceTabKind]
+  parallelTask: [sourceId: string]
   rename: [id: string, title: string]
   move: [id: string, toIndex: number]
   runCommand: [command: QuickCommand]
@@ -46,9 +47,9 @@ const emit = defineEmits<{
   manageCommands: []
 }>()
 
-/** 标签操作菜单的宽度；只放一个动作，窄一点更贴近标签。 */
+/** 标签操作菜单的宽度；贴近标签展示。 */
 const TAB_MENU_WIDTH = 160
-/** 新建菜单的宽度；两个动作，按最长文案留位。 */
+/** 新建菜单的宽度；按最长文案留位。 */
 const CREATE_MENU_WIDTH = 176
 
 /** 正在重命名的标签；同一时刻只编辑一个标签。 */
@@ -90,7 +91,7 @@ const renameMenuStyle = computed(() => {
   }
 })
 
-/** 新建菜单：紧跟标签的「+」的两项动作，与标签的右键菜单共用同一套定位与收起规则。 */
+/** 新建菜单：紧跟标签的「+」按钮，与标签的右键菜单共用同一套定位与收起规则。 */
 const createMenu = useAnchoredPopup({
   width: CREATE_MENU_WIDTH,
   align: 'start',
@@ -165,6 +166,14 @@ function openTabMenu(tab: WorkspaceTabView, event: MouseEvent): void {
     if (renameOpen.value) renamePopup.value?.querySelector<HTMLButtonElement>('button')?.focus()
   })
 }
+
+/** 菜单里选「新建并行任务」：先收起菜单，再在当前对话发起独立并行任务。 */
+function parallelFromMenu(): void {
+  const key = menuTargetId.value
+  renameMenu.close()
+  if (key !== null) emit('parallelTask', key)
+}
+const menuTargetsChat = computed(() => props.tabs.some(tab => tab.id === menuTargetId.value && tab.kind === 'chat'))
 
 /** 菜单里选「重命名」：先收起菜单，再把该标签切到编辑态。 */
 function renameFromMenu(): void {
@@ -396,7 +405,7 @@ function onMenuKeydown(event: KeyboardEvent, close: () => void, popup: HTMLEleme
     </AppButton>
   </div>
 
-  <!-- 标签操作菜单：只放重命名，关闭仍用标签上的按钮，避免两个入口重复。 -->
+  <!-- 并行任务是对话标签的显式动作，不是新建对话的前置模式选择。 -->
   <Teleport to="body">
     <Transition name="pop-motion">
       <div
@@ -408,11 +417,14 @@ function onMenuKeydown(event: KeyboardEvent, close: () => void, popup: HTMLEleme
         <AppButton variant="unstyled" class="project-sidebar-menu-item" @click="renameFromMenu">
           重命名
         </AppButton>
+        <AppButton v-if="menuTargetsChat" variant="unstyled" class="project-sidebar-menu-item" @click="parallelFromMenu">
+          新建并行任务
+        </AppButton>
       </div>
     </Transition>
   </Teleport>
 
-  <!-- 新建菜单：对话与终端各一项；终端创建中时禁用终端项，不排队重复创建。 -->
+  <!-- 新建菜单：提供新建对话、浏览器和终端入口；终端创建中时禁用终端项，不排队重复创建。 -->
   <Teleport to="body">
     <Transition name="pop-motion">
       <div
@@ -423,9 +435,6 @@ function onMenuKeydown(event: KeyboardEvent, close: () => void, popup: HTMLEleme
       >
         <AppButton variant="unstyled" class="project-sidebar-menu-item" role="menuitem" @click="createTab('chat')">
           新建对话
-        </AppButton>
-        <AppButton variant="unstyled" class="project-sidebar-menu-item" role="menuitem" @click="createTab('worktree-chat')">
-          新建隔离工作树对话
         </AppButton>
         <AppButton variant="unstyled" class="project-sidebar-menu-item" role="menuitem" @click="createTab('browser')">
           新建浏览器

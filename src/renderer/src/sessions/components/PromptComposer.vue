@@ -607,9 +607,9 @@ function onDrop(event: DragEvent): void {
     entryDragging.value = false
     const payload = readProjectEntryDragData(event)
     if (payload === null) return
-    // 载荷带项目根，落点复核这次拖动是否仍属于当前项目；跨项目只说明原因，不写入。
-    if (payload.projectPath !== (projectStore.currentProject?.path ?? null)) {
-      showDropHint('只能插入当前项目的文件。')
+    // 相对引用必须属于目标对话的工作区；同一项目的不同任务也不能互相解释路径。
+    if (payload.projectPath !== (projectStore.currentProject?.path ?? null) || payload.workspaceId !== workspaceTabsStore.activeWorkspace?.id) {
+      showDropHint('只能插入当前对话所属工作区的文件。')
       return
     }
     insertEntryReference(payload.path)

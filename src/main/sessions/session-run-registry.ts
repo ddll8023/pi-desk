@@ -18,6 +18,7 @@ export interface SessionRunSummary {
   readonly runId: number
   readonly projectPath: string | null
   readonly sessionId: string | null
+  readonly workspaceId: string | null
   readonly phase: SessionRunPhase
   readonly bindingGeneration: number | null
 }
@@ -32,6 +33,8 @@ export interface SessionRunQuery {
 export interface SdkHostRunRegistry {
   /** 该运行实例当前承载的归属项目；未承载会话时为 null。 */
   projectOfRun(runId: number): string | null
+  /** 执行环境只取该实例登记的工作区，不使用项目最后一次选择。 */
+  workspaceOfRun(runId: number): string | null
   /** 分配并登记应用级绑定代际；宿主不能自行编号。 */
   allocateGeneration(runId: number): number
   /** 记录宿主实际报告的绑定代际；未绑定时为 null。 */
@@ -49,6 +52,7 @@ export interface SessionRunRecord<T> {
   readonly owner: T
   projectPath: string | null
   sessionId: string | null
+  workspaceId: string | null
   phase: SessionRunPhase
   bindingGeneration: number | null
   /**
@@ -57,7 +61,7 @@ export interface SessionRunRecord<T> {
    */
   foregroundOrder: number | null
   /** 打开或新建前的上一份占用；仅用于打开失败时回退。 */
-  previous: { readonly projectPath: string | null; readonly sessionId: string | null; readonly phase: SessionRunPhase } | null
+  previous: { readonly projectPath: string | null; readonly sessionId: string | null; readonly workspaceId: string | null; readonly phase: SessionRunPhase } | null
 }
 
 /** 路径比较折叠 Windows 大小写；其他平台保持严格比较。 */
@@ -86,7 +90,7 @@ export class SessionRunRegistry<T> implements SessionRunQuery, SdkHostRunRegistr
   registerRun(runId: number, owner: T): SessionRunRecord<T> {
     if (this.records.has(runId)) throw new Error('运行身份已登记，不能重复登记。')
     const record: SessionRunRecord<T> = {
-      runId, owner, projectPath: null, sessionId: null, phase: 'idle',
+      runId, owner, projectPath: null, sessionId: null, workspaceId: null, phase: 'idle',
       bindingGeneration: null, foregroundOrder: null, previous: null
     }
     this.records.set(runId, record)
@@ -94,7 +98,7 @@ export class SessionRunRegistry<T> implements SessionRunQuery, SdkHostRunRegistr
   }
 
   /** 打开前为来源项目登记占位；同一会话已由其他运行实例接管时拒绝。 */
-  beginOpen(runId: number, projectPath: string, sessionId: string | null): void {
+  beginOpen(runId: number, projectPath: string, sessionId: string | null, workspaceId: string): void {
     const record = this.requireRun(runId)
     if (record.phase === 'opening' || record.phase === 'closing') {
       throw new SessionRunConflict('该运行实例已有未收敛的生命周期操作。')
@@ -109,9 +113,10 @@ export class SessionRunRegistry<T> implements SessionRunQuery, SdkHostRunRegistr
         if (samePath(other.projectPath, projectPath)) throw new SessionRunConflict('该会话已由另一个运行实例接管。')
       }
     }
-    record.previous = { projectPath: record.projectPath, sessionId: record.sessionId, phase: record.phase }
+    record.previous = { projectPath: record.projectPath, sessionId: record.sessionId, workspaceId: record.workspaceId, phase: record.phase }
     record.projectPath = projectPath
     record.sessionId = sessionId
+    record.workspaceId = workspaceId
     record.phase = 'opening'
   }
 
@@ -130,6 +135,7 @@ export class SessionRunRegistry<T> implements SessionRunQuery, SdkHostRunRegistr
     record.previous = null
     record.projectPath = previous?.projectPath ?? null
     record.sessionId = previous?.sessionId ?? null
+    record.workspaceId = previous?.workspaceId ?? null
     record.phase = previous?.phase ?? 'idle'
     if (record.phase === 'opening') record.phase = 'idle'
   }
@@ -145,6 +151,7 @@ export class SessionRunRegistry<T> implements SessionRunQuery, SdkHostRunRegistr
     const record = this.requireRun(runId)
     record.projectPath = null
     record.sessionId = null
+    record.workspaceId = null
     record.phase = 'idle'
     record.bindingGeneration = null
     record.previous = null
@@ -174,6 +181,10 @@ export class SessionRunRegistry<T> implements SessionRunQuery, SdkHostRunRegistr
   /** 该运行实例当前承载的归属项目。 */
   projectOfRun(runId: number): string | null {
     return this.records.get(runId)?.projectPath ?? null
+  }
+
+  workspaceOfRun(runId: number): string | null {
+    return this.records.get(runId)?.workspaceId ?? null
   }
 
   /** 前台选择：页面当前寻址的运行实例；与占用不同，只表达展示目标，但空闲回收以它判断是否豁免。 */

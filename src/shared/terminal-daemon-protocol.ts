@@ -1,9 +1,10 @@
 /** 终端守护进程的版本化本地协议；快照逐终端分块读取，页面确认恢复完成后才开启实时投递。 */
 import type { TerminalSessionInfo, TerminalSessionSnapshot } from './terminal-api'
+import { isWorkspaceId } from './workspace-api'
 import { TERMINAL_DATA_MAX_CHARS, TERMINAL_DIMENSION_MIN, TERMINAL_DIMENSION_MAX, TERMINAL_TITLE_MAX_CHARS, TERMINAL_WRITE_MAX_CHARS } from './terminal-api'
 export { TERMINAL_SNAPSHOT_MAX_CHARS } from './terminal-api'
 
-export const TERMINAL_DAEMON_PROTOCOL_VERSION = 2
+export const TERMINAL_DAEMON_PROTOCOL_VERSION = 3
 export const TERMINAL_DAEMON_ENTRY_FILE = 'index.cjs'
 export const TERMINAL_DAEMON_DIR_NAME = 'terminal-daemon'
 export const TERMINAL_DAEMON_HISTORY_DIR_NAME = 'history'
@@ -41,7 +42,7 @@ export type TerminalDaemonNotice =
 export type TerminalDaemonRequest = TerminalDaemonNotice
   | { readonly type: 'status' }
   | { readonly type: 'list'; readonly projectPath: string | null }
-  | { readonly type: 'create'; readonly projectPath: string; readonly cols: number; readonly rows: number }
+  | { readonly type: 'create'; readonly projectPath: string; readonly workspaceId: string; readonly cwd: string; readonly cols: number; readonly rows: number }
   | { readonly type: 'write'; readonly id: string; readonly data: string }
   | { readonly type: 'resize'; readonly id: string; readonly cols: number; readonly rows: number }
   | { readonly type: 'rename'; readonly id: string; readonly title: string }
@@ -144,8 +145,8 @@ export function isTerminalDaemonRequest(value: unknown): value is TerminalDaemon
     case 'list':
       return onlyKeys(value, ['type', 'projectPath']) && (value.projectPath === null || isPath(value.projectPath))
     case 'create':
-      return onlyKeys(value, ['type', 'projectPath', 'cols', 'rows']) && isPath(value.projectPath)
-        && isDimension(value.cols) && isDimension(value.rows)
+      return onlyKeys(value, ['type', 'projectPath', 'workspaceId', 'cwd', 'cols', 'rows']) && isPath(value.projectPath)
+        && isWorkspaceId(value.workspaceId) && isPath(value.cwd) && isDimension(value.cols) && isDimension(value.rows)
     case 'write':
       return onlyKeys(value, ['type', 'id', 'data']) && isId(value.id)
         && typeof value.data === 'string' && value.data.length <= TERMINAL_WRITE_MAX_CHARS

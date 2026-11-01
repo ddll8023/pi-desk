@@ -2,10 +2,10 @@
  * 定义右侧面板「源代码管理」的 IPC 契约：状态读取、单文件差异、提交历史与提交内差异，以及
  * 暂存/取消暂存/丢弃/提交四类写操作与拉取/推送两条远端操作。
  *
- * 与项目文件契约同一口径：页面只给项目内相对路径，项目根与仓库根由主进程解析，页面不能指定仓库、
- * 不能传入任何 git 参数。暂存/取消暂存/丢弃支持单个相对路径或批量相对路径（`GitWritePathRequest`）。
- * 状态读取不带参数，历史按条数/偏移与可选过滤路径读取；写操作成功后直接回传新的状态，避免「写完再拉一次」的竞态。
- * 远端操作同样不接受参数：远端、分支与推送策略全部由主进程从仓库现状与用户自己的 git 配置得出。
+ * 与文件契约同一口径：页面固定项目与工作区身份，路径相对该工作区执行根；执行根与仓库由主进程授权解析，
+ * 页面不能指定任意仓库或 git 参数。暂存/取消暂存/丢弃支持单路径或批量相对路径（`GitWritePathRequest`）。
+ * 状态读取也要求工作区目标；历史另带条数/偏移与可选过滤路径。写成功直接回传新状态，避免「写完再拉一次」的竞态。
+ * 远端操作只接受工作区目标：远端、分支与推送策略由主进程从该仓库现状和用户自己的 git 配置得出。
  * 写操作会执行仓库里的 filter 与 hook，因此项目尚无信任决定或被标记为未信任时返回 `TRUST_REQUIRED`；
  * 读操作（状态、差异、历史）不执行仓库代码，不做信任拦截。
  * 「不是 Git 仓库」是正常结果（`isRepository: false`）而不是错误，界面据此显示空态。
@@ -13,6 +13,8 @@
  * 界面提示而不是假装列全。
  */
 import type { DesktopError } from './desktop-api'
+import { isWorkspaceTarget } from './workspace-api'
+import type { WorkspaceTarget } from './workspace-api'
 
 export const GIT_STATUS_CHANNEL = 'desktop:git-status'
 export const GIT_DIFF_CHANNEL = 'desktop:git-diff'
@@ -85,10 +87,10 @@ export interface GitUpstream {
 
 /**
  * 一次状态快照。
- * `projectPath` 是本次读取的项目根：页面据此丢弃切换项目后的迟到结果（与文件检索同一手法）。
- * `repositoryRoot` 与项目根不同说明项目是仓库的子目录，条目路径已折算成项目内相对路径。
+ * projectPath 表示逻辑项目归属，workspaceId 固定执行环境；两者共同用于拒绝跨环境的迟到结果。
+ * repositoryRoot 是实际工作树的仓库根，不通过它与逻辑项目路径的差异推断子目录关系；条目路径相对授权执行根。
  */
-export interface GitStatus {
+export interface GitStatus extends WorkspaceTarget {
   readonly projectPath: string
   readonly isRepository: boolean
   readonly repositoryRoot: string | null
@@ -116,8 +118,8 @@ export type GitStatusResult =
 /** 写操作成功后直接回传新状态，页面不需要再拉一次。 */
 export type GitOperationResult = GitStatusResult
 
-/** diff 请求：路径 + 区域。区域决定两侧内容的来源（索引 / HEAD / 工作区）。 */
-export interface GitDiffRequest {
+/** diff 请求固定工作区、相对路径与区域；区域决定两侧内容的来源（索引 / HEAD / 工作区）。 */
+export interface GitDiffRequest extends WorkspaceTarget {
   readonly path: string
   readonly area: GitArea
 }
@@ -137,7 +139,7 @@ export interface GitTextDiff {
 }
 
 /** 工作区里的单文件差异：索引/HEAD 与工作区相比。 */
-export interface GitDiff extends GitTextDiff {
+export interface GitDiff extends GitTextDiff, WorkspaceTarget {
   readonly path: string
   readonly area: GitArea
 }
@@ -164,7 +166,7 @@ export interface GitCommitSummary {
   readonly pushed: boolean
 }
 
-export interface GitHistory {
+export interface GitHistory extends WorkspaceTarget {
   readonly projectPath: string
   readonly isRepository: boolean
   /** 上游分支名；没有上游时为 null。 */
@@ -184,7 +186,7 @@ export type GitHistoryResult =
   | { readonly ok: false; readonly error: DesktopError }
 
 /** 历史读取请求：limit/skip 分页，path 可选地只看某个文件的历史。 */
-export interface GitHistoryRequest {
+export interface GitHistoryRequest extends WorkspaceTarget {
   readonly limit?: number
   readonly skip?: number
   readonly path?: string
@@ -199,7 +201,7 @@ export interface GitCommitFile {
   readonly removed?: number
 }
 
-export interface GitCommitDetail {
+export interface GitCommitDetail extends WorkspaceTarget {
   readonly oid: string
   readonly shortOid: string
   readonly subject: string
@@ -219,12 +221,12 @@ export type GitCommitDetailResult =
   | { readonly ok: true; readonly data: GitCommitDetail }
   | { readonly ok: false; readonly error: DesktopError }
 
-export interface GitCommitDetailRequest {
+export interface GitCommitDetailRequest extends WorkspaceTarget {
   readonly oid: string
 }
 
 /** 提交内单文件差异：父提交（根提交为空）与该提交相比。 */
-export interface GitCommitDiff extends GitTextDiff {
+export interface GitCommitDiff extends GitTextDiff, WorkspaceTarget {
   readonly oid: string
   readonly path: string
 }
@@ -233,7 +235,7 @@ export type GitCommitDiffResult =
   | { readonly ok: true; readonly data: GitCommitDiff }
   | { readonly ok: false; readonly error: DesktopError }
 
-export interface GitCommitDiffRequest {
+export interface GitCommitDiffRequest extends WorkspaceTarget {
   readonly oid: string
   readonly path: string
   /** 重命名/复制条目的原路径：原内容要从父提交的这个路径取，否则会显示成「新文件」。 */
@@ -241,12 +243,12 @@ export interface GitCommitDiffRequest {
 }
 
 /** 单文件写操作请求：只接受项目内相对路径。 */
-export interface GitPathRequest {
+export interface GitPathRequest extends WorkspaceTarget {
   readonly path: string
 }
 
 /** 多文件写操作请求：支持批量传递项目内相对路径。 */
-export interface GitPathsRequest {
+export interface GitPathsRequest extends WorkspaceTarget {
   readonly paths: readonly string[]
 }
 
@@ -254,19 +256,19 @@ export interface GitPathsRequest {
 export type GitWritePathRequest = GitPathRequest | GitPathsRequest
 
 /** 提交请求：只接受提交信息，选项与作者一律沿用用户自己的 git 配置。 */
-export interface GitCommitRequest {
+export interface GitCommitRequest extends WorkspaceTarget {
   readonly message: string
 }
 
 export interface GitApi {
-  readonly getGitStatus: () => Promise<GitStatusResult>
+  readonly getGitStatus: (request: WorkspaceTarget) => Promise<GitStatusResult>
   readonly getGitDiff: (request: GitDiffRequest) => Promise<GitDiffResult>
   readonly stageGitPaths: (request: GitWritePathRequest) => Promise<GitOperationResult>
   readonly unstageGitPaths: (request: GitWritePathRequest) => Promise<GitOperationResult>
   readonly discardGitPath: (request: GitWritePathRequest) => Promise<GitOperationResult>
   readonly commitGitStaged: (request: GitCommitRequest) => Promise<GitOperationResult>
-  readonly pullGit: () => Promise<GitOperationResult>
-  readonly pushGit: () => Promise<GitOperationResult>
+  readonly pullGit: (request: WorkspaceTarget) => Promise<GitOperationResult>
+  readonly pushGit: (request: WorkspaceTarget) => Promise<GitOperationResult>
   readonly getGitHistory: (request: GitHistoryRequest) => Promise<GitHistoryResult>
   readonly getGitCommitDetail: (request: GitCommitDetailRequest) => Promise<GitCommitDetailResult>
   readonly getGitCommitDiff: (request: GitCommitDiffRequest) => Promise<GitCommitDiffResult>
@@ -290,6 +292,13 @@ const MAX_PATH_CHARS = 4096
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function scopeKeys(value: Record<string, unknown>, fields: readonly string[]): boolean {
+  return isWorkspaceTarget(value) && Object.keys(value).every(key => key === 'projectPath' || key === 'workspaceId' || fields.includes(key))
+}
+export function isGitWorkspaceRequest(value: unknown): value is WorkspaceTarget {
+  return isRecord(value) && scopeKeys(value, [])
 }
 
 function isCount(value: unknown): value is number {
@@ -319,7 +328,7 @@ function isUpstream(value: unknown): value is GitUpstream {
 }
 
 function isGitStatus(value: unknown): value is GitStatus {
-  if (!isRecord(value)) return false
+  if (!isRecord(value) || !isWorkspaceTarget(value)) return false
   if (typeof value.projectPath !== 'string' || value.projectPath === '') return false
   if (typeof value.isRepository !== 'boolean') return false
   if (value.repositoryRoot !== null && typeof value.repositoryRoot !== 'string') return false
@@ -350,14 +359,14 @@ function isGitTextDiff(value: Record<string, unknown>): boolean {
 }
 
 function isGitDiff(value: unknown): value is GitDiff {
-  if (!isRecord(value)) return false
+  if (!isRecord(value) || !isWorkspaceTarget(value)) return false
   if (typeof value.path !== 'string' || value.path === '') return false
   if (!isArea(value.area)) return false
   return isGitTextDiff(value)
 }
 
 function isGitCommitDiff(value: unknown): value is GitCommitDiff {
-  if (!isRecord(value)) return false
+  if (!isRecord(value) || !isWorkspaceTarget(value)) return false
   if (typeof value.path !== 'string' || value.path === '') return false
   if (!isOid(value.oid)) return false
   return isGitTextDiff(value)
@@ -380,7 +389,7 @@ function isCommitSummary(value: unknown): value is GitCommitSummary {
 }
 
 function isGitHistory(value: unknown): value is GitHistory {
-  if (!isRecord(value)) return false
+  if (!isRecord(value) || !isWorkspaceTarget(value)) return false
   if (typeof value.projectPath !== 'string' || value.projectPath === '') return false
   if (typeof value.isRepository !== 'boolean') return false
   if (value.upstreamName !== null && typeof value.upstreamName !== 'string') return false
@@ -402,7 +411,7 @@ function isCommitFile(value: unknown): value is GitCommitFile {
 }
 
 function isGitCommitDetail(value: unknown): value is GitCommitDetail {
-  if (!isRecord(value)) return false
+  if (!isRecord(value) || !isWorkspaceTarget(value)) return false
   if (!isOid(value.oid) || !isOid(value.shortOid)) return false
   if (typeof value.subject !== 'string' || typeof value.body !== 'string') return false
   if (typeof value.authorName !== 'string' || typeof value.authorEmail !== 'string') return false
@@ -462,14 +471,14 @@ export function isGitCommitDiffResult(value: unknown): value is GitCommitDiffRes
 /** 单文件写操作请求校验：只接受一个项目内相对路径字段。 */
 export function isGitPathRequest(value: unknown): value is GitPathRequest {
   if (!isRecord(value)) return false
-  if (Object.keys(value).some((key) => key !== 'path')) return false
+  if (!scopeKeys(value, ['path'])) return false
   return typeof value.path === 'string' && value.path !== '' && value.path.length <= MAX_PATH_CHARS
 }
 
 /** 批量写操作请求校验：接受非空相对路径数组。 */
 export function isGitPathsRequest(value: unknown): value is GitPathsRequest {
   if (!isRecord(value)) return false
-  if (Object.keys(value).some((key) => key !== 'paths')) return false
+  if (!scopeKeys(value, ['paths'])) return false
   if (!Array.isArray(value.paths) || value.paths.length === 0 || value.paths.length > GIT_STATUS_LIMIT) return false
   return value.paths.every((p) => typeof p === 'string' && p !== '' && p.length <= MAX_PATH_CHARS)
 }
@@ -482,7 +491,7 @@ export function isGitWritePathRequest(value: unknown): value is GitWritePathRequ
 /** diff 请求校验：路径 + 区域，字段之外一律拒绝。 */
 export function isGitDiffRequest(value: unknown): value is GitDiffRequest {
   if (!isRecord(value)) return false
-  if (Object.keys(value).some((key) => key !== 'path' && key !== 'area')) return false
+  if (!scopeKeys(value, ['path', 'area'])) return false
   if (typeof value.path !== 'string' || value.path === '' || value.path.length > MAX_PATH_CHARS) return false
   return isArea(value.area)
 }
@@ -490,7 +499,7 @@ export function isGitDiffRequest(value: unknown): value is GitDiffRequest {
 /** 历史请求校验：limit/skip 可选，path 可选且必须是项目内相对路径。 */
 export function isGitHistoryRequest(value: unknown): value is GitHistoryRequest {
   if (!isRecord(value)) return false
-  if (Object.keys(value).some((key) => key !== 'limit' && key !== 'skip' && key !== 'path')) return false
+  if (!scopeKeys(value, ['limit', 'skip', 'path'])) return false
   if (value.limit !== undefined && (!isCount(value.limit) || value.limit === 0 || value.limit > GIT_HISTORY_MAX_LIMIT)) {
     return false
   }
@@ -503,13 +512,13 @@ export function isGitHistoryRequest(value: unknown): value is GitHistoryRequest 
 
 export function isGitCommitDetailRequest(value: unknown): value is GitCommitDetailRequest {
   if (!isRecord(value)) return false
-  if (Object.keys(value).some((key) => key !== 'oid')) return false
+  if (!scopeKeys(value, ['oid'])) return false
   return isOid(value.oid)
 }
 
 export function isGitCommitDiffRequest(value: unknown): value is GitCommitDiffRequest {
   if (!isRecord(value)) return false
-  if (Object.keys(value).some((key) => key !== 'oid' && key !== 'path' && key !== 'oldPath')) return false
+  if (!scopeKeys(value, ['oid', 'path', 'oldPath'])) return false
   if (!isOid(value.oid)) return false
   if (value.oldPath !== undefined) {
     if (typeof value.oldPath !== 'string' || value.oldPath === '' || value.oldPath.length > MAX_PATH_CHARS) return false
@@ -520,7 +529,7 @@ export function isGitCommitDiffRequest(value: unknown): value is GitCommitDiffRe
 /** 提交请求校验：只接受非空、不超长的提交信息。 */
 export function isGitCommitRequest(value: unknown): value is GitCommitRequest {
   if (!isRecord(value)) return false
-  if (Object.keys(value).some((key) => key !== 'message')) return false
+  if (!scopeKeys(value, ['message'])) return false
   if (typeof value.message !== 'string') return false
   if (value.message.trim() === '') return false
   return value.message.length <= GIT_COMMIT_MESSAGE_MAX_CHARS

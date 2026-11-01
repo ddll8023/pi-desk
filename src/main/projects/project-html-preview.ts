@@ -1,4 +1,4 @@
-/** HTML 文件预览：本地资源限定在所属项目内，主文档使用内存快照；网络资源遵守 Chromium 的跨域与混合内容限制，不暴露桌面桥接、Node 或本地写入能力。 */
+/** HTML 文件预览：身份与本地资源固定在文档所属工作区，主文档使用内存快照；网络资源遵守 Chromium 限制，不暴露桌面桥接、Node 或本地写入能力。 */
 import { randomUUID } from 'node:crypto'
 import { lstat, open, realpath } from 'node:fs/promises'
 import { extname } from 'node:path'
@@ -14,11 +14,15 @@ import type {
   ProjectHtmlPreviewData, ProjectHtmlPreviewReleaseResult, ProjectHtmlPreviewRequest, ProjectHtmlPreviewResult
 } from '../../shared/project-file-api'
 import { isInsideRoot, resolveProjectEntryAbsolute } from './project-entry-path'
+import { workspaceTarget } from '../../shared/workspace-api'
+import type { WorkspaceContext } from '../../shared/workspace-api'
+import type { WorkspaceManager } from '../workspaces/workspace-manager'
 
 interface PreviewRecord {
   readonly id: string
   readonly ownerId: number
   readonly projectPath: string
+  readonly workspaceId: string
   readonly root: string
   readonly path: string
   readonly partition: string
@@ -106,25 +110,24 @@ export class ProjectHtmlPreview {
   private readonly previewSessions = new WeakSet<Session>()
   private readonly ownerGenerations = new Map<number, number>()
 
-  constructor(private readonly resolveProjectPath: (requested: string) => Promise<string | null>) {}
+  constructor(private readonly workspaces: Pick<WorkspaceManager, 'use'>) {}
 
-  async prepare(owner: WebContents, request: ProjectHtmlPreviewRequest): Promise<ProjectHtmlPreviewResult> {
+  async prepare(owner: WebContents, request: ProjectHtmlPreviewRequest, context: WorkspaceContext): Promise<ProjectHtmlPreviewResult> {
     const ownerId = owner.id
     const generation = this.ownerGenerations.get(ownerId)
     if (Buffer.byteLength(request.text, 'utf8') > PROJECT_FILE_TEXT_MAX_BYTES) return failure('INVALID_REQUEST', 'HTML 内容超过预览上限。')
-    const projectPath = await this.resolveProjectPath(request.projectPath)
-    if (!projectPath) return failure('INVALID_REQUEST', '文件所属项目未登记或已被移除。')
+    const projectPath = context.projectPath
     try {
-      const root = await realpath(projectPath)
+      const root = await realpath(context.rootPath)
       const resolved = await resolveProjectEntryAbsolute(root, request.path)
       if (!resolved.ok) return resolved
       const info = await lstat(resolved.absolutePath)
       if (!info.isFile() || info.isSymbolicLink() || !/\.html?$/i.test(resolved.relativePath)) return failure('INVALID_REQUEST', '只能预览项目内普通 HTML 文件。')
       if (info.size > PROJECT_FILE_TEXT_MAX_BYTES) return failure('INVALID_REQUEST', 'HTML 文件超过预览上限。')
-      const registered = await this.resolveProjectPath(projectPath)
-      if (!registered || owner.isDestroyed() || this.ownerGenerations.get(ownerId) !== generation) return failure('INVALID_REQUEST', '预览所属窗口或项目已关闭。')
+      await this.workspaces.use(workspaceTarget(context), 'read', async () => undefined)
+      if (owner.isDestroyed() || this.ownerGenerations.get(ownerId) !== generation) return failure('INVALID_REQUEST', '预览所属窗口或项目已关闭。')
       let record = request.previewId === null ? undefined : this.records.get(request.previewId)
-      if (request.previewId !== null && (!record || record.ownerId !== ownerId || record.root !== root || record.path !== resolved.relativePath)) {
+      if (request.previewId !== null && (!record || record.ownerId !== ownerId || record.workspaceId !== context.id || record.root !== root || record.path !== resolved.relativePath)) {
         return failure('INVALID_REQUEST', '原预览已释放或不属于当前文档，请重新打开预览。')
       }
       if (!record) {
@@ -132,7 +135,7 @@ export class ProjectHtmlPreview {
         const partition = `${PROJECT_HTML_PREVIEW_PARTITION_PREFIX}${id}`
         const isolated = session.fromPartition(partition, { cache: false })
         record = {
-          id, partition, ownerId, projectPath, root, path: resolved.relativePath,
+          id, partition, ownerId, projectPath, workspaceId: context.id, root, path: resolved.relativePath,
           session: isolated, guests: new Set(), text: request.text, revision: 0
         }
         this.previewSessions.add(isolated)
@@ -167,6 +170,11 @@ export class ProjectHtmlPreview {
         ? record.projectPath.toLowerCase() === projectPath.toLowerCase() : record.projectPath === projectPath
       if (matches) this.dispose(record)
     }
+  }
+
+  /** 生命周期收敛时释放该工作区的预览及容器，不影响同项目的其他工作区。 */
+  releaseWorkspace(workspaceId: string): void {
+    for (const record of this.records.values()) if (record.workspaceId === workspaceId) this.dispose(record)
   }
 
   /** 只有可信主窗口已登记的预览才能使用专属 partition，不能从 DOM 临时拼一个本地文件容器。 */
@@ -215,6 +223,7 @@ export class ProjectHtmlPreview {
   private location(record: PreviewRecord): ProjectHtmlPreviewData {
     const path = record.path.split('/').map(part => encodeURIComponent(part)).join('/')
     return {
+      projectPath: record.projectPath, workspaceId: record.workspaceId,
       previewId: record.id, partition: record.partition,
       url: `${PROJECT_HTML_PREVIEW_SCHEME}://${record.id}/${path}?revision=${record.revision}`
     }
@@ -246,11 +255,12 @@ export class ProjectHtmlPreview {
     if (this.records.get(record.id) !== record) return unavailable(410)
     if (request.method !== 'GET' && request.method !== 'HEAD') return unavailable(405)
     try {
+      return await this.workspaces.use({ projectPath: record.projectPath, workspaceId: record.workspaceId }, 'read', async context => {
       const path = resourcePath(new URL(request.url), record)
       if (!path) return unavailable(403)
       const contentType = CONTENT_TYPES[extname(path).toLowerCase()]
-      if (!contentType || !await this.resolveProjectPath(record.projectPath)) return unavailable(404)
-      const root = await realpath(record.projectPath)
+      if (!contentType) return unavailable(404)
+      const root = await realpath(context.rootPath)
       if (root !== record.root) return unavailable(403)
       const resolved = await resolveProjectEntryAbsolute(root, path)
       if (!resolved.ok) return unavailable(403)
@@ -265,6 +275,7 @@ export class ProjectHtmlPreview {
       const bytes = await readBoundedAsset(actual)
       if (!bytes || this.records.get(record.id) !== record) return unavailable(403)
       return new Response(bytes, { headers: headers(contentType) })
+      })
     } catch {
       // 资源错误不把底层文件路径或异常堆栈泄露给预览中的脚本。
       return unavailable(404)

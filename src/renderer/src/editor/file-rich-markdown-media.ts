@@ -7,6 +7,7 @@ import { renderMathInto, tokenizeBlock, tokenizeInline } from '../ui/markdown-ma
 export interface MathEditRequest { readonly position: number; readonly latex: string; readonly type: 'inlineMath' | 'blockMath' }
 export interface RichMediaContext {
   projectPath: () => string
+  workspaceId: () => string
   path: () => string
   editMath: (request: MathEditRequest) => void
 }
@@ -115,6 +116,7 @@ export function createRichMedia(context: RichMediaContext) {
           dom.textContent = `图片：${String(current.attrs.alt || '图片')}（加载中…）`
           const reference = String(current.attrs.src ?? '')
           const project = context.projectPath()
+          const workspaceId = context.workspaceId()
           const path = context.path()
           queue.push(async () => {
             if (disposed || request !== generation) return
@@ -122,7 +124,7 @@ export function createRichMedia(context: RichMediaContext) {
             try {
               if ((!admitted && imageCount >= 40) || imageChars >= 32 * 1024 * 1024) { budgetBlocked = true; throw new Error('图片数量或总量超出显示上限，释放额度后重试') }
               if (!admitted) { admitted = true; imageCount += 1 }
-              const result = await loadMarkdownImage(project, path, reference)
+              const result = await loadMarkdownImage(project, path, reference, workspaceId)
               if (disposed || request !== generation) return
               if (!result.url) throw new Error(result.error ?? '图片未加载')
               if (imageChars + result.url.length > 32 * 1024 * 1024) { budgetBlocked = true; throw new Error('图片总量超出显示上限，释放额度后重试') }

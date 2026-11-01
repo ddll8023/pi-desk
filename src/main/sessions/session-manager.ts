@@ -5,11 +5,11 @@
  *
  * 列表来自 Pi 管理的会话文件（session-store），按调用方显式给出的项目读取并只读取窗口内的文件：
  * 侧栏按项目树展示会话，因此列表不再隐式取当前项目，但只接受已添加项目的规范路径；
- * 打开与重载只回传运行实例与会话身份，不附带会话列表：切换链不等目录扫描，列表读取失败也不会
+ * 打开与重载回传运行实例、会话与工作区上下文，不附带会话列表：切换链不等目录扫描，列表读取失败也不会
  * 把已完成的切换报成失败；删除成功后回传调用方窗口大小的列表快照（`listLimit`），
  * 变更不会把页面已展开的列表塌回首屏。
  * 新建、打开、切换与重载都交给 SDK 宿主，由宿主在同一进程内替换会话，目标、归属与信任经本模块的
- * SDK 授权回路复核，授权依据是来源运行实例登记的归属项目，不是前台项目。
+ * SDK 授权回路复核，执行根取来源实例登记的工作区，项目信任取其归属项目，不是前台选择。
  * 多运行实例下打开其他会话不中断任何正在运行的会话；重载以目标会话自己的项目做信任复核。
  * 删除以显式项目路径定位文件：先按与项目移除同一套门禁收敛占用（opening/closing 拒绝、在途工作
  * 需显式中断确认），释放成功后才删文件；任一步失败都会保留会话原样，不产生半删状态。
@@ -31,6 +31,9 @@ import type {
 } from '../../shared/session-api'
 import { isSessionOpenRequest } from '../../shared/session-api'
 import type { RuntimeStatus } from '../../shared/runtime-api'
+import type { WorkspaceManager } from '../workspaces/workspace-manager'
+import { WorkspaceStorageError } from '../workspaces/workspace-store'
+import { WorktreeOperationError } from '../git/worktree-service'
 import type { ProjectManager } from '../projects/project-manager'
 import { SdkHostError } from './sdk-host-manager'
 import { sessionErrorOf } from './sdk-runtime-bridge'
@@ -73,6 +76,7 @@ export interface SessionManagerOptions {
   readonly projects: ProjectManager
   /** 会话后端；列表之外的会话编排都经它提交。 */
   readonly sdk: SdkRuntimeBridge
+  readonly workspaces: WorkspaceManager
   /** SDK 授权使用新鲜信任结果，不复用调用方传入的旧决定。 */
   readonly projectsTrust: import('../trust/trust-manager').TrustManager
   /**
@@ -81,6 +85,7 @@ export interface SessionManagerOptions {
    */
   readonly ownership: {
     isProjectActive(projectPath: string): boolean
+    workspaceOfRun(runId: number): string | null
     runOfSession(projectPath: string, sessionId: string): SessionRunSummary | null
   }
   /** 生成式 UI 开关：由主进程读配置后交给宿主决定是否注册该内置扩展。 */
@@ -88,8 +93,6 @@ export interface SessionManagerOptions {
 }
 
 export class SessionManager {
-  private readonly pendingWorktreePaths = new Map<string, string>()
-
   constructor(private readonly options: SessionManagerOptions) {}
 
   /**
@@ -97,7 +100,7 @@ export class SessionManager {
    * 无受保护资源但没有显式信任时按未信任建立，避免新出现的资源被隐式加载；
    * 异步读取前后都以注册表登记为准，前台切换不会改变已登记运行实例的授权范围。
    */
-  async prepareSdkTarget(reference: SdkSessionReference, ownerProjectPath: string): Promise<SdkSessionTarget> {
+  async prepareSdkTarget(reference: SdkSessionReference, ownerProjectPath: string, workspaceId: string): Promise<SdkSessionTarget> {
     if (!isSdkSessionReference(reference)) throw new SdkTargetFailure('INVALID_SESSION_TARGET')
     try {
       const projectPath = await normalizeProjectPath(ownerProjectPath)
@@ -106,10 +109,11 @@ export class SessionManager {
       if (trust.resources.length > 0 && trust.decision === null) throw new SdkTargetFailure('TRUST_REQUIRED')
       const identity = reference.kind === 'new' ? null : await resolveSdkSessionFile(projectPath, reference)
       if (!this.options.ownership.isProjectActive(projectPath)) throw new SdkTargetFailure('STALE_SESSION')
-      const worktreePath = this.pendingWorktreePaths.get(projectPath) ?? null
-      return { projectPath, sessionDir: getProjectSessionDir(projectPath), trusted: trust.decision === 'trusted',
+      const workspace = await this.options.workspaces.authorize(projectPath, workspaceId)
+      await this.options.workspaces.bindSession(projectPath, identity?.sessionId ?? null, workspaceId)
+      return { projectPath, workspaceId, sessionDir: getProjectSessionDir(projectPath), trusted: trust.decision === 'trusted',
         genui: await this.genuiEnabled(),
-        worktreePath,
+        worktreePath: workspace.kind === 'task' ? workspace.rootPath : null,
         sessionId: identity?.sessionId ?? null, sessionFile: identity?.sessionFile ?? null,
         fileStamp: identity?.fileStamp ?? null }
     } catch (error) {
@@ -157,7 +161,8 @@ export class SessionManager {
   /**
    * 会话历史读取：页面只给项目与会话，这里判定该会话当前由哪条路径作答。
    * 已被运行实例接管时由绑定路径读权威分支（绑定代际在 SDK 桥内复核）；未接管时由宿主解析日志文件。
-   * 两条都不建立会话、不申请信任、不改动任何文件；读不到时页面退回原来的等待呈现。
+   * 两条都返回会话所属工作区，不启动执行会话或写入会话日志；缺少默认工作区时可登记其元数据。
+   * 读取不申请信任或占用；读不到时页面退回原来的等待呈现。
    */
   async readHistory(request: SessionHistoryRequest): Promise<SessionHistoryResult> {
     try {
@@ -165,18 +170,19 @@ export class SessionManager {
       if (!await this.options.projects.hasProject(projectPath)) {
         throw new SessionFailure('INVALID_PROJECT_PATH', '只能读取已添加项目的会话历史。')
       }
+      const workspace = await this.options.workspaces.contextForSession(projectPath, request.sessionId)
       const bound = await this.options.sdk.readBoundHistory({
         projectPath, sessionId: request.sessionId, query: request.query
       })
       if (bound !== null) {
-        return { ok: true, data: { projectPath, sessionId: request.sessionId, data: bound } }
+        return { ok: true, data: { projectPath, sessionId: request.sessionId, workspace, data: bound } }
       }
       const identity = await resolveSdkSessionFile(projectPath, { kind: 'id', sessionId: request.sessionId })
       const data = await this.options.sdk.readSessionLog({
         projectPath, sessionId: identity.sessionId,
         sessionFile: identity.sessionFile, fileStamp: identity.fileStamp, query: request.query
       })
-      return { ok: true, data: { projectPath, sessionId: identity.sessionId, data } }
+      return { ok: true, data: { projectPath, sessionId: identity.sessionId, workspace, data } }
     } catch (error) {
       // 游标与绑定代际已失效不是读取失败：页面据此按权威基准重建一次，
       // 因此不能落进 `INVALID_PROJECT_PATH`（项目未登记）或 `RUNTIME_NOT_READY`（宿主未就绪）的分类里。
@@ -248,14 +254,10 @@ export class SessionManager {
     // 后台请求不分配选择序号，避免打断尚未完成的桌面前台选择。
     const selection = placement === 'foreground' ? this.options.sdk.beginSelection() : null
     const projectPath = await normalizeProjectPath(request.projectPath)
-    if (request.worktreePath) {
-      this.pendingWorktreePaths.set(projectPath, request.worktreePath)
-    } else {
-      this.pendingWorktreePaths.delete(projectPath)
-    }
     if (!await this.options.projects.hasProject(projectPath)) {
       throw new SessionFailure('INVALID_PROJECT_PATH', '只能打开已添加项目的会话。')
     }
+    const workspace = await this.options.workspaces.resolveForSession(projectPath, request.sessionId, request.workspaceId)
     if (selection !== null) {
       if (this.options.projects.currentProjectPath() !== projectPath) {
         throw new SessionFailure('RUNTIME_COMMAND_REJECTED', '项目已切换，未打开旧项目的会话。')
@@ -278,7 +280,7 @@ export class SessionManager {
       throw new SessionFailure('SESSION_NOT_FOUND', '当前项目下找不到该会话；列表可能已过期。')
     }
 
-    return this.openWithSdk(projectPath, request, selection)
+    return this.openWithSdk(projectPath, request, selection, workspace.id)
   }
 
   /** 该会话是否已由某个运行实例占用；占用覆盖打开中与未确认退出，与会话文件是否已落盘无关。 */
@@ -291,13 +293,13 @@ export class SessionManager {
    * 这里只复核实际打开的会话；成功后的状态经事件收敛。
    */
   private async openWithSdk(
-    projectPath: string, request: SessionOpenRequest, selection: number | null
+    projectPath: string, request: SessionOpenRequest, selection: number | null, workspaceId: string
   ): Promise<SessionOpenData> {
     const switched = await this.options.sdk.switchSession(
       request.sessionId === null ? 'new' : 'open',
       request.sessionId === null ? { kind: 'new' } : { kind: 'id', sessionId: request.sessionId },
       request.allowInterrupt,
-      { projectPath, sessionId: request.sessionId },
+      { projectPath, sessionId: request.sessionId, workspaceId },
       selection
     )
     if (switched.cancelled) {
@@ -309,9 +311,7 @@ export class SessionManager {
       throw new SessionFailure('SESSION_NOT_FOUND', '实际打开的会话与请求不一致；未改动任何已有文件。')
     }
     // 后台结果不走桌面的前台归属收敛，不能因桌面正在显示其他项目而触发 focusProject。
-    return selection === null
-      ? { projectPath, runId: switched.runId, openedSessionId }
-      : this.openData(projectPath, switched.runId, openedSessionId)
+    return this.openData(projectPath, switched.runId, openedSessionId, selection !== null)
   }
 
   /**
@@ -319,15 +319,19 @@ export class SessionManager {
    * 不再附带回传会话列表：列表由页面按自己的窗口节奏单独读取，打开链不等目录扫描。
    * 列表读取可能晚于前台切换，因此实际打开身份必须在读取前固定。
    */
-  private openData(
-    projectPath: string, runId: number, openedSessionId: string | null
-  ): SessionOpenData {
+  private async openData(
+    projectPath: string, runId: number, openedSessionId: string | null, focus = true
+  ): Promise<SessionOpenData> {
+    const workspaceId = this.options.ownership.workspaceOfRun(runId)
+    if (workspaceId === null) throw new SessionFailure('RUNTIME_NOT_READY', '运行实例缺少已授权工作区，未使用项目目录代替。')
+    const workspace = await this.options.workspaces.authorize(projectPath, workspaceId)
+    await this.options.workspaces.bindSession(projectPath, openedSessionId, workspaceId)
     const currentProjectPath = this.options.projects.currentProjectPath()
-    if (currentProjectPath !== null && currentProjectPath !== projectPath) {
+    if (focus && currentProjectPath !== null && currentProjectPath !== projectPath) {
       // 等待宿主期间用户可能已经切项目；旧请求不能把前台留在原项目。
       this.options.sdk.focusProject(currentProjectPath)
     }
-    return { projectPath, runId, openedSessionId }
+    return { projectPath, runId, openedSessionId, workspace }
   }
 
   /**
@@ -412,7 +416,7 @@ export class SessionManager {
       throw new SessionFailure('TRUST_REQUIRED', '该会话所属项目包含需要信任决定的资源。')
     }
     const switched = await this.options.sdk.switchSession('reload', { kind: 'new' }, allowInterrupt,
-      { projectPath: bound.projectPath, sessionId: bound.sessionId }, selection)
+      { projectPath: bound.projectPath, sessionId: bound.sessionId, workspaceId: bound.workspaceId }, selection)
     if (switched.cancelled) {
       throw new SessionFailure('RUNTIME_COMMAND_REJECTED', '重新加载资源被取消，当前会话保持不变。')
     }
@@ -427,12 +431,15 @@ export class SessionManager {
   private boundSessionOfForeground(): {
     readonly projectPath: string
     readonly sessionId: string | null
+    readonly workspaceId: string
   } | null {
     const runId = this.options.sdk.foregroundRunId()
     if (runId === null) return null
     const status: SdkSessionStatus | null = this.options.sdk.sessionStatusOfRun(runId)
     if (status === null || status.bindingId === null || status.projectPath === null) return null
-    return { projectPath: status.projectPath, sessionId: status.sessionId }
+    const workspaceId = this.options.ownership.workspaceOfRun(runId)
+    if (workspaceId === null) return null
+    return { projectPath: status.projectPath, sessionId: status.sessionId, workspaceId }
   }
 
   private requireProjectPath(): string {
@@ -459,8 +466,11 @@ export class SessionManager {
     if (error instanceof ProjectPathError) {
       return { ok: false, error: { code: 'INVALID_PROJECT_PATH', message: error.message } }
     }
-    if (error instanceof SessionStorageError) {
+    if (error instanceof SessionStorageError || error instanceof WorkspaceStorageError) {
       return { ok: false, error: { code: 'INTERNAL_ERROR', message: error.message } }
+    }
+    if (error instanceof WorktreeOperationError) {
+      return { ok: false, error: { code: error.code === 'TRUST_REQUIRED' ? 'TRUST_REQUIRED' : 'RUNTIME_COMMAND_REJECTED', message: error.message } }
     }
     // 宿主与会话授权失败按固定分类映射；未知异常仍收敛为调用方的兜底错误。
     if (error instanceof SdkHostError || error instanceof SdkTargetFailure) {

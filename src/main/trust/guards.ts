@@ -1,4 +1,4 @@
-/** 项目信任门禁：解析当前项目是否需要信任决定，并为 Git 写操作提供统一放行判断。读操作不经过这里；未登记的运行实例不会被解析成任何项目。 */
+/** 项目信任门禁：区分当前项目查询与显式操作所属项目；Git 写入固定目标项目复核信任，未登记实例不解析成其他项目。 */
 
 import { join } from 'node:path'
 import type { DesktopError } from '../../shared/desktop-api'
@@ -9,16 +9,20 @@ import { projectManager, trustManager, sdkRuntime } from '../services'
  * 由调用方按 `TRUST_REQUIRED` 拒绝；有决定或无资源时一并返回已保存的决定，
  * 供只读列举（MCP 配置）判断项目级配置是否生效。
  */
-export async function resolveTrustForCurrentProject(): Promise<{
+export function resolveTrustForCurrentProject(): ReturnType<typeof resolveTrustForProject> {
+  return resolveTrustForProject(projectManager.currentProjectPath())
+}
+
+export async function resolveTrustForProject(projectPath: string | null): Promise<{
   readonly requiresPrompt: boolean
   readonly decision: 'trusted' | 'untrusted' | null
   readonly message: string | null
 }> {
-  const outcome = await trustManager.resolveLaunchDecision(projectManager.currentProjectPath())
+  const outcome = await trustManager.resolveLaunchDecision(projectPath)
   if (!outcome.requiresPrompt) {
     return { requiresPrompt: false, decision: outcome.decision, message: null }
   }
-  const status = await trustManager.statusOf(projectManager.currentProjectPath())
+  const status = await trustManager.statusOf(projectPath)
   const summary = status.resources.map((resource) => resource.path).join('、')
   return {
     requiresPrompt: true,
@@ -28,12 +32,13 @@ export async function resolveTrustForCurrentProject(): Promise<{
 }
 
 /**
- * Git 写操作的项目信任门禁：暂存、提交、推送等会执行仓库里的 filter 与 hook，属于执行他人代码。
+ * Git 写操作按调用方已固定的 projectPath 复核信任，不在等待期间重新读取前台项目。
+ * 暂存、提交、推送等会执行仓库里的 filter 与 hook，属于执行他人代码。
  * 尚无决定时回 `TRUST_REQUIRED` 交给信任对话框；已被标记为未信任时同样拒绝，但不弹框，直接说明原因。
  * 返回 null 表示放行。读操作不经过这里。
  */
-export async function requireGitWriteTrust(): Promise<DesktopError | null> {
-  const trust = await resolveTrustForCurrentProject()
+export async function requireGitWriteTrust(projectPath: string): Promise<DesktopError | null> {
+  const trust = await resolveTrustForProject(projectPath)
   if (trust.requiresPrompt) {
     return { code: 'TRUST_REQUIRED', message: trust.message ?? '项目包含需要信任决定的资源，确认后再执行 Git 写操作。' }
   }

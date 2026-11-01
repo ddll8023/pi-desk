@@ -88,7 +88,7 @@ export async function openSession(
   projectPath: string,
   sessionId: string | null,
   allowInterrupt: boolean,
-  worktreePath?: string | null
+  workspaceId?: string | null
 ): Promise<SessionOpenResult> {
   const bridge = window.desktop
   if (!bridge || typeof bridge.openSession !== 'function') return unavailable()
@@ -97,7 +97,7 @@ export async function openSession(
       projectPath,
       sessionId,
       allowInterrupt,
-      ...(worktreePath ? { worktreePath } : {})
+      ...(workspaceId ? { workspaceId } : {})
     }
     return await bridge.openSession(request)
   } catch (error) {

@@ -1,8 +1,9 @@
 /**
- * 工作区文件标签的编辑状态：按项目保存已打开文件的读取结果、编辑模式、脏标记与磁盘冲突。
+ * 工作区文件标签的编辑状态：按工作区身份与相对路径识别记录，保存读取结果、编辑模式、脏标记与磁盘冲突。
  *
  * 文件内容读写全经主进程：这里只保存「读到了什么、用户改没改、磁盘基线是什么」，
- * 不自行拼接绝对路径。读取结果分文本、图片与「不支持」三类；只有文本可编辑，
+ * 不自行拼接绝对路径，也不因前台切换改写记录归属；工作区正在收敛或已结束时拒绝保存并保留草稿。
+ * 读取结果分文本、图片与「不支持」三类；只有文本可编辑，
  * 且超过可编辑上限的文本只读：这类记录不会变脏，也不接受保存。
  *
  * 打开时的默认模式按文件类型与偏好决定：Markdown 按设置里的默认视图（默认预览，阅读是主要用途），
@@ -28,6 +29,7 @@ import type {
 } from '../../../../shared/project-file-api'
 import { fileNameOf, isHtmlPath, isMarkdownPath } from '../file-language'
 import { readProjectFile, statProjectFile, writeProjectFile } from '../services/project-file'
+import { useTaskWorkspacesStore } from '../../workspace/stores/task-workspaces'
 import { usePreferencesStore } from '../../preferences/stores/preferences'
 
 /** 文件标签的展示模式：源码与预览；Markdown 为排版编辑，HTML 为隔离页面。 */
@@ -50,6 +52,7 @@ export type FileLoadView =
 export interface FileEditorRecord {
   readonly key: string
   readonly projectPath: string
+  readonly workspaceId: string
   readonly path: string
   readonly name: string
   readonly markdown: boolean
@@ -108,9 +111,9 @@ export const useProjectEditorStore = defineStore('project-editor', () => {
   }
 
   /** 同项目内已打开的文件键；用于「再次点击同一文件时聚焦已有标签」。 */
-  function keyOf(projectPath: string, path: string): string | null {
+  function keyOf(projectPath: string, path: string, workspaceId: string): string | null {
     for (const record of Object.values(records.value)) {
-      if (record.projectPath === projectPath && record.path === path) return record.key
+      if (record.projectPath === projectPath && record.workspaceId === workspaceId && record.path === path) return record.key
     }
     return null
   }
@@ -126,8 +129,8 @@ export const useProjectEditorStore = defineStore('project-editor', () => {
    * 新键先登记为读取中并立即返回，让标签先出现，读取结果随后写入；读取失败保留错误状态，
    * 不建立可编辑的假内容。Markdown 按偏好取默认视图，HTML 默认页面，其余文本进源码。
    */
-  function open(projectPath: string, path: string): string {
-    const existing = keyOf(projectPath, path)
+  function open(projectPath: string, path: string, workspaceId: string): string {
+    const existing = keyOf(projectPath, path, workspaceId)
     if (existing !== null) return existing
 
     const key = `${FILE_KEY_PREFIX}${nextFileTabId}`
@@ -136,6 +139,7 @@ export const useProjectEditorStore = defineStore('project-editor', () => {
     const record: FileEditorRecord = {
       key,
       projectPath,
+      workspaceId,
       path,
       name: fileNameOf(path),
       markdown,
@@ -166,13 +170,17 @@ export const useProjectEditorStore = defineStore('project-editor', () => {
     const version = (loadVersions.get(key) ?? 0) + 1
     loadVersions.set(key, version)
     update(key, { load: { phase: 'loading' }, dirty: false, draft: null, richDraft: null, conflict: false, saveError: null })
-    const result = await readProjectFile(record.projectPath, record.path)
+    const result = await readProjectFile(record.projectPath, record.path, record.workspaceId)
     if (records.value[key] === undefined || loadVersions.get(key) !== version) return
     if (!result.ok) {
       update(key, { load: { phase: 'error', error: result.error } })
       return
     }
     const content = result.data
+    if (content.workspaceId !== record.workspaceId || content.projectPath !== record.projectPath) {
+      update(key, { load: { phase: 'error', error: { code: 'INVALID_RESPONSE', message: '文件响应不属于原工作区。' } } })
+      return
+    }
     if (content.kind === 'unsupported') {
       update(key, { load: { phase: 'unsupported', content } })
       return
@@ -280,11 +288,14 @@ export const useProjectEditorStore = defineStore('project-editor', () => {
     if (record === undefined || record.load.phase !== 'ready' || !isEditable(record)) return false
     const content = record.load.content
     if (content.kind !== 'text' || record.saving) return false
-
+    const workspaces = useTaskWorkspacesStore()
+    if (workspaces.isLocked(record.workspaceId) || workspaces.of(record.workspaceId)?.phase !== 'ready') {
+      update(key, { saveError: '原工作区正在收敛或已结束，草稿保留，未写入其他目录。' }); return false
+    }
     const savedVersion = editVersions.get(key) ?? 0
     update(key, { saving: true, saveError: null })
     const expected = force ? null : { size: content.size, mtimeMs: content.mtimeMs }
-    const result = await writeProjectFile(record.projectPath, record.path, text, content.eol, content.bom, expected)
+    const result = await writeProjectFile(record.projectPath, record.path, text, content.eol, content.bom, expected, record.workspaceId)
     if (records.value[key] === undefined) return false
     if (!result.ok) {
       update(key, {
@@ -293,6 +304,9 @@ export const useProjectEditorStore = defineStore('project-editor', () => {
         conflict: result.error.code === 'CONFLICT'
       })
       return false
+    }
+    if (result.data.workspaceId !== record.workspaceId || result.data.projectPath !== record.projectPath) {
+      update(key, { saving: false, saveError: '保存响应归属不一致，未清除草稿。' }); return false
     }
     const changedDuringSave = (editVersions.get(key) ?? 0) !== savedVersion
     const latest = records.value[key]
@@ -321,11 +335,11 @@ export const useProjectEditorStore = defineStore('project-editor', () => {
     if (initial === undefined || initial.load.phase !== 'ready' || initial.saving || initial.conflict) return
 
     const baselineAtRequest = initial.load.content
-    const result = await statProjectFile(initial.projectPath, initial.path)
+    const result = await statProjectFile(initial.projectPath, initial.path, initial.workspaceId)
     const latest = records.value[key]
     if (latest === undefined || latest.load.phase !== 'ready' || latest.saving || latest.conflict
       || latest.load.content !== baselineAtRequest) return
-    if (!result.ok) return
+    if (!result.ok || result.data.workspaceId !== initial.workspaceId || result.data.projectPath !== initial.projectPath) return
 
     const baseline = latest.load.content
     if (!result.data.exists) {
@@ -354,11 +368,11 @@ export const useProjectEditorStore = defineStore('project-editor', () => {
    * 目录监听回报一批目录变化：父目录命中的已打开文件逐个重新比对磁盘基线。
    * 与窗口聚焦走同一套判断（`checkExternal`），只读 `stat`，不写盘也不抢用户的未保存改动。
    */
-  function checkChangedDirectories(projectPath: string, directories: readonly string[]): void {
+  function checkChangedDirectories(projectPath: string, directories: readonly string[], workspaceId: string): void {
     if (directories.length === 0) return
     const changed = new Set(directories)
     for (const record of Object.values(records.value)) {
-      if (record.projectPath !== projectPath || !changed.has(parentDirectoryOf(record.path))) continue
+      if (record.projectPath !== projectPath || record.workspaceId !== workspaceId || !changed.has(parentDirectoryOf(record.path))) continue
       void checkExternal(record.key)
     }
   }
@@ -367,9 +381,9 @@ export const useProjectEditorStore = defineStore('project-editor', () => {
    * 重新比对全部已打开文件的磁盘基线：用于拿不到具体目录的整树刷新（如目录监听 overflow）。
    * 代价只是每个标签一次 `stat`，文件不多时可以接受。
    */
-  function checkAllExternal(projectPath: string): void {
+  function checkAllExternal(projectPath: string, workspaceId: string): void {
     for (const record of Object.values(records.value)) {
-      if (record.projectPath === projectPath) void checkExternal(record.key)
+      if (record.projectPath === projectPath && record.workspaceId === workspaceId) void checkExternal(record.key)
     }
   }
 

@@ -165,7 +165,7 @@ export interface SdkHostStatus {
 }
 
 export type SdkSessionAuthority = (
-  reference: SdkSessionReference, ownerProjectPath: string
+  reference: SdkSessionReference, ownerProjectPath: string, workspaceId: string
 ) => Promise<SdkSessionTarget>
 
 interface PendingRequest {
@@ -245,6 +245,7 @@ export interface SdkHostManagerOptions {
  */
 const READ_ONLY_RUNS: SdkHostRunRegistry = {
   projectOfRun: () => null,
+  workspaceOfRun: () => null,
   allocateGeneration: () => { throw new SdkHostError('INVALID_SESSION_TARGET', FAILURE_MESSAGES.INVALID_SESSION_TARGET) },
   recordBinding: () => {},
   markUnconfirmed: () => {}
@@ -591,6 +592,7 @@ export class SdkHostManager {
     if (this.sessionSubmission !== null || this.uncertainOperationId !== null) {
       throw new SdkHostError('SESSION_OPERATION_CONFLICT', FAILURE_MESSAGES.SESSION_OPERATION_CONFLICT)
     }
+    const previousTarget = this.currentTarget
     const requestId = randomUUID()
     this.sessionSubmission = requestId
     let submitted = false
@@ -606,9 +608,11 @@ export class SdkHostManager {
         if (this.authority === null || (action === 'open' && reference.kind === 'new')) {
           throw new SdkHostError('INVALID_SESSION_TARGET', FAILURE_MESSAGES.INVALID_SESSION_TARGET)
         }
+        const workspaceId = this.requireOwnerWorkspace()
         target = await this.authority(action === 'open' ? reference : { kind: 'new' },
-          this.requireOwnerProject())
-        if (!isSdkSessionTarget(target)) throw new SdkHostError('INVALID_SESSION_TARGET', FAILURE_MESSAGES.INVALID_SESSION_TARGET)
+          this.requireOwnerProject(), workspaceId)
+        if (!isSdkSessionTarget(target) || target.workspaceId !== workspaceId
+          || this.requireOwnerWorkspace() !== workspaceId) throw new SdkHostError('INVALID_SESSION_TARGET', FAILURE_MESSAGES.INVALID_SESSION_TARGET)
         this.currentTarget = target
       }
       if (this.active !== record || record.closing || expected.bindingId !== this.sessionSnapshot.bindingId) {
@@ -618,8 +622,10 @@ export class SdkHostManager {
       const frame = await this.request(record, { version: SDK_HOST_PROTOCOL_VERSION, hostId: record.hostId,
         requestId, type: 'session', action, expectedBindingId: expected.bindingId, interrupt, target }, SESSION_TIMEOUT_MS, WRITE_SETTLE_TIMEOUT_MS)
       if (frame.type !== 'session-result') throw new SdkHostError('HOST_PROTOCOL_ERROR', 'SDK 会话结果不符合契约。')
+      if (frame.cancelled) this.currentTarget = previousTarget
       return { status: this.getSessionStatus(), cancelled: frame.cancelled }
     } catch (error) {
+      if (!submitted) this.currentTarget = previousTarget
       if (submitted && error instanceof SdkHostError && (error.code === 'HOST_TIMEOUT'
         || error.code === 'HOST_EXITED' || error.code === 'HOST_CLOSED')) {
         this.uncertainOperationId = requestId
@@ -687,6 +693,13 @@ export class SdkHostManager {
     const ownerProjectPath = this.options.runs.projectOfRun(this.options.runId)
     if (ownerProjectPath === null) throw new SdkHostError('INVALID_SESSION_TARGET', FAILURE_MESSAGES.INVALID_SESSION_TARGET)
     return ownerProjectPath
+  }
+
+  /** 运行实例登记的工作区才是环境授权依据；未登记时不能降级到项目目录。 */
+  private requireOwnerWorkspace(): string {
+    const workspaceId = this.options.runs.workspaceOfRun(this.options.runId)
+    if (workspaceId === null) throw new SdkHostError('INVALID_SESSION_TARGET', FAILURE_MESSAGES.INVALID_SESSION_TARGET)
+    return workspaceId
   }
 
   /** 控制请求同样需要固定宿主与绑定，关闭协商期间仍可解除原上下文等待。 */
@@ -1017,8 +1030,10 @@ export class SdkHostManager {
       if (event.projectPath !== null && !samePath(event.projectPath, ownerProjectPath)) {
         throw new SdkHostError('STALE_SESSION', FAILURE_MESSAGES.STALE_SESSION)
       }
-      target = await this.authority(event.reference, ownerProjectPath)
-      if (!isSdkSessionTarget(target)) throw new SdkHostError('INVALID_SESSION_TARGET', FAILURE_MESSAGES.INVALID_SESSION_TARGET)
+      const workspaceId = this.requireOwnerWorkspace()
+      target = await this.authority(event.reference, ownerProjectPath, workspaceId)
+      if (!isSdkSessionTarget(target) || target.workspaceId !== workspaceId
+        || this.requireOwnerWorkspace() !== workspaceId) throw new SdkHostError('INVALID_SESSION_TARGET', FAILURE_MESSAGES.INVALID_SESSION_TARGET)
       this.currentTarget = target
       // 代际紧邻实际重绑前分配；授权失败不分配，编号缺口不影响唯一性。
       generation = this.options.runs.allocateGeneration(this.options.runId)

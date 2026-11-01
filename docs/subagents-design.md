@@ -40,8 +40,8 @@
 - `src/sdk-host/extension-ui-bridge.ts` 已有可取消的选择、确认、输入与编辑交互桥，但现有交互不自动具备子任务来源语义。
 - `src/main/trust/trust-manager.ts` 明确只管理项目资源信任，不提供 OS 沙箱或工具权限限制。
 - `src/shared-process/runtime.ts` 支持加载受管 SDK 运行时，因此实际 SDK 可能不同于编译期依赖；不能只根据依赖声明推断运行能力。
-- 项目记忆 `.agents/memory/topics/conventions/multi-session-scope.md` 明确：独立宿主只隔离进程与运行身份，同项目会话仍访问共享工作目录，不提供文件隔离、自动冲突解决或自动恢复全部运行任务。
-- 项目记忆 `.agents/memory/topics/conventions/projection-limits.md` 与当前 `ChatMessageItem.vue` 一致：Thinking 与工具调用逐项展示、各自开合，只有相邻工具调用归组。
+- `src/main/workspaces/workspace-manager.ts` 与 `src/main/sessions/session-manager.ts` 明确：会话运行在已授权的工作区执行根内；同一工作区内部的多个会话仍访问该工作区的共享文件目录，不提供同环境内部的文件隔离或自动冲突解决。
+- `src/renderer/src/sessions/components/ChatMessageItem.vue` 与投影契约一致：Thinking 与工具调用逐项展示、各自开合，只有相邻工具调用归组。
 
 ## 3. 调研结论与方案取舍
 
@@ -329,12 +329,12 @@ Project Trust 是项目资源加载的信任决定，不是逐任务写入授权
 - **影响**：可能将“信任项目”错误解释为允许子任务任意写入，或在必要安全钩子缺失时执行。
 - **推荐处置**：显式装配允许能力与必要安全资源，关联用户交互到原任务，未获授权或交互不可用时停止推进。
 
-### 10.4 共享目录存在并行写入竞争
+### 10.4 同工作区共享目录存在并行写入竞争
 
-- **位置**：同项目共享工作目录；`.agents/memory/topics/conventions/multi-session-scope.md`。
-- **证据**：独立宿主不提供文件隔离或自动冲突解决，多个会话仍操作同一份文件。
+- **位置**：同一工作区内的共享执行根（`src/main/workspaces/workspace-manager.ts`）。
+- **证据**：独立 SDK 宿主只隔离进程与运行身份，同一工作区内部各会话或子任务仍操作同一份文件。
 - **影响**：同文件并行修改可能覆盖结果；任意 bash 也能绕过只读提示。
-- **推荐处置**：只读工作并行，文档写入使用范围受限的编辑能力，同文件读改写串行，不承诺文件隔离。
+- **推荐处置**：只读工作并行，文档写入使用范围受限的编辑能力，同文件读改写串行，不承诺同环境内部的文件隔离。
 
 ### 10.5 SDK 能力与子任务用量需要统一口径
 

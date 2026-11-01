@@ -28,16 +28,16 @@ export function captureRichInsertion(editor: Editor, valid: () => boolean) {
   }
 }
 const queues = new WeakMap<Editor, Promise<void>>()
-export function insertRichImage(editor: Editor, projectPath: string, path: string, valid: () => boolean, notice: (message: string) => void, bytes?: () => Promise<Uint8Array>): void {
+export function insertRichImage(editor: Editor, projectPath: string, workspaceId: string, path: string, valid: () => boolean, notice: (message: string) => void, bytes?: () => Promise<Uint8Array>): void {
   const target = captureRichInsertion(editor, valid)
   // 输入顺序决定导入与插入顺序，不能让较快的第二张图片越过第一张。
   const task = (queues.get(editor) ?? Promise.resolve()).then(async () => {
     if (!target.range()) return
     const snapshot = bytes ? await bytes() : undefined
     if (!target.range()) return
-    const result = await importMarkdownImage(projectPath, path, snapshot)
+    const result = await importMarkdownImage(projectPath, path, snapshot, workspaceId)
     if (!result.ok) { if (valid()) notice(result.error.message); return }
-    if (!result.data.reference) return
+    if (result.data.workspaceId !== workspaceId || result.data.projectPath !== projectPath || !result.data.reference) return
     const range = target.range()
     if (!range) { notice(`图片已导入 ${result.data.path ?? ''}，原插入位置已失效，未修改正文。`); return }
     const selection = editor.state.selection

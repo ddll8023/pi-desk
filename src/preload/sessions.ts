@@ -43,7 +43,7 @@ export const sessionsApi = {
     const payload: SessionOpenRequest = {
       projectPath: request.projectPath, sessionId: request.sessionId,
       allowInterrupt: request.allowInterrupt,
-      ...(request.worktreePath === undefined ? {} : { worktreePath: request.worktreePath })
+      ...(request.workspaceId === undefined ? {} : { workspaceId: request.workspaceId })
     }
     const response: unknown = await ipcRenderer.invoke(SESSION_OPEN_CHANNEL, payload)
     return isSessionOpenResult(response) ? response : invalidSessionResponse()

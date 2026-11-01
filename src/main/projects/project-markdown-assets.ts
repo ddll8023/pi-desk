@@ -21,8 +21,11 @@ function imageExtension(bytes: Buffer): string | null {
   return null
 }
 
+import { workspaceTarget } from '../../shared/workspace-api'
+import type { WorkspaceContext } from '../../shared/workspace-api'
+
 export class ProjectMarkdownAssets {
-  constructor(private readonly resolveProject: (path: string) => Promise<string | null>) {}
+  constructor(private readonly checkContext: (context: WorkspaceContext) => Promise<unknown>) {}
 
   /** 路径逐层 lstat，禁止借助项目内符号链接将导入位置移到另一处。 */
   private async document(root: string, path: string): Promise<string> {
@@ -38,11 +41,10 @@ export class ProjectMarkdownAssets {
     return resolved.absolutePath
   }
 
-  async import(request: ProjectMarkdownImageRequest, owner: BrowserWindow | null): Promise<ProjectMarkdownImageResult> {
+  async import(context: WorkspaceContext, request: ProjectMarkdownImageRequest, owner: BrowserWindow | null): Promise<ProjectMarkdownImageResult> {
     try {
-      const registered = await this.resolveProject(request.projectPath)
-      if (!registered) throw new Error('所属项目已移除，未导入图片。')
-      const root = await realpath(registered)
+      await this.checkContext(context)
+      const root = await realpath(context.rootPath)
       const document = await this.document(root, request.path)
       let bytes: Buffer
       let stem = 'image'
@@ -50,7 +52,7 @@ export class ProjectMarkdownAssets {
         const options = { title: '插入图片', properties: ['openFile'] as ('openFile')[], filters: [{ name: '图片', extensions: ['png','jpg','jpeg','gif','webp','bmp','ico','avif'] }] }
         const chosen = owner ? await dialog.showOpenDialog(owner, options) : await dialog.showOpenDialog(options)
         const selected = chosen.filePaths[0]
-        if (chosen.canceled || !selected) return { ok: true, data: { projectPath: registered, path: null, reference: null } }
+        if (chosen.canceled || !selected) return { ok: true, data: { ...workspaceTarget(context), path: null, reference: null } }
         const handle = await open(selected, constants.O_RDONLY | constants.O_NOFOLLOW)
         try {
           const stat = await handle.stat()
@@ -69,7 +71,7 @@ export class ProjectMarkdownAssets {
       if (!bytes.length || bytes.length > PROJECT_FILE_IMAGE_MAX_BYTES) throw new Error('图片为空或超过导入上限。')
       const extension = imageExtension(bytes)
       if (!extension) throw new Error('图片格式不受支持；不允许导入 SVG 或非图片内容。')
-      if (!(await this.resolveProject(registered))) throw new Error('所属项目已移除，未导入图片。')
+      await this.checkContext(context)
       await this.document(root, request.path)
       const parent = dirname(document)
       if (!isInsideRoot(root, await realpath(parent))) throw new Error('导入目录已越界。')
@@ -79,7 +81,7 @@ export class ProjectMarkdownAssets {
       let complete = false
       try { await handle.writeFile(bytes); await handle.sync(); complete = true }
       finally { await handle.close(); if (!complete) await unlink(destination).catch(() => {}) }
-      return { ok: true, data: { projectPath: registered, path: relative(root, destination).split(sep).join('/'), reference: encodeURIComponent(name) } }
+      return { ok: true, data: { ...workspaceTarget(context), path: relative(root, destination).split(sep).join('/'), reference: encodeURIComponent(name) } }
     } catch (error) {
       return { ok: false, error: { code: 'INVALID_REQUEST', message: error instanceof Error ? error.message : String(error) } }
     }

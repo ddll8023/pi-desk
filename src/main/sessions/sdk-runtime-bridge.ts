@@ -61,6 +61,7 @@ import type {
 import type { ExtensionDialogResponseInput, ExtensionUiSnapshot } from '../../shared/extension-ui-api'
 import type { SessionError, SessionErrorCode } from '../../shared/session-api'
 import type { SessionRunState, SessionRunsSnapshot } from '../../shared/session-run-api'
+import type { WorkspaceManager } from '../workspaces/workspace-manager'
 
 /** 页面 Runtime 通道可见的宿主失败分类；表是穷尽 Record，新增分类会在编译期暴露。 */
 const RUNTIME_ERROR_CODES: Record<SdkHostErrorCode, RuntimeErrorCode> = {
@@ -266,6 +267,7 @@ function sameRuns(left: readonly SessionRunState[], right: readonly SessionRunSt
       && run.projectPath === other.projectPath
       && run.sessionId === other.sessionId
       && run.phase === other.phase
+      && run.workspaceId === other.workspaceId
       && run.isForeground === other.isForeground
       && run.isStreaming === other.isStreaming
       && run.hasMessages === other.hasMessages
@@ -281,6 +283,7 @@ type SessionSwitchAction = 'new' | 'open' | 'reload'
 interface SessionOwner {
   readonly projectPath: string
   readonly sessionId: string | null
+  readonly workspaceId: string
 }
 
 /** 无前台运行实例时的页面状态：与宿主已建立但会话为空时一致。 */
@@ -313,6 +316,7 @@ export interface SdkRuntimeBridgeOptions {
   readonly prepareHost: (host: SdkHostManager) => void
   /** 只读宿主池：查看历史使用的解析进程，不属于运行实例，也不参与占用判定。 */
   readonly logHosts: LogHostPool
+  readonly workspaces: Pick<WorkspaceManager, 'authorize' | 'bindSession'>
 }
 
 /**
@@ -336,6 +340,9 @@ export class SdkRuntimeBridge {
   /** 正在进行的回收：新的提交等它收敛后再恢复，不与释放竞争。 */
   private readonly reclaiming = new Map<number, Promise<void>>()
   private shuttingDown = false
+  private readonly workspaceBindings = new Map<number, Promise<void>>()
+  /** 发送尚未确认期间不允许生命周期清理越过状态事件的传输窗口。 */
+  private readonly submittingRuns = new Map<number, number>()
   /** 前台选择序号：打开与重载提交时递增，用于不让先提交后完成的选择把前台改回旧目标。 */
   private selectionSeed = 0
   /** 按对象记住原服务宿主；读取与绑定都能复用，池身份移交后也不会留下过期编号。 */
@@ -434,6 +441,23 @@ export class SdkRuntimeBridge {
     // 只采纳宿主已确认绑定的身份：替换过程中会先上报一次无会话，不能当作新占用。
     if (status.phase !== 'bound' || status.sessionId === run.sessionId) return
     this.options.runs.settleOpen(runId, status.sessionId)
+    void this.recordWorkspaceBinding(runId).catch(error => console.error('[workspace] 会话绑定未保存：', error))
+  }
+
+  /** 内部派生、恢复和首次打开共用同一个持久绑定链；保存失败阻断后续发送。 */
+  private recordWorkspaceBinding(runId: number): Promise<void> {
+    const run = this.runOf(runId)
+    if (run === null || run.projectPath === null || run.workspaceId === null) {
+      return Promise.reject(new SdkHostError('AUTHORIZATION_FAILED', '运行实例缺少已授权工作区。'))
+    }
+    const { projectPath, sessionId, workspaceId } = run
+    const previous = this.workspaceBindings.get(runId) ?? Promise.resolve()
+    const task = previous.catch(() => {}).then(async () => {
+      try { await this.options.workspaces.bindSession(projectPath, sessionId, workspaceId) }
+      catch { throw new SdkHostError('AUTHORIZATION_FAILED', '工作区绑定未能保存；已阻止继续发送，请重新打开会话。') }
+    })
+    this.workspaceBindings.set(runId, task)
+    return task
   }
 
   /**
@@ -743,6 +767,7 @@ export class SdkRuntimeBridge {
         runId: run.runId,
         projectPath: run.projectPath,
         sessionId: run.sessionId,
+        workspaceId: run.workspaceId,
         phase: run.phase,
         isForeground: run.runId === foreground,
         isStreaming: session === null ? false : !session.isIdle,
@@ -767,6 +792,9 @@ export class SdkRuntimeBridge {
     if (owner.sessionId === null) return null
     const occupied = this.options.runs.runOfSession(owner.projectPath, owner.sessionId)
     if (occupied === null) return null
+    if (occupied.workspaceId !== owner.workspaceId) {
+      throw new SdkHostError('INVALID_SESSION_TARGET', '会话运行实例与请求工作区不一致，未重新解释执行目录。')
+    }
     if (occupied.phase === 'unconfirmed') {
       throw new SdkHostError('SESSION_OPERATION_CONFLICT',
         '该会话的上一运行实例尚未确认退出，未重复接管；请等它收敛后重试。')
@@ -905,6 +933,22 @@ export class SdkRuntimeBridge {
     return result
   }
 
+  /** 工作区销毁前先检查全部占用，再收敛空闲实例；不隐式中断任何任务。 */
+  async closeWorkspaceRuns(workspaceIds: readonly string[]): Promise<void> {
+    const ids = new Set(workspaceIds)
+    const runs = this.options.runs.allRuns().filter(run => run.workspaceId !== null && ids.has(run.workspaceId))
+    for (const run of runs) {
+      if (run.phase !== 'running' || this.runHasPendingWork(run.runId) || this.submittingRuns.has(run.runId)
+        || ['preparing', 'blocked', 'failed'].includes(run.owner.getSessionStatus().phase)) {
+        throw new Error('工作区仍有执行、打开或未确认的会话；未自动中断或删除。')
+      }
+    }
+    for (const run of runs) {
+      const result = await this.closeRun(run.runId)
+      if (!result.ok) throw new Error(result.error.message)
+    }
+  }
+
   /**
    * 该实例是否有在途工作：排队消息、独立 Bash、等待中的审批或扩展输入都算；
    * 宿主已失败时按无在途工作处理，因为已无法确认它是否仍在工作。
@@ -954,10 +998,21 @@ export class SdkRuntimeBridge {
     if (matched === null) return { ok: false, error: TARGET_CHANGED_ERROR }
     if (matched.bindingId === null) return { ok: false, error: UNBOUND_ERROR }
     this.keepAlive(matched.run.runId)
+    const runId = matched.run.runId
+    this.submittingRuns.set(runId, (this.submittingRuns.get(runId) ?? 0) + 1)
     try {
+      await this.recordWorkspaceBinding(runId)
+      const { projectPath, workspaceId } = matched.run
+      if (projectPath === null || workspaceId === null) return { ok: false, error: TARGET_CHANGED_ERROR }
+      await this.options.workspaces.authorize(projectPath, workspaceId)
+      if (this.matchedRun(target)?.bindingId !== matched.bindingId) return { ok: false, error: TARGET_CHANGED_ERROR }
       return { ok: true, data: { disposition: await matched.run.owner.prompt(message, images) } }
     } catch (error) {
       return { ok: false, error: runtimeErrorOf(error) }
+    } finally {
+      const remaining = (this.submittingRuns.get(runId) ?? 1) - 1
+      if (remaining === 0) this.submittingRuns.delete(runId)
+      else this.submittingRuns.set(runId, remaining)
     }
   }
 
@@ -1067,8 +1122,9 @@ export class SdkRuntimeBridge {
   }
 
   /**
-   * 回退只回退对话分支：目标消息由宿主按投影身份定位，结果未知时标记 `blocked`，
-   * 页面据此停止后续写操作，不自动重发；宿主侧追加窗口内到达的结果帧仍按真实结果返回。
+   * 普通桌面桥接提交对话分支回退；内部收到 revertCode 时先尝试提交式快照恢复，再交给宿主回退消息。
+   * 该条件分支不提供磁盘与对话的事务式恢复保证。目标消息按投影身份定位，结果未知时标记 blocked，
+   * 页面据此停止后续写操作且不自动重发；追加窗口内到达的宿主结果帧仍按真实结果返回。
    * `text` 在未取消时按页面契约补空串（页面不消费该字段）。
    */
   async rewind(request: RuntimeRewindRequest): Promise<RuntimeRewindResult> {
@@ -1242,7 +1298,7 @@ export class SdkRuntimeBridge {
     const run = this.ensureRun(owner, selection === null ? this.foregroundRunId() : null)
     if (selection !== null) this.focusRun(run.runId)
     try {
-      this.options.runs.beginOpen(run.runId, owner.projectPath, owner.sessionId)
+      this.options.runs.beginOpen(run.runId, owner.projectPath, owner.sessionId, owner.workspaceId)
     } catch (error) {
       if (error instanceof SessionRunConflict) {
         throw new SdkHostError('SESSION_OPERATION_CONFLICT',
@@ -1259,7 +1315,11 @@ export class SdkRuntimeBridge {
         ? { bindingId: current.bindingId, activityVersion: current.activityVersion }
         : null
       const result = await host.runSessionAction(action, reference, host.getSessionIdentity(), interrupt)
-      this.options.runs.settleOpen(run.runId, host.getSessionStatus().sessionId)
+      if (result.cancelled) this.options.runs.failOpen(run.runId)
+      else {
+        this.options.runs.settleOpen(run.runId, host.getSessionStatus().sessionId)
+        await this.recordWorkspaceBinding(run.runId)
+      }
       this.publishState()
       if (selection !== null) this.settleSelection(selection, owner)
       return { cancelled: result.cancelled, runId: run.runId }

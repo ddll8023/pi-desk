@@ -1,41 +1,44 @@
-/** 持有 `@` 文件引用的候选路径；检索由主进程按当前项目完成，这里只保存最后一次查询的结果。 */
+/** @ 文件候选固定发起对话的工作区；切换环境立即撤销旧查询，不把同名路径串入另一任务。 */
 import { defineStore } from 'pinia'
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import type { DesktopError } from '../../../../shared/desktop-api'
+import { workspaceTarget } from '../../../../shared/workspace-api'
 import { searchProjectFiles } from '../services/project-file'
 import { useProjectStore } from '../../projects/stores/project'
+import { useTaskWorkspacesStore } from '../../workspace/stores/task-workspaces'
 
 export const useProjectFileStore = defineStore('project-file', () => {
+  const projects = useProjectStore()
+  const workspaces = useTaskWorkspacesStore()
   const entries = ref<readonly string[]>([])
   const pending = ref(false)
   const error = ref<DesktopError | null>(null)
-  /** 自增序号：连续输入时只让最后一次查询的结果落地。 */
   let sequence = 0
-
-  /**
-   * 检索候选；过期响应（期间又发起了新查询）直接丢弃，不覆盖新结果。
-   * 结果还按主进程报告的项目复核：前台项目已切换时旧项目的候选不进新项目的输入框。
-   */
+  watch(() => [projects.currentProject?.path ?? null, workspaces.selected(projects.currentProject?.path ?? null)?.id ?? null], () => {
+    sequence += 1; entries.value = []; pending.value = false; error.value = null
+  }, { flush: 'sync' })
   async function search(query: string): Promise<void> {
-    const ticket = ++sequence
+    const projectPath = projects.currentProject?.path ?? null
+    if (!projectPath || workspaces.pendingProjects.includes(projectPath)) return
+    let ticket = ++sequence
     pending.value = true
-    const result = await searchProjectFiles(query)
-    if (ticket !== sequence) return
-
-    pending.value = false
-    if (!result.ok) {
-      error.value = result.error
-      entries.value = []
-      return
-    }
-    if (result.data.projectPath !== (useProjectStore().currentProject?.path ?? null)) {
+    try {
+      const context = await workspaces.ensure(projectPath)
+      if (projects.currentProject?.path !== projectPath || ticket !== sequence) return
+      if (!workspaces.selected(projectPath)) {
+        workspaces.select(context)
+        ticket = ++sequence
+        pending.value = true
+      }
+      const result = await searchProjectFiles(query, workspaceTarget(context))
+      if (ticket !== sequence || workspaces.selected(projectPath)?.id !== context.id) return
+      if (!result.ok) { error.value = result.error; entries.value = []; return }
+      if (result.data.projectPath !== projectPath || result.data.workspaceId !== context.id) return
       error.value = null
-      entries.value = []
-      return
-    }
-    error.value = null
-    entries.value = result.data.entries
+      entries.value = result.data.entries
+    } catch (caught) {
+      if (ticket === sequence) { entries.value = []; error.value = { code: 'BRIDGE_CALL_FAILED', message: caught instanceof Error ? caught.message : '文件候选查询失败。' } }
+    } finally { if (ticket === sequence) pending.value = false }
   }
-
   return { entries, pending, error, search }
 })

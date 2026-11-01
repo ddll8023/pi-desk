@@ -33,6 +33,7 @@ import type { TerminalSessionInfo } from '../../../../shared/terminal-api'
 import type { QuickCommand, QuickCommandScope } from '../../../../shared/quick-commands-api'
 import { copyText } from '../../ui/clipboard'
 import { hasProjectEntryDragData, projectEntryInsertText, readProjectEntryDragData } from '../../ui/project-entry-drag'
+import type { ProjectEntryDragPayload } from '../../ui/project-entry-drag'
 import { resolveProjectEntryPath } from '../../editor/services/project-file'
 import { resizeTerminal, writeTerminal } from '../services/terminal'
 import { useProjectStore } from '../../projects/stores/project'
@@ -556,29 +557,30 @@ function onDragLeave(event: DragEvent): void {
   dropActive.value = false
 }
 
-/** 落下：复核载荷仍属于当前项目，再把绝对路径插入本终端。 */
+/** 落下：复核载荷属于本终端所在工作区，再把绝对路径插入本终端。 */
 function onDrop(event: DragEvent): void {
   if (!hasProjectEntryDragData(event)) return
   event.preventDefault()
   dropActive.value = false
   const payload = readProjectEntryDragData(event)
   if (payload === null) return
-  if (payload.projectPath !== (projectStore.currentProject?.path ?? null)) {
-    showNotice('只能插入当前项目的文件。')
+  if (payload.projectPath !== props.session.projectPath || payload.workspaceId !== props.session.workspaceId) {
+    showNotice('只能插入本终端所属工作区的文件。')
     return
   }
-  void insertEntryPath(payload.path, payload.name)
+  void insertEntryPath(payload)
 }
 
 /** 绝对路径经主进程解析后写入本终端：只补一个空格，不隐式回车。 */
-async function insertEntryPath(path: string, name: string): Promise<void> {
-  const resolved = await resolveProjectEntryPath(path)
+async function insertEntryPath(target: ProjectEntryDragPayload): Promise<void> {
+  const session = props.session
+  const resolved = await resolveProjectEntryPath(target.path, target)
   if (!resolved.ok) {
     showNotice(resolved.error.message)
     return
   }
-  await terminalStore.insertText(props.session.id, projectEntryInsertText(props.session.shell, resolved.data.absolutePath))
-  showNotice(`已插入路径：${name}`)
+  if (resolved.data.workspaceId !== session.workspaceId || resolved.data.projectPath !== session.projectPath) return
+  if (await terminalStore.insertText(session.id, projectEntryInsertText(session.shell, resolved.data.absolutePath))) showNotice(`已插入路径：${target.name}`)
 }
 
 /**

@@ -1,6 +1,7 @@
 /** 只定义「会话运行状态」查询、事件、释放与结束请求的固定通道、载荷类型与跨进程校验；页面据此展示后台会话的运行、等待与未确认状态。 */
 import type { RuntimeError } from './runtime-api'
 import { isRuntimeError } from './runtime-api'
+import { isWorkspaceId } from './workspace-api'
 
 export const SESSION_RUNS_STATE_CHANNEL = 'desktop:session-runs-state'
 export const SESSION_RUNS_EVENT = 'desktop:session-runs-changed'
@@ -23,6 +24,7 @@ export interface SessionRunState {
   readonly runId: number
   readonly projectPath: string | null
   readonly sessionId: string | null
+  readonly workspaceId: string | null
   readonly phase: SessionRunPhase
   /** 是否当前前台实例；同一时刻至多一个为真。 */
   readonly isForeground: boolean
@@ -105,6 +107,7 @@ function isSessionRunState(value: unknown): value is SessionRunState {
     && value.runId > 0
     && (value.projectPath === null || typeof value.projectPath === 'string')
     && (value.sessionId === null || typeof value.sessionId === 'string')
+    && (value.workspaceId === null || isWorkspaceId(value.workspaceId))
     && typeof value.phase === 'string'
     && SESSION_RUN_PHASES.includes(value.phase as SessionRunPhase)
     && typeof value.isForeground === 'boolean'

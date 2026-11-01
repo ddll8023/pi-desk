@@ -1,6 +1,9 @@
 /** 主进程业务实例的唯一装配处：配置、项目、信任、会话、只读解析宿主池、终端、供应商、资源、更新、生成式界面与手机访问各一份，按依赖顺序建立并互相注入回调。本文件只做实例化，不注册 IPC、不写业务判断；其中系统目录选择与终端守护状态广播经 window-channel.ts 提供，是本文件对窗口投递层的唯一依赖。 */
 
 import { app } from 'electron'
+import { join } from 'node:path'
+import { WorkspaceStore } from './workspaces/workspace-store'
+import { WorkspaceManager } from './workspaces/workspace-manager'
 import { PROJECT_DIRECTORY_CHANGED_EVENT } from '../shared/project-file-api'
 import { TERMINAL_DATA_EVENT, TERMINAL_EXIT_EVENT } from '../shared/terminal-api'
 import { DesktopConfigStore } from './config/desktop-config-store'
@@ -49,14 +52,15 @@ export const logHosts = new LogHostPool({
 })
 
 /** 页面会话主链后端：按注册表定位运行实例，宿主按需建立，失败分类在此映射回既有 Runtime 契约。 */
-export const sdkRuntime = new SdkRuntimeBridge({
+export const sdkRuntime: SdkRuntimeBridge = new SdkRuntimeBridge({
   runs: sessionRuns,
   logHosts,
   // 授权回路接主进程会话编排：宿主不能自行授权项目或任意会话路径。
   prepareHost: (host) => {
-    host.setSessionAuthority((reference, ownerProjectPath) => sessionManager.prepareSdkTarget(reference, ownerProjectPath))
+    host.setSessionAuthority((reference, ownerProjectPath, workspaceId) => sessionManager.prepareSdkTarget(reference, ownerProjectPath, workspaceId))
   },
-  createHost: (runId) => new SdkHostManager({ runId, runs: sessionRuns, browserSessionService })
+  createHost: (runId) => new SdkHostManager({ runId, runs: sessionRuns, browserSessionService }),
+  get workspaces(): WorkspaceManager { return workspaceManager }
 })
 
 /** 本地配置文件的唯一读写者；本文件的所有字段共用同一份配置与写入队列。 */
@@ -72,11 +76,23 @@ export const projectManager = new ProjectManager({
   runs: sessionRuns
 })
 
+/** 工作区身份独立持久化；应用装配只创建所有者，不提前读写用户任务数据。 */
+export const workspaceStore = new WorkspaceStore(() => join(app.getPath('userData'), 'task-workspaces.json'))
+export const worktreeService = new WorktreeService()
+export const workspaceManager: WorkspaceManager = new WorkspaceManager({
+  store: workspaceStore, worktrees: worktreeService, projects: projectManager, trust: trustManager,
+  closeWorkspaceRuns: ids => sdkRuntime.closeWorkspaceRuns(ids),
+  countTerminals: id => terminals.countWorkspaceTerminals(id),
+  settleTerminals: (id, consent) => terminals.settleWorkspace(id, consent),
+  releaseViews: id => { projectDirectoryWatcher.releaseWorkspace(id); projectHtmlPreview.releaseWorkspace(id); projectFileIndex.invalidate(id) }
+})
+
 export const sessionManager = new SessionManager({
   projects: projectManager,
   sdk: sdkRuntime,
   projectsTrust: trustManager,
   ownership: sessionRuns,
+  workspaces: workspaceManager,
   // 生成式 UI 开关在会话创建期读取；读失败按开启处理，不因偏好故障阻断会话。
   readGenuiEnabled: async () => (await configStore.readGenui()).enabled
 })
@@ -100,45 +116,33 @@ export const packageUpdater = new PackageUpdater({
 /** 内置 Pi agent 安装：只由页面显式发起，写入应用自有的运行时目录，不自动执行也不重试。 */
 export const piAgentUpdater = new PiAgentUpdater({ runtimeRoot: getRuntimeRoot })
 
-/** 项目文件索引：根路径只取当前项目，页面无法指定检索目录。 */
-export const projectFileIndex = new ProjectFileIndex({
-  currentProjectPath: () => projectManager.currentProjectPath()
-})
+/** 文件索引按已授权工作区缓存，页面不能绕过身份指定执行目录。 */
+export const projectFileIndex = new ProjectFileIndex()
 
-/** 项目目录读取：右侧面板文件树的单层列举，根路径同样只取当前项目。 */
-export const projectDirectory = new ProjectDirectoryReader({
-  currentProjectPath: () => projectManager.currentProjectPath()
-})
+/** 文件树按显式工作区逐层列举；不依赖前台项目的可变状态。 */
+export const projectDirectory = new ProjectDirectoryReader()
 
 /**
  * 项目目录监听：页面提交已加载的目录集合，主进程只监听这些层并推送变化，文件树不必手动刷新。
  * 变化同时丢弃文件索引快照，让 `@` 检索立刻能看到新文件。
  */
 export const projectDirectoryWatcher = new ProjectDirectoryWatcher({
-  currentProjectPath: () => projectManager.currentProjectPath(),
   sendChange: (change) => sendToRenderer(PROJECT_DIRECTORY_CHANGED_EVENT, change),
-  onChanged: () => projectFileIndex.invalidate()
+  onChanged: workspaceId => projectFileIndex.invalidate(workspaceId)
 })
 
 /** 文件内容按请求固定的已登记项目读写，切换前台项目不改变异步请求归属。 */
-export const projectFileContent = new ProjectFileContent({
-  resolveProjectPath: resolveRegisteredProjectPath
-})
+export const projectFileContent = new ProjectFileContent()
 
 /** HTML 草稿与预览隔离身份只存内存，资源请求继续复核所属项目的登记状态。 */
-export const projectHtmlPreview = new ProjectHtmlPreview(resolveRegisteredProjectPath)
+export const projectHtmlPreview = new ProjectHtmlPreview(workspaceManager)
 
 /** 源代码管理：状态、差异、历史与暂存/提交；仓库根与路径折算全在主进程，页面只给项目内相对路径。 */
 export const gitService = new GitService({
-  currentProjectPath: () => projectManager.currentProjectPath()
+  resolveWorkspace: target => workspaceManager.contextFor(target, 'read')
 })
 
-/** Git 工作树隔离管理服务：多工作树列举、隔离工作树创建、依赖软链接编排与安全清理。 */
-export const worktreeService = new WorktreeService({
-  currentProjectPath: () => projectManager.currentProjectPath()
-})
-
-/** Turn 代码快照服务：工作树隔离会话下的轮次快照打标与 Rewind 精确时光倒流。 */
+/** 工作树的提交式快照与恢复服务；服务本身不代表桌面轮次捕获及代码回退链已贯通。 */
 export const turnSnapshotService = new TurnSnapshotService()
 
 /** 认证执行端：管理认证辅助进程，凭据读写全在官方实现内完成。 */
@@ -163,6 +167,7 @@ export const browserSessionService = new BrowserSessionService()
 /** 内置终端适配：PTY、画面与流控由独立守护进程持有，主进程只转发受限协议。 */
 export const terminals = new TerminalManager({
   resolveProjectPath: resolveRegisteredProjectPath,
+  workspaces: workspaceManager,
   sendData: (event) => sendToRenderer(TERMINAL_DATA_EVENT, event),
   sendExit: (event) => sendToRenderer(TERMINAL_EXIT_EVENT, event),
   // 连接变化（守护进程拉起、断开、重连）时把状态推给页面；页面据此刷新快照与提示。
@@ -175,8 +180,8 @@ export const terminals = new TerminalManager({
 registerTerminalStatusSource(() => terminals.status())
 
 /**
- * 终端、文件内容与项目移除共用的项目解析：只认已登记项目，并回登记时的规范路径。
- * 终端的工作目录只取这条路径，页面给出的写法不直接进入 shell。
+ * 项目登记解析：只认已登记项目，并回登记时的规范路径；终端执行根另由工作区授权。
+ * 项目分组、清单与移除继续使用逻辑项目路径，不以任务目录冒充项目。
  */
 export async function resolveRegisteredProjectPath(requested: string): Promise<string | null> {
   const list = await configStore.list()

@@ -11,10 +11,10 @@
 | `src/main/window.ts` | 唯一窗口的创建、主题与标题栏配色、导航与权限限制、单实例聚焦 |
 | `src/main/window-channel.ts` | 窗口引用、向页面投递事件与全部业务广播、系统目录选择；不持有业务实例，终端状态来源由组合根注册 |
 | `src/main/asset-protocol.ts` | 应用与 HTML 预览协议注册、应用资产处理、页面地址解析、目录越界判定与生产 CSP；预览资源处理归[文件模块](files-editor.md)的独立会话 |
-| `src/main/services.ts` | 主进程业务实例的唯一装配处（配置、项目、信任、会话、终端、供应商、资源、更新、生成式界面、手机访问） |
+| `src/main/services.ts` | 主进程业务实例的唯一装配处（配置、项目、信任、会话、任务工作区、终端、供应商、资源、更新、生成式界面、手机访问） |
 | `src/main/ipc/dispatch.ts` | IPC 注册包装、调用者校验、有界标识与 MCP 服务器名校验 |
 | `src/preload/index.ts` | 只合并各域 Api 并暴露 `window.desktop`，不含 channel 调用与校验 |
-| `src/preload/*.ts`（域文件） | 按业务域各一个文件（`desktop`、`projects`、`sessions`、`runtime`、`terminal`、`git`、`preferences`、`providers`、`updates`、`trust`、`genui`、`lan-remote`、`browser`），各自承载固定 channel 调用、声明字段载荷重建、响应与事件校验、订阅释放 |
+| `src/preload/*.ts`（域文件） | 按业务域各一个文件（`desktop`、`projects`、`sessions`、`runtime`、`terminal`、`git`、`worktree`、`preferences`、`providers`、`updates`、`trust`、`genui`、`lan-remote`、`browser`），各自承载固定 channel 调用、声明字段载荷重建、响应与事件校验、订阅释放 |
 | `src/renderer/src/App.vue` | 页面组合根：只装配外壳骨架、弹层宿主与启动编排 |
 | `src/renderer/src/shell/components/AppShell.vue` | 布局骨架：顶部栏、侧栏与窄窗遮罩、工作区槽、右侧面板；持有窄窗与侧栏开合状态 |
 | `src/renderer/src/shell/components/WorkspaceView.vue` | 工作区：标签条、操作失败提示、对话／终端／文件／浏览器面板层与空态；核对浏览器批注来源与目标，切换后交由输入坞合并草稿 |
@@ -102,14 +102,14 @@
 | --- | --- |
 | `src/renderer/src/ui/AppButton.vue` | 原生按钮及统一视觉变体；业务组件共用 |
 | `src/renderer/src/ui/AppSelect.vue` | 自定义选择器；业务表单共用 |
-| `src/renderer/src/ui/ConfirmDialog.vue` | 通用确认弹层；应用外壳、聊天列表、聊天输入坞、文件编辑、Git、供应商、资源、终端设置与快捷命令消费 |
+| `src/renderer/src/ui/ConfirmDialog.vue` | 通用确认弹层（支持 body 扩展插槽与确认禁用控制）；应用外壳、任务工作区横幅、聊天列表、聊天输入坞、文件编辑、Git、供应商、资源、终端设置与快捷命令消费 |
 | `src/renderer/src/ui/anchored-popup.ts` | 浮层定位与生命周期；标签、菜单、文件编辑、Git、侧栏与基础选择器消费 |
 | `src/renderer/src/ui/clipboard.ts` | 复制文本与错误结果；聊天、文件、供应商、资源、终端、更新与生成式界面消费 |
 | `src/renderer/src/ui/MarkdownContent.vue` | 安全 Markdown 展示、数学与代码／表格交互；聊天正文的 Thinking、回答与技能正文以及手机网页消息消费 |
 | `src/renderer/src/ui/markdown.ts` | 聊天 Markdown 解析与清洗，供 Markdown 展示组件使用 |
 | `src/renderer/src/ui/markdown-shared.ts` | 代码、表格与 HTML 转义的共同渲染；聊天及文件 Markdown 消费 |
 | `src/renderer/src/ui/markdown-math.ts` | 数学解析与 KaTeX 渲染；聊天、文件预览及富文本公式消费 |
-| `src/renderer/src/ui/project-entry-drag.ts` | 项目条目拖拽载荷、路径引用文本与终端插入文本；文件树、输入坞与终端视图共用 |
+| `src/renderer/src/ui/project-entry-drag.ts` | 项目条目拖拽载荷（携带项目与工作区执行环境身份）、路径引用文本与终端插入文本；文件树、输入坞与终端视图共用 |
 | `src/renderer/src/ui/relative-time.ts` | 相对时间文案；侧栏会话行与提交历史共用 |
 | `src/renderer/src/ui/forked-sessions.ts` | 分叉会话折叠；侧栏项目树使用 |
 

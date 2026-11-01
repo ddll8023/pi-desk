@@ -36,6 +36,7 @@ export const terminalApi = {
   async createTerminal(request: TerminalCreateRequest) {
     const payload: TerminalCreateRequest = {
       projectPath: request.projectPath,
+      workspaceId: request.workspaceId,
       cols: request.cols,
       rows: request.rows
     }

@@ -32,6 +32,7 @@ interface SnapshotTransfer {
 interface DaemonSession {
   readonly id: string
   readonly projectPath: string
+  readonly workspaceId: string | null
   pty: IPty | null
   readonly shell: string
   readonly cwd: string
@@ -98,7 +99,7 @@ export class TerminalSessionManager {
     }
   }
 
-  async create(projectPath: string, cols: number, rows: number): Promise<TerminalCreateOutcome> {
+  async create(projectPath: string, workspaceId: string, cwd: string, cols: number, rows: number): Promise<TerminalCreateOutcome> {
     if (this.stopping || !isDimension(cols) || !isDimension(rows)) return { ok: false, reason: 'invalid' }
     if ([...this.sessions.values()].filter((session) => session.status === 'running' || session.emulator !== null).length >= MAX_SESSIONS) {
       return { ok: false, reason: 'limit' }
@@ -107,13 +108,13 @@ export class TerminalSessionManager {
     let pty: IPty
     try {
       pty = spawnPty(shell.file, shell.args, {
-        name: 'xterm-256color', cols, rows, cwd: projectPath, env: terminalEnvironment(),
+        name: 'xterm-256color', cols, rows, cwd, env: terminalEnvironment(),
         // 随包 ConPTY 透传全屏程序使用的鼠标模式；其他平台不传这个选项。
         ...(process.platform === 'win32' ? { useConptyDll: true } : {})
       })
     } catch (error) { this.options.onError(error); return { ok: false, reason: 'spawn' } }
     const session = this.newSession({
-      id: randomUUID(), projectPath, shell: shell.file, cwd: projectPath,
+      id: randomUUID(), projectPath, workspaceId, shell: shell.file, cwd,
       userTitle: null, title: null, defaultTitle: shellTitle(shell.file), cols, rows, createdAt: Date.now()
     }, pty, false)
     session.emulator = new HeadlessEmulator(cols, rows, this.options.scrollbackLines, this.options.onError,
@@ -171,13 +172,13 @@ export class TerminalSessionManager {
 
   write(id: string, data: string): boolean {
     const session = this.sessions.get(id)
-    if (this.stopping || session?.pty === null || session === undefined || session.status !== 'running') return false
+    if (this.stopping || session?.pty === null || session === undefined || session.released || session.status !== 'running') return false
     try { session.pty.write(data); return true } catch (error) { this.options.onError(error); return false }
   }
 
   resize(id: string, cols: number, rows: number): boolean {
     const session = this.sessions.get(id)
-    if (this.stopping || session === undefined || !isDimension(cols) || !isDimension(rows)) return false
+    if (this.stopping || session === undefined || session.released || !isDimension(cols) || !isDimension(rows)) return false
     if (session.cols === cols && session.rows === rows) return true
     // 冷会话保留生成画面时的尺寸，避免把旧序列误解释为新尺寸。
     if (session.status === 'exited') return true
@@ -189,15 +190,18 @@ export class TerminalSessionManager {
     return true
   }
 
-  close(id: string): void {
+  async close(id: string): Promise<void> {
     const session = this.sessions.get(id)
     if (session === undefined || this.stopping) return
-    this.sessions.delete(id)
     this.release(session, true)
+    // 清理工作树前必须等 PTY 真正退出，不能把已发送终止信号误报为已释放目录。
+    await waitForExits([session], KILL_GRACE_MS + 500)
+    if (!session.exited) throw new Error('终端进程尚未退出，未释放任务工作区。')
+    this.sessions.delete(id)
     this.options.onSessionsChanged()
   }
-  closeAll(): void {
-    for (const id of [...this.sessions.keys()]) this.close(id)
+  async closeAll(): Promise<void> {
+    await Promise.all([...this.sessions.keys()].map(id => this.close(id)))
   }
   list(projectPath: string | null): readonly TerminalSessionInfo[] {
     return [...this.sessions.values()].filter((session) => projectPath === null || session.projectPath === projectPath).map(toSessionInfo)
@@ -436,8 +440,8 @@ export class TerminalSessionManager {
     return [...this.sessions.values()].filter((session) => session.status === 'running').length
   }
   persistedRecords(): readonly PersistedSessionRecord[] {
-    return [...this.sessions.values()].map(({ id, projectPath, shell, cwd, userTitle, reportedTitle, defaultTitle, cols, rows, createdAt }) => ({
-      id, projectPath, shell, cwd, userTitle, title: reportedTitle, defaultTitle, cols, rows, createdAt
+    return [...this.sessions.values()].map(({ id, projectPath, workspaceId, shell, cwd, userTitle, reportedTitle, defaultTitle, cols, rows, createdAt }) => ({
+      id, projectPath, workspaceId, shell, cwd, userTitle, title: reportedTitle, defaultTitle, cols, rows, createdAt
     }))
   }
 
@@ -481,7 +485,7 @@ export class TerminalSessionManager {
 }
 
 function toSessionInfo(session: DaemonSession): TerminalSessionInfo {
-  return { id: session.id, projectPath: session.projectPath, title: displayTitleOf(session), shell: session.shell,
+  return { id: session.id, projectPath: session.projectPath, workspaceId: session.workspaceId, title: displayTitleOf(session), shell: session.shell,
     cwd: session.cwd, cols: session.cols, rows: session.rows, status: session.status, exitCode: session.exitCode }
 }
 /** 展示标题：用户命名优先，其次是程序上报，最后是 shell 默认名。 */

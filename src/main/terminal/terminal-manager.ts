@@ -1,8 +1,8 @@
 /**
- * 终端功能的页面契约适配层：把渲染端请求转成守护进程请求，并保持原有的项目校验与错误文案。
+ * 终端页面契约适配层：新建按显式工作区授权执行根，输入与画面读取复核原终端归属，不借用前台目录。
  *
- * 终端进程、缓冲、背压与画面状态都不在这里——它们由独立守护进程持有，应用退出后继续运行。这一层只做三件事：
- * 把页面给的项目路径收敛为已登记项目的规范路径、把守护进程的错误码翻成页面契约、把输出与退出事件转给页面。
+ * PTY、缓冲、背压和画面由独立守护进程持有；本层负责工作区占用、清单适配、错误映射和事件投递。
+ * 工作区清理前统计并收敛所属终端；运行终端须明确关闭许可，旧记录缺少环境身份时只允许查看退出画面。
  *
  * 页面暂时不在（重载、窗口关闭）时不保留输出：守护进程的画面状态是权威来源，重新挂载后按快照补齐；
  * 这里只需立刻回报消费量，让守护进程继续下发，不把额度耗在没人接收的数据上。
@@ -20,6 +20,7 @@ import type {
   TerminalExitEvent,
   TerminalListRequest,
   TerminalSessionResult,
+  TerminalSessionInfo,
   TerminalSessionsResult,
   TerminalSnapshotsResult,
   TerminalAckRequest,
@@ -30,7 +31,10 @@ import type {
   TerminalRecoveryRequest,
   TerminalWriteRequest
 } from '../../shared/terminal-api'
-import { isTerminalSessionSnapshot } from '../../shared/terminal-api'
+import { isTerminalSessionSnapshot, isTerminalSessionResult, isTerminalSessionsResult } from '../../shared/terminal-api'
+import type { WorkspaceManager } from '../workspaces/workspace-manager'
+import { workspaceError } from '../workspaces/workspace-manager'
+import { WorktreeOperationError } from '../git/worktree-service'
 import { TERMINAL_SNAPSHOT_MAX_CHARS } from '../../shared/terminal-daemon-protocol'
 import { TerminalDaemonClient } from './terminal-daemon-client'
 import type { TerminalDaemonResult } from './terminal-daemon-client'
@@ -47,6 +51,7 @@ const KNOWN_ERROR_CODES: readonly TerminalErrorCode[] = [
 ]
 
 export interface TerminalManagerOptions {
+  readonly workspaces: Pick<WorkspaceManager, 'use'>
   /** 把页面给出的项目路径收敛为已登记项目的规范路径；未登记时返回 null。 */
   readonly resolveProjectPath: (requested: string) => Promise<string | null>
   /** 下发终端输出；返回 false 表示当前没有可信页面接收。 */
@@ -79,37 +84,68 @@ export class TerminalManager {
     return this.client.hasLiveProcess
   }
 
-  /** 在已登记项目内新建终端；未登记的项目回可展示的原因。 */
+  /** 在明确工作区授权执行根内新建终端；身份失效时拒绝，不改用项目主目录。 */
   async create(request: TerminalCreateRequest): Promise<TerminalSessionResult> {
-    const projectPath = await this.options.resolveProjectPath(request.projectPath)
-    if (projectPath === null) {
-      return sessionFailure('INVALID_REQUEST', '只能为已添加的项目创建终端。')
+    try {
+      return await this.options.workspaces.use(request, 'run', async context => {
+        const result = await this.client.request({ type: 'create', projectPath: context.projectPath,
+          workspaceId: context.id, cwd: context.rootPath, cols: request.cols, rows: request.rows }, true)
+        if (!result.ok) return { ok: false, error: toTerminalError(result.error) }
+        if (!isTerminalSessionResult({ ok: true, data: result.data }) || result.data.workspaceId !== context.id
+          || result.data.projectPath !== context.projectPath || result.data.cwd !== context.rootPath) {
+          return sessionFailure('INVALID_RESPONSE', '终端响应与原工作区不一致，未接入其他环境。')
+        }
+        return { ok: true, data: result.data }
+      })
+    } catch (error) { return sessionFailure('INVALID_REQUEST', workspaceError(error).message) }
+  }
+
+  private async inventory(): Promise<readonly TerminalSessionInfo[]> {
+    const result = await this.client.request({ type: 'list', projectPath: null })
+    if (!result.ok) {
+      if (!this.client.hasLiveProcess) return []
+      throw new WorktreeOperationError('CONFLICT', result.error.message)
     }
-    const result = await this.client.request({
-      type: 'create',
-      projectPath,
-      cols: request.cols,
-      rows: request.rows
-    }, true)
-    if (!result.ok) return { ok: false, error: toTerminalError(result.error) }
-    return { ok: true, data: result.data }
+    if (!isTerminalSessionsResult({ ok: true, data: { sessions: result.data } })) throw new WorktreeOperationError('CONFLICT', '无法识别终端归属，未继续清理工作区。')
+    return result.data
+  }
+  /** 统计所属工作区的运行终端；存在无法识别归属的旧协议进程时拒绝继续任务清理。 */
+  async countWorkspaceTerminals(workspaceId: string): Promise<number> {
+    if (this.client.staleDaemon()) throw new WorktreeOperationError('CONFLICT', '旧协议终端仍在运行；请在终端管理中显式结束旧守护进程后处理任务。')
+    return (await this.inventory()).filter(session => session.workspaceId === workspaceId && session.status === 'running').length
+  }
+  /** 关闭该工作区的终端记录并等待守护进程确认；无显式许可时拒绝关闭运行终端。 */
+  async settleWorkspace(workspaceId: string, consent: boolean): Promise<void> {
+    await this.countWorkspaceTerminals(workspaceId)
+    const sessions = (await this.inventory()).filter(session => session.workspaceId === workspaceId)
+    if (!consent && sessions.some(session => session.status === 'running')) throw new WorktreeOperationError('CONFLICT', '任务关联工作区仍有运行中的终端，须明确确认关闭后才能继续。')
+    for (const session of sessions) {
+      const result = await this.client.request({ type: 'close', id: session.id })
+      if (!result.ok) throw new WorktreeOperationError('CONFLICT', result.error.message)
+    }
+  }
+  private async withSession<T>(id: string, mode: 'read' | 'run', operation: () => Promise<T>, legacyRead = false): Promise<T | { ok: false; error: TerminalError }> {
+    try {
+      const session = (await this.inventory()).find(item => item.id === id)
+      if (!session) return { ok: false, error: { code: 'TERMINAL_NOT_FOUND', message: '原终端已关闭。' } }
+      if (session.workspaceId === null) {
+        if (legacyRead && session.status === 'exited') return await operation()
+        return { ok: false, error: { code: 'INVALID_REQUEST', message: '旧终端记录仅供查看，请在明确工作区中新建终端。' } }
+      }
+      return await this.options.workspaces.use({ projectPath: session.projectPath, workspaceId: session.workspaceId }, mode, operation)
+    } catch (error) { return { ok: false, error: { code: 'INVALID_REQUEST', message: workspaceError(error).message } } }
   }
 
   /** 把页面输入写入终端；已退出或已关闭的终端回可展示的原因。 */
   async write(request: TerminalWriteRequest): Promise<TerminalCommandResult> {
-    const result = await this.client.request({ type: 'write', id: request.id, data: request.data })
-    return commandResult(result)
+    return this.withSession(request.id, 'run', async () => commandResult(await this.client.request({ type: 'write', id: request.id, data: request.data })))
   }
 
   /** 同步终端尺寸；尺寸变化会转给 PTY，让全屏程序按新尺寸重排。 */
   async resize(request: TerminalResizeRequest): Promise<TerminalCommandResult> {
-    const result = await this.client.request({
-      type: 'resize',
-      id: request.id,
-      cols: request.cols,
-      rows: request.rows
-    })
-    return commandResult(result)
+    return this.withSession(request.id, 'read', async () => commandResult(await this.client.request({
+      type: 'resize', id: request.id, cols: request.cols, rows: request.rows
+    })), true)
   }
 
   /** 给终端命名；空标题清除命名。命名随会话元数据落盘，重启后仍保留。 */
@@ -148,6 +184,9 @@ export class TerminalManager {
 
   /** 单终端分块取画面；页面解析完成后另行开启投递，实时输出不会抢在快照前进入页面。 */
   async snapshots(request: TerminalSnapshotRequest): Promise<TerminalSnapshotsResult> {
+    return this.withSession(request.id, 'read', () => this.snapshotFor(request), true)
+  }
+  private async snapshotFor(request: TerminalSnapshotRequest): Promise<TerminalSnapshotsResult> {
     let completed = false
     try {
       const result = await this.client.request({ type: 'snapshot-begin', id: request.id, deliveryId: request.deliveryId })

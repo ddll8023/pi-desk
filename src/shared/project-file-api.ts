@@ -1,12 +1,14 @@
 /**
  * 定义项目文件检索、单层目录列举、目录监听、条目路径解析、条目删除（移入系统废纸篓）与文件内容读写的 IPC 契约及跨进程响应校验。
- * 目录操作与条目删除以当前项目为根；文件内容和 Markdown 资源固定请求所属的已登记项目，绝对路径与越界路径由主进程拒绝；
+ * 文件、目录、搜索和预览均固定已登记项目及工作区身份；绝对路径与越界路径由主进程拒绝；
  * 需要绝对路径时（复制、写入终端、在文件管理器中显示）一律由主进程解析后回传，页面不自行拼接。
  * 普通文件读返回文本、图片或「不支持」，保存只接受文本并带回磁盘基线；图片导入走独立受限通道，不暴露任意二进制写入。
- * HTML 预览只登记当前文档快照与隔离容器身份，页面资源由主进程限定在所属项目内提供，不落盘草稿。
+ * HTML 预览只登记文档快照与隔离容器身份，资源固定在文档所属工作区内提供，不落盘草稿。
  * 目录监听是本契约里唯一的推送通道：页面提交「已加载的目录集合」，主进程只回报这些层里发生的变化。
  */
 import type { DesktopError } from './desktop-api'
+import { isWorkspaceTarget } from './workspace-api'
+import type { WorkspaceTarget } from './workspace-api'
 
 export const PROJECT_FILE_SEARCH_CHANNEL = 'desktop:project-file-search'
 export const PROJECT_DIRECTORY_LIST_CHANNEL = 'desktop:project-directory-list'
@@ -54,13 +56,21 @@ export const PROJECT_FILE_IMAGE_MAX_BYTES = 8 * 1024 * 1024
 export type ProjectFileEol = 'lf' | 'crlf'
 
 /**
- * 检索结果；`entries` 是相对当前项目根的 POSIX 风格路径，最多 50 条。
- * 未选择项目、目录不可读与没有匹配一样返回空数组，不区分成错误。
- * `projectPath` 是本次实际检索的项目根；未选择项目时为 null。页面据此丢弃已切换项目的迟到结果。
+ * 检索结果；entries 是相对请求工作区执行根的 POSIX 路径，候选数量由文件索引定义限制。
+ * 目录不可读或工作区失效返回错误，只有无匹配时返回空数组。
+ * projectPath 表示逻辑归属，workspaceId 固定执行根；页面据此丢弃跨工作区的迟到结果。
  */
-export interface ProjectFileSearch {
+export interface ProjectFileSearch extends WorkspaceTarget {
   readonly entries: readonly string[]
-  readonly projectPath: string | null
+}
+export interface ProjectFileSearchRequest extends WorkspaceTarget { readonly query: string }
+export function isProjectFileSearchRequest(value: unknown): value is ProjectFileSearchRequest {
+  return isRecord(value) && isWorkspaceTarget(value) && Object.keys(value).every(key => ['projectPath', 'workspaceId', 'query'].includes(key))
+    && typeof value.query === 'string' && value.query.length <= PROJECT_FILE_QUERY_MAX_CHARS
+}
+export function isProjectDirectoryListRequest(value: unknown): value is ProjectDirectoryListRequest {
+  return isRecord(value) && isWorkspaceTarget(value) && Object.keys(value).every(key => ['projectPath', 'workspaceId', 'directory'].includes(key))
+    && typeof value.directory === 'string' && value.directory.length <= PROJECT_DIRECTORY_PATH_MAX_CHARS
 }
 
 export type ProjectFileSearchResult =
@@ -70,7 +80,7 @@ export type ProjectFileSearchResult =
 /** 目录条目类型；符号链接不跟随，因此不会按它指向的目标归类。 */
 export type ProjectDirectoryEntryKind = 'directory' | 'file' | 'other'
 
-/** 单层目录里的一个条目；`path` 是相对项目根的 POSIX 路径，供后续按路径请求子层使用。 */
+/** 单层目录条目；path 相对请求工作区执行根，后续子层请求须保留同一工作区身份。 */
 export interface ProjectDirectoryEntry {
   readonly name: string
   readonly path: string
@@ -80,11 +90,10 @@ export interface ProjectDirectoryEntry {
 }
 
 /**
- * 单层目录列举结果；`directory` 是本次列举的目录相对路径，项目根为 ''。
- * `projectPath` 是本次实际列举的项目根；未选择项目时为 null，页面据此丢弃已切换项目的迟到结果。
+ * 单层目录列举结果；directory 相对请求工作区执行根，根层为 ''。
+ * 项目和工作区身份固定列举归属；不接受缺少工作区的默认目录请求。
  */
-export interface ProjectDirectoryListing {
-  readonly projectPath: string | null
+export interface ProjectDirectoryListing extends WorkspaceTarget {
   readonly directory: string
   readonly entries: readonly ProjectDirectoryEntry[]
   /** 该层条目超过上限被截断；界面提示而不是假装列全。 */
@@ -97,15 +106,17 @@ export type ProjectDirectoryListResult =
   | { readonly ok: false; readonly error: DesktopError }
 
 /** 列举请求；只接受项目内相对目录路径，根目录传空串。 */
-export interface ProjectDirectoryListRequest {
+export interface ProjectDirectoryListRequest extends WorkspaceTarget {
   readonly directory: string
 }
 
 /**
- * 目录监听请求：页面只提交「当前已加载的目录」相对路径集合，根路径由主进程决定。
- * 主进程按集合做增删（不递归），页面收起或切项目时提交新集合即可。
+ * 目录监听请求固定工作区及「当前已加载的目录」相对路径集合，根路径由主进程授权解析。
+ * 主进程按集合增删监听（不递归）；双 null 与空集合仅用于解除监听，不表示回退到默认目录。
  */
 export interface ProjectDirectoryWatchRequest {
+  readonly projectPath: string | null
+  readonly workspaceId: string | null
   readonly directories: readonly string[]
 }
 
@@ -121,21 +132,21 @@ export type ProjectDirectoryWatchResult =
 /**
  * 目录变化事件：`changed` 时 `directories` 是被改动目录的相对路径（已落在页面登记过的层内）；
  * `overflow` 表示变化过多或监听不可用，此时 `directories` 为空，页面应整树重读。
- * `projectPath` 是发生变化的项目根，页面据此丢弃已切项目的迟到事件。
+ * projectPath 是逻辑项目归属，workspaceId 标识发生变化的工作区；页面按两者隔离事件与缓存。
  */
-export interface ProjectDirectoryChange {
+export interface ProjectDirectoryChange extends WorkspaceTarget {
   readonly kind: 'changed' | 'overflow'
   readonly projectPath: string
   readonly directories: readonly string[]
 }
 
-/** 单个条目的路径请求；同样只接受项目内相对路径，项目根由主进程决定。 */
-export interface ProjectEntryPathRequest {
+/** 单条目请求固定工作区身份；路径只能相对该工作区执行根，根路径由主进程授权解析。 */
+export interface ProjectEntryPathRequest extends WorkspaceTarget {
   readonly path: string
 }
 
 /** 条目路径解析结果：`path` 是规范化后的相对路径，`absolutePath` 是主进程按平台拼出的绝对路径。 */
-export interface ProjectEntryPath {
+export interface ProjectEntryPath extends WorkspaceTarget {
   readonly path: string
   readonly absolutePath: string
 }
@@ -154,14 +165,14 @@ export type ProjectEntryDeleteResult =
   | { readonly ok: true }
   | { readonly ok: false; readonly error: DesktopError }
 
-/** 文件读写固定所属项目；路径仍必须是该已登记项目内的相对路径。 */
-export interface ProjectFileReadRequest {
+/** 文件读写固定已登记项目及工作区身份；相对路径不随前台标签变化而重新解释。 */
+export interface ProjectFileReadRequest extends WorkspaceTarget {
   readonly projectPath: string
   readonly path: string
 }
 
 /** 可编辑文本内容；`text` 已统一为 `\n` 换行，`eol` 与 `bom` 用于保存时还原原始格式。 */
-export interface ProjectFileTextContent {
+export interface ProjectFileTextContent extends WorkspaceTarget {
   readonly kind: 'text'
   readonly path: string
   readonly text: string
@@ -172,7 +183,7 @@ export interface ProjectFileTextContent {
 }
 
 /** 图片内容；`base64` 由页面转成 `data:` URL 展示，不经过任何远程地址。 */
-export interface ProjectFileImageContent {
+export interface ProjectFileImageContent extends WorkspaceTarget {
   readonly kind: 'image'
   readonly path: string
   readonly mimeType: string
@@ -182,7 +193,7 @@ export interface ProjectFileImageContent {
 }
 
 /** 不支持预览与编辑的内容：二进制或超出大小上限；只回原因，不搬运内容。 */
-export interface ProjectFileUnsupportedContent {
+export interface ProjectFileUnsupportedContent extends WorkspaceTarget {
   readonly kind: 'unsupported'
   readonly path: string
   readonly reason: 'binary' | 'too-large'
@@ -200,7 +211,7 @@ export type ProjectFileReadResult =
   | { readonly ok: false; readonly error: DesktopError }
 
 /** 写入文件请求；`expected` 为 null 表示用户已确认覆盖，跳过磁盘基线比对。 */
-export interface ProjectFileWriteRequest {
+export interface ProjectFileWriteRequest extends WorkspaceTarget {
   readonly projectPath: string
   readonly path: string
   readonly text: string
@@ -210,7 +221,7 @@ export interface ProjectFileWriteRequest {
 }
 
 /** 写入成功后的新磁盘基线；页面据此更新脏状态与后续冲突判定。 */
-export interface ProjectFileWriteData {
+export interface ProjectFileWriteData extends WorkspaceTarget {
   readonly path: string
   readonly size: number
   readonly mtimeMs: number
@@ -224,7 +235,7 @@ export type ProjectFileWriteResult =
 export interface ProjectFileStatRequest extends ProjectFileReadRequest {}
 
 /** 磁盘基线；条目已不存在时 `exists` 为 false，size 与 mtimeMs 为 0。 */
-export interface ProjectFileStatData {
+export interface ProjectFileStatData extends WorkspaceTarget {
   readonly path: string
   readonly exists: boolean
   readonly size: number
@@ -243,17 +254,17 @@ export type ProjectMarkdownImageRequest = ProjectFileReadRequest & (
   | { readonly source: 'clipboard'; readonly bytes: Uint8Array }
 )
 export type ProjectMarkdownImageResult =
-  | { readonly ok: true; readonly data: { readonly projectPath: string; readonly path: string | null; readonly reference: string | null } }
+  | { readonly ok: true; readonly data: WorkspaceTarget & { readonly path: string | null; readonly reference: string | null } }
   | { readonly ok: false; readonly error: DesktopError }
 export type ProjectMarkdownDocumentsResult =
-  | { readonly ok: true; readonly data: { readonly projectPath: string; readonly entries: readonly string[]; readonly truncated: boolean } }
+  | { readonly ok: true; readonly data: WorkspaceTarget & { readonly entries: readonly string[]; readonly truncated: boolean } }
   | { readonly ok: false; readonly error: DesktopError }
 
 /** 图片来源只认系统选择器或粘贴事件字节，不接受页面提供的外部路径。 */
 export function isProjectMarkdownImageRequest(value: unknown): value is ProjectMarkdownImageRequest {
   if (!isRecord(value)) return false
-  if (Object.keys(value).some(key => !['projectPath', 'path', 'source', 'bytes'].includes(key))) return false
-  if (!isProjectFileReadRequest({ projectPath: value.projectPath, path: value.path })) return false
+  if (Object.keys(value).some(key => !['projectPath', 'workspaceId', 'path', 'source', 'bytes'].includes(key))) return false
+  if (!isProjectFileReadRequest({ projectPath: value.projectPath, workspaceId: value.workspaceId, path: value.path })) return false
   return value.source === 'pick' ? !('bytes' in value)
     : value.source === 'clipboard' && value.bytes instanceof Uint8Array && value.bytes.byteLength > 0 && value.bytes.byteLength <= PROJECT_FILE_IMAGE_MAX_BYTES
 }
@@ -262,13 +273,13 @@ export function isProjectMarkdownImageResult(value: unknown): value is ProjectMa
   if (value.ok === false) return isProjectFileSearchResult(value)
   if (value.ok !== true || !isRecord(value.data)) return false
   const data = value.data
-  return typeof data.projectPath === 'string' && ((data.path === null && data.reference === null)
+  return isWorkspaceTarget(data) && ((data.path === null && data.reference === null)
     || (typeof data.path === 'string' && typeof data.reference === 'string'))
 }
 export function isProjectMarkdownDocumentsResult(value: unknown): value is ProjectMarkdownDocumentsResult {
   if (!isRecord(value)) return false
   if (value.ok === false) return isProjectFileSearchResult(value)
-  return value.ok === true && isRecord(value.data) && typeof value.data.projectPath === 'string'
+  return value.ok === true && isRecord(value.data) && isWorkspaceTarget(value.data)
     && typeof value.data.truncated === 'boolean' && Array.isArray(value.data.entries)
     && value.data.entries.length <= 20000 && value.data.entries.every(entry => typeof entry === 'string' && entry.length <= PROJECT_DIRECTORY_PATH_MAX_CHARS)
 }
@@ -279,7 +290,7 @@ export interface ProjectHtmlPreviewRequest extends ProjectFileReadRequest {
   readonly previewId: string | null
 }
 
-export interface ProjectHtmlPreviewData {
+export interface ProjectHtmlPreviewData extends WorkspaceTarget {
   readonly previewId: string
   readonly partition: string
   readonly url: string
@@ -302,8 +313,8 @@ function isPreviewId(value: unknown): value is string {
 }
 
 export function isProjectHtmlPreviewRequest(value: unknown): value is ProjectHtmlPreviewRequest {
-  if (!isRecord(value) || Object.keys(value).some(key => !['projectPath', 'path', 'text', 'previewId'].includes(key))) return false
-  return isProjectFileReadRequest({ projectPath: value.projectPath, path: value.path })
+  if (!isRecord(value) || Object.keys(value).some(key => !['projectPath', 'workspaceId', 'path', 'text', 'previewId'].includes(key))) return false
+  return isProjectFileReadRequest({ projectPath: value.projectPath, workspaceId: value.workspaceId, path: value.path })
     && typeof value.path === 'string' && /\.html?$/i.test(value.path)
     && typeof value.text === 'string' && value.text.length <= PROJECT_FILE_TEXT_MAX_BYTES
     && (value.previewId === null || isPreviewId(value.previewId))
@@ -318,7 +329,7 @@ export function isProjectHtmlPreviewResult(value: unknown): value is ProjectHtml
   if (value.ok === false) return isProjectFileSearchResult(value)
   if (value.ok !== true || !isRecord(value.data)) return false
   const data = value.data
-  if (!isPreviewId(data.previewId) || data.partition !== `${PROJECT_HTML_PREVIEW_PARTITION_PREFIX}${data.previewId}` || typeof data.url !== 'string') return false
+  if (!isWorkspaceTarget(data) || !isPreviewId(data.previewId) || data.partition !== `${PROJECT_HTML_PREVIEW_PARTITION_PREFIX}${data.previewId}` || typeof data.url !== 'string') return false
   try {
     const url = new URL(data.url)
     return url.protocol === `${PROJECT_HTML_PREVIEW_SCHEME}:` && url.hostname === data.previewId && !url.port && !url.username && !url.password
@@ -334,11 +345,11 @@ export interface ProjectFileApi {
   readonly releaseProjectHtmlPreview: (request: ProjectHtmlPreviewReleaseRequest) => Promise<ProjectHtmlPreviewReleaseResult>
   readonly listMarkdownDocuments: (request: ProjectFileReadRequest) => Promise<ProjectMarkdownDocumentsResult>
   readonly importMarkdownImage: (request: ProjectMarkdownImageRequest) => Promise<ProjectMarkdownImageResult>
-  /** 在当前项目内按查询串检索文件路径；不接受目录参数，根路径由主进程决定。 */
-  readonly searchProjectFiles: (query: string) => Promise<ProjectFileSearchResult>
-  /** 列举当前项目内某一层的目录条目；不接受绝对路径，根路径由主进程决定。 */
+  /** 在明确工作区内检索文件路径；不接受任意执行目录。 */
+  readonly searchProjectFiles: (request: ProjectFileSearchRequest) => Promise<ProjectFileSearchResult>
+  /** 列举明确工作区的一层目录；路径相对授权执行根，不接受绝对路径。 */
   readonly listProjectDirectory: (request: ProjectDirectoryListRequest) => Promise<ProjectDirectoryListResult>
-  /** 提交当前项目里需要监听的目录集合；主进程按集合增删监听，不递归。 */
+  /** 提交明确工作区的监听目录集合；主进程按集合增删，不递归，空目标仅用于解除监听。 */
   readonly watchProjectDirectories: (request: ProjectDirectoryWatchRequest) => Promise<ProjectDirectoryWatchResult>
   /** 订阅目录变化；回调只在主进程登记的层内触发，返回取消订阅函数。 */
   readonly onProjectDirectoryChanged: (listener: (change: ProjectDirectoryChange) => void) => () => void
@@ -361,8 +372,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function isProjectFileSearch(value: unknown): value is ProjectFileSearch {
-  if (!isRecord(value)) return false
-  if (value.projectPath !== null && typeof value.projectPath !== 'string') return false
+  if (!isRecord(value) || !isWorkspaceTarget(value)) return false
   return Array.isArray(value.entries)
     && value.entries.every((entry) => typeof entry === 'string' && entry !== '')
 }
@@ -388,8 +398,7 @@ function isProjectDirectoryEntry(value: unknown): value is ProjectDirectoryEntry
 }
 
 function isProjectDirectoryListing(value: unknown): value is ProjectDirectoryListing {
-  if (!isRecord(value)) return false
-  if (value.projectPath !== null && typeof value.projectPath !== 'string') return false
+  if (!isRecord(value) || !isWorkspaceTarget(value)) return false
   if (typeof value.directory !== 'string' || typeof value.truncated !== 'boolean') return false
   return Array.isArray(value.entries) && value.entries.every(isProjectDirectoryEntry)
 }
@@ -404,12 +413,13 @@ export function isProjectDirectoryListResult(value: unknown): value is ProjectDi
 }
 
 /**
- * 监听请求校验：只接受 `directories` 一个字段，且必须是字符串数组；
+ * 监听请求校验：固定项目与工作区，directories 必须是字符串数组；双 null 仅用于解除全部监听；
  * 逐项范围校验（越界、绝对路径、超长）在主进程完成，这里只挡住结构异常。
  */
 export function isProjectDirectoryWatchRequest(value: unknown): value is ProjectDirectoryWatchRequest {
   if (!isRecord(value)) return false
-  if (Object.keys(value).some((key) => key !== 'directories')) return false
+  if (Object.keys(value).some((key) => !['projectPath', 'workspaceId', 'directories'].includes(key))) return false
+  if (!isWorkspaceTarget(value) && !(value.projectPath === null && value.workspaceId === null && Array.isArray(value.directories) && value.directories.length === 0)) return false
   return Array.isArray(value.directories)
     && value.directories.every((entry) => (
       typeof entry === 'string' && entry.length <= PROJECT_DIRECTORY_PATH_MAX_CHARS
@@ -432,7 +442,7 @@ export function isProjectDirectoryWatchResult(value: unknown): value is ProjectD
 /** 目录变化事件校验：`changed` 必须给出目录，`overflow` 必须是空列表，未知 kind 一律拒绝。 */
 export function isProjectDirectoryChange(value: unknown): value is ProjectDirectoryChange {
   if (!isRecord(value)) return false
-  if (typeof value.projectPath !== 'string' || value.projectPath === '') return false
+  if (!isWorkspaceTarget(value)) return false
   if (!Array.isArray(value.directories) || !value.directories.every((entry) => typeof entry === 'string')) return false
   if (value.kind === 'changed') return value.directories.length > 0
   if (value.kind === 'overflow') return value.directories.length === 0
@@ -440,7 +450,7 @@ export function isProjectDirectoryChange(value: unknown): value is ProjectDirect
 }
 
 function isProjectEntryPath(value: unknown): value is ProjectEntryPath {
-  if (!isRecord(value)) return false
+  if (!isRecord(value) || !isWorkspaceTarget(value)) return false
   return typeof value.path === 'string'
     && value.path !== ''
     && value.path.length <= PROJECT_DIRECTORY_PATH_MAX_CHARS
@@ -450,8 +460,8 @@ function isProjectEntryPath(value: unknown): value is ProjectEntryPath {
 
 /** 条目路径请求与目录列举同一口径：只接受非空且不超过长度上限的相对路径字符串。 */
 export function isProjectEntryPathRequest(value: unknown): value is ProjectEntryPathRequest {
-  if (!isRecord(value)) return false
-  if (Object.keys(value).some((key) => key !== 'path')) return false
+  if (!isRecord(value) || !isWorkspaceTarget(value)) return false
+  if (Object.keys(value).some((key) => !['projectPath', 'workspaceId', 'path'].includes(key))) return false
   return typeof value.path === 'string'
     && value.path !== ''
     && value.path.length <= PROJECT_DIRECTORY_PATH_MAX_CHARS
@@ -460,14 +470,10 @@ export function isProjectEntryPathRequest(value: unknown): value is ProjectEntry
 /** 项目归属只做有界结构校验；主进程继续核对项目登记及路径安全。 */
 export function isProjectFileReadRequest(value: unknown): value is ProjectFileReadRequest {
   if (!isRecord(value)) return false
-  return Object.keys(value).every(key => key === 'projectPath' || key === 'path')
-    && isFileProjectPath(value.projectPath)
+  return Object.keys(value).every(key => ['projectPath', 'workspaceId', 'path'].includes(key))
+    && isWorkspaceTarget(value)
     && typeof value.path === 'string' && value.path !== ''
     && value.path.length <= PROJECT_DIRECTORY_PATH_MAX_CHARS
-}
-
-function isFileProjectPath(value: unknown): value is string {
-  return typeof value === 'string' && value.trim() !== '' && value.length <= 4096
 }
 
 export function isProjectEntryPathResult(value: unknown): value is ProjectEntryPathResult {
@@ -506,7 +512,7 @@ function isFileMetric(value: unknown): value is number {
 
 /** 文本、图片与「不支持」三类内容各自校验字段，未知 kind 一律拒绝。 */
 function isProjectFileContent(value: unknown): value is ProjectFileContent {
-  if (!isRecord(value)) return false
+  if (!isRecord(value) || !isWorkspaceTarget(value)) return false
   if (typeof value.path !== 'string' || value.path === '') return false
   if (!isFileMetric(value.size) || !isFileMetric(value.mtimeMs)) return false
 
@@ -541,12 +547,12 @@ export function isProjectFileReadResult(value: unknown): value is ProjectFileRea
 export function isProjectFileWriteRequest(value: unknown): value is ProjectFileWriteRequest {
   if (!isRecord(value)) return false
   if (Object.keys(value).some((key) => (
-    key !== 'projectPath' && key !== 'path' && key !== 'text' && key !== 'eol' && key !== 'bom' && key !== 'expected'
+    key !== 'projectPath' && key !== 'workspaceId' && key !== 'path' && key !== 'text' && key !== 'eol' && key !== 'bom' && key !== 'expected'
   ))) return false
   if (typeof value.path !== 'string' || value.path === '' || value.path.length > PROJECT_DIRECTORY_PATH_MAX_CHARS) {
     return false
   }
-  if (!isFileProjectPath(value.projectPath) || typeof value.text !== 'string') return false
+  if (!isWorkspaceTarget(value) || typeof value.text !== 'string') return false
   if (value.eol !== 'lf' && value.eol !== 'crlf') return false
   if (typeof value.bom !== 'boolean') return false
   if (value.expected === null) return true
@@ -559,7 +565,7 @@ export function isProjectFileWriteResult(value: unknown): value is ProjectFileWr
   if (!isRecord(value)) return false
   if (value.ok === true) {
     const data = value.data
-    return isRecord(data)
+    return isRecord(data) && isWorkspaceTarget(data)
       && typeof data.path === 'string' && data.path !== ''
       && isFileMetric(data.size) && isFileMetric(data.mtimeMs)
   }
@@ -573,7 +579,7 @@ export function isProjectFileStatResult(value: unknown): value is ProjectFileSta
   if (!isRecord(value)) return false
   if (value.ok === true) {
     const data = value.data
-    return isRecord(data)
+    return isRecord(data) && isWorkspaceTarget(data)
       && typeof data.path === 'string' && data.path !== ''
       && typeof data.exists === 'boolean'
       && isFileMetric(data.size) && isFileMetric(data.mtimeMs)

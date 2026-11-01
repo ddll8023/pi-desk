@@ -74,7 +74,7 @@ async function handleRequest(request: TerminalDaemonRequest): Promise<TerminalDa
     case 'status': return { ok: true, data: { ...sessions.status(), buildId } }
     case 'list': return { ok: true, data: sessions.list(request.projectPath) }
     case 'create': {
-      const outcome = await sessions.create(request.projectPath, request.cols, request.rows)
+      const outcome = await sessions.create(request.projectPath, request.workspaceId, request.cwd, request.cols, request.rows)
       if (outcome.ok) return { ok: true, data: outcome.info }
       return { ok: false, error: outcome.reason === 'limit'
         ? { code: 'TERMINAL_LIMIT_REACHED', message: '终端资源已达上限，请关闭一个运行中的终端或等待输出保存。' }
@@ -83,8 +83,8 @@ async function handleRequest(request: TerminalDaemonRequest): Promise<TerminalDa
     case 'write': return commandReply(sessions.write(request.id, request.data), '该终端已退出或已关闭，不能再输入。')
     case 'resize': return commandReply(sessions.resize(request.id, request.cols, request.rows), '该终端已关闭。')
     case 'rename': return commandReply(sessions.rename(request.id, request.title), '该终端已关闭或标题不合法。')
-    case 'close': sessions.close(request.id); return { ok: true, data: null }
-    case 'close-all': sessions.closeAll(); return { ok: true, data: null }
+    case 'close': await sessions.close(request.id); return { ok: true, data: null }
+    case 'close-all': await sessions.closeAll(); return { ok: true, data: null }
     case 'ack': sessions.acknowledge(request.id, request.deliveryId, request.seqEnd); return { ok: true, data: null }
     case 'detach': sessions.detach(request.id, request.deliveryId); return { ok: true, data: null }
     case 'snapshot-begin': return { ok: true, data: await sessions.beginSnapshot(request.id, request.deliveryId) }

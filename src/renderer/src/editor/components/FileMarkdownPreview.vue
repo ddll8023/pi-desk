@@ -14,6 +14,7 @@ const props = defineProps<{
   readonly text: string
   readonly path: string
   readonly projectPath: string
+  readonly workspaceId: string
   readonly active: boolean
   readonly showFrontmatter: boolean
 }>()
@@ -127,7 +128,7 @@ async function loadImages(element: HTMLElement, current: number): Promise<void> 
     if (current !== revision || !props.active) return
     await Promise.all(queue.slice(start, start + 4).map(async frame => {
       const label = frame.dataset.imageLabel ?? '图片'
-      const source = await loadMarkdownImage(props.projectPath, props.path, frame.dataset.imagePath ?? '')
+      const source = await loadMarkdownImage(props.projectPath, props.path, frame.dataset.imagePath ?? '', props.workspaceId)
       if (current !== revision || !props.active || !frame.isConnected) return
       if (!source.url || chars + source.url.length > 32 * 1024 * 1024) {
         frame.textContent = `${label}（${source.error ?? '图片总量超出上限'}）`
@@ -150,7 +151,7 @@ function invalidate(): void {
   clearMatches(); clearMarkdownImageCache(); revision += 1; needsMount = true
   if (props.active) void nextTick(mountReadonly)
 }
-watch([() => props.text, () => props.path, () => props.projectPath], invalidate)
+watch([() => props.text, () => props.path, () => props.projectPath, () => props.workspaceId], invalidate)
 watch(() => props.active, value => {
   if (value && needsMount) void nextTick(mountReadonly)
   else if (!value) { revision += 1; needsMount = true; clearSearch() }

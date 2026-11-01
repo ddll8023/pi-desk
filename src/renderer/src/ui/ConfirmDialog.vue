@@ -1,4 +1,4 @@
-<!-- 需要用户确认的操作对话框：运行中切换带 allowInterrupt 重试，信任决定重置由调用方执行对应动作，取消不做任何改动。 -->
+<!-- 通用确认弹窗：保留既有描述与详情，允许通过 body 插槽补充选项，并由调用方控制确认按钮是否可用。 -->
 <script setup lang="ts">
 import { nextTick, onUnmounted, ref, useId, watch } from 'vue'
 import AppButton from './AppButton.vue'
@@ -10,11 +10,16 @@ const props = withDefaults(defineProps<{
   readonly description: string
   readonly detail: string
   readonly confirmLabel: string
+  /** 状态未就绪或操作进行中时禁止确认；默认不影响既有调用方。 */
+  readonly confirmDisabled?: boolean
   /** 确认按钮的视觉语义；破坏性操作用 danger，纯提示用 default。 */
   readonly confirmVariant?: 'default' | 'primary' | 'danger'
 }>(), {
-  confirmVariant: 'danger'
+  confirmVariant: 'danger',
+  confirmDisabled: false
 })
+
+defineSlots<{ body?: () => unknown }>()
 
 const emit = defineEmits<{
   confirm: []
@@ -23,6 +28,10 @@ const emit = defineEmits<{
 
 const panel = ref<HTMLElement | null>(null)
 const titleId = useId()
+
+function confirm(): void {
+  if (!props.confirmDisabled) emit('confirm')
+}
 
 function onKeydown(event: KeyboardEvent): void {
   if (event.key === 'Escape') emit('cancel')
@@ -72,10 +81,11 @@ onUnmounted(() => {
       <div class="dialog-body">
         <p class="text-sm">{{ description }}</p>
         <p class="detail-note">{{ detail }}</p>
+        <slot name="body" />
       </div>
       <div class="dialog-footer">
         <AppButton @click="emit('cancel')">取消</AppButton>
-        <AppButton :variant="props.confirmVariant" @click="emit('confirm')">
+        <AppButton :variant="props.confirmVariant" :disabled="props.confirmDisabled" @click="confirm">
           {{ confirmLabel }}
         </AppButton>
       </div>

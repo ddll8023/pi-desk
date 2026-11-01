@@ -5,7 +5,7 @@
  * 与主进程「页面只能给相对路径」的边界一致。位图按主进程返回的 MIME 直接内联，SVG 是文本，
  * 用文本拼 `data:image/svg+xml` 展示（脚本不会执行，`img` 上下文本身也不运行 SVG 脚本）。
  *
- * 结果按「项目根 + 路径」缓存并合并并发请求，避免同一张图在滚动或重渲染时反复跨进程搬运；
+ * 结果按「工作区 + 项目 + 路径」缓存并合并并发请求，避免同一张图在滚动或重渲染时反复跨进程搬运；
  * 失败不缓存，重新载入文件时可以再试。
  */
 import { readProjectFile } from './services/project-file'
@@ -28,7 +28,8 @@ const cache = new Map<string, Promise<MarkdownImageSource>>()
 export async function loadMarkdownImage(
   projectPath: string,
   documentPath: string,
-  reference: string
+  reference: string,
+  workspaceId: string
 ): Promise<MarkdownImageSource> {
   if (/^https?:\/\//i.test(reference.trim())) {
     return { url: null, error: '远程图片不加载' }
@@ -38,11 +39,11 @@ export async function loadMarkdownImage(
     return { url: null, error: '图片不在项目内' }
   }
 
-  const key = `${projectPath}\n${path}`
+  const key = `${workspaceId}\n${projectPath}\n${path}`
   const cached = cache.get(key)
   if (cached !== undefined) return cached
 
-  const pending = readImage(projectPath, path)
+  const pending = readImage(projectPath, path, workspaceId)
   cache.set(key, pending)
   if (cache.size > CACHE_LIMIT) cache.clear()
   const result = await pending
@@ -57,11 +58,12 @@ export function clearMarkdownImageCache(): void {
 }
 
 /** 读取并转换成可直接放进 `img.src` 的地址；失败原因保持可展示。 */
-async function readImage(projectPath: string, path: string): Promise<MarkdownImageSource> {
-  const result = await readProjectFile(projectPath, path)
+async function readImage(projectPath: string, path: string, workspaceId: string): Promise<MarkdownImageSource> {
+  const result = await readProjectFile(projectPath, path, workspaceId)
   if (!result.ok) return { url: null, error: result.error.message }
 
   const content = result.data
+  if (content.workspaceId !== workspaceId || content.projectPath !== projectPath) return { url: null, error: '图片响应不属于原工作区。' }
   if (content.kind === 'image') {
     return { url: `data:${content.mimeType};base64,${content.base64}`, error: null }
   }

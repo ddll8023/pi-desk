@@ -21,6 +21,7 @@ import { usePreferencesStore } from '../../preferences/stores/preferences'
 import { useRuntimeStore } from './runtime'
 import { listSessions, openSession, reloadSession, deleteSession, readSessionFirstPage } from '../services/session'
 import { useWorkspaceTabsStore } from '../../workspace/stores/workspace-tabs'
+import { useTaskWorkspacesStore } from '../../workspace/stores/task-workspaces'
 import type { ChatOpenIntent } from '../../workspace/stores/workspace-tabs'
 
 /** `idle` 表示尚未读取该项目的列表；读取中、成功与失败各占一档。 */
@@ -362,6 +363,7 @@ export const useSessionStore = defineStore('session', () => {
     const tabs = useWorkspaceTabsStore()
     const key = tabs.prepareOpenTab(targetPath, sessionId, preferredTabKey)
     if (key === null) return
+    const workspaceId = tabs.workspaceIdForTab(targetPath, key)
     const sequence = ++openSequence
     // 日志读取不排队：先把已有历史显示出来，打开动作照旧串行提交；失败或过期都静默降级。
     // 同一会话已经在展示日志历史时不重复请求：补提交的打开会因为重复清空再重发而闪一下。
@@ -369,7 +371,7 @@ export const useSessionStore = defineStore('session', () => {
     if (sessionId === null || runtime.logSessionId !== sessionId) {
       runtime.clearPreview()
       const logToken = ++logSequence
-      if (sessionId !== null) void loadLogPage(runtime, targetPath, sessionId, logToken)
+      if (sessionId !== null) void loadLogPage(runtime, targetPath, sessionId, logToken, key)
     }
     openingProjectPath.value = targetPath
     clearPendingTarget()
@@ -387,8 +389,7 @@ export const useSessionStore = defineStore('session', () => {
       }
       // 同一空标签的前一次打开可能刚收敛；此时复用实际身份，不能再次按 null 新建并遗留旧实例。
       const requestedSessionId = sessionId ?? tabs.sessionIdForTab(targetPath, key)
-      const worktreePath = tabs.tabWorktrees[key]?.path ?? null
-      const result = await openSession(targetPath, requestedSessionId, allowInterrupt, worktreePath)
+      const result = await openSession(targetPath, requestedSessionId, allowInterrupt, workspaceId)
       if (result.ok) {
         if (result.data.projectPath !== targetPath) {
           if (sequence === openSequence) actionError.value = {
@@ -398,7 +399,9 @@ export const useSessionStore = defineStore('session', () => {
         }
         // 打开不再回传列表：侧栏由项目切换、删除、回退与新增会话落盘后的补读维护，
         // 切换链不等目录扫描，列表读取失败也不会把已完成的切换报成失败。
+        useTaskWorkspacesStore().accept(result.data.workspace)
         const projectAlive = projectStore.projects.some(project => project.path === targetPath)
+        tabs.bindWorkspace(targetPath, key, result.data.workspace.id)
         // 实例身份即使迟到也只能绑定原标签，不能按新的前台或空标签重新猜测。
         const bound = projectAlive && tabs.syncOpenTab(result.data.openedSessionId, targetPath, key,
           result.data.runId, sequence === openSequence && currentProjectPath() === targetPath)
@@ -437,19 +440,22 @@ export const useSessionStore = defineStore('session', () => {
    * 日志首页：命中就先把首页历史放进展示位，绑定完成后由权威投影接管。
    * 成功后展示目标固定为该项目与会话，后续翻页、展开轮次与续段由运行时按同一目标继续读取。
    * 读取只是可放弃的加速，失败、结果不属于请求目标或被更晚的选择取代时都不写入，
-   * 界面退回原来的等待呈现；它不改变任何文件、占用或信任判定。
+   * 界面退回原来的等待呈现；它不写会话日志，不改变占用或信任判定，成功后将主进程解析的工作区归属绑定到原标签。
    * 首页读到过期时由 `readSessionFirstPage` 重发一次，重发仍失败就静默降级。
    */
   async function loadLogPage(
     runtime: ReturnType<typeof useRuntimeStore>,
     projectPath: string,
     sessionId: string,
-    token: number
+    token: number,
+    tabKey: string
   ): Promise<void> {
     const result = await readSessionFirstPage(projectPath, sessionId)
     if (token !== logSequence || !result.ok) return
     if (result.data.projectPath !== projectPath || result.data.sessionId !== sessionId) return
     if (result.data.data.kind !== 'page') return
+    useTaskWorkspacesStore().accept(result.data.workspace)
+    useWorkspaceTabsStore().bindWorkspace(projectPath, tabKey, result.data.workspace.id)
     runtime.applyLogPage(result.data.data, { projectPath, sessionId })
   }
 
@@ -521,6 +527,7 @@ export const useSessionStore = defineStore('session', () => {
       if (result.ok) {
         pendingReload.value = false
         awaitingInterrupt.value = false
+        useTaskWorkspacesStore().accept(result.data.workspace)
         // 会话已重建，它读到的就是已保存的开关值：在这里收敛「待重新加载」状态。
         // 模型页、资源页与设置页都走同一个入口，不靠调用方各自标记。
         const preferencesStore = usePreferencesStore()

@@ -15,7 +15,7 @@
 | `src/main/projects/project-manager.ts` | 项目列表、候选添加、切换、移除与 Runtime 协作 |
 | `src/main/shared/project-path.ts` | 项目绝对路径规范化与显示名 |
 | `src/main/trust/trust-manager.ts` | 受保护项目资源探测、信任状态与决定保存 |
-| `src/main/trust/guards.ts` | 当前项目的信任门禁：探测是否需要信任决定，并为 Git 写操作提供统一放行判断 |
+| `src/main/trust/guards.ts` | 项目信任门禁：区分当前项目查询与操作所属项目复核；为 Git 写操作提供统一放行判断 |
 | `src/shared/project-api.ts` | 项目请求、列表、选择结果与运行时校验 |
 | `src/shared/trust-api.ts` | 信任资源、状态与决定契约 |
 | `src/renderer/src/projects/stores/project.ts` | 项目展示副本、候选添加、串行选择及操作错误 |
@@ -33,7 +33,7 @@
 - [F-config](shared.md#f-configdesktop-配置混合)：`src/main/config/desktop-config-store.ts` 是项目列表、当前项目、信任决定的唯一持久化入口。
 - [会话](sessions-chat.md)：`src/main/sessions/session-run-registry.ts`、`src/main/sessions/sdk-runtime-bridge.ts` 提供占用查询、前台选择与项目范围关闭。
 - [终端](terminal-commands.md)：项目移除成功后，主进程使用原规范路径另行请求关闭该项目终端。
-- [Git](git.md)：Git 写动作经主进程的项目级信任拦截。
+- [Git](git.md)：Git 写动作按操作所属项目复核信任，不在等待期间重新读取前台项目。
 
 ## 关键流程
 
@@ -52,4 +52,4 @@
 
 项目与信任写入 `desktop-config.json`，不写项目目录里的 Pi 配置。候选状态只在内存，桥接时由服务重建普通对象，不传 Vue 代理。
 
-信任表示是否允许加载或执行受保护项目资源，不代表文件隔离、网络隔离或工具权限沙箱。同一项目多会话仍访问共享工作目录。项目路径的规范化、大小写比较和前台项目选择不能代替运行实例的授权归属。
+信任表示是否允许加载或执行受保护项目资源，不代表文件隔离、网络隔离或工具权限沙箱。同一工作区内多会话仍访问该工作区执行根；任务工作区提供独立工作树物理隔离，但仍受相同的系统权限约束。项目路径的规范化、大小写比较和前台项目选择不能代替运行实例的授权归属。

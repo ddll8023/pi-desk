@@ -4,11 +4,14 @@
  * 页面逐终端取得有容量上限的画面，解析完成后确认恢复，随后接收实时输出。
  * 数据确认带投递代际与累计进度；迟到或重复确认不会释放其他页面的额度。
  *
- * 边界：页面只能给出已登记项目的路径与终端标识，shell、环境变量与工作目录都由主进程决定；
- * 终端进程与其缓冲由独立守护进程持有，应用退出后继续运行，页面卸载、标签切换、项目切换与应用重启
- * 都不结束终端。重新接回时先取快照（滚动历史与模式恢复序列），再接实时输出。
+ * 边界：新建固定已登记项目与工作区身份，后续操作按终端标识复核原归属；shell、环境变量与执行目录由主进程决定。
+ * 终端进程与缓冲由独立守护进程持有，页面卸载、标签或项目切换不结束终端；退出应用按用户选择收敛或继续后台运行。
+ * 任务工作区清理须明确确认关闭运行终端。重新接回时先取快照（滚动历史与模式恢复序列），再接实时输出。
  * 字符数一律按 UTF-16 码元（JS 字符串长度）计，下发与确认必须同一口径。
  */
+import { isWorkspaceId, isWorkspaceTarget } from './workspace-api'
+import type { WorkspaceTarget } from './workspace-api'
+
 export const TERMINAL_CREATE_CHANNEL = 'desktop:terminal-create'
 export const TERMINAL_WRITE_CHANNEL = 'desktop:terminal-write'
 export const TERMINAL_RESIZE_CHANNEL = 'desktop:terminal-resize'
@@ -69,6 +72,8 @@ export interface TerminalSessionInfo {
   readonly id: string
   /** 终端所属项目路径；终端的展示与收敛都按它分组。 */
   readonly projectPath: string
+  /** 旧冷记录没有工作区身份，只能查看，不据此创建可执行环境。 */
+  readonly workspaceId: string | null
   /**
    * 展示标题：用户命名优先，其次是程序上报的标题，最后是 shell 可执行文件名。
    * 均由守护进程计算并随会话元数据落盘，命名走 `renameTerminal`。
@@ -76,7 +81,7 @@ export interface TerminalSessionInfo {
   readonly title: string
   /** 实际启动的 shell 可执行文件；用于界面展示与排障。 */
   readonly shell: string
-  /** 终端启动时的工作目录；等于创建时的项目路径。 */
+  /** 终端启动时固定的执行目录；任务终端为任务工作区根。 */
   readonly cwd: string
   readonly cols: number
   readonly rows: number
@@ -85,9 +90,8 @@ export interface TerminalSessionInfo {
   readonly exitCode: number | null
 }
 
-/** 创建请求：只接受已登记项目路径与初始尺寸，不接受 shell、环境变量或工作目录。 */
-export interface TerminalCreateRequest {
-  readonly projectPath: string
+/** 创建请求固定项目、工作区身份与初始尺寸，不接受 shell、环境变量或任意执行目录。 */
+export interface TerminalCreateRequest extends WorkspaceTarget {
   readonly cols: number
   readonly rows: number
 }
@@ -208,7 +212,7 @@ export type TerminalDaemonStatusResult =
   | { readonly ok: false; readonly error: TerminalError }
 
 export interface TerminalApi {
-  /** 在已添加的项目内新建终端；shell、环境变量与工作目录都由主进程决定。 */
+  /** 在已授权工作区内新建终端；失效环境不切回项目目录，shell 与环境变量由主进程决定。 */
   readonly createTerminal: (request: TerminalCreateRequest) => Promise<TerminalSessionResult>
   /** 把用户输入写入终端；数据长度有上限，超出按非法请求拒绝。 */
   readonly writeTerminal: (request: TerminalWriteRequest) => Promise<TerminalCommandResult>
@@ -284,6 +288,7 @@ function isTerminalSessionInfo(value: unknown): value is TerminalSessionInfo {
   if (!isRecord(value)) return false
   return isTerminalId(value.id)
     && isTerminalProjectPath(value.projectPath)
+    && (value.workspaceId === null || isWorkspaceId(value.workspaceId))
     && typeof value.title === 'string'
     && typeof value.shell === 'string'
     && value.shell !== ''
@@ -412,8 +417,8 @@ export function isTerminalExitEvent(value: unknown): value is TerminalExitEvent 
 
 export function isTerminalCreateRequest(value: unknown): value is TerminalCreateRequest {
   if (!isRecord(value)) return false
-  if (Object.keys(value).some((key) => key !== 'projectPath' && key !== 'cols' && key !== 'rows')) return false
-  return isTerminalProjectPath(value.projectPath) && isDimension(value.cols) && isDimension(value.rows)
+  if (Object.keys(value).some((key) => !['projectPath', 'workspaceId', 'cols', 'rows'].includes(key))) return false
+  return isWorkspaceTarget(value) && isDimension(value.cols) && isDimension(value.rows)
 }
 
 export function isTerminalWriteRequest(value: unknown): value is TerminalWriteRequest {

@@ -59,8 +59,12 @@ watch(panelCollapsed, (collapsed) => {
   draggingWidth.value = null
   resizing.value = false
 })
-const projectName = computed(() => currentProject.value?.name ?? '未选择项目')
-const projectPath = computed(() => currentProject.value?.path ?? '尚未选择项目')
+const projectName = computed(() => {
+  const name = currentProject.value?.name ?? '未选择项目'
+  const context = directoryStore.context
+  return context?.kind === 'task' ? `${name} · ${context.branch ?? '并行任务'}` : name
+})
+const projectPath = computed(() => directoryStore.context?.rootPath ?? (currentProject.value ? '正在解析标签工作区…' : '尚未选择项目'))
 const showingGit = computed(() => rightPanelTab.value === 'source-control')
 const refreshLabel = computed(() => (showingGit.value ? '刷新 Git 状态' : '刷新文件树'))
 

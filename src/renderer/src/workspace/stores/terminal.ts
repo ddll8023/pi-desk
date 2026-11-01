@@ -10,6 +10,7 @@ import {
   stopTerminalDaemon as stopTerminalDaemonBridge, subscribeTerminalDaemonStatus, subscribeTerminalEvents, writeTerminal
 } from '../services/terminal'
 import { useProjectStore } from '../../projects/stores/project'
+import { useTaskWorkspacesStore } from './task-workspaces'
 
 type TerminalWriter = (event: TerminalDataEvent, consumed: () => void) => void
 interface WriterEntry {
@@ -20,6 +21,7 @@ interface WriterEntry {
 }
 export const useTerminalStore = defineStore('terminal', () => {
   const projectStore = useProjectStore()
+  const workspaces = useTaskWorkspacesStore()
   const sessions = ref<readonly TerminalSessionInfo[]>([])
   const titles = ref<Record<string, string>>({})
   /** 已由用户命名的终端：实时上报的 OSC 标题不再参与展示，避免盖回自定义名字。 */
@@ -109,25 +111,30 @@ export const useTerminalStore = defineStore('terminal', () => {
     for (const id of pendingExits.keys()) if (!alive.has(id) && !creating.value && loadPromise === null) pendingExits.delete(id)
   }
 
-  async function createTerminal(projectPath: string | null = currentProjectPath.value): Promise<string | null> {
+  async function createTerminal(projectPath: string | null = currentProjectPath.value, workspaceId?: string | null): Promise<string | null> {
     if (projectPath === null) { error.value = '先选择项目，再新建终端。'; return null }
     // 前一次创建还在途：给可见原因，避免重复点击表现为「点了没反应」。
     if (creating.value) { error.value = '正在创建终端，请稍候。'; return null }
+    const requestedId = workspaceId === undefined ? workspaces.selected(projectPath)?.id ?? null : workspaceId
     creating.value = true
     mutationVersion += 1
     error.value = null
     try {
-      const result = await createTerminalBridge({ projectPath, cols: 80, rows: 24 })
+      const workspace = await workspaces.ensure(projectPath, requestedId)
+      if (workspace.phase !== 'ready') throw new Error('原工作区不可启动终端，未切回主目录。')
+      const result = await createTerminalBridge({ projectPath, workspaceId: workspace.id, cols: 80, rows: 24 })
       if (!result.ok) { error.value = result.error.message; return null }
       if (projectStore.view.phase === 'ready' && !projectStore.projects.some((project) => project.path === projectPath)) {
         await closeTerminalBridge(result.data.id)
         return null
       }
+      if (result.data.workspaceId !== workspace.id || result.data.projectPath !== projectPath) throw new Error('新终端不属于请求工作区。')
       const exitCode = pendingExits.get(result.data.id)
       const session = exitCode === undefined ? result.data : { ...result.data, status: 'exited' as const, exitCode }
       sessions.value = [...sessions.value.filter((entry) => entry.id !== session.id), session]
       return session.id
-    } finally { mutationVersion += 1; creating.value = false; pruneLocalState() }
+    } catch (caught) { error.value = caught instanceof Error ? caught.message : '创建终端失败。'; return null }
+    finally { mutationVersion += 1; creating.value = false; pruneLocalState() }
   }
 
   async function closeTerminal(id: string): Promise<void> {
@@ -238,10 +245,11 @@ export const useTerminalStore = defineStore('terminal', () => {
   }
   function reportError(message: string): void { error.value = message }
   function clearError(): void { error.value = null }
-  async function insertText(id: string, text: string): Promise<void> {
+  async function insertText(id: string, text: string): Promise<boolean> {
     const result = await writeTerminal({ id, data: text })
-    if (!result.ok) { error.value = result.error.message; return }
+    if (!result.ok) { error.value = result.error.message; return false }
     insertFocus.value = { id, seq: ++insertFocusSeq }
+    return true
   }
   async function closeAllTerminals(): Promise<boolean> {
     error.value = null

@@ -8,6 +8,7 @@ import AppButton from '../../ui/AppButton.vue'
 
 const props = defineProps<{
   readonly projectPath: string
+  readonly workspaceId: string
   readonly path: string
   readonly text: string
   readonly active: boolean
@@ -40,8 +41,8 @@ async function refresh(): Promise<void> {
     while (pending && !disposed) {
       pending = false
       const version = requested
-      const text = props.text
-      const result = await prepareProjectHtmlPreview(props.projectPath, props.path, text, previewId)
+      const text = props.text, project = props.projectPath, workspaceId = props.workspaceId, path = props.path
+      const result = await prepareProjectHtmlPreview(project, path, text, previewId, workspaceId)
       if (!result.ok) {
         if (!disposed && version === requested) {
           preview.value = null
@@ -55,7 +56,8 @@ async function refresh(): Promise<void> {
         await release(result.data.previewId)
         return
       }
-      if (version !== requested || !props.active) continue
+      if (version !== requested || !props.active || props.workspaceId !== workspaceId || props.projectPath !== project
+        || result.data.workspaceId !== workspaceId || result.data.projectPath !== project) continue
       error.value = ''
       pageLoading.value = true
       preview.value = result.data
@@ -80,7 +82,7 @@ watch(webview, (current, previous) => {
   current?.addEventListener('did-stop-loading', onLoadStopped)
   current?.addEventListener('did-fail-load', onLoadFailed)
 }, { flush: 'post' })
-watch([() => props.active, () => props.text], ([active]) => {
+watch([() => props.active, () => props.text, () => props.workspaceId, () => props.projectPath, () => props.path], ([active]) => {
   // 切换工作区标签不重载已有页面；只有源文变化、首次打开或显式刷新才重建页面。
   if (active && (preview.value === null || renderedText !== props.text)) void refresh()
 }, { immediate: true })

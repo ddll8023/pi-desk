@@ -1,7 +1,7 @@
 /**
  * 作为渲染端终端操作的调用入口，把桥接缺失与通信异常转换为安全的展示结果。
  *
- * 只搬运声明字段：项目路径、终端标识、输入文本与行列数；shell、环境变量与工作目录都由主进程决定。
+ * 只搬运声明字段：项目与工作区身份、终端标识、输入文本与行列数；shell、环境变量与工作目录都由主进程决定。
  * 数据确认不重试也不上报失败：它只释放主进程的背压额度，丢一次只影响后续下发的节奏。
  */
 import type { TerminalError } from '../../../../shared/terminal-api'
@@ -44,7 +44,7 @@ export async function createTerminal(request: TerminalCreateRequest): Promise<Te
   const bridge = window.desktop
   if (!bridge || typeof bridge.createTerminal !== 'function') return unavailable()
   try {
-    return await bridge.createTerminal(request)
+    return await bridge.createTerminal({ projectPath: request.projectPath, workspaceId: request.workspaceId, cols: request.cols, rows: request.rows })
   } catch (error) {
     return callFailed(error, '创建终端')
   }

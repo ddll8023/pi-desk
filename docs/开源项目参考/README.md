@@ -24,9 +24,9 @@
 | 项目 | 仓库 | 定位 | 与当前项目的关系 | 明细 |
 | --- | --- | --- | --- | --- |
 | DeepSeek Harness（DSH） | [deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) | 以插件组合构建的 Agent Harness，提供 Web、桌面与程序化入口 | 会话、模型和扩展能力重合；子代理、目标及沙箱策略超出当前内置能力 | [deepseek-harness.md](deepseek-harness.md) |
-| Orca | [stablyai/orca](https://github.com/stablyai/orca) | 以工作树为中心的多编码 Agent 工作台 | Git、编辑器、终端与手机对话部分重合；工作树、远程执行和审阅闭环超出现状 | [orca.md](orca.md) |
+| Orca | [stablyai/orca](https://github.com/stablyai/orca) | 以工作树为中心的多编码 Agent 工作台 | Git、编辑器、终端与手机对话部分重合；任务工作区以稳定 ID 关联会话、文件、Git 与终端，远程执行、任务来源和完整审阅闭环仍有差距 | [orca.md](orca.md) |
 | EvoFlow | [EvovexAI/EvoFlow](https://github.com/EvovexAI/EvoFlow) | 面向长任务的 Agent Runtime 与控制平面；主体为非商业源码可见许可 | 聊天和资源配置重合；Plan/Goal、团队、工作流和岗位调度属于不同产品范围 | [evoflow.md](evoflow.md) |
 | EditHere | [Inginnng/EditHere](https://github.com/Inginnng/EditHere) | 截图、批注与组件调整的本地 AI 反馈工具；主体为非商业源码可用许可 | 外部工具协议与通用图片点框批注部分重合；系统抓屏、OCR、大爆炸布局拖拽与视频打点超出当前内置能力 | [edithere.md](edithere.md) |
 | CoWork OS | [CoWork-OS/CoWork-OS](https://github.com/CoWork-OS/CoWork-OS) | 面向编码、知识工作与自动化的本地优先个人 Agent 桌面应用 | 桌面工作区与终端部分重合；CDP 浏览器自动操控与人机接管超出现状 | [cowork-os.md](cowork-os.md) |
-| Lancer | [raylee-ai/lancer](https://github.com/raylee-ai/lancer) | 基于 pi-gui 和 pi 的桌面 AI 工作区，聚焦会话并行分支、事件拓扑图与交付物追溯 | Pi 接入与多分支管理实质重合；GitTree、Turn 快照、本地控制 API 与扩展前端沙箱超出现状；局域网手机扫码与常驻终端守护为本项目独有 | [lancer.md](lancer.md) |
+| Lancer | [raylee-ai/lancer](https://github.com/raylee-ai/lancer) | 基于 pi-gui 和 pi 的桌面 AI 工作区，聚焦会话并行分支、事件拓扑图与交付物追溯 | Pi 接入实质重合；会话多分支与审阅部分重合，已有提交式快照服务但代码回退链未贯通；GitTree、独立 Turn 检查点、本地控制 API 与扩展前端沙箱仍有差距 | [lancer.md](lancer.md) |
 | OpenBitFun | [GCWing/OpenBitFun](https://github.com/GCWing/OpenBitFun) | 基于 Rust Agent Runtime 与 Tauri 的开源多模式 Agent 工作台 | 会话、终端、Git 与 MCP 实质重合；Mini App、多模式 Harness、跨网多设备切换与 Computer Use 超出当前内置能力；内置受管浏览器与局域网免配置直连为本项目独有 | [openbitfun.md](openbitfun.md) |

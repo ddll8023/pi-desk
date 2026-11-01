@@ -13,11 +13,18 @@ import type { DesktopError } from '../../../../shared/desktop-api'
 import type { GitCommitDetail, GitCommitFile, GitCommitSummary, GitTextDiff } from '../../../../shared/git-api'
 import { getGitCommitDetail, getGitCommitDiff, getGitHistory, getGitHistoryPage } from '../services/git'
 import { useProjectStore } from '../../projects/stores/project'
+import { useTaskWorkspacesStore } from '../../workspace/stores/task-workspaces'
+import { workspaceTarget } from '../../../../shared/workspace-api'
+import type { WorkspaceTarget } from '../../../../shared/workspace-api'
 
 type Phase = 'idle' | 'loading' | 'ready' | 'error'
 
 export const useGitHistoryStore = defineStore('git-history', () => {
   const projectStore = useProjectStore()
+  const workspaces = useTaskWorkspacesStore()
+  const context = computed(() => workspaces.selected(projectStore.currentProject?.path ?? null))
+  const listTarget = ref<WorkspaceTarget | null>(null)
+  function isCurrent(target: WorkspaceTarget): boolean { return context.value?.id === target.workspaceId && projectStore.currentProject?.path === target.projectPath }
   const commits = ref<readonly GitCommitSummary[]>([])
   const hasMore = ref(false)
   const upstreamName = ref<string | null>(null)
@@ -49,6 +56,7 @@ export const useGitHistoryStore = defineStore('git-history', () => {
   function resetList(): void {
     listSeq += 1
     commits.value = []
+    listTarget.value = null
     hasMore.value = false
     upstreamName.value = null
     aheadCount.value = 0
@@ -72,21 +80,23 @@ export const useGitHistoryStore = defineStore('git-history', () => {
 
   /** 打开历史（可带过滤路径）；重复打开同一路径时重新读第一页，内容可能已经变化。 */
   async function open(path: string | null = null): Promise<void> {
+    const workspace = context.value
+    if (!workspace) return
+    const target = workspaceTarget(workspace)
+    listTarget.value = target
     filterPath.value = path
     resetDetail()
 
     const ticket = ++listSeq
     phase.value = commits.value.length === 0 ? 'loading' : phase.value
-    const result = await getGitHistory(path ?? undefined)
-    if (ticket !== listSeq) return
-    const currentPath = projectStore.currentProject?.path ?? null
-    if (currentPath === null || result.data.projectPath !== currentPath) return
-
+    const result = await getGitHistory(target, path ?? undefined)
+    if (ticket !== listSeq || !isCurrent(target)) return
     if (!result.ok) {
       error.value = result.error
       phase.value = 'error'
       return
     }
+    if (result.data.workspaceId !== target.workspaceId || result.data.projectPath !== target.projectPath) return
     commits.value = result.data.commits
     hasMore.value = result.data.hasMore
     upstreamName.value = result.data.upstreamName
@@ -97,19 +107,18 @@ export const useGitHistoryStore = defineStore('git-history', () => {
 
   /** 继续读更早的提交；失败只提示，不影响已加载的部分。 */
   async function loadMore(): Promise<void> {
-    if (!canLoadMore.value) return
+    const target = listTarget.value
+    if (!canLoadMore.value || !target || !isCurrent(target)) return
     loadingMore.value = true
     const ticket = listSeq
-    const result = await getGitHistoryPage(commits.value.length, filterPath.value)
+    const result = await getGitHistoryPage(target, commits.value.length, filterPath.value)
+    if (ticket !== listSeq || !isCurrent(target)) return
     loadingMore.value = false
-    if (ticket !== listSeq) return
-    const currentPath = projectStore.currentProject?.path ?? null
-    if (currentPath === null || result.data.projectPath !== currentPath) return
-
     if (!result.ok) {
       error.value = result.error
       return
     }
+    if (result.data.workspaceId !== target.workspaceId || result.data.projectPath !== target.projectPath) return
     commits.value = [...commits.value, ...result.data.commits]
     hasMore.value = result.data.hasMore
     error.value = null
@@ -117,6 +126,9 @@ export const useGitHistoryStore = defineStore('git-history', () => {
 
   /** 打开一个提交的详情（改动文件清单）。 */
   async function selectCommit(commit: GitCommitSummary): Promise<void> {
+    const target = listTarget.value
+    if (!target || !isCurrent(target)) return
+    diffSeq += 1
     fileSelection.value = null
     diff.value = null
     diffPhase.value = 'idle'
@@ -125,14 +137,15 @@ export const useGitHistoryStore = defineStore('git-history', () => {
     detailPhase.value = 'loading'
 
     const ticket = ++detailSeq
-    const result = await getGitCommitDetail(commit.oid)
-    if (ticket !== detailSeq) return
+    const result = await getGitCommitDetail(target, commit.oid)
+    if (ticket !== detailSeq || !isCurrent(target)) return
 
     if (!result.ok) {
       detailError.value = result.error
       detailPhase.value = 'error'
       return
     }
+    if (result.data.workspaceId !== target.workspaceId || result.data.projectPath !== target.projectPath) return
     detail.value = result.data
     detailPhase.value = 'ready'
   }
@@ -148,14 +161,15 @@ export const useGitHistoryStore = defineStore('git-history', () => {
     diffPhase.value = 'loading'
 
     const ticket = ++diffSeq
-    const result = await getGitCommitDiff(current.oid, file.path, file.oldPath)
-    if (ticket !== diffSeq) return
+    const result = await getGitCommitDiff(current, current.oid, file.path, file.oldPath)
+    if (ticket !== diffSeq || !isCurrent(current)) return
 
     if (!result.ok) {
       diffError.value = result.error
       diffPhase.value = 'error'
       return
     }
+    if (result.data.workspaceId !== current.workspaceId || result.data.projectPath !== current.projectPath) return
     diff.value = result.data
     diffPhase.value = 'ready'
   }
@@ -176,10 +190,9 @@ export const useGitHistoryStore = defineStore('git-history', () => {
 
   /** 切换项目时重置历史与详情，避免显示上一项目的提交记录。 */
   watch(
-    () => projectStore.currentProject?.path ?? null,
-    () => {
-      resetList()
-    }
+    () => [projectStore.currentProject?.path ?? null, context.value?.id ?? null, context.value?.phase ?? null],
+    () => { resetList() },
+    { flush: 'sync' }
   )
 
   return {

@@ -2,12 +2,12 @@
  * 项目目录单层读取、条目路径解析与安全删除：为右侧面板的文件树提供「一层目录的条目」，
  * 把相对条目路径还原为绝对路径，并将指定条目移入系统废纸篓。
  *
- * 只接受项目内相对路径，项目根由调用方注入，页面无法指定绝对路径；读取与解析前都用 `realpath` 复核
- * 目标仍在项目内，且符号链接不跟随，因此链接不会把访问带出项目。列举只回传条目名与类型：不读文件内容、
+ * 执行根来自调用方传入的已授权工作区上下文，页面只给相对路径；读取与解析前用 realpath 复核
+ * 目标仍在该工作区内，条目符号链接不作为其指向的目标展开。列举只回传条目名与类型：不读文件内容、
  * 不递归、不做 git 过滤（只跳过 `.git`），单层条目超过上限时截断并如实标记。
  * 解析只对父目录做 realpath：最后一段按原名拼回，因此符号链接条目解析为链接本身而不是它指向的目标；
  * 复制路径不需要条目仍存在，在文件管理器中显示与删除则先 `lstat` 确认存在，否则回可展示的原因；
- * 删除通过 Electron 的 `shell.trashItem` 安全移入系统废纸篓，并拒绝删除项目根目录自身。
+ * 删除通过 Electron 的 shell.trashItem 移入系统废纸篓，并拒绝删除工作区执行根自身。
  * 目录不存在、不可读、越界与条目已删除都回可展示的原因，由界面就近提示。
  */
 import type { Dirent } from 'node:fs'
@@ -15,6 +15,8 @@ import { lstat, readdir, realpath } from 'node:fs/promises'
 import { join } from 'node:path'
 import { shell } from 'electron'
 import { PROJECT_DIRECTORY_ENTRY_LIMIT } from '../../shared/project-file-api'
+import { workspaceTarget } from '../../shared/workspace-api'
+import type { WorkspaceContext } from '../../shared/workspace-api'
 import type {
   ProjectDirectoryEntry,
   ProjectDirectoryEntryKind,
@@ -28,37 +30,24 @@ import { isInsideRoot, normalizeRelativeDirectory, readFailureMessage, resolvePr
 /** 只跳过版本库目录：其余条目（含 dotfiles）都如实展示，gitignore 过滤留到后续按开关处理。 */
 const SKIPPED_DIRECTORIES = new Set(['.git'])
 
-export interface ProjectDirectoryReaderOptions {
-  /** 当前项目路径的内存快照；未选择项目时为 null，不触发磁盘访问。 */
-  readonly currentProjectPath: () => string | null
-}
-
 export class ProjectDirectoryReader {
-  constructor(private readonly options: ProjectDirectoryReaderOptions) {}
-
   /**
-   * 把项目内相对条目路径解析为绝对路径；未选择项目、路径非法与越界都回可展示的原因。
+   * 把已授权工作区内的相对条目路径解析为绝对路径；路径非法或越界回可展示的原因。
    * 不检查条目是否仍存在：复制路径不应该因为文件刚被删掉就失败。
    */
-  async resolveEntry(path: string): Promise<ProjectEntryPathResult> {
-    const root = this.options.currentProjectPath()
-    if (root === null) {
-      return { ok: false, error: { code: 'INVALID_REQUEST', message: '尚未选择项目，无法解析文件路径。' } }
-    }
+  async resolveEntry(context: WorkspaceContext, path: string): Promise<ProjectEntryPathResult> {
+    const root = context.rootPath
     const resolved = await resolveProjectEntryAbsolute(root, path)
     if (!resolved.ok) return resolved
-    return { ok: true, data: { path: resolved.relativePath, absolutePath: resolved.absolutePath } }
+    return { ok: true, data: { ...workspaceTarget(context), path: resolved.relativePath, absolutePath: resolved.absolutePath } }
   }
 
   /**
    * 在系统文件管理器中显示一个条目：解析通过且条目仍存在时交给 Electron 的 `showItemInFolder`，
    * 它只定位并选中条目，不打开文件。
    */
-  async revealEntry(path: string): Promise<ProjectEntryRevealResult> {
-    const root = this.options.currentProjectPath()
-    if (root === null) {
-      return { ok: false, error: { code: 'INVALID_REQUEST', message: '尚未选择项目，无法显示文件位置。' } }
-    }
+  async revealEntry(context: WorkspaceContext, path: string): Promise<ProjectEntryRevealResult> {
+    const root = context.rootPath
     const resolved = await resolveProjectEntryAbsolute(root, path)
     if (!resolved.ok) return resolved
     try {
@@ -81,13 +70,10 @@ export class ProjectDirectoryReader {
 
   /**
    * 将一个项目内条目移入系统废纸篓：解析通过且在项目内，条目存在时交给 Electron 的 `shell.trashItem`。
-   * 不允许删除项目根目录自身。
+   * 不允许删除工作区执行根自身。
    */
-  async deleteEntry(path: string): Promise<ProjectEntryDeleteResult> {
-    const root = this.options.currentProjectPath()
-    if (root === null) {
-      return { ok: false, error: { code: 'INVALID_REQUEST', message: '尚未选择项目，无法删除文件。' } }
-    }
+  async deleteEntry(context: WorkspaceContext, path: string): Promise<ProjectEntryDeleteResult> {
+    const root = context.rootPath
     const resolved = await resolveProjectEntryAbsolute(root, path)
     if (!resolved.ok) return resolved
     if (resolved.relativePath === '' || resolved.relativePath === '.') {
@@ -111,12 +97,9 @@ export class ProjectDirectoryReader {
     return { ok: true }
   }
 
-  /** 列举一层目录；未选择项目时返回空结果，与检索接口保持同一口径。 */
-  async list(directory: string): Promise<ProjectDirectoryListResult> {
-    const root = this.options.currentProjectPath()
-    if (root === null) {
-      return { ok: true, data: { projectPath: null, directory: '', entries: [], truncated: false } }
-    }
+  /** 列举主进程已授权工作区的一层目录；不读取变化中的前台项目。 */
+  async list(context: WorkspaceContext, directory: string): Promise<ProjectDirectoryListResult> {
+    const root = context.rootPath
 
     const relative = normalizeRelativeDirectory(directory)
     if (relative === null) {
@@ -147,7 +130,7 @@ export class ProjectDirectoryReader {
     return {
       ok: true,
       data: {
-        projectPath: root,
+        ...workspaceTarget(context),
         directory: relative,
         entries: truncated ? entries.slice(0, PROJECT_DIRECTORY_ENTRY_LIMIT) : entries,
         truncated

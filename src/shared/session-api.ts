@@ -6,6 +6,8 @@
  */
 import { isHistoryData, isHistoryQuery } from './runtime-api'
 import type { HistoryData, HistoryQuery, RuntimeErrorCode } from './runtime-api'
+import { isWorkspaceContext, isWorkspaceId } from './workspace-api'
+import type { WorkspaceContext } from './workspace-api'
 
 export const SESSION_LIST_CHANNEL = 'desktop:session-list'
 export const SESSION_OPEN_CHANNEL = 'desktop:session-open'
@@ -122,22 +124,21 @@ export interface SessionOpenRequest {
   readonly projectPath: string
   readonly sessionId: string | null
   readonly allowInterrupt: boolean
-  /** 可选的隔离工作树路径；指定时该会话的 SDK 宿主工具以此工作树作为 CWD 执行。 */
-  readonly worktreePath?: string | null
+  /** 新建可指定托管工作区；已有会话以主进程持久绑定为准，不接受执行目录。 */
+  readonly workspaceId?: string | null
 }
 
 /** 打开请求固定项目归属，不允许在异步信任检查后重新解释当前项目。 */
 export function isSessionOpenRequest(value: unknown): value is SessionOpenRequest {
   if (!isRecord(value)) return false
-  if (Object.keys(value).some(key => !['projectPath', 'sessionId', 'allowInterrupt', 'worktreePath'].includes(key))) return false
-  const worktreePathOk = value.worktreePath === undefined || value.worktreePath === null
-    || (typeof value.worktreePath === 'string' && value.worktreePath.trim() !== '' && value.worktreePath.length <= MAX_PROJECT_PATH_LENGTH)
+  if (Object.keys(value).some(key => !['projectPath', 'sessionId', 'allowInterrupt', 'workspaceId'].includes(key))) return false
+  const workspaceIdOk = value.workspaceId === undefined || value.workspaceId === null || isWorkspaceId(value.workspaceId)
   return typeof value.projectPath === 'string' && value.projectPath.trim() !== ''
     && value.projectPath.length <= MAX_PROJECT_PATH_LENGTH
     && (value.sessionId === null || (typeof value.sessionId === 'string'
       && value.sessionId.trim() !== '' && value.sessionId.length <= 255))
     && typeof value.allowInterrupt === 'boolean'
-    && worktreePathOk
+    && workspaceIdOk
 }
 
 /**
@@ -168,6 +169,7 @@ export interface SessionHistoryRequest {
  * 未绑定时的结果只是展示副本：发送、回退与压缩仍以绑定是否完成为准。
  */
 export interface SessionHistoryData {
+  readonly workspace: WorkspaceContext
   readonly projectPath: string
   readonly sessionId: string
   readonly data: HistoryData
@@ -196,6 +198,7 @@ export function isSessionHistoryResult(value: unknown): value is SessionHistoryR
   const data = value.data
   return typeof data.projectPath === 'string' && data.projectPath !== ''
     && typeof data.sessionId === 'string' && data.sessionId !== ''
+    && isWorkspaceContext(data.workspace) && data.workspace.projectPath === data.projectPath
     && isHistoryData(data.data)
 }
 
@@ -232,6 +235,7 @@ export interface SessionOpenData {
   readonly projectPath: string
   readonly runId: number
   readonly openedSessionId: string | null
+  readonly workspace: WorkspaceContext
 }
 
 export type SessionOpenResult =
@@ -338,6 +342,7 @@ export function isSessionOpenResult(value: unknown): value is SessionOpenResult 
     && typeof data.projectPath === 'string' && data.projectPath !== ''
     && typeof data.runId === 'number' && Number.isSafeInteger(data.runId) && data.runId > 0
     && (data.openedSessionId === null || typeof data.openedSessionId === 'string')
+    && isWorkspaceContext(data.workspace) && data.workspace.projectPath === data.projectPath
 }
 
 // TypeScript 声明不能保证 invoke 的实际返回值；沙箱桥接只放行本契约。

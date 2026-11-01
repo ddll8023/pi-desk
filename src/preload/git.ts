@@ -4,6 +4,8 @@ import { ipcRenderer } from 'electron'
 import { GIT_COMMIT_CHANNEL, GIT_COMMIT_DETAIL_CHANNEL, GIT_COMMIT_DIFF_CHANNEL, GIT_DIFF_CHANNEL, GIT_DISCARD_CHANNEL, GIT_HISTORY_CHANNEL, GIT_PULL_CHANNEL, GIT_PUSH_CHANNEL, GIT_STAGE_CHANNEL, GIT_STATUS_CHANNEL, GIT_UNSTAGE_CHANNEL, isGitCommitDetailResult, isGitCommitDiffResult, isGitDiffResult, isGitHistoryResult, isGitStatusResult } from '../shared/git-api'
 import type { GitCommitDetailRequest, GitCommitDetailResult, GitCommitDiffRequest, GitCommitDiffResult, GitCommitRequest, GitDiffRequest, GitDiffResult, GitHistoryRequest, GitHistoryResult, GitOperationResult, GitStatusResult, GitWritePathRequest } from '../shared/git-api'
 import type { GitApi } from '../shared/git-api'
+import type { WorkspaceTarget } from '../shared/workspace-api'
+function scope(target: WorkspaceTarget): WorkspaceTarget { return { projectPath: target.projectPath, workspaceId: target.workspaceId } }
 
 const INVALID_GIT_RESPONSE = '桌面接口返回了无法识别的 Git 结果。'
 
@@ -28,51 +30,52 @@ function invalidGitCommitDiffResponse(): GitCommitDiffResult {
 }
 
 export const gitApi = {
-  async getGitStatus(): Promise<GitStatusResult> {
-    const response: unknown = await ipcRenderer.invoke(GIT_STATUS_CHANNEL)
+  async getGitStatus(request: WorkspaceTarget): Promise<GitStatusResult> {
+    const response: unknown = await ipcRenderer.invoke(GIT_STATUS_CHANNEL, scope(request))
     return isGitStatusResult(response) ? response : invalidGitStatusResponse()
   },
 
   async getGitDiff(request: GitDiffRequest): Promise<GitDiffResult> {
-    const response: unknown = await ipcRenderer.invoke(GIT_DIFF_CHANNEL, { path: request.path, area: request.area })
+    const response: unknown = await ipcRenderer.invoke(GIT_DIFF_CHANNEL, { ...scope(request), path: request.path, area: request.area })
     return isGitDiffResult(response) ? response : invalidGitDiffResponse()
   },
 
   async stageGitPaths(request: GitWritePathRequest): Promise<GitOperationResult> {
-    const payload = 'paths' in request ? { paths: request.paths } : { path: request.path }
+    const payload = { ...scope(request), ...('paths' in request ? { paths: [...request.paths] } : { path: request.path }) }
     const response: unknown = await ipcRenderer.invoke(GIT_STAGE_CHANNEL, payload)
     return isGitStatusResult(response) ? response : invalidGitStatusResponse()
   },
 
   async unstageGitPaths(request: GitWritePathRequest): Promise<GitOperationResult> {
-    const payload = 'paths' in request ? { paths: request.paths } : { path: request.path }
+    const payload = { ...scope(request), ...('paths' in request ? { paths: [...request.paths] } : { path: request.path }) }
     const response: unknown = await ipcRenderer.invoke(GIT_UNSTAGE_CHANNEL, payload)
     return isGitStatusResult(response) ? response : invalidGitStatusResponse()
   },
 
   async discardGitPath(request: GitWritePathRequest): Promise<GitOperationResult> {
-    const payload = 'paths' in request ? { paths: request.paths } : { path: request.path }
+    const payload = { ...scope(request), ...('paths' in request ? { paths: [...request.paths] } : { path: request.path }) }
     const response: unknown = await ipcRenderer.invoke(GIT_DISCARD_CHANNEL, payload)
     return isGitStatusResult(response) ? response : invalidGitStatusResponse()
   },
 
   async commitGitStaged(request: GitCommitRequest): Promise<GitOperationResult> {
-    const response: unknown = await ipcRenderer.invoke(GIT_COMMIT_CHANNEL, { message: request.message })
+    const response: unknown = await ipcRenderer.invoke(GIT_COMMIT_CHANNEL, { ...scope(request), message: request.message })
     return isGitStatusResult(response) ? response : invalidGitStatusResponse()
   },
 
-  async pullGit(): Promise<GitOperationResult> {
-    const response: unknown = await ipcRenderer.invoke(GIT_PULL_CHANNEL)
+  async pullGit(request: WorkspaceTarget): Promise<GitOperationResult> {
+    const response: unknown = await ipcRenderer.invoke(GIT_PULL_CHANNEL, scope(request))
     return isGitStatusResult(response) ? response : invalidGitStatusResponse()
   },
 
-  async pushGit(): Promise<GitOperationResult> {
-    const response: unknown = await ipcRenderer.invoke(GIT_PUSH_CHANNEL)
+  async pushGit(request: WorkspaceTarget): Promise<GitOperationResult> {
+    const response: unknown = await ipcRenderer.invoke(GIT_PUSH_CHANNEL, scope(request))
     return isGitStatusResult(response) ? response : invalidGitStatusResponse()
   },
 
   async getGitHistory(request: GitHistoryRequest): Promise<GitHistoryResult> {
     const response: unknown = await ipcRenderer.invoke(GIT_HISTORY_CHANNEL, {
+      ...scope(request),
       ...(request.limit === undefined ? {} : { limit: request.limit }),
       ...(request.skip === undefined ? {} : { skip: request.skip }),
       ...(request.path === undefined ? {} : { path: request.path })
@@ -81,12 +84,13 @@ export const gitApi = {
   },
 
   async getGitCommitDetail(request: GitCommitDetailRequest): Promise<GitCommitDetailResult> {
-    const response: unknown = await ipcRenderer.invoke(GIT_COMMIT_DETAIL_CHANNEL, { oid: request.oid })
+    const response: unknown = await ipcRenderer.invoke(GIT_COMMIT_DETAIL_CHANNEL, { ...scope(request), oid: request.oid })
     return isGitCommitDetailResult(response) ? response : invalidGitCommitDetailResponse()
   },
 
   async getGitCommitDiff(request: GitCommitDiffRequest): Promise<GitCommitDiffResult> {
     const response: unknown = await ipcRenderer.invoke(GIT_COMMIT_DIFF_CHANNEL, {
+      ...scope(request),
       oid: request.oid,
       path: request.path,
       ...(request.oldPath === undefined ? {} : { oldPath: request.oldPath })

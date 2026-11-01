@@ -1,500 +1,226 @@
-/**
- * 主进程 Git Worktree 隔离与生命周期管理服务：
- * 负责列举多工作树、在 `.pi/worktrees/` 下创建带分支的隔离工作树、
- * 自动配置 `.gitignore` 保护、共享依赖目录软链接编排、以及安全的移除与分支清理。
- *
- * 关键安全边界：
- * - 严禁删除主工作树（`isMain: true`）；
- * - 工作树目录严格限定在当前仓库根的 `.pi/worktrees/` 内，杜绝路径逃逸；
- * - 依赖软链接创建失败（如 Windows 非开发者模式）优雅降级，不中断工作树创建；
- * - 写操作支持并发串行化锁，防止 git worktree 内部锁定冲突。
- */
-import { access, appendFile, lstat, readFile, symlink } from 'node:fs/promises'
-import { isAbsolute, join, normalize, relative, resolve } from 'node:path'
-import type { DesktopError, DesktopErrorCode } from '../../shared/desktop-api'
-import {
-  WORKTREE_BRANCH_NAME_MAX_CHARS,
-  WORKTREE_BRANCH_NAME_REGEX
-} from '../../shared/worktree-api'
-import type {
-  CreateWorktreeRequest,
-  CreateWorktreeResult,
-  MergeWorktreeRequest,
-  MergeWorktreeResult,
-  RemoveWorktreeRequest,
-  RemoveWorktreeResult,
-  WorktreeEntry,
-  WorktreeListResult,
-  WorktreeStatus,
-  WorktreeStatusRequest,
-  WorktreeStatusResult
-} from '../../shared/worktree-api'
+/** 工作树物理适配：显式仓库上下文、本地排除配置与仓库级写队列；托管身份和会话生命周期由工作区管理器负责。 */
+import { access, appendFile, lstat, mkdir, readFile, realpath, symlink } from 'node:fs/promises'
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
+import type { DesktopErrorCode } from '../../shared/desktop-api'
+import type { WorktreeEntry, WorktreeStatus } from '../../shared/worktree-api'
+import type { WorkspaceContext } from '../../shared/workspace-api'
 import { GIT_READ_TIMEOUT_MS, GitCommandError, runGit } from './git-command'
 import { canonicalProjectRoot, resolveGitRepository } from './git-repository'
 import type { GitRepository } from './git-repository'
 
-export interface WorktreeServiceOptions {
-  /** 当前活动项目路径获取器。 */
-  readonly currentProjectPath: () => string | null
+export class WorktreeOperationError extends Error {
+  constructor(readonly code: DesktopErrorCode, message: string) { super(message) }
+}
+function samePath(left: string, right: string): boolean {
+  const a = resolve(left), b = resolve(right)
+  return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b
+}
+function missing(error: unknown): boolean {
+  return error instanceof Error && 'code' in error && error.code === 'ENOENT'
+}
+async function exists(path: string): Promise<boolean> {
+  try { await lstat(path); return true } catch (error) { if (missing(error)) return false; throw error }
+}
+function inside(root: string, path: string): boolean {
+  const part = relative(root, path)
+  return part !== '' && part !== '..' && !part.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`) && !isAbsolute(part)
 }
 
-function errorResult<T extends { ok: false; error: DesktopError }>(code: DesktopErrorCode, message: string): T {
-  return { ok: false, error: { code, message } } as T
-}
-
-/** 规范化路径并统一平台大小写折叠比较 */
-function normalizePath(p: string): string {
-  const resolved = resolve(p)
-  if (process.platform === 'win32') {
-    return resolved.toLowerCase()
-  }
-  return resolved
-}
-
-/** 检查文件或目录是否存在 */
-async function pathExists(p: string): Promise<boolean> {
-  try {
-    await access(p)
-    return true
-  } catch {
-    return false
-  }
-}
-
-/**
- * 解析 `git worktree list --porcelain` 输出为结构化的 WorktreeEntry 数组。
- * 纯函数，独立导出以供单元测试。
- */
-export function parseWorktreeListPorcelain(stdout: string, mainRepoRoot: string): WorktreeEntry[] {
+/** 解析 Git porcelain；第一条为主工作树，其他条目不因当前项目处于链接工作树而成为主工作树。 */
+export function parseWorktreeListPorcelain(stdout: string, _mainRepoRoot: string): WorktreeEntry[] {
   const entries: WorktreeEntry[] = []
-  const blocks = stdout.split(/\r?\n\r?\n/u).map((b) => b.trim()).filter((b) => b !== '')
-  const normMainRoot = normalizePath(mainRepoRoot)
-
-  for (const block of blocks) {
-    const lines = block.split(/\r?\n/u).map((l) => l.trim()).filter((l) => l !== '')
-    let worktreePath = ''
-    let headCommit = ''
-    let branch: string | null = null
-    let isLocked = false
+  for (const block of stdout.split(/\r?\n\r?\n/u)) {
+    let path = '', headCommit = '', branch: string | null = null
+    let isLocked = false, isPrunable = false
     let lockReason: string | undefined
-    let isPrunable = false
-
-    for (const line of lines) {
-      if (line.startsWith('worktree ')) {
-        worktreePath = resolve(line.slice('worktree '.length).trim())
-      } else if (line.startsWith('HEAD ')) {
-        headCommit = line.slice('HEAD '.length).trim()
-      } else if (line.startsWith('branch ')) {
-        const fullRef = line.slice('branch '.length).trim()
-        branch = fullRef.startsWith('refs/heads/') ? fullRef.slice('refs/heads/'.length) : fullRef
-      } else if (line === 'detached') {
-        branch = null
-      } else if (line.startsWith('locked')) {
+    for (const line of block.split(/\r?\n/u)) {
+      if (line.startsWith('worktree ')) path = resolve(line.slice(9))
+      else if (line.startsWith('HEAD ')) headCommit = line.slice(5)
+      else if (line.startsWith('branch ')) branch = line.slice(7).replace(/^refs\/heads\//u, '')
+      else if (line === 'detached') branch = null
+      else if (line === 'locked' || line.startsWith('locked ')) {
         isLocked = true
-        const reason = line.slice('locked'.length).trim()
-        if (reason !== '') lockReason = reason
-      } else if (line.startsWith('prunable')) {
-        isPrunable = true
-      }
+        lockReason = line.slice(6).trim() || undefined
+      } else if (line === 'prunable' || line.startsWith('prunable ')) isPrunable = true
     }
-
-    if (worktreePath !== '' && headCommit !== '') {
-      const isMain = entries.length === 0 || normalizePath(worktreePath) === normMainRoot
-      entries.push({
-        path: worktreePath,
-        branch,
-        headCommit,
-        isMain,
-        isLocked,
-        ...(lockReason === undefined ? {} : { lockReason }),
-        ...(isPrunable ? { isPrunable: true } : {})
-      })
-    }
+    if (path && headCommit) entries.push({ path, headCommit, branch, isMain: entries.length === 0,
+      isLocked, ...(lockReason === undefined ? {} : { lockReason }), ...(isPrunable ? { isPrunable: true } : {}) })
   }
-
   return entries
 }
 
 export class WorktreeService {
-  private readonly currentProjectPath: () => string | null
-  /** 同一仓库的写操作串行队列 */
-  private writeQueue: Promise<unknown> = Promise.resolve()
+  private readonly queues = new Map<string, Promise<unknown>>()
 
-  constructor(options: WorktreeServiceOptions) {
-    this.currentProjectPath = options.currentProjectPath
+  private enqueue<T>(repositoryPath: string, operation: () => Promise<T>): Promise<T> {
+    const key = process.platform === 'win32' ? repositoryPath.toLowerCase() : repositoryPath
+    const task = (this.queues.get(key) ?? Promise.resolve()).then(operation, operation)
+    const tail = task.catch(() => {})
+    this.queues.set(key, tail)
+    void tail.then(() => { if (this.queues.get(key) === tail) this.queues.delete(key) })
+    return task
   }
-
-  /** 获取当前仓库上下文 */
-  private async getActiveRepository(): Promise<{ repository: GitRepository; canonicalRoot: string } | null> {
-    const current = this.currentProjectPath()
-    if (current === null) return null
-    const canonicalRoot = await canonicalProjectRoot(current)
-    const repository = await resolveGitRepository(canonicalRoot)
-    if (repository === null) return null
-    return { repository, canonicalRoot }
+  async listWorktrees(projectPath: string): Promise<{ repository: GitRepository | null; worktrees: readonly WorktreeEntry[] }> {
+    const repository = await resolveGitRepository(await canonicalProjectRoot(projectPath))
+    if (!repository) return { repository: null, worktrees: [] }
+    const { stdout } = await runGit(['worktree', 'list', '--porcelain'], { cwd: repository.root, timeoutMs: GIT_READ_TIMEOUT_MS })
+    return { repository, worktrees: parseWorktreeListPorcelain(stdout, repository.root) }
   }
-
-  /** 串行执行写操作 */
-  private enqueueWrite<T>(task: () => Promise<T>): Promise<T> {
-    const run = this.writeQueue.then(task, task)
-    this.writeQueue = run.catch(() => {})
-    return run
-  }
-
-  /**
-   * 列举当前项目仓库的所有工作树。
-   */
-  async listWorktrees(): Promise<WorktreeListResult> {
-    const active = await this.getActiveRepository()
-    if (active === null) {
-      return { ok: true, isRepository: false, worktrees: [] }
-    }
-
+  private async branchOf(path: string): Promise<string | null> {
     try {
-      const { stdout } = await runGit(['worktree', 'list', '--porcelain'], {
-        cwd: active.repository.root,
-        timeoutMs: GIT_READ_TIMEOUT_MS
-      })
-      const worktrees = parseWorktreeListPorcelain(stdout, active.repository.root)
-      return { ok: true, isRepository: true, worktrees }
+      const { stdout } = await runGit(['symbolic-ref', '--quiet', '--short', 'HEAD'], { cwd: path, timeoutMs: GIT_READ_TIMEOUT_MS })
+      return stdout.trim() || null
     } catch (error) {
-      if (error instanceof GitCommandError) {
-        return errorResult('GIT_ERROR', `读取工作树列表失败：${error.message}`)
-      }
-      return errorResult('INTERNAL_ERROR', error instanceof Error ? error.message : String(error))
+      if (error instanceof GitCommandError && error.kind === 'failed' && error.exitCode === 1) return null
+      throw error
     }
   }
-
-  /**
-   * 确保主仓库 `.gitignore` 中包含 `.pi/worktrees/` 忽略项。
-   */
-  private async ensureGitignore(repoRoot: string): Promise<void> {
-    const gitignorePath = join(repoRoot, '.gitignore')
-    try {
-      let content = ''
-      if (await pathExists(gitignorePath)) {
-        content = await readFile(gitignorePath, 'utf-8')
-      }
-      const lines = content.split(/\r?\n/u)
-      const hasIgnore = lines.some((line) => {
-        const trimmed = line.trim()
-        return trimmed === '.pi/worktrees' || trimmed === '.pi/worktrees/' || trimmed === '/.pi/worktrees/'
-      })
-      if (!hasIgnore) {
-        const prefix = content.length > 0 && !content.endsWith('\n') ? '\n' : ''
-        await appendFile(gitignorePath, `${prefix}# pi-desk worktrees\n.pi/worktrees/\n`, 'utf-8')
-      }
-    } catch (error) {
-      console.warn('[worktree] 自动更新 .gitignore 失败：', error)
-    }
+  async planWorkspace(projectPath: string, id: string, baseBranch?: string): Promise<WorkspaceContext> {
+    const repository = await resolveGitRepository(projectPath)
+    if (!repository) throw new WorktreeOperationError('NOT_A_REPOSITORY', '该项目不是有效的 Git 仓库。')
+    const projectRoot = await canonicalProjectRoot(projectPath)
+    const prefix = relative(repository.root, projectRoot)
+    if (prefix && !inside(repository.root, projectRoot)) throw new WorktreeOperationError('FORBIDDEN', '项目不在对应仓库内。')
+    const { stdout } = await runGit(['rev-parse', '--verify', '--end-of-options', `${baseBranch ?? 'HEAD'}^{commit}`],
+      { cwd: repository.root, timeoutMs: GIT_READ_TIMEOUT_MS })
+    const baseCommit = stdout.trim()
+    if (!/^[a-f0-9]{40,64}$/u.test(baseCommit)) throw new WorktreeOperationError('GIT_FAILED', '无法固定任务起始提交。')
+    const worktreePath = join(repository.root, '.pi', 'worktrees', id)
+    return { id, revision: 1, projectPath, rootPath: join(worktreePath, prefix), repositoryPath: repository.root,
+      worktreePath, kind: 'task', branch: `pi/task-${id}`, baseCommit,
+      destinationBranch: await this.branchOf(repository.root), phase: 'creating', mergedCommit: null, mergedTaskCommit: null, problem: null }
   }
-
-  /**
-   * 为新工作树建立主仓库依赖目录的符号链接（node_modules、.venv 等）。
-   */
-  private async linkDependencies(repoRoot: string, targetWorktreePath: string): Promise<void> {
-    const candidates = ['node_modules', '.venv', 'vendor']
-    for (const name of candidates) {
-      const sourcePath = join(repoRoot, name)
-      const destPath = join(targetWorktreePath, name)
+  private async managedPath(workspace: WorkspaceContext): Promise<{ repositoryPath: string; path: string }> {
+    if (workspace.kind !== 'task' || !workspace.repositoryPath || !workspace.worktreePath || !workspace.branch) {
+      throw new WorktreeOperationError('FORBIDDEN', '只能操作应用登记的任务工作树。')
+    }
+    const repositoryPath = await realpath(workspace.repositoryPath)
+    if (!samePath(repositoryPath, workspace.repositoryPath)) throw new WorktreeOperationError('FORBIDDEN', '任务所属仓库的真实目录已变化。')
+    const expected = join(repositoryPath, '.pi', 'worktrees', workspace.id)
+    if (!samePath(workspace.worktreePath, expected) || !inside(expected, workspace.rootPath) && !samePath(expected, workspace.rootPath)) {
+      throw new WorktreeOperationError('FORBIDDEN', '任务目录与托管身份不一致。')
+    }
+    // 不允许 .pi、worktrees 或任务目录经符号链接逃离仓库；不存在的末级目录留给创建操作建立。
+    for (const path of [join(repositoryPath, '.pi'), join(repositoryPath, '.pi', 'worktrees'), expected]) {
+      if (await exists(path) && !samePath(await realpath(path), path)) throw new WorktreeOperationError('FORBIDDEN', '托管目录包含重定向的符号链接。')
+    }
+    return { repositoryPath, path: expected }
+  }
+  async assertUsable(workspace: WorkspaceContext): Promise<void> {
+    if (workspace.kind === 'project') {
+      const stat = await lstat(workspace.rootPath)
+      if (!stat.isDirectory()) throw new WorktreeOperationError('INVALID_REQUEST', '项目执行目录不可用。')
+      return
+    }
+    await this.registeredEntry(workspace)
+    const root = await realpath(workspace.rootPath)
+    if (!samePath(root, workspace.rootPath)) throw new WorktreeOperationError('FORBIDDEN', '任务执行根被重定向。')
+    const stat = await lstat(root)
+    if (!stat.isDirectory()) throw new WorktreeOperationError('INVALID_REQUEST', '任务执行根不是目录。')
+  }
+  private async registeredEntry(workspace: WorkspaceContext): Promise<WorktreeEntry> {
+    const { repositoryPath, path } = await this.managedPath(workspace)
+    const inventory = await this.listWorktrees(repositoryPath)
+    if (!inventory.repository || !samePath(inventory.repository.root, repositoryPath)) throw new WorktreeOperationError('FORBIDDEN', '任务所属仓库不一致。')
+    const entry = inventory.worktrees.find(item => samePath(item.path, path))
+    if (!entry || entry.isMain || entry.branch !== workspace.branch || entry.isPrunable || entry.isLocked) {
+      throw new WorktreeOperationError('CONFLICT', '托管工作树已丢失、换分支或被锁定；未改用其他目录。')
+    }
+    return entry
+  }
+  private async ensureLocalExclude(repositoryPath: string): Promise<void> {
+    const { stdout } = await runGit(['rev-parse', '--git-path', 'info/exclude'], { cwd: repositoryPath, timeoutMs: GIT_READ_TIMEOUT_MS })
+    const file = resolve(repositoryPath, stdout.trim())
+    let content = ''
+    try { content = await readFile(file, 'utf8') } catch (error) { if (!missing(error)) throw error }
+    if (content.split(/\r?\n/u).some(line => ['.pi/worktrees/', '/.pi/worktrees/'].includes(line.trim()))) return
+    await mkdir(dirname(file), { recursive: true })
+    await appendFile(file, `${content && !content.endsWith('\n') ? '\n' : ''}# pi-desk task workspaces\n/.pi/worktrees/\n`, 'utf8')
+  }
+  private async linkDependencies(repositoryPath: string, path: string): Promise<void> {
+    for (const name of ['node_modules', '.venv', 'vendor']) {
+      const source = join(repositoryPath, name), destination = join(path, name)
       try {
-        if ((await pathExists(sourcePath)) && !(await pathExists(destPath))) {
-          // 在 Unix 上采用相对符号链接，在 Windows 上若权限允许使用目录符号链接
-          const relSource = relative(targetWorktreePath, sourcePath)
-          const symlinkType = process.platform === 'win32' ? 'junction' : 'dir'
-          await symlink(relSource, destPath, symlinkType)
-        }
-      } catch (err) {
-        // 软链接创建失败属非致命错误（例如 Windows 未开开发者权限）
-        console.warn(`[worktree] 共享依赖 ${name} 软链接创建跳过：`, err)
-      }
-    }
-  }
-
-  /**
-   * 创建新的隔离工作树。
-   */
-  async createWorktree(request: CreateWorktreeRequest): Promise<CreateWorktreeResult> {
-    const branchName = request.branchName.trim()
-    if (
-      branchName === '' ||
-      branchName.length > WORKTREE_BRANCH_NAME_MAX_CHARS ||
-      !WORKTREE_BRANCH_NAME_REGEX.test(branchName)
-    ) {
-      return errorResult('INVALID_REQUEST', '分支名称不合法，请使用标准 Git 分支名。')
-    }
-
-    return this.enqueueWrite(async () => {
-      const active = await this.getActiveRepository()
-      if (active === null) {
-        return errorResult('NOT_FOUND', '当前项目不是有效的 Git 仓库。')
-      }
-
-      const repoRoot = active.repository.root
-      const worktreeBaseDir = resolve(join(repoRoot, '.pi', 'worktrees'))
-      const targetWorktreePath = resolve(join(worktreeBaseDir, branchName))
-
-      // 安全路径边界校验：确保工作树严格位于 .pi/worktrees 内
-      const rel = relative(worktreeBaseDir, targetWorktreePath)
-      if (rel.startsWith('..') || isAbsolute(rel)) {
-        return errorResult('FORBIDDEN', '目标工作树路径非法，不允许跳出 .pi/worktrees 目录。')
-      }
-
-      if (await pathExists(targetWorktreePath)) {
-        return errorResult('CONFLICT', `目标工作树路径已存在：${branchName}`)
-      }
-
-      // 1. 确保主仓库已将 .pi/worktrees/ 纳入忽略
-      await this.ensureGitignore(repoRoot)
-
-      // 2. 执行 git worktree add
-      const addArgs = ['worktree', 'add', '-b', branchName, targetWorktreePath]
-      if (request.baseBranch !== undefined && request.baseBranch.trim() !== '') {
-        addArgs.push(request.baseBranch.trim())
-      }
-
-      try {
-        await runGit(addArgs, {
-          cwd: repoRoot,
-          timeoutMs: GIT_READ_TIMEOUT_MS
-        })
+        if (!await exists(source) || await exists(destination) || !(await lstat(source)).isDirectory()) continue
+        // 只共享明确忽略的可再生目录，不能把仓库已跟踪内容替换成链接。
+        await runGit(['check-ignore', '--quiet', '--', name], { cwd: repositoryPath, timeoutMs: GIT_READ_TIMEOUT_MS })
+        await symlink(process.platform === 'win32' ? source : relative(path, source), destination,
+          process.platform === 'win32' ? 'junction' : 'dir')
       } catch (error) {
-        if (error instanceof GitCommandError) {
-          return errorResult('GIT_ERROR', `创建 Git 工作树失败：${error.stderr || error.message}`)
-        }
-        return errorResult('INTERNAL_ERROR', error instanceof Error ? error.message : String(error))
+        if (error instanceof GitCommandError && error.exitCode === 1) continue
+        console.warn(`[worktree] 未共享依赖目录 ${name}：`, error)
       }
-
-      // 3. 编排公共依赖目录的符号链接
-      await this.linkDependencies(repoRoot, targetWorktreePath)
-
-      // 4. 查询并返回新工作树的准确信息
-      const listRes = await this.listWorktrees()
-      if (!listRes.ok) {
-        return errorResult(listRes.error.code, listRes.error.message)
-      }
-
-      const normTarget = normalizePath(targetWorktreePath)
-      const found = listRes.worktrees.find((w) => normalizePath(w.path) === normTarget)
-      if (found === undefined) {
-        return errorResult('INTERNAL_ERROR', '工作树已创建，但无法从工作树列表中查询到该条目。')
-      }
-
-      return { ok: true, worktree: found }
+    }
+  }
+  async createWorktree(workspace: WorkspaceContext): Promise<void> {
+    const { repositoryPath, path } = await this.managedPath(workspace)
+    await this.enqueue(repositoryPath, async () => {
+      if (await exists(path)) throw new WorktreeOperationError('CONFLICT', '任务目录已存在，未覆盖。')
+      if (!workspace.branch || !workspace.baseCommit) throw new WorktreeOperationError('INVALID_REQUEST', '任务缺少固定分支或起始提交。')
+      await this.ensureLocalExclude(repositoryPath)
+      await runGit(['worktree', 'add', '-b', workspace.branch, path, workspace.baseCommit], { cwd: repositoryPath, timeoutMs: GIT_READ_TIMEOUT_MS })
+      await this.linkDependencies(repositoryPath, path)
+      await this.assertUsable(workspace)
     })
   }
-
-  /**
-   * 移除工作树，并可选删除关联分支。
-   */
-  async removeWorktree(request: RemoveWorktreeRequest): Promise<RemoveWorktreeResult> {
-    const rawPath = request.worktreePath.trim()
-    if (rawPath === '') {
-      return errorResult('INVALID_REQUEST', '必须指定要移除的工作树路径。')
+  async checkWorktreeStatus(workspace: WorkspaceContext): Promise<WorktreeStatus> {
+    const entry = await this.registeredEntry(workspace)
+    const { stdout } = await runGit(['status', '--porcelain=v1', '-z'], { cwd: entry.path, timeoutMs: GIT_READ_TIMEOUT_MS })
+    let changedFileCount = 0, untrackedFileCount = 0
+    const entries = stdout.split('\0')
+    for (let index = 0; index < entries.length; index++) {
+      const line = entries[index]
+      if (!line) continue
+      if (line.startsWith('??')) untrackedFileCount++
+      else {
+        changedFileCount++
+        if (line.slice(0, 2).includes('R') || line.slice(0, 2).includes('C')) index++
+      }
     }
-
-    return this.enqueueWrite(async () => {
-      const active = await this.getActiveRepository()
-      if (active === null) {
-        return errorResult('NOT_FOUND', '当前项目不是有效的 Git 仓库。')
-      }
-
-      const listRes = await this.listWorktrees()
-      if (!listRes.ok) {
-        return errorResult(listRes.error.code, listRes.error.message)
-      }
-
-      const normTarget = normalizePath(rawPath)
-      const targetWorktree = listRes.worktrees.find((w) => normalizePath(w.path) === normTarget)
-
-      if (targetWorktree === undefined) {
-        return errorResult('NOT_FOUND', '未找到指定的工作树条目。')
-      }
-
-      // 严禁移除主工作树
-      if (targetWorktree.isMain) {
-        return errorResult('FORBIDDEN', '严禁移除主仓库工作树！')
-      }
-
-      // 1. 执行 git worktree remove
-      const removeArgs = ['worktree', 'remove', targetWorktree.path]
-      if (request.force === true) {
-        removeArgs.push('--force')
-      }
-
-      try {
-        await runGit(removeArgs, {
-          cwd: active.repository.root,
-          timeoutMs: GIT_READ_TIMEOUT_MS
-        })
-      } catch (error) {
-        if (error instanceof GitCommandError) {
-          return errorResult('GIT_ERROR', `移除工作树失败：${error.stderr || error.message}`)
-        }
-        return errorResult('INTERNAL_ERROR', error instanceof Error ? error.message : String(error))
-      }
-
-      // 2. 如果指定了删除分支，且该工作树有关联分支
-      const shouldDeleteBranch = request.deleteBranch !== false
-      if (shouldDeleteBranch && targetWorktree.branch !== null) {
-        try {
-          await runGit(['branch', '-D', targetWorktree.branch], {
-            cwd: active.repository.root,
-            timeoutMs: GIT_READ_TIMEOUT_MS
-          })
-        } catch (branchError) {
-          console.warn(`[worktree] 移除关联分支 ${targetWorktree.branch} 失败：`, branchError)
-        }
-      }
-
-      return { ok: true }
-    })
+    return { path: entry.path, isClean: changedFileCount === 0 && untrackedFileCount === 0, changedFileCount, untrackedFileCount }
   }
-
-  /**
-   * 检查指定工作树是否有未提交改动。
-   */
-  async checkWorktreeStatus(request: WorktreeStatusRequest): Promise<WorktreeStatusResult> {
-    const targetPath = request.worktreePath.trim()
-    if (targetPath === '') {
-      return errorResult('INVALID_REQUEST', '必须指定要检测的工作树路径。')
-    }
-
-    if (!(await pathExists(targetPath))) {
-      return errorResult('NOT_FOUND', '工作树目录不存在。')
-    }
-
-    try {
-      const { stdout } = await runGit(['status', '--porcelain=v1'], {
-        cwd: targetPath,
-        timeoutMs: GIT_READ_TIMEOUT_MS
-      })
-
-      const lines = stdout.split(/\r?\n/u).map((l) => l.trim()).filter((l) => l !== '')
-      let changedCount = 0
-      let untrackedCount = 0
-
-      for (const line of lines) {
-        if (line.startsWith('??')) {
-          untrackedCount++
-        } else {
-          changedCount++
-        }
-      }
-
-      const status: WorktreeStatus = {
-        path: targetPath,
-        isClean: changedCount === 0 && untrackedCount === 0,
-        changedFileCount: changedCount,
-        untrackedFileCount: untrackedCount
-      }
-
-      return { ok: true, status }
-    } catch (error) {
-      if (error instanceof GitCommandError) {
-        return errorResult('GIT_ERROR', `检查工作树状态失败：${error.message}`)
-      }
-      return errorResult('INTERNAL_ERROR', error instanceof Error ? error.message : String(error))
-    }
+  async removeWorktree(workspace: WorkspaceContext, options: { readonly force: boolean; readonly deleteBranch: boolean }): Promise<{ cleanupError: string | null }> {
+    const { repositoryPath } = await this.managedPath(workspace)
+    return this.enqueue(repositoryPath, () => this.removeInQueue(workspace, options))
   }
-
-  /**
-   * 将工作树的分支合入当前主分支，并可选自动清理该工作树与分支。
-   */
-  async mergeWorktree(request: MergeWorktreeRequest): Promise<MergeWorktreeResult> {
-    const rawPath = request.worktreePath.trim()
-    if (rawPath === '') {
-      return errorResult('INVALID_REQUEST', '必须指定要合并的工作树路径。')
+  /** 只有公开入口入队；合入与移除不在队列内相互调用，避免等待自身尾部。 */
+  private async removeInQueue(workspace: WorkspaceContext, options: { readonly force: boolean; readonly deleteBranch: boolean }): Promise<{ cleanupError: string | null }> {
+    const { repositoryPath } = await this.managedPath(workspace)
+    const entry = await this.registeredEntry(workspace)
+    if (workspace.mergedTaskCommit !== null && entry.headCommit !== workspace.mergedTaskCommit) {
+      throw new WorktreeOperationError('CONFLICT', '合入后任务分支又产生了提交，未删除这些新成果。')
     }
-
-    return this.enqueueWrite(async () => {
-      const active = await this.getActiveRepository()
-      if (active === null) {
-        return errorResult('NOT_FOUND', '当前项目不是有效的 Git 仓库。')
-      }
-
-      const listRes = await this.listWorktrees()
-      if (!listRes.ok) {
-        return errorResult(listRes.error.code, listRes.error.message)
-      }
-
-      const normTarget = normalizePath(rawPath)
-      const targetWorktree = listRes.worktrees.find((w) => normalizePath(w.path) === normTarget)
-      if (targetWorktree === undefined) {
-        return errorResult('NOT_FOUND', '未找到指定的工作树条目。')
-      }
-
-      if (targetWorktree.isMain) {
-        return errorResult('FORBIDDEN', '主工作树无需合入自身。')
-      }
-
-      if (targetWorktree.branch === null) {
-        return errorResult('INVALID_REQUEST', '该工作树处于游离（detached）状态，无分支可合并。')
-      }
-
-      // 1. 检查主工作树状态是否干净，防止未提交的改动导致 merge 失败或混淆
-      const { stdout: mainStatusOut } = await runGit(['status', '--porcelain=v1'], {
-        cwd: active.repository.root,
-        timeoutMs: GIT_READ_TIMEOUT_MS
-      })
-      if (mainStatusOut.trim() !== '') {
-        return errorResult('CONFLICT', '主工作区存在未提交或未暂存的修改，请先提交或暂存后再合并。')
-      }
-
-      // 2. 检查工作树内是否有未提交的改动，若有自动打快照收录
-      const { stdout: wtStatusOut } = await runGit(['status', '--porcelain=v1'], {
-        cwd: targetWorktree.path,
-        timeoutMs: GIT_READ_TIMEOUT_MS
-      })
-      if (wtStatusOut.trim() !== '') {
-        await runGit(['add', '-A'], { cwd: targetWorktree.path, timeoutMs: GIT_READ_TIMEOUT_MS })
-        await runGit(['commit', '-m', 'pi-desk: finalize before merge', '--no-verify'], {
-          cwd: targetWorktree.path,
-          timeoutMs: GIT_READ_TIMEOUT_MS
-        })
-      }
-
-      // 3. 在主仓库执行 git merge
-      const isSquash = request.squash === true
-      const mergeArgs = isSquash
-        ? ['merge', '--squash', targetWorktree.branch]
-        : ['merge', '--no-ff', targetWorktree.branch, '-m', `Merge worktree branch '${targetWorktree.branch}'`]
-
+    await runGit(['worktree', 'remove', ...(options.force ? ['--force'] : []), entry.path], { cwd: repositoryPath, timeoutMs: GIT_READ_TIMEOUT_MS })
+    if (options.deleteBranch && workspace.branch) {
       try {
-        await runGit(mergeArgs, {
-          cwd: active.repository.root,
-          timeoutMs: GIT_READ_TIMEOUT_MS
-        })
-        if (isSquash) {
-          await runGit(['commit', '-m', `Squash merge branch '${targetWorktree.branch}'`], {
-            cwd: active.repository.root,
-            timeoutMs: GIT_READ_TIMEOUT_MS
-          })
-        }
-      } catch (error) {
-        if (error instanceof GitCommandError) {
-          return errorResult('CONFLICT', `合并分支发生冲突或失败：${error.stderr || error.message}。工作树与临时分支已保留。`)
-        }
-        return errorResult('INTERNAL_ERROR', error instanceof Error ? error.message : String(error))
+        await runGit(['branch', options.force || workspace.mergedCommit ? '-D' : '-d', '--', workspace.branch],
+          { cwd: repositoryPath, timeoutMs: GIT_READ_TIMEOUT_MS })
+      } catch (error) { return { cleanupError: `工作树目录已移除，临时分支保留：${error instanceof Error ? error.message : String(error)}` } }
+    }
+    return { cleanupError: null }
+  }
+  async mergeWorktree(workspace: WorkspaceContext, squash: boolean): Promise<{ mergedCommit: string; taskCommit: string }> {
+    const { repositoryPath } = await this.managedPath(workspace)
+    return this.enqueue(repositoryPath, async () => {
+      const entry = await this.registeredEntry(workspace)
+      const destinationBranch = await this.branchOf(repositoryPath)
+      if (!destinationBranch || destinationBranch !== workspace.destinationBranch) throw new WorktreeOperationError('CONFLICT', '合入目标分支已变化，未合入其他分支。')
+      const { stdout: mainStatus } = await runGit(['status', '--porcelain=v1'], { cwd: repositoryPath, timeoutMs: GIT_READ_TIMEOUT_MS })
+      if (mainStatus.trim()) throw new WorktreeOperationError('CONFLICT', '目标工作区存在未提交修改；本阶段不自动处理这些修改。')
+      const taskStatus = await this.checkWorktreeStatus(workspace)
+      if (!taskStatus.isClean) {
+        // 任务尚有未提交成果时先暂存并提交再合入；该交付提交不是独立轮次检查点。
+        await runGit(['add', '-A'], { cwd: entry.path, timeoutMs: GIT_READ_TIMEOUT_MS })
+        await runGit(['commit', '-m', 'pi-desk: finalize before merge', '--no-verify'], { cwd: entry.path, timeoutMs: GIT_READ_TIMEOUT_MS })
       }
-
-      // 4. 获取最新的合并 commit hash
-      const { stdout: headOut } = await runGit(['rev-parse', 'HEAD'], {
-        cwd: active.repository.root,
-        timeoutMs: GIT_READ_TIMEOUT_MS
-      })
-      const mergedCommit = headOut.trim()
-
-      // 5. 若配置了 deleteAfterMerge（默认 true），自动清理工作树与分支
-      if (request.deleteAfterMerge !== false) {
-        await this.removeWorktree({
-          worktreePath: targetWorktree.path,
-          deleteBranch: true,
-          force: true
-        })
-      }
-
-      return { ok: true, mergedCommit }
+      const { stdout: taskHead } = await runGit(['rev-parse', 'HEAD'], { cwd: entry.path, timeoutMs: GIT_READ_TIMEOUT_MS })
+      const branch = workspace.branch
+      if (!branch) throw new WorktreeOperationError('INVALID_REQUEST', '任务没有可合入分支。')
+      await runGit(squash ? ['merge', '--squash', branch] : ['merge', '--no-ff', branch, '-m', `Merge task '${workspace.id}'`],
+        { cwd: repositoryPath, timeoutMs: GIT_READ_TIMEOUT_MS })
+      if (squash) await runGit(['commit', '-m', `Squash task '${workspace.id}'`], { cwd: repositoryPath, timeoutMs: GIT_READ_TIMEOUT_MS })
+      const { stdout } = await runGit(['rev-parse', 'HEAD'], { cwd: repositoryPath, timeoutMs: GIT_READ_TIMEOUT_MS })
+      return { mergedCommit: stdout.trim(), taskCommit: taskHead.trim() }
     })
   }
 }

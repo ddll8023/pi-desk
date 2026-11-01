@@ -2,20 +2,21 @@
  * 右侧面板文件条目的拖拽载荷、路径引用文本与「写入终端」前的转义。
  *
  * 拖拽只在应用内成立：载荷写进自定义 MIME，不写 `text/plain`，因此拖到应用外不会带出路径，
- * 也不会被别的输入框当成文本收下。载荷里带上项目路径，落点可以复核这次拖动是否仍属于当前项目。
+ * 也不会被别的输入框当成文本收下。载荷固定所属项目与工作区身份，落点复核这次拖动是否仍属于同一工作区。
  * 落点有两个：终端面板写入带引号的绝对路径，输入坞插入项目相对路径文本（不读文件内容）。
  *
  * 路径一律由主进程解析成绝对路径后才写入终端；这里的引号规则按终端实际启动的 shell 可执行名判定，
- * 因为终端的工作目录固定是项目根，但用户可能已经在里面切到别处，绝对路径不依赖当前目录。
+ * 因为终端的执行目录固定为对应工作区执行根，绝对路径由主进程解析，不依赖终端内当前的相对目录。
  */
 import type { ProjectDirectoryEntryKind } from '../../../shared/project-file-api'
+import { isWorkspaceTarget } from '../../../shared/workspace-api'
+import type { WorkspaceTarget } from '../../../shared/workspace-api'
 
 /** 应用内文件拖拽的自定义 MIME；落点只认这一种载荷。 */
 export const PROJECT_ENTRY_DRAG_MIME = 'application/x-pi-desk-project-entry'
 
-/** 一次文件拖动携带的最小信息：项目根用于复核归属，相对路径用于交给主进程解析。 */
-export interface ProjectEntryDragPayload {
-  readonly projectPath: string
+/** 一次文件拖动携带的最小信息：项目与工作区身份用于复核归属，相对路径用于交给主进程解析。 */
+export interface ProjectEntryDragPayload extends WorkspaceTarget {
   readonly path: string
   readonly name: string
   readonly kind: ProjectDirectoryEntryKind
@@ -52,12 +53,13 @@ export function readProjectEntryDragData(event: DragEvent): ProjectEntryDragPayl
   }
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return null
   const fields = value as Record<string, unknown>
-  if (typeof fields.projectPath !== 'string' || fields.projectPath === '') return null
+  if (!isWorkspaceTarget(fields)) return null
   if (typeof fields.path !== 'string' || fields.path === '') return null
   if (typeof fields.name !== 'string' || fields.name === '') return null
   if (typeof fields.kind !== 'string' || !ENTRY_KINDS.includes(fields.kind)) return null
   return {
     projectPath: fields.projectPath,
+    workspaceId: fields.workspaceId,
     path: fields.path,
     name: fields.name,
     kind: fields.kind as ProjectDirectoryEntryKind

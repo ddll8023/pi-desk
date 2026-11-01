@@ -3,7 +3,7 @@
  *
  * 不递归、也不做 gitignore 过滤：树是按层懒加载的，需要感知的只有已展开的那几层，逐目录 `fs.watch`
  * 因此天然不会进入 `node_modules` 与 `.git`，也不需要维护忽略表。页面提交目录集合，这里按集合做增删；
- * 项目根变化时整体重建，页面不需要自己拆监听。目录相对路径一律经 `normalizeRelativeDirectory` 归一，
+ * 工作区身份或执行根变化时整体重建，页面不需要自己拆监听。目录相对路径经 normalizeRelativeDirectory 归一，
  * 绝对路径与越界路径直接丢弃，页面无法借此监听项目外的东西。
  *
  * 事件按批发送：同一目录只报一次，连续变化用 150ms 合并窗口、自首个事件起最多 500ms 必发，避免一次
@@ -12,6 +12,8 @@
  * 并清掉过期的展开状态；这些失效目录的监听同时摘掉，等页面重新列举成功后再登记。
  */
 import { watch } from 'node:fs'
+import { workspaceTarget } from '../../shared/workspace-api'
+import type { WorkspaceContext } from '../../shared/workspace-api'
 import type { FSWatcher } from 'node:fs'
 import { stat } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -168,17 +170,18 @@ async function isDirectory(path: string): Promise<boolean> {
 }
 
 export interface ProjectDirectoryWatcherOptions {
-  /** 当前项目路径的内存快照；未选择项目时为 null，不触发磁盘访问。 */
-  readonly currentProjectPath: () => string | null
   /** 变化只发给当前窗口；页面已关闭时调用方自行丢弃。 */
   readonly sendChange: (change: ProjectDirectoryChange) => void
   /** 确实有目录发生变化时回调一次；用于丢弃文件索引等派生缓存，overflow 也会触发。 */
-  readonly onChanged?: () => void
+  readonly onChanged?: (workspaceId: string) => void
 }
 
 export class ProjectDirectoryWatcher {
-  /** 监听所属的项目根；与当前项目不一致时整体重建。 */
+  /** 监听所属工作区的执行根；身份或根变化时整体重建。 */
   private root: string | null = null
+  private context: WorkspaceContext | null = null
+  private generation = 0
+  private requestTicket = 0
   /** 已建立的监听：键是项目内相对目录，根目录为 `''`。 */
   private readonly entries = new Map<string, FSWatcher>()
   /** 系统级监听额度用尽后本次登记周期内不再尝试，避免反复失败抖动。 */
@@ -197,13 +200,18 @@ export class ProjectDirectoryWatcher {
   }
 
   /**
-   * 按页面给出的目录集合调整监听：切项目时先拆掉旧根的全部监听，再按新集合登记。
+   * 按固定工作区和目录集合调整监听；身份或执行根变化时先拆旧监听，过期登记请求不生效。
    * 返回实际生效的目录数；不存在的目录不计入，也不会让整体失败。
    */
-  async sync(directories: readonly string[]): Promise<ProjectDirectoryWatchResult> {
-    const root = this.options.currentProjectPath()
-    if (root !== this.root) {
-      // 旧根的在途批次已不属于新项目：连同监听一起丢掉。
+  beginRequest(): number { return ++this.requestTicket }
+
+  async sync(context: WorkspaceContext | null, directories: readonly string[], ticket = this.beginRequest()): Promise<ProjectDirectoryWatchResult> {
+    if (ticket !== this.requestTicket) return { ok: true, data: { watching: this.entries.size } }
+    const root = context?.rootPath ?? null
+    if (root !== this.root || context?.id !== this.context?.id) {
+      this.generation += 1
+      this.context = context
+      // 旧工作区的在途批次与监听一起失效，不能发到新环境。
       this.batcher.clear()
       this.stopAll()
       this.root = root
@@ -224,14 +232,21 @@ export class ProjectDirectoryWatcher {
   }
 
   /**
-   * 拆掉全部监听并回到未选择项目的状态；窗口关闭与退出时调用。
-   * 页面切项目不需要走到这里：下次登记时根不一致，`sync` 会自己重建。
+   * 拆掉全部监听并撤销工作区与请求代际；窗口关闭、退出或所属工作区释放时调用。
+   * 页面切换环境可直接登记新目标，sync 根据身份及执行根变化重建。
    */
   dispose(): void {
+    this.requestTicket += 1
     this.batcher.clear()
     this.stopAll()
     this.root = null
+    this.context = null
+    this.generation += 1
     this.degraded = false
+  }
+
+  releaseWorkspace(workspaceId: string): void {
+    if (this.context?.id === workspaceId) this.dispose()
   }
 
   /** 建立一层目录的监听；目录还不存在或没有权限时返回 false，等页面重新列举后再登记。 */
@@ -280,35 +295,39 @@ export class ProjectDirectoryWatcher {
   /** 发一批变化：先把失效目录折算到最近的仍然存在的父目录，再交给页面。 */
   private async flush(batch: DirectoryBatch): Promise<void> {
     const root = this.root
-    if (root === null) return
-    this.options.onChanged?.()
+    const context = this.context
+    const generation = this.generation
+    if (root === null || context === null) return
+    this.options.onChanged?.(context.id)
     if (batch.overflow) {
-      this.options.sendChange({ kind: 'overflow', projectPath: root, directories: [] })
+      this.options.sendChange({ ...workspaceTarget(context), kind: 'overflow', directories: [] })
       return
     }
 
     const affected: string[] = []
     const seen = new Set<string>()
     for (const directory of batch.directories) {
-      const existing = await this.existingAncestor(root, directory)
-      // 期间切换了项目：这一批已经不属于当前根，整批丢弃。
-      if (root !== this.root) return
+      const existing = await this.existingAncestor(root, directory, generation)
+      // 期间工作区代际已变化：这一批不再属于当前监听环境，整批丢弃。
+      if (generation !== this.generation) return
       if (existing === null || seen.has(existing)) continue
       seen.add(existing)
       affected.push(existing)
     }
     if (affected.length === 0) return
-    this.options.sendChange({ kind: 'changed', projectPath: root, directories: affected })
+    this.options.sendChange({ ...workspaceTarget(context), kind: 'changed', directories: affected })
   }
 
   /**
    * 取这一层仍然存在的最近祖先：目录还在就是它自己，已被删除或移走就上溯到父目录。
    * 上溯过程中顺带摘掉失效目录的监听，避免继续持有已删除 inode 的句柄。
    */
-  private async existingAncestor(root: string, directory: string): Promise<string | null> {
+  private async existingAncestor(root: string, directory: string, generation: number): Promise<string | null> {
     let current = directory
     for (;;) {
-      if (await isDirectory(absoluteOf(root, current))) return current
+      const found = await isDirectory(absoluteOf(root, current))
+      if (generation !== this.generation) return null
+      if (found) return current
       this.unwatch(current)
       if (current === '') return null
       const slash = current.lastIndexOf('/')

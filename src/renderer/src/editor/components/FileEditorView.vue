@@ -9,6 +9,7 @@ import { isHtmlPath } from '../file-language'
 import { useFileDocumentSession } from '../file-document-session'
 import type { FileEditorMode } from '../stores/project-editor'
 import { useProjectEditorStore } from '../stores/project-editor'
+import { useTaskWorkspacesStore } from '../../workspace/stores/task-workspaces'
 import AppButton from '../../ui/AppButton.vue'
 import CodeMirrorEditor from './CodeMirrorEditor.vue'
 import ConfirmDialog from '../../ui/ConfirmDialog.vue'
@@ -17,6 +18,7 @@ import FileHtmlPreview from './FileHtmlPreview.vue'
 
 const props = defineProps<{ readonly tabKey: string; readonly active: boolean }>()
 const editorStore = useProjectEditorStore()
+const workspaces = useTaskWorkspacesStore()
 const editorRef = ref<InstanceType<typeof CodeMirrorEditor> | null>(null)
 const previewRef = ref<InstanceType<typeof FileMarkdownView> | null>(null)
 const session = useFileDocumentSession({
@@ -50,6 +52,8 @@ const unsupportedReason = computed(() => {
 })
 const readOnlyNote = computed(() => {
   const content = textContent.value
+  const workspace = record.value ? workspaces.of(record.value.workspaceId) : null
+  if (record.value && (workspaces.isLocked(record.value.workspaceId) || workspace?.phase !== 'ready')) return '工作区正在收敛或已结束；保留当前草稿，不执行写入。'
   return content && content.size > PROJECT_FILE_EDIT_MAX_BYTES ? `文件超过 ${PROJECT_FILE_EDIT_MAX_BYTES / 1024 / 1024} MiB，只能查看，不能编辑。` : null
 })
 const editable = computed(() => textContent.value !== null && readOnlyNote.value === null)
@@ -214,6 +218,7 @@ onBeforeUnmount(() => {
             :text="documentText"
             :path="record?.path ?? ''"
             :project-path="record?.projectPath ?? ''"
+            :workspace-id="record?.workspaceId ?? ''"
             :font-size="editorStore.previewFontSize"
             :show-frontmatter="editorStore.showFrontmatter"
             :active="active && mode === 'preview'"
@@ -237,6 +242,7 @@ onBeforeUnmount(() => {
             :text="documentText"
             :path="record?.path ?? ''"
             :project-path="record?.projectPath ?? ''"
+            :workspace-id="record?.workspaceId ?? ''"
             :active="active && mode === 'preview'"
           />
         </div>

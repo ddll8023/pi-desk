@@ -1,18 +1,20 @@
 /** 终端历史与冷画面的落盘：输出批量追加、积压可计量，画面及元数据原子写入且同一路径不并发写。 */
 import { appendFile, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { isWorkspaceId } from '../shared/workspace-api'
 import { TERMINAL_TITLE_MAX_CHARS } from '../shared/terminal-api'
 import { TERMINAL_SNAPSHOT_MAX_CHARS } from '../shared/terminal-daemon-protocol'
 
 const MAX_HISTORY_CHARS = 4 * 1024 * 1024
 const RESTORE_HISTORY_CHARS = 2 * 1024 * 1024
-const SESSIONS_FILE_VERSION = 1
+const SESSIONS_FILE_VERSION = 2
 const APPEND_INTERVAL_MS = 16
 const APPEND_BATCH_CHARS = 256 * 1024
 
 export interface PersistedSessionRecord {
   readonly id: string
   readonly projectPath: string
+  readonly workspaceId: string | null
   readonly shell: string
   readonly cwd: string
   /** 用户命名的标题；null 表示用户未命名，回退到程序上报标题或 shell 默认名。 */
@@ -173,7 +175,7 @@ export class HistoryStore {
       const parsed: unknown = JSON.parse(await readFile(this.options.sessionsFile, 'utf8'))
       if (typeof parsed !== 'object' || parsed === null) return []
       const file = parsed as { version?: unknown; sessions?: unknown }
-      if (file.version !== SESSIONS_FILE_VERSION || !Array.isArray(file.sessions)) return []
+      if ((file.version !== 1 && file.version !== SESSIONS_FILE_VERSION) || !Array.isArray(file.sessions)) return []
       const records: PersistedSessionRecord[] = []
       const ids = new Set<string>()
       for (const entry of file.sessions) {
@@ -243,9 +245,10 @@ function parseRecord(value: unknown): PersistedSessionRecord | null {
   }
   if (!isDimension(record.cols) || !isDimension(record.rows)
     || typeof record.createdAt !== 'number' || !Number.isFinite(record.createdAt)) return null
+  if (record.workspaceId !== undefined && record.workspaceId !== null && !isWorkspaceId(record.workspaceId)) return null
   const title = parseOptionalTitle(record.title)
   return {
-    id: record.id, projectPath: record.projectPath as string, shell: record.shell as string,
+    id: record.id, projectPath: record.projectPath as string, workspaceId: isWorkspaceId(record.workspaceId) ? record.workspaceId : null, shell: record.shell as string,
     cwd: record.cwd as string, userTitle: parseOptionalTitle(record.userTitle),
     title, defaultTitle: parseOptionalTitle(record.defaultTitle) ?? title ?? shellNameOf(record.shell as string),
     cols: record.cols, rows: record.rows, createdAt: record.createdAt

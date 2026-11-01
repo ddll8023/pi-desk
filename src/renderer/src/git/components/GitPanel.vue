@@ -27,6 +27,7 @@ import { computed, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { GIT_STATUS_LIMIT } from '../../../../shared/git-api'
 import type { GitChangeEntry, GitChangeStatus, GitConflictKind, GitConflictOperation } from '../../../../shared/git-api'
+import type { WorkspaceTarget } from '../../../../shared/workspace-api'
 import { useGitHistoryStore } from '../stores/git-history'
 import { useGitStatusStore, type GitGroup } from '../stores/git-status'
 import { useProjectStore } from '../../projects/stores/project'
@@ -94,7 +95,7 @@ interface DiscardTargetBatch {
   readonly paths: readonly string[]
 }
 
-type DiscardTarget = DiscardTargetSingle | DiscardTargetBatch
+type DiscardTarget = (DiscardTargetSingle | DiscardTargetBatch) & WorkspaceTarget
 
 /** 等待确认的丢弃目标（单个条目或批量条目）；null 表示对话框关闭。 */
 const pendingDiscard = ref<DiscardTarget | null>(null)
@@ -102,10 +103,10 @@ const pendingDiscard = ref<DiscardTarget | null>(null)
 const view = ref<'changes' | 'history'>('changes')
 
 // 切项目时归位到未提交更改视图，并重置弹窗状态
-watch(() => currentProject.value?.path, () => {
+watch(() => [currentProject.value?.path, gitStore.context?.id, gitStore.context?.phase], () => {
   view.value = 'changes'
   pendingDiscard.value = null
-})
+}, { flush: 'sync' })
 
 const selectionLabel = computed(() => (
   selection.value === null ? '' : AREA_LABELS[selection.value.area]
@@ -154,29 +155,29 @@ function canUnstage(entry: GitChangeEntry): boolean {
 }
 
 function openFile(entry: GitChangeEntry): void {
-  workspaceTabsStore.openFileTab(entry.path)
+  if (status.value) workspaceTabsStore.openFileTab(entry.path, undefined, undefined, status.value)
 }
 
 /** 差异视图里的「打开文件」：路径来自当前选中项，不构造假条目。 */
 function openSelected(): void {
   const current = selection.value
   if (current === null) return
-  workspaceTabsStore.openFileTab(current.path)
+  if (status.value) workspaceTabsStore.openFileTab(current.path, undefined, undefined, status.value)
 }
 
 function requestDiscard(entry: GitChangeEntry): void {
-  pendingDiscard.value = { kind: 'single', entry }
+  if (status.value) pendingDiscard.value = { kind: 'single', entry, projectPath: status.value.projectPath, workspaceId: status.value.workspaceId }
 }
 
 function requestDiscardBatch(target: { title: string; description: string; detail: string; paths: readonly string[] }): void {
   if (target.paths.length === 0) return
-  pendingDiscard.value = { kind: 'batch', ...target }
+  if (status.value) pendingDiscard.value = { kind: 'batch', ...target, projectPath: status.value.projectPath, workspaceId: status.value.workspaceId }
 }
 
 function confirmDiscard(): void {
   const target = pendingDiscard.value
   pendingDiscard.value = null
-  if (target === null) return
+  if (target === null || target.workspaceId !== gitStore.context?.id || target.projectPath !== currentProject.value?.path) return
   if (target.kind === 'single') {
     void gitStore.discard(target.entry)
   } else {
