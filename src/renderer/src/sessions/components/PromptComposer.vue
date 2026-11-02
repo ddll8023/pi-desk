@@ -660,12 +660,26 @@ function readAsBase64(file: File): Promise<string> {
   })
 }
 
-/** 输入行按内容自动增高：未到上限不出现滚动条，上限同时受窗口高度约束，矮窗口下不吃掉消息区。 */
+/** 检查运行环境是否原生支持 field-sizing（Chromium 123+ 原生支持，免除每次输入的脚本布局测量）。 */
+const supportsFieldSizing = typeof CSS !== 'undefined' && typeof CSS.supports === 'function'
+  && CSS.supports('field-sizing', 'content')
+
+/**
+ * 输入行按内容自动增高：
+ * 原生支持 field-sizing 时直接跳过脚本测量，彻底消除打字时的强制同步重排（Layout Thrashing）；
+ * 降级环境仅在内容溢出或高度需缩小时测量，未到上限不出现滚动条。
+ */
 function autoGrow(): void {
+  if (supportsFieldSizing) return
   const element = textarea.value
   if (element === null) return
-  element.style.height = 'auto'
   const maxHeight = Math.min(MAX_INPUT_HEIGHT, window.innerHeight * 0.4)
+  if (element.scrollHeight > element.clientHeight) {
+    element.style.height = `${Math.min(element.scrollHeight, maxHeight)}px`
+    element.style.overflowY = element.scrollHeight > maxHeight ? 'auto' : 'hidden'
+    return
+  }
+  element.style.height = 'auto'
   const wanted = element.scrollHeight
   element.style.height = `${Math.min(wanted, maxHeight)}px`
   element.style.overflowY = wanted > maxHeight ? 'auto' : 'hidden'
@@ -1572,7 +1586,6 @@ onMounted(() => {
           :aria-controls="activeListId"
           :aria-expanded="activeListOpen"
           @keydown="onKeydown"
-          @keyup="refreshFileToken"
           @click="refreshFileToken"
           @paste="onPaste"
           @compositionstart="composing = true"

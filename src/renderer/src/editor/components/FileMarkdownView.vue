@@ -76,6 +76,14 @@ let handledAnchor = 0
 let scrollFrame = 0
 let resizeObserver: ResizeObserver | null = null
 let disposed = false
+let surfaceUpdateTimer: ReturnType<typeof setTimeout> | null = null
+
+function cancelSurfaceUpdate(): void {
+  if (surfaceUpdateTimer !== null) {
+    clearTimeout(surfaceUpdateTimer)
+    surfaceUpdateTimer = null
+  }
+}
 
 function sourceState(): MarkdownSurfaceState {
   const reason = props.editable ? richMarkdownUnsupportedReason(props.text) : '此文件只读。'
@@ -106,9 +114,18 @@ function refreshSurface(): void {
   updateActiveHeading()
   handleAnchorRequest()
 }
-function onSurfaceUpdated(): void {
+/** 表面状态刷新：富文本连续按键事务期间通过防抖合并频繁的 DOM 遍历与标题测量，停顿后统一刷新。 */
+function onSurfaceUpdated(immediate = false): void {
   const generation = viewGeneration
-  void nextTick(() => { if (generation === viewGeneration) refreshSurface() })
+  cancelSurfaceUpdate()
+  if (immediate) {
+    void nextTick(() => { if (generation === viewGeneration) refreshSurface() })
+    return
+  }
+  surfaceUpdateTimer = setTimeout(() => {
+    surfaceUpdateTimer = null
+    if (generation === viewGeneration) refreshSurface()
+  }, 150)
 }
 function toggleToc(): void {
   showToc.value = !showToc.value
@@ -300,6 +317,7 @@ onMounted(() => {
 })
 onBeforeUnmount(() => {
   disposed = true; viewGeneration += 1
+  cancelSurfaceUpdate()
   flushEdit(true); closeSearch(false)
   resizeObserver?.disconnect()
   window.removeEventListener('keydown', onFindShortcut)
