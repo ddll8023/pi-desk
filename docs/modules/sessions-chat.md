@@ -87,7 +87,7 @@
 | `src/renderer/src/sessions/components/WorktreeTaskBanner.vue` | 任务工作区状态底栏、固定目标与审阅合并（支持 Squash 与自动清理）、运行终端关闭确认与放弃删除流程 |
 | `src/renderer/src/sessions/components/ChatMessageItem.vue` | 单消息、图片编号及说明、思考抽屉、纯过程紧凑步骤、流式打字光标、工具归组面板与生成式界面分发 |
 | `src/renderer/src/sessions/components/HistoryLoadSentinel.vue` | 历史加载触发哨兵 |
-| `src/renderer/src/sessions/components/ToolCard.vue` | 工具身份、查询／对象、范围与结果摘要，状态与耗时并列；区分 Diff 来源与片段，原文按需展开 |
+| `src/renderer/src/sessions/components/ToolCard.vue` | 单行紧凑展示操作分类徽章、真实工具名、语境化参数与状态耗时胶囊；展开区展示结构化结果卡片、Diff 与调试抽屉，原文按需展开 |
 | `src/renderer/src/sessions/components/ToolResultPreview.vue` | 工具结果的计数口径、命中内容、来源、历史状态与省略提示；只展示投影，不发起额外查询 |
 | `src/renderer/src/sessions/components/UsageDetailDialog.vue` | 会话用量明细与独立的 Codex 账户额度展示、按需读取与手动刷新 |
 | `src/renderer/src/sessions/components/SessionActivityBar.vue` | 会话活动摘要和明细 |
@@ -123,7 +123,7 @@
 
 ## 状态与边界
 
-工具卡、相邻工具组与执行抽屉使用同一操作分类。宿主从完整参数与结果提取有界语义摘要，实时与历史路径共用提取规则，摘要不依赖已经截断的 JSON 原文。卡片折叠时保留工具身份、查询或目标、已有范围信息及结果概况；展开先看命中内容与来源，原始参数和结果按需展开、续读。返回数、工具报告的总匹配数、文本预览中的可见条目数分别表达，缺失统计保持未知；部分报告、失败、无返回条目和截断不混同。Diff 标明结果或参数推断来源，可见片段计数不冒充完整文件改动量；页面不读项目文件或重跑工具补造展示事实。摘要类型、边界与载荷校验见 [F-runtime-state](shared.md#f-runtime-state综合-runtime-状态混合)。
+工具卡、相邻工具组与执行抽屉使用同一操作分类。宿主从完整参数与结果提取有界语义摘要，实时与历史路径共用提取规则，摘要不依赖已经截断的 JSON 原文。卡片折叠时以单行三段式呈现操作分类徽章、真实工具名首要身份、语境化参数及改动量；展开先看命中内容与来源、文件 Diff，原始参数和结果在底部抽屉按需展开、续读。返回数、工具报告的总匹配数、文本预览中的可见条目数分别表达，缺失统计保持未知；部分报告、失败、无返回条目和截断不混同。Diff 标明结果或参数推断来源，可见片段计数不冒充完整文件改动量；页面不读项目文件或重跑工具补造展示事实。摘要类型、边界与载荷校验见 [F-runtime-state](shared.md#f-runtime-state综合-runtime-状态混合)。
 
 运行注册表是运行身份、绑定代际、工作区授权和占用真源；SDK 持有会话及历史；renderer 保存展示副本、后台投影留底与有限历史缓存。后台新建与接入已有会话复用同一条授权与打开链，按目标项目复核信任，不参与桌面前台选择，也不清扫或占用桌面空白会话；手机首次发送创建与结果未知保护见[手机访问](lan-remote.md#状态与边界)。会话列表按项目取有界窗口，不能当作完整运行清单；列表由项目切换、删除、回退与新增会话落盘后的补读维护，打开与重载不回传列表，切换链不等目录扫描，列表读取失败也不回退已完成的切换。
 

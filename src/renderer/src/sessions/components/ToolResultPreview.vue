@@ -16,7 +16,7 @@ const headline = computed(() => toolResultHeadline(props.result))
       <span v-if="result.truncated" class="tool-result-flag">工具报告截断</span>
       <span v-if="result.outcome === 'partial'" class="tool-result-flag">非最终结果</span>
     </div>
-    <p v-if="result.summary && (result.returnedCount !== null || result.totalCount !== null)" class="tool-note">{{ result.summary }}</p>
+    <p v-if="result.summary && (result.returnedCount !== null || result.totalCount !== null)" class="tool-note tool-result-summary">{{ result.summary }}</p>
     <dl v-if="result.facts.length > 0" class="tool-args-summary tool-result-facts">
       <template v-for="entry in result.facts" :key="entry.label">
         <dt class="tool-arg-key">{{ entry.label }}</dt>
@@ -25,10 +25,12 @@ const headline = computed(() => toolResultHeadline(props.result))
     </dl>
     <ol v-if="result.items.length > 0" class="tool-result-list">
       <li v-for="(item, index) in result.items" :key="`${item.location ?? ''}:${item.title}:${index}`" class="tool-result-item">
-        <p class="tool-result-item-title">{{ item.title }}</p>
-        <p v-if="item.location" class="tool-result-location font-mono">{{ item.location }}</p>
+        <div class="tool-result-item-header">
+          <span class="tool-result-item-title">{{ item.title }}</span>
+          <span v-if="item.location" class="tool-result-location font-mono" :title="item.location">{{ item.location }}</span>
+        </div>
         <p v-if="item.meta" class="tool-result-meta">{{ item.meta }}</p>
-        <p v-if="item.excerpt" class="tool-result-excerpt">{{ item.excerpt }}</p>
+        <p v-if="item.excerpt" class="tool-result-excerpt font-mono">{{ item.excerpt }}</p>
         <p v-if="item.evidence" class="tool-result-evidence">{{ item.evidence }}</p>
       </li>
     </ol>

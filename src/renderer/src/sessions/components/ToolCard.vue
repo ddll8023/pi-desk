@@ -1,5 +1,5 @@
-<!-- 工具卡：折叠时展示操作身份、查询或目标、实际范围及结果摘要，状态与耗时各自保留。
-     展开先看有界结果与来源、Diff及请求说明，原始参数与结果按需展开；摘要缺失时退回文本，不猜计数。
+<!-- 工具卡：折叠时以单行三段式呈现分类徽章、真实工具名、语境化参数与状态耗时胶囊；
+     展开先看有界结果卡片、文件Diff与请求说明，原始参数与结果在底部抽屉按需展开；摘要缺失时退回文本，不猜计数。
      推断Diff和截断片段明确标记；开合只上报userExpand，滚动与历史续读继续由原有链路负责。 -->
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
@@ -107,7 +107,7 @@ const durationText = computed(() => {
 const argsSummary = computed<readonly ToolArgSummaryEntry[] | null>(() => execution.value?.argsSummary ?? null)
 const argsPreview = computed(() => toolCallPreview(props.block.toolName, argsSummary.value, execution.value?.argsText ?? null))
 
-/** 操作分类与抽屉统计共用；真实工具名保留为次级身份，不再被参数替代。 */
+/** 操作分类与抽屉统计共用；真实工具名作为第一身份突出显示，与语境化参数紧邻并列。 */
 const operation = computed(() => getToolOperation(props.block.toolName))
 const presentation = computed(() => execution.value?.presentation ?? null)
 const resultPresentation = computed(() => presentation.value?.result ?? null)
@@ -126,6 +126,27 @@ const isFileTool = computed(() => FILE_TOOLS.has(props.block.toolName))
 const projectRoot = computed(() => useProjectStore().currentProject?.path ?? null)
 const filePath = computed(() => (isFileTool.value ? toolFilePath(argsSummary.value) : null))
 const filePathText = computed(() => (filePath.value === null ? null : displayToolPath(filePath.value, projectRoot.value)))
+
+/**
+ * 格式化后的目标参数：按工具类型提供清晰的语境，避免与工具名称混淆。
+ * - 文件类工具优先使用相对路径；
+ * - 检索/搜索类工具自动为关键词添加双引号；
+ * - 其他工具（命令、ID、URL、偏好领域等）原样显示关键参数；
+ * - 无参数工具返回 null。
+ */
+const targetParamText = computed<string | null>(() => {
+  if (filePathText.value !== null) return filePathText.value
+  const subject = subjectPreview.value
+  if (subject === null || subject.trim() === '') return null
+  const trimmed = subject.trim()
+  if (operation.value.kind.endsWith('-search')) {
+    if ((trimmed.startsWith('"') && trimmed.endsWith('"')) || (trimmed.startsWith('\'') && trimmed.endsWith('\''))) {
+      return trimmed
+    }
+    return `"${trimmed}"`
+  }
+  return trimmed
+})
 
 /** 变更展示只来自投影已解析的 diff；来源与标题只描述事实，不推断未提供的语义。 */
 const diff = computed<ToolDiff | null>(() => execution.value?.diff ?? null)
@@ -349,28 +370,20 @@ function copyLabel(target: CopyTarget): string {
   <details v-if="execution" :open="expanded" class="tool-card" :class="{ 'is-running': isRunning }">
     <summary @click.prevent="toggleExpanded">
       <span class="disclosure" aria-hidden="true"></span>
-      <span class="tool-summary-content">
-        <span class="tool-summary-head">
-          <span class="tool-badge" :class="`tool-badge-${operation.tone}`">{{ operation.label }}</span>
-          <span class="tool-name font-mono" :title="block.toolName">{{ block.toolName }}</span>
-          <span v-if="operation.transport" class="tool-transport">{{ operation.transport }}</span>
-          <span v-if="changeCounts !== null" class="tool-change-count" :title="changeCountsTitle">
-            <span class="tool-change-add">+{{ changeCounts.add }}</span>
-            <span class="tool-change-remove">−{{ changeCounts.remove }}</span>
-            <span v-if="changeCountsInferred" class="tool-change-inferred">参数推断</span>
-            <span v-if="changeCountsPartial" class="tool-change-inferred">片段</span>
-          </span>
+      <div class="tool-summary-row">
+        <span class="tool-badge" :class="`tool-badge-${operation.tone}`">{{ operation.label }}</span>
+        <span class="tool-name font-mono" :title="block.toolName">{{ block.toolName }}</span>
+        <span v-if="targetParamText !== null" class="tool-target-param font-mono" :title="filePath ?? targetParamText">{{ targetParamText }}</span>
+        <span v-if="changeCounts !== null" class="tool-change-count" :title="changeCountsTitle">
+          <span class="tool-change-add">+{{ changeCounts.add }}</span>
+          <span class="tool-change-remove">−{{ changeCounts.remove }}</span>
+          <span v-if="changeCountsInferred" class="tool-change-inferred">推断</span>
+          <span v-if="changeCountsPartial" class="tool-change-inferred">片段</span>
         </span>
-        <span v-if="filePathText !== null" class="tool-target-path font-mono" :title="filePath ?? filePathText">{{ filePathText }}</span>
-        <span v-else-if="subjectPreview" class="tool-summary-subject" :title="subjectPreview">{{ subjectPreview }}</span>
-        <span class="tool-summary-outcome" :class="{ 'text-desk-danger': resultPresentation?.outcome === 'error' }">
-          <span class="tool-outcome-text" :title="outcomePreview">{{ outcomePreview }}</span>
-          <span v-if="resultPresentation?.hasMore === true" class="tool-inline-flag">还有更多</span>
-          <span v-if="resultPresentation?.truncated" class="tool-inline-flag">工具报告截断</span>
-          <span v-if="execution.textTruncated" class="tool-inline-flag">原文展示已截断</span>
+        <span v-if="resultPresentation?.outcome === 'error'" class="tool-summary-outcome text-desk-danger font-medium" :title="outcomePreview">
+          <span class="tool-outcome-text">{{ outcomePreview }}</span>
         </span>
-        <span v-if="contextPreview" class="tool-summary-context" :title="contextPreview">{{ contextPreview }}</span>
-      </span>
+      </div>
       <span class="tool-status-pill" :class="phaseClass">
         <svg v-if="isRunning" class="tool-spinner inline-block size-3 shrink-0" viewBox="0 0 24 24" fill="none" aria-hidden="true">
           <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3"></circle>
@@ -382,6 +395,7 @@ function copyLabel(target: CopyTarget): string {
       </span>
     </summary>
     <div class="tool-card-body">
+      <p v-if="contextPreview" class="tool-card-context-note">{{ contextPreview }}</p>
       <ToolResultPreview v-if="resultPresentation" :result="resultPresentation" />
       <p v-else-if="execution.text === '' && outputChunks.length === 0" class="tool-note">{{ isRunning ? '等待工具报告结果。' : '没有可用的结果摘要。' }}</p>
       <template v-if="fileBody !== null">
@@ -404,41 +418,43 @@ function copyLabel(target: CopyTarget): string {
         </template>
       </dl>
       <p v-if="presentation?.request?.truncated" class="tool-note">请求摘要有所省略，可展开原始参数查看当前已加载内容。</p>
-      <section v-if="execution.argsText !== null || argsChunks.length > 0" class="tool-raw-section">
-        <div class="tool-fold-row">
-          <AppButton variant="ghost" :aria-expanded="argsExpanded" @click="expandArgs">{{ argsExpanded ? '收起原始参数' : '原始参数' }}</AppButton>
-          <AppButton v-if="execution.argsText !== null" variant="compact" title="复制当前已加载参数" @click="copyTarget('args', execution.argsText)">{{ copyLabel('args') }}</AppButton>
-        </div>
-        <template v-if="argsExpanded">
-          <p v-if="execution.argsText !== null" class="tool-output">{{ execution.argsText }}</p>
-          <HistoryLoadSentinel v-for="chunk in argsChunks" :key="historyChunkKey(chunk)"
-            :cursor="`${historyChunkKey(chunk)}:${chunk.offset}`" :enabled="historyEnabled === true && expanded && argsExpanded"
+      <div class="tool-raw-sections">
+        <section v-if="execution.argsText !== null || argsChunks.length > 0" class="tool-raw-section">
+          <div class="tool-fold-row">
+            <AppButton variant="ghost" :aria-expanded="argsExpanded" @click="expandArgs">{{ argsExpanded ? '收起原始参数' : '原始参数' }}</AppButton>
+            <AppButton v-if="execution.argsText !== null" variant="compact" title="复制当前已加载参数" @click="copyTarget('args', execution.argsText)">{{ copyLabel('args') }}</AppButton>
+          </div>
+          <template v-if="argsExpanded">
+            <p v-if="execution.argsText !== null" class="tool-output">{{ execution.argsText }}</p>
+            <HistoryLoadSentinel v-for="chunk in argsChunks" :key="historyChunkKey(chunk)"
+              :cursor="`${historyChunkKey(chunk)}:${chunk.offset}`" :enabled="historyEnabled === true && expanded && argsExpanded"
+              :loading="historyBusy === true" :error="chunkStates?.[historyChunkKey(chunk)]?.error" @load="emit('loadChunk', chunk)" />
+            <p v-if="execution.argsTruncated && argsChunks.length === 0" class="tool-note">参数原文超出展示上限，当前内容不完整。</p>
+          </template>
+        </section>
+        <section v-if="execution.text !== '' || outputChunks.length > 0" class="tool-raw-section">
+          <div class="tool-fold-row">
+            <span v-if="isFailure" class="tool-note">{{ resultLabel }}</span>
+            <AppButton v-else variant="ghost" :aria-expanded="textExpanded" @click="expandText">{{ textExpanded ? '收起' : '展开' }}{{ resultLabel }}</AppButton>
+            <AppButton variant="compact" title="复制当前已加载结果" @click="copyTarget('text', execution.text)">{{ copyLabel('text') }}</AppButton>
+          </div>
+          <template v-if="showFullResult || resultPresentation === null">
+            <p class="tool-output" :class="isFailure ? 'text-desk-danger' : ''">{{ showFullResult ? execution.text : resultPreviewView.preview }}</p>
+            <p v-if="!showFullResult && resultPlainNote !== null" class="tool-note">{{ resultPlainNote }}</p>
+          </template>
+          <HistoryLoadSentinel v-for="chunk in outputChunks" :key="historyChunkKey(chunk)"
+            :cursor="`${historyChunkKey(chunk)}:${chunk.offset}`" :enabled="historyEnabled === true && expanded && showFullResult"
             :loading="historyBusy === true" :error="chunkStates?.[historyChunkKey(chunk)]?.error" @load="emit('loadChunk', chunk)" />
-          <p v-if="execution.argsTruncated && argsChunks.length === 0" class="tool-note">参数原文超出展示上限，当前内容不完整。</p>
-        </template>
-      </section>
-      <section v-if="execution.text !== '' || outputChunks.length > 0" class="tool-raw-section">
-        <div class="tool-fold-row">
-          <span v-if="isFailure" class="tool-note">{{ resultLabel }}</span>
-          <AppButton v-else variant="ghost" :aria-expanded="textExpanded" @click="expandText">{{ textExpanded ? '收起' : '展开' }}{{ resultLabel }}</AppButton>
-          <AppButton variant="compact" title="复制当前已加载结果" @click="copyTarget('text', execution.text)">{{ copyLabel('text') }}</AppButton>
-        </div>
-        <template v-if="showFullResult || resultPresentation === null">
-          <p class="tool-output" :class="isFailure ? 'text-desk-danger' : ''">{{ showFullResult ? execution.text : resultPreviewView.preview }}</p>
-          <p v-if="!showFullResult && resultPlainNote !== null" class="tool-note">{{ resultPlainNote }}</p>
-        </template>
-        <HistoryLoadSentinel v-for="chunk in outputChunks" :key="historyChunkKey(chunk)"
-          :cursor="`${historyChunkKey(chunk)}:${chunk.offset}`" :enabled="historyEnabled === true && expanded && showFullResult"
-          :loading="historyBusy === true" :error="chunkStates?.[historyChunkKey(chunk)]?.error" @load="emit('loadChunk', chunk)" />
-        <p v-if="execution.textTruncated && outputChunks.length === 0" class="tool-note">输出原文超出展示上限，当前内容不完整。</p>
-        <p v-if="execution.outputPath !== null" class="tool-note">完整输出：{{ execution.outputPath }}</p>
-      </section>
+          <p v-if="execution.textTruncated && outputChunks.length === 0" class="tool-note">输出原文超出展示上限，当前内容不完整。</p>
+          <p v-if="execution.outputPath !== null" class="tool-note">完整输出：{{ execution.outputPath }}</p>
+        </section>
+      </div>
       <p v-if="nonTextNotice" class="tool-note">{{ nonTextNotice }}</p>
     </div>
   </details>
   <div v-else class="tool-card">
     <div class="tool-card-body tool-missing-record">
-      <div class="tool-summary-head">
+      <div class="tool-summary-row">
         <span class="tool-badge" :class="`tool-badge-${operation.tone}`">{{ operation.label }}</span>
         <span class="tool-name font-mono" :title="block.toolName">{{ block.toolName }}</span>
       </div>
