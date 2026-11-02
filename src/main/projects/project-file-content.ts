@@ -4,8 +4,9 @@
  * 执行根来自主进程已授权的工作区上下文，页面固定工作区身份与相对路径；解析及越界判定复用
  * project-entry-path 的规则。符号链接拒绝读写，避免将访问带出所属工作区。
  *
- * 读取按内容分类：图片按扩展名映射 MIME 后回 base64；电子表格（Excel 等）由主进程提取多工作表行列结构；文本按 UTF-8 严格解码，识别并剥离 BOM、
- * 统计换行符主类型，编辑区统一使用 `\n`；二进制（含 NUL 字节）与非法 UTF-8 按「不支持」返回；
+ * 读取按内容分类：图片按扩展名映射 MIME 后回 base64；电子表格（Excel 等）由主进程提取多工作表行列结构；
+ * 文档文件（PDF、DOCX）读取二进制回传 base64 由前端 Canvas/DOM 渲染，DOC 提取正文结构化文本；
+ * 文本按 UTF-8 严格解码，识别并剥离 BOM、统计换行符主类型，编辑区统一使用 `\n`；二进制（含 NUL 字节）与非法 UTF-8 按「不支持」返回；
  * 超过读取上限同样按「不支持」返回，不截断、不假装可读。读取上限高于可编辑上限：
  * 大文件仍可只读预览，但写入会按可编辑上限拒绝。
  *
@@ -15,12 +16,14 @@
  */
 import { chmod, lstat, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises'
 import * as XLSX from 'xlsx'
+import WordExtractor from 'word-extractor'
 import type { Stats } from 'node:fs'
 import { basename, dirname, extname, join } from 'node:path'
 import type { DesktopError, DesktopErrorCode } from '../../shared/desktop-api'
 import { workspaceTarget } from '../../shared/workspace-api'
 import type { WorkspaceContext, WorkspaceTarget } from '../../shared/workspace-api'
 import {
+  PROJECT_FILE_DOCUMENT_MAX_BYTES,
   PROJECT_FILE_EDIT_MAX_BYTES,
   PROJECT_FILE_IMAGE_MAX_BYTES,
   PROJECT_FILE_SPREADSHEET_MAX_BYTES,
@@ -157,6 +160,65 @@ export class ProjectFileContent {
           size,
           mtimeMs
         }
+      }
+    }
+
+    if (ext === 'pdf') {
+      if (size > PROJECT_FILE_DOCUMENT_MAX_BYTES) return unsupported(target, resolved.relativePath, 'too-large', size, mtimeMs)
+      const buffer = await readBuffer(resolved.absolutePath, resolved.relativePath)
+      if (!buffer.ok) return buffer
+      return {
+        ok: true,
+        data: {
+          ...target,
+          kind: 'pdf',
+          path: resolved.relativePath,
+          base64: buffer.data.toString('base64'),
+          size,
+          mtimeMs
+        }
+      }
+    }
+
+    if (ext === 'docx') {
+      if (size > PROJECT_FILE_DOCUMENT_MAX_BYTES) return unsupported(target, resolved.relativePath, 'too-large', size, mtimeMs)
+      const buffer = await readBuffer(resolved.absolutePath, resolved.relativePath)
+      if (!buffer.ok) return buffer
+      return {
+        ok: true,
+        data: {
+          ...target,
+          kind: 'docx',
+          path: resolved.relativePath,
+          base64: buffer.data.toString('base64'),
+          size,
+          mtimeMs
+        }
+      }
+    }
+
+    if (ext === 'doc') {
+      if (size > PROJECT_FILE_DOCUMENT_MAX_BYTES) return unsupported(target, resolved.relativePath, 'too-large', size, mtimeMs)
+      const buffer = await readBuffer(resolved.absolutePath, resolved.relativePath)
+      if (!buffer.ok) return buffer
+      try {
+        const extractor = new WordExtractor()
+        const doc = await extractor.extract(buffer.data)
+        return {
+          ok: true,
+          data: {
+            ...target,
+            kind: 'doc',
+            path: resolved.relativePath,
+            body: doc.getBody() ?? '',
+            headers: doc.getHeaders() ?? '',
+            footers: doc.getFooters() ?? '',
+            size,
+            mtimeMs
+          }
+        }
+      } catch {
+        return unsupported(target, resolved.relativePath, 'binary', size, mtimeMs)
       }
     }
 

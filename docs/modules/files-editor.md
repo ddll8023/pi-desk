@@ -4,7 +4,7 @@
 
 ## 职责与入口
 
-负责项目内文件树、目录监听、`@` 文件引用检索、条目解析与系统文件管理器定位、条目安全删除（移入系统废纸篓）、文件内容读取／保存／磁盘基线，以及源码编辑、图片预览、Markdown 预览与富文本编辑、HTML 页面预览与电子表格／纯文本表格（Excel、CSV、TSV）结构化预览。
+负责项目内文件树、目录监听、`@` 文件引用检索、条目解析与系统文件管理器定位、条目安全删除（移入系统废纸篓）、文件内容读取／保存／磁盘基线，以及源码编辑、图片预览、Markdown 预览与富文本编辑、HTML 页面预览、电子表格／纯文本表格（Excel、CSV、TSV）结构化预览与文档文件（PDF、DOCX、DOC）只读排版预览。
 
 入口为右侧文件树、文件菜单、输入坞文件引用、文件标签及 Markdown 文档链接。输入坞可接受从文件树拖入的条目：只插入目标工作区相对路径文本（目录同样插入路径），不读文件内容，跨工作区拖动被拒绝。不执行 Agent 的文件工具，不拥有工作区标签顺序，不把桌面草稿当跨应用重启持久化。
 
@@ -43,6 +43,7 @@
 | `src/renderer/src/editor/components/CodeMirrorEditor.vue` | 源码编辑器及对外编辑接口 |
 | `src/renderer/src/editor/components/FileHtmlPreview.vue` | HTML 隔离页面、快照刷新、加载与错误状态、容器释放 |
 | `src/renderer/src/editor/components/FileTablePreview.vue` | 电子表格（Excel 多工作表）与纯文本表格（CSV/TSV）结构化网格预览、多工作表切换、排序与筛选 |
+| `src/renderer/src/editor/components/FileDocumentPreview.vue` | 文档文件（PDF 逐页 Canvas 与文本层、DOCX 纸张排版、DOC 结构提取）预览，提供页码导航与缩放 |
 | `src/renderer/src/editor/components/FileMarkdownView.vue` | Markdown 预览／可编辑排版、目录、查找及只读降级 |
 | `src/renderer/src/editor/components/FileMarkdownPreview.vue` | 只读安全 DOM、资源及阅读交互适配 |
 | `src/renderer/src/editor/components/FileMarkdownToolbar.vue` | 文档工具区、编辑能力提示与阅读选项 |
@@ -54,7 +55,7 @@
 
 | 文件 | 用途 |
 | --- | --- |
-| `src/renderer/src/editor/file-language.ts` | 文件名、语言、Markdown、HTML、电子表格与纯文本表格类型识别 |
+| `src/renderer/src/editor/file-language.ts` | 文件名、语言、Markdown、HTML、电子表格、纯文本表格与文档（PDF/DOCX/DOC）类型识别 |
 | `src/renderer/src/editor/file-code-highlight.ts` | 文件代码高亮与语言加载 |
 | `src/renderer/src/editor/file-images.ts` | 项目内 Markdown 图片读取和显示地址管理 |
 | `src/renderer/src/editor/file-markdown.ts` | 文件 Markdown 只读解析、安全渲染与预览支持判定 |
@@ -105,7 +106,7 @@
 
 1. `RightPanel.vue` 初始化目录 Store；列举结果按工作区与已加载层缓存，再将需观察的目录集合连同工作区身份登记到主进程。
 2. 主进程监听变化并合并事件，页面收到后重读对应层；变化同时使对应工作区文件索引失效。overflow 走更大范围的重新读取，不伪造逐文件增量。
-3. 打开条目先由工作区登记文件标签（携带目标工作区身份），再由 `project-editor` 读取固定工作区执行根内的文件；内容分为文本、图片、电子表格或不支持，不把超大或非文本内容伪装成可编辑文本。
+3. 打开条目先由工作区登记文件标签（携带目标工作区身份），再由 `project-editor` 读取固定工作区执行根内的文件；内容分为文本、图片、电子表格、文档（PDF/DOCX/DOC）或不支持，不把超大或非文本内容伪装成可编辑文本。
 4. `file-document-session.ts` 协调源码／排版切换与保存；Store 维护已接受的源文和恢复草稿，编辑实例持有未提交输入、选区及撤销历史。源码变化捕获全文快照，富文本仅将已证明可回写的文本交给 Store。
 5. `FileMarkdownView.vue` 统一提供操作区、目录与查找界面，富文本和只读视图通过 `file-markdown-view.ts` 的契约适配。保存进度与编辑能力分开表达，只读原因在操作区展示。
 6. 初次装载与外部全文替换先分离 Front Matter，再经 `parseRichMarkdown()` 完成语法支持判定、无损标记规范化及完整结构检查；富文本会话完成候选的序列化往返证明后才接管实例。编辑器从不可编辑的合法空文档启动，不在 Markdown 扩展初始化时隐式装载整篇源文。
@@ -135,6 +136,15 @@ HTML 文件默认显示「页面」，可切回「源码」编辑；类型识别
 - **工作表切换**：Excel 等多工作表文件在底部展示 Sheet 切换栏，纯文本表格自动隐藏；
 - **交互与排序**：支持粘性冻结表头、列头点击三态排序（原序 → 升序 → 降序 → 原序）、数值列等宽右对齐与即时子串搜索过滤；
 - **大表保护**：单工作表最大读取 1000 行，超出时标记 `truncated` 并在工具栏给出明确提示，防止超大 DOM 阻塞界面。
+
+### 文档预览（PDF、DOCX 与 DOC）
+
+文档文件支持只读预览，大小上限为 32 MiB（`PROJECT_FILE_DOCUMENT_MAX_BYTES`），超出按 `unsupported: too-large` 返回。打开时默认进入「预览」模式，标题栏展示只读文档标识。
+
+`FileDocumentPreview.vue` 统一承接三类文档的呈现与缩放操作：
+- **PDF 预览**：主进程读取二进制 Buffer 并回传 Base64（`kind: 'pdf'`），前端基于 `pdfjs-dist` 在 Canvas 上分页绘制，并叠加 TextLayer 文字图层支持鼠标划词与复制快捷键；提供页码输入跳转、上一页／下一页翻页、自适应视口宽度与阶梯缩放控制；
+- **DOCX 预览**：主进程读取二进制 Buffer 并回传 Base64（`kind: 'docx'`），前端通过 `docx-preview` 转译并渲染为仿 Word 纸张卡片 DOM，保留字号、表格、图片、缩进与页边距，外层深浅主题自适应；
+- **DOC 预览（Word 97-2003）**：主进程通过 `word-extractor` 在 Node.js 内存中提取正文段落、页眉与页脚结构（`kind: 'doc'`），前端以结构化纸张呈现，顶部附有旧版格式提示横幅。
 
 ## 数据与安全边界
 

@@ -2,7 +2,7 @@
  * 定义项目文件检索、单层目录列举、目录监听、条目路径解析、条目删除（移入系统废纸篓）与文件内容读写的 IPC 契约及跨进程响应校验。
  * 文件、目录、搜索和预览均固定已登记项目及工作区身份；绝对路径与越界路径由主进程拒绝；
  * 需要绝对路径时（复制、写入终端、在文件管理器中显示）一律由主进程解析后回传，页面不自行拼接。
- * 普通文件读返回文本、图片、电子表格或「不支持」，保存只接受文本并带回磁盘基线；图片导入走独立受限通道，不暴露任意二进制写入。
+ * 普通文件读返回文本、图片、电子表格、文档（PDF/DOCX/DOC）或「不支持」，保存只接受文本并带回磁盘基线；图片导入走独立受限通道，不暴露任意二进制写入。
  * HTML 预览只登记文档快照与隔离容器身份，资源固定在文档所属工作区内提供，不落盘草稿。
  * 目录监听是本契约里唯一的推送通道：页面提交「已加载的目录集合」，主进程只回报这些层里发生的变化。
  */
@@ -54,6 +54,9 @@ export const PROJECT_FILE_IMAGE_MAX_BYTES = 8 * 1024 * 1024
 
 /** 电子表格（Excel 等）预览的字节上限；超出按「不支持」返回。 */
 export const PROJECT_FILE_SPREADSHEET_MAX_BYTES = 16 * 1024 * 1024
+
+/** 文档（PDF、Word 等）预览的字节上限；超出按「不支持」返回。 */
+export const PROJECT_FILE_DOCUMENT_MAX_BYTES = 32 * 1024 * 1024
 
 /** 电子表格单个工作表预览的行数上限；超出截断并标记，避免过量 DOM 阻塞界面。 */
 export const PROJECT_FILE_SPREADSHEET_MAX_ROWS = 1000
@@ -225,10 +228,42 @@ export interface ProjectFileUnsupportedContent extends WorkspaceTarget {
   readonly mtimeMs: number
 }
 
+/** PDF 文档内容；`base64` 由前端交给 PDF.js 逐页渲染到 Canvas 上并叠加文本层。 */
+export interface ProjectFilePdfContent extends WorkspaceTarget {
+  readonly kind: 'pdf'
+  readonly path: string
+  readonly base64: string
+  readonly size: number
+  readonly mtimeMs: number
+}
+
+/** DOCX 文档内容；`base64` 由前端转为 ArrayBuffer 由 docx-preview 渲染为标准 DOM。 */
+export interface ProjectFileDocxContent extends WorkspaceTarget {
+  readonly kind: 'docx'
+  readonly path: string
+  readonly base64: string
+  readonly size: number
+  readonly mtimeMs: number
+}
+
+/** DOC 文档内容（Word 97-2003）；主进程提取出的正文、页眉、页脚结构化文本。 */
+export interface ProjectFileDocContent extends WorkspaceTarget {
+  readonly kind: 'doc'
+  readonly path: string
+  readonly body: string
+  readonly headers: string
+  readonly footers: string
+  readonly size: number
+  readonly mtimeMs: number
+}
+
 export type ProjectFileContent =
   | ProjectFileTextContent
   | ProjectFileImageContent
   | ProjectFileSpreadsheetContent
+  | ProjectFilePdfContent
+  | ProjectFileDocxContent
+  | ProjectFileDocContent
   | ProjectFileUnsupportedContent
 
 export type ProjectFileReadResult =
@@ -542,7 +577,7 @@ function isProjectFileSpreadsheetSheet(value: unknown): value is ProjectFileSpre
   return value.rows.every(row => Array.isArray(row) && row.every(cell => typeof cell === 'string'))
 }
 
-/** 文本、图片、电子表格与「不支持」四类内容各自校验字段，未知 kind 一律拒绝。 */
+/** 文本、图片、电子表格、文档（PDF/DOCX/DOC）与「不支持」内容各自校验字段，未知 kind 一律拒绝。 */
 function isProjectFileContent(value: unknown): value is ProjectFileContent {
   if (!isRecord(value) || !isWorkspaceTarget(value)) return false
   if (typeof value.path !== 'string' || value.path === '') return false
@@ -559,6 +594,17 @@ function isProjectFileContent(value: unknown): value is ProjectFileContent {
   }
   if (value.kind === 'spreadsheet') {
     return Array.isArray(value.sheets) && value.sheets.every(isProjectFileSpreadsheetSheet)
+  }
+  if (value.kind === 'pdf') {
+    return typeof value.base64 === 'string'
+  }
+  if (value.kind === 'docx') {
+    return typeof value.base64 === 'string'
+  }
+  if (value.kind === 'doc') {
+    return typeof value.body === 'string'
+      && typeof value.headers === 'string'
+      && typeof value.footers === 'string'
   }
   if (value.kind === 'unsupported') {
     return value.reason === 'binary' || value.reason === 'too-large'

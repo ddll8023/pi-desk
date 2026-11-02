@@ -1,8 +1,14 @@
-<!-- 文件工作台外壳：展示文件身份、保存与视图切换；Markdown 由文档会话协调排版编辑，HTML 页面与各类表格文件提供独立预览。 -->
+<!-- 文件工作台外壳：展示文件身份、保存与视图切换；Markdown 由文档会话协调排版编辑，HTML 页面、各类表格与各类文档（PDF/DOCX/DOC）提供独立预览。 -->
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { PROJECT_FILE_EDIT_MAX_BYTES } from '../../../../shared/project-file-api'
-import type { ProjectFileSpreadsheetContent, ProjectFileTextContent } from '../../../../shared/project-file-api'
+import type {
+  ProjectFileDocContent,
+  ProjectFileDocxContent,
+  ProjectFilePdfContent,
+  ProjectFileSpreadsheetContent,
+  ProjectFileTextContent
+} from '../../../../shared/project-file-api'
 import { copyText } from '../../ui/clipboard'
 import { canPreviewFileMarkdown } from '../file-markdown'
 import { isHtmlPath, isSpreadsheetPath, isTextTablePath } from '../file-language'
@@ -16,6 +22,7 @@ import ConfirmDialog from '../../ui/ConfirmDialog.vue'
 import FileMarkdownView from './FileMarkdownView.vue'
 import FileHtmlPreview from './FileHtmlPreview.vue'
 import FileTablePreview from './FileTablePreview.vue'
+import FileDocumentPreview from './FileDocumentPreview.vue'
 
 const props = defineProps<{ readonly tabKey: string; readonly active: boolean }>()
 const editorStore = useProjectEditorStore()
@@ -46,6 +53,19 @@ const spreadsheetContent = computed<ProjectFileSpreadsheetContent | null>(() => 
   const load = record.value?.load
   return load?.phase === 'ready' && load.content.kind === 'spreadsheet' ? load.content : null
 })
+const pdfContent = computed<ProjectFilePdfContent | null>(() => {
+  const load = record.value?.load
+  return load?.phase === 'ready' && load.content.kind === 'pdf' ? load.content : null
+})
+const docxContent = computed<ProjectFileDocxContent | null>(() => {
+  const load = record.value?.load
+  return load?.phase === 'ready' && load.content.kind === 'docx' ? load.content : null
+})
+const docContent = computed<ProjectFileDocContent | null>(() => {
+  const load = record.value?.load
+  return load?.phase === 'ready' && load.content.kind === 'doc' ? load.content : null
+})
+const isDocument = computed(() => pdfContent.value !== null || docxContent.value !== null || docContent.value !== null)
 const isSpreadsheet = computed(() => spreadsheetContent.value !== null)
 const textTable = computed(() => isTextTablePath(record.value?.path ?? ''))
 const imageSource = computed(() => {
@@ -173,8 +193,11 @@ onBeforeUnmount(() => {
           <span class="file-editor-path-name">{{ record?.name ?? '文件' }}</span>
         </button>
         <span v-if="pathNotice" class="file-editor-path-toast" role="status">{{ pathNotice }}</span>
-        <span v-if="readOnlyNote && !hasPreview && !isSpreadsheet" class="file-editor-badge" role="status" :title="readOnlyNote">只读</span>
+        <span v-if="readOnlyNote && !hasPreview && !isSpreadsheet && !isDocument" class="file-editor-badge" role="status" :title="readOnlyNote">只读</span>
         <span v-if="isSpreadsheet" class="file-editor-badge is-spreadsheet" role="status" title="电子表格仅提供只读网格与多工作表查看">只读 · 电子表格</span>
+        <span v-if="pdfContent" class="file-editor-badge is-document" role="status" title="PDF 文档仅提供只读预览">只读 · PDF 文档</span>
+        <span v-if="docxContent" class="file-editor-badge is-document" role="status" title="Word 文档仅提供只读排版预览">只读 · Word 文档</span>
+        <span v-if="docContent" class="file-editor-badge is-document" role="status" title="旧版 Word 文档仅提供结构化文本只读预览">只读 · Word 旧版</span>
       </div>
       <div class="file-editor-actions">
         <span
@@ -269,6 +292,16 @@ onBeforeUnmount(() => {
           :key="`${tabKey}:${record?.loadRevision ?? 0}`"
           :spreadsheet="spreadsheetContent"
           :path="record?.path ?? ''"
+          :active="active"
+        />
+      </div>
+      <div v-else-if="isDocument" class="file-editor-surface file-editor-document">
+        <FileDocumentPreview
+          :key="`${tabKey}:${record?.loadRevision ?? 0}`"
+          :path="record?.path ?? ''"
+          :pdf="pdfContent"
+          :docx="docxContent"
+          :doc="docContent"
           :active="active"
         />
       </div>

@@ -1,5 +1,5 @@
 /**
- * 文件路径到 CodeMirror 语言及排版、页面、表格预览类型的映射：只按文件名/扩展名匹配，不做内容嗅探。
+ * 文件路径到 CodeMirror 语言及排版、页面、表格与文档预览类型的映射：只按文件名/扩展名匹配，不做内容嗅探。
  *
  * 语言包来自 `@codemirror/language-data` 的注册表，由 `LanguageDescription.load()` 按需动态加载，
  * 因此未打开过的语言不会进入首屏包。匹配不到时返回 null，编辑器退化为纯文本。
@@ -50,3 +50,24 @@ export function isTextTablePath(path: string): boolean {
 export function isTableFilePath(path: string): boolean {
   return isSpreadsheetPath(path) || isTextTablePath(path)
 }
+
+/** PDF 格式文档判定。 */
+export function isPdfPath(path: string): boolean {
+  return fileNameOf(path).toLowerCase().endsWith('.pdf')
+}
+
+/** DOCX 格式文档判定（现代 Office Open XML Word 文档）。 */
+export function isDocxPath(path: string): boolean {
+  return fileNameOf(path).toLowerCase().endsWith('.docx')
+}
+
+/** DOC 格式文档判定（旧版 Word 97-2003 二进制复合文档）。 */
+export function isDocPath(path: string): boolean {
+  return fileNameOf(path).toLowerCase().endsWith('.doc')
+}
+
+/** 广义文档文件判定，涵盖 PDF、DOCX 与 DOC 文档。 */
+export function isDocumentFilePath(path: string): boolean {
+  return isPdfPath(path) || isDocxPath(path) || isDocPath(path)
+}
+

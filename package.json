@@ -61,6 +61,7 @@
     "codemirror": "6.0.2",
     "cross-spawn": "7.0.6",
     "diff": "8.0.4",
+    "docx-preview": "^0.4.1",
     "dompurify": "3.4.16",
     "emojibase": "17.0.0",
     "emojibase-data": "17.0.0",
@@ -69,9 +70,11 @@
     "mermaid": "11.17.2",
     "motion-v": "2.6.0",
     "node-pty": "1.1.0",
+    "pdfjs-dist": "^6.5.438",
     "pinia": "4.0.3",
     "qrcode-generator": "2.0.4",
     "vue": "3.5.43",
+    "word-extractor": "^1.0.4",
     "xlsx": "^0.18.5"
   },
   "overrides": {
@@ -85,6 +88,7 @@
     "@tailwindcss/vite": "4.3.3",
     "@types/cross-spawn": "^6.0.6",
     "@types/node": "24.19.1",
+    "@types/word-extractor": "^1.0.6",
     "@vitejs/plugin-vue": "6.0.9",
     "@vue/tsconfig": "0.9.1",
     "electron": "44.7.0",
