@@ -38,7 +38,7 @@ function focusMarker(id: number): void {
 }
 function add(area: Pick<ImageAnnotation, 'kind' | 'x' | 'y' | 'width' | 'height'>): void {
   if (props.disabled || full.value) return
-  const id = props.document.nextId
+  const id = props.document.annotations.length === 0 ? 1 : props.document.nextId
   emit('change', { ...props.document, nextId: id + 1,
     annotations: [...props.document.annotations, { id, ...area, text: '' }] })
   focusNote(id)
@@ -59,7 +59,8 @@ function overview(event: Event): void {
 function remove(id: number): void {
   if (props.disabled) return
   const annotations = props.document.annotations.filter(item => item.id !== id)
-  emit('change', { ...props.document, annotations })
+  const nextId = annotations.length === 0 ? 1 : Math.max(...annotations.map(item => item.id)) + 1
+  emit('change', { ...props.document, nextId, annotations })
   if (selectedId.value === id) selectedId.value = annotations[0]?.id ?? null
 }
 function keydown(event: KeyboardEvent): void {

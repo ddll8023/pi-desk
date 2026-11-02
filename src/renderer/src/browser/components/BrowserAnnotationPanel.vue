@@ -89,7 +89,8 @@ function position(event: PointerEvent): { x: number; y: number } | null {
 
 function addAtCenter(): void {
   if (preview.value) return
-  const id = props.document.nextId++
+  const id = props.document.annotations.length === 0 ? 1 : props.document.nextId++
+  if (props.document.annotations.length === 0) props.document.nextId = 2
   props.document.annotations.push({ id, kind: mode.value,
     x: mode.value === 'point' ? 0.5 : 0.4, y: mode.value === 'point' ? 0.5 : 0.4,
     width: mode.value === 'point' ? 0 : 0.2, height: mode.value === 'point' ? 0 : 0.2, text: '' })
@@ -114,6 +115,9 @@ function selectAnnotation(id: number, focusEditor = false): void {
 function deleteSelected(): void {
   if (preview.value || busy.value) return
   props.document.annotations = props.document.annotations.filter(item => item.id !== selectedId.value)
+  props.document.nextId = props.document.annotations.length === 0
+    ? 1
+    : Math.max(...props.document.annotations.map(item => item.id)) + 1
   editorOpen.value = false
 }
 
@@ -171,7 +175,8 @@ function pointerUp(event: PointerEvent): void {
   const width = Math.abs(last.x - first.x)
   const height = Math.abs(last.y - first.y)
   if (mode.value === 'rect' && (width < 0.005 || height < 0.005)) return
-  const id = props.document.nextId++
+  const id = props.document.annotations.length === 0 ? 1 : props.document.nextId++
+  if (props.document.annotations.length === 0) props.document.nextId = 2
   props.document.annotations.push({ id, kind: mode.value,
     x: mode.value === 'point' ? first.x : x, y: mode.value === 'point' ? first.y : y,
     width: mode.value === 'point' ? 0 : width, height: mode.value === 'point' ? 0 : height, text: '' })
