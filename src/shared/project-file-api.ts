@@ -2,7 +2,7 @@
  * 定义项目文件检索、单层目录列举、目录监听、条目路径解析、条目删除（移入系统废纸篓）与文件内容读写的 IPC 契约及跨进程响应校验。
  * 文件、目录、搜索和预览均固定已登记项目及工作区身份；绝对路径与越界路径由主进程拒绝；
  * 需要绝对路径时（复制、写入终端、在文件管理器中显示）一律由主进程解析后回传，页面不自行拼接。
- * 普通文件读返回文本、图片或「不支持」，保存只接受文本并带回磁盘基线；图片导入走独立受限通道，不暴露任意二进制写入。
+ * 普通文件读返回文本、图片、电子表格或「不支持」，保存只接受文本并带回磁盘基线；图片导入走独立受限通道，不暴露任意二进制写入。
  * HTML 预览只登记文档快照与隔离容器身份，资源固定在文档所属工作区内提供，不落盘草稿。
  * 目录监听是本契约里唯一的推送通道：页面提交「已加载的目录集合」，主进程只回报这些层里发生的变化。
  */
@@ -51,6 +51,12 @@ export const PROJECT_FILE_EDIT_MAX_BYTES = 2 * 1024 * 1024
 
 /** 图片预览的字节上限；超出按「不支持」返回，避免一次 IPC 搬运过大内容。 */
 export const PROJECT_FILE_IMAGE_MAX_BYTES = 8 * 1024 * 1024
+
+/** 电子表格（Excel 等）预览的字节上限；超出按「不支持」返回。 */
+export const PROJECT_FILE_SPREADSHEET_MAX_BYTES = 16 * 1024 * 1024
+
+/** 电子表格单个工作表预览的行数上限；超出截断并标记，避免过量 DOM 阻塞界面。 */
+export const PROJECT_FILE_SPREADSHEET_MAX_ROWS = 1000
 
 /** 文本编辑区里统一使用 `\n`；保存时按读取到的原始换行符还原。 */
 export type ProjectFileEol = 'lf' | 'crlf'
@@ -192,6 +198,24 @@ export interface ProjectFileImageContent extends WorkspaceTarget {
   readonly mtimeMs: number
 }
 
+/** 电子表格中的单个工作表数据；包含工作表名称、截取后的行数组以及行列全量统计。 */
+export interface ProjectFileSpreadsheetSheet {
+  readonly name: string
+  readonly rows: readonly (readonly string[])[]
+  readonly totalRows: number
+  readonly totalColumns: number
+  readonly truncated: boolean
+}
+
+/** 电子表格内容（Excel 等）；解析后的结构化多工作表数据直接传给前端只读渲染。 */
+export interface ProjectFileSpreadsheetContent extends WorkspaceTarget {
+  readonly kind: 'spreadsheet'
+  readonly path: string
+  readonly sheets: readonly ProjectFileSpreadsheetSheet[]
+  readonly size: number
+  readonly mtimeMs: number
+}
+
 /** 不支持预览与编辑的内容：二进制或超出大小上限；只回原因，不搬运内容。 */
 export interface ProjectFileUnsupportedContent extends WorkspaceTarget {
   readonly kind: 'unsupported'
@@ -204,6 +228,7 @@ export interface ProjectFileUnsupportedContent extends WorkspaceTarget {
 export type ProjectFileContent =
   | ProjectFileTextContent
   | ProjectFileImageContent
+  | ProjectFileSpreadsheetContent
   | ProjectFileUnsupportedContent
 
 export type ProjectFileReadResult =
@@ -510,7 +535,14 @@ function isFileMetric(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0
 }
 
-/** 文本、图片与「不支持」三类内容各自校验字段，未知 kind 一律拒绝。 */
+function isProjectFileSpreadsheetSheet(value: unknown): value is ProjectFileSpreadsheetSheet {
+  if (!isRecord(value)) return false
+  if (typeof value.name !== 'string' || !isFileMetric(value.totalRows) || !isFileMetric(value.totalColumns) || typeof value.truncated !== 'boolean') return false
+  if (!Array.isArray(value.rows)) return false
+  return value.rows.every(row => Array.isArray(row) && row.every(cell => typeof cell === 'string'))
+}
+
+/** 文本、图片、电子表格与「不支持」四类内容各自校验字段，未知 kind 一律拒绝。 */
 function isProjectFileContent(value: unknown): value is ProjectFileContent {
   if (!isRecord(value) || !isWorkspaceTarget(value)) return false
   if (typeof value.path !== 'string' || value.path === '') return false
@@ -524,6 +556,9 @@ function isProjectFileContent(value: unknown): value is ProjectFileContent {
   if (value.kind === 'image') {
     return typeof value.mimeType === 'string' && value.mimeType !== ''
       && typeof value.base64 === 'string'
+  }
+  if (value.kind === 'spreadsheet') {
+    return Array.isArray(value.sheets) && value.sheets.every(isProjectFileSpreadsheetSheet)
   }
   if (value.kind === 'unsupported') {
     return value.reason === 'binary' || value.reason === 'too-large'

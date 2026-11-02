@@ -3,11 +3,11 @@
  *
  * 文件内容读写全经主进程：这里只保存「读到了什么、用户改没改、磁盘基线是什么」，
  * 不自行拼接绝对路径，也不因前台切换改写记录归属；工作区正在收敛或已结束时拒绝保存并保留草稿。
- * 读取结果分文本、图片与「不支持」三类；只有文本可编辑，
+ * 读取结果分文本、图片、电子表格与「不支持」四类；只有文本可编辑，
  * 且超过可编辑上限的文本只读：这类记录不会变脏，也不接受保存。
  *
  * 打开时的默认模式按文件类型与偏好决定：Markdown 按设置里的默认视图（默认预览，阅读是主要用途），
- * HTML 默认页面预览，其余文本进源码；用户在标签内切换后，同一个标签保持该选择，不会每次重读都跳回默认值。
+ * HTML 与各类表格（Excel、CSV、TSV）默认预览，其余文本进源码；用户在标签内切换后，同一个标签保持该选择，不会每次重读都跳回默认值。
  *
  * 脏标记由编辑器上报，保存时把当前文本交给主进程，并把返回的新磁盘基线写回记录；
  * 外部改动通过 `stat` 比对 size/mtimeMs 发现：未修改的文件自动重新载入，有未保存修改时
@@ -24,10 +24,11 @@ import type { DesktopError } from '../../../../shared/desktop-api'
 import { PROJECT_FILE_EDIT_MAX_BYTES } from '../../../../shared/project-file-api'
 import type {
   ProjectFileImageContent,
+  ProjectFileSpreadsheetContent,
   ProjectFileTextContent,
   ProjectFileUnsupportedContent
 } from '../../../../shared/project-file-api'
-import { fileNameOf, isHtmlPath, isMarkdownPath } from '../file-language'
+import { fileNameOf, isHtmlPath, isMarkdownPath, isTableFilePath } from '../file-language'
 import { readProjectFile, statProjectFile, writeProjectFile } from '../services/project-file'
 import { useTaskWorkspacesStore } from '../../workspace/stores/task-workspaces'
 import { usePreferencesStore } from '../../preferences/stores/preferences'
@@ -44,7 +45,7 @@ const DEFAULT_PREVIEW_FONT_SIZE = 16
 /** 一次读取的结果状态；错误与「不支持」分开，界面据此给出不同的提示与动作。 */
 export type FileLoadView =
   | { readonly phase: 'loading' }
-  | { readonly phase: 'ready'; readonly content: ProjectFileTextContent | ProjectFileImageContent }
+  | { readonly phase: 'ready'; readonly content: ProjectFileTextContent | ProjectFileImageContent | ProjectFileSpreadsheetContent }
   | { readonly phase: 'unsupported'; readonly content: ProjectFileUnsupportedContent }
   | { readonly phase: 'error'; readonly error: DesktopError }
 
@@ -145,7 +146,11 @@ export const useProjectEditorStore = defineStore('project-editor', () => {
       markdown,
       load: { phase: 'loading' },
       loadRevision: 0,
-      mode: markdown ? preferencesStore.markdownDefaultView : isHtmlPath(path) ? 'preview' : 'code',
+      mode: markdown
+        ? preferencesStore.markdownDefaultView
+        : (isHtmlPath(path) || isTableFilePath(path))
+          ? 'preview'
+          : 'code',
       dirty: false,
       draft: null,
       richDraft: null,

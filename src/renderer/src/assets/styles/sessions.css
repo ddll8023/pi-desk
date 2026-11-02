@@ -1229,8 +1229,6 @@
 .tool-card:hover .tool-target-path {
     color: var(--color-desk-ink);
   }
-    color: var(--color-desk-accent);
-  }
 .tool-target-args {
     color: var(--color-desk-muted);
     flex: 1;

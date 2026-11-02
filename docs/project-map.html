@@ -1030,8 +1030,8 @@
         "relationIds": ["r-fe-tab-register", "r-fe-project-scope"],
         "steps": [
           {"title": "打开条目并登记标签", "description": "工作区先登记文件标签，再由编辑模块读取固定项目内的文件。", "moduleIds": ["files-editor", "workspace-tabs"]},
-          {"title": "分类并读取内容", "description": "主进程复核已登记项目、相对路径与文件类型，内容分为文本、图片或不支持。", "moduleIds": ["files-editor", "projects-trust"]},
-          {"title": "编辑与视图切换", "description": "源码、Markdown 排版与 HTML 页面使用同一份编辑记录；HTML 默认页面并以当前源文快照预览，富文本会话完成序列化往返证明后才接管实例。", "moduleIds": ["files-editor"]},
+          {"title": "分类并读取内容", "description": "主进程复核已登记项目、相对路径与文件类型，内容分为文本、图片、电子表格或不支持。", "moduleIds": ["files-editor", "projects-trust"]},
+          {"title": "编辑与视图切换", "description": "源码、Markdown 排版、HTML 页面与表格（Excel/CSV/TSV）使用同一份编辑记录；HTML 默认页面并以当前源文快照预览，富文本会话完成序列化往返证明后才接管实例。", "moduleIds": ["files-editor"]},
           {"title": "保存并判定冲突", "description": "保存携带文本、换行语义与磁盘基线；主进程复核真实路径，同目录临时文件加 rename 原子替换。", "moduleIds": ["files-editor"]},
           {"title": "脏标签关闭确认", "description": "关闭前由应用级弹层宿主确认，脏文件不隐式保存。", "moduleIds": ["app-shell", "workspace-tabs"]}
         ]

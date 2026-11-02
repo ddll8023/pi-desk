@@ -1,11 +1,11 @@
-<!-- 文件工作台外壳：展示文件身份、保存与视图切换；Markdown 由文档会话协调排版编辑，HTML 交给独立沙箱预览。 -->
+<!-- 文件工作台外壳：展示文件身份、保存与视图切换；Markdown 由文档会话协调排版编辑，HTML 页面与各类表格文件提供独立预览。 -->
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { PROJECT_FILE_EDIT_MAX_BYTES } from '../../../../shared/project-file-api'
-import type { ProjectFileTextContent } from '../../../../shared/project-file-api'
+import type { ProjectFileSpreadsheetContent, ProjectFileTextContent } from '../../../../shared/project-file-api'
 import { copyText } from '../../ui/clipboard'
 import { canPreviewFileMarkdown } from '../file-markdown'
-import { isHtmlPath } from '../file-language'
+import { isHtmlPath, isSpreadsheetPath, isTextTablePath } from '../file-language'
 import { useFileDocumentSession } from '../file-document-session'
 import type { FileEditorMode } from '../stores/project-editor'
 import { useProjectEditorStore } from '../stores/project-editor'
@@ -15,6 +15,7 @@ import CodeMirrorEditor from './CodeMirrorEditor.vue'
 import ConfirmDialog from '../../ui/ConfirmDialog.vue'
 import FileMarkdownView from './FileMarkdownView.vue'
 import FileHtmlPreview from './FileHtmlPreview.vue'
+import FileTablePreview from './FileTablePreview.vue'
 
 const props = defineProps<{ readonly tabKey: string; readonly active: boolean }>()
 const editorStore = useProjectEditorStore()
@@ -41,14 +42,20 @@ const textContent = computed<ProjectFileTextContent | null>(() => {
   const load = record.value?.load
   return load?.phase === 'ready' && load.content.kind === 'text' ? load.content : null
 })
+const spreadsheetContent = computed<ProjectFileSpreadsheetContent | null>(() => {
+  const load = record.value?.load
+  return load?.phase === 'ready' && load.content.kind === 'spreadsheet' ? load.content : null
+})
+const isSpreadsheet = computed(() => spreadsheetContent.value !== null)
+const textTable = computed(() => isTextTablePath(record.value?.path ?? ''))
 const imageSource = computed(() => {
   const load = record.value?.load
-  return load?.phase === 'ready' && load.content.kind === 'image' ? `data:${load.content.mimeType};base64,${load.content.base64}` : null
+  return load?.phase === 'ready' && load.content.kind === 'image' ? `data:${load.content.mimeType};base64,${load.content.base64}` : undefined
 })
 const unsupportedReason = computed(() => {
   const load = record.value?.load
   if (load?.phase !== 'unsupported') return null
-  return load.content.reason === 'binary' ? '这是二进制文件，不提供预览与编辑。' : '文件超出预览上限（文本 8 MiB、图片 8 MiB），未读取内容。'
+  return load.content.reason === 'binary' ? '这是不受支持的二进制文件，不提供预览与编辑。' : '文件超出预览上限，未读取内容。'
 })
 const readOnlyNote = computed(() => {
   const content = textContent.value
@@ -63,8 +70,8 @@ const saveError = computed(() => record.value?.saveError ?? null)
 const requestedMode = computed(() => record.value?.mode ?? 'code')
 const markdown = computed(() => record.value?.markdown === true)
 const html = computed(() => isHtmlPath(record.value?.path ?? ''))
-const hasPreview = computed(() => markdown.value || html.value)
-const previewAllowed = computed(() => html.value || canPreviewFileMarkdown(documentText.value))
+const hasPreview = computed(() => markdown.value || html.value || textTable.value)
+const previewAllowed = computed(() => html.value || textTable.value || canPreviewFileMarkdown(documentText.value))
 const sourceFallback = computed(() => markdown.value && requestedMode.value === 'preview' && !previewAllowed.value)
 const mode = computed<FileEditorMode>(() => sourceFallback.value ? 'code' : requestedMode.value)
 const previewEditingAllowed = computed(() => editable.value && previewAllowed.value)
@@ -79,6 +86,7 @@ const editingCapability = computed(() => {
       : { kind: 'ready', label: '可编辑', detail: '当前为源码编辑。' }
   }
   if (html.value) return { kind: 'readonly', label: '页面预览', detail: '页面在独立容器内运行；修改文件请切回源码。' }
+  if (textTable.value) return { kind: 'readonly', label: '表格预览', detail: '当前为只读表格视图；修改文件请切回源码。' }
   const current = previewState.value
   switch (current.phase) {
     case 'initializing': return { kind: 'waiting', label: '准备中', detail: '编辑器准备完成后才能输入。' }
@@ -165,7 +173,8 @@ onBeforeUnmount(() => {
           <span class="file-editor-path-name">{{ record?.name ?? '文件' }}</span>
         </button>
         <span v-if="pathNotice" class="file-editor-path-toast" role="status">{{ pathNotice }}</span>
-        <span v-if="readOnlyNote && !hasPreview" class="file-editor-badge" role="status" :title="readOnlyNote">只读</span>
+        <span v-if="readOnlyNote && !hasPreview && !isSpreadsheet" class="file-editor-badge" role="status" :title="readOnlyNote">只读</span>
+        <span v-if="isSpreadsheet" class="file-editor-badge is-spreadsheet" role="status" title="电子表格仅提供只读网格与多工作表查看">只读 · 电子表格</span>
       </div>
       <div class="file-editor-actions">
         <span
@@ -182,7 +191,7 @@ onBeforeUnmount(() => {
             <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5.5 4.5L2 8l3.5 3.5M10.5 4.5L14 8l-3.5 3.5" /></svg><span>源码</span>
           </button>
           <button type="button" role="radio" class="file-editor-mode-item" :class="{ 'is-active': mode === 'preview' }" :aria-checked="mode === 'preview'" :tabindex="mode === 'preview' ? 0 : -1" @click="setMode('preview')">
-            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5h5l3 3v8H4zM9 2.5v3h3M6 8h4M6 10.5h4" /></svg><span>{{ html ? '页面' : '排版' }}</span>
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5h5l3 3v8H4zM9 2.5v3h3M6 8h4M6 10.5h4" /></svg><span>{{ html ? '页面' : textTable ? '表格' : '排版' }}</span>
           </button>
         </div>
       </div>
@@ -246,6 +255,22 @@ onBeforeUnmount(() => {
             :active="active && mode === 'preview'"
           />
         </div>
+        <div v-if="textTable && previewVisited" class="file-editor-layer file-editor-preview" :class="{ 'is-hidden': mode !== 'preview' }" :inert="mode !== 'preview'" :aria-hidden="mode !== 'preview'">
+          <FileTablePreview
+            :key="`${tabKey}:${record?.loadRevision ?? 0}`"
+            :text="documentText"
+            :path="record?.path ?? ''"
+            :active="active && mode === 'preview'"
+          />
+        </div>
+      </div>
+      <div v-else-if="spreadsheetContent" class="file-editor-surface file-editor-spreadsheet">
+        <FileTablePreview
+          :key="`${tabKey}:${record?.loadRevision ?? 0}`"
+          :spreadsheet="spreadsheetContent"
+          :path="record?.path ?? ''"
+          :active="active"
+        />
       </div>
       <div v-else-if="imageSource" class="file-editor-image"><img :src="imageSource" :alt="record?.name ?? '图片预览'" /></div>
     </div>

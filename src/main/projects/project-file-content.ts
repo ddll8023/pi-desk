@@ -4,7 +4,7 @@
  * 执行根来自主进程已授权的工作区上下文，页面固定工作区身份与相对路径；解析及越界判定复用
  * project-entry-path 的规则。符号链接拒绝读写，避免将访问带出所属工作区。
  *
- * 读取按内容分类：图片按扩展名映射 MIME 后回 base64；文本按 UTF-8 严格解码，识别并剥离 BOM、
+ * 读取按内容分类：图片按扩展名映射 MIME 后回 base64；电子表格（Excel 等）由主进程提取多工作表行列结构；文本按 UTF-8 严格解码，识别并剥离 BOM、
  * 统计换行符主类型，编辑区统一使用 `\n`；二进制（含 NUL 字节）与非法 UTF-8 按「不支持」返回；
  * 超过读取上限同样按「不支持」返回，不截断、不假装可读。读取上限高于可编辑上限：
  * 大文件仍可只读预览，但写入会按可编辑上限拒绝。
@@ -14,6 +14,7 @@
  * 并保留原文件权限位。
  */
 import { chmod, lstat, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises'
+import * as XLSX from 'xlsx'
 import type { Stats } from 'node:fs'
 import { basename, dirname, extname, join } from 'node:path'
 import type { DesktopError, DesktopErrorCode } from '../../shared/desktop-api'
@@ -22,12 +23,15 @@ import type { WorkspaceContext, WorkspaceTarget } from '../../shared/workspace-a
 import {
   PROJECT_FILE_EDIT_MAX_BYTES,
   PROJECT_FILE_IMAGE_MAX_BYTES,
+  PROJECT_FILE_SPREADSHEET_MAX_BYTES,
+  PROJECT_FILE_SPREADSHEET_MAX_ROWS,
   PROJECT_FILE_TEXT_MAX_BYTES
 } from '../../shared/project-file-api'
 import type {
   ProjectFileEol,
   ProjectFileReadRequest,
   ProjectFileReadResult,
+  ProjectFileSpreadsheetSheet,
   ProjectFileStatRequest,
   ProjectFileStatResult,
   ProjectFileWriteRequest,
@@ -52,6 +56,48 @@ const IMAGE_MIME_TYPES: Readonly<Record<string, string>> = {
 
 const UTF8_BOM = Buffer.from([0xef, 0xbb, 0xbf])
 
+/** 电子表格扩展名；主进程直接解析多工作表行列结构回传给前端，不作为普通不可读二进制处理。 */
+const SPREADSHEET_EXTENSIONS: readonly string[] = ['xlsx', 'xls', 'ods']
+
+/**
+ * 内存解析电子表格 Buffer，提取各个 Sheet 的行矩阵与维度统计；
+ * 单元格统一转字符串，超出上限时截断并标记。
+ */
+function parseSpreadsheet(buffer: Buffer): ProjectFileSpreadsheetSheet[] | null {
+  try {
+    const workbook = XLSX.read(buffer, { type: 'buffer', cellDates: true })
+    const sheets: ProjectFileSpreadsheetSheet[] = []
+    for (const name of workbook.SheetNames) {
+      const sheet = workbook.Sheets[name]
+      if (!sheet) continue
+      const rawRows = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, defval: '' })
+      let totalColumns = 0
+      for (const row of rawRows) {
+        if (Array.isArray(row) && row.length > totalColumns) totalColumns = row.length
+      }
+      const totalRows = rawRows.length
+      const truncated = totalRows > PROJECT_FILE_SPREADSHEET_MAX_ROWS
+      const slice = truncated ? rawRows.slice(0, PROJECT_FILE_SPREADSHEET_MAX_ROWS) : rawRows
+      const rows = slice.map((row) => {
+        if (!Array.isArray(row)) return []
+        const converted = row.map((cell) => (cell === null || cell === undefined ? '' : String(cell)))
+        while (converted.length < totalColumns) converted.push('')
+        return converted
+      })
+      sheets.push({
+        name,
+        rows,
+        totalRows,
+        totalColumns,
+        truncated
+      })
+    }
+    return sheets.length > 0 ? sheets : [{ name: 'Sheet1', rows: [], totalRows: 0, totalColumns: 0, truncated: false }]
+  } catch {
+    return null
+  }
+}
+
 export class ProjectFileContent {
 
   /** 读取已授权工作区内的文件，结果携带同一身份；分类由主进程判定，页面按 kind 展示。 */
@@ -75,7 +121,8 @@ export class ProjectFileContent {
 
     const size = info.data.size
     const mtimeMs = info.data.mtimeMs
-    const mimeType = IMAGE_MIME_TYPES[extname(resolved.relativePath).slice(1).toLowerCase()] ?? null
+    const ext = extname(resolved.relativePath).slice(1).toLowerCase()
+    const mimeType = IMAGE_MIME_TYPES[ext] ?? null
     if (mimeType !== null) {
       if (size > PROJECT_FILE_IMAGE_MAX_BYTES) return unsupported(target, resolved.relativePath, 'too-large', size, mtimeMs)
       const buffer = await readBuffer(resolved.absolutePath, resolved.relativePath)
@@ -88,6 +135,25 @@ export class ProjectFileContent {
           path: resolved.relativePath,
           mimeType,
           base64: buffer.data.toString('base64'),
+          size,
+          mtimeMs
+        }
+      }
+    }
+
+    if (SPREADSHEET_EXTENSIONS.includes(ext)) {
+      if (size > PROJECT_FILE_SPREADSHEET_MAX_BYTES) return unsupported(target, resolved.relativePath, 'too-large', size, mtimeMs)
+      const buffer = await readBuffer(resolved.absolutePath, resolved.relativePath)
+      if (!buffer.ok) return buffer
+      const sheets = parseSpreadsheet(buffer.data)
+      if (sheets === null) return unsupported(target, resolved.relativePath, 'binary', size, mtimeMs)
+      return {
+        ok: true,
+        data: {
+          ...target,
+          kind: 'spreadsheet',
+          path: resolved.relativePath,
+          sheets,
           size,
           mtimeMs
         }
