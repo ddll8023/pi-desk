@@ -17,7 +17,10 @@ export const productionCsp = [
   "connect-src 'none'",
   // data: 与 blob: 仅用于本地图片附件的缩略图展示；不放开远程图片。
   "img-src 'self' data: blob:",
-  "font-src 'self'",
+  // data: 与 blob: 允许 PDF.js 等组件动态加载解析后的内嵌字体。
+  "font-src 'self' data: blob:",
+  // worker-src 放开同源和 blob，支持 PDF.js 等组件创建 Web Worker。
+  "worker-src 'self' blob:",
   "object-src 'none'",
   // frame-src 允许嵌入受限的 webview 网页容器，支持 http/https/about 外部页面。
   "frame-src 'self' http: https: about: data:",
@@ -29,7 +32,19 @@ export const productionCsp = [
 export const contentTypes: Readonly<Record<string, string>> = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
-  '.css': 'text/css; charset=utf-8'
+  '.mjs': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
+  '.woff': 'font/woff',
+  '.woff2': 'font/woff2',
+  '.ttf': 'font/ttf',
+  '.otf': 'font/otf',
+  '.json': 'application/json; charset=utf-8',
+  '.wasm': 'application/wasm'
 }
 
 /** 开发页面地址由 dev server 端口拼出；端口来自环境变量，与 vite 配置共用同一解析。 */
@@ -37,10 +52,10 @@ export const DEVELOPMENT_PAGE_URL = `http://127.0.0.1:${devServerPortFromEnv(pro
 /** 打包态页面由应用协议提供；与 `registerAssetProtocol` 的 host 限制保持一致。 */
 export const APPLICATION_PAGE_URL = 'app://desktop/index.html'
 
-/** 必须在 ready 前注册；不赋予绕过 CSP 或运行 Service Worker 的权限。 */
+/** 必须在 ready 前注册；赋予应用协议 fetch 与 CORS 特权以支持 Module Worker，不赋予绕过 CSP 或运行 Service Worker 的权限。 */
 export function registerAssetScheme(): void {
   protocol.registerSchemesAsPrivileged([
-    { scheme: 'app', privileges: { standard: true, secure: true } },
+    { scheme: 'app', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } },
     // 仅预览独立 session 注册处理器；标准地址支持相对资源，不赋予 CSP 绕过或 Service Worker 权限。
     { scheme: PROJECT_HTML_PREVIEW_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } }
   ])

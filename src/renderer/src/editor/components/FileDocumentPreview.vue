@@ -1,10 +1,11 @@
-<!-- 文档预览组件：统一支持 PDF（Canvas 逐页渲染 + 文本选择层）、DOCX（高保真 DOM 纸张排版）与 DOC（旧版结构化文本提取），提供缩放、翻页与自适应视图。 -->
+<!-- 文档预览组件：统一支持 PDF（Canvas 逐页渲染 + 文本选择层）、DOCX（高保真 DOM 纸张排版）与 DOC（旧版结构化文本提取），提供缩放、翻页、自适应视图与左侧大纲导航。 -->
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import * as pdfjsLib from 'pdfjs-dist'
 import type { PDFDocumentProxy, RenderTask } from 'pdfjs-dist'
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 import { renderAsync } from 'docx-preview'
+import FileDocumentOutline, { type DocumentOutlineItem } from './FileDocumentOutline.vue'
 import type {
   ProjectFileDocContent,
   ProjectFileDocxContent,
@@ -35,6 +36,12 @@ const viewportRef = shallowRef<HTMLElement | null>(null)
 const zoomLevels = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0]
 const zoomIndex = ref(2) // 默认 1.0 (100%)
 const fitWidth = ref(true) // 默认自适应容器宽度
+
+// === 大纲侧边栏状态 ===
+const showOutline = ref(true)
+const outlineLoading = ref(false)
+const outlineItems = shallowRef<readonly DocumentOutlineItem[]>([])
+const activeOutlineId = ref('')
 
 const currentScale = computed(() => zoomLevels[zoomIndex.value])
 const zoomPercent = computed(() => `${Math.round(currentScale.value * 100)}%`)
@@ -92,6 +99,247 @@ function base64ToArrayBuffer(base64: string): ArrayBuffer {
   return bytes.buffer
 }
 
+/** 解析 PDF destination 对应的页码（1 起始）。 */
+async function resolvePdfPageNumber(doc: PDFDocumentProxy, dest: unknown): Promise<number | null> {
+  if (!dest) return null
+  try {
+    let explicitDest = dest
+    if (typeof dest === 'string') {
+      explicitDest = await doc.getDestination(dest)
+    }
+    if (Array.isArray(explicitDest) && explicitDest.length > 0) {
+      const pageRef = explicitDest[0]
+      if (typeof pageRef === 'object' && pageRef !== null) {
+        const pageIndex = await doc.getPageIndex(pageRef)
+        return pageIndex + 1
+      }
+      if (typeof pageRef === 'number') {
+        return pageRef + 1
+      }
+    }
+  } catch {
+    // 忽略异常目标解析
+  }
+  return null
+}
+
+interface RawPdfOutlineItem {
+  title: string
+  dest?: unknown
+  items?: RawPdfOutlineItem[]
+}
+
+/** 递归将 PDF 原生 outline 树转换为组件标准 DocumentOutlineItem 树。 */
+function transformPdfOutline(rawItems: RawPdfOutlineItem[], prefix = 'pdf-outline'): DocumentOutlineItem[] {
+  return rawItems.map((item, index) => {
+    const id = `${prefix}-${index}`
+    return {
+      id,
+      label: item.title?.trim() || '未命目标题',
+      level: 1,
+      dest: item.dest,
+      children: item.items && item.items.length > 0 ? transformPdfOutline(item.items, id) : undefined
+    }
+  })
+}
+
+/** 异步为 PDF 大纲节点预解析页码。 */
+async function resolveOutlinePages(doc: PDFDocumentProxy, items: DocumentOutlineItem[]): Promise<void> {
+  for (const item of items) {
+    if (item.dest && !item.pageNumber) {
+      const page = await resolvePdfPageNumber(doc, item.dest)
+      if (page) item.pageNumber = page
+    }
+    if (item.children) {
+      void resolveOutlinePages(doc, item.children as DocumentOutlineItem[])
+    }
+  }
+}
+
+/** 根据当前 PDF 页码自动同步大纲激活项。 */
+function syncActiveOutlineWithPage(page: number): void {
+  if (docType.value !== 'pdf') return
+  const findMatch = (items: readonly DocumentOutlineItem[]): string | null => {
+    for (const item of items) {
+      if (item.pageNumber === page) return item.id
+      if (item.children) {
+        const childMatch = findMatch(item.children)
+        if (childMatch) return childMatch
+      }
+    }
+    return null
+  }
+  const matchId = findMatch(outlineItems.value)
+  if (matchId) activeOutlineId.value = matchId
+}
+
+watch(pdfCurrentPage, (page) => {
+  syncActiveOutlineWithPage(page)
+})
+
+/** 从 DOCX 渲染后的 DOM 与样式元数据中提取标题构建大纲树。 */
+function extractDocxOutline(doc?: any): void {
+  if (!docxContainerRef.value) return
+
+  // 1. 从 docx-preview 的 stylesPart 解析出真正的标题样式与类名映射
+  const headingClassMap = new Map<string, number>()
+  if (doc && doc.stylesPart && Array.isArray(doc.stylesPart.styles)) {
+    for (const style of doc.stylesPart.styles) {
+      const name = String(style.name || '').toLowerCase()
+      const id = String(style.id || '').toLowerCase()
+      let level = 0
+      const headingMatch = name.match(/heading\s*(\d+)/i) || id.match(/heading\s*(\d+)/i) || name.match(/标题\s*(\d+)/)
+      if (headingMatch) {
+        level = parseInt(headingMatch[1], 10)
+      } else if (name === 'title' || id === 'title') {
+        level = 1
+      } else if (name === 'subtitle' || id === 'subtitle') {
+        level = 2
+      }
+      if (level > 0 && style.id) {
+        // docx-preview 使用 escapeClassName(style.id) 作为 class 后缀
+        const escaped = String(style.id).replace(/[ .]+/g, '-').replace(/[&]+/g, 'and').toLowerCase()
+        headingClassMap.set(`docx_${escaped}`, level)
+        headingClassMap.set(`docx_${String(style.id).toLowerCase()}`, level)
+      }
+    }
+  }
+
+  // 2. 遍历容器内的所有段落 <p>
+  const paragraphs = docxContainerRef.value.querySelectorAll<HTMLElement>('p')
+  const flatItems: DocumentOutlineItem[] = []
+  let index = 0
+
+  paragraphs.forEach((p) => {
+    const text = p.textContent?.trim()
+    if (!text) return
+
+    let matchedLevel = 0
+
+    // 优先通过 Word 标题样式类名命中
+    for (const cls of Array.from(p.classList)) {
+      const lvl = headingClassMap.get(cls.toLowerCase())
+      if (lvl) {
+        matchedLevel = lvl
+        break
+      }
+    }
+
+    // 兜底：启发式识别（针对未应用样式、纯手工大号字或粗体编排的段落）
+    if (!matchedLevel && text.length <= 60 && !text.includes('\n')) {
+      const computedStyle = window.getComputedStyle(p)
+      const fontSize = parseFloat(computedStyle.fontSize) || 14
+      const fontWeight = parseInt(computedStyle.fontWeight, 10) || 400
+      const isBold = fontWeight >= 600 || computedStyle.fontWeight === 'bold'
+
+      if (fontSize >= 19 && isBold) {
+        matchedLevel = 1
+      } else if (fontSize >= 16 && isBold) {
+        matchedLevel = 2
+      } else if (isBold && /^(第[一二三四五六七八九十0-9]+[章节卷篇部分]|[\d一二三四五六七八九十]+[、.．\s])/.test(text)) {
+        matchedLevel = 2
+      }
+    }
+
+    if (matchedLevel > 0) {
+      const domId = `docx-heading-${index++}`
+      p.id = domId
+      flatItems.push({
+        id: domId,
+        label: text,
+        level: matchedLevel,
+        domId
+      })
+    }
+  })
+
+  // 3. 将扁平列表转换为多级树状结构，支持层级折叠展开
+  if (flatItems.length === 0) {
+    outlineItems.value = []
+    return
+  }
+
+  const rootItems: DocumentOutlineItem[] = []
+  const stack: { item: DocumentOutlineItem; children: DocumentOutlineItem[] }[] = []
+
+  for (const flat of flatItems) {
+    const node: DocumentOutlineItem = {
+      ...flat,
+      children: []
+    }
+    const childrenArr = node.children as DocumentOutlineItem[]
+
+    while (stack.length > 0 && stack[stack.length - 1].item.level >= node.level) {
+      stack.pop()
+    }
+
+    if (stack.length === 0) {
+      rootItems.push(node)
+    } else {
+      stack[stack.length - 1].children.push(node)
+    }
+
+    stack.push({ item: node, children: childrenArr })
+  }
+
+  const sanitizeTree = (items: DocumentOutlineItem[]): DocumentOutlineItem[] => {
+    return items.map(item => ({
+      ...item,
+      children: item.children && item.children.length > 0 ? sanitizeTree(item.children as DocumentOutlineItem[]) : undefined
+    }))
+  }
+
+  outlineItems.value = sanitizeTree(rootItems)
+}
+
+/** 从 DOC 旧版提取段落中提取章节标题大纲。 */
+function extractDocOutline(): void {
+  if (!docParagraphs.value || docParagraphs.value.length === 0) {
+    outlineItems.value = []
+    return
+  }
+  const items: DocumentOutlineItem[] = []
+  docParagraphs.value.forEach((text, index) => {
+    if (text.length <= 40 && (/^(第[一二三四五六七八九十0-9]+[章节卷篇部分]|[\d一二三四五六七八九十]+[、.．\s])/.test(text) || index === 0)) {
+      items.push({
+        id: `doc-p-${index}`,
+        label: text,
+        level: 1,
+        domId: `doc-p-${index}`
+      })
+    }
+  })
+  outlineItems.value = items
+}
+
+/** 处理大纲项点击导航。 */
+async function onNavigateOutline(item: DocumentOutlineItem): Promise<void> {
+  activeOutlineId.value = item.id
+  if (docType.value === 'pdf' && pdfDoc.value) {
+    let targetPage = item.pageNumber
+    if (!targetPage && item.dest) {
+      targetPage = (await resolvePdfPageNumber(pdfDoc.value, item.dest)) ?? undefined
+      if (targetPage) item.pageNumber = targetPage
+    }
+    if (targetPage && targetPage >= 1 && targetPage <= pdfTotalPages.value) {
+      pdfCurrentPage.value = targetPage
+      await renderPdfPage()
+      if (viewportRef.value) {
+        viewportRef.value.scrollTop = 0
+      }
+    }
+  } else if ((docType.value === 'docx' || docType.value === 'doc') && item.domId) {
+    const el = document.getElementById(item.domId)
+    const viewport = viewportRef.value
+    if (el && viewport) {
+      const viewportRect = viewport.getBoundingClientRect()
+      const elRect = el.getBoundingClientRect()
+      const targetScrollTop = viewport.scrollTop + (elRect.top - viewportRect.top) - 16
+      viewport.scrollTo({ top: Math.max(0, targetScrollTop), behavior: 'smooth' })
+    }
+  }
+}
+
 /** 加载并解析 PDF 文档对象。 */
 async function loadPdfDocument(): Promise<void> {
   if (!props.pdf) return
@@ -99,6 +347,7 @@ async function loadPdfDocument(): Promise<void> {
   pdfError.value = ''
   pdfCurrentPage.value = 1
   pdfTotalPages.value = 1
+  outlineItems.value = []
   try {
     const arrayBuffer = base64ToArrayBuffer(props.pdf.base64)
     const loadingTask = pdfjsLib.getDocument({
@@ -109,6 +358,23 @@ async function loadPdfDocument(): Promise<void> {
     pdfDoc.value = doc
     pdfTotalPages.value = doc.numPages
     await renderPdfPage()
+
+    // 异步提取书签大纲
+    outlineLoading.value = true
+    try {
+      const outline = await doc.getOutline()
+      if (outline && outline.length > 0) {
+        const transformed = transformPdfOutline(outline as RawPdfOutlineItem[])
+        outlineItems.value = transformed
+        void resolveOutlinePages(doc, transformed)
+      } else {
+        outlineItems.value = []
+      }
+    } catch {
+      outlineItems.value = []
+    } finally {
+      outlineLoading.value = false
+    }
   } catch (err) {
     pdfError.value = err instanceof Error ? err.message : 'PDF 文档解析失败。'
   } finally {
@@ -224,13 +490,14 @@ async function renderDocx(): Promise<void> {
   try {
     const arrayBuffer = base64ToArrayBuffer(props.docx.base64)
     docxContainerRef.value.innerHTML = ''
-    await renderAsync(arrayBuffer, docxContainerRef.value, undefined, {
+    const docxResult = await renderAsync(arrayBuffer, docxContainerRef.value, undefined, {
       inWrapper: true,
       ignoreWidth: false,
       ignoreHeight: false,
       breakPages: true
     })
     if (ticket !== docxRenderTicket) return
+    extractDocxOutline(docxResult)
   } catch (err) {
     if (ticket !== docxRenderTicket) return
     docxError.value = err instanceof Error ? err.message : 'DOCX 渲染失败。'
@@ -244,6 +511,7 @@ onMounted(() => {
   if (props.active) {
     if (props.docx) void renderDocx()
     else if (props.pdf) void loadPdfDocument()
+    else if (props.doc) extractDocOutline()
   }
 })
 
@@ -254,6 +522,10 @@ watch([() => props.active, () => props.pdf], ([active, pdf]) => {
 
 watch([() => props.active, () => props.docx], ([active, docx]) => {
   if (active && docx) void renderDocx()
+})
+
+watch([() => props.active, () => props.doc], ([active, doc]) => {
+  if (active && doc) extractDocOutline()
 })
 
 watch([currentScale, fitWidth], () => {
@@ -277,6 +549,21 @@ onBeforeUnmount(() => {
     <!-- 统一文档顶部控制栏 -->
     <header class="file-document-toolbar">
       <div class="file-document-meta">
+        <!-- 大纲侧边栏展开/收起切换按钮 -->
+        <button
+          type="button"
+          class="file-document-btn"
+          :class="{ 'is-active': showOutline }"
+          :title="showOutline ? '收起大纲' : '展开大纲'"
+          :aria-label="showOutline ? '收起大纲' : '展开大纲'"
+          @click="showOutline = !showOutline"
+        >
+          <svg viewBox="0 0 16 16" fill="currentColor" class="w-3.5 h-3.5 mr-1" aria-hidden="true">
+            <path d="M2 3.75A.75.75 0 0 1 2.75 3h10.5a.75.75 0 0 1 0 1.5H2.75A.75.75 0 0 1 2 3.75zm0 4.25a.75.75 0 0 1 .75-.75h10.5a.75.75 0 0 1 0 1.5H2.75A.75.75 0 0 1 2 8zm0 4.25a.75.75 0 0 1 .75-.75h6.5a.75.75 0 0 1 0 1.5h-6.5a.75.75 0 0 1-.75-.75z"/>
+          </svg>
+          <span>大纲</span>
+        </button>
+
         <span class="file-document-badge is-type" role="status">
           <span v-if="docType === 'pdf'">PDF 文档</span>
           <span v-else-if="docType === 'docx'">Word (DOCX)</span>
@@ -363,69 +650,87 @@ onBeforeUnmount(() => {
       </div>
     </header>
 
-    <!-- 滚动渲染舞台区 -->
-    <div
-      ref="viewportRef"
-      class="file-document-viewport scroll-area"
-      tabindex="0"
-      role="region"
-      aria-label="文档预览区域，可滚动查看"
-    >
-      <!-- 加载提示浮层 -->
-      <div v-if="pdfLoading || docxLoading" class="file-document-feedback">
-        <p>正在解析并排版文档内容…</p>
-      </div>
+    <!-- 主展示分栏：左侧大纲侧边栏 + 右侧视口渲染舞台 -->
+    <div class="file-document-main">
+      <FileDocumentOutline
+        v-if="showOutline"
+        :entries="outlineItems"
+        :active-id="activeOutlineId"
+        :doc-type="docType"
+        :loading="outlineLoading"
+        @navigate="onNavigateOutline"
+        @close="showOutline = false"
+      />
 
-      <!-- 错误提示 -->
-      <div v-if="pdfError || docxError" class="file-document-feedback is-error" role="alert">
-        <p>{{ pdfError || docxError }}</p>
-      </div>
-
-      <!-- 1. PDF 舞台：常驻容器，避免条件切换丢失 DOM 句柄 -->
-      <div v-show="docType === 'pdf' && !pdfError" class="file-document-pdf-stage">
-        <div class="file-document-pdf-canvas-wrap">
-          <canvas ref="pdfCanvasRef" class="file-document-pdf-canvas"></canvas>
-          <div ref="pdfTextLayerRef" class="file-document-text-layer textLayer"></div>
-        </div>
-      </div>
-
-      <!-- 2. DOCX 舞台：常驻容器，确保 renderAsync 能向实际挂载的 DOM 节点写入内容 -->
+      <!-- 滚动渲染舞台区 -->
       <div
-        v-show="docType === 'docx' && !docxError"
-        class="file-document-docx-stage"
-        :style="{ transform: `scale(${currentScale})`, transformOrigin: 'top center' }"
+        ref="viewportRef"
+        class="file-document-viewport scroll-area"
+        tabindex="0"
+        role="region"
+        aria-label="文档预览区域，可滚动查看"
       >
-        <div ref="docxContainerRef" class="file-document-docx-container"></div>
-      </div>
-
-      <!-- 3. DOC 提取文本舞台 -->
-      <div
-        v-if="docType === 'doc'"
-        class="file-document-doc-stage"
-        :style="{ transform: `scale(${currentScale})`, transformOrigin: 'top center' }"
-      >
-        <div class="file-document-notice-banner" role="status">
-          <svg viewBox="0 0 16 16" fill="currentColor" class="w-4 h-4 shrink-0" aria-hidden="true">
-            <path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1zm0 3.5a.75.75 0 0 1 .75.75v3.5a.75.75 0 0 1-1.5 0v-3.5A.75.75 0 0 1 8 4.5zm0 7a.875.875 0 1 1 0-1.75.875.875 0 0 1 0 1.75z"/>
-          </svg>
-          <span>.doc 属于旧版 Word 二进制格式，已提取正文与文本结构展示；如需查看完整版式、字体与复杂排版，建议另存为 .docx 或 .pdf。</span>
+        <!-- 加载提示浮层 -->
+        <div v-if="pdfLoading || docxLoading" class="file-document-feedback">
+          <p>正在解析并排版文档内容…</p>
         </div>
 
-        <article class="file-document-paper">
-          <header v-if="props.doc?.headers" class="file-document-paper-header">
-            {{ props.doc.headers }}
-          </header>
+        <!-- 错误提示 -->
+        <div v-if="pdfError || docxError" class="file-document-feedback is-error" role="alert">
+          <p>{{ pdfError || docxError }}</p>
+        </div>
 
-          <main class="file-document-paper-body">
-            <p v-for="(p, idx) in docParagraphs" :key="idx" class="file-document-p">
-              {{ p }}
-            </p>
-          </main>
+        <!-- 1. PDF 舞台：常驻容器，避免条件切换丢失 DOM 句柄 -->
+        <div v-show="docType === 'pdf' && !pdfError" class="file-document-pdf-stage">
+          <div class="file-document-pdf-canvas-wrap">
+            <canvas ref="pdfCanvasRef" class="file-document-pdf-canvas"></canvas>
+            <div ref="pdfTextLayerRef" class="file-document-text-layer textLayer"></div>
+          </div>
+        </div>
 
-          <footer v-if="props.doc?.footers" class="file-document-paper-footer">
-            {{ props.doc.footers }}
-          </footer>
-        </article>
+        <!-- 2. DOCX 舞台：常驻容器，确保 renderAsync 能向实际挂载的 DOM 节点写入内容 -->
+        <div
+          v-show="docType === 'docx' && !docxError"
+          class="file-document-docx-stage"
+          :style="{ transform: `scale(${currentScale})`, transformOrigin: 'top center' }"
+        >
+          <div ref="docxContainerRef" class="file-document-docx-container"></div>
+        </div>
+
+        <!-- 3. DOC 提取文本舞台 -->
+        <div
+          v-if="docType === 'doc'"
+          class="file-document-doc-stage"
+          :style="{ transform: `scale(${currentScale})`, transformOrigin: 'top center' }"
+        >
+          <div class="file-document-notice-banner" role="status">
+            <svg viewBox="0 0 16 16" fill="currentColor" class="w-4 h-4 shrink-0" aria-hidden="true">
+              <path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1zm0 3.5a.75.75 0 0 1 .75.75v3.5a.75.75 0 0 1-1.5 0v-3.5A.75.75 0 0 1 8 4.5zm0 7a.875.875 0 1 1 0-1.75.875.875 0 0 1 0 1.75z"/>
+            </svg>
+            <span>.doc 属于旧版 Word 二进制格式，已提取正文与文本结构展示；如需查看完整版式、字体与复杂排版，建议另存为 .docx 或 .pdf。</span>
+          </div>
+
+          <article class="file-document-paper">
+            <header v-if="props.doc?.headers" class="file-document-paper-header">
+              {{ props.doc.headers }}
+            </header>
+
+            <main class="file-document-paper-body">
+              <p
+                v-for="(p, idx) in docParagraphs"
+                :id="`doc-p-${idx}`"
+                :key="idx"
+                class="file-document-p"
+              >
+                {{ p }}
+              </p>
+            </main>
+
+            <footer v-if="props.doc?.footers" class="file-document-paper-footer">
+              {{ props.doc.footers }}
+            </footer>
+          </article>
+        </div>
       </div>
     </div>
   </div>

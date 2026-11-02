@@ -16,7 +16,10 @@ const developmentCsp = [
   `connect-src 'self' ws://127.0.0.1:${devServerPort}`,
   // data: 与 blob: 仅用于本地图片附件的缩略图展示，与生产 CSP 保持一致；不放开远程图片。
   "img-src 'self' data: blob:",
-  "font-src 'self'",
+  // data: 与 blob: 允许 PDF.js 等组件动态加载解析后的内嵌字体。
+  "font-src 'self' data: blob:",
+  // worker-src 放开同源和 blob，支持 PDF.js 等组件创建 Web Worker。
+  "worker-src 'self' blob:",
   "object-src 'none'",
   // frame-src 允许嵌入受限的 webview 网页容器，支持 http/https/about 外部页面。
   "frame-src 'self' http: https: about: data:",

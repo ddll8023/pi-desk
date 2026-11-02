@@ -43,7 +43,8 @@
 | `src/renderer/src/editor/components/CodeMirrorEditor.vue` | 源码编辑器及对外编辑接口 |
 | `src/renderer/src/editor/components/FileHtmlPreview.vue` | HTML 隔离页面、快照刷新、加载与错误状态、容器释放 |
 | `src/renderer/src/editor/components/FileTablePreview.vue` | 电子表格（Excel 多工作表）与纯文本表格（CSV/TSV）结构化网格预览、多工作表切换、排序与筛选 |
-| `src/renderer/src/editor/components/FileDocumentPreview.vue` | 文档文件（PDF 逐页 Canvas 与文本层、DOCX 纸张排版、DOC 结构提取）预览，提供页码导航与缩放 |
+| `src/renderer/src/editor/components/FileDocumentPreview.vue` | 文档文件（PDF 逐页 Canvas 与文本层、DOCX 纸张排版、DOC 结构提取）预览，提供左侧大纲侧边栏、页码导航与缩放 |
+| `src/renderer/src/editor/components/FileDocumentOutline.vue` | 文档通用大纲侧边栏：多级树折叠/展开、当前章节高亮、页码徽章标记与快速定位 |
 | `src/renderer/src/editor/components/FileMarkdownView.vue` | Markdown 预览／可编辑排版、目录、查找及只读降级 |
 | `src/renderer/src/editor/components/FileMarkdownPreview.vue` | 只读安全 DOM、资源及阅读交互适配 |
 | `src/renderer/src/editor/components/FileMarkdownToolbar.vue` | 文档工具区、编辑能力提示与阅读选项 |
@@ -141,10 +142,10 @@ HTML 文件默认显示「页面」，可切回「源码」编辑；类型识别
 
 文档文件支持只读预览，大小上限为 32 MiB（`PROJECT_FILE_DOCUMENT_MAX_BYTES`），超出按 `unsupported: too-large` 返回。打开时默认进入「预览」模式，标题栏展示只读文档标识。
 
-`FileDocumentPreview.vue` 统一承接三类文档的呈现与缩放操作：
-- **PDF 预览**：主进程读取二进制 Buffer 并回传 Base64（`kind: 'pdf'`），前端基于 `pdfjs-dist` 在 Canvas 上分页绘制，并叠加 TextLayer 文字图层支持鼠标划词与复制快捷键；提供页码输入跳转、上一页／下一页翻页、自适应视口宽度与阶梯缩放控制；
-- **DOCX 预览**：主进程读取二进制 Buffer 并回传 Base64（`kind: 'docx'`），前端通过 `docx-preview` 转译并渲染为仿 Word 纸张卡片 DOM，保留字号、表格、图片、缩进与页边距，外层深浅主题自适应；
-- **DOC 预览（Word 97-2003）**：主进程通过 `word-extractor` 在 Node.js 内存中提取正文段落、页眉与页脚结构（`kind: 'doc'`），前端以结构化纸张呈现，顶部附有旧版格式提示横幅。
+`FileDocumentPreview.vue` 统一承接三类文档的呈现、大纲与缩放操作，并提供统一的左侧大纲侧边栏（`FileDocumentOutline.vue`）支持展开/收起：
+- **PDF 预览**：主进程读取二进制 Buffer 并回传 Base64（`kind: 'pdf'`），前端基于 `pdfjs-dist` 在 Canvas 上分页绘制，并叠加 TextLayer 文字图层支持鼠标划词与复制快捷键；解析原生书签大纲树与目标页码，支持点击翻页与双向高亮联动；提供页码输入跳转、上一页／下一页翻页、自适应视口宽度与阶梯缩放控制；
+- **DOCX 预览**：主进程读取二进制 Buffer 并回传 Base64（`kind: 'docx'`），前端通过 `docx-preview` 转译并渲染为仿 Word 纸张卡片 DOM，保留字号、表格、图片、缩进与页边距，外层深浅主题自适应；基于样式元数据与计算样式启发式提取章节标题大纲，支持点击平滑滚动定位；
+- **DOC 预览（Word 97-2003）**：主进程通过 `word-extractor` 在 Node.js 内存中提取正文段落、页眉与页脚结构（`kind: 'doc'`），前端以结构化纸张呈现，顶部附有旧版格式提示横幅，并从段落结构中提取大纲条目供快速导航。
 
 ## 数据与安全边界
 
