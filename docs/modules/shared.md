@@ -35,9 +35,9 @@
 | `src/renderer/src/sessions/stores/runtime-model-display.ts` | 对话页隐藏模型偏好、乐观更新与串行写回、失败回滚 |
 | `src/shared/runtime-api.ts` | 只再导出 `./runtime/`，外部导入路径不变 |
 | `src/shared/runtime/status.ts` | 运行目标、状态、错误与命令（Prompt、回退、压缩、切换模型） |
-| `src/shared/runtime/projection.ts` | 消息／工具／历史／活动／用量／速率投影 |
+| `src/shared/runtime/projection.ts` | 消息／工具／历史／活动／用量／速率投影，以及工具语义摘要契约与传输边界 |
 | `src/shared/runtime/models.ts` | 模型标识、摘要与 agent 能力清单 |
-| `src/shared/runtime/resources.ts` | 资源预读、诊断与 MCP 状态、探测、配置、命令 |
+| `src/shared/runtime/resources.ts` | 资源、诊断与 MCP 契约，并集中校验 Runtime、投影、历史及工具语义摘要载荷 |
 | `src/shared/runtime/api.ts` | `RuntimeApi` 桥接接口：聚合上述四组方法，跨域类型在此引用 |
 | `src/shared/runtime/projection-reducer.ts` | 桌面与手机共用的纯投影增量合并；长度或消息身份不符时返回 null，由调用方转快照 |
 

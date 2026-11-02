@@ -3,6 +3,7 @@ import type { SessionEntry } from '@earendil-works/pi-coding-agent'
 import type { HistoryChunk, HistoryData, HistoryPage, HistoryQuery, ProjectionMessage } from '../../shared/runtime-api'
 import { MessageProjection } from './message-projection'
 import { summarizeToolArguments } from './tool-projection'
+import { summarizeToolRequest, summarizeToolResult } from './tool-presentation'
 import { parseGenuiPayload } from '../../shared/genui-api'
 import { readImageAnnotationMessage } from '../../shared/image-annotation'
 import type { ImageAnnotationAttachment } from '../../shared/image-annotation'
@@ -239,24 +240,36 @@ export function readBranchHistory(branch: readonly SessionEntry[], query: Histor
     }
   }
   const wanted = new Set(snapshot.tools.map(tool => tool.toolCallId))
-  const argumentsById = new Map<string, { text: string; truncated: boolean; summary: ReturnType<typeof summarizeToolArguments> }>()
+  const argumentsById = new Map<string, { text: string; truncated: boolean;
+    summary: ReturnType<typeof summarizeToolArguments>; request: ReturnType<typeof summarizeToolRequest> }>()
   for (const entry of branch) {
     if (entry.type !== 'message' || entry.message.role !== 'assistant' || !Array.isArray(entry.message.content)) continue
     entry.message.content.forEach((part, index) => {
       if (part.type !== 'toolCall' || !wanted.has(part.id)) return
       const text = JSON.stringify(part.arguments) ?? ''
       argumentsById.set(part.id, { text: text.slice(0, 4_096), truncated: text.length > 4_096,
-        summary: summarizeToolArguments(part.arguments) })
+        summary: summarizeToolArguments(part.arguments), request: summarizeToolRequest(part.name, part.arguments) })
       if (text.length > 4_096 && !chunks.some(chunk => chunk.entryId === entry.id && chunk.contentIndex === index && chunk.field === 'arguments')) {
         chunks.push({ entryId: entry.id, contentIndex: index, field: 'arguments', offset: 0, toolCallId: part.id })
       }
     })
+  }
+  // 摘要消费选中条目的原始结果，不能从已裁成 8KB 的 JSON 片段反推总数与来源。
+  const resultsById = new Map<string, ReturnType<typeof summarizeToolResult>>()
+  const toolNames = new Map(snapshot.tools.map(tool => [tool.toolCallId, tool.toolName]))
+  for (const entry of selected) {
+    const original = messageOf(entry)
+    if (original?.role !== 'toolResult' || typeof original.toolCallId !== 'string' || !wanted.has(original.toolCallId)) continue
+    resultsById.set(original.toolCallId, summarizeToolResult(toolNames.get(original.toolCallId) ?? '', original,
+      { isError: original.isError === true }))
   }
   return { kind: query.kind, messages: displayed, tools: snapshot.tools.map(tool => {
     const args = argumentsById.get(tool.toolCallId)
     return { ...tool, textTruncated: tool.textTruncated || chunks.some(chunk => chunk.field === 'output' && chunk.toolCallId === tool.toolCallId),
       ...(args ? { argsText: args.text, argsSummary: args.summary,
       argsTruncated: args.truncated } : {}),
+      presentation: { request: args?.request ?? tool.presentation?.request ?? null,
+        result: resultsById.get(tool.toolCallId) ?? tool.presentation?.result ?? null },
       ...(tool.ui ? { latestRevision: latest.get(tool.ui.documentId) ?? tool.ui.revision } : {}) }
   }), chunks, before, next, turnId } satisfies HistoryPage
 }

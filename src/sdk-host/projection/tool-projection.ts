@@ -17,6 +17,7 @@
  * 参数除了原始 JSON 文本，还产出值级摘要（`argsSummary`）：长文本、数组与嵌套对象只给规模，
  * 源码不进入展示层；摘要由完整参数算出，因此不受 `argsText` 截断影响。结果里 Pi 保存完整
  * 输出的路径原样带到 `outputPath`，界面据此指路，不自己推测文件位置。
+ * `presentation` 在原文截断前提取查询、范围与结果事实，只放行固定有界字段；未知结果不猜计数。
  */
 import type {
   ToolArgSummaryEntry,
@@ -26,8 +27,11 @@ import type {
   ToolExecution,
   ToolExecutionPhase,
   ToolExecutionTextKind,
-  ToolNonTextPart
+  ToolNonTextPart,
+  ToolPresentation,
+  ToolRequestPresentation
 } from '../../shared/runtime-api'
+import { summarizeToolRequest, summarizeToolResult } from './tool-presentation'
 import { parseGenuiPayload } from '../../shared/genui-api'
 import type { GenuiPayload } from '../../shared/genui-api'
 
@@ -86,6 +90,7 @@ interface MutableToolExecution {
   nonTextParts: ToolNonTextPart[]
   diff: ToolDiff | null
   ui: GenuiPayload | null
+  presentation: ToolPresentation
 }
 
 export interface ToolProjectionCallbacks {
@@ -170,13 +175,16 @@ export function summarizeToolArguments(value: unknown): readonly ToolArgSummaryE
   return entries
 }
 
-/** 历史补种只有参数文本时解析出摘要；解析失败返回 null，不猜造键值。 */
-function summarizeArgsText(argsText: string | null): readonly ToolArgSummaryEntry[] | null {
-  if (argsText === null) return null
+/** 历史补种只解析一次参数，同时生成值级与语义摘要；失败保留空摘要，不猜造键值。 */
+function summarizeArgsText(toolName: string, argsText: string): {
+  readonly summary: readonly ToolArgSummaryEntry[] | null
+  readonly request: ToolRequestPresentation | null
+} {
   try {
-    return summarizeToolArguments(JSON.parse(argsText))
+    const args: unknown = JSON.parse(argsText)
+    return { summary: summarizeToolArguments(args), request: summarizeToolRequest(toolName, args) }
   } catch {
-    return null
+    return { summary: null, request: null }
   }
 }
 
@@ -361,7 +369,8 @@ function toPublicTool(entry: MutableToolExecution): ToolExecution {
     nonTextBlocks: entry.nonTextBlocks,
     nonTextParts: entry.nonTextParts,
     diff: entry.diff,
-    ui: entry.ui
+    ui: entry.ui,
+    presentation: entry.presentation
   }
 }
 
@@ -434,6 +443,7 @@ export class ToolProjection {
     const entry: MutableToolExecution = {
       toolCallId: seed.toolCallId,
       toolName: seed.toolName ?? '',
+      presentation: { request: null, result: null },
       phase: seed.isError ? 'failed' : 'succeeded',
       startedAt: null,
       endedAt: seed.endedAt,
@@ -458,6 +468,8 @@ export class ToolProjection {
     entry.outputPath = readOutputPath(seed.result)
     entry.diff = extractDiff(entry.toolName, entry.argsText, seed.result)
     entry.ui = readUiPayload(seed.result)
+    entry.presentation = { ...entry.presentation,
+      result: summarizeToolResult(entry.toolName, seed.result, { isError: seed.isError, text: extracted.text }) }
     this.emit(entry)
   }
 
@@ -468,6 +480,7 @@ export class ToolProjection {
     entry.diff = null
     entry.outputPath = null
     entry.ui = null
+    entry.presentation = { request: null, result: null }
     this.applyArgs(entry, payload.args)
     this.emit(entry)
     return 'start'
@@ -480,6 +493,8 @@ export class ToolProjection {
     const partial = extractResultText(payload.partialResult)
     this.setText(entry, partial, 'partial')
     this.applyNonText(entry, partial)
+    entry.presentation = { ...entry.presentation,
+      result: summarizeToolResult(entry.toolName, payload.partialResult, { isError: false, partial: true, text: partial.text }) }
     this.emit(entry)
     return 'update'
   }
@@ -499,6 +514,8 @@ export class ToolProjection {
     this.applyNonText(entry, result)
     entry.diff = extractDiff(entry.toolName, entry.argsText, payload.result)
     entry.ui = readUiPayload(payload.result)
+    entry.presentation = { ...entry.presentation,
+      result: summarizeToolResult(entry.toolName, payload.result, { isError: payload.isError === true, text: result.text }) }
     this.emit(entry)
     return 'end'
   }
@@ -522,6 +539,7 @@ export class ToolProjection {
     const entry: MutableToolExecution = {
       toolCallId,
       toolName: toolName ?? '',
+      presentation: { request: null, result: null },
       phase: initialPhase,
       startedAt,
       endedAt: null,
@@ -548,13 +566,16 @@ export class ToolProjection {
     const argsText = serializeToolArguments(rawArgs)
     if (argsText === null) return
     entry.argsSummary = summarizeToolArguments(rawArgs)
+    entry.presentation = { ...entry.presentation, request: summarizeToolRequest(entry.toolName, rawArgs) }
     this.storeArgsText(entry, argsText)
   }
 
   /** 历史补种只有参数文本：先解析摘要，再存可能被截断的文本。 */
   private applyArgsText(entry: MutableToolExecution, argsText: string | null): void {
     if (argsText === null) return
-    entry.argsSummary = summarizeArgsText(argsText)
+    const summary = summarizeArgsText(entry.toolName, argsText)
+    entry.argsSummary = summary.summary
+    entry.presentation = { ...entry.presentation, request: summary.request }
     this.storeArgsText(entry, argsText)
   }
 

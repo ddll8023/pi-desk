@@ -189,9 +189,9 @@ const displayRows = computed<readonly DisplayRow[]>(() => {
   return rows
 })
 
-/** 面板头部的一行统计：「N 个工具 · a 已完成 / b 失败」；状态只按已有执行记录统计。 */
+/** 面板头部汇总工具数量、统一操作分类与已有执行状态；缺少执行记录时不推断成功或失败。 */
 function groupStats(blocks: readonly ChatToolBlock[]): string {
-  return toolGroupStats(blocks.map(block => block.execution?.phase ?? null))
+  return toolGroupStats(blocks.map(block => block.execution?.phase ?? null), blocks.map(block => block.toolName))
 }
 
 /** 只标记渲染入口，不改变界面版本、会话身份或消息的块顺序。 */

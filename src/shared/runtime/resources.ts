@@ -1,9 +1,10 @@
-/** Pi 资源与 MCP 契约：资源清单、资源预读、诊断，以及 MCP 状态、探测、配置与命令。 */
+/** Pi 资源与 MCP 契约，以及 Runtime、消息／工具投影与历史载荷的集中跨进程校验。 */
 
 import { COMPACT_INSTRUCTIONS_MAX_CHARS } from './status'
 import type { PromptDisposition, PromptResult, RuntimeCompactRequest, RuntimeDiagnosticsResult, RuntimeError, RuntimeInfo, RuntimeResult, RuntimeRewindRequest, RuntimeRewindResult, RuntimeSetModelRequest, RuntimeState, RuntimeStatus, RuntimeTarget } from './status'
 import type { AgentCapabilities, CapabilitiesResult, ModelIdentity, ModelSummary } from './models'
-import type { ContextUsage, ExtensionErrorEntry, HistoryChunk, HistoryData, HistoryQuery, MessageGeneration, MessageUsage, OutputRate, ProjectionBatch, ProjectionBlock, ProjectionBlockKind, ProjectionCompaction, ProjectionMessage, ProjectionResult, ProjectionSnapshot, ProjectionUpdate, SessionActivity, SessionUsage, ToolArgSummaryEntry, ToolDiff, ToolDiffLine, ToolDiffLineKind, ToolExecution, ToolExecutionPhase, ToolExecutionTextKind, ToolNonTextPart } from './projection'
+import type { ContextUsage, ExtensionErrorEntry, HistoryChunk, HistoryData, HistoryQuery, MessageGeneration, MessageUsage, OutputRate, ProjectionBatch, ProjectionBlock, ProjectionBlockKind, ProjectionCompaction, ProjectionMessage, ProjectionResult, ProjectionSnapshot, ProjectionUpdate, SessionActivity, SessionUsage, ToolArgSummaryEntry, ToolDiff, ToolDiffLine, ToolDiffLineKind, ToolExecution, ToolExecutionPhase, ToolExecutionTextKind, ToolNonTextPart, ToolPresentation, ToolPresentationFact, ToolRequestPresentation, ToolResultPresentation, ToolPresentationItem } from './projection'
+import { TOOL_PRESENTATION_LIMITS as PRESENTATION_LIMITS } from './projection'
 import { isGenuiPayload } from '../genui-api'
 import { parseImageAnnotationAttachments } from '../image-annotation'
 
@@ -478,6 +479,47 @@ function isToolNonTextPart(value: unknown): value is ToolNonTextPart {
       || (typeof value.bytes === 'number' && Number.isInteger(value.bytes) && value.bytes >= 0))
 }
 
+/** 只放行固定的有界展示字段，不把任意工具 details 对象送进页面。 */
+function isPresentationText(value: unknown, limit: number, nullable = true): boolean {
+  return (nullable && value === null) || (typeof value === 'string' && value.length <= limit)
+}
+function isPresentationFact(value: unknown): value is ToolPresentationFact {
+  return isRecord(value) && isPresentationText(value.label, PRESENTATION_LIMITS.label, false)
+    && isPresentationText(value.value, PRESENTATION_LIMITS.value, false)
+}
+function isPresentationFacts(value: unknown): value is readonly ToolPresentationFact[] {
+  return Array.isArray(value) && value.length <= PRESENTATION_LIMITS.facts && value.every(isPresentationFact)
+}
+function isRequestPresentation(value: unknown): value is ToolRequestPresentation {
+  return isRecord(value) && isPresentationText(value.subject, PRESENTATION_LIMITS.subject)
+    && isPresentationFacts(value.facts) && typeof value.truncated === 'boolean'
+}
+function isPresentationItem(value: unknown): value is ToolPresentationItem {
+  return isRecord(value) && isPresentationText(value.title, PRESENTATION_LIMITS.title, false)
+    && isPresentationText(value.location, PRESENTATION_LIMITS.location)
+    && isPresentationText(value.excerpt, PRESENTATION_LIMITS.excerpt)
+    && isPresentationText(value.evidence, PRESENTATION_LIMITS.evidence)
+    && isPresentationText(value.meta, PRESENTATION_LIMITS.meta)
+}
+function isPresentationCount(value: unknown): boolean {
+  return value === null || (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0)
+}
+function isResultPresentation(value: unknown): value is ToolResultPresentation {
+  return isRecord(value) && typeof value.outcome === 'string'
+    && ['result', 'empty', 'error', 'cancelled', 'partial', 'unknown'].includes(value.outcome)
+    && isPresentationText(value.summary, PRESENTATION_LIMITS.note)
+    && isPresentationCount(value.returnedCount) && isPresentationCount(value.totalCount)
+    && (value.hasMore === null || typeof value.hasMore === 'boolean')
+    && typeof value.truncated === 'boolean' && typeof value.previewTruncated === 'boolean'
+    && isPresentationFacts(value.facts) && Array.isArray(value.items)
+    && value.items.length <= PRESENTATION_LIMITS.items && value.items.every(isPresentationItem)
+    && isPresentationText(value.note, PRESENTATION_LIMITS.note)
+}
+function isToolPresentation(value: unknown): value is ToolPresentation {
+  return isRecord(value) && (value.request === null || isRequestPresentation(value.request))
+    && (value.result === null || isResultPresentation(value.result))
+}
+
 function isToolExecution(value: unknown): value is ToolExecution {
   if (!isRecord(value)) return false
   return typeof value.toolCallId === 'string'
@@ -500,6 +542,7 @@ function isToolExecution(value: unknown): value is ToolExecution {
     && Array.isArray(value.nonTextParts)
     && value.nonTextParts.every(isToolNonTextPart)
     && (value.latestRevision === undefined || isCount(value.latestRevision))
+    && (value.presentation === undefined || value.presentation === null || isToolPresentation(value.presentation))
     && (value.ui === null || isGenuiPayload(value.ui))
     && isToolDiff(value.diff)
 }

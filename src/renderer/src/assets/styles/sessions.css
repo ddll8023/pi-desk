@@ -1102,9 +1102,9 @@
   }
 .tool-card > summary {
     display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.375rem 0.625rem;
+    align-items: flex-start;
+    gap: 0.625rem;
+    padding: 0.625rem;
     font-size: 0.75rem;
     cursor: pointer;
     user-select: none;
@@ -1113,50 +1113,106 @@
 .tool-card > summary:hover {
     background: var(--color-desk-surface-subtle);
   }
-/* 工具类型语义徽章（操作维度区分，柔和且不刺眼） */
+.tool-card > summary > .disclosure {
+    flex-shrink: 0;
+    margin-top: 0.35rem;
+  }
+.tool-summary-content {
+    display: flex;
+    flex: 1;
+    min-width: 0;
+    flex-direction: column;
+    gap: 0.3rem;
+  }
+.tool-summary-head {
+    display: flex;
+    min-width: 0;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.4rem;
+  }
+.tool-summary-subject {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    overflow: hidden;
+    overflow-wrap: anywhere;
+    color: var(--color-desk-ink);
+    font-size: var(--text-2xs);
+    line-height: 1.5;
+    white-space: pre-wrap;
+  }
+.tool-summary-outcome {
+    display: flex;
+    min-width: 0;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.35rem;
+    font-size: 0.75rem;
+  }
+.tool-outcome-text {
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+.tool-summary-context {
+    color: var(--color-desk-muted);
+    font-size: var(--text-2xs);
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+  }
+.tool-inline-flag,
+.tool-result-flag,
+.tool-transport {
+    padding: 1px 5px;
+    border: 1px solid var(--color-desk-line);
+    border-radius: var(--radius-desk-sm);
+    color: var(--color-desk-muted);
+    font-size: var(--text-2xs);
+    line-height: 1.4;
+  }
+/* 操作文字是第一识别通道，徽章复用深浅主题令牌，不另建工具专属色盘。 */
 .tool-badge {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    font-family: var(--font-mono);
-    font-size: 10px;
+    font-family: var(--font-sans);
+    font-size: var(--text-2xs);
     font-weight: 600;
-    letter-spacing: 0.03em;
-    padding: 1.5px 5.5px;
-    border-radius: 4px;
+    padding: 2px 6px;
+    border-radius: var(--radius-desk-sm);
     flex-shrink: 0;
-    line-height: 1.25;
+    line-height: 1.4;
   }
-.tool-badge-read {
-    background: rgba(56, 189, 248, 0.12);
-    color: #38bdf8;
-    border: 1px solid rgba(56, 189, 248, 0.25);
+.tool-badge-read,
+.tool-badge-search {
+    background: var(--color-desk-accent-soft);
+    color: var(--color-desk-accent);
+    border: 1px solid color-mix(in srgb, var(--color-desk-accent) 25%, var(--color-desk-line));
   }
 .tool-badge-edit,
 .tool-badge-write {
-    background: rgba(52, 211, 153, 0.12);
-    color: #34d399;
-    border: 1px solid rgba(52, 211, 153, 0.25);
+    background: var(--color-desk-success-soft);
+    color: var(--color-desk-success);
+    border: 1px solid color-mix(in srgb, var(--color-desk-success) 25%, var(--color-desk-line));
   }
-.tool-badge-bash {
-    background: rgba(192, 132, 252, 0.12);
-    color: #c084fc;
-    border: 1px solid rgba(192, 132, 252, 0.25);
-  }
-.tool-badge-mcp {
-    background: rgba(251, 146, 60, 0.12);
-    color: #fb923c;
-    border: 1px solid rgba(251, 146, 60, 0.25);
-  }
+.tool-badge-terminal,
+.tool-badge-control,
 .tool-badge-default {
     background: var(--color-desk-surface-subtle);
     color: var(--color-desk-muted);
     border: 1px solid var(--color-desk-line);
   }
 .tool-name {
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
     color: var(--color-desk-muted);
-    font-size: 11px;
-    flex-shrink: 0;
+    font-size: var(--text-2xs);
   }
 .tool-target-path {
     color: var(--color-desk-ink);
@@ -1183,10 +1239,13 @@
     gap: 0.35rem;
     padding: 1.5px 6.5px;
     border-radius: 9999px;
-    font-size: 10.5px;
+    font-size: var(--text-2xs);
     background: var(--color-desk-surface-subtle);
     border: 1px solid var(--color-desk-line);
     flex-shrink: 0;
+    flex-wrap: wrap;
+    max-width: 100%;
+    white-space: nowrap;
   }
 .tool-status-icon {
     font-size: 10.5px;
@@ -1205,6 +1264,8 @@
   }
 .tool-duration {
     @apply shrink-0;
+    padding-left: 0.35rem;
+    border-left: 1px solid var(--color-desk-line);
   }
 /* 文件类工具的改动量：新增与删除各自着色，数值用等宽数字避免变化时抖动。
      整组不拆行：窄消息列里 `+n −m` 与「推断」标记必须待在同一行，否则会读成两组数据。 */
@@ -1232,6 +1293,87 @@
   }
 .tool-card-body {
     @apply space-y-2 border-t border-desk-line px-3 py-2.5;
+  }
+/* 结果优先，原文按需展开；列表只用分隔线，不在每个命中外再套卡片。 */
+.tool-result-preview {
+    display: grid;
+    gap: 0.5rem;
+  }
+.tool-result-heading {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.4rem;
+  }
+.tool-result-title {
+    font-size: 0.75rem;
+    font-weight: 600;
+    overflow-wrap: anywhere;
+  }
+.tool-result-list {
+    display: grid;
+    gap: 0.5rem;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+.tool-result-item {
+    min-width: 0;
+    padding-top: 0.5rem;
+    border-top: 1px solid var(--color-desk-line);
+  }
+.tool-result-item-title {
+    font-size: 0.75rem;
+    font-weight: 600;
+    overflow-wrap: anywhere;
+  }
+.tool-result-location,
+.tool-result-meta {
+    margin-top: 0.2rem;
+    color: var(--color-desk-muted);
+    font-size: var(--text-2xs);
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+  }
+.tool-result-excerpt {
+    margin-top: 0.35rem;
+    font-size: 0.75rem;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+.tool-result-evidence {
+    margin-top: 0.3rem;
+    color: var(--color-desk-accent);
+    font-size: var(--text-2xs);
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+  }
+.tool-request-facts,
+.tool-raw-section {
+    padding-top: 0.5rem;
+    border-top: 1px solid var(--color-desk-line);
+  }
+.tool-missing-record {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    border-top: 0;
+  }
+@media (max-width: 640px) {
+    .tool-card > summary {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr);
+    }
+    .tool-card > summary > .tool-status-pill {
+      grid-column: 2;
+      justify-self: start;
+    }
+  }
+@media (prefers-reduced-motion: reduce) {
+    .tool-spinner { animation: none; }
   }
 /* 工具输出不设纵向上限：纵向滚动由卡片内容区统一承担，整卡只保留一层滚动条。 */
 .tool-output {

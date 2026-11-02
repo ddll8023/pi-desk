@@ -10,6 +10,7 @@ import HistoryLoadSentinel from './HistoryLoadSentinel.vue'
 import type { ChatMessageView, ChatTurnView } from '../chat-view'
 import { formatDuration, useTickingNow } from '../clock'
 import { formatTokens } from '../usage-format'
+import { toolOperationStats } from '../tool-summary'
 import ChatMessageItem from './ChatMessageItem.vue'
 import { useSessionBranchStore } from '../stores/session-branch'
 import TurnBranchSwitcher from './TurnBranchSwitcher.vue'
@@ -201,31 +202,21 @@ function toggleProcessGroup(key: string): void {
 }
 
 function processGroupStats(messages: readonly ChatMessageView[]): string {
-  let reads = 0
-  let edits = 0
-  let bashes = 0
-  let others = 0
+  const toolNames: string[] = []
   let thinkings = 0
   for (const msg of messages) {
     for (const b of msg.blocks) {
       if (b.kind === 'thinking') {
         thinkings += 1
       } else if (b.kind === 'toolcall') {
-        const name = b.toolName.toLowerCase()
-        if (name.includes('read') || name.includes('fetch') || name.includes('get')) reads += 1
-        else if (name.includes('edit') || name.includes('write') || name.includes('patch')) edits += 1
-        else if (name.includes('bash') || name.includes('terminal') || name.includes('cmd')) bashes += 1
-        else others += 1
+        toolNames.push(b.toolName)
       }
     }
   }
-  const parts: string[] = []
-  if (reads > 0) parts.push(`${reads} 读取`)
-  if (edits > 0) parts.push(`${edits} 编辑`)
-  if (bashes > 0) parts.push(`${bashes} 终端`)
-  if (others > 0) parts.push(`${others} 工具`)
+  const operations = toolOperationStats(toolNames)
+  const parts = operations === '' ? [] : [operations]
   if (thinkings > 0) parts.push(`${thinkings} 思考`)
-  const total = reads + edits + bashes + others + thinkings
+  const total = toolNames.length + thinkings
   return `${total} 项操作${parts.length > 0 ? ` · ${parts.join(' / ')}` : ''}`
 }
 </script>

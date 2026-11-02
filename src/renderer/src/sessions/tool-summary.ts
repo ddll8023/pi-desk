@@ -1,13 +1,15 @@
 /**
  * 工具卡片的展示推导：摘要行内容、变更展示与结果预览。
  *
- * 只做展示层计算，不改变投影数据。涵盖六类：
- * 参数摘要与参数值文案（长文本、数组与嵌套对象只给规模，支持结构化 JSON 与 skill_guard_select 的人道化语义提炼）；
+ * 只做展示层计算，不改变投影数据；操作分类与宿主共用，结果语义来自截断前的有界投影。
+ * 参数摘要与参数值文案（支持结构化 JSON 与规范选择的名称提取）；
  * 文件路径相对化与 `write` 内容预览；
  * Diff 增删行统计与工具组状态统计；结果规模测量与预览裁剪（按行数、按字符两种裁剪原因分开）；
  * 结果整体是 JSON 时的结构摘要。为不在渲染线程解析大文本，JSON 判定同时限制长度。
  */
-import type { ToolArgSummaryEntry, ToolArgValue, ToolDiff, ToolExecutionPhase } from '../../../shared/runtime-api'
+import type { ToolArgSummaryEntry, ToolArgValue, ToolDiff, ToolExecutionPhase, ToolPresentation, ToolResultPresentation } from '../../../shared/runtime-api'
+import { toolLocalName, toolOperationGroups } from '../../../shared/tool-operation'
+export { getToolOperation } from '../../../shared/tool-operation'
 
 /** 折叠摘要的长度上限；只用于那一行摘要，不代替展开后的内容。 */
 const ARGS_PREVIEW_CHARS = 120
@@ -32,7 +34,15 @@ const PREVIEW_ARG_KEYS: Readonly<Record<string, readonly string[]>> = {
   ls: ['path', 'file_path'],
   bash: ['command'],
   grep: ['pattern', 'path'],
-  find: ['pattern', 'path']
+  ffgrep: ['pattern', 'path'],
+  find: ['pattern', 'path'],
+  fffind: ['pattern', 'path'],
+  memory_search: ['query'],
+  memory_rules: ['query'],
+  web_search: ['query'],
+  source_check: ['claim', 'query'],
+  fetch_content: ['url'],
+  get_search_content: ['query', 'findText']
 }
 
 /** 未知工具（含 MCP 工具）最多展示的短参数个数。 */
@@ -154,6 +164,13 @@ function formatJsonArgsPreview(argsText: string): string | null {
         return `${key}: ${val.trim()}`
       }
     }
+    for (const key of ['queries', 'urls', 'ids', 'findText']) {
+      const value = record[key]
+      if (Array.isArray(value)) {
+        const parts = value.slice(0, 3).filter((part): part is string => typeof part === 'string')
+        if (parts.length > 0) return `${key}: ${parts.join('；')}${value.length > parts.length ? '…' : ''}`
+      }
+    }
     const keys = Object.keys(record)
     if (keys.length > 0) {
       return `结构化参数 · ${keys.slice(0, 3).join(', ')}${keys.length > 3 ? '…' : ''}`
@@ -173,7 +190,8 @@ export function toolCallPreview(
   summary: readonly ToolArgSummaryEntry[] | null,
   argsText: string | null
 ): string | null {
-  if (toolName === 'skill_guard_select' && argsText !== null) {
+  const local = toolLocalName(toolName)
+  if (local === 'skill_guard_select' && argsText !== null) {
     try {
       const parsed: unknown = JSON.parse(argsText)
       if (parsed && typeof parsed === 'object' && Array.isArray((parsed as Record<string, unknown>).skills)) {
@@ -188,7 +206,7 @@ export function toolCallPreview(
   }
 
   if (summary !== null && summary.length > 0) {
-    const keys = PREVIEW_ARG_KEYS[toolName]
+    const keys = Object.hasOwn(PREVIEW_ARG_KEYS, local) ? PREVIEW_ARG_KEYS[local] : undefined
     const preferred = keys === undefined ? joinFallbackArgs(summary) : findPreviewArg(summary, keys)
     if (preferred !== null) return clipPreview(preferred)
   }
@@ -197,7 +215,7 @@ export function toolCallPreview(
     const trimmed = argsText.trim()
     if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
       const jsonPreview = formatJsonArgsPreview(trimmed)
-      if (jsonPreview !== null) return clipPreview(jsonPreview)
+      return jsonPreview === null ? '参数摘要不可用，可展开查看原文' : clipPreview(jsonPreview)
     }
     const firstLine = argsText.split('\n', 1)[0]?.trim() ?? ''
     return firstLine === '' ? null : clipPreview(firstLine)
@@ -229,7 +247,7 @@ export function displayToolPath(path: string, root: string | null): string {
   return normalizedValue.slice(normalizedRoot.length + 1)
 }
 
-/** 改动量：只数投影已算出的新增与删除行，没有变更时返回 null。 */
+/** 只统计投影可见片段的增删行；无可计数行时返回 null，不代表文件没有改动。 */
 export function diffChangeCounts(diff: ToolDiff | null): { readonly add: number; readonly remove: number } | null {
   if (diff === null) return null
   let add = 0
@@ -254,18 +272,55 @@ const GROUP_PHASE_LABELS: Readonly<Record<ToolExecutionPhase, string>> = {
   unknown: '未确认结束'
 }
 
+/** 按统一操作分类汇总工具名称，省略未出现的类别，不推断执行状态。 */
+export function toolOperationStats(names: readonly string[]): string {
+  return toolOperationGroups(names).map(group => `${group.count} ${group.label}`).join(' / ')
+}
+
+/** 折叠行只显示工具明确提供的数量，不把展示片段或分页条数当作总命中数。 */
+export function toolResultHeadline(result: ToolResultPresentation): string {
+  if (result.outcome === 'error') return `结果失败：${result.summary ?? '工具报告错误'}`
+  if (result.outcome === 'cancelled') return result.summary ?? '已取消'
+  if (result.outcome === 'unknown' && result.summary !== null) return result.summary
+  const prefix = result.outcome === 'partial' ? '当前报告 · ' : ''
+  if (result.returnedCount !== null) {
+    return `${prefix}返回 ${result.returnedCount} 条${result.totalCount === null ? '' : ` / 总匹配 ${result.totalCount} 条`}`
+  }
+  if (result.totalCount !== null) return `${prefix}总匹配 ${result.totalCount} 条`
+  return `${prefix}${result.summary ?? (result.outcome === 'empty' ? '无相关命中' : '已有结果')}`
+}
+
+/** 实际范围优先于请求提示；不从省略的 project_id 或路径推断全局或当前项目。 */
+export function toolContextPreview(presentation: ToolPresentation | null | undefined): string | null {
+  if (presentation === null || presentation === undefined) return null
+  const facts = [...(presentation.result?.facts ?? []).filter(item => ['实际范围', '实际项目', '检索对象', '月份'].includes(item.label)),
+    ...(presentation.request?.facts ?? []).filter(item => ['路径', '项目过滤', '排除', '请求模式', '领域', '查询数'].includes(item.label))]
+  const seen = new Set<string>()
+  const values: string[] = []
+  for (const item of facts) {
+    const value = `${item.label}：${item.value}`
+    if (seen.has(value)) continue
+    seen.add(value); values.push(value)
+    if (values.length === 4) break
+  }
+  return values.length === 0 ? null : values.join(' · ')
+}
+
 /**
- * 工具组头部统计：只列出实际出现的状态，顺序固定，避免同一组的状态文案随到达顺序抖动。
- * `null` 表示该调用还没有执行记录，不把它当成失败或成功。
+ * 工具组汇总调用数、操作分类与实际出现的执行状态，类别和状态各自保持固定顺序。
+ * phases 中的 null 表示执行记录尚未到达，不冒充失败或成功；names 用于补充操作分类。
  */
-export function toolGroupStats(phases: readonly (ToolExecutionPhase | null)[]): string {
+export function toolGroupStats(phases: readonly (ToolExecutionPhase | null)[], names: readonly string[] = []): string {
   const counts = new Map<string, number>()
   for (const phase of phases) {
     const label = phase === null ? '执行记录未到达' : GROUP_PHASE_LABELS[phase]
     counts.set(label, (counts.get(label) ?? 0) + 1)
   }
-  const parts = [...counts].map(([label, count]) => `${count} ${label}`)
-  return `${phases.length} 个工具 · ${parts.join(' / ')}`
+  const parts = ['运行中', '失败', '未确认结束', '已完成', '执行记录未到达'].flatMap(label => {
+    const count = counts.get(label)
+    return count === undefined ? [] : [`${count} ${label}`]
+  })
+  return [`${phases.length} 个工具`, toolOperationStats(names), parts.join(' / ')].filter(Boolean).join(' · ')
 }
 
 /**

@@ -92,6 +92,44 @@ export interface ToolArgSummaryEntry {
   readonly value: ToolArgValue
 }
 
+/** 工具语义摘要的传输边界；宿主提取与跨进程校验共用，不增加原文投影上限。 */
+export const TOOL_PRESENTATION_LIMITS = {
+  subject: 640, facts: 8, label: 80, value: 320, items: 5,
+  title: 160, location: 320, excerpt: 480, evidence: 240, meta: 320, note: 320
+} as const
+export interface ToolPresentationFact { readonly label: string; readonly value: string }
+export interface ToolRequestPresentation {
+  readonly subject: string | null
+  readonly facts: readonly ToolPresentationFact[]
+  /** 只表示请求摘要省略，不表示原始请求不完整。 */
+  readonly truncated: boolean
+}
+export interface ToolPresentationItem {
+  readonly title: string
+  readonly location: string | null
+  readonly excerpt: string | null
+  readonly evidence: string | null
+  readonly meta: string | null
+}
+export interface ToolResultPresentation {
+  readonly outcome: 'result' | 'empty' | 'error' | 'cancelled' | 'partial' | 'unknown'
+  readonly summary: string | null
+  /** 返回数组长度或工具明确报告的数量；不从输出行数猜测总命中数。 */
+  readonly returnedCount: number | null
+  readonly totalCount: number | null
+  readonly hasMore: boolean | null
+  /** 工具自身报告的截断，与本界面预览省略分开。 */
+  readonly truncated: boolean
+  readonly previewTruncated: boolean
+  readonly facts: readonly ToolPresentationFact[]
+  readonly items: readonly ToolPresentationItem[]
+  readonly note: string | null
+}
+export interface ToolPresentation {
+  readonly request: ToolRequestPresentation | null
+  readonly result: ToolResultPresentation | null
+}
+
 /** Diff 单行语义：`fold` 为 Pi 折叠省略行的占位，无内容文本。 */
 export type ToolDiffLineKind = 'add' | 'remove' | 'context' | 'fold'
 
@@ -147,6 +185,8 @@ export interface ToolExecution {
   readonly nonTextParts: readonly ToolNonTextPart[]
   /** 文件变更展示数据；null 表示无可信来源，不伪造 Diff。 */
   readonly diff: ToolDiff | null
+  /** 截断前提取的有界语义摘要；旧记录缺失时退回参数与文本预览，不猜造结果。 */
+  readonly presentation?: ToolPresentation | null
   /**
    * 生成式 UI 载荷；null 表示该工具没有交付界面，或载荷未通过校验。
    * 载荷已由主进程按 `parseGenuiPayload` 校验并归一，渲染端可直接使用。
