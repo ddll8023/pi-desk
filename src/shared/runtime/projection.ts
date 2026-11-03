@@ -1,5 +1,6 @@
-/** 会话投影契约：消息、工具、历史、活动与用量投影的展示结构、上限与校验；投影批次与历史分页也在这里。 */
+/** 会话投影契约：消息、工具、任务流程、历史、活动与用量的展示结构；投影批次与历史分页也在这里。 */
 
+import type { TaskFlow, TaskFlowState } from '../task-flow'
 import type { RuntimeError } from './status'
 import type { GenuiPayload } from '../genui-api'
 import type { ImageAnnotationAttachment } from '../image-annotation'
@@ -282,6 +283,7 @@ export type ProjectionUpdate =
   | { readonly kind: 'message'; readonly message: ProjectionMessage }
   | { readonly kind: 'tool'; readonly tool: ToolExecution }
   | { readonly kind: 'activity'; readonly activity: SessionActivity }
+  | { readonly kind: 'task-flow'; readonly state: TaskFlowState }
 
 /** 重新订阅或失去同步时的唯一基准；没有活动 Runtime 时消息与工具列表为空。 */
 export interface ProjectionSnapshot {
@@ -297,6 +299,7 @@ export interface ProjectionSnapshot {
   readonly droppedMessages: number
   readonly droppedTools: number
   readonly activity?: SessionActivity
+  readonly taskFlow?: TaskFlowState
   /**
    * 分页锚点与分支版本：`revision` 由宿主产生，只用于判断已加载的分页是否仍属于同一分支，
    * 不由页面回传，也不参与寻址。
@@ -391,6 +394,7 @@ export type HistoryQuery =
 
 export interface HistoryPage {
   readonly kind: 'page' | 'turn'
+  readonly taskFlows?: readonly TaskFlow[]
   readonly messages: readonly ProjectionMessage[]
   readonly tools: readonly ToolExecution[]
   readonly chunks: readonly HistoryChunk[]

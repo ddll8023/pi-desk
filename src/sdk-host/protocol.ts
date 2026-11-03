@@ -3,6 +3,8 @@ import { isExtensionDialogResponseInput, projectExtensionUiRequest } from '../sh
 import { parseImageAnnotations } from '../shared/image-annotation'
 import type { ImageAnnotationDocument } from '../shared/image-annotation'
 import { isWorkspaceId } from '../shared/workspace-api'
+import { isTaskFlowProbe } from '../shared/task-flow'
+import type { TaskFlowProbe } from '../shared/task-flow'
 import {
   COMPACT_INSTRUCTIONS_MAX_CHARS,
   isCapabilitiesResult, isMcpCommandResult, isMcpStatusResult, isOutputRate, isProjectionBatch,
@@ -14,7 +16,7 @@ import type {
   RuntimeDiagnostics, SessionUsage, HistoryQuery, HistoryData
 } from '../shared/runtime-api'
 
-export const SDK_HOST_PROTOCOL_VERSION = 9
+export const SDK_HOST_PROTOCOL_VERSION = 10
 /**
  * `hostId` 是主进程注册表分配的应用级运行身份；宿主不能自行编号，重启后也不会复用旧值。
  */
@@ -150,6 +152,8 @@ export type SdkHostRequest =
   | (RequestEnvelope & { readonly type: 'shutdown' })
   | SdkSessionRequest
   | (RequestEnvelope & { readonly type: 'session-abort'; readonly bindingId: number })
+  | (RequestEnvelope & { readonly type: 'task-flow-start'; readonly bindingId: number; readonly flowId: string; readonly revision: number })
+  | (RequestEnvelope & { readonly type: 'task-flow-read'; readonly bindingId: number; readonly revision: number | null })
   /** 提交只表达是否被接受；本轮结束不属于提交响应。 */
   | (RequestEnvelope & { readonly type: 'prompt'; readonly bindingId: number; readonly message: string;
       readonly images: readonly { readonly type: 'image'; readonly data: string; readonly mimeType: string;
@@ -191,6 +195,7 @@ export type SdkHostFrame =
   | (RequestEnvelope & { readonly type: 'session-result'; readonly seq: number; readonly status: SdkSessionStatus;
       readonly cancelled: boolean })
   | (RequestEnvelope & { readonly type: 'projection-result'; readonly projection: ProjectionSnapshot })
+  | (RequestEnvelope & { readonly type: 'task-flow-result'; readonly snapshot: TaskFlowProbe })
   | (RequestEnvelope & { readonly type: 'history-result'; readonly data: HistoryData })
   | (RequestEnvelope & { readonly type: 'log-result'; readonly data: HistoryData })
   | (RequestEnvelope & { readonly type: 'prompt-result'; readonly disposition: 'started' | 'queued' | 'handled' })
@@ -340,6 +345,10 @@ export function isSdkHostRequest(value: unknown): value is SdkHostRequest {
       return validTarget && requestKeys(value, ['action', 'expectedBindingId', 'interrupt', 'target'])
     }
     case 'session-abort': return isIdentity(value.bindingId) && requestKeys(value, ['bindingId'])
+    case 'task-flow-start': return isIdentity(value.bindingId) && isIdentifier(value.flowId) && isCount(value.revision)
+      && requestKeys(value, ['bindingId', 'flowId', 'revision'])
+    case 'task-flow-read': return isIdentity(value.bindingId) && (value.revision === null || isCount(value.revision))
+      && requestKeys(value, ['bindingId', 'revision'])
     case 'prompt': return isIdentity(value.bindingId) && typeof value.message === 'string'
       && Array.isArray(value.images) && value.images.every(entry =>
         isRecord(entry) && entry.type === 'image' && typeof entry.data === 'string'
@@ -405,6 +414,7 @@ export function isSdkHostFrame(value: unknown): value is SdkHostFrame {
       && requestKeys(value, ['disposition'])
     case 'history-result': return isHistoryData(value.data) && requestKeys(value, ['data'])
     case 'log-result': return isHistoryData(value.data) && requestKeys(value, ['data'])
+    case 'task-flow-result': return isTaskFlowProbe(value.snapshot) && requestKeys(value, ['snapshot'])
     case 'projection-result': return isProjectionResult({ ok: true, data: value.projection })
       && requestKeys(value, ['projection'])
     case 'session-result': return isCount(value.seq) && isSdkSessionStatus(value.status) && typeof value.cancelled === 'boolean'

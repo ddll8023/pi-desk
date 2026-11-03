@@ -1,9 +1,12 @@
-/** 会话执行主链的 IPC：状态查询、中止、回退、可用模型与切换、手动压缩、Prompt 提交、投影快照与确认。目标身份、绑定代际与会话归属全部由主进程核对，页面不能指定任意会话文件或 Pi 条目；历史读取走会话通道。 */
+/** 会话执行主链的 IPC：任务启动与状态对账、状态查询、中止、回退、可用模型与切换、手动压缩、Prompt 提交、投影快照与确认。目标身份、绑定代际与会话归属全部由主进程核对，页面不能指定任意会话文件或 Pi 条目；历史读取走会话通道。 */
 
 import type { IpcMainInvokeEvent } from 'electron'
+import { TASK_FLOW_START_CHANNEL, TASK_FLOW_READ_CHANNEL, isTaskFlowStartRequest, isTaskFlowReadRequest } from '../../shared/task-flow'
+import type { TaskFlowReadResult } from '../../shared/task-flow'
 import { parseImageAnnotations } from '../../shared/image-annotation'
 import {
   RUNTIME_ABORT_CHANNEL,
+  PROMPT_IMAGE_MAX_COUNT,
   RUNTIME_CAPABILITIES_CHANNEL,
   RUNTIME_COMPACT_CHANNEL,
   RUNTIME_SET_MODEL_CHANNEL,
@@ -47,6 +50,17 @@ export function capabilitiesFailure(code: RuntimeErrorCode, message: string): Ca
 }
 
 export function registerRuntimeHandlers(pageUrl: string): void {
+  handle(TASK_FLOW_START_CHANNEL, async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<RuntimeResult> => {
+    if (!isTrustedCaller(event, pageUrl)) return runtimeFailure('FORBIDDEN', '不允许此页面启动任务。')
+    if (args.length !== 1 || !isTaskFlowStartRequest(args[0])) return runtimeFailure('INVALID_REQUEST', '任务启动需要固定目标、计划身份和版本。')
+    return sdkRuntime.startTaskFlow(args[0])
+  })
+  handle(TASK_FLOW_READ_CHANNEL, async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<TaskFlowReadResult> => {
+    if (!isTrustedCaller(event, pageUrl)) return { ok: false, error: { code: 'FORBIDDEN', message: '不允许此页面读取任务。' } }
+    if (args.length !== 1 || !isTaskFlowReadRequest(args[0])) return { ok: false, error: { code: 'INVALID_REQUEST', message: '任务快照需要固定目标和已知水位。' } }
+    return sdkRuntime.readTaskFlow(args[0])
+  })
+
   handle(RUNTIME_STATUS_CHANNEL, (event: IpcMainInvokeEvent, ...args: unknown[]): RuntimeResult => {
     if (!isTrustedCaller(event, pageUrl)) {
       return runtimeFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
@@ -156,7 +170,7 @@ export function registerRuntimeHandlers(pageUrl: string): void {
       // 图片及独立标注逐字段校验后重建；未声明字段直接拒绝，不作为扩展参数透传。
       const images: PromptImageInput[] = []
       if (fields.images !== undefined) {
-        if (!Array.isArray(fields.images) || fields.images.length > 4) {
+        if (!Array.isArray(fields.images) || fields.images.length > PROMPT_IMAGE_MAX_COUNT) {
           return promptFailure('INVALID_REQUEST', '图片附件必须是数量受控的数组。')
         }
         for (const entry of fields.images) {

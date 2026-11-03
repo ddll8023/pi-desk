@@ -44,7 +44,7 @@ const WRITE_TOOLS: ReadonlySet<string> = new Set(['write', 'edit', 'multiedit', 
 const BUILTIN_TOOLS: ReadonlySet<string> = new Set([
   'read', 'write', 'edit', 'multiedit', 'apply_patch',
   'bash', 'powershell', 'grep', 'find', 'ls', 'codemode', 'tool_search',
-  'ui_render', 'ui_patch', 'ui_catalog', 'ui_inspect', 'ffgrep', 'fffind'
+  'ui_render', 'ui_patch', 'ui_catalog', 'ui_inspect', 'ffgrep', 'fffind', 'task_plan'
 ])
 
 /** MCP 资源工具：属于 MCP 能力，但不属于任何具体服务器。 */

@@ -301,7 +301,7 @@ const status = computed<{ readonly kind: 'info' | 'error'; readonly text: string
   }
   if (promptView.value.phase === 'accepted') {
     // 「已开始执行」由消息列表与运行中的停止键表达，不在这里重复播报；
-    // 排队与「已处理但未发起 run」需要解释为什么没开始或没反应，保留文案。
+    // 排队与已处理只表达受理分类；任务启动口令也返回 handled，不能据此断言没有执行。
     return promptView.value.disposition === 'started'
       ? null
       : { kind: 'info', text: acceptedText(promptView.value.disposition) }
@@ -346,11 +346,11 @@ const status = computed<{ readonly kind: 'info' | 'error'; readonly text: string
   return null
 })
 
-/** 排队与「已处理但未发起 run」的结果文案；已开始执行不在信息行重复播报。 */
+/** 仅说明受理结果；是否实际执行由会话运行指示和任务投影表达。 */
 function acceptedText(disposition: PromptDisposition): string {
   return disposition === 'queued'
     ? 'Pi 已将本次输入排队。'
-    : '本次输入已被处理，未发起新的 Agent run。'
+    : '本次输入已处理。'
 }
 
 /** 本会话累计用量；主进程未取到统计时为 null。 */

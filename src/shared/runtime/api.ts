@@ -1,8 +1,9 @@
 /**
- * Runtime 桥接对象的完整接口：把状态与命令、投影、模型能力、资源与 MCP 四组方法聚合成一个
- * 页面可见的契约。四个域文件互不引用，跨域类型集中在这里引用。
+ * Runtime 桥接对象的完整接口：聚合会话状态与命令、任务流程、消息投影、模型能力、资源及 MCP 方法。
+ * 具体载荷和校验由对应契约文件维护，此处只定义页面可见的方法签名。
  */
 
+import type { TaskFlowReadRequest, TaskFlowReadResult, TaskFlowStartRequest } from '../task-flow'
 import type { CapabilitiesResult } from './models'
 import type { McpCommandAction, McpCommandResult, McpConfigResult, McpInspectAbortResult, McpInspectionResult, McpStatusResult, ResourcePreviewResult, ResourcesResult } from './resources'
 import type { ProjectionBatch, ProjectionResult } from './projection'
@@ -10,6 +11,10 @@ import type { PromptImageInput, PromptResult, RuntimeCompactRequest, RuntimeDiag
 
 
 export interface RuntimeApi {
+  /** 启动用户确认的原版本计划；回执不代表步骤已经完成。 */
+  readonly startRuntimeTaskFlow: (request: TaskFlowStartRequest) => Promise<RuntimeResult>
+  /** 在途任务水位对账，不读取完整消息或重新执行任务。 */
+  readonly getRuntimeTaskFlow: (request: TaskFlowReadRequest) => Promise<TaskFlowReadResult>
   readonly getRuntimeStatus: () => Promise<RuntimeResult>
   /** 提交 Prompt 到目标运行实例的当前绑定；成功只表达接受、排队或已处理。 */
   readonly sendPrompt: (target: RuntimeTarget, message: string, images?: readonly PromptImageInput[]) => Promise<PromptResult>

@@ -1,5 +1,7 @@
 /** Pi 资源与 MCP 契约，以及 Runtime、消息／工具投影与历史载荷的集中跨进程校验。 */
 
+import { isTaskFlow, isTaskFlowProbe, isTaskFlowState, TASK_FLOW_MAX_FLOWS } from '../task-flow'
+import type { TaskFlowReadResult } from '../task-flow'
 import { COMPACT_INSTRUCTIONS_MAX_CHARS } from './status'
 import type { PromptDisposition, PromptResult, RuntimeCompactRequest, RuntimeDiagnosticsResult, RuntimeError, RuntimeInfo, RuntimeResult, RuntimeRewindRequest, RuntimeRewindResult, RuntimeSetModelRequest, RuntimeState, RuntimeStatus, RuntimeTarget } from './status'
 import type { AgentCapabilities, CapabilitiesResult, ModelIdentity, ModelSummary } from './models'
@@ -592,6 +594,7 @@ function isToolDiff(value: unknown): value is ToolDiff | null {
 function isProjectionUpdate(value: unknown): value is ProjectionUpdate {
   if (!isRecord(value)) return false
   if (value.kind === 'activity') return isSessionActivity(value.activity)
+  if (value.kind === 'task-flow') return isTaskFlowState(value.state)
   if (value.kind === 'tool') return isToolExecution(value.tool)
   if (value.kind === 'message') return isProjectionMessage(value.message)
   if (typeof value.messageId !== 'string') return false
@@ -616,6 +619,7 @@ function isProjectionSnapshot(value: unknown): value is ProjectionSnapshot {
   if (!Array.isArray(value.messages) || !value.messages.every(isProjectionMessage)) return false
   if (!Array.isArray(value.tools) || !value.tools.every(isToolExecution)) return false
   return (value.activity === undefined || isSessionActivity(value.activity))
+    && (value.taskFlow === undefined || isTaskFlowState(value.taskFlow))
     && (value.history === undefined || (isRecord(value.history)
       && (value.history.before === null || isHistoryId(value.history.before)) && isCount(value.history.revision)))
     && typeof value.truncated === 'boolean'
@@ -665,6 +669,14 @@ export function isProjectionResult(value: unknown): value is ProjectionResult {
   return typeof message === 'string'
     && typeof code === 'string'
     && RUNTIME_ERROR_CODES.includes(code)
+}
+
+/** 任务快照复用既有错误码约束，成功结果另校验来源与水位。 */
+export function isTaskFlowReadResult(value: unknown): value is TaskFlowReadResult {
+  if (!isRecord(value)) return false
+  if (value.ok === true) return isTaskFlowProbe(value.data)
+  return value.ok === false && isRecord(value.error) && typeof value.error.message === 'string'
+    && typeof value.error.code === 'string' && RUNTIME_ERROR_CODES.includes(value.error.code)
 }
 
 /** 条目身份有界；不允许把任意路径混入历史请求。 */
@@ -717,6 +729,7 @@ export function isHistoryData(value: unknown): value is HistoryData {
   if (value.kind === 'text') return isHistoryChunk(value.chunk) && typeof value.text === 'string'
     && value.text.length <= 262_144 && (value.next === null || isCount(value.next))
   return (value.kind === 'page' || value.kind === 'turn')
+    && (value.taskFlows === undefined || (Array.isArray(value.taskFlows) && value.taskFlows.length <= TASK_FLOW_MAX_FLOWS && value.taskFlows.every(isTaskFlow)))
     && Array.isArray(value.messages) && value.messages.length <= 64 && value.messages.every(isProjectionMessage)
     && Array.isArray(value.tools) && value.tools.length <= 100 && value.tools.every(isToolExecution)
     && Array.isArray(value.chunks) && value.chunks.every(isHistoryChunk)

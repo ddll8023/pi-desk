@@ -1,6 +1,6 @@
 <!--
   右侧面板外壳：位于顶部栏之下、工作区之后的第三列，头部是当前项目与刷新入口，主体按页签在
-  「文件树」与「源代码管理」之间切换。
+  「文件树」「源代码管理」与当前会话的「任务流程」之间切换。
 
   折叠与宽度来自界面偏好：折叠时宽度归零并置 inert（与左侧栏同一手法），宽度在拖拽期间只在本组件内
   生效，松手或键盘调整结束才提交一次，避免每帧写配置。分隔条可拖拽也可用方向键调整，并作为分隔控件
@@ -9,18 +9,20 @@
 
   页签选择同样存在界面偏好里（重启后保持）。头部只有一个刷新入口，按当前页签决定刷哪一份数据；
   源代码管理的状态跟踪与文件树的目录监听都在这里启动而不是在各自的页签里，这样未打开该页签时
-  页签角标也能显示改动数，两个页签切换时自动刷新也不中断。
+  页签角标也能显示改动数；任务推送与对账由 Runtime 独立持有，切换或折叠页签不会停止同步。
 -->
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { MAX_RIGHT_PANEL_WIDTH, MIN_RIGHT_PANEL_WIDTH } from '../../../../shared/preferences-api'
+import type { RightPanelTab } from '../../../../shared/preferences-api'
 import { usePreferencesStore } from '../../preferences/stores/preferences'
 import { useProjectDirectoryStore } from '../../editor/stores/project-directory'
 import { useProjectStore } from '../../projects/stores/project'
 import AppButton from '../../ui/AppButton.vue'
 import FileTreeView from '../../editor/components/FileTreeView.vue'
 import GitPanel from '../../git/components/GitPanel.vue'
+import TaskFlowSidebar from '../../sessions/components/TaskFlowSidebar.vue'
 import RightPanelTabs from './RightPanelTabs.vue'
 import { useGitStatusStore } from '../../git/stores/git-status'
 
@@ -42,6 +44,7 @@ const { entries: gitEntries } = storeToRefs(gitStore)
 const draggingWidth = ref<number | null>(null)
 const resizing = ref(false)
 const refreshing = ref(false)
+const taskSidebar = ref<InstanceType<typeof TaskFlowSidebar> | null>(null)
 /** 拖拽起点：指针横坐标与开始时的面板宽度；为空表示当前没有拖拽。 */
 let dragOrigin: { readonly pointerX: number; readonly width: number } | null = null
 
@@ -66,7 +69,8 @@ const projectName = computed(() => {
 })
 const projectPath = computed(() => directoryStore.context?.rootPath ?? (currentProject.value ? '正在解析标签工作区…' : '尚未选择项目'))
 const showingGit = computed(() => rightPanelTab.value === 'source-control')
-const refreshLabel = computed(() => (showingGit.value ? '刷新 Git 状态' : '刷新文件树'))
+const showingTask = computed(() => rightPanelTab.value === 'task-flow')
+const refreshLabel = computed(() => showingTask.value ? '刷新任务状态' : showingGit.value ? '刷新 Git 状态' : '刷新文件树')
 
 function clampWidth(width: number): number {
   return Math.min(maximumWidth.value, Math.max(MIN_RIGHT_PANEL_WIDTH, Math.round(width)))
@@ -108,18 +112,19 @@ function onResizeKeydown(event: KeyboardEvent): void {
   void preferencesStore.setRightPanelWidth(target)
 }
 
-/** 头部唯一的刷新入口：按当前页签刷新对应视图，避免两个视图各放一个按钮。 */
+/** 头部唯一的刷新入口：按当前页签刷新文件、Git 或任务状态，不触发任务执行。 */
 async function refresh(): Promise<void> {
   if (refreshing.value) return
   refreshing.value = true
   try {
-    await (showingGit.value ? gitStore.refresh() : directoryStore.refresh())
+    if (showingTask.value) await taskSidebar.value?.refresh()
+    else await (showingGit.value ? gitStore.refresh() : directoryStore.refresh())
   } finally {
     refreshing.value = false
   }
 }
 
-function selectTab(tab: 'files' | 'source-control'): void {
+function selectTab(tab: RightPanelTab): void {
   void preferencesStore.setRightPanelTab(tab)
 }
 
@@ -168,8 +173,10 @@ onBeforeUnmount(() => {
 
       <RightPanelTabs :active="rightPanelTab" :changes="gitEntries.length" @select="selectTab" />
 
-      <FileTreeView v-if="!showingGit" />
-      <GitPanel v-else />
+      <FileTreeView v-if="rightPanelTab === 'files'" />
+      <GitPanel v-else-if="showingGit" />
+      <!-- 保持任务页挂载以发现当前会话的新计划；状态订阅和对账始终由 Runtime 持有。 -->
+      <TaskFlowSidebar ref="taskSidebar" v-show="showingTask" />
     </div>
 
     <!-- 分隔条贴着面板左缘：拖拽改宽，方向键微调，Home/End 直达宽度边界。 -->

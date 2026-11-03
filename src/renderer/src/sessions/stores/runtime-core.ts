@@ -1,11 +1,14 @@
 /**
- * 会话运行与投影状态：前台实例身份、Prompt/回退/中止/压缩等动作状态、投影分片与后台留底。
+ * 会话运行与投影状态：前台实例身份、Prompt/回退/中止/压缩等动作状态、投影分片与后台留底，以及任务流程的同源展示和在途对账。
  * 同时持有日志展示：会话未绑定时先展示按会话读到的历史，绑定后等权威基准落位再交还展示位。
  * 历史读取按会话寻址，读取目标由本切片给出；历史缓存与投影增量合并都是纯函数模块，由本切片组合，
  * 其中增量合并（`shared/runtime/projection-reducer.ts`）与手机网页共用；模型能力、模型切换与展示偏好
  * 由 `runtime-models` 与 `runtime-model-display` 持有，本切片只经 `bindStatusEffects` 在状态收敛时通知它们。
  */
 import { computed, ref, shallowRef } from 'vue'
+import { emptyTaskFlowState, isTaskFlowActive, mergeTaskFlows, resolveTaskFlowStart } from '../../../../shared/task-flow'
+import type { TaskFlow, TaskFlowProbe, TaskFlowState } from '../../../../shared/task-flow'
+import { createTaskFlowReconciler } from '../task-flow-sync'
 import { applyProjectionUpdates as applyUpdates } from '../../../../shared/runtime/projection-reducer'
 import type { ComputedRef, Ref } from 'vue'
 import type {
@@ -18,6 +21,7 @@ import type {
   PromptImageInput,
   PromptResult,
   RuntimeError,
+  RuntimeResult,
   RuntimeRewindRequest,
   RuntimeStatus,
   RuntimeTarget,
@@ -30,9 +34,11 @@ import {
   ackRuntimeProjection,
   compactRuntime,
   getRuntimeProjection,
+  getRuntimeTaskFlow,
   getRuntimeStatus,
   rewindRuntime,
   sendPrompt,
+  startRuntimeTaskFlow,
   subscribeRuntimeProjection,
   subscribeRuntimeStatus
 } from '../services/runtime'
@@ -104,6 +110,11 @@ export interface ProjectionSlice {
   appliedSeq: number
   history: HistoryState
   activity: SessionActivity | null
+  taskFlow: TaskFlowState
+  taskFlowError: string | null
+  taskFlowCheck: boolean
+  taskFlowStarting: boolean
+  taskFlowBlocked: boolean
 }
 
 /**
@@ -131,6 +142,10 @@ export interface RuntimeCoreDeps {
 
 /** 会话运行切片对外提供的能力；组合根据此装配，模型切片只读取其中的身份与互斥状态。 */
 export interface RuntimeCore {
+  displayTaskFlows: ComputedRef<readonly TaskFlow[]>
+  taskFlowNotice: ComputedRef<string | null>
+  taskFlowLive: ComputedRef<boolean>
+  refreshTaskFlow(): Promise<void>
   view: Ref<RuntimeViewState>
   foregroundRunId: Ref<number | null>
   suspendedSessionId: ComputedRef<string | null>
@@ -236,6 +251,18 @@ export function createRuntimeCore(deps: RuntimeCoreDeps): RuntimeCore {
   })
   const history = historyCache.state
   const activity = ref<SessionActivity | null>(null)
+  const taskFlow = shallowRef<TaskFlowState>(emptyTaskFlowState())
+  const taskFlowError = ref<string | null>(null)
+  const taskFlowStarting = ref(false)
+  const taskFlowCheck = ref(false)
+  let taskFlowBlocked = false
+  const displayTaskFlows = computed<readonly TaskFlow[]>(() => mergeTaskFlows(history.value.taskFlows, taskFlow.value.flows)
+    .sort((left, right) => left.createdAt - right.createdAt))
+  const taskFlowLive = computed(() => view.value.phase === 'ready' && logSessionId.value === null)
+  const taskFlowNotice = computed<string | null>(() => taskFlowError.value ?? taskFlow.value.error
+    ?? (taskFlowCheck.value && !taskFlowStarting.value ? '正在核对任务实际状态，不会重复启动。'
+      : displayTaskFlows.value.some(flow => isTaskFlowActive(flow.phase)) && !taskFlowLive.value
+        ? '当前执行连接不可用；这里只保留最后记录，未确认任务结束。' : null))
   /** 日志来源：内容随页面进来，绑定完成即退场；它不是权威投影，不参与任何写操作。 */
   const logPage = shallowRef<HistoryPage | null>(null)
   const logSessionId = ref<string | null>(null)
@@ -337,13 +364,122 @@ export function createRuntimeCore(deps: RuntimeCoreDeps): RuntimeCore {
   /** 模型切片在状态收敛时的同步回调；绑定在 `subscribe()` 之前完成，因此首个状态快照也能带上模型侧动作。 */
   let statusEffects: ((context: StatusTransitionContext) => void) | null = null
 
+  /** 只追踪已经存在的在途任务；结束或失效后不再轮询，也不保活或重启宿主。 */
+  const taskFlowReconciler = createTaskFlowReconciler({
+    targets: () => {
+      const targets: { target: RuntimeTarget; revision: number | null }[] = []
+      if (view.value.phase === 'ready' && logPage.value === null && appliedRunId !== null && appliedRuntimeId !== null
+        && view.value.snapshot.runId === appliedRunId && view.value.snapshot.runtimeId === appliedRuntimeId
+        && !taskFlowBlocked && (taskFlowCheck.value || taskFlow.value.flows.some(flow => isTaskFlowActive(flow.phase)))) {
+        targets.push({ target: { runId: appliedRunId, runtimeId: appliedRuntimeId }, revision: taskFlow.value.revision })
+      }
+      for (const [runId, slice] of backgroundProjections) {
+        if (runId === foregroundRunId.value || slice.appliedRuntimeId === null || slice.taskFlowBlocked) continue
+        if (slice.taskFlowCheck || slice.taskFlow.flows.some(flow => isTaskFlowActive(flow.phase))) {
+          targets.push({ target: { runId, runtimeId: slice.appliedRuntimeId }, revision: slice.taskFlow.revision })
+        }
+      }
+      return targets
+    },
+    apply: applyTaskFlowProbe,
+    failed: (target, message, unavailable) => {
+      if (target.runId === appliedRunId && target.runtimeId === appliedRuntimeId && logPage.value === null) {
+        taskFlowError.value = message
+        taskFlowBlocked = unavailable
+      } else {
+        const slice = backgroundProjections.get(target.runId)
+        if (slice?.appliedRuntimeId !== target.runtimeId) return
+        slice.taskFlowError = message
+        slice.taskFlowBlocked = unavailable
+      }
+    }
+  })
+
+  function applyTaskFlowState(state: TaskFlowState): void {
+    if (state.revision < taskFlow.value.revision) return
+    taskFlow.value = state
+    taskFlowError.value = null
+    taskFlowBlocked = false
+    taskFlowReconciler.refresh()
+  }
+  function applyTaskFlowProbe(target: RuntimeTarget, probe: TaskFlowProbe): void {
+    if (probe.runtimeId !== target.runtimeId) return
+    if (target.runId === appliedRunId && target.runtimeId === appliedRuntimeId && logPage.value === null) {
+      if (probe.revision < taskFlow.value.revision) return
+      if (probe.state !== null) taskFlow.value = probe.state
+      taskFlowError.value = null
+      taskFlowBlocked = false
+      if (!taskFlowStarting.value) taskFlowCheck.value = false
+    } else {
+      const slice = backgroundProjections.get(target.runId)
+      if (slice?.appliedRuntimeId !== target.runtimeId || probe.revision < slice.taskFlow.revision) return
+      if (probe.state !== null) slice.taskFlow = probe.state
+      slice.taskFlowError = null
+      slice.taskFlowBlocked = false
+      if (!slice.taskFlowStarting) slice.taskFlowCheck = false
+    }
+  }
+
+  /** 所有桌面启动入口固定同一个计划版本，受理未确认时只读对账，绝不自动重发。 */
+  async function dispatchTaskFlowStart(target: RuntimeTarget, flow: TaskFlow): Promise<RuntimeResult> {
+    taskFlowStarting.value = true
+    taskFlowCheck.value = true
+    taskFlowBlocked = false
+    taskFlowError.value = null
+    const pending = startRuntimeTaskFlow({ target, flowId: flow.id, revision: flow.revision })
+    taskFlowReconciler.refresh()
+    const result = await pending
+    if (target.runId === appliedRunId && target.runtimeId === appliedRuntimeId && logPage.value === null) {
+      taskFlowStarting.value = false
+      taskFlowCheck.value = true
+      taskFlowError.value = result.ok ? null : result.error.message
+    } else {
+      const slice = backgroundProjections.get(target.runId)
+      if (slice?.appliedRuntimeId !== target.runtimeId) return result
+      slice.taskFlowStarting = false
+      slice.taskFlowCheck = true
+      slice.taskFlowError = result.ok ? null : result.error.message
+    }
+    taskFlowReconciler.refresh()
+    return result
+  }
+
+  /** 侧栏刷新只读原目标；查看日志时走既有只读首页链路，不借刷新启动或恢复执行。 */
+  async function refreshTaskFlow(): Promise<void> {
+    const lifecycle = deps.lifecycle.count
+    if (logPage.value !== null) {
+      const target = historyTarget()
+      if (target === null) return
+      const refreshed = await reloadLogPage(target)
+      if (lifecycle === deps.lifecycle.count && logSessionId.value === target.sessionId && !refreshed) {
+        taskFlowError.value = '任务历史刷新失败，保留已有记录。'
+      }
+      return
+    }
+    const target = currentTarget()
+    if (target === null || target.runtimeId === null) {
+      taskFlowError.value = '当前会话未连接，已有任务记录仅供回看。'
+      return
+    }
+    const result = await getRuntimeTaskFlow({ target, revision: null })
+    const current = currentTarget()
+    if (lifecycle !== deps.lifecycle.count || logPage.value !== null || current === null
+      || current.runId !== target.runId || current.runtimeId !== target.runtimeId) return
+    if (result.ok) {
+      applyTaskFlowProbe(target, result.data)
+      taskFlowReconciler.refresh()
+    } else taskFlowError.value = result.error.message
+  }
+
   /** 先订阅状态与投影、再取快照，避免初始化期间漏掉通知。 */
   function subscribe(): void {
     if (releaseSubscription === null) releaseSubscription = subscribeRuntimeStatus((status) => applyStatus(status))
     if (releaseProjection === null) releaseProjection = subscribeRuntimeProjection((batch) => applyBatch(batch))
+    taskFlowReconciler.start()
   }
 
   function unsubscribe(): void {
+    taskFlowReconciler.stop()
     releaseSubscription?.()
     releaseSubscription = null
     releaseProjection?.()
@@ -377,8 +513,16 @@ export function createRuntimeCore(deps: RuntimeCoreDeps): RuntimeCore {
     const target = currentTarget()
     if (target === null) return null
     const sessionId = view.value.snapshot.info?.sessionId ?? null
+    const plan = resolveTaskFlowStart(taskFlow.value.flows, message, images.length)
+    if (plan !== null && (logPage.value !== null || projectionSync.value !== 'synced'
+      || taskFlowStarting.value || taskFlowCheck.value || view.value.snapshot.info?.isStreaming)) return null
     promptView.value = { phase: 'sending' }
-    const result = await sendPrompt(target, message, images)
+    let result: PromptResult
+    if (plan !== null) {
+      const started = await dispatchTaskFlowStart(target, plan)
+      // 作为命令消费，输入坞不会等待一条并不存在的“开始”用户消息，也不会交给模型自由执行。
+      result = started.ok ? { ok: true, data: { disposition: 'handled' } } : { ok: false, error: started.error }
+    } else result = await sendPrompt(target, message, images)
     if (view.value.phase !== 'ready' || view.value.snapshot.runId !== target.runId
       || view.value.snapshot.runtimeId !== target.runtimeId
       || (view.value.snapshot.info?.sessionId ?? null) !== sessionId) return result
@@ -471,7 +615,8 @@ export function createRuntimeCore(deps: RuntimeCoreDeps): RuntimeCore {
    */
   async function stopOperation(): Promise<void> {
     if (view.value.phase !== 'ready') return
-    if (view.value.snapshot.info?.isStreaming !== true) return
+    if (view.value.snapshot.info?.isStreaming !== true
+      && !taskFlow.value.flows.some(flow => isTaskFlowActive(flow.phase))) return
     if (abortView.value.phase === 'requesting') return
     const target = currentTarget()
     if (target === null) return
@@ -619,6 +764,7 @@ export function createRuntimeCore(deps: RuntimeCoreDeps): RuntimeCore {
       if (!sameBranch) history.value = { ...emptyHistory(), revision: snapshot.history?.revision ?? 0 }
       if (!sameBranch || history.value.pages.length === 0) history.value.before = snapshot.history?.before ?? null
       activity.value = snapshot.activity ?? null
+      applyTaskFlowState(snapshot.taskFlow ?? emptyTaskFlowState())
       messages.value = snapshot.messages
       tools.value = snapshot.tools
       rememberUiRevisions(history.value, snapshot.tools)
@@ -679,7 +825,10 @@ export function createRuntimeCore(deps: RuntimeCoreDeps): RuntimeCore {
     messages.value = applied.messages
     tools.value = applied.tools
     rememberUiRevisions(history.value, applied.tools)
-    for (const update of batch.updates) if (update.kind === 'activity') activity.value = update.activity
+    for (const update of batch.updates) {
+      if (update.kind === 'activity') activity.value = update.activity
+      if (update.kind === 'task-flow') applyTaskFlowState(update.state)
+    }
     appliedSeq = batch.seq
     projectionSync.value = 'synced'
     ackRuntimeProjection(target, appliedSeq)
@@ -706,6 +855,11 @@ export function createRuntimeCore(deps: RuntimeCoreDeps): RuntimeCore {
     appliedRunId = null
     appliedRuntimeId = null
     appliedSeq = 0
+    taskFlow.value = emptyTaskFlowState()
+    taskFlowError.value = null
+    taskFlowCheck.value = false
+    taskFlowStarting.value = false
+    taskFlowBlocked = false
   }
 
   /** 离开前台时把当前展示留底到该实例的分片；未就绪或没有来源时不留底。 */
@@ -721,7 +875,12 @@ export function createRuntimeCore(deps: RuntimeCoreDeps): RuntimeCore {
       appliedRuntimeId,
       appliedSeq,
       history: history.value,
-      activity: activity.value
+      activity: activity.value,
+      taskFlow: taskFlow.value,
+      taskFlowError: taskFlowError.value,
+      taskFlowCheck: taskFlowCheck.value,
+      taskFlowStarting: taskFlowStarting.value,
+      taskFlowBlocked
     })
   }
 
@@ -739,6 +898,11 @@ export function createRuntimeCore(deps: RuntimeCoreDeps): RuntimeCore {
     tools.value = saved.tools
     history.value = saved.history
     activity.value = saved.activity
+    taskFlow.value = saved.taskFlow
+    taskFlowError.value = saved.taskFlowError
+    taskFlowCheck.value = saved.taskFlowCheck
+    taskFlowStarting.value = saved.taskFlowStarting
+    taskFlowBlocked = saved.taskFlowBlocked
     projectionSync.value = saved.sync
     projectionTruncated.value = saved.truncated
     droppedMessages.value = saved.droppedMessages
@@ -783,7 +947,15 @@ export function createRuntimeCore(deps: RuntimeCoreDeps): RuntimeCore {
     slice.messages = applied.messages
     slice.tools = applied.tools
     rememberUiRevisions(slice.history, applied.tools)
-    for (const update of batch.updates) if (update.kind === 'activity') slice.activity = update.activity
+    for (const update of batch.updates) {
+      if (update.kind === 'activity') slice.activity = update.activity
+      if (update.kind === 'task-flow' && update.state.revision >= slice.taskFlow.revision) {
+        slice.taskFlow = update.state
+        slice.taskFlowError = null
+        slice.taskFlowBlocked = false
+      }
+    }
+    taskFlowReconciler.refresh()
     slice.appliedSeq = batch.seq
     slice.sync = 'synced'
     ackRuntimeProjection(target, slice.appliedSeq)
@@ -863,6 +1035,14 @@ export function createRuntimeCore(deps: RuntimeCoreDeps): RuntimeCore {
         lastReadyIdentity.value = { runId: status.runId, runtimeId: status.runtimeId,
           sessionId: status.info?.sessionId ?? null }
       }
+      if (status.runtimeId !== appliedRuntimeId) {
+        taskFlow.value = emptyTaskFlowState()
+        taskFlowError.value = null
+        taskFlowCheck.value = false
+        taskFlowStarting.value = false
+      }
+      taskFlowBlocked = false
+      taskFlowReconciler.refresh()
       // 换实例、换代、换会话、上一次重同步未收敛（syncing/stale）或欠着基准快照都重新取基准；
       // 例外是取回的分片仍与该绑定一致：此时切回直接复用缓存，不再重读整表。
       // 日志展示等退场时也一定取一次基准：退场只能发生在基准落位之后。
@@ -894,7 +1074,13 @@ export function createRuntimeCore(deps: RuntimeCoreDeps): RuntimeCore {
   function showPreview(page: HistoryPage, resetHistory = true): void {
     messages.value = page.messages
     tools.value = page.tools
-    if (resetHistory) history.value = { ...emptyHistory(), before: page.before }
+    if (resetHistory) history.value = { ...emptyHistory(), before: page.before, taskFlows: page.taskFlows ?? [] }
+    else history.value.taskFlows = mergeTaskFlows(history.value.taskFlows, page.taskFlows ?? [])
+    taskFlow.value = emptyTaskFlowState()
+    taskFlowError.value = null
+    taskFlowStarting.value = false
+    taskFlowCheck.value = false
+    taskFlowBlocked = false
     activity.value = null
     projectionTruncated.value = false
     droppedMessages.value = 0
@@ -936,6 +1122,11 @@ export function createRuntimeCore(deps: RuntimeCoreDeps): RuntimeCore {
     logPage.value = null
     logSessionId.value = null
     logProjectPath.value = null
+    taskFlow.value = emptyTaskFlowState()
+    taskFlowError.value = null
+    taskFlowStarting.value = false
+    taskFlowCheck.value = false
+    taskFlowBlocked = false
     messages.value = []
     tools.value = []
     history.value = emptyHistory()
@@ -969,6 +1160,10 @@ export function createRuntimeCore(deps: RuntimeCoreDeps): RuntimeCore {
   }
 
   return {
+    displayTaskFlows,
+    taskFlowNotice,
+    taskFlowLive,
+    refreshTaskFlow,
     view,
     foregroundRunId,
     suspendedSessionId,

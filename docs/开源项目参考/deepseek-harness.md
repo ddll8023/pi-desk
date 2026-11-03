@@ -90,13 +90,14 @@
 | 插件与资源管理 | 都能让 Agent 获得扩展能力 | DSH 的模型、循环和界面都可参与插件组合；pi-desk 的资源页主要展示／诊断 Pi 资源，不是 Cordis 组合编辑器或插件市场 |
 | 权限与项目安全 | 都有执行前的用户决策入口 | DSH 具有工具审批和沙箱策略；pi-desk `TrustManager` 管理项目资源信任，明确不提供 OS 沙箱或工具权限限制。扩展对话框也不等于所有工具都受审批 |
 | 命令执行 | 都能在项目中执行 Shell | DSH 的 Agent Shell 工具与作业服务不等于桌面终端面板；pi-desk 的用户终端由独立 PTY 守护进程维护，与 Agent 会话分离。见[终端模块][p-terminal] |
+| 结构化计划与执行追踪 | 先登记计划，再观察执行状态与结果 | pi-desk 的 `task_plan` 及控制器只覆盖同一会话的串行步骤，通过聊天控制、右侧只读页及分支记录表达状态；不等价于 DSH 的专用计划模式、目标与工作流插件组合 |
 
 ### 对方独有
 
 | 类别 | DSH 已公开能力 | pi-desk 当前边界 |
 | --- | --- | --- |
 | 子代理管理 | 受管父子关系、独立子会话、消息、续接与结果交付 | 内置子代理模块无；[现有文档][p-subdesign]是初步设计，不是已实现功能；多会话并行也不自动形成父子任务 |
-| 目标与工作流 | `plan-mode`、`tool-goal`、`tool-workflow` | 内置模式与任务控制平面无；在聊天里写计划不等于具备这些运行语义 |
+| 专用模式、目标与组合工作流 | `plan-mode`、`tool-goal`、`tool-workflow` | 已有会话内串行计划与执行追踪，但没有等价的专用模式、开放目标及可组合工作流控制面；串行步骤不创建子代理 |
 | Harness 组合入口 | Web、无界面、SDK、ACP 与多层 Profile 组合 | pi-desk 是 Pi SDK 桌面客户端，不提供等价的自有 Harness 分发体系 |
 
 ### 尚不能判定为“无对应”的项
@@ -133,6 +134,7 @@ pi-desk 有[声明式生成式界面][p-genui]、桌面文件编辑和常驻终�
 
 - [会话模块][p-session]、[`src/sdk-host/session-runtime.ts`](../../src/sdk-host/session-runtime.ts)：`SdkSessionRuntime`、`createAgentSessionServices`、`createAgentSessionRuntime` 及内置扩展工厂装配。
 - [资源模块][p-resources]、[终端模块][p-terminal]、[子代理初步设计][p-subdesign]。
+- [`TaskFlowController`](../../src/sdk-host/task-flow/controller.ts)、[任务契约](../../src/shared/task-flow.ts)：当前会话的串行计划与状态边界，不把该能力记为子代理或完整工作流平台。
 - [`src/main/trust/trust-manager.ts`](../../src/main/trust/trust-manager.ts)：`TrustManager` 的职责及沙箱排除边界。
 - [生成式界面模块][p-genui]、[`src/sdk-host/genui/tools.ts`](../../src/sdk-host/genui/tools.ts)：`GenuiToolDetails` 与模型摘要／界面载荷分离。
 - [`package.json`](../../package.json)：现有 Electron、Vue、Pi SDK 和终端依赖。

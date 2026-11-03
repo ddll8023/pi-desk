@@ -9,6 +9,12 @@ import { ImageAnnotationContext } from './image-annotations'
 import type { ImageAnnotationDocument } from '../shared/image-annotation'
 import { createGenuiExtension, GENUI_EXTENSION_NAME } from './genui/index'
 import { createBrowserExtension, BROWSER_EXTENSION_NAME } from './browser/index'
+import { TaskFlowController } from './task-flow/controller'
+import type { TaskStepOutcome } from './task-flow/controller'
+import { createTaskFlowExtension, TASK_FLOW_EXTENSION_NAME } from './task-flow/index'
+import { readTaskFlowHistory } from './task-flow/history'
+import { TASK_FLOW_ENTRY_TYPE, resolveTaskFlowStart } from '../shared/task-flow'
+import type { TaskFlow, TaskFlowProbe, TaskFlowStep } from '../shared/task-flow'
 import { MessageProjection } from './projection/message-projection'
 import { ActivityProjection, matchesActivityPrefix } from './projection/activity-projection'
 import type { ActivityCheckpointState } from './projection/activity-projection'
@@ -262,6 +268,7 @@ export class SdkSessionRuntime {
   /** Prompt 提交与 MCP 调用互斥：同一时刻只允许一个 prompt 请求。 */
   private promptInFlight = false
   private readonly imageAnnotations = new ImageAnnotationContext()
+  private readonly taskFlow = new TaskFlowController()
 
   constructor(private readonly sdk: Sdk, private readonly options: RuntimeOptions) {}
 
@@ -373,6 +380,22 @@ export class SdkSessionRuntime {
     this.publish()
   }
 
+  /** 只启动当前会话的原版本计划；正常聊天与任务步骤不能相互插队。 */
+  startTaskFlow(bindingId: number, flowId: string, revision: number): void {
+    this.requireBoundSession(bindingId)
+    if (this.operationId !== null || this.promptInFlight || this.isBusy() || this.needsHostRebuild) {
+      throw new SdkSessionFailure('SESSION_BUSY')
+    }
+    try { this.taskFlow.start(flowId, revision) } catch { throw new SdkSessionFailure('SESSION_OPERATION_CONFLICT') }
+  }
+
+  /** 在途对账只读任务内存；水位相同时不搬运计划与结果。 */
+  readTaskFlow(bindingId: number, revision: number | null): TaskFlowProbe {
+    this.requireBoundSession(bindingId)
+    const state = this.taskFlow.snapshot()
+    return { runtimeId: bindingId, revision: state.revision, state: revision === state.revision ? null : state }
+  }
+
   /** 投影快照只在已绑定代际有效；未绑定时返回 null，不由宿主凭空造空基准。 */
   getProjection(bindingId: number): ProjectionSnapshot | null {
     if (bindingId !== this.bindingId || this.projection === null) return null
@@ -431,6 +454,7 @@ export class SdkSessionRuntime {
       this.pendingEntryLookup = null
       const page = readBranchHistory(branch, { kind: 'page', before: null }, this.bindingId)
       if (page.kind !== 'text') this.projection?.replaceProjectedHistory(page, this.historyRevision)
+      this.restoreTaskFlows(session, this.bindingId)
     }
     this.historyTail = branch.at(-1)?.id ?? null
     const view = activity.refresh(branch, target.projectPath, session.sessionId, session.sessionManager)
@@ -470,6 +494,12 @@ export class SdkSessionRuntime {
     const session = this.requireBoundSession(bindingId)
     if (this.needsHostRebuild || this.operationId !== null) throw new SdkSessionFailure('SESSION_BUSY')
     if (this.promptInFlight || this.isBusy()) throw new SdkSessionFailure('SESSION_BUSY')
+    const plan = resolveTaskFlowStart(this.taskFlow.snapshot().flows, message, images.length)
+    if (plan !== null) {
+      // 聊天口令与固定版本启动请求共用任务控制器；口令作为桌面动作消费，不进入普通模型请求。
+      this.startTaskFlow(bindingId, plan.id, plan.revision)
+      return 'handled'
+    }
     let disposition: 'started' | 'queued' | 'handled' | null = null
     let rejection: unknown = null
     let reportAccepted: () => void = () => {}
@@ -721,10 +751,64 @@ export class SdkSessionRuntime {
     }
   }
 
-  /** SDK 的空闲状态之外，还检查队列、独立 Bash 和由宿主持有的交互。 */
+  /** 控制器是任务状态唯一所有者；主进程只监督宿主，页面只消费快照。 */
+  private restoreTaskFlows(session: AgentSession, bindingId: number): void {
+    this.taskFlow.bind(readTaskFlowHistory(session.sessionManager.getBranch()), {
+      persist: flow => {
+        if (this.session !== session || this.bindingId !== bindingId) throw new Error('任务绑定已经失效。')
+        session.sessionManager.appendCustomEntry(TASK_FLOW_ENTRY_TYPE, flow)
+      },
+      changed: state => {
+        if (this.session !== session || this.bindingId !== bindingId) return
+        this.projection?.setTaskFlow(state)
+        this.publish()
+      },
+      execute: (flow, step, index) => this.executeTaskStep(session, bindingId, flow, step, index)
+    })
+  }
+
+  /** 每个业务步骤对应一次完整 SDK 运行；先监听，再启动，不能用提交接受回执冒充执行结束。 */
+  private async executeTaskStep(session: AgentSession, bindingId: number, flow: TaskFlow,
+    step: TaskFlowStep, index: number): Promise<TaskStepOutcome> {
+    const current = (): boolean => this.session === session && this.bindingId === bindingId
+      && this.valid && !this.needsHostRebuild && !this.closing
+    if (!current() || !session.isIdle || session.pendingMessageCount > 0) throw new Error('步骤执行环境不可用。')
+    const before = new Set(session.sessionManager.getBranch().map(entry => entry.id))
+    let started = false
+    let settled = false
+    const off = session.subscribe(event => {
+      if (!current()) return
+      if (event.type === 'agent_start') started = true
+      if (event.type === 'agent_settled') settled = true
+    })
+    let executionFailed = false
+    try {
+      await session.prompt(`任务：${flow.title}\n当前步骤 ${index + 1}/${flow.steps.length}：${step.title}\n\n${step.instruction}\n\n`
+        + '只执行当前步骤，不提前执行后续步骤。遵守原会话中已确认的范围与操作权限；'
+        + '开始任务不新增文件修改、测试、构建或其他操作授权。需要用户决定或新增授权时先说明并等待，'
+        + '不要把无法完成的工作表述为已经完成。此步骤结束时总结实际结果和未解决事项。', { source: 'rpc' })
+      await session.waitForIdle()
+    } catch { executionFailed = true } finally { off() }
+    if (!current()) throw new Error('步骤所属会话已经失效。')
+    const entries = session.sessionManager.getBranch().filter(entry => !before.has(entry.id))
+    const prompt = entries.find(entry => entry.type === 'message' && entry.message.role === 'user')
+    const response = entries.findLast(entry => entry.type === 'message' && entry.message.role === 'assistant')
+    const assistant = response?.type === 'message' && response.message.role === 'assistant' ? response.message : null
+    const reason = assistant?.stopReason
+    const phase: TaskStepOutcome['phase'] = executionFailed || reason === 'error' ? 'failed'
+      : reason === 'aborted' ? 'cancelled'
+      : !started || !settled || reason !== 'stop' ? 'interrupted' : 'completed'
+    return { phase, result: assistant === null ? null : session.getLastAssistantText() ?? null,
+      promptEntryId: prompt?.id ?? null, resultEntryId: response?.id ?? null,
+      error: phase === 'completed' ? null : phase === 'cancelled' ? '当前步骤已停止。'
+        : !started ? '输入被处理但未启动步骤执行；没有将其标记为完成。'
+        : phase === 'interrupted' ? '没有确认完整执行终态；不会自动继续或重跑。' : '步骤执行失败，详情见会话记录。' }
+  }
+
+  /** 流程在步骤间仍占用会话；不能因短暂的 SDK 空闲而插入普通输入或回收宿主。 */
   private isBusy(): boolean {
-    return this.session !== null && (!this.session.isIdle || this.session.pendingMessageCount > 0
-      || this.session.isBashRunning || (this.bridge?.waitingCount ?? 0) > 0)
+    return this.taskFlow.active || (this.session !== null && (!this.session.isIdle || this.session.pendingMessageCount > 0
+      || this.session.isBashRunning || (this.bridge?.waitingCount ?? 0) > 0))
   }
 
   /** 同步读取执行变化；低层 agent_end 不能直接把会话标成空闲。 */
@@ -820,6 +904,14 @@ export class SdkSessionRuntime {
                 replaceable: true
               }]
             : []),
+          { name: TASK_FLOW_EXTENSION_NAME, builtin: true, replaceable: true,
+            factory: createTaskFlowExtension((plan, ctx) => {
+              const session = this.session
+              if (!this.valid || session === null || this.currentCreation !== creation
+                || ctx.sessionManager.getSessionId() !== session.sessionId) throw new Error('任务计划不属于当前会话。')
+              const origin = session.sessionManager.getBranch().findLast(entry => entry.type === 'message' && entry.message.role === 'user')
+              return this.taskFlow.create(plan, origin?.id ?? null)
+            }) },
           // 图片资料是独立上下文消息，不改写提示词，也不提供新的模型工具。
           this.imageAnnotations.extension,
           bindingGuard
@@ -919,6 +1011,7 @@ export class SdkSessionRuntime {
       this.historyTail = null
       this.historyRevision = 0
       this.refreshActivity()
+      this.restoreTaskFlows(session, bindingId)
       // 速率结算随绑定建立：订阅方只在仍是当前绑定时改写快照。
       const rate = new OutputRateTracker(snapshot => {
         if (this.rate !== rate) return
@@ -1144,6 +1237,7 @@ export class SdkSessionRuntime {
 
   /** 官方失效钩子同步解绑，不让旧 SDK 事件或 UI 引用覆盖下一绑定。 */
   private invalidateCurrent(): void {
+    this.taskFlow.reset()
     this.valid = false
     this.unsubscribe?.()
     this.unsubscribe = null
@@ -1171,6 +1265,7 @@ export class SdkSessionRuntime {
 
   /** 取消实际交互与 SDK 工作，队列明确清理；等待独立 Bash 真正结束。 */
   private async settleCurrent(): Promise<void> {
+    this.taskFlow.requestStop()
     const session = this.session
     if (session === null) return
     this.bridge?.cancelPending()
@@ -1180,6 +1275,7 @@ export class SdkSessionRuntime {
     try {
       await bounded((async () => {
         await session.abort()
+        await this.taskFlow.waitForStop()
         while (polling && (!session.isIdle || session.isBashRunning || session.pendingMessageCount > 0)) {
           await new Promise<void>(resolvePromise => setTimeout(resolvePromise, 25))
         }

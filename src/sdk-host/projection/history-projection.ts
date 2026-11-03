@@ -2,6 +2,7 @@
 import type { SessionEntry } from '@earendil-works/pi-coding-agent'
 import type { HistoryChunk, HistoryData, HistoryPage, HistoryQuery, ProjectionMessage } from '../../shared/runtime-api'
 import { MessageProjection } from './message-projection'
+import { readTaskFlowHistory } from '../task-flow/history'
 import { summarizeToolArguments } from './tool-projection'
 import { summarizeToolRequest, summarizeToolResult } from './tool-presentation'
 import { parseGenuiPayload } from '../../shared/genui-api'
@@ -271,5 +272,6 @@ export function readBranchHistory(branch: readonly SessionEntry[], query: Histor
       presentation: { request: args?.request ?? tool.presentation?.request ?? null,
         result: resultsById.get(tool.toolCallId) ?? tool.presentation?.result ?? null },
       ...(tool.ui ? { latestRevision: latest.get(tool.ui.documentId) ?? tool.ui.revision } : {}) }
-  }), chunks, before, next, turnId } satisfies HistoryPage
+  }), chunks, before, next, turnId,
+    taskFlows: readTaskFlowHistory(branch, new Set(selected.map(entry => entry.id))) } satisfies HistoryPage
 }

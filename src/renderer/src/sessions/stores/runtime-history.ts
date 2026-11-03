@@ -3,6 +3,8 @@
  * 只做缓存合并与淘汰，不持有运行身份；读取目标与会话键由调用方注入，因此不依赖其它切片。
  */
 import { ref } from 'vue'
+import { mergeTaskFlows } from '../../../../shared/task-flow'
+import type { TaskFlow } from '../../../../shared/task-flow'
 import type { Ref } from 'vue'
 import type {
   HistoryChunk,
@@ -33,6 +35,7 @@ export interface HistoryTurnState {
   chunkStates: Record<string, HistoryChunkLoadState>
 }
 export interface HistoryState {
+  taskFlows: readonly TaskFlow[]
   /** 本页缓存所属的分支版本，只用于判断是否还能沿用已加载页；不随请求外发。 */
   revision: number
   before: string | null
@@ -45,7 +48,7 @@ export interface HistoryState {
 }
 export function emptyHistory(): HistoryState {
   return {
-    revision: 0, before: null, loading: false, error: null, pages: [], visible: [],
+    taskFlows: [], revision: 0, before: null, loading: false, error: null, pages: [], visible: [],
     uiRevisions: new Map(), turns: Object.create(null) as Record<string, HistoryTurnState>
   }
 }
@@ -88,6 +91,7 @@ export function createHistoryCache(deps: HistoryCacheDeps): HistoryCache {
       // 期间换过分支时读取已返回 null，旧分页不会写回新缓存。
       if (page === null) return
       if (page.kind !== 'page' || page.before === before) throw new Error('历史分页未前进，已停止自动加载。')
+      owner.taskFlows = mergeTaskFlows(owner.taskFlows, page.taskFlows ?? [])
       owner.pages = [...page.messages, ...owner.pages]
       owner.before = page.before
     } catch (error) { owner.error = error instanceof Error ? error.message : String(error) }
@@ -116,6 +120,7 @@ export function createHistoryCache(deps: HistoryCacheDeps): HistoryCache {
         for (const item of incoming) rows.set(key(item), item)
         return [...rows.values()]
       }
+      owner.taskFlows = mergeTaskFlows(owner.taskFlows, page.taskFlows ?? [])
       turn.messages = merge(more ? turn.messages : [], page.messages, messageKey)
       turn.tools = merge(more ? turn.tools : [], page.tools, tool => tool.toolCallId)
       // 已完成的参数续段可能再次随后续工具结果页出现，不能重置回原游标。

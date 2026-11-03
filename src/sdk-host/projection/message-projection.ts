@@ -19,6 +19,7 @@
  * 单块超长仍按单块上限截断，与角色无关。任何收缩都在投影上标记（截断标记或丢弃计数），
  * 并让渲染端整表重同步，不伪装成完整内容。
  */
+import type { TaskFlowState } from '../../shared/task-flow'
 import type {
   MessageUsage,
   HistoryPage,
@@ -172,6 +173,7 @@ export class MessageProjection {
   private disposed = false
   private rebuilding = false
   private readonly toolProjection: ToolProjection
+  private taskFlow: TaskFlowState | undefined
   private activity: SessionActivity | undefined
   private activitySignature = ''
   private historyBefore: string | null = null
@@ -323,6 +325,14 @@ export class MessageProjection {
     this.flush()
   }
 
+  /** 任务状态与正文分开；步骤转换立即发布，不等待正文批处理或动画。 */
+  setTaskFlow(state: TaskFlowState): void {
+    if (state === this.taskFlow) return
+    this.taskFlow = state
+    this.queueUpdate({ kind: 'task-flow', state })
+    this.flush()
+  }
+
   /** 累计活动与展示窗口分开；只有事实变化才下发。 */
   setActivity(activity: SessionActivity): void {
     const signature = JSON.stringify(activity)
@@ -446,6 +456,7 @@ export class MessageProjection {
       droppedMessages: this.droppedMessages,
       droppedTools: tools.droppedTools,
       ...(this.activity ? { activity: this.activity } : {}),
+      ...(this.taskFlow ? { taskFlow: this.taskFlow } : {}),
       history: { before: this.historyBefore, revision: this.historyRevision }
     }
   }

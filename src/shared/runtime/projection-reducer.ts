@@ -24,7 +24,7 @@ export function applyProjectionUpdates(
   let nextMessages = [...messages]
   let nextTools = [...tools]
   for (const update of updates) {
-    if (update.kind === 'activity') continue
+    if (update.kind === 'activity' || update.kind === 'task-flow') continue
     if (update.kind === 'tool') {
       const incoming = update.tool
       nextTools = nextTools.some(tool => tool.toolCallId === incoming.toolCallId)

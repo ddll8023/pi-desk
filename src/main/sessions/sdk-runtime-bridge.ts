@@ -62,6 +62,7 @@ import type { ExtensionDialogResponseInput, ExtensionUiSnapshot } from '../../sh
 import type { SessionError, SessionErrorCode } from '../../shared/session-api'
 import type { SessionRunState, SessionRunsSnapshot } from '../../shared/session-run-api'
 import type { WorkspaceManager } from '../workspaces/workspace-manager'
+import type { TaskFlowReadRequest, TaskFlowReadResult, TaskFlowStartRequest } from '../../shared/task-flow'
 
 /** 页面 Runtime 通道可见的宿主失败分类；表是穷尽 Record，新增分类会在编译期暴露。 */
 const RUNTIME_ERROR_CODES: Record<SdkHostErrorCode, RuntimeErrorCode> = {
@@ -1119,6 +1120,30 @@ export class SdkRuntimeBridge {
     } catch (error) {
       return { ok: false, error: runtimeErrorOf(error) }
     }
+  }
+
+  /** 启动固定版本的计划；用户动作不会因前台切换而改投其他运行实例。 */
+  async startTaskFlow(request: TaskFlowStartRequest): Promise<RuntimeResult> {
+    const matched = this.matchedRun(request.target)
+    if (matched === null) return { ok: false, error: TARGET_CHANGED_ERROR }
+    if (matched.bindingId === null) return { ok: false, error: UNBOUND_ERROR }
+    this.keepAlive(matched.run.runId)
+    const host = matched.run.owner
+    try {
+      await host.startTaskFlow(request.flowId, request.revision)
+      return { ok: true, data: mapStatus(host.getStatus(), host.getSessionStatus(), matched.run.runId) }
+    } catch (error) { return { ok: false, error: runtimeErrorOf(error) } }
+  }
+
+  /** 在途对账只读取已有绑定，不恢复会话、不改变执行或延长空闲宿主寿命。 */
+  async readTaskFlow(request: TaskFlowReadRequest): Promise<TaskFlowReadResult> {
+    const matched = this.matchedRun(request.target)
+    if (matched === null) return { ok: false, error: TARGET_CHANGED_ERROR }
+    if (matched.bindingId === null) return { ok: false, error: UNBOUND_ERROR }
+    try {
+      const snapshot = await matched.run.owner.readTaskFlow(request.revision)
+      return { ok: true, data: { ...snapshot, runId: matched.run.runId } }
+    } catch (error) { return { ok: false, error: runtimeErrorOf(error) } }
   }
 
   /**

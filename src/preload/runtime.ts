@@ -1,7 +1,10 @@
-/** Runtime、模型能力、资源与 MCP：preload 的 runtime 域，只经固定 channel 与主进程通信，载荷与响应在此重建与校验。 */
+/** Runtime、任务流程、模型能力、资源与 MCP：preload 的 runtime 域，只经固定 channel 与主进程通信，载荷与响应在此重建与校验。 */
 
 import { ipcRenderer } from 'electron'
 import { cloneImageAnnotations } from '../shared/image-annotation'
+import { TASK_FLOW_START_CHANNEL, TASK_FLOW_READ_CHANNEL } from '../shared/task-flow'
+import type { TaskFlowReadRequest, TaskFlowReadResult, TaskFlowStartRequest } from '../shared/task-flow'
+import { isTaskFlowReadResult } from '../shared/runtime-api'
 import type { IpcRendererEvent } from 'electron'
 import { RUNTIME_ABORT_CHANNEL, RUNTIME_CAPABILITIES_CHANNEL, RUNTIME_COMPACT_CHANNEL, RUNTIME_SET_MODEL_CHANNEL, RUNTIME_DIAGNOSTICS_CHANNEL, RUNTIME_MCP_COMMAND_CHANNEL, RUNTIME_MCP_CONFIG_CHANNEL, RUNTIME_MCP_INSPECT_ABORT_CHANNEL, RUNTIME_MCP_INSPECT_CHANNEL, RUNTIME_MCP_STATUS_CHANNEL, RUNTIME_PROMPT_CHANNEL, RUNTIME_REWIND_CHANNEL, RUNTIME_PROJECTION_ACK_CHANNEL, RUNTIME_PROJECTION_CHANNEL, RUNTIME_PROJECTION_EVENT, RUNTIME_RESOURCES_CHANNEL, RUNTIME_RESOURCE_PREVIEW_CHANNEL, RUNTIME_STATUS_CHANNEL, RUNTIME_STATUS_EVENT, isCapabilitiesResult, isMcpCommandResult, isMcpConfigResult, isMcpInspectionResult, isMcpInspectAbortResult, isMcpStatusResult, isProjectionBatch, isProjectionResult, isPromptResult, isResourcesResult, isResourcePreviewResult, isRuntimeDiagnosticsResult, isRuntimeResult, isRuntimeRewindResult, isRuntimeStatus } from '../shared/runtime-api'
 import type { CapabilitiesResult, McpCommandAction, McpCommandResult, McpConfigResult, McpInspectionResult, McpInspectAbortResult, McpStatusResult, ProjectionBatch, ProjectionResult, PromptImageInput, PromptResult, ResourcesResult, ResourcePreviewResult, RuntimeCompactRequest, RuntimeDiagnosticsResult, RuntimeResult, RuntimeSetModelRequest, RuntimeRewindRequest, RuntimeStatus, RuntimeTarget } from '../shared/runtime-api'
@@ -64,6 +67,21 @@ function invalidMcpInspectAbortResponse(): McpInspectAbortResult {
 }
 
 export const runtimeApi = {
+  async startRuntimeTaskFlow(request: TaskFlowStartRequest) {
+    const response: unknown = await ipcRenderer.invoke(TASK_FLOW_START_CHANNEL, {
+      target: { runId: request.target.runId, runtimeId: request.target.runtimeId }, flowId: request.flowId, revision: request.revision
+    })
+    return isRuntimeResult(response) ? response : invalidRuntimeResponse()
+  },
+
+  async getRuntimeTaskFlow(request: TaskFlowReadRequest): Promise<TaskFlowReadResult> {
+    const response: unknown = await ipcRenderer.invoke(TASK_FLOW_READ_CHANNEL, {
+      target: { runId: request.target.runId, runtimeId: request.target.runtimeId }, revision: request.revision
+    })
+    return isTaskFlowReadResult(response) ? response
+      : { ok: false, error: { code: 'INVALID_RESPONSE', message: '任务状态快照不符合契约。' } }
+  },
+
   async getRuntimeStatus() {
     const response: unknown = await ipcRenderer.invoke(RUNTIME_STATUS_CHANNEL)
     return isRuntimeResult(response) ? response : invalidRuntimeResponse()

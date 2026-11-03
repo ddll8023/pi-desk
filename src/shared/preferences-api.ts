@@ -60,10 +60,10 @@ export const DEFAULT_RIGHT_PANEL_WIDTH = 350
 export const MIN_RIGHT_PANEL_WIDTH = 240
 export const MAX_RIGHT_PANEL_WIDTH = 720
 
-/** 右侧面板的页签：文件树与源代码管理共用同一列，同一时刻只显示一个。 */
-export type RightPanelTab = 'files' | 'source-control'
+/** 右侧面板页签：文件、源代码管理与当前会话任务流程共用一列，选中值沿用同一偏好保存链路。 */
+export type RightPanelTab = 'files' | 'source-control' | 'task-flow'
 
-const RIGHT_PANEL_TABS: readonly RightPanelTab[] = ['files', 'source-control']
+const RIGHT_PANEL_TABS: readonly RightPanelTab[] = ['files', 'source-control', 'task-flow']
 
 export function isRightPanelTab(value: unknown): value is RightPanelTab {
   return typeof value === 'string' && RIGHT_PANEL_TABS.includes(value as RightPanelTab)
