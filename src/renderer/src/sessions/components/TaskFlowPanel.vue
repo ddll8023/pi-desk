@@ -5,7 +5,7 @@ import type { TaskFlow, TaskFlowPhase } from '../../../../shared/task-flow'
 import { isTaskFlowActive } from '../../../../shared/task-flow'
 import { useProjectStore } from '../../projects/stores/project'
 import { useRuntimeStore } from '../stores/runtime'
-import { displayToolPath } from '../tool-summary'
+import { displayToolPath, toolFilePath, toolCallPreview } from '../tool-summary'
 import AppButton from '../../ui/AppButton.vue'
 
 const props = defineProps<{
@@ -27,6 +27,7 @@ const selected = ref<string | null>(null)
 let latestId: string | null = null
 
 function formatPath(filePath: string): string {
+  if (typeof filePath !== 'string') return ''
   return displayToolPath(filePath, projectRoot.value)
 }
 
@@ -79,12 +80,17 @@ const isStreaming = computed(() => {
 const liveActionText = computed<string>(() => {
   if (activeTool.value) {
     const name = activeTool.value.toolName
-    const summary = activeTool.value.argsSummary || ''
-    if (name === 'read') return `正在读取文件: ${summary ? formatPath(summary) : '文件'}`
-    if (name === 'edit' || name === 'write') return `正在修改代码: ${summary ? formatPath(summary) : '文件'}`
-    if (name === 'bash') return `正在执行命令: ${summary || '终端脚本'}`
+    const tool = activeTool.value
+    const filePath = toolFilePath(tool.argsSummary)
+    if (name === 'read') return `正在读取文件: ${filePath ? formatPath(filePath) : '文件'}`
+    if (name === 'edit' || name === 'write') return `正在修改代码: ${filePath ? formatPath(filePath) : '文件'}`
+    if (name === 'bash') {
+      const command = toolCallPreview(name, tool.argsSummary, tool.argsText)
+      return `正在执行命令: ${command || '终端脚本'}`
+    }
     if (name === 'task_plan') return '正在规划并同步任务流程...'
-    return `正在调用工具: ${name}`
+    const preview = toolCallPreview(name, tool.argsSummary, tool.argsText)
+    return preview ? `正在调用工具: ${name} (${preview})` : `正在调用工具: ${name}`
   }
   if (isStreaming.value) return '正在分析上下文与生成回答...'
   if (currentFlow.value && isTaskFlowActive(currentFlow.value.phase)) {
@@ -104,7 +110,10 @@ const touchedFiles = computed<readonly string[]>(() => {
   if (currentFlow.value) {
     for (const step of currentFlow.value.steps) {
       for (const file of step.changedFiles ?? []) {
-        if (!seen.has(file)) { seen.add(file); list.push(file) }
+        if (typeof file === 'string' && file.trim() && !seen.has(file)) {
+          seen.add(file)
+          list.push(file)
+        }
       }
     }
   }
@@ -112,17 +121,22 @@ const touchedFiles = computed<readonly string[]>(() => {
   if (list.length < 5) {
     for (let i = runtimeStore.displayTools.length - 1; i >= 0 && list.length < 5; i--) {
       const tool = runtimeStore.displayTools[i]
-      if (tool?.argsSummary && !seen.has(tool.argsSummary)
-        && ['read', 'edit', 'write'].includes(tool.toolName)) {
-        seen.add(tool.argsSummary)
-        list.push(tool.argsSummary)
+      if (tool && ['read', 'edit', 'write'].includes(tool.toolName)) {
+        const filePath = toolFilePath(tool.argsSummary)
+        if (filePath && !seen.has(filePath)) {
+          seen.add(filePath)
+          list.push(filePath)
+        }
       }
     }
   }
   // 3. 从活动摘要中兜底提取最近触及的文件
   if (list.length < 5 && runtimeStore.activity?.files) {
     for (const f of runtimeStore.activity.files) {
-      if (!seen.has(f.path)) { seen.add(f.path); list.push(f.path) }
+      if (typeof f?.path === 'string' && f.path.trim() && !seen.has(f.path)) {
+        seen.add(f.path)
+        list.push(f.path)
+      }
       if (list.length >= 5) break
     }
   }
