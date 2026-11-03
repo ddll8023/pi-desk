@@ -87,8 +87,8 @@
 | `src/renderer/src/sessions/components/ImageAnnotationPanel.vue` | 左图右说明的独立标注面板、编号双向定位、同步删除与键盘调整入口 |
 | `src/renderer/src/sessions/components/ImageAnnotationCanvas.vue` | 共用原图坐标系的编号与点框叠加层，支持编辑及桌面／手机只读展示，不修改图片像素 |
 | `src/renderer/src/sessions/components/ChatMessageList.vue` | 本地待发送／结果未确认状态及绑定图片标注展示、权威消息交接、历史加载、滚动与布局观察；发布对话跳转入口并消费顶部栏与任务侧栏的定位意图；承接工作树隔离任务横幅挂载 |
-| `src/renderer/src/sessions/components/TaskFlowPanel.vue` | 只读任务轨道、步骤状态、变更产物胶囊、结果与记录定位，提供执行中脉冲视觉反馈，不提供启动或停止控件 |
-| `src/renderer/src/sessions/components/TaskFlowSidebar.vue` | 右侧任务页的当前会话门禁、空态、只读刷新与定位转交；新计划首次出现时打开页签，后续状态更新不抢切视图 |
+| `src/renderer/src/sessions/components/TaskFlowPanel.vue` | 当前任务焦点看板与步骤轨道：置顶展示当前轮次目标与实时工具动作（支持简单任务实时态），提供流动微光动效、极简步骤阶梯、变更产物胶囊与会话记录定位，不提供启动或停止控件 |
+| `src/renderer/src/sessions/components/TaskFlowSidebar.vue` | 右侧任务页的当前会话门禁、宿主挂载、只读刷新与定位转交；就绪时始终挂载任务面板承接实时动态，新计划首次出现时打开页签，后续状态更新不抢切视图 |
 | `src/renderer/src/sessions/components/ChatTurnItem.vue` | 按轮摘要、展开与原文内容、多分支切换，以及同轮助手响应流与多步骤执行过程抽屉（Process Drawer）管理 |
 | `src/renderer/src/sessions/components/TurnBranchSwitcher.vue` | 轮次多分支微型切换器（`‹ 1 / 2 ›`） |
 | `src/renderer/src/sessions/components/WorktreeTaskBanner.vue` | 任务工作区状态底栏、固定目标与审阅合并（支持 Squash 与自动清理）、运行终端关闭确认与放弃删除流程 |
@@ -136,7 +136,7 @@ Agent 通过内置 `task_plan` 登记串行步骤，登记本身不执行。当�
 
 任务状态的权威所有者是宿主内的 `TaskFlowController`。状态变化立即进入既有投影批次与快照；页面复用运行身份、绑定代际及水位守卫，并在在途任务期间读取轻量快照，覆盖末条通知遗漏。水位未变化时只返回确认，不反复读取完整聊天记录；失联或读取超时保留最后记录并标明未确认，不推断成功、不重发执行。折叠侧栏或切换页签不停止 Runtime 的订阅与对账，相关读取策略以 `src/renderer/src/sessions/task-flow-sync.ts` 为准。
 
-任务记录通过官方会话管理器的自定义条目保存，不加入模型上下文，也不另建任务数据库。历史读取遵循当前分支，绑定恢复时将未确认结束的运行记录表达为中断，不自动恢复执行；回退会话不撤销已经发生的文件修改，也不重放历史任务。任务摘要与展示边界以 `src/shared/task-flow.ts` 为准。串行步骤不创建子代理，不构成通用 DAG 编排、可发布工作流或后台定时调度。
+任务记录通过官方会话管理器的自定义条目保存，不加入模型上下文，也不另建任务数据库。历史读取遵循当前分支，绑定恢复时将未确认结束的运行记录表达为中断，不自动恢复执行；回退会话不撤销已经发生的文件修改，也不重放历史任务。任务摘要与展示边界以 `src/shared/task-flow.ts` 为准。串行步骤不创建子代理，不构成通用 DAG 编排、可发布工作流或后台定时调度。右侧看板支持双模态：无多步计划时实时呈现当前轮次目标、活跃工具调用与涉及文件；存在计划时收敛为极简步骤阶梯并高亮当前执行步。
 
 ## 状态与边界
 

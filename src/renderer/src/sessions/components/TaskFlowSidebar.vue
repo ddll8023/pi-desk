@@ -1,4 +1,4 @@
-<!-- 右侧任务页：只展示当前对话的同源任务状态；视图切换不持有或暂停执行与对账。 -->
+<!-- 右侧任务与执行看板宿主：就绪时全量挂载任务面板承接当前焦点与执行轨道；视图切换不持有或暂停执行与对账。 -->
 <script setup lang="ts">
 import { computed, watch } from 'vue'
 import { useRuntimeStore } from '../stores/runtime'
@@ -63,11 +63,6 @@ defineExpose({ refresh })
   <section id="right-panel-page-task-flow" class="flex min-h-0 flex-1 flex-col" role="tabpanel" aria-labelledby="right-panel-tab-task-flow">
     <div v-if="!eligible" class="p-4 text-xs text-desk-muted" role="status">
       请选择一个对话查看任务流程。文件、终端和新对话不会展示其他会话的任务。
-    </div>
-    <div v-else-if="runtime.displayTaskFlows.length === 0" class="space-y-2 p-4 text-xs text-desk-muted" role="status">
-      <p class="font-medium text-desk-ink">当前对话暂无任务计划</p>
-      <p>可让 Agent 使用 task_plan 登记步骤，再在聊天中发送“开始／开始执行”。</p>
-      <p v-if="runtime.taskFlowNotice" class="text-desk-warning">{{ runtime.taskFlowNotice }}</p>
     </div>
     <TaskFlowPanel
       v-else
