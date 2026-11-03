@@ -1,8 +1,10 @@
-<!-- 右侧任务页只展示宿主状态、步骤与结果，并提供记录定位；执行控制统一由聊天承接。 -->
+<!-- 右侧任务页只展示宿主状态、步骤、结果及变更产物，并提供记录定位与节点状态反馈；执行控制统一由聊天承接。 -->
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import type { TaskFlow, TaskFlowPhase } from '../../../../shared/task-flow'
 import { isTaskFlowActive } from '../../../../shared/task-flow'
+import { useProjectStore } from '../../projects/stores/project'
+import { displayToolPath } from '../tool-summary'
 import AppButton from '../../ui/AppButton.vue'
 
 const props = defineProps<{
@@ -17,6 +19,11 @@ const emit = defineEmits<{
 }>()
 const selected = ref<string | null>(null)
 let latestId: string | null = null
+const projectStore = useProjectStore()
+const projectRoot = computed(() => projectStore.currentProject?.path ?? null)
+function formatPath(filePath: string): string {
+  return displayToolPath(filePath, projectRoot.value)
+}
 watch(() => props.flows, flows => {
   const latest = flows.at(-1)?.id ?? null
   if (latest !== latestId || !flows.some(flow => flow.id === selected.value)) selected.value = latest
@@ -60,6 +67,22 @@ function glyph(phase: TaskFlowPhase): string {
               </summary>
               <div class="mt-1 space-y-2 rounded-desk-sm bg-desk-surface-subtle p-2 text-xs">
                 <p class="whitespace-pre-wrap break-words text-desk-muted">{{ step.instruction }}</p>
+                <div v-if="step.changedFiles && step.changedFiles.length > 0" class="space-y-1 rounded-desk-xs border border-desk-line bg-desk-surface p-2">
+                  <div class="flex items-center justify-between text-2xs font-medium text-desk-muted">
+                    <span>变更产物</span>
+                    <span>{{ step.changedFiles.length }} 个文件</span>
+                  </div>
+                  <div class="flex flex-wrap gap-1">
+                    <span
+                      v-for="file in step.changedFiles"
+                      :key="file"
+                      class="inline-block max-w-full truncate rounded-desk-xs border border-desk-line bg-desk-surface-subtle px-1.5 py-0.5 font-mono text-2xs text-desk-ink"
+                      :title="file"
+                    >
+                      {{ formatPath(file) }}
+                    </span>
+                  </div>
+                </div>
                 <p v-if="step.result" class="whitespace-pre-wrap break-words">{{ step.result }}</p>
                 <p v-if="step.error" class="whitespace-pre-wrap break-words text-desk-danger">{{ step.error }}</p>
                 <AppButton v-if="step.resultEntryId || step.promptEntryId" variant="ghost" @click="emit('locate', step.resultEntryId ?? step.promptEntryId ?? '', props.ownerKey)">定位会话记录</AppButton>
@@ -79,8 +102,31 @@ function glyph(phase: TaskFlowPhase): string {
 .task-flow-track::before { content: ''; position: absolute; top: 10px; bottom: 10px; left: 8px; width: 1px; background: var(--color-desk-line-strong); }
 .task-flow-node { position: relative; display: flex; gap: 10px; padding-block: 4px; }
 .task-flow-glyph { z-index: 1; display: grid; place-items: center; flex: none; width: 17px; height: 23px; background: var(--color-desk-surface); color: var(--color-desk-muted); font-size: 12px; }
-.task-flow-node[data-phase='running'] .task-flow-glyph { color: var(--color-desk-accent); }
+.task-flow-node[data-phase='running'] .task-flow-glyph {
+  color: var(--color-desk-accent);
+  animation: pulse-glyph 1.8s ease-in-out infinite;
+}
+.task-flow-node[data-phase='running'] summary {
+  border-left: 2px solid var(--color-desk-accent);
+  padding-left: 6px;
+  background-color: var(--color-desk-surface-subtle);
+}
 .task-flow-node[data-phase='completed'] .task-flow-glyph { color: var(--color-desk-success); }
 .task-flow-node[data-phase='failed'] .task-flow-glyph { color: var(--color-desk-danger); }
+summary {
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+summary:hover {
+  background-color: var(--color-desk-surface-subtle);
+}
 summary::-webkit-details-marker { display: none; }
+@keyframes pulse-glyph {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.2); opacity: 0.65; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .task-flow-node[data-phase='running'] .task-flow-glyph {
+    animation: none;
+  }
+}
 </style>

@@ -23,6 +23,8 @@ export interface TaskFlowStep {
   readonly resultEntryId: string | null
   readonly result: string | null
   readonly error: string | null
+  /** 步骤执行期间通过文件修改工具产生且未报错的相对路径集合，裁剪至有界范围。 */
+  readonly changedFiles?: readonly string[]
 }
 export interface TaskFlow {
   readonly id: string
@@ -70,6 +72,11 @@ function text(value: unknown, max = TASK_FLOW_MAX_TEXT): value is string {
 function id(value: unknown): value is string { return text(value, 128) && value !== '' }
 function nullableId(value: unknown): boolean { return value === null || id(value) }
 function nullableText(value: unknown): boolean { return value === null || text(value) }
+function optionalStringArray(value: unknown, maxItems = 64, maxLength = 512): boolean {
+  if (value === undefined) return true
+  return Array.isArray(value) && value.length <= maxItems
+    && value.every(item => typeof item === 'string' && item.length <= maxLength && !item.includes('\0'))
+}
 function time(value: unknown): boolean { return value === null || count(value) }
 function keys(value: Record<string, unknown>, allowed: readonly string[]): boolean {
   return Object.keys(value).every(key => allowed.includes(key))
@@ -101,7 +108,8 @@ function isStep(value: unknown): value is TaskFlowStep {
     && text(value.instruction) && value.instruction.trim() !== '' && isTaskFlowPhase(value.phase)
     && time(value.startedAt) && time(value.endedAt) && nullableId(value.promptEntryId)
     && nullableId(value.resultEntryId) && nullableText(value.result) && nullableText(value.error)
-    && keys(value, ['id', 'title', 'instruction', 'phase', 'startedAt', 'endedAt', 'promptEntryId', 'resultEntryId', 'result', 'error'])
+    && optionalStringArray(value.changedFiles)
+    && keys(value, ['id', 'title', 'instruction', 'phase', 'startedAt', 'endedAt', 'promptEntryId', 'resultEntryId', 'result', 'error', 'changedFiles'])
 }
 export function isTaskFlow(value: unknown): value is TaskFlow {
   return record(value) && id(value.id) && count(value.revision) && text(value.title, 200) && value.title.trim() !== ''

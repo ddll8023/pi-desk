@@ -10,6 +10,7 @@ export interface TaskStepOutcome {
   readonly error: string | null
   readonly promptEntryId: string | null
   readonly resultEntryId: string | null
+  readonly changedFiles?: readonly string[]
 }
 interface ExecutionHost {
   persist(flow: TaskFlow): void
@@ -59,7 +60,7 @@ export class TaskFlowController {
     const flow: TaskFlow = { id: randomUUID(), revision: 0, title: plan.title, originEntryId,
       phase: 'pending', createdAt: now, updatedAt: now, steps: plan.steps.map<TaskFlowStep>(step => ({
         ...step, id: randomUUID(), phase: 'pending', startedAt: null, endedAt: null,
-        promptEntryId: null, resultEntryId: null, result: null, error: null
+        promptEntryId: null, resultEntryId: null, result: null, error: null, changedFiles: []
       })) }
     this.commit(flow)
     return this.find(flow.id)
@@ -120,7 +121,8 @@ export class TaskFlowController {
       const current = this.find(id)
       const phase = this.stopRequested ? 'cancelled' : outcome.phase
       this.commit({ ...current, steps: current.steps.map<TaskFlowStep>(candidate => candidate.id === step.id
-        ? { ...candidate, ...outcome, phase, result: boundedText(outcome.result), error: boundedText(outcome.error), endedAt: Date.now() }
+        ? { ...candidate, ...outcome, phase, result: boundedText(outcome.result), error: boundedText(outcome.error),
+            changedFiles: outcome.changedFiles?.slice(0, 64) ?? candidate.changedFiles ?? [], endedAt: Date.now() }
         : candidate) })
       if (phase !== 'completed') {
         this.finish(id, phase)

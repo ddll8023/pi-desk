@@ -14,6 +14,7 @@ import type { TaskStepOutcome } from './task-flow/controller'
 import { createTaskFlowExtension, TASK_FLOW_EXTENSION_NAME } from './task-flow/index'
 import { readTaskFlowHistory } from './task-flow/history'
 import { TASK_FLOW_ENTRY_TYPE, resolveTaskFlowStart } from '../shared/task-flow'
+import { toolLocalName } from '../shared/tool-operation'
 import type { TaskFlow, TaskFlowProbe, TaskFlowStep } from '../shared/task-flow'
 import { MessageProjection } from './projection/message-projection'
 import { ActivityProjection, matchesActivityPrefix } from './projection/activity-projection'
@@ -767,7 +768,7 @@ export class SdkSessionRuntime {
     })
   }
 
-  /** 每个业务步骤对应一次完整 SDK 运行；先监听，再启动，不能用提交接受回执冒充执行结束。 */
+  /** 每个业务步骤对应一次完整 SDK 运行；先监听，再启动，不能用提交接受回执冒充执行结束；聚合步骤中成功的文件修改工具调用并返回变更列表。 */
   private async executeTaskStep(session: AgentSession, bindingId: number, flow: TaskFlow,
     step: TaskFlowStep, index: number): Promise<TaskStepOutcome> {
     const current = (): boolean => this.session === session && this.bindingId === bindingId
@@ -791,6 +792,32 @@ export class SdkSessionRuntime {
     } catch { executionFailed = true } finally { off() }
     if (!current()) throw new Error('步骤所属会话已经失效。')
     const entries = session.sessionManager.getBranch().filter(entry => !before.has(entry.id))
+    const failedToolCallIds = new Set<string>()
+    for (const entry of entries) {
+      if (entry.type === 'message' && entry.message.role === 'toolResult' && entry.message.isError === true) {
+        if (typeof entry.message.toolCallId === 'string') failedToolCallIds.add(entry.message.toolCallId)
+      }
+    }
+    const mutationTools = new Set(['edit', 'patch', 'apply_patch', 'write'])
+    const changedFileSet = new Set<string>()
+    for (const entry of entries) {
+      if (entry.type === 'message' && entry.message.role === 'assistant' && Array.isArray(entry.message.content)) {
+        for (const part of entry.message.content) {
+          if (part.type === 'toolCall' && typeof part.name === 'string' && typeof part.id === 'string') {
+            if (mutationTools.has(toolLocalName(part.name)) && !failedToolCallIds.has(part.id)
+              && typeof part.arguments === 'object' && part.arguments !== null) {
+              const args = part.arguments as Record<string, unknown>
+              const rawPath = typeof args.path === 'string' ? args.path
+                : typeof args.file_path === 'string' ? args.file_path : null
+              if (rawPath !== null && rawPath.trim() !== '') {
+                changedFileSet.add(rawPath.trim().replace(/\\/g, '/'))
+              }
+            }
+          }
+        }
+      }
+    }
+    const changedFiles = [...changedFileSet].slice(0, 64)
     const prompt = entries.find(entry => entry.type === 'message' && entry.message.role === 'user')
     const response = entries.findLast(entry => entry.type === 'message' && entry.message.role === 'assistant')
     const assistant = response?.type === 'message' && response.message.role === 'assistant' ? response.message : null
@@ -799,7 +826,7 @@ export class SdkSessionRuntime {
       : reason === 'aborted' ? 'cancelled'
       : !started || !settled || reason !== 'stop' ? 'interrupted' : 'completed'
     return { phase, result: assistant === null ? null : session.getLastAssistantText() ?? null,
-      promptEntryId: prompt?.id ?? null, resultEntryId: response?.id ?? null,
+      promptEntryId: prompt?.id ?? null, resultEntryId: response?.id ?? null, changedFiles,
       error: phase === 'completed' ? null : phase === 'cancelled' ? '当前步骤已停止。'
         : !started ? '输入被处理但未启动步骤执行；没有将其标记为完成。'
         : phase === 'interrupted' ? '没有确认完整执行终态；不会自动继续或重跑。' : '步骤执行失败，详情见会话记录。' }
