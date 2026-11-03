@@ -1,402 +1,476 @@
-<!-- 任务流程与会话执行动态看板：提供当前焦点实时反馈、极简步骤轨道与产物定位，执行控制由聊天承接。 -->
+<!-- 任务语义看板：紧凑轨道式时间线与节点展开交互，按业务目标、阶段与轮次组织工作流向。 -->
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
-import type { TaskFlow, TaskFlowPhase } from '../../../../shared/task-flow'
-import { isTaskFlowActive } from '../../../../shared/task-flow'
-import { useProjectStore } from '../../projects/stores/project'
-import { useRuntimeStore } from '../stores/runtime'
-import { displayToolPath, toolFilePath, toolCallPreview } from '../tool-summary'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import type { SessionTaskGroup, SessionTaskTrack, SessionTaskTurn, TaskViewStatus, TaskViewTone } from '../task-flow-view'
+import TaskFlowSteps from './TaskFlowSteps.vue'
 import AppButton from '../../ui/AppButton.vue'
 
 const props = defineProps<{
-  readonly flows: readonly TaskFlow[]
+  readonly track: SessionTaskTrack
   readonly ownerKey: string
   readonly live: boolean
   readonly notice: string | null
+  readonly projectRoot: string | null
+  readonly earlier: { readonly available: boolean; readonly loading: boolean; readonly error: string | null }
 }>()
 const emit = defineEmits<{
   locate: [entryId: string, ownerKey: string]
-  expand: []
+  locateTurn: [messageId: string, ownerKey: string]
+  loadEarlier: [ownerKey: string]
+  loadTurn: [turnId: string, more: boolean, ownerKey: string]
 }>()
 
-const runtimeStore = useRuntimeStore()
-const projectStore = useProjectStore()
-const projectRoot = computed(() => projectStore.currentProject?.path ?? null)
+const tones = {
+  accent: 'text-desk-accent',
+  success: 'text-desk-success',
+  danger: 'text-desk-danger',
+  warning: 'text-desk-warning',
+  muted: 'text-desk-muted'
+} satisfies Record<TaskViewTone, string>
 
-const selected = ref<string | null>(null)
-let latestId: string | null = null
-
-function formatPath(filePath: string): string {
-  if (typeof filePath !== 'string') return ''
-  return displayToolPath(filePath, projectRoot.value)
+interface BusinessSection {
+  readonly id: string
+  readonly title: string | null
+  readonly status: TaskViewStatus | null
+  readonly current: boolean
+  readonly turns: readonly SessionTaskTurn[]
 }
 
-watch(() => props.flows, flows => {
-  const latest = flows.at(-1)?.id ?? null
-  if (latest !== latestId || !flows.some(flow => flow.id === selected.value)) selected.value = latest
-  latestId = latest
-}, { immediate: true })
-
-const currentFlow = computed<TaskFlow | null>(() => {
-  if (props.flows.length === 0) return null
-  return props.flows.find(f => f.id === selected.value) ?? props.flows.at(-1) ?? null
-})
-
-function label(phase: TaskFlowPhase): string {
-  if (isTaskFlowActive(phase) && !props.live) return '未确认结束'
-  if (isTaskFlowActive(phase) && props.notice !== null) return '状态待确认'
-  return {
-    pending: '待执行', running: '执行中', stopping: '停止中', completed: '执行完成',
-    failed: '执行失败', cancelled: '已停止', interrupted: '已中断'
-  }[phase]
+function sections(task: SessionTaskGroup): readonly BusinessSection[] {
+  if (task.stages.length === 0) {
+    return [{ id: 'rounds', title: null, status: null, current: task.current, turns: task.turns }]
+  }
+  return [
+    ...task.stages.map(stage => ({ ...stage, id: `stage:${stage.id}` })),
+    ...(task.unassigned.length === 0 ? [] : [{
+      id: '__unassigned',
+      title: '对话推进',
+      status: null,
+      current: task.unassigned.some(turn => turn.current),
+      turns: task.unassigned
+    }])
+  ]
 }
 
-/** 提取当前轮次的目标：简单任务提取最新用户意图，多步任务提取整体目标。 */
-const latestUserGoal = computed<string>(() => {
-  const msgs = runtimeStore.displayMessages
-  for (let i = msgs.length - 1; i >= 0; i--) {
-    const msg = msgs[i]
-    if (msg?.role === 'user') {
-      for (const b of msg.blocks) {
-        if (b.type === 'text' && typeof b.text === 'string' && b.text.trim()) {
-          const line = b.text.trim().split('\n')[0]?.trim() ?? ''
-          return line.length > 90 ? line.slice(0, 87) + '...' : line
-        }
-      }
-    }
+const plans = computed(() => [...props.track.turns.flatMap(turn => turn.plans), ...props.track.unattachedPlans])
+const hasCurrentIntent = computed(() => props.track.tasks.some(task => task.current))
+
+/** 节点展开状态缓存：默认展开当前活跃/最新轮，历史轮默认紧凑折叠 */
+const expansion = ref<Record<string, boolean>>({})
+/** 详情抽屉展开状态缓存 */
+const detailsExpansion = ref<Record<string, boolean>>({})
+
+const scroller = ref<HTMLElement | null>(null)
+const followingLatest = ref(true)
+let observer: ResizeObserver | null = null
+let prependAnchor: { readonly id: string; readonly top: number; readonly ownerKey: string } | null = null
+
+function isExpanded(turn: SessionTaskTurn): boolean {
+  if (expansion.value[turn.id] !== undefined) {
+    return expansion.value[turn.id]
   }
-  return '当前对话任务'
-})
-
-/** 提取当前活跃的工具调用与实时流式状态。 */
-const activeTool = computed(() => {
-  return runtimeStore.displayTools.find(t => t.phase === 'running') ?? null
-})
-const isStreaming = computed(() => {
-  return runtimeStore.view.phase === 'ready' && runtimeStore.view.snapshot.info?.isStreaming === true
-})
-
-/** 实时动态文字描述：哪怕是单轮简单任务，用户也能一眼看清当前这一秒在干什么。 */
-const liveActionText = computed<string>(() => {
-  if (activeTool.value) {
-    const name = activeTool.value.toolName
-    const tool = activeTool.value
-    const filePath = toolFilePath(tool.argsSummary)
-    if (name === 'read') return `正在读取文件: ${filePath ? formatPath(filePath) : '文件'}`
-    if (name === 'edit' || name === 'write') return `正在修改代码: ${filePath ? formatPath(filePath) : '文件'}`
-    if (name === 'bash') {
-      const command = toolCallPreview(name, tool.argsSummary, tool.argsText)
-      return `正在执行命令: ${command || '终端脚本'}`
-    }
-    if (name === 'task_plan') return '正在规划并同步任务流程...'
-    const preview = toolCallPreview(name, tool.argsSummary, tool.argsText)
-    return preview ? `正在调用工具: ${name} (${preview})` : `正在调用工具: ${name}`
-  }
-  if (isStreaming.value) return '正在分析上下文与生成回答...'
-  if (currentFlow.value && isTaskFlowActive(currentFlow.value.phase)) {
-    const runningStep = currentFlow.value.steps.find(s => isTaskFlowActive(s.phase))
-    return runningStep ? `正在执行步骤: ${runningStep.title}` : '任务执行推进中...'
-  }
-  if (props.live) return '当前就绪 · 等待下一指令'
-  return '当前会话连接已断开'
-})
-
-/** 提取当前任务或最近活动关联的文件微胶囊（最多 5 个）。 */
-const touchedFiles = computed<readonly string[]>(() => {
-  const list: string[] = []
-  const seen = new Set<string>()
-
-  // 1. 若有多步流当前步产生的 changedFiles，优先收集
-  if (currentFlow.value) {
-    for (const step of currentFlow.value.steps) {
-      for (const file of step.changedFiles ?? []) {
-        if (typeof file === 'string' && file.trim() && !seen.has(file)) {
-          seen.add(file)
-          list.push(file)
-        }
-      }
-    }
-  }
-  // 2. 从最近工具调用中提取读写的文件
-  if (list.length < 5) {
-    for (let i = runtimeStore.displayTools.length - 1; i >= 0 && list.length < 5; i--) {
-      const tool = runtimeStore.displayTools[i]
-      if (tool && ['read', 'edit', 'write'].includes(tool.toolName)) {
-        const filePath = toolFilePath(tool.argsSummary)
-        if (filePath && !seen.has(filePath)) {
-          seen.add(filePath)
-          list.push(filePath)
-        }
-      }
-    }
-  }
-  // 3. 从活动摘要中兜底提取最近触及的文件
-  if (list.length < 5 && runtimeStore.activity?.files) {
-    for (const f of runtimeStore.activity.files) {
-      if (typeof f?.path === 'string' && f.path.trim() && !seen.has(f.path)) {
-        seen.add(f.path)
-        list.push(f.path)
-      }
-      if (list.length >= 5) break
-    }
-  }
-  return list.slice(0, 5)
-})
-
-/** 多步任务进度统计。 */
-const flowProgress = computed(() => {
-  if (!currentFlow.value) return null
-  const total = currentFlow.value.steps.length
-  if (total === 0) return null
-  const completed = currentFlow.value.steps.filter(s => s.phase === 'completed').length
-  const percent = Math.round((completed / total) * 100)
-  return { completed, total, percent }
-})
-
-const activeStep = computed(() => {
-  if (!currentFlow.value) return null
-  return currentFlow.value.steps.find(s => isTaskFlowActive(s.phase)) ?? null
-})
-
-/** 步骤连接线是否应当点亮高亮。 */
-function isLineLit(stepIndex: number, steps: readonly { readonly phase: TaskFlowPhase }[]): boolean {
-  const current = steps[stepIndex]?.phase
-  const next = steps[stepIndex + 1]?.phase
-  return current === 'completed' && (next === 'completed' || isTaskFlowActive(next ?? 'pending'))
+  return turn.current
 }
+
+function toggleTurn(turn: SessionTaskTurn): void {
+  followingLatest.value = false
+  const current = isExpanded(turn)
+  expansion.value = { ...expansion.value, [turn.id]: !current }
+}
+
+function toggleDetails(turn: SessionTaskTurn): void {
+  followingLatest.value = false
+  const current = detailsExpansion.value[turn.id] ?? false
+  detailsExpansion.value = { ...detailsExpansion.value, [turn.id]: !current }
+  if (!current && turn.historyId !== null && turn.history.available && !turn.history.loaded && !turn.history.loading) {
+    emit('loadTurn', turn.historyId, false, props.ownerKey)
+  }
+}
+
+function locateTurn(turn: SessionTaskTurn): void {
+  if (turn.messageId !== null) emit('locateTurn', turn.messageId, props.ownerKey)
+}
+
+function loadTurn(turn: SessionTaskTurn): void {
+  if (turn.historyId !== null && !turn.history.loading) {
+    followingLatest.value = false
+    emit('loadTurn', turn.historyId, turn.history.loaded && turn.history.hasMore, props.ownerKey)
+  }
+}
+
+function focusCurrent(force = false): void {
+  const host = scroller.value
+  const current = host?.querySelector<HTMLElement>('[data-current-focus="true"]')
+  if (host === null || current == null || host.clientHeight === 0) return
+  const bounds = host.getBoundingClientRect()
+  const target = current.getBoundingClientRect()
+  if (force || target.top < bounds.top || target.bottom > bounds.bottom) {
+    host.scrollTop += target.top - bounds.top - 16
+  }
+}
+
+function onScroll(): void {
+  const host = scroller.value
+  const current = host?.querySelector<HTMLElement>('[data-current-focus="true"]')
+  if (host === null || current == null || prependAnchor !== null) return
+  const bounds = host.getBoundingClientRect()
+  const target = current.getBoundingClientRect()
+  followingLatest.value = target.top >= bounds.top && target.bottom <= bounds.bottom
+}
+
+function scrollLatest(): void {
+  followingLatest.value = true
+  prependAnchor = null
+  focusCurrent(true)
+}
+
+/** 历史前插保持侧栏自己的阅读位置，不接管主聊天区滚动。 */
+function loadEarlier(): void {
+  const host = scroller.value
+  followingLatest.value = false
+  if (host !== null) {
+    const top = host.getBoundingClientRect().top
+    const anchor = [...host.querySelectorAll<HTMLElement>('[data-task-turn-id]')].find(element => {
+      const bounds = element.getBoundingClientRect()
+      return bounds.height > 0 && bounds.bottom > top
+    })
+    if (anchor?.dataset.taskTurnId !== undefined) {
+      prependAnchor = { id: anchor.dataset.taskTurnId, top: anchor.getBoundingClientRect().top - top, ownerKey: props.ownerKey }
+    }
+  }
+  emit('loadEarlier', props.ownerKey)
+}
+
+watch(() => [props.track, props.earlier.loading] as const, () => {
+  void nextTick(() => {
+    const host = scroller.value
+    if (host === null) return
+    const anchor = prependAnchor
+    if (anchor !== null && anchor.ownerKey === props.ownerKey) {
+      const element = host.querySelector<HTMLElement>(`[data-task-turn-id="${CSS.escape(anchor.id)}"]`)
+      if (element !== null) host.scrollTop += element.getBoundingClientRect().top - host.getBoundingClientRect().top - anchor.top
+      if (!props.earlier.loading) prependAnchor = null
+    } else if (followingLatest.value) focusCurrent()
+  })
+}, { flush: 'post', immediate: true })
+
+onMounted(() => {
+  observer = new ResizeObserver(() => { if (followingLatest.value) focusCurrent() })
+  if (scroller.value !== null) observer.observe(scroller.value)
+})
+
+onBeforeUnmount(() => { observer?.disconnect() })
 </script>
 
 <template>
-  <section class="task-flow-panel flex flex-col min-h-0 bg-desk-surface" aria-label="任务执行看板">
-    <!-- 顶部状态栏：任务记录切换与实时连接感知 -->
-    <header class="sticky top-0 z-10 flex shrink-0 items-center justify-between gap-2 border-b border-desk-line bg-desk-surface/90 backdrop-blur-sm px-3 py-2.5">
+  <section class="task-flow-panel flex min-h-0 flex-col bg-desk-surface" aria-label="任务意图与业务流程">
+    <!-- 顶部状态栏 -->
+    <header class="flex shrink-0 items-center justify-between gap-2 border-b border-desk-line bg-desk-surface/90 px-3 py-2.5 backdrop-blur-xs">
       <div class="flex items-center gap-2 min-w-0">
-        <span class="relative flex h-2 w-2">
-          <span v-if="live && (activeTool || isStreaming || (currentFlow && isTaskFlowActive(currentFlow.phase)))" class="animate-ping absolute inline-flex h-full w-full rounded-full bg-desk-accent opacity-75"></span>
-          <span class="relative inline-flex rounded-full h-2 w-2" :class="live ? 'bg-desk-accent' : 'bg-desk-muted'"></span>
+        <span class="relative flex h-2 w-2 shrink-0">
+          <span v-if="live" class="absolute inline-flex h-full w-full animate-ping rounded-full bg-desk-accent opacity-75 motion-reduce:animate-none"></span>
+          <span class="relative inline-flex h-2 w-2 rounded-full" :class="live ? 'bg-desk-accent' : 'bg-desk-muted'"></span>
         </span>
-        <span class="text-xs font-semibold text-desk-ink truncate">
-          {{ currentFlow ? currentFlow.title : '当前会话动态' }}
-        </span>
+        <h3 class="text-xs font-semibold text-desk-ink truncate">任务流程</h3>
       </div>
-      <div class="flex items-center gap-2">
-        <span v-if="currentFlow" class="text-2xs font-medium px-1.5 py-0.5 rounded-desk-xs border border-desk-line bg-desk-surface-subtle text-desk-muted">
-          {{ label(currentFlow.phase) }}
-        </span>
-        <select
-          v-if="flows.length > 1"
-          v-model="selected"
-          class="rounded-desk-sm border border-desk-line bg-desk-surface px-2 py-0.5 text-2xs text-desk-ink focus:outline-none focus:border-desk-accent"
-          aria-label="选择历史任务计划"
-          @change="emit('expand')"
-        >
-          <option v-for="flow in flows" :key="flow.id" :value="flow.id">{{ flow.title }}</option>
-        </select>
+      <div class="flex items-center gap-2 text-2xs text-desk-muted shrink-0">
+        <span v-if="track.tasks.length > 0">{{ track.tasks.length }} 项任务</span>
+        <AppButton v-if="!followingLatest && hasCurrentIntent" variant="ghost" @click="scrollLatest">当前轮 ↓</AppButton>
       </div>
     </header>
 
-    <div class="flex-1 min-h-0 overflow-y-auto p-3 space-y-3">
-      <!-- 异常或核对提示 -->
-      <div v-if="notice" class="rounded-desk-sm border border-desk-warning/40 bg-desk-warning-soft/50 p-2 text-xs text-desk-warning" role="status">
+    <div ref="scroller" class="min-h-0 flex-1 overflow-y-auto p-3 space-y-3 [overflow-anchor:none]" @scroll.passive="onScroll">
+      <!-- 异常或状态待确认提示 -->
+      <div v-if="notice" class="rounded-desk-sm border border-desk-warning/30 bg-desk-warning-soft p-2 text-2xs text-desk-warning" role="status">
         {{ notice }}
       </div>
 
-      <!-- 【置顶当前焦点卡片（Current Focus）】：无论简单任务还是多步任务，永远居顶直观呈现当前正在干什么 -->
-      <section
-        class="focus-card rounded-desk-md border border-desk-line bg-desk-surface-subtle p-3 space-y-2.5 transition-all"
-        :class="{ 'is-active-running': activeTool || isStreaming || activeStep }"
-        aria-label="当前执行焦点"
-      >
-        <div class="flex items-center justify-between gap-2">
-          <span class="text-2xs font-semibold uppercase tracking-wider text-desk-muted">
-            {{ currentFlow ? '当前步骤焦点' : '当前对话任务' }}
-          </span>
-          <span
-            v-if="activeTool || isStreaming || activeStep"
-            class="inline-flex items-center gap-1.5 text-2xs font-medium text-desk-accent"
-          >
-            <span class="h-1.5 w-1.5 rounded-full bg-desk-accent animate-pulse"></span>
-            运行中
-          </span>
-          <span v-else class="text-2xs text-desk-muted">就绪</span>
-        </div>
-
-        <!-- 目标与步骤简述 -->
-        <h4 class="text-xs font-medium text-desk-ink break-words leading-relaxed">
-          {{ activeStep ? activeStep.title : latestUserGoal }}
-        </h4>
-
-        <!-- 实时执行动作反馈（Lancer Light UI 流动状态行） -->
-        <div class="flow-action-strip flex items-center gap-2 rounded-desk-sm border border-desk-line/70 bg-desk-surface px-2.5 py-1.5 text-2xs text-desk-ink">
-          <div class="shrink-0 flex items-center justify-center">
-            <template v-if="activeTool || isStreaming || activeStep">
-              <span class="relative flex h-2 w-2">
-                <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-desk-accent opacity-75"></span>
-                <span class="relative inline-flex rounded-full h-2 w-2 bg-desk-accent"></span>
-              </span>
-            </template>
-            <template v-else>
-              <span class="inline-flex h-2 w-2 rounded-full bg-desk-success"></span>
-            </template>
-          </div>
-          <span class="min-w-0 truncate font-mono text-desk-ink">{{ liveActionText }}</span>
-        </div>
-
-        <!-- 当前关联/读写的文件微胶囊 -->
-        <div v-if="touchedFiles.length > 0" class="space-y-1 pt-1 border-t border-desk-line/60">
-          <div class="text-2xs text-desk-muted font-medium">涉及文件产物</div>
-          <div class="flex flex-wrap gap-1">
-            <span
-              v-for="file in touchedFiles"
-              :key="file"
-              class="file-badge inline-flex items-center gap-1 max-w-full truncate rounded-desk-xs border border-desk-line bg-desk-surface px-1.5 py-0.5 font-mono text-2xs text-desk-ink"
-              :title="file"
-            >
-              <svg class="w-3 h-3 text-desk-muted shrink-0" viewBox="0 0 16 16" fill="currentColor">
-                <path d="M4 1.75C4 .784 4.784 0 5.75 0h5.586a1.75 1.75 0 0 1 1.237.513l2.914 2.914c.328.328.513.774.513 1.237v9.586A1.75 1.75 0 0 1 14.25 16h-8.5A1.75 1.75 0 0 1 4 14.25V1.75zm1.75-.25a.25.25 0 0 0-.25.25v12.5c0 .138.112.25.25.25h8.5a.25.25 0 0 0 .25-.25V4.75h-2.75A1.75 1.75 0 0 1 10 3V1.5H5.75z"/>
-              </svg>
-              <span class="truncate">{{ formatPath(file) }}</span>
-            </span>
-          </div>
-        </div>
-      </section>
-
-      <!-- 【简单任务说明】：当没有多步计划时呈现轻量说明，不显示空态死区 -->
-      <div v-if="!currentFlow" class="rounded-desk-sm border border-desk-line/60 bg-desk-surface p-3 text-2xs text-desk-muted space-y-1">
-        <p class="font-medium text-desk-ink">当前为实时单轮对话</p>
-        <p>日常问答与单步代码修改自动在此同步状态；遇复杂长任务时，Agent 可通过 task_plan 登记多步计划并生成下方追踪轨道。</p>
+      <!-- 载入更早对话入口 -->
+      <div v-if="earlier.available || earlier.error" class="py-1 text-center">
+        <AppButton variant="ghost" :disabled="earlier.loading" @click="loadEarlier">
+          {{ earlier.loading ? '正在载入…' : earlier.error ? '重试载入历史' : '载入更早对话' }}
+        </AppButton>
+        <p v-if="earlier.error" class="mt-1 text-left text-2xs text-desk-danger" role="status">{{ earlier.error }}</p>
       </div>
 
-      <!-- 【多步计划详情区】：仅当存在结构化 TaskFlow 时呈现 -->
-      <template v-else>
-        <!-- 进度条（参考 EvoFlow 紧凑进度指示） -->
-        <div v-if="flowProgress" class="space-y-1.5 px-0.5">
-          <div class="flex items-center justify-between text-2xs text-desk-muted">
-            <span>执行进度</span>
-            <span class="font-mono font-medium text-desk-ink">{{ flowProgress.completed }} / {{ flowProgress.total }} 步 ({{ flowProgress.percent }}%)</span>
-          </div>
-          <div class="h-1.5 w-full rounded-full bg-desk-surface-subtle overflow-hidden border border-desk-line/70">
-            <div
-              class="h-full bg-desk-accent transition-all duration-300 ease-out"
-              :style="{ width: `${flowProgress.percent}%` }"
-            ></div>
-          </div>
-        </div>
-
-        <!-- 启动与控制提示 -->
-        <p v-if="currentFlow.phase === 'pending'" class="text-2xs text-desk-muted bg-desk-surface-subtle/80 rounded-desk-sm p-2 border border-desk-line/70 leading-relaxed">
-          待启动：在无附件聊天中发送“开始／开始执行”；需要停止时，使用聊天输入坞的停止键。本计划不新增操作授权。
-        </p>
-
-        <!-- 步骤执行紧凑轨道（EvoFlow 阶梯 + Lancer 流动动效） -->
-        <ol class="task-flow-track space-y-2" aria-label="执行步骤列表">
-          <li
-            v-for="(step, index) in currentFlow.steps"
-            :key="step.id"
-            class="step-item relative flex items-start gap-2.5 rounded-desk-sm p-2 transition-all"
-            :class="{
-              'is-running': isTaskFlowActive(step.phase),
-              'is-completed': step.phase === 'completed',
-              'is-failed': step.phase === 'failed',
-              'is-pending': step.phase === 'pending'
-            }"
-            :data-phase="step.phase"
-          >
-            <!-- 左侧状态节点（精致 SVG 徽章） -->
-            <div class="step-node-glyph shrink-0 mt-0.5 flex items-center justify-center w-5 h-5 rounded-full border bg-desk-surface z-1">
-              <!-- running: 脉冲核 -->
-              <template v-if="isTaskFlowActive(step.phase)">
-                <span class="relative flex h-3 w-3">
-                  <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-desk-accent opacity-75"></span>
-                  <span class="relative inline-flex rounded-full h-3 w-3 bg-desk-accent"></span>
-                </span>
-              </template>
-              <!-- completed: 绿勾 -->
-              <template v-else-if="step.phase === 'completed'">
-                <svg class="w-3.5 h-3.5 text-desk-success" viewBox="0 0 16 16" fill="currentColor">
-                  <path fill-rule="evenodd" d="M13.78 4.22a.75.75 0 0 1 0 1.06l-7.25 7.25a.75.75 0 0 1-1.06 0L2.22 9.28a.75.75 0 0 1 1.06-1.06L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0z"/>
-                </svg>
-              </template>
-              <!-- failed: 红色警告 -->
-              <template v-else-if="step.phase === 'failed'">
-                <svg class="w-3.5 h-3.5 text-desk-danger" viewBox="0 0 16 16" fill="currentColor">
-                  <path fill-rule="evenodd" d="M8 15A7 7 0 1 0 8 1a7 7 0 0 0 0 14zM8 4a.75.75 0 0 1 .75.75v3.5a.75.75 0 0 1-1.5 0v-3.5A.75.75 0 0 1 8 4zm0 8a1 1 0 1 0 0-2 1 1 0 0 0 0 2z"/>
-                </svg>
-              </template>
-              <!-- pending: 序号环 -->
-              <template v-else>
-                <span class="text-2xs font-mono font-medium text-desk-muted">{{ index + 1 }}</span>
-              </template>
+      <!-- 任务列表 -->
+      <div class="space-y-4">
+        <article
+          v-for="task in track.tasks"
+          :key="task.id"
+          class="task-card rounded-desk-sm border border-desk-line bg-desk-surface p-3 transition-colors"
+          :class="{ 'border-desk-line-strong shadow-desk-raise': task.current }"
+          :aria-label="task.title"
+        >
+          <!-- 任务主标题栏 -->
+          <header class="mb-3 space-y-1">
+            <div class="flex items-start justify-between gap-2.5">
+              <h4 class="min-w-0 break-words text-xs font-semibold leading-relaxed text-desk-ink">
+                {{ task.title }}
+              </h4>
+              <span
+                class="shrink-0 rounded-desk-xs px-1.5 py-0.5 font-mono text-2xs"
+                :class="[tones[task.status.tone], task.current && task.status.kind === 'running' ? 'bg-desk-accent/10 font-medium' : 'bg-desk-surface-subtle']"
+              >
+                {{ task.status.label }}
+              </span>
             </div>
+            <p class="text-2xs text-desk-muted">
+              {{ task.stages.length > 0 ? '业务阶段 · 流程跟踪' : '工作意图 · 单轮推进' }}
+            </p>
+          </header>
 
-            <!-- 右侧步骤内容：紧凑卡片并支持折叠展开 -->
-            <details
-              class="min-w-0 flex-1 group"
-              :open="isTaskFlowActive(step.phase) || (step.phase === 'completed' && index === currentFlow.steps.length - 1)"
-              @toggle="emit('expand')"
+          <!-- 业务阶段或轮次轨迹轨道 -->
+          <div class="task-sections space-y-4">
+            <section
+              v-for="section in sections(task)"
+              :key="section.id"
+              class="task-section relative"
+              :class="{ 'is-staged pl-4': section.title }"
             >
-              <summary class="flex cursor-pointer list-none items-center justify-between gap-2 py-0.5 text-xs select-none">
-                <span class="font-medium text-desk-ink break-words min-w-0">
-                  {{ step.title }}
+              <!-- 业务阶段标题（仅长任务多阶段存在） -->
+              <div v-if="section.title" class="stage-header relative mb-2 flex items-center justify-between gap-2 text-xs">
+                <div class="flex items-center gap-1.5 min-w-0">
+                  <span
+                    class="stage-indicator h-2 w-2 rounded-full border shrink-0"
+                    :class="section.current ? 'border-desk-accent bg-desk-accent shadow-xs' : 'border-desk-line-strong bg-desk-surface-subtle'"
+                    aria-hidden="true"
+                  ></span>
+                  <h5 class="break-words font-medium truncate" :class="section.current ? 'text-desk-accent' : 'text-desk-ink'">
+                    {{ section.title }}
+                  </h5>
+                </div>
+                <span v-if="section.status" class="shrink-0 text-2xs font-mono" :class="tones[section.status.tone]">
+                  {{ section.status.label }}
                 </span>
-                <div class="shrink-0 flex items-center gap-1.5">
-                  <span class="text-2xs text-desk-muted font-mono">
-                    {{ step.phase === 'pending' && currentFlow.phase !== 'pending' && !isTaskFlowActive(currentFlow.phase) ? '未执行' : label(step.phase) }}
-                  </span>
-                  <svg class="w-3 h-3 text-desk-muted transition-transform duration-200 group-open:rotate-90" viewBox="0 0 16 16" fill="currentColor">
-                    <path fill-rule="evenodd" d="M6.22 3.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.75.75 0 0 1-1.06-1.06L9.94 8 6.22 4.28a.75.75 0 0 1 0-1.06z"/>
-                  </svg>
-                </div>
-              </summary>
-
-              <!-- 折叠展开的明细内容 -->
-              <div class="mt-2 space-y-2 rounded-desk-xs bg-desk-surface-subtle p-2 text-xs border border-desk-line/60">
-                <p class="whitespace-pre-wrap break-words text-2xs text-desk-muted leading-relaxed">
-                  {{ step.instruction }}
-                </p>
-
-                <!-- 变更产物胶囊 -->
-                <div v-if="step.changedFiles && step.changedFiles.length > 0" class="space-y-1.5 rounded-desk-xs border border-desk-line bg-desk-surface p-2">
-                  <div class="flex items-center justify-between text-2xs font-medium text-desk-muted">
-                    <span>步骤变更产物</span>
-                    <span class="font-mono">{{ step.changedFiles.length }} 个文件</span>
-                  </div>
-                  <div class="flex flex-wrap gap-1">
-                    <span
-                      v-for="file in step.changedFiles"
-                      :key="file"
-                      class="inline-block max-w-full truncate rounded-desk-xs border border-desk-line bg-desk-surface-subtle px-1.5 py-0.5 font-mono text-2xs text-desk-ink"
-                      :title="file"
-                    >
-                      {{ formatPath(file) }}
-                    </span>
-                  </div>
-                </div>
-
-                <p v-if="step.result" class="whitespace-pre-wrap break-words text-2xs font-mono text-desk-ink bg-desk-surface p-1.5 rounded-desk-xs border border-desk-line/70">
-                  {{ step.result }}
-                </p>
-                <p v-if="step.error" class="whitespace-pre-wrap break-words text-2xs text-desk-danger bg-desk-danger-soft p-1.5 rounded-desk-xs border border-desk-danger/40">
-                  {{ step.error }}
-                </p>
-
-                <div v-if="step.resultEntryId || step.promptEntryId" class="pt-1">
-                  <AppButton
-                    variant="ghost"
-                    @click="emit('locate', step.resultEntryId ?? step.promptEntryId ?? '', props.ownerKey)"
-                  >
-                    定位会话记录
-                  </AppButton>
-                </div>
               </div>
-            </details>
-          </li>
-        </ol>
 
-        <p v-if="currentFlow.phase === 'completed'" class="text-2xs text-desk-muted text-center pt-2">
-          步骤执行已结束；不代表产出已经过检查或目标必然达成。
-        </p>
-      </template>
+              <!-- 连贯的垂直时间线轨道（Timeline Track） -->
+              <ol class="timeline-track relative space-y-2.5" aria-label="轮次工作流向">
+                <li
+                  v-for="(turn, turnIdx) in section.turns"
+                  :key="turn.id"
+                  :data-task-turn-id="turn.id"
+                  :data-current-focus="turn.current ? 'true' : undefined"
+                  class="timeline-item relative flex gap-2.5"
+                  :class="{ 'is-current': turn.current, 'is-expanded': isExpanded(turn) }"
+                >
+                  <!-- 垂直连接线（由 CSS 绘制）与状态节点图标（Glyph） -->
+                  <div class="timeline-node shrink-0 pt-0.5 flex flex-col items-center">
+                    <button
+                      type="button"
+                      class="node-disc flex h-4 w-4 items-center justify-center rounded-full border bg-desk-surface transition-all select-none"
+                      :class="[
+                        turn.current
+                          ? 'border-desk-accent text-desk-accent ring-2 ring-desk-accent/20'
+                          : turn.status.kind === 'failed'
+                            ? 'border-desk-danger text-desk-danger bg-desk-danger-soft'
+                            : turn.status.kind === 'interrupted'
+                              ? 'border-desk-warning text-desk-warning bg-desk-warning-soft'
+                              : 'border-desk-line text-desk-muted hover:border-desk-line-strong'
+                      ]"
+                      :title="isExpanded(turn) ? '收起此轮' : '展开此轮'"
+                      :aria-label="isExpanded(turn) ? `收起第 ${turnIdx + 1} 轮` : `展开第 ${turnIdx + 1} 轮`"
+                      @click="toggleTurn(turn)"
+                    >
+                      <!-- 进行中：微光脉冲点 -->
+                      <span v-if="turn.status.kind === 'running'" class="relative flex h-2 w-2">
+                        <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-desk-accent opacity-75 motion-reduce:animate-none"></span>
+                        <span class="relative inline-flex rounded-full h-2 w-2 bg-desk-accent"></span>
+                      </span>
+                      <!-- 完成：小点或序号 -->
+                      <span v-else-if="turn.status.kind === 'responded'" class="h-1.5 w-1.5 rounded-full bg-desk-muted"></span>
+                      <!-- 异常态：小警告点 -->
+                      <span v-else-if="turn.status.kind === 'failed' || turn.status.kind === 'interrupted'" class="h-1.5 w-1.5 rounded-full bg-current"></span>
+                      <!-- 默认空点 -->
+                      <span v-else class="h-1.5 w-1.5 rounded-full border border-desk-line-strong"></span>
+                    </button>
+                  </div>
+
+                  <!-- 节点内容主体 -->
+                  <div class="timeline-content min-w-0 flex-1 space-y-1">
+                    <!-- 紧凑概要行（点击可折叠/展开） -->
+                    <div
+                      class="group flex cursor-pointer items-start justify-between gap-2 select-none"
+                      @click="toggleTurn(turn)"
+                    >
+                      <div class="flex items-baseline gap-1.5 min-w-0">
+                        <span v-if="turn.time" class="shrink-0 font-mono text-2xs text-desk-muted">
+                          {{ turn.time }}
+                        </span>
+                        <span v-if="turn.current" class="shrink-0 font-medium text-2xs text-desk-accent">
+                          本轮
+                        </span>
+                        <p
+                          class="break-words text-xs leading-relaxed transition-colors"
+                          :class="[
+                            turn.current ? 'font-medium text-desk-ink' : 'text-desk-muted group-hover:text-desk-ink',
+                            !isExpanded(turn) ? 'line-clamp-1' : ''
+                          ]"
+                        >
+                          {{ turn.title }}
+                        </p>
+                      </div>
+                      <div class="flex items-center gap-1 shrink-0 text-desk-muted group-hover:text-desk-ink">
+                        <svg
+                          class="h-3 w-3 transition-transform duration-150 motion-reduce:transition-none"
+                          :class="{ 'rotate-90': isExpanded(turn) }"
+                          viewBox="0 0 16 16"
+                          fill="currentColor"
+                          aria-hidden="true"
+                        >
+                          <path fill-rule="evenodd" d="M6.22 3.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.75.75 0 0 1-1.06-1.06L9.94 8 6.22 4.28a.75.75 0 0 1 0-1.06z" clip-rule="evenodd" />
+                        </svg>
+                      </div>
+                    </div>
+
+                    <!-- 展开的详细卡片（Current 或被展开项可见） -->
+                    <div
+                      v-if="isExpanded(turn)"
+                      class="turn-detail mt-1.5 rounded-desk-xs border border-desk-line/70 bg-desk-surface-subtle/50 p-2 text-2xs leading-relaxed space-y-2"
+                    >
+                      <!-- 正在执行的实时动作反馈 -->
+                      <p v-if="turn.action" class="flex items-center gap-1.5 break-all font-mono text-desk-accent">
+                        <span class="h-1.5 w-1.5 rounded-full bg-desk-accent animate-pulse shrink-0 motion-reduce:animate-none"></span>
+                        <span>当前工具：{{ turn.action }}</span>
+                      </p>
+
+                      <!-- 本轮简要交付或结果总结 -->
+                      <div v-if="turn.summary" class="rounded-desk-xs bg-desk-surface border border-desk-line/60 p-1.5 text-desk-ink">
+                        <span class="font-medium text-desk-muted block mb-0.5">交付总结</span>
+                        <p class="break-words leading-relaxed">{{ turn.summary }}</p>
+                      </div>
+
+                      <!-- 成功修改的文件标签胶囊 -->
+                      <div v-if="turn.changedFiles.length > 0" class="space-y-1">
+                        <span class="font-medium text-desk-success block">已记录修改 {{ turn.changedFiles.length }} 个文件</span>
+                        <div class="flex flex-wrap gap-1">
+                          <span
+                            v-for="file in turn.changedFiles"
+                            :key="file"
+                            class="inline-block max-w-full truncate rounded-desk-xs border border-desk-line bg-desk-surface px-1.5 py-0.2 font-mono text-desk-ink"
+                            :title="file"
+                          >
+                            {{ file }}
+                          </span>
+                        </div>
+                      </div>
+
+                      <!-- 操作栏：展开依据 / 定位对话 -->
+                      <div class="flex items-center justify-between gap-2 pt-1 border-t border-desk-line/50">
+                        <AppButton
+                          variant="ghost"
+                          :aria-expanded="detailsExpansion[turn.id] === true"
+                          @click="toggleDetails(turn)"
+                        >
+                          {{ detailsExpansion[turn.id] ? '收起依据' : '查看依据' }}
+                        </AppButton>
+                        <AppButton
+                          v-if="turn.messageId"
+                          variant="ghost"
+                          :aria-label="`定位对话：${turn.title}`"
+                          @click="locateTurn(turn)"
+                        >
+                          定位对话 ↗
+                        </AppButton>
+                      </div>
+
+                      <!-- 深层下钻依据：用户原文、回复文本、完整工具记录 -->
+                      <div v-if="detailsExpansion[turn.id]" class="space-y-2.5 pt-1.5 border-t border-desk-line/40 text-desk-muted">
+                        <details v-if="turn.request" class="group">
+                          <summary class="cursor-pointer font-medium hover:text-desk-ink select-none">用户原文</summary>
+                          <p class="mt-1 max-h-36 overflow-y-auto whitespace-pre-wrap break-words rounded-desk-xs bg-desk-surface p-1.5 font-mono text-desk-ink border border-desk-line/60">
+                            {{ turn.request }}
+                          </p>
+                        </details>
+
+                        <details v-if="turn.responseText" class="group">
+                          <summary class="cursor-pointer font-medium hover:text-desk-ink select-none">助手原始回复</summary>
+                          <p class="mt-1 max-h-40 overflow-y-auto whitespace-pre-wrap break-words rounded-desk-xs bg-desk-surface p-1.5 font-mono text-desk-ink border border-desk-line/60">
+                            {{ turn.responseText }}
+                          </p>
+                        </details>
+
+                        <!-- 工具活动列表 -->
+                        <div v-if="turn.activities.length > 0" class="space-y-1">
+                          <span class="font-medium block">底层操作流水（{{ turn.activities.reduce((s, a) => s + a.count, 0) }} 项）</span>
+                          <ul class="space-y-1">
+                            <li
+                              v-for="activity in turn.activities"
+                              :key="activity.id"
+                              class="rounded-desk-xs bg-desk-surface px-1.5 py-1 border border-desk-line/50 flex items-start justify-between gap-2"
+                            >
+                              <div class="min-w-0">
+                                <span class="font-medium text-desk-ink">
+                                  {{ activity.title }}
+                                  <span v-if="activity.count > 1" class="font-normal text-desk-muted">×{{ activity.count }}</span>
+                                </span>
+                                <p v-for="subject in activity.subjects.slice(0, 2)" :key="subject" class="truncate font-mono text-desk-muted" :title="subject">
+                                  {{ subject }}
+                                </p>
+                              </div>
+                              <span class="shrink-0 font-mono" :class="tones[activity.status.tone]">
+                                {{ activity.status.label }}
+                              </span>
+                            </li>
+                          </ul>
+                        </div>
+
+                        <!-- 读取参考的文件 -->
+                        <details v-if="turn.readFiles.length > 0" class="group">
+                          <summary class="cursor-pointer font-medium hover:text-desk-ink select-none">
+                            读取参考 · {{ turn.readFiles.length }} 个文件
+                          </summary>
+                          <ul class="mt-1 space-y-0.5 rounded-desk-xs bg-desk-surface p-1.5 font-mono border border-desk-line/60">
+                            <li v-for="file in turn.readFiles" :key="file" class="truncate" :title="file">{{ file }}</li>
+                          </ul>
+                        </details>
+
+                        <!-- 历史未载入时的补读入口 -->
+                        <div v-if="turn.history.available" class="pt-1">
+                          <p v-if="turn.history.error" class="text-desk-danger" role="status">{{ turn.history.error }}</p>
+                          <AppButton
+                            v-if="!turn.history.loaded || turn.history.hasMore || turn.history.loading"
+                            variant="ghost"
+                            :disabled="turn.history.loading"
+                            @click="loadTurn(turn)"
+                          >
+                            {{ turn.history.loading ? '正在载入…' : turn.history.error ? '重试读取' : turn.history.loaded ? '载入后续记录' : '载入完整执行记录' }}
+                          </AppButton>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </li>
+              </ol>
+            </section>
+          </div>
+        </article>
+      </div>
+
+      <!-- 结构化任务计划抽屉（若注册了 task_plan） -->
+      <details v-if="plans.length > 0" class="border-t border-desk-line pt-3" @click="followingLatest = false">
+        <summary class="cursor-pointer rounded-desk-sm text-2xs font-medium text-desk-muted hover:text-desk-ink select-none">
+          已登记的计划步骤（{{ plans.length }} 项）
+        </summary>
+        <div class="mt-2.5 space-y-3">
+          <TaskFlowSteps
+            v-for="flow in plans"
+            :key="flow.id"
+            :flow="flow"
+            :live="live"
+            :uncertain="notice !== null"
+            :project-root="projectRoot"
+            @locate="entryId => emit('locate', entryId, ownerKey)"
+            @inspect="followingLatest = false"
+          />
+        </div>
+      </details>
+
+      <!-- 完全空态 -->
+      <p v-if="track.tasks.length === 0 && plans.length === 0" class="py-8 text-center text-xs text-desk-muted">
+        暂无可展示的任务信息
+      </p>
     </div>
   </section>
 </template>
@@ -406,104 +480,31 @@ function isLineLit(stepIndex: number, steps: readonly { readonly phase: TaskFlow
   min-height: 0;
 }
 
-/* 焦点卡片流动边框动效（Lancer Light UI 流动光线） */
-.focus-card {
-  position: relative;
-  background: var(--color-desk-surface-subtle);
-  border: 1px solid var(--color-desk-line);
-}
-
-.focus-card.is-active-running {
-  border-color: var(--color-desk-accent);
-  background: color-mix(in srgb, var(--color-desk-accent) 4%, var(--color-desk-surface));
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-desk-accent) 25%, transparent),
-              0 2px 8px color-mix(in srgb, var(--color-desk-accent) 10%, transparent);
-}
-
-.flow-action-strip {
-  position: relative;
-  overflow: hidden;
-}
-
-.is-active-running .flow-action-strip::after {
+/* 垂直轨道连续线：连接前后节点 */
+.timeline-item:not(:last-child) .timeline-node::after {
   content: '';
   position: absolute;
-  top: 0;
-  bottom: 0;
-  left: -100%;
-  width: 50%;
-  background: linear-gradient(
-    90deg,
-    transparent 0%,
-    color-mix(in srgb, var(--color-desk-accent) 20%, transparent) 50%,
-    transparent 100%
-  );
-  animation: light-beam 2.4s ease-in-out infinite;
-}
-
-/* 步骤项目与连接线 */
-.step-item {
-  position: relative;
-  border: 1px solid var(--color-desk-line);
-  background: var(--color-desk-surface);
-}
-
-.step-item:not(:last-child)::before {
-  content: '';
-  position: absolute;
-  top: 24px;
+  top: 18px;
   bottom: -10px;
-  left: 17px;
+  left: 7.5px;
   width: 1px;
   background: var(--color-desk-line);
   z-index: 0;
 }
 
-.step-item.is-completed:not(:last-child)::before {
-  background: color-mix(in srgb, var(--color-desk-success) 50%, var(--color-desk-line));
+/* 阶段缩进时左侧的阶段轨道线 */
+.task-section.is-staged::before {
+  content: '';
+  position: absolute;
+  left: 3.5px;
+  top: 10px;
+  bottom: 0;
+  width: 1px;
+  background: var(--color-desk-line);
+  z-index: 0;
 }
 
-.step-item.is-running {
-  border-color: var(--color-desk-accent);
-  background: color-mix(in srgb, var(--color-desk-accent) 5%, var(--color-desk-surface));
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-desk-accent) 30%, transparent);
-}
-
-.step-item.is-running .step-node-glyph {
-  border-color: var(--color-desk-accent);
-  box-shadow: 0 0 6px color-mix(in srgb, var(--color-desk-accent) 40%, transparent);
-}
-
-.step-item.is-completed .step-node-glyph {
-  border-color: var(--color-desk-success);
-  background: var(--color-desk-success-soft);
-}
-
-.step-item.is-failed .step-node-glyph {
-  border-color: var(--color-desk-danger);
-  background: var(--color-desk-danger-soft);
-}
-
-.step-item.is-pending {
-  opacity: 0.85;
-}
-
-summary::-webkit-details-marker {
-  display: none;
-}
-
-@keyframes light-beam {
-  0% { transform: translateX(0); }
-  100% { transform: translateX(350%); }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .is-active-running .flow-action-strip::after {
-    animation: none;
-    display: none;
-  }
-  .animate-ping, .animate-pulse {
-    animation: none !important;
-  }
+.timeline-item.is-current .node-disc {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-desk-accent) 15%, transparent);
 }
 </style>

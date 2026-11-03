@@ -1,6 +1,7 @@
 /** 会话投影契约：消息、工具、任务流程、历史、活动与用量的展示结构；投影批次与历史分页也在这里。 */
 
 import type { TaskFlow, TaskFlowState } from '../task-flow'
+import type { TaskIntent } from '../task-intent'
 import type { RuntimeError } from './status'
 import type { GenuiPayload } from '../genui-api'
 import type { ImageAnnotationAttachment } from '../image-annotation'
@@ -243,6 +244,8 @@ export interface MessageUsage {
 
 /** `id` 由 Desktop 生成，不冒充 Pi 消息字段。 */
 export interface ProjectionMessage {
+  /** Agent 上报的本轮公开工作说明；仅用户消息携带，不替代程序运行状态。 */
+  readonly taskIntent?: TaskIntent
   /** 只属于本条用户消息的图片资料；图片序号与原始内容块中的图片顺序一致。 */
   readonly imageAnnotations?: readonly ImageAnnotationAttachment[]
   readonly id: string

@@ -2,6 +2,7 @@
 
 import { isTaskFlow, isTaskFlowProbe, isTaskFlowState, TASK_FLOW_MAX_FLOWS } from '../task-flow'
 import type { TaskFlowReadResult } from '../task-flow'
+import { isTaskIntent } from '../task-intent'
 import { COMPACT_INSTRUCTIONS_MAX_CHARS } from './status'
 import type { PromptDisposition, PromptResult, RuntimeCompactRequest, RuntimeDiagnosticsResult, RuntimeError, RuntimeInfo, RuntimeResult, RuntimeRewindRequest, RuntimeRewindResult, RuntimeSetModelRequest, RuntimeState, RuntimeStatus, RuntimeTarget } from './status'
 import type { AgentCapabilities, CapabilitiesResult, ModelIdentity, ModelSummary } from './models'
@@ -432,6 +433,8 @@ function isProjectionMessage(value: unknown): value is ProjectionMessage {
     && (value.entryId === undefined || value.entryId === null || isHistoryId(value.entryId))
     && (value.recoverable === undefined || typeof value.recoverable === 'boolean')
     && (value.turnEntryId === undefined || isHistoryId(value.turnEntryId))
+    && (value.taskIntent === undefined || (value.role === 'user' && isTaskIntent(value.taskIntent)
+      && value.entryId === value.taskIntent.turnEntryId))
     && (value.imageAnnotations === undefined || (value.role === 'user'
       && parseImageAnnotationAttachments(value.imageAnnotations) !== null))
     && compaction

@@ -27,6 +27,7 @@
 import { PROMPT_IMAGE_MAX_CHARS, PROMPT_IMAGE_MAX_COUNT } from '../../../shared/runtime-api'
 import type { MessageUsage, ProjectionBlock, ProjectionCompaction, ProjectionMessage, PromptImageInput, ToolExecution } from '../../../shared/runtime-api'
 import type { GenuiPayload } from '../../../shared/genui-api'
+import type { TaskIntent } from '../../../shared/task-intent'
 import { parseSkillBlock, stripImageMarkerLines } from '../../../shared/user-message-text'
 import { cloneImageAnnotations } from '../../../shared/image-annotation'
 import type { ImageAnnotationDocument } from '../../../shared/image-annotation'
@@ -105,12 +106,16 @@ export interface ChatTurnView {
 }
 
 export interface ChatMessageView {
+  /** 语义由宿主随用户消息给出；本模块不从正文或思考中推断。 */
+  readonly taskIntent?: TaskIntent
   readonly id: string
   readonly entryId: string | null
   readonly recoverable: boolean
   readonly turnEntryId: string | null
   readonly role: 'user' | 'assistant' | 'compaction'
   readonly blocks: readonly ChatBlock[]
+  /** 原始停止原因供状态展示区分失败与用户中止，不从中文错误文案反推。 */
+  readonly stopReason?: ProjectionMessage['stopReason']
   /** 整条消息的失败文案；非 null 时界面按错误提示展示。 */
   readonly failure: string | null
   readonly time: string | null
@@ -475,12 +480,14 @@ function buildMessageView(
 
   return {
     view: {
+      ...(message.taskIntent === undefined ? {} : { taskIntent: message.taskIntent }),
       id: message.entryId ? `history:${message.entryId}` : message.id,
       entryId: message.entryId ?? null,
       recoverable: message.recoverable === true,
       turnEntryId: message.turnEntryId ?? null,
       role: message.role,
       blocks,
+      stopReason: message.stopReason,
       failure: messageFailureText(message),
       time: formatMessageTime(message.timestamp),
       generation: message.generation,

@@ -13,6 +13,8 @@ import { TaskFlowController } from './task-flow/controller'
 import type { TaskStepOutcome } from './task-flow/controller'
 import { createTaskFlowExtension, TASK_FLOW_EXTENSION_NAME } from './task-flow/index'
 import { readTaskFlowHistory } from './task-flow/history'
+import { createTaskIntentExtension, createTaskIntentReport, TASK_INTENT_EXTENSION_NAME } from './task-intent'
+import { TASK_INTENT_ENTRY_TYPE } from '../shared/task-intent'
 import { TASK_FLOW_ENTRY_TYPE, resolveTaskFlowStart } from '../shared/task-flow'
 import { toolLocalName } from '../shared/tool-operation'
 import type { TaskFlow, TaskFlowProbe, TaskFlowStep } from '../shared/task-flow'
@@ -938,6 +940,19 @@ export class SdkSessionRuntime {
                 || ctx.sessionManager.getSessionId() !== session.sessionId) throw new Error('任务计划不属于当前会话。')
               const origin = session.sessionManager.getBranch().findLast(entry => entry.type === 'message' && entry.message.role === 'user')
               return this.taskFlow.create(plan, origin?.id ?? null)
+            }) },
+          { name: TASK_INTENT_EXTENSION_NAME, builtin: true, replaceable: true,
+            factory: createTaskIntentExtension((input, ctx) => {
+              const session = this.session
+              if (!this.valid || session === null || this.currentCreation !== creation || this.bindingId === null
+                || this.needsHostRebuild || this.closing || ctx.sessionManager.getSessionId() !== session.sessionId) {
+                throw new Error('任务说明不属于当前有效会话，未记录。')
+              }
+              const report = createTaskIntentReport(session.sessionManager.getBranch(), input)
+              // 持久化失败时不发布成功副本；语义没有执行入口，也不修改任务控制器。
+              session.sessionManager.appendCustomEntry(TASK_INTENT_ENTRY_TYPE, report)
+              this.projection?.setTaskIntent(report)
+              return report
             }) },
           // 图片资料是独立上下文消息，不改写提示词，也不提供新的模型工具。
           this.imageAnnotations.extension,

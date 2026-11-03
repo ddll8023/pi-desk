@@ -20,6 +20,8 @@
  * 并让渲染端整表重同步，不伪装成完整内容。
  */
 import type { TaskFlowState } from '../../shared/task-flow'
+import { newerTaskIntent } from '../../shared/task-intent'
+import type { TaskIntent } from '../../shared/task-intent'
 import type {
   MessageUsage,
   HistoryPage,
@@ -87,6 +89,7 @@ interface MutableBlock {
 }
 
 interface MutableMessage {
+  taskIntent?: TaskIntent
   imageAnnotations?: readonly ImageAnnotationAttachment[]
   /** 来源身份只在主进程核对，不跨 IPC 暴露摘要。 */
   sourceIdentity: UserMessageIdentity | null
@@ -173,6 +176,8 @@ export class MessageProjection {
   private disposed = false
   private rebuilding = false
   private readonly toolProjection: ToolProjection
+  /** 仅暂存尚未取得消息映射的语义；不按时间或数组下标猜轮次。 */
+  private readonly pendingIntents = new Map<string, TaskIntent>()
   private taskFlow: TaskFlowState | undefined
   private activity: SessionActivity | undefined
   private activitySignature = ''
@@ -316,6 +321,7 @@ export class MessageProjection {
   replaceProjectedHistory(page: HistoryPage, revision: number): void {
     this.clearTimer()
     this.pending = []; this.outstanding = []; this.messages.length = 0
+    this.pendingIntents.clear()
     this.active = null; this.activeTurn = null
     this.droppedMessages = 0; this.truncated = false
     this.toolProjection.reset()
@@ -330,6 +336,27 @@ export class MessageProjection {
     if (state === this.taskFlow) return
     this.taskFlow = state
     this.queueUpdate({ kind: 'task-flow', state })
+    this.flush()
+  }
+
+  /** 语义只更新已经核实的用户轮次；未映射时等官方条目 ID 回填后再发布。 */
+  setTaskIntent(intent: TaskIntent): void {
+    if (this.disposed) return
+    const message = this.messages.find(candidate => candidate.role === 'user' && candidate.entryId === intent.turnEntryId)
+    if (message === undefined) {
+      const latest = newerTaskIntent(intent, this.pendingIntents.get(intent.turnEntryId))
+      if (latest !== undefined) this.pendingIntents.set(intent.turnEntryId, latest)
+      while (this.pendingIntents.size > MAX_UPDATES_PER_BATCH) {
+        const oldest = this.pendingIntents.keys().next().value
+        if (oldest === undefined) break
+        this.pendingIntents.delete(oldest)
+      }
+      return
+    }
+    const latest = newerTaskIntent(intent, message.taskIntent)
+    if (latest === undefined || latest === message.taskIntent) return
+    message.taskIntent = latest
+    this.queueUpdate({ kind: 'message', message: this.toPublicMessage(message) })
     this.flush()
   }
 
@@ -349,6 +376,9 @@ export class MessageProjection {
     if (message === undefined || message.entryId !== undefined) return false
     message.entryId = entryId
     if (turnEntryId) message.turnEntryId = turnEntryId
+    const intent = this.pendingIntents.get(entryId)
+    if (message.role === 'user' && intent !== undefined) message.taskIntent = intent
+    this.pendingIntents.delete(entryId)
     this.queueUpdate({ kind: 'message', message: this.toPublicMessage(message) })
     this.flush()
     return true
@@ -380,6 +410,7 @@ export class MessageProjection {
     this.pending = []
     this.outstanding = []
     this.messages.length = 0
+    this.pendingIntents.clear()
     this.active = null
     this.activeTurn = null
     this.droppedMessages = 0
@@ -474,6 +505,7 @@ export class MessageProjection {
     this.pending = []
     this.outstanding = []
     this.messages.length = 0
+    this.pendingIntents.clear()
     this.active = null
     this.activeTurn = null
     this.toolProjection.dispose()
@@ -1072,6 +1104,7 @@ export class MessageProjection {
   private toPublicMessage(message: MutableMessage): ProjectionMessage {
     return {
       ...(message.imageAnnotations === undefined ? {} : { imageAnnotations: message.imageAnnotations }),
+      ...(message.taskIntent === undefined ? {} : { taskIntent: message.taskIntent }),
       id: message.id,
       role: message.role,
       blocks: message.blocks.map((block) => this.toPublicBlock(block)),
