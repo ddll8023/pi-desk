@@ -5,3 +5,11 @@ release/
 /runtime
 # macOS Finder 在每个目录生成的元数据文件，与项目内容无关。
 .DS_Store
+
+# Python 虚拟环境与缓存
+.venv/
+__pycache__/
+*.pyc
+
+# 记忆引擎系统运行时缓存与锁
+.system/
