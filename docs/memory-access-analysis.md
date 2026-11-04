@@ -41,7 +41,7 @@
 - 默认用户库 `~/.agents/memory-store/.system/` 下截至本轮尚无 `access.json`，`memory_status` 报告 `status: not_collected`。
 - 未产生统计记录的核心原因包括两层：
   1. **跨平台换行符导致索引指纹校验失败（运行阻断）**：Mac 端提交的派生索引（`index/search.json`）记录的是 LF 换行符哈希，而在 Windows 下 Git 若开启 `core.autocrlf=true` 会将文本检出为 CRLF，导致 `check_search_sources` 抛出 `INDEX_STALE` 错误，阻断了 `memory_read`、`memory_search` 及统计写入链路。现已通过用户库 `.gitattributes`（`* text eol=lf`）及 `reindex` 彻底解除该阻断。
-  2. **检索与规则工具直接返回全文导致调用替代（漏斗归零）**：现有采集口径仅覆盖 `memory_read`（定向读原文）。但在真实会话中，`memory_search` 与 `memory_rules` 已直接返回记录全文（`content`），模型完成检索后已取得足够事实，在实际会话中极少或从未触发二次定向读取 `memory_read`。
+  2. **检索与规则工具直接返回全文导致调用替代（漏斗归零）**：现有采集口径仅覆盖 `memory_read`（定向读原文）。但在真实会话中，`memory_search` 与 `memory_rules` 曾直接返回记录全文（`content`），模型完成检索后已取得足够事实，在实际会话中极少触发二次定向读取 `memory_read`。现已通过 P0 改动将检索与规则工具调整为默认返回前 200 字摘要并附带 `content_truncated` 标识，漏斗绕过问题已在代码层解除。
 
 因此，本轮仍没有可用于分析的实际访问分布。这表示在所检查的存储位置尚无统计文件，不表示所有记录历史上均为零次，也不能推断其他环境的数据情况。后续分析须重新读取当时的部署与数据事实，不能沿用此处观察来判断届时是否已经生效。
 
