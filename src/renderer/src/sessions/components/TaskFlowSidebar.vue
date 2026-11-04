@@ -1,4 +1,4 @@
-<!-- 用户任务侧栏宿主：固定会话与工作区身份，接入任务概览、计划动作、结果文件和既有问题入口。 -->
+<!-- 用户任务侧栏宿主：固定会话与工作区身份，接入任务概览、计划动作和既有问题入口。 -->
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, watch } from 'vue'
 import { createTaskFlowMotion } from '../task-flow-motion'

@@ -295,14 +295,6 @@ function buildTaskTrackNodes(task: SessionTaskGroup, live: boolean): TaskTrackNo
       }))
     }
   }
-  if (task.summary !== null || task.artifacts.length > 0) {
-    const source = [...task.turns].reverse().find(turn => turn.summary === task.summary && turn.summary !== null)
-    nodes.push({ id: 'delivery', kind: 'delivery', title: task.artifacts.some(item => item.kind === 'change') ? '交付与变更' : '任务交付',
-      description: task.summary, status: task.status.kind === 'delivered'
-        ? { kind: 'delivered', label: '已交付', tone: 'success' } : { kind: 'responded', label: '已记录', tone: 'muted' },
-      current: task.status.kind === 'delivered', entryId: source?.report?.turnEntryId ?? source?.historyId ?? null,
-      turns: source === undefined ? [] : [source], artifacts: task.artifacts })
-  }
   return nodes
 }
 
