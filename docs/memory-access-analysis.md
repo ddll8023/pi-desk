@@ -35,13 +35,15 @@
 
 ### 2.2 本轮实际观察到的数据条件
 
-静态调查发现：
+静态与运行调查发现：
 
-- 扩展维护源包含自动统计调用与 `memory_access_stats` 工具。
-- 本机部署副本的 `memory_read` 仍直接返回原文，没有自动统计调用，也未注册该统计查询工具。
-- 默认用户库 `~/.agents/memory-store/.system/` 下没有 `access.json`。
+- 扩展维护源与本机部署副本（`~/.pi/agent/extensions/pi-memory/`）已完全对齐，均包含自动统计调用并已注册 `memory_access_stats` 工具。
+- 默认用户库 `~/.agents/memory-store/.system/` 下截至本轮尚无 `access.json`，`memory_status` 报告 `status: not_collected`。
+- 未产生统计记录的核心原因包括两层：
+  1. **跨平台换行符导致索引指纹校验失败（运行阻断）**：Mac 端提交的派生索引（`index/search.json`）记录的是 LF 换行符哈希，而在 Windows 下 Git 若开启 `core.autocrlf=true` 会将文本检出为 CRLF，导致 `check_search_sources` 抛出 `INDEX_STALE` 错误，阻断了 `memory_read`、`memory_search` 及统计写入链路。现已通过用户库 `.gitattributes`（`* text eol=lf`）及 `reindex` 彻底解除该阻断。
+  2. **检索与规则工具直接返回全文导致调用替代（漏斗归零）**：现有采集口径仅覆盖 `memory_read`（定向读原文）。但在真实会话中，`memory_search` 与 `memory_rules` 已直接返回记录全文（`content`），模型完成检索后已取得足够事实，在实际会话中极少或从未触发二次定向读取 `memory_read`。
 
-因此，本轮没有可用于分析的实际访问分布。这表示在所检查的存储位置尚无统计文件，不表示所有记录历史上均为零次，也不能推断其他环境的数据情况。后续分析须重新读取当时的部署与数据事实，不能沿用此处观察来判断届时是否已经生效。
+因此，本轮仍没有可用于分析的实际访问分布。这表示在所检查的存储位置尚无统计文件，不表示所有记录历史上均为零次，也不能推断其他环境的数据情况。后续分析须重新读取当时的部署与数据事实，不能沿用此处观察来判断届时是否已经生效。
 
 不为补齐分布扫描历史会话或补造事件，也不把维护源能力、工具描述或已有类型检查结果当作运行采集已经生效的证据。
 
@@ -183,6 +185,8 @@
 
 - 当时实际启用的采集入口与口径是什么，是否仍只覆盖 `memory_read`？
 - 统计是否已经开始采集，覆盖起点在哪里，是否存在不可用或未确认事件？
+- 跨平台检出是否已保持 LF 换行符与派生索引指纹一致，是否存在 `INDEX_STALE` 导致的静默读取中断？
+- 搜索和规则工具直接返回正文是否形成了完整的调用替代，导致 `memory_read` 漏斗被绕过？
 - 记录的新旧、存续时间和任务机会是否明显不同，是否适合直接比较累计次数？
 - 是否只有汇总计数，还是另有获准采集的曝光与反馈信息？没有的信息不推算、不补造。
 
@@ -211,6 +215,7 @@
 - 扩展维护源：`~/.pi/agent/skills/pi-skill-setup/assets/extensions/pi-memory/` 下的 `tools.ts`、`context.ts`、`engine.ts` 与 `index.ts`。
 - 本机部署副本：`~/.pi/agent/extensions/pi-memory/` 下的 `tools.ts`、`engine.ts` 与 `config.json`。
 - 用户库目录：`~/.agents/memory-store/.system/`；接续原文位于 `daily/2026/11/2026-11-02.md`，项目为 `pi-desktop`。
+- 用户库换行符规范：`~/.agents/memory-store/.gitattributes`（`* text eol=lf`），确保跨操作系统检出内容 SHA-256 指纹与 `index/search.json` 保持一致。
 - 接续记录：调研结论 `m_01M6E8KVD5JW1BVPTK571R4S1J`、统计决定 `m_01M6E8KVD556MQGD25C91YJVEP`、实现进展 `m_01M6E8KVD5X24N8PFQPC6SPBDV`。历史记录保留来源条件，不代替当前代码与数据事实。
 
 这些用户级路径是本机来源线索，不是跨机部署模板；重新分析时按实际环境确认。
