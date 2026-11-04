@@ -64,7 +64,7 @@
 
 | 本项目能力 | 对方对应 | 差异 |
 | --- | --- | --- |
-| **会话捕获与上下文注入** | **Proxy 管道注入 (Session Binding & System Prompt)** | 对方通过独立双协议 Proxy 服务拦截 Agent 流量，在 System Prompt 强行拼装注入 Agent 记忆、Skill 与 Wiki 上下文；本项目通过用户级扩展在 `context` 钩子注入画像与项目索引，正文不修改系统提示词，日记检索依赖显式工具（`memory_search` / `memory_read` 等）由模型根据任务自主按需调用。 |
+| **会话捕获与上下文注入** | **Proxy 管道注入 (Session Binding & System Prompt)** | 对方通过独立双协议 Proxy 服务拦截 Agent 流量，在 System Prompt 强行拼装注入 Agent 记忆、Skill 与 Wiki 上下文；本项目通过用户级扩展在 `context` 钩子注入画像、项目索引及按任务自动召回的相关规则与日记，正文不修改系统提示词与用户输入，深入细节仍由模型通过显式工具自主按需深入读取。 |
 | **检索与相关度排序** | **混合检索 (BM25 + 向量 + RRF)** | 对方采用 BM25 词法检索与本地/云端向量检索（sqlite-vec / TCVDB）并通过倒数排名融合（RRF）进行混合打分；本项目检索核心目前仅采用中文双字词元与英文词元的 BM25 词法相关性，尚未引入向量检索与 Embedding 计算。 |
 | **Skill 资产与沉淀** | **Skill 库提炼与管理** | 对方提供从会话执行轨迹中自动提取 Skill 并进行团队资产化分发的闭环；本项目遵循 Pi 原生 `SKILL.md` 标准，强调任务执行前的 `skill_guard` 运行时门禁、上下文全文加载证据审查与逐文件清单审批。 |
 
