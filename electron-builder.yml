@@ -13,7 +13,7 @@ npmRebuild: false
 directories:
   output: release
   buildResources: build
-# 只收构建产物；package.json 与生产依赖的 node_modules 由 electron-builder 固定纳入。
+# 收集构建产物与随前端分发的 Light UI 许可；package.json 与生产依赖的 node_modules 由 electron-builder 固定纳入。
 # 受管入口（SDK 宿主、CLI 运行器、版本检查脚本、认证辅助进程）以裸模块名解析官方 SDK，
 # 因此生产依赖必须落在应用目录的 node_modules 下。node-pty 的 prebuilds/（含 conpty.dll）
 # 必须一并随包，任何过滤规则都不能排除它，否则终端无法启动。
@@ -22,6 +22,9 @@ directories:
 files:
   - package.json
   - out/**
+  # 原版 Light UI 随前端分发，版权与许可文本必须一并保留。
+  - licenses/lancer-light-ui-MIT.txt
+  - licenses/lancer-light-ui-NOTICE.txt
 win:
   # 用预生成的多尺寸 .ico（源是 build/icon.svg），不用 .svg：electron-builder 的 SVG 转换工具
   # （resvg + libvips WASM）会为每个 CPU 核分配一个 1 GiB、不可增长的共享 WebAssembly 内存，

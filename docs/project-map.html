@@ -254,7 +254,7 @@
         ],
         "constraints": [
           "设置页只是业务模块的导航容器，不持有全部设置值",
-          "右侧面板承载文件、Git 与当前会话的只读任务页；执行控制在聊天中",
+          "右侧面板承载文件、Git 与当前会话的任务流程页；任务可在面板开始或继续，停止操作由输入坞控制",
           "单窗口、单实例，事件只投递给可信主 frame"
         ],
         "links": [
@@ -272,9 +272,10 @@
           "历史按会话寻址：已绑定读权威分支，未绑定由日志解析作答",
           "运行注册表管理运行身份、绑定代际与占用",
           "消息、工具、任务流程、历史、活动与用量投影",
-          "task_plan 只登记串行步骤；无附件的明确启动口令在聊天中分流，停止操作通过聊天输入坞停止键发起",
+          "task_plan 只登记串行步骤；支持任务面板就地开始／继续或无附件聊天口令启动，停止操作通过聊天输入坞停止键发起",
           "任务状态变化即时推送，在途任务按水位读取轻量快照补齐遗漏",
-          "右侧任务流程页只读展示当前对话的状态、结果与记录定位，切换页签不停止同步",
+          "右侧任务流程页采用单轨道展示当前任务流向、交付文件与记录定位，切换页签不停止同步",
+          "运行中通过原版 Light UI 光线将真实事件与轨道节点连接，运行气泡与当前步骤接入同色流动边框",
           "用量弹窗展示会话统计与独立的 Codex 账户额度，支持刷新",
           "点击立即展示本地待发送消息，后台就绪后提交固定输入",
           "输入坞内图片附件区提供点框编号与绑定说明，随提示词提交但不拼入提示词",
@@ -301,15 +302,17 @@
           {"kind": "关键实现", "label": "任务意图与阶段契约", "path": "src/shared/task-intent.ts"},
           {"kind": "关键实现", "label": "任务状态契约与启动匹配", "path": "src/shared/task-flow.ts"},
           {"kind": "关键实现", "label": "在途任务轻量对账", "path": "src/renderer/src/sessions/task-flow-sync.ts"},
+          {"kind": "关键实现", "label": "任务光线与事件适配", "path": "src/renderer/src/sessions/task-flow-motion.ts"},
           {"kind": "关键实现", "label": "任务轨迹与阶段展示模型", "path": "src/renderer/src/sessions/task-flow-view.ts"},
-          {"kind": "界面入口", "label": "右侧只读任务页", "path": "src/renderer/src/sessions/components/TaskFlowSidebar.vue"},
-          {"kind": "界面入口", "label": "计划步骤轨道", "path": "src/renderer/src/sessions/components/TaskFlowSteps.vue"},
-          {"kind": "界面入口", "label": "任务意图与业务流程看板", "path": "src/renderer/src/sessions/components/TaskFlowPanel.vue"}
+          {"kind": "界面入口", "label": "任务侧栏宿主与动效编排", "path": "src/renderer/src/sessions/components/TaskFlowSidebar.vue"},
+          {"kind": "界面入口", "label": "计划步骤与就地操作", "path": "src/renderer/src/sessions/components/TaskFlowSteps.vue"},
+          {"kind": "界面入口", "label": "原版流动运行边框", "path": "src/renderer/src/sessions/components/TaskRunningBorder.vue"},
+          {"kind": "界面入口", "label": "任务单轨道流程看板", "path": "src/renderer/src/sessions/components/TaskFlowPanel.vue"}
         ],
         "resources": [
           {"name": "会话历史文件", "owner": "官方 SDK", "lifecycle": "位于 Pi agent 目录下的项目会话文件；应用内占用由主进程注册表维护"},
           {"name": "页面投影留底与历史缓存", "owner": "renderer Runtime Store", "lifecycle": "展示缓存，不替代会话历史存储"},
-          {"name": "串行任务状态与记录", "owner": "TaskFlowController 与官方会话管理器", "lifecycle": "状态由 SDK 宿主控制器维护，记录保存为当前分支的自定义条目，不加入模型上下文，不自动恢复执行"},
+          {"name": "串行任务状态、公开语义与记录", "owner": "TaskFlowController 与官方会话管理器", "lifecycle": "状态由 SDK 宿主控制器维护，公开语义（目标、阶段、待处理与产物）随当前分支自定义条目保存，不加入模型上下文，不自动恢复执行"},
           {"name": "图片标注资料", "owner": "会话输入状态与官方 SDK", "lifecycle": "未提交草稿按原输入身份留在页面内存；已提交资料随会话历史保存，投影按所属图片还原"}
         ],
         "constraints": [
@@ -318,8 +321,8 @@
           "图片编号、位置与说明绑定，不改写原图像素；说明由 SDK 附属消息提供，不参与提示词命令或模板处理",
           "历史读取只接受项目与会话，不接受任意文件路径",
           "关闭标签保留历史，与删除会话不同",
-          "启动计划不新增操作授权；执行完成不等于业务目标达成或产出已经检查",
-          "失败、中断或停止后不继续派发后续步骤，不自动重试或重放历史任务",
+          "启动与继续计划不新增操作授权；执行完成不等于业务目标达成或产出已经检查",
+          "步骤收敛前模型须声明交付结果；未获授权或受阻进入等待并停止继续派发，不自动重试或重放历史任务",
           "串行步骤不创建子代理，也不是通用 DAG、可发布工作流或定时调度平台"
         ],
         "links": [
@@ -729,7 +732,8 @@
       {"id": "r-pr-terminal-close", "from": "projects-trust", "to": "terminal-commands", "label": "项目移除后关闭该项目终端", "kind": "call"},
       {"id": "r-sc-model-candidates", "from": "sessions-chat", "to": "providers-auth", "label": "读取模型候选、默认模型与 Codex 账户额度", "kind": "read"},
       {"id": "r-sc-resource-completion", "from": "sessions-chat", "to": "resources-mcp", "label": "读取技能与命令补全", "kind": "read"},
-      {"id": "r-sc-task-panel", "from": "sessions-chat", "to": "app-shell", "label": "右侧宿主承载只读任务流程页", "kind": "compose"},
+      {"id": "r-sc-task-panel", "from": "sessions-chat", "to": "app-shell", "label": "右侧宿主承载任务流程看板", "kind": "compose"},
+      {"id": "r-sc-artifact-open", "from": "sessions-chat", "to": "workspace-tabs", "label": "任务交付与变更文件打开标签", "kind": "call"},
       {"id": "r-sc-genui-payload", "from": "sessions-chat", "to": "genui", "label": "分发生成式界面载荷", "kind": "compose"},
       {"id": "r-genui-session-tools", "from": "genui", "to": "sessions-chat", "label": "注册内置工具并回传结果", "kind": "compose"},
       {"id": "r-sc-file-candidates", "from": "sessions-chat", "to": "files-editor", "label": "取文件引用候选", "kind": "read"},
@@ -1044,15 +1048,15 @@
       {
         "id": "task-flow",
         "name": "会话串行任务",
-        "summary": "聊天登记并控制任务，宿主串行执行步骤，右侧任务流程页只读展示同源状态与结果。",
-        "note": "停止由聊天输入坞发起；启动不新增授权。失联保留最后记录并标明未确认，不猜测成功，也不重发执行。串行步骤不等价于子代理或通用 DAG。",
-        "relationIds": ["r-sc-task-panel", "r-sc-project-guard"],
+        "summary": "面板就地或聊天登记并控制任务，宿主串行执行步骤，模型声明交付结果，右侧任务流程页以单轨道展示状态与交付入口。",
+        "note": "停止由聊天输入坞发起；启动或继续不新增授权。未声明步骤交付或遇阻塞进入等待，停止继续派发；动效在历史或未激活时保持静默。串行步骤不等价于子代理或通用 DAG。",
+        "relationIds": ["r-sc-task-panel", "r-sc-artifact-open", "r-sc-project-guard"],
         "steps": [
           {"title": "登记计划", "description": "task_plan 保存当前会话的串行步骤，登记本身不执行；任务领域载荷由共享契约校验。", "moduleIds": ["sessions-chat"]},
-          {"title": "聊天启动", "description": "当前会话有唯一待执行计划且输入无附件时，开始／开始执行分流至控制器，不交给普通 Agent 自由执行。", "moduleIds": ["sessions-chat"]},
-          {"title": "逐步执行与记录", "description": "控制器先记录再派发，每步对应完整 SDK 运行，步骤间保持会话占用；失败、中断或停止后不继续派发。", "moduleIds": ["sessions-chat"]},
-          {"title": "同源展示", "description": "状态变化进入投影即时推送；Runtime 在在途期间读取轻量水位快照，右侧页按当前对话展示并转交记录定位。", "moduleIds": ["sessions-chat", "app-shell"]},
-          {"title": "历史回看", "description": "任务记录随当前分支的会话自定义条目保存，不加入模型上下文；恢复未确认的执行记录时表达为中断，不自动重跑。", "moduleIds": ["sessions-chat"]}
+          {"title": "启动与继续", "description": "用户在任务面板就地点击“开始执行”或“继续当前步骤”；会话存在唯一待执行或等待计划且输入无附件时，聊天口令分流至控制器。", "moduleIds": ["sessions-chat"]},
+          {"title": "逐步执行与业务交付门禁", "description": "控制器先记录再派发，每步对应完整 SDK 运行，步骤间保持会话占用；模型必须声明交付结果，需授权或受阻进入等待，失败或停止后不继续派发。", "moduleIds": ["sessions-chat"]},
+          {"title": "单轨道与动效展示", "description": "状态变化进入投影即时推送；Runtime 读取轻量快照对账，右侧页以单轨道展示目标、阶段与已交付文件入口，真实事件投射 Light UI 光线。", "moduleIds": ["sessions-chat", "app-shell", "workspace-tabs"]},
+          {"title": "历史回看", "description": "任务快照与公开任务语义随当前分支保存，不加入模型上下文；恢复未确认的执行记录时表达为中断，待执行或等待计划予以保留，不自动重跑。", "moduleIds": ["sessions-chat"]}
         ]
       },
       {

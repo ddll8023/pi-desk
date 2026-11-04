@@ -5,12 +5,14 @@ import type { TaskFlow, TaskFlowPhase, TaskFlowPlan, TaskFlowState, TaskFlowStep
 import { interruptHistoricalFlow } from './history'
 
 export interface TaskStepOutcome {
-  readonly phase: 'completed' | 'failed' | 'cancelled' | 'interrupted'
+  readonly phase: 'completed' | 'waiting' | 'failed' | 'cancelled' | 'interrupted'
   readonly result: string | null
   readonly error: string | null
   readonly promptEntryId: string | null
   readonly resultEntryId: string | null
   readonly changedFiles?: readonly string[]
+  readonly taskId?: string | null
+  readonly waitingReason?: string | null
 }
 interface ExecutionHost {
   persist(flow: TaskFlow): void
@@ -34,6 +36,13 @@ export class TaskFlowController {
 
   get active(): boolean { return this.activeId !== null }
   snapshot(): TaskFlowState { return this.state }
+  /** 只返回真正由控制器派发的当前步骤，模型不能指定其他执行身份。 */
+  currentStep(): { readonly flow: TaskFlow; readonly step: TaskFlowStep } | null {
+    if (this.activeId === null) return null
+    const flow = this.find(this.activeId)
+    const step = flow.steps.find(candidate => isTaskFlowActive(candidate.phase))
+    return step === undefined ? null : { flow, step }
+  }
   bind(flows: readonly TaskFlow[], host: ExecutionHost): void {
     const revision = this.state.revision + 1
     this.reset()
@@ -50,33 +59,36 @@ export class TaskFlowController {
     this.execution = null
     this.state = emptyTaskFlowState()
   }
-  create(plan: TaskFlowPlan, originEntryId: string | null): TaskFlow {
+  create(plan: TaskFlowPlan, originEntryId: string | null, taskId: string | null = null): TaskFlow {
     if (this.host === null || this.active) throw new Error('当前任务仍在执行，不能替换计划。')
     // 新计划只替代尚未执行的计划，不修改已结束的执行记录。
     for (const pending of this.state.flows.filter(flow => flow.phase === 'pending')) {
       this.commit({ ...pending, phase: 'cancelled', steps: pending.steps.map<TaskFlowStep>(step => ({ ...step, phase: 'cancelled' })) })
     }
     const now = Date.now()
-    const flow: TaskFlow = { id: randomUUID(), revision: 0, title: plan.title, originEntryId,
+    const flow: TaskFlow = { id: randomUUID(), revision: 0, title: plan.title, originEntryId, taskId,
       phase: 'pending', createdAt: now, updatedAt: now, steps: plan.steps.map<TaskFlowStep>(step => ({
         ...step, id: randomUUID(), phase: 'pending', startedAt: null, endedAt: null,
-        promptEntryId: null, resultEntryId: null, result: null, error: null, changedFiles: []
+        promptEntryId: null, resultEntryId: null, result: null, error: null, changedFiles: [], waitingReason: null
       })) }
     this.commit(flow)
     return this.find(flow.id)
   }
   /** 启动回执不等待整段执行；启动记录持久化失败时绝不派发第一步。 */
-  start(id: string, revision: number): void {
+  start(id: string, revision: number, taskId: string | null = null): void {
     const host = this.host
     const flow = this.find(id)
-    if (host === null || this.active || flow.phase !== 'pending' || flow.revision !== revision) {
-      throw new Error('计划已变化或已经启动，请同步后查看，不会重复执行。')
+    const first = flow.steps.findIndex(step => step.phase === 'pending' || step.phase === 'waiting')
+    if (host === null || this.active || !['pending', 'waiting'].includes(flow.phase) || flow.revision !== revision
+      || first < 0 || flow.steps.slice(0, first).some(step => step.phase !== 'completed')
+      || (flow.phase === 'waiting' && flow.steps[first]?.phase !== 'waiting')) {
+      throw new Error('计划已变化或不允许启动，请同步后查看，不会重复执行。')
     }
     this.activeId = id
     this.stopRequested = false
-    try { this.commit({ ...flow, phase: 'running' }) } catch (error) { this.activeId = null; throw error }
+    try { this.commit({ ...flow, taskId: flow.taskId ?? taskId, phase: 'running' }) } catch (error) { this.activeId = null; throw error }
     const generation = this.generation
-    const execution = Promise.resolve().then(() => this.run(id, generation, host))
+    const execution = Promise.resolve().then(() => this.run(id, first, generation, host))
       .catch(error => {
         if (this.generation !== generation || this.host !== host) return
         const current = this.find(id)
@@ -105,25 +117,29 @@ export class TaskFlowController {
     if (flow === undefined) throw new Error('任务不属于当前会话分支。')
     return flow
   }
-  private async run(id: string, generation: number, host: ExecutionHost): Promise<void> {
+  private async run(id: string, first: number, generation: number, host: ExecutionHost): Promise<void> {
     const valid = (): boolean => this.generation === generation && this.host === host
-    for (let index = 0; valid() && index < this.find(id).steps.length; index++) {
+    for (let index = first; valid() && index < this.find(id).steps.length; index++) {
       if (this.stopRequested) break
       const flow = this.find(id)
       const step = flow.steps[index]
-      if (step === undefined || step.phase !== 'pending') throw new Error('步骤状态不允许启动。')
+      if (step === undefined || (step.phase !== 'pending' && step.phase !== 'waiting')) throw new Error('步骤状态不允许启动。')
       this.commit({ ...flow, steps: flow.steps.map<TaskFlowStep>(candidate => candidate.id === step.id
-        ? { ...candidate, phase: 'running', startedAt: Date.now() } : candidate) })
+        ? { ...candidate, phase: 'running', startedAt: candidate.startedAt ?? Date.now(), endedAt: null,
+            waitingReason: null, error: null } : candidate) })
       // changed 回调可能触发取消；派发之前再检查一次，不能越过停止门。
       if (!valid() || this.stopRequested) break
       const outcome = await host.execute(this.find(id), step, index)
       if (!valid()) return
       const current = this.find(id)
       const phase = this.stopRequested ? 'cancelled' : outcome.phase
-      this.commit({ ...current, steps: current.steps.map<TaskFlowStep>(candidate => candidate.id === step.id
-        ? { ...candidate, ...outcome, phase, result: boundedText(outcome.result), error: boundedText(outcome.error),
-            changedFiles: outcome.changedFiles?.slice(0, 64) ?? candidate.changedFiles ?? [], endedAt: Date.now() }
-        : candidate) })
+      this.commit({ ...current, taskId: current.taskId ?? outcome.taskId ?? null,
+        steps: current.steps.map<TaskFlowStep>(candidate => candidate.id === step.id
+          ? { ...candidate, phase, promptEntryId: outcome.promptEntryId, resultEntryId: outcome.resultEntryId,
+              result: boundedText(outcome.result), error: boundedText(outcome.error),
+              waitingReason: phase === 'waiting' ? boundedText(outcome.waitingReason ?? '当前步骤需要补充说明后继续。') : null,
+              changedFiles: [...new Set([...(candidate.changedFiles ?? []), ...(outcome.changedFiles ?? [])])].slice(0, 64),
+              endedAt: Date.now() } : candidate) })
       if (phase !== 'completed') {
         this.finish(id, phase)
         return

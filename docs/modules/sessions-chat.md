@@ -6,7 +6,7 @@
 
 负责按项目读取会话列表、打开／新建／重载／删除会话、按会话读取历史（页、轮次与原文续段），监督 SDK 宿主、维护运行身份与占用，发送与中止、回退、压缩，投影聊天／工具／任务流程／历史／活动与用量，管理会话内串行任务计划与执行、独立图片资料与编号标注，以及 SDK 扩展对话框、通知和 widget。
 
-入口为侧栏、顶部栏的对话跳转入口、输入坞（含图片附件与标注）、聊天消息动作、资源重载，以及右侧只读的“任务流程”页签；任务启动与停止均在聊天中控制。文件编辑器、终端、MCP 配置与供应商持久化属于其他模块；会话内 Agent 自己读写项目文件也不等于桌面文件编辑接口。
+入口为侧栏、顶部栏的对话跳转入口、输入坞（含图片附件与标注）、聊天消息动作、资源重载，以及右侧“任务流程”页签；任务可在右侧面板就地开始或继续当前步骤，也可在无附件聊天中发送口令启动，停止操作沿用聊天输入坞停止键。文件编辑器、终端、MCP 配置与供应商持久化属于其他模块；会话内 Agent 自己读写项目文件也不等于桌面文件编辑接口。
 
 ## 专属文件
 
@@ -33,9 +33,9 @@
 | `src/sdk-host/extension-ui-bridge.ts` | SDK UI 回调到宿主消息的适配及取消 |
 | `src/sdk-host/browser/tools.ts` | 内置浏览器操控工具定义（快照、正文、导航、点击、输入、按键、滚动）与 A11y 树格式化 |
 | `src/sdk-host/browser/index.ts` | 内置浏览器扩展工厂接入 |
-| `src/sdk-host/task-flow/index.ts` | 注册内置 `task_plan`，只登记计划，不启动执行，也不提供模型回写进度的工具 |
-| `src/sdk-host/task-intent.ts` | 注册内置 `task_report`，记录与回读任务意图及业务阶段说明，不启动执行 |
-| `src/sdk-host/task-flow/controller.ts` | `TaskFlowController` 持有单会话任务状态，串行执行步骤，先记录再派发，管理停止门与结果收敛 |
+| `src/sdk-host/task-flow/index.ts` | 注册内置 `task_plan`，只登记计划，不启动执行，也不提供模型回写进度的工具；引导在任务面板操作或在聊天发送启动口令 |
+| `src/sdk-host/task-intent.ts` | 注册内置 `task_report`，记录与回读任务意图、业务阶段、状态、待处理事项与产物说明，校验串行步骤交付，不启动执行 |
+| `src/sdk-host/task-flow/controller.ts` | `TaskFlowController` 持有单会话任务状态，串行执行步骤，先记录再派发，管理等待门、停止门与结果收敛 |
 | `src/sdk-host/task-flow/history.ts` | 从官方当前分支读取自定义任务记录，为绑定恢复提供中断表达，不重放历史任务 |
 
 ### 会话投影与契约
@@ -73,6 +73,7 @@
 | `src/renderer/src/sessions/services/session-runs.ts` | 运行清单与生命周期桥接 |
 | `src/renderer/src/sessions/services/runtime.ts` | Runtime 状态、Prompt、回退、压缩、模型命令、任务启动／轻量快照与投影桥接 |
 | `src/renderer/src/sessions/task-flow-sync.ts` | 在途任务水位对账、单飞读取与超时未确认提示；不保存第二份任务状态，不重发启动请求 |
+| `src/renderer/src/sessions/task-flow-motion.ts` | 任务光线与事件适配：根据会话与真实语义事件连接聊天摘要与对应轨道节点，去重、静默历史与可见性过滤 |
 | `src/renderer/src/sessions/task-flow-view.ts` | 会话任务轨迹与业务阶段展示模型，提供紧凑时间线、状态折叠与对话定位数据 |
 | `src/renderer/src/sessions/services/extension-ui.ts` | 扩展快照订阅与对话回应桥接 |
 | `src/renderer/src/sessions/chat-view.ts` | 将消息与工具投影组织为聊天展示模型，保留图片与标注关系并还原可重发输入 |
@@ -90,10 +91,11 @@
 | `src/renderer/src/sessions/components/ImageAnnotationPanel.vue` | 左图右说明的独立标注面板、编号双向定位、同步删除与键盘调整入口 |
 | `src/renderer/src/sessions/components/ImageAnnotationCanvas.vue` | 共用原图坐标系的编号与点框叠加层，支持编辑及桌面／手机只读展示，不修改图片像素 |
 | `src/renderer/src/sessions/components/ChatMessageList.vue` | 本地待发送／结果未确认状态及绑定图片标注展示、权威消息交接、历史加载、滚动与布局观察；发布对话跳转入口并消费顶部栏与任务侧栏的定位意图；承接工作树隔离任务横幅挂载 |
-| `src/renderer/src/sessions/components/TaskFlowPanel.vue` | 任务语义看板：紧凑轨道时间线与节点展开交互，按业务目标、阶段与轮次组织工作流向，提供底层依据抽屉与会话定位 |
-| `src/renderer/src/sessions/components/TaskFlowSidebar.vue` | 任务语义侧栏宿主：组织业务任务与阶段流向，复用历史与导航，刷新不启动执行或生成语义 |
-| `src/renderer/src/sessions/components/TaskFlowSteps.vue` | 真实计划的步骤轨道：展示宿主计划步骤、状态、结果与修改产物，不提供执行控制 |
-| `src/renderer/src/sessions/components/ChatTurnItem.vue` | 按轮摘要、展开与原文内容、多分支切换，以及同轮助手响应流与多步骤执行过程抽屉（Process Drawer）管理 |
+| `src/renderer/src/sessions/components/TaskFlowPanel.vue` | 任务流程看板：参考 Lancer 的任务单轨道界面，固定工作目标，串联业务节点、对话定位与交付文件，历史任务收起，提供底层依据抽屉 |
+| `src/renderer/src/sessions/components/TaskFlowSidebar.vue` | 任务侧栏宿主：组织业务任务、阶段与单轨道流向，管理面板展开动效生命周期与就地计划操作，复用历史与导航，刷新不启动执行或生成语义 |
+| `src/renderer/src/sessions/components/TaskFlowSteps.vue` | 计划步骤与操作区域：展示计划步骤、等待说明、变更概览与本步回复，就地提供开始执行与继续当前步骤操作 |
+| `src/renderer/src/sessions/components/TaskRunningBorder.vue` | 原版 Lancer SVG 流动运行边框的 Vue 挂载层：在任务活动进行且未受阻时提供非侵入视觉反馈，离屏与减少动态效果时停用 |
+| `src/renderer/src/sessions/components/ChatTurnItem.vue` | 按轮摘要、展开与原文内容、多分支切换，同轮连续的纯过程消息统一收纳为单行公开工作摘要，运行中接入 SVG 运行边框，结束后默认收起以突出最终回答正文 |
 | `src/renderer/src/sessions/components/TurnBranchSwitcher.vue` | 轮次多分支微型切换器（`‹ 1 / 2 ›`） |
 | `src/renderer/src/sessions/components/WorktreeTaskBanner.vue` | 任务工作区状态底栏、固定目标与审阅合并（支持 Squash 与自动清理）、运行终端关闭确认与放弃删除流程 |
 | `src/renderer/src/sessions/components/ChatMessageItem.vue` | 单消息、图片编号及说明、思考抽屉、纯过程紧凑步骤、流式打字光标、工具归组面板与生成式界面分发 |
@@ -134,14 +136,14 @@
 
 ### 任务计划与执行
 
-Agent 通过内置 `task_plan` 登记串行步骤，登记本身不执行。当前会话存在唯一待执行计划、且本次输入无附件时，在聊天中发送“开始”或“开始执行”会启动任务控制器；匹配规则与请求校验见 `src/shared/task-flow.ts`。桌面按已显示的计划身份与修订号提交启动，宿主另在普通输入入口使用相同匹配规则。需要停止时使用聊天输入坞的停止键，先禁止下一步派发，再等待当前 SDK 执行真实收敛。右侧“任务流程”只展示当前对话的步骤、状态、执行产物（变更文件）和结果，提供只读刷新与原始记录定位，不提供执行控制；空白对话、文件或终端标签不借用其他会话的任务。
+Agent 通过内置 `task_plan` 登记串行步骤，登记本身不执行。用户可在右侧任务流程面板就地点击“开始执行”或“继续当前步骤”；当会话存在唯一待执行或等待计划、且输入无附件时，在聊天中发送“开始”“开始执行”或“继续当前步骤”同样会分流至任务控制器，不交给普通 Agent 自由执行；匹配规则与请求校验见 `src/shared/task-flow.ts`。需要停止时使用聊天输入坞的停止键，先禁止下一步派发，再等待当前 SDK 执行真实收敛。右侧“任务流程”看板采用连续单轨道组织当前任务流向与交付入口，突出工作目标与当前步骤，提供就地计划操作与原始记录定位；空白对话、文件或终端标签不借用其他会话的任务。
 
-每个步骤对应一次完整的 SDK 运行，控制器根据实际起止与结果推进，不依赖模型补报进度；宿主在步骤结束时从分支工具调用中自动聚合成功变更的文件路径并随步骤状态持久化；步骤之间仍保持会话占用。失败、中断或停止后不继续派发后续步骤，也不自动重试。启动口令以已处理命令交回，不等待一条同名普通用户消息；`handled` 只是受理分类，不表示任务没有执行。计划不增加文件修改、测试、构建或其他操作授权，执行完成也不等于业务目标达成或产出已获检查。
+每个步骤对应一次完整的 SDK 运行，控制器根据实际起止、结果与业务交付声明推进：模型在最终回复前必须通过 `task_report` 声明 `stepOutcome`（`completed` 或 `waiting`），存在未决事项或需授权时上报 `status=waiting/blocked` 并提供 `attention` 说明，控制器停止后续派发并进入等待态；步骤之间仍保持会话占用。宿主在步骤结束时从分支工具调用中聚合带有明确成功回执的文件修改路径并随步骤状态持久化。失败、中断或停止后不继续派发后续步骤，也不自动重试。启动口令以已处理命令交回，不等待一条同名普通用户消息；`handled` 只是受理分类，不表示任务没有执行。计划不增加文件修改、测试、构建或其他操作授权，执行完成也不等于业务目标达成或产出已获检查。
 
 任务状态的权威所有者是宿主内的 `TaskFlowController`。状态变化立即进入既有投影批次与快照；页面复用运行身份、绑定代际及水位守卫，并在在途任务期间读取轻量快照，覆盖末条通知遗漏。水位未变化时只返回确认，不反复读取完整聊天记录；失联或读取超时保留最后记录并标明未确认，不推断成功、不重发执行。折叠侧栏或切换页签不停止 Runtime 的订阅与对账，相关读取策略以 `src/renderer/src/sessions/task-flow-sync.ts` 为准。
 
-任务记录通过官方会话管理器的自定义条目保存，不加入模型上下文，也不另建任务数据库。历史读取遵循当前分支，绑定恢复时将未确认结束的运行记录表达为中断，不自动恢复执行；回退会话不撤销已经发生的文件修改，也不重放历史任务。任务摘要与展示边界以 `src/shared/task-flow.ts` 为准。串行步骤不创建子代理，不构成通用 DAG 编排、可发布工作流或后台定时调度。
-除 `task_plan` 串行执行外，Agent 可通过内置 `task_report` 记录当前轮公开工作说明与长任务业务阶段（保存为分支内自定义条目并在投影中随用户轮次下发）。右侧“任务流程”看板采用紧凑垂直轨道时间线组织业务流向：简单任务直接展示工作意图，长任务按业务阶段与所属对话分层；`task_plan` 计划作为步骤抽屉展示，用户原文、助手回复与底层工具活动收拢在依据抽屉中供按需下钻。
+任务记录通过官方会话管理器的自定义条目保存，不加入模型上下文，也不另建任务数据库。历史读取遵循当前分支，绑定恢复时将未确认结束的运行记录表达为中断，已处于待执行或等待状态的计划予以保留，不自动重跑；回退会话不撤销已经发生的文件修改，也不重放历史任务。任务摘要与展示边界以 `src/shared/task-flow.ts` 为准。串行步骤不创建子代理，不构成通用 DAG 编排、可发布工作流或后台定时调度。
+除 `task_plan` 串行执行外，Agent 可通过内置 `task_report` 记录当前用户任务的公开工作说明、业务阶段、状态、待处理事项与产物（保存为分支内自定义条目并在投影中随用户轮次下发）。右侧“任务流程”看板采用参考 Lancer 的紧凑单轨道时间线组织业务流向：固定工作目标，串联真实阶段、步骤与已交付文件入口，未归属轮次作为待归属活动隔离展示；运行中通过原版 Light UI 光线将真实事件与轨道节点连接，运行气泡与当前步骤接入同色 SVG 流动边框，历史载入与换绑保持静默。用户原文、助手回复与底层工具流水收拢在依据抽屉中供按需下钻。
 
 ## 状态与边界
 

@@ -16,7 +16,7 @@ export function readTaskFlowHistory(branch: readonly SessionEntry[], selected?: 
       || (step.resultEntryId !== null && selected.has(step.resultEntryId))))
   return selected === undefined ? flows : flows.slice(-TASK_FLOW_MAX_FLOWS)
 }
-/** 恢复只表达中断，不自动重放旧流程；尚未启动的计划仍可由用户明确启动。 */
+/** 恢复时仅把未确认结束的运行态转为中断，待执行与等待状态的计划予以保持，不自动重跑；未启动或等待续接的计划仍可由用户明确操作。 */
 export function interruptHistoricalFlow(flow: TaskFlow): TaskFlow {
   if (flow.phase !== 'running' && flow.phase !== 'stopping') return flow
   return { ...flow, revision: flow.revision + 1, phase: 'interrupted', steps: flow.steps.map<TaskFlowStep>(step =>

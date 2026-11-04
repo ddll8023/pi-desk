@@ -1,0 +1,35 @@
+/* Lancer Light UI 原版运行边框；来源 raylee-ai/lancer@b5bede0f245f88af6096fc01915d5aa347db5436/packages/light-ui/src/running-border.css。许可见仓库 licenses/lancer-light-ui-MIT.txt、lancer-light-ui-NOTICE.txt。 */
+/* The parent bubble is position:relative. Add the SVG only while work is running.
+   This is the same restrained outline used by Lancer, without a rotating backdrop. */
+.light-running-border {
+  position: absolute;
+  inset: 0;
+  inline-size: 100%;
+  block-size: 100%;
+  overflow: visible;
+  pointer-events: none;
+  fill: none;
+  stroke: var(--light-color, #70a7f7);
+  stroke-width: 1.2px;
+  filter: drop-shadow(0 0 2px color-mix(in srgb, var(--light-color, #70a7f7) 40%, transparent));
+}
+.light-running-border rect {
+  vector-effect: non-scaling-stroke;
+  stroke-dasharray: 9 91;
+  animation: light-execution-border 3.6s linear infinite;
+}
+.light-motion-paused .light-running-border rect {
+  animation-play-state: paused;
+}
+@keyframes light-execution-border {
+  to {
+    stroke-dashoffset: -100;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .light-running-border rect {
+    animation: none;
+    stroke-dasharray: none;
+    opacity: 0.55;
+  }
+}

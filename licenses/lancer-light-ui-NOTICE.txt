@@ -1,0 +1,14 @@
+Lancer Light UI
+
+Extracted from the Lancer desktop application's light-trail rendering implementation.
+Lancer is a fork of pi-gui: https://github.com/minghinmatthewlam/pi-gui
+Upstream copyright (c) 2026 Matthew Lam. MIT license retained in lancer-light-ui-MIT.txt.
+Lancer-specific additions and this extraction: Lancer contributors, 2026, MIT.
+
+This library includes no model-provider SDK, gateway configuration, credentials,
+user conversations, character artwork, or downloaded media. Model names shown in
+the demo identify example origins; they do not imply an affiliation or endorsement.
+
+Imported from https://github.com/raylee-ai/lancer/tree/b5bede0f245f88af6096fc01915d5aa347db5436/packages/light-ui/src
+Runtime algorithms and rendering are retained. Optional DOM reference types in light-layer.ts
+explicitly include undefined to match this project's exactOptionalPropertyTypes setting.

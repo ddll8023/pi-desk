@@ -9,10 +9,10 @@ export function createTaskFlowExtension(create: (plan: TaskFlowPlan, ctx: Extens
   return pi => {
     try {
       pi.registerTool({
-        name: 'task_plan', label: '任务计划',
-        description: '将用户要求的多步骤任务登记为可追踪的串行计划。只规划，不执行；用户在无附件聊天中发送“开始／开始执行”后才运行；运行中的停止操作使用聊天输入坞停止键。右侧任务流程仅用于查看状态与结果。'
-          + '每步必须有明确工作说明，只包含用户已同意的范围。计划不是文件修改、测试、构建或其他操作的新增授权。'
-          + '不要在登记后自行执行这些步骤；不要使用此工具更新进度，运行状态由程序维护。修改尚未启动的计划时重新登记即可。',
+        name: 'task_plan', label: '任务计划', executionMode: 'sequential',
+        description: '将已讨论的多步骤工作登记为串行计划，并关联当前任务。只规划，不执行；用户在任务面板点击“开始执行”后才运行，也支持无附件聊天发送“开始／开始执行”。停止仍使用聊天输入坞停止键。'
+          + '每步必须有明确工作说明，只包含用户已同意的范围。开始计划不增加文件修改、测试、构建或其他操作授权。'
+          + '不要登记后自行执行。步骤结束前通过 task_report 声明 stepOutcome；等待用户时停止后续派发，用户补充后可显式“继续当前步骤”。修改尚未启动的计划时重新登记。',
         parameters: {
           type: 'object', additionalProperties: false, required: ['title', 'steps'], properties: {
             title: { type: 'string', maxLength: 200, description: '任务目标' },
@@ -28,7 +28,7 @@ export function createTaskFlowExtension(create: (plan: TaskFlowPlan, ctx: Extens
           const plan = parseTaskFlowPlan(input)
           if (plan === null) throw new Error('任务计划格式不正确；请提供目标及有明确说明的步骤。')
           const flow = create(plan, ctx)
-          return { content: [{ type: 'text', text: `已登记「${flow.title}」，共 ${flow.steps.length} 步。等待用户在无附件聊天中发送“开始／开始执行”；右侧“任务流程”仅展示状态，当前没有执行任何步骤。` }],
+          return { content: [{ type: 'text', text: `已登记「${flow.title}」，共 ${flow.steps.length} 步。用户可在任务面板查看计划并点击“开始执行”，也可无附件发送“开始／开始执行”。当前没有执行任何步骤，启动不新增操作授权。` }],
             details: { flowId: flow.id, revision: flow.revision } }
         }
       })

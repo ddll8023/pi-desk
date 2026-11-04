@@ -29,19 +29,19 @@
 | 文件 | 模块相关符号与范围 |
 | --- | --- |
 | `src/renderer/src/sessions/stores/runtime.ts` | 只做装配与初始化／释放编排，不含业务状态；按原成员名转发到下列四个切片 |
-| `src/renderer/src/sessions/stores/runtime-core.ts` | 前台实例身份、Prompt／回退／中止／压缩等动作状态、投影分片与后台留底；`send` 分流聊天任务口令，持有任务展示与在途对账，提供只读刷新；保留 `rewind`、`compact`、`stopOperation` 及快照收敛 |
+| `src/renderer/src/sessions/stores/runtime-core.ts` | 前台实例身份、Prompt／回退／中止／压缩等动作状态、投影分片与后台留底；`send` 分流聊天任务口令，`startTaskFlow` 提交固定目标和版本的开始与继续操作，持有任务展示与在途对账，提供只读刷新；保留 `rewind`、`compact`、`stopOperation` 及快照收敛 |
 | `src/renderer/src/sessions/stores/runtime-history.ts` | 历史分页、展开轮次的原文与续段状态、任务记录修订合并及缓存淘汰；读取目标与会话键由调用方注入 |
 | `src/renderer/src/sessions/stores/runtime-models.ts` | 可用模型能力清单、Runtime 未就绪时的候选预读、Pi 默认模型、当前会话 `switchModel` |
 | `src/renderer/src/sessions/stores/runtime-model-display.ts` | 对话页隐藏模型偏好、乐观更新与串行写回、失败回滚 |
 | `src/shared/runtime-api.ts` | 只再导出 `./runtime/`，外部导入路径不变 |
 | `src/shared/runtime/status.ts` | 运行目标、状态、错误与命令（Prompt、回退、压缩、切换模型） |
-| `src/shared/runtime/projection.ts` | 消息／工具／任务流程／历史／活动／用量／速率投影，以及工具语义摘要契约与传输边界；任务领域类型由会话模块的 `task-flow.ts` 定义 |
+| `src/shared/runtime/projection.ts` | 消息／工具／任务流程／历史／活动／用量／速率投影，以及工具语义摘要与公开任务语义契约及传输边界；任务领域类型由会话模块的 `task-flow.ts` 与 `task-intent.ts` 定义 |
 | `src/shared/runtime/models.ts` | 模型标识、摘要与 agent 能力清单 |
 | `src/shared/runtime/resources.ts` | 资源、诊断与 MCP 契约，并集中校验 Runtime、消息／任务投影、历史、任务快照及工具语义摘要载荷 |
 | `src/shared/runtime/api.ts` | `RuntimeApi` 桥接接口：聚合会话状态与命令、任务启动及轻量快照、消息投影、模型能力、资源与 MCP 方法；具体载荷由对应契约维护 |
 | `src/shared/runtime/projection-reducer.ts` | 桌面与手机共用的纯消息／工具增量合并；活动及任务状态由调用方独立处理，长度或消息身份不符时返回 null 并转快照 |
 
-请求目标的运行实例与绑定代际由主进程登记，不等同于标签键或可变的当前项目；按会话读取历史不带这两项，由主进程判定该会话走绑定路径还是日志路径。后台投影留底是页面展示缓存，SDK 会话和历史文件仍是另一层生命周期。`stores/runtime.ts` 只是装配门面：会话运行、历史缓存、模型能力与模型展示偏好分别落在 `runtime-core`、`runtime-history`、`runtime-models`、`runtime-model-display`，门面保留原有公开成员与历史类型再导出，消费者不需要改调用点。任务的计划、步骤及状态权威归 SDK 宿主内的控制器，专属实现与 `src/shared/task-flow.ts` 的归属见[会话模块](sessions-chat.md#任务计划与执行)；Runtime 只保存展示副本，聊天控制与右侧只读页共用同源数据。
+请求目标的运行实例与绑定代际由主进程登记，不等同于标签键或可变的当前项目；按会话读取历史不带这两项，由主进程判定该会话走绑定路径还是日志路径。后台投影留底是页面展示缓存，SDK 会话和历史文件仍是另一层生命周期。`stores/runtime.ts` 只是装配门面：会话运行、历史缓存、模型能力与模型展示偏好分别落在 `runtime-core`、`runtime-history`、`runtime-models`、`runtime-model-display`，门面保留原有公开成员与历史类型再导出，消费者不需要改调用点。任务的计划、步骤及状态权威归 SDK 宿主内的控制器，专属实现与 `src/shared/task-flow.ts` 的归属见[会话模块](sessions-chat.md#任务计划与执行)；Runtime 只保存展示副本，聊天控制、面板就地操作与右侧任务流程页共用同源数据。
 
 ## F-config：Desktop 配置（混合）
 
@@ -112,6 +112,7 @@
 | `src/renderer/src/ui/project-entry-drag.ts` | 项目条目拖拽载荷（携带项目与工作区执行环境身份）、路径引用文本与终端插入文本；文件树、输入坞与终端视图共用 |
 | `src/renderer/src/ui/relative-time.ts` | 相对时间文案；侧栏会话行与提交历史共用 |
 | `src/renderer/src/ui/forked-sessions.ts` | 分叉会话折叠；侧栏项目树使用 |
+| `src/renderer/src/ui/lancer-light-ui/` | 原版 Lancer Light UI 算法与 SVG 渲染层（`index.ts`、`geometry.ts`、`svg.ts`、`light-layer.ts`、`running-border.css`）；无外部运行时依赖，会话任务光线适配与运行边框组件消费 |
 
 `src/renderer/src/ui/` 是共享展示目录，只收被多个能力重复使用的无业务状态代码：展示组件、Markdown 与数学渲染、剪贴板、浮层定位、相对时间与分叉折叠。仅服务单一能力的文件不因位置相同就视为共享：`sessions/clock.ts` 服务聊天计时，`editor/` 的富文本实现只服务文件编辑。
 
@@ -120,6 +121,7 @@
 页面样式入口为 `src/renderer/src/assets/main.css`，负责引入 Tailwind、KaTeX、本地基础样式及能力样式。主题令牌与基础规则归 `src/renderer/src/assets/styles/base.css`；能力规则按样式归属分别位于 `src/renderer/src/assets/styles/editor.css`、`sessions.css`、`git.css`、`shell.css`、`projects.css`、`workspace.css`、`preferences.css` 与 `ui.css`。这些样式均由页面入口统一加载，不由各能力组件重复导入。
 
 手机网页有独立样式入口 `src/lan-mobile/src/mobile.css`：复用基础令牌与共享组件样式后追加窄屏规则，不重复定义主题。
+`src/renderer/src/ui/lancer-light-ui/running-border.css` 由 `TaskRunningBorder.vue` 就近按需加载，不污染主全局样式。
 `src/renderer/src/assets/genui.css` 仍由生成式界面模块独立维护。全局主题与主进程窗口背景／覆盖层颜色存在同步关系，改动不只影响单个组件。
 
 ## F-build：构建与发行上下文
@@ -147,6 +149,8 @@
 | `build/icon.ico` | 预生成的发行图标资源 |
 | `licenses/emojibase-MIT.txt` | 对应第三方许可声明 |
 | `licenses/mermaid-MIT.txt` | 对应第三方许可声明 |
+| `licenses/lancer-light-ui-MIT.txt` | 对应借鉴 Lancer Light UI 的 MIT 许可声明 |
+| `licenses/lancer-light-ui-NOTICE.txt` | 对应借鉴 Lancer Light UI 的上游版权通知与来源说明 |
 | `licenses/orca-MIT.txt` | 对应借鉴代码的许可声明 |
 | `.gitignore` | 排除依赖、编译输出、发行输出与平台元数据 |
 

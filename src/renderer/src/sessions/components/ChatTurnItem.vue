@@ -1,19 +1,21 @@
-<!-- 一轮对话：用户消息始终可见，其后的 AI 回答与压缩记录整体折叠成一行摘要（条数、本轮响应耗时、最后一次调用的 token），点摘要行展开或收起。
-     同轮次内的多个助手响应组织在 .chat-turn-responses 流中；连续的纯过程消息（工具调用与思考）整体收纳为可折叠的执行过程抽屉（Process Drawer），运行中自适应展开查看流水线，结束后默认收起以突出最终回答正文。
+<!-- 一轮对话：用户消息始终可见，回答与压缩记录由会话阅读状态控制展开；耗时和用量仅作次要信息。
+     连续的纯过程消息统一默认收拢为一行公开工作摘要，运行中也不铺开工具流水；分组身份固定为首条消息，新增操作不重置手动开合。
      折叠状态不在这里持有：开合由消息列表按会话写入 session-view，本组件只渲染给定状态并发出开合意图，因此定位与状态隔离都在同一处处理。
      卡片的手动展开（思考、工具、技能、压缩摘要、旧版界面）只原样向上转发，滚动位置与跟随仍由消息列表决定。 -->
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import type { HistoryChunk } from '../../../../shared/runtime-api'
 import type { HistoryTurnState } from '../stores/runtime'
+import { useRuntimeStore } from '../stores/runtime'
+import { useExtensionUiStore } from '../stores/extension-ui'
 import HistoryLoadSentinel from './HistoryLoadSentinel.vue'
 import type { ChatMessageView, ChatTurnView } from '../chat-view'
 import { formatDuration, useTickingNow } from '../clock'
 import { formatTokens } from '../usage-format'
-import { toolOperationStats } from '../tool-summary'
 import ChatMessageItem from './ChatMessageItem.vue'
 import { useSessionBranchStore } from '../stores/session-branch'
 import TurnBranchSwitcher from './TurnBranchSwitcher.vue'
+import TaskRunningBorder from './TaskRunningBorder.vue'
 
 const props = defineProps<{
   readonly turn: ChatTurnView
@@ -44,6 +46,11 @@ const emit = defineEmits<{
 }>()
 
 const sessionBranchStore = useSessionBranchStore()
+const runtime = useRuntimeStore()
+const extension = useExtensionUiStore()
+const waitingForQuestion = computed(() => runtime.conversationKey === props.ownerKey && runtime.view.phase === 'ready'
+  && extension.runId === runtime.foregroundRunId && extension.runtimeId === runtime.view.snapshot.runtimeId
+  && extension.dialogs.length > 0)
 const branchState = computed(() => {
   return sessionBranchStore.getBranchState(props.ownerKey, props.turn.key, props.turn.responses)
 })
@@ -64,7 +71,7 @@ const recoverable = computed(() => props.turn.historyId !== null
   && (props.turn.user?.recoverable || props.turn.responses.some(message => message.recoverable)))
 const showSummary = computed(() => (hasResponses.value || recoverable.value) && (!props.current || !props.expanded))
 const userIncomplete = computed(() => props.turn.user?.blocks.some(block => block.kind === 'text' && block.truncated) === true)
-const live = computed(() => props.current && (props.turn.turn !== null || props.running === true))
+const live = computed(() => props.current && (props.turn.turn?.endedAt === null || props.running === true))
 const canLoadHistory = computed(() => props.historyAvailable === true && !live.value)
 const needsInitialDetails = computed(() => canLoadHistory.value && recoverable.value && !props.detail?.loaded
   && (props.expanded || userIncomplete.value))
@@ -163,7 +170,7 @@ const responseGroups = computed<readonly ResponseGroup[]>(() => {
     if (currentProcess.length > 0) {
       groups.push({
         kind: 'process',
-        key: `process:${currentProcess.map(m => m.id).join(',')}`,
+        key: `process:${props.ownerKey}:${props.turn.key}:${currentProcess[0]?.id ?? ''}`,
         messages: [...currentProcess]
       })
       currentProcess = []
@@ -186,13 +193,13 @@ const responseGroups = computed<readonly ResponseGroup[]>(() => {
   return groups
 })
 
-/** 手动控制执行过程抽屉的开合；未手动干预时：运行中默认展开，结束后默认收起归整。 */
+/** 开合是局部阅读状态；运行和新增工具均不代替用户展开过程。 */
 const processOverrides = reactive(new Map<string, boolean>())
 
 function isProcessGroupOpen(key: string): boolean {
   const manual = processOverrides.get(key)
   if (manual !== undefined) return manual
-  return live.value
+  return false
 }
 
 function toggleProcessGroup(key: string): void {
@@ -201,23 +208,27 @@ function toggleProcessGroup(key: string): void {
   if (next) emit('userExpand')
 }
 
+function processActive(group: ResponseGroup): boolean {
+  return live.value && responseGroups.value.at(-1)?.key === group.key
+}
+const motionGroupKey = computed(() => responseGroups.value.filter(group => group.kind === 'process').at(-1)?.key ?? null)
+function isMotionSource(group: ResponseGroup): boolean {
+  const last = group.messages.at(-1)
+  return group.key === motionGroupKey.value && props.turn.user?.taskIntent !== undefined && last !== undefined
+    && props.turn.responses.some(message => message.id === last.id)
+}
+function processGroupTitle(group: ResponseGroup): string {
+  if (isMotionSource(group)) return props.turn.user?.taskIntent?.intent ?? '工作过程'
+  return processActive(group) ? '正在处理当前请求' : '工作过程'
+}
+function runningBorder(group: ResponseGroup): boolean {
+  const report = props.turn.user?.taskIntent
+  return props.running === true && props.historyAvailable === true && processActive(group) && !waitingForQuestion.value
+    && report?.attention == null && !['waiting', 'blocked', 'cancelled'].includes(report?.status ?? '')
+}
 function processGroupStats(messages: readonly ChatMessageView[]): string {
-  const toolNames: string[] = []
-  let thinkings = 0
-  for (const msg of messages) {
-    for (const b of msg.blocks) {
-      if (b.kind === 'thinking') {
-        thinkings += 1
-      } else if (b.kind === 'toolcall') {
-        toolNames.push(b.toolName)
-      }
-    }
-  }
-  const operations = toolOperationStats(toolNames)
-  const parts = operations === '' ? [] : [operations]
-  if (thinkings > 0) parts.push(`${thinkings} 思考`)
-  const total = toolNames.length + thinkings
-  return `${total} 项操作${parts.length > 0 ? ` · ${parts.join(' / ')}` : ''}`
+  const count = messages.reduce((total, message) => total + message.blocks.filter(block => block.kind === 'toolcall').length, 0)
+  return count > 0 ? `${count} 项操作` : '工作记录'
 }
 </script>
 
@@ -275,28 +286,27 @@ function processGroupStats(messages: readonly ChatMessageView[]): string {
     <template v-if="expanded">
       <div v-if="hasResponses" class="chat-turn-responses">
         <template v-for="group in responseGroups" :key="group.key">
-          <!-- 多个纯过程步骤整体收纳进执行过程抽屉，避免散落霸屏 -->
-          <div v-if="group.kind === 'process' && group.messages.length > 1" class="turn-process-drawer">
+          <!-- 单条和连续过程都使用同一个摘要入口，避免只有一条工具时仍直接铺开。 -->
+          <div v-if="group.kind === 'process'" class="turn-process-drawer">
             <button
               type="button"
               class="turn-process-header"
+              :data-task-source-owner="isMotionSource(group) ? ownerKey : undefined"
+              :data-task-source-task="isMotionSource(group) ? turn.user?.taskIntent?.taskId : undefined"
+              :data-task-source-turn="isMotionSource(group) ? turn.user?.taskIntent?.turnEntryId : undefined"
               :aria-expanded="isProcessGroupOpen(group.key)"
               @click="toggleProcessGroup(group.key)"
             >
+              <TaskRunningBorder v-if="runningBorder(group)" :active="true" :radius="8" />
               <span class="disclosure" :class="{ 'is-open': isProcessGroupOpen(group.key) }" aria-hidden="true"></span>
               <span class="turn-process-icon" aria-hidden="true">
                 <svg viewBox="0 0 24 24" class="size-3.5 fill-none stroke-current" stroke-width="2">
                   <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z" />
                 </svg>
               </span>
-              <span class="turn-process-title">执行过程</span>
-              <span class="turn-process-stats">{{ processGroupStats(group.messages) }}</span>
-              <span class="turn-process-hint ml-auto">
-                <span v-if="live && isProcessGroupOpen(group.key)" class="running-wave-bars text-desk-accent mr-1">
-                  <span></span><span></span><span></span>
-                </span>
-                {{ isProcessGroupOpen(group.key) ? '收起步骤' : '展开查看' }}
-              </span>
+              <span class="turn-process-title" :title="processGroupTitle(group)">{{ processGroupTitle(group) }}</span>
+              <span class="turn-process-stats">{{ processActive(group) ? '进行中' : processGroupStats(group.messages) }}</span>
+              <span class="turn-process-hint">{{ isProcessGroupOpen(group.key) ? '收起记录' : '查看过程' }}</span>
             </button>
             <div v-if="isProcessGroupOpen(group.key)" class="turn-process-body">
               <ChatMessageItem
@@ -321,7 +331,7 @@ function processGroupStats(messages: readonly ChatMessageView[]): string {
               />
             </div>
           </div>
-          <!-- 单个步骤或最终内容回复直接渲染 -->
+          <!-- 正文和生成式界面直接呈现，不藏入工具过程。 -->
           <template v-else>
             <ChatMessageItem
               v-for="(message, responseIndex) in group.messages"

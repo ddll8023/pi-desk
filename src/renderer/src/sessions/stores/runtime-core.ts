@@ -146,6 +146,8 @@ export interface RuntimeCore {
   displayTaskFlows: ComputedRef<readonly TaskFlow[]>
   taskFlowNotice: ComputedRef<string | null>
   taskFlowLive: ComputedRef<boolean>
+  taskFlowStarting: Ref<boolean>
+  startTaskFlow(flowId: string, revision: number, expected: RuntimeTarget): Promise<boolean>
   refreshTaskFlow(): Promise<void>
   view: Ref<RuntimeViewState>
   foregroundRunId: Ref<number | null>
@@ -451,6 +453,22 @@ export function createRuntimeCore(deps: RuntimeCoreDeps): RuntimeCore {
     return result
   }
 
+  /** 面板操作只接受原会话和原版本；不把日志、失步副本或迟到点击变成新的执行请求。 */
+  async function startTaskFlow(flowId: string, revision: number, expected: RuntimeTarget): Promise<boolean> {
+    const target = currentTarget()
+    if (target === null || target.runtimeId === null || target.runId !== expected.runId || target.runtimeId !== expected.runtimeId
+      || logPage.value !== null || projectionSync.value !== 'synced' || taskFlowStarting.value || taskFlowCheck.value
+      || preparingPrompt.value || promptView.value.phase === 'sending' || modelSwitchView.value.phase === 'switching'
+      || abortView.value.phase === 'requesting' || compactView.value.phase === 'requesting' || rewindBlocksWrites()
+      || view.value.phase !== 'ready' || view.value.snapshot.info?.isStreaming === true) return false
+    const flow = taskFlow.value.flows.find(candidate => candidate.id === flowId)
+    if (flow === undefined || flow.revision !== revision || (flow.phase !== 'pending' && flow.phase !== 'waiting')) {
+      taskFlowError.value = '计划已变化，请查看最新内容后再操作。'
+      return false
+    }
+    return (await dispatchTaskFlowStart(target, flow)).ok
+  }
+
   /** 侧栏刷新只读原目标；查看日志时走既有只读首页链路，不借刷新启动或恢复执行。 */
   async function refreshTaskFlow(): Promise<void> {
     const lifecycle = deps.lifecycle.count
@@ -515,7 +533,7 @@ export function createRuntimeCore(deps: RuntimeCoreDeps): RuntimeCore {
 
   /** 未派发返回 null；已派发的受理结果仍交回原调用方，只有仍属当前绑定时才改写前台动作状态。 */
   async function send(message: string, images: readonly PromptImageInput[] = []): Promise<PromptResult | null> {
-    if (view.value.phase !== 'ready' || promptView.value.phase === 'sending'
+    if (view.value.phase !== 'ready' || promptView.value.phase === 'sending' || taskFlowStarting.value || taskFlowCheck.value
       || modelSwitchView.value.phase === 'switching' || rewindBlocksWrites()) return null
     const target = currentTarget()
     if (target === null) return null
@@ -1170,6 +1188,8 @@ export function createRuntimeCore(deps: RuntimeCoreDeps): RuntimeCore {
     displayTaskFlows,
     taskFlowNotice,
     taskFlowLive,
+    taskFlowStarting,
+    startTaskFlow,
     refreshTaskFlow,
     view,
     foregroundRunId,

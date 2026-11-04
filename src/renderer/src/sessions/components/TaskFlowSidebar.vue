@@ -1,18 +1,24 @@
-<!-- 任务语义侧栏宿主：将用户轮次的宿主上报组织成业务任务，复用历史与导航，刷新不启动执行或生成语义。 -->
+<!-- 用户任务侧栏宿主：固定会话与工作区身份，接入任务概览、计划动作、结果文件和既有问题入口。 -->
 <script setup lang="ts">
-import { computed, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, watch } from 'vue'
+import { createTaskFlowMotion } from '../task-flow-motion'
+import type { TaskMotionContext } from '../task-flow-motion'
 import { useRuntimeStore } from '../stores/runtime'
 import { useSessionViewStore } from '../stores/session-view'
+import { useExtensionUiStore } from '../stores/extension-ui'
+import { isTaskArtifactPath } from '../../../../shared/task-intent'
 import { useChatNavigationStore } from '../stores/chat-navigation'
 import { useWorkspaceTabsStore } from '../../workspace/stores/workspace-tabs'
 import { useProjectStore } from '../../projects/stores/project'
 import { usePreferencesStore } from '../../preferences/stores/preferences'
 import { createChatViewCache } from '../chat-view'
+import { parseDialogTitle } from '../extension-dialog-presentation'
 import { buildSessionTaskTrack } from '../task-flow-view'
 import type { TaskTurnHistory } from '../task-flow-view'
 import TaskFlowPanel from './TaskFlowPanel.vue'
 
 const runtime = useRuntimeStore()
+const extension = useExtensionUiStore()
 const sessionView = useSessionViewStore()
 const navigation = useChatNavigationStore()
 const workspace = useWorkspaceTabsStore()
@@ -20,7 +26,8 @@ const projects = useProjectStore()
 const preferences = usePreferencesStore()
 const eligible = computed(() => !workspace.isChatNewDraft && (workspace.isChatReady || workspace.isChatLogPreview))
 const contextKey = computed(() => eligible.value
-  ? `${projects.currentProject?.path ?? ''}:${workspace.activeSessionId ?? sessionView.key}` : null)
+  ? `${projects.currentProject?.path ?? ''}:${workspace.activeWorkspace?.id ?? ''}:${workspace.activeSessionId ?? sessionView.key}` : null)
+const projectRoot = computed(() => workspace.activeWorkspace?.rootPath ?? projects.currentProject?.path ?? null)
 const viewCache = createChatViewCache()
 const turns = computed(() => viewCache.toTurns(runtime.displayMessages, runtime.displayTools))
 const runtimeInfo = computed(() => runtime.view.phase === 'ready' ? runtime.view.snapshot.info : null)
@@ -49,11 +56,44 @@ const turnHistory = computed(() => {
 const taskTrack = computed(() => buildSessionTaskTrack(turns.value, runtime.displayTaskFlows, {
   live: live.value, streaming: runtimeInfo.value?.isStreaming === true,
   compacting: runtimeInfo.value?.isCompacting === true,
-  projectRoot: projects.currentProject?.path ?? null, history: turnHistory.value
+  projectRoot: projectRoot.value, history: turnHistory.value
 }))
 const earlier = computed(() => ({
   available: runtime.history.before !== null, loading: runtime.history.loading, error: runtime.history.error
 }))
+
+const waitingDialog = computed(() => {
+  if (!eligible.value || runtime.view.phase !== 'ready' || extension.runId !== runtime.view.snapshot.runId
+    || extension.runtimeId !== runtime.view.snapshot.runtimeId) return null
+  const dialog = extension.dialogs[0]
+  return dialog === undefined ? null : { id: dialog.id, title: parseDialogTitle(dialog.title).question }
+})
+const canExecute = computed(() => eligible.value && workspace.isChatInteractive && live.value
+  && runtime.view.phase === 'ready' && runtime.view.snapshot.runtimeId !== null
+  && runtimeInfo.value?.sessionId === workspace.activeSessionId
+  && runtimeInfo.value?.isStreaming !== true && runtimeInfo.value?.isCompacting !== true
+  && !runtime.preparingPrompt && runtime.promptView.phase !== 'sending'
+  && !runtime.taskFlowStarting && waitingDialog.value === null && sessionView.pendingPrompt === null)
+const canOpenFiles = computed(() => eligible.value && workspace.activeWorkspace?.phase === 'ready'
+  && workspace.activeTab !== null && projects.currentProject !== null
+  && workspace.workspaceIdForTab(projects.currentProject.path, workspace.activeTab) === workspace.activeWorkspace.id)
+
+const panelActive = computed(() => eligible.value && preferences.rightPanelOpen && preferences.rightPanelTab === 'task-flow')
+const motionContext = computed<TaskMotionContext>(() => ({
+  key: `${contextKey.value ?? ''}:${runtime.conversationKey}`,
+  sourceOwner: runtime.conversationKey, targetOwner: contextKey.value ?? '',
+  enabled: panelActive.value && workspace.isChatReady && live.value && notice.value === null
+    && waitingDialog.value === null && !earlier.value.loading && runtimeInfo.value?.sessionId === workspace.activeSessionId,
+  track: taskTrack.value
+}))
+// 工具流式文本不产生新动效事件；只监听语义修订、轮次归属和计划版本。
+const motionSignal = computed(() => taskTrack.value.turns.map(turn => `${turn.id}:${turn.current}:${turn.report?.revision ?? '-'}`).join('|')
+  + runtime.displayTaskFlows.map(flow => `${flow.id}:${flow.revision}`).join('|'))
+let motion: ReturnType<typeof createTaskFlowMotion> | null = null
+watch(() => [motionContext.value.key, motionContext.value.enabled, motionSignal.value] as const,
+  () => motion?.update(motionContext.value), { flush: 'post' })
+onMounted(() => { motion = createTaskFlowMotion(); motion.update(motionContext.value) })
+onBeforeUnmount(() => { motion?.destroy(); motion = null })
 
 /** 仅为界面提示去重，不是任务状态；重挂载时不把已有历史计划当成新计划抢切页签。 */
 const mountedAt = Date.now()
@@ -104,6 +144,23 @@ function locate(entryId: string, ownerKey: string): void {
   if (turn?.user) navigation.requestJump(sessionView.key, turn.user.id)
   else navigation.requestEntryJump(sessionView.key, entryId)
 }
+/** 不经聊天草稿转发启动口令；直接固定当前会话、计划与修订号，迟到点击不能换目标。 */
+async function startFlow(flowId: string, revision: number, ownerKey: string): Promise<void> {
+  if (!owns(ownerKey) || !canExecute.value || runtime.view.phase !== 'ready') return
+  const target = { runId: runtime.view.snapshot.runId, runtimeId: runtime.view.snapshot.runtimeId }
+  if (target.runId === null || target.runtimeId === null) return
+  await runtime.startTaskFlow(flowId, revision, { runId: target.runId, runtimeId: target.runtimeId })
+}
+function openFile(path: string, ownerKey: string): void {
+  if (!owns(ownerKey) || !canOpenFiles.value || !isTaskArtifactPath(path)
+    || !taskTrack.value.tasks.some(task => task.artifacts.some(artifact => artifact.path === path))) return
+  const target = workspace.activeWorkspace
+  if (target === null) return
+  workspace.openFileTab(path, undefined, undefined, { projectPath: target.projectPath, workspaceId: target.id })
+}
+function showQuestion(dialogId: string, ownerKey: string): void {
+  if (owns(ownerKey) && waitingDialog.value?.id === dialogId) extension.restoreDialog()
+}
 async function loadEarlier(ownerKey: string): Promise<void> {
   if (owns(ownerKey) && runtime.history.before !== null && !runtime.history.loading) await runtime.loadEarlierHistory()
 }
@@ -137,14 +194,23 @@ defineExpose({ refresh })
       class="min-h-0 flex-1"
       :track="taskTrack"
       :owner-key="contextKey ?? 'no-session'"
+      :active="panelActive"
       :live="live"
       :notice="notice"
-      :project-root="projects.currentProject?.path ?? null"
+      :project-root="projectRoot"
       :earlier="earlier"
+      :running="live && runtimeInfo?.isStreaming === true"
+      :starting="runtime.taskFlowStarting"
+      :can-execute="canExecute"
+      :can-open-files="canOpenFiles"
+      :waiting-dialog="waitingDialog"
       @locate="locate"
       @locate-turn="locateTurn"
       @load-earlier="loadEarlier"
       @load-turn="loadTurn"
+      @start="startFlow"
+      @open-file="openFile"
+      @show-question="showQuestion"
     />
   </section>
 </template>

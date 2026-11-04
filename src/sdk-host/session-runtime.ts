@@ -13,7 +13,7 @@ import { TaskFlowController } from './task-flow/controller'
 import type { TaskStepOutcome } from './task-flow/controller'
 import { createTaskFlowExtension, TASK_FLOW_EXTENSION_NAME } from './task-flow/index'
 import { readTaskFlowHistory } from './task-flow/history'
-import { createTaskIntentExtension, createTaskIntentReport, TASK_INTENT_EXTENSION_NAME } from './task-intent'
+import { createTaskIntentExtension, createTaskIntentReport, readTaskIntents, TASK_INTENT_EXTENSION_NAME } from './task-intent'
 import { TASK_INTENT_ENTRY_TYPE } from '../shared/task-intent'
 import { TASK_FLOW_ENTRY_TYPE, resolveTaskFlowStart } from '../shared/task-flow'
 import { toolLocalName } from '../shared/tool-operation'
@@ -385,11 +385,14 @@ export class SdkSessionRuntime {
 
   /** 只启动当前会话的原版本计划；正常聊天与任务步骤不能相互插队。 */
   startTaskFlow(bindingId: number, flowId: string, revision: number): void {
-    this.requireBoundSession(bindingId)
+    const session = this.requireBoundSession(bindingId)
     if (this.operationId !== null || this.promptInFlight || this.isBusy() || this.needsHostRebuild) {
       throw new SdkSessionFailure('SESSION_BUSY')
     }
-    try { this.taskFlow.start(flowId, revision) } catch { throw new SdkSessionFailure('SESSION_OPERATION_CONFLICT') }
+    // 计划可能先于本轮首次语义上报登记；启动时补齐同一来源轮次的归属，不另造一个任务。
+    const flow = this.taskFlow.snapshot().flows.find(candidate => candidate.id === flowId)
+    const taskId = flow?.originEntryId == null ? null : readTaskIntents(session.sessionManager.getBranch()).get(flow.originEntryId)?.taskId ?? null
+    try { this.taskFlow.start(flowId, revision, taskId) } catch { throw new SdkSessionFailure('SESSION_OPERATION_CONFLICT') }
   }
 
   /** 在途对账只读任务内存；水位相同时不搬运计划与结果。 */
@@ -770,7 +773,7 @@ export class SdkSessionRuntime {
     })
   }
 
-  /** 每个业务步骤对应一次完整 SDK 运行；先监听，再启动，不能用提交接受回执冒充执行结束；聚合步骤中成功的文件修改工具调用并返回变更列表。 */
+  /** SDK 收敛和业务交付是两道独立边界：未声明当前步骤交付时停在等待，不从回复正文猜测完成。 */
   private async executeTaskStep(session: AgentSession, bindingId: number, flow: TaskFlow,
     step: TaskFlowStep, index: number): Promise<TaskStepOutcome> {
     const current = (): boolean => this.session === session && this.bindingId === bindingId
@@ -787,49 +790,53 @@ export class SdkSessionRuntime {
     let executionFailed = false
     try {
       await session.prompt(`任务：${flow.title}\n当前步骤 ${index + 1}/${flow.steps.length}：${step.title}\n\n${step.instruction}\n\n`
+        + (step.phase === 'waiting' ? '这是用户显式续接当前步骤。先结合会话中的补充与已有产物继续，不重做已完成步骤，不自动重试已发生的写操作。\n' : '')
         + '只执行当前步骤，不提前执行后续步骤。遵守原会话中已确认的范围与操作权限；'
-        + '开始任务不新增文件修改、测试、构建或其他操作授权。需要用户决定或新增授权时先说明并等待，'
-        + '不要把无法完成的工作表述为已经完成。此步骤结束时总结实际结果和未解决事项。', { source: 'rpc' })
+        + '开始或继续任务不新增文件修改、测试、构建或其他操作授权。需要用户决定、补充资料或新增授权时先说明并等待。'
+        + '最终回复前必须使用 task_report：当前步骤已实际交付则 stepOutcome=completed；'
+        + '尚需用户处理或仍受阻则 stepOutcome=waiting、status=waiting/blocked，并提供具体 attention。'
+        + '不要把业务阶段结束等同于当前执行步骤交付。缺少结构化交付声明时程序不会派发下一步。', { source: 'rpc' })
       await session.waitForIdle()
     } catch { executionFailed = true } finally { off() }
     if (!current()) throw new Error('步骤所属会话已经失效。')
-    const entries = session.sessionManager.getBranch().filter(entry => !before.has(entry.id))
-    const failedToolCallIds = new Set<string>()
+    const branch = session.sessionManager.getBranch()
+    const entries = branch.filter(entry => !before.has(entry.id))
+    const successfulCalls = new Set<string>()
     for (const entry of entries) {
-      if (entry.type === 'message' && entry.message.role === 'toolResult' && entry.message.isError === true) {
-        if (typeof entry.message.toolCallId === 'string') failedToolCallIds.add(entry.message.toolCallId)
+      if (entry.type === 'message' && entry.message.role === 'toolResult' && typeof entry.message.toolCallId === 'string') {
+        if (entry.message.isError === false) successfulCalls.add(entry.message.toolCallId)
+        else successfulCalls.delete(entry.message.toolCallId)
       }
     }
     const mutationTools = new Set(['edit', 'patch', 'apply_patch', 'write'])
     const changedFileSet = new Set<string>()
     for (const entry of entries) {
-      if (entry.type === 'message' && entry.message.role === 'assistant' && Array.isArray(entry.message.content)) {
-        for (const part of entry.message.content) {
-          if (part.type === 'toolCall' && typeof part.name === 'string' && typeof part.id === 'string') {
-            if (mutationTools.has(toolLocalName(part.name)) && !failedToolCallIds.has(part.id)
-              && typeof part.arguments === 'object' && part.arguments !== null) {
-              const args = part.arguments as Record<string, unknown>
-              const rawPath = typeof args.path === 'string' ? args.path
-                : typeof args.file_path === 'string' ? args.file_path : null
-              if (rawPath !== null && rawPath.trim() !== '') {
-                changedFileSet.add(rawPath.trim().replace(/\\/g, '/'))
-              }
-            }
-          }
-        }
+      if (entry.type !== 'message' || entry.message.role !== 'assistant' || !Array.isArray(entry.message.content)) continue
+      for (const part of entry.message.content) {
+        if (part.type !== 'toolCall' || !mutationTools.has(toolLocalName(part.name)) || !successfulCalls.has(part.id)
+          || typeof part.arguments !== 'object' || part.arguments === null) continue
+        const args = part.arguments as Record<string, unknown>
+        const rawPath = typeof args.path === 'string' ? args.path : typeof args.file_path === 'string' ? args.file_path : null
+        if (rawPath !== null && rawPath.trim() !== '') changedFileSet.add(rawPath.trim().replace(/\\/g, '/'))
       }
     }
-    const changedFiles = [...changedFileSet].slice(0, 64)
     const prompt = entries.find(entry => entry.type === 'message' && entry.message.role === 'user')
     const response = entries.findLast(entry => entry.type === 'message' && entry.message.role === 'assistant')
     const assistant = response?.type === 'message' && response.message.role === 'assistant' ? response.message : null
+    const report = prompt === undefined ? undefined : readTaskIntents(branch).get(prompt.id)
+    const declaration = report?.step
+    const delivered = declaration?.flowId === flow.id && declaration.stepId === step.id && declaration.outcome === 'completed'
+      && report?.status !== 'waiting' && report?.status !== 'blocked' && report?.status !== 'cancelled'
     const reason = assistant?.stopReason
     const phase: TaskStepOutcome['phase'] = executionFailed || reason === 'error' ? 'failed'
       : reason === 'aborted' ? 'cancelled'
-      : !started || !settled || reason !== 'stop' ? 'interrupted' : 'completed'
+      : !started || !settled || reason !== 'stop' ? 'interrupted' : delivered ? 'completed' : 'waiting'
     return { phase, result: assistant === null ? null : session.getLastAssistantText() ?? null,
-      promptEntryId: prompt?.id ?? null, resultEntryId: response?.id ?? null, changedFiles,
-      error: phase === 'completed' ? null : phase === 'cancelled' ? '当前步骤已停止。'
+      promptEntryId: prompt?.id ?? null, resultEntryId: response?.id ?? null,
+      changedFiles: [...changedFileSet].slice(0, 64), taskId: report?.taskId ?? flow.taskId ?? null,
+      waitingReason: phase === 'waiting' ? report?.attention?.message
+        ?? '本轮响应已结束，但尚未收到当前步骤的业务交付声明。补充说明后可继续当前步骤。' : null,
+      error: phase === 'completed' || phase === 'waiting' ? null : phase === 'cancelled' ? '当前步骤已停止。'
         : !started ? '输入被处理但未启动步骤执行；没有将其标记为完成。'
         : phase === 'interrupted' ? '没有确认完整执行终态；不会自动继续或重跑。' : '步骤执行失败，详情见会话记录。' }
   }
@@ -938,8 +945,10 @@ export class SdkSessionRuntime {
               const session = this.session
               if (!this.valid || session === null || this.currentCreation !== creation
                 || ctx.sessionManager.getSessionId() !== session.sessionId) throw new Error('任务计划不属于当前会话。')
-              const origin = session.sessionManager.getBranch().findLast(entry => entry.type === 'message' && entry.message.role === 'user')
-              return this.taskFlow.create(plan, origin?.id ?? null)
+              const branch = session.sessionManager.getBranch()
+              const origin = branch.findLast(entry => entry.type === 'message' && entry.message.role === 'user')
+              const taskId = origin === undefined ? null : readTaskIntents(branch).get(origin.id)?.taskId ?? null
+              return this.taskFlow.create(plan, origin?.id ?? null, taskId)
             }) },
           { name: TASK_INTENT_EXTENSION_NAME, builtin: true, replaceable: true,
             factory: createTaskIntentExtension((input, ctx) => {
@@ -948,11 +957,16 @@ export class SdkSessionRuntime {
                 || this.needsHostRebuild || this.closing || ctx.sessionManager.getSessionId() !== session.sessionId) {
                 throw new Error('任务说明不属于当前有效会话，未记录。')
               }
-              const report = createTaskIntentReport(session.sessionManager.getBranch(), input)
-              // 持久化失败时不发布成功副本；语义没有执行入口，也不修改任务控制器。
+              const current = this.taskFlow.currentStep()
+              const report = createTaskIntentReport(session.sessionManager.getBranch(), input, current === null ? null
+                : { flowId: current.flow.id, stepId: current.step.id, taskId: current.flow.taskId ?? null })
+              // 只有持久化成功才发布；步骤声明在 SDK 真正收敛之后才由执行控制器消费。
               session.sessionManager.appendCustomEntry(TASK_INTENT_ENTRY_TYPE, report)
               this.projection?.setTaskIntent(report)
               return report
+            }, () => {
+              const current = this.taskFlow.currentStep()
+              return current === null ? null : { flowId: current.flow.id, stepId: current.step.id, taskId: current.flow.taskId ?? null }
             }) },
           // 图片资料是独立上下文消息，不改写提示词，也不提供新的模型工具。
           this.imageAnnotations.extension,

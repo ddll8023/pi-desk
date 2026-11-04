@@ -317,93 +317,84 @@
     gap: 0.375rem;
     width: 100%;
   }
-/*
-   * 执行过程抽屉（Process Drawer）：将同轮内的多步工具调用与思考整体整理归组。
-   * 收拢时呈现为精致的一行胶囊卡片，展开时内部以连贯流水线导轨排布。
-   */
+/* 工作过程默认为单行活动摘要，细节展开后再呈现，不与正文争夺视觉主次。 */
 .turn-process-drawer {
     display: flex;
+    min-width: 0;
     flex-direction: column;
     width: 100%;
+    border: 0;
     border-radius: var(--radius-desk-md);
-    border: 1px solid var(--color-desk-line);
-    background: color-mix(in srgb, var(--color-desk-surface-subtle) 40%, var(--color-desk-surface));
-    overflow: hidden;
-    transition: border-color var(--default-transition-duration) ease, background-color var(--default-transition-duration) ease;
-  }
-.turn-process-drawer:hover {
-    border-color: color-mix(in srgb, var(--color-desk-accent) 35%, var(--color-desk-line));
+    background: transparent;
   }
 .turn-process-header {
+    position: relative;
     display: flex;
+    min-height: 36px;
     align-items: center;
-    gap: 0.5rem;
-    padding: 0.45rem 0.75rem;
+    gap: 8px;
+    padding: 8px 12px;
     width: 100%;
+    border: 1px solid var(--color-desk-line);
+    border-radius: inherit;
     background: transparent;
-    border: none;
     color: var(--color-desk-muted);
-    font-size: 0.75rem;
+    font-size: 12px;
     cursor: pointer;
     user-select: none;
     text-align: left;
     transition: background-color var(--default-transition-duration) ease;
   }
 .turn-process-header:hover {
-    background: color-mix(in srgb, var(--color-desk-surface-subtle) 50%, transparent);
+    background: var(--color-desk-surface-subtle);
     color: var(--color-desk-ink);
   }
 .turn-process-icon {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    color: var(--color-desk-accent);
     flex-shrink: 0;
+    color: var(--color-desk-accent);
   }
 .turn-process-title {
-    font-weight: 550;
-    color: var(--color-desk-ink);
-    flex-shrink: 0;
-  }
-.turn-process-stats {
-    font-family: var(--font-mono);
-    font-size: 11px;
-    color: var(--color-desk-muted);
+    min-width: 0;
+    flex: 1;
     overflow: hidden;
+    color: var(--color-desk-ink);
+    font-weight: 500;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-.turn-process-hint {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.25rem;
-    padding: 1.5px 6px;
-    border-radius: var(--radius-desk-sm);
-    background: color-mix(in srgb, var(--color-desk-surface) 60%, transparent);
-    border: 1px solid color-mix(in srgb, var(--color-desk-line) 80%, transparent);
-    font-size: 10.5px;
-    color: var(--color-desk-muted);
+.turn-process-stats {
     flex-shrink: 0;
+    color: var(--color-desk-muted);
+    font-size: 11px;
+    white-space: nowrap;
+  }
+.turn-process-hint {
+    flex-shrink: 0;
+    color: var(--color-desk-accent);
+    font-size: 11px;
+    white-space: nowrap;
   }
 .turn-process-body {
+    position: relative;
     display: flex;
     flex-direction: column;
-    gap: 0.375rem;
-    padding: 0.5rem 0.625rem 0.625rem 1.25rem;
-    border-top: 1px solid var(--color-desk-line);
-    background: color-mix(in srgb, var(--color-desk-surface) 40%, transparent);
-    position: relative;
+    gap: 6px;
+    padding: 12px 0 0 18px;
+    border-top: 0;
+    background: transparent;
   }
-/* 抽屉内部流水线时间线竖线导轨 */
+/* 导轨只出现在用户主动展开的真实操作序列中。 */
 .turn-process-body::before {
     content: '';
     position: absolute;
-    top: 0.625rem;
-    bottom: 0.625rem;
-    left: 0.625rem;
-    width: 2px;
-    border-radius: 9999px;
-    background: color-mix(in srgb, var(--color-desk-line-strong) 40%, transparent);
+    top: 12px;
+    bottom: 0;
+    left: 8px;
+    width: 1px;
+    background: var(--color-desk-line);
   }
 /* 早期轮次的摘要行：与工具卡同族的低强调卡片，整行可点，展开后仍留在原位当折叠入口。 */
 .chat-turn-summary {

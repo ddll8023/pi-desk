@@ -1,5 +1,6 @@
 /** 任务流程的有界领域契约：计划不授予执行权限，运行状态只接受宿主控制器产生的事实。 */
 import type { RuntimeError, RuntimeTarget } from './runtime/status'
+import { isTaskId } from './task-intent'
 
 export const TASK_FLOW_START_CHANNEL = 'desktop:task-flow-start'
 export const TASK_FLOW_READ_CHANNEL = 'desktop:task-flow-read'
@@ -7,7 +8,7 @@ export const TASK_FLOW_ENTRY_TYPE = 'pi-desk.task-flow.v1'
 export const TASK_FLOW_MAX_FLOWS = 16
 export const TASK_FLOW_MAX_STEPS = 12
 export const TASK_FLOW_MAX_TEXT = 4096
-export type TaskFlowPhase = 'pending' | 'running' | 'stopping' | 'completed' | 'failed' | 'cancelled' | 'interrupted'
+export type TaskFlowPhase = 'pending' | 'running' | 'stopping' | 'waiting' | 'completed' | 'failed' | 'cancelled' | 'interrupted'
 export interface TaskFlowPlan {
   readonly title: string
   readonly steps: readonly { readonly title: string; readonly instruction: string }[]
@@ -23,14 +24,17 @@ export interface TaskFlowStep {
   readonly resultEntryId: string | null
   readonly result: string | null
   readonly error: string | null
-  /** 步骤执行期间通过文件修改工具产生且未报错的相对路径集合，裁剪至有界范围。 */
+  /** 步骤中有成功工具回执的变更路径；展示层按所属工作区转为相对路径，裁剪至有界范围。 */
   readonly changedFiles?: readonly string[]
+  /** 当前步骤等待用户决定或缺少业务交付声明时的说明，不是执行错误。 */
+  readonly waitingReason?: string | null
 }
 export interface TaskFlow {
   readonly id: string
   readonly revision: number
   readonly title: string
   readonly originEntryId: string | null
+  readonly taskId?: string | null
   readonly phase: TaskFlowPhase
   readonly createdAt: number
   readonly updatedAt: number
@@ -86,7 +90,7 @@ function target(value: unknown): boolean {
     && count(value.runtimeId) && value.runtimeId > 0 && keys(value, ['runId', 'runtimeId'])
 }
 export function isTaskFlowPhase(value: unknown): value is TaskFlowPhase {
-  return typeof value === 'string' && ['pending', 'running', 'stopping', 'completed', 'failed', 'cancelled', 'interrupted'].includes(value)
+  return typeof value === 'string' && ['pending', 'running', 'stopping', 'waiting', 'completed', 'failed', 'cancelled', 'interrupted'].includes(value)
 }
 export function isTaskFlowActive(phase: TaskFlowPhase): boolean {
   return phase === 'running' || phase === 'stopping'
@@ -109,14 +113,15 @@ function isStep(value: unknown): value is TaskFlowStep {
     && time(value.startedAt) && time(value.endedAt) && nullableId(value.promptEntryId)
     && nullableId(value.resultEntryId) && nullableText(value.result) && nullableText(value.error)
     && optionalStringArray(value.changedFiles)
-    && keys(value, ['id', 'title', 'instruction', 'phase', 'startedAt', 'endedAt', 'promptEntryId', 'resultEntryId', 'result', 'error', 'changedFiles'])
+    && (value.waitingReason === undefined || nullableText(value.waitingReason))
+    && keys(value, ['id', 'title', 'instruction', 'phase', 'startedAt', 'endedAt', 'promptEntryId', 'resultEntryId', 'result', 'error', 'changedFiles', 'waitingReason'])
 }
 export function isTaskFlow(value: unknown): value is TaskFlow {
   return record(value) && id(value.id) && count(value.revision) && text(value.title, 200) && value.title.trim() !== ''
-    && nullableId(value.originEntryId) && isTaskFlowPhase(value.phase) && count(value.createdAt) && count(value.updatedAt)
+    && nullableId(value.originEntryId) && (value.taskId == null || isTaskId(value.taskId)) && isTaskFlowPhase(value.phase) && count(value.createdAt) && count(value.updatedAt)
     && Array.isArray(value.steps) && value.steps.length > 0 && value.steps.length <= TASK_FLOW_MAX_STEPS
     && value.steps.every(isStep) && new Set(value.steps.map(step => step.id)).size === value.steps.length
-    && keys(value, ['id', 'revision', 'title', 'originEntryId', 'phase', 'createdAt', 'updatedAt', 'steps'])
+    && keys(value, ['id', 'revision', 'title', 'originEntryId', 'taskId', 'phase', 'createdAt', 'updatedAt', 'steps'])
 }
 export function isTaskFlowState(value: unknown): value is TaskFlowState {
   return record(value) && count(value.revision) && nullableText(value.error)
@@ -137,11 +142,15 @@ export function isTaskFlowReadRequest(value: unknown): value is TaskFlowReadRequ
   return record(value) && target(value.target) && (value.revision === null || count(value.revision))
     && keys(value, ['target', 'revision'])
 }
-/** 只把无附件的明确启动口令路由到唯一待执行计划，不猜测一般聊天或“继续”的含义。 */
+/** 聊天快捷入口仍要求唯一计划；一般的“继续”和用户补充不被当作启动授权。 */
 export function resolveTaskFlowStart(flows: readonly TaskFlow[], message: string, attachmentCount: number): TaskFlow | null {
-  if (attachmentCount !== 0 || !['开始', '开始执行'].includes(message.trim())) return null
-  const pending = flows.filter(flow => flow.phase === 'pending')
-  return pending.length === 1 ? pending[0] ?? null : null
+  if (attachmentCount !== 0) return null
+  const command = message.trim()
+  const phase = ['开始', '开始执行'].includes(command) ? 'pending'
+    : command === '继续当前步骤' ? 'waiting' : null
+  if (phase === null) return null
+  const candidates = flows.filter(flow => flow.phase === phase)
+  return candidates.length === 1 ? candidates[0] ?? null : null
 }
 export function emptyTaskFlowState(): TaskFlowState { return { revision: 0, flows: [], error: null } }
 /** 同一分支内仅用流程修订号合并，不用到达顺序或时间戳覆盖更新的事实。 */

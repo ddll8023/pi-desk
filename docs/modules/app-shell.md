@@ -43,7 +43,7 @@
 - [偏好](preferences.md)：主题、面板宽度、折叠和页签值；主进程 `nativeTheme` 驱动页面亮暗色。
 - [项目](projects-trust.md)、[会话](sessions-chat.md)、[标签](workspace-tabs.md)：提供标题栏和主区上下文。
 - [文件](files-editor.md)、[Git](git.md)：`RightPanel.vue` 启动各自的跟踪，切页签不等于结束业务跟踪。
-- [会话任务流程](sessions-chat.md#任务计划与执行)：`TaskFlowSidebar.vue` 按当前对话展示只读任务页，启动与停止在聊天中控制；状态订阅与对账由 Runtime 持有，不随侧栏开合暂停。
+- [会话任务流程](sessions-chat.md#任务计划与执行)：`TaskFlowSidebar.vue` 承载当前对话的任务流向并就地提供开始／继续操作，停止操作沿用输入坞停止键；状态订阅与对账由 Runtime 独立持有，不随侧栏开合暂停，面板折叠或隐藏时动效静默暂停并在重显时安全恢复。
 
 ## 状态、调用链与生命周期
 
