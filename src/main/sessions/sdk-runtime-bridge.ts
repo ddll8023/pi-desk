@@ -911,7 +911,7 @@ export class SdkRuntimeBridge {
   }
 
   /**
-   * 结束一个运行实例：先按中断式释放解除占用与会话绑定，再关闭它的宿主进程。
+   * 结束一个运行实例：先按中断式释放解除占用与会话绑定，再后台异步关闭它的宿主进程，不阻塞前台响应。
    * 释放未确认时占用保留、宿主不动，错误如实返回；会话历史文件始终不动。
    */
   async closeRun(runId: number): Promise<RuntimeResult> {
@@ -924,13 +924,13 @@ export class SdkRuntimeBridge {
     }
     const run = this.runOf(runId)
     if (run === null || this.hostUnavailable(run)) return result
-    try {
-      await run.owner.suspend()
-    } catch {
+    // 宿主退出等待耗时较长，由后台异步收敛，不阻塞页面对关闭标签的即时响应。
+    void run.owner.suspend().catch(() => {
       // 宿主未确认关闭：占用已解除，空闲回收与应用退出链会继续收敛，不改写本次结束结果。
-    }
-    // 宿主状态属于运行实例列表的展示字段，挂起后补发一次，页面才不会显示成仍就绪。
-    this.publishState()
+    }).finally(() => {
+      // 宿主状态属于运行实例列表的展示字段，挂起后补发一次，页面才不会显示成仍就绪。
+      this.publishState()
+    })
     return result
   }
 
