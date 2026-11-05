@@ -29,8 +29,11 @@ let ready = false
 let closing = false
 let seq = 0
 let sessions: SdkSessionRuntime | null = null
-/** 桌面记忆配置在本进程的唯一持有者；无桌面配置时保持空，由扩展自行退回 CLI 行为。 */
-const memoryConfiguration = new MemoryConfigurationHolder()
+/** 桌面记忆配置在本进程的唯一持有者；无桌面配置时保持空，由扩展自行退回 CLI 行为。
+ * 扩展订阅的总线由宿主在加载 SDK 后创建：`ExtensionRuntime` 不对外暴露 `events`，
+ * 只能把同一实例显式交给资源加载器，才能让推送与订阅相连。
+ */
+let memoryConfiguration: MemoryConfigurationHolder | null = null
 /** 已加载的官方 SDK 模块：预览只需要它的解析与内存会话管理，不建立 AgentSession。 */
 let sdkModule: SdkModule | null = null
 /** 进程内共享检查点：首页由日志读取提供，稳定活动由运行时累计，两类状态分别校验和复用。 */
@@ -140,6 +143,7 @@ async function initialize(request: Extract<SdkHostRequest, { type: 'initialize' 
       fail(request, 'AGENT_DIR_MISMATCH'); return
     }
     // 扩展工厂在资源加载阶段同步读进程环境，因此在建立会话前先写入首次配置。
+    memoryConfiguration = new MemoryConfigurationHolder(sdk.createEventBus())
     memoryConfiguration.apply(request.memoryConfiguration)
     sessions = new SdkSessionRuntime(sdk, {
       hostId: request.hostId, agentDir: actualAgentDir, productResourcesDir: request.productResourcesDir,
@@ -189,6 +193,8 @@ async function dispatch(request: SdkHostRequest): Promise<void> {
   if (request.hostId !== hostId) { fail(request, 'HOST_NOT_READY'); return }
   if (request.type === 'shutdown') { await shutdown(request); return }
   if (request.type === 'memory-configuration') {
+    // 初始化之前没有扩展加载，也没有可推送的总线；此时只保留首次配置由 initialize 写入。
+    if (memoryConfiguration === null) { fail(request, 'HOST_NOT_READY'); return }
     memoryConfiguration.apply(request.memoryConfiguration)
     return
   }

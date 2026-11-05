@@ -46,7 +46,7 @@ interface RuntimeOptions {
   readonly agentDir: string
   /** 主进程根据宿主产物定位的产品资源，不从会话 cwd 发现。 */
   readonly productResourcesDir: string
-  /** 桌面记忆配置持有者；服务重建时把新总线绑给它，以便推送变更。 */
+  /** 桌面记忆配置持有者；服务重建沿用同一总线，推送变更时已加载扩展能收到。 */
   readonly memory: MemoryConfigurationHolder
   readonly authorize: (reference: SdkSessionReference, bindingId: number | null, projectPath: string | null) => Promise<SdkSessionAuthorization>
   readonly onState: (status: SdkSessionStatus) => void
@@ -986,12 +986,10 @@ export class SdkSessionRuntime {
       ]
       const product = await prepareProductResources(this.sdk, {
         directory: this.options.productResourcesDir, cwd, agentDir, settingsManager, extensionFactories,
-        memory: this.options.memory.current()
+        eventBus: this.options.memory.bus, memory: this.options.memory.current()
       })
       const services = await this.sdk.createAgentSessionServices({ cwd, agentDir, settingsManager,
         resourceLoaderOptions: product.options })
-      // 新服务自带事件总线；配置推送沿用同一总线，不重建扩展实例。
-      this.options.memory.attach(services.resourceLoader.getExtensions().runtime.events)
       if (this.closing) throw new SdkSessionFailure('HOST_NOT_READY')
       // 来源筛选在扩展求值之前完成；必要产品能力与注册结果不完整时仍然保守拒绝绑定。
       try { product.assertLoaded(services.resourceLoader) } catch { throw new SdkSessionFailure('SESSION_BIND_FAILED') }

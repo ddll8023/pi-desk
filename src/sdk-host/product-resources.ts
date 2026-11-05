@@ -6,7 +6,7 @@
 import { realpathSync } from 'node:fs'
 import { dirname } from 'node:path'
 import type {
-  CreateAgentSessionServicesOptions, InlineExtension, ResourceDiagnostic, ResourceLoader, SettingsManager, Skill
+  CreateAgentSessionServicesOptions, EventBus, InlineExtension, ResourceDiagnostic, ResourceLoader, SettingsManager, Skill
 } from '@earendil-works/pi-coding-agent'
 import {
   agentResourcePath, matchesAgentResource, readAgentResourceBundle
@@ -26,6 +26,8 @@ interface ProductResourceInput {
   readonly agentDir: string
   readonly settingsManager: SettingsManager
   readonly extensionFactories: InlineExtension[]
+  /** 宿主唯一的扩展事件总线；记忆配置变更与扩展订阅走同一条通道。 */
+  readonly eventBus: EventBus
   /** 桌面受管记忆配置；非空时扩展必须能同步读到同一份配置，不允许静默退回 CLI 探测。 */
   readonly memory: MemoryHostConfiguration | null
 }
@@ -104,6 +106,8 @@ export async function prepareProductResources(sdk: Sdk, input: ProductResourceIn
       additionalExtensionPaths: [
         ...bundle.extensions.map(item => agentResourcePath(bundle.root, item.entry)), ...externalExtensions
       ],
+      // 显式给出总线：扩展从这里订阅，宿主推送也走同一实例，不依赖加载结果反取。
+      eventBus: input.eventBus,
       additionalSkillPaths: bundle.skills.map(item => agentResourcePath(bundle.root, item.entry)),
       extensionFactories: input.extensionFactories,
       skillsOverride
