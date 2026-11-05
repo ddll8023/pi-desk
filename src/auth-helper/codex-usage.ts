@@ -8,6 +8,12 @@ const CODEX_USAGE_URL = 'https://chatgpt.com/backend-api/wham/usage'
 const CACHE_TTL_MS = 60_000
 const QUERY_TIMEOUT_MS = 10_000
 
+/**
+ * 本机没有可用于额度查询的 Codex 账户凭据（未登录、仅 API Key 或凭据缺少账户信息）。
+ * 属预期状态而不是故障，单独上报让页面不展示额度区；消息里不携带任何凭据内容。
+ */
+export class CodexNotLoggedInError extends Error {}
+
 interface UsageAuth {
   readonly token: string
   readonly accountId: string
@@ -56,15 +62,15 @@ async function resolveAuth(runtime: ModelRuntime, signal: AbortSignal): Promise<
       : '无法读取或刷新 Codex 登录凭据，请在设置的模型页面重新登录 OpenAI Codex。')
   }
   if (resolved === undefined) {
-    throw new Error('尚未登录 OpenAI Codex，请在设置的模型页面完成账户登录后刷新。')
+    throw new CodexNotLoggedInError('尚未登录 OpenAI Codex，请在设置的模型页面完成账户登录后刷新。')
   }
   const token = resolved.auth.apiKey
   if (resolved.source !== 'OAuth' || typeof token !== 'string' || token.length === 0) {
-    throw new Error('额度查询需要 OpenAI Codex 账户登录，API Key 不支持此查询。')
+    throw new CodexNotLoggedInError('额度查询需要 OpenAI Codex 账户登录，API Key 不支持此查询。')
   }
   const accountId = accountIdFromToken(token)
   if (accountId === '') {
-    throw new Error('Codex 登录凭据缺少有效账户信息，请重新登录 OpenAI Codex。')
+    throw new CodexNotLoggedInError('Codex 登录凭据缺少有效账户信息，请重新登录 OpenAI Codex。')
   }
   return { token, accountId, fingerprint: createHash('sha256').update(token).digest('hex') }
 }

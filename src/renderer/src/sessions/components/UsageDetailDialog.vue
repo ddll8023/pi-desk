@@ -1,4 +1,5 @@
-<!-- 用量与额度浮层：保留本会话统计，按需查询独立的 Codex 账户额度；缺失数据只显示占位，不推算额度或换算金额。 -->
+<!-- 用量与额度浮层：保留本会话统计，按需查询独立的 Codex 账户额度；缺失数据只显示占位，不推算额度或换算金额。
+     没有可用的 Codex 账户凭据（未登录、仅 API Key 或凭据缺账户信息）时整块不展示，加载中同样不占位。 -->
 <script setup lang="ts">
 import { computed, nextTick, onUnmounted, ref, useId, watch } from 'vue'
 import type { OutputRate, SessionUsage } from '../../../../shared/runtime-api'
@@ -38,7 +39,8 @@ async function loadQuota(refresh: boolean): Promise<void> {
   } else {
     // 失败可能意味着凭据已切换或退出；不继续展示上一账户的额度。
     quota.value = null
-    quotaError.value = result.error
+    // 没有可用账户凭据是预期状态而不是故障：不写错误，额度区整块不展示。
+    quotaError.value = result.error.code === 'AUTH_CODEX_NOT_LOGGED_IN' ? null : result.error
   }
 }
 
@@ -67,6 +69,9 @@ const quotaRows = computed(() => (quota.value?.windows ?? []).map((window) => ({
 
 const quotaUpdated = computed(() => quota.value === null ? null : new Date(quota.value.fetchedAt)
   .toLocaleTimeString('zh-CN', { hour12: false }))
+
+/** 额度区只在已取到快照或存在真实错误时渲染；加载中与无可用账户凭据都不占位。 */
+const quotaVisible = computed(() => quota.value !== null || quotaError.value !== null)
 
 /** 一条指标：淡色标签 + 实色数值，`title` 是悬停图例。 */
 interface UsageMetric {
@@ -186,7 +191,7 @@ onUnmounted(() => {
               </div>
             </section>
 
-            <section class="space-y-3 border-t border-desk-line pt-4" aria-label="Codex 账户额度" :aria-busy="quotaLoading">
+            <section v-if="quotaVisible" class="space-y-3 border-t border-desk-line pt-4" aria-label="Codex 账户额度" :aria-busy="quotaLoading">
               <div class="flex flex-wrap items-center justify-between gap-2">
                 <h3 class="text-xs font-semibold text-desk-ink">Codex 账户额度</h3>
                 <AppButton variant="compact" :disabled="quotaLoading" @click="loadQuota(true)">

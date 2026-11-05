@@ -48,6 +48,8 @@ export type AuthHelperErrorCode =
   | 'AUTH_PROMPT_MISMATCH'
   | 'INVALID_REQUEST'
   | 'AUTH_HELPER_ERROR'
+  /** 没有可用于额度查询的 Codex 账户凭据；属预期状态，主进程透传给页面，不按故障处理。 */
+  | 'AUTH_CODEX_NOT_LOGGED_IN'
 
 /** 辅助进程 → 主进程的帧。 */
 export type AuthHelperFrame =
@@ -75,7 +77,8 @@ const HELPER_ERROR_CODES: readonly string[] = [
   'AUTH_LOGIN_NOT_FOUND',
   'AUTH_PROMPT_MISMATCH',
   'INVALID_REQUEST',
-  'AUTH_HELPER_ERROR'
+  'AUTH_HELPER_ERROR',
+  'AUTH_CODEX_NOT_LOGGED_IN'
 ]
 
 /** 状态投影里的来源取值；与 shared/auth-api.ts 的 AuthSource 保持一致。 */

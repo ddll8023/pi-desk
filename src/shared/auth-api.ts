@@ -140,6 +140,11 @@ export type AuthErrorCode =
   | 'AUTH_OPEN_URL_FAILED'
   /** 认证辅助进程缺少运行依赖（官方 SDK 未安装或未构建），无法读取状态与登录。 */
   | 'AUTH_HELPER_DEPENDENCY_MISSING'
+  /**
+   * 本机没有可用于额度查询的 Codex 账户凭据（未登录、仅配置 API Key 或凭据缺少账户信息）。
+   * 这是预期状态而不是故障：页面不展示额度区，也不按错误提示。
+   */
+  | 'AUTH_CODEX_NOT_LOGGED_IN'
 
 export interface AuthError {
   readonly code: AuthErrorCode
@@ -256,7 +261,8 @@ const AUTH_ERROR_CODES: readonly string[] = [
   'AUTH_PROMPT_MISMATCH',
   'AUTH_PROVIDER_UNKNOWN',
   'AUTH_OPEN_URL_FAILED',
-  'AUTH_HELPER_DEPENDENCY_MISSING'
+  'AUTH_HELPER_DEPENDENCY_MISSING',
+  'AUTH_CODEX_NOT_LOGGED_IN'
 ]
 
 function isRecord(value: unknown): value is Record<string, unknown> {

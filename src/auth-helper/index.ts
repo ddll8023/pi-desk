@@ -19,7 +19,7 @@ import { join } from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
 import type { CreateModelRuntimeOptions, ModelRuntime } from '@earendil-works/pi-coding-agent'
 import { loadSdkModule } from '../shared-process/runtime'
-import { CodexUsageReader } from './codex-usage'
+import { CodexNotLoggedInError, CodexUsageReader } from './codex-usage'
 import type { AuthMethod, AuthPrompt, AuthProviderStatus } from '../shared/auth-api'
 import {
   AUTH_HELPER_MAX_RECORD_CHARS,
@@ -120,6 +120,7 @@ type AuthHelperFrameResponseCode =
   | 'AUTH_PROMPT_MISMATCH'
   | 'INVALID_REQUEST'
   | 'AUTH_HELPER_ERROR'
+  | 'AUTH_CODEX_NOT_LOGGED_IN'
 
 /** 计算 models.json 修改戳；文件不存在时返回 null。用于检测配置变化并重置 ModelRuntime。 */
 async function getModelsConfigStamp(filePath: string): Promise<string | null> {
@@ -431,7 +432,12 @@ async function handleRequest(request: AuthHelperRequest): Promise<void> {
         respondOk(request.id, await codexUsageReader.read(await modelRuntime(), request.refresh))
       } catch (error) {
         // 额度模块只抛出固定安全文案，不附带令牌、原始响应体或 SDK 刷新异常。
-        respondError(request.id, 'AUTH_HELPER_ERROR', describeError(error))
+        // 未登录等预期状态单独上报，页面据此不展示额度区；其余仍按辅助进程故障。
+        respondError(
+          request.id,
+          error instanceof CodexNotLoggedInError ? 'AUTH_CODEX_NOT_LOGGED_IN' : 'AUTH_HELPER_ERROR',
+          describeError(error)
+        )
       }
       return
     }

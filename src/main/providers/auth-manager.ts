@@ -118,6 +118,8 @@ function mapHelperCode(code: AuthHelperErrorCode): AuthErrorCode {
     case 'AUTH_LOGIN_NOT_FOUND': return 'AUTH_LOGIN_NOT_FOUND'
     case 'AUTH_PROMPT_MISMATCH': return 'AUTH_PROMPT_MISMATCH'
     case 'INVALID_REQUEST': return 'INVALID_REQUEST'
+    // 没有可用的 Codex 账户凭据是预期状态，透传给页面而不归为执行端不可用。
+    case 'AUTH_CODEX_NOT_LOGGED_IN': return 'AUTH_CODEX_NOT_LOGGED_IN'
     default: return 'AUTH_UNAVAILABLE'
   }
 }
