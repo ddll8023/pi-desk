@@ -34,7 +34,9 @@ function isDirectory(path) {
  */
 function spawnCommand(command, args, options) {
   if (process.platform !== 'win32') return spawnSync(command, args, options)
-  return spawnSync(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', [command, ...args].join(' ')], options)
+  // windowsHide：不另弹控制台；从资源管理器双击 .cmd 时预检不应额外闪窗。
+  return spawnSync(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', [command, ...args].join(' ')],
+    { windowsHide: true, ...options })
 }
 
 /** 固定入口执行；工作目录固定在仓库根，输出直接透传，不被本脚本改写。 */
@@ -45,7 +47,7 @@ function run(command, args, label, viaShell = false) {
     if (!env[name]) env[name] = value
   }
   const spawn = viaShell ? spawnCommand : spawnSync
-  const result = spawn(command, args, { cwd: projectRoot, env, stdio: 'inherit' })
+  const result = spawn(command, args, { cwd: projectRoot, env, stdio: 'inherit', windowsHide: true })
   if (result.error) throw result.error
   if (result.status !== 0) throw new Error(`${label}失败（退出码 ${result.status ?? '未知'}）。`)
 }
@@ -53,7 +55,7 @@ function run(command, args, label, viaShell = false) {
 function requireNode() {
   for (const [command, hint, viaShell] of [['node', 'Node.js', false], ['npm', 'npm', true]]) {
     const spawn = viaShell ? spawnCommand : spawnSync
-    const probe = spawn(command, ['--version'], { stdio: 'ignore' })
+    const probe = spawn(command, ['--version'], { stdio: 'ignore', windowsHide: true })
     if (probe.error || probe.status !== 0) {
       throw new Error(`未找到 ${command} 命令，请先安装 ${hint} 后再运行。`)
     }
