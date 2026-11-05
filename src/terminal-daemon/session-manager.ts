@@ -451,7 +451,7 @@ export class TerminalSessionManager {
     const sessions = [...this.sessions.values()]
     this.resetDelivery()
     for (const session of sessions) {
-      if (!session.exited) terminatePty(session, 'SIGTERM')
+      if (!session.exited) terminatePty(session, 'SIGHUP')
     }
     await waitForExits(sessions, 400)
     for (const session of sessions) if (!session.exited) terminatePty(session, 'SIGKILL')
@@ -476,7 +476,7 @@ export class TerminalSessionManager {
     session.emulator = null
     if (removeHistory) this.options.history.remove(session.id)
     if (session.exited || session.pty === null) return
-    terminatePty(session, 'SIGTERM')
+    terminatePty(session, 'SIGHUP')
     session.killTimer = setTimeout(() => {
       session.killTimer = null
       if (!session.exited) terminatePty(session, 'SIGKILL')
