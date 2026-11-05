@@ -273,7 +273,6 @@
           "运行注册表管理运行身份、绑定代际与占用",
           "消息、工具、历史、活动与用量投影",
           "运行中在会话处理当前请求时接入同色 SVG 流动边框",
-          "支持 task_report 上报公开任务目标、阶段与状态，在折叠抽屉中呈现工作意图",
           "用量弹窗展示会话统计与独立的 Codex 账户额度，支持刷新",
           "点击立即展示本地待发送消息，后台就绪后提交固定输入",
           "输入坞内图片附件区提供点框编号与绑定说明，随提示词提交但不拼入提示词",
@@ -293,14 +292,11 @@
           {"kind": "关键实现", "label": "图片独立资料消息", "path": "src/sdk-host/image-annotations.ts"},
           {"kind": "界面入口", "label": "用量与额度弹窗", "path": "src/renderer/src/sessions/components/UsageDetailDialog.vue"},
           {"kind": "关键实现", "label": "Runtime 展示状态", "path": "src/renderer/src/sessions/stores/runtime-core.ts"},
-          {"kind": "关键实现", "label": "任务意图与工作说明上报", "path": "src/sdk-host/task-intent.ts"},
-          {"kind": "关键实现", "label": "任务意图与阶段契约", "path": "src/shared/task-intent.ts"},
           {"kind": "界面入口", "label": "原版流动运行边框", "path": "src/renderer/src/sessions/components/TaskRunningBorder.vue"}
         ],
         "resources": [
           {"name": "会话历史文件", "owner": "官方 SDK", "lifecycle": "位于 Pi agent 目录下的项目会话文件；应用内占用由主进程注册表维护"},
           {"name": "页面投影留底与历史缓存", "owner": "renderer Runtime Store", "lifecycle": "展示缓存，不替代会话历史存储"},
-          {"name": "公开任务语义与记录", "owner": "官方会话管理器", "lifecycle": "目标、阶段、待处理与产物随当前分支自定义条目保存，不加入模型上下文，不增加操作授权"},
           {"name": "图片标注资料", "owner": "会话输入状态与官方 SDK", "lifecycle": "未提交草稿按原输入身份留在页面内存；已提交资料随会话历史保存，投影按所属图片还原"}
         ],
         "constraints": [

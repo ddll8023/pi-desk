@@ -1,5 +1,5 @@
 <!-- 一轮对话：用户消息始终可见，回答与压缩记录由会话阅读状态控制展开；耗时和用量仅作次要信息。
-     连续的纯过程消息统一默认收拢为一行公开工作摘要，运行中也不铺开工具流水；分组身份固定为首条消息，新增操作不重置手动开合。
+     连续的纯过程消息统一默认收拢为一行工作过程摘要，运行中也不铺开工具流水；分组身份固定为首条消息，新增操作不重置手动开合。
      折叠状态不在这里持有：开合由消息列表按会话写入 session-view，本组件只渲染给定状态并发出开合意图，因此定位与状态隔离都在同一处处理。
      卡片的手动展开（思考、工具、技能、压缩摘要、旧版界面）只原样向上转发，滚动位置与跟随仍由消息列表决定。 -->
 <script setup lang="ts">
@@ -211,20 +211,11 @@ function toggleProcessGroup(key: string): void {
 function processActive(group: ResponseGroup): boolean {
   return live.value && responseGroups.value.at(-1)?.key === group.key
 }
-const motionGroupKey = computed(() => responseGroups.value.filter(group => group.kind === 'process').at(-1)?.key ?? null)
-function isMotionSource(group: ResponseGroup): boolean {
-  const last = group.messages.at(-1)
-  return group.key === motionGroupKey.value && props.turn.user?.taskIntent !== undefined && last !== undefined
-    && props.turn.responses.some(message => message.id === last.id)
-}
 function processGroupTitle(group: ResponseGroup): string {
-  if (isMotionSource(group)) return props.turn.user?.taskIntent?.intent ?? '工作过程'
   return processActive(group) ? '正在处理当前请求' : '工作过程'
 }
 function runningBorder(group: ResponseGroup): boolean {
-  const report = props.turn.user?.taskIntent
   return props.running === true && props.historyAvailable === true && processActive(group) && !waitingForQuestion.value
-    && report?.attention == null && !['waiting', 'blocked', 'cancelled'].includes(report?.status ?? '')
 }
 function processGroupStats(messages: readonly ChatMessageView[]): string {
   const count = messages.reduce((total, message) => total + message.blocks.filter(block => block.kind === 'toolcall').length, 0)

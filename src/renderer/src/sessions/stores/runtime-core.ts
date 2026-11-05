@@ -6,7 +6,6 @@
  * 由 `runtime-models` 与 `runtime-model-display` 持有，本切片只经 `bindStatusEffects` 在状态收敛时通知它们。
  */
 import { computed, ref, shallowRef } from 'vue'
-import { newerTaskIntent } from '../../../../shared/task-intent'
 import { applyProjectionUpdates as applyUpdates } from '../../../../shared/runtime/projection-reducer'
 import type { ComputedRef, Ref } from 'vue'
 import type {
@@ -266,8 +265,7 @@ export function createRuntimeCore(deps: RuntimeCoreDeps): RuntimeCore {
     const base = new Map<string, ProjectionMessage>()
     for (const message of [...history.value.pages, ...messages.value]) {
       const key = messageKey(message)
-      const taskIntent = newerTaskIntent(message.taskIntent, base.get(key)?.taskIntent)
-      base.set(key, taskIntent === undefined || taskIntent === message.taskIntent ? message : { ...message, taskIntent })
+      base.set(key, message)
     }
     const output: ProjectionMessage[] = []
     // 最后一条用户消息：`findLast` 属于 ES2023，当前页面的 lib 只到 ES2022，因此从尾部手写一次查找。
@@ -292,10 +290,8 @@ export function createRuntimeCore(deps: RuntimeCoreDeps): RuntimeCore {
         const live = group.find(candidate => messageKey(candidate) === messageKey(message))
         const liveComplete = live && !live.blocks.some(block => block.truncated || block.notice)
           && (live.role === 'user' || live.generation !== null)
-        const taskIntent = newerTaskIntent(live?.taskIntent, message.taskIntent)
         output.push(live ? { ...message, generation: live.generation, turn: live.turn,
-          blocks: liveComplete ? live.blocks : message.blocks,
-          ...(taskIntent === undefined ? {} : { taskIntent }) } : message)
+          blocks: liveComplete ? live.blocks : message.blocks } : message)
       }
       for (const message of group) if (!seen.has(messageKey(message))
         && (!message.recoverable || message.generation !== null || message.turn !== null)) output.push(message)

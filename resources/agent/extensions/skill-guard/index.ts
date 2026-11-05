@@ -26,7 +26,7 @@ const LOADED_VERSION = implementationVersion(IMPLEMENTATIONS)
 const ENTRY_TYPE = 'skill-guard'
 const SECTION = 'skill_guard'
 const SELECTION_TOOL = 'skill_guard_select'
-const RECOVERY_TOOLS = new Set(['read', 'grep', 'find', 'ls', 'ffgrep', 'fffind', 'tool_search', 'task_report'])
+const RECOVERY_TOOLS = new Set(['read', 'grep', 'find', 'ls', 'ffgrep', 'fffind', 'tool_search'])
 
 interface PendingMutation {
   tool: string

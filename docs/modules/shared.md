@@ -35,13 +35,13 @@
 | `src/renderer/src/sessions/stores/runtime-model-display.ts` | 对话页隐藏模型偏好、乐观更新与串行写回、失败回滚 |
 | `src/shared/runtime-api.ts` | 只再导出 `./runtime/`，外部导入路径不变 |
 | `src/shared/runtime/status.ts` | 运行目标、状态、错误与命令（Prompt、回退、压缩、切换模型） |
-| `src/shared/runtime/projection.ts` | 消息／工具／历史／活动／用量／速率投影，以及工具语义摘要与公开任务语义契约及传输边界；任务领域类型由会话模块的 `task-intent.ts` 定义 |
+| `src/shared/runtime/projection.ts` | 消息／工具／历史／活动／用量／速率投影，以及工具语义摘要与传输边界 |
 | `src/shared/runtime/models.ts` | 模型标识、摘要与 agent 能力清单 |
 | `src/shared/runtime/resources.ts` | 资源、诊断与 MCP 契约，并集中校验 Runtime、消息投影、历史及工具语义摘要载荷 |
 | `src/shared/runtime/api.ts` | `RuntimeApi` 桥接接口：聚合会话状态与命令、消息投影、模型能力、资源与 MCP 方法；具体载荷由对应契约维护 |
 | `src/shared/runtime/projection-reducer.ts` | 桌面与手机共用的纯消息／工具增量合并；活动状态由调用方独立处理，长度或消息身份不符时返回 null 并转快照 |
 
-请求目标的运行实例与绑定代际由主进程登记，不等同于标签键或可变的当前项目；按会话读取历史不带这两项，由主进程判定该会话走绑定路径还是日志路径。后台投影留底是页面展示缓存，SDK 会话和历史文件仍是另一层生命周期。`stores/runtime.ts` 只是装配门面：会话运行、历史缓存、模型能力与模型展示偏好分别落在 `runtime-core`、`runtime-history`、`runtime-models`、`runtime-model-display`，门面保留原有公开成员与历史类型再导出，消费者不需要改调用点。公开任务语义的记录与回读见[会话模块](sessions-chat.md#任务意图与工作进展)。
+请求目标的运行实例与绑定代际由主进程登记，不等同于标签键或可变的当前项目；按会话读取历史不带这两项，由主进程判定该会话走绑定路径还是日志路径。后台投影留底是页面展示缓存，SDK 会话和历史文件仍是另一层生命周期。`stores/runtime.ts` 只是装配门面：会话运行、历史缓存、模型能力与模型展示偏好分别落在 `runtime-core`、`runtime-history`、`runtime-models`、`runtime-model-display`，门面保留原有公开成员与历史类型再导出，消费者不需要改调用点。
 
 ## F-config：Desktop 配置（混合）
 
@@ -115,7 +115,7 @@
 | `src/renderer/src/ui/project-entry-drag.ts` | 项目条目拖拽载荷（携带项目与工作区执行环境身份）、路径引用文本与终端插入文本；文件树、输入坞与终端视图共用 |
 | `src/renderer/src/ui/relative-time.ts` | 相对时间文案；侧栏会话行与提交历史共用 |
 | `src/renderer/src/ui/forked-sessions.ts` | 分叉会话折叠；侧栏项目树使用 |
-| `src/renderer/src/ui/lancer-light-ui/` | 原版 Lancer Light UI 算法与 SVG 渲染层（`index.ts`、`geometry.ts`、`svg.ts`、`light-layer.ts`、`running-border.css`）；无外部运行时依赖，会话任务光线适配与运行边框组件消费 |
+| `src/renderer/src/ui/lancer-light-ui/` | 原版 Lancer Light UI 算法与 SVG 渲染层（`index.ts`、`geometry.ts`、`svg.ts`、`light-layer.ts`、`running-border.css`）；无外部运行时依赖，仅运行边框组件消费 |
 
 `src/renderer/src/ui/` 是共享展示目录，只收被多个能力重复使用的无业务状态代码：展示组件、Markdown 与数学渲染、剪贴板、浮层定位、相对时间与分叉折叠。仅服务单一能力的文件不因位置相同就视为共享：`sessions/clock.ts` 服务聊天计时，`editor/` 的富文本实现只服务文件编辑。
 

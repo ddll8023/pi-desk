@@ -35,7 +35,6 @@
 | `src/sdk-host/extension-ui-bridge.ts` | SDK UI 回调到宿主消息的适配及取消 |
 | `src/sdk-host/browser/tools.ts` | 内置浏览器操控工具定义（快照、正文、导航、点击、输入、按键、滚动）与 A11y 树格式化 |
 | `src/sdk-host/browser/index.ts` | 内置浏览器扩展工厂接入 |
-| `src/sdk-host/task-intent.ts` | 注册内置 `task_report`，记录与回读任务意图、业务阶段、状态、待处理事项与产物说明，不启动执行 |
 
 ### 会话投影与契约
 
@@ -51,7 +50,6 @@
 | `src/sdk-host/projection/checkpoint.ts` | 首页与稳定活动的独立内存检查点：绑定时分别核对恢复条件，命中不替代 SDK 打开会话文件 |
 | `src/shared/session-api.ts` | 会话列表、打开、重载、删除与按会话读取历史的页面契约 |
 | `src/shared/session-run-api.ts` | 应用级运行清单、释放／结束与事件契约 |
-| `src/shared/task-intent.ts` | 任务意图、业务阶段、上报来源与有界校验契约 |
 | `src/shared/extension-ui-api.ts` | 扩展对话、通知、widget 与回应形态 |
 | `src/shared/tool-operation.ts` | 宿主与页面共用的工具身份、操作分类及分组顺序；未知工具保留真实名称 |
 | `src/shared/user-message-text.ts` | 用户消息里的技能块与图片标记处理，供摘要和展示共用 |
@@ -86,8 +84,8 @@
 | `src/renderer/src/sessions/components/ImageAnnotationPanel.vue` | 左图右说明的独立标注面板、编号双向定位、同步删除与键盘调整入口 |
 | `src/renderer/src/sessions/components/ImageAnnotationCanvas.vue` | 共用原图坐标系的编号与点框叠加层，支持编辑及桌面／手机只读展示，不修改图片像素 |
 | `src/renderer/src/sessions/components/ChatMessageList.vue` | 本地待发送／结果未确认状态及绑定图片标注展示、权威消息交接、历史加载、滚动与布局观察；发布对话跳转入口并消费顶部栏定位意图；承接工作树隔离任务横幅挂载 |
-| `src/renderer/src/sessions/components/TaskRunningBorder.vue` | 原版 Lancer SVG 流动运行边框的 Vue 挂载层：在会话处理当前请求且未受阻时提供非侵入视觉反馈，离屏与减少动态效果时停用 |
-| `src/renderer/src/sessions/components/ChatTurnItem.vue` | 按轮摘要、展开与原文内容、多分支切换，同轮连续的纯过程消息统一收纳为单行公开工作摘要，运行中接入 SVG 运行边框，结束后默认收起以突出最终回答正文 |
+| `src/renderer/src/sessions/components/TaskRunningBorder.vue` | 原版 Lancer SVG 流动运行边框的 Vue 挂载层：在会话处理当前请求、未等待扩展提问时提供非侵入视觉反馈，离屏与减少动态效果时停用 |
+| `src/renderer/src/sessions/components/ChatTurnItem.vue` | 按轮摘要、展开与原文内容、多分支切换，同轮连续的纯过程消息统一收纳为单行工作过程摘要，运行中接入 SVG 运行边框，结束后默认收起以突出最终回答正文 |
 | `src/renderer/src/sessions/components/TurnBranchSwitcher.vue` | 轮次多分支微型切换器（`‹ 1 / 2 ›`） |
 | `src/renderer/src/sessions/components/WorktreeTaskBanner.vue` | 任务工作区状态底栏、固定目标与审阅合并（支持 Squash 与自动清理）、运行终端关闭确认与放弃删除流程 |
 | `src/renderer/src/sessions/components/ChatMessageItem.vue` | 单消息、图片编号及说明、思考抽屉、纯过程紧凑步骤、流式打字光标、工具归组面板与生成式界面分发 |
@@ -126,10 +124,6 @@
 5. 页面校验代际／序号并应用增量；切回已缓存的实例时直接复用分片与模型清单，仅在换代、缺基准、序号断档或宿主失效时取快照；同一绑定的快照水位不倒退；早期历史和超长正文按会话读取当前分支，不接受任意文件路径，分支已变时按权威基准重建一次。
 6. 回退基于官方条目身份建立新分支，并在执行前将当前分支的回复归档至多分支历史栈；压缩由 SDK 处理。当前渲染端回退未贯通代码硬重置，Rewind 仅执行会话消息回退；处于任务工作区时的代码恢复留在独立检查点阶段实现。成功请求和最终展示收敛不是同一个时点。
 7. 删除会话先按登记占用结束或释放实例，再删除受限会话文件并刷新列表。关闭标签保留历史，与删除不同。
-
-### 任务意图与工作进展
-
-Agent 可通过内置 `task_report` 记录当前用户任务的公开工作说明、业务阶段、状态、待处理事项与产物（保存为分支内自定义条目并在投影中随用户轮次下发）。公开任务语义用于在消息折叠区呈现更贴近工作意图的阶段性标题，并在需要用户决策或授权时清晰呈现待处理说明；回退会话不撤销已经发生的文件修改。任务上报不作为操作授权，也不改变会话既有权限边界。
 
 ## 状态与边界
 

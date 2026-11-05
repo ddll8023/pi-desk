@@ -11,8 +11,6 @@ import { ImageAnnotationContext } from './image-annotations'
 import type { ImageAnnotationDocument } from '../shared/image-annotation'
 import { createGenuiExtension, GENUI_EXTENSION_NAME } from './genui/index'
 import { createBrowserExtension, BROWSER_EXTENSION_NAME } from './browser/index'
-import { createTaskIntentExtension, createTaskIntentReport, TASK_INTENT_EXTENSION_NAME } from './task-intent'
-import { TASK_INTENT_ENTRY_TYPE } from '../shared/task-intent'
 import { MessageProjection } from './projection/message-projection'
 import { ActivityProjection, matchesActivityPrefix } from './projection/activity-projection'
 import type { ActivityCheckpointState } from './projection/activity-projection'
@@ -834,18 +832,6 @@ export class SdkSessionRuntime {
                 replaceable: true
               }]
             : []),
-          { name: TASK_INTENT_EXTENSION_NAME, builtin: true, replaceable: true,
-            factory: createTaskIntentExtension((input, ctx) => {
-              const session = this.session
-              if (!this.valid || session === null || this.currentCreation !== creation || this.bindingId === null
-                || this.needsHostRebuild || this.closing || ctx.sessionManager.getSessionId() !== session.sessionId) {
-                throw new Error('任务说明不属于当前有效会话，未记录。')
-              }
-              const report = createTaskIntentReport(session.sessionManager.getBranch(), input)
-              session.sessionManager.appendCustomEntry(TASK_INTENT_ENTRY_TYPE, report)
-              this.projection?.setTaskIntent(report)
-              return report
-            }) },
           // 图片资料是独立上下文消息，不改写提示词，也不提供新的模型工具。
           this.imageAnnotations.extension,
           bindingGuard

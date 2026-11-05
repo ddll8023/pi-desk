@@ -27,7 +27,6 @@
 import { PROMPT_IMAGE_MAX_CHARS, PROMPT_IMAGE_MAX_COUNT } from '../../../shared/runtime-api'
 import type { MessageUsage, ProjectionBlock, ProjectionCompaction, ProjectionMessage, PromptImageInput, ToolExecution } from '../../../shared/runtime-api'
 import type { GenuiPayload } from '../../../shared/genui-api'
-import type { TaskIntent } from '../../../shared/task-intent'
 import { parseSkillBlock, stripImageMarkerLines } from '../../../shared/user-message-text'
 import { cloneImageAnnotations } from '../../../shared/image-annotation'
 import type { ImageAnnotationDocument } from '../../../shared/image-annotation'
@@ -106,8 +105,6 @@ export interface ChatTurnView {
 }
 
 export interface ChatMessageView {
-  /** 语义由宿主随用户消息给出；本模块不从正文或思考中推断。 */
-  readonly taskIntent?: TaskIntent
   readonly id: string
   readonly entryId: string | null
   readonly recoverable: boolean
@@ -480,7 +477,6 @@ function buildMessageView(
 
   return {
     view: {
-      ...(message.taskIntent === undefined ? {} : { taskIntent: message.taskIntent }),
       id: message.entryId ? `history:${message.entryId}` : message.id,
       entryId: message.entryId ?? null,
       recoverable: message.recoverable === true,

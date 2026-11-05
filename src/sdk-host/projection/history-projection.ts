@@ -2,7 +2,6 @@
 import type { SessionEntry } from '@earendil-works/pi-coding-agent'
 import type { HistoryChunk, HistoryData, HistoryPage, HistoryQuery, ProjectionMessage } from '../../shared/runtime-api'
 import { MessageProjection } from './message-projection'
-import { readTaskIntents } from '../task-intent'
 import { summarizeToolArguments } from './tool-projection'
 import { summarizeToolRequest, summarizeToolResult } from './tool-presentation'
 import { parseGenuiPayload } from '../../shared/genui-api'
@@ -209,7 +208,6 @@ export function readBranchHistory(branch: readonly SessionEntry[], query: Histor
     if (user(entry)) currentTurn = entry.id
     if (currentTurn && selectedIds.has(entry.id)) turnIds.set(entry.id, currentTurn)
   }
-  const taskIntents = readTaskIntents(branch)
   let sourceIndex = 0
   const displayed: ProjectionMessage[] = snapshot.messages.map(message => {
     while (sourceIndex < messages.length && messages[sourceIndex]?.role === 'toolResult') sourceIndex++
@@ -224,9 +222,7 @@ export function readBranchHistory(branch: readonly SessionEntry[], query: Histor
       ? originalMessage.content
       : null
     const sourceTurn = turnIds.get(entryId)
-    const taskIntent = message.role === 'user' ? taskIntents.get(entryId) : undefined
     return { ...message, id: historyMessageId(entryId), entryId,
-      ...(taskIntent === undefined ? {} : { taskIntent }),
       recoverable: query.kind === 'page' || chunks.some(chunk => chunk.entryId === entryId),
       ...(sourceTurn ? { turnEntryId: sourceTurn } : {}),
       blocks: message.blocks.map(block => ({ ...block,
