@@ -235,13 +235,6 @@ async function dispatch(request: SdkHostRequest): Promise<void> {
       await runtime.abort(request.bindingId)
       send({ ...envelope, type: 'session-result', seq, status: runtime.getStatus(), cancelled: false })
       return
-    case 'task-flow-start':
-      runtime.startTaskFlow(request.bindingId, request.flowId, request.revision)
-      send({ ...envelope, type: 'session-result', seq, status: runtime.getStatus(), cancelled: false })
-      return
-    case 'task-flow-read':
-      send({ ...envelope, type: 'task-flow-result', snapshot: runtime.readTaskFlow(request.bindingId, request.revision) })
-      return
     case 'prompt':
       send({ ...envelope, type: 'prompt-result',
         disposition: await runtime.submit(request.bindingId, request.message, request.images) })

@@ -1,6 +1,5 @@
-/** 渲染端 Runtime 状态、任务流程、模型选择、Prompt、回退、手动压缩与投影同步的受限桥接入口；通信异常转换为安全的展示结果。 */
+/** 渲染端 Runtime 状态、模型选择、Prompt、回退、手动压缩与投影同步的受限桥接入口；通信异常转换为安全的展示结果。 */
 import { cloneImageAnnotations } from '../../../../shared/image-annotation'
-import type { TaskFlowReadRequest, TaskFlowReadResult, TaskFlowStartRequest } from '../../../../shared/task-flow'
 import type {
   CapabilitiesResult,
   ProjectionBatch,
@@ -31,22 +30,6 @@ function callFailed(error: unknown): { ok: false; error: RuntimeError } {
     ok: false,
     error: { code: 'BRIDGE_CALL_FAILED', message: `桌面桥接调用失败，可以重试：${detail}` }
   }
-}
-
-/** 启动属于非幂等操作；通信异常只提示结果未知，不自动重新执行。 */
-export async function startRuntimeTaskFlow(request: TaskFlowStartRequest): Promise<RuntimeResult> {
-  const bridge = window.desktop
-  if (!bridge || typeof bridge.startRuntimeTaskFlow !== 'function') return unavailable()
-  try { return await bridge.startRuntimeTaskFlow(request) } catch {
-    return { ok: false, error: { code: 'BRIDGE_CALL_FAILED', message: '任务启动回执未确认；正在核对实际状态，不会自动重发。' } }
-  }
-}
-
-/** 对账只读取原目标，不建立或启动会话。 */
-export async function getRuntimeTaskFlow(request: TaskFlowReadRequest): Promise<TaskFlowReadResult> {
-  const bridge = window.desktop
-  if (!bridge || typeof bridge.getRuntimeTaskFlow !== 'function') return unavailable()
-  try { return await bridge.getRuntimeTaskFlow(request) } catch (error) { return callFailed(error) }
 }
 
 export async function getRuntimeStatus(): Promise<RuntimeResult> {

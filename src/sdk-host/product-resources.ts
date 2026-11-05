@@ -68,33 +68,41 @@ export async function prepareProductResources(sdk: Sdk, input: ProductResourceIn
     return loaded.skills
   })
 
-  /** 同名 Skill 必须是已知同源副本；未知的用户定制不能被产品悄悄覆盖。 */
-  function requireKnownSkill(item: AgentResource, path: string): void {
-    if (!matchesAgentResource(bundle, item, path)) {
-      console.error(`[product-resources] Skill ${item.id} 与产品配套规范发生来源冲突：${path}`)
-      throw new Error(`Skill ${item.id} 与产品配套规范发生来源冲突：${path}`)
-    }
-  }
-
   function skillsOverride(base: { skills: Skill[]; diagnostics: ResourceDiagnostic[] }): typeof base {
+    /** 本次替换给出的说明；用户副本路径必须留在技能诊断里，不能只出现在宿主日志。 */
+    const skillNotes: ResourceDiagnostic[] = []
+
+    /**
+     * 同名 Skill 只核对身份并留诊断：Skill 是纯文本指令，产品版本仍按 `reserved` 优先。
+     * 内容不同的用户副本不采用，也不静默覆盖；同源核对失败的扩展（可能覆盖工具）仍按冲突拒绝建立会话。
+     */
+    function reportForeignSkill(item: AgentResource, path: string): void {
+      if (matchesAgentResource(bundle, item, path)) return
+      const message = `同名 Skill ${item.id} 与产品配套规范内容不一致，已改用产品版本：${path}`
+      console.warn(`[product-resources] ${message}`)
+      diagnostics.push(message)
+      skillNotes.push({ type: 'warning', message, path })
+    }
+
     for (const item of bundle.skills) {
       for (const skill of base.skills) {
-        if (skill.name === item.id) requireKnownSkill(item, skill.filePath)
+        if (skill.name === item.id) reportForeignSkill(item, skill.filePath)
       }
       // SDK 已经按名字去重，仍须核对被去重的候选，不能只看胜出的那份。
       for (const diagnostic of base.diagnostics) {
         const collision = diagnostic.collision
         if (collision?.resourceType === 'skill' && collision.name === item.id) {
-          requireKnownSkill(item, collision.winnerPath)
-          requireKnownSkill(item, collision.loserPath)
+          reportForeignSkill(item, collision.winnerPath)
+          reportForeignSkill(item, collision.loserPath)
         }
       }
     }
     const reserved = new Set(bundle.skills.map(item => item.id))
     return {
       skills: [...productSkills, ...base.skills.filter(item => !reserved.has(item.name))],
-      diagnostics: base.diagnostics.filter(item => !item.collision || item.collision.resourceType !== 'skill'
-        || !reserved.has(item.collision.name))
+      // 只丢掉 SDK 的同名 collision 条目；本层给出的说明保留，冲突双方路径因此仍可见。
+      diagnostics: [...skillNotes, ...base.diagnostics.filter(item => !item.collision
+        || item.collision.resourceType !== 'skill' || !reserved.has(item.collision.name))]
     }
   }
 

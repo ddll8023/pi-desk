@@ -291,9 +291,6 @@ function processGroupStats(messages: readonly ChatMessageView[]): string {
             <button
               type="button"
               class="turn-process-header"
-              :data-task-source-owner="isMotionSource(group) ? ownerKey : undefined"
-              :data-task-source-task="isMotionSource(group) ? turn.user?.taskIntent?.taskId : undefined"
-              :data-task-source-turn="isMotionSource(group) ? turn.user?.taskIntent?.turnEntryId : undefined"
               :aria-expanded="isProcessGroupOpen(group.key)"
               @click="toggleProcessGroup(group.key)"
             >

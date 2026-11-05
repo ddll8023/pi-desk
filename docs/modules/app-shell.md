@@ -8,7 +8,7 @@
 
 顶部栏居中胶囊是对话导航入口：单行呈现项目名与当前会话，入口是模态弹窗（遮罩、居中轻量面板、Escape 或点遮罩收起，收起后焦点回到触发键），按新的在前列出每轮用户输入（序号、摘要、发送时间、含几个生成式界面），列表内部自己滚动，键盘 ↑↓／Home／End 移动、Enter 跳转；触发键带「当前轮／总轮数」位置小标。入口列表与当前轮由消息区发布，顶部栏只渲染弹窗并发出跳转意图，滚动与折叠仍由消息区执行（见[会话与聊天](sessions-chat.md)）。
 
-不负责具体会话执行、文件读写、Git 命令或设置值的持久化。设置页只是各业务模块的导航容器，右侧面板是“文件”“源代码管理”和当前会话“任务流程”页签的共同宿主；任务业务状态仍归会话模块。
+不负责具体会话执行、文件读写、Git 命令或设置值的持久化。设置页只是各业务模块的导航容器，右侧面板是“文件”与“源代码管理”页签的共同宿主。
 
 ## 专属文件
 
@@ -25,8 +25,8 @@
 | `src/renderer/src/shell/components/AppTitleBar.vue` | 自绘标题栏、项目与会话信息、对话导航弹窗与布局切换入口 |
 | `src/renderer/src/shell/components/SettingsView.vue` | 设置导航与分节内容分发；外观设置入口 |
 | `src/renderer/src/shell/components/SettingsNavIcon.vue` | 设置导航图标映射 |
-| `src/renderer/src/shell/components/RightPanel.vue` | 面板宽度与三类页签、文件目录和 Git 跟踪生命周期；按当前页签转交只读刷新，并挂载会话模块的任务侧栏 |
-| `src/renderer/src/shell/components/RightPanelTabs.vue` | 文件／源代码管理／任务流程页签与 Git 改动角标 |
+| `src/renderer/src/shell/components/RightPanel.vue` | 面板宽度与两类页签、文件目录和 Git 跟踪生命周期；按当前页签转交只读刷新 |
+| `src/renderer/src/shell/components/RightPanelTabs.vue` | 文件／源代码管理页签与 Git 改动角标 |
 | `src/renderer/src/shell/stores/desktop.ts` | 应用信息展示状态 |
 | `src/renderer/src/shell/stores/settings.ts` | 设置页开关与当前分节，不保存设置值 |
 | `src/renderer/src/shell/services/desktop.ts` | 应用信息桥接与通信失败转换 |
@@ -43,14 +43,13 @@
 - [偏好](preferences.md)：主题、面板宽度、折叠和页签值；主进程 `nativeTheme` 驱动页面亮暗色。
 - [项目](projects-trust.md)、[会话](sessions-chat.md)、[标签](workspace-tabs.md)：提供标题栏和主区上下文。
 - [文件](files-editor.md)、[Git](git.md)：`RightPanel.vue` 启动各自的跟踪，切页签不等于结束业务跟踪。
-- [会话任务流程](sessions-chat.md#任务计划与执行)：`TaskFlowSidebar.vue` 承载当前对话的任务流向并就地提供开始／继续操作，停止操作沿用输入坞停止键；状态订阅与对账由 Runtime 独立持有，不随侧栏开合暂停，面板折叠或隐藏时动效静默暂停并在重显时安全恢复。
 
 ## 状态、调用链与生命周期
 
 1. 主进程在建立窗口前应用便携数据路径及已保存主题，读取窗口状态，创建沙箱窗口并限制导航、权限和新窗口。
 2. Vue 页面经固定 bridge 查询应用信息；主进程只接受可信主 frame 的固定请求。
 3. 页面挂载时初始化展示 Store（顺序见 `src/renderer/src/shell/use-app-startup.ts`）；具体功能视图自行维护局部生命周期，例如模型页订阅认证，右侧面板订阅目录和 Git。
-4. 设置页导航状态只在页面内保留。窗口位置和大小通过唯一配置实例保存；右侧页签、宽度与开合沿用偏好保存链路。当前对话的新计划首次出现时可打开“任务流程”页，历史重看与后续状态变化不抢切用户已选择的页签。
+4. 设置页导航状态只在页面内保留。窗口位置和大小通过唯一配置实例保存；右侧页签、宽度与开合沿用偏好保存链路。
 5. 窗口关闭时先检测终端任务并提供终止/后台常驻选择，无活跃任务时自动收尾守护进程；选择后台常驻时退出链断开连接并由守护进程继续持有。退出链先停止手机访问的本地入口并断开手机，再阻止 SDK 恢复、关闭宿主与认证辅助进程、收敛窗口状态。
 
 应用保持单实例、单业务窗口。便携目录是运行数据，不属于可清除编译产物。Electron 集成细节在主进程；renderer 不直接调用 Electron。

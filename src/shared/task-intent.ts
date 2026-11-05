@@ -21,12 +21,6 @@ export interface TaskArtifact {
   readonly title: string
   readonly description: string | null
 }
-export interface TaskStepReport {
-  /** 执行身份由宿主附加，模型只声明当前步骤的业务结果。 */
-  readonly flowId: string
-  readonly stepId: string
-  readonly outcome: 'completed' | 'waiting'
-}
 export interface TaskIntent {
   readonly source: 'agent'
   readonly taskId: string
@@ -43,7 +37,6 @@ export interface TaskIntent {
   readonly status?: TaskLifecycle
   readonly attention?: TaskAttention | null
   readonly artifacts?: readonly TaskArtifact[]
-  readonly step?: TaskStepReport
 }
 export interface TaskIntentInput {
   readonly taskId: string | null
@@ -55,7 +48,6 @@ export interface TaskIntentInput {
   readonly status: TaskLifecycle | undefined
   readonly attention: TaskAttention | null | undefined
   readonly artifacts: readonly TaskArtifact[] | undefined
-  readonly stepOutcome: TaskStepReport['outcome'] | undefined
 }
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -107,19 +99,18 @@ function stages(value: unknown): value is readonly TaskIntentStage[] {
 }
 export function parseTaskIntentInput(value: unknown): TaskIntentInput | null {
   if (!record(value) || !keys(value, ['taskId', 'taskTitle', 'intent', 'stages', 'stageId', 'summary',
-    'status', 'attention', 'artifacts', 'stepOutcome'])
+    'status', 'attention', 'artifacts'])
     || (value.taskId !== null && !isTaskId(value.taskId)) || !text(value.taskTitle) || !text(value.intent)
     || (value.stages !== undefined && !stages(value.stages))
     || (value.stageId !== undefined && value.stageId !== null && !isTaskIntentEntryId(value.stageId))
     || (value.summary !== undefined && value.summary !== null && !text(value.summary, TASK_INTENT_SUMMARY_LIMIT))
     || (value.status !== undefined && !isTaskLifecycle(value.status))
     || (value.attention !== undefined && value.attention !== null && !attention(value.attention))
-    || (value.artifacts !== undefined && !artifacts(value.artifacts))
-    || (value.stepOutcome !== undefined && value.stepOutcome !== 'completed' && value.stepOutcome !== 'waiting')) return null
+    || (value.artifacts !== undefined && !artifacts(value.artifacts))) return null
   return { taskId: value.taskId, taskTitle: value.taskTitle.trim(), intent: value.intent.trim(),
     stages: value.stages?.map(stage => ({ ...stage, title: stage.title.trim() })),
     stageId: value.stageId, summary: typeof value.summary === 'string' ? value.summary.trim() : value.summary,
-    status: value.status, attention: value.attention, artifacts: value.artifacts, stepOutcome: value.stepOutcome }
+    status: value.status, attention: value.attention, artifacts: value.artifacts }
 }
 export function isTaskIntent(value: unknown): value is TaskIntent {
   if (!record(value) || !keys(value, ['source', 'taskId', 'rootEntryId', 'turnEntryId', 'revision', 'reportedAt',
@@ -134,9 +125,6 @@ export function isTaskIntent(value: unknown): value is TaskIntent {
     && (value.status === undefined || isTaskLifecycle(value.status))
     && (value.attention === undefined || value.attention === null || attention(value.attention))
     && (value.artifacts === undefined || artifacts(value.artifacts))
-    && (value.step === undefined || (record(value.step) && keys(value.step, ['flowId', 'stepId', 'outcome'])
-      && isTaskIntentEntryId(value.step.flowId) && isTaskIntentEntryId(value.step.stepId)
-      && (value.step.outcome === 'completed' || value.step.outcome === 'waiting')))
     && (value.attention == null || value.status === 'waiting' || value.status === 'blocked')
 }
 /** 同一轮次的历史详情不得把较新的语义上报覆盖成旧副本。 */

@@ -101,12 +101,6 @@ export const useRuntimeStore = defineStore('runtime', () => {
   }
 
   return {
-    displayTaskFlows: core.displayTaskFlows,
-    taskFlowNotice: core.taskFlowNotice,
-    taskFlowLive: core.taskFlowLive,
-    taskFlowStarting: core.taskFlowStarting,
-    startTaskFlow: core.startTaskFlow,
-    refreshTaskFlow: core.refreshTaskFlow,
     view: core.view,
     foregroundRunId: core.foregroundRunId,
     suspendedSessionId: core.suspendedSessionId,

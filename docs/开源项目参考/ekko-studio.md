@@ -75,7 +75,7 @@
 
 | 本项目能力 | Ekko Studio 对应 | 差异说明 |
 | --- | --- | --- |
-| Coding Agent 接入 | 14 种 Coding Agent CLI 集成 | pi-desk 深度内置 Pi SDK 完整生态（含 Pi Tools、MCP、Skill 门禁与 Task Plan），以 Pi 为深度整合的执行核心；Ekko Studio 外层包装 14 种 CLI（包含 Pi、Claude Code、Codex 等），提供隔离与全局配置，偏向外部 CLI 适配层。 |
+| Coding Agent 接入 | 14 种 Coding Agent CLI 集成 | pi-desk 深度内置 Pi SDK 完整生态（含 Pi Tools、MCP 与 Skill 门禁），以 Pi 为深度整合的执行核心；Ekko Studio 外层包装 14 种 CLI（包含 Pi、Claude Code、Codex 等），提供隔离与全局配置，偏向外部 CLI 适配层。 |
 | 受管浏览器操控 | 桌面 Agent 浏览器（Desktop Agent Browser） | pi-desk 采用内置受限 Webview，侧重于网页点框批注提取 HTML/CSS 并注入对话草稿；Ekko Studio 提供独立桌面 Agent 浏览器面板，通过 MCP (`agent-browser`) 执行无障碍快照、点击、填表与控制台日志捕获。见[工作区标签][p-workspace] |
 | 移动端/远程接续 | 移动 App 与会话分享（Mobile App & Relay） | pi-desk 提供免安装的局域网扫码直连 Web 页面，桌面开启即用，手机访问全部项目对话；Ekko Studio 提供独立移动 App 客户端，支持局域网、鉴权直连与云端 Relay 中转，支持 iOS Live Activities 与会话分享 Token。见[手机访问][p-lan] |
 | 文件浏览与查看 | 文件浏览器（File Browser） | pi-desk 聚焦本地工作区文件树，深度结合 CodeMirror 源码编辑、Tiptap 富 Markdown 编辑与 Git 差异联动，内置 Excel/CSV/TSV 表格解析与 PDF/DOCX 排版预览；Ekko Studio 重点支持远程后端文件管理，并在聊天中支持 DOCX/PPTX/XLSX/PDF 等生成文件的本地预览。见[文件模块][p-files] |

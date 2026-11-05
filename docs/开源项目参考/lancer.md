@@ -79,7 +79,7 @@
 
 | 本项目能力 | 对方对应 | 差异 |
 | --- | --- | --- |
-| **运行可视化与排版** | GitTree 任务拓扑图 + Light UI 光线动效 | **pi-desk** 已接入参考 Lancer 的单会话任务单轨道与原版 Light UI 光线及流动运行边框：支持面板就地开始／继续与聊天口令启动，真实阶段事件投射光线，运行气泡与当前步骤接入同色 SVG 流动边框；它聚焦单会话内的任务与阶段流向，不是多会话事件拓扑图，也不包含递归子分支。**Lancer** 的 GitTree 展现多会话线、分支、交接及交付节点。 |
+| **运行可视化与排版** | GitTree 任务拓扑图 + Light UI 光线动效 | **pi-desk** 已接入参考 Lancer 的原版 Light UI 流动运行边框：在会话处理当前请求时提供非侵入视觉反馈。**Lancer** 的 GitTree 展现多会话线、分支、交接及交付节点。 |
 | **代码审阅与 Diff 展示** | 审阅工作台（`Workbench`）与 Turn 级别快照（`TurnCheckpointStore`） | **pi-desk** 已有按工作区固定的 Git Diff、持久任务身份和会话绑定，文件与终端也使用该身份；另保留在任务分支执行自动提交的旧快照服务；当前生命周期触发与跨桥接代码回退链尚未贯通，不能视为可靠的轮次恢复能力。**Lancer** 的 `TurnCheckpointStore` 将快照对象与索引保存在应用数据目录的独立 `objects.git` bare 仓库，不依赖向用户任务分支追加快照提交，并由审阅工作台按轮次读取。 |
 
 ### 无对应（本项目独有）
@@ -97,7 +97,7 @@
 
 | 类别 | 具体能力 |
 | --- | --- |
-| **子会话编排** | Lancer 提供递归子分支、孙分支与父会话结果汇总；pi-desk 的串行任务步骤不创建子代理，[子代理文档][p-subagent]仍为设计，不能计入实质重合。 |
+| **子会话编排** | Lancer 提供递归子分支、孙分支与父会话结果汇总；pi-desk 不创建子代理，[子代理文档][p-subagent]仍为设计，不能计入实质重合。 |
 | **本地无头控制接口** | Unix Domain Socket + Bearer Token 的 Control API 与 `./scripts/lancer-ctl`，支持外部程序非交互式派发（send/queue/steer）、等待（wait）、订阅日志流（stream）与多泳道查看（lanes）。 |
 | **自定义桌面扩展前端** | 基于 `pi-extension://` 协议、沙箱 iframe 与 Chord 0.87.0 的前端扩展挂载机制，允许 Pi 扩展携带独立的 GUI 操作面板（如 PR Review、Test Runs）。 |
 | **macOS 豆包 App 接管** | 利用 macOS 辅助功能（Accessibility API）与本地豆包桌面应用挂接，接收外部生成内容。 |
@@ -109,7 +109,7 @@
 | --- | --- | --- |
 | **桌面外壳与前端** | Electron + Vue 3 + TypeScript + Pinia + Tailwind CSS v4 | Electron 43 + React + TypeScript + Tailwind CSS |
 | **Pi 运行边界** | 独立 `utilityProcess` 托管 SDK 宿主，故障不波及主进程 | Electron 主进程内直接加载 Pi SDK 驱动 |
-| **任务与子线程** | 会话内串行任务已内置，Subagent 编排仍为设计 | 递归子分支（child-threads）与航道视图 |
+| **任务与子线程** | 仅支持单会话意图汇报，Subagent 编排仍为设计 | 递归子分支（child-threads）与航道视图 |
 | **外部控制接入** | 局域网 HTTP 手机网页（受限 Cookie 认证） | 本地 Unix Domain Socket（Bearer Token Wire API + CLI） |
 | **代码快照颗粒度** | 已有 Git 工作区差异与提交式轮次快照服务；独立检查点未实现，代码回退链未贯通 | 独立 Bare Git 仓库管理的 Turn 级别快照（每交互回合） |
 | **构建与包管理** | npm / electron-vite / electron-builder | pnpm workspaces (10.34.9) / electron-vite |
@@ -122,7 +122,7 @@
 | --- | --- | --- |
 | **本地 Unix Socket 控制接口（Control API）** | **高** | **本项目现有 Node 运行时即可完全覆盖**。利用 Node 原生 `net` 模块监听 Unix Domain Socket，以 Bearer Token 鉴权，复用主进程现有的会话派发与审批通道。能为用户本地自动化脚本、测试管道或多 Agent 协作提供标准输入通道，避免直接篡改 `~/.pi/agent/sessions/*.jsonl` 产生文件锁争抢。 |
 | **基于独立 Bare Git 仓库的 Turn 级别审查快照** | **中** | **需要替换现有提交式快照，而不是再叠加一条回退路径**。现有稳定工作区 ID、持久会话绑定及统一执行上下文可以作为检查点归属基础；快照存储需独立于用户索引和分支历史，同时贯通轮次边界、差异与恢复结果。系统 Git 已存在，但捕获范围、资源限额、保留策略及恢复协调仍需独立设计；工作区与文件/Git/终端贯通不代表独立检查点或完整代码恢复已经实现。 |
-| **GitTree 任务事件拓扑图与 Light UI 动态反馈** | **已落地核心动效** | 本项目已将 `@lancer/light-ui` 原版核心算法与 SVG 渲染层源码（MIT）导入至 `src/renderer/src/ui/lancer-light-ui/`，随前端编译并由 `task-flow-motion.ts` 与 `TaskRunningBorder.vue` 接入真实阶段事件与运行边框，保留 MIT 与 NOTICE 并随包携带。多会话拓扑视图、递归子分支与桌面 React 图组件仍为对方独有能力，本项目不引入。 |
+| **GitTree 任务事件拓扑图与 Light UI 动态反馈** | **已落地核心动效** | 本项目已将 `@lancer/light-ui` 原版核心算法与 SVG 渲染层源码（MIT）导入至 `src/renderer/src/ui/lancer-light-ui/`，随前端编译并由 `TaskRunningBorder.vue` 接入处理中的运行边框，保留 MIT 与 NOTICE 并随包携带。多会话拓扑视图、递归子分支与桌面 React 图组件仍为对方独有能力，本项目不引入。 |
 | **桌面扩展前端沙箱挂载体系** | **低** | **需要独立的产品级体系设计**。需新增自定义协议（如 `pi-extension://`）、CSP 沙箱隔离 iframe、多进程间 MessagePort 管道以及状态双向同步机制。由于改动横跨主进程、preload 和渲染层，工程复杂度较高，短期内可优先完善标准 CLI 扩展与 MCP 支持。 |
 
 ## 信息来源
@@ -142,8 +142,7 @@
   - 项目全局架构与运行边界：[`docs/项目结构文档.md`][p-arch]
   - 当前任务工作区与提交式快照边界：[`workspace-manager.ts`](../../src/main/workspaces/workspace-manager.ts)、[`session-manager.ts`](../../src/main/sessions/session-manager.ts)、[`turn-snapshot-service.ts`](../../src/main/git/turn-snapshot-service.ts)、[`sdk-host-manager.ts`](../../src/main/sessions/sdk-host-manager.ts)、[渲染端回退服务](../../src/renderer/src/sessions/services/runtime.ts)及 [`preload/runtime.ts`](../../src/preload/runtime.ts)。
   - 对方独立检查点机制：[`TurnCheckpointStore`](https://github.com/raylee-ai/lancer/blob/main/apps/desktop/electron/workbench/checkpoint-store.ts)。
-  - 会话内串行任务与单轨道看板：[任务控制器](../../src/sdk-host/task-flow/controller.ts)、[状态与语义契约](../../src/shared/task-flow.ts)、[任务流程看板](../../src/renderer/src/sessions/components/TaskFlowPanel.vue)、[任务侧栏](../../src/renderer/src/sessions/components/TaskFlowSidebar.vue)、[计划步骤与就地操作](../../src/renderer/src/sessions/components/TaskFlowSteps.vue)。
-  - 原版 Light UI 与动效适配：[`src/renderer/src/ui/lancer-light-ui/`](../../src/renderer/src/ui/lancer-light-ui/)、[`task-flow-motion.ts`](../../src/renderer/src/sessions/task-flow-motion.ts)、[`TaskRunningBorder.vue`](../../src/renderer/src/sessions/components/TaskRunningBorder.vue)、[`licenses/lancer-light-ui-MIT.txt`](../../licenses/lancer-light-ui-MIT.txt)。
+  - 原版 Light UI 与动效适配：[`src/renderer/src/ui/lancer-light-ui/`](../../src/renderer/src/ui/lancer-light-ui/)、[`TaskRunningBorder.vue`](../../src/renderer/src/sessions/components/TaskRunningBorder.vue)、[`licenses/lancer-light-ui-MIT.txt`](../../licenses/lancer-light-ui-MIT.txt)。
   - 子代理设计规划：[`docs/subagents-design.md`][p-subagent]
   - 开源参考索引：[`docs/开源项目参考/README.md`][p-index]
 

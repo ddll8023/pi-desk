@@ -103,8 +103,8 @@ MIT 部分要求保留声明；Apache-2.0 部分还涉及随附许可、修改�
 
 | 能力 | 重叠环节 | 不可视作替代的原因 |
 | --- | --- | --- |
-| 多任务可观测 | 看到任务正在做什么及其工具活动 | pi-desk 有会话运行清单、消息／工具／文件活动、用量及当前对话的任务单轨道；没有岗位、跨任务派发和任务交付中心，不能把会话任务页等同于任务中心 |
-| 结构化计划与执行 | 登记步骤、启动后跟踪状态并回看结果 | pi-desk 通过 `task_plan` 登记同一会话内的串行步骤，支持在任务面板就地开始／继续或通过聊天口令启动，步骤推进需要模型业务交付声明，遇阻塞进入等待；控制器维护状态并随分支保存记录，不是 EvoFlow 的 Supervisor DAG、项目团队或独立 Plan / Goal 模式 |
+| 多任务可观测 | 看到任务正在做什么及其工具活动 | pi-desk 有会话运行清单、消息／工具／文件活动与用量；没有岗位、跨任务派发和任务交付中心 |
+| 结构化计划与执行 | 登记步骤、启动后跟踪状态并回看结果 | pi-desk 仅通过 `task_report` 记录当前用户意图与业务阶段，不内置专用串行计划执行看板或工作流平台；不是 EvoFlow 的 Supervisor DAG、项目团队或独立 Plan / Goal 模式 |
 | 工作空间与代码检索 | 都围绕项目目录和文件工作 | pi-desk 的文件树、文件候选和编辑接口不是符号／引用图谱及向量检索服务；EvoFlow 依赖清单包含 AST 和向量组件 |
 | 手机或渠道继续交互 | 从桌面之外回应 Agent | pi-desk 提供局域网扫码直连、可访问全部已登记项目的聊天网页；EvoFlow 的 IM 是消息渠道及调度推送，不是同一种客户端链路 |
 | 参数化交互 | 用户提交结构化参数 | pi-desk 的生成式界面参数回到当前会话；EvoFlow 工作流参数触发已发布流程。输入、输出和生命周期不同，不能把表单相似视为实质重合 |
@@ -114,7 +114,7 @@ MIT 部分要求保留声明；Apache-2.0 部分还涉及随附许可、修改�
 
 | 类别 | EvoFlow 官方描述的能力 | pi-desk 当前边界 |
 | --- | --- | --- |
-| 开放目标与团队控制面 | Goal、项目团队、跨任务派发与恢复流程 | 已有单会话串行计划及执行追踪，但没有等价的开放目标与团队编排；[子代理文档][p-subdesign]仍是初步设计 |
+| 开放目标与团队控制面 | Goal、项目团队、跨任务派发与恢复流程 | 没有等价的开放目标与团队编排；[子代理文档][p-subdesign]仍是初步设计 |
 | 工作流与调度 | 节点画布、发布运行、定时触发 | 无可视化模板编排、发布复用、定时调度与独立执行历史中心；会话分支内的任务记录不是平台运行中心 |
 | 岗位员工 | 值班、职责、审批、预算、汇报 | 无对应内置产品模型 |
 | 资料与资产服务 | 知识库、向量检索、画像、经验和反思入口 | 无对应内置服务；现有文件检索不承担相同目标 |
@@ -146,7 +146,7 @@ EvoFlow 文档包含广泛的桌面与预览能力，但本次没有核实其是
 ### 对方官方资料与清单
 
 - [README][e-readme]、[文档入口][e-docs]、[产品总览][e-overview]：模式、功能地图及概念边界。
-- [Plan 模式][e-plan]、[任务中心][e-tasks]：官方描述的计划启动、步骤依赖及执行图入口；与本项目的串行任务轨道区分。
+- [Plan 模式][e-plan]、[任务中心][e-tasks]：官方描述的计划启动、步骤依赖及执行图入口。
 - [根 LICENSE][e-license]、[NOTICE][e-notice]：主体非商业许可与第三方范围。
 - 已实际读取的例外文本：[DeerFlow MIT][e-deerlicense]、[ZCode Apache-2.0][e-zlicense]、[Liquid Glass MIT][e-glasslicense]、[Canvas Skill Apache-2.0][e-canvaslicense]、[Frontend Skill Apache-2.0][e-frontendlicense]、[Skill Creator Apache-2.0][e-skilllicense]。
 - [面板包声明][e-panel]、[桌面 Cargo][e-cargo]、[Gateway 依赖][e-gateway]、[Harness 依赖][e-harness]：运行层和组件，不作为完整实现证明。
@@ -159,7 +159,6 @@ EvoFlow 文档包含广泛的桌面与预览能力，但本次没有核实其是
 - [文件模块][p-files]、[资源模块][p-resources]、[手机模块][p-mobile]、[生成式界面模块][p-genui]：对应能力与明确不做项。
 - [`src/sdk-host/genui/tools.ts`](../../src/sdk-host/genui/tools.ts)：声明式文档和补丁入口；不持有任务执行状态。
 - [子代理初步设计][p-subdesign]：只用于说明设计不等于实现，不把设计内容计入已实现能力。
-- [`TaskFlowController`](../../src/sdk-host/task-flow/controller.ts)、[任务契约](../../src/shared/task-flow.ts)、[任务侧栏与看板](../../src/renderer/src/sessions/components/TaskFlowSidebar.vue)：会话内串行执行、分支记录与任务流程面板，不是完整工作流平台。
 - [`package.json`](../../package.json)：现有依赖声明，不据此声称存在内置知识库服务。
 
 [e-plan]: https://github.com/EvovexAI/EvoFlow/blob/main/docs/user/guides/chat/plan-mode.md

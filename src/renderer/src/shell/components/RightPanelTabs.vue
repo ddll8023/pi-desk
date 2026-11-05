@@ -1,8 +1,8 @@
 <!--
-  右侧面板的页签条：文件、源代码管理与当前会话任务流程共用同一列，同一时刻只显示一个。
+  右侧面板的页签条：文件与源代码管理共用同一列，同一时刻只显示一个。
 
   页签只表达「看哪一个视图」，不承担任何数据读取：选中状态由界面偏好持有（重启后保持），
-  切换只派发一次意图；文件与 Git 保持既有跟踪，任务状态由 Runtime 独立管理。改动数只作为提示，为 0 时不显示。
+  切换只派发一次意图；文件与 Git 保持既有跟踪。改动数只作为提示，为 0 时不显示。
 -->
 <script setup lang="ts">
 import type { RightPanelTab } from '../../../../shared/preferences-api'
@@ -20,8 +20,7 @@ const emit = defineEmits<{
 /** 页签定义：顺序即展示顺序，图标与文案成对给出。 */
 const TABS: readonly { readonly key: RightPanelTab; readonly label: string }[] = [
   { key: 'files', label: '文件' },
-  { key: 'source-control', label: '源代码管理' },
-  { key: 'task-flow', label: '任务流程' }
+  { key: 'source-control', label: '源代码管理' }
 ]
 </script>
 
@@ -31,7 +30,6 @@ const TABS: readonly { readonly key: RightPanelTab; readonly label: string }[] =
       v-for="tab in TABS"
       :key="tab.key"
       :id="`right-panel-tab-${tab.key}`"
-      :aria-controls="tab.key === 'task-flow' ? 'right-panel-page-task-flow' : undefined"
       type="button"
       role="tab"
       class="right-panel-tab"

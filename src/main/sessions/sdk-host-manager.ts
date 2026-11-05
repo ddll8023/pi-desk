@@ -22,7 +22,6 @@ import type {
   AgentCapabilities, McpStatus, PiResources, ProjectionBatch, ProjectionSnapshot, PromptImageInput,
   RuntimeDiagnostics, HistoryData, HistoryQuery
 } from '../../shared/runtime-api'
-import type { TaskFlowProbe } from '../../shared/task-flow'
 import type { BrowserSessionService } from '../browser/browser-session-service'
 import { sendToRenderer } from '../window-channel'
 import { turnSnapshotService } from '../services'
@@ -77,8 +76,6 @@ const EXPECTED_REPLIES: Record<SdkHostRequest['type'], SdkHostFrame['type'] | nu
   'memory-configuration': null,
   session: 'session-result',
   'session-abort': 'session-result',
-  'task-flow-start': 'session-result',
-  'task-flow-read': 'task-flow-result',
   prompt: 'prompt-result',
   'set-model': 'session-result',
   rewind: 'rewind-result',
@@ -131,6 +128,8 @@ const HOST_OUTPUT_TAIL_BYTES = 8 * 1024
 class HostOutputTail {
   private readonly chunks: Buffer[] = []
   private length = 0
+  /** 已经写入主进程日志的字节数；分配新数组后偏移仍对同一段输出有效。 */
+  private reported = 0
 
   /** 追加并丢弃最旧的部分，保证缓冲不随运行时长增长。 */
   append(chunk: Buffer): void {
@@ -144,11 +143,15 @@ class HostOutputTail {
     }
   }
 
-  /** 单块超出上限时只取尾部；没有输出时返回空串。 */
-  tail(): string {
-    if (this.chunks.length === 0) return ''
+  /**
+   * 只取上次上报之后的新增输出：同一段宿主输出不在第二条日志里重复出现。
+   * 起点已被尾部上限截断时下退到当前窗口开头，错失的部分不再补回。
+   */
+  unreported(): string {
     const joined = Buffer.concat(this.chunks)
-    const start = Math.max(0, joined.length - HOST_OUTPUT_TAIL_BYTES)
+    const windowStart = joined.length - this.length
+    const start = Math.max(0, this.reported - windowStart)
+    this.reported = this.length
     return joined.subarray(start).toString('utf8')
   }
 }
@@ -384,28 +387,6 @@ export class SdkHostManager {
       requestId: randomUUID(), type: 'prompt', bindingId, message, images: validated.images }, SESSION_TIMEOUT_MS)
     if (frame.type !== 'prompt-result') throw new SdkHostError('HOST_PROTOCOL_ERROR', 'SDK 提交结果不符合契约。')
     return frame.disposition
-  }
-
-  /** 启动只等待受理；超时后不重发，后续状态由推送和轻量快照确认。 */
-  async startTaskFlow(flowId: string, revision: number): Promise<void> {
-    const record = this.requireHost(true)
-    const bindingId = this.sessionSnapshot.bindingId
-    if (bindingId === null) throw new SdkHostError('STALE_SESSION', FAILURE_MESSAGES.STALE_SESSION)
-    const frame = await this.request(record, { version: SDK_HOST_PROTOCOL_VERSION, hostId: record.hostId,
-      requestId: randomUUID(), type: 'task-flow-start', bindingId, flowId, revision }, SESSION_TIMEOUT_MS)
-    if (frame.type !== 'session-result') throw new SdkHostError('HOST_PROTOCOL_ERROR', '任务启动回执不符合契约。')
-  }
-
-  /** 任务对账不读取聊天原文、不创建新宿主；同水位只返回轻量确认。 */
-  async readTaskFlow(revision: number | null): Promise<TaskFlowProbe> {
-    const record = this.requireHost(true)
-    const bindingId = this.sessionSnapshot.bindingId
-    if (bindingId === null) throw new SdkHostError('STALE_SESSION', FAILURE_MESSAGES.STALE_SESSION)
-    const frame = await this.request(record, { version: SDK_HOST_PROTOCOL_VERSION, hostId: record.hostId,
-      requestId: randomUUID(), type: 'task-flow-read', bindingId, revision }, SESSION_TIMEOUT_MS)
-    if (frame.type !== 'task-flow-result' || this.active !== record || this.sessionSnapshot.bindingId !== bindingId
-      || frame.snapshot.runtimeId !== bindingId) throw new SdkHostError('STALE_SESSION', FAILURE_MESSAGES.STALE_SESSION)
-    return frame.snapshot
   }
 
   /** 会话内模型切换：以宿主实际状态为准，超时或退出时结果未知且不自动重发。 */
@@ -997,6 +978,8 @@ export class SdkHostManager {
     record.pending.delete(value.requestId)
     clearTimeout(pending.timer)
     if (value.type === 'failed') {
+      // 会话级失败的诊断只存在于宿主 stderr：先留日志再拒绝，页面文案不变。
+      this.logHostOutput(record, value.code, `宿主请求 ${pending.type} 失败`)
       pending.reject(new SdkHostError(value.code, FAILURE_MESSAGES[value.code]))
     } else {
       pending.resolve(value)
@@ -1373,9 +1356,17 @@ export class SdkHostManager {
    * 页面与 IPC 结果仍只拿到分类与固定文案，不搬运宿主输出。
    */
   private reportHostFailure(record: HostRecord, code: SdkHostErrorCode, detail: string): void {
-    const tail = record.output.tail().trimEnd()
-    const output = tail === '' ? '（宿主没有输出）' : `\n${tail}`
-    console.error(`[sdk-host] hostId=${record.hostId} agentDir=${record.agentDir} ${code}：${detail}${output}`)
+    this.logHostOutput(record, code, detail)
+  }
+
+  /**
+   * 宿主侧异常只留在主进程日志：会话级失败的原因（如资源冲突）只出现在宿主输出里，
+   * 页面与 IPC 结果仍只拿分类与固定文案。每段输出只写一次，不随多个失败点重复铺开。
+   */
+  private logHostOutput(record: HostRecord, code: SdkHostErrorCode, detail: string): void {
+    const output = record.output.unreported().trimEnd()
+    const tail = output === '' ? '（宿主没有输出）' : `\n${output}`
+    console.error(`[sdk-host] hostId=${record.hostId} agentDir=${record.agentDir} ${code}：${detail}${tail}`)
   }
 
   /** 逐项清理定时器与等待者，不把原请求移交给新宿主。 */

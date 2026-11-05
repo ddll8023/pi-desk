@@ -1,6 +1,6 @@
 /**
  * 对话内跳转登记：消息区把当前会话每一轮的用户输入摘要与「当前读到哪一轮」发布出来，
- * 顶部栏据此渲染跳转列表；顶部栏与任务侧栏发出一次性跳转意图，消息区消费后按既有定位规则滚动。
+ * 顶部栏据此渲染跳转列表；顶部栏发出一次性跳转意图，消息区消费后按既有定位规则滚动。
  *
  * 滚动位置、折叠展开与生成式界面跳转的权威始终在消息区：本模块只搬运入口与意图，
  * 不读 DOM、不算位置。登记带会话键，键不一致时对外为空，切换会话不会把上一个会话的列表
@@ -27,9 +27,10 @@ export interface ChatNavEntry {
 }
 
 /** 跳转意图：带会话键，消费方复核后才执行。 */
-export type ChatNavJump =
-  | { readonly ownerKey: string; readonly messageId: string; readonly entryId?: never }
-  | { readonly ownerKey: string; readonly entryId: string; readonly messageId?: never }
+export interface ChatNavJump {
+  readonly ownerKey: string
+  readonly messageId: string
+}
 
 const NO_ENTRIES: readonly ChatNavEntry[] = []
 
@@ -99,27 +100,13 @@ export const useChatNavigationStore = defineStore('chat-navigation', () => {
     pending.value = { ownerKey: key, messageId }
   }
 
-  /** 任务侧栏只传官方条目身份，具体消息与轮次定位仍由消息区负责。 */
-  function requestEntryJump(key: string, entryId: string): void {
-    pending.value = { ownerKey: key, entryId }
-  }
-
-  function takeEntryJump(key: string): string | null {
-    const request = pending.value
-    if (request === null) return null
-    if (request.ownerKey !== key) { pending.value = null; return null }
-    if (request.entryId === undefined) return null
-    pending.value = null
-    return request.entryId
-  }
-
   /** 取走待跳转目标；没有或不属于当前会话时返回 null。 */
   function takeJump(key: string): string | null {
     const request = pending.value
     if (request === null) return null
     pending.value = null
-    return request.ownerKey === key ? request.messageId ?? null : null
+    return request.ownerKey === key ? request.messageId : null
   }
 
-  return { entries, activeId, pending, publish, clear, requestJump, takeJump, requestEntryJump, takeEntryJump }
+  return { entries, activeId, pending, publish, clear, requestJump, takeJump }
 })

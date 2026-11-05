@@ -19,7 +19,6 @@
  * 单块超长仍按单块上限截断，与角色无关。任何收缩都在投影上标记（截断标记或丢弃计数），
  * 并让渲染端整表重同步，不伪装成完整内容。
  */
-import type { TaskFlowState } from '../../shared/task-flow'
 import { newerTaskIntent } from '../../shared/task-intent'
 import type { TaskIntent } from '../../shared/task-intent'
 import type {
@@ -178,7 +177,6 @@ export class MessageProjection {
   private readonly toolProjection: ToolProjection
   /** 仅暂存尚未取得消息映射的语义；不按时间或数组下标猜轮次。 */
   private readonly pendingIntents = new Map<string, TaskIntent>()
-  private taskFlow: TaskFlowState | undefined
   private activity: SessionActivity | undefined
   private activitySignature = ''
   private historyBefore: string | null = null
@@ -331,14 +329,6 @@ export class MessageProjection {
     this.flush()
   }
 
-  /** 任务状态与正文分开；步骤转换立即发布，不等待正文批处理或动画。 */
-  setTaskFlow(state: TaskFlowState): void {
-    if (state === this.taskFlow) return
-    this.taskFlow = state
-    this.queueUpdate({ kind: 'task-flow', state })
-    this.flush()
-  }
-
   /** 语义只更新已经核实的用户轮次；未映射时等官方条目 ID 回填后再发布。 */
   setTaskIntent(intent: TaskIntent): void {
     if (this.disposed) return
@@ -487,7 +477,6 @@ export class MessageProjection {
       droppedMessages: this.droppedMessages,
       droppedTools: tools.droppedTools,
       ...(this.activity ? { activity: this.activity } : {}),
-      ...(this.taskFlow ? { taskFlow: this.taskFlow } : {}),
       history: { before: this.historyBefore, revision: this.historyRevision }
     }
   }

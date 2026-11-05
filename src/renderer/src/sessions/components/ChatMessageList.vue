@@ -154,21 +154,7 @@ const rewindBlockReason = computed<string | null>(() => {
   return null
 })
 const canRewind = computed(() => rewindBlockReason.value === null)
-const rewindDetail = computed(() => '回退会新建一条会话分支继续，原消息文本将恢复至输入框。已经发生的文件修改不会撤销，历史任务也不会自动重新执行。')
-
-/** 任务记录沿用消息区唯一的定位入口；尚未加载的记录明确提示，不伪造跳转。 */
-function locateTaskEntry(entryId: string): void {
-  pauseFollow()
-  const turn = turns.value.find(candidate => candidate.user?.entryId === entryId
-    || candidate.responses.some(message => message.entryId === entryId))
-  const messageId = turn?.user?.id ?? turn?.responses[0]?.id
-  if (messageId !== undefined) jumpToMessage(messageId)
-  else {
-    refillNotice.value = '该步骤的会话记录尚未加载，请向上加载历史后再定位。'
-    if (refillNoticeTimer !== null) clearTimeout(refillNoticeTimer)
-    refillNoticeTimer = setTimeout(() => { refillNotice.value = null; refillNoticeTimer = null }, 8000)
-  }
-}
+const rewindDetail = computed(() => '回退会新建一条会话分支继续，原消息文本将恢复至输入框。已经发生的文件修改不会撤销。')
 
 /** 目标消息的可提交内容（文本与可还原附件）；目标已不在投影里时返回 null，调用方据此不发起回退。 */
 function userMessagePayloadOf(messageId: string): UserMessagePayload | null {
@@ -772,15 +758,10 @@ function scheduleNavigationUpdate(): void {
 }
 
 /**
- * 取走顶部栏或任务侧栏发出的跳转意图。入口在发布之后才到的情况（新会话首轮、历史页刚回读）
+ * 取走顶部栏发出的跳转意图。入口在发布之后才到的情况（新会话首轮、历史页刚回读）
  * 由下一次发布重新调度，因此这里只消费一次，不在这里等待数据。
  */
 function consumeNavigationJump(): void {
-  const entryId = chatNavigation.takeEntryJump(sessionViewStore.key)
-  if (entryId !== null) {
-    locateTaskEntry(entryId)
-    return
-  }
   const messageId = chatNavigation.takeJump(sessionViewStore.key)
   if (messageId !== null) jumpToMessage(messageId)
 }
