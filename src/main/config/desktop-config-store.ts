@@ -125,7 +125,7 @@ interface StoredConfig {
   readonly extensionAutoUpdate: boolean
   /** 可选字段：生成式 UI 开关；缺失或非法按开启处理，保持该能力默认可用。 */
   readonly genuiEnabled: boolean
-  /** 可选字段：用户级全局记忆开关；缺失或非法按关闭处理，首次启用由用户确认。 */
+  /** 可选字段：用户级全局记忆开关；缺失或非法按开启处理，显式关闭保留。 */
   readonly memoryEnabled: boolean
   /** 手机设备保存身份记录与高熵凭证摘要，不保存 Cookie 原文。 */
   readonly lanDevices: readonly LanStoredDevice[]
@@ -425,8 +425,8 @@ export class DesktopConfigStore {
   private extensionAutoUpdate = false
   /** 生成式 UI 默认开启：它是内置特性，不应要求用户先去发现再打开。 */
   private genuiEnabled = true
-  /** 记忆开关默认关闭：首次启用需要用户明确确认，不在启动时隐式打开。 */
-  private memoryEnabled = false
+  /** 记忆开关默认开启：它是内置特性，用户可在设置页显式关闭。 */
+  private memoryEnabled = true
   private lanDevices: LanStoredDevice[] = []
   private windowState: WindowState = DEFAULT_WINDOW_STATE
   private projectTrust: Record<string, TrustDecision> = {}
@@ -704,7 +704,7 @@ export class DesktopConfigStore {
     })
   }
 
-  /** 读取记忆开关；缺失或非法时为关闭。 */
+  /** 读取记忆开关；缺失或非法时为开启。 */
   readMemoryEnabled(): Promise<MemoryPreference> {
     return this.enqueue(async () => {
       await this.loadFromDisk()
@@ -971,8 +971,8 @@ export class DesktopConfigStore {
       extensionAutoUpdate: value.extensionAutoUpdate === true,
       // 缺失按开启：旧配置文件里没有这个字段，而生成式 UI 默认可用。
       genuiEnabled: value.genuiEnabled !== false,
-      // 缺失按关闭：记忆会读取用户个人库，默认开启等于在未告知的情况下接入。
-      memoryEnabled: value.memoryEnabled === true,
+      // 缺失按开启：旧配置文件里没有这个字段，而记忆默认可用；显式关闭保留。
+      memoryEnabled: value.memoryEnabled !== false,
       lanDevices: sanitizeLanDevices(value.lanDevices),
       window: sanitizeWindowState(value.window),
       projectTrust: sanitizeProjectTrust(value.projectTrust),
