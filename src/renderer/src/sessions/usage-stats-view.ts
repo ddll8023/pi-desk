@@ -43,6 +43,8 @@ export interface DailyBarItem {
   readonly output: number
   readonly cacheRead: number
   readonly heightPercent: number
+  /** 是否渲染 X 轴日期标签：近 30 根柱全量标注会互相重叠，只标注首末与等距的少数几根。 */
+  readonly showLabel: boolean
   readonly tooltip: string
 }
 
@@ -54,8 +56,11 @@ export function buildDailyBars(daily: readonly UsageDailyStat[], maxBars = 30): 
   if (daily.length === 0) return []
   const sliced = daily.length > maxBars ? daily.slice(daily.length - maxBars) : daily
   const maxTokens = Math.max(1, ...sliced.map(item => item.totalTokens))
+  const lastIndex = sliced.length - 1
+  // 标签间隔按「最多约 7 个标签」反推；末位附近不足一个间隔时让位给末位，避免最后两个标签贴在一起。
+  const labelStep = Math.max(1, Math.ceil(sliced.length / 7))
 
-  return sliced.map(item => {
+  return sliced.map((item, index) => {
     const ratio = Math.max(0.04, item.totalTokens / maxTokens)
     const heightPercent = Math.min(100, Math.round(ratio * 100))
     const tooltip = `${item.date}：总计 ${formatTokens(item.totalTokens)} (输入 ${formatTokens(item.input)}, 输出 ${formatTokens(item.output)}, 缓存读 ${formatTokens(item.cacheRead)})`
@@ -67,6 +72,10 @@ export function buildDailyBars(daily: readonly UsageDailyStat[], maxBars = 30): 
       output: item.output,
       cacheRead: item.cacheRead,
       heightPercent,
+      showLabel:
+        index === 0 ||
+        index === lastIndex ||
+        (index % labelStep === 0 && lastIndex - index >= labelStep),
       tooltip
     }
   })
