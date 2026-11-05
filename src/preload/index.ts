@@ -35,6 +35,7 @@ import type { WorktreeApi } from '../shared/worktree-api'
 import type { GitCleanupApi } from '../shared/git-cleanup-api'
 import type { LanRemoteApi } from '../shared/lan-remote-api'
 import type { MemoryApi } from '../shared/memory-api'
+import type { UsageStatsApi } from '../shared/usage-stats-api'
 import { desktopApi } from './desktop'
 import { genuiApi } from './genui'
 import { gitApi } from './git'
@@ -50,9 +51,10 @@ import { trustApi } from './trust'
 import { updatesApi } from './updates'
 import { lanRemoteApi } from './lan-remote'
 import { memoryApi } from './memory'
+import { usageStatsApi } from './usage-stats'
 
 /** 合并后的桥接对象：各域键互不重叠，平铺后仍是页面看到的同一份 `DesktopApi` 契约。 */
-const desktop: BrowserCaptureApi & BrowserSessionApi & DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionApi & SessionRunApi & TerminalApi & PreferencesApi & QuickCommandsApi & GenuiParamsApi & PiSettingsApi & TrustApi & ExtensionUiApi & AuthApi & ModelsConfigApi & UpdatesApi & GitApi & WorktreeApi & GitCleanupApi & LanRemoteApi & MemoryApi = {
+const desktop: BrowserCaptureApi & BrowserSessionApi & DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionApi & SessionRunApi & TerminalApi & PreferencesApi & QuickCommandsApi & GenuiParamsApi & PiSettingsApi & TrustApi & ExtensionUiApi & AuthApi & ModelsConfigApi & UpdatesApi & GitApi & WorktreeApi & GitCleanupApi & LanRemoteApi & MemoryApi & UsageStatsApi = {
   ...desktopApi,
   ...browserApi,
   ...projectsApi,
@@ -68,7 +70,8 @@ const desktop: BrowserCaptureApi & BrowserSessionApi & DesktopApi & RuntimeApi &
   ...trustApi,
   ...genuiApi,
   ...lanRemoteApi,
-  ...memoryApi
+  ...memoryApi,
+  ...usageStatsApi
 }
 
 contextBridge.exposeInMainWorld('desktop', desktop)

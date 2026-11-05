@@ -11,10 +11,10 @@
 | `src/main/window.ts` | 唯一窗口的创建、主题与标题栏配色、导航与权限限制、单实例聚焦 |
 | `src/main/window-channel.ts` | 窗口引用、向页面投递事件与全部业务广播、系统目录选择；不持有业务实例，终端状态来源由组合根注册 |
 | `src/main/asset-protocol.ts` | 应用与 HTML 预览协议注册、应用资产处理、页面地址解析、目录越界判定与生产 CSP；预览资源处理归[文件模块](files-editor.md)的独立会话 |
-| `src/main/services.ts` | 主进程业务实例的唯一装配处（配置、项目、信任、会话、任务工作区、终端、供应商、资源、更新、生成式界面、记忆、手机访问） |
+| `src/main/services.ts` | 主进程业务实例的唯一装配处（配置、项目、信任、会话、任务工作区、终端、供应商、资源、更新、生成式界面、记忆、Git 清理、用量统计、手机访问） |
 | `src/main/ipc/dispatch.ts` | IPC 注册包装、调用者校验、有界标识与 MCP 服务器名校验 |
 | `src/preload/index.ts` | 只合并各域 Api 并暴露 `window.desktop`，不含 channel 调用与校验 |
-| `src/preload/*.ts`（域文件） | 按业务域各一个文件（`desktop`、`projects`、`sessions`、`runtime`、`terminal`、`git`、`worktree`、`git-cleanup`、`preferences`、`providers`、`updates`、`trust`、`genui`、`memory`、`lan-remote`、`browser`），各自承载固定 channel 调用、声明字段载荷重建、响应与事件校验、订阅释放 |
+| `src/preload/*.ts`（域文件） | 按业务域各一个文件（`desktop`、`projects`、`sessions`、`runtime`、`terminal`、`git`、`worktree`、`git-cleanup`、`preferences`、`providers`、`updates`、`trust`、`genui`、`memory`、`lan-remote`、`browser`、`usage-stats`），各自承载固定 channel 调用、声明字段载荷重建、响应与事件校验、订阅释放 |
 | `src/renderer/src/App.vue` | 页面组合根：只装配外壳骨架、弹层宿主与启动编排 |
 | `src/renderer/src/shell/components/AppShell.vue` | 布局骨架：顶部栏、侧栏与窄窗遮罩、工作区槽、右侧面板；持有窄窗与侧栏开合状态 |
 | `src/renderer/src/shell/components/WorkspaceView.vue` | 工作区：标签条、操作失败提示、对话／终端／文件／浏览器面板层与空态；核对浏览器批注来源与目标，切换后交由输入坞合并草稿 |

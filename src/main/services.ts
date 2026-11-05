@@ -1,4 +1,4 @@
-/** 主进程业务实例的唯一装配处：配置、项目、信任、会话、只读解析宿主池、终端、供应商、资源、更新、生成式界面、记忆、Git 清理与手机访问各一份，按依赖顺序建立并互相注入回调。本文件只做实例化，不注册 IPC、不写业务判断；其中系统目录选择与终端守护状态广播经 window-channel.ts 提供，是本文件对窗口投递层的唯一依赖。 */
+/** 主进程业务实例的唯一装配处：配置、项目、信任、会话、只读解析宿主池、终端、供应商、资源、更新、生成式界面、记忆、Git 清理、用量统计与手机访问各一份，按依赖顺序建立并互相注入回调。本文件只做实例化，不注册 IPC、不写业务判断；其中系统目录选择与终端守护状态广播经 window-channel.ts 提供，是本文件对窗口投递层的唯一依赖。 */
 
 import { app, dialog } from 'electron'
 import { join } from 'node:path'
@@ -21,6 +21,7 @@ import { GitService } from './git/git-service'
 import { WorktreeService } from './git/worktree-service'
 import { TurnSnapshotService } from './git/turn-snapshot-service'
 import { GitCleanupService } from './git/git-cleanup-service'
+import { UsageStatsService } from './usage/usage-stats-service'
 import { ProjectManager } from './projects/project-manager'
 import { McpInspectionManager } from './resources/mcp-inspection'
 import { createReadOnlyHost, getSdkHostEntryPath, SdkHostManager } from './sessions/sdk-host-manager'
@@ -195,6 +196,11 @@ export const gitCleanupService = new GitCleanupService({
   removeRegisteredWorkspace: async (request) => {
     await workspaceManager.removeWorktree(request)
   }
+})
+
+/** 会话用量统计服务：盘点各已登记项目的会话目录与 Token 消耗。 */
+export const usageStatsService = new UsageStatsService({
+  readProjects: async () => (await configStore.list()).projects
 })
 
 /** 认证执行端：管理认证辅助进程，凭据读写全在官方实现内完成。 */
