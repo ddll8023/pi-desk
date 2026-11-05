@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 在 macOS 主机上产出便携包：只做前置检查，不安装依赖、不下载 Electron。
+# 在 macOS 主机上产出便携包：缺少的依赖与受管记忆运行环境由预检脚本自行补齐。
 set -u
 
 cd "$(dirname "$0")/.." || exit 1
@@ -14,8 +14,8 @@ if ! command -v npm >/dev/null 2>&1; then
   exit 1
 fi
 
-if [ ! -f "node_modules/electron-builder/package.json" ]; then
-  echo "[错误] 缺少打包依赖，请先在项目根目录运行 npm install。"
+# 环境预检：幂等；任一资源无法获取时明确报错并停止，不继续出包。
+if ! node scripts/ensure-environment.mjs; then
   exit 1
 fi
 

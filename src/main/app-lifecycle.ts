@@ -57,6 +57,7 @@ import {
 } from './providers/ipc'
 import { registerUpdatesHandlers } from './updates/ipc'
 import { registerLanRemoteHandlers } from './lan-remote/ipc'
+import { registerMemoryHandlers } from './memory/ipc'
 
 /** 应用退出时等待关闭链的总预算；覆盖各平台兜底阶段后强制退出。 */
 const QUIT_DEADLINE_MS = 10_000
@@ -205,6 +206,7 @@ export async function startApplication(): Promise<void> {
   registerAuthHandlers(pageUrl)
   registerUpdatesHandlers(pageUrl)
   registerLanRemoteHandlers(pageUrl)
+  registerMemoryHandlers(pageUrl)
 
   // 事件订阅：全部只投递给当前唯一可信窗口。
   sdkRuntime.onStatusChanged(broadcastRuntimeStatus)

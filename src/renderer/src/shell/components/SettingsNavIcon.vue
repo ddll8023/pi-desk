@@ -66,6 +66,12 @@ defineProps<{ readonly name: SettingsIconName }>()
       <path d="M11 18h2" />
     </template>
 
+    <template v-else-if="name === 'brain'">
+      <path d="M12 5a3 3 0 0 0-3 3v.5A3 3 0 0 0 6.5 11a3 3 0 0 0 .5 5.5 3 3 0 0 0 5 2.5" />
+      <path d="M12 5a3 3 0 0 1 3 3v.5A3 3 0 0 1 17.5 11a3 3 0 0 1-.5 5.5 3 3 0 0 1-5 2.5" />
+      <path d="M12 5v14" />
+    </template>
+
     <template v-else>
       <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
       <path d="M21 3v5h-5" />

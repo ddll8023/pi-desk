@@ -31,6 +31,9 @@ import type { BrowserAutoAttachPayload } from '../../shared/browser-session-api'
 import { ExtensionUiManager } from './extension-ui-manager'
 import type { ExtensionDialogResponseInput, ExtensionUiSnapshot } from '../../shared/extension-ui-api'
 import { getPiAgentDir, getPiProcessEnvironment } from '../shared/pi-paths'
+import { agentResourcesDirectory } from '../../shared-process/agent-resources'
+import { managedMemoryConfiguration } from '../../shared-process/memory-runtime'
+import type { MemoryConfigurationProvider } from '../../shared-process/memory-runtime'
 import { validatePromptInput } from './prompt-input'
 import type { SdkHostRunRegistry } from './session-run-registry'
 
@@ -71,6 +74,7 @@ const STATUS_FIELDS = ['phase', 'bindingId', 'activityVersion', 'operationId', '
 const EXPECTED_REPLIES: Record<SdkHostRequest['type'], SdkHostFrame['type'] | null> = {
   initialize: 'ready',
   shutdown: 'closed',
+  'memory-configuration': null,
   session: 'session-result',
   'session-abort': 'session-result',
   'task-flow-start': 'session-result',
@@ -219,7 +223,7 @@ const FAILURE_MESSAGES: Record<SdkHostFailureCode, string> = {
 export const SDK_HOST_FAILURE_MESSAGES = FAILURE_MESSAGES
 
 /** 入口与主进程产物保持固定相邻布局；页面不能指定脚本、参数或替代 SDK。 */
-function getSdkHostEntryPath(): string {
+export function getSdkHostEntryPath(): string {
   return resolve(__dirname, '..', 'sdk-host', 'index.mjs')
 }
 
@@ -240,6 +244,8 @@ export interface SdkHostManagerOptions {
   runs: SdkHostRunRegistry
   /** 受管浏览器会话服务实例。 */
   browserSessionService?: BrowserSessionService
+  /** 记忆配置来源；缺省时不提供受管配置，扩展会退回其自身的 CLI 行为。 */
+  memory?: MemoryConfigurationProvider
 }
 
 /**
@@ -254,9 +260,17 @@ const READ_ONLY_RUNS: SdkHostRunRegistry = {
   markUnconfirmed: () => {}
 }
 
+/**
+ * 只读宿主没有业务会话，但仍要回应协议里的记忆配置：
+ * 固定返回关闭且无运行环境的配置，不为查看历史而探测用户库。
+ */
+const READ_ONLY_MEMORY: MemoryConfigurationProvider = {
+  read: async hostEntry => managedMemoryConfiguration(hostEntry, false, 0)
+}
+
 /** 只读宿主：用于查看会话历史，不承载会话；绑定前由执行链接管，接管后才接上授权回路。 */
 export function createReadOnlyHost(options: { readonly hostId: number }): SdkHostManager {
-  return new SdkHostManager({ runId: options.hostId, runs: READ_ONLY_RUNS })
+  return new SdkHostManager({ runId: options.hostId, runs: READ_ONLY_RUNS, memory: READ_ONLY_MEMORY })
 }
 
 export class SdkHostManager {
@@ -877,9 +891,13 @@ export class SdkHostManager {
           lastError: 'HOST_EXITED' })
       })
       this.publish({ state: 'starting', hostId: current.hostId, sdkVersion: null, lastError: null })
+      // 记忆配置必须在建立会话前给出：扩展工厂在资源加载阶段就要同步读到它。
+      const memoryConfiguration = await (this.options.memory ?? READ_ONLY_MEMORY).read(entryPath)
       const frame = await this.request(current, {
         version: SDK_HOST_PROTOCOL_VERSION, hostId: current.hostId,
-        requestId: randomUUID(), type: 'initialize', agentDir
+        requestId: randomUUID(), type: 'initialize', agentDir,
+        productResourcesDir: agentResourcesDirectory(entryPath),
+        memoryConfiguration
       }, READY_TIMEOUT_MS)
       if (frame.type !== 'ready') {
         throw new SdkHostError('HOST_PROTOCOL_ERROR', 'SDK 宿主初始化响应不符合契约。')
@@ -1196,6 +1214,19 @@ export class SdkHostManager {
     } catch {
       this.failTransport(record, '无法向宿主发送浏览器操作结果')
     }
+  }
+
+  /**
+   * 记忆开关或运行时资源变化后推送给已就绪宿主。
+   * 未就绪宿主不补发：它在初始化时会读到最新配置；失败由调用方作为「未确认生效」处理。
+   */
+  async refreshMemoryConfiguration(): Promise<void> {
+    const record = this.active
+    if (record === null || record.exited || record.closing || !record.ready) return
+    const memoryConfiguration = await (this.options.memory ?? READ_ONLY_MEMORY).read(getSdkHostEntryPath())
+    if (record.exited || record.closing || !record.ready || this.active !== record) return
+    record.child.postMessage({ version: SDK_HOST_PROTOCOL_VERSION, hostId: record.hostId,
+      requestId: randomUUID(), type: 'memory-configuration', memoryConfiguration } satisfies SdkHostRequest)
   }
 
   /**

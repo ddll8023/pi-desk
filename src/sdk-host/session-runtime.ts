@@ -3,8 +3,10 @@ import { randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { readFile, realpath, stat } from 'node:fs/promises'
 import { dirname, isAbsolute, resolve } from 'node:path'
-import type { AgentSession, AgentSessionEvent, AgentSessionRuntime, ExtensionCommandContextActions, ExtensionFactory, SessionStats } from '@earendil-works/pi-coding-agent'
+import type { AgentSession, AgentSessionEvent, AgentSessionRuntime, ExtensionCommandContextActions, ExtensionFactory, InlineExtension, SessionStats } from '@earendil-works/pi-coding-agent'
 import { ExtensionUiBridge } from './extension-ui-bridge'
+import { prepareProductResources } from './product-resources'
+import type { MemoryConfigurationHolder } from './memory-configuration'
 import { ImageAnnotationContext } from './image-annotations'
 import type { ImageAnnotationDocument } from '../shared/image-annotation'
 import { createGenuiExtension, GENUI_EXTENSION_NAME } from './genui/index'
@@ -42,6 +44,10 @@ type RuntimeFactory = Parameters<Sdk['createAgentSessionRuntime']>[0]
 interface RuntimeOptions {
   readonly hostId: number
   readonly agentDir: string
+  /** 主进程根据宿主产物定位的产品资源，不从会话 cwd 发现。 */
+  readonly productResourcesDir: string
+  /** 桌面记忆配置持有者；服务重建时把新总线绑给它，以便推送变更。 */
+  readonly memory: MemoryConfigurationHolder
   readonly authorize: (reference: SdkSessionReference, bindingId: number | null, projectPath: string | null) => Promise<SdkSessionAuthorization>
   readonly onState: (status: SdkSessionStatus) => void
   readonly onUiRequest: (bindingId: number, payload: Record<string, unknown>) => void
@@ -867,6 +873,9 @@ export class SdkSessionRuntime {
     }
     const cwd = await realpath(target.projectPath)
     if (!samePath(cwd, target.projectPath) || !(await stat(cwd)).isDirectory()) throw new SdkSessionFailure('INVALID_SESSION_TARGET')
+    const executionRoot = target.worktreePath?.trim() || target.projectPath
+    if (!isAbsolute(executionRoot) || !samePath(await realpath(executionRoot), executionRoot)
+      || !(await stat(executionRoot)).isDirectory()) throw new SdkSessionFailure('INVALID_SESSION_TARGET')
     if (target.sessionFile === null) return
     const filePath = await realpath(target.sessionFile)
     const directory = await realpath(target.sessionDir)
@@ -879,12 +888,14 @@ export class SdkSessionRuntime {
       || stamp(before) !== target.fileStamp) throw new SdkSessionFailure('INVALID_SESSION_TARGET')
     const entries = this.sdk.parseSessionEntries(await readFile(filePath, 'utf8'))
     const header = entries.find(entry => entry.type === 'session')
-    if (header?.type !== 'session' || header.id !== target.sessionId
-      || typeof header.cwd !== 'string' || !isAbsolute(header.cwd) || !samePath(await realpath(header.cwd), target.projectPath)
+    const headerCwd = header?.type === 'session' && typeof header.cwd === 'string' && isAbsolute(header.cwd)
+      ? await realpath(header.cwd) : null
+    if (header?.type !== 'session' || header.id !== target.sessionId || headerCwd === null
+      || (!samePath(headerCwd, target.projectPath) && !samePath(headerCwd, executionRoot))
       || (header.version !== undefined && header.version > this.sdk.CURRENT_SESSION_VERSION)) {
       throw new SdkSessionFailure('INVALID_SESSION_TARGET')
     }
-    const preview = this.sdk.SessionManager.inMemory(target.projectPath, undefined, entries)
+    const preview = this.sdk.SessionManager.inMemory(executionRoot, undefined, entries)
     preview.buildSessionContext()
     const identity = { projectPath: target.projectPath, sessionId: target.sessionId, sessionFile: filePath }
     const state = this.options.checkpoints.activityOf(identity)
@@ -900,7 +911,9 @@ export class SdkSessionRuntime {
   /** services 每次重建；项目 provider 不注册进全局查询容器。 */
   private readonly createRuntime: RuntimeFactory = async ({ cwd, agentDir, sessionManager, sessionStartEvent }) => {
     const target = this.factoryTarget
-    if (target === null || !samePath(cwd, target.projectPath) || !samePath(agentDir, this.options.agentDir)) {
+    const executionRoot = target?.worktreePath?.trim() || target?.projectPath
+    if (target === null || executionRoot === undefined || !samePath(cwd, executionRoot)
+      || !samePath(agentDir, this.options.agentDir)) {
       throw new SdkSessionFailure('INVALID_SESSION_TARGET')
     }
     const creation = ++this.creationSeed
@@ -916,8 +929,7 @@ export class SdkSessionRuntime {
     }
     try {
       const settingsManager = this.sdk.SettingsManager.create(cwd, agentDir, { projectTrusted: target.trusted })
-      const services = await this.sdk.createAgentSessionServices({ cwd, agentDir, settingsManager,
-        resourceLoaderOptions: { extensionFactories: [
+      const extensionFactories: InlineExtension[] = [
           { name: 'codemode', factory: this.sdk.createCodemodeExtension(), builtin: true, replaceable: true },
           { name: 'tool-search', factory: this.sdk.createToolSearchExtension(), builtin: true, replaceable: true },
           { name: 'mcp', factory: this.sdk.createMcpExtension(), builtin: true, replaceable: true },
@@ -971,10 +983,19 @@ export class SdkSessionRuntime {
           // 图片资料是独立上下文消息，不改写提示词，也不提供新的模型工具。
           this.imageAnnotations.extension,
           bindingGuard
-        ] } })
+      ]
+      const product = await prepareProductResources(this.sdk, {
+        directory: this.options.productResourcesDir, cwd, agentDir, settingsManager, extensionFactories,
+        memory: this.options.memory.current()
+      })
+      const services = await this.sdk.createAgentSessionServices({ cwd, agentDir, settingsManager,
+        resourceLoaderOptions: product.options })
+      // 新服务自带事件总线；配置推送沿用同一总线，不重建扩展实例。
+      this.options.memory.attach(services.resourceLoader.getExtensions().runtime.events)
       if (this.closing) throw new SdkSessionFailure('HOST_NOT_READY')
-      // 无法证明失败扩展不是审批机制，保守阻止绑定，不静默丢掉策略后开放执行。
-      if (services.resourceLoader.getExtensions().errors.length > 0) throw new SdkSessionFailure('SESSION_BIND_FAILED')
+      // 来源筛选在扩展求值之前完成；必要产品能力与注册结果不完整时仍然保守拒绝绑定。
+      try { product.assertLoaded(services.resourceLoader) } catch { throw new SdkSessionFailure('SESSION_BIND_FAILED') }
+      services.diagnostics.push(...product.diagnostics.map(message => ({ type: 'info' as const, message })))
       const scope = await this.sdk.resolveModelScopeWithDiagnostics(settingsManager.getEnabledModels() ?? [], services.modelRuntime)
       const result = await this.sdk.createAgentSessionFromServices({ services, sessionManager,
         scopedModels: scope.scopedModels, ...(sessionStartEvent === undefined ? {} : { sessionStartEvent }) })

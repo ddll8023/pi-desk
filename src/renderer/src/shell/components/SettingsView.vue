@@ -21,6 +21,7 @@ import FileSettingsSection from '../../editor/components/FileSettingsSection.vue
 import GitSettingsSection from '../../git/components/GitSettingsSection.vue'
 import VersionUpdateSection from '../../updates/components/VersionUpdateSection.vue'
 import LanRemoteSettingsSection from '../../lan-remote/components/LanRemoteSettingsSection.vue'
+import MemorySettingsSection from '../../memory/components/MemorySettingsSection.vue'
 
 const preferencesStore = usePreferencesStore()
 const settingsStore = useSettingsStore()
@@ -111,6 +112,7 @@ const markdownViewOptions = [
         <ModelSettingsView v-else-if="activeSection === 'model'" />
         <ResourceView v-else-if="activeSection === 'resources'" />
         <GenuiSettingsSection v-else-if="activeSection === 'features'" />
+        <MemorySettingsSection v-else-if="activeSection === 'memory'" />
         <VersionUpdateSection v-else />
       </div>
     </div>

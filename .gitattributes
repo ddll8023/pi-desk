@@ -1,0 +1,5 @@
+# 明文指定批处理与 shell 脚本的行尾：检出结果不依赖各机器的 core.autocrlf。
+# cmd.exe 读取纯 LF 的 .cmd 时会切行失败，连代码页切换都失效，表现为命令粘连成乱码。
+*.cmd text eol=crlf
+*.bat text eol=crlf
+*.sh text eol=lf

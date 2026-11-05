@@ -1,0 +1,293 @@
+/** 按需检索与受控保存工具；Memory Skill 决定何时用记忆，主动定向读取自动记独立统计，权威内容保存须审批。 */
+import { createHash } from 'node:crypto'
+import { Type } from '@earendil-works/pi-ai'
+import type { JsonValue } from '@earendil-works/pi-ai'
+import type { ExtensionAPI, ExtensionToolContext } from '@earendil-works/pi-coding-agent'
+import { approve, approvalLimit, approvalText } from './approval.ts'
+import { CONTROL_TYPE, applicableProfiles } from './context.ts'
+import type { Lease, MemoryRuntime } from './context.ts'
+import { DOMAINS, array, domain, errorText, object, text } from './engine.ts'
+import type { JsonObject } from './engine.ts'
+
+const DomainSchema = Type.Union(DOMAINS.map(value => Type.Literal(value)))
+const Ids = Type.Array(Type.String({ pattern: '^m_[0-9A-HJKMNP-TV-Z]{26}$' }), { maxItems: 50 })
+const Offset = Type.Optional(Type.Integer({ minimum: 0 }))
+const Limit = Type.Optional(Type.Integer({ minimum: 1, maximum: 200 }))
+const Output = Type.Object({ ok: Type.Literal(true), data: Type.Unknown(), error: Type.Null() })
+const ReadHints = { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
+const ACCESS_NOTE = '自动技术统计仅表示主动定向读取结果已准备，不代表模型已接收、理解或采纳；不参与检索排序。'
+
+function result(data: JsonObject) {
+  const value = { ok: true as const, data, error: null }
+  const json = JSON.stringify(value, null, 2)
+  if (json.length > 180_000) throw new Error('结果超过单次完整输出上限；请缩小 limit 或查询范围，未截断正文')
+  return { content: [{ type: 'text' as const, text: json }], details: data, structuredContent: JSON.parse(json) as JsonValue }
+}
+function keys(data: JsonObject, allowed: string[]): void {
+  if (Object.keys(data).some(key => !allowed.includes(key))) throw new Error('候选包含未允许字段；不接受 approved、plan_id 或模型授权声明')
+}
+function boundedPage(offset: number | undefined, limit: number | undefined): [number, number] {
+  const start = offset ?? 0
+  const count = limit ?? 20
+  if (!Number.isInteger(start) || start < 0 || !Number.isInteger(count) || count < 1 || count > 200) throw new Error('分页范围无效')
+  return [start, count]
+}
+/** Pi 会话使用 UUID，引擎要求 s_ULID；稳定编码，不能换 ID 绕过重复保存。 */
+function diarySessionId(sessionId: string): string {
+  const alphabet = '0123456789ABCDEFGHJKMNPQRSTVWXYZ'
+  let value = BigInt(`0x${createHash('sha256').update(`pi-memory.global\0${sessionId}`).digest('hex').slice(0, 32)}`)
+  let encoded = ''
+  for (let index = 0; index < 26; index++) { encoded = alphabet[Number(value & 31n)] + encoded; value >>= 5n }
+  return `s_${encoded}`
+}
+
+export function registerMemoryTools(pi: ExtensionAPI, runtime: MemoryRuntime): void {
+  // 全局检索不探测项目目录；停用、取消和会话换代仍使用同一租约边界。
+  const globalRead = async (ctx: ExtensionToolContext, signal: AbortSignal | undefined,
+    work: (lease: Lease) => Promise<JsonObject>) => {
+    const lease = runtime.lease(ctx, signal)
+    const data = await work(lease)
+    lease.assert()
+    return result(data)
+  }
+  /** 控制与状态在停用、全局关闭或受管环境不可用时仍可读，以便说明真实原因。 */
+  const controlRead = async (ctx: ExtensionToolContext, signal: AbortSignal | undefined,
+    work: (lease: Lease) => Promise<JsonObject>) => {
+    const lease = runtime.lease(ctx, signal, true)
+    const data = await work(lease)
+    lease.assert()
+    return result(data)
+  }
+  const save = async (ctx: ExtensionToolContext, signal: AbortSignal | undefined, operation: 'save' | 'profile',
+    prepare: (lease: Lease) => Promise<JsonObject>) => {
+    // 无完整交互能力时，连计划技术缓存也不生成。
+    approvalLimit(ctx)
+    const lease = runtime.lease(ctx, signal)
+    const finishSave = runtime.beginSave(lease)
+    try {
+      const input = await prepare(lease)
+      lease.assert()
+      const leaf = ctx.sessionManager.getLeafId()
+      const stillCurrent = (): void => {
+        lease.assert()
+        if (ctx.sessionManager.getLeafId() !== leaf) throw new Error('审批期间当前分支已改变，旧确认失效')
+        approvalLimit(ctx)
+      }
+      const plan = await runtime.engine.plan(operation, input, lease.signal)
+      stillCurrent()
+      const message = approvalText(runtime.engine, plan, { sessionId: lease.state.sessionId,
+        cwd: lease.state.cwd })
+      const accepted = await approve(ctx, message, lease.signal)
+      if (!accepted) return result({ memory_scope: 'global', committed: false, cancelled: true, plan_id: plan.id,
+        message: '未提交权威记忆；短期候选仍由既有引擎管理' })
+      stillCurrent()
+      const data = await runtime.engine.commit(plan, stillCurrent)
+      // commit 一旦开始不强杀；如在提交期间换代，返回真实结果而不是宣称撤销。
+      return result({ ...data, committed: true, plan_id: plan.id,
+        source_pi_session_id: lease.state.sessionId, source_cwd: lease.state.cwd,
+        note: '仅此具体计划已提交；没有其他文件沙箱或跨域事务保证' })
+    } finally { finishSave() }
+  }
+
+  pi.registerTool({
+    name: 'memory_status', label: '读取记忆库状态',
+    description: '读取用户级全局记忆库、受管运行时、启停与可用状态；不初始化、修索引或恢复事务。运行环境不可用时也返回真实原因。',
+    parameters: Type.Object({}, { additionalProperties: false }), outputSchema: Output, annotations: ReadHints,
+    async execute(_id, _params, signal, _onUpdate, ctx) {
+      return controlRead(ctx, signal, async lease => {
+        let store: JsonObject
+        try { store = await runtime.engine.status(lease.signal) }
+        catch (error) { store = { status: 'unavailable', error: errorText(error) } }
+        return { memory_scope: 'global', runtime: runtime.status(ctx), store }
+      })
+    }
+  })
+  pi.registerTool({
+    name: 'memory_control', label: '控制记忆召回', exposure: 'model-only', executionMode: 'sequential',
+    description: '遵从用户要求停用、恢复或刷新记忆。off/on 只记录当前分支控制选项，不保存记忆正文或批准；refresh 使旧缓存和待确认计划失效。',
+    parameters: Type.Object({ action: Type.Union([Type.Literal('off'), Type.Literal('on'), Type.Literal('refresh')]) }, { additionalProperties: false }),
+    outputSchema: Output, annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    async execute(_id, params, _signal, _onUpdate, ctx) {
+      return result(runtime.control(ctx, params.action, data => pi.appendEntry(CONTROL_TYPE, data)))
+    }
+  })
+  pi.registerTool({
+    name: 'memory_profiles', label: '按领域读取适用画像',
+    description: '按领域读取全局或领域适用的画像及来源，支持分页。历史项目画像不自动升格为全局偏好；current_profile 不代表事实已核实。',
+    parameters: Type.Object({ domain: DomainSchema, offset: Offset, limit: Limit }, { additionalProperties: false }),
+    outputSchema: Output, annotations: ReadHints,
+    async execute(_id, params, signal, _onUpdate, ctx) {
+      return globalRead(ctx, signal, async lease => {
+        const selected = domain(params.domain)
+        const data = applicableProfiles(await runtime.engine.profiles(selected, lease.signal), selected,
+          [...new Set([...runtime.config.profileDomains, selected])])
+        const profiles = array(data.profiles)
+        const [offset, limit] = boundedPage(params.offset, params.limit)
+        return { ...data, store: runtime.engine.store, total_profiles: profiles.length, offset,
+          profiles: profiles.slice(offset, offset + limit), has_more: offset + limit < profiles.length,
+          next_offset: offset + limit < profiles.length ? offset + limit : null }
+      })
+    }
+  })
+  pi.registerTool({
+    name: 'memory_rules', label: '读取当前有效规则',
+    description: '读取用户级全局库当前有效决定和约束，支持主题查询与分页，不绑定或过滤当前项目。历史来源与适用条件不变；摘要需 memory_read 读取全文，不自动修索引。',
+    parameters: Type.Object({ query: Type.Optional(Type.String()), offset: Offset, limit: Limit }, { additionalProperties: false }),
+    outputSchema: Output, annotations: ReadHints,
+    async execute(_id, params, signal, _onUpdate, ctx) {
+      return globalRead(ctx, signal, async lease => {
+        const [offset, limit] = boundedPage(params.offset, params.limit)
+        const data = await runtime.engine.rules(params.query ?? '', offset, limit, lease.signal)
+        if (data.memory_scope !== 'global') throw new Error('规则返回的检索范围不一致，未展示')
+        return { ...data, rules: array(data.rules).map(value => {
+          const row = object(value)
+          if (row.status !== 'active') {
+            throw new Error('规则生命周期无效，未展示')
+          }
+          return { ...row, status_basis: '仅投影当前有效版本；不证明事实已核实或适用于当前任务',
+            source: { store: runtime.engine.store, command: 'rules', file: row.file_path,
+              source_project: row.source_project ?? row.project_id ?? null, id: row.id, date: row.date } }
+        }) }
+      })
+    }
+  })
+  pi.registerTool({
+    name: 'memory_search', label: '按任务检索全局记忆',
+    description: '从用户级全局索引按任务关键词查询日记，不绑定项目。records 查询全部日记，recent 限近期，historical/month 查询月摘要。支持分页；摘要需 memory_read 读取全文，不自动修复索引或扩大明确时间范围。',
+    parameters: Type.Object({ query: Type.String({ minLength: 1 }),
+      mode: Type.Optional(Type.Union([Type.Literal('records'), Type.Literal('recent'), Type.Literal('historical'), Type.Literal('month')])),
+      month: Type.Optional(Type.String({ pattern: '^\\d{4}-(0[1-9]|1[0-2])$' })), offset: Offset, limit: Limit }, { additionalProperties: false }),
+    outputSchema: Output, annotations: ReadHints,
+    async execute(_id, params, signal, _onUpdate, ctx) {
+      return globalRead(ctx, signal, async lease => {
+        const [offset, limit] = boundedPage(params.offset, params.limit)
+        const mode = params.mode ?? 'records'
+        const data = await runtime.engine.search(params.query, mode, params.month, offset, limit, lease.signal)
+        if (data.memory_scope !== 'global' || data.mode !== mode) throw new Error('搜索返回的范围不一致，未展示')
+        const summary = mode === 'historical' || mode === 'month'
+        const matches = array(data.matches).map(value => {
+          const row = object(value)
+          if (row.kind !== (summary ? 'summary' : 'record')) throw new Error('搜索返回的记录类型不一致，未展示')
+          return { ...row, source: { store: runtime.engine.store, command: 'recall', file: row.file_path, source_project: row.project_id ?? null,
+            ...(summary ? { month: row.month, source_record_ids: row.source_record_ids } : { id: row.id, date: row.date }) } }
+        })
+        return { ...data, matches,
+          requested_scope: { memory_scope: 'global', mode, month: params.month ?? null, query: params.query },
+          has_more_matches: data.has_more === true }
+      })
+    }
+  })
+  pi.registerTool({
+    name: 'memory_read', label: '读取指定日记原文',
+    description: '按 1..50 个真实日记 ID 读取全局库原文，保留历史来源、状态和适用条件，不要求项目登记。成功准备结果后默认记录独立访问统计；统计失败仍返回原文及未确认状态，不代表模型实际采纳。',
+    parameters: Type.Object({ ids: Type.Array(Type.String({ pattern: '^m_[0-9A-HJKMNP-TV-Z]{26}$' }), { minItems: 1, maxItems: 50 }) }, { additionalProperties: false }),
+    outputSchema: Output, annotations: { ...ReadHints, readOnlyHint: false, idempotentHint: false },
+    async execute(toolCallId, params, signal, _onUpdate, ctx) {
+      const lease = runtime.lease(ctx, signal)
+      const data = await runtime.engine.read(params.ids, lease.signal)
+      lease.assert()
+      if (data.memory_scope !== 'global') throw new Error('原文返回的范围不一致，未展示')
+      const values = array(data.records)
+      if (values.length !== params.ids.length) throw new Error('原文返回的记录数量不一致，未展示')
+      const records = values.map((value, index) => {
+        const row = object(value)
+        if (row.id !== params.ids[index]) {
+          throw new Error('原文身份不一致，未展示')
+        }
+        return { ...row, status: row.status ?? 'active',
+          source: { store: runtime.engine.store, file: row.file_path, source_project: row.project_id ?? null, id: row.id, date: row.date } }
+      })
+      const payload = { ...data, records }
+      // 先确认完整输出可返回，并预留最坏的统计错误文本；超限或旧租约不产生统计。
+      result({ ...payload, access_statistics: { status: 'unconfirmed', new_records: null,
+        duplicate_records: null, error: '\u0000'.repeat(1024), note: ACCESS_NOTE } })
+      let statistics: JsonObject
+      try {
+        const version = text(data.index_version, '原文来源版本')
+        const recorded = await runtime.engine.recordAccess(params.ids, lease.state.sessionId, toolCallId, version, lease.assert)
+        const added = recorded.new_records
+        const duplicate = recorded.duplicate_records
+        if (typeof added !== 'number' || !Number.isInteger(added) || added < 0
+          || typeof duplicate !== 'number' || !Number.isInteger(duplicate) || duplicate < 0
+          || added + duplicate !== new Set(params.ids).size
+          || recorded.status !== (added > 0 ? 'recorded' : 'duplicate')) throw new Error('统计返回的计数或状态不一致')
+        statistics = { status: recorded.status, new_records: added, duplicate_records: duplicate, note: ACCESS_NOTE }
+      } catch (error) {
+        // 写入后通信失败不能冒充“未写入”；不重试，也不使成功原文变成统计错误。
+        statistics = { status: 'unconfirmed', new_records: null, duplicate_records: null,
+          error: errorText(error).slice(0, 1024), note: ACCESS_NOTE }
+      }
+      lease.assert()
+      return result({ ...payload, access_statistics: statistics })
+    }
+  })
+  pi.registerTool({
+    name: 'memory_access_stats', label: '查询记忆访问统计',
+    description: '按 1..50 个真实日记 ID 只读查询主动定向读取次数、去重会话数和最近读取时间，不产生访问计数。统计默认自动采集，无需配置；零次或尚未采集不表示历史上从未使用，统计不代表有用性或事实正确，也不参与排名。不初始化、修复或扫描历史。',
+    parameters: Type.Object({ ids: Type.Array(Type.String({ pattern: '^m_[0-9A-HJKMNP-TV-Z]{26}$' }), { minItems: 1, maxItems: 50 }) }, { additionalProperties: false }),
+    outputSchema: Output, annotations: ReadHints,
+    async execute(_id, params, signal, _onUpdate, ctx) {
+      return globalRead(ctx, signal, async lease => {
+        const ids = [...new Set(params.ids)]
+        const data = await runtime.engine.accessStats(ids, lease.signal)
+        const rows = array(data.records)
+        if (data.coverage !== 'recorded_accesses_only' || data.automatic !== true || rows.length !== ids.length) {
+          throw new Error('访问统计返回的范围或数量不一致，未展示')
+        }
+        const records = rows.map((value, index) => {
+          const row = object(value)
+          if (row.id !== ids[index]) throw new Error('访问统计返回的记录身份不一致，未展示')
+          return { ...row, source: { store: runtime.engine.store, command: 'access-stats',
+            id: row.id, source_project: row.source_project ?? row.project_id ?? null, date: row.date } }
+        })
+        return { ...data, records }
+      })
+    }
+  })
+  const RecordSchema = Type.Object({
+    type: Type.Union(['decision', 'constraint', 'progress', 'issue', 'fact', 'preference_evidence'].map(value => Type.Literal(value))),
+    topic: Type.String({ minLength: 1, maxLength: 200 }), content: Type.String({ minLength: 1, maxLength: 20_000 }),
+    rule_key: Type.Optional(Type.String({ minLength: 1 })), source_record_ids: Type.Optional(Ids),
+    supersede_record_ids: Type.Optional(Ids), supersession_reason: Type.Optional(Type.String({ minLength: 1 }))
+  }, { additionalProperties: false })
+  pi.registerTool({
+    name: 'memory_save', label: '审批并保存工作日记', exposure: 'model-only', executionMode: 'sequential',
+    description: '仅在用户明确要求保存日记时，传入具体完整候选。按 memory Skill 先核实事实与现行规则。工具生成短期计划、完整展示并等待真实用户批准后才提交；取消/变化/无交互不提交。会写计划技术缓存，可清理过期计划；不是只读操作。不接受 approved 或外部 plan_id。',
+    parameters: Type.Object({ records: Type.Array(RecordSchema, { minItems: 1, maxItems: 50 }) }, { additionalProperties: false }),
+    outputSchema: Output, annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
+    async execute(_id, params, signal, _onUpdate, ctx) {
+      keys(params, ['records'])
+      // 固化候选，后续交互不复用可被另一处理器修改的参数引用。
+      const candidate = object(JSON.parse(JSON.stringify(params)))
+      return save(ctx, signal, 'save', async () => {
+        const records = array(candidate.records).map(value => {
+          const row = object(value)
+          keys(row, ['type', 'topic', 'content', 'rule_key', 'source_record_ids', 'supersede_record_ids', 'supersession_reason'])
+          return row
+        })
+        return { agent: ctx.mode === 'tui' ? 'pi' : 'pi-desk',
+          session_id: diarySessionId(ctx.sessionManager.getSessionId()), records }
+      })
+    }
+  })
+  pi.registerTool({
+    name: 'memory_profile_save', label: '审批并保存个人画像', exposure: 'model-only', executionMode: 'sequential',
+    description: '仅在用户明确要求维护画像/长期偏好时使用，不因保存日记或一次行为顺带更新。先读取相关画像，再提供完整正文、依据、作用域及替换 ID。生成具体计划、展示全部新旧内容后由真实用户批准；不接受模型批准标志。',
+    parameters: Type.Object({ domain: DomainSchema, scope: Type.String({ pattern: '^(global|domain:[a-z0-9-]+)$' }),
+      basis: Type.Union([Type.Literal('explicit'), Type.Literal('inferred_confirmed')]),
+      title: Type.String({ minLength: 1, maxLength: 200 }), content: Type.String({ minLength: 1, maxLength: 20_000 }),
+      source_record_ids: Type.Optional(Ids), replace_profile_ids: Type.Optional(Type.Array(Type.String({ pattern: '^p_[0-9A-HJKMNP-TV-Z]{26}$' }), { maxItems: 50 }))
+    }, { additionalProperties: false }),
+    outputSchema: Output, annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
+    async execute(_id, params, signal, _onUpdate, ctx) {
+      keys(params, ['domain', 'scope', 'basis', 'title', 'content', 'source_record_ids', 'replace_profile_ids'])
+      const candidate = object(JSON.parse(JSON.stringify(params)))
+      return save(ctx, signal, 'profile', async () => {
+        domain(candidate.domain)
+        const scope = text(candidate.scope)
+        if (scope !== 'global' && scope !== `domain:${candidate.domain}`) throw new Error('画像作用域须为 global 或所选领域')
+        return candidate
+      })
+    }
+  })
+}

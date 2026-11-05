@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "bundleId": "cpython-3.12.16-20261026-tzdata-2026.6",
+  "pythonVersion": "3.12.16",
+  "pythonRelease": "20261026",
+  "targets": {
+    "win32-x64": {
+      "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20261026/cpython-3.12.16%2B20261026-x86_64-pc-windows-msvc-install_only_stripped.tar.gz",
+      "sha256": "1f2ab53880fc67ea323398c6388e05af28addc99a8e389209f08a51fdff4b149",
+      "python": "distribution/python/python.exe"
+    },
+    "win32-arm64": {
+      "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20261026/cpython-3.12.16%2B20261026-aarch64-pc-windows-msvc-install_only_stripped.tar.gz",
+      "sha256": "3b2e4da9209cec3e0eaf4db31176977a88df32d598ff94a7899c34cd8304db04",
+      "python": "distribution/python/python.exe"
+    },
+    "darwin-x64": {
+      "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20261026/cpython-3.12.16%2B20261026-x86_64-apple-darwin-install_only_stripped.tar.gz",
+      "sha256": "37c38fda76fec1fbf310adcbafb7f0d96af13b5511bf8ea954c3aa8eec185734",
+      "python": "distribution/python/bin/python3.12"
+    },
+    "darwin-arm64": {
+      "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20261026/cpython-3.12.16%2B20261026-aarch64-apple-darwin-install_only_stripped.tar.gz",
+      "sha256": "353d5f1b4fd2715e7053f12f068435d5bbad16b91e057006b5d01e0925709a7e",
+      "python": "distribution/python/bin/python3.12"
+    }
+  },
+  "timezone": {
+    "version": "2026.6",
+    "url": "https://files.pythonhosted.org/packages/7a/29/6a1391d31cd00ff9e927215a224a880e1e84e826b64ba80a499e51c074d8/tzdata-2026.6.tar.gz",
+    "sha256": "85d2cd9c09f81f0bb29db27759fc83af4f1e620efb814f8c5bf8b4cc4feece6d",
+    "directory": "timezone/tzdata-2026.6/src/tzdata/zoneinfo"
+  }
+}

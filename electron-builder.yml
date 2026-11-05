@@ -19,6 +19,8 @@ directories:
 # 必须一并随包，任何过滤规则都不能排除它，否则终端无法启动。
 # 终端守护进程入口是 out/terminal-daemon/index.cjs：它由应用用 Electron 自带的 Node 拉起后脱离运行，
 # 同样从应用目录的 node_modules 解析 node-pty 与 @xterm/headless，两者都是生产依赖，不能移到 devDependencies。
+# 受管记忆运行环境随 out/** 一并进包（宿主按自身产物目录旁定位），因此不另写 extraResources：
+# 复制到 resources/ 反而会与宿主查找位置不一致。
 files:
   - package.json
   - out/**
@@ -39,6 +41,9 @@ mac:
   target:
     - zip
   category: public.app-category.developer-tools
+  # 随包 IANA 时区数据是二进制 TZif，不是可执行代码；不排除时 codesign 会在数据文件上失败。
+  signIgnore:
+    - '/memory-runtime/.*/timezone/'
   # ad-hoc 签名：无证书也能在本机直接运行；electron-builder 会带上内置的
   # allow-jit 与 disable-library-validation entitlements。换正式证书时改用 CSC_* 环境变量。
   identity: "-"

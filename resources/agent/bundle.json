@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "extensions": [
+    {
+      "id": "skill-guard",
+      "entry": "extensions/skill-guard/index.ts",
+      "files": [
+        "extensions/skill-guard/index.ts",
+        "extensions/skill-guard/context.ts",
+        "extensions/skill-guard/references.ts",
+        "extensions/skill-guard/routing.ts"
+      ],
+      "requiredTools": ["skill_guard_select"]
+    },
+    {
+      "id": "pi-memory",
+      "entry": "extensions/pi-memory/index.ts",
+      "files": [
+        "extensions/pi-memory/index.ts",
+        "extensions/pi-memory/approval.ts",
+        "extensions/pi-memory/context.ts",
+        "extensions/pi-memory/engine.ts",
+        "extensions/pi-memory/files.ts",
+        "extensions/pi-memory/host.ts",
+        "extensions/pi-memory/recall.ts",
+        "extensions/pi-memory/tools.ts"
+      ],
+      "localConfigFiles": ["config.json"],
+      "requiredTools": [
+        "memory_status",
+        "memory_control",
+        "memory_profiles",
+        "memory_rules",
+        "memory_search",
+        "memory_read",
+        "memory_access_stats",
+        "memory_save",
+        "memory_profile_save"
+      ]
+    }
+  ],
+  "skills": [
+    {
+      "id": "memory",
+      "entry": "skills/memory/SKILL.md",
+      "files": [
+        "skills/memory/SKILL.md",
+        "skills/memory/references/cli.md",
+        "skills/memory/references/integrity.md",
+        "skills/memory/references/monthly.md",
+        "skills/memory/references/profile.md",
+        "skills/memory/references/save.md",
+        "skills/memory/references/search.md",
+        "skills/memory/scripts/memory_store.py"
+      ]
+    }
+  ],
+  "memoryEngine": "skills/memory/scripts/memory_store.py"
+}

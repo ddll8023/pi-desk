@@ -15,6 +15,7 @@ import type {
 import { loadSdkModule } from '../shared-process/runtime'
 import type { SdkModule } from '../shared-process/runtime'
 import { SdkSessionFailure, SdkSessionRuntime } from './session-runtime'
+import { MemoryConfigurationHolder } from './memory-configuration'
 import { readSessionLog } from './log-reader'
 import { ProjectionCheckpoints } from './projection/checkpoint'
 
@@ -28,6 +29,8 @@ let ready = false
 let closing = false
 let seq = 0
 let sessions: SdkSessionRuntime | null = null
+/** 桌面记忆配置在本进程的唯一持有者；无桌面配置时保持空，由扩展自行退回 CLI 行为。 */
+const memoryConfiguration = new MemoryConfigurationHolder()
 /** 已加载的官方 SDK 模块：预览只需要它的解析与内存会话管理，不建立 AgentSession。 */
 let sdkModule: SdkModule | null = null
 /** 进程内共享检查点：首页由日志读取提供，稳定活动由运行时累计，两类状态分别校验和复用。 */
@@ -125,7 +128,8 @@ async function initialize(request: Extract<SdkHostRequest, { type: 'initialize' 
   initializing = true
   clearTimeout(initializeTimer)
   try {
-    if (!isAbsolute(request.agentDir) || process.env.PI_CODING_AGENT_DIR !== request.agentDir) {
+    if (!isAbsolute(request.agentDir) || !isAbsolute(request.productResourcesDir)
+      || process.env.PI_CODING_AGENT_DIR !== request.agentDir) {
       fail(request, 'AGENT_DIR_MISMATCH'); return
     }
     const sdk = await loadSdkModule()
@@ -135,8 +139,12 @@ async function initialize(request: Extract<SdkHostRequest, { type: 'initialize' 
     if (!isAbsolute(actualAgentDir) || !samePath(actualAgentDir, request.agentDir)) {
       fail(request, 'AGENT_DIR_MISMATCH'); return
     }
+    // 扩展工厂在资源加载阶段同步读进程环境，因此在建立会话前先写入首次配置。
+    memoryConfiguration.apply(request.memoryConfiguration)
     sessions = new SdkSessionRuntime(sdk, {
-      hostId: request.hostId, agentDir: actualAgentDir, authorize, checkpoints, browserOperator: dispatchBrowserOperation,
+      hostId: request.hostId, agentDir: actualAgentDir, productResourcesDir: request.productResourcesDir,
+      memory: memoryConfiguration,
+      authorize, checkpoints, browserOperator: dispatchBrowserOperation,
       onState: status => {
         if (status.phase === 'invalid') cancelAuthorizations(status.bindingId)
         send({ version: SDK_HOST_PROTOCOL_VERSION, hostId: request.hostId, type: 'session-state', seq: ++seq, status })
@@ -180,6 +188,10 @@ async function dispatch(request: SdkHostRequest): Promise<void> {
   if (request.type === 'initialize') { await initialize(request); return }
   if (request.hostId !== hostId) { fail(request, 'HOST_NOT_READY'); return }
   if (request.type === 'shutdown') { await shutdown(request); return }
+  if (request.type === 'memory-configuration') {
+    memoryConfiguration.apply(request.memoryConfiguration)
+    return
+  }
   if (request.type === 'authorization-result') {
     const pending = authorizations.get(request.requestId)
     if (pending === undefined || pending.bindingId !== request.bindingId) return

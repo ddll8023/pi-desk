@@ -1,5 +1,7 @@
 /** SDK 宿主内部生命周期、目标授权、日志读取与交互契约；不引入 SDK，不开放任意调用或凭据快照。 */
 import { isExtensionDialogResponseInput, projectExtensionUiRequest } from '../shared/extension-ui-api'
+import { isMemoryHostConfiguration } from '../shared-process/memory-runtime'
+import type { MemoryHostConfiguration } from '../shared-process/memory-runtime'
 import { parseImageAnnotations } from '../shared/image-annotation'
 import type { ImageAnnotationDocument } from '../shared/image-annotation'
 import { isWorkspaceId } from '../shared/workspace-api'
@@ -16,7 +18,10 @@ import type {
   RuntimeDiagnostics, SessionUsage, HistoryQuery, HistoryData
 } from '../shared/runtime-api'
 
-export const SDK_HOST_PROTOCOL_VERSION = 10
+export const SDK_HOST_PROTOCOL_VERSION = 12
+/** 桌面记忆配置推送通道：与扩展侧 host.ts 的常量一致，只传受限配置对象。 */
+export const MEMORY_CONFIGURATION_CHANGED = 'pi-desk:memory-configuration-changed:v1'
+
 /**
  * `hostId` 是主进程注册表分配的应用级运行身份；宿主不能自行编号，重启后也不会复用旧值。
  */
@@ -148,7 +153,9 @@ export type SdkSessionRequest = RequestEnvelope & {
 }
 
 export type SdkHostRequest =
-  | (RequestEnvelope & { readonly type: 'initialize'; readonly agentDir: string })
+  | (RequestEnvelope & { readonly type: 'initialize'; readonly agentDir: string;
+      readonly productResourcesDir: string; readonly memoryConfiguration: MemoryHostConfiguration })
+  | (RequestEnvelope & { readonly type: 'memory-configuration'; readonly memoryConfiguration: MemoryHostConfiguration })
   | (RequestEnvelope & { readonly type: 'shutdown' })
   | SdkSessionRequest
   | (RequestEnvelope & { readonly type: 'session-abort'; readonly bindingId: number })
@@ -335,7 +342,11 @@ function isConfirmation(value: unknown): value is SdkInterruptConfirmation | nul
 export function isSdkHostRequest(value: unknown): value is SdkHostRequest {
   if (!isRecord(value) || !isRequest(value)) return false
   switch (value.type) {
-    case 'initialize': return isPath(value.agentDir) && requestKeys(value, ['agentDir'])
+    case 'initialize': return isPath(value.agentDir) && isPath(value.productResourcesDir)
+      && isMemoryHostConfiguration(value.memoryConfiguration)
+      && requestKeys(value, ['agentDir', 'productResourcesDir', 'memoryConfiguration'])
+    case 'memory-configuration': return isMemoryHostConfiguration(value.memoryConfiguration)
+      && requestKeys(value, ['memoryConfiguration'])
     case 'shutdown': return requestKeys(value, [])
     case 'session': {
       if (typeof value.action !== 'string' || !['new', 'open', 'reload', 'release'].includes(value.action)

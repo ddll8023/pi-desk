@@ -1,6 +1,6 @@
-/** 主进程业务实例的唯一装配处：配置、项目、信任、会话、只读解析宿主池、终端、供应商、资源、更新、生成式界面、Git 清理与手机访问各一份，按依赖顺序建立并互相注入回调。本文件只做实例化，不注册 IPC、不写业务判断；其中系统目录选择与终端守护状态广播经 window-channel.ts 提供，是本文件对窗口投递层的唯一依赖。 */
+/** 主进程业务实例的唯一装配处：配置、项目、信任、会话、只读解析宿主池、终端、供应商、资源、更新、生成式界面、记忆、Git 清理与手机访问各一份，按依赖顺序建立并互相注入回调。本文件只做实例化，不注册 IPC、不写业务判断；其中系统目录选择与终端守护状态广播经 window-channel.ts 提供，是本文件对窗口投递层的唯一依赖。 */
 
-import { app } from 'electron'
+import { app, dialog } from 'electron'
 import { join } from 'node:path'
 import { WorkspaceStore } from './workspaces/workspace-store'
 import { WorkspaceManager } from './workspaces/workspace-manager'
@@ -23,7 +23,7 @@ import { TurnSnapshotService } from './git/turn-snapshot-service'
 import { GitCleanupService } from './git/git-cleanup-service'
 import { ProjectManager } from './projects/project-manager'
 import { McpInspectionManager } from './resources/mcp-inspection'
-import { createReadOnlyHost, SdkHostManager } from './sessions/sdk-host-manager'
+import { createReadOnlyHost, getSdkHostEntryPath, SdkHostManager } from './sessions/sdk-host-manager'
 import { LogHostPool } from './sessions/log-host-pool'
 import { SdkRuntimeBridge } from './sessions/sdk-runtime-bridge'
 import { SessionManager } from './sessions/session-manager'
@@ -34,12 +34,14 @@ import { UpdateChecker } from './updates/update-checker'
 import { PackageUpdater } from './updates/package-updater'
 import { PiAgentUpdater } from './updates/pi-agent-updater'
 import { getRuntimeRoot } from './updates/pi-runtime'
+import { MemoryManager } from './memory/memory-manager'
 import { WindowState } from './window-state'
 import { LanRemoteManager } from './lan-remote/manager'
 import { BrowserSessionService } from './browser/browser-session-service'
 import {
   broadcastTerminalDaemonStatus,
   chooseDirectoryWithDialog,
+  mainWindow,
   registerTerminalStatusSource,
   sendToRenderer,
 } from './window-channel'
@@ -60,7 +62,7 @@ export const sdkRuntime: SdkRuntimeBridge = new SdkRuntimeBridge({
   prepareHost: (host) => {
     host.setSessionAuthority((reference, ownerProjectPath, workspaceId) => sessionManager.prepareSdkTarget(reference, ownerProjectPath, workspaceId))
   },
-  createHost: (runId) => new SdkHostManager({ runId, runs: sessionRuns, browserSessionService }),
+  createHost: (runId) => new SdkHostManager({ runId, runs: sessionRuns, browserSessionService, memory: memoryManager.provider }),
   get workspaces(): WorkspaceManager { return workspaceManager }
 })
 
@@ -125,6 +127,35 @@ export const packageUpdater = new PackageUpdater({
 
 /** 内置 Pi agent 安装：只由页面显式发起，写入应用自有的运行时目录，不自动执行也不重试。 */
 export const piAgentUpdater = new PiAgentUpdater({ runtimeRoot: getRuntimeRoot })
+
+/**
+ * 首次创建记忆库的确认：在唯一业务窗口展示目标位置与影响。
+ * 取消、窗口不可用或对话框异常一律视为未确认，不执行创建。
+ */
+async function confirmMemoryInitialization(detail: string): Promise<boolean> {
+  const target = mainWindow
+  if (target === null || target.isDestroyed()) return false
+  try {
+    const result = await dialog.showMessageBox(target, {
+      type: 'question', buttons: ['创建', '取消'], defaultId: 0, cancelId: 1, noLink: true,
+      title: '创建记忆库', message: '创建用户级全局记忆库？', detail
+    })
+    return result.response === 0
+  } catch {
+    return false
+  }
+}
+
+/**
+ * 用户级全局记忆：开关、受管运行时、库状态与首次创建的唯一所有者。
+ * 资源位置相对宿主产物固定；不读项目目录，也不在启动时自动创建用户库。
+ */
+export const memoryManager = new MemoryManager({
+  store: configStore,
+  hostEntry: getSdkHostEntryPath,
+  confirmInitialize: confirmMemoryInitialization,
+  notifyHosts: () => sdkRuntime.notifyMemoryConfiguration()
+})
 
 /** 文件索引按已授权工作区缓存，页面不能绕过身份指定执行目录。 */
 export const projectFileIndex = new ProjectFileIndex()

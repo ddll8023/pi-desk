@@ -10,7 +10,7 @@
 
 依据分为三类：
 
-- **项目事实**：来自已读取的维护源、部署副本、用户库目录与接续记忆。
+- **项目事实**：来自产品资源维护源、用户库目录与接续记忆。
 - **外部证据**：来自论文、官方说明或成熟实现，只证明其原有条件下的机制与结论。
 - **设计推断**：根据前两类依据形成的候选方向，尚无本项目效果数据支持。
 
@@ -25,7 +25,7 @@
 - 同一会话中的新调用增加读取次数，不增加会话数。
 - 同一调用重复提交不增加次数，也不刷新最近读取时间。
 - 刷新、压缩与同会话分支切换不重置持久去重。
-- 底层 CLI `read`、搜索结果、规则列表、画像、项目知识、自动背景、历史回放及统计查询不计数。
+- 底层 CLI `read`、搜索结果、规则列表、画像、自动背景、历史回放及统计查询不计数。
 - 搜索与规则工具也能返回正文。因此，该统计不是全部访问量，更不是实际使用次数。
 - 计数记录的是主动读取结果已经准备，不保证模型最终接收、理解、采纳或正确应用。
 
@@ -37,7 +37,7 @@
 
 静态与运行调查发现：
 
-- 扩展维护源与本机部署副本（`~/.pi/agent/extensions/pi-memory/`）已完全对齐，均包含自动统计调用并已注册 `memory_access_stats` 工具。
+- 产品资源维护源已包含自动统计调用并已注册 `memory_access_stats` 工具；用户 agentDir 下的同源旧副本在扩展执行前被排除，不作为另一套生效来源。
 - 默认用户库 `~/.agents/memory-store/.system/` 下截至本轮尚无 `access.json`，`memory_status` 报告 `status: not_collected`。
 - 未产生统计记录的核心原因包括两层：
   1. **跨平台换行符导致索引指纹校验失败（运行阻断）**：Mac 端提交的派生索引（`index/search.json`）记录的是 LF 换行符哈希，而在 Windows 下 Git 若开启 `core.autocrlf=true` 会将文本检出为 CRLF，导致 `check_search_sources` 抛出 `INDEX_STALE` 错误，阻断了 `memory_read`、`memory_search` 及统计写入链路。现已通过用户库 `.gitattributes`（`* text eol=lf`）及 `reindex` 彻底解除该阻断。
@@ -153,7 +153,7 @@
 
 先利用真实计数观察主动读取行为，不立即开展热度重排。后续结论必须能够指出计数究竟支持了哪种判断，以及仍然缺少什么信息；没有发现明确问题时，不为使用计数而强行修改召回。
 
-数据积累不要求补计历史，也不意味着本轮已经安排部署、重载或采集。维护源与运行实例是否一致，应以届时实际资料为准。
+数据积累不要求补计历史，也不意味着本轮已经安排部署、重载或采集。产品资源是否已在运行实例中生效，应以届时实际资料为准。
 
 ### 8.2 已落实的自动召回闭环
 
@@ -211,9 +211,9 @@
 ### 项目资料
 
 - [记忆系统调研与方案设计](memory-research-design.md)。
-- Memory 维护源：`~/.pi/agent/skills/memory-skill/memory/` 下的 `SKILL.md`、`references/search.md`、`references/cli.md` 与 `scripts/memory_store.py`。
-- 扩展维护源：`~/.pi/agent/skills/pi-skill-setup/assets/extensions/pi-memory/` 下的 `tools.ts`、`context.ts`、`engine.ts` 与 `index.ts`。
-- 本机部署副本：`~/.pi/agent/extensions/pi-memory/` 下的 `tools.ts`、`engine.ts` 与 `config.json`。
+- Memory 维护源：[`resources/agent/skills/memory/`](../resources/agent/skills/memory/) 下的 `SKILL.md`、`references/search.md`、`references/cli.md` 与 `scripts/memory_store.py`。
+- 扩展维护源：[`resources/agent/extensions/pi-memory/`](../resources/agent/extensions/pi-memory/) 下的 `tools.ts`、`context.ts`、`engine.ts` 与 `index.ts`。
+- 桌面装配与受管运行环境：[`src/sdk-host/product-resources.ts`](../src/sdk-host/product-resources.ts)、[`src/main/memory/memory-manager.ts`](../src/main/memory/memory-manager.ts)、[`resources/memory-runtime/manifest.json`](../resources/memory-runtime/manifest.json)。
 - 用户库目录：`~/.agents/memory-store/.system/`；接续原文位于 `daily/2026/11/2026-11-02.md`，项目为 `pi-desktop`。
 - 用户库换行符规范：`~/.agents/memory-store/.gitattributes`（`* text eol=lf`），确保跨操作系统检出内容 SHA-256 指纹与 `index/search.json` 保持一致。
 - 接续记录：调研结论 `m_01M6E8KVD5JW1BVPTK571R4S1J`、统计决定 `m_01M6E8KVD556MQGD25C91YJVEP`、实现进展 `m_01M6E8KVD5X24N8PFQPC6SPBDV`。历史记录保留来源条件，不代替当前代码与数据事实。

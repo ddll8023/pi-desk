@@ -216,7 +216,7 @@
     "project": {
       "name": "Pi Desktop",
       "summary": "基于 Electron 的桌面客户端：Vue 3 页面经沙箱 preload 与主进程通信，会话由独立 SDK 宿主执行，终端由独立守护进程持有 PTY。本页把业务模块、运行单元与关键流程放在同一张图上，用于从功能定位实现、从关系判断影响边界。",
-      "sourceNote": "事实来源：docs/项目结构文档.md 与 docs/modules/ 的 14 份模块文档，路径与入口已按 src/ 静态核对。覆盖范围止于本地调用边界：外部 SDK、依赖包内部实现、用户安装的扩展与运行时动态发现的资源不在此登记。本页不是完整依赖分析，也不是代码质量或运行状态认证。",
+      "sourceNote": "事实来源：docs/项目结构文档.md 与 docs/modules/ 的 15 份模块文档，路径与入口已按 src/ 静态核对。覆盖范围止于本地调用边界：外部 SDK、依赖包内部实现、用户安装的扩展与运行时动态发现的资源不在此登记。本页不是完整依赖分析，也不是代码质量或运行状态认证。",
       "links": [
         {"label": "项目结构总览", "href": "项目结构文档.md"},
         {"label": "公共记录", "href": "modules/shared.md"}
@@ -722,6 +722,41 @@
           {"label": "模块文档：偏好", "href": "modules/preferences.md"},
           {"label": "公共记录 F-config", "href": "modules/shared.md#f-configdesktop-配置混合"}
         ]
+      },
+      {
+        "id": "memory",
+        "name": "记忆",
+        "groupId": "setting",
+        "summary": "用户级全局记忆的开关、随包受管运行环境状态、记忆库状态探测与首次创建，以及把配置推送给已就绪的 SDK 宿主。",
+        "features": [
+          "全局记忆开关，默认关闭且保存成功后才生效",
+          "随包 CPython 与时区数据的运行环境探测，缺失时明确报告",
+          "记忆库状态探测与经用户确认的首次创建",
+          "配置版本推进与向已就绪宿主推送新配置"
+        ],
+        "tags": ["Electron 主进程", "Vue 页面", "SDK 宿主"],
+        "entries": [
+          {"kind": "关键实现", "label": "开关、库状态与创建", "path": "src/main/memory/memory-manager.ts"},
+          {"kind": "关键实现", "label": "记忆通道注册", "path": "src/main/memory/ipc.ts"},
+          {"kind": "共享契约", "label": "记忆接口与校验", "path": "src/shared/memory-api.ts"},
+          {"kind": "关键实现", "label": "受管运行环境布局与配置校验", "path": "src/shared-process/memory-runtime.ts"},
+          {"kind": "关键实现", "label": "宿主内配置持有与推送", "path": "src/sdk-host/memory-configuration.ts"},
+          {"kind": "界面入口", "label": "设置页记忆分节", "path": "src/renderer/src/memory/components/MemorySettingsSection.vue"}
+        ],
+        "resources": [
+          {"name": "用户级全局记忆库", "owner": "MemoryManager 与随包文件引擎", "lifecycle": "当前用户的 ~/.agents/memory-store/，所有项目共用，不随应用数据目录迁移，不写入项目目录"},
+          {"name": "受管记忆运行环境", "owner": "构建暂存，MemoryManager 只读使用", "lifecycle": "out/sdk-host/memory-runtime/ 下的随包 CPython 与 IANA 时区数据，只读且不存用户记忆"}
+        ],
+        "constraints": [
+          "不自动创建或迁移记忆库、不重建索引、不恢复事务",
+          "不使用系统 Python 或项目虚拟环境，资源缺失时明确报告",
+          "会话内开启不能绕过桌面全局关闭；关闭只停用能力，不删除既有记录",
+          "开关保存成功后才生效，宿主未确认采纳时只报未确认生效"
+        ],
+        "links": [
+          {"label": "模块文档：记忆", "href": "modules/memory.md"},
+          {"label": "公共记录 F-config", "href": "modules/shared.md#f-configdesktop-配置混合"}
+        ]
       }
     ],
     "relations": [
@@ -756,6 +791,8 @@
       {"id": "r-up-auto-switch", "from": "updates-runtime", "to": "preferences", "label": "消费扩展自动更新开关", "kind": "read"},
       {"id": "r-pf-shell-layout", "from": "preferences", "to": "app-shell", "label": "布局值由外壳消费", "kind": "call"},
       {"id": "r-genui-param-switch", "from": "genui", "to": "preferences", "label": "读写生成式开关", "kind": "write"},
+      {"id": "r-mem-shell-settings", "from": "memory", "to": "app-shell", "label": "设置页承载开关、运行环境与库创建", "kind": "compose"},
+      {"id": "r-mem-host-push", "from": "memory", "to": "sessions-chat", "label": "向已就绪宿主推送受管配置", "kind": "call"},
       {"id": "r-lr-shell-settings", "from": "lan-remote", "to": "app-shell", "label": "设置页承载启停与设备管理", "kind": "compose"},
       {"id": "r-lr-config-grant", "from": "lan-remote", "to": "projects-trust", "label": "读取全部已登记项目并复核目标", "kind": "call"},
       {"id": "r-lr-session-access", "from": "lan-remote", "to": "sessions-chat", "label": "授权后后台新建／接入、读取绑定资源与压缩", "kind": "call"},
@@ -768,7 +805,7 @@
           "name": "Electron 主进程",
           "kind": "常驻进程",
           "summary": "应用级配置、IPC、安全边界与退出编排的所有者；启动时按固定顺序注册各能力通道。",
-          "contains": ["app-shell", "projects-trust", "workspace-tabs", "sessions-chat", "files-editor", "git", "terminal-commands", "providers-auth", "resources-mcp", "updates-runtime", "preferences", "genui", "lan-remote"],
+          "contains": ["app-shell", "projects-trust", "workspace-tabs", "sessions-chat", "files-editor", "git", "terminal-commands", "providers-auth", "resources-mcp", "updates-runtime", "preferences", "genui", "memory", "lan-remote"],
           "entries": [
             {"kind": "进程入口", "label": "组合根", "path": "src/main/index.ts"},
             {"kind": "关键实现", "label": "业务实例唯一装配处", "path": "src/main/services.ts"},
@@ -810,7 +847,7 @@
           "name": "Vue 页面",
           "kind": "常驻进程",
           "summary": "保存展示副本、局部编辑与阅读状态；不直接持有系统进程，也不直接调用 Electron。",
-          "contains": ["app-shell", "workspace-tabs", "sessions-chat", "files-editor", "git", "terminal-commands", "providers-auth", "resources-mcp", "updates-runtime", "preferences", "genui", "lan-remote"],
+          "contains": ["app-shell", "workspace-tabs", "sessions-chat", "files-editor", "git", "terminal-commands", "providers-auth", "resources-mcp", "updates-runtime", "preferences", "genui", "memory", "lan-remote"],
           "entries": [
             {"kind": "页面入口", "label": "Vue 挂载", "path": "src/renderer/src/main.ts"},
             {"kind": "页面入口", "label": "组合根", "path": "src/renderer/src/App.vue"}
@@ -831,7 +868,7 @@
           "name": "SDK 宿主",
           "kind": "受管进程",
           "summary": "utilityProcess 承载官方 SDK 会话与串行任务执行，控制器维护任务状态，SDK 事件及任务快照通过有界投影送达页面。",
-          "contains": ["sessions-chat", "genui"],
+          "contains": ["sessions-chat", "genui", "memory"],
           "entries": [
             {"kind": "进程入口", "label": "宿主入口", "path": "src/sdk-host/index.ts"},
             {"kind": "关键实现", "label": "会话运行", "path": "src/sdk-host/session-runtime.ts"},

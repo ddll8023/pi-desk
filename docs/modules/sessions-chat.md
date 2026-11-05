@@ -27,7 +27,9 @@
 | `src/main/sessions/extension-ui-ipc.ts` | 扩展交互通道注册：对话、通知与 widget 快照读取及应答提交 |
 | `src/sdk-host/index.ts` | 宿主入口、初始化、授权回应与控制／生命周期分派 |
 | `src/sdk-host/protocol.ts` | 主进程和 SDK 宿主的版本化消息、请求与目标校验 |
-| `src/sdk-host/session-runtime.ts` | 官方 SDK 会话、运行请求、订阅、回退／压缩、内置扩展装配及任务控制器绑定；任务启动口令与普通输入分流 |
+| `src/sdk-host/session-runtime.ts` | 官方 SDK 会话、运行请求、订阅、回退／压缩、产品资源装配、内置扩展装配及任务控制器绑定；任务启动口令与普通输入分流 |
+| `src/sdk-host/product-resources.ts` | 产品资源解析与执行前同源筛选、技能覆盖与来源冲突判定、必要扩展与工具及配置注入的核验 |
+| `src/sdk-host/memory-configuration.ts` | 宿主内记忆配置的唯一持有者；写进程环境并向已加载扩展推送变更 |
 | `src/sdk-host/image-annotations.ts` | 按提交的异步作用域附带本轮独立图片说明消息，不改写提示词或预先排入下一轮 |
 | `src/sdk-host/log-reader.ts` | 日志读取：把已授权的会话文件按查询解析成历史页、轮次页或原文续段，不建会话、不加载扩展与 MCP；按文件版本有界复用多个会话的解析结果，并把最新首页写入检查点 |
 | `src/sdk-host/extension-ui-bridge.ts` | SDK UI 回调到宿主消息的适配及取消 |
@@ -114,7 +116,8 @@
 - [F-assembly](shared.md#f-assembly进程与页面组装混合)：`src/main/sessions/ipc.ts` 的 `registerSessionHandlers`、`src/main/sessions/runtime-ipc.ts` 的 `registerRuntimeHandlers`、`src/main/sessions/extension-ui-ipc.ts` 的 `registerExtensionUiHandlers`、广播，`src/main/app-lifecycle.ts` 的生命周期及 `src/renderer/src/shell/components/AppDialogHost.vue` 的确认弹层。
 - [F-runtime-state](shared.md#f-runtime-state综合-runtime-状态混合)：`src/renderer/src/sessions/stores/runtime-core.ts` 持有展示状态与投影分片，`src/renderer/src/sessions/stores/runtime-history.ts` 持有历史缓存，`src/renderer/src/sessions/stores/runtime.ts` 为装配门面；`src/shared/runtime-api.ts` 提供综合契约。
 - [F-sidebar](shared.md#f-sidebar项目会话树混合)：项目树中的会话与运行状态。
-- [F-process](shared.md#f-process受管进程与-sdk-公共设施共享)：SDK 定位、固定环境与进程终止。SDK 动态加载不代表宿主可自行选择任意授权目录。
+- [F-process](shared.md#f-process受管进程与-sdk-公共设施共享)：SDK 定位、固定环境、产品资源清单与进程终止。SDK 动态加载不代表宿主可自行选择任意授权目录。
+- [记忆](memory.md)：宿主初始化时携带受管记忆配置并在资源加载前写入，内部会话按开关与资源状态装配扩展。
 - [F-ui](shared.md#f-ui前端共享展示共享)、[F-style](shared.md#f-style全局主题与业务样式混合)：Markdown、数学、复制、浮层和聊天样式。
 - [项目与信任](projects-trust.md)：登记项目与目标授权；[工作区](workspace-tabs.md)：原标签绑定、选择与关闭，以及浏览器批注的来源固定和目标切换编排。输入坞的 `mergeBrowserAnnotation` 在目标就绪后复核身份并合并草稿，两模块不拥有 SDK 分配权。
 - [供应商](providers-auth.md)：`RuntimeModelSelect.vue` 提供模型选择，持久默认模型不等于当前会话模型；`UsageDetailDialog.vue` 经认证服务读取 Codex 账户额度，查询机制与凭据边界由供应商模块维护。

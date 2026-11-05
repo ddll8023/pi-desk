@@ -1,0 +1,56 @@
+# 记忆
+
+模块 ID：`memory`。返回 [总览](../项目结构文档.md)。
+
+## 职责与入口
+
+负责用户级全局记忆的开关、随包受管运行环境状态、记忆库状态探测与首次创建，以及把这些状态推送给已就绪的 SDK 宿主。入口为设置页“记忆”分节。
+
+记忆库是当前系统用户的 `~/.agents/memory-store/`，所有项目共用，不按目录或项目身份过滤，不写入项目目录；开关默认关闭，只有用户在设置页开启后生效。引擎由随包 CPython 与 IANA 时区数据执行，不使用系统 Python、不依赖项目虚拟环境；运行资源或配套引擎缺失时明确报告，不回退其他解释器。
+
+不自动创建或迁移记忆库、不重建索引、不恢复事务、不强杀已启动的提交。开关保存成功后才生效；宿主未确认采纳时只报“未确认生效”，不把已保存的真相改写为失败。
+
+## 专属文件
+
+### 主进程、桥接与契约
+
+| 文件 | 用途 |
+| --- | --- |
+| `src/main/memory/memory-manager.ts` | 开关、配置版本、运行环境与库状态探测、经用户确认的首次创建、向宿主推送配置 |
+| `src/main/memory/ipc.ts` | 状态、开关与创建三个固定通道的调用者与参数校验 |
+| `src/shared/memory-api.ts` | 通道名、快照与结果契约及入参校验 |
+| `src/shared-process/memory-runtime.ts` | 受管运行环境布局与清单校验、全局库位置、宿主配置的受限校验与序列化 |
+| `src/preload/memory.ts` | 固定通道调用与结果契约校验 |
+| `src/renderer/src/memory/services/memory.ts` | 页面桥接定位与响应校验 |
+| `src/renderer/src/memory/components/MemorySettingsSection.vue` | 开关、运行环境、库状态与创建表单 |
+
+### 宿主与产品资源
+
+| 文件 | 用途 |
+| --- | --- |
+| `src/sdk-host/memory-configuration.ts` | 宿主内配置持有者：写进程环境并向已加载扩展推送变更 |
+| `src/sdk-host/product-resources.ts` | 产品资源装配、执行前同源筛选与必要组件核验，并核对配置是否已注入 |
+| `resources/agent/extensions/pi-memory/` | 记忆扩展：请求级背景、工具注册、会话控制与保存审批通道 |
+| `resources/agent/skills/memory/` | 配套规范、引用与文件引擎 `scripts/memory_store.py` |
+| `resources/agent/bundle.json` | 上述扩展、Skill 与引擎入口及组成文件声明 |
+| `resources/memory-runtime/manifest.json` | 受管 Python 与时区归档的固定地址、SHA-256 与目标布局 |
+| `scripts/prepare-memory-runtime.mjs`、`scripts/stage-memory-runtime.mjs` | 显式准备归档、校验后解压缓存；把当前平台的一份暂存到宿主产物旁 |
+
+扩展与引擎的具体行为见 `resources/agent/extensions/pi-memory/README.md` 与 `resources/agent/skills/memory/SKILL.md`，本文不复述工具参数与检索细节。
+
+## 公共与跨模块引用
+
+- [F-assembly](shared.md#f-assembly进程与页面组装混合)：`src/main/app-lifecycle.ts` 注册记忆通道；`src/main/services.ts` 建立唯一的记忆管理器并注入宿主创建参数。
+- [F-config](shared.md#f-configdesktop-配置混合)：开关经 `MemoryManager` 写入 `desktop-config.json`，只读降级时不假称已保存。
+- [F-process](shared.md#f-process受管进程与-sdk-公共设施共享)：`memory-runtime.ts` 的布局与清单校验；`pi-paths.ts` 的 agentDir 与宿主产物定位。
+- [F-build](shared.md#f-build构建与发行上下文)：`sdk-host:build` 依次暂存产品资源与受管运行环境，随 `out/**` 进包；macOS 签名排除其中的时区数据。
+- [会话](sessions-chat.md)：宿主初始化与配置推送走 `src/main/sessions/sdk-host-manager.ts` 的协议请求；会话创建时装配产品资源。会话内 `/memory off|on` 只控制当前分支，不能绕过桌面全局关闭。
+- [资源与 MCP](resources-mcp.md)、[偏好](preferences.md)：技能与扩展命令的展示沿用资源模块；本模块只拥有记忆开关与库生命周期，不接管偏好存储与资源预读。
+
+## 数据流与边界
+
+1. 设置页读状态：主进程只读探测运行环境与库形态，返回开关、运行环境版本、库路径、库状态与时区。
+2. 用户切换开关：主进程保存配置后递增配置版本，再把新配置推给所有已就绪宿主；未就绪宿主在下次初始化时读到最新值。
+3. 首次创建：仅当库根既不存在或缺少清单时可用；先展示目标位置与时区并取得真实用户确认，再由受管解释器执行 `init`，创建后重新探测，失败不留下半成品结论。
+4. 会话使用：宿主在建立会话前把配置写入进程环境，扩展据此决定可用性；配置版本变化使旧会话状态与缓存整体作废。
+5. 库内容本身（日记、画像、月摘要、索引、访问统计）由扩展与文件引擎维护，本模块不读写正文，也不把库状态当作内容质量结论。

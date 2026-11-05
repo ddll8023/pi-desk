@@ -143,7 +143,9 @@ function resultFacts(toolName: string, data: Record<string, unknown>): ToolPrese
   const scope = record(data.requested_scope) ? data.requested_scope : null
   const project = Object.hasOwn(data, 'project_id') ? data.project_id : scope?.project_id
   const projectScoped = ['memory_search', 'memory_rules', 'memory_read'].includes(toolLocalName(toolName))
-  if (project === null && projectScoped) facts.push(fact('实际范围', '全局（未限定项目）'))
+  const globalMemory = data.memory_scope === 'global' || scope?.memory_scope === 'global'
+  if (globalMemory) facts.push(fact('实际范围', '用户级全局记忆'))
+  else if (project === null && projectScoped) facts.push(fact('实际范围', '全局（未限定项目）'))
   else if (typeof project === 'string') facts.push(fact(projectScoped ? '实际项目' : '报告项目', project))
   const scopeNames: Readonly<Record<string, string>> = {
     all_daily: '全部日记', recent_daily: '近期日记', historical_month_summaries: '历史月摘要', monthly_summary: '指定月摘要'
@@ -177,9 +179,10 @@ function toItem(value: unknown, scoreLabel: string, memoryItem: boolean): { read
   evidenceParts.push(...strings(value.reasons, 2))
   const metaParts: string[] = []
   const date = firstString(value, ['date', 'month'])
-  const project = firstString(value, ['project_id', 'project'])
+  const project = firstString(value, ['source_project', 'project_id', 'project'])
+    ?? (source === null ? null : firstString(source, ['source_project']))
   if (date !== null) metaParts.push(date)
-  if (project !== null) metaParts.push(`项目 ${project}`)
+  if (project !== null) metaParts.push(`${memoryItem ? '历史来源项目' : '项目'} ${project}`)
   if (memoryItem && value.status === 'superseded') metaParts.push('历史版本 · 已被替代')
   else if (memoryItem && value.status === 'active') metaParts.push(value.type === 'decision' || value.type === 'constraint' ? '当前有效版本' : '已保存记录')
   else if (typeof value.status === 'string') metaParts.push(`工具报告状态 ${value.status}`)

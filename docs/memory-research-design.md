@@ -4,7 +4,7 @@
 
 本文整理记忆系统的当前实现事实、外部借鉴线索与候选优化方向。
 
-现有实现提供全局词法索引、统一检索与定向读取工具、默认主动读取统计、配套发布资源及桌面工具语义展示。实现描述以共享扩展维护源与文件引擎为准，运行实例的能力取决于实际部署并加载的版本。**本文关于后续阶段（如请求前按任务自动召回）的内容仍属方案设计，不构成开发或执行授权。实施前须明确需求边界并取得逐文件执行清单批准。**
+现有实现提供全局词法索引、统一检索与定向读取工具、默认主动读取统计、随包产品资源与受管运行环境及桌面工具语义展示。实现描述以 `resources/agent/` 下的扩展与配套 Skill、文件引擎为准，运行实例的能力取决于已加载的产品资源版本。**本文关于后续阶段（如请求前按任务自动召回）的内容仍属方案设计，不构成开发或执行授权。实施前须明确需求边界并取得逐文件执行清单批准。**
 
 第三方能力和历史实现仅作为事实与参考，不自动成为必须保留或新增的需求。
 
@@ -27,28 +27,28 @@
 
 | 组件 | 当前职责 |
 | --- | --- |
-| Memory Skill | 统一管理工作日记、项目知识、月度总结与画像，规范查询、整理与两阶段保存流程 |
+| Memory Skill | 统一管理工作日记、月度总结与画像，规范查询、整理与两阶段保存流程 |
 | 用户级 `pi-memory` 扩展 | 请求级背景注入、记忆工具注册、主动读取统计触发、会话控制与保存审批通道 |
 | Python 文件引擎 | 用户级数据读写、两阶段保存计划与事务、全局派生索引及词法排序，独立访问统计的去重、持久化与查询 |
-| `pi-skill-setup` | 配套发布资源、指纹清单与跨机配置对齐，保持 Skill、扩展与引擎版本一致 |
+| `pi-skill-setup` | 独立 CLI 的成套部署与跨机配置对齐，保持 Skill、扩展与引擎版本一致 |
 | pi-desk 桌面端 | SDK 宿主、截断前工具语义摘要提取、实时/历史投影与结果优先卡片展示 |
 
-共享扩展与配套资源的统一维护源位于 `~/.pi/agent/skills/pi-skill-setup/assets/`；实际 agentDir 下的 `extensions/pi-memory/` 是部署副本，不应作为另一套独立维护源。
+扩展与配套资源的唯一维护源位于仓库 `resources/agent/`，构建时原样暂存到 `out/sdk-host/agent-resources/` 并附内容指纹，由 pi-desk 宿主显式装配，不要求在每个业务项目中安装。用户 agentDir 下同名的旧部署副本只在入口与全部组成文件内容一致时于执行前排除；带本地配置的副本不自动排除，未知同名内容按冲突处理。
 
-pi-desk 通过 `src/main/shared/pi-paths.ts` 解析 agentDir，并在 `src/sdk-host/session-runtime.ts` 创建 SDK 会话服务；桌面端提供工具摘要投影与卡片展示，但扩展本身作为用户级通用扩展运行。
+pi-desk 通过 `src/main/shared/pi-paths.ts` 解析 agentDir，并在 `src/sdk-host/session-runtime.ts` 创建 SDK 会话服务；桌面端提供工具摘要投影与卡片展示，扩展本身作为随包产品资源在宿主内部装配。
 
 ### 3.2 数据边界
 
 | 数据 | 存储位置 | 用途 |
 | --- | --- | --- |
-| 工作日记 | `~/.agents/memory-store/daily/` | 按日期、项目记录事件、进展、决定和约束，统一全局存储 |
+| 工作日记 | `~/.agents/memory-store/daily/` | 按日期记录事件、进展、决定和约束，所有项目共用 |
 | 个人画像 | `~/.agents/memory-store/profile/` | 按领域与作用域保存偏好 |
 | 月度总结 | `~/.agents/memory-store/monthly/` | 关联日记来源的历史回顾 |
 | 派生索引 | `~/.agents/memory-store/index/` | 记录定位、当前有效规则、月份及全局词法检索（`search.json`） |
-| 项目知识 | `<项目根>/.agents/memory/` | 独立可选域：维护项目现行约定、特殊配置、选型理由和棘手问题 |
+| 项目本地知识 | `<项目根>/.agents/memory/` | 历史可选域，记录项目约定与棘手问题；不由本能力自动读取或维护 |
 | 主动读取统计 | 文件引擎 `ACCESS_STORE` 指定的独立技术文件 | 保存计数、采集起点、最近读取时间及必要的哈希去重身份，不保存正文或查询词 |
 
-用户库通过 Markdown 正文与 JSON 项目表、派生索引组织数据。项目知识是独立可选域，不自动复制进用户库，也不作为全局日记查询的前置。未建立项目知识目录不影响全局记忆检索。访问统计不是权威记忆或派生检索索引，不参与正文与保存计划的内容指纹，也不能从记忆正文或历史会话自动重建。
+用户库通过 Markdown 正文与派生索引组织数据，不要求项目表或项目登记。旧项目表仅作为已有索引的历史来源参与指纹核对，不是新库的组成或读取、保存的前置条件。项目本地知识不由本能力读取或维护，也不作为全局日记查询的前置。访问统计不是权威记忆或派生检索索引，不参与正文与保存计划的内容指纹，也不能从记忆正文或历史会话自动重建。
 
 ### 3.3 自动读取与工具
 
@@ -61,13 +61,13 @@ pi-desk 通过 `src/main/shared/pi-paths.ts` 解析 agentDir，并在 `src/sdk-h
 
 当前工具能力包括：
 
-- `memory_search`：默认按任务检索全局已保存日记，支持中文词法相关度排序、明确项目过滤、近期／月摘要模式与分页。
-- `memory_rules`：默认查询全局各项目当前有效决定与约束，支持明确项目过滤与词法匹配，不受近期窗口限制。
-- `memory_read`：按记录 ID 从索引定向读取完整原文，核对来源并保留历史状态，支持可选项目限定，不要求目录绑定；成功准备完整结果后默认提交独立访问统计，不是纯只读。
+- `memory_search`：默认按任务检索全局已保存日记，支持中文词法相关度排序、近期／月摘要模式与分页。
+- `memory_rules`：查询全局当前有效决定与约束，支持词法匹配，不受近期窗口限制。
+- `memory_read`：按记录 ID 从索引定向读取完整原文，核对来源并保留历史状态与适用条件，不要求目录绑定；成功准备完整结果后默认提交独立访问统计，不是纯只读。
 - `memory_access_stats`：按真实记录 ID 只读查询主动定向读取次数、去重会话数和最近读取时间，查询本身不产生计数。
-- `memory_status`：读取既有库与项目表，并报告独立访问统计状态，不创建统计文件或修复数据。
+- `memory_status`：读取全局库状态，并报告独立访问统计状态，不创建统计文件或修复数据。
+- `memory_control`：记录当前分支的停用、恢复或刷新，不保存记忆正文或用户批准。
 - `memory_profiles`：按领域与作用域读取画像。
-- `memory_project_read`：按需分页读取项目本地索引和规范主题。
 - `memory_save`、`memory_profile_save`：分别提交日记、画像候选，经完整计划展示与真实用户批准后保存。
 
 ### 3.4 当前检索与保存的边界
@@ -80,7 +80,7 @@ pi-desk 通过 `src/main/shared/pi-paths.ts` 解析 agentDir，并在 `src/sdk-h
 
 首次统计仅在已有可用库中创建独立技术文件，不初始化库或补建锁文件。统计非阻塞取锁，失败时保留成功原文并报告结果未确认，不自动重试、补计或修复；已启动的统计写入不因取消或状态变化而撤销。明确删除记录时预览并在同一事务中清理对应统计，规则替代不转移旧记录计数。
 
-保存通道先生成短期计划，完整展示新旧正文、来源和替代／撤回影响，再等待真实用户批准。提交前复核会话、分支、项目、计划及来源状态。日记保存不顺带维护画像，项目知识维护也不借用用户库写入授权。
+保存通道先生成短期计划，完整展示新旧正文、来源、历史来源标签和替代／撤回影响，再等待真实用户批准。提交前复核会话、分支、计划及来源状态。日记保存不顺带维护画像，画像维护也不借用日记写入授权。
 
 `/memory off`、`on`、`refresh` 管理启停和旧操作状态；停用阻止新的主动读取与统计，刷新不清空计数、不重载配置与代码，停用也不能清除已经进入模型上下文的内容。缺库、读取失败和待恢复事务不自动触发初始化或修复。
 
@@ -212,9 +212,9 @@ MCP 不保证模型主动调用，也不自动提高搜索质量。若未来开�
 
 - 统一词法检索核心：引擎实现全局 bigram + BM25 词法检索（`recall`）、有效规则查询与按 ID 定向读取。
 - 全局检索派生索引：`index/search.json` 覆盖日记与月摘要，来源指纹核对，事务同步发布。
-- 工具协议对齐：扩展工具支持默认全局日记检索、明确项目过滤、分页与状态保留。
+- 工具协议对齐：扩展工具支持默认全局日记检索、分页与状态保留。
 - 默认主动读取统计：定向原文读取自动提交独立技术统计，提供只读查询、持久去重、故障隔离与删除联动，不改变检索排序或权威内容审批。
-- 跨机配套资源：`pi-skill-setup` 统一携带匹配的 Memory Skill 发布快照、引擎与指纹清单。
+- 随包产品资源与受管运行环境：构建阶段暂存扩展、Skill 与引擎并生成内容指纹，同时暂存当前平台的 CPython 3.12 与 IANA 时区数据；归档来源与 SHA-256 在清单中固定。
 - 桌面结果展示：截断前提取语义摘要，工具卡提供操作分类、查询、范围、计数口径与来源展示。
 - 请求级任务自动召回：扩展在 `context` 钩子中按任务自动调用引擎只读 `recall-background` 协议；实现续接语境保留、条件内存缓存、来源指纹校验、预算控制与区分展示（有效决定 vs 历史参考），被替代规则不自动注入，无命中保持静默。自动背景不计入主动读取统计。
 - 检索返回策略截断（P0）：`indexed_recall` 与 `active_rules` 默认将 `content` 截断为前 200 字摘要并附带 `content_truncated: true`，恢复 `memory_read` 二次定向读取漏斗与主动读取统计可观察性。
@@ -267,7 +267,7 @@ MCP 不保证模型主动调用，也不自动提高搜索质量。若未来开�
 
 进入开发前，应围绕实际阶段重新取得事实：
 
-- 重新读取共享扩展维护源、部署配置、Python 引擎与 pi-desk SDK 接入点，确认本文现状仍成立。
+- 重新读取 `resources/agent/` 产品资源、受管运行环境清单、Python 引擎与 pi-desk SDK 接入点，确认本文现状仍成立。
 - 根据实际记忆内容及任务类型，重新判断检索范围、适用条件和主要查询困难，避免把“没有相关内容”误判为检索算法问题。
 - 重新核实 DSH 插件与 OpenViking 官方源码及接口变化，重点确认请求前召回、消息归属、数据作用域和写入行为。
 - 若拟引入第三方代码、依赖或服务，再核实许可、维护情况、部署条件、数据流向及成本；本文不提供直接引入的结论。
@@ -279,13 +279,13 @@ MCP 不保证模型主动调用，也不自动提高搜索质量。若未来开�
 
 ### 10.1 当前实现
 
-- 当前 Memory Skill：`~/.pi/agent/skills/memory-skill/memory/SKILL.md` 及 `references/project.md`、`references/search.md`。
-- 共享扩展维护源：`~/.pi/agent/skills/pi-skill-setup/assets/extensions/pi-memory/`。
-- 当前部署扩展：`~/.pi/agent/extensions/pi-memory/` 中的 `index.ts`、`context.ts`、`engine.ts`、`project.ts`、`tools.ts`、`approval.ts`、`README.md` 与本机配置。
-- 文件引擎：`~/.pi/agent/skills/memory-skill/memory/scripts/memory_store.py`。
+- 当前 Memory Skill：[`resources/agent/skills/memory/SKILL.md`](../resources/agent/skills/memory/SKILL.md) 及 `references/cli.md`、`references/search.md`。
+- 产品扩展维护源：[`resources/agent/extensions/pi-memory/`](../resources/agent/extensions/pi-memory/)，组成文件声明在 `resources/agent/bundle.json`。
+- 桌面装配与注入：[`src/sdk-host/product-resources.ts`](../src/sdk-host/product-resources.ts)、[`src/sdk-host/memory-configuration.ts`](../src/sdk-host/memory-configuration.ts)、[`src/main/memory/memory-manager.ts`](../src/main/memory/memory-manager.ts)。
+- 受管运行环境：[`resources/memory-runtime/manifest.json`](../resources/memory-runtime/manifest.json) 固定 CPython 与 tzdata 归档地址与 SHA-256；引擎：[`resources/agent/skills/memory/scripts/memory_store.py`](../resources/agent/skills/memory/scripts/memory_store.py)。
 - [agentDir 解析](../src/main/shared/pi-paths.ts)、[SDK 会话服务](../src/sdk-host/session-runtime.ts)、[桌面扩展交互桥](../src/sdk-host/extension-ui-bridge.ts)。
 
-这些用户级路径是当前环境事实，文件不随本仓库自动分发；本机配置、路径和记忆数据不能直接当作跨机模板复制。
+产品资源随桌面构建分发，不在业务项目中部署副本；用户库仍位于当前用户的 `~/.agents/memory-store/`，其中日记、画像、统计与本机配置不能当作跨机模板复制。
 
 ### 10.2 外部资料
 

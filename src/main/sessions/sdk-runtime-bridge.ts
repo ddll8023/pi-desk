@@ -338,6 +338,18 @@ export class SdkRuntimeBridge {
   private readonly detachers = new Map<number, () => void>()
   /** 按运行实例的空闲回收计时器；到期后复核空闲并释放宿主进程。 */
   private readonly reclaimTimers = new Map<number, ReturnType<typeof setTimeout>>()
+
+  /**
+   * 记忆配置变化：推给所有已就绪的受管宿主。
+   * 未就绪宿主在下次初始化时自然读到新值；有宿主推送失败时向上报告，由调用方标为未确认生效。
+   */
+  async notifyMemoryConfiguration(): Promise<void> {
+    const results = await Promise.allSettled(
+      this.options.runs.allRuns().map(run => run.owner.refreshMemoryConfiguration()))
+    if (results.some(result => result.status === 'rejected')) {
+      throw new Error('部分运行中的会话未确认采纳新的记忆配置。')
+    }
+  }
   /** 正在进行的回收：新的提交等它收敛后再恢复，不与释放竞争。 */
   private readonly reclaiming = new Map<number, Promise<void>>()
   private shuttingDown = false

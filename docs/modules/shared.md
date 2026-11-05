@@ -11,10 +11,10 @@
 | `src/main/window.ts` | 唯一窗口的创建、主题与标题栏配色、导航与权限限制、单实例聚焦 |
 | `src/main/window-channel.ts` | 窗口引用、向页面投递事件与全部业务广播、系统目录选择；不持有业务实例，终端状态来源由组合根注册 |
 | `src/main/asset-protocol.ts` | 应用与 HTML 预览协议注册、应用资产处理、页面地址解析、目录越界判定与生产 CSP；预览资源处理归[文件模块](files-editor.md)的独立会话 |
-| `src/main/services.ts` | 主进程业务实例的唯一装配处（配置、项目、信任、会话、任务工作区、终端、供应商、资源、更新、生成式界面、手机访问） |
+| `src/main/services.ts` | 主进程业务实例的唯一装配处（配置、项目、信任、会话、任务工作区、终端、供应商、资源、更新、生成式界面、记忆、手机访问） |
 | `src/main/ipc/dispatch.ts` | IPC 注册包装、调用者校验、有界标识与 MCP 服务器名校验 |
 | `src/preload/index.ts` | 只合并各域 Api 并暴露 `window.desktop`，不含 channel 调用与校验 |
-| `src/preload/*.ts`（域文件） | 按业务域各一个文件（`desktop`、`projects`、`sessions`、`runtime`、`terminal`、`git`、`worktree`、`git-cleanup`、`preferences`、`providers`、`updates`、`trust`、`genui`、`lan-remote`、`browser`），各自承载固定 channel 调用、声明字段载荷重建、响应与事件校验、订阅释放 |
+| `src/preload/*.ts`（域文件） | 按业务域各一个文件（`desktop`、`projects`、`sessions`、`runtime`、`terminal`、`git`、`worktree`、`git-cleanup`、`preferences`、`providers`、`updates`、`trust`、`genui`、`memory`、`lan-remote`、`browser`），各自承载固定 channel 调用、声明字段载荷重建、响应与事件校验、订阅释放 |
 | `src/renderer/src/App.vue` | 页面组合根：只装配外壳骨架、弹层宿主与启动编排 |
 | `src/renderer/src/shell/components/AppShell.vue` | 布局骨架：顶部栏、侧栏与窄窗遮罩、工作区槽、右侧面板；持有窄窗与侧栏开合状态 |
 | `src/renderer/src/shell/components/WorkspaceView.vue` | 工作区：标签条、操作失败提示、对话／终端／文件／浏览器面板层与空态；核对浏览器批注来源与目标，切换后交由输入坞合并草稿 |
@@ -55,6 +55,7 @@
 | 供应商与认证 | 安装级设备标识、隐藏模型列表 |
 | 终端与快捷命令 | 全局与项目范围命令列表 |
 | 更新与生成式界面 | 扩展自动更新、生成式 UI 开关 |
+| 记忆 | 全局记忆开关；只由 `MemoryManager` 写入，宿主与页面都只读同一份结果 |
 | 手机访问 | 手机设备身份与凭证摘要；自动连接地址、监听状态与一次性连接码不落盘 |
 
 文件位于 `userData/desktop-config.json`。全部读写串行进行，保存前比对已加载的磁盘文件标识；读失败可进入只读降级，结构损坏走备份重建。其他服务通过同一个实例访问，不另行直接覆盖此文件。应用单实例锁由 `src/main/app-lifecycle.ts` 的 `acquireSingleInstance` 建立。
@@ -81,8 +82,10 @@
 | `src/main/shared/shell-path.ts` | 图形界面启动时补齐登录 shell 的 PATH | 应用启动与后续外部命令 |
 | `src/shared-process/process-tree-termination.ts` | 跨平台进程树终止 | 受管入口、资源探测、认证及终端守护进程 |
 | `src/shared-process/runtime.ts` | SDK 发布目录布局、当前版本指针、SDK 入口解析、动态加载及自带版本回退 | 主进程运行时解析、SDK 宿主、认证、CLI、版本检查、安装入口 |
+| `src/shared-process/agent-resources.ts` | 产品 Agent 资源固定布局、清单读取与内容指纹、同源身份比对 | 主进程资源目录定位、SDK 宿主的产品资源装配 |
+| `src/shared-process/memory-runtime.ts` | 受管记忆运行环境布局与清单校验、全局库位置、随包配置的受限校验与序列化 | 主进程记忆管理器、SDK 宿主的配置注入与回写 |
 
-前四行位于 `src/main/shared/`，后两行位于 `src/shared-process/`。`runtime.ts` 与 `src/entries/runtime-install/index.ts` 不是同一职责：前者本身不下载、不安装，只维护发布目录布局与当前版本指针。
+前四行位于 `src/main/shared/`，后四行位于 `src/shared-process/`。`runtime.ts` 与 `src/entries/runtime-install/index.ts` 不是同一职责：前者本身不下载、不安装，只维护发布目录布局与当前版本指针。
 
 ## F-platform：文件锁、外链与基础错误（共享）
 
@@ -138,13 +141,19 @@
 | `vite.sdk-host.config.ts` | SDK 宿主、CLI、版本检查、扩展更新、运行时安装五入口 → `out/sdk-host/` 下各自 ESM 产物 |
 | `vite.terminal-daemon.config.ts` | `src/terminal-daemon/index.ts` → `out/terminal-daemon/index.cjs`；原生 PTY 与终端依赖保留外部引用 |
 | `vite.lan-mobile.config.ts` | `src/lan-mobile/index.html` → `out/lan-mobile/`；手机网页产物，供手机访问的局域网 HTTP 服务读取 |
-| `electron-builder.yml` | 随包文件、图标、平台发行目标与输出目录；生产依赖随应用分发 |
+| `electron-builder.yml` | 随包文件、图标、平台发行目标与输出目录；随包受管记忆运行环境，macOS 签名排除其中的时区数据；生产依赖随应用分发 |
 | `scripts/start-dev.cmd` | 对应平台的开发启动包装 |
 | `scripts/start-dev.sh` | 对应平台的开发启动包装 |
 | `scripts/package-win.cmd` | 对应平台的便携出包包装 |
 | `scripts/package-mac.sh` | 对应平台的便携出包包装 |
 | `scripts/package-portable.mjs` | 按主机平台／架构调用打包器，准备镜像默认值及 PTY 助手权限 |
+| `scripts/prepare-memory-runtime.mjs` | 显式下载受管 Python 与时区归档、校验固定 SHA-256 并解压到工作区缓存；不执行下载的解释器 |
+| `scripts/ensure-environment.mjs` | 开发启动与出包前的幂等预检：依赖、Electron 二进制与当前平台受管运行环境，缺哪项补哪项，失败即停 |
+| `scripts/stage-agent-resources.mjs` | 将 `resources/agent/` 原样暂存到宿主产物旁并生成内容指纹清单 |
+| `scripts/stage-memory-runtime.mjs` | 将当前平台的受管运行环境暂存到宿主产物旁；未准备时明确失败，不自动下载 |
 | `scripts/fix-node-pty-permissions.mjs` | 修正 PTY 预编译助手执行权限，供开发与发行准备使用 |
+| `resources/agent/` | 门禁与记忆扩展、配套 Memory Skill 及引擎的唯一维护源，构建时原样暂存进宿主产物 |
+| `resources/memory-runtime/` | 受管 Python 与时区归档的固定清单、内容指纹及来源与许可说明；不存生成产物与用户数据 |
 | `build/icon.svg` | 应用图标源 |
 | `build/icon.ico` | 预生成的发行图标资源 |
 | `licenses/emojibase-MIT.txt` | 对应第三方许可声明 |

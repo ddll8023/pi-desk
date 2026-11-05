@@ -1,7 +1,7 @@
 @echo off
 for /f "tokens=2 delims=:" %%c in ('chcp') do set "oldcp=%%c"
 chcp 65001 >nul
-rem 在 Windows 主机上产出便携包：只做前置检查，不安装依赖、不下载 Electron。
+rem 在 Windows 主机上产出便携包：缺少的依赖与受管记忆运行环境由预检脚本自行补齐。
 setlocal
 cd /d "%~dp0.."
 
@@ -17,9 +17,11 @@ if errorlevel 1 (
   exit /b 1
 )
 
-if not exist "node_modules\electron-builder\package.json" (
-  echo [错误] 缺少打包依赖，请先在项目根目录运行 npm install。
-  exit /b 1
+rem 环境预检：幂等；任一资源无法获取时明确报错并停止，不继续出包。
+call node scripts\ensure-environment.mjs
+if errorlevel 1 (
+  if defined oldcp chcp %oldcp% >nul
+  endlocal & exit /b 1
 )
 
 call npm run package:win
