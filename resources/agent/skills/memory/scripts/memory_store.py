@@ -186,6 +186,12 @@ def candidate_check(text, single_line=False):
     if single_line: expect('\n' not in text and '\r' not in text and '<!--' not in text, '标题或项目名称必须为单行且不能含标记')
     return text.strip()
 
+def content_key(typ, rule_key, topic, content):
+    """内容指纹：去重按内容而不是会话或 ID；归一化空白，避免排版差异被当成新记录。"""
+    raw=unicodedata.normalize('NFKC',f'{typ}\x1f{rule_key or ""}\x1f{topic}\x1f{content}')
+    return hashlib.sha256(re.sub(r'\s+',' ',raw).strip().encode()).hexdigest()
+
+
 def parse_daily(text: str) -> list[dict]:
     """同时读取全局段与旧来源段；旧标签不参与项目身份绑定。"""
     text=text.replace('\r\n','\n')
@@ -966,9 +972,10 @@ def prepare(root: Path, op: str, data: dict) -> dict:
         now=dt.datetime.now(z);date=now.date().isoformat();saved_at=now.isoformat(timespec='seconds')
         session_id=data.get('session_id') or ulid('s')
         expect(isinstance(session_id,str) and ID_RE.fullmatch(session_id) is not None,'非法 session_id')
-        preexisting=[r for r in records if r['session']['id']==session_id]
-        expect(not preexisting,'此会话已保存，须先判断差异，不能通过更换 ID 重复保存')
         out=[];supersede=[];seen_keys=set();superseded_ids=set()
+        # 去重按内容：同一会话可以多次保存，重复的只是内容相同的那些条目。
+        seen_content={content_key(r['type'],r.get('rule_key'),r['topic'],r['content']) for r in records}
+        duplicates=[]
         for item in data.get('records',[]):
             expect(isinstance(item,dict) and not set(item)-{'type','topic','content','rule_key','source_record_ids',
                    'supersede_record_ids','supersession_reason'},'记录字段无效；不接受项目绑定字段')
@@ -993,7 +1000,12 @@ def prepare(root: Path, op: str, data: dict) -> dict:
                     targets.append((previous,candidate_check(item.get('supersession_reason',''))))
             else:
                 expect(not rule_key and not explicit_ids,'非规则日记不能带规则键或替代目标')
-            rid=ulid('m');title=candidate_check(item['topic'],True);content=candidate_check(item['content'])
+            title=candidate_check(item['topic'],True);content=candidate_check(item['content'])
+            digest=content_key(typ,rule_key,title,content)
+            if digest in seen_content:
+                duplicates.append(title);continue
+            seen_content.add(digest)
+            rid=ulid('m')
             new_record={'id':rid,'type':typ,'topic':title,'title':title,'content':content}
             if typ in RULE_TYPES:new_record.update({'rule_key':rule_key,'status':'active'})
             if sources:new_record['source_record_ids']=sources
@@ -1006,7 +1018,7 @@ def prepare(root: Path, op: str, data: dict) -> dict:
                                   'source_project':previous.get('project_id'),
                                   'superseded_by':rid,'reason':reason})
             out.append(new_record)
-        expect(out,'没有可保存的候选记录')
+        expect(out,('候选与已有记录完全重复，未写入：'+'、'.join(duplicates)) if duplicates else '没有可保存的候选记录')
         withdrawn=[date[:7]] if file_bytes(root,f'monthly/{date[:4]}/{date[:7]}.md') is not None else []
         payload={'date':date,'saved_at':saved_at,'session_id':session_id,'agent':candidate_check(data.get('agent','unknown'),True),
                  'records':out,'supersede':supersede,'withdrawn_months':withdrawn}
