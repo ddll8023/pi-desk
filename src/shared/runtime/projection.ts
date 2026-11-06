@@ -356,6 +356,17 @@ export interface SessionGenuiActivity {
   readonly versions: number
 }
 
+/**
+ * 一轮里被修改的文件：只收写入事实，不把读取算作改动，也不与工具卡片重复表达。
+ * `truncated` 为 true 表示该轮写入文件超过展示上限，列表只是前若干项，不代表全部。
+ */
+export interface SessionTurnFiles {
+  /** 轮次身份取该轮用户消息的条目 ID，与消息投影的 `turnEntryId` 同一口径。 */
+  readonly turnEntryId: string
+  readonly files: readonly { readonly key: string; readonly label: string; readonly writes: number }[]
+  readonly truncated: boolean
+}
+
 export interface SessionActivity {
   readonly files: readonly SessionFileActivity[]
   readonly skills: readonly SessionSkillActivity[]
@@ -367,6 +378,11 @@ export interface SessionActivity {
   readonly mcpCount: number
   readonly pluginCount: number
   readonly genuiCount: number
+  /**
+   * 按轮归组的改动事实：只含有写入的轮次，并保留最近若干轮（上限由宿主聚合处封顶）。
+   * 回合头展示与延续判定共用这一份口径，渲染端不自行汇总工具条目。
+   */
+  readonly turns: readonly SessionTurnFiles[]
   readonly empty: boolean
   /** SDK嵌套记录曾省略调用或参数，恢复时无法凭空补全。 */
   readonly incomplete?: boolean

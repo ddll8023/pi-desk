@@ -1,7 +1,8 @@
 <!-- 一轮对话：用户消息始终可见，回答与压缩记录由会话阅读状态控制展开；耗时和用量仅作次要信息。
      连续的纯过程消息统一默认收拢为一行工作过程摘要，运行中也不铺开工具流水；分组身份固定为首条消息，新增操作不重置手动开合。
      折叠状态不在这里持有：开合由消息列表按会话写入 session-view，本组件只渲染给定状态并发出开合意图，因此定位与状态隔离都在同一处处理。
-     卡片的手动展开（思考、工具、技能、压缩摘要、旧版界面）只原样向上转发，滚动位置与跟随仍由消息列表决定。 -->
+     卡片的手动展开（思考、工具、技能、压缩摘要、旧版界面）只原样向上转发，滚动位置与跟随仍由消息列表决定。
+     用户消息下方另给一行「本轮改动 N 个文件」：数据取自宿主活动投影的按轮分组，本组件只按轮次 ID 取用并展示，不自行汇总。 -->
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import type { HistoryChunk } from '../../../../shared/runtime-api'
@@ -10,6 +11,7 @@ import { useRuntimeStore } from '../stores/runtime'
 import { useExtensionUiStore } from '../stores/extension-ui'
 import HistoryLoadSentinel from './HistoryLoadSentinel.vue'
 import type { ChatMessageView, ChatTurnView } from '../chat-view'
+import type { SessionTurnFiles } from '../../../../shared/runtime/projection'
 import { formatDuration, useTickingNow } from '../clock'
 import { formatTokens } from '../usage-format'
 import ChatMessageItem from './ChatMessageItem.vue'
@@ -147,6 +149,27 @@ const usageText = computed(() => {
 /** 摘要行右侧的次要信息：耗时与用量，都缺失时整段为空。 */
 const metaText = computed(() => [durationText.value, usageText.value].filter(part => part !== null).join(' · '))
 
+/**
+ * 本轮被修改的文件：事实来自宿主活动投影，按该轮用户消息的条目 ID 对齐。
+ * 只有活动属于当前会话时才显示，否则会把其它会话的改动挂到这一轮上。
+ */
+const turnFiles = computed<SessionTurnFiles | null>(() => {
+  if (runtime.conversationKey !== props.ownerKey) return null
+  const turnEntryId = props.turn.user?.entryId ?? null
+  if (turnEntryId === null) return null
+  return runtime.activity?.turns.find(item => item.turnEntryId === turnEntryId) ?? null
+})
+
+/** 改动人数的开合只是局部阅读状态，不写回 session-view。 */
+const turnFilesOpen = ref(false)
+
+/** 超过上限时加号标明列表不完整，避免把前若干项读成全部。 */
+const turnFilesTitle = computed(() => {
+  const files = turnFiles.value
+  if (files === null) return ''
+  return files.truncated ? `本轮改动 ${files.files.length}+ 个文件` : `本轮改动 ${files.files.length} 个文件`
+})
+
 /** 判断一条助手消息是否为纯过程消息（只有工具调用或思考，没有正文文本，也没有生成式界面）。 */
 function isMessageProcessOnly(msg: ChatMessageView): boolean {
   if (msg.role !== 'assistant') return false
@@ -251,6 +274,28 @@ function processGroupStats(messages: readonly ChatMessageView[]): string {
       :total="branchState.total"
       @select="handleSelectBranch"
     />
+
+    <div v-if="turnFiles !== null" class="mt-2">
+      <button
+        type="button"
+        class="inline-flex items-center gap-1.5 text-xs text-desk-muted transition-colors hover:text-desk-ink"
+        :aria-expanded="turnFilesOpen"
+        @click="turnFilesOpen = !turnFilesOpen"
+      >
+        <span class="disclosure" :class="{ 'is-open': turnFilesOpen }" aria-hidden="true"></span>
+        <span>{{ turnFilesTitle }}</span>
+      </button>
+      <ul v-if="turnFilesOpen && turnFiles !== null" class="mt-1.5 space-y-1">
+        <li
+          v-for="file in turnFiles.files"
+          :key="file.key"
+          class="flex items-baseline gap-2 text-xs text-desk-muted"
+        >
+          <span class="truncate" :title="file.key">{{ file.label }}</span>
+          <span v-if="file.writes > 1" class="shrink-0">×{{ file.writes }}</span>
+        </li>
+      </ul>
+    </div>
 
     <HistoryLoadSentinel
       v-if="needsInitialDetails && detail?.error"

@@ -8,6 +8,7 @@
  * 1. 文件：内置 `read` 算读取，`write` / `edit`（含 `multiedit`、`apply_patch`）算修改；路径取参数摘要里的 path 一类键，
  *    摘要只给规模（路径超长）时回退到参数原文解析。失败的工具不计数——没读到、也没写成；
  *    累计器只收录成功完成的调用，不把进行中或未知结果冒充完成。
+ *    写入事实另按轮归组（轮次取该轮用户消息的条目 ID），供回合头展示与延续判定共用；只保留最近若干轮，每轮文件数也封顶。
  * 2. Skill：用户消息里 Pi 展开的 `/skill:<名称>` 块（显式调用），以及模型读取技能文件 `SKILL.md`
  *    的完整上下文证据，以及宿主注入的审计证据。三者分别标注，不把读取请求冒充加载。
  * 3. MCP：`mcp__<服务器>__<工具>` 形式的工具名按服务器归并；三个 MCP 资源工具不属于任何具体服务器，
@@ -26,7 +27,7 @@ import { createHash } from 'node:crypto'
 import type { SessionEntry } from '@earendil-works/pi-coding-agent'
 import type { ToolArgSummaryEntry, ToolExecution, SkillActivitySource, SessionActivity,
   SessionFileActivity, SessionSkillActivity, SessionMcpActivity, SessionPluginActivity,
-  SessionGenuiActivity } from '../../shared/runtime-api'
+  SessionGenuiActivity, SessionTurnFiles } from '../../shared/runtime-api'
 import { GENUI_RENDER_TOOL_NAMES, readGenuiPayloadHeader } from '../../shared/genui-api'
 import { parseSkillBlock } from '../../shared/user-message-text'
 
@@ -61,8 +62,12 @@ const MCP_PREFIX = 'mcp__'
 /** 文件工具参数里可能承载路径的键；顺序即优先级。 */
 const PATH_ARG_KEYS: readonly string[] = ['path', 'file_path', 'filePath', 'notebook_path', 'target_file']
 
+/** 轮次改动明细上限：轮数与每轮文件数各自封顶，活动载荷不随会话长度无界增长。 */
+const TURN_FILES_MAX_TURNS = 50
+const TURN_FILES_MAX_PER_TURN = 20
+
 /** 活动折叠语义变化时递增；不与 SDK 版本或绑定代际混用。 */
-export const ACTIVITY_STATE_VERSION = 1
+export const ACTIVITY_STATE_VERSION = 2
 
 export interface ActivityCommandState {
   readonly id: string
@@ -76,6 +81,8 @@ export interface ActivityToolState {
   readonly phase: ToolExecution['phase']
   /** 仅保存路径字段的 JSON，不保存完整工具参数。 */
   readonly argsText: string | null
+  /** 该调用所属轮次（该轮用户消息的条目 ID）；无法归属时为 null，不推到相邻轮次。 */
+  readonly turnEntryId: string | null
 }
 
 /** 已处理日志前缀的独立轻量快照，不含实时补充或原始条目引用。 */
@@ -90,14 +97,20 @@ export interface ActivityCheckpointState {
   readonly genui: readonly SessionGenuiActivity[]
   readonly evidence: readonly string[]
   readonly incomplete: boolean
+  /** 已处理前缀末尾所在的轮次；恢复后继续追加条目时靠它把新调用归回正确轮次。 */
+  readonly currentTurn: string | null
 }
 
 export interface SessionActivityCache {
-  /** 将已提取的技能命令与轻量工具条目归纳为活动，工具贡献按对象身份复用。 */
+  /**
+   * 将已提取的技能命令与轻量工具条目归纳为活动，工具贡献按对象身份复用。
+   * `turnOf` 由调用方给出工具所属轮次，用于按轮归组改动文件；返回 null 时不归入任何轮次。
+   */
   derive(
     commands: readonly ActivityCommandState[],
     tools: readonly ToolExecution[],
-    projectPath: string | null
+    projectPath: string | null,
+    turnOf: (toolCallId: string) => string | null
   ): SessionActivity
 }
 
@@ -279,8 +292,10 @@ export function createSessionActivityCache(): SessionActivityCache {
   let toolEntries = new Map<string, { readonly source: ToolExecution; readonly facts: ToolFacts }>()
 
   return {
-    derive(commands, tools, projectPath) {
+    derive(commands, tools, projectPath, turnOf) {
       const files = new Map<string, FileBucket>()
+      // 轮次改动：外层键是轮次身份，内层键是路径键；只收写入事实。
+      const turnFiles = new Map<string, Map<string, { label: string; writes: number }>>()
       const skills = new Map<string, { readonly name: string; readonly source: SkillActivitySource; readonly location: string | null; count: number }>()
       const servers = new Map<string, McpBucket>()
       const plugins = new Map<string, number>()
@@ -319,6 +334,14 @@ export function createSessionActivityCache(): SessionActivityCache {
           if (facts.file.mode === 'read') bucket.reads += 1
           else bucket.writes += 1
           files.set(described.key, bucket)
+          if (facts.file.mode === 'write') {
+            const turnEntryId = turnOf(tool.toolCallId)
+            if (turnEntryId !== null) {
+              const perTurn = turnFiles.get(turnEntryId) ?? new Map<string, { label: string; writes: number }>()
+              perTurn.set(described.key, { label: described.label, writes: (perTurn.get(described.key)?.writes ?? 0) + 1 })
+              turnFiles.set(turnEntryId, perTurn)
+            }
+          }
         }
         if (facts.skill !== null) addSkill(facts.skill.name, 'file', facts.skill.location)
         if (facts.mcp !== null) {
@@ -363,11 +386,25 @@ export function createSessionActivityCache(): SessionActivityCache {
         .map(([toolName, count]) => ({ toolName, count }))
         .sort(byCountThenName(item => item.toolName))
 
+      const turnRows: SessionTurnFiles[] = [...turnFiles.entries()]
+        .slice(-TURN_FILES_MAX_TURNS)
+        .map(([turnEntryId, perTurn]) => {
+          const rows = [...perTurn.entries()]
+            .map(([key, file]) => ({ key, label: file.label, writes: file.writes }))
+            .sort((left, right) => right.writes - left.writes || left.label.localeCompare(right.label, 'zh-Hans-CN'))
+          return {
+            turnEntryId,
+            files: rows.slice(0, TURN_FILES_MAX_PER_TURN),
+            truncated: rows.length > TURN_FILES_MAX_PER_TURN
+          }
+        })
+
       return {
         files: fileRows,
         skills: skillRows,
         mcp: mcpRows,
         plugins: pluginRows,
+        turns: turnRows,
         // 界面交付不来自工具条目本身（投影的轻量条目不带载荷），由 `ActivityProjection` 另计。
         genui: [],
         fileCount: fileRows.length,
@@ -412,7 +449,9 @@ export function matchesActivityPrefix(state: ActivityCheckpointState, branch: re
 
 /** 补齐展示聚合所需的空字段；实际保存的参数只有路径，没有正文、输出或完整参数。 */
 function activityTool(state: ActivityToolState): ToolExecution {
-  return { ...state, startedAt: null, endedAt: null, argsTruncated: false, argsSummary: null,
+  // 逐字段取值：轮次归属是活动内部事实，不进工具条目的展示契约。
+  return { toolCallId: state.toolCallId, toolName: state.toolName, phase: state.phase, argsText: state.argsText,
+    startedAt: null, endedAt: null, argsTruncated: false, argsSummary: null,
     outputPath: null, text: '', textKind: 'none', textTruncated: false,
     nonTextBlocks: 0, nonTextParts: [], diff: null, ui: null }
 }
@@ -427,6 +466,10 @@ export class ActivityProjection {
   /** 仅在当前 manager 内判断连续追加，不导出这个原始条目引用。 */
   private lastEntry: SessionEntry | null = null
   private tools = new Map<string, ToolExecution>()
+  /** 工具调用 ID → 所属轮次；与工具条目分存，工具展示对象结构不受影响。 */
+  private turnByTool = new Map<string, string>()
+  /** 正在累加的轮次：由用户消息切换，其后直到下一条用户消息的工具调用都归它。 */
+  private currentTurn: string | null = null
   private liveTools = new Map<string, ToolExecution>()
   private commands: ActivityCommandState[] = []
   private skills = new Map<string, SessionSkillActivity>()
@@ -444,6 +487,10 @@ export class ActivityProjection {
       this.prefixLength = state.prefixLength
       this.prefixHash = state.prefixHash
       this.tools = new Map(state.tools.map(tool => [tool.toolCallId, activityTool({ ...tool })]))
+      for (const tool of state.tools) {
+        if (tool.turnEntryId !== null) this.turnByTool.set(tool.toolCallId, tool.turnEntryId)
+      }
+      this.currentTurn = state.currentTurn ?? null
       this.commands = state.commands.map(command => ({ ...command }))
       this.skills = new Map(state.skills.map(skill => [`${skill.source}:${skill.name}:${skill.location}`, { ...skill }]))
       this.genui = new Map(state.genui.map(item => [item.documentId, { ...item }]))
@@ -471,7 +518,9 @@ export class ActivityProjection {
     const argsText = typeof path === 'string' ? JSON.stringify({ path }) : previous?.argsText ?? null
     const nextPhase = phase === 'unknown' ? previous?.phase ?? phase : phase
     if (previous?.toolName === name && previous.phase === nextPhase && previous.argsText === argsText) return
-    tools.set(id, activityTool({ toolCallId: id, toolName: name, phase: nextPhase, argsText }))
+    tools.set(id, activityTool({ toolCallId: id, toolName: name, phase: nextPhase, argsText,
+      turnEntryId: this.currentTurn }))
+    if (this.currentTurn !== null) this.turnByTool.set(id, this.currentTurn)
     this.dirty = true
   }
 
@@ -506,7 +555,8 @@ export class ActivityProjection {
       tools.set(id, live.argsText === null && stable?.argsText !== undefined
         ? { ...live, argsText: stable.argsText } : live)
     }
-    const derived = this.cache.derive(this.commands, [...tools.values()].filter(tool => tool.phase === 'succeeded'), projectPath)
+    const derived = this.cache.derive(this.commands, [...tools.values()].filter(tool => tool.phase === 'succeeded'),
+      projectPath, toolCallId => this.turnByTool.get(toolCallId) ?? null)
     const skills = [...derived.skills, ...this.skills.values()].sort(byCountThenName(item => item.name))
     const genui = [...this.genui.values()].map(bucket => ({ ...bucket }))
     this.view = { ...derived, skills, skillCount: skills.length, genui, genuiCount: genui.length,
@@ -525,11 +575,13 @@ export class ActivityProjection {
       version: ACTIVITY_STATE_VERSION, prefixLength: this.prefixLength,
       tailEntryId: this.lastEntry?.id ?? null, prefixHash: this.prefixHash,
       tools: [...this.tools.values()].map(tool => ({ toolCallId: tool.toolCallId,
-        toolName: tool.toolName, phase: tool.phase, argsText: tool.argsText })),
+        toolName: tool.toolName, phase: tool.phase, argsText: tool.argsText,
+        turnEntryId: this.turnByTool.get(tool.toolCallId) ?? null })),
       commands: this.commands.map(command => ({ ...command })),
       skills: [...this.skills.values()].map(skill => ({ ...skill })),
       genui: [...this.genui.values()].map(item => ({ ...item })),
-      evidence: [...this.evidence], incomplete: this.incomplete
+      evidence: [...this.evidence], incomplete: this.incomplete,
+      currentTurn: this.currentTurn
     }
     return this.savedState
   }
@@ -540,6 +592,7 @@ export class ActivityProjection {
     this.prefixHash = EMPTY_ACTIVITY_PREFIX
     this.lastEntry = null
     this.tools.clear(); this.liveTools.clear(); this.commands = []; this.skills.clear()
+    this.turnByTool.clear(); this.currentTurn = null
     this.genui.clear(); this.evidence.clear()
     this.cache = createSessionActivityCache()
     this.incomplete = false
@@ -576,6 +629,8 @@ export class ActivityProjection {
       }
     }
     if (message.role === 'user') {
+      // 先切换当前轮：即使该条不是技能调用，后续工具调用也要归到这一轮。
+      if (this.currentTurn !== id) { this.currentTurn = id; this.dirty = true }
       const text = typeof message.content === 'string' ? message.content : content
         .filter(part => isRecord(part) && part.type === 'text' && typeof part.text === 'string')
         .map(part => (part as { text: string }).text).join('\n')

@@ -707,6 +707,10 @@ export function isSessionActivity(value: unknown): value is SessionActivity {
     && Array.isArray(value.genui) && value.genui.every(row => isRecord(row)
       && typeof row.documentId === 'string' && row.documentId !== ''
       && typeof row.title === 'string' && isCount(row.revision) && isCount(row.versions) && row.versions >= 1)
+    && Array.isArray(value.turns) && value.turns.length <= 50 && value.turns.every(row => isRecord(row)
+      && typeof row.turnEntryId === 'string' && row.turnEntryId !== '' && typeof row.truncated === 'boolean'
+      && Array.isArray(row.files) && row.files.length <= 20 && row.files.every(file => isRecord(file)
+        && typeof file.key === 'string' && typeof file.label === 'string' && isCount(file.writes)))
     && ['fileCount', 'skillCount', 'mcpCount', 'pluginCount', 'genuiCount'].every(key => isCount(value[key]))
     && typeof value.empty === 'boolean'
     && (value.incomplete === undefined || typeof value.incomplete === 'boolean')
