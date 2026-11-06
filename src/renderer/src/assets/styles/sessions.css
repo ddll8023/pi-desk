@@ -50,7 +50,7 @@
     align-items: flex-end;
     gap: 0.375rem;
   }
-/* ＋ 菜单：单列三段（图片 / 模型 / 常用消息），整块不滚动，只有常用消息区内部滚动。
+/* ＋ 菜单：单列四段（图片 / 模型 / 执行模式 / 常用消息），整块不滚动，只有常用消息区内部滚动。
      浮层以触发键为基准展开；选择器带上坞前缀，才盖住 ui.css 里后引入的 .dialog-popover（方向与宽度都从那里接管）。 */
 .prompt-composer-plus {
     position: relative;
@@ -99,8 +99,46 @@
     max-height: min(24rem, 50vh);
     overflow: hidden;
     padding: 0.25rem;
+    /* 材质只叠在现有 pop 阴影之上：一条顶部内高光 + 一层自上淡出的强调渐变，让浮层在白底上有面的厚度；
+       白光与渐变都从现有令牌算得，深浅主题各自成立，不新增颜色。 */
+    transform-origin: left bottom;
+    border-color: color-mix(in srgb, var(--color-desk-accent) 14%, var(--color-desk-line));
+    background-image: linear-gradient(180deg, color-mix(in srgb, var(--color-desk-accent) 7%, transparent), transparent 34%);
+    box-shadow: var(--shadow-desk-pop), inset 0 1px 0 color-mix(in srgb, var(--color-desk-surface) 75%, #ffffff);
   }
-/* 一段：标题 + 内容竖排；段与段靠标题底带分隔，不再画线、不再加内距。 */
+/* 进场：从左下角生长。时长沿用两档令牌，进场 240ms 说明它是一块展开的面板，退场与 pop 同档更快。
+     四段按 0 / 18 / 36 / 54ms 错开落位，末段结束（234ms）仍早于外层动画，入场类被移除时不会截断子动画。 */
+.prompt-composer-plus-menu.plus-menu-motion-enter-active {
+    animation: plus-menu-in var(--motion-duration-slow) var(--motion-ease-entrance) both;
+  }
+.prompt-composer-plus-menu.plus-menu-motion-leave-active {
+    animation: plus-menu-out var(--motion-duration-fast) var(--motion-ease-exit) both;
+  }
+.prompt-composer-plus-menu.plus-menu-motion-enter-active .prompt-composer-plus-section {
+    animation: plus-section-in var(--motion-duration-base) var(--motion-ease-entrance) both;
+  }
+.prompt-composer-plus-menu.plus-menu-motion-enter-active .prompt-composer-plus-section:nth-child(2) {
+    animation-delay: 18ms;
+  }
+.prompt-composer-plus-menu.plus-menu-motion-enter-active .prompt-composer-plus-section:nth-child(3) {
+    animation-delay: 36ms;
+  }
+.prompt-composer-plus-menu.plus-menu-motion-enter-active .prompt-composer-plus-section:nth-child(4) {
+    animation-delay: 54ms;
+  }
+@keyframes plus-menu-in {
+    from { opacity: 0; transform: translateY(6px) scale(0.96); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+  }
+@keyframes plus-menu-out {
+    from { opacity: 1; transform: translateY(0) scale(1); }
+    to { opacity: 0; transform: translateY(4px) scale(0.98); }
+  }
+@keyframes plus-section-in {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: none; }
+  }
+/* 一段：标题 + 内容竖排；段与段靠标题下的发丝线分隔，不再画线、不再加内距。 */
 .prompt-composer-plus-section {
     @apply flex flex-none flex-col;
   }
@@ -109,25 +147,70 @@
     flex: 1 1 auto;
     min-height: 0;
   }
-/* 段标题：浅底带而非裸标题 + 分隔线。字号与字重取 git 分组头同一档（11px / 600），
-     圆角按外层 12px 减 4px 内距取 md，底带因此与外层同心。
-     底色用沉陷面而非 surface-subtle：后者就是菜单行的悬停底色，紧贴底带的第一行悬停时会与底带连成一块。 */
+/* 段标题：整条沉陷色带把菜单读成四块并列色块，改为字距标签加一条从左淡出的发丝线；
+     字号与字重仍取 git 分组头同一档（11px / 600），只换表达方式，不改信息层级。 */
 .prompt-composer-plus-section-title {
-    @apply m-0 flex h-6 items-center px-2 text-2xs font-semibold;
-    border-radius: var(--radius-desk-md);
-    background: var(--color-desk-canvas-sunken);
+    @apply m-0 flex h-6 items-center gap-2 px-2.5 text-2xs font-semibold;
+    letter-spacing: 0.06em;
     color: var(--color-desk-muted);
+  }
+.prompt-composer-plus-section-title::after {
+    content: "";
+    flex: 1 1 auto;
+    height: 1px;
+    background: linear-gradient(90deg, var(--color-desk-line), transparent);
   }
 /* 常用消息列表：占满剩余高度后自己滚动，条数少时按内容收缩，不留空白。 */
 .prompt-composer-plus-list {
     @apply flex min-h-0 flex-col overflow-y-auto;
   }
-/* 菜单里的一行：左侧动作名，右侧次要说明；左内距比段标题多 4px，让标题读成标签、行读成内容。 */
-.prompt-composer-plus-row {
-    @apply flex h-[30px] w-full shrink-0 items-center gap-2 rounded-desk-sm pl-3 pr-2 text-left text-xs transition-colors;
+/* 可滚动时上下渐隐：提示列表还有内容，也不让被截断的行看起来像半行错误。 */
+.prompt-composer-plus-list.can-scroll {
+    mask-image: linear-gradient(180deg, transparent 0, #000 0.5rem, #000 calc(100% - 0.5rem), transparent 100%);
   }
-.prompt-composer-plus-row:not(:disabled):hover {
-    background: var(--color-desk-surface-subtle);
+/* 菜单里的一行：左侧动作名，右侧次要说明；左内距比段标题多 2px，让标题读成标签、行读成内容。
+     悬停用「左竖条 + 左浓右淡的强调渐变」两层反馈，而不是铺满平涂色：平涂会把相邻两行糊成一片，
+     渐变自动作名一侧淡出，行动线仍然清楚；两层只做装饰，不接事件。 */
+.prompt-composer-plus-row {
+    @apply relative flex h-8 w-full shrink-0 items-center gap-2 rounded-desk-md pl-3 pr-2 text-left text-xs;
+  }
+.prompt-composer-plus-row::before {
+    content: "";
+    position: absolute;
+    z-index: 1;
+    top: 7px;
+    bottom: 7px;
+    left: 0;
+    width: 2px;
+    border-radius: 999px;
+    background: var(--color-desk-accent);
+    transform: scaleY(0);
+    transform-origin: center;
+    transition: transform var(--motion-duration-base) var(--motion-ease-entrance);
+  }
+.prompt-composer-plus-row::after {
+    content: "";
+    position: absolute;
+    z-index: 0;
+    inset: 0;
+    border-radius: inherit;
+    background: linear-gradient(90deg, color-mix(in srgb, var(--color-desk-accent-soft) 94%, transparent), transparent 78%);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity var(--motion-duration-base) ease;
+  }
+.prompt-composer-plus-row > * {
+    position: relative;
+    z-index: 1;
+  }
+.prompt-composer-plus-row:not(:disabled):hover::before,
+  .prompt-composer-plus-row:focus-visible::before,
+  .prompt-composer-plus-row.is-selected::before {
+    transform: scaleY(1);
+  }
+.prompt-composer-plus-row:not(:disabled):hover::after,
+  .prompt-composer-plus-row:focus-visible::after {
+    opacity: 1;
   }
 /* 不可提交或不能添加附件时置灰：本行没有底色与描边可退，只能压低文字并换成禁止光标，
      否则点下去毫无反应且外观与可用项一致。 */
@@ -142,14 +225,23 @@
 .prompt-composer-plus-row.is-command {
     font-family: var(--font-mono);
   }
-/* 已选模式：用字重与强调色标记，不再额外加一个勾选图标。 */
+/* 已选模式：竖条常亮 + 字重与强调色，仍不额外加一个勾选图标。 */
 .prompt-composer-plus-row.is-selected {
     @apply font-semibold;
     color: var(--color-desk-accent);
   }
+.prompt-composer-plus-row.is-selected::after {
+    opacity: 0.7;
+  }
+/* 悬停时说明文字跟自己提亮一档：行是一个整体，说明不该比动作名更早退出。
+     禁用态由下面的 :disabled 规则压低，不参与悬停。 */
 .prompt-composer-plus-row-note {
     @apply ml-auto shrink-0 text-2xs;
     color: var(--color-desk-muted);
+    transition: color var(--motion-duration-base) ease;
+  }
+.prompt-composer-plus-row:not(:disabled):hover .prompt-composer-plus-row-note {
+    color: color-mix(in srgb, var(--color-desk-muted) 55%, var(--color-desk-ink));
   }
 /* 坞内的图标键改圆形：只作用于本坞，不改全应用共用的图标变体。 */
 .prompt-composer-shell .icon-button-square,
@@ -192,9 +284,27 @@
     border-color: color-mix(in srgb, var(--color-desk-line-strong) 55%, transparent);
     background: var(--color-desk-surface);
   }
-/* 附件按钮的字符：与 pigui 输入坞的工具栏一致，用符号而不用图标。 */
-.prompt-composer-char {
+/* 附件按钮的字符：与 pigui 输入坞的工具栏一致，用符号而不用图标。
+     34px 圆键没有文字，只靠底色变化不足以说明菜单已展开，因此展开时符号转 45° 读作「再点一次收起」。 */
+.prompt-composer-shell .prompt-composer-char {
     @apply text-lg leading-none;
+    transition: transform var(--default-transition-duration) var(--motion-ease-entrance),
+      background-color var(--default-transition-duration) ease,
+      border-color var(--default-transition-duration) ease,
+      color var(--default-transition-duration) ease;
+  }
+.prompt-composer-shell .prompt-composer-char.is-open {
+    transform: rotate(45deg);
+    border-color: color-mix(in srgb, var(--color-desk-accent) 45%, var(--color-desk-line-strong));
+    background: var(--color-desk-accent-soft);
+    color: var(--color-desk-accent);
+  }
+/* 展开态的悬停与按下各提一档：不复用 ui.css 里图标键的灰底，否则浅强调底会被抹掉。 */
+.prompt-composer-shell .prompt-composer-char.is-open:not(:disabled):hover,
+  .prompt-composer-shell .prompt-composer-char.is-open:not(:disabled):active {
+    border-color: color-mix(in srgb, var(--color-desk-accent) 55%, var(--color-desk-line-strong));
+    background: color-mix(in srgb, var(--color-desk-accent-soft) 82%, var(--color-desk-accent));
+    color: var(--color-desk-accent);
   }
 /* 发送与停止按钮的字符：比附件略小，避免实心块显得过重。 */
 .prompt-composer-send {
@@ -1660,5 +1770,23 @@
 @keyframes tool-spin {
     from { transform: rotate(0deg); }
     to { transform: rotate(360deg); }
+  }
+/* 用户偏好减少动效：＋ 菜单的进场、错峰、行反馈与开合旋转全部关闭；
+     关闭后 Vue 检测不到 animation，过渡会立即完成，不会停在中间态。 */
+@media (prefers-reduced-motion: reduce) {
+    .prompt-composer-plus-menu.plus-menu-motion-enter-active,
+    .prompt-composer-plus-menu.plus-menu-motion-leave-active,
+    .prompt-composer-plus-menu.plus-menu-motion-enter-active .prompt-composer-plus-section {
+      animation: none !important;
+    }
+    .prompt-composer-plus-row::before,
+    .prompt-composer-plus-row::after,
+    .prompt-composer-plus-row-note,
+    .prompt-composer-shell .prompt-composer-char {
+      transition: none !important;
+    }
+    .prompt-composer-shell .prompt-composer-char.is-open {
+      transform: none;
+    }
   }
 }

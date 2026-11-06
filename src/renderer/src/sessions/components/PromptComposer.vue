@@ -721,6 +721,18 @@ function togglePlusMenu(): void {
   else plusMenuOpen.value = true
 }
 
+/** 常用消息超出可见高度时才给列表挂上下渐隐，条数少时不挂，免得首行被无意义地淡掉。 */
+function refreshPlusListMask(): void {
+  const list = plusMenu.value?.querySelector<HTMLElement>('.prompt-composer-plus-list')
+  if (!list) return
+  list.classList.toggle('can-scroll', list.scrollHeight - list.clientHeight > 2)
+}
+
+// 菜单每次展开后重算一次：常用消息条数来自界面偏好，展开前节点还不存在。
+watch(plusMenuOpen, (open) => {
+  if (open) void nextTick(refreshPlusListMask)
+})
+
 function closePlusMenu(restoreFocus = false): void {
   if (!plusMenuOpen.value) return
   plusMenuOpen.value = false
@@ -1647,6 +1659,7 @@ onMounted(() => {
             <AppButton
               variant="icon"
               class="prompt-composer-char"
+              :class="{ 'is-open': plusMenuOpen }"
               :aria-expanded="plusMenuOpen"
               aria-controls="prompt-plus-menu"
               aria-label="输入选项"
@@ -1656,76 +1669,79 @@ onMounted(() => {
             >
               ＋
             </AppButton>
-            <!-- 菜单是单列四段：图片、模型、执行模式、常用消息自上而下排列，只有常用消息区内部滚动。 -->
-            <div
-              v-if="plusMenuOpen"
-              id="prompt-plus-menu"
-              ref="plusMenu"
-              class="dialog-popover prompt-composer-plus-menu"
-              role="group"
-              aria-label="输入选项"
-              @keydown="onPlusMenuKeydown"
-            >
-              <div class="prompt-composer-plus-section">
-                <p class="prompt-composer-plus-section-title">图片</p>
-                <!-- 触发图片附件选择；图片说明由附件区独立标注，不进入提示词。 -->
-                <AppButton
-                  variant="unstyled"
-                  class="prompt-composer-plus-row"
-                  :disabled="attachDisabled"
-                  @click="pickImageFromMenu"
-                >
-                  <span>添加图片</span>
-                  <span class="prompt-composer-plus-row-note">也可粘贴或拖入</span>
-                </AppButton>
-              </div>
-              <div class="prompt-composer-plus-section">
-                <p class="prompt-composer-plus-section-title">模型</p>
-                <!-- 未绑定或原位新草稿选择草稿模型；实际绑定后才切当前会话模型，另设全局默认走次级动作。 -->
-                <RuntimeModelSelect
-                  variant="menu"
-                  :new-conversation="workspaceTabsStore.isChatNewDraft"
-                  :resetting="workspaceTabsStore.isChatResetting || workspaceTabsStore.isChatBinding"
-                />
-              </div>
-              <div class="prompt-composer-plus-section">
-                <p class="prompt-composer-plus-section-title">执行模式</p>
-                <!-- 两档互斥；已开始对话的会话保持原能力集，只显示当前值。 -->
-                <AppButton
-                  v-for="option in modeOptions"
-                  :key="option.value"
-                  variant="unstyled"
-                  class="prompt-composer-plus-row"
-                  :class="currentMode === option.value ? 'is-selected' : ''"
-                  :aria-pressed="currentMode === option.value"
-                  :disabled="modeLocked"
-                  :title="modeLocked ? '本会话已开始，模式只在新建会话时生效' : undefined"
-                  @click="selectMode(option.value)"
-                >
-                  <span>{{ option.label }}</span>
-                  <span class="prompt-composer-plus-row-note">{{ option.value === 'fast' ? '不注入记忆，直接给清单' : '读记忆，先给方案' }}</span>
-                </AppButton>
-              </div>
-              <div class="prompt-composer-plus-section is-grow">
-                <p class="prompt-composer-plus-section-title">常用消息</p>
-                <!-- 消息多时只有本区滚动，顶部两段留在原位。 -->
-                <div class="prompt-composer-plus-list scroll-area">
+            <!-- 进场从触发键所在的左下角生长，四段依次落位；退场交给同名 leave 过渡，比进场更快。
+                 菜单是单列四段：图片、模型、执行模式、常用消息自上而下排列，只有常用消息区内部滚动。 -->
+            <Transition name="plus-menu-motion">
+              <div
+                v-if="plusMenuOpen"
+                id="prompt-plus-menu"
+                ref="plusMenu"
+                class="dialog-popover prompt-composer-plus-menu"
+                role="group"
+                aria-label="输入选项"
+                @keydown="onPlusMenuKeydown"
+              >
+                <div class="prompt-composer-plus-section">
+                  <p class="prompt-composer-plus-section-title">图片</p>
+                  <!-- 触发图片附件选择；图片说明由附件区独立标注，不进入提示词。 -->
                   <AppButton
-                    v-for="(message, index) in quickSendMessages"
-                    :key="`${message}-${index}`"
                     variant="unstyled"
                     class="prompt-composer-plus-row"
-                    :class="isCommandMessage(message) ? 'is-command' : ''"
-                    :disabled="quickSendDisabled"
-                    :title="message"
-                    @click="sendQuickMessage(message)"
+                    :disabled="attachDisabled"
+                    @click="pickImageFromMenu"
                   >
-                    <span class="min-w-0 truncate">{{ message }}</span>
+                    <span>添加图片</span>
+                    <span class="prompt-composer-plus-row-note">也可粘贴或拖入</span>
                   </AppButton>
-                  <p v-if="quickSendMessages.length === 0" class="prompt-composer-plus-row-note px-2 py-1">尚未配置常用消息，可在设置里添加。</p>
+                </div>
+                <div class="prompt-composer-plus-section">
+                  <p class="prompt-composer-plus-section-title">模型</p>
+                  <!-- 未绑定或原位新草稿选择草稿模型；实际绑定后才切当前会话模型，另设全局默认走次级动作。 -->
+                  <RuntimeModelSelect
+                    variant="menu"
+                    :new-conversation="workspaceTabsStore.isChatNewDraft"
+                    :resetting="workspaceTabsStore.isChatResetting || workspaceTabsStore.isChatBinding"
+                  />
+                </div>
+                <div class="prompt-composer-plus-section">
+                  <p class="prompt-composer-plus-section-title">执行模式</p>
+                  <!-- 两档互斥；已开始对话的会话保持原能力集，只显示当前值。 -->
+                  <AppButton
+                    v-for="option in modeOptions"
+                    :key="option.value"
+                    variant="unstyled"
+                    class="prompt-composer-plus-row"
+                    :class="currentMode === option.value ? 'is-selected' : ''"
+                    :aria-pressed="currentMode === option.value"
+                    :disabled="modeLocked"
+                    :title="modeLocked ? '本会话已开始，模式只在新建会话时生效' : undefined"
+                    @click="selectMode(option.value)"
+                  >
+                    <span>{{ option.label }}</span>
+                    <span class="prompt-composer-plus-row-note">{{ option.value === 'fast' ? '不注入记忆，需求确认后给清单' : '读记忆，需求确认后先给方案' }}</span>
+                  </AppButton>
+                </div>
+                <div class="prompt-composer-plus-section is-grow">
+                  <p class="prompt-composer-plus-section-title">常用消息</p>
+                  <!-- 消息多时只有本区滚动，顶部两段留在原位；滚动时重算上下渐隐。 -->
+                  <div class="prompt-composer-plus-list scroll-area" @scroll.passive="refreshPlusListMask">
+                    <AppButton
+                      v-for="(message, index) in quickSendMessages"
+                      :key="`${message}-${index}`"
+                      variant="unstyled"
+                      class="prompt-composer-plus-row"
+                      :class="isCommandMessage(message) ? 'is-command' : ''"
+                      :disabled="quickSendDisabled"
+                      :title="message"
+                      @click="sendQuickMessage(message)"
+                    >
+                      <span class="min-w-0 truncate">{{ message }}</span>
+                    </AppButton>
+                    <p v-if="quickSendMessages.length === 0" class="prompt-composer-plus-row-note px-2 py-1">尚未配置常用消息，可在设置里添加。</p>
+                  </div>
                 </div>
               </div>
-            </div>
+            </Transition>
           </div>
 
           <textarea
