@@ -7,6 +7,8 @@ export interface MemoryHostConfiguration {
   readonly version: 1
   readonly revision: number
   readonly enabled: boolean
+  /** 是否由执行模式关闭：用户开关仍开着，但这个会话不注入记忆。 */
+  readonly disabledByMode: boolean
   readonly available: boolean
   readonly store: string
   readonly engine: string
@@ -37,14 +39,15 @@ function nullableText(value: unknown): boolean { return value === null || typeof
 export function isMemoryHostConfiguration(value: unknown): value is MemoryHostConfiguration {
   return record(value) && value.version === 1 && typeof value.revision === 'number'
     && Number.isSafeInteger(value.revision) && value.revision >= 0
-    && typeof value.enabled === 'boolean' && typeof value.available === 'boolean'
+    && typeof value.enabled === 'boolean' && typeof value.disabledByMode === 'boolean'
+    && typeof value.available === 'boolean'
     && typeof value.store === 'string' && isAbsolute(value.store)
     && typeof value.engine === 'string' && isAbsolute(value.engine)
     && typeof value.python === 'string' && isAbsolute(value.python)
     && (value.tzdata === null || (typeof value.tzdata === 'string' && isAbsolute(value.tzdata)))
     && (!value.available || value.tzdata !== null)
     && nullableText(value.pythonVersion) && nullableText(value.timezoneVersion) && nullableText(value.error)
-    && Object.keys(value).every(key => ['version', 'revision', 'enabled', 'available', 'store', 'engine', 'python',
+    && Object.keys(value).every(key => ['version', 'revision', 'enabled', 'disabledByMode', 'available', 'store', 'engine', 'python',
       'tzdata', 'pythonVersion', 'timezoneVersion', 'error'].includes(key))
 }
 function resource(root: string, name: unknown, directory = false): string {
@@ -64,7 +67,7 @@ export function managedMemoryConfiguration(hostEntry: string, enabled: boolean, 
   const hostRoot = dirname(hostEntry)
   const runtimeRoot = join(hostRoot, 'memory-runtime')
   const engine = join(hostRoot, 'agent-resources/skills/memory/scripts/memory_store.py')
-  const base: MemoryHostConfiguration = { version: 1, revision, enabled, available: false,
+  const base: MemoryHostConfiguration = { version: 1, revision, enabled, disabledByMode: false, available: false,
     store: globalMemoryDirectory(), engine, python: join(runtimeRoot, 'unavailable'), tzdata: null,
     pythonVersion: null, timezoneVersion: null, error: null }
   if (!['win32', 'darwin'].includes(process.platform) || !['x64', 'arm64'].includes(process.arch)) {

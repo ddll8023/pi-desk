@@ -10,9 +10,17 @@ import type { EventBus } from '@earendil-works/pi-coding-agent'
 import { MEMORY_CONFIGURATION_ENV, serializeMemoryConfiguration } from '../shared-process/memory-runtime'
 import type { MemoryHostConfiguration } from '../shared-process/memory-runtime'
 import { MEMORY_CONFIGURATION_CHANGED } from './protocol'
+import type { ExecutionMode } from '../shared/preferences-api'
+
+/** 推送去重的身份：只关心会影响扩展行为的开关与成因，不看磁盘路径等资源字段。 */
+function effectiveState(configuration: MemoryHostConfiguration): string {
+  return `${configuration.enabled}:${configuration.disabledByMode}`
+}
 
 export class MemoryConfigurationHolder {
   private configuration: MemoryHostConfiguration | null = null
+  /** 上一次推给扩展的有效状态；快速模式派生出的关闭不写回用户配置。 */
+  private appliedState: string | null = null
 
   /** 全进程唯一的扩展事件总线；服务重建沿用同一总线，已加载扩展的订阅不会失效。 */
   constructor(readonly bus: EventBus) {}
@@ -24,6 +32,27 @@ export class MemoryConfigurationHolder {
   /** 采纳新配置：同步更新进程环境，并把变更推给已加载扩展。 */
   apply(configuration: MemoryHostConfiguration): void {
     this.configuration = configuration
+    this.publish(configuration)
+  }
+
+  /**
+   * 按会话模式派生：快速模式不注入记忆，其它模式沿用用户开关。
+   * 只在有效启用状态变化时推送，避免每次建会话都向扩展重发同一份配置。
+   */
+  forMode(mode: ExecutionMode): MemoryHostConfiguration | null {
+    const base = this.configuration
+    if (base === null) return null
+    // 用户开关仍是事实：快速模式只把「本会话不注入」标成 disabledByMode，扩展据此区分成因。
+    const effective = mode === 'fast' && base.enabled
+      ? { ...base, enabled: false, disabledByMode: true }
+      : { ...base, disabledByMode: false }
+    if (this.appliedState !== effectiveState(effective)) this.publish(effective)
+    return effective
+  }
+
+  /** 进程环境供扩展工厂同步读取，总线供已加载扩展跟随；两处写失败都不改变宿主配置真相。 */
+  private publish(configuration: MemoryHostConfiguration): void {
+    this.appliedState = effectiveState(configuration)
     try {
       process.env[MEMORY_CONFIGURATION_ENV] = serializeMemoryConfiguration(configuration)
     } catch { /* 环境写入失败只影响后续加载的扩展，不影响已加载会话。 */ }

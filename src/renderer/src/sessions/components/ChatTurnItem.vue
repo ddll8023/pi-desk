@@ -2,7 +2,7 @@
      连续的纯过程消息统一默认收拢为一行工作过程摘要，运行中也不铺开工具流水；分组身份固定为首条消息，新增操作不重置手动开合。
      折叠状态不在这里持有：开合由消息列表按会话写入 session-view，本组件只渲染给定状态并发出开合意图，因此定位与状态隔离都在同一处处理。
      卡片的手动展开（思考、工具、技能、压缩摘要、旧版界面）只原样向上转发，滚动位置与跟随仍由消息列表决定。
-     用户消息下方另给一行「本轮改动 N 个文件」：数据取自宿主活动投影的按轮分组，本组件只按轮次 ID 取用并展示，不自行汇总。 -->
+     用户消息下方另给一行「本轮改动 N 个文件」与该轮的延续判定：数据都取自宿主活动投影的按轮分组，本组件只按轮次 ID 取用并展示，不自行汇总或重新判断。 -->
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import type { HistoryChunk } from '../../../../shared/runtime-api'
@@ -160,6 +160,15 @@ const turnFiles = computed<SessionTurnFiles | null>(() => {
   return runtime.activity?.turns.find(item => item.turnEntryId === turnEntryId) ?? null
 })
 
+/** 该轮的延续判定：与改动文件同一份投影，同一轮只在有结论时显示一行。 */
+const turnJudgement = computed<string | null>(() => {
+  const judgement = turnFiles.value?.judgement ?? null
+  if (judgement === null) return null
+  const verdict = judgement.verdict === 'continuation' ? '延续上一个任务' : '新任务'
+  const signal = judgement.signal === 'wording' ? '命中措辞' : '命中上一轮改动文件'
+  return `判定：${verdict}（${signal}）`
+})
+
 /** 改动人数的开合只是局部阅读状态，不写回 session-view。 */
 const turnFilesOpen = ref(false)
 
@@ -275,7 +284,9 @@ function processGroupStats(messages: readonly ChatMessageView[]): string {
       @select="handleSelectBranch"
     />
 
-    <div v-if="turnFiles !== null" class="mt-2">
+    <p v-if="turnJudgement !== null" class="mt-2 text-xs text-desk-muted">{{ turnJudgement }}</p>
+
+    <div v-if="turnFiles !== null && turnFiles.files.length > 0" class="mt-2">
       <button
         type="button"
         class="inline-flex items-center gap-1.5 text-xs text-desk-muted transition-colors hover:text-desk-ink"

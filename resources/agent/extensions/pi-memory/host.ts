@@ -9,6 +9,7 @@ export interface MemoryHostConfiguration {
   version: 1
   revision: number
   enabled: boolean
+  disabledByMode: boolean
   available: boolean
   store: string
   engine: string
@@ -24,13 +25,15 @@ export function parseHostConfiguration(value: unknown): MemoryHostConfiguration 
   const path = (name: string): boolean => typeof row[name] === 'string' && isAbsolute(row[name])
   const nullableText = (name: string): boolean => row[name] === null || typeof row[name] === 'string'
   if (row.version !== 1 || typeof row.revision !== 'number' || !Number.isSafeInteger(row.revision) || row.revision < 0
-    || typeof row.enabled !== 'boolean' || typeof row.available !== 'boolean'
+    || typeof row.enabled !== 'boolean' || typeof row.disabledByMode !== 'boolean'
+    || typeof row.available !== 'boolean'
     || !path('store') || !path('engine') || !path('python') || !(row.tzdata === null || path('tzdata'))
     || (row.available && row.tzdata === null) || !nullableText('error')
     || !nullableText('pythonVersion') || !nullableText('timezoneVersion')
-    || Object.keys(row).some(key => !['version', 'revision', 'enabled', 'available', 'store', 'engine', 'python', 'tzdata',
+    || Object.keys(row).some(key => !['version', 'revision', 'enabled', 'disabledByMode', 'available', 'store', 'engine', 'python', 'tzdata',
       'pythonVersion', 'timezoneVersion', 'error'].includes(key))) throw new Error('桌面记忆配置字段无效')
-  return { version: 1, revision: row.revision, enabled: row.enabled, available: row.available,
+  return { version: 1, revision: row.revision, enabled: row.enabled, disabledByMode: row.disabledByMode,
+    available: row.available,
     store: String(row.store), engine: String(row.engine), python: String(row.python),
     tzdata: row.tzdata === null ? null : String(row.tzdata), error: row.error === null ? null : String(row.error),
     pythonVersion: row.pythonVersion === null ? null : String(row.pythonVersion),

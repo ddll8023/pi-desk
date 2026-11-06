@@ -215,7 +215,10 @@ function mapStatus(host: SdkHostStatus, session: SdkSessionStatus, runId: number
     sessionId: session.sessionId,
     info: state === 'ready' ? mapInfo(session) : null,
     sdkVersion: host.sdkVersion,
-    lastError: failure === null ? null : `会话后端故障（${failure}）：请重新打开会话或重启应用。`
+    lastError: failure === null
+      ? null
+      : `会话后端故障（${failure}）：请重新打开会话或重启应用。`
+        + (session.lastErrorDetail ? ` 原因：${session.lastErrorDetail}` : '')
   }
 }
 

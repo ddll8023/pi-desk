@@ -18,6 +18,8 @@
  * 5. 界面：`ui_render` / `ui_patch` 的 `toolResult` 里带 `details.ui` 时记一份交付事实，
  *    按 `documentId` 合并：版本取最大、标题取后出现的非空值、`versions` 累加。
  *    只读头部字段，不解析节点树；嵌套调用（`nestedCalls`）不带 `details`，因此其中的界面不计入。
+ * 6. 待办清单：`todo_write` 的 `toolResult` 里带清单时记下最新一份，随检查点保存，恢复会话后不依赖重放。
+ * 7. 延续判定：由宿主在用户轮次开始时算好写入，按该轮用户消息的条目 ID 归档；属本轮临时事实，不进检查点。
  *
  * 日志累计与实时工具状态分别维护：实时状态只补充展示，检查点只导出已进入官方分支的轻量事实。
  * 同一 SDK manager 内确认连续追加后只折叠新增条目；跨来源恢复核对完整前缀摘要，不能只比较末条 ID。
@@ -27,8 +29,9 @@ import { createHash } from 'node:crypto'
 import type { SessionEntry } from '@earendil-works/pi-coding-agent'
 import type { ToolArgSummaryEntry, ToolExecution, SkillActivitySource, SessionActivity,
   SessionFileActivity, SessionSkillActivity, SessionMcpActivity, SessionPluginActivity,
-  SessionGenuiActivity, SessionTurnFiles } from '../../shared/runtime-api'
+  SessionGenuiActivity, SessionTurnFiles, SessionTodoList, SessionContinuation } from '../../shared/runtime-api'
 import { GENUI_RENDER_TOOL_NAMES, readGenuiPayloadHeader } from '../../shared/genui-api'
+import { TODO_TOOL_NAME, parseTodoListDetails } from '../todo-list'
 import { parseSkillBlock } from '../../shared/user-message-text'
 
 /** 只读取文件内容的工具；其他工具即使读到文件（如 bash）也不猜测它碰了哪个路径。 */
@@ -67,7 +70,7 @@ const TURN_FILES_MAX_TURNS = 50
 const TURN_FILES_MAX_PER_TURN = 20
 
 /** 活动折叠语义变化时递增；不与 SDK 版本或绑定代际混用。 */
-export const ACTIVITY_STATE_VERSION = 2
+export const ACTIVITY_STATE_VERSION = 3
 
 export interface ActivityCommandState {
   readonly id: string
@@ -99,6 +102,8 @@ export interface ActivityCheckpointState {
   readonly incomplete: boolean
   /** 已处理前缀末尾所在的轮次；恢复后继续追加条目时靠它把新调用归回正确轮次。 */
   readonly currentTurn: string | null
+  /** 待办清单：取分支上最近一次 `todo_write` 的结果，恢复后不依赖重放。 */
+  readonly todos: SessionTodoList | null
 }
 
 export interface SessionActivityCache {
@@ -110,7 +115,8 @@ export interface SessionActivityCache {
     commands: readonly ActivityCommandState[],
     tools: readonly ToolExecution[],
     projectPath: string | null,
-    turnOf: (toolCallId: string) => string | null
+    turnOf: (toolCallId: string) => string | null,
+    judgements: ReadonlyMap<string, SessionContinuation>
   ): SessionActivity
 }
 
@@ -292,7 +298,7 @@ export function createSessionActivityCache(): SessionActivityCache {
   let toolEntries = new Map<string, { readonly source: ToolExecution; readonly facts: ToolFacts }>()
 
   return {
-    derive(commands, tools, projectPath, turnOf) {
+    derive(commands, tools, projectPath, turnOf, judgements) {
       const files = new Map<string, FileBucket>()
       // 轮次改动：外层键是轮次身份，内层键是路径键；只收写入事实。
       const turnFiles = new Map<string, Map<string, { label: string; writes: number }>>()
@@ -386,6 +392,10 @@ export function createSessionActivityCache(): SessionActivityCache {
         .map(([toolName, count]) => ({ toolName, count }))
         .sort(byCountThenName(item => item.toolName))
 
+      // 有判定但没有写入的轮次也要出现在列表里：否则回合头的判定行不会显示。
+      for (const turnEntryId of judgements.keys()) {
+        if (!turnFiles.has(turnEntryId)) turnFiles.set(turnEntryId, new Map())
+      }
       const turnRows: SessionTurnFiles[] = [...turnFiles.entries()]
         .slice(-TURN_FILES_MAX_TURNS)
         .map(([turnEntryId, perTurn]) => {
@@ -394,6 +404,7 @@ export function createSessionActivityCache(): SessionActivityCache {
             .sort((left, right) => right.writes - left.writes || left.label.localeCompare(right.label, 'zh-Hans-CN'))
           return {
             turnEntryId,
+            judgement: judgements.get(turnEntryId) ?? null,
             files: rows.slice(0, TURN_FILES_MAX_PER_TURN),
             truncated: rows.length > TURN_FILES_MAX_PER_TURN
           }
@@ -407,6 +418,9 @@ export function createSessionActivityCache(): SessionActivityCache {
         turns: turnRows,
         // 界面交付不来自工具条目本身（投影的轻量条目不带载荷），由 `ActivityProjection` 另计。
         genui: [],
+        // 待办清单同样来自工具结果载荷，不进入工具条目。
+        todos: null,
+        continuation: null,
         fileCount: fileRows.length,
         skillCount: skillRows.length,
         mcpCount: mcpRows.length,
@@ -474,6 +488,16 @@ export class ActivityProjection {
   private commands: ActivityCommandState[] = []
   private skills = new Map<string, SessionSkillActivity>()
   private genui = new Map<string, GenuiBucket>()
+  private todos: SessionTodoList | null = null
+  /**
+   * 待绑定的延续判定：宿主在用户轮次开始前算出，此时该轮用户消息尚未进入分支，
+   * 等到它出现时再按条目 ID 归档；因此暂存一份，不直接对外展示。
+   */
+  private pendingContinuation: SessionContinuation | null = null
+  /** 已判定的轮次；只看展示，不进检查点，重开会话后不重放旧判定。 */
+  private judgementByTurn = new Map<string, SessionContinuation>()
+  /** 最近一次已归档的判定；坞上一行提示用它，与按轮结论同源。 */
+  private continuation: SessionContinuation | null = null
   private evidence = new Set<string>()
   private cache = createSessionActivityCache()
   private incomplete = false
@@ -494,6 +518,7 @@ export class ActivityProjection {
       this.commands = state.commands.map(command => ({ ...command }))
       this.skills = new Map(state.skills.map(skill => [`${skill.source}:${skill.name}:${skill.location}`, { ...skill }]))
       this.genui = new Map(state.genui.map(item => [item.documentId, { ...item }]))
+      this.todos = state.todos ?? null
       this.evidence = new Set(state.evidence)
       this.incomplete = state.incomplete
       this.savedState = state
@@ -556,10 +581,13 @@ export class ActivityProjection {
         ? { ...live, argsText: stable.argsText } : live)
     }
     const derived = this.cache.derive(this.commands, [...tools.values()].filter(tool => tool.phase === 'succeeded'),
-      projectPath, toolCallId => this.turnByTool.get(toolCallId) ?? null)
+      projectPath, toolCallId => this.turnByTool.get(toolCallId) ?? null,
+      this.judgementByTurn)
     const skills = [...derived.skills, ...this.skills.values()].sort(byCountThenName(item => item.name))
     const genui = [...this.genui.values()].map(bucket => ({ ...bucket }))
     this.view = { ...derived, skills, skillCount: skills.length, genui, genuiCount: genui.length,
+      todos: this.todos,
+      continuation: this.continuation,
       incomplete: this.incomplete,
       empty: derived.files.length === 0 && skills.length === 0 && derived.mcp.length === 0
         && derived.plugins.length === 0 && genui.length === 0 }
@@ -581,7 +609,8 @@ export class ActivityProjection {
       skills: [...this.skills.values()].map(skill => ({ ...skill })),
       genui: [...this.genui.values()].map(item => ({ ...item })),
       evidence: [...this.evidence], incomplete: this.incomplete,
-      currentTurn: this.currentTurn
+      currentTurn: this.currentTurn,
+      todos: this.todos
     }
     return this.savedState
   }
@@ -594,6 +623,10 @@ export class ActivityProjection {
     this.tools.clear(); this.liveTools.clear(); this.commands = []; this.skills.clear()
     this.turnByTool.clear(); this.currentTurn = null
     this.genui.clear(); this.evidence.clear()
+    this.todos = null
+    this.pendingContinuation = null
+    this.judgementByTurn.clear()
+    this.continuation = null
     this.cache = createSessionActivityCache()
     this.incomplete = false
     this.savedState = null
@@ -616,7 +649,10 @@ export class ActivityProjection {
         if (previous.phase !== phase) { this.tools.set(message.toolCallId, { ...previous, phase }); this.dirty = true }
         if (this.liveTools.delete(message.toolCallId)) this.dirty = true
       } else if (message.isError === true && this.liveTools.delete(message.toolCallId)) this.dirty = true
-      if (message.isError !== true && typeof message.toolName === 'string') this.recordGenui(message.toolName, message.details)
+      if (message.isError !== true && typeof message.toolName === 'string') {
+        this.recordGenui(message.toolName, message.details)
+        this.recordTodos(message.toolName, message.details)
+      }
     }
     if (message.role === 'toolResult' && isRecord(message.nestedCalls)) {
       if (message.nestedCalls.complete === false && !this.incomplete) { this.incomplete = true; this.dirty = true }
@@ -630,7 +666,16 @@ export class ActivityProjection {
     }
     if (message.role === 'user') {
       // 先切换当前轮：即使该条不是技能调用，后续工具调用也要归到这一轮。
-      if (this.currentTurn !== id) { this.currentTurn = id; this.dirty = true }
+      if (this.currentTurn !== id) {
+        this.currentTurn = id
+        // 新轮次出现才把暂存判定归档：此刻该轮条目 ID 才真实存在。
+        if (this.pendingContinuation !== null) {
+          this.judgementByTurn.set(id, this.pendingContinuation)
+          this.continuation = this.pendingContinuation
+          this.pendingContinuation = null
+        }
+        this.dirty = true
+      }
       const text = typeof message.content === 'string' ? message.content : content
         .filter(part => isRecord(part) && part.type === 'text' && typeof part.text === 'string')
         .map(part => (part as { text: string }).text).join('\n')
@@ -639,6 +684,23 @@ export class ActivityProjection {
       this.commands.push({ id, name: skill.name, location: skill.location === '' ? null : skill.location })
       this.dirty = true
     }
+  }
+
+  /**
+   * 暂存本轮延续判定。调用发生在该轮用户消息进入分支之前，因此不能立刻挂到轮次上；
+   * `message()` 遇到新的用户条目时按条目 ID 归档。
+   */
+  setPendingContinuation(value: SessionContinuation | null): void {
+    this.pendingContinuation = value
+  }
+
+  /** 待办清单只认本工具的结果；形状不符时保留已有清单，不让一次坏参数抹掉已提交的状态。 */
+  private recordTodos(toolName: string, details: unknown): void {
+    if (toolName !== TODO_TOOL_NAME) return
+    const parsed = parseTodoListDetails(details)
+    if (parsed === null) return
+    this.todos = { items: parsed.items }
+    this.dirty = true
   }
 
   /**

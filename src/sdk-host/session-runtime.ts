@@ -8,6 +8,13 @@ import { ExtensionUiBridge } from './extension-ui-bridge'
 import { prepareProductResources } from './product-resources'
 import type { MemoryConfigurationHolder } from './memory-configuration'
 import { ImageAnnotationContext } from './image-annotations'
+// 上一轮改动面按系统提示分段注入，与图片资料同用 before_agent_start，但不改输入与 transcript。
+import { createTurnFilesHintExtension } from './turn-files-hint'
+import { lastTurnWithWrites } from './turn-files-hint'
+// 延续判定只用确定性信号；结论同时进提示分段与活动投影。
+import { judgeContinuation } from './continuation-signal'
+// 标准模式的待办清单与写操作门禁；快速会话不注册。
+import { createTodoListExtension } from './todo-list'
 import type { ImageAnnotationDocument } from '../shared/image-annotation'
 import { createGenuiExtension, GENUI_EXTENSION_NAME } from './genui/index'
 import { createBrowserExtension, BROWSER_EXTENSION_NAME } from './browser/index'
@@ -32,6 +39,22 @@ import type { ExtensionDialogResponseInput } from '../shared/extension-ui-api'
 
 type Sdk = typeof import('@earendil-works/pi-coding-agent')
 type RuntimeFactory = Parameters<Sdk['createAgentSessionRuntime']>[0]
+
+/** 模式分段的名称与正文：只描述产出形态，不重复授权规则。 */
+const MODE_HINT_EXTENSION_NAME = 'execution-mode-hint'
+const TODO_LIST_EXTENSION_NAME = 'todo-list'
+const MODE_SECTION_KEY = 'execution-mode'
+const CONTINUATION_SECTION_KEY = 'continuation-signal'
+const FAST_MODE_SECTION = '快速模式：直接给出逐文件执行清单并等待确认，不讨论方案；清单审批、运行与测试授权照常。'
+const STANDARD_MODE_SECTION = '标准模式：先给出方案与关键取舍，再给出逐文件执行清单；不跳过方案直接改动。'
+/**
+ * 快速模式下整组下线的记忆工具，与 `resources/agent/bundle.json` 中 `pi-memory` 的 requiredTools 一致。
+ * 只关注入不够：工具仍在时模型会调用并据此要求用户去恢复记忆，而实际情况是模式裁剪。
+ */
+const FAST_MODE_DROPPED_TOOLS: ReadonlySet<string> = new Set([
+  'memory_status', 'memory_control', 'memory_profiles', 'memory_rules', 'memory_search',
+  'memory_read', 'memory_access_stats', 'memory_save', 'memory_profile_save'
+])
 interface RuntimeOptions {
   readonly hostId: number
   readonly agentDir: string
@@ -253,6 +276,8 @@ export class SdkSessionRuntime {
   private closing = false
   private phase: SdkSessionStatus['phase'] = 'empty'
   private lastError: SdkHostFailureCode | null = null
+  /** 失败时的原始原因摘要；错误码只说明分类，这里保留可定位的那一句。 */
+  private lastErrorDetail: string | null = null
   private needsHostRebuild = false
   private valid = false
   /** 速率结算与用量缓存都只属于当前绑定；换代或失效时一并清空。 */
@@ -282,7 +307,7 @@ export class SdkSessionRuntime {
       isIdle: this.operationId === null && !this.isBusy(), pendingMessages: session?.pendingMessageCount ?? 0,
       isCompacting: session?.isCompacting ?? false,
       isBashRunning: session?.isBashRunning ?? false, waitingDialogs: this.bridge?.waitingCount ?? 0,
-      needsHostRebuild: this.needsHostRebuild, lastError: this.lastError,
+      needsHostRebuild: this.needsHostRebuild, lastError: this.lastError, lastErrorDetail: this.lastErrorDetail,
       modelProvider: model.provider, modelId: model.id, messageCount: this.projectedMessageCount,
       usage: this.usage, rate: this.rateSnapshot
     }
@@ -301,6 +326,7 @@ export class SdkSessionRuntime {
     this.operationId = request.requestId
     this.phase = 'preparing'
     this.lastError = null
+    this.lastErrorDetail = null
     let finish: () => void = () => {}
     this.operationDone = new Promise<void>(resolvePromise => { finish = resolvePromise })
     this.publish()
@@ -810,6 +836,31 @@ export class SdkSessionRuntime {
     try {
       const settingsManager = this.sdk.SettingsManager.create(cwd, agentDir, { projectTrusted: target.trusted })
       const extensionFactories: InlineExtension[] = [
+          // 模式对产出形态的要求写成系统提示分段；能力集差异由记忆配置、记忆工具裁剪与 Skill 集合承担。
+          { name: MODE_HINT_EXTENSION_NAME, builtin: true, replaceable: true, factory: pi => {
+            // 快速会话整组去掉记忆工具；标准会话保持 `pi-memory` 自带的全集。
+            pi.on('session_start', () => {
+              if (target.mode !== 'fast') return
+              const remaining = pi.getActiveTools().filter(name => !FAST_MODE_DROPPED_TOOLS.has(name))
+              pi.setActiveTools(remaining)
+            })
+            pi.on('before_agent_start', event => {
+              if (event.messageType !== 'user') return undefined
+              event.systemPromptOptions.sections[MODE_SECTION_KEY] = target.mode === 'fast'
+                ? FAST_MODE_SECTION
+                : STANDARD_MODE_SECTION
+              // 判定只在本轮算一次；无结论时不写分段，也不覆盖上一次展示。
+              const verdict = judgeContinuation(event.prompt, lastTurnWithWrites(this.activityView))
+              if (verdict !== null) {
+                event.systemPromptOptions.sections[CONTINUATION_SECTION_KEY] = verdict.verdict === 'continuation'
+                  ? '延续判定：本轮是上一个任务的延续，只对齐增量要求，不重复已确认的需求与方案。'
+                  : '延续判定：本轮是新任务，清理上一个任务未确认的假设与待决项，保留技术栈约定与全局偏好。'
+                // 该轮条目此时还没进分支，判定先暂存；投影在轮次出现时按条目 ID 归档并照常推送。
+                this.activity?.setPendingContinuation(verdict)
+              }
+              return undefined
+            })
+          } },
           { name: 'codemode', factory: this.sdk.createCodemodeExtension(), builtin: true, replaceable: true },
           { name: 'tool-search', factory: this.sdk.createToolSearchExtension(), builtin: true, replaceable: true },
           { name: 'mcp', factory: this.sdk.createMcpExtension(), builtin: true, replaceable: true },
@@ -834,11 +885,17 @@ export class SdkSessionRuntime {
             : []),
           // 图片资料是独立上下文消息，不改写提示词，也不提供新的模型工具。
           this.imageAnnotations.extension,
+          // 延续判定需要知道上一轮动过哪些文件；只注入投影已有的改动事实，不含对话摘要。
+          createTurnFilesHintExtension(() => this.activityView),
+          // 待办清单只在标准模式存在：快速模式既没有清单要求，也不应看到这个工具。
+          ...(target.mode === 'standard'
+            ? [{ name: TODO_LIST_EXTENSION_NAME, factory: createTodoListExtension(), builtin: true, replaceable: true }]
+            : []),
           bindingGuard
       ]
       const product = await prepareProductResources(this.sdk, {
         directory: this.options.productResourcesDir, cwd, agentDir, settingsManager, extensionFactories,
-        eventBus: this.options.memory.bus, memory: this.options.memory.current(), mode: target.mode
+        eventBus: this.options.memory.bus, memory: this.options.memory.forMode(target.mode), mode: target.mode
       })
       const services = await this.sdk.createAgentSessionServices({ cwd, agentDir, settingsManager,
         resourceLoaderOptions: product.options })
@@ -885,6 +942,7 @@ export class SdkSessionRuntime {
     this.currentCreation = this.creations.get(session) ?? null
     this.phase = 'preparing'
     this.lastError = null
+    this.lastErrorDetail = null
     this.extensionErrors = []
     // 绑定代际只能来自主进程注册表；缺失时不自行编号，按绑定失败收敛。
     const generation = this.pendingGeneration
@@ -893,6 +951,9 @@ export class SdkSessionRuntime {
       this.needsHostRebuild = true
       this.phase = 'blocked'
       this.lastError = 'SESSION_BIND_FAILED'
+      // 主进程已完成授权却不给绑定代际时，宿主拿不到任何可执行入口；留一句原因供页面定位。
+      this.lastErrorDetail = '绑定代际缺失：宿主未收到主进程的 authorization'
+      console.error(`[sdk-host] ${this.lastErrorDetail}`)
       this.publish()
       throw new SdkSessionFailure('SESSION_BIND_FAILED')
     }
@@ -952,10 +1013,13 @@ export class SdkSessionRuntime {
         onWaitingChanged: () => this.publish(), onUnavailable: () => this.blockUnavailableInteraction()
       })
       this.unsubscribe = session.subscribe(event => this.onSdkEvent(session, bindingId, event))
-    } catch {
+    } catch (error) {
       this.needsHostRebuild = true
       this.lastError = 'SESSION_BIND_FAILED'
       this.phase = 'blocked'
+      // 这里原本吞掉异常，只留错误码；原始原因对定位绑定失败是必要的。
+      this.lastErrorDetail = (error instanceof Error ? error.message : String(error)).slice(0, 400)
+      console.error(`[sdk-host] 绑定失败：${this.lastErrorDetail}`)
       this.publish()
       throw new SdkSessionFailure('SESSION_BIND_FAILED')
     }

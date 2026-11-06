@@ -1,7 +1,7 @@
 <!-- 图片与编号说明由坞内附件区独立管理；点击发送即固定提示词、图片及标注快照，说明由 SDK 独立资料消息承接。
      结果未确认时可补读同步，确认结束原运行后恢复输入，不自动重发。
      原位新建以独立草稿承接输入：旧实例结束期间可编辑但不发送，首次发送才建立新会话。
-     Prompt 输入坞：处理输入法组合态、Enter 发送与 Shift+Enter 换行、焦点回归与重复提交、响应侧栏「新建」的聚焦请求并给出一次性提示，并在 Agent 运行期间原位提供停止入口；在 Agent 运行与流式响应期间草稿文本、图片附件与标注编辑保持可用，点击发送时才校验会话空闲；同时承接 Extension 的 set_editor_text 填充文本、图片附件的选择/文本框与活动视窗全局快捷粘贴（兼容系统截图提取）/拖拽入口、输入行按内容自动增高、＋ 菜单内的常用消息（短语取自界面偏好，可在设置里增删改与排序，点击即发送）、Pi 命令的斜杠模糊补全（Runtime 就绪后用运行中的命令清单，未就绪时用主进程预读的技能清单，按类型分组并按匹配优先级排序；另含 Desktop 层自己拦截的界面命令）与 `@` 项目文件引用（只写入相对路径文本，不传文件内容）；右侧文件树的行拖入坞内也走同一条相对路径引用规则。输入坞是单行结构：左侧 ＋ 菜单集中放置图片附件、模型选择与常用消息（菜单本身自上而下分图片、模型、常用消息三段，仅常用消息区内部滚动），中间是输入行，右侧是发送/停止键；坞下方一行是水平居中的信息行：异常与进行中的状态文本、被收起的 Extension 对话入口与会话用量指标（缓存命中率、上下文占用与平均速率，点击开明细；累计 token 与费用只在明细浮层展示）。Extension 的 setStatus 项不在输入区展示。 -->
+     Prompt 输入坞：处理输入法组合态、Enter 发送与 Shift+Enter 换行、焦点回归与重复提交、响应侧栏「新建」的聚焦请求并给出一次性提示，并在 Agent 运行期间原位提供停止入口；在 Agent 运行与流式响应期间草稿文本、图片附件与标注编辑保持可用，点击发送时才校验会话空闲；同时承接 Extension 的 set_editor_text 填充文本、图片附件的选择/文本框与活动视窗全局快捷粘贴（兼容系统截图提取）/拖拽入口、输入行按内容自动增高、＋ 菜单内的常用消息（短语取自界面偏好，可在设置里增删改与排序，点击即发送）、Pi 命令的斜杠模糊补全（Runtime 就绪后用运行中的命令清单，未就绪时用主进程预读的技能清单，按类型分组并按匹配优先级排序；另含 Desktop 层自己拦截的界面命令）与 `@` 项目文件引用（只写入相对路径文本，不传文件内容）；右侧文件树的行拖入坞内也走同一条相对路径引用规则。输入坞是单行结构：左侧 ＋ 菜单集中放置图片附件、模型选择、执行模式与常用消息（菜单本身自上而下分四段，仅常用消息区内部滚动；执行模式两档互斥，已开始的会话只显示当前值不可改），中间是输入行，右侧是发送/停止键；坞上方是待办清单面板（仅标准模式提交清单后出现）与一行延续判定结论（宿主给出结论时才渲染）；坞下方一行是水平居中的信息行：异常与进行中的状态文本、被收起的 Extension 对话入口与会话用量指标（缓存命中率、上下文占用与平均速率，点击开明细；累计 token 与费用只在明细浮层展示）。Extension 的 setStatus 项不在输入区展示。 -->
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
@@ -10,6 +10,7 @@ import { cloneImageAnnotations, imageAnnotationError } from '../../../../shared/
 import type { ImageAnnotationDocument } from '../../../../shared/image-annotation'
 import { PROMPT_IMAGE_MAX_COUNT } from '../../../../shared/runtime-api'
 import type { OutputRate, PiResourceEntry, PiResourceKind, PromptDisposition, PromptImageInput } from '../../../../shared/runtime-api'
+import type { ExecutionMode } from '../../../../shared/preferences-api'
 import { useExtensionUiStore } from '../stores/extension-ui'
 import { usePreferencesStore } from '../../preferences/stores/preferences'
 import { useProjectFileStore } from '../../editor/stores/project-file'
@@ -27,6 +28,7 @@ import ConfirmDialog from '../../ui/ConfirmDialog.vue'
 import RuntimeModelSelect from '../../providers/components/RuntimeModelSelect.vue'
 import UsageDetailDialog from './UsageDetailDialog.vue'
 import PromptImageMaterials from './PromptImageMaterials.vue'
+import TodoPanel from './TodoPanel.vue'
 import { hasProjectEntryDragData, projectEntryReferenceText, readProjectEntryDragData } from '../../ui/project-entry-drag'
 
 const runtimeStore = useRuntimeStore()
@@ -174,11 +176,30 @@ watch(() => sessionViewStore.requestedInput, applyRequestedInput)
 
 /** 常用消息候选：与草稿内容无关，选中即用该短语发起一次提交；短语来自界面偏好，可在设置里编辑。 */
 const quickSendMessages = computed(() => preferencesStore.quickSendMessages)
-/** 菜单开关；菜单把图片附件、模型与常用消息三段收在一处，输入行本身只留触发键与发送/停止。 */
+/** 菜单开关；菜单把图片附件、模型、执行模式与常用消息收在一处，输入行本身只留触发键与发送/停止。 */
 const plusMenuOpen = ref(false)
 /** 菜单外层引用：判断一次点击是否落在触发键或菜单之内。 */
 const plusRoot = ref<HTMLElement | null>(null)
 const plusMenu = ref<HTMLElement | null>(null)
+/**
+ * 模式放在 ＋ 菜单里：它不是每次发送都要动的控件，收进菜单后坞内只留 ＋、输入框与发送键。
+ * 模式是会话属性，已提交过对话的会话保持原能力集，只显示当前值不再可改。
+ */
+const modeOptions: readonly { readonly value: ExecutionMode; readonly label: string }[] = [
+  { value: 'fast', label: '快速' },
+  { value: 'standard', label: '标准' }
+]
+const currentMode = computed(() => preferencesStore.executionMode)
+/** 已有对话或正在绑定时锁定：此时改模式不会影响当前会话的能力集。 */
+const modeLocked = computed(() => runtimeStore.messages.length > 0 || workspaceTabsStore.isChatBinding)
+/** 延续判定只展示结论与命中信号；用户可以直接在对话里纠正，界面不提供改判按钮。 */
+const continuationText = computed(() => {
+  const judgement = runtimeStore.activity?.continuation ?? null
+  if (judgement === null) return null
+  const verdict = judgement.verdict === 'continuation' ? '延续上一个任务' : '新任务'
+  const signal = judgement.signal === 'wording' ? '命中措辞' : '命中上一轮改动文件'
+  return `判定：${verdict}（${signal}）；判定有误直接说明。`
+})
 /** 常用消息的提交门禁：不满足时整组置灰，避免点了没有反应。 */
 const quickSendDisabled = computed(() => (
   !canSubmit.value || sessionViewStore.pendingPrompt !== null || incompleteImageAnnotations.value
@@ -688,6 +709,12 @@ function autoGrow(): void {
   element.style.overflowY = wanted > maxHeight ? 'auto' : 'hidden'
 }
 
+/** 切换只写界面偏好，不重建当前会话；锁定后菜单项置灰，不会走到这里。 */
+async function selectMode(mode: ExecutionMode): Promise<void> {
+  if (mode === currentMode.value) return
+  await preferencesStore.saveExecutionMode(mode)
+}
+
 /** ＋ 菜单：本身不改焦点位置，鼠标点开后可直接点项；键盘用户的下方向键由触发键处理。 */
 function togglePlusMenu(): void {
   if (plusMenuOpen.value) closePlusMenu()
@@ -785,9 +812,9 @@ function pickImageFromMenu(): void {
 
 /** 点击触发键、菜单与模型选项浮层之外的位置即收起；在文档层监听，避免遮罩挡在输入区前面。 */
 function onDocumentPointerDown(event: PointerEvent): void {
-  if (!plusMenuOpen.value) return
   const target = event.target
   if (!(target instanceof Node)) return
+  if (!plusMenuOpen.value) return
   if (plusRoot.value?.contains(target) === true) return
   // 模型选择器的选项浮层 Teleport 到 body，落在它里面不算离开菜单；否则浮层会在 click 之前被卸载。
   if (target instanceof Element && target.closest('[data-app-select-popup]') !== null) return
@@ -1608,6 +1635,12 @@ onMounted(() => {
           @change="updateImageAnnotations"
         />
 
+        <!-- 待办清单：标准模式提交后贴在输入坞上方；快速模式没有这个工具，永远不会出现。 -->
+        <TodoPanel :todos="runtimeStore.activity?.todos ?? null" />
+
+        <!-- 延续判定：宿主本轮算出的结论，只用于让用户发现误判；没有结论时不占位。 -->
+        <p v-if="continuationText !== null" class="prompt-continuation" role="status">{{ continuationText }}</p>
+
         <!-- 输入行：左侧 ＋ 菜单、中间输入框、右侧发送/停止，三者在底边对齐，多行时按钮跟随下沿。 -->
         <div class="prompt-composer-row">
           <div ref="plusRoot" class="prompt-composer-plus">
@@ -1623,7 +1656,7 @@ onMounted(() => {
             >
               ＋
             </AppButton>
-            <!-- 菜单是单列三段：图片、模型、常用消息自上而下排列，只有常用消息区内部滚动。 -->
+            <!-- 菜单是单列四段：图片、模型、执行模式、常用消息自上而下排列，只有常用消息区内部滚动。 -->
             <div
               v-if="plusMenuOpen"
               id="prompt-plus-menu"
@@ -1654,6 +1687,24 @@ onMounted(() => {
                   :new-conversation="workspaceTabsStore.isChatNewDraft"
                   :resetting="workspaceTabsStore.isChatResetting || workspaceTabsStore.isChatBinding"
                 />
+              </div>
+              <div class="prompt-composer-plus-section">
+                <p class="prompt-composer-plus-section-title">执行模式</p>
+                <!-- 两档互斥；已开始对话的会话保持原能力集，只显示当前值。 -->
+                <AppButton
+                  v-for="option in modeOptions"
+                  :key="option.value"
+                  variant="unstyled"
+                  class="prompt-composer-plus-row"
+                  :class="currentMode === option.value ? 'is-selected' : ''"
+                  :aria-pressed="currentMode === option.value"
+                  :disabled="modeLocked"
+                  :title="modeLocked ? '本会话已开始，模式只在新建会话时生效' : undefined"
+                  @click="selectMode(option.value)"
+                >
+                  <span>{{ option.label }}</span>
+                  <span class="prompt-composer-plus-row-note">{{ option.value === 'fast' ? '不注入记忆，直接给清单' : '读记忆，先给方案' }}</span>
+                </AppButton>
               </div>
               <div class="prompt-composer-plus-section is-grow">
                 <p class="prompt-composer-plus-section-title">常用消息</p>

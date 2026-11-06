@@ -71,7 +71,7 @@ const historyExpanded = computed(() => sessionViewStore.historyExpanded)
 
 /** 轻量累计事实由宿主提供，不受工具卡片的最近100条展示窗口影响。 */
 const activity = computed(() => runtimeStore.activity ?? {
-  files: [], genui: [], skills: [], mcp: [], plugins: [], turns: [],
+  files: [], genui: [], skills: [], mcp: [], plugins: [], turns: [], todos: null, continuation: null,
   fileCount: 0, genuiCount: 0, skillCount: 0, mcpCount: 0, pluginCount: 0,
   empty: true, incomplete: false
 })

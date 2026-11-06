@@ -37,7 +37,7 @@ interface ProductResourceInput {
   readonly eventBus: EventBus
   /** 桌面受管记忆配置；非空时扩展必须能同步读到同一份配置，不允许静默退回 CLI 探测。 */
   readonly memory: MemoryHostConfiguration | null
-  /** 主进程给出的执行模式；只用于裁剪用户级 Skill 集合。 */
+  /** 主进程给出的执行模式；决定用户级 Skill 裁剪，以及记忆被派生为关闭时是否留诊断。 */
   readonly mode: ExecutionMode
 }
 
@@ -59,6 +59,10 @@ export async function prepareProductResources(sdk: Sdk, input: ProductResourceIn
   // 发现来源本身不启动扩展。沿用同一信任设置，未信任项目的资源不会被提升为显式加载项。
   const resolved = await resolver.resolve(async () => 'error')
   const diagnostics: string[] = []
+  // 快速模式的记忆开关由宿主派生，不是用户改动了开关；没有这条诊断会看成记忆配置丢失。
+  if (input.mode === 'fast' && input.memory !== null && !input.memory.enabled) {
+    diagnostics.push('快速模式未注入记忆：本会话的记忆库与后台召回不生效')
+  }
   const externalExtensions: string[] = []
   for (const resource of resolved.extensions) {
     if (!resource.enabled) continue

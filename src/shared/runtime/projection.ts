@@ -365,6 +365,27 @@ export interface SessionTurnFiles {
   readonly turnEntryId: string
   readonly files: readonly { readonly key: string; readonly label: string; readonly writes: number }[]
   readonly truncated: boolean
+  /** 该轮输入的延续判定；只在有结论时带出，无结论为 null。 */
+  readonly judgement: SessionContinuation | null
+}
+
+export interface SessionTodoItem {
+  readonly text: string
+  readonly status: 'pending' | 'in_progress' | 'completed'
+}
+
+/** 会话当前那一份待办清单；不存在时为 null，不拿空数组冒充「已提交」。 */
+export interface SessionTodoList {
+  readonly items: readonly SessionTodoItem[]
+}
+
+/**
+ * 本轮输入的延续判定结论：宿主在用户轮次开始时算一次，不进日志、不改历史轮次。
+ * 无结论时为 null，表示两个确定性信号都给不出判断。
+ */
+export interface SessionContinuation {
+  readonly verdict: 'continuation' | 'new_task'
+  readonly signal: 'wording' | 'file-reference'
 }
 
 export interface SessionActivity {
@@ -383,6 +404,10 @@ export interface SessionActivity {
    * 回合头展示与延续判定共用这一份口径，渲染端不自行汇总工具条目。
    */
   readonly turns: readonly SessionTurnFiles[]
+  /** 标准模式的待办清单：取当前分支上最近一次 `todo_write` 的结果。 */
+  readonly todos: SessionTodoList | null
+  /** 最近一次延续判定；坞上一行提示用它，按轮的同一结论也挂在 `turns[].judgement` 上。 */
+  readonly continuation: SessionContinuation | null
   readonly empty: boolean
   /** SDK嵌套记录曾省略调用或参数，恢复时无法凭空补全。 */
   readonly incomplete?: boolean

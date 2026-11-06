@@ -710,7 +710,18 @@ export function isSessionActivity(value: unknown): value is SessionActivity {
     && Array.isArray(value.turns) && value.turns.length <= 50 && value.turns.every(row => isRecord(row)
       && typeof row.turnEntryId === 'string' && row.turnEntryId !== '' && typeof row.truncated === 'boolean'
       && Array.isArray(row.files) && row.files.length <= 20 && row.files.every(file => isRecord(file)
-        && typeof file.key === 'string' && typeof file.label === 'string' && isCount(file.writes)))
+        && typeof file.key === 'string' && typeof file.label === 'string' && isCount(file.writes))
+      && (row.judgement === null || (isRecord(row.judgement)
+        && ['continuation', 'new_task'].includes(String(row.judgement.verdict))
+        && ['wording', 'file-reference'].includes(String(row.judgement.signal)))))
+    && (value.todos === null || (isRecord(value.todos) && Array.isArray(value.todos.items)
+      && value.todos.items.length <= 50 && value.todos.items.every(item => isRecord(item)
+        && typeof item.text === 'string' && item.text !== ''
+        && ['pending', 'in_progress', 'completed'].includes(String(item.status)))))
+
+    && (value.continuation === null || (isRecord(value.continuation)
+      && ['continuation', 'new_task'].includes(String(value.continuation.verdict))
+      && ['wording', 'file-reference'].includes(String(value.continuation.signal))))
     && ['fileCount', 'skillCount', 'mcpCount', 'pluginCount', 'genuiCount'].every(key => isCount(value[key]))
     && typeof value.empty === 'boolean'
     && (value.incomplete === undefined || typeof value.incomplete === 'boolean')

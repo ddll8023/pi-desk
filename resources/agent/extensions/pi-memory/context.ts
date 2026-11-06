@@ -99,6 +99,13 @@ export class MemoryRuntime {
     if (state) { state.closed = true; state.controller.abort(); state.profiles = undefined; state.recall = undefined }
   }
 
+  /** 停用原因来自宿主派生：执行模式关闭时不要说成用户停用，否则会引到错误的恢复动作。 */
+  private disabledMessage(): string {
+    return this.config.hostDisabledByMode
+      ? '本次会话按执行模式关闭了记忆；切到标准模式后新建会话，或由用户在设置里开启'
+      : '记忆已停用；先由用户明确恢复记忆'
+  }
+
   lease(ctx: ExtensionContext, signal?: AbortSignal, allowDisabled = false): Lease {
     const manager = ctx.sessionManager
     const state = this.state(ctx)
@@ -109,7 +116,7 @@ export class MemoryRuntime {
         || manager.getSessionId() !== state.sessionId || resolve(ctx.cwd) !== state.cwd) {
         throw new Error('记忆操作所属会话／分支已变化或取消，旧结果和确认失效')
       }
-      if (!allowDisabled && !state.enabled) throw new Error('记忆已停用；先由用户明确恢复记忆')
+      if (!allowDisabled && !state.enabled) throw new Error(this.disabledMessage())
     }
     assert()
     return { signal: combined, state, assert }
@@ -132,6 +139,7 @@ export class MemoryRuntime {
   status(ctx: ExtensionContext): JsonObject {
     const state = this.state(ctx)
     return { enabled: state.enabled && !state.closed, global_enabled: this.config.hostEnabled,
+      disabled_by: state.enabled && !state.closed ? null : (this.config.hostDisabledByMode ? 'execution-mode' : 'user'),
       session_enabled: state.sessionEnabled,
       memory_scope: 'global', session_id: state.sessionId,
       store: this.engine.store, engine: this.config.engine, python: this.config.python,

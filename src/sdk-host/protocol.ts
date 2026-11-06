@@ -55,7 +55,10 @@ export interface SdkSessionTarget {
   readonly trusted: boolean
   /** 是否注册生成式 UI 内置扩展；由主进程按用户开关给出，宿主只负责据此决定注册与否。 */
   readonly genui: boolean
-  /** 执行模式；只用于裁剪 Skill 集合，不改变工具、授权与交互能力。 */
+  /**
+   * 执行模式；决定 Skill 集合、记忆注入与记忆工具集，以及是否注册待办门禁。
+   * 不改变文件清单审批与运行授权规则。
+   */
   readonly mode: ExecutionMode
   /** 主进程解析的任务执行根；仅为宿主内部启动参数，不接受页面直传。 */
   readonly worktreePath?: string | null
@@ -121,6 +124,8 @@ export interface SdkSessionStatus {
   readonly modelId: string | null
   /** 投影中当前展示的消息条数；未绑定时为 0。 */
   readonly messageCount: number
+  /** 绑定失败时的原始异常摘要；只用于诊断，不参与状态判定。 */
+  readonly lastErrorDetail?: string | null
   /** 会话累计用量；官方统计未取到时为 null，不用全零冒充。 */
   readonly usage: SessionUsage | null
   /** 输出速率；未结算到有效值时为 null。 */
@@ -132,7 +137,8 @@ export function emptySdkSessionStatus(): SdkSessionStatus {
   return { phase: 'empty', bindingId: null, activityVersion: 0, operationId: null,
     projectPath: null, sessionId: null, sessionFile: null, isIdle: true, isCompacting: false,
     pendingMessages: 0, isBashRunning: false, waitingDialogs: 0, needsHostRebuild: false, lastError: null,
-    modelProvider: null, modelId: null, messageCount: 0, usage: null, rate: { average: null } }
+    modelProvider: null, modelId: null, messageCount: 0, usage: null, rate: { average: null },
+    lastErrorDetail: null }
 }
 
 /** 调用方固定的宿主与绑定身份，防止进程重建后编号重用导致旧动作穿透。 */
@@ -329,9 +335,12 @@ export function isSdkSessionStatus(value: unknown): value is SdkSessionStatus {
     && isCount(value.messageCount)
     && (value.usage === null || isSessionUsage(value.usage))
     && isOutputRate(value.rate)
+    && (value.lastErrorDetail === undefined || value.lastErrorDetail === null
+      || (typeof value.lastErrorDetail === 'string' && value.lastErrorDetail.length <= 400))
     && hasKeys(value, ['phase', 'bindingId', 'activityVersion', 'operationId', 'projectPath',
       'sessionId', 'sessionFile', 'isIdle', 'isCompacting', 'pendingMessages', 'isBashRunning', 'waitingDialogs',
-      'needsHostRebuild', 'lastError', 'modelProvider', 'modelId', 'messageCount', 'usage', 'rate'])
+      'needsHostRebuild', 'lastError', 'modelProvider', 'modelId', 'messageCount', 'usage', 'rate',
+      'lastErrorDetail'])
 }
 /** 中断确认只属于一个具体绑定及执行版本。 */
 function isConfirmation(value: unknown): value is SdkInterruptConfirmation | null {

@@ -21,6 +21,8 @@ export interface MemoryConfig {
   managed: boolean
   /** 全局启用开关；桌面缺省关闭，独立 CLI 缺省开启。 */
   hostEnabled: boolean
+  /** 宿主按执行模式关闭；此时 hostEnabled 为 false，但用户开关并未改动。 */
+  hostDisabledByMode: boolean
   /** 受管运行环境是否完整可用；不可用时读取与保存都明确失败，不回退其他解释器。 */
   available: boolean
   unavailableReason: string | null
@@ -33,6 +35,8 @@ export interface MemoryConfig {
 export interface ManagedHostConfig {
   revision: number
   enabled: boolean
+  /** 宿主按执行模式关闭，而不是用户关掉了开关。 */
+  disabledByMode: boolean
   available: boolean
   store: string
   engine: string
@@ -155,7 +159,8 @@ export async function loadConfig(host?: ManagedHostConfig): Promise<MemoryConfig
 
   if (host !== undefined) {
     return { python: host.python, engine: host.engine, store: host.store, profileDomains,
-      revision: host.revision, managed: true, hostEnabled: host.enabled, available: host.available,
+      revision: host.revision, managed: true, hostEnabled: host.enabled, hostDisabledByMode: host.disabledByMode,
+      available: host.available,
       unavailableReason: host.error, tzdata: host.tzdata, pythonVersion: host.pythonVersion,
       timezoneVersion: host.timezoneVersion }
   }
@@ -165,7 +170,7 @@ export async function loadConfig(host?: ManagedHostConfig): Promise<MemoryConfig
   const python = rawPython || await detectPython(process.cwd())
   const engine = await detectEngine(rawEngine)
   return { python, engine, store: join(homedir(), '.agents', 'memory-store'), profileDomains,
-    revision: 0, managed: false, hostEnabled: true, available: true, unavailableReason: null,
+    revision: 0, managed: false, hostEnabled: true, hostDisabledByMode: false, available: true, unavailableReason: null,
     tzdata: null, pythonVersion: null, timezoneVersion: null }
 }
 
