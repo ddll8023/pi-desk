@@ -122,6 +122,30 @@ export function extractFileTargets(input: Record<string, unknown>): FileTarget[]
   return result.filter((target, index) => result.findIndex(other => other.path === target.path) === index)
 }
 
+/**
+ * 扩展名到技术栈族的归并只用于判断沿用的登记是否仍适配当前改动目标；
+ * 不映射到具体技能名，不代替模型判断适用规范。配置与文档类格式不参与比较。
+ */
+const STACK_FAMILIES: Readonly<Record<string, string>> = Object.freeze({
+  '.js': 'web', '.jsx': 'web', '.mjs': 'web', '.cjs': 'web', '.ts': 'web', '.tsx': 'web', '.mts': 'web', '.cts': 'web',
+  '.vue': 'web', '.svelte': 'web', '.astro': 'web', '.css': 'web', '.scss': 'web', '.sass': 'web', '.less': 'web', '.html': 'web',
+  '.py': 'python', '.pyi': 'python', '.java': 'java', '.kt': 'jvm', '.kts': 'jvm', '.scala': 'jvm', '.groovy': 'jvm',
+  '.go': 'go', '.rs': 'rust', '.rb': 'ruby', '.php': 'php', '.cs': 'dotnet', '.fs': 'dotnet', '.vb': 'dotnet',
+  '.swift': 'swift', '.c': 'c', '.h': 'c', '.cc': 'cpp', '.cpp': 'cpp', '.cxx': 'cpp', '.hpp': 'cpp', '.m': 'objc', '.mm': 'objc',
+  '.sql': 'sql', '.sh': 'shell', '.bash': 'shell', '.zsh': 'shell', '.ps1': 'shell', '.cmd': 'shell', '.bat': 'shell'
+})
+
+/** 无扩展名、文档、配置与锁文件视为栈中性，返回空数组以免误撤销沿用的登记。 */
+export function stackFamilies(paths: readonly string[]): string[] {
+  const families = new Set<string>()
+  for (const path of paths) {
+    const match = /(\.[^./\\]+)$/.exec(path)
+    const family = match ? STACK_FAMILIES[match[1].toLowerCase()] : undefined
+    if (family) families.add(family)
+  }
+  return [...families]
+}
+
 /** 为不可信的 JSON 与工具参数做窄化，不调用其中的任何内容。 */
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)

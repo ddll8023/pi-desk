@@ -1,6 +1,7 @@
 /**
  * Skill 动态登记门禁：主模型选择技能与必读引用，扩展只核对候选资格和当前上下文加载证据。
- * 不内置业务路由、不调用额外分类模型；不是命令沙箱，也不替代方案、文件清单或测试授权。
+ * 不内置业务路由、不调用额外分类模型；同一会话内可沿用既有登记，仅在证据或技术栈变化时要求重新登记。
+ * 不是命令沙箱，也不替代方案、文件清单或测试授权。
  */
 import { createHash, randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
@@ -9,7 +10,7 @@ import { Type } from '@earendil-works/pi-ai'
 import type { ExtensionAPI, ExtensionContext, Skill } from '@earendil-works/pi-coding-agent'
 import { CONTEXT_IMPLEMENTATION, SkillContext, fingerprint, textContent } from './context.ts'
 import type { LoadEvidence, MissingSkill } from './context.ts'
-import { ROUTING_IMPLEMENTATION, canonicalPath, explicitSkillName, extractFileTargets, validateSelection } from './routing.ts'
+import { ROUTING_IMPLEMENTATION, canonicalPath, explicitSkillName, extractFileTargets, stackFamilies, validateSelection } from './routing.ts'
 import type { Requirement, SelectionRequest } from './routing.ts'
 import { REFERENCES_IMPLEMENTATION, registeredReferences } from './references.ts'
 import type { ReferenceRequirement } from './references.ts'
@@ -50,6 +51,10 @@ interface GuardState {
   explicit: string | undefined
   selection: SelectionRegistration | null
   selectionNotice: string
+  /** 本轮登记沿用自上一轮请求，不要求同一批放行规则。 */
+  inherited: boolean
+  /** 已实际改动过的技术栈族，用于判断沿用的登记是否仍适配。 */
+  stacks: string[]
   prompt: string
   taskHash: string
   runId: string
@@ -78,7 +83,12 @@ function missingReason(tool: string, missing: readonly MissingSkill[]): string {
   return `Skill 前置条件未满足，${tool} 未执行。以下已登记正文尚未以当前版本进入生成本次调用的有效模型上下文：\n${items.join('\n')}\n\n请完整读取技能入口与必读引用；分段读取须覆盖正文。新读取结果不能作为同批调用的放行证据，须等待下一次模型请求。登记不代表已读，也不构成修改、测试、构建或运行授权。`
 }
 
-/** 每个会话独立持有本轮登记与加载证据，所有技能身份均来自宿主实际候选。 */
+/** 无有效登记时的阻断说明，供首次请求与技术栈变更共用。 */
+function selectionRequiredReason(notice: string, tool: string): string {
+  return `${notice}。${tool} 未执行；先按实际技能目录完成判断、完整加载执行技能入口，再调用 ${SELECTION_TOOL}。读取与搜索仍可用于补齐资料；登记不构成任何业务操作或运行授权。`
+}
+
+/** 默认沿用同一会话内已登记的技能与引用，仅在登记本身失效时才要求重新判断。 */
 export default function skillGuard(pi: ExtensionAPI): void {
   const states = new WeakMap<ExtensionContext['sessionManager'], GuardState>()
   const stateFor = (ctx: ExtensionContext): GuardState => {
@@ -86,7 +96,7 @@ export default function skillGuard(pi: ExtensionAPI): void {
     let state = states.get(ctx.sessionManager)
     if (!state || state.scope !== scope) {
       state = { scope, skills: [], required: [], references: [], subjects: [], explicit: undefined,
-        selection: null, selectionNotice: '本轮尚未登记技能选择', prompt: '', taskHash: '', runId: randomUUID(),
+        selection: null, selectionNotice: '本轮尚未登记技能选择', inherited: false, stacks: [], prompt: '', taskHash: '', runId: randomUUID(),
         context: new SkillContext(), pending: new Map(), firstMutation: false, lastContextAudit: '' }
       states.set(ctx.sessionManager, state)
     }
@@ -102,6 +112,7 @@ export default function skillGuard(pi: ExtensionAPI): void {
   }
   const invalidateSelection = (state: GuardState, notice: string): void => {
     state.selection = null
+    state.inherited = false
     state.selectionNotice = notice
   }
   /** 登记之后技能发生改动，必须重新判断引用，不能只补读新正文后沿用旧清单。 */
@@ -138,9 +149,9 @@ export default function skillGuard(pi: ExtensionAPI): void {
   pi.registerTool({
     name: SELECTION_TOOL,
     label: '登记 Skill 选择',
-    description: '每轮用户请求先根据当前技能目录的描述选择执行规范，完整加载其入口，再登记全部执行技能、仅审查对象和依据技能正文确定的必读引用。此工具不证明选择完整，也不自动加载正文；引用未读时可先登记，随后完整读取。再次调用会替换本轮完整清单。',
+    description: '首次修改文件前选择并登记执行规范与必读引用；同一会话内后续请求默认沿用该登记，仅在技术栈、技能版本、分支或上下文变化时重新登记。此工具不证明选择完整，也不自动加载正文。',
     promptSnippet: '登记主模型根据任务和技能描述选择的规范及必读引用',
-    promptGuidelines: ['每轮用户请求须先完成 Skill 适用性判断和登记；读取与搜索可用于补齐资料。登记不是执行授权。'],
+    promptGuidelines: ['首次修改文件前须完成 Skill 适用性判断和登记；同一会话内延续任务沿用原登记，不机械重复登记。登记不是执行授权。'],
     exposure: 'model-only',
     executionMode: 'sequential',
     parameters: Type.Object({
@@ -168,6 +179,8 @@ export default function skillGuard(pi: ExtensionAPI): void {
       state.references = references
       state.selection = { generation: state.context.generation, toolCallId, evidence }
       state.selectionNotice = ''
+      state.inherited = false
+      state.stacks = []
       const missing = state.context.missingReferences(references)
       audit(state, ctx, 'selection-registered', { toolCallId, generation: state.context.generation,
         required: state.required.map(item => item.name), subjects: state.subjects,
@@ -191,10 +204,26 @@ export default function skillGuard(pi: ExtensionAPI): void {
     if (event.messageType === 'user') {
       state.prompt = event.prompt
       state.explicit = explicitSkillName(event.prompt)
-      state.required = state.explicit ? [{ name: state.explicit, reason: '用户显式加载该技能', origin: 'explicit' }] : []
-      state.references = []
-      state.subjects = []
-      invalidateSelection(state, '本轮用户请求尚未登记技能选择；可结合对话上下文沿用原方案，但须重新登记')
+      if (state.explicit) {
+        state.required = [{ name: state.explicit, reason: '用户显式加载该技能', origin: 'explicit' }]
+        state.references = []
+        state.subjects = []
+        state.stacks = []
+        invalidateSelection(state, '用户显式加载技能，请核对必读引用后重新登记')
+      } else if (state.selection) {
+        // 同一会话的新请求默认沿用上一次登记；证据、版本与技术栈仍由后续核对决定是否撤销。
+        state.inherited = true
+        state.selectionNotice = ''
+        audit(state, ctx, 'selection-inherited', { generation: state.context.generation, toolCallId: state.selection.toolCallId,
+          required: state.required.map(item => item.name), subjects: state.subjects,
+          references: state.references.map(item => item.path), stacks: state.stacks })
+      } else {
+        state.required = []
+        state.references = []
+        state.subjects = []
+        state.stacks = []
+        invalidateSelection(state, '本轮用户请求尚未登记技能选择')
+      }
     } else if (!state.prompt) {
       state.prompt = latestUserPrompt(ctx)
     }
@@ -204,8 +233,11 @@ export default function skillGuard(pi: ExtensionAPI): void {
     state.pending.clear()
     state.firstMutation = false
     state.lastContextAudit = ''
-    const guidance = `本扩展不替你选择具体技能。每轮用户请求先结合当前目标、对话上下文、已确认技术栈和宿主实际提供的 Skill 名称与 description 判断适用性；可先读取与搜索确认事实。完整加载已选执行技能入口后，调用 ${SELECTION_TOOL} 登记完整清单、仅审查对象及依据技能正文判定的必读引用；引用可在登记后补读。无适用技能也须提交空清单和理由。每轮登记一次即可，任务范围或技能版本变化时重新判断并替换清单，不要机械重复登记。\n\n目录、登记和自我声明不证明正文已读。门禁只认当前有效模型上下文中的全文证据，支持用户显式加载、模型读取及带版本的完整宿主注入；读取与新登记都不能作为同批其他调用的放行证据。被审查的技能不自动成为执行规范。禁止自动调用的技能只在用户显式加载后允许登记为执行规范。\n\n必读条件由 Skill 自身声明并由模型转为结构化登记，扩展不维护技能名称、业务关键词或引用文件名映射。门禁保证已登记内容的加载核对，不保证模型没有漏选、漏登记，也不证明遵守了正文。不得把选择登记或加载核对视为文件修改、测试、构建、启动、重载或其他运行授权；仍须遵守原有人工确认边界。`
-    event.systemPromptOptions.sections[SECTION] = `${guidance}\n\n门禁已加载实现：${LOADED_VERSION}（不是磁盘同步状态，也不是 Skill 已读证明）。`
+    const registeredLine = state.selection
+      ? `当前沿用的登记：${state.required.map(item => item.name).join('、') || '（空清单，无适用技能）'}${state.subjects.length ? `；仅审查：${state.subjects.join('、')}` : ''}${state.references.length ? `；必读引用：${state.references.map(item => item.path).join('、')}` : ''}。若本轮任务需要不同规范，调用 ${SELECTION_TOOL} 替换清单；改动技术栈不同或正文已离开上下文时门禁会要求重新登记。`
+      : `本轮尚未登记技能选择：${state.selectionNotice}。`
+    const guidance = `本扩展不替你选择具体技能。每轮用户请求先结合当前目标、对话上下文、已确认技术栈和宿主实际提供的 Skill 名称与 description 判断适用性；可先读取与搜索确认事实。首次修改文件前须完整加载执行技能入口，并调用 ${SELECTION_TOOL} 登记完整清单、仅审查对象及依据技能正文判定的必读引用；引用可在登记后补读。同一会话内后续请求默认沿用该登记，仅在改动技术栈不同、已登记正文离开上下文、技能版本变化、会话分支切换或上下文压缩后重新判断并重新登记；不机械重复登记。无适用技能也须提交空清单和理由。\n\n目录、登记和自我声明不证明正文已读。门禁只认当前有效模型上下文中的全文证据，支持用户显式加载、模型读取及带版本的完整宿主注入；读取与新登记都不能作为同批其他调用的放行证据。沿用的登记在正文离开上下文后自动失效。被审查的技能不自动成为执行规范。禁止自动调用的技能只在用户显式加载后允许登记为执行规范。\n\n必读条件由 Skill 自身声明并由模型转为结构化登记，扩展不维护技能名称、业务关键词或引用文件名映射，也不据扩展名判断适用技能。门禁保证已登记内容的加载核对，不保证模型没有漏选、漏登记，也不证明遵守了正文。不得把选择登记或加载核对视为文件修改、测试、构建、启动、重载或其他运行授权；仍须遵守原有人工确认边界。`
+    event.systemPromptOptions.sections[SECTION] = `${guidance}\n\n${registeredLine}\n\n门禁已加载实现：${LOADED_VERSION}（不是磁盘同步状态，也不是 Skill 已读证明）。`
     audit(state, ctx, 'selection-required', { generation: state.context.generation,
       explicit: state.explicit ?? null, registered: state.selection !== null })
   })
@@ -232,11 +264,30 @@ export default function skillGuard(pi: ExtensionAPI): void {
     const changed = changedSelection(state, ctx)
     const missing = [...state.context.missing(state.required, state.skills, ctx.cwd), ...state.context.missingReferences(state.references)]
     let reason = state.auditError
-    if (!reason && !state.selection) reason = `${state.selectionNotice}。${event.toolName} 未执行；先按实际技能目录完成判断、完整加载执行技能入口，再调用 ${SELECTION_TOOL}。读取与搜索仍可用于补齐资料；登记不构成任何业务操作或运行授权。`
-    if (!reason && state.selection && state.context.generation <= state.selection.generation) {
+    if (!reason && !state.selection) reason = selectionRequiredReason(state.selectionNotice, event.toolName)
+    if (!reason && state.selection && !state.inherited && state.context.generation <= state.selection.generation) {
       reason = `新登记尚未进入下一次有效模型请求，${event.toolName} 未执行。不能用同批登记为其他调用放行。`
     }
-    if (!reason && (changed.length || missing.length)) reason = missingReason(event.toolName, [...changed, ...missing])
+    if (!reason && (changed.length || missing.length)) {
+      // 沿用的登记在正文离开上下文后不能只补读，须重新加载后重新登记。
+      if (state.inherited && missing.length) {
+        invalidateSelection(state, '沿用的技能正文已不在当前上下文，请重新加载并登记')
+        audit(state, ctx, 'inheritance-revoked', { tool: event.toolName, toolCallId: event.toolCallId,
+          missing: missing.map(item => item.name) })
+        reason = selectionRequiredReason(state.selectionNotice, event.toolName)
+      } else reason = missingReason(event.toolName, [...changed, ...missing])
+    }
+    const targets = event.toolName === 'edit' || event.toolName === 'write'
+      ? extractFileTargets(event.input).map(target => canonicalPath(target.path, ctx.cwd)) : []
+    if (!reason && targets.length) {
+      const families = stackFamilies(targets)
+      if (state.stacks.length && families.length && !families.some(family => state.stacks.includes(family))) {
+        invalidateSelection(state, `改动目标的技术栈（${families.join('/')}）与上次登记（${state.stacks.join('/')}）不同，请重新判断并登记`)
+        audit(state, ctx, 'inheritance-revoked', { tool: event.toolName, toolCallId: event.toolCallId,
+          families, stacks: state.stacks, cause: 'stack-changed' })
+        reason = selectionRequiredReason(state.selectionNotice, event.toolName)
+      } else if (!state.stacks.length) state.stacks = families
+    }
     if (reason) {
       audit(state, ctx, 'blocked', { tool: event.toolName, toolCallId: event.toolCallId, parentToolCallId: event.parentToolCallId,
         generation: state.context.generation,
@@ -245,8 +296,7 @@ export default function skillGuard(pi: ExtensionAPI): void {
       return { block: true, reason }
     }
     if (event.toolName === 'edit' || event.toolName === 'write') state.pending.set(event.toolCallId, {
-      tool: event.toolName, targets: extractFileTargets(event.input).map(target => canonicalPath(target.path, ctx.cwd)),
-      startedAt: Date.now(), generation: state.context.generation,
+      tool: event.toolName, targets, startedAt: Date.now(), generation: state.context.generation,
       required: state.required.map(item => item.name), loaded: [...state.context.loaded.values()] })
     return undefined
   })
@@ -280,6 +330,8 @@ export default function skillGuard(pi: ExtensionAPI): void {
     state.references = []
     state.subjects = []
     state.explicit = undefined
+    state.stacks = []
+    state.inherited = false
     state.prompt = ''
     state.taskHash = ''
     state.lastContextAudit = ''
@@ -290,6 +342,8 @@ export default function skillGuard(pi: ExtensionAPI): void {
     state.context.reset()
     state.pending.clear()
     state.lastContextAudit = ''
+    state.stacks = []
+    state.inherited = false
     invalidateSelection(state, '上下文已压缩，请核对保留的正文并重新登记技能与必读引用')
   })
   pi.on('session_shutdown', (_event, ctx) => { states.delete(ctx.sessionManager) })
