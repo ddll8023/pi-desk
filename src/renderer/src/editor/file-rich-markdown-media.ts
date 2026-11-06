@@ -1,7 +1,7 @@
-/** 富文本图片与数学节点：本地图片沿用项目读取边界，公式复用现有定界符与 KaTeX，不引入不兼容的数学扩展。 */
+/** 富文本图片与数学节点：本地图片沿用项目读取边界，远程图片直连加载且不携带 Referer；公式复用现有定界符与 KaTeX，不引入不兼容的数学扩展。 */
 import { Node } from '@tiptap/core'
 import { Image } from '@tiptap/extension-image'
-import { loadMarkdownImage } from './file-images'
+import { imageFailureHint, loadMarkdownImage } from './file-images'
 import { renderMathInto, tokenizeBlock, tokenizeInline } from '../ui/markdown-math'
 
 export interface MathEditRequest { readonly position: number; readonly latex: string; readonly type: 'inlineMath' | 'blockMath' }
@@ -128,13 +128,28 @@ export function createRichMedia(context: RichMediaContext) {
               if (disposed || request !== generation) return
               if (!result.url) throw new Error(result.error ?? '图片未加载')
               if (imageChars + result.url.length > 32 * 1024 * 1024) { budgetBlocked = true; throw new Error('图片总量超出显示上限，释放额度后重试') }
+              const url = result.url
               const image = document.createElement('img')
               image.alt = String(current.attrs.alt ?? '')
-              image.src = result.url
+              image.src = url
               image.draggable = false
               image.loading = 'lazy'
               image.decoding = 'async'
-              bytes = result.url.length
+              image.referrerPolicy = 'no-referrer'
+              // 远程图片由渲染进程直接请求，失败不会抛错：单独退回错误态，避免留下可双击放大的破损图。
+              image.addEventListener('error', () => {
+                if (disposed || request !== generation || image.parentElement !== dom) return
+                dom.textContent = `${String(current.attrs.alt || '图片')}（${imageFailureHint(url)}）`
+                dom.classList.remove('is-ready')
+                dom.classList.add('is-error')
+                dom.removeAttribute('title')
+                // 图片实际未显示，释放它占用的数量与字符额度供后续图片使用。
+                if (admitted) { admitted = false; imageCount -= 1 }
+                imageChars -= bytes
+                bytes = 0
+                wake()
+              }, { once: true })
+              bytes = url.length
               imageChars += bytes
               dom.replaceChildren(image)
               dom.classList.add('is-ready')

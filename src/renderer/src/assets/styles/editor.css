@@ -525,7 +525,7 @@
 .file-markdown-details-body > * { margin: 0; }
 .file-markdown-details-body > * + * { margin-top: var(--markdown-flow); }
 .file-markdown-details-body > * + :is(h1, h2, h3, h4, h5, h6) { margin-top: var(--markdown-section-gap); }
-/* 项目内图片：未加载时是占位文本，加载完成后替换成 img。 */
+/* Markdown 图片（项目内或远程）：未加载时是占位文本，加载完成后替换成 img，失败则保留原因文本。 */
 .file-markdown-image-frame {
     display: inline-block;
     max-width: 100%;

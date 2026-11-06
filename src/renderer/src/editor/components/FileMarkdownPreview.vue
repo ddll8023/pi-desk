@@ -6,7 +6,7 @@ import { canPreviewFileMarkdown, renderFileMarkdown } from '../file-markdown'
 import { applyHighlights, clearHighlights, collectMatches, scrollRangeIntoView } from '../file-markdown-search'
 import { EMPTY_MARKDOWN_SEARCH, EMPTY_MARKDOWN_SEARCH_STATUS } from '../file-markdown-view'
 import type { MarkdownReadingView, MarkdownSearchQuery, MarkdownSearchStatus } from '../file-markdown-view'
-import { clearMarkdownImageCache, loadMarkdownImage } from '../file-images'
+import { clearMarkdownImageCache, imageFailureHint, loadMarkdownImage } from '../file-images'
 import { highlightCodeBlocks } from '../file-code-highlight'
 import { renderMathInto } from '../../ui/markdown-math'
 
@@ -135,9 +135,20 @@ async function loadImages(element: HTMLElement, current: number): Promise<void> 
         frame.classList.add('is-error')
         return
       }
-      chars += source.url.length
+      const url = source.url
+      chars += url.length
       const image = document.createElement('img')
-      image.src = source.url; image.alt = label; image.loading = 'lazy'; image.decoding = 'async'
+      image.src = url; image.alt = label; image.loading = 'lazy'; image.decoding = 'async'
+      // 远程图片由渲染进程直接请求：不携带 Referer，失败时只能凭来源域名提示，区别于主进程返回的本地失败原因。
+      image.referrerPolicy = 'no-referrer'
+      image.addEventListener('error', () => {
+        if (current !== revision || !props.active || image.parentElement !== frame) return
+        frame.classList.remove('is-ready')
+        frame.classList.add('is-error')
+        frame.removeAttribute('tabindex'); frame.removeAttribute('role'); frame.removeAttribute('aria-label')
+        frame.textContent = `${label}（${imageFailureHint(url)}）`
+        emit('updated')
+      }, { once: true })
       frame.replaceChildren(image)
       frame.classList.add('is-ready')
       frame.tabIndex = 0

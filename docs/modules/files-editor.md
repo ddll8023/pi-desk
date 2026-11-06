@@ -58,7 +58,7 @@
 | --- | --- |
 | `src/renderer/src/editor/file-language.ts` | 文件名、语言、Markdown、HTML、电子表格、纯文本表格与文档（PDF/DOCX/DOC）类型识别 |
 | `src/renderer/src/editor/file-code-highlight.ts` | 文件代码高亮与语言加载 |
-| `src/renderer/src/editor/file-images.ts` | 项目内 Markdown 图片读取和显示地址管理 |
+| `src/renderer/src/editor/file-images.ts` | Markdown 图片地址解析与显示管理（项目内读取、远程直连） |
 | `src/renderer/src/editor/file-markdown.ts` | 文件 Markdown 只读解析、安全渲染与预览支持判定 |
 | `src/renderer/src/editor/file-markdown-dom.ts` | 只读 DOM 增强、标题锚点与目录条目提取 |
 | `src/renderer/src/editor/file-markdown-links.ts` | 纯路径、链接分类与项目相对目标解析 |
@@ -152,6 +152,8 @@ HTML 文件默认显示「页面」，可切回「源码」编辑；类型识别
 项目文件是真实外部数据。内容写入使用同目录临时文件与 rename，编辑器草稿和撤销在页面内；关闭脏标签前先确认，关闭不等于保存。目录检索索引与树缓存可再生，不拥有文件真源。
 
 页面只提交契约允许的项目与相对路径，主进程执行项目登记及真实路径边界检查；链接、HTML、图片、数学和代码片段各有渲染入口，不能将可信 UI 组件等同于可信文件内容。
+
+Markdown 预览的图片按地址分流：项目内相对路径经主进程读取为 `data:` URL，越界与不支持的类型仍被拒绝；`http(s)` 远程图片由渲染进程直接请求，受生产 CSP 的 `img-src` 约束且不带 Referer，不经过主进程读取。
 
 HTML 脚本只在独立沙箱容器运行，不向预览暴露桌面桥接、Node 或本地写入能力。资源条目自身的符号链接、真实路径越界和不支持的资源请求被拒绝；本地资源类型、读取上限和预览 CSP 以 `project-html-preview.ts` 与共享契约定义为准。网络资源仍遵守 Chromium 的跨域与混合内容限制，不因文件预览关闭安全机制；预览禁止弹窗、下载和敏感权限请求。
 

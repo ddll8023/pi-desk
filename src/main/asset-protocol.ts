@@ -12,11 +12,12 @@ export const productionCsp = [
   "default-src 'none'",
   "script-src 'self'",
   // 终端组件在运行时按测量结果写样式（xterm 的滚动条颜色等），因此样式源放开内联；
-  // 脚本仍然只允许自身，页面也不加载任何远程内容。
+  // 脚本与连接仍只允许自身，页面不加载任何远程脚本或远程连接。
   "style-src 'self' 'unsafe-inline'",
   "connect-src 'none'",
-  // data: 与 blob: 仅用于本地图片附件的缩略图展示；不放开远程图片。
-  "img-src 'self' data: blob:",
+  // data: 与 blob: 用于本地图片附件的缩略图展示；http: 与 https: 仅供 Markdown 预览直连文档里的远程图片，
+  // 这些 img 由调用方设置 no-referrer，其余远程内容（脚本、样式、连接）仍然不放开。
+  "img-src 'self' data: blob: https: http:",
   // data: 与 blob: 允许 PDF.js 等组件动态加载解析后的内嵌字体。
   "font-src 'self' data: blob:",
   // worker-src 放开同源和 blob，支持 PDF.js 等组件创建 Web Worker。
