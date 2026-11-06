@@ -20,6 +20,12 @@
 
 以上版本、统计与发布产物核实于 **2026-10-26**，仅为快照，依据[仓库 API][eh-meta]和[Release API][eh-release]。
 
+## 界面截图
+
+![EditHere 与 AI 协作：AI 发起标注，你在 EditHere 中圈出位置、写下意见，点击「完成并返回 AI」后 AI 按反馈修改界面](https://raw.githubusercontent.com/Inginnng/EditHere/codex/native/assets/readme/hero-zh.gif)
+
+*AI 发起标注 → 在 EditHere 里写意见 → 「完成并返回 AI」→ AI 读取反馈并修改（官方 README 图注）。官方素材为动图，无静态界面截图。*
+
 ## 许可证
 
 ### 主体许可
@@ -125,6 +131,7 @@
 - [AI 与命令行 (AGENT-CLI.md)][eh-agentcli]：`edithere-cli` 命令集、`feedback-minimal-4` 结构化反馈与错误码。
 - [网页版文档 (web/README.md)][eh-webdocs]：MCP Apps SDK 接入、离线单页与 Web 架构。
 - [CMakeLists.txt][eh-cmake]、[LICENSE][eh-license]、[LICENSING.md][eh-licensing]、[NOTICE][eh-notice]：技术栈依赖与许可边界。
+- 截图来源：[README 截图素材][eh-shots]（raw 直链，核实于 2026-11-06）。
 - [仓库 API][eh-meta]、[最新 Release API][eh-release]：2026-10-26 快照。
 
 ### 本项目事实出处
@@ -151,6 +158,7 @@
 [eh-notice]: https://github.com/Inginnng/EditHere/blob/codex/native/NOTICE
 [eh-meta]: https://api.github.com/repos/Inginnng/EditHere
 [eh-release]: https://api.github.com/repos/Inginnng/EditHere/releases/latest
+[eh-shots]: https://github.com/Inginnng/EditHere/tree/codex/native/assets/readme
 [p-resources]: ../modules/resources-mcp.md
 [p-genui]: ../modules/genui.md
 [p-session]: ../modules/sessions-chat.md

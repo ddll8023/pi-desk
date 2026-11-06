@@ -19,6 +19,16 @@
 
 以上数值核实于 **2026-10-27**，仅为快照，来源为官方发布清单与[公开统计数据](https://github.com/CoWork-OS/CoWork-OS/blob/main/docs/public-adoption-stats.md)。
 
+## 界面截图
+
+![Today：每个待决策事项一张卡片](https://raw.githubusercontent.com/CoWork-OS/CoWork-OS/main/resources/branding/images/readme-today.webp)
+
+*Today：每个待决策事项一张卡片（官方 README 图注）。*
+
+![生成的表格在对话旁打开](https://raw.githubusercontent.com/CoWork-OS/CoWork-OS/main/resources/branding/images/readme-workbench.webp)
+
+*生成的表格在对话旁打开（官方 README 图注）。*
+
 ## 许可证
 
 [根 LICENSE](https://github.com/CoWork-OS/CoWork-OS/blob/HEAD/LICENSE) 为 **MIT License**，版权方为 `2025 CoWork-OSS Contributors`。
@@ -109,4 +119,5 @@
 - [Browser V2 架构文档](https://github.com/CoWork-OS/CoWork-OS/blob/main/docs/browser-v2-architecture.md)
 - [根 LICENSE](https://github.com/CoWork-OS/CoWork-OS/blob/HEAD/LICENSE)
 - [公共统计快照](https://github.com/CoWork-OS/CoWork-OS/blob/main/docs/public-adoption-stats.md)
+- 截图来源：[README 素材目录 `resources/branding/images/`](https://github.com/CoWork-OS/CoWork-OS/tree/main/resources/branding/images)，raw 直链核实于 2026-11-06
 - 本项目侧事实出处：`src/renderer/src/browser/components/BrowserView.vue`、`src/main/browser/ipc.ts`

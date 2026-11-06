@@ -19,6 +19,16 @@
 
 以上数值核实于 2026-11-03，仅为快照。
 
+## 界面截图
+
+![Wiki：把产品文档、设计规格与运维手册转为带链接图谱的结构化页面](https://raw.githubusercontent.com/TencentCloud/TencentDB-Agent-Memory/feat/server_team/assets/images/wiki.png)
+
+*Wiki：把产品文档、设计规格与运维手册转为带链接图谱的结构化页面（官方 README 相邻说明）。*
+
+![Chat Memory：L0 对话 → L1 原子 → L2 场景 → L3 画像逐层提炼](https://raw.githubusercontent.com/TencentCloud/TencentDB-Agent-Memory/feat/server_team/assets/images/chat_memory.png)
+
+*Chat Memory：L0 对话 → L1 原子 → L2 场景 → L3 画像逐层提炼（官方 README 相邻说明）。*
+
 ## 许可证
 
 根目录 [LICENSE](https://github.com/TencentCloud/TencentDB-Agent-Memory/blob/feat/server_team/LICENSE) 为标准 MIT 许可证，版权归属于 Tencent（Copyright (C) 2026 Tencent. All rights reserved.）。
@@ -103,6 +113,7 @@
   - 中文主文档：[README_CN.md](https://github.com/TencentCloud/TencentDB-Agent-Memory/blob/feat/server_team/README_CN.md)
   - 部署与配置文档：[INSTALL.md](https://github.com/TencentCloud/TencentDB-Agent-Memory/blob/feat/server_team/INSTALL.md)
   - Pi 扩展源码与文档：[`MemoryCore/pi-plugin/index.ts`](https://github.com/TencentCloud/TencentDB-Agent-Memory/blob/feat/server_team/MemoryCore/pi-plugin/index.ts) 与 [`MemoryCore/pi-plugin/README.md`](https://github.com/TencentCloud/TencentDB-Agent-Memory/blob/feat/server_team/MemoryCore/pi-plugin/README.md)
+  - 截图素材目录：[`assets/images/`](https://github.com/TencentCloud/TencentDB-Agent-Memory/tree/feat/server_team/assets/images)（raw 直链，核实于 2026-11-06）
 - **版本与统计**：
   - GitHub 仓库元数据接口：`https://api.github.com/repos/TencentCloud/TencentDB-Agent-Memory`（核实于 2026-11-03）
   - GitHub 最新 Release 接口：`https://api.github.com/repos/TencentCloud/TencentDB-Agent-Memory/releases/latest`（标签 `v2.0.3`，核实于 2026-11-03）

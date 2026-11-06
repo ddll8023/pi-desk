@@ -19,6 +19,16 @@
 
 以上版本、统计与产物核实于 **2026-10-31**，仅为快照，数据源于[仓库 API][obf-repo]、[Release 列表][obf-release]及官网。
 
+## 界面截图
+
+![OpenBitFun 桌面端首页](https://raw.githubusercontent.com/GCWing/OpenBitFun/main/png/openbitfun-desktop.png)
+
+*桌面端首页（官方 README alt 文本）。*
+
+![OpenBitFun 桌面端多 Agent 会话](https://raw.githubusercontent.com/GCWing/OpenBitFun/main/png/openbitfun-desktop-session.png)
+
+*桌面端多 Agent 会话（官方 README alt 文本）。*
+
 ## 许可证
 
 根目录 [`LICENSE`][obf-license] 为 **MIT License**，版权方为 CWing（2026）。README 声明 `Core code: MIT`，第三方依赖与资源遵循各自开源许可证（如 `third_party/` 与部分专用工具）。
@@ -120,6 +130,7 @@
 - [OpenBitFun 产品架构文档（docs/architecture/product-architecture.md）][obf-arch]
 - [OpenBitFun 仓库根目录 LICENSE][obf-license] 与 [Cargo.toml][obf-cargo]
 - [OpenBitFun 仓库 API][obf-repo] 与 [Release 列表][obf-release]（核实于 2026-10-31）
+- 截图来源：[仓库截图素材目录 `png/`][obf-shots]（raw 直链，核实于 2026-11-06）
 - 本项目侧事实依据：`docs/项目结构文档.md`、`docs/modules/sessions-chat.md`、`docs/modules/workspace-tabs.md`、`docs/modules/genui.md`、`docs/modules/lan-remote.md`
 
 [obf-home]: https://openbitfun.com
@@ -131,3 +142,4 @@
 [obf-readme]: https://github.com/GCWing/OpenBitFun/blob/main/README.md
 [obf-repo]: https://github.com/GCWing/OpenBitFun
 [obf-release]: https://github.com/GCWing/OpenBitFun/releases
+[obf-shots]: https://github.com/GCWing/OpenBitFun/tree/main/png

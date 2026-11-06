@@ -20,6 +20,16 @@
 
 以上版本、统计与发布产物核实于 **2026-10-25**，仅为快照，依据[仓库 API][e-meta]和[Release API][e-release]。README 声明 Windows / macOS / Linux 支持，但平台声明不能替代某次 Release 的实际产物清单，不推定 Linux 从未提供安装包。
 
+## 界面截图
+
+![主聊天界面](https://raw.githubusercontent.com/EvovexAI/EvoFlow/main/docs/assets/screenshots/main-chat.png)
+
+*官方文档截图目录中的主聊天界面（`docs/assets/screenshots/main-chat.png`）。*
+
+![任务中心界面](https://raw.githubusercontent.com/EvovexAI/EvoFlow/main/docs/assets/screenshots/task-center.png)
+
+*同一目录下的任务中心界面（`docs/assets/screenshots/task-center.png`）。*
+
 ## 许可证
 
 ### 主体许可
@@ -147,6 +157,7 @@ EvoFlow 文档包含广泛的桌面与预览能力，但本次没有核实其是
 
 - [README][e-readme]、[文档入口][e-docs]、[产品总览][e-overview]：模式、功能地图及概念边界。
 - [Plan 模式][e-plan]、[任务中心][e-tasks]：官方描述的计划启动、步骤依赖及执行图入口。
+- 截图来源：[官方文档截图目录][e-shots]（raw 直链，核实于 2026-11-06）。
 - [根 LICENSE][e-license]、[NOTICE][e-notice]：主体非商业许可与第三方范围。
 - 已实际读取的例外文本：[DeerFlow MIT][e-deerlicense]、[ZCode Apache-2.0][e-zlicense]、[Liquid Glass MIT][e-glasslicense]、[Canvas Skill Apache-2.0][e-canvaslicense]、[Frontend Skill Apache-2.0][e-frontendlicense]、[Skill Creator Apache-2.0][e-skilllicense]。
 - [面板包声明][e-panel]、[桌面 Cargo][e-cargo]、[Gateway 依赖][e-gateway]、[Harness 依赖][e-harness]：运行层和组件，不作为完整实现证明。
@@ -163,6 +174,7 @@ EvoFlow 文档包含广泛的桌面与预览能力，但本次没有核实其是
 
 [e-plan]: https://github.com/EvovexAI/EvoFlow/blob/main/docs/user/guides/chat/plan-mode.md
 [e-tasks]: https://github.com/EvovexAI/EvoFlow/blob/main/docs/user/guides/tasks/task-center.md
+[e-shots]: https://github.com/EvovexAI/EvoFlow/tree/main/docs/assets/screenshots
 [e-readme]: https://github.com/EvovexAI/EvoFlow/blob/main/README.md
 [e-docs]: https://github.com/EvovexAI/EvoFlow/blob/main/docs/index.md
 [e-overview]: https://github.com/EvovexAI/EvoFlow/blob/main/docs/user/getting-started/product-overview.md

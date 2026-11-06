@@ -20,6 +20,16 @@
 
 以上版本与统计核实于 **2026-10-25**，仅为快照，来源为[仓库 API][d-meta]、[Release API][d-release]和[桌面包声明][d-desktop]。桌面配置包含 macOS 与 Windows 打包入口；本次没有核实可下载的安装产物清单，不将构建脚本视为已发布产物。
 
+## 界面截图
+
+![模型供应商页面](https://raw.githubusercontent.com/deepseek-ai/deepseek-harness/master/docs/user/guide/providers-models-page.png)
+
+*官方用户指南中的模型供应商页面（`docs/user/guide/providers-models-page.png`）。*
+
+![自定义供应商配置表单](https://raw.githubusercontent.com/deepseek-ai/deepseek-harness/master/docs/user/guide/providers-custom-form.png)
+
+*同一指南中的自定义供应商配置表单（`docs/user/guide/providers-custom-form.png`）。*
+
 ## 许可证
 
 [根 LICENSE][d-license] 为 MIT，版权方为 DeepSeek。允许使用、修改、分发及商业使用，分发副本或实质部分需保留版权与许可声明；软件按现状提供。
@@ -128,6 +138,7 @@ pi-desk 有[声明式生成式界面][p-genui]、桌面文件编辑和常驻终�
 - [基础 Bundle][d-base]、[组合清单][d-composition]：工具和策略的实际组合入口；不是按营销文案穷举功能。
 - [工具契约][d-tools]、[子代理契约][d-subagent]：工具展示和父子任务语义。
 - [桌面包声明][d-desktop]、[根 LICENSE][d-license]。
+- 截图来源：[用户指南素材][d-shots]（raw 直链，核实于 2026-11-06）。
 - [仓库 API][d-meta]、[最新 Release API][d-release]：2026-10-25 快照。
 
 ### 本项目事实出处
@@ -149,6 +160,7 @@ pi-desk 有[声明式生成式界面][p-genui]、桌面文件编辑和常驻终�
 [d-license]: https://github.com/deepseek-ai/deepseek-harness/blob/master/LICENSE
 [d-meta]: https://api.github.com/repos/deepseek-ai/deepseek-harness
 [d-release]: https://api.github.com/repos/deepseek-ai/deepseek-harness/releases/latest
+[d-shots]: https://github.com/deepseek-ai/deepseek-harness/tree/master/docs/user/guide
 [p-session]: ../modules/sessions-chat.md
 [p-resources]: ../modules/resources-mcp.md
 [p-terminal]: ../modules/terminal-commands.md

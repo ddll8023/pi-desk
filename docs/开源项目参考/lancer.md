@@ -19,6 +19,12 @@
 
 以上版本、统计与产物核实于 **2026-10-31**，仅为快照，数据源于[仓库 API][l-meta]与[Release API][l-release]。
 
+## 界面截图
+
+![Lancer 主工作区，含助手控制、会话气泡与并行 GitTree 列](https://raw.githubusercontent.com/raylee-ai/lancer/main/apps/website/public/media/lancer-workspace.webp)
+
+*Lancer 主工作区：助手指令与状态控制、会话气泡与并行 GitTree 列（官网首屏 alt 文本）。*
+
 ## 许可证
 
 根目录 [`LICENSE`][l-license] 为 **MIT License**，版权方为 Matthew Lam（2026）。保留 upstream pi-gui 的原始版权声明与 [`NOTICE`][l-notice]，Lancer 的源码修改同样采用 MIT 许可发布。允许自由使用、修改、分发与商用，须保留版权与许可声明。仓库 API 的 `license` 字段识别为 MIT，与根文件一致。
@@ -135,6 +141,7 @@
   - 多泳道航道扩展说明：[`docs/multi-lane-phase1-extension.md`][l-lane]
   - 独立光线层的框架边界：[`packages/light-ui/README.md`][l-light-readme]、[`src/light-layer.ts`][l-light-source]；与 React 桌面图组件分开理解。
   - 许可证与版权通知：[`LICENSE`][l-license]、[`NOTICE`][l-notice]、[`docs/third-party-dependencies.md`][l-deps]
+  - 界面素材：[`apps/website/public/media/`][l-shots]（raw 直链，核实于 2026-11-06）
 - **对方版本与元数据（2026-10-31 快照）**：
   - 仓库基础 API：`https://api.github.com/repos/raylee-ai/lancer`
   - Release 发布 API：`https://api.github.com/repos/raylee-ai/lancer/releases`
@@ -147,6 +154,7 @@
   - 开源参考索引：[`docs/开源项目参考/README.md`][p-index]
 
 [l-repo]: https://github.com/raylee-ai/lancer
+[l-shots]: https://github.com/raylee-ai/lancer/tree/main/apps/website/public/media
 [l-meta]: https://api.github.com/repos/raylee-ai/lancer
 [l-release]: https://api.github.com/repos/raylee-ai/lancer/releases
 [l-license]: https://github.com/raylee-ai/lancer/blob/main/LICENSE

@@ -20,6 +20,16 @@
 
 以上版本、统计与产物核实于 **2026-11-03**，仅为快照，来源为仓库 API、Release 页面与官方包声明。
 
+## 界面截图
+
+![空闲状态的工作流示例：连接 Claude、Codex 与带审批门的审阅节点](https://raw.githubusercontent.com/EKKOLearnAI/ekko-studio/main/docs/screenshots/overview/workflow.png)
+
+*空闲状态的工作流示例：连接 Claude、Codex 与带审批门的审阅节点（官方 README 图注）。*
+
+![Agent Manager 中的 16 个内置与编码代理卡片](https://raw.githubusercontent.com/EKKOLearnAI/ekko-studio/main/docs/screenshots/overview/agent-manager.png)
+
+*Agent Manager：16 个内置与编码代理卡片（官方 README 图注）。*
+
 ## 许可证
 
 [根 LICENSE][e-license] 为 **Business Source License 1.1（BSL 1.1）**，版权方为 EKKOLearnAI。
@@ -116,6 +126,7 @@
 - 根目录包配置：[package.json][e-package]（v0.8.14）
 - 架构设计文档：[ARCHITECTURE.md][e-arch]
 - 中文文档：[README_zh.md][e-readme-zh]
+- 截图来源：[官方文档截图目录 `docs/screenshots/overview/`](https://github.com/EKKOLearnAI/ekko-studio/tree/main/docs/screenshots/overview)，raw 直链核实于 2026-11-06
 - 版本与统计快照：2026-11-03 核实，Release `v0.8.14`，Star 11,648 / Fork 1,448
 - 本项目侧事实依据：
   - [项目结构文档](../项目结构文档.md)

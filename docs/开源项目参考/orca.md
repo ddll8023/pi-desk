@@ -20,6 +20,16 @@
 
 以上版本、统计与产物核实于 **2026-10-25**，仅为快照，来源为[仓库 API][o-meta]和[Release API][o-release]。移动端和远程形态来源于[产品说明][o-intro]与[手机文档][o-mobile]，不表示它们都包含在该次桌面 Release 资产中。
 
+## 界面截图
+
+![Orca 桌面应用：协调者 Agent 并行运行多个工作区 Agent，右下角为 Orca 手机端](https://raw.githubusercontent.com/stablyai/orca/main/docs/assets/readme-hero.jpg)
+
+*Orca 桌面应用：协调者 Agent 并行运行多个工作区 Agent，右下角为 Orca 手机端（官方 README alt 文本）。*
+
+![新建工作树并为其分配独立 Agent，与其他运行中的工作树并列](https://raw.githubusercontent.com/stablyai/orca/main/docs/assets/readme-features/parallel-worktrees.poster.jpg)
+
+*新建工作树并为其分配独立 Agent，与其他运行中的工作树并列（官方 README alt 文本）。*
+
 ## 许可证
 
 [根 LICENSE][o-license] 为 MIT，版权方为 Lovecast Inc.。允许使用、修改、分发和商用，需保留版权与许可声明；不提供软件保证。仓库 API 的 MIT 识别与实际文本一致。
@@ -129,6 +139,7 @@ pi-desk 的[声明式生成式界面][p-genui]含文档版本、节点补丁及�
 - [移动端][o-mobile]：配对、Relay、终端、Git 和桌面真源。
 - [Design Mode][o-design]、[Annotate AI Diff][o-annotate]：页面上下文与审阅闭环。
 - [包声明][o-package]、[根 LICENSE][o-license]。
+- 截图来源：[README 素材目录][o-shots]（raw 直链，核实于 2026-11-06）。
 - [仓库 API][o-meta]、[最新 Release API][o-release]：2026-10-25 快照。
 
 ### 本项目事实出处
@@ -153,6 +164,7 @@ pi-desk 的[声明式生成式界面][p-genui]含文档版本、节点补丁及�
 [o-license]: https://github.com/stablyai/orca/blob/main/LICENSE
 [o-meta]: https://api.github.com/repos/stablyai/orca
 [o-release]: https://api.github.com/repos/stablyai/orca/releases/latest
+[o-shots]: https://github.com/stablyai/orca/tree/main/docs/assets
 [p-files]: ../modules/files-editor.md
 [p-terminal]: ../modules/terminal-commands.md
 [p-git]: ../modules/git.md
