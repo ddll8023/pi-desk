@@ -459,17 +459,12 @@ function onListboxKeydown(event: KeyboardEvent): void {
   overflow: hidden;
 }
 
-/* provider 小字与模型名分层；模型名用等宽字体，与路径、代码的呈现一致。 */
+/* provider 小字与模型名分层；模型名用等宽字体，与路径、代码的呈现一致。
+   两者只靠 .app-select-value 的 gap 分隔，不再用伪元素插分隔符——分隔符会被读成模型名的一部分。 */
 .app-select-meta {
   flex: none;
   color: var(--color-desk-muted);
   font-size: 0.6875rem;
-}
-
-.app-select-meta::after {
-  content: "/";
-  margin-left: 0.35rem;
-  color: var(--color-desk-line-strong);
 }
 
 .app-select-name {
@@ -656,27 +651,32 @@ function onListboxKeydown(event: KeyboardEvent): void {
   font-size: 0.6875rem;
 }
 
+/* 能力标签有最小宽度并居中：选项行右端不会因标签长短左右移动。 */
 .app-select-option-tag {
   flex: none;
+  min-width: 2.25rem;
   border: 1px solid var(--color-desk-line);
   border-radius: 4px;
   padding: 0 0.3rem;
   color: var(--color-desk-muted);
   font-size: 0.625rem;
   line-height: 1.6;
+  text-align: center;
 }
 
-/* 候选项次级动作：贴在行的右端，不改变行的选中态，只在调用方给出 action 时渲染。 */
+/* 候选项次级动作：与选中勾共用固定宽度的一列，不改变行的选中态，只在调用方给出 action 时渲染。 */
 .app-select-option-action {
   flex: none;
+  width: 3.5rem;
   border: 0;
   border-radius: 4px;
   background: transparent;
-  padding: 0.15rem 0.35rem;
+  padding: 0.15rem 0;
   color: var(--color-desk-muted);
   cursor: pointer;
   font-size: var(--text-2xs);
   line-height: 1.45;
+  text-align: center;
   transition: background var(--motion-duration-fast) ease, color var(--motion-duration-fast) ease;
 }
 
@@ -696,10 +696,10 @@ function onListboxKeydown(event: KeyboardEvent): void {
   background: var(--color-desk-surface-subtle);
 }
 
+/* 选中项只用浅强调底 + 强调色模型名 + 右端勾表达；再叠左侧竖条会在圆角行上切出方角，并与左端徽标争位置。 */
 .app-select-option.is-selected {
   background: var(--color-desk-accent-soft);
   color: var(--color-desk-accent);
-  box-shadow: inset 3px 0 0 0 var(--color-desk-accent);
 }
 
 .app-select-option.is-selected .app-select-option-label {

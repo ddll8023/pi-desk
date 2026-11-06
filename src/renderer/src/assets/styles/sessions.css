@@ -50,8 +50,8 @@
     align-items: flex-end;
     gap: 0.375rem;
   }
-/* ＋ 菜单：左侧分类栏 + 右侧内容面板；浮层以触发键为基准展开，宽度上限防止内容撑开。
-     选择器带上坞前缀，才盖住 ui.css 里后引入的 .dialog-popover（方向与宽度、滚动都从那里接管）。 */
+/* ＋ 菜单：单列三段（图片 / 模型 / 常用消息），整块不滚动，只有常用消息区内部滚动。
+     浮层以触发键为基准展开；选择器带上坞前缀，才盖住 ui.css 里后引入的 .dialog-popover（方向与宽度都从那里接管）。 */
 .prompt-composer-plus {
     position: relative;
     flex: none;
@@ -61,52 +61,54 @@
     bottom: calc(100% + 0.375rem);
     left: 0;
     display: flex;
-    flex-direction: row;
+    flex-direction: column;
     gap: 0.25rem;
     width: min(21rem, 82vw);
-    max-height: 24rem;
-    overflow-y: auto;
+    max-height: min(24rem, 50vh);
+    overflow: hidden;
     padding: 0.25rem;
   }
-/* 分类栏：固定宽度竖列，选中项用浅强调底色与强调文字，未选中只有悬停浅底。 */
-.prompt-composer-plus-cats {
-    display: flex;
-    flex: none;
-    flex-direction: column;
-    gap: 0.125rem;
-    width: 5.25rem;
-    padding: 0.125rem;
+/* 一段：标题 + 内容竖排；段与段靠标题底带分隔，不再画线、不再加内距。 */
+.prompt-composer-plus-section {
+    @apply flex flex-none flex-col;
   }
-.prompt-composer-plus-cat {
-    @apply w-full rounded-desk-sm px-2 py-1.5 text-left text-xs font-medium whitespace-nowrap transition-colors;
+/* 常用消息段是唯一可伸缩的一段：内容超出时由内部列表滚动，顶部两段保持可见。 */
+.prompt-composer-plus-section.is-grow {
+    flex: 1 1 auto;
+    min-height: 0;
+  }
+/* 段标题：浅底带而非裸标题 + 分隔线。字号与字重取 git 分组头同一档（11px / 600），
+     圆角按外层 12px 减 4px 内距取 md，底带因此与外层同心。
+     底色用沉陷面而非 surface-subtle：后者就是菜单行的悬停底色，紧贴底带的第一行悬停时会与底带连成一块。 */
+.prompt-composer-plus-section-title {
+    @apply m-0 flex h-6 items-center px-2 text-2xs font-semibold;
+    border-radius: var(--radius-desk-md);
+    background: var(--color-desk-canvas-sunken);
     color: var(--color-desk-muted);
   }
-.prompt-composer-plus-cat:not(:disabled):not([aria-selected='true']):hover {
-    background: var(--color-desk-surface-subtle);
+/* 常用消息列表：占满剩余高度后自己滚动，条数少时按内容收缩，不留空白。 */
+.prompt-composer-plus-list {
+    @apply flex min-h-0 flex-col overflow-y-auto;
   }
-.prompt-composer-plus-cat[aria-selected='true'] {
-    background: var(--color-desk-accent-soft);
-    color: var(--color-desk-accent);
-  }
-/* 内容面板：占满剩余宽度；最小高度保证切换分类时浮层不跳动。 */
-.prompt-composer-plus-panes {
-    display: flex;
-    flex: 1 1 auto;
-    flex-direction: column;
-    min-width: 0;
-    min-height: 6rem;
-    padding: 0.125rem;
-  }
-/* 单个分类面板：竖排内容，行间距由行自身的内距提供。 */
-.prompt-composer-plus-pane {
-    @apply flex flex-col;
-  }
-/* 面板内的一行：左侧动作名，右侧次要说明；与分类栏同一档行高。 */
+/* 菜单里的一行：左侧动作名，右侧次要说明；左内距比段标题多 4px，让标题读成标签、行读成内容。 */
 .prompt-composer-plus-row {
-    @apply flex w-full items-center gap-2 rounded-desk-sm px-2 py-1.5 text-left text-xs transition-colors;
+    @apply flex h-[30px] w-full shrink-0 items-center gap-2 rounded-desk-sm pl-3 pr-2 text-left text-xs transition-colors;
   }
 .prompt-composer-plus-row:not(:disabled):hover {
     background: var(--color-desk-surface-subtle);
+  }
+/* 不可提交或不能添加附件时置灰：本行没有底色与描边可退，只能压低文字并换成禁止光标，
+     否则点下去毫无反应且外观与可用项一致。 */
+.prompt-composer-plus-row:disabled {
+    @apply cursor-not-allowed;
+    color: var(--color-desk-muted);
+  }
+.prompt-composer-plus-row:disabled .prompt-composer-plus-row-note {
+    color: color-mix(in srgb, var(--color-desk-muted) 70%, transparent);
+  }
+/* 斜杠开头的常用消息是命令，与补全列表里的命令名同样用等宽字体区分。 */
+.prompt-composer-plus-row.is-command {
+    font-family: var(--font-mono);
   }
 .prompt-composer-plus-row-note {
     @apply ml-auto shrink-0 text-2xs;

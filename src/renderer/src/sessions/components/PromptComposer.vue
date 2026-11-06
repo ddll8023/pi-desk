@@ -1,7 +1,7 @@
 <!-- 图片与编号说明由坞内附件区独立管理；点击发送即固定提示词、图片及标注快照，说明由 SDK 独立资料消息承接。
      结果未确认时可补读同步，确认结束原运行后恢复输入，不自动重发。
      原位新建以独立草稿承接输入：旧实例结束期间可编辑但不发送，首次发送才建立新会话。
-     Prompt 输入坞：处理输入法组合态、Enter 发送与 Shift+Enter 换行、焦点回归与重复提交、响应侧栏「新建」的聚焦请求并给出一次性提示，并在 Agent 运行期间原位提供停止入口；在 Agent 运行与流式响应期间草稿文本、图片附件与标注编辑保持可用，点击发送时才校验会话空闲；同时承接 Extension 的 set_editor_text 填充文本、图片附件的选择/文本框与活动视窗全局快捷粘贴（兼容系统截图提取）/拖拽入口、输入行按内容自动增高、＋ 菜单内的常用消息（短语取自界面偏好，可在设置里增删改与排序，点击即发送）、Pi 命令的斜杠模糊补全（Runtime 就绪后用运行中的命令清单，未就绪时用主进程预读的技能清单，按类型分组并按匹配优先级排序；另含 Desktop 层自己拦截的界面命令）与 `@` 项目文件引用（只写入相对路径文本，不传文件内容）；右侧文件树的行拖入坞内也走同一条相对路径引用规则。输入坞是单行结构：左侧 ＋ 菜单集中放置图片附件、模型选择与常用消息（菜单本身是分类栏 + 内容面板两栏），中间是输入行，右侧是发送/停止键；坞下方一行是水平居中的信息行：异常与进行中的状态文本、被收起的 Extension 对话入口与会话用量指标（缓存命中率、上下文占用与平均速率，点击开明细；累计 token 与费用只在明细浮层展示）。Extension 的 setStatus 项不在输入区展示。 -->
+     Prompt 输入坞：处理输入法组合态、Enter 发送与 Shift+Enter 换行、焦点回归与重复提交、响应侧栏「新建」的聚焦请求并给出一次性提示，并在 Agent 运行期间原位提供停止入口；在 Agent 运行与流式响应期间草稿文本、图片附件与标注编辑保持可用，点击发送时才校验会话空闲；同时承接 Extension 的 set_editor_text 填充文本、图片附件的选择/文本框与活动视窗全局快捷粘贴（兼容系统截图提取）/拖拽入口、输入行按内容自动增高、＋ 菜单内的常用消息（短语取自界面偏好，可在设置里增删改与排序，点击即发送）、Pi 命令的斜杠模糊补全（Runtime 就绪后用运行中的命令清单，未就绪时用主进程预读的技能清单，按类型分组并按匹配优先级排序；另含 Desktop 层自己拦截的界面命令）与 `@` 项目文件引用（只写入相对路径文本，不传文件内容）；右侧文件树的行拖入坞内也走同一条相对路径引用规则。输入坞是单行结构：左侧 ＋ 菜单集中放置图片附件、模型选择与常用消息（菜单本身自上而下分图片、模型、常用消息三段，仅常用消息区内部滚动），中间是输入行，右侧是发送/停止键；坞下方一行是水平居中的信息行：异常与进行中的状态文本、被收起的 Extension 对话入口与会话用量指标（缓存命中率、上下文占用与平均速率，点击开明细；累计 token 与费用只在明细浮层展示）。Extension 的 setStatus 项不在输入区展示。 -->
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
@@ -174,16 +174,7 @@ watch(() => sessionViewStore.requestedInput, applyRequestedInput)
 
 /** 常用消息候选：与草稿内容无关，选中即用该短语发起一次提交；短语来自界面偏好，可在设置里编辑。 */
 const quickSendMessages = computed(() => preferencesStore.quickSendMessages)
-/** ＋ 菜单的分类：图片与模型各自一栏，常用消息一栏；默认落在最常用的常用消息上。 */
-const PLUS_CATEGORIES = [
-  { key: 'image', label: '图片' },
-  { key: 'model', label: '模型' },
-  { key: 'message', label: '消息' }
-] as const
-type PlusCategory = (typeof PLUS_CATEGORIES)[number]['key']
-/** 当前分类；保留上一次选择，关闭再打开不为用户重置认知。 */
-const plusCategory = ref<PlusCategory>('message')
-/** 菜单开关；菜单把图片附件、模型与常用消息三类选择收在一处，输入行本身只留触发键与发送/停止。 */
+/** 菜单开关；菜单把图片附件、模型与常用消息三段收在一处，输入行本身只留触发键与发送/停止。 */
 const plusMenuOpen = ref(false)
 /** 菜单外层引用：判断一次点击是否落在触发键或菜单之内。 */
 const plusRoot = ref<HTMLElement | null>(null)
@@ -709,40 +700,30 @@ function closePlusMenu(restoreFocus = false): void {
   if (restoreFocus) void nextTick(() => { plusRoot.value?.querySelector('button')?.focus() })
 }
 
-/** 分类栏里的分类键：按 key 取回元素，用于键盘切换后把焦点跟上。 */
-function tabButtonOf(key: PlusCategory): HTMLButtonElement | null {
-  return plusMenu.value?.querySelector<HTMLButtonElement>(`#prompt-plus-cat-${key}`) ?? null
+/** 菜单内的可操作行：跳过禁用项，打开时的落点与行间移动都按同一份顺序取。 */
+function plusMenuRows(): HTMLButtonElement[] {
+  return [...(plusMenu.value?.querySelectorAll<HTMLButtonElement>('button:not(:disabled)') ?? [])]
 }
 
-function focusActivePlusCategory(): void {
-  tabButtonOf(plusCategory.value)?.focus()
+/** 聚焦菜单内第 index 行；越界时收到最近的一端。 */
+function focusPlusRow(index: number): void {
+  const rows = plusMenuRows()
+  if (rows.length === 0) return
+  rows[Math.min(Math.max(index, 0), rows.length - 1)]?.focus()
 }
 
-function selectPlusCategory(key: PlusCategory): void {
-  plusCategory.value = key
-}
-
-/** 分类栏键盘：上下键在可用分类间移动并同步切面板，焦点跟随；Esc 由菜单容器统一处理。 */
-function onPlusCatsKeydown(event: KeyboardEvent): void {
-  if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
-  const keys = PLUS_CATEGORIES
-    .map((category) => category.key)
-    .filter((key) => !(key === 'image' && attachDisabled.value))
-  if (keys.length === 0) return
+/** 上下键在菜单各行之间移动焦点；焦点不在菜单内时落到首行或末行。 */
+function movePlusRowFocus(event: KeyboardEvent): void {
+  const rows = plusMenuRows()
+  if (rows.length === 0) return
   event.preventDefault()
-  const current = keys.indexOf(plusCategory.value)
+  const current = rows.findIndex((row) => row === document.activeElement)
   const step = event.key === 'ArrowDown' ? 1 : -1
-  const next = current < 0 ? 0 : (current + step + keys.length) % keys.length
-  const key = keys[next]
-  if (key === undefined) return
-  plusCategory.value = key
-  void nextTick(() => { tabButtonOf(key)?.focus() })
+  const next = current < 0
+    ? (step === 1 ? 0 : rows.length - 1)
+    : (current + step + rows.length) % rows.length
+  rows[next]?.focus()
 }
-
-/** 图片入口因模型能力或张数上限禁用时，菜单不能停在一个不可用的分类上。 */
-watch(attachDisabled, (disabled) => {
-  if (disabled && plusCategory.value === 'image') plusCategory.value = 'message'
-})
 
 /** 触发键上的方向键是键盘用户的展开入口；回车与空格仍由按钮原生点击处理。 */
 function onPlusTriggerKeydown(event: KeyboardEvent): void {
@@ -754,11 +735,18 @@ function onPlusTriggerKeydown(event: KeyboardEvent): void {
   if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
   event.preventDefault()
   plusMenuOpen.value = true
-  void nextTick(focusActivePlusCategory)
+  // 向下键从首行进入，向上键从末行进入；-1 按 focusPlusRow 的收边规则落到最后一行。
+  void nextTick(() => { focusPlusRow(event.key === 'ArrowDown' ? 0 : -1) })
 }
 
-/** 菜单内的键盘：Esc 收起并把焦点还给触发键；分类切换与方向键交给分类栏自身。 */
+/** 菜单内的键盘：上下键在菜单各行间移动焦点，Esc 收起并把焦点还给触发键。 */
 function onPlusMenuKeydown(event: KeyboardEvent): void {
+  // 模型选择器自己吃掉的方向键（展开候选）不再兼作行间移动。
+  if (event.defaultPrevented) return
+  if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+    movePlusRowFocus(event)
+    return
+  }
   if (event.key !== 'Escape') return
   event.preventDefault()
   event.stopPropagation()
@@ -774,6 +762,11 @@ function scrollActiveOptionIntoView(container: HTMLElement | null): void {
   void nextTick(() => {
     container?.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest' })
   })
+}
+
+/** 斜杠开头的常用消息按命令排版，与命令补全列表用等宽字体的约定一致。 */
+function isCommandMessage(message: string): boolean {
+  return message.trimStart().startsWith('/')
 }
 
 /** 常用消息：把短语写进草稿后走与手动发送同一条提交路径，不改发送契约；不可提交时该项在菜单里已置灰。 */
@@ -1630,78 +1623,48 @@ onMounted(() => {
             >
               ＋
             </AppButton>
-            <!-- 菜单是「分类栏 + 内容面板」两栏：分类键走 tab 语义，面板只渲染当前分类的内容。 -->
+            <!-- 菜单是单列三段：图片、模型、常用消息自上而下排列，只有常用消息区内部滚动。 -->
             <div
               v-if="plusMenuOpen"
               id="prompt-plus-menu"
               ref="plusMenu"
-              class="dialog-popover prompt-composer-plus-menu scroll-area"
+              class="dialog-popover prompt-composer-plus-menu"
+              role="group"
+              aria-label="输入选项"
               @keydown="onPlusMenuKeydown"
             >
-              <div
-                class="prompt-composer-plus-cats"
-                role="tablist"
-                aria-label="输入选项分类"
-                @keydown="onPlusCatsKeydown"
-              >
+              <div class="prompt-composer-plus-section">
+                <p class="prompt-composer-plus-section-title">图片</p>
+                <!-- 触发图片附件选择；图片说明由附件区独立标注，不进入提示词。 -->
                 <AppButton
-                  v-for="category in PLUS_CATEGORIES"
-                  :id="`prompt-plus-cat-${category.key}`"
-                  :key="category.key"
                   variant="unstyled"
-                  role="tab"
-                  :aria-selected="plusCategory === category.key"
-                  :aria-controls="`prompt-plus-pane-${category.key}`"
-                  :disabled="category.key === 'image' && attachDisabled"
-                  class="prompt-composer-plus-cat"
-                  @click="selectPlusCategory(category.key)"
-                >{{ category.label }}</AppButton>
+                  class="prompt-composer-plus-row"
+                  :disabled="attachDisabled"
+                  @click="pickImageFromMenu"
+                >
+                  <span>添加图片</span>
+                  <span class="prompt-composer-plus-row-note">也可粘贴或拖入</span>
+                </AppButton>
               </div>
-              <div class="prompt-composer-plus-panes">
-                <div
-                  v-show="plusCategory === 'image'"
-                  id="prompt-plus-pane-image"
-                  role="tabpanel"
-                  aria-labelledby="prompt-plus-cat-image"
-                  class="prompt-composer-plus-pane"
-                >
-                  <!-- 触发图片附件选择；图片说明由附件区独立标注，不进入提示词。 -->
-                  <AppButton
-                    variant="unstyled"
-                    class="prompt-composer-plus-row"
-                    :disabled="attachDisabled"
-                    @click="pickImageFromMenu"
-                  >
-                    <span>添加图片</span>
-                    <span class="prompt-composer-plus-row-note">也可粘贴或拖入</span>
-                  </AppButton>
-                </div>
-                <div
-                  v-show="plusCategory === 'model'"
-                  id="prompt-plus-pane-model"
-                  role="tabpanel"
-                  aria-labelledby="prompt-plus-cat-model"
-                  class="prompt-composer-plus-pane"
-                >
-                  <!-- 未绑定或原位新草稿选择草稿模型；实际绑定后才切当前会话模型，另设全局默认走次级动作。 -->
-                  <RuntimeModelSelect
-                    variant="menu"
-                    :new-conversation="workspaceTabsStore.isChatNewDraft"
-                    :resetting="workspaceTabsStore.isChatResetting || workspaceTabsStore.isChatBinding"
-                  />
-                </div>
-                <div
-                  v-show="plusCategory === 'message'"
-                  id="prompt-plus-pane-message"
-                  role="tabpanel"
-                  aria-labelledby="prompt-plus-cat-message"
-                  class="prompt-composer-plus-pane"
-                >
+              <div class="prompt-composer-plus-section">
+                <p class="prompt-composer-plus-section-title">模型</p>
+                <!-- 未绑定或原位新草稿选择草稿模型；实际绑定后才切当前会话模型，另设全局默认走次级动作。 -->
+                <RuntimeModelSelect
+                  variant="menu"
+                  :new-conversation="workspaceTabsStore.isChatNewDraft"
+                  :resetting="workspaceTabsStore.isChatResetting || workspaceTabsStore.isChatBinding"
+                />
+              </div>
+              <div class="prompt-composer-plus-section is-grow">
+                <p class="prompt-composer-plus-section-title">常用消息</p>
+                <!-- 消息多时只有本区滚动，顶部两段留在原位。 -->
+                <div class="prompt-composer-plus-list scroll-area">
                   <AppButton
                     v-for="(message, index) in quickSendMessages"
                     :key="`${message}-${index}`"
                     variant="unstyled"
                     class="prompt-composer-plus-row"
+                    :class="isCommandMessage(message) ? 'is-command' : ''"
                     :disabled="quickSendDisabled"
                     :title="message"
                     @click="sendQuickMessage(message)"

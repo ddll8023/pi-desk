@@ -343,24 +343,46 @@ function refreshModels(): void {
   max-width: none;
   flex: 1 1 auto;
 }
-/* 菜单行里的触发器退成安静的行式控件：不再自带底色、描边与投影，悬停跟菜单项一样只变色。 */
+/* 菜单行里的触发器退成安静的行式控件：不再自带底色、描边与投影，行高与内距跟同一菜单里的其它行对齐。
+   宽度靠 flex 分配而不是 100%：它与刷新键同排，声明成定宽基值会把自己挤出容器。
+   左内距 0.75rem 与菜单行的 pl-3 对齐，徽标不会比其它行的文字更靠左。 */
 .app-runtime-model.is-menu .runtime-model-control :deep(.app-select-trigger) {
-  width: 100%;
+  flex: 1 1 auto;
+  min-width: 0;
   height: 30px;
   border: 0;
   border-radius: var(--radius-desk-sm);
   background: transparent;
   box-shadow: none;
-  padding: 0;
+  padding: 0 0.5rem 0 0.75rem;
   color: var(--color-desk-ink);
 }
 .app-runtime-model.is-menu .runtime-model-control :deep(.app-select-trigger:not(:disabled):hover) {
-  background: transparent;
-  color: var(--color-desk-accent);
+  background: var(--color-desk-surface-subtle);
+  color: var(--color-desk-ink);
 }
 .app-runtime-model.is-menu .runtime-model-control :deep(.app-select-trigger[aria-expanded="true"]) {
+  background: var(--color-desk-accent-soft);
   box-shadow: none;
   color: var(--color-desk-accent);
+}
+/* 菜单行只放徽标与模型名：供应商名在候选列表与触发键的 title 里仍可见，行内不再与模型名争宽度。 */
+.app-runtime-model.is-menu .runtime-model-control :deep(.app-select-meta) {
+  display: none;
+}
+/* 菜单行里的刷新键降成行内小图标：24px、无边框，不与 30px 行的行高争视觉重量。 */
+.app-runtime-model.is-menu .runtime-model-refresh {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: var(--radius-desk-sm);
+  background: transparent;
+  color: var(--color-desk-muted);
+}
+.app-runtime-model.is-menu .runtime-model-refresh:not(:disabled):hover {
+  background: var(--color-desk-surface-subtle);
+  color: var(--color-desk-ink);
 }
 /* 设置默认的反馈在菜单里改为向下展开：向上会被菜单的滚动区裁掉。 */
 .app-runtime-model.is-menu .runtime-model-notice {
