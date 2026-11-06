@@ -99,6 +99,8 @@ export const sessionManager = new SessionManager({
   workspaces: workspaceManager,
   // 生成式 UI 开关在会话创建期读取；读失败按开启处理，不因偏好故障阻断会话。
   readGenuiEnabled: async () => (await configStore.readGenui()).enabled,
+  // 执行模式同样在会话创建期读取，决定宿主裁掉哪些 Skill；读失败按标准模式处理。
+  readExecutionMode: async () => (await configStore.readExecutionMode()).mode,
   // 删除会话后是否级联清理工作树，由界面偏好决定；读失败按不清理处理，不自作主张删目录。
   readCleanupOnSessionDelete: async () => {
     try {

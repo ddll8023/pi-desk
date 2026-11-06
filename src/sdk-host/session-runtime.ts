@@ -838,7 +838,7 @@ export class SdkSessionRuntime {
       ]
       const product = await prepareProductResources(this.sdk, {
         directory: this.options.productResourcesDir, cwd, agentDir, settingsManager, extensionFactories,
-        eventBus: this.options.memory.bus, memory: this.options.memory.current()
+        eventBus: this.options.memory.bus, memory: this.options.memory.current(), mode: target.mode
       })
       const services = await this.sdk.createAgentSessionServices({ cwd, agentDir, settingsManager,
         resourceLoaderOptions: product.options })

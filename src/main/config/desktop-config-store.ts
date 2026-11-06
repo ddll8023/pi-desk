@@ -1,12 +1,12 @@
 /**
  * 本地 Desktop 配置的唯一读写者：最近项目的添加/移除、当前项目、界面偏好、窗口状态、各项目信任决定（Project Trust）
- * 与安装级 UUID、对话页模型展示偏好、快捷发送短语、扩展自动更新开关、生成式 UI 开关、记忆开关、快捷命令及手机设备授权的加载、保存与降级处理。
+ * 与安装级 UUID、对话页模型展示偏好、快捷发送短语、扩展自动更新开关、生成式 UI 开关、执行模式、记忆开关、快捷命令及手机设备授权的加载、保存与降级处理。
  *
  * 配置位于 Electron userData 目录下的 desktop-config.json。写入采用同目录临时文件加改名替换，
  * 所有读写串行执行；加载时记录文件的标识（mtime 与大小），每次写入前比对，磁盘在加载后被其他
  * 写入者改动过就放弃本次保存，不用过期内容覆盖它。结构损坏先备份再重新开始，暂时读不到时进入
  * 只读降级，避免用空配置覆盖仍然存在的记录。界面偏好、窗口状态、各项目的信任决定、安装级 UUID
- * 与对话页模型展示偏好、快捷发送短语、扩展自动更新开关、生成式 UI 开关、记忆开关、快捷命令、手机设备授权是同一文件里的可选字段，
+ * 与对话页模型展示偏好、快捷发送短语、扩展自动更新开关、生成式 UI 开关、执行模式、记忆开关、快捷命令、手机设备授权是同一文件里的可选字段，
  * 缺失或非法一律按默认值处理，不参与结构判定，也不改变版本语义；路径归一化在 project-path.ts，切换编排在
  * project-manager.ts，偏好读取在 preferences-manager.ts，窗口状态校正与保存时机在 window-state.ts，
  * 信任决定的探测与启动参数映射在 trust-manager.ts。
@@ -19,8 +19,8 @@ import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join } from 'node:path'
 import { app } from 'electron'
-import { isMarkdownDefaultView, isRightPanelTab, isTerminalLinkOpenMode } from '../../shared/preferences-api'
-import type { AutoUpdatePreference, GenuiPreference, ModelDisplayPreference, QuickSendPreference, UiPreferences, UiTheme } from '../../shared/preferences-api'
+import { isExecutionMode, isMarkdownDefaultView, isRightPanelTab, isTerminalLinkOpenMode } from '../../shared/preferences-api'
+import type { AutoUpdatePreference, ExecutionMode, ExecutionModePreference, GenuiPreference, ModelDisplayPreference, QuickSendPreference, UiPreferences, UiTheme } from '../../shared/preferences-api'
 import {
   DEFAULT_FILE_EXCLUDE_PATTERNS,
   DEFAULT_QUICK_SEND_MESSAGES,
@@ -127,6 +127,8 @@ interface StoredConfig {
   readonly genuiEnabled: boolean
   /** 可选字段：用户级全局记忆开关；缺失或非法按开启处理，显式关闭保留。 */
   readonly memoryEnabled: boolean
+  /** 可选字段：执行模式；缺失或非法按标准模式处理，它只影响新建会话的能力集。 */
+  readonly executionMode: ExecutionMode
   /** 手机设备保存身份记录与高熵凭证摘要，不保存 Cookie 原文。 */
   readonly lanDevices: readonly LanStoredDevice[]
 }
@@ -151,6 +153,8 @@ interface PersistPayload {
   readonly genuiEnabled?: boolean
   /** 未显式更新时保留当前值，避免其他配置写入将记忆开关复位。 */
   readonly memoryEnabled?: boolean
+  /** 未显式更新时保留当前值，避免其他配置写入将执行模式复位。 */
+  readonly executionMode?: ExecutionMode
   readonly lanDevices?: readonly LanStoredDevice[]
 }
 
@@ -427,6 +431,8 @@ export class DesktopConfigStore {
   private genuiEnabled = true
   /** 记忆开关默认开启：它是内置特性，用户可在设置页显式关闭。 */
   private memoryEnabled = true
+  /** 执行模式默认标准：裁剪能力集会改变 Agent 的行为范围，不由程序自己替用户收紧。 */
+  private executionMode: ExecutionMode = 'standard'
   private lanDevices: LanStoredDevice[] = []
   private windowState: WindowState = DEFAULT_WINDOW_STATE
   private projectTrust: Record<string, TrustDecision> = {}
@@ -704,6 +710,36 @@ export class DesktopConfigStore {
     })
   }
 
+  /** 读取执行模式；缺失或非法时为标准模式。 */
+  readExecutionMode(): Promise<ExecutionModePreference> {
+    return this.enqueue(async () => {
+      await this.loadFromDisk()
+      return { mode: this.executionMode }
+    })
+  }
+
+  /** 执行模式保存成功后才提交；只读降级不能假称已保存。 */
+  saveExecutionMode(preference: ExecutionModePreference): Promise<ExecutionModePreference> {
+    return this.enqueue(async () => {
+      await this.loadFromDisk()
+      if (this.readOnly) {
+        throw new DesktopConfigStorageError('本地配置处于只读状态，执行模式未保存。')
+      }
+      const next: ExecutionMode = isExecutionMode(preference.mode) ? preference.mode : 'standard'
+      await this.persist({
+        projects: this.projects,
+        currentProjectId: this.currentProjectId,
+        ui: this.ui,
+        windowState: this.windowState,
+        projectTrust: this.projectTrust,
+        authDeviceId: this.deviceIdForPersist(),
+        executionMode: next
+      })
+      this.executionMode = next
+      return { mode: next }
+    })
+  }
+
   /** 读取记忆开关；缺失或非法时为开启。 */
   readMemoryEnabled(): Promise<MemoryPreference> {
     return this.enqueue(async () => {
@@ -924,6 +960,7 @@ export class DesktopConfigStore {
       this.extensionAutoUpdate = parsed.extensionAutoUpdate
       this.genuiEnabled = parsed.genuiEnabled
       this.memoryEnabled = parsed.memoryEnabled
+      this.executionMode = parsed.executionMode
       this.lanDevices = [...parsed.lanDevices]
       this.windowState = parsed.window
       this.projectTrust = parsed.projectTrust
@@ -940,6 +977,7 @@ export class DesktopConfigStore {
     this.extensionAutoUpdate = parsed.extensionAutoUpdate
     this.genuiEnabled = parsed.genuiEnabled
     this.memoryEnabled = parsed.memoryEnabled
+    this.executionMode = parsed.executionMode
     this.lanDevices = [...parsed.lanDevices]
     this.windowState = parsed.window
     this.projectTrust = parsed.projectTrust
@@ -973,6 +1011,8 @@ export class DesktopConfigStore {
       genuiEnabled: value.genuiEnabled !== false,
       // 缺失按开启：旧配置文件里没有这个字段，而记忆默认可用；显式关闭保留。
       memoryEnabled: value.memoryEnabled !== false,
+      // 缺失按标准：模式会裁剪能力集，旧配置与非法值都回落标准，不默默收紧。
+      executionMode: isExecutionMode(value.executionMode) ? value.executionMode : 'standard',
       lanDevices: sanitizeLanDevices(value.lanDevices),
       window: sanitizeWindowState(value.window),
       projectTrust: sanitizeProjectTrust(value.projectTrust),
@@ -1041,6 +1081,7 @@ export class DesktopConfigStore {
       extensionAutoUpdate: next.extensionAutoUpdate === undefined ? this.extensionAutoUpdate : next.extensionAutoUpdate,
       genuiEnabled: next.genuiEnabled === undefined ? this.genuiEnabled : next.genuiEnabled,
       memoryEnabled: next.memoryEnabled === undefined ? this.memoryEnabled : next.memoryEnabled,
+      executionMode: next.executionMode === undefined ? this.executionMode : next.executionMode,
       lanDevices: (next.lanDevices ?? this.lanDevices).map(device => ({ ...device }))
     }
     // 这份配置是整文件写入：磁盘在加载后被别的写入者改过时，宁可放弃本次保存，也不用过期内容覆盖。

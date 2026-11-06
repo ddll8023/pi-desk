@@ -1,6 +1,6 @@
 /**
  * 保存侧栏与右侧面板的界面偏好（含侧栏展开的项目路径与文件树排除规则）、Markdown 默认视图、终端链接打开模式、
- * 快捷发送短语、扩展自动更新开关与生成式 UI 开关；窗口状态由主进程独占，不保存 Runtime 数据或单个消息块的临时开合状态。
+ * 快捷发送短语、扩展自动更新开关、生成式 UI 开关与执行模式；窗口状态由主进程独占，不保存 Runtime 数据或单个消息块的临时开合状态。
  *
  * 界面偏好是一份整体载荷：折叠状态、主题、展开的项目路径、右侧面板开合/宽度/页签、Markdown 默认视图、
  * 终端链接打开模式、文件树排除规则与两个 Git 清理策略一起写入，任一变化都保存当前完整值，避免分字段保存互相覆盖；
@@ -10,6 +10,7 @@
  * 自动更新开关默认关，只有用户显式打开后主进程才会在启动检查后自动更新扩展。
  * 生成式 UI 开关区分「最近保存值」与「当前会话已生效值」：它在会话创建期读取，保存本身不重建会话，
  * 两者不等就表示还要重新加载资源才生效；生效标记由重载成功处统一写入。
+ * 执行模式只影响新建会话加载的 Skill 集合，没有「已生效值」需要跟踪：保存后由设置页说明它在下一个会话生效。
  */
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
@@ -22,8 +23,8 @@ import {
   MAX_RIGHT_PANEL_WIDTH,
   MIN_RIGHT_PANEL_WIDTH
 } from '../../../../shared/preferences-api'
-import type { PreferencesError, MarkdownDefaultView, RightPanelTab, TerminalLinkOpenMode, UiPreferences, UiTheme } from '../../../../shared/preferences-api'
-import { getAutoUpdate, getGenui, getPreferences, getQuickSend, setAutoUpdate, setGenui, setQuickSend, setUiPreferences } from '../services/preferences'
+import type { ExecutionMode, PreferencesError, MarkdownDefaultView, RightPanelTab, TerminalLinkOpenMode, UiPreferences, UiTheme } from '../../../../shared/preferences-api'
+import { getAutoUpdate, getExecutionMode, getGenui, getPreferences, getQuickSend, setAutoUpdate, setExecutionMode, setGenui, setQuickSend, setUiPreferences } from '../services/preferences'
 
 /** 快捷发送短语的保存状态；失败保留原列表并把原因交给设置页展示。 */
 type QuickSendView =
@@ -39,6 +40,12 @@ type AutoUpdateView =
 
 /** 生成式 UI 开关的保存状态；与自动更新开关分开，失败原因只影响这一个控件。 */
 type GenuiView =
+  | { readonly phase: 'idle' }
+  | { readonly phase: 'saving' }
+  | { readonly phase: 'error'; readonly error: PreferencesError }
+
+/** 执行模式的保存状态；失败原因只影响这一个控件。 */
+type ExecutionModeView =
   | { readonly phase: 'idle' }
   | { readonly phase: 'saving' }
   | { readonly phase: 'error'; readonly error: PreferencesError }
@@ -84,6 +91,11 @@ export const usePreferencesStore = defineStore('preferences', () => {
   const genuiAppliedEnabled = ref(true)
   /** 开关是否成功从配置读到；读失败时界面显示的是默认值，设置页据此提示。 */
   const genuiLoaded = ref(false)
+  /** 执行模式；读取失败或非法时按标准处理，与主进程默认口径一致。 */
+  const executionMode = ref<ExecutionMode>('standard')
+  const executionModeView = ref<ExecutionModeView>({ phase: 'idle' })
+  /** 模式是否成功从配置读到；读失败时界面显示的是默认值，设置页据此提示。 */
+  const executionModeLoaded = ref(false)
   /** 首次读取是否已结束；用于侧栏挂载与设置控件启用，读取失败也结束等待。 */
   const ready = ref(false)
   const actionError = ref<PreferencesError | null>(null)
@@ -94,12 +106,13 @@ export const usePreferencesStore = defineStore('preferences', () => {
   async function initialize(): Promise<void> {
     if (ready.value) return
 
-    // 四份偏好互相独立：快捷发送、自动更新或生成式 UI 开关读取失败不影响侧栏与主题，也不把启动变成阻塞。
-    const [result, quickSend, autoUpdate, genui] = await Promise.all([
+    // 五份偏好互相独立：快捷发送、自动更新、生成式 UI 开关或执行模式读取失败不影响侧栏与主题，也不把启动变成阻塞。
+    const [result, quickSend, autoUpdate, genui, executionModeResult] = await Promise.all([
       getPreferences(),
       getQuickSend(),
       getAutoUpdate(),
-      getGenui()
+      getGenui(),
+      getExecutionMode()
     ])
     if (result.ok) {
       sidebarCollapsed.value = result.data.sidebarCollapsed
@@ -123,6 +136,10 @@ export const usePreferencesStore = defineStore('preferences', () => {
       genuiSavedEnabled.value = genui.data.enabled
       genuiAppliedEnabled.value = genui.data.enabled
       genuiLoaded.value = true
+    }
+    if (executionModeResult.ok) {
+      executionMode.value = executionModeResult.data.mode
+      executionModeLoaded.value = true
     }
     // 读取失败也结束等待：界面继续使用默认布局，不把偏好读取变成启动阻塞。
     ready.value = true
@@ -397,6 +414,25 @@ export const usePreferencesStore = defineStore('preferences', () => {
     genuiAppliedEnabled.value = enabled
   }
 
+  /**
+   * 保存执行模式：保存成功才用主进程确认后的值覆盖当前值，失败保留原值并暴露错误。
+   * 模式在会话创建期读取，保存本身不改变已打开的会话。
+   */
+  async function saveExecutionMode(mode: ExecutionMode): Promise<boolean> {
+    if (executionModeView.value.phase === 'saving') return false
+
+    executionModeView.value = { phase: 'saving' }
+    const result = await setExecutionMode({ mode })
+    if (!result.ok) {
+      executionModeView.value = { phase: 'error', error: result.error }
+      return false
+    }
+    executionMode.value = result.data.mode
+    executionModeLoaded.value = true
+    executionModeView.value = { phase: 'idle' }
+    return true
+  }
+
   return {
     sidebarCollapsed,
     theme,
@@ -419,6 +455,9 @@ export const usePreferencesStore = defineStore('preferences', () => {
     genuiSavedEnabled,
     genuiAppliedEnabled,
     genuiLoaded,
+    executionMode,
+    executionModeView,
+    executionModeLoaded,
     ready,
     actionError,
     initialize,
@@ -443,6 +482,7 @@ export const usePreferencesStore = defineStore('preferences', () => {
     saveQuickSendMessages,
     saveExtensionAutoUpdate,
     saveGenuiEnabled,
-    markGenuiApplied
+    markGenuiApplied,
+    saveExecutionMode
   }
 })

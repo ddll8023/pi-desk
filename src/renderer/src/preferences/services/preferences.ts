@@ -1,7 +1,9 @@
-/** 封装界面偏好、对话页模型展示偏好、快捷发送短语、扩展自动更新开关与生成式 UI 开关读写，重建普通载荷并保留桥接失败原因。 */
+/** 封装界面偏好、对话页模型展示偏好、快捷发送短语、扩展自动更新开关、生成式 UI 开关与执行模式的读写，重建普通载荷并保留桥接失败原因。 */
 import type {
   AutoUpdatePreference,
   AutoUpdateResult,
+  ExecutionModePreference,
+  ExecutionModeResult,
   GenuiPreference,
   GenuiResult,
   ModelDisplayPreference,
@@ -151,6 +153,28 @@ export async function setGenui(preference: GenuiPreference): Promise<GenuiResult
   if (!bridge || typeof bridge.setGenui !== 'function') return unavailable()
   try {
     return await bridge.setGenui({ enabled: preference.enabled === true })
+  } catch (error) {
+    return callFailed(error)
+  }
+}
+
+/** 读取执行模式；失败时页面按标准模式展示。 */
+export async function getExecutionMode(): Promise<ExecutionModeResult> {
+  const bridge = window.desktop
+  if (!bridge || typeof bridge.getExecutionMode !== 'function') return unavailable()
+  try {
+    return await bridge.getExecutionMode()
+  } catch (error) {
+    return callFailed(error)
+  }
+}
+
+/** 保存执行模式；只影响新建会话加载的 Skill 集合，已打开的会话不变。 */
+export async function setExecutionMode(preference: ExecutionModePreference): Promise<ExecutionModeResult> {
+  const bridge = window.desktop
+  if (!bridge || typeof bridge.setExecutionMode !== 'function') return unavailable()
+  try {
+    return await bridge.setExecutionMode({ mode: preference.mode })
   } catch (error) {
     return callFailed(error)
   }

@@ -11,7 +11,7 @@
  * 六类偏好共用错误码。
  * IPC 契约与响应校验在 shared/preferences-api.ts，请求参数与调用者校验在 main/index.ts。
  */
-import type { AutoUpdatePreference, AutoUpdateResult, GenuiPreference, GenuiResult, ModelDisplayPreference, ModelDisplayResult, PreferencesError, PreferencesResult, QuickSendPreference, QuickSendResult, UiPreferences } from '../../shared/preferences-api'
+import type { AutoUpdatePreference, AutoUpdateResult, ExecutionModePreference, ExecutionModeResult, GenuiPreference, GenuiResult, ModelDisplayPreference, ModelDisplayResult, PreferencesError, PreferencesResult, QuickSendPreference, QuickSendResult, UiPreferences } from '../../shared/preferences-api'
 import type { QuickCommandsPreference, QuickCommandsResult } from '../../shared/quick-commands-api'
 import type { DesktopConfigStore } from '../config/desktop-config-store'
 import { DesktopConfigStorageError } from '../config/desktop-config-store'
@@ -135,6 +135,24 @@ export class PreferencesManager {
       return { ok: true, data: await this.options.store.saveGenui(preference) }
     } catch (error) {
       return this.failure(error, '保存生成式 UI 开关时发生未预期的内部错误。')
+    }
+  }
+
+  /** 读取执行模式；缺失或非法时为主进程回落的标准模式。 */
+  async getExecutionMode(): Promise<ExecutionModeResult> {
+    try {
+      return { ok: true, data: await this.options.store.readExecutionMode() }
+    } catch (error) {
+      return this.failure(error, '读取执行模式时发生未预期的内部错误。')
+    }
+  }
+
+  /** 保存执行模式；只影响新建会话加载的 Skill 集合，不写 Pi 配置。 */
+  async setExecutionMode(preference: ExecutionModePreference): Promise<ExecutionModeResult> {
+    try {
+      return { ok: true, data: await this.options.store.saveExecutionMode(preference) }
+    } catch (error) {
+      return this.failure(error, '保存执行模式时发生未预期的内部错误。')
     }
   }
 

@@ -1,4 +1,4 @@
-/** 界面偏好与快捷命令的 IPC：界面主题与面板偏好、对话页模型展示偏好、快捷发送短语、全局与项目范围快捷命令、扩展自动更新与生成式界面开关。未知字段与非法取值一律拒绝。 */
+/** 界面偏好与快捷命令的 IPC：界面主题与面板偏好、对话页模型展示偏好、快捷发送短语、全局与项目范围快捷命令、扩展自动更新、生成式界面开关与执行模式。未知字段与非法取值一律拒绝。 */
 
 import type { IpcMainInvokeEvent } from 'electron'
 import {
@@ -11,10 +11,13 @@ import {
   PREFERENCES_GET_AUTO_UPDATE_CHANNEL,
   PREFERENCES_SET_AUTO_UPDATE_CHANNEL,
   PREFERENCES_GET_GENUI_CHANNEL,
-  PREFERENCES_SET_GENUI_CHANNEL
+  PREFERENCES_SET_GENUI_CHANNEL,
+  PREFERENCES_GET_EXECUTION_MODE_CHANNEL,
+  PREFERENCES_SET_EXECUTION_MODE_CHANNEL
 } from '../../shared/preferences-api'
 import type {
   AutoUpdateResult,
+  ExecutionModeResult,
   GenuiResult,
   ModelDisplayResult,
   PreferencesErrorCode,
@@ -23,6 +26,7 @@ import type {
 } from '../../shared/preferences-api'
 import {
   isAutoUpdatePreference,
+  isExecutionModePreference,
   isGenuiPreference,
   isUiPreferences,
   isModelDisplayPreference,
@@ -145,6 +149,30 @@ export function registerPreferencesHandlers(pageUrl: string): void {
         return { ok: false, error: { code: 'INVALID_REQUEST', message: '生成式 UI 开关只接受一个布尔值。' } }
       }
       return preferencesManager.setGenui(args[0])
+    }
+  )
+  handle(
+    PREFERENCES_GET_EXECUTION_MODE_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<ExecutionModeResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return { ok: false, error: { code: 'FORBIDDEN', message: '不允许此页面调用桌面接口。' } }
+      }
+      if (args.length !== 0) {
+        return { ok: false, error: { code: 'INVALID_REQUEST', message: '执行模式读取接口不接受参数。' } }
+      }
+      return preferencesManager.getExecutionMode()
+    }
+  )
+  handle(
+    PREFERENCES_SET_EXECUTION_MODE_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<ExecutionModeResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return { ok: false, error: { code: 'FORBIDDEN', message: '不允许此页面调用桌面接口。' } }
+      }
+      if (args.length !== 1 || !isExecutionModePreference(args[0])) {
+        return { ok: false, error: { code: 'INVALID_REQUEST', message: '执行模式只接受 fast 或 standard。' } }
+      }
+      return preferencesManager.setExecutionMode(args[0])
     }
   )
   handle(

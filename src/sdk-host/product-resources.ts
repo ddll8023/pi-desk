@@ -16,6 +16,13 @@ import {
   MEMORY_CONFIGURATION_ENV, serializeMemoryConfiguration
 } from '../shared-process/memory-runtime'
 import type { MemoryHostConfiguration } from '../shared-process/memory-runtime'
+import type { ExecutionMode } from '../shared/preferences-api'
+
+/**
+ * 快速模式下不加载的规范 Skill：它们要求先讨论方案或同步文档，与快速模式的定位相反。
+ * 只作用于用户级 Skill；随包产品 Skill 是必要能力，裁掉会让 assertLoaded 失败。
+ */
+const FAST_MODE_BLOCKED_SKILLS: readonly string[] = ['design-protocol', 'code-doc-sync', 'architecture-redesign']
 
 type Sdk = typeof import('@earendil-works/pi-coding-agent')
 type ResourceOptions = NonNullable<CreateAgentSessionServicesOptions['resourceLoaderOptions']>
@@ -30,6 +37,8 @@ interface ProductResourceInput {
   readonly eventBus: EventBus
   /** 桌面受管记忆配置；非空时扩展必须能同步读到同一份配置，不允许静默退回 CLI 探测。 */
   readonly memory: MemoryHostConfiguration | null
+  /** 主进程给出的执行模式；只用于裁剪用户级 Skill 集合。 */
+  readonly mode: ExecutionMode
 }
 
 interface ProductResourceAssembly {
@@ -98,8 +107,18 @@ export async function prepareProductResources(sdk: Sdk, input: ProductResourceIn
       }
     }
     const reserved = new Set(bundle.skills.map(item => item.id))
+    const userSkills = base.skills.filter(item => !reserved.has(item.name))
+    const blocked = new Set(input.mode === 'fast' ? FAST_MODE_BLOCKED_SKILLS : [])
+    if (blocked.size > 0) {
+      // 留诊断：会话里看不到这些 Skill 是模式导致的，不是安装或加载出了问题。
+      for (const skill of userSkills) {
+        if (blocked.has(skill.name)) {
+          skillNotes.push({ type: 'warning', message: `快速模式未加载 Skill ${skill.name}`, path: skill.filePath })
+        }
+      }
+    }
     return {
-      skills: [...productSkills, ...base.skills.filter(item => !reserved.has(item.name))],
+      skills: [...productSkills, ...userSkills.filter(item => !blocked.has(item.name))],
       // 只丢掉 SDK 的同名 collision 条目；本层给出的说明保留，冲突双方路径因此仍可见。
       diagnostics: [...skillNotes, ...base.diagnostics.filter(item => !item.collision
         || item.collision.resourceType !== 'skill' || !reserved.has(item.collision.name))]

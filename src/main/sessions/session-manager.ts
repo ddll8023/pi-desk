@@ -16,6 +16,7 @@
  * 会话文件删除后，按界面偏好清理该会话独占且无未提交改动的任务工作树；清理失败不回滚删除，也不影响列表返回。
  * 有活动操作而重载请求未确认时直接拒绝，不自动中断、不排队、不重放已提交的内容。
  * 生成式 UI 开关在每次授权时读一次并随目标下发给宿主；读失败按开启处理，不让偏好故障阻断会话。
+ * 执行模式同样在授权时读一次随目标下发，宿主据此裁剪 Skill 集合；读失败按标准模式处理。
  * IPC 契约与校验在 shared/session-api.ts。
  */
 import type {
@@ -32,6 +33,7 @@ import type {
 } from '../../shared/session-api'
 import { isSessionOpenRequest } from '../../shared/session-api'
 import type { RuntimeStatus } from '../../shared/runtime-api'
+import type { ExecutionMode } from '../../shared/preferences-api'
 import type { WorkspaceManager } from '../workspaces/workspace-manager'
 import { WorkspaceStorageError } from '../workspaces/workspace-store'
 import { WorktreeOperationError } from '../git/worktree-service'
@@ -91,6 +93,8 @@ export interface SessionManagerOptions {
   }
   /** 生成式 UI 开关：由主进程读配置后交给宿主决定是否注册该内置扩展。 */
   readonly readGenuiEnabled: () => Promise<boolean>
+  /** 执行模式：由主进程读配置后交给宿主裁剪 Skill 集合，不改变任何授权规则。 */
+  readonly readExecutionMode: () => Promise<ExecutionMode>
   /** 删除会话后是否清理该会话关联且无未提交改动的工作树；由界面偏好决定，读不到时按不清理处理。 */
   readonly readCleanupOnSessionDelete?: () => Promise<boolean>
   /** 按会话清理其独占的工作树；实现自己负责跳过共享、脏工作树等情况。 */
@@ -118,6 +122,7 @@ export class SessionManager {
       await this.options.workspaces.bindSession(projectPath, identity?.sessionId ?? null, workspaceId)
       return { projectPath, workspaceId, sessionDir: getProjectSessionDir(projectPath), trusted: trust.decision === 'trusted',
         genui: await this.genuiEnabled(),
+        mode: await this.executionMode(),
         worktreePath: workspace.kind === 'task' ? workspace.rootPath : null,
         sessionId: identity?.sessionId ?? null, sessionFile: identity?.sessionFile ?? null,
         fileStamp: identity?.fileStamp ?? null }
@@ -137,6 +142,18 @@ export class SessionManager {
       return await this.options.readGenuiEnabled()
     } catch {
       return true
+    }
+  }
+
+  /**
+   * 读执行模式；读失败按标准模式处理。偏好读不到时不能默默收紧 Agent 的能力集，
+   * 也不应因此让用户建不了会话。
+   */
+  private async executionMode(): Promise<ExecutionMode> {
+    try {
+      return await this.options.readExecutionMode()
+    } catch {
+      return 'standard'
     }
   }
 

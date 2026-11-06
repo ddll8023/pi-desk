@@ -13,6 +13,7 @@ import AppButton from '../../ui/AppButton.vue'
 import ModelSettingsView from '../../providers/components/ModelSettingsView.vue'
 import QuickSendSection from '../../preferences/components/QuickSendSection.vue'
 import QuickCommandsSection from '../../preferences/components/QuickCommandsSection.vue'
+import ExecutionModeSection from '../../preferences/components/ExecutionModeSection.vue'
 import TerminalSettingsSection from '../../workspace/components/TerminalSettingsSection.vue'
 import ResourceView from '../../resources/components/ResourceView.vue'
 import GenuiSettingsSection from '../../genui/components/GenuiSettingsSection.vue'
@@ -112,7 +113,10 @@ const markdownViewOptions = [
         <LanRemoteSettingsSection v-else-if="activeSection === 'lan-remote'" />
         <ModelSettingsView v-else-if="activeSection === 'model'" />
         <ResourceView v-else-if="activeSection === 'resources'" />
-        <GenuiSettingsSection v-else-if="activeSection === 'features'" />
+        <template v-else-if="activeSection === 'features'">
+          <GenuiSettingsSection />
+          <ExecutionModeSection />
+        </template>
         <MemorySettingsSection v-else-if="activeSection === 'memory'" />
         <UsageStatsSection v-else-if="activeSection === 'usage'" />
         <VersionUpdateSection v-else />
