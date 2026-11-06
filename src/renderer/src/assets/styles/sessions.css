@@ -1,14 +1,14 @@
 /* 归集会话与聊天能力相关的组件样式。 */
 @layer components {
-/* 输入坞：附件行、输入行、工具条三段竖排；浮层以坞为定位基准，整块浮在消息区底色上。未获焦悬停微提亮，聚焦贴合圆角发光。 */
+/* 输入坞：附件行与输入行竖排，信息行在坞外下方；浮层以坞为定位基准，整块浮在消息区底色上。坞内只有一层底色，不再有工具条底带与分隔线。未获焦悬停微提亮，聚焦贴合圆角发光。 */
 .prompt-composer-shell {
     position: relative;
     display: flex;
     flex-direction: column;
     gap: 0.375rem;
-    padding: 0.5rem 1rem 0;
+    padding: 0.5rem 0.75rem;
     border: 1px solid var(--color-desk-line-strong);
-    border-radius: var(--radius-desk-lg);
+    border-radius: var(--radius-desk-xl);
     background: var(--color-desk-surface);
     box-shadow: var(--shadow-desk-dock);
     transition: border-color var(--default-transition-duration) ease, box-shadow var(--default-transition-duration) ease;
@@ -26,12 +26,15 @@
     border-color: var(--color-desk-accent);
     background: var(--color-desk-accent-soft);
   }
-/* 输入行高度优先由浏览器 field-sizing 原生按内容自适应，未到上限不出现滚动条，矮窗口下上限不超过 40vh。 */
+/* 输入行高度优先由浏览器 field-sizing 原生按内容自适应，未到上限不出现滚动条，矮窗口下上限不超过 40vh。
+     高度与坞内两枚圆形键配合：单行时两者底边对齐，多行时随下沿下沉。 */
 .prompt-composer-input {
     field-sizing: content;
+    flex: 1 1 auto;
+    min-width: 0;
     min-height: 2.25rem;
     max-height: min(12.5rem, 40vh);
-    padding: 0.375rem 0 0.5rem;
+    padding: 0.35rem 0;
     border: 0;
     border-radius: var(--radius-desk-md);
     background: transparent;
@@ -41,20 +44,83 @@
 .prompt-composer-input:focus-visible {
     outline: none;
   }
-.prompt-composer-toolbar {
+/* 输入行：＋ 菜单触发键、输入框与发送/停止键同在底边基线上，两侧键不因多行输入上浮。 */
+.prompt-composer-row {
     display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 0.75rem;
-    margin: 0 -1rem;
-    border-top: 1px solid var(--color-desk-line);
-    border-radius: 0 0 var(--radius-desk-lg) var(--radius-desk-lg);
-    background: var(--color-desk-surface-subtle);
-    padding: 0.5rem 1rem;
+    align-items: flex-end;
+    gap: 0.375rem;
   }
-/* 信息行：状态文本、待回答入口与用量指标同处左侧，占满剩余宽度并允许换行。 */
+/* ＋ 菜单：左侧分类栏 + 右侧内容面板；浮层以触发键为基准展开，宽度上限防止内容撑开。
+     选择器带上坞前缀，才盖住 ui.css 里后引入的 .dialog-popover（方向与宽度、滚动都从那里接管）。 */
+.prompt-composer-plus {
+    position: relative;
+    flex: none;
+  }
+.prompt-composer-shell .prompt-composer-plus-menu {
+    position: absolute;
+    bottom: calc(100% + 0.375rem);
+    left: 0;
+    display: flex;
+    flex-direction: row;
+    gap: 0.25rem;
+    width: min(21rem, 82vw);
+    max-height: 24rem;
+    overflow-y: auto;
+    padding: 0.25rem;
+  }
+/* 分类栏：固定宽度竖列，选中项用浅强调底色与强调文字，未选中只有悬停浅底。 */
+.prompt-composer-plus-cats {
+    display: flex;
+    flex: none;
+    flex-direction: column;
+    gap: 0.125rem;
+    width: 5.25rem;
+    padding: 0.125rem;
+  }
+.prompt-composer-plus-cat {
+    @apply w-full rounded-desk-sm px-2 py-1.5 text-left text-xs font-medium whitespace-nowrap transition-colors;
+    color: var(--color-desk-muted);
+  }
+.prompt-composer-plus-cat:not(:disabled):not([aria-selected='true']):hover {
+    background: var(--color-desk-surface-subtle);
+  }
+.prompt-composer-plus-cat[aria-selected='true'] {
+    background: var(--color-desk-accent-soft);
+    color: var(--color-desk-accent);
+  }
+/* 内容面板：占满剩余宽度；最小高度保证切换分类时浮层不跳动。 */
+.prompt-composer-plus-panes {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 6rem;
+    padding: 0.125rem;
+  }
+/* 单个分类面板：竖排内容，行间距由行自身的内距提供。 */
+.prompt-composer-plus-pane {
+    @apply flex flex-col;
+  }
+/* 面板内的一行：左侧动作名，右侧次要说明；与分类栏同一档行高。 */
+.prompt-composer-plus-row {
+    @apply flex w-full items-center gap-2 rounded-desk-sm px-2 py-1.5 text-left text-xs transition-colors;
+  }
+.prompt-composer-plus-row:not(:disabled):hover {
+    background: var(--color-desk-surface-subtle);
+  }
+.prompt-composer-plus-row-note {
+    @apply ml-auto shrink-0 text-2xs;
+    color: var(--color-desk-muted);
+  }
+/* 坞内的图标键改圆形：只作用于本坞，不改全应用共用的图标变体。 */
+.prompt-composer-shell .icon-button-square,
+  .prompt-composer-shell .icon-button-square-primary {
+    border-radius: 999px;
+  }
+/* 信息行：坞下方一行，水平居中；状态文本、待回答入口与用量指标从左向右排列并允许换行，
+     坞内只留输入控件，异常与统计数据不再挤占输入行高度。 */
 .prompt-composer-meta {
-    @apply flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1;
+    @apply flex min-w-0 flex-wrap items-center justify-center gap-x-3 gap-y-1 px-1 pt-2;
   }
 /* 状态文本只在异常与进行中出现；不加重字重，避免与用量数据抢注意力。 */
 .prompt-composer-status {
@@ -80,7 +146,8 @@
 .prompt-usage:hover {
     @apply text-desk-ink;
   }
-/* 用量分项 chip：浅底圆角把数值分组，等宽数字避免数值变化时行内抖动。 */
+/* 用量分项 chip：浅底圆角把数值分组，等宽数字避免数值变化时行内抖动；
+     信息行在沉陷面上，chip 用坞面白底浮起来，与输入坞同色但不抢输入行。 */
 .prompt-metric {
     @apply inline-flex items-baseline gap-1 rounded-full border px-2 py-0.5 tabular-nums;
     border-color: color-mix(in srgb, var(--color-desk-line-strong) 55%, transparent);
@@ -131,9 +198,9 @@
 .usage-note {
     @apply font-mono text-2xs text-desk-muted;
   }
-/* 坞内附件 chip：缩略图 + 文件名，横排不换行，宽度由文件名截断控制。 */
+/* 坞内附件 chip：缩略图 + 文件名，横排不换行，宽度由文件名截断控制；描边与坞内其他控件同强度。 */
 .prompt-composer-attachment {
-    @apply flex items-center gap-2 rounded-desk-sm border border-desk-line bg-desk-surface-subtle py-0.5 pr-0.5 pl-1;
+    @apply flex items-center gap-2 rounded-desk-sm border border-desk-line-strong bg-desk-surface-subtle py-0.5 pr-0.5 pl-1;
     max-width: min(15rem, 100%);
   }
 .prompt-composer-attachment-thumb {
@@ -142,11 +209,6 @@
 /* 待发附件行：位于坞内顶部，随坞宽度换行。 */
 .prompt-composer-attachments {
     @apply flex flex-wrap gap-2;
-  }
-/* 快捷发送下拉：贴着触发键浮在工具条上方。按最长条目取宽但不超过上限，条目保持单行不折行；
-     条数由设置决定，超过高度上限时在浮层内滚动，键盘高亮才跟得上。 */
-.prompt-composer-menu {
-    @apply absolute right-0 bottom-full z-40 mb-2 max-h-64 w-max min-w-[7rem] max-w-[min(20rem,55vw)] overflow-y-auto rounded-desk-md border border-desk-line bg-desk-surface p-1 shadow-desk-pop;
   }
 /* 输入坞的补全条目：名称独占一行、说明另起一行，说明截断为单行，浮层不被长描述撑开；
      四组候选（界面命令 / 技能 / 模板 / 扩展命令）共用这套排版，名称长短不影响说明的起始位置。 */
@@ -442,9 +504,9 @@
     align-self: flex-start;
     padding: 1.5rem 1.75rem;
     border: 1px solid var(--color-desk-line);
-    border-radius: 18px;
+    border-radius: var(--radius-desk-xl);
     background: var(--color-desk-surface);
-    box-shadow: var(--shadow-desk-raise), 0 12px 34px -22px rgba(23, 37, 47, 0.1);
+    box-shadow: var(--shadow-desk-card);
     animation: chat-card-entrance var(--motion-duration-base) var(--motion-ease-entrance);
     transition: border-color var(--default-transition-duration) ease, box-shadow var(--default-transition-duration) ease;
   }
@@ -1027,11 +1089,7 @@
 .chat-role {
     @apply text-xs font-semibold text-desk-ink;
   }
-@media (prefers-color-scheme: dark) {
-    .chat-message-assistant {
-      box-shadow: 0 10px 32px -20px rgba(0, 0, 0, 0.4);
-    }
-  }
+/* 助手卡片的阴影已由 --shadow-desk-card 令牌提供明暗两套值，这里不再单独覆盖。 */
 @media (max-width: 799px) {
     .chat-message-assistant {
       padding: 1.125rem 1rem;

@@ -1,5 +1,5 @@
 <!-- 原位新建使用默认模型预读，不把旧实例的模型当作新会话模型；结束旧实例期间禁止模型操作。
-     输入坞模型选择器：未选项目时也读全局模型目录；选中只切换当前会话或草稿模型，候选项里的「设为默认」才写 Pi 自身默认模型（settings.json），会话切换与默认模型写入互不联动；候选项排除设置中隐藏的模型。 -->
+     输入坞模型选择器（内联胶囊或 ＋ 菜单行两种使用位置）：未选项目时也读全局模型目录；选中只切换当前会话或草稿模型，候选项里的「设为默认」才写 Pi 自身默认模型（settings.json），会话切换与默认模型写入互不联动；候选项排除设置中隐藏的模型。 -->
 <script setup lang="ts">
 import { computed, onUnmounted, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
@@ -15,7 +15,11 @@ const props = withDefaults(defineProps<{
   readonly newConversation?: boolean
   /** 旧实例结束或新绑定确认期间，禁止改选与手动刷新。 */
   readonly resetting?: boolean
-}>(), { newConversation: false, resetting: false })
+  /** 使用位置：输入坞内联胶囊（inline）或 ＋ 菜单行（menu）；菜单行改为占满整行的行式触发器。 */
+  readonly variant?: 'inline' | 'menu'
+}>(), { newConversation: false, resetting: false, variant: 'inline' })
+
+const isMenu = computed(() => props.variant === 'menu')
 
 const runtimeStore = useRuntimeStore()
 const sessionStore = useSessionStore()
@@ -277,7 +281,7 @@ function refreshModels(): void {
 </script>
 
 <template>
-  <div class="app-runtime-model" :class="{ 'is-error': error !== null }" :aria-busy="busy">
+  <div class="app-runtime-model" :class="{ 'is-error': error !== null, 'is-menu': isMenu }" :aria-busy="busy">
     <div class="runtime-model-control">
       <AppSelect
         id="runtime-model-select"
@@ -328,12 +332,44 @@ function refreshModels(): void {
 </template>
 
 <style scoped>
-/* 常驻在输入坞动作组里：宽度随模型名自适应，上限防止长名撑开工具条。 */
+/* 输入坞里的两种使用位置：内联时宽度随模型名自适应、上限防止长名撑开输入坞；菜单行里占满整行。 */
 .app-runtime-model {
   position: relative;
   min-width: 0;
   max-width: 16rem;
   flex: none;
+}
+.app-runtime-model.is-menu {
+  max-width: none;
+  flex: 1 1 auto;
+}
+/* 菜单行里的触发器退成安静的行式控件：不再自带底色、描边与投影，悬停跟菜单项一样只变色。 */
+.app-runtime-model.is-menu .runtime-model-control :deep(.app-select-trigger) {
+  width: 100%;
+  height: 30px;
+  border: 0;
+  border-radius: var(--radius-desk-sm);
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
+  color: var(--color-desk-ink);
+}
+.app-runtime-model.is-menu .runtime-model-control :deep(.app-select-trigger:not(:disabled):hover) {
+  background: transparent;
+  color: var(--color-desk-accent);
+}
+.app-runtime-model.is-menu .runtime-model-control :deep(.app-select-trigger[aria-expanded="true"]) {
+  box-shadow: none;
+  color: var(--color-desk-accent);
+}
+/* 设置默认的反馈在菜单里改为向下展开：向上会被菜单的滚动区裁掉。 */
+.app-runtime-model.is-menu .runtime-model-notice {
+  top: 100%;
+  right: auto;
+  bottom: auto;
+  left: 0;
+  margin-top: 0.35rem;
+  margin-bottom: 0;
 }
 .runtime-model-control {
   display: flex;

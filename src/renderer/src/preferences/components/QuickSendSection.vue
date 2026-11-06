@@ -1,4 +1,4 @@
-<!-- 设置页的快捷输入区块：编辑输入坞快捷发送下拉的候选短语。
+<!-- 设置页的快捷输入区块：编辑输入坞 ＋ 菜单「消息」栏里的候选短语。
      编辑只改本地草稿，点保存才写入界面偏好；主进程保存成功后才提交，失败保留草稿并就地提示。
      规范化规则与主进程存储层保持一致，用户看到的就是实际会被保存的内容。 -->
 <script setup lang="ts">
@@ -79,7 +79,7 @@ async function save(): Promise<void> {
   <div class="settings-section-stack">
     <header>
       <h1 class="text-xl font-semibold tracking-tight">快捷输入</h1>
-      <p class="mt-1 text-sm text-desk-muted">输入坞快捷发送下拉里的短语，点一下就用该短语直接发送。</p>
+      <p class="mt-1 text-sm text-desk-muted">输入坞 ＋ 菜单「消息」栏里的短语，点一下就用该短语直接发送。</p>
     </header>
 
     <section class="settings-section" aria-labelledby="settings-quick-send-title">

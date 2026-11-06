@@ -840,7 +840,7 @@ onBeforeUnmount(() => {
   <section v-show="!props.hidden || pendingPrompt !== null" class="relative flex min-h-0 flex-1 flex-col bg-desk-canvas-sunken" :inert="props.hidden && pendingPrompt === null" :aria-hidden="props.hidden && pendingPrompt === null">
     <div
       ref="scroller"
-      class="scroll-area min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-6 [overflow-anchor:none]"
+      class="scroll-area min-h-0 flex-1 overflow-y-auto px-4 pt-5 pb-3 sm:px-6 [overflow-anchor:none]"
       @scroll.passive="onScroll"
       @wheel.passive="onWheel"
       @pointerdown="onScrollerPointerDown"

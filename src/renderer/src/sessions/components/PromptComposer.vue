@@ -1,7 +1,7 @@
 <!-- 图片与编号说明由坞内附件区独立管理；点击发送即固定提示词、图片及标注快照，说明由 SDK 独立资料消息承接。
      结果未确认时可补读同步，确认结束原运行后恢复输入，不自动重发。
      原位新建以独立草稿承接输入：旧实例结束期间可编辑但不发送，首次发送才建立新会话。
-     Prompt 输入坞：处理输入法组合态、Enter 发送与 Shift+Enter 换行、焦点回归与重复提交、响应侧栏「新建」的聚焦请求并给出一次性提示，并在 Agent 运行期间原位提供停止入口；在 Agent 运行与流式响应期间草稿文本、图片附件与标注编辑保持可用，点击发送时才校验会话空闲；同时承接 Extension 的 set_editor_text 填充文本、图片附件的选择/文本框与活动视窗全局快捷粘贴（兼容系统截图提取）/拖拽入口、输入行按内容自动增高、快捷发送下拉（短语取自界面偏好，可在设置里增删改与排序）、Pi 命令的斜杠模糊补全（Runtime 就绪后用运行中的命令清单，未就绪时用主进程预读的技能清单，按类型分组并按匹配优先级排序；另含 Desktop 层自己拦截的界面命令）与 `@` 项目文件引用（只写入相对路径文本，不传文件内容）；右侧文件树的行拖入坞内也走同一条相对路径引用规则。底部工具条左侧是信息行：异常与进行中的状态文本、被收起的 Extension 对话入口与会话用量指标（缓存命中率、上下文占用与平均速率，点击开明细；累计 token 与费用只在明细浮层展示）；右侧是模型选择、附件、快捷发送与发送/停止按钮。Extension 的 setStatus 项不在输入区展示。 -->
+     Prompt 输入坞：处理输入法组合态、Enter 发送与 Shift+Enter 换行、焦点回归与重复提交、响应侧栏「新建」的聚焦请求并给出一次性提示，并在 Agent 运行期间原位提供停止入口；在 Agent 运行与流式响应期间草稿文本、图片附件与标注编辑保持可用，点击发送时才校验会话空闲；同时承接 Extension 的 set_editor_text 填充文本、图片附件的选择/文本框与活动视窗全局快捷粘贴（兼容系统截图提取）/拖拽入口、输入行按内容自动增高、＋ 菜单内的常用消息（短语取自界面偏好，可在设置里增删改与排序，点击即发送）、Pi 命令的斜杠模糊补全（Runtime 就绪后用运行中的命令清单，未就绪时用主进程预读的技能清单，按类型分组并按匹配优先级排序；另含 Desktop 层自己拦截的界面命令）与 `@` 项目文件引用（只写入相对路径文本，不传文件内容）；右侧文件树的行拖入坞内也走同一条相对路径引用规则。输入坞是单行结构：左侧 ＋ 菜单集中放置图片附件、模型选择与常用消息（菜单本身是分类栏 + 内容面板两栏），中间是输入行，右侧是发送/停止键；坞下方一行是水平居中的信息行：异常与进行中的状态文本、被收起的 Extension 对话入口与会话用量指标（缓存命中率、上下文占用与平均速率，点击开明细；累计 token 与费用只在明细浮层展示）。Extension 的 setStatus 项不在输入区展示。 -->
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
@@ -172,15 +172,27 @@ function applyRequestedInput(): void {
 
 watch(() => sessionViewStore.requestedInput, applyRequestedInput)
 
-/** 快捷发送候选：与草稿内容无关，选中即用该短语发起一次提交；短语来自界面偏好，可在设置里编辑。 */
+/** 常用消息候选：与草稿内容无关，选中即用该短语发起一次提交；短语来自界面偏好，可在设置里编辑。 */
 const quickSendMessages = computed(() => preferencesStore.quickSendMessages)
-const quickSendOpen = ref(false)
-const quickSendIndex = ref(0)
-const quickSendList = ref<HTMLElement | null>(null)
-/** 触发按钮上显示的当前短语；列表为空时为 undefined，此时按钮也是禁用的。 */
-const quickSendCurrent = computed(() => quickSendMessages.value[quickSendIndex.value])
-/** 下拉外层引用：用于判断一次点击是否落在下拉之外。 */
-const quickSend = ref<HTMLElement | null>(null)
+/** ＋ 菜单的分类：图片与模型各自一栏，常用消息一栏；默认落在最常用的常用消息上。 */
+const PLUS_CATEGORIES = [
+  { key: 'image', label: '图片' },
+  { key: 'model', label: '模型' },
+  { key: 'message', label: '消息' }
+] as const
+type PlusCategory = (typeof PLUS_CATEGORIES)[number]['key']
+/** 当前分类；保留上一次选择，关闭再打开不为用户重置认知。 */
+const plusCategory = ref<PlusCategory>('message')
+/** 菜单开关；菜单把图片附件、模型与常用消息三类选择收在一处，输入行本身只留触发键与发送/停止。 */
+const plusMenuOpen = ref(false)
+/** 菜单外层引用：判断一次点击是否落在触发键或菜单之内。 */
+const plusRoot = ref<HTMLElement | null>(null)
+const plusMenu = ref<HTMLElement | null>(null)
+/** 常用消息的提交门禁：不满足时整组置灰，避免点了没有反应。 */
+const quickSendDisabled = computed(() => (
+  !canSubmit.value || sessionViewStore.pendingPrompt !== null || incompleteImageAnnotations.value
+    || (pendingImages.value.length > 0 && imageSupported.value === false)
+))
 /** 拖拽计数：dragenter/dragleave 会在子元素间反复触发，用计数而不是布尔避免高亮抖动。 */
 const dragDepth = ref(0)
 const dragging = computed(() => dragDepth.value > 0)
@@ -363,7 +375,7 @@ const usageOpen = ref(false)
 watch(() => workspaceTabsStore.newChatInputKey, (key, previous) => {
   if (key === null || key === previous) return
   usageOpen.value = false
-  quickSendOpen.value = false
+  plusMenuOpen.value = false
   cancelFileSearch()
   void nextTick(() => { if (props.active) textarea.value?.focus() })
 }, { flush: 'post' })
@@ -685,15 +697,72 @@ function autoGrow(): void {
   element.style.overflowY = wanted > maxHeight ? 'auto' : 'hidden'
 }
 
-/** 展开或收起快捷发送下拉。 */
-function toggleQuickSend(): void {
-  quickSendOpen.value = !quickSendOpen.value
+/** ＋ 菜单：本身不改焦点位置，鼠标点开后可直接点项；键盘用户的下方向键由触发键处理。 */
+function togglePlusMenu(): void {
+  if (plusMenuOpen.value) closePlusMenu()
+  else plusMenuOpen.value = true
 }
 
-function moveQuickSend(step: number): void {
-  const count = quickSendMessages.value.length
-  if (count === 0) return
-  quickSendIndex.value = (quickSendIndex.value + step + count) % count
+function closePlusMenu(restoreFocus = false): void {
+  if (!plusMenuOpen.value) return
+  plusMenuOpen.value = false
+  if (restoreFocus) void nextTick(() => { plusRoot.value?.querySelector('button')?.focus() })
+}
+
+/** 分类栏里的分类键：按 key 取回元素，用于键盘切换后把焦点跟上。 */
+function tabButtonOf(key: PlusCategory): HTMLButtonElement | null {
+  return plusMenu.value?.querySelector<HTMLButtonElement>(`#prompt-plus-cat-${key}`) ?? null
+}
+
+function focusActivePlusCategory(): void {
+  tabButtonOf(plusCategory.value)?.focus()
+}
+
+function selectPlusCategory(key: PlusCategory): void {
+  plusCategory.value = key
+}
+
+/** 分类栏键盘：上下键在可用分类间移动并同步切面板，焦点跟随；Esc 由菜单容器统一处理。 */
+function onPlusCatsKeydown(event: KeyboardEvent): void {
+  if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
+  const keys = PLUS_CATEGORIES
+    .map((category) => category.key)
+    .filter((key) => !(key === 'image' && attachDisabled.value))
+  if (keys.length === 0) return
+  event.preventDefault()
+  const current = keys.indexOf(plusCategory.value)
+  const step = event.key === 'ArrowDown' ? 1 : -1
+  const next = current < 0 ? 0 : (current + step + keys.length) % keys.length
+  const key = keys[next]
+  if (key === undefined) return
+  plusCategory.value = key
+  void nextTick(() => { tabButtonOf(key)?.focus() })
+}
+
+/** 图片入口因模型能力或张数上限禁用时，菜单不能停在一个不可用的分类上。 */
+watch(attachDisabled, (disabled) => {
+  if (disabled && plusCategory.value === 'image') plusCategory.value = 'message'
+})
+
+/** 触发键上的方向键是键盘用户的展开入口；回车与空格仍由按钮原生点击处理。 */
+function onPlusTriggerKeydown(event: KeyboardEvent): void {
+  if (event.key === 'Escape' && plusMenuOpen.value) {
+    event.preventDefault()
+    closePlusMenu(true)
+    return
+  }
+  if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
+  event.preventDefault()
+  plusMenuOpen.value = true
+  void nextTick(focusActivePlusCategory)
+}
+
+/** 菜单内的键盘：Esc 收起并把焦点还给触发键；分类切换与方向键交给分类栏自身。 */
+function onPlusMenuKeydown(event: KeyboardEvent): void {
+  if (event.key !== 'Escape') return
+  event.preventDefault()
+  event.stopPropagation()
+  closePlusMenu(true)
 }
 
 /**
@@ -707,25 +776,29 @@ function scrollActiveOptionIntoView(container: HTMLElement | null): void {
   })
 }
 
-/** 快捷发送：把候选短语写进草稿后走与手动发送同一条提交路径，不改发送契约。 */
-function sendQuickMessage(index: number): void {
-  const message = quickSendMessages.value[index]
-  if (message === undefined) return
-  quickSendIndex.value = index
-  quickSendOpen.value = false
-  if (!canSubmit.value || sessionViewStore.pendingPrompt !== null || incompleteImageAnnotations.value
-    || (pendingImages.value.length > 0 && imageSupported.value === false)) return
+/** 常用消息：把短语写进草稿后走与手动发送同一条提交路径，不改发送契约；不可提交时该项在菜单里已置灰。 */
+function sendQuickMessage(message: string): void {
+  closePlusMenu()
   draft.value = message
   textarea.value?.focus()
   void submit()
 }
 
-/** 点击下拉与触发键之外的位置即收起；在文档层监听，避免遮罩挡在输入区前面。 */
+/** 菜单里的图片入口与原先的 ＋ 键同一个行为：先收起菜单再打开选择器，说明仍由附件区独立标注。 */
+function pickImageFromMenu(): void {
+  closePlusMenu()
+  imageMaterials.value?.openPicker()
+}
+
+/** 点击触发键、菜单与模型选项浮层之外的位置即收起；在文档层监听，避免遮罩挡在输入区前面。 */
 function onDocumentPointerDown(event: PointerEvent): void {
-  if (!quickSendOpen.value) return
+  if (!plusMenuOpen.value) return
   const target = event.target
-  if (target instanceof Node && quickSend.value?.contains(target)) return
-  quickSendOpen.value = false
+  if (!(target instanceof Node)) return
+  if (plusRoot.value?.contains(target) === true) return
+  // 模型选择器的选项浮层 Teleport 到 body，落在它里面不算离开菜单；否则浮层会在 click 之前被卸载。
+  if (target instanceof Element && target.closest('[data-app-select-popup]') !== null) return
+  plusMenuOpen.value = false
 }
 
 onUnmounted(() => {
@@ -748,17 +821,12 @@ onUnmounted(() => {
 
 /** 草稿的每一次写入都重算高度与 `@` 引用：用户输入、Extension 填充、补全写入与命令清空都经这里。 */
 watch(draft, () => {
-  quickSendOpen.value = false
+  plusMenuOpen.value = false
   // 延到 DOM 更新之后：自动增高与 `@` 词元都要读更新后的文本与光标位置。
   void nextTick(() => {
     autoGrow()
     refreshFileToken()
   })
-})
-
-/** 短语在设置里被增删改后，当前选中项可能越界；夹取到合法范围，按钮不会渲染出空文本。 */
-watch(quickSendMessages, (messages) => {
-  if (quickSendIndex.value >= messages.length) quickSendIndex.value = 0
 })
 
 function onKeydown(event: KeyboardEvent): void {
@@ -808,30 +876,6 @@ function onKeydown(event: KeyboardEvent): void {
     }
     if (event.key === 'Escape') {
       filesDismissed.value = true
-      return
-    }
-  }
-
-  // 快捷发送下拉已展开时，方向键与 Enter 归它，避免 Enter 误发草稿。
-  if (quickSendOpen.value) {
-    if (event.key === 'ArrowDown') {
-      event.preventDefault()
-      moveQuickSend(1)
-      return
-    }
-    if (event.key === 'ArrowUp') {
-      event.preventDefault()
-      moveQuickSend(-1)
-      return
-    }
-    if (event.key === 'Enter') {
-      event.preventDefault()
-      sendQuickMessage(quickSendIndex.value)
-      return
-    }
-    if (event.key === 'Escape') {
-      event.preventDefault()
-      quickSendOpen.value = false
       return
     }
   }
@@ -1345,10 +1389,9 @@ const fileToken = ref<FileToken | null>(null)
 const fileActiveIndex = ref(0)
 const fileList = ref<HTMLElement | null>(null)
 
-// 三个列表各自在键盘移动时跟随滚动；条数超限时高亮项不会被留在视野之外。
+// 两个列表各自在键盘移动时跟随滚动；条数超限时高亮项不会被留在视野之外。
 watch(suggestionIndex, () => scrollActiveOptionIntoView(commandList.value))
 watch(fileActiveIndex, () => scrollActiveOptionIntoView(fileList.value))
-watch(quickSendIndex, () => scrollActiveOptionIntoView(quickSendList.value))
 const filesDismissed = ref(false)
 /** 防抖待发标志：这段时间里候选还是上一轮的，Enter 必须等结果而不是发送半截路径。 */
 const fileSearchScheduled = ref(false)
@@ -1484,8 +1527,8 @@ onMounted(() => {
 </script>
 
 <template>
-  <!-- 与消息区同色，输入坞靠描边与阴影浮起；不再用顶部分隔线切开两块。 -->
-  <section class="bg-desk-canvas-sunken px-4 py-3 sm:px-6">
+  <!-- 与消息区同色，输入坞靠描边与阴影浮起；不再用顶部分隔线切开两块。上下内距与消息列底部留白同节奏。 -->
+  <section class="bg-desk-canvas-sunken px-4 pt-3 pb-4 sm:px-6">
     <div class="chat-column mx-auto">
       <div v-if="pendingSyncPrompt !== null" class="mb-2 flex flex-wrap items-center gap-2">
         <p v-if="pendingSyncPrompt.phase === 'unconfirmed'" class="text-xs text-desk-muted" role="status">提交结果未确认，文字和附件已保留。</p>
@@ -1572,148 +1615,194 @@ onMounted(() => {
           @change="updateImageAnnotations"
         />
 
-        <textarea
-          id="prompt-input"
-          ref="textarea"
-          v-model="draft"
-          rows="1"
-          class="text-control prompt-composer-input resize-none"
-          placeholder="输入要发送给 Pi 的内容（可粘贴或拖入图片）"
-          autocomplete="off"
-          spellcheck="false"
-          :aria-describedby="statusText !== null ? 'prompt-status' : undefined"
-          aria-autocomplete="list"
-          :aria-controls="activeListId"
-          :aria-expanded="activeListOpen"
-          @keydown="onKeydown"
-          @click="refreshFileToken"
-          @paste="onPaste"
-          @compositionstart="composing = true"
-          @compositionend="composing = false"
-        ></textarea>
-
-        <div class="prompt-composer-toolbar">
-          <div class="prompt-composer-meta">
-            <!-- 状态文本只在异常与进行中出现；正常态让位给用量指标。 -->
-            <p
-              v-if="statusText !== null"
-              id="prompt-status"
-              :role="statusRole"
-              class="prompt-composer-status"
-              :class="statusTone"
-            >
-              {{ statusText }}
-            </p>
-            <!-- 被收起的插件请求：点击恢复到对话弹窗，不代替用户取消。 -->
-            <button
-              v-if="pendingTitle !== null"
-              type="button"
-              class="prompt-pending"
-              title="展开被收起的插件请求"
-              @click="extensionStore.restoreDialog()"
-            >
-              <span aria-hidden="true">❓</span>
-              <span class="prompt-pending-text">{{ pendingTitle }}</span>
-            </button>
-            <!-- 会话用量指标：点击开明细浮层；统计未取到时显示占位。Extension 的 setStatus 项不在输入区展示。 -->
-            <button
-              type="button"
-              class="prompt-usage"
-              aria-haspopup="dialog"
-              :aria-expanded="usageOpen"
-              title="点击查看本会话用量明细"
-              @click="usageOpen = true"
-            >
-              <template v-if="usageParts.length > 0">
-                <span
-                  v-for="part in usageParts"
-                  :key="part.key"
-                  class="prompt-metric"
-                  :class="part.tone"
-                  :title="part.title"
-                >{{ part.text }}</span>
-              </template>
-              <span v-else class="prompt-metric">用量 —</span>
-            </button>
-          </div>
-          <div class="flex flex-none items-center gap-1.5">
-            <!-- 未绑定或原位新草稿选择草稿模型；实际绑定后才切当前会话模型，另设全局默认走次级动作。 -->
-            <RuntimeModelSelect
-              :new-conversation="workspaceTabsStore.isChatNewDraft"
-              :resetting="workspaceTabsStore.isChatResetting || workspaceTabsStore.isChatBinding"
-            />
-
-            <!-- 触发图片附件选择；图片说明由附件区独立标注，不进入提示词。 -->
+        <!-- 输入行：左侧 ＋ 菜单、中间输入框、右侧发送/停止，三者在底边对齐，多行时按钮跟随下沿。 -->
+        <div class="prompt-composer-row">
+          <div ref="plusRoot" class="prompt-composer-plus">
             <AppButton
               variant="icon"
               class="prompt-composer-char"
-              :disabled="attachDisabled"
-              aria-label="添加图片"
-              title="添加图片（也可粘贴或拖入）"
-              @click="imageMaterials?.openPicker()"
+              :aria-expanded="plusMenuOpen"
+              aria-controls="prompt-plus-menu"
+              aria-label="输入选项"
+              title="输入选项（添加图片、模型、常用消息）"
+              @click="togglePlusMenu"
+              @keydown="onPlusTriggerKeydown"
             >
               ＋
             </AppButton>
-
-            <!-- 快捷发送：按钮上直接显示当前选中短语，点一下就用它提交。 -->
-            <div ref="quickSend" class="relative">
-              <AppButton
-                variant="icon"
-                class="w-auto max-w-[min(12rem,40vw)] gap-1 px-2.5"
-                :disabled="!canSubmit || sessionViewStore.pendingPrompt !== null || incompleteImageAnnotations || (pendingImages.length > 0 && imageSupported === false) || quickSendMessages.length === 0"
-                aria-haspopup="listbox"
-                :aria-expanded="quickSendOpen"
-                aria-controls="prompt-quick-send"
-                :title="quickSendCurrent === undefined
-                  ? '选择并直接发送常用消息'
-                  : `当前：${quickSendCurrent}；点击选择并直接发送`"
-                @click="toggleQuickSend"
+            <!-- 菜单是「分类栏 + 内容面板」两栏：分类键走 tab 语义，面板只渲染当前分类的内容。 -->
+            <div
+              v-if="plusMenuOpen"
+              id="prompt-plus-menu"
+              ref="plusMenu"
+              class="dialog-popover prompt-composer-plus-menu scroll-area"
+              @keydown="onPlusMenuKeydown"
+            >
+              <div
+                class="prompt-composer-plus-cats"
+                role="tablist"
+                aria-label="输入选项分类"
+                @keydown="onPlusCatsKeydown"
               >
-                <span class="min-w-0 truncate text-xs">{{ quickSendCurrent }}</span>
-                <span aria-hidden="true">▾</span>
-              </AppButton>
-              <div v-if="quickSendOpen" id="prompt-quick-send" ref="quickSendList" role="listbox" aria-label="常用消息" class="prompt-composer-menu scroll-area">
                 <AppButton
-                  v-for="(message, index) in quickSendMessages"
-                  :key="index"
+                  v-for="category in PLUS_CATEGORIES"
+                  :id="`prompt-plus-cat-${category.key}`"
+                  :key="category.key"
                   variant="unstyled"
-                  role="option"
-                  :aria-selected="index === quickSendIndex"
-                  class="list-item truncate"
-                  :class="index === quickSendIndex ? 'list-item-active' : ''"
-                  :title="message"
-                  @click="sendQuickMessage(index)"
+                  role="tab"
+                  :aria-selected="plusCategory === category.key"
+                  :aria-controls="`prompt-plus-pane-${category.key}`"
+                  :disabled="category.key === 'image' && attachDisabled"
+                  class="prompt-composer-plus-cat"
+                  @click="selectPlusCategory(category.key)"
+                >{{ category.label }}</AppButton>
+              </div>
+              <div class="prompt-composer-plus-panes">
+                <div
+                  v-show="plusCategory === 'image'"
+                  id="prompt-plus-pane-image"
+                  role="tabpanel"
+                  aria-labelledby="prompt-plus-cat-image"
+                  class="prompt-composer-plus-pane"
                 >
-                  {{ message }}
-                </AppButton>
+                  <!-- 触发图片附件选择；图片说明由附件区独立标注，不进入提示词。 -->
+                  <AppButton
+                    variant="unstyled"
+                    class="prompt-composer-plus-row"
+                    :disabled="attachDisabled"
+                    @click="pickImageFromMenu"
+                  >
+                    <span>添加图片</span>
+                    <span class="prompt-composer-plus-row-note">也可粘贴或拖入</span>
+                  </AppButton>
+                </div>
+                <div
+                  v-show="plusCategory === 'model'"
+                  id="prompt-plus-pane-model"
+                  role="tabpanel"
+                  aria-labelledby="prompt-plus-cat-model"
+                  class="prompt-composer-plus-pane"
+                >
+                  <!-- 未绑定或原位新草稿选择草稿模型；实际绑定后才切当前会话模型，另设全局默认走次级动作。 -->
+                  <RuntimeModelSelect
+                    variant="menu"
+                    :new-conversation="workspaceTabsStore.isChatNewDraft"
+                    :resetting="workspaceTabsStore.isChatResetting || workspaceTabsStore.isChatBinding"
+                  />
+                </div>
+                <div
+                  v-show="plusCategory === 'message'"
+                  id="prompt-plus-pane-message"
+                  role="tabpanel"
+                  aria-labelledby="prompt-plus-cat-message"
+                  class="prompt-composer-plus-pane"
+                >
+                  <AppButton
+                    v-for="(message, index) in quickSendMessages"
+                    :key="`${message}-${index}`"
+                    variant="unstyled"
+                    class="prompt-composer-plus-row"
+                    :disabled="quickSendDisabled"
+                    :title="message"
+                    @click="sendQuickMessage(message)"
+                  >
+                    <span class="min-w-0 truncate">{{ message }}</span>
+                  </AppButton>
+                  <p v-if="quickSendMessages.length === 0" class="prompt-composer-plus-row-note px-2 py-1">尚未配置常用消息，可在设置里添加。</p>
+                </div>
               </div>
             </div>
-
-            <!-- 发送与停止共用一个位置与一档强调色，运行中靠字符形状区分。 -->
-            <AppButton
-              v-if="stopVisible"
-              variant="icon-primary"
-              class="prompt-composer-send"
-              :disabled="abortView.phase === 'requesting'"
-              aria-label="停止当前操作"
-              title="停止当前操作"
-              @click="stop"
-            >
-              ■
-            </AppButton>
-            <AppButton
-              v-else
-              variant="icon-primary"
-              class="prompt-composer-send"
-              :disabled="!canSend"
-              aria-label="发送"
-              title="发送（Enter 发送，Shift+Enter 换行）"
-              @click="submit"
-            >
-              ↑
-            </AppButton>
           </div>
+
+          <textarea
+            id="prompt-input"
+            ref="textarea"
+            v-model="draft"
+            rows="1"
+            class="text-control prompt-composer-input resize-none"
+            placeholder="输入要发送给 Pi 的内容（可粘贴或拖入图片）"
+            autocomplete="off"
+            spellcheck="false"
+            :aria-describedby="statusText !== null ? 'prompt-status' : undefined"
+            aria-autocomplete="list"
+            :aria-controls="activeListId"
+            :aria-expanded="activeListOpen"
+            @keydown="onKeydown"
+            @click="refreshFileToken"
+            @paste="onPaste"
+            @compositionstart="composing = true"
+            @compositionend="composing = false"
+          ></textarea>
+
+          <!-- 发送与停止共用一个位置与一档强调色，运行中靠字符形状区分。 -->
+          <AppButton
+            v-if="stopVisible"
+            variant="icon-primary"
+            class="prompt-composer-send"
+            :disabled="abortView.phase === 'requesting'"
+            aria-label="停止当前操作"
+            title="停止当前操作"
+            @click="stop"
+          >
+            ■
+          </AppButton>
+          <AppButton
+            v-else
+            variant="icon-primary"
+            class="prompt-composer-send"
+            :disabled="!canSend"
+            aria-label="发送"
+            title="发送（Enter 发送，Shift+Enter 换行）"
+            @click="submit"
+          >
+            ↑
+          </AppButton>
         </div>
+      </div>
+
+      <!-- 信息行在输入坞之外、同一列宽内：状态、被收起的插件请求与会话用量，不挤占输入行。 -->
+      <div class="prompt-composer-meta">
+        <!-- 状态文本只在异常与进行中出现；正常态让位给用量指标。 -->
+        <p
+          v-if="statusText !== null"
+          id="prompt-status"
+          :role="statusRole"
+          class="prompt-composer-status"
+          :class="statusTone"
+        >
+          {{ statusText }}
+        </p>
+        <!-- 被收起的插件请求：点击恢复到对话弹窗，不代替用户取消。 -->
+        <button
+          v-if="pendingTitle !== null"
+          type="button"
+          class="prompt-pending"
+          title="展开被收起的插件请求"
+          @click="extensionStore.restoreDialog()"
+        >
+          <span aria-hidden="true">❓</span>
+          <span class="prompt-pending-text">{{ pendingTitle }}</span>
+        </button>
+        <!-- 会话用量指标：点击开明细浮层；统计未取到时显示占位。Extension 的 setStatus 项不在输入区展示。 -->
+        <button
+          type="button"
+          class="prompt-usage"
+          aria-haspopup="dialog"
+          :aria-expanded="usageOpen"
+          title="点击查看本会话用量明细"
+          @click="usageOpen = true"
+        >
+          <template v-if="usageParts.length > 0">
+            <span
+              v-for="part in usageParts"
+              :key="part.key"
+              class="prompt-metric"
+              :class="part.tone"
+              :title="part.title"
+            >{{ part.text }}</span>
+          </template>
+          <span v-else class="prompt-metric">用量 —</span>
+        </button>
       </div>
     </div>
 

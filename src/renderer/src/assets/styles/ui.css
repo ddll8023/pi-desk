@@ -114,7 +114,7 @@
 .control-button-ghost:disabled {
     @apply cursor-not-allowed opacity-60;
   }
-/* 输入坞弹层里的列表行：命令/文件补全与快捷发送下拉共用；对话框与页面内的清单行改用 list-card，Extension 对话的选项行与参考行另用 dialog-option-row 与 dialog-reference-row。选中态由 list-item-active 叠加左侧色条。 */
+/* 输入坞弹层里的列表行：命令与文件补全共用；对话框与页面内的清单行改用 list-card，Extension 对话的选项行与参考行另用 dialog-option-row 与 dialog-reference-row。选中态由 list-item-active 叠加左侧色条。 */
 .list-item {
     @apply block w-full rounded-desk-sm border border-transparent px-2.5 py-2 text-left transition-colors;
   }

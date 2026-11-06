@@ -66,7 +66,7 @@ export const usePreferencesStore = defineStore('preferences', () => {
   const gitAutoCleanWorktreeOnMerge = ref(true)
   /** 删除会话时是否清理关联且无未提交改动的工作树；默认开，避免残留堆积。 */
   const gitAutoCleanWorktreeOnSessionDelete = ref(true)
-  /** 快捷发送下拉的候选短语；顺序即展示顺序，读取失败或非法时为默认列表。 */
+  /** ＋ 菜单「消息」栏的候选短语；顺序即展示顺序，读取失败或非法时为默认列表。 */
   const quickSendMessages = ref<string[]>([...DEFAULT_QUICK_SEND_MESSAGES])
   const quickSendView = ref<QuickSendView>({ phase: 'idle' })
   /** 扩展自动更新开关；读取失败或非法时按关闭处理，不把未知当成已开启。 */
