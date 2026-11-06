@@ -404,7 +404,7 @@ export interface SessionActivity {
    * 回合头展示与延续判定共用这一份口径，渲染端不自行汇总工具条目。
    */
   readonly turns: readonly SessionTurnFiles[]
-  /** 标准模式的待办清单：取当前分支上最近一次 `todo_write` 的结果。 */
+  /** 本轮待办清单：只取当前轮 `todo_write` 的结果，新一轮开始或提交空清单后为 null。 */
   readonly todos: SessionTodoList | null
   /** 最近一次延续判定；坞上一行提示用它，按轮的同一结论也挂在 `turns[].judgement` 上。 */
   readonly continuation: SessionContinuation | null

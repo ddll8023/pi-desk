@@ -4,6 +4,9 @@
  * 状态只存在工具结果的 `details` 里，不落外部文件：清单随会话分支走，rewind 或 fork 之后
  * 自然回到当时那份清单，不需要额外的同步或清理。
  *
+ * 清单是按轮的状态：门禁只认本轮提交的清单，分支上更早的清单跨过本轮用户消息就不算数；
+ * 空清单是合法提交，用于显式清空，但门禁仍要求本轮存在非空清单。
+ *
  * 门禁只拦文件写入类工具，不拦 `bash`：拦住命令会让首轮连只读探索都做不了，
  * 因此接受「首轮命令仍可改文件」这一残留风险。
  */
@@ -46,19 +49,21 @@ const TODO_PARAMETERS = {
   }
 } as unknown as ToolParameters
 
-/** 分支上最近一次清单；只认本工具的结果，缺条目或形状不符时按不存在处理。 */
+/** 分支上本轮最近一次的清单；跨过本轮用户消息就停，上一轮的清单不算数。 */
 export function readTodoList(entries: readonly SessionEntry[]): TodoListDetails | null {
   for (let index = entries.length - 1; index >= 0; index -= 1) {
     const entry = entries[index]
     if (entry === undefined || entry.type !== 'message') continue
     const message = entry.message
+    // 门禁按轮生效：新一轮必须先交自己的清单，不沿用上一轮。
+    if (message.role === 'user') return null
     if (message.role !== 'toolResult' || message.toolName !== TODO_TOOL_NAME) continue
     return parseTodoListDetails(message.details)
   }
   return null
 }
 
-/** 从工具结果的 `details` 解出清单；投影与门禁共用同一份解析，不接受空清单。 */
+/** 从工具结果的 `details` 解出清单；空清单是合法状态，表示本轮没有待办。 */
 export function parseTodoListDetails(details: unknown): TodoListDetails | null {
   if (typeof details !== 'object' || details === null || Array.isArray(details)) return null
   const candidate = details as { version?: unknown; items?: unknown }
@@ -71,7 +76,7 @@ export function parseTodoListDetails(details: unknown): TodoListDetails | null {
     const status = TODO_STATUSES.find(value => value === item.status) ?? 'pending'
     items.push({ text: item.text.trim(), status })
   }
-  return items.length === 0 ? null : { version: 1, items }
+  return { version: 1, items }
 }
 
 /**
@@ -83,10 +88,13 @@ export function createTodoListExtension(): ExtensionFactory {
       name: TODO_TOOL_NAME,
       label: '待办清单',
       description: '提交或更新本轮的执行待办清单。标准模式在执行文件改动前必须先提交一次；'
-        + '每次提交覆盖上一版，全部条目都要带上。',
+        + '每次提交覆盖上一版，全部条目都要带上。某项开始或完成时立即重新提交，不要攒到收尾。'
+        + '清单只对当前轮有效；本轮没有待办时提交空清单清空。',
       promptSnippet: 'todo_write — 提交或更新本轮执行待办清单（标准模式写文件前必须先提交）',
       promptGuidelines: [
         '标准模式在第一次写文件之前先提交待办清单；一次提交完整清单，不要只交改动项。',
+        '开始某一项或完成某一项时立即重新提交整份清单，让状态跟上实际进展，不要留到最后一次性更新。',
+        '清单只对当前轮有效：新一轮必须重新提交，上一轮的清单不会替你过门禁；没有待办时提交空清单清空。',
         '清单是执行步骤，不代替逐文件执行清单审批：需要用户确认的改动仍要在对话里单独列出。'
       ],
       parameters: TODO_PARAMETERS,
@@ -103,7 +111,10 @@ export function createTodoListExtension(): ExtensionFactory {
             normalized.push({ text, status })
           }
         }
-        if (normalized.length === 0) throw new Error('待办清单至少需要一条非空条目')
+        if (normalized.length === 0) {
+          const cleared: TodoListDetails = { version: 1, items: [] }
+          return { content: [{ type: 'text' as const, text: '已清空待办清单。' }], details: cleared }
+        }
         const done = normalized.filter(item => item.status === 'completed').length
         const details: TodoListDetails = { version: 1, items: normalized }
         return {

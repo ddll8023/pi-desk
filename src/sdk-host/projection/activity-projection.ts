@@ -15,10 +15,12 @@
  *    单独归到一行，不猜测它们连的是哪个服务器。
  * 4. 插件：既不是内置工具、也不是 MCP 工具的工具名按扩展工具统计。投影里没有「工具属于哪个扩展文件」
  *    的信息，因此只报工具名与次数，不编造来源扩展。
- * 5. 界面：`ui_render` / `ui_patch` 的 `toolResult` 里带 `details.ui` 时记一份交付事实，
- *    按 `documentId` 合并：版本取最大、标题取后出现的非空值、`versions` 累加。
- *    只读头部字段，不解析节点树；嵌套调用（`nestedCalls`）不带 `details`，因此其中的界面不计入。
- * 6. 待办清单：`todo_write` 的 `toolResult` 里带清单时记下最新一份，随检查点保存，恢复会话后不依赖重放。
+ * 5. 界面：`ui_render` / `ui_patch` 的结果里带 `details.ui` 时记一份交付事实，按 `documentId` 合并：
+ *    版本取最大、标题取后出现的非空值、`versions` 累加。结果先在 `tool_execution_end` 事件里即时记下，
+ *    再按调用 ID 去重，分支条目重复到达时只算一次。只读头部字段，不解析节点树；
+ *    带 `parentToolCallId` 的嵌套调用不计入——分支不保留它们的 `details`，算了会与恢复后的口径不一致。
+ * 6. 待办清单：只记**当前轮** `todo_write` 的清单，同样以事件结果即时记录并按调用 ID 去重；
+ *    新一轮用户消息出现即清空，列表跨过本轮用户消息后不再算数，因此恢复会话不依赖重放。
  * 7. 延续判定：由宿主在用户轮次开始时算好写入，按该轮用户消息的条目 ID 归档；属本轮临时事实，不进检查点。
  *
  * 日志累计与实时工具状态分别维护：实时状态只补充展示，检查点只导出已进入官方分支的轻量事实。
@@ -102,7 +104,7 @@ export interface ActivityCheckpointState {
   readonly incomplete: boolean
   /** 已处理前缀末尾所在的轮次；恢复后继续追加条目时靠它把新调用归回正确轮次。 */
   readonly currentTurn: string | null
-  /** 待办清单：取分支上最近一次 `todo_write` 的结果，恢复后不依赖重放。 */
+  /** 待办清单：当前轮的 `todo_write` 结果，随检查点保存，恢复后不依赖重放。 */
   readonly todos: SessionTodoList | null
 }
 
@@ -488,6 +490,8 @@ export class ActivityProjection {
   private commands: ActivityCommandState[] = []
   private skills = new Map<string, SessionSkillActivity>()
   private genui = new Map<string, GenuiBucket>()
+  /** 已计入的界面交付调用：事件与分支两条路径都会看到同一次调用，可靠性键去重避免版本数翻倍。 */
+  private genuiCalls = new Set<string>()
   private todos: SessionTodoList | null = null
   /**
    * 待绑定的延续判定：宿主在用户轮次开始前算出，此时该轮用户消息尚未进入分支，
@@ -531,6 +535,13 @@ export class ActivityProjection {
   observe(event: Record<string, unknown>): void {
     if ((event.type !== 'tool_execution_start' && event.type !== 'tool_execution_end')
       || typeof event.toolCallId !== 'string' || typeof event.toolName !== 'string') return
+    // 工具返回值已经带上结果：清单与界面交付按事件即时记录，不等分支追加，也不需要下一个事件再刷一次。
+    // 嵌套调用在分支里没有条目，记下来会与恢复后的口径不一致，这里直接跳过。
+    if (event.type === 'tool_execution_end' && event.isError !== true && event.parentToolCallId === undefined) {
+      const details = isRecord(event.result) ? event.result.details : undefined
+      this.recordTodos(event.toolName, details, event.toolCallId)
+      this.recordGenui(event.toolName, details, event.toolCallId)
+    }
     this.call(this.liveTools, event.toolCallId, event.toolName, event.args,
       event.type === 'tool_execution_start' ? 'running' : event.isError === true ? 'failed' : 'succeeded')
   }
@@ -622,7 +633,7 @@ export class ActivityProjection {
     this.lastEntry = null
     this.tools.clear(); this.liveTools.clear(); this.commands = []; this.skills.clear()
     this.turnByTool.clear(); this.currentTurn = null
-    this.genui.clear(); this.evidence.clear()
+    this.genui.clear(); this.genuiCalls.clear(); this.evidence.clear()
     this.todos = null
     this.pendingContinuation = null
     this.judgementByTurn.clear()
@@ -650,8 +661,8 @@ export class ActivityProjection {
         if (this.liveTools.delete(message.toolCallId)) this.dirty = true
       } else if (message.isError === true && this.liveTools.delete(message.toolCallId)) this.dirty = true
       if (message.isError !== true && typeof message.toolName === 'string') {
-        this.recordGenui(message.toolName, message.details)
-        this.recordTodos(message.toolName, message.details)
+        this.recordGenui(message.toolName, message.details, message.toolCallId)
+        this.recordTodos(message.toolName, message.details, message.toolCallId)
       }
     }
     if (message.role === 'toolResult' && isRecord(message.nestedCalls)) {
@@ -668,6 +679,8 @@ export class ActivityProjection {
       // 先切换当前轮：即使该条不是技能调用，后续工具调用也要归到这一轮。
       if (this.currentTurn !== id) {
         this.currentTurn = id
+        // 清单按轮生效：新一轮开始就清掉上一轮的，避免面板显示早已完成的旧清单。
+        if (this.todos !== null) { this.todos = null; this.dirty = true }
         // 新轮次出现才把暂存判定归档：此刻该轮条目 ID 才真实存在。
         if (this.pendingContinuation !== null) {
           this.judgementByTurn.set(id, this.pendingContinuation)
@@ -694,11 +707,13 @@ export class ActivityProjection {
     this.pendingContinuation = value
   }
 
-  /** 待办清单只认本工具的结果；形状不符时保留已有清单，不让一次坏参数抹掉已提交的状态。 */
-  private recordTodos(toolName: string, details: unknown): void {
+  /** 待办清单只认本工具的结果，且只写当前轮：迟到的旧轮结果不覆盖本轮。 */
+  private recordTodos(toolName: string, details: unknown, toolCallId: string): void {
     if (toolName !== TODO_TOOL_NAME) return
     const parsed = parseTodoListDetails(details)
     if (parsed === null) return
+    const turn = this.turnByTool.get(toolCallId)
+    if (turn !== undefined && this.currentTurn !== null && turn !== this.currentTurn) return
     this.todos = { items: parsed.items }
     this.dirty = true
   }
@@ -708,11 +723,14 @@ export class ActivityProjection {
    * 同一 `documentId` 合并成一条：版本取最大、标题取后出现的非空值、`versions` 累加。
    * 标题为空（历史文档缺字段）时不拿空串盖掉已有标题。
    */
-  private recordGenui(toolName: string, details: unknown): void {
+  private recordGenui(toolName: string, details: unknown, toolCallId: string): void {
     if (!GENUI_RENDER_TOOL_NAMES.has(toolName)) return
     if (!isRecord(details)) return
     const header = readGenuiPayloadHeader(details.ui)
     if (header === null) return
+    // 同一次调用在实时事件与分支条目里各出现一次；重复计入会把 `versions` 算成两倍。
+    if (this.genuiCalls.has(toolCallId)) return
+    this.genuiCalls.add(toolCallId)
     this.dirty = true
     const existing = this.genui.get(header.documentId)
     if (existing === undefined) {

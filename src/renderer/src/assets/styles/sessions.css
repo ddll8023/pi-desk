@@ -72,6 +72,18 @@
     @apply m-0 text-2xs font-semibold tabular-nums;
     color: var(--color-desk-muted);
   }
+/* 标题行就是折叠开关：整行可点，计数与箭头共用一行高度。 */
+.prompt-todo-head {
+    @apply flex w-full items-center justify-between gap-2 border-0 bg-transparent p-0 text-left transition-colors;
+    cursor: pointer;
+    color: var(--color-desk-muted);
+  }
+.prompt-todo-head:hover .prompt-todo-title {
+    color: var(--color-desk-ink);
+  }
+.prompt-todo-chevron {
+    @apply shrink-0 text-2xs;
+  }
 .prompt-todo-list {
     @apply m-0 max-h-24 list-none overflow-y-auto p-0 text-xs;
   }

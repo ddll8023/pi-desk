@@ -40,13 +40,15 @@ import type { ExtensionDialogResponseInput } from '../shared/extension-ui-api'
 type Sdk = typeof import('@earendil-works/pi-coding-agent')
 type RuntimeFactory = Parameters<Sdk['createAgentSessionRuntime']>[0]
 
-/** 模式分段的名称与正文：只描述产出形态，不重复授权规则。 */
+/** 提示分段的名称与正文：只描述产出形态与整理要求，不重复授权规则。 */
 const MODE_HINT_EXTENSION_NAME = 'execution-mode-hint'
 const TODO_LIST_EXTENSION_NAME = 'todo-list'
 const MODE_SECTION_KEY = 'execution-mode'
+const INTENT_SECTION_KEY = 'intent-summary'
 const CONTINUATION_SECTION_KEY = 'continuation-signal'
-const FAST_MODE_SECTION = '快速模式：直接给出逐文件执行清单并等待确认，不讨论方案；清单审批、运行与测试授权照常。'
-const STANDARD_MODE_SECTION = '标准模式：先给出方案与关键取舍，再给出逐文件执行清单；不跳过方案直接改动。'
+const INTENT_SUMMARY_SECTION = '需求理解（本条优先于系统提示中「省略需求复述」「最短回答」的通用约定，因为整理是为了暴露歧义而不是重复措辞）：收到新任务先在回复开头用简短条目给出需求理解——目标、范围与不做项、输入里模糊或有多解之处、你采用的默认假设；随后在同一回合内紧接着给出本模式要求的产出形态，不停下等待单独确认。用户指出理解有误时以其纠正为准并重做后续产出。'
+const FAST_MODE_SECTION = '快速模式：需求理解之后直接给出逐文件执行清单并等待确认，不讨论方案与取舍；清单审批、运行与测试授权照常。'
+const STANDARD_MODE_SECTION = '标准模式：需求理解之后先给出方案与关键取舍，再给出逐文件执行清单；不跳过方案直接改动。'
 /**
  * 快速模式下整组下线的记忆工具，与 `resources/agent/bundle.json` 中 `pi-memory` 的 requiredTools 一致。
  * 只关注入不够：工具仍在时模型会调用并据此要求用户去恢复记忆，而实际情况是模式裁剪。
@@ -836,7 +838,7 @@ export class SdkSessionRuntime {
     try {
       const settingsManager = this.sdk.SettingsManager.create(cwd, agentDir, { projectTrusted: target.trusted })
       const extensionFactories: InlineExtension[] = [
-          // 模式对产出形态的要求写成系统提示分段；能力集差异由记忆配置、记忆工具裁剪与 Skill 集合承担。
+          // 需求理解、模式产出形态与延续判定各写一段；能力集差异由记忆配置、记忆工具裁剪与 Skill 集合承担。
           { name: MODE_HINT_EXTENSION_NAME, builtin: true, replaceable: true, factory: pi => {
             // 快速会话整组去掉记忆工具；标准会话保持 `pi-memory` 自带的全集。
             pi.on('session_start', () => {
@@ -851,6 +853,10 @@ export class SdkSessionRuntime {
                 : STANDARD_MODE_SECTION
               // 判定只在本轮算一次；无结论时不写分段，也不覆盖上一次展示。
               const verdict = judgeContinuation(event.prompt, lastTurnWithWrites(this.activityView))
+              // 延续轮只对齐增量，不再重复需求理解；新任务与无结论都注入，漏判不能成为跳过整理的理由。
+              if (verdict?.verdict !== 'continuation') {
+                event.systemPromptOptions.sections[INTENT_SECTION_KEY] = INTENT_SUMMARY_SECTION
+              }
               if (verdict !== null) {
                 event.systemPromptOptions.sections[CONTINUATION_SECTION_KEY] = verdict.verdict === 'continuation'
                   ? '延续判定：本轮是上一个任务的延续，只对齐增量要求，不重复已确认的需求与方案。'
