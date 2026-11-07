@@ -34,6 +34,8 @@ import type {
 import { summarizeToolRequest, summarizeToolResult } from './tool-presentation'
 import { parseGenuiPayload } from '../../shared/genui-api'
 import type { GenuiPayload } from '../../shared/genui-api'
+import { parseSubAgentView } from '../../shared/sub-agent-view'
+import type { SubAgentView } from '../../shared/sub-agent-view'
 
 /** 工具参数摘要上限；超限截断并在条目上标记，不伪装成完整参数。 */
 const MAX_TOOL_ARGS_CHARS = 4096
@@ -90,6 +92,7 @@ interface MutableToolExecution {
   nonTextParts: ToolNonTextPart[]
   diff: ToolDiff | null
   ui: GenuiPayload | null
+  subAgents: readonly SubAgentView[]
   presentation: ToolPresentation
 }
 
@@ -203,6 +206,23 @@ function readOutputPath(result: unknown): string | null {
 function readUiPayload(result: unknown): GenuiPayload | null {
   if (!isRecord(result) || !isRecord(result.details)) return null
   return parseGenuiPayload(result.details.ui)
+}
+
+/**
+ * 子任务快照：从结果 `details.subAgents` 读取并逐项重走校验；历史记录里的单个
+ * `details.subAgent` 归一为单元素数组。渲染端只相信跨进程契约，不相信上游一定校验过；
+ * 形状不符时返回空数组，界面降级为普通工具结果，不猜测缺失字段。
+ */
+function readSubAgentViews(result: unknown): readonly SubAgentView[] {
+  if (!isRecord(result) || !isRecord(result.details)) return []
+  const { subAgents, subAgent } = result.details
+  const source = Array.isArray(subAgents) ? subAgents : [subAgent]
+  const views: SubAgentView[] = []
+  for (const item of source) {
+    const view = parseSubAgentView(item)
+    if (view !== null) views.push(view)
+  }
+  return views
 }
 
 /** 由 base64 字符数估算解码后字节数；不解析内容，也不保留数据本身。 */
@@ -370,6 +390,7 @@ function toPublicTool(entry: MutableToolExecution): ToolExecution {
     nonTextParts: entry.nonTextParts,
     diff: entry.diff,
     ui: entry.ui,
+    subAgents: entry.subAgents,
     presentation: entry.presentation
   }
 }
@@ -457,7 +478,8 @@ export class ToolProjection {
       nonTextBlocks: 0,
       nonTextParts: [],
       diff: null,
-      ui: null
+      ui: null,
+      subAgents: []
     }
     this.entries.push(entry)
     this.index.set(seed.toolCallId, entry)
@@ -468,6 +490,7 @@ export class ToolProjection {
     entry.outputPath = readOutputPath(seed.result)
     entry.diff = extractDiff(entry.toolName, entry.argsText, seed.result)
     entry.ui = readUiPayload(seed.result)
+    entry.subAgents = readSubAgentViews(seed.result)
     entry.presentation = { ...entry.presentation,
       result: summarizeToolResult(entry.toolName, seed.result, { isError: seed.isError, text: extracted.text }) }
     this.emit(entry)
@@ -480,6 +503,7 @@ export class ToolProjection {
     entry.diff = null
     entry.outputPath = null
     entry.ui = null
+    entry.subAgents = []
     entry.presentation = { request: null, result: null }
     this.applyArgs(entry, payload.args)
     this.emit(entry)
@@ -493,6 +517,9 @@ export class ToolProjection {
     const partial = extractResultText(payload.partialResult)
     this.setText(entry, partial, 'partial')
     this.applyNonText(entry, partial)
+    // 进度快照只随实际带了子任务快照的更新替换，避免旧快照盖住新快照。
+    const progressed = readSubAgentViews(payload.partialResult)
+    if (progressed.length > 0) entry.subAgents = progressed
     entry.presentation = { ...entry.presentation,
       result: summarizeToolResult(entry.toolName, payload.partialResult, { isError: false, partial: true, text: partial.text }) }
     this.emit(entry)
@@ -514,6 +541,9 @@ export class ToolProjection {
     this.applyNonText(entry, result)
     entry.diff = extractDiff(entry.toolName, entry.argsText, payload.result)
     entry.ui = readUiPayload(payload.result)
+    // 最终结果没带快照时保留最后一次进度快照，避免卡片在结束时变成空白。
+    const ended = readSubAgentViews(payload.result)
+    if (ended.length > 0) entry.subAgents = ended
     entry.presentation = { ...entry.presentation,
       result: summarizeToolResult(entry.toolName, payload.result, { isError: payload.isError === true, text: result.text }) }
     this.emit(entry)
@@ -553,7 +583,8 @@ export class ToolProjection {
       nonTextBlocks: 0,
       nonTextParts: [],
       diff: null,
-      ui: null
+      ui: null,
+      subAgents: []
     }
     this.entries.push(entry)
     this.index.set(toolCallId, entry)

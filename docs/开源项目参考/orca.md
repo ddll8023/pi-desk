@@ -149,7 +149,7 @@ pi-desk 的[声明式生成式界面][p-genui]含文档版本、节点补丁及�
 - [终端模块][p-terminal]：PTY 守护进程、历史和全局／项目快捷命令。
 - [Git 模块][p-git]、[`src/main/git/git-command.ts`](../../src/main/git/git-command.ts)、[`src/shared/git-api.ts`](../../src/shared/git-api.ts)：`GitRunOptions`、固定 Git 通道和请求范围。
 - [`workspace-manager.ts`](../../src/main/workspaces/workspace-manager.ts)、[`workspace-store.ts`](../../src/main/workspaces/workspace-store.ts)、[`workspace-api.ts`](../../src/shared/workspace-api.ts)、[`worktree-service.ts`](../../src/main/git/worktree-service.ts)及 [`projects/ipc.ts`](../../src/main/projects/ipc.ts)、[`git/ipc.ts`](../../src/main/git/ipc.ts)、[`terminal-manager.ts`](../../src/main/terminal/terminal-manager.ts)、[`workspace-tabs.ts`](../../src/renderer/src/workspace/stores/workspace-tabs.ts)：工作区身份、会话绑定、执行上下文与生命周期；`task-workspaces.json` 按需保存在应用数据目录，不导入未登记的外部工作树。
-- [会话模块][p-session]、[`src/sdk-host/session-runtime.ts`](../../src/sdk-host/session-runtime.ts)：Pi SDK 会话及内置工厂装配；[子代理初步设计](../subagents-design.md)不是实现清单。
+- [会话模块][p-session]、[`src/sdk-host/session-runtime.ts`](../../src/sdk-host/session-runtime.ts)：Pi SDK 会话及内置工厂装配；[子代理](../modules/sub-agent.md)记录独立子进程委派、批内并行、单项取消与受限文档写入。
 - [手机模块][p-mobile]、[`src/main/lan-remote/manager.ts`](../../src/main/lan-remote/manager.ts)、[`src/main/lan-remote/server.ts`](../../src/main/lan-remote/server.ts)、[`src/shared/lan-remote-api.ts`](../../src/shared/lan-remote-api.ts)：`LanRemoteManager`、`LanServer` 与共享契约中的局域网入口、自动扫码连接及设备身份边界。
 - [生成式界面模块][p-genui]、[`package.json`](../../package.json)、[既有 Orca 许可声明](../../licenses/orca-MIT.txt)。
 

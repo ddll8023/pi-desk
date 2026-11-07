@@ -124,7 +124,7 @@ MIT 部分要求保留声明；Apache-2.0 部分还涉及随附许可、修改�
 
 | 类别 | EvoFlow 官方描述的能力 | pi-desk 当前边界 |
 | --- | --- | --- |
-| 开放目标与团队控制面 | Goal、项目团队、跨任务派发与恢复流程 | 没有等价的开放目标与团队编排；[子代理文档][p-subdesign]仍是初步设计 |
+| 开放目标与团队控制面 | Goal、项目团队、跨任务派发与恢复流程 | 没有等价的开放目标与团队编排；[子代理][p-subdesign]为本地单层委派（查询、审查、文档），支持批内并行，不做递归子会话与跨任务恢复 |
 | 工作流与调度 | 节点画布、发布运行、定时触发 | 无可视化模板编排、发布复用、定时调度与独立执行历史中心；会话分支内的任务记录不是平台运行中心 |
 | 岗位员工 | 值班、职责、审批、预算、汇报 | 无对应内置产品模型 |
 | 资料与资产服务 | 知识库、向量检索、画像、经验和反思入口 | 无对应内置服务；现有文件检索不承担相同目标 |
@@ -169,7 +169,7 @@ EvoFlow 文档包含广泛的桌面与预览能力，但本次没有核实其是
 - [会话模块][p-session]、[`src/sdk-host/session-runtime.ts`](../../src/sdk-host/session-runtime.ts)：`SdkSessionRuntime` 与 SDK 内置扩展装配。
 - [文件模块][p-files]、[资源模块][p-resources]、[手机模块][p-mobile]、[生成式界面模块][p-genui]：对应能力与明确不做项。
 - [`src/sdk-host/genui/tools.ts`](../../src/sdk-host/genui/tools.ts)：声明式文档和补丁入口；不持有任务执行状态。
-- [子代理初步设计][p-subdesign]：只用于说明设计不等于实现，不把设计内容计入已实现能力。
+- [子代理][p-subdesign]：记录子进程委派的执行隔离、批次边界与文档写入范围，不把未启用的 research 与递归能力计入重合。
 - [`package.json`](../../package.json)：现有依赖声明，不据此声称存在内置知识库服务。
 
 [e-plan]: https://github.com/EvovexAI/EvoFlow/blob/main/docs/user/guides/chat/plan-mode.md
@@ -198,4 +198,4 @@ EvoFlow 文档包含广泛的桌面与预览能力，但本次没有核实其是
 [p-resources]: ../modules/resources-mcp.md
 [p-mobile]: ../modules/lan-remote.md
 [p-genui]: ../modules/genui.md
-[p-subdesign]: ../subagents-design.md
+[p-subdesign]: ../modules/sub-agent.md

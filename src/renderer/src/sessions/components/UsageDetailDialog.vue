@@ -136,6 +136,14 @@ const metrics = computed<readonly UsageMetric[]>(() => {
   ]
 })
 
+/** 子代理开销行：只在真正发生过委派时出现，未知用量如实标为 —。 */
+const subAgentText = computed<string | null>(() => {
+  const totals = props.usage?.subAgents ?? null
+  if (totals === null || totals.calls === 0) return null
+  const tokens = totals.totalTokens === null ? '—' : formatTokens(totals.totalTokens)
+  return `${totals.calls} 次 · ${tokens}`
+})
+
 /** 上下文占用行：文本、进度条宽度与档位色；未知百分比不给条也不给语义色。 */
 const contextRow = computed<{ readonly text: string; readonly level: string; readonly width: string } | null>(() => {
   const context = props.usage?.context ?? null
@@ -229,6 +237,12 @@ onUnmounted(() => {
               <p v-else class="usage-note">
                 用量 —（尚未取到会话统计）
               </p>
+
+              <div v-if="subAgentText !== null" class="usage-row"
+                title="委派子代理产生的独立模型调用：不计入上方父会话累计">
+                <span class="usage-label">子代理</span>
+                <span class="usage-value">{{ subAgentText }}</span>
+              </div>
 
               <div class="usage-metrics">
                 <span

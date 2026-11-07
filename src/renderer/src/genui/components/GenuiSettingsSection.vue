@@ -109,18 +109,12 @@ async function clearParams(): Promise<void> {
   <div class="settings-section-stack">
     <header>
       <h1 class="text-xl font-semibold tracking-tight">功能</h1>
-      <p class="mt-1 text-sm text-desk-muted">
-        这些是本应用内置的能力，开关只影响本应用的行为，不修改 Pi 的配置。
-      </p>
     </header>
 
     <section class="settings-section" aria-labelledby="settings-genui-title">
       <div class="settings-section-heading">
         <div>
           <h2 id="settings-genui-title" class="settings-section-title">生成式界面</h2>
-          <p class="mt-1 text-xs text-desk-muted">
-            模型可以在回答里交付可交互界面：方案对比、指标、表格、图表、机制图解、步骤与可调参数。
-          </p>
         </div>
         <div class="segment w-full sm:w-48" role="group" aria-label="生成式界面开关">
           <AppButton
@@ -140,8 +134,7 @@ async function clearParams(): Promise<void> {
 
       <div class="settings-row">
         <p class="max-w-prose text-xs leading-5 text-desk-muted">
-          关闭后模型看不到这项能力，也不会尝试生成；已交付的界面照常显示，参数照常可调。
-          开关在会话创建时生效，改动后需重新加载资源。
+          关闭后模型不再看到这项能力；已交付的界面照常显示，参数照常可调。
         </p>
         <div v-if="ready" class="flex items-center gap-2">
           <p v-if="saving" class="text-2xs text-desk-muted">保存中…</p>
@@ -176,8 +169,7 @@ async function clearParams(): Promise<void> {
         <div>
           <p class="text-sm font-medium">界面参数缓存</p>
           <p class="mt-1 max-w-prose text-xs leading-5 text-desk-muted">
-            界面上调过的参数保存在本机，重启后仍在；不随对话历史或项目同步。
-            清除只删本机保存的取值，界面文档与对话历史不受影响。
+            保存在本机，重启后仍在，不随对话历史或项目同步；清除只删取值，界面文档与对话历史不受影响。
           </p>
           <p v-if="genuiParamPersistence.failed" role="status" class="mt-1 text-2xs text-desk-danger">
             本机参数保存失败，最近一次调节可能没有写入。

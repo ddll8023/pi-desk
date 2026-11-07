@@ -34,9 +34,6 @@ async function select(mode: ExecutionMode): Promise<void> {
     <div class="settings-section-heading">
       <div>
         <h2 id="settings-execution-mode-title" class="settings-section-title">执行模式</h2>
-        <p class="mt-1 text-xs text-desk-muted">
-          决定 Agent 加载哪些规范，以及是否需要先给出方案再动手。
-        </p>
       </div>
       <div class="segment w-full sm:w-48" role="group" aria-label="执行模式">
         <AppButton
@@ -57,12 +54,10 @@ async function select(mode: ExecutionMode): Promise<void> {
     <div class="settings-row">
       <p class="max-w-prose text-xs leading-5 text-desk-muted">
         快速模式不加载 design-protocol、code-doc-sync、architecture-redesign 三项规范，也不要求先讨论方案；
-        逐文件改动清单的审批与运行、测试授权在两种模式下都照常，不会因为选了快速模式被跳过。
+        逐文件清单审批与运行、测试授权照常，不会因选快速模式被跳过。模式只对新建会话生效，已打开的会话保持原能力集。
       </p>
       <p v-if="saving" class="text-2xs text-desk-muted">保存中…</p>
     </div>
-
-    <p class="mt-3 text-xs text-desk-muted">模式在新建会话时读取；已经打开的会话保持原来的能力集。</p>
 
     <p v-if="!executionModeLoaded" role="status" class="status-notice status-notice-warn mt-3">
       未能读取已保存的执行模式，当前显示的是默认值；重新选择一次即可写入。

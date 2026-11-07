@@ -167,6 +167,9 @@ export type SdkHostRequest =
   | (RequestEnvelope & { readonly type: 'shutdown' })
   | SdkSessionRequest
   | (RequestEnvelope & { readonly type: 'session-abort'; readonly bindingId: number })
+  /** 只取消指定子任务：任务标识由宿主按当前绑定的在途委派匹配。 */
+  | (RequestEnvelope & { readonly type: 'sub-agent-cancel'; readonly bindingId: number;
+      readonly taskIds: readonly string[] })
   /** 提交只表达是否被接受；本轮结束不属于提交响应。 */
   | (RequestEnvelope & { readonly type: 'prompt'; readonly bindingId: number; readonly message: string;
       readonly images: readonly { readonly type: 'image'; readonly data: string; readonly mimeType: string;
@@ -365,6 +368,10 @@ export function isSdkHostRequest(value: unknown): value is SdkHostRequest {
       return validTarget && requestKeys(value, ['action', 'expectedBindingId', 'interrupt', 'target'])
     }
     case 'session-abort': return isIdentity(value.bindingId) && requestKeys(value, ['bindingId'])
+    case 'sub-agent-cancel': return isIdentity(value.bindingId)
+      && Array.isArray(value.taskIds) && value.taskIds.length > 0 && value.taskIds.length <= 6
+      && value.taskIds.every(item => typeof item === 'string' && item.length > 0 && item.length <= 128)
+      && requestKeys(value, ['bindingId', 'taskIds'])
     case 'prompt': return isIdentity(value.bindingId) && typeof value.message === 'string'
       && Array.isArray(value.images) && value.images.every(entry =>
         isRecord(entry) && entry.type === 'image' && typeof entry.data === 'string'

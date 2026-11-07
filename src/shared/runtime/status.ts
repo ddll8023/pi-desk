@@ -9,6 +9,8 @@ export const RUNTIME_PROMPT_CHANNEL = 'desktop:runtime-prompt'
 /** 仅回退对话；目标由主进程核对，页面不能指定任意会话文件或 Pi 条目。 */
 export const RUNTIME_REWIND_CHANNEL = 'desktop:runtime-rewind'
 export const RUNTIME_ABORT_CHANNEL = 'desktop:runtime-abort'
+/** 只取消指定子任务；其他子任务与当前轮继续运行。 */
+export const RUNTIME_SUB_AGENT_CANCEL_CHANNEL = 'desktop:runtime-sub-agent-cancel'
 export const RUNTIME_PROJECTION_CHANNEL = 'desktop:runtime-projection'
 export const RUNTIME_PROJECTION_ACK_CHANNEL = 'desktop:runtime-projection-ack'
 export const RUNTIME_CAPABILITIES_CHANNEL = 'desktop:runtime-capabilities'
@@ -136,6 +138,12 @@ export interface RuntimeRewindRequest {
   readonly messageId: string
   /** 是否联动将代码重置回该轮消息发起前的状态（仅在工作树隔离会话下生效）。 */
   readonly revertCode?: boolean
+}
+
+/** 取消子任务请求：目标单独校验，任务标识只按当前绑定的在途委派匹配。 */
+export interface RuntimeSubAgentCancelRequest {
+  readonly target: RuntimeTarget
+  readonly taskIds: readonly string[]
 }
 
 /** text 是 Pi 返回的完整原文；渲染端当前不消费该字段，回退与重新发送均使用页面编辑框内的文本。 */

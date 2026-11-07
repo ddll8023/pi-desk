@@ -342,7 +342,7 @@ export class ModelsConfigManager {
     let apiKey = request.apiKey?.trim()
     if ((apiKey === undefined || apiKey === '' || apiKey === MODELS_CONFIG_SECRET_SENTINEL) && request.providerId) {
       // 尝试从已解析的 providers 中恢复
-      if (this.parsed === null) await this.load()
+      if (this.parsed === null) await this.read()
       if (this.parsed && isRecord(this.parsed.providers)) {
         const existing = this.parsed.providers[request.providerId]
         if (isRecord(existing) && typeof existing.apiKey === 'string') {

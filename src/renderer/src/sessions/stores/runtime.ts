@@ -153,6 +153,7 @@ export const useRuntimeStore = defineStore('runtime', () => {
     setModelsVisibility: modelDisplay.setModelsVisibility,
     showAllModels: modelDisplay.showAllModels,
     stopOperation: core.stopOperation,
+    cancelSubAgents: core.cancelSubAgents,
     refreshCapabilities: modelSlice.refreshCapabilities
   }
 })

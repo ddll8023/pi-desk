@@ -11,6 +11,8 @@ import { ImageAnnotationContext } from './image-annotations'
 // 上一轮改动面按系统提示分段注入，与图片资料同用 before_agent_start，但不改输入与 transcript。
 import { createTurnFilesHintExtension } from './turn-files-hint'
 import { lastTurnWithWrites } from './turn-files-hint'
+import { SubAgentControlRegistry } from './sub-agent/control'
+import { createSubAgentDelegationExtension } from './sub-agent/delegation-extension'
 // 延续判定只用确定性信号；结论同时进提示分段与活动投影。
 import { judgeContinuation } from './continuation-signal'
 // 标准模式的待办清单与写操作门禁；快速会话不注册。
@@ -33,8 +35,9 @@ import type {
 } from './protocol'
 import type {
   AgentCapabilities, ExtensionErrorEntry, McpStatus, ModelSummary, OutputRate, PiResourceEntry, PiResources,
-  ProjectionBatch, ProjectionSnapshot, PromptDisposition, RuntimeDiagnostics, SessionActivity, SessionUsage, HistoryData, HistoryPage, HistoryQuery
+  ProjectionBatch, ProjectionSnapshot, PromptDisposition, RuntimeDiagnostics, SessionActivity, SessionUsage, SubAgentUsageTotals, HistoryData, HistoryPage, HistoryQuery
 } from '../shared/runtime-api'
+import { parseSubAgentView } from '../shared/sub-agent-view'
 import type { ExtensionDialogResponseInput } from '../shared/extension-ui-api'
 
 type Sdk = typeof import('@earendil-works/pi-coding-agent')
@@ -112,8 +115,30 @@ function readModelIdentity(model: { readonly provider?: unknown; readonly id?: u
   return { provider, id }
 }
 
+/** 子代理用量累计项：同一子任务的进度与结束快照可重复上报，按任务键覆盖而不是相加。 */
+interface SubAgentUsageEntry {
+  readonly inputTokens: number | null
+  readonly outputTokens: number | null
+  readonly totalTokens: number | null
+}
+
+/** 从工具结果里读取子任务用量：进度用 `partialResult`、结束用 `result`，两条路径都可能带上快照。 */
+function readSubAgentUsages(result: unknown): readonly { readonly taskId: string; readonly usage: SubAgentUsageEntry }[] {
+  if (typeof result !== 'object' || result === null) return []
+  const details = (result as { readonly details?: unknown }).details
+  if (typeof details !== 'object' || details === null) return []
+  const { subAgents, subAgent } = details as { readonly subAgents?: unknown; readonly subAgent?: unknown }
+  const source = Array.isArray(subAgents) ? subAgents : [subAgent]
+  const usages: { readonly taskId: string; readonly usage: SubAgentUsageEntry }[] = []
+  for (const item of source) {
+    const view = parseSubAgentView(item)
+    if (view !== null) usages.push({ taskId: view.taskId, usage: view.usage })
+  }
+  return usages
+}
+
 /** 官方统计到页面用量的投影：缺失的累计值按 0，未知的上下文占用保持 null。 */
-function toSessionUsage(stats: SessionStats): SessionUsage {
+function toSessionUsage(stats: SessionStats, subAgents: SubAgentUsageTotals | null): SessionUsage {
   const context = stats.contextUsage
   return {
     input: stats.tokens.input,
@@ -123,7 +148,8 @@ function toSessionUsage(stats: SessionStats): SessionUsage {
     cost: stats.cost,
     context: context === undefined ? null : {
       tokens: context.tokens, contextWindow: context.contextWindow, percent: context.percent
-    }
+    },
+    subAgents
   }
 }
 
@@ -286,8 +312,12 @@ export class SdkSessionRuntime {
   private rate: OutputRateTracker | null = null
   private rateSnapshot: OutputRate = { average: null }
   private usage: SessionUsage | null = null
+  /** 子代理用量：按「工具调用 + 任务」去重，只保留每个任务最新的累计值。 */
+  private readonly subAgentUsage = new Map<string, SubAgentUsageEntry>()
   private usageReadAt = 0
   private usageTimer: ReturnType<typeof setTimeout> | null = null
+  /** 子代理取消登记：宿主失效时整体清空；正常换绑时由每个任务结束时自行注销。 */
+  private readonly subAgentControl = new SubAgentControlRegistry()
   /** 投影上报的展示消息条数；未绑定时为 0。 */
   private projectedMessageCount = 0
   /** 当前代际收到的 Extension 运行时错误；绑定换代时清空。 */
@@ -405,6 +435,15 @@ export class SdkSessionRuntime {
       throw new SdkSessionFailure('SESSION_RECOVERY_REQUIRED')
     }
     this.publish()
+  }
+
+  /**
+   * 只取消指定子任务：未在当前绑定内的标识直接忽略，不抛错也不影响当前轮。
+   * 是否真的停下仍由工具快照的终态表达，本方法只负责把请求送到对应委派。
+   */
+  async cancelSubAgents(bindingId: number, taskIds: readonly string[]): Promise<void> {
+    if (bindingId !== this.bindingId || !this.valid) throw new SdkSessionFailure('STALE_SESSION')
+    this.subAgentControl.cancel(taskIds)
   }
 
   /** 投影快照只在已绑定代际有效；未绑定时返回 null，不由宿主凭空造空基准。 */
@@ -869,6 +908,13 @@ export class SdkSessionRuntime {
           } },
           { name: 'codemode', factory: this.sdk.createCodemodeExtension(), builtin: true, replaceable: true },
           { name: 'tool-search', factory: this.sdk.createToolSearchExtension(), builtin: true, replaceable: true },
+          // 委派工具由宿主注入子进程入口与取消控制端：页面只能按任务标识取消，不能指定路径或进程。
+          { name: 'sub-agent-delegation', builtin: true, replaceable: true,
+            factory: createSubAgentDelegationExtension({
+              entryPath: resolve(this.options.productResourcesDir, '../pi-cli.mjs'),
+              skillsDir: resolve(this.options.productResourcesDir, 'skills'),
+              guardPath: resolve(this.options.productResourcesDir, '../sub-agent-write-guard.mjs')
+            }, this.subAgentControl) },
           { name: 'mcp', factory: this.sdk.createMcpExtension(), builtin: true, replaceable: true },
           // 生成式 UI 是产品内置能力，与上述内置扩展同形态注册；工厂自身不抛异常。
           // 用户关掉开关时直接不注册，而不是注册后再报错：这样模型完全看不到这几个工具。
@@ -1014,6 +1060,7 @@ export class SdkSessionRuntime {
       this.rate = rate
       this.rateSnapshot = { average: null }
       this.usage = null
+      this.subAgentUsage.clear()
       this.bridge = new ExtensionUiBridge(session.extensionRunner.getUIContext(), {
         bindingId, onRequest: this.options.onUiRequest, onCancel: this.options.onUiCancel,
         onWaitingChanged: () => this.publish(), onUnavailable: () => this.blockUnavailableInteraction()
@@ -1177,6 +1224,11 @@ export class SdkSessionRuntime {
     } else if (event.type === 'message_end') {
       if (isAssistantMessage(event.message)) this.rate?.settle(readAssistantOutput(event.message), Date.now())
       this.scheduleUsageRefresh()
+    } else if (event.type === 'tool_execution_update') {
+      // 子代理用量随进度上报；同一任务的最新值覆盖旧值，不做累加。
+      this.recordSubAgentUsage(event.toolCallId, event.partialResult)
+    } else if (event.type === 'tool_execution_end') {
+      this.recordSubAgentUsage(event.toolCallId, event.result)
     }
     if (event.type !== 'message_update' && event.type !== 'tool_execution_update') {
       this.publish()
@@ -1195,6 +1247,30 @@ export class SdkSessionRuntime {
   }
 
   /**
+   * 记录子代理自身用量：与父会话累计分开，供界面单独展示。
+   * 同一任务在进度与结束阶段都会上报快照，按「工具调用:任务」覆盖以保证只计一次。
+   */
+  private recordSubAgentUsage(toolCallId: string, result: unknown): void {
+    for (const entry of readSubAgentUsages(result)) {
+      this.subAgentUsage.set(`${toolCallId}:${entry.taskId}`, entry.usage)
+    }
+  }
+
+  /** 汇总已发生的子代理用量；没有任何子任务时为 null，不伪装成零开销。 */
+  private subAgentUsageTotals(): SubAgentUsageTotals | null {
+    if (this.subAgentUsage.size === 0) return null
+    let inputTokens: number | null = null
+    let outputTokens: number | null = null
+    let totalTokens: number | null = null
+    for (const usage of this.subAgentUsage.values()) {
+      if (usage.inputTokens !== null) inputTokens = (inputTokens ?? 0) + usage.inputTokens
+      if (usage.outputTokens !== null) outputTokens = (outputTokens ?? 0) + usage.outputTokens
+      if (usage.totalTokens !== null) totalTokens = (totalTokens ?? 0) + usage.totalTokens
+    }
+    return { calls: this.subAgentUsage.size, inputTokens, outputTokens, totalTokens }
+  }
+
+  /**
    * 会话累计用量按最小间隔补读一次：官方统计可能遍历条目，读一次缓存一次；
    * 读取失败保留上一次已确认的统计，不用空值或全零覆盖展示。
    */
@@ -1207,7 +1283,7 @@ export class SdkSessionRuntime {
       const session = this.session
       if (session === null || !this.valid) return
       try {
-        this.usage = toSessionUsage(session.getSessionStats())
+        this.usage = toSessionUsage(session.getSessionStats(), this.subAgentUsageTotals())
       } catch {
         return
       }
@@ -1251,6 +1327,8 @@ export class SdkSessionRuntime {
     this.rateSnapshot = { average: null }
     this.clearUsageTimer()
     this.usage = null
+    this.subAgentUsage.clear()
+    this.subAgentControl.clear()
     this.projectedMessageCount = 0
     this.session = null
     this.currentCreation = null

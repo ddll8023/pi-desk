@@ -44,6 +44,37 @@ function formatDateKey(timestamp: number): string {
   return `${year}-${month}-${day}`
 }
 
+function readCount(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? Math.max(0, value) : null
+}
+
+/**
+ * 提取委派工具结果里的子代理用量：子代理是另起的模型调用，其用量只出现在
+ * `details.subAgents[].usage` 里，计入一次；历史记录的单任务写法也兼容。
+ * 没有可用快照或供应商未上报时返回 null，不把它当成零消耗。
+ */
+function readSubAgentUsage(details: unknown): { input: number; output: number; total: number } | null {
+  if (!isRecord(details)) return null
+  const source = Array.isArray(details.subAgents) ? details.subAgents : [details.subAgent]
+  let input = 0
+  let output = 0
+  let total = 0
+  let seen = false
+  for (const item of source) {
+    if (!isRecord(item) || !isRecord(item.usage)) continue
+    const usage = item.usage
+    const inputTokens = readCount(usage.inputTokens)
+    const outputTokens = readCount(usage.outputTokens)
+    const totalTokens = readCount(usage.totalTokens)
+    if (inputTokens === null && outputTokens === null && totalTokens === null) continue
+    seen = true
+    input += inputTokens ?? 0
+    output += outputTokens ?? 0
+    total += totalTokens ?? (inputTokens ?? 0) + (outputTokens ?? 0)
+  }
+  return seen ? { input, output, total } : null
+}
+
 export async function scanSessionJsonl(
   filePath: string,
   fileStamp: string,
@@ -120,6 +151,27 @@ export async function scanSessionJsonl(
       if (type === 'message' && isRecord(entry.message)) {
         const msg = entry.message
         const role = msg.role
+
+        // 子代理开销单独计入：不进模型分组（子任务未记录模型归属），也不增加消息条数。
+        if (role === 'toolResult') {
+          const subAgent = readSubAgentUsage(msg.details)
+          if (subAgent !== null) {
+            totalInput += subAgent.input
+            totalOutput += subAgent.output
+            totalTokens += subAgent.total
+            const stamp = typeof entry.timestamp === 'string' ? Date.parse(entry.timestamp)
+              : typeof entry.timestamp === 'number' ? entry.timestamp : updatedAt
+            const dateKey = formatDateKey(Number.isNaN(stamp) ? updatedAt : stamp)
+            let subDaily = dailyMap.get(dateKey)
+            if (!subDaily) {
+              subDaily = { date: dateKey, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, messageCount: 0 }
+              dailyMap.set(dateKey, subDaily)
+            }
+            subDaily.input += subAgent.input
+            subDaily.output += subAgent.output
+            subDaily.totalTokens += subAgent.total
+          }
+        }
 
         // 提取首条用户消息作为标题
         if (role === 'user' && title === null) {

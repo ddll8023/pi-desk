@@ -9,7 +9,13 @@ import { canonicalProjectRoot, resolveGitRepository } from './git-repository'
 import type { GitRepository } from './git-repository'
 
 export class WorktreeOperationError extends Error {
-  constructor(readonly code: DesktopErrorCode, message: string) { super(message) }
+  readonly code: DesktopErrorCode
+
+  // 不写成构造器参数属性：Node 的 TypeScript 仅擦除类型，参数属性不属于可擦除语法。
+  constructor(code: DesktopErrorCode, message: string) {
+    super(message)
+    this.code = code
+  }
 }
 function samePath(left: string, right: string): boolean {
   const a = resolve(left), b = resolve(right)

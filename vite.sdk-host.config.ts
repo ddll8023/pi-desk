@@ -1,10 +1,11 @@
 /**
- * 独立构建 ESM SDK 宿主、一次性 CLI 运行器、一次性版本检查脚本、一次性扩展更新脚本
- * 与一次性内置 Pi agent 安装脚本；只输出自身产物，不把官方包并入主进程或沙箱 preload。
+ * 独立构建 ESM SDK 宿主、一次性 CLI 运行器、一次性版本检查脚本、一次性扩展更新脚本、
+ * 一次性内置 Pi agent 安装脚本，以及文档子代理的写入守卫扩展；只输出自身产物，
+ * 不把官方包并入主进程或沙箱 preload。
  *
- * 五个入口共用同一份 external 与目标环境：宿主常驻并持有会话，运行器一次性执行主进程给定的 CLI 参数，
+ * 上述入口共用同一份 external 与目标环境：宿主常驻并持有会话，运行器一次性执行主进程给定的 CLI 参数，
  * 版本检查一次性读取已安装与远端版本并输出 JSON，扩展更新一次性执行更新并输出进度与结论，
- * 运行时安装一次性把官方发布安装到应用自有的运行时目录。
+ * 运行时安装一次性把官方发布安装到应用自有的运行时目录，写入守卫作为独立扩展文件被 `-e` 加载。
  */
 import { resolve } from 'node:path'
 import { defineConfig } from 'vite'
@@ -25,7 +26,9 @@ export default defineConfig({
         'pi-cli': resolve('src/entries/pi-cli/index.ts'),
         'update-check': resolve('src/entries/update-check/index.ts'),
         'package-update': resolve('src/entries/package-update/index.ts'),
-        'runtime-install': resolve('src/entries/runtime-install/index.ts')
+        'runtime-install': resolve('src/entries/runtime-install/index.ts'),
+        // 文档子代理的写入守卫单独产物：由子进程以 `-e` 加载，不进产品资源包，主会话不会加载它。
+        'sub-agent-write-guard': resolve('src/sdk-host/sub-agent/write-guard.ts')
       },
       external: ['@earendil-works/pi-coding-agent', /^node:/],
       output: {

@@ -49,6 +49,7 @@ import type {
   RuntimeInfo,
   RuntimeResult,
   RuntimeRewindRequest,
+  RuntimeSubAgentCancelRequest,
   RuntimeRewindResult,
   RuntimeSetModelRequest,
   RuntimeState,
@@ -997,6 +998,22 @@ export class SdkRuntimeBridge {
     const host = matched.run.owner
     try {
       const status = await host.abortSession({ hostId: host.getSessionIdentity().hostId, bindingId: matched.bindingId })
+      return { ok: true, data: mapStatus(host.getStatus(), status, matched.run.runId) }
+    } catch (error) {
+      return { ok: false, error: runtimeErrorOf(error) }
+    }
+  }
+
+  /** 取消指定子任务：目标与任务标识都在主进程核对后才转发给宿主。 */
+  async cancelSubAgents(request: RuntimeSubAgentCancelRequest): Promise<RuntimeResult> {
+    const matched = this.matchedRun(request.target)
+    if (matched === null) return { ok: false, error: TARGET_CHANGED_ERROR }
+    if (matched.bindingId === null) return { ok: false, error: UNBOUND_ERROR }
+    this.keepAlive(matched.run.runId)
+    const host = matched.run.owner
+    try {
+      const status = await host.cancelSubAgents(
+        { hostId: host.getSessionIdentity().hostId, bindingId: matched.bindingId }, request.taskIds)
       return { ok: true, data: mapStatus(host.getStatus(), status, matched.run.runId) }
     } catch (error) {
       return { ok: false, error: runtimeErrorOf(error) }

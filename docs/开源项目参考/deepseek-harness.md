@@ -106,7 +106,7 @@
 
 | 类别 | DSH 已公开能力 | pi-desk 当前边界 |
 | --- | --- | --- |
-| 子代理管理 | 受管父子关系、独立子会话、消息、续接与结果交付 | 内置子代理模块无；[现有文档][p-subdesign]是初步设计，不是已实现功能；多会话并行也不自动形成父子任务 |
+| 子代理管理 | 受管父子关系、独立子会话、消息、续接与结果交付 | 内置只读委派：查询与审查两类，独立 CLI 子进程加工具白名单，活动与用量随工具结果回传；没有父子登记、并行任务组与续接；多会话并行也不自动形成父子任务 |
 | 专用模式、目标与组合工作流 | `plan-mode`、`tool-goal`、`tool-workflow` | 没有等价的专用模式、开放目标及可组合工作流控制面 |
 | Harness 组合入口 | Web、无界面、SDK、ACP 与多层 Profile 组合 | pi-desk 是 Pi SDK 桌面客户端，不提供等价的自有 Harness 分发体系 |
 
@@ -144,7 +144,7 @@ pi-desk 有[声明式生成式界面][p-genui]、桌面文件编辑和常驻终�
 ### 本项目事实出处
 
 - [会话模块][p-session]、[`src/sdk-host/session-runtime.ts`](../../src/sdk-host/session-runtime.ts)：`SdkSessionRuntime`、`createAgentSessionServices`、`createAgentSessionRuntime` 及内置扩展工厂装配。
-- [资源模块][p-resources]、[终端模块][p-terminal]、[子代理初步设计][p-subdesign]。
+- [资源模块][p-resources]、[终端模块][p-terminal]、[子代理][p-subdesign]。
 - [`src/main/trust/trust-manager.ts`](../../src/main/trust/trust-manager.ts)：`TrustManager` 的职责及沙箱排除边界。
 - [生成式界面模块][p-genui]、[`src/sdk-host/genui/tools.ts`](../../src/sdk-host/genui/tools.ts)：`GenuiToolDetails` 与模型摘要／界面载荷分离。
 - [`package.json`](../../package.json)：现有 Electron、Vue、Pi SDK 和终端依赖。
@@ -165,4 +165,4 @@ pi-desk 有[声明式生成式界面][p-genui]、桌面文件编辑和常驻终�
 [p-resources]: ../modules/resources-mcp.md
 [p-terminal]: ../modules/terminal-commands.md
 [p-genui]: ../modules/genui.md
-[p-subdesign]: ../subagents-design.md
+[p-subdesign]: ../modules/sub-agent.md

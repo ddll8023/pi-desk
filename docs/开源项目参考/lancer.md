@@ -103,7 +103,7 @@
 
 | 类别 | 具体能力 |
 | --- | --- |
-| **子会话编排** | Lancer 提供递归子分支、孙分支与父会话结果汇总；pi-desk 不创建子代理，[子代理文档][p-subagent]仍为设计，不能计入实质重合。 |
+| **子会话编排** | Lancer 提供递归子分支、孙分支与父会话结果汇总；pi-desk 只做本地单层委派（查询、审查、文档），不做递归子会话与父会话汇总，[子代理][p-subagent]不计入实质重合。 |
 | **本地无头控制接口** | Unix Domain Socket + Bearer Token 的 Control API 与 `./scripts/lancer-ctl`，支持外部程序非交互式派发（send/queue/steer）、等待（wait）、订阅日志流（stream）与多泳道查看（lanes）。 |
 | **自定义桌面扩展前端** | 基于 `pi-extension://` 协议、沙箱 iframe 与 Chord 0.87.0 的前端扩展挂载机制，允许 Pi 扩展携带独立的 GUI 操作面板（如 PR Review、Test Runs）。 |
 | **macOS 豆包 App 接管** | 利用 macOS 辅助功能（Accessibility API）与本地豆包桌面应用挂接，接收外部生成内容。 |
@@ -150,7 +150,7 @@
   - 当前任务工作区与提交式快照边界：[`workspace-manager.ts`](../../src/main/workspaces/workspace-manager.ts)、[`session-manager.ts`](../../src/main/sessions/session-manager.ts)、[`turn-snapshot-service.ts`](../../src/main/git/turn-snapshot-service.ts)、[`sdk-host-manager.ts`](../../src/main/sessions/sdk-host-manager.ts)、[渲染端回退服务](../../src/renderer/src/sessions/services/runtime.ts)及 [`preload/runtime.ts`](../../src/preload/runtime.ts)。
   - 对方独立检查点机制：[`TurnCheckpointStore`](https://github.com/raylee-ai/lancer/blob/main/apps/desktop/electron/workbench/checkpoint-store.ts)。
   - 原版 Light UI 与动效适配：[`src/renderer/src/ui/lancer-light-ui/`](../../src/renderer/src/ui/lancer-light-ui/)、[`TaskRunningBorder.vue`](../../src/renderer/src/sessions/components/TaskRunningBorder.vue)、[`licenses/lancer-light-ui-MIT.txt`](../../licenses/lancer-light-ui-MIT.txt)。
-  - 子代理设计规划：[`docs/subagents-design.md`][p-subagent]
+  - 子代理模块：[`docs/modules/sub-agent.md`][p-subagent]
   - 开源参考索引：[`docs/开源项目参考/README.md`][p-index]
 
 [l-repo]: https://github.com/raylee-ai/lancer
@@ -168,5 +168,5 @@
 [l-light-readme]: https://github.com/raylee-ai/lancer/blob/main/packages/light-ui/README.md
 [l-light-source]: https://github.com/raylee-ai/lancer/blob/main/packages/light-ui/src/light-layer.ts
 [p-arch]: ../项目结构文档.md
-[p-subagent]: ../subagents-design.md
+[p-subagent]: ../modules/sub-agent.md
 [p-index]: README.md

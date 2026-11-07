@@ -22,6 +22,7 @@ import { cacheHitRate, formatTokens } from '../usage-format'
 import { toolGroupStats } from '../tool-summary'
 import MarkdownContent from '../../ui/MarkdownContent.vue'
 import ToolCard from './ToolCard.vue'
+import SubAgentCard from './SubAgentCard.vue'
 import GenuiMountGate from '../../genui/components/GenuiMountGate.vue'
 import UiDocument from '../../genui/components/UiDocument.vue'
 import AppButton from '../../ui/AppButton.vue'
@@ -526,20 +527,26 @@ function onEditKeydown(event: KeyboardEvent): void {
           <span class="execution-panel-title">执行记录</span>
           <span class="execution-panel-stats">{{ groupStats(row.blocks) }}</span>
         </div>
-        <ToolCard
-          v-for="block in row.blocks"
-          :key="block.key"
-          :block="block"
-          :history-chunks="chunksFor(block)"
-          :chunk-states="chunkStates"
-          :history-enabled="historyEnabled"
-          :history-busy="historyBusy"
-          :history-more="historyMore"
-          :history-error="historyError"
-          @load-more="emit('loadMore')"
-          @load-chunk="emit('loadChunk', $event)"
-          @user-expand="emit('userExpand')"
-        />
+        <template v-for="block in row.blocks" :key="block.key">
+          <SubAgentCard
+            v-if="(block.execution?.subAgents.length ?? 0) > 0"
+            :views="block.execution?.subAgents ?? []"
+            @user-expand="emit('userExpand')"
+          />
+          <ToolCard
+            v-else
+            :block="block"
+            :history-chunks="chunksFor(block)"
+            :chunk-states="chunkStates"
+            :history-enabled="historyEnabled"
+            :history-busy="historyBusy"
+            :history-more="historyMore"
+            :history-error="historyError"
+            @load-more="emit('loadMore')"
+            @load-chunk="emit('loadChunk', $event)"
+            @user-expand="emit('userExpand')"
+          />
+        </template>
       </section>
       <template v-else>
         <details
@@ -633,6 +640,11 @@ function onEditKeydown(event: KeyboardEvent): void {
               :submit-disabled-reason="disabledReason ?? null"
             />
           </GenuiMountGate>
+          <SubAgentCard
+            v-else-if="(row.block.execution?.subAgents.length ?? 0) > 0"
+            :views="row.block.execution?.subAgents ?? []"
+            @user-expand="emit('userExpand')"
+          />
           <ToolCard
             v-else
             :block="row.block"

@@ -76,6 +76,7 @@ const EXPECTED_REPLIES: Record<SdkHostRequest['type'], SdkHostFrame['type'] | nu
   'memory-configuration': null,
   session: 'session-result',
   'session-abort': 'session-result',
+  'sub-agent-cancel': 'session-result',
   prompt: 'prompt-result',
   'set-model': 'session-result',
   rewind: 'rewind-result',
@@ -669,6 +670,19 @@ export class SdkHostManager {
     return this.getSessionStatus()
   }
 
+  /**
+   * 取消指定子任务：绕过生命周期提交锁，只作用于给定绑定内真实在途的任务。
+   * 成功仅表示宿主已收到并转发，任务是否真的停下仍以工具快照为准。
+   */
+  async cancelSubAgents(expected: SdkSessionIdentity & { readonly bindingId: number },
+    taskIds: readonly string[]): Promise<SdkSessionStatus> {
+    const record = this.requireSessionHost(expected)
+    const frame = await this.request(record, { version: SDK_HOST_PROTOCOL_VERSION, hostId: record.hostId,
+      requestId: randomUUID(), type: 'sub-agent-cancel', bindingId: expected.bindingId, taskIds }, SESSION_TIMEOUT_MS)
+    if (frame.type !== 'session-result') throw new SdkHostError('HOST_PROTOCOL_ERROR', 'SDK 子任务取消结果不符合契约。')
+    return this.getSessionStatus()
+  }
+
   /** SDK 确认回应后才移除镜像；选择候选、method 和绑定身份在两端都复核。 */
   async respondDialog(expected: SdkSessionIdentity & { readonly bindingId: number }, dialogId: string, response: ExtensionDialogResponseInput): Promise<void> {
     const record = this.requireSessionHost(expected)
@@ -1031,7 +1045,11 @@ export class SdkHostManager {
     // 宿主当前不再报告该操作在执行即视为已收敛，不依赖中间是否见过开始事件。
     if (this.uncertainOperationId !== null
       && status.operationId !== this.uncertainOperationId) this.uncertainOperationId = null
-    if (previous.phase === 'busy' && status.phase === 'ready' && this.currentTarget?.worktreePath && this.lastUserMessageId !== null) {
+    // 一轮对话结束的标志是会话从非空闲转为空闲，而不是某个瞬时的 phase：
+    // 当前 phase 只有绑定/准备/空/失败这类生命周期值，是否空闲另由 `isIdle` 表达。
+    if (previous.phase === 'bound' && status.phase === 'bound'
+      && previous.isIdle === false && status.isIdle === true
+      && this.currentTarget?.worktreePath && this.lastUserMessageId !== null) {
       void turnSnapshotService.createTurnSnapshot(this.currentTarget.worktreePath, this.lastUserMessageId)
     }
     this.publishSession()
@@ -1109,7 +1127,7 @@ export class SdkHostManager {
 
       if (!boundInstance) {
         // 向渲染进程派发自动开辟并绑定事件
-        const projectPath = this.sessionSnapshot.target?.projectPath ?? ''
+        const projectPath = this.sessionSnapshot.projectPath ?? ''
         sendToRenderer(BROWSER_AUTO_ATTACH_EVENT, {
           sessionId,
           runId: this.options.runId,

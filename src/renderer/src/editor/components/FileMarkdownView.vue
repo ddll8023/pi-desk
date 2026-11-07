@@ -298,8 +298,8 @@ watch(() => props.active, active => {
   if (active) onSurfaceUpdated()
   else { flushEdit(); closeSearch(false); zoomed.value = null }
 })
-watch(() => props.anchorRequest?.id, onSurfaceUpdated)
-watch(() => props.fontSize, onSurfaceUpdated)
+watch(() => props.anchorRequest?.id, () => onSurfaceUpdated())
+watch(() => props.fontSize, () => onSurfaceUpdated())
 onMounted(() => {
   window.addEventListener('keydown', onFindShortcut)
   if (shell.value) {

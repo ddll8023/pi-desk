@@ -53,6 +53,20 @@ export async function abortRuntime(target: RuntimeTarget): Promise<RuntimeResult
   }
 }
 
+/** 只取消指定子任务；成功只表示请求已送达宿主，任务是否停下仍看工具快照。 */
+export async function cancelRuntimeSubAgents(target: RuntimeTarget, taskIds: readonly string[]): Promise<RuntimeResult> {
+  const bridge = window.desktop
+  if (!bridge || typeof bridge.cancelRuntimeSubAgents !== 'function') return unavailable()
+  try {
+    return await bridge.cancelRuntimeSubAgents({
+      target: { runId: target.runId, runtimeId: target.runtimeId },
+      taskIds
+    })
+  } catch (error) {
+    return callFailed(error)
+  }
+}
+
 /** 提交 Prompt 到目标实例的当前绑定；返回只表达请求接受或拒绝，不代表 Agent 执行结束。 */
 export async function sendPrompt(
   target: RuntimeTarget,

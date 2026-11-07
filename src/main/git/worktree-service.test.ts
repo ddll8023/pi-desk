@@ -1,13 +1,15 @@
-import { describe, expect, it } from 'vitest'
+/** 工作树 porcelain 解析的单元测试：空输出、单工作树与多工作树的 detached／prunable／locked 状态。 */
+import assert from 'node:assert/strict'
+import { describe, it } from 'node:test'
 import { resolve } from 'node:path'
-import { parseWorktreeListPorcelain } from './worktree-service'
+import { parseWorktreeListPorcelain } from './worktree-service.ts'
 
 describe('parseWorktreeListPorcelain', () => {
   const mainRepo = resolve('/test/repo')
 
   it('空文本输出空数组', () => {
-    expect(parseWorktreeListPorcelain('', mainRepo)).toEqual([])
-    expect(parseWorktreeListPorcelain('   \n\n  ', mainRepo)).toEqual([])
+    assert.deepEqual(parseWorktreeListPorcelain('', mainRepo), [])
+    assert.deepEqual(parseWorktreeListPorcelain('   \n\n  ', mainRepo), [])
   })
 
   it('正确解析单个主工作树', () => {
@@ -19,8 +21,8 @@ describe('parseWorktreeListPorcelain', () => {
     ].join('\n')
 
     const result = parseWorktreeListPorcelain(stdout, mainRepo)
-    expect(result).toHaveLength(1)
-    expect(result[0]).toEqual({
+    assert.equal(result.length, 1)
+    assert.deepEqual(result[0], {
       path: mainRepo,
       branch: 'main',
       headCommit: '0123456789abcdef0123456789abcdef01234567',
@@ -57,31 +59,33 @@ describe('parseWorktreeListPorcelain', () => {
     ].join('\n')
 
     const result = parseWorktreeListPorcelain(stdout, mainRepo)
-    expect(result).toHaveLength(4)
+    assert.equal(result.length, 4)
+    const [main, feature, detached, locked] = result
+    assert.ok(main !== undefined && feature !== undefined && detached !== undefined && locked !== undefined)
 
     // 主工作树
-    expect(result[0].path).toBe(wt1)
-    expect(result[0].branch).toBe('main')
-    expect(result[0].isMain).toBe(true)
-    expect(result[0].isLocked).toBe(false)
+    assert.equal(main.path, wt1)
+    assert.equal(main.branch, 'main')
+    assert.equal(main.isMain, true)
+    assert.equal(main.isLocked, false)
 
     // 隔离分支工作树
-    expect(result[1].path).toBe(wt2)
-    expect(result[1].branch).toBe('feature/feat-1')
-    expect(result[1].isMain).toBe(false)
-    expect(result[1].isLocked).toBe(false)
+    assert.equal(feature.path, wt2)
+    assert.equal(feature.branch, 'feature/feat-1')
+    assert.equal(feature.isMain, false)
+    assert.equal(feature.isLocked, false)
 
     // detached + prunable
-    expect(result[2].path).toBe(wt3)
-    expect(result[2].branch).toBeNull()
-    expect(result[2].isMain).toBe(false)
-    expect(result[2].isPrunable).toBe(true)
+    assert.equal(detached.path, wt3)
+    assert.equal(detached.branch, null)
+    assert.equal(detached.isMain, false)
+    assert.equal(detached.isPrunable, true)
 
     // locked + reason
-    expect(result[3].path).toBe(wt4)
-    expect(result[3].branch).toBe('experiment')
-    expect(result[3].isMain).toBe(false)
-    expect(result[3].isLocked).toBe(true)
-    expect(result[3].lockReason).toBe('Reason for lock in tests')
+    assert.equal(locked.path, wt4)
+    assert.equal(locked.branch, 'experiment')
+    assert.equal(locked.isMain, false)
+    assert.equal(locked.isLocked, true)
+    assert.equal(locked.lockReason, 'Reason for lock in tests')
   })
 })

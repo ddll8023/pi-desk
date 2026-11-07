@@ -4,6 +4,7 @@ import type { IpcMainInvokeEvent } from 'electron'
 import { parseImageAnnotations } from '../../shared/image-annotation'
 import {
   RUNTIME_ABORT_CHANNEL,
+  RUNTIME_SUB_AGENT_CANCEL_CHANNEL,
   PROMPT_IMAGE_MAX_COUNT,
   RUNTIME_CAPABILITIES_CHANNEL,
   RUNTIME_COMPACT_CHANNEL,
@@ -16,6 +17,7 @@ import {
   isRuntimeCompactRequest,
   isRuntimeSetModelRequest,
   isRuntimeRewindRequest,
+  isSubAgentCancelRequest,
   isRuntimeTarget
 } from '../../shared/runtime-api'
 import type {
@@ -69,6 +71,20 @@ export function registerRuntimeHandlers(pageUrl: string): void {
         return runtimeFailure('INVALID_REQUEST', '中止操作只接受运行实例与绑定代际。')
       }
       return sdkRuntime.abort(args[0])
+    }
+  )
+
+  /** 子任务取消只作用于当前绑定内真实在途的委派任务，不改变其他任务与当前轮。 */
+  handle(
+    RUNTIME_SUB_AGENT_CANCEL_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<RuntimeResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return runtimeFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 1 || !isSubAgentCancelRequest(args[0])) {
+        return runtimeFailure('INVALID_REQUEST', '取消子任务只接受运行实例、绑定代际与任务标识。')
+      }
+      return sdkRuntime.cancelSubAgents(args[0])
     }
   )
 

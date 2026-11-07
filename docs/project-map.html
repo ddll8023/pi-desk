@@ -312,6 +312,42 @@
         ]
       },
       {
+        "id": "sub-agent",
+        "name": "子代理",
+        "groupId": "chat",
+        "summary": "把可独立完成的工作交给隔离子进程执行：工具能力由 `--tools` 白名单限定，批内任务各自收敛，支持按任务标识定向取消与受限文档写入。",
+        "features": [
+          "查询、审查、文档三类子任务入口；research 未启用",
+          "每任务一个独立子进程，批内并行且部分失败不污染其他结论",
+          "文档写入受产品上限与任务 write_scope 两层约束，守卫扩展按真实路径拦截越界",
+          "页面按任务标识取消单项，不影响同批其他任务与当前轮",
+          "事件流快照投影为卡片，用量单列进会话与日统计"
+        ],
+        "tags": ["SDK 宿主", "Pi 扩展", "子进程"],
+        "entries": [
+          {"kind": "关键实现", "label": "委派工具、批次调度与事件流快照", "path": "src/sdk-host/sub-agent/delegation-extension.ts"},
+          {"kind": "关键实现", "label": "单项取消登记表", "path": "src/sdk-host/sub-agent/control.ts"},
+          {"kind": "关键实现", "label": "文档写入守卫", "path": "src/sdk-host/sub-agent/write-guard.ts"},
+          {"kind": "关键实现", "label": "执行快照契约与校验", "path": "src/shared/sub-agent-view.ts"},
+          {"kind": "界面入口", "label": "子任务卡片", "path": "src/renderer/src/sessions/components/SubAgentCard.vue"}
+        ],
+        "resources": [
+          {"name": "子任务执行快照", "owner": "工具结果 details.subAgents", "lifecycle": "随会话记录保存，不另建存储；记录缺失时卡片降级为普通工具结果"},
+          {"name": "子代理用量", "owner": "会话用量与日统计", "lifecycle": "按「工具调用 + 任务」单次归集，不并入父会话累计，不按模型拆分"},
+          {"name": "取消登记表", "owner": "宿主会话对象", "lifecycle": "宿主失效时整体清空；正常换绑时由每个任务结束时自行注销"}
+        ],
+        "constraints": [
+          "只读任务无 bash 与写入工具；能力边界由进程参数强制，不是提示词劝阻",
+          "子进程不继承用户与项目配置、不加载其他扩展、不落盘会话，也不能递归委派",
+          "文档写入上限为 docs/ 与仓库根 README.md，任务只能收窄不能扩大",
+          "子任务生命周期等于工具调用，没有主进程父子登记表，不支持脱离父任务继续运行",
+          "独立进程是故障域隔离，不是文件隔离，不构成 OS 沙箱"
+        ],
+        "links": [
+          {"label": "模块文档：子代理", "href": "modules/sub-agent.md"}
+        ]
+      },
+      {
         "id": "genui",
         "name": "生成式界面",
         "groupId": "chat",
@@ -784,7 +820,8 @@
       {"id": "r-sc-model-candidates", "from": "sessions-chat", "to": "providers-auth", "label": "读取模型候选、默认模型与 Codex、OpenCode Go 账户额度", "kind": "read"},
       {"id": "r-sc-resource-completion", "from": "sessions-chat", "to": "resources-mcp", "label": "读取技能与命令补全", "kind": "read"},
       {"id": "r-sc-genui-payload", "from": "sessions-chat", "to": "genui", "label": "分发生成式界面载荷", "kind": "compose"},
-      {"id": "r-genui-session-tools", "from": "genui", "to": "sessions-chat", "label": "注册内置工具并回传结果", "kind": "compose"},
+      {"id": "r-sc-subagent-delegate", "from": "sessions-chat", "to": "sub-agent", "label": "调用委派工具与下发取消请求", "kind": "call"},
+      {"id": "r-subagent-sc-projection", "from": "sub-agent", "to": "sessions-chat", "label": "回传执行快照与用量", "kind": "compose"},      {"id": "r-genui-session-tools", "from": "genui", "to": "sessions-chat", "label": "注册内置工具并回传结果", "kind": "compose"},
       {"id": "r-sc-file-candidates", "from": "sessions-chat", "to": "files-editor", "label": "取文件引用候选", "kind": "read"},
       {"id": "r-sc-quick-send", "from": "sessions-chat", "to": "preferences", "label": "读取快捷输入短语", "kind": "read"},
       {"id": "r-sc-sg-extension", "from": "sessions-chat", "to": "skill-guard", "label": "装配宿主门禁并承接选择工具卡片", "kind": "compose"},
@@ -883,7 +920,7 @@
           "name": "SDK 宿主",
           "kind": "受管进程",
           "summary": "utilityProcess 承载官方 SDK 会话，SDK 事件与历史记录通过有界投影送达页面。",
-          "contains": ["sessions-chat", "genui", "memory", "skill-guard"],
+          "contains": ["sessions-chat", "sub-agent", "genui", "memory", "skill-guard"],
           "entries": [
             {"kind": "进程入口", "label": "宿主入口", "path": "src/sdk-host/index.ts"},
             {"kind": "关键实现", "label": "会话运行", "path": "src/sdk-host/session-runtime.ts"},

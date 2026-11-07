@@ -95,12 +95,13 @@ const SCROLL_PARAMETERS = {
 export function registerBrowserTools(pi: ExtensionAPI, operator: SdkBrowserOperator): void {
   pi.registerTool({
     name: 'browser_snapshot',
+    label: '页面快照',
     description: '获取当前受管内置浏览器页面的结构化无障碍树快照。输出包含当前页面 URL、标题及带 [ref: N] 标号的可交互控件列表。动作前必须先通过本工具获取最新快照引用。',
     parameters: SNAPSHOT_PARAMETERS,
     async execute() {
       const result = await operator({ kind: 'snapshot' })
       if (!result.ok) {
-        return { content: [{ type: 'text', text: `获取页面快照失败：${result.error}` }] }
+        return { content: [{ type: 'text', text: `获取页面快照失败：${result.error}` }], details: undefined }
       }
 
       const snapshot = result.data as BrowserSnapshot
@@ -124,54 +125,57 @@ export function registerBrowserTools(pi: ExtensionAPI, operator: SdkBrowserOpera
         text += '  ... (页面元素较多，已截断显示前 250 个交互节点)\n'
       }
 
-      return { content: [{ type: 'text', text }] }
+      return { content: [{ type: 'text', text }], details: undefined }
     }
   })
 
   pi.registerTool({
     name: 'browser_get_content',
+    label: '页面正文',
     description: '提取当前内置浏览器页面的纯文本正文内容。适用于长网页、文档阅读与纯文本分析场景。',
     parameters: CONTENT_PARAMETERS,
     async execute() {
       const result = await operator({ kind: 'get-content' })
       if (!result.ok) {
-        return { content: [{ type: 'text', text: `提取页面正文失败：${result.error}` }] }
+        return { content: [{ type: 'text', text: `提取页面正文失败：${result.error}` }], details: undefined }
       }
 
       const content = result.data as Extract<BrowserContentResult, { ok: true }>
       const text = `[页面地址]: ${content.url}\n[页面标题]: ${content.title}\n\n${content.text}`
-      return { content: [{ type: 'text', text }] }
+      return { content: [{ type: 'text', text }], details: undefined }
     }
   })
 
   pi.registerTool({
     name: 'browser_navigate',
+    label: '打开网页',
     description: '在当前绑定的内置浏览器中导航到指定的 URL 地址。',
     parameters: NAVIGATE_PARAMETERS,
     async execute(_toolCallId, rawParams) {
       const params = rawParams as { url?: string }
       if (!params || typeof params.url !== 'string') {
-        return { content: [{ type: 'text', text: '参数错误：url 必须为字符串。' }] }
+        return { content: [{ type: 'text', text: '参数错误：url 必须为字符串。' }], details: undefined }
       }
 
       const result = await operator({ kind: 'navigate', url: params.url })
       if (!result.ok) {
-        return { content: [{ type: 'text', text: `导航失败：${result.error}` }] }
+        return { content: [{ type: 'text', text: `导航失败：${result.error}` }], details: undefined }
       }
 
       const data = result.data as { title: string; url: string }
-      return { content: [{ type: 'text', text: `已成功导航到目标页面：${data.title} (${data.url})` }] }
+      return { content: [{ type: 'text', text: `已成功导航到目标页面：${data.title} (${data.url})` }], details: undefined }
     }
   })
 
   pi.registerTool({
     name: 'browser_click',
+    label: '点击元素',
     description: '点击当前页面快照中指定的 [ref: N] 元素。执行前会进行动态视口滚动与盒模型可见性校验。',
     parameters: CLICK_PARAMETERS,
     async execute(_toolCallId, rawParams) {
       const params = rawParams as { ref?: number }
       if (!params || typeof params.ref !== 'number') {
-        return { content: [{ type: 'text', text: '参数错误：ref 必须为数字标号。' }] }
+        return { content: [{ type: 'text', text: '参数错误：ref 必须为数字标号。' }], details: undefined }
       }
 
       const result = await operator({ kind: 'click', refId: params.ref })
@@ -179,22 +183,23 @@ export function registerBrowserTools(pi: ExtensionAPI, operator: SdkBrowserOpera
         const errorMsg = result.error.includes('不存在') || result.error.includes('过期')
           ? `点击失败：元素标号 [ref: ${params.ref}] 已失效或未找到。请先调用 browser_snapshot 获取当前最新页面快照。`
           : `点击失败：${result.error}`
-        return { content: [{ type: 'text', text: errorMsg }] }
+        return { content: [{ type: 'text', text: errorMsg }], details: undefined }
       }
 
       const data = result.data as { title: string; url: string }
-      return { content: [{ type: 'text', text: `已成功点击 [ref: ${params.ref}]。当前页面：${data.title} (${data.url})` }] }
+      return { content: [{ type: 'text', text: `已成功点击 [ref: ${params.ref}]。当前页面：${data.title} (${data.url})` }], details: undefined }
     }
   })
 
   pi.registerTool({
     name: 'browser_fill',
+    label: '填写输入框',
     description: '在当前页面快照中指定的输入框 [ref: N] 中清空并输入文本内容。',
     parameters: FILL_PARAMETERS,
     async execute(_toolCallId, rawParams) {
       const params = rawParams as { ref?: number; text?: string }
       if (!params || typeof params.ref !== 'number' || typeof params.text !== 'string') {
-        return { content: [{ type: 'text', text: '参数错误：必须提供有效的 ref 数字和 text 字符串。' }] }
+        return { content: [{ type: 'text', text: '参数错误：必须提供有效的 ref 数字和 text 字符串。' }], details: undefined }
       }
 
       const result = await operator({ kind: 'fill', refId: params.ref, text: params.text })
@@ -202,36 +207,38 @@ export function registerBrowserTools(pi: ExtensionAPI, operator: SdkBrowserOpera
         const errorMsg = result.error.includes('不存在') || result.error.includes('过期')
           ? `输入失败：输入框标号 [ref: ${params.ref}] 已失效或未找到。请先调用 browser_snapshot 获取当前最新页面快照。`
           : `输入失败：${result.error}`
-        return { content: [{ type: 'text', text: errorMsg }] }
+        return { content: [{ type: 'text', text: errorMsg }], details: undefined }
       }
 
       const data = result.data as { title: string; url: string }
-      return { content: [{ type: 'text', text: `已成功在 [ref: ${params.ref}] 中输入文本。当前页面：${data.title} (${data.url})` }] }
+      return { content: [{ type: 'text', text: `已成功在 [ref: ${params.ref}] 中输入文本。当前页面：${data.title} (${data.url})` }], details: undefined }
     }
   })
 
   pi.registerTool({
     name: 'browser_press_key',
+    label: '发送按键',
     description: '向当前浏览器页面派发控制按键（支持 Enter、Tab、Escape、Backspace、ArrowDown 等）。',
     parameters: PRESS_PARAMETERS,
     async execute(_toolCallId, rawParams) {
       const params = rawParams as { key?: string }
       if (!params || typeof params.key !== 'string') {
-        return { content: [{ type: 'text', text: '参数错误：key 必须为字符串。' }] }
+        return { content: [{ type: 'text', text: '参数错误：key 必须为字符串。' }], details: undefined }
       }
 
       const result = await operator({ kind: 'press', key: params.key })
       if (!result.ok) {
-        return { content: [{ type: 'text', text: `按键派发失败：${result.error}` }] }
+        return { content: [{ type: 'text', text: `按键派发失败：${result.error}` }], details: undefined }
       }
 
       const data = result.data as { title: string; url: string }
-      return { content: [{ type: 'text', text: `已成功向页面派发按键 [${params.key}]。当前页面：${data.title} (${data.url})` }] }
+      return { content: [{ type: 'text', text: `已成功向页面派发按键 [${params.key}]。当前页面：${data.title} (${data.url})` }], details: undefined }
     }
   })
 
   pi.registerTool({
     name: 'browser_scroll',
+    label: '滚动页面',
     description: '在当前页面滚动指定的像素位移。默认向下滚动 300 像素。',
     parameters: SCROLL_PARAMETERS,
     async execute(_toolCallId, rawParams) {
@@ -241,11 +248,11 @@ export function registerBrowserTools(pi: ExtensionAPI, operator: SdkBrowserOpera
 
       const result = await operator({ kind: 'scroll', deltaX, deltaY })
       if (!result.ok) {
-        return { content: [{ type: 'text', text: `滚动派发失败：${result.error}` }] }
+        return { content: [{ type: 'text', text: `滚动派发失败：${result.error}` }], details: undefined }
       }
 
       const data = result.data as { title: string; url: string }
-      return { content: [{ type: 'text', text: `已成功在页面派发滚动。当前页面：${data.title} (${data.url})` }] }
+      return { content: [{ type: 'text', text: `已成功在页面派发滚动。当前页面：${data.title} (${data.url})` }], details: undefined }
     }
   })
 }

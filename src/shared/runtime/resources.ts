@@ -1,11 +1,12 @@
 /** Pi 资源与 MCP 契约，以及 Runtime、消息／工具投影与历史载荷的集中跨进程校验。 */
 
 import { COMPACT_INSTRUCTIONS_MAX_CHARS } from './status'
-import type { PromptDisposition, PromptResult, RuntimeCompactRequest, RuntimeDiagnosticsResult, RuntimeError, RuntimeInfo, RuntimeResult, RuntimeRewindRequest, RuntimeRewindResult, RuntimeSetModelRequest, RuntimeState, RuntimeStatus, RuntimeTarget } from './status'
+import type { PromptDisposition, PromptResult, RuntimeCompactRequest, RuntimeDiagnosticsResult, RuntimeError, RuntimeInfo, RuntimeResult, RuntimeRewindRequest, RuntimeRewindResult, RuntimeSetModelRequest, RuntimeState, RuntimeStatus, RuntimeSubAgentCancelRequest, RuntimeTarget } from './status'
 import type { AgentCapabilities, CapabilitiesResult, ModelIdentity, ModelSummary } from './models'
 import type { ContextUsage, ExtensionErrorEntry, HistoryChunk, HistoryData, HistoryQuery, MessageGeneration, MessageUsage, OutputRate, ProjectionBatch, ProjectionBlock, ProjectionBlockKind, ProjectionCompaction, ProjectionMessage, ProjectionResult, ProjectionSnapshot, ProjectionUpdate, SessionActivity, SessionUsage, ToolArgSummaryEntry, ToolDiff, ToolDiffLine, ToolDiffLineKind, ToolExecution, ToolExecutionPhase, ToolExecutionTextKind, ToolNonTextPart, ToolPresentation, ToolPresentationFact, ToolRequestPresentation, ToolResultPresentation, ToolPresentationItem } from './projection'
 import { TOOL_PRESENTATION_LIMITS as PRESENTATION_LIMITS } from './projection'
 import { isGenuiPayload } from '../genui-api'
+import { isSubAgentView } from '../sub-agent-view'
 import { parseImageAnnotationAttachments } from '../image-annotation'
 
 
@@ -19,6 +20,16 @@ export function isRuntimeTarget(value: unknown): value is RuntimeTarget {
     && value.runId > 0
     && generationOk
     && Object.keys(value).every(key => key === 'runId' || key === 'runtimeId')
+}
+
+/** 取消子任务请求：目标照旧校验，任务标识只接受有界非空字符串，不接受额外字段。 */
+export function isSubAgentCancelRequest(value: unknown): value is RuntimeSubAgentCancelRequest {
+  if (!isRecord(value)) return false
+  if (!isRuntimeTarget(value.target)) return false
+  const taskIds = value.taskIds
+  if (!Array.isArray(taskIds) || taskIds.length === 0 || taskIds.length > 6) return false
+  if (!taskIds.every(item => typeof item === 'string' && item.length > 0 && item.length <= 128)) return false
+  return Object.keys(value).every(key => key === 'target' || key === 'taskIds')
 }
 
 /** 与模型切换入口保持相同长度边界，拒绝多余字段。 */
@@ -310,6 +321,16 @@ export function isSessionUsage(value: unknown): value is SessionUsage {
     && isFiniteNumber(value.cacheWrite)
     && isFiniteNumber(value.cost)
     && (value.context === null || isContextUsage(value.context))
+    && (value.subAgents === null || isSubAgentUsageTotals(value.subAgents))
+}
+
+/** 子代理用量桶：调用次数必为计数，token 字段允许未知。 */
+function isSubAgentUsageTotals(value: unknown): boolean {
+  if (!isRecord(value)) return false
+  return isCount(value.calls)
+    && isNullableFiniteNumber(value.inputTokens)
+    && isNullableFiniteNumber(value.outputTokens)
+    && isNullableFiniteNumber(value.totalTokens)
 }
 
 /** 输出速率形状校验；同上，宿主上报与页面消费共用。 */
@@ -544,6 +565,8 @@ function isToolExecution(value: unknown): value is ToolExecution {
     && (value.latestRevision === undefined || isCount(value.latestRevision))
     && (value.presentation === undefined || value.presentation === null || isToolPresentation(value.presentation))
     && (value.ui === null || isGenuiPayload(value.ui))
+    && (value.subAgents === undefined
+      || (Array.isArray(value.subAgents) && value.subAgents.every(isSubAgentView)))
     && isToolDiff(value.diff)
 }
 

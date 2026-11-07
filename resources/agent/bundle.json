@@ -53,6 +53,34 @@
         "skills/memory/references/search.md",
         "skills/memory/scripts/memory_store.py"
       ]
+    },
+    {
+      "id": "sub-agent-query",
+      "entry": "skills/sub-agent-query/SKILL.md",
+      "files": [
+        "skills/sub-agent-query/SKILL.md"
+      ]
+    },
+    {
+      "id": "sub-agent-research",
+      "entry": "skills/sub-agent-research/SKILL.md",
+      "files": [
+        "skills/sub-agent-research/SKILL.md"
+      ]
+    },
+    {
+      "id": "sub-agent-review",
+      "entry": "skills/sub-agent-review/SKILL.md",
+      "files": [
+        "skills/sub-agent-review/SKILL.md"
+      ]
+    },
+    {
+      "id": "sub-agent-document",
+      "entry": "skills/sub-agent-document/SKILL.md",
+      "files": [
+        "skills/sub-agent-document/SKILL.md"
+      ]
     }
   ],
   "memoryEngine": "skills/memory/scripts/memory_store.py"

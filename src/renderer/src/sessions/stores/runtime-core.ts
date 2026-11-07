@@ -29,6 +29,7 @@ import type {
 import {
   abortRuntime,
   ackRuntimeProjection,
+  cancelRuntimeSubAgents,
   compactRuntime,
   getRuntimeProjection,
   getRuntimeStatus,
@@ -179,6 +180,8 @@ export interface RuntimeCore {
   rewind(request: RuntimeRewindRequest): Promise<boolean>
   compact(instructions: string | null): Promise<CompactOutcome>
   stopOperation(): Promise<void>
+  /** 只取消给定子任务；不动当前轮与其他任务，终态仍由工具快照决定。 */
+  cancelSubAgents(taskIds: readonly string[]): Promise<void>
   applyStatus(status: RuntimeStatus): void
   reset(): void
 }
@@ -488,6 +491,17 @@ export function createRuntimeCore(deps: RuntimeCoreDeps): RuntimeCore {
     abortView.value = result.ok
       ? { phase: 'idle' }
       : { phase: 'error', error: result.error }
+  }
+
+  /**
+   * 只取消指定子任务：不动当前轮与其他任务；成功只表示请求已送达，
+   * 卡片真正的「已中断」由工具快照的终态决定。
+   */
+  async function cancelSubAgents(taskIds: readonly string[]): Promise<void> {
+    if (taskIds.length === 0) return
+    const target = currentTarget()
+    if (target === null) return
+    await cancelRuntimeSubAgents(target, taskIds)
   }
 
   /**
@@ -1017,6 +1031,7 @@ export function createRuntimeCore(deps: RuntimeCoreDeps): RuntimeCore {
     rewind,
     compact,
     stopOperation,
+    cancelSubAgents,
     applyStatus,
     reset
   }

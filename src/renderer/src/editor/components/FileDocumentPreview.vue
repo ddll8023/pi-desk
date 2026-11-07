@@ -2,7 +2,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import * as pdfjsLib from 'pdfjs-dist'
-import type { PDFDocumentProxy, RenderTask } from 'pdfjs-dist'
+import type { PDFDocumentLoadingTask, PDFDocumentProxy, RenderTask } from 'pdfjs-dist'
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 import { renderAsync } from 'docx-preview'
 import FileDocumentOutline, { type DocumentOutlineItem } from './FileDocumentOutline.vue'
@@ -43,7 +43,7 @@ const outlineLoading = ref(false)
 const outlineItems = shallowRef<readonly DocumentOutlineItem[]>([])
 const activeOutlineId = ref('')
 
-const currentScale = computed(() => zoomLevels[zoomIndex.value])
+const currentScale = computed(() => zoomLevels[zoomIndex.value] ?? 1)
 const zoomPercent = computed(() => `${Math.round(currentScale.value * 100)}%`)
 
 function zoomIn(): void {
@@ -67,6 +67,8 @@ function toggleFitWidth(): void {
 
 // === PDF 相关状态与渲染 ===
 const pdfDoc = shallowRef<PDFDocumentProxy | null>(null)
+/** 加载任务：v6 只保留 `loadingTask.destroy()`，销毁文档与 worker 都走这里。 */
+const pdfLoadingTask = shallowRef<PDFDocumentLoadingTask | null>(null)
 const pdfCanvasRef = shallowRef<HTMLCanvasElement | null>(null)
 const pdfTextLayerRef = shallowRef<HTMLDivElement | null>(null)
 const pdfCurrentPage = ref(1)
@@ -103,7 +105,7 @@ function base64ToArrayBuffer(base64: string): ArrayBuffer {
 async function resolvePdfPageNumber(doc: PDFDocumentProxy, dest: unknown): Promise<number | null> {
   if (!dest) return null
   try {
-    let explicitDest = dest
+    let explicitDest: unknown = dest
     if (typeof dest === 'string') {
       explicitDest = await doc.getDestination(dest)
     }
@@ -133,13 +135,12 @@ interface RawPdfOutlineItem {
 function transformPdfOutline(rawItems: RawPdfOutlineItem[], prefix = 'pdf-outline'): DocumentOutlineItem[] {
   return rawItems.map((item, index) => {
     const id = `${prefix}-${index}`
-    return {
-      id,
-      label: item.title?.trim() || '未命目标题',
-      level: 1,
-      dest: item.dest,
-      children: item.items && item.items.length > 0 ? transformPdfOutline(item.items, id) : undefined
-    }
+    const base = { id, label: item.title?.trim() || '未命目标题', level: 1 }
+    // `exactOptionalPropertyTypes` 下不能显式写 `children: undefined`，空子树直接略去该字段。
+    const children = item.items && item.items.length > 0 ? transformPdfOutline(item.items, id) : null
+    return item.dest === undefined
+      ? (children === null ? base : { ...base, children })
+      : (children === null ? { ...base, dest: item.dest } : { ...base, dest: item.dest, children })
   })
 }
 
@@ -190,7 +191,8 @@ function extractDocxOutline(doc?: any): void {
       let level = 0
       const headingMatch = name.match(/heading\s*(\d+)/i) || id.match(/heading\s*(\d+)/i) || name.match(/标题\s*(\d+)/)
       if (headingMatch) {
-        level = parseInt(headingMatch[1], 10)
+        const digits = headingMatch[1]
+        if (digits !== undefined) level = parseInt(digits, 10)
       } else if (name === 'title' || id === 'title') {
         level = 1
       } else if (name === 'subtitle' || id === 'subtitle') {
@@ -269,24 +271,36 @@ function extractDocxOutline(doc?: any): void {
     }
     const childrenArr = node.children as DocumentOutlineItem[]
 
-    while (stack.length > 0 && stack[stack.length - 1].item.level >= node.level) {
+    while (stack.length > 0) {
+      const top = stack[stack.length - 1]
+      if (top === undefined || top.item.level < node.level) break
       stack.pop()
     }
 
-    if (stack.length === 0) {
+    const parent = stack[stack.length - 1]
+    if (parent === undefined) {
       rootItems.push(node)
     } else {
-      stack[stack.length - 1].children.push(node)
+      parent.children.push(node)
     }
 
     stack.push({ item: node, children: childrenArr })
   }
 
   const sanitizeTree = (items: DocumentOutlineItem[]): DocumentOutlineItem[] => {
-    return items.map(item => ({
-      ...item,
-      children: item.children && item.children.length > 0 ? sanitizeTree(item.children as DocumentOutlineItem[]) : undefined
-    }))
+    return items.map(item => {
+      const children = item.children === undefined ? [] : sanitizeTree([...item.children])
+      // 空子树不写 `children`：`exactOptionalPropertyTypes` 不接受显式 undefined。
+      const base = {
+        id: item.id,
+        label: item.label,
+        level: item.level,
+        ...(item.pageNumber === undefined ? {} : { pageNumber: item.pageNumber }),
+        ...(item.dest === undefined ? {} : { dest: item.dest }),
+        ...(item.domId === undefined ? {} : { domId: item.domId })
+      }
+      return children.length === 0 ? base : { ...base, children }
+    })
   }
 
   outlineItems.value = sanitizeTree(rootItems)
@@ -351,9 +365,9 @@ async function loadPdfDocument(): Promise<void> {
   try {
     const arrayBuffer = base64ToArrayBuffer(props.pdf.base64)
     const loadingTask = pdfjsLib.getDocument({
-      data: new Uint8Array(arrayBuffer),
-      isEvalSupported: false
+      data: new Uint8Array(arrayBuffer)
     })
+    pdfLoadingTask.value = loadingTask
     const doc = await loadingTask.promise
     pdfDoc.value = doc
     pdfTotalPages.value = doc.numPages
@@ -420,7 +434,7 @@ async function renderPdfPage(): Promise<void> {
     const transform = outputScale !== 1 ? [outputScale, 0, 0, outputScale, 0, 0] : undefined
 
     const task = page.render({
-      canvasContext: context,
+      canvas,
       transform,
       viewport
     })
@@ -537,10 +551,11 @@ onBeforeUnmount(() => {
     activeRenderTask.cancel()
     activeRenderTask = null
   }
-  if (pdfDoc.value) {
-    void pdfDoc.value.destroy()
-    pdfDoc.value = null
+  if (pdfLoadingTask.value) {
+    void pdfLoadingTask.value.destroy()
+    pdfLoadingTask.value = null
   }
+  pdfDoc.value = null
 })
 </script>
 

@@ -235,6 +235,10 @@ async function dispatch(request: SdkHostRequest): Promise<void> {
       await runtime.abort(request.bindingId)
       send({ ...envelope, type: 'session-result', seq, status: runtime.getStatus(), cancelled: false })
       return
+    case 'sub-agent-cancel':
+      await runtime.cancelSubAgents(request.bindingId, request.taskIds)
+      send({ ...envelope, type: 'session-result', seq, status: runtime.getStatus(), cancelled: false })
+      return
     case 'prompt':
       send({ ...envelope, type: 'prompt-result',
         disposition: await runtime.submit(request.bindingId, request.message, request.images) })

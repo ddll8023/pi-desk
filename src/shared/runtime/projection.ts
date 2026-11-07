@@ -2,6 +2,7 @@
 
 import type { RuntimeError } from './status'
 import type { GenuiPayload } from '../genui-api'
+import type { SubAgentView } from '../sub-agent-view'
 import type { ImageAnnotationAttachment } from '../image-annotation'
 
 
@@ -16,6 +17,17 @@ export interface ContextUsage {
 }
 
 /**
+ * 子代理自身的模型调用用量：与父会话累计分开统计，因为它是另起的模型请求。
+ * 供应商未报告时各 token 字段为 null，`calls` 仍记录已发生的调用次数。
+ */
+export interface SubAgentUsageTotals {
+  readonly calls: number
+  readonly inputTokens: number | null
+  readonly outputTokens: number | null
+  readonly totalTokens: number | null
+}
+
+/**
  * `get_session_stats` 的用量投影：累计数值缺失按 0，未知的上下文占用保持 null。
  * 主进程尚未读到统计时为 null，与“读到全零”区分。
  */
@@ -26,6 +38,8 @@ export interface SessionUsage {
   readonly cacheWrite: number
   readonly cost: number
   readonly context: ContextUsage | null
+  /** 子代理开销：不并进上面的父会话累计，避免总数无法解释。 */
+  readonly subAgents: SubAgentUsageTotals | null
 }
 
 /**
@@ -192,6 +206,12 @@ export interface ToolExecution {
    * 载荷已由主进程按 `parseGenuiPayload` 校验并归一，渲染端可直接使用。
    */
   readonly ui: GenuiPayload | null
+  /**
+   * 子任务执行视图；空数组表示该工具不是委派工具或快照未通过校验。
+   * 一次委派可含多个子任务，各自独立收敛，因此这里始终是数组而不是单个对象。
+   * 任务状态与活动用专用契约表达，不走生成式 UI：两者的生命周期与展示上限不同。
+   */
+  readonly subAgents: readonly SubAgentView[]
   /** 完整当前分支中该界面的最高版本，避免回读旧页时误启用旧界面。 */
   readonly latestRevision?: number
 }

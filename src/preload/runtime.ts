@@ -3,8 +3,8 @@
 import { ipcRenderer } from 'electron'
 import { cloneImageAnnotations } from '../shared/image-annotation'
 import type { IpcRendererEvent } from 'electron'
-import { RUNTIME_ABORT_CHANNEL, RUNTIME_CAPABILITIES_CHANNEL, RUNTIME_COMPACT_CHANNEL, RUNTIME_SET_MODEL_CHANNEL, RUNTIME_DIAGNOSTICS_CHANNEL, RUNTIME_MCP_COMMAND_CHANNEL, RUNTIME_MCP_CONFIG_CHANNEL, RUNTIME_MCP_INSPECT_ABORT_CHANNEL, RUNTIME_MCP_INSPECT_CHANNEL, RUNTIME_MCP_STATUS_CHANNEL, RUNTIME_PROMPT_CHANNEL, RUNTIME_REWIND_CHANNEL, RUNTIME_PROJECTION_ACK_CHANNEL, RUNTIME_PROJECTION_CHANNEL, RUNTIME_PROJECTION_EVENT, RUNTIME_RESOURCES_CHANNEL, RUNTIME_RESOURCE_PREVIEW_CHANNEL, RUNTIME_STATUS_CHANNEL, RUNTIME_STATUS_EVENT, isCapabilitiesResult, isMcpCommandResult, isMcpConfigResult, isMcpInspectionResult, isMcpInspectAbortResult, isMcpStatusResult, isProjectionBatch, isProjectionResult, isPromptResult, isResourcesResult, isResourcePreviewResult, isRuntimeDiagnosticsResult, isRuntimeResult, isRuntimeRewindResult, isRuntimeStatus } from '../shared/runtime-api'
-import type { CapabilitiesResult, McpCommandAction, McpCommandResult, McpConfigResult, McpInspectionResult, McpInspectAbortResult, McpStatusResult, ProjectionBatch, ProjectionResult, PromptImageInput, PromptResult, ResourcesResult, ResourcePreviewResult, RuntimeCompactRequest, RuntimeDiagnosticsResult, RuntimeResult, RuntimeSetModelRequest, RuntimeRewindRequest, RuntimeStatus, RuntimeTarget } from '../shared/runtime-api'
+import { RUNTIME_ABORT_CHANNEL, RUNTIME_SUB_AGENT_CANCEL_CHANNEL, RUNTIME_CAPABILITIES_CHANNEL, RUNTIME_COMPACT_CHANNEL, RUNTIME_SET_MODEL_CHANNEL, RUNTIME_DIAGNOSTICS_CHANNEL, RUNTIME_MCP_COMMAND_CHANNEL, RUNTIME_MCP_CONFIG_CHANNEL, RUNTIME_MCP_INSPECT_ABORT_CHANNEL, RUNTIME_MCP_INSPECT_CHANNEL, RUNTIME_MCP_STATUS_CHANNEL, RUNTIME_PROMPT_CHANNEL, RUNTIME_REWIND_CHANNEL, RUNTIME_PROJECTION_ACK_CHANNEL, RUNTIME_PROJECTION_CHANNEL, RUNTIME_PROJECTION_EVENT, RUNTIME_RESOURCES_CHANNEL, RUNTIME_RESOURCE_PREVIEW_CHANNEL, RUNTIME_STATUS_CHANNEL, RUNTIME_STATUS_EVENT, isCapabilitiesResult, isMcpCommandResult, isMcpConfigResult, isMcpInspectionResult, isMcpInspectAbortResult, isMcpStatusResult, isProjectionBatch, isProjectionResult, isPromptResult, isResourcesResult, isResourcePreviewResult, isRuntimeDiagnosticsResult, isRuntimeResult, isRuntimeRewindResult, isRuntimeStatus } from '../shared/runtime-api'
+import type { CapabilitiesResult, McpCommandAction, McpCommandResult, McpConfigResult, McpInspectionResult, McpInspectAbortResult, McpStatusResult, ProjectionBatch, ProjectionResult, PromptImageInput, PromptResult, ResourcesResult, ResourcePreviewResult, RuntimeCompactRequest, RuntimeDiagnosticsResult, RuntimeResult, RuntimeSetModelRequest, RuntimeRewindRequest, RuntimeStatus, RuntimeSubAgentCancelRequest, RuntimeTarget } from '../shared/runtime-api'
 import type { RuntimeApi } from '../shared/runtime-api'
 
 const INVALID_RUNTIME_RESPONSE = '桌面接口返回了无法识别的 Runtime 结果。'
@@ -73,6 +73,15 @@ export const runtimeApi = {
     const response: unknown = await ipcRenderer.invoke(RUNTIME_ABORT_CHANNEL, {
       runId: target.runId,
       runtimeId: target.runtimeId
+    })
+    return isRuntimeResult(response) ? response : invalidRuntimeResponse()
+  },
+
+  /** 只取消指定子任务：目标与任务标识逐字段重建，不转发页面传入的其他内容。 */
+  async cancelRuntimeSubAgents(request: RuntimeSubAgentCancelRequest) {
+    const response: unknown = await ipcRenderer.invoke(RUNTIME_SUB_AGENT_CANCEL_CHANNEL, {
+      target: { runId: request.target.runId, runtimeId: request.target.runtimeId },
+      taskIds: request.taskIds.map(taskId => String(taskId))
     })
     return isRuntimeResult(response) ? response : invalidRuntimeResponse()
   },

@@ -381,7 +381,7 @@ function processGroupStats(messages: readonly ChatMessageView[]): string {
               v-for="(message, responseIndex) in group.messages"
               :key="message.id"
               :message="message"
-              :compact-header="responseIndex > 0 || group.kind === 'process'"
+              :compact-header="responseIndex > 0"
               :actions-disabled="actionsDisabled"
               :disabled-reason="disabledReason"
               :history-chunks="chunksOf(message)"

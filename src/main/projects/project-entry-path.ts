@@ -16,7 +16,7 @@ export type ProjectEntryResolution =
   | { readonly ok: false; readonly error: DesktopError }
 
 /** 解析失败：只描述可展示的原因，不携带底层文件错误。 */
-export function entryFailure(code: 'INVALID_REQUEST' | 'INTERNAL_ERROR', message: string): ProjectEntryResolution {
+export function entryFailure(code: 'INVALID_REQUEST' | 'INTERNAL_ERROR', message: string): { readonly ok: false; readonly error: DesktopError } {
   return { ok: false, error: { code, message } }
 }
 

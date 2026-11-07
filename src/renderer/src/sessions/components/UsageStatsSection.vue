@@ -100,7 +100,7 @@ onMounted(() => {
       </div>
       <div>
         <AppButton
-          variant="secondary"
+          variant="ghost"
           size="sm"
           type="button"
           :disabled="viewState.phase === 'loading' || refreshing"

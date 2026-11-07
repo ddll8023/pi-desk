@@ -2,7 +2,7 @@
  * 用量统计视图的纯函数与展示格式化：
  * 提供图表柱高归一化、缓存命中率计算、占比计算及日期时间显示，供用量统计分节组件复用。
  */
-import type { UsageDailyStat } from '../../../../shared/usage-stats-api'
+import type { UsageDailyStat } from '../../../shared/usage-stats-api'
 import { cacheHitRate, formatTokens } from './usage-format'
 
 export { cacheHitRate, formatTokens }
