@@ -118,6 +118,4 @@
   - GitHub 仓库元数据接口：`https://api.github.com/repos/TencentCloud/TencentDB-Agent-Memory`（核实于 2026-11-03）
   - GitHub 最新 Release 接口：`https://api.github.com/repos/TencentCloud/TencentDB-Agent-Memory/releases/latest`（标签 `v2.0.3`，核实于 2026-11-03）
 - **本项目侧事实依据**：
-  - 记忆系统架构设计与现状：[docs/memory-research-design.md](../memory-research-design.md)
-  - 记忆访问统计与召回分析：[docs/memory-access-analysis.md](../memory-access-analysis.md)
   - 项目参考目录规范：[docs/开源项目参考/README.md](README.md)
