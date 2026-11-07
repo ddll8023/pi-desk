@@ -216,7 +216,7 @@
     "project": {
       "name": "Pi Desktop",
       "summary": "基于 Electron 的桌面客户端：Vue 3 页面经沙箱 preload 与主进程通信，会话由独立 SDK 宿主执行，终端由独立守护进程持有 PTY。本页把业务模块、运行单元与关键流程放在同一张图上，用于从功能定位实现、从关系判断影响边界。",
-      "sourceNote": "事实来源：docs/项目结构文档.md 与 docs/modules/ 的 15 份模块文档，路径与入口已按 src/ 静态核对。覆盖范围止于本地调用边界：外部 SDK、依赖包内部实现、用户安装的扩展与运行时动态发现的资源不在此登记。本页不是完整依赖分析，也不是代码质量或运行状态认证。",
+      "sourceNote": "事实来源：docs/项目结构文档.md 与 docs/modules/ 的模块文档，路径与入口已按 src/ 静态核对。覆盖范围止于本地调用边界：外部 SDK、依赖包内部实现、用户安装的扩展与运行时动态发现的资源不在此登记。本页不是完整依赖分析，也不是代码质量或运行状态认证。",
       "links": [
         {"label": "项目结构总览", "href": "项目结构文档.md"},
         {"label": "公共记录", "href": "modules/shared.md"}
@@ -738,6 +738,39 @@
           {"label": "模块文档：记忆", "href": "modules/memory.md"},
           {"label": "公共记录 F-config", "href": "modules/shared.md#f-configdesktop-配置混合"}
         ]
+      },
+      {
+        "id": "skill-guard",
+        "name": "门禁",
+        "groupId": "model",
+        "summary": "登记主模型选择的执行技能、仅审查对象与必读引用，按当前上下文核对正文加载证据，并在修改类工具执行前阻断未满足条件的调用；同一会话内沿用登记，只在证据或技术栈变化时要求重新登记。",
+        "features": [
+          "首次修改文件前的技能登记与仅审查对象区分",
+          "每次模型请求重建加载证据，分段读取须覆盖正文全文",
+          "同会话沿用登记；正文离开上下文、技能版本变化或目标技术栈族不同时撤销",
+          "只读工具与选择工具本身不拦截，拦截说明不含方案、清单与测试授权"
+        ],
+        "tags": ["SDK 宿主", "Pi 扩展", "运行时门禁"],
+        "entries": [
+          {"kind": "关键实现", "label": "会话状态、工具注册与事件挂钩", "path": "resources/agent/extensions/skill-guard/index.ts"},
+          {"kind": "关键实现", "label": "候选校验与扩展名技术栈族", "path": "resources/agent/extensions/skill-guard/routing.ts"},
+          {"kind": "关键实现", "label": "加载证据重建与缺失判定", "path": "resources/agent/extensions/skill-guard/context.ts"},
+          {"kind": "关键实现", "label": "必读引用归属与目录边界校验", "path": "resources/agent/extensions/skill-guard/references.ts"},
+          {"kind": "资源清单", "label": "扩展入口与组成文件声明", "path": "resources/agent/bundle.json"}
+        ],
+        "resources": [
+          {"name": "会话门禁状态", "owner": "skill-guard 扩展进程内存", "lifecycle": "按会话管理对象持有，分支切换、上下文压缩与关闭时失效，不落盘"},
+          {"name": "技能选择审计", "owner": "会话分支条目（appendEntry）", "lifecycle": "随分支保存，只记身份、版本、来源与状态，不复制选择参数与正文"}
+        ],
+        "constraints": [
+          "不替模型选择技能，扩展内不维护技能名称、触发词或引用文件名",
+          "技术栈族只按扩展名归并用于撤销沿用，不映射到具体技能",
+          "门禁不写用户文件与记忆库、不改变工具权限，也不构成测试或重启授权"
+        ],
+        "links": [
+          {"label": "模块文档：门禁", "href": "modules/skill-guard.md"},
+          {"label": "公共记录 F-build", "href": "modules/shared.md#f-build构建与发行上下文"}
+        ]
       }
     ],
     "relations": [
@@ -752,6 +785,7 @@
       {"id": "r-genui-session-tools", "from": "genui", "to": "sessions-chat", "label": "注册内置工具并回传结果", "kind": "compose"},
       {"id": "r-sc-file-candidates", "from": "sessions-chat", "to": "files-editor", "label": "取文件引用候选", "kind": "read"},
       {"id": "r-sc-quick-send", "from": "sessions-chat", "to": "preferences", "label": "读取快捷输入短语", "kind": "read"},
+      {"id": "r-sc-sg-extension", "from": "sessions-chat", "to": "skill-guard", "label": "装配宿主门禁并承接选择工具卡片", "kind": "compose"},
       {"id": "r-fe-project-scope", "from": "files-editor", "to": "projects-trust", "label": "固定已登记项目范围", "kind": "call"},
       {"id": "r-fe-tab-register", "from": "files-editor", "to": "workspace-tabs", "label": "登记文件标签", "kind": "call"},
       {"id": "r-fe-terminal-path", "from": "files-editor", "to": "terminal-commands", "label": "插入路径到活动终端", "kind": "call"},
@@ -847,7 +881,7 @@
           "name": "SDK 宿主",
           "kind": "受管进程",
           "summary": "utilityProcess 承载官方 SDK 会话，SDK 事件与历史记录通过有界投影送达页面。",
-          "contains": ["sessions-chat", "genui", "memory"],
+          "contains": ["sessions-chat", "genui", "memory", "skill-guard"],
           "entries": [
             {"kind": "进程入口", "label": "宿主入口", "path": "src/sdk-host/index.ts"},
             {"kind": "关键实现", "label": "会话运行", "path": "src/sdk-host/session-runtime.ts"},
