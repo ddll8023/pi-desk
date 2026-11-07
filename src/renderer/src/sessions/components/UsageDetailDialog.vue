@@ -1,10 +1,10 @@
-<!-- 用量与额度浮层：保留本会话统计，按需查询独立的 Codex 账户额度；缺失数据只显示占位，不推算额度或换算金额。
-     没有可用的 Codex 账户凭据（未登录、仅 API Key 或凭据缺账户信息）时整块不展示，加载中同样不占位。 -->
+<!-- 用量与额度浮层：保留本会话统计，按需查询独立的 Codex 与 OpenCode Go 账户额度；缺失数据只显示占位，不推算额度或换算金额。
+     Codex 没有可用账户凭据（未登录、仅 API Key 或凭据缺账户信息）、OpenCode Go 没有可用 API Key 时整块不展示，加载中同样不占位。 -->
 <script setup lang="ts">
 import { computed, nextTick, onUnmounted, ref, useId, watch } from 'vue'
 import type { OutputRate, SessionUsage } from '../../../../shared/runtime-api'
-import type { AuthError, CodexUsageSnapshot } from '../../../../shared/auth-api'
-import { getAuthCodexUsage } from '../../providers/services/auth'
+import type { AuthError, CodexUsageSnapshot, OpencodeUsageSnapshot, OpencodeUsageWindowId } from '../../../../shared/auth-api'
+import { getAuthCodexUsage, getAuthOpencodeUsage } from '../../providers/services/auth'
 import { cacheHitRate, formatCost, formatTokens } from '../usage-format'
 import AppButton from '../../ui/AppButton.vue'
 
@@ -24,6 +24,10 @@ const quota = ref<CodexUsageSnapshot | null>(null)
 const quotaLoading = ref(false)
 const quotaError = ref<AuthError | null>(null)
 let quotaRequest = 0
+const opencodeQuota = ref<OpencodeUsageSnapshot | null>(null)
+const opencodeLoading = ref(false)
+const opencodeError = ref<AuthError | null>(null)
+let opencodeRequest = 0
 
 /** 关闭、重新打开与卸载均换代，迟到的桥接结果不能覆盖另一轮弹窗。 */
 async function loadQuota(refresh: boolean): Promise<void> {
@@ -41,6 +45,24 @@ async function loadQuota(refresh: boolean): Promise<void> {
     quota.value = null
     // 没有可用账户凭据是预期状态而不是故障：不写错误，额度区整块不展示。
     quotaError.value = result.error.code === 'AUTH_CODEX_NOT_LOGGED_IN' ? null : result.error
+  }
+}
+
+/** OpenCode Go 额度与 Codex 相互独立：没有可用 API Key 时同样不占位、不写错误。 */
+async function loadOpencodeQuota(refresh: boolean): Promise<void> {
+  if (!props.open || opencodeLoading.value) return
+  const request = ++opencodeRequest
+  opencodeLoading.value = true
+  opencodeError.value = null
+  const result = await getAuthOpencodeUsage(refresh)
+  if (request !== opencodeRequest || !props.open) return
+  opencodeLoading.value = false
+  if (result.ok) {
+    opencodeQuota.value = result.data
+  } else {
+    // 配置可能已被删除；不继续展示上一账户的额度。
+    opencodeQuota.value = null
+    opencodeError.value = result.error.code === 'AUTH_OPENCODE_NOT_CONFIGURED' ? null : result.error
   }
 }
 
@@ -72,6 +94,25 @@ const quotaUpdated = computed(() => quota.value === null ? null : new Date(quota
 
 /** 额度区只在已取到快照或存在真实错误时渲染；加载中与无可用账户凭据都不占位。 */
 const quotaVisible = computed(() => quota.value !== null || quotaError.value !== null)
+
+/** OpenCode Go 只给已用比例，窗口标签按固定语义展示，不换算金额。 */
+const OPENCODE_WINDOW_LABELS: Record<OpencodeUsageWindowId, string> = {
+  rolling: '5 小时',
+  weekly: '每周',
+  monthly: '每月'
+}
+
+const opencodeRows = computed(() => (opencodeQuota.value?.windows ?? []).map((window) => ({
+  ...window,
+  label: OPENCODE_WINDOW_LABELS[window.id],
+  reset: resetText(window.resetAt),
+  level: window.usedPercent >= 90 ? 'usage-fill-danger' : window.usedPercent >= 70 ? 'usage-fill-warn' : ''
+})))
+
+const opencodeUpdated = computed(() => opencodeQuota.value === null ? null : new Date(opencodeQuota.value.fetchedAt)
+  .toLocaleTimeString('zh-CN', { hour12: false }))
+
+const opencodeVisible = computed(() => opencodeQuota.value !== null || opencodeError.value !== null)
 
 /** 一条指标：淡色标签 + 实色数值，`title` 是悬停图例。 */
 interface UsageMetric {
@@ -120,7 +161,10 @@ watch(
     if (open) {
       quota.value = null
       quotaError.value = null
+      opencodeQuota.value = null
+      opencodeError.value = null
       void loadQuota(false)
+      void loadOpencodeQuota(false)
       window.addEventListener('keydown', onKeydown)
       void nextTick(() => panel.value?.focus())
     } else {
@@ -128,6 +172,10 @@ watch(
       quotaLoading.value = false
       quota.value = null
       quotaError.value = null
+      opencodeRequest += 1
+      opencodeLoading.value = false
+      opencodeQuota.value = null
+      opencodeError.value = null
       window.removeEventListener('keydown', onKeydown)
     }
   },
@@ -136,6 +184,7 @@ watch(
 
 onUnmounted(() => {
   quotaRequest += 1
+  opencodeRequest += 1
   window.removeEventListener('keydown', onKeydown)
 })
 </script>
@@ -232,6 +281,47 @@ onUnmounted(() => {
                 <details v-if="quotaError.detail !== null" class="text-2xs text-desk-muted">
                   <summary class="cursor-pointer">技术细节</summary>
                   <pre class="mt-2 whitespace-pre-wrap break-words font-mono">{{ quotaError.detail }}</pre>
+                </details>
+              </div>
+            </section>
+
+            <section v-if="opencodeVisible" class="space-y-3 border-t border-desk-line pt-4" aria-label="OpenCode Go 额度" :aria-busy="opencodeLoading">
+              <div class="flex flex-wrap items-center justify-between gap-2">
+                <h3 class="text-xs font-semibold text-desk-ink">OpenCode Go 额度</h3>
+                <AppButton variant="compact" :disabled="opencodeLoading" @click="loadOpencodeQuota(true)">
+                  {{ opencodeLoading ? '读取中…' : '刷新额度' }}
+                </AppButton>
+              </div>
+              <p class="usage-note">已配置 OpenCode Go 订阅的账户额度，不是本会话用量；百分比是已用比例。</p>
+              <p v-if="opencodeLoading" role="status" class="usage-note">正在读取账户额度…</p>
+              <template v-if="opencodeQuota !== null">
+                <p v-if="opencodeRows.length === 0" class="usage-note">接口没有返回额度窗口。</p>
+                <div v-for="row in opencodeRows" :key="row.id" class="space-y-1.5">
+                  <div class="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-1">
+                    <span class="text-xs text-desk-muted">{{ row.label }}</span>
+                    <span class="usage-note">{{ row.reset }}</span>
+                  </div>
+                  <div class="usage-row">
+                    <span
+                      class="usage-bar"
+                      role="meter"
+                      :aria-label="`${row.label}已用额度`"
+                      :aria-valuenow="row.usedPercent"
+                      :aria-valuemin="0"
+                      :aria-valuemax="100"
+                    >
+                      <span class="usage-fill" :class="row.level" :style="{ width: `${row.usedPercent}%` }"></span>
+                    </span>
+                    <span class="usage-value">已用 {{ row.usedPercent.toFixed(1) }}%</span>
+                  </div>
+                </div>
+                <p class="usage-note">更新于 {{ opencodeUpdated }} · 缓存 60 秒</p>
+              </template>
+              <div v-else-if="opencodeError !== null" role="status" class="space-y-2">
+                <p class="usage-note">{{ opencodeError.message }}</p>
+                <details v-if="opencodeError.detail !== null" class="text-2xs text-desk-muted">
+                  <summary class="cursor-pointer">技术细节</summary>
+                  <pre class="mt-2 whitespace-pre-wrap break-words font-mono">{{ opencodeError.detail }}</pre>
                 </details>
               </div>
             </section>

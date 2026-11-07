@@ -1,6 +1,6 @@
 /**
  * 认证辅助进程入口：复用官方 SDK 的 `ModelRuntime` 完成 Provider 认证状态读取、API Key 与 OAuth
- * 登录流程、退出登录与 Codex 账户额度查询，凭据读写仍由官方实现落在 `<agent-dir>/auth.json`。
+ * 登录流程、退出登录与 Codex、OpenCode Go 账户额度查询，凭据读写仍由官方实现落在 `<agent-dir>/auth.json`。
  *
  * 进程由主进程用 `ELECTRON_RUN_AS_NODE` 启动，只通过 stdin/stdout 的 JSONL 帧通信，不监听网络、
  * 不接受外部参数、不启动 Pi。约定：
@@ -20,6 +20,7 @@ import { StringDecoder } from 'node:string_decoder'
 import type { CreateModelRuntimeOptions, ModelRuntime } from '@earendil-works/pi-coding-agent'
 import { loadSdkModule } from '../shared-process/runtime'
 import { CodexNotLoggedInError, CodexUsageReader } from './codex-usage'
+import { OpencodeNotConfiguredError, OpencodeUsageReader } from './opencode-usage'
 import type { AuthMethod, AuthPrompt, AuthProviderStatus } from '../shared/auth-api'
 import {
   AUTH_HELPER_MAX_RECORD_CHARS,
@@ -84,6 +85,7 @@ const writeStderr = process.stderr.write.bind(process.stderr)
 const decoder = new StringDecoder('utf8')
 const flows = new Map<string, LoginFlow>()
 const codexUsageReader = new CodexUsageReader()
+const opencodeUsageReader = new OpencodeUsageReader()
 let sdk: typeof import('@earendil-works/pi-coding-agent') | null = null
 let runtime: ModelRuntime | null = null
 let statusReady = false
@@ -121,6 +123,7 @@ type AuthHelperFrameResponseCode =
   | 'INVALID_REQUEST'
   | 'AUTH_HELPER_ERROR'
   | 'AUTH_CODEX_NOT_LOGGED_IN'
+  | 'AUTH_OPENCODE_NOT_CONFIGURED'
 
 /** 计算 models.json 修改戳；文件不存在时返回 null。用于检测配置变化并重置 ModelRuntime。 */
 async function getModelsConfigStamp(filePath: string): Promise<string | null> {
@@ -277,6 +280,7 @@ function startLogin(
       secrets: []
     }
     if (request.providerId === 'openai-codex') codexUsageReader.clear()
+    if (request.providerId === 'opencode-go') opencodeUsageReader.clear()
     flows.set(flow.flowId, flow)
     void runLogin(active, flow, request).catch(() => undefined)
     return {}
@@ -319,6 +323,7 @@ async function runLogin(
     }
   } finally {
     if (request.providerId === 'openai-codex') codexUsageReader.clear()
+    if (request.providerId === 'opencode-go') opencodeUsageReader.clear()
     settlePrompt(flow, null)
     flows.delete(flow.flowId)
     writeFrame({
@@ -441,6 +446,19 @@ async function handleRequest(request: AuthHelperRequest): Promise<void> {
       }
       return
     }
+    case 'opencode-usage': {
+      try {
+        respondOk(request.id, await opencodeUsageReader.read(await modelRuntime(), request.refresh))
+      } catch (error) {
+        // 与 Codex 额度同样只传出固定文案；未配置属预期状态，页面据此不展示额度区。
+        respondError(
+          request.id,
+          error instanceof OpencodeNotConfiguredError ? 'AUTH_OPENCODE_NOT_CONFIGURED' : 'AUTH_HELPER_ERROR',
+          describeError(error)
+        )
+      }
+      return
+    }
     case 'login': {
       try {
         const failure = await startLogin(request)
@@ -481,10 +499,12 @@ async function handleRequest(request: AuthHelperRequest): Promise<void> {
           return
         }
         if (request.providerId === 'openai-codex') codexUsageReader.clear()
+        if (request.providerId === 'opencode-go') opencodeUsageReader.clear()
         try {
           await active.logout(request.providerId, { signal: AbortSignal.timeout(LOGOUT_TIMEOUT_MS) })
         } finally {
           if (request.providerId === 'openai-codex') codexUsageReader.clear()
+          if (request.providerId === 'opencode-go') opencodeUsageReader.clear()
         }
         statusReady = false
         respondOk(request.id, { loggedOut: true })

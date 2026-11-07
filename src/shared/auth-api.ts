@@ -1,6 +1,6 @@
 /**
- * 定义认证状态读取、Provider 登录流程（API Key 与 OAuth）、退出登录、Codex 额度与外链打开的固定通道、
- * 请求与结果类型、登录流程快照与跨进程校验。
+ * 定义认证状态读取、Provider 登录流程（API Key 与 OAuth）、退出登录、Codex 与 OpenCode Go 额度、
+ * 外链打开的固定通道、请求与结果类型、登录流程快照与跨进程校验。
  *
  * 凭据本身从不进入本契约：状态只描述「是否已配置、来源与类型」，流程快照只描述输入形态与进度；
  * 密钥只经 `desktop:auth-login-respond` 单向提交给主进程，主进程不回传任何已有凭据内容。
@@ -11,6 +11,8 @@ import type { DesktopErrorCode } from './desktop-api'
 export const AUTH_STATUS_CHANNEL = 'desktop:auth-status'
 /** 只接受 `{ refresh: boolean }`：查询已登录 Codex 账户的额度，不接受地址或凭据。 */
 export const AUTH_CODEX_USAGE_CHANNEL = 'desktop:auth-codex-usage'
+/** 只接受 `{ refresh: boolean }`：查询已配置 OpenCode Go 订阅的账户额度，不接受地址或凭据。 */
+export const AUTH_OPENCODE_USAGE_CHANNEL = 'desktop:auth-opencode-usage'
 /** 只接受 `{ providerId, method }`：启动一次官方登录流程。 */
 export const AUTH_LOGIN_START_CHANNEL = 'desktop:auth-login-start'
 /** 只接受 `{ flowId, promptId, value }`：回应流程中的当前提示（密钥由此单向提交）。 */
@@ -145,6 +147,11 @@ export type AuthErrorCode =
    * 这是预期状态而不是故障：页面不展示额度区，也不按错误提示。
    */
   | 'AUTH_CODEX_NOT_LOGGED_IN'
+  /**
+   * 本机没有可用于额度查询的 OpenCode Go API Key（未配置，或凭据不含 API Key）。
+   * 这是预期状态而不是故障：页面不展示 OpenCode Go 额度区，也不按错误提示。
+   */
+  | 'AUTH_OPENCODE_NOT_CONFIGURED'
 
 export interface AuthError {
   readonly code: AuthErrorCode
@@ -193,6 +200,32 @@ export interface AuthCodexUsageRequest {
   readonly refresh: boolean
 }
 
+/** OpenCode Go 的订阅窗口：滚动 5 小时、每周与每月。 */
+export type OpencodeUsageWindowId = 'rolling' | 'weekly' | 'monthly'
+
+/** 单个窗口只包含上游给出的已用比例与重置时间，不推算金额。 */
+export interface OpencodeUsageWindow {
+  readonly id: OpencodeUsageWindowId
+  /** 已用百分比；与 Codex 额度的剩余百分比方向相反。 */
+  readonly usedPercent: number
+  /** 毫秒时间戳；上游未提供时为 null。 */
+  readonly resetAt: number | null
+}
+
+/** 只包含展示数据，不包含账户 API Key 或原始接口响应。 */
+export interface OpencodeUsageSnapshot {
+  readonly windows: readonly OpencodeUsageWindow[]
+  readonly fetchedAt: number
+}
+
+export type AuthOpencodeUsageResult =
+  | { readonly ok: true; readonly data: OpencodeUsageSnapshot }
+  | { readonly ok: false; readonly error: AuthError }
+
+export interface AuthOpencodeUsageRequest {
+  readonly refresh: boolean
+}
+
 export interface AuthRefreshModelsPayload {
   readonly count: number
   readonly providerId?: string
@@ -231,6 +264,8 @@ export interface AuthApi {
   readonly getAuthStatus: () => Promise<AuthStatusResult>
   /** 查询已有 Codex 账户的额度；refresh 为 true 时绕过短期缓存。 */
   readonly getAuthCodexUsage: (refresh: boolean) => Promise<AuthCodexUsageResult>
+  /** 查询已配置的 OpenCode Go 订阅额度；refresh 为 true 时绕过短期缓存。 */
+  readonly getAuthOpencodeUsage: (refresh: boolean) => Promise<AuthOpencodeUsageResult>
   /** 启动官方登录流程；成功只表示流程已开始，结果以流程快照收敛。 */
   readonly startAuthLogin: (providerId: string, method: AuthMethod) => Promise<AuthFlowResult>
   /** 回应流程中的当前提示；密钥只经此单向提交。 */
@@ -262,7 +297,8 @@ const AUTH_ERROR_CODES: readonly string[] = [
   'AUTH_PROVIDER_UNKNOWN',
   'AUTH_OPEN_URL_FAILED',
   'AUTH_HELPER_DEPENDENCY_MISSING',
-  'AUTH_CODEX_NOT_LOGGED_IN'
+  'AUTH_CODEX_NOT_LOGGED_IN',
+  'AUTH_OPENCODE_NOT_CONFIGURED'
 ]
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -412,6 +448,36 @@ export function isAuthCodexUsageResult(value: unknown): value is AuthCodexUsageR
 
 /** 页面只能决定是否刷新；不接受任意供应商、地址或认证字段。 */
 export function isAuthCodexUsageRequest(value: unknown): value is AuthCodexUsageRequest {
+  return isRecord(value) && Object.keys(value).length === 1 && typeof value.refresh === 'boolean'
+}
+
+/** 窗口按固定 id 与已用比例放行；同一窗口不重复出现。 */
+function isOpencodeUsageWindow(value: unknown): value is OpencodeUsageWindow {
+  if (!isRecord(value)) return false
+  return (value.id === 'rolling' || value.id === 'weekly' || value.id === 'monthly')
+    && typeof value.usedPercent === 'number' && Number.isFinite(value.usedPercent)
+    && value.usedPercent >= 0 && value.usedPercent <= 100
+    && (value.resetAt === null || (typeof value.resetAt === 'number'
+      && Number.isFinite(value.resetAt) && value.resetAt > 0 && value.resetAt <= 8.64e15))
+}
+
+export function isOpencodeUsageSnapshot(value: unknown): value is OpencodeUsageSnapshot {
+  if (!isRecord(value)) return false
+  if (!Array.isArray(value.windows) || value.windows.length > 3) return false
+  if (!value.windows.every(isOpencodeUsageWindow)) return false
+  if (new Set(value.windows.map((window) => window.id)).size !== value.windows.length) return false
+  return typeof value.fetchedAt === 'number' && Number.isFinite(value.fetchedAt)
+    && value.fetchedAt > 0 && value.fetchedAt <= 8.64e15
+}
+
+export function isAuthOpencodeUsageResult(value: unknown): value is AuthOpencodeUsageResult {
+  if (!isRecord(value)) return false
+  if (value.ok === true) return isOpencodeUsageSnapshot(value.data)
+  return isAuthErrorResult(value)
+}
+
+/** 页面同样只能决定是否刷新；请求形状与 Codex 额度保持一致。 */
+export function isAuthOpencodeUsageRequest(value: unknown): value is AuthOpencodeUsageRequest {
   return isRecord(value) && Object.keys(value).length === 1 && typeof value.refresh === 'boolean'
 }
 

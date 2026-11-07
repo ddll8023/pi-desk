@@ -13,6 +13,7 @@ export const AUTH_HELPER_MAX_RECORD_CHARS = 1_048_576
 export type AuthHelperRequest =
   | { readonly id: string; readonly type: 'status' }
   | { readonly id: string; readonly type: 'codex-usage'; readonly refresh: boolean }
+  | { readonly id: string; readonly type: 'opencode-usage'; readonly refresh: boolean }
   | {
     readonly id: string
     readonly type: 'login'
@@ -50,6 +51,8 @@ export type AuthHelperErrorCode =
   | 'AUTH_HELPER_ERROR'
   /** 没有可用于额度查询的 Codex 账户凭据；属预期状态，主进程透传给页面，不按故障处理。 */
   | 'AUTH_CODEX_NOT_LOGGED_IN'
+  /** 没有可用于额度查询的 OpenCode Go API Key；同样属预期状态，页面据此不展示额度区。 */
+  | 'AUTH_OPENCODE_NOT_CONFIGURED'
 
 /** 辅助进程 → 主进程的帧。 */
 export type AuthHelperFrame =
@@ -78,7 +81,8 @@ const HELPER_ERROR_CODES: readonly string[] = [
   'AUTH_PROMPT_MISMATCH',
   'INVALID_REQUEST',
   'AUTH_HELPER_ERROR',
-  'AUTH_CODEX_NOT_LOGGED_IN'
+  'AUTH_CODEX_NOT_LOGGED_IN',
+  'AUTH_OPENCODE_NOT_CONFIGURED'
 ]
 
 /** 状态投影里的来源取值；与 shared/auth-api.ts 的 AuthSource 保持一致。 */
@@ -198,6 +202,8 @@ export function isAuthHelperRequest(value: unknown): value is AuthHelperRequest 
     case 'shutdown':
       return true
     case 'codex-usage':
+      return typeof value.refresh === 'boolean'
+    case 'opencode-usage':
       return typeof value.refresh === 'boolean'
     case 'login':
       return isIdentifier(value.flowId)

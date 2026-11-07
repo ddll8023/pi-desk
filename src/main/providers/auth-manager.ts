@@ -1,6 +1,6 @@
 /**
  * 认证执行端的唯一持有者：懒启动并管理认证辅助进程，把辅助进程的帧投影为 Provider 状态与登录流程
- * 快照，编排登录、提示回应、取消、退出登录、外链打开、Codex 额度与受控的云端模型目录刷新。
+ * 快照，编排登录、提示回应、取消、退出登录、外链打开、Codex 与 OpenCode Go 额度与受控的云端模型目录刷新。
  *
  * 边界：
  * - 凭据内容全部由官方 SDK 在辅助进程内读写，落在 `<agent-dir>/auth.json`；主进程不读取任何已有凭据
@@ -24,9 +24,10 @@ import type {
   AuthPrompt,
   AuthRefreshModelsPayload,
   AuthStatus,
-  CodexUsageSnapshot
+  CodexUsageSnapshot,
+  OpencodeUsageSnapshot
 } from '../../shared/auth-api'
-import { AUTH_MAX_SECRET_CHARS, AUTH_MAX_SELECT_VALUE_CHARS, isCodexUsageSnapshot } from '../../shared/auth-api'
+import { AUTH_MAX_SECRET_CHARS, AUTH_MAX_SELECT_VALUE_CHARS, isCodexUsageSnapshot, isOpencodeUsageSnapshot } from '../../shared/auth-api'
 import { isAuthStatusPayload } from '../../auth-helper/protocol'
 import type { AuthHelperErrorCode, AuthHelperFrame, AuthHelperRequestInput } from '../../auth-helper/protocol'
 import { AuthHelperProcess, AuthHelperProcessError } from './auth-helper-process'
@@ -120,6 +121,8 @@ function mapHelperCode(code: AuthHelperErrorCode): AuthErrorCode {
     case 'INVALID_REQUEST': return 'INVALID_REQUEST'
     // 没有可用的 Codex 账户凭据是预期状态，透传给页面而不归为执行端不可用。
     case 'AUTH_CODEX_NOT_LOGGED_IN': return 'AUTH_CODEX_NOT_LOGGED_IN'
+    // 没有可用于额度查询的 OpenCode Go API Key 同样是预期状态。
+    case 'AUTH_OPENCODE_NOT_CONFIGURED': return 'AUTH_OPENCODE_NOT_CONFIGURED'
     default: return 'AUTH_UNAVAILABLE'
   }
 }
@@ -217,6 +220,19 @@ export class AuthManager {
     if (!outcome.ok) throw new AuthManagerError(outcome.code, outcome.message, outcome.detail)
     if (!isCodexUsageSnapshot(outcome.data)) {
       throw new AuthManagerError('INVALID_RESPONSE', '认证辅助进程返回的 Codex 额度不符合约定。')
+    }
+    return outcome.data
+  }
+
+  /** 查询已配置的 OpenCode Go 订阅额度；不绑定当前会话，也不读取或回传凭据。 */
+  async readOpencodeUsage(refresh: boolean): Promise<OpencodeUsageSnapshot> {
+    if (this.flow?.providerId === 'opencode-go' && !isTerminal(this.flow.phase)) {
+      throw new AuthManagerError('AUTH_LOGIN_CONFLICT', 'OpenCode Go 正在配置，请完成认证后刷新额度。')
+    }
+    const outcome = await this.request({ type: 'opencode-usage', refresh }, STATUS_TIMEOUT_MS)
+    if (!outcome.ok) throw new AuthManagerError(outcome.code, outcome.message, outcome.detail)
+    if (!isOpencodeUsageSnapshot(outcome.data)) {
+      throw new AuthManagerError('INVALID_RESPONSE', '认证辅助进程返回的 OpenCode Go 额度不符合约定。')
     }
     return outcome.data
   }

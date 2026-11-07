@@ -4,7 +4,7 @@
 
 ## 职责与入口
 
-负责模型设置页里的供应商凭据、API Key／OAuth 登录退出、自定义 `models.json` 条目，以及默认模型、当前会话模型选择、对话页模型可见性和 Codex 账户额度查询。入口为设置页“模型”、认证弹窗、聊天输入区模型选择器与“用量与额度”弹窗。密钥、验证码、设备授权、认证结果及会话重载由独立认证弹窗承载。
+负责模型设置页里的供应商凭据、API Key／OAuth 登录退出、自定义 `models.json` 条目，以及默认模型、当前会话模型选择、对话页模型可见性、Codex 账户额度与 OpenCode Go 订阅额度查询。入口为设置页“模型”、认证弹窗、聊天输入区模型选择器与“用量与额度”弹窗。密钥、验证码、设备授权、认证结果及会话重载由独立认证弹窗承载。
 
 凭据、供应商定义、默认模型和桌面展示偏好是四类数据，页面按供应商聚合展示不代表它们共享存储。SDK 会话执行及资源重载由会话模块处理，SDK 安装由更新模块处理。
 
@@ -12,19 +12,20 @@
 
 | 文件 | 用途 |
 | --- | --- |
-| `src/main/providers/auth-manager.ts` | 认证状态、登录流程、提示回应、取消、退出、受控授权地址、云端模型目录刷新与 Codex 额度查询编排 |
+| `src/main/providers/auth-manager.ts` | 认证状态、登录流程、提示回应、取消、退出、受控授权地址、云端模型目录刷新与 Codex、OpenCode Go 额度查询编排 |
 | `src/main/providers/auth-helper-process.ts` | 认证辅助进程启动、JSONL 通信与关闭 |
-| `src/auth-helper/index.ts` | 官方 ModelRuntime 认证适配、提示、敏感信息脱敏、受控云端模型目录刷新与 Codex 额度请求分派 |
+| `src/auth-helper/index.ts` | 官方 ModelRuntime 认证适配、提示、敏感信息脱敏、受控云端模型目录刷新与 Codex、OpenCode Go 额度请求分派 |
 | `src/auth-helper/codex-usage.ts` | Codex 账户额度查询、响应解析、按凭据隔离的短期缓存与在途请求合并 |
+| `src/auth-helper/opencode-usage.ts` | OpenCode Go 订阅额度查询、响应解析、按 API Key 指纹隔离的短期缓存与在途请求合并 |
 | `src/auth-helper/protocol.ts` | 辅助进程请求、响应和事件帧 |
 | `src/main/providers/models-config-manager.ts` | 自定义供应商快照、脱敏、单条保存／删除与并发基线 |
 | `src/main/providers/pi-settings-manager.ts` | Pi 默认模型读取与定点写入 |
-| `src/shared/auth-api.ts` | 页面认证状态、登录方法、提示、流程、Codex 额度与错误契约及跨进程校验 |
+| `src/shared/auth-api.ts` | 页面认证状态、登录方法、提示、流程、Codex 与 OpenCode Go 额度及错误契约与跨进程校验 |
 | `src/shared/models-config-api.ts` | 自定义供应商请求、快照与校验 |
 | `src/shared/pi-settings-api.ts` | 默认模型读取／写入契约 |
 | `src/renderer/src/providers/stores/auth.ts` | 认证状态、流程副本及临时输入 |
 | `src/renderer/src/providers/stores/models-config.ts` | 供应商条目快照与编辑动作 |
-| `src/renderer/src/providers/services/auth.ts` | 认证与 Codex 额度桥接、登录事件与错误细节 |
+| `src/renderer/src/providers/services/auth.ts` | 认证与 Codex、OpenCode Go 额度桥接、登录事件与错误细节 |
 | `src/renderer/src/providers/services/models-config.ts` | 供应商定义桥接 |
 | `src/renderer/src/providers/services/pi-settings.ts` | 默认模型桥接 |
 | `src/renderer/src/providers/provider-status.ts` | 供应商配置／认证状态文案 |
@@ -42,7 +43,7 @@
 
 ## 公共与跨模块引用
 
-- [F-assembly](shared.md#f-assembly进程与页面组装混合)：认证与 Codex 额度、自定义模型、Pi 默认模型 IPC、事件投递及对应 preload 方法。
+- [F-assembly](shared.md#f-assembly进程与页面组装混合)：认证与 Codex、OpenCode Go 额度、自定义模型、Pi 默认模型 IPC、事件投递及对应 preload 方法。
 - [F-runtime-state](shared.md#f-runtime-state综合-runtime-状态混合)：`stores/runtime-models.ts` 的能力、模型切换、`loadPiDefaultModel`、`setPiDefaultModel`；`stores/runtime-model-display.ts` 的 `loadModelDisplay` 与可见性动作；`runtime.ts` 只做门面转发；`runtime-api.ts` 的模型身份与能力类型。
 - [F-config](shared.md#f-configdesktop-配置混合)：模型隐藏项与安装级设备标识；不保存认证密钥。
 - [F-platform](shared.md#f-platform文件锁外链与基础错误共享)：配置写锁、外链与基础错误。
@@ -56,6 +57,7 @@
 | --- | --- | --- |
 | 登录／退出 | 模型页／认证弹窗 → auth Store／服务 → IPC → AuthManager → 辅助进程 → 官方 SDK | agent 目录 `auth.json`；页面只接收状态与提示 |
 | 查询 Codex 额度 | 用量与额度弹窗 → auth 服务 → IPC → AuthManager → 辅助进程 → 官方额度接口 | 展示快照仅在内存短期缓存；OAuth 续期仍由 SDK 管理 |
+| 查询 OpenCode Go 额度 | 用量与额度弹窗 → auth 服务 → IPC → AuthManager → 辅助进程 → 官方额度接口 | 展示快照仅在内存短期缓存；API Key 只由辅助进程从 SDK 解析 |
 | 定义供应商 | 条目弹层 → models-config Store／服务 → IPC → ModelsConfigManager | agent 目录 `models.json`；按单个 provider 修改 |
 | 探测端点模型 | 条目编辑弹窗 → models-config 服务 → IPC → ModelsConfigManager → 端点 `/models` 探测 | 仅在表单草稿填充，保存后写入 models.json |
 | 删除供应商 | 展开区危险操作 → 确认对话框 → models-config Store／服务 → IPC → ModelsConfigManager | agent 目录 `models.json`；只删该 provider 的条目 |
@@ -73,5 +75,7 @@
 Codex 额度是已登录账户的统计，不是本会话 token／费用，也不要求当前会话选用 Codex 模型。辅助进程通过官方 SDK 解析已有 Codex OAuth 凭据并按需续期，只向固定官方地址查询；API Key 不支持该查询；没有可用账户凭据（未登录、仅 API Key 或凭据缺少账户信息）时上报 `AUTH_CODEX_NOT_LOGGED_IN`，用量弹窗据此不展示额度区，也不按故障提示。接口属于非公开接口，异常或字段失配如实报错，不推算额度或为 credits 添加币种。固定地址、缓存与超时参数以 `src/auth-helper/codex-usage.ts` 的定义为准，页面契约与校验以 `src/shared/auth-api.ts` 为准。
 
 额度缓存按凭据指纹隔离，同一凭据的在途查询合并；手动刷新绕过有效缓存，Codex 登录开始、结束及退出使缓存和旧查询失效。响应返回后再次核对凭据，避免返回旧账户的数据。凭据不进入主进程或页面，额度快照不写入会话历史或 Desktop 配置；必要的凭据续期仍由 SDK 写入认证存储。
+
+OpenCode Go 额度只在 Pi 中已配置 `opencode-go` 的 API Key 时展示，不读取 OpenCode CLI 自身的认证文件；没有可用 API Key 时上报 `AUTH_OPENCODE_NOT_CONFIGURED`，用量弹窗据此不展示该区、不按故障提示。上游接口只返回滚动 5 小时、每周与每月三个窗口的已用百分比和重置时间，不提供金额，页面也不推算金额；固定地址、浏览器 User-Agent、缓存与超时参数以 `src/auth-helper/opencode-usage.ts` 的定义为准，API Key 登录、退出同样使缓存与旧查询失效。
 
 preload 与服务传递明确字段和普通对象，主进程决定辅助入口与授权地址。默认模型保存不修改当前会话；当前模型切换不隐式修改全局默认。选择器按当前对话的实际绑定状态决定操作目标：未绑定或原位新草稿选择草稿模型，不改写 Pi 全局默认模型；另设全局默认走候选项的次级动作；旧实例结束或新绑定尚在确认时禁用改选与手动刷新，当前模型切换反馈以实际运行状态为准。配置写入需要文件锁及已有基线，不通过第二个 Desktop 配置写入者绕过统一存储。

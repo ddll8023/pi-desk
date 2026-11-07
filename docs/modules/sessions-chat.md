@@ -100,7 +100,7 @@
 | `src/renderer/src/sessions/components/HistoryLoadSentinel.vue` | 历史加载触发哨兵 |
 | `src/renderer/src/sessions/components/ToolCard.vue` | 单行紧凑展示操作分类徽章、真实工具名、语境化参数与状态耗时胶囊；展开区展示结构化结果卡片、Diff 与调试抽屉，原文按需展开 |
 | `src/renderer/src/sessions/components/ToolResultPreview.vue` | 工具结果的计数口径、命中内容、来源、历史状态与省略提示；只展示投影，不发起额外查询 |
-| `src/renderer/src/sessions/components/UsageDetailDialog.vue` | 会话用量明细与独立的 Codex 账户额度展示、按需读取与手动刷新 |
+| `src/renderer/src/sessions/components/UsageDetailDialog.vue` | 会话用量明细与独立的 Codex、OpenCode Go 账户额度展示、按需读取与手动刷新 |
 | `src/renderer/src/sessions/components/SessionActivityBar.vue` | 会话活动摘要和明细 |
 | `src/renderer/src/sessions/components/ExtensionDialog.vue` | SDK 扩展交互队列的当前对话 |
 | `src/renderer/src/sessions/components/ExtensionNotificationBar.vue` | 扩展通知展示 |
@@ -116,14 +116,14 @@
 - [记忆](memory.md)：宿主初始化时携带受管记忆配置并在资源加载前写入，内部会话按开关与资源状态装配扩展。
 - [F-ui](shared.md#f-ui前端共享展示共享)、[F-style](shared.md#f-style全局主题与业务样式混合)：Markdown、数学、复制、浮层和聊天样式。
 - [项目与信任](projects-trust.md)：登记项目与目标授权；[工作区](workspace-tabs.md)：原标签绑定、选择与关闭，以及浏览器批注的来源固定和目标切换编排。输入坞的 `mergeBrowserAnnotation` 在目标就绪后复核身份并合并草稿，两模块不拥有 SDK 分配权。
-- [供应商](providers-auth.md)：`RuntimeModelSelect.vue` 提供模型选择，持久默认模型不等于当前会话模型；`UsageDetailDialog.vue` 经认证服务读取 Codex 账户额度，查询机制与凭据边界由供应商模块维护。
+- [供应商](providers-auth.md)：`RuntimeModelSelect.vue` 提供模型选择，持久默认模型不等于当前会话模型；`UsageDetailDialog.vue` 经认证服务读取 Codex 与 OpenCode Go 账户额度，查询机制与凭据边界由供应商模块维护。
 - [文件](files-editor.md)：`project-file` Store 提供 `@` 文件候选；[资源](resources-mcp.md) 提供技能和命令补全；[偏好](preferences.md) 提供快捷输入。
 - [生成式界面](genui.md)：宿主注册内置扩展，工具投影识别其载荷，消息组件分发到专用渲染器。
 - [工作区标签](workspace-tabs.md)：宿主挂载内置浏览器扩展，通过 `browser-operation` 反向协议由主进程 `BrowserSessionService` 复核会话代际并派发动作；未绑定实例时主进程自动派发 `browser:auto-attach` 事件通知工作区开辟分屏并完成 1:1 静默绑定，驱动受管浏览器。
 
 ## 关键调用链
 
-输入坞的用量指标打开“用量与额度”弹窗，保留本会话统计并按需读取 Codex 账户额度，支持手动刷新。未登录或没有可用账户凭据时整块不展示，加载中同样不占位；接口失败和缺失窗口分别展示，不把账户额度计入会话用量；关闭或卸载后忽略迟到响应，重新打开时读取当前账户快照。查询链路见[供应商与认证](providers-auth.md#调用链与数据所有者)，不经过会话 SDK 宿主。
+输入坞的用量指标打开“用量与额度”弹窗，保留本会话统计并按需读取 Codex 与 OpenCode Go 账户额度，支持手动刷新。两类额度各自独立：未登录或没有可用账户凭据、没有 OpenCode Go API Key 时对应区块整块不展示，加载中同样不占位；接口失败和缺失窗口分别展示，不把账户额度计入会话用量；关闭或卸载后忽略迟到响应，重新打开时读取当前账户快照。查询链路见[供应商与认证](providers-auth.md#调用链与数据所有者)，不经过会话 SDK 宿主。
 
 1. 页面表达打开意图：标签 Store 计算 `ChatOpenIntent`，`session` Store 固定项目与标签并串行提交；选择本身立即落到标签，不等打开动作整体收尾。打开已有会话前先按会话读取首页历史并显示出来，未绑定时可继续翻页、展开轮次与续段；历史读取不排队，失败即降级。页面只给项目与会话，由主进程判定该会话当前走绑定路径还是日志解析；主进程按会话持久绑定解析对应工作区并在响应中回传，标签据此同步工作区环境。
 2. 主进程校验登记项目与信任，注册表管理占用，Runtime 桥决定复用、切前台或建立宿主；前台选择按主进程分配的序号收敛，先提交后完成的旧选择不会把前台改回旧目标。项目成为当前项目时预热只读池中的一个解析宿主，供查看历史与随后的绑定共用。
