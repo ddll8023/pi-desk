@@ -644,6 +644,8 @@ BACKGROUND_POLICY = 'lexical-global-background-v2'
 BACKGROUND_STOPWORDS = {'当前','现在','需要','可以','已经','相关','问题','项目','功能','优化','处理',
                        '继续','一下','看看','进行','是否','推荐','建议','方案','实现','本次','以下',
                        'please','could','would','should','help','with','this','that'}
+# 自动背景的类型权重：决定与约束优先于进展流水，避免历史流水挤占有限的背景预算。
+TYPE_WEIGHT = {'decision':1.6,'constraint':1.8,'preference_evidence':1.4,'fact':1.1,'issue':1.0,'progress':0.7}
 
 
 def background_recall(root: Path, data: dict) -> dict:
@@ -690,6 +692,9 @@ def background_recall(root: Path, data: dict) -> dict:
         return {**base,'unchanged':True,'ids':cached_ids}
     terms={term for term in lexical_terms(query) if term not in BACKGROUND_STOPWORDS}
     ranked=rank_documents(docs,' '.join(sorted(terms))) if terms else []
+    # 先按类型权重重排，再套相关度门槛与相对截断，保证规则类条目先获得名额。
+    ranked=[(doc,score*TYPE_WEIGHT.get(doc.get('type'),1.0),hits) for doc,score,hits in ranked]
+    ranked.sort(key=lambda item:(-item[1],item[0]['key']))
     eligible=[item for item in ranked if len(item[2])>=min(2,len(terms))
               and len(item[2])/max(1,len(terms))>=0.12]
     if eligible:
@@ -704,8 +709,10 @@ def background_recall(root: Path, data: dict) -> dict:
     fields=('id','type','topic','title','content','project_id','date','file_path','status','source_record_ids')
     matches=[{**{key:row[key] for key in fields if key in row},'score':round(item[1],6),
               'matched_terms':item[2]} for row,item in zip(rows,selected)]
+    # 无命中时给出具体原因，供扩展区分“没有词项”“没有重叠”和“低于门槛”，不把它们都说成无命中。
+    reason=None if matches else ('no_terms' if not terms else 'no_overlap' if not ranked else 'below_threshold')
     return {**base,'unchanged':False,'matches':matches,'ids':[row['id'] for row in matches],
-            'no_match':not matches,'eligible_count':len(eligible),
+            'no_match':not matches,'reason':reason,'eligible_count':len(eligible),
             'note':'自动词法筛选不证明适用性或事实正确；被替代规则不自动注入，完整历史仍可手动查询。'}
 
 

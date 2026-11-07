@@ -131,7 +131,7 @@ export function registerMemoryTools(pi: ExtensionAPI, runtime: MemoryRuntime): v
   })
   pi.registerTool({
     name: 'memory_rules', label: '读取当前有效规则',
-    description: '读取用户级全局库当前有效决定和约束，支持主题查询与分页，不绑定或过滤当前项目。历史来源与适用条件不变；摘要需 memory_read 读取全文，不自动修索引。',
+    description: '调整既有约定、判断某项要求是否仍然有效时先查询。读取用户级全局库当前有效决定和约束，支持主题查询与分页，不绑定或过滤当前项目。历史来源与适用条件不变；摘要需 memory_read 读取全文，不自动修索引。',
     parameters: Type.Object({ query: Type.Optional(Type.String()), offset: Offset, limit: Limit }, { additionalProperties: false }),
     outputSchema: Output, annotations: ReadHints,
     async execute(_id, params, signal, _onUpdate, ctx) {
@@ -153,7 +153,7 @@ export function registerMemoryTools(pi: ExtensionAPI, runtime: MemoryRuntime): v
   })
   pi.registerTool({
     name: 'memory_search', label: '按任务检索全局记忆',
-    description: '从用户级全局索引按任务关键词查询日记，不绑定项目。records 查询全部日记，recent 限近期，historical/month 查询月摘要。支持分页；摘要需 memory_read 读取全文，不自动修复索引或扩大明确时间范围。',
+    description: '开始新任务、需沿用先前决定或偏好、或同一错误反复出现时先检索。从用户级全局索引按任务关键词查询日记，不绑定项目。records 查询全部日记，recent 限近期，historical/month 查询月摘要。支持分页；摘要需 memory_read 读取全文，不自动修复索引或扩大明确时间范围。',
     parameters: Type.Object({ query: Type.String({ minLength: 1 }),
       mode: Type.Optional(Type.Union([Type.Literal('records'), Type.Literal('recent'), Type.Literal('historical'), Type.Literal('month')])),
       month: Type.Optional(Type.String({ pattern: '^\\d{4}-(0[1-9]|1[0-2])$' })), offset: Offset, limit: Limit }, { additionalProperties: false }),

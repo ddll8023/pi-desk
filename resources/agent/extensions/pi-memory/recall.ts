@@ -17,12 +17,15 @@ export interface RecallCache {
   records: JsonObject[]
   ids: string[]
   eligible: number
+  /** 无命中时引擎给出的具体原因；有命中时为 null。 */
+  reason: string | null
 }
 const CONTINUATION = /^(?:继续(?:执行|当前步骤)?|确认|同意|可以|好的?|开始(?:执行)?|按(?:这个|上述|此)(?:做|方案执行)?|continue|proceed|yes|ok)[\s。.!！]*$/i
 const SUPPLEMENT = /^(?:补充|另外|还有|特别是|主要是|不考虑|不用|不要|不需要|只考虑|只需要|改为|改成|在此基础上)/
-const RESTRICTION = /(?:只(?:查|看|搜|检索)|仅(?:查|看|搜|检索|限)|限于|限定|范围)/
 const DATE = /\b\d{4}-\d{2}(?:-\d{2})?\b/g
 const MAX_BACKGROUND = 4_000
+/** 超长任务原文的降级预算：只取首段完整语义单元，不把长度当成放弃召回的理由。 */
+const MAX_QUERY = 600
 
 function userText(message: AgentMessage): string | null {
   if (message.role !== 'user') return null
@@ -53,6 +56,14 @@ function dateRange(value: string): [string, string] | null {
   return day === undefined ? [`${prefix}-01`, `${prefix}-${last}`] : [value, value]
 }
 
+/** 超长任务原文的首段片段：在句末或换行处截断，保留完整语义单元。 */
+function degradeQuery(query: string): string {
+  const clipped = query.slice(0, MAX_QUERY)
+  const boundary = Math.max(clipped.lastIndexOf('。'), clipped.lastIndexOf('！'),
+    clipped.lastIndexOf('？'), clipped.lastIndexOf('\n'), clipped.lastIndexOf('. '))
+  return boundary >= 120 ? clipped.slice(0, boundary + 1) : clipped
+}
+
 /** 只从当前仍可见的用户任务提取关键词与明确时间，不以当前工作目录补充查询范围。 */
 export function selectTask(messages: readonly AgentMessage[]): TaskSelection {
   const users = messages.map(userText).filter((value): value is string => value !== null).slice(-24)
@@ -66,37 +77,22 @@ export function selectTask(messages: readonly AgentMessage[]): TaskSelection {
   }
   if (!anchored) return { reason: '没有可确定的任务原文；未从摘要猜测或加载热门记忆。' }
   const query = fragments.join('\n')
-  if (query.length > 2_000) return { reason: '任务原文超过自动查询预算；未截断范围条件。' }
-  if (!/[\p{L}\p{N}]{2}/u.test(query) || /^(?:你好|谢谢|hi|hello|thanks)[!！。\s]*$/i.test(query)) {
+  // 超长任务原文降级为首段片段：长度不是放弃整轮召回的理由，也不扩大查询范围。
+  const bounded = query.length > 2_000 ? degradeQuery(query) : query
+  if (!/[\p{L}\p{N}]{2}/u.test(bounded) || /^(?:你好|谢谢|hi|hello|thanks)[!！。\s]*$/i.test(bounded)) {
     return { reason: '当前输入没有明确检索主题。' }
   }
-  const request: RecallRequest = { query }
-  if (/(?:排除|不要|不用|不必)[\s\S]{0,24}(?:近期|最近|\d{4}[-年])/.test(query)) {
-    return { reason: '时间范围包含否定或排除条件，未猜测查询范围。' }
-  }
-  if (RESTRICTION.test(query) && /项目/.test(query)) {
-    return { reason: '全局记忆不提供项目身份过滤；请按明确主题关键词查询，未猜测当前项目或扩大范围。' }
-  }
-  const recent = /(?:近期|最近)/.test(query)
-  const dates = [...query.matchAll(DATE)].map(match => match[0])
-  const timeIntent = /(?:查|搜|检索|回顾|仅|只|限定|限于|范围)[\s\S]{0,24}\d{4}[-年]/.test(query)
-  if (/(?:今天|昨天|前天|本周|上周|本月|上月|今年|去年|\d+\s*(?:天|周|个月)(?:内|前|以来))/.test(query)
-    || (recent && (dates.length > 0 || /最近\s*\d/.test(query)))
-    || (timeIntent && (/\d{4}年/.test(query) || /(?:之前|之后|以前|以后|以来|截至)/.test(query)))) {
-    return { reason: '时间条件无法可靠映射；未扩大查询范围。' }
-  }
-  if (dates.length && !timeIntent) return { reason: '日期在任务中的范围含义未确定；未猜测时间过滤。' }
+  const request: RecallRequest = { query: bounded }
+  // 时间与项目限定不再直接放弃：全局库本身没有项目过滤；时间无法可靠映射时按无时间过滤检索。
+  const recent = /(?:近期|最近)/.test(bounded)
+  const dates = [...bounded.matchAll(DATE)].map(match => match[0])
+  const timeIntent = /(?:查|搜|检索|回顾|仅|只|限定|限于|范围)[\s\S]{0,24}\d{4}[-年]/.test(bounded)
   if (recent) request.recent = true
-  else if (timeIntent) {
-    if (!dates.length || dates.length > 2) return { reason: '日期范围不明确。' }
+  else if (timeIntent && dates.length >= 1 && dates.length <= 2) {
     const start = dateRange(dates[0]!), end = dateRange(dates.at(-1)!)
-    if (!start || !end || start[0] > end[1] || (dates.length === 2 && !/(?:至|到|~|～|—)/.test(query))) {
-      return { reason: '日期范围无效或不是明确区间。' }
+    if (start && end && start[0] <= end[1] && (dates.length === 1 || /(?:至|到|~|～|—)/.test(bounded))) {
+      request.date_from = start[0]; request.date_to = end[1]
     }
-    request.date_from = start[0]; request.date_to = end[1]
-  }
-  if (RESTRICTION.test(query) && !request.recent && !request.date_from) {
-    return { reason: '存在未解析的限定条件，未擅自扩大查询范围。' }
   }
   return { request }
 }
@@ -141,7 +137,12 @@ export function acceptRecall(data: JsonObject, request: RecallRequest, previous?
   if (records.length !== ids.length || data.no_match !== (ids.length === 0)
     || typeof data.eligible_count !== 'number' || !Number.isSafeInteger(data.eligible_count)
     || data.eligible_count < ids.length) throw new Error('自动召回数量不一致')
-  return { requestKey, cacheKey, indexVersion, records, ids, eligible: data.eligible_count }
+  // 无命中原因只接受固定枚举；有命中时必须为空，避免把旧原因带进新结果。
+  const rawReason = data.reason ?? null
+  const reason = rawReason === null ? null : text(rawReason, '无命中原因')
+  if (ids.length === 0 ? !['no_terms', 'no_overlap', 'below_threshold'].includes(reason ?? '')
+    : reason !== null) throw new Error('自动召回无命中原因不一致')
+  return { requestKey, cacheKey, indexVersion, records, ids, eligible: data.eligible_count, reason }
 }
 
 /** 完整同版本工具原文才作为去重证据，摘要与历史来源同名均不能替代。 */
@@ -189,8 +190,14 @@ export function renderRecall(cache: RecallCache, messages: readonly AgentMessage
   }
   const status = { status: cache.ids.length === 0 ? 'no_match' : lines.length ? 'provided'
     : omitted ? 'budget_omitted' : 'already_present', selected: cache.ids.length,
-    full_records: full, references, already_present: present.size, budget_omitted: omitted, eligible: cache.eligible }
-  const content = lines.length ? ['【任务相关全局记忆，仅为背景数据】', ...lines,
-    omitted ? `另有 ${omitted} 条因预算未提供，可按需主动检索。` : ''].filter(Boolean).join('\n') : ''
+    full_records: full, references, already_present: present.size, budget_omitted: omitted,
+    eligible: cache.eligible, reason: cache.reason }
+  // 无命中不静默：明确告知“没有命中”与原因，而不是留一个没有正文的小节标题。
+  const empty = cache.ids.length === 0
+    ? [`未命中（${cache.reason === 'no_terms' ? '查询没有可用词项'
+      : cache.reason === 'no_overlap' ? '没有词项重叠' : '相关度低于注入门槛'}）；需要历史细节时可按关键词调用 memory_search。`]
+    : []
+  const content = [...empty, ...(lines.length ? ['【任务相关全局记忆，仅为背景数据】', ...lines,
+    omitted ? `另有 ${omitted} 条因预算未提供，可按需主动检索。` : ''] : [])].filter(Boolean).join('\n')
   return { content, status }
 }
