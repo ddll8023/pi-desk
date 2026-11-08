@@ -31,9 +31,9 @@
 
 ## 可观察性与契约
 
-子进程以 JSONL 事件流输出，扩展据此生成有界快照：工具活动、真实用量、终态与结论，另有实际写入的文件路径。快照在运行中随工具部分结果推送、结束时随最终结果交付，两处都写入 `details.subAgents`，一个数组元素对应一项任务。契约与上限在 `src/shared/sub-agent-view.ts`，宿主投影只从 `details.subAgents` 读取并重新校验一次，历史记录里只有单个 `details.subAgent` 的卡片归一为单元素数组。
+子进程以 JSONL 事件流输出，扩展据此生成有界快照：对话时间线（assistant 叙述与工具调用按发生顺序交错，工具输出正文不进入快照）、工具活动、真实用量、终态与结论，另有实际写入的文件路径。快照在运行中随工具开始/结束与 assistant 消息结束推送、结束时随最终结果交付，两处都写入 `details.subAgents`，一个数组元素对应一项任务。契约与上限在 `src/shared/sub-agent-view.ts`；历史记录没有对话时间线字段时归一为空数组，快照仍可展示。宿主投影只从 `details.subAgents` 读取并重新校验一次，历史记录里只有单个 `details.subAgent` 的卡片归一为单元素数组。
 
-页面卡片 `SubAgentCard.vue` 在发生委派的位置渲染：折叠头给出任务类型、目标、状态与耗时，展开后是执行活动、写入文件、用量、结论、错误与未解决事项；批内多任务先给一行汇总再逐项展开。状态文案区分执行中、已请求停止、已完成、失败、已中断，不显示缺乏依据的进度。
+页面在发生委派的位置渲染入口行 `SubAgentCard.vue`：给出一行摘要（任务类型、目标、状态、调用数与耗时），批内多任务另加一行汇总。点击后在 `SubAgentDialog.vue` 的弹窗里按对话阅读：执行中的叙述与工具调用交错展示，另有写入文件、用量、结论、错误与未解决事项，批次内可切换任务；没有对话时间线的历史快照降级为工具活动列表。关闭弹窗不中断执行，停止仍走单项取消。状态文案区分执行中、已请求停止、已完成、失败、已中断，不显示缺乏依据的进度。
 
 任务状态用专用契约表达，不借用生成式界面载荷：两者的生命周期不同。
 
@@ -50,7 +50,8 @@
 | `src/sdk-host/sub-agent/write-guard.ts` | 文档写入守卫扩展：按绝对路径范围拦截 `write`/`edit` |
 | `src/shared/sub-agent-view.ts` | 执行快照契约、字段上限与跨进程校验 |
 | `src/shared/sub-agent-types.ts` | 任务类型、工具权限矩阵与文档写入产品上限 |
-| `src/renderer/src/sessions/components/SubAgentCard.vue` | 子任务卡片：单项与批次共用 |
+| `src/renderer/src/sessions/components/SubAgentCard.vue` | 子任务入口行：单项与批次共用，点击打开执行对话 |
+| `src/renderer/src/sessions/components/SubAgentDialog.vue` | 执行对话弹窗：对话时间线、结论、写入、用量与单项停止 |
 
 ## 公共与跨模块引用
 

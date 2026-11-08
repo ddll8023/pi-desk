@@ -94,6 +94,10 @@ function killInFlightChildren(): void {
 const ACTIVITY_LIMIT = 24
 /** 卡片上识别任务用的目标摘要上限。 */
 const OBJECTIVE_LIMIT = 400
+/** 对话时间线保留条数：与契约上限一致，超出时只丢最早条目并保留总数。 */
+const TRANSCRIPT_LIMIT = 20
+/** 单条对话文本上限：契约超限就整份丢弃，不能指望校验层帮忙截断。 */
+const TRANSCRIPT_TEXT_LIMIT = 1_600
 /** 结论摘要上限；完整结论仍在工具结果文本里。 */
 const SUMMARY_LIMIT = 800
 /** 技能正文上限；产品规范文件远小于该值。 */
@@ -264,6 +268,17 @@ interface TraceActivity {
   durationMs: number | null
 }
 
+/**
+ * 对话时间线条目：与 `SubAgentView.transcript` 契约一致。
+ * 工具条目的阶段在对应结束事件上回填，不在开始时猜测完成度。
+ */
+type TraceTranscriptEntry =
+  | { kind: 'assistant'; text: string }
+  | { kind: 'tool'; tool: string; target: string | null; phase: TraceActivity['phase']; durationMs: number | null }
+
+/** 工具型条目需要按调用标识回填，单独取窄后的类型。 */
+type TraceTranscriptTool = Extract<TraceTranscriptEntry, { kind: 'tool' }>
+
 interface TraceUsage {
   inputTokens: number | null
   outputTokens: number | null
@@ -319,12 +334,17 @@ function readUsage(value: unknown): TraceUsage | null {
 
 /**
  * 把子进程事件缩减为有界的执行快照。
- * 只记真实工具调用与供应商报告的用量；模型的中间叙述不进入快照。
+ * 只记真实工具调用、assistant 叙述与供应商报告的用量；工具输出正文不进入快照。
  */
 class AgentTrace {
   readonly startedAt = Date.now()
   private readonly activities: TraceActivity[] = []
   private readonly running = new Map<string, TraceActivity>()
+  /** 对话时间线：assistant 叙述与工具调用按发生顺序交错。 */
+  private readonly transcript: TraceTranscriptEntry[] = []
+  /** 仍在时间线内的工具条目，按调用标识回填结束状态。 */
+  private readonly transcriptTools = new Map<string, TraceTranscriptTool>()
+  private transcriptTotal = 0
   private total = 0
   private usage: TraceUsage = { inputTokens: null, outputTokens: null, totalTokens: null }
   private finalText: string | null = null
@@ -347,6 +367,7 @@ class AgentTrace {
       }
       if (id !== null) this.running.set(id, activity)
       this.record(activity)
+      this.openTranscriptTool(id, activity)
       return
     }
     if (event.type === 'tool_execution_end') {
@@ -361,6 +382,7 @@ class AgentTrace {
       activity.phase = event.isError === true ? 'error' : 'done'
       activity.durationMs = typeof event.durationMs === 'number' && isCount(event.durationMs) ? event.durationMs : null
       if (existing === undefined) this.record(activity)
+      this.closeTranscriptTool(id, activity)
       if (id !== null) this.running.delete(id)
       return
     }
@@ -371,7 +393,13 @@ class AgentTrace {
     }
     if (event.type === 'message_end') {
       const text = readAssistantText(event.message)
-      if (text !== null) this.finalText = text
+      if (text !== null) {
+        this.finalText = text
+        // 中间叙述在对话弹窗里按发言顺序展示；空文本不占位置。
+        if (text.trim() !== '') {
+          this.pushTranscript({ kind: 'assistant', text: text.trim().slice(0, TRANSCRIPT_TEXT_LIMIT) })
+        }
+      }
       if (typeof event.message === 'object' && event.message !== null) {
         const usage = readUsage((event.message as Record<string, unknown>).usage)
         if (usage !== null) this.usage = usage
@@ -411,6 +439,17 @@ class AgentTrace {
 
   view(phase: SnapshotPhase, extra: TraceExtra = {}): unknown {
     const terminal = phase === 'succeeded' || phase === 'failed' || phase === 'aborted'
+    const transcript = this.transcript.map(item => ({ ...item }))
+    let transcriptTotal = this.transcriptTotal
+    // 终态最后一段通常就是输出 JSON：它是结论而不是对话，已在 summary 里，不当作叙述展示。
+    if (terminal && this.finalText !== null) {
+      const last = transcript[transcript.length - 1]
+      if (last !== undefined && last.kind === 'assistant'
+        && last.text === this.finalText.trim().slice(0, TRANSCRIPT_TEXT_LIMIT)) {
+        transcript.pop()
+        transcriptTotal = Math.max(0, transcriptTotal - 1)
+      }
+    }
     return {
       taskId: this.taskId.slice(0, 128),
       taskType: this.taskType,
@@ -420,6 +459,8 @@ class AgentTrace {
       endedAt: terminal ? Date.now() : null,
       activities: this.activities.map(item => ({ ...item })),
       activityTotal: this.total,
+      transcript,
+      transcriptTotal,
       usage: this.usage,
       // 三项都截到契约上限：校验层超限就整份丢弃，不能指望它帮忙截断。
       summary: extra.summary === undefined || extra.summary === null ? null : extra.summary.slice(0, SUMMARY_LIMIT),
@@ -428,6 +469,45 @@ class AgentTrace {
       pending: (extra.pending ?? []).slice(0, 6).map(item => item.slice(0, 240)),
       writes: [...this.writes]
     }
+  }
+
+  /** 工具开始时入时间线：先记 running，结束事件再回填真实结果与耗时。 */
+  private openTranscriptTool(id: string | null, activity: TraceActivity): void {
+    const entry: TraceTranscriptTool = {
+      kind: 'tool',
+      tool: activity.tool,
+      target: activity.target,
+      phase: activity.phase,
+      durationMs: activity.durationMs
+    }
+    this.pushTranscript(entry)
+    if (id !== null) this.transcriptTools.set(id, entry)
+  }
+
+  /** 工具结束时回填时间线；没有开始事件时补一条终态条目，不丢这次调用。 */
+  private closeTranscriptTool(id: string | null, activity: TraceActivity): void {
+    const entry = id === null ? undefined : this.transcriptTools.get(id)
+    if (entry !== undefined) {
+      entry.phase = activity.phase
+      entry.durationMs = activity.durationMs
+      if (id !== null) this.transcriptTools.delete(id)
+      // 条目已被上限挤出时间线时只更新引用，不再补一条：同一次调用不能占两个总数。
+      return
+    }
+    this.pushTranscript({
+      kind: 'tool',
+      tool: activity.tool,
+      target: activity.target,
+      phase: activity.phase,
+      durationMs: activity.durationMs
+    })
+  }
+
+  /** 入时间线并保持有界：超出上限只丢最早条目，总数照实累加。 */
+  private pushTranscript(entry: TraceTranscriptEntry): void {
+    this.transcript.push(entry)
+    this.transcriptTotal += 1
+    while (this.transcript.length > TRANSCRIPT_LIMIT) this.transcript.shift()
   }
 
   /** 写入列表去重且有上限：超出上限不再追加，不擕掉已发生的路径。 */
@@ -841,7 +921,7 @@ export function createSubAgentDelegationExtension(config: SubAgentWorkerConfig,
         extra: {},
         result: null
       }))
-      /** 进度只推真实活动：工具开始与结束各一次，不按 token 增量刷屏。 */
+      /** 进度只推真实活动与已完成的叙述：工具开始/结束与消息结束各推一次，不按 token 增量刷屏。 */
       const publish = (): void => {
         const views = states.map(state => state.trace.view(state.phase, state.extra))
         const live = states.filter(state => state.phase === 'running' || state.phase === 'cancelling')
@@ -888,7 +968,9 @@ export function createSubAgentDelegationExtension(config: SubAgentWorkerConfig,
           note => onUpdate?.({ content: [{ type: 'text', text: note.slice(0, 300) }], details: { subAgents: [] } }),
           event => {
             trace.consume(event)
-            if (event.type === 'tool_execution_start' || event.type === 'tool_execution_end') publish()
+            // 叙述在 message_end 才成形：也要推一次，否则执行中的对话要等到下一次工具调用才刷新。
+            if (event.type === 'tool_execution_start' || event.type === 'tool_execution_end'
+              || event.type === 'message_end') publish()
           },
           () => { state.phase = 'cancelling'; publish() },
           workerEnvExtra)

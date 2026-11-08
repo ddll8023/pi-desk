@@ -21,6 +21,21 @@ export interface SubAgentActivity {
   readonly durationMs: number | null
 }
 
+/**
+ * 对话时间线条目：子代理真实说过的话与真实发生过的工具调用，按发生顺序交错。
+ * 判别联合而非可空字段：文本条目没有阶段与目标，工具条目没有叙述正文。
+ * 只收录子代理自己的 assistant 文本，不收录工具输出正文与用户/系统消息。
+ */
+export type SubAgentTranscriptItem =
+  | { readonly kind: 'assistant'; readonly text: string }
+  | {
+    readonly kind: 'tool'
+    readonly tool: string
+    readonly target: string | null
+    readonly phase: SubAgentActivity['phase']
+    readonly durationMs: number | null
+  }
+
 /** 用量口径：供应商未报告时各字段为 null，不以 0 表示确定没有消耗。 */
 export interface SubAgentUsage {
   readonly inputTokens: number | null
@@ -41,6 +56,13 @@ export interface SubAgentView {
   readonly activities: readonly SubAgentActivity[]
   /** 真实活动总数；必须给出，缺失时视为载荷不合规。 */
   readonly activityTotal: number
+  /**
+   * 对话时间线：assistant 叙述与工具调用按发生顺序交错，供弹窗按对话阅读。
+   * 历史记录早于本字段，缺失时归一为空数组而不是判为不合规——旧会话必须仍能展示。
+   */
+  readonly transcript: readonly SubAgentTranscriptItem[]
+  /** 真实时间线条目总数；历史记录缺失时为 0。 */
+  readonly transcriptTotal: number
   readonly usage: SubAgentUsage
   /** 结论摘要；失败时为 null，结论正文仍在工具结果文本里。 */
   readonly summary: string | null
@@ -52,9 +74,11 @@ export interface SubAgentView {
   readonly writes: readonly string[]
 }
 
-/** 视图字段上限：与渲染端折叠展示的容量一致，超出部分不进入契约。 */
+/** 视图字段上限：与渲染端展示的容量一致，超出部分不进入契约。 */
 export const SUB_AGENT_VIEW_LIMITS = {
   activity: 24,
+  transcript: 20,
+  transcriptText: 1600,
   objective: 400,
   summary: 800,
   pendingItems: 6,
@@ -108,6 +132,41 @@ function parseActivity(value: unknown): SubAgentActivity | null {
   return { tool, target, phase: phase as SubAgentActivity['phase'], durationMs }
 }
 
+/**
+ * 对话条目校验：文本条目只要文本，工具条目只要工具名与目标；
+ * 任一字段超限或形状不符即整条判为不合规，不做部分修补。
+ */
+function parseTranscriptItem(value: unknown): SubAgentTranscriptItem | null {
+  if (!isRecord(value)) return null
+  if (value.kind === 'assistant') {
+    const { text } = value
+    if (!isText(text, SUB_AGENT_VIEW_LIMITS.transcriptText)) return null
+    return { kind: 'assistant', text }
+  }
+  if (value.kind === 'tool') {
+    const { tool, target, phase, durationMs } = value
+    if (!isText(tool, SUB_AGENT_VIEW_LIMITS.tool)) return null
+    if (!isNullableText(target, SUB_AGENT_VIEW_LIMITS.target)) return null
+    if (typeof phase !== 'string' || !(ACTIVITY_PHASES as readonly string[]).includes(phase)) return null
+    if (!isCountOrNull(durationMs)) return null
+    return { kind: 'tool', tool, target, phase: phase as SubAgentActivity['phase'], durationMs }
+  }
+  return null
+}
+
+/** 时间线缺失按空数组处理：旧快照没有该字段，不能因此丢掉整份执行记录。 */
+function parseTranscript(value: unknown): SubAgentTranscriptItem[] | null {
+  if (value === undefined || value === null) return []
+  if (!Array.isArray(value) || value.length > SUB_AGENT_VIEW_LIMITS.transcript) return null
+  const parsed: SubAgentTranscriptItem[] = []
+  for (const item of value) {
+    const entry = parseTranscriptItem(item)
+    if (entry === null) return null
+    parsed.push(entry)
+  }
+  return parsed
+}
+
 function parseUsage(value: unknown): SubAgentUsage | null {
   if (!isRecord(value)) return null
   const { inputTokens, outputTokens, totalTokens } = value
@@ -122,7 +181,7 @@ function parseUsage(value: unknown): SubAgentUsage | null {
 export function parseSubAgentView(value: unknown): SubAgentView | null {
   if (!isRecord(value)) return null
   const { taskId, taskType, objective, phase, startedAt, endedAt, activities, activityTotal,
-    usage, summary, errorCode, errorMessage, pending, writes } = value
+    transcript, transcriptTotal, usage, summary, errorCode, errorMessage, pending, writes } = value
   if (!isText(taskId, SUB_AGENT_VIEW_LIMITS.taskId)) return null
   if (typeof taskType !== 'string' || !(TASK_TYPES as readonly string[]).includes(taskType)) return null
   if (!isText(objective, SUB_AGENT_VIEW_LIMITS.objective)) return null
@@ -136,6 +195,10 @@ export function parseSubAgentView(value: unknown): SubAgentView | null {
     parsedActivities.push(activity)
   }
   if (!isCount(activityTotal)) return null
+  const parsedTranscript = parseTranscript(transcript)
+  if (parsedTranscript === null) return null
+  // 总数缺失时按已保留条数兜底：旧快照没有该字段，界面不应显示成“另有 0 条未保留”。
+  if (transcriptTotal !== undefined && !isCount(transcriptTotal)) return null
   const parsedUsage = parseUsage(usage)
   if (parsedUsage === null) return null
   if (!isNullableText(summary, SUB_AGENT_VIEW_LIMITS.summary)) return null
@@ -159,6 +222,8 @@ export function parseSubAgentView(value: unknown): SubAgentView | null {
     endedAt,
     activities: parsedActivities,
     activityTotal: activityTotal as number,
+    transcript: parsedTranscript,
+    transcriptTotal: typeof transcriptTotal === 'number' ? transcriptTotal : parsedTranscript.length,
     usage: parsedUsage,
     summary,
     errorCode,
