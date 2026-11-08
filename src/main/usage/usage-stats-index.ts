@@ -18,7 +18,8 @@ import type {
 } from '../../shared/usage-stats-api'
 
 const FILE_NAME = 'usage-stats-index.json'
-const INDEX_VERSION = 1
+// 版本 2：会话条目增加 costMessages（计价消息数），模型与日度条目增加可空 cost，旧缓存不再兼容。
+const INDEX_VERSION = 2
 
 /** 单个会话文件的缓存统计数据 */
 export interface CachedSessionUsage {
@@ -31,6 +32,8 @@ export interface CachedSessionUsage {
   readonly messageCount: number
   readonly totals: UsageTokenBreakdown
   readonly cost: number
+  /** 已上报价格的助手消息数；为 0 时表示本会话没有可用费用。 */
+  readonly costMessages: number
   readonly models: readonly UsageModelStat[]
   readonly daily: readonly UsageDailyStat[]
 }
@@ -148,6 +151,7 @@ export class UsageStatsIndexStore {
       && typeof value.messageCount === 'number'
       && isRecord(value.totals)
       && typeof value.cost === 'number'
+      && typeof value.costMessages === 'number'
       && Array.isArray(value.models)
       && Array.isArray(value.daily)
   }

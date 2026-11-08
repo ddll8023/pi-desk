@@ -1,6 +1,8 @@
 /**
  * 单个会话 JSONL 文件的流式用量扫描器：
  * 逐行提取 session 头部、首条用户消息标题、model_change 事件以及每条 assistant 消息的 token 用量。
+ * 费用只采信供应商在消息里上报的价格：能取到价格的调用才累加并计入 costMessages；
+ * 子代理开销与未上报价格的调用保持未计价，不会因为缺少价格被当成 0 成本。
  * 内存占用恒定，不把整个 JSONL 载入内存。
  */
 import { createReadStream } from 'node:fs'
@@ -95,6 +97,7 @@ export async function scanSessionJsonl(
   let totalCacheWrite = 0
   let totalTokens = 0
   let totalCost = 0
+  let costMessages = 0
   let assistantMessageCount = 0
 
   const modelMap = new Map<string, {
@@ -106,6 +109,9 @@ export async function scanSessionJsonl(
     cacheWrite: number
     totalTokens: number
     messageCount: number
+    /** 内部累加用：计价合计与计价消息数；输出时换算成可空的 cost。 */
+    cost: number
+    costMessages: number
   }>()
 
   const dailyMap = new Map<string, {
@@ -116,6 +122,8 @@ export async function scanSessionJsonl(
     cacheWrite: number
     totalTokens: number
     messageCount: number
+    cost: number
+    costMessages: number
   }>()
 
   try {
@@ -164,7 +172,17 @@ export async function scanSessionJsonl(
             const dateKey = formatDateKey(Number.isNaN(stamp) ? updatedAt : stamp)
             let subDaily = dailyMap.get(dateKey)
             if (!subDaily) {
-              subDaily = { date: dateKey, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, messageCount: 0 }
+              subDaily = {
+                date: dateKey,
+                input: 0,
+                output: 0,
+                cacheRead: 0,
+                cacheWrite: 0,
+                totalTokens: 0,
+                messageCount: 0,
+                cost: 0,
+                costMessages: 0
+              }
               dailyMap.set(dateKey, subDaily)
             }
             subDaily.input += subAgent.input
@@ -194,10 +212,13 @@ export async function scanSessionJsonl(
             : (input + output + cacheRead + cacheWrite)
 
           let costVal = 0
+          let costKnown = false
           if (typeof u.cost === 'number' && Number.isFinite(u.cost)) {
             costVal = Math.max(0, u.cost)
+            costKnown = true
           } else if (isRecord(u.cost) && typeof u.cost.total === 'number' && Number.isFinite(u.cost.total)) {
             costVal = Math.max(0, u.cost.total)
+            costKnown = true
           }
 
           // 如果助手消息自带 provider 或 model，优先采纳
@@ -224,6 +245,7 @@ export async function scanSessionJsonl(
           totalCacheWrite += cacheWrite
           totalTokens += tokens
           totalCost += costVal
+          if (costKnown) costMessages += 1
           assistantMessageCount += 1
 
           // 累加模型
@@ -238,7 +260,9 @@ export async function scanSessionJsonl(
               cacheRead: 0,
               cacheWrite: 0,
               totalTokens: 0,
-              messageCount: 0
+              messageCount: 0,
+              cost: 0,
+              costMessages: 0
             }
             modelMap.set(modelKey, modelBucket)
           }
@@ -248,6 +272,8 @@ export async function scanSessionJsonl(
           modelBucket.cacheWrite += cacheWrite
           modelBucket.totalTokens += tokens
           modelBucket.messageCount += 1
+          modelBucket.cost += costVal
+          if (costKnown) modelBucket.costMessages += 1
 
           // 累加日期
           let dailyBucket = dailyMap.get(dateKey)
@@ -259,7 +285,9 @@ export async function scanSessionJsonl(
               cacheRead: 0,
               cacheWrite: 0,
               totalTokens: 0,
-              messageCount: 0
+              messageCount: 0,
+              cost: 0,
+              costMessages: 0
             }
             dailyMap.set(dateKey, dailyBucket)
           }
@@ -269,6 +297,8 @@ export async function scanSessionJsonl(
           dailyBucket.cacheWrite += cacheWrite
           dailyBucket.totalTokens += tokens
           dailyBucket.messageCount += 1
+          dailyBucket.cost += costVal
+          if (costKnown) dailyBucket.costMessages += 1
         }
       }
     }
@@ -288,8 +318,27 @@ export async function scanSessionJsonl(
     totalTokens
   }
 
-  const models: UsageModelStat[] = Array.from(modelMap.values()).map(m => ({ ...m }))
-  const daily: UsageDailyStat[] = Array.from(dailyMap.values()).map(d => ({ ...d }))
+  const models: UsageModelStat[] = Array.from(modelMap.values()).map(m => ({
+    provider: m.provider,
+    modelId: m.modelId,
+    input: m.input,
+    output: m.output,
+    cacheRead: m.cacheRead,
+    cacheWrite: m.cacheWrite,
+    totalTokens: m.totalTokens,
+    messageCount: m.messageCount,
+    cost: m.costMessages > 0 ? m.cost : null
+  }))
+  const daily: UsageDailyStat[] = Array.from(dailyMap.values()).map(d => ({
+    date: d.date,
+    input: d.input,
+    output: d.output,
+    cacheRead: d.cacheRead,
+    cacheWrite: d.cacheWrite,
+    totalTokens: d.totalTokens,
+    messageCount: d.messageCount,
+    cost: d.costMessages > 0 ? d.cost : null
+  }))
 
   return {
     filePath,
@@ -301,6 +350,7 @@ export async function scanSessionJsonl(
     messageCount: assistantMessageCount,
     totals,
     cost: totalCost,
+    costMessages,
     models,
     daily
   }

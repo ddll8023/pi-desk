@@ -18,6 +18,11 @@ export function formatCost(value: number): string {
   return Number.isFinite(value) ? value.toFixed(3) : '?'
 }
 
+/** 费用展示：null 表示供应商未提供价格，用 `—` 占位，不写 0.000。 */
+export function formatCostOrDash(value: number | null): string {
+  return value === null ? '—' : formatCost(value)
+}
+
 /** 缓存命中率所需的 prompt 分项；会话累计与单条消息用量都满足该形状。 */
 export interface CacheHitUsage {
   readonly input: number

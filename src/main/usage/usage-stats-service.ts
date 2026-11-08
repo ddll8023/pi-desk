@@ -1,7 +1,7 @@
 /**
  * 会话用量统计主服务：
  * 按已登记项目遍历其会话目录，基于文件 mtime+size 增量扫描 JSONL 并维护本地索引缓存，
- * 对外输出按模型、项目、按日趋势和 Top 会话的聚合统计摘要。
+ * 对外输出按模型、项目、按日趋势和 Top 会话的聚合统计摘要，费用只汇总上报价格的调用并附计价消息数。
  */
 import { readdir, stat } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -147,8 +147,8 @@ export class UsageStatsService {
     let totalCacheWrite = 0
     let totalTokens = 0
     let totalCost = 0
+    let totalCostMessages = 0
     let totalMessages = 0
-    let hasNonZeroCost = false
 
     const modelAggregation = new Map<string, {
       provider: string
@@ -159,6 +159,8 @@ export class UsageStatsService {
       cacheWrite: number
       totalTokens: number
       messageCount: number
+      /** 已上报价格的调用合计；null 表示该模型没有任何计价调用。 */
+      cost: number | null
     }>()
 
     const projectAggregation = new Map<string, {
@@ -170,6 +172,7 @@ export class UsageStatsService {
       cacheWrite: number
       totalTokens: number
       sessionCount: number
+      cost: number | null
     }>()
 
     const dailyAggregation = new Map<string, {
@@ -180,6 +183,7 @@ export class UsageStatsService {
       cacheWrite: number
       totalTokens: number
       messageCount: number
+      cost: number | null
     }>()
 
     const topSessions: UsageTopSession[] = []
@@ -191,9 +195,9 @@ export class UsageStatsService {
       totalCacheWrite += record.totals.cacheWrite
       totalTokens += record.totals.totalTokens
       totalMessages += record.messageCount
-      if (record.cost > 0) {
+      if (record.costMessages > 0) {
         totalCost += record.cost
-        hasNonZeroCost = true
+        totalCostMessages += record.costMessages
       }
 
       // 映射项目名称
@@ -215,7 +219,8 @@ export class UsageStatsService {
             cacheRead: 0,
             cacheWrite: 0,
             totalTokens: 0,
-            messageCount: 0
+            messageCount: 0,
+            cost: null
           }
           modelAggregation.set(key, bucket)
         }
@@ -225,6 +230,7 @@ export class UsageStatsService {
         bucket.cacheWrite += m.cacheWrite
         bucket.totalTokens += m.totalTokens
         bucket.messageCount += m.messageCount
+        if (m.cost !== null) bucket.cost = (bucket.cost ?? 0) + m.cost
       }
 
       // 累加项目
@@ -238,7 +244,8 @@ export class UsageStatsService {
           cacheRead: 0,
           cacheWrite: 0,
           totalTokens: 0,
-          sessionCount: 0
+          sessionCount: 0,
+          cost: null
         }
         projectAggregation.set(normCwd, projBucket)
       }
@@ -248,6 +255,7 @@ export class UsageStatsService {
       projBucket.cacheWrite += record.totals.cacheWrite
       projBucket.totalTokens += record.totals.totalTokens
       projBucket.sessionCount += 1
+      if (record.costMessages > 0) projBucket.cost = (projBucket.cost ?? 0) + record.cost
 
       // 累加日期
       for (const d of record.daily) {
@@ -260,7 +268,8 @@ export class UsageStatsService {
             cacheRead: 0,
             cacheWrite: 0,
             totalTokens: 0,
-            messageCount: 0
+            messageCount: 0,
+            cost: null
           }
           dailyAggregation.set(d.date, dailyBucket)
         }
@@ -270,6 +279,7 @@ export class UsageStatsService {
         dailyBucket.cacheWrite += d.cacheWrite
         dailyBucket.totalTokens += d.totalTokens
         dailyBucket.messageCount += d.messageCount
+        if (d.cost !== null) dailyBucket.cost = (dailyBucket.cost ?? 0) + d.cost
       }
 
       // 放入 Top 候选
@@ -284,7 +294,8 @@ export class UsageStatsService {
         cacheRead: record.totals.cacheRead,
         cacheWrite: record.totals.cacheWrite,
         totalTokens: record.totals.totalTokens,
-        messageCount: record.messageCount
+        messageCount: record.messageCount,
+        cost: record.costMessages > 0 ? record.cost : null
       })
     }
 
@@ -313,8 +324,9 @@ export class UsageStatsService {
     return {
       totalSessions: records.length,
       totalMessages,
+      costMessages: totalCostMessages,
       totals,
-      totalCost: hasNonZeroCost ? totalCost : null,
+      totalCost: totalCostMessages > 0 ? totalCost : null,
       models: sortedModels,
       projects: sortedProjects,
       daily: sortedDaily,

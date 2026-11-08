@@ -1,21 +1,27 @@
 <!-- 设置页的用量统计分节：
-     统计已登记项目的所有本地会话 Token 消耗，展示总量、缓存命中率、日度趋势、模型分布、项目分布及高消耗会话 Top 明细。
+     统计已登记项目的所有本地会话 Token 消耗，展示总量与分项构成、可切换范围与指标的堆叠趋势、按日明细表、
+     模型分布、项目分布及高消耗会话 Top 明细。
+     费用只在供应商上报价格时计入，缺失时按「未提供」占位，不推算金额。
      支持手动重新扫描；点击 Top 会话可直接跳转至对应项目的该会话并关闭设置页。 -->
 <script setup lang="ts">
-import { computed, onMounted, ref, shallowRef } from 'vue'
+import { computed, onMounted, ref, shallowRef, watch } from 'vue'
 import type {
   UsageStatsSummary,
   UsageTopSession
 } from '../../../../shared/usage-stats-api'
 import { getUsageStats } from '../services/usage-stats'
 import {
+  USAGE_RANGE_OPTIONS,
+  USAGE_SEGMENTS,
   buildDailyBars,
+  buildDailyDetailRows,
   calculateSharePercent,
   cacheHitRate,
   formatDateTime,
   formatTokens
 } from '../usage-stats-view'
-import { formatCost } from '../usage-format'
+import type { DailyBarItem, UsageMetric, UsageRange, UsageSegmentKey } from '../usage-stats-view'
+import { formatCost, formatCostOrDash } from '../usage-format'
 import { useSessionStore } from '../stores/session'
 import { useSettingsStore } from '../../shell/stores/settings'
 import AppButton from '../../ui/AppButton.vue'
@@ -32,10 +38,64 @@ const viewState = shallowRef<ViewState>({ phase: 'loading' })
 const summary = shallowRef<UsageStatsSummary | null>(null)
 const refreshing = ref(false)
 
+/** 趋势默认近 30 天；范围按有记录日期取末尾 N 天，不按自然日补零。 */
+const range = ref<UsageRange>(30)
+/** 指标默认 Token；没有任何计价消息时费用视图不可选。 */
+const metric = ref<UsageMetric>('tokens')
+
+const costAvailable = computed(() => (summary.value?.costMessages ?? 0) > 0)
+
+watch(costAvailable, (available) => {
+  if (!available) metric.value = 'tokens'
+})
+
+const rangeLabel = computed(
+  () => USAGE_RANGE_OPTIONS.find(option => option.value === range.value)?.label ?? ''
+)
+
 const dailyBars = computed(() => {
   if (!summary.value) return []
-  return buildDailyBars(summary.value.daily, 30)
+  return buildDailyBars(summary.value.daily, { range: range.value, metric: metric.value })
 })
+
+const dailyDetailRows = computed(() => {
+  if (!summary.value) return []
+  return buildDailyDetailRows(summary.value.daily, range.value)
+})
+
+/** 概览的四段构成：宽度与占比都来自总量，四段之和即总量。 */
+const overviewSegments = computed(() => {
+  const totals = summary.value?.totals
+  if (!totals || totals.totalTokens <= 0) return []
+  return USAGE_SEGMENTS.map((segment) => {
+    const value = totals[segment.key]
+    return {
+      key: segment.key,
+      label: segment.label,
+      color: segment.color,
+      width: `${(value / totals.totalTokens) * 100}%`,
+      share: calculateSharePercent(value, totals.totalTokens),
+      tokens: formatTokens(value)
+    }
+  })
+})
+
+const overviewDescription = computed(() => (
+  overviewSegments.value.map(segment => `${segment.label} ${segment.share}`).join('，')
+))
+
+/** 柱体段的配色统一从 USAGE_SEGMENTS 取，模板里不重复硬编码色值。 */
+function segmentColor(key: UsageSegmentKey): string {
+  return USAGE_SEGMENTS.find(segment => segment.key === key)?.color ?? 'var(--color-desk-chart-1)'
+}
+
+/** 悬停读数只显示当前指标的单个数值，完整分项放在 title 与明细表中。 */
+function barReadout(bar: DailyBarItem): string {
+  const value = metric.value === 'cost'
+    ? (bar.cost === null ? '无价格' : `$${formatCost(bar.cost)}`)
+    : `${formatTokens(bar.totalTokens)} Token`
+  return `${bar.label}：${value}`
+}
 
 const overallCacheHitRate = computed(() => {
   if (!summary.value) return null
@@ -123,17 +183,17 @@ onMounted(() => {
 
     <!-- 正常就绪状态 -->
     <template v-else-if="summary !== null">
-      <!-- 1. 总量指标卡片 -->
+      <!-- 1. 总量与分项构成 -->
       <section class="settings-section" aria-labelledby="usage-overview-title">
         <div class="settings-section-heading">
           <h2 id="usage-overview-title" class="settings-section-title">总量概览</h2>
           <span class="text-2xs tabular-nums text-desk-muted">
-            共扫描 {{ summary.totalSessions }} 个会话 · {{ summary.totalMessages }} 条回复
+            共扫描 {{ summary.totalSessions }} 个会话 · {{ summary.totalMessages }} 条回复 · 已计价 {{ summary.costMessages }} 条
           </span>
         </div>
 
-        <!-- 四个指标同级：字号与等宽数字统一，层次由标签与位置表达，不单独放大其中一格。 -->
-        <dl class="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <!-- 六个指标同级：字号与等宽数字统一，层次由标签与位置表达，不单独放大其中一格。 -->
+        <dl class="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
           <div class="rounded-desk-sm border border-desk-line bg-desk-canvas-sunken px-3 py-2">
             <dt class="text-2xs text-desk-muted">总 Token</dt>
             <dd class="mt-0.5 text-sm font-semibold tabular-nums" :title="`${summary.totals.totalTokens} tokens`">
@@ -142,16 +202,42 @@ onMounted(() => {
           </div>
 
           <div class="rounded-desk-sm border border-desk-line bg-desk-canvas-sunken px-3 py-2">
-            <dt class="text-2xs text-desk-muted">输入 / 输出</dt>
-            <dd class="mt-0.5 text-sm font-semibold tabular-nums" :title="`输入: ${summary.totals.input} · 输出: ${summary.totals.output}`">
-              {{ formatTokens(summary.totals.input) }} / {{ formatTokens(summary.totals.output) }}
+            <dt class="text-2xs text-desk-muted">输入</dt>
+            <dd class="mt-0.5 text-sm font-semibold tabular-nums" :title="`输入: ${summary.totals.input}`">
+              {{ formatTokens(summary.totals.input) }}
+              <span class="ml-1 text-2xs font-normal text-desk-muted">
+                {{ calculateSharePercent(summary.totals.input, summary.totals.totalTokens) }}
+              </span>
+            </dd>
+          </div>
+
+          <div class="rounded-desk-sm border border-desk-line bg-desk-canvas-sunken px-3 py-2">
+            <dt class="text-2xs text-desk-muted">输出</dt>
+            <dd class="mt-0.5 text-sm font-semibold tabular-nums" :title="`输出: ${summary.totals.output}`">
+              {{ formatTokens(summary.totals.output) }}
+              <span class="ml-1 text-2xs font-normal text-desk-muted">
+                {{ calculateSharePercent(summary.totals.output, summary.totals.totalTokens) }}
+              </span>
             </dd>
           </div>
 
           <div class="rounded-desk-sm border border-desk-line bg-desk-canvas-sunken px-3 py-2">
             <dt class="text-2xs text-desk-muted">缓存读取</dt>
             <dd class="mt-0.5 text-sm font-semibold tabular-nums" :title="`缓存读: ${summary.totals.cacheRead}`">
-              {{ formatTokens(summary.totals.cacheRead) }}<span class="ml-1 text-2xs font-normal text-desk-muted">命中 {{ overallCacheHitText }}</span>
+              {{ formatTokens(summary.totals.cacheRead) }}
+              <span class="ml-1 text-2xs font-normal text-desk-muted">
+                命中 {{ overallCacheHitText }}
+              </span>
+            </dd>
+          </div>
+
+          <div class="rounded-desk-sm border border-desk-line bg-desk-canvas-sunken px-3 py-2">
+            <dt class="text-2xs text-desk-muted">缓存写入</dt>
+            <dd class="mt-0.5 text-sm font-semibold tabular-nums" :title="`缓存写: ${summary.totals.cacheWrite}`">
+              {{ formatTokens(summary.totals.cacheWrite) }}
+              <span class="ml-1 text-2xs font-normal text-desk-muted">
+                {{ calculateSharePercent(summary.totals.cacheWrite, summary.totals.totalTokens) }}
+              </span>
             </dd>
           </div>
 
@@ -159,39 +245,124 @@ onMounted(() => {
             <dt class="text-2xs text-desk-muted">累计费用</dt>
             <dd class="mt-0.5 text-sm font-semibold tabular-nums">
               <span v-if="summary.totalCost !== null">${{ formatCost(summary.totalCost) }}</span>
-              <span v-else class="text-xs font-normal text-desk-muted">未提供价格信息</span>
+              <span v-else class="text-xs font-normal text-desk-muted">未提供价格</span>
             </dd>
           </div>
         </dl>
+
+        <!-- 构成条：四段与上方分项同序同色，宽度即占比，零值时整条不渲染。 -->
+        <div
+          v-if="overviewSegments.length > 0"
+          class="mt-3 flex h-1.5 overflow-hidden rounded-full bg-desk-canvas-sunken"
+          role="img"
+          :aria-label="`Token 构成：${overviewDescription}`"
+        >
+          <div
+            v-for="segment in overviewSegments"
+            :key="segment.key"
+            :style="{ width: segment.width, backgroundColor: segment.color }"
+            :title="`${segment.label}：${segment.tokens}（${segment.share}）`"
+          ></div>
+        </div>
       </section>
 
-      <!-- 2. 日度用量趋势 -->
+      <!-- 2. 日度用量趋势 + 按日明细 -->
       <section v-if="dailyBars.length > 0" class="settings-section" aria-labelledby="usage-trend-title">
         <div class="settings-section-heading">
-          <h2 id="usage-trend-title" class="settings-section-title">用量趋势 (近 30 个有记录日)</h2>
-          <span class="text-2xs text-desk-muted">单位：Token 量</span>
+          <div>
+            <h2 id="usage-trend-title" class="settings-section-title">用量趋势</h2>
+            <p class="mt-1 text-2xs text-desk-muted">
+              按有记录日期取{{ rangeLabel }}；柱高为当日{{ metric === 'cost' ? '费用' : 'Token 量' }}。
+            </p>
+          </div>
+          <div class="flex flex-wrap items-center gap-2">
+            <div class="segment" role="group" aria-label="统计范围">
+              <AppButton
+                v-for="option in USAGE_RANGE_OPTIONS"
+                :key="option.value"
+                variant="unstyled"
+                class="segment-option"
+                :class="range === option.value ? 'is-selected' : ''"
+                :aria-pressed="range === option.value"
+                @click="range = option.value"
+              >
+                {{ option.label }}
+              </AppButton>
+            </div>
+            <div class="segment" role="group" aria-label="趋势指标">
+              <AppButton
+                variant="unstyled"
+                class="segment-option"
+                :class="metric === 'tokens' ? 'is-selected' : ''"
+                :aria-pressed="metric === 'tokens'"
+                @click="metric = 'tokens'"
+              >
+                Token
+              </AppButton>
+              <AppButton
+                variant="unstyled"
+                class="segment-option"
+                :class="metric === 'cost' ? 'is-selected' : ''"
+                :aria-pressed="metric === 'cost'"
+                :disabled="!costAvailable"
+                :title="costAvailable ? '按供应商上报的费用查看' : '模型未上报价格，无法按费用查看'"
+                @click="metric = 'cost'"
+              >
+                费用
+              </AppButton>
+            </div>
+          </div>
+        </div>
+
+        <!-- 图例：Token 指标下四种分项与柱体段同色；费用指标没有分项，只说明口径。 -->
+        <div class="mt-3 flex flex-wrap items-center justify-between gap-2 text-2xs text-desk-muted">
+          <div v-if="metric === 'tokens'" class="flex flex-wrap items-center gap-3">
+            <span v-for="segment in USAGE_SEGMENTS" :key="segment.key" class="inline-flex items-center gap-1.5">
+              <span class="size-2 rounded-sm" :style="{ backgroundColor: segment.color }" aria-hidden="true"></span>
+              {{ segment.label }}
+            </span>
+          </div>
+          <span v-else>费用只统计供应商上报价格的调用，未提供价格的日期不画柱</span>
+          <span>单位：{{ metric === 'cost' ? '美元' : 'Token' }}</span>
         </div>
 
         <!-- 柱区顶部留出读数卡片的高度：横向滚动容器会把 overflow-y 算成 auto，不预留就会被裁掉。 -->
-        <div class="mt-4 rounded-desk-sm border border-desk-line bg-desk-surface p-4">
-          <div class="flex h-36 items-end gap-1.5 overflow-x-auto pb-6 pt-7 scroll-area">
+        <div class="mt-3 rounded-desk-sm border border-desk-line bg-desk-surface p-4">
+          <div
+            class="flex h-36 items-end gap-1.5 overflow-x-auto pb-6 pt-7 scroll-area"
+            role="group"
+            aria-label="每日用量趋势"
+          >
             <div
               v-for="bar in dailyBars"
               :key="bar.date"
-              class="group relative flex flex-1 min-w-[20px] max-w-[40px] flex-col items-center justify-end h-full cursor-default"
+              class="group relative flex h-full flex-1 min-w-[18px] flex-col items-center justify-end"
+              :class="range === 7 ? 'max-w-none' : 'max-w-[40px]'"
               :title="bar.tooltip"
+              role="img"
+              :aria-label="bar.ariaLabel"
             >
-              <!-- 柱体 -->
-              <div
-                class="w-full rounded-t bg-desk-accent/70 transition-all hover:bg-desk-accent"
-                :style="{ height: `${bar.heightPercent}%` }"
-              ></div>
+              <!-- 柱体：Token 指标按四个分项堆叠，费用指标整体一色 -->
+              <div class="w-full" :style="{ height: `${bar.heightPercent}%` }">
+                <div
+                  v-if="metric === 'cost'"
+                  class="h-full w-full rounded-t"
+                  :style="{ backgroundColor: 'var(--color-desk-chart-1)' }"
+                ></div>
+                <div v-else class="flex h-full w-full flex-col-reverse overflow-hidden rounded-t">
+                  <div
+                    v-for="segment in bar.segments"
+                    :key="segment.key"
+                    :style="{ height: `${segment.percent}%`, backgroundColor: segmentColor(segment.key) }"
+                  ></div>
+                </div>
+              </div>
 
-              <!-- 悬浮数值卡片 -->
+              <!-- 悬浮读数：单行短值；完整分项在 title 与按日明细表里 -->
               <div
-                class="pointer-events-none absolute bottom-full mb-1 hidden rounded border border-desk-line bg-desk-surface px-1.5 py-0.5 text-2xs tabular-nums whitespace-nowrap shadow-sm group-hover:block z-10"
+                class="pointer-events-none absolute bottom-full mb-1 hidden rounded border border-desk-line bg-desk-surface px-2 py-1 text-2xs whitespace-nowrap tabular-nums shadow-sm group-hover:block z-10"
               >
-                {{ bar.label }}: {{ formatTokens(bar.totalTokens) }}
+                {{ barReadout(bar) }}
               </div>
 
               <!-- X 轴日期：只标注稀疏标记的柱，避免相邻标签重叠 -->
@@ -204,6 +375,44 @@ onMounted(() => {
             </div>
           </div>
         </div>
+
+        <!-- 明细表：精确读数与键盘浏览的入口，默认折叠，最新日期在前。 -->
+        <details class="mt-3 border-t border-desk-line pt-3">
+          <summary class="cursor-pointer text-2xs font-medium text-desk-muted">
+            按日明细（{{ rangeLabel }}，最新在前）
+          </summary>
+          <div class="mt-2 overflow-x-auto scroll-area">
+            <table class="w-full min-w-[34rem] border-collapse text-xs">
+              <caption class="sr-only">按日用量明细</caption>
+              <thead>
+                <tr class="text-2xs text-desk-muted">
+                  <th scope="col" class="py-1.5 pr-2 text-left font-medium">日期</th>
+                  <th scope="col" class="px-2 py-1.5 text-right font-medium">总量</th>
+                  <th scope="col" class="px-2 py-1.5 text-right font-medium">输入</th>
+                  <th scope="col" class="px-2 py-1.5 text-right font-medium">输出</th>
+                  <th scope="col" class="px-2 py-1.5 text-right font-medium">缓存读</th>
+                  <th scope="col" class="px-2 py-1.5 text-right font-medium">缓存写</th>
+                  <th scope="col" class="px-2 py-1.5 text-right font-medium">回复</th>
+                  <th v-if="costAvailable" scope="col" class="py-1.5 pl-2 text-right font-medium">费用</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="row in dailyDetailRows" :key="row.date" class="border-t border-desk-line">
+                  <th scope="row" class="py-1.5 pr-2 text-left font-normal tabular-nums">{{ row.date }}</th>
+                  <td class="px-2 py-1.5 text-right font-medium tabular-nums">{{ formatTokens(row.totalTokens) }}</td>
+                  <td class="px-2 py-1.5 text-right tabular-nums text-desk-muted">{{ formatTokens(row.input) }}</td>
+                  <td class="px-2 py-1.5 text-right tabular-nums text-desk-muted">{{ formatTokens(row.output) }}</td>
+                  <td class="px-2 py-1.5 text-right tabular-nums text-desk-muted">{{ formatTokens(row.cacheRead) }}</td>
+                  <td class="px-2 py-1.5 text-right tabular-nums text-desk-muted">{{ formatTokens(row.cacheWrite) }}</td>
+                  <td class="px-2 py-1.5 text-right tabular-nums text-desk-muted">{{ row.messageCount }}</td>
+                  <td v-if="costAvailable" class="py-1.5 pl-2 text-right tabular-nums text-desk-muted">
+                    {{ formatCostOrDash(row.cost) }}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </details>
       </section>
 
       <!-- 3. 模型与项目分布 (双列并排) -->
@@ -248,9 +457,12 @@ onMounted(() => {
                 ></div>
               </div>
 
-              <div class="mt-1.5 flex items-center justify-between text-2xs tabular-nums text-desk-muted">
+              <div class="mt-1.5 flex items-center justify-between gap-2 text-2xs tabular-nums text-desk-muted">
                 <span>输入: {{ formatTokens(m.input) }} · 输出: {{ formatTokens(m.output) }}</span>
-                <span>{{ m.messageCount }} 次回复</span>
+                <span class="shrink-0">
+                  <template v-if="m.cost !== null">费用 ${{ formatCost(m.cost) }} · </template>
+                  {{ m.messageCount }} 次回复
+                </span>
               </div>
             </li>
           </ul>
@@ -293,9 +505,12 @@ onMounted(() => {
                 ></div>
               </div>
 
-              <div class="mt-1.5 flex items-center justify-between text-2xs text-desk-muted">
+              <div class="mt-1.5 flex items-center justify-between gap-2 text-2xs text-desk-muted">
                 <span class="min-w-0 flex-1 truncate tabular-nums" :title="p.projectPath">{{ p.projectPath }}</span>
-                <span class="shrink-0 tabular-nums">{{ p.sessionCount }} 个会话</span>
+                <span class="shrink-0 tabular-nums">
+                  <template v-if="p.cost !== null">费用 ${{ formatCost(p.cost) }} · </template>
+                  {{ p.sessionCount }} 个会话
+                </span>
               </div>
             </li>
           </ul>
@@ -346,6 +561,7 @@ onMounted(() => {
                 </div>
                 <div class="text-2xs tabular-nums text-desk-muted">
                   入 {{ formatTokens(session.input) }} · 出 {{ formatTokens(session.output) }}
+                  <template v-if="session.cost !== null"> · ${{ formatCost(session.cost) }}</template>
                 </div>
               </div>
             </button>

@@ -25,9 +25,9 @@
 | `src/main/sessions/ipc.ts` | 会话列表、打开、重载、删除、按会话读取历史，以及运行清单查询、释放与结束的通道注册 |
 | `src/main/sessions/runtime-ipc.ts` | 执行主链通道注册：状态、中止、回退、模型、压缩、Prompt、投影快照与确认 |
 | `src/main/sessions/extension-ui-ipc.ts` | 扩展交互通道注册：对话、通知与 widget 快照读取及应答提交 |
-| `src/main/usage/usage-stats-service.ts` | 跨项目遍历会话并聚合 Token 用量、日度趋势、模型与项目分布 |
+| `src/main/usage/usage-stats-service.ts` | 跨项目遍历会话并聚合 Token 用量、费用、日度趋势、模型与项目分布 |
 | `src/main/usage/usage-stats-index.ts` | 会话用量索引缓存与原子落盘，按文件 stamp 增量复用 |
-| `src/main/usage/usage-stats-scan.ts` | 单个会话 JSONL 文件流式解析器：提取助手消息用量、模型变更与首条消息标题 |
+| `src/main/usage/usage-stats-scan.ts` | 单个会话 JSONL 文件流式解析器：提取助手消息用量、计价消息与费用、模型变更与首条消息标题 |
 | `src/main/usage/ipc.ts` | 会话用量统计查询 IPC 通道注册与校验 |
 | `src/sdk-host/index.ts` | 宿主入口、初始化、授权回应与控制／生命周期分派 |
 | `src/sdk-host/protocol.ts` | 主进程和 SDK 宿主的版本化消息、请求与目标校验 |
@@ -54,7 +54,7 @@
 | `src/sdk-host/projection/checkpoint.ts` | 首页与稳定活动的独立内存检查点：绑定时分别核对恢复条件，命中不替代 SDK 打开会话文件 |
 | `src/shared/session-api.ts` | 会话列表、打开、重载、删除与按会话读取历史的页面契约 |
 | `src/shared/session-run-api.ts` | 应用级运行清单、释放／结束与事件契约 |
-| `src/shared/usage-stats-api.ts` | 跨项目与跨会话 Token 统计 IPC 契约与聚合类型校验 |
+| `src/shared/usage-stats-api.ts` | 跨项目与跨会话 Token 与费用统计 IPC 契约与聚合类型校验 |
 | `src/shared/extension-ui-api.ts` | 扩展对话、通知、widget 与回应形态 |
 | `src/shared/tool-operation.ts` | 宿主与页面共用的工具身份、操作分类及分组顺序；未知工具保留真实名称 |
 | `src/shared/user-message-text.ts` | 用户消息里的技能块与图片标记处理，供摘要和展示共用 |
@@ -77,7 +77,7 @@
 | `src/renderer/src/sessions/chat-view.ts` | 将消息与工具投影组织为聊天展示模型，保留图片与标注关系并还原可重发输入 |
 | `src/renderer/src/sessions/clock.ts` | 聊天生成／工具计时与显示时钟 |
 | `src/renderer/src/sessions/usage-format.ts` | token、费用及用量展示格式 |
-| `src/renderer/src/sessions/usage-stats-view.ts` | 用量统计图表归一化、缓存命中率与展示纯函数 |
+| `src/renderer/src/sessions/usage-stats-view.ts` | 用量统计的日期范围切片、堆叠柱与按日明细行归一化、缓存命中率与占比计算 |
 | `src/renderer/src/sessions/services/usage-stats.ts` | 用量统计桌面桥接服务 |
 | `src/renderer/src/sessions/tool-summary.ts` | 参数降级、宿主语义摘要文案、操作与状态汇总、路径相对化、Diff 片段计数及原文预览 |
 | `src/renderer/src/sessions/extension-dialog-presentation.ts` | 扩展提示、选择及对话展示转换 |
@@ -86,7 +86,7 @@
 
 | 文件 | 用途 |
 | --- | --- |
-| `src/renderer/src/sessions/components/UsageStatsSection.vue` | 设置页「用量」分节：总量指标、日度趋势、模型/项目分布与 Top 会话跳转 |
+| `src/renderer/src/sessions/components/UsageStatsSection.vue` | 设置页「用量」分节：总量与分项构成、可切范围与指标的堆叠趋势、按日明细表、模型/项目分布与 Top 会话跳转 |
 | `src/renderer/src/sessions/components/PromptComposer.vue` | 提示词与独立图片资料编排、视窗全局粘贴与剪贴板截图提取、对话期间草稿与标注编辑、文件树拖入引用、命令与补全；浏览器批注草稿合并；固定提示词、图片及标注快照、后台提交与失败恢复；显式同步及确认结束原运行后的输入恢复 |
 | `src/renderer/src/sessions/components/PromptImageMaterials.vue` | 输入坞内图片附件行：导入、移除、缩略图与独立标注按钮双入口、标注数量展示 |
 | `src/renderer/src/sessions/components/ImageAnnotationPanel.vue` | 左图右说明的独立标注面板、编号双向定位、同步删除与键盘调整入口 |
