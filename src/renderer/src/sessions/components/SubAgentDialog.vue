@@ -1,6 +1,8 @@
 <!-- 子代理对话弹窗：把一次委派内的执行过程按发生顺序当对话读。
      内容全部取自 SubAgentView 快照；执行中随宿主推送刷新，关闭弹窗不中断执行。
-     历史记录没有对话时间线时降级为工具活动列表，不猜测缺失的叙述。 -->
+     历史记录没有对话时间线时降级为工具活动列表，不猜测缺失的叙述。
+     视觉上头部只承载身份与状态（标题、状态药丸、耗时、用量），任务目标单独作引言块，
+     时间线用一条竖轨串起节点与叙述；运行中复用主对话同一枚光点边框，进场只做一次轻编排。 -->
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, useId, watch } from 'vue'
 import type {
@@ -11,6 +13,7 @@ import type {
 import { formatDuration } from '../clock'
 import { formatTokens } from '../usage-format'
 import { useRuntimeStore } from '../stores/runtime'
+import TaskRunningBorder from './TaskRunningBorder.vue'
 
 const props = defineProps<{
   readonly open: boolean
@@ -175,17 +178,20 @@ async function stopActive(): Promise<void> {
             aria-modal="true"
             :aria-labelledby="titleId"
             tabindex="-1"
-            class="dialog-panel max-w-2xl"
+            class="dialog-panel subagent-panel max-w-2xl"
           >
-            <div class="dialog-header">
-              <div class="min-w-0">
-                <h2 :id="titleId" class="dialog-title">子代理执行</h2>
+            <div class="dialog-header subagent-header">
+              <h2 :id="titleId" class="dialog-title">子代理执行</h2>
+              <div v-if="activeView !== null" class="subagent-header-meta">
+                <span class="subagent-phase" :class="`is-${activeView.phase}`">{{ PHASE_LABELS[activeView.phase] }}</span>
+                <span v-if="viewElapsed(activeView) !== null" class="subagent-header-elapsed">{{ viewElapsed(activeView) }}</span>
+                <span v-if="viewUsage(activeView) !== null" class="subagent-header-usage">{{ viewUsage(activeView) }}</span>
               </div>
               <button type="button" class="dialog-close-button" aria-label="关闭" @click="emit('close')"></button>
             </div>
 
             <div class="dialog-body">
-              <div v-if="isBatch" class="flex flex-wrap gap-1.5" role="group" aria-label="切换子任务">
+              <div v-if="isBatch" class="subagent-tabs" role="group" aria-label="切换子任务">
                 <button
                   v-for="view in views"
                   :key="view.taskId"
@@ -202,19 +208,12 @@ async function stopActive(): Promise<void> {
               </div>
 
               <template v-if="activeView !== null">
-                <section class="space-y-1">
-                  <div class="flex flex-wrap items-baseline gap-2 text-xs text-desk-muted">
-                    <span>{{ TASK_LABELS[activeView.taskType] }}</span>
-                    <span :class="isLive(activeView) ? 'text-desk-accent' : ''">
-                      {{ PHASE_LABELS[activeView.phase] }}
-                    </span>
-                    <span v-if="viewElapsed(activeView) !== null" class="font-mono">{{ viewElapsed(activeView) }}</span>
-                    <span v-if="viewUsage(activeView) !== null" class="ml-auto">{{ viewUsage(activeView) }}</span>
-                  </div>
-                  <p class="text-sm leading-6 break-words text-desk-ink">{{ activeView.objective }}</p>
+                <section class="subagent-lead" aria-label="任务目标">
+                  <span class="subagent-lead-type">{{ TASK_LABELS[activeView.taskType] }}</span>
+                  <p class="subagent-lead-text">{{ activeView.objective }}</p>
                 </section>
 
-                <section class="space-y-2" aria-label="执行对话">
+                <section class="subagent-flow space-y-2" aria-label="执行对话" :aria-busy="isLive(activeView)">
                   <ol v-if="activeView.transcript.length > 0" class="subagent-transcript">
                     <li
                       v-for="(item, index) in activeView.transcript"
@@ -222,11 +221,13 @@ async function stopActive(): Promise<void> {
                       :class="item.kind === 'assistant' ? 'subagent-said' : 'subagent-call'"
                     >
                       <template v-if="item.kind === 'assistant'">
-                        <span class="subagent-speaker">子代理</span>
-                        <p class="subagent-text">{{ item.text }}</p>
+                        <div class="subagent-said-body">
+                          <span class="subagent-speaker">子代理</span>
+                          <p class="subagent-text">{{ item.text }}</p>
+                        </div>
                       </template>
                       <template v-else>
-                        <span class="subagent-mark" :class="`is-${item.phase}`" aria-hidden="true">{{ ACTIVITY_MARKS[item.phase] }}</span>
+                        <span class="subagent-node" :class="`is-${item.phase}`" aria-hidden="true">{{ ACTIVITY_MARKS[item.phase] }}</span>
                         <span class="subagent-call-text">{{ item.target === null ? item.tool : `${item.tool} · ${item.target}` }}</span>
                         <span v-if="item.durationMs !== null" class="subagent-call-time">{{ formatDuration(item.durationMs) }}</span>
                       </template>
@@ -237,7 +238,7 @@ async function stopActive(): Promise<void> {
                   <template v-else-if="activeView.activities.length > 0">
                     <ol class="subagent-transcript">
                       <li v-for="(activity, index) in activeView.activities" :key="`${activity.tool}-${index}`" class="subagent-call">
-                        <span class="subagent-mark" :class="`is-${activity.phase}`" aria-hidden="true">{{ ACTIVITY_MARKS[activity.phase] }}</span>
+                        <span class="subagent-node" :class="`is-${activity.phase}`" aria-hidden="true">{{ ACTIVITY_MARKS[activity.phase] }}</span>
                         <span class="subagent-call-text">{{ activityText(activity) }}</span>
                         <span v-if="activityDuration(activity) !== null" class="subagent-call-time">{{ activityDuration(activity) }}</span>
                       </li>
@@ -289,6 +290,9 @@ async function stopActive(): Promise<void> {
               >{{ stoppingTask === activeView?.taskId ? '正在停止…' : '停止此任务' }}</button>
               <button type="button" class="subagent-close" @click="emit('close')">关闭</button>
             </div>
+
+            <!-- 运行中的光点边框与主对话的「进行中」用同一资产；放在内容之后，描边才绘制在头尾底色之上。 -->
+            <TaskRunningBorder v-if="activeView !== null" :active="isLive(activeView)" :radius="12" />
           </div>
         </Transition>
       </div>
@@ -297,89 +301,218 @@ async function stopActive(): Promise<void> {
 </template>
 
 <style scoped>
-/* 批次切换：一行标签，选中态用左侧色条而不是只靠颜色填充。 */
-.subagent-tab {
+/* 面板需要相对定位承载运行边框；圆角由 .dialog-panel 的 rounded-desk-lg 提供，边框层用 inherit 继承。 */
+.subagent-panel {
+  position: relative;
+}
+/* 头部：状态药丸与耗时、用量收到标题右侧，关闭按钮仍是最右一格。
+   药丸的文字本身承载状态，圆点只做同色强调，不是唯一通道。 */
+.subagent-header {
+  align-items: center;
+  gap: 0.75rem;
+  animation: subagent-entry-in var(--motion-duration-slow) var(--motion-ease-entrance) both;
+}
+.subagent-header-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-left: auto;
+}
+.subagent-phase {
   display: inline-flex;
   align-items: center;
-  gap: 0.25rem;
-  padding: 0.125rem 0.5rem;
+  gap: 0.3125rem;
+  padding: 0.0625rem 0.4375rem;
+  border: 1px solid var(--color-desk-line);
+  border-radius: 999px;
+  background: var(--color-desk-surface);
+  color: var(--color-desk-muted);
+  font-size: var(--text-2xs);
+  line-height: 1.5;
+  white-space: nowrap;
+  transition: border-color var(--default-transition-duration) ease, color var(--default-transition-duration) ease;
+}
+.subagent-phase::before {
+  content: "";
+  width: 0.375rem;
+  height: 0.375rem;
+  border-radius: 999px;
+  background: currentColor;
+}
+.subagent-phase.is-running,
+.subagent-phase.is-cancelling {
+  border-color: color-mix(in srgb, var(--color-desk-accent) 45%, var(--color-desk-line));
+  color: var(--color-desk-accent);
+}
+.subagent-phase.is-succeeded {
+  border-color: color-mix(in srgb, var(--color-desk-success) 40%, var(--color-desk-line));
+  color: var(--color-desk-success);
+}
+.subagent-phase.is-failed,
+.subagent-phase.is-aborted {
+  border-color: color-mix(in srgb, var(--color-desk-danger) 40%, var(--color-desk-line));
+  color: var(--color-desk-danger);
+}
+.subagent-header-elapsed,
+.subagent-header-usage {
+  color: var(--color-desk-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  white-space: nowrap;
+}
+/* 任务目标作为阅读起点：左侧强调条给出归属，底色比正文区略深一档。 */
+.subagent-lead {
+  display: grid;
+  gap: 0.375rem;
+  padding: 0.625rem 0.75rem;
+  border-left: 2px solid color-mix(in srgb, var(--color-desk-accent) 42%, transparent);
+  border-radius: 0 var(--radius-desk-sm) var(--radius-desk-sm) 0;
+  background: color-mix(in srgb, var(--color-desk-accent-soft) 55%, var(--color-desk-surface));
+  animation: subagent-entry-in var(--motion-duration-slow) var(--motion-ease-entrance) both;
+  animation-delay: 50ms;
+}
+.subagent-lead-type {
+  justify-self: start;
+  padding: 0 0.375rem;
   border: 1px solid var(--color-desk-line);
   border-radius: var(--radius-desk-sm);
-  background: var(--color-desk-surface-subtle);
+  background: var(--color-desk-surface);
   color: var(--color-desk-muted);
-  font-size: 0.6875rem;
-  cursor: pointer;
+  font-size: var(--text-2xs);
+  line-height: 1.6;
 }
-.subagent-tab-active {
-  border-color: color-mix(in srgb, var(--color-desk-accent) 45%, var(--color-desk-line));
+.subagent-lead-text {
+  margin: 0;
   color: var(--color-desk-ink);
+  font-size: var(--text-md);
+  line-height: 1.7;
+  overflow-wrap: anywhere;
 }
-/* 对话时间线：说话与工具调用交错，间距靠行距而不是分隔线。 */
+/* 对话区最后一档入场：面板与头部先落位，内容随后淡入，避免整块同时出现。 */
+.subagent-flow {
+  animation: subagent-entry-in var(--motion-duration-slow) var(--motion-ease-entrance) both;
+  animation-delay: 100ms;
+}
+/* 时间线：左侧一条竖轨串起全部条目，工具调用是轨上的节点；
+   叙述不占节点，用浅底块自己成一块，两者不再共用同一条左边线。 */
 .subagent-transcript {
+  position: relative;
   display: grid;
   gap: 0.5rem;
   margin: 0;
   padding: 0;
   list-style: none;
 }
+.subagent-transcript::before {
+  content: "";
+  position: absolute;
+  top: 0.5rem;
+  bottom: 0.5rem;
+  left: calc(0.5rem - 0.5px);
+  width: 1px;
+  background: linear-gradient(
+    to bottom,
+    color-mix(in srgb, var(--color-desk-accent) 45%, transparent),
+    var(--color-desk-line) 28%,
+    transparent
+  );
+}
+/* 新条目随推送自然淡入：挂载即播放一次，已存在的条目不会重播。 */
+.subagent-transcript > li {
+  animation: subagent-line-in var(--motion-duration-base) var(--motion-ease-entrance) both;
+}
 .subagent-said {
   display: grid;
+  grid-template-columns: 1rem 1fr;
+  column-gap: 0.5rem;
+}
+.subagent-said-body {
+  grid-column: 2;
+  display: grid;
   gap: 0.125rem;
-  padding-left: 0.5rem;
-  border-left: 2px solid color-mix(in srgb, var(--color-desk-accent) 35%, transparent);
+  padding: 0.3125rem 0.5rem;
+  border-radius: var(--radius-desk-sm);
+  background: var(--color-desk-surface-subtle);
 }
 .subagent-speaker {
   color: var(--color-desk-muted);
-  font-size: 0.6875rem;
+  font-size: var(--text-2xs);
 }
 .subagent-text {
   margin: 0;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   font-size: 0.75rem;
-  line-height: 1.5;
+  line-height: 1.6;
   color: var(--color-desk-ink);
 }
 .subagent-call {
-  display: flex;
-  align-items: baseline;
-  gap: 0.375rem;
-  min-width: 0;
-  font-size: 0.75rem;
+  display: grid;
+  grid-template-columns: 1rem 1fr auto;
+  column-gap: 0.5rem;
+  align-items: center;
+  font-size: var(--text-2xs);
 }
-.subagent-mark {
-  flex: none;
-  width: 0.75rem;
-  text-align: center;
+/* 节点：圆形徽记，字符是颜色之外的第二通道；已完成压低对比，运行中与错误才着色。 */
+.subagent-node {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1rem;
+  height: 1rem;
+  border: 1px solid var(--color-desk-line-strong);
+  border-radius: 999px;
+  background: var(--color-desk-surface);
   color: var(--color-desk-muted);
   font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  line-height: 1;
 }
-.subagent-mark.is-error {
-  color: var(--color-desk-danger, var(--color-desk-muted));
+.subagent-node.is-running {
+  border-color: color-mix(in srgb, var(--color-desk-accent) 55%, var(--color-desk-line));
+  color: var(--color-desk-accent);
+}
+.subagent-node.is-done {
+  border-color: transparent;
+  background: var(--color-desk-canvas-sunken);
+}
+.subagent-node.is-error {
+  border-color: color-mix(in srgb, var(--color-desk-danger) 45%, var(--color-desk-line));
+  background: var(--color-desk-danger-soft);
+  color: var(--color-desk-danger);
 }
 .subagent-call-text {
-  flex: 1;
   min-width: 0;
   overflow-wrap: anywhere;
   font-family: var(--font-mono);
-  font-size: 0.6875rem;
+  font-size: var(--text-2xs);
 }
 .subagent-call-time {
-  flex: none;
   color: var(--color-desk-muted);
   font-family: var(--font-mono);
-  font-size: 0.6875rem;
+  font-size: var(--text-2xs);
 }
+/* 小节标题自成一行：上方的细线把它与时间线切开，字号压到元信息档。 */
 .subagent-section-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
   margin: 0;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--color-desk-line);
   color: var(--color-desk-muted);
-  font-size: 0.6875rem;
+  font-size: var(--text-2xs);
+  font-weight: 500;
+  letter-spacing: 0.04em;
 }
 .subagent-list {
   margin: 0;
   padding-left: 1rem;
-  font-size: 0.6875rem;
   color: var(--color-desk-ink);
+  font-size: var(--text-2xs);
+  line-height: 1.6;
 }
 .subagent-list li {
   overflow-wrap: anywhere;
@@ -387,13 +520,55 @@ async function stopActive(): Promise<void> {
 .subagent-note {
   margin: 0;
   color: var(--color-desk-muted);
-  font-size: 0.6875rem;
+  font-size: var(--text-2xs);
 }
+/* 错误块：语义底色加左条，与时间线里的错误节点同一套色。 */
 .subagent-error {
   margin: 0;
-  overflow-wrap: anywhere;
-  color: var(--color-desk-danger, var(--color-desk-muted));
+  padding: 0.5rem 0.625rem;
+  border-left: 2px solid var(--color-desk-danger);
+  border-radius: 0 var(--radius-desk-sm) var(--radius-desk-sm) 0;
+  background: var(--color-desk-danger-soft);
+  color: var(--color-desk-danger);
   font-size: 0.75rem;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+/* 批次切换做成沉陷槽里的分段按钮：选中项用面板底色浮起，未选中项静止时完全安静。 */
+.subagent-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.125rem;
+  padding: 0.1875rem;
+  border: 1px solid var(--color-desk-line);
+  border-radius: var(--radius-desk-md);
+  background: var(--color-desk-canvas-sunken);
+}
+.subagent-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.125rem 0.5rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius-desk-sm);
+  background: transparent;
+  color: var(--color-desk-muted);
+  font-size: var(--text-2xs);
+  cursor: pointer;
+  transition:
+    background-color var(--default-transition-duration) ease,
+    border-color var(--default-transition-duration) ease,
+    color var(--default-transition-duration) ease;
+}
+.subagent-tab:hover {
+  color: var(--color-desk-ink);
+  background: color-mix(in srgb, var(--color-desk-surface) 70%, transparent);
+}
+.subagent-tab-active {
+  border-color: var(--color-desk-line-strong);
+  background: var(--color-desk-surface);
+  color: var(--color-desk-ink);
+  box-shadow: var(--shadow-desk-raise);
 }
 .subagent-stop,
 .subagent-close {
@@ -412,5 +587,38 @@ async function stopActive(): Promise<void> {
 .subagent-stop:disabled {
   cursor: default;
   opacity: 0.6;
+}
+/* 入场位移只有 3–4px：面板本身已在落位，内容再做大位移会显得晃动。 */
+@keyframes subagent-entry-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes subagent-line-in {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .subagent-header,
+  .subagent-lead,
+  .subagent-flow,
+  .subagent-transcript > li {
+    animation: none;
+  }
+  .subagent-tab,
+  .subagent-phase {
+    transition: none;
+  }
 }
 </style>

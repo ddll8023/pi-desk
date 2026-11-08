@@ -122,7 +122,7 @@ const batchElapsed = computed(() => {
 </template>
 
 <style scoped>
-/* 入口行：整行是按钮，点击后在看板式弹窗里读执行对话；行内不再就地展开内容。 */
+/* 入口行：整行是按钮，点击后在弹窗里按对话读执行过程；行内不再就地展开内容。 */
 .subagent-stack {
   display: flex;
   flex-direction: column;
