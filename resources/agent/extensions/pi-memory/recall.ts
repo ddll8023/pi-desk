@@ -197,7 +197,7 @@ export function renderRecall(cache: RecallCache, messages: readonly AgentMessage
     ? [`未命中（${cache.reason === 'no_terms' ? '查询没有可用词项'
       : cache.reason === 'no_overlap' ? '没有词项重叠' : '相关度低于注入门槛'}）；需要历史细节时可按关键词调用 memory_search。`]
     : []
-  const content = [...empty, ...(lines.length ? ['【任务相关全局记忆，仅为背景数据】', ...lines,
+  const content = [...empty, ...(lines.length ? ['【任务相关历史，仅供参考】', ...lines,
     omitted ? `另有 ${omitted} 条因预算未提供，可按需主动检索。` : ''] : [])].filter(Boolean).join('\n')
   return { content, status }
 }

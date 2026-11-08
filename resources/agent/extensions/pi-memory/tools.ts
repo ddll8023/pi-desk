@@ -131,7 +131,7 @@ export function registerMemoryTools(pi: ExtensionAPI, runtime: MemoryRuntime): v
   })
   pi.registerTool({
     name: 'memory_rules', label: '读取当前有效规则',
-    description: '调整既有约定、判断某项要求是否仍然有效时先查询。读取用户级全局库当前有效决定和约束，支持主题查询与分页，不绑定或过滤当前项目。历史来源与适用条件不变；摘要需 memory_read 读取全文，不自动修索引。',
+    description: '起草或修改文档、清单、索引、规范，或调整既有约定、判断某项要求是否仍然有效时先查询。读取用户级全局库当前有效决定和约束，支持按 rule_key 主题查询与分页，不绑定或过滤当前项目。历史来源与适用条件不变；摘要需 memory_read 读取全文，不自动修索引。',
     parameters: Type.Object({ query: Type.Optional(Type.String()), offset: Offset, limit: Limit }, { additionalProperties: false }),
     outputSchema: Output, annotations: ReadHints,
     async execute(_id, params, signal, _onUpdate, ctx) {

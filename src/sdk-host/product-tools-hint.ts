@@ -15,7 +15,8 @@ export const PRODUCT_TOOLS_SECTION_KEY = 'product-tools'
 const MEMORY_SECTION = `记忆工具（memory_search / memory_rules / memory_read）是背景来源，按需主动查询，不等用户开口：
 - 新任务涉及设计取舍、用户偏好、既有约定或反复出现的问题时先查；
 - 需要知道某个现有实现为什么这样做时查 rules；
-- 查到的摘要需要完整正文时按记录 ID 读原文。`
+- 查到的摘要需要完整正文时按记录 ID 读原文。
+背景中已注入的约定优先于通用习惯与个人偏好：产出文档、清单、索引、规范前，先用 memory_rules 按 rule_key 核对该族最新约定。`
 
 const SUBAGENT_SECTION = `委派工具 delegate_subagent 用于结构化批量产出，不是 read/ffgrep 的替代：
 - query：需要读多处文件才能回答、或把检索过程放进主会话会挤占上下文时（典型是 3 个以上符号或跨多个模块），用 query 批量并行；同步注释与文档前确认受影响位置也走这条；
