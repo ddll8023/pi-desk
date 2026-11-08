@@ -1,10 +1,11 @@
 /**
  * 用量统计视图的纯函数与展示格式化：
- * 提供日期范围切片、堆叠柱与明细表的行数据、缓存命中率与占比计算，供用量统计分节组件复用。
+ * 提供日期范围切片、堆叠柱与明细表的行数据、构成条与趋势轴线刻度、缓存命中率与占比计算，
+ * 供用量统计分节与构成条组件复用。
  * 范围按「有记录的日期」取末尾 N 天，不按自然日补零；费用缺失时保持 null，不推算金额。
  */
 import type { UsageDailyStat } from '../../../shared/usage-stats-api'
-import { cacheHitRate, formatCostOrDash, formatTokens } from './usage-format'
+import { cacheHitRate, formatCost, formatCostOrDash, formatTokens } from './usage-format'
 
 export { cacheHitRate, formatTokens }
 
@@ -22,7 +23,11 @@ export const USAGE_RANGE_OPTIONS: readonly { readonly value: UsageRange; readonl
   { value: 'all', label: '全部' }
 ]
 
-/** 堆叠柱的四个 token 分项；颜色取自主题图表色槽，不借用强调色与语义色。 */
+/**
+ * 堆叠柱的四个 token 分项。
+ * 颜色取用量专用色阶：同一青蓝色相的四级明度 + 一处暖色强调。
+ * 分类色槽（chart-1..6）适合并列类别，在缓存读取占九成以上的用量构成里会失衡。
+ */
 export type UsageSegmentKey = 'input' | 'output' | 'cacheRead' | 'cacheWrite'
 
 export const USAGE_SEGMENTS: readonly {
@@ -31,11 +36,78 @@ export const USAGE_SEGMENTS: readonly {
   /** 直接取主题 CSS 变量：浅色与暗色各自成立，也不依赖类名扫描。 */
   readonly color: string
 }[] = [
-  { key: 'input', label: '输入', color: 'var(--color-desk-chart-1)' },
-  { key: 'output', label: '输出', color: 'var(--color-desk-chart-2)' },
-  { key: 'cacheRead', label: '缓存读取', color: 'var(--color-desk-chart-3)' },
-  { key: 'cacheWrite', label: '缓存写入', color: 'var(--color-desk-chart-4)' }
+  { key: 'input', label: '输入', color: 'var(--color-desk-usage-1)' },
+  { key: 'output', label: '输出', color: 'var(--color-desk-usage-2)' },
+  { key: 'cacheRead', label: '缓存读取', color: 'var(--color-desk-usage-3)' },
+  { key: 'cacheWrite', label: '缓存写入', color: 'var(--color-desk-usage-4)' }
 ]
+
+/**
+ * 构成条的一段：宽度百分比与已格式化的读数。
+ * 组件只负责画，占比口径、分母与文本都在这里定好，避免同一条构成关系在两处各算一遍。
+ */
+export interface CompositionSegment {
+  readonly key: UsageSegmentKey
+  readonly label: string
+  readonly color: string
+  /** 相对构成条整宽的百分比；零值段保留在结果里，由组件跳过。 */
+  readonly percent: number
+  /** 已格式化的占比文本，例如 "42.5%"。 */
+  readonly share: string
+  /** 已格式化的数值文本，例如 "1.2M"。 */
+  readonly value: string
+  /** 未格式化的原始 token 数：图例靠它在悬停时给出精确值。 */
+  readonly raw: number
+}
+
+/**
+ * 把四个 token 分项组装成构成条。
+ * 分母取四项之和而不是总量：供应商上报的 totalTokens 可能包含未分项的余额
+ * （如推理 token），用总量归一会让四段之和不足整宽、条尾留出无法解释的空隙。
+ */
+export function buildCompositionSegments(
+  values: Readonly<Record<UsageSegmentKey, number>>
+): readonly CompositionSegment[] {
+  const sum = USAGE_SEGMENTS.reduce((total, segment) => total + Math.max(0, values[segment.key]), 0)
+  if (sum <= 0) return []
+  return USAGE_SEGMENTS.map((segment) => {
+    const value = Math.max(0, values[segment.key])
+    return {
+      key: segment.key,
+      label: segment.label,
+      color: segment.color,
+      percent: (value / sum) * 100,
+      share: calculateSharePercent(value, sum),
+      value: formatTokens(value),
+      raw: value
+    }
+  })
+}
+
+/** 趋势图 Y 轴的一档刻度：`ratio` 是相对峰值的比例，标签是已格式化读数。 */
+export interface UsageAxisTick {
+  readonly ratio: number
+  readonly label: string
+}
+
+/**
+ * 取峰值、半峰值与 0 三档刻度；单位随所选指标，费用缺失不在这里推算。
+ * 刻度量级跟随峰值而不是整数档位，避免短范围下出现 0/2M/4M 这类无意义的空档。
+ */
+export function buildAxisTicks(
+  bars: readonly DailyBarItem[],
+  metric: UsageMetric
+): readonly UsageAxisTick[] {
+  const peak = Math.max(0, ...bars.map(bar => bar.metricValue))
+  const formatValue = (value: number): string => (
+    metric === 'cost' ? `$${formatCost(value)}` : formatTokens(Math.round(value))
+  )
+  return [
+    { ratio: 1, label: formatValue(peak) },
+    { ratio: 0.5, label: formatValue(peak / 2) },
+    { ratio: 0, label: metric === 'cost' ? '$0' : '0' }
+  ]
+}
 
 /** 格式化完整时间：年-月-日 时:分 */
 export function formatDateTime(timestamp: number): string {
@@ -87,11 +159,14 @@ export interface DailyBarItem {
   readonly label: string
   readonly totalTokens: number
   readonly cost: number | null
+  /** 该日按当前指标取到的原始值，Axis 刻度据此取峰值。 */
+  readonly metricValue: number
+  /** 该日当前指标是否有值；无值（含费用视图下未计价）只画基线条，不画柱。 */
+  readonly hasValue: boolean
   readonly heightPercent: number
   readonly segments: readonly DailyBarSegment[]
   /** 是否渲染 X 轴日期标签：日期较多时全量标注会互相重叠，只标注首末与等距的少数几根。 */
   readonly showLabel: boolean
-  readonly tooltip: string
   readonly ariaLabel: string
 }
 
@@ -100,7 +175,7 @@ export interface DailyBarsOptions {
   readonly metric: UsageMetric
 }
 
-/** 供读屏与浮层共用的单日描述，费用未知时如实说明而不是省略。 */
+/** 供读屏使用的单日描述，费用未知时如实说明而不是省略。 */
 function describeDay(item: UsageDailyStat): string {
   const parts = [
     `输入 ${formatTokens(item.input)}`,
@@ -114,7 +189,7 @@ function describeDay(item: UsageDailyStat): string {
 
 /**
  * 将日度趋势归一化为堆叠柱；柱高按所选指标取峰值归一化，
- * 段高按当天四个 token 分项占总量的比例分配，保证「柱高 = 当天该指标、段和 = 100%」。
+ * 段高按当天四项之和归一，保证「柱高 = 当天该指标、段和 = 100%」。
  */
 export function buildDailyBars(
   daily: readonly UsageDailyStat[],
@@ -123,23 +198,28 @@ export function buildDailyBars(
   const sliced = sliceDaily(daily, options.range)
   if (sliced.length === 0) return []
 
-  const metricValue = (item: UsageDailyStat): number | null => (
+  const readMetric = (item: UsageDailyStat): number | null => (
     options.metric === 'cost' ? item.cost : item.totalTokens
   )
-  const maxValue = Math.max(1, ...sliced.map(item => metricValue(item) ?? 0))
+  const maxValue = Math.max(1, ...sliced.map(item => readMetric(item) ?? 0))
   const lastIndex = sliced.length - 1
   // 标签间隔按「最多约 8 个标签」反推；末位附近不足一个间隔时让位给末位，避免最后两个标签贴在一起。
   const labelStep = Math.max(1, Math.ceil(sliced.length / (options.range === 7 ? 7 : 8)))
 
   return sliced.map((item, index) => {
-    const value = metricValue(item) ?? 0
+    const value = readMetric(item) ?? 0
     // 有值但极小的日子保留 4% 可见高度；无值（如当天没有计价调用）不画柱。
     const ratio = value > 0 ? Math.max(0.04, value / maxValue) : 0
     const heightPercent = Math.min(100, Math.round(ratio * 100))
-    const segments: readonly DailyBarSegment[] = item.totalTokens > 0
+    // 段高按四项之和归一：上报的总量可能含未分项的余额，用总量归一会让柱顶留出空缺。
+    const segmentTotal = USAGE_SEGMENTS.reduce(
+      (total, segment) => total + Math.max(0, item[segment.key]),
+      0
+    )
+    const segments: readonly DailyBarSegment[] = segmentTotal > 0
       ? USAGE_SEGMENTS.map(segment => ({
           key: segment.key,
-          percent: (item[segment.key] / item.totalTokens) * 100
+          percent: (Math.max(0, item[segment.key]) / segmentTotal) * 100
         }))
       : []
     const description = describeDay(item)
@@ -149,13 +229,14 @@ export function buildDailyBars(
       label: item.date === 'unknown' ? '未知' : formatShortDate(item.date),
       totalTokens: item.totalTokens,
       cost: item.cost,
+      metricValue: value,
+      hasValue: value > 0,
       heightPercent,
       segments,
       showLabel:
         index === 0 ||
         index === lastIndex ||
         (index % labelStep === 0 && lastIndex - index >= labelStep),
-      tooltip: description,
       ariaLabel: description
     }
   })

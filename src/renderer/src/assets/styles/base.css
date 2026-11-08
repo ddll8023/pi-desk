@@ -12,6 +12,12 @@
   --color-desk-line: #dce3e9;
   /* 控件描边；比分隔线略深，让可点控件与静态分区分开。 */
   --color-desk-line-strong: #c5d0d9;
+  /* 浏览器分屏模块沿用的三个历史名字：本仓库对应的是 line / surface-subtle / muted。
+     写成别名让那批现有引用一次生效，不再把同一颜色硬编码第二遍；
+     值里引用的是下面会被暗色覆盖的同名令牌，因此别名无需单独再写一份暗色值。 */
+  --color-desk-border: var(--color-desk-line);
+  --color-desk-panel: var(--color-desk-surface-subtle);
+  --color-desk-ink-muted: var(--color-desk-muted);
   --color-desk-accent: #236978;
   --color-desk-accent-hover: #1b5563;
   /* 选中行与浅强调底色；不用于正文文字。 */
@@ -77,6 +83,18 @@
   --motion-ease-entrance: cubic-bezier(0.16, 1, 0.3, 1);
   --motion-ease-exit: cubic-bezier(0.4, 0, 1, 1);
 }
+/* 用量构成色阶（输入／输出／缓存读取／缓存写入）：同一青蓝色相的四级明度，专用于「同一个量的拆分」；
+   与分类色槽 chart-1..6 分开，不把单色系与会互相争夺注意力的分类色混用。
+   输出是唯一的暖色强调，与输入构成「生成／消费」两端；缓存两项走同色阶的中浅两级，
+   因为它们在用量里既占大头又最不需要被强调。
+   这四个写在 @theme 之外：它们只被行内样式里的 var() 引用，不需要工具类，
+   而 @theme 里没有工具类引用的变量会被编译裁剪掉。 */
+:root {
+  --color-desk-usage-1: #2a6f97;
+  --color-desk-usage-2: #b4762a;
+  --color-desk-usage-3: #7fa8c3;
+  --color-desk-usage-4: #c3d3de;
+}
 /* 暗色主题：由主进程 nativeTheme.themeSource 驱动 prefers-color-scheme，无需页面脚本参与。
    仅重定义同名令牌，工具类经 var() 引用即可全局生效；色值与主进程窗口背景色保持同步。 */
 @media (prefers-color-scheme: dark) {
@@ -100,6 +118,11 @@
     --color-desk-chart-4: #6fbb90;
     --color-desk-chart-5: #d488a8;
     --color-desk-chart-6: #c2a878;
+    /* 用量构成色阶在暗色下沿同一明暗秩序：输入最亮、缓存写入最暗。 */
+    --color-desk-usage-1: #6fa8d6;
+    --color-desk-usage-2: #d9a45f;
+    --color-desk-usage-3: #4c7f9f;
+    --color-desk-usage-4: #345b74;
     --color-desk-danger: #d47c7f;
     --color-desk-danger-soft: #372225;
     --color-desk-warning: #d3b06e;

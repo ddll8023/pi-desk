@@ -358,7 +358,7 @@ function onEscape(): void {
           <span class="session-activity-chip-count">{{ section.count }}</span>
         </AppButton>
       </div>
-      <span v-if="activity.incomplete" class="text-xs text-desk-text-muted" title="SDK曾省略嵌套调用或参数；当前事实不受工具窗口裁剪，但不能恢复从未保存的信息。">嵌套记录不完整，计数可能偏少</span>
+      <span v-if="activity.incomplete" class="text-xs text-desk-muted" title="SDK曾省略嵌套调用或参数；当前事实不受工具窗口裁剪，但不能恢复从未保存的信息。">嵌套记录不完整，计数可能偏少</span>
       <AppButton
         v-if="hasHistoryTurn"
         variant="unstyled"

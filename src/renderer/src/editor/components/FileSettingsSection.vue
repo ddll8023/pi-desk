@@ -197,7 +197,7 @@ function onKeydown(event: KeyboardEvent): void {
             :key="pattern"
             class="flex items-center justify-between rounded px-2.5 py-1.5 text-xs bg-desk-surface border border-desk-border"
           >
-            <span class="font-mono text-desk-text truncate mr-2">{{ pattern }}</span>
+            <span class="font-mono text-desk-ink truncate mr-2">{{ pattern }}</span>
             <AppButton
               variant="unstyled"
               class="text-desk-muted hover:text-desk-danger p-1"
