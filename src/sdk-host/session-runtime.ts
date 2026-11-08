@@ -11,6 +11,7 @@ import { ImageAnnotationContext } from './image-annotations'
 // 上一轮改动面按系统提示分段注入，与图片资料同用 before_agent_start，但不改输入与 transcript。
 import { createTurnFilesHintExtension } from './turn-files-hint'
 import { lastTurnWithWrites } from './turn-files-hint'
+import { PRODUCT_TOOLS_SECTION_KEY, productToolsSection } from './product-tools-hint'
 import { SubAgentControlRegistry } from './sub-agent/control'
 import { createSubAgentDelegationExtension } from './sub-agent/delegation-extension'
 // 延续判定只用确定性信号；结论同时进提示分段与活动投影。
@@ -890,6 +891,8 @@ export class SdkSessionRuntime {
               event.systemPromptOptions.sections[MODE_SECTION_KEY] = target.mode === 'fast'
                 ? FAST_MODE_SECTION
                 : STANDARD_MODE_SECTION
+              // 记忆与委派工具随应用提供，其他宿主没有；使用时机写进分段，不写全局 AGENTS.md。
+              event.systemPromptOptions.sections[PRODUCT_TOOLS_SECTION_KEY] = productToolsSection(target.mode)
               // 判定只在本轮算一次；无结论时不写分段，也不覆盖上一次展示。
               const verdict = judgeContinuation(event.prompt, lastTurnWithWrites(this.activityView))
               // 延续轮只对齐增量，不再重复需求理解；新任务与无结论都注入，漏判不能成为跳过整理的理由。

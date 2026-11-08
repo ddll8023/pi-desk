@@ -92,7 +92,7 @@ export function registerMemoryTools(pi: ExtensionAPI, runtime: MemoryRuntime): v
   pi.registerTool({
     name: 'memory_status', label: '读取记忆库状态',
     description: '读取用户级全局记忆库、受管运行时、启停与可用状态；不初始化、修索引或恢复事务。运行环境不可用时也返回真实原因。',
-    parameters: Type.Object({}, { additionalProperties: false }), outputSchema: Output, annotations: ReadHints,
+    parameters: Type.Object({}), outputSchema: Output, annotations: ReadHints,
     async execute(_id, _params, signal, _onUpdate, ctx) {
       return controlRead(ctx, signal, async lease => {
         let store: JsonObject
