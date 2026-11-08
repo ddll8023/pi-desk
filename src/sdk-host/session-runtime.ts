@@ -51,7 +51,7 @@ const MODE_SECTION_KEY = 'execution-mode'
 const INTENT_SECTION_KEY = 'intent-summary'
 const CONTINUATION_SECTION_KEY = 'continuation-signal'
 const INTENT_SUMMARY_SECTION = '需求理解（本条优先于系统提示中「省略需求复述」「最短回答」的通用约定，因为整理是为了暴露歧义而不是重复措辞）：收到新任务先在回复开头用简短条目给出需求理解——目标、范围与不做项、输入里模糊或有多解之处、你采用的默认假设；随后在同一回合内紧接着给出本模式要求的产出形态，不停下等待单独确认。用户指出理解有误时以其纠正为准并重做后续产出。'
-const FAST_MODE_SECTION = '快速模式：需求理解之后直接给出逐文件执行清单并等待确认，不讨论方案与取舍；清单审批、运行与测试授权照常。'
+const FAST_MODE_SECTION = '快速模式：需求理解之后直接给出逐文件执行清单并等待确认，不讨论方案与取舍；清单审批、运行与测试授权照常，判断与核查、任务范围边界不豁免。高风险、不可逆或跨多个文件的改动先说明情况并建议改用标准模式；用户本次要求先出方案或写文档时按标准模式处理。'
 const STANDARD_MODE_SECTION = '标准模式：需求理解之后先给出方案与关键取舍，再给出逐文件执行清单；不跳过方案直接改动。'
 /**
  * 快速模式下整组下线的记忆工具，与 `resources/agent/bundle.json` 中 `pi-memory` 的 requiredTools 一致。
