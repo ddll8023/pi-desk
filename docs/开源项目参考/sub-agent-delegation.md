@@ -16,6 +16,7 @@
 | Cline | `spawn_agent`（子代理）/ Agent Teams（协调者） | 子代理由模型判断；Teams 由 coordinator 拆任务 | **编排层**：任务板 + 邮箱 + mission log | 子代理可再派生；批准一次 `spawn_agent` 即批准其后续全部工具调用 |
 | Amp | `Task` / `Read Thread` / 插件子代理（oracle 等） | 官方表述为 Amp 自行决定何时使用子代理 | 无 | 子代理之间不可通信、只回摘要，可续派任务 |
 | DeepSeek Harness | `tool-subagent` / `-fork` / `-control` | 模型调用工具 | 宿主侧契约：`depthLimit`、`parent`/`caller` 两种投递、子代理目录持久化 | 受管激活、消息与中断权限、冷恢复 |
+| dsh-superagent | `orchestrator_route`（常驻主会话调用） | 宿主侧准入先判：允许名单 + 准入表 + 有版本的策略，模型只在已准入候选上研判 | **策略层**：策略版本、三档强度、默认 `observe` 影子模式；命中规则随授权下发给执行器 | 每工单一个会话 + 槽位上限（给人留一个额外槽位）、订阅把后续讨论直接投递、按同一授权恢复 |
 | Lancer | 会话内编排工具 | 模型调用 | 宿主侧 Orchestration owner 承担子分支策略与监督 | 递归子/孙分支，结果回父会话汇总 |
 
 ## 逐产品要点
@@ -38,13 +39,15 @@
 
 **Lancer**。在产品层做递归子分支与父会话汇总，架构文档列出宿主侧 Orchestration owner 负责 child-thread 策略、监督与编排工具，属于“策略在宿主、触发在模型”。来源：[architecture.md](https://github.com/raylee-ai/lancer/blob/main/docs/architecture.md)、本地记录 [lancer.md](lancer.md)。
 
+**dsh-superagent**。唯一把“谁能派活”做成宿主侧硬约束的产品：来源（GitHub、飞书）产生事件，确定性准入先按允许名单与准入表定强度，模型再逐条规则研判，受理后生成不可变授权并落到持久工单，派工把工单交给一个执行器会话。派发仍是主会话调 `orchestrator_route`，但可选集合已由准入圈定，提示词不能改变权限；默认 `observe` 只把主动判定记为“应受理”，供人复核后再开 `auto`。续派靠订阅：订阅线程上的人类消息直接投给该工单的执行器，不再经过研判。定位是研究原型（单提交、无 Release、`has_issues=false`），执行器以 operator 的 OS 用户全权限运行。来源：[002-authorization.md](https://github.com/deepseek-ai/dsh-superagent-prototype/blob/main/docs/002-authorization.md)、[003-execution.md](https://github.com/deepseek-ai/dsh-superagent-prototype/blob/main/docs/003-execution.md)、本地记录 [dsh-superagent.md](dsh-superagent.md)。
+
 ## 共性结论
 
-1. **委派一律是普通工具**。九个产品里没有一个用关键词匹配或正则做路由；判定主体都是主模型，差异只在提示文本与是否额外加策略层。
+1. **派发一律是普通工具**。十个产品里没有一个用关键词匹配或正则做路由；判定主体都是主模型，差异只在提示文本与是否额外加策略层。唯一例外方向是 dsh-superagent：派发仍是工具调用，但宿主侧准入先把可选集合压到“已受理的候选”，模型只在其中选，权限不交给提示词。
 2. **“何时用”写在两处**：系统/工具提示里的主动性与缺席约束（Codex 的常量、OpenCode 的 proactive 措辞、Gemini 的 instructed to use），以及每个子代理自己的 `description`（Claude Code、Cursor、OpenCode 都明确要求描述质量）。前者决定默认倾向，后者决定匹配精度。
 3. **没有“每子代理一个工具”的形态**。早期 Gemini 曾为每个 agent 生成同名工具，后来合并为 `invoke_agent`；其余产品从一开始就是单工具 + 类型/名称参数。把类型拆成多个工具在主流实现中缺少先例。
 4. **并行都靠“同一轮多次工具调用”**，需要结果的语义由产品自己加（Claude 的 `async_launched`、OpenCode 的 `background`、Codex 的 `wait_agent`）。没有一家做多轮排队调度。
-5. **编排层只在两类产品出现**：Cline 的 Agent Teams 与 Lancer 的 Orchestration owner，都引入了持久共享状态（任务板、数据库）。单层委派的产品都不做这件事。
+5. **编排层只在三类产品出现**：Cline 的 Agent Teams、Lancer 的 Orchestration owner 与 dsh-superagent 的工单编排，都引入了持久共享状态（任务板、数据库、工单）。前两者仍由模型决定是否派发，第三个把授权与派发做成持久实体；单层委派的产品都不做这件事。
 
 ## 与 pi-desk 的对照
 
@@ -56,7 +59,8 @@
 | 进程与权限 | 独立子进程 + `--tools` 白名单 + 文档写入守卫 + 不继承用户扩展（调研任务显式 `-e` 加载 `pi-web-access`） | 对方独有：Claude Code/Cursor 无 OS 级进程隔离；本项目独有：进程参数强制而非提示词劝阻 |
 | 并行 | 单次调用内 `tasks[]` 批量、批内并发上限 3；调用之间串行 | 部分重合：批内并行等价于对方“同轮多次调用”，但缺后台执行与按任务续派 |
 | 续派与父子登记 | 无：子任务生命周期等于一次工具调用，父级中断收敛全部子进程 | 无对应：Claude Code 的 `agentId` resume、Cursor 的 agent ID resume、DSH 的受管树都超出当前边界 |
-| 编排层 | 无 | 无对应：Cline Teams / Lancer 的编排依赖持久任务板，与“不做递归、无父子登记表”的既定边界冲突 |
+| 编排层 | 无 | 无对应：Cline Teams / Lancer 的编排依赖持久任务板，dsh-superagent 依赖工单、授权记录与订阅，均与“不做递归、无父子登记表”的既定边界冲突 |
+| 授权闸门与事件驱动派生 | 无：会话只能由用户发起，`delegate_subagent` 只在本轮内生效 | 无对应：对方的“谁能派活”是宿主侧名单与准入表，并有 `observe` 影子模式；本项目连主动派生入口都没有，不能把 `TrustManager` 当同一职责 |
 
 ## 可借鉴方向
 
@@ -88,5 +92,6 @@
 - Amp：[tools](https://ampcode.com/docs/tools)、[models-and-subagents](https://ampcode.com/docs/models-and-subagents)
 - DeepSeek Harness：[subagent.md](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/subsystems/subagent.md)
 - Lancer：[architecture.md](https://github.com/raylee-ai/lancer/blob/main/docs/architecture.md)
+- dsh-superagent：[002-authorization.md](https://github.com/deepseek-ai/dsh-superagent-prototype/blob/main/docs/002-authorization.md)、[003-execution.md](https://github.com/deepseek-ai/dsh-superagent-prototype/blob/main/docs/003-execution.md)、[005-panel.md](https://github.com/deepseek-ai/dsh-superagent-prototype/blob/main/docs/005-panel.md)
 
 pi-desk 侧事实出处：`src/sdk-host/sub-agent/delegation-extension.ts`（派发入口、类型参数、工具白名单、批次并发、超时预算）、`src/sdk-host/product-tools-hint.ts`（委派时机分段）、`src/shared/sub-agent-types.ts`（权限矩阵与写入上限）、[子代理模块文档](../modules/sub-agent.md)。

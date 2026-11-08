@@ -2,6 +2,8 @@
 
 返回[开源项目参考](README.md)。本文记录 DeepSeek 官方的 `deepseek-ai/deepseek-harness`，不是同名社区桌面包装项目，也不是 pi-desk 的模块文档。
 
+DSH 生态中的 [dsh-superagent](dsh-superagent.md)（面向单个 GitHub 仓库的主动式 Agent，以 bundle 形式接入本 Harness）是独立仓库，明细另见该文件，不在本文范围内。
+
 ## 基本信息
 
 | 项 | 值 |
