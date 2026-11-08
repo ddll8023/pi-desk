@@ -41,7 +41,7 @@ const RECITE_CUSTOM_TYPE = 'todo-list.recitation.v1'
 /** 回述首句：明确它不是用户新指令，避免模型把提醒当新消息重复回应。 */
 const RECITE_PREFIX = '【自动回述】当前轮待办清单，不是用户的新消息，也不要回复它：据此刻状态校准进度，'
   + '某项开始或完成时立刻用 todo_write 重新提交整份清单。'
-/** 三态标记与 `TodoPanel.vue` 保持一致：模型读到的清单和界面看到的是同一套语义。 */
+/** 三态标记只用于模型侧回述与工具回执，文字近似与界面胶囊的 待处理/进行中/已完成 对应。 */
 const STATUS_MARKS: Readonly<Record<TodoItem['status'], string>> = {
   completed: '✓',
   in_progress: '▸',

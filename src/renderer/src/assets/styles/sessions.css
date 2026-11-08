@@ -84,20 +84,97 @@
 .prompt-todo-chevron {
     @apply shrink-0 text-2xs;
   }
+/* 条目列表：条目从单行标题变成了含状态环、chip 与胶囊的一整行，高度上限随之放宽，约能同时看到 6 条。 */
 .prompt-todo-list {
-    @apply m-0 max-h-24 list-none overflow-y-auto p-0 text-xs;
+    @apply m-0 flex max-h-[14rem] list-none flex-col gap-0.5 overflow-y-auto p-0 text-xs;
   }
-/* 完成项压暗并划线：状态同时由字符与样式表达，不单靠颜色。 */
+/* 一条待办四栅：状态环、序号、正文、状态胶囊。正文过长时只在自己这栏换行，环与胶囊始终对齐首行居中。 */
 .prompt-todo-item {
-    @apply flex items-start gap-1.5 py-0.5;
-    color: var(--color-desk-ink);
+    @apply grid items-center gap-x-2 rounded-desk-sm px-1.5 py-1 text-desk-ink transition-colors;
+    grid-template-columns: auto auto minmax(0, 1fr) auto;
   }
-.prompt-todo-item.is-completed {
+.prompt-todo-item:hover {
+    background: color-mix(in srgb, var(--color-desk-ink) 5%, transparent);
+  }
+/* 执行中整行淡强调底加左侧色轨：坞里通常只有一条在动，靠这两处说出位置，不再额外加动效打断输入。 */
+.prompt-todo-item.is-in_progress {
+    background: var(--color-desk-accent-soft);
+    box-shadow: inset 2px 0 0 0 var(--color-desk-accent);
+  }
+.prompt-todo-item.is-in_progress:hover {
+    background: color-mix(in srgb, var(--color-desk-accent) 14%, transparent);
+  }
+/* 状态环：待处理空心细环，进行中套一圈旋转弧，已完成换成对勾。图形只做辅助，状态结论由右侧胶囊的文字承担。 */
+.prompt-todo-ring {
+    @apply relative inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full;
+    border: 1.5px solid var(--color-desk-line-strong);
+  }
+.prompt-todo-item.is-in_progress .prompt-todo-ring {
+    border-color: color-mix(in srgb, var(--color-desk-accent) 30%, transparent);
+  }
+.prompt-todo-item.is-in_progress .prompt-todo-ring::after {
+    content: '';
+    position: absolute;
+    inset: -1.5px;
+    border-radius: inherit;
+    border: 1.5px solid transparent;
+    border-top-color: var(--color-desk-accent);
+    animation: prompt-todo-ring-spin 1.6s linear infinite;
+  }
+.prompt-todo-item.is-completed .prompt-todo-ring {
+    border-color: transparent;
+    background: var(--color-desk-success-soft);
+    color: var(--color-desk-success);
+  }
+.prompt-todo-ring-check {
+    @apply font-bold leading-none;
+    font-size: 9px;
+  }
+/* 序号是清单自身的执行顺序：等宽数字避免进入两位数时正文起点横向抖动。 */
+.prompt-todo-index {
+    @apply shrink-0 text-2xs font-semibold tabular-nums;
+    color: var(--color-desk-muted);
+  }
+.prompt-todo-text {
+    @apply min-w-0 leading-snug;
+  }
+/* 完成项压暗并划线：与状态胶囊、对勾环共同表达完成，不单靠颜色。 */
+.prompt-todo-item.is-completed .prompt-todo-text {
     @apply line-through;
     color: var(--color-desk-muted);
   }
-.prompt-todo-mark {
-    @apply inline-block w-3 shrink-0 text-center;
+/* 文件名 chip：就地替换正文里的文件名，沿用坞内用量 chip 的圆角细边规格；等宽字体把路径与中文分开。 */
+.prompt-todo-file {
+    @apply inline-flex items-baseline rounded-full border px-1.5 font-mono text-2xs whitespace-nowrap;
+    border-color: color-mix(in srgb, var(--color-desk-line-strong) 55%, transparent);
+    background: var(--color-desk-surface);
+    color: var(--color-desk-ink);
+  }
+/* 状态胶囊：文字是主通道，颜色只做辅助，三态各取一套现有语义色。 */
+.prompt-todo-status {
+    @apply inline-flex shrink-0 items-baseline rounded-full border px-1.5 py-0.5 text-2xs whitespace-nowrap;
+    border-color: color-mix(in srgb, var(--color-desk-line-strong) 55%, transparent);
+    color: var(--color-desk-muted);
+  }
+.prompt-todo-item.is-in_progress .prompt-todo-status {
+    border-color: color-mix(in srgb, var(--color-desk-accent) 35%, transparent);
+    background: var(--color-desk-surface);
+    color: var(--color-desk-accent);
+  }
+.prompt-todo-item.is-completed .prompt-todo-status {
+    border-color: color-mix(in srgb, var(--color-desk-success) 30%, transparent);
+    background: var(--color-desk-success-soft);
+    color: var(--color-desk-success);
+  }
+@keyframes prompt-todo-ring-spin {
+    to { transform: rotate(360deg); }
+  }
+/* 用户偏好减少动效：执行中只剩静态半环，仍能看出这条在跑，不逐帧旋转。 */
+@media (prefers-reduced-motion: reduce) {
+    .prompt-todo-item.is-in_progress .prompt-todo-ring::after {
+      animation: none;
+      border-right-color: var(--color-desk-accent);
+    }
   }
 
 .prompt-composer-shell .prompt-composer-plus-menu {
