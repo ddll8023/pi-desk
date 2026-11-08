@@ -248,7 +248,7 @@ export interface SdkHostManagerOptions {
   runs: SdkHostRunRegistry
   /** 受管浏览器会话服务实例。 */
   browserSessionService?: BrowserSessionService
-  /** 记忆配置来源；缺省时不提供受管配置，扩展会退回其自身的 CLI 行为。 */
+  /** 记忆配置来源；缺省时退到只读兜底配置（关闭且无可用运行环境），扩展仍按受管配置处理，不自行退回 CLI 探测。 */
   memory?: MemoryConfigurationProvider
 }
 
@@ -265,16 +265,23 @@ const READ_ONLY_RUNS: SdkHostRunRegistry = {
 }
 
 /**
- * 只读宿主没有业务会话，但仍要回应协议里的记忆配置：
- * 固定返回关闭且无运行环境的配置，不为查看历史而探测用户库。
+ * 未注入真实开关来源时的兜底记忆配置：固定返回关闭且无运行环境的配置。
+ * 它不代表用户关掉了记忆，只说明这个宿主没有拿到桌面侧的用户级配置。
  */
 const READ_ONLY_MEMORY: MemoryConfigurationProvider = {
   read: async hostEntry => managedMemoryConfiguration(hostEntry, false, 0)
 }
 
-/** 只读宿主：用于查看会话历史，不承载会话；绑定前由执行链接管，接管后才接上授权回路。 */
-export function createReadOnlyHost(options: { readonly hostId: number }): SdkHostManager {
-  return new SdkHostManager({ runId: options.hostId, runs: READ_ONLY_RUNS, memory: READ_ONLY_MEMORY })
+/**
+ * 只读宿主：用于查看会话历史，不承载会话；绑定前由执行链接管，接管后才接上授权回路。
+ * 记忆开关必须由调用方传入真实来源：这个宿主会在绑定时被原地接管成运行实例，
+ * 若在此固定成关闭，接管后的会话会把用户的全局开关读成“用户停用”并拒绝保存。
+ */
+export function createReadOnlyHost(options: {
+  readonly hostId: number
+  readonly memory: MemoryConfigurationProvider
+}): SdkHostManager {
+  return new SdkHostManager({ runId: options.hostId, runs: READ_ONLY_RUNS, memory: options.memory })
 }
 
 export class SdkHostManager {
