@@ -4,7 +4,7 @@
      工具调用按块相邻关系归组：连续出现且都不是生成式界面的工具调用合成一个「执行记录」面板，面板内每条仍是一张独立折叠的 ToolCard；
      单条工具不套面板，Thinking、正文与生成式界面都是分组分界，不会被归进工具面板。
      交付了生成式界面的工具调用改渲染界面本身，不再套折叠卡；界面按可见性挂载：远离视口的界面只留一行占位，展开全部轮次时不把每份界面都常驻。
-     界面内的参数提交复用消息动作栏的禁用口径（运行中、未同步、正在发送等），不另做一套判断。用户消息下方使用细线图标操作栏，回退与修改后的重新发送由父级执行。
+     界面内的参数提交复用消息动作栏的禁用口径（运行中、未同步、正在发送等），不另做一套判断。用户消息下方使用细线图标操作栏（回退、复制、修改），AI 回复底部只保留整条回复的复制入口；回退与修改后的重新发送由父级执行。
      早期轮次的整体收起由 ChatTurnItem 负责，这里只表达单条消息内部每项自己的开合；同一轮内的非首条 AI 消息用紧凑表头，不重复 π 标记与角色名。
      被取代的旧版界面折叠成一行：整行点击跳转到新版（由消息列表定位），右侧小按钮展开查看旧版。
      卡片的手动展开只上报 `userExpand`：消息列表据此停止粘底，展开的内容从摘要行下面长出来而不是把摘要行顶走；收起不上报。 -->
@@ -85,6 +85,15 @@ onUnmounted(() => {
 /** 复制与修改预填共用同一份还原：技能消息还原成 Pi 命令形态，投影生成的附件说明不计入。 */
 const messageText = computed(() => userMessagePayload(props.message).text)
 const hasText = computed(() => messageText.value.trim() !== '')
+/** AI 回复的复制范围：该条消息里所有正文块按空行拼接，图片附件说明与技能正文不计入。 */
+const assistantText = computed(() => props.message.blocks.flatMap(block => (
+  block.kind === 'text' && !block.notice && block.skill === null && block.text.trim() !== ''
+    ? [block.text.trim()]
+    : []
+)).join('\n\n'))
+const hasAssistantText = computed(() => assistantText.value !== '')
+/** 复制内容按角色取：用户消息取还原后的输入，AI 消息取整条回复正文。 */
+const copySource = computed(() => (props.message.role === 'user' ? messageText.value : assistantText.value))
 
 /** 禁用原因只在动作栏确实不可用时展示，不影响启用态的默认说明。 */
 const unavailableReason = computed(() => (props.actionsDisabled === true ? props.disabledReason ?? null : null))
@@ -108,12 +117,12 @@ async function copyMessage(): Promise<void> {
   copyFeedback.value = ''
   let copied = false
   try {
-    copied = await copyText(messageText.value)
+    copied = await copyText(copySource.value)
   } catch {
     // 剪贴板回退路径也可能受环境限制，不能留下永久的复制中状态。
   }
   if (!mounted) return
-  // 截断提示只针对被复制的用户文本；技能正文的截断只影响卡片展示，不影响复制出来的命令。
+  // 截断提示按被复制的正文块判断；技能正文的截断只影响卡片展示，不影响复制出来的命令。
   const truncated = props.message.blocks.some(block => (
     block.kind === 'text' && block.truncated && block.skill === null
   ))
@@ -779,6 +788,40 @@ function onEditKeydown(event: KeyboardEvent): void {
       </div>
     </div>
 
+    <!-- AI 回复只有一个复制入口：整条回复的 Markdown 原文，放在消息底部而不是每段正文旁边。 -->
+    <div
+      v-if="!isUser && !isCompaction && hasAssistantText"
+      class="chat-message-actions chat-message-actions-assistant"
+      role="group"
+      aria-label="回复操作"
+    >
+      <span
+        v-if="copyFeedback"
+        role="status"
+        :class="copySucceeded ? 'sr-only' : 'chat-message-action-feedback'"
+      >{{ copyFeedback }}</span>
+      <div class="chat-message-action-toolbar">
+        <AppButton
+          variant="unstyled"
+          class="chat-message-action"
+          :class="{ 'chat-message-action-copied': copySucceeded }"
+          :disabled="copying"
+          aria-label="复制回复"
+          :aria-describedby="`${tooltipId}-copy-reply`"
+          @click="copyMessage"
+        >
+          <svg v-if="copySucceeded" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="m5 12 4 4L19 6" />
+          </svg>
+          <svg v-else viewBox="0 0 24 24" aria-hidden="true">
+            <rect x="8" y="8" width="12" height="12" rx="2" />
+            <path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3" />
+          </svg>
+          <span :id="`${tooltipId}-copy-reply`" role="tooltip" class="chat-message-action-tooltip">{{ copySucceeded ? '已复制' : '复制回复' }}</span>
+        </AppButton>
+      </div>
+    </div>
+
     <div v-if="isUser && editing" class="chat-message-edit" role="group" aria-label="编辑消息">
       <textarea
         ref="editTextarea"
@@ -819,6 +862,29 @@ function onEditKeydown(event: KeyboardEvent): void {
   display: flex;
   align-items: center;
   gap: 3px;
+}
+
+/* AI 回复操作栏沿用同一套按钮，只在消息正文的左下角对齐。 */
+.chat-message-actions-assistant {
+  align-self: flex-start;
+  justify-content: flex-start;
+}
+
+/* 单个按钮在最左时，提示向左展开会越过卡片边界，这里恢复居中展开。 */
+.chat-message-actions-assistant .chat-message-action:last-child .chat-message-action-tooltip {
+  right: auto;
+  left: 50%;
+  transform: translate(-50%, 3px);
+}
+
+.chat-message-actions-assistant .chat-message-action:last-child:hover .chat-message-action-tooltip,
+.chat-message-actions-assistant .chat-message-action:last-child:focus-visible .chat-message-action-tooltip {
+  transform: translate(-50%, 0);
+}
+
+.chat-message-actions-assistant .chat-message-action:last-child .chat-message-action-tooltip::after {
+  right: auto;
+  left: calc(50% - 4px);
 }
 
 .chat-message-action {
