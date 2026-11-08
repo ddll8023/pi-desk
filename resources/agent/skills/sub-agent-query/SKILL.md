@@ -61,7 +61,7 @@ compatibility: >-
 
 ### 约束
 
-- **超时**：30 秒
+- **超时**：以请求的 `constraints.timeout_seconds` 为准，不要按更短的时间自我收敛
 - **最大 token**：5000
 - **文件访问**：只读，全项目范围
 - **上下文访问**：无（你看不到会话历史）
@@ -89,7 +89,7 @@ compatibility: >-
     "file_filter": "src/**/*.ts"
   },
   "constraints": {
-    "timeout_seconds": 30,
+    "timeout_seconds": 90,
     "max_tokens": 5000,
     "read_only": true
   }
@@ -297,13 +297,13 @@ if (found_count === 0) {
 ```json
 {
   "query": "find all console.log",
-  "constraints": { "timeout_seconds": 30 }
+  "constraints": { "timeout_seconds": 90 }
 }
 ```
 
 **你的执行**：
 1. 用 `grep "console.log"`
-2. 搜索 25 秒后超时
+2. 检索过程中触发超时
 3. 已找到 50 处，但未完成全部扫描
 
 **输出**：
@@ -317,7 +317,7 @@ if (found_count === 0) {
   },
   "error": {
     "code": "timeout",
-    "message": "查询超时（30s）"
+    "message": "查询超时"
   }
 }
 ```
@@ -331,7 +331,7 @@ if (found_count === 0) {
 | 错误 | 原因 | 你的响应 |
 |------|------|---------|
 | 查询为空 | `payload.query` 缺失或空字符串 | `{ status: "error", error: { code: "invalid_query" } }` |
-| 超时 | 搜索超过 30 秒 | `{ status: "partial", result: { ... }, error: { code: "timeout" } }` |
+| 超时 | 检索超过请求里的 `constraints.timeout_seconds` | `{ status: "partial", result: { ... }, error: { code: "timeout" } }` |
 | 权限错误 | 尝试用 `write` 工具 | `{ status: "error", error: { code: "permission_denied" } }` |
 | 文件不存在 | 指定文件路径不存在 | `{ status: "error", error: { code: "file_not_found" } }` |
 

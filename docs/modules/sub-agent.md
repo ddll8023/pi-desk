@@ -6,21 +6,42 @@
 
 把可独立完成的工作交给隔离子代理执行，并在主对话里给出归属、取消、失败与用量的所有者。入口是宿主内联扩展 `src/sdk-host/sub-agent/delegation-extension.ts` 注册的 `delegate_subagent` 工具，模型可调用、用户不直接触发，执行模式为串行：同一会话内不会并发跑两次委派。
 
-任务类型有三种：`query`（代码查询）、`review`（代码审查）、`document`（受限文档修改）。`research` 未启用——子进程没有可验证的联网工具。扩展由宿主在装配时注入子进程入口、技能目录、写入守卫路径与取消控制端，不从资源目录按文件路径加载；对应规范正文取自随包技能 `resources/agent/skills/sub-agent-*/SKILL.md`。
+任务类型有四种：`query`（代码查询）、`research`（技术调研）、`review`（代码审查）、`document`（受限文档修改）。调研与主会话的调研链路一致：子进程拿到内置的 `web_search`、`fetch_content`、`get_search_content`、`source_check`，用外部资料作依据；扩展由宿主在装配时注入子进程入口、技能目录、写入守卫路径与取消控制端，不从资源目录按文件路径加载；对应规范正文取自随包技能 `resources/agent/skills/sub-agent-*/SKILL.md`。委派时机由系统提示的产品工具分段（`src/sdk-host/product-tools-hint.ts`）与工具自身的类型描述共同承载；四类子代理规范只供子进程按目录读取，不进入主会话技能列表（清单里以 `subAgentOnly` 标记）。
 
 ## 执行与隔离
 
 每次委派为独立子进程：`out/sdk-host/pi-cli.mjs --mode json`，经 `ELECTRON_RUN_AS_NODE` 让 Electron 二进制以 Node 模式启动。能力边界由进程参数强制，不是提示词劝阻：
 
-- `--tools` 白名单：只读任务为 `read/grep/find/ls`，文档任务另加 `edit/write`；
-- `--no-extensions --no-skills --no-prompt-templates --no-context-files --no-mcp --no-session`：不继承用户级与项目级配置、不装载其他扩展、不落盘会话；文档任务在该组合之外以 `-e` 显式加载写入守卫；
+- `--tools` 白名单：只读任务为 `read/grep/find/ls`，调研任务另加 `web_search/fetch_content/get_search_content/source_check`，文档任务另加 `edit/write`；
+- `--no-extensions --no-skills --no-prompt-templates --no-context-files --no-mcp --no-session`：不继承用户级与项目级配置、不装载其他扩展、不落盘会话；文档任务在该组合之外以 `-e` 显式加载写入守卫；调研任务同样以 `-e` 显式加载用户安装的 `pi-web-access`，入口缺失时直接返回 `web_unavailable`，不降级成只读本地的调研；
 - 子进程没有委派工具，因此不能递归委派；不下发 `bash`。
 
-任务说明由规范正文、本次请求 JSON 与输出要求组成，不注入父会话历史。预算按实测设定并写入请求约束：查询 90s、审查 150s、文档 120s。
+任务说明由规范正文、本次请求 JSON 与输出要求组成，不注入父会话历史。预算按实测设定并写入请求约束：查询 90s、审查 150s、文档 120s、调研 240s。
 
 ## 批次与并行
 
 一次委派可带多个互相独立的任务（`tasks[]`），批内每个任务是独立子进程、独立预算、独立结论，并发数有上限。快照以任务数组交付，部分失败不影响其他任务的结论。同批两个文档任务在目标文件冲突时在派发阶段直接拒绝，同目录下的不同文件可以并行；冲突判定只看 `target_file`，不按目录范围字符串比较。
+
+审查任务的两种形态：维度之间不并行，单个 review 任务按 `dimensions` 顺序逐项审，跨维度重复的问题只记一条；需要维度级并行时，把维度拆成同一批里的多个任务。
+
+```json
+{ "subagent_type": "review", "objective": "审查登录接口重写",
+  "payload": { "code_to_review": "...",
+               "dimensions": ["security", "performance", "convention", "logic"],
+               "related_files": ["src/auth.ts"] } }
+```
+
+```json
+{ "tasks": [
+  { "subagent_type": "review", "objective": "审查登录接口重写：security",
+    "payload": { "code_to_review": "...", "dimensions": ["security"], "related_files": ["src/auth.ts"] } },
+  { "subagent_type": "review", "objective": "审查登录接口重写：logic",
+    "payload": { "code_to_review": "...", "dimensions": ["logic"], "related_files": ["src/auth.ts"] } } ] }
+```
+
+拆分的代价：`code_to_review` 按任务重复传输，用量按任务分别计入，跨维度重复的问题会在各任务里各报一次，任务数受批内上限约束。
+
+规范核对不单列维度：`payload.standards` 给出条款时，由 `convention` 维度逐条对照，`finding.reference` 记条款出处；条款不符按 `warning`/`info` 记，不改变 `pass` 判定（仍只看有无 `critical`）。子代理不会自行加载规范 Skill，条款必须由主 Agent 自包含传入。
 
 ## 文档写入边界
 

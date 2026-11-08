@@ -18,10 +18,11 @@ const MEMORY_SECTION = `记忆工具（memory_search / memory_rules / memory_rea
 - 查到的摘要需要完整正文时按记录 ID 读原文。`
 
 const SUBAGENT_SECTION = `委派工具 delegate_subagent 用于结构化批量产出，不是 read/ffgrep 的替代：
-- 一次要查 3 个以上符号的定义与引用时，用 query 批量并行；
-- 需要按安全、性能、规范、逻辑多维度审查代码时，用 review；
-- 需要创建或按小节更新 2 个以上文档时，用 document 并声明 write_scope。
-单点定位、单文件小改、需要边讨论边改的工作直接用 read / ffgrep / edit，不要委派。`
+- query：需要读多处文件才能回答、或把检索过程放进主会话会挤占上下文时（典型是 3 个以上符号或跨多个模块），用 query 批量并行；同步注释与文档前确认受影响位置也走这条；
+- research：需要外部资料（官方文档、开源仓库、论文）作依据、做多方案对比或核查结论来源时，用 research；
+- review：需要按安全、性能、规范、逻辑多维度审查代码时，用 review；项目有适用规范 skill 时，把要核对的条款写进 payload.standards，子代理不会自己加载规范；
+- document：需要创建或按小节更新 2 个以上文档时，用 document 并声明 write_scope。
+单点定位、单文件小改、需要边讨论边改的工作直接用 read / ffgrep / edit，不要委派；仓库内的符号定位仍用 query，不因要查词就派 research。`
 
 /**
  * 快速模式整组下线记忆工具，注入记忆指引会让模型去找不存在的工具，因此只保留委派段。

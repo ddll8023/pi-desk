@@ -56,6 +56,7 @@
     },
     {
       "id": "sub-agent-query",
+      "subAgentOnly": true,
       "entry": "skills/sub-agent-query/SKILL.md",
       "files": [
         "skills/sub-agent-query/SKILL.md"
@@ -63,6 +64,7 @@
     },
     {
       "id": "sub-agent-research",
+      "subAgentOnly": true,
       "entry": "skills/sub-agent-research/SKILL.md",
       "files": [
         "skills/sub-agent-research/SKILL.md"
@@ -70,6 +72,7 @@
     },
     {
       "id": "sub-agent-review",
+      "subAgentOnly": true,
       "entry": "skills/sub-agent-review/SKILL.md",
       "files": [
         "skills/sub-agent-review/SKILL.md"
@@ -77,6 +80,7 @@
     },
     {
       "id": "sub-agent-document",
+      "subAgentOnly": true,
       "entry": "skills/sub-agent-document/SKILL.md",
       "files": [
         "skills/sub-agent-document/SKILL.md"

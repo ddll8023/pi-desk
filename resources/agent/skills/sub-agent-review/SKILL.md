@@ -63,7 +63,7 @@ compatibility: >-
 
 ### 约束
 
-- **超时**：45 秒
+- **超时**：以请求的 `constraints.timeout_seconds` 为准，不要按更短的时间自我收敛
 - **最大 token**：6000
 - **只读**：是（`constraints.read_only = true`）
 - **文件访问**：仅变更相关文件（readonly-changed-files）
@@ -107,7 +107,7 @@ compatibility: >-
     "change_context": "用户认证模块重构"
   },
   "constraints": {
-    "timeout_seconds": 45,
+    "timeout_seconds": 150,
     "max_tokens": 6000,
     "read_only": true
   }
@@ -121,6 +121,7 @@ compatibility: >-
 | `code_to_review` | 是 | 待审查代码文本；`findings[].location.line` 的行号**相对这段文本** |
 | `dimensions` | 否 | 取值集 `security`/`performance`/`convention`/`logic`；缺失或空数组时按四维全量审查 |
 | `related_files` | 否 | 相关文件路径（相对 `project_root`），用于确认调用链与类型 |
+| `standards` | 否 | 要逐条核对的规范条款文本；由主 Agent 传入，你不会自己加载任何规范 Skill |
 | `change_context` | 否 | 改动背景，只用于判断改动意图，不作为放行依据 |
 | `constraints` | 是 | 超时、token 上限、只读标志 |
 
@@ -213,7 +214,7 @@ compatibility: >-
 |------|-----------|
 | `security` | SQL 注入、命令注入、XSS、硬编码密钥/口令、权限与鉴权检查缺失、不安全反序列化、路径穿越、敏感信息写入日志 |
 | `performance` | N+1 查询、循环内重复 IO、无上限的并发或内存集合、同步阻塞主线程、重复计算未缓存、闭包持有大对象 |
-| `convention` | 命名与项目既有风格不一致、函数超过 50 行、单文件职责过载、导入顺序与分组、公开函数缺注释、魔法数字 |
+| `convention` | 命名与项目既有风格不一致、函数超过 50 行、单文件职责过载、导入顺序与分组、公开函数缺注释、魔法数字；提供了 `payload.standards` 时逐条对照这些条款，不符合的归入本维度，并在 `reference` 写条款出处 |
 | `logic` | 边界条件（空、0、超长、并发）、异常未捕获或吞掉、`null`/`undefined` 未检查、状态机缺分支、返回值与调用方期望不一致、异步未 await |
 
 跨维度重复的问题只记一条，按主要影响维度归类。
@@ -353,7 +354,7 @@ pass = summary.by_severity.critical === 0
     "code_to_review": "...",
     "dimensions": ["security", "performance", "convention", "logic"]
   },
-  "constraints": { "timeout_seconds": 45 }
+  "constraints": { "timeout_seconds": 150 }
 }
 ```
 
@@ -390,7 +391,7 @@ pass = summary.by_severity.critical === 0
 | `permission_denied` | 主 Agent 要求使用禁止工具（`edit`、`write`、联网、构建命令） | `status: "error"`，`message` 写明被拒工具 |
 | `out_of_scope_file` | `related_files` 指向 `project_root` 外或禁止路径 | `status: "error"`，列出越权路径 |
 | `file_not_found` | `related_files` 中文件不存在 | `status: "error"`，列出缺失路径 |
-| `timeout` | 超过 45 秒 | `status: "partial"`，保留已完成维度 |
+| `timeout` | 超过请求里的 `constraints.timeout_seconds` | `status: "partial"`，保留已完成维度 |
 | `quota_exceeded` | findings 超过 30 条或触达 token 上限 | `status: "partial"`，保留前 30 条 |
 
 ### 错误响应模板

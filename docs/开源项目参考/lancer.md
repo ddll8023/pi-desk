@@ -103,7 +103,7 @@
 
 | 类别 | 具体能力 |
 | --- | --- |
-| **子会话编排** | Lancer 提供递归子分支、孙分支与父会话结果汇总；pi-desk 只做本地单层委派（查询、审查、文档），不做递归子会话与父会话汇总，[子代理][p-subagent]不计入实质重合。 |
+| **子会话编排** | Lancer 提供递归子分支、孙分支与父会话结果汇总；pi-desk 只做本地单层委派（查询、调研、审查、文档），不做递归子会话与父会话汇总，[子代理][p-subagent]不计入实质重合。 |
 | **本地无头控制接口** | Unix Domain Socket + Bearer Token 的 Control API 与 `./scripts/lancer-ctl`，支持外部程序非交互式派发（send/queue/steer）、等待（wait）、订阅日志流（stream）与多泳道查看（lanes）。 |
 | **自定义桌面扩展前端** | 基于 `pi-extension://` 协议、沙箱 iframe 与 Chord 0.87.0 的前端扩展挂载机制，允许 Pi 扩展携带独立的 GUI 操作面板（如 PR Review、Test Runs）。 |
 | **macOS 豆包 App 接管** | 利用 macOS 辅助功能（Accessibility API）与本地豆包桌面应用挂接，接收外部生成内容。 |

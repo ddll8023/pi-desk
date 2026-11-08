@@ -9,8 +9,8 @@
 /** 子任务阶段：`cancelling` 表示已请求停止但子进程尚未收敛。 */
 export type SubAgentPhase = 'queued' | 'running' | 'cancelling' | 'succeeded' | 'failed' | 'aborted'
 
-/** 任务模式；与委派工具的 `subagent_type` 一致，只保留当前可执行的三种。 */
-export type SubAgentTaskType = 'query' | 'review' | 'document'
+/** 任务模式；与委派工具的 `subagent_type` 一致，只保留当前可执行的四种。 */
+export type SubAgentTaskType = 'query' | 'research' | 'review' | 'document'
 
 /** 单条活动：一次真实工具调用，不包含模型的中间叙述。 */
 export interface SubAgentActivity {
@@ -92,7 +92,7 @@ export const SUB_AGENT_VIEW_LIMITS = {
 } as const
 
 const PHASES: readonly SubAgentPhase[] = ['queued', 'running', 'cancelling', 'succeeded', 'failed', 'aborted']
-const TASK_TYPES: readonly SubAgentTaskType[] = ['query', 'review', 'document']
+const TASK_TYPES: readonly SubAgentTaskType[] = ['query', 'research', 'review', 'document']
 const ACTIVITY_PHASES: readonly SubAgentActivity['phase'][] = ['running', 'done', 'error']
 
 function isRecord(value: unknown): value is Record<string, unknown> {

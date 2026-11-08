@@ -33,3 +33,9 @@
 | OpenBitFun | [GCWing/OpenBitFun](https://github.com/GCWing/OpenBitFun) | 基于 Rust Agent Runtime 与 Tauri 的开源多模式 Agent 工作台 | 会话、终端、Git 与 MCP 实质重合；Mini App、多模式 Harness、跨网多设备切换与 Computer Use 超出当前内置能力；内置受管浏览器与局域网免配置直连为本项目独有 | [openbitfun.md](openbitfun.md) |
 | Ekko Studio | [EKKOLearnAI/ekko-studio](https://github.com/EKKOLearnAI/ekko-studio) | 本地优先的多 Agent AI 工作区与工作流工作台；主体为 BSL 1.1 源码可见许可 | 聊天、终端、受管浏览器与移动端部分重合；Vue Flow 可视化工作流、10 大平台网关、群聊房间与 Office 预览超出当前内置能力；声明式 GenUI 为本项目独有 | [ekko-studio.md](ekko-studio.md) |
 | TencentDB Agent Memory | [TencentCloud/TencentDB-Agent-Memory](https://github.com/TencentCloud/TencentDB-Agent-Memory) | 面向 AI Agent 团队的统一记忆中枢，提供分层记忆、Skill、Wiki 与 CodeGraph 四大资产 | 语义分层与白盒持久化实质重合；会话注入、混合检索与 Skill 部分重合；符号化短期记忆与多租户资产管理超出当前内置能力；双阶段审批门禁与主动读取统计为本项目独有 | [tencentdb-agent-memory.md](tencentdb-agent-memory.md) |
+
+## 专题对照
+
+横向机制对照不按项目拆分，也不为索引表增行；各产品的完整能力仍以对应项目文件为准。
+
+- [sub-agent-delegation.md](sub-agent-delegation.md)：主代理如何决定把任务交给子代理，覆盖九个产品的派发入口、主动性来源、路由与策略层、并行与续派。

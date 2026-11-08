@@ -44,6 +44,7 @@ const PHASE_MARKS: Readonly<Record<SubAgentPhase, string>> = {
 
 const TASK_LABELS: Readonly<Record<SubAgentView['taskType'], string>> = {
   query: '代码查询',
+  research: '技术调研',
   review: '代码审查',
   document: '文档编写'
 }

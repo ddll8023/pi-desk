@@ -88,18 +88,6 @@ export interface SubAgentConstraints {
   
   /** 是否只读（query/research/review=true; document=false） */
   read_only: boolean
-  
-  /** 调研时的额外参数 */
-  research?: {
-    num_sources?: number  // 默认 3
-    include_local?: boolean  // 默认 true
-  }
-  
-  /** 文档代理时的额外参数 */
-  document?: {
-    target_dir?: string  // 默认 'docs/'
-    backup?: boolean  // 默认 true
-  }
 }
 
 // ============================================================================
@@ -477,8 +465,8 @@ export interface SubAgentToolPermission {
 
 /**
  * 所有子代理的权限矩阵。
- * query、review 与 document 都有运行时入口（`delegate_subagent`）；research 未启用，
- * 矩阵保留为后续阶段的能力依据。
+ * 四种类型都有运行时入口（`delegate_subagent`）：query、review、document 用本地只读或受限写入，
+ * research 额外下放四个只读联网工具（web_search、fetch_content、get_search_content、source_check）。
  */
 export const SUB_AGENT_PERMISSIONS: Record<SubAgentType, SubAgentToolPermission> = {
   query: {
@@ -486,15 +474,16 @@ export const SUB_AGENT_PERMISSIONS: Record<SubAgentType, SubAgentToolPermission>
     deniedTools: ['edit', 'write', 'bash'],
     fileAccess: 'readonly-all',
     contextAccess: 'none',
-    timeout: 30000,
+    timeout: 90000,
     maxTokens: 5000
   },
   research: {
-    allowedTools: ['web_search', 'fetch_content', 'ffgrep', 'read'],
-    deniedTools: ['edit', 'write', 'mcp'],
+    // 不列入 ffgrep：产品侧工具不随子进程加载，只能写 Pi 内置工具名。
+    allowedTools: ['read', 'grep', 'find', 'ls', 'web_search', 'fetch_content', 'get_search_content', 'source_check'],
+    deniedTools: ['edit', 'write', 'bash', 'mcp'],
     fileAccess: 'readonly-all',
     contextAccess: 'none',
-    timeout: 60000,
+    timeout: 240000,
     maxTokens: 8000
   },
   review: {
@@ -502,7 +491,7 @@ export const SUB_AGENT_PERMISSIONS: Record<SubAgentType, SubAgentToolPermission>
     deniedTools: ['edit', 'write', 'bash'],
     fileAccess: 'readonly-changed-files',
     contextAccess: 'none',
-    timeout: 45000,
+    timeout: 150000,
     maxTokens: 6000
   },
   document: {

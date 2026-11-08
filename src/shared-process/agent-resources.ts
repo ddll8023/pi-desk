@@ -18,6 +18,8 @@ export interface AgentResource {
   readonly files: readonly string[]
   readonly requiredTools: readonly string[]
   readonly localConfigFiles: readonly string[]
+  /** 仅供子代理进程按目录名读取、不进入主会话技能列表：子代理身份规范不属于主代理能力。 */
+  readonly subAgentOnly: boolean
 }
 
 export interface AgentResourceBundle {
@@ -74,6 +76,7 @@ function parseResource(value: unknown): AgentResource {
     || !resourceName(value.entry) || !strings(value.files) || value.files.length === 0
     || value.files.length > 128 || !value.files.every(resourceName) || !value.files.includes(value.entry)
     || (value.requiredTools !== undefined && !strings(value.requiredTools))
+    || (value.subAgentOnly !== undefined && typeof value.subAgentOnly !== 'boolean')
     || (value.localConfigFiles !== undefined && (!strings(value.localConfigFiles) || !value.localConfigFiles.every(resourceName)))) {
     throw new Error('产品资源组成清单无效')
   }
@@ -81,7 +84,8 @@ function parseResource(value: unknown): AgentResource {
   if (value.files.some(path => !path.startsWith(`${base}/`))) throw new Error('产品组件文件不在入口所属目录内')
   return {
     id: value.id, entry: value.entry, files: value.files,
-    requiredTools: value.requiredTools ?? [], localConfigFiles: value.localConfigFiles ?? []
+    requiredTools: value.requiredTools ?? [], localConfigFiles: value.localConfigFiles ?? [],
+    subAgentOnly: value.subAgentOnly === true
   }
 }
 

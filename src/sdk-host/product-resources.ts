@@ -80,6 +80,9 @@ export async function prepareProductResources(sdk: Sdk, input: ProductResourceIn
       || loaded.diagnostics.some(entry => entry.type === 'error')) throw new Error(`产品 Skill 不可用：${item.id}`)
     return loaded.skills
   })
+  // 子代理身份规范只由子进程按目录读取：主会话技能列表去掉它们，避免模型把「派子代理」当成「加载技能」。
+  const sessionSkills = productSkills.filter(skill =>
+    !bundle.skills.some(item => item.subAgentOnly && item.id === skill.name))
 
   function skillsOverride(base: { skills: Skill[]; diagnostics: ResourceDiagnostic[] }): typeof base {
     /** 本次替换给出的说明；用户副本路径必须留在技能诊断里，不能只出现在宿主日志。 */
@@ -122,7 +125,7 @@ export async function prepareProductResources(sdk: Sdk, input: ProductResourceIn
       }
     }
     return {
-      skills: [...productSkills, ...userSkills.filter(item => !blocked.has(item.name))],
+      skills: [...sessionSkills, ...userSkills.filter(item => !blocked.has(item.name))],
       // 只丢掉 SDK 的同名 collision 条目；本层给出的说明保留，冲突双方路径因此仍可见。
       diagnostics: [...skillNotes, ...base.diagnostics.filter(item => !item.collision
         || item.collision.resourceType !== 'skill' || !reserved.has(item.collision.name))]
@@ -139,7 +142,8 @@ export async function prepareProductResources(sdk: Sdk, input: ProductResourceIn
       ],
       // 显式给出总线：扩展从这里订阅，宿主推送也走同一实例，不依赖加载结果反取。
       eventBus: input.eventBus,
-      additionalSkillPaths: bundle.skills.map(item => agentResourcePath(bundle.root, item.entry)),
+      additionalSkillPaths: bundle.skills.filter(item => !item.subAgentOnly)
+        .map(item => agentResourcePath(bundle.root, item.entry)),
       extensionFactories: input.extensionFactories,
       skillsOverride
     },
@@ -166,6 +170,8 @@ export async function prepareProductResources(sdk: Sdk, input: ProductResourceIn
       }
       const skills = loader.getSkills().skills
       for (const item of bundle.skills) {
+        // 子代理专用规范不在主会话技能列表里，不能要求它被会话加载。
+        if (item.subAgentOnly) continue
         const path = agentResourcePath(bundle.root, item.entry)
         if (!skills.some(skill => skill.name === item.id && realpathSync(skill.filePath) === path)) {
           console.error(`[product-resources] 产品必要 Skill 未加载：${item.id}`)

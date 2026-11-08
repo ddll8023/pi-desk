@@ -916,7 +916,8 @@ export class SdkSessionRuntime {
             factory: createSubAgentDelegationExtension({
               entryPath: resolve(this.options.productResourcesDir, '../pi-cli.mjs'),
               skillsDir: resolve(this.options.productResourcesDir, 'skills'),
-              guardPath: resolve(this.options.productResourcesDir, '../sub-agent-write-guard.mjs')
+              guardPath: resolve(this.options.productResourcesDir, '../sub-agent-write-guard.mjs'),
+              agentDir: this.options.agentDir
             }, this.subAgentControl) },
           { name: 'mcp', factory: this.sdk.createMcpExtension(), builtin: true, replaceable: true },
           // 生成式 UI 是产品内置能力，与上述内置扩展同形态注册；工厂自身不抛异常。
