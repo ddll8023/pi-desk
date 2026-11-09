@@ -1,6 +1,8 @@
 /**
- * 应用级生命周期：便携数据目录、登录 shell PATH、单实例锁、窗口全部关闭与退出链（先收敛手机访问入口）。
+ * 应用级生命周期：便携数据目录、产品 agent 目录与首启导入、登录 shell PATH、单实例锁、窗口全部关闭与退出链
+ * （先收敛手机访问入口）。
  *
+ * agent 目录必须在任何会话、凭据或设置读写之前固定；首启导入先于建窗，逐项幂等且失败不阻断启动。
  * 退出链在预算内走完即退出，超时强制退出，不把应用挂死；终端的 PTY 由独立守护进程持有，
  * 这里只断开连接，下次启动按同一端点接回。
  */
@@ -8,6 +10,9 @@ import { app } from 'electron'
 import { mkdirSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { applyLoginShellPath } from './shared/shell-path'
+import { configurePiAgentDirectories } from './shared/pi-paths'
+import { registerAgentHomeHandlers } from './agent-home/ipc'
+import { runSharedImport } from './agent-home/shared-import'
 import {
   authManager,
   lanRemote,
@@ -122,6 +127,9 @@ async function runStartupAutoUpdate(): Promise<void> {
 export function prepareApplication(): void {
   registerAssetScheme()
   applyPortableDataDirectory()
+  // 产品自己的 agent 目录跟随应用数据目录：便携版随之落在程序旁，开发态留在系统默认位置。
+  // 必须在任何会话、凭据或设置读写之前固定，之后的解析都只认这一份结果。
+  configurePiAgentDirectories({ product: join(app.getPath('userData'), 'agent') })
   // 图形界面启动时进程 PATH 只有系统默认值，先补齐登录 shell 的 PATH，
   // 使后续所有受管子进程（扩展更新、运行时安装、SDK 宿主）都能找到 npm、git。
   applyLoginShellPath()
@@ -209,6 +217,7 @@ export async function startApplication(): Promise<void> {
   registerLanRemoteHandlers(pageUrl)
   registerMemoryHandlers(pageUrl)
   registerUsageStatsHandlers(pageUrl)
+  registerAgentHomeHandlers(pageUrl)
 
   // 事件订阅：全部只投递给当前唯一可信窗口。
   sdkRuntime.onStatusChanged(broadcastRuntimeStatus)
@@ -222,6 +231,9 @@ export async function startApplication(): Promise<void> {
   packageUpdater.onOutcome(broadcastPackageUpdateOutcome)
   piAgentUpdater.onProgress(broadcastAgentInstallProgress)
 
+  // 首启导入先于建窗：会话历史、模型与扩展包都只从产品目录读取，导入未完会看不到既有会话。
+  // 逐项幂等，重复启动只补缺失项；失败不阻止启动，结论进设置页与导入标记。
+  await runSharedImport()
   await createWindow(pageUrl)
   // 窗口已创建后再开始检查：它只影响页面上的提示，不参与启动编排。
   // 首次检查结束后按开关决定要不要自动更新一次扩展；这一次不阻塞窗口显示。

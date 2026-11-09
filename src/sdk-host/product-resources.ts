@@ -1,20 +1,21 @@
 /**
- * 桌面产品资源装配：先解析和筛选来源，再让 SDK 求值扩展。
- * 不修改用户 settings、不移除用户文件，不用加载后的 extensionsOverride 掩盖重复注册。
- * 身份按组件形状判定：形状命中的副本一律排除；只有产品件自身损坏或外来路径争用产品工具名才拒绝建立会话，
- * 其余问题作为结构化诊断交给页面。未识别的外部扩展仍保留 SDK 的冲突诊断；本层不是第三方代码的副作用隔离器。
+ * 桌面产品资源装配：产品件来自随包产物，用户级 Agent 资产从终端 CLI 的目录只读加载。
+ *
+ * 不修改用户 settings、不移除用户文件，也不用加载后的 extensionsOverride 掩盖重复注册。
+ * 共享目录只贡献 `AGENTS.md` 与 `skills/`：同名 Skill 由产品版本优先；只有产品件自身损坏或
+ * 非产品扩展争用产品工具名才拒绝建立会话，其余问题作为结构化诊断交给页面。
  */
-import { realpathSync } from 'node:fs'
-import { dirname } from 'node:path'
+import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs'
+import { dirname, join, resolve } from 'node:path'
 import type {
   CreateAgentSessionServicesOptions, EventBus, InlineExtension, ResourceDiagnostic, ResourceLoader, SettingsManager, Skill
 } from '@earendil-works/pi-coding-agent'
 import { RESOURCE_ISSUE_LIMIT, isResourceIssue } from '../shared/runtime-api'
 import type { ResourceIssue } from '../shared/runtime-api'
 import {
-  agentResourcePath, classifyAgentResourceCopy, readAgentDeploymentManifest, readAgentResourceBundle
+  agentResourcePath, readAgentResourceBundle
 } from '../shared-process/agent-resources'
-import type { AgentResource, AgentResourceCopyClassification } from '../shared-process/agent-resources'
+import type { AgentResource } from '../shared-process/agent-resources'
 import { judgeLoadedExtensions } from './conflicts'
 import {
   MEMORY_CONFIGURATION_ENV, serializeMemoryConfiguration
@@ -28,6 +29,9 @@ import type { ExecutionMode } from '../shared/preferences-api'
  */
 const FAST_MODE_BLOCKED_SKILLS: readonly string[] = ['design-protocol', 'code-doc-sync', 'architecture-redesign']
 
+/** 只读注入的用户级 AGENTS.md 读取上限；超出时跳过并保持会话可用。 */
+const SHARED_AGENTS_MAX_BYTES = 262_144
+
 type Sdk = typeof import('@earendil-works/pi-coding-agent')
 type ResourceOptions = NonNullable<CreateAgentSessionServicesOptions['resourceLoaderOptions']>
 
@@ -35,6 +39,8 @@ interface ProductResourceInput {
   readonly directory: string
   readonly cwd: string
   readonly agentDir: string
+  /** 终端 CLI 的目录：只读加载用户级 `AGENTS.md` 与 `skills/`，不写入。 */
+  readonly sharedAgentDir: string
   readonly settingsManager: SettingsManager
   readonly extensionFactories: InlineExtension[]
   /** 宿主唯一的扩展事件总线；记忆配置变更与扩展订阅走同一条通道。 */
@@ -79,8 +85,6 @@ export async function prepareProductResources(sdk: Sdk, input: ProductResourceIn
     diagnostics.push('快速模式未注入记忆：本会话的记忆库与后台召回不生效')
   }
   const externalExtensions: string[] = []
-  // 部署登记只用于区分「版本不同」与「部署后被改过」；缺失或矛盾时按内容比对降级，不改变是否排除。
-  const deployments = readAgentDeploymentManifest(input.agentDir)
   const issues: ResourceIssue[] = []
   /** 诊断条目有界：超限或字段不合规的条目直接丢弃，避免整帧被状态校验拒收。 */
   const pushIssue = (issue: ResourceIssue): void => {
@@ -89,24 +93,8 @@ export async function prepareProductResources(sdk: Sdk, input: ProductResourceIn
   }
   for (const resource of resolved.extensions) {
     if (!resource.enabled) continue
-    // 内联来源不是文件，不参与组件身份判定。
-    if (resource.path.startsWith('builtin:')) {
-      externalExtensions.push(resource.path)
-      continue
-    }
-    let identified = false
-    for (const item of bundle.extensions) {
-      const copy = classifyAgentResourceCopy(bundle, item, resource.path, deployments)
-      if (copy.kind === 'foreign') continue
-      identified = true
-      // 产品自身来源与形状命中的副本都由产品版本接管，均不进入显式加载清单。
-      if (copy.kind === 'product') continue
-      const message = describeCopy(item, copy, resource.path)
-      diagnostics.push(message)
-      const issue = copyIssue(item, copy, resource.path)
-      if (issue !== null) pushIssue(issue)
-    }
-    if (!identified) externalExtensions.push(resource.path)
+    // 产品件与内联例子不在发现结果里；其余都是用户自装的扩展与包，按原样显式加载。
+    externalExtensions.push(resource.path)
   }
 
   const productSkills = bundle.skills.flatMap(item => {
@@ -125,15 +113,13 @@ export async function prepareProductResources(sdk: Sdk, input: ProductResourceIn
     const skillNotes: ResourceDiagnostic[] = []
 
     /**
-     * 同名 Skill 只核对身份并留诊断：Skill 是纯文本指令，产品版本仍按 `reserved` 优先。
-     * 内容不同的副本不采用，也不静默覆盖；扩展侧的重复加载在装载结果阶段判定，不在这里处理。
+     * 同名 Skill 由产品版本提供：与产品入口内容一致时是同一份规范的副本，静默采用产品版本；
+     * 内容不同才留一条诊断，说明用户副本没有被加载。
      */
-    function reportForeignSkill(item: AgentResource, path: string): void {
-      const copy = classifyAgentResourceCopy(bundle, item, path, deployments)
-      if (copy.kind === 'identical' || copy.kind === 'product') return
-      const message = copy.kind === 'foreign'
-        ? `同名 Skill ${item.id} 与产品配套规范内容不一致，已改用产品版本：${path}`
-        : describeCopy(item, copy, path)
+    function reportSharedSkill(item: AgentResource, path: string): void {
+      const productEntry = agentResourcePath(bundle.root, item.entry)
+      if (samePath(path, productEntry) || sameFileContent(path, productEntry)) return
+      const message = `同名 Skill ${item.id} 与产品配套规范内容不一致，已改用产品版本：${path}`
       console.warn(`[product-resources] ${message}`)
       diagnostics.push(message)
       skillNotes.push({ type: 'warning', message, path })
@@ -141,14 +127,14 @@ export async function prepareProductResources(sdk: Sdk, input: ProductResourceIn
 
     for (const item of bundle.skills) {
       for (const skill of base.skills) {
-        if (skill.name === item.id) reportForeignSkill(item, skill.filePath)
+        if (skill.name === item.id) reportSharedSkill(item, skill.filePath)
       }
       // SDK 已经按名字去重，仍须核对被去重的候选，不能只看胜出的那份。
       for (const diagnostic of base.diagnostics) {
         const collision = diagnostic.collision
         if (collision?.resourceType === 'skill' && collision.name === item.id) {
-          reportForeignSkill(item, collision.winnerPath)
-          reportForeignSkill(item, collision.loserPath)
+          reportSharedSkill(item, collision.winnerPath)
+          reportSharedSkill(item, collision.loserPath)
         }
       }
     }
@@ -182,8 +168,13 @@ export async function prepareProductResources(sdk: Sdk, input: ProductResourceIn
       ],
       // 显式给出总线：扩展从这里订阅，宿主推送也走同一实例，不依赖加载结果反取。
       eventBus: input.eventBus,
-      additionalSkillPaths: bundle.skills.filter(item => !item.subAgentOnly)
-        .map(item => agentResourcePath(bundle.root, item.entry)),
+      additionalSkillPaths: [
+        ...bundle.skills.filter(item => !item.subAgentOnly)
+          .map(item => agentResourcePath(bundle.root, item.entry)),
+        ...sharedSkillDirs(input)
+      ],
+      // 用户级全局指令从共享目录只读注入，不改写、不复制。
+      agentsFilesOverride: base => withSharedAgentsFile(base, input.sharedAgentDir),
       extensionFactories: input.extensionFactories,
       skillsOverride
     },
@@ -256,30 +247,37 @@ function safeRealpath(path: string): string {
 }
 
 /**
- * 副本偏离的说明：只列前三个差异文件，既不把整份清单搬进界面，也保留可定位信息。
- * 措辞保持中性：本机可能构建较旧、副本可能较新，运行期无法判断方向。
+ * 副本偏离的说明已随共享目录退役；这里只保留共享来源的只读挂载与同名 Skill 的内容比对。
  */
-function describeCopy(item: AgentResource, copy: AgentResourceCopyClassification, path: string): string {
-  const files = copy.changedFiles.slice(0, 3).join('、')
-  const rest = copy.changedFiles.length > 3 ? ` 等 ${copy.changedFiles.length} 个文件` : ''
-  const detail = files === '' ? '' : `（${files}${rest}）`
-  if (copy.kind === 'modified') {
-    return `部署副本 ${item.id} 在部署后被本地修改或上次同步未完成${detail}；`
-      + `桌面使用产品内置版本，副本仍留给终端 CLI：${path}`
-  }
-  return `部署副本 ${item.id} 与本机产品版本不同${detail}；桌面使用产品内置版本，副本仍留给终端 CLI：${path}`
+function sharedSkillDirs(input: ProductResourceInput): readonly string[] {
+  if (samePath(input.sharedAgentDir, input.agentDir)) return []
+  const directory = join(input.sharedAgentDir, 'skills')
+  try {
+    return statSync(directory).isDirectory() ? [directory] : []
+  } catch { return [] }
 }
 
-/** 只有实质偏离才产诊断：内容与产品一致的副本静默排除，登记过期单独记一条。 */
-function copyIssue(item: AgentResource, copy: AgentResourceCopyClassification, path: string): ResourceIssue | null {
-  if (copy.kind === 'modified') {
-    return { kind: 'copy-modified', componentId: item.id, tool: null, productPath: null, otherPath: path }
-  }
-  if (copy.kind === 'outdated') {
-    return { kind: 'copy-outdated', componentId: item.id, tool: null, productPath: null, otherPath: path }
-  }
-  if (copy.marker === 'inconsistent') {
-    return { kind: 'copy-marker-stale', componentId: item.id, tool: null, productPath: null, otherPath: path }
-  }
-  return null
+/** 用户级全局指令：共享目录根下的 `AGENTS.md` 排在项目文件之前；读不到时跳过，不阻断会话。 */
+function withSharedAgentsFile(
+  base: { agentsFiles: Array<{ path: string; content: string }> },
+  sharedAgentDir: string
+): { agentsFiles: Array<{ path: string; content: string }> } {
+  const path = join(sharedAgentDir, 'AGENTS.md')
+  if (base.agentsFiles.some(entry => samePath(entry.path, path))) return base
+  try {
+    if (!existsSync(path) || statSync(path).size > SHARED_AGENTS_MAX_BYTES) return base
+    const content = readFileSync(path, 'utf8').replace(/^\uFEFF/, '')
+    return { agentsFiles: [{ path, content }, ...base.agentsFiles] }
+  } catch { return base }
+}
+
+function samePath(left: string, right: string): boolean {
+  const a = resolve(left)
+  const b = resolve(right)
+  return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b
+}
+
+/** 同名 Skill 内容比对；读不到就按不同处理，只多一条诊断。 */
+function sameFileContent(left: string, right: string): boolean {
+  try { return readFileSync(left).equals(readFileSync(right)) } catch { return false }
 }

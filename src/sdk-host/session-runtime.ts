@@ -64,6 +64,8 @@ const FAST_MODE_DROPPED_TOOLS: ReadonlySet<string> = new Set([
 interface RuntimeOptions {
   readonly hostId: number
   readonly agentDir: string
+  /** 终端 CLI 的目录，只读加载用户级 `AGENTS.md` 与 `skills/`；不是产品目录。 */
+  readonly sharedAgentDir: string
   /** 主进程根据宿主产物定位的产品资源，不从会话 cwd 发现。 */
   readonly productResourcesDir: string
   /** 桌面记忆配置持有者；服务重建沿用同一总线，推送变更时已加载扩展能收到。 */
@@ -965,7 +967,9 @@ export class SdkSessionRuntime {
           bindingGuard
       ]
       const product = await prepareProductResources(this.sdk, {
-        directory: this.options.productResourcesDir, cwd, agentDir, settingsManager, extensionFactories,
+        directory: this.options.productResourcesDir, cwd, agentDir,
+        sharedAgentDir: this.options.sharedAgentDir,
+        settingsManager, extensionFactories,
         eventBus: this.options.memory.bus, memory: this.options.memory.forMode(target.mode), mode: target.mode
       })
       const services = await this.sdk.createAgentSessionServices({ cwd, agentDir, settingsManager,

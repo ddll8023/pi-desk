@@ -29,7 +29,7 @@ import { BROWSER_AUTO_ATTACH_EVENT } from '../../shared/browser-session-api'
 import type { BrowserAutoAttachPayload } from '../../shared/browser-session-api'
 import { ExtensionUiManager } from './extension-ui-manager'
 import type { ExtensionDialogResponseInput, ExtensionUiSnapshot } from '../../shared/extension-ui-api'
-import { getPiAgentDir, getPiProcessEnvironment } from '../shared/pi-paths'
+import { getPiAgentDir, getPiProcessEnvironment, getSharedPiAgentDir } from '../shared/pi-paths'
 import { agentResourcesDirectory } from '../../shared-process/agent-resources'
 import { managedMemoryConfiguration } from '../../shared-process/memory-runtime'
 import type { MemoryConfigurationProvider } from '../../shared-process/memory-runtime'
@@ -898,6 +898,8 @@ export class SdkHostManager {
       const frame = await this.request(current, {
         version: SDK_HOST_PROTOCOL_VERSION, hostId: current.hostId,
         requestId: randomUUID(), type: 'initialize', agentDir,
+        // 只读来源：宿主从这里加载用户级 AGENTS.md 与 skills，不写入。
+        sharedAgentDir: getSharedPiAgentDir(),
         productResourcesDir: agentResourcesDirectory(entryPath),
         memoryConfiguration
       }, READY_TIMEOUT_MS)

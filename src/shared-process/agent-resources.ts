@@ -1,12 +1,11 @@
 /**
- * 产品 Agent 资源的固定布局、清单读取与副本身份判定。
+ * 产品 Agent 资源的固定布局与清单读取。
  * 只读取主进程指定的产物目录，不执行扩展、不发现用户配置、不创建或迁移记忆数据。
- * 身份由「组件形状」证明：目录与入口同名且组成文件齐备，即认定同一组件的副本；
- * 内容摘要与部署登记只决定诊断措辞，既不证明来源，也不是 Skill 已读证据、用户授权或安全边界。
+ * 清单自带逐文件指纹与组件摘要，读取时重算复核；内容摘要不是 Skill 已读证据、用户授权或安全边界。
  */
 import { createHash } from 'node:crypto'
 import { readFileSync, realpathSync, statSync } from 'node:fs'
-import { basename, dirname, isAbsolute, join, posix, relative, resolve, sep } from 'node:path'
+import { dirname, isAbsolute, join, posix, relative, resolve, sep } from 'node:path'
 
 const RESOURCE_DIRECTORY = 'agent-resources'
 const MANIFEST_NAME = 'bundle.json'
@@ -100,13 +99,6 @@ export function componentDigestOf(fingerprints: Readonly<Record<string, string>>
   return createHash('sha256').update(lines.join('\n')).digest('hex')
 }
 
-/** 目录身份比较不二次解析链接；Windows 盘符与大小写不区分。 */
-function samePath(left: string, right: string): boolean {
-  const a = resolve(left)
-  const b = resolve(right)
-  return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b
-}
-
 /** 运行期只接受已生成指纹的产物清单；源码目录不能作为缺失产物的隐式回退。 */
 export function readAgentResourceBundle(directory: string): AgentResourceBundle {
   if (!isAbsolute(directory)) throw new Error('产品资源目录必须是绝对路径')
@@ -148,112 +140,4 @@ export function readAgentResourceBundle(directory: string): AgentResourceBundle 
     componentDigests[item.id] = digest
   }
   return { root, extensions, skills, memoryEngine: raw.memoryEngine, fingerprints, componentDigests }
-}
-
-/** 部署登记条目：同步流程写入的薄证据，只用于区分「与产品不同」和「部署后被改过」。 */
-export interface AgentDeploymentEntry {
-  readonly componentId: string
-  readonly contentDigest: string
-  /** 同步时写入的目标目录绝对路径；与候选目录不符时该条证据不可用。 */
-  readonly target: string
-  readonly sourceRevision: string | null
-}
-
-const DEPLOYMENT_MANIFEST_NAME = '.pi-desk-deployments.json'
-const MAX_DEPLOYMENT_ENTRIES = 64
-
-/**
- * 读取 agent 目录根下的部署登记。
- * 缺失、损坏、字段越界、指向目录外或同一组件重复登记，一律降级为「没有可用证据」；
- * 本函数不抛错、不改变加载结论，只影响副本身份的措辞精度。
- */
-export function readAgentDeploymentManifest(agentDir: string): ReadonlyMap<string, AgentDeploymentEntry> {
-  const entries = new Map<string, AgentDeploymentEntry>()
-  try {
-    const root = realpathSync(agentDir)
-    const path = join(root, DEPLOYMENT_MANIFEST_NAME)
-    if (statSync(path).size > MAX_MANIFEST_BYTES) return entries
-    const raw: unknown = JSON.parse(readFileSync(path, 'utf8'))
-    if (!record(raw) || raw.schema !== 1 || !Array.isArray(raw.deployments)
-      || raw.deployments.length > MAX_DEPLOYMENT_ENTRIES) return entries
-    const duplicated = new Set<string>()
-    for (const value of raw.deployments) {
-      if (!record(value) || typeof value.componentId !== 'string' || !/^[a-z][a-z0-9-]*$/.test(value.componentId)
-        || typeof value.contentDigest !== 'string' || !/^[a-f0-9]{64}$/.test(value.contentDigest)
-        || !resourceName(value.target)) continue
-      const target = resolve(root, value.target)
-      if (!inside(root, target) || samePath(target, root)) continue
-      if (entries.has(value.componentId)) {
-        duplicated.add(value.componentId)
-        continue
-      }
-      entries.set(value.componentId, {
-        componentId: value.componentId, contentDigest: value.contentDigest, target,
-        sourceRevision: typeof value.sourceRevision === 'string' && value.sourceRevision.length <= 64
-          ? value.sourceRevision : null
-      })
-    }
-    // 同一组件两条登记互相矛盾时，不挑一条采用：按没有证据处理。
-    for (const id of duplicated) entries.delete(id)
-  } catch { /* 没有登记文件不是故障，调用方按内容比对降级处理。 */ }
-  return entries
-}
-
-/** 候选副本的身份结论；除 `product` 外都需要在生产装配时排除。 */
-export type AgentResourceCopyKind = 'product' | 'identical' | 'outdated' | 'modified' | 'foreign'
-
-export interface AgentResourceCopyClassification {
-  readonly kind: AgentResourceCopyKind
-  /** 与当前产品版本不同的组成文件（相对路径）；调用方自行截断展示。 */
-  readonly changedFiles: readonly string[]
-  /** 部署登记与磁盘内容的关系；`none` 表示没有可用证据。 */
-  readonly marker: 'none' | 'consistent' | 'inconsistent'
-}
-
-const FOREIGN_COPY: AgentResourceCopyClassification = { kind: 'foreign', changedFiles: [], marker: 'none' }
-
-/**
- * 按组件形状判定副本身份，再用内容摘要与部署登记区分三种偏离程度。
- * 不变式：形状命中即认定「同一组件的副本」，排除方向永远安全，因此本函数从不建议继续加载；
- * 部署登记只影响措辞——缺失或矛盾时退回到「与本机产品版本不同」，不阻断会话。
- */
-export function classifyAgentResourceCopy(bundle: AgentResourceBundle, item: AgentResource,
-  candidate: string, deployments: ReadonlyMap<string, AgentDeploymentEntry>): AgentResourceCopyClassification {
-  if (!isAbsolute(candidate)) return FOREIGN_COPY
-  try {
-    const actual = realpathSync(candidate)
-    if (samePath(actual, agentResourcePath(bundle.root, item.entry))) {
-      return { kind: 'product', changedFiles: [], marker: 'none' }
-    }
-    if (basename(actual) !== posix.basename(item.entry)) return FOREIGN_COPY
-    const base = dirname(actual)
-    // 目录名也要与入口所属目录同名：同名目录 + 同名入口 + 组成文件齐备才是同一组件的副本。
-    if (basename(base) !== posix.basename(posix.dirname(item.entry))) return FOREIGN_COPY
-    const sourceBase = posix.dirname(item.entry)
-    const digests: Record<string, string> = {}
-    for (const name of item.files) {
-      const path = realpathSync(resolve(base, posix.relative(sourceBase, name)))
-      // 缺一个组成文件就不是完整副本：按外部件处理，交给冲突分级判定。
-      if (!inside(base, path)) return FOREIGN_COPY
-      digests[name] = fingerprint(path)
-    }
-    const changedFiles = item.files.filter(name => digests[name] !== bundle.fingerprints[name])
-    const deployment = deployments.get(item.id)
-    const evidence = deployment !== undefined && samePath(deployment.target, base) ? deployment.contentDigest : null
-    const diskDigest = componentDigestOf(digests, item.files)
-    if (changedFiles.length === 0) {
-      const marker = evidence === null ? 'none' : evidence === diskDigest ? 'consistent' : 'inconsistent'
-      return { kind: 'identical', changedFiles, marker }
-    }
-    if (evidence === null) return { kind: 'outdated', changedFiles, marker: 'none' }
-    // 登记摘要等于磁盘摘要时副本仍是同步写入的原样内容；不等则部署后被动过或同步中断。
-    return evidence === diskDigest
-      ? { kind: 'outdated', changedFiles, marker: 'consistent' }
-      : { kind: 'modified', changedFiles, marker: 'inconsistent' }
-  } catch (error) {
-    // 不存在或路径形状不匹配表示不是这份副本；权限和解析故障不能伪装成不匹配。
-    const code = (error as NodeJS.ErrnoException).code
-    if (code === 'ENOENT' || code === 'ENOTDIR' || code === 'EISDIR') return FOREIGN_COPY
-    throw error
-  }
 }
