@@ -1,4 +1,4 @@
-/** 用户级全局记忆的请求背景与分支控制；提供适用偏好、常驻约定和任务召回，不定位项目、不把召回正文写入会话。 */
+/** 用户级全局记忆的请求背景与分支控制；提供适用偏好、常驻约定和任务召回，按工作目录匹配项目归属、按名称解析检索范围，不把召回正文写入会话。 */
 import { resolve } from 'node:path'
 import type { AgentMessage } from '@earendil-works/pi-agent-core'
 import type { ExtensionContext } from '@earendil-works/pi-coding-agent'
@@ -63,7 +63,7 @@ function normalizeProjectPath(value: string): string {
 }
 
 /** 会话工作目录对应的项目归属：取注册表里最长的路径前缀；未登记返回 null，不按目录名推测。 */
-function resolveProjectId(projects: readonly { id: string; path: string }[], cwd: string): string | null {
+function resolveProjectId(projects: readonly { id: string; name: string; path: string }[], cwd: string): string | null {
   const target = normalizeProjectPath(cwd)
   let matched: { id: string; length: number } | null = null
   for (const project of projects) {
@@ -95,6 +95,22 @@ function newestByFamily(rows: JsonObject[]): { family: string; row: JsonObject }
       || (text(row.date) === text(previous.date) && text(row.id) > text(previous.id))) newest.set(key, row)
   }
   return [...newest.values()].map(row => ({ family: ruleFamily(row), row }))
+}
+
+/**
+ * 会话内指定的检索范围：按 UUID 或项目名称精确匹配注册表，不做前缀、模糊或目录名推测。
+ * 名称比较在不区分大小写的平台折叠大小写；重名与未登记都返回 null，由调用方报错并列出可选项目。
+ */
+export function resolveProjectTarget(
+  projects: readonly { id: string; name: string; path: string }[], value: string
+): { id: string; name: string } | null {
+  const wanted = value.trim()
+  if (!wanted) return null
+  const byId = projects.find(project => project.id === wanted)
+  if (byId !== undefined) return { id: byId.id, name: byId.name }
+  const fold = (item: string): string => (process.platform === 'win32' || process.platform === 'darwin' ? item.toLowerCase() : item)
+  const matches = projects.filter(project => fold(project.name) === fold(wanted))
+  return matches.length === 1 ? { id: matches[0].id, name: matches[0].name } : null
 }
 
 /** 归属优先级：0 当前项目、1 通用（无项目归属的跨项目约定）、2 其他项目；未识别当前项目时全部同级。 */
@@ -133,8 +149,14 @@ export class MemoryRuntime {
   engine: MemoryEngine
   constructor(config: MemoryConfig, engine: MemoryEngine) { this.config = config; this.engine = engine }
 
-  /** 当前会话的项目归属；保存时写入记录，不参与检索范围过滤。 */
+  /** 当前会话的项目归属；保存时写入记录，也用于 `scope=current-project` 的范围解析。 */
   projectId(cwd: string): string | null { return resolveProjectId(this.config.projects, cwd) }
+
+  /** 当前项目的 id 与名称：供状态查询展示与检索范围核对；未登记返回 null，不按目录名推测。 */
+  private currentProject(cwd: string): { id: string; name: string } | null {
+    const id = this.projectId(cwd)
+    return id === null ? null : resolveProjectTarget(this.config.projects, id)
+  }
 
   /**
    * 采纳桌面推送的新配置。
@@ -233,6 +255,8 @@ export class MemoryRuntime {
       unavailable_reason: this.config.unavailableReason, tzdata: this.config.tzdata,
       python_version: this.config.pythonVersion, timezone_version: this.config.timezoneVersion,
       config_revision: this.config.revision, projects_unavailable: this.config.projectsUnavailable,
+      projects: this.config.projects.map(project => ({ id: project.id, name: project.name })),
+      current_project: this.currentProject(state.cwd),
       automatic_domains: this.config.profileDomains, saving: this.saving,
       automatic_recall: { ...(state.recallStatus ?? { status: state.enabled ? 'not_requested' : 'disabled' }),
         resident: state.residentStats ?? { status: state.enabled ? 'not_requested' : 'disabled' } },
@@ -250,6 +274,7 @@ export class MemoryRuntime {
    * 常驻约定：不依赖词法命中，近七天每个 `rule_key` 族按归属分别取最新一条。
    * 只注入当前项目与通用（无项目归属的跨项目约定）两类族；其他项目的族既不注入也不占索引行，
    * 需要时靠任务召回或 memory_rules／memory_search 取得。未识别当前项目时不过滤。
+   * 没有 `rule_key` 的决定与约束不进常驻：族前缀是进入常驻的前提，缺失时只能主动检索。
    * 预算用尽后的候选族降为索引行；本会话只读取一次，超时或失败时返回空，不影响其余背景。
    */
   private async residentSummary(lease: Lease): Promise<string> {
@@ -263,11 +288,13 @@ export class MemoryRuntime {
     const signal = AbortSignal.any([lease.signal, controller.signal])
     const timer = setTimeout(() => controller.abort(), RESIDENT_TIMEOUT)
     try {
-      const data = await this.engine.rules('', 0, 200, signal)
+      const data = await this.engine.rules('', 0, 200, null, signal)
       lease.assert()
       const projectId = this.projectId(state.cwd)
+      // 空 rule_key 的约定不进常驻：族前缀决定能否常驻，缺失时只走主动检索。
       const rows = array(data.rules).map(value => object(value))
-        .filter(row => (text(row.type) === 'decision' || text(row.type) === 'constraint') && text(row.date) >= window)
+        .filter(row => (text(row.type) === 'decision' || text(row.type) === 'constraint')
+          && text(row.date) >= window && text(row.rule_key) !== '')
       // 只收当前项目与通用两类族：其他项目的约定不进常驻，避免无关条目占预算。
       const all = newestByFamily(rows)
       const excludedKeys = new Set(all.filter(item => projectRank(item.row, projectId) === 2)

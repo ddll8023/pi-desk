@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'
 import { Type } from '@earendil-works/pi-ai'
 import type { JsonValue } from '@earendil-works/pi-ai'
 import type { ExtensionAPI, ExtensionToolContext } from '@earendil-works/pi-coding-agent'
-import { CONTROL_TYPE, applicableProfiles } from './context.ts'
+import { CONTROL_TYPE, applicableProfiles, resolveProjectTarget } from './context.ts'
 import type { Lease, MemoryRuntime } from './context.ts'
 import { DOMAINS, array, domain, errorText, object, text } from './engine.ts'
 import type { GeneratedPlan, JsonObject } from './engine.ts'
@@ -16,6 +16,42 @@ const Limit = Type.Optional(Type.Integer({ minimum: 1, maximum: 200 }))
 const Output = Type.Object({ ok: Type.Literal(true), data: Type.Unknown(), error: Type.Null() })
 const ReadHints = { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
 const ACCESS_NOTE = '自动技术统计仅表示主动定向读取结果已准备，不代表模型已接收、理解或采纳；不参与检索排序。'
+/** 检索范围：默认全库；非全库档在引擎侧总连同无归属的通用记录一起返回。 */
+const Scope = Type.Optional(Type.Union([Type.Literal('all'), Type.Literal('current-project'), Type.Literal('project')]))
+const ProjectArg = Type.Optional(Type.String({ minLength: 1, maxLength: 200 }))
+
+/**
+ * 解析本次检索的项目范围：`all` 返回 null（全库），其他档返回注册表内唯一匹配的项目。
+ * 未登记、重名、条件矛盾或注册表不可读都直接报错，不静默降级成全库。
+ */
+function projectScope(runtime: MemoryRuntime, cwd: string, scope: string | undefined, project: string | undefined):
+{ id: string; name: string } | null {
+  const selected = scope ?? 'all'
+  if (selected !== 'current-project' && selected !== 'project') {
+    if (project !== undefined) throw new Error('scope 不是 project 时不接受 project 参数，未扩大检索范围')
+    return null
+  }
+  if (runtime.config.projectsUnavailable) throw new Error('项目注册表不可读，无法按项目收窄检索；去掉 scope 可按全库检索')
+  if (selected === 'current-project') {
+    if (project !== undefined) throw new Error('scope=current-project 不接受 project 参数')
+    const id = runtime.projectId(cwd)
+    if (id === null) throw new Error('当前工作目录未登记为项目，无法按当前项目收窄；可改用 scope=project 并指定项目名')
+    const target = resolveProjectTarget(runtime.config.projects, id)
+    if (target === null) throw new Error('当前项目不在项目注册表内，未按项目收窄')
+    return target
+  }
+  if (project === undefined || project.trim() === '') throw new Error('scope=project 必须同时给出 project（项目名称或 ID）')
+  const target = resolveProjectTarget(runtime.config.projects, project)
+  if (target !== null) return target
+  const names = runtime.config.projects.map(item => item.name).slice(0, 20)
+  throw new Error(`未找到唯一匹配的项目「${project}」；可选：${names.join('、') || '（注册表为空）'}。重名时请改用项目 ID`)
+}
+
+/** 引擎回显的项目范围必须与请求一致，否则不展示已经越界的结果。 */
+function assertScoped(data: JsonObject, project: { id: string; name: string } | null): void {
+  const returned = data.project === undefined || data.project === null ? null : text(data.project, '项目范围')
+  if (returned !== (project?.id ?? null)) throw new Error('检索返回的项目范围与请求不一致，未展示')
+}
 
 function result(data: JsonObject) {
   const value = { ok: true as const, data, error: null }
@@ -140,15 +176,19 @@ export function registerMemoryTools(pi: ExtensionAPI, runtime: MemoryRuntime): v
   })
   pi.registerTool({
     name: 'memory_rules', label: '读取当前有效规则',
-    description: '起草或修改文档、清单、索引、规范，或调整既有约定、判断某项要求是否仍然有效时先查询。读取用户级全局库当前有效决定和约束，支持按 rule_key 主题查询与分页，不绑定或过滤当前项目。历史来源与适用条件不变；摘要需 memory_read 读取全文，不自动修索引。',
-    parameters: Type.Object({ query: Type.Optional(Type.String()), offset: Offset, limit: Limit }, { additionalProperties: false }),
+    description: '起草或修改文档、清单、索引、规范，或调整既有约定、判断某项要求是否仍然有效时先查询。读取用户级全局库当前有效决定和约束，支持按 rule_key 主题查询与分页。默认检索全库；scope 可收窄到当前项目或指定项目，收窄时仍包含无项目归属的通用约定。历史来源与适用条件不变；摘要需 memory_read 读取全文，不自动修索引。',
+    parameters: Type.Object({ query: Type.Optional(Type.String()), offset: Offset, limit: Limit,
+      scope: Scope, project: ProjectArg }, { additionalProperties: false }),
     outputSchema: Output, annotations: ReadHints,
     async execute(_id, params, signal, _onUpdate, ctx) {
       return globalRead(ctx, signal, async lease => {
         const [offset, limit] = boundedPage(params.offset, params.limit)
-        const data = await runtime.engine.rules(params.query ?? '', offset, limit, lease.signal)
+        const target = projectScope(runtime, lease.state.cwd, params.scope, params.project)
+        const data = await runtime.engine.rules(params.query ?? '', offset, limit, target?.id ?? null, lease.signal)
         if (data.memory_scope !== 'global') throw new Error('规则返回的检索范围不一致，未展示')
-        return { ...data, rules: array(data.rules).map(value => {
+        assertScoped(data, target)
+        return { ...data, requested_scope: { memory_scope: 'global', scope: params.scope ?? 'all', project: target },
+          rules: array(data.rules).map(value => {
           const row = object(value)
           if (row.status !== 'active') {
             throw new Error('规则生命周期无效，未展示')
@@ -162,26 +202,33 @@ export function registerMemoryTools(pi: ExtensionAPI, runtime: MemoryRuntime): v
   })
   pi.registerTool({
     name: 'memory_search', label: '按任务检索全局记忆',
-    description: '开始新任务、需沿用先前决定或偏好、或同一错误反复出现时先检索。从用户级全局索引按任务关键词查询日记，不绑定项目。records 查询全部日记，recent 限近期，historical/month 查询月摘要。支持分页；摘要需 memory_read 读取全文，不自动修复索引或扩大明确时间范围。',
+    description: '开始新任务、需沿用先前决定或偏好、或同一错误反复出现时先检索。从用户级全局索引按任务关键词查询日记。默认 mode=auto 按时间分层：近窗口内的日记参与检索，更早的月份优先用月摘要代表，缺摘要时回退该月最多两条日记；每条结果带 layer，返回体带 missing_summaries 列出尚未归档的月份。records 才是全历史检索。scope 可收窄到当前项目或指定项目，收窄时仍包含无项目归属的通用约定。recent 限近期日记，historical/month 查询月摘要。支持分页；摘要需 memory_read 读取全文，不自动修复索引或扩大明确时间范围。',
     parameters: Type.Object({ query: Type.String({ minLength: 1 }),
-      mode: Type.Optional(Type.Union([Type.Literal('records'), Type.Literal('recent'), Type.Literal('historical'), Type.Literal('month')])),
-      month: Type.Optional(Type.String({ pattern: '^\\d{4}-(0[1-9]|1[0-2])$' })), offset: Offset, limit: Limit }, { additionalProperties: false }),
+      mode: Type.Optional(Type.Union([Type.Literal('auto'), Type.Literal('records'), Type.Literal('recent'), Type.Literal('historical'), Type.Literal('month')])),
+      month: Type.Optional(Type.String({ pattern: '^\\d{4}-(0[1-9]|1[0-2])$' })), offset: Offset, limit: Limit,
+      scope: Scope, project: ProjectArg }, { additionalProperties: false }),
     outputSchema: Output, annotations: ReadHints,
     async execute(_id, params, signal, _onUpdate, ctx) {
       return globalRead(ctx, signal, async lease => {
         const [offset, limit] = boundedPage(params.offset, params.limit)
-        const mode = params.mode ?? 'records'
-        const data = await runtime.engine.search(params.query, mode, params.month, offset, limit, lease.signal)
+        const mode = params.mode ?? 'auto'
+        const target = projectScope(runtime, lease.state.cwd, params.scope, params.project)
+        const data = await runtime.engine.search(params.query, mode, params.month, offset, limit, target?.id ?? null, lease.signal)
         if (data.memory_scope !== 'global' || data.mode !== mode) throw new Error('搜索返回的范围不一致，未展示')
-        const summary = mode === 'historical' || mode === 'month'
+        assertScoped(data, target)
+        const summaryOnly = mode === 'historical' || mode === 'month'
         const matches = array(data.matches).map(value => {
           const row = object(value)
-          if (row.kind !== (summary ? 'summary' : 'record')) throw new Error('搜索返回的记录类型不一致，未展示')
+          const isSummary = row.kind === 'summary'
+          // auto 模式会同时命中日记与月摘要，其余模式仍要求单一记录类型。
+          if (row.kind !== 'record' && row.kind !== 'summary') throw new Error('搜索返回的记录类型不一致，未展示')
+          if (summaryOnly !== isSummary && mode !== 'auto') throw new Error('搜索返回的记录类型不一致，未展示')
           return { ...row, source: { store: runtime.engine.store, command: 'recall', file: row.file_path, source_project: row.project_id ?? null,
-            ...(summary ? { month: row.month, source_record_ids: row.source_record_ids } : { id: row.id, date: row.date }) } }
+            ...(isSummary ? { month: row.month, source_record_ids: row.source_record_ids } : { id: row.id, date: row.date }) } }
         })
         return { ...data, matches,
-          requested_scope: { memory_scope: 'global', mode, month: params.month ?? null, query: params.query },
+          requested_scope: { memory_scope: 'global', mode, month: params.month ?? null, query: params.query,
+            scope: params.scope ?? 'all', project: target },
           has_more_matches: data.has_more === true }
       })
     }

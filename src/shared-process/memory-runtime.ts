@@ -3,9 +3,10 @@ import { readFileSync, realpathSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 
-/** 项目注册表的最小映射：只用于给记忆记录标明归属，不参与记忆检索范围。 */
+/** 项目注册表的最小映射：`path` 用于匹配记录归属，`name` 用于会话内选择检索范围。 */
 export interface MemoryProject {
   readonly id: string
+  readonly name: string
   readonly path: string
 }
 export interface MemoryHostConfiguration {
@@ -21,9 +22,9 @@ export interface MemoryHostConfiguration {
   readonly tzdata: string | null
   readonly pythonVersion: string | null
   readonly timezoneVersion: string | null
-  /** 项目注册表的 id 与路径；扩展按会话工作目录匹配归属，不根据目录名推测。 */
+  /** 项目注册表的 id、名称与路径；扩展按工作目录匹配归属，按名称选定检索范围，不推断目录名。 */
   readonly projects: readonly MemoryProject[]
-  /** 项目注册表本次读取失败：记忆仍可写入，但记录不带归属。 */
+  /** 项目注册表本次读取失败：记忆仍可写入，但记录不带归属，也不能按项目收窄。 */
   readonly projectsUnavailable: boolean
   readonly error: string | null
 }
@@ -57,7 +58,8 @@ export function isMemoryHostConfiguration(value: unknown): value is MemoryHostCo
     && (!value.available || value.tzdata !== null)
     && nullableText(value.pythonVersion) && nullableText(value.timezoneVersion) && nullableText(value.error)
     && Array.isArray(value.projects) && value.projects.every(project => record(project)
-      && Object.keys(project).length === 2 && typeof project.id === 'string' && project.id !== ''
+      && Object.keys(project).length === 3 && typeof project.id === 'string' && project.id !== ''
+      && typeof project.name === 'string' && project.name !== ''
       && typeof project.path === 'string' && isAbsolute(project.path))
     && typeof value.projectsUnavailable === 'boolean'
     && Object.keys(value).every(key => ['version', 'revision', 'enabled', 'disabledByMode', 'available', 'store', 'engine', 'python',

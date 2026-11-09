@@ -8,7 +8,7 @@ import { fingerprint, missing, readText } from './files.ts'
 
 export const DOMAINS = ['communication', 'coding', 'learning', 'workflow'] as const
 export type Domain = typeof DOMAINS[number]
-export type SearchMode = 'records' | 'recent' | 'historical' | 'month'
+export type SearchMode = 'auto' | 'records' | 'recent' | 'historical' | 'month'
 export type JsonObject = Record<string, unknown>
 export interface MemoryConfig {
   python: string
@@ -30,8 +30,8 @@ export interface MemoryConfig {
   tzdata: string | null
   pythonVersion: string | null
   timezoneVersion: string | null
-  /** 项目注册表映射；独立 CLI 为空，保存时项目归属留空。 */
-  projects: readonly { id: string; path: string }[]
+  /** 项目注册表映射；独立 CLI 为空，保存时项目归属留空，也不能按项目收窄。 */
+  projects: readonly { id: string; name: string; path: string }[]
   /** 桌面项目注册表本次读取失败；仅用于状态报告，不改变检索范围。 */
   projectsUnavailable: boolean
 }
@@ -313,14 +313,18 @@ export class MemoryEngine {
   profiles(selected: Domain, signal?: AbortSignal): Promise<JsonObject> {
     return this.run(['profiles', '--domain', selected], undefined, signal)
   }
-  rules(query: string, offset: number, limit: number, signal?: AbortSignal): Promise<JsonObject> {
-    return this.run(['rules', '--query', query, '--offset', String(offset), '--limit', String(limit)], undefined, signal)
+  rules(query: string, offset: number, limit: number, project: string | null, signal?: AbortSignal): Promise<JsonObject> {
+    const args = ['rules', '--query', query, '--offset', String(offset), '--limit', String(limit)]
+    if (project !== null) args.push('--project', project)
+    return this.run(args, undefined, signal)
   }
   /** 全局召回走独立协议，旧 search 的近期默认不随部署前后的工具定义悄悄改变。 */
   search(query: string, mode: SearchMode, month: string | undefined,
-    offset: number, limit: number, signal?: AbortSignal): Promise<JsonObject> {
-    if (!['records', 'recent', 'historical', 'month'].includes(mode)) throw new Error('检索模式无效')
+    offset: number, limit: number, project: string | null, signal?: AbortSignal): Promise<JsonObject> {
+    if (!['auto', 'records', 'recent', 'historical', 'month'].includes(mode)) throw new Error('检索模式无效')
     const args = ['recall', '--query', query, '--mode', mode, '--offset', String(offset), '--limit', String(limit)]
+    // 收窄范围时明确下发项目：引擎把无归属的通用记录一并保留，空值表示不收窄。
+    if (project !== null) args.push('--project', project)
     if (mode === 'month') {
       if (!month || !/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) throw new Error('按月搜索必须明确 YYYY-MM')
       args.push('--month', month)

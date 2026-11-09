@@ -17,9 +17,9 @@ export interface MemoryHostConfiguration {
   tzdata: string | null
   pythonVersion: string | null
   timezoneVersion: string | null
-  /** 项目注册表的 id 与路径；只用于给记录标明归属。 */
-  projects: readonly { id: string; path: string }[]
-  /** 项目注册表读取失败：记忆仍可写入，但记录不带归属。 */
+  /** 项目注册表的 id、名称与路径；`path` 用于匹配归属，`name` 用于选定检索范围。 */
+  projects: readonly { id: string; name: string; path: string }[]
+  /** 项目注册表读取失败：记忆仍可写入，但记录不带归属，也不能按项目收窄。 */
   projectsUnavailable: boolean
   error: string | null
 }
@@ -28,14 +28,15 @@ export function parseHostConfiguration(value: unknown): MemoryHostConfiguration 
   const row = value as Record<string, unknown>
   const path = (name: string): boolean => typeof row[name] === 'string' && isAbsolute(row[name])
   const nullableText = (name: string): boolean => row[name] === null || typeof row[name] === 'string'
-  const projects = (): { id: string; path: string }[] => {
+  const projects = (): { id: string; name: string; path: string }[] => {
     if (!Array.isArray(row.projects)) throw new Error('桌面记忆配置字段无效')
     return row.projects.map(project => {
       if (!project || typeof project !== 'object' || Array.isArray(project)) throw new Error('桌面记忆配置字段无效')
       const entry = project as Record<string, unknown>
-      if (Object.keys(entry).length !== 2 || typeof entry.id !== 'string' || entry.id === ''
+      if (Object.keys(entry).length !== 3 || typeof entry.id !== 'string' || entry.id === ''
+        || typeof entry.name !== 'string' || entry.name === ''
         || typeof entry.path !== 'string' || !isAbsolute(entry.path)) throw new Error('桌面记忆配置字段无效')
-      return { id: entry.id, path: entry.path }
+      return { id: entry.id, name: entry.name, path: entry.path }
     })
   }
   if (row.version !== 1 || typeof row.revision !== 'number' || !Number.isSafeInteger(row.revision) || row.revision < 0

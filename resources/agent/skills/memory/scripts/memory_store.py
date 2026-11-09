@@ -3,6 +3,8 @@
 
 权威写入经过具体计划与确认，访问统计独立持久化。旧日记的来源标签仅作历史信息；
 读取不自动迁移、改写旧正文、修复索引或把局部规则提升为通用要求。
+检索默认覆盖全库；指定项目范围时只限定来源项目，无归属记录承载跨项目通用约定，仍参与检索。
+时间上默认分层：近窗口内的日记参与检索，更早的月份优先用月摘要代表，缺摘要时回退该月限量日记。
 """
 import argparse, contextlib, datetime as dt, hashlib, json, math, os, re, secrets, shutil, stat, sys, time, unicodedata, uuid
 from collections import Counter
@@ -613,8 +615,13 @@ def error_recall(root: Path, data: dict) -> dict:
 
 
 def indexed_recall(root: Path, query: str, mode: str = 'records',
-                   month: str | None = None, offset: int = 0, limit: int = 50, allow_empty: bool = False) -> dict:
-    """从全局派生索引执行词法召回；content 截断为前 200 字摘要，完整正文需二次调用 read。"""
+                   month: str | None = None, offset: int = 0, limit: int = 50, allow_empty: bool = False,
+                   project: str | None = None) -> dict:
+    """从全局派生索引执行词法召回；content 截断为前 200 字摘要，完整正文需二次调用 read。
+
+    project 为注册表 UUID 时只收窄来源项目，无归属记录（通用约定与未归因历史）仍保留；
+    收窄在排序前完成，否则顺序靠前的外项目条目会占满分页名额。
+    """
     expect(mode in ('records','recent','historical','month'),'非法检索模式')
     expect(offset>=0 and 1<=limit<=200,'offset/limit 非法；每批最多 200 条')
     expect(allow_empty or bool(query.strip()),'检索问题不能为空')
@@ -628,6 +635,9 @@ def indexed_recall(root: Path, query: str, mode: str = 'records',
         today=dt.datetime.now(zone).date();first=(today-dt.timedelta(days=window-1)).isoformat()
         docs=[doc for doc in docs if first<=doc['date']<=today.isoformat()]
     if mode=='month':docs=[doc for doc in docs if doc['month']==month]
+    if project is not None:
+        expect(PROJECT_ID_RE.fullmatch(project) is not None,'项目范围须为注册表 UUID')
+        docs=[doc for doc in docs if doc.get('project_id') in (project,None)]
     ranked=rank_documents(docs,query) if query.strip() else [(doc,0.0,[]) for doc in sorted(docs,key=lambda doc:doc['key'])]
     page=ranked[offset:offset+limit];rows=hydrate_documents(root,index,[item[0] for item in page],verified)
     def truncate_content(content: str, limit: int = 200) -> tuple[str, bool]:
@@ -641,10 +651,71 @@ def indexed_recall(root: Path, query: str, mode: str = 'records',
     scope={'records':'all_daily','recent':'recent_daily','historical':'historical_month_summaries','month':'monthly_summary'}[mode]
     missing=mode=='month' and f'monthly/{month[:4]}/{month}.md' not in index['sources']
     return {'status':'MONTHLY_SUMMARY_MISSING' if missing else 'OK','scope':scope,'memory_scope':'global',
-            'mode':mode,'month':month,'query':query,'index_version':index['fingerprint'],'coverage':'indexed_sources',
+            'mode':mode,'month':month,'query':query,'project':project,
+            'index_version':index['fingerprint'],'coverage':'indexed_sources',
             'matches':matches,'total_matches':len(ranked),'offset':offset,'limit':limit,
             'has_more':offset+limit<len(ranked),'next_offset':offset+limit if offset+limit<len(ranked) else None,
             'no_match':not ranked,'note':'仅词法相关性；历史来源与状态不代表当前适用或事实已核实；摘要需 memory_read 读取全文'}
+
+
+def layered_recall(root: Path, query: str, offset: int = 0, limit: int = 50,
+                   project: str | None = None) -> dict:
+    """按时间分层召回：近期窗口内的日记直接参与排序，更早的月份优先用月摘要代表。
+
+    候选集先合并后一次排序，分数才具有可比性；配额在排序之后施加。
+    缺摘要的月份回退该月日记，每月最多两条，并在 missing_summaries 里报出
+    仍未归档的月份，由用户自行决定何时生成月摘要。
+    """
+    expect(offset>=0 and 1<=limit<=200,'offset/limit 非法；每批最多 200 条')
+    expect(bool(query.strip()),'检索问题不能为空')
+    manifest,zone=load(root);index,verified=load_search_index(root)
+    window=manifest['recent_window_days'];expect(1<=window<=366,'recent_window_days 超出合理范围')
+    today=dt.datetime.now(zone).date();cutoff=(today-dt.timedelta(days=window-1)).isoformat()
+    records=[doc for doc in index['documents'] if doc['kind']=='record' and doc['status']=='active']
+    summaries=[doc for doc in index['documents'] if doc['kind']=='summary']
+    if project is not None:
+        expect(PROJECT_ID_RE.fullmatch(project) is not None,'项目范围须为注册表 UUID')
+        records=[doc for doc in records if doc.get('project_id') in (project,None)]
+        summaries=[doc for doc in summaries if doc.get('project_id') in (project,None)]
+    summary_months={doc['month'] for doc in summaries}
+    recent=[doc for doc in records if doc['date']>=cutoff]
+    older=[doc for doc in records if doc['date']<cutoff]
+    # 近窗口内的日记与远期代表同池排序：分池排序会让 BM25 分数不可比。
+    ranked=rank_documents(recent+older+summaries,query)
+    kept=[];fallback_months=Counter();summary_seen=Counter()
+    for doc,score,hits in ranked:
+        if doc['kind']=='summary':
+            if summary_seen[doc['month']]>=1:continue
+            summary_seen[doc['month']]+=1;layer='summary'
+        elif doc['date']>=cutoff:
+            layer='recent'
+        else:
+            month=doc['date'][:7]
+            if month in summary_months:continue
+            if fallback_months[month]>=2:continue
+            fallback_months[month]+=1;layer='fallback'
+        kept.append((doc,score,hits,layer))
+    page=kept[offset:offset+limit]
+    rows=hydrate_documents(root,index,[item[0] for item in page],verified)
+    def truncate_content(content: str, limit: int = 200) -> tuple[str, bool]:
+        if len(content) <= limit: return content, False
+        return content[:limit] + '...', True
+    matches=[]
+    for row,item in zip(rows,page):
+        truncated, was_truncated = truncate_content(row['content'])
+        matches.append({**row, 'content': truncated, 'content_truncated': was_truncated,
+                        'layer':item[3], 'score':round(item[1],6),'matched_terms':item[2]})
+    layers=Counter(item[3] for item in kept)
+    older_months={doc['date'][:7] for doc in older}
+    missing=sorted(month for month in older_months if month not in summary_months)[:12]
+    return {'status':'OK','scope':'layered_recent_and_monthly','memory_scope':'global',
+            'mode':'auto','query':query,'project':project,'window_days':window,'cutoff':cutoff,
+            'index_version':index['fingerprint'],'coverage':'indexed_sources',
+            'matches':matches,'total_matches':len(kept),'offset':offset,'limit':limit,
+            'has_more':offset+limit<len(kept),'next_offset':offset+limit if offset+limit<len(kept) else None,
+            'no_match':not kept,'missing_summaries':missing,
+            'layers':{'recent':layers['recent'],'summary':layers['summary'],'fallback':layers['fallback']},
+            'note':'近窗口内查日记，更早月份优先用月摘要；缺摘要的月份回退该月最多两条日记。仅词法相关性，历史来源不代表当前适用'}
 
 
 BACKGROUND_POLICY = 'lexical-global-background-v2'
@@ -947,11 +1018,17 @@ def monthly_source(root: Path, month: str, offset: int = 0, limit: int = 50, clo
                         'source_record_ids':r.get('source_record_ids',[])} for r in page]}
 
 
-def active_rules(root: Path, query: str = '', offset: int = 0, limit: int = 50) -> dict:
-    """查询全局库有效规则；历史来源保持原命名空间，不因同键而合并。"""
+def active_rules(root: Path, query: str = '', offset: int = 0, limit: int = 50, project: str | None = None) -> dict:
+    """查询全局库有效规则；历史来源保持原命名空间，不因同键而合并。
+
+    project 为注册表 UUID 时只收窄来源项目，无归属的通用约定仍保留；筛选先于排序与分页。
+    """
     index,verified=load_search_index(root)
     expect(offset>=0 and 1<=limit<=200,'offset/limit 非法；每批最多 200 条')
     selected=[doc for doc in index['documents'] if doc['kind']=='record' and is_active_rule(doc)]
+    if project is not None:
+        expect(PROJECT_ID_RE.fullmatch(project) is not None,'项目范围须为注册表 UUID')
+        selected=[doc for doc in selected if doc.get('project_id') in (project,None)]
     # 无查询词时按日期倒序优先：limit 截断必须保留最新约定，不能因项目与键的分组顺序漏掉近期规则。
     if query.strip():selected=[item[0] for item in rank_documents(selected,query)]
     else:selected.sort(key=lambda doc:(doc['date'],doc.get('project_id') or '',doc.get('rule_key',''),doc['id']),reverse=True)
@@ -967,7 +1044,7 @@ def active_rules(root: Path, query: str = '', offset: int = 0, limit: int = 50) 
                       'type':r['type'],'topic':r['topic'],'content':truncated,'content_truncated':was_truncated,
                       'source_record_ids':r.get('source_record_ids',[]),
                       'supersedes':r.get('supersedes',[])})
-    return {'memory_scope':'global','total_rules':len(selected),'offset':offset,'limit':limit,
+    return {'memory_scope':'global','project':project,'total_rules':len(selected),'offset':offset,'limit':limit,
             'index_version':index['fingerprint'],'coverage':'indexed_sources',
             'has_more':offset+limit<len(selected),
             'next_offset':offset+len(page) if offset+limit<len(selected) else None,
@@ -1201,10 +1278,10 @@ def main() -> None:
     pp=sub.add_parser('plan');pp.add_argument('operation',choices=['save','delete','profile','month']);pp.add_argument('--input',required=True)
     cm=sub.add_parser('commit');cm.add_argument('--plan-id',required=True);cm.add_argument('--approved',action='store_true')
     sr=sub.add_parser('search');sr.add_argument('--query',default='');sr.add_argument('--month');sr.add_argument('--all-dates',action='store_true');sr.add_argument('--historical',action='store_true');sr.add_argument('--limit',type=int,default=50)
-    recall=sub.add_parser('recall');recall.add_argument('--query',required=True);recall.add_argument('--mode',choices=['records','recent','historical','month'],default='records');recall.add_argument('--month');recall.add_argument('--offset',type=int,default=0);recall.add_argument('--limit',type=int,default=50)
+    recall=sub.add_parser('recall');recall.add_argument('--query',required=True);recall.add_argument('--mode',choices=['auto','records','recent','historical','month'],default='auto');recall.add_argument('--month');recall.add_argument('--offset',type=int,default=0);recall.add_argument('--limit',type=int,default=50);recall.add_argument('--project',default=None)
     background=sub.add_parser('recall-background');background.add_argument('--input',required=True,choices=['-'])
     error=sub.add_parser('error-recall');error.add_argument('--input',required=True,choices=['-'])
-    rules=sub.add_parser('rules');rules.add_argument('--query',default='');rules.add_argument('--offset',type=int,default=0);rules.add_argument('--limit',type=int,default=50)
+    rules=sub.add_parser('rules');rules.add_argument('--query',default='');rules.add_argument('--offset',type=int,default=0);rules.add_argument('--limit',type=int,default=50);rules.add_argument('--project',default=None)
     ms=sub.add_parser('month-source');ms.add_argument('month');ms.add_argument('--offset',type=int,default=0);ms.add_argument('--limit',type=int,default=50);ms.add_argument('--closed-today-confirmed',action='store_true')
     rr=sub.add_parser('read');rr.add_argument('ids',nargs='+')
     ac=sub.add_parser('access-record');ac.add_argument('--input',required=True,choices=['-'])
@@ -1267,7 +1344,12 @@ def main() -> None:
             expect(args.approved,'提交必须显式 --approved；扩展和 CLI 都不得省略这个内部标记')
             with locking(root,True):result=commit(root,args.plan_id)
         elif args.cmd=='recall':
-            with locking(root):result=indexed_recall(root,args.query,args.mode,args.month,args.offset,args.limit)
+            with locking(root):
+                if args.mode=='auto':
+                    expect(args.month is None,'auto 模式不接受 month')
+                    result=layered_recall(root,args.query,args.offset,args.limit,args.project)
+                else:
+                    result=indexed_recall(root,args.query,args.mode,args.month,args.offset,args.limit,project=args.project)
         elif args.cmd=='recall-background':
             raw=sys.stdin.buffer.read(65_537)
             expect(len(raw)<=65_536,'自动召回输入超过上限')
@@ -1281,7 +1363,7 @@ def main() -> None:
         elif args.cmd=='search':
             with locking(root):result=cmd_search(root,args)
         elif args.cmd=='rules':
-            with locking(root):result=active_rules(root,args.query,args.offset,args.limit)
+            with locking(root):result=active_rules(root,args.query,args.offset,args.limit,args.project)
         elif args.cmd=='month-source':
             with locking(root):result=monthly_source(root,args.month,args.offset,args.limit,args.closed_today_confirmed)
         elif args.cmd=='read':

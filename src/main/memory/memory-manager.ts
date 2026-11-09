@@ -60,11 +60,14 @@ export class MemoryManager {
     return managedMemoryConfiguration(hostEntry, state.enabled, this.revision, registry.projects, registry.unavailable)
   }
 
-  /** 项目映射只用于记录归属；注册表读不到时置标记，记忆仍可用，只是不标项目。 */
-  private async projects(): Promise<{ projects: { id: string; path: string }[]; unavailable: boolean }> {
+  /**
+   * 项目映射用于记录归属与按项目收窄检索：`path` 供工作目录匹配归属，`name` 供会话内选择检索范围。
+   * 注册表读不到时置标记，记忆仍可用，只是不标项目、不能按项目收窄。
+   */
+  private async projects(): Promise<{ projects: { id: string; name: string; path: string }[]; unavailable: boolean }> {
     try {
       const list = await this.options.store.list()
-      return { projects: list.projects.map(project => ({ id: project.id, path: project.path })), unavailable: false }
+      return { projects: list.projects.map(project => ({ id: project.id, name: project.name, path: project.path })), unavailable: false }
     } catch { return { projects: [], unavailable: true } }
   }
 

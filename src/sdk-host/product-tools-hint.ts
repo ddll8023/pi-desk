@@ -15,6 +15,7 @@ export const PRODUCT_TOOLS_SECTION_KEY = 'product-tools'
 const MEMORY_SECTION = `记忆工具（memory_search / memory_rules / memory_read）是背景来源，按需主动查询，不等用户开口：
 - 新任务涉及设计取舍、用户偏好、既有约定或反复出现的问题时先查；
 - 需要知道某个现有实现为什么这样做时查 rules；
+- 只有用户明确指向某个项目时才传 scope（current-project 或 project + 项目名），其余不传，默认全库；
 - 查到的摘要需要完整正文时按记录 ID 读原文。
 背景中已注入的约定优先于通用习惯与个人偏好：产出文档、清单、索引、规范前，先用 memory_rules 按 rule_key 核对该族最新约定。`
 

@@ -9,6 +9,8 @@
 ```text
 status
 recall --query "任务主题" --offset 0 --limit 50
+recall --mode auto --project <UUID> --query "项目内的任务主题"
+recall --mode records --query "需要远期细节的旧主题"
 recall --mode recent --query "近期工作"
 recall --mode historical --query "已有月摘要主题"
 recall --mode month --month YYYY-MM --query "已有月摘要主题"
@@ -20,16 +22,16 @@ month-source YYYY-MM --offset 0 --limit 50
 months
 ```
 
-- 不接受 `--project`、项目登记计划或项目绑定参数。项目名称可作为普通主题关键词，不改变存储或隐式过滤。
+- `recall` 与 `rules` 接受 `--project <UUID>`：只收窄来源项目，无归属的通用记录仍返回；UUID 须来自桌面项目注册表，独立 CLI 没有注册表时不传。不接受项目登记计划或项目绑定参数，项目名称也不能当作范围参数（只作普通主题关键词）。
 - `status` 返回全局库、manifest、日记和画像数量及统计状态，不创建或修复文件。
-- `recall` 默认查询全部日记；recent 明确限近期，historical 仅查已有月摘要，month 必须明确月份。旧 `search` 保留近期默认及 `--all-dates`，不与 recall 默认范围混淆。
+- `recall` 默认 `--mode auto`：按时间分层——近 `recent_window_days` 天的日记直接参与排序，更早的月份优先用月摘要代表，缺摘要的月份回退该月最多两条日记；返回体带 `layer`、`cutoff`、`window_days`、`layers` 与 `missing_summaries`。`records` 才是全历史，recent 明确限近期，historical 仅查已有月摘要，month 必须明确月份且不接受与 auto 混用。旧 `search` 保留近期默认及 `--all-dates`，不与 recall 默认范围混淆。
 - `recall`、`rules` 返回摘要；需全文时按真实 ID 调用 `read`。历史来源和有效状态不证明事实正确或当前适用。
 - 分页使用 `offset`、`limit` 和返回的 `has_more`、`next_offset`，每批 1..200；跨页核对 `index_version`。
 - `read` 按 1..50 个真实日记 ID 定位原文并核对版本，不扫描未索引历史。CLI read 本身不记录访问统计。
 - `profiles` 按领域返回原始条目，包括历史作用域；自动背景及扩展工具只采纳全局或适用领域画像，不升级旧项目画像。
 - `month-source` 返回指定月份的全部日记及真实来源，未完结月份拒绝；最后一天经用户确认结束可使用 `--closed-today-confirmed`。
 
-全局接口通过 `memory_scope:"global"` 明确范围。旧条目可能携带 `project_id` 或 `source_project` 作为来源信息，这些不是输入参数或当前项目绑定。
+全局接口通过 `memory_scope:"global"` 明确范围；`project` 回显本次收窄的来源项目，为 null 表示未收窄。旧条目可能携带 `project_id` 或 `source_project` 作为来源信息，只作来源标注，不构成当前项目绑定。
 
 ## 自动背景内部协议
 
