@@ -3,10 +3,11 @@
  *
  * 只由获准的构建流程调用，不执行扩展、Python 或用户配置，不安装依赖、初始化记忆或重载会话。
  * 不合并或转译扩展模块，保留 import.meta.url、相对引擎路径和门禁加载指纹的语义。
- * 只写本次源文件和生成清单，不删除目录；历史残留不作为加载来源。
+ * 只写本次源文件和生成清单，并删除产物目录中本次未声明的旧文件：历史残留会让「拷贝产物目录」
+ * 把已从源删除的模块带回部署副本，使副本组成与当前版本不一致。
  */
 import { createHash } from 'node:crypto'
-import { mkdir, readFile, readdir, realpath, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, readdir, realpath, rm, rmdir, writeFile } from 'node:fs/promises'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -51,6 +52,43 @@ function requireEntry(value, files) {
   }
 }
 
+/** 产物目录里现有的普通文件；目录不存在时返回空集合，不把首次构建当成故障。 */
+async function collectExisting(directory, files = []) {
+  let entries
+  try {
+    entries = await readdir(directory, { withFileTypes: true })
+  } catch (error) {
+    if (error.code === 'ENOENT') return files
+    throw error
+  }
+  for (const entry of entries) {
+    const path = join(directory, entry.name)
+    if (entry.isDirectory()) await collectExisting(path, files)
+    else if (entry.isFile()) files.push(path)
+  }
+  return files
+}
+
+/** 删除清完旧文件后剩下的空目录；非空目录保持原样。 */
+async function pruneEmptyDirectories(directory) {
+  let entries
+  try {
+    entries = await readdir(directory, { withFileTypes: true })
+  } catch (error) {
+    if (error.code === 'ENOENT') return
+    throw error
+  }
+  for (const entry of entries) {
+    if (entry.isDirectory()) await pruneEmptyDirectories(join(directory, entry.name))
+  }
+  if (directory === outputRoot) return
+  try {
+    await rmdir(directory)
+  } catch (error) {
+    if (error.code !== 'ENOTEMPTY' && error.code !== 'ENOENT') throw error
+  }
+}
+
 async function stage() {
   const source = await realpath(sourceRoot)
   const files = new Map()
@@ -72,6 +110,15 @@ async function stage() {
     for (const name of item.files) requireEntry(name, files)
   }
   requireEntry(bundle.memoryEngine, files)
+  // 先清掉本次未声明的旧文件：夹在两次构建之间的产物目录不应同时存在两个版本的组成。
+  const declared = new Set([...files.keys(), 'bundle.json'])
+  let removed = 0
+  for (const path of await collectExisting(outputRoot)) {
+    if (declared.has(relative(outputRoot, path).split(sep).join('/'))) continue
+    await rm(path, { force: true })
+    removed += 1
+  }
+  await pruneEmptyDirectories(outputRoot)
   const fingerprints = {}
   for (const [name, bytes] of [...files].sort(([left], [right]) => left.localeCompare(right))) {
     fingerprints[name] = fingerprint(bytes)
@@ -87,7 +134,7 @@ async function stage() {
   // 清单最后写入；部分暂存失败时，运行期不能把混合版本误当作完整资源。
   await writeFile(join(outputRoot, 'bundle.json'),
     `${JSON.stringify({ ...bundle, fingerprints, componentDigests }, null, 2)}\n`)
-  console.log(`产品 Agent 资源已暂存：${outputRoot}`)
+  console.log(`产品 Agent 资源已暂存：${outputRoot}（清理旧文件 ${removed} 个）`)
 }
 
 await stage()

@@ -312,13 +312,24 @@ test('副本身份：登记与磁盘不一致时按部署后被修改处理', ()
   }
 })
 
-test('副本身份：组成文件不齐、入口形状不符或相对路径判为 foreign', () => {
+test('副本身份：缺组成文件按版本不同处理，不升为外来件', () => {
   const product = createDemoBundle()
   const partial = createTempRoot('pi-desk-partial-')
   try {
     writeFile(partial.dir, DEMO_FILES[0], DEMO_CONTENT[DEMO_FILES[0]] ?? '')
-    assert.equal(classifyAgentResourceCopy(product.bundle, demoResource(),
-      join(partial.dir, DEMO_FILES[0]), new Map()).kind, 'foreign')
+    assert.deepEqual(classifyAgentResourceCopy(product.bundle, demoResource(),
+      join(partial.dir, DEMO_FILES[0]), new Map()),
+    { kind: 'outdated', changedFiles: [DEMO_FILES[1]], marker: 'none' })
+  } finally {
+    partial.cleanup()
+    product.cleanup()
+  }
+})
+
+test('副本身份：入口形状不符或相对路径判为 foreign', () => {
+  const product = createDemoBundle()
+  const partial = createTempRoot('pi-desk-partial-')
+  try {
     assert.equal(classifyAgentResourceCopy(product.bundle, demoResource(),
       join(partial.dir, 'missing', 'index.ts'), new Map()).kind, 'foreign')
     assert.equal(classifyAgentResourceCopy(product.bundle, demoResource(), DEMO_FILES[0], new Map()).kind, 'foreign')

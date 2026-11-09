@@ -1,7 +1,7 @@
 /**
  * 产品 Agent 资源的固定布局、清单读取与副本身份判定。
  * 只读取主进程指定的产物目录，不执行扩展、不发现用户配置、不创建或迁移记忆数据。
- * 身份由「组件形状」证明：目录与入口同名且组成文件齐备，即认定同一组件的副本；
+ * 身份由「组件形状」证明：目录与入口同名即认定同一组件的副本，组成文件缺失或内容不同都只算偏离；
  * 内容摘要与部署登记只决定诊断措辞，既不证明来源，也不是 Skill 已读证据、用户授权或安全边界。
  */
 import { createHash } from 'node:crypto'
@@ -215,7 +215,8 @@ const FOREIGN_COPY: AgentResourceCopyClassification = { kind: 'foreign', changed
 /**
  * 按组件形状判定副本身份，再用内容摘要与部署登记区分三种偏离程度。
  * 不变式：形状命中即认定「同一组件的副本」，排除方向永远安全，因此本函数从不建议继续加载；
- * 部署登记只影响措辞——缺失或矛盾时退回到「与本机产品版本不同」，不阻断会话。
+ * 组成文件缺失、内容偏离、登记缺失或矛盾都归入偏离，只影响措辞与诊断，不阻断会话——
+ * 只有目录名或入口名不匹配才判为外部件，因为那种情况下无法判断它是否注册同一批产品工具。
  */
 export function classifyAgentResourceCopy(bundle: AgentResourceBundle, item: AgentResource,
   candidate: string, deployments: ReadonlyMap<string, AgentDeploymentEntry>): AgentResourceCopyClassification {
@@ -227,23 +228,38 @@ export function classifyAgentResourceCopy(bundle: AgentResourceBundle, item: Age
     }
     if (basename(actual) !== posix.basename(item.entry)) return FOREIGN_COPY
     const base = dirname(actual)
-    // 目录名也要与入口所属目录同名：同名目录 + 同名入口 + 组成文件齐备才是同一组件的副本。
+    // 目录名也要与入口所属目录同名：同名目录 + 同名入口即同一组件的副本，组成文件数量与内容另行判定。
     if (basename(base) !== posix.basename(posix.dirname(item.entry))) return FOREIGN_COPY
     const sourceBase = posix.dirname(item.entry)
     const digests: Record<string, string> = {}
+    const missing: string[] = []
     for (const name of item.files) {
-      const path = realpathSync(resolve(base, posix.relative(sourceBase, name)))
-      // 缺一个组成文件就不是完整副本：按外部件处理，交给冲突分级判定。
+      let path: string
+      try {
+        path = realpathSync(resolve(base, posix.relative(sourceBase, name)))
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code
+        // 缺件是最常见的偏离形态（旧副本没有新组成文件）：记为差异，不升级为外来件。
+        if (code !== 'ENOENT' && code !== 'ENOTDIR' && code !== 'EISDIR') throw error
+        missing.push(name)
+        continue
+      }
+      // 链接把组成文件带出组件目录时形状不可信，仍按外部件处理。
       if (!inside(base, path)) return FOREIGN_COPY
       digests[name] = fingerprint(path)
     }
-    const changedFiles = item.files.filter(name => digests[name] !== bundle.fingerprints[name])
+    const changedFiles = item.files.filter(name => missing.includes(name) || digests[name] !== bundle.fingerprints[name])
     const deployment = deployments.get(item.id)
     const evidence = deployment !== undefined && samePath(deployment.target, base) ? deployment.contentDigest : null
     const diskDigest = componentDigestOf(digests, item.files)
     if (changedFiles.length === 0) {
       const marker = evidence === null ? 'none' : evidence === diskDigest ? 'consistent' : 'inconsistent'
       return { kind: 'identical', changedFiles, marker }
+    }
+    // 缺件的副本必然是旧版本或同步中断，不按「部署后被改过」措辞，也不据登记改判。
+    if (missing.length > 0) {
+      const marker = evidence === null ? 'none' : evidence === diskDigest ? 'consistent' : 'inconsistent'
+      return { kind: 'outdated', changedFiles, marker }
     }
     if (evidence === null) return { kind: 'outdated', changedFiles, marker: 'none' }
     // 登记摘要等于磁盘摘要时副本仍是同步写入的原样内容；不等则部署后被动过或同步中断。

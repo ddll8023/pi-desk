@@ -151,6 +151,7 @@
 | `scripts/ensure-environment.mjs` | 开发启动与出包前的幂等预检：依赖、Electron 二进制与当前平台受管运行环境，缺哪项补哪项，失败即停 |
 | `scripts/stage-agent-resources.mjs` | 将 `resources/agent/` 原样暂存到宿主产物旁并生成内容指纹清单 |
 | `scripts/stage-memory-runtime.mjs` | 将当前平台的受管运行环境暂存到宿主产物旁；未准备时明确失败，不自动下载 |
+| `scripts/sync-skill-assets.mjs` | 从 `resources/agent/` 生成 `pi-skill-setup` 的发布快照并重算清单指纹；只写快照，不部署到 agent 目录 |
 | `scripts/fix-node-pty-permissions.mjs` | 修正 PTY 预编译助手执行权限，供开发与发行准备使用 |
 | `resources/agent/` | 门禁与记忆扩展、配套 Memory Skill 及引擎的唯一维护源，构建时原样暂存进宿主产物 |
 | `resources/memory-runtime/` | 受管 Python 与时区归档的固定清单、内容指纹及来源与许可说明；不存生成产物与用户数据 |
