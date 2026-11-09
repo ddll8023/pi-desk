@@ -4,7 +4,7 @@
 
 ## 职责与入口
 
-把可独立完成的工作交给隔离子代理执行，并在主对话里给出归属、取消、失败与用量的所有者。入口是宿主内联扩展 `src/sdk-host/sub-agent/delegation-extension.ts` 注册的 `delegate_subagent` 工具，模型可调用、用户不直接触发，执行模式为串行：同一会话内不会并发跑两次委派。
+把可独立完成的工作交给隔离子代理执行，并在主对话里给出归属、取消、失败与用量的所有者。入口是宿主内联扩展 `src/sdk-host/sub-agent/delegation-extension.ts` 注册的 `delegate_subagent` 工具，模型可调用、用户不直接触发。同一消息内的多次委派调用并行执行；批内并发上限由 `BATCH_CONCURRENCY` 决定，多个调用各自独立计数。
 
 任务类型有四种：`query`（代码查询）、`research`（技术调研）、`review`（代码审查）、`document`（受限文档修改）。调研与主会话的调研链路一致：子进程拿到内置的 `web_search`、`fetch_content`、`get_search_content`、`source_check`，用外部资料作依据；扩展由宿主在装配时注入子进程入口、技能目录、写入守卫路径与取消控制端，不从资源目录按文件路径加载；对应规范正文取自随包技能 `resources/agent/skills/sub-agent-*/SKILL.md`。委派时机由系统提示的产品工具分段（`src/sdk-host/product-tools-hint.ts`）与工具自身的类型描述共同承载；四类子代理规范只供子进程按目录读取，不进入主会话技能列表（清单里以 `subAgentOnly` 标记）。
 

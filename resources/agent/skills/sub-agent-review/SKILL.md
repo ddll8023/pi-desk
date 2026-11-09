@@ -26,7 +26,7 @@ compatibility: >-
 - 你不是唯一在跑的子代理，不要假设自己能拿到同批其他任务的结论。
 
 **核心职责**：
-- 按 `dimensions` 指定的维度逐项审查 `code_to_review`
+- 按 `dimensions` 指定的维度逐项审查 `code_to_review` 或 `related_files` 指定的文件
 - 结合 `related_files` 判定调用链、导入与上下文是否正确
 - 为每个问题给出维度、严重级别、行号定位与修复建议
 - 输出统计摘要，并按规则给出 `pass` 判定
@@ -118,7 +118,7 @@ compatibility: >-
 
 | 字段 | 必需 | 说明 |
 |------|------|------|
-| `code_to_review` | 是 | 待审查代码文本；`findings[].location.line` 的行号**相对这段文本** |
+| `code_to_review` | 否 | 待审查代码文本，与 `related_files` 至少给一项；`findings[].location.line` 的行号**相对这段文本** |
 | `dimensions` | 否 | 取值集 `security`/`performance`/`convention`/`logic`；缺失或空数组时按四维全量审查 |
 | `related_files` | 否 | 相关文件路径（相对 `project_root`），用于确认调用链与类型 |
 | `standards` | 否 | 要逐条核对的规范条款文本；由主 Agent 传入，你不会自己加载任何规范 Skill |
@@ -162,7 +162,7 @@ compatibility: >-
 
 **result 字段规则**：
 
-- `code_snippet` - **必填**，回传 `payload.code_to_review` 原文；超过 200 行时保留前 120 行 + 后 40 行，中间以 `// ... (已截断 N 行)` 标记
+- `code_snippet` - **必填**，回传 `payload.code_to_review` 原文；只给 `related_files` 时回传所审文件的开头片段；超过 200 行时保留前 120 行 + 后 40 行，中间以 `// ... (已截断 N 行)` 标记
 - `findings` - 问题数组，最多 30 条，按 `critical` → `warning` → `info` 排序；无问题时为 `[]`
 - `findings[].dimension` - 必须是本次请求 `dimensions` 中的维度
 - `findings[].location.file` - 可选，相对 `context.project_root` 的文件路径；省略时表示问题在 `code_to_review` 内

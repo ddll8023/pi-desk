@@ -202,8 +202,8 @@ export interface ReviewRequest extends SubAgentRequestBase {
 }
 
 export interface ReviewPayload {
-  /** 待审查的代码 */
-  code_to_review: string
+  /** 待审查的代码；与 related_files 至少给一项 */
+  code_to_review?: string
   
   /** 审查维度 */
   dimensions: ReviewDimension[]
