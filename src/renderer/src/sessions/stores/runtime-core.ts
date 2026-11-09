@@ -878,7 +878,7 @@ export function createRuntimeCore(deps: RuntimeCoreDeps): RuntimeCore {
           code: 'RUNTIME_EXITED',
           message: status.lastError ?? 'Runtime 已异常退出，结果不确定。'
         },
-        resourceIssues: status.resourceIssues
+        resourceIssues: status.resourceIssues ?? []
       }
       return { targetChanged, sessionChanged, previousStreaming, sessionAbsent: status.sessionId === null }
     }

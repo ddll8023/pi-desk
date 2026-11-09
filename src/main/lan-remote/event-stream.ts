@@ -4,6 +4,7 @@ import type { LanSessionTarget } from '../../shared/lan-remote-api'
 import type { ProjectionBatch, RuntimeStatus } from '../../shared/runtime-api'
 import type { ExtensionUiSnapshot } from '../../shared/extension-ui-api'
 import { LanAccessError, LanDeviceManager } from './device-manager'
+import { lanStatusProjection } from './session-service'
 import type { LanSessionService } from './session-service'
 
 type PendingEvent = { readonly type: 'projection'; readonly data: ProjectionBatch }
@@ -39,8 +40,11 @@ export class LanEventStream {
     this.detach.push(this.service.runtime.onProjectionBatch(data => {
       if (data.runId === this.ref.target.runId) this.enqueue({ type: 'projection', data })
     }))
-    this.detach.push(this.service.runtime.onRunStatusChanged(data => {
-      if (data.runId === this.ref.target.runId) this.enqueue({ type: 'status', data })
+    this.detach.push(this.service.runtime.onRunStatusChanged((data: RuntimeStatus) => {
+      if (data.runId !== this.ref.target.runId) return
+      // 远端只要诊断类别与标识：本机绝对路径在投影层就置空，不进入事件流。
+      const projected = lanStatusProjection(data)
+      if (projected !== null) this.enqueue({ type: 'status', data: projected })
     }))
     this.detach.push(this.service.runtime.onExtensionUi(data => {
       if (data.runId === this.ref.target.runId) this.enqueue({ type: 'interaction', data })
@@ -59,7 +63,7 @@ export class LanEventStream {
       this.queue.push(...retained)
       this.queuedBytes = retained.reduce((sum, entry) => sum + entry.bytes, 0)
       this.response.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no' })
-      await this.send('snapshot', { ...snapshot, status: this.service.runtime.getStatusOfRun(this.ref.target.runId) })
+      await this.send('snapshot', { ...snapshot, status: lanStatusProjection(this.service.runtime.getStatusOfRun(this.ref.target.runId)) })
       if (this.closed) return
       this.ready = true
       this.timer = setInterval(() => this.enqueue({ type: 'heartbeat', data: null }), 15_000)
@@ -106,7 +110,8 @@ export class LanEventStream {
           this.interactionSeq = event.data.seq
         }
         await this.send(event.type, event.type === 'heartbeat'
-          ? { serverId: this.service.serverId, status: this.service.runtime.getStatusOfRun(this.ref.target.runId) } : event.data)
+          ? { serverId: this.service.serverId, status: lanStatusProjection(this.service.runtime.getStatusOfRun(this.ref.target.runId)) }
+          : event.data)
       }
     } catch (error) { this.fail(error) } finally { this.draining = false }
   }

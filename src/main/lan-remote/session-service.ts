@@ -7,12 +7,24 @@ import type {
   LanCommands, LanCreatedSession, LanOperation, LanProjectActiveState, LanRequest, LanResult, LanSessionActiveInfo, LanSessionTarget
 } from '../../shared/lan-remote-api'
 import type { SessionRunState } from '../../shared/session-run-api'
+import type { RuntimeStatus } from '../../shared/runtime-api'
 import type { TrustManager } from '../trust/trust-manager'
 import { previewProjectResources, ResourcePreviewError } from '../resources/resource-preview'
 import type { Project } from '../../shared/project-api'
 import { LanAccessError, LanDeviceManager } from './device-manager'
 
 const MAX_WRITE_RECORDS = 1024
+/**
+ * 远端只要知道诊断类别与组件/工具标识：本机绝对路径不下发，避免把用户名与部署布局交给已配对设备。
+ * 旧宿主可能不带该字段，按空数组降级。
+ */
+export function lanStatusProjection(status: RuntimeStatus | null): RuntimeStatus | null {
+  if (status === null) return null
+  return {
+    ...status,
+    resourceIssues: (status.resourceIssues ?? []).map(issue => ({ ...issue, productPath: null, otherPath: null }))
+  }
+}
 function unwrap<T>(result: LanResult<T>): T {
   if (!result.ok) throw new LanAccessError(result.error.code, result.error.message, 409)
   return result.data
@@ -68,7 +80,7 @@ export class LanSessionService {
     const projection = unwrap(await this.runtime.getProjection(ref.target))
     await this.authorizeTarget(deviceId, ref)
     if (projection.runtimeId !== ref.target.runtimeId) throw new LanAccessError('TARGET_CHANGED', '会话投影已换代，请重新打开会话。', 409)
-    return { status: this.runtime.getStatusOfRun(ref.target.runId), projection,
+    return { status: lanStatusProjection(this.runtime.getStatusOfRun(ref.target.runId)), projection,
       interaction: this.runtime.getExtensionUiSnapshot(ref.target.runId) }
   }
 

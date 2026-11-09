@@ -159,6 +159,19 @@ export class SdkSessionFailure extends Error {
   constructor(readonly code: SdkHostFailureCode) { super(code) }
 }
 
+/** 绑定阶段标识：失败时仅作为固定分类进入状态通道，不携带任何异常正文。 */
+type BindStage = 'theme' | 'projection' | 'history' | 'activity' | 'bridge' | 'subscribe'
+
+/** 阶段的中文说明；页面只看到这一类固定文本，原始异常仍只进宿主 stderr。 */
+const BIND_STAGE_LABELS: Readonly<Record<BindStage, string>> = {
+  theme: '主题初始化',
+  projection: '投影装配',
+  history: '历史装载',
+  activity: '活动恢复',
+  bridge: '交互桥接',
+  subscribe: '事件订阅'
+}
+
 /** 只比较已经明确的绝对身份，项目规范形式仍由主进程负责。 */
 function samePath(left: string, right: string): boolean {
   const a = resolve(left)
@@ -984,6 +997,11 @@ export class SdkSessionRuntime {
       return { ...result, services, diagnostics: services.diagnostics }
     } catch (error) {
       this.needsHostRebuild = true
+      // 装配阶段（清单、服务创建、模型作用域）的失败也在这一层：不写原因就只剩固定文案。
+      if (!(error instanceof SdkSessionFailure)) {
+        this.lastErrorDetail = (error instanceof Error ? error.message : String(error)).slice(0, 400)
+        console.error(`[sdk-host] 会话创建失败：${this.lastErrorDetail}`)
+      }
       throw error instanceof SdkSessionFailure ? error : new SdkSessionFailure('SESSION_CREATE_FAILED')
     }
   }
@@ -1030,9 +1048,12 @@ export class SdkSessionRuntime {
     this.bindingId = generation
     this.activityVersion += 1
     const bindingId = this.bindingId
+    // 阶段标识用于把失败归到固定分类；异常正文不进状态通道。
+    let stage: BindStage = 'theme'
     try {
       if (this.closing || this.currentCreation === null) throw new SdkSessionFailure('STALE_SESSION')
       this.sdk.initTheme(session.settingsManager.getTheme(), false)
+      stage = 'projection'
       const projection = new MessageProjection(bindingId, {
         onBatch: batch => this.options.onProjectionBatch(bindingId, batch),
         // SDK 会话状态是执行态的权威来源，不再由展示事件反推 isStreaming；消息条数仍取投影。
@@ -1048,6 +1069,7 @@ export class SdkSessionRuntime {
         }
       })
       // 展示历史与模型上下文分开；官方当前分支是历史唯一来源，不自行重建会话树。
+      stage = 'history'
       const seeded = await this.seedPage(session, bindingId)
       projection.seedProjectedHistory(seeded.page)
       if (seeded.fileStamp !== null) {
@@ -1056,6 +1078,7 @@ export class SdkSessionRuntime {
         })
       }
       this.projection = projection
+      stage = 'activity'
       const prepared = this.preparedActivity
       this.preparedActivity = null
       const canRestore = prepared !== null && this.target !== null
@@ -1079,18 +1102,24 @@ export class SdkSessionRuntime {
       this.rateSnapshot = { average: null }
       this.usage = null
       this.subAgentUsage.clear()
+      stage = 'bridge'
       this.bridge = new ExtensionUiBridge(session.extensionRunner.getUIContext(), {
         bindingId, onRequest: this.options.onUiRequest, onCancel: this.options.onUiCancel,
         onWaitingChanged: () => this.publish(), onUnavailable: () => this.blockUnavailableInteraction()
       })
+      stage = 'subscribe'
       this.unsubscribe = session.subscribe(event => this.onSdkEvent(session, bindingId, event))
     } catch (error) {
       this.needsHostRebuild = true
       this.lastError = 'SESSION_BIND_FAILED'
       this.phase = 'blocked'
-      // 这里原本吞掉异常，只留错误码；原始原因对定位绑定失败是必要的。
-      this.lastErrorDetail = (error instanceof Error ? error.message : String(error)).slice(0, 400)
-      console.error(`[sdk-host] 绑定失败：${this.lastErrorDetail}`)
+      // 绑定阶段的异常可能来自 SDK 或扩展运行路径：页面通道只接受本模块自造的失败码，
+      // 其余原文只进宿主 stderr，避免第三方正文与路径经常态通道进入页面。
+      const detail = error instanceof SdkSessionFailure
+        ? error.message
+        : `绑定阶段异常（${BIND_STAGE_LABELS[stage]}）`
+      this.lastErrorDetail = detail.slice(0, 400)
+      console.error(`[sdk-host] 绑定失败：${(error instanceof Error ? error.message : String(error)).slice(0, 400)}`)
       this.publish()
       throw new SdkSessionFailure('SESSION_BIND_FAILED')
     }

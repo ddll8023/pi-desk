@@ -196,63 +196,134 @@ test('部署登记：缺失、损坏、越界、重复或字段非法都降级�
   }
 })
 
-test('副本身份矩阵：产品、内容一致、版本不同、部署后被改、外部件', () => {
+test('副本身份：产品自身入口判为 product', () => {
   const product = createDemoBundle()
-  const copy = createTempRoot('pi-desk-agentdir-')
-  const partial = createTempRoot('pi-desk-partial-')
   try {
-    assert.equal(classifyAgentResourceCopy(product.bundle, demoResource(), join(product.dir, DEMO_FILES[0]), new Map()).kind,
-      'product')
+    assert.equal(classifyAgentResourceCopy(product.bundle, demoResource(),
+      join(product.dir, DEMO_FILES[0]), new Map()).kind, 'product')
+  } finally {
+    product.cleanup()
+  }
+})
 
-    // 内容一致且无标记：静默排除，标记状态为 none。
+test('副本身份：内容一致且无标记时静默排除', () => {
+  const product = createDemoBundle()
+  const copy = createTempRoot('pi-desk-copy-')
+  try {
     const entry = writeDemoCopy(copy.dir)
-    const identical = classifyAgentResourceCopy(product.bundle, demoResource(), entry, new Map())
-    assert.equal(identical.kind, 'identical')
-    assert.equal(identical.marker, 'none')
+    assert.deepEqual(classifyAgentResourceCopy(product.bundle, demoResource(), entry, new Map()),
+      { kind: 'identical', changedFiles: [], marker: 'none' })
+  } finally {
+    copy.cleanup()
+    product.cleanup()
+  }
+})
 
-    // BOM 与 CRLF 只影响字节，不影响身份。
-    writeFile(copy.dir, DEMO_FILES[0],
-      `\uFEFF${(DEMO_CONTENT[DEMO_FILES[0]] ?? '').replace(/\n/g, '\r\n')}`)
-    assert.equal(classifyAgentResourceCopy(product.bundle, demoResource(), entry, new Map()).kind, 'identical')
+test('副本身份：BOM 与 CRLF 只影响字节，不改变身份', () => {
+  const product = createDemoBundle()
+  const copy = createTempRoot('pi-desk-copy-')
+  try {
+    const entry = writeDemoCopy(copy.dir, {
+      [DEMO_FILES[0]]: `\uFEFF${(DEMO_CONTENT[DEMO_FILES[0]] ?? '').replace(/\n/g, '\r\n')}`
+    })
+    assert.deepEqual(classifyAgentResourceCopy(product.bundle, demoResource(), entry, new Map()),
+      { kind: 'identical', changedFiles: [], marker: 'none' })
+  } finally {
+    copy.cleanup()
+    product.cleanup()
+  }
+})
 
-    // 标记摘要等于产品摘要 → consistent；等于其它值 → 内容仍按一致处理，但标记过期。
+test('副本身份：登记摘要等于产品摘要时记为 consistent', () => {
+  const product = createDemoBundle()
+  const copy = createTempRoot('pi-desk-copy-')
+  try {
+    const entry = writeDemoCopy(copy.dir)
     writeDeployments(copy.dir, [{ componentId: 'demo', target: 'extensions/demo',
       contentDigest: componentDigestOf(product.bundle.fingerprints, DEMO_FILES) }])
-    assert.equal(classifyAgentResourceCopy(product.bundle, demoResource(), entry,
-      readAgentDeploymentManifest(copy.dir)).marker, 'consistent')
-    writeDeployments(copy.dir, [{ componentId: 'demo', target: 'extensions/demo', contentDigest: 'f'.repeat(64) }])
-    const staleMarker = classifyAgentResourceCopy(product.bundle, demoResource(), entry,
-      readAgentDeploymentManifest(copy.dir))
-    assert.equal(staleMarker.kind, 'identical')
-    assert.equal(staleMarker.marker, 'inconsistent')
+    assert.deepEqual(
+      classifyAgentResourceCopy(product.bundle, demoResource(), entry, readAgentDeploymentManifest(copy.dir)),
+      { kind: 'identical', changedFiles: [], marker: 'consistent' })
+  } finally {
+    copy.cleanup()
+    product.cleanup()
+  }
+})
 
-    // 版本不同：无标记时中性处理；登记与磁盘一致说明是原样同步结果；不一致说明被动过。
-    writeFile(copy.dir, DEMO_FILES[1], "export const helper = 'v2'\n")
-    const outdated = classifyAgentResourceCopy(product.bundle, demoResource(), entry,
-      readAgentDeploymentManifest(copy.dir))
-    assert.equal(outdated.kind, 'outdated')
-    assert.deepEqual(outdated.changedFiles, [DEMO_FILES[1]])
+test('副本身份：内容一致但登记摘要不同时按标记过期处理', () => {
+  const product = createDemoBundle()
+  const copy = createTempRoot('pi-desk-copy-')
+  try {
+    const entry = writeDemoCopy(copy.dir)
+    writeDeployments(copy.dir, [{ componentId: 'demo', target: 'extensions/demo', contentDigest: 'f'.repeat(64) }])
+    assert.deepEqual(
+      classifyAgentResourceCopy(product.bundle, demoResource(), entry, readAgentDeploymentManifest(copy.dir)),
+      { kind: 'identical', changedFiles: [], marker: 'inconsistent' })
+  } finally {
+    copy.cleanup()
+    product.cleanup()
+  }
+})
+
+test('副本身份：无标记且内容不同时按版本不同处理', () => {
+  const product = createDemoBundle()
+  const copy = createTempRoot('pi-desk-copy-')
+  try {
+    const entry = writeDemoCopy(copy.dir, { [DEMO_FILES[1]]: "export const helper = 'v2'\n" })
+    assert.deepEqual(classifyAgentResourceCopy(product.bundle, demoResource(), entry, new Map()),
+      { kind: 'outdated', changedFiles: [DEMO_FILES[1]], marker: 'none' })
+  } finally {
+    copy.cleanup()
+    product.cleanup()
+  }
+})
+
+test('副本身份：登记与磁盘一致时按原样同步的版本不同处理', () => {
+  const product = createDemoBundle()
+  const copy = createTempRoot('pi-desk-copy-')
+  try {
+    const entry = writeDemoCopy(copy.dir, { [DEMO_FILES[1]]: "export const helper = 'v2'\n" })
     const diskDigest = componentDigestOf({
       [DEMO_FILES[0]]: digest(DEMO_CONTENT[DEMO_FILES[0]] ?? ''),
       [DEMO_FILES[1]]: digest("export const helper = 'v2'\n")
     }, DEMO_FILES)
     writeDeployments(copy.dir, [{ componentId: 'demo', target: 'extensions/demo', contentDigest: diskDigest }])
-    assert.equal(classifyAgentResourceCopy(product.bundle, demoResource(), entry,
-      readAgentDeploymentManifest(copy.dir)).kind, 'outdated')
-    writeDeployments(copy.dir, [{ componentId: 'demo', target: 'extensions/demo', contentDigest: 'e'.repeat(64) }])
-    assert.equal(classifyAgentResourceCopy(product.bundle, demoResource(), entry,
-      readAgentDeploymentManifest(copy.dir)).kind, 'modified')
+    assert.deepEqual(
+      classifyAgentResourceCopy(product.bundle, demoResource(), entry, readAgentDeploymentManifest(copy.dir)),
+      { kind: 'outdated', changedFiles: [DEMO_FILES[1]], marker: 'consistent' })
+  } finally {
+    copy.cleanup()
+    product.cleanup()
+  }
+})
 
-    // 组成文件不齐、入口形状不符或相对路径都按外部件处理。
+test('副本身份：登记与磁盘不一致时按部署后被修改处理', () => {
+  const product = createDemoBundle()
+  const copy = createTempRoot('pi-desk-copy-')
+  try {
+    const entry = writeDemoCopy(copy.dir, { [DEMO_FILES[1]]: "export const helper = 'v2'\n" })
+    writeDeployments(copy.dir, [{ componentId: 'demo', target: 'extensions/demo', contentDigest: 'e'.repeat(64) }])
+    assert.deepEqual(
+      classifyAgentResourceCopy(product.bundle, demoResource(), entry, readAgentDeploymentManifest(copy.dir)),
+      { kind: 'modified', changedFiles: [DEMO_FILES[1]], marker: 'inconsistent' })
+  } finally {
+    copy.cleanup()
+    product.cleanup()
+  }
+})
+
+test('副本身份：组成文件不齐、入口形状不符或相对路径判为 foreign', () => {
+  const product = createDemoBundle()
+  const partial = createTempRoot('pi-desk-partial-')
+  try {
     writeFile(partial.dir, DEMO_FILES[0], DEMO_CONTENT[DEMO_FILES[0]] ?? '')
-    assert.equal(classifyAgentResourceCopy(product.bundle, demoResource(), join(partial.dir, DEMO_FILES[0]), new Map()).kind,
-      'foreign')
+    assert.equal(classifyAgentResourceCopy(product.bundle, demoResource(),
+      join(partial.dir, DEMO_FILES[0]), new Map()).kind, 'foreign')
     assert.equal(classifyAgentResourceCopy(product.bundle, demoResource(),
       join(partial.dir, 'missing', 'index.ts'), new Map()).kind, 'foreign')
     assert.equal(classifyAgentResourceCopy(product.bundle, demoResource(), DEMO_FILES[0], new Map()).kind, 'foreign')
   } finally {
     partial.cleanup()
-    copy.cleanup()
     product.cleanup()
   }
 })

@@ -383,8 +383,10 @@ export function isRuntimeStatus(value: unknown): value is RuntimeStatus {
   if (value.sessionId !== null && typeof value.sessionId !== 'string') return false
   if (value.sdkVersion !== null && typeof value.sdkVersion !== 'string') return false
   if (value.lastError !== null && typeof value.lastError !== 'string') return false
-  if (!Array.isArray(value.resourceIssues) || value.resourceIssues.length > RESOURCE_ISSUE_LIMIT) return false
-  if (!value.resourceIssues.every(isResourceIssue)) return false
+  // 混合构建时旧宿主/旧主进程不带该字段：缺字段只降级为「无诊断」，不让整帧失效。
+  if (value.resourceIssues !== undefined
+    && (!Array.isArray(value.resourceIssues) || value.resourceIssues.length > RESOURCE_ISSUE_LIMIT
+      || !value.resourceIssues.every(isResourceIssue))) return false
   return value.info === null || isRuntimeInfo(value.info)
 }
 

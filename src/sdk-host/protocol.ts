@@ -345,8 +345,10 @@ export function isSdkSessionStatus(value: unknown): value is SdkSessionStatus {
     && isOutputRate(value.rate)
     && (value.lastErrorDetail === undefined || value.lastErrorDetail === null
       || (typeof value.lastErrorDetail === 'string' && value.lastErrorDetail.length <= 400))
-    && Array.isArray(value.resourceIssues) && value.resourceIssues.length <= RESOURCE_ISSUE_LIMIT
-    && value.resourceIssues.every(isResourceIssue)
+    // 主进程与宿主可能来自不同构建：旧宿主不带该字段时只降级为「无诊断」，不让整帧被拒。
+    && (value.resourceIssues === undefined
+      || (Array.isArray(value.resourceIssues) && value.resourceIssues.length <= RESOURCE_ISSUE_LIMIT
+        && value.resourceIssues.every(isResourceIssue)))
     && hasKeys(value, ['phase', 'bindingId', 'activityVersion', 'operationId', 'projectPath',
       'sessionId', 'sessionFile', 'isIdle', 'isCompacting', 'pendingMessages', 'isBashRunning', 'waitingDialogs',
       'needsHostRebuild', 'lastError', 'modelProvider', 'modelId', 'messageCount', 'usage', 'rate',

@@ -332,11 +332,17 @@ const failureIssues = computed(() => {
   return { items, rest: Math.max(0, current.resourceIssues.length - items.length) }
 })
 
-/** 诊断行只拼固定措辞与路径；类型缺失时不让整行消失。 */
+/** 诊断里的可变字段来自第三方注册名与磁盘路径：剔除控制字符并截断，不把异常文本带进页面。 */
+function diagnosticText(value: string, limit: number): string {
+  const plain = value.replace(/[\u0000-\u001f\u007f]/g, ' ').trim()
+  return plain.length > limit ? `${plain.slice(0, limit)}…` : plain
+}
+
+/** 诊断行只拼固定措辞与已净化的标识、路径；类型缺失时不让整行消失。 */
 function describeIssue(issue: ResourceIssue): string {
-  const subject = issue.componentId === null ? '扩展' : `组件 ${issue.componentId}`
+  const subject = issue.componentId === null ? '扩展' : `组件 ${diagnosticText(issue.componentId, 64)}`
   const detail = issue.kind === 'tool-conflict' || issue.kind === 'tool-duplicate'
-    ? `工具名 ${issue.tool ?? '-'} 被重复注册`
+    ? `工具名 ${diagnosticText(issue.tool ?? '-', 64)} 被重复注册`
     : issue.kind === 'extension-load-failed'
       ? '加载失败'
       : issue.kind === 'copy-modified'
@@ -344,7 +350,9 @@ function describeIssue(issue: ResourceIssue): string {
         : issue.kind === 'copy-marker-stale'
           ? '部署标记过期'
           : '与本机产品版本不同'
-  const paths = [issue.productPath, issue.otherPath].filter((path): path is string => path !== null)
+  const paths = [issue.productPath, issue.otherPath]
+    .filter((path): path is string => path !== null)
+    .map(path => diagnosticText(path, 200))
   return paths.length === 0 ? `${subject}：${detail}` : `${subject}：${detail}（${paths.join(' / ')}）`
 }
 
@@ -924,12 +932,15 @@ onBeforeUnmount(() => {
           @jump-latest="jumpToGenuiVersion"
         />
 
-        <div v-if="turns.length === 0 && pendingPrompt === null" class="empty-state">
+        <div v-if="turns.length === 0 && pendingPrompt === null" class="empty-state" role="status">
           <p class="empty-state-title">{{ emptyState.title }}</p>
           <p class="empty-state-text">{{ emptyState.description }}</p>
-          <ul v-if="failureIssues.items.length > 0" role="status" class="mt-1 flex flex-col gap-1">
-            <li v-for="issue in failureIssues.items" :key="`${issue.kind}:${issue.componentId ?? ''}:${issue.tool ?? ''}`"
-              class="empty-state-text text-desk-danger">
+          <ul v-if="failureIssues.items.length > 0" class="mt-1 flex flex-col gap-1">
+            <li
+              v-for="issue in failureIssues.items"
+              :key="`${issue.kind}:${issue.componentId ?? ''}:${issue.tool ?? ''}:${issue.otherPath ?? ''}`"
+              class="empty-state-text text-desk-danger"
+            >
               {{ describeIssue(issue) }}
             </li>
           </ul>

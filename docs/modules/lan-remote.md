@@ -19,7 +19,7 @@
 | `src/main/lan-remote/server.ts` | 局域网 HTTP 载体：自动端口、扫码登记、真实连接来源与同源校验先于业务分派 |
 | `src/main/lan-remote/static-assets.ts` | 只提供手机构建目录中的首页与 assets，真实路径复核阻止越界 |
 | `src/main/lan-remote/event-stream.ts` | 单连接事件流：先观察增量再读取基准，独立背压与断流 |
-| `src/main/lan-remote/session-service.ts` | 设备与项目校验、后台会话与压缩分派、命令候选预读／读取及路径裁剪、写请求去重 |
+| `src/main/lan-remote/session-service.ts` | 设备与项目校验、后台会话与压缩分派、命令候选预读／读取及路径裁剪、远端状态诊断的本机路径裁剪、写请求去重 |
 | `src/main/lan-remote/device-manager.ts` | 内存中的一次性连接码、设备身份与凭证摘要、过期与撤销 |
 
 ### 契约与桥接

@@ -9,7 +9,7 @@ import { dirname } from 'node:path'
 import type {
   CreateAgentSessionServicesOptions, EventBus, InlineExtension, ResourceDiagnostic, ResourceLoader, SettingsManager, Skill
 } from '@earendil-works/pi-coding-agent'
-import { RESOURCE_ISSUE_LIMIT } from '../shared/runtime-api'
+import { RESOURCE_ISSUE_LIMIT, isResourceIssue } from '../shared/runtime-api'
 import type { ResourceIssue } from '../shared/runtime-api'
 import {
   agentResourcePath, classifyAgentResourceCopy, readAgentDeploymentManifest, readAgentResourceBundle
@@ -82,9 +82,10 @@ export async function prepareProductResources(sdk: Sdk, input: ProductResourceIn
   // 部署登记只用于区分「版本不同」与「部署后被改过」；缺失或矛盾时按内容比对降级，不改变是否排除。
   const deployments = readAgentDeploymentManifest(input.agentDir)
   const issues: ResourceIssue[] = []
-  /** 诊断条目有界：超限只保留前几条，避免状态校验因超出上限而拒绝整份快照。 */
+  /** 诊断条目有界：超限或字段不合规的条目直接丢弃，避免整帧被状态校验拒收。 */
   const pushIssue = (issue: ResourceIssue): void => {
-    if (issues.length < RESOURCE_ISSUE_LIMIT) issues.push(issue)
+    if (issues.length >= RESOURCE_ISSUE_LIMIT || !isResourceIssue(issue)) return
+    issues.push(issue)
   }
   for (const resource of resolved.extensions) {
     if (!resource.enabled) continue
@@ -203,7 +204,7 @@ export async function prepareProductResources(sdk: Sdk, input: ProductResourceIn
           componentId: item.id, tool, path: agentResourcePath(bundle.root, item.entry)
         })))
       })
-      for (const issue of judgement.warnings) pushIssue(issue)
+      // 致命项优先入列：诊断条数有上限，不能让外来扩展的警告把冲突原因挤出页面。
       if (judgement.fatal.length > 0) {
         for (const issue of judgement.fatal) {
           pushIssue(issue)
@@ -213,6 +214,7 @@ export async function prepareProductResources(sdk: Sdk, input: ProductResourceIn
         }
         throw new Error(describeFatal(judgement.fatal))
       }
+      for (const issue of judgement.warnings) pushIssue(issue)
       for (const item of bundle.extensions) {
         const path = agentResourcePath(bundle.root, item.entry)
         const loaded = extensions.extensions.find(entry => realpathOrSynthetic(entry.resolvedPath) === path)

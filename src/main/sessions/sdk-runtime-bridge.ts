@@ -218,7 +218,8 @@ function mapStatus(host: SdkHostStatus, session: SdkSessionStatus, runId: number
     info: state === 'ready' ? mapInfo(session) : null,
     sdkVersion: host.sdkVersion,
     // 资源装配诊断与会话绑定无关：建立失败时页面也必须能列出冲突来源与工具名。
-    resourceIssues: session.resourceIssues,
+    // 旧宿主可能不带该字段，归一为空数组，避免下游拿到 undefined。
+    resourceIssues: session.resourceIssues ?? [],
     lastError: failure === null
       ? null
       : `会话后端故障（${failure}）：请重新打开会话或重启应用。`

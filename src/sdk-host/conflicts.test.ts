@@ -18,7 +18,7 @@ const PRODUCT_TOOLS: readonly ProductToolOwner[] = [
   { componentId: 'pi-memory', tool: 'memory_read', path: PRODUCT_PATH }
 ]
 
-test('同名工具按首个注册者归owner，同一路径重复列举不算冲突', () => {
+test('同名工具归首个注册者，同一路径重复列举不算冲突', () => {
   const conflicts = collectToolConflicts([
     extension('/a/index.ts', ['memory_read', 'other']),
     extension('/b/index.ts', ['memory_read']),
@@ -58,6 +58,22 @@ test('两个外来扩展争用同一工具名只作提示，不阻断会话', ()
   assert.equal(judgement.warnings.length, 1)
   assert.equal(judgement.warnings[0]?.kind, 'tool-duplicate')
   assert.equal(judgement.warnings[0]?.tool, 'shared_tool')
+})
+
+test('两个外来扩展争用产品的非必需工具名时仍带产品组件标识', () => {
+  // 产品工具清单里存在、但争用双方都不是产品路径：只作提示，标识用于定位到相关组件。
+  const judgement = judgeLoadedExtensions({
+    extensions: [extension('/user/a/index.ts', ['memory_extra']), extension('/user/b/index.ts', ['memory_extra'])],
+    loadErrors: [],
+    productPaths: PRODUCT_PATHS,
+    productTools: [...PRODUCT_TOOLS, { componentId: 'pi-memory', tool: 'memory_extra', path: PRODUCT_PATH }]
+  })
+  assert.equal(judgement.fatal.length, 0)
+  assert.equal(judgement.warnings.length, 1)
+  assert.equal(judgement.warnings[0]?.kind, 'tool-duplicate')
+  assert.equal(judgement.warnings[0]?.componentId, 'pi-memory')
+  assert.equal(judgement.warnings[0]?.productPath, null)
+  assert.equal(judgement.warnings[0]?.otherPath, '/user/b/index.ts')
 })
 
 test('加载失败按路径归属：产品件致命，外来扩展只作提示', () => {
