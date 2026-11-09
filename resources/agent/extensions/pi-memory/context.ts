@@ -80,9 +80,14 @@ function ruleFamily(row: JsonObject): string {
   return key.split('.')[0] || '(未分类)'
 }
 
+/** 来源项目：无项目归属的通用约定返回空串，不把 null 当成解析错误。 */
+function sourceProject(row: JsonObject): string {
+  return typeof row.source_project === 'string' ? row.source_project : ''
+}
+
 /** 族键带归属：不同项目的同族记录各自保留最新，避免被其他项目的新记录顶掉。 */
 function familyKey(row: JsonObject): string {
-  return `${text(row.source_project)}\u0000${ruleFamily(row)}`
+  return `${sourceProject(row)}\u0000${ruleFamily(row)}`
 }
 
 /** 每族每个归属只保留最新一条：同族旧版仍可检索，但不占常驻预算。 */
@@ -100,7 +105,7 @@ function newestByFamily(rows: JsonObject[]): { family: string; row: JsonObject }
 /** 归属优先级：0 当前项目、1 通用（无项目归属的跨项目约定）、2 其他项目；未识别当前项目时全部同级。 */
 function projectRank(row: JsonObject, projectId: string | null): number {
   if (projectId === null) return 1
-  const source = text(row.source_project)
+  const source = sourceProject(row)
   if (source === projectId) return 0
   return source === '' ? 1 : 2
 }
@@ -127,7 +132,7 @@ function residentIndex(row: JsonObject): string {
 
 export class MemoryRuntime {
   private readonly states = new WeakMap<ExtensionContext['sessionManager'], State>()
-  /** 同一实例不并发保存；独立宿主之间仍由文件引擎的锁和指纹协调。 */
+  /** 同一实例不并发保存；独立宿主之间由数据库写事务与库版本协调。 */
   private saving = false
   config: MemoryConfig
   engine: MemoryEngine
@@ -237,7 +242,7 @@ export class MemoryRuntime {
       automatic_recall: { ...(state.recallStatus ?? { status: state.enabled ? 'not_requested' : 'disabled' }),
         resident: state.residentStats ?? { status: state.enabled ? 'not_requested' : 'disabled' } },
       approval_boundary: '仅覆盖 pi-memory 写入通道；不是全局文件沙箱',
-      commands: '/memory status | off | on | refresh', maintenance: '不自动初始化、保存、修索引或恢复事务' }
+      commands: '/memory status | off | on | refresh', maintenance: '不自动初始化、保存、重建词项或迁移' }
   }
 
   /** 近期日期窗口：常驻约定只取最近七天的决定与约束，更早的结论仍可手动检索。 */
@@ -375,7 +380,7 @@ export class MemoryRuntime {
       lease.assert()
       lease.state.recall = undefined
       lease.state.recallStatus = { status: 'unavailable', reason: errorText(error) }
-      return `任务相关记忆不可用（不是无命中）：${errorText(error)}。未修复索引或使用旧召回。`
+      return `任务相关记忆不可用（不是无命中）：${errorText(error)}。未自动重建词项或使用旧召回。`
     } finally { if (timer) clearTimeout(timer) }
   }
 

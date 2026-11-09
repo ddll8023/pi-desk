@@ -1,43 +1,56 @@
 #!/usr/bin/env python3
-"""用户级全局日记、画像与月度摘要文件引擎，不依赖当前项目或项目登记。
+"""用户级全局日记、画像与月度摘要的 SQLite 存储引擎，不依赖当前项目或项目登记。
 
-权威写入经过具体计划与确认，访问统计独立持久化。旧日记的来源标签仅作历史信息；
-读取不自动迁移、改写旧正文、修复索引或把局部规则提升为通用要求。
+权威数据只有一份：`<store>/memory.db`（WAL）。记录、画像、月摘要、访问统计与待确认计划同库同事务，
+词项作为派生数据与记录在同一事务内写入，读取不再核对原文指纹。检索保持词法（CJK 双字片段 + BM25）
+与既有打分口径，只把候选裁剪交给库内词项表。
+
+旧 Markdown 库只经 `migrate` 一次性导入；运行期不读也不写 Markdown，`export` 仅生成只读快照。
 """
-import argparse, contextlib, datetime as dt, hashlib, json, math, os, re, secrets, shutil, stat, sys, time, unicodedata, uuid
+import argparse, contextlib, datetime as dt, hashlib, json, math, re, secrets, sqlite3, sys, time, unicodedata, uuid
 from collections import Counter
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import zoneinfo
 
-SCHEMA = '0.4'
-# 读取兼容旧版本：0.2/0.3 库没有记录级项目归属，按段标记解释；写入一律使用当前版本。
-READABLE_SCHEMAS = ('0.2','0.3',SCHEMA)
+DB_NAME = 'memory.db'
+# PRAGMA user_version 是唯一版本源；库内不再保留第二份可写版本号。
+STORE_VERSION = 1
+READABLE_VERSION = STORE_VERSION
+PLAN_VERSION = 4
 TYPES = {'decision','constraint','progress','issue','fact','preference_evidence'}
 RULE_TYPES = {'decision','constraint'}
-PLAN_VERSION = 3
 DOMAINS = {'communication','coding','learning','workflow'}
-ALLOWED_TOP = {'manifest.json','catalog','daily','monthly','profile','index','.system'}
 ID_RE = re.compile(r'^[msp]_[0-9A-HJKMNP-TV-Z]{26}$')
 # 项目归属取桌面项目注册表的 UUID；旧项目段里的自由命名只作历史来源，不参与匹配。
 PROJECT_ID_RE = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
-RECORD_OPEN = re.compile(r'^<!-- memory:record (\{.*\}) -->$')
-PROJECT_OPEN = re.compile(r'^<!-- memory:project (\{.*\}) -->$')
-GLOBAL_OPEN = '<!-- memory:global -->'
-SESSION_OPEN = re.compile(r'^<!-- memory:session (\{.*\}) -->$')
-PROFILE_OPEN = re.compile(r'^<!-- memory:profile (\{.*\}) -->$')
-SUM_OPEN = re.compile(r'^<!-- memory:summary (\{.*\}) -->$')
-SEARCH_INDEX = 'index/search.json'
-SEARCH_VERSION = 1
+DEFAULT_RECENT_WINDOW = 30
 SEARCH_ALGORITHM = 'cjk-bigram-bm25-v1'
-ACCESS_STORE = '.system/access.json'
-ACCESS_VERSION = 1
-ACCESS_NOTE = '仅统计采集开始后的主动定向读取；不代表全部访问、模型接收、理解、采纳或事实正确，不参与检索排序。'
 SEARCH_TOKENS = re.compile(r'[a-z0-9_]+|[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\U00020000-\U0002ebef]+')
 SEARCH_STOPWORDS = {'的','了','是','在','和','与','我','你','如何','什么','怎么','一个','这个','那个',
                     'the','a','an','and','or','is','are','to','of','for','in','how','what'}
+BUSY_TIMEOUT_SECONDS = 10.0
+BUSY_RETRIES = 4
+ACCESS_NOTE = '仅统计采集开始后的主动定向读取；不代表全部访问、模型接收、理解、采纳或事实正确，不参与检索排序。'
+BACKGROUND_POLICY = 'lexical-global-background-v3'
+BACKGROUND_STOPWORDS = {'当前','现在','需要','可以','已经','相关','问题','项目','功能','优化','处理',
+                       '继续','一下','看看','进行','是否','推荐','建议','方案','实现','本次','以下',
+                       'please','could','would','should','help','with','this','that'}
+# 自动背景的类型权重：决定与约束优先于进展流水，避免历史流水挤占有限的背景预算。
+TYPE_WEIGHT = {'decision':1.6,'constraint':1.8,'preference_evidence':1.4,'fact':1.1,'issue':1.0,'progress':0.7}
+
+# 旧 Markdown 库的标记只被 migrate 使用；运行期不再解析这些结构。
+LEGACY_SCHEMAS = ('0.2','0.3','0.4')
+LEGACY_RECORD_OPEN = re.compile(r'^<!-- memory:record (\{.*\}) -->$')
+LEGACY_PROJECT_OPEN = re.compile(r'^<!-- memory:project (\{.*\}) -->$')
+LEGACY_GLOBAL_OPEN = '<!-- memory:global -->'
+LEGACY_SESSION_OPEN = re.compile(r'^<!-- memory:session (\{.*\}) -->$')
+LEGACY_PROFILE_OPEN = re.compile(r'^<!-- memory:profile (\{.*\}) -->$')
+LEGACY_SUM_OPEN = re.compile(r'^<!-- memory:summary (\{.*\}) -->$')
+
 
 class MemoryError(Exception): pass
+
 
 def ulid(prefix):
     alphabet='0123456789ABCDEFGHJKMNPQRSTVWXYZ'
@@ -46,143 +59,13 @@ def ulid(prefix):
     for _ in range(26): a=alphabet[n&31]+a; n >>= 5
     return prefix+'_'+a
 
+
 def j(o): return json.dumps(o,ensure_ascii=False,indent=2,sort_keys=True)+'\n'
 def compact(o): return json.dumps(o,ensure_ascii=False,separators=(',',':'))
 def sha(b): return hashlib.sha256(b).hexdigest()
-def read(p): return p.read_text(encoding='utf-8')
-def parse_json(p): return json.loads(read(p))
 def expect(condition, message):
     if not condition: raise MemoryError(message)
 
-def safe(root, rel):
-    rel=Path(rel)
-    expect(not rel.is_absolute() and '..' not in rel.parts and len(rel.parts)>0,'非法路径')
-    expect(rel.parts[0] in ALLOWED_TOP,'非白名单数据路径')
-    p=root/rel
-    parent=p
-    while parent!=root.parent and parent!=root:
-        expect(not parent.is_symlink(), '禁止通过符号链接读写数据')
-        parent=parent.parent
-    return p
-
-def file_bytes(root, rel, overrides=None):
-    if overrides is not None and rel in overrides: return overrides[rel]
-    p=safe(root,rel)
-    return p.read_bytes() if p.exists() else None
-
-def stored_files(root, subtree, suffix):
-    p=safe(root,subtree)
-    if not p.exists(): return []
-    out=[]
-    for f in sorted(p.rglob('*')):
-        if f.is_file() and f.suffix==suffix:
-            expect(not f.is_symlink(), '禁止符号链接: '+str(f))
-            out.append(f.relative_to(root).as_posix())
-    return out
-
-def root_fingerprint(root: Path) -> str:
-    paths=['manifest.json']
-    if file_bytes(root,'catalog/projects.json') is not None:paths.append('catalog/projects.json')
-    for directory,ext in [('daily','.md'),('monthly','.md'),('profile','.md')]:paths+=stored_files(root,directory,ext)
-    return sha(compact([[s,sha(file_bytes(root,s))] for s in sorted(paths)]).encode())
-
-def load(root: Path) -> tuple[dict,dt.tzinfo]:
-    expect(root.is_dir(),f'记忆库不存在: {root}；先执行 init')
-    expect(not root.is_symlink(),'记忆库根目录不能是符号链接')
-    manifest=parse_json(safe(root,'manifest.json'))
-    expect(manifest.get('schema_version') in READABLE_SCHEMAS,'数据版本不匹配；未自动迁移')
-    zone=manifest.get('timezone')
-    try: z=ZoneInfo(zone)
-    except (ZoneInfoNotFoundError,TypeError): raise MemoryError(f'无效/不可用的 IANA 时区: {zone}；Windows 可能需要安装 tzdata')
-    return manifest,z
-
-def require_clean_transactions(root: Path) -> None:
-    """普通操作不得以查询或生成计划为由自动回滚权威数据。"""
-    pending=safe(root,'.system/transactions')
-    expect(not pending.exists() or not any(pending.iterdir()),
-           'RECOVERY_REQUIRED：存在未处理事务；须单独批准 recover --approved')
-
-@contextlib.contextmanager
-def locking(root,exclusive=False,allow_recovery=False,blocking=True,existing_only=False):
-    lock=safe(root,'.system/lock')
-    if exclusive and not existing_only:
-        lock.parent.mkdir(parents=True,exist_ok=True)
-    else:
-        expect(lock.is_file(),'锁文件缺失；此操作不会自动创建技术文件')
-    with open(lock,'a+b' if exclusive and not existing_only else 'r+b') as f:
-        if os.name=='nt':
-            import msvcrt
-            f.seek(0)
-            while True:
-                try:
-                    msvcrt.locking(f.fileno(),msvcrt.LK_LOCK if blocking else msvcrt.LK_NBLCK,1);break
-                except OSError:
-                    if not blocking:raise MemoryError('ACCESS_BUSY：记忆库正在操作，未写入访问统计')
-                    time.sleep(.05)
-        else:
-            import fcntl
-            flags=fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH
-            try:fcntl.flock(f.fileno(),flags | (0 if blocking else fcntl.LOCK_NB))
-            except BlockingIOError:raise MemoryError('ACCESS_BUSY：记忆库正在操作，未写入访问统计')
-        try:
-            if not allow_recovery:require_clean_transactions(root)
-            yield
-        finally:
-            if os.name=='nt':f.seek(0);msvcrt.locking(f.fileno(),msvcrt.LK_UNLCK,1)
-            else:fcntl.flock(f.fileno(),fcntl.LOCK_UN)
-
-def atomic_write(p, data):
-    p.parent.mkdir(parents=True,exist_ok=True)
-    tmp=p.with_name(p.name+'.'+uuid.uuid4().hex+'.tmp')
-    with open(tmp,'wb') as f: f.write(data); f.flush();os.fsync(f.fileno())
-    os.replace(tmp,p)
-
-def apply_transaction(root,changes):
-    """Multi-file rollback journal. All cooperating readers/writers must take lock."""
-    if not changes:return
-    txid='tx_'+uuid.uuid4().hex
-    base=safe(root,'.system/transactions')/txid
-    base.mkdir(parents=True)
-    entries=[]
-    for i,(rel,new) in enumerate(sorted(changes.items())):
-        expect(rel==ACCESS_STORE or rel.startswith(('daily/','monthly/','profile/','catalog/','index/')),
-               '不允许事务修改此位置')
-        old=file_bytes(root,rel)
-        expect(new is None or isinstance(new,bytes),'新文件必须是 bytes 或 None')
-        if old is not None:atomic_write(base/f'old_{i}',old)
-        if new is not None:atomic_write(base/f'new_{i}',new)
-        entries.append({'path':rel,'old':sha(old) if old is not None else None,'new':sha(new) if new is not None else None,'n':i})
-    journal={'state':'PREPARED','files':entries}
-    atomic_write(base/'journal.json',j(journal).encode())
-    try:
-        for x in entries:
-            p=safe(root,x['path'])
-            if x['new'] is None:
-                p.unlink(missing_ok=True)
-            else:atomic_write(p,(base/f"new_{x['n']}").read_bytes())
-        journal['state']='COMMITTED'
-        atomic_write(base/'journal.json',j(journal).encode())
-    except Exception:
-        # 保留日志；后续普通操作须停止，只有单独获批的恢复操作可处理事务。
-        raise
-    shutil.rmtree(base)
-
-def recover(root):
-    pending=safe(root,'.system/transactions')
-    if not pending.exists():return
-    for base in sorted(pending.iterdir()):
-        expect(base.is_dir() and not base.is_symlink(),'非法事务目录')
-        jp=base/'journal.json'
-        expect(jp.exists(),'事务暂存损坏，请人工检查 '+str(base))
-        journal=parse_json(jp)
-        if journal['state']=='COMMITTED':shutil.rmtree(base);continue
-        for x in reversed(journal['files']):
-            p=safe(root,x['path']); current=p.read_bytes() if p.exists() else None
-            digest=sha(current) if current is not None else None
-            expect(digest in (x['old'],x['new']),f'文件被外部修改，禁止自动回滚: {p}')
-            if x['old'] is None:p.unlink(missing_ok=True)
-            else:atomic_write(p,(base/f"old_{x['n']}").read_bytes())
-        shutil.rmtree(base)
 
 def candidate_check(text, single_line=False):
     expect(isinstance(text,str) and text.strip(),'文本不能为空')
@@ -190,111 +73,12 @@ def candidate_check(text, single_line=False):
     if single_line: expect('\n' not in text and '\r' not in text and '<!--' not in text, '标题或项目名称必须为单行且不能含标记')
     return text.strip()
 
+
 def content_key(typ, rule_key, topic, content):
     """内容指纹：去重按内容而不是会话或 ID；归一化空白，避免排版差异被当成新记录。"""
     raw=unicodedata.normalize('NFKC',f'{typ}\x1f{rule_key or ""}\x1f{topic}\x1f{content}')
     return hashlib.sha256(re.sub(r'\s+',' ',raw).strip().encode()).hexdigest()
 
-
-def parse_daily(text: str) -> list[dict]:
-    """同时读取全局段与旧来源段；旧标签不参与项目身份绑定。"""
-    text=text.replace('\r\n','\n')
-    lines=text.splitlines();recs=[];source={};current_session=None;scope_known=False;i=0
-    expect(text.startswith('---\n') and '\n# ' in text,'非法每日记忆文件头')
-    while i<len(lines):
-        line=lines[i]
-        if line.startswith('## '):
-            expect(i+1<len(lines),'记忆范围标记丢失')
-            marker=lines[i+1]
-            if marker==GLOBAL_OPEN:source={}
-            else:
-                mt=PROJECT_OPEN.fullmatch(marker);expect(mt,'无法识别记忆范围标记')
-                pid=json.loads(mt.group(1))['id']
-                expect(isinstance(pid,str) and bool(pid),'历史来源标签无效')
-                source={'project_id':pid,'project_name':line[3:]}
-            scope_known=True;current_session=None;i+=2;continue
-        if line.startswith('### '):
-            expect(scope_known and i+1<len(lines),'会话缺少记忆范围上下文')
-            mt=SESSION_OPEN.fullmatch(lines[i+1]);expect(mt,'会话标记丢失')
-            current_session=json.loads(mt.group(1));i+=2;continue
-        mt=RECORD_OPEN.fullmatch(line)
-        if mt:
-            expect(scope_known and current_session,'记录没有会话上下文')
-            meta=json.loads(mt.group(1));expect(i+1<len(lines) and lines[i+1].startswith('#### '),'记录标题丢失')
-            title=lines[i+1][5:];i+=2;body=[]
-            while i<len(lines) and lines[i]!='<!-- /memory:record -->':body.append(lines[i]);i+=1
-            expect(i<len(lines),'缺少记录结束标记')
-            # 记录级归属优先于段标记：新记录写在全局段内，归属记在记录上。
-            recs.append({**source,**meta,'session':current_session,'title':title,'content':'\n'.join(body).strip()})
-            i+=1;continue
-        if line.startswith('<!-- memory:') or line.startswith('<!-- /memory:'):
-            raise MemoryError('未识别的记录标记: '+line)
-        i+=1
-    ids=[r['id'] for r in recs]
-    expect(len(set(ids))==len(ids),'每日文件内记忆 ID 重复')
-    return recs
-
-def render_daily(date: str, recs: list[dict]) -> str:
-    """新记录统一写入全局段并在记录内保留项目归属；旧来源段原样保留，不再按归属重新分段。"""
-    out=[f'---\nschema_version: "{SCHEMA}"\ndate: "{date}"\n---\n\n# {date}\n']
-    sections=list(dict.fromkeys(r.get('project_name') for r in recs))
-    for section in sections:
-        rows=[r for r in recs if r.get('project_name')==section]
-        if section is None:out.append(f'## 全局记忆\n{GLOBAL_OPEN}\n')
-        else:out.append(f'## {section}\n<!-- memory:project {compact({"id":rows[0]["project_id"]})} -->\n')
-        for sid in dict.fromkeys(r['session']['id'] for r in rows):
-            session_rows=[r for r in rows if r['session']['id']==sid];session=session_rows[0]['session']
-            out.append(f'### 会话 {session["saved_at"][11:16]}\n<!-- memory:session {compact(session)} -->\n')
-            for row in session_rows:
-                meta={key:row[key] for key in ('id','type','topic','rule_key','status','supersedes','superseded_by','source_record_ids','project_id') if key in row}
-                out.append(f'<!-- memory:record {compact(meta)} -->\n#### {row["title"]}\n{row["content"]}\n<!-- /memory:record -->\n')
-    return '\n'.join(out).rstrip()+'\n'
-
-def parse_profiles(text):
-    out=[];lines=text.splitlines();i=0
-    while i<len(lines):
-        mt=PROFILE_OPEN.fullmatch(lines[i])
-        if mt:
-            meta=json.loads(mt.group(1));i+=1
-            expect(i<len(lines) and lines[i].startswith('## '),'画像标题丢失')
-            title=lines[i][3:];i+=1;body=[]
-            while i<len(lines) and lines[i]!='<!-- /memory:profile -->':body.append(lines[i]);i+=1
-            expect(i<len(lines),'画像缺少结束标记')
-            out.append({**meta,'title':title,'content':'\n'.join(body).strip()})
-        i+=1
-    return out
-
-def render_profiles(domain,profiles):
-    out=[f'# {domain}\n']
-    for p in profiles:
-        meta={k:p[k] for k in ('id','scope','basis','source_record_ids')}
-        out.append(f'<!-- memory:profile {compact(meta)} -->\n## {p["title"]}\n{p["content"]}\n<!-- /memory:profile -->\n')
-    return '\n'.join(out).rstrip()+'\n'
-
-def all_records(root,overrides=None):
-    paths=set(stored_files(root,'daily','.md'))
-    if overrides:paths.update(k for k in overrides if k.startswith('daily/') and k.endswith('.md'))
-    found=[]
-    for rel in sorted(paths):
-        b=file_bytes(root,rel,overrides)
-        if b is not None:
-            for r in parse_daily(b.decode('utf-8')):
-                r['file_path']=rel;r['date']=Path(rel).stem;found.append(r)
-    ids=[r['id'] for r in found];expect(len(ids)==len(set(ids)),'记忆 ID 在不同日期重复')
-    return found
-
-def all_profiles(root,overrides=None):
-    result=[]
-    for domain in sorted(DOMAINS):
-        rel='profile/'+domain+'.md';b=file_bytes(root,rel,overrides)
-        if b is not None:
-            for p in parse_profiles(b.decode()):p['domain']=domain;result.append(p)
-    ids=[p['id'] for p in result];expect(len(ids)==len(set(ids)),'画像 ID 重复')
-    return result
-
-def is_active_rule(record: dict) -> bool:
-    """旧记录未带状态时保持有效；历史版本不进入当前规则投影。"""
-    return record['type'] in RULE_TYPES and record.get('status','active')=='active'
 
 def record_refs(record: dict, key: str) -> list[str]:
     refs=record.get(key,[])
@@ -302,436 +86,25 @@ def record_refs(record: dict, key: str) -> list[str]:
            and len(refs)==len(set(refs)),f'{key} 必须为不重复的 ID 数组')
     return refs
 
-def validate_state(root: Path, overrides: dict | None = None) -> tuple[list[dict],list[dict]]:
-    recs=all_records(root,overrides);profiles=all_profiles(root,overrides)
-    unique={};refmap={r['id']:r for r in recs};valid_ids=set(refmap)
-    for r in recs:
-        expect(ID_RE.fullmatch(r['id']) is not None,'非法记忆 ID: '+r['id'])
-        expect(r['date']==Path(r['file_path']).stem,'每日文件日期与文件名不一致')
-        expect(r['type'] in TYPES,'未知记录类型')
-        expect(r.get('status','active') in ('active','superseded'),'非法记录状态')
-        expect(r.get('project_id') is None or (isinstance(r['project_id'],str) and bool(r['project_id'].strip())),
-               '项目归属无效')
-        sources=record_refs(r,'source_record_ids')
-        expect(set(sources).issubset(valid_ids) and r['id'] not in sources,'日记来源不存在或引用自身')
-        supersedes=record_refs(r,'supersedes')
-        expect(set(supersedes).issubset(valid_ids) and r['id'] not in supersedes,'替代目标不存在或引用自身')
-        if r['type'] in RULE_TYPES:
-            expect(isinstance(r.get('rule_key'),str) and r['rule_key'].strip(),'规则记录缺少 rule_key')
-            if is_active_rule(r):
-                # 历史来源的同名规则仍独立，不因全局可检索被合并或自动提升。
-                k=(r.get('project_id'),r['rule_key'])
-                expect(k not in unique,f'重复有效规则: {k}')
-                unique[k]=r['id']
-            for rid in supersedes:
-                old=refmap[rid]
-                expect(old['type'] in RULE_TYPES and old.get('status')=='superseded'
-                       and old.get('superseded_by')==r['id'],'替代关系必须指向已被明确替代的规则')
-        else:
-            expect(not supersedes and r.get('status','active')=='active' and not r.get('superseded_by'),
-                   '非规则日记不能参与有效版本替代')
-        successor=r.get('superseded_by')
-        if successor is not None:
-            expect(isinstance(successor,str) and successor in valid_ids,'后继规则不存在')
-            newer=refmap[successor]
-            expect(r.get('status')=='superseded' and newer['type'] in RULE_TYPES
-                   and r['id'] in record_refs(newer,'supersedes'),
-                   '后继规则与替代关系不一致')
-    for r in recs:
-        seen={r['id']};successor=r.get('superseded_by')
-        while successor:
-            expect(successor not in seen,'规则替代关系存在循环')
-            seen.add(successor);successor=refmap[successor].get('superseded_by')
-    for p in profiles:
-        expect(isinstance(p.get('scope'),str) and (p['scope']=='global'
-               or re.fullmatch(r'(domain|project):[a-z0-9-]+',p['scope'])),'画像历史作用域无效')
-        expect(ID_RE.fullmatch(p['id']) is not None,'非法画像 ID')
-        expect(set(record_refs(p,'source_record_ids')).issubset(valid_ids),'画像引用了已经删除的来源记忆')
-    months=set(stored_files(root,'monthly','.md'))
-    if overrides:months.update(k for k in overrides if k.startswith('monthly/') and k.endswith('.md'))
-    for rel in months:
-        b=file_bytes(root,rel,overrides)
-        if b is None:continue
-        for line in b.decode('utf-8').splitlines():
-            mt=SUM_OPEN.fullmatch(line)
-            if mt:
-                ids=json.loads(mt.group(1))['source_record_ids']
-                expect(ids and set(ids).issubset(valid_ids),f'摘要来源已丢失: {rel}')
-                expect(all(refmap[rid]['date'][:7]==Path(rel).stem for rid in ids),'摘要跨越指定月份')
-    return recs,profiles
 
-def search_paths(root: Path, overrides: dict | None = None) -> list[str]:
-    """只枚举全局检索来源；画像保留独立的按领域读取入口。"""
-    paths={'manifest.json'}
-    # 旧索引可继续核对已有目录表的指纹，但它不再是记忆功能的必需文件。
-    if file_bytes(root,'catalog/projects.json',overrides) is not None:paths.add('catalog/projects.json')
-    for subtree in ('daily','monthly'):paths.update(stored_files(root,subtree,'.md'))
-    for rel,value in (overrides or {}).items():
-        if rel in paths or (rel.startswith(('daily/','monthly/')) and rel.endswith('.md')):
-            if value is None:paths.discard(rel)
-            else:paths.add(rel)
-    return sorted(paths)
+def is_active_rule(record: dict) -> bool:
+    return record['type'] in RULE_TYPES and record.get('status','active')=='active'
 
 
-def source_stamp(path: Path) -> list[int]:
-    info=path.stat()
-    expect(stat.S_ISREG(info.st_mode),'检索来源不是普通文件: '+str(path))
-    return [info.st_dev,info.st_ino,info.st_size,info.st_mtime_ns,info.st_ctime_ns]
+def parse_month(value: object) -> str:
+    expect(isinstance(value,str) and re.fullmatch(r'\d{4}-(0[1-9]|1[0-2])',value) is not None,'非法月份')
+    return str(value)
 
 
-def stable_source(root: Path, rel: str) -> tuple[bytes,list[int]]:
-    path=safe(root,rel);before=source_stamp(path);data=path.read_bytes();after=source_stamp(path)
-    expect(before==after,'SOURCE_CHANGED：来源读取期间变化，未使用混合版本: '+rel)
-    return data,after
+def db_path(root: Path) -> Path:
+    return root/DB_NAME
 
 
-def lexical_terms(value: str) -> list[str]:
-    """中文双字片段与英文词元；标识符同时保留整体和下划线片段。"""
-    tokens=[]
-    for run in SEARCH_TOKENS.findall(unicodedata.normalize('NFKC',value).casefold()):
-        if run.isascii():parts=[run,*[part for part in run.split('_') if part and part!=run]]
-        else:parts=[run] if len(run)==1 else [run[i:i+2] for i in range(len(run)-1)]
-        tokens.extend(part for part in parts if part not in SEARCH_STOPWORDS)
-    return tokens
-
-
-def summary_records(data: bytes, rel: str) -> list[dict]:
-    """月摘要按文件内序号定位；旧项目标签仅作来源信息。"""
-    lines=data.decode('utf-8').splitlines();result=[];project=None;topic='';scope_known=False;i=0
-    while i<len(lines):
-        line=lines[i];marker=PROJECT_OPEN.fullmatch(line)
-        if marker:project=json.loads(marker.group(1))['id'];scope_known=True
-        elif line==GLOBAL_OPEN:project=None;scope_known=True
-        elif line.startswith('### '):topic=line[4:]
-        else:
-            marker=SUM_OPEN.fullmatch(line)
-            if marker:
-                expect(scope_known,'月摘要缺少记忆范围标记: '+rel)
-                meta=json.loads(marker.group(1));body=[];i+=1
-                while i<len(lines) and lines[i]!='<!-- /memory:summary -->':body.append(lines[i]);i+=1
-                expect(i<len(lines),'月摘要缺少结束标记: '+rel)
-                result.append({'kind':'summary','key':f'summary:{rel}:{len(result)}','file_path':rel,
-                               'month':Path(rel).stem,**({'project_id':project,'project':project} if project is not None else {}),'topic':topic,
-                               'content':'\n'.join(body).strip(),'source_record_ids':meta['source_record_ids']})
-        i+=1
-    return result
-
-
-def search_document(record: dict, kind: str = 'record') -> dict:
-    fields=('id','file_path','date','project_id','type','topic','title','rule_key','status',
-            'superseded_by','supersedes','source_record_ids') if kind=='record' else (
-                'key','file_path','month','project_id','topic','source_record_ids')
-    row={key:record[key] for key in fields if key in record}
-    row.update({'kind':kind,'key':'record:'+record['id'] if kind=='record' else record['key']})
-    if kind=='record':row['status']=record.get('status','active')
-    terms=Counter(lexical_terms(record['content']))
-    for field in dict.fromkeys(str(record.get(key) or '') for key in ('title','topic','rule_key')):
-        terms.update({term:count*3 for term,count in Counter(lexical_terms(field)).items()})
-    row['terms']=dict(terms);row['length']=sum(terms.values())
-    return row
-
-
-def search_fingerprint(index: dict) -> str:
-    payload={key:value for key,value in index.items() if key!='fingerprint'}
-    return sha(json.dumps(payload,ensure_ascii=False,sort_keys=True,separators=(',',':')).encode())
-
-
-def build_search_index(snapshot: dict, sources: dict, records: list[dict]) -> dict:
-    docs=[search_document(record) for record in records]
-    for rel,data in sorted(snapshot.items()):
-        if rel.startswith('monthly/'):
-            docs.extend(search_document(record,'summary') for record in summary_records(data,rel))
-    result={'version':SEARCH_VERSION,'algorithm':SEARCH_ALGORITHM,'sources':sources,'documents':docs}
-    result['fingerprint']=search_fingerprint(result)
-    return result
-
-
-def check_search_sources(root: Path, index: dict) -> dict[str,bytes]:
-    """文件属性仅作判脏线索；变动来源及返回原文还须核对内容指纹。"""
-    sources=index['sources'];verified={}
-    expect(search_paths(root)==sorted(sources),'INDEX_STALE：检索来源集合变化，须单独批准重建索引')
-    for rel,source in sources.items():
-        expect(isinstance(source,dict) and isinstance(source.get('sha256'),str),'INDEX_INVALID：来源版本无效')
-        if source.get('stamp')!=source_stamp(safe(root,rel)):
-            data,_=stable_source(root,rel)
-            expect(sha(data)==source['sha256'],'INDEX_STALE：来源内容已变化: '+rel)
-            verified[rel]=data
-    return verified
-
-
-def load_search_index(root: Path) -> tuple[dict,dict[str,bytes]]:
-    data=file_bytes(root,SEARCH_INDEX)
-    expect(data is not None,'INDEX_MISSING：全局检索索引缺失；须单独批准 reindex，未扫描历史或自动修复')
-    index=json.loads(data)
-    expect(isinstance(index,dict) and index.get('version')==SEARCH_VERSION
-           and index.get('algorithm')==SEARCH_ALGORITHM,'INDEX_VERSION：检索索引版本不适用，须单独批准重建')
-    expect(isinstance(index.get('sources'),dict) and isinstance(index.get('documents'),list),
-           'INDEX_INVALID：检索索引结构无效')
-    expect(index.get('fingerprint')==search_fingerprint(index),'INDEX_INVALID：检索索引指纹不一致')
-    keys=set()
-    for doc in index['documents']:
-        expect(isinstance(doc,dict) and isinstance(doc.get('key'),str) and doc.get('kind') in ('record','summary')
-               and isinstance(doc.get('file_path'),str) and doc['file_path'] in index['sources']
-               and (doc.get('project_id') is None or isinstance(doc['project_id'],str))
-               and isinstance(doc.get('terms'),dict)
-               and isinstance(doc.get('length'),int) and doc['length']>=0,'INDEX_INVALID：候选结构无效')
-        expect(doc['key'] not in keys,'INDEX_INVALID：候选定位重复');keys.add(doc['key'])
-        expect(all(isinstance(term,str) and isinstance(count,int) and count>0
-                   for term,count in doc['terms'].items()),'INDEX_INVALID：词项结构无效')
-        if doc['kind']=='record':
-            expect(isinstance(doc.get('id'),str) and doc['id'].startswith('m_')
-                   and ID_RE.fullmatch(doc['id']) is not None and doc['key']=='record:'+doc['id']
-                   and doc.get('status') in ('active','superseded') and doc.get('type') in TYPES,
-                   'INDEX_INVALID：日记候选身份或状态无效')
-    return index,check_search_sources(root,index)
-
-
-def rank_documents(documents: list[dict], query: str) -> list[tuple[dict,float,list[str]]]:
-    """相关性先于时间与项目；不将其他项目的历史决定提升为当前规则。"""
-    tokens=set(lexical_terms(query))
-    if not tokens:return []
-    total=len(documents);average=sum(doc['length'] for doc in documents)/max(total,1) or 1
-    frequency=Counter(term for doc in documents for term in tokens if term in doc['terms']);ranked=[]
-    for doc in documents:
-        hits=sorted(tokens.intersection(doc['terms']))
-        if not hits:continue
-        score=0.0
-        for term in hits:
-            count=doc['terms'][term];weight=math.log1p((total-frequency[term]+0.5)/(frequency[term]+0.5))
-            score+=weight*count*2.2/(count+1.2*(0.25+0.75*doc['length']/average))
-        ranked.append((doc,score*len(hits)/len(tokens),hits))
-    ranked.sort(key=lambda item:(-item[1],item[0]['key']))
-    return ranked
-
-
-def hydrate_documents(root: Path, index: dict, documents: list[dict], verified: dict[str,bytes]) -> list[dict]:
-    """每个命中文件只解析一次；索引不代替完整原文或真实生命周期。"""
-    files={};result=[]
-    for doc in documents:
-        rel=doc['file_path']
-        if rel not in files:
-            data=verified.get(rel)
-            if data is None:data,_=stable_source(root,rel)
-            expect(sha(data)==index['sources'][rel]['sha256'],'INDEX_STALE：原文与索引来源版本不一致: '+rel)
-            if rel.startswith('daily/'):
-                rows=parse_daily(data.decode('utf-8'))
-                for row in rows:row.update({'file_path':rel,'date':Path(rel).stem})
-                files[rel]={'record:'+row['id']:row for row in rows}
-            else:
-                expect(rel.startswith('monthly/'),'INDEX_INVALID：原文定位不属于日记或月摘要')
-                files[rel]={row['key']:row for row in summary_records(data,rel)}
-        row=files[rel].get(doc['key'])
-        expect(row is not None and search_document(row,doc['kind'])==doc,
-               'INDEX_STALE：候选身份、状态或检索内容与原文不一致')
-        result.append({**row,'kind':doc['kind'],**({'status':row.get('status','active'),
-                       'source_record_ids':row.get('source_record_ids',[])} if doc['kind']=='record' else {})})
-    check_search_sources(root,index)
-    return result
-
-
-def extract_error_fingerprint(output: str, exit_code: int = 0) -> str:
-    """从工具执行输出提取稳定的报错特征串，去除动态内容（路径、PID、时间戳）。"""
-    if not output or not isinstance(output, str): return ''
-    
-    lines = output.splitlines()
-    keywords = ['error:', 'failed', 'exception', 'traceback', 'fatal', 'err!', 
-                'cannot', 'not found', 'no such', 'permission denied', 'syntax error']
-    
-    selected = []
-    for i, line in enumerate(lines):
-        lower = line.lower()
-        if any(kw in lower for kw in keywords):
-            # 保留当前行及前后各1行上下文
-            if i > 0 and lines[i-1].strip():
-                selected.append(lines[i-1])
-            selected.append(line)
-            if i + 1 < len(lines) and lines[i+1].strip():
-                selected.append(lines[i+1])
-    
-    if not selected and exit_code != 0:
-        # 无明显错误关键词但退出码非零，保留最后几行
-        selected = [l for l in lines[-5:] if l.strip()]
-    
-    if not selected: return ''
-    
-    # 去除动态内容
-    fingerprint = '\n'.join(selected)
-    # 移除绝对路径（Windows 与 Unix）
-    fingerprint = re.sub(r'[A-Za-z]:[\\\S]+', '<PATH>', fingerprint)
-    fingerprint = re.sub(r'/[\w/\-\.]+', '<PATH>', fingerprint)
-    # 移除时间戳
-    fingerprint = re.sub(r'\d{4}-\d{2}-\d{2}[T\s]\d{2}:\d{2}:\d{2}', '<TIME>', fingerprint)
-    # 移除 PID
-    fingerprint = re.sub(r'\bpid[:\s]+\d+', 'pid:<PID>', fingerprint, flags=re.IGNORECASE)
-    # 移除临时文件名
-    fingerprint = re.sub(r'\btmp[\w\-\.]+', '<TMP>', fingerprint, flags=re.IGNORECASE)
-    
-    # 限制长度
-    if len(fingerprint) > 500:
-        fingerprint = fingerprint[:500]
-    
-    return fingerprint.strip()
-
-
-def error_recall(root: Path, data: dict) -> dict:
-    """报错指纹专用检索：仅匹配 type=issue 的日记记录。"""
-    allowed = {'fingerprint', 'limit'}
-    expect(isinstance(data, dict) and not set(data) - allowed, '报错召回输入字段无效')
-    fingerprint = data.get('fingerprint')
-    expect(isinstance(fingerprint, str) and 0 < len(fingerprint.strip()) <= 500, '报错指纹须为有界特征串')
-    limit = data.get('limit', 3)
-    expect(isinstance(limit, int) and 1 <= limit <= 10, '报错召回数量限制无效')
-    
-    index, verified = load_search_index(root)
-    
-    # 只检索 type=issue 的记录
-    docs = [doc for doc in index['documents'] 
-            if doc['kind'] == 'record' 
-            and doc.get('type') == 'issue']
-    
-    ranked = rank_documents(docs, fingerprint.strip())
-    # 相关度门槛：至少匹配到 2 个词项
-    eligible = [item for item in ranked if len(item[2]) >= 2]
-    
-    selected = eligible[:limit]
-    rows = hydrate_documents(root, index, [item[0] for item in selected], verified)
-    
-    fields = ('id', 'type', 'topic', 'title', 'content', 'project_id', 'date', 'file_path', 'status', 'source_record_ids')
-    matches = [{**{key: row[key] for key in fields if key in row}, 
-                'score': round(item[1], 6), 
-                'matched_terms': item[2]} for row, item in zip(rows, selected)]
-    
-    return {
-        'policy': 'error-fingerprint-v1',
-        'index_version': index['fingerprint'],
-        'fingerprint': fingerprint,
-        'memory_scope': 'global',
-        'matches': matches,
-        'no_match': not matches,
-        'note': '报错指纹联动仅匹配 issue 类型日记；不自动沉淀新记录，所有写入仍需人工审批。'
-    }
-
-
-def indexed_recall(root: Path, query: str, mode: str = 'records',
-                   month: str | None = None, offset: int = 0, limit: int = 50, allow_empty: bool = False) -> dict:
-    """从全局派生索引执行词法召回；content 截断为前 200 字摘要，完整正文需二次调用 read。"""
-    expect(mode in ('records','recent','historical','month'),'非法检索模式')
-    expect(offset>=0 and 1<=limit<=200,'offset/limit 非法；每批最多 200 条')
-    expect(allow_empty or bool(query.strip()),'检索问题不能为空')
-    expect((mode=='month' and isinstance(month,str) and re.fullmatch(r'\d{4}-(0[1-9]|1[0-2])',month))
-           or (mode!='month' and month is None),'月份必须明确且仅用于 month 模式')
-    manifest,zone=load(root);index,verified=load_search_index(root)
-    kind='summary' if mode in ('historical','month') else 'record'
-    docs=[doc for doc in index['documents'] if doc['kind']==kind]
-    if mode=='recent':
-        window=manifest['recent_window_days'];expect(1<=window<=366,'recent_window_days 超出合理范围')
-        today=dt.datetime.now(zone).date();first=(today-dt.timedelta(days=window-1)).isoformat()
-        docs=[doc for doc in docs if first<=doc['date']<=today.isoformat()]
-    if mode=='month':docs=[doc for doc in docs if doc['month']==month]
-    ranked=rank_documents(docs,query) if query.strip() else [(doc,0.0,[]) for doc in sorted(docs,key=lambda doc:doc['key'])]
-    page=ranked[offset:offset+limit];rows=hydrate_documents(root,index,[item[0] for item in page],verified)
-    def truncate_content(content: str, limit: int = 200) -> tuple[str, bool]:
-        if len(content) <= limit: return content, False
-        return content[:limit] + '...', True
-    matches=[]
-    for row,item in zip(rows,page):
-        truncated, was_truncated = truncate_content(row['content'])
-        matches.append({**row, 'content': truncated, 'content_truncated': was_truncated,
-                        'score':round(item[1],6),'matched_terms':item[2]})
-    scope={'records':'all_daily','recent':'recent_daily','historical':'historical_month_summaries','month':'monthly_summary'}[mode]
-    missing=mode=='month' and f'monthly/{month[:4]}/{month}.md' not in index['sources']
-    return {'status':'MONTHLY_SUMMARY_MISSING' if missing else 'OK','scope':scope,'memory_scope':'global',
-            'mode':mode,'month':month,'query':query,'index_version':index['fingerprint'],'coverage':'indexed_sources',
-            'matches':matches,'total_matches':len(ranked),'offset':offset,'limit':limit,
-            'has_more':offset+limit<len(ranked),'next_offset':offset+limit if offset+limit<len(ranked) else None,
-            'no_match':not ranked,'note':'仅词法相关性；历史来源与状态不代表当前适用或事实已核实；摘要需 memory_read 读取全文'}
-
-
-BACKGROUND_POLICY = 'lexical-global-background-v2'
-BACKGROUND_STOPWORDS = {'当前','现在','需要','可以','已经','相关','问题','项目','功能','优化','处理',
-                       '继续','一下','看看','进行','是否','推荐','建议','方案','实现','本次','以下',
-                       'please','could','would','should','help','with','this','that'}
-# 自动背景的类型权重：决定与约束优先于进展流水，避免历史流水挤占有限的背景预算。
-TYPE_WEIGHT = {'decision':1.6,'constraint':1.8,'preference_evidence':1.4,'fact':1.1,'issue':1.0,'progress':0.7}
-
-
-def background_recall(root: Path, data: dict) -> dict:
-    """自动背景专用只读入口；共享词法核心，缓存复用仍核对来源与命中原文。"""
-    allowed={'query','recent','date_from','date_to','cache_key','cached_ids'}
-    expect(isinstance(data,dict) and not set(data)-allowed,'自动召回输入字段无效')
-    query=data.get('query')
-    expect(isinstance(query,str) and 0<len(query.strip())<=2000,'自动召回需要有界任务查询')
-    manifest,zone=load(root)
-    recent=data.get('recent',False)
-    expect(type(recent) is bool,'recent 必须为布尔值')
-    first,last=data.get('date_from'),data.get('date_to')
-    expect(not recent or (first is None and last is None),'近期与明确日期范围不能混用')
-    for value in (first,last):
-        if value is not None:
-            expect(isinstance(value,str) and re.fullmatch(r'\d{4}-\d{2}-\d{2}',value) is not None,
-                   '日期范围须为 YYYY-MM-DD')
-            dt.date.fromisoformat(value)
-    if recent:
-        window=manifest['recent_window_days']
-        expect(type(window) is int and 1<=window<=366,'近期窗口无效')
-        today=dt.datetime.now(zone).date()
-        first=(today-dt.timedelta(days=window-1)).isoformat();last=today.isoformat()
-    expect(first is None or last is None or first<=last,'日期范围顺序无效')
-    cached_ids=data.get('cached_ids',[]);cached_key=data.get('cache_key')
-    expect(isinstance(cached_ids,list) and len(cached_ids)<=6
-           and all(isinstance(rid,str) and rid.startswith('m_') and ID_RE.fullmatch(rid) for rid in cached_ids)
-           and len(set(cached_ids))==len(cached_ids),'自动召回缓存身份无效')
-    expect(cached_key is None or (isinstance(cached_key,str) and re.fullmatch(r'[0-9a-f]{64}',cached_key)),
-           '自动召回缓存键无效')
-    expect(cached_key is not None or not cached_ids,'缓存 ID 缺少所属版本')
-    index,verified=load_search_index(root)
-    scope={'memory_scope':'global','date_from':first,'date_to':last}
-    cache_key=sha(compact([BACKGROUND_POLICY,index['fingerprint'],query,scope]).encode())
-    docs=[doc for doc in index['documents'] if doc['kind']=='record' and doc['status']=='active'
-          and (first is None or doc['date']>=first) and (last is None or doc['date']<=last)]
-    base={'policy':BACKGROUND_POLICY,'index_version':index['fingerprint'],'cache_key':cache_key,
-          'scope':scope,'coverage':'indexed_sources'}
-    if cached_key==cache_key:
-        by_id={doc['id']:doc for doc in docs}
-        expect(all(rid in by_id for rid in cached_ids),'缓存记录不属于当前候选范围')
-        # 同版本不能跳过原文哈希；空命中也已经检查来源集合与变化文件。
-        hydrate_documents(root,index,[by_id[rid] for rid in cached_ids],verified)
-        return {**base,'unchanged':True,'ids':cached_ids}
-    terms={term for term in lexical_terms(query) if term not in BACKGROUND_STOPWORDS}
-    ranked=rank_documents(docs,' '.join(sorted(terms))) if terms else []
-    # 先按类型权重重排，再套相关度门槛与相对截断，保证规则类条目先获得名额。
-    ranked=[(doc,score*TYPE_WEIGHT.get(doc.get('type'),1.0),hits) for doc,score,hits in ranked]
-    ranked.sort(key=lambda item:(-item[1],item[0]['key']))
-    eligible=[item for item in ranked if len(item[2])>=min(2,len(terms))
-              and len(item[2])/max(1,len(terms))>=0.12]
-    if eligible:
-        eligible=[item for item in eligible if item[1]>=eligible[0][1]*0.45]
-    # 相关性门槛先于分组，分别保留最多三条规则和三条经历，避免一类挤占全部名额。
-    selected=[];counts={'rule':0,'history':0}
-    for item in eligible:
-        group='rule' if item[0]['type'] in RULE_TYPES else 'history'
-        if counts[group]>=3:continue
-        counts[group]+=1;selected.append(item)
-    rows=hydrate_documents(root,index,[item[0] for item in selected],verified)
-    fields=('id','type','topic','title','content','project_id','date','file_path','status','source_record_ids')
-    matches=[{**{key:row[key] for key in fields if key in row},'score':round(item[1],6),
-              'matched_terms':item[2]} for row,item in zip(rows,selected)]
-    # 无命中时给出具体原因，供扩展区分“没有词项”“没有重叠”和“低于门槛”，不把它们都说成无命中。
-    reason=None if matches else ('no_terms' if not terms else 'no_overlap' if not ranked else 'below_threshold')
-    return {**base,'unchanged':False,'matches':matches,'ids':[row['id'] for row in matches],
-            'no_match':not matches,'reason':reason,'eligible_count':len(eligible),
-            'note':'自动词法筛选不证明适用性或事实正确；被替代规则不自动注入，完整历史仍可手动查询。'}
-
-
-def indexed_read(root: Path, ids: list[str]) -> dict:
-    expect(1<=len(ids)<=50 and all(isinstance(rid,str) and rid.startswith('m_')
-           and ID_RE.fullmatch(rid) is not None for rid in ids),'须指定 1..50 个真实日记 ID')
-    index,verified=load_search_index(root)
-    by_id={doc['id']:doc for doc in index['documents'] if doc['kind']=='record'}
-    expect(all(rid in by_id for rid in ids),'指定记忆 ID 不在当前索引中，未扫描全历史')
-    docs=[by_id[rid] for rid in ids]
-    return {'records':hydrate_documents(root,index,docs,verified),'memory_scope':'global',
-            'index_version':index['fingerprint'],'coverage':'indexed_sources'}
+def access_time(value: object) -> dt.datetime:
+    if not isinstance(value,str): raise MemoryError('ACCESS_INVALID：统计时间无效')
+    parsed=dt.datetime.fromisoformat(value)
+    expect(parsed.utcoffset() is not None,'ACCESS_INVALID：统计时间缺少时区')
+    return parsed
 
 
 def access_ids(ids: object) -> list[str]:
@@ -743,183 +116,627 @@ def access_ids(ids: object) -> list[str]:
     return list(dict.fromkeys(ids))
 
 
-def access_time(value: object) -> dt.datetime:
-    if not isinstance(value,str):raise MemoryError('ACCESS_INVALID：统计时间无效')
-    parsed=dt.datetime.fromisoformat(value)
-    expect(parsed.utcoffset() is not None,'ACCESS_INVALID：统计时间缺少时区')
-    return parsed
+# ---------------------------------------------------------------------------
+# 连接、事务与版本
+# ---------------------------------------------------------------------------
+
+SCHEMA_SQL = """
+CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE records(
+  id TEXT PRIMARY KEY, date TEXT NOT NULL, session_id TEXT NOT NULL, agent TEXT NOT NULL,
+  saved_at TEXT NOT NULL, type TEXT NOT NULL, topic TEXT NOT NULL, title TEXT NOT NULL,
+  content TEXT NOT NULL, rule_key TEXT, status TEXT NOT NULL, superseded_by TEXT,
+  project_id TEXT, content_digest TEXT NOT NULL, doc_length INTEGER NOT NULL);
+CREATE INDEX records_date ON records(date);
+CREATE INDEX records_rule ON records(type, rule_key, project_id, status);
+CREATE TABLE record_sources(record_id TEXT NOT NULL REFERENCES records(id) ON DELETE CASCADE,
+  source_id TEXT NOT NULL, PRIMARY KEY(record_id, source_id));
+CREATE TABLE record_supersedes(record_id TEXT NOT NULL REFERENCES records(id) ON DELETE CASCADE,
+  target_id TEXT NOT NULL, PRIMARY KEY(record_id, target_id));
+CREATE TABLE record_terms(record_id TEXT NOT NULL REFERENCES records(id) ON DELETE CASCADE,
+  term TEXT NOT NULL, tf INTEGER NOT NULL, PRIMARY KEY(record_id, term));
+CREATE INDEX record_terms_term ON record_terms(term);
+CREATE TABLE profiles(id TEXT PRIMARY KEY, domain TEXT NOT NULL, scope TEXT NOT NULL,
+  basis TEXT NOT NULL, title TEXT NOT NULL, content TEXT NOT NULL);
+CREATE INDEX profiles_domain ON profiles(domain);
+CREATE TABLE profile_sources(profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  source_id TEXT NOT NULL, PRIMARY KEY(profile_id, source_id));
+CREATE TABLE summaries(month TEXT NOT NULL, position INTEGER NOT NULL, topic TEXT NOT NULL,
+  content TEXT NOT NULL, generated_at TEXT NOT NULL, doc_length INTEGER NOT NULL,
+  PRIMARY KEY(month, position));
+CREATE TABLE summary_sources(month TEXT NOT NULL, position INTEGER NOT NULL, source_id TEXT NOT NULL,
+  PRIMARY KEY(month, position, source_id));
+CREATE TABLE summary_terms(month TEXT NOT NULL, position INTEGER NOT NULL, term TEXT NOT NULL,
+  tf INTEGER NOT NULL, PRIMARY KEY(month, position, term));
+CREATE INDEX summary_terms_term ON summary_terms(term);
+CREATE TABLE access_events(record_id TEXT NOT NULL, session_hash TEXT NOT NULL,
+  event_hash TEXT NOT NULL, at TEXT NOT NULL, PRIMARY KEY(record_id, session_hash, event_hash));
+CREATE INDEX access_events_record ON access_events(record_id);
+CREATE TABLE plans(plan_id TEXT PRIMARY KEY, operation TEXT NOT NULL, plan_version INTEGER NOT NULL,
+  created_at REAL NOT NULL, expected_change_seq INTEGER NOT NULL, payload TEXT NOT NULL);
+"""
 
 
-def load_access_state(root: Path) -> dict | None:
-    """缺失表示尚未采集；损坏不当作零计数，也不从历史会话重建。"""
-    path=safe(root,ACCESS_STORE)
-    if not path.exists():return None
-    data,_=stable_source(root,ACCESS_STORE)
-    state=json.loads(data)
-    expect(isinstance(state,dict) and set(state)=={'version','started_at','records'}
-           and type(state['version']) is int and state['version']==ACCESS_VERSION
-           and isinstance(state['records'],dict),'ACCESS_INVALID：统计结构或版本无效')
-    access_time(state['started_at'])
-    for rid,row in state['records'].items():
-        expect(isinstance(rid,str) and rid.startswith('m_') and ID_RE.fullmatch(rid)
-               and isinstance(row,dict) and set(row)=={'read_count','session_count','last_read_at','sessions'}
-               and isinstance(row['sessions'],dict) and bool(row['sessions']),
-               'ACCESS_INVALID：记录统计结构无效')
-        access_time(row['last_read_at'])
-        count=0
-        for session,events in row['sessions'].items():
-            expect(isinstance(session,str) and re.fullmatch('[0-9a-f]{64}',session)
-                   and isinstance(events,list) and bool(events)
-                   and all(isinstance(event,str) and re.fullmatch('[0-9a-f]{64}',event) for event in events),
-                   'ACCESS_INVALID：去重身份无效')
-            expect(len(events)==len(set(events)),'ACCESS_INVALID：存在重复调用身份')
-            count+=len(events)
-        expect(type(row['read_count']) is int and row['read_count']==count
-               and type(row['session_count']) is int and row['session_count']==len(row['sessions']),
-               'ACCESS_INVALID：计数与去重身份不一致')
-    return state
+def _connect(path: Path, write: bool) -> sqlite3.Connection:
+    if write:
+        conn=sqlite3.connect(str(path),timeout=BUSY_TIMEOUT_SECONDS,isolation_level=None)
+    else:
+        # 只读连接用 URI 模式；目录仍需可写，WAL 的共享内存索引由 SQLite 自行映射。
+        conn=sqlite3.connect(path.absolute().as_uri()+'?mode=ro',uri=True,timeout=BUSY_TIMEOUT_SECONDS,isolation_level=None)
+        conn.execute('PRAGMA query_only=1')
+    conn.row_factory=sqlite3.Row
+    conn.execute(f'PRAGMA busy_timeout={int(BUSY_TIMEOUT_SECONDS*1000)}')
+    conn.execute('PRAGMA foreign_keys=ON')
+    return conn
 
 
-def access_metrics(row: dict | None) -> dict:
-    return {'observed':row is not None,'read_count':row['read_count'] if row else 0,
-            'session_count':row['session_count'] if row else 0,
-            'last_read_at':row['last_read_at'] if row else None}
+@contextlib.contextmanager
+def connect(root: Path, write: bool = False):
+    """短连接：每次调用开一条连接，写路径显式 BEGIN IMMEDIATE，只读路径 mode=ro。"""
+    path=db_path(root)
+    expect(path.is_file(),'DB_MISSING：记忆库不存在；先执行 init')
+    conn=_connect(path,write)
+    try: yield conn
+    finally: conn.close()
 
 
-def access_status(root: Path) -> dict:
-    """统计故障只在状态中报告，不使成功的权威记忆读取变成统计故障。"""
+@contextlib.contextmanager
+def transaction(conn: sqlite3.Connection):
+    """写事务：先取写锁，忙时整事务重试；失败统一回滚。"""
+    acquired=False
+    for attempt in range(BUSY_RETRIES):
+        try:
+            conn.execute('BEGIN IMMEDIATE');acquired=True;break
+        except sqlite3.OperationalError as error:
+            message=str(error).lower()
+            if 'locked' not in message and 'busy' not in message:
+                raise MemoryError(f'DB_ERROR：{error}') from error
+            if attempt==BUSY_RETRIES-1: break
+            time.sleep(0.05*(attempt+1))
+    expect(acquired,'ACCESS_BUSY：记忆库正在操作，未完成写入')
     try:
-        state=load_access_state(root)
-        return {'automatic':True,'status':'available' if state else 'not_collected',
-                'file':ACCESS_STORE,'started_at':state['started_at'] if state else None,
-                'tracked_records':len(state['records']) if state else 0,'note':ACCESS_NOTE}
-    except (MemoryError,ValueError,KeyError,TypeError,UnicodeError,OSError) as error:
-        return {'automatic':True,'status':'unavailable','file':ACCESS_STORE,
-                'error':str(error)[:1024],'note':ACCESS_NOTE}
+        yield
+        conn.execute('COMMIT')
+    except BaseException:
+        try: conn.execute('ROLLBACK')
+        except sqlite3.Error: pass
+        raise
 
 
-def indexed_access_stats(root: Path, ids: list[str]) -> dict:
-    ids=access_ids(ids)
-    index,_=load_search_index(root)
-    available={doc['id']:doc for doc in index['documents'] if doc['kind']=='record'}
-    expect(all(rid in available for rid in ids),'指定统计 ID 不在当前索引中，未扫描历史')
-    state=load_access_state(root)
-    rows=state['records'] if state else {}
-    return {'status':'available' if state else 'not_collected','automatic':True,
-            'started_at':state['started_at'] if state else None,'index_version':index['fingerprint'],
-            'coverage':'recorded_accesses_only','note':ACCESS_NOTE,
-            'memory_scope':'global','records':[{'id':rid,'source_project':available[rid].get('project_id'),'date':available[rid]['date'],
-                        'status':available[rid]['status'],**access_metrics(rows.get(rid))} for rid in ids]}
+def meta_value(conn: sqlite3.Connection, key: str) -> str:
+    row=conn.execute('SELECT value FROM meta WHERE key=?',(key,)).fetchone()
+    expect(row is not None,f'DB_INVALID：缺少元信息 {key}')
+    return row[0]
 
 
-def record_access(root: Path, data: dict) -> dict:
-    """调用方已准备完整结果；在独占锁内去重并原子写入单份技术统计。"""
-    expect(isinstance(data,dict) and set(data)=={'ids','session_id','tool_call_id','index_version'},
-           '访问事件字段无效；不接受外部计数、时间或正文')
-    ids=access_ids(data['ids'])
-    for key in ('session_id','tool_call_id'):
-        expect(isinstance(data[key],str) and bool(data[key].strip()) and len(data[key])<=512,
-               '访问事件身份无效: '+key)
-    expect(isinstance(data['index_version'],str)
-           and re.fullmatch('[0-9a-f]{64}',data['index_version']),'访问来源版本无效')
-    index,_=load_search_index(root)
-    expect(index['fingerprint']==data['index_version'],
-           'SOURCE_CHANGED：读取后来源版本已变化，未计入访问统计')
-    available={doc['id'] for doc in index['documents'] if doc['kind']=='record'}
-    expect(set(ids).issubset(available),'访问记录已不在当前索引中，未写统计')
-    now=dt.datetime.now(dt.timezone.utc).isoformat(timespec='milliseconds')
-    state=load_access_state(root)
-    if state is None:state={'version':ACCESS_VERSION,'started_at':now,'records':{}}
-    session=sha(('pi-memory.access.session\0'+data['session_id']).encode())
-    event=sha(('pi-memory.access.call\0'+data['session_id']+'\0'+data['tool_call_id']).encode())
-    added=0
-    for rid in ids:
-        row=state['records'].get(rid)
-        if row is None:
-            row={'read_count':0,'session_count':0,'last_read_at':now,'sessions':{}}
-            state['records'][rid]=row
-        events=row['sessions'].get(session)
-        if events is not None and event in events:continue
-        if events is None:
-            events=[];row['sessions'][session]=events;row['session_count']+=1
-        events.append(event);row['read_count']+=1
-        row['last_read_at']=max(row['last_read_at'],now,key=access_time)
-        added+=1
-    if added:atomic_write(safe(root,ACCESS_STORE),j(state).encode())
-    return {'status':'recorded' if added else 'duplicate','new_records':added,
-            'duplicate_records':len(ids)-added}
+def meta_patch(conn: sqlite3.Connection, values: dict) -> None:
+    conn.executemany('INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
+                     [(key,str(value)) for key,value in values.items()])
 
 
-def search_semantics(index: dict) -> dict:
-    """来源属性是缓存提示，不能把事务落盘后的属性变化误判为语义索引变化。"""
-    return {**{key:value for key,value in index.items() if key not in ('fingerprint','sources')},
-            'sources':{rel:{'sha256':value['sha256']} for rel,value in index['sources'].items()}}
+def change_seq(conn: sqlite3.Connection) -> int:
+    return int(meta_value(conn,'change_seq'))
 
 
-def index_updates(root: Path, overrides: dict[str,bytes | None]) -> dict[str,bytes]:
-    snapshot={};sources={}
-    for rel in search_paths(root,overrides):
-        if rel in overrides:data=overrides[rel];stamp=None
-        else:data,stamp=stable_source(root,rel)
-        snapshot[rel]=data
-        # 改写来源尚未落盘，不猜最终文件属性；读取时仅对这些来源核对内容指纹。
-        sources[rel]={'sha256':sha(data),'stamp':stamp}
-    recs,profiles=validate_state(root,{**overrides,**snapshot})
-    # 可选元数据按实际字段投影，未修改的旧日记不因升级被要求重建索引。
-    entries={r['id']:{k:r.get(k) for k in ('file_path','date','project_id','type','topic','rule_key')}
-             |{'session_id':r['session']['id']}
-             |{k:r[k] for k in ('status','superseded_by','supersedes','source_record_ids') if k in r} for r in recs}
-    rules={compact([r.get('project_id'),r['rule_key']]):r['id'] for r in recs if is_active_rule(r)}
+def bump(conn: sqlite3.Connection) -> int:
+    """单调版本：写入与词项在同一事务内递增，替换读取侧的整库指纹。"""
+    value=change_seq(conn)+1
+    meta_patch(conn,{'change_seq':value})
+    return value
+
+
+def require_version(conn: sqlite3.Connection) -> int:
+    version=conn.execute('PRAGMA user_version').fetchone()[0]
+    expect(version==READABLE_VERSION,
+           f'DB_VERSION：数据版本不适用（库 {version}，代码 {READABLE_VERSION}）；须执行 migrate')
+    return version
+
+
+def timezone_of(conn: sqlite3.Connection) -> dt.tzinfo:
+    zone=meta_value(conn,'timezone')
+    try: return ZoneInfo(zone)
+    except (ZoneInfoNotFoundError,TypeError): raise MemoryError(f'无效/不可用的 IANA 时区: {zone}；Windows 可能需要安装 tzdata')
+
+
+def recent_window(conn: sqlite3.Connection) -> int:
+    window=int(meta_value(conn,'recent_window_days'))
+    expect(1<=window<=366,'recent_window_days 超出合理范围')
+    return window
+
+
+def create_store(root: Path, timezone: str) -> dict:
+    """建库入口：WAL、Schema、版本与元信息一次写入，供 init 与 migrate 共用。"""
+    try: ZoneInfo(timezone)
+    except ZoneInfoNotFoundError: raise MemoryError('IANA 时区不可用；Windows 可安装 tzdata')
+    root.mkdir(parents=True,exist_ok=True)
+    path=db_path(root)
+    expect(not path.exists(),'DB_EXISTS：目标库已存在，禁止覆盖')
+    conn=_connect(path,True)
+    try:
+        conn.execute('PRAGMA journal_mode=WAL')
+        conn.execute('PRAGMA synchronous=NORMAL')
+        conn.executescript(SCHEMA_SQL)
+        conn.execute(f'PRAGMA user_version={STORE_VERSION}')
+        meta_patch(conn,{'timezone':timezone,'recent_window_days':DEFAULT_RECENT_WINDOW,
+                         'change_seq':0,'created_at':dt.datetime.now(dt.timezone.utc).isoformat(timespec='seconds'),
+                         'storage':'sqlite','search':SEARCH_ALGORITHM})
+    finally: conn.close()
+    return {'database':str(path),'store_version':STORE_VERSION,'timezone':timezone}
+
+
+# ---------------------------------------------------------------------------
+# 记录与词项
+# ---------------------------------------------------------------------------
+
+def lexical_terms(value: str) -> list[str]:
+    """中文双字片段与英文词元；标识符同时保留整体和下划线片段。"""
+    tokens=[]
+    for run in SEARCH_TOKENS.findall(unicodedata.normalize('NFKC',value).casefold()):
+        if run.isascii():parts=[run,*[part for part in run.split('_') if part and part!=run]]
+        else:parts=[run] if len(run)==1 else [run[i:i+2] for i in range(len(run)-1)]
+        tokens.extend(part for part in parts if part not in SEARCH_STOPWORDS)
+    return tokens
+
+
+def document_terms(title: str, content: str, rule_key: str | None) -> tuple[dict, int]:
+    """标题与规则键的词频按三倍计入；长度包含这些加权词频，与既有打分口径一致。"""
+    terms=Counter(lexical_terms(content))
+    for field in dict.fromkeys([title,rule_key or '']):
+        terms.update({term:count*3 for term,count in Counter(lexical_terms(field)).items()})
+    return dict(terms),sum(terms.values())
+
+
+def summary_terms(topic: str, content: str) -> tuple[dict, int]:
+    terms=Counter(lexical_terms(content))
+    terms.update({term:count*3 for term,count in Counter(lexical_terms(topic)).items()})
+    return dict(terms),sum(terms.values())
+
+
+def write_terms(conn: sqlite3.Connection, record_id: str, terms: dict) -> None:
+    conn.executemany('INSERT INTO record_terms(record_id,term,tf) VALUES(?,?,?)',
+                     [(record_id,term,tf) for term,tf in terms.items()])
+
+
+def write_summary_terms(conn: sqlite3.Connection, month: str, position: int, terms: dict) -> None:
+    conn.executemany('INSERT INTO summary_terms(month,position,term,tf) VALUES(?,?,?,?)',
+                     [(month,position,term,tf) for term,tf in terms.items()])
+
+
+PUBLIC_FIELDS=('id','date','type','topic','title','content','rule_key','status','superseded_by',
+               'project_id','source_record_ids','supersedes','session')
+
+
+def public_record(row: dict) -> dict:
+    """对外只暴露记录语义字段；内容指纹与词项长度是实现细节，不进入工具输出。"""
+    return {key:row[key] for key in PUBLIC_FIELDS if key in row}
+
+
+def record_rows(conn: sqlite3.Connection, where: str = '', params: tuple = ()) -> list[dict]:
+    """读取完整记录；关联字段按 ID 集合一次性补充，避免逐行查询。"""
+    sql=('SELECT id,date,session_id,agent,saved_at,type,topic,title,content,rule_key,status,'
+         'superseded_by,project_id,content_digest,doc_length FROM records'+(' WHERE '+where if where else ''))
+    rows=[dict(row) for row in conn.execute(sql,params)]
+    if not rows: return rows
+    ids=[row['id'] for row in rows]
+    placeholders=','.join('?'*len(ids))
+    sources={}
+    for rid,source in conn.execute(f'SELECT record_id,source_id FROM record_sources WHERE record_id IN ({placeholders})',ids):
+        sources.setdefault(rid,[]).append(source)
+    supersedes={}
+    for rid,target in conn.execute(f'SELECT record_id,target_id FROM record_supersedes WHERE record_id IN ({placeholders})',ids):
+        supersedes.setdefault(rid,[]).append(target)
+    for row in rows:
+        row['source_record_ids']=sources.get(row['id'],[])
+        row['supersedes']=supersedes.get(row['id'],[])
+        row['session']={'id':row.pop('session_id'),'saved_at':row['saved_at'],'agent':row.pop('agent')}
+    return rows
+
+
+def record_by_ids(conn: sqlite3.Connection, ids: list[str]) -> dict[str, dict]:
+    if not ids: return {}
+    placeholders=','.join('?'*len(ids))
+    return {row['id']:row for row in record_rows(conn,f'id IN ({placeholders})',tuple(ids))}
+
+
+def profile_rows(conn: sqlite3.Connection) -> list[dict]:
+    rows=[dict(row) for row in conn.execute(
+        'SELECT id,domain,scope,basis,title,content FROM profiles ORDER BY domain,id')]
+    if not rows: return rows
+    ids=[row['id'] for row in rows]
+    placeholders=','.join('?'*len(ids))
+    sources={}
+    for pid,source in conn.execute(f'SELECT profile_id,source_id FROM profile_sources WHERE profile_id IN ({placeholders})',ids):
+        sources.setdefault(pid,[]).append(source)
+    for row in rows: row['source_record_ids']=sources.get(row['id'],[])
+    return rows
+
+
+PUBLIC_SUMMARY_FIELDS=('key','month','topic','content','source_record_ids')
+
+
+def public_summary(row: dict) -> dict:
+    """摘要只对外暴露来源与正文；词项长度是实现细节。"""
+    return {key:row[key] for key in PUBLIC_SUMMARY_FIELDS if key in row}
+
+
+def summary_rows(conn: sqlite3.Connection, month: str | None = None) -> list[dict]:
+    sql=('SELECT month,position,topic,content,generated_at,doc_length FROM summaries'
+         +(' WHERE month=?' if month else '')+' ORDER BY month,position')
+    rows=[dict(row) for row in conn.execute(sql,(month,) if month else ())]
+    if not rows: return rows
+    pairs=[(row['month'],row['position']) for row in rows]
+    sources={}
+    for m,pos,source in conn.execute('SELECT month,position,source_id FROM summary_sources '
+                                     'WHERE '+('month=?' if month else '1=1'),(month,) if month else ()):
+        sources.setdefault((m,pos),[]).append(source)
+    for row in rows:
+        row['source_record_ids']=sources.get((row['month'],row['position']),[])
+        row['key']=f'summary:{row["month"]}:{row["position"]}'
+    return rows
+
+
+def month_status(conn: sqlite3.Connection) -> dict[str, dict]:
     months={}
+    for row in conn.execute('SELECT substr(date,1,7) AS month,COUNT(*) AS n FROM records GROUP BY month'):
+        months[row['month']]={'record_count':row['n'],'summary_available':False}
+    for row in conn.execute('SELECT DISTINCT month FROM summaries'):
+        months.setdefault(row['month'],{'record_count':0,'summary_available':False})['summary_available']=True
+    return months
+
+
+def withdraw_month(conn: sqlite3.Connection, month: str) -> None:
+    """新增或删除记录会使已生成的当月摘要失真，按既有语义撤回而不是就地改写。"""
+    conn.execute('DELETE FROM summary_terms WHERE month=?',(month,))
+    conn.execute('DELETE FROM summary_sources WHERE month=?',(month,))
+    conn.execute('DELETE FROM summaries WHERE month=?',(month,))
+
+
+# ---------------------------------------------------------------------------
+# 校验（库内一致性，不再比对文件）
+# ---------------------------------------------------------------------------
+
+def validate_state(conn: sqlite3.Connection) -> tuple[list[dict],list[dict]]:
+    recs=record_rows(conn)
+    profiles=profile_rows(conn)
+    refmap={r['id']:r for r in recs}
+    valid_ids=set(refmap)
+    unique={}
     for r in recs:
-        m=r['date'][:7];months.setdefault(m,{'record_count':0,'summary_available':False})
-        months[m]['record_count']+=1
-    summary_paths=set(stored_files(root,'monthly','.md'))
-    summary_paths.update(k for k in overrides if k.startswith('monthly/') and k.endswith('.md'))
-    for rel in summary_paths:
-        if file_bytes(root,rel,overrides) is None:continue
-        m=Path(rel).stem;months.setdefault(m,{'record_count':0,'summary_available':False})['summary_available']=True
-    return {'index/records.json':j(entries).encode(),'index/rules.json':j(rules).encode(),
-            'index/months.json':j(months).encode(),SEARCH_INDEX:j(build_search_index(snapshot,sources,recs)).encode()}
+        expect(ID_RE.fullmatch(r['id']) is not None,'非法记忆 ID: '+r['id'])
+        expect(re.fullmatch(r'\d{4}-\d{2}-\d{2}',r['date']) is not None and _valid_date(r['date']),
+               '记录日期无效: '+r['id'])
+        expect(r['type'] in TYPES,'未知记录类型')
+        expect(r['status'] in ('active','superseded'),'非法记录状态')
+        expect(r['project_id'] is None or (isinstance(r['project_id'],str)
+               and PROJECT_ID_RE.fullmatch(r['project_id']) is not None),'项目归属无效')
+        sources=record_refs(r,'source_record_ids')
+        expect(set(sources).issubset(valid_ids) and r['id'] not in sources,'日记来源不存在或引用自身')
+        supersedes=record_refs(r,'supersedes')
+        expect(set(supersedes).issubset(valid_ids) and r['id'] not in supersedes,'替代目标不存在或引用自身')
+        if r['type'] in RULE_TYPES:
+            expect(isinstance(r.get('rule_key'),str) and r['rule_key'].strip(),'规则记录缺少 rule_key')
+            if is_active_rule(r):
+                k=(r.get('project_id'),r['rule_key'])
+                expect(k not in unique,f'重复有效规则: {k}')
+                unique[k]=r['id']
+            for rid in supersedes:
+                old=refmap[rid]
+                expect(old['type'] in RULE_TYPES and old['status']=='superseded'
+                       and old.get('superseded_by')==r['id'],'替代关系必须指向已被明确替代的规则')
+        else:
+            expect(not supersedes and r['status']=='active' and not r.get('superseded_by'),
+                   '非规则日记不能参与有效版本替代')
+        successor=r.get('superseded_by')
+        if successor is not None:
+            expect(isinstance(successor,str) and successor in valid_ids,'后继规则不存在')
+            newer=refmap[successor]
+            expect(r['status']=='superseded' and newer['type'] in RULE_TYPES
+                   and r['id'] in record_refs(newer,'supersedes'),'后继规则与替代关系不一致')
+    for r in recs:
+        seen={r['id']};successor=r.get('superseded_by')
+        while successor:
+            expect(successor not in seen,'规则替代关系存在循环')
+            seen.add(successor);successor=refmap[successor].get('superseded_by')
+    profile_ids=set()
+    for p in profiles:
+        expect(ID_RE.fullmatch(p['id']) is not None,'非法画像 ID')
+        expect(p['id'] not in profile_ids,'画像 ID 重复');profile_ids.add(p['id'])
+        expect(p['domain'] in DOMAINS,'画像领域无效')
+        expect(p['scope']=='global' or re.fullmatch(r'(domain|project):[a-z0-9-]+',p['scope']) is not None,
+               '画像历史作用域无效')
+        expect(set(record_refs(p,'source_record_ids')).issubset(valid_ids),'画像引用了已经删除的来源记忆')
+    for s in summary_rows(conn):
+        ids=record_refs(s,'source_record_ids')
+        expect(ids and set(ids).issubset(valid_ids),f'摘要来源已丢失: {s["month"]}')
+        expect(all(refmap[rid]['date'][:7]==s['month'] for rid in ids),'摘要跨越指定月份')
+        candidate_check(s['topic'],True);candidate_check(s['content'])
+    return recs,profiles
 
-def invalidate_months(root,changes,months):
-    for month in months:
-        rel=f'monthly/{month[:4]}/{month}.md'
-        if file_bytes(root,rel,changes) is not None:changes[rel]=None
 
-def plan_saved(root: Path, operation: str, payload: dict) -> dict:
-    # 只清理过期技术候选，不借生成新计划删除权威记忆。
-    plans=safe(root,'.system/plans')
-    if plans.exists():
-        for p in plans.glob('s_*.json'):
-            if p.is_symlink(): continue
-            try:
-                if time.time()-parse_json(p).get('created_at',0)>24*3600:p.unlink()
-            except (ValueError,KeyError,OSError): pass
-    out={'plan_version':PLAN_VERSION,'memory_scope':'global','plan_id':ulid('s'),'operation':operation,'created_at':time.time(),'expected_fingerprint':root_fingerprint(root),'payload':payload}
-    rel='.system/plans/'+out['plan_id']+'.json'
-    atomic_write(safe(root,rel),j(out).encode())
-    return out
+def _valid_date(value: str) -> bool:
+    try: dt.date.fromisoformat(value);return True
+    except ValueError: return False
 
-def render_preview(plan: dict) -> dict:
-    op=plan['operation'];d=plan['payload']
-    result={'plan_version':plan['plan_version'],'memory_scope':'global','plan_id':plan['plan_id'],'operation':op,'expires_in_hours':24}
-    if op=='save':
-        result.update({'memory_scope':'global','date':d['date'],'new_records':d['records'],
-                       'superseded_records':d['supersede'],'history_preserved':True})
-    elif op=='delete':
-        result.update({'delete_records':d['records'],'affected_record_references':d['affected_record_references'],
-                       'affected_profiles':d['affected_profiles'],
-                       'affected_access_statistics':d['access_statistics']})
-    elif op=='profile':
-        result.update({'new_profile':d['profile'],'replace_profile_ids':d['replace_ids'],
-                       'replaced_profiles':d['replaced_profiles'],'source_diary_preserved':True})
-    elif op=='month':
-        result.update({'month':d['month'],'summary':d['topics'],'source_total':d['source_total'],
-                       'source_used':d['source_used'],'source_uncovered_ids':d['source_uncovered_ids']})
-    if op in ('save','delete'):
-        result['withdrawn_months']=d['withdrawn_months']
-    return result
+
+# ---------------------------------------------------------------------------
+# 词法检索（打分口径与旧实现一致）
+# ---------------------------------------------------------------------------
+
+def _placeholders(values: list | tuple) -> str:
+    return ','.join('?'*len(values))
+
+
+def record_context(conn: sqlite3.Connection, tokens: set[str], where: str = '', params: tuple = ()) -> tuple[int, dict, dict, float]:
+    """一次取候选文档、全集文档数、全集平均长度与查询词的全集文档频率。"""
+    total=conn.execute('SELECT COUNT(*) FROM records'+(' WHERE '+where if where else ''),params).fetchone()[0]
+    average=conn.execute('SELECT AVG(doc_length) FROM records'+(' WHERE '+where if where else ''),params).fetchone()[0] or 1
+    if not tokens: return total,{}, {}, average
+    ordered=sorted(tokens)
+    marks=_placeholders(ordered)
+    condition=(' WHERE '+where+' AND ') if where else ' WHERE '
+    frequency={row[0]:row[1] for row in conn.execute(
+        'SELECT t.term,COUNT(DISTINCT t.record_id) FROM record_terms t JOIN records r ON r.id=t.record_id'
+        +condition+f't.term IN ({marks}) GROUP BY t.term',(*params,*ordered))}
+    docs={}
+    for rid,term,tf,length,kind in conn.execute(
+            'SELECT t.record_id,t.term,t.tf,r.doc_length,r.type FROM record_terms t JOIN records r ON r.id=t.record_id'
+            +condition+f't.term IN ({marks})',(*params,*ordered)):
+        doc=docs.get(rid)
+        if doc is None:
+            doc={'key':'record:'+rid,'id':rid,'type':kind,'terms':{},'length':length};docs[rid]=doc
+        doc['terms'][term]=tf
+    return total,frequency,docs,average
+
+
+def summary_context(conn: sqlite3.Connection, tokens: set[str], month: str | None = None) -> tuple[int, dict, dict, float]:
+    where='month=?' if month else ''
+    params=(month,) if month else ()
+    total=conn.execute('SELECT COUNT(*) FROM summaries'+(' WHERE '+where if where else ''),params).fetchone()[0]
+    average=conn.execute('SELECT AVG(doc_length) FROM summaries'+(' WHERE '+where if where else ''),params).fetchone()[0] or 1
+    if not tokens: return total,{}, {}, average
+    ordered=sorted(tokens)
+    marks=_placeholders(ordered)
+    condition=(' WHERE '+where+' AND ') if where else ' WHERE '
+    frequency={row[0]:row[1] for row in conn.execute(
+        'SELECT t.term,COUNT(*) FROM summary_terms t'+condition+f't.term IN ({marks}) GROUP BY t.term',
+        (*params,*ordered))}
+    docs={}
+    for m,pos,term,tf,length in conn.execute(
+            'SELECT t.month,t.position,t.term,t.tf,s.doc_length FROM summary_terms t JOIN summaries s '
+            'ON s.month=t.month AND s.position=t.position'+condition+f't.term IN ({marks})',(*params,*ordered)):
+        key=(m,pos);doc=docs.get(key)
+        if doc is None:
+            doc={'key':f'summary:{m}:{pos}','month':m,'position':pos,'terms':{},'length':length};docs[key]=doc
+        doc['terms'][term]=tf
+    return total,frequency,docs,average
+
+
+def rank_documents(total: int, frequency: dict, documents: dict, average: float, query: str) -> list[tuple[dict,float,list[str]]]:
+    """相关性先于时间与项目；不将其他项目的历史决定提升为当前规则。"""
+    tokens=set(lexical_terms(query))
+    if not tokens or not documents: return []
+    ranked=[]
+    for doc in documents.values():
+        hits=sorted(tokens.intersection(doc['terms']))
+        if not hits: continue
+        score=0.0
+        for term in hits:
+            count=doc['terms'][term];seen=frequency.get(term,0)
+            weight=math.log1p((total-seen+0.5)/(seen+0.5))
+            score+=weight*count*2.2/(count+1.2*(0.25+0.75*doc['length']/average))
+        ranked.append((doc,score*len(hits)/len(tokens),hits))
+    ranked.sort(key=lambda item:(-item[1],item[0]['key']))
+    return ranked
+
+
+def truncate(content: str, limit: int = 200) -> tuple[str, bool]:
+    if len(content) <= limit: return content, False
+    return content[:limit] + '...', True
+
+
+def indexed_recall(root: Path, query: str, mode: str = 'records',
+                   month: str | None = None, offset: int = 0, limit: int = 50, allow_empty: bool = False) -> dict:
+    """词法召回；content 截断为前 200 字摘要，完整正文需二次调用 read。"""
+    expect(mode in ('records','recent','historical','month'),'非法检索模式')
+    expect(offset>=0 and 1<=limit<=200,'offset/limit 非法；每批最多 200 条')
+    expect(allow_empty or bool(query.strip()),'检索问题不能为空')
+    expect((mode=='month' and isinstance(month,str) and re.fullmatch(r'\d{4}-(0[1-9]|1[0-2])',month))
+           or (mode!='month' and month is None),'月份必须明确且仅用于 month 模式')
+    with connect(root) as conn:
+        require_version(conn)
+        zone=timezone_of(conn);version=change_seq(conn)
+        tokens=set(lexical_terms(query))
+        if mode in ('historical','month'):
+            total,frequency,docs,average=summary_context(conn,tokens,month if mode=='month' else None)
+            if tokens:
+                ranked=rank_documents(total,frequency,docs,average,query)
+            else:
+                ranked=[({'key':row['key'],'month':row['month'],'position':row['position']},0.0,[])
+                        for row in sorted(summary_rows(conn,month if mode=='month' else None),
+                                          key=lambda row:row['key'])]
+            page=ranked[offset:offset+limit]
+            rows=summary_rows(conn,month if mode=='month' else None)
+            by_key={(row['month'],row['position']):row for row in rows}
+            selected=[public_summary(by_key[(item[0]['month'],item[0]['position'])]) for item in page]
+            missing=mode=='month' and not any(row['month']==month for row in rows)
+            scope={'historical':'historical_month_summaries','month':'monthly_summary'}[mode]
+        else:
+            where='' ; params=()
+            if mode=='recent':
+                window=recent_window(conn)
+                today=dt.datetime.now(zone).date();first=(today-dt.timedelta(days=window-1)).isoformat()
+                where='date>=? AND date<=?';params=(first,today.isoformat())
+            total,frequency,docs,average=record_context(conn,tokens,where,params)
+            ranked=rank_documents(total,frequency,docs,average,query) if tokens else []
+            if not tokens:
+                fallback=record_rows(conn,where,params)
+                fallback.sort(key=lambda r:r['id'])
+                ranked=[({'key':'record:'+r['id'],'id':r['id']},0.0,[]) for r in fallback]
+            page=ranked[offset:offset+limit]
+            fetched=record_by_ids(conn,[item[0]['id'] for item in page])
+            selected=[public_record(fetched[item[0]['id']]) for item in page]
+            missing=False
+            scope={'records':'all_daily','recent':'recent_daily'}[mode]
+        matches=[]
+        for row,item in zip(selected,page):
+            body,was_truncated=truncate(row['content'])
+            matches.append({**row,'kind':'summary' if 'key' in row else 'record','content':body,
+                            'content_truncated':was_truncated,'score':round(item[1],6),'matched_terms':item[2]})
+    return {'status':'MONTHLY_SUMMARY_MISSING' if missing else 'OK','scope':scope,'memory_scope':'global',
+            'mode':mode,'month':month,'query':query,'store_version':version,'coverage':'store_records',
+            'matches':matches,'total_matches':len(ranked),'offset':offset,'limit':limit,
+            'has_more':offset+limit<len(ranked),'next_offset':offset+limit if offset+limit<len(ranked) else None,
+            'no_match':not ranked,'note':'仅词法相关性；历史来源与状态不代表当前适用或事实已核实；摘要需 memory_read 读取全文'}
+
+
+def background_recall(root: Path, data: dict) -> dict:
+    """自动背景专用只读入口；共享词法核心，缓存只按库版本判定。"""
+    allowed={'query','recent','date_from','date_to','cache_key','cached_ids'}
+    expect(isinstance(data,dict) and not set(data)-allowed,'自动召回输入字段无效')
+    query=data.get('query')
+    expect(isinstance(query,str) and 0<len(query.strip())<=2000,'自动召回需要有界任务查询')
+    recent=data.get('recent',False)
+    expect(type(recent) is bool,'recent 必须为布尔值')
+    first,last=data.get('date_from'),data.get('date_to')
+    expect(not recent or (first is None and last is None),'近期与明确日期范围不能混用')
+    for value in (first,last):
+        if value is not None:
+            expect(isinstance(value,str) and re.fullmatch(r'\d{4}-\d{2}-\d{2}',value) is not None,'日期范围须为 YYYY-MM-DD')
+            dt.date.fromisoformat(value)
+    cached_ids=data.get('cached_ids',[]);cached_key=data.get('cache_key')
+    expect(isinstance(cached_ids,list) and len(cached_ids)<=6
+           and all(isinstance(rid,str) and rid.startswith('m_') and ID_RE.fullmatch(rid) for rid in cached_ids)
+           and len(set(cached_ids))==len(cached_ids),'自动召回缓存身份无效')
+    expect(cached_key is None or (isinstance(cached_key,str) and re.fullmatch(r'[0-9a-f]{64}',cached_key)),
+           '自动召回缓存键无效')
+    expect(cached_key is not None or not cached_ids,'缓存 ID 缺少所属版本')
+    with connect(root) as conn:
+        require_version(conn)
+        zone=timezone_of(conn);version=change_seq(conn)
+        if recent:
+            window=recent_window(conn)
+            today=dt.datetime.now(zone).date()
+            first=(today-dt.timedelta(days=window-1)).isoformat();last=today.isoformat()
+        expect(first is None or last is None or first<=last,'日期范围顺序无效')
+        scope={'memory_scope':'global','date_from':first,'date_to':last}
+        cache_key=sha(compact([BACKGROUND_POLICY,version,query,scope]).encode())
+        base={'policy':BACKGROUND_POLICY,'store_version':version,'cache_key':cache_key,
+              'scope':scope,'coverage':'store_records'}
+        where=['status=?'];params=['active']
+        if first is not None: where.append('date>=?');params.append(first)
+        if last is not None: where.append('date<=?');params.append(last)
+        condition=' AND '.join(where)
+        if cached_ids:
+            by_id=record_by_ids(conn,cached_ids)
+            rows=[by_id.get(rid) for rid in cached_ids]
+            expect(all(row is not None for row in rows),'缓存记录不属于当前候选范围')
+            expect(all(row['status']=='active' for row in rows),'缓存记录不属于当前候选范围')
+            if cached_key==cache_key: return {**base,'unchanged':True,'ids':cached_ids}
+        terms={term for term in lexical_terms(query) if term not in BACKGROUND_STOPWORDS}
+        total,frequency,docs,average=record_context(conn,terms,condition,tuple(params))
+        ranked=rank_documents(total,frequency,docs,average,' '.join(sorted(terms))) if terms else []
+        # 先按类型权重重排，再套相关度门槛与相对截断，保证规则类条目先获得名额。
+        ranked=[(doc,score*TYPE_WEIGHT.get(doc.get('type',''),1.0),hits) for doc,score,hits in ranked]
+        ranked.sort(key=lambda item:(-item[1],item[0]['key']))
+        eligible=[item for item in ranked if len(item[2])>=min(2,len(terms))
+                  and len(item[2])/max(1,len(terms))>=0.12]
+        if eligible: eligible=[item for item in eligible if item[1]>=eligible[0][1]*0.45]
+        selected=[];counts={'rule':0,'history':0}
+        for item in eligible:
+            group='rule' if item[0].get('type') in RULE_TYPES else 'history'
+            if counts[group]>=3: continue
+            counts[group]+=1;selected.append(item)
+        rows=record_by_ids(conn,[item[0]['id'] for item in selected])
+        fields=('id','type','topic','title','content','project_id','date','status','source_record_ids','rule_key')
+        matches=[{**{key:rows[item[0]['id']][key] for key in fields if key in rows[item[0]['id']]},
+                  'score':round(item[1],6),'matched_terms':item[2]} for item in selected]
+        reason=None if matches else ('no_terms' if not terms else 'no_overlap' if not ranked else 'below_threshold')
+    return {**base,'unchanged':False,'matches':matches,'ids':[row['id'] for row in matches],
+            'no_match':not matches,'reason':reason,'eligible_count':len(eligible),
+            'note':'自动词法筛选不证明适用性或事实正确；被替代规则不自动注入，完整历史仍可手动查询。'}
+
+
+def error_recall(root: Path, data: dict) -> dict:
+    """报错指纹专用检索：仅匹配 type=issue 的日记记录。"""
+    allowed={'fingerprint','limit'}
+    expect(isinstance(data,dict) and not set(data)-allowed,'报错召回输入字段无效')
+    fingerprint=data.get('fingerprint')
+    expect(isinstance(fingerprint,str) and 0<len(fingerprint.strip())<=500,'报错指纹须为有界特征串')
+    limit=data.get('limit',3)
+    expect(isinstance(limit,int) and 1<=limit<=10,'报错召回数量限制无效')
+    with connect(root) as conn:
+        require_version(conn)
+        version=change_seq(conn)
+        tokens=set(lexical_terms(fingerprint.strip()))
+        total,frequency,docs,average=record_context(conn,tokens,'type=?',('issue',))
+        ranked=rank_documents(total,frequency,docs,average,fingerprint.strip())
+        eligible=[item for item in ranked if len(item[2])>=2]
+        selected=eligible[:limit]
+        rows=record_by_ids(conn,[item[0]['id'] for item in selected])
+        fields=('id','type','topic','title','content','project_id','date','status','source_record_ids')
+        matches=[{**{key:rows[item[0]['id']][key] for key in fields if key in rows[item[0]['id']]},
+                  'score':round(item[1],6),'matched_terms':item[2]} for item in selected]
+    return {'policy':'error-fingerprint-v1','store_version':version,'fingerprint':fingerprint,
+            'memory_scope':'global','matches':matches,'no_match':not matches,
+            'note':'报错指纹联动仅匹配 issue 类型日记；不自动沉淀新记录，所有写入仍需人工审批。'}
+
+
+def indexed_read(root: Path, ids: list[str]) -> dict:
+    expect(1<=len(ids)<=50 and all(isinstance(rid,str) and rid.startswith('m_')
+           and ID_RE.fullmatch(rid) is not None for rid in ids),'须指定 1..50 个真实日记 ID')
+    with connect(root) as conn:
+        require_version(conn)
+        version=change_seq(conn)
+        by_id=record_by_ids(conn,ids)
+        expect(all(rid in by_id for rid in ids),'指定记忆 ID 不存在，未扫描历史')
+        return {'records':[public_record(by_id[rid]) for rid in ids],'memory_scope':'global',
+                'store_version':version,'coverage':'store_records'}
+
+
+def active_rules(root: Path, query: str = '', offset: int = 0, limit: int = 50) -> dict:
+    """查询全局库有效规则；历史来源保持原命名空间，不因同键而合并。"""
+    expect(offset>=0 and 1<=limit<=200,'offset/limit 非法；每批最多 200 条')
+    with connect(root) as conn:
+        require_version(conn)
+        version=change_seq(conn)
+        where='type IN (?,?) AND status=?'
+        params=tuple(sorted(RULE_TYPES))+('active',)
+        rows=record_rows(conn,where,params)
+        total=len(rows)
+        if query.strip():
+            tokens=set(lexical_terms(query))
+            _,frequency,docs,average=record_context(conn,tokens,where,params)
+            order=[item[0]['id'] for item in rank_documents(total,frequency,docs,average,query)]
+            index={row['id']:row for row in rows}
+            ordered=[index[rid] for rid in order if rid in index]
+        else:
+            ordered=sorted(rows,key=lambda r:(r['date'],r['project_id'] or '',r['rule_key'] or '',r['id']),reverse=True)
+        page=ordered[offset:offset+limit]
+        rules=[]
+        for r in page:
+            body,was_truncated=truncate(r['content'])
+            rules.append({'id':r['id'],'date':r['date'],'source_project':r['project_id'],'status':'active',
+                          'rule_key':r['rule_key'],'type':r['type'],'topic':r['topic'],'content':body,
+                          'content_truncated':was_truncated,'source_record_ids':r['source_record_ids'],
+                          'supersedes':r['supersedes']})
+        return {'memory_scope':'global','total_rules':total,'offset':offset,'limit':limit,
+                'store_version':version,'coverage':'store_records',
+                'has_more':offset+limit<total,'next_offset':offset+len(page) if offset+limit<total else None,
+                'rules':rules,'note':'返回摘要，完整正文需调用 memory_read'}
+
+
+def profiles_view(root: Path, domain: str | None = None) -> dict:
+    with connect(root) as conn:
+        require_version(conn)
+        rows=[row for row in profile_rows(conn) if not domain or row['domain']==domain]
+    return {'memory_scope':'global','profiles':rows}
+
+
+def months_view(root: Path) -> dict:
+    with connect(root) as conn:
+        require_version(conn)
+        return {'months':month_status(conn)}
+
 
 def month_closed(month, zone, closed_today_confirmed=False):
     expect(re.fullmatch(r'\d{4}-(0[1-9]|1[0-2])',month),'非法月份')
@@ -931,263 +748,759 @@ def month_closed(month, zone, closed_today_confirmed=False):
 
 
 def monthly_source(root: Path, month: str, offset: int = 0, limit: int = 50, closed_today_confirmed: bool = False) -> dict:
-    _,zone=load(root)
-    month_closed(month,zone,closed_today_confirmed)
+    month=parse_month(month)
     expect(offset>=0 and 1<=limit<=200,'offset/limit 非法；每批最多 200 条')
-    selected=[r for r in all_records(root) if r['date'].startswith(month+'-')]
-    selected.sort(key=lambda r:(r['date'],r['session']['saved_at'],r['id']))
-    page=selected[offset:offset+limit]
-    return {'memory_scope':'global','month':month,'total_records':len(selected),'offset':offset,'limit':limit,
-            'has_more':offset+limit<len(selected),
-            'next_offset':offset+len(page) if offset+limit<len(selected) else None,
-            'records':[{'id':r['id'],'source_project':r.get('project_id'),'source_project_name':r.get('project_name'),
-                        'date':r['date'],'session_id':r['session']['id'], 'type':r['type'],
-                        'topic':r['topic'],'rule_key':r.get('rule_key'),'content':r['content'],
-                        'status':r.get('status','active'),'superseded_by':r.get('superseded_by'),
-                        'source_record_ids':r.get('source_record_ids',[])} for r in page]}
+    with connect(root) as conn:
+        require_version(conn)
+        zone=timezone_of(conn)
+        month_closed(month,zone,closed_today_confirmed)
+        selected=[r for r in record_rows(conn,'substr(date,1,7)=?',(month,))]
+        selected.sort(key=lambda r:(r['date'],r['session']['saved_at'],r['id']))
+        page=selected[offset:offset+limit]
+        return {'memory_scope':'global','month':month,'total_records':len(selected),'offset':offset,'limit':limit,
+                'has_more':offset+limit<len(selected),
+                'next_offset':offset+len(page) if offset+limit<len(selected) else None,
+                'records':[{'id':r['id'],'source_project':r['project_id'],'date':r['date'],
+                            'session_id':r['session']['id'],'type':r['type'],'topic':r['topic'],
+                            'rule_key':r['rule_key'],'content':r['content'],'status':r['status'],
+                            'superseded_by':r['superseded_by'],'source_record_ids':r['source_record_ids']}
+                           for r in page]}
 
 
-def active_rules(root: Path, query: str = '', offset: int = 0, limit: int = 50) -> dict:
-    """查询全局库有效规则；历史来源保持原命名空间，不因同键而合并。"""
-    index,verified=load_search_index(root)
-    expect(offset>=0 and 1<=limit<=200,'offset/limit 非法；每批最多 200 条')
-    selected=[doc for doc in index['documents'] if doc['kind']=='record' and is_active_rule(doc)]
-    # 无查询词时按日期倒序优先：limit 截断必须保留最新约定，不能因项目与键的分组顺序漏掉近期规则。
-    if query.strip():selected=[item[0] for item in rank_documents(selected,query)]
-    else:selected.sort(key=lambda doc:(doc['date'],doc.get('project_id') or '',doc.get('rule_key',''),doc['id']),reverse=True)
-    page=hydrate_documents(root,index,selected[offset:offset+limit],verified)
-    def truncate_content(content: str, limit: int = 200) -> tuple[str, bool]:
-        if len(content) <= limit: return content, False
-        return content[:limit] + '...', True
-    rules=[]
-    for r in page:
-        truncated, was_truncated = truncate_content(r['content'])
-        rules.append({'id':r['id'],'date':r['date'],'source_project':r.get('project_id'),'file_path':r['file_path'],
-                      'status':'active','rule_key':r.get('rule_key'),
-                      'type':r['type'],'topic':r['topic'],'content':truncated,'content_truncated':was_truncated,
-                      'source_record_ids':r.get('source_record_ids',[]),
-                      'supersedes':r.get('supersedes',[])})
-    return {'memory_scope':'global','total_rules':len(selected),'offset':offset,'limit':limit,
-            'index_version':index['fingerprint'],'coverage':'indexed_sources',
-            'has_more':offset+limit<len(selected),
-            'next_offset':offset+len(page) if offset+limit<len(selected) else None,
-            'rules':rules,'note':'返回摘要，完整正文需调用 memory_read'}
+# ---------------------------------------------------------------------------
+# 访问统计
+# ---------------------------------------------------------------------------
 
+def access_summary(conn: sqlite3.Connection) -> dict:
+    started=conn.execute("SELECT value FROM meta WHERE key='access_started_at'").fetchone()
+    rows=conn.execute('SELECT record_id,COUNT(*) AS reads,COUNT(DISTINCT session_hash) AS sessions,'
+                      'MAX(at) AS last_at FROM access_events GROUP BY record_id').fetchall()
+    return {'started_at':started[0] if started else None,
+            'records':{row['record_id']:{'read_count':row['reads'],'session_count':row['sessions'],
+                                         'last_read_at':row['last_at']} for row in rows}}
+
+
+def access_metrics(row: dict | None) -> dict:
+    return {'observed':row is not None,'read_count':row['read_count'] if row else 0,
+            'session_count':row['session_count'] if row else 0,
+            'last_read_at':row['last_read_at'] if row else None}
+
+
+def access_status(root: Path) -> dict:
+    """统计故障只在状态中报告，不使成功的权威记忆读取变成统计故障。"""
+    try:
+        with connect(root) as conn:
+            require_version(conn)
+            state=access_summary(conn)
+            return {'automatic':True,'status':'available' if state['started_at'] else 'not_collected',
+                    'storage':'database','started_at':state['started_at'],
+                    'tracked_records':len(state['records']),'note':ACCESS_NOTE}
+    except (MemoryError,ValueError,KeyError,TypeError,UnicodeError,OSError,sqlite3.Error) as error:
+        return {'automatic':True,'status':'unavailable','storage':'database',
+                'error':str(error)[:1024],'note':ACCESS_NOTE}
+
+
+def indexed_access_stats(root: Path, ids: list[str]) -> dict:
+    ids=access_ids(ids)
+    with connect(root) as conn:
+        require_version(conn)
+        version=change_seq(conn)
+        by_id=record_by_ids(conn,ids)
+        expect(all(rid in by_id for rid in ids),'指定统计 ID 不存在，未扫描历史')
+        state=access_summary(conn)
+        return {'status':'available' if state['started_at'] else 'not_collected','automatic':True,
+                'started_at':state['started_at'],'store_version':version,
+                'coverage':'recorded_accesses_only','note':ACCESS_NOTE,'memory_scope':'global',
+                'records':[{'id':rid,'source_project':by_id[rid]['project_id'],'date':by_id[rid]['date'],
+                            'status':by_id[rid]['status'],**access_metrics(state['records'].get(rid))} for rid in ids]}
+
+
+def record_access(root: Path, data: dict) -> dict:
+    """调用方已准备完整结果；在写事务内去重并写入单份技术统计。"""
+    expect(isinstance(data,dict) and set(data)=={'ids','session_id','tool_call_id','store_version'},
+           '访问事件字段无效；不接受外部计数、时间或正文')
+    ids=access_ids(data['ids'])
+    for key in ('session_id','tool_call_id'):
+        expect(isinstance(data[key],str) and bool(data[key].strip()) and len(data[key])<=512,
+               '访问事件身份无效: '+key)
+    expect(isinstance(data['store_version'],str) and re.fullmatch(r'\d{1,19}',data['store_version']) is not None,
+           '访问来源版本无效')
+    with connect(root,write=True) as conn:
+        require_version(conn)
+        with transaction(conn):
+            expect(str(change_seq(conn))==data['store_version'],
+                   'SOURCE_CHANGED：读取后来源版本已变化，未计入访问统计')
+            placeholders=_placeholders(ids)
+            available={row[0] for row in conn.execute(f'SELECT id FROM records WHERE id IN ({placeholders})',ids)}
+            expect(set(ids).issubset(available),'访问记录已不存在，未写统计')
+            now=dt.datetime.now(dt.timezone.utc).isoformat(timespec='milliseconds')
+            session=sha(('pi-memory.access.session\0'+data['session_id']).encode())
+            event=sha(('pi-memory.access.call\0'+data['session_id']+'\0'+data['tool_call_id']).encode())
+            added=0
+            if conn.execute("SELECT 1 FROM meta WHERE key='access_started_at'").fetchone() is None:
+                meta_patch(conn,{'access_started_at':now})
+            for rid in ids:
+                before=conn.total_changes
+                conn.execute('INSERT OR IGNORE INTO access_events(record_id,session_hash,event_hash,at) VALUES(?,?,?,?)',
+                             (rid,session,event,now))
+                if conn.total_changes>before: added+=1
+    return {'status':'recorded' if added else 'duplicate','new_records':added,
+            'duplicate_records':len(ids)-added}
+
+
+# ---------------------------------------------------------------------------
+# 计划与提交
+# ---------------------------------------------------------------------------
 
 def prepare(root: Path, op: str, data: dict) -> dict:
-    _,z=load(root)
     allowed={'save':{'agent','session_id','records','project_id'},
              'delete':{'ids'},
              'profile':{'domain','scope','basis','title','content','source_record_ids','replace_profile_ids'},
              'month':{'month','topics','closed_today_confirmed','rebuild_existing'}}
     expect(op in allowed and isinstance(data,dict) and not set(data)-allowed[op],
            '全局记忆候选包含不支持字段；不接受项目登记参数')
-    records,_=validate_state(root);existing_ids={r['id']:r for r in records}
+    with connect(root) as conn:
+        require_version(conn)
+        zone=timezone_of(conn)
+        records,_=validate_state(conn)
+        existing_ids={r['id']:r for r in records}
+        if op=='save':
+            now=dt.datetime.now(zone);date=now.date().isoformat();saved_at=now.isoformat(timespec='seconds')
+            session_id=data.get('session_id') or ulid('s')
+            expect(isinstance(session_id,str) and ID_RE.fullmatch(session_id) is not None,'非法 session_id')
+            # 归属由宿主从项目注册表解析；拿不到时留空，不根据路径或名称推测。
+            project_id=data.get('project_id')
+            expect(project_id is None or (isinstance(project_id,str) and PROJECT_ID_RE.fullmatch(project_id) is not None),
+                   '项目归属必须是项目注册表的 UUID 或留空')
+            out=[];supersede=[];seen_keys=set();superseded_ids=set()
+            seen_content={r['content_digest'] for r in records}
+            duplicates=[]
+            for item in data.get('records',[]):
+                expect(isinstance(item,dict) and not set(item)-{'type','topic','content','rule_key','source_record_ids',
+                       'supersede_record_ids','supersession_reason'},'记录字段无效；不接受项目绑定字段')
+                typ=item['type'];expect(typ in TYPES,'非法记忆类型')
+                expect('replace_record_ids' not in item and 'replacement_reason' not in item,
+                       '旧替换协议不再接受；请用 supersede_record_ids / supersession_reason，历史不会删除')
+                rule_key=item.get('rule_key');targets=[]
+                explicit_ids=record_refs(item,'supersede_record_ids')
+                sources=record_refs(item,'source_record_ids')
+                expect(set(sources).issubset(existing_ids),'日记引用了未知来源 ID')
+                if typ in RULE_TYPES:
+                    expect(isinstance(rule_key,str) and rule_key.strip(),'规则需要 rule_key')
+                    expect(rule_key not in seen_keys,'本次候选规则键重复');seen_keys.add(rule_key)
+                    for r in records:
+                        if r.get('project_id')==project_id and r.get('rule_key')==rule_key and is_active_rule(r):
+                            targets.append((r,'相同 rule_key 的新决定取代旧决定，旧正文保留'))
+                    for rid in explicit_ids:
+                        expect(rid in existing_ids,'显式替代目标 ID 不存在: '+rid)
+                        previous=existing_ids[rid]
+                        expect(is_active_rule(previous),'显式替代只能指向当前有效规则: '+rid)
+                        expect(all(r['id']!=rid for r,_ in targets),'同键目标已自动列入，不要重复显式指定')
+                        targets.append((previous,candidate_check(item.get('supersession_reason',''))))
+                else:
+                    expect(not rule_key and not explicit_ids,'非规则日记不能带规则键或替代目标')
+                title=candidate_check(item['topic'],True);content=candidate_check(item['content'])
+                digest=content_key(typ,rule_key,title,content)
+                if digest in seen_content:
+                    duplicates.append(title);continue
+                seen_content.add(digest)
+                rid=ulid('m')
+                new_record={'id':rid,'type':typ,'topic':title,'title':title,'content':content}
+                if typ in RULE_TYPES:new_record.update({'rule_key':rule_key,'status':'active'})
+                if project_id is not None:new_record['project_id']=project_id
+                if sources:new_record['source_record_ids']=sources
+                if targets:new_record['supersedes']=[r['id'] for r,_ in targets]
+                for previous,reason in targets:
+                    expect(previous['id'] not in superseded_ids,'同一旧规则不能在本次计划中被重复替代')
+                    superseded_ids.add(previous['id'])
+                    supersede.append({'id':previous['id'],'date':previous['date'],'topic':previous['topic'],
+                                      'content':previous['content'],'rule_key':previous['rule_key'],
+                                      'source_project':previous.get('project_id'),
+                                      'superseded_by':rid,'reason':reason})
+                out.append(new_record)
+            expect(out,('候选与已有记录完全重复，未写入：'+'、'.join(duplicates)) if duplicates else '没有可保存的候选记录')
+            withdrawn=[date[:7]] if conn.execute('SELECT 1 FROM summaries WHERE month=?',(date[:7],)).fetchone() else []
+            payload={'date':date,'saved_at':saved_at,'session_id':session_id,
+                     'agent':candidate_check(data.get('agent','unknown'),True),
+                     'records':out,'supersede':supersede,'withdrawn_months':withdrawn}
+        elif op=='delete':
+            ids=record_refs(data,'ids');expect(ids,'删除 ID 不能为空')
+            expect(all(x in existing_ids for x in ids),'目标记忆 ID 不存在')
+            doomed=set(ids);affected=[]
+            for r in records:
+                if r['id'] in doomed:continue
+                removed_sources=[v for v in r.get('source_record_ids',[]) if v in doomed]
+                removed_supersedes=[v for v in r.get('supersedes',[]) if v in doomed]
+                removed_successor=r.get('superseded_by') if r.get('superseded_by') in doomed else None
+                if removed_sources or removed_supersedes or removed_successor:
+                    affected.append({'id':r['id'],'date':r['date'],'topic':r['topic'],'content':r['content'],
+                                     'removed_source_record_ids':removed_sources,
+                                     'removed_supersedes':removed_supersedes,
+                                     'removed_superseded_by':removed_successor})
+            affected_profiles=[p for p in profile_rows(conn) if doomed.intersection(p.get('source_record_ids',[]))]
+            months={existing_ids[rid]['date'][:7] for rid in ids}
+            withdrawn=[m for m in sorted(months)
+                       if conn.execute('SELECT 1 FROM summaries WHERE month=?',(m,)).fetchone()]
+            state=access_summary(conn)
+            payload={'records':[{k:existing_ids[rid].get(k) for k in ('id','date','project_id','type','topic','content')} for rid in ids],
+                     'affected_record_references':affected,'affected_profiles':affected_profiles,
+                     'withdrawn_months':withdrawn,
+                     'access_statistics':{'storage':'database','target_ids':ids,
+                         'observed':[{'id':rid,**access_metrics(state['records'].get(rid))} for rid in ids],
+                         'note':'删除目标在提交时的全部对应统计；审批期间新增的目标访问同属此范围，不删除其他记录统计。'}}
+        elif op=='profile':
+            domain=data['domain'];expect(domain in DOMAINS,'非法画像领域')
+            scope=data['scope'];expect(scope in ('global','domain:'+domain),'新增画像仅接受 global 或所选领域作用域')
+            basis=data['basis'];expect(basis in ('explicit','inferred_confirmed'),'非法画像依据')
+            sources=record_refs(data,'source_record_ids');expect(set(sources).issubset(existing_ids),'未知画像来源')
+            replace_ids=record_refs(data,'replace_profile_ids');available=profile_rows(conn)
+            expect(all(any(p['id']==v and p['domain']==domain for p in available) for v in replace_ids),
+                   '画像替换目标不存在或不同领域')
+            payload={'domain':domain,'profile':{'id':ulid('p'),'scope':scope,'basis':basis,'source_record_ids':sources,
+                     'title':candidate_check(data['title'],True),'content':candidate_check(data['content'])},
+                     'replace_ids':replace_ids,
+                     'replaced_profiles':[p for p in available if p['id'] in replace_ids]}
+        elif op=='month':
+            month=parse_month(data['month']);month_closed(month,zone,data.get('closed_today_confirmed',False))
+            now=dt.datetime.now(zone)
+            exists=conn.execute('SELECT 1 FROM summaries WHERE month=?',(month,)).fetchone() is not None
+            expect(not exists or data.get('rebuild_existing') is True,'已有正式摘要；明确指定重建才可覆盖')
+            month_records=[r for r in records if r['date'][:7]==month];refmap={r['id']:r for r in month_records}
+            topics=data['topics'];expect(isinstance(topics,list) and topics,'摘要不能是空内容')
+            for topic in topics:
+                expect(isinstance(topic,dict) and not set(topic)-{'title','content','source_record_ids'},'月度主题字段无效')
+                candidate_check(topic['title'],True);candidate_check(topic['content'])
+                refs=record_refs(topic,'source_record_ids')
+                expect(refs and all(rid in refmap for rid in refs),'摘要来源必须属于指定月份')
+            covered={rid for topic in topics for rid in topic['source_record_ids']}
+            payload={'month':month,'topics':topics,'generated_at':now.isoformat(timespec='seconds'),
+                     'closed_today_confirmed':data.get('closed_today_confirmed',False),
+                     'source_total':len(month_records),'source_used':len(covered),
+                     'source_uncovered_ids':sorted(set(refmap)-covered)}
+        else: raise MemoryError('不支持的计划操作')
+        expected=change_seq(conn)
+    return plan_saved(root,op,payload,expected)
+
+
+def plan_saved(root: Path, operation: str, payload: dict, expected: int) -> dict:
+    # 只清理过期计划，不借生成新计划删除权威记忆。
+    plan={'plan_version':PLAN_VERSION,'memory_scope':'global','plan_id':ulid('s'),'operation':operation,
+          'created_at':time.time(),'expected_change_seq':expected,'payload':payload}
+    with connect(root,write=True) as conn:
+        require_version(conn)
+        with transaction(conn):
+            conn.execute('DELETE FROM plans WHERE created_at<?',(time.time()-24*3600,))
+            conn.execute('INSERT INTO plans(plan_id,operation,plan_version,created_at,expected_change_seq,payload) '
+                         'VALUES(?,?,?,?,?,?)',
+                         (plan['plan_id'],operation,PLAN_VERSION,plan['created_at'],expected,compact(payload)))
+    return plan
+
+
+def plan_show(root: Path, plan_id: str) -> dict:
+    expect(isinstance(plan_id,str) and plan_id.startswith('s_') and ID_RE.fullmatch(plan_id) is not None,'非法计划 ID')
+    with connect(root) as conn:
+        require_version(conn)
+        row=conn.execute('SELECT plan_version,operation,created_at,expected_change_seq,payload FROM plans WHERE plan_id=?',
+                         (plan_id,)).fetchone()
+        expect(row is not None,'计划不存在/已提交')
+        return {'plan_version':row['plan_version'],'memory_scope':'global','plan_id':plan_id,
+                'operation':row['operation'],'created_at':row['created_at'],
+                'expected_change_seq':row['expected_change_seq'],'payload':json.loads(row['payload'])}
+
+
+def render_preview(plan: dict) -> dict:
+    op=plan['operation'];d=plan['payload']
+    result={'plan_version':plan['plan_version'],'memory_scope':'global','plan_id':plan['plan_id'],
+            'operation':op,'expires_in_hours':24}
     if op=='save':
-        now=dt.datetime.now(z);date=now.date().isoformat();saved_at=now.isoformat(timespec='seconds')
-        session_id=data.get('session_id') or ulid('s')
-        expect(isinstance(session_id,str) and ID_RE.fullmatch(session_id) is not None,'非法 session_id')
-        # 归属由宿主从项目注册表解析；拿不到时留空，不根据路径或名称推测。
-        project_id=data.get('project_id')
-        expect(project_id is None or (isinstance(project_id,str) and PROJECT_ID_RE.fullmatch(project_id) is not None),
-               '项目归属必须是项目注册表的 UUID 或留空')
-        out=[];supersede=[];seen_keys=set();superseded_ids=set()
-        # 去重按内容：同一会话可以多次保存，重复的只是内容相同的那些条目。
-        seen_content={content_key(r['type'],r.get('rule_key'),r['topic'],r['content']) for r in records}
-        duplicates=[]
-        for item in data.get('records',[]):
-            expect(isinstance(item,dict) and not set(item)-{'type','topic','content','rule_key','source_record_ids',
-                   'supersede_record_ids','supersession_reason'},'记录字段无效；不接受项目绑定字段')
-            typ=item['type'];expect(typ in TYPES,'非法记忆类型')
-            expect('replace_record_ids' not in item and 'replacement_reason' not in item,
-                   '旧替换协议不再接受；请用 supersede_record_ids / supersession_reason，历史不会删除')
-            rule_key=item.get('rule_key');targets=[]
-            explicit_ids=record_refs(item,'supersede_record_ids')
-            sources=record_refs(item,'source_record_ids')
-            expect(set(sources).issubset(existing_ids),'日记引用了未知来源 ID')
-            if typ in RULE_TYPES:
-                expect(isinstance(rule_key,str) and rule_key.strip(),'规则需要 rule_key')
-                expect(rule_key not in seen_keys,'本次候选规则键重复');seen_keys.add(rule_key)
-                for r in records:
-                    if r.get('project_id')==project_id and r.get('rule_key')==rule_key and is_active_rule(r):
-                        targets.append((r,'相同 rule_key 的新决定取代旧决定，旧正文保留'))
-                for rid in explicit_ids:
-                    expect(rid in existing_ids,'显式替代目标 ID 不存在: '+rid)
-                    previous=existing_ids[rid]
-                    expect(is_active_rule(previous),'显式替代只能指向当前有效规则: '+rid)
-                    expect(all(r['id']!=rid for r,_ in targets),'同键目标已自动列入，不要重复显式指定')
-                    targets.append((previous,candidate_check(item.get('supersession_reason',''))))
-            else:
-                expect(not rule_key and not explicit_ids,'非规则日记不能带规则键或替代目标')
-            title=candidate_check(item['topic'],True);content=candidate_check(item['content'])
-            digest=content_key(typ,rule_key,title,content)
-            if digest in seen_content:
-                duplicates.append(title);continue
-            seen_content.add(digest)
-            rid=ulid('m')
-            new_record={'id':rid,'type':typ,'topic':title,'title':title,'content':content}
-            if typ in RULE_TYPES:new_record.update({'rule_key':rule_key,'status':'active'})
-            if project_id is not None:new_record['project_id']=project_id
-            if sources:new_record['source_record_ids']=sources
-            if targets:new_record['supersedes']=[r['id'] for r,_ in targets]
-            for previous,reason in targets:
-                expect(previous['id'] not in superseded_ids,'同一旧规则不能在本次计划中被重复替代')
-                superseded_ids.add(previous['id'])
-                supersede.append({'id':previous['id'],'date':previous['date'],'topic':previous['topic'],
-                                  'content':previous['content'],'rule_key':previous['rule_key'],
-                                  'source_project':previous.get('project_id'),
-                                  'superseded_by':rid,'reason':reason})
-            out.append(new_record)
-        expect(out,('候选与已有记录完全重复，未写入：'+'、'.join(duplicates)) if duplicates else '没有可保存的候选记录')
-        withdrawn=[date[:7]] if file_bytes(root,f'monthly/{date[:4]}/{date[:7]}.md') is not None else []
-        payload={'date':date,'saved_at':saved_at,'session_id':session_id,'agent':candidate_check(data.get('agent','unknown'),True),
-                 'records':out,'supersede':supersede,'withdrawn_months':withdrawn}
+        result.update({'date':d['date'],'new_records':d['records'],
+                       'superseded_records':d['supersede'],'history_preserved':True})
     elif op=='delete':
-        ids=record_refs(data,'ids');expect(ids,'删除 ID 不能为空')
-        expect(all(x in existing_ids for x in ids),'目标记忆 ID 不存在')
-        doomed=set(ids);affected=[]
-        for r in records:
-            if r['id'] in doomed:continue
-            removed_sources=[v for v in r.get('source_record_ids',[]) if v in doomed]
-            removed_supersedes=[v for v in r.get('supersedes',[]) if v in doomed]
-            removed_successor=r.get('superseded_by') if r.get('superseded_by') in doomed else None
-            if removed_sources or removed_supersedes or removed_successor:
-                affected.append({'id':r['id'],'date':r['date'],'topic':r['topic'],'content':r['content'],
-                                 'removed_source_record_ids':removed_sources,'removed_supersedes':removed_supersedes,
-                                 'removed_superseded_by':removed_successor})
-        affected_profiles=[p for p in all_profiles(root) if doomed.intersection(p.get('source_record_ids',[]))]
-        months={existing_ids[rid]['date'][:7] for rid in ids}
-        withdrawn=[m for m in sorted(months) if file_bytes(root,f'monthly/{m[:4]}/{m}.md') is not None]
-        access=load_access_state(root)
-        access_rows=access['records'] if access else {}
-        payload={'records':[{k:existing_ids[rid].get(k) for k in ('id','date','project_id','type','topic','content')} for rid in ids],
-                 'affected_record_references':affected,'affected_profiles':affected_profiles,'withdrawn_months':withdrawn,
-                 'access_statistics':{'file':ACCESS_STORE,'target_ids':ids,
-                     'observed':[{'id':rid,**access_metrics(access_rows.get(rid))} for rid in ids],
-                     'note':'删除目标在提交时的全部对应统计；审批期间新增的目标访问同属此范围，不删除其他记录统计。'}}
+        result.update({'delete_records':d['records'],'affected_record_references':d['affected_record_references'],
+                       'affected_profiles':d['affected_profiles'],
+                       'affected_access_statistics':d['access_statistics']})
     elif op=='profile':
-        domain=data['domain'];expect(domain in DOMAINS,'非法画像领域')
-        scope=data['scope'];expect(scope in ('global','domain:'+domain),'新增画像仅接受 global 或所选领域作用域')
-        basis=data['basis'];expect(basis in ('explicit','inferred_confirmed'),'非法画像依据')
-        sources=record_refs(data,'source_record_ids');expect(set(sources).issubset(existing_ids),'未知画像来源')
-        replace_ids=record_refs(data,'replace_profile_ids');available=all_profiles(root)
-        expect(all(any(p['id']==v and p['domain']==domain for p in available) for v in replace_ids),'画像替换目标不存在或不同领域')
-        payload={'domain':domain,'profile':{'id':ulid('p'),'scope':scope,'basis':basis,'source_record_ids':sources,
-                 'title':candidate_check(data['title'],True),'content':candidate_check(data['content'])},
-                 'replace_ids':replace_ids,'replaced_profiles':[p for p in available if p['id'] in replace_ids]}
+        result.update({'new_profile':d['profile'],'replace_profile_ids':d['replace_ids'],
+                       'replaced_profiles':d['replaced_profiles'],'source_diary_preserved':True})
     elif op=='month':
-        month=data['month'];month_closed(month,z,data.get('closed_today_confirmed',False))
-        now=dt.datetime.now(z);rel=f'monthly/{month[:4]}/{month}.md'
-        expect(not safe(root,rel).exists() or data.get('rebuild_existing') is True,'已有正式摘要；明确指定重建才可覆盖')
-        month_records=[r for r in records if r['date'][:7]==month];refmap={r['id']:r for r in month_records}
-        topics=data['topics'];expect(isinstance(topics,list) and topics,'摘要不能是空内容')
-        for topic in topics:
-            expect(isinstance(topic,dict) and not set(topic)-{'title','content','source_record_ids'},'月度主题字段无效')
-            candidate_check(topic['title'],True);candidate_check(topic['content'])
-            refs=record_refs(topic,'source_record_ids')
-            expect(refs and all(rid in refmap for rid in refs),'摘要来源必须属于指定月份')
-        covered={rid for topic in topics for rid in topic['source_record_ids']}
-        payload={'month':month,'topics':topics,'generated_at':now.isoformat(timespec='seconds'),
-                 'closed_today_confirmed':data.get('closed_today_confirmed',False),
-                 'source_total':len(month_records),'source_used':len(covered),
-                 'source_uncovered_ids':sorted(set(refmap)-covered)}
-    else:raise MemoryError('不支持的计划操作')
-    return plan_saved(root,op,payload)
+        result.update({'month':d['month'],'summary':d['topics'],'source_total':d['source_total'],
+                       'source_used':d['source_used'],'source_uncovered_ids':d['source_uncovered_ids']})
+    if op in ('save','delete'): result['withdrawn_months']=d['withdrawn_months']
+    if op=='month': result['preview_source_total']=d['source_total']
+    return result
+
 
 def commit(root: Path, plan_id: str) -> dict:
     expect(isinstance(plan_id,str) and plan_id.startswith('s_') and ID_RE.fullmatch(plan_id) is not None,'非法计划 ID')
-    p=safe(root,'.system/plans/'+plan_id+'.json');expect(p.exists(),'计划不存在/已提交')
-    plan=parse_json(p)
-    expect(plan.get('plan_version')==PLAN_VERSION and plan.get('memory_scope')=='global',
-           'PLAN_VERSION：旧语义计划不能提交，必须重新生成并确认')
-    expect(time.time()-plan['created_at']<=24*3600,'计划已过期')
-    expect(plan['expected_fingerprint']==root_fingerprint(root),'STALE_PLAN：记忆库内容已经变化，必须重新预览')
-    op=plan['operation'];data=plan['payload'];changes={};existing=all_records(root)
-    if op=='month':
-        _,z=load(root);month_closed(data['month'],z,data.get('closed_today_confirmed',False))
-    withdrawn_months=[];deleted_access_statistics=[]
-    if op=='save':
-        successors={r['id']:r['superseded_by'] for r in data['supersede']}
-        daypath=f'daily/{data["date"][:4]}/{data["date"][5:7]}/{data["date"]}.md'
-        paths={r['file_path'] for r in existing if r['id'] in successors}|{daypath}
-        for rel in paths:
-            entries=[]
-            for r in existing:
-                if r['file_path']!=rel:continue
-                entry=dict(r)
-                if r['id'] in successors:
-                    entry.update({'status':'superseded','superseded_by':successors[r['id']]})
-                entries.append(entry)
-            if rel==daypath:
-                entries.extend({**r,'session':{'id':data['session_id'],'saved_at':data['saved_at'],'agent':data['agent']}}
-                               for r in data['records'])
-            changes[rel]=render_daily(Path(rel).stem,entries).encode()
-        # 替代只调整有效性；旧月份的原文、来源 ID 和历史摘要仍然成立。
-        withdrawn_months=data['withdrawn_months']
-        invalidate_months(root,changes,withdrawn_months)
-    elif op=='delete':
-        deleted={r['id'] for r in data['records']}
-        access_plan=data.get('access_statistics')
-        expect(isinstance(access_plan,dict) and access_plan.get('file')==ACCESS_STORE
-               and isinstance(access_plan.get('target_ids'),list)
-               and all(isinstance(rid,str) for rid in access_plan['target_ids'])
-               and len(access_plan['target_ids'])==len(deleted) and set(access_plan['target_ids'])==deleted,
-               'PLAN_VERSION：删除计划未完整展示访问统计范围，须重新生成并确认')
-        access=load_access_state(root)
-        if access is not None:
-            deleted_access_statistics=sorted(deleted.intersection(access['records']))
-            if deleted_access_statistics:
-                for rid in deleted_access_statistics:del access['records'][rid]
-                changes[ACCESS_STORE]=j(access).encode()
-        affected={r['id'] for r in data['affected_record_references']}
-        paths={r['file_path'] for r in existing if r['id'] in deleted or r['id'] in affected}
-        for rel in paths:
-            entries=[]
-            for r in existing:
-                if r['file_path']!=rel or r['id'] in deleted:continue
-                entry=dict(r)
-                for key in ('source_record_ids','supersedes'):
-                    if key in entry:entry[key]=[rid for rid in entry[key] if rid not in deleted]
-                if entry.get('superseded_by') in deleted:entry.pop('superseded_by')
-                # 删除后继不能让已经过时的旧决定重新成为当前规则。
-                entries.append(entry)
-            changes[rel]=render_daily(Path(rel).stem,entries).encode() if entries else None
-        for domain in DOMAINS:
-            rel='profile/'+domain+'.md';b=file_bytes(root,rel)
-            if b is None:continue
-            profiles=parse_profiles(b.decode());changed=False
-            for profile in profiles:
-                sources=profile.get('source_record_ids',[]);cleaned=[rid for rid in sources if rid not in deleted]
-                if cleaned!=sources:profile['source_record_ids']=cleaned;changed=True
-            if changed:changes[rel]=render_profiles(domain,profiles).encode()
-        withdrawn_months=data['withdrawn_months']
-        invalidate_months(root,changes,withdrawn_months)
-    elif op=='profile':
-        rel='profile/'+data['domain']+'.md';old=file_bytes(root,rel)
-        profiles=parse_profiles(old.decode()) if old else []
-        profiles=[p for p in profiles if p['id'] not in data['replace_ids']]
-        profiles.append(data['profile'])
-        changes[rel]=render_profiles(data['domain'],profiles).encode()
-    elif op=='month':
-        m=data['month'];rel=f'monthly/{m[:4]}/{m}.md'
-        output=[f'---\nschema_version: "{SCHEMA}"\nmonth: "{m}"\ngenerated_at: "{data["generated_at"]}"\n---\n\n# {m} 工作回顾\n']
-        output.append(f'## 全局回顾\n{GLOBAL_OPEN}\n')
-        for topic in data['topics']:
-            output.append(f'### {topic["title"]}\n<!-- memory:summary {compact({"source_record_ids":topic["source_record_ids"]})} -->\n{topic["content"]}\n<!-- /memory:summary -->\n')
-        changes[rel]='\n'.join(output).encode()
-    else:raise MemoryError('不支持的全局记忆计划操作')
-    changes.update(index_updates(root,changes))
-    apply_transaction(root,changes);p.unlink()
-    return {'memory_scope':'global','committed':plan_id,'operation':op,'changed_files':sorted(changes),
-            'withdrawn_months':withdrawn_months,'deleted_access_statistics_ids':deleted_access_statistics,
+    new_ids: list[str] = []
+    with connect(root,write=True) as conn:
+        require_version(conn)
+        zone=timezone_of(conn)
+        with transaction(conn):
+            row=conn.execute('SELECT plan_version,operation,created_at,expected_change_seq,payload FROM plans WHERE plan_id=?',
+                             (plan_id,)).fetchone()
+            expect(row is not None,'计划不存在/已提交')
+            expect(row['plan_version']==PLAN_VERSION,'PLAN_VERSION：旧语义计划不能提交，必须重新生成并确认')
+            expect(time.time()-row['created_at']<=24*3600,'计划已过期')
+            expect(row['expected_change_seq']==change_seq(conn),'STALE_PLAN：记忆库内容已经变化，必须重新预览')
+            op=row['operation'];data=json.loads(row['payload'])
+            if op=='month': month_closed(data['month'],zone,data.get('closed_today_confirmed',False))
+            withdrawn=[];deleted_statistics=[]
+            if op=='save':
+                successors={r['id']:r['superseded_by'] for r in data['supersede']}
+                for old_id,new_id in successors.items():
+                    conn.execute('UPDATE records SET status=?,superseded_by=? WHERE id=?',('superseded',new_id,old_id))
+                for r in data['records']:
+                    terms,length=document_terms(r['title'],r['content'],r.get('rule_key'))
+                    conn.execute('INSERT INTO records(id,date,session_id,agent,saved_at,type,topic,title,content,'
+                                 'rule_key,status,superseded_by,project_id,content_digest,doc_length) '
+                                 'VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+                                 (r['id'],data['date'],data['session_id'],data['agent'],data['saved_at'],r['type'],
+                                  r['topic'],r['title'],r['content'],r.get('rule_key'),r.get('status','active'),
+                                  None,r.get('project_id'),
+                                  content_key(r['type'],r.get('rule_key'),r['title'],r['content']),length))
+                    conn.executemany('INSERT INTO record_sources(record_id,source_id) VALUES(?,?)',
+                                     [(r['id'],sid) for sid in r.get('source_record_ids',[])])
+                    conn.executemany('INSERT INTO record_supersedes(record_id,target_id) VALUES(?,?)',
+                                     [(r['id'],tid) for tid in r.get('supersedes',[])])
+                    write_terms(conn,r['id'],terms)
+                new_ids=[r['id'] for r in data['records']]
+                withdrawn=data['withdrawn_months']
+                for month in withdrawn: withdraw_month(conn,month)
+            elif op=='delete':
+                deleted={r['id'] for r in data['records']}
+                access_plan=data.get('access_statistics')
+                expect(isinstance(access_plan,dict) and access_plan.get('storage')=='database'
+                       and isinstance(access_plan.get('target_ids'),list)
+                       and len(access_plan['target_ids'])==len(deleted)
+                       and set(access_plan['target_ids'])==deleted,
+                       'PLAN_VERSION：删除计划未完整展示访问统计范围，须重新生成并确认')
+                placeholders=_placeholders(sorted(deleted));ids=sorted(deleted)
+                deleted_statistics=sorted({row[0] for row in conn.execute(
+                    f'SELECT record_id FROM access_events WHERE record_id IN ({placeholders})',ids)})
+                conn.execute(f'DELETE FROM access_events WHERE record_id IN ({placeholders})',ids)
+                conn.execute(f'DELETE FROM record_sources WHERE source_id IN ({placeholders})',ids)
+                conn.execute(f'DELETE FROM record_supersedes WHERE target_id IN ({placeholders})',ids)
+                conn.execute(f'DELETE FROM profile_sources WHERE source_id IN ({placeholders})',ids)
+                conn.execute(f'UPDATE records SET superseded_by=NULL WHERE superseded_by IN ({placeholders})',ids)
+                conn.execute(f'DELETE FROM records WHERE id IN ({placeholders})',ids)
+                withdrawn=data['withdrawn_months']
+                for month in withdrawn: withdraw_month(conn,month)
+            elif op=='profile':
+                for pid in data['replace_ids']:
+                    conn.execute('DELETE FROM profiles WHERE id=?',(pid,))
+                profile=data['profile']
+                conn.execute('INSERT INTO profiles(id,domain,scope,basis,title,content) VALUES(?,?,?,?,?,?)',
+                             (profile['id'],data['domain'],profile['scope'],profile['basis'],
+                              profile['title'],profile['content']))
+                conn.executemany('INSERT INTO profile_sources(profile_id,source_id) VALUES(?,?)',
+                                 [(profile['id'],sid) for sid in profile['source_record_ids']])
+            elif op=='month':
+                month=data['month'];withdraw_month(conn,month)
+                for position,topic in enumerate(data['topics']):
+                    terms,length=summary_terms(topic['title'],topic['content'])
+                    conn.execute('INSERT INTO summaries(month,position,topic,content,generated_at,doc_length) '
+                                 'VALUES(?,?,?,?,?,?)',
+                                 (month,position,topic['title'],topic['content'],data['generated_at'],length))
+                    conn.executemany('INSERT INTO summary_sources(month,position,source_id) VALUES(?,?,?)',
+                                     [(month,position,sid) for sid in topic['source_record_ids']])
+                    write_summary_terms(conn,month,position,terms)
+            else: raise MemoryError('不支持的全局记忆计划操作')
+            conn.execute('DELETE FROM plans WHERE plan_id=?',(plan_id,))
+            version=bump(conn)
+    return {'memory_scope':'global','committed':plan_id,'operation':op,'store_version':version,
+            'new_record_ids':new_ids,'withdrawn_months':withdrawn,
+            'deleted_access_statistics_ids':deleted_statistics,
             'superseded_record_ids':[r['id'] for r in data['supersede']] if op=='save' else []}
 
-def cmd_search(root: Path, args: argparse.Namespace) -> dict:
-    """既有入口保留近期语义；全局召回使用 recall，二者共用索引与排序。"""
-    expect(not (args.historical and (args.month or args.all_dates)),'--historical 不能与 --month/--all-dates 合用')
-    expect(not (args.month and args.all_dates),'--month 不能与 --all-dates 合用')
-    mode='historical' if args.historical else 'month' if args.month else 'records' if args.all_dates else 'recent'
-    return indexed_recall(root,args.query,mode,args.month,0,args.limit,allow_empty=True)
+
+# ---------------------------------------------------------------------------
+# 维护：状态、校验、重建、迁移、导出
+# ---------------------------------------------------------------------------
+
+def status_view(root: Path) -> dict:
+    with connect(root) as conn:
+        version=require_version(conn)
+        return {'memory_scope':'global','root':str(root),'database':str(db_path(root)),
+                'store_version':version,'change_seq':change_seq(conn),
+                'timezone':meta_value(conn,'timezone'),'recent_window_days':recent_window(conn),
+                'search':meta_value(conn,'search'),
+                'records':conn.execute('SELECT COUNT(*) FROM records').fetchone()[0],
+                'profiles':conn.execute('SELECT COUNT(*) FROM profiles').fetchone()[0],
+                'summary_months':len({row[0] for row in conn.execute('SELECT DISTINCT month FROM summaries')}),
+                'access_statistics':access_status(root)}
+
+
+def integrity_view(root: Path) -> dict:
+    with connect(root) as conn:
+        require_version(conn)
+        check=conn.execute('PRAGMA quick_check').fetchone()[0]
+        expect(check=='ok',f'DB_CORRUPT：完整性检查失败：{check}')
+        recs,profiles=validate_state(conn)
+        for row in conn.execute('SELECT id,doc_length FROM records'):
+            total=conn.execute('SELECT COALESCE(SUM(tf),0) FROM record_terms WHERE record_id=?',(row[0],)).fetchone()[0]
+            expect(total==row[1],f'DB_INVALID：词项长度与记录不一致: {row[0]}')
+        for row in conn.execute('SELECT month,position,doc_length FROM summaries'):
+            total=conn.execute('SELECT COALESCE(SUM(tf),0) FROM summary_terms WHERE month=? AND position=?',
+                               (row[0],row[1])).fetchone()[0]
+            expect(total==row[2],f'DB_INVALID：词项长度与摘要不一致: {row[0]}#{row[1]}')
+        expected_seq=conn.execute('SELECT COALESCE(MAX(rowid),0) FROM records').fetchone()[0]
+        return {'valid':True,'records':len(recs),'profiles':len(profiles),'quick_check':check,
+                'change_seq':change_seq(conn),'max_record_rowid':expected_seq}
+
+
+def reindex_view(root: Path) -> dict:
+    """重建只重算派生词项，不改写任何权威正文。"""
+    with connect(root,write=True) as conn:
+        require_version(conn)
+        with transaction(conn):
+            conn.execute('DELETE FROM record_terms')
+            for row in conn.execute('SELECT id,title,content,rule_key FROM records'):
+                terms,length=document_terms(row['title'],row['content'],row['rule_key'])
+                write_terms(conn,row['id'],terms)
+                conn.execute('UPDATE records SET doc_length=? WHERE id=?',(length,row['id']))
+            conn.execute('DELETE FROM summary_terms')
+            for row in conn.execute('SELECT month,position,topic,content FROM summaries'):
+                terms,length=summary_terms(row['topic'],row['content'])
+                write_summary_terms(conn,row['month'],row['position'],terms)
+                conn.execute('UPDATE summaries SET doc_length=? WHERE month=? AND position=?',
+                             (length,row['month'],row['position']))
+            version=bump(conn)
+    return {'reindexed':True,'store_version':version}
+
+
+def reassign_store(root: Path, source: str, target: str) -> dict:
+    """改判记录归属：只在目标归属下没有同键有效规则时搬移，保留记录、替代链与历史来源。"""
+    for value in (source,target):
+        expect(isinstance(value,str) and PROJECT_ID_RE.fullmatch(value) is not None,
+               '项目归属必须是项目注册表的 UUID')
+    expect(source!=target,'源与目标项目归属相同')
+    with connect(root,write=True) as conn:
+        require_version(conn)
+        with transaction(conn):
+            total=conn.execute('SELECT COUNT(*) FROM records WHERE project_id=?',(source,)).fetchone()[0]
+            expect(total>0,f'没有归属 {source} 的记录')
+            # 同键冲突不自动裁决：两个归属各自的有效规则合并后会变成重复有效版本。
+            conflicts=[row[0] for row in conn.execute(
+                'SELECT s.id FROM records s JOIN records t ON t.project_id=? AND t.rule_key=s.rule_key '
+                'AND t.status=? WHERE s.project_id=? AND s.status=? AND s.type IN (?,?)',
+                (target,'active',source,'active',*sorted(RULE_TYPES)))]
+            expect(not conflicts,'目标归属下已有同键有效规则，需先决定替代顺序: '+','.join(conflicts))
+            conn.execute('UPDATE records SET project_id=? WHERE project_id=?',(target,source))
+            version=bump(conn)
+    return {'reassigned':total,'from':source,'to':target,'store_version':version}
+
+
+def init_store(root: Path, timezone: str) -> dict:
+    expect(not root.exists() or not any(root.iterdir()),'目标目录非空，禁止覆盖')
+    result=create_store(root,timezone)
+    return {'initialized':str(root),**result}
+
+
+def migrate_store(target: Path, source: Path) -> dict:
+    """一次性把旧 Markdown 库导入 SQLite：先归档原名，失败回滚改名，成功才写库。"""
+    source=source.absolute();target=target.absolute()
+    expect(source.is_dir() and not source.is_symlink(),'旧库目录不存在或不是普通目录')
+    manifest_path=source/'manifest.json'
+    expect(manifest_path.is_file(),'旧库缺少 manifest.json，无法迁移')
+    manifest=json.loads(manifest_path.read_text(encoding='utf-8'))
+    expect(manifest.get('schema_version') in LEGACY_SCHEMAS,
+           f'旧库版本不支持迁移: {manifest.get("schema_version")}')
+    timezone=str(manifest.get('timezone'))
+    expect(timezone,'旧库缺少时区，无法迁移')
+    expect(not db_path(target).exists(),'DB_EXISTS：目标库已存在，禁止迁移覆盖')
+    expect(target==source or not target.exists() or not any(target.iterdir()),
+           '迁移目标目录非空，禁止覆盖')
+    records=_legacy_records(source)
+    profiles=_legacy_profiles(source)
+    summaries=_legacy_summaries(source,{r['id'] for r in records})
+    access=_legacy_access(source)
+    stamp=dt.datetime.now().strftime('%Y%m%dT%H%M%S')
+    archive=source.parent/(source.name+'-archive-'+stamp)
+    expect(not archive.exists(),f'归档目录已存在: {archive}')
+    moved=source!=target
+    if moved:
+        source.rename(archive)
+        target.mkdir(parents=True,exist_ok=True)
+    else:
+        archive.mkdir(parents=True,exist_ok=False)
+        for entry in source.iterdir():
+            entry.rename(archive/entry.name)
+    try:
+        create_store(target,timezone)
+        with connect(target,write=True) as conn:
+            with transaction(conn):
+                conn.execute('DELETE FROM meta')
+                meta_patch(conn,{'timezone':timezone,
+                                 'recent_window_days':int(manifest.get('recent_window_days',DEFAULT_RECENT_WINDOW)),
+                                 'change_seq':0,'created_at':dt.datetime.now(dt.timezone.utc).isoformat(timespec='seconds'),
+                                 'storage':'sqlite','search':SEARCH_ALGORITHM})
+                for record in records:
+                    terms,length=document_terms(record['title'],record['content'],record.get('rule_key'))
+                    conn.execute('INSERT INTO records(id,date,session_id,agent,saved_at,type,topic,title,content,'
+                                 'rule_key,status,superseded_by,project_id,content_digest,doc_length) '
+                                 'VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+                                 (record['id'],record['date'],record['session']['id'],record['session']['agent'],
+                                  record['session']['saved_at'],record['type'],record['topic'],record['title'],
+                                  record['content'],record.get('rule_key'),record.get('status','active'),
+                                  record.get('superseded_by'),record.get('project_id'),
+                                  content_key(record['type'],record.get('rule_key'),record['title'],record['content']),
+                                  length))
+                    write_terms(conn,record['id'],terms)
+                    conn.executemany('INSERT INTO record_sources(record_id,source_id) VALUES(?,?)',
+                                     [(record['id'],sid) for sid in record.get('source_record_ids',[])])
+                    conn.executemany('INSERT INTO record_supersedes(record_id,target_id) VALUES(?,?)',
+                                     [(record['id'],tid) for tid in record.get('supersedes',[])])
+                for profile in profiles:
+                    conn.execute('INSERT INTO profiles(id,domain,scope,basis,title,content) VALUES(?,?,?,?,?,?)',
+                                 (profile['id'],profile['domain'],profile['scope'],profile['basis'],
+                                  profile['title'],profile['content']))
+                    conn.executemany('INSERT INTO profile_sources(profile_id,source_id) VALUES(?,?)',
+                                     [(profile['id'],sid) for sid in profile.get('source_record_ids',[])])
+                for position,summary in enumerate(summaries):
+                    terms,length=summary_terms(summary['topic'],summary['content'])
+                    conn.execute('INSERT INTO summaries(month,position,topic,content,generated_at,doc_length) '
+                                 'VALUES(?,?,?,?,?,?)',
+                                 (summary['month'],summary['position'],summary['topic'],summary['content'],
+                                  summary['generated_at'],length))
+                    conn.executemany('INSERT INTO summary_sources(month,position,source_id) VALUES(?,?,?)',
+                                     [(summary['month'],summary['position'],sid) for sid in summary['source_record_ids']])
+                    write_summary_terms(conn,summary['month'],summary['position'],terms)
+                if access['started_at']:
+                    meta_patch(conn,{'access_started_at':access['started_at']})
+                    for rid,rows in access['events'].items():
+                        conn.executemany('INSERT INTO access_events(record_id,session_hash,event_hash,at) VALUES(?,?,?,?)',
+                                         [(rid,session,event,at) for session,event,at in rows])
+                version=bump(conn)
+        imported=status_view(target)
+        expect(imported['records']==len(records),'迁移校验失败：记录数量不一致')
+        expect(imported['profiles']==len(profiles),'迁移校验失败：画像数量不一致')
+        expect(imported['summary_months']==len({s['month'] for s in summaries}),'迁移校验失败：摘要月份不一致')
+    except BaseException:
+        db=db_path(target)
+        if db.exists(): db.unlink()
+        for suffix in ('-wal','-shm'):
+            extra=db.with_name(db.name+suffix)
+            if extra.exists(): extra.unlink()
+        if moved:
+            if target.exists() and not any(target.iterdir()): target.rmdir()
+            archive.rename(source)
+        else:
+            for entry in archive.iterdir(): entry.rename(source/entry.name)
+            archive.rmdir()
+        raise
+    return {'migrated':True,'database':str(db_path(target)),'archive':str(archive),
+            'store_version':STORE_VERSION,'records':len(records),'profiles':len(profiles),
+            'summaries':len(summaries),'access_records':len(access['events']),'change_seq':version}
+
+
+def export_store(root: Path, out: Path) -> dict:
+    """生成只读 Markdown 快照供人阅读；导出物不参与写回，也不被引擎读取。"""
+    expect(not out.exists() or not any(out.iterdir()),'导出目标非空，禁止覆盖')
+    with connect(root) as conn:
+        require_version(conn)
+        records=record_rows(conn)
+        profiles=profile_rows(conn)
+        summaries=summary_rows(conn)
+    out.mkdir(parents=True,exist_ok=True)
+    by_date={}
+    for record in records: by_date.setdefault(record['date'],[]).append(record)
+    for date,rows in sorted(by_date.items()):
+        path=out/'daily'/date[:4]/date[5:7]/(date+'.md')
+        path.parent.mkdir(parents=True,exist_ok=True)
+        atomic_write(path,render_daily(date,rows).encode())
+    for month in sorted({row['month'] for row in summaries}):
+        path=out/'monthly'/month[:4]/(month+'.md')
+        path.parent.mkdir(parents=True,exist_ok=True)
+        atomic_write(path,render_monthly(month,[row for row in summaries if row['month']==month],
+                                         next(row['generated_at'] for row in summaries if row['month']==month)).encode())
+    for domain in sorted({row['domain'] for row in profiles} | DOMAINS):
+        path=out/'profile'/(domain+'.md')
+        path.parent.mkdir(parents=True,exist_ok=True)
+        atomic_write(path,render_profiles(domain,[row for row in profiles if row['domain']==domain]).encode())
+    atomic_write(out/'manifest.json',j({'schema_version':'0.3','timezone':meta_of(root),
+                                         'recent_window_days':30,'exported_from':'sqlite'}).encode())
+    return {'exported':str(out),'records':len(records),'profiles':len(profiles),
+            'summaries':len(summaries),'note':'只读快照；不参与写回，引擎不再读取这些文件'}
+
+
+def meta_of(root: Path) -> str:
+    with connect(root) as conn:
+        return meta_value(conn,'timezone')
+
+
+def atomic_write(path: Path, data: bytes) -> None:
+    path.parent.mkdir(parents=True,exist_ok=True)
+    tmp=path.with_name(path.name+'.'+uuid.uuid4().hex+'.tmp')
+    with open(tmp,'wb') as f:
+        f.write(data);f.flush()
+    tmp.replace(path)
+
+
+def render_daily(date: str, records: list[dict]) -> str:
+    out=[f'---\nschema_version: "0.3"\ndate: "{date}"\n---\n\n# {date}\n',
+         '## 全局记忆\n'+LEGACY_GLOBAL_OPEN+'\n']
+    for session_id in dict.fromkeys(record['session']['id'] for record in records):
+        rows=[record for record in records if record['session']['id']==session_id]
+        session=rows[0]['session']
+        out.append(f'### 会话 {session["saved_at"][11:16]}\n<!-- memory:session {compact(session)} -->\n')
+        for row in rows:
+            meta={key:row[key] for key in ('id','type','topic','rule_key','status','superseded_by','project_id')
+                  if row.get(key) is not None}
+            if row['source_record_ids']: meta['source_record_ids']=row['source_record_ids']
+            if row['supersedes']: meta['supersedes']=row['supersedes']
+            out.append(f'<!-- memory:record {compact(meta)} -->\n#### {row["title"]}\n{row["content"]}\n<!-- /memory:record -->\n')
+    return '\n'.join(out).rstrip()+'\n'
+
+
+def render_monthly(month: str, rows: list[dict], generated_at: str) -> str:
+    out=[f'---\nschema_version: "0.3"\nmonth: "{month}"\ngenerated_at: "{generated_at}"\n---\n\n# {month} 工作回顾\n',
+         '## 全局回顾\n'+LEGACY_GLOBAL_OPEN+'\n']
+    for row in rows:
+        meta={'source_record_ids':row['source_record_ids']}
+        out.append(f'### {row["topic"]}\n<!-- memory:summary {compact(meta)} -->\n{row["content"]}\n<!-- /memory:summary -->\n')
+    return '\n'.join(out).rstrip()+'\n'
+
+
+def render_profiles(domain: str, rows: list[dict]) -> str:
+    out=[f'# {domain}\n']
+    for row in rows:
+        meta={key:row[key] for key in ('id','scope','basis','source_record_ids')}
+        out.append(f'<!-- memory:profile {compact(meta)} -->\n## {row["title"]}\n{row["content"]}\n<!-- /memory:profile -->\n')
+    return '\n'.join(out).rstrip()+'\n'
+
+
+# ---------------------------------------------------------------------------
+# 旧 Markdown 库解析（仅 migrate 使用）
+# ---------------------------------------------------------------------------
+
+def _legacy_files(root: Path, subtree: str, suffix: str) -> list[str]:
+    base=root/subtree
+    if not base.is_dir(): return []
+    out=[]
+    for path in sorted(base.rglob('*')):
+        expect(not path.is_symlink(),'禁止符号链接: '+str(path))
+        if path.is_file() and path.suffix==suffix:
+            out.append(path.relative_to(root).as_posix())
+    return out
+
+
+def _legacy_records(root: Path) -> list[dict]:
+    found=[]
+    for rel in _legacy_files(root,'daily','.md'):
+        text=(root/rel).read_text(encoding='utf-8').replace('\r\n','\n')
+        lines=text.splitlines();source={};current_session=None;scope_known=False;i=0
+        while i<len(lines):
+            line=lines[i]
+            if line.startswith('## '):
+                expect(i+1<len(lines),'记忆范围标记丢失')
+                marker=lines[i+1]
+                if marker==LEGACY_GLOBAL_OPEN: source={}
+                else:
+                    mt=LEGACY_PROJECT_OPEN.fullmatch(marker)
+                    expect(mt is not None,'无法识别记忆范围标记')
+                    pid=json.loads(mt.group(1))['id']
+                    source={'project_id':pid,'project_name':line[3:]}
+                scope_known=True;current_session=None;i+=2;continue
+            if line.startswith('### '):
+                expect(scope_known and i+1<len(lines),'会话缺少记忆范围上下文')
+                mt=LEGACY_SESSION_OPEN.fullmatch(lines[i+1])
+                expect(mt is not None,'会话标记丢失')
+                current_session=json.loads(mt.group(1));i+=2;continue
+            mt=LEGACY_RECORD_OPEN.fullmatch(line)
+            if mt:
+                expect(scope_known and current_session,'记录没有会话上下文')
+                meta=json.loads(mt.group(1))
+                expect(i+1<len(lines) and lines[i+1].startswith('#### '),'记录标题丢失')
+                title=lines[i+1][5:];i+=2;body=[]
+                while i<len(lines) and lines[i]!='<!-- /memory:record -->':body.append(lines[i]);i+=1
+                expect(i<len(lines),'缺少记录结束标记')
+                found.append({**source,**meta,'session':current_session,'title':title,
+                              'content':'\n'.join(body).strip(),'date':Path(rel).stem})
+            i+=1
+    ids=[r['id'] for r in found]
+    expect(len(ids)==len(set(ids)),'记忆 ID 在不同日期重复')
+    for record in found:
+        record.setdefault('status','active')
+        record.pop('project_name',None)
+        project=record.get('project_id')
+        if project is not None and PROJECT_ID_RE.fullmatch(str(project)) is None: record.pop('project_id',None)
+    return found
+
+
+def _legacy_profiles(root: Path) -> list[dict]:
+    result=[]
+    for domain in sorted(DOMAINS):
+        path=root/'profile'/(domain+'.md')
+        if not path.is_file(): continue
+        lines=path.read_text(encoding='utf-8').splitlines();i=0
+        while i<len(lines):
+            mt=LEGACY_PROFILE_OPEN.fullmatch(lines[i])
+            if mt:
+                meta=json.loads(mt.group(1))
+                expect(i+1<len(lines) and lines[i+1].startswith('## '),'画像标题丢失')
+                title=lines[i+1][3:];i+=2;body=[]
+                while i<len(lines) and lines[i]!='<!-- /memory:profile -->':body.append(lines[i]);i+=1
+                expect(i<len(lines),'画像缺少结束标记')
+                result.append({**meta,'domain':domain,'title':title,'content':'\n'.join(body).strip()})
+            i+=1
+    ids=[p['id'] for p in result]
+    expect(len(ids)==len(set(ids)),'画像 ID 重复')
+    return result
+
+
+def _legacy_summaries(root: Path, valid_ids: set[str]) -> list[dict]:
+    result=[]
+    for rel in _legacy_files(root,'monthly','.md'):
+        month=Path(rel).stem
+        lines=(root/rel).read_text(encoding='utf-8').splitlines();topic='';i=0;position=0
+        while i<len(lines):
+            line=lines[i]
+            if line.startswith('### '): topic=line[4:]
+            mt=LEGACY_SUM_OPEN.fullmatch(line)
+            if mt:
+                meta=json.loads(mt.group(1));body=[];i+=1
+                while i<len(lines) and lines[i]!='<!-- /memory:summary -->':body.append(lines[i]);i+=1
+                expect(i<len(lines),'月摘要缺少结束标记')
+                ids=meta['source_record_ids']
+                expect(set(ids).issubset(valid_ids),f'摘要来源已丢失: {rel}')
+                result.append({'month':month,'position':position,'topic':topic,
+                               'content':'\n'.join(body).strip(),
+                               'generated_at':_legacy_generated_at(root/rel),'source_record_ids':ids})
+                position+=1
+            i+=1
+    return result
+
+
+def _legacy_generated_at(path: Path) -> str:
+    for line in path.read_text(encoding='utf-8').splitlines()[:8]:
+        mt=re.fullmatch(r'generated_at: "(.+)"',line)
+        if mt: return mt.group(1)
+    return dt.datetime.now(dt.timezone.utc).isoformat(timespec='seconds')
+
+
+def _legacy_access(root: Path) -> dict:
+    path=root/'.system'/'access.json'
+    empty={'started_at':None,'events':{}}
+    if not path.is_file(): return empty
+    state=json.loads(path.read_text(encoding='utf-8'))
+    expect(isinstance(state,dict) and isinstance(state.get('records'),dict),'ACCESS_INVALID：统计结构无效')
+    events={}
+    for rid,row in state['records'].items():
+        expect(isinstance(row,dict) and isinstance(row.get('sessions'),dict),'ACCESS_INVALID：记录统计结构无效')
+        at=row.get('last_read_at')
+        access_time(at)
+        rows=[]
+        for session,items in row['sessions'].items():
+            expect(isinstance(items,list),'ACCESS_INVALID：去重身份无效')
+            for event in items: rows.append((session,event,at))
+        if rows: events[rid]=rows
+    return {'started_at':state.get('started_at'),'events':events}
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
 
 def main() -> None:
     parser=argparse.ArgumentParser(description=__doc__)
@@ -1196,9 +1509,15 @@ def main() -> None:
     parser.add_argument('--store',default=str(Path.home()/'.agents'/'memory-store'),help='memory-store directory (default: ~/.agents/memory-store; override only for tests/migration)')
     sub=parser.add_subparsers(dest='cmd',required=True)
     init=sub.add_parser('init');init.add_argument('--timezone',required=True)
-    sub.add_parser('status');sub.add_parser('validate');sub.add_parser('reindex');sub.add_parser('months')
-    rc=sub.add_parser('recover');rc.add_argument('--approved',action='store_true')
+    sub.add_parser('status');sub.add_parser('validate');sub.add_parser('integrity')
+    sub.add_parser('reindex');sub.add_parser('months')
+    rs=sub.add_parser('reassign');rs.add_argument('--from',dest='source',required=True)
+    rs.add_argument('--to',dest='target',required=True);rs.add_argument('--approved',action='store_true')
+    migrate=sub.add_parser('migrate');migrate.add_argument('--from',dest='source',default=None,
+        help='legacy Markdown store directory (default: --store)')
+    export=sub.add_parser('export');export.add_argument('--out',required=True)
     pp=sub.add_parser('plan');pp.add_argument('operation',choices=['save','delete','profile','month']);pp.add_argument('--input',required=True)
+    ps=sub.add_parser('plan-show');ps.add_argument('--plan-id',required=True)
     cm=sub.add_parser('commit');cm.add_argument('--plan-id',required=True);cm.add_argument('--approved',action='store_true')
     sr=sub.add_parser('search');sr.add_argument('--query',default='');sr.add_argument('--month');sr.add_argument('--all-dates',action='store_true');sr.add_argument('--historical',action='store_true');sr.add_argument('--limit',type=int,default=50)
     recall=sub.add_parser('recall');recall.add_argument('--query',required=True);recall.add_argument('--mode',choices=['records','recent','historical','month'],default='records');recall.add_argument('--month');recall.add_argument('--offset',type=int,default=0);recall.add_argument('--limit',type=int,default=50)
@@ -1219,88 +1538,72 @@ def main() -> None:
         zoneinfo.reset_tzpath([str(tzpath.absolute())])
     root=Path(args.store).expanduser().absolute()
     if args.cmd=='init':
-        expect(not root.exists() or not any(root.iterdir()),'目标目录非空，禁止覆盖')
-        try:ZoneInfo(args.timezone)
-        except ZoneInfoNotFoundError:raise MemoryError('IANA 时区不可用；Windows 可安装 tzdata')
-        root.mkdir(parents=True,exist_ok=True)
-        for d in ['daily','monthly','profile','index','.system/plans','.system/transactions']:(root/d).mkdir(parents=True,exist_ok=True)
-        atomic_write(root/'manifest.json',j({'schema_version':SCHEMA,'timezone':args.timezone,'recent_window_days':30}).encode())
-        for d in DOMAINS:atomic_write(root/'profile'/f'{d}.md',f'# {d}\n'.encode())
-        atomic_write(root/'.system'/'lock',b'0')
-        with locking(root,True): apply_transaction(root,index_updates(root,{}))
-        result={'initialized':str(root),'schema_version':SCHEMA}
+        result=init_store(root,args.timezone)
+    elif args.cmd=='migrate':
+        result=migrate_store(root,Path(args.source).expanduser().absolute() if args.source else root)
     else:
-        load(root)
-        if args.cmd=='recover':
-            expect(args.approved,'恢复事务必须先取得明确授权，再使用 --approved')
-            with locking(root,True,allow_recovery=True):recover(root)
-            result={'recovered':True}
-        elif args.cmd=='status':
-            with locking(root):
-                man,_=load(root)
-                result={'memory_scope':'global','root':str(root),'manifest':man,'records':len(all_records(root)),
-                        'profiles':len(all_profiles(root)),'access_statistics':access_status(root)}
-        elif args.cmd=='validate':
-            with locking(root):
-                rs,ps=validate_state(root)
-                expected=index_updates(root,{})
-                for name,contents in expected.items():
-                    if name==SEARCH_INDEX:
-                        current,_=load_search_index(root)
-                        expect(search_semantics(current)==search_semantics(json.loads(contents)),
-                               'INDEX_STALE：检索索引语义不一致，须单独批准 reindex')
-                    else:expect(file_bytes(root,name)==contents,'INDEX_STALE：索引不一致，须单独批准 reindex: '+name)
-                result={'valid':True,'records':len(rs),'profiles':len(ps)}
-        elif args.cmd=='months':
-            with locking(root):
-                expected=index_updates(root,{})
-                result={'months':json.loads(expected['index/months.json'])}
-        elif args.cmd=='reindex':
-            with locking(root,True):
-                changes=index_updates(root,{})
-                apply_transaction(root,changes)
-                result={'rebuilt':sorted(changes)}
+        if args.cmd=='export':
+            result=export_store(root,Path(args.out).expanduser().absolute())
+        elif args.cmd=='plan-show':
+            result=plan_show(root,args.plan_id)
         elif args.cmd=='plan':
-            raw_input=json.loads(sys.stdin.buffer.read().decode('utf-8')) if args.input=='-' else parse_json(Path(args.input))
-            with locking(root,True):result=render_preview(prepare(root,args.operation,raw_input))
+            raw_input=json.loads(sys.stdin.buffer.read().decode('utf-8')) if args.input=='-' else json.loads(Path(args.input).read_text(encoding='utf-8'))
+            result=render_preview(prepare(root,args.operation,raw_input))
         elif args.cmd=='commit':
             expect(args.approved,'必须明确 --approved；Skill 必须先展示变更并取得用户确认')
-            with locking(root,True):result=commit(root,args.plan_id)
+            result=commit(root,args.plan_id)
+        elif args.cmd=='status':
+            result=status_view(root)
+        elif args.cmd=='validate':
+            with connect(root) as conn:
+                require_version(conn)
+                recs,profiles=validate_state(conn)
+                result={'valid':True,'records':len(recs),'profiles':len(profiles)}
+        elif args.cmd=='integrity':
+            result=integrity_view(root)
+        elif args.cmd=='reindex':
+            result=reindex_view(root)
+        elif args.cmd=='reassign':
+            expect(args.approved,'改判记录归属必须先取得明确授权，再使用 --approved')
+            result=reassign_store(root,args.source,args.target)
+        elif args.cmd=='months':
+            result=months_view(root)
         elif args.cmd=='recall':
-            with locking(root):result=indexed_recall(root,args.query,args.mode,args.month,args.offset,args.limit)
+            result=indexed_recall(root,args.query,args.mode,args.month,args.offset,args.limit)
         elif args.cmd=='recall-background':
             raw=sys.stdin.buffer.read(65_537)
             expect(len(raw)<=65_536,'自动召回输入超过上限')
-            raw_input=json.loads(raw.decode('utf-8'))
-            with locking(root):result=background_recall(root,raw_input)
+            result=background_recall(root,json.loads(raw.decode('utf-8')))
         elif args.cmd=='error-recall':
             raw=sys.stdin.buffer.read(65_537)
             expect(len(raw)<=65_536,'报错召回输入超过上限')
-            raw_input=json.loads(raw.decode('utf-8'))
-            with locking(root):result=error_recall(root,raw_input)
+            result=error_recall(root,json.loads(raw.decode('utf-8')))
         elif args.cmd=='search':
-            with locking(root):result=cmd_search(root,args)
+            expect(not (args.historical and (args.month or args.all_dates)),'--historical 不能与 --month/--all-dates 合用')
+            expect(not (args.month and args.all_dates),'--month 不能与 --all-dates 合用')
+            mode='historical' if args.historical else 'month' if args.month else 'records' if args.all_dates else 'recent'
+            result=indexed_recall(root,args.query,mode,args.month,0,args.limit,allow_empty=True)
         elif args.cmd=='rules':
-            with locking(root):result=active_rules(root,args.query,args.offset,args.limit)
+            result=active_rules(root,args.query,args.offset,args.limit)
         elif args.cmd=='month-source':
-            with locking(root):result=monthly_source(root,args.month,args.offset,args.limit,args.closed_today_confirmed)
+            result=monthly_source(root,args.month,args.offset,args.limit,args.closed_today_confirmed)
         elif args.cmd=='read':
-            with locking(root):result=indexed_read(root,args.ids)
+            result=indexed_read(root,args.ids)
         elif args.cmd=='access-record':
             raw_input=json.loads(sys.stdin.buffer.read().decode('utf-8'))
-            expect(safe(root,'.system/lock').is_file(),'已有锁文件缺失；访问统计不会补建锁文件')
-            with locking(root,True,blocking=False,existing_only=True):result=record_access(root,raw_input)
+            result=record_access(root,raw_input)
         elif args.cmd=='access-stats':
-            with locking(root):result=indexed_access_stats(root,args.ids)
+            result=indexed_access_stats(root,args.ids)
         elif args.cmd=='profiles':
-            with locking(root):result={'memory_scope':'global','profiles':[x for x in all_profiles(root) if not args.domain or x['domain']==args.domain]}
-        else:raise MemoryError('未知操作')
+            result=profiles_view(root,args.domain)
+        else: raise MemoryError('未知操作')
     print(j({'ok':True,'data':result,'error':None}),end='')
+
 
 if __name__=='__main__':
     if hasattr(sys.stdin,'reconfigure'):sys.stdin.reconfigure(encoding='utf-8')
     if hasattr(sys.stdout,'reconfigure'):sys.stdout.reconfigure(encoding='utf-8')
     try:main()
-    except (MemoryError,ValueError,KeyError,TypeError,UnicodeError,json.JSONDecodeError,OSError) as e:
+    except (MemoryError,ValueError,KeyError,TypeError,UnicodeError,json.JSONDecodeError,OSError,sqlite3.Error) as e:
         print(j({'ok':False,'data':None,'error':{'type':e.__class__.__name__,'message':str(e)}}),end='')
         sys.exit(1)

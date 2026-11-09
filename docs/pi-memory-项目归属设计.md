@@ -29,8 +29,8 @@
 | 事实 | 来源 |
 | --- | --- |
 | `save` 只接受 `agent`、`session_id`、`records`，格式层无项目字段 | `memory_store.py` 的 allowed 集合 |
-| 新文件写 `## 全局记忆` 与 `<!-- memory:global -->`；旧文件按 `<!-- memory:project {"id":...} -->` 分段 | `daily/2026/11/2026-11-08.md` 第 8-9 行、`daily/2026/10/2026-10-31.md` 第 9 行 |
-| 索引含 `project_id`，261 条中 110 条为空；近七天 76 条约定中 51 条为空 | `index/records.json` |
+| 新文件写 `## 全局记忆` 与 `<!-- memory:global -->`；旧文件按 `<!-- memory:project {"id":...} -->` 分段 | 库内 `records` 表（旧 `daily/*.md` 已删除） |
+| 索引含 `project_id`，261 条中 110 条为空；近七天 76 条约定中 51 条为空 | 库内 `records` 表（旧 `index/records.json` 已删除） |
 | 项目命名两套并存：旧段名 `pi-desktop`，`rule_key` 前缀 `pi-desk` | 同上 |
 | 保存时 `cwd` 已在手上，但未进 `engine.plan` 与 `commit` | 扩展 `tools.ts` 的审批文案与返回体使用 `source_cwd`；`engine.ts` 无项目参数 |
 | 查看器把无归属记录归到 `_global`，界面显示「全局记忆」 | `memory-manager-web/server/store.mjs` 的 `GLOBAL_PROJECT_ID` |

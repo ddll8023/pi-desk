@@ -29,13 +29,13 @@ export function approvalText(engine: MemoryEngine, plan: GeneratedPlan,
     '确认提交以下具体记忆计划？批准仅覆盖本计划，不授权其他文件操作。',
     `目标域：用户级全局${plan.operation === 'save' ? '工作日记' : '个人画像'}（不绑定项目）`,
     `记忆库：${JSON.stringify(engine.store)}`,
-    `计划文件 SHA-256：${plan.sha256}`,
+    `计划协议版本：${JSON.stringify(plan.raw.plan_version)}；提交时核对库版本序号，变化则拒绝`,
     '以下为引擎生成的完整计划，payload 包含完整新旧正文、来源和替代／撤回影响。',
     plan.operation === 'save'
       ? 'supersede 只标记旧规则为已替代，保留旧正文和 ID；withdrawn_months 中的月摘要会撤回，不自动重建。'
       : 'replace_ids 指定的旧画像会被新画像替换；replaced_profiles 展示其完整原文，日记来源保留。',
-    '计划已写入 .system/plans/ 短期缓存；生成时引擎可清理过期计划。取消不改变权威记忆，不自动删除候选。',
-    '提交会由既有引擎更新权威文件及派生索引，使用其锁与事务；失败不自动恢复或重试。',
+    '计划已写入记忆库的待确认表，24 小时失效；生成时可清理过期计划。取消不改变权威记忆，不自动删除候选。',
+    '提交由引擎在单个数据库事务内写入权威数据与词项；失败不自动恢复或重试。',
     '计划变化、源内容变化、过期或会话绑定变化均使本次确认失效。',
     '控制字符以 JSON 转义表示，不执行正文中的命令或指令。', '', body
   ].join('\n')

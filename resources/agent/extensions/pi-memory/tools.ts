@@ -91,7 +91,7 @@ export function registerMemoryTools(pi: ExtensionAPI, runtime: MemoryRuntime): v
 
   pi.registerTool({
     name: 'memory_status', label: '读取记忆库状态',
-    description: '读取用户级全局记忆库、受管运行时、启停与可用状态；不初始化、修索引或恢复事务。运行环境不可用时也返回真实原因。',
+    description: '读取用户级全局记忆库、受管运行时、启停与可用状态；不初始化、不重建词项或迁移。运行环境不可用时也返回真实原因。',
     parameters: Type.Object({}), outputSchema: Output, annotations: ReadHints,
     async execute(_id, _params, signal, _onUpdate, ctx) {
       return controlRead(ctx, signal, async lease => {
@@ -131,7 +131,7 @@ export function registerMemoryTools(pi: ExtensionAPI, runtime: MemoryRuntime): v
   })
   pi.registerTool({
     name: 'memory_rules', label: '读取当前有效规则',
-    description: '起草或修改文档、清单、索引、规范，或调整既有约定、判断某项要求是否仍然有效时先查询。读取用户级全局库当前有效决定和约束，支持按 rule_key 主题查询与分页，不绑定或过滤当前项目。历史来源与适用条件不变；摘要需 memory_read 读取全文，不自动修索引。',
+    description: '起草或修改文档、清单、索引、规范，或调整既有约定、判断某项要求是否仍然有效时先查询。读取用户级全局库当前有效决定和约束，支持按 rule_key 主题查询与分页，不绑定或过滤当前项目。历史来源与适用条件不变；摘要需 memory_read 读取全文，不自动重建词项。',
     parameters: Type.Object({ query: Type.Optional(Type.String()), offset: Offset, limit: Limit }, { additionalProperties: false }),
     outputSchema: Output, annotations: ReadHints,
     async execute(_id, params, signal, _onUpdate, ctx) {
@@ -145,15 +145,15 @@ export function registerMemoryTools(pi: ExtensionAPI, runtime: MemoryRuntime): v
             throw new Error('规则生命周期无效，未展示')
           }
           return { ...row, status_basis: '仅投影当前有效版本；不证明事实已核实或适用于当前任务',
-            source: { store: runtime.engine.store, command: 'rules', file: row.file_path,
-              source_project: row.source_project ?? row.project_id ?? null, id: row.id, date: row.date } }
+            source: { store: runtime.engine.store, command: 'rules', date: row.date,
+              source_project: row.source_project ?? row.project_id ?? null, id: row.id } }
         }) }
       })
     }
   })
   pi.registerTool({
     name: 'memory_search', label: '按任务检索全局记忆',
-    description: '开始新任务、需沿用先前决定或偏好、或同一错误反复出现时先检索。从用户级全局索引按任务关键词查询日记，不绑定项目。records 查询全部日记，recent 限近期，historical/month 查询月摘要。支持分页；摘要需 memory_read 读取全文，不自动修复索引或扩大明确时间范围。',
+    description: '开始新任务、需沿用先前决定或偏好、或同一错误反复出现时先检索。从用户级全局库按任务关键词查询日记，不绑定项目。records 查询全部日记，recent 限近期，historical/month 查询月摘要。支持分页；摘要需 memory_read 读取全文，不自动重建词项或扩大明确时间范围。',
     parameters: Type.Object({ query: Type.String({ minLength: 1 }),
       mode: Type.Optional(Type.Union([Type.Literal('records'), Type.Literal('recent'), Type.Literal('historical'), Type.Literal('month')])),
       month: Type.Optional(Type.String({ pattern: '^\\d{4}-(0[1-9]|1[0-2])$' })), offset: Offset, limit: Limit }, { additionalProperties: false }),
@@ -168,7 +168,7 @@ export function registerMemoryTools(pi: ExtensionAPI, runtime: MemoryRuntime): v
         const matches = array(data.matches).map(value => {
           const row = object(value)
           if (row.kind !== (summary ? 'summary' : 'record')) throw new Error('搜索返回的记录类型不一致，未展示')
-          return { ...row, source: { store: runtime.engine.store, command: 'recall', file: row.file_path, source_project: row.project_id ?? null,
+          return { ...row, source: { store: runtime.engine.store, command: 'recall', source_project: row.project_id ?? null,
             ...(summary ? { month: row.month, source_record_ids: row.source_record_ids } : { id: row.id, date: row.date }) } }
         })
         return { ...data, matches,
@@ -195,7 +195,7 @@ export function registerMemoryTools(pi: ExtensionAPI, runtime: MemoryRuntime): v
           throw new Error('原文身份不一致，未展示')
         }
         return { ...row, status: row.status ?? 'active',
-          source: { store: runtime.engine.store, file: row.file_path, source_project: row.project_id ?? null, id: row.id, date: row.date } }
+          source: { store: runtime.engine.store, date: row.date, source_project: row.project_id ?? null, id: row.id } }
       })
       const payload = { ...data, records }
       // 先确认完整输出可返回，并预留最坏的统计错误文本；超限或旧租约不产生统计。
@@ -203,8 +203,9 @@ export function registerMemoryTools(pi: ExtensionAPI, runtime: MemoryRuntime): v
         duplicate_records: null, error: '\u0000'.repeat(1024), note: ACCESS_NOTE } })
       let statistics: JsonObject
       try {
-        const version = text(data.index_version, '原文来源版本')
-        const recorded = await runtime.engine.recordAccess(params.ids, lease.state.sessionId, toolCallId, version, lease.assert)
+        const version = data.store_version
+        if (typeof version !== 'number' || !Number.isSafeInteger(version) || version < 0) throw new Error('原文来源版本无效')
+        const recorded = await runtime.engine.recordAccess(params.ids, lease.state.sessionId, toolCallId, String(version), lease.assert)
         const added = recorded.new_records
         const duplicate = recorded.duplicate_records
         if (typeof added !== 'number' || !Number.isInteger(added) || added < 0

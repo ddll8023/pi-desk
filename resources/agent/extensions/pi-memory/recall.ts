@@ -13,7 +13,7 @@ export type TaskSelection = { request: RecallRequest } | { reason: string }
 export interface RecallCache {
   requestKey: string
   cacheKey: string
-  indexVersion: string
+  storeVersion: string
   records: JsonObject[]
   ids: string[]
   eligible: number
@@ -103,14 +103,20 @@ function hash(value: unknown): string {
   return result
 }
 
+/** 库版本是单调递增的整数序号，不再是内容指纹。 */
+function version(value: unknown): string {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) throw new Error('自动召回库版本无效')
+  return String(value)
+}
+
 export function acceptRecall(data: JsonObject, request: RecallRequest, previous?: RecallCache): RecallCache {
-  if (data.policy !== 'lexical-global-background-v2' || data.coverage !== 'indexed_sources') throw new Error('自动召回协议不匹配')
+  if (data.policy !== 'lexical-global-background-v3' || data.coverage !== 'store_records') throw new Error('自动召回协议不匹配')
   const scope = object(data.scope, '召回范围')
   if (scope.memory_scope !== 'global' || (!request.recent
     && (scope.date_from !== (request.date_from ?? null) || scope.date_to !== (request.date_to ?? null)))) {
     throw new Error('自动召回范围不一致，未展示')
   }
-  const cacheKey = hash(data.cache_key), indexVersion = hash(data.index_version)
+  const cacheKey = hash(data.cache_key), storeVersion = version(data.store_version)
   const ids = array(data.ids).map(value => text(value, '记录 ID'))
   if (ids.length > 6 || new Set(ids).size !== ids.length || ids.some(id => !/^m_[0-9A-HJKMNP-TV-Z]{26}$/.test(id))) {
     throw new Error('自动召回记录身份无效')
@@ -118,7 +124,7 @@ export function acceptRecall(data: JsonObject, request: RecallRequest, previous?
   const requestKey = JSON.stringify(request)
   if (data.unchanged === true) {
     if (!previous || previous.requestKey !== requestKey || previous.cacheKey !== cacheKey
-      || previous.indexVersion !== indexVersion || JSON.stringify(previous.ids) !== JSON.stringify(ids)) {
+      || previous.storeVersion !== storeVersion || JSON.stringify(previous.ids) !== JSON.stringify(ids)) {
       throw new Error('未取得与本请求一致的缓存确认')
     }
     return previous
@@ -128,7 +134,6 @@ export function acceptRecall(data: JsonObject, request: RecallRequest, previous?
     const row = object(value), date = text(row.date)
     text(row.content); text(row.topic); text(row.title)
     if (row.id !== ids[index] || row.status !== 'active' || !/^\d{4}-\d{2}-\d{2}$/.test(date)
-      || !/^daily\/\d{4}\/\d{2}\/\d{4}-\d{2}-\d{2}\.md$/.test(text(row.file_path))
       || !['decision', 'constraint', 'fact', 'progress', 'issue', 'preference_evidence'].includes(text(row.type))
       || (typeof scope.date_from === 'string' && date < scope.date_from)
       || (typeof scope.date_to === 'string' && date > scope.date_to)) throw new Error('自动召回身份或生命周期无效')
@@ -142,7 +147,7 @@ export function acceptRecall(data: JsonObject, request: RecallRequest, previous?
   const reason = rawReason === null ? null : text(rawReason, '无命中原因')
   if (ids.length === 0 ? !['no_terms', 'no_overlap', 'below_threshold'].includes(reason ?? '')
     : reason !== null) throw new Error('自动召回无命中原因不一致')
-  return { requestKey, cacheKey, indexVersion, records, ids, eligible: data.eligible_count, reason }
+  return { requestKey, cacheKey, storeVersion, records, ids, eligible: data.eligible_count, reason }
 }
 
 /** 完整同版本工具原文才作为去重证据，摘要与历史来源同名均不能替代。 */
@@ -156,13 +161,13 @@ function presentRecords(messages: readonly AgentMessage[], cache: RecallCache): 
       const envelope = object(JSON.parse(body))
       if (envelope.ok !== true) continue
       const data = object(envelope.data)
-      if (data.index_version !== cache.indexVersion) continue
+      if (String(data.store_version) !== cache.storeVersion) continue
       const values = data.records ?? data.matches ?? data.rules
       if (!Array.isArray(values)) continue
       for (const value of values) {
         const row = object(value)
         if (cache.records.some(record => record.id === row.id && record.content === row.content
-          && record.status === row.status && record.file_path === row.file_path)) present.add(text(row.id))
+          && record.status === row.status && record.date === row.date)) present.add(text(row.id))
       }
     } catch { /* 不完整输出不作为已读证明。 */ }
   }
@@ -175,7 +180,7 @@ export function renderRecall(cache: RecallCache, messages: readonly AgentMessage
   let full = 0, references = 0, omitted = 0, used = 300
   for (const row of cache.records) {
     if (present.has(text(row.id))) continue
-    const metadata = { id: row.id, date: row.date, title: row.title, status: row.status, source: row.file_path,
+    const metadata = { id: row.id, date: row.date, title: row.title, status: row.status, source: row.date,
       source_project: row.project_id ?? null,
       applicability: '用户级全局库中的参考；历史来源和有效状态不证明适用于当前任务。' }
     const complete = JSON.stringify({ ...metadata, content: row.content })
