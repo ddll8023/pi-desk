@@ -16,7 +16,7 @@
 - `--no-extensions --no-skills --no-prompt-templates --no-context-files --no-mcp --no-session`：不继承用户级与项目级配置、不装载其他扩展、不落盘会话；文档任务在该组合之外以 `-e` 显式加载写入守卫；调研任务同样以 `-e` 显式加载用户安装的 `pi-web-access`，入口缺失时直接返回 `web_unavailable`，不降级成只读本地的调研；
 - 子进程没有委派工具，因此不能递归委派；不下发 `bash`。
 
-任务说明由规范正文、本次请求 JSON 与输出要求组成，不注入父会话历史。预算按实测设定并写入请求约束：查询 90s、审查 150s、文档 120s、调研 240s。
+任务说明由规范正文、本次请求 JSON 与输出要求组成，不注入父会话历史。预算按实测设定并写入请求约束，具体取值见 `TASK_PROFILES`（`src/sdk-host/sub-agent/delegation-extension.ts`）。
 
 ## 批次与并行
 
@@ -70,7 +70,7 @@
 | `src/sdk-host/sub-agent/control.ts` | 取消登记表：按任务标识登记与注销取消入口 |
 | `src/sdk-host/sub-agent/write-guard.ts` | 文档写入守卫扩展：按绝对路径范围拦截 `write`/`edit` |
 | `src/shared/sub-agent-view.ts` | 执行快照契约、字段上限与跨进程校验 |
-| `src/shared/sub-agent-types.ts` | 任务类型、工具权限矩阵与文档写入产品上限 |
+| `src/shared/sub-agent-types.ts` | 任务类型、任务契约校验与文档写入产品上限 |
 | `src/renderer/src/sessions/components/SubAgentCard.vue` | 子任务入口行：单项与批次共用，点击打开执行对话 |
 | `src/renderer/src/sessions/components/SubAgentDialog.vue` | 执行对话弹窗：对话时间线、结论、写入、用量与单项停止 |
 
@@ -86,4 +86,4 @@
 - 记录随会话走：快照作为工具结果的一部分进入会话记录，不另建独立存储，没有保留策略与访问边界；记录缺失时卡片降级为普通工具结果。
 - 用量单列：子代理是另起的模型调用，其用量在会话用量与日统计各计一次，不与父会话累计混算；日统计不按模型拆分。
 - 子进程是故障域隔离，不是文件隔离：与父会话操作同一份工作区，不构成 OS 沙箱；关闭扩展的代价是不继承宿主的安全钩子与供应商装配。
-- 结果要过结构校验：状态取值、类型与任务标识一致、按类型必备的结论结构都必须满足，否则整体判 `invalid_output`。超时先终止进程再返回结果，带回工具调用次数、最后一次工具、已写入文件与进程状态；文档任务写入已生效时返回 `partial`，由主代理先核对文件现状再决定是否重试。
+- 结果要过结构校验：状态取值、类型与任务标识一致、按类型必备的结论结构都必须满足，否则整体判 `invalid_output`。超时先收回子进程再返回结果：SIGTERM 未生效则强杀，强杀后仍收不到退出事件就按已终止收敛；结果带回工具调用次数、最后一次工具、已写入文件、收回方式与退出码；文档任务写入已生效时返回 `partial`，由主代理先核对文件现状再决定是否重试。

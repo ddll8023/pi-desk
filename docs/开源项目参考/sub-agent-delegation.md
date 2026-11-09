@@ -94,4 +94,4 @@
 - Lancer：[architecture.md](https://github.com/raylee-ai/lancer/blob/main/docs/architecture.md)
 - dsh-superagent：[002-authorization.md](https://github.com/deepseek-ai/dsh-superagent-prototype/blob/main/docs/002-authorization.md)、[003-execution.md](https://github.com/deepseek-ai/dsh-superagent-prototype/blob/main/docs/003-execution.md)、[005-panel.md](https://github.com/deepseek-ai/dsh-superagent-prototype/blob/main/docs/005-panel.md)
 
-pi-desk 侧事实出处：`src/sdk-host/sub-agent/delegation-extension.ts`（派发入口、类型参数、工具白名单、批次并发、超时预算）、`src/sdk-host/product-tools-hint.ts`（委派时机分段）、`src/shared/sub-agent-types.ts`（权限矩阵与写入上限）、[子代理模块文档](../modules/sub-agent.md)。
+pi-desk 侧事实出处：`src/sdk-host/sub-agent/delegation-extension.ts`（派发入口、类型参数、工具白名单、批次并发、超时预算）、`src/sdk-host/product-tools-hint.ts`（委派时机分段）、`src/shared/sub-agent-types.ts`（任务契约与写入上限）、[子代理模块文档](../modules/sub-agent.md)。
