@@ -29,7 +29,7 @@
 | 文件 | 用途 |
 | --- | --- |
 | `src/sdk-host/memory-configuration.ts` | 宿主内配置持有者：写进程环境并向已加载扩展推送变更 |
-| `src/sdk-host/product-resources.ts` | 产品资源装配、执行前同源筛选与必要组件核验，并核对配置是否已注入 |
+| `src/sdk-host/product-resources.ts` | 产品资源装配、执行前排除部署副本、扩展加载结果分级与必要组件核验，并核对配置是否已注入 |
 | `resources/agent/extensions/pi-memory/` | 记忆扩展：请求级背景、工具注册、会话控制与保存审批通道 |
 | `resources/agent/skills/memory/` | 配套规范、引用与文件引擎 `scripts/memory_store.py` |
 | `resources/agent/bundle.json` | 上述扩展、Skill 与引擎入口及组成文件声明 |

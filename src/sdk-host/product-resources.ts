@@ -1,17 +1,21 @@
 /**
  * 桌面产品资源装配：先解析和筛选来源，再让 SDK 求值扩展。
  * 不修改用户 settings、不移除用户文件，不用加载后的 extensionsOverride 掩盖重复注册。
- * 未识别的外部扩展保留 SDK 的冲突诊断；本层不是任意第三方代码的副作用隔离器。
+ * 身份按组件形状判定：形状命中的副本一律排除；只有产品件自身损坏或外来路径争用产品工具名才拒绝建立会话，
+ * 其余问题作为结构化诊断交给页面。未识别的外部扩展仍保留 SDK 的冲突诊断；本层不是第三方代码的副作用隔离器。
  */
 import { realpathSync } from 'node:fs'
 import { dirname } from 'node:path'
 import type {
   CreateAgentSessionServicesOptions, EventBus, InlineExtension, ResourceDiagnostic, ResourceLoader, SettingsManager, Skill
 } from '@earendil-works/pi-coding-agent'
+import { RESOURCE_ISSUE_LIMIT } from '../shared/runtime-api'
+import type { ResourceIssue } from '../shared/runtime-api'
 import {
-  agentResourcePath, matchesAgentResource, readAgentResourceBundle
+  agentResourcePath, classifyAgentResourceCopy, readAgentDeploymentManifest, readAgentResourceBundle
 } from '../shared-process/agent-resources'
-import type { AgentResource } from '../shared-process/agent-resources'
+import type { AgentResource, AgentResourceCopyClassification } from '../shared-process/agent-resources'
+import { judgeLoadedExtensions } from './conflicts'
 import {
   MEMORY_CONFIGURATION_ENV, serializeMemoryConfiguration
 } from '../shared-process/memory-runtime'
@@ -44,8 +48,19 @@ interface ProductResourceInput {
 interface ProductResourceAssembly {
   readonly options: ResourceOptions
   readonly diagnostics: readonly string[]
+  /** 装配阶段的非致命诊断；页面用它列出副本落后、外来扩展失败等需要处置的事实。 */
+  readonly issues: readonly ResourceIssue[]
   /** 必要组件的来源与工具注册均确认之后，宿主才允许绑定会话。 */
   assertLoaded(loader: ResourceLoader): void
+}
+
+/**
+ * 产品资源核验失败：致命项同时已记入 `issues`，调用方据此保留完整诊断。
+ * 消息只拼产品组件标识、工具名与路径，不掺杂任何扩展正文。
+ */
+function describeFatal(issues: readonly ResourceIssue[]): string {
+  const detail = issues.map(issue => `${issue.kind}:${issue.componentId ?? '-'}:${issue.tool ?? '-'}`).join('；')
+  return `资源装配存在必须处理的冲突：${detail}`
 }
 
 /** 每次创建／重载会话重新解析，不能把上个项目的显式加载清单带到新工作区。 */
@@ -64,13 +79,33 @@ export async function prepareProductResources(sdk: Sdk, input: ProductResourceIn
     diagnostics.push('快速模式未注入记忆：本会话的记忆库与后台召回不生效')
   }
   const externalExtensions: string[] = []
+  // 部署登记只用于区分「版本不同」与「部署后被改过」；缺失或矛盾时按内容比对降级，不改变是否排除。
+  const deployments = readAgentDeploymentManifest(input.agentDir)
+  const issues: ResourceIssue[] = []
+  /** 诊断条目有界：超限只保留前几条，避免状态校验因超出上限而拒绝整份快照。 */
+  const pushIssue = (issue: ResourceIssue): void => {
+    if (issues.length < RESOURCE_ISSUE_LIMIT) issues.push(issue)
+  }
   for (const resource of resolved.extensions) {
     if (!resource.enabled) continue
-    const product = resource.path.startsWith('builtin:') ? undefined
-      : bundle.extensions.find(item => matchesAgentResource(bundle, item, resource.path))
-    if (product) {
-      diagnostics.push(`已在执行前排除同源 ${product.id} 部署副本：${resource.path}`)
-    } else externalExtensions.push(resource.path)
+    // 内联来源不是文件，不参与组件身份判定。
+    if (resource.path.startsWith('builtin:')) {
+      externalExtensions.push(resource.path)
+      continue
+    }
+    let identified = false
+    for (const item of bundle.extensions) {
+      const copy = classifyAgentResourceCopy(bundle, item, resource.path, deployments)
+      if (copy.kind === 'foreign') continue
+      identified = true
+      // 产品自身来源与形状命中的副本都由产品版本接管，均不进入显式加载清单。
+      if (copy.kind === 'product') continue
+      const message = describeCopy(item, copy, resource.path)
+      diagnostics.push(message)
+      const issue = copyIssue(item, copy, resource.path)
+      if (issue !== null) pushIssue(issue)
+    }
+    if (!identified) externalExtensions.push(resource.path)
   }
 
   const productSkills = bundle.skills.flatMap(item => {
@@ -90,11 +125,14 @@ export async function prepareProductResources(sdk: Sdk, input: ProductResourceIn
 
     /**
      * 同名 Skill 只核对身份并留诊断：Skill 是纯文本指令，产品版本仍按 `reserved` 优先。
-     * 内容不同的用户副本不采用，也不静默覆盖；同源核对失败的扩展（可能覆盖工具）仍按冲突拒绝建立会话。
+     * 内容不同的副本不采用，也不静默覆盖；扩展侧的重复加载在装载结果阶段判定，不在这里处理。
      */
     function reportForeignSkill(item: AgentResource, path: string): void {
-      if (matchesAgentResource(bundle, item, path)) return
-      const message = `同名 Skill ${item.id} 与产品配套规范内容不一致，已改用产品版本：${path}`
+      const copy = classifyAgentResourceCopy(bundle, item, path, deployments)
+      if (copy.kind === 'identical' || copy.kind === 'product') return
+      const message = copy.kind === 'foreign'
+        ? `同名 Skill ${item.id} 与产品配套规范内容不一致，已改用产品版本：${path}`
+        : describeCopy(item, copy, path)
       console.warn(`[product-resources] ${message}`)
       diagnostics.push(message)
       skillNotes.push({ type: 'warning', message, path })
@@ -134,6 +172,7 @@ export async function prepareProductResources(sdk: Sdk, input: ProductResourceIn
 
   return {
     diagnostics,
+    issues,
     options: {
       // 关闭默认扩展求值，只显式加载已筛选来源；不关闭技能、模板、上下文或其他 SDK 发现能力。
       noExtensions: true,
@@ -149,10 +188,30 @@ export async function prepareProductResources(sdk: Sdk, input: ProductResourceIn
     },
     assertLoaded(loader) {
       const extensions = loader.getExtensions()
-      if (extensions.errors.length > 0) {
-        // 只输出冲突的来源路径，不把第三方异常正文或配置内容复制到页面和日志。
-        for (const entry of extensions.errors) console.error(`[product-resources] 扩展加载失败或冲突：${entry.path}`)
-        throw new Error('扩展加载存在错误，未建立产品会话')
+      const productPaths = new Map<string, string>()
+      for (const item of bundle.extensions) productPaths.set(agentResourcePath(bundle.root, item.entry), item.id)
+      // 冲突与加载失败共用 SDK 的 errors 数组；这里按结构与路径归到组件，不用一句「有错」打死整个会话。
+      const judgement = judgeLoadedExtensions({
+        extensions: extensions.extensions.map(entry => ({
+          path: realpathOrSynthetic(entry.resolvedPath), tools: entry.tools
+        })),
+        loadErrors: extensions.errors.map(entry => ({
+          path: safeRealpath(entry.path), error: entry.error
+        })),
+        productPaths,
+        productTools: bundle.extensions.flatMap(item => item.requiredTools.map(tool => ({
+          componentId: item.id, tool, path: agentResourcePath(bundle.root, item.entry)
+        })))
+      })
+      for (const issue of judgement.warnings) pushIssue(issue)
+      if (judgement.fatal.length > 0) {
+        for (const issue of judgement.fatal) {
+          pushIssue(issue)
+          // 只记录产品组件标识、工具名与路径，不把扩展异常正文或配置内容复制到日志与页面。
+          console.error(`[product-resources] ${issue.kind}：${issue.componentId ?? '-'} ${issue.tool ?? '-'} `
+            + `${issue.otherPath ?? issue.productPath ?? '-'}`)
+        }
+        throw new Error(describeFatal(judgement.fatal))
       }
       for (const item of bundle.extensions) {
         const path = agentResourcePath(bundle.root, item.entry)
@@ -185,4 +244,40 @@ export async function prepareProductResources(sdk: Sdk, input: ProductResourceIn
 /** SDK 内置／内联来源不是文件；不能为来源确认把它们当成磁盘路径。 */
 function realpathOrSynthetic(path: string): string {
   return path.startsWith('builtin:') || path.startsWith('<') ? path : realpathSync(path)
+}
+
+/** 诊断条目里的路径可能已经不存在；只用于归类比对，读不到就保留原值。 */
+function safeRealpath(path: string): string {
+  try {
+    return realpathOrSynthetic(path)
+  } catch { return path }
+}
+
+/**
+ * 副本偏离的说明：只列前三个差异文件，既不把整份清单搬进界面，也保留可定位信息。
+ * 措辞保持中性：本机可能构建较旧、副本可能较新，运行期无法判断方向。
+ */
+function describeCopy(item: AgentResource, copy: AgentResourceCopyClassification, path: string): string {
+  const files = copy.changedFiles.slice(0, 3).join('、')
+  const rest = copy.changedFiles.length > 3 ? ` 等 ${copy.changedFiles.length} 个文件` : ''
+  const detail = files === '' ? '' : `（${files}${rest}）`
+  if (copy.kind === 'modified') {
+    return `部署副本 ${item.id} 在部署后被本地修改或上次同步未完成${detail}；`
+      + `桌面使用产品内置版本，副本仍留给终端 CLI：${path}`
+  }
+  return `部署副本 ${item.id} 与本机产品版本不同${detail}；桌面使用产品内置版本，副本仍留给终端 CLI：${path}`
+}
+
+/** 只有实质偏离才产诊断：内容与产品一致的副本静默排除，登记过期单独记一条。 */
+function copyIssue(item: AgentResource, copy: AgentResourceCopyClassification, path: string): ResourceIssue | null {
+  if (copy.kind === 'modified') {
+    return { kind: 'copy-modified', componentId: item.id, tool: null, productPath: null, otherPath: path }
+  }
+  if (copy.kind === 'outdated') {
+    return { kind: 'copy-outdated', componentId: item.id, tool: null, productPath: null, otherPath: path }
+  }
+  if (copy.marker === 'inconsistent') {
+    return { kind: 'copy-marker-stale', componentId: item.id, tool: null, productPath: null, otherPath: path }
+  }
+  return null
 }

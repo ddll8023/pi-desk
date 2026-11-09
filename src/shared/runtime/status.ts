@@ -88,6 +88,36 @@ export interface RuntimeInfo {
   readonly rate: OutputRate
 }
 
+/**
+ * 资源装配阶段的结构化诊断：只列产品自身的组件标识、冲突工具名与双方路径。
+ * 不携带第三方扩展的错误正文与配置内容，避免把不可信文本投影到页面。
+ */
+export type ResourceIssueKind =
+  /** 部署副本与本机产品版本内容不同（落后、超前或来源不同）。 */
+  | 'copy-outdated'
+  /** 副本在部署后被动过，或上次同步未完成。 */
+  | 'copy-modified'
+  /** 部署登记与磁盘内容矛盾（标记过期）。 */
+  | 'copy-marker-stale'
+  /** 非产品扩展注册了产品的必需工具名；这一项会阻止建立会话。 */
+  | 'tool-conflict'
+  /** 两个外来扩展争用同一工具名；首个注册者生效，只作提示。 */
+  | 'tool-duplicate'
+  /** 外来扩展加载失败；不影响会话建立，但需要用户处理。 */
+  | 'extension-load-failed'
+
+export interface ResourceIssue {
+  readonly kind: ResourceIssueKind
+  /** 产品组件标识；仅外来扩展之间的问题为 null。 */
+  readonly componentId: string | null
+  /** 冲突涉及的工具名；非工具类问题为 null。 */
+  readonly tool: string | null
+  /** 产品侧路径；与产品无关的问题为 null。 */
+  readonly productPath: string | null
+  /** 副本或外来扩展路径；没有对端时为 null。 */
+  readonly otherPath: string | null
+}
+
 export interface RuntimeStatus {
   readonly state: RuntimeState
   /** 来源运行实例；没有前台运行实例时为 null。 */
@@ -106,6 +136,11 @@ export interface RuntimeStatus {
    */
   readonly sdkVersion: string | null
   readonly lastError: string | null
+  /**
+   * 本代际的资源装配诊断；非空时页面在失败提示旁列出具体原因。
+   * 与 `RuntimeDiagnostics` 不同：它在会话未绑定、建立失败时也可用。
+   */
+  readonly resourceIssues: readonly ResourceIssue[]
 }
 
 export type RuntimeErrorCode =

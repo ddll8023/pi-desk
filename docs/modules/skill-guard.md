@@ -38,7 +38,7 @@
 
 ## 公共与跨模块引用
 
-- [F-assembly](shared.md#f-assembly进程与页面组装混合)：宿主装配产品资源，并在扩展执行前排除同源旧副本；重复注册按错误处理。
+- [F-assembly](shared.md#f-assembly进程与页面组装混合)：宿主装配产品资源，并在扩展执行前排除形状命中的部署副本；只有非产品路径争用产品工具名才拒绝建立会话，其余资源问题只作诊断。
 - [F-build](shared.md#f-build构建与发行上下文)：`scripts/stage-agent-resources.mjs` 把 `resources/agent/` 原样暂存到 `out/sdk-host/agent-resources/` 并生成内容指纹；`src/shared-process/agent-resources.ts` 读取清单、校验指纹，并要求组件中包含门禁扩展。源码改动未经构建不会进入桌面运行的副本。
 - `src/sdk-host/projection/activity-projection.ts` 只消费 `context-loaded` 审计条目生成会话技能活动，其余审计事件不进入投影。
 - 工具卡片：`src/shared/tool-operation.ts` 把选择工具归为控制类操作，`src/sdk-host/projection/tool-presentation.ts` 与 `src/renderer/src/sessions/tool-summary.ts` 摘要选择结果。

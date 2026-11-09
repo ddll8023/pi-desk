@@ -10,7 +10,7 @@ import { storeToRefs } from 'pinia'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { createChatViewCache, userMessagePayload } from '../chat-view'
 import type { ChatMessageView, ChatTurnView, UserMessagePayload } from '../chat-view'
-import type { RuntimeRewindRequest } from '../../../../shared/runtime-api'
+import type { ResourceIssue, RuntimeRewindRequest } from '../../../../shared/runtime-api'
 import { useProjectStore } from '../../projects/stores/project'
 import { useRuntimeStore } from '../stores/runtime'
 import { useSessionStore } from '../stores/session'
@@ -292,9 +292,13 @@ const emptyState = computed(() => {
     return { title: '正在关闭 Runtime', description: '关闭完成后可以打开或新建会话。', action: null }
   }
   if (current.phase === 'failed') {
+    // 失败态的处置方向由诊断决定：有冲突时引导处理来源，没有则就是重试。
+    const hint = current.resourceIssues.some(issue => issue.kind === 'tool-conflict')
+      ? '下方是阻止建立会话的冲突来源；处理后再次点击发送重试。'
+      : '可再次点击发送重试启动；下方诊断给出资源层面的原因。'
     return {
       title: 'Runtime 异常退出',
-      description: `${current.error.message}；可再次点击发送重试启动；若怀疑是某个 Extension 导致启动失败，请先停用该扩展。`,
+      description: `${current.error.message}；${hint}`,
       action: 'new-session' as const
     }
   }
@@ -316,6 +320,33 @@ const emptyState = computed(() => {
     action: null
   }
 })
+
+/**
+ * 失败态的资源诊断：最多列三条，剩余给条数。
+ * 只投影产品组件标识、工具名与路径，不回显任何扩展正文，因此可以当作普通文本渲染。
+ */
+const failureIssues = computed(() => {
+  const current = runtimeView.value
+  if (current.phase !== 'failed') return { items: [] as readonly ResourceIssue[], rest: 0 }
+  const items = current.resourceIssues.slice(0, 3)
+  return { items, rest: Math.max(0, current.resourceIssues.length - items.length) }
+})
+
+/** 诊断行只拼固定措辞与路径；类型缺失时不让整行消失。 */
+function describeIssue(issue: ResourceIssue): string {
+  const subject = issue.componentId === null ? '扩展' : `组件 ${issue.componentId}`
+  const detail = issue.kind === 'tool-conflict' || issue.kind === 'tool-duplicate'
+    ? `工具名 ${issue.tool ?? '-'} 被重复注册`
+    : issue.kind === 'extension-load-failed'
+      ? '加载失败'
+      : issue.kind === 'copy-modified'
+        ? '部署后被本地修改或同步未完成'
+        : issue.kind === 'copy-marker-stale'
+          ? '部署标记过期'
+          : '与本机产品版本不同'
+  const paths = [issue.productPath, issue.otherPath].filter((path): path is string => path !== null)
+  return paths.length === 0 ? `${subject}：${detail}` : `${subject}：${detail}（${paths.join(' / ')}）`
+}
 
 /** 摘要只取用户已有的文本，不解析 Markdown；技能调用、纯图片与没有可展示文本的消息分别标明。 */
 function navLabel(message: ChatMessageView): string {
@@ -896,6 +927,13 @@ onBeforeUnmount(() => {
         <div v-if="turns.length === 0 && pendingPrompt === null" class="empty-state">
           <p class="empty-state-title">{{ emptyState.title }}</p>
           <p class="empty-state-text">{{ emptyState.description }}</p>
+          <ul v-if="failureIssues.items.length > 0" role="status" class="mt-1 flex flex-col gap-1">
+            <li v-for="issue in failureIssues.items" :key="`${issue.kind}:${issue.componentId ?? ''}:${issue.tool ?? ''}`"
+              class="empty-state-text text-desk-danger">
+              {{ describeIssue(issue) }}
+            </li>
+          </ul>
+          <p v-if="failureIssues.rest > 0" class="empty-state-text">另有 {{ failureIssues.rest }} 条资源诊断。</p>
           <div v-if="emptyState.action === 'new-session'" class="mt-2 flex flex-wrap items-center justify-center gap-2">
             <AppButton
               variant="primary"

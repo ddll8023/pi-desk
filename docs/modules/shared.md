@@ -82,7 +82,7 @@
 | `src/main/shared/shell-path.ts` | 图形界面启动时补齐登录 shell 的 PATH | 应用启动与后续外部命令 |
 | `src/shared-process/process-tree-termination.ts` | 跨平台进程树终止 | 受管入口、资源探测、认证及终端守护进程 |
 | `src/shared-process/runtime.ts` | SDK 发布目录布局、当前版本指针、SDK 入口解析、动态加载及自带版本回退 | 主进程运行时解析、SDK 宿主、认证、CLI、版本检查、安装入口 |
-| `src/shared-process/agent-resources.ts` | 产品 Agent 资源固定布局、清单读取与内容指纹、同源身份比对 | 主进程资源目录定位、SDK 宿主的产品资源装配 |
+| `src/shared-process/agent-resources.ts` | 产品 Agent 资源固定布局、清单读取与内容指纹、组件摘要、部署登记读取与副本身份判定 | 主进程资源目录定位、SDK 宿主的产品资源装配 |
 | `src/shared-process/memory-runtime.ts` | 受管记忆运行环境布局与清单校验、全局库位置、随包配置的受限校验与序列化 | 主进程记忆管理器、SDK 宿主的配置注入与回写 |
 
 前四行位于 `src/main/shared/`，后四行位于 `src/shared-process/`。`runtime.ts` 与 `src/entries/runtime-install/index.ts` 不是同一职责：前者本身不下载、不安装，只维护发布目录布局与当前版本指针。

@@ -36,7 +36,7 @@ import type {
 } from './protocol'
 import type {
   AgentCapabilities, ExtensionErrorEntry, McpStatus, ModelSummary, OutputRate, PiResourceEntry, PiResources,
-  ProjectionBatch, ProjectionSnapshot, PromptDisposition, RuntimeDiagnostics, SessionActivity, SessionUsage, SubAgentUsageTotals, HistoryData, HistoryPage, HistoryQuery
+  ProjectionBatch, ProjectionSnapshot, PromptDisposition, ResourceIssue, RuntimeDiagnostics, SessionActivity, SessionUsage, SubAgentUsageTotals, HistoryData, HistoryPage, HistoryQuery
 } from '../shared/runtime-api'
 import { parseSubAgentView } from '../shared/sub-agent-view'
 import type { ExtensionDialogResponseInput } from '../shared/extension-ui-api'
@@ -323,6 +323,8 @@ export class SdkSessionRuntime {
   private projectedMessageCount = 0
   /** 当前代际收到的 Extension 运行时错误；绑定换代时清空。 */
   private extensionErrors: ExtensionErrorEntry[] = []
+  /** 本代际的资源装配诊断；建立失败时也保留，页面据此列出冲突来源。 */
+  private resourceIssues: ResourceIssue[] = []
   /** Prompt 提交与 MCP 调用互斥：同一时刻只允许一个 prompt 请求。 */
   private promptInFlight = false
   private readonly imageAnnotations = new ImageAnnotationContext()
@@ -342,7 +344,7 @@ export class SdkSessionRuntime {
       isBashRunning: session?.isBashRunning ?? false, waitingDialogs: this.bridge?.waitingCount ?? 0,
       needsHostRebuild: this.needsHostRebuild, lastError: this.lastError, lastErrorDetail: this.lastErrorDetail,
       modelProvider: model.provider, modelId: model.id, messageCount: this.projectedMessageCount,
-      usage: this.usage, rate: this.rateSnapshot
+      usage: this.usage, rate: this.rateSnapshot, resourceIssues: this.resourceIssues.map(issue => ({ ...issue }))
     }
   }
 
@@ -956,8 +958,20 @@ export class SdkSessionRuntime {
       const services = await this.sdk.createAgentSessionServices({ cwd, agentDir, settingsManager,
         resourceLoaderOptions: product.options })
       if (this.closing) throw new SdkSessionFailure('HOST_NOT_READY')
-      // 来源筛选在扩展求值之前完成；必要产品能力与注册结果不完整时仍然保守拒绝绑定。
-      try { product.assertLoaded(services.resourceLoader) } catch { throw new SdkSessionFailure('SESSION_BIND_FAILED') }
+      // 来源筛选在扩展求值之前完成；只有产品件损坏或争用产品工具名才拒绝绑定，其余问题进诊断。
+      try {
+        product.assertLoaded(services.resourceLoader)
+      } catch (error) {
+        // fatal 项已由 assertLoaded 记入 product.issues，这里整份取回，避免重复添加。
+        this.resourceIssues = product.issues.map(issue => ({ ...issue }))
+        // 失败原因必须留在状态里：页面只拿到固定失败码时，无法区分冲突来源与安装损坏。
+        this.lastErrorDetail = (error instanceof Error ? error.message : String(error)).slice(0, 400)
+        console.error(`[sdk-host] 产品资源未通过核验：${this.lastErrorDetail}`)
+        this.publish()
+        throw new SdkSessionFailure('SESSION_BIND_FAILED')
+      }
+      // 核验已把致命项与外来扩展问题都放进同一份 issues；绑定阶段不再清空，否则页面看不到原因。
+      this.resourceIssues = product.issues.map(issue => ({ ...issue }))
       services.diagnostics.push(...product.diagnostics.map(message => ({ type: 'info' as const, message })))
       const scope = await this.sdk.resolveModelScopeWithDiagnostics(settingsManager.getEnabledModels() ?? [], services.modelRuntime)
       const result = await this.sdk.createAgentSessionFromServices({ services, sessionManager,
@@ -1334,6 +1348,8 @@ export class SdkSessionRuntime {
     this.subAgentUsage.clear()
     this.subAgentControl.clear()
     this.projectedMessageCount = 0
+    // 资源诊断属于上一次装配结果，不能随绑定失效跟到新会话。
+    this.resourceIssues = []
     this.session = null
     this.currentCreation = null
     this.phase = 'invalid'

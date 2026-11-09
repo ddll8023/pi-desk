@@ -1,7 +1,7 @@
 /** Pi 资源与 MCP 契约，以及 Runtime、消息／工具投影与历史载荷的集中跨进程校验。 */
 
 import { COMPACT_INSTRUCTIONS_MAX_CHARS } from './status'
-import type { PromptDisposition, PromptResult, RuntimeCompactRequest, RuntimeDiagnosticsResult, RuntimeError, RuntimeInfo, RuntimeResult, RuntimeRewindRequest, RuntimeRewindResult, RuntimeSetModelRequest, RuntimeState, RuntimeStatus, RuntimeSubAgentCancelRequest, RuntimeTarget } from './status'
+import type { PromptDisposition, PromptResult, ResourceIssue, RuntimeCompactRequest, RuntimeDiagnosticsResult, RuntimeError, RuntimeInfo, RuntimeResult, RuntimeRewindRequest, RuntimeRewindResult, RuntimeSetModelRequest, RuntimeState, RuntimeStatus, RuntimeSubAgentCancelRequest, RuntimeTarget } from './status'
 import type { AgentCapabilities, CapabilitiesResult, ModelIdentity, ModelSummary } from './models'
 import type { ContextUsage, ExtensionErrorEntry, HistoryChunk, HistoryData, HistoryQuery, MessageGeneration, MessageUsage, OutputRate, ProjectionBatch, ProjectionBlock, ProjectionBlockKind, ProjectionCompaction, ProjectionMessage, ProjectionResult, ProjectionSnapshot, ProjectionUpdate, SessionActivity, SessionUsage, ToolArgSummaryEntry, ToolDiff, ToolDiffLine, ToolDiffLineKind, ToolExecution, ToolExecutionPhase, ToolExecutionTextKind, ToolNonTextPart, ToolPresentation, ToolPresentationFact, ToolRequestPresentation, ToolResultPresentation, ToolPresentationItem } from './projection'
 import { TOOL_PRESENTATION_LIMITS as PRESENTATION_LIMITS } from './projection'
@@ -296,6 +296,31 @@ function isRuntimeState(value: unknown): value is RuntimeState {
     || value === 'stopping' || value === 'failed'
 }
 
+/** 资源诊断条数与字段上限；页面最多展示三条，其余折叠为计数。 */
+export const RESOURCE_ISSUE_LIMIT = 16
+const RESOURCE_ISSUE_KINDS: readonly string[] = [
+  'copy-outdated', 'copy-modified', 'copy-marker-stale', 'tool-conflict', 'tool-duplicate',
+  'extension-load-failed'
+]
+const RESOURCE_ISSUE_PATH_MAX = 512
+
+/** 路径字段只接受有界字符串；不要求在渲染端确认磁盘存在。 */
+function isResourceIssuePath(value: unknown): boolean {
+  return value === null
+    || (typeof value === 'string' && value.length > 0 && value.length <= RESOURCE_ISSUE_PATH_MAX
+      && !value.includes('\u0000'))
+}
+
+export function isResourceIssue(value: unknown): value is ResourceIssue {
+  if (!isRecord(value)) return false
+  if (typeof value.kind !== 'string' || !RESOURCE_ISSUE_KINDS.includes(value.kind)) return false
+  if (value.componentId !== null
+    && (typeof value.componentId !== 'string' || !/^[a-z][a-z0-9-]*$/.test(value.componentId))) return false
+  if (value.tool !== null && (typeof value.tool !== 'string' || value.tool.length === 0 || value.tool.length > 128)) return false
+  if (!isResourceIssuePath(value.productPath) || !isResourceIssuePath(value.otherPath)) return false
+  return Object.keys(value).every(key => ['kind', 'componentId', 'tool', 'productPath', 'otherPath'].includes(key))
+}
+
 /** 累计统计允收任意有限数（包含 0）；未知值必须是 null。 */
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value)
@@ -358,6 +383,8 @@ export function isRuntimeStatus(value: unknown): value is RuntimeStatus {
   if (value.sessionId !== null && typeof value.sessionId !== 'string') return false
   if (value.sdkVersion !== null && typeof value.sdkVersion !== 'string') return false
   if (value.lastError !== null && typeof value.lastError !== 'string') return false
+  if (!Array.isArray(value.resourceIssues) || value.resourceIssues.length > RESOURCE_ISSUE_LIMIT) return false
+  if (!value.resourceIssues.every(isResourceIssue)) return false
   return value.info === null || isRuntimeInfo(value.info)
 }
 

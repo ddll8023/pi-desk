@@ -1392,6 +1392,11 @@ export class SdkHostManager {
     const output = record.output.unreported().trimEnd()
     const tail = output === '' ? '（宿主没有输出）' : `\n${output}`
     console.error(`[sdk-host] hostId=${record.hostId} agentDir=${record.agentDir} ${code}：${detail}${tail}`)
+    // 资源装配的结构化诊断同时进主进程日志：页面不会展示第三方错误正文，日志是它们的唯一出口。
+    for (const issue of this.sessionSnapshot.resourceIssues) {
+      console.error(`[sdk-host] 资源诊断 ${issue.kind}：${issue.componentId ?? '-'} ${issue.tool ?? '-'} `
+        + `${issue.productPath ?? '-'} / ${issue.otherPath ?? '-'}`)
+    }
   }
 
   /** 逐项清理定时器与等待者，不把原请求移交给新宿主。 */

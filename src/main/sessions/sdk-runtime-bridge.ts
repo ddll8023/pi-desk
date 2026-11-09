@@ -52,6 +52,7 @@ import type {
   RuntimeSubAgentCancelRequest,
   RuntimeRewindResult,
   RuntimeSetModelRequest,
+  ResourceIssue,
   RuntimeState,
   RuntimeStatus,
   RuntimeTarget,
@@ -216,6 +217,8 @@ function mapStatus(host: SdkHostStatus, session: SdkSessionStatus, runId: number
     sessionId: session.sessionId,
     info: state === 'ready' ? mapInfo(session) : null,
     sdkVersion: host.sdkVersion,
+    // 资源装配诊断与会话绑定无关：建立失败时页面也必须能列出冲突来源与工具名。
+    resourceIssues: session.resourceIssues,
     lastError: failure === null
       ? null
       : `会话后端故障（${failure}）：请重新打开会话或重启应用。`
@@ -231,6 +234,7 @@ function sameStatus(left: RuntimeStatus, right: RuntimeStatus): boolean {
     && left.sessionId === right.sessionId
     && left.sdkVersion === right.sdkVersion
     && left.lastError === right.lastError
+    && sameResourceIssues(left.resourceIssues, right.resourceIssues)
     && left.info?.sessionId === right.info?.sessionId
     && left.info?.isStreaming === right.info?.isStreaming
     && left.info?.isCompacting === right.info?.isCompacting
@@ -240,6 +244,18 @@ function sameStatus(left: RuntimeStatus, right: RuntimeStatus): boolean {
     // 用量与速率是对象：按值比较，否则每次统计刷新都会被当成新状态广播。
     && sameUsage(left.info?.usage ?? null, right.info?.usage ?? null)
     && sameRate(left.info?.rate, right.info?.rate)
+}
+
+/**
+ * 资源诊断只含有限字段：按字段逐项比较，避免同一份诊断在每次状态刷新时都被当成新广播。
+ */
+function sameResourceIssues(left: readonly ResourceIssue[], right: readonly ResourceIssue[]): boolean {
+  if (left.length !== right.length) return false
+  return left.every((issue, index) => {
+    const other = right[index]
+    return other !== undefined && issue.kind === other.kind && issue.componentId === other.componentId
+      && issue.tool === other.tool && issue.productPath === other.productPath && issue.otherPath === other.otherPath
+  })
 }
 
 /** 用量按每个数值字段比较；未知与全零必须区分。 */
@@ -292,7 +308,8 @@ interface SessionOwner {
 
 /** 无前台运行实例时的页面状态：与宿主已建立但会话为空时一致。 */
 const IDLE_STATUS: RuntimeStatus = {
-  state: 'idle', runId: null, runtimeId: null, sessionId: null, info: null, sdkVersion: null, lastError: null
+  state: 'idle', runId: null, runtimeId: null, sessionId: null, info: null, sdkVersion: null, lastError: null,
+  resourceIssues: []
 }
 
 /**

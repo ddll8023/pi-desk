@@ -17,6 +17,7 @@ import type {
   PromptDisposition,
   PromptImageInput,
   PromptResult,
+  ResourceIssue,
   RuntimeError,
   RuntimeResult,
   RuntimeRewindRequest,
@@ -49,7 +50,8 @@ export type RuntimeViewState =
   | { phase: 'ready'; snapshot: RuntimeStatus }
   | { phase: 'stopping' }
   | { phase: 'closed' }
-  | { phase: 'failed'; error: RuntimeError }
+  /** 失败态带资源装配诊断：建立失败时页面需要列出冲突来源，而不只是一句固定文案。 */
+  | { phase: 'failed'; error: RuntimeError; resourceIssues: readonly ResourceIssue[] }
 
 export type PromptViewState =
   | { phase: 'idle' }
@@ -875,7 +877,8 @@ export function createRuntimeCore(deps: RuntimeCoreDeps): RuntimeCore {
         error: {
           code: 'RUNTIME_EXITED',
           message: status.lastError ?? 'Runtime 已异常退出，结果不确定。'
-        }
+        },
+        resourceIssues: status.resourceIssues
       }
       return { targetChanged, sessionChanged, previousStreaming, sessionAbsent: status.sessionId === null }
     }

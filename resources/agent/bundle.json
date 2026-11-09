@@ -25,7 +25,6 @@
         "extensions/pi-memory/recall.ts",
         "extensions/pi-memory/tools.ts"
       ],
-      "localConfigFiles": ["config.json"],
       "requiredTools": [
         "memory_status",
         "memory_control",

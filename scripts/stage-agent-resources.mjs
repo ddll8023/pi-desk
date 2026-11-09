@@ -14,6 +14,17 @@ const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const sourceRoot = join(projectRoot, 'resources', 'agent')
 const outputRoot = join(projectRoot, 'out', 'sdk-host', 'agent-resources')
 
+/**
+ * 组件聚合摘要：与运行期 componentDigestOf 完全同规则。
+ * 按相对路径码位序排序（不用 localeCompare，避免区域设置影响），再拼接「路径 \0 指纹」行取 sha256。
+ */
+function componentDigest(fingerprints, files) {
+  const lines = [...files]
+    .sort((left, right) => (left < right ? -1 : left > right ? 1 : 0))
+    .map(name => `${name}\u0000${fingerprints[name] ?? ''}`)
+  return createHash('sha256').update(lines.join('\n')).digest('hex')
+}
+
 /** 与运行期身份比对一致：只归一化 BOM 和换行，不改写实际复制的字节。 */
 function fingerprint(bytes) {
   const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes).replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n')
@@ -68,8 +79,14 @@ async function stage() {
     await mkdir(dirname(target), { recursive: true })
     await writeFile(target, bytes)
   }
+  // 组件摘要写在清单里，运行期会按 fingerprints 重算复核；它区分副本与本机版本的偏离程度，不用于准入。
+  const componentDigests = {}
+  for (const item of [...bundle.extensions, ...bundle.skills]) {
+    componentDigests[item.id] = componentDigest(fingerprints, item.files)
+  }
   // 清单最后写入；部分暂存失败时，运行期不能把混合版本误当作完整资源。
-  await writeFile(join(outputRoot, 'bundle.json'), `${JSON.stringify({ ...bundle, fingerprints }, null, 2)}\n`)
+  await writeFile(join(outputRoot, 'bundle.json'),
+    `${JSON.stringify({ ...bundle, fingerprints, componentDigests }, null, 2)}\n`)
   console.log(`产品 Agent 资源已暂存：${outputRoot}`)
 }
 

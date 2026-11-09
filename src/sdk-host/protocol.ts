@@ -8,14 +8,14 @@ import { isWorkspaceId } from '../shared/workspace-api'
 import { isExecutionMode } from '../shared/preferences-api'
 import type { ExecutionMode } from '../shared/preferences-api'
 import {
-  COMPACT_INSTRUCTIONS_MAX_CHARS,
+  COMPACT_INSTRUCTIONS_MAX_CHARS, RESOURCE_ISSUE_LIMIT,
   isCapabilitiesResult, isMcpCommandResult, isMcpStatusResult, isOutputRate, isProjectionBatch,
-  isProjectionResult, isResourcesResult, isRuntimeDiagnosticsResult, isSessionUsage, isHistoryQuery, isHistoryData
+  isProjectionResult, isResourceIssue, isResourcesResult, isRuntimeDiagnosticsResult, isSessionUsage, isHistoryQuery, isHistoryData
 } from '../shared/runtime-api'
 import type { ExtensionDialogResponseInput } from '../shared/extension-ui-api'
 import type {
   AgentCapabilities, McpStatus, OutputRate, PiResources, ProjectionBatch, ProjectionSnapshot,
-  RuntimeDiagnostics, SessionUsage, HistoryQuery, HistoryData
+  ResourceIssue, RuntimeDiagnostics, SessionUsage, HistoryQuery, HistoryData
 } from '../shared/runtime-api'
 
 export const SDK_HOST_PROTOCOL_VERSION = 12
@@ -126,6 +126,11 @@ export interface SdkSessionStatus {
   readonly messageCount: number
   /** 绑定失败时的原始异常摘要；只用于诊断，不参与状态判定。 */
   readonly lastErrorDetail?: string | null
+  /**
+   * 本代际的资源装配诊断；会话未绑定或建立失败时也保留，页面据此列出冲突来源。
+   * 只含产品组件标识、工具名与路径，不携带扩展错误正文。
+   */
+  readonly resourceIssues: readonly ResourceIssue[]
   /** 会话累计用量；官方统计未取到时为 null，不用全零冒充。 */
   readonly usage: SessionUsage | null
   /** 输出速率；未结算到有效值时为 null。 */
@@ -138,7 +143,7 @@ export function emptySdkSessionStatus(): SdkSessionStatus {
     projectPath: null, sessionId: null, sessionFile: null, isIdle: true, isCompacting: false,
     pendingMessages: 0, isBashRunning: false, waitingDialogs: 0, needsHostRebuild: false, lastError: null,
     modelProvider: null, modelId: null, messageCount: 0, usage: null, rate: { average: null },
-    lastErrorDetail: null }
+    lastErrorDetail: null, resourceIssues: [] }
 }
 
 /** 调用方固定的宿主与绑定身份，防止进程重建后编号重用导致旧动作穿透。 */
@@ -340,10 +345,12 @@ export function isSdkSessionStatus(value: unknown): value is SdkSessionStatus {
     && isOutputRate(value.rate)
     && (value.lastErrorDetail === undefined || value.lastErrorDetail === null
       || (typeof value.lastErrorDetail === 'string' && value.lastErrorDetail.length <= 400))
+    && Array.isArray(value.resourceIssues) && value.resourceIssues.length <= RESOURCE_ISSUE_LIMIT
+    && value.resourceIssues.every(isResourceIssue)
     && hasKeys(value, ['phase', 'bindingId', 'activityVersion', 'operationId', 'projectPath',
       'sessionId', 'sessionFile', 'isIdle', 'isCompacting', 'pendingMessages', 'isBashRunning', 'waitingDialogs',
       'needsHostRebuild', 'lastError', 'modelProvider', 'modelId', 'messageCount', 'usage', 'rate',
-      'lastErrorDetail'])
+      'lastErrorDetail', 'resourceIssues'])
 }
 /** 中断确认只属于一个具体绑定及执行版本。 */
 function isConfirmation(value: unknown): value is SdkInterruptConfirmation | null {
