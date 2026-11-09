@@ -226,7 +226,6 @@ export class MemoryRuntime {
       lease.assert()
       const rows = array(data.rules).map(value => object(value))
         .filter(row => (text(row.type) === 'decision' || text(row.type) === 'constraint') && text(row.date) >= window)
-      const families = newestByFamily(rows)
       // 全部族按约束优先、再按日期倒序排列，依次注入全文直到预算用尽。
       const families = newestByFamily(rows)
         .sort((left, right) => residentRank(left.row) - residentRank(right.row)
