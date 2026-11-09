@@ -10,13 +10,17 @@ from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import zoneinfo
 
-SCHEMA = '0.3'
+SCHEMA = '0.4'
+# 读取兼容旧版本：0.2/0.3 库没有记录级项目归属，按段标记解释；写入一律使用当前版本。
+READABLE_SCHEMAS = ('0.2','0.3',SCHEMA)
 TYPES = {'decision','constraint','progress','issue','fact','preference_evidence'}
 RULE_TYPES = {'decision','constraint'}
 PLAN_VERSION = 3
 DOMAINS = {'communication','coding','learning','workflow'}
 ALLOWED_TOP = {'manifest.json','catalog','daily','monthly','profile','index','.system'}
 ID_RE = re.compile(r'^[msp]_[0-9A-HJKMNP-TV-Z]{26}$')
+# 项目归属取桌面项目注册表的 UUID；旧项目段里的自由命名只作历史来源，不参与匹配。
+PROJECT_ID_RE = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
 RECORD_OPEN = re.compile(r'^<!-- memory:record (\{.*\}) -->$')
 PROJECT_OPEN = re.compile(r'^<!-- memory:project (\{.*\}) -->$')
 GLOBAL_OPEN = '<!-- memory:global -->'
@@ -86,7 +90,7 @@ def load(root: Path) -> tuple[dict,dt.tzinfo]:
     expect(root.is_dir(),f'记忆库不存在: {root}；先执行 init')
     expect(not root.is_symlink(),'记忆库根目录不能是符号链接')
     manifest=parse_json(safe(root,'manifest.json'))
-    expect(manifest.get('schema_version') in ('0.2',SCHEMA),'数据版本不匹配；未自动迁移')
+    expect(manifest.get('schema_version') in READABLE_SCHEMAS,'数据版本不匹配；未自动迁移')
     zone=manifest.get('timezone')
     try: z=ZoneInfo(zone)
     except (ZoneInfoNotFoundError,TypeError): raise MemoryError(f'无效/不可用的 IANA 时区: {zone}；Windows 可能需要安装 tzdata')
@@ -220,7 +224,8 @@ def parse_daily(text: str) -> list[dict]:
             title=lines[i+1][5:];i+=2;body=[]
             while i<len(lines) and lines[i]!='<!-- /memory:record -->':body.append(lines[i]);i+=1
             expect(i<len(lines),'缺少记录结束标记')
-            recs.append({**meta,**source,'session':current_session,'title':title,'content':'\n'.join(body).strip()})
+            # 记录级归属优先于段标记：新记录写在全局段内，归属记在记录上。
+            recs.append({**source,**meta,'session':current_session,'title':title,'content':'\n'.join(body).strip()})
             i+=1;continue
         if line.startswith('<!-- memory:') or line.startswith('<!-- /memory:'):
             raise MemoryError('未识别的记录标记: '+line)
@@ -230,18 +235,18 @@ def parse_daily(text: str) -> list[dict]:
     return recs
 
 def render_daily(date: str, recs: list[dict]) -> str:
-    """新增内容写入全局段；获批改写同日文件时保留旧记录的来源分组。"""
+    """新记录统一写入全局段并在记录内保留项目归属；旧来源段原样保留，不再按归属重新分段。"""
     out=[f'---\nschema_version: "{SCHEMA}"\ndate: "{date}"\n---\n\n# {date}\n']
-    sources=list(dict.fromkeys(r.get('project_id') for r in recs))
-    for source in sources:
-        rows=[r for r in recs if r.get('project_id')==source]
-        if source is None:out.append(f'## 全局记忆\n{GLOBAL_OPEN}\n')
-        else:out.append(f'## {rows[0]["project_name"]}\n<!-- memory:project {compact({"id":source})} -->\n')
+    sections=list(dict.fromkeys(r.get('project_name') for r in recs))
+    for section in sections:
+        rows=[r for r in recs if r.get('project_name')==section]
+        if section is None:out.append(f'## 全局记忆\n{GLOBAL_OPEN}\n')
+        else:out.append(f'## {section}\n<!-- memory:project {compact({"id":rows[0]["project_id"]})} -->\n')
         for sid in dict.fromkeys(r['session']['id'] for r in rows):
             session_rows=[r for r in rows if r['session']['id']==sid];session=session_rows[0]['session']
             out.append(f'### 会话 {session["saved_at"][11:16]}\n<!-- memory:session {compact(session)} -->\n')
             for row in session_rows:
-                meta={key:row[key] for key in ('id','type','topic','rule_key','status','supersedes','superseded_by','source_record_ids') if key in row}
+                meta={key:row[key] for key in ('id','type','topic','rule_key','status','supersedes','superseded_by','source_record_ids','project_id') if key in row}
                 out.append(f'<!-- memory:record {compact(meta)} -->\n#### {row["title"]}\n{row["content"]}\n<!-- /memory:record -->\n')
     return '\n'.join(out).rstrip()+'\n'
 
@@ -305,6 +310,8 @@ def validate_state(root: Path, overrides: dict | None = None) -> tuple[list[dict
         expect(r['date']==Path(r['file_path']).stem,'每日文件日期与文件名不一致')
         expect(r['type'] in TYPES,'未知记录类型')
         expect(r.get('status','active') in ('active','superseded'),'非法记录状态')
+        expect(r.get('project_id') is None or (isinstance(r['project_id'],str) and bool(r['project_id'].strip())),
+               '项目归属无效')
         sources=record_refs(r,'source_record_ids')
         expect(set(sources).issubset(valid_ids) and r['id'] not in sources,'日记来源不存在或引用自身')
         supersedes=record_refs(r,'supersedes')
@@ -945,8 +952,9 @@ def active_rules(root: Path, query: str = '', offset: int = 0, limit: int = 50) 
     index,verified=load_search_index(root)
     expect(offset>=0 and 1<=limit<=200,'offset/limit 非法；每批最多 200 条')
     selected=[doc for doc in index['documents'] if doc['kind']=='record' and is_active_rule(doc)]
+    # 无查询词时按日期倒序优先：limit 截断必须保留最新约定，不能因项目与键的分组顺序漏掉近期规则。
     if query.strip():selected=[item[0] for item in rank_documents(selected,query)]
-    else:selected.sort(key=lambda doc:(doc.get('project_id') or '',doc.get('rule_key',''),doc['date'],doc['id']))
+    else:selected.sort(key=lambda doc:(doc['date'],doc.get('project_id') or '',doc.get('rule_key',''),doc['id']),reverse=True)
     page=hydrate_documents(root,index,selected[offset:offset+limit],verified)
     def truncate_content(content: str, limit: int = 200) -> tuple[str, bool]:
         if len(content) <= limit: return content, False
@@ -968,17 +976,21 @@ def active_rules(root: Path, query: str = '', offset: int = 0, limit: int = 50) 
 
 def prepare(root: Path, op: str, data: dict) -> dict:
     _,z=load(root)
-    allowed={'save':{'agent','session_id','records'},
+    allowed={'save':{'agent','session_id','records','project_id'},
              'delete':{'ids'},
              'profile':{'domain','scope','basis','title','content','source_record_ids','replace_profile_ids'},
              'month':{'month','topics','closed_today_confirmed','rebuild_existing'}}
     expect(op in allowed and isinstance(data,dict) and not set(data)-allowed[op],
-           '全局记忆候选包含不支持字段；不接受项目绑定或登记参数')
+           '全局记忆候选包含不支持字段；不接受项目登记参数')
     records,_=validate_state(root);existing_ids={r['id']:r for r in records}
     if op=='save':
         now=dt.datetime.now(z);date=now.date().isoformat();saved_at=now.isoformat(timespec='seconds')
         session_id=data.get('session_id') or ulid('s')
         expect(isinstance(session_id,str) and ID_RE.fullmatch(session_id) is not None,'非法 session_id')
+        # 归属由宿主从项目注册表解析；拿不到时留空，不根据路径或名称推测。
+        project_id=data.get('project_id')
+        expect(project_id is None or (isinstance(project_id,str) and PROJECT_ID_RE.fullmatch(project_id) is not None),
+               '项目归属必须是项目注册表的 UUID 或留空')
         out=[];supersede=[];seen_keys=set();superseded_ids=set()
         # 去重按内容：同一会话可以多次保存，重复的只是内容相同的那些条目。
         seen_content={content_key(r['type'],r.get('rule_key'),r['topic'],r['content']) for r in records}
@@ -997,7 +1009,7 @@ def prepare(root: Path, op: str, data: dict) -> dict:
                 expect(isinstance(rule_key,str) and rule_key.strip(),'规则需要 rule_key')
                 expect(rule_key not in seen_keys,'本次候选规则键重复');seen_keys.add(rule_key)
                 for r in records:
-                    if r.get('project_id') is None and r.get('rule_key')==rule_key and is_active_rule(r):
+                    if r.get('project_id')==project_id and r.get('rule_key')==rule_key and is_active_rule(r):
                         targets.append((r,'相同 rule_key 的新决定取代旧决定，旧正文保留'))
                 for rid in explicit_ids:
                     expect(rid in existing_ids,'显式替代目标 ID 不存在: '+rid)
@@ -1015,6 +1027,7 @@ def prepare(root: Path, op: str, data: dict) -> dict:
             rid=ulid('m')
             new_record={'id':rid,'type':typ,'topic':title,'title':title,'content':content}
             if typ in RULE_TYPES:new_record.update({'rule_key':rule_key,'status':'active'})
+            if project_id is not None:new_record['project_id']=project_id
             if sources:new_record['source_record_ids']=sources
             if targets:new_record['supersedes']=[r['id'] for r,_ in targets]
             for previous,reason in targets:

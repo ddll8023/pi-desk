@@ -30,6 +30,10 @@ export interface MemoryConfig {
   tzdata: string | null
   pythonVersion: string | null
   timezoneVersion: string | null
+  /** 项目注册表映射；独立 CLI 为空，保存时项目归属留空。 */
+  projects: readonly { id: string; path: string }[]
+  /** 桌面项目注册表本次读取失败；仅用于状态报告，不改变检索范围。 */
+  projectsUnavailable: boolean
 }
 /** 桌面显式配置；结构由 host.ts 校验，这里只声明引擎需要的最小字段。 */
 export interface ManagedHostConfig {
@@ -44,6 +48,8 @@ export interface ManagedHostConfig {
   tzdata: string | null
   pythonVersion: string | null
   timezoneVersion: string | null
+  projects: readonly { id: string; path: string }[]
+  projectsUnavailable: boolean
   error: string | null
 }
 export interface GeneratedPlan {
@@ -162,7 +168,8 @@ export async function loadConfig(host?: ManagedHostConfig): Promise<MemoryConfig
       revision: host.revision, managed: true, hostEnabled: host.enabled, hostDisabledByMode: host.disabledByMode,
       available: host.available,
       unavailableReason: host.error, tzdata: host.tzdata, pythonVersion: host.pythonVersion,
-      timezoneVersion: host.timezoneVersion }
+      timezoneVersion: host.timezoneVersion, projects: host.projects,
+      projectsUnavailable: host.projectsUnavailable }
   }
 
   const rawPython = typeof data.python === 'string' && data.python.trim() ? data.python.trim() : undefined
@@ -171,7 +178,7 @@ export async function loadConfig(host?: ManagedHostConfig): Promise<MemoryConfig
   const engine = await detectEngine(rawEngine)
   return { python, engine, store: join(homedir(), '.agents', 'memory-store'), profileDomains,
     revision: 0, managed: false, hostEnabled: true, hostDisabledByMode: false, available: true, unavailableReason: null,
-    tzdata: null, pythonVersion: null, timezoneVersion: null }
+    tzdata: null, pythonVersion: null, timezoneVersion: null, projects: [], projectsUnavailable: false }
 }
 
 export class MemoryEngine {

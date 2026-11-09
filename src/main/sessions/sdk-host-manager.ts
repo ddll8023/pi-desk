@@ -269,7 +269,7 @@ const READ_ONLY_RUNS: SdkHostRunRegistry = {
  * 它不代表用户关掉了记忆，只说明这个宿主没有拿到桌面侧的用户级配置。
  */
 const READ_ONLY_MEMORY: MemoryConfigurationProvider = {
-  read: async hostEntry => managedMemoryConfiguration(hostEntry, false, 0)
+  read: async hostEntry => managedMemoryConfiguration(hostEntry, false, 0, [], false)
 }
 
 /**

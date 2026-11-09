@@ -56,15 +56,26 @@ export class MemoryManager {
 
   private async configuration(hostEntry: string): Promise<MemoryHostConfiguration> {
     const state = await this.enabled()
-    return managedMemoryConfiguration(hostEntry, state.enabled, this.revision)
+    const registry = await this.projects()
+    return managedMemoryConfiguration(hostEntry, state.enabled, this.revision, registry.projects, registry.unavailable)
+  }
+
+  /** 项目映射只用于记录归属；注册表读不到时置标记，记忆仍可用，只是不标项目。 */
+  private async projects(): Promise<{ projects: { id: string; path: string }[]; unavailable: boolean }> {
+    try {
+      const list = await this.options.store.list()
+      return { projects: list.projects.map(project => ({ id: project.id, path: project.path })), unavailable: false }
+    } catch { return { projects: [], unavailable: true } }
   }
 
   /** 状态读取不写任何用户数据；运行环境与库状态分别报告。 */
   async snapshot(): Promise<MemoryResult> {
     const state = await this.enabled()
+    const registry = await this.projects()
     let configuration: MemoryHostConfiguration
     try {
-      configuration = managedMemoryConfiguration(this.options.hostEntry(), state.enabled, this.revision)
+      configuration = managedMemoryConfiguration(this.options.hostEntry(), state.enabled, this.revision,
+        registry.projects, registry.unavailable)
     } catch {
       return failure('RUNTIME_MISSING', '受管记忆运行环境无法解析；未回退系统 Python。')
     }

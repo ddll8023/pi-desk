@@ -54,22 +54,53 @@ export function applicableProfiles(result: JsonObject, requested: Domain, select
   return { memory_scope: 'global', domain: requested, applicable_domains: selected, profiles, excluded_by_scope: excluded }
 }
 
+/** 路径归一：统一分隔符并去掉尾部斜杠；仅在不区分大小写的平台折叠大小写。 */
+function normalizeProjectPath(value: string): string {
+  const normalized = value.replace(/\\/g, '/').replace(/\/+$/, '')
+  return process.platform === 'win32' || process.platform === 'darwin' ? normalized.toLowerCase() : normalized
+}
+
+/** 会话工作目录对应的项目归属：取注册表里最长的路径前缀；未登记返回 null，不按目录名推测。 */
+function resolveProjectId(projects: readonly { id: string; path: string }[], cwd: string): string | null {
+  const target = normalizeProjectPath(cwd)
+  let matched: { id: string; length: number } | null = null
+  for (const project of projects) {
+    const base = normalizeProjectPath(project.path)
+    if (!base || (target !== base && !target.startsWith(`${base}/`))) continue
+    if (matched === null || base.length > matched.length) matched = { id: project.id, length: base.length }
+  }
+  return matched === null ? null : matched.id
+}
+
 /** 约定族按 rule_key 前缀聚合；缺失时归入未分类，只留索引不外扩。 */
 function ruleFamily(row: JsonObject): string {
   const key = typeof row.rule_key === 'string' ? row.rule_key : ''
   return key.split('.')[0] || '(未分类)'
 }
 
-/** 每族只保留最新一条：同族旧版仍可检索，但不占常驻预算。 */
+/** 族键带归属：不同项目的同族记录各自保留最新，避免被其他项目的新记录顶掉。 */
+function familyKey(row: JsonObject): string {
+  return `${text(row.source_project)}\u0000${ruleFamily(row)}`
+}
+
+/** 每族每个归属只保留最新一条：同族旧版仍可检索，但不占常驻预算。 */
 function newestByFamily(rows: JsonObject[]): { family: string; row: JsonObject }[] {
   const newest = new Map<string, JsonObject>()
   for (const row of rows) {
-    const family = ruleFamily(row)
-    const previous = newest.get(family)
+    const key = familyKey(row)
+    const previous = newest.get(key)
     if (previous === undefined || text(row.date) > text(previous.date)
-      || (text(row.date) === text(previous.date) && text(row.id) > text(previous.id))) newest.set(family, row)
+      || (text(row.date) === text(previous.date) && text(row.id) > text(previous.id))) newest.set(key, row)
   }
-  return [...newest.entries()].map(([family, row]) => ({ family, row }))
+  return [...newest.values()].map(row => ({ family: ruleFamily(row), row }))
+}
+
+/** 归属优先级：0 当前项目、1 通用（无项目归属的跨项目约定）、2 其他项目；未识别当前项目时全部同级。 */
+function projectRank(row: JsonObject, projectId: string | null): number {
+  if (projectId === null) return 1
+  const source = text(row.source_project)
+  if (source === projectId) return 0
+  return source === '' ? 1 : 2
 }
 
 /** 约束先于决定：同一预算下优先保住约束类约定。 */
@@ -99,6 +130,9 @@ export class MemoryRuntime {
   config: MemoryConfig
   engine: MemoryEngine
   constructor(config: MemoryConfig, engine: MemoryEngine) { this.config = config; this.engine = engine }
+
+  /** 当前会话的项目归属；保存时写入记录，不参与检索范围过滤。 */
+  projectId(cwd: string): string | null { return resolveProjectId(this.config.projects, cwd) }
 
   /**
    * 采纳桌面推送的新配置。
@@ -196,7 +230,7 @@ export class MemoryRuntime {
       managed: this.config.managed, available: this.config.available,
       unavailable_reason: this.config.unavailableReason, tzdata: this.config.tzdata,
       python_version: this.config.pythonVersion, timezone_version: this.config.timezoneVersion,
-      config_revision: this.config.revision,
+      config_revision: this.config.revision, projects_unavailable: this.config.projectsUnavailable,
       automatic_domains: this.config.profileDomains, saving: this.saving,
       automatic_recall: { ...(state.recallStatus ?? { status: state.enabled ? 'not_requested' : 'disabled' }),
         resident: state.residentStats ?? { status: state.enabled ? 'not_requested' : 'disabled' } },
@@ -211,8 +245,10 @@ export class MemoryRuntime {
   }
 
   /**
-   * 常驻约定：不依赖词法命中，方法约定族每族注入最新一条全文，其余族只出索引行。
-   * 本会话只读取一次；超时或失败时返回空，不影响其余背景，也不每轮重试。
+   * 常驻约定：不依赖词法命中，近七天每个 `rule_key` 族按归属分别取最新一条。
+   * 只注入当前项目与通用（无项目归属的跨项目约定）两类族；其他项目的族既不注入也不占索引行，
+   * 需要时靠任务召回或 memory_rules／memory_search 取得。未识别当前项目时不过滤。
+   * 预算用尽后的候选族降为索引行；本会话只读取一次，超时或失败时返回空，不影响其余背景。
    */
   private async residentSummary(lease: Lease): Promise<string> {
     const state = lease.state
@@ -224,13 +260,21 @@ export class MemoryRuntime {
     try {
       const data = await this.engine.rules('', 0, 200, signal)
       lease.assert()
+      const projectId = this.projectId(state.cwd)
       const rows = array(data.rules).map(value => object(value))
         .filter(row => (text(row.type) === 'decision' || text(row.type) === 'constraint') && text(row.date) >= window)
-      // 全部族按约束优先、再按日期倒序排列，依次注入全文直到预算用尽。
-      const families = newestByFamily(rows)
-        .sort((left, right) => residentRank(left.row) - residentRank(right.row)
+      // 只收当前项目与通用两类族：其他项目的约定不进常驻，避免无关条目占预算。
+      const all = newestByFamily(rows)
+      const excludedKeys = new Set(all.filter(item => projectRank(item.row, projectId) === 2)
+        .map(item => familyKey(item.row)))
+      const families = all.filter(item => !excludedKeys.has(familyKey(item.row)))
+        .sort((left, right) => projectRank(left.row, projectId) - projectRank(right.row, projectId)
+          || residentRank(left.row) - residentRank(right.row)
           || text(right.row.date).localeCompare(text(left.row.date))
           || text(left.row.id).localeCompare(text(right.row.id)))
+      const excludedFamilies = excludedKeys.size
+      // 按被排除的族统计行数：同族旧版本不算被项目排除，否则 omitted 会偏小。
+      const excludedRecords = rows.filter(row => excludedKeys.has(familyKey(row))).length
       const bodies = await this.residentBodies(families.map(item => text(item.row.id)), signal)
       lease.assert()
       const lines: string[] = []
@@ -244,11 +288,12 @@ export class MemoryRuntime {
       }
       const pending = indexed.length
       for (const row of indexed.slice(0, RESIDENT_INDEX_ROWS)) lines.push(residentIndex(row))
-      const omitted = rows.length - injected
+      const omitted = rows.length - excludedRecords - injected
       if (pending > 0) lines.push(`另有 ${pending} 族未展开正文（共 ${omitted} 条未注入）：memory_rules 取摘要，memory_read 取全文。`)
+      if (excludedFamilies > 0) lines.push(`其他项目另有 ${excludedFamilies} 族约定未进入常驻；需要时用 memory_rules 或 memory_search 检索。`)
       state.resident = lines.join('\n')
       state.residentStats = { status: 'provided', families: families.length, injected, indexed: pending, omitted,
-        budget: RESIDENT_BUDGET, chars: used }
+        excluded: excludedFamilies, excluded_records: excludedRecords, budget: RESIDENT_BUDGET, chars: used }
       return state.resident
     } catch {
       lease.assert()

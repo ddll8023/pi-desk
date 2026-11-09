@@ -17,6 +17,10 @@ export interface MemoryHostConfiguration {
   tzdata: string | null
   pythonVersion: string | null
   timezoneVersion: string | null
+  /** 项目注册表的 id 与路径；只用于给记录标明归属。 */
+  projects: readonly { id: string; path: string }[]
+  /** 项目注册表读取失败：记忆仍可写入，但记录不带归属。 */
+  projectsUnavailable: boolean
   error: string | null
 }
 export function parseHostConfiguration(value: unknown): MemoryHostConfiguration {
@@ -24,20 +28,33 @@ export function parseHostConfiguration(value: unknown): MemoryHostConfiguration 
   const row = value as Record<string, unknown>
   const path = (name: string): boolean => typeof row[name] === 'string' && isAbsolute(row[name])
   const nullableText = (name: string): boolean => row[name] === null || typeof row[name] === 'string'
+  const projects = (): { id: string; path: string }[] => {
+    if (!Array.isArray(row.projects)) throw new Error('桌面记忆配置字段无效')
+    return row.projects.map(project => {
+      if (!project || typeof project !== 'object' || Array.isArray(project)) throw new Error('桌面记忆配置字段无效')
+      const entry = project as Record<string, unknown>
+      if (Object.keys(entry).length !== 2 || typeof entry.id !== 'string' || entry.id === ''
+        || typeof entry.path !== 'string' || !isAbsolute(entry.path)) throw new Error('桌面记忆配置字段无效')
+      return { id: entry.id, path: entry.path }
+    })
+  }
   if (row.version !== 1 || typeof row.revision !== 'number' || !Number.isSafeInteger(row.revision) || row.revision < 0
     || typeof row.enabled !== 'boolean' || typeof row.disabledByMode !== 'boolean'
     || typeof row.available !== 'boolean'
     || !path('store') || !path('engine') || !path('python') || !(row.tzdata === null || path('tzdata'))
     || (row.available && row.tzdata === null) || !nullableText('error')
     || !nullableText('pythonVersion') || !nullableText('timezoneVersion')
+    || typeof row.projectsUnavailable !== 'boolean'
     || Object.keys(row).some(key => !['version', 'revision', 'enabled', 'disabledByMode', 'available', 'store', 'engine', 'python', 'tzdata',
-      'pythonVersion', 'timezoneVersion', 'error'].includes(key))) throw new Error('桌面记忆配置字段无效')
+      'pythonVersion', 'timezoneVersion', 'projects', 'projectsUnavailable', 'error'].includes(key))) throw new Error('桌面记忆配置字段无效')
+  const projectMap = projects()
   return { version: 1, revision: row.revision, enabled: row.enabled, disabledByMode: row.disabledByMode,
     available: row.available,
     store: String(row.store), engine: String(row.engine), python: String(row.python),
     tzdata: row.tzdata === null ? null : String(row.tzdata), error: row.error === null ? null : String(row.error),
     pythonVersion: row.pythonVersion === null ? null : String(row.pythonVersion),
-    timezoneVersion: row.timezoneVersion === null ? null : String(row.timezoneVersion) }
+    timezoneVersion: row.timezoneVersion === null ? null : String(row.timezoneVersion), projects: projectMap,
+    projectsUnavailable: row.projectsUnavailable }
 }
 /** 只在进程环境中存在桌面配置时才被视为受管运行；解析失败按无桌面通道处理，不阻塞会话。 */
 export function readHostConfiguration(): MemoryHostConfiguration | undefined {

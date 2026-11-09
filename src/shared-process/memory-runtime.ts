@@ -3,6 +3,11 @@ import { readFileSync, realpathSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 
+/** 项目注册表的最小映射：只用于给记忆记录标明归属，不参与记忆检索范围。 */
+export interface MemoryProject {
+  readonly id: string
+  readonly path: string
+}
 export interface MemoryHostConfiguration {
   readonly version: 1
   readonly revision: number
@@ -16,6 +21,10 @@ export interface MemoryHostConfiguration {
   readonly tzdata: string | null
   readonly pythonVersion: string | null
   readonly timezoneVersion: string | null
+  /** 项目注册表的 id 与路径；扩展按会话工作目录匹配归属，不根据目录名推测。 */
+  readonly projects: readonly MemoryProject[]
+  /** 项目注册表本次读取失败：记忆仍可写入，但记录不带归属。 */
+  readonly projectsUnavailable: boolean
   readonly error: string | null
 }
 export interface MemoryConfigurationProvider {
@@ -47,8 +56,12 @@ export function isMemoryHostConfiguration(value: unknown): value is MemoryHostCo
     && (value.tzdata === null || (typeof value.tzdata === 'string' && isAbsolute(value.tzdata)))
     && (!value.available || value.tzdata !== null)
     && nullableText(value.pythonVersion) && nullableText(value.timezoneVersion) && nullableText(value.error)
+    && Array.isArray(value.projects) && value.projects.every(project => record(project)
+      && Object.keys(project).length === 2 && typeof project.id === 'string' && project.id !== ''
+      && typeof project.path === 'string' && isAbsolute(project.path))
+    && typeof value.projectsUnavailable === 'boolean'
     && Object.keys(value).every(key => ['version', 'revision', 'enabled', 'disabledByMode', 'available', 'store', 'engine', 'python',
-      'tzdata', 'pythonVersion', 'timezoneVersion', 'error'].includes(key))
+      'tzdata', 'pythonVersion', 'timezoneVersion', 'projects', 'projectsUnavailable', 'error'].includes(key))
 }
 function resource(root: string, name: unknown, directory = false): string {
   if (typeof name !== 'string' || !name || isAbsolute(name) || name.includes('\\') || name.includes(':')
@@ -63,13 +76,14 @@ function resource(root: string, name: unknown, directory = false): string {
 export function globalMemoryDirectory(): string { return join(homedir(), '.agents', 'memory-store') }
 
 /** 缺资源仍返回受管配置，使普通对话可用；记忆操作会明确失败，绝不回退系统解释器。 */
-export function managedMemoryConfiguration(hostEntry: string, enabled: boolean, revision: number): MemoryHostConfiguration {
+export function managedMemoryConfiguration(hostEntry: string, enabled: boolean, revision: number,
+  projects: readonly MemoryProject[], projectsUnavailable: boolean): MemoryHostConfiguration {
   const hostRoot = dirname(hostEntry)
   const runtimeRoot = join(hostRoot, 'memory-runtime')
   const engine = join(hostRoot, 'agent-resources/skills/memory/scripts/memory_store.py')
   const base: MemoryHostConfiguration = { version: 1, revision, enabled, disabledByMode: false, available: false,
     store: globalMemoryDirectory(), engine, python: join(runtimeRoot, 'unavailable'), tzdata: null,
-    pythonVersion: null, timezoneVersion: null, error: null }
+    pythonVersion: null, timezoneVersion: null, projects, projectsUnavailable, error: null }
   if (!['win32', 'darwin'].includes(process.platform) || !['x64', 'arm64'].includes(process.arch)) {
     return { ...base, error: '当前平台或架构没有受管记忆运行环境。' }
   }

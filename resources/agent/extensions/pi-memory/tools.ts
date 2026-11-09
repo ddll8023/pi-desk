@@ -259,14 +259,17 @@ export function registerMemoryTools(pi: ExtensionAPI, runtime: MemoryRuntime): v
       keys(params, ['records'])
       // 固化候选，后续交互不复用可被另一处理器修改的参数引用。
       const candidate = object(JSON.parse(JSON.stringify(params)))
-      return save(ctx, signal, 'save', async () => {
+      return save(ctx, signal, 'save', async lease => {
         const records = array(candidate.records).map(value => {
           const row = object(value)
           keys(row, ['type', 'topic', 'content', 'rule_key', 'source_record_ids', 'supersede_record_ids', 'supersession_reason'])
           return row
         })
+        // 归属由宿主按项目注册表解析；未登记项目或独立 CLI 留空，不根据目录名推测。
+        const project = runtime.projectId(lease.state.cwd)
         return { agent: ctx.mode === 'tui' ? 'pi' : 'pi-desk',
-          session_id: diarySessionId(ctx.sessionManager.getSessionId()), records }
+          session_id: diarySessionId(ctx.sessionManager.getSessionId()), records,
+          ...(project === null ? {} : { project_id: project }) }
       })
     }
   })
