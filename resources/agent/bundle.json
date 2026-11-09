@@ -17,13 +17,13 @@
       "entry": "extensions/pi-memory/index.ts",
       "files": [
         "extensions/pi-memory/index.ts",
-        "extensions/pi-memory/approval.ts",
         "extensions/pi-memory/context.ts",
         "extensions/pi-memory/engine.ts",
         "extensions/pi-memory/files.ts",
         "extensions/pi-memory/host.ts",
         "extensions/pi-memory/recall.ts",
-        "extensions/pi-memory/tools.ts"
+        "extensions/pi-memory/tools.ts",
+        "extensions/pi-memory/write-gate.ts"
       ],
       "requiredTools": [
         "memory_status",

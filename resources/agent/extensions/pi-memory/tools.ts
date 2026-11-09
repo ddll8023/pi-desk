@@ -1,13 +1,13 @@
-/** 按需检索与受控保存工具；Memory Skill 决定何时用记忆，主动定向读取自动记独立统计，权威内容保存须审批。 */
+/** 按需检索与受控保存工具；Memory Skill 决定何时用记忆，主动定向读取自动记独立统计，权威内容保存受宿主写入闸门约束。 */
 import { createHash } from 'node:crypto'
 import { Type } from '@earendil-works/pi-ai'
 import type { JsonValue } from '@earendil-works/pi-ai'
 import type { ExtensionAPI, ExtensionToolContext } from '@earendil-works/pi-coding-agent'
-import { approve, approvalLimit, approvalText } from './approval.ts'
 import { CONTROL_TYPE, applicableProfiles } from './context.ts'
 import type { Lease, MemoryRuntime } from './context.ts'
 import { DOMAINS, array, domain, errorText, object, text } from './engine.ts'
-import type { JsonObject } from './engine.ts'
+import type { GeneratedPlan, JsonObject } from './engine.ts'
+import { assertWritableHost } from './write-gate.ts'
 
 const DomainSchema = Type.Union(DOMAINS.map(value => Type.Literal(value)))
 const Ids = Type.Array(Type.String({ pattern: '^m_[0-9A-HJKMNP-TV-Z]{26}$' }), { maxItems: 50 })
@@ -40,6 +40,19 @@ function diarySessionId(sessionId: string): string {
   for (let index = 0; index < 26; index++) { encoded = alphabet[Number(value & 31n)] + encoded; value >>= 5n }
   return `s_${encoded}`
 }
+/** 回执只列本次提交的内容摘要；记录 ID 需用 memory_search 定位，计划阶段尚未分配。 */
+function receipt(operation: 'save' | 'profile', plan: GeneratedPlan): JsonObject {
+  const preview = plan.preview
+  if (operation === 'profile') {
+    return { profile: preview.new_profile ?? null, replace_profile_ids: preview.replace_profile_ids ?? null }
+  }
+  const records = Array.isArray(preview.new_records) ? preview.new_records : []
+  return { date: preview.date ?? null,
+    records: records.map(value => {
+      const row = object(value)
+      return { type: row.type ?? null, topic: row.topic ?? null, rule_key: row.rule_key ?? null }
+    }) }
+}
 
 export function registerMemoryTools(pi: ExtensionAPI, runtime: MemoryRuntime): void {
   // 全局检索不探测项目目录；停用、取消和会话换代仍使用同一租约边界。
@@ -60,8 +73,8 @@ export function registerMemoryTools(pi: ExtensionAPI, runtime: MemoryRuntime): v
   }
   const save = async (ctx: ExtensionToolContext, signal: AbortSignal | undefined, operation: 'save' | 'profile',
     prepare: (lease: Lease) => Promise<JsonObject>) => {
-    // 无完整交互能力时，连计划技术缓存也不生成。
-    approvalLimit(ctx)
+    // 无可用交互桥时，连计划技术缓存也不生成。
+    assertWritableHost(ctx)
     const lease = runtime.lease(ctx, signal)
     const finishSave = runtime.beginSave(lease)
     try {
@@ -70,20 +83,16 @@ export function registerMemoryTools(pi: ExtensionAPI, runtime: MemoryRuntime): v
       const leaf = ctx.sessionManager.getLeafId()
       const stillCurrent = (): void => {
         lease.assert()
-        if (ctx.sessionManager.getLeafId() !== leaf) throw new Error('审批期间当前分支已改变，旧确认失效')
-        approvalLimit(ctx)
+        if (ctx.sessionManager.getLeafId() !== leaf) throw new Error('生成计划期间当前分支已改变，未提交')
+        assertWritableHost(ctx)
       }
       const plan = await runtime.engine.plan(operation, input, lease.signal)
       stillCurrent()
-      const message = approvalText(runtime.engine, plan, { sessionId: lease.state.sessionId,
-        cwd: lease.state.cwd })
-      const accepted = await approve(ctx, message, lease.signal)
-      if (!accepted) return result({ memory_scope: 'global', committed: false, cancelled: true, plan_id: plan.id,
-        message: '未提交权威记忆；短期候选仍由既有引擎管理' })
-      stillCurrent()
+      // 用户已明确要求保存，计划生成后直接提交；取消与分支变化仍使本次写入失效。
+      if (lease.signal.aborted) throw new Error('保存已取消，未提交权威记忆')
       const data = await runtime.engine.commit(plan, stillCurrent)
       // commit 一旦开始不强杀；如在提交期间换代，返回真实结果而不是宣称撤销。
-      return result({ ...data, committed: true, plan_id: plan.id,
+      return result({ ...data, committed: true, plan_id: plan.id, receipt: receipt(operation, plan),
         source_pi_session_id: lease.state.sessionId, source_cwd: lease.state.cwd,
         note: '仅此具体计划已提交；没有其他文件沙箱或跨域事务保证' })
     } finally { finishSave() }
@@ -104,7 +113,7 @@ export function registerMemoryTools(pi: ExtensionAPI, runtime: MemoryRuntime): v
   })
   pi.registerTool({
     name: 'memory_control', label: '控制记忆召回', exposure: 'model-only', executionMode: 'sequential',
-    description: '遵从用户要求停用、恢复或刷新记忆。off/on 只记录当前分支控制选项，不保存记忆正文或批准；refresh 使旧缓存和待确认计划失效。',
+    description: '遵从用户要求停用、恢复或刷新记忆。off/on 只记录当前分支控制选项，不保存记忆正文或写入授权；refresh 使旧缓存和待提交计划失效。',
     parameters: Type.Object({ action: Type.Union([Type.Literal('off'), Type.Literal('on'), Type.Literal('refresh')]) }, { additionalProperties: false }),
     outputSchema: Output, annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
     async execute(_id, params, _signal, _onUpdate, ctx) {
@@ -251,8 +260,8 @@ export function registerMemoryTools(pi: ExtensionAPI, runtime: MemoryRuntime): v
     supersede_record_ids: Type.Optional(Ids), supersession_reason: Type.Optional(Type.String({ minLength: 1 }))
   }, { additionalProperties: false })
   pi.registerTool({
-    name: 'memory_save', label: '审批并保存工作日记', exposure: 'model-only', executionMode: 'sequential',
-    description: '仅在用户明确要求保存日记时，传入具体完整候选。按 memory Skill 先核实事实与现行规则。工具生成短期计划、完整展示并等待真实用户批准后才提交；取消/变化/无交互不提交。会写计划技术缓存，可清理过期计划；不是只读操作。不接受 approved 或外部 plan_id。',
+    name: 'memory_save', label: '保存工作日记', exposure: 'model-only', executionMode: 'sequential',
+    description: '仅在用户明确要求保存日记时，传入具体完整候选。按 memory Skill 先核实事实与现行规则。工具生成版本 3 计划后直接提交并返回提交结果与回执，不再逐次等待确认；取消、分支变化或无写入能力宿主不提交。会写计划技术缓存，可清理过期计划；不是只读操作。不接受 approved 或外部 plan_id。',
     parameters: Type.Object({ records: Type.Array(RecordSchema, { minItems: 1, maxItems: 50 }) }, { additionalProperties: false }),
     outputSchema: Output, annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
     async execute(_id, params, signal, _onUpdate, ctx) {
@@ -274,8 +283,8 @@ export function registerMemoryTools(pi: ExtensionAPI, runtime: MemoryRuntime): v
     }
   })
   pi.registerTool({
-    name: 'memory_profile_save', label: '审批并保存个人画像', exposure: 'model-only', executionMode: 'sequential',
-    description: '仅在用户明确要求维护画像/长期偏好时使用，不因保存日记或一次行为顺带更新。先读取相关画像，再提供完整正文、依据、作用域及替换 ID。生成具体计划、展示全部新旧内容后由真实用户批准；不接受模型批准标志。',
+    name: 'memory_profile_save', label: '保存个人画像', exposure: 'model-only', executionMode: 'sequential',
+    description: '仅在用户明确要求维护画像/长期偏好时使用，不因保存日记或一次行为顺带更新。先读取相关画像，再提供完整正文、依据、作用域及替换 ID。生成具体计划后直接提交并返回回执；不接受模型批准标志。',
     parameters: Type.Object({ domain: DomainSchema, scope: Type.String({ pattern: '^(global|domain:[a-z0-9-]+)$' }),
       basis: Type.Union([Type.Literal('explicit'), Type.Literal('inferred_confirmed')]),
       title: Type.String({ minLength: 1, maxLength: 200 }), content: Type.String({ minLength: 1, maxLength: 20_000 }),

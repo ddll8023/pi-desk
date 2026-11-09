@@ -45,17 +45,17 @@ months
 
 `access-stats` 只读取得次数、会话数、最近时间及 observed 状态；搜索、规则摘要、画像、自动背景和历史回放不计数。统计失败保留成功原文与未确认状态；写入开始后的取消不是撤销。
 
-## 写入与审批
+## 写入与提交
 
 ```text
 python <脚本> plan save --input -
-# 展示完整计划并取得对该份内容的真实用户确认
+# 独立 CLI：逐份核对计划后再提交
 python <脚本> commit --plan-id <实际返回ID> --approved
 ```
 
-计划版本为 3，并明确 `memory_scope:"global"`。计划缓存位于 `.system/plans/`，24 小时失效；源、候选或引擎变化后重新预览。旧项目语义计划拒绝提交，不自动改写旧缓存。
+计划版本为 3，并明确 `memory_scope:"global"`。计划缓存位于 `.system/plans/`，24 小时失效；源、候选或引擎变化后重新生成。旧项目语义计划拒绝提交，不自动改写旧缓存。
 
-`plan` 不是完全不落盘；`--approved` 不替代真实批准。桌面使用 memory_save 或 memory_profile_save，由扩展展示完整内容并等待用户，不让模型自行传 approved 或外部计划 ID。
+`plan` 不是完全不落盘。桌面使用 memory_save 或 memory_profile_save，由扩展生成计划后直接提交并返回回执（计划 ID、条目摘要、变更文件）；`--approved` 只是引擎内部标记，不代替用户要求，模型也不能自行传 approved 或外部计划 ID。无交互能力的宿主在生成计划前就被闸门拒绝。
 
 ### 日记候选
 
@@ -110,7 +110,7 @@ scope 只能为 global 或所选 domain。basis 为 explicit 或 inferred_confir
 
 ### 明确删除
 
-`plan delete --input -` 接收 `{"ids":["m_真实记录ID"]}`。展示目标原文、来源、受影响引用、画像来源、访问统计及月摘要，批准后才提交。
+`plan delete --input -` 接收 `{"ids":["m_真实记录ID"]}`。计划列出目标原文、来源、受影响引用、画像来源、访问统计及月摘要；独立 CLI 逐份核对后提交。
 
 删除统计范围绑定目标 ID，提交时新增的对应统计也在范围内；不含完整范围的旧计划拒绝。删除后继不恢复过时规则，画像已确认正文不自动删除。删除不涵盖外部备份、Git 或其他设备。
 

@@ -30,7 +30,7 @@
 | --- | --- |
 | `src/sdk-host/memory-configuration.ts` | 宿主内配置持有者：写进程环境并向已加载扩展推送变更 |
 | `src/sdk-host/product-resources.ts` | 产品资源装配、执行前排除部署副本、扩展加载结果分级与必要组件核验，并核对配置是否已注入 |
-| `resources/agent/extensions/pi-memory/` | 记忆扩展：请求级背景、工具注册、会话控制与保存审批通道 |
+| `resources/agent/extensions/pi-memory/` | 记忆扩展：请求级背景、工具注册、会话控制与写入闸门下的保存通道 |
 | `resources/agent/skills/memory/` | 配套规范、引用与文件引擎 `scripts/memory_store.py` |
 | `resources/agent/bundle.json` | 上述扩展、Skill 与引擎入口及组成文件声明 |
 | `resources/memory-runtime/manifest.json` | 受管 Python 与时区归档的固定地址、SHA-256 与目标布局 |
@@ -69,6 +69,6 @@
 3. 首次创建：仅当库根既不存在或缺少清单时可用；先展示目标位置与时区并取得真实用户确认，再由受管解释器执行 `init`，创建后重新探测，失败不留下半成品结论。
 4. 会话使用：宿主在建立会话前把配置写入进程环境，扩展据此决定可用性；配置版本变化使旧会话状态与缓存整体作废。
 5. 库内容本身（日记、画像、月摘要、索引、访问统计）由扩展与文件引擎维护，本模块不读写正文，也不把库状态当作内容质量结论。
-6. 没有「应查未查」检测：模型是否调用记忆工具不受约束，也不因此阻断任何写操作。只读的记忆工具（`memory_status`、`memory_search`、`memory_rules`、`memory_read`、`memory_access_stats`、`memory_profiles`）已加入门禁放行集合，写工具仍走保存审批。
+6. 没有「应查未查」检测：模型是否调用记忆工具不受约束，也不因此阻断任何写操作。只读的记忆工具（`memory_status`、`memory_search`、`memory_rules`、`memory_read`、`memory_access_stats`、`memory_profiles`）已加入门禁放行集合；写工具由扩展的宿主写入闸门约束，仍只应在用户明确要求保存时调用。
 7. 配置读取失败与用户主动关闭在会话内不可区分：两者都表现为 `disabled_by: "user"`，`/memory status` 不单独报告读取故障。
 8. 记录的项目归属由宿主按项目注册表解析后随保存写入，写入的是记录级字段而非新的段标记；无项目归属即通用记忆，承载跨项目的方法与写法约定，未登记项目与独立 CLI 同样留空，读取与召回仍覆盖全库。

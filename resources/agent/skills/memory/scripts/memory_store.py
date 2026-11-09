@@ -608,7 +608,7 @@ def error_recall(root: Path, data: dict) -> dict:
         'memory_scope': 'global',
         'matches': matches,
         'no_match': not matches,
-        'note': '报错指纹联动仅匹配 issue 类型日记；不自动沉淀新记录，所有写入仍需人工审批。'
+        'note': '报错指纹联动仅匹配 issue 类型日记；不自动沉淀新记录，所有写入仍需用户明确要求后才进行。'
     }
 
 
@@ -1064,7 +1064,7 @@ def prepare(root: Path, op: str, data: dict) -> dict:
                  'affected_record_references':affected,'affected_profiles':affected_profiles,'withdrawn_months':withdrawn,
                  'access_statistics':{'file':ACCESS_STORE,'target_ids':ids,
                      'observed':[{'id':rid,**access_metrics(access_rows.get(rid))} for rid in ids],
-                     'note':'删除目标在提交时的全部对应统计；审批期间新增的目标访问同属此范围，不删除其他记录统计。'}}
+                     'note':'删除目标在提交时的全部对应统计；计划生成后新增的目标访问同属此范围，不删除其他记录统计。'}}
     elif op=='profile':
         domain=data['domain'];expect(domain in DOMAINS,'非法画像领域')
         scope=data['scope'];expect(scope in ('global','domain:'+domain),'新增画像仅接受 global 或所选领域作用域')
@@ -1264,7 +1264,7 @@ def main() -> None:
             raw_input=json.loads(sys.stdin.buffer.read().decode('utf-8')) if args.input=='-' else parse_json(Path(args.input))
             with locking(root,True):result=render_preview(prepare(root,args.operation,raw_input))
         elif args.cmd=='commit':
-            expect(args.approved,'必须明确 --approved；Skill 必须先展示变更并取得用户确认')
+            expect(args.approved,'提交必须显式 --approved；扩展和 CLI 都不得省略这个内部标记')
             with locking(root,True):result=commit(root,args.plan_id)
         elif args.cmd=='recall':
             with locking(root):result=indexed_recall(root,args.query,args.mode,args.month,args.offset,args.limit)
