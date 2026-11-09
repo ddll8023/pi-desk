@@ -29,8 +29,10 @@ interface State {
   recall?: RecallCache | undefined
   recallStatus?: JsonObject | undefined
   profiles?: { signature: string; value: string } | undefined
-  /** 常驻约定：每会话只读一次，保存或刷新后重新取得。 */
+  /** 常驻约定：每会话只成功读取一次，保存或刷新后重新取得。 */
   resident?: string | undefined
+  /** 本会话已尝试装配常驻的次数；失败后允许重试一次，冷启动不应拖死整会话。 */
+  residentAttempts?: number | undefined
   /** 常驻约定的注入规模，只进状态查询与排障，不进入模型上下文。 */
   residentStats?: JsonObject | undefined
 }
@@ -179,7 +181,7 @@ export class MemoryRuntime {
   shutdown(ctx: ExtensionContext): void {
     const state = this.states.get(ctx.sessionManager)
     if (state) { state.closed = true; state.controller.abort(); state.profiles = undefined; state.recall = undefined
-      state.resident = undefined; state.residentStats = undefined }
+      state.resident = undefined; state.residentAttempts = undefined; state.residentStats = undefined }
   }
 
   /** 停用原因来自宿主派生：执行模式关闭时不要说成用户停用，否则会引到错误的恢复动作。 */
@@ -210,7 +212,7 @@ export class MemoryRuntime {
     if (this.saving) throw new Error('已有记忆保存正在处理，请等待其真实结果')
     this.saving = true
     return () => { this.saving = false; lease.state.profiles = undefined; lease.state.recall = undefined
-      lease.state.resident = undefined; lease.state.residentStats = undefined }
+      lease.state.resident = undefined; lease.state.residentAttempts = undefined; lease.state.residentStats = undefined }
   }
 
   control(ctx: ExtensionContext, action: 'on' | 'off' | 'refresh', append: (data: JsonObject) => void): JsonObject {
@@ -253,6 +255,9 @@ export class MemoryRuntime {
   private async residentSummary(lease: Lease): Promise<string> {
     const state = lease.state
     if (state.resident !== undefined) return state.resident
+    // 成功一次即本会话复用；失败允许下一请求重试一次，避免一次冷启动或瞬时故障拖死整会话。
+    if ((state.residentAttempts ?? 0) >= 2) return ''
+    state.residentAttempts = (state.residentAttempts ?? 0) + 1
     const window = this.residentWindow()
     const controller = new AbortController()
     const signal = AbortSignal.any([lease.signal, controller.signal])
@@ -295,11 +300,11 @@ export class MemoryRuntime {
       state.residentStats = { status: 'provided', families: families.length, injected, indexed: pending, omitted,
         excluded: excludedFamilies, excluded_records: excludedRecords, budget: RESIDENT_BUDGET, chars: used }
       return state.resident
-    } catch {
+    } catch (error) {
       lease.assert()
-      // 超时或失败都不每轮重试：本会话内保留空结果，保存或刷新后再重新取得。
-      state.resident = ''
-      state.residentStats = { status: 'unavailable' }
+      // 失败不缓存正文，只记录原因：下一次请求重试一次，仍失败才不再尝试。
+      state.resident = undefined
+      state.residentStats = { status: 'unavailable', reason: errorText(error) }
       return ''
     } finally { clearTimeout(timer) }
   }
