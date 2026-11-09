@@ -6,7 +6,7 @@
 
 负责登记主模型选择的执行技能、仅审查对象与必读引用，核对已登记正文是否以当前版本完整进入有效模型上下文，并在修改类工具执行前阻断未满足条件的调用。入口是宿主扩展 `resources/agent/extensions/skill-guard/`：注册 `skill_guard_select` 工具，挂钩 `before_agent_start`、`context_with_system`、`tool_call`、`tool_result` 与会话分支／压缩／关闭事件，经 `systemPromptOptions.sections.skill_guard` 向每次请求注入门禁说明与当前登记摘要；`/skill-guard` 命令只比对内存加载版本与磁盘差异，不重载。
 
-门禁不替模型选择技能，扩展内不维护技能名称、业务触发词或引用文件名；`read`、`grep`、`ls`、`ffgrep`、`fffind` 等只读工具与选择工具本身不受拦截。它也不是命令沙箱，不构成方案、文件清单、测试、构建或重启的授权。
+门禁不替模型选择技能，扩展内不维护技能名称、业务触发词或引用文件名；`read`、`grep`、`ls`、`ffgrep`、`fffind` 等只读检索工具、只读记忆工具（`memory_status`、`memory_search`、`memory_rules`、`memory_read`、`memory_access_stats`、`memory_profiles`）与选择工具本身不受拦截。它也不是命令沙箱，不构成方案、文件清单、测试、构建或重启的授权。
 
 ## 登记与沿用
 

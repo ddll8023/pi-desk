@@ -27,7 +27,9 @@ const LOADED_VERSION = implementationVersion(IMPLEMENTATIONS)
 const ENTRY_TYPE = 'skill-guard'
 const SECTION = 'skill_guard'
 const SELECTION_TOOL = 'skill_guard_select'
-const RECOVERY_TOOLS = new Set(['read', 'grep', 'find', 'ls', 'ffgrep', 'fffind', 'tool_search'])
+/** 只读工具不改变文件状态，也不携带要遵守的规范：先行放行，避免每次新请求都要先登记才能检索代码或读记忆。 */
+const RECOVERY_TOOLS = new Set(['read', 'grep', 'find', 'ls', 'ffgrep', 'fffind', 'tool_search',
+  'memory_status', 'memory_search', 'memory_rules', 'memory_read', 'memory_access_stats', 'memory_profiles'])
 
 interface PendingMutation {
   tool: string
