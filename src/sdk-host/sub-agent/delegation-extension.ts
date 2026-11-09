@@ -38,22 +38,23 @@ type TaskType = typeof TASK_TYPES[number]
 /**
  * 每类任务的工具白名单与预算。
  * 子进程是官方 Pi CLI：只读任务用内置工具 `read/grep/find/ls`，文档任务另加 `edit/write`；
- * 产品里的 ffgrep/ffind 不会随子进程加载；调研任务用 Pi 内置的联网只读工具，与主会话的调研链路一致。
- * 预算按实测取值：同一查词任务常见 28–35s，偶发上游拥塞时超过 90s，故查询任务给 90s、审查任务给 150s；
- * 文档任务多一次读写往返，给 120s；调研任务含多次检索与抓取往返，给 240s。
+ * 产品里的 ffgrep/ffind 不会随子进程加载；调研任务的联网只读工具由用户安装的 pi-web-access 扩展经 `-e` 提供，与主会话的调研链路一致。
+ * 预算按实测取值：单次工具调用约 5.5s，审查任务在 150s 内跑完 27 次调用仍未收敛，
+ * 故审查与调研各给 600s（约 110 次调用余量）、文档给 360s（多一次读写往返）、查询给 240s。
+ * 放宽预算会让子代理倾向用满，因此不另加无进展截断，中止交给卡片上的停止入口。
  * 预算同时写进请求的 constraints，子代理不再按更短的时间自我规划。
  */
 const TASK_PROFILES: Record<TaskType, { skill: string; tools: readonly string[]; timeoutMs: number }> = {
-  query: { skill: 'sub-agent-query', tools: ['read', 'grep', 'find', 'ls'], timeoutMs: 90_000 },
-  review: { skill: 'sub-agent-review', tools: ['read', 'grep', 'find', 'ls'], timeoutMs: 150_000 },
+  query: { skill: 'sub-agent-query', tools: ['read', 'grep', 'find', 'ls'], timeoutMs: 240_000 },
+  review: { skill: 'sub-agent-review', tools: ['read', 'grep', 'find', 'ls'], timeoutMs: 600_000 },
   // 调研只下放只读检索与联网工具：不给写入、不经 MCP 扩展，联网凭据与代理沿用子进程自身的 Pi 配置。
   research: {
     skill: 'sub-agent-research',
     tools: ['read', 'grep', 'find', 'ls', 'web_search', 'fetch_content', 'get_search_content', 'source_check'],
-    timeoutMs: 240_000
+    timeoutMs: 600_000
   },
   // 文档任务多一次读写往返，预算相应放宽；edit/write 的可达范围由守卫扩展限定。
-  document: { skill: 'sub-agent-document', tools: ['read', 'grep', 'find', 'ls', 'edit', 'write'], timeoutMs: 120_000 }
+  document: { skill: 'sub-agent-document', tools: ['read', 'grep', 'find', 'ls', 'edit', 'write'], timeoutMs: 360_000 }
 }
 
 /** 请求负载字段：单任务与批内单项共用同一份 schema，避免两处漏改。 */
@@ -86,6 +87,10 @@ const WRITE_SCOPE_SCHEMA = Type.Array(Type.String({ minLength: 1, maxLength: SUB
 })
 
 /** 子进程输出上限；事件流比纯文本大，但仍必须封顶，避免无界内存占用。 */const OUTPUT_LIMIT_BYTES = 8_388_608
+/** 发出 SIGTERM 后等进程自行退出的时间，到点即强杀。 */
+const FORCE_KILL_GRACE_MS = 2_000
+/** 强杀后等 stdio 关闭的时间；仍不关闭就按已终止收敛，避免任务永远停在执行中。 */
+const CLOSE_SETTLE_GRACE_MS = 5_000
 /** 批内并发上限：并发子进程等于并发模型请求，过多容易触发供应商限流。 */
 const BATCH_CONCURRENCY = 3
 /** 一次委派允许的子任务数；与渲染端批次契约上限一致。 */
@@ -188,6 +193,8 @@ interface RunOutcome {
   readonly exitCode: number | null
   /** 超时那一刻子进程是否已经退出；用于区分「上游仍在重试」与「进程已退但输出流未关」。 */
   readonly exitedBeforeStop: boolean
+  /** 是否升级为 SIGKILL；用于区分「SIGTERM 已终止」与「必须强杀」。 */
+  readonly escalatedToKill: boolean
 }
 
 /** 子进程句柄：`done` 在进程收敛后完成，`cancel` 用于只停这一个任务。 */
@@ -218,24 +225,40 @@ function startWorker(entry: string, args: readonly string[], cwd: string, timeou
     let timedOut = false
     let cancelled = false
     let exitedBeforeStop = false
+    let escalatedToKill = false
+    let stopping = false
     let settled = false
     let timer: ReturnType<typeof setTimeout> | null = null
+    let forceKillTimer: ReturnType<typeof setTimeout> | null = null
+    let settleTimer: ReturnType<typeof setTimeout> | null = null
     const finish = (exitCode: number | null): void => {
       if (settled) return
       settled = true
       inFlightChildren.delete(child)
       if (timer !== null) clearTimeout(timer)
+      if (forceKillTimer !== null) clearTimeout(forceKillTimer)
+      if (settleTimer !== null) clearTimeout(settleTimer)
       signal?.removeEventListener('abort', onAbort)
-      resolvePromise({ stderr: Buffer.concat(errors).toString('utf8'), timedOut, cancelled, exitCode, exitedBeforeStop })
+      resolvePromise({ stderr: Buffer.concat(errors).toString('utf8'), timedOut, cancelled, exitCode, exitedBeforeStop, escalatedToKill })
     }
     const stop = (reason: 'timeout' | 'cancel'): void => {
-      if (settled) return
+      // 已收回或已在收回：重复请求只保留第一次的判定，不再叠一层强杀与收敛定时器。
+      if (settled || stopping) return
+      stopping = true
       // 计时或取消发生时的真实进程状态：已退出但管道未关，与仍在运行是两种完全不同的故障。
       if (!exitedBeforeStop) exitedBeforeStop = child.exitCode !== null || child.signalCode !== null
       if (reason === 'timeout') timedOut = true
       else { cancelled = true; onCancelStart() }
       child.kill('SIGTERM')
-      setTimeout(() => child.kill('SIGKILL'), 2_000).unref()
+      // 两级收回：SIGTERM 未生效就强杀；强杀后仍无 close 说明只是输出流没关，
+      // 此时进程已经不在，继续等只会让任务永远停在「执行中」，按已终止收敛。
+      forceKillTimer = setTimeout(() => {
+        escalatedToKill = true
+        try { child.kill('SIGKILL') } catch { /* 已退出 */ }
+        settleTimer = setTimeout(() => finish(null), CLOSE_SETTLE_GRACE_MS)
+        settleTimer.unref()
+      }, FORCE_KILL_GRACE_MS)
+      forceKillTimer.unref()
     }
     const onAbort = (): void => stop('cancel')
     // 定向取消与整轮中断走同一条收敛路径，不另开分支。
@@ -1061,13 +1084,14 @@ export function createSubAgentDelegationExtension(config: SubAgentWorkerConfig,
           const writtenNote = written.length === 0
             ? ''
             : `；已写入 ${written.join('、')}，先确认文件现状再决定是否重试`
-          // 超时的两种故障形态必须分开报：否则无法判断是上游重试吃掉了预算，还是输出流泄漏。
+          // 超时的故障形态必须分开报，且必须写清进程已被收回：只看「超时」无法判断子进程是否还在跑。
           const processNote = outcome.exitedBeforeStop
-            ? '进程已退出但输出流未关闭'
-            : '进程仍在运行，可能卡在上游重试或模型循环'
+            ? '子进程已自行退出，输出流未关闭'
+            : outcome.escalatedToKill ? '已强制终止子进程（SIGKILL）' : '已终止子进程（SIGTERM）'
+          const exitNote = outcome.exitCode === null ? '退出码未知' : `退出码 ${outcome.exitCode}`
           const stderrTail = outcome.stderr.trim().slice(-200)
           const stderrNote = stderrTail === '' ? '' : `；stderr：${stderrTail}`
-          const message = `子代理执行超时（${profile.timeoutMs / 1_000}s），${processNote}；已完成 ${done} 次工具调用${lastNote}${writtenNote}${stderrNote}`
+          const message = `子代理执行超时（${profile.timeoutMs / 1_000}s），${processNote}，${exitNote}；已完成 ${done} 次工具调用${lastNote}${writtenNote}${stderrNote}`
           state.phase = 'failed'
           state.extra = { errorCode: 'timeout', errorMessage: message, summary: partial }
           return failure(spec.type, spec.taskId, 'timeout', message, elapsed,

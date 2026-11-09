@@ -46,7 +46,7 @@ compatibility: >-
 
 写入边界由宿主加载的守卫扩展在工具执行前强制判断：命中范围外的调用会被直接阻断并返回拒绝原因，不会产生写入。因此不要尝试用 `..`、绝对路径或符号链接绕过——那只会让任务失败。
 
-- **超时**：120 秒
+- **超时**：360 秒
 - **最大 token**：6000
 - **只读**：否（`constraints.read_only = false`）
 - **上下文访问**：无（你看不到会话历史）
@@ -67,7 +67,7 @@ compatibility: >-
     "content": "## 访问控制\n\n使用 Bearer Token 认证。"
   },
   "constraints": {
-    "timeout_seconds": 120,
+    "timeout_seconds": 360,
     "max_tokens": 6000,
     "read_only": false,
     "write_scope": ["docs/api/"]

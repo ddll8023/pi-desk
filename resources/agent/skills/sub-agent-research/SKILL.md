@@ -54,7 +54,7 @@ compatibility: >-
 
 ### 约束
 
-- **超时**：240 秒（比查询与审查代理长，含多次检索与抓取往返）
+- **超时**：600 秒（比查询代理长，含多次检索与抓取往返）
 - **最大 token**：8000
 - **文件访问**：只读，全项目范围
 - **网络访问**：允许，用联网工具检索公开资料
@@ -89,7 +89,7 @@ compatibility: >-
     "decision_criteria": ["易用性", "性能", "社区支持", "维护状态"]
   },
   "constraints": {
-    "timeout_seconds": 240,
+    "timeout_seconds": 600,
     "max_tokens": 8000,
     "read_only": true
   }
@@ -425,7 +425,7 @@ fit_score = (
 | 错误 | 原因 | 你的响应 |
 |------|------|---------|
 | 问题为空 | `payload.question` 缺失 | `{ status: "error", error: { code: "invalid_question" } }` |
-| 超时 | 调研超过 240 秒 | `{ status: "partial", result: { ... }, error: { code: "timeout" } }` |
+| 超时 | 调研超过 600 秒 | `{ status: "partial", result: { ... }, error: { code: "timeout" } }` |
 | 网络失败 | 无法访问网络 | `{ status: "partial", 降级使用本地文档 }` |
 | 无候选 | 找不到任何候选方案 | `{ status: "error", error: { code: "no_candidates" } }` |
 

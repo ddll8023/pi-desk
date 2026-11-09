@@ -89,7 +89,7 @@ compatibility: >-
     "file_filter": "src/**/*.ts"
   },
   "constraints": {
-    "timeout_seconds": 90,
+    "timeout_seconds": 240,
     "max_tokens": 5000,
     "read_only": true
   }
@@ -297,7 +297,7 @@ if (found_count === 0) {
 ```json
 {
   "query": "find all console.log",
-  "constraints": { "timeout_seconds": 90 }
+  "constraints": { "timeout_seconds": 240 }
 }
 ```
 

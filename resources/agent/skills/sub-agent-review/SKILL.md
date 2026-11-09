@@ -107,7 +107,7 @@ compatibility: >-
     "change_context": "用户认证模块重构"
   },
   "constraints": {
-    "timeout_seconds": 150,
+    "timeout_seconds": 600,
     "max_tokens": 6000,
     "read_only": true
   }
@@ -354,7 +354,7 @@ pass = summary.by_severity.critical === 0
     "code_to_review": "...",
     "dimensions": ["security", "performance", "convention", "logic"]
   },
-  "constraints": { "timeout_seconds": 150 }
+  "constraints": { "timeout_seconds": 600 }
 }
 ```
 
