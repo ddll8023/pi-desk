@@ -331,7 +331,7 @@ export class MemoryEngine {
     } else if (month !== undefined) throw new Error('非按月模式不接受 month，未扩大范围')
     return this.run(args, undefined, signal)
   }
-  /** 自动背景只走只读协议；独立短预算，不借用主动读取统计或审批入口。 */
+  /** 自动背景只走只读协议；独立短预算，不借用主动读取统计或写入通道。 */
   backgroundRecall(input: JsonObject, signal: AbortSignal): Promise<JsonObject> {
     return this.run(['recall-background', '--input', '-'], input, signal, false, undefined, 5_000)
   }
@@ -375,7 +375,7 @@ export class MemoryEngine {
           ['superseded_records', 'supersede'], ['withdrawn_months', 'withdrawn_months']]
       : [['new_profile', 'profile'], ['replace_profile_ids', 'replace_ids'], ['replaced_profiles', 'replaced_profiles']]
     if (pairs.some(([key, source]) => JSON.stringify(preview[key!]) !== JSON.stringify(payload[source!]))) {
-      throw new Error('计划内容与引擎预览不一致，禁止审批或提交')
+      throw new Error('计划内容与引擎预览不一致，禁止提交')
     }
     if (engineSha256 !== fingerprint(await readText(await realpath(this.config.engine)))) throw new Error('生成计划期间引擎已变化')
     return Object.freeze({ id, operation, raw, preview, engineSha256 })

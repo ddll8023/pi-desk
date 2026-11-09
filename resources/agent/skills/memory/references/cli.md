@@ -45,17 +45,17 @@ months
 
 `access-stats` 只读取得次数、会话数、最近时间及 observed 状态；搜索、规则摘要、画像、自动背景和历史回放不计数。统计失败保留成功原文与未确认状态；写入开始后的取消不是撤销。
 
-## 写入与审批
+## 写入
 
 ```text
 python <脚本> plan save --input -
-# 展示完整计划并取得对该份内容的真实用户确认
+# 人工核对该份计划内容后提交（扩展侧生成计划后直接提交）
 python <脚本> commit --plan-id <实际返回ID> --approved
 ```
 
 计划版本为 4，并明确 `memory_scope:"global"`。计划写入库内待确认表，24 小时失效；源、候选或引擎变化后重新预览。提交在写事务内核对库变更序号与引用关系，旧项目语义计划拒绝提交，不自动改写旧缓存。
 
-`plan` 不是完全不落盘；`--approved` 不替代真实批准。桌面使用 memory_save 或 memory_profile_save，由扩展展示完整内容并等待用户，不让模型自行传 approved 或外部计划 ID。
+`plan` 不是完全不落盘；`--approved` 只是引擎内部标记，不代表用户已逐份批准。桌面使用 memory_save 或 memory_profile_save：扩展经写入闸门判定宿主可写后直接提交并返回回执，模型不能传入 approved 或外部计划 ID。
 
 ### 日记候选
 

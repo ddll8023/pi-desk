@@ -22,7 +22,7 @@
 2. `basis:explicit` 用于用户明确表达；`inferred_confirmed` 用于已展示依据且用户确认的推测。
 3. 来源用真实 `source_record_ids`；没有日记来源时不编造，历史记录也可作为依据。
 4. 更新时用同领域 `replace_profile_ids` 指定旧条目，展示全部新旧正文、来源和作用范围。
-5. 桌面调用 `memory_profile_save` 由扩展审批；CLI 走 `plan profile` → 确认 → `commit`。
+5. 桌面调用 `memory_profile_save` 由扩展生成计划后直接提交；CLI 走 `plan profile` → `commit`。
 
 画像替换不删除日记或旧偏好证据，不自动撤回历史月摘要。用户另行要求删除来源时按 [数据边界](integrity.md) 处理；已确认的画像正文不因来源删除自动消失。
 

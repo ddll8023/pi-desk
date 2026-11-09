@@ -678,7 +678,7 @@ def error_recall(root: Path, data: dict) -> dict:
                   'score':round(item[1],6),'matched_terms':item[2]} for item in selected]
     return {'policy':'error-fingerprint-v1','store_version':version,'fingerprint':fingerprint,
             'memory_scope':'global','matches':matches,'no_match':not matches,
-            'note':'报错指纹联动仅匹配 issue 类型日记；不自动沉淀新记录，所有写入仍需人工审批。'}
+            'note':'报错指纹联动仅匹配 issue 类型日记；不自动沉淀新记录，写入仍只在用户明确要求时进行。'}
 
 
 def indexed_read(root: Path, ids: list[str]) -> dict:
@@ -947,7 +947,7 @@ def prepare(root: Path, op: str, data: dict) -> dict:
                      'withdrawn_months':withdrawn,
                      'access_statistics':{'storage':'database','target_ids':ids,
                          'observed':[{'id':rid,**access_metrics(state['records'].get(rid))} for rid in ids],
-                         'note':'删除目标在提交时的全部对应统计；审批期间新增的目标访问同属此范围，不删除其他记录统计。'}}
+                         'note':'删除目标在提交时的全部对应统计；计划生成到提交之间新增的目标访问同属此范围，不删除其他记录统计。'}}
         elif op=='profile':
             domain=data['domain'];expect(domain in DOMAINS,'非法画像领域')
             scope=data['scope'];expect(scope in ('global','domain:'+domain),'新增画像仅接受 global 或所选领域作用域')
@@ -1550,7 +1550,7 @@ def main() -> None:
             raw_input=json.loads(sys.stdin.buffer.read().decode('utf-8')) if args.input=='-' else json.loads(Path(args.input).read_text(encoding='utf-8'))
             result=render_preview(prepare(root,args.operation,raw_input))
         elif args.cmd=='commit':
-            expect(args.approved,'必须明确 --approved；Skill 必须先展示变更并取得用户确认')
+            expect(args.approved,'必须明确 --approved；该标记只是引擎内部确认，不代表用户逐份批准')
             result=commit(root,args.plan_id)
         elif args.cmd=='status':
             result=status_view(root)
