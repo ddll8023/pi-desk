@@ -63,6 +63,50 @@ export class MemoryManager {
   }
 
   /**
+   * 启动对齐专用：把记忆库里旧项目归属改判到派生 ID。
+   *
+   * 库文件不存在视为无可迁移；单条失败只回报项目名，由调用方决定是否保留旧 ID。
+   * 归属迁移只改 `records.project_id`，不写正文、不重建词项。
+   */
+  async reassignProjects(
+    pairs: readonly { readonly id: string; readonly name: string; readonly next: string }[]
+  ): Promise<{ migrated: number; skipped: number; failed: readonly string[] }> {
+    if (pairs.length === 0) return { migrated: 0, skipped: 0, failed: [] }
+    let configuration: MemoryHostConfiguration
+    try {
+      configuration = await this.configuration(this.options.hostEntry())
+    } catch {
+      return { migrated: 0, skipped: 0, failed: ['受管记忆运行环境不可用'] }
+    }
+    try {
+      const info = await stat(join(configuration.store, STORE_FILE))
+      if (!info.isFile()) return { migrated: 0, skipped: pairs.length, failed: [] }
+    } catch {
+      return { migrated: 0, skipped: pairs.length, failed: [] }
+    }
+    let migrated = 0
+    let skipped = 0
+    const failed: string[] = []
+    for (const pair of pairs) {
+      const result = await this.runEngine(configuration, ['reassign', '--from', pair.id, '--to', pair.next, '--approved'])
+      let payload: unknown = null
+      try { payload = result.text.trim() ? JSON.parse(result.text) : null } catch { payload = null }
+      if (result.code === 0 && isRecord(payload) && payload.ok === true) {
+        const count = isRecord(payload.data) && typeof payload.data.reassigned === 'number' ? payload.data.reassigned : 0
+        migrated += count
+        continue
+      }
+      // 「没有归属」表示该 ID 在库里没有记录，属于正常跳过，不算失败。
+      const message = isRecord(payload) && isRecord(payload.error) && typeof payload.error.message === 'string'
+        ? payload.error.message
+        : ''
+      if (/没有归属/.test(message)) { skipped += 1; continue }
+      failed.push(pair.name)
+    }
+    return { migrated, skipped, failed }
+  }
+
+  /**
    * 项目映射用于记录归属与按项目收窄检索：`path` 供工作目录匹配归属，`name` 供会话内选择检索范围。
    * 注册表读不到时置标记，记忆仍可用，只是不标项目、不能按项目收窄。
    */

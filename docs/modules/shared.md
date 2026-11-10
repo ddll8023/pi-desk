@@ -45,11 +45,11 @@
 
 ## F-config：Desktop 配置（混合）
 
-唯一归属文件：`src/main/config/desktop-config-store.ts`。
+配置持久化的唯一归属文件：`src/main/config/desktop-config-store.ts`。项目身份不随机生成：id 由项目名派生（`src/main/config/project-identity.ts`），旧随机 id 在启动时由 `src/main/config/project-identity-migration.ts` 先把记忆库归属迁移到派生值，再写回配置。
 
 | 使用者 | 涉及字段／入口 |
 | --- | --- |
-| 项目与信任 | 项目列表、当前项目、`projectTrust`、按项目清除快捷命令 |
+| 项目与信任 | 项目列表、当前项目（id 由名称派生，跨机器与 userData 一致）、`projectTrust`、按项目清除快捷命令 |
 | 应用外壳 | 窗口位置、尺寸、最大化状态 |
 | 偏好 | 界面主题、侧栏、右侧面板、Markdown 默认视图、快捷输入、Git 自动清理策略 |
 | 供应商与认证 | 安装级设备标识、隐藏模型列表 |

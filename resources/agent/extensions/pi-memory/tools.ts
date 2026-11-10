@@ -76,20 +76,6 @@ function diarySessionId(sessionId: string): string {
   for (let index = 0; index < 26; index++) { encoded = alphabet[Number(value & 31n)] + encoded; value >>= 5n }
   return `s_${encoded}`
 }
-/** 回执只列本次提交的内容摘要；记录 ID 需用 memory_search 定位，计划阶段尚未分配。 */
-function receipt(operation: 'save' | 'profile', plan: GeneratedPlan): JsonObject {
-  const preview = plan.preview
-  if (operation === 'profile') {
-    return { profile: preview.new_profile ?? null, replace_profile_ids: preview.replace_profile_ids ?? null }
-  }
-  const records = Array.isArray(preview.new_records) ? preview.new_records : []
-  return { date: preview.date ?? null,
-    records: records.map(value => {
-      const row = object(value)
-      return { type: row.type ?? null, topic: row.topic ?? null, rule_key: row.rule_key ?? null }
-    }) }
-}
-
 /** 回执只列本次提交的内容摘要；记录 ID 以提交返回的 new_record_ids 为准。 */
 function receipt(operation: 'save' | 'profile', plan: GeneratedPlan): JsonObject {
   const preview = plan.preview

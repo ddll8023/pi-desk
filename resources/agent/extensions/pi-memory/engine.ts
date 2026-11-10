@@ -120,7 +120,7 @@ export async function detectPython(hostDirectory?: string): Promise<string> {
  * 1. 显式配置路径；
  * 2. 同一资源树内相对寻址：../../skills/memory/scripts/memory_store.py
  * 3. 同一资源树内备选寻址：../../skills/memory-skill/memory/scripts/memory_store.py
- * 4. 全局用户技能路径回退：~/.pi/agent/skills/...
+ * 4. 全局用户技能路径回退：~/.agents/skills/...
  */
 export async function detectEngine(configured?: string): Promise<string> {
   if (configured && configured.trim()) {
@@ -133,8 +133,8 @@ export async function detectEngine(configured?: string): Promise<string> {
   const candidates = [
     fileURLToPath(new URL('../../skills/memory/scripts/memory_store.py', import.meta.url)),
     fileURLToPath(new URL('../../skills/memory-skill/memory/scripts/memory_store.py', import.meta.url)),
-    join(homedir(), '.pi', 'agent', 'skills', 'memory', 'scripts', 'memory_store.py'),
-    join(homedir(), '.pi', 'agent', 'skills', 'memory-skill', 'memory', 'scripts', 'memory_store.py')
+    join(homedir(), '.agents', 'skills', 'memory', 'scripts', 'memory_store.py'),
+    join(homedir(), '.agents', 'skills', 'memory-skill', 'memory', 'scripts', 'memory_store.py')
   ]
 
   for (const candidate of candidates) {

@@ -9,7 +9,8 @@
  * 与对话页模型展示偏好、快捷发送短语、扩展自动更新开关、生成式 UI 开关、执行模式、记忆开关、快捷命令、手机设备授权是同一文件里的可选字段，
  * 缺失或非法一律按默认值处理，不参与结构判定，也不改变版本语义；路径归一化在 project-path.ts，切换编排在
  * project-manager.ts，偏好读取在 preferences-manager.ts，窗口状态校正与保存时机在 window-state.ts，
- * 信任决定的探测与启动参数映射在 trust-manager.ts。
+ * 信任决定的探测与启动参数映射在 trust-manager.ts，项目 id 由项目名派生见 project-identity.ts，
+ * 旧随机 id 的启动对齐见 project-identity-migration.ts。
  *
  * 项目列表顺序由用户自己维护：加载时保持文件顺序，切换或添加只更新 `lastOpenedAt` 与条目内容，
  * 不把项目重新排序，也不把最近打开的项目顶到最前；只有超出上限时才按 `lastOpenedAt` 淘汰最旧的记录。
@@ -19,6 +20,7 @@ import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join } from 'node:path'
 import { app } from 'electron'
+import { projectIdForName } from './project-identity'
 import { isExecutionMode, isMarkdownDefaultView, isRightPanelTab, isTerminalLinkOpenMode } from '../../shared/preferences-api'
 import type { AutoUpdatePreference, ExecutionMode, ExecutionModePreference, GenuiPreference, ModelDisplayPreference, QuickSendPreference, UiPreferences, UiTheme } from '../../shared/preferences-api'
 import {
@@ -455,6 +457,48 @@ export class DesktopConfigStore {
   }
 
   /**
+   * 待对齐的项目身份：已有项目的 id 与按名称派生的值不一致时列出映射。
+   * 只读、不写盘；调用方先迁移记忆归属，成功后再用 `applyIdentityChanges` 回写。
+   */
+  identityChanges(): Promise<readonly { id: string; name: string; next: string }[]> {
+    return this.enqueue(async () => {
+      await this.loadFromDisk()
+      return this.projects
+        .map(project => ({ id: project.id, name: project.name, next: projectIdForName(project.name) }))
+        .filter(change => change.id !== change.next)
+    })
+  }
+
+  /** 按启动对齐的映射改写项目 id；只动 id 与当前项目指针，其余字段与顺序保持不变。 */
+  applyIdentityChanges(changes: readonly { id: string; next: string }[]): Promise<ProjectList> {
+    return this.enqueue(async () => {
+      await this.loadFromDisk()
+      if (changes.length === 0) return this.snapshot()
+      const mapping = new Map(changes.map(change => [change.id, change.next]))
+      const projects = this.projects.map(project => {
+        const next = mapping.get(project.id)
+        return next === undefined ? project : { ...project, id: next }
+      })
+      const currentProjectId = this.currentProjectId === null
+        ? null
+        : (mapping.get(this.currentProjectId) ?? this.currentProjectId)
+      if (!this.readOnly) {
+        await this.persist({
+          projects,
+          currentProjectId,
+          ui: this.ui,
+          windowState: this.windowState,
+          projectTrust: this.projectTrust,
+          authDeviceId: this.deviceIdForPersist()
+        })
+      }
+      this.projects = projects
+      this.currentProjectId = currentProjectId
+      return this.snapshot()
+    })
+  }
+
+  /**
    * 把归一化后的目录设为当前项目并保存；已有记录原位更新，新项目追加到列表末尾。
    * 切换不重排列表：项目顺序由用户在侧栏里自行维护，最近打开的项目不会被顶到最前。
    * 只读降级时只更新本次运行的内存状态；保存失败保持内存状态不变。
@@ -469,7 +513,8 @@ export class DesktopConfigStore {
 
       const existing = this.projects.find((project) => project.path === projectPath)
       const record: Project = {
-        id: existing?.id ?? randomUUID(),
+        // 已有项目沿用磁盘上的 ID；新项目按名称派生，使同一项目跨机器、跨 userData 共用一份身份。
+        id: existing?.id ?? projectIdForName(name),
         name,
         path: projectPath,
         lastOpenedAt: Date.now()

@@ -584,7 +584,7 @@ onMounted(() => {
               class="border-t border-desk-line px-2 py-2.5 text-xs transition-colors first:border-t-0 hover:bg-desk-canvas-sunken"
             >
               <div class="flex items-baseline justify-between gap-3">
-                <div class="min-w-0 flex-1 truncate font-medium" :title="row.detailTitle">{{ row.name }}</div>
+                <div class="min-w-0 flex-1 truncate font-medium" :title="row.detailTitle ?? undefined">{{ row.name }}</div>
                 <div class="shrink-0 text-right text-xs font-semibold whitespace-nowrap tabular-nums">
                   {{ row.totalTokens }}
                   <span class="ml-1 font-normal text-2xs text-desk-muted">{{ row.share }}</span>
@@ -601,7 +601,7 @@ onMounted(() => {
               </div>
 
               <div class="mt-1.5 flex items-center justify-between gap-2 text-2xs text-desk-muted">
-                <span class="min-w-0 flex-1 truncate tabular-nums" :title="row.detailTitle">{{ row.detail }}</span>
+                <span class="min-w-0 flex-1 truncate tabular-nums" :title="row.detailTitle ?? undefined">{{ row.detail }}</span>
                 <span class="shrink-0 tabular-nums">{{ row.meta }}</span>
               </div>
             </li>

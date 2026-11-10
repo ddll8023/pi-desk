@@ -47,11 +47,18 @@ const CONFLICT_MARKER = 'conflicts with'
 export function collectToolConflicts(extensions: readonly LoadedExtensionLike[]): ToolConflict[] {
   const owners = new Map<string, string>()
   const conflicts: ToolConflict[] = []
+  // 同一路径重复列举会产生同一条争用，按所有者与对方路径去重，避免计数失真。
+  const reported = new Set<string>()
   for (const extension of extensions) {
     for (const tool of extension.tools.keys()) {
       const owner = owners.get(tool)
       if (owner === undefined) owners.set(tool, extension.path)
-      else if (owner !== extension.path) conflicts.push({ tool, ownerPath: owner, otherPath: extension.path })
+      else if (owner !== extension.path) {
+        const key = `${tool}\u0000${owner}\u0000${extension.path}`
+        if (reported.has(key)) continue
+        reported.add(key)
+        conflicts.push({ tool, ownerPath: owner, otherPath: extension.path })
+      }
     }
   }
   return conflicts

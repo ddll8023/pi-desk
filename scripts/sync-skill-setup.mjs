@@ -1,19 +1,19 @@
 /**
- * 同步 pi-skill-setup 的随包规则模板：从维护电脑的全局规则生成 macOS 模板，再按固定平台差异生成 Windows 模板，
- * 并删除 assets 下不再携带的文件。
+ * 同步 pi-skill-setup 的随包规则模板：按维护电脑全局规则的实际平台口吻，派生另一平台的模板
+ * （维护源是 macOS 就生成 Windows 模板，反之亦然），并删除 assets 下不再携带的文件。
  *
  * 只写目标技能目录：不读项目配置、不运行宿主、不部署到任何 agentDir，也不触碰记忆库或凭据。
  * `--check` 只比对并报告差异，不写文件也不删除；默认模式才写入与清理。
  * 目标目录由 `PI_SKILL_SETUP_DIR` 覆盖，源文件由 `PI_AGENTS_SOURCE` 覆盖，默认分别为
- * `~/.pi/agent/skills/pi-skill-setup` 与 `~/.pi/agent/AGENTS.md`。
+ * `~/.agents/skills/pi-skill-setup` 与 `~/.agents/AGENTS.md`。
  */
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, resolve, sep } from 'node:path'
 
 const check = process.argv.includes('--check')
-const skillDir = resolve(process.env.PI_SKILL_SETUP_DIR ?? join(homedir(), '.pi/agent/skills/pi-skill-setup'))
-const sourcePath = resolve(process.env.PI_AGENTS_SOURCE ?? join(homedir(), '.pi/agent/AGENTS.md'))
+const skillDir = resolve(process.env.PI_SKILL_SETUP_DIR ?? join(homedir(), '.agents/skills/pi-skill-setup'))
+const sourcePath = resolve(process.env.PI_AGENTS_SOURCE ?? join(homedir(), '.agents/AGENTS.md'))
 const assets = join(skillDir, 'assets')
 /** 随包只允许两份模板；其余条目在同步时删除，避免旧资源继续被当作部署材料。 */
 const ALLOWED = new Set(['mac-AGENTS.md', 'Windows-AGENTS.md'])
@@ -25,6 +25,12 @@ const MAC_PYTHON = '<后端目录>/.venv/bin/python <script>'
 const WINDOWS_PYTHON = '<后端目录>/.venv/Scripts/python.exe <script>'
 const MAC_ENCODING = '仅遇到实际编码异常时添加 `PYTHONIOENCODING=utf-8`。'
 const WINDOWS_ENCODING = '仅遇到实际编码异常时，才按当前终端语法设置 `PYTHONIOENCODING=utf-8`。'
+/** 三条差异成对维护，换向与单点替换共用同一份定义，避免两个方向各自漂移。 */
+const PLATFORM_PAIRS = [
+  { mac: MAC_FIRST, windows: WINDOWS_FIRST, label: '第 14 条首句' },
+  { mac: MAC_PYTHON, windows: WINDOWS_PYTHON, label: 'Python 解释器路径' },
+  { mac: MAC_ENCODING, windows: WINDOWS_ENCODING, label: '编码环境变量说明' }
+]
 
 function fail(message) {
   console.error(`[skill-setup] ${message}`)
@@ -38,11 +44,22 @@ function replaceOnce(text, from, to, label) {
   return text.replace(from, to)
 }
 
-function buildWindowsTemplate(mac) {
-  if (!mac.includes(MAC_FIRST)) fail('全局规则缺少第 14 条的 macOS 首句，无法生成 Windows 模板')
-  const withFirst = replaceOnce(mac, MAC_FIRST, WINDOWS_FIRST, '第 14 条首句')
-  const withPython = replaceOnce(withFirst, MAC_PYTHON, WINDOWS_PYTHON, 'Python 解释器路径')
-  return replaceOnce(withPython, MAC_ENCODING, WINDOWS_ENCODING, '编码环境变量说明')
+function buildTemplates(source) {
+  const isMac = source.includes(MAC_FIRST)
+  const isWindows = source.includes(WINDOWS_FIRST)
+  // 维护电脑本身可能是任一平台：源文件就是同平台模板，只需向另一方向派生。
+  if (isMac === isWindows) {
+    fail(`全局规则第 14 条平台首句无法判定：macOS 标记 ${isMac}、Windows 标记 ${isWindows}，应恰好出现一处`)
+  }
+  return isMac
+    ? { mac: source, windows: retarget(source, 'mac', 'windows') }
+    : { mac: retarget(source, 'windows', 'mac'), windows: source }
+}
+
+/** 按三条固定平台差异整体换向；任一文本不唯一出现即报错，不静默产出错误模板。 */
+function retarget(text, from, to) {
+  return PLATFORM_PAIRS.reduce((current, pair) =>
+    replaceOnce(current, pair[from], pair[to], pair.label), text)
 }
 
 function writeIfChanged(name, content) {
@@ -90,8 +107,8 @@ function pruneSkillRoot() {
 }
 
 if (!existsSync(sourcePath)) fail(`找不到维护电脑的全局规则：${sourcePath}`)
-const macTemplate = readFileSync(sourcePath, 'utf8').replace(/\r\n?/g, '\n')
-const windowsTemplate = buildWindowsTemplate(macTemplate)
+const sourceText = readFileSync(sourcePath, 'utf8').replace(/\r\n?/g, '\n')
+const { mac: macTemplate, windows: windowsTemplate } = buildTemplates(sourceText)
 
 writeIfChanged('mac-AGENTS.md', macTemplate)
 writeIfChanged('Windows-AGENTS.md', windowsTemplate)

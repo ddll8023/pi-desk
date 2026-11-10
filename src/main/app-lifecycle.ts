@@ -11,11 +11,14 @@ import { mkdirSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { applyLoginShellPath } from './shared/shell-path'
 import { configurePiAgentDirectories } from './shared/pi-paths'
+import { alignProjectIdentities } from './config/project-identity-migration'
 import { registerAgentHomeHandlers } from './agent-home/ipc'
 import { runSharedImport } from './agent-home/shared-import'
 import {
   authManager,
+  configStore,
   lanRemote,
+  memoryManager,
   packageUpdater,
   piAgentUpdater,
   preferencesManager,
@@ -234,6 +237,9 @@ export async function startApplication(): Promise<void> {
   // 首启导入先于建窗：会话历史、模型与扩展包都只从产品目录读取，导入未完会看不到既有会话。
   // 逐项幂等，重复启动只补缺失项；失败不阻止启动，结论进设置页与导入标记。
   await runSharedImport()
+  // 项目身份对齐在建窗与建会话前完成：先迁移记忆归属，再把派生 ID 写回配置。
+  // 失败只保留旧 ID 并在下次启动重试，不阻断启动。
+  await alignProjectIdentities(configStore, memoryManager)
   await createWindow(pageUrl)
   // 窗口已创建后再开始检查：它只影响页面上的提示，不参与启动编排。
   // 首次检查结束后按开关决定要不要自动更新一次扩展；这一次不阻塞窗口显示。
