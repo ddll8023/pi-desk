@@ -2,14 +2,23 @@
  * 页面尚未就绪时的 Pi 预读：同一个一次性 RPC 进程读取资源、可用模型与默认模型。
  *
  * 不落会话、不加载 Extension、不连接 MCP；模型与资源只作启动前候选，就绪后以活动会话与主进程查询为准。
+ * 技能按会话同源补齐（随包产品技能与只读共享技能目录），扩展命令仍需会话启动后才出现。
  * 各命令的拒绝、形状错误与超时分别返回，避免模型读取失败挡住技能，或资源失败挡住模型选择。
  * 同项目与信任决定的并发读取合并，强制刷新淘汰旧结果；进程按组终止，不残留子进程。
  * 未选项目时另有全局预读：用中立目录作 cwd，只取模型与默认身份，不读项目资源。
  */
 import type { ChildProcess } from 'node:child_process'
+import { existsSync } from 'node:fs'
+import { join } from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
 import type { PiResourcePreview, RuntimeErrorCode } from '../../shared/runtime-api'
-import { spawnPiCli } from '../shared/pi-cli-process'
+import { getSdkHostDirectory, spawnPiCli } from '../shared/pi-cli-process'
+import { getSharedPiAgentDir } from '../shared/pi-paths'
+import {
+  agentResourcePath,
+  agentResourcesDirectory,
+  readAgentResourceBundle
+} from '../../shared-process/agent-resources'
 import { terminateProcessTree } from '../../shared-process/process-tree-termination'
 import { toModelSummaries, toResources, toRuntimeInfo } from './pi-response-projection'
 
@@ -111,7 +120,28 @@ function previewLaunchArguments(trustDecision: 'trusted' | 'untrusted' | null): 
   const args = ['--mode', 'rpc', '--no-session', '--no-extensions', '--no-mcp']
   if (trustDecision === 'trusted') args.push('--approve')
   else if (trustDecision === 'untrusted') args.push('--no-approve')
+  for (const path of previewSkillPaths()) args.push('--skill', path)
   return args
+}
+
+/**
+ * 预读技能路径：与 sdk-host 会话同源，取随包产品技能（排除只给子代理的）与只读共享技能目录。
+ * 产品清单读不到或共享目录缺失时只少这几条候选，不阻断模型与其他资源预读；结果在进程内缓存一次。
+ */
+let cachedSkillPaths: string[] | null = null
+function previewSkillPaths(): readonly string[] {
+  if (cachedSkillPaths !== null) return cachedSkillPaths
+  const paths: string[] = []
+  try {
+    const bundle = readAgentResourceBundle(agentResourcesDirectory(join(getSdkHostDirectory(), 'index.mjs')))
+    for (const item of bundle.skills) {
+      if (!item.subAgentOnly) paths.push(agentResourcePath(bundle.root, item.entry))
+    }
+  } catch { /* 产品资源不可用时不额外报告，预读仍有项目与共享来源。 */ }
+  const shared = join(getSharedPiAgentDir(), 'skills')
+  if (existsSync(shared)) paths.push(shared)
+  cachedSkillPaths = paths
+  return paths
 }
 
 /** 一组固定请求共享进程；命令级错误不影响其他已取得的结果。 */

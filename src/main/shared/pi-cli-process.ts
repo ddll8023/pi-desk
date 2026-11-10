@@ -27,6 +27,11 @@ export function getPiCliEntryPath(): string {
   return managedEntryPath(CLI_ENTRY_NAME)
 }
 
+/** SDK 宿主产物目录；产品 Agent 资源与宿主入口保持固定相邻布局，与一次性入口同一套解析。 */
+export function getSdkHostDirectory(): string {
+  return resolve(__dirname, '..', CLI_OUTPUT_DIRECTORY)
+}
+
 /** 版本检查脚本入口；与 CLI 运行器同一个产物目录与解析方式。 */
 export function getUpdateCheckEntryPath(): string {
   return managedEntryPath(UPDATE_CHECK_ENTRY_NAME)
