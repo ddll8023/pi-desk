@@ -1,23 +1,25 @@
 /**
  * 用量统计视图的纯函数与展示格式化：
- * 提供日期范围切片、堆叠柱与明细表的行数据、构成条与趋势轴线刻度、缓存命中率与占比计算，
- * 供用量统计分节与构成条组件复用。
- * 范围按「有记录的日期」取末尾 N 天，不按自然日补零；费用缺失时保持 null，不推算金额。
+ * 提供日期范围切片、堆叠柱与明细表的行数据、构成条与趋势轴线刻度、日度热力图格子、
+ * 缓存命中率与占比计算，供用量统计分节、构成条与热力图组件复用。
+ * 趋势范围按「有记录的日期」取末尾 N 天，不按自然日补零；热力图按自然日补齐空白格。
+ * 费用缺失时保持 null，不推算金额。
  */
 import type { UsageDailyStat } from '../../../shared/usage-stats-api'
 import { cacheHitRate, formatCost, formatCostOrDash, formatTokens } from './usage-format'
 
 export { cacheHitRate, formatTokens }
 
-/** 趋势图可选范围：近 7 / 30 / 90 个有记录日期，或全部。 */
-export type UsageRange = 7 | 30 | 90 | 'all'
+/** 趋势图可选范围：近 7 / 14 / 30 / 90 个有记录日期，或全部。 */
+export type UsageRange = 7 | 14 | 30 | 90 | 'all'
 
-/** 趋势图指标：Token 量，或供应商上报的费用。 */
-export type UsageMetric = 'tokens' | 'cost'
+/** 趋势图指标：Token 量、回复条数，或供应商上报的费用。 */
+export type UsageMetric = 'tokens' | 'messages' | 'cost'
 
 /** 范围选项按从短到长排列，默认选中 30 天。 */
 export const USAGE_RANGE_OPTIONS: readonly { readonly value: UsageRange; readonly label: string }[] = [
   { value: 7, label: '近 7 天' },
+  { value: 14, label: '近 14 天' },
   { value: 30, label: '近 30 天' },
   { value: 90, label: '近 90 天' },
   { value: 'all', label: '全部' }
@@ -99,9 +101,11 @@ export function buildAxisTicks(
   metric: UsageMetric
 ): readonly UsageAxisTick[] {
   const peak = Math.max(0, ...bars.map(bar => bar.metricValue))
-  const formatValue = (value: number): string => (
-    metric === 'cost' ? `$${formatCost(value)}` : formatTokens(Math.round(value))
-  )
+  const formatValue = (value: number): string => {
+    if (metric === 'cost') return `$${formatCost(value)}`
+    if (metric === 'messages') return String(Math.round(value))
+    return formatTokens(Math.round(value))
+  }
   return [
     { ratio: 1, label: formatValue(peak) },
     { ratio: 0.5, label: formatValue(peak / 2) },
@@ -159,6 +163,8 @@ export interface DailyBarItem {
   readonly label: string
   readonly totalTokens: number
   readonly cost: number | null
+  /** Token 指标下柱体由四项分项堆叠；费用与回复数等单值指标不拆段。 */
+  readonly stacked: boolean
   /** 该日按当前指标取到的原始值，Axis 刻度据此取峰值。 */
   readonly metricValue: number
   /** 该日当前指标是否有值；无值（含费用视图下未计价）只画基线条，不画柱。 */
@@ -198,9 +204,11 @@ export function buildDailyBars(
   const sliced = sliceDaily(daily, options.range)
   if (sliced.length === 0) return []
 
-  const readMetric = (item: UsageDailyStat): number | null => (
-    options.metric === 'cost' ? item.cost : item.totalTokens
-  )
+  const readMetric = (item: UsageDailyStat): number | null => {
+    if (options.metric === 'cost') return item.cost
+    if (options.metric === 'messages') return item.messageCount
+    return item.totalTokens
+  }
   const maxValue = Math.max(1, ...sliced.map(item => readMetric(item) ?? 0))
   const lastIndex = sliced.length - 1
   // 标签间隔按「最多约 8 个标签」反推；末位附近不足一个间隔时让位给末位，避免最后两个标签贴在一起。
@@ -216,7 +224,8 @@ export function buildDailyBars(
       (total, segment) => total + Math.max(0, item[segment.key]),
       0
     )
-    const segments: readonly DailyBarSegment[] = segmentTotal > 0
+    // 只有 Token 指标按四项拆段；回复数等单值指标整柱同色，拆段会给出并不存在的构成关系。
+    const segments: readonly DailyBarSegment[] = options.metric === 'tokens' && segmentTotal > 0
       ? USAGE_SEGMENTS.map(segment => ({
           key: segment.key,
           percent: (Math.max(0, item[segment.key]) / segmentTotal) * 100
@@ -229,6 +238,7 @@ export function buildDailyBars(
       label: item.date === 'unknown' ? '未知' : formatShortDate(item.date),
       totalTokens: item.totalTokens,
       cost: item.cost,
+      stacked: options.metric === 'tokens',
       metricValue: value,
       hasValue: value > 0,
       heightPercent,
@@ -271,4 +281,172 @@ export function buildDailyDetailRows(
       cost: item.cost
     }))
     .reverse()
+}
+
+/** 日度热力图的一格；`level` 只是颜色强度分级，真实读数在 `title` 与 `ariaLabel` 里。 */
+export interface HeatmapCell {
+  readonly date: string
+  readonly tokens: number
+  readonly messages: number
+  readonly level: 0 | 1 | 2 | 3 | 4
+  /** 今天之后的格子只占位、不承载数据。 */
+  readonly future: boolean
+  readonly title: string
+  readonly ariaLabel: string
+}
+
+/** 热力图的一列即一周，固定周一起始、周日结束。 */
+export interface HeatmapWeek {
+  readonly key: string
+  /** 该列列首所在月份变化时才给标签，避免每周都重复月名。 */
+  readonly monthLabel: string | null
+  readonly cells: readonly HeatmapCell[]
+}
+
+/** 近 53 周（一年）的日度用量热力图。 */
+export interface HeatmapModel {
+  readonly weeks: readonly HeatmapWeek[]
+  /** 范围内有记录日期的 Token 合计，口径与概览一致。 */
+  readonly totalTokens: number
+  readonly activeDays: number
+  readonly peakTokens: number
+  readonly peakDate: string
+  readonly ariaLabel: string
+}
+
+/**
+ * 热力图 0–4 级填充色：0 级是无记录时的底槽色，1–4 级由用量基色按比例混入底槽色，
+ * 不新增主题令牌，浅色与暗色主题各自跟着基色走。
+ */
+export const HEATMAP_LEVEL_COLORS = [
+  'var(--color-desk-canvas-sunken)',
+  'color-mix(in oklab, var(--color-desk-usage-1) 18%, var(--color-desk-canvas-sunken))',
+  'color-mix(in oklab, var(--color-desk-usage-1) 40%, var(--color-desk-canvas-sunken))',
+  'color-mix(in oklab, var(--color-desk-usage-1) 68%, var(--color-desk-canvas-sunken))',
+  'color-mix(in oklab, var(--color-desk-usage-1) 95%, var(--color-desk-canvas-sunken))'
+] as const
+
+/** 默认回溯的周数：53 列覆盖一年并容纳跨年月份。 */
+export const HEATMAP_WEEKS = 53
+
+function formatDateKeyOf(date: Date): string {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+/** 非零用量的分位阈值，用来把颜色切成四级；样本为空时全部退化为 0。 */
+function heatmapThresholds(values: readonly number[]): readonly [number, number, number] {
+  if (values.length === 0) return [0, 0, 0]
+  const sorted = [...values].sort((a, b) => a - b)
+  const at = (ratio: number): number => sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * ratio))]
+  return [at(0.25), at(0.5), at(0.75)]
+}
+
+/**
+ * 把日度统计排成近 N 周的日历热力图。
+ * 与趋势图不同，这里必须按自然日补齐空白格（否则列会错位），所以缺失日期填 0、未来日期只占位。
+ */
+export function buildHeatmap(
+  daily: readonly UsageDailyStat[],
+  today: Date = new Date(),
+  weeks: number = HEATMAP_WEEKS
+): HeatmapModel {
+  const byDate = new Map<string, UsageDailyStat>()
+  for (const item of daily) {
+    if (item.date !== 'unknown') byDate.set(item.date, item)
+  }
+
+  const end = new Date(today.getFullYear(), today.getMonth(), today.getDate())
+  const endKey = formatDateKeyOf(end)
+  // 以周一为一周起点：先回到本周周一，再往前推满整周。
+  const offsetToMonday = (end.getDay() + 6) % 7
+  const start = new Date(
+    end.getFullYear(),
+    end.getMonth(),
+    end.getDate() - offsetToMonday - (weeks - 1) * 7
+  )
+
+  const nonzero = Array.from(byDate.values())
+    .map(item => item.totalTokens)
+    .filter(value => value > 0)
+  const [p25, p50, p75] = heatmapThresholds(nonzero)
+
+  let totalTokens = 0
+  let activeDays = 0
+  let peakTokens = 0
+  let peakDate = ''
+  let previousMonth = -1
+  const weekList: HeatmapWeek[] = []
+
+  for (let index = 0; index < weeks; index += 1) {
+    const cells: HeatmapCell[] = []
+    let monthLabel: string | null = null
+
+    for (let dayIndex = 0; dayIndex < 7; dayIndex += 1) {
+      const date = new Date(
+        start.getFullYear(),
+        start.getMonth(),
+        start.getDate() + index * 7 + dayIndex
+      )
+      const key = formatDateKeyOf(date)
+      const future = key > endKey
+      const item = byDate.get(key)
+      const tokens = future ? 0 : item?.totalTokens ?? 0
+      const messages = future ? 0 : item?.messageCount ?? 0
+
+      if (dayIndex === 0 && date.getMonth() !== previousMonth) {
+        previousMonth = date.getMonth()
+        monthLabel = `${previousMonth + 1}月`
+      }
+      if (tokens > 0) {
+        totalTokens += tokens
+        activeDays += 1
+        if (tokens > peakTokens) {
+          peakTokens = tokens
+          peakDate = key
+        }
+      }
+
+      const level: HeatmapCell['level'] = tokens <= 0
+        ? 0
+        : tokens >= p75
+          ? 4
+          : tokens >= p50
+            ? 3
+            : tokens >= p25
+              ? 2
+              : 1
+
+      cells.push({
+        date: key,
+        tokens,
+        messages,
+        level,
+        future,
+        title: future
+          ? ''
+          : `${key} · ${formatTokens(tokens)} tokens · ${messages} 条回复`,
+        ariaLabel: future
+          ? ''
+          : `${formatDateLabel(key)}：${formatTokens(tokens)} tokens，${messages} 条回复`
+      })
+    }
+
+    weekList.push({ key: keyOfWeekStart(start, index), monthLabel, cells })
+  }
+
+  const ariaLabel = peakDate === ''
+    ? `近 ${weeks} 周每日用量热力图：还没有记录`
+    : `近 ${weeks} 周每日用量热力图：${activeDays} 天有记录，最高 ${formatTokens(peakTokens)} tokens（${peakDate}）`
+
+  return { weeks: weekList, totalTokens, activeDays, peakTokens, peakDate, ariaLabel }
+}
+
+/** 列 key 用列首日期，避免用下标而让 v-for 在范围变化时错误复用。 */
+function keyOfWeekStart(start: Date, index: number): string {
+  return formatDateKeyOf(
+    new Date(start.getFullYear(), start.getMonth(), start.getDate() + index * 7)
+  )
 }

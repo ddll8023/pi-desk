@@ -78,7 +78,7 @@
 | `src/renderer/src/sessions/chat-view.ts` | 将消息与工具投影组织为聊天展示模型，保留图片与标注关系并还原可重发输入 |
 | `src/renderer/src/sessions/clock.ts` | 聊天生成／工具计时与显示时钟 |
 | `src/renderer/src/sessions/usage-format.ts` | token、费用及用量展示格式 |
-| `src/renderer/src/sessions/usage-stats-view.ts` | 用量统计的日期范围切片、堆叠柱与轴线刻度、构成段与按日明细行归一化、缓存命中率与占比计算 |
+| `src/renderer/src/sessions/usage-stats-view.ts` | 用量统计的日期范围切片、堆叠柱与轴线刻度、日度热力图格子与分位分级、构成段与按日明细行归一化、缓存命中率与占比计算 |
 | `src/renderer/src/sessions/services/usage-stats.ts` | 用量统计桌面桥接服务 |
 | `src/renderer/src/sessions/tool-summary.ts` | 参数降级、宿主语义摘要文案、操作与状态汇总、路径相对化、Diff 片段计数及原文预览 |
 | `src/renderer/src/sessions/extension-dialog-presentation.ts` | 扩展提示、选择及对话展示转换 |
@@ -87,7 +87,8 @@
 
 | 文件 | 用途 |
 | --- | --- |
-| `src/renderer/src/sessions/components/UsageStatsSection.vue` | 设置页「用量」分节：总量与分项构成、可切范围与指标的堆叠趋势、按日明细表、模型/项目分布与 Top 会话跳转 |
+| `src/renderer/src/sessions/components/UsageStatsSection.vue` | 设置页「用量」分节：四个并列读数、总量与分项构成、可切范围与指标的堆叠趋势、全年活跃度热力图、按日明细表、模型/项目分布与 Top 会话跳转；分节可见时静默轮询刷新 |
+| `src/renderer/src/sessions/components/UsageHeatmap.vue` | 近 53 周按日 Token 热力图：7 行日历格、月份与星期标签、四级强度配色、悬停读数与整图无障碍描述 |
 | `src/renderer/src/sessions/components/UsageCompositionBar.vue` | 用量构成条：四段堆叠、段间 1px 分隔与非零段 2px 保底，供概览与模型／项目分布行复用 |
 | `src/renderer/src/sessions/components/PromptComposer.vue` | 提示词与独立图片资料编排、视窗全局粘贴与剪贴板截图提取、对话期间草稿与标注编辑、文件树拖入引用、命令与补全；浏览器批注草稿合并；固定提示词、图片及标注快照、后台提交与失败恢复；显式同步及确认结束原运行后的输入恢复 |
 | `src/renderer/src/sessions/components/PromptImageMaterials.vue` | 输入坞内图片附件行：导入、移除、缩略图与独立标注按钮双入口、标注数量展示 |

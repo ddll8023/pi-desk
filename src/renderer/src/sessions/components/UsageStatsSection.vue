@@ -1,12 +1,13 @@
 <!-- 设置页的用量统计分节：
-     统计已登记项目的所有本地会话 Token 消耗，展示总量与分项构成、可切换范围与指标的堆叠趋势、按日明细表、
-     模型分布、项目分布及高消耗会话 Top 明细。
+     统计已登记项目的所有本地会话 Token 消耗，展示关键读数、总量与分项构成、可切换范围与指标的堆叠趋势、
+     近一年日度热力图、按日明细表、模型分布、项目分布及高消耗会话 Top 明细。
      费用只在供应商上报价格时计入，缺失时按「未提供」占位，不推算金额。
-     支持手动重新扫描；点击 Top 会话可直接跳转至对应项目的该会话并关闭设置页。
-     展示口径：量级用两个主读数承载，构成关系交给构成条与图例；趋势图带三档刻度与网格线，
+     支持手动重新扫描；分节可见时每 60 秒静默刷新一次（走文件戳缓存，不切断当前视图），页面隐藏后停止。
+     点击 Top 会话可直接跳转至对应项目的该会话并关闭设置页。
+     展示口径：量级用四个并列读数承载，构成关系交给构成条与图例；趋势图带三档刻度与网格线，
      柱宽与间距按天数分档；分布行内的条与趋势图同序同色，只表达构成、不重复绝对值。 -->
 <script setup lang="ts">
-import { computed, onMounted, ref, shallowRef, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
 import type {
   UsageStatsSummary,
   UsageTopSession
@@ -19,6 +20,7 @@ import {
   buildCompositionSegments,
   buildDailyBars,
   buildDailyDetailRows,
+  buildHeatmap,
   calculateSharePercent,
   cacheHitRate,
   formatDateTime,
@@ -35,6 +37,7 @@ import { useSessionStore } from '../stores/session'
 import { useSettingsStore } from '../../shell/stores/settings'
 import AppButton from '../../ui/AppButton.vue'
 import UsageCompositionBar from './UsageCompositionBar.vue'
+import UsageHeatmap from './UsageHeatmap.vue'
 
 const sessionStore = useSessionStore()
 const settingsStore = useSettingsStore()
@@ -56,7 +59,21 @@ const metric = ref<UsageMetric>('tokens')
 const costAvailable = computed(() => (summary.value?.costMessages ?? 0) > 0)
 
 watch(costAvailable, (available) => {
-  if (!available) metric.value = 'tokens'
+  if (!available && metric.value === 'cost') metric.value = 'tokens'
+})
+
+/** 趋势指标的展示名，副标题、读数行与单位标签共用同一处说法。 */
+const metricLabel = computed(() => {
+  if (metric.value === 'cost') return '费用'
+  if (metric.value === 'messages') return '回复条数'
+  return 'Token 量'
+})
+
+/** 读数行右侧的单位，与指标一一对应；回复数不带短格式，直接给条数。 */
+const metricUnit = computed(() => {
+  if (metric.value === 'cost') return '美元'
+  if (metric.value === 'messages') return '条'
+  return 'Token'
 })
 
 const rangeLabel = computed(
@@ -85,6 +102,19 @@ const overviewAriaLabel = computed(() => {
   return `Token 构成：${parts.join('，')}`
 })
 
+/** 会话规模与费用覆盖情况合成一行说明，费用不再占用主读数。 */
+const summaryNote = computed(() => {
+  const current = summary.value
+  if (!current) return ''
+  const cost = current.totalCost === null
+    ? '累计费用未提供价格'
+    : `累计费用 $${formatCost(current.totalCost)}`
+  return `共扫描 ${current.totalSessions} 个会话 · ${current.totalMessages} 条回复 · 已计价 ${current.costMessages} 条 · ${cost}`
+})
+
+/** 近 53 周热力图；日期列按自然日补齐，与趋势图的「只取有记录日期」口径不同。 */
+const heatmap = computed(() => buildHeatmap(summary.value?.daily ?? []))
+
 /** 趋势图三档刻度：峰值、半峰值与 0，单位随所选指标。 */
 const trendAxis = computed(() => buildAxisTicks(dailyBars.value, metric.value))
 
@@ -94,6 +124,7 @@ const trendAxis = computed(() => buildAxisTicks(dailyBars.value, metric.value))
  */
 const BAR_SIZING = {
   7: { gap: 'gap-2.5', width: 'min-w-[32px] max-w-[56px]' },
+  14: { gap: 'gap-1.5', width: 'min-w-[14px] max-w-[28px]' },
   30: { gap: 'gap-1.5', width: 'min-w-[10px] max-w-[24px]' },
   90: { gap: 'gap-1', width: 'min-w-[6px] max-w-[14px]' },
   all: { gap: 'gap-1', width: 'min-w-[6px] max-w-[14px]' }
@@ -179,6 +210,7 @@ const readoutValue = computed(() => {
   const bar = readoutBar.value
   if (bar === null) return ''
   if (metric.value === 'cost') return bar.cost === null ? '无价格' : `$${formatCost(bar.cost)}`
+  if (metric.value === 'messages') return String(bar.metricValue)
   return formatTokens(bar.totalTokens)
 })
 
@@ -198,6 +230,49 @@ const overallCacheHitText = computed(() => {
   return `${(rate * 100).toFixed(1)}%`
 })
 
+/** 概览的四个并列读数：量级、缓存效率与会话规模各自一格，不与构成条重复。 */
+interface OverviewMetric {
+  readonly key: string
+  readonly label: string
+  readonly value: string
+  /** 原始值的悬停提示；缓存命中率没有可展开的原始值。 */
+  readonly title: string | null
+}
+
+const overviewMetrics = computed<readonly OverviewMetric[]>(() => {
+  const current = summary.value
+  if (!current) return []
+  return [
+    {
+      key: 'tokens',
+      label: '总 Token',
+      value: formatTokens(current.totals.totalTokens),
+      title: `${current.totals.totalTokens} tokens`
+    },
+    {
+      key: 'cache-hit',
+      label: '缓存命中率',
+      value: overallCacheHitText.value,
+      title: null
+    },
+    {
+      key: 'sessions',
+      label: '会话数',
+      value: String(current.totalSessions),
+      title: `${current.totalSessions} 个会话`
+    },
+    {
+      key: 'messages',
+      label: '回复数',
+      value: String(current.totalMessages),
+      title: `${current.totalMessages} 条回复`
+    }
+  ]
+})
+
+/** 自动刷新失败不把整页切成错误态，只记一行提示并保留上一次的成功数据。 */
+const autoRefreshError = ref<string | null>(null)
+
 async function loadData(forceRefresh = false): Promise<void> {
   if (forceRefresh) {
     refreshing.value = true
@@ -212,6 +287,7 @@ async function loadData(forceRefresh = false): Promise<void> {
       return
     }
     summary.value = result.summary
+    autoRefreshError.value = null
     viewState.value = { phase: 'ready' }
   } catch (error) {
     viewState.value = {
@@ -223,6 +299,54 @@ async function loadData(forceRefresh = false): Promise<void> {
   }
 }
 
+/** 自动刷新的节拍；走文件戳缓存，未变的会话不会被重扫。 */
+const AUTO_REFRESH_MS = 60_000
+let autoRefreshTimer: ReturnType<typeof setInterval> | null = null
+let silentRefreshing = false
+
+async function refreshSilently(): Promise<void> {
+  if (silentRefreshing || refreshing.value) return
+  silentRefreshing = true
+  try {
+    const result = await getUsageStats({ refresh: false })
+    if (result.ok) {
+      summary.value = result.summary
+      autoRefreshError.value = null
+    } else {
+      autoRefreshError.value = result.error.message
+    }
+  } catch (error) {
+    autoRefreshError.value = error instanceof Error ? error.message : '自动刷新失败。'
+  } finally {
+    silentRefreshing = false
+  }
+}
+
+function stopAutoRefresh(): void {
+  if (autoRefreshTimer !== null) {
+    clearInterval(autoRefreshTimer)
+    autoRefreshTimer = null
+  }
+}
+
+function startAutoRefresh(): void {
+  stopAutoRefresh()
+  if (document.visibilityState === 'hidden') return
+  autoRefreshTimer = setInterval(() => {
+    void refreshSilently()
+  }, AUTO_REFRESH_MS)
+}
+
+/** 页面隐藏时停定时器，回到可见时立即补一次再重新计时，避免后台空跑。 */
+function handleVisibilityChange(): void {
+  if (document.visibilityState === 'hidden') {
+    stopAutoRefresh()
+    return
+  }
+  void refreshSilently()
+  startAutoRefresh()
+}
+
 async function handleOpenSession(item: UsageTopSession): Promise<void> {
   settingsStore.closeSettings()
   await sessionStore.open(item.sessionId, false, item.projectPath)
@@ -230,6 +354,13 @@ async function handleOpenSession(item: UsageTopSession): Promise<void> {
 
 onMounted(() => {
   void loadData(false)
+  document.addEventListener('visibilitychange', handleVisibilityChange)
+  startAutoRefresh()
+})
+
+onUnmounted(() => {
+  stopAutoRefresh()
+  document.removeEventListener('visibilitychange', handleVisibilityChange)
 })
 </script>
 
@@ -274,29 +405,23 @@ onMounted(() => {
           <div>
             <h2 id="usage-overview-title" class="settings-section-title">总量概览</h2>
             <p class="mt-1 text-2xs tabular-nums text-desk-muted">
-              共扫描 {{ summary.totalSessions }} 个会话 · {{ summary.totalMessages }} 条回复 · 已计价 {{ summary.costMessages }} 条
+              {{ summaryNote }}
+            </p>
+            <p v-if="autoRefreshError !== null" class="mt-1 text-2xs text-desk-warning" role="status">
+              自动刷新失败：{{ autoRefreshError }}
             </p>
           </div>
         </div>
 
-        <!-- 两个主读数承载量级：总 Token 与累计费用同级放大，四个分项交给下方的构成条与图例。 -->
-        <dl class="mt-4 flex flex-wrap items-end gap-x-10 gap-y-4">
-          <div>
-            <dt class="text-2xs text-desk-muted">总 Token</dt>
+        <!-- 四个并列读数承载量级与规模，费用不再占用主读数；四个分项交给下方的构成条与图例。 -->
+        <dl class="mt-4 grid grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-4">
+          <div v-for="item in overviewMetrics" :key="item.key">
+            <dt class="text-2xs text-desk-muted">{{ item.label }}</dt>
             <dd
-              class="mt-1 font-semibold text-2xl leading-none tabular-nums"
-              :title="`${summary.totals.totalTokens} tokens`"
+              class="mt-1 font-semibold text-xl leading-none tabular-nums"
+              :title="item.title ?? undefined"
             >
-              {{ formatTokens(summary.totals.totalTokens) }}
-            </dd>
-          </div>
-          <div>
-            <dt class="text-2xs text-desk-muted">累计费用</dt>
-            <dd class="mt-1 leading-none">
-              <span v-if="summary.totalCost !== null" class="font-semibold text-2xl tabular-nums">
-                ${{ formatCost(summary.totalCost) }}
-              </span>
-              <span v-else class="text-sm font-medium text-desk-muted">未提供价格</span>
+              {{ item.value }}
             </dd>
           </div>
         </dl>
@@ -332,7 +457,7 @@ onMounted(() => {
           <div>
             <h2 id="usage-trend-title" class="settings-section-title">用量趋势</h2>
             <p class="mt-1 text-2xs text-desk-muted">
-              按有记录日期取{{ rangeLabel }}；柱高为当日{{ metric === 'cost' ? '费用' : 'Token 量' }}。
+              按有记录日期取{{ rangeLabel }}；柱高为当日{{ metricLabel }}。
             </p>
           </div>
           <div class="flex flex-wrap items-center gap-2">
@@ -362,6 +487,15 @@ onMounted(() => {
               <AppButton
                 variant="unstyled"
                 class="segment-option"
+                :class="metric === 'messages' ? 'is-selected' : ''"
+                :aria-pressed="metric === 'messages'"
+                @click="metric = 'messages'"
+              >
+                回复数
+              </AppButton>
+              <AppButton
+                variant="unstyled"
+                class="segment-option"
                 :class="metric === 'cost' ? 'is-selected' : ''"
                 :aria-pressed="metric === 'cost'"
                 :disabled="!costAvailable"
@@ -374,7 +508,7 @@ onMounted(() => {
           </div>
         </div>
 
-        <!-- 图例：Token 指标下四种分项与柱体段同色；费用指标没有分项，只说明口径。 -->
+        <!-- 图例：Token 指标下四种分项与柱体段同色；其余指标没有分项，只说明口径。 -->
         <div class="mt-3 flex flex-wrap items-center gap-3 text-2xs text-desk-muted">
           <template v-if="metric === 'tokens'">
             <span v-for="segment in USAGE_SEGMENTS" :key="segment.key" class="inline-flex items-center gap-1.5">
@@ -382,6 +516,7 @@ onMounted(() => {
               {{ segment.label }}
             </span>
           </template>
+          <span v-else-if="metric === 'messages'">柱高为当日回复条数</span>
           <span v-else>费用只统计供应商上报价格的调用，未提供价格的日期不画柱</span>
         </div>
 
@@ -393,7 +528,7 @@ onMounted(() => {
               <span class="text-2xs tabular-nums text-desk-muted">{{ readoutDate }}</span>
               <span class="text-xs font-semibold tabular-nums">{{ readoutValue }}</span>
             </div>
-            <span class="text-2xs text-desk-muted">单位 {{ metric === 'cost' ? '美元' : 'Token' }}</span>
+            <span class="text-2xs text-desk-muted">单位 {{ metricUnit }}</span>
           </div>
 
           <div class="relative h-44">
@@ -443,7 +578,7 @@ onMounted(() => {
                        段间 1px 卡片底色隔开，非零段保底 1px 高度，避免小分项在柱上消失。 -->
                   <div class="relative w-full" :style="{ height: `${bar.heightPercent}%` }">
                     <div
-                      v-if="metric === 'cost'"
+                      v-if="!bar.stacked"
                       class="h-full w-full rounded-t-sm"
                       :style="{ backgroundColor: 'var(--color-desk-usage-1)' }"
                     ></div>
@@ -516,7 +651,20 @@ onMounted(() => {
         </details>
       </section>
 
-      <!-- 3. 模型与项目分布 (双列并排) -->
+      <!-- 3. 近一年日度活跃度 -->
+      <section class="settings-section" aria-labelledby="usage-heatmap-title">
+        <div class="settings-section-heading">
+          <div>
+            <h2 id="usage-heatmap-title" class="settings-section-title">全年活跃度</h2>
+            <p class="mt-1 text-2xs tabular-nums text-desk-muted">
+              {{ heatmap.activeDays }} 天有记录 · 合计 {{ formatTokens(heatmap.totalTokens) }} tokens
+            </p>
+          </div>
+        </div>
+        <UsageHeatmap :model="heatmap" />
+      </section>
+
+      <!-- 4. 模型与项目分布 (双列并排) -->
       <div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <!-- 模型分布 -->
         <section class="settings-section" aria-labelledby="usage-models-title">
@@ -609,7 +757,7 @@ onMounted(() => {
         </section>
       </div>
 
-      <!-- 4. 高消耗会话 Top 明细 -->
+      <!-- 5. 高消耗会话 Top 明细 -->
       <section class="settings-section" aria-labelledby="usage-top-sessions-title">
         <div class="settings-section-heading">
           <h2 id="usage-top-sessions-title" class="settings-section-title">高消耗会话 Top 排行</h2>
