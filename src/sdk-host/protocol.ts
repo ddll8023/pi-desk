@@ -166,7 +166,7 @@ export type SdkSessionRequest = RequestEnvelope & {
 }
 
 export type SdkHostRequest =
-  | (RequestEnvelope & { readonly type: 'initialize'; readonly agentDir: string;
+  | (RequestEnvelope & { readonly type: 'initialize'; readonly agentDir: string; readonly sharedAgentDir: string;
       readonly productResourcesDir: string; readonly memoryConfiguration: MemoryHostConfiguration })
   | (RequestEnvelope & { readonly type: 'memory-configuration'; readonly memoryConfiguration: MemoryHostConfiguration })
   | (RequestEnvelope & { readonly type: 'shutdown' })
@@ -363,9 +363,10 @@ function isConfirmation(value: unknown): value is SdkInterruptConfirmation | nul
 export function isSdkHostRequest(value: unknown): value is SdkHostRequest {
   if (!isRecord(value) || !isRequest(value)) return false
   switch (value.type) {
-    case 'initialize': return isPath(value.agentDir) && isPath(value.productResourcesDir)
+    case 'initialize': return isPath(value.agentDir) && isPath(value.sharedAgentDir)
+      && isPath(value.productResourcesDir)
       && isMemoryHostConfiguration(value.memoryConfiguration)
-      && requestKeys(value, ['agentDir', 'productResourcesDir', 'memoryConfiguration'])
+      && requestKeys(value, ['agentDir', 'sharedAgentDir', 'productResourcesDir', 'memoryConfiguration'])
     case 'memory-configuration': return isMemoryHostConfiguration(value.memoryConfiguration)
       && requestKeys(value, ['memoryConfiguration'])
     case 'shutdown': return requestKeys(value, [])

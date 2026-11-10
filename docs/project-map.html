@@ -651,12 +651,13 @@
         "id": "resources-mcp",
         "name": "资源与 MCP",
         "groupId": "model",
-        "summary": "技能、模板与扩展命令的展示与补全，启动前资源／模型预读、会话诊断，MCP 配置列举与一次性探测，以及运行中会话的 MCP 动作。",
+        "summary": "技能、模板与扩展命令的展示与补全，启动前资源／模型预读、会话诊断，MCP 配置列举与一次性探测，运行中会话的 MCP 动作，以及 Pi 运行目录与首启导入。",
         "features": [
           "一次性 CLI RPC 资源与模型预读、分项错误",
           "全局／项目 MCP 配置的受限读取与覆盖说明",
           "一次性 MCP 探测、超时与取消",
-          "运行中会话的资源、诊断与 MCP 命令结果"
+          "运行中会话的资源、诊断与 MCP 命令结果",
+          "Pi 运行目录展示与首启导入状态"
         ],
         "tags": ["Electron 主进程", "一次性入口", "Vue 页面"],
         "entries": [
@@ -664,10 +665,13 @@
           {"kind": "关键实现", "label": "MCP 配置读取", "path": "src/main/resources/mcp-config-reader.ts"},
           {"kind": "关键实现", "label": "MCP 一次性探测", "path": "src/main/resources/mcp-inspection.ts"},
           {"kind": "命令入口", "label": "固定参数 CLI 入口", "path": "src/entries/pi-cli/index.ts"},
-          {"kind": "界面入口", "label": "资源视图", "path": "src/renderer/src/resources/components/ResourceView.vue"}
+          {"kind": "界面入口", "label": "资源视图", "path": "src/renderer/src/resources/components/ResourceView.vue"},
+          {"kind": "关键实现", "label": "首启导入", "path": "src/main/agent-home/shared-import.ts"},
+          {"kind": "界面入口", "label": "运行目录分节", "path": "src/renderer/src/resources/components/AgentHomeSection.vue"}
         ],
         "resources": [
           {"name": "MCP 配置文件", "owner": "Pi agent 目录与项目目录", "lifecycle": "只读列举，不连接服务器"},
+          {"name": "产品 agent 目录与导入标记", "owner": "pi-paths 与 shared-import", "lifecycle": "首次启动复制可复用项，之后只补缺失项，不覆盖已有内容"},
           {"name": "资源预读结果", "owner": "resource Store", "lifecycle": "跟随项目与启动阶段，各来源分别报告错误"}
         ],
         "constraints": [

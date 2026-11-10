@@ -17,7 +17,6 @@
     "sdk-host:build": "vite build --config vite.sdk-host.config.ts && node scripts/stage-agent-resources.mjs && node scripts/stage-memory-runtime.mjs",
     "memory-runtime:prepare": "node scripts/prepare-memory-runtime.mjs",
     "memory-runtime:stage": "node scripts/stage-memory-runtime.mjs",
-    "skill-assets:sync": "node scripts/sync-skill-assets.mjs",
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json",
     "typecheck:web": "vue-tsc --noEmit -p tsconfig.web.json",
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
@@ -26,7 +25,8 @@
     "package:win": "npm run build && node scripts/package-portable.mjs --win",
     "package:mac": "npm run build && node scripts/package-portable.mjs --mac",
     "terminal-daemon:build": "vite build --config vite.terminal-daemon.config.ts",
-    "lan-mobile:build": "vite build --config vite.lan-mobile.config.ts"
+    "lan-mobile:build": "vite build --config vite.lan-mobile.config.ts",
+  "skill-setup:sync": "node scripts/sync-skill-setup.mjs"
   },
   "dependencies": {
     "@codemirror/commands": "6.11.1",

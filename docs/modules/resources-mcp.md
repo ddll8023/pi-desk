@@ -4,7 +4,7 @@
 
 ## 职责与入口
 
-负责技能、提示词模板和扩展命令的展示与补全，启动前资源／模型预读、会话启动诊断，MCP 配置文件列举、一次性连接探测及运行中会话的 MCP 登录／退出／重连。
+负责技能、提示词模板和扩展命令的展示与补全，启动前资源／模型预读、会话启动诊断，MCP 配置文件列举、一次性连接探测及运行中会话的 MCP 登录／退出／重连，以及 Pi 运行目录与首启导入的展示。
 
 入口为设置页“资源”和输入坞补全；MCP 服务器不是本应用的后端模块。资源预读、文件配置、独立探测与运行中会话状态是不同来源，不能合并成一份无来源的“连接状态”。
 
@@ -20,12 +20,17 @@
 | `src/renderer/src/resources/stores/resource.ts` | 运行资源、预读技能、诊断、MCP 配置／探测／动作展示状态 |
 | `src/renderer/src/resources/services/resource.ts` | 资源、预读、诊断和 MCP 的受限桥接 |
 | `src/renderer/src/resources/components/ResourceView.vue` | 资源分组、详情、配置和 MCP 状态／动作入口 |
+| `src/main/agent-home/shared-import.ts` | 首启从共享目录复制设置、供应商定义、MCP 配置、扩展包与会话；逐项幂等，不覆盖已有项 |
+| `src/main/agent-home/ipc.ts` | 运行目录状态与手动导入的固定通道注册 |
+| `src/shared/agent-home-api.ts` | 运行目录状态、导入结果与通道契约 |
+| `src/renderer/src/resources/services/agent-home.ts` | 运行目录与导入状态的受限桥接 |
+| `src/renderer/src/resources/components/AgentHomeSection.vue` | 产品目录、只读共享来源与导入状态展示 |
 
 资源 Store、服务、CLI 入口及预读关联已读；配置解析和页面辅助片段结合静态调用映射。外部 MCP 配置内容与服务器实现不属于本仓库源码地图。
 
 ## 公共与跨模块引用
 
-- [F-assembly](shared.md#f-assembly进程与页面组装混合)：`src/main/resources/ipc.ts` 的 `registerResourceHandlers` 注册资源、预读、诊断和 MCP 固定通道及对应 preload 方法。
+- [F-assembly](shared.md#f-assembly进程与页面组装混合)：`src/main/resources/ipc.ts` 的 `registerResourceHandlers` 注册资源、预读、诊断和 MCP 固定通道及对应 preload 方法；`registerAgentHomeHandlers` 注册运行目录与导入通道，对应 `preload/agent-home.ts`。
 - [F-runtime-state](shared.md#f-runtime-state综合-runtime-状态混合)：`src/shared/runtime-api.ts` 中 `PiResourcePreview`、资源、MCP 与诊断类型；Runtime Store 提供当前运行目标及模型预读消费者。
 - [F-process](shared.md#f-process受管进程与-sdk-公共设施共享)：`pi-cli-process.ts` 启动固定 CLI 入口；`pi-paths.ts` 与运行时加载固定 SDK 来源；进程树终止用于探测取消。
 - [项目与信任](projects-trust.md)：项目级配置是否生效取决于真实信任决定；当前项目与运行目标的所属项目要分别理解。

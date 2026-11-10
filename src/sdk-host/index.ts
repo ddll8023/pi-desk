@@ -131,7 +131,8 @@ async function initialize(request: Extract<SdkHostRequest, { type: 'initialize' 
   initializing = true
   clearTimeout(initializeTimer)
   try {
-    if (!isAbsolute(request.agentDir) || !isAbsolute(request.productResourcesDir)
+    if (!isAbsolute(request.agentDir) || !isAbsolute(request.sharedAgentDir)
+      || !isAbsolute(request.productResourcesDir)
       || process.env.PI_CODING_AGENT_DIR !== request.agentDir) {
       fail(request, 'AGENT_DIR_MISMATCH'); return
     }
@@ -147,6 +148,7 @@ async function initialize(request: Extract<SdkHostRequest, { type: 'initialize' 
     memoryConfiguration.apply(request.memoryConfiguration)
     sessions = new SdkSessionRuntime(sdk, {
       hostId: request.hostId, agentDir: actualAgentDir, productResourcesDir: request.productResourcesDir,
+      sharedAgentDir: request.sharedAgentDir,
       memory: memoryConfiguration,
       authorize, checkpoints, browserOperator: dispatchBrowserOperation,
       onState: status => {

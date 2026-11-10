@@ -93,12 +93,6 @@ export interface RuntimeInfo {
  * 不携带第三方扩展的错误正文与配置内容，避免把不可信文本投影到页面。
  */
 export type ResourceIssueKind =
-  /** 部署副本与本机产品版本内容不同（落后、超前或来源不同）。 */
-  | 'copy-outdated'
-  /** 副本在部署后被动过，或上次同步未完成。 */
-  | 'copy-modified'
-  /** 部署登记与磁盘内容矛盾（标记过期）。 */
-  | 'copy-marker-stale'
   /** 非产品扩展注册了产品的必需工具名；这一项会阻止建立会话。 */
   | 'tool-conflict'
   /** 两个外来扩展争用同一工具名；首个注册者生效，只作提示。 */

@@ -23,12 +23,13 @@ import type { UpdatesApi } from '../../shared/updates-api'
 import type { LanRemoteApi } from '../../shared/lan-remote-api'
 import type { MemoryApi } from '../../shared/memory-api'
 import type { UsageStatsApi } from '../../shared/usage-stats-api'
+import type { AgentHomeApi } from '../../shared/agent-home-api'
 import type { BrowserCaptureApi } from '../../shared/browser-api'
 import type { BrowserSessionApi } from '../../shared/browser-session-api'
 
 declare global {
   interface Window {
-    readonly desktop?: BrowserCaptureApi & BrowserSessionApi & DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionApi & SessionRunApi & TerminalApi & PreferencesApi & QuickCommandsApi & GenuiParamsApi & PiSettingsApi & TrustApi & ExtensionUiApi & AuthApi & ModelsConfigApi & UpdatesApi & GitApi & WorktreeApi & GitCleanupApi & LanRemoteApi & MemoryApi & UsageStatsApi
+    readonly desktop?: BrowserCaptureApi & BrowserSessionApi & DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionApi & SessionRunApi & TerminalApi & PreferencesApi & QuickCommandsApi & GenuiParamsApi & PiSettingsApi & TrustApi & ExtensionUiApi & AuthApi & ModelsConfigApi & UpdatesApi & GitApi & WorktreeApi & GitCleanupApi & LanRemoteApi & MemoryApi & UsageStatsApi & AgentHomeApi
   }
 }
 

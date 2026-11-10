@@ -151,7 +151,7 @@ function resultFacts(toolName: string, data: Record<string, unknown>): ToolPrese
     all_daily: '全部日记', recent_daily: '近期日记', historical_month_summaries: '历史月摘要', monthly_summary: '指定月摘要'
   }
   if (typeof data.scope === 'string') facts.push(fact('检索对象', (Object.hasOwn(scopeNames, data.scope) ? scopeNames[data.scope] : undefined) ?? data.scope))
-  for (const [key, label] of [['month', '月份'], ['offset', '返回偏移'], ['coverage', '覆盖口径'], ['index_version', '索引版本']] as const) {
+  for (const [key, label] of [['month', '月份'], ['offset', '返回偏移'], ['coverage', '覆盖口径'], ['store_version', '库版本']] as const) {
     const value = scalar(data[key])
     if (value !== null) facts.push(fact(label, value))
   }
@@ -169,19 +169,21 @@ function toItem(value: unknown, scoreLabel: string, memoryItem: boolean): { read
   const text = firstString(value, ['snippet', 'summary', 'content', 'description', 'text', 'line_text'])
     ?? strings(value.highlights, 2).join('\n')
   if (title === null && text === '') return null
+  const date = firstString(value, ['date', 'month'])
   let location = firstString(value, ['file_path', 'path', 'url'])
     ?? (source === null ? null : firstString(source, ['file', 'path', 'url']))
   const line = countAt(value, ['line_number', 'lineNumber', 'line'])
   if (location !== null && line !== null) location += `:${line}`
+  // 记忆记录没有文件路径，位置回退为记录日期，并避免与下方 meta 重复。
+  if (location === null) location = date
   const evidenceParts: string[] = []
   const terms = strings(value.matched_terms, 8)
   if (terms.length > 0) evidenceParts.push(`命中：${terms.join('、')}`)
   evidenceParts.push(...strings(value.reasons, 2))
   const metaParts: string[] = []
-  const date = firstString(value, ['date', 'month'])
   const project = firstString(value, ['source_project', 'project_id', 'project'])
     ?? (source === null ? null : firstString(source, ['source_project']))
-  if (date !== null) metaParts.push(date)
+  if (date !== null && location !== date) metaParts.push(date)
   if (project !== null) metaParts.push(`${memoryItem ? '历史来源项目' : '项目'} ${project}`)
   if (memoryItem && value.status === 'superseded') metaParts.push('历史版本 · 已被替代')
   else if (memoryItem && value.status === 'active') metaParts.push(value.type === 'decision' || value.type === 'constraint' ? '当前有效版本' : '已保存记录')

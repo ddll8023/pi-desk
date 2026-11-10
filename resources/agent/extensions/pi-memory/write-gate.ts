@@ -4,7 +4,10 @@ import type { ExtensionContext } from '@earendil-works/pi-coding-agent'
 interface Capabilities { version: 1; fullText: true; maxMessageChars: number }
 type DesktopUI = ExtensionContext['ui'] & { piDeskConfirmCapabilities?: () => Capabilities | null }
 
-/** 闸门只判断宿主能不能写，不展示正文，也不代表用户已要求保存；能力声明不是保存授权。 */
+/**
+ * 闸门只判断宿主能不能写，不展示正文，也不代表用户已要求保存；能力声明不是保存授权。
+ * 保存计划由扩展生成后直接提交，取消、会话换代与无写入能力的宿主都不会提交。
+ */
 export function assertWritableHost(ctx: ExtensionContext): void {
   if (!ctx.hasUI) throw new Error('没有真实交互能力，未生成计划或提交')
   if (ctx.mode === 'tui') return

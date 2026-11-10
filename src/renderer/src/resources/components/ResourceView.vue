@@ -1,4 +1,4 @@
-<!-- Pi 资源视图：一页三区——资源清单、MCP 服务器、默认折叠的排障区。
+<!-- Pi 资源视图：一页四区——资源清单、MCP 服务器、Pi 运行目录、默认折叠的排障区。
      资源清单在 Runtime 就绪时来自当前会话已加载的扩展、提示词与技能；未就绪时用一次性 Pi 进程的磁盘预读（只含 Skill），
      并如实标注来源。MCP 列表的骨架来自 Pi 的 mcp.json（只读浅层读取，不连接服务器、未启动也可读），
      连接状态与工具由官方 CLI 的 `pi mcp list --json` 探测按名叠加；探测会另起一个 Pi 进程重连服务器，
@@ -15,6 +15,7 @@ import { useSessionStore } from '../../sessions/stores/session'
 import { copyText } from '../../ui/clipboard'
 import AppButton from '../../ui/AppButton.vue'
 import ConfirmDialog from '../../ui/ConfirmDialog.vue'
+import AgentHomeSection from './AgentHomeSection.vue'
 
 const resourceStore = useResourceStore()
 const sessionStore = useSessionStore()
@@ -813,6 +814,9 @@ const resourceActionsDisabled = computed(() => currentProject.value === null)
         </p>
       </div>
     </details>
+
+    <!-- 运行目录与首启导入：与资源清单同页，但不参与资源读取，也不改配置文件正文。 -->
+    <AgentHomeSection />
 
     <Teleport to="body">
       <ConfirmDialog

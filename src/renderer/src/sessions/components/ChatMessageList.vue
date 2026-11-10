@@ -343,13 +343,7 @@ function describeIssue(issue: ResourceIssue): string {
   const subject = issue.componentId === null ? '扩展' : `组件 ${diagnosticText(issue.componentId, 64)}`
   const detail = issue.kind === 'tool-conflict' || issue.kind === 'tool-duplicate'
     ? `工具名 ${diagnosticText(issue.tool ?? '-', 64)} 被重复注册`
-    : issue.kind === 'extension-load-failed'
-      ? '加载失败'
-      : issue.kind === 'copy-modified'
-        ? '部署后被本地修改或同步未完成'
-        : issue.kind === 'copy-marker-stale'
-          ? '部署标记过期'
-          : '与本机产品版本不同'
+    : '加载失败'
   const paths = [issue.productPath, issue.otherPath]
     .filter((path): path is string => path !== null)
     .map(path => diagnosticText(path, 200))

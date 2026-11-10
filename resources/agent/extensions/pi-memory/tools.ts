@@ -1,4 +1,4 @@
-/** 按需检索与受控保存工具；Memory Skill 决定何时用记忆，主动定向读取自动记独立统计，权威内容保存受宿主写入闸门约束。 */
+/** 按需检索与受控保存工具；Memory Skill 决定何时用记忆，主动定向读取自动记独立统计，权威内容保存经写入闸门后直接提交。 */
 import { createHash } from 'node:crypto'
 import { Type } from '@earendil-works/pi-ai'
 import type { JsonValue } from '@earendil-works/pi-ai'
@@ -90,6 +90,20 @@ function receipt(operation: 'save' | 'profile', plan: GeneratedPlan): JsonObject
     }) }
 }
 
+/** 回执只列本次提交的内容摘要；记录 ID 以提交返回的 new_record_ids 为准。 */
+function receipt(operation: 'save' | 'profile', plan: GeneratedPlan): JsonObject {
+  const preview = plan.preview
+  if (operation === 'profile') {
+    return { profile: preview.new_profile ?? null, replace_profile_ids: preview.replace_profile_ids ?? null }
+  }
+  const records = Array.isArray(preview.new_records) ? preview.new_records : []
+  return { date: preview.date ?? null,
+    records: records.map(value => {
+      const row = object(value)
+      return { type: row.type ?? null, topic: row.topic ?? null, rule_key: row.rule_key ?? null }
+    }) }
+}
+
 export function registerMemoryTools(pi: ExtensionAPI, runtime: MemoryRuntime): void {
   // 全局检索不探测项目目录；停用、取消和会话换代仍使用同一租约边界。
   const globalRead = async (ctx: ExtensionToolContext, signal: AbortSignal | undefined,
@@ -136,7 +150,7 @@ export function registerMemoryTools(pi: ExtensionAPI, runtime: MemoryRuntime): v
 
   pi.registerTool({
     name: 'memory_status', label: '读取记忆库状态',
-    description: '读取用户级全局记忆库、受管运行时、启停与可用状态；不初始化、修索引或恢复事务。运行环境不可用时也返回真实原因。',
+    description: '读取用户级全局记忆库、受管运行时、启停与可用状态；不初始化、不重建词项或迁移。运行环境不可用时也返回真实原因。',
     parameters: Type.Object({}), outputSchema: Output, annotations: ReadHints,
     async execute(_id, _params, signal, _onUpdate, ctx) {
       return controlRead(ctx, signal, async lease => {
@@ -176,7 +190,7 @@ export function registerMemoryTools(pi: ExtensionAPI, runtime: MemoryRuntime): v
   })
   pi.registerTool({
     name: 'memory_rules', label: '读取当前有效规则',
-    description: '起草或修改文档、清单、索引、规范，或调整既有约定、判断某项要求是否仍然有效时先查询。读取用户级全局库当前有效决定和约束，支持按 rule_key 主题查询与分页。默认检索全库；scope 可收窄到当前项目或指定项目，收窄时仍包含无项目归属的通用约定。历史来源与适用条件不变；摘要需 memory_read 读取全文，不自动修索引。',
+    description: '起草或修改文档、清单、索引、规范，或调整既有约定、判断某项要求是否仍然有效时先查询。读取用户级全局库当前有效决定和约束，支持按 rule_key 主题查询与分页。默认检索全库；scope 可收窄到当前项目或指定项目，收窄时仍包含无项目归属的通用约定。历史来源与适用条件不变；摘要需 memory_read 读取全文，不自动重建词项。',
     parameters: Type.Object({ query: Type.Optional(Type.String()), offset: Offset, limit: Limit,
       scope: Scope, project: ProjectArg }, { additionalProperties: false }),
     outputSchema: Output, annotations: ReadHints,
@@ -194,15 +208,15 @@ export function registerMemoryTools(pi: ExtensionAPI, runtime: MemoryRuntime): v
             throw new Error('规则生命周期无效，未展示')
           }
           return { ...row, status_basis: '仅投影当前有效版本；不证明事实已核实或适用于当前任务',
-            source: { store: runtime.engine.store, command: 'rules', file: row.file_path,
-              source_project: row.source_project ?? row.project_id ?? null, id: row.id, date: row.date } }
+            source: { store: runtime.engine.store, command: 'rules', date: row.date,
+              source_project: row.source_project ?? row.project_id ?? null, id: row.id } }
         }) }
       })
     }
   })
   pi.registerTool({
     name: 'memory_search', label: '按任务检索全局记忆',
-    description: '开始新任务、需沿用先前决定或偏好、或同一错误反复出现时先检索。从用户级全局索引按任务关键词查询日记。默认 mode=auto 按时间分层：近窗口内的日记参与检索，更早的月份优先用月摘要代表，缺摘要时回退该月最多两条日记；每条结果带 layer，返回体带 missing_summaries 列出尚未归档的月份。records 才是全历史检索。scope 可收窄到当前项目或指定项目，收窄时仍包含无项目归属的通用约定。recent 限近期日记，historical/month 查询月摘要。支持分页；摘要需 memory_read 读取全文，不自动修复索引或扩大明确时间范围。',
+    description: '开始新任务、需沿用先前决定或偏好、或同一错误反复出现时先检索。从用户级全局库按任务关键词查询日记。默认 mode=auto 按时间分层：近窗口内的日记参与检索，更早的月份优先用月摘要代表，缺摘要时回退该月最多两条日记；每条结果带 layer，返回体带 missing_summaries 列出尚未归档的月份。records 才是全历史检索。scope 可收窄到当前项目或指定项目，收窄时仍包含无项目归属的通用约定。recent 限近期日记，historical/month 查询月摘要。支持分页；摘要需 memory_read 读取全文，不自动重建词项或扩大明确时间范围。',
     parameters: Type.Object({ query: Type.String({ minLength: 1 }),
       mode: Type.Optional(Type.Union([Type.Literal('auto'), Type.Literal('records'), Type.Literal('recent'), Type.Literal('historical'), Type.Literal('month')])),
       month: Type.Optional(Type.String({ pattern: '^\\d{4}-(0[1-9]|1[0-2])$' })), offset: Offset, limit: Limit,
@@ -223,7 +237,7 @@ export function registerMemoryTools(pi: ExtensionAPI, runtime: MemoryRuntime): v
           // auto 模式会同时命中日记与月摘要，其余模式仍要求单一记录类型。
           if (row.kind !== 'record' && row.kind !== 'summary') throw new Error('搜索返回的记录类型不一致，未展示')
           if (summaryOnly !== isSummary && mode !== 'auto') throw new Error('搜索返回的记录类型不一致，未展示')
-          return { ...row, source: { store: runtime.engine.store, command: 'recall', file: row.file_path, source_project: row.project_id ?? null,
+          return { ...row, source: { store: runtime.engine.store, command: 'recall', source_project: row.project_id ?? null,
             ...(isSummary ? { month: row.month, source_record_ids: row.source_record_ids } : { id: row.id, date: row.date }) } }
         })
         return { ...data, matches,
@@ -251,7 +265,7 @@ export function registerMemoryTools(pi: ExtensionAPI, runtime: MemoryRuntime): v
           throw new Error('原文身份不一致，未展示')
         }
         return { ...row, status: row.status ?? 'active',
-          source: { store: runtime.engine.store, file: row.file_path, source_project: row.project_id ?? null, id: row.id, date: row.date } }
+          source: { store: runtime.engine.store, date: row.date, source_project: row.project_id ?? null, id: row.id } }
       })
       const payload = { ...data, records }
       // 先确认完整输出可返回，并预留最坏的统计错误文本；超限或旧租约不产生统计。
@@ -259,8 +273,9 @@ export function registerMemoryTools(pi: ExtensionAPI, runtime: MemoryRuntime): v
         duplicate_records: null, error: '\u0000'.repeat(1024), note: ACCESS_NOTE } })
       let statistics: JsonObject
       try {
-        const version = text(data.index_version, '原文来源版本')
-        const recorded = await runtime.engine.recordAccess(params.ids, lease.state.sessionId, toolCallId, version, lease.assert)
+        const version = data.store_version
+        if (typeof version !== 'number' || !Number.isSafeInteger(version) || version < 0) throw new Error('原文来源版本无效')
+        const recorded = await runtime.engine.recordAccess(params.ids, lease.state.sessionId, toolCallId, String(version), lease.assert)
         const added = recorded.new_records
         const duplicate = recorded.duplicate_records
         if (typeof added !== 'number' || !Number.isInteger(added) || added < 0
@@ -308,7 +323,7 @@ export function registerMemoryTools(pi: ExtensionAPI, runtime: MemoryRuntime): v
   }, { additionalProperties: false })
   pi.registerTool({
     name: 'memory_save', label: '保存工作日记', exposure: 'model-only', executionMode: 'sequential',
-    description: '仅在用户明确要求保存日记时，传入具体完整候选。按 memory Skill 先核实事实与现行规则。工具生成版本 3 计划后直接提交并返回提交结果与回执，不再逐次等待确认；取消、分支变化或无写入能力宿主不提交。会写计划技术缓存，可清理过期计划；不是只读操作。不接受 approved 或外部 plan_id。',
+    description: '仅在用户明确要求保存日记时，传入具体完整候选。按 memory Skill 先核实事实与现行规则。工具生成计划后直接提交并返回提交结果与回执，不再逐次等待确认；取消、分支变化或无写入能力宿主不提交。会写计划技术缓存，可清理过期计划；不是只读操作。不接受 approved 或外部 plan_id。',
     parameters: Type.Object({ records: Type.Array(RecordSchema, { minItems: 1, maxItems: 50 }) }, { additionalProperties: false }),
     outputSchema: Output, annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
     async execute(_id, params, signal, _onUpdate, ctx) {

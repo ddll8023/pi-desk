@@ -299,7 +299,7 @@ function isRuntimeState(value: unknown): value is RuntimeState {
 /** 资源诊断条数与字段上限；页面最多展示三条，其余折叠为计数。 */
 export const RESOURCE_ISSUE_LIMIT = 16
 const RESOURCE_ISSUE_KINDS: readonly string[] = [
-  'copy-outdated', 'copy-modified', 'copy-marker-stale', 'tool-conflict', 'tool-duplicate',
+  'tool-conflict', 'tool-duplicate',
   'extension-load-failed'
 ]
 const RESOURCE_ISSUE_PATH_MAX = 512

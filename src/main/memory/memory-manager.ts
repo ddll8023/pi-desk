@@ -16,6 +16,8 @@ import type { MemoryErrorCode, MemoryInitializeRequest, MemoryPreference, Memory
 
 const ENGINE_TIMEOUT_MS = 30_000
 const ENGINE_MAX_OUTPUT = 4 * 1024 * 1024
+/** 权威数据只有一份库文件；库目录由配置给出，文件名固定。 */
+const STORE_FILE = 'memory.db'
 const SUPPORTED_PLATFORMS = ['win32', 'darwin']
 
 export interface MemoryManagerOptions {
@@ -199,10 +201,16 @@ export class MemoryManager {
     try {
       const parsed: unknown = JSON.parse(result.text)
       if (isRecord(parsed) && parsed.ok === true && isRecord(parsed.data)) {
-        const manifest = parsed.data.manifest
-        if (isRecord(manifest) && typeof manifest.timezone === 'string') {
-          return { state: 'ready', path: configuration.store, timezone: manifest.timezone, message: null }
+        // 就绪以库内版本序号与时区为准；不再依赖已退出的文件清单。
+        const version = parsed.data.store_version
+        const timezone = parsed.data.timezone
+        if (typeof version === 'number' && Number.isInteger(version) && version >= 0 && typeof timezone === 'string') {
+          return { state: 'ready', path: configuration.store, timezone, message: null }
         }
+        const shape = await this.libraryShape(configuration)
+        if (shape !== null) return shape
+        return { state: 'invalid', path: configuration.store, timezone: null,
+          message: '记忆库状态缺少版本或时区；未自动修复。' }
       }
       if (isRecord(parsed) && isRecord(parsed.error) && typeof parsed.error.message === 'string') {
         const message = parsed.error.message
@@ -222,7 +230,7 @@ export class MemoryManager {
   }
 
   /**
-   * 库根的只读形态判定：只有目录存在且带清单才算「已初始化」的候选。
+   * 库根的只读形态判定：只有目录存在且带库文件才算「已初始化」的候选。
    * 缺根或只有空／残留目录都属于「尚未创建」，否则用户会在页面上看不到创建入口；
    * 非空目录的覆盖保护由引擎 init 自己拒绝，这里不预判也不会写入任何内容。
    */
@@ -239,11 +247,11 @@ export class MemoryManager {
         message: '记忆库保存位置不是目录，未创建也无法读取。' }
     }
     try {
-      if ((await stat(join(configuration.store, 'manifest.json'))).isFile()) return null
+      if ((await stat(join(configuration.store, STORE_FILE))).isFile()) return null
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return null
       return { state: 'missing', path: configuration.store, timezone: null,
-        message: '该位置已有目录但没有记忆库清单；创建只会在空目录中进行，不会覆盖既有文件。' }
+        message: '该位置已有目录但没有记忆库文件；创建只会在空目录中进行，不会覆盖既有文件。' }
     }
     return null
   }

@@ -1,6 +1,6 @@
-/** 既有记忆引擎的固定协议适配；不提供 shell、初始化、恢复、维护或外部计划提交入口。 */
+/** 既有记忆引擎的固定协议适配；不提供 shell、初始化、迁移、维护或外部计划提交入口。 */
 import { spawn } from 'node:child_process'
-import { lstat, realpath, readdir } from 'node:fs/promises'
+import { lstat, realpath } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -57,7 +57,6 @@ export interface GeneratedPlan {
   readonly operation: 'save' | 'profile'
   readonly raw: JsonObject
   readonly preview: JsonObject
-  readonly sha256: string
   readonly engineSha256: string
 }
 const MAX_OUTPUT = 2_097_152
@@ -65,6 +64,9 @@ const MAX_INPUT = 262_144
 const PLAN_ID = /^s_[0-9A-HJKMNP-TV-Z]{26}$/
 const RECORD_ID = /^m_[0-9A-HJKMNP-TV-Z]{26}$/
 const READ_TIMEOUT = 30_000
+/** 权威数据只有一份库文件；宿主传入的 store 仍是目录，由引擎定位库。 */
+const STORE_FILE = 'memory.db'
+const PLAN_VERSION = 4
 
 export function object(value: unknown, label = '对象'): JsonObject {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`${label}格式无效`)
@@ -190,12 +192,18 @@ export class MemoryEngine {
     if (!this.config.available) throw new Error(this.config.unavailableReason ?? '受管记忆运行环境不可用')
   }
 
-  /** 检查用户级记忆库目录是否存在。 */
+  /** 检查用户级记忆库目录与库文件是否存在；缺库时不自建、不迁移。 */
   async hasStore(): Promise<boolean> {
     try {
       const info = await lstat(this.store)
       if (!info.isDirectory()) throw new Error('全局记忆库根不是目录')
-      return true
+    } catch (error) {
+      if (missing(error)) return false
+      throw error
+    }
+    try {
+      const database = await lstat(join(this.store, STORE_FILE))
+      return database.isFile()
     } catch (error) {
       if (missing(error)) return false
       throw error
@@ -221,26 +229,22 @@ export class MemoryEngine {
       if (missing(error)) throw new Error('用户级记忆库不存在；未初始化')
       throw error
     }
-    try { await this.storePath(['.system', 'lock']) } catch (error) {
-      if (missing(error)) throw new Error('已有锁文件缺失；未自动创建或修复')
+    try {
+      const database = await lstat(await this.storePath([STORE_FILE]))
+      if (!database.isFile()) throw new Error('记忆库文件不是普通文件')
+    } catch (error) {
+      if (missing(error)) throw new Error('记忆库文件缺失；未自动创建或迁移')
       throw error
     }
-    const transactions = await this.storePath(['.system', 'transactions'])
-    if ((await readdir(transactions)).length) throw new Error('RECOVERY_REQUIRED：存在未处理事务；未执行恢复')
   }
 
-  /** 每次请求只检查必要来源；缓存不落盘，事务存在时也不复用旧画像。 */
+  /** 画像缓存键用库版本：版本变化即失效，不再读取源文件。 */
   async profileSignature(selected: Domain[]): Promise<string> {
     await this.requireStore()
-    const parts: [string, string][] = []
-    for (const name of ['manifest.json', ...selected.map(item => `profile/${item}.md`)]) {
-      try { parts.push([name, await readText(await this.storePath(name.split('/')))]) } catch (error) {
-        if (!missing(error)) throw error
-        if (!name.startsWith('profile/')) throw error
-        parts.push([name, '<missing>'])
-      }
-    }
-    return fingerprint(JSON.stringify(parts))
+    const status = await this.run(['status'])
+    const version = status.store_version
+    if (typeof version !== 'number' || !Number.isInteger(version) || version < 0) throw new Error('记忆库版本无效')
+    return fingerprint(JSON.stringify([version, [...selected].sort()]))
   }
 
   /** 固定参数数组启动现有脚本；-I/-B 避免项目 Python 路径和字节码缓存。 */
@@ -331,7 +335,7 @@ export class MemoryEngine {
     } else if (month !== undefined) throw new Error('非按月模式不接受 month，未扩大范围')
     return this.run(args, undefined, signal)
   }
-  /** 自动背景只走只读协议；独立短预算，不借用主动读取统计或写入入口。 */
+  /** 自动背景只走只读协议；独立短预算，不借用主动读取统计或写入通道。 */
   backgroundRecall(input: JsonObject, signal: AbortSignal): Promise<JsonObject> {
     return this.run(['recall-background', '--input', '-'], input, signal, false, undefined, 5_000)
   }
@@ -351,13 +355,13 @@ export class MemoryEngine {
   }
 
   /** 调用身份来自宿主，不开放计数、时间或启停参数；底层 read 仍为纯读取。 */
-  recordAccess(ids: string[], sessionId: string, toolCallId: string, indexVersion: string,
+  recordAccess(ids: string[], sessionId: string, toolCallId: string, storeVersion: string,
     beforeSpawn: () => void): Promise<JsonObject> {
     if (!ids.length || ids.length > 50 || ids.some(id => !RECORD_ID.test(id))
       || !sessionId.trim() || sessionId.length > 512 || !toolCallId.trim() || toolCallId.length > 512
-      || !/^[0-9a-f]{64}$/.test(indexVersion)) throw new Error('访问统计的记录、宿主身份或来源版本无效')
+      || !/^\d{1,19}$/.test(storeVersion)) throw new Error('访问统计的记录、宿主身份或来源版本无效')
     return this.run(['access-record', '--input', '-'], {
-      ids: [...new Set(ids)], session_id: sessionId, tool_call_id: toolCallId, index_version: indexVersion
+      ids: [...new Set(ids)], session_id: sessionId, tool_call_id: toolCallId, store_version: storeVersion
     }, undefined, 'statistics', beforeSpawn)
   }
 
@@ -366,26 +370,27 @@ export class MemoryEngine {
     const preview = await this.run(['plan', operation, '--input', '-'], input, signal)
     const id = text(preview.plan_id, '实际计划 ID')
     if (!PLAN_ID.test(id)) throw new Error('引擎返回非法计划 ID')
-    const bytes = await readText(await this.storePath(['.system', 'plans', `${id}.json`]))
-    const raw = object(JSON.parse(bytes), '计划')
-    if (raw.plan_version !== 3 || raw.memory_scope !== 'global' || raw.plan_id !== id || raw.operation !== operation
-      || preview.plan_version !== 3 || preview.memory_scope !== 'global' || preview.operation !== operation) throw new Error('计划协议或身份不一致，禁止提交')
+    const raw = object(await this.run(['plan-show', '--plan-id', id], undefined, signal), '计划')
+    if (raw.plan_version !== PLAN_VERSION || raw.memory_scope !== 'global' || raw.plan_id !== id || raw.operation !== operation
+      || preview.plan_version !== PLAN_VERSION || preview.memory_scope !== 'global' || preview.operation !== operation) throw new Error('计划协议或身份不一致，禁止提交')
     const payload = object(raw.payload, '计划正文')
     const pairs = operation === 'save'
       ? [['date', 'date'], ['new_records', 'records'],
           ['superseded_records', 'supersede'], ['withdrawn_months', 'withdrawn_months']]
       : [['new_profile', 'profile'], ['replace_profile_ids', 'replace_ids'], ['replaced_profiles', 'replaced_profiles']]
     if (pairs.some(([key, source]) => JSON.stringify(preview[key!]) !== JSON.stringify(payload[source!]))) {
-      throw new Error('计划缓存与引擎预览不一致，禁止提交')
+      throw new Error('计划内容与引擎预览不一致，禁止提交')
     }
     if (engineSha256 !== fingerprint(await readText(await realpath(this.config.engine)))) throw new Error('生成计划期间引擎已变化')
-    return Object.freeze({ id, operation, raw, preview, sha256: fingerprint(bytes), engineSha256 })
+    return Object.freeze({ id, operation, raw, preview, engineSha256 })
   }
 
   async assertPlan(plan: GeneratedPlan): Promise<void> {
     await this.requireStore()
-    const bytes = await readText(await this.storePath(['.system', 'plans', `${plan.id}.json`]))
-    if (fingerprint(bytes) !== plan.sha256) throw new Error('计划内容已变化，旧确认失效；必须重新生成并展示')
+    const raw = object(await this.run(['plan-show', '--plan-id', plan.id]), '计划')
+    if (JSON.stringify(raw.payload) !== JSON.stringify(plan.raw.payload) || raw.created_at !== plan.raw.created_at) {
+      throw new Error('计划内容已变化，旧确认失效；必须重新生成并展示')
+    }
     const created = plan.raw.created_at
     if (typeof created !== 'number' || !Number.isFinite(created) || Date.now() / 1000 - created > 86_400 || created > Date.now() / 1000 + 60) {
       throw new Error('计划已过期或时间无效；必须重新生成并展示')

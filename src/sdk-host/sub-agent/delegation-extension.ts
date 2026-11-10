@@ -27,7 +27,7 @@ export interface SubAgentWorkerConfig {
   readonly skillsDir: string
   /** 写入守卫扩展绝对路径；文档任务以 `-e` 显式加载，其余任务不加载。 */
   readonly guardPath: string
-  /** Pi agent 目录；调研任务据此定位用户安装的 pi-web-access 扩展入口。 */
+  /** 产品自己的 Pi agent 目录；调研任务据此定位首启导入的 pi-web-access 扩展入口。 */
   readonly agentDir: string
 }
 
@@ -38,7 +38,7 @@ type TaskType = typeof TASK_TYPES[number]
 /**
  * 每类任务的工具白名单与预算。
  * 子进程是官方 Pi CLI：只读任务用内置工具 `read/grep/find/ls`，文档任务另加 `edit/write`；
- * 产品里的 ffgrep/ffind 不会随子进程加载；调研任务的联网只读工具由用户安装的 pi-web-access 扩展经 `-e` 提供，与主会话的调研链路一致。
+ * 产品里的 ffgrep/ffind 不会随子进程加载；调研任务的联网只读工具由产品 agent 目录中的 pi-web-access 扩展经 `-e` 提供（首启从共享目录导入），与主会话的调研链路一致。
  * 预算按实测取值：单次工具调用约 5.5s，审查任务在 150s 内跑完 27 次调用仍未收敛，
  * 故审查与调研各给 600s（约 110 次调用余量）、文档给 360s（多一次读写往返）、查询给 240s。
  * 放宽预算会让子代理倾向用满，因此不另加无进展截断，中止交给卡片上的停止入口。
@@ -126,7 +126,7 @@ const ISOLATION_ARGS = ['--no-extensions', '--no-skills', '--no-prompt-templates
   '--no-context-files', '--no-mcp', '--no-session'] as const
 
 /**
- * 调研用的联网工具来自用户级 Pi 扩展包 pi-web-access：子进程带 `--no-extensions`，
+ * 调研用的联网工具来自产品 agent 目录中的 pi-web-access（随 npm 目录首启导入）：子进程带 `--no-extensions`，
  * 只能由宿主按已安装位置显式 `-e` 加载。找不到入口时任务直接失败，不降级成本地调研。
  */
 function resolveWebAccessPath(agentDir: string): string {
@@ -1041,11 +1041,11 @@ export function createSubAgentDelegationExtension(config: SubAgentWorkerConfig,
           return failure(spec.type, spec.taskId, 'skill_missing', `未找到规范：${profile.skill}`, Date.now() - taskStart)
         }
         const workerArgs = ['--mode', 'json', buildPrompt(skillBody, request), '--tools', profile.tools.join(','), ...ISOLATION_ARGS]
-        // 调研的联网工具由用户安装的 pi-web-access 提供：`--no-extensions` 下只能显式 `-e` 加载。
+        // 调研的联网工具由产品 agent 目录中的 pi-web-access 提供：`--no-extensions` 下只能显式 `-e` 加载。
         if (spec.type === 'research') {
           const webAccessPath = resolveWebAccessPath(config.agentDir)
           if (!existsSync(webAccessPath)) {
-            const message = `未找到联网扩展：${webAccessPath}（需要安装 pi-web-access）`
+            const message = `未找到联网扩展：${webAccessPath}（首启从共享目录导入 npm 目录后可用）`
             state.phase = 'failed'
             state.extra = { errorCode: 'web_unavailable', errorMessage: message }
             return failure(spec.type, spec.taskId, 'web_unavailable', message, Date.now() - taskStart)
