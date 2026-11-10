@@ -132,7 +132,11 @@ export function prepareApplication(): void {
   applyPortableDataDirectory()
   // 产品自己的 agent 目录跟随应用数据目录：便携版随之落在程序旁，开发态留在系统默认位置。
   // 必须在任何会话、凭据或设置读写之前固定，之后的解析都只认这一份结果。
-  configurePiAgentDirectories({ product: join(app.getPath('userData'), 'agent') })
+  // home 与 agent 并列：它只交给 SDK 宿主，让直接调用 `os.homedir()` 的第三方扩展落在产品目录内。
+  configurePiAgentDirectories({
+    product: join(app.getPath('userData'), 'agent'),
+    home: join(app.getPath('userData'), 'home')
+  })
   // 图形界面启动时进程 PATH 只有系统默认值，先补齐登录 shell 的 PATH，
   // 使后续所有受管子进程（扩展更新、运行时安装、SDK 宿主）都能找到 npm、git。
   applyLoginShellPath()
