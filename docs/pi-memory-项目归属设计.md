@@ -34,7 +34,7 @@
 | 项目命名两套并存：旧段名 `pi-desktop`，`rule_key` 前缀 `pi-desk` | 同上 |
 | 保存时 `cwd` 已在手上，但未进 `engine.plan` 与 `commit` | 扩展 `tools.ts` 的返回体使用 `source_cwd`；`engine.ts` 无项目参数 |
 | 查看器把无归属记录归到 `_global`，界面显示「全局记忆」 | `memory-manager-web/server/store.mjs` 的 `GLOBAL_PROJECT_ID` |
-| 常驻排序键为「约束优先 + 日期倒序」，与当前任务无关 | 扩展 `context.ts` 的 `residentRank` 与 `residentSummary` |
+| 常驻正文按「归属 → 日期倒序 → 同日约束在前」输出，预算按「归属 → 约束优先 → 日期」分配 | 扩展 `context.ts` 的 `residentRank`、`budgetOrder` 与 `outputOrder` |
 | 会话 `session_id` 是引擎生成的 `s_<ULID>`，映射不回 `<agent-dir>/sessions/<编码cwd>/` | 每日文件会话块与 `memory_store.py` 的 `ulid('s')` |
 
 ## 4. 关键前提审查

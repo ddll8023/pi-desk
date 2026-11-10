@@ -90,8 +90,11 @@ function familyKey(row: JsonObject): string {
   return `${sourceProject(row)}\u0000${ruleFamily(row)}`
 }
 
+/** 排序对象：族名与命中的记录；预算顺序与输出顺序作用在同一批条目上。 */
+interface RankedItem { family: string; row: JsonObject }
+
 /** 每族每个归属只保留最新一条：同族旧版仍可检索，但不占常驻预算。 */
-function newestByFamily(rows: JsonObject[]): { family: string; row: JsonObject }[] {
+function newestByFamily(rows: JsonObject[]): RankedItem[] {
   const newest = new Map<string, JsonObject>()
   for (const row of rows) {
     const key = familyKey(row)
@@ -280,6 +283,7 @@ export class MemoryRuntime {
    * 只注入当前项目与通用（无项目归属的跨项目约定）两类族；其他项目的族既不注入也不占索引行，
    * 需要时靠任务召回或 memory_rules／memory_search 取得。未识别当前项目时不过滤。
    * 没有 `rule_key` 的决定与约束不进常驻：族前缀是进入常驻的前提，缺失时只能主动检索。
+   * 预算按「归属 → 约束优先」先到先得，正文按「日期倒序、同日约束在前」输出：两者不是同一把尺子。
    * 预算用尽后的候选族降为索引行；本会话只读取一次，超时或失败时返回空，不影响其余背景。
    */
   private async residentSummary(lease: Lease): Promise<string> {
@@ -304,25 +308,37 @@ export class MemoryRuntime {
       const all = newestByFamily(rows)
       const excludedKeys = new Set(all.filter(item => projectRank(item.row, projectId) === 2)
         .map(item => familyKey(item.row)))
-      const families = all.filter(item => !excludedKeys.has(familyKey(item.row)))
-        .sort((left, right) => projectRank(left.row, projectId) - projectRank(right.row, projectId)
-          || residentRank(left.row) - residentRank(right.row)
-          || text(right.row.date).localeCompare(text(left.row.date))
-          || text(left.row.id).localeCompare(text(right.row.id)))
+      /** 预算顺序：归属 → 约束优先 → 日期 → id 降序；决定谁拿正文、谁降为索引行。 */
+      const budgetOrder = (left: RankedItem, right: RankedItem): number =>
+        projectRank(left.row, projectId) - projectRank(right.row, projectId)
+        || residentRank(left.row) - residentRank(right.row)
+        || text(right.row.date).localeCompare(text(left.row.date))
+        || text(right.row.id).localeCompare(text(left.row.id))
+      /** 输出顺序：正文按时间倒序给模型读，约束只赢在同一天内，压不过更晚的决定。 */
+      const outputOrder = (left: RankedItem, right: RankedItem): number =>
+        projectRank(left.row, projectId) - projectRank(right.row, projectId)
+        || text(right.row.date).localeCompare(text(left.row.date))
+        || residentRank(left.row) - residentRank(right.row)
+        || text(right.row.id).localeCompare(text(left.row.id))
+      const families = all.filter(item => !excludedKeys.has(familyKey(item.row))).sort(budgetOrder)
       const excludedFamilies = excludedKeys.size
       // 按被排除的族统计行数：同族旧版本不算被项目排除，否则 omitted 会偏小。
       const excludedRecords = rows.filter(row => excludedKeys.has(familyKey(row))).length
       const bodies = await this.residentBodies(families.map(item => text(item.row.id)), signal)
       lease.assert()
-      const lines: string[] = []
+      // 预算按 budgetOrder 先到先得，正文按 outputOrder 重排：两者不共用同一把尺子。
+      const blocks: { item: RankedItem; block: string }[] = []
       const indexed: JsonObject[] = []
       let used = 0
-      let injected = 0
       for (const item of families) {
         const block = residentBlock(item.row, bodies.get(text(item.row.id)))
         if (used + block.length + 1 > RESIDENT_BUDGET) { indexed.push(item.row); continue }
-        lines.push(block); used += block.length + 1; injected += 1
+        blocks.push({ item, block }); used += block.length + 1
       }
+      const injected = blocks.length
+      const lines: string[] = blocks
+        .sort((left, right) => outputOrder(left.item, right.item))
+        .map(entry => entry.block)
       const pending = indexed.length
       for (const row of indexed.slice(0, RESIDENT_INDEX_ROWS)) lines.push(residentIndex(row))
       const omitted = rows.length - excludedRecords - injected
