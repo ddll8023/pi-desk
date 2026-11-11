@@ -16,7 +16,9 @@
 | --- | --- |
 | `src/main/sessions/session-manager.ts` | 列表、前后台新建／打开、重载、删除与 SDK 目标授权编排；解析会话专家绑定并随目标下发 |
 | `src/main/sessions/session-experts.ts` | 会话专家绑定解析：已有会话以持久绑定为准，新会话才用打开请求里的值 |
-| `src/main/sessions/expert-catalog.ts` | 合并随包与自定义专家目录，产出选择器视图与加载诊断；不启动宿主 |
+| `src/main/sessions/expert-catalog.ts` | 合并随包与自定义专家目录，产出选择器视图与加载诊断；另回答快速模式会剔除哪些用户级技能；不启动宿主 |
+| `src/main/sessions/expert-files.ts` | 专家定义的写操作：把内置专家派生为自定义副本（写 `derivedFrom`）、删除自定义专家；写入面只到 `<agentDir>/experts/` |
+| `src/main/sessions/expert-ipc.ts` | 派生、删除与快速模式剔除清单三条通道；清单与诊断仍走 `desktop:session-experts` |
 | `src/main/sessions/session-store.ts` | 项目会话目录、受限列表窗口与摘要缓存、文件定位与删除 |
 | `src/main/sessions/session-run-registry.ts` | 运行 ID、绑定代际、前台顺序及会话占用的唯一登记 |
 | `src/main/sessions/log-host-pool.ts` | 只读解析宿主池：按项目保活查看历史用的宿主进程，不登记运行实例、不占用会话，可被绑定接管 |
@@ -35,7 +37,7 @@
 | `src/sdk-host/product-home.ts` | 把内置 `os` 的 CJS 导出对象上的 `homedir` 指向产品 home，使直接调用 `os.homedir()` 的第三方扩展写入产品目录；命名导入 `homedir` 与依赖 `USERPROFILE` 的调用方仍用真实主目录 |
 | `src/sdk-host/protocol.ts` | 主进程和 SDK 宿主的版本化消息、请求与目标校验 |
 | `src/sdk-host/session-runtime.ts` | 官方 SDK 会话、运行请求、订阅、回退／压缩、产品资源装配与内置扩展装配、资源装配诊断与绑定阶段分类 |
-| `src/sdk-host/expert-role.ts` | 按会话目标读取选中的专家定义，并把正文装配成 `expert-role` 系统提示分段；未选中时不读资源清单 |
+| `src/sdk-host/expert-role.ts` | 按会话目标读取选中的专家定义，并把正文装配成 `expert-role` 系统提示分段；未选中时不读资源清单；快速模式下专家引用的被剔除规范在段尾说明 |
 | `src/sdk-host/product-resources.ts` | 产品资源解析、用户级 `AGENTS.md` 与 skills 的只读挂载、技能覆盖与同名技能诊断、扩展加载结果分级与必要组件及配置注入的核验 |
 | `src/sdk-host/conflicts.ts` | 扩展加载结果的冲突分级：按工具名与路径归属区分致命项与仅诊断项，不解析 SDK 错误文案 |
 | `src/sdk-host/memory-configuration.ts` | 宿主内记忆配置的唯一持有者；写进程环境并向已加载扩展推送变更 |
@@ -58,6 +60,7 @@
 | `src/sdk-host/projection/output-rate.ts` | 模型输出速率计算 |
 | `src/sdk-host/projection/checkpoint.ts` | 首页与稳定活动的独立内存检查点：绑定时分别核对恢复条件，命中不替代 SDK 打开会话文件 |
 | `src/shared/session-api.ts` | 会话列表、打开、重载、删除、按会话读取历史，以及会话专家绑定与专家清单的页面契约 |
+| `src/shared/experts-api.ts` | 专家派生、删除与快速模式剔除清单三条通道；专家视图与诊断类型复用会话域，不重复定义 |
 | `src/shared/session-run-api.ts` | 应用级运行清单、释放／结束与事件契约 |
 | `src/shared/usage-stats-api.ts` | 跨项目与跨会话 Token 与费用统计 IPC 契约与聚合类型校验 |
 | `src/shared/extension-ui-api.ts` | 扩展对话、通知、widget 与回应形态 |

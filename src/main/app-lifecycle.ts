@@ -49,6 +49,7 @@ import { registerGitHandlers } from './git/ipc'
 import { registerWorktreeHandlers } from './git/worktree-ipc'
 import { registerGitCleanupHandlers } from './git/git-cleanup-ipc'
 import { registerSessionHandlers, registerSessionRunHandlers } from './sessions/ipc'
+import { registerExpertHandlers } from './sessions/expert-ipc'
 import { registerExtensionUiHandlers } from './sessions/extension-ui-ipc'
 import { registerRuntimeHandlers } from './sessions/runtime-ipc'
 import { registerResourceHandlers } from './resources/ipc'
@@ -212,6 +213,7 @@ export async function startApplication(): Promise<void> {
   registerWorktreeHandlers(pageUrl)
   registerGitCleanupHandlers(pageUrl)
   registerSessionHandlers(pageUrl)
+  registerExpertHandlers(pageUrl)
   registerSessionRunHandlers(pageUrl)
   registerTerminalHandlers(pageUrl)
   registerTrustHandlers(pageUrl)

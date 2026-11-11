@@ -14,7 +14,7 @@
 | `src/main/services.ts` | 主进程业务实例的唯一装配处（配置、项目、信任、会话、任务工作区、终端、供应商、资源、更新、生成式界面、记忆、Git 清理、用量统计、手机访问） |
 | `src/main/ipc/dispatch.ts` | IPC 注册包装、调用者校验、有界标识与 MCP 服务器名校验 |
 | `src/preload/index.ts` | 只合并各域 Api 并暴露 `window.desktop`，不含 channel 调用与校验 |
-| `src/preload/*.ts`（域文件） | 按业务域各一个文件（`desktop`、`projects`、`sessions`、`runtime`、`terminal`、`git`、`worktree`、`git-cleanup`、`preferences`、`providers`、`updates`、`trust`、`genui`、`memory`、`lan-remote`、`browser`、`usage-stats`），各自承载固定 channel 调用、声明字段载荷重建、响应与事件校验、订阅释放 |
+| `src/preload/*.ts`（域文件） | 按业务域各一个文件（`desktop`、`projects`、`sessions`、`runtime`、`terminal`、`git`、`worktree`、`git-cleanup`、`preferences`、`providers`、`updates`、`trust`、`genui`、`memory`、`lan-remote`、`browser`、`usage-stats`、`agent-home`、`experts`），各自承载固定 channel 调用、声明字段载荷重建、响应与事件校验、订阅释放 |
 | `src/renderer/src/App.vue` | 页面组合根：只装配外壳骨架、弹层宿主与启动编排 |
 | `src/renderer/src/shell/components/AppShell.vue` | 布局骨架：顶部栏、侧栏与窄窗遮罩、工作区槽、右侧面板；持有窄窗与侧栏开合状态 |
 | `src/renderer/src/shell/components/WorkspaceView.vue` | 工作区：标签条、操作失败提示、对话／终端／文件／浏览器面板层与空态；核对浏览器批注来源与目标，切换后交由输入坞合并草稿 |

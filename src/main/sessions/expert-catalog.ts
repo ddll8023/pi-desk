@@ -1,6 +1,6 @@
 /**
- * 主进程侧的专家清单读取：合并随包清单的内置专家与产品 agent 目录下的自定义专家，
- * 产出选择器可用的视图与加载诊断。
+ * 专家清单与设置页辅助读取：合并随包清单的内置专家与产品 agent 目录下的自定义专家，
+ * 产出选择器可用的视图与加载诊断，并回答「快速模式会剔除哪些用户级技能」。
  *
  * 只读：不启动 SDK 宿主、不打开会话、不写任何文件；技能可见集取「随包非子代理专用技能 +
  * 共享目录技能」，缺失的技能引用只体现在诊断里，不让整份清单失败。
@@ -9,6 +9,7 @@ import { join } from 'node:path'
 import { agentResourcesDirectory, readAgentResourceBundle } from '../../shared-process/agent-resources'
 import { builtinExperts, loadExpertCatalog, skillDirectoryIds } from '../../shared-process/expert-definitions'
 import type { ExpertDefinition } from '../../shared-process/expert-definitions'
+import { fastModeBlockedSkillsIn } from '../../shared/execution-mode-skills'
 import type { SessionExpertCatalog, SessionExpertView } from '../../shared/session-api'
 import { getSdkHostDirectory } from '../shared/pi-cli-process'
 import { getPiAgentDir, getSharedPiAgentDir } from '../shared/pi-paths'
@@ -20,6 +21,7 @@ function toView(definition: ExpertDefinition): SessionExpertView {
     displayName: definition.displayName,
     summary: definition.summary,
     source: definition.source,
+    derivedFrom: definition.derivedFrom,
     skillIds: definition.skillIds,
     unavailableSkillIds: definition.unavailableSkillIds
   }
@@ -46,4 +48,15 @@ export function readExpertCatalog(): SessionExpertCatalog {
       kind: issue.kind, expertId: issue.expertId, skillId: issue.skillId, path: issue.path
     }))
   }
+}
+
+/**
+ * 快速模式下会被剔除的用户级技能：与宿主用的是同一份名单与同一层目录，
+ * 因此设置页写出来的就是实际发生的；目录里没有这些技能时返回空数组，页面据此说明「当前没有可剔除项」。
+ */
+export function readFastModeExclusions(): string[] {
+  return fastModeBlockedSkillsIn([
+    ...skillDirectoryIds(join(getPiAgentDir(), 'skills')),
+    ...skillDirectoryIds(join(getSharedPiAgentDir(), 'skills'))
+  ])
 }

@@ -16,6 +16,7 @@ import QuickCommandsSection from '../../preferences/components/QuickCommandsSect
 import ExecutionModeSection from '../../preferences/components/ExecutionModeSection.vue'
 import TerminalSettingsSection from '../../workspace/components/TerminalSettingsSection.vue'
 import ResourceView from '../../resources/components/ResourceView.vue'
+import ExpertSettingsSection from '../../experts/components/ExpertSettingsSection.vue'
 import GenuiSettingsSection from '../../genui/components/GenuiSettingsSection.vue'
 import SettingsNavIcon from './SettingsNavIcon.vue'
 import FileSettingsSection from '../../editor/components/FileSettingsSection.vue'
@@ -113,6 +114,7 @@ const markdownViewOptions = [
         <LanRemoteSettingsSection v-else-if="activeSection === 'lan-remote'" />
         <ModelSettingsView v-else-if="activeSection === 'model'" />
         <ResourceView v-else-if="activeSection === 'resources'" />
+        <ExpertSettingsSection v-else-if="activeSection === 'experts'" />
         <template v-else-if="activeSection === 'features'">
           <GenuiSettingsSection />
           <ExecutionModeSection />

@@ -7,7 +7,7 @@
  * `preferences`（界面偏好与快捷命令）、`providers`（认证、供应商与 Pi 默认模型）、
  * `updates`（版本检查与更新）、`trust`（Project Trust）、`genui`（生成式界面参数与 Extension UI）、
  * `lan-remote`（局域网访问控制与设备授权）、`browser`（受限网页截图、元素选择与取消）、
- * `agent-home`（桌面自有 Pi agent 目录与首启导入）。
+ * `agent-home`（桌面自有 Pi agent 目录与首启导入）、`experts`（内置专家的派生、自定义专家删除与快速模式剔除清单）。
  *
  * 不暴露 Electron、任意 channel 或系统能力；沙箱不能 require 拆分模块，构建侧保持单产物。
  */
@@ -38,6 +38,7 @@ import type { LanRemoteApi } from '../shared/lan-remote-api'
 import type { MemoryApi } from '../shared/memory-api'
 import type { UsageStatsApi } from '../shared/usage-stats-api'
 import type { AgentHomeApi } from '../shared/agent-home-api'
+import type { ExpertApi } from '../shared/experts-api'
 import { desktopApi } from './desktop'
 import { genuiApi } from './genui'
 import { gitApi } from './git'
@@ -55,9 +56,10 @@ import { lanRemoteApi } from './lan-remote'
 import { memoryApi } from './memory'
 import { usageStatsApi } from './usage-stats'
 import { agentHomeApi } from './agent-home'
+import { expertsApi } from './experts'
 
 /** 合并后的桥接对象：各域键互不重叠，平铺后仍是页面看到的同一份 `DesktopApi` 契约。 */
-const desktop: BrowserCaptureApi & BrowserSessionApi & DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionApi & SessionRunApi & TerminalApi & PreferencesApi & QuickCommandsApi & GenuiParamsApi & PiSettingsApi & TrustApi & ExtensionUiApi & AuthApi & ModelsConfigApi & UpdatesApi & GitApi & WorktreeApi & GitCleanupApi & LanRemoteApi & MemoryApi & UsageStatsApi & AgentHomeApi = {
+const desktop: BrowserCaptureApi & BrowserSessionApi & DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionApi & SessionRunApi & TerminalApi & PreferencesApi & QuickCommandsApi & GenuiParamsApi & PiSettingsApi & TrustApi & ExtensionUiApi & AuthApi & ModelsConfigApi & UpdatesApi & GitApi & WorktreeApi & GitCleanupApi & LanRemoteApi & MemoryApi & UsageStatsApi & AgentHomeApi & ExpertApi = {
   ...desktopApi,
   ...browserApi,
   ...projectsApi,
@@ -75,7 +77,8 @@ const desktop: BrowserCaptureApi & BrowserSessionApi & DesktopApi & RuntimeApi &
   ...lanRemoteApi,
   ...memoryApi,
   ...usageStatsApi,
-  ...agentHomeApi
+  ...agentHomeApi,
+  ...expertsApi
 }
 
 contextBridge.exposeInMainWorld('desktop', desktop)

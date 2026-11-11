@@ -33,6 +33,8 @@ export interface ExpertDefinition {
   readonly body: string
   readonly source: 'builtin' | 'user'
   readonly filePath: string
+  /** 派生副本的来源内置标识；手写自定义专家为 null。只用于追溯与展示，不参与加载判定。 */
+  readonly derivedFrom: string | null
   /** 引用但不可用的技能：定义本身仍可用，这些引用不生效。 */
   readonly unavailableSkillIds: readonly string[]
 }
@@ -143,6 +145,11 @@ function readDefinition(input: {
   const displayName = document.fields.displayName
   const summary = document.fields.summary
   const skillIds = parseSkillIds(document.fields.skills)
+  // 派生来源是可选的追溯字段；写了就必须指回一个合法的专家标识，写成任意文本按定义无效处理。
+  const derivedFrom = document.fields.derivedFrom === undefined || document.fields.derivedFrom === ''
+    ? null
+    : document.fields.derivedFrom
+  if (derivedFrom !== null && !EXPERT_ID.test(derivedFrom)) return invalid(id, filePath)
   // 声明的 name 必须等于目录名；只有引用没有正文的条目退化成技能集合，按无效处理。
   if (document.fields.name !== id || displayName === undefined || displayName === ''
     || summary === undefined || summary === '' || skillIds === null || document.body === '') {
@@ -151,7 +158,7 @@ function readDefinition(input: {
   return {
     ok: true,
     definition: {
-      id, displayName, summary, skillIds, body: document.body, source, filePath, unavailableSkillIds: []
+      id, displayName, summary, skillIds, body: document.body, source, filePath, derivedFrom, unavailableSkillIds: []
     }
   }
 }

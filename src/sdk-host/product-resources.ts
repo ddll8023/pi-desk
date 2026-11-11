@@ -12,6 +12,8 @@ import type {
 } from '@earendil-works/pi-coding-agent'
 import { RESOURCE_ISSUE_LIMIT, isResourceIssue } from '../shared/runtime-api'
 import type { ResourceIssue } from '../shared/runtime-api'
+// 快速模式剔除名单与设置页解释同源，避免两处各写一份技能名。
+import { FAST_MODE_BLOCKED_SKILLS } from '../shared/execution-mode-skills'
 import {
   agentResourcePath, readAgentResourceBundle
 } from '../shared-process/agent-resources'
@@ -22,12 +24,6 @@ import {
 } from '../shared-process/memory-runtime'
 import type { MemoryHostConfiguration } from '../shared-process/memory-runtime'
 import type { ExecutionMode } from '../shared/preferences-api'
-
-/**
- * 快速模式下不加载的规范 Skill：它们要求先讨论方案或同步文档，与快速模式的定位相反。
- * 只作用于用户级 Skill；随包产品 Skill 是必要能力，裁掉会让 assertLoaded 失败。
- */
-const FAST_MODE_BLOCKED_SKILLS: readonly string[] = ['design-protocol', 'code-doc-sync', 'architecture-redesign']
 
 /** 只读注入的用户级 AGENTS.md 读取上限；超出时跳过并保持会话可用。 */
 const SHARED_AGENTS_MAX_BYTES = 262_144

@@ -30,7 +30,7 @@
 - [终端](terminal-commands.md)：快捷命令有独立业务契约与 Store，配置适配复用 PreferencesManager；终端链接打开模式随 UI 偏好保存，由终端设置节与终端视图消费。
 - [生成式界面](genui.md)：开关与本机参数文件不同；[更新](updates-runtime.md)：启动扩展自动更新消费开关；[会话](sessions-chat.md)：重载后同步功能已应用状态。
 - [Git](git.md)：两个清理策略随 UI 偏好保存，分别作为合入弹窗与删除会话时的默认勾选；实际清理仍由 Git 模块与工作区管理器执行，偏好不代替确认。
-- 执行模式：契约与校验在 `src/shared/preferences-api.ts`（`isExecutionMode`、`ExecutionModePreference`），持久化由 `src/main/config/desktop-config-store.ts` 的 `readExecutionMode`／`saveExecutionMode` 承担；会话创建时 `src/main/sessions/session-manager.ts` 读取后交给 SDK 宿主，`product-resources.ts` 依模式裁剪用户级 Skill 与记忆工具，`session-runtime.ts` 注入模式分段。
+- 执行模式：契约与校验在 `src/shared/preferences-api.ts`（`isExecutionMode`、`ExecutionModePreference`），持久化由 `src/main/config/desktop-config-store.ts` 的 `readExecutionMode`／`saveExecutionMode` 承担；会话创建时 `src/main/sessions/session-manager.ts` 读取后交给 SDK 宿主，`product-resources.ts` 依模式裁剪用户级 Skill 与记忆工具，`session-runtime.ts` 注入模式分段。裁剪名单只维护在 `src/shared/execution-mode-skills.ts`：宿主据此过滤，设置页同源读取后逐条列出，不在文案里另写一份技能名。
 - [F-style](shared.md#f-style全局主题与业务样式混合)：CSS 同名主题令牌，主进程通过 `nativeTheme` 驱动亮暗色。
 
 ## 调用链与数据

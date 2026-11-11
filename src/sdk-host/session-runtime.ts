@@ -934,7 +934,9 @@ export class SdkSessionRuntime {
                 ? FAST_MODE_SECTION
                 : STANDARD_MODE_SECTION
               // 专家正文每轮重写：改定义文件在下一轮生效，历史对话不因此被改写。
-              if (expert !== null) event.systemPromptOptions.sections[EXPERT_SECTION_KEY] = expertRoleSection(expert)
+              if (expert !== null) {
+                event.systemPromptOptions.sections[EXPERT_SECTION_KEY] = expertRoleSection(expert, { mode: target.mode })
+              }
               // 记忆与委派工具随应用提供，其他宿主没有；使用时机写进分段，不写全局 AGENTS.md。
               event.systemPromptOptions.sections[PRODUCT_TOOLS_SECTION_KEY] = productToolsSection(target.mode)
               // 判定只在本轮算一次；无结论时不写分段，也不覆盖上一次展示。
