@@ -6,7 +6,7 @@
  */
 import { join } from 'node:path'
 import { readAgentResourceBundle } from '../shared-process/agent-resources'
-import { builtinExperts, loadExpertCatalog, skillDirectoryIds } from '../shared-process/expert-definitions'
+import { builtinExperts, clipExpertBody, loadExpertCatalog, skillDirectoryIds } from '../shared-process/expert-definitions'
 import { fastModeBlockedSkillsIn } from '../shared/execution-mode-skills'
 import type { ExecutionMode } from '../shared/preferences-api'
 import type { ExpertDefinition } from '../shared-process/expert-definitions'
@@ -19,13 +19,13 @@ export interface ExpertRoleOptions {
   readonly mode?: ExecutionMode
 }
 
-/** 角色段文本：专家正文原样进入，不裁剪也不摘要，改定义文件即改变下一轮的角色。 */
+/** 角色段文本：专家正文按统一上限裁剪后进入，不摘缩也不改写定义文件；改定义文件即改变下一轮的角色。 */
 export function expertRoleSection(definition: ExpertDefinition, options: ExpertRoleOptions = {}): string {
   const lines = [
     `当前会话使用的专家：${definition.displayName}`,
     `定位：${definition.summary}`,
     '',
-    definition.body
+    clipExpertBody(definition.body)
   ]
   if (definition.unavailableSkillIds.length > 0) {
     lines.push('', `以下技能本次未加载，不要当成可用能力：${definition.unavailableSkillIds.join('、')}。`)

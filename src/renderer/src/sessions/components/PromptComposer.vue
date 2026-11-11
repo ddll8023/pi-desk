@@ -1,7 +1,7 @@
 <!-- 图片与编号说明由坞内附件区独立管理；点击发送即固定提示词、图片及标注快照，说明由 SDK 独立资料消息承接。
      结果未确认时可补读同步，确认结束原运行后恢复输入，不自动重发。
      原位新建以独立草稿承接输入：旧实例结束期间可编辑但不发送，首次发送才建立新会话。
-     Prompt 输入坞：处理输入法组合态、Enter 发送与 Shift+Enter 换行、焦点回归与重复提交、响应侧栏「新建」的聚焦请求并给出一次性提示，并在 Agent 运行期间原位提供停止入口；在 Agent 运行与流式响应期间草稿文本、图片附件与标注编辑保持可用，点击发送时才校验会话空闲；同时承接 Extension 的 set_editor_text 填充文本、图片附件的选择/文本框与活动视窗全局快捷粘贴（兼容系统截图提取）/拖拽入口、输入行按内容自动增高、＋ 菜单内的常用消息（短语取自界面偏好，可在设置里增删改与排序，点击即发送）、Pi 命令的斜杠模糊补全（Runtime 就绪后用运行中的命令清单，未就绪时用主进程预读的技能清单，按类型分组并按匹配优先级排序；另含 Desktop 层自己拦截的界面命令）与 `@` 项目文件引用（只写入相对路径文本，不传文件内容）；右侧文件树的行拖入坞内也走同一条相对路径引用规则。输入坞是单行结构：左侧 ＋ 菜单集中放置图片附件、模型选择、执行模式、专家与常用消息（菜单本身自上而下分五段，仅常用消息区内部滚动；执行模式两档互斥，专家一个会话只选一个，两者都只在新建会话时可选，已开始的会话只显示当前值不可改），中间是输入行，右侧是发送/停止键；坞上方是待办清单面板（仅标准模式提交清单后出现）与一行延续判定结论（宿主给出结论时才渲染）；坞下方一行是水平居中的信息行：异常与进行中的状态文本、被收起的 Extension 对话入口与会话用量指标（缓存命中率、上下文占用与平均速率，点击开明细；累计 token 与费用只在明细浮层展示）。Extension 的 setStatus 项不在输入区展示。 -->
+     Prompt 输入坞：处理输入法组合态、Enter 发送与 Shift+Enter 换行、焦点回归与重复提交、响应侧栏「新建」的聚焦请求并给出一次性提示，并在 Agent 运行期间原位提供停止入口；在 Agent 运行与流式响应期间草稿文本、图片附件与标注编辑保持可用，点击发送时才校验会话空闲；同时承接 Extension 的 set_editor_text 填充文本、图片附件的选择/文本框与活动视窗全局快捷粘贴（兼容系统截图提取）/拖拽入口、输入行按内容自动增高、＋ 菜单内的常用消息（短语取自界面偏好，可在设置里增删改与排序，点击即发送）、Pi 命令的斜杠模糊补全（Runtime 就绪后用运行中的命令清单，未就绪时用主进程预读的技能清单，按类型分组并按匹配优先级排序；另含 Desktop 层自己拦截的界面命令）与 `@` 项目文件引用（只写入相对路径文本，不传文件内容）；右侧文件树的行拖入坞内也走同一条相对路径引用规则。输入坞是单行结构：左侧 ＋ 菜单集中放置图片附件、模型选择、执行模式、专家与常用消息（菜单本身自上而下分五段，仅常用消息区内部滚动；执行模式两档互斥，专家一个会话只选一个、段内只占一行，点开二级列表再选具体专家，两者都只在新建会话时可选，已开始的会话只显示当前值不可改），中间是输入行，右侧是发送/停止键；坞上方是待办清单面板（仅标准模式提交清单后出现）、一行延续判定结论（宿主给出结论时才渲染）与一行专家失效提示（绑定的定义已不在清单里时才渲染）；坞下方一行是水平居中的信息行：异常与进行中的状态文本、被收起的 Extension 对话入口与会话用量指标（缓存命中率、上下文占用与平均速率，点击开明细；累计 token 与费用只在明细浮层展示）。Extension 的 setStatus 项不在输入区展示。 -->
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
@@ -11,6 +11,7 @@ import type { ImageAnnotationDocument } from '../../../../shared/image-annotatio
 import { PROMPT_IMAGE_MAX_COUNT } from '../../../../shared/runtime-api'
 import type { OutputRate, PiResourceEntry, PiResourceKind, PromptDisposition, PromptImageInput } from '../../../../shared/runtime-api'
 import type { ExecutionMode } from '../../../../shared/preferences-api'
+import type { SessionExpertView } from '../../../../shared/session-api'
 import { useExtensionUiStore } from '../stores/extension-ui'
 import { usePreferencesStore } from '../../preferences/stores/preferences'
 import { useProjectFileStore } from '../../editor/stores/project-file'
@@ -24,6 +25,7 @@ import { useWorkspaceTabsStore } from '../../workspace/stores/workspace-tabs'
 import { parseDialogTitle } from '../extension-dialog-presentation'
 import { cacheHitRate, formatTokens } from '../usage-format'
 import AppButton from '../../ui/AppButton.vue'
+import AppSelect from '../../ui/AppSelect.vue'
 import ConfirmDialog from '../../ui/ConfirmDialog.vue'
 import RuntimeModelSelect from '../../providers/components/RuntimeModelSelect.vue'
 import UsageDetailDialog from './UsageDetailDialog.vue'
@@ -192,6 +194,60 @@ const modeOptions: readonly { readonly value: ExecutionMode; readonly label: str
 const currentMode = computed(() => preferencesStore.executionMode)
 /** 已有对话或正在绑定时锁定：此时改模式不会影响当前会话的能力集。 */
 const modeLocked = computed(() => runtimeStore.messages.length > 0 || workspaceTabsStore.isChatBinding)
+/** 专家的一行提示：先讲清为什么可能不完整，都没问题时返回 null，由调用方回退到简介。 */
+function expertFlags(expert: SessionExpertView): string | null {
+  const notes: string[] = []
+  if (expert.unavailableSkillIds.length > 0) notes.push('部分技能不可用')
+  if (expert.truncated) notes.push('正文过长已截断')
+  return notes.length > 0 ? notes.join(' · ') : null
+}
+/** 二级列表的候选项：结构与 AppSelect 约定的选项同形，不另开一套选择器契约。 */
+interface ExpertGroupOption {
+  readonly value: string
+  readonly label: string
+  readonly description?: string | undefined
+  readonly tag?: string | undefined
+}
+interface ExpertGroup {
+  readonly label?: string
+  readonly options: readonly ExpertGroupOption[]
+}
+/**
+ * 专家二级列表：第一项固定为「不使用专家」，其上是全部专家；绑定失效时补一组，
+ * 否则触发器会因找不到选中值而显示成未选，把「已经失效」误读成「从未选过」。
+ */
+const expertGroups = computed<readonly ExpertGroup[]>(() => {
+  const groups: ExpertGroup[] = [{
+    options: [{ value: '', label: '不使用专家', description: '按通用助手回答' }]
+  }]
+  const experts = sessionStore.expertCatalog.experts
+  if (experts.length > 0) {
+    groups.push({
+      label: '专家',
+      options: experts.map(expert => ({
+        value: expert.id,
+        label: expert.displayName,
+        description: expertFlags(expert) ?? expert.summary,
+        tag: expert.source === 'builtin' ? '内置' : '自定义'
+      }))
+    })
+  }
+  if (sessionStore.expertBindingInvalid && sessionStore.selectedExpertId !== null) {
+    groups.push({
+      label: '已失效',
+      options: [{
+        value: sessionStore.selectedExpertId,
+        label: `已失效：${sessionStore.selectedExpertId}`,
+        description: '定义已不存在，本会话不再注入专家角色'
+      }]
+    })
+  }
+  return groups
+})
+/** 二级列表回传：空串表示不使用专家，其余按标识选中。 */
+function onExpertSelect(value: string): void {
+  selectExpert(value === '' ? null : value)
+}
 /** 延续判定只展示结论与命中信号；用户可以直接在对话里纠正，界面不提供改判按钮。 */
 const continuationText = computed(() => {
   const judgement = runtimeStore.activity?.continuation ?? null
@@ -1665,6 +1721,11 @@ onMounted(() => {
         <!-- 延续判定：宿主本轮算出的结论，只用于让用户发现误判；没有结论时不占位。 -->
         <p v-if="continuationText !== null" class="prompt-continuation" role="status">{{ continuationText }}</p>
 
+        <!-- 专家失效：选中的定义已不在清单里。只如实说明，不自动清绑定——重建同名专家即可恢复。 -->
+        <p v-if="sessionStore.expertBindingInvalid" class="prompt-expert-stale" role="status">
+          专家「{{ sessionStore.selectedExpertId }}」的定义已不存在，本会话不再注入专家角色；换专家需新建会话。
+        </p>
+
         <!-- 输入行：左侧 ＋ 菜单、中间输入框、右侧发送/停止，三者在底边对齐，多行时按钮跟随下沿。 -->
         <div class="prompt-composer-row">
           <div ref="plusRoot" class="prompt-composer-plus">
@@ -1681,8 +1742,8 @@ onMounted(() => {
             >
               ＋
             </AppButton>
-            <!-- 进场从触发键所在的左下角生长，四段依次落位；退场交给同名 leave 过渡，比进场更快。
-                 菜单是单列四段：图片、模型、执行模式、常用消息自上而下排列，只有常用消息区内部滚动。 -->
+            <!-- 进场从触发键所在的左下角生长，五段依次落位；退场交给同名 leave 过渡，比进场更快。
+                 菜单是单列五段：图片、模型、执行模式、专家与常用消息自上而下排列，只有常用消息区内部滚动。 -->
             <Transition name="plus-menu-motion">
               <div
                 v-if="plusMenuOpen"
@@ -1735,33 +1796,22 @@ onMounted(() => {
                 </div>
                 <div class="prompt-composer-plus-section">
                   <p class="prompt-composer-plus-section-title">专家</p>
-                  <!-- 一个会话只用一个专家：开始对话后锁定，换专家需要新会话。 -->
-                  <AppButton
-                    variant="unstyled"
-                    class="prompt-composer-plus-row"
-                    :class="sessionStore.selectedExpertId === null ? 'is-selected' : ''"
-                    :aria-pressed="sessionStore.selectedExpertId === null"
+                  <!-- 一个会话只用一个专家：开始对话后锁定，换专家需要新会话。
+                       一级行只显示当前选择，点开才是二级列表，专家再多也不撑高菜单。 -->
+                  <AppSelect
+                    id="prompt-expert"
+                    class="prompt-expert-row"
+                    label="专家"
+                    :groups="expertGroups"
+                    :model-value="sessionStore.selectedExpertId ?? ''"
+                    empty-label="不使用专家"
                     :disabled="modeLocked"
-                    :title="modeLocked ? '本会话已开始，专家只在新建会话时选择' : undefined"
-                    @click="selectExpert(null)"
-                  >
-                    <span>不使用专家</span>
-                    <span class="prompt-composer-plus-row-note">按通用助手回答</span>
-                  </AppButton>
-                  <AppButton
-                    v-for="expert in sessionStore.expertCatalog.experts"
-                    :key="expert.id"
-                    variant="unstyled"
-                    class="prompt-composer-plus-row"
-                    :class="sessionStore.selectedExpertId === expert.id ? 'is-selected' : ''"
-                    :aria-pressed="sessionStore.selectedExpertId === expert.id"
-                    :disabled="modeLocked"
-                    :title="modeLocked ? '本会话已开始，专家只在新建会话时选择' : expert.summary"
-                    @click="selectExpert(expert.id)"
-                  >
-                    <span>{{ expert.displayName }}</span>
-                    <span class="prompt-composer-plus-row-note">{{ expert.unavailableSkillIds.length > 0 ? '部分技能不可用' : expert.source === 'builtin' ? '内置' : '自定义' }}</span>
-                  </AppButton>
+                    @update:model-value="onExpertSelect"
+                  />
+                  <!-- 失效绑定：定义被删或改名后仍被会话持有，只能新会话换专家，所以这里只说明不提供改绑。 -->
+                  <p v-if="sessionStore.expertBindingInvalid" class="prompt-composer-plus-row-note">
+                    已失效：{{ sessionStore.selectedExpertId }}（定义已不存在，本会话不再注入专家角色）
+                  </p>
                   <p v-if="sessionStore.expertError !== null" class="prompt-composer-plus-row-note">
                     {{ sessionStore.expertError.message }}
                   </p>

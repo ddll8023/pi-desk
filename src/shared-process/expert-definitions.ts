@@ -21,6 +21,21 @@ const EXPERT_ID = /^[a-z][a-z0-9-]*$/
 const SKILL_ID = /^[A-Za-z0-9][A-Za-z0-9_-]*$/
 /** 自定义专家目录内的固定定义文件名。 */
 const DEFINITION_FILE = 'expert.md'
+/**
+ * 正文进入系统提示的字符上限：角色定义每轮占用上下文，超过这个量级通常意味着把整份文档塞了进来。
+ * 超限只截断不报诊断——规则收紧不能让已经在用的定义突然失效。
+ */
+const MAX_ROLE_CHARS = 4_000
+/** 截断时补在正文末尾的说明：让模型知道定义被截过，也让用户明白后半段为何没有生效。 */
+const TRUNCATION_NOTE = '\n\n（角色定义过长，已截断。）'
+
+/**
+ * 按上限裁剪正文。主进程视图与宿主角色段共用同一口径，避免两处长度判断漂移；
+ * 定义文件本身不被改写，完整正文仍在磁盘上。
+ */
+export function clipExpertBody(body: string): string {
+  return body.length <= MAX_ROLE_CHARS ? body : `${body.slice(0, MAX_ROLE_CHARS).trimEnd()}${TRUNCATION_NOTE}`
+}
 
 /** 一份可召唤的专家定义。 */
 export interface ExpertDefinition {
@@ -31,6 +46,8 @@ export interface ExpertDefinition {
   readonly skillIds: readonly string[]
   /** 去掉声明段之后的正文：召唤时作为角色段进入系统提示。 */
   readonly body: string
+  /** 正文是否超过注入上限；超限时正文仍完整保存在磁盘，只是进入系统提示时被截断。 */
+  readonly truncated: boolean
   readonly source: 'builtin' | 'user'
   readonly filePath: string
   /** 派生副本的来源内置标识；手写自定义专家为 null。只用于追溯与展示，不参与加载判定。 */
@@ -158,7 +175,8 @@ function readDefinition(input: {
   return {
     ok: true,
     definition: {
-      id, displayName, summary, skillIds, body: document.body, source, filePath, derivedFrom, unavailableSkillIds: []
+      id, displayName, summary, skillIds, body: document.body, truncated: document.body.length > MAX_ROLE_CHARS,
+      source, filePath, derivedFrom, unavailableSkillIds: []
     }
   }
 }

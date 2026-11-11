@@ -22,6 +22,7 @@ function toView(definition: ExpertDefinition): SessionExpertView {
     summary: definition.summary,
     source: definition.source,
     derivedFrom: definition.derivedFrom,
+    truncated: definition.truncated,
     skillIds: definition.skillIds,
     unavailableSkillIds: definition.unavailableSkillIds
   }

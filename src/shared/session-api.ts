@@ -276,6 +276,8 @@ export interface SessionExpertView {
   readonly source: 'builtin' | 'user'
   /** 派生副本的来源内置标识；手写自定义专家为 null，设置页据此标「派生自 X」。 */
   readonly derivedFrom: string | null
+  /** 正文超过注入上限时会被截断；页面据此提示用户定义没完整生效。 */
+  readonly truncated: boolean
   readonly skillIds: readonly string[]
   /** 引用但不可用的技能：定义本身仍可用，这些引用不生效。 */
   readonly unavailableSkillIds: readonly string[]
@@ -425,6 +427,7 @@ function isSessionExpertView(value: unknown): value is SessionExpertView {
     && typeof value.summary === 'string'
     && (value.source === 'builtin' || value.source === 'user')
     && (value.derivedFrom === null || isExpertId(value.derivedFrom))
+    && typeof value.truncated === 'boolean'
     && Array.isArray(value.skillIds) && value.skillIds.every(item => typeof item === 'string')
     && Array.isArray(value.unavailableSkillIds)
     && value.unavailableSkillIds.every(item => typeof item === 'string')

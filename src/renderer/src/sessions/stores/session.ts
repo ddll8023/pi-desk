@@ -84,8 +84,17 @@ export const useSessionStore = defineStore('session', () => {
   /** 专家清单与诊断；只在需要选择时读取，读取失败不影响会话本身。 */
   const expertCatalog = ref<SessionExpertCatalog>({ experts: [], issues: [] })
   const expertError = ref<SessionError | ProjectError | null>(null)
+  /** 清单是否成功读到过：只有读到过才能判「选中的专家已不存在」，否则一次加载失败会被误报成失效。 */
+  const expertCatalogLoaded = ref(false)
   /** 当前会话的专家：新建时是用户的选择，打开已有会话时以主进程回报为准。 */
   const selectedExpertId = ref<string | null>(null)
+  /**
+   * 选中的专家不在清单里：定义被删除或改名后，会话仍持有旧的绑定标识。
+   * 绑定不去自动清理——重建同名专家即可恢复，界面只如实反映当前状态。
+   */
+  const expertBindingInvalid = computed(() => expertCatalogLoaded.value
+    && selectedExpertId.value !== null
+    && !expertCatalog.value.experts.some(item => item.id === selectedExpertId.value))
   /** 已把专家写回主进程的会话键：会话身份落盘后只写一次，不重复提交。 */
   let writtenExpertKey: string | null = null
   const opening = ref(false)
@@ -338,6 +347,7 @@ export const useSessionStore = defineStore('session', () => {
     const result = await listSessionExperts()
     if (result.ok) {
       expertCatalog.value = result.data
+      expertCatalogLoaded.value = true
       expertError.value = null
       return
     }
@@ -697,6 +707,7 @@ export const useSessionStore = defineStore('session', () => {
     openingProjectPath,
     expertCatalog,
     expertError,
+    expertBindingInvalid,
     selectedExpertId,
     loadExperts,
     selectExpert,

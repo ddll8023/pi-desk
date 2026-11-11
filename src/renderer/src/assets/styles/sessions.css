@@ -61,6 +61,11 @@
     @apply mb-1.5 text-2xs;
     color: var(--color-desk-muted);
   }
+/* 专家失效行：与判定行同位置，但用警示色——它意味着当前这一轮的角色定义没进去。 */
+.prompt-expert-stale {
+    @apply mb-1.5 text-2xs;
+    color: var(--color-desk-warning);
+  }
 
 /* 待办清单面板：贴在坞上方的窄条，条目多时只在自己内部滚动，不抬高输入行。 */
 .prompt-todo {
@@ -309,6 +314,32 @@
   }
 .prompt-composer-plus-row:disabled .prompt-composer-plus-row-note {
     color: color-mix(in srgb, var(--color-desk-muted) 70%, transparent);
+  }
+/* 菜单里的专家选择：一级行只显示当前选择，真正的候选列表在浮层里打开。
+     选择器自带底色与描边，这里把它退成与菜单行同高的安静控件；用三层选择器压过组件自身的 scoped 样式。 */
+.prompt-composer-plus-menu .prompt-composer-plus-section .prompt-expert-row {
+    @apply w-full text-xs;
+    flex: 1 1 auto;
+    min-width: 0;
+    height: 2rem;
+    padding: 0 0.5rem 0 0.75rem;
+    border: 0;
+    border-radius: var(--radius-desk-md);
+    background: transparent;
+    box-shadow: none;
+    color: var(--color-desk-ink);
+  }
+.prompt-composer-plus-menu .prompt-composer-plus-section .prompt-expert-row:not(:disabled):hover {
+    background: var(--color-desk-surface-subtle);
+    color: var(--color-desk-ink);
+  }
+.prompt-composer-plus-menu .prompt-composer-plus-section .prompt-expert-row[aria-expanded="true"] {
+    background: var(--color-desk-accent-soft);
+    color: var(--color-desk-accent);
+  }
+.prompt-composer-plus-menu .prompt-composer-plus-section .prompt-expert-row:disabled {
+    @apply cursor-not-allowed;
+    color: var(--color-desk-muted);
   }
 /* 斜杠开头的常用消息是命令，与补全列表里的命令名同样用等宽字体区分。 */
 .prompt-composer-plus-row.is-command {

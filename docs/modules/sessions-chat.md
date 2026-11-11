@@ -16,7 +16,7 @@
 | --- | --- |
 | `src/main/sessions/session-manager.ts` | 列表、前后台新建／打开、重载、删除与 SDK 目标授权编排；解析会话专家绑定并随目标下发 |
 | `src/main/sessions/session-experts.ts` | 会话专家绑定解析：已有会话以持久绑定为准，新会话才用打开请求里的值 |
-| `src/main/sessions/expert-catalog.ts` | 合并随包与自定义专家目录，产出选择器视图与加载诊断；另回答快速模式会剔除哪些用户级技能；不启动宿主 |
+| `src/main/sessions/expert-catalog.ts` | 合并随包与自定义专家目录，产出选择器视图（含派生来源与是否超长截断）与加载诊断；另回答快速模式会剔除哪些用户级技能；不启动宿主 |
 | `src/main/sessions/expert-files.ts` | 专家定义的写操作：把内置专家派生为自定义副本（写 `derivedFrom`）、删除自定义专家；写入面只到 `<agentDir>/experts/` |
 | `src/main/sessions/expert-ipc.ts` | 派生、删除与快速模式剔除清单三条通道；清单与诊断仍走 `desktop:session-experts` |
 | `src/main/sessions/session-store.ts` | 项目会话目录、受限列表窗口与摘要缓存、文件定位与删除 |
@@ -37,7 +37,7 @@
 | `src/sdk-host/product-home.ts` | 把内置 `os` 的 CJS 导出对象上的 `homedir` 指向产品 home，使直接调用 `os.homedir()` 的第三方扩展写入产品目录；命名导入 `homedir` 与依赖 `USERPROFILE` 的调用方仍用真实主目录 |
 | `src/sdk-host/protocol.ts` | 主进程和 SDK 宿主的版本化消息、请求与目标校验 |
 | `src/sdk-host/session-runtime.ts` | 官方 SDK 会话、运行请求、订阅、回退／压缩、产品资源装配与内置扩展装配、资源装配诊断与绑定阶段分类 |
-| `src/sdk-host/expert-role.ts` | 按会话目标读取选中的专家定义，并把正文装配成 `expert-role` 系统提示分段；未选中时不读资源清单；快速模式下专家引用的被剔除规范在段尾说明 |
+| `src/sdk-host/expert-role.ts` | 按会话目标读取选中的专家定义，把正文按上限裁剪后装配成 `expert-role` 系统提示分段；未选中时不读资源清单；快速模式下专家引用的被剔除规范在段尾说明 |
 | `src/sdk-host/product-resources.ts` | 产品资源解析、用户级 `AGENTS.md` 与 skills 的只读挂载、技能覆盖与同名技能诊断、扩展加载结果分级与必要组件及配置注入的核验 |
 | `src/sdk-host/conflicts.ts` | 扩展加载结果的冲突分级：按工具名与路径归属区分致命项与仅诊断项，不解析 SDK 错误文案 |
 | `src/sdk-host/memory-configuration.ts` | 宿主内记忆配置的唯一持有者；写进程环境并向已加载扩展推送变更 |
@@ -97,7 +97,7 @@
 | `src/renderer/src/sessions/components/UsageStatsSection.vue` | 设置页「用量」分节：四个并列读数、总量与分项构成、可切范围与指标的堆叠趋势、全年活跃度热力图、按日明细表、模型/项目分布与 Top 会话跳转；分节可见时静默轮询刷新 |
 | `src/renderer/src/sessions/components/UsageHeatmap.vue` | 近 53 周按日 Token 热力图：7 行日历格、月份与星期标签、四级强度配色、悬停读数与整图无障碍描述 |
 | `src/renderer/src/sessions/components/UsageCompositionBar.vue` | 用量构成条：四段堆叠、段间 1px 分隔与非零段 2px 保底，供概览与模型／项目分布行复用 |
-| `src/renderer/src/sessions/components/PromptComposer.vue` | 提示词与独立图片资料编排、视窗全局粘贴与剪贴板截图提取、对话期间草稿与标注编辑、文件树拖入引用、命令与补全；浏览器批注草稿合并；固定提示词、图片及标注快照、后台提交与失败恢复；显式同步及确认结束原运行后的输入恢复 |
+| `src/renderer/src/sessions/components/PromptComposer.vue` | 提示词与独立图片资料编排、视窗全局粘贴与剪贴板截图提取、对话期间草稿与标注编辑、文件树拖入引用、命令与补全；＋ 菜单内的执行模式与专家选择（专家段一级行 + 二级列表，绑定失效时给出提示）；浏览器批注草稿合并；固定提示词、图片及标注快照、后台提交与失败恢复；显式同步及确认结束原运行后的输入恢复 |
 | `src/renderer/src/sessions/components/PromptImageMaterials.vue` | 输入坞内图片附件行：导入、移除、缩略图与独立标注按钮双入口、标注数量展示 |
 | `src/renderer/src/sessions/components/ImageAnnotationPanel.vue` | 左图右说明的独立标注面板、编号双向定位、同步删除与键盘调整入口 |
 | `src/renderer/src/sessions/components/ImageAnnotationCanvas.vue` | 共用原图坐标系的编号与点框叠加层，支持编辑及桌面／手机只读展示，不修改图片像素 |

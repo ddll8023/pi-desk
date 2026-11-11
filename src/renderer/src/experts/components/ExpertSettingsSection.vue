@@ -116,6 +116,9 @@ onMounted(() => { void store.load() })
               <p v-if="expert.unavailableSkillIds.length > 0" class="mt-1 text-2xs text-desk-warning">
                 不可用：{{ expert.unavailableSkillIds.join('、') }}（定义仍可用，这些引用不生效）
               </p>
+              <p v-if="expert.truncated" class="mt-1 text-2xs text-desk-warning">
+                正文过长：召唤时只注入前一段并补一行截断说明，定义文件本身不变
+              </p>
             </div>
             <div class="shrink-0">
               <AppButton
