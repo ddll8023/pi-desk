@@ -1,5 +1,5 @@
 /**
- * 只定义 Pi Session 列表（按项目、按窗口）、打开、重新加载、删除与历史读取 IPC 的固定通道、请求与结果类型及跨进程响应校验。
+ * 只定义 Pi Session 列表（按项目、按窗口）、打开、重新加载、删除、历史读取与会话专家绑定及清单 IPC 的固定通道、请求与结果类型及跨进程响应校验。
  * 历史读取按会话寻址：页面只给项目、会话与历史查询，绑定与否由主进程判定，页面不传运行实例与绑定代际。
  * 列表不分页追加而是逐页扩展窗口：每次请求都返回"最近 limit 条"，响应可直接整体替换页面已有的窗口，
  * 两次请求之间列表发生重排、新增或删除时不会产生重复行或空洞；窗口大小由页面决定，主进程只校验范围。
@@ -21,6 +21,13 @@ export const SESSION_DELETE_CHANNEL = 'desktop:session-delete'
  * 未接管时由日志解析作答；两条路径返回同一套消息身份，页面不必区分来源。
  */
 export const SESSION_HISTORY_CHANNEL = 'desktop:session-history'
+/**
+ * 设置某会话使用的专家：只记录会话与专家的绑定，不重开会话，也不改已发出的系统提示；
+ * `expertId` 为 null 表示清除。会话首轮后界面不再提供切换入口，本通道供新建会话落盘与恢复使用。
+ */
+export const SESSION_SET_EXPERT_CHANNEL = 'desktop:session-set-expert'
+/** 读取可用专家清单与加载诊断：内置与自定义合并后给出，供选择器展示。 */
+export const SESSION_EXPERTS_CHANNEL = 'desktop:session-experts'
 
 /** 会话列表首屏条数与每次“加载更多”的增量；侧栏按它分页。 */
 export const SESSION_PAGE_SIZE = 30
@@ -126,19 +133,25 @@ export interface SessionOpenRequest {
   readonly allowInterrupt: boolean
   /** 新建可指定托管工作区；已有会话以主进程持久绑定为准，不接受执行目录。 */
   readonly workspaceId?: string | null
+  /**
+   * 新建会话时可指定专家；已持久化的会话绑定优先于本字段。
+   * 未传时主进程只看持久绑定，不会从界面当前偏好里猜一个专家。
+   */
+  readonly expertId?: string | null
 }
 
 /** 打开请求固定项目归属，不允许在异步信任检查后重新解释当前项目。 */
 export function isSessionOpenRequest(value: unknown): value is SessionOpenRequest {
   if (!isRecord(value)) return false
-  if (Object.keys(value).some(key => !['projectPath', 'sessionId', 'allowInterrupt', 'workspaceId'].includes(key))) return false
+  if (Object.keys(value).some(key => !['projectPath', 'sessionId', 'allowInterrupt', 'workspaceId', 'expertId'].includes(key))) return false
   const workspaceIdOk = value.workspaceId === undefined || value.workspaceId === null || isWorkspaceId(value.workspaceId)
+  const expertIdOk = value.expertId === undefined || value.expertId === null || isExpertId(value.expertId)
   return typeof value.projectPath === 'string' && value.projectPath.trim() !== ''
     && value.projectPath.length <= MAX_PROJECT_PATH_LENGTH
     && (value.sessionId === null || (typeof value.sessionId === 'string'
       && value.sessionId.trim() !== '' && value.sessionId.length <= 255))
     && typeof value.allowInterrupt === 'boolean'
-    && workspaceIdOk
+    && workspaceIdOk && expertIdOk
 }
 
 /**
@@ -236,10 +249,63 @@ export interface SessionOpenData {
   readonly runId: number
   readonly openedSessionId: string | null
   readonly workspace: WorkspaceContext
+  /**
+   * 本次实际生效的专家标识；未绑定或绑定已失效时为 null。
+   * 只回传标识，显示名与诊断由专家清单接口提供，打开链不因此多读一遍资源目录。
+   */
+  readonly expertId: string | null
 }
 
 export type SessionOpenResult =
   | { readonly ok: true; readonly data: SessionOpenData }
+  | { readonly ok: false; readonly error: SessionError }
+
+/**
+ * 专家标识与目录名同形：小写字母开头，只含小写字母、数字与连字符。
+ * 主进程与契约校验共用同一口径，避免一边接受一边拒绝。
+ */
+export function isExpertId(value: unknown): value is string {
+  return typeof value === 'string' && value.length <= 64 && /^[a-z][a-z0-9-]*$/.test(value)
+}
+
+/** 选择器展示所需的专家信息；不携带正文，正文只在宿主侧进入系统提示。 */
+export interface SessionExpertView {
+  readonly id: string
+  readonly displayName: string
+  readonly summary: string
+  readonly source: 'builtin' | 'user'
+  readonly skillIds: readonly string[]
+  /** 引用但不可用的技能：定义本身仍可用，这些引用不生效。 */
+  readonly unavailableSkillIds: readonly string[]
+}
+
+/** 一条加载诊断；只带标识与路径，不复制定义正文。 */
+export interface SessionExpertIssue {
+  readonly kind: 'definition-invalid' | 'id-conflict' | 'skill-reference-missing' | 'skill-reference-sub-agent'
+  readonly expertId: string | null
+  readonly skillId: string | null
+  readonly path: string
+}
+
+export interface SessionExpertCatalog {
+  readonly experts: readonly SessionExpertView[]
+  readonly issues: readonly SessionExpertIssue[]
+}
+
+/** 设置会话专家请求：会话必须已存在，专家必须能通过清除之外的校验。 */
+export interface SessionSetExpertRequest {
+  readonly projectPath: string
+  readonly sessionId: string
+  /** null 表示清除该会话的专家绑定。 */
+  readonly expertId: string | null
+}
+
+export type SessionSetExpertResult =
+  | { readonly ok: true; readonly data: { readonly expertId: string | null } }
+  | { readonly ok: false; readonly error: SessionError }
+
+export type SessionExpertsResult =
+  | { readonly ok: true; readonly data: SessionExpertCatalog }
   | { readonly ok: false; readonly error: SessionError }
 
 /** 删除会话成功时同样返回删除后的列表快照（窗口取请求里的 `listLimit`）；失败时不改变任何文件与占用。 */
@@ -271,6 +337,10 @@ export interface SessionApi {
    * 成功时返回删除后的该会话所属项目的列表快照。
    */
   readonly deleteSession: (request: SessionDeleteRequest) => Promise<SessionDeleteResult>
+  /** 设置或清除某会话的专家绑定；只影响后续打开该会话时的角色段，不改已发出的对话。 */
+  readonly setSessionExpert: (request: SessionSetExpertRequest) => Promise<SessionSetExpertResult>
+  /** 读取可用专家清单与加载诊断；不打开会话，也不启动宿主。 */
+  readonly listSessionExperts: () => Promise<SessionExpertsResult>
 }
 
 // 与 runtime-api.ts 的共享错误码保持一致，再追加 Session 专有错误码。
@@ -343,6 +413,56 @@ export function isSessionOpenResult(value: unknown): value is SessionOpenResult 
     && typeof data.runId === 'number' && Number.isSafeInteger(data.runId) && data.runId > 0
     && (data.openedSessionId === null || typeof data.openedSessionId === 'string')
     && isWorkspaceContext(data.workspace) && data.workspace.projectPath === data.projectPath
+    && (data.expertId === null || isExpertId(data.expertId))
+}
+
+function isSessionExpertView(value: unknown): value is SessionExpertView {
+  if (!isRecord(value)) return false
+  return isExpertId(value.id)
+    && typeof value.displayName === 'string' && value.displayName !== ''
+    && typeof value.summary === 'string'
+    && (value.source === 'builtin' || value.source === 'user')
+    && Array.isArray(value.skillIds) && value.skillIds.every(item => typeof item === 'string')
+    && Array.isArray(value.unavailableSkillIds)
+    && value.unavailableSkillIds.every(item => typeof item === 'string')
+}
+
+const EXPERT_ISSUE_KINDS: readonly string[] = [
+  'definition-invalid', 'id-conflict', 'skill-reference-missing', 'skill-reference-sub-agent'
+]
+
+function isSessionExpertCatalog(value: unknown): value is SessionExpertCatalog {
+  if (!isRecord(value)) return false
+  if (!Array.isArray(value.experts) || !value.experts.every(isSessionExpertView)) return false
+  if (!Array.isArray(value.issues)) return false
+  return value.issues.every(issue => isRecord(issue)
+    && typeof issue.kind === 'string' && EXPERT_ISSUE_KINDS.includes(issue.kind)
+    && (issue.expertId === null || typeof issue.expertId === 'string')
+    && (issue.skillId === null || typeof issue.skillId === 'string')
+    && typeof issue.path === 'string')
+}
+
+/** 设置专家请求只放行已登记项目、非空会话与已声明格式的专家标识。 */
+export function isSessionSetExpertRequest(value: unknown): value is SessionSetExpertRequest {
+  if (!isRecord(value)) return false
+  if (Object.keys(value).some((key) => key !== 'projectPath' && key !== 'sessionId' && key !== 'expertId')) return false
+  return typeof value.projectPath === 'string' && value.projectPath !== ''
+    && value.projectPath.length <= MAX_PROJECT_PATH_LENGTH
+    && typeof value.sessionId === 'string' && value.sessionId !== '' && value.sessionId.length <= 255
+    && (value.expertId === null || isExpertId(value.expertId))
+}
+
+export function isSessionExpertsResult(value: unknown): value is SessionExpertsResult {
+  if (!isRecord(value)) return false
+  if (value.ok === false) return isSessionFailure(value)
+  return value.ok === true && isSessionExpertCatalog(value.data)
+}
+
+export function isSessionSetExpertResult(value: unknown): value is SessionSetExpertResult {
+  if (!isRecord(value)) return false
+  if (value.ok === false) return isSessionFailure(value)
+  if (value.ok !== true || !isRecord(value.data)) return false
+  return value.data.expertId === null || isExpertId(value.data.expertId)
 }
 
 // TypeScript 声明不能保证 invoke 的实际返回值；沙箱桥接只放行本契约。

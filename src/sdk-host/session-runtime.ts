@@ -39,6 +39,8 @@ import type {
   ProjectionBatch, ProjectionSnapshot, PromptDisposition, ResourceIssue, RuntimeDiagnostics, SessionActivity, SessionUsage, SubAgentUsageTotals, HistoryData, HistoryPage, HistoryQuery
 } from '../shared/runtime-api'
 import { parseSubAgentView } from '../shared/sub-agent-view'
+import { EXPERT_SECTION_KEY, expertRoleSection, readSelectedExpert } from './expert-role'
+import type { ExpertDefinition } from '../shared-process/expert-definitions'
 import type { ExtensionDialogResponseInput } from '../shared/extension-ui-api'
 
 type Sdk = typeof import('@earendil-works/pi-coding-agent')
@@ -873,6 +875,27 @@ export class SdkSessionRuntime {
     }
   }
 
+  /**
+   * 读取本次会话的专家定义：未选、标识已失效或清单读不出来都退回 null，不阻断会话创建。
+   * 失效与读取失败只在宿主日志留一条带标识的记录，不把定义正文或用户目录结构外泄。
+   */
+  private selectedExpert(target: SdkSessionTarget): ExpertDefinition | null {
+    if (target.expertId === null) return null
+    try {
+      const expert = readSelectedExpert({
+        resourcesDirectory: this.options.productResourcesDir,
+        agentDir: this.options.agentDir,
+        sharedAgentDir: this.options.sharedAgentDir,
+        expertId: target.expertId
+      })
+      if (expert === null) console.error(`[session-runtime] 专家定义不可用：${target.expertId}`)
+      return expert
+    } catch (error) {
+      console.error(`[session-runtime] 专家清单读取失败：${target.expertId}`, error)
+      return null
+    }
+  }
+
   /** services 每次重建；项目 provider 不注册进全局查询容器。 */
   private readonly createRuntime: RuntimeFactory = async ({ cwd, agentDir, sessionManager, sessionStartEvent }) => {
     const target = this.factoryTarget
@@ -882,6 +905,8 @@ export class SdkSessionRuntime {
       throw new SdkSessionFailure('INVALID_SESSION_TARGET')
     }
     const creation = ++this.creationSeed
+    // 专家定义在会话创建时读一次：会话内不换专家，正文不需要每轮重新解析。
+    const expert = this.selectedExpert(target)
     // 只守住有效绑定与必要交互，不引入新的权限规则；工具调用仍由 SDK 管线处理。
     const bindingGuard: ExtensionFactory = pi => {
       pi.on('tool_call', () => {
@@ -908,6 +933,8 @@ export class SdkSessionRuntime {
               event.systemPromptOptions.sections[MODE_SECTION_KEY] = target.mode === 'fast'
                 ? FAST_MODE_SECTION
                 : STANDARD_MODE_SECTION
+              // 专家正文每轮重写：改定义文件在下一轮生效，历史对话不因此被改写。
+              if (expert !== null) event.systemPromptOptions.sections[EXPERT_SECTION_KEY] = expertRoleSection(expert)
               // 记忆与委派工具随应用提供，其他宿主没有；使用时机写进分段，不写全局 AGENTS.md。
               event.systemPromptOptions.sections[PRODUCT_TOOLS_SECTION_KEY] = productToolsSection(target.mode)
               // 判定只在本轮算一次；无结论时不写分段，也不覆盖上一次展示。

@@ -3,15 +3,22 @@
  *
  * 只读取随包清单给出的内置专家定义，以及产品 agent 目录下的自定义专家，合并成一份可召唤清单；
  * 单个定义损坏、身份冲突或引用了不可用技能时只影响对应条目，不中断整份清单。
- * 本模块不装配会话、不注入系统提示、不扫描技能目录本身，也不产生任何子代理调用。
+ * 本模块不装配会话、不注入系统提示，也不产生任何子代理调用；清单条目到内置入口的映射与技能目录标识列举由这里提供。
  */
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
+import { agentResourcePath } from './agent-resources.ts'
+import type { AgentResourceBundle } from './agent-resources.ts'
 
 /** 单个定义文件的读取上限：正文会整段进入系统提示，超过这个体积通常意味着塞了整份文档。 */
 const MAX_DEFINITION_BYTES = 262_144
 /** 专家标识与目录名同形：小写字母开头，只含小写字母、数字与连字符。 */
 const EXPERT_ID = /^[a-z][a-z0-9-]*$/
+/**
+ * 技能标识独立放宽：技能取自技能目录，允许下划线与大写；沿用专家 id 规则会把合法技能误判为写法非法，
+ * 连带使整个专家定义失效。
+ */
+const SKILL_ID = /^[A-Za-z0-9][A-Za-z0-9_-]*$/
 /** 自定义专家目录内的固定定义文件名。 */
 const DEFINITION_FILE = 'expert.md'
 
@@ -107,7 +114,7 @@ function parseSkillIds(value: string | undefined): string[] | null {
   const items = value.replace(/^\[/, '').replace(/\]$/, '').split(',')
     .map(item => item.trim().replace(/^['"]|['"]$/g, ''))
     .filter(item => item !== '')
-  return items.every(item => EXPERT_ID.test(item)) ? items : null
+  return items.every(item => SKILL_ID.test(item)) ? items : null
 }
 
 function invalid(expertId: string | null, path: string): ReadResult {
@@ -167,6 +174,25 @@ function judgeSkills(
     unavailable.push(skillId)
   }
   return { ...definition, unavailableSkillIds: unavailable }
+}
+
+/** 列出目录下的技能标识；目录缺失或不可读时按没有技能处理。 */
+export function skillDirectoryIds(directory: string): string[] {
+  try {
+    return readdirSync(directory, { withFileTypes: true })
+      .filter(entry => entry.isDirectory() && !entry.isSymbolicLink())
+      .map(entry => entry.name)
+  } catch {
+    return []
+  }
+}
+
+/**
+ * 把随包清单的专家条目映射为内置入口。入口相对路径的越界与存在性由清单校验和指纹保证，
+ * 这里只做形状转换，两个调用方（主进程与宿主）不各自重复拼接路径。
+ */
+export function builtinExperts(bundle: AgentResourceBundle): BuiltinExpert[] {
+  return bundle.experts.map(item => ({ id: item.id, filePath: agentResourcePath(bundle.root, item.entry) }))
 }
 
 /** 列出自定义专家目录下的候选标识；符号链接不跟随，目录缺失视为空。 */

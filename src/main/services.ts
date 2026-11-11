@@ -29,6 +29,7 @@ import { LogHostPool } from './sessions/log-host-pool'
 import { SdkRuntimeBridge } from './sessions/sdk-runtime-bridge'
 import { SessionManager } from './sessions/session-manager'
 import { SessionRunRegistry } from './sessions/session-run-registry'
+import { readExpertCatalog } from './sessions/expert-catalog'
 import { TerminalManager } from './terminal/terminal-manager'
 import { TrustManager } from './trust/trust-manager'
 import { UpdateChecker } from './updates/update-checker'
@@ -113,7 +114,15 @@ export const sessionManager = new SessionManager({
       return false
     }
   },
-  cleanupSessionWorkspace: (projectPath, sessionId) => workspaceManager.cleanupForDeletedSession(projectPath, sessionId)
+  cleanupSessionWorkspace: (projectPath, sessionId) => workspaceManager.cleanupForDeletedSession(projectPath, sessionId),
+  // 专家绑定与会话同生命周期：只存标识，定义由宿主装载，主进程不缓存正文。
+  sessionExperts: {
+    read: (projectPath, sessionId) => configStore.readSessionExpert(projectPath, sessionId),
+    save: binding => configStore.saveSessionExpert(binding),
+    forget: (projectPath, sessionId) => configStore.forgetSessionExpert(projectPath, sessionId)
+  },
+  // 清单每次现读：目录很小，而缓存会让新写的自定义专家必须重启才出现。
+  readExpertCatalog: () => readExpertCatalog()
 })
 
 /** 手机访问管理器只装配依赖；局域网入口须显式开启，地址与端口自动确定，无需外部代理。 */

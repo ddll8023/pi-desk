@@ -1,5 +1,5 @@
 /**
- * 保存会话面板的展示状态：按项目保存会话列表窗口、打开、重新加载与删除动作；列表摘要与打开、切换、删除编排在主进程，完整日志解析与执行在 SDK 宿主。
+ * 保存会话面板的展示状态：按项目保存会话列表窗口、打开、重新加载与删除动作，以及本会话的专家选择；列表摘要与打开、切换、删除编排在主进程，完整日志解析与执行在 SDK 宿主。
  *
  * 侧栏按项目树展示会话，因此列表按项目分片保存（键是项目路径）：展开其他项目时懒读取，
  * 已读过的分片在应用内保留，切换项目不需要重新读取。分片只登记主进程回报的项目路径对应的结果，
@@ -13,13 +13,13 @@
 import { defineStore } from 'pinia'
 import { computed, ref, shallowRef } from 'vue'
 import { MAX_SESSION_WINDOW, SESSION_PAGE_SIZE } from '../../../../shared/session-api'
-import type { SessionError, SessionList, SessionSummary } from '../../../../shared/session-api'
+import type { SessionError, SessionExpertCatalog, SessionList, SessionSummary } from '../../../../shared/session-api'
 import type { ProjectError } from '../../../../shared/project-api'
 import { useTrustStore } from '../../projects/stores/trust'
 import { useProjectStore } from '../../projects/stores/project'
 import { usePreferencesStore } from '../../preferences/stores/preferences'
 import { useRuntimeStore } from './runtime'
-import { listSessions, openSession, reloadSession, deleteSession, readSessionFirstPage } from '../services/session'
+import { listSessions, openSession, reloadSession, deleteSession, readSessionFirstPage, listSessionExperts, setSessionExpert } from '../services/session'
 import { useWorkspaceTabsStore } from '../../workspace/stores/workspace-tabs'
 import { useTaskWorkspacesStore } from '../../workspace/stores/task-workspaces'
 import type { ChatOpenIntent } from '../../workspace/stores/workspace-tabs'
@@ -81,6 +81,13 @@ export const useSessionStore = defineStore('session', () => {
    * 界面只消费 message。
    */
   const actionError = ref<SessionError | ProjectError | null>(null)
+  /** 专家清单与诊断；只在需要选择时读取，读取失败不影响会话本身。 */
+  const expertCatalog = ref<SessionExpertCatalog>({ experts: [], issues: [] })
+  const expertError = ref<SessionError | ProjectError | null>(null)
+  /** 当前会话的专家：新建时是用户的选择，打开已有会话时以主进程回报为准。 */
+  const selectedExpertId = ref<string | null>(null)
+  /** 已把专家写回主进程的会话键：会话身份落盘后只写一次，不重复提交。 */
+  let writtenExpertKey: string | null = null
   const opening = ref(false)
   /** 最新打开意图固定项目与标签；已发出的请求收敛后才执行下一次，不并发改前台。 */
   const openingProjectPath = ref<string | null>(null)
@@ -326,6 +333,33 @@ export const useSessionStore = defineStore('session', () => {
   /** 已经核过列表的会话 id；同一会话不再补读。 */
   let reconciledSessionId: string | null = null
 
+  /** 读取专家清单；失败只记错误，选择器退回「不使用专家」，不影响会话本身。 */
+  async function loadExperts(): Promise<void> {
+    const result = await listSessionExperts()
+    if (result.ok) {
+      expertCatalog.value = result.data
+      expertError.value = null
+      return
+    }
+    expertError.value = result.error
+  }
+
+  /** 选择本会话使用的专家；`null` 表示不使用。已开始对话的会话由界面禁用切换。 */
+  function selectExpert(expertId: string | null): void {
+    selectedExpertId.value = expertId
+    // 换了选择就要重新写回一次，否则回写会被当成已完成。
+    writtenExpertKey = null
+  }
+
+  /** 会话身份落盘后把专家写回主进程；同一会话只写一次，失败留待下次打开再试。 */
+  async function persistExpertFor(projectPath: string, sessionId: string): Promise<void> {
+    const expertId = selectedExpertId.value
+    const key = `${projectPath}\u0000${sessionId}`
+    if (expertId === null || writtenExpertKey === key) return
+    const result = await setSessionExpert({ projectPath, sessionId, expertId })
+    if (result.ok) writtenExpertKey = key
+  }
+
   /**
    * 当前会话不在列表里时补读一次该项目的列表：Pi 新建会话只分配身份，会话文件到首次写入才创建，
    * 因此列表里可能根本没有它（打开也不再回传列表）；调用方应在确有消息落盘后触发。
@@ -334,6 +368,8 @@ export const useSessionStore = defineStore('session', () => {
     if (sessionId === null || reconciledSessionId === sessionId) return
     const projectPath = currentProjectPath()
     if (projectPath === null) return
+    // 新建会话的身份到这时才确定：先把专家写回主进程，重启后才能带着同一个专家打开。
+    await persistExpertFor(projectPath, sessionId)
     if (sliceOf(projectPath).sessions.some((session) => session.sessionId === sessionId)) {
       reconciledSessionId = sessionId
       return
@@ -389,7 +425,9 @@ export const useSessionStore = defineStore('session', () => {
       }
       // 同一空标签的前一次打开可能刚收敛；此时复用实际身份，不能再次按 null 新建并遗留旧实例。
       const requestedSessionId = sessionId ?? tabs.sessionIdForTab(targetPath, key)
-      const result = await openSession(targetPath, requestedSessionId, allowInterrupt, workspaceId)
+      // 新建会话带上当前选择；已有会话由主进程按持久绑定解析，页面不拿本地状态覆盖它。
+      const requestExpertId = requestedSessionId === null ? selectedExpertId.value : null
+      const result = await openSession(targetPath, requestedSessionId, allowInterrupt, workspaceId, requestExpertId)
       if (result.ok) {
         if (result.data.projectPath !== targetPath) {
           if (sequence === openSequence) actionError.value = {
@@ -400,6 +438,8 @@ export const useSessionStore = defineStore('session', () => {
         // 打开不再回传列表：侧栏由项目切换、删除、回退与新增会话落盘后的补读维护，
         // 切换链不等目录扫描，列表读取失败也不会把已完成的切换报成失败。
         useTaskWorkspacesStore().accept(result.data.workspace)
+        // 回显以主进程回报为准：绑定失效时这里退回 null，界面不再假装专家仍在生效。
+        selectedExpertId.value = result.data.expertId
         const projectAlive = projectStore.projects.some(project => project.path === targetPath)
         tabs.bindWorkspace(targetPath, key, result.data.workspace.id)
         // 实例身份即使迟到也只能绑定原标签，不能按新的前台或空标签重新猜测。
@@ -655,6 +695,11 @@ export const useSessionStore = defineStore('session', () => {
     actionError,
     opening,
     openingProjectPath,
+    expertCatalog,
+    expertError,
+    selectedExpertId,
+    loadExperts,
+    selectExpert,
     invalidateOpenSelection,
     waitForOpenActions,
     deleting,

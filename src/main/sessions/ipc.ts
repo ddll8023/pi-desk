@@ -1,4 +1,4 @@
-/** 会话与运行实例的 IPC：会话列表、打开、重载、删除、按会话读取历史，以及应用级运行清单查询、释放与结束。删除会话前先按登记占用收敛实例；关闭标签与删除会话是不同动作。 */
+/** 会话与运行实例的 IPC：会话列表、打开、重载、删除、按会话读取历史、会话专家绑定与专家清单，以及应用级运行清单查询、释放与结束。删除会话前先按登记占用收敛实例；关闭标签与删除会话是不同动作。 */
 
 import type { IpcMainInvokeEvent } from 'electron'
 import {
@@ -7,17 +7,22 @@ import {
   SESSION_OPEN_CHANNEL,
   SESSION_HISTORY_CHANNEL,
   SESSION_RELOAD_CHANNEL,
+  SESSION_SET_EXPERT_CHANNEL,
+  SESSION_EXPERTS_CHANNEL,
   isSessionDeleteRequest,
   isSessionListRequest,
   isSessionOpenRequest,
-  isSessionHistoryRequest
+  isSessionHistoryRequest,
+  isSessionSetExpertRequest
 } from '../../shared/session-api'
 import type {
   SessionDeleteResult,
   SessionErrorCode,
+  SessionExpertsResult,
   SessionHistoryResult,
   SessionListResult,
-  SessionOpenResult
+  SessionOpenResult,
+  SessionSetExpertResult
 } from '../../shared/session-api'
 import {
   SESSION_RUNS_STATE_CHANNEL,
@@ -136,6 +141,34 @@ export function registerSessionHandlers(pageUrl: string): void {
         return sessionFailure('INVALID_REQUEST', '删除会话接口只接受一个包含项目路径、会话 id、中断确认与列表窗口的请求对象。')
       }
       return sessionManager.delete(args[0])
+    }
+  )
+
+  /** 专家绑定只写记录，不改已发出的系统提示；会话首轮后界面不再提供切换入口。 */
+  handle(
+    SESSION_SET_EXPERT_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<SessionSetExpertResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return sessionFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 1 || !isSessionSetExpertRequest(args[0])) {
+        return sessionFailure('INVALID_REQUEST', '设置会话专家只接受一个包含项目路径、会话 id 与专家 id 的请求对象。')
+      }
+      return sessionManager.setExpert(args[0])
+    }
+  )
+
+  /** 专家清单：只读目录，不打开会话也不启动宿主。 */
+  handle(
+    SESSION_EXPERTS_CHANNEL,
+    (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<SessionExpertsResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return Promise.resolve(sessionFailure('FORBIDDEN', '不允许此页面调用桌面接口。'))
+      }
+      if (args.length !== 0) {
+        return Promise.resolve(sessionFailure('INVALID_REQUEST', '专家清单接口不接受参数。'))
+      }
+      return sessionManager.listExperts()
     }
   )
 }

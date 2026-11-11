@@ -83,7 +83,7 @@
 | `src/shared-process/process-tree-termination.ts` | 跨平台进程树终止 | 受管入口、资源探测、认证及终端守护进程 |
 | `src/shared-process/runtime.ts` | SDK 发布目录布局、当前版本指针、SDK 入口解析、动态加载及自带版本回退 | 主进程运行时解析、SDK 宿主、认证、CLI、版本检查、安装入口 |
 | `src/shared-process/agent-resources.ts` | 产品 Agent 资源固定布局、清单读取与内容指纹、组件摘要 | 主进程资源目录定位、SDK 宿主的产品资源装配 |
-| `src/shared-process/expert-definitions.ts` | 专家定义解析、内置与自定义两来源合并、身份冲突与技能引用诊断；尚无调用方，召唤接入属后续阶段 | 专家列表与后续会话召唤 |
+| `src/shared-process/expert-definitions.ts` | 专家定义解析、内置与自定义两来源合并、身份冲突与技能引用诊断；同时提供清单条目到内置入口的映射与技能目录标识列举 | 主进程专家清单与 SDK 宿主的角色段装载 |
 | `src/shared-process/memory-runtime.ts` | 受管记忆运行环境布局与清单校验、全局库位置、随包配置的受限校验与序列化 | 主进程记忆管理器、SDK 宿主的配置注入与回写 |
 
 表内前四行位于 `src/main/shared/`，其余位于 `src/shared-process/`。`runtime.ts` 与 `src/entries/runtime-install/index.ts` 不是同一职责：前者本身不下载、不安装，只维护发布目录布局与当前版本指针。

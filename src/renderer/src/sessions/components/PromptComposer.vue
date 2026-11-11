@@ -1,7 +1,7 @@
 <!-- 图片与编号说明由坞内附件区独立管理；点击发送即固定提示词、图片及标注快照，说明由 SDK 独立资料消息承接。
      结果未确认时可补读同步，确认结束原运行后恢复输入，不自动重发。
      原位新建以独立草稿承接输入：旧实例结束期间可编辑但不发送，首次发送才建立新会话。
-     Prompt 输入坞：处理输入法组合态、Enter 发送与 Shift+Enter 换行、焦点回归与重复提交、响应侧栏「新建」的聚焦请求并给出一次性提示，并在 Agent 运行期间原位提供停止入口；在 Agent 运行与流式响应期间草稿文本、图片附件与标注编辑保持可用，点击发送时才校验会话空闲；同时承接 Extension 的 set_editor_text 填充文本、图片附件的选择/文本框与活动视窗全局快捷粘贴（兼容系统截图提取）/拖拽入口、输入行按内容自动增高、＋ 菜单内的常用消息（短语取自界面偏好，可在设置里增删改与排序，点击即发送）、Pi 命令的斜杠模糊补全（Runtime 就绪后用运行中的命令清单，未就绪时用主进程预读的技能清单，按类型分组并按匹配优先级排序；另含 Desktop 层自己拦截的界面命令）与 `@` 项目文件引用（只写入相对路径文本，不传文件内容）；右侧文件树的行拖入坞内也走同一条相对路径引用规则。输入坞是单行结构：左侧 ＋ 菜单集中放置图片附件、模型选择、执行模式与常用消息（菜单本身自上而下分四段，仅常用消息区内部滚动；执行模式两档互斥，已开始的会话只显示当前值不可改），中间是输入行，右侧是发送/停止键；坞上方是待办清单面板（仅标准模式提交清单后出现）与一行延续判定结论（宿主给出结论时才渲染）；坞下方一行是水平居中的信息行：异常与进行中的状态文本、被收起的 Extension 对话入口与会话用量指标（缓存命中率、上下文占用与平均速率，点击开明细；累计 token 与费用只在明细浮层展示）。Extension 的 setStatus 项不在输入区展示。 -->
+     Prompt 输入坞：处理输入法组合态、Enter 发送与 Shift+Enter 换行、焦点回归与重复提交、响应侧栏「新建」的聚焦请求并给出一次性提示，并在 Agent 运行期间原位提供停止入口；在 Agent 运行与流式响应期间草稿文本、图片附件与标注编辑保持可用，点击发送时才校验会话空闲；同时承接 Extension 的 set_editor_text 填充文本、图片附件的选择/文本框与活动视窗全局快捷粘贴（兼容系统截图提取）/拖拽入口、输入行按内容自动增高、＋ 菜单内的常用消息（短语取自界面偏好，可在设置里增删改与排序，点击即发送）、Pi 命令的斜杠模糊补全（Runtime 就绪后用运行中的命令清单，未就绪时用主进程预读的技能清单，按类型分组并按匹配优先级排序；另含 Desktop 层自己拦截的界面命令）与 `@` 项目文件引用（只写入相对路径文本，不传文件内容）；右侧文件树的行拖入坞内也走同一条相对路径引用规则。输入坞是单行结构：左侧 ＋ 菜单集中放置图片附件、模型选择、执行模式、专家与常用消息（菜单本身自上而下分五段，仅常用消息区内部滚动；执行模式两档互斥，专家一个会话只选一个，两者都只在新建会话时可选，已开始的会话只显示当前值不可改），中间是输入行，右侧是发送/停止键；坞上方是待办清单面板（仅标准模式提交清单后出现）与一行延续判定结论（宿主给出结论时才渲染）；坞下方一行是水平居中的信息行：异常与进行中的状态文本、被收起的 Extension 对话入口与会话用量指标（缓存命中率、上下文占用与平均速率，点击开明细；累计 token 与费用只在明细浮层展示）。Extension 的 setStatus 项不在输入区展示。 -->
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
@@ -718,7 +718,19 @@ async function selectMode(mode: ExecutionMode): Promise<void> {
 /** ＋ 菜单：本身不改焦点位置，鼠标点开后可直接点项；键盘用户的下方向键由触发键处理。 */
 function togglePlusMenu(): void {
   if (plusMenuOpen.value) closePlusMenu()
-  else plusMenuOpen.value = true
+  else {
+    plusMenuOpen.value = true
+    // 专家目录可能刚被改过：每次打开都重读一次，不在应用启动时就缓存住。
+    void sessionStore.loadExperts()
+  }
+}
+
+/**
+ * 选择本会话使用的专家；`null` 表示不使用。已开始对话的会话菜单项置灰，换专家需要新会话。
+ */
+function selectExpert(expertId: string | null): void {
+  sessionStore.selectExpert(expertId)
+  closePlusMenu()
 }
 
 /** 常用消息超出可见高度时才给列表挂上下渐隐，条数少时不挂，免得首行被无意义地淡掉。 */
@@ -1720,6 +1732,39 @@ onMounted(() => {
                     <span>{{ option.label }}</span>
                     <span class="prompt-composer-plus-row-note">{{ option.value === 'fast' ? '不注入记忆，需求确认后给清单' : '读记忆，需求确认后先给方案' }}</span>
                   </AppButton>
+                </div>
+                <div class="prompt-composer-plus-section">
+                  <p class="prompt-composer-plus-section-title">专家</p>
+                  <!-- 一个会话只用一个专家：开始对话后锁定，换专家需要新会话。 -->
+                  <AppButton
+                    variant="unstyled"
+                    class="prompt-composer-plus-row"
+                    :class="sessionStore.selectedExpertId === null ? 'is-selected' : ''"
+                    :aria-pressed="sessionStore.selectedExpertId === null"
+                    :disabled="modeLocked"
+                    :title="modeLocked ? '本会话已开始，专家只在新建会话时选择' : undefined"
+                    @click="selectExpert(null)"
+                  >
+                    <span>不使用专家</span>
+                    <span class="prompt-composer-plus-row-note">按通用助手回答</span>
+                  </AppButton>
+                  <AppButton
+                    v-for="expert in sessionStore.expertCatalog.experts"
+                    :key="expert.id"
+                    variant="unstyled"
+                    class="prompt-composer-plus-row"
+                    :class="sessionStore.selectedExpertId === expert.id ? 'is-selected' : ''"
+                    :aria-pressed="sessionStore.selectedExpertId === expert.id"
+                    :disabled="modeLocked"
+                    :title="modeLocked ? '本会话已开始，专家只在新建会话时选择' : expert.summary"
+                    @click="selectExpert(expert.id)"
+                  >
+                    <span>{{ expert.displayName }}</span>
+                    <span class="prompt-composer-plus-row-note">{{ expert.unavailableSkillIds.length > 0 ? '部分技能不可用' : expert.source === 'builtin' ? '内置' : '自定义' }}</span>
+                  </AppButton>
+                  <p v-if="sessionStore.expertError !== null" class="prompt-composer-plus-row-note">
+                    {{ sessionStore.expertError.message }}
+                  </p>
                 </div>
                 <div class="prompt-composer-plus-section is-grow">
                   <p class="prompt-composer-plus-section-title">常用消息</p>

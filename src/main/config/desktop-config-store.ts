@@ -1,12 +1,12 @@
 /**
  * 本地 Desktop 配置的唯一读写者：最近项目的添加/移除、当前项目、界面偏好、窗口状态、各项目信任决定（Project Trust）
- * 与安装级 UUID、对话页模型展示偏好、快捷发送短语、扩展自动更新开关、生成式 UI 开关、执行模式、记忆开关、快捷命令及手机设备授权的加载、保存与降级处理。
+ * 与安装级 UUID、对话页模型展示偏好、快捷发送短语、扩展自动更新开关、生成式 UI 开关、执行模式、记忆开关、快捷命令、手机设备授权及会话专家绑定的加载、保存与降级处理。
  *
  * 配置位于 Electron userData 目录下的 desktop-config.json。写入采用同目录临时文件加改名替换，
  * 所有读写串行执行；加载时记录文件的标识（mtime 与大小），每次写入前比对，磁盘在加载后被其他
  * 写入者改动过就放弃本次保存，不用过期内容覆盖它。结构损坏先备份再重新开始，暂时读不到时进入
  * 只读降级，避免用空配置覆盖仍然存在的记录。界面偏好、窗口状态、各项目的信任决定、安装级 UUID
- * 与对话页模型展示偏好、快捷发送短语、扩展自动更新开关、生成式 UI 开关、执行模式、记忆开关、快捷命令、手机设备授权是同一文件里的可选字段，
+ * 与对话页模型展示偏好、快捷发送短语、扩展自动更新开关、生成式 UI 开关、执行模式、记忆开关、快捷命令、手机设备授权、会话专家绑定是同一文件里的可选字段，
  * 缺失或非法一律按默认值处理，不参与结构判定，也不改变版本语义；路径归一化在 project-path.ts，切换编排在
  * project-manager.ts，偏好读取在 preferences-manager.ts，窗口状态校正与保存时机在 window-state.ts，
  * 信任决定的探测与启动参数映射在 trust-manager.ts，项目 id 由项目名派生见 project-identity.ts，
@@ -58,6 +58,12 @@ const CONFIG_BASE_NAME = 'desktop-config'
 const CONFIG_FILE_NAME = `${CONFIG_BASE_NAME}.json`
 /** 配置结构版本；字段含义变化必须显式升级，不静默改写既有文件。 */
 const CONFIG_VERSION = 1
+/**
+ * 会话专家绑定的专家标识规则与总条数上限：标识口径与 `src/shared/session-api.ts` 的 `isExpertId` 一致。
+ * 绑定额外存一份是为了重启后还能带回来；超出上限时丢掉最早写入的记录，而不是拒绝保存。
+ */
+const SESSION_EXPERT_ID = /^[a-z][a-z0-9-]*$/
+const MAX_SESSION_EXPERT_BINDINGS = 2000
 /** 最近项目上限；超出按 `lastOpenedAt` 最旧淘汰，避免配置文件无界增长。 */
 const MAX_PROJECTS = 50
 /** 窗口尺寸的存储边界；只拒绝明显异常的值，实际尺寸下限与显示器上限由 window-state.ts 处理。 */
@@ -133,6 +139,18 @@ interface StoredConfig {
   readonly executionMode: ExecutionMode
   /** 手机设备保存身份记录与高熵凭证摘要，不保存 Cookie 原文。 */
   readonly lanDevices: readonly LanStoredDevice[]
+  /** 会话级专家绑定；缺失或非法条目逐条丢弃，缺失字段按无绑定处理。 */
+  readonly sessionExperts: readonly SessionExpertBinding[]
+}
+
+/**
+ * 会话使用的专家记录：路径与会话 id 共同定位一个会话，专家 id 指向专家目录下的子目录。
+ * 只存标识不存正文，专家正文始终从磁盘读取，改文件即生效。
+ */
+export interface SessionExpertBinding {
+  readonly projectPath: string
+  readonly sessionId: string
+  readonly expertId: string
 }
 
 /** 落盘载荷；未显式更新的可选字段保留当前值，避免其他配置写入将它们清除。 */
@@ -158,6 +176,8 @@ interface PersistPayload {
   /** 未显式更新时保留当前值，避免其他配置写入将执行模式复位。 */
   readonly executionMode?: ExecutionMode
   readonly lanDevices?: readonly LanStoredDevice[]
+  /** 未显式更新时保留当前值，避免其他配置写入将会话专家绑定清除。 */
+  readonly sessionExperts?: readonly SessionExpertBinding[]
 }
 
 /** 配置写入失败；由调用方映射为 `PROJECT_STORAGE_FAILED` 或通用内部错误。 */
@@ -167,8 +187,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-/** 设备记录独立降级为空授权；重复身份或摘要不保留，避免损坏配置扩大授权。 */
-function sanitizeLanDevices(value: unknown): LanStoredDevice[] {
+/** 设备记录独立降级为空授权；重复身份或摘要不保留，避免损坏配置扩大授权。 */function sanitizeLanDevices(value: unknown): LanStoredDevice[] {
   if (!Array.isArray(value)) return []
   const seen = new Set<string>()
   const devices: LanStoredDevice[] = []
@@ -180,6 +199,29 @@ function sanitizeLanDevices(value: unknown): LanStoredDevice[] {
     if (devices.length >= LAN_REMOTE_MAX_DEVICES) break
   }
   return devices
+}
+
+/**
+ * 会话专家绑定逐条过滤：路径必须绝对、会话与专家标识必须合格式，
+ * 同一会话只保留先出现的一条，总数封顶，避免损坏配置或残留堆积把文件无限撑大。
+ */
+function sanitizeSessionExperts(value: unknown): SessionExpertBinding[] {
+  if (!Array.isArray(value)) return []
+  const seen = new Set<string>()
+  const bindings: SessionExpertBinding[] = []
+  for (const entry of value) {
+    if (!isRecord(entry)) continue
+    const { projectPath, sessionId, expertId } = entry
+    if (typeof projectPath !== 'string' || !isAbsolute(projectPath)) continue
+    if (typeof sessionId !== 'string' || sessionId === '' || sessionId.length > 255) continue
+    if (typeof expertId !== 'string' || !SESSION_EXPERT_ID.test(expertId)) continue
+    const key = `${projectPath}\u0000${sessionId}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    bindings.push({ projectPath, sessionId, expertId })
+    if (bindings.length >= MAX_SESSION_EXPERT_BINDINGS) break
+  }
+  return bindings
 }
 
 function isMissingFile(error: unknown): boolean {
@@ -436,6 +478,7 @@ export class DesktopConfigStore {
   /** 执行模式默认标准：裁剪能力集会改变 Agent 的行为范围，不由程序自己替用户收紧。 */
   private executionMode: ExecutionMode = 'standard'
   private lanDevices: LanStoredDevice[] = []
+  private sessionExperts: SessionExpertBinding[] = []
   private windowState: WindowState = DEFAULT_WINDOW_STATE
   private projectTrust: Record<string, TrustDecision> = {}
   /** 磁盘上的安装级 UUID；只在配置里保存过一次后才有值。 */
@@ -785,9 +828,59 @@ export class DesktopConfigStore {
     })
   }
 
-  /** 读取记忆开关；缺失或非法时为开启。 */
-  readMemoryEnabled(): Promise<MemoryPreference> {
+  /** 读取某个会话的专家绑定；没有记录时返回 null，由调用方决定是否用请求里的值。 */
+  readSessionExpert(projectPath: string, sessionId: string): Promise<string | null> {
     return this.enqueue(async () => {
+      await this.loadFromDisk()
+      return this.sessionExperts
+        .find(item => item.projectPath === projectPath && item.sessionId === sessionId)?.expertId ?? null
+    })
+  }
+
+  /**
+   * 写入或清除会话专家绑定；`expertId` 为 null 时删除该会话的记录。
+   * 保存成功后才提交内存值，只读降级不能假称已保存。
+   */
+  saveSessionExpert(binding: {
+    readonly projectPath: string
+    readonly sessionId: string
+    readonly expertId: string | null
+  }): Promise<string | null> {
+    return this.enqueue(async () => {
+      await this.loadFromDisk()
+      if (this.readOnly) {
+        throw new DesktopConfigStorageError('本地配置处于只读状态，会话专家未保存。')
+      }
+      const rest = this.sessionExperts.filter(item => !(item.projectPath === binding.projectPath
+        && item.sessionId === binding.sessionId))
+      const next = binding.expertId === null
+        ? rest
+        : [...rest, { projectPath: binding.projectPath, sessionId: binding.sessionId, expertId: binding.expertId }]
+      // 绑定只增不减时会无限增长；超出上限时丢最早写入的记录，不影响当前会话。
+      const capped = next.length > MAX_SESSION_EXPERT_BINDINGS
+        ? next.slice(next.length - MAX_SESSION_EXPERT_BINDINGS)
+        : next
+      await this.persist({
+        projects: this.projects,
+        currentProjectId: this.currentProjectId,
+        ui: this.ui,
+        windowState: this.windowState,
+        projectTrust: this.projectTrust,
+        authDeviceId: this.deviceIdForPersist(),
+        sessionExperts: capped
+      })
+      this.sessionExperts = capped
+      return binding.expertId
+    })
+  }
+
+  /** 删除会话时清理它的专家绑定；其余记录原样保留。 */
+  forgetSessionExpert(projectPath: string, sessionId: string): Promise<void> {
+    return this.saveSessionExpert({ projectPath, sessionId, expertId: null }).then(() => undefined)
+  }
+
+  /** 读取记忆开关；缺失或非法时为开启。 */
+  readMemoryEnabled(): Promise<MemoryPreference> {    return this.enqueue(async () => {
       await this.loadFromDisk()
       return { enabled: this.memoryEnabled }
     })
@@ -1007,6 +1100,7 @@ export class DesktopConfigStore {
       this.memoryEnabled = parsed.memoryEnabled
       this.executionMode = parsed.executionMode
       this.lanDevices = [...parsed.lanDevices]
+      this.sessionExperts = parsed.sessionExperts.map(item => ({ ...item }))
       this.windowState = parsed.window
       this.projectTrust = parsed.projectTrust
       this.storedAuthDeviceId = parsed.authDeviceId
@@ -1024,6 +1118,7 @@ export class DesktopConfigStore {
     this.memoryEnabled = parsed.memoryEnabled
     this.executionMode = parsed.executionMode
     this.lanDevices = [...parsed.lanDevices]
+    this.sessionExperts = parsed.sessionExperts.map(item => ({ ...item }))
     this.windowState = parsed.window
     this.projectTrust = parsed.projectTrust
     this.storedAuthDeviceId = parsed.authDeviceId
@@ -1059,6 +1154,7 @@ export class DesktopConfigStore {
       // 缺失按标准：模式会裁剪能力集，旧配置与非法值都回落标准，不默默收紧。
       executionMode: isExecutionMode(value.executionMode) ? value.executionMode : 'standard',
       lanDevices: sanitizeLanDevices(value.lanDevices),
+      sessionExperts: sanitizeSessionExperts(value.sessionExperts),
       window: sanitizeWindowState(value.window),
       projectTrust: sanitizeProjectTrust(value.projectTrust),
       authDeviceId: sanitizeAuthDeviceId(value.authDeviceId)
@@ -1127,7 +1223,8 @@ export class DesktopConfigStore {
       genuiEnabled: next.genuiEnabled === undefined ? this.genuiEnabled : next.genuiEnabled,
       memoryEnabled: next.memoryEnabled === undefined ? this.memoryEnabled : next.memoryEnabled,
       executionMode: next.executionMode === undefined ? this.executionMode : next.executionMode,
-      lanDevices: (next.lanDevices ?? this.lanDevices).map(device => ({ ...device }))
+      lanDevices: (next.lanDevices ?? this.lanDevices).map(device => ({ ...device })),
+      sessionExperts: (next.sessionExperts ?? this.sessionExperts).map(item => ({ ...item }))
     }
     // 这份配置是整文件写入：磁盘在加载后被别的写入者改过时，宁可放弃本次保存，也不用过期内容覆盖。
     if (await this.stampOf(file) !== this.loadedStamp) {

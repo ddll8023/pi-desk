@@ -126,8 +126,7 @@ test('引用子代理专用技能与不存在的技能都只标注，专家仍�
   }
 })
 
-test('自定义目录不存在时只有内置专家，且不产生诊断', () => {
-  const temp = createTempRoot('pi-desk-expert-')
+test('自定义目录不存在时只有内置专家，且不产生诊断', () => {  const temp = createTempRoot('pi-desk-expert-')
   try {
     const builtinPath = writeFile(temp.dir, 'builtin/experts/news-research/expert.md', definition({ id: 'news-research' }))
     const catalog = loadExpertCatalog({

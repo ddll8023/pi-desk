@@ -14,7 +14,9 @@
 
 | 文件 | 用途 |
 | --- | --- |
-| `src/main/sessions/session-manager.ts` | 列表、前后台新建／打开、重载、删除与 SDK 目标授权编排 |
+| `src/main/sessions/session-manager.ts` | 列表、前后台新建／打开、重载、删除与 SDK 目标授权编排；解析会话专家绑定并随目标下发 |
+| `src/main/sessions/session-experts.ts` | 会话专家绑定解析：已有会话以持久绑定为准，新会话才用打开请求里的值 |
+| `src/main/sessions/expert-catalog.ts` | 合并随包与自定义专家目录，产出选择器视图与加载诊断；不启动宿主 |
 | `src/main/sessions/session-store.ts` | 项目会话目录、受限列表窗口与摘要缓存、文件定位与删除 |
 | `src/main/sessions/session-run-registry.ts` | 运行 ID、绑定代际、前台顺序及会话占用的唯一登记 |
 | `src/main/sessions/log-host-pool.ts` | 只读解析宿主池：按项目保活查看历史用的宿主进程，不登记运行实例、不占用会话，可被绑定接管 |
@@ -33,6 +35,7 @@
 | `src/sdk-host/product-home.ts` | 把内置 `os` 的 CJS 导出对象上的 `homedir` 指向产品 home，使直接调用 `os.homedir()` 的第三方扩展写入产品目录；命名导入 `homedir` 与依赖 `USERPROFILE` 的调用方仍用真实主目录 |
 | `src/sdk-host/protocol.ts` | 主进程和 SDK 宿主的版本化消息、请求与目标校验 |
 | `src/sdk-host/session-runtime.ts` | 官方 SDK 会话、运行请求、订阅、回退／压缩、产品资源装配与内置扩展装配、资源装配诊断与绑定阶段分类 |
+| `src/sdk-host/expert-role.ts` | 按会话目标读取选中的专家定义，并把正文装配成 `expert-role` 系统提示分段；未选中时不读资源清单 |
 | `src/sdk-host/product-resources.ts` | 产品资源解析、用户级 `AGENTS.md` 与 skills 的只读挂载、技能覆盖与同名技能诊断、扩展加载结果分级与必要组件及配置注入的核验 |
 | `src/sdk-host/conflicts.ts` | 扩展加载结果的冲突分级：按工具名与路径归属区分致命项与仅诊断项，不解析 SDK 错误文案 |
 | `src/sdk-host/memory-configuration.ts` | 宿主内记忆配置的唯一持有者；写进程环境并向已加载扩展推送变更 |
@@ -54,7 +57,7 @@
 | `src/sdk-host/projection/identity.ts` | 用户消息规范化摘要身份；不替代官方回退条目 ID |
 | `src/sdk-host/projection/output-rate.ts` | 模型输出速率计算 |
 | `src/sdk-host/projection/checkpoint.ts` | 首页与稳定活动的独立内存检查点：绑定时分别核对恢复条件，命中不替代 SDK 打开会话文件 |
-| `src/shared/session-api.ts` | 会话列表、打开、重载、删除与按会话读取历史的页面契约 |
+| `src/shared/session-api.ts` | 会话列表、打开、重载、删除、按会话读取历史，以及会话专家绑定与专家清单的页面契约 |
 | `src/shared/session-run-api.ts` | 应用级运行清单、释放／结束与事件契约 |
 | `src/shared/usage-stats-api.ts` | 跨项目与跨会话 Token 与费用统计 IPC 契约与聚合类型校验 |
 | `src/shared/extension-ui-api.ts` | 扩展对话、通知、widget 与回应形态 |
@@ -66,13 +69,13 @@
 
 | 文件 | 用途 |
 | --- | --- |
-| `src/renderer/src/sessions/stores/session.ts` | 按项目的列表窗口与读取调度、串行打开／重载、按标签意图提交打开、删除与待确认目标 |
+| `src/renderer/src/sessions/stores/session.ts` | 按项目的列表窗口与读取调度、串行打开／重载、按标签意图提交打开、删除与待确认目标；本会话专家选择、回显与写回 |
 | `src/renderer/src/sessions/stores/session-runs.ts` | 运行清单、副本状态、释放与结束 |
 | `src/renderer/src/sessions/stores/session-view.ts` | 会话输入、阅读与展开状态，按标签保存待发送快照、核对同步并保留未确认输入，原位新草稿的独立留底、浏览器批注交付目标身份核对及图片与绑定标注的移交、还原与回收 |
 | `src/renderer/src/sessions/stores/session-branch.ts` | 会话多分支历史归档、按轮分支状态与索引切换 |
 | `src/renderer/src/sessions/stores/chat-navigation.ts` | 对话内跳转登记：按会话键发布轮次入口与当前轮，转交顶部栏消息定位意图 |
 | `src/renderer/src/sessions/stores/extension-ui.ts` | 运行目标的扩展对话、通知、widget 展示副本 |
-| `src/renderer/src/sessions/services/session.ts` | 会话请求桥接 |
+| `src/renderer/src/sessions/services/session.ts` | 会话与专家请求桥接 |
 | `src/renderer/src/sessions/services/session-runs.ts` | 运行清单与生命周期桥接 |
 | `src/renderer/src/sessions/services/runtime.ts` | Runtime 状态、Prompt、回退、压缩、模型命令与投影桥接 |
 | `src/renderer/src/sessions/services/extension-ui.ts` | 扩展快照订阅与对话回应桥接 |
@@ -131,7 +134,7 @@
 
 1. 页面表达打开意图：标签 Store 计算 `ChatOpenIntent`，`session` Store 固定项目与标签并串行提交；选择本身立即落到标签，不等打开动作整体收尾。打开已有会话前先按会话读取首页历史并显示出来，未绑定时可继续翻页、展开轮次与续段；历史读取不排队，失败即降级。页面只给项目与会话，由主进程判定该会话当前走绑定路径还是日志解析；主进程按会话持久绑定解析对应工作区并在响应中回传，标签据此同步工作区环境。
 2. 主进程校验登记项目与信任，注册表管理占用，Runtime 桥决定复用、切前台或建立宿主；前台选择按主进程分配的序号收敛，先提交后完成的旧选择不会把前台改回旧目标。项目成为当前项目时预热只读池中的一个解析宿主，供查看历史与随后的绑定共用。
-3. 宿主请求会话目标准备，主进程按来源实例的归属项目复核目标，再返回绑定代际与目录；宿主不能自行编号授权。
+3. 宿主请求会话目标准备，主进程按来源实例的归属项目复核目标，再返回绑定代际与目录；宿主不能自行编号授权。目标同时带上本次会话的专家标识，宿主装载对应定义后按轮注入角色段；定义失效时只跳过注入，不影响会话可用性。
 4. 输入坞点击发送即固定本次提示词、图片及绑定标注、清空本次输入，并按原标签显示本地待发送消息；目标未就绪时先走会话打开链，就绪且投影同步后经 Runtime 服务提交固定目标与输入快照。普通提示词进入命令、输入处理器与模板管线。图片说明在实际启动用户轮次时作为 SDK 独立附属消息提供。SDK 事件转换成消息、工具与活动投影，图片标注关联回原用户消息；主进程广播到可信页面。本地待发送展示与 SDK 受理、正式投影到达是不同阶段。
 5. 页面校验代际／序号并应用增量；切回已缓存的实例时直接复用分片与模型清单，仅在换代、缺基准、序号断档或宿主失效时取快照；同一绑定的快照水位不倒退；早期历史和超长正文按会话读取当前分支，不接受任意文件路径，分支已变时按权威基准重建一次。
 6. 回退基于官方条目身份建立新分支，并在执行前将当前分支的回复归档至多分支历史栈；压缩由 SDK 处理。当前渲染端回退未贯通代码硬重置，Rewind 仅执行会话消息回退；处于任务工作区时的代码恢复留在独立检查点阶段实现。成功请求和最终展示收敛不是同一个时点。

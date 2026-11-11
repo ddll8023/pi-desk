@@ -20,6 +20,7 @@ pi-desk 产品行为只能存在于以下位置，**禁止写入全局 AGENTS.md
 | 执行模式定义 | `src/shared/preferences-api.ts` 契约、`src/main/config/desktop-config-store.ts` 持久化 |
 | 标准/快速模式分段 | `src/sdk-host/session-runtime.ts` 常量 `STANDARD_MODE_SECTION`、`FAST_MODE_SECTION` |
 | 需求理解与延续判定分段 | `src/sdk-host/session-runtime.ts` 常量 `INTENT_SUMMARY_SECTION`、`CONTINUATION_SECTION`，判定函数 `judgeContinuation` |
+| 专家角色段 | `src/sdk-host/expert-role.ts` 常量 `EXPERT_SECTION_KEY`，定义来自 `resources/agent/experts/` 与 `<agentDir>/experts/`，只在会话选中专家时注入 |
 | 快速模式豁免 Skill | `src/sdk-host/product-resources.ts` 常量 `FAST_MODE_BLOCKED_SKILLS` |
 | 记忆与委派工具时机 | `src/sdk-host/product-tools-hint.ts` 函数 `productToolsSection`，由 `session-runtime.ts` 的 `MODE_HINT_EXTENSION_NAME` 扩展注入 |
 | 回合头改动文件提示 | `src/sdk-host/turn-files-hint.ts` |

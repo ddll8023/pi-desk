@@ -17,6 +17,7 @@
  * 有活动操作而重载请求未确认时直接拒绝，不自动中断、不排队、不重放已提交的内容。
  * 生成式 UI 开关在每次授权时读一次并随目标下发给宿主；读失败按开启处理，不让偏好故障阻断会话。
  * 执行模式同样在授权时读一次随目标下发，宿主据此裁剪 Skill 集合；读失败按标准模式处理。
+ * 专家绑定只存标识：已存在的会话以持久绑定为准，新建时用打开请求里的值，宿主装载定义后才注入角色段。
  * IPC 契约与校验在 shared/session-api.ts。
  */
 import type {
@@ -29,9 +30,13 @@ import type {
   SessionOpenData,
   SessionOpenResult,
   SessionHistoryRequest,
-  SessionHistoryResult
+  SessionHistoryResult,
+  SessionExpertCatalog,
+  SessionExpertsResult,
+  SessionSetExpertRequest,
+  SessionSetExpertResult
 } from '../../shared/session-api'
-import { isSessionOpenRequest } from '../../shared/session-api'
+import { isExpertId, isSessionOpenRequest } from '../../shared/session-api'
 import type { RuntimeStatus } from '../../shared/runtime-api'
 import type { ExecutionMode } from '../../shared/preferences-api'
 import type { WorkspaceManager } from '../workspaces/workspace-manager'
@@ -44,6 +49,8 @@ import type { SdkRuntimeBridge } from './sdk-runtime-bridge'
 import { SessionStorageError, deleteSessionFile, listSessions, resolveSessionFile, resolveSdkSessionFile, getProjectSessionDir } from './session-store'
 import { ProjectPathError, normalizeProjectPath } from '../shared/project-path'
 import type { SessionRunSummary } from './session-run-registry'
+import { resolveSessionExpert } from './session-experts'
+import type { SessionExpertBindings } from './session-experts'
 import { isSdkSessionReference } from '../../sdk-host/protocol'
 import type { SdkHostFailureCode, SdkSessionReference, SdkSessionStatus, SdkSessionTarget } from '../../sdk-host/protocol'
 
@@ -99,10 +106,65 @@ export interface SessionManagerOptions {
   readonly readCleanupOnSessionDelete?: () => Promise<boolean>
   /** 按会话清理其独占的工作树；实现自己负责跳过共享、脏工作树等情况。 */
   readonly cleanupSessionWorkspace?: (projectPath: string, sessionId: string) => Promise<boolean>
+  /** 会话专家绑定的读写口；缺省时按没有专家处理，打开照常进行。 */
+  readonly sessionExperts?: SessionExpertBindings
+  /** 读取专家清单与加载诊断；缺省时清单为空，不阻止其他会话能力。 */
+  readonly readExpertCatalog?: () => SessionExpertCatalog
 }
 
 export class SessionManager {
+  /**
+   * 本次打开请求里的专家，按「工作区 + 会话」暂存，等宿主发起授权时取走。
+   * 宿主授权只拿得到引用与工作区，拿不到页面请求；新会话还没有会话 id，不能靠持久绑定传递。
+   */
+  private readonly pendingExperts = new Map<string, string | null>()
+
   constructor(private readonly options: SessionManagerOptions) {}
+
+  /** 暂存键：新建会话没有会话 id，用 `new` 占位，避免与已有会话互相覆盖。 */
+  private expertKey(workspaceId: string, sessionId: string | null): string {
+    return `${workspaceId}\u0000${sessionId ?? 'new'}`
+  }
+
+  /** 专家清单：清单读不出来时只报告，不让选择器因为安装问题整个不可用。 */
+  async listExperts(): Promise<SessionExpertsResult> {
+    try {
+      return { ok: true, data: this.options.readExpertCatalog?.() ?? { experts: [], issues: [] } }
+    } catch (error) {
+      return this.failure(error, {
+        code: 'INTERNAL_ERROR',
+        message: '读取专家清单时发生未预期的内部错误。'
+      })
+    }
+  }
+
+  /**
+   * 设置或清除会话的专家绑定：会话必须属于已登记项目且文件存在。
+   * 只写绑定，不改已发出的系统提示；下一次打开该会话时才生效。
+   */
+  async setExpert(request: SessionSetExpertRequest): Promise<SessionSetExpertResult> {
+    try {
+      const projectPath = await normalizeProjectPath(request.projectPath)
+      if (!await this.options.projects.hasProject(projectPath)) {
+        throw new SessionFailure('INVALID_PROJECT_PATH', '只能为已添加项目的会话设置专家。')
+      }
+      if (await resolveSessionFile(projectPath, request.sessionId) === null) {
+        throw new SessionFailure('SESSION_NOT_FOUND', '当前项目下找不到该会话；列表可能已过期。')
+      }
+      if (this.options.sessionExperts === undefined) {
+        throw new SessionFailure('INTERNAL_ERROR', '当前运行未启用会话专家。')
+      }
+      const saved = await this.options.sessionExperts.save({
+        projectPath, sessionId: request.sessionId, expertId: request.expertId
+      })
+      return { ok: true, data: { expertId: saved } }
+    } catch (error) {
+      return this.failure(error, {
+        code: 'INTERNAL_ERROR',
+        message: '设置会话专家时发生未预期的内部错误。'
+      })
+    }
+  }
 
   /**
    * SDK 内部目标授权：归属项目由调用方按来源运行实例给定，不读前台选择。
@@ -123,6 +185,7 @@ export class SessionManager {
       return { projectPath, workspaceId, sessionDir: getProjectSessionDir(projectPath), trusted: trust.decision === 'trusted',
         genui: await this.genuiEnabled(),
         mode: await this.executionMode(),
+        expertId: await this.expertOf(projectPath, identity?.sessionId ?? null, workspaceId),
         worktreePath: workspace.kind === 'task' ? workspace.rootPath : null,
         sessionId: identity?.sessionId ?? null, sessionFile: identity?.sessionFile ?? null,
         fileStamp: identity?.fileStamp ?? null }
@@ -131,6 +194,19 @@ export class SessionManager {
       if (error instanceof SessionStorageError) throw new SdkTargetFailure('SESSION_NOT_FOUND')
       throw new SdkTargetFailure('AUTHORIZATION_FAILED')
     }
+  }
+
+  /**
+   * 本次授权使用的专家：先看这次打开请求暂存的值，没有再看持久绑定。
+   * 未启用绑定时只接受请求值，行为与未引入专家前一致。
+   */
+  private async expertOf(projectPath: string, sessionId: string | null, workspaceId: string): Promise<string | null> {
+    const key = this.expertKey(workspaceId, sessionId)
+    const pending = this.pendingExperts.get(key)
+    if (this.options.sessionExperts === undefined) return isExpertId(pending) ? pending : null
+    return resolveSessionExpert({
+      bindings: this.options.sessionExperts, projectPath, sessionId, requested: pending
+    })
   }
 
   /**
@@ -302,7 +378,16 @@ export class SessionManager {
       throw new SessionFailure('SESSION_NOT_FOUND', '当前项目下找不到该会话；列表可能已过期。')
     }
 
-    return this.openWithSdk(projectPath, request, selection, workspace.id)
+    // 专家随本次打开请求暂存：宿主授权时只拿得到引用与工作区，取不到页面请求本身。
+    const expertKey = this.expertKey(workspace.id, request.sessionId)
+    if (request.expertId !== undefined) {
+      this.pendingExperts.set(expertKey, isExpertId(request.expertId) ? request.expertId : null)
+    }
+    try {
+      return await this.openWithSdk(projectPath, request, selection, workspace.id)
+    } finally {
+      this.pendingExperts.delete(expertKey)
+    }
   }
 
   /** 该会话是否已由某个运行实例占用；占用覆盖打开中与未确认退出，与会话文件是否已落盘无关。 */
@@ -348,12 +433,13 @@ export class SessionManager {
     if (workspaceId === null) throw new SessionFailure('RUNTIME_NOT_READY', '运行实例缺少已授权工作区，未使用项目目录代替。')
     const workspace = await this.options.workspaces.authorize(projectPath, workspaceId)
     await this.options.workspaces.bindSession(projectPath, openedSessionId, workspaceId)
+    const expertId = await this.expertOf(projectPath, openedSessionId, workspaceId)
     const currentProjectPath = this.options.projects.currentProjectPath()
     if (focus && currentProjectPath !== null && currentProjectPath !== projectPath) {
       // 等待宿主期间用户可能已经切项目；旧请求不能把前台留在原项目。
       this.options.sdk.focusProject(currentProjectPath)
     }
-    return { projectPath, runId, openedSessionId, workspace }
+    return { projectPath, runId, openedSessionId, workspace, expertId }
   }
 
   /**
@@ -386,6 +472,8 @@ export class SessionManager {
         }
       }
       await deleteSessionFile(projectPath, request.sessionId)
+      // 绑定只是标识记录：清理失败不影响已完成的删除，也不阻断后续工作区清理。
+      await this.options.sessionExperts?.forget(projectPath, request.sessionId).catch(() => undefined)
       // 会话已删：按偏好清理它独占且无改动的任务工作树。清理失败不回滚删除，也不影响列表返回。
       await this.cleanupWorkspaceAfterDelete(projectPath, request.sessionId)
       return { ok: true, data: await listSessions(projectPath, request.listLimit) }

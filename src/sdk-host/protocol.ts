@@ -5,6 +5,7 @@ import type { MemoryHostConfiguration } from '../shared-process/memory-runtime'
 import { parseImageAnnotations } from '../shared/image-annotation'
 import type { ImageAnnotationDocument } from '../shared/image-annotation'
 import { isWorkspaceId } from '../shared/workspace-api'
+import { isExpertId } from '../shared/session-api'
 import { isExecutionMode } from '../shared/preferences-api'
 import type { ExecutionMode } from '../shared/preferences-api'
 import {
@@ -18,7 +19,8 @@ import type {
   ResourceIssue, RuntimeDiagnostics, SessionUsage, HistoryQuery, HistoryData
 } from '../shared/runtime-api'
 
-export const SDK_HOST_PROTOCOL_VERSION = 12
+/** 目标结构新增 `expertId`，旧宿主读到不带它的目标会拒收，因此升版本而不做兼容。 */
+export const SDK_HOST_PROTOCOL_VERSION = 13
 /** 桌面记忆配置推送通道：与扩展侧 host.ts 的常量一致，只传受限配置对象。 */
 export const MEMORY_CONFIGURATION_CHANGED = 'pi-desk:memory-configuration-changed:v1'
 
@@ -60,6 +62,11 @@ export interface SdkSessionTarget {
    * 不改变文件清单审批与运行授权规则。
    */
   readonly mode: ExecutionMode
+  /**
+   * 本次会话使用的专家；只影响宿主注入的角色段，不改工具集与权限面。
+   * 主进程已按持久绑定或打开请求解析完毕，宿主不再自行查找。
+   */
+  readonly expertId: string | null
   /** 主进程解析的任务执行根；仅为宿主内部启动参数，不接受页面直传。 */
   readonly worktreePath?: string | null
 }
@@ -314,8 +321,9 @@ export function isSdkSessionTarget(value: unknown): value is SdkSessionTarget {
     ? value.sessionId === null && value.fileStamp === null
     : isPath(value.sessionFile) && isIdentifier(value.sessionId) && isIdentifier(value.fileStamp)
   const worktreeValid = value.worktreePath === undefined || value.worktreePath === null || isPath(value.worktreePath)
-  return targetValid && worktreeValid && isWorkspaceId(value.workspaceId)
-    && hasKeys(value, ['workspaceId', 'projectPath', 'sessionDir', 'sessionId', 'sessionFile', 'fileStamp', 'trusted', 'genui', 'mode', 'worktreePath'])
+  const expertValid = value.expertId === null || isExpertId(value.expertId)
+  return targetValid && worktreeValid && expertValid && isWorkspaceId(value.workspaceId)
+    && hasKeys(value, ['workspaceId', 'projectPath', 'sessionDir', 'sessionId', 'sessionFile', 'fileStamp', 'trusted', 'genui', 'mode', 'expertId', 'worktreePath'])
 }
 /** 日志目标只接受绝对路径、会话身份、文件戳与已声明的历史查询；不带信任或功能开关，避免被当成绑定目标。 */
 export function isSdkLogTarget(value: unknown): value is SdkLogTarget {
