@@ -117,3 +117,39 @@ test('产物文件被改动后清单校验失败，混合版本不会进入身�
   }
 })
 
+test('专家段缺省时按空列表处理，旧产物不因新增组成而失效', () => {
+  const temp = createTempRoot('pi-desk-bundle-')
+  try {
+    writeProductBundle(temp.dir)
+    assert.deepEqual(readAgentResourceBundle(temp.dir).experts, [])
+  } finally {
+    temp.cleanup()
+  }
+})
+
+test('专家组成文件缺少内容指纹时清单校验失败', () => {
+  const temp = createTempRoot('pi-desk-bundle-')
+  try {
+    writeProductBundle(temp.dir, manifest => {
+      manifest.experts = [{
+        id: 'news-research', entry: 'experts/news-research/expert.md', files: ['experts/news-research/expert.md']
+      }]
+    })
+    assert.throws(() => readAgentResourceBundle(temp.dir), /缺少内容指纹/u)
+  } finally {
+    temp.cleanup()
+  }
+})
+
+test('专家与技能标识重复时清单无效', () => {
+  const temp = createTempRoot('pi-desk-bundle-')
+  try {
+    writeProductBundle(temp.dir, manifest => {
+      manifest.experts = [{ id: 'memory', entry: 'skills/memory/SKILL.md', files: ['skills/memory/SKILL.md'] }]
+    })
+    assert.throws(() => readAgentResourceBundle(temp.dir), /身份重复/u)
+  } finally {
+    temp.cleanup()
+  }
+})
+

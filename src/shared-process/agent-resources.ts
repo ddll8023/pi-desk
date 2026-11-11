@@ -25,6 +25,8 @@ export interface AgentResourceBundle {
   readonly root: string
   readonly extensions: readonly AgentResource[]
   readonly skills: readonly AgentResource[]
+  /** 专家定义：只作为可召唤的角色资源，不参与技能装配，也不进入子代理进程。 */
+  readonly experts: readonly AgentResource[]
   readonly memoryEngine: string
   readonly fingerprints: Readonly<Record<string, string>>
   /** 每个组件的组成文件聚合摘要；读取时按 fingerprints 重算复核，不能由清单自证。 */
@@ -107,10 +109,14 @@ export function readAgentResourceBundle(directory: string): AgentResourceBundle 
   if (statSync(manifestPath).size > MAX_MANIFEST_BYTES) throw new Error('产品资源清单超过读取上限')
   const raw: unknown = JSON.parse(readFileSync(manifestPath, 'utf8'))
   if (!record(raw) || raw.version !== 1 || !Array.isArray(raw.extensions) || !Array.isArray(raw.skills)
+    || (raw.experts !== undefined && !Array.isArray(raw.experts))
     || !resourceName(raw.memoryEngine) || !record(raw.fingerprints)) throw new Error('产品资源清单缺失或版本无效')
   const extensions = raw.extensions.map(parseResource)
   const skills = raw.skills.map(parseResource)
-  const ids = [...extensions, ...skills].map(item => item.id)
+  // 专家段是可选组成：旧产物没有这一项时按空列表处理，不要求为新增能力重建全部清单。
+  const experts = Array.isArray(raw.experts) ? raw.experts.map(parseResource) : []
+  const components = [...extensions, ...skills, ...experts]
+  const ids = components.map(item => item.id)
   if (new Set(ids).size !== ids.length || extensions.some(item => item.requiredTools.length === 0)
     || !extensions.some(item => item.id === 'skill-guard')
     || !extensions.some(item => item.id === 'pi-memory') || !skills.some(item => item.id === 'memory')) {
@@ -126,12 +132,12 @@ export function readAgentResourceBundle(directory: string): AgentResourceBundle 
     if (fingerprint(agentResourcePath(root, name)) !== digest) throw new Error(`产品资源内容与清单不一致：${name}`)
     fingerprints[name] = digest
   }
-  for (const name of [...extensions, ...skills].flatMap(item => item.files).concat(raw.memoryEngine)) {
+  for (const name of components.flatMap(item => item.files).concat(raw.memoryEngine)) {
     if (!Object.hasOwn(fingerprints, name)) throw new Error(`产品资源缺少内容指纹：${name}`)
   }
   if (!record(raw.componentDigests)) throw new Error('产品资源组件摘要缺失')
   const componentDigests: Record<string, string> = {}
-  for (const item of [...extensions, ...skills]) {
+  for (const item of components) {
     const digest = raw.componentDigests[item.id]
     if (typeof digest !== 'string' || !/^[a-f0-9]{64}$/.test(digest)
       || digest !== componentDigestOf(fingerprints, item.files)) {
@@ -139,5 +145,5 @@ export function readAgentResourceBundle(directory: string): AgentResourceBundle 
     }
     componentDigests[item.id] = digest
   }
-  return { root, extensions, skills, memoryEngine: raw.memoryEngine, fingerprints, componentDigests }
+  return { root, extensions, skills, experts, memoryEngine: raw.memoryEngine, fingerprints, componentDigests }
 }

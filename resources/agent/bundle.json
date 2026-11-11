@@ -86,5 +86,14 @@
       ]
     }
   ],
+  "experts": [
+    {
+      "id": "news-research",
+      "entry": "experts/news-research/expert.md",
+      "files": [
+        "experts/news-research/expert.md"
+      ]
+    }
+  ],
   "memoryEngine": "skills/memory/scripts/memory_store.py"
 }

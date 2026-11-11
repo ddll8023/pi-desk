@@ -83,9 +83,10 @@
 | `src/shared-process/process-tree-termination.ts` | 跨平台进程树终止 | 受管入口、资源探测、认证及终端守护进程 |
 | `src/shared-process/runtime.ts` | SDK 发布目录布局、当前版本指针、SDK 入口解析、动态加载及自带版本回退 | 主进程运行时解析、SDK 宿主、认证、CLI、版本检查、安装入口 |
 | `src/shared-process/agent-resources.ts` | 产品 Agent 资源固定布局、清单读取与内容指纹、组件摘要 | 主进程资源目录定位、SDK 宿主的产品资源装配 |
+| `src/shared-process/expert-definitions.ts` | 专家定义解析、内置与自定义两来源合并、身份冲突与技能引用诊断；尚无调用方，召唤接入属后续阶段 | 专家列表与后续会话召唤 |
 | `src/shared-process/memory-runtime.ts` | 受管记忆运行环境布局与清单校验、全局库位置、随包配置的受限校验与序列化 | 主进程记忆管理器、SDK 宿主的配置注入与回写 |
 
-前四行位于 `src/main/shared/`，后四行位于 `src/shared-process/`。`runtime.ts` 与 `src/entries/runtime-install/index.ts` 不是同一职责：前者本身不下载、不安装，只维护发布目录布局与当前版本指针。
+表内前四行位于 `src/main/shared/`，其余位于 `src/shared-process/`。`runtime.ts` 与 `src/entries/runtime-install/index.ts` 不是同一职责：前者本身不下载、不安装，只维护发布目录布局与当前版本指针。
 
 ## F-platform：文件锁、外链与基础错误（共享）
 
@@ -153,7 +154,7 @@
 | `scripts/sync-skill-setup.mjs` | 从维护电脑的全局规则生成 pi-skill-setup 的两份规则模板，并清理技能目录 `assets/` 名单外文件；`--check` 只比对不写 |
 | `scripts/stage-memory-runtime.mjs` | 将当前平台的受管运行环境暂存到宿主产物旁；未准备时明确失败，不自动下载 |
 | `scripts/fix-node-pty-permissions.mjs` | 修正 PTY 预编译助手执行权限，供开发与发行准备使用 |
-| `resources/agent/` | 门禁与记忆扩展、配套 Memory Skill 及引擎的唯一维护源，构建时原样暂存进宿主产物 |
+| `resources/agent/` | 门禁与记忆扩展、配套 Memory Skill 及引擎、专家定义的唯一维护源，构建时原样暂存进宿主产物 |
 | `resources/memory-runtime/` | 受管 Python 与时区归档的固定清单、内容指纹及来源与许可说明；不存生成产物与用户数据 |
 | `build/icon.svg` | 应用图标源 |
 | `build/icon.ico` | 预生成的发行图标资源 |

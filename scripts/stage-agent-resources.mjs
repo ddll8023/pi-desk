@@ -98,11 +98,15 @@ async function stage() {
     files.set(name, await readFile(path))
   }
   const bundle = JSON.parse(await readFile(join(source, 'bundle.json'), 'utf8'))
-  if (bundle.version !== 1 || !Array.isArray(bundle.extensions) || !Array.isArray(bundle.skills)) {
+  if (bundle.version !== 1 || !Array.isArray(bundle.extensions) || !Array.isArray(bundle.skills)
+    || (bundle.experts !== undefined && !Array.isArray(bundle.experts))) {
     throw new Error('产品资源清单格式无效')
   }
+  // 专家段与扩展、技能同构，但可以由旧清单直接缺省；缺省时产物里也不写这一项。
+  const components = [...bundle.extensions, ...bundle.skills,
+    ...(Array.isArray(bundle.experts) ? bundle.experts : [])]
   const ids = new Set()
-  for (const item of [...bundle.extensions, ...bundle.skills]) {
+  for (const item of components) {
     if (typeof item.id !== 'string' || !item.id || ids.has(item.id) || !Array.isArray(item.files)
       || item.files.length === 0 || !item.files.includes(item.entry)) throw new Error('产品资源身份或组成文件无效')
     ids.add(item.id)
@@ -128,7 +132,7 @@ async function stage() {
   }
   // 组件摘要写在清单里，运行期会按 fingerprints 重算复核；它区分副本与本机版本的偏离程度，不用于准入。
   const componentDigests = {}
-  for (const item of [...bundle.extensions, ...bundle.skills]) {
+  for (const item of components) {
     componentDigests[item.id] = componentDigest(fingerprints, item.files)
   }
   // 清单最后写入；部分暂存失败时，运行期不能把混合版本误当作完整资源。
