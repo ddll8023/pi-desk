@@ -340,7 +340,11 @@ function formatDateKeyOf(date: Date): string {
 function heatmapThresholds(values: readonly number[]): readonly [number, number, number] {
   if (values.length === 0) return [0, 0, 0]
   const sorted = [...values].sort((a, b) => a - b)
-  const at = (ratio: number): number => sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * ratio))]
+  // 样本非空时索引一定落在合法范围内，这里的回退只为满足索引访问的类型收窄。
+  const at = (ratio: number): number => {
+    const index = Math.min(sorted.length - 1, Math.floor(sorted.length * ratio))
+    return sorted[index] ?? 0
+  }
   return [at(0.25), at(0.5), at(0.75)]
 }
 
