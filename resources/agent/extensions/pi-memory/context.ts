@@ -1,4 +1,4 @@
-/** 用户级全局记忆的请求背景与分支控制；提供适用偏好、常驻约定和任务召回，按工作目录匹配项目归属、按名称解析检索范围，不把召回正文写入会话。 */
+/** 用户级全局记忆的请求背景与分支控制；提供适用偏好、常驻约定、当前项目近况和任务召回，按工作目录匹配项目归属、按名称解析检索范围，不把召回正文写入会话。 */
 import { resolve } from 'node:path'
 import type { AgentMessage } from '@earendil-works/pi-agent-core'
 import type { ExtensionContext } from '@earendil-works/pi-coding-agent'
@@ -9,10 +9,15 @@ import type { RecallCache } from './recall.ts'
 
 export const CONTEXT_TYPE = 'pi-memory.background.v1'
 export const CONTROL_TYPE = 'pi-memory.control.v1'
-/** 常驻约定的总预算、单条上限与索引行数：预算足够时全部族注入全文，用尽才降为索引。 */
+/** 常驻背景总预算：约定与近况分段，进展流水不能挤掉规则预算。 */
 const RESIDENT_BUDGET = 20_000
+const RESIDENT_RULES_BUDGET = 17_000
+const RESIDENT_NOTES_BUDGET = 3_000
 const RESIDENT_MAX_RULE_CHARS = 2_000
 const RESIDENT_INDEX_ROWS = 20
+/** 近况条数与单条上限：这段只回答「这个项目最近在做什么」，不做词法筛选。 */
+const RESIDENT_NOTES_LIMIT = 3
+const RESIDENT_NOTE_MAX_CHARS = 1_200
 /** 规则列表与取全文是两次读取，共用一个会话内预算，超时后不再重试。 */
 const RESIDENT_TIMEOUT = 3_000
 interface State {
@@ -35,6 +40,10 @@ interface State {
   residentAttempts?: number | undefined
   /** 常驻约定的注入规模，只进状态查询与排障，不进入模型上下文。 */
   residentStats?: JsonObject | undefined
+  /** 当前项目近况：与常驻约定分开缓存与失败，读不到只影响这一段。 */
+  notes?: string | undefined
+  notesAttempts?: number | undefined
+  notesStats?: JsonObject | undefined
 }
 export interface Lease {
   signal: AbortSignal
@@ -149,6 +158,17 @@ function residentIndex(row: JsonObject): string {
   return key ? `· ${key} ${text(row.topic)}` : `· ${text(row.topic)}`
 }
 
+/** 近况标签：先给类型，再给正文，避免把历史进展读成必须遵守的约定。 */
+const NOTE_LABELS: Record<string, string> = { progress: '进展', issue: '问题', fact: '事实', preference_evidence: '偏好证据' }
+
+/** 近况块只保留类型、日期、主题与有限正文；超出时给出按 ID 读取的出口。 */
+function noteBlock(row: JsonObject): string {
+  const label = NOTE_LABELS[text(row.type)] ?? '记录'
+  const body = text(row.content).replace(/\r/g, '').trim()
+  const cut = body.length > RESIDENT_NOTE_MAX_CHARS
+  return `■ ${text(row.date)} ${label} ${text(row.topic)}\n${body.slice(0, RESIDENT_NOTE_MAX_CHARS)}${cut ? `\n…（余下按 memory_read ${text(row.id)} 读）` : ''}`
+}
+
 export class MemoryRuntime {
   private readonly states = new WeakMap<ExtensionContext['sessionManager'], State>()
   /** 同一实例不并发保存；独立宿主之间由数据库写事务与库版本协调。 */
@@ -211,7 +231,8 @@ export class MemoryRuntime {
   shutdown(ctx: ExtensionContext): void {
     const state = this.states.get(ctx.sessionManager)
     if (state) { state.closed = true; state.controller.abort(); state.profiles = undefined; state.recall = undefined
-      state.resident = undefined; state.residentAttempts = undefined; state.residentStats = undefined }
+      state.resident = undefined; state.residentAttempts = undefined; state.residentStats = undefined
+      state.notes = undefined; state.notesAttempts = undefined; state.notesStats = undefined }
   }
 
   /** 停用原因来自宿主派生：执行模式关闭时不要说成用户停用，否则会引到错误的恢复动作。 */
@@ -242,7 +263,8 @@ export class MemoryRuntime {
     if (this.saving) throw new Error('已有记忆保存正在处理，请等待其真实结果')
     this.saving = true
     return () => { this.saving = false; lease.state.profiles = undefined; lease.state.recall = undefined
-      lease.state.resident = undefined; lease.state.residentAttempts = undefined; lease.state.residentStats = undefined }
+      lease.state.resident = undefined; lease.state.residentAttempts = undefined; lease.state.residentStats = undefined
+      lease.state.notes = undefined; lease.state.notesAttempts = undefined; lease.state.notesStats = undefined }
   }
 
   control(ctx: ExtensionContext, action: 'on' | 'off' | 'refresh', append: (data: JsonObject) => void): JsonObject {
@@ -267,12 +289,13 @@ export class MemoryRuntime {
       current_project: this.currentProject(state.cwd),
       automatic_domains: this.config.profileDomains, saving: this.saving,
       automatic_recall: { ...(state.recallStatus ?? { status: state.enabled ? 'not_requested' : 'disabled' }),
-        resident: state.residentStats ?? { status: state.enabled ? 'not_requested' : 'disabled' } },
+        resident: state.residentStats ?? { status: state.enabled ? 'not_requested' : 'disabled' },
+        notes: state.notesStats ?? { status: state.enabled ? 'not_requested' : 'disabled' } },
       approval_boundary: '仅覆盖 pi-memory 写入通道；不是全局文件沙箱',
       commands: '/memory status | off | on | refresh', maintenance: '不自动初始化、保存、重建词项或迁移' }
   }
 
-  /** 近期日期窗口：常驻约定只取最近七天的决定与约束，更早的结论仍可手动检索。 */
+  /** 近期日期窗口：常驻背景（约定与近况）只取最近七天，更早的结论仍可手动检索。 */
   private residentWindow(): string {
     const date = new Date(Date.now() - 7 * 86_400_000)
     return new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 10)
@@ -332,7 +355,7 @@ export class MemoryRuntime {
       let used = 0
       for (const item of families) {
         const block = residentBlock(item.row, bodies.get(text(item.row.id)))
-        if (used + block.length + 1 > RESIDENT_BUDGET) { indexed.push(item.row); continue }
+        if (used + block.length + 1 > RESIDENT_RULES_BUDGET) { indexed.push(item.row); continue }
         blocks.push({ item, block }); used += block.length + 1
       }
       const injected = blocks.length
@@ -344,15 +367,60 @@ export class MemoryRuntime {
       const omitted = rows.length - excludedRecords - injected
       if (pending > 0) lines.push(`另有 ${pending} 族未展开正文（共 ${omitted} 条未注入）：memory_rules 取摘要，memory_read 取全文。`)
       if (excludedFamilies > 0) lines.push(`其他项目另有 ${excludedFamilies} 族约定未进入常驻；需要时用 memory_rules 或 memory_search 检索。`)
-      state.resident = lines.join('\n')
+      const content = injected > 0 ? ['以下「决定 / 约束」是约定，须遵守。', ...lines] : lines
+      state.resident = content.join('\n')
       state.residentStats = { status: 'provided', families: families.length, injected, indexed: pending, omitted,
-        excluded: excludedFamilies, excluded_records: excludedRecords, budget: RESIDENT_BUDGET, chars: used }
+        excluded: excludedFamilies, excluded_records: excludedRecords,
+        budget: RESIDENT_RULES_BUDGET, total_budget: RESIDENT_BUDGET, chars: used }
       return state.resident
     } catch (error) {
       lease.assert()
       // 失败不缓存正文，只记录原因：下一次请求重试一次，仍失败才不再尝试。
       state.resident = undefined
       state.residentStats = { status: 'unavailable', reason: errorText(error) }
+      return ''
+    } finally { clearTimeout(timer) }
+  }
+
+  /**
+   * 当前项目近况：近七天、当前项目归属、非规则类记录，按日期倒序取有限条。
+   * 不做词法筛选与族收敛，也不混入其他项目：这段只回答「这个项目最近在做什么」。
+   * 与常驻约定分开缓存与失败，近况读不到不影响规则段。
+   */
+  private async projectNotes(lease: Lease): Promise<string> {
+    const state = lease.state
+    if (state.notes !== undefined) return state.notes
+    // 失败允许下一次请求重试一次，与常驻约定的重试预算一致。
+    if ((state.notesAttempts ?? 0) >= 2) return ''
+    state.notesAttempts = (state.notesAttempts ?? 0) + 1
+    const projectId = this.projectId(state.cwd)
+    if (projectId === null) {
+      state.notes = ''; state.notesStats = { status: 'no_project' }
+      return ''
+    }
+    const controller = new AbortController()
+    const signal = AbortSignal.any([lease.signal, controller.signal])
+    const timer = setTimeout(() => controller.abort(), RESIDENT_TIMEOUT)
+    try {
+      const data = await this.engine.recentNotes(projectId, this.residentWindow(), RESIDENT_NOTES_LIMIT, signal)
+      lease.assert()
+      const records = array(data.records).map(value => object(value))
+        .filter(row => NOTE_LABELS[text(row.type)] !== undefined)
+      const lines: string[] = []
+      let used = 0
+      for (const row of records) {
+        const block = noteBlock(row)
+        if (used + block.length + 1 > RESIDENT_NOTES_BUDGET) continue
+        lines.push(block); used += block.length + 1
+      }
+      state.notes = lines.join('\n')
+      state.notesStats = { status: 'provided', project: projectId, candidates: records.length,
+        injected: lines.length, budget: RESIDENT_NOTES_BUDGET, chars: used }
+      return state.notes
+    } catch (error) {
+      lease.assert()
+      // 失败不缓存正文，只记原因；下一次请求再试一次。
+      state.notesStats = { status: 'unavailable', reason: errorText(error) }
       return ''
     } finally { clearTimeout(timer) }
   }
@@ -451,6 +519,7 @@ export class MemoryRuntime {
       }
       const recalled = await this.automaticBackground(lease, messages)
       const resident = await this.residentSummary(lease)
+      const notes = await this.projectNotes(lease)
       const errors = await this.errorBackground(lease, messages)
       lease.assert()
       return [
@@ -460,6 +529,7 @@ export class MemoryRuntime {
         '记忆使用及保存仍遵守 memory Skill；保存须用户明确要求，由扩展经写入闸门直接提交并返回回执。',
         `全局库：${this.engine.store}；领域：${this.config.profileDomains.join(', ')}。`,
         '【适用偏好】', profiles, ...(resident ? ['【常驻约定：用户已确认，产出前核对】', resident] : []),
+        ...(notes ? ['【当前项目近况：历史状态，不是约定，不构成要求】', notes] : []),
         ...(recalled ? ['【任务相关记忆】', recalled] : []), errors
       ].filter(Boolean).join('\n')
     } catch (error) {

@@ -21,6 +21,8 @@ READABLE_VERSION = STORE_VERSION
 PLAN_VERSION = 4
 TYPES = {'decision','constraint','progress','issue','fact','preference_evidence'}
 RULE_TYPES = {'decision','constraint'}
+# 非规则类记录只用于「项目近况」，不参与常驻约定的族收敛与替代。
+NOTE_TYPES = TYPES - RULE_TYPES
 DOMAINS = {'communication','coding','learning','workflow'}
 ID_RE = re.compile(r'^[msp]_[0-9A-HJKMNP-TV-Z]{26}$')
 # 项目归属取桌面项目注册表的 UUID；旧项目段里的自由命名只作历史来源，不参与匹配。
@@ -819,6 +821,31 @@ def active_rules(root: Path, query: str = '', offset: int = 0, limit: int = 50,
                 'store_version':version,'coverage':'store_records',
                 'has_more':offset+limit<total,'next_offset':offset+len(page) if offset+limit<total else None,
                 'rules':rules,'note':'返回摘要，完整正文需调用 memory_read'}
+
+
+def project_notes(root: Path, project: str, date_from: str, limit: int = 3) -> dict:
+    """按项目与日期窗口读取进展、问题与事实，供每轮背景的「当前项目近况」段使用。
+
+    不做词法筛选也不做族收敛：这一段的语义是「这个项目最近在做什么」，口径必须可预测。
+    只读且只收 active；规则类记录由 `rules` 提供，不在这里重复。
+    """
+    expect(isinstance(project,str) and PROJECT_ID_RE.fullmatch(project) is not None,
+           '项目范围须为注册表 UUID')
+    expect(isinstance(date_from,str) and re.fullmatch(r'\d{4}-\d{2}-\d{2}',date_from) is not None,
+           '近况起始日期须为 YYYY-MM-DD')
+    expect(isinstance(limit,int) and 1<=limit<=10,'近况条数非法；每批 1～10 条')
+    types=tuple(sorted(NOTE_TYPES))
+    placeholders=','.join('?'*len(types))
+    with connect(root) as conn:
+        require_version(conn)
+        version=change_seq(conn)
+        rows=record_rows(conn,f'type IN ({placeholders}) AND status=? AND project_id=? AND date>=?',
+                         types+('active',project,date_from))
+    ordered=sorted(rows,key=lambda r:(r['date'],r['id']),reverse=True)[:limit]
+    return {'memory_scope':'global','project':project,'date_from':date_from,'limit':limit,
+            'store_version':version,'coverage':'store_records',
+            'records':[public_record(r) for r in ordered],
+            'note':'近况只作历史状态，不构成约定；正文未按词法筛选，也不参与族收敛'}
 
 
 def profiles_view(root: Path, domain: str | None = None) -> dict:
@@ -1620,6 +1647,7 @@ def main() -> None:
     background=sub.add_parser('recall-background');background.add_argument('--input',required=True,choices=['-'])
     error=sub.add_parser('error-recall');error.add_argument('--input',required=True,choices=['-'])
     rules=sub.add_parser('rules');rules.add_argument('--query',default='');rules.add_argument('--project');rules.add_argument('--offset',type=int,default=0);rules.add_argument('--limit',type=int,default=50)
+    notes=sub.add_parser('project-notes');notes.add_argument('--project',required=True);notes.add_argument('--date-from',required=True);notes.add_argument('--limit',type=int,default=3)
     ms=sub.add_parser('month-source');ms.add_argument('month');ms.add_argument('--offset',type=int,default=0);ms.add_argument('--limit',type=int,default=50);ms.add_argument('--closed-today-confirmed',action='store_true')
     rr=sub.add_parser('read');rr.add_argument('ids',nargs='+')
     ac=sub.add_parser('access-record');ac.add_argument('--input',required=True,choices=['-'])
@@ -1685,6 +1713,8 @@ def main() -> None:
             result=indexed_recall(root,args.query,mode,args.month,0,args.limit,allow_empty=True)
         elif args.cmd=='rules':
             result=active_rules(root,args.query,args.offset,args.limit,args.project)
+        elif args.cmd=='project-notes':
+            result=project_notes(root,args.project,args.date_from,args.limit)
         elif args.cmd=='month-source':
             result=monthly_source(root,args.month,args.offset,args.limit,args.closed_today_confirmed)
         elif args.cmd=='read':
