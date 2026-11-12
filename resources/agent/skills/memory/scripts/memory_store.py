@@ -23,6 +23,15 @@ TYPES = {'decision','constraint','progress','issue','fact','preference_evidence'
 RULE_TYPES = {'decision','constraint'}
 # 非规则类记录只用于「项目近况」，不参与常驻约定的合并与替代。
 NOTE_TYPES = TYPES - RULE_TYPES
+# 规则类沿用 active/superseded；非规则类允许 resolved/archived，用于把已完成工作转入历史层。
+RULE_STATUSES = {'active','superseded'}
+NOTE_STATUSES = {
+    'progress': {'active','archived'},
+    'issue': {'active','resolved','archived'},
+    'fact': {'active','archived'},
+    'preference_evidence': {'active','archived'},
+}
+CLOSE_STATUSES = {'resolved','archived'}
 DOMAINS = {'communication','coding','learning','workflow'}
 ID_RE = re.compile(r'^[msp]_[0-9A-HJKMNP-TV-Z]{26}$')
 # 项目归属取桌面项目注册表的 UUID；旧项目段里的自由命名只作历史来源，不参与匹配。
@@ -409,7 +418,10 @@ def validate_state(conn: sqlite3.Connection) -> tuple[list[dict],list[dict]]:
         expect(re.fullmatch(r'\d{4}-\d{2}-\d{2}',r['date']) is not None and _valid_date(r['date']),
                '记录日期无效: '+r['id'])
         expect(r['type'] in TYPES,'未知记录类型')
-        expect(r['status'] in ('active','superseded'),'非法记录状态')
+        if r['type'] in RULE_TYPES:
+            expect(r['status'] in RULE_STATUSES,'非法规则记录状态')
+        else:
+            expect(r['status'] in NOTE_STATUSES[r['type']],'非法非规则记录状态')
         expect(r['project_id'] is None or (isinstance(r['project_id'],str)
                and PROJECT_ID_RE.fullmatch(r['project_id']) is not None),'项目归属无效')
         sources=record_refs(r,'source_record_ids')
@@ -427,7 +439,7 @@ def validate_state(conn: sqlite3.Connection) -> tuple[list[dict],list[dict]]:
                 expect(old['type'] in RULE_TYPES and old['status']=='superseded'
                        and old.get('superseded_by')==r['id'],'替代关系必须指向已被明确替代的规则')
         else:
-            expect(not supersedes and r['status']=='active' and not r.get('superseded_by'),
+            expect(not supersedes and not r.get('superseded_by'),
                    '非规则日记不能参与有效版本替代')
         successor=r.get('superseded_by')
         if successor is not None:
@@ -976,7 +988,7 @@ def record_access(root: Path, data: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 def prepare(root: Path, op: str, data: dict) -> dict:
-    allowed={'save':{'agent','session_id','records','project_id'},
+    allowed={'save':{'agent','session_id','records','status_updates','project_id'},
              'delete':{'ids'},
              'profile':{'domain','scope','basis','title','content','source_record_ids','replace_profile_ids'},
              'month':{'month','topics','closed_today_confirmed','rebuild_existing'}}
@@ -998,10 +1010,31 @@ def prepare(root: Path, op: str, data: dict) -> dict:
             out=[];supersede=[];seen_keys=set();superseded_ids=set()
             seen_content={r['content_digest'] for r in records}
             duplicates=[]
+            status_updates=[];seen_update_ids=set()
+            for update in data.get('status_updates',[]):
+                expect(isinstance(update,dict) and not set(update)-{'id','status','reason'},'状态更新字段无效')
+                rid=update.get('id')
+                expect(isinstance(rid,str) and ID_RE.fullmatch(rid) is not None and rid in existing_ids,
+                       '状态更新目标不存在')
+                expect(rid not in seen_update_ids,'同一记录不能重复更新状态');seen_update_ids.add(rid)
+                target=update.get('status')
+                expect(target in CLOSE_STATUSES,'状态更新只接受 resolved 或 archived')
+                previous=existing_ids[rid]
+                expect(previous['type'] not in RULE_TYPES,'规则记录不能用状态更新关闭')
+                expect(previous['status']=='active','只有 active 记录可以关闭')
+                expect(target in NOTE_STATUSES[previous['type']],f'{previous["type"]} 不支持 {target} 状态')
+                reason=candidate_check(update.get('reason',''),True)
+                status_updates.append({'id':rid,'from':previous['status'],'to':target,
+                                       'type':previous['type'],'topic':previous['topic'],'reason':reason})
             for item in data.get('records',[]):
-                expect(isinstance(item,dict) and not set(item)-{'type','topic','content','rule_key','source_record_ids',
-                       'supersede_record_ids','supersession_reason'},'记录字段无效；不接受项目绑定字段')
+                expect(isinstance(item,dict) and not set(item)-{'type','topic','content','rule_key','status',
+                       'source_record_ids','supersede_record_ids','supersession_reason'},'记录字段无效；不接受项目绑定字段')
                 typ=item['type'];expect(typ in TYPES,'非法记忆类型')
+                status=item.get('status','active')
+                if typ in RULE_TYPES:
+                    expect(status=='active','规则记录不支持非 active 状态')
+                else:
+                    expect(status in NOTE_STATUSES[typ],'非法非规则记录状态')
                 expect('replace_record_ids' not in item and 'replacement_reason' not in item,
                        '旧替换协议不再接受；请用 supersede_record_ids / supersession_reason，历史不会删除')
                 rule_key=item.get('rule_key');targets=[]
@@ -1029,7 +1062,10 @@ def prepare(root: Path, op: str, data: dict) -> dict:
                 seen_content.add(digest)
                 rid=ulid('m')
                 new_record={'id':rid,'type':typ,'topic':title,'title':title,'content':content}
-                if typ in RULE_TYPES:new_record.update({'rule_key':rule_key,'status':'active'})
+                if typ in RULE_TYPES:
+                    new_record.update({'rule_key':rule_key,'status':'active'})
+                else:
+                    new_record['status']=status
                 if project_id is not None:new_record['project_id']=project_id
                 if sources:new_record['source_record_ids']=sources
                 if targets:new_record['supersedes']=[r['id'] for r,_ in targets]
@@ -1041,11 +1077,13 @@ def prepare(root: Path, op: str, data: dict) -> dict:
                                       'source_project':previous.get('project_id'),
                                       'superseded_by':rid,'reason':reason})
                 out.append(new_record)
-            expect(out,('候选与已有记录完全重复，未写入：'+'、'.join(duplicates)) if duplicates else '没有可保存的候选记录')
+            expect(out or status_updates,
+                   ('候选与已有记录完全重复，未写入：'+'、'.join(duplicates)) if duplicates else '没有可保存的候选记录或状态更新')
             withdrawn=[date[:7]] if conn.execute('SELECT 1 FROM summaries WHERE month=?',(date[:7],)).fetchone() else []
             payload={'date':date,'saved_at':saved_at,'session_id':session_id,
                      'agent':candidate_check(data.get('agent','unknown'),True),
-                     'records':out,'supersede':supersede,'withdrawn_months':withdrawn}
+                     'records':out,'status_updates':status_updates,
+                     'supersede':supersede,'withdrawn_months':withdrawn}
         elif op=='delete':
             ids=record_refs(data,'ids');expect(ids,'删除 ID 不能为空')
             expect(all(x in existing_ids for x in ids),'目标记忆 ID 不存在')
@@ -1137,6 +1175,7 @@ def render_preview(plan: dict) -> dict:
             'operation':op,'expires_in_hours':24}
     if op=='save':
         result.update({'date':d['date'],'new_records':d['records'],
+                       'status_updates':d.get('status_updates',[]),
                        'superseded_records':d['supersede'],'history_preserved':True})
     elif op=='delete':
         result.update({'delete_records':d['records'],'affected_record_references':d['affected_record_references'],
@@ -1170,6 +1209,8 @@ def commit(root: Path, plan_id: str) -> dict:
             if op=='month': month_closed(data['month'],zone,data.get('closed_today_confirmed',False))
             withdrawn=[];deleted_statistics=[]
             if op=='save':
+                for update in data.get('status_updates',[]):
+                    conn.execute('UPDATE records SET status=? WHERE id=?',(update['to'],update['id']))
                 successors={r['id']:r['superseded_by'] for r in data['supersede']}
                 for old_id,new_id in successors.items():
                     conn.execute('UPDATE records SET status=?,superseded_by=? WHERE id=?',('superseded',new_id,old_id))
@@ -1234,6 +1275,7 @@ def commit(root: Path, plan_id: str) -> dict:
     return {'memory_scope':'global','committed':plan_id,'operation':op,'store_version':version,
             'new_record_ids':new_ids,'withdrawn_months':withdrawn,
             'deleted_access_statistics_ids':deleted_statistics,
+            'status_updated_ids':[u['id'] for u in data.get('status_updates',[])] if op=='save' else [],
             'superseded_record_ids':[r['id'] for r in data['supersede']] if op=='save' else []}
 
 

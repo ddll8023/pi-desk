@@ -301,31 +301,46 @@ export function registerMemoryTools(pi: ExtensionAPI, runtime: MemoryRuntime): v
       })
     }
   })
+  const RecordStatus = Type.Optional(Type.Union([Type.Literal('active'), Type.Literal('resolved'), Type.Literal('archived')]))
+  const StatusUpdateSchema = Type.Object({
+    id: Type.String({ pattern: '^m_[0-9A-HJKMNP-TV-Z]{26}$' }),
+    status: Type.Union([Type.Literal('resolved'), Type.Literal('archived')]),
+    reason: Type.String({ minLength: 1, maxLength: 2000 })
+  }, { additionalProperties: false })
   const RecordSchema = Type.Object({
     type: Type.Union(['decision', 'constraint', 'progress', 'issue', 'fact', 'preference_evidence'].map(value => Type.Literal(value))),
     topic: Type.String({ minLength: 1, maxLength: 200 }), content: Type.String({ minLength: 1, maxLength: 20_000 }),
+    status: RecordStatus,
     rule_key: Type.Optional(Type.String({ minLength: 1 })), source_record_ids: Type.Optional(Ids),
     supersede_record_ids: Type.Optional(Ids), supersession_reason: Type.Optional(Type.String({ minLength: 1 }))
   }, { additionalProperties: false })
   pi.registerTool({
     name: 'memory_save', label: '保存工作日记', exposure: 'model-only', executionMode: 'sequential',
-    description: '仅在用户明确要求保存日记时，传入具体完整候选。按 memory Skill 先核实事实与现行规则。工具生成计划后直接提交并返回提交结果与回执，不再逐次等待确认；取消、分支变化或无写入能力宿主不提交。会写计划技术缓存，可清理过期计划；不是只读操作。不接受 approved 或外部 plan_id。',
-    parameters: Type.Object({ records: Type.Array(RecordSchema, { minItems: 1, maxItems: 50 }) }, { additionalProperties: false }),
+    description: '仅在用户明确要求保存日记时，传入具体完整候选。按 memory Skill 先核实事实与现行规则，只保存后续仍会使用的结论、约束与未决状态，历史流水归历史层。工具生成计划后直接提交并返回提交结果与回执，不再逐次等待确认；取消、分支变化或无写入能力宿主不提交。会写计划技术缓存，可清理过期计划；不是只读操作。不接受 approved 或外部 plan_id。',
+    parameters: Type.Object({
+      records: Type.Array(RecordSchema, { minItems: 0, maxItems: 50 }),
+      status_updates: Type.Optional(Type.Array(StatusUpdateSchema, { maxItems: 50 }))
+    }, { additionalProperties: false }),
     outputSchema: Output, annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
     async execute(_id, params, signal, _onUpdate, ctx) {
-      keys(params, ['records'])
+      keys(params, ['records', 'status_updates'])
       // 固化候选，后续交互不复用可被另一处理器修改的参数引用。
       const candidate = object(JSON.parse(JSON.stringify(params)))
       return save(ctx, signal, 'save', async lease => {
         const records = array(candidate.records).map(value => {
           const row = object(value)
-          keys(row, ['type', 'topic', 'content', 'rule_key', 'source_record_ids', 'supersede_record_ids', 'supersession_reason'])
+          keys(row, ['type', 'topic', 'content', 'status', 'rule_key', 'source_record_ids', 'supersede_record_ids', 'supersession_reason'])
+          return row
+        })
+        const statusUpdates = candidate.status_updates === undefined ? [] : array(candidate.status_updates).map(value => {
+          const row = object(value)
+          keys(row, ['id', 'status', 'reason'])
           return row
         })
         // 归属由宿主按项目注册表解析；未登记项目或独立 CLI 留空，不根据目录名推测。
         const project = runtime.projectId(lease.state.cwd)
         return { agent: ctx.mode === 'tui' ? 'pi' : 'pi-desk',
-          session_id: diarySessionId(ctx.sessionManager.getSessionId()), records,
+          session_id: diarySessionId(ctx.sessionManager.getSessionId()), records, status_updates: statusUpdates,
           ...(project === null ? {} : { project_id: project }) }
       })
     }

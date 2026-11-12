@@ -322,7 +322,7 @@ export class MemoryEngine {
     if (project !== null) args.push('--project', project)
     return this.run(args, undefined, signal)
   }
-  /** 当前项目近况：非规则类记录按日期倒序取有限条，不经词法筛选，也不参与常驻去重。 */
+  /** 当前项目近况：`status=active` 的非规则类记录按日期倒序取有限条，不经词法筛选，也不参与常驻去重。 */
   recentNotes(project: string, dateFrom: string, limit: number, signal?: AbortSignal): Promise<JsonObject> {
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(project)) throw new Error('近况查询的项目归属无效')
     if (!/^\d{4}-\d{2}-\d{2}$/.test(dateFrom)) throw new Error('近况查询的起始日期无效')

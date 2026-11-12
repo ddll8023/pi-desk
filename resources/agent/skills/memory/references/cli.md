@@ -65,8 +65,12 @@ python <脚本> commit --plan-id <实际返回ID> --approved
 {
   "agent":"pi",
   "records":[
-    {"type":"progress","topic":"工作主题","content":"记录实际工作、结果与未完成部分。"},
+    {"type":"progress","topic":"工作主题","content":"记录实际工作、结果与未完成部分。","status":"active"},
+    {"type":"issue","topic":"已关闭问题","content":"问题、根因与处理结果。","status":"resolved"},
     {"type":"decision","topic":"明确决定","rule_key":"稳定语义键","content":"决定、理由及适用条件。","source_record_ids":[]}
+  ],
+  "status_updates":[
+    {"id":"m_XXXXXXXXXXXXXXXXXXXXXXXXXX","status":"archived","reason":"工作已完成，不再影响后续决策"}
   ]
 }
 ```
@@ -75,9 +79,11 @@ python <脚本> commit --plan-id <实际返回ID> --approved
 
 类型为 decision、constraint、progress、issue、fact、preference_evidence。只有规则类提供 rule_key。先查语义重复和适用范围，同键只自动替代全局旧规则，不因历史来源同键而合并。
 
+非规则记录可在候选中直接带 `status`：`progress`／`fact`／`preference_evidence` 支持 `active`／`archived`，`issue` 支持 `active`／`resolved`／`archived`；`resolved`／`archived` 不进入当前项目近况，仍可检索。关闭已有活跃记录用 `status_updates`，每项包含 `id`、`status`（`resolved`／`archived`）与 `reason`；只作用于 `active` 的非规则记录。
+
 明确替代有效历史记录或跨键规则时提供 `supersede_record_ids` 与 `supersession_reason`。计划展示完整旧来源、旧新正文和理由，旧 ID、日期和正文保留；旧物理替换字段不接受。
 
-返回 `new_records`、`superseded_records`、`history_preserved`、`withdrawn_months`。新增记录进入已有当月摘要时列出撤回影响，不自动重建。
+返回 `new_records`、`superseded_records`、`status_updates`、`history_preserved`、`withdrawn_months`。新增记录进入已有当月摘要时列出撤回影响，不自动重建。
 
 ### 画像候选
 
