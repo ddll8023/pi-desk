@@ -4,6 +4,7 @@
  * 只读取随包清单给出的内置专家定义，以及产品 agent 目录下的自定义专家，合并成一份可召唤清单；
  * 单个定义损坏、身份冲突或引用了不可用技能时只影响对应条目，不中断整份清单。
  * 本模块不装配会话、不注入系统提示，也不产生任何子代理调用；清单条目到内置入口的映射、技能目录标识列举，以及写回所需的声明解析、标识校验与上限常量都由这里提供，主进程不复制第二份规则。
+ * 能力范围（技能与 MCP）的解析与合并也在这里：专家只继承默认基线并做增减，两类来源的语义差异只体现在调用方给出的可用集上。
  */
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
@@ -44,6 +45,20 @@ export interface ExpertDefinition {
   readonly summary: string
   /** 声明引用的技能标识；不可用的引用仍保留在这里，另在 `unavailableSkillIds` 标出。 */
   readonly skillIds: readonly string[]
+  /** 技能范围：`only` 时 `skillIds` 是白名单，`inherit` 时 `skillIds` 只作提示、范围由基线加减决定。 */
+  readonly skillsMode: ExpertCapabilityMode
+  /** 继承模式下在基线之上加回的技能；基线不含它时才有意义。 */
+  readonly skillAddIds: readonly string[]
+  /** 继承模式下从基线排除的技能。 */
+  readonly skillRemoveIds: readonly string[]
+  /** MCP 范围：`only` 时 `mcpServerIds` 是白名单，`inherit` 时由基线加减决定。 */
+  readonly mcpMode: ExpertCapabilityMode
+  /** `only` 模式下保留的 MCP 服务器名。 */
+  readonly mcpServerIds: readonly string[]
+  /** 继承模式下在基线之上加回的 MCP 服务器。 */
+  readonly mcpAddIds: readonly string[]
+  /** 继承模式下从基线排除的 MCP 服务器。 */
+  readonly mcpRemoveIds: readonly string[]
   /** 去掉声明段之后的正文：召唤时作为角色段进入系统提示。 */
   readonly body: string
   /** 正文是否超过注入上限；超限时正文仍完整保存在磁盘，只是进入系统提示时被截断。 */
@@ -65,13 +80,32 @@ export type ExpertIssueKind =
   | 'skill-reference-missing'
   /** 引用了只对子代理进程可见的技能：专家不得使用这类规范。 */
   | 'skill-reference-sub-agent'
+  /** 白名单里引用的 MCP 服务器在当前配置中不存在。 */
+  | 'mcp-reference-missing'
 
 /** 一条结构化诊断；只带标识与路径，不携带用户正文。 */
 export interface ExpertIssue {
   readonly kind: ExpertIssueKind
   readonly expertId: string | null
   readonly skillId: string | null
+  /** MCP 相关诊断的服务器名；其余诊断固定为 null。 */
+  readonly serverName: string | null
   readonly path: string
+}
+
+/** 能力范围的两种语义：继承默认基线后加减，或直接给出白名单。 */
+export type ExpertCapabilityMode = 'inherit' | 'only'
+
+/** 默认能力基线：`null` 表示不做限制，等于该维度全部可用。 */
+export interface ExpertCapabilityDefaults {
+  readonly skills: readonly string[] | null
+  readonly mcpServers: readonly string[] | null
+}
+
+/** 一份专家最终生效的能力范围；`null` 表示该维度不限制。 */
+export interface ExpertCapabilityScope {
+  readonly skills: readonly string[] | null
+  readonly mcpServers: readonly string[] | null
 }
 
 export interface ExpertCatalog {
@@ -96,6 +130,8 @@ export interface LoadExpertCatalogInput extends ExpertSkillContext {
   readonly builtin: readonly BuiltinExpert[]
   /** 自定义专家根目录；目录不存在时按没有自定义专家处理。 */
   readonly userDirectory: string
+  /** 当前配置里存在的 MCP 服务器名；不传时跳过 MCP 引用诊断。 */
+  readonly availableMcpServers?: readonly string[]
 }
 
 export interface ParsedDocument {
@@ -163,8 +199,27 @@ export function parseExpertSkillIds(value: string | undefined): string[] | null 
   return parseSkillIds(value)
 }
 
+/** 解析能力模式；写回前用它确认声明段里的 mode 可识别，未写按继承处理。 */
+export function parseExpertCapabilityMode(value: string | undefined): ExpertCapabilityMode | null {
+  return parseMode(value)
+}
+
+/**
+ * MCP 服务器名与技能标识同一套字符规则（Pi 的 server 名只允许字母、数字、下划线与连字符），
+ * 两端复用同一份解析，避免写回放行一个读不回来的名字。
+ */
+export function parseExpertServerNames(value: string | undefined): string[] | null {
+  return parseSkillIds(value)
+}
+
 function invalid(expertId: string | null, path: string): ReadResult {
-  return { ok: false, issue: { kind: 'definition-invalid', expertId, skillId: null, path } }
+  return { ok: false, issue: { kind: 'definition-invalid', expertId, skillId: null, serverName: null, path } }
+}
+
+/** 能力模式只接受两种取值；缺省按继承处理，写错按无效定义处理而不猜测意图。 */
+function parseMode(value: string | undefined): ExpertCapabilityMode | null {
+  if (value === undefined || value === '' || value === 'inherit') return 'inherit'
+  return value === 'only' ? 'only' : null
 }
 
 /** 解析单个定义文件；任何一步不成立都只产出诊断，不抛异常。 */
@@ -189,6 +244,13 @@ function readDefinition(input: {
   const displayName = document.fields.displayName
   const summary = document.fields.summary
   const skillIds = parseSkillIds(document.fields.skills)
+  const skillsMode = parseMode(document.fields.skillsMode)
+  const skillAddIds = parseSkillIds(document.fields.skillsAdd)
+  const skillRemoveIds = parseSkillIds(document.fields.skillsRemove)
+  const mcpMode = parseMode(document.fields.mcpMode)
+  const mcpServerIds = parseSkillIds(document.fields.mcpServers)
+  const mcpAddIds = parseSkillIds(document.fields.mcpAdd)
+  const mcpRemoveIds = parseSkillIds(document.fields.mcpRemove)
   // 派生来源是可选的追溯字段；写了就必须指回一个合法的专家标识，写成任意文本按定义无效处理。
   const derivedFrom = document.fields.derivedFrom === undefined || document.fields.derivedFrom === ''
     ? null
@@ -196,14 +258,18 @@ function readDefinition(input: {
   if (derivedFrom !== null && !EXPERT_ID.test(derivedFrom)) return invalid(id, filePath)
   // 声明的 name 必须等于目录名；只有引用没有正文的条目退化成技能集合，按无效处理。
   if (document.fields.name !== id || displayName === undefined || displayName === ''
-    || summary === undefined || summary === '' || skillIds === null || document.body === '') {
+    || summary === undefined || summary === '' || skillIds === null || document.body === ''
+    || skillsMode === null || skillAddIds === null || skillRemoveIds === null
+    || mcpMode === null || mcpServerIds === null || mcpAddIds === null || mcpRemoveIds === null) {
     return invalid(id, filePath)
   }
   return {
     ok: true,
     definition: {
       id, displayName, summary, skillIds, body: document.body, truncated: document.body.length > MAX_ROLE_CHARS,
-      source, filePath, derivedFrom, unavailableSkillIds: []
+      source, filePath, derivedFrom, unavailableSkillIds: [],
+      skillsMode, skillAddIds, skillRemoveIds,
+      mcpMode, mcpServerIds, mcpAddIds, mcpRemoveIds
     }
   }
 }
@@ -222,10 +288,81 @@ function judgeSkills(
         ? null
         : 'skill-reference-missing'
     if (kind === null) continue
-    issues.push({ kind, expertId: definition.id, skillId, path: definition.filePath })
+    issues.push({ kind, expertId: definition.id, skillId, serverName: null, path: definition.filePath })
     unavailable.push(skillId)
   }
   return { ...definition, unavailableSkillIds: unavailable }
+}
+
+/**
+ * 判定 MCP 白名单里引用了配置中没有的服务器：只在 `only` 模式下检查，
+ * 继承模式的排除项本来就可能因为别的项目没有该服务器而落空。
+ * 未给出可用清单时（主进程未读配置）整段跳过，避免把「不知道」当成「不存在」。
+ */
+function judgeMcpServers(
+  definition: ExpertDefinition,
+  available: readonly string[] | undefined,
+  issues: ExpertIssue[]
+): ExpertDefinition {
+  if (available === undefined || definition.mcpMode !== 'only') return definition
+  for (const serverName of definition.mcpServerIds) {
+    if (available.includes(serverName)) continue
+    issues.push({
+      kind: 'mcp-reference-missing', expertId: definition.id, skillId: null,
+      serverName, path: definition.filePath
+    })
+  }
+  return definition
+}
+
+/**
+ * 计算一份专家最终生效的能力范围：`only` 直接取白名单并与可用集求交，
+ * 继承模式则在默认基线上加减；三者都为空时返回 `null`（不限制），避免因为一次保存就固定成当时的清单。
+ */
+export function resolveExpertCapabilityScope(input: {
+  readonly definition: Pick<ExpertDefinition,
+    'skillsMode' | 'skillIds' | 'skillAddIds' | 'skillRemoveIds'
+    | 'mcpMode' | 'mcpServerIds' | 'mcpAddIds' | 'mcpRemoveIds'>
+  readonly defaults: ExpertCapabilityDefaults
+  readonly availableSkillIds: readonly string[]
+  readonly availableMcpServers: readonly string[]
+}): ExpertCapabilityScope {
+  const skills = resolveDimension({
+    mode: input.definition.skillsMode,
+    only: input.definition.skillIds,
+    add: input.definition.skillAddIds,
+    remove: input.definition.skillRemoveIds,
+    base: input.defaults.skills,
+    available: input.availableSkillIds
+  })
+  const mcpServers = resolveDimension({
+    mode: input.definition.mcpMode,
+    only: input.definition.mcpServerIds,
+    add: input.definition.mcpAddIds,
+    remove: input.definition.mcpRemoveIds,
+    base: input.defaults.mcpServers,
+    available: input.availableMcpServers
+  })
+  return { skills, mcpServers }
+}
+
+/** 单个维度的展开：可用集之外的名字一律视为不存在，只减少不增加。 */
+function resolveDimension(input: {
+  readonly mode: ExpertCapabilityMode
+  readonly only: readonly string[]
+  readonly add: readonly string[]
+  readonly remove: readonly string[]
+  readonly base: readonly string[] | null
+  readonly available: readonly string[]
+}): readonly string[] | null {
+  const available = new Set(input.available)
+  if (input.mode === 'only') return input.only.filter(id => available.has(id))
+  if (input.base === null && input.add.length === 0 && input.remove.length === 0) return null
+  const base = input.base === null ? input.available : input.base
+  const scope = new Set(base.filter(id => available.has(id)))
+  for (const id of input.add) if (available.has(id)) scope.add(id)
+  for (const id of input.remove) scope.delete(id)
+  return [...scope]
 }
 
 /** 列出目录下的技能标识；目录缺失或不可读时按没有技能处理。 */
@@ -267,26 +404,26 @@ export function loadExpertCatalog(input: LoadExpertCatalogInput): ExpertCatalog 
 
   for (const item of input.builtin) {
     if (claimed.has(item.id)) {
-      issues.push({ kind: 'id-conflict', expertId: item.id, skillId: null, path: item.filePath })
+      issues.push({ kind: 'id-conflict', expertId: item.id, skillId: null, serverName: null, path: item.filePath })
       continue
     }
     claimed.add(item.id)
     const result = readDefinition({ id: item.id, filePath: item.filePath, source: 'builtin' })
     if (!result.ok) { issues.push(result.issue); continue }
-    experts.push(judgeSkills(result.definition, input, issues))
+    experts.push(judgeMcpServers(judgeSkills(result.definition, input, issues), input.availableMcpServers, issues))
   }
 
   for (const id of listUserExpertIds(input.userDirectory)) {
     const filePath = join(input.userDirectory, id, DEFINITION_FILE)
     // 内置专家只读不可覆盖：同名自定义不进入清单，避免同一标识出现两种行为。
     if (claimed.has(id)) {
-      issues.push({ kind: 'id-conflict', expertId: id, skillId: null, path: filePath })
+      issues.push({ kind: 'id-conflict', expertId: id, skillId: null, serverName: null, path: filePath })
       continue
     }
     claimed.add(id)
     const result = readDefinition({ id, filePath, source: 'user' })
     if (!result.ok) { issues.push(result.issue); continue }
-    experts.push(judgeSkills(result.definition, input, issues))
+    experts.push(judgeMcpServers(judgeSkills(result.definition, input, issues), input.availableMcpServers, issues))
   }
 
   return { experts, issues }

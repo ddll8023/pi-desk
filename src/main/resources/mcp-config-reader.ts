@@ -6,8 +6,10 @@
  * 也不连接任何服务器、不写任何文件。文件不存在按「没有配置」处理，解析或格式错误如实进入 `errors`；
  * 项目级配置是否会被 Pi 读取取决于信任决定，由调用方传入，这里只如实回传。
  * 使用 `pi mcp list --json` 探测连接状态是另一条通道：它没有「只列举不连接」的模式。
+ * 另提供一份同步的全局服务器名单，供专家设置页列举能力候选——专家是全局的，不绑定单个项目。
  */
 import { readFile, stat } from 'node:fs/promises'
+import { readFileSync, statSync } from 'node:fs'
 import { isAbsolute, join } from 'node:path'
 import type { McpConfigListing, McpConfigServer } from '../../shared/runtime-api'
 import { getPiAgentDir } from '../shared/pi-paths'
@@ -36,26 +38,11 @@ function isMissingPath(error: unknown): boolean {
 }
 
 /**
- * 读取一个 mcp.json；文件缺失不算错误。
- * `mcpServers` 必须是对象，条目必须是对象，其余情况如实写入错误文本。
- * 先看文件大小，超限不读入内存。
+ * 把一个 mcp.json 的文本解析成条目；键层结构不合法的内容进 errors，不影响其他条目。
+ * 异步读取与同步枚举共用这一份解析，避免两条路径对同一份文件给出不同结论。
  */
-async function readConfigFile(filePath: string): Promise<ConfigFile> {
+function parseConfigText(text: string, filePath: string): ConfigFile {
   const errors: string[] = []
-  let text: string
-  try {
-    const info = await stat(filePath)
-    if (info.size > MAX_CONFIG_BYTES) {
-      errors.push(`${filePath}：文件超过 ${MAX_CONFIG_BYTES} 字节上限，未读取`)
-      return { entries: [], errors }
-    }
-    text = await readFile(filePath, 'utf8')
-  } catch (error) {
-    if (isMissingPath(error)) return { entries: [], errors: [] }
-    errors.push(`${filePath}：无法读取（${error instanceof Error ? error.message : String(error)}）`)
-    return { entries: [], errors }
-  }
-
   let parsed: unknown
   try {
     parsed = JSON.parse(text)
@@ -84,6 +71,49 @@ async function readConfigFile(filePath: string): Promise<ConfigFile> {
     entries.push([name, value])
   }
   return { entries, errors }
+}
+
+/** 读取一个 mcp.json；文件缺失不算错误。先看文件大小，超限不读入内存。 */
+async function readConfigFile(filePath: string): Promise<ConfigFile> {
+  let text: string
+  try {
+    const info = await stat(filePath)
+    if (info.size > MAX_CONFIG_BYTES) {
+      return { entries: [], errors: [`${filePath}：文件超过 ${MAX_CONFIG_BYTES} 字节上限，未读取`] }
+    }
+    text = await readFile(filePath, 'utf8')
+  } catch (error) {
+    if (isMissingPath(error)) return { entries: [], errors: [] }
+    return { entries: [], errors: [`${filePath}：无法读取（${error instanceof Error ? error.message : String(error)}）`] }
+  }
+  return parseConfigText(text, filePath)
+}
+
+/** 全局配置里的一条服务器：名称与启用状态，够设置页列举候选与标注。 */
+export interface ConfiguredMcpServer {
+  readonly name: string
+  readonly enabled: boolean
+}
+
+/**
+ * 同步列举 `<agentDir>/mcp.json` 里的服务器名；文件缺失或解析失败时返回空数组。
+ * 只读全局配置：专家是全局的，项目级服务器因项目而异，由会话装配按当时的实际配置求交。
+ */
+export function readConfiguredMcpServers(): ConfiguredMcpServer[] {
+  const filePath = join(getPiAgentDir(), CONFIG_FILE_NAME)
+  let text: string
+  try {
+    const info = statSync(filePath)
+    if (!info.isFile() || info.size > MAX_CONFIG_BYTES) return []
+    text = readFileSync(filePath, 'utf8')
+  } catch {
+    return []
+  }
+  return parseConfigText(text, filePath).entries.map(([name, value]) => ({
+    name,
+    // 与 Pi 的默认一致：未写 enabled 按启用处理。
+    enabled: value.enabled !== false
+  }))
 }
 
 /** Pi 的覆盖判定：项目级条目没有 command、url 与 type 时，它只覆盖同名全局条目。 */

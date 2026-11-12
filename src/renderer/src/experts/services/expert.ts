@@ -1,17 +1,22 @@
-/** 专家设置页的受限桥接：清单复用 sessions 域，派生、读取、保存与删除走专家域；不向页面暴露任何文件路径写权限。 */
+/** 专家设置页的受限桥接：清单复用 sessions 域，派生、读取、保存、删除、能力候选与默认能力基线走专家域；不向页面暴露任何文件路径写权限。 */
 import { isSessionExpertsResult } from '../../../../shared/session-api'
 import type { SessionExpertsResult } from '../../../../shared/session-api'
 import {
+  isExpertCapabilitiesResult,
   isExpertDeleteResult,
   isExpertDeriveResult,
   isExpertEditableDefinitionResult,
+  isExpertSaveDefaultsResult,
   isExpertSaveResult,
   isFastModeExclusionsResult
 } from '../../../../shared/experts-api'
 import type {
+  ExpertCapabilitiesResult,
   ExpertDeleteResult,
   ExpertDeriveResult,
   ExpertReadResult,
+  ExpertSaveDefaultsRequest,
+  ExpertSaveDefaultsResult,
   ExpertSaveRequest,
   ExpertSaveResult,
   FastModeExclusionsResult
@@ -24,6 +29,8 @@ interface ExpertBridge {
   readonly saveExpert: (request: ExpertSaveRequest) => Promise<unknown>
   readonly deleteExpert: (request: { readonly expertId: string }) => Promise<unknown>
   readonly listFastModeExclusions: () => Promise<unknown>
+  readonly listCapabilities: () => Promise<unknown>
+  readonly saveCapabilityDefaults: (request: ExpertSaveDefaultsRequest) => Promise<unknown>
 }
 
 function bridge(): ExpertBridge | null {
@@ -34,7 +41,9 @@ function bridge(): ExpertBridge | null {
     || typeof value.readExpertDefinition !== 'function'
     || typeof value.saveExpert !== 'function'
     || typeof value.deleteExpert !== 'function'
-    || typeof value.listFastModeExclusions !== 'function') return null
+    || typeof value.listFastModeExclusions !== 'function'
+    || typeof value.listCapabilities !== 'function'
+    || typeof value.saveCapabilityDefaults !== 'function') return null
   return value as ExpertBridge
 }
 
@@ -56,6 +65,12 @@ const READ_FALLBACK: ExpertReadResult = {
 }
 const SAVE_FALLBACK: ExpertSaveResult = {
   ok: false, error: { code: 'INTERNAL_ERROR', message: '保存请求没有送达主进程。' }
+}
+const CAPABILITIES_FALLBACK: ExpertCapabilitiesResult = {
+  ok: false, error: { code: 'INTERNAL_ERROR', message: '无法读取能力候选。' }
+}
+const SAVE_DEFAULTS_FALLBACK: ExpertSaveDefaultsResult = {
+  ok: false, error: { code: 'INTERNAL_ERROR', message: '默认能力没有送达主进程。' }
 }
 
 async function call<Result>(
@@ -118,5 +133,21 @@ export function listFastModeExclusions(): Promise<FastModeExclusionsResult> {
     target => target.listFastModeExclusions(),
     isFastModeExclusionsResult,
     EXCLUSIONS_FALLBACK
+  )
+}
+
+export function listCapabilities(): Promise<ExpertCapabilitiesResult> {
+  return call(
+    target => target.listCapabilities(),
+    isExpertCapabilitiesResult,
+    CAPABILITIES_FALLBACK
+  )
+}
+
+export function saveCapabilityDefaults(request: ExpertSaveDefaultsRequest): Promise<ExpertSaveDefaultsResult> {
+  return call(
+    target => target.saveCapabilityDefaults(request),
+    isExpertSaveDefaultsResult,
+    SAVE_DEFAULTS_FALLBACK
   )
 }

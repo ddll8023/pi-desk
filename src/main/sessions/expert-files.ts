@@ -5,6 +5,7 @@
  * 目标再复核必须落在 experts 根下的一级目录。内置专家在随包目录里只读，这里既不覆盖也不删除。
  * 派生只复制正文并补 `derivedFrom`，此后副本自行演进，不跟随内置升级；
  * 保存保留声明段里本模块不认识的字段，避免把用户手写的说明洗掉。
+ * 能力范围字段只在非默认值时写入：继承模式与空加减项不落行，文件保持可读，也不把当时清单固化成白名单。
  */
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -15,10 +16,13 @@ import {
   builtinExperts,
   isExpertDefinitionId,
   isSkillReferenceId,
+  parseExpertCapabilityMode,
   parseExpertDocument,
+  parseExpertServerNames,
   parseExpertSkillIds
 } from '../../shared-process/expert-definitions'
-import { MAX_EXPERT_SKILL_REFS } from '../../shared/experts-api'
+import { MAX_EXPERT_MCP_REFS, MAX_EXPERT_SKILL_REFS } from '../../shared/experts-api'
+import type { ExpertCapabilityMode } from '../../shared-process/expert-definitions'
 import type { ExpertDeleteResult, ExpertDeriveResult, ExpertReadResult, ExpertSaveResult } from '../../shared/experts-api'
 
 /** 派生副本的标识后缀；被占用时顺延编号。 */
@@ -173,6 +177,10 @@ export function readUserExpertDefinition(input: {
   if (skillIds === null) {
     return failure('INVALID_DEFINITION', '声明段的 skills 写法不合法，先手工修正再回来编辑。')
   }
+  const capabilities = parseCapabilityFields(document.fields)
+  if (capabilities === null) {
+    return failure('INVALID_DEFINITION', '声明段的能力字段（模式或服务器列表）写法不合法，先手工修正再回来编辑。')
+  }
   const derivedFrom = document.fields.derivedFrom
   return {
     ok: true,
@@ -181,10 +189,35 @@ export function readUserExpertDefinition(input: {
       displayName: document.fields.displayName ?? '',
       summary: document.fields.summary ?? '',
       skillIds,
+      ...capabilities,
       body: document.body,
       derivedFrom: derivedFrom !== undefined && isExpertDefinitionId(derivedFrom) ? derivedFrom : null
     }
   }
+}
+
+/** 读取时把能力字段解析成界面直接可编辑的形状；任一项写法不合法就整份拒绝，不拿半份数据填表。 */
+function parseCapabilityFields(fields: Readonly<Record<string, string>>): {
+  readonly skillsMode: ExpertCapabilityMode
+  readonly skillAddIds: readonly string[]
+  readonly skillRemoveIds: readonly string[]
+  readonly mcpMode: ExpertCapabilityMode
+  readonly mcpServerIds: readonly string[]
+  readonly mcpAddIds: readonly string[]
+  readonly mcpRemoveIds: readonly string[]
+} | null {
+  const skillsMode = parseExpertCapabilityMode(fields.skillsMode)
+  const skillAddIds = parseExpertSkillIds(fields.skillsAdd)
+  const skillRemoveIds = parseExpertSkillIds(fields.skillsRemove)
+  const mcpMode = parseExpertCapabilityMode(fields.mcpMode)
+  const mcpServerIds = parseExpertServerNames(fields.mcpServers)
+  const mcpAddIds = parseExpertServerNames(fields.mcpAdd)
+  const mcpRemoveIds = parseExpertServerNames(fields.mcpRemove)
+  if (skillsMode === null || skillAddIds === null || skillRemoveIds === null
+    || mcpMode === null || mcpServerIds === null || mcpAddIds === null || mcpRemoveIds === null) {
+    return null
+  }
+  return { skillsMode, skillAddIds, skillRemoveIds, mcpMode, mcpServerIds, mcpAddIds, mcpRemoveIds }
 }
 
 /** 新建时分配一个没被占用的标识；内置标识都是语义名，不会与 `expert-<序号>` 撞上。 */
@@ -196,8 +229,8 @@ function nextAutoExpertId(agentDir: string): string {
 }
 
 /**
- * 重写声明段：只动本设计认识的四个字段，其余行（`derivedFrom` 与用户自加的说明）原样保留。
- * 字段顺序固定，避免每次保存都产生无意义的 diff。
+ * 重写声明段：只动本设计认识的字段，其余行（`derivedFrom` 与用户自加的说明）原样保留。
+ * 字段顺序固定，避免每次保存都产生无意义的 diff；能力字段只在偏离默认值时写法入文件。
  */
 function rebuildHeader(input: {
   readonly headerLines: readonly string[]
@@ -205,23 +238,48 @@ function rebuildHeader(input: {
   readonly displayName: string
   readonly summary: string
   readonly skillIds: readonly string[]
+  readonly skillsMode: ExpertCapabilityMode
+  readonly skillAddIds: readonly string[]
+  readonly skillRemoveIds: readonly string[]
+  readonly mcpMode: ExpertCapabilityMode
+  readonly mcpServerIds: readonly string[]
+  readonly mcpAddIds: readonly string[]
+  readonly mcpRemoveIds: readonly string[]
 }): string[] {
-  const managed = /^(name|displayName|summary|skills)\s*:/
+  const managed = /^(name|displayName|summary|skills|skillsMode|skillsAdd|skillsRemove|mcpMode|mcpServers|mcpAdd|mcpRemove)\s*:/
   const kept = input.headerLines.filter(line => !managed.test(line))
-  const skills = input.skillIds.length === 0 ? '[]' : `[${input.skillIds.join(', ')}]`
-  return [
+  const lines = [
     `name: ${input.id}`,
     `displayName: ${input.displayName}`,
     `summary: ${input.summary}`,
-    `skills: ${skills}`,
-    ...kept
+    `skills: ${formatList(input.skillIds)}`
   ]
+  // 继承模式是默认值：不写行，避免每份定义都带一条与基线等价却不再随基线变化的声明。
+  if (input.skillsMode === 'only') lines.push('skillsMode: only')
+  if (input.skillAddIds.length > 0) lines.push(`skillsAdd: ${formatList(input.skillAddIds)}`)
+  if (input.skillRemoveIds.length > 0) lines.push(`skillsRemove: ${formatList(input.skillRemoveIds)}`)
+  if (input.mcpMode === 'only') lines.push('mcpMode: only')
+  if (input.mcpServerIds.length > 0) lines.push(`mcpServers: ${formatList(input.mcpServerIds)}`)
+  if (input.mcpAddIds.length > 0) lines.push(`mcpAdd: ${formatList(input.mcpAddIds)}`)
+  if (input.mcpRemoveIds.length > 0) lines.push(`mcpRemove: ${formatList(input.mcpRemoveIds)}`)
+  return [...lines, ...kept]
+}
+
+/** 列表统一写成 `[]` 或 `[a, b]`，读取端两种都认。 */
+function formatList(ids: readonly string[]): string {
+  return ids.length === 0 ? '[]' : `[${ids.join(', ')}]`
+}
+
+/** 去重并保留首次出现的顺序；同一标识重复写没有额外含义。 */
+function dedupe(ids: readonly string[]): string[] {
+  return [...new Set(ids)]
 }
 
 /**
- * 新建或保存一份自定义专家：新建由主进程分配标识，保存只改声明的四个字段与正文。
- * 拒绝落盘的条件都是写入前就能判定的（字段为空、写法不合法、引用子代理专用技能、超出体积）；
- * 引用了当前不可见的技能与正文超长只回报，不拦——用户可能先写引用、后补技能。
+ * 新建或保存一份自定义专家：新建由主进程分配标识，保存只改声明字段与正文。
+ * 拒绝落盘的条件都是写入前就能判定的（字段为空、写法不合法、引用子代理专用技能、超出体积、
+ * 技能白名单为空）；引用了当前不可见的技能与服务器、正文超长只回报，不拦——
+ * 用户可能先写引用、后补技能，拦下来会让编辑无法保存。
  */
 export function saveUserExpertDefinition(input: {
   readonly agentDir: string
@@ -229,26 +287,53 @@ export function saveUserExpertDefinition(input: {
   readonly displayName: string
   readonly summary: string
   readonly skillIds: readonly string[]
+  readonly skillsMode: ExpertCapabilityMode
+  readonly skillAddIds: readonly string[]
+  readonly skillRemoveIds: readonly string[]
+  readonly mcpMode: ExpertCapabilityMode
+  readonly mcpServerIds: readonly string[]
+  readonly mcpAddIds: readonly string[]
+  readonly mcpRemoveIds: readonly string[]
   readonly body: string
   readonly availableSkillIds: readonly string[]
   readonly subAgentOnlySkillIds: readonly string[]
+  readonly availableMcpServers: readonly string[]
 }): ExpertSaveResult {
   const { agentDir } = input
   if (input.expertId !== null && !isExpertDefinitionId(input.expertId)) {
     return failure('INVALID_REQUEST', '专家标识写法不合法。')
   }
-  if (input.skillIds.length > MAX_EXPERT_SKILL_REFS) {
+  const skillIds = dedupe(input.skillIds)
+  const skillAddIds = dedupe(input.skillAddIds)
+  const skillRemoveIds = dedupe(input.skillRemoveIds)
+  const mcpServerIds = dedupe(input.mcpServerIds)
+  const mcpAddIds = dedupe(input.mcpAddIds)
+  const mcpRemoveIds = dedupe(input.mcpRemoveIds)
+  if (skillIds.length > MAX_EXPERT_SKILL_REFS || skillAddIds.length > MAX_EXPERT_SKILL_REFS
+    || skillRemoveIds.length > MAX_EXPERT_SKILL_REFS) {
     return failure('INVALID_DEFINITION', `技能引用最多 ${MAX_EXPERT_SKILL_REFS} 个。`)
   }
-  if (!input.skillIds.every(isSkillReferenceId)) {
+  if (mcpServerIds.length > MAX_EXPERT_MCP_REFS || mcpAddIds.length > MAX_EXPERT_MCP_REFS
+    || mcpRemoveIds.length > MAX_EXPERT_MCP_REFS) {
+    return failure('INVALID_DEFINITION', `MCP 服务器引用最多 ${MAX_EXPERT_MCP_REFS} 个。`)
+  }
+  const allSkillIds = [...skillIds, ...skillAddIds, ...skillRemoveIds]
+  if (!allSkillIds.every(isSkillReferenceId)) {
     return failure('INVALID_DEFINITION', '技能引用里有写法不合法的标识。')
   }
-  const blocked = input.skillIds.filter(id => input.subAgentOnlySkillIds.includes(id))
+  if (![...mcpServerIds, ...mcpAddIds, ...mcpRemoveIds].every(isSkillReferenceId)) {
+    return failure('INVALID_DEFINITION', 'MCP 服务器名里有写法不合法的名称。')
+  }
+  const blocked = allSkillIds.filter(id => input.subAgentOnlySkillIds.includes(id))
   if (blocked.length > 0) {
-    return failure('INVALID_DEFINITION', `不能引用只对子代理可见的技能：${blocked.join('、')}。`)
+    return failure('INVALID_DEFINITION', `不能引用只对子代理可见的技能：${[...new Set(blocked)].join('、')}。`)
+  }
+  // 技能白名单为空等于禁用全部技能，专家会退化成只会说话的角色，按无效定义拦下。
+  if (input.skillsMode === 'only' && skillIds.length === 0) {
+    return failure('INVALID_DEFINITION', '技能选择「仅用选中」时至少要保留一个技能；要继承默认则切回继承模式。')
   }
   if (input.body.trim() === '') {
-    return failure('INVALID_DEFINITION', '正文不能为空；只有技能清单的专家会退化成技能集合。')
+    return failure('INVALID_DEFINITION', '正文不能为空；只有能力清单的专家会退化成一个开关。')
   }
 
   const expertId = input.expertId ?? nextAutoExpertId(agentDir)
@@ -276,7 +361,14 @@ export function saveUserExpertDefinition(input: {
     id: expertId,
     displayName: input.displayName.trim(),
     summary: input.summary.trim(),
-    skillIds: input.skillIds
+    skillIds,
+    skillsMode: input.skillsMode,
+    skillAddIds,
+    skillRemoveIds,
+    mcpMode: input.mcpMode,
+    mcpServerIds,
+    mcpAddIds,
+    mcpRemoveIds
   })
   const text = ['---', ...header, '---', '', body, ''].join('\n')
   if (Buffer.byteLength(text, 'utf8') > EXPERT_LIMITS.definitionBytes) {
@@ -296,7 +388,9 @@ export function saveUserExpertDefinition(input: {
     ok: true,
     data: {
       expertId,
-      unavailableSkillIds: input.skillIds.filter(id => !input.availableSkillIds.includes(id)),
+      unavailableSkillIds: allSkillIds.filter(id => !input.availableSkillIds.includes(id)),
+      unavailableMcpServers: [...mcpServerIds, ...mcpAddIds, ...mcpRemoveIds]
+        .filter(name => !input.availableMcpServers.includes(name)),
       truncated: body.length > EXPERT_LIMITS.roleChars
     }
   }

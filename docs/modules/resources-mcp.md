@@ -14,7 +14,8 @@
 | --- | --- |
 | `src/main/resources/resource-preview.ts` | 一次性 CLI RPC 预读资源、可用模型及默认模型，缓存结果与分项错误 |
 | `src/main/resources/pi-response-projection.ts` | CLI `get_commands`、`get_available_models`、`get_state` 的字段投影 |
-| `src/main/resources/mcp-config-reader.ts` | 全局／项目 MCP 配置的受限读取、覆盖与生效说明 |
+| `src/main/resources/mcp-config-reader.ts` | 全局／项目 MCP 配置的受限读取、覆盖与生效说明；另提供同步的全局服务器名单供专家能力候选使用 |
+| `src/shared-process/mcp-session-config.ts` | 会话级 MCP 配置合并（全局 + 受信项目，覆盖语义同 Pi）与按专家许可集把范围外服务器标为停用 |
 | `src/main/resources/mcp-inspection.ts` | 一次性 MCP 探测、超时和取消 |
 | `src/entries/pi-cli/index.ts` | 用官方 SDK CLI 执行主进程固定参数的一次性入口 |
 | `src/renderer/src/resources/stores/resource.ts` | 运行资源、预读技能、诊断、MCP 配置／探测／动作展示状态 |
@@ -45,8 +46,9 @@
 | --- | --- |
 | 运行中的 SDK 会话 | 目标实例当前绑定已加载的技能、模板、扩展命令、诊断与 MCP 命令结果 |
 | 启动前预读 | 主进程按项目或中立目录调用一次性 CLI；技能来源与 sdk-host 会话同源（随包产品技能与只读共享技能目录，扩展命令不在其中），资源、模型及默认身份分别报告错误 |
-| MCP 配置文件 | 只读全局与项目配置，不连接服务器；包含覆盖、生效与信任语义 |
+| MCP 配置文件 | 只读全局与项目配置，不连接服务器；包含覆盖、生效与信任语义；专家能力候选只列全局服务器 |
 | MCP 一次性探测 | 主进程固定 `mcp list --json`；另起连接，仅代表探测时刻，与会话连接不是同一实例 |
+| 专家能力范围 | 会话启动时按已选专家与默认基线求交，范围外的服务器标为停用而不连接（不启动子进程、不读凭据）；改完需新建会话生效 |
 
 Store 按配置清单构建 MCP 列表，再按服务器名叠加探测结果；没有配置结果时可展示探测报告。登录／退出／重连由主进程把受限动作及合法服务器名转成运行中会话的固定命令。
 

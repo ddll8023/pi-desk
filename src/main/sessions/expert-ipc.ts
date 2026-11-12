@@ -1,33 +1,40 @@
 /**
- * 专家资源管理的 IPC：派生内置专家、读取与保存自定义专家、删除自定义专家、读取快速模式剔除清单。
- * 只写 <agentDir>/experts/ 下的内容，不碰随包目录。
+ * 专家资源管理的 IPC：派生内置专家、读取与保存自定义专家、删除自定义专家、读取快速模式剔除清单，
+ * 以及能力候选读取与默认能力基线保存。只写 <agentDir> 下的 experts/ 与基线文件，不碰随包目录。
  */
 
 import type { IpcMainInvokeEvent } from 'electron'
 import { join } from 'node:path'
 import {
+  EXPERTS_CAPABILITIES_CHANNEL,
   EXPERTS_DELETE_CHANNEL,
   EXPERTS_DERIVE_CHANNEL,
   EXPERTS_FAST_MODE_CHANNEL,
   EXPERTS_READ_CHANNEL,
   EXPERTS_SAVE_CHANNEL,
+  EXPERTS_SAVE_DEFAULTS_CHANNEL,
   isExpertDeleteRequest,
   isExpertDeriveRequest,
   isExpertReadRequest,
+  isExpertSaveDefaultsRequest,
   isExpertSaveRequest
 } from '../../shared/experts-api'
 import type {
+  ExpertCapabilitiesResult,
   ExpertDeleteResult,
   ExpertDeriveResult,
   ExpertReadResult,
+  ExpertSaveDefaultsResult,
   ExpertSaveResult,
   FastModeExclusionsResult
 } from '../../shared/experts-api'
 import { agentResourcesDirectory } from '../../shared-process/agent-resources'
+import { writeExpertCapabilityDefaults } from '../../shared-process/expert-capability-defaults'
 import { handle, isTrustedCaller } from '../ipc/dispatch'
 import { getSdkHostDirectory } from '../shared/pi-cli-process'
 import { getPiAgentDir } from '../shared/pi-paths'
-import { readExpertSkillContext, readFastModeExclusions } from '../sessions/expert-catalog'
+import { readConfiguredMcpServers } from '../resources/mcp-config-reader'
+import { readExpertCapabilities, readExpertSkillContext, readFastModeExclusions } from '../sessions/expert-catalog'
 import { deleteUserExpert, deriveBuiltinExpert, readUserExpertDefinition, saveUserExpertDefinition } from '../sessions/expert-files'
 
 /** 随包资源目录：与清单读取、宿主装载用的是同一处产物。 */
@@ -114,10 +121,64 @@ export function registerExpertHandlers(pageUrl: string): void {
         displayName: request.displayName,
         summary: request.summary,
         skillIds: request.skillIds,
+        skillsMode: request.skillsMode,
+        skillAddIds: request.skillAddIds,
+        skillRemoveIds: request.skillRemoveIds,
+        mcpMode: request.mcpMode,
+        mcpServerIds: request.mcpServerIds,
+        mcpAddIds: request.mcpAddIds,
+        mcpRemoveIds: request.mcpRemoveIds,
         body: request.body,
         availableSkillIds: skillContext.availableSkillIds,
-        subAgentOnlySkillIds: skillContext.subAgentOnlySkillIds
+        subAgentOnlySkillIds: skillContext.subAgentOnlySkillIds,
+        // 未配置的服务器不拦保存，只在结果里回报，与技能引用同一口径。
+        availableMcpServers: readConfiguredMcpServers().map(server => server.name)
       }))
+    }
+  )
+
+  /** 能力候选：技能、全局 MCP 服务器与当前默认基线；页面不开会话也能勾选。 */
+  handle(
+    EXPERTS_CAPABILITIES_CHANNEL,
+    (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<ExpertCapabilitiesResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return Promise.resolve({ ok: false, error: { code: 'FORBIDDEN', message: '不允许此页面调用桌面接口。' } })
+      }
+      if (args.length !== 0) {
+        return Promise.resolve({ ok: false, error: { code: 'INVALID_REQUEST', message: '能力候选读取不接受参数。' } })
+      }
+      try {
+        return Promise.resolve({ ok: true, data: readExpertCapabilities() })
+      } catch {
+        return Promise.resolve({
+          ok: false,
+          error: { code: 'INTERNAL_ERROR', message: '读取能力候选失败，检查随包资源是否完整。' }
+        })
+      }
+    }
+  )
+
+  /** 保存默认基线：写入后返回归一化结果，页面据此确认看到的与生效的一致。 */
+  handle(
+    EXPERTS_SAVE_DEFAULTS_CHANNEL,
+    (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<ExpertSaveDefaultsResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return Promise.resolve({ ok: false, error: { code: 'FORBIDDEN', message: '不允许此页面调用桌面接口。' } })
+      }
+      if (args.length !== 1 || !isExpertSaveDefaultsRequest(args[0])) {
+        return Promise.resolve({
+          ok: false,
+          error: { code: 'INVALID_REQUEST', message: '默认能力只能包含技能标识与 MCP 服务器名两份列表（null 表示不限制）。' }
+        })
+      }
+      try {
+        return Promise.resolve({ ok: true, data: writeExpertCapabilityDefaults(getPiAgentDir(), args[0]) })
+      } catch {
+        return Promise.resolve({
+          ok: false,
+          error: { code: 'INTERNAL_ERROR', message: '保存默认能力失败，检查应用数据目录是否可写。' }
+        })
+      }
     }
   )
 

@@ -1,6 +1,7 @@
 <!-- 设置页「专家」分节：列出内置与自定义专家、加载诊断，并提供新建、编辑、派生副本与删除四个操作。
+     顶部另有「默认能力」卡片：专家继承的技能与 MCP 范围在那一处统一调整，专家定义只在它之上做增减。
      新建与编辑走同一个对话框（ExpertEditorDialog）；派生只复制正文到产品 agent 目录并写入 derivedFrom，
-     此后副本自行演进、不跟随内置升级，因此列表要给派生来源与「改完下一轮生效」的说明；诊断只读展示，
+     此后副本自行演进、不跟随内置升级，因此列表要给派生来源与「新建会话才生效」的说明；诊断只读展示，
      界面上不提供自动修复。 -->
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
@@ -9,11 +10,13 @@ import type { SessionExpertIssue, SessionExpertView } from '../../../../shared/s
 import { useExpertStore } from '../stores/expert'
 import AppButton from '../../ui/AppButton.vue'
 import ConfirmDialog from '../../ui/ConfirmDialog.vue'
+import ExpertCapabilityDefaultsCard from './ExpertCapabilityDefaultsCard.vue'
 import ExpertEditorDialog from './ExpertEditorDialog.vue'
 
 const store = useExpertStore()
 const {
-  experts, issues, busyId, loadError, actionError, notice, loaded, editorOpen, editingId
+  experts, issues, busyId, loadError, actionError, notice, loaded, editorOpen, editingId,
+  capabilities, capabilitiesError, defaultsSaving
 } = storeToRefs(store)
 
 const pendingDelete = ref<SessionExpertView | null>(null)
@@ -23,7 +26,8 @@ const ISSUE_LABELS = {
   'definition-invalid': '定义无效',
   'id-conflict': '标识冲突',
   'skill-reference-missing': '引用的技能不存在',
-  'skill-reference-sub-agent': '引用了子代理专用技能'
+  'skill-reference-sub-agent': '引用了子代理专用技能',
+  'mcp-reference-missing': '引用的 MCP 服务器不存在'
 } as const satisfies Record<SessionExpertIssue['kind'], string>
 
 const deleteOpen = computed(() => pendingDelete.value !== null)
@@ -35,8 +39,37 @@ function issueLabel(issue: SessionExpertIssue): string {
 /** 诊断行只带标识与路径，正文里拼成一行人话。 */
 function issueText(issue: SessionExpertIssue): string {
   const who = issue.expertId ?? '（无标识）'
-  const skill = issue.skillId === null ? '' : `：${issue.skillId}`
-  return `${who}${skill}`
+  const target = issue.skillId ?? issue.serverName
+  return target === null ? who : `${who}：${target}`
+}
+
+/** 名单只取前三个，再多用「等 N 个」收住：列表行不是清单页。 */
+function nameList(ids: readonly string[]): string {
+  return ids.length <= 3 ? ids.join('、') : `${ids.slice(0, 3).join('、')} 等 ${ids.length} 个`
+}
+
+/** 继承模式相对基线的加减：没有改动时不写括号，避免每行都带一个空括注。 */
+function delta(add: readonly string[], remove: readonly string[]): string {
+  if (add.length === 0 && remove.length === 0) return ''
+  const parts: string[] = []
+  if (add.length > 0) parts.push(`+${add.length}`)
+  if (remove.length > 0) parts.push(`−${remove.length}`)
+  return `（${parts.join(' ')}）`
+}
+
+/** 能力摘要：只描述范围口径与数量，不把整个名单塞进列表。 */
+function capabilitySummary(expert: SessionExpertView): string {
+  const skills = expert.skillsMode === 'only'
+    ? (expert.skillIds.length === 0
+      ? '技能 0 个（仅用选中）'
+      : `技能 ${expert.skillIds.length} 个（仅用选中：${nameList(expert.skillIds)}）`)
+    // 继承模式下的 `skills` 只作提示，不参与装配，所以标出来避免被当成实际范围。
+    : `技能继承默认${delta(expert.skillAddIds, expert.skillRemoveIds)}${
+      expert.skillIds.length > 0 ? `；声明 ${nameList(expert.skillIds)} 仅提示` : ''}`
+  const mcp = expert.mcpMode === 'only'
+    ? `MCP ${expert.mcpServerIds.length} 个（仅用选中）`
+    : `MCP 继承默认${delta(expert.mcpAddIds, expert.mcpRemoveIds)}`
+  return `${skills} · ${mcp}`
 }
 
 function isBusy(expert: SessionExpertView): boolean {
@@ -64,9 +97,17 @@ onMounted(() => { void store.load() })
       <h1 class="text-xl font-semibold tracking-tight">专家</h1>
       <p class="mt-1 text-sm text-desk-muted">
         专家是一段会话级角色说明：新建会话时在输入坞选择，之后每一轮都作为独立系统提示段注入。
-        专家不增删工具、不改预算，也不派子代理；这里只管定义文件，不改调用方式。
+        专家不增删工具、不改预算，也不派子代理；它能做的是收窄本会话的技能与 MCP 服务器范围，
+        工具、权限与确认流程不受它影响。
       </p>
     </header>
+
+    <ExpertCapabilityDefaultsCard
+      :capabilities="capabilities"
+      :error="capabilitiesError"
+      :saving="defaultsSaving"
+      @save="store.saveDefaults"
+    />
 
     <section class="settings-section" aria-labelledby="settings-experts-list-title" :aria-busy="!loaded">
       <div class="settings-section-heading">
@@ -117,9 +158,7 @@ onMounted(() => { void store.load() })
                 <span class="font-mono text-2xs text-desk-muted">{{ expert.id }}</span>
               </div>
               <p class="mt-1 text-xs text-desk-muted">{{ expert.summary }}</p>
-              <p class="mt-1 text-2xs text-desk-muted">
-                引用技能：{{ expert.skillIds.length > 0 ? expert.skillIds.join('、') : '未声明' }}
-              </p>
+              <p class="mt-1 text-2xs text-desk-muted">能力范围：{{ capabilitySummary(expert) }}</p>
               <p v-if="expert.unavailableSkillIds.length > 0" class="mt-1 text-2xs text-desk-warning">
                 不可用：{{ expert.unavailableSkillIds.join('、') }}（定义仍可用，这些引用不生效）
               </p>

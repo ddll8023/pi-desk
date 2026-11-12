@@ -40,11 +40,36 @@ import type {
 } from '../shared/runtime-api'
 import { parseSubAgentView } from '../shared/sub-agent-view'
 import { EXPERT_SECTION_KEY, expertRoleSection, readSelectedExpert } from './expert-role'
+import { resolveSessionCapabilityScope } from './expert-capability'
+import { limitMcpServers, readMcpSessionConfig } from '../shared-process/mcp-session-config'
+import type { McpSessionConfig } from '../shared-process/mcp-session-config'
 import type { ExpertDefinition } from '../shared-process/expert-definitions'
 import type { ExtensionDialogResponseInput } from '../shared/extension-ui-api'
+import type { McpExtensionOptions } from '@earendil-works/pi-coding-agent'
 
 type Sdk = typeof import('@earendil-works/pi-coding-agent')
 type RuntimeFactory = Parameters<Sdk['createAgentSessionRuntime']>[0]
+/** `McpExtensionOptions.loadConfig` 的返回形状；SDK 没有导出 LoadedMcpConfig 类型，只能从选项推导。 */
+type LoadedMcpShape = ReturnType<NonNullable<McpExtensionOptions['loadConfig']>>
+
+/**
+ * 把本地合并结果转成 MCP 扩展要求的形状。
+ * 服务器 `config` 原样透传、只在收窄时改过 `enabled`，字段语义由 Pi 的文档保证，
+ * 所以这里只做一次结构转换；不逐一重建每个字段，避免把 SDK 的默认值固化在本仓库。
+ */
+function toLoadedMcpConfig(config: McpSessionConfig): LoadedMcpShape {
+  return {
+    servers: config.servers.map(server => ({
+      name: server.name,
+      config: server.config,
+      source: server.source,
+      scope: server.scope,
+      ...(server.override === null ? {} : { override: server.override })
+    })),
+    errors: [...config.errors],
+    ...(config.projectConfig === null ? {} : { projectConfig: config.projectConfig })
+  } as unknown as LoadedMcpShape
+}
 
 /** 提示分段的名称与正文：只描述产出形态与整理要求，不重复授权规则。 */
 const MODE_HINT_EXTENSION_NAME = 'execution-mode-hint'
@@ -907,6 +932,19 @@ export class SdkSessionRuntime {
     const creation = ++this.creationSeed
     // 专家定义在会话创建时读一次：会话内不换专家，正文不需要每轮重新解析。
     const expert = this.selectedExpert(target)
+    // 能力范围也在创建时算一次：技能与 MCP 都是装配期决定的，改完需要重开会话才生效。
+    // 没召专家时两条都是不限制，行为与引入基线之前一致。
+    const capability = resolveSessionCapabilityScope({
+      expert,
+      resourcesDirectory: this.options.productResourcesDir,
+      agentDir: this.options.agentDir,
+      sharedAgentDir: this.options.sharedAgentDir,
+      availableMcpServers: readMcpSessionConfig({
+        agentDir: this.options.agentDir,
+        cwd: executionRoot,
+        projectTrusted: target.trusted
+      }).servers.map(server => server.name)
+    })
     // 只守住有效绑定与必要交互，不引入新的权限规则；工具调用仍由 SDK 管线处理。
     const bindingGuard: ExtensionFactory = pi => {
       pi.on('tool_call', () => {
@@ -935,7 +973,9 @@ export class SdkSessionRuntime {
                 : STANDARD_MODE_SECTION
               // 专家正文每轮重写：改定义文件在下一轮生效，历史对话不因此被改写。
               if (expert !== null) {
-                event.systemPromptOptions.sections[EXPERT_SECTION_KEY] = expertRoleSection(expert, { mode: target.mode })
+                event.systemPromptOptions.sections[EXPERT_SECTION_KEY] = expertRoleSection(expert, {
+                  mode: target.mode, scope: capability
+                })
               }
               // 记忆与委派工具随应用提供，其他宿主没有；使用时机写进分段，不写全局 AGENTS.md。
               event.systemPromptOptions.sections[PRODUCT_TOOLS_SECTION_KEY] = productToolsSection(target.mode)
@@ -965,7 +1005,16 @@ export class SdkSessionRuntime {
               guardPath: resolve(this.options.productResourcesDir, '../sub-agent-write-guard.mjs'),
               agentDir: this.options.agentDir
             }, this.subAgentControl) },
-          { name: 'mcp', factory: this.sdk.createMcpExtension(), builtin: true, replaceable: true },
+          { name: 'mcp', factory: this.sdk.createMcpExtension({
+            // 许可集只减不增：范围外的服务器改成停用，仍留在清单里供 `/mcp` 查看，
+            // 而不是删掉让人以为配置丢了。
+            loadConfig: () => toLoadedMcpConfig(limitMcpServers(
+              readMcpSessionConfig({
+                agentDir: this.options.agentDir, cwd: executionRoot, projectTrusted: target.trusted
+              }),
+              capability.mcpServers
+            ))
+          }), builtin: true, replaceable: true },
           // 生成式 UI 是产品内置能力，与上述内置扩展同形态注册；工厂自身不抛异常。
           // 用户关掉开关时直接不注册，而不是注册后再报错：这样模型完全看不到这几个工具。
           ...(target.genui
@@ -999,7 +1048,8 @@ export class SdkSessionRuntime {
         directory: this.options.productResourcesDir, cwd, agentDir,
         sharedAgentDir: this.options.sharedAgentDir,
         settingsManager, extensionFactories,
-        eventBus: this.options.memory.bus, memory: this.options.memory.forMode(target.mode), mode: target.mode
+        eventBus: this.options.memory.bus, memory: this.options.memory.forMode(target.mode), mode: target.mode,
+        skillPermit: capability.skills
       })
       const services = await this.sdk.createAgentSessionServices({ cwd, agentDir, settingsManager,
         resourceLoaderOptions: product.options })

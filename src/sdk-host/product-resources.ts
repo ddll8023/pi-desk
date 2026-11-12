@@ -2,8 +2,9 @@
  * 桌面产品资源装配：产品件来自随包产物，用户级 Agent 资产从终端 CLI 的目录只读加载。
  *
  * 不修改用户 settings、不移除用户文件，也不用加载后的 extensionsOverride 掩盖重复注册。
- * 共享目录只贡献 `AGENTS.md` 与 `skills/`：同名 Skill 由产品版本优先；只有产品件自身损坏或
- * 非产品扩展争用产品工具名才拒绝建立会话，其余问题作为结构化诊断交给页面。
+ * 共享目录只贡献 `AGENTS.md` 与 `skills/`：同名 Skill 由产品版本优先；技能可见集随后按专家许可集收窄（`skillPermit`），
+ * 核验只针对本次会装载的那部分，不把被排除的技能当成加载失败。
+ * 只有产品件自身损坏或非产品扩展争用产品工具名才拒绝建立会话，其余问题作为结构化诊断交给页面。
  */
 import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
@@ -45,6 +46,11 @@ interface ProductResourceInput {
   readonly memory: MemoryHostConfiguration | null
   /** 主进程给出的执行模式；决定用户级 Skill 裁剪，以及记忆被派生为关闭时是否留诊断。 */
   readonly mode: ExecutionMode
+  /**
+   * 本会话允许装载的技能标识；`null` 表示不限制。
+   * 来自专家能力范围：范围外的技能既不装配也不列在技能诊断里，试模型看不到也调不到。
+   */
+  readonly skillPermit: readonly string[] | null
 }
 
 interface ProductResourceAssembly {
@@ -137,6 +143,9 @@ export async function prepareProductResources(sdk: Sdk, input: ProductResourceIn
     const reserved = new Set(bundle.skills.map(item => item.id))
     const userSkills = base.skills.filter(item => !reserved.has(item.name))
     const blocked = new Set(input.mode === 'fast' ? FAST_MODE_BLOCKED_SKILLS : [])
+    // 专家许可集只减不增：先按模式剔一遍，再按许可集把范围外的技能拿掉。
+    const permitted = input.skillPermit === null ? null : new Set(input.skillPermit)
+    const inScope = (name: string): boolean => permitted === null || permitted.has(name)
     if (blocked.size > 0) {
       // 留诊断：会话里看不到这些 Skill 是模式导致的，不是安装或加载出了问题。
       for (const skill of userSkills) {
@@ -146,7 +155,8 @@ export async function prepareProductResources(sdk: Sdk, input: ProductResourceIn
       }
     }
     return {
-      skills: [...sessionSkills, ...userSkills.filter(item => !blocked.has(item.name))],
+      skills: [...sessionSkills, ...userSkills.filter(item => !blocked.has(item.name))]
+        .filter(item => inScope(item.name)),
       // 只丢掉 SDK 的同名 collision 条目；本层给出的说明保留，冲突双方路径因此仍可见。
       diagnostics: [...skillNotes, ...base.diagnostics.filter(item => !item.collision
         || item.collision.resourceType !== 'skill' || !reserved.has(item.collision.name))]
@@ -220,6 +230,9 @@ export async function prepareProductResources(sdk: Sdk, input: ProductResourceIn
       for (const item of bundle.skills) {
         // 子代理专用规范不在主会话技能列表里，不能要求它被会话加载。
         if (item.subAgentOnly) continue
+        // 被专家许可集排除的技能本来就不进会话可见集，不能当成加载失败；
+        // 它是否损坏由装配前对每个产品 Skill 的严格校验负责。
+        if (input.skillPermit !== null && !input.skillPermit.includes(item.id)) continue
         const path = agentResourcePath(bundle.root, item.entry)
         if (!skills.some(skill => skill.name === item.id && realpathSync(skill.filePath) === path)) {
           console.error(`[product-resources] 产品必要 Skill 未加载：${item.id}`)

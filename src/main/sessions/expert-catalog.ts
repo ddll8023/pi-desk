@@ -4,16 +4,22 @@
  *
  * 只读：不启动 SDK 宿主、不打开会话、不写任何文件；技能可见集取「随包非子代理专用技能 +
  * 共享目录技能」，缺失的技能引用只体现在诊断里，不让整份清单失败。
+ * 能力候选也由这里给：技能候选、全局 MCP 服务器与当前默认基线，页面不自己拼路径也不自己读文件。
  */
 import { join } from 'node:path'
 import { agentResourcesDirectory, readAgentResourceBundle } from '../../shared-process/agent-resources'
 import type { AgentResourceBundle } from '../../shared-process/agent-resources'
 import { builtinExperts, loadExpertCatalog, skillDirectoryIds } from '../../shared-process/expert-definitions'
 import type { ExpertDefinition } from '../../shared-process/expert-definitions'
+import { readExpertCapabilityDefaults } from '../../shared-process/expert-capability-defaults'
 import { fastModeBlockedSkillsIn } from '../../shared/execution-mode-skills'
+import type {
+  ExpertCapabilities, ExpertMcpCandidate, ExpertSkillCandidate
+} from '../../shared/experts-api'
 import type { SessionExpertCatalog, SessionExpertView } from '../../shared/session-api'
 import { getSdkHostDirectory } from '../shared/pi-cli-process'
 import { getPiAgentDir, getSharedPiAgentDir } from '../shared/pi-paths'
+import { readConfiguredMcpServers } from '../resources/mcp-config-reader'
 
 /** 正文只在宿主侧进入系统提示，视图里不带正文与磁盘路径。 */
 function toView(definition: ExpertDefinition): SessionExpertView {
@@ -25,7 +31,14 @@ function toView(definition: ExpertDefinition): SessionExpertView {
     derivedFrom: definition.derivedFrom,
     truncated: definition.truncated,
     skillIds: definition.skillIds,
-    unavailableSkillIds: definition.unavailableSkillIds
+    unavailableSkillIds: definition.unavailableSkillIds,
+    skillsMode: definition.skillsMode,
+    skillAddIds: definition.skillAddIds,
+    skillRemoveIds: definition.skillRemoveIds,
+    mcpMode: definition.mcpMode,
+    mcpServerIds: definition.mcpServerIds,
+    mcpAddIds: definition.mcpAddIds,
+    mcpRemoveIds: definition.mcpRemoveIds
   }
 }
 
@@ -65,14 +78,32 @@ export function readExpertCatalog(): SessionExpertCatalog {
     builtin: builtinExperts(bundle),
     userDirectory: join(getPiAgentDir(), 'experts'),
     availableSkillIds: [...skillContext.availableSkillIds],
-    subAgentOnlySkillIds: [...skillContext.subAgentOnlySkillIds]
+    subAgentOnlySkillIds: [...skillContext.subAgentOnlySkillIds],
+    // 只拿全局配置的服务器作诊断口径；项目级服务器因项目而异，由会话装配按实际配置求交。
+    availableMcpServers: readConfiguredMcpServers().map(server => server.name)
   })
   return {
     experts: catalog.experts.map(toView),
     issues: catalog.issues.map(issue => ({
-      kind: issue.kind, expertId: issue.expertId, skillId: issue.skillId, path: issue.path
+      kind: issue.kind, expertId: issue.expertId, skillId: issue.skillId,
+      serverName: issue.serverName, path: issue.path
     }))
   }
+}
+
+/**
+ * 读取能力候选与当前默认基线：技能候选分随包与共享两个来源，MCP 只列全局配置，
+ * 基线文件缺失或损坏时按「不限制」回退，并在 UI 上仍能保存成新值。
+ */
+export function readExpertCapabilities(): ExpertCapabilities {
+  const bundle = readAgentResourceBundle(agentResourcesDirectory(join(getSdkHostDirectory(), 'index.mjs')))
+  const skills: ExpertSkillCandidate[] = [
+    ...bundle.skills.filter(item => !item.subAgentOnly).map(item => ({ id: item.id, source: 'builtin' as const })),
+    ...skillDirectoryIds(join(getSharedPiAgentDir(), 'skills')).map(id => ({ id, source: 'shared' as const }))
+  ]
+  const mcpServers: ExpertMcpCandidate[] = readConfiguredMcpServers()
+    .map(server => ({ name: server.name, scope: 'global' as const, enabled: server.enabled }))
+  return { skills, mcpServers, defaults: readExpertCapabilityDefaults(getPiAgentDir()) }
 }
 
 /**

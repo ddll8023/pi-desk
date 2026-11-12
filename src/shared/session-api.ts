@@ -281,13 +281,25 @@ export interface SessionExpertView {
   readonly skillIds: readonly string[]
   /** 引用但不可用的技能：定义本身仍可用，这些引用不生效。 */
   readonly unavailableSkillIds: readonly string[]
+  /** 技能范围：`only` 时 `skillIds` 是白名单，`inherit` 时由默认基线加减决定。 */
+  readonly skillsMode: 'inherit' | 'only'
+  readonly skillAddIds: readonly string[]
+  readonly skillRemoveIds: readonly string[]
+  /** MCP 范围：语义同技能，列表换成服务器名。 */
+  readonly mcpMode: 'inherit' | 'only'
+  readonly mcpServerIds: readonly string[]
+  readonly mcpAddIds: readonly string[]
+  readonly mcpRemoveIds: readonly string[]
 }
 
 /** 一条加载诊断；只带标识与路径，不复制定义正文。 */
 export interface SessionExpertIssue {
   readonly kind: 'definition-invalid' | 'id-conflict' | 'skill-reference-missing' | 'skill-reference-sub-agent'
+    | 'mcp-reference-missing'
   readonly expertId: string | null
   readonly skillId: string | null
+  /** MCP 相关诊断的服务器名；其余诊断固定为 null。 */
+  readonly serverName: string | null
   readonly path: string
 }
 
@@ -422,19 +434,27 @@ export function isSessionOpenResult(value: unknown): value is SessionOpenResult 
 
 function isSessionExpertView(value: unknown): value is SessionExpertView {
   if (!isRecord(value)) return false
+  const referencesOk = (list: unknown): boolean => Array.isArray(list) && list.every(item => typeof item === 'string')
   return isExpertId(value.id)
     && typeof value.displayName === 'string' && value.displayName !== ''
     && typeof value.summary === 'string'
     && (value.source === 'builtin' || value.source === 'user')
     && (value.derivedFrom === null || isExpertId(value.derivedFrom))
     && typeof value.truncated === 'boolean'
-    && Array.isArray(value.skillIds) && value.skillIds.every(item => typeof item === 'string')
-    && Array.isArray(value.unavailableSkillIds)
-    && value.unavailableSkillIds.every(item => typeof item === 'string')
+    && referencesOk(value.skillIds)
+    && referencesOk(value.unavailableSkillIds)
+    && referencesOk(value.skillAddIds)
+    && referencesOk(value.skillRemoveIds)
+    && referencesOk(value.mcpServerIds)
+    && referencesOk(value.mcpAddIds)
+    && referencesOk(value.mcpRemoveIds)
+    && (value.skillsMode === 'inherit' || value.skillsMode === 'only')
+    && (value.mcpMode === 'inherit' || value.mcpMode === 'only')
 }
 
 const EXPERT_ISSUE_KINDS: readonly string[] = [
-  'definition-invalid', 'id-conflict', 'skill-reference-missing', 'skill-reference-sub-agent'
+  'definition-invalid', 'id-conflict', 'skill-reference-missing', 'skill-reference-sub-agent',
+  'mcp-reference-missing'
 ]
 
 function isSessionExpertCatalog(value: unknown): value is SessionExpertCatalog {
@@ -445,6 +465,7 @@ function isSessionExpertCatalog(value: unknown): value is SessionExpertCatalog {
     && typeof issue.kind === 'string' && EXPERT_ISSUE_KINDS.includes(issue.kind)
     && (issue.expertId === null || typeof issue.expertId === 'string')
     && (issue.skillId === null || typeof issue.skillId === 'string')
+    && (issue.serverName === null || typeof issue.serverName === 'string')
     && typeof issue.path === 'string')
 }
 

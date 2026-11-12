@@ -14,9 +14,10 @@ import {
   isSkillReferenceId,
   loadExpertCatalog,
   parseExpertDocument,
-  parseExpertSkillIds
+  parseExpertSkillIds,
+  resolveExpertCapabilityScope
 } from './expert-definitions.ts'
-import type { ExpertCatalog } from './expert-definitions.ts'
+import type { ExpertCapabilityDefaults, ExpertCatalog, ExpertDefinition } from './expert-definitions.ts'
 
 interface TempRoot {
   readonly dir: string
@@ -36,7 +37,7 @@ function writeFile(root: string, name: string, text: string): string {
   return path
 }
 
-/** 一份形状合法的定义；`mutate` 用于制造结构问题。 */
+/** 一份形状合法的定义；`mutate` 用于制造结构问题，能力字段只在给定时才写出。 */
 function definition(input: {
   readonly id: string
   readonly displayName?: string
@@ -44,13 +45,26 @@ function definition(input: {
   readonly skills?: string
   readonly body?: string
   readonly name?: string
+  readonly skillsMode?: string
+  readonly skillsAdd?: string
+  readonly skillsRemove?: string
+  readonly mcpMode?: string
+  readonly mcpServers?: string
 }): string {
+  const capabilityLines = [
+    input.skillsMode === undefined ? null : `skillsMode: ${input.skillsMode}`,
+    input.skillsAdd === undefined ? null : `skillsAdd: ${input.skillsAdd}`,
+    input.skillsRemove === undefined ? null : `skillsRemove: ${input.skillsRemove}`,
+    input.mcpMode === undefined ? null : `mcpMode: ${input.mcpMode}`,
+    input.mcpServers === undefined ? null : `mcpServers: ${input.mcpServers}`
+  ].filter((line): line is string => line !== null)
   return [
     '---',
     `name: ${input.name ?? input.id}`,
     `displayName: ${input.displayName ?? '新闻调研专家'}`,
     `summary: ${input.summary ?? '按日期检索当日热点。'}`,
     `skills: ${input.skills ?? '[]'}`,
+    ...capabilityLines,
     '---',
     '',
     input.body ?? '# 正文\n\n## 工作流程\n\n1. 检索。'
@@ -166,4 +180,95 @@ test('专家标识与技能引用各用一套形状校验', () => {
   assert.equal(isSkillReferenceId('memory'), true)
   assert.equal(isSkillReferenceId('Skill_One'), true)
   assert.equal(isSkillReferenceId('bad id'), false)
+})
+
+/** 一份可直接参与能力计算的定义，只填充计算用到的字段。 */
+function capabilityDefinition(overrides: Partial<ExpertDefinition> = {}): ExpertDefinition {
+  return {
+    id: 'my-expert',
+    displayName: '文档评审官',
+    summary: '只看文档。',
+    skillIds: [],
+    skillsMode: 'inherit',
+    skillAddIds: [],
+    skillRemoveIds: [],
+    mcpMode: 'inherit',
+    mcpServerIds: [],
+    mcpAddIds: [],
+    mcpRemoveIds: [],
+    body: '# 正文',
+    truncated: false,
+    source: 'user',
+    filePath: '/tmp/my-expert/expert.md',
+    derivedFrom: null,
+    unavailableSkillIds: [],
+    ...overrides
+  }
+}
+
+const UNRESTRICTED: ExpertCapabilityDefaults = { skills: null, mcpServers: null }
+
+const AVAILABLE = { availableSkillIds: ['memory', 'frontend-design'], availableMcpServers: ['filesystem', 'docs'] }
+
+test('默认基线为 null 且没有加减项时不做限制', () => {
+  const scope = resolveExpertCapabilityScope({
+    definition: capabilityDefinition(), defaults: UNRESTRICTED, ...AVAILABLE
+  })
+  // 返回 null 而不是当时的全量快照：以后新增的技能与服务器也能被这个专家继承到。
+  assert.deepEqual(scope, { skills: null, mcpServers: null })
+})
+
+test('继承模式下在基线上加回与排除', () => {
+  const scope = resolveExpertCapabilityScope({
+    definition: capabilityDefinition({
+      skillAddIds: ['frontend-design'],
+      skillRemoveIds: ['memory'],
+      mcpRemoveIds: ['docs']
+    }),
+    defaults: { skills: ['memory'], mcpServers: ['filesystem', 'docs'] },
+    ...AVAILABLE
+  })
+  assert.deepEqual(scope, { skills: ['frontend-design'], mcpServers: ['filesystem'] })
+})
+
+test('仅用选中时白名单与外层基线无关，可用集之外的名字被剔掉', () => {
+  const scope = resolveExpertCapabilityScope({
+    definition: capabilityDefinition({
+      skillsMode: 'only',
+      skillIds: ['memory', 'missing-skill', 'sub-agent-review'],
+      mcpMode: 'only',
+      mcpServerIds: ['docs']
+    }),
+    defaults: { skills: ['memory', 'frontend-design'], mcpServers: null },
+    ...AVAILABLE
+  })
+  assert.deepEqual(scope, { skills: ['memory'], mcpServers: ['docs'] })
+})
+
+test('仅用选中的 MCP 白名单引用了不存在的服务器时只报诊断', () => {
+  const temp = createTempRoot('pi-desk-expert-')
+  try {
+    const catalog = createCatalog(temp, {
+      'my-expert/expert.md': definition({ id: 'my-expert', mcpMode: 'only', mcpServers: '[filesystem, ghost]' })
+    })
+    assert.deepEqual(catalog.experts.map(item => item.id), ['news-research', 'my-expert'])
+    assert.deepEqual(catalog.issues.map(item => [item.kind, item.serverName]),
+      [['mcp-reference-missing', 'ghost']])
+  } finally {
+    temp.cleanup()
+  }
+})
+
+test('能力字段写法不合法时整份定义判为无效', () => {
+  const temp = createTempRoot('pi-desk-expert-')
+  try {
+    const catalog = createCatalog(temp, {
+      'bad-mode/expert.md': definition({ id: 'bad-mode', skillsMode: 'somtimes' })
+    })
+    assert.deepEqual(catalog.experts.map(item => item.id), ['news-research'])
+    assert.deepEqual(catalog.issues.map(item => [item.kind, item.expertId]),
+      [['definition-invalid', 'bad-mode']])
+  } finally {
+    temp.cleanup()
+  }
 })
