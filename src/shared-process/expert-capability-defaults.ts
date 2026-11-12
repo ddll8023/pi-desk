@@ -9,7 +9,7 @@
 import { mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { MAX_EXPERT_DEFAULTS_ENTRIES, isSkillReference } from '../shared/experts-api'
-import type { ExpertCapabilityDefaults } from './expert-definitions'
+import type { ExpertCapabilityDefaults } from '../shared/expert-capability'
 
 /** 基线文件名；与专家定义同在产品 agent 目录根下。 */
 export const EXPERT_CAPABILITY_DEFAULTS_FILE = 'capability-defaults.json'

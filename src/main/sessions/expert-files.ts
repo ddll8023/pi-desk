@@ -22,7 +22,7 @@ import {
   parseExpertSkillIds
 } from '../../shared-process/expert-definitions'
 import { MAX_EXPERT_MCP_REFS, MAX_EXPERT_SKILL_REFS } from '../../shared/experts-api'
-import type { ExpertCapabilityMode } from '../../shared-process/expert-definitions'
+import type { ExpertCapabilityFields } from '../../shared/expert-capability'
 import type { ExpertDeleteResult, ExpertDeriveResult, ExpertReadResult, ExpertSaveResult } from '../../shared/experts-api'
 
 /** 派生副本的标识后缀；被占用时顺延编号。 */
@@ -197,15 +197,7 @@ export function readUserExpertDefinition(input: {
 }
 
 /** 读取时把能力字段解析成界面直接可编辑的形状；任一项写法不合法就整份拒绝，不拿半份数据填表。 */
-function parseCapabilityFields(fields: Readonly<Record<string, string>>): {
-  readonly skillsMode: ExpertCapabilityMode
-  readonly skillAddIds: readonly string[]
-  readonly skillRemoveIds: readonly string[]
-  readonly mcpMode: ExpertCapabilityMode
-  readonly mcpServerIds: readonly string[]
-  readonly mcpAddIds: readonly string[]
-  readonly mcpRemoveIds: readonly string[]
-} | null {
+function parseCapabilityFields(fields: Readonly<Record<string, string>>): ExpertCapabilityFields | null {
   const skillsMode = parseExpertCapabilityMode(fields.skillsMode)
   const skillAddIds = parseExpertSkillIds(fields.skillsAdd)
   const skillRemoveIds = parseExpertSkillIds(fields.skillsRemove)
@@ -232,19 +224,12 @@ function nextAutoExpertId(agentDir: string): string {
  * 重写声明段：只动本设计认识的字段，其余行（`derivedFrom` 与用户自加的说明）原样保留。
  * 字段顺序固定，避免每次保存都产生无意义的 diff；能力字段只在偏离默认值时写法入文件。
  */
-function rebuildHeader(input: {
+function rebuildHeader(input: ExpertCapabilityFields & {
   readonly headerLines: readonly string[]
   readonly id: string
   readonly displayName: string
   readonly summary: string
   readonly skillIds: readonly string[]
-  readonly skillsMode: ExpertCapabilityMode
-  readonly skillAddIds: readonly string[]
-  readonly skillRemoveIds: readonly string[]
-  readonly mcpMode: ExpertCapabilityMode
-  readonly mcpServerIds: readonly string[]
-  readonly mcpAddIds: readonly string[]
-  readonly mcpRemoveIds: readonly string[]
 }): string[] {
   const managed = /^(name|displayName|summary|skills|skillsMode|skillsAdd|skillsRemove|mcpMode|mcpServers|mcpAdd|mcpRemove)\s*:/
   const kept = input.headerLines.filter(line => !managed.test(line))
@@ -281,19 +266,12 @@ function dedupe(ids: readonly string[]): string[] {
  * 技能白名单为空）；引用了当前不可见的技能与服务器、正文超长只回报，不拦——
  * 用户可能先写引用、后补技能，拦下来会让编辑无法保存。
  */
-export function saveUserExpertDefinition(input: {
+export function saveUserExpertDefinition(input: ExpertCapabilityFields & {
   readonly agentDir: string
   readonly expertId: string | null
   readonly displayName: string
   readonly summary: string
   readonly skillIds: readonly string[]
-  readonly skillsMode: ExpertCapabilityMode
-  readonly skillAddIds: readonly string[]
-  readonly skillRemoveIds: readonly string[]
-  readonly mcpMode: ExpertCapabilityMode
-  readonly mcpServerIds: readonly string[]
-  readonly mcpAddIds: readonly string[]
-  readonly mcpRemoveIds: readonly string[]
   readonly body: string
   readonly availableSkillIds: readonly string[]
   readonly subAgentOnlySkillIds: readonly string[]

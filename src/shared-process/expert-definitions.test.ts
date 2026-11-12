@@ -17,7 +17,8 @@ import {
   parseExpertSkillIds,
   resolveExpertCapabilityScope
 } from './expert-definitions.ts'
-import type { ExpertCapabilityDefaults, ExpertCatalog, ExpertDefinition } from './expert-definitions.ts'
+import type { ExpertCatalog, ExpertDefinition } from './expert-definitions.ts'
+import type { ExpertCapabilityDefaults } from '../shared/expert-capability'
 
 interface TempRoot {
   readonly dir: string

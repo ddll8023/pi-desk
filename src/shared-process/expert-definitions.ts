@@ -10,6 +10,8 @@ import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import { agentResourcePath } from './agent-resources.ts'
 import type { AgentResourceBundle } from './agent-resources.ts'
+import { isExpertCapabilityMode } from '../shared/expert-capability'
+import type { ExpertCapabilityDefaults, ExpertCapabilityFields, ExpertCapabilityMode } from '../shared/expert-capability'
 
 /** 单个定义文件的读取上限：正文会整段进入系统提示，超过这个体积通常意味着塞了整份文档。 */
 const MAX_DEFINITION_BYTES = 262_144
@@ -39,26 +41,12 @@ export function clipExpertBody(body: string): string {
 }
 
 /** 一份可召唤的专家定义。 */
-export interface ExpertDefinition {
+export interface ExpertDefinition extends ExpertCapabilityFields {
   readonly id: string
   readonly displayName: string
   readonly summary: string
   /** 声明引用的技能标识；不可用的引用仍保留在这里，另在 `unavailableSkillIds` 标出。 */
   readonly skillIds: readonly string[]
-  /** 技能范围：`only` 时 `skillIds` 是白名单，`inherit` 时 `skillIds` 只作提示、范围由基线加减决定。 */
-  readonly skillsMode: ExpertCapabilityMode
-  /** 继承模式下在基线之上加回的技能；基线不含它时才有意义。 */
-  readonly skillAddIds: readonly string[]
-  /** 继承模式下从基线排除的技能。 */
-  readonly skillRemoveIds: readonly string[]
-  /** MCP 范围：`only` 时 `mcpServerIds` 是白名单，`inherit` 时由基线加减决定。 */
-  readonly mcpMode: ExpertCapabilityMode
-  /** `only` 模式下保留的 MCP 服务器名。 */
-  readonly mcpServerIds: readonly string[]
-  /** 继承模式下在基线之上加回的 MCP 服务器。 */
-  readonly mcpAddIds: readonly string[]
-  /** 继承模式下从基线排除的 MCP 服务器。 */
-  readonly mcpRemoveIds: readonly string[]
   /** 去掉声明段之后的正文：召唤时作为角色段进入系统提示。 */
   readonly body: string
   /** 正文是否超过注入上限；超限时正文仍完整保存在磁盘，只是进入系统提示时被截断。 */
@@ -91,15 +79,6 @@ export interface ExpertIssue {
   /** MCP 相关诊断的服务器名；其余诊断固定为 null。 */
   readonly serverName: string | null
   readonly path: string
-}
-
-/** 能力范围的两种语义：继承默认基线后加减，或直接给出白名单。 */
-export type ExpertCapabilityMode = 'inherit' | 'only'
-
-/** 默认能力基线：`null` 表示不做限制，等于该维度全部可用。 */
-export interface ExpertCapabilityDefaults {
-  readonly skills: readonly string[] | null
-  readonly mcpServers: readonly string[] | null
 }
 
 /** 一份专家最终生效的能力范围；`null` 表示该维度不限制。 */
@@ -219,7 +198,7 @@ function invalid(expertId: string | null, path: string): ReadResult {
 /** 能力模式只接受两种取值；缺省按继承处理，写错按无效定义处理而不猜测意图。 */
 function parseMode(value: string | undefined): ExpertCapabilityMode | null {
   if (value === undefined || value === '' || value === 'inherit') return 'inherit'
-  return value === 'only' ? 'only' : null
+  return isExpertCapabilityMode(value) ? value : null
 }
 
 /** 解析单个定义文件；任何一步不成立都只产出诊断，不抛异常。 */

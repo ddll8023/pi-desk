@@ -6,6 +6,7 @@
  */
 import { isHistoryData, isHistoryQuery } from './runtime-api'
 import type { HistoryData, HistoryQuery, RuntimeErrorCode } from './runtime-api'
+import type { ExpertCapabilityFields } from './expert-capability'
 import { isWorkspaceContext, isWorkspaceId } from './workspace-api'
 import type { WorkspaceContext } from './workspace-api'
 
@@ -269,7 +270,7 @@ export function isExpertId(value: unknown): value is string {
 }
 
 /** 选择器展示所需的专家信息；不携带正文，正文只在宿主侧进入系统提示。 */
-export interface SessionExpertView {
+export interface SessionExpertView extends ExpertCapabilityFields {
   readonly id: string
   readonly displayName: string
   readonly summary: string
@@ -281,15 +282,6 @@ export interface SessionExpertView {
   readonly skillIds: readonly string[]
   /** 引用但不可用的技能：定义本身仍可用，这些引用不生效。 */
   readonly unavailableSkillIds: readonly string[]
-  /** 技能范围：`only` 时 `skillIds` 是白名单，`inherit` 时由默认基线加减决定。 */
-  readonly skillsMode: 'inherit' | 'only'
-  readonly skillAddIds: readonly string[]
-  readonly skillRemoveIds: readonly string[]
-  /** MCP 范围：语义同技能，列表换成服务器名。 */
-  readonly mcpMode: 'inherit' | 'only'
-  readonly mcpServerIds: readonly string[]
-  readonly mcpAddIds: readonly string[]
-  readonly mcpRemoveIds: readonly string[]
 }
 
 /** 一条加载诊断；只带标识与路径，不复制定义正文。 */

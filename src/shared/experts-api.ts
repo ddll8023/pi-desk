@@ -7,6 +7,8 @@
  * 错误码独立成族：写盘失败、定义不合法与清单读取失败是不同故障，页面据此分开提示。
  */
 import { isExpertId } from './session-api'
+import { isExpertCapabilityMode } from './expert-capability'
+import type { ExpertCapabilityDefaults, ExpertCapabilityFields } from './expert-capability'
 
 /** 把内置专家复制成自定义目录下的派生副本；副本立即出现在清单里。 */
 export const EXPERTS_DERIVE_CHANNEL = 'desktop:expert-derive'
@@ -36,15 +38,6 @@ export const MAX_EXPERT_MCP_REFS = 20
  * 因此不能沿用单个专家 20 个引用的上限，否则专家越多时基线反而写不进去。
  */
 export const MAX_EXPERT_DEFAULTS_ENTRIES = 64
-
-/** 能力范围的两种语义：继承默认基线后加减，或直接给出白名单。 */
-export type ExpertCapabilityMode = 'inherit' | 'only'
-
-/** 默认能力基线：`null` 表示该维度不限制，等于全部可用。 */
-export interface ExpertCapabilityDefaults {
-  readonly skills: readonly string[] | null
-  readonly mcpServers: readonly string[] | null
-}
 
 /** 技能候选：来源区分随包、产品自有目录与共享目录技能，页面按来源标注。 */
 export interface ExpertSkillCandidate {
@@ -108,18 +101,11 @@ export type FastModeExclusionsResult =
   | { readonly ok: false; readonly error: ExpertError }
 
 /** 编辑对话框需要的一份自定义专家：声明字段与正文一起返回，只在设置页使用。 */
-export interface ExpertEditableDefinition {
+export interface ExpertEditableDefinition extends ExpertCapabilityFields {
   readonly id: string
   readonly displayName: string
   readonly summary: string
   readonly skillIds: readonly string[]
-  readonly skillsMode: ExpertCapabilityMode
-  readonly skillAddIds: readonly string[]
-  readonly skillRemoveIds: readonly string[]
-  readonly mcpMode: ExpertCapabilityMode
-  readonly mcpServerIds: readonly string[]
-  readonly mcpAddIds: readonly string[]
-  readonly mcpRemoveIds: readonly string[]
   readonly body: string
   readonly derivedFrom: string | null
 }
@@ -134,21 +120,13 @@ export type ExpertReadResult =
 
 /**
  * 保存请求：`expertId` 为 `null` 表示新建（标识由主进程分配），否则更新该自定义专家。
- * 技能与 MCP 各带一份模式：`only` 时列表是实际白名单，`inherit` 时列表只是提示、范围由加减项决定。
- * 不可用引用由主进程在结果里回报，不拦保存。
+ * 能力字段语义见 `ExpertCapabilityFields`；不可用引用由主进程在结果里回报，不拦保存。
  */
-export interface ExpertSaveRequest {
+export interface ExpertSaveRequest extends ExpertCapabilityFields {
   readonly expertId: string | null
   readonly displayName: string
   readonly summary: string
   readonly skillIds: readonly string[]
-  readonly skillsMode: ExpertCapabilityMode
-  readonly skillAddIds: readonly string[]
-  readonly skillRemoveIds: readonly string[]
-  readonly mcpMode: ExpertCapabilityMode
-  readonly mcpServerIds: readonly string[]
-  readonly mcpAddIds: readonly string[]
-  readonly mcpRemoveIds: readonly string[]
   readonly body: string
 }
 
@@ -256,10 +234,6 @@ export function isMcpServerReference(value: unknown): value is string {
   return typeof value === 'string' && SKILL_REFERENCE.test(value)
 }
 
-function isCapabilityMode(value: unknown): value is ExpertCapabilityMode {
-  return value === 'inherit' || value === 'only'
-}
-
 /** 一组引用：数量在限制内且每个写法合法；同名重复不在这里判，保存时按原顺序去重。 */
 function isReferenceList(value: unknown, max: number, check: (item: unknown) => item is string): value is readonly string[] {
   return Array.isArray(value) && value.length <= max && value.every(check)
@@ -290,8 +264,8 @@ export function isExpertSaveRequest(value: unknown): value is ExpertSaveRequest 
   if (!isSingleLineText(value.displayName, MAX_EXPERT_DISPLAY_NAME_LENGTH)) return false
   if (!isSingleLineText(value.summary, MAX_EXPERT_SUMMARY_LENGTH)) return false
   if (typeof value.body !== 'string' || value.body.trim() === '') return false
-  return isCapabilityMode(value.skillsMode)
-    && isCapabilityMode(value.mcpMode)
+  return isExpertCapabilityMode(value.skillsMode)
+    && isExpertCapabilityMode(value.mcpMode)
     && isReferenceList(value.skillIds, MAX_EXPERT_SKILL_REFS, isSkillReference)
     && isReferenceList(value.skillAddIds, MAX_EXPERT_SKILL_REFS, isSkillReference)
     && isReferenceList(value.skillRemoveIds, MAX_EXPERT_SKILL_REFS, isSkillReference)
@@ -310,8 +284,8 @@ export function isExpertEditableDefinitionResult(value: unknown): value is Exper
     && typeof data.summary === 'string'
     && typeof data.body === 'string'
     && (data.derivedFrom === null || isExpertId(data.derivedFrom))
-    && isCapabilityMode(data.skillsMode)
-    && isCapabilityMode(data.mcpMode)
+    && isExpertCapabilityMode(data.skillsMode)
+    && isExpertCapabilityMode(data.mcpMode)
     && isReferenceList(data.skillIds, MAX_EXPERT_SKILL_REFS, isSkillReference)
     && isReferenceList(data.skillAddIds, MAX_EXPERT_SKILL_REFS, isSkillReference)
     && isReferenceList(data.skillRemoveIds, MAX_EXPERT_SKILL_REFS, isSkillReference)
