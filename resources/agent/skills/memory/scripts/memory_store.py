@@ -21,7 +21,7 @@ READABLE_VERSION = STORE_VERSION
 PLAN_VERSION = 4
 TYPES = {'decision','constraint','progress','issue','fact','preference_evidence'}
 RULE_TYPES = {'decision','constraint'}
-# 非规则类记录只用于「项目近况」，不参与常驻约定的族收敛与替代。
+# 非规则类记录只用于「项目近况」，不参与常驻约定的合并与替代。
 NOTE_TYPES = TYPES - RULE_TYPES
 DOMAINS = {'communication','coding','learning','workflow'}
 ID_RE = re.compile(r'^[msp]_[0-9A-HJKMNP-TV-Z]{26}$')
@@ -826,7 +826,7 @@ def active_rules(root: Path, query: str = '', offset: int = 0, limit: int = 50,
 def project_notes(root: Path, project: str, date_from: str, limit: int = 3) -> dict:
     """按项目与日期窗口读取进展、问题与事实，供每轮背景的「当前项目近况」段使用。
 
-    不做词法筛选也不做族收敛：这一段的语义是「这个项目最近在做什么」，口径必须可预测。
+    不做词法筛选也不做常驻去重：这一段的语义是「这个项目最近在做什么」，口径必须可预测。
     只读且只收 active；规则类记录由 `rules` 提供，不在这里重复。
     """
     expect(isinstance(project,str) and PROJECT_ID_RE.fullmatch(project) is not None,
@@ -845,7 +845,7 @@ def project_notes(root: Path, project: str, date_from: str, limit: int = 3) -> d
     return {'memory_scope':'global','project':project,'date_from':date_from,'limit':limit,
             'store_version':version,'coverage':'store_records',
             'records':[public_record(r) for r in ordered],
-            'note':'近况只作历史状态，不构成约定；正文未按词法筛选，也不参与族收敛'}
+            'note':'近况只作历史状态，不构成约定；正文未按词法筛选，也不参与常驻去重'}
 
 
 def profiles_view(root: Path, domain: str | None = None) -> dict:

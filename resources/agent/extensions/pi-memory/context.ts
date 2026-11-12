@@ -363,7 +363,7 @@ export class MemoryRuntime {
       const pending = indexed.length
       for (const row of indexed.slice(0, RESIDENT_INDEX_ROWS)) lines.push(residentIndex(row))
       const omitted = rows.length - excludedRecords - injected
-      if (pending > 0) lines.push(`另有 ${pending} 族未展开正文（共 ${omitted} 条未注入）：memory_rules 取摘要，memory_read 取全文。`)
+      if (pending > 0) lines.push(`另有 ${pending} 条未展开正文（共 ${omitted} 条未注入）：memory_rules 取摘要，memory_read 取全文。`)
       if (excludedFamilies > 0) lines.push(`其他项目另有 ${excludedFamilies} 条约定未进入常驻；需要时用 memory_rules 或 memory_search 检索。`)
       const content = injected > 0 ? ['以下「决定 / 约束」是约定，须遵守。', ...lines] : lines
       state.resident = content.join('\n')
@@ -423,7 +423,7 @@ export class MemoryRuntime {
     } finally { clearTimeout(timer) }
   }
 
-  /** 约定族全文按 ID 读取；取不到时退回摘要并在块内指向 memory_read，不放大为整体失败。 */
+  /** 约定全文按 ID 读取；取不到时退回摘要并在块内指向 memory_read，不放大为整体失败。 */
   private async residentBodies(ids: string[], signal: AbortSignal): Promise<Map<string, string>> {
     const bodies = new Map<string, string>()
     if (!ids.length) return bodies
