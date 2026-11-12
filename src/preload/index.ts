@@ -7,7 +7,7 @@
  * `preferences`（界面偏好与快捷命令）、`providers`（认证、供应商与 Pi 默认模型）、
  * `updates`（版本检查与更新）、`trust`（Project Trust）、`genui`（生成式界面参数与 Extension UI）、
  * `lan-remote`（局域网访问控制与设备授权）、`browser`（受限网页截图、元素选择与取消）、
- * `agent-home`（桌面自有 Pi agent 目录与首启导入）、`experts`（内置专家的派生、自定义专家删除与快速模式剔除清单）。
+ * `agent-home`（桌面自有 Pi agent 目录与首启导入）、`experts`（内置专家的派生、自定义专家的读取与保存、删除与快速模式剔除清单）。
  *
  * 不暴露 Electron、任意 channel 或系统能力；沙箱不能 require 拆分模块，构建侧保持单产物。
  */

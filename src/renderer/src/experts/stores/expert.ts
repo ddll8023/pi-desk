@@ -1,13 +1,21 @@
 /**
- * 设置页「专家」分节的展示状态：清单与加载诊断、派生与删除动作、快速模式剔除清单。
+ * 设置页「专家」分节的展示状态：清单与加载诊断、派生、保存与删除动作、编辑对话框、快速模式剔除清单。
  *
- * 清单每次进页面现读：自定义专家目录很小，缓存只会让刚派生的副本看起来没生效。
- * 动作状态与清单状态分开：派生或删除失败只影响一行提示，已读到的列表继续可用。
+ * 清单每次进页面现读：自定义专家目录很小，缓存只会让刚派生或刚保存的定义看起来没生效。
+ * 动作状态与清单状态分开：派生、保存或删除失败只影响一行提示，已读到的列表继续可用。
  */
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import type { SessionExpertIssue, SessionExpertView } from '../../../../shared/session-api'
-import { deleteExpert, deriveExpert, listExperts, listFastModeExclusions } from '../services/expert'
+import type { ExpertEditableDefinition, ExpertSaveRequest, ExpertSaveResult } from '../../../../shared/experts-api'
+import {
+  deleteExpert,
+  deriveExpert,
+  listExperts,
+  listFastModeExclusions,
+  readExpertDefinition,
+  saveExpert
+} from '../services/expert'
 
 type Phase = 'idle' | 'loading' | 'ready' | 'error'
 
@@ -21,6 +29,11 @@ export const useExpertStore = defineStore('experts', () => {
   const busyId = ref<string | null>(null)
   const actionError = ref<string | null>(null)
   const notice = ref<string | null>(null)
+  /** 编辑对话框是否打开；`editingId` 为 null 表示新建。 */
+  const editorOpen = ref(false)
+  const editingId = ref<string | null>(null)
+  /** 保存进行中：对话框据此禁用重复提交，与列表行的 `busyId` 分开。 */
+  const saving = ref(false)
 
   const builtinExperts = computed(() => experts.value.filter(item => item.source === 'builtin'))
   const userExperts = computed(() => experts.value.filter(item => item.source === 'user'))
@@ -81,8 +94,60 @@ export const useExpertStore = defineStore('experts', () => {
     actionError.value = null
   }
 
+  function openCreate(): void {
+    clearNotice()
+    editingId.value = null
+    editorOpen.value = true
+  }
+
+  function openEdit(expertId: string): void {
+    clearNotice()
+    editingId.value = expertId
+    editorOpen.value = true
+  }
+
+  function closeEditor(): void {
+    editorOpen.value = false
+    editingId.value = null
+  }
+
+  /**
+   * 读取一份自定义专家定义供对话框回填；失败时只写提示并返回 null，
+   * 对话框保持空白，不拿半份数据让用户误以为定义就是那样。
+   */
+  async function readDefinition(expertId: string): Promise<ExpertEditableDefinition | null> {
+    const result = await readExpertDefinition(expertId)
+    if (!result.ok) {
+      actionError.value = result.error.message
+      return null
+    }
+    return result.data
+  }
+
+  /** 保存：成功后就地重读清单并关闭对话框；失败把结果原样交给对话框就地展示。 */
+  async function save(request: ExpertSaveRequest): Promise<ExpertSaveResult> {
+    if (saving.value) {
+      return { ok: false, error: { code: 'INTERNAL_ERROR', message: '正在保存，请稍候。' } }
+    }
+    saving.value = true
+    actionError.value = null
+    notice.value = null
+    const result = await saveExpert(request)
+    saving.value = false
+    if (!result.ok) return result
+    notice.value = result.data.unavailableSkillIds.length > 0
+      ? `已保存 ${result.data.expertId}；引用的技能当前不可用：${result.data.unavailableSkillIds.join('、')}。`
+      : `已保存 ${result.data.expertId}，改完下一轮会话生效。`
+    editorOpen.value = false
+    editingId.value = null
+    await load()
+    return result
+  }
+
   return {
     experts, issues, fastModeSkillIds, phase, loadError, busyId, actionError, notice,
-    builtinExperts, userExperts, loaded, load, derive, remove, clearNotice
+    editorOpen, editingId, saving,
+    builtinExperts, userExperts, loaded, load, derive, remove, clearNotice,
+    openCreate, openEdit, closeEditor, readDefinition, save
   }
 })

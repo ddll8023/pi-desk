@@ -16,9 +16,9 @@
 | --- | --- |
 | `src/main/sessions/session-manager.ts` | 列表、前后台新建／打开、重载、删除与 SDK 目标授权编排；解析会话专家绑定并随目标下发 |
 | `src/main/sessions/session-experts.ts` | 会话专家绑定解析：已有会话以持久绑定为准，新会话才用打开请求里的值 |
-| `src/main/sessions/expert-catalog.ts` | 合并随包与自定义专家目录，产出选择器视图（含派生来源与是否超长截断）与加载诊断；另回答快速模式会剔除哪些用户级技能；不启动宿主 |
-| `src/main/sessions/expert-files.ts` | 专家定义的写操作：把内置专家派生为自定义副本（写 `derivedFrom`）、删除自定义专家；写入面只到 `<agentDir>/experts/` |
-| `src/main/sessions/expert-ipc.ts` | 派生、删除与快速模式剔除清单三条通道；清单与诊断仍走 `desktop:session-experts` |
+| `src/main/sessions/expert-catalog.ts` | 合并随包与自定义专家目录，产出选择器视图（含派生来源与是否超长截断）与加载诊断；另提供主会话可见技能与子代理专用技能上下文，供保存校验与清单诊断共用；另回答快速模式会剔除哪些用户级技能；不启动宿主 |
+| `src/main/sessions/expert-files.ts` | 专家定义的写操作：把内置专家派生为自定义副本（写 `derivedFrom`）、读取与保存自定义专家定义、删除自定义专家；保存只改声明的四个字段与正文、保留其余声明行，先写临时文件再改名；写入面只到 `<agentDir>/experts/` |
+| `src/main/sessions/expert-ipc.ts` | 派生、读取、保存、删除与快速模式剔除清单五条通道；清单与诊断仍走 `desktop:session-experts` |
 | `src/main/sessions/session-store.ts` | 项目会话目录、受限列表窗口与摘要缓存、文件定位与删除 |
 | `src/main/sessions/session-run-registry.ts` | 运行 ID、绑定代际、前台顺序及会话占用的唯一登记 |
 | `src/main/sessions/log-host-pool.ts` | 只读解析宿主池：按项目保活查看历史用的宿主进程，不登记运行实例、不占用会话，可被绑定接管 |
@@ -60,7 +60,7 @@
 | `src/sdk-host/projection/output-rate.ts` | 模型输出速率计算 |
 | `src/sdk-host/projection/checkpoint.ts` | 首页与稳定活动的独立内存检查点：绑定时分别核对恢复条件，命中不替代 SDK 打开会话文件 |
 | `src/shared/session-api.ts` | 会话列表、打开、重载、删除、按会话读取历史，以及会话专家绑定与专家清单的页面契约 |
-| `src/shared/experts-api.ts` | 专家派生、删除与快速模式剔除清单三条通道；专家视图与诊断类型复用会话域，不重复定义 |
+| `src/shared/experts-api.ts` | 专家派生、读取与保存、删除与快速模式剔除清单五条通道及请求／结果契约校验；专家视图与诊断类型复用会话域，不重复定义 |
 | `src/shared/session-run-api.ts` | 应用级运行清单、释放／结束与事件契约 |
 | `src/shared/usage-stats-api.ts` | 跨项目与跨会话 Token 与费用统计 IPC 契约与聚合类型校验 |
 | `src/shared/extension-ui-api.ts` | 扩展对话、通知、widget 与回应形态 |
@@ -114,6 +114,8 @@
 | `src/renderer/src/sessions/components/SessionActivityBar.vue` | 会话活动摘要和明细 |
 | `src/renderer/src/sessions/components/ExtensionDialog.vue` | SDK 扩展交互队列的当前对话 |
 | `src/renderer/src/sessions/components/ExtensionNotificationBar.vue` | 扩展通知展示 |
+| `src/renderer/src/experts/components/ExpertSettingsSection.vue` | 设置页「专家」分节：内置与自定义专家列表、加载诊断、派生副本、新建与编辑入口、删除确认 |
+| `src/renderer/src/experts/components/ExpertEditorDialog.vue` | 专家编辑对话框：显示名称、一句话简介、逗号分隔的技能引用与正文四个字段，新建与编辑两态；保存中禁用重复提交，失败就地展示原因，关闭归还焦点 |
 
 核心打开链、Store、宿主入口及投影职责已由源码读取；投影辅助实现与界面文件结合导入、模板和接口调用映射，不将本表视作逐函数质量结论。
 

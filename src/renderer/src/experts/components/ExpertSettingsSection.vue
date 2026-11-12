@@ -1,6 +1,7 @@
-<!-- 设置页「专家」分节：列出内置与自定义专家、加载诊断，并提供派生副本与删除自定义专家两个写操作。
-     派生只复制正文到产品 agent 目录并写入 derivedFrom，此后副本自行演进、不跟随内置升级，
-     因此列表要给派生来源与「改文件下一轮生效」的说明；诊断只读展示，界面上不提供自动修复。 -->
+<!-- 设置页「专家」分节：列出内置与自定义专家、加载诊断，并提供新建、编辑、派生副本与删除四个操作。
+     新建与编辑走同一个对话框（ExpertEditorDialog）；派生只复制正文到产品 agent 目录并写入 derivedFrom，
+     此后副本自行演进、不跟随内置升级，因此列表要给派生来源与「改完下一轮生效」的说明；诊断只读展示，
+     界面上不提供自动修复。 -->
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { storeToRefs } from 'pinia'
@@ -8,9 +9,12 @@ import type { SessionExpertIssue, SessionExpertView } from '../../../../shared/s
 import { useExpertStore } from '../stores/expert'
 import AppButton from '../../ui/AppButton.vue'
 import ConfirmDialog from '../../ui/ConfirmDialog.vue'
+import ExpertEditorDialog from './ExpertEditorDialog.vue'
 
 const store = useExpertStore()
-const { experts, issues, busyId, loadError, actionError, notice, loaded } = storeToRefs(store)
+const {
+  experts, issues, busyId, loadError, actionError, notice, loaded, editorOpen, editingId
+} = storeToRefs(store)
 
 const pendingDelete = ref<SessionExpertView | null>(null)
 
@@ -69,10 +73,13 @@ onMounted(() => { void store.load() })
         <div>
           <h2 id="settings-experts-list-title" class="settings-section-title">可用专家</h2>
           <p class="mt-1 text-xs text-desk-muted">
-            内置专家随应用发布，只能派生副本；自定义专家在应用数据目录下，可以删除。
+            内置专家随应用发布，只能派生副本；自定义专家可以在页面内新建与编辑，也可以删除。标识创建后不可改。
           </p>
         </div>
-        <AppButton variant="ghost" :disabled="!loaded" @click="refresh">重新读取</AppButton>
+        <div class="flex items-center gap-2">
+          <AppButton variant="ghost" :disabled="!loaded" @click="refresh">重新读取</AppButton>
+          <AppButton variant="primary" :disabled="!loaded" @click="store.openCreate()">新建专家</AppButton>
+        </div>
       </div>
 
       <p v-if="loadError !== null" role="alert" class="status-notice status-notice-error mt-3">
@@ -80,7 +87,7 @@ onMounted(() => { void store.load() })
       </p>
 
       <p v-else-if="loaded && experts.length === 0" role="status" class="mt-3 text-xs text-desk-muted">
-        还没有可用的专家。内置专家需要重新构建随包资源后才会出现；自定义专家放在应用数据目录的 experts/&lt;id&gt;/expert.md。
+        还没有可用的专家。内置专家需要重新构建随包资源后才会出现；自定义专家可以用右上角「新建专家」从空白创建，或从内置专家派生副本。
       </p>
 
       <p v-if="notice !== null" role="status" class="status-notice mt-3">{{ notice }}</p>
@@ -120,7 +127,7 @@ onMounted(() => { void store.load() })
                 正文过长：召唤时只注入前一段并补一行截断说明，定义文件本身不变
               </p>
             </div>
-            <div class="shrink-0">
+            <div class="flex shrink-0 items-center gap-2">
               <AppButton
                 v-if="expert.source === 'builtin'"
                 variant="ghost"
@@ -129,14 +136,22 @@ onMounted(() => { void store.load() })
               >
                 {{ isBusy(expert) ? '派生中…' : '派生副本' }}
               </AppButton>
-              <AppButton
-                v-else
-                variant="ghost"
-                :disabled="busyId !== null"
-                @click="pendingDelete = expert"
-              >
-                删除
-              </AppButton>
+              <template v-else>
+                <AppButton
+                  variant="ghost"
+                  :disabled="busyId !== null"
+                  @click="store.openEdit(expert.id)"
+                >
+                  编辑
+                </AppButton>
+                <AppButton
+                  variant="ghost"
+                  :disabled="busyId !== null"
+                  @click="pendingDelete = expert"
+                >
+                  删除
+                </AppButton>
+              </template>
             </div>
           </div>
         </li>
@@ -164,6 +179,12 @@ onMounted(() => { void store.load() })
         </li>
       </ul>
     </section>
+
+    <ExpertEditorDialog
+      :open="editorOpen"
+      :expert-id="editingId"
+      @cancel="store.closeEditor()"
+    />
 
     <ConfirmDialog
       :open="deleteOpen"

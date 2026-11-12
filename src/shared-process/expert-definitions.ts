@@ -3,7 +3,7 @@
  *
  * 只读取随包清单给出的内置专家定义，以及产品 agent 目录下的自定义专家，合并成一份可召唤清单；
  * 单个定义损坏、身份冲突或引用了不可用技能时只影响对应条目，不中断整份清单。
- * 本模块不装配会话、不注入系统提示，也不产生任何子代理调用；清单条目到内置入口的映射与技能目录标识列举由这里提供。
+ * 本模块不装配会话、不注入系统提示，也不产生任何子代理调用；清单条目到内置入口的映射、技能目录标识列举，以及写回所需的声明解析、标识校验与上限常量都由这里提供，主进程不复制第二份规则。
  */
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
@@ -98,7 +98,7 @@ export interface LoadExpertCatalogInput extends ExpertSkillContext {
   readonly userDirectory: string
 }
 
-interface ParsedDocument {
+export interface ParsedDocument {
   readonly fields: Readonly<Record<string, string>>
   readonly body: string
 }
@@ -134,6 +134,33 @@ function parseSkillIds(value: string | undefined): string[] | null {
     .map(item => item.trim().replace(/^['"]|['"]$/g, ''))
     .filter(item => item !== '')
   return items.every(item => SKILL_ID.test(item)) ? items : null
+}
+
+/** 标识与目录名同形的判定；主进程写盘与页面契约共用这一份规则。 */
+export function isExpertDefinitionId(value: unknown): value is string {
+  return typeof value === 'string' && EXPERT_ID.test(value)
+}
+
+/** 技能标识判定：技能目录允许下划线与大写，与专家标识不是同一套规则。 */
+export function isSkillReferenceId(value: unknown): value is string {
+  return typeof value === 'string' && SKILL_ID.test(value)
+}
+
+/** 定义文件固定名与两类上限：主进程写盘与页面提示共用，不在两边各写一份常数。 */
+export const EXPERT_DEFINITION_FILE = DEFINITION_FILE
+export const EXPERT_LIMITS = {
+  definitionBytes: MAX_DEFINITION_BYTES,
+  roleChars: MAX_ROLE_CHARS
+} as const
+
+/** 解析一份定义文件的声明段与正文；返回 null 表示缺少首尾分隔行，写回前据此判断能否安全改写。 */
+export function parseExpertDocument(text: string): ParsedDocument | null {
+  return parseDocument(text)
+}
+
+/** 解析技能引用列表；返回 null 表示写法不合法，写回时直接拒绝而不是猜用户的意图。 */
+export function parseExpertSkillIds(value: string | undefined): string[] | null {
+  return parseSkillIds(value)
 }
 
 function invalid(expertId: string | null, path: string): ReadResult {

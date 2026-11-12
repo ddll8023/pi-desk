@@ -1,20 +1,27 @@
-/** 专家设置页的受限桥接：清单复用 sessions 域，派生与删除走专家域；不向页面暴露任何文件路径写权限。 */
+/** 专家设置页的受限桥接：清单复用 sessions 域，派生、读取、保存与删除走专家域；不向页面暴露任何文件路径写权限。 */
 import { isSessionExpertsResult } from '../../../../shared/session-api'
 import type { SessionExpertsResult } from '../../../../shared/session-api'
 import {
   isExpertDeleteResult,
   isExpertDeriveResult,
+  isExpertEditableDefinitionResult,
+  isExpertSaveResult,
   isFastModeExclusionsResult
 } from '../../../../shared/experts-api'
 import type {
   ExpertDeleteResult,
   ExpertDeriveResult,
+  ExpertReadResult,
+  ExpertSaveRequest,
+  ExpertSaveResult,
   FastModeExclusionsResult
 } from '../../../../shared/experts-api'
 
 interface ExpertBridge {
   readonly listSessionExperts: () => Promise<unknown>
   readonly deriveExpert: (request: { readonly builtinId: string }) => Promise<unknown>
+  readonly readExpertDefinition: (request: { readonly expertId: string }) => Promise<unknown>
+  readonly saveExpert: (request: ExpertSaveRequest) => Promise<unknown>
   readonly deleteExpert: (request: { readonly expertId: string }) => Promise<unknown>
   readonly listFastModeExclusions: () => Promise<unknown>
 }
@@ -24,6 +31,8 @@ function bridge(): ExpertBridge | null {
   if (value === undefined
     || typeof value.listSessionExperts !== 'function'
     || typeof value.deriveExpert !== 'function'
+    || typeof value.readExpertDefinition !== 'function'
+    || typeof value.saveExpert !== 'function'
     || typeof value.deleteExpert !== 'function'
     || typeof value.listFastModeExclusions !== 'function') return null
   return value as ExpertBridge
@@ -41,6 +50,12 @@ const DELETE_FALLBACK: ExpertDeleteResult = {
 }
 const EXCLUSIONS_FALLBACK: FastModeExclusionsResult = {
   ok: false, error: { code: 'INTERNAL_ERROR', message: '无法读取快速模式剔除清单。' }
+}
+const READ_FALLBACK: ExpertReadResult = {
+  ok: false, error: { code: 'INTERNAL_ERROR', message: '读取请求没有送达主进程。' }
+}
+const SAVE_FALLBACK: ExpertSaveResult = {
+  ok: false, error: { code: 'INTERNAL_ERROR', message: '保存请求没有送达主进程。' }
 }
 
 async function call<Result>(
@@ -79,6 +94,22 @@ export function deleteExpert(expertId: string): Promise<ExpertDeleteResult> {
     target => target.deleteExpert({ expertId }),
     isExpertDeleteResult,
     DELETE_FALLBACK
+  )
+}
+
+export function readExpertDefinition(expertId: string): Promise<ExpertReadResult> {
+  return call(
+    target => target.readExpertDefinition({ expertId }),
+    isExpertEditableDefinitionResult,
+    READ_FALLBACK
+  )
+}
+
+export function saveExpert(request: ExpertSaveRequest): Promise<ExpertSaveResult> {
+  return call(
+    target => target.saveExpert(request),
+    isExpertSaveResult,
+    SAVE_FALLBACK
   )
 }
 

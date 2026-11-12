@@ -1,12 +1,16 @@
-/** 专家资源管理的桥接：设置页的派生、删除与快速模式剔除清单；清单本身复用 sessions 域的读取。 */
+/** 专家资源管理的桥接：设置页的派生、读取与保存、删除与快速模式剔除清单；清单本身复用 sessions 域的读取。 */
 
 import { ipcRenderer } from 'electron'
 import {
   EXPERTS_DELETE_CHANNEL,
   EXPERTS_DERIVE_CHANNEL,
   EXPERTS_FAST_MODE_CHANNEL,
+  EXPERTS_READ_CHANNEL,
+  EXPERTS_SAVE_CHANNEL,
   isExpertDeleteResult,
   isExpertDeriveResult,
+  isExpertEditableDefinitionResult,
+  isExpertSaveResult,
   isFastModeExclusionsResult
 } from '../shared/experts-api'
 import type {
@@ -15,6 +19,10 @@ import type {
   ExpertDeleteResult,
   ExpertDeriveRequest,
   ExpertDeriveResult,
+  ExpertReadRequest,
+  ExpertReadResult,
+  ExpertSaveRequest,
+  ExpertSaveResult,
   FastModeExclusionsResult
 } from '../shared/experts-api'
 
@@ -38,5 +46,23 @@ export const expertsApi: ExpertApi = {
   async listFastModeExclusions(): Promise<FastModeExclusionsResult> {
     const response: unknown = await ipcRenderer.invoke(EXPERTS_FAST_MODE_CHANNEL)
     return isFastModeExclusionsResult(response) ? response : invalidExpertResponse()
+  },
+
+  async readExpertDefinition(request: ExpertReadRequest): Promise<ExpertReadResult> {
+    const payload: ExpertReadRequest = { expertId: request.expertId }
+    const response: unknown = await ipcRenderer.invoke(EXPERTS_READ_CHANNEL, payload)
+    return isExpertEditableDefinitionResult(response) ? response : invalidExpertResponse()
+  },
+
+  async saveExpert(request: ExpertSaveRequest): Promise<ExpertSaveResult> {
+    const payload: ExpertSaveRequest = {
+      expertId: request.expertId,
+      displayName: request.displayName,
+      summary: request.summary,
+      skillIds: [...request.skillIds],
+      body: request.body
+    }
+    const response: unknown = await ipcRenderer.invoke(EXPERTS_SAVE_CHANNEL, payload)
+    return isExpertSaveResult(response) ? response : invalidExpertResponse()
   }
 }

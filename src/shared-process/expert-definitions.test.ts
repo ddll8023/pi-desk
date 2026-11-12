@@ -9,7 +9,13 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
-import { loadExpertCatalog } from './expert-definitions.ts'
+import {
+  isExpertDefinitionId,
+  isSkillReferenceId,
+  loadExpertCatalog,
+  parseExpertDocument,
+  parseExpertSkillIds
+} from './expert-definitions.ts'
 import type { ExpertCatalog } from './expert-definitions.ts'
 
 interface TempRoot {
@@ -140,4 +146,24 @@ test('自定义目录不存在时只有内置专家，且不产生诊断', () =>
   } finally {
     temp.cleanup()
   }
+})
+
+test('写回用的解析工具与加载层同一口径', () => {
+  const document = parseExpertDocument(definition({ id: 'my-expert', skills: '[memory]' }))
+  assert.equal(document?.fields.name, 'my-expert')
+  assert.match(document?.body ?? '', /^# 正文/u)
+  // 缺少首尾分隔行时返回 null：写回前据此判断能否安全改写，而不是猜字段来源。
+  assert.equal(parseExpertDocument('name: my-expert\n'), null)
+  assert.deepEqual(parseExpertSkillIds('[]'), [])
+  assert.deepEqual(parseExpertSkillIds('[memory, frontend-design]'), ['memory', 'frontend-design'])
+  assert.equal(parseExpertSkillIds('memory, bad id'), null)
+})
+
+test('专家标识与技能引用各用一套形状校验', () => {
+  assert.equal(isExpertDefinitionId('my-expert'), true)
+  assert.equal(isExpertDefinitionId('My-Expert'), false)
+  assert.equal(isExpertDefinitionId('my_expert'), false)
+  assert.equal(isSkillReferenceId('memory'), true)
+  assert.equal(isSkillReferenceId('Skill_One'), true)
+  assert.equal(isSkillReferenceId('bad id'), false)
 })
