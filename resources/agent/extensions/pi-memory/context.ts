@@ -83,27 +83,25 @@ function resolveProjectId(projects: readonly { id: string; name: string; path: s
   return matched === null ? null : matched.id
 }
 
-/** 约定族按 rule_key 前缀聚合；缺失时归入未分类，只留索引不外扩。 */
-function ruleFamily(row: JsonObject): string {
-  const key = typeof row.rule_key === 'string' ? row.rule_key : ''
-  return key.split('.')[0] || '(未分类)'
-}
-
 /** 来源项目：无项目归属的通用约定返回空串，不把 null 当成解析错误。 */
 function sourceProject(row: JsonObject): string {
   return typeof row.source_project === 'string' ? row.source_project : ''
 }
 
-/** 族键带归属：不同项目的同族记录各自保留最新，避免被其他项目的新记录顶掉。 */
+/** 收敛键带归属：不同项目的同名键各自保留，避免被其他项目的记录顶掉。 */
 function familyKey(row: JsonObject): string {
-  return `${sourceProject(row)}\u0000${ruleFamily(row)}`
+  return `${sourceProject(row)}\u0000${typeof row.rule_key === 'string' ? row.rule_key : ''}`
 }
 
-/** 排序对象：族名与命中的记录；预算顺序与输出顺序作用在同一批条目上。 */
-interface RankedItem { family: string; row: JsonObject }
+/** 排序对象：收敛键与命中的记录；预算顺序与输出顺序作用在同一批条目上。 */
+interface RankedItem { key: string; row: JsonObject }
 
-/** 每族每个归属只保留最新一条：同族旧版仍可检索，但不占常驻预算。 */
-function newestByFamily(rows: JsonObject[]): RankedItem[] {
+/**
+ * 同一项目、同一 `rule_key` 只保留最新一条。
+ * 版本更替已由替代机制标记为 superseded，这里只做防御性去重；
+ * 不同 `rule_key` 即使首段相同也不合并，否则会静默挤掉同主题的其他决定。
+ */
+function newestByKey(rows: JsonObject[]): RankedItem[] {
   const newest = new Map<string, JsonObject>()
   for (const row of rows) {
     const key = familyKey(row)
@@ -111,7 +109,7 @@ function newestByFamily(rows: JsonObject[]): RankedItem[] {
     if (previous === undefined || text(row.date) > text(previous.date)
       || (text(row.date) === text(previous.date) && text(row.id) > text(previous.id))) newest.set(key, row)
   }
-  return [...newest.values()].map(row => ({ family: ruleFamily(row), row }))
+  return [...newest.values()].map(row => ({ key: familyKey(row), row }))
 }
 
 /**
@@ -152,7 +150,7 @@ function residentBlock(row: JsonObject, full: string | undefined): string {
   return `${head}\n${body}${cut ? `\n…（余下按 memory_read ${text(row.id)} 读）` : ''}`
 }
 
-/** 未展开正文的族只留一行索引，让缺口可见而不是静默丢弃。 */
+/** 未展开正文的条目只留一行索引，让缺口可见而不是静默丢弃。 */
 function residentIndex(row: JsonObject): string {
   const key = typeof row.rule_key === 'string' ? row.rule_key : ''
   return key ? `· ${key} ${text(row.topic)}` : `· ${text(row.topic)}`
@@ -302,12 +300,12 @@ export class MemoryRuntime {
   }
 
   /**
-   * 常驻约定：不依赖词法命中，近七天每个 `rule_key` 族按归属分别取最新一条。
-   * 只注入当前项目与通用（无项目归属的跨项目约定）两类族；其他项目的族既不注入也不占索引行，
+   * 常驻约定：不依赖词法命中，近七天每个 `rule_key` 按归属分别取最新一条。
+   * 只注入当前项目与通用（无项目归属的跨项目约定）两类归属；其他项目的记录既不注入也不占索引行，
    * 需要时靠任务召回或 memory_rules／memory_search 取得。未识别当前项目时不过滤。
-   * 没有 `rule_key` 的决定与约束不进常驻：族前缀是进入常驻的前提，缺失时只能主动检索。
+   * 没有 `rule_key` 的决定与约束不进常驻：键是共同身份，缺失时只能主动检索。
    * 预算按「归属 → 约束优先」先到先得，正文按「日期倒序、同日约束在前」输出：两者不是同一把尺子。
-   * 预算用尽后的候选族降为索引行；本会话只读取一次，超时或失败时返回空，不影响其余背景。
+   * 预算用尽后的候选项降为索引行；本会话只读取一次，超时或失败时返回空，不影响其余背景。
    */
   private async residentSummary(lease: Lease): Promise<string> {
     const state = lease.state
@@ -323,12 +321,12 @@ export class MemoryRuntime {
       const data = await this.engine.rules('', 0, 200, null, signal)
       lease.assert()
       const projectId = this.projectId(state.cwd)
-      // 空 rule_key 的约定不进常驻：族前缀决定能否常驻，缺失时只走主动检索。
+      // 空 rule_key 的约定不进常驻：键是共同身份，缺失时只能主动检索。
       const rows = array(data.rules).map(value => object(value))
         .filter(row => (text(row.type) === 'decision' || text(row.type) === 'constraint')
           && text(row.date) >= window && text(row.rule_key) !== '')
-      // 只收当前项目与通用两类族：其他项目的约定不进常驻，避免无关条目占预算。
-      const all = newestByFamily(rows)
+      // 只收当前项目与通用两类归属：其他项目的约定不进常驻，避免无关条目占预算。
+      const all = newestByKey(rows)
       const excludedKeys = new Set(all.filter(item => projectRank(item.row, projectId) === 2)
         .map(item => familyKey(item.row)))
       /** 预算顺序：归属 → 约束优先 → 日期 → id 降序；决定谁拿正文、谁降为索引行。 */
@@ -345,7 +343,7 @@ export class MemoryRuntime {
         || text(right.row.id).localeCompare(text(left.row.id))
       const families = all.filter(item => !excludedKeys.has(familyKey(item.row))).sort(budgetOrder)
       const excludedFamilies = excludedKeys.size
-      // 按被排除的族统计行数：同族旧版本不算被项目排除，否则 omitted 会偏小。
+      // 按被排除的键统计行数：同键旧版本不算被项目排除，否则 omitted 会偏小。
       const excludedRecords = rows.filter(row => excludedKeys.has(familyKey(row))).length
       const bodies = await this.residentBodies(families.map(item => text(item.row.id)), signal)
       lease.assert()
@@ -366,7 +364,7 @@ export class MemoryRuntime {
       for (const row of indexed.slice(0, RESIDENT_INDEX_ROWS)) lines.push(residentIndex(row))
       const omitted = rows.length - excludedRecords - injected
       if (pending > 0) lines.push(`另有 ${pending} 族未展开正文（共 ${omitted} 条未注入）：memory_rules 取摘要，memory_read 取全文。`)
-      if (excludedFamilies > 0) lines.push(`其他项目另有 ${excludedFamilies} 族约定未进入常驻；需要时用 memory_rules 或 memory_search 检索。`)
+      if (excludedFamilies > 0) lines.push(`其他项目另有 ${excludedFamilies} 条约定未进入常驻；需要时用 memory_rules 或 memory_search 检索。`)
       const content = injected > 0 ? ['以下「决定 / 约束」是约定，须遵守。', ...lines] : lines
       state.resident = content.join('\n')
       state.residentStats = { status: 'provided', families: families.length, injected, indexed: pending, omitted,
