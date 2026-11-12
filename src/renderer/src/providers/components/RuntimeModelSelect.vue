@@ -1,5 +1,5 @@
 <!-- 原位新建使用默认模型预读，不把旧实例的模型当作新会话模型；结束旧实例期间禁止模型操作。
-     输入坞模型选择器（内联胶囊或 ＋ 菜单行两种使用位置）：未选项目时也读全局模型目录；选中只切换当前会话或草稿模型，候选项里的「设为默认」才写 Pi 自身默认模型（settings.json），会话切换与默认模型写入互不联动；候选项排除设置中隐藏的模型。 -->
+     输入坞模型选择器（坞内联胶囊或 ＋ 菜单二级面板内的候选列表两种使用位置）：未选项目时也读全局模型目录；选中只切换当前会话或草稿模型，候选项里的「设为默认」才写 Pi 自身默认模型（settings.json），会话切换与默认模型写入互不联动；候选项排除设置中隐藏的模型。 -->
 <script setup lang="ts">
 import { computed, onUnmounted, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
@@ -15,11 +15,11 @@ const props = withDefaults(defineProps<{
   readonly newConversation?: boolean
   /** 旧实例结束或新绑定确认期间，禁止改选与手动刷新。 */
   readonly resetting?: boolean
-  /** 使用位置：输入坞内联胶囊（inline）或 ＋ 菜单行（menu）；菜单行改为占满整行的行式触发器。 */
+  /** 使用位置：输入坞内联胶囊（inline）或 ＋ 菜单二级面板内的常驻候选列表（menu）。 */
   readonly variant?: 'inline' | 'menu'
 }>(), { newConversation: false, resetting: false, variant: 'inline' })
 
-const isMenu = computed(() => props.variant === 'menu')
+const isPanel = computed(() => props.variant === 'menu')
 
 const runtimeStore = useRuntimeStore()
 const sessionStore = useSessionStore()
@@ -281,8 +281,44 @@ function refreshModels(): void {
 </script>
 
 <template>
-  <div class="app-runtime-model" :class="{ 'is-error': error !== null, 'is-menu': isMenu }" :aria-busy="busy">
-    <div class="runtime-model-control">
+  <div class="app-runtime-model" :class="{ 'is-error': error !== null, 'is-panel': isPanel }" :aria-busy="busy">
+    <!-- 面板内嵌：没有触发键，当前值由列表的选中项表达，状态与刷新入口独占一行。 -->
+    <div v-if="isPanel" class="runtime-model-head">
+      <p
+        v-if="error || progress"
+        :id="error ? 'runtime-model-error' : 'runtime-model-progress'"
+        class="runtime-model-state"
+        :role="error ? 'alert' : 'status'"
+      >{{ error ?? progress }}</p>
+      <span v-else class="runtime-model-state">{{ currentLabel }}</span>
+      <AppButton
+        v-if="canPrepare || canRetry"
+        variant="icon"
+        class="runtime-model-refresh"
+        :disabled="refreshDisabled"
+        :aria-label="canPrepare ? '刷新模型列表' : '重试读取模型列表'"
+        :title="canPrepare ? '刷新模型列表' : '重试读取模型列表'"
+        @click="refreshModels"
+      >
+        <span aria-hidden="true">↻</span>
+      </AppButton>
+    </div>
+    <!-- 二级面板里的常驻候选：不占一次点击去展开，列表自己滚动，选完不收面板。 -->
+    <AppSelect
+      v-if="isPanel"
+      id="runtime-model-select"
+      inline
+      :label="ready ? '当前会话模型' : '新会话模型'"
+      :groups="groups"
+      :model-value="currentKey"
+      :disabled="disabledReason !== null"
+      searchable
+      search-placeholder="搜索供应商或模型…"
+      empty-results-label="没有匹配的模型"
+      @update:model-value="chooseModel"
+      @option-action="chooseDefaultModel"
+    />
+    <div v-else class="runtime-model-control">
       <AppSelect
         id="runtime-model-select"
         :label="ready ? '当前会话模型' : '新会话模型'"
@@ -314,9 +350,10 @@ function refreshModels(): void {
         <span aria-hidden="true">↻</span>
       </AppButton>
     </div>
-    <!-- 进度与错误并入触发键文案与 title；此处仅保留读屏用的隐藏区域，输入坞高度保持恒定。 -->
+    <!-- 坞内胶囊把进度与错误并入触发键文案与 title，此处仅保留读屏用的隐藏区域，输入坞高度保持恒定。
+         面板内已由上方状态行表达，不重复渲染。 -->
     <p
-      v-if="error || progress"
+      v-if="!isPanel && (error || progress)"
       :id="error ? 'runtime-model-error' : 'runtime-model-progress'"
       class="sr-only"
       :role="error ? 'alert' : 'status'"
@@ -332,46 +369,42 @@ function refreshModels(): void {
 </template>
 
 <style scoped>
-/* 输入坞里的两种使用位置：内联时宽度随模型名自适应、上限防止长名撑开输入坞；菜单行里占满整行。 */
+/* 两种使用位置：坞内胶囊宽度随模型名自适应、上限防止长名撑开输入坞；二级面板内占满整块面板。 */
 .app-runtime-model {
   position: relative;
   min-width: 0;
   max-width: 16rem;
   flex: none;
 }
-.app-runtime-model.is-menu {
+.app-runtime-model.is-panel {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
   max-width: none;
-  flex: 1 1 auto;
+  min-height: 0;
 }
-/* 菜单行里的触发器退成安静的行式控件：不再自带底色、描边与投影，行高与内距跟同一菜单里的其它行对齐。
-   宽度靠 flex 分配而不是 100%：它与刷新键同排，声明成定宽基值会把自己挤出容器。
-   左内距 0.75rem 与菜单行的 pl-3 对齐，徽标不会比其它行的文字更靠左。 */
-.app-runtime-model.is-menu .runtime-model-control :deep(.app-select-trigger) {
-  flex: 1 1 auto;
+/* 面板内的状态行：当前值、读取进度与错误共用一行，右侧跟刷新键；长文案折行而不撑出面板。 */
+.runtime-model-head {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0 0.25rem 0.15rem;
+}
+.runtime-model-state {
   min-width: 0;
-  height: 30px;
-  border: 0;
-  border-radius: var(--radius-desk-sm);
-  background: transparent;
-  box-shadow: none;
-  padding: 0 0.5rem 0 0.75rem;
-  color: var(--color-desk-ink);
+  flex: 1 1 auto;
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--color-desk-muted);
+  font-size: var(--text-2xs);
+  line-height: 1.4;
 }
-.app-runtime-model.is-menu .runtime-model-control :deep(.app-select-trigger:not(:disabled):hover) {
-  background: var(--color-desk-surface-subtle);
-  color: var(--color-desk-ink);
+.app-runtime-model.is-error .runtime-model-state {
+  color: var(--color-desk-danger);
 }
-.app-runtime-model.is-menu .runtime-model-control :deep(.app-select-trigger[aria-expanded="true"]) {
-  background: var(--color-desk-accent-soft);
-  box-shadow: none;
-  color: var(--color-desk-accent);
-}
-/* 菜单行只放徽标与模型名：供应商名在候选列表与触发键的 title 里仍可见，行内不再与模型名争宽度。 */
-.app-runtime-model.is-menu .runtime-model-control :deep(.app-select-meta) {
-  display: none;
-}
-/* 菜单行里的刷新键降成行内小图标：24px、无边框，不与 30px 行的行高争视觉重量。 */
-.app-runtime-model.is-menu .runtime-model-refresh {
+/* 面板内的刷新键降成行内小图标：24px、无边框，不与列表行争视觉重量。 */
+.app-runtime-model.is-panel .runtime-model-refresh {
   flex: none;
   width: 24px;
   height: 24px;
@@ -380,18 +413,15 @@ function refreshModels(): void {
   background: transparent;
   color: var(--color-desk-muted);
 }
-.app-runtime-model.is-menu .runtime-model-refresh:not(:disabled):hover {
+.app-runtime-model.is-panel .runtime-model-refresh:not(:disabled):hover {
   background: var(--color-desk-surface-subtle);
   color: var(--color-desk-ink);
 }
-/* 设置默认的反馈在菜单里改为向下展开：向上会被菜单的滚动区裁掉。 */
-.app-runtime-model.is-menu .runtime-model-notice {
-  top: 100%;
-  right: auto;
-  bottom: auto;
-  left: 0;
-  margin-top: 0.35rem;
-  margin-bottom: 0;
+/* 面板内的设置默认反馈改回块级：向下展开会被面板的滚动区裁掉。 */
+.app-runtime-model.is-panel .runtime-model-notice {
+  position: static;
+  flex: none;
+  margin: 0.25rem 0.25rem 0;
 }
 .runtime-model-control {
   display: flex;
@@ -428,7 +458,7 @@ function refreshModels(): void {
   opacity: 0.6;
 }
 /* 读取进度与错误并入触发键文案，不设独立状态行，输入坞高度保持恒定。 */
-.app-runtime-model.is-error :deep(.app-select-name) {
+.app-runtime-model.is-error .runtime-model-control :deep(.app-select-name) {
   color: var(--color-desk-danger);
 }
 /* 设置默认的反馈浮层贴在胶囊上方，不占布局、不改变输入坞高度；向右展开会越出窗口，因此靠右对齐向左生长。 */

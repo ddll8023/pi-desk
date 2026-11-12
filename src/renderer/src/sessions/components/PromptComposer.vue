@@ -1,7 +1,7 @@
 <!-- 图片与编号说明由坞内附件区独立管理；点击发送即固定提示词、图片及标注快照，说明由 SDK 独立资料消息承接。
      结果未确认时可补读同步，确认结束原运行后恢复输入，不自动重发。
      原位新建以独立草稿承接输入：旧实例结束期间可编辑但不发送，首次发送才建立新会话。
-     Prompt 输入坞：处理输入法组合态、Enter 发送与 Shift+Enter 换行、焦点回归与重复提交、响应侧栏「新建」的聚焦请求并给出一次性提示，并在 Agent 运行期间原位提供停止入口；在 Agent 运行与流式响应期间草稿文本、图片附件与标注编辑保持可用，点击发送时才校验会话空闲；同时承接 Extension 的 set_editor_text 填充文本、图片附件的选择/文本框与活动视窗全局快捷粘贴（兼容系统截图提取）/拖拽入口、输入行按内容自动增高、＋ 菜单内的常用消息（短语取自界面偏好，可在设置里增删改与排序，点击即发送）、Pi 命令的斜杠模糊补全（Runtime 就绪后用运行中的命令清单，未就绪时用主进程预读的技能清单，按类型分组并按匹配优先级排序；另含 Desktop 层自己拦截的界面命令）与 `@` 项目文件引用（只写入相对路径文本，不传文件内容）；右侧文件树的行拖入坞内也走同一条相对路径引用规则。输入坞是单行结构：左侧 ＋ 菜单集中放置图片附件、模型选择、执行模式、专家与常用消息（菜单本身自上而下分五段，仅常用消息区内部滚动；执行模式两档互斥，专家一个会话只选一个、段内只占一行，点开二级列表再选具体专家，两者都只在新建会话时可选，已开始的会话只显示当前值不可改），中间是输入行，右侧是发送/停止键；坞上方是待办清单面板（仅标准模式提交清单后出现）、一行延续判定结论（宿主给出结论时才渲染）与一行专家失效提示（绑定的定义已不在清单里时才渲染）；坞下方一行是水平居中的信息行：异常与进行中的状态文本、被收起的 Extension 对话入口与会话用量指标（缓存命中率、上下文占用与平均速率，点击开明细；累计 token 与费用只在明细浮层展示）。Extension 的 setStatus 项不在输入区展示。 -->
+     Prompt 输入坞：处理输入法组合态、Enter 发送与 Shift+Enter 换行、焦点回归与重复提交、响应侧栏「新建」的聚焦请求并给出一次性提示，并在 Agent 运行期间原位提供停止入口；在 Agent 运行与流式响应期间草稿文本、图片附件与标注编辑保持可用，点击发送时才校验会话空闲；同时承接 Extension 的 set_editor_text 填充文本、图片附件的选择/文本框与活动视窗全局快捷粘贴（兼容系统截图提取）/拖拽入口、输入行按内容自动增高、＋ 菜单内的常用消息（短语取自界面偏好，可在设置里增删改与排序，点击即发送）、Pi 命令的斜杠模糊补全（Runtime 就绪后用运行中的命令清单，未就绪时用主进程预读的技能清单，按类型分组并按匹配优先级排序；另含 Desktop 层自己拦截的界面命令）与 `@` 项目文件引用（只写入相对路径文本，不传文件内容）；右侧文件树的行拖入坞内也走同一条相对路径引用规则。输入坞是单行结构：左侧 ＋ 菜单是两列双级结构——左列分类行（添加图片、模型、执行模式、专家、常用消息），右列是当前分类的二级面板（添加图片直接触发选择，其余四项的候选或选项常驻在面板里，仅列表区内部滚动；执行模式两档互斥，专家一个会话只选一个，两者都只在新建会话时可选，已开始的会话只显示当前值不可改），中间是输入行，右侧是发送/停止键；坞上方是待办清单面板（仅标准模式提交清单后出现）、一行延续判定结论（宿主给出结论时才渲染）与一行专家失效提示（绑定的定义已不在清单里时才渲染）；坞下方一行是水平居中的信息行：异常与进行中的状态文本、被收起的 Extension 对话入口与会话用量指标（缓存命中率、上下文占用与平均速率，点击开明细；累计 token 与费用只在明细浮层展示）。Extension 的 setStatus 项不在输入区展示。 -->
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
@@ -183,6 +183,19 @@ const plusMenuOpen = ref(false)
 /** 菜单外层引用：判断一次点击是否落在触发键或菜单之内。 */
 const plusRoot = ref<HTMLElement | null>(null)
 const plusMenu = ref<HTMLElement | null>(null)
+/** 二级面板的分类：除图片是直接执行的动作外，其余四项各占一块面板。 */
+type PlusPanel = 'model' | 'mode' | 'expert' | 'quick'
+/** 一级列的分类与面板映射；图片是直接动作，不在其中。 */
+const plusPanelRows: readonly { readonly value: PlusPanel; readonly label: string }[] = [
+  { value: 'model', label: '模型' },
+  { value: 'mode', label: '执行模式' },
+  { value: 'expert', label: '专家' },
+  { value: 'quick', label: '常用消息' }
+]
+/** 当前展开的二级面板；面板始终展开，点一级行只换面板，不收菜单。 */
+const plusPanel = ref<PlusPanel>('model')
+/** 二级面板容器引用：键盘从一级行进面板、Esc 退回一级行都按它判断焦点位置。 */
+const plusPanelRoot = ref<HTMLElement | null>(null)
 /**
  * 模式放在 ＋ 菜单里：它不是每次发送都要动的控件，收进菜单后坞内只留 ＋、输入框与发送键。
  * 模式是会话属性，已提交过对话的会话保持原能力集，只显示当前值不再可改。
@@ -194,7 +207,7 @@ const modeOptions: readonly { readonly value: ExecutionMode; readonly label: str
 const currentMode = computed(() => preferencesStore.executionMode)
 /** 已有对话或正在绑定时锁定：此时改模式不会影响当前会话的能力集。 */
 const modeLocked = computed(() => runtimeStore.messages.length > 0 || workspaceTabsStore.isChatBinding)
-/** 专家的一行提示：先讲清为什么可能不完整，都没问题时返回 null，由调用方回退到简介。 */
+/** 专家的一行提示：先讲清为什么可能不完整，都没问题时返回 null，界面不再显示描述行。 */
 function expertFlags(expert: SessionExpertView): string | null {
   const notes: string[] = []
   if (expert.unavailableSkillIds.length > 0) notes.push('部分技能不可用')
@@ -215,6 +228,7 @@ interface ExpertGroup {
 /**
  * 专家二级列表：第一项固定为「不使用专家」，其上是全部专家；绑定失效时补一组，
  * 否则触发器会因找不到选中值而显示成未选，把「已经失效」误读成「从未选过」。
+ * 面板窄、候选多，只保留异常提示，正常专家不再带整段简介。
  */
 const expertGroups = computed<readonly ExpertGroup[]>(() => {
   const groups: ExpertGroup[] = [{
@@ -227,7 +241,7 @@ const expertGroups = computed<readonly ExpertGroup[]>(() => {
       options: experts.map(expert => ({
         value: expert.id,
         label: expert.displayName,
-        description: expertFlags(expert) ?? expert.summary,
+        description: expertFlags(expert) ?? undefined,
         tag: expert.source === 'builtin' ? '内置' : '自定义'
       }))
     })
@@ -776,9 +790,16 @@ function togglePlusMenu(): void {
   if (plusMenuOpen.value) closePlusMenu()
   else {
     plusMenuOpen.value = true
+    // 每次打开都回到第一块面板，保留上一次停在哪一分类只会在重开时让人意外。
+    plusPanel.value = 'model'
     // 专家目录可能刚被改过：每次打开都重读一次，不在应用启动时就缓存住。
     void sessionStore.loadExperts()
   }
+}
+
+/** 切换二级面板：只换内容，不收菜单，菜单宽度因此不跳。 */
+function openPlusPanel(panel: PlusPanel): void {
+  plusPanel.value = panel
 }
 
 /**
@@ -796,9 +817,9 @@ function refreshPlusListMask(): void {
   list.classList.toggle('can-scroll', list.scrollHeight - list.clientHeight > 2)
 }
 
-// 菜单每次展开后重算一次：常用消息条数来自界面偏好，展开前节点还不存在。
-watch(plusMenuOpen, (open) => {
-  if (open) void nextTick(refreshPlusListMask)
+// 菜单打开与面板切换后都重算一次：常用消息条数来自界面偏好，切换前节点还不存在。
+watch([plusMenuOpen, plusPanel], () => {
+  if (plusMenuOpen.value) void nextTick(refreshPlusListMask)
 })
 
 function closePlusMenu(restoreFocus = false): void {
@@ -807,21 +828,21 @@ function closePlusMenu(restoreFocus = false): void {
   if (restoreFocus) void nextTick(() => { plusRoot.value?.querySelector('button')?.focus() })
 }
 
-/** 菜单内的可操作行：跳过禁用项，打开时的落点与行间移动都按同一份顺序取。 */
-function plusMenuRows(): HTMLButtonElement[] {
-  return [...(plusMenu.value?.querySelectorAll<HTMLButtonElement>('button:not(:disabled)') ?? [])]
+/** 一级行的可操作项：跳过禁用项，打开时的落点与行间移动都按同一份顺序取；二级面板里的控件不参与这一步。 */
+function plusNavRows(): HTMLButtonElement[] {
+  return [...(plusMenu.value?.querySelectorAll<HTMLButtonElement>('.prompt-composer-plus-nav-row:not(:disabled)') ?? [])]
 }
 
-/** 聚焦菜单内第 index 行；越界时收到最近的一端。 */
-function focusPlusRow(index: number): void {
-  const rows = plusMenuRows()
+/** 聚焦一级列第 index 行；越界时收到最近的一端。 */
+function focusPlusNavRow(index: number): void {
+  const rows = plusNavRows()
   if (rows.length === 0) return
   rows[Math.min(Math.max(index, 0), rows.length - 1)]?.focus()
 }
 
-/** 上下键在菜单各行之间移动焦点；焦点不在菜单内时落到首行或末行。 */
-function movePlusRowFocus(event: KeyboardEvent): void {
-  const rows = plusMenuRows()
+/** 上下键在一级行之间移动焦点；焦点不在菜单内时落到首行或末行。 */
+function movePlusNavFocus(event: KeyboardEvent): void {
+  const rows = plusNavRows()
   if (rows.length === 0) return
   event.preventDefault()
   const current = rows.findIndex((row) => row === document.activeElement)
@@ -830,6 +851,34 @@ function movePlusRowFocus(event: KeyboardEvent): void {
     ? (step === 1 ? 0 : rows.length - 1)
     : (current + step + rows.length) % rows.length
   rows[next]?.focus()
+}
+
+/** 当前焦点落在哪一列：一级列、二级面板，还是都不在（例如触发键本身）。 */
+function plusFocusZone(): 'nav' | 'panel' | 'outside' {
+  const active = document.activeElement
+  if (!(active instanceof Node)) return 'outside'
+  if (plusPanelRoot.value?.contains(active) === true) return 'panel'
+  if (plusMenu.value?.querySelector('.prompt-composer-plus-nav')?.contains(active) === true) return 'nav'
+  return 'outside'
+}
+
+/** 从一级行进入二级面板：搜索框优先，其次首个可操作按钮，最后落到列表本身。 */
+function focusPlusPanel(): void {
+  plusPanelRoot.value
+    ?.querySelector<HTMLElement>('input, button:not(:disabled), [role="listbox"][tabindex]')
+    ?.focus()
+}
+
+/** 从二级面板退回当前分类的一级行。 */
+function focusPlusPanelOwner(): void {
+  plusMenu.value
+    ?.querySelector<HTMLButtonElement>(`.prompt-composer-plus-nav-row[data-plus-panel="${plusPanel.value}"]`)
+    ?.focus()
+}
+
+/** 文本输入里的左右键是移动光标，不能兼作两级之间的切换。 */
+function isTextEntry(element: Element | null): boolean {
+  return element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement
 }
 
 /** 触发键上的方向键是键盘用户的展开入口；回车与空格仍由按钮原生点击处理。 */
@@ -842,22 +891,40 @@ function onPlusTriggerKeydown(event: KeyboardEvent): void {
   if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
   event.preventDefault()
   plusMenuOpen.value = true
-  // 向下键从首行进入，向上键从末行进入；-1 按 focusPlusRow 的收边规则落到最后一行。
-  void nextTick(() => { focusPlusRow(event.key === 'ArrowDown' ? 0 : -1) })
+  plusPanel.value = 'model'
+  // 向下键从首行进入，向上键从末行进入；-1 按 focusPlusNavRow 的收边规则落到最后一行。
+  void nextTick(() => { focusPlusNavRow(event.key === 'ArrowDown' ? 0 : -1) })
 }
 
-/** 菜单内的键盘：上下键在菜单各行间移动焦点，Esc 收起并把焦点还给触发键。 */
+/**
+ * 菜单内的键盘：上下键在一级行间移动，右键进面板、左键回一级行；
+ * Esc 先把面板的焦点退回一级行，再按一次才收起整个菜单。文本输入里的左右键留给光标。
+ */
 function onPlusMenuKeydown(event: KeyboardEvent): void {
-  // 模型选择器自己吃掉的方向键（展开候选）不再兼作行间移动。
+  // 候选列表自己吃掉的方向键不再兼作两级之间的移动。
   if (event.defaultPrevented) return
-  if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-    movePlusRowFocus(event)
+  const zone = plusFocusZone()
+  if (event.key === 'ArrowRight' && zone === 'nav') {
+    event.preventDefault()
+    focusPlusPanel()
     return
   }
-  if (event.key !== 'Escape') return
-  event.preventDefault()
-  event.stopPropagation()
-  closePlusMenu(true)
+  if (event.key === 'ArrowLeft' && zone === 'panel' && !isTextEntry(document.activeElement)) {
+    event.preventDefault()
+    focusPlusPanelOwner()
+    return
+  }
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    event.stopPropagation()
+    if (zone === 'panel') {
+      focusPlusPanelOwner()
+      return
+    }
+    closePlusMenu(true)
+    return
+  }
+  if (event.key === 'ArrowDown' || event.key === 'ArrowUp') movePlusNavFocus(event)
 }
 
 /**
@@ -890,14 +957,13 @@ function pickImageFromMenu(): void {
   imageMaterials.value?.openPicker()
 }
 
-/** 点击触发键、菜单与模型选项浮层之外的位置即收起；在文档层监听，避免遮罩挡在输入区前面。 */
+/** 点击触发键与菜单之外的位置即收起；在文档层监听，避免遮罩挡在输入区前面。 */
 function onDocumentPointerDown(event: PointerEvent): void {
   const target = event.target
   if (!(target instanceof Node)) return
   if (!plusMenuOpen.value) return
   if (plusRoot.value?.contains(target) === true) return
-  // 模型选择器的选项浮层 Teleport 到 body，落在它里面不算离开菜单；否则浮层会在 click 之前被卸载。
-  if (target instanceof Element && target.closest('[data-app-select-popup]') !== null) return
+  // 菜单里的候选都内嵌在面板中，不再有 Teleport 到 body 的浮层需要例外处理。
   plusMenuOpen.value = false
 }
 
@@ -1742,8 +1808,9 @@ onMounted(() => {
             >
               ＋
             </AppButton>
-            <!-- 进场从触发键所在的左下角生长，五段依次落位；退场交给同名 leave 过渡，比进场更快。
-                 菜单是单列五段：图片、模型、执行模式、专家与常用消息自上而下排列，只有常用消息区内部滚动。 -->
+            <!-- 进场从触发键所在的左下角生长，一级列逐行错峰落位；退场交给同名 leave 过渡，比进场更快。
+                 菜单是两列：左列是分类行（图片是唯一直接执行的动作），右列是当前分类的二级面板。
+                 面板始终展开，点一级行只切换分类，菜单宽度因此不抖动。 -->
             <Transition name="plus-menu-motion">
               <div
                 v-if="plusMenuOpen"
@@ -1754,86 +1821,87 @@ onMounted(() => {
                 aria-label="输入选项"
                 @keydown="onPlusMenuKeydown"
               >
-                <div class="prompt-composer-plus-section">
-                  <p class="prompt-composer-plus-section-title">图片</p>
+                <div class="prompt-composer-plus-nav">
                   <!-- 触发图片附件选择；图片说明由附件区独立标注，不进入提示词。 -->
                   <AppButton
                     variant="unstyled"
-                    class="prompt-composer-plus-row"
+                    class="prompt-composer-plus-nav-row"
                     :disabled="attachDisabled"
                     @click="pickImageFromMenu"
                   >
                     <span>添加图片</span>
-                    <span class="prompt-composer-plus-row-note">也可粘贴或拖入</span>
+                  </AppButton>
+                  <AppButton
+                    v-for="panel in plusPanelRows"
+                    :key="panel.value"
+                    variant="unstyled"
+                    class="prompt-composer-plus-nav-row"
+                    :class="plusPanel === panel.value ? 'is-open' : ''"
+                    :aria-expanded="plusPanel === panel.value"
+                    :data-plus-panel="panel.value"
+                    @click="openPlusPanel(panel.value)"
+                  >
+                    <span>{{ panel.label }}</span>
+                    <span class="prompt-composer-plus-nav-arrow" aria-hidden="true">›</span>
                   </AppButton>
                 </div>
-                <div class="prompt-composer-plus-section">
-                  <p class="prompt-composer-plus-section-title">模型</p>
-                  <!-- 未绑定或原位新草稿选择草稿模型；实际绑定后才切当前会话模型，另设全局默认走次级动作。 -->
+                <div :id="`prompt-plus-panel-${plusPanel}`" ref="plusPanelRoot" class="prompt-composer-plus-panel">
+                  <!-- 模型：候选常驻在面板里，未绑定或原位新草稿选择草稿模型；实际绑定后才切当前会话模型。 -->
                   <RuntimeModelSelect
+                    v-if="plusPanel === 'model'"
                     variant="menu"
                     :new-conversation="workspaceTabsStore.isChatNewDraft"
                     :resetting="workspaceTabsStore.isChatResetting || workspaceTabsStore.isChatBinding"
                   />
-                </div>
-                <div class="prompt-composer-plus-section">
-                  <p class="prompt-composer-plus-section-title">执行模式</p>
-                  <!-- 两档互斥；已开始对话的会话保持原能力集，只显示当前值。 -->
-                  <AppButton
-                    v-for="option in modeOptions"
-                    :key="option.value"
-                    variant="unstyled"
-                    class="prompt-composer-plus-row"
-                    :class="currentMode === option.value ? 'is-selected' : ''"
-                    :aria-pressed="currentMode === option.value"
-                    :disabled="modeLocked"
-                    :title="modeLocked ? '本会话已开始，模式只在新建会话时生效' : undefined"
-                    @click="selectMode(option.value)"
-                  >
-                    <span>{{ option.label }}</span>
-                    <span class="prompt-composer-plus-row-note">{{ option.value === 'fast' ? '不注入记忆，需求确认后给清单' : '读记忆，需求确认后先给方案' }}</span>
-                  </AppButton>
-                </div>
-                <div class="prompt-composer-plus-section">
-                  <p class="prompt-composer-plus-section-title">专家</p>
-                  <!-- 一个会话只用一个专家：开始对话后锁定，换专家需要新会话。
-                       一级行只显示当前选择，点开才是二级列表，专家再多也不撑高菜单。 -->
-                  <AppSelect
-                    id="prompt-expert"
-                    class="prompt-expert-row"
-                    label="专家"
-                    :groups="expertGroups"
-                    :model-value="sessionStore.selectedExpertId ?? ''"
-                    empty-label="不使用专家"
-                    :disabled="modeLocked"
-                    @update:model-value="onExpertSelect"
-                  />
-                  <!-- 失效绑定：定义被删或改名后仍被会话持有，只能新会话换专家，所以这里只说明不提供改绑。 -->
-                  <p v-if="sessionStore.expertBindingInvalid" class="prompt-composer-plus-row-note">
-                    已失效：{{ sessionStore.selectedExpertId }}（定义已不存在，本会话不再注入专家角色）
-                  </p>
-                  <p v-if="sessionStore.expertError !== null" class="prompt-composer-plus-row-note">
-                    {{ sessionStore.expertError.message }}
-                  </p>
-                </div>
-                <div class="prompt-composer-plus-section is-grow">
-                  <p class="prompt-composer-plus-section-title">常用消息</p>
-                  <!-- 消息多时只有本区滚动，顶部两段留在原位；滚动时重算上下渐隐。 -->
-                  <div class="prompt-composer-plus-list scroll-area" @scroll.passive="refreshPlusListMask">
+                  <template v-else-if="plusPanel === 'mode'">
+                    <!-- 两档互斥；已开始对话的会话保持原能力集，只显示当前值。 -->
                     <AppButton
-                      v-for="(message, index) in quickSendMessages"
-                      :key="`${message}-${index}`"
+                      v-for="option in modeOptions"
+                      :key="option.value"
                       variant="unstyled"
                       class="prompt-composer-plus-row"
-                      :class="isCommandMessage(message) ? 'is-command' : ''"
-                      :disabled="quickSendDisabled"
-                      :title="message"
-                      @click="sendQuickMessage(message)"
+                      :class="currentMode === option.value ? 'is-selected' : ''"
+                      :aria-pressed="currentMode === option.value"
+                      :disabled="modeLocked"
+                      :title="modeLocked ? '本会话已开始，模式只在新建会话时生效' : undefined"
+                      @click="selectMode(option.value)"
                     >
-                      <span class="min-w-0 truncate">{{ message }}</span>
+                      <span>{{ option.label }}</span>
                     </AppButton>
-                    <p v-if="quickSendMessages.length === 0" class="prompt-composer-plus-row-note px-2 py-1">尚未配置常用消息，可在设置里添加。</p>
-                  </div>
+                  </template>
+                  <template v-else-if="plusPanel === 'expert'">
+                    <!-- 一个会话只用一个专家：开始对话后锁定，换专家需要新会话；候选项常驻面板，不再套一层浮层。 -->
+                    <AppSelect
+                      id="prompt-expert"
+                      inline
+                      label="专家"
+                      :groups="expertGroups"
+                      :model-value="sessionStore.selectedExpertId ?? ''"
+                      :disabled="modeLocked"
+                      @update:model-value="onExpertSelect"
+                    />
+                    <p v-if="sessionStore.expertError !== null" class="prompt-composer-plus-panel-note">
+                      {{ sessionStore.expertError.message }}
+                    </p>
+                  </template>
+                  <template v-else>
+                    <!-- 常用消息：面板高度固定，条数多时只在本区内滚动，滚动时重算上下渐隐。 -->
+                    <div class="prompt-composer-plus-list scroll-area" @scroll.passive="refreshPlusListMask">
+                      <AppButton
+                        v-for="(message, index) in quickSendMessages"
+                        :key="`${message}-${index}`"
+                        variant="unstyled"
+                        class="prompt-composer-plus-row"
+                        :class="isCommandMessage(message) ? 'is-command' : ''"
+                        :disabled="quickSendDisabled"
+                        :title="message"
+                        @click="sendQuickMessage(message)"
+                      >
+                        <span class="min-w-0 truncate">{{ message }}</span>
+                      </AppButton>
+                      <p v-if="quickSendMessages.length === 0" class="prompt-composer-plus-row-note px-2 py-1">尚未配置常用消息，可在设置里添加。</p>
+                    </div>
+                  </template>
                 </div>
               </div>
             </Transition>

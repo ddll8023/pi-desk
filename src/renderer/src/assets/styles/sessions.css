@@ -182,15 +182,18 @@
     }
   }
 
+/* 两列：左列一级分类行、右列二级面板。面板始终展开，宽度固定，切换分类时菜单不跳。
+     一级列 7.75rem 不收缩，面板列吃掉剩下的 12.75rem；窄窗口下先压面板，候选名截断但菜单不越界。 */
 .prompt-composer-shell .prompt-composer-plus-menu {
     position: absolute;
     bottom: calc(100% + 0.375rem);
     left: 0;
     display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-    width: min(21rem, 82vw);
-    max-height: min(24rem, 50vh);
+    flex-direction: row;
+    gap: 0;
+    width: min(20.5rem, 84vw);
+    /* 高度固定：各面板内容长短不一，若按内容收缩，切分类时整个菜单会上下跳。 */
+    height: min(20rem, 50vh);
     overflow: hidden;
     padding: 0.25rem;
     /* 材质只叠在现有 pop 阴影之上：一条顶部内高光 + 一层自上淡出的强调渐变，让浮层在白底上有面的厚度；
@@ -201,24 +204,27 @@
     box-shadow: var(--shadow-desk-pop), inset 0 1px 0 color-mix(in srgb, var(--color-desk-surface) 75%, #ffffff);
   }
 /* 进场：从左下角生长。时长沿用两档令牌，进场 240ms 说明它是一块展开的面板，退场与 pop 同档更快。
-     四段按 0 / 18 / 36 / 54ms 错开落位，末段结束（234ms）仍早于外层动画，入场类被移除时不会截断子动画。 */
+     一级行按 0 / 18 / 36 / 54 / 72ms 错开落位，末行结束（304ms）晚于外层动画，但入场类被移除时只截断行动画，浮层本身已就位。 */
 .prompt-composer-plus-menu.plus-menu-motion-enter-active {
     animation: plus-menu-in var(--motion-duration-slow) var(--motion-ease-entrance) both;
   }
 .prompt-composer-plus-menu.plus-menu-motion-leave-active {
     animation: plus-menu-out var(--motion-duration-fast) var(--motion-ease-exit) both;
   }
-.prompt-composer-plus-menu.plus-menu-motion-enter-active .prompt-composer-plus-section {
+.prompt-composer-plus-menu.plus-menu-motion-enter-active .prompt-composer-plus-nav-row {
     animation: plus-section-in var(--motion-duration-base) var(--motion-ease-entrance) both;
   }
-.prompt-composer-plus-menu.plus-menu-motion-enter-active .prompt-composer-plus-section:nth-child(2) {
+.prompt-composer-plus-menu.plus-menu-motion-enter-active .prompt-composer-plus-nav-row:nth-child(2) {
     animation-delay: 18ms;
   }
-.prompt-composer-plus-menu.plus-menu-motion-enter-active .prompt-composer-plus-section:nth-child(3) {
+.prompt-composer-plus-menu.plus-menu-motion-enter-active .prompt-composer-plus-nav-row:nth-child(3) {
     animation-delay: 36ms;
   }
-.prompt-composer-plus-menu.plus-menu-motion-enter-active .prompt-composer-plus-section:nth-child(4) {
+.prompt-composer-plus-menu.plus-menu-motion-enter-active .prompt-composer-plus-nav-row:nth-child(4) {
     animation-delay: 54ms;
+  }
+.prompt-composer-plus-menu.plus-menu-motion-enter-active .prompt-composer-plus-nav-row:nth-child(5) {
+    animation-delay: 72ms;
   }
 @keyframes plus-menu-in {
     from { opacity: 0; transform: translateY(6px) scale(0.96); }
@@ -232,43 +238,44 @@
     from { opacity: 0; transform: translateY(6px); }
     to { opacity: 1; transform: none; }
   }
-/* 一段：标题 + 内容竖排；段与段靠标题下的发丝线分隔，不再画线、不再加内距。 */
-.prompt-composer-plus-section {
+/* 一级列：分类行竖排；图片行是唯一直接执行的动作，其余四行只切换右侧面板。 */
+.prompt-composer-plus-nav {
     @apply flex flex-none flex-col;
+    width: 7.75rem;
   }
-/* 常用消息段是唯一可伸缩的一段：内容超出时由内部列表滚动，顶部两段保持可见。 */
-.prompt-composer-plus-section.is-grow {
+/* 二级面板：吃掉一级列之外的全部宽度，内容超出时由内部列表自己滚动。
+     两列之间只用一条发丝线分开，不加底色块：两列同底才能让一级行的强调反馈与面板里的选中态落在同一层。 */
+.prompt-composer-plus-panel {
+    @apply flex min-h-0 flex-col overflow-hidden;
+    flex: 1 1 auto;
+    min-width: 0;
+    padding: 0.25rem;
+    border-left: 1px solid var(--color-desk-line);
+  }
+/* 面板内的提示行：专家读写失败等，用危险色说明当前面板为什么不可用。 */
+.prompt-composer-plus-panel-note {
+    @apply m-0 px-2 py-1 text-2xs;
+    color: var(--color-desk-danger);
+  }
+/* 常用消息列表：占满面板剩余高度后自己滚动，条数少时按内容收缩，不留空白。 */
+.prompt-composer-plus-list {
+    @apply flex flex-col overflow-y-auto;
     flex: 1 1 auto;
     min-height: 0;
-  }
-/* 段标题：整条沉陷色带把菜单读成四块并列色块，改为字距标签加一条从左淡出的发丝线；
-     字号与字重仍取 git 分组头同一档（11px / 600），只换表达方式，不改信息层级。 */
-.prompt-composer-plus-section-title {
-    @apply m-0 flex h-6 items-center gap-2 px-2.5 text-2xs font-semibold;
-    letter-spacing: 0.06em;
-    color: var(--color-desk-muted);
-  }
-.prompt-composer-plus-section-title::after {
-    content: "";
-    flex: 1 1 auto;
-    height: 1px;
-    background: linear-gradient(90deg, var(--color-desk-line), transparent);
-  }
-/* 常用消息列表：占满剩余高度后自己滚动，条数少时按内容收缩，不留空白。 */
-.prompt-composer-plus-list {
-    @apply flex min-h-0 flex-col overflow-y-auto;
   }
 /* 可滚动时上下渐隐：提示列表还有内容，也不让被截断的行看起来像半行错误。 */
 .prompt-composer-plus-list.can-scroll {
     mask-image: linear-gradient(180deg, transparent 0, #000 0.5rem, #000 calc(100% - 0.5rem), transparent 100%);
   }
-/* 菜单里的一行：左侧动作名，右侧次要说明；左内距比段标题多 2px，让标题读成标签、行读成内容。
-     悬停用「左竖条 + 左浓右淡的强调渐变」两层反馈，而不是铺满平涂色：平涂会把相邻两行糊成一片，
+/* 菜单里的行：一级分类行与面板里的选项行共用同一套行规格与反馈。
+     悬停用「左竖条 + 左浓右淡的强调渐变」两层，而不是铺满平涂色：平涂会把相邻两行糊成一片，
      渐变自动作名一侧淡出，行动线仍然清楚；两层只做装饰，不接事件。 */
-.prompt-composer-plus-row {
+.prompt-composer-plus-nav-row,
+  .prompt-composer-plus-row {
     @apply relative flex h-8 w-full shrink-0 items-center gap-2 rounded-desk-md pl-3 pr-2 text-left text-xs;
   }
-.prompt-composer-plus-row::before {
+.prompt-composer-plus-nav-row::before,
+  .prompt-composer-plus-row::before {
     content: "";
     position: absolute;
     z-index: 1;
@@ -282,7 +289,8 @@
     transform-origin: center;
     transition: transform var(--motion-duration-base) var(--motion-ease-entrance);
   }
-.prompt-composer-plus-row::after {
+.prompt-composer-plus-nav-row::after,
+  .prompt-composer-plus-row::after {
     content: "";
     position: absolute;
     z-index: 0;
@@ -293,53 +301,55 @@
     pointer-events: none;
     transition: opacity var(--motion-duration-base) ease;
   }
-.prompt-composer-plus-row > * {
+.prompt-composer-plus-nav-row > *,
+  .prompt-composer-plus-row > * {
     position: relative;
     z-index: 1;
   }
-.prompt-composer-plus-row:not(:disabled):hover::before,
+.prompt-composer-plus-nav-row:not(:disabled):hover::before,
+  .prompt-composer-plus-nav-row:focus-visible::before,
+  .prompt-composer-plus-nav-row.is-open::before,
+  .prompt-composer-plus-row:not(:disabled):hover::before,
   .prompt-composer-plus-row:focus-visible::before,
   .prompt-composer-plus-row.is-selected::before {
     transform: scaleY(1);
   }
-.prompt-composer-plus-row:not(:disabled):hover::after,
+.prompt-composer-plus-nav-row:not(:disabled):hover::after,
+  .prompt-composer-plus-nav-row:focus-visible::after,
+  .prompt-composer-plus-row:not(:disabled):hover::after,
   .prompt-composer-plus-row:focus-visible::after {
     opacity: 1;
   }
 /* 不可提交或不能添加附件时置灰：本行没有底色与描边可退，只能压低文字并换成禁止光标，
      否则点下去毫无反应且外观与可用项一致。 */
-.prompt-composer-plus-row:disabled {
+.prompt-composer-plus-nav-row:disabled,
+  .prompt-composer-plus-row:disabled {
     @apply cursor-not-allowed;
     color: var(--color-desk-muted);
   }
 .prompt-composer-plus-row:disabled .prompt-composer-plus-row-note {
     color: color-mix(in srgb, var(--color-desk-muted) 70%, transparent);
   }
-/* 菜单里的专家选择：一级行只显示当前选择，真正的候选列表在浮层里打开。
-     选择器自带底色与描边，这里把它退成与菜单行同高的安静控件；用三层选择器压过组件自身的 scoped 样式。 */
-.prompt-composer-plus-menu .prompt-composer-plus-section .prompt-expert-row {
-    @apply w-full text-xs;
-    flex: 1 1 auto;
-    min-width: 0;
-    height: 2rem;
-    padding: 0 0.5rem 0 0.75rem;
-    border: 0;
-    border-radius: var(--radius-desk-md);
-    background: transparent;
-    box-shadow: none;
-    color: var(--color-desk-ink);
+/* 一级行右端的箭头：展开的面板用旋转 90° 表示，颜色与行的强调色同步。 */
+.prompt-composer-plus-nav-arrow {
+    @apply ml-auto shrink-0;
+    color: var(--color-desk-muted);
+    font-size: 0.875rem;
+    line-height: 1;
+    transition: transform var(--motion-duration-base) var(--motion-ease-entrance),
+      color var(--motion-duration-base) ease;
   }
-.prompt-composer-plus-menu .prompt-composer-plus-section .prompt-expert-row:not(:disabled):hover {
-    background: var(--color-desk-surface-subtle);
-    color: var(--color-desk-ink);
-  }
-.prompt-composer-plus-menu .prompt-composer-plus-section .prompt-expert-row[aria-expanded="true"] {
-    background: var(--color-desk-accent-soft);
+.prompt-composer-plus-nav-row.is-open .prompt-composer-plus-nav-arrow {
+    transform: rotate(90deg);
     color: var(--color-desk-accent);
   }
-.prompt-composer-plus-menu .prompt-composer-plus-section .prompt-expert-row:disabled {
-    @apply cursor-not-allowed;
-    color: var(--color-desk-muted);
+/* 展开的一级行：竖条常亮 + 字重与强调色，与面板里的选中项同一套表达。 */
+.prompt-composer-plus-nav-row.is-open {
+    @apply font-semibold;
+    color: var(--color-desk-accent);
+  }
+.prompt-composer-plus-nav-row.is-open::after {
+    opacity: 0.7;
   }
 /* 斜杠开头的常用消息是命令，与补全列表里的命令名同样用等宽字体区分。 */
 .prompt-composer-plus-row.is-command {
@@ -1896,14 +1906,20 @@
 @media (prefers-reduced-motion: reduce) {
     .prompt-composer-plus-menu.plus-menu-motion-enter-active,
     .prompt-composer-plus-menu.plus-menu-motion-leave-active,
-    .prompt-composer-plus-menu.plus-menu-motion-enter-active .prompt-composer-plus-section {
+    .prompt-composer-plus-menu.plus-menu-motion-enter-active .prompt-composer-plus-nav-row {
       animation: none !important;
     }
+    .prompt-composer-plus-nav-row::before,
+    .prompt-composer-plus-nav-row::after,
+    .prompt-composer-plus-nav-arrow,
     .prompt-composer-plus-row::before,
     .prompt-composer-plus-row::after,
     .prompt-composer-plus-row-note,
     .prompt-composer-shell .prompt-composer-char {
       transition: none !important;
+    }
+    .prompt-composer-plus-nav-row.is-open .prompt-composer-plus-nav-arrow {
+      transform: none;
     }
     .prompt-composer-shell .prompt-composer-char.is-open {
       transform: none;
