@@ -47,7 +47,7 @@ function expandAgentPath(input: string): string {
 /**
  * 由应用入口注入产品目录；只在首次解析前调用，避免已读路径与进程环境不一致。
  * agent 与 home 都由应用给出，home 不会被第三方扩展或默认值决定；共享目录由环境变量或默认的
- * `~/.pi/agent` 决定，不经此入口覆盖。
+ * `~/.agents` 决定，不经此入口覆盖。
  */
 export function configurePiAgentDirectories(input: { readonly product: string; readonly home: string }): void {
   if (resolvedAgentDir !== null) return
@@ -81,11 +81,14 @@ export function getProductHomeDir(): string {
   return resolvedProductHomeDir
 }
 
-/** 只读来源：用户级 AGENTS.md 与 skills 从这里加载，首启导入也以它为源。 */
+/**
+ * 只读来源：用户级 AGENTS.md 与 skills 从这里加载，首启导入也以它为源。
+ * 缺省取 `~/.agents`——用户级技能与规则目录实际部署在那里，取旧目录会让部署结果读不到。
+ */
 export function getSharedPiAgentDir(): string {
   resolvedSharedAgentDir ??= resolve(startupCwd, configuredSharedAgentDir
     ? expandAgentPath(configuredSharedAgentDir)
-    : join(homedir(), '.pi', 'agent'))
+    : join(homedir(), '.agents'))
   return resolvedSharedAgentDir
 }
 

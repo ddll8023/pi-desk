@@ -46,10 +46,10 @@ export interface ExpertCapabilityDefaults {
   readonly mcpServers: readonly string[] | null
 }
 
-/** 技能候选：来源区分随包技能与共享目录技能，页面按来源标注。 */
+/** 技能候选：来源区分随包、产品自有目录与共享目录技能，页面按来源标注。 */
 export interface ExpertSkillCandidate {
   readonly id: string
-  readonly source: 'builtin' | 'shared'
+  readonly source: 'builtin' | 'product' | 'shared'
 }
 
 /** MCP 服务器候选：`scope` 说明它来自全局还是项目配置，项目项只在受信项目里生效。 */
@@ -350,7 +350,7 @@ export function isExpertCapabilitiesResult(value: unknown): value is ExpertCapab
   if (!Array.isArray(data.skills) || !Array.isArray(data.mcpServers)) return false
   if (!isExpertCapabilityDefaults(data.defaults)) return false
   const skillsOk = data.skills.every(item => isRecord(item) && isSkillReference(item.id)
-    && (item.source === 'builtin' || item.source === 'shared'))
+    && (item.source === 'builtin' || item.source === 'product' || item.source === 'shared'))
   const mcpOk = data.mcpServers.every(item => isRecord(item) && isMcpServerReference(item.name)
     && (item.scope === 'global' || item.scope === 'project') && typeof item.enabled === 'boolean')
   return skillsOk && mcpOk

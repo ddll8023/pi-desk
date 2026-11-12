@@ -2,23 +2,24 @@
  * 页面尚未就绪时的 Pi 预读：同一个一次性 RPC 进程读取资源、可用模型与默认模型。
  *
  * 不落会话、不加载 Extension、不连接 MCP；模型与资源只作启动前候选，就绪后以活动会话与主进程查询为准。
- * 技能按会话同源补齐（随包产品技能与只读共享技能目录），扩展命令仍需会话启动后才出现。
+ * 技能按会话同源补齐（随包产品技能 + 全局与项目技能目录），且关掉 CLI 自己的目录发现；
+ * 扩展命令仍需会话启动后才出现。
  * 各命令的拒绝、形状错误与超时分别返回，避免模型读取失败挡住技能，或资源失败挡住模型选择。
  * 同项目与信任决定的并发读取合并，强制刷新淘汰旧结果；进程按组终止，不残留子进程。
  * 未选项目时另有全局预读：用中立目录作 cwd，只取模型与默认身份，不读项目资源。
  */
 import type { ChildProcess } from 'node:child_process'
-import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
 import type { PiResourcePreview, RuntimeErrorCode } from '../../shared/runtime-api'
 import { getSdkHostDirectory, spawnPiCli } from '../shared/pi-cli-process'
-import { getSharedPiAgentDir } from '../shared/pi-paths'
+import { getPiAgentDir, getSharedPiAgentDir } from '../shared/pi-paths'
 import {
   agentResourcePath,
   agentResourcesDirectory,
   readAgentResourceBundle
 } from '../../shared-process/agent-resources'
+import { collectSkillSources } from '../../shared-process/skill-sources'
 import { terminateProcessTree } from '../../shared-process/process-tree-termination'
 import { toModelSummaries, toResources, toRuntimeInfo } from './pi-response-projection'
 
@@ -116,31 +117,43 @@ export async function previewGlobalModels(neutralDir: string, force = false): Pr
 }
 
 /** 模型预读不需要 MCP 连接，也不能为展示候选执行扩展代码或保存会话。 */
-function previewLaunchArguments(trustDecision: 'trusted' | 'untrusted' | null): string[] {
-  const args = ['--mode', 'rpc', '--no-session', '--no-extensions', '--no-mcp']
+function previewLaunchArguments(workingDirectory: string, trustDecision: 'trusted' | 'untrusted' | null): string[] {
+  // 技能来源由这里显式给出，关掉 CLI 自己的目录发现，否则预读会看到会话里没有的技能。
+  const args = ['--mode', 'rpc', '--no-session', '--no-extensions', '--no-mcp', '--no-skills']
   if (trustDecision === 'trusted') args.push('--approve')
   else if (trustDecision === 'untrusted') args.push('--no-approve')
-  for (const path of previewSkillPaths()) args.push('--skill', path)
+  for (const path of previewSkillPaths(workingDirectory, trustDecision)) args.push('--skill', path)
   return args
 }
 
 /**
- * 预读技能路径：与 sdk-host 会话同源，取随包产品技能（排除只给子代理的）与只读共享技能目录。
- * 产品清单读不到或共享目录缺失时只少这几条候选，不阻断模型与其他资源预读；结果在进程内缓存一次。
+ * 预读技能路径：与 sdk-host 会话同源，取随包产品技能（排除只给子代理的）与两类技能目录。
+ * 项目目录只在明确受信时加入；产品清单读不到或目录缺失时只少这几条候选，不阻断模型与其他资源预读。
+ * 缓存按「工作目录 + 信任决定」分开，否则受信后仍会拿到未受信时的旧清单；有上限，不随项目数无限增长。
  */
-let cachedSkillPaths: string[] | null = null
-function previewSkillPaths(): readonly string[] {
-  if (cachedSkillPaths !== null) return cachedSkillPaths
+const PREVIEW_SKILL_CACHE_LIMIT = 32
+const cachedSkillPaths = new Map<string, readonly string[]>()
+function previewSkillPaths(cwd: string, trustDecision: 'trusted' | 'untrusted' | null): readonly string[] {
+  const key = `${cwd}\n${trustDecision ?? 'default'}`
+  const cached = cachedSkillPaths.get(key)
+  if (cached !== undefined) return cached
   const paths: string[] = []
   try {
     const bundle = readAgentResourceBundle(agentResourcesDirectory(join(getSdkHostDirectory(), 'index.mjs')))
     for (const item of bundle.skills) {
       if (!item.subAgentOnly) paths.push(agentResourcePath(bundle.root, item.entry))
     }
-  } catch { /* 产品资源不可用时不额外报告，预读仍有项目与共享来源。 */ }
-  const shared = join(getSharedPiAgentDir(), 'skills')
-  if (existsSync(shared)) paths.push(shared)
-  cachedSkillPaths = paths
+  } catch { /* 产品资源不可用时不额外报告，预读仍有下面的目录来源。 */ }
+  const sources = collectSkillSources({
+    agentDir: getPiAgentDir(),
+    sharedAgentDir: getSharedPiAgentDir(),
+    cwd,
+    // 未明确受信（含默认策略）时不带项目技能：与会话侧同一判断，避免预读比会话多出候选。
+    projectTrusted: trustDecision === 'trusted'
+  })
+  paths.push(...sources.global, ...sources.project)
+  if (cachedSkillPaths.size >= PREVIEW_SKILL_CACHE_LIMIT) cachedSkillPaths.clear()
+  cachedSkillPaths.set(key, paths)
   return paths
 }
 
@@ -153,7 +166,7 @@ function runPreviewProbe(
   return new Promise((resolve, reject) => {
     let child: ChildProcess
     try {
-      child = spawnPiCli(previewLaunchArguments(trustDecision), {
+      child = spawnPiCli(previewLaunchArguments(workingDirectory, trustDecision), {
         cwd: workingDirectory,
         stdin: true,
         env: { PI_SKIP_VERSION_CHECK: '1' }

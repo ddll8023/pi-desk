@@ -3,7 +3,8 @@
 
   表单由本对话框持有，保存交给专家 store：成功后由 store 关闭并重读清单，失败时保留已填内容并就地展示原因。
   能力范围分技能与 MCP 两个维度，各有「继承默认」与「仅用选中」两种口径；继承时只记录相对默认基线的增减，
-  不用每次从零勾选，也随默认基线统一调整。技能候选来自随包与共享目录，MCP 只列全局配置；
+  不用每次从零勾选，也随默认基线统一调整。技能候选来自随包、产品目录与共享目录，MCP 只列全局配置；
+  项目自带技能属于工作区，不受专家范围限制，因此在候选列表外单独说明。
   定义里引用但当前不可用的项仍列出来，避免一次编辑把它们静默丢掉。
   新建时标识由主进程分配，界面不提供标识输入——标识即目录名且创建后不可改，让用户填只会填错。
 -->
@@ -12,6 +13,7 @@ import { computed, nextTick, onUnmounted, ref, useId, watch } from 'vue'
 import { MAX_EXPERT_DISPLAY_NAME_LENGTH, MAX_EXPERT_MCP_REFS, MAX_EXPERT_SKILL_REFS, MAX_EXPERT_SUMMARY_LENGTH } from '../../../../shared/experts-api'
 import type { ExpertEditableDefinition, ExpertSaveRequest } from '../../../../shared/experts-api'
 import { useExpertStore } from '../stores/expert'
+import { skillSourceLabel } from '../skill-source-label'
 import AppButton from '../../ui/AppButton.vue'
 import ExpertCapabilityPicker from './ExpertCapabilityPicker.vue'
 
@@ -71,7 +73,9 @@ const baselineMcp = computed(() => store.capabilities?.defaults.mcpServers ?? nu
 
 const skillRows = computed<CapabilityRow[]>(() => {
   const rows: Omit<CapabilityRow, 'state'>[] = (store.capabilities?.skills ?? []).map(item => ({
-    id: item.id, label: item.source === 'builtin' ? '随包' : '共享目录', unavailable: false
+    id: item.id,
+    label: item.source === 'shared' ? '' : skillSourceLabel(item.source),
+    unavailable: false
   }))
   const known = new Set(rows.map(row => row.id))
   for (const id of referencedSkillIds.value) {
@@ -87,7 +91,7 @@ const skillRows = computed<CapabilityRow[]>(() => {
 
 const mcpRows = computed<CapabilityRow[]>(() => {
   const rows: Omit<CapabilityRow, 'state'>[] = (store.capabilities?.mcpServers ?? []).map(item => ({
-    id: item.name, label: item.enabled ? '全局配置' : '配置里已停用', unavailable: false
+    id: item.name, label: item.enabled ? '' : '配置里已停用', unavailable: false
   }))
   const known = new Set(rows.map(row => row.id))
   for (const name of referencedMcpNames.value) {
@@ -310,8 +314,7 @@ function onKeydown(event: KeyboardEvent): void {
               <div>
                 <h2 :id="titleId" class="dialog-title">{{ title }}</h2>
                 <p class="dialog-subtitle">
-                  专家正文在新建会话召唤后作为独立系统提示段注入；能力范围只收窄本会话的技能与 MCP 服务器，
-                  不改工具与权限。标识创建后不可改，显示名称、能力范围与正文可以随时改。
+                  名称、能力范围与正文可以改；标识创建后不可修改。
                 </p>
               </div>
             </div>
@@ -360,17 +363,18 @@ function onKeydown(event: KeyboardEvent): void {
                     :max-refs="MAX_EXPERT_SKILL_REFS"
                     inherit-label="继承默认"
                     only-label="仅用选中"
-                    inherit-hint="勾选记录相对默认基线的增减，基线调整时跟着变。"
-                    only-hint="只装配勾选的技能，不随默认基线变化；至少保留一个。"
+                    inherit-hint="勾选记录相对默认基线的增减。"
+                    only-hint="只装配勾选的技能；至少保留一个。"
                     search-placeholder="按名称筛选技能"
                     empty-text="没有匹配的技能。"
-                    no-rows-text="随包与共享目录里都没有技能。"
+                    no-rows-text="随包、产品目录与共享目录里都没有技能。"
                     :ready="capabilityReady"
                     :disabled="saving || loading"
                     list-in-inherit
                     @update:mode="skillsMode = $event"
                     @update:selected="selectedSkills = $event"
                   />
+                  <p class="hint-text">项目自带技能始终可用，不受此处限制。</p>
                   <ExpertCapabilityPicker
                     title="MCP 服务器范围"
                     group-label="MCP 服务器范围"
@@ -380,8 +384,8 @@ function onKeydown(event: KeyboardEvent): void {
                     :max-refs="MAX_EXPERT_MCP_REFS"
                     inherit-label="继承默认"
                     only-label="仅用选中"
-                    inherit-hint="勾选记录相对默认基线的增减，基线调整时跟着变。"
-                    only-hint="只连接勾选的服务器，不随默认基线变化。"
+                    inherit-hint=""
+                    only-hint="只连接勾选的服务器。"
                     search-placeholder="按名称筛选服务器"
                     empty-text="没有匹配的服务器。"
                     no-rows-text="全局 mcp.json 里还没有服务器；先到资源页添加，再回来勾选。"
@@ -402,7 +406,6 @@ function onKeydown(event: KeyboardEvent): void {
                     placeholder="身份、方法论、工作流程与输出规范；这部分会整段进入系统提示"
                     :disabled="saving || loading"
                   ></textarea>
-                  <span class="hint-text">正文超过注入上限时只在召唤时截断，定义文件保留全文。</span>
                 </label>
               </div>
             </div>
@@ -412,7 +415,7 @@ function onKeydown(event: KeyboardEvent): void {
                 {{ saveError }}
               </p>
               <p v-else-if="!canSave && !loading" class="mr-auto hint-text">
-                显示名称、简介与正文都不能为空；技能选「仅用选中」时至少保留一个。
+                名称、简介与正文不能为空；仅用选中时技能至少一个。
               </p>
               <AppButton :disabled="saving" @click="emit('cancel')">取消</AppButton>
               <AppButton variant="primary" :disabled="!canSave" @click="submit">

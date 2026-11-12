@@ -96,9 +96,7 @@ onMounted(() => { void store.load() })
     <header>
       <h1 class="text-xl font-semibold tracking-tight">专家</h1>
       <p class="mt-1 text-sm text-desk-muted">
-        专家是一段会话级角色说明：新建会话时在输入坞选择，之后每一轮都作为独立系统提示段注入。
-        专家不增删工具、不改预算，也不派子代理；它能做的是收窄本会话的技能与 MCP 服务器范围，
-        工具、权限与确认流程不受它影响。
+        为会话注入一段角色说明，并在该会话内收窄技能与 MCP 范围。
       </p>
     </header>
 
@@ -114,7 +112,7 @@ onMounted(() => { void store.load() })
         <div>
           <h2 id="settings-experts-list-title" class="settings-section-title">可用专家</h2>
           <p class="mt-1 text-xs text-desk-muted">
-            内置专家随应用发布，只能派生副本；自定义专家可以在页面内新建与编辑，也可以删除。标识创建后不可改。
+            内置专家只能派生副本；标识创建后不可修改。
           </p>
         </div>
         <div class="flex items-center gap-2">
@@ -128,7 +126,7 @@ onMounted(() => { void store.load() })
       </p>
 
       <p v-else-if="loaded && experts.length === 0" role="status" class="mt-3 text-xs text-desk-muted">
-        还没有可用的专家。内置专家需要重新构建随包资源后才会出现；自定义专家可以用右上角「新建专家」从空白创建，或从内置专家派生副本。
+        还没有候选专家；可用右上角「新建专家」创建。
       </p>
 
       <p v-if="notice !== null" role="status" class="status-notice mt-3">{{ notice }}</p>
@@ -160,10 +158,10 @@ onMounted(() => { void store.load() })
               <p class="mt-1 text-xs text-desk-muted">{{ expert.summary }}</p>
               <p class="mt-1 text-2xs text-desk-muted">能力范围：{{ capabilitySummary(expert) }}</p>
               <p v-if="expert.unavailableSkillIds.length > 0" class="mt-1 text-2xs text-desk-warning">
-                不可用：{{ expert.unavailableSkillIds.join('、') }}（定义仍可用，这些引用不生效）
+                不可用：{{ expert.unavailableSkillIds.join('、') }}
               </p>
               <p v-if="expert.truncated" class="mt-1 text-2xs text-desk-warning">
-                正文过长：召唤时只注入前一段并补一行截断说明，定义文件本身不变
+                正文过长，召唤时会被截断
               </p>
             </div>
             <div class="flex shrink-0 items-center gap-2">
@@ -201,9 +199,6 @@ onMounted(() => { void store.load() })
       <div class="settings-section-heading">
         <div>
           <h2 id="settings-experts-issues-title" class="settings-section-title">加载诊断</h2>
-          <p class="mt-1 text-xs text-desk-muted">
-            这里只报告问题，不改动任何文件；修好定义后重新读取即可。
-          </p>
         </div>
       </div>
       <ul class="mt-3 space-y-1.5">

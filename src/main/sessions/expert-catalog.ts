@@ -3,15 +3,17 @@
  * 产出选择器可用的视图与加载诊断，并回答「快速模式会剔除哪些用户级技能」。
  *
  * 只读：不启动 SDK 宿主、不打开会话、不写任何文件；技能可见集取「随包非子代理专用技能 +
- * 共享目录技能」，缺失的技能引用只体现在诊断里，不让整份清单失败。
+ * 全局技能目录（产品 agent 目录与共享目录）」，缺失的技能引用只体现在诊断里，不让整份清单失败。
  * 能力候选也由这里给：技能候选、全局 MCP 服务器与当前默认基线，页面不自己拼路径也不自己读文件。
+ * 项目技能不进候选：专家是全局定义，项目来源随工作区变化，候选会因此随项目漂移。
  */
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { agentResourcesDirectory, readAgentResourceBundle } from '../../shared-process/agent-resources'
 import type { AgentResourceBundle } from '../../shared-process/agent-resources'
 import { builtinExperts, loadExpertCatalog, skillDirectoryIds } from '../../shared-process/expert-definitions'
 import type { ExpertDefinition } from '../../shared-process/expert-definitions'
 import { readExpertCapabilityDefaults } from '../../shared-process/expert-capability-defaults'
+import { globalSkillDirectories } from '../../shared-process/skill-sources'
 import { fastModeBlockedSkillsIn } from '../../shared/execution-mode-skills'
 import type {
   ExpertCapabilities, ExpertMcpCandidate, ExpertSkillCandidate
@@ -54,12 +56,20 @@ export interface ExpertSkillContext {
 /** 从已读到的随包清单算技能上下文；调用方已经持有清单时用它，不重复读一次清单。 */
 export function expertSkillContextOf(bundle: AgentResourceBundle): ExpertSkillContext {
   return {
-    availableSkillIds: [
-      ...bundle.skills.filter(item => !item.subAgentOnly).map(item => item.id),
-      ...skillDirectoryIds(join(getSharedPiAgentDir(), 'skills'))
-    ],
+    availableSkillIds: availableSkillIdsOf(bundle),
     subAgentOnlySkillIds: bundle.skills.filter(item => item.subAgentOnly).map(item => item.id)
   }
+}
+
+/** 可用技能标识：随包在前，全局目录在后，同一标识只留一次（同名副本不重复计数）。 */
+function availableSkillIdsOf(bundle: AgentResourceBundle): string[] {
+  const ids = new Set(bundle.skills.filter(item => !item.subAgentOnly).map(item => item.id))
+  for (const directory of globalSkillDirectories({
+    agentDir: getPiAgentDir(), sharedAgentDir: getSharedPiAgentDir()
+  })) {
+    for (const id of skillDirectoryIds(directory)) ids.add(id)
+  }
+  return [...ids]
 }
 
 /** 自取随包清单的技能上下文；保存校验只需要这一份数据时用它。 */
@@ -92,15 +102,29 @@ export function readExpertCatalog(): SessionExpertCatalog {
 }
 
 /**
- * 读取能力候选与当前默认基线：技能候选分随包与共享两个来源，MCP 只列全局配置，
+ * 读取能力候选与当前默认基线：技能候选分随包、产品 agent 目录、共享目录三个来源，
+ * 同名技能按这个顺序只列一次；MCP 只列全局配置，
  * 基线文件缺失或损坏时按「不限制」回退，并在 UI 上仍能保存成新值。
  */
 export function readExpertCapabilities(): ExpertCapabilities {
   const bundle = readAgentResourceBundle(agentResourcesDirectory(join(getSdkHostDirectory(), 'index.mjs')))
-  const skills: ExpertSkillCandidate[] = [
-    ...bundle.skills.filter(item => !item.subAgentOnly).map(item => ({ id: item.id, source: 'builtin' as const })),
-    ...skillDirectoryIds(join(getSharedPiAgentDir(), 'skills')).map(id => ({ id, source: 'shared' as const }))
-  ]
+  const agentSkillsDirectory = resolve(join(getPiAgentDir(), 'skills'))
+  const seen = new Set<string>()
+  const skills: ExpertSkillCandidate[] = []
+  const pushSkill = (id: string, source: ExpertSkillCandidate['source']): void => {
+    if (seen.has(id)) return
+    seen.add(id)
+    skills.push({ id, source })
+  }
+  for (const item of bundle.skills) {
+    if (!item.subAgentOnly) pushSkill(item.id, 'builtin')
+  }
+  for (const directory of globalSkillDirectories({
+    agentDir: getPiAgentDir(), sharedAgentDir: getSharedPiAgentDir()
+  })) {
+    const source = resolve(directory) === agentSkillsDirectory ? 'product' : 'shared'
+    for (const id of skillDirectoryIds(directory)) pushSkill(id, source)
+  }
   const mcpServers: ExpertMcpCandidate[] = readConfiguredMcpServers()
     .map(server => ({ name: server.name, scope: 'global' as const, enabled: server.enabled }))
   return { skills, mcpServers, defaults: readExpertCapabilityDefaults(getPiAgentDir()) }
@@ -108,11 +132,11 @@ export function readExpertCapabilities(): ExpertCapabilities {
 
 /**
  * 快速模式下会被剔除的用户级技能：与宿主用的是同一份名单与同一层目录，
- * 因此设置页写出来的就是实际发生的；目录里没有这些技能时返回空数组，页面据此说明「当前没有可剔除项」。
+ * 因此设置页写出的就是实际发生的；目录里没有这些技能时返回空数组，页面据此说明「当前没有可剔除项」。
+ * 项目技能不在设置页的当前项目上下文里，只统计全局目录。
  */
 export function readFastModeExclusions(): string[] {
   return fastModeBlockedSkillsIn([
-    ...skillDirectoryIds(join(getPiAgentDir(), 'skills')),
-    ...skillDirectoryIds(join(getSharedPiAgentDir(), 'skills'))
+    ...globalSkillDirectories({ agentDir: getPiAgentDir(), sharedAgentDir: getSharedPiAgentDir() })
   ])
 }

@@ -365,11 +365,15 @@ function resolveDimension(input: {
   return [...scope]
 }
 
-/** 列出目录下的技能标识；目录缺失或不可读时按没有技能处理。 */
+/**
+ * 列出目录下的技能标识；目录缺失或不可读时按没有技能处理。
+ * 名字必须符合技能标识规则：技能目录可能自身是版本库（`.git`）或带编辑器临时目录，
+ * 把它们当作候选会让设置页列出无法引用的条目，并让能力数据的契约校验拒掉整份结果。
+ */
 export function skillDirectoryIds(directory: string): string[] {
   try {
     return readdirSync(directory, { withFileTypes: true })
-      .filter(entry => entry.isDirectory() && !entry.isSymbolicLink())
+      .filter(entry => entry.isDirectory() && !entry.isSymbolicLink() && SKILL_ID.test(entry.name))
       .map(entry => entry.name)
   } catch {
     return []

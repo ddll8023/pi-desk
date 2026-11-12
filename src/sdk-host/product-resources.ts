@@ -4,6 +4,8 @@
  * 不修改用户 settings、不移除用户文件，也不用加载后的 extensionsOverride 掩盖重复注册。
  * 共享目录只贡献 `AGENTS.md` 与 `skills/`：同名 Skill 由产品版本优先；技能可见集随后按专家许可集收窄（`skillPermit`），
  * 核验只针对本次会装载的那部分，不把被排除的技能当成加载失败。
+ * 技能来源全部显式给出（`noSkills` 关掉 SDK 自身的目录发现）：全局来源受专家许可集约束，项目来源属于工作区、
+ * 专家无法表达，因此始终装配。
  * 只有产品件自身损坏或非产品扩展争用产品工具名才拒绝建立会话，其余问题作为结构化诊断交给页面。
  */
 import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs'
@@ -15,6 +17,7 @@ import { RESOURCE_ISSUE_LIMIT, isResourceIssue } from '../shared/runtime-api'
 import type { ResourceIssue } from '../shared/runtime-api'
 // 快速模式剔除名单与设置页解释同源，避免两处各写一份技能名。
 import { FAST_MODE_BLOCKED_SKILLS } from '../shared/execution-mode-skills'
+import { collectSkillSources, isUnderSkillDirectory } from '../shared-process/skill-sources'
 import {
   agentResourcePath, readAgentResourceBundle
 } from '../shared-process/agent-resources'
@@ -109,6 +112,13 @@ export async function prepareProductResources(sdk: Sdk, input: ProductResourceIn
   // 子代理身份规范只由子进程按目录读取：主会话技能列表去掉它们，避免模型把「派子代理」当成「加载技能」。
   const sessionSkills = productSkills.filter(skill =>
     !bundle.skills.some(item => item.subAgentOnly && item.id === skill.name))
+  // 来源与预读、设置页候选同一套规则；项目来源只在已受信项目里出现。
+  const skillSources = collectSkillSources({
+    agentDir: input.agentDir,
+    sharedAgentDir: input.sharedAgentDir,
+    cwd: input.cwd,
+    projectTrusted: input.settingsManager.isProjectTrusted()
+  })
 
   function skillsOverride(base: { skills: Skill[]; diagnostics: ResourceDiagnostic[] }): typeof base {
     /** 本次替换给出的说明；用户副本路径必须留在技能诊断里，不能只出现在宿主日志。 */
@@ -145,7 +155,9 @@ export async function prepareProductResources(sdk: Sdk, input: ProductResourceIn
     const blocked = new Set(input.mode === 'fast' ? FAST_MODE_BLOCKED_SKILLS : [])
     // 专家许可集只减不增：先按模式剔一遍，再按许可集把范围外的技能拿掉。
     const permitted = input.skillPermit === null ? null : new Set(input.skillPermit)
-    const inScope = (name: string): boolean => permitted === null || permitted.has(name)
+    // 项目技能不受许可集约束：专家定义是全局的，写不出「当前项目才有的技能」。
+    const inScope = (skill: Skill): boolean => permitted === null || permitted.has(skill.name)
+      || isUnderSkillDirectory(skill.filePath, skillSources.project)
     if (blocked.size > 0) {
       // 留诊断：会话里看不到这些 Skill 是模式导致的，不是安装或加载出了问题。
       for (const skill of userSkills) {
@@ -156,7 +168,7 @@ export async function prepareProductResources(sdk: Sdk, input: ProductResourceIn
     }
     return {
       skills: [...sessionSkills, ...userSkills.filter(item => !blocked.has(item.name))]
-        .filter(item => inScope(item.name)),
+        .filter(item => inScope(item)),
       // 只丢掉 SDK 的同名 collision 条目；本层给出的说明保留，冲突双方路径因此仍可见。
       diagnostics: [...skillNotes, ...base.diagnostics.filter(item => !item.collision
         || item.collision.resourceType !== 'skill' || !reserved.has(item.collision.name))]
@@ -167,8 +179,10 @@ export async function prepareProductResources(sdk: Sdk, input: ProductResourceIn
     diagnostics,
     issues,
     options: {
-      // 关闭默认扩展求值，只显式加载已筛选来源；不关闭技能、模板、上下文或其他 SDK 发现能力。
+      // 关闭默认扩展求值，只显式加载已筛选来源；技能同样关掉 SDK 自动发现，来源只由下面的清单决定。
       noExtensions: true,
+      // 技能只认产品给出的来源：随包、全局（agent 目录与共享目录）、项目（受信时的工作区技能目录）。
+      noSkills: true,
       additionalExtensionPaths: [
         ...bundle.extensions.map(item => agentResourcePath(bundle.root, item.entry)), ...externalExtensions
       ],
@@ -177,7 +191,8 @@ export async function prepareProductResources(sdk: Sdk, input: ProductResourceIn
       additionalSkillPaths: [
         ...bundle.skills.filter(item => !item.subAgentOnly)
           .map(item => agentResourcePath(bundle.root, item.entry)),
-        ...sharedSkillDirs(input)
+        ...skillSources.global,
+        ...skillSources.project
       ],
       // 用户级全局指令从共享目录只读注入，不改写、不复制。
       agentsFilesOverride: base => withSharedAgentsFile(base, input.sharedAgentDir),
@@ -253,17 +268,6 @@ function safeRealpath(path: string): string {
   try {
     return realpathOrSynthetic(path)
   } catch { return path }
-}
-
-/**
- * 副本偏离的说明已随共享目录退役；这里只保留共享来源的只读挂载与同名 Skill 的内容比对。
- */
-function sharedSkillDirs(input: ProductResourceInput): readonly string[] {
-  if (samePath(input.sharedAgentDir, input.agentDir)) return []
-  const directory = join(input.sharedAgentDir, 'skills')
-  try {
-    return statSync(directory).isDirectory() ? [directory] : []
-  } catch { return [] }
 }
 
 /** 用户级全局指令：共享目录根下的 `AGENTS.md` 排在项目文件之前；读不到时跳过，不阻断会话。 */

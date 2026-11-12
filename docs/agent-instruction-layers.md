@@ -24,7 +24,7 @@ pi-desk 产品行为只能存在于以下位置，**禁止写入全局 AGENTS.md
 | 快速模式豁免 Skill | `src/sdk-host/product-resources.ts` 常量 `FAST_MODE_BLOCKED_SKILLS` |
 | 记忆与委派工具时机 | `src/sdk-host/product-tools-hint.ts` 函数 `productToolsSection`，由 `session-runtime.ts` 的 `MODE_HINT_EXTENSION_NAME` 扩展注入 |
 | 回合头改动文件提示 | `src/sdk-host/turn-files-hint.ts` |
-| 扩展与 Skill | `resources/agent/**` → 构建暂存为 `out/sdk-host/agent-resources/`（不携带 AGENTS 文件） |
+| 扩展与 Skill | `resources/agent/**` → 构建暂存为 `out/sdk-host/agent-resources/`（不携带 AGENTS 文件）；技能来源目录由 `src/shared-process/skill-sources.ts` 给出（全局：产品 agent 目录与共享目录；项目：受信项目的 `.pi/skills` 与逐级 `.agents/skills`） |
 
 **设计原则**（来自 `src/sdk-host/product-tools-hint.ts` 文件头与 `session-runtime.ts` 的模式提示扩展注释）：
 - 记忆与委派工具随应用提供，其他宿主没有。
