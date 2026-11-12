@@ -97,7 +97,7 @@
 | `src/renderer/src/sessions/components/UsageStatsSection.vue` | 设置页「用量」分节：四个并列读数、总量与分项构成、可切范围与指标的堆叠趋势、全年活跃度热力图、按日明细表、模型/项目分布与 Top 会话跳转；分节可见时静默轮询刷新 |
 | `src/renderer/src/sessions/components/UsageHeatmap.vue` | 近 53 周按日 Token 热力图：7 行日历格、月份与星期标签、四级强度配色、悬停读数与整图无障碍描述 |
 | `src/renderer/src/sessions/components/UsageCompositionBar.vue` | 用量构成条：四段堆叠、段间 1px 分隔与非零段 2px 保底，供概览与模型／项目分布行复用 |
-| `src/renderer/src/sessions/components/PromptComposer.vue` | 提示词与独立图片资料编排、视窗全局粘贴与剪贴板截图提取、对话期间草稿与标注编辑、文件树拖入引用、命令与补全；＋ 菜单为一级分类行 + 二级面板的双级结构（模型、执行模式、专家、常用消息的候选常驻面板内，绑定失效时给出提示）；浏览器批注草稿合并；固定提示词、图片及标注快照、后台提交与失败恢复；显式同步及确认结束原运行后的输入恢复 |
+| `src/renderer/src/sessions/components/PromptComposer.vue` | 提示词与独立图片资料编排、视窗全局粘贴与剪贴板截图提取、对话期间草稿与标注编辑、文件树拖入引用、命令与补全；＋ 菜单为一级分类行 + 二级面板的双级结构（模型、执行模式、专家、技能、常用消息常驻面板内；技能取与斜杠补全同源的清单，点击只把 `/skill:<名称>` 写到草稿最前而不发送；专家绑定失效时给出提示）；浏览器批注草稿合并；固定提示词、图片及标注快照、后台提交与失败恢复；显式同步及确认结束原运行后的输入恢复 |
 | `src/renderer/src/sessions/components/PromptImageMaterials.vue` | 输入坞内图片附件行：导入、移除、缩略图与独立标注按钮双入口、标注数量展示 |
 | `src/renderer/src/sessions/components/ImageAnnotationPanel.vue` | 左图右说明的独立标注面板、编号双向定位、同步删除与键盘调整入口 |
 | `src/renderer/src/sessions/components/ImageAnnotationCanvas.vue` | 共用原图坐标系的编号与点框叠加层，支持编辑及桌面／手机只读展示，不修改图片像素 |

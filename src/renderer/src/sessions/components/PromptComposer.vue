@@ -1,7 +1,7 @@
 <!-- 图片与编号说明由坞内附件区独立管理；点击发送即固定提示词、图片及标注快照，说明由 SDK 独立资料消息承接。
      结果未确认时可补读同步，确认结束原运行后恢复输入，不自动重发。
      原位新建以独立草稿承接输入：旧实例结束期间可编辑但不发送，首次发送才建立新会话。
-     Prompt 输入坞：处理输入法组合态、Enter 发送与 Shift+Enter 换行、焦点回归与重复提交、响应侧栏「新建」的聚焦请求并给出一次性提示，并在 Agent 运行期间原位提供停止入口；在 Agent 运行与流式响应期间草稿文本、图片附件与标注编辑保持可用，点击发送时才校验会话空闲；同时承接 Extension 的 set_editor_text 填充文本、图片附件的选择/文本框与活动视窗全局快捷粘贴（兼容系统截图提取）/拖拽入口、输入行按内容自动增高、＋ 菜单内的常用消息（短语取自界面偏好，可在设置里增删改与排序，点击即发送）、Pi 命令的斜杠模糊补全（Runtime 就绪后用运行中的命令清单，未就绪时用主进程预读的技能清单，按类型分组并按匹配优先级排序；另含 Desktop 层自己拦截的界面命令）与 `@` 项目文件引用（只写入相对路径文本，不传文件内容）；右侧文件树的行拖入坞内也走同一条相对路径引用规则。输入坞是单行结构：左侧 ＋ 菜单是两列双级结构——左列分类行（添加图片、模型、执行模式、专家、常用消息），右列是当前分类的二级面板（添加图片直接触发选择，其余四项的候选或选项常驻在面板里，仅列表区内部滚动；执行模式两档互斥，专家一个会话只选一个，两者都只在新建会话时可选，已开始的会话只显示当前值不可改），中间是输入行，右侧是发送/停止键；坞上方是待办清单面板（仅标准模式提交清单后出现）、一行延续判定结论（宿主给出结论时才渲染）与一行专家失效提示（绑定的定义已不在清单里时才渲染）；坞下方一行是水平居中的信息行：异常与进行中的状态文本、被收起的 Extension 对话入口与会话用量指标（缓存命中率、上下文占用与平均速率，点击开明细；累计 token 与费用只在明细浮层展示）。Extension 的 setStatus 项不在输入区展示。 -->
+     Prompt 输入坞：处理输入法组合态、Enter 发送与 Shift+Enter 换行、焦点回归与重复提交、响应侧栏「新建」的聚焦请求并给出一次性提示，并在 Agent 运行期间原位提供停止入口；在 Agent 运行与流式响应期间草稿文本、图片附件与标注编辑保持可用，点击发送时才校验会话空闲；同时承接 Extension 的 set_editor_text 填充文本、图片附件的选择/文本框与活动视窗全局快捷粘贴（兼容系统截图提取）/拖拽入口、输入行按内容自动增高、＋ 菜单内的常用消息（短语取自界面偏好，可在设置里增删改与排序，点击即发送）、Pi 命令的斜杠模糊补全（Runtime 就绪后用运行中的命令清单，未就绪时用主进程预读的技能清单，按类型分组并按匹配优先级排序；另含 Desktop 层自己拦截的界面命令）与 `@` 项目文件引用（只写入相对路径文本，不传文件内容）；右侧文件树的行拖入坞内也走同一条相对路径引用规则。输入坞是单行结构：左侧 ＋ 菜单是两列双级结构——左列分类行（添加图片、模型、执行模式、专家、技能、常用消息），右列是当前分类的二级面板（添加图片直接触发选择，其余五项常驻在面板里、仅列表区内部滚动，其中技能点击后只把 `/skill:<名称>` 写到草稿最前、不发送；执行模式两档互斥，专家一个会话只选一个，两者都只在新建会话时可选，已开始的会话只显示当前值不可改），中间是输入行，右侧是发送/停止键；坞上方是待办清单面板（仅标准模式提交清单后出现）、一行延续判定结论（宿主给出结论时才渲染）与一行专家失效提示（绑定的定义已不在清单里时才渲染）；坞下方一行是水平居中的信息行：异常与进行中的状态文本、被收起的 Extension 对话入口与会话用量指标（缓存命中率、上下文占用与平均速率，点击开明细；累计 token 与费用只在明细浮层展示）。Extension 的 setStatus 项不在输入区展示。 -->
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
@@ -26,6 +26,7 @@ import { parseDialogTitle } from '../extension-dialog-presentation'
 import { cacheHitRate, formatTokens } from '../usage-format'
 import AppButton from '../../ui/AppButton.vue'
 import AppSelect from '../../ui/AppSelect.vue'
+import type { SelectGroup, SelectOption } from '../../ui/AppSelectList.vue'
 import ConfirmDialog from '../../ui/ConfirmDialog.vue'
 import RuntimeModelSelect from '../../providers/components/RuntimeModelSelect.vue'
 import UsageDetailDialog from './UsageDetailDialog.vue'
@@ -183,17 +184,18 @@ const plusMenuOpen = ref(false)
 /** 菜单外层引用：判断一次点击是否落在触发键或菜单之内。 */
 const plusRoot = ref<HTMLElement | null>(null)
 const plusMenu = ref<HTMLElement | null>(null)
-/** 二级面板的分类：除图片是直接执行的动作外，其余四项各占一块面板。 */
-type PlusPanel = 'model' | 'mode' | 'expert' | 'quick'
+/** 二级面板的分类：除图片是直接执行的动作外，其余五项各占一块面板。 */
+type PlusPanel = 'model' | 'mode' | 'expert' | 'skill' | 'quick'
 /** 一级列的分类与面板映射；图片是直接动作，不在其中。 */
 const plusPanelRows: readonly { readonly value: PlusPanel; readonly label: string }[] = [
   { value: 'model', label: '模型' },
   { value: 'mode', label: '执行模式' },
   { value: 'expert', label: '专家' },
+  { value: 'skill', label: '技能' },
   { value: 'quick', label: '常用消息' }
 ]
 /** 当前展开的二级面板；面板始终展开，点一级行只换面板，不收菜单。 */
-const plusPanel = ref<PlusPanel>('model')
+const plusPanel = ref<PlusPanel>('quick')
 /** 二级面板容器引用：键盘从一级行进面板、Esc 退回一级行都按它判断焦点位置。 */
 const plusPanelRoot = ref<HTMLElement | null>(null)
 /**
@@ -790,8 +792,8 @@ function togglePlusMenu(): void {
   if (plusMenuOpen.value) closePlusMenu()
   else {
     plusMenuOpen.value = true
-    // 每次打开都回到第一块面板，保留上一次停在哪一分类只会在重开时让人意外。
-    plusPanel.value = 'model'
+    // 每次打开都回到常用消息，保留上一次停在哪一分类只会在重开时让人意外。
+    plusPanel.value = 'quick'
     // 专家目录可能刚被改过：每次打开都重读一次，不在应用启动时就缓存住。
     void sessionStore.loadExperts()
   }
@@ -891,7 +893,7 @@ function onPlusTriggerKeydown(event: KeyboardEvent): void {
   if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
   event.preventDefault()
   plusMenuOpen.value = true
-  plusPanel.value = 'model'
+  plusPanel.value = 'quick'
   // 向下键从首行进入，向上键从末行进入；-1 按 focusPlusNavRow 的收边规则落到最后一行。
   void nextTick(() => { focusPlusNavRow(event.key === 'ArrowDown' ? 0 : -1) })
 }
@@ -949,6 +951,35 @@ function sendQuickMessage(message: string): void {
   draft.value = message
   textarea.value?.focus()
   void submit()
+}
+
+/**
+ * 技能面板的候选：与斜杠补全同一份来源——就绪后用运行中的资源清单，未就绪用主进程预读的技能清单，
+ * 不另建一份技能数据；候选多时靠面板内的搜索行过滤。
+ */
+const skillGroups = computed<readonly SelectGroup[]>(() => {
+  const source = runtimeReady.value ? resourceStore.entries : resourceStore.previewSkills
+  const options: SelectOption[] = []
+  for (const entry of source) {
+    if (entry.kind !== 'skill') continue
+    options.push({
+      value: entry.name,
+      label: entry.name.startsWith('skill:') ? entry.name.slice('skill:'.length) : entry.name,
+      description: entry.description ?? undefined
+    })
+  }
+  return options.length > 0 ? [{ options }] : []
+})
+
+/**
+ * 技能面板：命令只有位于消息开头才会被宿主当成技能调用，所以不写入光标处而是放到最前；
+ * 已有草稿原样留在命令之后，草稿本身已是技能命令时只替换那一段，反复点选不会叠成多条。
+ */
+function insertSkillCommand(name: string): void {
+  closePlusMenu()
+  const rest = draft.value.replace(/^\/skill:\S+\s*/, '')
+  draft.value = `/${name} ${rest}`
+  textarea.value?.focus()
 }
 
 /** 菜单里的图片入口与原先的 ＋ 键同一个行为：先收起菜单再打开选择器，说明仍由附件区独立标注。 */
@@ -1802,7 +1833,7 @@ onMounted(() => {
               :aria-expanded="plusMenuOpen"
               aria-controls="prompt-plus-menu"
               aria-label="输入选项"
-              title="输入选项（添加图片、模型、常用消息）"
+              title="输入选项（添加图片、模型、执行模式、专家、技能、常用消息）"
               @click="togglePlusMenu"
               @keydown="onPlusTriggerKeydown"
             >
@@ -1883,6 +1914,20 @@ onMounted(() => {
                     <p v-if="sessionStore.expertError !== null" class="prompt-composer-plus-panel-note">
                       {{ sessionStore.expertError.message }}
                     </p>
+                  </template>
+                  <template v-else-if="plusPanel === 'skill'">
+                    <!-- 技能：候选与斜杠补全同源，点击只把命令写进草稿，补完任务说明再发送；不设选中值，可反复点选。 -->
+                    <AppSelect
+                      id="prompt-skill"
+                      inline
+                      label="技能"
+                      searchable
+                      search-placeholder="搜索技能…"
+                      empty-results-label="没有可用的技能"
+                      :groups="skillGroups"
+                      model-value=""
+                      @update:model-value="insertSkillCommand"
+                    />
                   </template>
                   <template v-else>
                     <!-- 常用消息：面板高度固定，条数多时只在本区内滚动，滚动时重算上下渐隐。 -->
