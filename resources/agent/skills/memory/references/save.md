@@ -65,6 +65,7 @@
 - 规则记录仍用 `supersede_record_ids` / `supersession_reason` 替代，不用 `status_updates` 伪装关闭。
 - 新保存的非规则记录可直接带 `status`；规则记录只能以 `active` 进入，由替代机制退出。
 - `progress` 必须显式给 `status`，引擎不接受缺省值：`active` 只表示仍待推进的未决状态，正文含提交号、`+N/−N` 行数或括号内文件数的 `active progress` 会被引擎拒绝。`fact`／`issue` 仍可省略（缺省 `active`）。
+- 批量审查过时记录或清理流水式记录前，按 [维护审查](maintenance.md) 逐条核对；本节只规定单条保存与关闭，不代替维护流程。
 
 ## 提交与回执
 
