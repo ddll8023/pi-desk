@@ -316,7 +316,7 @@ export function registerMemoryTools(pi: ExtensionAPI, runtime: MemoryRuntime): v
   }, { additionalProperties: false })
   pi.registerTool({
     name: 'memory_save', label: '保存工作日记', exposure: 'model-only', executionMode: 'sequential',
-    description: '仅在用户明确要求保存日记时，传入具体完整候选。按 memory Skill 先核实事实与现行规则，只保存后续仍会使用的结论、约束与未决状态，历史流水归历史层。工具生成计划后直接提交并返回提交结果与回执，不再逐次等待确认；取消、分支变化或无写入能力宿主不提交。会写计划技术缓存，可清理过期计划；不是只读操作。不接受 approved 或外部 plan_id。',
+    description: '仅在用户明确要求保存日记时，传入具体完整候选。按 memory Skill 先核实事实与现行规则，只保存后续仍会使用的结论、约束与未决状态，历史流水归历史层。progress 必须显式给 status：active 只表示仍待推进的未决状态，已完成流水用 archived；引擎会拒绝缺省状态和带提交号／改动行数的 active progress。工具生成计划后直接提交并返回提交结果与回执，不再逐次等待确认；取消、分支变化或无写入能力宿主不提交。会写计划技术缓存，可清理过期计划；不是只读操作。不接受 approved 或外部 plan_id。',
     parameters: Type.Object({
       records: Type.Array(RecordSchema, { minItems: 0, maxItems: 50 }),
       status_updates: Type.Optional(Type.Array(StatusUpdateSchema, { maxItems: 50 }))

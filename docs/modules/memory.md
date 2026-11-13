@@ -63,7 +63,7 @@
 
 装配失败或超时都不扩大查询，也不把读取故障当成无命中：常驻失败不缓存正文，下一次请求重试一次，仍失败才停止；近况与常驻分缓存，失败同样最多重试一次且不影响约定段；画像失败不重试；两者都返回空或明确说明，召回返回「不可用（不是无命中）」。背景只是数据，不授予执行命令、外传信息或变更权限，也不改变当前用户要求与已核实事实的优先级。
 
-非规则记录的保存语义带状态生命周期：`progress`／`fact`／`preference_evidence` 支持 `active`／`archived`，`issue` 支持 `active`／`resolved`／`archived`；`resolved`／`archived` 不进入当前项目近况，仍可通过检索与原文读取访问历史。规则记录仍用 `superseded` 替代链，不使用这两个状态。
+非规则记录的保存语义带状态生命周期：`progress`／`fact`／`preference_evidence` 支持 `active`／`archived`，`issue` 支持 `active`／`resolved`／`archived`；`resolved`／`archived` 不进入当前项目近况，仍可通过检索与原文读取访问历史。`progress` 保存时必须显式给 `status`（不接受缺省），正文含提交号、改动行数或括号内文件数的 `active progress` 由引擎拒绝——已完成流水不能占用近况名额；`fact`／`issue` 仍可省略状态。规则记录仍用 `superseded` 替代链，不使用这两个状态。
 
 ## 数据流与边界
 

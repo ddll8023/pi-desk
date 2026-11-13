@@ -86,6 +86,20 @@ def candidate_check(text, single_line=False):
     return text.strip()
 
 
+# 已完成流水的可判定痕迹：提交号、改动行数、括号内文件数。
+# 只用于校验 active 的 progress——正文主体是实施过程时，它不该占据近况名额。
+IMPL_STAT=re.compile(r'[+＋]\d+\s*[／/]\s*[−-]\d+'
+                     r'|\d+\s*[+＋]\s*[／/]\s*\d+\s*[−-]'
+                     r'|[（(]\s*\d+\s*个?\s*文件\s*[）)]')
+HASH_LIKE=re.compile(r'(?<![0-9a-z])[0-9a-f]{7,40}(?![0-9a-z])')
+
+
+def impl_trace(text: str) -> bool:
+    """正文是否以实施过程为主体。纯数字串（日期、单据号）不算提交号，必须有 a-f 才算。"""
+    if IMPL_STAT.search(text): return True
+    return any(any(c in 'abcdef' for c in hit.group()) for hit in HASH_LIKE.finditer(text))
+
+
 def content_key(typ, rule_key, topic, content):
     """内容指纹：去重按内容而不是会话或 ID；归一化空白，避免排版差异被当成新记录。"""
     raw=unicodedata.normalize('NFKC',f'{typ}\x1f{rule_key or ""}\x1f{topic}\x1f{content}')
@@ -1035,6 +1049,9 @@ def prepare(root: Path, op: str, data: dict) -> dict:
                     expect(status=='active','规则记录不支持非 active 状态')
                 else:
                     expect(status in NOTE_STATUSES[typ],'非法非规则记录状态')
+                # 进度类必须表态：缺省 active 会让已完成流水静默进入近况，因此不接受默认值。
+                expect(typ!='progress' or 'status' in item,
+                       'progress 须显式给 status：active 表示仍待推进的未决状态（能回答卡在哪、下一步是什么），已完成的历史流水用 archived')
                 expect('replace_record_ids' not in item and 'replacement_reason' not in item,
                        '旧替换协议不再接受；请用 supersede_record_ids / supersession_reason，历史不会删除')
                 rule_key=item.get('rule_key');targets=[]
@@ -1056,6 +1073,10 @@ def prepare(root: Path, op: str, data: dict) -> dict:
                 else:
                     expect(not rule_key and not explicit_ids,'非规则日记不能带规则键或替代目标')
                 title=candidate_check(item['topic'],True);content=candidate_check(item['content'])
+                # 带实施痕迹的正文不可能是“仍待推进”的未决状态；要求归档或改写，而不是静默放行。
+                expect(not (typ=='progress' and status=='active' and impl_trace(title+' '+content)),
+                       'progress 正文含提交号、改动行数或文件数，属已完成流水，不能以 active 进入近况：'
+                       '改 status 为 archived，或改写为仍待推进的未决状态')
                 digest=content_key(typ,rule_key,title,content)
                 if digest in seen_content:
                     duplicates.append(title);continue
