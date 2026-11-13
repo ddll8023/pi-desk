@@ -85,6 +85,7 @@ const EXPECTED_REPLIES: Record<SdkHostRequest['type'], SdkHostFrame['type'] | nu
   resources: 'resources-result',
   diagnostics: 'diagnostics-result',
   'mcp-status': 'mcp-status-result',
+  'memory-injection': 'memory-injection-result',
   'mcp-command': 'mcp-command-result',
   'projection-snapshot': 'projection-result',
   history: 'history-result',
