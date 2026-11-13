@@ -1,4 +1,4 @@
-/** 用户级全局记忆的请求背景与分支控制；提供适用偏好、常驻约定、当前项目近况和任务召回，按工作目录匹配项目归属、按名称解析检索范围，不把召回正文写入会话；装配只留下不含正文的审计元数据（段状态与记录身份）。 */
+/** 用户级全局记忆的请求背景与分支控制；提供适用偏好、常驻约定、当前项目近况和任务召回，按工作目录匹配项目归属、按名称解析检索范围，不把召回正文写入会话；装配只留下不含正文的审计元数据（五段状态与记录／画像身份、摘要）。 */
 import { resolve } from 'node:path'
 import type { AgentMessage } from '@earendil-works/pi-agent-core'
 import type { ExtensionContext } from '@earendil-works/pi-coding-agent'
@@ -37,7 +37,7 @@ interface State {
   hostRevision: number
   recall?: RecallCache | undefined
   recallStatus?: JsonObject | undefined
-  profiles?: { signature: string; value: string } | undefined
+  profiles?: { signature: string; value: string; entries: JsonObject[] } | undefined
   /** 常驻约定：每会话只成功读取一次，保存或刷新后重新取得。 */
   resident?: string | undefined
   /** 本会话已尝试装配常驻的次数；失败后允许重试一次，冷启动不应拖死整会话。 */
@@ -52,6 +52,8 @@ interface State {
   residentEntries?: JsonObject[] | undefined
   /** 当前项目近况实际注入的条目身份。 */
   notesEntries?: JsonObject[] | undefined
+  /** 报错召回实际注入的条目身份；每轮重建，不沿用上一轮的错误上下文。 */
+  errorEntries?: JsonObject[] | undefined
   /** 近况因段预算未注入的条数：整段丢弃不静默。 */
   notesDropped?: number | undefined
   /** 本次装配的审计元数据；由 `takeInjection` 取走，写入时机由调用方决定。 */
@@ -198,6 +200,13 @@ function recordEntry(row: JsonObject, body: string): JsonObject {
     excerpt: content.slice(0, AUDIT_EXCERPT_CHARS), truncated: content.length > AUDIT_EXCERPT_CHARS }
 }
 
+/** 画像没有记录类型与日期，单独一种条目形状；正文同样不进入会话，展开时按领域另取。 */
+function profileEntry(row: JsonObject): JsonObject {
+  const content = text(row.content).replace(/\r/g, '').trim()
+  return { id: text(row.id), domain: text(row.domain), scope: text(row.scope), title: text(row.title),
+    excerpt: content.slice(0, AUDIT_EXCERPT_CHARS), truncated: content.length > AUDIT_EXCERPT_CHARS }
+}
+
 /** 状态里的条目身份给有界 ID 列表：全量身份进审计条目，避免状态输出撑满界面。 */
 function idFields(entries: readonly JsonObject[]): { ids: string[]; ids_total: number } {
   return { ids: entries.slice(0, 40).map(entry => text(entry.id)), ids_total: entries.length }
@@ -267,6 +276,7 @@ export class MemoryRuntime {
     if (state) { state.closed = true; state.controller.abort(); state.profiles = undefined; state.recall = undefined
       state.resident = undefined; state.residentAttempts = undefined; state.residentStats = undefined
       state.residentEntries = undefined
+      state.errorEntries = undefined
       state.notes = undefined; state.notesAttempts = undefined; state.notesStats = undefined
       state.notesEntries = undefined; state.notesDropped = undefined
       state.injection = undefined; state.lastAuditKey = undefined }
@@ -302,6 +312,7 @@ export class MemoryRuntime {
     return () => { this.saving = false; lease.state.profiles = undefined; lease.state.recall = undefined
       lease.state.resident = undefined; lease.state.residentAttempts = undefined; lease.state.residentStats = undefined
       lease.state.residentEntries = undefined
+      lease.state.errorEntries = undefined
       lease.state.notes = undefined; lease.state.notesAttempts = undefined; lease.state.notesStats = undefined
       lease.state.notesEntries = undefined; lease.state.notesDropped = undefined
       lease.state.injection = undefined; lease.state.lastAuditKey = undefined }
@@ -486,27 +497,35 @@ export class MemoryRuntime {
     return bodies
   }
 
-  private async errorBackground(lease: Lease, messages: readonly AgentMessage[]): Promise<string> {
+  private async errorBackground(lease: Lease, messages: readonly AgentMessage[]): Promise<{ value: string; entries: JsonObject[] }> {
+    // 每轮重建：上一轮的错误上下文不能沿用到本轮审计里。
+    lease.state.errorEntries = []
+    const empty = { value: '', entries: [] as JsonObject[] }
     for (let index = messages.length - 1; index >= 0; index--) {
       const message = messages[index]!
       if (message.role === 'user') break
       if (message.role !== 'toolResult' || !message.isError) continue
       const output = message.content.filter(block => block.type === 'text').map(block => block.text).join('\n').trim()
-      if (!output) return ''
+      if (!output) return empty
       try {
         const data = await this.engine.errorRecall({ fingerprint: output.slice(0, 500), limit: 3 }, lease.signal)
         lease.assert()
-        if (data.no_match) return ''
+        if (data.no_match) return empty
         const matches = array(data.matches)
+        const entries = matches.map(value => {
+          const row = object(value)
+          return recordEntry(row, text(row.content))
+        })
+        lease.state.errorEntries = entries
         const body = JSON.stringify(matches)
-        if (body.length <= 4_000) return `【报错相关历史，仅为有条件的参考】\n${body}`
-        return `报错相关历史超过背景预算，未截断正文；可用 memory_read 读取：${matches.map(value => text(object(value).id)).join(', ')}`
+        if (body.length <= 4_000) return { value: `【报错相关历史，仅为有条件的参考】\n${body}`, entries }
+        return { value: `报错相关历史超过背景预算，未截断正文；可用 memory_read 读取：${matches.map(value => text(object(value).id)).join(', ')}`, entries }
       } catch {
         lease.assert()
-        return ''
+        return empty
       }
     }
-    return ''
+    return empty
   }
 
   private async automaticBackground(lease: Lease, messages: readonly AgentMessage[]): Promise<string> {
@@ -560,29 +579,31 @@ export class MemoryRuntime {
    * 适用画像段：库版本变化即重取，失败或超时只降级本段并写明原因。
    * 租约失效（会话切换、取消、配置更新）不属于段故障，继续上抛。
    */
-  private async profileSection(lease: Lease): Promise<{ value: string; available: boolean }> {
+  private async profileSection(lease: Lease): Promise<{ value: string; available: boolean; entries: JsonObject[] }> {
     const state = lease.state
     try {
       const signature = await this.engine.profileSignature(this.config.profileDomains, lease.signal)
-      const cached = state.profiles?.signature === signature ? state.profiles.value : undefined
-      if (cached !== undefined) return { value: cached, available: true }
+      const cached = state.profiles?.signature === signature ? state.profiles : undefined
+      if (cached !== undefined) return { value: cached.value, available: true, entries: cached.entries }
       const sections: string[] = []
+      const entries: JsonObject[] = []
       for (const selected of this.config.profileDomains) {
         const data = applicableProfiles(await this.engine.profiles(selected, lease.signal), selected, this.config.profileDomains)
         lease.assert()
         if (array(data.profiles).length) sections.push(JSON.stringify(data))
+        for (const row of array(data.profiles).map(value => object(value))) entries.push(profileEntry(row))
       }
       if (signature !== await this.engine.profileSignature(this.config.profileDomains, lease.signal)) {
         throw new Error('画像读取期间发生变化')
       }
       let value = sections.join('\n') || '当前没有适用画像。'
       if (value.length > 20_000) value = '画像超过自动背景预算，未截断正文；可用 memory_profiles 按领域读取。'
-      state.profiles = { signature, value }
-      return { value, available: true }
+      state.profiles = { signature, value, entries }
+      return { value, available: true, entries }
     } catch (error) {
       lease.assert()
       state.profiles = undefined
-      return { value: `画像段本次不可用：${errorText(error)}；未回退旧画像。`, available: false }
+      return { value: `画像段本次不可用：${errorText(error)}；未回退旧画像。`, available: false, entries: [] }
     }
   }
 
@@ -594,7 +615,9 @@ export class MemoryRuntime {
     const entries = {
       recall: (state.recall?.records ?? []).map(row => recordEntry(row, text(row.content))),
       resident: state.residentEntries ?? [],
-      notes: state.notesEntries ?? []
+      notes: state.notesEntries ?? [],
+      errors: state.errorEntries ?? [],
+      profiles: state.profiles?.entries ?? []
     }
     const key = JSON.stringify({ request: state.recall?.requestKey ?? null,
       segments: { ...segments, recall: { ...segments.recall, reused: undefined } }, entries })
@@ -612,7 +635,7 @@ export class MemoryRuntime {
     state.lastAuditKey = key
     state.injection = { version: 1, at: new Date().toISOString(), sessionId: state.sessionId, cwd: state.cwd,
       revision: this.config.revision, requestKey: null, status, reason,
-      segments: {}, entries: { recall: [], resident: [], notes: [] } }
+      segments: {}, entries: { recall: [], resident: [], notes: [], errors: [], profiles: [] } }
   }
 
   /** 取走本次装配的审计记录：写入时机由调用方决定，读完即清空，同一份不重复落盘。 */
@@ -651,7 +674,7 @@ export class MemoryRuntime {
         resident: lease.state.residentStats ?? { status: 'not_requested' },
         notes: lease.state.notesStats ?? { status: 'not_requested' },
         recall: lease.state.recallStatus ?? { status: 'not_requested' },
-        errors: { status: errors ? 'provided' : 'none' }
+        errors: { status: errors.value ? 'provided' : 'none' }
       }
       this.recordInjection(lease.state, segments)
       const residentNotice = resident ? null
@@ -672,7 +695,7 @@ export class MemoryRuntime {
         ...(notes || notesNotice || notesDropped
           ? ['【当前项目近况：历史状态，不是约定，不构成要求】', notes || notesNotice || '',
               ...(notesDropped ? [notesDropped] : [])] : []),
-        ...(recalled ? ['【任务相关记忆】', recalled] : []), errors
+        ...(recalled ? ['【任务相关记忆】', recalled] : []), errors.value
       ].filter(Boolean).join('\n')
     } catch (error) {
       lease.assert()

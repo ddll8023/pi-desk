@@ -4,6 +4,8 @@ export const MEMORY_ENABLED_CHANNEL = 'desktop:memory-enabled'
 export const MEMORY_INITIALIZE_CHANNEL = 'desktop:memory-initialize'
 /** 只读：按真实记录 ID 取回正文，供会话内的注入条目展开；不写库、不记录访问统计。 */
 export const MEMORY_READ_CHANNEL = 'desktop:memory-read'
+/** 只读：按领域取回画像正文，供注入卡片展开画像条目；不写库、不记录访问统计。 */
+export const MEMORY_PROFILE_READ_CHANNEL = 'desktop:memory-profile-read'
 
 export interface MemoryPreference { readonly enabled: boolean }
 export interface MemoryInitializeRequest { readonly timezone: string }
@@ -21,6 +23,21 @@ export interface MemoryReadRecord {
 }
 export type MemoryReadResult =
   | { readonly ok: true; readonly data: { readonly records: readonly MemoryReadRecord[] } }
+  | { readonly ok: false; readonly error: { readonly code: MemoryErrorCode; readonly message: string } }
+
+/** 画像领域是固定枚举：页面只能选领域，不能按 ID、关键词或数量扫描。 */
+export const MEMORY_PROFILE_DOMAINS = ['communication', 'coding', 'learning', 'workflow'] as const
+export type MemoryProfileDomain = typeof MEMORY_PROFILE_DOMAINS[number]
+export interface MemoryProfileReadRequest { readonly domain: MemoryProfileDomain }
+export interface MemoryProfileReadRecord {
+  readonly id: string
+  readonly domain: string
+  readonly scope: string
+  readonly title: string
+  readonly content: string
+}
+export type MemoryProfileReadResult =
+  | { readonly ok: true; readonly data: { readonly profiles: readonly MemoryProfileReadRecord[] } }
   | { readonly ok: false; readonly error: { readonly code: MemoryErrorCode; readonly message: string } }
 export interface MemorySnapshot {
   readonly enabled: boolean
@@ -49,6 +66,7 @@ export interface MemoryApi {
   readonly setMemoryEnabled: (request: MemoryPreference) => Promise<MemoryResult>
   readonly initializeMemory: (request: MemoryInitializeRequest) => Promise<MemoryResult>
   readonly readMemoryRecords: (request: MemoryReadRequest) => Promise<MemoryReadResult>
+  readonly readMemoryProfiles: (request: MemoryProfileReadRequest) => Promise<MemoryProfileReadResult>
 }
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -112,6 +130,33 @@ export function isMemoryReadResult(value: unknown): value is MemoryReadResult {
   if (value.ok === true) {
     return record(value.data) && Array.isArray(value.data.records)
       && value.data.records.length <= MEMORY_READ_MAX_IDS && value.data.records.every(isMemoryReadRecord)
+  }
+  return value.ok === false && record(value.error) && typeof value.error.message === 'string'
+    && typeof value.error.code === 'string'
+}
+
+export function isMemoryProfileReadRequest(value: unknown): value is MemoryProfileReadRequest {
+  if (!record(value) || Object.keys(value).length !== 1) return false
+  return typeof value.domain === 'string'
+    && (MEMORY_PROFILE_DOMAINS as readonly string[]).includes(value.domain)
+}
+
+const PROFILE_ID = /^p_[0-9A-HJKMNP-TV-Z]{26}$/
+
+function isMemoryProfileReadRecord(value: unknown): value is MemoryProfileReadRecord {
+  if (!record(value)) return false
+  return typeof value.id === 'string' && PROFILE_ID.test(value.id)
+    && typeof value.domain === 'string' && (MEMORY_PROFILE_DOMAINS as readonly string[]).includes(value.domain)
+    && typeof value.scope === 'string' && /^(global|domain:[a-z0-9-]{1,64})$/.test(value.scope)
+    && typeof value.title === 'string' && value.title.length <= 300
+    && typeof value.content === 'string' && value.content.length <= 20_000
+}
+
+export function isMemoryProfileReadResult(value: unknown): value is MemoryProfileReadResult {
+  if (!record(value)) return false
+  if (value.ok === true) {
+    return record(value.data) && Array.isArray(value.data.profiles)
+      && value.data.profiles.length <= 64 && value.data.profiles.every(isMemoryProfileReadRecord)
   }
   return value.ok === false && record(value.error) && typeof value.error.message === 'string'
     && typeof value.error.code === 'string'

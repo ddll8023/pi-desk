@@ -114,7 +114,7 @@
 | `src/renderer/src/sessions/components/ToolCard.vue` | 单行紧凑展示操作分类徽章、真实工具名、语境化参数与状态耗时胶囊；展开区展示结构化结果卡片、Diff 与调试抽屉，原文按需展开 |
 | `src/renderer/src/sessions/components/ToolResultPreview.vue` | 工具结果的计数口径、命中内容、来源、历史状态与省略提示；只展示投影，不发起额外查询 |
 | `src/renderer/src/sessions/components/UsageDetailDialog.vue` | 会话用量明细与独立的 Codex、OpenCode Go 账户额度展示、按需读取与手动刷新 |
-| `src/renderer/src/sessions/components/MemoryInjectionDialog.vue` | 记忆注入卡片：按段列出最近一次请求注入的条目，点击展开摘要，被截断时按记录 ID 只读取全文 |
+| `src/renderer/src/sessions/components/MemoryInjectionDialog.vue` | 记忆注入卡片：五个分段（适用偏好、常驻约定、当前项目近况、任务召回、报错召回）以 tab 切换，点击条目展开摘要，被截断时记录条目按 ID、画像条目按领域只读取全文 |
 | `src/renderer/src/sessions/components/SessionActivityBar.vue` | 会话活动摘要和明细 |
 | `src/renderer/src/sessions/components/ExtensionDialog.vue` | SDK 扩展交互队列的当前对话 |
 | `src/renderer/src/sessions/components/ExtensionNotificationBar.vue` | 扩展通知展示 |
@@ -143,7 +143,7 @@
 
 输入坞的用量指标打开“用量与额度”弹窗，保留本会话统计并按需读取 Codex 与 OpenCode Go 账户额度，支持手动刷新。两类额度各自独立：未登录或没有可用账户凭据、没有 OpenCode Go API Key 时对应区块整块不展示，加载中同样不占位；接口失败和缺失窗口分别展示，不把账户额度计入会话用量；关闭或卸载后忽略迟到响应，重新打开时读取当前账户快照。查询链路见[供应商与认证](providers-auth.md#调用链与数据所有者)，不经过会话 SDK 宿主。
 
-输入坞提交 `/memory status` 时由 Desktop 拦下并打开“记忆注入”卡片：数据来自宿主内会话分支上最近一条注入审计（只读请求，不跑命令、不读库），卡片按常驻约定、当前项目近况与任务召回分段，点击条目展开摘要，被截断时经只读记录接口取全文；带参数形式（如 `status json`）仍交给扩展命令输出文本，两者不并行展示。
+输入坞提交 `/memory status` 时由 Desktop 拦下并打开“记忆注入”卡片：数据来自宿主内会话分支上最近一条注入审计（只读请求，不跑命令、不读库），卡片把适用偏好、常驻约定、当前项目近况、任务召回与报错召回五个分段做成 tab 切换，点击条目展开摘要，被截断时记录条目经只读记录接口取全文、画像条目经只读画像接口按领域取全文；带参数形式（如 `status json`）仍交给扩展命令输出文本，两者不并行展示。
 
 1. 页面表达打开意图：标签 Store 计算 `ChatOpenIntent`，`session` Store 固定项目与标签并串行提交；选择本身立即落到标签，不等打开动作整体收尾。打开已有会话前先按会话读取首页历史并显示出来，未绑定时可继续翻页、展开轮次与续段；历史读取不排队，失败即降级。页面只给项目与会话，由主进程判定该会话当前走绑定路径还是日志解析；主进程按会话持久绑定解析对应工作区并在响应中回传，标签据此同步工作区环境。
 2. 主进程校验登记项目与信任，注册表管理占用，Runtime 桥决定复用、切前台或建立宿主；前台选择按主进程分配的序号收敛，先提交后完成的旧选择不会把前台改回旧目标。项目成为当前项目时预热只读池中的一个解析宿主，供查看历史与随后的绑定共用。

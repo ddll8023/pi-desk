@@ -164,7 +164,11 @@ export async function loadConfig(host?: ManagedHostConfig): Promise<MemoryConfig
     // 零配置：允许 config.json 不存在
   }
 
-  const rawDomains = Array.isArray(data.profileDomains) ? data.profileDomains : ['communication', 'workflow']
+  // 桌面宿主不下发 profileDomains（配置契约无此字段，产品扩展目录也不带 config.json），
+  // 零配置即四域：只取两域会让 coding/learning 的现有画像永不进入背景。
+  const rawDomains = Array.isArray(data.profileDomains)
+    ? data.profileDomains
+    : ['communication', 'coding', 'learning', 'workflow']
   const profileDomains = domains(rawDomains)
 
   if (host !== undefined) {

@@ -1,8 +1,9 @@
 /**
- * 会话内记忆注入审计的跨进程契约：只读快照，含段状态与条目身份、摘要。
+ * 会话内记忆注入审计的跨进程契约：只读快照，含五段状态与条目身份、摘要。
  *
  * 数据来源是会话分支里 `pi-memory.injection.v1` 自定义条目，由扩展在装配背景时写入；
  * 本契约只搬运它的形状，不读库、不写库，也不携带条目正文全文。
+ * 画像段与报错段是后补的两段，字段可选：旧会话里没有它们的审计条目仍按有效快照展示。
  */
 import type { RuntimeError } from './status'
 
@@ -21,11 +22,26 @@ export interface MemoryInjectionEntry {
   readonly truncated: boolean
 }
 
-/** 三段可点击的注入内容；召回段与常驻、近况使用同一形状。 */
+/**
+ * 画像条目：来源是 `profiles` 命令，ID 为 `p_` 前缀，没有记录类型与日期，故单列一种形状。
+ * 全文不放进审计，展开时按领域另取。
+ */
+export interface MemoryInjectionProfileEntry {
+  readonly id: string
+  readonly domain: string
+  readonly scope: string
+  readonly title: string
+  readonly excerpt: string
+  readonly truncated: boolean
+}
+
+/** 五段可点击的注入内容；后两段可选，兼容只有三段的旧审计条目。 */
 export interface MemoryInjectionEntries {
   readonly recall: readonly MemoryInjectionEntry[]
   readonly resident: readonly MemoryInjectionEntry[]
   readonly notes: readonly MemoryInjectionEntry[]
+  readonly errors?: readonly MemoryInjectionEntry[]
+  readonly profiles?: readonly MemoryInjectionProfileEntry[]
 }
 
 /** 五段装配状态按原字段搬运，渲染端只读已知键，不据此推断额外含义。 */
@@ -47,8 +63,11 @@ export type MemoryInjectionResult =
   | { readonly ok: false; readonly error: RuntimeError }
 
 const RECORD_ID = /^m_[0-9A-HJKMNP-TV-Z]{26}$/
+const PROFILE_ID = /^p_[0-9A-HJKMNP-TV-Z]{26}$/
 const DATE = /^\d{4}-\d{2}-\d{2}$/
 const ENTRY_TYPES = ['decision', 'constraint', 'fact', 'progress', 'issue', 'preference_evidence']
+const PROFILE_DOMAINS = ['communication', 'coding', 'learning', 'workflow']
+const PROFILE_SCOPE = /^(global|domain:[a-z0-9-]{1,64})$/
 const STATUSES: readonly MemoryInjectionStatus[] = ['provided', 'disabled', 'unavailable']
 /** 单段条目上限：与扩展侧的预算一致地宽松，只用于挡住形状错误的数据。 */
 const MAX_ENTRIES = 400
@@ -76,6 +95,20 @@ function isEntryList(value: unknown): value is readonly MemoryInjectionEntry[] {
   return Array.isArray(value) && value.length <= MAX_ENTRIES && value.every(isEntry)
 }
 
+function isProfileEntry(value: unknown): value is MemoryInjectionProfileEntry {
+  if (!isRecord(value)) return false
+  return typeof value.id === 'string' && PROFILE_ID.test(value.id)
+    && typeof value.domain === 'string' && PROFILE_DOMAINS.includes(value.domain)
+    && typeof value.scope === 'string' && PROFILE_SCOPE.test(value.scope)
+    && bounded(value.title, 300) && bounded(value.excerpt, 1_000)
+    && typeof value.truncated === 'boolean'
+}
+
+/** 画像条目同样按段限流；缺失（旧审计条目）与格式不符区别对待。 */
+function isProfileEntryList(value: unknown): value is readonly MemoryInjectionProfileEntry[] {
+  return Array.isArray(value) && value.length <= MAX_ENTRIES && value.every(isProfileEntry)
+}
+
 function isSegments(value: unknown): value is Readonly<Record<string, Readonly<Record<string, unknown>>>> {
   if (!isRecord(value) || Object.keys(value).length > MAX_SEGMENTS) return false
   return Object.values(value).every(segment => isRecord(segment) && Object.keys(segment).length <= MAX_SEGMENT_KEYS)
@@ -94,7 +127,9 @@ export function isMemoryInjectionSnapshot(value: unknown): value is MemoryInject
   if (!isSegments(value.segments)) return false
   const entries = value.entries
   if (!isRecord(entries)) return false
-  return isEntryList(entries.recall) && isEntryList(entries.resident) && isEntryList(entries.notes)
+  if (!isEntryList(entries.recall) || !isEntryList(entries.resident) || !isEntryList(entries.notes)) return false
+  if (entries.errors !== undefined && !isEntryList(entries.errors)) return false
+  return entries.profiles === undefined || isProfileEntryList(entries.profiles)
 }
 
 export function isMemoryInjectionResult(value: unknown): value is MemoryInjectionResult {
