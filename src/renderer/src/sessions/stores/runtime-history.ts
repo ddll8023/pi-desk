@@ -40,23 +40,16 @@ export interface HistoryState {
   error: string | null
   pages: readonly ProjectionMessage[]
   visible: string[]
-  uiRevisions: Map<string, number>
   turns: Record<string, HistoryTurnState>
 }
 export function emptyHistory(): HistoryState {
   return {
     revision: 0, before: null, loading: false, error: null, pages: [], visible: [],
-    uiRevisions: new Map(), turns: Object.create(null) as Record<string, HistoryTurnState>
+    turns: Object.create(null) as Record<string, HistoryTurnState>
   }
 }
 export function messageKey(message: ProjectionMessage): string {
   return message.entryId ?? message.id
-}
-
-/** 界面版本事实不随工具卡片淘汰，避免旧历史界面被重新激活。 */
-export function rememberUiRevisions(state: HistoryState, incoming: readonly ToolExecution[]): void {
-  for (const tool of incoming) if (tool.ui) state.uiRevisions.set(tool.ui.documentId,
-    Math.max(state.uiRevisions.get(tool.ui.documentId) ?? 0, tool.ui.revision, tool.latestRevision ?? 0))
 }
 
 export interface HistoryCacheDeps {
@@ -120,7 +113,6 @@ export function createHistoryCache(deps: HistoryCacheDeps): HistoryCache {
       turn.tools = merge(more ? turn.tools : [], page.tools, tool => tool.toolCallId)
       // 已完成的参数续段可能再次随后续工具结果页出现，不能重置回原游标。
       turn.chunks = merge(more ? turn.chunks : [], page.chunks.filter(chunk => !turn.chunkStates[historyChunkKey(chunk)]), historyChunkKey)
-      rememberUiRevisions(owner, page.tools)
       turn.next = page.next; turn.loaded = true
       trim(owner, turnId)
     } catch (error) { turn.error = error instanceof Error ? error.message : String(error) }

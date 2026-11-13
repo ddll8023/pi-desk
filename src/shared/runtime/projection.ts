@@ -1,7 +1,6 @@
 /** 会话投影契约：消息、工具、历史、活动与用量的展示结构；投影批次与历史分页也在这里。 */
 
 import type { RuntimeError } from './status'
-import type { GenuiPayload } from '../genui-api'
 import type { SubAgentView } from '../sub-agent-view'
 import type { ImageAnnotationAttachment } from '../image-annotation'
 
@@ -202,18 +201,11 @@ export interface ToolExecution {
   /** 截断前提取的有界语义摘要；旧记录缺失时退回参数与文本预览，不猜造结果。 */
   readonly presentation?: ToolPresentation | null
   /**
-   * 生成式 UI 载荷；null 表示该工具没有交付界面，或载荷未通过校验。
-   * 载荷已由主进程按 `parseGenuiPayload` 校验并归一，渲染端可直接使用。
-   */
-  readonly ui: GenuiPayload | null
-  /**
    * 子任务执行视图；空数组表示该工具不是委派工具或快照未通过校验。
    * 一次委派可含多个子任务，各自独立收敛，因此这里始终是数组而不是单个对象。
-   * 任务状态与活动用专用契约表达，不走生成式 UI：两者的生命周期与展示上限不同。
+   * 任务状态与活动用专用契约表达，两者的生命周期与展示上限不同。
    */
   readonly subAgents: readonly SubAgentView[]
-  /** 完整当前分支中该界面的最高版本，避免回读旧页时误启用旧界面。 */
-  readonly latestRevision?: number
 }
 
 /** AI 消息生成计时：时刻来自 Desktop 接收事件，不代表模型服务端耗时，也不包含后续工具执行。 */
@@ -366,17 +358,6 @@ export interface SessionPluginActivity {
 }
 
 /**
- * 一份生成式界面的交付事实：只记身份与版本，不带节点树与标题以外的内容。
- * `versions` 是该界面在分支上出现过的次数（含修改），与 `ui_inspect` 的列表口径一致。
- */
-export interface SessionGenuiActivity {
-  readonly documentId: string
-  readonly title: string
-  readonly revision: number
-  readonly versions: number
-}
-
-/**
  * 一轮里被修改的文件：只收写入事实，不把读取算作改动，也不与工具卡片重复表达。
  * `truncated` 为 true 表示该轮写入文件超过展示上限，列表只是前若干项，不代表全部。
  */
@@ -413,12 +394,10 @@ export interface SessionActivity {
   readonly skills: readonly SessionSkillActivity[]
   readonly mcp: readonly SessionMcpActivity[]
   readonly plugins: readonly SessionPluginActivity[]
-  readonly genui: readonly SessionGenuiActivity[]
   readonly fileCount: number
   readonly skillCount: number
   readonly mcpCount: number
   readonly pluginCount: number
-  readonly genuiCount: number
   /**
    * 按轮归组的改动事实：只含有写入的轮次，并保留最近若干轮（上限由宿主聚合处封顶）。
    * 回合头展示与延续判定共用这一份口径，渲染端不自行汇总工具条目。

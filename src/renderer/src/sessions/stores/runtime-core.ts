@@ -40,7 +40,7 @@ import {
   subscribeRuntimeStatus
 } from '../services/runtime'
 import { readSessionHistory, readSessionFirstPage } from '../services/session'
-import { createHistoryCache, emptyHistory, messageKey, rememberUiRevisions } from './runtime-history'
+import { createHistoryCache, emptyHistory, messageKey } from './runtime-history'
 import type { HistoryCache, HistoryState } from './runtime-history'
 
 /** Runtime 的展示阶段；宿主已回收时用 `closed` 表示挂起而不是失败。 */
@@ -322,12 +322,9 @@ export function createRuntimeCore(deps: RuntimeCoreDeps): RuntimeCore {
         text: keepText ? previous.text : live.text,
         textTruncated: keepText ? previous.textTruncated : live.textTruncated,
         argsText: keepArgs ? previous.argsText : live.argsText,
-        argsTruncated: keepArgs ? previous.argsTruncated : live.argsTruncated,
-        latestRevision: Math.max(previous.latestRevision ?? 0, live.latestRevision ?? 0) })
+        argsTruncated: keepArgs ? previous.argsTruncated : live.argsTruncated })
     }
-    return [...combined.values()].map(tool => tool.ui ? { ...tool,
-      latestRevision: Math.max(tool.ui.revision, tool.latestRevision ?? 0,
-        history.value.uiRevisions.get(tool.ui.documentId) ?? 0) } : tool)
+    return [...combined.values()]
   })
   let releaseSubscription: (() => void) | null = null
   let releaseProjection: (() => void) | null = null
@@ -641,7 +638,6 @@ export function createRuntimeCore(deps: RuntimeCoreDeps): RuntimeCore {
       activity.value = snapshot.activity ?? null
       messages.value = snapshot.messages
       tools.value = snapshot.tools
-      rememberUiRevisions(history.value, snapshot.tools)
       projectionTruncated.value = snapshot.truncated
       droppedMessages.value = snapshot.droppedMessages
       droppedTools.value = snapshot.droppedTools
@@ -698,7 +694,6 @@ export function createRuntimeCore(deps: RuntimeCoreDeps): RuntimeCore {
     }
     messages.value = applied.messages
     tools.value = applied.tools
-    rememberUiRevisions(history.value, applied.tools)
     for (const update of batch.updates) {
       if (update.kind === 'activity') activity.value = update.activity
     }
@@ -804,7 +799,6 @@ export function createRuntimeCore(deps: RuntimeCoreDeps): RuntimeCore {
     }
     slice.messages = applied.messages
     slice.tools = applied.tools
-    rememberUiRevisions(slice.history, applied.tools)
     for (const update of batch.updates) {
       if (update.kind === 'activity') slice.activity = update.activity
     }

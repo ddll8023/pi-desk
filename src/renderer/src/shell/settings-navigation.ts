@@ -49,7 +49,7 @@ export const SETTINGS_NAV_GROUPS: readonly SettingsNavGroup[] = [
       { id: 'model', label: '模型', icon: 'bot', keywords: ['供应商', '凭据', 'models.json', 'provider'] },
       { id: 'resources', label: '资源', icon: 'blocks', keywords: ['技能', '提示词模板', '扩展', 'MCP', 'skills'] },
       { id: 'experts', label: '专家', icon: 'user-round', keywords: ['专家', 'expert', '角色', '派生', '自定义专家', '行业专家'] },
-      { id: 'features', label: '功能', icon: 'toggle-left', keywords: ['生成式界面', '界面', 'genui', '开关', 'feature', '执行模式', '快速模式', '标准模式'] },
+      { id: 'features', label: '功能', icon: 'toggle-left', keywords: ['开关', 'feature', '执行模式', '快速模式', '标准模式'] },
       { id: 'memory', label: '记忆', icon: 'brain', keywords: ['记忆', '日记', '偏好', '画像', 'memory', '全局'] },
       { id: 'usage', label: '用量', icon: 'chart', keywords: ['用量', 'token', 'tokens', '统计', '消耗', '费用', 'usage', 'cost', '额度'] }
     ]

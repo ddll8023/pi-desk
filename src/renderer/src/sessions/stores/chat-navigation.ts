@@ -2,7 +2,7 @@
  * 对话内跳转登记：消息区把当前会话每一轮的用户输入摘要与「当前读到哪一轮」发布出来，
  * 顶部栏据此渲染跳转列表；顶部栏发出一次性跳转意图，消息区消费后按既有定位规则滚动。
  *
- * 滚动位置、折叠展开与生成式界面跳转的权威始终在消息区：本模块只搬运入口与意图，
+ * 滚动位置与折叠展开的权威始终在消息区：本模块只搬运入口与意图，
  * 不读 DOM、不算位置。登记带会话键，键不一致时对外为空，切换会话不会把上一个会话的列表
  * 留在顶部栏，也不会把跳转意图交给新会话。意图只保留一条，后到的覆盖前一条。
  *
@@ -22,8 +22,6 @@ export interface ChatNavEntry {
    * 由消息区按投影字段透传，本模块不推算也不补造。
    */
   readonly time: string | null
-  /** 本轮交付的生成式界面个数；大于 0 时列表里补一行说明。 */
-  readonly uiCount: number
 }
 
 /** 跳转意图：带会话键，消费方复核后才执行。 */
@@ -46,8 +44,7 @@ function sameNavEntries(a: readonly ChatNavEntry[], b: readonly ChatNavEntry[]):
     if (
       left.id !== right.id ||
       left.label !== right.label ||
-      left.time !== right.time ||
-      left.uiCount !== right.uiCount
+      left.time !== right.time
     ) {
       return false
     }

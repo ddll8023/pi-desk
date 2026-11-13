@@ -19,7 +19,6 @@ import { judgeContinuation } from './continuation-signal'
 // 标准模式的待办清单与写操作门禁；快速会话不注册。
 import { createTodoListExtension } from './todo-list'
 import type { ImageAnnotationDocument } from '../shared/image-annotation'
-import { createGenuiExtension, GENUI_EXTENSION_NAME } from './genui/index'
 import { createBrowserExtension, BROWSER_EXTENSION_NAME } from './browser/index'
 import { MessageProjection } from './projection/message-projection'
 import { ActivityProjection, matchesActivityPrefix } from './projection/activity-projection'
@@ -1033,11 +1032,6 @@ export class SdkSessionRuntime {
               capability.mcpServers
             ))
           }), builtin: true, replaceable: true },
-          // 生成式 UI 是产品内置能力，与上述内置扩展同形态注册；工厂自身不抛异常。
-          // 用户关掉开关时直接不注册，而不是注册后再报错：这样模型完全看不到这几个工具。
-          ...(target.genui
-            ? [{ name: GENUI_EXTENSION_NAME, factory: createGenuiExtension(), builtin: true, replaceable: true }]
-            : []),
           // 内置浏览器自动化工具扩展
           ...(this.options.browserOperator
             ? [{

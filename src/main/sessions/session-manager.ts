@@ -15,8 +15,7 @@
  * 需显式中断确认），释放成功后才删文件；任一步失败都会保留会话原样，不产生半删状态。
  * 会话文件删除后，按界面偏好清理该会话独占且无未提交改动的任务工作树；清理失败不回滚删除，也不影响列表返回。
  * 有活动操作而重载请求未确认时直接拒绝，不自动中断、不排队、不重放已提交的内容。
- * 生成式 UI 开关在每次授权时读一次并随目标下发给宿主；读失败按开启处理，不让偏好故障阻断会话。
- * 执行模式同样在授权时读一次随目标下发，宿主据此裁剪 Skill 集合；读失败按标准模式处理。
+ * 执行模式在授权时读一次随目标下发，宿主据此裁剪 Skill 集合；读失败按标准模式处理。
  * 专家绑定只存标识：已存在的会话以持久绑定为准，新建时用打开请求里的值，宿主装载定义后才注入角色段。
  * IPC 契约与校验在 shared/session-api.ts。
  */
@@ -98,8 +97,6 @@ export interface SessionManagerOptions {
     workspaceOfRun(runId: number): string | null
     runOfSession(projectPath: string, sessionId: string): SessionRunSummary | null
   }
-  /** 生成式 UI 开关：由主进程读配置后交给宿主决定是否注册该内置扩展。 */
-  readonly readGenuiEnabled: () => Promise<boolean>
   /** 执行模式：由主进程读配置后交给宿主裁剪 Skill 集合，不改变任何授权规则。 */
   readonly readExecutionMode: () => Promise<ExecutionMode>
   /** 删除会话后是否清理该会话关联且无未提交改动的工作树；由界面偏好决定，读不到时按不清理处理。 */
@@ -183,7 +180,6 @@ export class SessionManager {
       const workspace = await this.options.workspaces.authorize(projectPath, workspaceId)
       await this.options.workspaces.bindSession(projectPath, identity?.sessionId ?? null, workspaceId)
       return { projectPath, workspaceId, sessionDir: getProjectSessionDir(projectPath), trusted: trust.decision === 'trusted',
-        genui: await this.genuiEnabled(),
         mode: await this.executionMode(),
         expertId: await this.expertOf(projectPath, identity?.sessionId ?? null, workspaceId),
         worktreePath: workspace.kind === 'task' ? workspace.rootPath : null,
@@ -207,18 +203,6 @@ export class SessionManager {
     return resolveSessionExpert({
       bindings: this.options.sessionExperts, projectPath, sessionId, requested: pending
     })
-  }
-
-  /**
-   * 读生成式 UI 开关；读失败按开启处理。偏好读不到不应让用户建不了会话，
-   * 也不能把一次瞬时 IO 故障变成「功能消失」。
-   */
-  private async genuiEnabled(): Promise<boolean> {
-    try {
-      return await this.options.readGenuiEnabled()
-    } catch {
-      return true
-    }
   }
 
   /**

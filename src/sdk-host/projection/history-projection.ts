@@ -4,7 +4,6 @@ import type { HistoryChunk, HistoryData, HistoryPage, HistoryQuery, ProjectionMe
 import { MessageProjection } from './message-projection'
 import { summarizeToolArguments } from './tool-projection'
 import { summarizeToolRequest, summarizeToolResult } from './tool-presentation'
-import { parseGenuiPayload } from '../../shared/genui-api'
 import { readImageAnnotationMessage } from '../../shared/image-annotation'
 import type { ImageAnnotationAttachment } from '../../shared/image-annotation'
 
@@ -230,15 +229,6 @@ export function readBranchHistory(branch: readonly SessionEntry[], query: Histor
           && originalContent[block.contentIndex]?.type === 'image' ? true : block.notice,
         truncated: chunks.some(chunk => chunk.entryId === entryId && chunk.contentIndex === block.contentIndex) })) }
   })
-  const latest = new Map<string, number>()
-  for (const entry of branch) {
-    const message = messageOf(entry)
-    const details = message && record(message.details) ? message.details : null
-    const ui = details ? parseGenuiPayload(details.ui) : null
-    if (ui) {
-      latest.set(ui.documentId, Math.max(latest.get(ui.documentId) ?? 0, ui.revision))
-    }
-  }
   const wanted = new Set(snapshot.tools.map(tool => tool.toolCallId))
   const argumentsById = new Map<string, { text: string; truncated: boolean;
     summary: ReturnType<typeof summarizeToolArguments>; request: ReturnType<typeof summarizeToolRequest> }>()
@@ -269,7 +259,6 @@ export function readBranchHistory(branch: readonly SessionEntry[], query: Histor
       ...(args ? { argsText: args.text, argsSummary: args.summary,
       argsTruncated: args.truncated } : {}),
       presentation: { request: args?.request ?? tool.presentation?.request ?? null,
-        result: resultsById.get(tool.toolCallId) ?? tool.presentation?.result ?? null },
-      ...(tool.ui ? { latestRevision: latest.get(tool.ui.documentId) ?? tool.ui.revision } : {}) }
+        result: resultsById.get(tool.toolCallId) ?? tool.presentation?.result ?? null } }
   }), chunks, before, next, turnId } satisfies HistoryPage
 }

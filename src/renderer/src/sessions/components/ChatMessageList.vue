@@ -3,7 +3,7 @@
      消息区：按投影渲染、粘底与对话内跳转；承接用户消息回退确认与修改提交，回退会新建会话（列表折叠为一条），项目文件不回退；回退将提示词回填输入框，图片及绑定说明恢复到独立资料区；修改重试在没能重发时交回修改后的提示词与原图片资料。
      每一轮的用户输入摘要与当前所在轮由这里发布给顶部栏的跳转列表，跳转意图也回到这里执行，滚动与折叠仍只有本组件一处权威。
      渲染与折叠都以轮为单位：当前轮与上一轮始终完整展开，更早的轮次只留用户输入、其后的 AI 回答与过程压成一行摘要（见 ChatTurnItem）；开合状态按会话保存，顶部开关控制全局默认。
-     卡片（思考、工具、技能、压缩摘要、旧版界面）的手动展开由子组件上报，收到后停止粘底：摘要行留在原处，内容从它下面长出来，只有外层滚动范围变大。
+     卡片（思考、工具、技能、压缩摘要）的手动展开由子组件上报，收到后停止粘底：摘要行留在原处，内容从它下面长出来，只有外层滚动范围变大。
      滚动位置仍只由本组件决定，子组件不持有滚动逻辑。 -->
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
@@ -105,7 +105,7 @@ function isTurnExpanded(turn: ChatTurnView, index: number): boolean {
 const navEntries = computed(() => turns.value.flatMap(turn => (
   turn.user === null
     ? []
-    : [{ id: turn.user.id, label: navLabel(turn.user), time: turn.user.time, uiCount: turn.uiCount }]
+    : [{ id: turn.user.id, label: navLabel(turn.user), time: turn.user.time }]
 )))
 const runtimeInfo = computed(() => (
   runtimeView.value.phase === 'ready' ? runtimeView.value.snapshot.info : null
@@ -625,53 +625,6 @@ function highlightJumpTarget(target: HTMLElement): void {
   }, JUMP_HIGHLIGHT_MS)
 }
 
-/**
- * 跳到某份界面的最新版本：被取代的旧版折叠行用它。
- *
- * 按「包含这个 documentId 且 revision 最大的那一轮」定位，而不是精确匹配 `supersededBy`：
- * 最高版本号可能来自已被截断的工具条目，对应的元素不一定在当前 DOM 里。
- * 目标优先取挂载门的 data 属性（未挂载时占位也在），找不到时退到该轮本身。
- */
-function jumpToGenuiVersion(documentId: string): void {
-  let best: { turn: ChatTurnView; messageId: string | null; revision: number } | null = null
-  for (const turn of turns.value) {
-    for (const message of [...(turn.user === null ? [] : [turn.user]), ...turn.responses]) {
-      for (const block of message.blocks) {
-        if (block.kind !== 'toolcall' || block.ui === null || block.ui.documentId !== documentId) continue
-        if (best !== null && block.ui.revision <= best.revision) continue
-        best = { turn, messageId: turn.user?.id ?? null, revision: block.ui.revision }
-      }
-    }
-  }
-  if (best === null) return
-  const target = best
-  const index = turns.value.indexOf(target.turn)
-  const locate = (): void => {
-    const body = content.value
-    if (body === null) return
-    const turnElement = body.querySelector<HTMLElement>(`.chat-turn[data-turn-key="${CSS.escape(target.turn.key)}"]`)
-    const candidates = turnElement?.querySelectorAll<HTMLElement>(`[data-genui-document-id="${CSS.escape(documentId)}"]`)
-    let anchor = turnElement
-    let anchorRevision = -1
-    for (const candidate of candidates ?? []) {
-      const revision = Number(candidate.dataset.genuiRevision ?? '')
-      if (!Number.isFinite(revision) || revision <= anchorRevision) continue
-      anchor = candidate
-      anchorRevision = revision
-    }
-    if (anchor === null || anchor === undefined) return
-    scrollToElement(anchor, target.messageId)
-    highlightJumpTarget(anchor)
-  }
-  // 目标轮被折叠时先展开再定位，否则跳过去只看得到用户输入。
-  if (!isTurnExpanded(target.turn, index)) {
-    sessionViewStore.setTurnExpansion(sessionViewStore.key, target.turn.key, true)
-    void nextTick(locate)
-    return
-  }
-  locate()
-}
-
 /** 定位当前投影里的用户消息；目标轮被折叠时先展开再定位。 */
 function jumpToMessage(messageId: string): void {
   const index = turns.value.findIndex(turn => turn.user?.id === messageId)
@@ -923,7 +876,6 @@ onBeforeUnmount(() => {
           @user-expand="pauseFollow"
           @rewind="requestRewind"
           @submit-edit="handleSubmitEdit"
-          @jump-latest="jumpToGenuiVersion"
         />
 
         <div v-if="turns.length === 0 && pendingPrompt === null" class="empty-state" role="status">

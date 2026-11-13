@@ -1,12 +1,10 @@
 <!-- 单条消息：按块展示正文、思考、工具卡、技能卡、压缩卡与计时（单条生成耗时与本轮响应耗时）与本次调用的 token 花销。
      纯过程消息（仅含工具调用或思考且无正文）自动绑定 .chat-message-process，消除多余外层边框与空旷间距，融入一体化执行流；
      过程块逐项展示：每段 Thinking 折叠成带思维图标与状态胶囊的轻量抽屉（生成中展开微光流动并跟随最新思考，结束后收起），正文按原位置展示并支持流式呼吸打字光标。
-     工具调用按块相邻关系归组：连续出现且都不是生成式界面的工具调用合成一个「执行记录」面板，面板内每条仍是一张独立折叠的 ToolCard；
-     单条工具不套面板，Thinking、正文与生成式界面都是分组分界，不会被归进工具面板。
-     交付了生成式界面的工具调用改渲染界面本身，不再套折叠卡；界面按可见性挂载：远离视口的界面只留一行占位，展开全部轮次时不把每份界面都常驻。
-     界面内的参数提交复用消息动作栏的禁用口径（运行中、未同步、正在发送等），不另做一套判断。用户消息下方使用细线图标操作栏（回退、复制、修改），AI 回复底部只保留整条回复的复制入口；回退与修改后的重新发送由父级执行。
+     工具调用按块相邻关系归组：连续出现的工具调用合成一个「执行记录」面板，面板内每条仍是一张独立折叠的 ToolCard；
+     单条工具不套面板，Thinking 与正文都是分组分界，不会被归进工具面板。
+     用户消息下方使用细线图标操作栏（回退、复制、修改），AI 回复底部只保留整条回复的复制入口；回退与修改后的重新发送由父级执行。
      早期轮次的整体收起由 ChatTurnItem 负责，这里只表达单条消息内部每项自己的开合；同一轮内的非首条 AI 消息用紧凑表头，不重复 π 标记与角色名。
-     被取代的旧版界面折叠成一行：整行点击跳转到新版（由消息列表定位），右侧小按钮展开查看旧版。
      卡片的手动展开只上报 `userExpand`：消息列表据此停止粘底，展开的内容从摘要行下面长出来而不是把摘要行顶走；收起不上报。 -->
 <script setup lang="ts">
 import { computed, onUnmounted, reactive, ref, useId, watch } from 'vue'
@@ -23,8 +21,6 @@ import { toolGroupStats } from '../tool-summary'
 import MarkdownContent from '../../ui/MarkdownContent.vue'
 import ToolCard from './ToolCard.vue'
 import SubAgentCard from './SubAgentCard.vue'
-import GenuiMountGate from '../../genui/components/GenuiMountGate.vue'
-import UiDocument from '../../genui/components/UiDocument.vue'
 import AppButton from '../../ui/AppButton.vue'
 import ImageAnnotationCanvas from './ImageAnnotationCanvas.vue'
 
@@ -49,8 +45,6 @@ const emit = defineEmits<{
   submitEdit: [messageId: string, editedText: string]
   loadChunk: [chunk: HistoryChunk]
   loadMore: []
-  /** 旧版折叠行跳转到同一界面的最新版；定位由消息列表负责。 */
-  jumpLatest: [documentId: string]
   /** 某张卡片被手动展开；滚动位置与跟随由消息列表处理，本组件不持有滚动逻辑。 */
   userExpand: []
 }>()
@@ -142,24 +136,11 @@ const thinkingOverrides = reactive(new Map<string, boolean>())
 /** 技能卡初始折叠，流式更新不改变手动选择。 */
 const skillOverrides = reactive(new Map<string, boolean>())
 
-/** 被取代版本的只读展开状态；键为块 key，默认收起。跳到新版不影响它。 */
-const readonlyOpen = reactive(new Set<string>())
-
-/** 切换某个历史界面的展开状态；只影响查看，不改版本与参数。展开时上报，让摘要行留在原处。 */
-function toggleReadonly(key: string): void {
-  if (readonlyOpen.has(key)) {
-    readonlyOpen.delete(key)
-    return
-  }
-  readonlyOpen.add(key)
-  emit('userExpand')
-}
-
 const isUser = computed(() => props.message.role === 'user')
 
 /**
  * 一条展示行：单个块，或一组相邻的工具调用。
- * 归组只发生在连续且都没有生成式界面的工具调用之间；Thinking、正文与生成式界面都是分界，
+ * 归组只发生在连续的工具调用之间；Thinking 与正文都是分界，
  * 因此收起或展开一个工具不会连带收起任何其它内容。
  */
 type DisplayRow =
@@ -188,7 +169,7 @@ const displayRows = computed<readonly DisplayRow[]>(() => {
     group = []
   }
   for (const block of props.message.blocks) {
-    if (block.kind === 'toolcall' && block.ui === null) {
+    if (block.kind === 'toolcall') {
       group.push(block)
       continue
     }
@@ -204,11 +185,9 @@ function groupStats(blocks: readonly ChatToolBlock[]): string {
   return toolGroupStats(blocks.map(block => block.execution?.phase ?? null), blocks.map(block => block.toolName))
 }
 
-/** 只标记渲染入口，不改变界面版本、会话身份或消息的块顺序。 */
-const hasGenui = computed(() => props.message.blocks.some(block => block.kind === 'toolcall' && block.ui !== null))
-/** 纯过程消息：既不是用户消息也不是压缩记录，并且只有工具调用或思考，没有非空正文文本和生成式界面。 */
+/** 纯过程消息：既不是用户消息也不是压缩记录，并且只有工具调用或思考，没有非空正文文本。 */
 const hasContentText = computed(() => props.message.blocks.some(block => block.kind === 'text' && block.text.trim() !== ''))
-const isProcessOnly = computed(() => !isUser.value && !isCompaction.value && !hasGenui.value && !hasContentText.value)
+const isProcessOnly = computed(() => !isUser.value && !isCompaction.value && !hasContentText.value)
 /** 压缩记录不是对话消息：不展示生成计时、用户操作栏与复制入口。 */
 const isCompaction = computed(() => props.message.role === 'compaction')
 const compaction = computed(() => props.message.compaction)
@@ -464,7 +443,7 @@ function onEditKeydown(event: KeyboardEvent): void {
 <template>
   <article class="chat-message" :class="[
     isUser ? 'chat-message-user' : isCompaction ? 'chat-message-compaction' : 'chat-message-assistant',
-    { 'chat-message-has-genui': hasGenui, 'chat-message-process': isProcessOnly }
+    { 'chat-message-process': isProcessOnly }
   ]">
     <header class="chat-meta" :class="{ 'chat-meta-continued': compactHeader === true, 'chat-meta-process': isProcessOnly }">
       <span v-if="!isUser && !isCompaction && compactHeader !== true" class="chat-role-mark" aria-hidden="true">π</span>
@@ -528,7 +507,7 @@ function onEditKeydown(event: KeyboardEvent): void {
     </template>
 
     <!-- 响应过程逐项展示：每段思考各自折叠成一行，正文按原位置排在各块之间；
-         连续且非生成式界面的工具调用归入一个执行记录面板，单条工具仍是一张独立折叠卡。 -->
+         连续的工具调用归入一个执行记录面板，单条工具仍是一张独立折叠卡。 -->
     <template v-for="row in displayRows" :key="row.kind === 'tools' ? row.key : row.block.key">
       <!-- 工具组：面板只提供归组与统计，组内每条仍是一张独立折叠的 ToolCard。 -->
       <section v-if="row.kind === 'tools'" class="execution-panel" aria-label="工具执行记录">
@@ -600,57 +579,10 @@ function onEditKeydown(event: KeyboardEvent): void {
             <p v-if="row.block.truncated && chunksFor(row.block).length === 0" class="tool-note">此内容超出展示上限，已截断。</p>
           </div>
         </details>
-        <!-- 交付了生成式界面的工具调用直接渲染界面，不再套一层折叠卡；其余工具仍走通用 ToolCard。
-             同一份界面只有最高版本可交互：被取代的版本折叠成一行只读记录，展开后控件与提交都禁用。
-             按 documentId 作 key：文档被替换时整个界面连同内存参数一起重建。
-             界面由 GenuiMountGate 按可见性挂载：长会话里展开全部轮次时，不把每份界面的组件都常驻。
-             旧版折叠行的整行点击是「跳到新版」，右侧小按钮才是查看旧版，两种意图不混用。 -->
+        <!-- 交付了子任务的工具调用直接渲染子代理卡片；其余工具仍走通用 ToolCard。 -->
         <template v-else-if="row.block.kind === 'toolcall'">
-          <!-- 被取代的旧版折叠成一行：整行是跳转到新版的按钮，右侧单独切换查看旧版。
-               两者分成两个按钮而不是套在 details 的 summary 里：点击意图不同，嵌套交互控件也不合语义。 -->
-          <template v-if="row.block.ui !== null && row.block.supersededBy !== null">
-            <div class="genui-history">
-              <button
-                type="button"
-                class="genui-history-main"
-                :title="`跳到《${row.block.ui.document.title}》第 ${row.block.supersededBy} 版`"
-                @click="emit('jumpLatest', row.block.ui.documentId)"
-              >
-                <span class="genui-history-label">历史界面</span>
-                <span class="genui-history-title">{{ row.block.ui.document.title }}</span>
-                <span class="genui-history-version">已被第 {{ row.block.supersededBy }} 版取代 · 跳到新版</span>
-              </button>
-              <button
-                type="button"
-                class="genui-history-toggle"
-                :aria-expanded="readonlyOpen.has(row.block.key)"
-                @click="toggleReadonly(row.block.key)"
-              >
-                {{ readonlyOpen.has(row.block.key) ? '收起' : '查看旧版' }}
-              </button>
-            </div>
-            <div v-if="readonlyOpen.has(row.block.key)" class="genui-history-body">
-              <GenuiMountGate :payload="row.block.ui">
-                <UiDocument
-                  :key="row.block.ui.documentId"
-                  :payload="row.block.ui"
-                  :submit-disabled="actionsDisabled === true"
-                  :submit-disabled-reason="disabledReason ?? null"
-                  :superseded-by="row.block.supersededBy"
-                />
-              </GenuiMountGate>
-            </div>
-          </template>
-          <GenuiMountGate v-else-if="row.block.ui !== null" :payload="row.block.ui">
-            <UiDocument
-              :key="row.block.ui.documentId"
-              :payload="row.block.ui"
-              :submit-disabled="actionsDisabled === true"
-              :submit-disabled-reason="disabledReason ?? null"
-            />
-          </GenuiMountGate>
           <SubAgentCard
-            v-else-if="(row.block.execution?.subAgents.length ?? 0) > 0"
+            v-if="(row.block.execution?.subAgents.length ?? 0) > 0"
             :views="row.block.execution?.subAgents ?? []"
             @user-expand="emit('userExpand')"
           />

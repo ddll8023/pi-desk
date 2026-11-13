@@ -9,7 +9,6 @@
  * 这里只管生命周期、补读与打开意图的提交，不持有布局状态，也不渲染任何内容。
  */
 import { onMounted, onUnmounted, watch } from 'vue'
-import { flushGenuiParamPersistence, initializeGenuiParamPersistence } from '../genui/param-persistence'
 import { useDesktopStore } from './stores/desktop'
 import { useExtensionUiStore } from '../sessions/stores/extension-ui'
 import { usePreferencesStore } from '../preferences/stores/preferences'
@@ -87,11 +86,6 @@ export function useAppStartup(): void {
     }
   )
 
-  /** 页面关闭或重载前把待写的参数落盘；`pagehide` 是卸载阶段还能发起 IPC 的时机。 */
-  function onPageHide(): void {
-    void flushGenuiParamPersistence()
-  }
-
   onMounted(() => {
     void desktopStore.initialize()
     void extensionStore.initialize()
@@ -120,13 +114,9 @@ export function useAppStartup(): void {
       if (intent !== null) void sessionStore.openIntent(intent)
     }, { flush: 'post' })
     void updatesStore.initialize()
-    // 界面参数的本机记录：只做冷启动补齐，晚到也不会盖掉用户刚调的取值。
-    void initializeGenuiParamPersistence()
-    window.addEventListener('pagehide', onPageHide)
   })
 
   onUnmounted(() => {
-    window.removeEventListener('pagehide', onPageHide)
     extensionStore.dispose()
     resourceStore.dispose()
     runtimeStore.dispose()

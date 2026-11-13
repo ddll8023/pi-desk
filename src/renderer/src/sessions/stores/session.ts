@@ -17,7 +17,6 @@ import type { SessionError, SessionExpertCatalog, SessionList, SessionSummary } 
 import type { ProjectError } from '../../../../shared/project-api'
 import { useTrustStore } from '../../projects/stores/trust'
 import { useProjectStore } from '../../projects/stores/project'
-import { usePreferencesStore } from '../../preferences/stores/preferences'
 import { useRuntimeStore } from './runtime'
 import { listSessions, openSession, reloadSession, deleteSession, readSessionFirstPage, listSessionExperts, setSessionExpert } from '../services/session'
 import { useWorkspaceTabsStore } from '../../workspace/stores/workspace-tabs'
@@ -578,10 +577,6 @@ export const useSessionStore = defineStore('session', () => {
         pendingReload.value = false
         awaitingInterrupt.value = false
         useTaskWorkspacesStore().accept(result.data.workspace)
-        // 会话已重建，它读到的就是已保存的开关值：在这里收敛「待重新加载」状态。
-        // 模型页、资源页与设置页都走同一个入口，不靠调用方各自标记。
-        const preferencesStore = usePreferencesStore()
-        preferencesStore.markGenuiApplied(preferencesStore.genuiSavedEnabled)
         reloaded = true
         return
       }

@@ -1,9 +1,9 @@
 /** 界面偏好、快捷输入与快捷命令：preload 的 preferences 域，只经固定 channel 与主进程通信，载荷与响应在此重建与校验。 */
 
 import { ipcRenderer } from 'electron'
-import { PREFERENCES_GET_CHANNEL, PREFERENCES_SET_UI_CHANNEL, PREFERENCES_GET_MODEL_DISPLAY_CHANNEL, PREFERENCES_SET_MODEL_DISPLAY_CHANNEL, PREFERENCES_GET_QUICK_SEND_CHANNEL, PREFERENCES_SET_QUICK_SEND_CHANNEL, PREFERENCES_GET_AUTO_UPDATE_CHANNEL, PREFERENCES_SET_AUTO_UPDATE_CHANNEL, PREFERENCES_GET_GENUI_CHANNEL, PREFERENCES_SET_GENUI_CHANNEL, PREFERENCES_GET_EXECUTION_MODE_CHANNEL, PREFERENCES_SET_EXECUTION_MODE_CHANNEL, isPreferencesResult, isModelDisplayResult, isQuickSendResult, isAutoUpdateResult, isGenuiResult, isExecutionModeResult } from '../shared/preferences-api'
+import { PREFERENCES_GET_CHANNEL, PREFERENCES_SET_UI_CHANNEL, PREFERENCES_GET_MODEL_DISPLAY_CHANNEL, PREFERENCES_SET_MODEL_DISPLAY_CHANNEL, PREFERENCES_GET_QUICK_SEND_CHANNEL, PREFERENCES_SET_QUICK_SEND_CHANNEL, PREFERENCES_GET_AUTO_UPDATE_CHANNEL, PREFERENCES_SET_AUTO_UPDATE_CHANNEL, PREFERENCES_GET_EXECUTION_MODE_CHANNEL, PREFERENCES_SET_EXECUTION_MODE_CHANNEL, isPreferencesResult, isModelDisplayResult, isQuickSendResult, isAutoUpdateResult, isExecutionModeResult } from '../shared/preferences-api'
 import { QUICK_COMMANDS_GET_CHANNEL, QUICK_COMMANDS_SET_CHANNEL, isQuickCommandsResult } from '../shared/quick-commands-api'
-import type { AutoUpdatePreference, AutoUpdateResult, ExecutionModePreference, ExecutionModeResult, GenuiPreference, GenuiResult, ModelDisplayPreference, ModelDisplayResult, PreferencesResult, QuickSendPreference, QuickSendResult, UiPreferences } from '../shared/preferences-api'
+import type { AutoUpdatePreference, AutoUpdateResult, ExecutionModePreference, ExecutionModeResult, ModelDisplayPreference, ModelDisplayResult, PreferencesResult, QuickSendPreference, QuickSendResult, UiPreferences } from '../shared/preferences-api'
 import type { QuickCommand, QuickCommandsPreference, QuickCommandsResult } from '../shared/quick-commands-api'
 import type { PreferencesApi } from '../shared/preferences-api'
 import type { QuickCommandsApi } from '../shared/quick-commands-api'
@@ -13,7 +13,6 @@ const INVALID_MODEL_DISPLAY_RESPONSE = '桌面接口返回了无法识别的对�
 const INVALID_QUICK_SEND_RESPONSE = '桌面接口返回了无法识别的快捷发送短语。'
 const INVALID_QUICK_COMMANDS_RESPONSE = '桌面接口返回了无法识别的快捷命令清单。'
 const INVALID_AUTO_UPDATE_RESPONSE = '桌面接口返回了无法识别的扩展自动更新开关。'
-const INVALID_GENUI_RESPONSE = '桌面接口返回了无法识别的生成式 UI 开关。'
 const INVALID_EXECUTION_MODE_RESPONSE = '桌面接口返回了无法识别的执行模式。'
 
 function invalidPreferencesResponse(): PreferencesResult {
@@ -30,10 +29,6 @@ function invalidQuickSendResponse(): QuickSendResult {
 
 function invalidAutoUpdateResponse(): AutoUpdateResult {
   return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_AUTO_UPDATE_RESPONSE } }
-}
-
-function invalidGenuiResponse(): GenuiResult {
-  return { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_GENUI_RESPONSE } }
 }
 
 function invalidExecutionModeResponse(): ExecutionModeResult {
@@ -107,18 +102,6 @@ export const preferencesApi = {
     const payload: AutoUpdatePreference = { enabled: preference.enabled === true }
     const response: unknown = await ipcRenderer.invoke(PREFERENCES_SET_AUTO_UPDATE_CHANNEL, payload)
     return isAutoUpdateResult(response) ? response : invalidAutoUpdateResponse()
-  },
-
-  async getGenui(): Promise<GenuiResult> {
-    const response: unknown = await ipcRenderer.invoke(PREFERENCES_GET_GENUI_CHANNEL)
-    return isGenuiResult(response) ? response : invalidGenuiResponse()
-  },
-
-  async setGenui(preference: GenuiPreference): Promise<GenuiResult> {
-    // 只搬运已声明的字段，不把页面传入的整个对象转交给主进程。
-    const payload: GenuiPreference = { enabled: preference.enabled === true }
-    const response: unknown = await ipcRenderer.invoke(PREFERENCES_SET_GENUI_CHANNEL, payload)
-    return isGenuiResult(response) ? response : invalidGenuiResponse()
   },
 
   async getExecutionMode(): Promise<ExecutionModeResult> {

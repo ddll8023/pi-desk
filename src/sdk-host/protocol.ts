@@ -55,8 +55,6 @@ export interface SdkSessionTarget {
   readonly sessionFile: string | null
   readonly fileStamp: string | null
   readonly trusted: boolean
-  /** 是否注册生成式 UI 内置扩展；由主进程按用户开关给出，宿主只负责据此决定注册与否。 */
-  readonly genui: boolean
   /**
    * 执行模式；决定 Skill 集合、记忆注入与记忆工具集，以及是否注册待办门禁。
    * 不改变文件清单审批与运行授权规则。
@@ -74,7 +72,7 @@ export interface SdkSessionTarget {
 /**
  * 会话日志读取目标：主进程已复核归属与文件戳的会话文件，以及要读的历史查询。
  * 日志读取只解析出当前分支的历史（页、轮次或原文续段），不建立 AgentSession，也不加载技能、扩展与 MCP，
- * 因此不携带信任与生成式 UI 开关；它不能用来提交任何写操作。
+ * 因此不携带信任开关；它不能用来提交任何写操作。
  */
 export interface SdkLogTarget {
   readonly projectPath: string
@@ -318,7 +316,7 @@ export function isSdkSessionReference(value: unknown): value is SdkSessionRefere
 /** 新建目标与恢复目标的文件、身份和读取标识必须一致存在；可选的工作树隔离路径必须合法。 */
 export function isSdkSessionTarget(value: unknown): value is SdkSessionTarget {
   if (!isRecord(value) || !isPath(value.projectPath) || !isPath(value.sessionDir)
-    || typeof value.trusted !== 'boolean' || typeof value.genui !== 'boolean'
+    || typeof value.trusted !== 'boolean'
     || !isExecutionMode(value.mode)) return false
   const targetValid = value.sessionFile === null
     ? value.sessionId === null && value.fileStamp === null
@@ -326,9 +324,9 @@ export function isSdkSessionTarget(value: unknown): value is SdkSessionTarget {
   const worktreeValid = value.worktreePath === undefined || value.worktreePath === null || isPath(value.worktreePath)
   const expertValid = value.expertId === null || isExpertId(value.expertId)
   return targetValid && worktreeValid && expertValid && isWorkspaceId(value.workspaceId)
-    && hasKeys(value, ['workspaceId', 'projectPath', 'sessionDir', 'sessionId', 'sessionFile', 'fileStamp', 'trusted', 'genui', 'mode', 'expertId', 'worktreePath'])
+    && hasKeys(value, ['workspaceId', 'projectPath', 'sessionDir', 'sessionId', 'sessionFile', 'fileStamp', 'trusted', 'mode', 'expertId', 'worktreePath'])
 }
-/** 日志目标只接受绝对路径、会话身份、文件戳与已声明的历史查询；不带信任或功能开关，避免被当成绑定目标。 */
+/** 日志目标只接受绝对路径、会话身份、文件戳与已声明的历史查询；不带信任状态，避免被当成绑定目标。 */
 export function isSdkLogTarget(value: unknown): value is SdkLogTarget {
   if (!isRecord(value) || !isPath(value.projectPath) || !isPath(value.sessionFile)) return false
   return isIdentifier(value.sessionId) && isIdentifier(value.fileStamp) && isHistoryQuery(value.query)

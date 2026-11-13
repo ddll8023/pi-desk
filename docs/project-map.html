@@ -351,39 +351,6 @@
         ]
       },
       {
-        "id": "genui",
-        "name": "生成式界面",
-        "groupId": "chat",
-        "summary": "内置声明式界面工具、文档修改与检索、工具结果载荷、Vue 原生渲染，以及可交互参数的页面状态与本机留档。",
-        "features": [
-          "界面交付、patch、目录与检查工具注册",
-          "节点、图表、图解与参数的共享契约校验",
-          "聊天消息内的生成式渲染分支",
-          "参数在页面内更新并显式提交为真实用户消息",
-          "本机旁路参数文件与清除入口"
-        ],
-        "tags": ["SDK 扩展", "Vue 渲染", "共享契约"],
-        "entries": [
-          {"kind": "关键实现", "label": "内置扩展工厂", "path": "src/sdk-host/genui/index.ts"},
-          {"kind": "关键实现", "label": "工具注册与结果", "path": "src/sdk-host/genui/tools.ts"},
-          {"kind": "关键实现", "label": "文档解析与校验", "path": "src/shared/genui/parse.ts"},
-          {"kind": "界面入口", "label": "文档容器", "path": "src/renderer/src/genui/components/UiDocument.vue"},
-          {"kind": "关键实现", "label": "参数运行期真源", "path": "src/renderer/src/genui/param-state.ts"},
-          {"kind": "关键实现", "label": "参数旁路存储", "path": "src/main/genui/genui-param-store.ts"}
-        ],
-        "resources": [
-          {"name": "生成式界面参数", "owner": "GenuiParamStore", "lifecycle": "userData/genui-params.json 按文档合并写回，不写回会话正文"}
-        ],
-        "constraints": [
-          "不执行模型生成的任意 HTML、CSS 或脚本",
-          "清除本机参数不删除会话中的工具结果",
-          "能力开关与已建立会话的实际装载状态分开"
-        ],
-        "links": [
-          {"label": "模块文档：生成式界面", "href": "modules/genui.md"}
-        ]
-      },
-      {
         "id": "lan-remote",
         "name": "手机访问",
         "groupId": "setting",
@@ -741,8 +708,7 @@
         ],
         "constraints": [
           "设置页导航不是设置值存储",
-          "配置不可写时不创建另一套本地存储兜底",
-          "生成式开关不意味着自动重建全部会话"
+          "配置不可写时不创建另一套本地存储兜底"
         ],
         "links": [
           {"label": "模块文档：偏好", "href": "modules/preferences.md"},
@@ -827,9 +793,8 @@
       {"id": "r-pr-terminal-close", "from": "projects-trust", "to": "terminal-commands", "label": "项目移除后关闭该项目终端", "kind": "call"},
       {"id": "r-sc-model-candidates", "from": "sessions-chat", "to": "providers-auth", "label": "读取模型候选、默认模型与 Codex、OpenCode Go 账户额度", "kind": "read"},
       {"id": "r-sc-resource-completion", "from": "sessions-chat", "to": "resources-mcp", "label": "读取技能与命令补全", "kind": "read"},
-      {"id": "r-sc-genui-payload", "from": "sessions-chat", "to": "genui", "label": "分发生成式界面载荷", "kind": "compose"},
       {"id": "r-sc-subagent-delegate", "from": "sessions-chat", "to": "sub-agent", "label": "调用委派工具与下发取消请求", "kind": "call"},
-      {"id": "r-subagent-sc-projection", "from": "sub-agent", "to": "sessions-chat", "label": "回传执行快照与用量", "kind": "compose"},      {"id": "r-genui-session-tools", "from": "genui", "to": "sessions-chat", "label": "注册内置工具并回传结果", "kind": "compose"},
+      {"id": "r-subagent-sc-projection", "from": "sub-agent", "to": "sessions-chat", "label": "回传执行快照与用量", "kind": "compose"},
       {"id": "r-sc-file-candidates", "from": "sessions-chat", "to": "files-editor", "label": "取文件引用候选", "kind": "read"},
       {"id": "r-sc-quick-send", "from": "sessions-chat", "to": "preferences", "label": "读取快捷输入短语", "kind": "read"},
       {"id": "r-sc-sg-extension", "from": "sessions-chat", "to": "skill-guard", "label": "装配宿主门禁并承接选择工具卡片", "kind": "compose"},
@@ -850,7 +815,6 @@
       {"id": "r-up-project-ext", "from": "updates-runtime", "to": "projects-trust", "label": "读取当前项目扩展声明", "kind": "read"},
       {"id": "r-up-auto-switch", "from": "updates-runtime", "to": "preferences", "label": "消费扩展自动更新开关", "kind": "read"},
       {"id": "r-pf-shell-layout", "from": "preferences", "to": "app-shell", "label": "布局值由外壳消费", "kind": "call"},
-      {"id": "r-genui-param-switch", "from": "genui", "to": "preferences", "label": "读写生成式开关", "kind": "write"},
       {"id": "r-mem-shell-settings", "from": "memory", "to": "app-shell", "label": "设置页承载开关、运行环境与库创建", "kind": "compose"},
       {"id": "r-mem-host-push", "from": "memory", "to": "sessions-chat", "label": "向已就绪宿主推送受管配置", "kind": "call"},
       {"id": "r-lr-shell-settings", "from": "lan-remote", "to": "app-shell", "label": "设置页承载启停与设备管理", "kind": "compose"},
@@ -865,7 +829,7 @@
           "name": "Electron 主进程",
           "kind": "常驻进程",
           "summary": "应用级配置、IPC、安全边界与退出编排的所有者；启动时按固定顺序注册各能力通道。",
-          "contains": ["app-shell", "projects-trust", "workspace-tabs", "sessions-chat", "files-editor", "git", "terminal-commands", "providers-auth", "resources-mcp", "updates-runtime", "preferences", "genui", "memory", "lan-remote"],
+          "contains": ["app-shell", "projects-trust", "workspace-tabs", "sessions-chat", "files-editor", "git", "terminal-commands", "providers-auth", "resources-mcp", "updates-runtime", "preferences", "memory", "lan-remote"],
           "entries": [
             {"kind": "进程入口", "label": "组合根", "path": "src/main/index.ts"},
             {"kind": "关键实现", "label": "业务实例唯一装配处", "path": "src/main/services.ts"},
@@ -907,7 +871,7 @@
           "name": "Vue 页面",
           "kind": "常驻进程",
           "summary": "保存展示副本、局部编辑与阅读状态；不直接持有系统进程，也不直接调用 Electron。",
-          "contains": ["app-shell", "workspace-tabs", "sessions-chat", "files-editor", "git", "terminal-commands", "providers-auth", "resources-mcp", "updates-runtime", "preferences", "genui", "memory", "lan-remote"],
+          "contains": ["app-shell", "workspace-tabs", "sessions-chat", "files-editor", "git", "terminal-commands", "providers-auth", "resources-mcp", "updates-runtime", "preferences", "memory", "lan-remote"],
           "entries": [
             {"kind": "页面入口", "label": "Vue 挂载", "path": "src/renderer/src/main.ts"},
             {"kind": "页面入口", "label": "组合根", "path": "src/renderer/src/App.vue"}
@@ -928,7 +892,7 @@
           "name": "SDK 宿主",
           "kind": "受管进程",
           "summary": "utilityProcess 承载官方 SDK 会话，SDK 事件与历史记录通过有界投影送达页面。",
-          "contains": ["sessions-chat", "sub-agent", "genui", "memory", "skill-guard"],
+          "contains": ["sessions-chat", "sub-agent", "memory", "skill-guard"],
           "entries": [
             {"kind": "进程入口", "label": "宿主入口", "path": "src/sdk-host/index.ts"},
             {"kind": "关键实现", "label": "会话运行", "path": "src/sdk-host/session-runtime.ts"},
@@ -1133,12 +1097,12 @@
         "name": "发送消息",
         "summary": "页面立即展示固定输入的本地待发送消息，后台就绪后提交，宿主执行并把 SDK 事件投影回页面。",
         "note": "本地待发送、SDK 受理与正式投影到达是不同阶段；普通消息由正式投影接替。任务启动口令作为已处理命令交回，不等待一条同名普通用户消息，handled 不表示没有执行。失败按原归属恢复输入，页面仍按代际与序号校验增量。",
-        "relationIds": ["r-wt-open-intent", "r-sc-project-guard", "r-genui-session-tools"],
+        "relationIds": ["r-wt-open-intent", "r-sc-project-guard"],
         "steps": [
           {"title": "固定输入并立即展示", "description": "输入坞固定本次提示词、图片及绑定标注，清空本次输入并按原标签显示本地待发送消息；后续编辑不混入本次提交，目标未就绪时先走会话打开链。", "moduleIds": ["sessions-chat", "workspace-tabs"]},
           {"title": "提交 Runtime 请求", "description": "目标就绪且投影同步后，Runtime 服务经桥接把运行实例、绑定代际与固定输入交给主进程，页面不自行决定授权目标。", "moduleIds": ["sessions-chat"]},
           {"title": "定位宿主并执行", "description": "主进程复核登记项目与信任，注册表决定复用、切前台或建立宿主；宿主准备会话后调用官方 SDK，图片说明作为本轮独立附属消息提供，不拼入提示词或命令参数。", "moduleIds": ["projects-trust", "sessions-chat"]},
-          {"title": "生成有界投影", "description": "宿主把 SDK 事件转换为消息、工具、历史与活动投影，将标注附属资料关联回所属用户图片；生成式界面载荷随工具结果一并识别。", "moduleIds": ["sessions-chat", "genui"]},
+          {"title": "生成有界投影", "description": "宿主把 SDK 事件转换为消息、工具、历史与活动投影，将标注附属资料关联回所属用户图片。", "moduleIds": ["sessions-chat"]},
           {"title": "页面应用增量", "description": "页面校验代际与序号后应用增量，正式用户消息接替本地待发送展示；切回已缓存实例时直接复用分片。", "moduleIds": ["sessions-chat", "workspace-tabs"]}
         ]
       },
@@ -1182,20 +1146,6 @@
           {"title": "辅助进程完成认证", "description": "辅助进程调用官方 SDK，提示与状态回传，密钥与验证码不进入页面状态快照。", "moduleIds": ["providers-auth"]},
           {"title": "切换当前会话模型", "description": "选择器按当前对话实际绑定状态决定操作目标，命令经主进程送到已绑定会话。", "moduleIds": ["providers-auth", "sessions-chat"]},
           {"title": "保存默认模型", "description": "默认模型定点写入 Pi settings.json，供新会话预读；受管运行时与 SDK 加载由更新模块负责。", "moduleIds": ["providers-auth", "updates-runtime"]}
-        ]
-      },
-      {
-        "id": "genui-deliver",
-        "name": "生成式界面交付与参数提交",
-        "summary": "模型交付声明式文档，经工具结果进入会话投影并在聊天内渲染；参数变动本地生效，显式提交才成为真实用户消息。",
-        "note": "本机参数是独立旁路，不写回会话正文；清除本机参数不删除会话中的工具结果。",
-        "relationIds": ["r-genui-session-tools", "r-sc-genui-payload"],
-        "steps": [
-          {"title": "交付文档", "description": "模型经内置工具交付结构化文档，共享契约校验形态、版本与上限。", "moduleIds": ["genui", "sessions-chat"]},
-          {"title": "进入会话投影", "description": "工具结果进入投影，聊天消息选择生成式渲染分支，节点组件只实现受支持的声明。", "moduleIds": ["sessions-chat", "genui"]},
-          {"title": "本机调节参数", "description": "参数变动先更新运行期真源，在本地完成派生展示，不发起网络或会话请求。", "moduleIds": ["genui"]},
-          {"title": "提交为真实消息", "description": "显式提交经会话链发出真实用户消息，回到模型输入。", "moduleIds": ["genui", "sessions-chat"]},
-          {"title": "旁路留档", "description": "参数按文档合并写回 userData/genui-params.json；冷启动只补尚未被用户新选择替代的记录。", "moduleIds": ["genui"]}
         ]
       },
       {

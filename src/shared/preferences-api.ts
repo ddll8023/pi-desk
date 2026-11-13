@@ -1,4 +1,4 @@
-/** 定义界面偏好（含文件排除规则、显隐模式与 Git 清理策略）、对话页模型展示偏好、快捷发送短语、扩展自动更新开关、生成式 UI 开关与执行模式的受限 IPC；窗口状态由主进程独占，不经过 IPC。 */
+/** 定义界面偏好（含文件排除规则、显隐模式与 Git 清理策略）、对话页模型展示偏好、快捷发送短语、扩展自动更新开关与执行模式的受限 IPC；窗口状态由主进程独占，不经过 IPC。 */
 import type { DesktopErrorCode } from './desktop-api'
 import type { ModelIdentity } from './runtime-api'
 import { isModelIdentity } from './runtime-api'
@@ -11,8 +11,6 @@ export const PREFERENCES_GET_QUICK_SEND_CHANNEL = 'desktop:preferences-get-quick
 export const PREFERENCES_SET_QUICK_SEND_CHANNEL = 'desktop:preferences-set-quick-send'
 export const PREFERENCES_GET_AUTO_UPDATE_CHANNEL = 'desktop:preferences-get-auto-update'
 export const PREFERENCES_SET_AUTO_UPDATE_CHANNEL = 'desktop:preferences-set-auto-update'
-export const PREFERENCES_GET_GENUI_CHANNEL = 'desktop:preferences-get-genui'
-export const PREFERENCES_SET_GENUI_CHANNEL = 'desktop:preferences-set-genui'
 export const PREFERENCES_GET_EXECUTION_MODE_CHANNEL = 'desktop:preferences-get-execution-mode'
 export const PREFERENCES_SET_EXECUTION_MODE_CHANNEL = 'desktop:preferences-set-execution-mode'
 
@@ -209,19 +207,6 @@ export type AutoUpdateResult =
   | { readonly ok: false; readonly error: PreferencesError }
 
 /**
- * 生成式 UI 开关：关闭后 SDK 宿主不再注册 ui_render / ui_patch / ui_catalog / ui_inspect，
- * 模型也就看不到这项能力。默认开：它是产品内置特性，不需要用户先发现再开启。
- * 开关只影响会话创建期，改动要重载资源后才生效；历史会话里已交付的界面仍照常渲染。
- */
-export interface GenuiPreference {
-  readonly enabled: boolean
-}
-
-export type GenuiResult =
-  | { readonly ok: true; readonly data: GenuiPreference }
-  | { readonly ok: false; readonly error: PreferencesError }
-
-/**
  * 执行模式：决定新建会话里加载哪些规范 Skill，以及是否要求先给出方案再动手。
  * 它只收缩能力集与讨论环节，不改变文件改动清单的审批与运行、测试授权——两种模式受同一套授权规则约束。
  * 默认标准：模式改变的是 Agent 的行为范围，默认不替用户收紧。
@@ -263,10 +248,6 @@ export interface PreferencesApi {
   readonly getAutoUpdate: () => Promise<AutoUpdateResult>
   /** 保存扩展自动更新开关；只改本应用的行为，不修改 Pi 配置。 */
   readonly setAutoUpdate: (preference: AutoUpdatePreference) => Promise<AutoUpdateResult>
-  /** 读取生成式 UI 开关；配置缺失或非法时主进程返回开启。 */
-  readonly getGenui: () => Promise<GenuiResult>
-  /** 保存生成式 UI 开关；只改本应用是否注册这项内置能力，不修改 Pi 配置。 */
-  readonly setGenui: (preference: GenuiPreference) => Promise<GenuiResult>
   /** 读取执行模式；配置缺失或非法时主进程返回标准模式。 */
   readonly getExecutionMode: () => Promise<ExecutionModeResult>
   /** 保存执行模式；只影响新建会话加载的 Skill 集合，不修改 Pi 配置。 */
@@ -352,13 +333,6 @@ export function isAutoUpdateResult(value: unknown): value is AutoUpdateResult {
     && PREFERENCES_ERROR_CODES.includes(value.error.code)
 }
 
-/** 生成式 UI 开关的请求形状校验：只允许 `enabled` 一个布尔字段。 */
-export function isGenuiPreference(value: unknown): value is GenuiPreference {
-  if (!isRecord(value)) return false
-  if (!Object.keys(value).every((key) => key === 'enabled')) return false
-  return typeof value.enabled === 'boolean'
-}
-
 /** 执行模式的请求形状校验：只允许 `mode` 一个字段，且取值必须是已声明的两档之一。 */
 export function isExecutionModePreference(value: unknown): value is ExecutionModePreference {
   if (!isRecord(value)) return false
@@ -370,16 +344,6 @@ export function isExecutionModePreference(value: unknown): value is ExecutionMod
 export function isExecutionModeResult(value: unknown): value is ExecutionModeResult {
   if (!isRecord(value)) return false
   if (value.ok === true) return isExecutionModePreference(value.data)
-  if (value.ok !== false || !isRecord(value.error)) return false
-  return typeof value.error.message === 'string'
-    && typeof value.error.code === 'string'
-    && PREFERENCES_ERROR_CODES.includes(value.error.code)
-}
-
-/** 与其它偏好同一形状：成功返回主进程确认后的开关状态，失败保留主进程错误。 */
-export function isGenuiResult(value: unknown): value is GenuiResult {
-  if (!isRecord(value)) return false
-  if (value.ok === true) return isGenuiPreference(value.data)
   if (value.ok !== false || !isRecord(value.error)) return false
   return typeof value.error.message === 'string'
     && typeof value.error.code === 'string'

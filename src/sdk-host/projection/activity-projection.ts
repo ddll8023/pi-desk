@@ -1,5 +1,5 @@
 /**
- * 会话活动派生：从官方当前分支累计文件、Skill、MCP、扩展工具与界面交付事实，
+ * 会话活动派生：从官方当前分支累计文件、Skill、MCP 与扩展工具事实，
  * 并以实时工具状态补充对话页顶部的活动摘要。
  *
  * 不读项目文件、不解析 Pi 配置、不持有会话所有权；稳定事实直接从官方分支补种，
@@ -15,13 +15,9 @@
  *    单独归到一行，不猜测它们连的是哪个服务器。
  * 4. 插件：既不是内置工具、也不是 MCP 工具的工具名按扩展工具统计。投影里没有「工具属于哪个扩展文件」
  *    的信息，因此只报工具名与次数，不编造来源扩展。
- * 5. 界面：`ui_render` / `ui_patch` 的结果里带 `details.ui` 时记一份交付事实，按 `documentId` 合并：
- *    版本取最大、标题取后出现的非空值、`versions` 累加。结果先在 `tool_execution_end` 事件里即时记下，
- *    再按调用 ID 去重，分支条目重复到达时只算一次。只读头部字段，不解析节点树；
- *    带 `parentToolCallId` 的嵌套调用不计入——分支不保留它们的 `details`，算了会与恢复后的口径不一致。
- * 6. 待办清单：只记**当前轮** `todo_write` 的清单，同样以事件结果即时记录并按调用 ID 去重；
+ * 5. 待办清单：只记**当前轮** `todo_write` 的清单，同样以事件结果即时记录并按调用 ID 去重；
  *    新一轮用户消息出现即清空，列表跨过本轮用户消息后不再算数，因此恢复会话不依赖重放。
- * 7. 延续判定：由宿主在用户轮次开始时算好写入，按该轮用户消息的条目 ID 归档；属本轮临时事实，不进检查点。
+ * 6. 延续判定：由宿主在用户轮次开始时算好写入，按该轮用户消息的条目 ID 归档；属本轮临时事实，不进检查点。
  *
  * 日志累计与实时工具状态分别维护：实时状态只补充展示，检查点只导出已进入官方分支的轻量事实。
  * 同一 SDK manager 内确认连续追加后只折叠新增条目；跨来源恢复核对完整前缀摘要，不能只比较末条 ID。
@@ -31,8 +27,7 @@ import { createHash } from 'node:crypto'
 import type { SessionEntry } from '@earendil-works/pi-coding-agent'
 import type { ToolArgSummaryEntry, ToolExecution, SkillActivitySource, SessionActivity,
   SessionFileActivity, SessionSkillActivity, SessionMcpActivity, SessionPluginActivity,
-  SessionGenuiActivity, SessionTurnFiles, SessionTodoList, SessionContinuation } from '../../shared/runtime-api'
-import { GENUI_RENDER_TOOL_NAMES, readGenuiPayloadHeader } from '../../shared/genui-api'
+  SessionTurnFiles, SessionTodoList, SessionContinuation } from '../../shared/runtime-api'
 import { TODO_TOOL_NAME, parseTodoListDetails } from '../todo-list'
 import { parseSkillBlock } from '../../shared/user-message-text'
 
@@ -43,14 +38,13 @@ const READ_TOOLS: ReadonlySet<string> = new Set(['read'])
 const WRITE_TOOLS: ReadonlySet<string> = new Set(['write', 'edit', 'multiedit', 'apply_patch'])
 
 /**
- * Pi 的内置工具与内置扩展工具（codemode / tool_search 随宿主固定注册，
- * 生成式 UI 的 ui_render / ui_patch / ui_catalog / ui_inspect 由 Desktop 以 builtin factory 注册）：
+ * Pi 的内置工具与内置扩展工具（codemode / tool_search 随宿主固定注册）：
  * 其余既非内置、也非 MCP 的工具按扩展（插件）工具统计。
  */
 const BUILTIN_TOOLS: ReadonlySet<string> = new Set([
   'read', 'write', 'edit', 'multiedit', 'apply_patch',
   'bash', 'powershell', 'grep', 'find', 'ls', 'codemode', 'tool_search',
-  'ui_render', 'ui_patch', 'ui_catalog', 'ui_inspect', 'ffgrep', 'fffind'
+  'ffgrep', 'fffind'
 ])
 
 /** MCP 资源工具：属于 MCP 能力，但不属于任何具体服务器。 */
@@ -99,7 +93,6 @@ export interface ActivityCheckpointState {
   readonly tools: readonly ActivityToolState[]
   readonly commands: readonly ActivityCommandState[]
   readonly skills: readonly SessionSkillActivity[]
-  readonly genui: readonly SessionGenuiActivity[]
   readonly evidence: readonly string[]
   readonly incomplete: boolean
   /** 已处理前缀末尾所在的轮次；恢复后继续追加条目时靠它把新调用归回正确轮次。 */
@@ -149,14 +142,6 @@ interface McpBucket {
   readonly server: string
   readonly tools: Map<string, number>
   count: number
-}
-
-/** 一份界面的累计：`versions` 是分支上出现过的次数，`revision` 取最大值。 */
-interface GenuiBucket {
-  readonly documentId: string
-  title: string
-  revision: number
-  versions: number
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -418,16 +403,13 @@ export function createSessionActivityCache(): SessionActivityCache {
         mcp: mcpRows,
         plugins: pluginRows,
         turns: turnRows,
-        // 界面交付不来自工具条目本身（投影的轻量条目不带载荷），由 `ActivityProjection` 另计。
-        genui: [],
-        // 待办清单同样来自工具结果载荷，不进入工具条目。
+        // 待办清单来自工具结果载荷，不进入工具条目。
         todos: null,
         continuation: null,
         fileCount: fileRows.length,
         skillCount: skillRows.length,
         mcpCount: mcpRows.length,
         pluginCount: pluginRows.length,
-        genuiCount: 0,
         empty: fileRows.length === 0 && skillRows.length === 0
           && mcpRows.length === 0 && pluginRows.length === 0
       }
@@ -469,7 +451,7 @@ function activityTool(state: ActivityToolState): ToolExecution {
   return { toolCallId: state.toolCallId, toolName: state.toolName, phase: state.phase, argsText: state.argsText,
     startedAt: null, endedAt: null, argsTruncated: false, argsSummary: null,
     outputPath: null, text: '', textKind: 'none', textTruncated: false,
-    nonTextBlocks: 0, nonTextParts: [], diff: null, ui: null, subAgents: [] }
+    nonTextBlocks: 0, nonTextParts: [], diff: null, subAgents: [] }
 }
 
 /** 活动累计器：稳定分支与实时补充分离；快照仅复制轻量稳定事实。 */
@@ -489,9 +471,6 @@ export class ActivityProjection {
   private liveTools = new Map<string, ToolExecution>()
   private commands: ActivityCommandState[] = []
   private skills = new Map<string, SessionSkillActivity>()
-  private genui = new Map<string, GenuiBucket>()
-  /** 已计入的界面交付调用：事件与分支两条路径都会看到同一次调用，可靠性键去重避免版本数翻倍。 */
-  private genuiCalls = new Set<string>()
   private todos: SessionTodoList | null = null
   /**
    * 待绑定的延续判定：宿主在用户轮次开始前算出，此时该轮用户消息尚未进入分支，
@@ -521,7 +500,6 @@ export class ActivityProjection {
       this.currentTurn = state.currentTurn ?? null
       this.commands = state.commands.map(command => ({ ...command }))
       this.skills = new Map(state.skills.map(skill => [`${skill.source}:${skill.name}:${skill.location}`, { ...skill }]))
-      this.genui = new Map(state.genui.map(item => [item.documentId, { ...item }]))
       this.todos = state.todos ?? null
       this.evidence = new Set(state.evidence)
       this.incomplete = state.incomplete
@@ -535,12 +513,11 @@ export class ActivityProjection {
   observe(event: Record<string, unknown>): void {
     if ((event.type !== 'tool_execution_start' && event.type !== 'tool_execution_end')
       || typeof event.toolCallId !== 'string' || typeof event.toolName !== 'string') return
-    // 工具返回值已经带上结果：清单与界面交付按事件即时记录，不等分支追加，也不需要下一个事件再刷一次。
+    // 工具返回值已经带上结果：清单按事件即时记录，不等分支追加，也不需要下一个事件再刷一次。
     // 嵌套调用在分支里没有条目，记下来会与恢复后的口径不一致，这里直接跳过。
     if (event.type === 'tool_execution_end' && event.isError !== true && event.parentToolCallId === undefined) {
       const details = isRecord(event.result) ? event.result.details : undefined
       this.recordTodos(event.toolName, details, event.toolCallId)
-      this.recordGenui(event.toolName, details, event.toolCallId)
     }
     this.call(this.liveTools, event.toolCallId, event.toolName, event.args,
       event.type === 'tool_execution_start' ? 'running' : event.isError === true ? 'failed' : 'succeeded')
@@ -595,13 +572,12 @@ export class ActivityProjection {
       projectPath, toolCallId => this.turnByTool.get(toolCallId) ?? null,
       this.judgementByTurn)
     const skills = [...derived.skills, ...this.skills.values()].sort(byCountThenName(item => item.name))
-    const genui = [...this.genui.values()].map(bucket => ({ ...bucket }))
-    this.view = { ...derived, skills, skillCount: skills.length, genui, genuiCount: genui.length,
+    this.view = { ...derived, skills, skillCount: skills.length,
       todos: this.todos,
       continuation: this.continuation,
       incomplete: this.incomplete,
       empty: derived.files.length === 0 && skills.length === 0 && derived.mcp.length === 0
-        && derived.plugins.length === 0 && genui.length === 0 }
+        && derived.plugins.length === 0 }
     this.dirty = false
     return this.view
   }
@@ -618,7 +594,6 @@ export class ActivityProjection {
         turnEntryId: this.turnByTool.get(tool.toolCallId) ?? null })),
       commands: this.commands.map(command => ({ ...command })),
       skills: [...this.skills.values()].map(skill => ({ ...skill })),
-      genui: [...this.genui.values()].map(item => ({ ...item })),
       evidence: [...this.evidence], incomplete: this.incomplete,
       currentTurn: this.currentTurn,
       todos: this.todos
@@ -633,7 +608,7 @@ export class ActivityProjection {
     this.lastEntry = null
     this.tools.clear(); this.liveTools.clear(); this.commands = []; this.skills.clear()
     this.turnByTool.clear(); this.currentTurn = null
-    this.genui.clear(); this.genuiCalls.clear(); this.evidence.clear()
+    this.evidence.clear()
     this.todos = null
     this.pendingContinuation = null
     this.judgementByTurn.clear()
@@ -661,7 +636,6 @@ export class ActivityProjection {
         if (this.liveTools.delete(message.toolCallId)) this.dirty = true
       } else if (message.isError === true && this.liveTools.delete(message.toolCallId)) this.dirty = true
       if (message.isError !== true && typeof message.toolName === 'string') {
-        this.recordGenui(message.toolName, message.details, message.toolCallId)
         this.recordTodos(message.toolName, message.details, message.toolCallId)
       }
     }
@@ -716,38 +690,6 @@ export class ActivityProjection {
     if (turn !== undefined && this.currentTurn !== null && turn !== this.currentTurn) return
     this.todos = { items: parsed.items }
     this.dirty = true
-  }
-
-  /**
-   * 记一份界面交付：只认 `ui_render` / `ui_patch` 的 `details.ui`，且只读头部。
-   * 同一 `documentId` 合并成一条：版本取最大、标题取后出现的非空值、`versions` 累加。
-   * 标题为空（历史文档缺字段）时不拿空串盖掉已有标题。
-   */
-  private recordGenui(toolName: string, details: unknown, toolCallId: string): void {
-    if (!GENUI_RENDER_TOOL_NAMES.has(toolName)) return
-    if (!isRecord(details)) return
-    const header = readGenuiPayloadHeader(details.ui)
-    if (header === null) return
-    // 同一次调用在实时事件与分支条目里各出现一次；重复计入会把 `versions` 算成两倍。
-    if (this.genuiCalls.has(toolCallId)) return
-    this.genuiCalls.add(toolCallId)
-    this.dirty = true
-    const existing = this.genui.get(header.documentId)
-    if (existing === undefined) {
-      this.genui.set(header.documentId, {
-        documentId: header.documentId,
-        title: header.title,
-        revision: header.revision,
-        versions: 1
-      })
-      return
-    }
-    this.genui.set(header.documentId, {
-      ...existing,
-      title: header.title === '' ? existing.title : header.title,
-      revision: Math.max(existing.revision, header.revision),
-      versions: existing.versions + 1
-    })
   }
 
   private audit(data: unknown): void {

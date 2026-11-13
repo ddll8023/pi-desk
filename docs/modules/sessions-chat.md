@@ -55,7 +55,7 @@
 | 文件 | 用途 |
 | --- | --- |
 | `src/sdk-host/projection/message-projection.ts` | 有界消息／工具聚合、序号、批次与确认，将图片标注附属资料关联回原用户消息 |
-| `src/sdk-host/projection/tool-projection.ts` | 工具生命周期、有界原文与生成式界面载荷接入，从完整参数和结果生成语义摘要 |
+| `src/sdk-host/projection/tool-projection.ts` | 工具生命周期、有界原文，从完整参数和结果生成语义摘要 |
 | `src/sdk-host/projection/tool-presentation.ts` | 请求、范围、结果计数与命中来源的有界提取；识别已知结构和文本格式，不重跑工具、不猜总匹配数 |
 | `src/sdk-host/projection/history-projection.ts` | 当前分支按轮历史与原文续段，从原始条目重建工具摘要，关联图片与标注 |
 | `src/sdk-host/projection/activity-projection.ts` | 从官方分支累计稳定活动事实，以实时工具状态补充展示，支持检查点恢复与连续追加复用 |
@@ -109,7 +109,7 @@
 | `src/renderer/src/sessions/components/ChatTurnItem.vue` | 按轮摘要、展开与原文内容、多分支切换，同轮连续的纯过程消息统一收纳为单行工作过程摘要，运行中接入 SVG 运行边框，结束后默认收起以突出最终回答正文 |
 | `src/renderer/src/sessions/components/TurnBranchSwitcher.vue` | 轮次多分支微型切换器（`‹ 1 / 2 ›`） |
 | `src/renderer/src/sessions/components/WorktreeTaskBanner.vue` | 任务工作区状态底栏、固定目标与审阅合并（支持 Squash 与自动清理）、运行终端关闭确认与放弃删除流程 |
-| `src/renderer/src/sessions/components/ChatMessageItem.vue` | 单消息、图片编号及说明、思考抽屉、纯过程紧凑步骤、流式打字光标、工具归组面板与生成式界面分发 |
+| `src/renderer/src/sessions/components/ChatMessageItem.vue` | 单消息、图片编号及说明、思考抽屉、纯过程紧凑步骤、流式打字光标与工具归组面板 |
 | `src/renderer/src/sessions/components/HistoryLoadSentinel.vue` | 历史加载触发哨兵 |
 | `src/renderer/src/sessions/components/ToolCard.vue` | 单行紧凑展示操作分类徽章、真实工具名、语境化参数与状态耗时胶囊；展开区展示结构化结果卡片、Diff 与调试抽屉，原文按需展开 |
 | `src/renderer/src/sessions/components/ToolResultPreview.vue` | 工具结果的计数口径、命中内容、来源、历史状态与省略提示；只展示投影，不发起额外查询 |
@@ -136,7 +136,6 @@
 - [项目与信任](projects-trust.md)：登记项目与目标授权；[工作区](workspace-tabs.md)：原标签绑定、选择与关闭，以及浏览器批注的来源固定和目标切换编排。输入坞的 `mergeBrowserAnnotation` 在目标就绪后复核身份并合并草稿，两模块不拥有 SDK 分配权。
 - [供应商](providers-auth.md)：`RuntimeModelSelect.vue` 提供模型选择，持久默认模型不等于当前会话模型；`UsageDetailDialog.vue` 经认证服务读取 Codex 与 OpenCode Go 账户额度，查询机制与凭据边界由供应商模块维护。
 - [文件](files-editor.md)：`project-file` Store 提供 `@` 文件候选；[资源](resources-mcp.md) 提供技能和命令补全；[偏好](preferences.md) 提供快捷输入。
-- [生成式界面](genui.md)：宿主注册内置扩展，工具投影识别其载荷，消息组件分发到专用渲染器。
 - [工作区标签](workspace-tabs.md)：宿主挂载内置浏览器扩展，通过 `browser-operation` 反向协议由主进程 `BrowserSessionService` 复核会话代际并派发动作；未绑定实例时主进程自动派发 `browser:auto-attach` 事件通知工作区开辟分屏并完成 1:1 静默绑定，驱动受管浏览器。
 
 ## 关键调用链

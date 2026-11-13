@@ -1,4 +1,4 @@
-/** 主进程业务实例的唯一装配处：配置、项目、信任、会话、只读解析宿主池、终端、供应商、资源、更新、生成式界面、记忆、Git 清理、用量统计与手机访问各一份，按依赖顺序建立并互相注入回调。本文件只做实例化，不注册 IPC、不写业务判断；其中系统目录选择与终端守护状态广播经 window-channel.ts 提供，是本文件对窗口投递层的唯一依赖。 */
+/** 主进程业务实例的唯一装配处：配置、项目、信任、会话、只读解析宿主池、终端、供应商、资源、更新、记忆、Git 清理、用量统计与手机访问各一份，按依赖顺序建立并互相注入回调。本文件只做实例化，不注册 IPC、不写业务判断；其中系统目录选择与终端守护状态广播经 window-channel.ts 提供，是本文件对窗口投递层的唯一依赖。 */
 
 import { app, dialog } from 'electron'
 import { join } from 'node:path'
@@ -11,7 +11,6 @@ import { AuthManager } from './providers/auth-manager'
 import { ModelsConfigManager } from './providers/models-config-manager'
 import { PiSettingsManager } from './providers/pi-settings-manager'
 import { PreferencesManager } from './preferences/preferences-manager'
-import { GenuiParamStore } from './genui/genui-param-store'
 import { ProjectDirectoryReader } from './projects/project-directory'
 import { ProjectDirectoryWatcher } from './projects/project-directory-watcher'
 import { ProjectFileContent } from './projects/project-file-content'
@@ -102,9 +101,7 @@ export const sessionManager = new SessionManager({
   projectsTrust: trustManager,
   ownership: sessionRuns,
   workspaces: workspaceManager,
-  // 生成式 UI 开关在会话创建期读取；读失败按开启处理，不因偏好故障阻断会话。
-  readGenuiEnabled: async () => (await configStore.readGenui()).enabled,
-  // 执行模式同样在会话创建期读取，决定宿主裁掉哪些 Skill；读失败按标准模式处理。
+  // 执行模式在会话创建期读取，决定宿主裁掉哪些 Skill；读失败按标准模式处理。
   readExecutionMode: async () => (await configStore.readExecutionMode()).mode,
   // 删除会话后是否级联清理工作树，由界面偏好决定；读失败按不清理处理，不自作主张删目录。
   readCleanupOnSessionDelete: async () => {
@@ -222,9 +219,6 @@ export const usageStatsService = new UsageStatsService({
 export const authManager = new AuthManager({ store: configStore, isPackaged: app.isPackaged })
 
 export const preferencesManager = new PreferencesManager({ store: configStore })
-
-/** 生成式界面参数取值的本机旁路存储；与 Desktop 配置分开，高频变化且可再生产。 */
-export const genuiParamStore = new GenuiParamStore()
 
 /** 自定义供应商配置（Pi 的 models.json）的唯一读写者；与 Desktop 自己的配置互不影响。 */
 export const modelsConfigManager = new ModelsConfigManager()

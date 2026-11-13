@@ -101,7 +101,6 @@ onMounted(() => { void nextTick(() => { if (scroller.value) scroller.value.scrol
                 <div v-if="block.execution.diff?.lines.length"><p class="mobile-detail-label">变更 · {{ block.execution.diff.source === 'args' ? '根据参数推断' : '执行结果' }}</p><pre class="scroll-area">{{ block.execution.diff.lines.map(line => `${line.kind === 'add' ? '+' : line.kind === 'remove' ? '-' : ' '} ${line.text}`).join('\n') }}</pre></div>
                 <div v-if="block.execution.text"><p class="mobile-detail-label">结果</p><pre class="scroll-area">{{ block.execution.text }}</pre></div>
                 <p v-if="block.execution.argsTruncated || block.execution.textTruncated" class="mobile-muted">内容已截断，可从这一轮原文继续读取。</p>
-                <p v-if="block.ui" class="mobile-muted">此工具交付了生成式界面，请在桌面查看与操作。</p>
               </template>
             </details>
           </template>

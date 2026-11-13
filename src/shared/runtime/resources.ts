@@ -5,7 +5,6 @@ import type { PromptDisposition, PromptResult, ResourceIssue, RuntimeCompactRequ
 import type { AgentCapabilities, CapabilitiesResult, ModelIdentity, ModelSummary } from './models'
 import type { ContextUsage, ExtensionErrorEntry, HistoryChunk, HistoryData, HistoryQuery, MessageGeneration, MessageUsage, OutputRate, ProjectionBatch, ProjectionBlock, ProjectionBlockKind, ProjectionCompaction, ProjectionMessage, ProjectionResult, ProjectionSnapshot, ProjectionUpdate, SessionActivity, SessionUsage, ToolArgSummaryEntry, ToolDiff, ToolDiffLine, ToolDiffLineKind, ToolExecution, ToolExecutionPhase, ToolExecutionTextKind, ToolNonTextPart, ToolPresentation, ToolPresentationFact, ToolRequestPresentation, ToolResultPresentation, ToolPresentationItem } from './projection'
 import { TOOL_PRESENTATION_LIMITS as PRESENTATION_LIMITS } from './projection'
-import { isGenuiPayload } from '../genui-api'
 import { isSubAgentView } from '../sub-agent-view'
 import { parseImageAnnotationAttachments } from '../image-annotation'
 
@@ -591,9 +590,7 @@ function isToolExecution(value: unknown): value is ToolExecution {
     && value.nonTextBlocks >= 0
     && Array.isArray(value.nonTextParts)
     && value.nonTextParts.every(isToolNonTextPart)
-    && (value.latestRevision === undefined || isCount(value.latestRevision))
     && (value.presentation === undefined || value.presentation === null || isToolPresentation(value.presentation))
-    && (value.ui === null || isGenuiPayload(value.ui))
     && (value.subAgents === undefined
       || (Array.isArray(value.subAgents) && value.subAgents.every(isSubAgentView)))
     && isToolDiff(value.diff)
@@ -756,9 +753,6 @@ export function isSessionActivity(value: unknown): value is SessionActivity {
     && Array.isArray(value.mcp) && value.mcp.every(row => counted(row) && typeof row.server === 'string'
       && Array.isArray(row.tools) && row.tools.every(tool => counted(tool) && typeof tool.name === 'string'))
     && Array.isArray(value.plugins) && value.plugins.every(row => counted(row) && typeof row.toolName === 'string')
-    && Array.isArray(value.genui) && value.genui.every(row => isRecord(row)
-      && typeof row.documentId === 'string' && row.documentId !== ''
-      && typeof row.title === 'string' && isCount(row.revision) && isCount(row.versions) && row.versions >= 1)
     && Array.isArray(value.turns) && value.turns.length <= 50 && value.turns.every(row => isRecord(row)
       && typeof row.turnEntryId === 'string' && row.turnEntryId !== '' && typeof row.truncated === 'boolean'
       && Array.isArray(row.files) && row.files.length <= 20 && row.files.every(file => isRecord(file)
@@ -774,7 +768,7 @@ export function isSessionActivity(value: unknown): value is SessionActivity {
     && (value.continuation === null || (isRecord(value.continuation)
       && ['continuation', 'new_task'].includes(String(value.continuation.verdict))
       && ['wording', 'file-reference'].includes(String(value.continuation.signal))))
-    && ['fileCount', 'skillCount', 'mcpCount', 'pluginCount', 'genuiCount'].every(key => isCount(value[key]))
+    && ['fileCount', 'skillCount', 'mcpCount', 'pluginCount'].every(key => isCount(value[key]))
     && typeof value.empty === 'boolean'
     && (value.incomplete === undefined || typeof value.incomplete === 'boolean')
 }

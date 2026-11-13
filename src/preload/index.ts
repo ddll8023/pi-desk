@@ -5,7 +5,7 @@
  * `desktop`（应用信息与外链）、`projects`（项目与项目文件）、`sessions`（会话与运行状态）、
  * `runtime`（Runtime、模型能力、资源与 MCP）、`terminal`（终端与守护进程）、`git`（源代码管理）、
  * `preferences`（界面偏好与快捷命令）、`providers`（认证、供应商与 Pi 默认模型）、
- * `updates`（版本检查与更新）、`trust`（Project Trust）、`genui`（生成式界面参数与 Extension UI）、
+ * `updates`（版本检查与更新）、`trust`（Project Trust）、`extension-ui`（扩展交互状态与弹窗响应）、
  * `lan-remote`（局域网访问控制与设备授权）、`browser`（受限网页截图、元素选择与取消）、
  * `agent-home`（桌面自有 Pi agent 目录与首启导入）、`experts`（内置专家的派生、自定义专家的读取与保存、删除与快速模式剔除清单）。
  *
@@ -24,7 +24,6 @@ import type { RuntimeApi } from '../shared/runtime-api'
 import type { TerminalApi } from '../shared/terminal-api'
 import type { PreferencesApi } from '../shared/preferences-api'
 import type { QuickCommandsApi } from '../shared/quick-commands-api'
-import type { GenuiParamsApi } from '../shared/genui-params-api'
 import type { PiSettingsApi } from '../shared/pi-settings-api'
 import type { TrustApi } from '../shared/trust-api'
 import type { ExtensionUiApi } from '../shared/extension-ui-api'
@@ -40,7 +39,7 @@ import type { UsageStatsApi } from '../shared/usage-stats-api'
 import type { AgentHomeApi } from '../shared/agent-home-api'
 import type { ExpertApi } from '../shared/experts-api'
 import { desktopApi } from './desktop'
-import { genuiApi } from './genui'
+import { extensionUiApi } from './extension-ui'
 import { gitApi } from './git'
 import { worktreeApi } from './worktree'
 import { gitCleanupApi } from './git-cleanup'
@@ -59,7 +58,7 @@ import { agentHomeApi } from './agent-home'
 import { expertsApi } from './experts'
 
 /** 合并后的桥接对象：各域键互不重叠，平铺后仍是页面看到的同一份 `DesktopApi` 契约。 */
-const desktop: BrowserCaptureApi & BrowserSessionApi & DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionApi & SessionRunApi & TerminalApi & PreferencesApi & QuickCommandsApi & GenuiParamsApi & PiSettingsApi & TrustApi & ExtensionUiApi & AuthApi & ModelsConfigApi & UpdatesApi & GitApi & WorktreeApi & GitCleanupApi & LanRemoteApi & MemoryApi & UsageStatsApi & AgentHomeApi & ExpertApi = {
+const desktop: BrowserCaptureApi & BrowserSessionApi & DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionApi & SessionRunApi & TerminalApi & PreferencesApi & QuickCommandsApi & PiSettingsApi & TrustApi & ExtensionUiApi & AuthApi & ModelsConfigApi & UpdatesApi & GitApi & WorktreeApi & GitCleanupApi & LanRemoteApi & MemoryApi & UsageStatsApi & AgentHomeApi & ExpertApi = {
   ...desktopApi,
   ...browserApi,
   ...projectsApi,
@@ -73,7 +72,7 @@ const desktop: BrowserCaptureApi & BrowserSessionApi & DesktopApi & RuntimeApi &
   ...providersApi,
   ...updatesApi,
   ...trustApi,
-  ...genuiApi,
+  ...extensionUiApi,
   ...lanRemoteApi,
   ...memoryApi,
   ...usageStatsApi,

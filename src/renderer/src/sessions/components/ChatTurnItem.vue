@@ -1,7 +1,7 @@
 <!-- 一轮对话：用户消息始终可见，回答与压缩记录由会话阅读状态控制展开；耗时和用量仅作次要信息。
      连续的纯过程消息统一默认收拢为一行工作过程摘要，运行中也不铺开工具流水；分组身份固定为首条消息，新增操作不重置手动开合。
      折叠状态不在这里持有：开合由消息列表按会话写入 session-view，本组件只渲染给定状态并发出开合意图，因此定位与状态隔离都在同一处处理。
-     卡片的手动展开（思考、工具、技能、压缩摘要、旧版界面）只原样向上转发，滚动位置与跟随仍由消息列表决定。
+     卡片的手动展开（思考、工具、技能、压缩摘要）只原样向上转发，滚动位置与跟随仍由消息列表决定。
      用户消息下方另给一行「本轮改动 N 个文件」与该轮的延续判定：数据都取自宿主活动投影的按轮分组，本组件只按轮次 ID 取用并展示，不自行汇总或重新判断。 -->
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
@@ -41,8 +41,6 @@ const emit = defineEmits<{
   loadChunk: [chunk: HistoryChunk]
   rewind: [messageId: string]
   submitEdit: [messageId: string, editedText: string]
-  /** 旧版界面折叠行请求跳转到同一界面的最新版；定位在消息列表完成。 */
-  jumpLatest: [documentId: string]
   /** 某张卡片被手动展开；消息列表据此停止粘底，本组件不处理。 */
   userExpand: []
 }>()
@@ -179,12 +177,11 @@ const turnFilesTitle = computed(() => {
   return files.truncated ? `本轮改动 ${files.files.length}+ 个文件` : `本轮改动 ${files.files.length} 个文件`
 })
 
-/** 判断一条助手消息是否为纯过程消息（只有工具调用或思考，没有正文文本，也没有生成式界面）。 */
+/** 判断一条助手消息是否为纯过程消息（只有工具调用或思考，没有正文文本）。 */
 function isMessageProcessOnly(msg: ChatMessageView): boolean {
   if (msg.role !== 'assistant') return false
   const hasText = msg.blocks.some(b => b.kind === 'text' && b.text.trim() !== '')
-  const hasGenui = msg.blocks.some(b => b.kind === 'toolcall' && b.ui !== null)
-  return !hasText && !hasGenui
+  return !hasText
 }
 
 interface ResponseGroup {
@@ -273,7 +270,6 @@ function processGroupStats(messages: readonly ChatMessageView[]): string {
       @load-chunk="emit('loadChunk', $event)"
       @rewind="emit('rewind', $event)"
       @submit-edit="(messageId, text) => emit('submitEdit', messageId, text)"
-      @jump-latest="emit('jumpLatest', $event)"
       @user-expand="emit('userExpand')"
     />
 
@@ -370,12 +366,11 @@ function processGroupStats(messages: readonly ChatMessageView[]): string {
                 @load-chunk="emit('loadChunk', $event)"
                 @rewind="emit('rewind', $event)"
                 @submit-edit="(messageId, text) => emit('submitEdit', messageId, text)"
-                @jump-latest="emit('jumpLatest', $event)"
                 @user-expand="emit('userExpand')"
               />
             </div>
           </div>
-          <!-- 正文和生成式界面直接呈现，不藏入工具过程。 -->
+          <!-- 正文直接呈现，不藏入工具过程。 -->
           <template v-else>
             <ChatMessageItem
               v-for="(message, responseIndex) in group.messages"
@@ -394,7 +389,6 @@ function processGroupStats(messages: readonly ChatMessageView[]): string {
               @load-chunk="emit('loadChunk', $event)"
               @rewind="emit('rewind', $event)"
               @submit-edit="(messageId, text) => emit('submitEdit', messageId, text)"
-              @jump-latest="emit('jumpLatest', $event)"
               @user-expand="emit('userExpand')"
             />
           </template>

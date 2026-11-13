@@ -37,7 +37,7 @@ pi-desk 产品行为只能存在于以下位置，**禁止写入全局 AGENTS.md
 | 内容特征 | 归属层级 |
 | --- | --- |
 | 提到 pi-desk、设置页路径、功能开关名称、随包资源路径 | 打包产物内置（代码分段） |
-| 提到特定宿主的工具名（如 `memory_*`、`delegate_subagent`、`ui_render`） | 打包产物内置（分段） |
+| 提到特定宿主的工具名（如 `memory_*`、`delegate_subagent`、`todo_write`） | 打包产物内置（分段） |
 | 提到 pi-desk 的技术栈、构建命令、目录约定 | pi-desk 开发仓库 AGENTS |
 | 跨项目通用的沟通、权限、判断原则 | 全局用户级 AGENTS |
 | 项目专有的技术栈、数据库、API 约定 | 工作区项目 AGENTS |

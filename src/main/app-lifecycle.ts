@@ -57,9 +57,6 @@ import { registerTrustHandlers } from './trust/ipc'
 import { registerTerminalHandlers } from './terminal/ipc'
 import { registerPreferencesHandlers } from './preferences/ipc'
 import {
-  registerGenuiParamHandlers,
-} from './genui/ipc'
-import {
   registerAuthHandlers,
   registerModelsConfigHandlers,
   registerPiSettingsHandlers,
@@ -216,7 +213,6 @@ export async function startApplication(): Promise<void> {
   registerTerminalHandlers(pageUrl)
   registerTrustHandlers(pageUrl)
   registerPreferencesHandlers(pageUrl)
-  registerGenuiParamHandlers(pageUrl)
   registerPiSettingsHandlers(pageUrl)
   registerModelsConfigHandlers(pageUrl)
   registerAuthHandlers(pageUrl)

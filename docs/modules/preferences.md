@@ -13,8 +13,8 @@
 | 文件 | 用途 |
 | --- | --- |
 | `src/main/preferences/preferences-manager.ts` | 通过共享配置实例读取／保存偏好，返回页面结果 |
-| `src/shared/preferences-api.ts` | 主题、布局、终端链接模式、文件排除与显隐、Git 清理策略、模型显示、快捷输入、自动更新、生成式开关、执行模式的契约及校验 |
-| `src/renderer/src/preferences/stores/preferences.ts` | 偏好展示与动作状态、布局修改及已保存／待应用的功能开关状态 |
+| `src/shared/preferences-api.ts` | 主题、布局、终端链接模式、文件排除与显隐、Git 清理策略、模型显示、快捷输入、自动更新、执行模式的契约及校验 |
+| `src/renderer/src/preferences/stores/preferences.ts` | 偏好展示与动作状态、布局修改及执行模式的保存状态 |
 | `src/renderer/src/preferences/services/preferences.ts` | 固定偏好桥接与普通载荷重建 |
 | `src/renderer/src/preferences/components/QuickSendSection.vue` | 快捷发送短语管理 |
 | `src/renderer/src/preferences/components/ExecutionModeSection.vue` | 执行模式（标准／快速）选择分节，经偏好服务读写 |
@@ -28,7 +28,7 @@
 - [应用外壳](app-shell.md)：`SettingsView.vue` 的外观分节、`RightPanel.vue` 的宽度／页签、标题栏的布局开关。
 - [供应商](providers-auth.md)：隐藏模型列表的读写通过本模块服务，交互状态当前位于综合 Runtime Store。
 - [终端](terminal-commands.md)：快捷命令有独立业务契约与 Store，配置适配复用 PreferencesManager；终端链接打开模式随 UI 偏好保存，由终端设置节与终端视图消费。
-- [生成式界面](genui.md)：开关与本机参数文件不同；[更新](updates-runtime.md)：启动扩展自动更新消费开关；[会话](sessions-chat.md)：重载后同步功能已应用状态。
+- [更新](updates-runtime.md)：启动扩展自动更新消费自动更新开关。
 - [Git](git.md)：两个清理策略随 UI 偏好保存，分别作为合入弹窗与删除会话时的默认勾选；实际清理仍由 Git 模块与工作区管理器执行，偏好不代替确认。
 - 执行模式：契约与校验在 `src/shared/preferences-api.ts`（`isExecutionMode`、`ExecutionModePreference`），持久化由 `src/main/config/desktop-config-store.ts` 的 `readExecutionMode`／`saveExecutionMode` 承担；会话创建时 `src/main/sessions/session-manager.ts` 读取后交给 SDK 宿主，`product-resources.ts` 依模式裁剪用户级 Skill 与记忆工具，`session-runtime.ts` 注入模式分段。裁剪名单只维护在 `src/shared/execution-mode-skills.ts`：宿主据此过滤，设置页同源读取后逐条列出，不在文案里另写一份技能名。
 - [F-style](shared.md#f-style全局主题与业务样式混合)：CSS 同名主题令牌，主进程通过 `nativeTheme` 驱动亮暗色。
@@ -41,4 +41,4 @@
 
 主题请求在合法后立即应用到原生主题；窗口与页面使用同一主题来源。右侧面板拖动期间保持局部尺寸，结束后再保存；Markdown 默认视图用于新打开标签，不强制改变所有已打开文件。
 
-保存失败通过结果和界面状态报告，配置不可写时不创建另一套本地存储兜底。生成式开关的已保存值与现有 SDK 会话已加载能力分开，开关不意味着自动重建全部会话。
+保存失败通过结果和界面状态报告，配置不可写时不创建另一套本地存储兜底。
