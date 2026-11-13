@@ -29,13 +29,9 @@ export const EXPERTS_SAVE_DEFAULTS_CHANNEL = 'desktop:expert-save-defaults'
 export const MAX_EXPERT_DISPLAY_NAME_LENGTH = 64
 /** 一句话简介的长度上限：列表里只占一行，过长会被截断显示。 */
 export const MAX_EXPERT_SUMMARY_LENGTH = 200
-/** 单个专家可引用的技能数量上限；再多就退化成技能集合，失去单点任务的定位。 */
-export const MAX_EXPERT_SKILL_REFS = 20
-/** 单个专家可引用的 MCP 服务器数量上限；与技能同一口径。 */
-export const MAX_EXPERT_MCP_REFS = 20
 /**
  * 默认能力基线的条目上限：基线描述「默认可用范围」，可能覆盖全部候选，
- * 因此不能沿用单个专家 20 个引用的上限，否则专家越多时基线反而写不进去。
+ * 写入时按此截断。单个专家的技能与 MCP 引用不设数量上限。
  */
 export const MAX_EXPERT_DEFAULTS_ENTRIES = 64
 
@@ -234,9 +230,17 @@ export function isMcpServerReference(value: unknown): value is string {
   return typeof value === 'string' && SKILL_REFERENCE.test(value)
 }
 
-/** 一组引用：数量在限制内且每个写法合法；同名重复不在这里判，保存时按原顺序去重。 */
-function isReferenceList(value: unknown, max: number, check: (item: unknown) => item is string): value is readonly string[] {
-  return Array.isArray(value) && value.length <= max && value.every(check)
+/**
+ * 一组引用：每个写法都合法，传了上限时还要在数量内；同名重复不在这里判，保存时按原顺序去重。
+ * 专家的技能与 MCP 范围不设数量上限，只有默认能力基线按 `MAX_EXPERT_DEFAULTS_ENTRIES` 截断。
+ */
+function isReferenceList(
+  value: unknown,
+  check: (item: unknown) => item is string,
+  max?: number
+): value is readonly string[] {
+  if (!Array.isArray(value) || !value.every(check)) return false
+  return max === undefined || value.length <= max
 }
 
 /** 显示名称与简介都会写进声明段，换行与首尾空白会破坏 `key: value` 结构，这里一并拒绝。 */
@@ -266,12 +270,12 @@ export function isExpertSaveRequest(value: unknown): value is ExpertSaveRequest 
   if (typeof value.body !== 'string' || value.body.trim() === '') return false
   return isExpertCapabilityMode(value.skillsMode)
     && isExpertCapabilityMode(value.mcpMode)
-    && isReferenceList(value.skillIds, MAX_EXPERT_SKILL_REFS, isSkillReference)
-    && isReferenceList(value.skillAddIds, MAX_EXPERT_SKILL_REFS, isSkillReference)
-    && isReferenceList(value.skillRemoveIds, MAX_EXPERT_SKILL_REFS, isSkillReference)
-    && isReferenceList(value.mcpServerIds, MAX_EXPERT_MCP_REFS, isMcpServerReference)
-    && isReferenceList(value.mcpAddIds, MAX_EXPERT_MCP_REFS, isMcpServerReference)
-    && isReferenceList(value.mcpRemoveIds, MAX_EXPERT_MCP_REFS, isMcpServerReference)
+    && isReferenceList(value.skillIds, isSkillReference)
+    && isReferenceList(value.skillAddIds, isSkillReference)
+    && isReferenceList(value.skillRemoveIds, isSkillReference)
+    && isReferenceList(value.mcpServerIds, isMcpServerReference)
+    && isReferenceList(value.mcpAddIds, isMcpServerReference)
+    && isReferenceList(value.mcpRemoveIds, isMcpServerReference)
 }
 
 export function isExpertEditableDefinitionResult(value: unknown): value is ExpertReadResult {
@@ -286,12 +290,12 @@ export function isExpertEditableDefinitionResult(value: unknown): value is Exper
     && (data.derivedFrom === null || isExpertId(data.derivedFrom))
     && isExpertCapabilityMode(data.skillsMode)
     && isExpertCapabilityMode(data.mcpMode)
-    && isReferenceList(data.skillIds, MAX_EXPERT_SKILL_REFS, isSkillReference)
-    && isReferenceList(data.skillAddIds, MAX_EXPERT_SKILL_REFS, isSkillReference)
-    && isReferenceList(data.skillRemoveIds, MAX_EXPERT_SKILL_REFS, isSkillReference)
-    && isReferenceList(data.mcpServerIds, MAX_EXPERT_MCP_REFS, isMcpServerReference)
-    && isReferenceList(data.mcpAddIds, MAX_EXPERT_MCP_REFS, isMcpServerReference)
-    && isReferenceList(data.mcpRemoveIds, MAX_EXPERT_MCP_REFS, isMcpServerReference)
+    && isReferenceList(data.skillIds, isSkillReference)
+    && isReferenceList(data.skillAddIds, isSkillReference)
+    && isReferenceList(data.skillRemoveIds, isSkillReference)
+    && isReferenceList(data.mcpServerIds, isMcpServerReference)
+    && isReferenceList(data.mcpAddIds, isMcpServerReference)
+    && isReferenceList(data.mcpRemoveIds, isMcpServerReference)
 }
 
 export function isExpertSaveResult(value: unknown): value is ExpertSaveResult {
@@ -301,8 +305,8 @@ export function isExpertSaveResult(value: unknown): value is ExpertSaveResult {
   const data = value.data
   return isExpertId(data.expertId)
     && typeof data.truncated === 'boolean'
-    && isReferenceList(data.unavailableSkillIds, MAX_EXPERT_SKILL_REFS, isSkillReference)
-    && isReferenceList(data.unavailableMcpServers, MAX_EXPERT_MCP_REFS, isMcpServerReference)
+    && isReferenceList(data.unavailableSkillIds, isSkillReference)
+    && isReferenceList(data.unavailableMcpServers, isMcpServerReference)
 }
 
 /** 默认基线：两个维度各自是 `null`（不限制）或合法的引用列表。 */
@@ -310,9 +314,9 @@ export function isExpertCapabilityDefaults(value: unknown): value is ExpertCapab
   if (!isRecord(value)) return false
   if (Object.keys(value).some(key => key !== 'skills' && key !== 'mcpServers')) return false
   const skillsOk = value.skills === null
-    || isReferenceList(value.skills, MAX_EXPERT_DEFAULTS_ENTRIES, isSkillReference)
+    || isReferenceList(value.skills, isSkillReference, MAX_EXPERT_DEFAULTS_ENTRIES)
   const mcpOk = value.mcpServers === null
-    || isReferenceList(value.mcpServers, MAX_EXPERT_DEFAULTS_ENTRIES, isMcpServerReference)
+    || isReferenceList(value.mcpServers, isMcpServerReference, MAX_EXPERT_DEFAULTS_ENTRIES)
   return skillsOk && mcpOk
 }
 

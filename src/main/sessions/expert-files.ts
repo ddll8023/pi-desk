@@ -21,7 +21,6 @@ import {
   parseExpertServerNames,
   parseExpertSkillIds
 } from '../../shared-process/expert-definitions'
-import { MAX_EXPERT_MCP_REFS, MAX_EXPERT_SKILL_REFS } from '../../shared/experts-api'
 import type { ExpertCapabilityFields } from '../../shared/expert-capability'
 import type { ExpertDeleteResult, ExpertDeriveResult, ExpertReadResult, ExpertSaveResult } from '../../shared/experts-api'
 
@@ -287,14 +286,6 @@ export function saveUserExpertDefinition(input: ExpertCapabilityFields & {
   const mcpServerIds = dedupe(input.mcpServerIds)
   const mcpAddIds = dedupe(input.mcpAddIds)
   const mcpRemoveIds = dedupe(input.mcpRemoveIds)
-  if (skillIds.length > MAX_EXPERT_SKILL_REFS || skillAddIds.length > MAX_EXPERT_SKILL_REFS
-    || skillRemoveIds.length > MAX_EXPERT_SKILL_REFS) {
-    return failure('INVALID_DEFINITION', `技能引用最多 ${MAX_EXPERT_SKILL_REFS} 个。`)
-  }
-  if (mcpServerIds.length > MAX_EXPERT_MCP_REFS || mcpAddIds.length > MAX_EXPERT_MCP_REFS
-    || mcpRemoveIds.length > MAX_EXPERT_MCP_REFS) {
-    return failure('INVALID_DEFINITION', `MCP 服务器引用最多 ${MAX_EXPERT_MCP_REFS} 个。`)
-  }
   const allSkillIds = [...skillIds, ...skillAddIds, ...skillRemoveIds]
   if (!allSkillIds.every(isSkillReferenceId)) {
     return failure('INVALID_DEFINITION', '技能引用里有写法不合法的标识。')

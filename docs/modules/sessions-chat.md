@@ -119,8 +119,8 @@
 | `src/renderer/src/sessions/components/ExtensionDialog.vue` | SDK 扩展交互队列的当前对话 |
 | `src/renderer/src/sessions/components/ExtensionNotificationBar.vue` | 扩展通知展示 |
 | `src/renderer/src/experts/components/ExpertSettingsSection.vue` | 设置页「专家」分节：默认能力卡片入口、内置与自定义专家列表（含一行能力范围摘要：口径、增减与仅用选中的名单）、加载诊断、派生副本、新建与编辑入口、删除确认 |
-| `src/renderer/src/experts/components/ExpertEditorDialog.vue` | 专家编辑对话框：显示名称、一句话简介、技能与 MCP 两个能力段（复用能力选择器，技能行按随包／产品目录／共享目录标注来源）、正文；新建与编辑两态；保存中禁用重复提交，失败就地展示原因，关闭归还焦点 |
-| `src/renderer/src/experts/components/ExpertCapabilityPicker.vue` | 能力选择器：两种形态（默认能力的 3 列网格与编辑对话框的列表）+ 已选计数 + 可选筛选 + 可选折叠（收起时保留标题与计数）；传 `mode` 时才出现口径分段；自绘勾选控件（`role="checkbox"` 的按钮、方块与内联对勾、键盘焦点环），列表形态下行尾状态文本区分基线默认、额外启用、已排除与当前不可用；供默认能力卡片与编辑对话框复用 |
+| `src/renderer/src/experts/components/ExpertEditorDialog.vue` | 专家编辑对话框：显示名称、一句话简介、技能与 MCP 两个能力段（复用能力选择器，均为 3 列勾选格；技能右槽在无状态时标出来源，状态优先）+ 已选计数与全选；引用数量不设上限；正文；新建与编辑两态；保存中禁用重复提交，失败就地展示原因，关闭归还焦点 |
+| `src/renderer/src/experts/components/ExpertCapabilityPicker.vue` | 能力选择器：3 列勾选格（格内右槽优先显示状态，状态为空时退回来源标签，标识与来源全文进 `title`）+ 已选计数 + 可选筛选 + 可选全选 + 可选折叠（收起时保留标题与计数）；传 `mode` 时才出现口径分段；自绘勾选控件（`role="checkbox"` 的按钮、方块与内联对勾、键盘焦点环）；供默认能力卡片与编辑对话框复用 |
 | `src/renderer/src/experts/components/ExpertCapabilityDefaultsCard.vue` | 默认能力卡片：技能与 MCP 各一份勾选集合（3 列网格、可折叠，勾满等于不限制），勾选即改；技能至少保留一个；保存后统一影响继承型专家，仅在有未保存改动时启用保存 |
 
 核心打开链、Store、宿主入口及投影职责已由源码读取；投影辅助实现与界面文件结合导入、模板和接口调用映射，不将本表视作逐函数质量结论。

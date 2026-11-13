@@ -3,14 +3,16 @@
 
   表单由本对话框持有，保存交给专家 store：成功后由 store 关闭并重读清单，失败时保留已填内容并就地展示原因。
   能力范围分技能与 MCP 两个维度，各有「继承默认」与「仅用选中」两种口径；继承时只记录相对默认基线的增减，
-  不用每次从零勾选，也随默认基线统一调整。技能候选来自随包、产品目录与共享目录，MCP 只列全局配置；
+  不用每次从零勾选，也随默认基线统一调整。两个维度都按 3 列勾选格呈现，格内右槽标出状态（基线默认／已排除等），
+  title 里同时带标识与来源；引用数量不设上限。
+  技能候选来自随包、产品目录与共享目录，MCP 只列全局配置；
   项目自带技能属于工作区，不受专家范围限制，因此在候选列表外单独说明。
   定义里引用但当前不可用的项仍列出来，避免一次编辑把它们静默丢掉。
   新建时标识由主进程分配，界面不提供标识输入——标识即目录名且创建后不可改，让用户填只会填错。
 -->
 <script setup lang="ts">
 import { computed, nextTick, onUnmounted, ref, useId, watch } from 'vue'
-import { MAX_EXPERT_DISPLAY_NAME_LENGTH, MAX_EXPERT_MCP_REFS, MAX_EXPERT_SKILL_REFS, MAX_EXPERT_SUMMARY_LENGTH } from '../../../../shared/experts-api'
+import { MAX_EXPERT_DISPLAY_NAME_LENGTH, MAX_EXPERT_SUMMARY_LENGTH } from '../../../../shared/experts-api'
 import type { ExpertEditableDefinition, ExpertSaveRequest } from '../../../../shared/experts-api'
 import { useExpertStore } from '../stores/expert'
 import { skillSourceLabel } from '../skill-source-label'
@@ -119,6 +121,13 @@ function baselineOf(dimension: 'skills' | 'mcp'): readonly string[] {
     : baseIds(baselineMcp.value, allMcpNames.value)
 }
 
+/** 勾满时只说结论，部分选中才给数量；两个维度同一口径。 */
+function selectionCount(rows: readonly CapabilityRow[], selected: readonly string[]): string {
+  const total = rows.length
+  if (total === 0) return ''
+  return selected.length === total ? `${total} 个全部可用` : `已选 ${selected.length} / ${total}`
+}
+
 /**
  * 行尾的状态标记：仅用选中时勾选本身已经说明了状态，不再重复一遍；
  * 继承模式下要能看出哪些是基线默认、哪些是手动加减。
@@ -135,6 +144,15 @@ function capabilityState(input: {
   const inBaseline = baselineOf(input.dimension).includes(input.row.id)
   if (inBaseline) return checked ? '基线默认' : '已排除'
   return checked ? '额外启用' : '未启用'
+}
+
+/** 全选只管当前维度：把候选（含已引用但当前不可用的项）全部勾上。 */
+function selectAllSkills(): void {
+  selectedSkills.value = skillRows.value.map(row => row.id)
+}
+
+function selectAllMcp(): void {
+  selectedMcp.value = mcpRows.value.map(row => row.id)
 }
 
 /** 基线展开：`null` 时用全部候选，与主进程的计算口径一致。 */
@@ -360,7 +378,7 @@ function onKeydown(event: KeyboardEvent): void {
                     :mode="skillsMode"
                     :selected="selectedSkills"
                     :rows="skillRows"
-                    :max-refs="MAX_EXPERT_SKILL_REFS"
+                    :count-text="selectionCount(skillRows, selectedSkills)"
                     inherit-label="继承默认"
                     only-label="仅用选中"
                     inherit-hint="勾选记录相对默认基线的增减。"
@@ -370,9 +388,10 @@ function onKeydown(event: KeyboardEvent): void {
                     no-rows-text="随包、产品目录与共享目录里都没有技能。"
                     :ready="capabilityReady"
                     :disabled="saving || loading"
-                    list-in-inherit
+                    select-all-label="全选"
                     @update:mode="skillsMode = $event"
                     @update:selected="selectedSkills = $event"
+                    @select-all="selectAllSkills"
                   />
                   <p class="hint-text">项目自带技能始终可用，不受此处限制。</p>
                   <ExpertCapabilityPicker
@@ -381,7 +400,7 @@ function onKeydown(event: KeyboardEvent): void {
                     :mode="mcpMode"
                     :selected="selectedMcp"
                     :rows="mcpRows"
-                    :max-refs="MAX_EXPERT_MCP_REFS"
+                    :count-text="selectionCount(mcpRows, selectedMcp)"
                     inherit-label="继承默认"
                     only-label="仅用选中"
                     inherit-hint=""
@@ -391,9 +410,10 @@ function onKeydown(event: KeyboardEvent): void {
                     no-rows-text="全局 mcp.json 里还没有服务器；先到资源页添加，再回来勾选。"
                     :ready="capabilityReady"
                     :disabled="saving || loading"
-                    list-in-inherit
+                    select-all-label="全选"
                     @update:mode="mcpMode = $event"
                     @update:selected="selectedMcp = $event"
+                    @select-all="selectAllMcp"
                   />
                 </div>
 

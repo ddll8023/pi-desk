@@ -831,12 +831,9 @@ details[open] > summary .disclosure {
   }
 }
 
-/* 自绘勾选行：整行是 role=checkbox 的按钮，方块与对勾都不依赖原生控件的系统外观；
+/* 自绘勾选项：整块是 role=checkbox 的按钮，方块与对勾都不依赖原生控件的系统外观；
    选中态同时改方块填充与对勾出现，不只用颜色表意。 */
-.check-row {
-    @apply flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs transition-colors;
-  }
-/* 网格形态的勾选项：同样整块可点，靠裁剪与 title 承担长名称，不额外加悬停层。 */
+/* 网格形态：整块可点，靠裁剪与 title 承担长名称，不额外加悬停层。 */
 .check-cell {
     @apply flex min-w-0 items-center gap-1.5 rounded-desk-sm border border-desk-line px-2 py-1.5 text-left text-xs transition-colors;
   }
@@ -853,17 +850,6 @@ details[open] > summary .disclosure {
 .check-cell:not(:disabled):hover .check-mark {
     border-color: var(--color-desk-accent);
   }
-.check-row:not(:disabled):hover {
-    @apply bg-desk-surface-subtle;
-  }
-.check-row:disabled {
-    @apply cursor-not-allowed opacity-60;
-  }
-/* 键盘焦点落在整行上：内缩描边，避免与列表容器的边框叠成双线。 */
-.check-row:focus-visible {
-    outline: 2px solid var(--color-desk-accent);
-    outline-offset: -2px;
-  }
 /* 勾选块：16px 方圆，选中反白对勾；尺寸固定，不随字号缩放。 */
 .check-mark {
     display: inline-flex;
@@ -879,9 +865,6 @@ details[open] > summary .disclosure {
     transition: background-color var(--default-transition-duration) ease,
       border-color var(--default-transition-duration) ease,
       color var(--default-transition-duration) ease;
-  }
-.check-row:not(:disabled):hover .check-mark {
-    border-color: var(--color-desk-accent);
   }
 .check-mark.is-on {
     border-color: var(--color-desk-accent);

@@ -125,7 +125,6 @@ function submit(): void {
     <div class="mt-5 border-t border-desk-line pt-5">
       <ExpertCapabilityPicker
         title="技能范围"
-        layout="grid"
         :selected="selectedSkills"
         :rows="skillRows"
         :count-text="skillCount"
@@ -147,7 +146,6 @@ function submit(): void {
     <div class="mt-5 border-t border-desk-line pt-5">
       <ExpertCapabilityPicker
         title="MCP 服务器"
-        layout="grid"
         :selected="selectedMcp"
         :rows="mcpRows"
         :count-text="mcpCount"
