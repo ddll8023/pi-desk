@@ -37,8 +37,7 @@
 | `src/main/usage/usage-stats-index.ts` | 会话用量索引缓存与原子落盘，按文件 stamp 增量复用 |
 | `src/main/usage/usage-stats-scan.ts` | 单个会话 JSONL 文件流式解析器：提取助手消息用量、计价消息与费用、模型变更与首条消息标题 |
 | `src/main/usage/ipc.ts` | 会话用量统计查询 IPC 通道注册与校验 |
-| `src/sdk-host/index.ts` | 宿主入口（首个 import 完成进程级 home 改写）、初始化、授权回应与控制／生命周期分派 |
-| `src/sdk-host/product-home.ts` | 把内置 `os` 的 CJS 导出对象上的 `homedir` 指向产品 home，使直接调用 `os.homedir()` 的第三方扩展写入产品目录；命名导入 `homedir` 与依赖 `USERPROFILE` 的调用方仍用真实主目录 |
+| `src/sdk-host/index.ts` | 宿主入口、初始化、授权回应与控制／生命周期分派 |
 | `src/sdk-host/protocol.ts` | 主进程和 SDK 宿主的版本化消息、请求与目标校验 |
 | `src/sdk-host/session-runtime.ts` | 官方 SDK 会话、运行请求、订阅、回退／压缩、产品资源装配与内置扩展装配（含按专家范围收窄 MCP）、资源装配诊断与绑定阶段分类 |
 | `src/sdk-host/expert-role.ts` | 按会话目标读取选中的专家定义，把正文按上限裁剪后装配成 `expert-role` 系统提示分段，并在段尾说明本次的技能／MCP 范围；未选中时不读资源清单；快速模式下专家引用的被剔除规范同样在段尾说明 |

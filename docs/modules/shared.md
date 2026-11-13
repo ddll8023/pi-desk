@@ -7,7 +7,7 @@
 | 文件 | 真实职责与模块使用范围 |
 | --- | --- |
 | `src/main/index.ts` | 只准备入口步骤：准备协议与应用目录、取单实例锁、注册生命周期，随后把启动编排交给 `app-lifecycle.ts`。不含业务逻辑 |
-| `src/main/app-lifecycle.ts` | 便携数据目录、产品 agent 目录与产品 home 固定、首启导入、登录 shell PATH、单实例锁、窗口就绪后按固定顺序调用各能力 `ipc.ts` 注册器、窗口全部关闭与退出链、启动时的扩展自动更新 |
+| `src/main/app-lifecycle.ts` | 便携数据目录、产品 agent 目录固定、首启导入、登录 shell PATH、单实例锁、窗口就绪后按固定顺序调用各能力 `ipc.ts` 注册器、窗口全部关闭与退出链、启动时的扩展自动更新 |
 | `src/main/window.ts` | 唯一窗口的创建、主题与标题栏配色、导航与权限限制、单实例聚焦 |
 | `src/main/window-channel.ts` | 窗口引用、向页面投递事件与全部业务广播、系统目录选择；不持有业务实例，终端状态来源由组合根注册 |
 | `src/main/asset-protocol.ts` | 应用与 HTML 预览协议注册、应用资产处理、页面地址解析、目录越界判定与生产 CSP；预览资源处理归[文件模块](files-editor.md)的独立会话 |
@@ -78,7 +78,7 @@
 | --- | --- | --- |
 | `src/main/shared/managed-entry-runner.ts` | 一次性入口输出分帧、超时、退出判定、单飞执行槽 | 版本检查、扩展更新、运行时安装 |
 | `src/main/shared/pi-cli-process.ts` | 固定产物定位与启动，只返回子进程句柄 | 资源预读、MCP 探测、版本与更新编排 |
-| `src/main/shared/pi-paths.ts` | 固定产品自有 agent 目录、产品 home、只读共享目录与受管环境；注入 SDK 入口 | 会话文件、配置、认证、SDK 宿主（含扩展 home 改写）、辅助入口与首启导入 |
+| `src/main/shared/pi-paths.ts` | 固定产品自有 agent 目录、只读共享目录与受管环境；注入 SDK 入口 | 会话文件、配置、认证、SDK 宿主、辅助入口与首启导入 |
 | `src/main/shared/shell-path.ts` | 图形界面启动时补齐登录 shell 的 PATH | 应用启动与后续外部命令 |
 | `src/shared-process/process-tree-termination.ts` | 跨平台进程树终止 | 受管入口、资源探测、认证及终端守护进程 |
 | `src/shared-process/runtime.ts` | SDK 发布目录布局、当前版本指针、SDK 入口解析、动态加载及自带版本回退 | 主进程运行时解析、SDK 宿主、认证、CLI、版本检查、安装入口 |

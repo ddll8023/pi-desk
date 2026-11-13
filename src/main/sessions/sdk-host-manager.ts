@@ -29,7 +29,7 @@ import { BROWSER_AUTO_ATTACH_EVENT } from '../../shared/browser-session-api'
 import type { BrowserAutoAttachPayload } from '../../shared/browser-session-api'
 import { ExtensionUiManager } from './extension-ui-manager'
 import type { ExtensionDialogResponseInput, ExtensionUiSnapshot } from '../../shared/extension-ui-api'
-import { getPiAgentDir, getPiProcessEnvironment, getProductHomeDir, getSharedPiAgentDir, PRODUCT_HOME_ENV } from '../shared/pi-paths'
+import { getPiAgentDir, getPiProcessEnvironment, getSharedPiAgentDir } from '../shared/pi-paths'
 import { agentResourcesDirectory } from '../../shared-process/agent-resources'
 import { managedMemoryConfiguration } from '../../shared-process/memory-runtime'
 import type { MemoryConfigurationProvider } from '../../shared-process/memory-runtime'
@@ -856,9 +856,6 @@ export class SdkHostManager {
       }
       const agentDir = getPiAgentDir()
       const env = getPiProcessEnvironment()
-      // 仅宿主进程带产品 home：第三方扩展（如 pi-rewind 的检查点）会直接读 `os.homedir()`，
-      // 由 `src/sdk-host/product-home` 按这个值改写；其他受管进程仍使用真实用户主目录。
-      env[PRODUCT_HOME_ENV] = getProductHomeDir()
       // utilityProcess 不是认证 helper 的 ELECTRON_RUN_AS_NODE 子进程。
       delete env.ELECTRON_RUN_AS_NODE
       const child = utilityProcess.fork(entryPath, [], {
