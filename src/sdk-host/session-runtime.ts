@@ -1,4 +1,4 @@
-/** 单活动 SDK 会话的生命周期所有者：负责绑定、运行请求及按分支读取历史，页面级投影与 ready 由主进程映射。 */
+/** 单活动 SDK 会话的生命周期所有者：负责绑定、运行请求、按分支读取历史与注入审计，页面级投影与 ready 由主进程映射。 */
 import { randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { readFile, realpath, stat } from 'node:fs/promises'
@@ -35,9 +35,10 @@ import type {
   SdkSessionStatus, SdkSessionTarget
 } from './protocol'
 import type {
-  AgentCapabilities, ExtensionErrorEntry, McpStatus, ModelSummary, OutputRate, PiResourceEntry, PiResources,
+  AgentCapabilities, ExtensionErrorEntry, McpStatus, MemoryInjectionSnapshot, ModelSummary, OutputRate, PiResourceEntry, PiResources,
   ProjectionBatch, ProjectionSnapshot, PromptDisposition, ResourceIssue, RuntimeDiagnostics, SessionActivity, SessionUsage, SubAgentUsageTotals, HistoryData, HistoryPage, HistoryQuery
 } from '../shared/runtime-api'
+import { isMemoryInjectionSnapshot } from '../shared/runtime-api'
 import { parseSubAgentView } from '../shared/sub-agent-view'
 import { EXPERT_SECTION_KEY, expertRoleSection, readSelectedExpert } from './expert-role'
 import { resolveSessionCapabilityScope } from './expert-capability'
@@ -253,6 +254,8 @@ const DIAGNOSTIC_PREFIXES: Readonly<Record<'info' | 'warning' | 'error', string>
 
 /** `/mcp` 是读取 MCP 状态的唯一固定命令；命令文本不接受页面传入。 */
 const MCP_STATUS_PROMPT = '/mcp'
+/** 扩展写入的注入审计条目类型；与 pi-memory 的 INJECTION_TYPE 一致。 */
+const MEMORY_INJECTION_CUSTOM_TYPE = 'pi-memory.injection.v1'
 
 /** MCP 命令文本由宿主拼出；动作与服务器名都已由主进程校验。 */
 function mcpCommandPrompt(action: SdkMcpCommandAction, serverName: string): string {
@@ -755,6 +758,21 @@ export class SdkSessionRuntime {
   /** MCP 状态读取：固定命令 `/mcp` 的 notify 文本就是状态清单。 */
   async readMcpStatus(bindingId: number): Promise<McpStatus> {
     return this.runMcpPrompt(bindingId, MCP_STATUS_PROMPT)
+  }
+
+  /**
+   * 记忆注入审计：只读当前绑定会话分支里最近一条审计条目，不执行命令、不读库。
+   * 条目数据可能是旧版本或损坏内容，形状不符时按「没有审计」处理。
+   */
+  readMemoryInjection(bindingId: number): MemoryInjectionSnapshot | null {
+    const session = this.requireBoundSession(bindingId)
+    const branch = session.sessionManager.getBranch()
+    for (let index = branch.length - 1; index >= 0; index--) {
+      const entry = branch[index]
+      if (entry === undefined || entry.type !== 'custom' || entry.customType !== MEMORY_INJECTION_CUSTOM_TYPE) continue
+      return isMemoryInjectionSnapshot(entry.data) ? entry.data : null
+    }
+    return null
   }
 
   /** MCP 登录/退出/重连：命令文本固定；浏览器授权与回调地址输入仍走既有 Extension UI 通道。 */

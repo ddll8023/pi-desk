@@ -64,6 +64,8 @@ const MAX_INPUT = 262_144
 const PLAN_ID = /^s_[0-9A-HJKMNP-TV-Z]{26}$/
 const RECORD_ID = /^m_[0-9A-HJKMNP-TV-Z]{26}$/
 const READ_TIMEOUT = 30_000
+/** 画像缓存键查询与常驻段共用短片预算：库忙或卡住时按段降级，不拖住整次请求。 */
+const STATUS_TIMEOUT = 3_000
 /** 权威数据只有一份库文件；宿主传入的 store 仍是目录，由引擎定位库。 */
 const STORE_FILE = 'memory.db'
 const PLAN_VERSION = 4
@@ -238,10 +240,10 @@ export class MemoryEngine {
     }
   }
 
-  /** 画像缓存键用库版本：版本变化即失效，不再读取源文件。 */
-  async profileSignature(selected: Domain[]): Promise<string> {
+  /** 画像缓存键用库版本：版本变化即失效，不再读取源文件；独立短片预算且可被会话取消。 */
+  async profileSignature(selected: Domain[], signal?: AbortSignal): Promise<string> {
     await this.requireStore()
-    const status = await this.run(['status'])
+    const status = await this.run(['status'], undefined, signal, false, undefined, STATUS_TIMEOUT)
     const version = status.store_version
     if (typeof version !== 'number' || !Number.isInteger(version) || version < 0) throw new Error('记忆库版本无效')
     return fingerprint(JSON.stringify([version, [...selected].sort()]))

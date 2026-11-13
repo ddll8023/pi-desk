@@ -35,6 +35,7 @@ import type {
   McpCommandAction,
   McpCommandResult,
   McpStatusResult,
+  MemoryInjectionResult,
   OutputRate,
   ProjectionBatch,
   ProjectionResult,
@@ -1116,6 +1117,19 @@ export class SdkRuntimeBridge {
     this.keepAlive(matched.run.runId)
     try {
       return { ok: true, data: await matched.run.owner.readMcpStatus() }
+    } catch (error) {
+      return { ok: false, error: runtimeErrorOf(error) }
+    }
+  }
+
+  /** 记忆注入审计只读目标实例当前绑定会话的最后一条审计；不执行命令、不读库。 */
+  async readMemoryInjection(target: RuntimeTarget): Promise<MemoryInjectionResult> {
+    const matched = this.matchedRun(target)
+    if (matched === null) return { ok: false, error: TARGET_CHANGED_ERROR }
+    if (matched.bindingId === null) return { ok: false, error: UNBOUND_ERROR }
+    this.keepAlive(matched.run.runId)
+    try {
+      return { ok: true, data: { injection: await matched.run.owner.readMemoryInjection() } }
     } catch (error) {
       return { ok: false, error: runtimeErrorOf(error) }
     }

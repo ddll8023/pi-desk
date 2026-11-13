@@ -1,8 +1,8 @@
 /**
- * 用户级全局记忆的桌面所有者：开关、受管运行时状态、库状态与首次初始化。
+ * 用户级全局记忆的桌面所有者：开关、受管运行时状态、库状态、首次初始化与按 ID 的只读正文读取。
  *
  * 只通过受管解释器与配套引擎执行固定动作；不读项目文件、不推断项目身份、不修改业务项目。
- * 库状态探测是只读调用；创建只在用户明确确认且目标位置尚无可用库时执行，不覆盖既有数据。
+ * 库状态探测与正文读取都是只读调用；创建只在用户明确确认且目标位置尚无可用库时执行，不覆盖既有数据。
  * 写入用户库的真值只有安装级配置里的开关；页面与宿主都只读这一份结果。
  */
 import { spawn } from 'node:child_process'
@@ -12,7 +12,7 @@ import { join } from 'node:path'
 import type { DesktopConfigStore } from '../config/desktop-config-store'
 import type { MemoryHostConfiguration, MemoryConfigurationProvider } from '../../shared-process/memory-runtime'
 import { managedMemoryConfiguration } from '../../shared-process/memory-runtime'
-import type { MemoryErrorCode, MemoryInitializeRequest, MemoryPreference, MemoryResult, MemorySnapshot } from '../../shared/memory-api'
+import type { MemoryErrorCode, MemoryInitializeRequest, MemoryPreference, MemoryReadRecord, MemoryReadResult, MemoryResult, MemorySnapshot } from '../../shared/memory-api'
 
 const ENGINE_TIMEOUT_MS = 30_000
 const ENGINE_MAX_OUTPUT = 4 * 1024 * 1024
@@ -35,6 +35,14 @@ function failure(code: MemoryErrorCode, message: string): MemoryResult {
 }
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+/** 只搬展示所需字段：引擎行缺少可选文本时留空，不因缺字段丢掉整条正文。 */
+function toReadRecord(value: unknown): MemoryReadRecord | null {
+  if (!isRecord(value) || typeof value.id !== 'string' || typeof value.content !== 'string') return null
+  const text = (item: unknown): string => (typeof item === 'string' ? item : '')
+  return { id: value.id, title: text(value.title), type: text(value.type), date: text(value.date),
+    topic: text(value.topic), status: text(value.status), content: value.content }
 }
 
 export class MemoryManager {
@@ -298,6 +306,34 @@ export class MemoryManager {
         message: '该位置已有目录但没有记忆库文件；创建只会在空目录中进行，不会覆盖既有文件。' }
     }
     return null
+  }
+
+  /**
+   * 只读读取记录正文：ID 由调用方给出，只用引擎固定的 `read` 子命令。
+   * 不写库、不记录访问统计；库不存在时如实报告，不把它当成空结果。
+   */
+  async readRecords(ids: readonly string[]): Promise<MemoryReadResult> {
+    let configuration: MemoryHostConfiguration
+    try { configuration = await this.configuration(this.options.hostEntry()) }
+    catch { return { ok: false, error: { code: 'RUNTIME_MISSING', message: '受管记忆运行环境不可用' } } }
+    const result = await this.runEngine(configuration, ['read', ...ids])
+    try {
+      const parsed: unknown = JSON.parse(result.text)
+      if (isRecord(parsed) && parsed.ok === true && isRecord(parsed.data) && Array.isArray(parsed.data.records)) {
+        const records = parsed.data.records
+          .map(toReadRecord).filter((record): record is MemoryReadRecord => record !== null)
+        if (records.length !== ids.length) {
+          return { ok: false, error: { code: 'INVALID_RESPONSE', message: '记忆引擎返回的记录与请求不一致。' } }
+        }
+        return { ok: true, data: { records } }
+      }
+      if (isRecord(parsed) && isRecord(parsed.error) && typeof parsed.error.message === 'string') {
+        const message = parsed.error.message
+        const missing = /记忆库不存在|记忆库文件缺失/.test(message)
+        return { ok: false, error: { code: missing ? 'STORE_UNAVAILABLE' : 'INTERNAL_ERROR', message } }
+      }
+    } catch { /* 非 JSON 输出按引擎失败处理。 */ }
+    return { ok: false, error: { code: 'INTERNAL_ERROR', message: this.describeFailure(result) } }
   }
 
   private describeFailure(result: { code: number; text: string }): string {

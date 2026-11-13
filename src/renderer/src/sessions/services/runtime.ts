@@ -1,7 +1,8 @@
-/** 渲染端 Runtime 状态、模型选择、Prompt、回退、手动压缩与投影同步的受限桥接入口；通信异常转换为安全的展示结果。 */
+/** 渲染端 Runtime 状态、模型选择、Prompt、回退、手动压缩、投影同步与记忆注入审计的受限桥接入口；通信异常转换为安全的展示结果。 */
 import { cloneImageAnnotations } from '../../../../shared/image-annotation'
 import type {
   CapabilitiesResult,
+  MemoryInjectionResult,
   ProjectionBatch,
   ProjectionResult,
   PromptImageInput,
@@ -203,5 +204,21 @@ export function subscribeRuntimeProjection(listener: (batch: ProjectionBatch) =>
     return bridge.onRuntimeProjectionChanged(listener)
   } catch {
     return () => {}
+  }
+}
+
+/**
+ * 只读当前绑定会话最近一条记忆注入审计：不执行命令、不读记忆库。
+ * 没有审计（旧会话或记忆从未启用）时返回 `injection: null`，与读取失败分开表达。
+ */
+export async function readMemoryInjection(target: RuntimeTarget): Promise<MemoryInjectionResult> {
+  const bridge = window.desktop
+  if (!bridge || typeof bridge.readRuntimeMemoryInjection !== 'function') {
+    return { ok: false, error: { code: 'BRIDGE_UNAVAILABLE', message: '桌面桥接不可用，请通过 Electron 打开此页面。' } }
+  }
+  try {
+    return await bridge.readRuntimeMemoryInjection({ runId: target.runId, runtimeId: target.runtimeId })
+  } catch (error) {
+    return callFailed(error)
   }
 }

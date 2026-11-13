@@ -1,10 +1,10 @@
-/** Runtime、模型能力、资源与 MCP：preload 的 runtime 域，只经固定 channel 与主进程通信，载荷与响应在此重建与校验。 */
+/** Runtime、模型能力、资源、MCP 与记忆注入审计：preload 的 runtime 域，只经固定 channel 与主进程通信，载荷与响应在此重建与校验。 */
 
 import { ipcRenderer } from 'electron'
 import { cloneImageAnnotations } from '../shared/image-annotation'
 import type { IpcRendererEvent } from 'electron'
-import { RUNTIME_ABORT_CHANNEL, RUNTIME_SUB_AGENT_CANCEL_CHANNEL, RUNTIME_CAPABILITIES_CHANNEL, RUNTIME_COMPACT_CHANNEL, RUNTIME_SET_MODEL_CHANNEL, RUNTIME_DIAGNOSTICS_CHANNEL, RUNTIME_MCP_COMMAND_CHANNEL, RUNTIME_MCP_CONFIG_CHANNEL, RUNTIME_MCP_INSPECT_ABORT_CHANNEL, RUNTIME_MCP_INSPECT_CHANNEL, RUNTIME_MCP_STATUS_CHANNEL, RUNTIME_PROMPT_CHANNEL, RUNTIME_REWIND_CHANNEL, RUNTIME_PROJECTION_ACK_CHANNEL, RUNTIME_PROJECTION_CHANNEL, RUNTIME_PROJECTION_EVENT, RUNTIME_RESOURCES_CHANNEL, RUNTIME_RESOURCE_PREVIEW_CHANNEL, RUNTIME_STATUS_CHANNEL, RUNTIME_STATUS_EVENT, isCapabilitiesResult, isMcpCommandResult, isMcpConfigResult, isMcpInspectionResult, isMcpInspectAbortResult, isMcpStatusResult, isProjectionBatch, isProjectionResult, isPromptResult, isResourcesResult, isResourcePreviewResult, isRuntimeDiagnosticsResult, isRuntimeResult, isRuntimeRewindResult, isRuntimeStatus } from '../shared/runtime-api'
-import type { CapabilitiesResult, McpCommandAction, McpCommandResult, McpConfigResult, McpInspectionResult, McpInspectAbortResult, McpStatusResult, ProjectionBatch, ProjectionResult, PromptImageInput, PromptResult, ResourcesResult, ResourcePreviewResult, RuntimeCompactRequest, RuntimeDiagnosticsResult, RuntimeResult, RuntimeSetModelRequest, RuntimeRewindRequest, RuntimeStatus, RuntimeSubAgentCancelRequest, RuntimeTarget } from '../shared/runtime-api'
+import { RUNTIME_ABORT_CHANNEL, RUNTIME_SUB_AGENT_CANCEL_CHANNEL, RUNTIME_CAPABILITIES_CHANNEL, RUNTIME_COMPACT_CHANNEL, RUNTIME_SET_MODEL_CHANNEL, RUNTIME_DIAGNOSTICS_CHANNEL, RUNTIME_MCP_COMMAND_CHANNEL, RUNTIME_MCP_CONFIG_CHANNEL, RUNTIME_MCP_INSPECT_ABORT_CHANNEL, RUNTIME_MCP_INSPECT_CHANNEL, RUNTIME_MCP_STATUS_CHANNEL, RUNTIME_MEMORY_INJECTION_CHANNEL, RUNTIME_PROMPT_CHANNEL, RUNTIME_REWIND_CHANNEL, RUNTIME_PROJECTION_ACK_CHANNEL, RUNTIME_PROJECTION_CHANNEL, RUNTIME_PROJECTION_EVENT, RUNTIME_RESOURCES_CHANNEL, RUNTIME_RESOURCE_PREVIEW_CHANNEL, RUNTIME_STATUS_CHANNEL, RUNTIME_STATUS_EVENT, isCapabilitiesResult, isMcpCommandResult, isMcpConfigResult, isMcpInspectionResult, isMcpInspectAbortResult, isMcpStatusResult, isMemoryInjectionResult, isProjectionBatch, isProjectionResult, isPromptResult, isResourcesResult, isResourcePreviewResult, isRuntimeDiagnosticsResult, isRuntimeResult, isRuntimeRewindResult, isRuntimeStatus } from '../shared/runtime-api'
+import type { CapabilitiesResult, McpCommandAction, McpCommandResult, McpConfigResult, McpInspectionResult, McpInspectAbortResult, McpStatusResult, MemoryInjectionResult, ProjectionBatch, ProjectionResult, PromptImageInput, PromptResult, ResourcesResult, ResourcePreviewResult, RuntimeCompactRequest, RuntimeDiagnosticsResult, RuntimeResult, RuntimeSetModelRequest, RuntimeRewindRequest, RuntimeStatus, RuntimeSubAgentCancelRequest, RuntimeTarget } from '../shared/runtime-api'
 import type { RuntimeApi } from '../shared/runtime-api'
 
 const INVALID_RUNTIME_RESPONSE = '桌面接口返回了无法识别的 Runtime 结果。'
@@ -15,6 +15,7 @@ const INVALID_RESOURCES_RESPONSE = '桌面接口返回了无法识别的资源�
 const INVALID_RESOURCE_PREVIEW_RESPONSE = '桌面接口返回了无法识别的资源预读结果。'
 const INVALID_DIAGNOSTICS_RESPONSE = '桌面接口返回了无法识别的诊断结果。'
 const INVALID_MCP_STATUS_RESPONSE = '桌面接口返回了无法识别的 MCP 状态结果。'
+const INVALID_MEMORY_INJECTION_RESPONSE = '桌面接口返回了无法识别的记忆注入审计结果。'
 const INVALID_MCP_INSPECTION_RESPONSE = '桌面接口返回了无法识别的 MCP 探测结果。'
 const INVALID_MCP_CONFIG_RESPONSE = '桌面接口返回了无法识别的 MCP 配置列举结果。'
 const INVALID_MCP_INSPECT_ABORT_RESPONSE = '桌面接口返回了无法识别的中止探测结果。'
@@ -179,6 +180,16 @@ export const runtimeApi = {
       runtimeId: target.runtimeId
     })
     return isMcpStatusResult(response) ? response : invalidMcpStatusResponse()
+  },
+
+  async readRuntimeMemoryInjection(target: RuntimeTarget): Promise<MemoryInjectionResult> {
+    const response: unknown = await ipcRenderer.invoke(RUNTIME_MEMORY_INJECTION_CHANNEL, {
+      runId: target.runId,
+      runtimeId: target.runtimeId
+    })
+    return isMemoryInjectionResult(response)
+      ? response
+      : { ok: false, error: { code: 'INVALID_RESPONSE', message: INVALID_MEMORY_INJECTION_RESPONSE } }
   },
 
   async runRuntimeMcpCommand(

@@ -1,9 +1,10 @@
 /**
- * Runtime 桥接对象的完整接口：聚合会话状态与命令、消息投影、模型能力、资源及 MCP 方法。
+ * Runtime 桥接对象的完整接口：聚合会话状态与命令、消息投影、模型能力、资源、MCP 与记忆注入审计方法。
  * 具体载荷和校验由对应契约文件维护，此处只定义页面可见的方法签名。
  */
 
 import type { CapabilitiesResult } from './models'
+import type { MemoryInjectionResult } from './memory'
 import type { McpCommandAction, McpCommandResult, McpConfigResult, McpInspectAbortResult, McpInspectionResult, McpStatusResult, ResourcePreviewResult, ResourcesResult } from './resources'
 import type { ProjectionBatch, ProjectionResult } from './projection'
 import type { PromptImageInput, PromptResult, RuntimeCompactRequest, RuntimeDiagnosticsResult, RuntimeResult, RuntimeRewindRequest, RuntimeRewindResult, RuntimeSetModelRequest, RuntimeStatus, RuntimeSubAgentCancelRequest, RuntimeTarget } from './status'
@@ -41,6 +42,8 @@ export interface RuntimeApi {
   readonly getRuntimeDiagnostics: (target: RuntimeTarget) => Promise<RuntimeDiagnosticsResult>
   /** 固定请求目标运行实例的 `/mcp` 状态；状态文本由 notify 捕获后返回，不在页面拼造。 */
   readonly readRuntimeMcpStatus: (target: RuntimeTarget) => Promise<McpStatusResult>
+  /** 只读目标运行实例当前绑定会话最近一条记忆注入审计；不执行命令、不读记忆库。 */
+  readonly readRuntimeMemoryInjection: (target: RuntimeTarget) => Promise<MemoryInjectionResult>
   /** MCP 服务器 OAuth 登录、退出或重连；服务器名由页面给出但由主进程校验，命令文本由主进程拼出。 */
   readonly runRuntimeMcpCommand: (target: RuntimeTarget, action: McpCommandAction, serverName: string) => Promise<McpCommandResult>
   /**

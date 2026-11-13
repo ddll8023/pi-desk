@@ -30,6 +30,8 @@ export const RUNTIME_RESOURCE_PREVIEW_CHANNEL = 'desktop:runtime-resource-previe
 export const RUNTIME_DIAGNOSTICS_CHANNEL = 'desktop:runtime-diagnostics'
 /** 固定请求 `/mcp` 状态；不接受页面传入命令文本。 */
 export const RUNTIME_MCP_STATUS_CHANNEL = 'desktop:runtime-mcp-status'
+/** 只读：当前绑定会话最近一条记忆注入审计；不执行命令、不读库。 */
+export const RUNTIME_MEMORY_INJECTION_CHANNEL = 'desktop:runtime-memory-injection'
 /** MCP 服务器 OAuth 登录、退出与重连；只接受受校验的服务器名，命令文本由主进程拼出。 */
 export const RUNTIME_MCP_COMMAND_CHANNEL = 'desktop:runtime-mcp-command'
 /**

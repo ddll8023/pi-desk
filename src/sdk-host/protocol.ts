@@ -10,17 +10,17 @@ import { isExecutionMode } from '../shared/preferences-api'
 import type { ExecutionMode } from '../shared/preferences-api'
 import {
   COMPACT_INSTRUCTIONS_MAX_CHARS, RESOURCE_ISSUE_LIMIT,
-  isCapabilitiesResult, isMcpCommandResult, isMcpStatusResult, isOutputRate, isProjectionBatch,
+  isCapabilitiesResult, isMcpCommandResult, isMcpStatusResult, isMemoryInjectionResult, isOutputRate, isProjectionBatch,
   isProjectionResult, isResourceIssue, isResourcesResult, isRuntimeDiagnosticsResult, isSessionUsage, isHistoryQuery, isHistoryData
 } from '../shared/runtime-api'
 import type { ExtensionDialogResponseInput } from '../shared/extension-ui-api'
 import type {
-  AgentCapabilities, McpStatus, OutputRate, PiResources, ProjectionBatch, ProjectionSnapshot,
+  AgentCapabilities, McpStatus, MemoryInjectionSnapshot, OutputRate, PiResources, ProjectionBatch, ProjectionSnapshot,
   ResourceIssue, RuntimeDiagnostics, SessionUsage, HistoryQuery, HistoryData
 } from '../shared/runtime-api'
 
-/** 目标结构新增 `expertId`，旧宿主读到不带它的目标会拒收，因此升版本而不做兼容。 */
-export const SDK_HOST_PROTOCOL_VERSION = 13
+/** 目标结构新增 `expertId`，旧宿主读到不带它的目标会拒收；`memory-injection` 请求同理，因此升版本而不做兼容。 */
+export const SDK_HOST_PROTOCOL_VERSION = 14
 /** 桌面记忆配置推送通道：与扩展侧 host.ts 的常量一致，只传受限配置对象。 */
 export const MEMORY_CONFIGURATION_CHANGED = 'pi-desk:memory-configuration-changed:v1'
 
@@ -200,6 +200,8 @@ export type SdkHostRequest =
   | (RequestEnvelope & { readonly type: 'diagnostics'; readonly bindingId: number })
   /** MCP 状态只读固定命令 `/mcp` 的 notify 捕获结果；命令文本不接受页面传入。 */
   | (RequestEnvelope & { readonly type: 'mcp-status'; readonly bindingId: number })
+  /** 记忆注入审计只读当前绑定会话分支里最近一条 `pi-memory.injection.v1`；不执行命令、不读库。 */
+  | (RequestEnvelope & { readonly type: 'memory-injection'; readonly bindingId: number })
   /** MCP 登录/退出/重连：动作与服务器名由主进程校验后拼成固定命令。 */
   | (RequestEnvelope & { readonly type: 'mcp-command'; readonly bindingId: number;
       readonly action: SdkMcpCommandAction; readonly serverName: string })
@@ -233,6 +235,7 @@ export type SdkHostFrame =
   | (RequestEnvelope & { readonly type: 'resources-result'; readonly resources: PiResources })
   | (RequestEnvelope & { readonly type: 'diagnostics-result'; readonly diagnostics: RuntimeDiagnostics })
   | (RequestEnvelope & { readonly type: 'mcp-status-result'; readonly status: McpStatus })
+  | (RequestEnvelope & { readonly type: 'memory-injection-result'; readonly injection: MemoryInjectionSnapshot | null })
   | (RequestEnvelope & { readonly type: 'mcp-command-result'; readonly status: McpStatus })
   | (RequestEnvelope & { readonly type: 'ack-result' })
   | (RequestEnvelope & { readonly type: 'ui-result' })
@@ -408,6 +411,7 @@ export function isSdkHostRequest(value: unknown): value is SdkHostRequest {
     case 'resources': return isIdentity(value.bindingId) && requestKeys(value, ['bindingId'])
     case 'diagnostics': return isIdentity(value.bindingId) && requestKeys(value, ['bindingId'])
     case 'mcp-status': return isIdentity(value.bindingId) && requestKeys(value, ['bindingId'])
+    case 'memory-injection': return isIdentity(value.bindingId) && requestKeys(value, ['bindingId'])
     case 'mcp-command': return isIdentity(value.bindingId) && isMcpCommandActionValue(value.action)
       && isIdentifier(value.serverName) && requestKeys(value, ['bindingId', 'action', 'serverName'])
     case 'projection-snapshot': return isIdentity(value.bindingId) && requestKeys(value, ['bindingId'])
@@ -446,6 +450,8 @@ export function isSdkHostFrame(value: unknown): value is SdkHostFrame {
       && requestKeys(value, ['diagnostics'])
     case 'mcp-status-result': return isMcpStatusResult({ ok: true, data: value.status })
       && requestKeys(value, ['status'])
+    case 'memory-injection-result': return isMemoryInjectionResult({ ok: true, data: { injection: value.injection } })
+      && requestKeys(value, ['injection'])
     case 'mcp-command-result': return isMcpCommandResult({ ok: true, data: value.status })
       && requestKeys(value, ['status'])
     case 'rewind-result': return typeof value.cancelled === 'boolean'

@@ -1,4 +1,4 @@
-/** Pi 资源与 MCP 的 IPC：只读资源清单、共享预读（资源、可用模型与默认模型）、启动诊断、MCP 状态、登录/退出/重连、配置列举、服务器探测与中止。命令文本由主进程按固定调用点给出。 */
+/** Pi 资源与 MCP 的 IPC：只读资源清单、共享预读（资源、可用模型与默认模型）、启动诊断、MCP 状态、登录/退出/重连、配置列举、服务器探测与中止，以及只读的记忆注入审计。命令文本由主进程按固定调用点给出。 */
 
 import { app } from 'electron'
 import type { IpcMainInvokeEvent } from 'electron'
@@ -9,6 +9,7 @@ import {
   RUNTIME_MCP_INSPECT_ABORT_CHANNEL,
   RUNTIME_MCP_INSPECT_CHANNEL,
   RUNTIME_MCP_STATUS_CHANNEL,
+  RUNTIME_MEMORY_INJECTION_CHANNEL,
   RUNTIME_RESOURCES_CHANNEL,
   RUNTIME_RESOURCE_PREVIEW_CHANNEL,
   isResourcePreviewRequest,
@@ -20,6 +21,7 @@ import type {
   McpInspectionResult,
   McpInspectAbortResult,
   McpStatusResult,
+  MemoryInjectionResult,
   ResourcesResult,
   ResourcePreviewResult,
   RuntimeDiagnosticsResult,
@@ -45,6 +47,10 @@ export function diagnosticsFailure(code: RuntimeErrorCode, message: string): Run
 }
 
 export function mcpStatusFailure(code: RuntimeErrorCode, message: string): McpStatusResult {
+  return { ok: false, error: { code, message } }
+}
+
+export function memoryInjectionFailure(code: RuntimeErrorCode, message: string): MemoryInjectionResult {
   return { ok: false, error: { code, message } }
 }
 
@@ -124,6 +130,20 @@ export function registerResourceHandlers(pageUrl: string): void {
         return diagnosticsFailure('INVALID_REQUEST', '诊断接口只接受运行实例与绑定代际。')
       }
       return sdkRuntime.readDiagnostics(args[0])
+    }
+  )
+
+  /** 记忆注入审计只读当前绑定会话最近一条记录；不执行命令、不读记忆库。 */
+  handle(
+    RUNTIME_MEMORY_INJECTION_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<MemoryInjectionResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return memoryInjectionFailure('FORBIDDEN', '不允许此页面调用桌面接口。')
+      }
+      if (args.length !== 1 || !isRuntimeTarget(args[0])) {
+        return memoryInjectionFailure('INVALID_REQUEST', '记忆注入审计接口只接受运行实例与绑定代际。')
+      }
+      return sdkRuntime.readMemoryInjection(args[0])
     }
   )
 

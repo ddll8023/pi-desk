@@ -270,6 +270,9 @@ async function dispatch(request: SdkHostRequest): Promise<void> {
     case 'mcp-status':
       send({ ...envelope, type: 'mcp-status-result', status: await runtime.readMcpStatus(request.bindingId) })
       return
+    case 'memory-injection':
+      send({ ...envelope, type: 'memory-injection-result', injection: runtime.readMemoryInjection(request.bindingId) })
+      return
     case 'mcp-command':
       send({ ...envelope, type: 'mcp-command-result',
         status: await runtime.runMcpCommand(request.bindingId, request.action, request.serverName) })

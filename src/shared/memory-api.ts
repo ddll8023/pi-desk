@@ -2,9 +2,26 @@
 export const MEMORY_STATUS_CHANNEL = 'desktop:memory-status'
 export const MEMORY_ENABLED_CHANNEL = 'desktop:memory-enabled'
 export const MEMORY_INITIALIZE_CHANNEL = 'desktop:memory-initialize'
+/** 只读：按真实记录 ID 取回正文，供会话内的注入条目展开；不写库、不记录访问统计。 */
+export const MEMORY_READ_CHANNEL = 'desktop:memory-read'
 
 export interface MemoryPreference { readonly enabled: boolean }
 export interface MemoryInitializeRequest { readonly timezone: string }
+
+/** 正文读取只接受真实记录 ID：页面不能按关键词、路径或数量扫描库。 */
+export interface MemoryReadRequest { readonly ids: readonly string[] }
+export interface MemoryReadRecord {
+  readonly id: string
+  readonly title: string
+  readonly type: string
+  readonly date: string
+  readonly topic: string
+  readonly status: string
+  readonly content: string
+}
+export type MemoryReadResult =
+  | { readonly ok: true; readonly data: { readonly records: readonly MemoryReadRecord[] } }
+  | { readonly ok: false; readonly error: { readonly code: MemoryErrorCode; readonly message: string } }
 export interface MemorySnapshot {
   readonly enabled: boolean
   readonly activation: 'applied' | 'unconfirmed'
@@ -31,6 +48,7 @@ export interface MemoryApi {
   readonly getMemoryStatus: () => Promise<MemoryResult>
   readonly setMemoryEnabled: (request: MemoryPreference) => Promise<MemoryResult>
   readonly initializeMemory: (request: MemoryInitializeRequest) => Promise<MemoryResult>
+  readonly readMemoryRecords: (request: MemoryReadRequest) => Promise<MemoryReadResult>
 }
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -64,4 +82,37 @@ export function isMemoryResult(value: unknown): value is MemoryResult {
   return value.ok === false && record(value.error) && typeof value.error.message === 'string'
     && ['FORBIDDEN', 'INVALID_REQUEST', 'INTERNAL_ERROR', 'CANCELLED', 'RUNTIME_MISSING', 'STORE_UNAVAILABLE',
       'INITIALIZATION_FAILED', 'BUSY', 'BRIDGE_UNAVAILABLE', 'INVALID_RESPONSE'].includes(String(value.error.code))
+}
+
+const RECORD_ID = /^m_[0-9A-HJKMNP-TV-Z]{26}$/
+/** 与扩展侧 `memory_read` 的上限一致：一次最多 50 条，不接受重复 ID。 */
+export const MEMORY_READ_MAX_IDS = 50
+
+export function isMemoryReadRequest(value: unknown): value is MemoryReadRequest {
+  if (!record(value) || Object.keys(value).length !== 1 || !Array.isArray(value.ids)) return false
+  const ids = value.ids
+  return ids.length > 0 && ids.length <= MEMORY_READ_MAX_IDS
+    && ids.every(id => typeof id === 'string' && RECORD_ID.test(id))
+    && new Set(ids).size === ids.length
+}
+
+function isMemoryReadRecord(value: unknown): value is MemoryReadRecord {
+  if (!record(value)) return false
+  return typeof value.id === 'string' && RECORD_ID.test(value.id)
+    && typeof value.title === 'string' && value.title.length <= 300
+    && typeof value.type === 'string' && value.type.length <= 64
+    && typeof value.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value.date)
+    && typeof value.topic === 'string' && value.topic.length <= 300
+    && typeof value.status === 'string' && value.status.length <= 32
+    && typeof value.content === 'string' && value.content.length <= 20_000
+}
+
+export function isMemoryReadResult(value: unknown): value is MemoryReadResult {
+  if (!record(value)) return false
+  if (value.ok === true) {
+    return record(value.data) && Array.isArray(value.data.records)
+      && value.data.records.length <= MEMORY_READ_MAX_IDS && value.data.records.every(isMemoryReadRecord)
+  }
+  return value.ok === false && record(value.error) && typeof value.error.message === 'string'
+    && typeof value.error.code === 'string'
 }

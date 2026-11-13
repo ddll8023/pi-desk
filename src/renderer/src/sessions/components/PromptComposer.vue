@@ -9,7 +9,7 @@ import { PROJECT_FILE_QUERY_MAX_CHARS } from '../../../../shared/project-file-ap
 import { cloneImageAnnotations, imageAnnotationError } from '../../../../shared/image-annotation'
 import type { ImageAnnotationDocument } from '../../../../shared/image-annotation'
 import { PROMPT_IMAGE_MAX_COUNT } from '../../../../shared/runtime-api'
-import type { OutputRate, PiResourceEntry, PiResourceKind, PromptDisposition, PromptImageInput } from '../../../../shared/runtime-api'
+import type { OutputRate, PiResourceEntry, PiResourceKind, PromptDisposition, PromptImageInput, RuntimeTarget } from '../../../../shared/runtime-api'
 import type { ExecutionMode } from '../../../../shared/preferences-api'
 import type { SessionExpertView } from '../../../../shared/session-api'
 import { useExtensionUiStore } from '../stores/extension-ui'
@@ -30,6 +30,7 @@ import type { SelectGroup, SelectOption } from '../../ui/AppSelectList.vue'
 import ConfirmDialog from '../../ui/ConfirmDialog.vue'
 import RuntimeModelSelect from '../../providers/components/RuntimeModelSelect.vue'
 import UsageDetailDialog from './UsageDetailDialog.vue'
+import MemoryInjectionDialog from './MemoryInjectionDialog.vue'
 import PromptImageMaterials from './PromptImageMaterials.vue'
 import TodoPanel from './TodoPanel.vue'
 import { hasProjectEntryDragData, projectEntryReferenceText, readProjectEntryDragData } from '../../ui/project-entry-drag'
@@ -57,7 +58,17 @@ let mounted = true
 let startupProjectPath: string | null = null
 let startupTabKey: string | null = null
 const submitting = ref(false)
+/** 记忆注入卡片：`/memory status` 在桌面打开它，带参数时仍走扩展命令的文本输出。 */
+const memoryInjectionOpen = ref(false)
+const memoryInjectionTarget = computed<RuntimeTarget | null>(() => {
+  if (runtimeView.value.phase !== 'ready') return null
+  const snapshot = runtimeView.value.snapshot
+  return snapshot.runId === null ? null : { runId: snapshot.runId, runtimeId: snapshot.runtimeId }
+})
 const pendingRecoveryId = ref<number | null>(null)
+// 卡片只描述当前会话最近一次注入：切标签或项目后关闭，避免把另一个会话的数据留在屏幕上。
+watch(() => [workspaceTabsStore.activeTab, projectStore.currentProject?.path] as const,
+  () => { memoryInjectionOpen.value = false })
 const pendingSyncPrompt = computed(() => {
   const pending = sessionViewStore.pendingPrompt
   return props.active && pending !== null && (pending.phase === 'accepted' || pending.phase === 'unconfirmed')
@@ -1095,6 +1106,12 @@ async function submit(): Promise<void> {
     }
     return
   }
+  // `/memory status` 由桌面打开注入卡片；带参数（如 json）仍交给扩展命令输出文本。
+  if (/^\/memory(\s+status)?$/.test(draft.value.trim())) {
+    draft.value = ''
+    memoryInjectionOpen.value = true
+    return
+  }
   // 新建对话由 Desktop 发起：在当前标签内就地替换，结束原实例并清空它的会话身份。
   // 判定用 trim：斜杠补全写入的候选带一个尾随空格，命令文本不能因此被当成普通输入发给模型。
   if (draft.value.trim() === '/new') {
@@ -2060,6 +2077,11 @@ onMounted(() => {
         :usage="usage"
         :rate="rate"
         @close="usageOpen = false"
+      />
+      <MemoryInjectionDialog
+        :open="memoryInjectionOpen"
+        :target="memoryInjectionTarget"
+        @close="memoryInjectionOpen = false"
       />
     </Teleport>
   </section>

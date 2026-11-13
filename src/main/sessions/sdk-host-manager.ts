@@ -19,7 +19,7 @@ import type {
   SdkLogTarget, SdkBrowserOperationResult
 } from '../../sdk-host/protocol'
 import type {
-  AgentCapabilities, McpStatus, PiResources, ProjectionBatch, ProjectionSnapshot, PromptImageInput,
+  AgentCapabilities, McpStatus, MemoryInjectionSnapshot, PiResources, ProjectionBatch, ProjectionSnapshot, PromptImageInput,
   RuntimeDiagnostics, HistoryData, HistoryQuery
 } from '../../shared/runtime-api'
 import type { BrowserSessionService } from '../browser/browser-session-service'
@@ -517,6 +517,19 @@ export class SdkHostManager {
       requestId: randomUUID(), type: 'mcp-status', bindingId }, MCP_STATUS_TIMEOUT_MS)
     if (frame.type !== 'mcp-status-result') throw new SdkHostError('HOST_PROTOCOL_ERROR', 'MCP 状态结果不符合契约。')
     return frame.status
+  }
+
+  /** 记忆注入审计：只读当前绑定会话最近一条审计条目，不跑命令、不读库。 */
+  async readMemoryInjection(): Promise<MemoryInjectionSnapshot | null> {
+    const record = this.requireHost(true)
+    const bindingId = this.sessionSnapshot.bindingId
+    if (bindingId === null) throw new SdkHostError('STALE_SESSION', FAILURE_MESSAGES.STALE_SESSION)
+    const frame = await this.request(record, { version: SDK_HOST_PROTOCOL_VERSION, hostId: record.hostId,
+      requestId: randomUUID(), type: 'memory-injection', bindingId }, SESSION_TIMEOUT_MS)
+    if (frame.type !== 'memory-injection-result') {
+      throw new SdkHostError('HOST_PROTOCOL_ERROR', '记忆注入审计结果不符合契约。')
+    }
+    return frame.injection
   }
 
   /** MCP 登录/退出/重连：命令文本由宿主拼出，等待期限按动作区分。 */
