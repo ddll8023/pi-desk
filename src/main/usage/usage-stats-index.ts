@@ -13,13 +13,14 @@ import { dirname, join } from 'node:path'
 import { app } from 'electron'
 import type {
   UsageDailyStat,
-  UsageModelStat,
+  UsageModelDailyStat,
+  UsageSubAgentDailyStat,
   UsageTokenBreakdown
 } from '../../shared/usage-stats-api'
 
 const FILE_NAME = 'usage-stats-index.json'
-// 版本 2：会话条目增加 costMessages（计价消息数），模型与日度条目增加可空 cost，旧缓存不再兼容。
-const INDEX_VERSION = 2
+// 版本 3：会话条目改为按日、模型×日与子代理×日明细（支撑渲染层按时间范围派生视图），旧缓存不再兼容。
+const INDEX_VERSION = 3
 
 /** 单个会话文件的缓存统计数据 */
 export interface CachedSessionUsage {
@@ -34,8 +35,9 @@ export interface CachedSessionUsage {
   readonly cost: number
   /** 已上报价格的助手消息数；为 0 时表示本会话没有可用费用。 */
   readonly costMessages: number
-  readonly models: readonly UsageModelStat[]
   readonly daily: readonly UsageDailyStat[]
+  readonly modelDaily: readonly UsageModelDailyStat[]
+  readonly subAgentDaily: readonly UsageSubAgentDailyStat[]
 }
 
 interface StoredUsageIndex {
@@ -152,7 +154,8 @@ export class UsageStatsIndexStore {
       && isRecord(value.totals)
       && typeof value.cost === 'number'
       && typeof value.costMessages === 'number'
-      && Array.isArray(value.models)
       && Array.isArray(value.daily)
+      && Array.isArray(value.modelDaily)
+      && Array.isArray(value.subAgentDaily)
   }
 }

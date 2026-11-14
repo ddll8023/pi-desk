@@ -1,6 +1,7 @@
 <!-- 用量日度热力图：
      把近一年的每日 Token 画成 7 行 × N 列日历格，用同一色相的深浅表达强度。
-     只表达分布与量级，精确读数交给格子悬停提示和下方按日明细表，不为每格增加 Tab 停留点。
+     只表达分布与量级，精确读数交给格子悬停提示和按日明细表，不为每格增加 Tab 停留点；
+     有记录的格子可点击，点击进入当日会话明细，键盘用户经按日明细表的日期按钮进入同一入口。
      未来日期留空占位以保持列对齐；无记录日期用底槽色，与「有记录但很小」区分开。 -->
 <script setup lang="ts">
 import type { HeatmapModel } from '../usage-stats-view'
@@ -11,6 +12,8 @@ interface Props {
 }
 
 const props = defineProps<Props>()
+
+const emit = defineEmits<{ select: [date: string] }>()
 
 /** 只标三行星期，七行全标会挤在一起且没有更多信息。 */
 const WEEKDAY_LABELS = [
@@ -64,9 +67,13 @@ const WEEKDAY_LABELS = [
               v-for="cell in week.cells"
               :key="cell.date"
               class="size-[10px] shrink-0 rounded-[2px]"
-              :class="cell.future ? 'invisible' : ''"
+              :class="[
+                cell.future ? 'invisible' : '',
+                cell.clickable ? 'cursor-pointer transition-shadow hover:outline hover:outline-1 hover:outline-[var(--color-desk-accent)]' : ''
+              ]"
               :style="{ backgroundColor: HEATMAP_LEVEL_COLORS[cell.level] }"
               :title="cell.title === '' ? undefined : cell.title"
+              @click="cell.clickable ? emit('select', cell.date) : undefined"
             ></span>
           </div>
         </div>

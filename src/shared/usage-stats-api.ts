@@ -1,6 +1,8 @@
 /**
  * 会话用量统计共享 API 契约：
- * 定义跨项目与跨会话的 token 与费用统计摘要、按日趋势、模型与项目分布、Top 会话的 IPC 通道及类型校验。
+ * 主进程只回传「meta + 会话明细数组」这一份单一数据源，每条会话携带按日、模型×日与子代理×日明细；
+ * 概览、趋势、分布与会话列表等全部报表视图由渲染层按统一时间范围从明细派生。
+ * 费用只采信供应商上报的价格，缺失时保持 null，不推算金额。
  */
 import type { DesktopError } from './desktop-api'
 
@@ -15,35 +17,7 @@ export interface UsageTokenBreakdown {
   readonly totalTokens: number
 }
 
-/** 单个模型的累计用量条目 */
-export interface UsageModelStat {
-  readonly provider: string
-  readonly modelId: string
-  readonly input: number
-  readonly output: number
-  readonly cacheRead: number
-  readonly cacheWrite: number
-  readonly totalTokens: number
-  readonly messageCount: number
-  /** 该模型已上报价格的调用合计；没有任何计价调用时为 null，不用 0 冒充。 */
-  readonly cost: number | null
-}
-
-/** 单个已登记项目的累计用量条目 */
-export interface UsageProjectStat {
-  readonly projectPath: string
-  readonly projectName: string
-  readonly input: number
-  readonly output: number
-  readonly cacheRead: number
-  readonly cacheWrite: number
-  readonly totalTokens: number
-  readonly sessionCount: number
-  /** 该项目内已上报价格的会话合计；没有任何计价会话时为 null。 */
-  readonly cost: number | null
-}
-
-/** 按日聚合的用量趋势条目（以会话消息本地日期 YYYY-MM-DD 为键，覆盖全部有记录日期） */
+/** 会话内按日聚合条目（日期为本地时区键 YYYY-MM-DD） */
 export interface UsageDailyStat {
   readonly date: string
   readonly input: number
@@ -56,46 +30,52 @@ export interface UsageDailyStat {
   readonly cost: number | null
 }
 
-/** 单个高用量会话的摘要条目 */
-export interface UsageTopSession {
-  readonly projectPath: string
-  readonly projectName: string
-  readonly sessionId: string
-  readonly title: string
-  readonly updatedAt: number
+/** 会话内单个模型单日的用量条目；模型分布按时间范围筛选的唯一依据 */
+export interface UsageModelDailyStat {
+  readonly provider: string
+  readonly modelId: string
+  readonly date: string
   readonly input: number
   readonly output: number
   readonly cacheRead: number
   readonly cacheWrite: number
   readonly totalTokens: number
   readonly messageCount: number
-  /** 该会话已上报价格的调用合计；没有任何计价调用时为 null。 */
+  /** 该模型该日已上报价格的调用合计；没有计价调用时为 null。 */
   readonly cost: number | null
 }
 
-/** 完整统计汇总数据 */
-export interface UsageStatsSummary {
-  /** 纳入统计的会话总数 */
-  readonly totalSessions: number
-  /** 纳入统计的助手消息总数 */
-  readonly totalMessages: number
-  /** 已上报价格的助手消息数；用来说明费用统计的覆盖范围。 */
-  readonly costMessages: number
-  /** 总 token 分项 */
+/** 会话内单日的子代理用量：委派调用未记录模型归属，单独携带以支撑「未归属模型」行 */
+export interface UsageSubAgentDailyStat {
+  readonly date: string
+  readonly input: number
+  readonly output: number
+  readonly totalTokens: number
+}
+
+/** 单个会话的用量明细：渲染层所有报表视图的唯一数据来源 */
+export interface UsageSessionStat {
+  readonly sessionId: string
+  readonly projectPath: string
+  readonly projectName: string
+  readonly title: string
+  readonly updatedAt: number
+  /** 助手回复条数（子代理调用不计入） */
+  readonly messageCount: number
+  /** 会话 token 总计，含子代理开销 */
   readonly totals: UsageTokenBreakdown
-  /**
-   * 官方上报的累计费用；没有任何计价消息时保持 null 表示未提供，
-   * 有计价消息则如实给出合计（全免费模型显示 0.000，而不是“未提供”）。
-   */
-  readonly totalCost: number | null
-  /** 模型分布列表（按总 token 降序） */
-  readonly models: readonly UsageModelStat[]
-  /** 项目分布列表（按总 token 降序） */
-  readonly projects: readonly UsageProjectStat[]
-  /** 日期趋势（按日期升序，近 30 天或有数据的全部天数） */
+  /** 已上报价格的调用合计；没有任何计价调用时为 null。 */
+  readonly cost: number | null
+  /** 已上报价格的助手消息数 */
+  readonly costMessages: number
   readonly daily: readonly UsageDailyStat[]
-  /** 消耗最高的会话明细（按总 token 降序，至多 50 条） */
-  readonly topSessions: readonly UsageTopSession[]
+  readonly modelDaily: readonly UsageModelDailyStat[]
+  readonly subAgentDaily: readonly UsageSubAgentDailyStat[]
+}
+
+/** 完整统计汇总：只含会话明细与扫描时间，其余读数由渲染层派生 */
+export interface UsageStatsSummary {
+  readonly sessions: readonly UsageSessionStat[]
   /** 索引扫描时间戳 */
   readonly scannedAt: number
 }
@@ -126,6 +106,10 @@ const isNullableCost = (value: unknown): value is number | null => (
   value === null || (isFiniteNumber(value) && value >= 0)
 )
 
+const isDateKey = (value: unknown): value is string => (
+  typeof value === 'string' && (value === 'unknown' || /^\d{4}-\d{2}-\d{2}$/.test(value))
+)
+
 function isBreakdown(value: unknown): value is UsageTokenBreakdown {
   return isRecord(value)
     && isNonNegativeInteger(value.input)
@@ -135,10 +119,23 @@ function isBreakdown(value: unknown): value is UsageTokenBreakdown {
     && isNonNegativeInteger(value.totalTokens)
 }
 
-function isModelStat(value: unknown): value is UsageModelStat {
+function isDailyStat(value: unknown): value is UsageDailyStat {
+  return isRecord(value)
+    && isDateKey(value.date)
+    && isNonNegativeInteger(value.input)
+    && isNonNegativeInteger(value.output)
+    && isNonNegativeInteger(value.cacheRead)
+    && isNonNegativeInteger(value.cacheWrite)
+    && isNonNegativeInteger(value.totalTokens)
+    && isNonNegativeInteger(value.messageCount)
+    && isNullableCost(value.cost)
+}
+
+function isModelDailyStat(value: unknown): value is UsageModelDailyStat {
   return isRecord(value)
     && typeof value.provider === 'string'
     && typeof value.modelId === 'string'
+    && isDateKey(value.date)
     && isNonNegativeInteger(value.input)
     && isNonNegativeInteger(value.output)
     && isNonNegativeInteger(value.cacheRead)
@@ -148,58 +145,33 @@ function isModelStat(value: unknown): value is UsageModelStat {
     && isNullableCost(value.cost)
 }
 
-function isProjectStat(value: unknown): value is UsageProjectStat {
+function isSubAgentDailyStat(value: unknown): value is UsageSubAgentDailyStat {
   return isRecord(value)
-    && typeof value.projectPath === 'string'
-    && typeof value.projectName === 'string'
+    && isDateKey(value.date)
     && isNonNegativeInteger(value.input)
     && isNonNegativeInteger(value.output)
-    && isNonNegativeInteger(value.cacheRead)
-    && isNonNegativeInteger(value.cacheWrite)
     && isNonNegativeInteger(value.totalTokens)
-    && isNonNegativeInteger(value.sessionCount)
-    && isNullableCost(value.cost)
 }
 
-function isDailyStat(value: unknown): value is UsageDailyStat {
+function isSessionStat(value: unknown): value is UsageSessionStat {
   return isRecord(value)
-    && typeof value.date === 'string'
-    && isNonNegativeInteger(value.input)
-    && isNonNegativeInteger(value.output)
-    && isNonNegativeInteger(value.cacheRead)
-    && isNonNegativeInteger(value.cacheWrite)
-    && isNonNegativeInteger(value.totalTokens)
-    && isNonNegativeInteger(value.messageCount)
-    && isNullableCost(value.cost)
-}
-
-function isTopSession(value: unknown): value is UsageTopSession {
-  return isRecord(value)
-    && typeof value.projectPath === 'string'
-    && typeof value.projectName === 'string'
     && typeof value.sessionId === 'string'
+    && typeof value.projectPath === 'string'
+    && typeof value.projectName === 'string'
     && typeof value.title === 'string'
     && isFiniteNumber(value.updatedAt)
-    && isNonNegativeInteger(value.input)
-    && isNonNegativeInteger(value.output)
-    && isNonNegativeInteger(value.cacheRead)
-    && isNonNegativeInteger(value.cacheWrite)
-    && isNonNegativeInteger(value.totalTokens)
     && isNonNegativeInteger(value.messageCount)
+    && isBreakdown(value.totals)
     && isNullableCost(value.cost)
+    && isNonNegativeInteger(value.costMessages)
+    && Array.isArray(value.daily) && value.daily.every(isDailyStat)
+    && Array.isArray(value.modelDaily) && value.modelDaily.every(isModelDailyStat)
+    && Array.isArray(value.subAgentDaily) && value.subAgentDaily.every(isSubAgentDailyStat)
 }
 
 function isSummary(value: unknown): value is UsageStatsSummary {
   return isRecord(value)
-    && isNonNegativeInteger(value.totalSessions)
-    && isNonNegativeInteger(value.totalMessages)
-    && isNonNegativeInteger(value.costMessages)
-    && isBreakdown(value.totals)
-    && (value.totalCost === null || (isFiniteNumber(value.totalCost) && value.totalCost >= 0))
-    && Array.isArray(value.models) && value.models.every(isModelStat)
-    && Array.isArray(value.projects) && value.projects.every(isProjectStat)
-    && Array.isArray(value.daily) && value.daily.every(isDailyStat)
-    && Array.isArray(value.topSessions) && value.topSessions.every(isTopSession)
+    && Array.isArray(value.sessions) && value.sessions.every(isSessionStat)
     && isFiniteNumber(value.scannedAt)
 }
 

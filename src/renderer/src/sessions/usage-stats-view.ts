@@ -1,22 +1,27 @@
 /**
  * 用量统计视图的纯函数与展示格式化：
- * 提供日期范围切片、堆叠柱与明细表的行数据、构成条与趋势轴线刻度、日度热力图格子、
- * 缓存命中率与占比计算，供用量统计分节、构成条与热力图组件复用。
- * 趋势范围按「有记录的日期」取末尾 N 天，不按自然日补零；热力图按自然日补齐空白格。
+ * 从「会话明细数组」这一份单一数据源按统一时间范围派生全部报表视图——
+ * 自然日窗口、概览读数与构成、趋势柱与按日明细、模型/项目分布（含子代理行）、会话列表与下钻过滤、日度热力图。
+ * 范围按自然日窗口结算（缺失日为零），「全部」从最早记录日到今天；热力图固定近 53 周、按自然日补齐。
+ * 日期无法解析的条目（date 为 `unknown`）无法落在自然日轴上，派生时统一跳过。
  * 费用缺失时保持 null，不推算金额。
  */
-import type { UsageDailyStat } from '../../../shared/usage-stats-api'
+import type {
+  UsageDailyStat,
+  UsageSessionStat,
+  UsageTokenBreakdown
+} from '../../../shared/usage-stats-api'
 import { cacheHitRate, formatCost, formatCostOrDash, formatTokens } from './usage-format'
 
 export { cacheHitRate, formatTokens }
 
-/** 趋势图可选范围：近 7 / 14 / 30 / 90 个有记录日期，或全部。 */
+/** 趋势图可选范围：近 7 / 14 / 30 / 90 个自然日，或全部（最早记录日至今） */
 export type UsageRange = 7 | 14 | 30 | 90 | 'all'
 
-/** 趋势图指标：Token 量、回复条数，或供应商上报的费用。 */
+/** 趋势图指标：Token 量、回复条数，或供应商上报的费用 */
 export type UsageMetric = 'tokens' | 'messages' | 'cost'
 
-/** 范围选项按从短到长排列，默认选中 30 天。 */
+/** 范围选项按从短到长排列，默认选中 30 天 */
 export const USAGE_RANGE_OPTIONS: readonly { readonly value: UsageRange; readonly label: string }[] = [
   { value: 7, label: '近 7 天' },
   { value: 14, label: '近 14 天' },
@@ -43,6 +48,11 @@ export const USAGE_SEGMENTS: readonly {
   { key: 'cacheRead', label: '缓存读取', color: 'var(--color-desk-usage-3)' },
   { key: 'cacheWrite', label: '缓存写入', color: 'var(--color-desk-usage-4)' }
 ]
+
+/** 柱体段与构成条的配色统一从这里取，模板里不重复硬编码色值。 */
+export function usageSegmentColor(key: UsageSegmentKey): string {
+  return USAGE_SEGMENTS.find(segment => segment.key === key)?.color ?? 'var(--color-desk-usage-1)'
+}
 
 /**
  * 构成条的一段：宽度百分比与已格式化的读数。
@@ -133,11 +143,6 @@ export function formatShortDate(dateStr: string): string {
   return dateStr
 }
 
-/** 日期键无法解析时扫描器写入 `unknown`，展示层统一写成人话。 */
-export function formatDateLabel(dateStr: string): string {
-  return dateStr === 'unknown' ? '未知日期' : dateStr
-}
-
 /** 计算某一项 token 在总 token 中的占比百分比文本：例如 "42.5%" */
 export function calculateSharePercent(value: number, total: number): string {
   if (total <= 0 || !Number.isFinite(value) || value <= 0) return '0.0%'
@@ -145,11 +150,362 @@ export function calculateSharePercent(value: number, total: number): string {
   return `${percent.toFixed(1)}%`
 }
 
-/** 按范围取末尾 N 个有记录日期；全部范围原样返回。 */
-export function sliceDaily(daily: readonly UsageDailyStat[], range: UsageRange): readonly UsageDailyStat[] {
-  if (range === 'all') return daily
-  return daily.length > range ? daily.slice(daily.length - range) : daily
+// ---------------------------------------------------------------------------
+// 自然日窗口
+// ---------------------------------------------------------------------------
+
+/** 自然日窗口：两端都是本地时区的 YYYY-MM-DD 日期键，含端点 */
+export interface UsageWindow {
+  readonly startKey: string
+  readonly endKey: string
+  readonly days: number
 }
+
+function dateKeyOf(date: Date): string {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+function dateOfKey(key: string): Date {
+  return new Date(Number(key.slice(0, 4)), Number(key.slice(5, 7)) - 1, Number(key.slice(8, 10)))
+}
+
+/** 从 startKey 到 endKey（含端点）逐日枚举日期键；逆序或非法区间退化为单日 */
+function iterateDateKeys(startKey: string, endKey: string): readonly string[] {
+  if (startKey > endKey) return [endKey]
+  const keys: string[] = []
+  const end = dateOfKey(endKey)
+  for (let cursor = dateOfKey(startKey); cursor <= end; cursor = new Date(cursor.getFullYear(), cursor.getMonth(), cursor.getDate() + 1)) {
+    keys.push(dateKeyOf(cursor))
+  }
+  return keys
+}
+
+/** 日期键是否为可解析的自然日（`unknown` 是扫描器对无法解析时间戳的兜底写法） */
+function isNaturalDateKey(key: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}$/.test(key)
+}
+
+/** 数据里最早的日期键（跳过无法解析的日期）；没有可解析日期时返回 null */
+function earliestDateKeyOf(sessions: readonly UsageSessionStat[]): string | null {
+  let earliest: string | null = null
+  for (const session of sessions) {
+    for (const item of session.daily) {
+      if (!isNaturalDateKey(item.date)) continue
+      if (earliest === null || item.date < earliest) earliest = item.date
+    }
+  }
+  return earliest
+}
+
+/** 解析时间范围：固定 N 天为「今天往前 N 天」（含今天），全部为最早记录日到今天 */
+export function buildWindow(range: UsageRange, today: Date, earliestKey: string | null): UsageWindow {
+  const end = new Date(today.getFullYear(), today.getMonth(), today.getDate())
+  const endKey = dateKeyOf(end)
+  let startKey = endKey
+  if (range === 'all') {
+    if (earliestKey !== null && earliestKey < endKey) startKey = earliestKey
+  } else {
+    startKey = dateKeyOf(new Date(end.getFullYear(), end.getMonth(), end.getDate() - (range - 1)))
+  }
+  return { startKey, endKey, days: iterateDateKeys(startKey, endKey).length }
+}
+
+function isDateInWindow(key: string, window: UsageWindow): boolean {
+  return isNaturalDateKey(key) && key >= window.startKey && key <= window.endKey
+}
+
+// ---------------------------------------------------------------------------
+// 窗口聚合：一次遍历会话明细，产出全部视图共用的窗口内聚合
+// ---------------------------------------------------------------------------
+
+interface MutableDailyBucket {
+  date: string
+  input: number
+  output: number
+  cacheRead: number
+  cacheWrite: number
+  totalTokens: number
+  messageCount: number
+  cost: number
+  costDays: number
+}
+
+interface MutableModelBucket {
+  provider: string
+  modelId: string
+  input: number
+  output: number
+  cacheRead: number
+  cacheWrite: number
+  totalTokens: number
+  messageCount: number
+  cost: number
+  costDays: number
+}
+
+interface MutableProjectBucket {
+  projectPath: string
+  projectName: string
+  input: number
+  output: number
+  cacheRead: number
+  cacheWrite: number
+  totalTokens: number
+  messageCount: number
+  sessionCount: number
+  cost: number
+  costDays: number
+}
+
+/** 窗口内单个模型的聚合读数 */
+export interface UsageModelAggregate {
+  readonly provider: string
+  readonly modelId: string
+  readonly input: number
+  readonly output: number
+  readonly cacheRead: number
+  readonly cacheWrite: number
+  readonly totalTokens: number
+  readonly messageCount: number
+  readonly cost: number | null
+}
+
+/** 窗口内单个项目的聚合读数 */
+export interface UsageProjectAggregate {
+  readonly projectPath: string
+  readonly projectName: string
+  readonly input: number
+  readonly output: number
+  readonly cacheRead: number
+  readonly cacheWrite: number
+  readonly totalTokens: number
+  readonly sessionCount: number
+  readonly cost: number | null
+}
+
+/** 全部视图共用的窗口内聚合结果 */
+export interface WindowAggregate {
+  readonly window: UsageWindow
+  /** 窗口内 token 总计，含子代理开销 */
+  readonly totals: UsageTokenBreakdown
+  /** 窗口内回复条数（子代理调用不计入） */
+  readonly messageCount: number
+  /** 窗口内费用；没有任何计价调用时为 null */
+  readonly cost: number | null
+  /** 窗口内有消耗记录的会话数 */
+  readonly activeSessions: number
+  /** 窗口内自然日序列（按日补零，升序） */
+  readonly daily: readonly UsageDailyStat[]
+  /** 窗口内模型分布（按总 token 降序） */
+  readonly models: readonly UsageModelAggregate[]
+  /** 窗口内子代理开销（未归属模型）；子代理不单独计费，只累计 token */
+  readonly subAgent: { readonly input: number; readonly output: number; readonly totalTokens: number }
+  /** 窗口内项目分布（按总 token 降序） */
+  readonly projects: readonly UsageProjectAggregate[]
+}
+
+/**
+ * 把会话明细按窗口聚合。
+ * 模型、项目与子代理只统计窗口内的条目；会话级总计、回复数与费用也从同一批窗口内日条目求和，
+ * 保证概览、分布与趋势在同一口径上可对账（模型行 + 子代理行 = 总计）。
+ */
+export function buildWindowAggregate(
+  sessions: readonly UsageSessionStat[],
+  range: UsageRange,
+  today: Date
+): WindowAggregate {
+  const window = buildWindow(range, today, earliestDateKeyOf(sessions))
+
+  const totals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0 }
+  let messageCount = 0
+  const costState = { cost: 0, costDays: 0 }
+  const subAgent = { input: 0, output: 0, totalTokens: 0 }
+
+  const dailyMap = new Map<string, MutableDailyBucket>()
+  const modelMap = new Map<string, MutableModelBucket>()
+  const projectMap = new Map<string, MutableProjectBucket>()
+  let activeSessions = 0
+
+  for (const session of sessions) {
+    let sessionActive = false
+    let projectBucket: MutableProjectBucket | null = null
+
+    for (const item of session.daily) {
+      if (!isDateInWindow(item.date, window)) continue
+      if (!sessionActive) {
+        sessionActive = true
+        activeSessions += 1
+        // 同项目多会话共用一个项目桶：先取再建，避免第二个会话覆盖第一个的累计
+        projectBucket = projectMap.get(session.projectPath) ?? {
+          projectPath: session.projectPath,
+          projectName: session.projectName,
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          messageCount: 0,
+          sessionCount: 0,
+          cost: 0,
+          costDays: 0
+        }
+        projectBucket.sessionCount += 1
+        projectMap.set(session.projectPath, projectBucket)
+      }
+
+      totals.input += item.input
+      totals.output += item.output
+      totals.cacheRead += item.cacheRead
+      totals.cacheWrite += item.cacheWrite
+      totals.totalTokens += item.totalTokens
+      messageCount += item.messageCount
+      if (item.cost !== null) {
+        costState.cost += item.cost
+        costState.costDays += 1
+      }
+
+      let dayBucket = dailyMap.get(item.date)
+      if (!dayBucket) {
+        dayBucket = {
+          date: item.date,
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          messageCount: 0,
+          cost: 0,
+          costDays: 0
+        }
+        dailyMap.set(item.date, dayBucket)
+      }
+      dayBucket.input += item.input
+      dayBucket.output += item.output
+      dayBucket.cacheRead += item.cacheRead
+      dayBucket.cacheWrite += item.cacheWrite
+      dayBucket.totalTokens += item.totalTokens
+      dayBucket.messageCount += item.messageCount
+      if (item.cost !== null) {
+        dayBucket.cost += item.cost
+        dayBucket.costDays += 1
+      }
+
+      // projectBucket 在本会话首个窗口内条目时已创建
+      const bucket = projectBucket
+      if (bucket !== null) {
+        bucket.input += item.input
+        bucket.output += item.output
+        bucket.cacheRead += item.cacheRead
+        bucket.cacheWrite += item.cacheWrite
+        bucket.totalTokens += item.totalTokens
+        bucket.messageCount += item.messageCount
+        if (item.cost !== null) {
+          bucket.cost += item.cost
+          bucket.costDays += 1
+        }
+      }
+    }
+
+    for (const item of session.modelDaily) {
+      if (!isDateInWindow(item.date, window)) continue
+      const key = `${item.provider}\u0000${item.modelId}`
+      let modelBucket = modelMap.get(key)
+      if (!modelBucket) {
+        modelBucket = {
+          provider: item.provider,
+          modelId: item.modelId,
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          messageCount: 0,
+          cost: 0,
+          costDays: 0
+        }
+        modelMap.set(key, modelBucket)
+      }
+      modelBucket.input += item.input
+      modelBucket.output += item.output
+      modelBucket.cacheRead += item.cacheRead
+      modelBucket.cacheWrite += item.cacheWrite
+      modelBucket.totalTokens += item.totalTokens
+      modelBucket.messageCount += item.messageCount
+      if (item.cost !== null) {
+        modelBucket.cost += item.cost
+        modelBucket.costDays += 1
+      }
+    }
+
+    for (const item of session.subAgentDaily) {
+      if (!isDateInWindow(item.date, window)) continue
+      subAgent.input += item.input
+      subAgent.output += item.output
+      subAgent.totalTokens += item.totalTokens
+    }
+  }
+
+  const daily: UsageDailyStat[] = iterateDateKeys(window.startKey, window.endKey).map((key) => {
+    const bucket = dailyMap.get(key)
+    return {
+      date: key,
+      input: bucket?.input ?? 0,
+      output: bucket?.output ?? 0,
+      cacheRead: bucket?.cacheRead ?? 0,
+      cacheWrite: bucket?.cacheWrite ?? 0,
+      totalTokens: bucket?.totalTokens ?? 0,
+      messageCount: bucket?.messageCount ?? 0,
+      cost: bucket !== null && bucket.costDays > 0 ? bucket.cost : null
+    }
+  })
+
+  const models: readonly UsageModelAggregate[] = Array.from(modelMap.values())
+    .map(bucket => ({
+      provider: bucket.provider,
+      modelId: bucket.modelId,
+      input: bucket.input,
+      output: bucket.output,
+      cacheRead: bucket.cacheRead,
+      cacheWrite: bucket.cacheWrite,
+      totalTokens: bucket.totalTokens,
+      messageCount: bucket.messageCount,
+      cost: bucket.costDays > 0 ? bucket.cost : null
+    }))
+    .sort((a, b) => b.totalTokens - a.totalTokens)
+
+  const projects: readonly UsageProjectAggregate[] = Array.from(projectMap.values())
+    .map(bucket => ({
+      projectPath: bucket.projectPath,
+      projectName: bucket.projectName,
+      input: bucket.input,
+      output: bucket.output,
+      cacheRead: bucket.cacheRead,
+      cacheWrite: bucket.cacheWrite,
+      totalTokens: bucket.totalTokens,
+      sessionCount: bucket.sessionCount,
+      cost: bucket.costDays > 0 ? bucket.cost : null
+    }))
+    .sort((a, b) => b.totalTokens - a.totalTokens)
+
+  return {
+    window,
+    totals,
+    messageCount,
+    cost: costState.costDays > 0 ? costState.cost : null,
+    activeSessions,
+    daily,
+    models,
+    subAgent,
+    projects
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 趋势柱与按日明细
+// ---------------------------------------------------------------------------
 
 /** 柱体的一段：占该柱高度的百分比，柱高本身由当天指标值与峰值归一化。 */
 export interface DailyBarSegment {
@@ -161,7 +517,6 @@ export interface DailyBarSegment {
 export interface DailyBarItem {
   readonly date: string
   readonly label: string
-  readonly totalTokens: number
   readonly cost: number | null
   /** Token 指标下柱体由四项分项堆叠；费用与回复数等单值指标不拆段。 */
   readonly stacked: boolean
@@ -176,11 +531,6 @@ export interface DailyBarItem {
   readonly ariaLabel: string
 }
 
-export interface DailyBarsOptions {
-  readonly range: UsageRange
-  readonly metric: UsageMetric
-}
-
 /** 供读屏使用的单日描述，费用未知时如实说明而不是省略。 */
 function describeDay(item: UsageDailyStat): string {
   const parts = [
@@ -190,32 +540,33 @@ function describeDay(item: UsageDailyStat): string {
     `缓存写 ${formatTokens(item.cacheWrite)}`,
     `${item.messageCount} 条回复`
   ]
-  return `${formatDateLabel(item.date)}：总计 ${formatTokens(item.totalTokens)}（${parts.join('，')}）；费用 ${item.cost === null ? '未提供价格' : `$${formatCostOrDash(item.cost)}`}`
+  return `${item.date}：总计 ${formatTokens(item.totalTokens)}（${parts.join('，')}）；费用 ${item.cost === null ? '未提供价格' : `$${formatCostOrDash(item.cost)}`}`
 }
 
 /**
- * 将日度趋势归一化为堆叠柱；柱高按所选指标取峰值归一化，
+ * 把窗口内自然日序列归一化为堆叠柱；柱高按所选指标取峰值归一化，
  * 段高按当天四项之和归一，保证「柱高 = 当天该指标、段和 = 100%」。
+ * 序列已按自然日补零，无值日只画基线条，保留日期位置。
  */
-export function buildDailyBars(
-  daily: readonly UsageDailyStat[],
-  options: DailyBarsOptions
+export function buildTrendBars(
+  aggregate: WindowAggregate,
+  metric: UsageMetric
 ): readonly DailyBarItem[] {
-  const sliced = sliceDaily(daily, options.range)
+  const sliced = aggregate.daily
   if (sliced.length === 0) return []
 
-  const readMetric = (item: UsageDailyStat): number | null => {
-    if (options.metric === 'cost') return item.cost
-    if (options.metric === 'messages') return item.messageCount
+  const readMetric = (item: UsageDailyStat): number => {
+    if (metric === 'cost') return item.cost ?? 0
+    if (metric === 'messages') return item.messageCount
     return item.totalTokens
   }
-  const maxValue = Math.max(1, ...sliced.map(item => readMetric(item) ?? 0))
+  const maxValue = Math.max(1, ...sliced.map(item => readMetric(item)))
   const lastIndex = sliced.length - 1
   // 标签间隔按「最多约 8 个标签」反推；末位附近不足一个间隔时让位给末位，避免最后两个标签贴在一起。
-  const labelStep = Math.max(1, Math.ceil(sliced.length / (options.range === 7 ? 7 : 8)))
+  const labelStep = Math.max(1, Math.ceil(sliced.length / 8))
 
   return sliced.map((item, index) => {
-    const value = readMetric(item) ?? 0
+    const value = readMetric(item)
     // 有值但极小的日子保留 4% 可见高度；无值（如当天没有计价调用）不画柱。
     const ratio = value > 0 ? Math.max(0.04, value / maxValue) : 0
     const heightPercent = Math.min(100, Math.round(ratio * 100))
@@ -225,7 +576,7 @@ export function buildDailyBars(
       0
     )
     // 只有 Token 指标按四项拆段；回复数等单值指标整柱同色，拆段会给出并不存在的构成关系。
-    const segments: readonly DailyBarSegment[] = options.metric === 'tokens' && segmentTotal > 0
+    const segments: readonly DailyBarSegment[] = metric === 'tokens' && segmentTotal > 0
       ? USAGE_SEGMENTS.map(segment => ({
           key: segment.key,
           percent: (Math.max(0, item[segment.key]) / segmentTotal) * 100
@@ -235,10 +586,9 @@ export function buildDailyBars(
 
     return {
       date: item.date,
-      label: item.date === 'unknown' ? '未知' : formatShortDate(item.date),
-      totalTokens: item.totalTokens,
+      label: formatShortDate(item.date),
       cost: item.cost,
-      stacked: options.metric === 'tokens',
+      stacked: metric === 'tokens',
       metricValue: value,
       hasValue: value > 0,
       heightPercent,
@@ -252,9 +602,10 @@ export function buildDailyBars(
   })
 }
 
-/** 按日明细表的一行，顺序为最新在前。 */
+/** 按日明细表的一行，顺序为最新在前；`active` 表示当天有回复或消耗。 */
 export interface DailyDetailRow {
   readonly date: string
+  readonly active: boolean
   readonly input: number
   readonly output: number
   readonly cacheRead: number
@@ -265,13 +616,12 @@ export interface DailyDetailRow {
 }
 
 /** 明细表用于精确读数与键盘浏览，行序与柱状图相反：最新日期在最上方。 */
-export function buildDailyDetailRows(
-  daily: readonly UsageDailyStat[],
-  range: UsageRange
-): readonly DailyDetailRow[] {
-  return sliceDaily(daily, range)
+export function buildDailyDetailRows(aggregate: WindowAggregate): readonly DailyDetailRow[] {
+  return [...aggregate.daily]
+    .reverse()
     .map(item => ({
-      date: formatDateLabel(item.date),
+      date: item.date,
+      active: item.totalTokens > 0 || item.messageCount > 0,
       input: item.input,
       output: item.output,
       cacheRead: item.cacheRead,
@@ -280,8 +630,229 @@ export function buildDailyDetailRows(
       messageCount: item.messageCount,
       cost: item.cost
     }))
-    .reverse()
 }
+
+// ---------------------------------------------------------------------------
+// 分布行与会话列表（下钻）
+// ---------------------------------------------------------------------------
+
+/**
+ * 下钻目标：把分布行、趋势柱、热力图格的点击统一收敛到「会话明细」列表。
+ * `label` 是下钻上下文标签，供列表标题与清除按钮使用。
+ */
+export type SessionDrill =
+  | { readonly kind: 'model'; readonly provider: string; readonly modelId: string; readonly label: string }
+  | { readonly kind: 'project'; readonly projectPath: string; readonly label: string }
+  | { readonly kind: 'day'; readonly date: string; readonly label: string }
+  | { readonly kind: 'subagent'; readonly label: string }
+
+/** 分布行（模型、项目与子代理共用同一套字段与排布） */
+export interface UsageDistributionRow {
+  /** v-for 的稳定 key，不用于解析下钻目标 */
+  readonly key: string
+  readonly name: string
+  /** 模型行的供应商标记；项目与子代理行为 null。 */
+  readonly badge: string | null
+  /** 名称下方的次级标识：模型的输入/输出分项，项目的路径。 */
+  readonly detail: string
+  /** 路径这类可能被截断的次级标识的悬停全文；不需要时为 null。 */
+  readonly detailTitle: string | null
+  readonly totalTokens: string
+  readonly share: string
+  readonly meta: string
+  readonly segments: readonly CompositionSegment[]
+  readonly drill: SessionDrill
+}
+
+/** 窗口内模型分布行（按 token 降序），子代理开销非零时追加「未归属模型」行保证构成可对账 */
+export function buildModelDistributionRows(aggregate: WindowAggregate): readonly UsageDistributionRow[] {
+  // 分母取含子代理的总计：各模型行 + 子代理行加起来等于总量，占比不会被稀释
+  const total = aggregate.totals.totalTokens
+  const rows: UsageDistributionRow[] = aggregate.models.map(model => ({
+    key: `model:${model.provider}:${model.modelId}`,
+    name: model.modelId,
+    badge: model.provider,
+    detail: `输入 ${formatTokens(model.input)} · 输出 ${formatTokens(model.output)}`,
+    detailTitle: null,
+    totalTokens: formatTokens(model.totalTokens),
+    share: calculateSharePercent(model.totalTokens, total),
+    meta: model.cost === null
+      ? `${model.messageCount} 次回复`
+      : `$${formatCost(model.cost)} · ${model.messageCount} 次回复`,
+    segments: buildCompositionSegments(model),
+    drill: {
+      kind: 'model',
+      provider: model.provider,
+      modelId: model.modelId,
+      label: model.modelId
+    } satisfies SessionDrill
+  }))
+  if (aggregate.subAgent.totalTokens > 0) {
+    rows.push({
+      key: 'subagent',
+      name: '子代理（未归属模型）',
+      badge: null,
+      detail: '委派子代理产生的调用，未记录模型归属',
+      detailTitle: null,
+      totalTokens: formatTokens(aggregate.subAgent.totalTokens),
+      share: calculateSharePercent(aggregate.subAgent.totalTokens, total),
+      meta: '',
+      segments: buildCompositionSegments({
+        input: aggregate.subAgent.input,
+        output: aggregate.subAgent.output,
+        cacheRead: 0,
+        cacheWrite: 0
+      }),
+      drill: { kind: 'subagent', label: '子代理（未归属模型）' }
+    })
+  }
+  return rows
+}
+
+/** 窗口内项目分布行（按 token 降序） */
+export function buildProjectDistributionRows(aggregate: WindowAggregate): readonly UsageDistributionRow[] {
+  const total = aggregate.totals.totalTokens
+  return aggregate.projects.map(project => ({
+    key: `project:${project.projectPath}`,
+    name: project.projectName,
+    badge: null,
+    detail: project.projectPath,
+    detailTitle: project.projectPath,
+    totalTokens: formatTokens(project.totalTokens),
+    share: calculateSharePercent(project.totalTokens, total),
+    meta: project.cost === null
+      ? `${project.sessionCount} 个会话`
+      : `$${formatCost(project.cost)} · ${project.sessionCount} 个会话`,
+    segments: buildCompositionSegments(project),
+    drill: { kind: 'project', projectPath: project.projectPath, label: project.projectName }
+  }))
+}
+
+/** 会话明细列表的一行：数值随视图口径（Top 或下钻）按范围结算 */
+export interface UsageSessionRow {
+  readonly sessionId: string
+  readonly projectPath: string
+  readonly projectName: string
+  readonly title: string
+  readonly updatedAt: number
+  readonly messageCount: number
+  readonly totalTokens: number
+  readonly input: number
+  readonly output: number
+  readonly cost: number | null
+}
+
+/** 会话明细列表的统一上限：Top 与下钻共用，避免无界列表 */
+export const SESSION_ROWS_LIMIT = 50
+
+interface MutableSessionSum {
+  input: number
+  output: number
+  totalTokens: number
+  messageCount: number
+  cost: number
+  costKnown: boolean
+}
+
+function sumSessionWindow(
+  session: UsageSessionStat,
+  window: UsageWindow
+): MutableSessionSum | null {
+  let sum: MutableSessionSum | null = null
+  for (const item of session.daily) {
+    if (!isDateInWindow(item.date, window)) continue
+    if (sum === null) sum = { input: 0, output: 0, totalTokens: 0, messageCount: 0, cost: 0, costKnown: false }
+    sum.input += item.input
+    sum.output += item.output
+    sum.totalTokens += item.totalTokens
+    sum.messageCount += item.messageCount
+    if (item.cost !== null) {
+      sum.cost += item.cost
+      sum.costKnown = true
+    }
+  }
+  return sum
+}
+
+/**
+ * 会话明细列表：无下钻时为窗口内消耗 Top（按窗口 token 降序，至多 SESSION_ROWS_LIMIT 条）；
+ * 有下钻时按模型、项目、单日或子代理过滤，数值只统计该口径在窗口内的部分。
+ */
+export function buildSessionRows(
+  sessions: readonly UsageSessionStat[],
+  aggregate: WindowAggregate,
+  drill: SessionDrill | null
+): readonly UsageSessionRow[] {
+  const rows: UsageSessionRow[] = []
+
+  for (const session of sessions) {
+    let sum: MutableSessionSum | null = null
+
+    if (drill === null || drill.kind === 'project') {
+      if (drill !== null && drill.projectPath !== session.projectPath) continue
+      sum = sumSessionWindow(session, aggregate.window)
+    } else if (drill.kind === 'day') {
+      const entry = session.daily.find(item => item.date === drill.date)
+      if (entry === undefined) continue
+      sum = {
+        input: entry.input,
+        output: entry.output,
+        totalTokens: entry.totalTokens,
+        messageCount: entry.messageCount,
+        cost: entry.cost ?? 0,
+        costKnown: entry.cost !== null
+      }
+    } else if (drill.kind === 'model') {
+      for (const item of session.modelDaily) {
+        if (item.provider !== drill.provider || item.modelId !== drill.modelId) continue
+        if (!isDateInWindow(item.date, aggregate.window)) continue
+        if (sum === null) sum = { input: 0, output: 0, totalTokens: 0, messageCount: 0, cost: 0, costKnown: false }
+        sum.input += item.input
+        sum.output += item.output
+        sum.totalTokens += item.totalTokens
+        sum.messageCount += item.messageCount
+        if (item.cost !== null) {
+          sum.cost += item.cost
+          sum.costKnown = true
+        }
+      }
+    } else {
+      for (const item of session.subAgentDaily) {
+        if (!isDateInWindow(item.date, aggregate.window)) continue
+        if (sum === null) sum = { input: 0, output: 0, totalTokens: 0, messageCount: 0, cost: 0, costKnown: false }
+        sum.input += item.input
+        sum.output += item.output
+        sum.totalTokens += item.totalTokens
+      }
+      // 子代理调用不计回复数：列表行带窗口内回复数作上下文，避免出现无法解释的 0
+      for (const item of session.daily) {
+        if (sum === null || !isDateInWindow(item.date, aggregate.window)) continue
+        sum.messageCount += item.messageCount
+      }
+    }
+
+    if (sum === null || sum.totalTokens <= 0) continue
+    rows.push({
+      sessionId: session.sessionId,
+      projectPath: session.projectPath,
+      projectName: session.projectName,
+      title: session.title,
+      updatedAt: session.updatedAt,
+      messageCount: sum.messageCount,
+      totalTokens: sum.totalTokens,
+      input: sum.input,
+      output: sum.output,
+      cost: sum.costKnown ? sum.cost : null
+    })
+  }
+
+  rows.sort((a, b) => b.totalTokens - a.totalTokens)
+  return rows.slice(0, SESSION_ROWS_LIMIT)
+}
+
+// ---------------------------------------------------------------------------
+// 日度热力图（固定近 53 周，不随范围筛选变化）
+// ---------------------------------------------------------------------------
 
 /** 日度热力图的一格；`level` 只是颜色强度分级，真实读数在 `title` 与 `ariaLabel` 里。 */
 export interface HeatmapCell {
@@ -291,6 +862,8 @@ export interface HeatmapCell {
   readonly level: 0 | 1 | 2 | 3 | 4
   /** 今天之后的格子只占位、不承载数据。 */
   readonly future: boolean
+  /** 有记录的格子可点击查看当日会话；无记录与未来格子不可点。 */
+  readonly clickable: boolean
   readonly title: string
   readonly ariaLabel: string
 }
@@ -329,13 +902,6 @@ export const HEATMAP_LEVEL_COLORS = [
 /** 默认回溯的周数：53 列覆盖一年并容纳跨年月份。 */
 export const HEATMAP_WEEKS = 53
 
-function formatDateKeyOf(date: Date): string {
-  const year = date.getFullYear()
-  const month = String(date.getMonth() + 1).padStart(2, '0')
-  const day = String(date.getDate()).padStart(2, '0')
-  return `${year}-${month}-${day}`
-}
-
 /** 非零用量的分位阈值，用来把颜色切成四级；样本为空时全部退化为 0。 */
 function heatmapThresholds(values: readonly number[]): readonly [number, number, number] {
   if (values.length === 0) return [0, 0, 0]
@@ -349,21 +915,41 @@ function heatmapThresholds(values: readonly number[]): readonly [number, number,
 }
 
 /**
- * 把日度统计排成近 N 周的日历热力图。
- * 与趋势图不同，这里必须按自然日补齐空白格（否则列会错位），所以缺失日期填 0、未来日期只占位。
+ * 把会话明细排成近 N 周的日历热力图。
+ * 热力图是固定时间轴视图，不随顶部范围筛选变化；按自然日补齐空白格（否则列会错位），
+ * 缺失日期填 0、未来日期只占位。有记录的格子可点击进入当日会话明细。
  */
 export function buildHeatmap(
-  daily: readonly UsageDailyStat[],
+  sessions: readonly UsageSessionStat[],
   today: Date = new Date(),
   weeks: number = HEATMAP_WEEKS
 ): HeatmapModel {
   const byDate = new Map<string, UsageDailyStat>()
-  for (const item of daily) {
-    if (item.date !== 'unknown') byDate.set(item.date, item)
+  for (const session of sessions) {
+    for (const item of session.daily) {
+      if (!isNaturalDateKey(item.date)) continue
+      const existing = byDate.get(item.date)
+      if (existing === undefined) {
+        byDate.set(item.date, item)
+        continue
+      }
+      // 同一天跨会话累加；费用只累加已上报价格的条目，全缺价时保持 null
+      const costKnown = existing.cost !== null || item.cost !== null
+      byDate.set(item.date, {
+        date: item.date,
+        input: existing.input + item.input,
+        output: existing.output + item.output,
+        cacheRead: existing.cacheRead + item.cacheRead,
+        cacheWrite: existing.cacheWrite + item.cacheWrite,
+        totalTokens: existing.totalTokens + item.totalTokens,
+        messageCount: existing.messageCount + item.messageCount,
+        cost: costKnown ? (existing.cost ?? 0) + (item.cost ?? 0) : null
+      })
+    }
   }
 
   const end = new Date(today.getFullYear(), today.getMonth(), today.getDate())
-  const endKey = formatDateKeyOf(end)
+  const endKey = dateKeyOf(end)
   // 以周一为一周起点：先回到本周周一，再往前推满整周。
   const offsetToMonday = (end.getDay() + 6) % 7
   const start = new Date(
@@ -394,7 +980,7 @@ export function buildHeatmap(
         start.getMonth(),
         start.getDate() + index * 7 + dayIndex
       )
-      const key = formatDateKeyOf(date)
+      const key = dateKeyOf(date)
       const future = key > endKey
       const item = byDate.get(key)
       const tokens = future ? 0 : item?.totalTokens ?? 0
@@ -429,12 +1015,15 @@ export function buildHeatmap(
         messages,
         level,
         future,
+        clickable: !future && tokens > 0,
         title: future
           ? ''
-          : `${key} · ${formatTokens(tokens)} tokens · ${messages} 条回复`,
+          : tokens > 0
+            ? `${key} · ${formatTokens(tokens)} tokens · ${messages} 条回复（点击查看当日会话）`
+            : `${key} · 无记录`,
         ariaLabel: future
           ? ''
-          : `${formatDateLabel(key)}：${formatTokens(tokens)} tokens，${messages} 条回复`
+          : `${key}：${formatTokens(tokens)} tokens，${messages} 条回复`
       })
     }
 
@@ -450,7 +1039,7 @@ export function buildHeatmap(
 
 /** 列 key 用列首日期，避免用下标而让 v-for 在范围变化时错误复用。 */
 function keyOfWeekStart(start: Date, index: number): string {
-  return formatDateKeyOf(
+  return dateKeyOf(
     new Date(start.getFullYear(), start.getMonth(), start.getDate() + index * 7)
   )
 }

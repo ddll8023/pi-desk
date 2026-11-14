@@ -1,43 +1,48 @@
 <!-- 设置页的用量统计分节：
-     统计已登记项目的所有本地会话 Token 消耗，展示关键读数、总量与分项构成、可切换范围与指标的堆叠趋势、
-     近一年日度热力图、按日明细表、模型分布、项目分布及高消耗会话 Top 明细。
+     以「会话明细」为唯一数据源，按页面顶部统一时间范围派生全部报表视图（概览、趋势、按日明细、
+     模型/项目分布、会话明细），支持从趋势柱、热力图格、分布行与按日明细下钻到该维度的会话列表。
      费用只在供应商上报价格时计入，缺失时按「未提供」占位，不推算金额。
      支持手动重新扫描；分节可见时每 60 秒静默刷新一次（走文件戳缓存，不切断当前视图），页面隐藏后停止。
-     点击 Top 会话可直接跳转至对应项目的该会话并关闭设置页。
-     展示口径：量级用四个并列读数承载，构成关系交给构成条与图例；趋势图带三档刻度与网格线，
-     柱宽与间距按天数分档；分布行内的条与趋势图同序同色，只表达构成、不重复绝对值。 -->
+     点击会话行跳转至对应项目的该会话并关闭设置页；热力图固定近一年窗口，不随范围筛选变化。 -->
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
-import type {
-  UsageStatsSummary,
-  UsageTopSession
-} from '../../../../shared/usage-stats-api'
+import type { UsageStatsSummary } from '../../../../shared/usage-stats-api'
 import { getUsageStats } from '../services/usage-stats'
 import {
   USAGE_RANGE_OPTIONS,
   USAGE_SEGMENTS,
   buildAxisTicks,
   buildCompositionSegments,
-  buildDailyBars,
   buildDailyDetailRows,
   buildHeatmap,
-  calculateSharePercent,
+  buildModelDistributionRows,
+  buildProjectDistributionRows,
+  buildSessionRows,
+  buildTrendBars,
+  buildWindowAggregate,
   cacheHitRate,
   formatDateTime,
   formatTokens
 } from '../usage-stats-view'
 import type {
-  CompositionSegment,
+  HeatmapModel,
+  SessionDrill,
+  UsageDistributionRow,
   UsageMetric,
   UsageRange,
-  UsageSegmentKey
+  UsageSessionRow,
+  WindowAggregate
 } from '../usage-stats-view'
-import { formatCost, formatCostOrDash } from '../usage-format'
+import { formatCost } from '../usage-format'
 import { useSessionStore } from '../stores/session'
 import { useSettingsStore } from '../../shell/stores/settings'
 import AppButton from '../../ui/AppButton.vue'
 import UsageCompositionBar from './UsageCompositionBar.vue'
+import UsageDailyTable from './UsageDailyTable.vue'
+import UsageDistributionList from './UsageDistributionList.vue'
 import UsageHeatmap from './UsageHeatmap.vue'
+import UsageSessionList from './UsageSessionList.vue'
+import UsageTrendChart from './UsageTrendChart.vue'
 
 const sessionStore = useSessionStore()
 const settingsStore = useSettingsStore()
@@ -51,16 +56,28 @@ const viewState = shallowRef<ViewState>({ phase: 'loading' })
 const summary = shallowRef<UsageStatsSummary | null>(null)
 const refreshing = ref(false)
 
-/** 趋势默认近 30 天；范围按有记录日期取末尾 N 天，不按自然日补零。 */
+/** 页面级时间范围：作用于概览、趋势、明细、分布与会话列表；默认近 30 天。 */
 const range = ref<UsageRange>(30)
-/** 指标默认 Token；没有任何计价消息时费用视图不可选。 */
+/** 趋势指标默认 Token；窗口内没有任何计价调用时费用视图不可选。 */
 const metric = ref<UsageMetric>('tokens')
+/** 下钻上下文；null 时会话明细区显示范围内消耗 Top。 */
+const drill = ref<SessionDrill | null>(null)
 
-const costAvailable = computed(() => (summary.value?.costMessages ?? 0) > 0)
+/** 窗口聚合是全部视图的共同上游，一次计算、多处派生。 */
+const aggregate = computed<WindowAggregate | null>(() => {
+  if (summary.value === null) return null
+  return buildWindowAggregate(summary.value.sessions, range.value, new Date())
+})
+
+const costAvailable = computed(() => aggregate.value !== null && aggregate.value.daily.some(day => day.cost !== null))
 
 watch(costAvailable, (available) => {
   if (!available && metric.value === 'cost') metric.value = 'tokens'
 })
+
+const rangeLabel = computed(
+  () => USAGE_RANGE_OPTIONS.find(option => option.value === range.value)?.label ?? ''
+)
 
 /** 趋势指标的展示名，副标题、读数行与单位标签共用同一处说法。 */
 const metricLabel = computed(() => {
@@ -76,159 +93,16 @@ const metricUnit = computed(() => {
   return 'Token'
 })
 
-const rangeLabel = computed(
-  () => USAGE_RANGE_OPTIONS.find(option => option.value === range.value)?.label ?? ''
-)
-
-const dailyBars = computed(() => {
-  if (!summary.value) return []
-  return buildDailyBars(summary.value.daily, { range: range.value, metric: metric.value })
+const overviewSubtitle = computed(() => {
+  const current = aggregate.value
+  if (current === null) return ''
+  const costText = current.cost === null
+    ? '费用未提供价格'
+    : `费用 $${formatCost(current.cost)}`
+  return `${rangeLabel.value} · ${costText}`
 })
 
-const dailyDetailRows = computed(() => {
-  if (!summary.value) return []
-  return buildDailyDetailRows(summary.value.daily, range.value)
-})
-
-/** 概览的四段构成：宽度与占比都来自四项之和，与趋势图、分布行同序同色。 */
-const overviewSegments = computed(() => {
-  const totals = summary.value?.totals
-  if (!totals) return []
-  return buildCompositionSegments(totals)
-})
-
-const overviewAriaLabel = computed(() => {
-  const parts = overviewSegments.value.map(segment => `${segment.label} ${segment.value}（${segment.share}）`)
-  return `Token 构成：${parts.join('，')}`
-})
-
-/** 会话规模与费用覆盖情况合成一行说明，费用不再占用主读数。 */
-const summaryNote = computed(() => {
-  const current = summary.value
-  if (!current) return ''
-  const cost = current.totalCost === null
-    ? '累计费用未提供价格'
-    : `累计费用 $${formatCost(current.totalCost)}`
-  return `共扫描 ${current.totalSessions} 个会话 · ${current.totalMessages} 条回复 · 已计价 ${current.costMessages} 条 · ${cost}`
-})
-
-/** 近 53 周热力图；日期列按自然日补齐，与趋势图的「只取有记录日期」口径不同。 */
-const heatmap = computed(() => buildHeatmap(summary.value?.daily ?? []))
-
-/** 趋势图三档刻度：峰值、半峰值与 0，单位随所选指标。 */
-const trendAxis = computed(() => buildAxisTicks(dailyBars.value, metric.value))
-
-/**
- * 柱宽与间距按范围分档：天数越多柱越窄、间距越小，全部范围下仍能看清单根柱。
- * 类名写成完整字面量，Tailwind 才能在构建时扫到。
- */
-const BAR_SIZING = {
-  7: { gap: 'gap-2.5', width: 'min-w-[32px] max-w-[56px]' },
-  14: { gap: 'gap-1.5', width: 'min-w-[14px] max-w-[28px]' },
-  30: { gap: 'gap-1.5', width: 'min-w-[10px] max-w-[24px]' },
-  90: { gap: 'gap-1', width: 'min-w-[6px] max-w-[14px]' },
-  all: { gap: 'gap-1', width: 'min-w-[6px] max-w-[14px]' }
-} satisfies Record<UsageRange, { readonly gap: string; readonly width: string }>
-
-const barSizing = computed(() => BAR_SIZING[range.value])
-
-/** 分布行的同一套字段，模型与项目两个分节据此保持同一种排布。 */
-interface DistributionRow {
-  readonly key: string
-  readonly name: string
-  /** 模型行的供应商标记；项目行为 null。 */
-  readonly badge: string | null
-  /** 名称下方的次级标识：模型的输入/输出分项，项目的路径。 */
-  readonly detail: string
-  /** 路径这类可能被截断的次级标识的悬停全文；不需要时为 null。 */
-  readonly detailTitle: string | null
-  readonly totalTokens: string
-  readonly share: string
-  readonly meta: string
-  readonly segments: readonly CompositionSegment[]
-}
-
-const modelRows = computed<readonly DistributionRow[]>(() => {
-  const total = summary.value?.totals.totalTokens ?? 0
-  return (summary.value?.models ?? []).map(model => ({
-    key: `${model.provider}:${model.modelId}`,
-    name: model.modelId,
-    badge: model.provider,
-    detail: `输入 ${formatTokens(model.input)} · 输出 ${formatTokens(model.output)}`,
-    detailTitle: null,
-    totalTokens: formatTokens(model.totalTokens),
-    share: calculateSharePercent(model.totalTokens, total),
-    meta: model.cost === null
-      ? `${model.messageCount} 次回复`
-      : `$${formatCost(model.cost)} · ${model.messageCount} 次回复`,
-    segments: buildCompositionSegments(model)
-  }))
-})
-
-const projectRows = computed<readonly DistributionRow[]>(() => {
-  const total = summary.value?.totals.totalTokens ?? 0
-  return (summary.value?.projects ?? []).map(project => ({
-    key: project.projectPath,
-    name: project.projectName,
-    badge: null,
-    detail: project.projectPath,
-    detailTitle: project.projectPath,
-    totalTokens: formatTokens(project.totalTokens),
-    share: calculateSharePercent(project.totalTokens, total),
-    meta: project.cost === null
-      ? `${project.sessionCount} 个会话`
-      : `$${formatCost(project.cost)} · ${project.sessionCount} 个会话`,
-    segments: buildCompositionSegments(project)
-  }))
-})
-
-/** 柱体段的配色统一从 USAGE_SEGMENTS 取，模板里不重复硬编码色值。 */
-function segmentColor(key: UsageSegmentKey): string {
-  return USAGE_SEGMENTS.find(segment => segment.key === key)?.color ?? 'var(--color-desk-usage-1)'
-}
-
-/**
- * 读数行：悬停某天时显示那天，离开后回到当前范围的峰值那天。
- * 读数固定在图表卡片顶部而不跟随光标：柱区是横向滚动容器，跟随光标的浮层必被裁切。
- */
-const hoveredDate = ref<string | null>(null)
-
-const readoutBar = computed(() => {
-  const bars = dailyBars.value
-  if (bars.length === 0) return null
-  const hovered = hoveredDate.value === null
-    ? null
-    : bars.find(bar => bar.date === hoveredDate.value) ?? null
-  if (hovered !== null) return hovered
-  return bars.reduce((peak, bar) => (bar.metricValue > peak.metricValue ? bar : peak))
-})
-
-const readoutDate = computed(() => readoutBar.value?.label ?? '')
-
-/** 单位由读数行右侧的静态标签给出，这里只放数值，不在两处重复单位。 */
-const readoutValue = computed(() => {
-  const bar = readoutBar.value
-  if (bar === null) return ''
-  if (metric.value === 'cost') return bar.cost === null ? '无价格' : `$${formatCost(bar.cost)}`
-  if (metric.value === 'messages') return String(bar.metricValue)
-  return formatTokens(bar.totalTokens)
-})
-
-const overallCacheHitRate = computed(() => {
-  if (!summary.value) return null
-  const totals = summary.value.totals
-  return cacheHitRate({
-    input: totals.input,
-    cacheRead: totals.cacheRead,
-    cacheWrite: totals.cacheWrite
-  })
-})
-
-const overallCacheHitText = computed(() => {
-  const rate = overallCacheHitRate.value
-  if (rate === null) return '—'
-  return `${(rate * 100).toFixed(1)}%`
-})
+const hasSessions = computed(() => (summary.value?.sessions.length ?? 0) > 0)
 
 /** 概览的四个并列读数：量级、缓存效率与会话规模各自一格，不与构成条重复。 */
 interface OverviewMetric {
@@ -240,8 +114,13 @@ interface OverviewMetric {
 }
 
 const overviewMetrics = computed<readonly OverviewMetric[]>(() => {
-  const current = summary.value
-  if (!current) return []
+  const current = aggregate.value
+  if (current === null) return []
+  const hit = cacheHitRate({
+    input: current.totals.input,
+    cacheRead: current.totals.cacheRead,
+    cacheWrite: current.totals.cacheWrite
+  })
   return [
     {
       key: 'tokens',
@@ -252,23 +131,73 @@ const overviewMetrics = computed<readonly OverviewMetric[]>(() => {
     {
       key: 'cache-hit',
       label: '缓存命中率',
-      value: overallCacheHitText.value,
+      value: hit === null ? '—' : `${(hit * 100).toFixed(1)}%`,
       title: null
     },
     {
       key: 'sessions',
       label: '会话数',
-      value: String(current.totalSessions),
-      title: `${current.totalSessions} 个会话`
+      value: String(current.activeSessions),
+      title: `${current.activeSessions} 个会话在范围内有消耗`
     },
     {
       key: 'messages',
       label: '回复数',
-      value: String(current.totalMessages),
-      title: `${current.totalMessages} 条回复`
+      value: String(current.messageCount),
+      title: `${current.messageCount} 条回复`
     }
   ]
 })
+
+const overallCacheHitText = computed(() => {
+  const current = aggregate.value
+  if (current === null) return '—'
+  const hit = cacheHitRate({
+    input: current.totals.input,
+    cacheRead: current.totals.cacheRead,
+    cacheWrite: current.totals.cacheWrite
+  })
+  return hit === null ? '—' : `${(hit * 100).toFixed(1)}%`
+})
+
+/** 概览的四段构成：宽度与占比都来自四项之和，与趋势图、分布行同序同色。 */
+const overviewSegments = computed(() => {
+  const totals = aggregate.value?.totals
+  if (!totals) return []
+  return buildCompositionSegments(totals)
+})
+
+const overviewAriaLabel = computed(() => {
+  const parts = overviewSegments.value.map(segment => `${segment.label} ${segment.value}（${segment.share}）`)
+  return `Token 构成：${parts.join('，')}`
+})
+
+/** 近 53 周热力图：固定时间轴视图，不随范围筛选变化；有记录的格子可下钻当日。 */
+const heatmap = computed<HeatmapModel | null>(() => {
+  if (summary.value === null) return null
+  return buildHeatmap(summary.value.sessions, new Date())
+})
+
+const trendBars = computed(() => aggregate.value === null ? [] : buildTrendBars(aggregate.value, metric.value))
+const trendAxis = computed(() => buildAxisTicks(trendBars.value, metric.value))
+const dailyRows = computed(() => aggregate.value === null ? [] : buildDailyDetailRows(aggregate.value))
+
+const modelRows = computed<readonly UsageDistributionRow[]>(() => {
+  if (aggregate.value === null) return []
+  return buildModelDistributionRows(aggregate.value)
+})
+
+const projectRows = computed<readonly UsageDistributionRow[]>(() => {
+  if (aggregate.value === null) return []
+  return buildProjectDistributionRows(aggregate.value)
+})
+
+const sessionRows = computed<readonly UsageSessionRow[]>(() => {
+  if (summary.value === null || aggregate.value === null) return []
+  return buildSessionRows(summary.value.sessions, aggregate.value, drill.value)
+})
+
+const updatedText = computed(() => summary.value === null ? '—' : formatDateTime(summary.value.scannedAt))
 
 /** 自动刷新失败不把整页切成错误态，只记一行提示并保留上一次的成功数据。 */
 const autoRefreshError = ref<string | null>(null)
@@ -347,9 +276,22 @@ function handleVisibilityChange(): void {
   startAutoRefresh()
 }
 
-async function handleOpenSession(item: UsageTopSession): Promise<void> {
+function handleDrill(selection: SessionDrill): void {
+  drill.value = selection
+}
+
+/** 趋势柱、热力图格与按日明细的日期点击统一进入当日会话明细。 */
+function handleDayDrill(date: string): void {
+  drill.value = { kind: 'day', date, label: date }
+}
+
+function clearDrill(): void {
+  drill.value = null
+}
+
+async function handleOpenSession(row: UsageSessionRow): Promise<void> {
   settingsStore.closeSettings()
-  await sessionStore.open(item.sessionId, false, item.projectPath)
+  await sessionStore.open(row.sessionId, false, row.projectPath)
 }
 
 onMounted(() => {
@@ -374,7 +316,10 @@ onUnmounted(() => {
           统计当前桌面已登记项目的所有本地会话 Token 与上下文用量（进行中的会话在结束落盘后计入）。
         </p>
       </div>
-      <div>
+      <div class="flex items-center gap-3">
+        <span v-if="viewState.phase === 'ready'" class="text-2xs tabular-nums text-desk-muted">
+          更新于 {{ updatedText }}
+        </span>
         <AppButton
           variant="ghost"
           size="sm"
@@ -398,414 +343,236 @@ onUnmounted(() => {
     </div>
 
     <!-- 正常就绪状态 -->
-    <template v-else-if="summary !== null">
-      <!-- 1. 总量与分项构成 -->
-      <section class="settings-section" aria-labelledby="usage-overview-title">
-        <div class="settings-section-heading">
-          <div>
-            <h2 id="usage-overview-title" class="settings-section-title">总量概览</h2>
-            <p class="mt-1 text-2xs tabular-nums text-desk-muted">
-              {{ summaryNote }}
-            </p>
-            <p v-if="autoRefreshError !== null" class="mt-1 text-2xs text-desk-warning" role="status">
-              自动刷新失败：{{ autoRefreshError }}
-            </p>
+    <template v-else-if="summary !== null && aggregate !== null">
+      <!-- 无任何会话记录：单一空态，不渲染空读数的各个分节 -->
+      <section v-if="!hasSessions" class="settings-section" aria-labelledby="usage-empty-title">
+        <h2 id="usage-empty-title" class="settings-section-title">暂无用量记录</h2>
+        <p class="mt-2 text-xs text-desk-muted">
+          还没有可统计的会话用量。会话在结束落盘后计入统计。
+        </p>
+      </section>
+
+      <template v-else>
+        <!-- 页面级范围筛选：统一作用于概览、趋势、明细、分布与会话列表 -->
+        <div class="flex flex-wrap items-center gap-2 px-1">
+          <span class="text-2xs text-desk-muted">范围</span>
+          <div class="segment" role="group" aria-label="统计范围">
+            <AppButton
+              v-for="option in USAGE_RANGE_OPTIONS"
+              :key="option.value"
+              variant="unstyled"
+              class="segment-option"
+              :class="range === option.value ? 'is-selected' : ''"
+              :aria-pressed="range === option.value"
+              @click="range = option.value"
+            >
+              {{ option.label }}
+            </AppButton>
           </div>
         </div>
 
-        <!-- 四个并列读数承载量级与规模，费用不再占用主读数；四个分项交给下方的构成条与图例。 -->
-        <dl class="mt-4 grid grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-4">
-          <div v-for="item in overviewMetrics" :key="item.key">
-            <dt class="text-2xs text-desk-muted">{{ item.label }}</dt>
-            <dd
-              class="mt-1 font-semibold text-xl leading-none tabular-nums"
-              :title="item.title ?? undefined"
-            >
-              {{ item.value }}
-            </dd>
+        <!-- 1. 总量与分项构成 -->
+        <section class="settings-section" aria-labelledby="usage-overview-title">
+          <div class="settings-section-heading">
+            <div>
+              <h2 id="usage-overview-title" class="settings-section-title">总量概览</h2>
+              <p class="mt-1 text-2xs tabular-nums text-desk-muted">
+                {{ overviewSubtitle }}
+              </p>
+              <p v-if="autoRefreshError !== null" class="mt-1 text-2xs text-desk-warning" role="status">
+                自动刷新失败：{{ autoRefreshError }}
+              </p>
+            </div>
           </div>
-        </dl>
 
-        <!-- 构成条 + 图例：四段同序同色，图例给出数值与占比，缓存读取额外带命中率。 -->
-        <div v-if="overviewSegments.length > 0" class="mt-5">
-          <UsageCompositionBar :segments="overviewSegments" size="md" :label="overviewAriaLabel" />
-          <dl class="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 sm:grid-cols-4">
-            <div v-for="segment in overviewSegments" :key="segment.key">
-              <dt class="flex items-center gap-1.5 text-2xs text-desk-muted">
-                <span
-                  class="size-2 shrink-0 rounded-sm"
-                  :style="{ backgroundColor: segment.color }"
-                  aria-hidden="true"
-                ></span>
-                {{ segment.label }}
-              </dt>
-              <dd class="mt-0.5 text-xs font-medium tabular-nums" :title="`${segment.label} ${segment.raw} tokens`">
-                {{ segment.value }}
-                <span class="ml-1 font-normal text-2xs text-desk-muted">{{ segment.share }}</span>
-                <span v-if="segment.key === 'cacheRead'" class="ml-1 font-normal text-2xs text-desk-muted">
-                  命中 {{ overallCacheHitText }}
-                </span>
+          <!-- 四个并列读数承载量级与规模，费用交给趋势指标与下方说明；四个分项交给构成条与图例。 -->
+          <dl class="mt-4 grid grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-4">
+            <div v-for="item in overviewMetrics" :key="item.key">
+              <dt class="text-2xs text-desk-muted">{{ item.label }}</dt>
+              <dd
+                class="mt-1 font-semibold text-xl leading-none tabular-nums"
+                :title="item.title ?? undefined"
+              >
+                {{ item.value }}
               </dd>
             </div>
           </dl>
-        </div>
-      </section>
 
-      <!-- 2. 日度用量趋势 + 按日明细 -->
-      <section v-if="dailyBars.length > 0" class="settings-section" aria-labelledby="usage-trend-title">
-        <div class="settings-section-heading">
-          <div>
-            <h2 id="usage-trend-title" class="settings-section-title">用量趋势</h2>
-            <p class="mt-1 text-2xs text-desk-muted">
-              按有记录日期取{{ rangeLabel }}；柱高为当日{{ metricLabel }}。
-            </p>
+          <!-- 构成条 + 图例：四段同序同色，图例给出数值与占比，缓存读取额外带命中率。 -->
+          <div v-if="overviewSegments.length > 0" class="mt-5">
+            <UsageCompositionBar :segments="overviewSegments" size="md" :label="overviewAriaLabel" />
+            <dl class="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 sm:grid-cols-4">
+              <div v-for="segment in overviewSegments" :key="segment.key">
+                <dt class="flex items-center gap-1.5 text-2xs text-desk-muted">
+                  <span
+                    class="size-2 shrink-0 rounded-sm"
+                    :style="{ backgroundColor: segment.color }"
+                    aria-hidden="true"
+                  ></span>
+                  {{ segment.label }}
+                </dt>
+                <dd class="mt-0.5 text-xs font-medium tabular-nums" :title="`${segment.label} ${segment.raw} tokens`">
+                  {{ segment.value }}
+                  <span class="ml-1 font-normal text-2xs text-desk-muted">{{ segment.share }}</span>
+                  <span v-if="segment.key === 'cacheRead'" class="ml-1 font-normal text-2xs text-desk-muted">
+                    命中 {{ overallCacheHitText }}
+                  </span>
+                </dd>
+              </div>
+            </dl>
           </div>
-          <div class="flex flex-wrap items-center gap-2">
-            <div class="segment" role="group" aria-label="统计范围">
-              <AppButton
-                v-for="option in USAGE_RANGE_OPTIONS"
-                :key="option.value"
-                variant="unstyled"
-                class="segment-option"
-                :class="range === option.value ? 'is-selected' : ''"
-                :aria-pressed="range === option.value"
-                @click="range = option.value"
-              >
-                {{ option.label }}
-              </AppButton>
-            </div>
-            <div class="segment" role="group" aria-label="趋势指标">
-              <AppButton
-                variant="unstyled"
-                class="segment-option"
-                :class="metric === 'tokens' ? 'is-selected' : ''"
-                :aria-pressed="metric === 'tokens'"
-                @click="metric = 'tokens'"
-              >
-                Token
-              </AppButton>
-              <AppButton
-                variant="unstyled"
-                class="segment-option"
-                :class="metric === 'messages' ? 'is-selected' : ''"
-                :aria-pressed="metric === 'messages'"
-                @click="metric = 'messages'"
-              >
-                回复数
-              </AppButton>
-              <AppButton
-                variant="unstyled"
-                class="segment-option"
-                :class="metric === 'cost' ? 'is-selected' : ''"
-                :aria-pressed="metric === 'cost'"
-                :disabled="!costAvailable"
-                :title="costAvailable ? '按供应商上报的费用查看' : '模型未上报价格，无法按费用查看'"
-                @click="metric = 'cost'"
-              >
-                费用
-              </AppButton>
-            </div>
-          </div>
-        </div>
+        </section>
 
-        <!-- 图例：Token 指标下四种分项与柱体段同色；其余指标没有分项，只说明口径。 -->
-        <div class="mt-3 flex flex-wrap items-center gap-3 text-2xs text-desk-muted">
-          <template v-if="metric === 'tokens'">
-            <span v-for="segment in USAGE_SEGMENTS" :key="segment.key" class="inline-flex items-center gap-1.5">
-              <span class="size-2 rounded-sm" :style="{ backgroundColor: segment.color }" aria-hidden="true"></span>
-              {{ segment.label }}
-            </span>
-          </template>
-          <span v-else-if="metric === 'messages'">柱高为当日回复条数</span>
-          <span v-else>费用只统计供应商上报价格的调用，未提供价格的日期不画柱</span>
-        </div>
-
-        <!-- 图表：读数行固定在卡片顶部，不跟随光标；刻度列与网格线共用同一个 bottom-5
-             （即列内日期行的高度），柱区不加竖向 padding，基线与刻度只有这一处来源。 -->
-        <div class="mt-3 rounded-desk-sm border border-desk-line bg-desk-surface p-4">
-          <div class="flex items-baseline justify-between gap-3 pb-3">
-            <div class="flex items-baseline gap-2">
-              <span class="text-2xs tabular-nums text-desk-muted">{{ readoutDate }}</span>
-              <span class="text-xs font-semibold tabular-nums">{{ readoutValue }}</span>
+        <!-- 2. 日度用量趋势 + 常驻按日明细 -->
+        <section class="settings-section" aria-labelledby="usage-trend-title">
+          <div class="settings-section-heading">
+            <div>
+              <h2 id="usage-trend-title" class="settings-section-title">用量趋势</h2>
+              <p class="mt-1 text-2xs text-desk-muted">
+                {{ rangeLabel }}按自然日结算，无消耗的日子不画柱；柱高为当日{{ metricLabel }}。
+              </p>
             </div>
-            <span class="text-2xs text-desk-muted">单位 {{ metricUnit }}</span>
+            <div class="flex flex-wrap items-center gap-2">
+              <div class="segment" role="group" aria-label="趋势指标">
+                <AppButton
+                  variant="unstyled"
+                  class="segment-option"
+                  :class="metric === 'tokens' ? 'is-selected' : ''"
+                  :aria-pressed="metric === 'tokens'"
+                  @click="metric = 'tokens'"
+                >
+                  Token
+                </AppButton>
+                <AppButton
+                  variant="unstyled"
+                  class="segment-option"
+                  :class="metric === 'messages' ? 'is-selected' : ''"
+                  :aria-pressed="metric === 'messages'"
+                  @click="metric = 'messages'"
+                >
+                  回复数
+                </AppButton>
+                <AppButton
+                  variant="unstyled"
+                  class="segment-option"
+                  :class="metric === 'cost' ? 'is-selected' : ''"
+                  :aria-pressed="metric === 'cost'"
+                  :disabled="!costAvailable"
+                  :title="costAvailable ? '按供应商上报的费用查看' : '所选范围内模型未上报价格，无法按费用查看'"
+                  @click="metric = 'cost'"
+                >
+                  费用
+                </AppButton>
+              </div>
+            </div>
           </div>
 
-          <div class="relative h-44">
-            <div class="pointer-events-none absolute top-0 bottom-5 left-0 w-12" aria-hidden="true">
+          <!-- 图例：Token 指标下四种分项与柱体段同色；其余指标没有分项，只说明口径。 -->
+          <div class="mt-3 flex flex-wrap items-center gap-3 text-2xs text-desk-muted">
+            <template v-if="metric === 'tokens'">
+              <span v-for="segment in USAGE_SEGMENTS" :key="segment.key" class="inline-flex items-center gap-1.5">
+                <span class="size-2 rounded-sm" :style="{ backgroundColor: segment.color }" aria-hidden="true"></span>
+                {{ segment.label }}
+              </span>
+            </template>
+            <span v-else-if="metric === 'messages'">柱高为当日回复条数</span>
+            <span v-else>费用只统计供应商上报价格的调用，未提供价格的日期不画柱</span>
+          </div>
+
+          <div class="mt-3">
+            <UsageTrendChart
+              :bars="trendBars"
+              :ticks="trendAxis"
+              :unit-label="metricUnit"
+              :metric="metric"
+              @select="handleDayDrill"
+            />
+          </div>
+
+          <!-- 常驻按日明细：精确读数与键盘浏览入口，最新日期在前；日期可点进当日会话明细。 -->
+          <div class="mt-3 border-t border-desk-line pt-3">
+            <p class="text-2xs font-medium text-desk-muted">按日明细（{{ rangeLabel }}，最新在前）</p>
+            <div class="mt-2">
+              <UsageDailyTable :rows="dailyRows" :cost-available="costAvailable" @select-day="handleDayDrill" />
+            </div>
+          </div>
+        </section>
+
+        <!-- 3. 模型与项目分布 (双列并排) -->
+        <div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
+          <!-- 模型分布 -->
+          <section class="settings-section" aria-labelledby="usage-models-title">
+            <div class="settings-section-heading">
+              <h2 id="usage-models-title" class="settings-section-title">模型用量分布</h2>
+              <span class="text-2xs text-desk-muted">{{ modelRows.length }} 项 · 点击行查看会话</span>
+            </div>
+
+            <UsageDistributionList
+              :rows="modelRows"
+              empty-text="所选范围内无模型用量记录。"
+              @select="handleDrill"
+            />
+          </section>
+
+          <!-- 项目分布 -->
+          <section class="settings-section" aria-labelledby="usage-projects-title">
+            <div class="settings-section-heading">
+              <h2 id="usage-projects-title" class="settings-section-title">项目用量分布</h2>
+              <span class="text-2xs text-desk-muted">{{ projectRows.length }} 项 · 点击行查看会话</span>
+            </div>
+
+            <UsageDistributionList
+              :rows="projectRows"
+              empty-text="所选范围内无项目用量记录。"
+              @select="handleDrill"
+            />
+          </section>
+        </div>
+
+        <!-- 4. 会话明细：无下钻为范围内消耗 Top，点击分布行/趋势柱/热力图格后按维度过滤 -->
+        <section class="settings-section" aria-labelledby="usage-sessions-title">
+          <div class="settings-section-heading">
+            <div class="flex flex-wrap items-center gap-2">
+              <h2 id="usage-sessions-title" class="settings-section-title">
+                {{ drill === null ? '高消耗会话' : '会话明细' }}
+              </h2>
               <span
-                v-for="tick in trendAxis"
-                :key="tick.ratio"
-                class="absolute right-0 translate-y-1/2 text-2xs whitespace-nowrap tabular-nums text-desk-muted"
-                :style="{ bottom: `${tick.ratio * 100}%` }"
+                v-if="drill !== null"
+                class="inline-flex items-center rounded-full border border-desk-line px-2 py-0.5 text-2xs text-desk-muted"
               >
-                {{ tick.label }}
+                {{ drill.label }} · {{ rangeLabel }}
               </span>
             </div>
-
-            <!-- 网格线只画在柱区内（左侧跳过刻度列）：峰顶、半高与基线，给柱高一个可读的参照。 -->
-            <div class="pointer-events-none absolute top-0 right-0 bottom-5 left-14" aria-hidden="true">
-              <div class="absolute inset-x-0 top-0 border-t border-desk-line"></div>
-              <div class="absolute inset-x-0 top-1/2 border-t border-dashed border-desk-line"></div>
-              <div class="absolute inset-x-0 bottom-0 border-t border-desk-line"></div>
-            </div>
-
-            <div
-              class="ml-14 flex h-full items-end overflow-x-auto scroll-area"
-              :class="barSizing.gap"
-              role="group"
-              aria-label="每日用量趋势"
-              @mouseleave="hoveredDate = null"
-            >
-              <div
-                v-for="bar in dailyBars"
-                :key="bar.date"
-                class="group relative flex h-full flex-1 flex-col items-center justify-end"
-                :class="barSizing.width"
-                role="img"
-                :aria-label="bar.ariaLabel"
-                @mouseenter="hoveredDate = bar.date"
-              >
-                <!-- 绘图格：柱高百分比基于这一格，下面的日期行不参与高度分配 -->
-                <div class="relative flex w-full grow flex-col justify-end">
-                  <!-- 悬停列高亮：垫在柱体后面的整列淡底，不改变柱体本身的颜色 -->
-                  <div
-                    class="pointer-events-none absolute inset-0 rounded-sm bg-desk-canvas-sunken opacity-0 transition-opacity group-hover:opacity-100"
-                    aria-hidden="true"
-                  ></div>
-
-                  <!-- 柱体：Token 指标按四个分项堆叠，费用指标整体一色；
-                       段间 1px 卡片底色隔开，非零段保底 1px 高度，避免小分项在柱上消失。 -->
-                  <div class="relative w-full" :style="{ height: `${bar.heightPercent}%` }">
-                    <div
-                      v-if="!bar.stacked"
-                      class="h-full w-full rounded-t-sm"
-                      :style="{ backgroundColor: 'var(--color-desk-usage-1)' }"
-                    ></div>
-                    <div v-else class="flex h-full w-full flex-col-reverse overflow-hidden rounded-t-sm">
-                      <div
-                        v-for="(segment, index) in bar.segments"
-                        :key="segment.key"
-                        :style="{
-                          height: `${segment.percent}%`,
-                          minHeight: '1px',
-                          backgroundColor: segmentColor(segment.key),
-                          boxShadow: index > 0 ? 'inset 0 1px 0 0 var(--color-desk-surface)' : 'none'
-                        }"
-                      ></div>
-                    </div>
-                  </div>
-
-                  <!-- 无值日只画一根 2px 基线条：保留日期位置，不让柱列出现无法解释的空洞 -->
-                  <div
-                    v-if="!bar.hasValue"
-                    class="relative h-0.5 w-full rounded-sm bg-desk-canvas-sunken"
-                  ></div>
-                </div>
-
-                <!-- 日期行：每列都占同一高度，稀疏标签用空行占位，柱高才能在列之间对齐 -->
-                <span class="flex h-5 shrink-0 items-center text-2xs whitespace-nowrap tabular-nums text-desk-muted">
-                  {{ bar.showLabel ? bar.label : '' }}
-                </span>
-              </div>
+            <div class="flex items-center gap-3">
+              <span class="text-2xs text-desk-muted">点击可快速打开该会话</span>
+              <AppButton v-if="drill !== null" variant="ghost" size="sm" type="button" @click="clearDrill">
+                清除筛选
+              </AppButton>
             </div>
           </div>
-        </div>
 
-        <!-- 明细表：精确读数与键盘浏览的入口，默认折叠，最新日期在前。 -->
-        <details class="mt-3 border-t border-desk-line pt-3">
-          <summary class="cursor-pointer text-2xs font-medium text-desk-muted">
-            按日明细（{{ rangeLabel }}，最新在前）
-          </summary>
-          <div class="mt-2 max-h-80 overflow-auto scroll-area">
-            <table class="w-full min-w-[34rem] border-collapse text-xs">
-              <caption class="sr-only">按日用量明细</caption>
-              <thead>
-                <tr class="text-2xs text-desk-muted">
-                  <th scope="col" class="py-1.5 pr-2 text-left font-medium">日期</th>
-                  <th scope="col" class="px-2 py-1.5 text-right font-medium">总量</th>
-                  <th scope="col" class="px-2 py-1.5 text-right font-medium">输入</th>
-                  <th scope="col" class="px-2 py-1.5 text-right font-medium">输出</th>
-                  <th scope="col" class="px-2 py-1.5 text-right font-medium">缓存读</th>
-                  <th scope="col" class="px-2 py-1.5 text-right font-medium">缓存写</th>
-                  <th scope="col" class="px-2 py-1.5 text-right font-medium">回复</th>
-                  <th v-if="costAvailable" scope="col" class="py-1.5 pl-2 text-right font-medium">费用</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="row in dailyDetailRows" :key="row.date" class="border-t border-desk-line">
-                  <th scope="row" class="py-1.5 pr-2 text-left font-normal tabular-nums">{{ row.date }}</th>
-                  <td class="px-2 py-1.5 text-right font-medium tabular-nums">{{ formatTokens(row.totalTokens) }}</td>
-                  <td class="px-2 py-1.5 text-right tabular-nums text-desk-muted">{{ formatTokens(row.input) }}</td>
-                  <td class="px-2 py-1.5 text-right tabular-nums text-desk-muted">{{ formatTokens(row.output) }}</td>
-                  <td class="px-2 py-1.5 text-right tabular-nums text-desk-muted">{{ formatTokens(row.cacheRead) }}</td>
-                  <td class="px-2 py-1.5 text-right tabular-nums text-desk-muted">{{ formatTokens(row.cacheWrite) }}</td>
-                  <td class="px-2 py-1.5 text-right tabular-nums text-desk-muted">{{ row.messageCount }}</td>
-                  <td v-if="costAvailable" class="py-1.5 pl-2 text-right tabular-nums text-desk-muted">
-                    {{ formatCostOrDash(row.cost) }}
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </details>
-      </section>
-
-      <!-- 3. 近一年日度活跃度 -->
-      <section class="settings-section" aria-labelledby="usage-heatmap-title">
-        <div class="settings-section-heading">
-          <div>
-            <h2 id="usage-heatmap-title" class="settings-section-title">全年活跃度</h2>
-            <p class="mt-1 text-2xs tabular-nums text-desk-muted">
-              {{ heatmap.activeDays }} 天有记录 · 合计 {{ formatTokens(heatmap.totalTokens) }} tokens
-            </p>
-          </div>
-        </div>
-        <UsageHeatmap :model="heatmap" />
-      </section>
-
-      <!-- 4. 模型与项目分布 (双列并排) -->
-      <div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <!-- 模型分布 -->
-        <section class="settings-section" aria-labelledby="usage-models-title">
-          <div class="settings-section-heading">
-            <h2 id="usage-models-title" class="settings-section-title">模型用量分布</h2>
-            <span class="text-2xs text-desk-muted">{{ summary.models.length }} 个模型</span>
-          </div>
-
-          <div v-if="summary.models.length === 0" class="mt-3 text-xs text-desk-muted">
-            无模型用量记录。
-          </div>
-
-          <!-- 列表项不再套一层卡片：外层分节已是卡片，行与行之间用分隔线区分。
-               左右各外扩 8px 交给滚动条槽位，行内 padding 再把内容拉回分节的内容边。 -->
-          <ul v-else class="mt-3 -mx-2 max-h-80 overflow-y-auto scroll-area">
-            <li
-              v-for="row in modelRows"
-              :key="row.key"
-              class="border-t border-desk-line px-2 py-2.5 text-xs transition-colors first:border-t-0 hover:bg-desk-canvas-sunken"
-            >
-              <div class="flex items-baseline justify-between gap-3">
-                <div class="flex min-w-0 flex-1 items-baseline gap-1.5">
-                  <span v-if="row.badge !== null" class="shrink-0 text-2xs text-desk-muted">[{{ row.badge }}]</span>
-                  <span class="min-w-0 truncate font-medium">{{ row.name }}</span>
-                </div>
-                <div class="shrink-0 text-right text-xs font-semibold whitespace-nowrap tabular-nums">
-                  {{ row.totalTokens }}
-                  <span class="ml-1 font-normal text-2xs text-desk-muted">{{ row.share }}</span>
-                </div>
-              </div>
-
-              <!-- 构成条：与趋势图同序同色的四段，行内只表达构成，绝对值已在上方数字里。
-                   外面包一层普通块：条宽只取决于这个块，不依赖行内的 flex 上下文。 -->
-              <div class="mt-2">
-                <UsageCompositionBar
-                  :segments="row.segments"
-                  size="sm"
-                  :label="`${row.name} 的 Token 构成`"
-                />
-              </div>
-
-              <div class="mt-1.5 flex items-center justify-between gap-2 text-2xs tabular-nums text-desk-muted">
-                <span class="min-w-0 truncate">{{ row.detail }}</span>
-                <span class="shrink-0">{{ row.meta }}</span>
-              </div>
-            </li>
-          </ul>
+          <UsageSessionList
+            :rows="sessionRows"
+            :empty-text="drill === null
+              ? `${rangeLabel}内暂无会话明细。`
+              : `${drill.label}在${rangeLabel}内没有会话明细。`"
+            @open="handleOpenSession"
+          />
         </section>
 
-        <!-- 项目分布 -->
-        <section class="settings-section" aria-labelledby="usage-projects-title">
+        <!-- 5. 近一年日度活跃度：固定窗口，不随范围筛选变化 -->
+        <section v-if="heatmap !== null" class="settings-section" aria-labelledby="usage-heatmap-title">
           <div class="settings-section-heading">
-            <h2 id="usage-projects-title" class="settings-section-title">项目用量分布</h2>
-            <span class="text-2xs text-desk-muted">{{ summary.projects.length }} 个项目</span>
+            <div>
+              <h2 id="usage-heatmap-title" class="settings-section-title">全年活跃度</h2>
+              <p class="mt-1 text-2xs tabular-nums text-desk-muted">
+                固定近一年窗口 · {{ heatmap.activeDays }} 天有记录 · 合计 {{ formatTokens(heatmap.totalTokens) }} tokens · 点击格子查看当日会话
+              </p>
+            </div>
           </div>
-
-          <div v-if="summary.projects.length === 0" class="mt-3 text-xs text-desk-muted">
-            无项目用量记录。
-          </div>
-
-          <ul v-else class="mt-3 -mx-2 max-h-80 overflow-y-auto scroll-area">
-            <li
-              v-for="row in projectRows"
-              :key="row.key"
-              class="border-t border-desk-line px-2 py-2.5 text-xs transition-colors first:border-t-0 hover:bg-desk-canvas-sunken"
-            >
-              <div class="flex items-baseline justify-between gap-3">
-                <div class="min-w-0 flex-1 truncate font-medium" :title="row.detailTitle ?? undefined">{{ row.name }}</div>
-                <div class="shrink-0 text-right text-xs font-semibold whitespace-nowrap tabular-nums">
-                  {{ row.totalTokens }}
-                  <span class="ml-1 font-normal text-2xs text-desk-muted">{{ row.share }}</span>
-                </div>
-              </div>
-
-              <!-- 构成条：与模型分布、趋势图保持同一套分项与颜色，项目占比不是成功语义。 -->
-              <div class="mt-2">
-                <UsageCompositionBar
-                  :segments="row.segments"
-                  size="sm"
-                  :label="`${row.name} 的 Token 构成`"
-                />
-              </div>
-
-              <div class="mt-1.5 flex items-center justify-between gap-2 text-2xs text-desk-muted">
-                <span class="min-w-0 flex-1 truncate tabular-nums" :title="row.detailTitle ?? undefined">{{ row.detail }}</span>
-                <span class="shrink-0 tabular-nums">{{ row.meta }}</span>
-              </div>
-            </li>
-          </ul>
+          <UsageHeatmap :model="heatmap" @select="handleDayDrill" />
         </section>
-      </div>
-
-      <!-- 5. 高消耗会话 Top 明细 -->
-      <section class="settings-section" aria-labelledby="usage-top-sessions-title">
-        <div class="settings-section-heading">
-          <h2 id="usage-top-sessions-title" class="settings-section-title">高消耗会话 Top 排行</h2>
-          <span class="text-2xs text-desk-muted">点击可快速打开该会话</span>
-        </div>
-
-        <div v-if="summary.topSessions.length === 0" class="mt-3 text-xs text-desk-muted">
-          暂无会话明细。
-        </div>
-
-        <ul v-else class="mt-3 -mx-2 max-h-96 divide-y divide-desk-line overflow-y-auto scroll-area">
-          <li v-for="(session, index) in summary.topSessions" :key="session.sessionId">
-            <!-- 整行是原生按钮：可聚焦、可键盘触发；行与行用分隔线区分，不再逐行套一层卡片。 -->
-            <button
-              type="button"
-              class="group flex w-full cursor-pointer items-center justify-between gap-3 px-2 py-2.5 text-left text-xs transition-colors hover:bg-desk-canvas-sunken"
-              @click="handleOpenSession(session)"
-            >
-              <!-- 序号与标题 -->
-              <span class="w-6 shrink-0 text-right font-mono text-2xs tabular-nums text-desk-muted">#{{ index + 1 }}</span>
-              <div class="min-w-0 flex-1">
-                <div class="flex items-center gap-1.5">
-                  <span class="truncate font-medium text-desk-ink group-hover:text-desk-accent" :title="session.title">
-                    {{ session.title }}
-                  </span>
-                  <span class="shrink-0 rounded border border-desk-line px-1 py-px text-2xs text-desk-muted">
-                    {{ session.projectName }}
-                  </span>
-                </div>
-                <div class="mt-0.5 text-2xs text-desk-muted">
-                  更新于 {{ formatDateTime(session.updatedAt) }} · {{ session.messageCount }} 条回复
-                </div>
-              </div>
-
-              <!-- 用量与 Token -->
-              <div class="shrink-0 text-right">
-                <div class="text-xs font-semibold tabular-nums text-desk-ink">
-                  {{ formatTokens(session.totalTokens) }}
-                </div>
-                <div class="text-2xs tabular-nums text-desk-muted">
-                  入 {{ formatTokens(session.input) }} · 出 {{ formatTokens(session.output) }}
-                  <template v-if="session.cost !== null"> · ${{ formatCost(session.cost) }}</template>
-                </div>
-              </div>
-            </button>
-          </li>
-        </ul>
-      </section>
+      </template>
     </template>
   </div>
 </template>
