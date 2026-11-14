@@ -272,6 +272,7 @@
           "历史按会话寻址：已绑定读权威分支，未绑定由日志解析作答",
           "运行注册表管理运行身份、绑定代际与占用",
           "消息、工具、历史、活动与用量投影",
+          "工具结果交付卡片时按固定外壳渲染，按钮只转发已登记动作",
           "运行中在会话处理当前请求时接入同色 SVG 流动边框",
           "用量弹窗展示会话统计与独立的 Codex、OpenCode Go 账户额度，支持刷新",
           "设置页用量：四个并列读数、Token 与费用分项构成、范围与指标可切的堆叠趋势、全年日度热力图、按日明细表、模型与项目分布，可见时静默刷新",
@@ -287,6 +288,8 @@
           {"kind": "关键实现", "label": "宿主监督与启动", "path": "src/main/sessions/sdk-host-manager.ts"},
           {"kind": "关键实现", "label": "官方 SDK 会话", "path": "src/sdk-host/session-runtime.ts"},
           {"kind": "关键实现", "label": "消息与工具投影", "path": "src/sdk-host/projection/message-projection.ts"},
+          {"kind": "关键实现", "label": "会话内卡片工具", "path": "src/sdk-host/present-card-extension.ts"},
+          {"kind": "界面入口", "label": "会话内卡片", "path": "src/renderer/src/sessions/components/PresentCard.vue"},
           {"kind": "界面入口", "label": "输入坞", "path": "src/renderer/src/sessions/components/PromptComposer.vue"},
           {"kind": "界面入口", "label": "图片附件与标注", "path": "src/renderer/src/sessions/components/PromptImageMaterials.vue"},
           {"kind": "界面入口", "label": "图片标注面板", "path": "src/renderer/src/sessions/components/ImageAnnotationPanel.vue"},
@@ -306,7 +309,8 @@
           "提交结果未确认时保留输入和附件；恢复不自动重发，已观察到正式消息时不重复恢复原输入",
           "图片编号、位置与说明绑定，不改写原图像素；说明由 SDK 附属消息提供，不参与提示词命令或模板处理",
           "历史读取只接受项目与会话，不接受任意文件路径",
-          "关闭标签保留历史，与删除会话不同"
+          "关闭标签保留历史，与删除会话不同",
+          "卡片类型与动作是随包枚举，模型不能描述布局或执行内容；动作只转发既有通道，写入是否成立由主进程判定"
         ],
         "links": [
           {"label": "模块文档：会话与聊天", "href": "modules/sessions-chat.md"},

@@ -41,6 +41,7 @@
 | `src/sdk-host/protocol.ts` | 主进程和 SDK 宿主的版本化消息、请求与目标校验 |
 | `src/sdk-host/session-runtime.ts` | 官方 SDK 会话、运行请求、订阅、回退／压缩、产品资源装配与内置扩展装配（含按专家范围收窄 MCP）、资源装配诊断与绑定阶段分类 |
 | `src/sdk-host/expert-role.ts` | 按会话目标读取选中的专家定义，把正文按上限裁剪后装配成 `expert-role` 系统提示分段，并在段尾说明本次的技能／MCP 范围；未选中时不读资源清单；快速模式下专家引用的被剔除规范同样在段尾说明 |
+| `src/sdk-host/present-card-extension.ts` | 会话内卡片工具 `present_card`：只接受枚举内的卡片类型与动作 ID，载荷经共享契约校验后随工具结果 `details.card` 下发；只给模型一句结论，不写盘、不改清单 |
 | `src/sdk-host/product-resources.ts` | 产品资源解析、用户级 `AGENTS.md` 与 skills 的只读挂载、技能覆盖与同名技能诊断（含按专家许可集过滤可见技能，项目技能不受该许可集裁剪）、扩展加载结果分级与必要组件及配置注入的核验 |
 | `src/sdk-host/conflicts.ts` | 扩展加载结果的冲突分级：按工具名与路径归属区分致命项与仅诊断项，不解析 SDK 错误文案 |
 | `src/sdk-host/memory-configuration.ts` | 宿主内记忆配置的唯一持有者；写进程环境并向已加载扩展推送变更 |
@@ -64,6 +65,7 @@
 | `src/sdk-host/projection/checkpoint.ts` | 首页与稳定活动的独立内存检查点：绑定时分别核对恢复条件，命中不替代 SDK 打开会话文件 |
 | `src/shared/session-api.ts` | 会话列表、打开、重载、删除、按会话读取历史，以及会话专家绑定与专家清单的页面契约 |
 | `src/shared/experts-api.ts` | 专家派生、读取与保存、删除、快速模式剔除清单、能力候选与默认基线保存七条通道及请求／结果契约校验；专家视图与诊断类型复用会话域，不重复定义 |
+| `src/shared/present-card-view.ts` | 会话内卡片载荷契约：卡片类型枚举、动作白名单、字段长度上限与共享解析器，宿主投影与渲染层共用同一份判定 |
 | `src/shared/session-run-api.ts` | 应用级运行清单、释放／结束与事件契约 |
 | `src/shared/usage-stats-api.ts` | 跨项目与跨会话 Token 与费用统计 IPC 契约与聚合类型校验 |
 | `src/shared/extension-ui-api.ts` | 扩展对话、通知、widget 与回应形态 |
@@ -112,6 +114,7 @@
 | `src/renderer/src/sessions/components/ChatMessageItem.vue` | 单消息、图片编号及说明、思考抽屉、纯过程紧凑步骤、流式打字光标与工具归组面板 |
 | `src/renderer/src/sessions/components/HistoryLoadSentinel.vue` | 历史加载触发哨兵 |
 | `src/renderer/src/sessions/components/ToolCard.vue` | 单行紧凑展示操作分类徽章、真实工具名、语境化参数与状态耗时胶囊；展开区展示结构化结果卡片、Diff 与调试抽屉，原文按需展开 |
+| `src/renderer/src/sessions/components/PresentCard.vue` | 会话内卡片：按固定外壳展示标题、字段、可折叠正文与主次按钮；按钮按动作 ID 转发到既有通道（`expert.save` → 专家保存并刷新清单，`copy.text` → 剪贴板），终态与失败原因就地展示 |
 | `src/renderer/src/sessions/components/ToolResultPreview.vue` | 工具结果的计数口径、命中内容、来源、历史状态与省略提示；只展示投影，不发起额外查询 |
 | `src/renderer/src/sessions/components/UsageDetailDialog.vue` | 会话用量明细与独立的 Codex、OpenCode Go 账户额度展示、按需读取与手动刷新 |
 | `src/renderer/src/sessions/components/MemoryInjectionDialog.vue` | 记忆注入卡片：三个分段（适用偏好、常驻约定、当前项目近况）以 tab 切换，点击条目展开摘要，被截断时记录条目按 ID、画像条目按领域只读取全文 |

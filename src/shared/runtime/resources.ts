@@ -6,6 +6,7 @@ import type { AgentCapabilities, CapabilitiesResult, ModelIdentity, ModelSummary
 import type { ContextUsage, ExtensionErrorEntry, HistoryChunk, HistoryData, HistoryQuery, MessageGeneration, MessageUsage, OutputRate, ProjectionBatch, ProjectionBlock, ProjectionBlockKind, ProjectionCompaction, ProjectionMessage, ProjectionResult, ProjectionSnapshot, ProjectionUpdate, SessionActivity, SessionUsage, ToolArgSummaryEntry, ToolDiff, ToolDiffLine, ToolDiffLineKind, ToolExecution, ToolExecutionPhase, ToolExecutionTextKind, ToolNonTextPart, ToolPresentation, ToolPresentationFact, ToolRequestPresentation, ToolResultPresentation, ToolPresentationItem } from './projection'
 import { TOOL_PRESENTATION_LIMITS as PRESENTATION_LIMITS } from './projection'
 import { isSubAgentView } from '../sub-agent-view'
+import { isPresentCardView } from '../present-card-view'
 import { parseImageAnnotationAttachments } from '../image-annotation'
 
 
@@ -593,6 +594,8 @@ function isToolExecution(value: unknown): value is ToolExecution {
     && (value.presentation === undefined || value.presentation === null || isToolPresentation(value.presentation))
     && (value.subAgents === undefined
       || (Array.isArray(value.subAgents) && value.subAgents.every(isSubAgentView)))
+    // 旧记录的投影没有该字段，缺省按「没有卡片」通过；写给旧客户端的载荷不受影响。
+    && (value.card === undefined || value.card === null || isPresentCardView(value.card))
     && isToolDiff(value.diff)
 }
 

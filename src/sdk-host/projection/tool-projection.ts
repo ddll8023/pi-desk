@@ -33,6 +33,8 @@ import type {
 import { summarizeToolRequest, summarizeToolResult } from './tool-presentation'
 import { parseSubAgentView } from '../../shared/sub-agent-view'
 import type { SubAgentView } from '../../shared/sub-agent-view'
+import { parsePresentCardView } from '../../shared/present-card-view'
+import type { PresentCardView } from '../../shared/present-card-view'
 
 /** 工具参数摘要上限；超限截断并在条目上标记，不伪装成完整参数。 */
 const MAX_TOOL_ARGS_CHARS = 4096
@@ -89,6 +91,7 @@ interface MutableToolExecution {
   nonTextParts: ToolNonTextPart[]
   diff: ToolDiff | null
   subAgents: readonly SubAgentView[]
+  card: PresentCardView | null
   presentation: ToolPresentation
 }
 
@@ -211,8 +214,16 @@ function readSubAgentViews(result: unknown): readonly SubAgentView[] {
   return views
 }
 
-/** 由 base64 字符数估算解码后字节数；不解析内容，也不保留数据本身。 */
-function estimateBase64Bytes(data: string): number {
+/**
+ * 会话内卡片：从结果 `details.card` 读取并重走契约校验。
+ * 类型或动作不在枚举内、字段超限时返回 null，界面退回普通工具结果，不猜造缺失字段。
+ */
+function readPresentCard(result: unknown): PresentCardView | null {
+  if (!isRecord(result) || !isRecord(result.details)) return null
+  return parsePresentCardView(result.details.card)
+}
+
+/** 由 base64 字符数估算解码后字节数；不解析内容，也不保留数据本身。 */function estimateBase64Bytes(data: string): number {
   if (data === '') return 0
   const padding = data.endsWith('==') ? 2 : data.endsWith('=') ? 1 : 0
   return Math.max(0, Math.floor((data.length * 3) / 4) - padding)
@@ -376,6 +387,7 @@ function toPublicTool(entry: MutableToolExecution): ToolExecution {
     nonTextParts: entry.nonTextParts,
     diff: entry.diff,
     subAgents: entry.subAgents,
+    card: entry.card,
     presentation: entry.presentation
   }
 }
@@ -463,7 +475,8 @@ export class ToolProjection {
       nonTextBlocks: 0,
       nonTextParts: [],
       diff: null,
-      subAgents: []
+      subAgents: [],
+      card: null
     }
     this.entries.push(entry)
     this.index.set(seed.toolCallId, entry)
@@ -474,6 +487,7 @@ export class ToolProjection {
     entry.outputPath = readOutputPath(seed.result)
     entry.diff = extractDiff(entry.toolName, entry.argsText, seed.result)
     entry.subAgents = readSubAgentViews(seed.result)
+    entry.card = readPresentCard(seed.result)
     entry.presentation = { ...entry.presentation,
       result: summarizeToolResult(entry.toolName, seed.result, { isError: seed.isError, text: extracted.text }) }
     this.emit(entry)
@@ -486,6 +500,7 @@ export class ToolProjection {
     entry.diff = null
     entry.outputPath = null
     entry.subAgents = []
+    entry.card = null
     entry.presentation = { request: null, result: null }
     this.applyArgs(entry, payload.args)
     this.emit(entry)
@@ -502,6 +517,9 @@ export class ToolProjection {
     // 进度快照只随实际带了子任务快照的更新替换，避免旧快照盖住新快照。
     const progressed = readSubAgentViews(payload.partialResult)
     if (progressed.length > 0) entry.subAgents = progressed
+    // 卡片只在带了新载荷的更新里替换，避免一次无卡片的进度事件抹掉已展示的卡片。
+    const progressedCard = readPresentCard(payload.partialResult)
+    if (progressedCard !== null) entry.card = progressedCard
     entry.presentation = { ...entry.presentation,
       result: summarizeToolResult(entry.toolName, payload.partialResult, { isError: false, partial: true, text: partial.text }) }
     this.emit(entry)
@@ -525,6 +543,8 @@ export class ToolProjection {
     // 最终结果没带快照时保留最后一次进度快照，避免卡片在结束时变成空白。
     const ended = readSubAgentViews(payload.result)
     if (ended.length > 0) entry.subAgents = ended
+    const endedCard = readPresentCard(payload.result)
+    if (endedCard !== null) entry.card = endedCard
     entry.presentation = { ...entry.presentation,
       result: summarizeToolResult(entry.toolName, payload.result, { isError: payload.isError === true, text: result.text }) }
     this.emit(entry)
@@ -564,7 +584,8 @@ export class ToolProjection {
       nonTextBlocks: 0,
       nonTextParts: [],
       diff: null,
-      subAgents: []
+      subAgents: [],
+      card: null
     }
     this.entries.push(entry)
     this.index.set(toolCallId, entry)

@@ -21,6 +21,7 @@ import { toolGroupStats } from '../tool-summary'
 import MarkdownContent from '../../ui/MarkdownContent.vue'
 import ToolCard from './ToolCard.vue'
 import SubAgentCard from './SubAgentCard.vue'
+import PresentCard from './PresentCard.vue'
 import AppButton from '../../ui/AppButton.vue'
 import ImageAnnotationCanvas from './ImageAnnotationCanvas.vue'
 
@@ -516,8 +517,11 @@ function onEditKeydown(event: KeyboardEvent): void {
           <span class="execution-panel-stats">{{ groupStats(row.blocks) }}</span>
         </div>
         <template v-for="block in row.blocks" :key="block.key">
+          <template v-if="block.execution && block.execution.card">
+            <PresentCard :card="block.execution.card" @user-expand="emit('userExpand')" />
+          </template>
           <SubAgentCard
-            v-if="(block.execution?.subAgents.length ?? 0) > 0"
+            v-else-if="(block.execution?.subAgents.length ?? 0) > 0"
             :views="block.execution?.subAgents ?? []"
             @user-expand="emit('userExpand')"
           />
@@ -579,10 +583,13 @@ function onEditKeydown(event: KeyboardEvent): void {
             <p v-if="row.block.truncated && chunksFor(row.block).length === 0" class="tool-note">此内容超出展示上限，已截断。</p>
           </div>
         </details>
-        <!-- 交付了子任务的工具调用直接渲染子代理卡片；其余工具仍走通用 ToolCard。 -->
+        <!-- 交付了卡片的工具调用直接渲染卡片；交付子任务的渲染子代理卡片；其余工具仍走通用 ToolCard。 -->
         <template v-else-if="row.block.kind === 'toolcall'">
+          <template v-if="row.block.execution && row.block.execution.card">
+            <PresentCard :card="row.block.execution.card" @user-expand="emit('userExpand')" />
+          </template>
           <SubAgentCard
-            v-if="(row.block.execution?.subAgents.length ?? 0) > 0"
+            v-else-if="(row.block.execution?.subAgents.length ?? 0) > 0"
             :views="row.block.execution?.subAgents ?? []"
             @user-expand="emit('userExpand')"
           />

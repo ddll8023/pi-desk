@@ -20,7 +20,7 @@
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json",
     "typecheck:web": "vue-tsc --noEmit -p tsconfig.web.json",
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
-    "test": "node --import ./scripts/test-register.mjs --test src/main/git/*.test.ts src/main/projects/*.test.ts src/shared-process/*.test.ts src/sdk-host/*.test.ts 'src/renderer/src/**/*.test.ts'",
+    "test": "node --import ./scripts/test-register.mjs --test src/main/git/*.test.ts src/main/projects/*.test.ts src/shared/*.test.ts src/shared-process/*.test.ts src/sdk-host/*.test.ts 'src/renderer/src/**/*.test.ts'",
     "package:portable": "npm run build && node scripts/package-portable.mjs",
     "package:win": "npm run build && node scripts/package-portable.mjs --win",
     "package:mac": "npm run build && node scripts/package-portable.mjs --mac",

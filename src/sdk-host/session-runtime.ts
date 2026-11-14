@@ -14,6 +14,7 @@ import { lastTurnWithWrites } from './turn-files-hint'
 import { PRODUCT_TOOLS_SECTION_KEY, productToolsSection } from './product-tools-hint'
 import { SubAgentControlRegistry } from './sub-agent/control'
 import { createSubAgentDelegationExtension } from './sub-agent/delegation-extension'
+import { createPresentCardExtension } from './present-card-extension'
 // 延续判定只用确定性信号；结论同时进提示分段与活动投影。
 import { judgeContinuation } from './continuation-signal'
 // 标准模式的待办清单与写操作门禁；快速会话不注册。
@@ -1014,6 +1015,8 @@ export class SdkSessionRuntime {
           } },
           { name: 'codemode', factory: this.sdk.createCodemodeExtension(), builtin: true, replaceable: true },
           { name: 'tool-search', factory: this.sdk.createToolSearchExtension(), builtin: true, replaceable: true },
+          // 会话内卡片：模型只能提交枚举内的卡片类型与动作，按钮落点由渲染层转发到既有通道。
+          { name: 'present-card', builtin: true, replaceable: true, factory: createPresentCardExtension() },
           // 委派工具由宿主注入子进程入口与取消控制端：页面只能按任务标识取消，不能指定路径或进程。
           { name: 'sub-agent-delegation', builtin: true, replaceable: true,
             factory: createSubAgentDelegationExtension({

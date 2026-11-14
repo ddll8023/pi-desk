@@ -36,6 +36,9 @@ function fingerprint(bytes) {
 async function collect(directory, files = []) {
   for (const entry of await readdir(directory, { withFileTypes: true })) {
     const path = join(directory, entry.name)
+    // Python 字节码缓存不可能是产品资源：它不是 UTF-8 文本（指纹解码会直接失败），也不应随包分发。
+    // 记忆引擎在源目录里被导入时会就地生成，因此按名字跳过，不要求维护者手工清理。
+    if (entry.name === '__pycache__' || entry.name.endsWith('.pyc')) continue
     if (entry.isSymbolicLink()) throw new Error(`产品资源不允许符号链接：${path}`)
     if (entry.isDirectory()) await collect(path, files)
     else if (entry.isFile()) files.push(path)

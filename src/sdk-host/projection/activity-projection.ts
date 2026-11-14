@@ -451,7 +451,7 @@ function activityTool(state: ActivityToolState): ToolExecution {
   return { toolCallId: state.toolCallId, toolName: state.toolName, phase: state.phase, argsText: state.argsText,
     startedAt: null, endedAt: null, argsTruncated: false, argsSummary: null,
     outputPath: null, text: '', textKind: 'none', textTruncated: false,
-    nonTextBlocks: 0, nonTextParts: [], diff: null, subAgents: [] }
+    nonTextBlocks: 0, nonTextParts: [], diff: null, subAgents: [], card: null }
 }
 
 /** 活动累计器：稳定分支与实时补充分离；快照仅复制轻量稳定事实。 */

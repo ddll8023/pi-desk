@@ -2,6 +2,7 @@
 
 import type { RuntimeError } from './status'
 import type { SubAgentView } from '../sub-agent-view'
+import type { PresentCardView } from '../present-card-view'
 import type { ImageAnnotationAttachment } from '../image-annotation'
 
 
@@ -206,6 +207,11 @@ export interface ToolExecution {
    * 任务状态与活动用专用契约表达，两者的生命周期与展示上限不同。
    */
   readonly subAgents: readonly SubAgentView[]
+  /**
+   * 会话内卡片；null 表示该工具没有交付卡片或载荷未通过校验。
+   * 卡片类型与动作都是随包枚举，界面按固定外壳渲染，不接受模型描述的界面结构。
+   */
+  readonly card: PresentCardView | null
 }
 
 /** AI 消息生成计时：时刻来自 Desktop 接收事件，不代表模型服务端耗时，也不包含后续工具执行。 */
