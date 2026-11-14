@@ -1,20 +1,16 @@
-/** 用户级全局记忆的请求背景与分支控制；提供适用偏好、常驻约定、当前项目近况和任务召回，按工作目录匹配项目归属、按名称解析检索范围，不把召回正文写入会话；装配只留下不含正文的审计元数据（五段状态与记录／画像身份、摘要）。 */
+/** 用户级全局记忆的请求背景与分支控制；提供适用偏好、常驻约定与当前项目近况，两者合并为一份按日期统一结算的共享预算；按工作目录匹配项目归属、按名称解析检索范围，不把背景正文写入会话；装配只留下不含正文的审计元数据。 */
 import { resolve } from 'node:path'
 import type { AgentMessage } from '@earendil-works/pi-agent-core'
 import type { ExtensionContext } from '@earendil-works/pi-coding-agent'
 import { array, domain, errorText, object, text } from './engine.ts'
 import type { Domain, JsonObject, MemoryConfig, MemoryEngine } from './engine.ts'
-import { acceptRecall, renderRecall, selectTask } from './recall.ts'
-import type { RecallCache } from './recall.ts'
 
 export const CONTEXT_TYPE = 'pi-memory.background.v1'
 export const CONTROL_TYPE = 'pi-memory.control.v1'
 /** 注入审计条目：只记段状态与记录身份，正文不进会话。 */
 export const INJECTION_TYPE = 'pi-memory.injection.v1'
-/** 常驻背景总预算：约定与近况分段，进展流水不能挤掉规则预算。 */
-const RESIDENT_BUDGET = 20_000
-const RESIDENT_RULES_BUDGET = 17_000
-const RESIDENT_NOTES_BUDGET = 3_000
+/** 常驻背景总预算：约定与近况共用一份，按日期统一结算，装不下即停。 */
+const RESIDENT_BUDGET = 10_000
 const RESIDENT_MAX_RULE_CHARS = 2_000
 const RESIDENT_INDEX_ROWS = 20
 /** 近况条数与单条上限：这段只回答「这个项目最近在做什么」，不做词法筛选。 */
@@ -22,7 +18,7 @@ const RESIDENT_NOTES_LIMIT = 3
 const RESIDENT_NOTE_MAX_CHARS = 1_200
 /** 审计条目里每条注入记录的摘要长度：只够辨认，全文按需读取。 */
 const AUDIT_EXCERPT_CHARS = 240
-/** 规则列表与取全文是两次读取，共用一个会话内预算，超时后不再重试。 */
+/** 规则列表、约定全文与近况是三次串行读取，共用一份会话内超时预算，超时后不再重试。 */
 const RESIDENT_TIMEOUT = 3_000
 interface State {
   cwd: string
@@ -35,39 +31,35 @@ interface State {
   controller: AbortController
   /** 创建该状态的桌面配置版本；版本变化时整个状态与缓存作废。 */
   hostRevision: number
-  recall?: RecallCache | undefined
-  recallStatus?: JsonObject | undefined
   profiles?: { signature: string; value: string; entries: JsonObject[] } | undefined
-  /** 常驻约定：每会话只成功读取一次，保存或刷新后重新取得。 */
-  resident?: string | undefined
-  /** 本会话已尝试装配常驻的次数；失败后允许重试一次，冷启动不应拖死整会话。 */
-  residentAttempts?: number | undefined
-  /** 常驻约定的注入规模，只进状态查询与排障，不进入模型上下文。 */
-  residentStats?: JsonObject | undefined
-  /** 当前项目近况：与常驻约定分开缓存与失败，读不到只影响这一段。 */
-  notes?: string | undefined
-  notesAttempts?: number | undefined
-  notesStats?: JsonObject | undefined
-  /** 常驻约定实际注入的条目身份，只进状态与审计，不进入模型上下文。 */
-  residentEntries?: JsonObject[] | undefined
-  /** 当前项目近况实际注入的条目身份。 */
-  notesEntries?: JsonObject[] | undefined
-  /** 报错召回实际注入的条目身份；每轮重建，不沿用上一轮的错误上下文。 */
-  errorEntries?: JsonObject[] | undefined
-  /** 近况因段预算未注入的条数：整段丢弃不静默。 */
-  notesDropped?: number | undefined
+  /** 常驻背景（约定与近况）的合并结算结果：一次成功即本会话复用。 */
+  pool?: { resident: string; notes: string } | undefined
+  /** 已尝试结算的次数；失败后允许下一请求整份重算一次，冷启动不应拖死整会话。 */
+  poolAttempts?: number | undefined
+  /** 结算规模与段状态，只进状态查询与排障，不进入模型上下文。 */
+  poolStats?: JsonObject | undefined
+  /** 实际注入的条目身份，只进状态与审计，不进入模型上下文。 */
+  poolEntries?: { resident: JsonObject[]; notes: JsonObject[] } | undefined
   /** 本次装配的审计元数据；由 `takeInjection` 取走，写入时机由调用方决定。 */
   injection?: JsonObject | undefined
   /** 上一次写入审计的内容键：同一轮多次模型调用只留一条。 */
   lastAuditKey?: string | undefined
 }
-/** 装配审计的五段状态，与 `/memory status` 的 `automatic_recall` 同源。 */
+/** 装配审计的段状态，与 `/memory status` 的 `background` 同源。 */
 interface InjectionSegments {
   profiles: JsonObject
   resident: JsonObject
   notes: JsonObject
-  recall: JsonObject
-  errors: JsonObject
+}
+/** 清空背景结算结果：保存、刷新与会话关闭共用同一份失效口径。 */
+function clearBackground(state: State): void {
+  state.profiles = undefined
+  state.pool = undefined
+  state.poolAttempts = undefined
+  state.poolStats = undefined
+  state.poolEntries = undefined
+  state.injection = undefined
+  state.lastAuditKey = undefined
 }
 export interface Lease {
   signal: AbortSignal
@@ -273,13 +265,7 @@ export class MemoryRuntime {
 
   shutdown(ctx: ExtensionContext): void {
     const state = this.states.get(ctx.sessionManager)
-    if (state) { state.closed = true; state.controller.abort(); state.profiles = undefined; state.recall = undefined
-      state.resident = undefined; state.residentAttempts = undefined; state.residentStats = undefined
-      state.residentEntries = undefined
-      state.errorEntries = undefined
-      state.notes = undefined; state.notesAttempts = undefined; state.notesStats = undefined
-      state.notesEntries = undefined; state.notesDropped = undefined
-      state.injection = undefined; state.lastAuditKey = undefined }
+    if (state) { state.closed = true; state.controller.abort(); clearBackground(state) }
   }
 
   /** 停用原因来自宿主派生：执行模式关闭时不要说成用户停用，否则会引到错误的恢复动作。 */
@@ -309,13 +295,7 @@ export class MemoryRuntime {
     lease.assert()
     if (this.saving) throw new Error('已有记忆保存正在处理，请等待其真实结果')
     this.saving = true
-    return () => { this.saving = false; lease.state.profiles = undefined; lease.state.recall = undefined
-      lease.state.resident = undefined; lease.state.residentAttempts = undefined; lease.state.residentStats = undefined
-      lease.state.residentEntries = undefined
-      lease.state.errorEntries = undefined
-      lease.state.notes = undefined; lease.state.notesAttempts = undefined; lease.state.notesStats = undefined
-      lease.state.notesEntries = undefined; lease.state.notesDropped = undefined
-      lease.state.injection = undefined; lease.state.lastAuditKey = undefined }
+    return () => { this.saving = false; clearBackground(lease.state) }
   }
 
   control(ctx: ExtensionContext, action: 'on' | 'off' | 'refresh', append: (data: JsonObject) => void): JsonObject {
@@ -339,9 +319,9 @@ export class MemoryRuntime {
       projects: this.config.projects.map(project => ({ id: project.id, name: project.name })),
       current_project: this.currentProject(state.cwd),
       automatic_domains: this.config.profileDomains, saving: this.saving,
-      automatic_recall: { ...(state.recallStatus ?? { status: state.enabled ? 'not_requested' : 'disabled' }),
-        resident: state.residentStats ?? { status: state.enabled ? 'not_requested' : 'disabled' },
-        notes: state.notesStats ?? { status: state.enabled ? 'not_requested' : 'disabled' } },
+      background: state.poolStats ?? { status: state.enabled ? 'not_requested' : 'disabled',
+        resident: { status: state.enabled ? 'not_requested' : 'disabled' },
+        notes: { status: state.enabled ? 'not_requested' : 'disabled' } },
       approval_boundary: '仅覆盖 pi-memory 写入通道；不是全局文件沙箱',
       commands: '/memory status | off | on | refresh', maintenance: '不自动初始化、保存、重建词项或迁移' }
   }
@@ -353,133 +333,105 @@ export class MemoryRuntime {
   }
 
   /**
-   * 常驻约定：不依赖词法命中，近七天每个 `rule_key` 按归属分别取最新一条。
-   * 只注入当前项目与通用（无项目归属的跨项目约定）两类归属；其他项目的记录既不注入也不占索引行，
-   * 需要时靠任务召回或 memory_rules／memory_search 取得。未识别当前项目时不过滤。
-   * 没有 `rule_key` 的决定与约束不进常驻：键是共同身份，缺失时只能主动检索。
-   * 预算按「归属 → 约束优先」先到先得，正文按「日期倒序、同日约束在前」输出：两者不是同一把尺子。
-   * 预算用尽后的候选项降为索引行；本会话只读取一次，超时或失败时返回空，不影响其余背景。
+   * 常驻背景：约定与近况合并为一份候选，按日期统一结算，共用一份预算。
+   * 约定：近七天、`rule_key` 非空、只收当前项目与通用两类归属，每族取最新一条；
+   * 近况：近七天、当前项目归属、非规则类，按段内名额先裁到最多 3 条。
+   * 结算顺序：日期降序 → 同日 constraint 先于 decision → 规则先于近况 → id 降序；装不下即停。
+   * 两段共用一份缓存：任一读取失败整份不缓存，下一请求整份重算。
    */
-  private async residentSummary(lease: Lease): Promise<string> {
+  private async residentPool(lease: Lease): Promise<{ resident: string; notes: string }> {
     const state = lease.state
-    if (state.resident !== undefined) return state.resident
-    // 成功一次即本会话复用；失败允许下一请求重试一次，避免一次冷启动或瞬时故障拖死整会话。
-    if ((state.residentAttempts ?? 0) >= 2) return ''
-    state.residentAttempts = (state.residentAttempts ?? 0) + 1
+    if (state.pool !== undefined) return state.pool
+    if ((state.poolAttempts ?? 0) >= 2) return { resident: '', notes: '' }
+    state.poolAttempts = (state.poolAttempts ?? 0) + 1
     const window = this.residentWindow()
+    const projectId = this.projectId(state.cwd)
     const controller = new AbortController()
     const signal = AbortSignal.any([lease.signal, controller.signal])
     const timer = setTimeout(() => controller.abort(), RESIDENT_TIMEOUT)
     try {
-      const data = await this.engine.rules('', 0, 200, null, signal)
+      const rules = await this.engine.rules('', 0, 200, null, signal)
       lease.assert()
-      const projectId = this.projectId(state.cwd)
       // 空 rule_key 的约定不进常驻：键是共同身份，缺失时只能主动检索。
-      const rows = array(data.rules).map(value => object(value))
+      const rows = array(rules.rules).map(value => object(value))
         .filter(row => (text(row.type) === 'decision' || text(row.type) === 'constraint')
           && text(row.date) >= window && text(row.rule_key) !== '')
-      // 只收当前项目与通用两类归属：其他项目的约定不进常驻，避免无关条目占预算。
+      // 只收当前项目与通用两类归属：其他项目的约定不进常驻，也不占预算。
       const all = newestByKey(rows)
       const excludedKeys = new Set(all.filter(item => projectRank(item.row, projectId) === 2)
         .map(item => familyKey(item.row)))
-      /** 预算顺序：归属 → 约束优先 → 日期 → id 降序；决定谁拿正文、谁降为索引行。 */
-      const budgetOrder = (left: RankedItem, right: RankedItem): number =>
-        projectRank(left.row, projectId) - projectRank(right.row, projectId)
-        || residentRank(left.row) - residentRank(right.row)
-        || text(right.row.date).localeCompare(text(left.row.date))
-        || text(right.row.id).localeCompare(text(left.row.id))
-      /** 输出顺序：正文按时间倒序给模型读，约束只赢在同一天内，压不过更晚的决定。 */
-      const outputOrder = (left: RankedItem, right: RankedItem): number =>
-        projectRank(left.row, projectId) - projectRank(right.row, projectId)
-        || text(right.row.date).localeCompare(text(left.row.date))
-        || residentRank(left.row) - residentRank(right.row)
-        || text(right.row.id).localeCompare(text(left.row.id))
-      const families = all.filter(item => !excludedKeys.has(familyKey(item.row))).sort(budgetOrder)
+      const families = all.filter(item => !excludedKeys.has(familyKey(item.row)))
       const excludedFamilies = excludedKeys.size
       // 按被排除的键统计行数：同键旧版本不算被项目排除，否则 omitted 会偏小。
       const excludedRecords = rows.filter(row => excludedKeys.has(familyKey(row))).length
       const bodies = await this.residentBodies(families.map(item => text(item.row.id)), signal)
       lease.assert()
-      // 预算按 budgetOrder 先到先得，正文按 outputOrder 重排：两者不共用同一把尺子。
-      const blocks: { item: RankedItem; block: string }[] = []
-      const indexed: JsonObject[] = []
+      const notesData = projectId === null ? null
+        : await this.engine.recentNotes(projectId, window, RESIDENT_NOTES_LIMIT, signal)
+      lease.assert()
+      // 近况名额是段内约束：先裁到最多 3 条，再进合并序列参与日期排序。
+      const noteRows = notesData === null ? []
+        : array(notesData.records).map(value => object(value))
+          .filter(row => NOTE_LABELS[text(row.type)] !== undefined).slice(0, RESIDENT_NOTES_LIMIT)
+      /** 合并候选：规则带全文或摘要，近况只有正文；两类共用一个结算序列。 */
+      const candidates: { kind: 'resident' | 'notes'; row: JsonObject; block: string }[] = [
+        ...families.map(item => ({ kind: 'resident' as const, row: item.row,
+          block: residentBlock(item.row, bodies.get(text(item.row.id))) })),
+        ...noteRows.map(row => ({ kind: 'notes' as const, row, block: noteBlock(row) }))
+      ]
+      /** 结算顺序：日期降序 → 同日 constraint 先于 decision → 规则先于近况 → id 降序。 */
+      const order = (left: typeof candidates[number], right: typeof candidates[number]): number =>
+        text(right.row.date).localeCompare(text(left.row.date))
+        || residentRank(left.row) - residentRank(right.row)
+        || (left.kind === 'resident' ? 0 : 1) - (right.kind === 'resident' ? 0 : 1)
+        || text(right.row.id).localeCompare(text(left.row.id))
+      candidates.sort(order)
+      // 装不下即停：缺口落在最老的一端，不回头补齐更早的条目。
+      const picked: typeof candidates = []
       let used = 0
-      for (const item of families) {
-        const block = residentBlock(item.row, bodies.get(text(item.row.id)))
-        if (used + block.length + 1 > RESIDENT_RULES_BUDGET) { indexed.push(item.row); continue }
-        blocks.push({ item, block }); used += block.length + 1
+      let cutoff = ''
+      for (const item of candidates) {
+        if (used + item.block.length + 1 > RESIDENT_BUDGET) break
+        picked.push(item); used += item.block.length + 1; cutoff = text(item.row.date)
       }
-      const injected = blocks.length
-      const lines: string[] = blocks
-        .sort((left, right) => outputOrder(left.item, right.item))
-        .map(entry => entry.block)
-      const pending = indexed.length
-      const entries = blocks.map(entry => recordEntry(entry.item.row,
-        bodies.get(text(entry.item.row.id)) ?? text(entry.item.row.content)))
-      state.residentEntries = entries
-      for (const row of indexed.slice(0, RESIDENT_INDEX_ROWS)) lines.push(residentIndex(row))
-      const omitted = rows.length - excludedRecords - injected
-      if (pending > 0) lines.push(`另有 ${pending} 条未展开正文（共 ${omitted} 条未注入）：memory_rules 取摘要，memory_read 取全文。`)
+      const dropped = candidates.length - picked.length
+      const residentPicked = picked.filter(item => item.kind === 'resident')
+      const notesPicked = picked.filter(item => item.kind === 'notes')
+      const entries = {
+        resident: residentPicked.map(item => recordEntry(item.row,
+          bodies.get(text(item.row.id)) ?? text(item.row.content))),
+        notes: notesPicked.map(item => recordEntry(item.row, text(item.row.content)))
+      }
+      state.poolEntries = entries
+      const lines: string[] = residentPicked.map(item => item.block)
+      const indexed = families.filter(item => !residentPicked.some(pick => text(pick.row.id) === text(item.row.id)))
+      for (const item of indexed.slice(0, RESIDENT_INDEX_ROWS)) lines.push(residentIndex(item.row))
+      if (indexed.length > 0) {
+        const covered = cutoff ? `（本次覆盖至 ${cutoff}）` : ''
+        lines.push(`另有 ${indexed.length} 条约定未展开正文${covered}：memory_rules 取摘要，memory_read 取全文。`)
+      }
       if (excludedFamilies > 0) lines.push(`其他项目另有 ${excludedFamilies} 条约定未进入常驻；需要时用 memory_rules 或 memory_search 检索。`)
-      const content = injected > 0 ? ['以下「决定 / 约束」是约定，须遵守。', ...lines] : lines
-      state.resident = content.join('\n')
-      state.residentStats = { status: 'provided', families: families.length, injected, indexed: pending, omitted,
-        excluded: excludedFamilies, excluded_records: excludedRecords, ...idFields(entries),
-        budget: RESIDENT_RULES_BUDGET, total_budget: RESIDENT_BUDGET, chars: used }
-      return state.resident
+      const resident = residentPicked.length > 0 ? ['以下「决定 / 约束」是约定，须遵守。', ...lines].join('\n') : lines.join('\n')
+      const notes = notesPicked.map(item => item.block).join('\n')
+      state.pool = { resident, notes }
+      state.poolStats = { status: 'provided', budget: RESIDENT_BUDGET, used,
+        remaining: Math.max(0, RESIDENT_BUDGET - used), cutoff: cutoff || null, dropped,
+        candidates: candidates.length,
+        resident: { status: 'provided', families: families.length, injected: residentPicked.length,
+          indexed: indexed.length, omitted: rows.length - excludedRecords - residentPicked.length,
+          excluded: excludedFamilies, excluded_records: excludedRecords, ...idFields(entries.resident) },
+        notes: projectId === null ? { status: 'no_project' }
+          : { status: 'provided', project: projectId, candidates: noteRows.length,
+            injected: notesPicked.length, dropped: noteRows.length - notesPicked.length, ...idFields(entries.notes) } }
+      return state.pool
     } catch (error) {
       lease.assert()
-      // 失败不缓存正文，只记录原因：下一次请求重试一次，仍失败才不再尝试。
-      state.resident = undefined
-      state.residentStats = { status: 'unavailable', reason: errorText(error) }
-      return ''
-    } finally { clearTimeout(timer) }
-  }
-
-  /**
-   * 当前项目近况：近七天、当前项目归属、`status=active` 的非规则类记录，按日期倒序取有限条。
-   * 不做词法筛选与族收敛，也不混入其他项目：这段只回答「这个项目最近在做什么」。
-   * 与常驻约定分开缓存与失败，近况读不到不影响规则段。
-   */
-  private async projectNotes(lease: Lease): Promise<string> {
-    const state = lease.state
-    if (state.notes !== undefined) return state.notes
-    // 失败允许下一次请求重试一次，与常驻约定的重试预算一致。
-    if ((state.notesAttempts ?? 0) >= 2) return ''
-    state.notesAttempts = (state.notesAttempts ?? 0) + 1
-    const projectId = this.projectId(state.cwd)
-    if (projectId === null) {
-      state.notes = ''; state.notesStats = { status: 'no_project' }
-      return ''
-    }
-    const controller = new AbortController()
-    const signal = AbortSignal.any([lease.signal, controller.signal])
-    const timer = setTimeout(() => controller.abort(), RESIDENT_TIMEOUT)
-    try {
-      const data = await this.engine.recentNotes(projectId, this.residentWindow(), RESIDENT_NOTES_LIMIT, signal)
-      lease.assert()
-      const records = array(data.records).map(value => object(value))
-        .filter(row => NOTE_LABELS[text(row.type)] !== undefined)
-      const lines: string[] = []
-      const entries: JsonObject[] = []
-      let used = 0
-      for (const row of records) {
-        const block = noteBlock(row)
-        if (used + block.length + 1 > RESIDENT_NOTES_BUDGET) continue
-        lines.push(block); used += block.length + 1; entries.push(recordEntry(row, text(row.content)))
-      }
-      state.notes = lines.join('\n')
-      state.notesEntries = entries
-      state.notesDropped = records.length - entries.length
-      state.notesStats = { status: 'provided', project: projectId, candidates: records.length,
-        injected: lines.length, dropped: state.notesDropped, ...idFields(entries),
-        budget: RESIDENT_NOTES_BUDGET, chars: used }
-      return state.notes
-    } catch (error) {
-      lease.assert()
-      // 失败不缓存正文，只记原因；下一次请求再试一次。
-      state.notesStats = { status: 'unavailable', reason: errorText(error) }
-      return ''
+      // 失败整份不缓存：下一次请求整份重算一次，仍失败才不再尝试。
+      state.pool = undefined
+      state.poolEntries = undefined
+      state.poolStats = { status: 'unavailable', reason: errorText(error),
+        resident: { status: 'unavailable' }, notes: { status: 'unavailable' } }
+      return { resident: '', notes: '' }
     } finally { clearTimeout(timer) }
   }
 
@@ -495,70 +447,6 @@ export class MemoryRuntime {
       }
     } catch { /* 全文不可用时仍保留索引与按 ID 读取的指引。 */ }
     return bodies
-  }
-
-  private async errorBackground(lease: Lease, messages: readonly AgentMessage[]): Promise<{ value: string; entries: JsonObject[] }> {
-    // 每轮重建：上一轮的错误上下文不能沿用到本轮审计里。
-    lease.state.errorEntries = []
-    const empty = { value: '', entries: [] as JsonObject[] }
-    for (let index = messages.length - 1; index >= 0; index--) {
-      const message = messages[index]!
-      if (message.role === 'user') break
-      if (message.role !== 'toolResult' || !message.isError) continue
-      const output = message.content.filter(block => block.type === 'text').map(block => block.text).join('\n').trim()
-      if (!output) return empty
-      try {
-        const data = await this.engine.errorRecall({ fingerprint: output.slice(0, 500), limit: 3 }, lease.signal)
-        lease.assert()
-        if (data.no_match) return empty
-        const matches = array(data.matches)
-        const entries = matches.map(value => {
-          const row = object(value)
-          return recordEntry(row, text(row.content))
-        })
-        lease.state.errorEntries = entries
-        const body = JSON.stringify(matches)
-        if (body.length <= 4_000) return { value: `【报错相关历史，仅为有条件的参考】\n${body}`, entries }
-        return { value: `报错相关历史超过背景预算，未截断正文；可用 memory_read 读取：${matches.map(value => text(object(value).id)).join(', ')}`, entries }
-      } catch {
-        lease.assert()
-        return empty
-      }
-    }
-    return empty
-  }
-
-  private async automaticBackground(lease: Lease, messages: readonly AgentMessage[]): Promise<string> {
-    const selection = selectTask(messages)
-    if ('reason' in selection) {
-      lease.state.recall = undefined
-      lease.state.recallStatus = { status: 'skipped', reason: selection.reason }
-      return `自动任务召回已跳过：${selection.reason}`
-    }
-    const requestKey = JSON.stringify(selection.request)
-    const previous = lease.state.recall?.requestKey === requestKey ? lease.state.recall : undefined
-    const controller = new AbortController()
-    const signal = AbortSignal.any([lease.signal, controller.signal])
-    let timer: ReturnType<typeof setTimeout> | undefined
-    try {
-      const timeout = new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(() => { controller.abort(); reject(new Error('自动召回超过独立等待预算')) }, 5_000)
-      })
-      const data = await Promise.race([this.engine.backgroundRecall({ ...selection.request,
-        ...(previous ? { cache_key: previous.cacheKey, cached_ids: previous.ids } : {}) }, signal), timeout])
-      lease.assert()
-      if (signal.aborted) throw new Error('自动召回已取消')
-      const cache = acceptRecall(data, selection.request, previous)
-      const rendered = renderRecall(cache, messages)
-      lease.state.recall = cache
-      lease.state.recallStatus = { ...rendered.status, ids: cache.ids, reused: data.unchanged === true }
-      return rendered.content
-    } catch (error) {
-      lease.assert()
-      lease.state.recall = undefined
-      lease.state.recallStatus = { status: 'unavailable', reason: errorText(error) }
-      return `任务相关记忆不可用（不是无命中）：${errorText(error)}。未自动重建词项或使用旧召回。`
-    } finally { if (timer) clearTimeout(timer) }
   }
 
   /** 段级失败只在所属段内说明一行：整段消失会让「没注入」与「没内容」无法区分。 */
@@ -613,19 +501,15 @@ export class MemoryRuntime {
    */
   private recordInjection(state: State, segments: InjectionSegments): void {
     const entries = {
-      recall: (state.recall?.records ?? []).map(row => recordEntry(row, text(row.content))),
-      resident: state.residentEntries ?? [],
-      notes: state.notesEntries ?? [],
-      errors: state.errorEntries ?? [],
-      profiles: state.profiles?.entries ?? []
+      profiles: state.profiles?.entries ?? [],
+      resident: state.poolEntries?.resident ?? [],
+      notes: state.poolEntries?.notes ?? []
     }
-    const key = JSON.stringify({ request: state.recall?.requestKey ?? null,
-      segments: { ...segments, recall: { ...segments.recall, reused: undefined } }, entries })
+    const key = JSON.stringify({ segments, entries })
     if (state.lastAuditKey === key) return
     state.lastAuditKey = key
-    state.injection = { version: 1, at: new Date().toISOString(), sessionId: state.sessionId, cwd: state.cwd,
-      revision: this.config.revision, requestKey: state.recall?.requestKey ?? null, status: 'provided',
-      reason: null, segments, entries }
+    state.injection = { version: 2, at: new Date().toISOString(), sessionId: state.sessionId, cwd: state.cwd,
+      revision: this.config.revision, status: 'provided', reason: null, segments, entries }
   }
 
   /** 未装配出任何段时也留一条审计：卡片要能解释「为什么没注入」，而不是显示空白。 */
@@ -633,9 +517,9 @@ export class MemoryRuntime {
     const key = JSON.stringify({ status, reason })
     if (state.lastAuditKey === key) return
     state.lastAuditKey = key
-    state.injection = { version: 1, at: new Date().toISOString(), sessionId: state.sessionId, cwd: state.cwd,
-      revision: this.config.revision, requestKey: null, status, reason,
-      segments: {}, entries: { recall: [], resident: [], notes: [], errors: [], profiles: [] } }
+    state.injection = { version: 2, at: new Date().toISOString(), sessionId: state.sessionId, cwd: state.cwd,
+      revision: this.config.revision, status, reason,
+      segments: {}, entries: { profiles: [], resident: [], notes: [] } }
   }
 
   /** 取走本次装配的审计记录：写入时机由调用方决定，读完即清空，同一份不重复落盘。 */
@@ -646,7 +530,7 @@ export class MemoryRuntime {
     return value
   }
 
-  async background(ctx: ExtensionContext, messages: readonly AgentMessage[]): Promise<string | null> {
+  async background(ctx: ExtensionContext): Promise<string | null> {
     const lease = this.lease(ctx, undefined, true)
     lease.state.injection = undefined
     if (!this.config.available) {
@@ -664,25 +548,26 @@ export class MemoryRuntime {
         return `用户级全局记忆库尚未初始化：${this.engine.store}；请在设置中确认创建。`
       }
       const profiles = await this.profileSection(lease)
-      const recalled = await this.automaticBackground(lease, messages)
-      const resident = await this.residentSummary(lease)
-      const notes = await this.projectNotes(lease)
-      const errors = await this.errorBackground(lease, messages)
+      const pool = await this.residentPool(lease)
       lease.assert()
+      const stats = lease.state.poolStats ?? {}
+      const residentStats = record(stats.resident)
+      const notesStats = record(stats.notes)
       const segments: InjectionSegments = {
         profiles: { status: profiles.available ? 'provided' : 'unavailable' },
-        resident: lease.state.residentStats ?? { status: 'not_requested' },
-        notes: lease.state.notesStats ?? { status: 'not_requested' },
-        recall: lease.state.recallStatus ?? { status: 'not_requested' },
-        errors: { status: errors.value ? 'provided' : 'none' }
+        resident: residentStats ?? { status: 'not_requested' },
+        notes: notesStats ?? { status: 'not_requested' }
       }
       this.recordInjection(lease.state, segments)
-      const residentNotice = resident ? null
-        : this.segmentNotice(lease.state.residentStats, '常驻约定', '本会话不再重试，需要时用 memory_rules 检索。')
-      const notesNotice = notes ? null
-        : this.segmentNotice(lease.state.notesStats, '当前项目近况', '本会话不再重试，需要时用 memory_search 检索。')
-      const notesDropped = (lease.state.notesDropped ?? 0) > 0
-        ? `另有 ${lease.state.notesDropped} 条近况因预算未注入。` : null
+      const residentNotice = pool.resident ? null
+        : this.segmentNotice(residentStats ?? undefined, '常驻约定', '本会话不再重试，需要时用 memory_rules 检索。')
+      const notesNotice = pool.notes ? null
+        : this.segmentNotice(notesStats ?? undefined, '当前项目近况', '本会话不再重试，需要时用 memory_search 检索。')
+      const cutoff = typeof stats.cutoff === 'string' ? stats.cutoff : null
+      const dropped = count(stats.dropped)
+      const budgetLine = cutoff !== null
+        ? `本次背景覆盖至 ${cutoff}${dropped > 0 ? `，另有 ${dropped} 条更早记录因预算未注入` : ''}。`
+        : null
       return [
         '以下是 pi-memory 为本次请求提供的用户级全局背景：其中用户已确认的约定用于约束本轮产出，历史条目仅供参考。',
         '不根据当前目录绑定项目、过滤记忆或读取项目本地知识。全局可检索不代表每条内容均通用。',
@@ -690,19 +575,15 @@ export class MemoryRuntime {
         '记忆使用及保存仍遵守 memory Skill；保存须用户明确要求，由扩展经写入闸门直接提交并返回回执。',
         `全局库：${this.engine.store}；领域：${this.config.profileDomains.join(', ')}。`,
         '【适用偏好】', profiles.value,
-        ...(resident || residentNotice
-          ? ['【常驻约定：用户已确认，产出前核对】', resident || residentNotice || ''] : []),
-        ...(notes || notesNotice || notesDropped
-          ? ['【当前项目近况：历史状态，不是约定，不构成要求】', notes || notesNotice || '',
-              ...(notesDropped ? [notesDropped] : [])] : []),
-        ...(recalled ? ['【任务相关记忆】', recalled] : []), errors.value
+        ...(pool.resident || residentNotice
+          ? ['【常驻约定：用户已确认，产出前核对】', pool.resident || residentNotice || ''] : []),
+        ...(pool.notes || notesNotice
+          ? ['【当前项目近况：历史状态，不是约定，不构成要求】', pool.notes || notesNotice || ''] : []),
+        ...(budgetLine ? [budgetLine] : [])
       ].filter(Boolean).join('\n')
     } catch (error) {
       lease.assert()
-      lease.state.profiles = undefined
-      lease.state.recall = undefined
-      lease.state.recallStatus = { status: 'unavailable', reason: errorText(error) }
-      lease.state.injection = undefined
+      clearBackground(lease.state)
       return `用户级全局记忆不可用：${errorText(error)}。未把读取故障当作缺库，未初始化、恢复或修复。`
     }
   }
@@ -710,12 +591,8 @@ export class MemoryRuntime {
 
 /** 状态摘要里的中文标签：内部取值只在 `status json` 输出中出现。 */
 const STATUS_LABELS: Record<string, string> = {
-  provided: '已注入', no_match: '无命中', skipped: '已跳过', unavailable: '不可用',
-  not_requested: '未请求', disabled: '已停用', budget_omitted: '预算不足',
-  already_present: '已在上下文', no_project: '无当前项目', none: '未使用'
-}
-const SKIP_REASONS: Record<string, string> = {
-  no_terms: '查询没有可用词项', no_overlap: '没有词项重叠', below_threshold: '相关度低于门槛'
+  provided: '已注入', unavailable: '不可用', not_requested: '未请求',
+  disabled: '已停用', no_project: '无当前项目', none: '未使用'
 }
 
 /** 摘要读取只做形状判断，缺字段时给占位，不编造计数。 */
@@ -748,18 +625,6 @@ function notesLine(stats: JsonObject): string {
   return parts.join(' · ')
 }
 
-function recallLine(stats: JsonObject): string {
-  if (stats.status === 'no_match') {
-    const reason = typeof stats.reason === 'string' ? SKIP_REASONS[stats.reason] ?? '原因未说明' : '原因未说明'
-    return `无命中（${reason}）`
-  }
-  if (stats.status !== 'provided') return label(stats.status) + reasonSuffix(stats)
-  const parts = [`${count(stats.selected)} 条`]
-  if (count(stats.already_present) > 0) parts.push(`已在上下文 ${count(stats.already_present)} 条`)
-  if (count(stats.budget_omitted) > 0) parts.push(`预算不足 ${count(stats.budget_omitted)} 条`)
-  return parts.join(' · ')
-}
-
 /**
  * `/memory status` 的文本摘要：只给决定「要不要处理」的信息，完整字段留给 `status json`。
  * 只输出有真实来源的段落；没有数据来源的段不写占位行。
@@ -777,16 +642,48 @@ export function statusSummary(data: JsonObject): string {
   const projectLine = data.projects_unavailable === true ? `当前项目 注册表不可读（登记 ${registered} 项）`
     : project === null ? `当前项目 未识别（登记 ${registered} 项）`
     : `当前项目 ${typeof project.name === 'string' ? project.name : '未命名'}（登记 ${registered} 项）`
-  const recall = record(data.automatic_recall)
-  const resident = record(recall?.resident)
-  const notes = record(recall?.notes)
+  const background = record(data.background)
+  const resident = record(background?.resident)
+  const notes = record(background?.notes)
   const domains = Array.isArray(data.automatic_domains)
     ? data.automatic_domains.filter(value => typeof value === 'string') : []
   const lines = [head, `库 ${store}${python}${revision}`, projectLine, '最近一次请求']
   if (domains.length) lines.push(`  偏好 ${domains.join(' · ')}`)
   if (resident !== null) lines.push(`  常驻 ${residentLine(resident)}`)
   if (notes !== null) lines.push(`  近况 ${notesLine(notes)}`)
-  if (recall !== null) lines.push(`  召回 ${recallLine(recall)}`)
+  const budget = count(background?.budget)
+  if (budget > 0) {
+    const cutoff = typeof background?.cutoff === 'string' ? ` · 覆盖至 ${background.cutoff}` : ''
+    lines.push(`  背景 ${count(background?.used)}/${budget} 字符${cutoff}`)
+  }
   lines.push('明细 /memory status json')
   return lines.join('\n')
+}
+
+/** 连续语气与补充语气的说法：停用判定要穿过它们才看真正的任务句。 */
+const CONTINUATION = /^(?:继续(?:执行|当前步骤)?|确认|同意|可以|好的?|开始(?:执行)?|按(?:这个|上述|此)(?:做|方案执行)?|continue|proceed|yes|ok)[\s。.!！]*$/i
+const SUPPLEMENT = /^(?:补充|另外|还有|特别是|主要是|不考虑|不用|不要|不需要|只考虑|只需要|改为|改成|在此基础上)/
+
+/** 取用户消息正文：跳过本扩展注入的背景块，它不是用户的原话。 */
+function userText(message: AgentMessage): string | null {
+  if (message.role !== 'user') return null
+  const value = typeof message.content === 'string' ? message.content
+    : message.content.filter(block => block.type === 'text').map(block => block.text).join('\n')
+  const trimmed = value.trim()
+  return trimmed.startsWith('以下是 pi-memory 为本次请求提供的') ? null : trimmed
+}
+
+/**
+ * 停用判定：最后一条锚定任务的用户消息里出现「不要用记忆」时跳过整段背景。
+ * 补充型句子向前继续找，连续语气直接跳过；遇到锚定任务即停止，不从更早的对话里猜测意图。
+ */
+export function memoryDisabledByRequest(messages: readonly AgentMessage[]): boolean {
+  const users = messages.map(userText).filter((value): value is string => value !== null).slice(-24)
+  for (let index = users.length - 1; index >= 0; index--) {
+    const value = users[index]!
+    if (CONTINUATION.test(value)) continue
+    if (/(?:不要|不用|不必|无需|禁止|别)(?:再)?(?:使用|读取|检索|调用|加载|参考)?\s*(?:任何|历史|已有|长期)?\s*(?:记忆|memory)/i.test(value)) return true
+    if (!SUPPLEMENT.test(value)) break
+  }
+  return false
 }

@@ -1,9 +1,9 @@
 /**
- * 会话内记忆注入审计的跨进程契约：只读快照，含五段状态与条目身份、摘要。
+ * 会话内记忆注入审计的跨进程契约：只读快照，含三段状态与条目身份、摘要。
  *
  * 数据来源是会话分支里 `pi-memory.injection.v1` 自定义条目，由扩展在装配背景时写入；
  * 本契约只搬运它的形状，不读库、不写库，也不携带条目正文全文。
- * 画像段与报错段是后补的两段，字段可选：旧会话里没有它们的审计条目仍按有效快照展示。
+ * 段集合与版本绑定：只有 `version: 2` 判为有效，旧的多段快照一律按「没有审计」处理。
  */
 import type { RuntimeError } from './status'
 
@@ -35,23 +35,20 @@ export interface MemoryInjectionProfileEntry {
   readonly truncated: boolean
 }
 
-/** 五段可点击的注入内容；后两段可选，兼容只有三段的旧审计条目。 */
+/** 三段可点击的注入内容：画像、常驻约定、当前项目近况，缺任一段即不是有效快照。 */
 export interface MemoryInjectionEntries {
-  readonly recall: readonly MemoryInjectionEntry[]
+  readonly profiles: readonly MemoryInjectionProfileEntry[]
   readonly resident: readonly MemoryInjectionEntry[]
   readonly notes: readonly MemoryInjectionEntry[]
-  readonly errors?: readonly MemoryInjectionEntry[]
-  readonly profiles?: readonly MemoryInjectionProfileEntry[]
 }
 
-/** 五段装配状态按原字段搬运，渲染端只读已知键，不据此推断额外含义。 */
+/** 三段装配状态按原字段搬运，渲染端只读已知键，不据此推断额外含义。 */
 export interface MemoryInjectionSnapshot {
-  readonly version: 1
+  readonly version: 2
   readonly at: string
   readonly sessionId: string | null
   readonly cwd: string | null
   readonly revision: number
-  readonly requestKey: string | null
   readonly status: MemoryInjectionStatus
   readonly reason: string | null
   readonly segments: Readonly<Record<string, Readonly<Record<string, unknown>>>>
@@ -117,19 +114,16 @@ function isSegments(value: unknown): value is Readonly<Record<string, Readonly<R
 /** 会话里读到的自定义条目数据可能是旧版本或损坏内容，形状不符时按「没有审计」处理。 */
 export function isMemoryInjectionSnapshot(value: unknown): value is MemoryInjectionSnapshot {
   if (!isRecord(value)) return false
-  if (value.version !== 1 || !bounded(value.at, 64)) return false
+  if (value.version !== 2 || !bounded(value.at, 64)) return false
   if (!(value.sessionId === null || bounded(value.sessionId, 256))) return false
   if (!(value.cwd === null || bounded(value.cwd, 4_096))) return false
   if (typeof value.revision !== 'number' || !Number.isSafeInteger(value.revision) || value.revision < 0) return false
-  if (!(value.requestKey === null || bounded(value.requestKey, 8_000))) return false
   if (typeof value.status !== 'string' || !STATUSES.includes(value.status as MemoryInjectionStatus)) return false
   if (!(value.reason === null || bounded(value.reason, 2_000))) return false
   if (!isSegments(value.segments)) return false
   const entries = value.entries
   if (!isRecord(entries)) return false
-  if (!isEntryList(entries.recall) || !isEntryList(entries.resident) || !isEntryList(entries.notes)) return false
-  if (entries.errors !== undefined && !isEntryList(entries.errors)) return false
-  return entries.profiles === undefined || isProfileEntryList(entries.profiles)
+  return isProfileEntryList(entries.profiles) && isEntryList(entries.resident) && isEntryList(entries.notes)
 }
 
 export function isMemoryInjectionResult(value: unknown): value is MemoryInjectionResult {

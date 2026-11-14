@@ -46,13 +46,12 @@ const DOMAIN_LABELS: Record<string, string> = {
   communication: '沟通', coding: '编码', learning: '学习', workflow: '流程'
 }
 const STATUS_LABELS: Record<string, string> = {
-  provided: '已注入', no_match: '无命中', skipped: '已跳过', unavailable: '不可用',
-  not_requested: '未请求', disabled: '已停用', budget_omitted: '预算不足',
-  already_present: '已在上下文', no_project: '无当前项目', none: '未使用'
+  provided: '已注入', unavailable: '不可用', not_requested: '未请求',
+  disabled: '已停用', no_project: '无当前项目', none: '未使用'
 }
 
 type Tone = 'accent' | 'danger' | 'success' | 'warning' | 'muted'
-type SegmentKey = 'profiles' | 'resident' | 'notes' | 'recall' | 'errors'
+type SegmentKey = 'profiles' | 'resident' | 'notes'
 interface Row {
   readonly key: string
   readonly id: string
@@ -66,13 +65,11 @@ interface Row {
   readonly truncated: boolean
 }
 
-/** 分段顺序与背景注入顺序一致：画像、常驻、近况、召回、报错。 */
+/** 分段顺序与背景注入顺序一致：画像、常驻、近况。 */
 const SEGMENTS: readonly { readonly key: SegmentKey; readonly label: string }[] = [
   { key: 'profiles', label: '适用偏好' },
   { key: 'resident', label: '常驻约定' },
-  { key: 'notes', label: '当前项目近况' },
-  { key: 'recall', label: '任务召回' },
-  { key: 'errors', label: '报错召回' }
+  { key: 'notes', label: '当前项目近况' }
 ]
 
 /** 读取最近一次注入审计；没有审计与读取失败分开表达。 */
@@ -137,9 +134,8 @@ function profileDomain(value: string | null): MemoryProfileDomain | null {
 }
 
 function segmentTone(status: string | undefined): Tone {
-  if (status === 'provided' || status === 'already_present') return 'accent'
+  if (status === 'provided') return 'accent'
   if (status === 'unavailable' || status === 'disabled') return 'danger'
-  if (status === 'budget_omitted') return 'warning'
   return 'muted'
 }
 
@@ -148,11 +144,9 @@ const segments = computed(() => {
   if (value === null) return []
   const entries = value.entries
   const rows: Record<SegmentKey, readonly Row[]> = {
-    profiles: (entries.profiles ?? []).map(profileRow),
+    profiles: entries.profiles.map(profileRow),
     resident: entries.resident.map(recordRow),
-    notes: entries.notes.map(recordRow),
-    recall: entries.recall.map(recordRow),
-    errors: (entries.errors ?? []).map(recordRow)
+    notes: entries.notes.map(recordRow)
   }
   return SEGMENTS.map(segment => {
     const status = value.segments[segment.key]?.status
@@ -419,7 +413,7 @@ onUnmounted(() => {
   color: var(--color-desk-danger);
   font-size: var(--text-2xs);
 }
-/* tab 行：横向铺开五段，选中项用底部强调线标记；窄窗口横向滚动而不换行。 */
+/* tab 行：横向铺开三段，选中项用底部强调线标记；窄窗口横向滚动而不换行。 */
 .memory-injection-tabbed {
   display: flex;
   flex-direction: column;

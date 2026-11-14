@@ -44,12 +44,6 @@ SEARCH_STOPWORDS = {'的','了','是','在','和','与','我','你','如何','�
 BUSY_TIMEOUT_SECONDS = 10.0
 BUSY_RETRIES = 4
 ACCESS_NOTE = '仅统计采集开始后的主动定向读取；不代表全部访问、模型接收、理解、采纳或事实正确，不参与检索排序。'
-BACKGROUND_POLICY = 'lexical-global-background-v3'
-BACKGROUND_STOPWORDS = {'当前','现在','需要','可以','已经','相关','问题','项目','功能','优化','处理',
-                       '继续','一下','看看','进行','是否','推荐','建议','方案','实现','本次','以下',
-                       'please','could','would','should','help','with','this','that'}
-# 自动背景的类型权重：决定与约束优先于进展流水，避免历史流水挤占有限的背景预算。
-TYPE_WEIGHT = {'decision':1.6,'constraint':1.8,'preference_evidence':1.4,'fact':1.1,'issue':1.0,'progress':0.7}
 
 # 旧 Markdown 库的标记只被 migrate 使用；运行期不再解析这些结构。
 LEGACY_SCHEMAS = ('0.2','0.3','0.4')
@@ -707,97 +701,6 @@ def layered_recall(root: Path, query: str, offset: int = 0, limit: int = 50,
             'layers':{'recent':layers['recent'],'summary':layers['summary'],'fallback':layers['fallback']},
             'note':'近窗口内查日记，更早月份优先用月摘要；缺摘要的月份回退该月最多两条日记。仅词法相关性，历史来源不代表当前适用'}
 
-
-def background_recall(root: Path, data: dict) -> dict:
-    """自动背景专用只读入口；共享词法核心，缓存只按库版本判定。"""
-    allowed={'query','recent','date_from','date_to','cache_key','cached_ids'}
-    expect(isinstance(data,dict) and not set(data)-allowed,'自动召回输入字段无效')
-    query=data.get('query')
-    expect(isinstance(query,str) and 0<len(query.strip())<=2000,'自动召回需要有界任务查询')
-    recent=data.get('recent',False)
-    expect(type(recent) is bool,'recent 必须为布尔值')
-    first,last=data.get('date_from'),data.get('date_to')
-    expect(not recent or (first is None and last is None),'近期与明确日期范围不能混用')
-    for value in (first,last):
-        if value is not None:
-            expect(isinstance(value,str) and re.fullmatch(r'\d{4}-\d{2}-\d{2}',value) is not None,'日期范围须为 YYYY-MM-DD')
-            dt.date.fromisoformat(value)
-    cached_ids=data.get('cached_ids',[]);cached_key=data.get('cache_key')
-    expect(isinstance(cached_ids,list) and len(cached_ids)<=6
-           and all(isinstance(rid,str) and rid.startswith('m_') and ID_RE.fullmatch(rid) for rid in cached_ids)
-           and len(set(cached_ids))==len(cached_ids),'自动召回缓存身份无效')
-    expect(cached_key is None or (isinstance(cached_key,str) and re.fullmatch(r'[0-9a-f]{64}',cached_key)),
-           '自动召回缓存键无效')
-    expect(cached_key is not None or not cached_ids,'缓存 ID 缺少所属版本')
-    with connect(root) as conn:
-        require_version(conn)
-        zone=timezone_of(conn);version=change_seq(conn)
-        if recent:
-            window=recent_window(conn)
-            today=dt.datetime.now(zone).date()
-            first=(today-dt.timedelta(days=window-1)).isoformat();last=today.isoformat()
-        expect(first is None or last is None or first<=last,'日期范围顺序无效')
-        scope={'memory_scope':'global','date_from':first,'date_to':last}
-        cache_key=sha(compact([BACKGROUND_POLICY,version,query,scope]).encode())
-        base={'policy':BACKGROUND_POLICY,'store_version':version,'cache_key':cache_key,
-              'scope':scope,'coverage':'store_records'}
-        where=['status=?'];params=['active']
-        if first is not None: where.append('date>=?');params.append(first)
-        if last is not None: where.append('date<=?');params.append(last)
-        condition=' AND '.join(where)
-        if cached_ids:
-            by_id=record_by_ids(conn,cached_ids)
-            rows=[by_id.get(rid) for rid in cached_ids]
-            expect(all(row is not None for row in rows),'缓存记录不属于当前候选范围')
-            expect(all(row['status']=='active' for row in rows),'缓存记录不属于当前候选范围')
-            if cached_key==cache_key: return {**base,'unchanged':True,'ids':cached_ids}
-        terms={term for term in lexical_terms(query) if term not in BACKGROUND_STOPWORDS}
-        total,frequency,docs,average=record_context(conn,terms,condition,tuple(params))
-        ranked=rank_documents(total,frequency,docs,average,' '.join(sorted(terms))) if terms else []
-        # 先按类型权重重排，再套相关度门槛与相对截断，保证规则类条目先获得名额。
-        ranked=[(doc,score*TYPE_WEIGHT.get(doc.get('type',''),1.0),hits) for doc,score,hits in ranked]
-        ranked.sort(key=lambda item:(-item[1],item[0]['key']))
-        eligible=[item for item in ranked if len(item[2])>=min(2,len(terms))
-                  and len(item[2])/max(1,len(terms))>=0.12]
-        if eligible: eligible=[item for item in eligible if item[1]>=eligible[0][1]*0.45]
-        selected=[];counts={'rule':0,'history':0}
-        for item in eligible:
-            group='rule' if item[0].get('type') in RULE_TYPES else 'history'
-            if counts[group]>=3: continue
-            counts[group]+=1;selected.append(item)
-        rows=record_by_ids(conn,[item[0]['id'] for item in selected])
-        fields=('id','type','topic','title','content','project_id','date','status','source_record_ids','rule_key')
-        matches=[{**{key:rows[item[0]['id']][key] for key in fields if key in rows[item[0]['id']]},
-                  'score':round(item[1],6),'matched_terms':item[2]} for item in selected]
-        reason=None if matches else ('no_terms' if not terms else 'no_overlap' if not ranked else 'below_threshold')
-    return {**base,'unchanged':False,'matches':matches,'ids':[row['id'] for row in matches],
-            'no_match':not matches,'reason':reason,'eligible_count':len(eligible),
-            'note':'自动词法筛选不证明适用性或事实正确；被替代规则不自动注入，完整历史仍可手动查询。'}
-
-
-def error_recall(root: Path, data: dict) -> dict:
-    """报错指纹专用检索：仅匹配 type=issue 的日记记录。"""
-    allowed={'fingerprint','limit'}
-    expect(isinstance(data,dict) and not set(data)-allowed,'报错召回输入字段无效')
-    fingerprint=data.get('fingerprint')
-    expect(isinstance(fingerprint,str) and 0<len(fingerprint.strip())<=500,'报错指纹须为有界特征串')
-    limit=data.get('limit',3)
-    expect(isinstance(limit,int) and 1<=limit<=10,'报错召回数量限制无效')
-    with connect(root) as conn:
-        require_version(conn)
-        version=change_seq(conn)
-        tokens=set(lexical_terms(fingerprint.strip()))
-        total,frequency,docs,average=record_context(conn,tokens,'type=?',('issue',))
-        ranked=rank_documents(total,frequency,docs,average,fingerprint.strip())
-        eligible=[item for item in ranked if len(item[2])>=2]
-        selected=eligible[:limit]
-        rows=record_by_ids(conn,[item[0]['id'] for item in selected])
-        fields=('id','type','topic','title','content','project_id','date','status','source_record_ids')
-        matches=[{**{key:rows[item[0]['id']][key] for key in fields if key in rows[item[0]['id']]},
-                  'score':round(item[1],6),'matched_terms':item[2]} for item in selected]
-    return {'policy':'error-fingerprint-v1','store_version':version,'fingerprint':fingerprint,
-            'memory_scope':'global','matches':matches,'no_match':not matches,
-            'note':'报错指纹联动仅匹配 issue 类型日记；不自动沉淀新记录，写入仍只在用户明确要求时进行。'}
 
 
 def indexed_read(root: Path, ids: list[str]) -> dict:
@@ -1707,8 +1610,6 @@ def main() -> None:
     cm=sub.add_parser('commit');cm.add_argument('--plan-id',required=True);cm.add_argument('--approved',action='store_true')
     sr=sub.add_parser('search');sr.add_argument('--query',default='');sr.add_argument('--month');sr.add_argument('--all-dates',action='store_true');sr.add_argument('--historical',action='store_true');sr.add_argument('--limit',type=int,default=50)
     recall=sub.add_parser('recall');recall.add_argument('--query',required=True);recall.add_argument('--mode',choices=['auto','records','recent','historical','month'],default='auto');recall.add_argument('--month');recall.add_argument('--project');recall.add_argument('--offset',type=int,default=0);recall.add_argument('--limit',type=int,default=50)
-    background=sub.add_parser('recall-background');background.add_argument('--input',required=True,choices=['-'])
-    error=sub.add_parser('error-recall');error.add_argument('--input',required=True,choices=['-'])
     rules=sub.add_parser('rules');rules.add_argument('--query',default='');rules.add_argument('--project');rules.add_argument('--offset',type=int,default=0);rules.add_argument('--limit',type=int,default=50)
     notes=sub.add_parser('project-notes');notes.add_argument('--project',required=True);notes.add_argument('--date-from',required=True);notes.add_argument('--limit',type=int,default=3)
     ms=sub.add_parser('month-source');ms.add_argument('month');ms.add_argument('--offset',type=int,default=0);ms.add_argument('--limit',type=int,default=50);ms.add_argument('--closed-today-confirmed',action='store_true')
@@ -1761,14 +1662,6 @@ def main() -> None:
                 result=layered_recall(root,args.query,args.offset,args.limit,args.project)
             else:
                 result=indexed_recall(root,args.query,args.mode,args.month,args.offset,args.limit,project=args.project)
-        elif args.cmd=='recall-background':
-            raw=sys.stdin.buffer.read(65_537)
-            expect(len(raw)<=65_536,'自动召回输入超过上限')
-            result=background_recall(root,json.loads(raw.decode('utf-8')))
-        elif args.cmd=='error-recall':
-            raw=sys.stdin.buffer.read(65_537)
-            expect(len(raw)<=65_536,'报错召回输入超过上限')
-            result=error_recall(root,json.loads(raw.decode('utf-8')))
         elif args.cmd=='search':
             expect(not (args.historical and (args.month or args.all_dates)),'--historical 不能与 --month/--all-dates 合用')
             expect(not (args.month and args.all_dates),'--month 不能与 --all-dates 合用')

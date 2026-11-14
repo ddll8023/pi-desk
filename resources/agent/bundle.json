@@ -21,7 +21,6 @@
         "extensions/pi-memory/engine.ts",
         "extensions/pi-memory/files.ts",
         "extensions/pi-memory/host.ts",
-        "extensions/pi-memory/recall.ts",
         "extensions/pi-memory/tools.ts",
         "extensions/pi-memory/write-gate.ts"
       ],

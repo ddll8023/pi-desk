@@ -348,15 +348,6 @@ export class MemoryEngine {
     } else if (month !== undefined) throw new Error('非按月模式不接受 month，未扩大范围')
     return this.run(args, undefined, signal)
   }
-  /** 自动背景只走只读协议；独立短预算，不借用主动读取统计或写入通道。 */
-  backgroundRecall(input: JsonObject, signal: AbortSignal): Promise<JsonObject> {
-    return this.run(['recall-background', '--input', '-'], input, signal, false, undefined, 5_000)
-  }
-
-  errorRecall(input: JsonObject, signal: AbortSignal): Promise<JsonObject> {
-    return this.run(['error-recall', '--input', '-'], input, signal, false, undefined, 5_000)
-  }
-
   read(ids: string[], signal?: AbortSignal): Promise<JsonObject> {
     if (!ids.length || ids.length > 50 || ids.some(id => !RECORD_ID.test(id))) throw new Error('原文读取必须指定 1..50 个真实日记 ID')
     return this.run(['read', ...ids], undefined, signal)

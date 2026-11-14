@@ -33,12 +33,6 @@ months
 
 全局接口通过 `memory_scope:"global"` 明确范围；`project` 回显本次收窄的来源项目，为 null 表示未收窄。旧条目可能携带 `project_id` 或 `source_project` 作为来源信息，只作来源标注，不构成当前项目绑定。
 
-## 自动背景内部协议
-
-`recall-background --input -` 接收 `query`、可选 `recent`、`date_from`、`date_to`、`cache_key`、`cached_ids`；不接受项目过滤。返回 `policy:"lexical-global-background-v3"`、全局 scope、`store_version` 与 `coverage:"store_records"`。缓存命中按库版本确认，被替代规则不自动注入。无命中时返回 `reason`，取值为 `no_terms`、`no_overlap` 或 `below_threshold`。
-
-`error-recall --input -` 接收有界 `fingerprint` 和可选 `limit`，从全局 issue 日记检索报错经验。两者均不写记忆、候选或访问统计，不证明检索结果适用。
-
 ## 主动读取统计
 
 `access-record --input -` 仅供扩展在完整原文准备好后调用。输入为真实 `ids`、宿主 `session_id`、`tool_call_id`、`store_version`，不接受外部计数、时间、正文或查询词。
