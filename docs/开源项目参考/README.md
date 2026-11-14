@@ -26,6 +26,7 @@
 | 项目 | 仓库 | 定位 | 与当前项目的关系 | 明细 |
 | --- | --- | --- | --- | --- |
 | DeepSeek Harness（DSH） | [deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) | 以插件组合构建的 Agent Harness，提供 Web、桌面与程序化入口 | 会话、模型和扩展能力重合；子代理、目标及沙箱策略超出当前内置能力 | [deepseek-harness.md](deepseek-harness.md) |
+| DeepSeek Chat Demo | [deepseek-ai/chat-demo](https://github.com/deepseek-ai/chat-demo) | DeepSeek 官方静态聊天示例，浏览器直连 API 的纯前端演示 | 聊天呈现层（流式、分支、公式渲染）实质重合；网络信息获取、附件、移动端部分重合；Agent 能力为本项目独有；语音、引用展示、历史 ZIP 归档与纯静态分列为对方独有 | [deepseek-chat-demo.md](deepseek-chat-demo.md) |
 | dsh-superagent | [deepseek-ai/dsh-superagent-prototype](https://github.com/deepseek-ai/dsh-superagent-prototype) | DSH bundle 形式的主动式仓库 Agent：监听 GitHub（可选飞书），按策略把获准请求变成工单并在独立会话中执行 | 会话与项目内执行实质重合，委派与面板部分重合；外部事件源、准入闸门与授权模型、工单编排与影子模式超出当前内置能力 | [dsh-superagent.md](dsh-superagent.md) |
 | Orca | [stablyai/orca](https://github.com/stablyai/orca) | 以工作树为中心的多编码 Agent 工作台 | Git、编辑器、终端与手机对话部分重合；任务工作区以稳定 ID 关联会话、文件、Git 与终端，远程执行、任务来源和完整审阅闭环仍有差距 | [orca.md](orca.md) |
 | EvoFlow | [EvovexAI/EvoFlow](https://github.com/EvovexAI/EvoFlow) | 面向长任务的 Agent Runtime 与控制平面；主体为非商业源码可见许可 | 聊天、资源配置及串行计划部分重合；Goal、团队、可发布工作流与岗位调度超出当前内置范围 | [evoflow.md](evoflow.md) |

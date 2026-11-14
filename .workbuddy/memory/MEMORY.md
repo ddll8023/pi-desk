@@ -21,3 +21,13 @@
 - 近况段与常驻段是两套预算：近况 3 条 / 3,000 字符 / 单条 1,200；常驻总 20,000 / 约定段 17,000 / 单条 2,000 / 索引行 20。
 - 引擎在 `resources/agent/skills/memory/scripts/memory_store.py`，扩展在 `resources/agent/extensions/pi-memory/`，库在 `~/.agents/memory-store/memory.db`（git 仓库，可回溯）。
 - 预演必须在**新副本**上做（`cp` 后 `--store` 指向它），副本提交一次就脏，下一次要重新复制。
+
+## genui 模块已移除（现状基线，2026-11-13）
+
+**结论：项目不再有「生成式界面」能力，不要再按它存在去找代码或文档。**
+
+- 已删 `src/sdk-host/genui/`、`src/shared/genui/`、`src/main/genui/`、`src/renderer/src/genui/`、`preload/genui.ts`、`shared/genui-api.ts`、`shared/genui-params-api.ts`、`assets/genui.css`、`docs/modules/genui.md`。工具 `ui_render`/`ui_patch`/`ui_catalog`/`ui_inspect` 不再注册。
+- **Extension UI 与被删模块无关**，桥接现在在 `src/preload/extension-ui.ts`（导出 `extensionUiApi`），主进程侧在 `main/sessions/extension-ui-*`。不要因为找不到 `preload/genui.ts` 而重建这层。
+- 契约层已无 `ToolExecution.ui`/`latestRevision`、`SessionActivity.genui`/`genuiCount`、`SessionTarget.genui`、`desktop-config.json` 的 `genuiEnabled`。旧会话里的界面工具结果仍在 JSONL 中，只按普通工具卡片展示。
+- **检索教训**：本机 BSD grep 不支持 `\|` 交替与 `\b`，带这些的模式会静默返回空、被误判成“已清理干净”。本仓检索一律用 `grep -F` 或 `grep -E`。
+
