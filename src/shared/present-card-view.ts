@@ -5,9 +5,11 @@
  * 渲染层校验的唯一形状来源——形状或枚举不符即返回 null，由界面降级成普通工具结果，
  * 不猜造缺失字段，也不允许模型描述布局、样式或可执行内容（边界见 docs/present-card-design.md）。
  */
+import { isExpertCapabilityMode } from './expert-capability'
+import type { ExpertCapabilityMode } from './expert-capability'
 
-/** 卡片类型：首期只有「草案」，新增类型前必须确认它有唯一动作落点。 */
-export const PRESENT_CARD_TYPES = ['draft'] as const
+/** 卡片类型：类型即场景契约，新增类型前必须确认它有唯一动作落点。 */
+export const PRESENT_CARD_TYPES = ['expert.draft'] as const
 
 export type PresentCardType = typeof PRESENT_CARD_TYPES[number]
 
@@ -24,7 +26,9 @@ export const PRESENT_CARD_LIMITS = {
   fieldLabel: 40,
   fieldValue: 400,
   body: 8_000,
-  actionLabel: 24
+  actionLabel: 24,
+  /** 能力段每个维度的名单长度：只防载荷无界，与专家引用数量不设上限无关。 */
+  capabilityIds: 64
 } as const
 
 /** 一条字段行：label 与 value 都按纯文本渲染，不解析 Markdown，也不当作链接。 */
@@ -39,6 +43,17 @@ export interface PresentCardAction {
   readonly label: string
 }
 
+/**
+ * 草案的能力范围：与专家定义的声明同构，`inherit` 表示在默认基线上加减，`only` 表示名单即白名单。
+ * 名单是模型建议的勾选集合，页面在此基础上让用户改；为 `null` 时按「继承默认能力」处理。
+ */
+export interface PresentCardCapability {
+  readonly skillsMode: ExpertCapabilityMode
+  readonly skillIds: readonly string[]
+  readonly mcpMode: ExpertCapabilityMode
+  readonly mcpServerIds: readonly string[]
+}
+
 /** 一份卡片载荷；`body` 只在界面展示，不进入模型可见的工具结果文本。 */
 export interface PresentCardView {
   readonly cardType: PresentCardType
@@ -46,6 +61,7 @@ export interface PresentCardView {
   readonly subtitle: string | null
   readonly fields: readonly PresentCardField[]
   readonly body: string | null
+  readonly capability: PresentCardCapability | null
   readonly primaryAction: PresentCardAction
   readonly secondaryAction: PresentCardAction | null
 }
@@ -72,6 +88,33 @@ function parseField(value: unknown): PresentCardField | null {
   return { label, value: fieldValue }
 }
 
+/** 能力名单里的一项：与专家标识、技能、MCP 服务器名同一套字符规则。 */
+function isCapabilityId(value: unknown): value is string {
+  return typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(value)
+}
+
+function parseIdList(value: unknown): readonly string[] | null {
+  if (!Array.isArray(value) || value.length > PRESENT_CARD_LIMITS.capabilityIds) return null
+  const ids: string[] = []
+  for (const item of value) {
+    if (!isCapabilityId(item)) return null
+    if (!ids.includes(item)) ids.push(item)
+  }
+  return ids
+}
+
+/** 能力段：缺省为 null（按继承基线处理）；给了就必须两个维度齐全且模式可识别。 */
+function parseCapability(value: unknown): PresentCardCapability | null | 'invalid' {
+  if (value === null || value === undefined) return null
+  if (!isRecord(value)) return 'invalid'
+  const { skillsMode, skillIds, mcpMode, mcpServerIds } = value
+  if (!isExpertCapabilityMode(skillsMode) || !isExpertCapabilityMode(mcpMode)) return 'invalid'
+  const parsedSkills = parseIdList(skillIds)
+  const parsedMcp = parseIdList(mcpServerIds)
+  if (parsedSkills === null || parsedMcp === null) return 'invalid'
+  return { skillsMode, skillIds: parsedSkills, mcpMode, mcpServerIds: parsedMcp }
+}
+
 function parseAction(value: unknown): PresentCardAction | null {
   if (!isRecord(value)) return null
   const { id, label } = value
@@ -86,7 +129,7 @@ function parseAction(value: unknown): PresentCardAction | null {
  */
 export function parsePresentCardView(value: unknown): PresentCardView | null {
   if (!isRecord(value)) return null
-  const { cardType, title, subtitle, fields, body, primaryAction, secondaryAction } = value
+  const { cardType, title, subtitle, fields, body, capability, primaryAction, secondaryAction } = value
   if (typeof cardType !== 'string' || !(PRESENT_CARD_TYPES as readonly string[]).includes(cardType)) return null
   if (!isText(title, PRESENT_CARD_LIMITS.title)) return null
   if (!isNullableText(subtitle, PRESENT_CARD_LIMITS.subtitle)) return null
@@ -98,6 +141,8 @@ export function parsePresentCardView(value: unknown): PresentCardView | null {
     parsedFields.push(field)
   }
   if (!isNullableText(body, PRESENT_CARD_LIMITS.body)) return null
+  const parsedCapability = parseCapability(capability)
+  if (parsedCapability === 'invalid') return null
   const parsedPrimary = parseAction(primaryAction)
   if (parsedPrimary === null) return null
   const parsedSecondary = secondaryAction === null || secondaryAction === undefined ? null : parseAction(secondaryAction)
@@ -109,6 +154,7 @@ export function parsePresentCardView(value: unknown): PresentCardView | null {
     subtitle: subtitle === '' ? null : subtitle,
     fields: parsedFields,
     body: body === '' ? null : body,
+    capability: parsedCapability,
     primaryAction: parsedPrimary,
     secondaryAction: parsedSecondary
   }

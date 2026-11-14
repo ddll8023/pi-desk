@@ -15,6 +15,7 @@ import { computed, nextTick, onUnmounted, ref, useId, watch } from 'vue'
 import { MAX_EXPERT_DISPLAY_NAME_LENGTH, MAX_EXPERT_SUMMARY_LENGTH } from '../../../../shared/experts-api'
 import type { ExpertEditableDefinition, ExpertSaveRequest } from '../../../../shared/experts-api'
 import { useExpertStore } from '../stores/expert'
+import { baseIds, restoreSelection, selectionState, toSelectionFields } from '../capability-selection'
 import { skillSourceLabel } from '../skill-source-label'
 import AppButton from '../../ui/AppButton.vue'
 import ExpertCapabilityPicker from './ExpertCapabilityPicker.vue'
@@ -87,7 +88,12 @@ const skillRows = computed<CapabilityRow[]>(() => {
   }
   return rows.map(row => ({
     ...row,
-    state: capabilityState({ row, dimension: 'skills', mode: skillsMode.value, selected: selectedSkills.value })
+    state: selectionState({
+      unavailable: row.unavailable,
+      mode: skillsMode.value,
+      checked: selectedSkills.value.includes(row.id),
+      inBaseline: baselineOf('skills').includes(row.id)
+    })
   }))
 })
 
@@ -103,7 +109,12 @@ const mcpRows = computed<CapabilityRow[]>(() => {
   }
   return rows.map(row => ({
     ...row,
-    state: capabilityState({ row, dimension: 'mcp', mode: mcpMode.value, selected: selectedMcp.value })
+    state: selectionState({
+      unavailable: row.unavailable,
+      mode: mcpMode.value,
+      checked: selectedMcp.value.includes(row.id),
+      inBaseline: baselineOf('mcp').includes(row.id)
+    })
   }))
 })
 
@@ -128,24 +139,6 @@ function selectionCount(rows: readonly CapabilityRow[], selected: readonly strin
   return selected.length === total ? `${total} 个全部可用` : `已选 ${selected.length} / ${total}`
 }
 
-/**
- * 行尾的状态标记：仅用选中时勾选本身已经说明了状态，不再重复一遍；
- * 继承模式下要能看出哪些是基线默认、哪些是手动加减。
- */
-function capabilityState(input: {
-  readonly row: { readonly id: string; readonly unavailable: boolean }
-  readonly dimension: 'skills' | 'mcp'
-  readonly mode: 'inherit' | 'only'
-  readonly selected: readonly string[]
-}): string {
-  if (input.row.unavailable) return '当前不可用'
-  if (input.mode === 'only') return ''
-  const checked = input.selected.includes(input.row.id)
-  const inBaseline = baselineOf(input.dimension).includes(input.row.id)
-  if (inBaseline) return checked ? '基线默认' : '已排除'
-  return checked ? '额外启用' : '未启用'
-}
-
 /** 全选只管当前维度：把候选（含已引用但当前不可用的项）全部勾上。 */
 function selectAllSkills(): void {
   selectedSkills.value = skillRows.value.map(row => row.id)
@@ -153,11 +146,6 @@ function selectAllSkills(): void {
 
 function selectAllMcp(): void {
   selectedMcp.value = mcpRows.value.map(row => row.id)
-}
-
-/** 基线展开：`null` 时用全部候选，与主进程的计算口径一致。 */
-function baseIds(baseline: readonly string[] | null, all: readonly string[]): readonly string[] {
-  return baseline ?? all
 }
 
 /** 清空表单：能力勾选回到默认基线，不残留上一次编辑的痕迹。 */
@@ -187,16 +175,22 @@ function applyDefinition(definition: ExpertEditableDefinition | null): void {
   referencedMcpNames.value = definition === null
     ? []
     : [...definition.mcpServerIds, ...definition.mcpAddIds, ...definition.mcpRemoveIds]
-  const skillBase = baseIds(baselineSkills.value, allSkillIds.value)
-  const mcpBase = baseIds(baselineMcp.value, allMcpNames.value)
-  selectedSkills.value = skillsMode.value === 'only'
-    ? [...(definition?.skillIds ?? [])]
-    : [...new Set([...skillBase, ...(definition?.skillAddIds ?? [])])]
-      .filter(id => !(definition?.skillRemoveIds ?? []).includes(id))
-  selectedMcp.value = mcpMode.value === 'only'
-    ? [...(definition?.mcpServerIds ?? [])]
-    : [...new Set([...mcpBase, ...(definition?.mcpAddIds ?? [])])]
-      .filter(name => !(definition?.mcpRemoveIds ?? []).includes(name))
+  selectedSkills.value = restoreSelection({
+    mode: skillsMode.value,
+    onlyIds: definition?.skillIds ?? [],
+    addIds: definition?.skillAddIds ?? [],
+    removeIds: definition?.skillRemoveIds ?? [],
+    baseline: baselineSkills.value,
+    all: allSkillIds.value
+  })
+  selectedMcp.value = restoreSelection({
+    mode: mcpMode.value,
+    onlyIds: definition?.mcpServerIds ?? [],
+    addIds: definition?.mcpAddIds ?? [],
+    removeIds: definition?.mcpRemoveIds ?? [],
+    baseline: baselineMcp.value,
+    all: allMcpNames.value
+  })
 }
 
 /**
@@ -249,29 +243,32 @@ onUnmounted(() => {
 
 /** 组装保存请求：`only` 写入白名单，继承写入相对基线的加与减；提示列表原样带回。 */
 function buildRequest(): ExpertSaveRequest {
-  const skillBase = baseIds(baselineSkills.value, allSkillIds.value)
-  const mcpBase = baseIds(baselineMcp.value, allMcpNames.value)
+  const skills = toSelectionFields({
+    mode: skillsMode.value,
+    selected: selectedSkills.value,
+    baseline: baselineSkills.value,
+    all: allSkillIds.value,
+    inheritOnlyIds: hintSkillIds.value
+  })
+  const mcp = toSelectionFields({
+    mode: mcpMode.value,
+    selected: selectedMcp.value,
+    baseline: baselineMcp.value,
+    all: allMcpNames.value
+  })
   return {
     expertId: props.expertId,
     displayName: displayName.value.trim(),
     summary: summary.value.trim(),
     body: body.value,
-    skillIds: skillsMode.value === 'only' ? [...selectedSkills.value] : [...hintSkillIds.value],
-    skillsMode: skillsMode.value,
-    skillAddIds: skillsMode.value === 'inherit'
-      ? selectedSkills.value.filter(id => !skillBase.includes(id))
-      : [],
-    skillRemoveIds: skillsMode.value === 'inherit'
-      ? skillBase.filter(id => !selectedSkills.value.includes(id))
-      : [],
-    mcpMode: mcpMode.value,
-    mcpServerIds: mcpMode.value === 'only' ? [...selectedMcp.value] : [],
-    mcpAddIds: mcpMode.value === 'inherit'
-      ? selectedMcp.value.filter(name => !mcpBase.includes(name))
-      : [],
-    mcpRemoveIds: mcpMode.value === 'inherit'
-      ? mcpBase.filter(name => !selectedMcp.value.includes(name))
-      : []
+    skillIds: [...skills.onlyIds],
+    skillsMode: skills.mode,
+    skillAddIds: [...skills.addIds],
+    skillRemoveIds: [...skills.removeIds],
+    mcpMode: mcp.mode,
+    mcpServerIds: [...mcp.onlyIds],
+    mcpAddIds: [...mcp.addIds],
+    mcpRemoveIds: [...mcp.removeIds]
   }
 }
 

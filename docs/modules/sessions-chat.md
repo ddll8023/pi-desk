@@ -114,7 +114,7 @@
 | `src/renderer/src/sessions/components/ChatMessageItem.vue` | 单消息、图片编号及说明、思考抽屉、纯过程紧凑步骤、流式打字光标与工具归组面板 |
 | `src/renderer/src/sessions/components/HistoryLoadSentinel.vue` | 历史加载触发哨兵 |
 | `src/renderer/src/sessions/components/ToolCard.vue` | 单行紧凑展示操作分类徽章、真实工具名、语境化参数与状态耗时胶囊；展开区展示结构化结果卡片、Diff 与调试抽屉，原文按需展开 |
-| `src/renderer/src/sessions/components/PresentCard.vue` | 会话内卡片：按固定外壳展示标题、字段、可折叠正文与主次按钮；按钮按动作 ID 转发到既有通道（`expert.save` → 专家保存并刷新清单，`copy.text` → 剪贴板），终态与失败原因就地展示 |
+| `src/renderer/src/sessions/components/PresentCard.vue` | 会话内卡片：按固定外壳展示标题、字段、能力勾选段、可折叠正文与主次按钮；技能与 MCP 用能力选择器列出候选（候选与基线取自能力候选通道），勾选按与编辑对话框同一套规则换算成保存字段；按钮按动作 ID 转发到既有通道（`expert.save` → 专家保存并刷新清单，`copy.text` → 剪贴板），终态与失败原因就地展示 |
 | `src/renderer/src/sessions/components/ToolResultPreview.vue` | 工具结果的计数口径、命中内容、来源、历史状态与省略提示；只展示投影，不发起额外查询 |
 | `src/renderer/src/sessions/components/UsageDetailDialog.vue` | 会话用量明细与独立的 Codex、OpenCode Go 账户额度展示、按需读取与手动刷新 |
 | `src/renderer/src/sessions/components/MemoryInjectionDialog.vue` | 记忆注入卡片：三个分段（适用偏好、常驻约定、当前项目近况）以 tab 切换，点击条目展开摘要，被截断时记录条目按 ID、画像条目按领域只读取全文 |
@@ -123,7 +123,8 @@
 | `src/renderer/src/sessions/components/ExtensionNotificationBar.vue` | 扩展通知展示 |
 | `src/renderer/src/experts/components/ExpertSettingsSection.vue` | 设置页「专家」分节：默认能力卡片入口、内置与自定义专家列表（含一行能力范围摘要：口径、增减与仅用选中的名单）、加载诊断、派生副本、新建与编辑入口、删除确认 |
 | `src/renderer/src/experts/components/ExpertEditorDialog.vue` | 专家编辑对话框：显示名称、一句话简介、技能与 MCP 两个能力段（复用能力选择器，均为 3 列勾选格；技能右槽在无状态时标出来源，状态优先）+ 已选计数与全选；引用数量不设上限；正文；新建与编辑两态；保存中禁用重复提交，失败就地展示原因，关闭归还焦点 |
-| `src/renderer/src/experts/components/ExpertCapabilityPicker.vue` | 能力选择器：3 列勾选格（格内右槽优先显示状态，状态为空时退回来源标签，标识与来源全文进 `title`）+ 已选计数 + 可选筛选 + 可选全选 + 可选折叠（收起时保留标题与计数）；传 `mode` 时才出现口径分段；自绘勾选控件（`role="checkbox"` 的按钮、方块与内联对勾、键盘焦点环）；供默认能力卡片与编辑对话框复用 |
+| `src/renderer/src/experts/components/ExpertCapabilityPicker.vue` | 能力选择器：3 列勾选格（格内右槽优先显示状态，状态为空时退回来源标签，标识与来源全文进 `title`）+ 已选计数 + 可选筛选 + 可选全选 + 可选折叠（收起时保留标题与计数）；传 `mode` 时才出现口径分段；自绘勾选控件（`role="checkbox"` 的按钮、方块与内联对勾、键盘焦点环）；供默认能力卡片、编辑对话框与会话内卡片复用 |
+| `src/renderer/src/experts/capability-selection.ts` | 能力勾选换算的单一实现：基线展开、按定义还原勾选、勾选 → `skillIds`/`Add`/`Remove` 换算、行尾状态文案；纯函数，不读配置也不写盘，编辑对话框与会话内卡片共用 |
 | `src/renderer/src/experts/components/ExpertCapabilityDefaultsCard.vue` | 默认能力卡片：技能与 MCP 各一份勾选集合（3 列网格、可折叠，勾满等于不限制），勾选即改；技能至少保留一个；保存后统一影响继承型专家，仅在有未保存改动时启用保存 |
 
 核心打开链、Store、宿主入口及投影职责已由源码读取；投影辅助实现与界面文件结合导入、模板和接口调用映射，不将本表视作逐函数质量结论。

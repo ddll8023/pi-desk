@@ -11,7 +11,7 @@
 import { Type } from '@earendil-works/pi-ai'
 import type { ExtensionFactory } from '@earendil-works/pi-coding-agent'
 import {
-  PRESENT_CARD_ACTIONS, PRESENT_CARD_LIMITS, PRESENT_CARD_TYPES, parsePresentCardView
+  PRESENT_CARD_ACTIONS, PRESENT_CARD_LIMITS, parsePresentCardView
 } from '../shared/present-card-view'
 import type { PresentCardActionId, PresentCardType, PresentCardView } from '../shared/present-card-view'
 
@@ -24,6 +24,12 @@ interface CardParams {
   readonly subtitle?: string
   readonly fields?: readonly { readonly label: string; readonly value: string }[]
   readonly body?: string
+  /** 技能范围：模式 + 建议勾选名单；省略时按继承默认基线处理。 */
+  readonly skills_mode?: 'inherit' | 'only'
+  readonly skill_ids?: readonly string[]
+  /** MCP 范围：同上。 */
+  readonly mcp_mode?: 'inherit' | 'only'
+  readonly mcp_server_ids?: readonly string[]
   readonly primary_action_id: PresentCardActionId
   readonly primary_action_label: string
   readonly secondary_action_id?: PresentCardActionId
@@ -37,9 +43,13 @@ interface CardParams {
 function buildCard(params: CardParams): PresentCardView | string {
   const subtitle = params.subtitle?.trim() === '' ? undefined : params.subtitle
   const body = params.body?.trim() === '' ? undefined : params.body
-  if (params.card_type === 'draft') {
+  if (params.card_type === 'expert.draft') {
     if (subtitle === undefined) return '草案卡片需要 subtitle（一句话简介）。'
     if (body === undefined) return '草案卡片需要 body（正文）。'
+    // 仅用选中却一个技能都不留，等于把专家退化成只会说话的角色，主进程保存时也会拒。
+    if (params.skills_mode === 'only' && (params.skill_ids ?? []).length === 0) {
+      return '技能选择「仅用选中」时至少要留一个技能；要继承默认基线就去掉 skills_mode。'
+    }
   }
   if (params.secondary_action_id !== undefined && params.secondary_action_label === undefined) {
     return '给了次要动作 ID 时也要给次要动作文案。'
@@ -50,6 +60,14 @@ function buildCard(params: CardParams): PresentCardView | string {
     subtitle: subtitle ?? null,
     fields: params.fields ?? [],
     body: body ?? null,
+    capability: params.skills_mode === undefined && params.mcp_mode === undefined
+      ? null
+      : {
+          skillsMode: params.skills_mode ?? 'inherit',
+          skillIds: params.skill_ids ?? [],
+          mcpMode: params.mcp_mode ?? 'inherit',
+          mcpServerIds: params.mcp_server_ids ?? []
+        },
     primaryAction: { id: params.primary_action_id, label: params.primary_action_label },
     secondaryAction: params.secondary_action_id === undefined
       ? null
@@ -84,7 +102,9 @@ export function createPresentCardExtension(): ExtensionFactory {
       promptSnippet: '把可落盘的成果做成带按钮的卡片',
       promptGuidelines: [
         '只在成果需要用户点一下才落地时使用（典型是专家定义草案）：普通说明、进度汇报与追问继续用文本。',
-        `card_type 目前只有 draft，且必须有 title、subtitle 与 body；fields 只放需要展示的说明行，不放正文。`,
+        'card_type 目前只有 expert.draft（专家定义草案），且必须有 title、subtitle 与 body；fields 只放需要展示的说明行，不放正文。',
+        '技能与 MCP 范围由你给出建议：skills_mode／mcp_mode 省略即继承默认基线，skill_ids 与 mcp_server_ids 是建议启用的名单；卡片会列出全部候选让用户改，你还需说明为何这样收窄。',
+        '只能引用当前候选里存在的技能，不得引用 sub-agent- 开头的子代理专用技能；仅用选中时技能名单不能为空。',
         '动作只能取白名单 ID：expert.save 保存为自定义专家，copy.text 复制正文到剪贴板；不要按文案自行发明动作，也不要声称按钮会执行未登记的操作。',
         'body 不进入工具结果文本，长正文不受上下文成本影响，但仍受长度上限约束；超过上限整张卡片会被拒绝而不是截断。',
         '不要用它提交代码、命令、凭据或链接：卡片只承载纯文本与已登记动作。',
@@ -92,8 +112,7 @@ export function createPresentCardExtension(): ExtensionFactory {
       ],
       exposure: 'model-only',
       parameters: Type.Object({
-        card_type: Type.Union(PRESENT_CARD_TYPES.map(type => Type.Literal(type)),
-          { description: '卡片类型；目前只有 draft（草案）' }),
+        card_type: Type.Literal('expert.draft', { description: '卡片类型；目前只有 expert.draft（专家定义草案）' }),
         title: Type.String({ minLength: 1, maxLength: PRESENT_CARD_LIMITS.title,
           description: '卡片标题；草案类型下即专家显示名称' }),
         subtitle: Type.Optional(Type.String({ maxLength: PRESENT_CARD_LIMITS.subtitle,
@@ -104,6 +123,14 @@ export function createPresentCardExtension(): ExtensionFactory {
         }), { maxItems: PRESENT_CARD_LIMITS.fields, description: '字段行，只放说明，不放正文' })),
         body: Type.Optional(Type.String({ maxLength: PRESENT_CARD_LIMITS.body,
           description: '卡片正文；草案类型下即专家定义正文，必填' })),
+        skills_mode: Type.Optional(Type.Union([Type.Literal('inherit'), Type.Literal('only')],
+          { description: '技能范围口径：inherit=继承默认基线后加减，only=名单即白名单；省略按继承处理' })),
+        skill_ids: Type.Optional(Type.Array(Type.String({ maxLength: 64 }),
+          { maxItems: PRESENT_CARD_LIMITS.capabilityIds, description: '建议启用的技能标识；卡片会列出全部候选让你改' })),
+        mcp_mode: Type.Optional(Type.Union([Type.Literal('inherit'), Type.Literal('only')],
+          { description: 'MCP 范围口径，同上；省略按继承处理' })),
+        mcp_server_ids: Type.Optional(Type.Array(Type.String({ maxLength: 64 }),
+          { maxItems: PRESENT_CARD_LIMITS.capabilityIds, description: '建议启用的 MCP 服务器名' })),
         primary_action_id: Type.Union(PRESENT_CARD_ACTIONS.map(action => Type.Literal(action)),
           { description: '主按钮动作 ID' }),
         primary_action_label: Type.String({ minLength: 1, maxLength: PRESENT_CARD_LIMITS.actionLabel,

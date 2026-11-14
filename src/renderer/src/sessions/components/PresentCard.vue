@@ -1,12 +1,18 @@
-<!-- 会话内卡片：present_card 工具交付的载荷，按随包枚举渲染固定外壳（标题、字段、正文、主次按钮）。
+<!-- 会话内卡片：present_card 工具交付的载荷，按随包枚举渲染固定外壳（标题、字段、正文、能力勾选、主次按钮）。
      卡片只是数据展示与动作转发：按钮按动作 ID 调既有业务通道（保存专家走 desktop:expert-save，复制走剪贴板），
-     不在渲染层拼装写入规则、不写文件；动作是否成立仍由主进程判定，失败原因就地显示。 -->
+     不在渲染层拼装写入规则、不写文件；动作是否成立仍由主进程判定，失败原因就地显示。
+     能力段的候选与默认基线来自能力候选通道，勾选换算与设置页编辑对话框共用 capability-selection 里的同一套规则。 -->
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import type { ExpertSaveRequest } from '../../../../shared/experts-api'
 import type { PresentCardView } from '../../../../shared/present-card-view'
 import { copyText } from '../../ui/clipboard'
 import { saveExpert } from '../../experts/services/expert'
+import { useExpertStore } from '../../experts/stores/expert'
+import { baseIds, restoreSelection, selectionState, toSelectionFields } from '../../experts/capability-selection'
+import type { CapabilitySelectionMode } from '../../experts/capability-selection'
+import { skillSourceLabel } from '../../experts/skill-source-label'
+import ExpertCapabilityPicker from '../../experts/components/ExpertCapabilityPicker.vue'
 import { useSessionStore } from '../stores/session'
 
 const props = defineProps<{
@@ -18,6 +24,15 @@ const props = defineProps<{
 const emit = defineEmits<{ userExpand: [] }>()
 
 const sessionStore = useSessionStore()
+const expertStore = useExpertStore()
+
+/** 能力候选行：来源或停用状态进 label，差异标记进 state，与设置页同一套呈现。 */
+interface CapabilityRow {
+  readonly id: string
+  readonly label: string
+  readonly unavailable: boolean
+  readonly state: string
+}
 
 /** 主次动作共享一个终态：已保存或已复制后不再重复提交，失败可重试。 */
 const phase = ref<'idle' | 'busy' | 'saved' | 'copied' | 'failed'>('idle')
@@ -26,33 +41,125 @@ const errorText = ref('')
 /** 保存成功后的专家标识；有值时说明这张卡片已经落过盘，重启后不保留。 */
 const savedExpertId = ref<string | null>(null)
 
+/** 能力候选是否已读；读到之前不渲染勾选格，避免空白框看着像「一项都没有」。 */
+const capabilityReady = computed(() => expertStore.capabilities !== null)
+
+const skillsMode = ref<CapabilitySelectionMode>(props.card.capability?.skillsMode ?? 'inherit')
+const mcpMode = ref<CapabilitySelectionMode>(props.card.capability?.mcpMode ?? 'inherit')
+const selectedSkills = ref<readonly string[]>(props.card.capability?.skillIds ?? [])
+const selectedMcp = ref<readonly string[]>(props.card.capability?.mcpServerIds ?? [])
+
+const baselineSkills = computed(() => expertStore.capabilities?.defaults.skills ?? null)
+const baselineMcp = computed(() => expertStore.capabilities?.defaults.mcpServers ?? null)
+const allSkillIds = computed(() => (expertStore.capabilities?.skills ?? []).map(item => item.id))
+const allMcpNames = computed(() => (expertStore.capabilities?.mcpServers ?? []).map(item => item.name))
+
+const skillRows = computed<readonly CapabilityRow[]>(() => {
+  const rows: { id: string; label: string; unavailable: boolean }[] = (expertStore.capabilities?.skills ?? [])
+    .map(item => ({ id: item.id, label: item.source === 'shared' ? '' : skillSourceLabel(item.source), unavailable: false }))
+  const known = new Set(rows.map(row => row.id))
+  for (const id of props.card.capability?.skillIds ?? []) {
+    if (known.has(id)) continue
+    known.add(id)
+    rows.push({ id, label: '当前不可用', unavailable: true })
+  }
+  const base = baseIds(baselineSkills.value, allSkillIds.value)
+  return rows.map(row => ({
+    ...row,
+    state: selectionState({
+      unavailable: row.unavailable,
+      mode: skillsMode.value,
+      checked: selectedSkills.value.includes(row.id),
+      inBaseline: base.includes(row.id)
+    })
+  }))
+})
+
+const mcpRows = computed<readonly CapabilityRow[]>(() => {
+  const rows: { id: string; label: string; unavailable: boolean }[] = (expertStore.capabilities?.mcpServers ?? [])
+    .map(item => ({ id: item.name, label: item.enabled ? '' : '配置里已停用', unavailable: false }))
+  const known = new Set(rows.map(row => row.id))
+  for (const name of props.card.capability?.mcpServerIds ?? []) {
+    if (known.has(name)) continue
+    known.add(name)
+    rows.push({ id: name, label: '当前不可用', unavailable: true })
+  }
+  const base = baseIds(baselineMcp.value, allMcpNames.value)
+  return rows.map(row => ({
+    ...row,
+    state: selectionState({
+      unavailable: row.unavailable,
+      mode: mcpMode.value,
+      checked: selectedMcp.value.includes(row.id),
+      inBaseline: base.includes(row.id)
+    })
+  }))
+})
+
+/** 保存后勾选就是专家实际生效的范围；技能白名单为空时界面先拦，主进程也会拒。 */
+const skillsEmpty = computed(() => skillsMode.value === 'only' && selectedSkills.value.length === 0)
+
 const hasBody = computed(() => props.card.body !== null && props.card.body !== '')
 const busy = computed(() => phase.value === 'busy')
-const saveDisabled = computed(() => busy.value || savedExpertId.value !== null)
+const saveDisabled = computed(() => busy.value || savedExpertId.value !== null || skillsEmpty.value)
+
+onMounted(async () => {
+  if (props.card.cardType !== 'expert.draft') return
+  // 候选与基线只在卡片需要时读一次；读失败时保持未就绪，保存仍以主进程校验为准。
+  if (expertStore.capabilities === null) await expertStore.loadCapabilities()
+  applyInitialSelection()
+})
 
 function onToggle(event: Event): void {
   const target = event.target
   if (target instanceof HTMLDetailsElement && target.open) emit('userExpand')
 }
 
+/** 勾满时只说结论，部分选中才给数量；与设置页同一口径。 */
+function selectionCount(rows: readonly CapabilityRow[], selected: readonly string[]): string {
+  const total = rows.length
+  if (total === 0) return ''
+  return selected.length === total ? `${total} 个全部可用` : `已选 ${selected.length} / ${total}`
+}
+
+function selectAllSkills(): void {
+  selectedSkills.value = skillRows.value.map(row => row.id)
+}
+
+function selectAllMcp(): void {
+  selectedMcp.value = mcpRows.value.map(row => row.id)
+}
+
 /**
  * 由草案组装保存请求：标题即显示名称、副标题即简介、正文即定义正文；
- * 技能与 MCP 一律继承默认基线——收窄范围需要逐项确认，属于设置页的工作。
+ * 能力范围按当前勾选换算，未给能力段的旧卡片按「继承默认基线」写入。
  */
 function toSaveRequest(): ExpertSaveRequest {
+  const skills = toSelectionFields({
+    mode: skillsMode.value,
+    selected: selectedSkills.value,
+    baseline: baselineSkills.value,
+    all: allSkillIds.value
+  })
+  const mcp = toSelectionFields({
+    mode: mcpMode.value,
+    selected: selectedMcp.value,
+    baseline: baselineMcp.value,
+    all: allMcpNames.value
+  })
   return {
     expertId: null,
     displayName: props.card.title,
     summary: props.card.subtitle ?? '',
-    skillIds: [],
     body: props.card.body ?? '',
-    skillsMode: 'inherit',
-    skillAddIds: [],
-    skillRemoveIds: [],
-    mcpMode: 'inherit',
-    mcpServerIds: [],
-    mcpAddIds: [],
-    mcpRemoveIds: []
+    skillIds: [...skills.onlyIds],
+    skillsMode: skills.mode,
+    skillAddIds: [...skills.addIds],
+    skillRemoveIds: [...skills.removeIds],
+    mcpMode: mcp.mode,
+    mcpServerIds: [...mcp.onlyIds],
+    mcpAddIds: [...mcp.addIds],
+    mcpRemoveIds: [...mcp.removeIds]
   }
 }
 
@@ -105,6 +212,34 @@ function runAction(id: PresentCardView['primaryAction']['id']): void {
 function actionDisabled(id: PresentCardView['primaryAction']['id']): boolean {
   return id === 'expert.save' ? saveDisabled.value : busy.value
 }
+
+/**
+ * 能力段的初始勾选：模型给了名单就按它还原，未给则落在默认基线上。
+ * 默认必须是基线的展开而不是空集——空集在继承模式里的含义是「把基线全部排除」。
+ */
+function applyInitialSelection(): void {
+  const capability = props.card.capability
+  selectedSkills.value = capability === null
+    ? [...baseIds(baselineSkills.value, allSkillIds.value)]
+    : restoreSelection({
+        mode: capability.skillsMode,
+        onlyIds: capability.skillIds,
+        addIds: [],
+        removeIds: [],
+        baseline: baselineSkills.value,
+        all: allSkillIds.value
+      })
+  selectedMcp.value = capability === null
+    ? [...baseIds(baselineMcp.value, allMcpNames.value)]
+    : restoreSelection({
+        mode: capability.mcpMode,
+        onlyIds: capability.mcpServerIds,
+        addIds: [],
+        removeIds: [],
+        baseline: baselineMcp.value,
+        all: allMcpNames.value
+      })
+}
 </script>
 
 <template>
@@ -120,6 +255,52 @@ function actionDisabled(id: PresentCardView['primaryAction']['id']): boolean {
         <dd>{{ field.value }}</dd>
       </div>
     </dl>
+
+    <div v-if="card.cardType === 'expert.draft'" class="present-card-capability">
+      <ExpertCapabilityPicker
+        title="技能范围"
+        group-label="技能范围"
+        :mode="skillsMode"
+        :selected="selectedSkills"
+        :rows="skillRows"
+        :count-text="selectionCount(skillRows, selectedSkills)"
+        inherit-label="继承默认"
+        only-label="仅用选中"
+        inherit-hint="勾选记录相对默认基线的增减。"
+        only-hint="只装配勾选的技能；至少保留一个。"
+        search-placeholder="按名称筛选技能"
+        empty-text="没有匹配的技能。"
+        no-rows-text="随包、产品目录与共享目录里都没有技能。"
+        :ready="capabilityReady"
+        :disabled="busy || savedExpertId !== null"
+        select-all-label="全选"
+        @update:mode="skillsMode = $event"
+        @update:selected="selectedSkills = $event"
+        @select-all="selectAllSkills"
+      />
+      <p v-if="skillsEmpty" class="present-card-error" role="alert">「仅用选中」时至少要保留一个技能。</p>
+      <ExpertCapabilityPicker
+        title="MCP 服务器范围"
+        group-label="MCP 服务器范围"
+        :mode="mcpMode"
+        :selected="selectedMcp"
+        :rows="mcpRows"
+        :count-text="selectionCount(mcpRows, selectedMcp)"
+        inherit-label="继承默认"
+        only-label="仅用选中"
+        inherit-hint=""
+        only-hint="只连接勾选的服务器。"
+        search-placeholder="按名称筛选服务器"
+        empty-text="没有匹配的服务器。"
+        no-rows-text="全局 mcp.json 里还没有服务器。"
+        :ready="capabilityReady"
+        :disabled="busy || savedExpertId !== null"
+        select-all-label="全选"
+        @update:mode="mcpMode = $event"
+        @update:selected="selectedMcp = $event"
+        @select-all="selectAllMcp"
+      />
+    </div>
 
     <details v-if="hasBody" class="present-card-body" @toggle="onToggle">
       <summary>查看正文</summary>
@@ -148,7 +329,7 @@ function actionDisabled(id: PresentCardView['primaryAction']['id']): boolean {
 </template>
 
 <style scoped>
-/* 外壳固定：场景只换标题、字段、正文与按钮文案，视觉与留白不随场景分叉。 */
+/* 外壳固定：场景只换标题、字段、正文、能力段与按钮文案，视觉与留白不随场景分叉。 */
 .present-card {
   display: flex;
   flex-direction: column;
@@ -196,6 +377,13 @@ function actionDisabled(id: PresentCardView['primaryAction']['id']): boolean {
   margin: 0;
   color: var(--color-desk-ink);
   overflow-wrap: anywhere;
+}
+.present-card-capability {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding-top: 0.25rem;
+  border-top: 1px solid var(--color-desk-line);
 }
 .present-card-body {
   font-size: 0.75rem;
