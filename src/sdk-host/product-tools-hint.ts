@@ -29,7 +29,14 @@ const SUBAGENT_SECTION = `委派工具 delegate_subagent 用于结构化批量�
 
 /**
  * 快速模式整组下线记忆工具，注入记忆指引会让模型去找不存在的工具，因此只保留委派段。
+ * 专家工具范围把委派移出激活集合时，`subAgent` 为 false，同样不再写委派时机：
+ * 提示里不能出现本会话调不到的工具。两者都不可用时返回空串，由调用方决定不写分段。
  */
-export function productToolsSection(mode: ExecutionMode): string {
-  return mode === 'fast' ? SUBAGENT_SECTION : `${MEMORY_SECTION}\n\n${SUBAGENT_SECTION}`
+export function productToolsSection(
+  mode: ExecutionMode,
+  options: { readonly subAgent: boolean } = { subAgent: true }
+): string {
+  const memory = mode === 'fast' ? '' : MEMORY_SECTION
+  const subAgent = options.subAgent ? SUBAGENT_SECTION : ''
+  return [memory, subAgent].filter(part => part !== '').join('\n\n')
 }

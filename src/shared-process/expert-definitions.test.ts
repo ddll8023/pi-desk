@@ -197,6 +197,10 @@ function capabilityDefinition(overrides: Partial<ExpertDefinition> = {}): Expert
     mcpServerIds: [],
     mcpAddIds: [],
     mcpRemoveIds: [],
+    toolsMode: 'inherit',
+    toolIds: [],
+    toolAddIds: [],
+    toolRemoveIds: [],
     body: '# 正文',
     truncated: false,
     source: 'user',
@@ -207,16 +211,20 @@ function capabilityDefinition(overrides: Partial<ExpertDefinition> = {}): Expert
   }
 }
 
-const UNRESTRICTED: ExpertCapabilityDefaults = { skills: null, mcpServers: null }
+const UNRESTRICTED: ExpertCapabilityDefaults = { skills: null, mcpServers: null, tools: null }
 
-const AVAILABLE = { availableSkillIds: ['memory', 'frontend-design'], availableMcpServers: ['filesystem', 'docs'] }
+const AVAILABLE = {
+  availableSkillIds: ['memory', 'frontend-design'],
+  availableMcpServers: ['filesystem', 'docs'],
+  availableToolNames: ['read', 'delegate_subagent', 'skill_guard_select']
+}
 
 test('默认基线为 null 且没有加减项时不做限制', () => {
   const scope = resolveExpertCapabilityScope({
     definition: capabilityDefinition(), defaults: UNRESTRICTED, ...AVAILABLE
   })
-  // 返回 null 而不是当时的全量快照：以后新增的技能与服务器也能被这个专家继承到。
-  assert.deepEqual(scope, { skills: null, mcpServers: null })
+  // 返回 null 而不是当时的全量快照：以后新增的技能、服务器与工具也能被这个专家继承到。
+  assert.deepEqual(scope, { skills: null, mcpServers: null, tools: null })
 })
 
 test('继承模式下在基线上加回与排除', () => {
@@ -226,10 +234,10 @@ test('继承模式下在基线上加回与排除', () => {
       skillRemoveIds: ['memory'],
       mcpRemoveIds: ['docs']
     }),
-    defaults: { skills: ['memory'], mcpServers: ['filesystem', 'docs'] },
+    defaults: { skills: ['memory'], mcpServers: ['filesystem', 'docs'], tools: null },
     ...AVAILABLE
   })
-  assert.deepEqual(scope, { skills: ['frontend-design'], mcpServers: ['filesystem'] })
+  assert.deepEqual(scope, { skills: ['frontend-design'], mcpServers: ['filesystem'], tools: null })
 })
 
 test('仅用选中时白名单与外层基线无关，可用集之外的名字被剔掉', () => {
@@ -240,10 +248,10 @@ test('仅用选中时白名单与外层基线无关，可用集之外的名字�
       mcpMode: 'only',
       mcpServerIds: ['docs']
     }),
-    defaults: { skills: ['memory', 'frontend-design'], mcpServers: null },
+    defaults: { skills: ['memory', 'frontend-design'], mcpServers: null, tools: null },
     ...AVAILABLE
   })
-  assert.deepEqual(scope, { skills: ['memory'], mcpServers: ['docs'] })
+  assert.deepEqual(scope, { skills: ['memory'], mcpServers: ['docs'], tools: null })
 })
 
 test('仅用选中的 MCP 白名单引用了不存在的服务器时只报诊断', () => {

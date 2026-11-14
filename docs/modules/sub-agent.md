@@ -8,6 +8,8 @@
 
 任务类型有四种：`query`（代码查询）、`research`（技术调研）、`review`（代码审查）、`document`（受限文档修改）。调研与主会话的调研链路一致：子进程拿到内置的 `web_search`、`fetch_content`、`get_search_content`、`source_check`，用外部资料作依据；扩展由宿主在装配时注入子进程入口、技能目录、写入守卫路径与取消控制端，不从资源目录按文件路径加载；对应规范正文取自随包技能 `resources/agent/skills/sub-agent-*/SKILL.md`。委派时机由系统提示的产品工具分段（`src/sdk-host/product-tools-hint.ts`）与工具自身的类型描述共同承载；四类子代理规范只供子进程按目录读取，不进入主会话技能列表（清单里以 `subAgentOnly` 标记）。
 
+召唤了专家的会话可以派子代理，委派本身也是一个可收窄的工具项：专家工具范围排除 `delegate_subagent` 时，装配期把它从激活集合移除，产品工具分段也不再写委派时机。子代理侧仍然不认识专家、不加载专家正文，委派只有一层。
+
 ## 执行与隔离
 
 每次委派为独立子进程：`out/sdk-host/pi-cli.mjs --mode json`，经 `ELECTRON_RUN_AS_NODE` 让 Electron 二进制以 Node 模式启动。能力边界由进程参数强制，不是提示词劝阻：

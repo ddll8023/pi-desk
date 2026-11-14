@@ -1,5 +1,6 @@
 <!-- 一轮对话：用户消息始终可见，回答与压缩记录由会话阅读状态控制展开；耗时和用量仅作次要信息。
      连续的纯过程消息统一默认收拢为一行工作过程摘要，运行中也不铺开工具流水；分组身份固定为首条消息，新增操作不重置手动开合。
+     含交付卡片的响应不进过程抽屉：卡片是成果，收进折叠区就变成必须先展开才能点的隐藏项。
      折叠状态不在这里持有：开合由消息列表按会话写入 session-view，本组件只渲染给定状态并发出开合意图，因此定位与状态隔离都在同一处处理。
      卡片的手动展开（思考、工具、技能、压缩摘要）只原样向上转发，滚动位置与跟随仍由消息列表决定。
      用户消息下方另给一行「本轮改动 N 个文件」与该轮的延续判定：数据都取自宿主活动投影的按轮分组，本组件只按轮次 ID 取用并展示，不自行汇总或重新判断。 -->
@@ -177,9 +178,15 @@ const turnFilesTitle = computed(() => {
   return files.truncated ? `本轮改动 ${files.files.length}+ 个文件` : `本轮改动 ${files.files.length} 个文件`
 })
 
-/** 判断一条助手消息是否为纯过程消息（只有工具调用或思考，没有正文文本）。 */
+/**
+ * 判断一条助手消息是否为纯过程消息（只有工具调用或思考，没有正文文本）。
+ * 交付卡片是成果而不是过程：含卡片的响应即使没有正文也不能收进抽屉，
+ * 否则卡片会连同工具流水一起默认折叠，用户得先展开才能看到它。
+ */
 function isMessageProcessOnly(msg: ChatMessageView): boolean {
   if (msg.role !== 'assistant') return false
+  // 与 `ChatMessageItem` 摘卡片的判定同源：都只看投影带出的 `execution.card`。
+  if (msg.blocks.some(b => b.kind === 'toolcall' && b.execution?.card != null)) return false
   const hasText = msg.blocks.some(b => b.kind === 'text' && b.text.trim() !== '')
   return !hasText
 }

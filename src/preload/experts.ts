@@ -74,6 +74,10 @@ export const expertsApi: ExpertApi = {
       mcpServerIds: [...request.mcpServerIds],
       mcpAddIds: [...request.mcpAddIds],
       mcpRemoveIds: [...request.mcpRemoveIds],
+      toolsMode: request.toolsMode,
+      toolIds: [...request.toolIds],
+      toolAddIds: [...request.toolAddIds],
+      toolRemoveIds: [...request.toolRemoveIds],
       body: request.body
     }
     const response: unknown = await ipcRenderer.invoke(EXPERTS_SAVE_CHANNEL, payload)
@@ -89,7 +93,8 @@ export const expertsApi: ExpertApi = {
     // 列表为 null 时必须原样传 null：它是「不限制」的唯一表达，不能被当成空数组。
     const payload: ExpertSaveDefaultsRequest = {
       skills: request.skills === null ? null : [...request.skills],
-      mcpServers: request.mcpServers === null ? null : [...request.mcpServers]
+      mcpServers: request.mcpServers === null ? null : [...request.mcpServers],
+      tools: request.tools === null ? null : [...request.tools]
     }
     const response: unknown = await ipcRenderer.invoke(EXPERTS_SAVE_DEFAULTS_CHANNEL, payload)
     return isExpertSaveDefaultsResult(response) ? response : invalidExpertResponse()

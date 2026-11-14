@@ -2,7 +2,7 @@
  * 专家资源管理（设置页）的固定通道、请求与结果类型及跨进程响应校验。
  *
  * 管六件事：「把内置专家派生成本地可编辑副本」「读取与保存自定义专家定义」「删除自定义专家」
- * 「快速模式会剔除哪些用户级技能」「能力候选（技能、全局 MCP 服务器）」「默认能力基线」；
+ * 「快速模式会剔除哪些用户级技能」「能力候选（技能、全局 MCP 服务器、工具）」「默认能力基线」；
  * 专家清单与加载诊断复用会话域的 `desktop:session-experts`，不在这里复制第二份读取。
  * 错误码独立成族：写盘失败、定义不合法与清单读取失败是不同故障，页面据此分开提示。
  */
@@ -34,7 +34,7 @@ export const MAX_EXPERT_DISPLAY_NAME_LENGTH = 64
 export const MAX_EXPERT_SUMMARY_LENGTH = 200
 /**
  * 默认能力基线的条目上限：基线描述「默认可用范围」，可能覆盖全部候选，
- * 写入时按此截断。单个专家的技能与 MCP 引用不设数量上限。
+ * 写入时按此截断。单个专家的技能、MCP 与工具引用不设数量上限。
  */
 export const MAX_EXPERT_DEFAULTS_ENTRIES = 64
 
@@ -51,10 +51,21 @@ export interface ExpertMcpCandidate {
   readonly enabled: boolean
 }
 
+/**
+ * 工具候选：名称与用途来自随包清单的工具声明。
+ * `required` 是受保护标记：技能门禁、待办清单与记忆组不能被专家范围排除，界面据它禁用取消。
+ */
+export interface ExpertToolCandidate {
+  readonly name: string
+  readonly summary: string
+  readonly required: boolean
+}
+
 /** 能力候选与当前基线一起返回：页面一次拿到勾选项与继承源，不用再读一次配置。 */
 export interface ExpertCapabilities {
   readonly skills: readonly ExpertSkillCandidate[]
   readonly mcpServers: readonly ExpertMcpCandidate[]
+  readonly tools: readonly ExpertToolCandidate[]
   readonly defaults: ExpertCapabilityDefaults
 }
 
@@ -146,10 +157,11 @@ export type ExpertCapabilitiesResult =
   | { readonly ok: true; readonly data: ExpertCapabilities }
   | { readonly ok: false; readonly error: ExpertError }
 
-/** 保存基线的请求：两个维度都用 `null` 表示不限制。 */
+/** 保存基线的请求：三个维度都用 `null` 表示不限制。 */
 export interface ExpertSaveDefaultsRequest {
   readonly skills: readonly string[] | null
   readonly mcpServers: readonly string[] | null
+  readonly tools: readonly string[] | null
 }
 
 export type ExpertSaveDefaultsResult =
@@ -233,9 +245,14 @@ export function isMcpServerReference(value: unknown): value is string {
   return typeof value === 'string' && SKILL_REFERENCE.test(value)
 }
 
+/** 工具名允许下划线（`tool_search`、`memory_read`），与专家标识的连字符规则不同。 */
+export function isToolReference(value: unknown): value is string {
+  return typeof value === 'string' && SKILL_REFERENCE.test(value)
+}
+
 /**
  * 一组引用：每个写法都合法，传了上限时还要在数量内；同名重复不在这里判，保存时按原顺序去重。
- * 专家的技能与 MCP 范围不设数量上限，只有默认能力基线按 `MAX_EXPERT_DEFAULTS_ENTRIES` 截断。
+ * 专家的技能、MCP 与工具范围不设数量上限，只有默认能力基线按 `MAX_EXPERT_DEFAULTS_ENTRIES` 截断。
  */
 function isReferenceList(
   value: unknown,
@@ -264,7 +281,8 @@ export function isExpertSaveRequest(value: unknown): value is ExpertSaveRequest 
   if (!isRecord(value)) return false
   const allowed = [
     'expertId', 'displayName', 'summary', 'skillIds', 'skillsMode', 'skillAddIds', 'skillRemoveIds',
-    'mcpMode', 'mcpServerIds', 'mcpAddIds', 'mcpRemoveIds', 'body'
+    'mcpMode', 'mcpServerIds', 'mcpAddIds', 'mcpRemoveIds',
+    'toolsMode', 'toolIds', 'toolAddIds', 'toolRemoveIds', 'body'
   ]
   if (Object.keys(value).some(key => !allowed.includes(key))) return false
   if (value.expertId !== null && !isExpertId(value.expertId)) return false
@@ -273,12 +291,16 @@ export function isExpertSaveRequest(value: unknown): value is ExpertSaveRequest 
   if (typeof value.body !== 'string' || value.body.trim() === '') return false
   return isExpertCapabilityMode(value.skillsMode)
     && isExpertCapabilityMode(value.mcpMode)
+    && isExpertCapabilityMode(value.toolsMode)
     && isReferenceList(value.skillIds, isSkillReference)
     && isReferenceList(value.skillAddIds, isSkillReference)
     && isReferenceList(value.skillRemoveIds, isSkillReference)
     && isReferenceList(value.mcpServerIds, isMcpServerReference)
     && isReferenceList(value.mcpAddIds, isMcpServerReference)
     && isReferenceList(value.mcpRemoveIds, isMcpServerReference)
+    && isReferenceList(value.toolIds, isToolReference)
+    && isReferenceList(value.toolAddIds, isToolReference)
+    && isReferenceList(value.toolRemoveIds, isToolReference)
 }
 
 export function isExpertEditableDefinitionResult(value: unknown): value is ExpertReadResult {
@@ -293,12 +315,16 @@ export function isExpertEditableDefinitionResult(value: unknown): value is Exper
     && (data.derivedFrom === null || isExpertId(data.derivedFrom))
     && isExpertCapabilityMode(data.skillsMode)
     && isExpertCapabilityMode(data.mcpMode)
+    && isExpertCapabilityMode(data.toolsMode)
     && isReferenceList(data.skillIds, isSkillReference)
     && isReferenceList(data.skillAddIds, isSkillReference)
     && isReferenceList(data.skillRemoveIds, isSkillReference)
     && isReferenceList(data.mcpServerIds, isMcpServerReference)
     && isReferenceList(data.mcpAddIds, isMcpServerReference)
     && isReferenceList(data.mcpRemoveIds, isMcpServerReference)
+    && isReferenceList(data.toolIds, isToolReference)
+    && isReferenceList(data.toolAddIds, isToolReference)
+    && isReferenceList(data.toolRemoveIds, isToolReference)
 }
 
 export function isExpertSaveResult(value: unknown): value is ExpertSaveResult {
@@ -312,15 +338,17 @@ export function isExpertSaveResult(value: unknown): value is ExpertSaveResult {
     && isReferenceList(data.unavailableMcpServers, isMcpServerReference)
 }
 
-/** 默认基线：两个维度各自是 `null`（不限制）或合法的引用列表。 */
+/** 默认基线：三个维度各自是 `null`（不限制）或合法的引用列表。 */
 export function isExpertCapabilityDefaults(value: unknown): value is ExpertCapabilityDefaults {
   if (!isRecord(value)) return false
-  if (Object.keys(value).some(key => key !== 'skills' && key !== 'mcpServers')) return false
+  if (Object.keys(value).some(key => key !== 'skills' && key !== 'mcpServers' && key !== 'tools')) return false
   const skillsOk = value.skills === null
     || isReferenceList(value.skills, isSkillReference, MAX_EXPERT_DEFAULTS_ENTRIES)
   const mcpOk = value.mcpServers === null
     || isReferenceList(value.mcpServers, isMcpServerReference, MAX_EXPERT_DEFAULTS_ENTRIES)
-  return skillsOk && mcpOk
+  const toolsOk = value.tools === null
+    || isReferenceList(value.tools, isToolReference, MAX_EXPERT_DEFAULTS_ENTRIES)
+  return skillsOk && mcpOk && toolsOk
 }
 
 export function isExpertCapabilitiesResult(value: unknown): value is ExpertCapabilitiesResult {
@@ -328,18 +356,20 @@ export function isExpertCapabilitiesResult(value: unknown): value is ExpertCapab
   if (value.ok === false) return isExpertFailure(value)
   if (value.ok !== true || !isRecord(value.data)) return false
   const data = value.data
-  if (!Array.isArray(data.skills) || !Array.isArray(data.mcpServers)) return false
+  if (!Array.isArray(data.skills) || !Array.isArray(data.mcpServers) || !Array.isArray(data.tools)) return false
   if (!isExpertCapabilityDefaults(data.defaults)) return false
   const skillsOk = data.skills.every(item => isRecord(item) && isSkillReference(item.id)
     && (item.source === 'builtin' || item.source === 'product' || item.source === 'shared'))
   const mcpOk = data.mcpServers.every(item => isRecord(item) && isMcpServerReference(item.name)
     && (item.scope === 'global' || item.scope === 'project') && typeof item.enabled === 'boolean')
-  return skillsOk && mcpOk
+  const toolsOk = data.tools.every(item => isRecord(item) && isToolReference(item.name)
+    && typeof item.summary === 'string' && typeof item.required === 'boolean')
+  return skillsOk && mcpOk && toolsOk
 }
 
 export function isExpertSaveDefaultsRequest(value: unknown): value is ExpertSaveDefaultsRequest {
   if (!isRecord(value)) return false
-  if (Object.keys(value).some(key => key !== 'skills' && key !== 'mcpServers')) return false
+  if (Object.keys(value).some(key => key !== 'skills' && key !== 'mcpServers' && key !== 'tools')) return false
   return isExpertCapabilityDefaults(value)
 }
 

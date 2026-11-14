@@ -42,6 +42,8 @@ import { isMemoryInjectionSnapshot } from '../shared/runtime-api'
 import { parseSubAgentView } from '../shared/sub-agent-view'
 import { EXPERT_SECTION_KEY, expertRoleSection, readSelectedExpert } from './expert-role'
 import { resolveSessionCapabilityScope } from './expert-capability'
+import { DELEGATION_TOOL_NAME } from './sub-agent/delegation-extension'
+import { PROTECTED_EXPERT_TOOLS } from '../shared/expert-capability'
 import { limitMcpServers, readMcpSessionConfig } from '../shared-process/mcp-session-config'
 import type { McpSessionConfig } from '../shared-process/mcp-session-config'
 import type { ExpertDefinition } from '../shared-process/expert-definitions'
@@ -950,7 +952,7 @@ export class SdkSessionRuntime {
     const creation = ++this.creationSeed
     // 专家定义在会话创建时读一次：会话内不换专家，正文不需要每轮重新解析。
     const expert = this.selectedExpert(target)
-    // 能力范围也在创建时算一次：技能与 MCP 都是装配期决定的，改完需要重开会话才生效。
+    // 能力范围也在创建时算一次：技能、MCP 与工具都是装配期决定的，改完需要重开会话才生效。
     // 没召专家时两条都是不限制，行为与引入基线之前一致。
     const capability = resolveSessionCapabilityScope({
       expert,
@@ -978,10 +980,15 @@ export class SdkSessionRuntime {
       const extensionFactories: InlineExtension[] = [
           // 需求理解、模式产出形态与延续判定各写一段；能力集差异由记忆配置、记忆工具裁剪与 Skill 集合承担。
           { name: MODE_HINT_EXTENSION_NAME, builtin: true, replaceable: true, factory: pi => {
-            // 快速会话整组去掉记忆工具；标准会话保持 `pi-memory` 自带的全集。
+            // 快速会话整组去掉记忆工具；专家工具范围再把范围外的工具移出激活集合，受保护工具始终补回。
+            // 两处裁剪合并为一次 setActiveTools：各自调用会互相覆盖，最终激活集合就取决于执行顺序。
             pi.on('session_start', () => {
-              if (target.mode !== 'fast') return
-              const remaining = pi.getActiveTools().filter(name => !FAST_MODE_DROPPED_TOOLS.has(name))
+              const dropped = new Set<string>(target.mode === 'fast' ? FAST_MODE_DROPPED_TOOLS : [])
+              const permitted = capability.tools === null
+                ? null
+                : new Set([...capability.tools, ...PROTECTED_EXPERT_TOOLS])
+              const remaining = pi.getActiveTools()
+                .filter(name => !dropped.has(name) && (permitted === null || permitted.has(name)))
               pi.setActiveTools(remaining)
             })
             pi.on('before_agent_start', event => {
@@ -996,7 +1003,13 @@ export class SdkSessionRuntime {
                 })
               }
               // 记忆与委派工具随应用提供，其他宿主没有；使用时机写进分段，不写全局 AGENTS.md。
-              event.systemPromptOptions.sections[PRODUCT_TOOLS_SECTION_KEY] = productToolsSection(target.mode)
+              // 委派被专家工具范围排除时不写它的时机段，避免模型对着不存在的工具做规划。
+              const productSection = productToolsSection(target.mode, {
+                subAgent: capability.tools === null || capability.tools.includes(DELEGATION_TOOL_NAME)
+              })
+              if (productSection !== '') {
+                event.systemPromptOptions.sections[PRODUCT_TOOLS_SECTION_KEY] = productSection
+              }
               // 判定只在本轮算一次；无结论时不写分段，也不覆盖上一次展示。
               const verdict = judgeContinuation(event.prompt, lastTurnWithWrites(this.activityView))
               // 延续轮只对齐增量，不再重复需求理解；新任务与无结论都注入，漏判不能成为跳过整理的理由。

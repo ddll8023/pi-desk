@@ -2,7 +2,8 @@
      卡片只是数据展示与动作转发：按钮按动作 ID 调既有业务通道（保存专家走 desktop:expert-save，复制走剪贴板），
      不在渲染层拼装写入规则、不写文件；动作是否成立仍由主进程判定，失败原因就地显示。
      所在位置由 ChatMessageItem 定为独立展示行，宽度占满消息列：不做限宽居中，也不套进执行记录面板。
-     能力段的候选与默认基线来自能力候选通道，勾选换算与设置页编辑对话框共用 capability-selection 里的同一套规则。 -->
+     能力段的候选与默认基线来自能力候选通道，勾选换算与设置页编辑对话框共用 capability-selection 里的同一套规则。
+     能力段含技能、MCP 与工具三个维度；工具里的受保护项（技能门禁、待办清单与记忆组）始终保持勾选。 -->
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import type { ExpertSaveRequest } from '../../../../shared/experts-api'
@@ -47,13 +48,20 @@ const capabilityReady = computed(() => expertStore.capabilities !== null)
 
 const skillsMode = ref<CapabilitySelectionMode>(props.card.capability?.skillsMode ?? 'inherit')
 const mcpMode = ref<CapabilitySelectionMode>(props.card.capability?.mcpMode ?? 'inherit')
+const toolsMode = ref<CapabilitySelectionMode>(props.card.capability?.toolsMode ?? 'inherit')
 const selectedSkills = ref<readonly string[]>(props.card.capability?.skillIds ?? [])
 const selectedMcp = ref<readonly string[]>(props.card.capability?.mcpServerIds ?? [])
+const selectedTools = ref<readonly string[]>(props.card.capability?.toolIds ?? [])
 
 const baselineSkills = computed(() => expertStore.capabilities?.defaults.skills ?? null)
 const baselineMcp = computed(() => expertStore.capabilities?.defaults.mcpServers ?? null)
+const baselineTools = computed(() => expertStore.capabilities?.defaults.tools ?? null)
 const allSkillIds = computed(() => (expertStore.capabilities?.skills ?? []).map(item => item.id))
 const allMcpNames = computed(() => (expertStore.capabilities?.mcpServers ?? []).map(item => item.name))
+const allToolNames = computed(() => (expertStore.capabilities?.tools ?? []).map(item => item.name))
+/** 受保护工具：卡片上的勾选不能取消，保存时主进程也会拒。 */
+const requiredToolNames = computed(() => (expertStore.capabilities?.tools ?? [])
+  .filter(item => item.required).map(item => item.name))
 
 const skillRows = computed<readonly CapabilityRow[]>(() => {
   const rows: { id: string; label: string; unavailable: boolean }[] = (expertStore.capabilities?.skills ?? [])
@@ -100,6 +108,30 @@ const mcpRows = computed<readonly CapabilityRow[]>(() => {
 /** 保存后勾选就是专家实际生效的范围；技能白名单为空时界面先拦，主进程也会拒。 */
 const skillsEmpty = computed(() => skillsMode.value === 'only' && selectedSkills.value.length === 0)
 
+/** 工具行：受保护候选带 `locked`，与设置页编辑对话框同一套呈现。 */
+const toolRows = computed<readonly CapabilityRow[]>(() => {
+  const rows: { id: string; label: string; unavailable: boolean; locked?: boolean }[]
+    = (expertStore.capabilities?.tools ?? [])
+      .map(item => ({ id: item.name, label: item.summary, unavailable: false, locked: item.required }))
+  const known = new Set(rows.map(row => row.id))
+  for (const name of props.card.capability?.toolIds ?? []) {
+    if (known.has(name)) continue
+    known.add(name)
+    rows.push({ id: name, label: '当前不可用', unavailable: true })
+  }
+  const base = baseIds(baselineTools.value, allToolNames.value)
+  return rows.map(row => ({
+    ...row,
+    state: selectionState({
+      unavailable: row.unavailable,
+      mode: toolsMode.value,
+      checked: selectedTools.value.includes(row.id),
+      inBaseline: base.includes(row.id),
+      required: row.locked === true
+    })
+  }))
+})
+
 const hasBody = computed(() => props.card.body !== null && props.card.body !== '')
 const busy = computed(() => phase.value === 'busy')
 const saveDisabled = computed(() => busy.value || savedExpertId.value !== null || skillsEmpty.value)
@@ -131,6 +163,10 @@ function selectAllMcp(): void {
   selectedMcp.value = mcpRows.value.map(row => row.id)
 }
 
+function selectAllTools(): void {
+  selectedTools.value = toolRows.value.map(row => row.id)
+}
+
 /**
  * 由草案组装保存请求：标题即显示名称、副标题即简介、正文即定义正文；
  * 能力范围按当前勾选换算，未给能力段的旧卡片按「继承默认基线」写入。
@@ -148,6 +184,12 @@ function toSaveRequest(): ExpertSaveRequest {
     baseline: baselineMcp.value,
     all: allMcpNames.value
   })
+  const tools = toSelectionFields({
+    mode: toolsMode.value,
+    selected: selectedTools.value,
+    baseline: baselineTools.value,
+    all: allToolNames.value
+  })
   return {
     expertId: null,
     displayName: props.card.title,
@@ -160,7 +202,11 @@ function toSaveRequest(): ExpertSaveRequest {
     mcpMode: mcp.mode,
     mcpServerIds: [...mcp.onlyIds],
     mcpAddIds: [...mcp.addIds],
-    mcpRemoveIds: [...mcp.removeIds]
+    mcpRemoveIds: [...mcp.removeIds],
+    toolsMode: tools.mode,
+    toolIds: [...tools.onlyIds],
+    toolAddIds: [...tools.addIds],
+    toolRemoveIds: [...tools.removeIds]
   }
 }
 
@@ -240,6 +286,20 @@ function applyInitialSelection(): void {
         baseline: baselineMcp.value,
         all: allMcpNames.value
       })
+  // 受保护工具始终勾上：模型建议里没有它们时也补回，否则保存会被主进程拒。
+  selectedTools.value = [...new Set([
+    ...(capability === null
+      ? [...baseIds(baselineTools.value, allToolNames.value)]
+      : restoreSelection({
+          mode: capability.toolsMode,
+          onlyIds: capability.toolIds,
+          addIds: [],
+          removeIds: [],
+          baseline: baselineTools.value,
+          all: allToolNames.value
+        })),
+    ...requiredToolNames.value
+  ])]
 }
 </script>
 
@@ -300,6 +360,27 @@ function applyInitialSelection(): void {
           @update:mode="mcpMode = $event"
           @update:selected="selectedMcp = $event"
           @select-all="selectAllMcp"
+        />
+        <ExpertCapabilityPicker
+          title="工具范围"
+          group-label="工具范围"
+          :mode="toolsMode"
+          :selected="selectedTools"
+          :rows="toolRows"
+          :count-text="selectionCount(toolRows, selectedTools)"
+          inherit-label="继承默认"
+          only-label="仅用选中"
+          inherit-hint="勾选记录相对默认基线的增减；标「必需」的工具始终保留。"
+          only-hint="只用勾选的工具；标「必需」的工具不受名单影响。"
+          search-placeholder="按名称筛选工具"
+          empty-text="没有匹配的工具。"
+          no-rows-text="随包清单里还没有工具声明。"
+          :ready="capabilityReady"
+          :disabled="busy || savedExpertId !== null"
+          select-all-label="全选"
+          @update:mode="toolsMode = $event"
+          @update:selected="selectedTools = $event"
+          @select-all="selectAllTools"
         />
       </div>
       <p v-if="skillsEmpty" class="present-card-error" role="alert">「仅用选中」时至少要保留一个技能。</p>
@@ -400,7 +481,7 @@ function applyInitialSelection(): void {
   border-radius: var(--radius-desk-sm);
   background: var(--color-desk-panel);
 }
-/* 技能与 MCP 两段之间只留一条分隔线，不叠外边距。 */
+/* 技能、MCP 与工具三段之间只留一条分隔线，不叠外边距。 */
 .present-card-capability > * + * {
   padding-top: 0.625rem;
   border-top: 1px solid var(--color-desk-line);

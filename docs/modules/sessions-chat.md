@@ -16,13 +16,13 @@
 | --- | --- |
 | `src/main/sessions/session-manager.ts` | 列表、前后台新建／打开、重载、删除与 SDK 目标授权编排；解析会话专家绑定并随目标下发 |
 | `src/main/sessions/session-experts.ts` | 会话专家绑定解析：已有会话以持久绑定为准，新会话才用打开请求里的值 |
-| `src/main/sessions/expert-catalog.ts` | 合并随包与自定义专家目录，产出选择器视图（含派生来源、是否超长截断与能力范围）与加载诊断（含 MCP 服务器引用）；另提供能力候选（随包、产品目录与共享目录三类技能，全局 MCP 服务器，默认基线）与主会话可见技能／子代理专用技能上下文（项目技能不进候选）；不启动宿主 |
+| `src/main/sessions/expert-catalog.ts` | 合并随包与自定义专家目录，产出选择器视图（含派生来源、是否超长截断与能力范围）与加载诊断（含 MCP 服务器引用）；另提供能力候选（随包、产品目录与共享目录三类技能，全局 MCP 服务器，随包清单声明的工具，默认基线）与主会话可见技能／子代理专用技能上下文（项目技能不进候选）；不启动宿主 |
 | `src/shared-process/skill-sources.ts` | 技能来源目录清单：全局来源（产品 agent 目录与共享目录）与项目来源（`<cwd>/.pi/skills`、逐级 `.agents/skills` 到仓库根）由这里统一计算，装配、预读与设置页候选共用同一口径 |
 | `src/main/sessions/expert-files.ts` | 专家定义的写操作：把内置专家派生为自定义副本（写 `derivedFrom`）、读取与保存自定义专家定义、删除自定义专家；保存改写身份、能力范围与正文，保留其余声明行，先写临时文件再改名；写入面只到 `<agentDir>/experts/` |
 | `src/main/sessions/expert-ipc.ts` | 派生、读取、保存、删除、快速模式剔除清单、能力候选与默认基线保存七条通道；清单与诊断仍走 `desktop:session-experts` |
-| `src/shared-process/expert-capability-defaults.ts` | 默认能力基线的读取与原子写：文件缺失或损坏按不限制回退，两个维度各自独立归一 |
+| `src/shared-process/expert-capability-defaults.ts` | 默认能力基线的读取与原子写：文件缺失或损坏按不限制回退，技能、MCP 与工具三个维度各自独立归一 |
 | `src/shared-process/mcp-session-config.ts` | 会话级 MCP 配置合并（全局 + 受信项目、覆盖语义）与按技能／服务器许可集标停用 |
-| `src/sdk-host/expert-capability.ts` | 由专家定义与默认基线算出本次会话的技能与 MCP 许可集；未召专家时不限制 |
+| `src/sdk-host/expert-capability.ts` | 由专家定义与默认基线算出本次会话的技能、MCP 与工具许可集；未召专家时不限制；受保护工具始终在可用集内 |
 | `src/main/sessions/session-store.ts` | 项目会话目录、受限列表窗口与摘要缓存、文件定位与删除 |
 | `src/main/sessions/session-run-registry.ts` | 运行 ID、绑定代际、前台顺序及会话占用的唯一登记 |
 | `src/main/sessions/log-host-pool.ts` | 只读解析宿主池：按项目保活查看历史用的宿主进程，不登记运行实例、不占用会话，可被绑定接管 |
@@ -108,13 +108,13 @@
 | `src/renderer/src/sessions/components/ImageAnnotationCanvas.vue` | 共用原图坐标系的编号与点框叠加层，支持编辑及桌面／手机只读展示，不修改图片像素 |
 | `src/renderer/src/sessions/components/ChatMessageList.vue` | 本地待发送／结果未确认状态及绑定图片标注展示、权威消息交接、历史加载、滚动与布局观察（底部留白让出浮动「回到底部」条）；发布对话跳转入口并消费顶部栏定位意图；承接工作树隔离任务横幅挂载 |
 | `src/renderer/src/sessions/components/TaskRunningBorder.vue` | 原版 Lancer SVG 流动运行边框的 Vue 挂载层：在会话处理当前请求、未等待扩展提问时提供非侵入视觉反馈，离屏与减少动态效果时停用 |
-| `src/renderer/src/sessions/components/ChatTurnItem.vue` | 按轮摘要、展开与原文内容、多分支切换，同轮连续的纯过程消息统一收纳为单行工作过程摘要，运行中接入 SVG 运行边框，结束后默认收起以突出最终回答正文 |
+| `src/renderer/src/sessions/components/ChatTurnItem.vue` | 按轮摘要、展开与原文内容、多分支切换，同轮连续的纯过程消息统一收纳为单行工作过程摘要，运行中接入 SVG 运行边框，结束后默认收起以突出最终回答正文；含交付卡片的响应不算纯过程，不进过程抽屉，直接按正文行展示 |
 | `src/renderer/src/sessions/components/TurnBranchSwitcher.vue` | 轮次多分支微型切换器（`‹ 1 / 2 ›`） |
 | `src/renderer/src/sessions/components/WorktreeTaskBanner.vue` | 任务工作区状态底栏、固定目标与审阅合并（支持 Squash 与自动清理）、运行终端关闭确认与放弃删除流程 |
 | `src/renderer/src/sessions/components/ChatMessageItem.vue` | 单消息、图片编号及说明、思考抽屉、纯过程紧凑步骤、流式打字光标与工具归组面板；交付卡片的调用单列为卡片行（不进面板、不计入面板统计） |
 | `src/renderer/src/sessions/components/HistoryLoadSentinel.vue` | 历史加载触发哨兵 |
 | `src/renderer/src/sessions/components/ToolCard.vue` | 单行紧凑展示操作分类徽章、真实工具名、语境化参数与状态耗时胶囊；展开区展示结构化结果卡片、Diff 与调试抽屉，原文按需展开 |
-| `src/renderer/src/sessions/components/PresentCard.vue` | 会话内卡片：按固定外壳展示标题（头部带）、字段网格、能力勾选区（浅底面板）、可折叠正文与主次按钮带；占满消息列做独立展示行，不限宽居中、不套执行面板；技能与 MCP 用能力选择器列出候选（候选与基线取自能力候选通道），勾选按与编辑对话框同一套规则换算成保存字段；按钮按动作 ID 转发到既有通道（`expert.save` → 专家保存并刷新清单，`copy.text` → 剪贴板），终态与失败原因就地展示；窄容器下字段转纵向堆叠 |
+| `src/renderer/src/sessions/components/PresentCard.vue` | 会话内卡片：按固定外壳展示标题（头部带）、字段网格、能力勾选区（浅底面板）、可折叠正文与主次按钮带；占满消息列做独立展示行，不限宽居中、不套执行面板；技能、MCP 与工具用能力选择器列出候选（候选与基线取自能力候选通道），选受保护工具保持勾选且不可取消，勾选按与编辑对话框同一套规则换算成保存字段；按钮按动作 ID 转发到既有通道（`expert.save` → 专家保存并刷新清单，`copy.text` → 剪贴板），终态与失败原因就地展示；窄容器下字段转纵向堆叠 |
 | `src/renderer/src/sessions/components/ToolResultPreview.vue` | 工具结果的计数口径、命中内容、来源、历史状态与省略提示；只展示投影，不发起额外查询 |
 | `src/renderer/src/sessions/components/UsageDetailDialog.vue` | 会话用量明细与独立的 Codex、OpenCode Go 账户额度展示、按需读取与手动刷新 |
 | `src/renderer/src/sessions/components/MemoryInjectionDialog.vue` | 记忆注入卡片：三个分段（适用偏好、常驻约定、当前项目近况）以 tab 切换，点击条目展开摘要，被截断时记录条目按 ID、画像条目按领域只读取全文 |
@@ -122,10 +122,10 @@
 | `src/renderer/src/sessions/components/ExtensionDialog.vue` | SDK 扩展交互队列的当前对话 |
 | `src/renderer/src/sessions/components/ExtensionNotificationBar.vue` | 扩展通知展示 |
 | `src/renderer/src/experts/components/ExpertSettingsSection.vue` | 设置页「专家」分节：默认能力卡片入口、内置与自定义专家列表（含一行能力范围摘要：口径、增减与仅用选中的名单）、加载诊断、派生副本、新建与编辑入口、删除确认 |
-| `src/renderer/src/experts/components/ExpertEditorDialog.vue` | 专家编辑对话框：显示名称、一句话简介、技能与 MCP 两个能力段（复用能力选择器，均为 3 列勾选格；技能右槽在无状态时标出来源，状态优先）+ 已选计数与全选；引用数量不设上限；正文；新建与编辑两态；保存中禁用重复提交，失败就地展示原因，关闭归还焦点 |
-| `src/renderer/src/experts/components/ExpertCapabilityPicker.vue` | 能力选择器：3 列勾选格（格内右槽优先显示状态，状态为空时退回来源标签，标识与来源全文进 `title`）+ 已选计数 + 可选筛选 + 可选全选 + 可选折叠（收起时保留标题与计数）；传 `mode` 时才出现口径分段；自绘勾选控件（`role="checkbox"` 的按钮、方块与内联对勾、键盘焦点环）；供默认能力卡片、编辑对话框与会话内卡片复用 |
-| `src/renderer/src/experts/capability-selection.ts` | 能力勾选换算的单一实现：基线展开、按定义还原勾选、勾选 → `skillIds`/`Add`/`Remove` 换算、行尾状态文案；纯函数，不读配置也不写盘，编辑对话框与会话内卡片共用 |
-| `src/renderer/src/experts/components/ExpertCapabilityDefaultsCard.vue` | 默认能力卡片：技能与 MCP 各一份勾选集合（3 列网格、可折叠，勾满等于不限制），勾选即改；技能至少保留一个；保存后统一影响继承型专家，仅在有未保存改动时启用保存 |
+| `src/renderer/src/experts/components/ExpertEditorDialog.vue` | 专家编辑对话框：显示名称、一句话简介、技能、MCP 与工具三个能力段（复用能力选择器，均为 3 列勾选格；技能右槽在无状态时标出来源，状态优先；工具段的受保护项锁定为「必需」不可取消）+ 已选计数与全选；引用数量不设上限；正文；新建与编辑两态；保存中禁用重复提交，失败就地展示原因，关闭归还焦点 |
+| `src/renderer/src/experts/components/ExpertCapabilityPicker.vue` | 能力选择器：3 列勾选格（格内右槽优先显示状态，状态为空时退回来源标签，标识与来源全文进 `title`）+ 已选计数 + 可选筛选 + 可选全选 + 可选折叠（收起时保留标题与计数）；传 `mode` 时才出现口径分段；行可传 `locked`，已勾选后不再响应取消；自绘勾选控件（`role="checkbox"` 的按钮、方块与内联对勾、键盘焦点环）；供默认能力卡片、编辑对话框与会话内卡片复用 |
+| `src/renderer/src/experts/capability-selection.ts` | 能力勾选换算的单一实现：基线展开、按定义还原勾选、勾选 → `skillIds`/`Add`/`Remove` 换算（技能、MCP 与工具三个维度同一套）、行尾状态文案（含受保护项的「必需」）；纯函数，不读配置也不写盘，编辑对话框与会话内卡片共用 |
+| `src/renderer/src/experts/components/ExpertCapabilityDefaultsCard.vue` | 默认能力卡片：技能、MCP 与工具各一份勾选集合（3 列网格、可折叠，勾满等于不限制），勾选即改；技能至少保留一个；工具的受保护项始终保留且不可取消；保存后统一影响继承型专家，仅在有未保存改动时启用保存 |
 
 核心打开链、Store、宿主入口及投影职责已由源码读取；投影辅助实现与界面文件结合导入、模板和接口调用映射，不将本表视作逐函数质量结论。
 

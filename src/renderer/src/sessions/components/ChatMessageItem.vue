@@ -1,5 +1,6 @@
 <!-- 单条消息：按块展示正文、思考、工具卡、技能卡、压缩卡与计时（单条生成耗时与本轮响应耗时）与本次调用的 token 花销。
-     纯过程消息（仅含工具调用或思考且无正文）自动绑定 .chat-message-process，消除多余外层边框与空旷间距，融入一体化执行流；
+     纯过程消息（仅含工具调用或思考且无正文，且不含交付卡片）自动绑定 .chat-message-process，消除多余外层边框与空旷间距，融入一体化执行流；
+     含交付卡片的响应即使没有正文也不按过程处理：卡片是成果，头部要保留时间、用量与缓存命中。
      过程块逐项展示：每段 Thinking 折叠成带思维图标与状态胶囊的轻量抽屉（生成中展开微光流动并跟随最新思考，结束后收起），正文按原位置展示并支持流式呼吸打字光标。
      工具调用按块相邻关系归组：连续出现的工具调用合成一个「执行记录」面板，面板内每条仍是一张独立折叠的 ToolCard；
      单条工具不套面板，Thinking 与正文都是分组分界，不会被归进工具面板。
@@ -201,7 +202,11 @@ function groupStats(blocks: readonly ChatToolBlock[]): string {
 
 /** 纯过程消息：既不是用户消息也不是压缩记录，并且只有工具调用或思考，没有非空正文文本。 */
 const hasContentText = computed(() => props.message.blocks.some(block => block.kind === 'text' && block.text.trim() !== ''))
-const isProcessOnly = computed(() => !isUser.value && !isCompaction.value && !hasContentText.value)
+/** 交付卡片是成果：含卡片的响应即使没有正文也不按过程样式处理，头部要保留时间、用量与缓存命中。 */
+const hasCard = computed(() => props.message.blocks
+  .some(block => block.kind === 'toolcall' && block.execution?.card != null))
+const isProcessOnly = computed(() => !isUser.value && !isCompaction.value
+  && !hasContentText.value && !hasCard.value)
 /** 压缩记录不是对话消息：不展示生成计时、用户操作栏与复制入口。 */
 const isCompaction = computed(() => props.message.role === 'compaction')
 const compaction = computed(() => props.message.compaction)

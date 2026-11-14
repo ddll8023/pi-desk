@@ -440,8 +440,12 @@ function isSessionExpertView(value: unknown): value is SessionExpertView {
     && referencesOk(value.mcpServerIds)
     && referencesOk(value.mcpAddIds)
     && referencesOk(value.mcpRemoveIds)
+    && referencesOk(value.toolIds)
+    && referencesOk(value.toolAddIds)
+    && referencesOk(value.toolRemoveIds)
     && (value.skillsMode === 'inherit' || value.skillsMode === 'only')
     && (value.mcpMode === 'inherit' || value.mcpMode === 'only')
+    && (value.toolsMode === 'inherit' || value.toolsMode === 'only')
 }
 
 const EXPERT_ISSUE_KINDS: readonly string[] = [

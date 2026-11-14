@@ -1,8 +1,8 @@
 /**
  * 专家角色段：把一个选中的专家定义包成一段系统提示，与执行模式、产品工具提示并列注入。
  *
- * 只写身份、方法与输出规范，不增删工具、不改预算与权限——技能与 MCP 范围的收窄由装配层（`expert-capability`）完成，
- * 这里只把结果如实写成一句范围说明，避免模型把未加载的能力当成可用；专家也不派子代理。
+ * 只写身份、方法与输出规范，不增删工具本身、不改预算与权限——技能、MCP 与工具范围的收窄由装配层（`expert-capability`）完成，
+ * 这里只把结果如实写成一句范围说明，避免模型把未加载的能力当成可用。
  * 引用了不可用技能、或快速模式剔掉了它引用的规范时，在段尾说明，避免模型把没加载的技能当成已加载。
  */
 import { join } from 'node:path'
@@ -44,7 +44,7 @@ export function expertRoleSection(definition: ExpertDefinition, options: ExpertR
   return lines.join('\n')
 }
 
-/** 能力范围的一句话说明；两个维度都不限制时返回 null，不为普通会话多写一段。 */
+/** 能力范围的一句话说明；三个维度都不限制时返回 null，不为普通会话多写一段。 */
 function describeScope(scope: ExpertCapabilityScope | undefined): string | null {
   if (scope === undefined) return null
   const notes: string[] = []
@@ -57,6 +57,10 @@ function describeScope(scope: ExpertCapabilityScope | undefined): string | null 
     notes.push(scope.mcpServers.length === 0
       ? '本会话停用了全部 MCP 服务器'
       : `本会话只连接 ${scope.mcpServers.length} 个 MCP 服务器，其余已停用`)
+  }
+  // 工具集里始终保留门禁与模式必需的工具，因此只说“被收窄”，不报具体个数以免与实际激活集合不一致。
+  if (scope.tools !== null) {
+    notes.push('本会话的可用工具已被专家范围收窄，范围外的工具不可用；技能门禁与待办清单不受影响')
   }
   return notes.length === 0 ? null : `能力范围：${notes.join('；')}。`
 }

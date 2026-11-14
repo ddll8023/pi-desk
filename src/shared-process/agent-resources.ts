@@ -12,6 +12,18 @@ const MANIFEST_NAME = 'bundle.json'
 const MAX_MANIFEST_BYTES = 131_072
 const MAX_RESOURCE_BYTES = 2_097_152
 
+/**
+ * 清单声明的工具：给设置页的专家工具范围充当候选项。
+ * 只声明与会话工具面相关的名字与用途，不参与工具注册，也不代表该工具一定被装进某次会话。
+ */
+export interface AgentToolDeclaration {
+  readonly name: string
+  /** 一句话用途；出现在设置页的候选行里。 */
+  readonly summary: string
+  /** 必需工具：专家范围不得排除它，排除会造成门禁或执行模式断裂。 */
+  readonly required: boolean
+}
+
 export interface AgentResource {
   readonly id: string
   readonly entry: string
@@ -25,6 +37,8 @@ export interface AgentResourceBundle {
   readonly root: string
   readonly extensions: readonly AgentResource[]
   readonly skills: readonly AgentResource[]
+  /** 工具候选声明；旧产物没有这一段时为空，专家工具范围因此没有候选可选。 */
+  readonly tools: readonly AgentToolDeclaration[]
   /** 专家定义：只作为可召唤的角色资源，不参与技能装配，也不进入子代理进程。 */
   readonly experts: readonly AgentResource[]
   readonly memoryEngine: string
@@ -74,6 +88,20 @@ function fingerprint(path: string): string {
   return createHash('sha256').update(text).digest('hex')
 }
 
+/** 工具名允许下划线（`tool_search`、`skill_guard_select`），与组件 id 的连字符规则不同。 */
+const TOOL_NAME = /^[a-z][a-z0-9_]*$/
+/** 用途说明的上限：设置页一行候选放不下更长的文本，也避免清单变成文档。 */
+const MAX_TOOL_SUMMARY = 120
+
+function parseTool(value: unknown): AgentToolDeclaration {
+  if (!record(value) || typeof value.name !== 'string' || !TOOL_NAME.test(value.name)
+    || typeof value.summary !== 'string' || value.summary.trim() === '' || value.summary.length > MAX_TOOL_SUMMARY
+    || typeof value.required !== 'boolean') {
+    throw new Error('产品工具声明无效')
+  }
+  return { name: value.name, summary: value.summary.trim(), required: value.required }
+}
+
 function parseResource(value: unknown): AgentResource {
   if (!record(value) || typeof value.id !== 'string' || !/^[a-z][a-z0-9-]*$/.test(value.id)
     || !resourceName(value.entry) || !strings(value.files) || value.files.length === 0
@@ -115,8 +143,19 @@ export function readAgentResourceBundle(directory: string): AgentResourceBundle 
   const skills = raw.skills.map(parseResource)
   // 专家段是可选组成：旧产物没有这一项时按空列表处理，不要求为新增能力重建全部清单。
   const experts = Array.isArray(raw.experts) ? raw.experts.map(parseResource) : []
+  // 工具段同理可选；声明了就不能与扩展的必需工具冲突，否则界面的「必需」与加载校验会成为两套口径。
+  const tools = Array.isArray(raw.tools) ? raw.tools.map(parseTool) : []
+  if (new Set(tools.map(item => item.name)).size !== tools.length) throw new Error('产品工具声明重复')
   const components = [...extensions, ...skills, ...experts]
   const ids = components.map(item => item.id)
+  if (Array.isArray(raw.tools)) {
+    const extensionTools = new Set(extensions.flatMap(item => item.requiredTools))
+    const declaredRequired = new Set(tools.filter(item => item.required).map(item => item.name))
+    if ([...extensionTools].some(name => !declaredRequired.has(name))
+      || [...declaredRequired].some(name => !extensionTools.has(name))) {
+      throw new Error('产品工具声明与扩展必需工具不一致')
+    }
+  }
   if (new Set(ids).size !== ids.length || extensions.some(item => item.requiredTools.length === 0)
     || !extensions.some(item => item.id === 'skill-guard')
     || !extensions.some(item => item.id === 'pi-memory') || !skills.some(item => item.id === 'memory')) {
@@ -145,5 +184,8 @@ export function readAgentResourceBundle(directory: string): AgentResourceBundle 
     }
     componentDigests[item.id] = digest
   }
-  return { root, extensions, skills, experts, memoryEngine: raw.memoryEngine, fingerprints, componentDigests }
+  return {
+    root, extensions, tools, skills, experts,
+    memoryEngine: raw.memoryEngine, fingerprints, componentDigests
+  }
 }

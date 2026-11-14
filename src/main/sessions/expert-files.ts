@@ -19,8 +19,10 @@ import {
   parseExpertCapabilityMode,
   parseExpertDocument,
   parseExpertServerNames,
-  parseExpertSkillIds
+  parseExpertSkillIds,
+  parseExpertToolNames
 } from '../../shared-process/expert-definitions'
+import { PROTECTED_EXPERT_TOOLS, isProtectedExpertTool } from '../../shared/expert-capability'
 import type { ExpertCapabilityFields } from '../../shared/expert-capability'
 import type { ExpertDeleteResult, ExpertDeriveResult, ExpertReadResult, ExpertSaveResult } from '../../shared/experts-api'
 
@@ -178,7 +180,7 @@ export function readUserExpertDefinition(input: {
   }
   const capabilities = parseCapabilityFields(document.fields)
   if (capabilities === null) {
-    return failure('INVALID_DEFINITION', '声明段的能力字段（模式或服务器列表）写法不合法，先手工修正再回来编辑。')
+    return failure('INVALID_DEFINITION', '声明段的能力字段（模式、技能、服务器或工具列表）写法不合法，先手工修正再回来编辑。')
   }
   const derivedFrom = document.fields.derivedFrom
   return {
@@ -204,11 +206,20 @@ function parseCapabilityFields(fields: Readonly<Record<string, string>>): Expert
   const mcpServerIds = parseExpertServerNames(fields.mcpServers)
   const mcpAddIds = parseExpertServerNames(fields.mcpAdd)
   const mcpRemoveIds = parseExpertServerNames(fields.mcpRemove)
+  const toolsMode = parseExpertCapabilityMode(fields.toolsMode)
+  const toolIds = parseExpertToolNames(fields.tools)
+  const toolAddIds = parseExpertToolNames(fields.toolsAdd)
+  const toolRemoveIds = parseExpertToolNames(fields.toolsRemove)
   if (skillsMode === null || skillAddIds === null || skillRemoveIds === null
-    || mcpMode === null || mcpServerIds === null || mcpAddIds === null || mcpRemoveIds === null) {
+    || mcpMode === null || mcpServerIds === null || mcpAddIds === null || mcpRemoveIds === null
+    || toolsMode === null || toolIds === null || toolAddIds === null || toolRemoveIds === null) {
     return null
   }
-  return { skillsMode, skillAddIds, skillRemoveIds, mcpMode, mcpServerIds, mcpAddIds, mcpRemoveIds }
+  return {
+    skillsMode, skillAddIds, skillRemoveIds,
+    mcpMode, mcpServerIds, mcpAddIds, mcpRemoveIds,
+    toolsMode, toolIds, toolAddIds, toolRemoveIds
+  }
 }
 
 /** 新建时分配一个没被占用的标识；内置标识都是语义名，不会与 `expert-<序号>` 撞上。 */
@@ -230,7 +241,7 @@ function rebuildHeader(input: ExpertCapabilityFields & {
   readonly summary: string
   readonly skillIds: readonly string[]
 }): string[] {
-  const managed = /^(name|displayName|summary|skills|skillsMode|skillsAdd|skillsRemove|mcpMode|mcpServers|mcpAdd|mcpRemove)\s*:/
+  const managed = /^(name|displayName|summary|skills|skillsMode|skillsAdd|skillsRemove|mcpMode|mcpServers|mcpAdd|mcpRemove|tools|toolsMode|toolsAdd|toolsRemove)\s*:/
   const kept = input.headerLines.filter(line => !managed.test(line))
   const lines = [
     `name: ${input.id}`,
@@ -246,6 +257,10 @@ function rebuildHeader(input: ExpertCapabilityFields & {
   if (input.mcpServerIds.length > 0) lines.push(`mcpServers: ${formatList(input.mcpServerIds)}`)
   if (input.mcpAddIds.length > 0) lines.push(`mcpAdd: ${formatList(input.mcpAddIds)}`)
   if (input.mcpRemoveIds.length > 0) lines.push(`mcpRemove: ${formatList(input.mcpRemoveIds)}`)
+  if (input.toolsMode === 'only') lines.push('toolsMode: only')
+  if (input.toolIds.length > 0) lines.push(`tools: ${formatList(input.toolIds)}`)
+  if (input.toolAddIds.length > 0) lines.push(`toolsAdd: ${formatList(input.toolAddIds)}`)
+  if (input.toolRemoveIds.length > 0) lines.push(`toolsRemove: ${formatList(input.toolRemoveIds)}`)
   return [...lines, ...kept]
 }
 
@@ -286,12 +301,26 @@ export function saveUserExpertDefinition(input: ExpertCapabilityFields & {
   const mcpServerIds = dedupe(input.mcpServerIds)
   const mcpAddIds = dedupe(input.mcpAddIds)
   const mcpRemoveIds = dedupe(input.mcpRemoveIds)
+  const toolIds = dedupe(input.toolIds)
+  const toolAddIds = dedupe(input.toolAddIds)
+  const toolRemoveIds = dedupe(input.toolRemoveIds)
   const allSkillIds = [...skillIds, ...skillAddIds, ...skillRemoveIds]
   if (!allSkillIds.every(isSkillReferenceId)) {
     return failure('INVALID_DEFINITION', '技能引用里有写法不合法的标识。')
   }
   if (![...mcpServerIds, ...mcpAddIds, ...mcpRemoveIds].every(isSkillReferenceId)) {
     return failure('INVALID_DEFINITION', 'MCP 服务器名里有写法不合法的名称。')
+  }
+  if (![...toolIds, ...toolAddIds, ...toolRemoveIds].every(isSkillReferenceId)) {
+    return failure('INVALID_DEFINITION', '工具名里有写法不合法的名称。')
+  }
+  // 受保护工具由技能门禁、执行模式与记忆组共同依赖，排除会让会话在功能上断裂而不是少一个能力。
+  const blockedTools = [...toolRemoveIds, ...(input.toolsMode === 'only'
+    ? PROTECTED_EXPERT_TOOLS.filter(name => !toolIds.includes(name))
+    : [])].filter(isProtectedExpertTool)
+  if (blockedTools.length > 0) {
+    return failure('INVALID_DEFINITION',
+      `这些工具不能从专家范围里排除：${[...new Set(blockedTools)].join('、')}。`)
   }
   const blocked = allSkillIds.filter(id => input.subAgentOnlySkillIds.includes(id))
   if (blocked.length > 0) {
@@ -337,7 +366,11 @@ export function saveUserExpertDefinition(input: ExpertCapabilityFields & {
     mcpMode: input.mcpMode,
     mcpServerIds,
     mcpAddIds,
-    mcpRemoveIds
+    mcpRemoveIds,
+    toolsMode: input.toolsMode,
+    toolIds,
+    toolAddIds,
+    toolRemoveIds
   })
   const text = ['---', ...header, '---', '', body, ''].join('\n')
   if (Buffer.byteLength(text, 'utf8') > EXPERT_LIMITS.definitionBytes) {

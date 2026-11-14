@@ -4,7 +4,8 @@
  * 只读取随包清单给出的内置专家定义，以及产品 agent 目录下的自定义专家，合并成一份可召唤清单；
  * 单个定义损坏、身份冲突或引用了不可用技能时只影响对应条目，不中断整份清单。
  * 本模块不装配会话、不注入系统提示，也不产生任何子代理调用；清单条目到内置入口的映射、技能目录标识列举，以及写回所需的声明解析、标识校验与上限常量都由这里提供，主进程不复制第二份规则。
- * 能力范围（技能与 MCP）的解析与合并也在这里：专家只继承默认基线并做增减，两类来源的语义差异只体现在调用方给出的可用集上。
+ * 能力范围（技能、MCP 与工具）的解析与合并也在这里：专家只继承默认基线并做增减，
+ * 三类来源的语义差异只体现在调用方给出的可用集上。
  */
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
@@ -85,6 +86,8 @@ export interface ExpertIssue {
 export interface ExpertCapabilityScope {
   readonly skills: readonly string[] | null
   readonly mcpServers: readonly string[] | null
+  /** 本会话可激活的工具；范围外的工具在装配期从激活集合移除（受保护工具除外）。 */
+  readonly tools: readonly string[] | null
 }
 
 export interface ExpertCatalog {
@@ -191,6 +194,11 @@ export function parseExpertServerNames(value: string | undefined): string[] | nu
   return parseSkillIds(value)
 }
 
+/** 工具名与技能标识同一套字符规则（都允许下划线），写回与解析共用这一份。 */
+export function parseExpertToolNames(value: string | undefined): string[] | null {
+  return parseSkillIds(value)
+}
+
 function invalid(expertId: string | null, path: string): ReadResult {
   return { ok: false, issue: { kind: 'definition-invalid', expertId, skillId: null, serverName: null, path } }
 }
@@ -230,6 +238,10 @@ function readDefinition(input: {
   const mcpServerIds = parseSkillIds(document.fields.mcpServers)
   const mcpAddIds = parseSkillIds(document.fields.mcpAdd)
   const mcpRemoveIds = parseSkillIds(document.fields.mcpRemove)
+  const toolsMode = parseMode(document.fields.toolsMode)
+  const toolIds = parseSkillIds(document.fields.tools)
+  const toolAddIds = parseSkillIds(document.fields.toolsAdd)
+  const toolRemoveIds = parseSkillIds(document.fields.toolsRemove)
   // 派生来源是可选的追溯字段；写了就必须指回一个合法的专家标识，写成任意文本按定义无效处理。
   const derivedFrom = document.fields.derivedFrom === undefined || document.fields.derivedFrom === ''
     ? null
@@ -239,7 +251,8 @@ function readDefinition(input: {
   if (document.fields.name !== id || displayName === undefined || displayName === ''
     || summary === undefined || summary === '' || skillIds === null || document.body === ''
     || skillsMode === null || skillAddIds === null || skillRemoveIds === null
-    || mcpMode === null || mcpServerIds === null || mcpAddIds === null || mcpRemoveIds === null) {
+    || mcpMode === null || mcpServerIds === null || mcpAddIds === null || mcpRemoveIds === null
+    || toolsMode === null || toolIds === null || toolAddIds === null || toolRemoveIds === null) {
     return invalid(id, filePath)
   }
   return {
@@ -248,7 +261,8 @@ function readDefinition(input: {
       id, displayName, summary, skillIds, body: document.body, truncated: document.body.length > MAX_ROLE_CHARS,
       source, filePath, derivedFrom, unavailableSkillIds: [],
       skillsMode, skillAddIds, skillRemoveIds,
-      mcpMode, mcpServerIds, mcpAddIds, mcpRemoveIds
+      mcpMode, mcpServerIds, mcpAddIds, mcpRemoveIds,
+      toolsMode, toolIds, toolAddIds, toolRemoveIds
     }
   }
 }
@@ -301,10 +315,12 @@ function judgeMcpServers(
 export function resolveExpertCapabilityScope(input: {
   readonly definition: Pick<ExpertDefinition,
     'skillsMode' | 'skillIds' | 'skillAddIds' | 'skillRemoveIds'
-    | 'mcpMode' | 'mcpServerIds' | 'mcpAddIds' | 'mcpRemoveIds'>
+    | 'mcpMode' | 'mcpServerIds' | 'mcpAddIds' | 'mcpRemoveIds'
+    | 'toolsMode' | 'toolIds' | 'toolAddIds' | 'toolRemoveIds'>
   readonly defaults: ExpertCapabilityDefaults
   readonly availableSkillIds: readonly string[]
   readonly availableMcpServers: readonly string[]
+  readonly availableToolNames: readonly string[]
 }): ExpertCapabilityScope {
   const skills = resolveDimension({
     mode: input.definition.skillsMode,
@@ -322,7 +338,15 @@ export function resolveExpertCapabilityScope(input: {
     base: input.defaults.mcpServers,
     available: input.availableMcpServers
   })
-  return { skills, mcpServers }
+  const tools = resolveDimension({
+    mode: input.definition.toolsMode,
+    only: input.definition.toolIds,
+    add: input.definition.toolAddIds,
+    remove: input.definition.toolRemoveIds,
+    base: input.defaults.tools,
+    available: input.availableToolNames
+  })
+  return { skills, mcpServers, tools }
 }
 
 /** 单个维度的展开：可用集之外的名字一律视为不存在，只减少不增加。 */

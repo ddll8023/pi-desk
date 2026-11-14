@@ -8,6 +8,7 @@
   一格只有一行宽的落点，因此右槽优先显示调用方给出的状态（基线默认、已排除等差异信息），
   状态为空时才显示来源标签；两者与完整标识一起放进 title，标识本身按需截断。
   状态文本只按内容决定用警示色还是次级灰。
+  行可传 `locked`：受保护工具勾上后不再响应取消，保证界面与实际生效集合一致；最终仍以主进程保存校验为准。
 -->
 <script setup lang="ts">
 import { computed, ref, useId } from 'vue'
@@ -16,13 +17,15 @@ import AppButton from '../../ui/AppButton.vue'
 /** 一屏能看全较多候选，超过这个数量才出现筛选框：到需要滚动时才给筛选。 */
 const GRID_SEARCH_THRESHOLD = 24
 
-/** 一行候选；`unavailable` 表示定义里引用了但当前环境没有。 */
+/** 一行候选；`unavailable` 表示定义里引用了但当前环境没有，`locked` 表示受保护项、不得取消。 */
 interface CapabilityPickerRow {
   readonly id: string
   readonly label: string
   readonly unavailable: boolean
   /** 行尾状态文本；空串表示不显示（例如「仅用选中」模式下勾选已说明状态）。 */
   readonly state: string
+  /** 勾上后不允许再取消（技能门禁、待办清单与记忆组属受保护工具）。 */
+  readonly locked?: boolean
 }
 
 const props = defineProps<{
@@ -87,6 +90,9 @@ const canSelectAll = computed(() => props.selectAllLabel !== undefined && props.
 const bodyVisible = computed(() => props.collapsible !== true || props.collapsed !== true)
 
 function toggle(id: string): void {
+  // 受保护项已经勾上时不再响应取消：让界面与实际生效集合保持一致，而不是保存时才报错。
+  const row = props.rows.find(item => item.id === id)
+  if (row?.locked === true && props.selected.includes(id)) return
   const next = props.selected.includes(id)
     ? props.selected.filter(item => item !== id)
     : [...props.selected, id]
@@ -107,9 +113,10 @@ function cellTextClass(row: CapabilityPickerRow): string {
   return row.state !== '' ? stateClass(row.state) : 'text-desk-muted'
 }
 
-/** 截断的标识与来源仍可从 title 读到；空项不拼多余分隔符。 */
+/** 截断的标识与来源仍可从 title 读到；空项不拼多余分隔符，受保护项额外提示不得取消。 */
 function rowTitle(row: CapabilityPickerRow): string {
-  return [row.id, row.label, row.state].filter(part => part !== '').join(' · ')
+  return [row.id, row.label, row.state, row.locked === true ? '必需项，不可取消' : '']
+    .filter(part => part !== '').join(' · ')
 }
 </script>
 
@@ -205,6 +212,7 @@ function rowTitle(row: CapabilityPickerRow): string {
             role="checkbox"
             class="check-cell"
             :aria-checked="selected.includes(row.id)"
+            :aria-disabled="row.locked === true && selected.includes(row.id)"
             :title="rowTitle(row)"
             :disabled="disabled"
             @click="toggle(row.id)"

@@ -13,11 +13,16 @@ import type { ExpertCapabilityDefaults } from '../shared/expert-capability'
 
 /** 基线文件名；与专家定义同在产品 agent 目录根下。 */
 export const EXPERT_CAPABILITY_DEFAULTS_FILE = 'capability-defaults.json'
-/** 单个基线文件的读取上限：只装两串标识，超出说明被写坏了。 */
+/** 单个基线文件的读取上限：只装三串标识，超出说明被写坏了。 */
 const MAX_DEFAULTS_BYTES = 64 * 1024
 
-/** 不做任何限制的基线：等于「全部可用」，与没有这份文件时行为一致。 */
-export const UNRESTRICTED_CAPABILITY_DEFAULTS: ExpertCapabilityDefaults = { skills: null, mcpServers: null }
+/**
+ * 不做任何限制的基线：等于「全部可用」，与没有这份文件时行为一致。
+ * 工具维度同样用 `null` 表示不限制：新装扩展带来的工具不会被旧基线当成排除项。
+ */
+export const UNRESTRICTED_CAPABILITY_DEFAULTS: ExpertCapabilityDefaults = {
+  skills: null, mcpServers: null, tools: null
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -36,10 +41,14 @@ function normalizeList(value: unknown): readonly string[] | null {
   return [...seen]
 }
 
-/** 任意形状归一化成可用的基线；两个维度各自独立回退，不互相拖累。 */
+/** 任意形状归一化成可用的基线；三个维度各自独立回退，不互相拖累。 */
 export function normalizeCapabilityDefaults(value: unknown): ExpertCapabilityDefaults {
   if (!isRecord(value)) return UNRESTRICTED_CAPABILITY_DEFAULTS
-  return { skills: normalizeList(value.skills), mcpServers: normalizeList(value.mcpServers) }
+  return {
+    skills: normalizeList(value.skills),
+    mcpServers: normalizeList(value.mcpServers),
+    tools: normalizeList(value.tools)
+  }
 }
 
 /** 读取基线；文件不存在、超限或解析失败都按「不限制」处理，由调用方决定是否提示。 */

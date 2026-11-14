@@ -1,5 +1,5 @@
 <!-- 设置页「专家」分节：列出内置与自定义专家、加载诊断，并提供新建、编辑、派生副本与删除四个操作。
-     顶部另有「默认能力」卡片：专家继承的技能与 MCP 范围在那一处统一调整，专家定义只在它之上做增减。
+     顶部另有「默认能力」卡片：专家继承的技能、MCP 与工具范围在那一处统一调整，专家定义只在它之上做增减。
      新建与编辑走同一个对话框（ExpertEditorDialog）；派生只复制正文到产品 agent 目录并写入 derivedFrom，
      此后副本自行演进、不跟随内置升级，因此列表要给派生来源与「新建会话才生效」的说明；诊断只读展示，
      界面上不提供自动修复。 -->
@@ -69,7 +69,13 @@ function capabilitySummary(expert: SessionExpertView): string {
   const mcp = expert.mcpMode === 'only'
     ? `MCP ${expert.mcpServerIds.length} 个（仅用选中）`
     : `MCP 继承默认${delta(expert.mcpAddIds, expert.mcpRemoveIds)}`
-  return `${skills} · ${mcp}`
+  // 工具维度只在偏离默认时提一句：大多数专家不动工具，列表行不应被它撑长。
+  const tools = expert.toolsMode === 'only'
+    ? `工具 ${expert.toolIds.length} 个（仅用选中）`
+    : expert.toolAddIds.length === 0 && expert.toolRemoveIds.length === 0
+      ? null
+      : `工具继承默认${delta(expert.toolAddIds, expert.toolRemoveIds)}`
+  return [skills, mcp, tools].filter((part): part is string => part !== null).join(' · ')
 }
 
 function isBusy(expert: SessionExpertView): boolean {
@@ -96,7 +102,7 @@ onMounted(() => { void store.load() })
     <header>
       <h1 class="text-xl font-semibold tracking-tight">专家</h1>
       <p class="mt-1 text-sm text-desk-muted">
-        为会话注入一段角色说明，并在该会话内收窄技能与 MCP 范围。
+        为会话注入一段角色说明，并在该会话内收窄技能、MCP 与工具范围。
       </p>
     </header>
 

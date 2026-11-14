@@ -1,11 +1,12 @@
 <!--
   默认能力卡片：设置页里唯一改动「专家继承什么」的地方。
 
-  只有一份集合：勾选即当前可用的技能与 MCP 服务器；勾满等于「不限制」。
+  只有一份集合：勾选即当前可用的技能、MCP 服务器与工具；勾满等于「不限制」。
   因此界面没有「继承全部／只保留选中」的模式切换，也没有第二份状态。
   保存时按集合是否等于全集归一：等于写 null（不限制），否则写白名单。
   技能至少保留一个（清空会让继承型专家连随包技能都拿不到），MCP 允许清空。
-  保存后由主进程写进 agent 目录，新建会话按新范围生效；工具与权限不在这里管。
+  工具里技能门禁、待办清单与记忆工具属受保护项：勾选保持且不可取消，与主进程保存校验同一套标准。
+  保存后由主进程写进 agent 目录，新建会话按新范围生效。
 -->
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
@@ -26,16 +27,22 @@ const emit = defineEmits<{
 
 const skills = computed(() => props.capabilities?.skills ?? [])
 const mcpServers = computed(() => props.capabilities?.mcpServers ?? [])
+const tools = computed(() => props.capabilities?.tools ?? [])
 const ready = computed(() => props.capabilities !== null)
 const allSkillIds = computed(() => skills.value.map(item => item.id))
 const allMcpNames = computed(() => mcpServers.value.map(item => item.name))
+const allToolNames = computed(() => tools.value.map(item => item.name))
+/** 受保护工具：默认集合里必须包含，界面上不可取消。 */
+const requiredToolNames = computed(() => tools.value.filter(item => item.required).map(item => item.name))
 
-/** 当前可用的技能与服务器；基线里 `null` 等于全部候选。 */
+/** 当前可用的技能、服务器与工具；基线里 `null` 等于全部候选。 */
 const selectedSkills = ref<readonly string[]>([])
 const selectedMcp = ref<readonly string[]>([])
-/** 两个区块默认展开：收起会把候选重新藏起来，不应成为默认。 */
+const selectedTools = ref<readonly string[]>([])
+/** 三个区块默认展开：收起会把候选重新藏起来，不应成为默认。 */
 const skillsExpanded = ref(true)
 const mcpExpanded = ref(true)
+const toolsExpanded = ref(true)
 
 /** 候选或已保存的基线变化时重建勾选；未保存的编辑会被覆盖，但基线只在保存后才变。 */
 watch(
@@ -44,6 +51,9 @@ watch(
     if (capabilities === null) return
     selectedSkills.value = capabilities.defaults.skills ?? allSkillIds.value
     selectedMcp.value = capabilities.defaults.mcpServers ?? allMcpNames.value
+    selectedTools.value = [...new Set([
+      ...(capabilities.defaults.tools ?? allToolNames.value), ...requiredToolNames.value
+    ])]
   },
   { immediate: true }
 )
@@ -63,6 +73,15 @@ const mcpRows = computed(() => mcpServers.value.map(server => ({
   state: ''
 })))
 
+/** 工具行：受保护项带 `locked`，选择器据此禁止取消。 */
+const toolRows = computed(() => tools.value.map(tool => ({
+  id: tool.name,
+  label: tool.summary,
+  unavailable: false,
+  state: tool.required ? '必需' : '',
+  locked: tool.required
+})))
+
 /** 勾满时只说结论，部分选中才给数量。 */
 const skillCount = computed(() => {
   const total = skills.value.length
@@ -78,6 +97,13 @@ const mcpCount = computed(() => {
     ? `${total} 个全部可用`
     : `已选 ${selectedMcp.value.length} / ${total}`
 })
+const toolCount = computed(() => {
+  const total = tools.value.length
+  if (total === 0) return ''
+  return selectedTools.value.length === total
+    ? `${total} 个全部可用`
+    : `已选 ${selectedTools.value.length} / ${total}`
+})
 
 /** `null` 表示不限制，比较时按全集展开，避免「显式全选」与「不限制」被当成脏改动。 */
 function sameSelection(current: readonly string[], stored: readonly string[] | null, all: readonly string[]): boolean {
@@ -91,6 +117,7 @@ const dirty = computed(() => {
   if (defaults === undefined) return false
   return !sameSelection(selectedSkills.value, defaults.skills, allSkillIds.value)
     || !sameSelection(selectedMcp.value, defaults.mcpServers, allMcpNames.value)
+    || !sameSelection(selectedTools.value, defaults.tools, allToolNames.value)
 })
 
 /** 技能清空会让继承型专家连随包技能都拿不到，所以至少保留一个。 */
@@ -105,7 +132,8 @@ function submit(): void {
   if (skillsEmpty.value) return
   emit('save', {
     skills: normalized(selectedSkills.value, allSkillIds.value),
-    mcpServers: normalized(selectedMcp.value, allMcpNames.value)
+    mcpServers: normalized(selectedMcp.value, allMcpNames.value),
+    tools: normalized(selectedTools.value, allToolNames.value)
   })
 }
 </script>
@@ -161,6 +189,27 @@ function submit(): void {
         @select-all="selectedMcp = [...allMcpNames]"
         @update:selected="selectedMcp = $event"
       />
+    </div>
+
+    <div class="mt-5 border-t border-desk-line pt-5">
+      <ExpertCapabilityPicker
+        title="工具"
+        :selected="selectedTools"
+        :rows="toolRows"
+        :count-text="toolCount"
+        select-all-label="全选"
+        search-placeholder="按名称筛选工具"
+        empty-text="没有匹配的工具。"
+        no-rows-text="随包清单里还没有工具声明；先重建资源再回来勾选。"
+        :ready="ready"
+        :disabled="saving"
+        collapsible
+        :collapsed="!toolsExpanded"
+        @toggle-collapse="toolsExpanded = !toolsExpanded"
+        @select-all="selectedTools = [...allToolNames]"
+        @update:selected="selectedTools = $event"
+      />
+      <p v-if="toolsExpanded" class="hint-text">标「必需」的工具始终保留，取消不会生效。</p>
     </div>
 
     <div class="mt-5 flex flex-wrap items-center gap-3 border-t border-desk-line pt-5">

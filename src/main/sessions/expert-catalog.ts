@@ -4,7 +4,7 @@
  *
  * 只读：不启动 SDK 宿主、不打开会话、不写任何文件；技能可见集取「随包非子代理专用技能 +
  * 全局技能目录（产品 agent 目录与共享目录）」，缺失的技能引用只体现在诊断里，不让整份清单失败。
- * 能力候选也由这里给：技能候选、全局 MCP 服务器与当前默认基线，页面不自己拼路径也不自己读文件。
+ * 能力候选也由这里给：技能候选、全局 MCP 服务器、随包清单声明的工具与当前默认基线，页面不自己拼路径也不自己读文件。
  * 项目技能不进候选：专家是全局定义，项目来源随工作区变化，候选会因此随项目漂移。
  */
 import { join, resolve } from 'node:path'
@@ -16,7 +16,7 @@ import { readExpertCapabilityDefaults } from '../../shared-process/expert-capabi
 import { globalSkillDirectories } from '../../shared-process/skill-sources'
 import { fastModeBlockedSkillsIn } from '../../shared/execution-mode-skills'
 import type {
-  ExpertCapabilities, ExpertMcpCandidate, ExpertSkillCandidate
+  ExpertCapabilities, ExpertMcpCandidate, ExpertSkillCandidate, ExpertToolCandidate
 } from '../../shared/experts-api'
 import type { SessionExpertCatalog, SessionExpertView } from '../../shared/session-api'
 import { getSdkHostDirectory } from '../shared/pi-cli-process'
@@ -40,7 +40,11 @@ function toView(definition: ExpertDefinition): SessionExpertView {
     mcpMode: definition.mcpMode,
     mcpServerIds: definition.mcpServerIds,
     mcpAddIds: definition.mcpAddIds,
-    mcpRemoveIds: definition.mcpRemoveIds
+    mcpRemoveIds: definition.mcpRemoveIds,
+    toolsMode: definition.toolsMode,
+    toolIds: definition.toolIds,
+    toolAddIds: definition.toolAddIds,
+    toolRemoveIds: definition.toolRemoveIds
   }
 }
 
@@ -103,7 +107,7 @@ export function readExpertCatalog(): SessionExpertCatalog {
 
 /**
  * 读取能力候选与当前默认基线：技能候选分随包、产品 agent 目录、共享目录三个来源，
- * 同名技能按这个顺序只列一次；MCP 只列全局配置，
+ * 同名技能按这个顺序只列一次；MCP 只列全局配置；工具候选来自随包清单的工具声明；
  * 基线文件缺失或损坏时按「不限制」回退，并在 UI 上仍能保存成新值。
  */
 export function readExpertCapabilities(): ExpertCapabilities {
@@ -127,7 +131,11 @@ export function readExpertCapabilities(): ExpertCapabilities {
   }
   const mcpServers: ExpertMcpCandidate[] = readConfiguredMcpServers()
     .map(server => ({ name: server.name, scope: 'global' as const, enabled: server.enabled }))
-  return { skills, mcpServers, defaults: readExpertCapabilityDefaults(getPiAgentDir()) }
+  // 工具候选按清单顺序给出：`required` 即受保护标记，设置页据此禁止取消。
+  const tools: ExpertToolCandidate[] = bundle.tools.map(item => ({
+    name: item.name, summary: item.summary, required: item.required
+  }))
+  return { skills, mcpServers, tools, defaults: readExpertCapabilityDefaults(getPiAgentDir()) }
 }
 
 /**

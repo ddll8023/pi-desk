@@ -30,6 +30,7 @@ import type {
 } from '../../shared/experts-api'
 import { agentResourcesDirectory } from '../../shared-process/agent-resources'
 import { writeExpertCapabilityDefaults } from '../../shared-process/expert-capability-defaults'
+import { PROTECTED_EXPERT_TOOLS } from '../../shared/expert-capability'
 import { handle, isTrustedCaller } from '../ipc/dispatch'
 import { getSdkHostDirectory } from '../shared/pi-cli-process'
 import { getPiAgentDir } from '../shared/pi-paths'
@@ -128,6 +129,10 @@ export function registerExpertHandlers(pageUrl: string): void {
         mcpServerIds: request.mcpServerIds,
         mcpAddIds: request.mcpAddIds,
         mcpRemoveIds: request.mcpRemoveIds,
+        toolsMode: request.toolsMode,
+        toolIds: request.toolIds,
+        toolAddIds: request.toolAddIds,
+        toolRemoveIds: request.toolRemoveIds,
         body: request.body,
         availableSkillIds: skillContext.availableSkillIds,
         subAgentOnlySkillIds: skillContext.subAgentOnlySkillIds,
@@ -137,7 +142,7 @@ export function registerExpertHandlers(pageUrl: string): void {
     }
   )
 
-  /** 能力候选：技能、全局 MCP 服务器与当前默认基线；页面不开会话也能勾选。 */
+  /** 能力候选：技能、全局 MCP 服务器、工具与当前默认基线；页面不开会话也能勾选。 */
   handle(
     EXPERTS_CAPABILITIES_CHANNEL,
     (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<ExpertCapabilitiesResult> => {
@@ -168,7 +173,24 @@ export function registerExpertHandlers(pageUrl: string): void {
       if (args.length !== 1 || !isExpertSaveDefaultsRequest(args[0])) {
         return Promise.resolve({
           ok: false,
-          error: { code: 'INVALID_REQUEST', message: '默认能力只能包含技能标识与 MCP 服务器名两份列表（null 表示不限制）。' }
+          error: {
+            code: 'INVALID_REQUEST',
+            message: '默认能力只能包含技能标识、MCP 服务器名与工具名三份列表（null 表示不限制）。'
+          }
+        })
+      }
+      // 受保护工具由技能门禁、执行模式与记忆组依赖；基线是继承源，缺项等于默认排除它们。
+      const defaultsRequest = args[0]
+      const missingProtected = defaultsRequest.tools === null
+        ? []
+        : PROTECTED_EXPERT_TOOLS.filter(name => !defaultsRequest.tools?.includes(name))
+      if (missingProtected.length > 0) {
+        return Promise.resolve({
+          ok: false,
+          error: {
+            code: 'INVALID_REQUEST',
+            message: `这些工具必须保留在默认能力里：${missingProtected.join('、')}。`
+          }
         })
       }
       try {

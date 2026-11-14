@@ -31,7 +31,9 @@ export interface SubAgentWorkerConfig {
   readonly agentDir: string
 }
 
-const TOOL_NAME = 'delegate_subagent'
+/** 委派工具名：宿主按专家工具范围裁剪激活集合时也用它，避免两边各写一份字符串。 */
+export const DELEGATION_TOOL_NAME = 'delegate_subagent'
+const TOOL_NAME = DELEGATION_TOOL_NAME
 const TASK_TYPES = ['query', 'research', 'review', 'document'] as const
 type TaskType = typeof TASK_TYPES[number]
 

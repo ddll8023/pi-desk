@@ -61,16 +61,19 @@ export function toSelectionFields(input: {
 }
 
 /**
- * 一行候选的状态文案：不可用优先；`only` 模式勾选本身已说明状态，不再重复；
- * 继承模式要能看出哪些是基线默认、哪些被手动加减。
+ * 一行候选的状态文案：不可用优先；受保护工具单独标「必需」（不可取消）；
+ * `only` 模式勾选本身已说明状态，不再重复；继承模式要能看出哪些是基线默认、哪些被手动加减。
  */
 export function selectionState(input: {
   readonly unavailable: boolean
   readonly mode: CapabilitySelectionMode
   readonly checked: boolean
   readonly inBaseline: boolean
+  /** 受保护项：范围里始终保留，界面不得取消。 */
+  readonly required?: boolean
 }): string {
   if (input.unavailable) return '当前不可用'
+  if (input.required === true) return '必需'
   if (input.mode === 'only') return ''
   if (input.inBaseline) return input.checked ? '基线默认' : '已排除'
   return input.checked ? '额外启用' : '未启用'

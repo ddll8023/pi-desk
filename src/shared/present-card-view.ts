@@ -52,6 +52,8 @@ export interface PresentCardCapability {
   readonly skillIds: readonly string[]
   readonly mcpMode: ExpertCapabilityMode
   readonly mcpServerIds: readonly string[]
+  readonly toolsMode: ExpertCapabilityMode
+  readonly toolIds: readonly string[]
 }
 
 /** 一份卡片载荷；`body` 只在界面展示，不进入模型可见的工具结果文本。 */
@@ -103,16 +105,25 @@ function parseIdList(value: unknown): readonly string[] | null {
   return ids
 }
 
-/** 能力段：缺省为 null（按继承基线处理）；给了就必须两个维度齐全且模式可识别。 */
+/**
+ * 能力段：缺省为 null（按继承基线处理）；给了就必须维度齐全且模式可识别。
+ * 工具维度允许缺省：旧卡片没有这一段，按「继承默认」补齐，不因此把整张卡片判为不合规。
+ */
 function parseCapability(value: unknown): PresentCardCapability | null | 'invalid' {
   if (value === null || value === undefined) return null
   if (!isRecord(value)) return 'invalid'
   const { skillsMode, skillIds, mcpMode, mcpServerIds } = value
   if (!isExpertCapabilityMode(skillsMode) || !isExpertCapabilityMode(mcpMode)) return 'invalid'
+  const toolsMode = value.toolsMode ?? 'inherit'
+  if (!isExpertCapabilityMode(toolsMode)) return 'invalid'
   const parsedSkills = parseIdList(skillIds)
   const parsedMcp = parseIdList(mcpServerIds)
-  if (parsedSkills === null || parsedMcp === null) return 'invalid'
-  return { skillsMode, skillIds: parsedSkills, mcpMode, mcpServerIds: parsedMcp }
+  const parsedTools = parseIdList(value.toolIds ?? [])
+  if (parsedSkills === null || parsedMcp === null || parsedTools === null) return 'invalid'
+  return {
+    skillsMode, skillIds: parsedSkills, mcpMode, mcpServerIds: parsedMcp,
+    toolsMode, toolIds: parsedTools
+  }
 }
 
 function parseAction(value: unknown): PresentCardAction | null {

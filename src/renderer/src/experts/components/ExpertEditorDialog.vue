@@ -2,9 +2,10 @@
   专家编辑对话框：新建或修改一份自定义专家（身份、能力范围、正文）。
 
   表单由本对话框持有，保存交给专家 store：成功后由 store 关闭并重读清单，失败时保留已填内容并就地展示原因。
-  能力范围分技能与 MCP 两个维度，各有「继承默认」与「仅用选中」两种口径；继承时只记录相对默认基线的增减，
-  不用每次从零勾选，也随默认基线统一调整。两个维度都按 3 列勾选格呈现，格内右槽标出状态（基线默认／已排除等），
+  能力范围分技能、MCP 与工具三个维度，各有「继承默认」与「仅用选中」两种口径；继承时只记录相对默认基线的增减，
+  不用每次从零勾选，也随默认基线统一调整。三个维度都按 3 列勾选格呈现，格内右槽标出状态（基线默认／已排除／必需等），
   title 里同时带标识与来源；引用数量不设上限。
+  工具维度里技能门禁、待办清单与记忆工具属受保护项：勾选格锁定，保存时也不会被排除。
   技能候选来自随包、产品目录与共享目录，MCP 只列全局配置；
   项目自带技能属于工作区，不受专家范围限制，因此在候选列表外单独说明。
   定义里引用但当前不可用的项仍列出来，避免一次编辑把它们静默丢掉。
@@ -31,12 +32,13 @@ const emit = defineEmits<{
   cancel: []
 }>()
 
-/** 能力候选行：来源用于标注，`unavailable` 表示定义引用了但当前环境里没有，`state` 是行尾的差异标记。 */
+/** 能力候选行：来源用于标注，`unavailable` 表示定义引用了但当前环境里没有，`state` 是行尾的差异标记，`locked` 是不可取消。 */
 interface CapabilityRow {
   readonly id: string
   readonly label: string
   readonly unavailable: boolean
   readonly state: string
+  readonly locked?: boolean
 }
 
 
@@ -49,16 +51,19 @@ let opener: HTMLElement | null = null
 const displayName = ref('')
 const summary = ref('')
 const body = ref('')
-/** 技能与 MCP 的范围口径；默认继承基线，只记录相对基线的增减。 */
+/** 技能、MCP 与工具的范围口径；默认继承基线，只记录相对基线的增减。 */
 const skillsMode = ref<'inherit' | 'only'>('inherit')
 const mcpMode = ref<'inherit' | 'only'>('inherit')
+const toolsMode = ref<'inherit' | 'only'>('inherit')
 const selectedSkills = ref<readonly string[]>([])
 const selectedMcp = ref<readonly string[]>([])
+const selectedTools = ref<readonly string[]>([])
 /** 继承模式下保留的旧提示列表（`skills:` 字段），保存时原样回传，不因一次编辑被洗掉。 */
 const hintSkillIds = ref<readonly string[]>([])
-/** 定义里出现过的技能与服务器：用于把当前不可用的引用也列出来。 */
+/** 定义里出现过的技能、服务器与工具：用于把当前不可用的引用也列出来。 */
 const referencedSkillIds = ref<readonly string[]>([])
 const referencedMcpNames = ref<readonly string[]>([])
+const referencedToolNames = ref<readonly string[]>([])
 const loading = ref(false)
 const loadError = ref<string | null>(null)
 const saveError = ref<string | null>(null)
@@ -70,9 +75,14 @@ const capabilityError = computed(() => store.capabilitiesError)
 const capabilityReady = computed(() => store.capabilities !== null)
 const allSkillIds = computed(() => (store.capabilities?.skills ?? []).map(item => item.id))
 const allMcpNames = computed(() => (store.capabilities?.mcpServers ?? []).map(item => item.name))
-/** 默认基线的两个维度；`null` 表示不限制，等于全部候选。 */
+const allToolNames = computed(() => (store.capabilities?.tools ?? []).map(item => item.name))
+/** 受保护工具：候选里标「必需」，勾选保持且不能取消，与主进程保存校验同一套标准。 */
+const requiredToolNames = computed(() => (store.capabilities?.tools ?? [])
+  .filter(item => item.required).map(item => item.name))
+/** 默认基线的三个维度；`null` 表示不限制，等于全部候选。 */
 const baselineSkills = computed(() => store.capabilities?.defaults.skills ?? null)
 const baselineMcp = computed(() => store.capabilities?.defaults.mcpServers ?? null)
+const baselineTools = computed(() => store.capabilities?.defaults.tools ?? null)
 
 const skillRows = computed<CapabilityRow[]>(() => {
   const rows: Omit<CapabilityRow, 'state'>[] = (store.capabilities?.skills ?? []).map(item => ({
@@ -118,6 +128,29 @@ const mcpRows = computed<CapabilityRow[]>(() => {
   }))
 })
 
+/** 工具行：受保护候选带 `locked`，其余与另两个维度同一套状态文案。 */
+const toolRows = computed<CapabilityRow[]>(() => {
+  const rows: Omit<CapabilityRow, 'state'>[] = (store.capabilities?.tools ?? []).map(item => ({
+    id: item.name, label: item.summary, unavailable: false, locked: item.required
+  }))
+  const known = new Set(rows.map(row => row.id))
+  for (const name of referencedToolNames.value) {
+    if (known.has(name)) continue
+    known.add(name)
+    rows.push({ id: name, label: '当前不可用', unavailable: true })
+  }
+  return rows.map(row => ({
+    ...row,
+    state: selectionState({
+      unavailable: row.unavailable,
+      mode: toolsMode.value,
+      checked: selectedTools.value.includes(row.id),
+      inBaseline: baselineOf('tools').includes(row.id),
+      required: row.locked === true
+    })
+  }))
+})
+
 const canSave = computed(() => !saving.value
   && displayName.value.trim() !== ''
   && summary.value.trim() !== ''
@@ -126,13 +159,14 @@ const canSave = computed(() => !saving.value
   && !(skillsMode.value === 'only' && selectedSkills.value.length === 0))
 
 /** 基线展开后的集合：用于判断某一行是「基线默认」还是被手动改动过。 */
-function baselineOf(dimension: 'skills' | 'mcp'): readonly string[] {
+function baselineOf(dimension: 'skills' | 'mcp' | 'tools'): readonly string[] {
+  if (dimension === 'tools') return baseIds(baselineTools.value, allToolNames.value)
   return dimension === 'skills'
     ? baseIds(baselineSkills.value, allSkillIds.value)
     : baseIds(baselineMcp.value, allMcpNames.value)
 }
 
-/** 勾满时只说结论，部分选中才给数量；两个维度同一口径。 */
+/** 勾满时只说结论，部分选中才给数量；三个维度同一口径。 */
 function selectionCount(rows: readonly CapabilityRow[], selected: readonly string[]): string {
   const total = rows.length
   if (total === 0) return ''
@@ -148,6 +182,10 @@ function selectAllMcp(): void {
   selectedMcp.value = mcpRows.value.map(row => row.id)
 }
 
+function selectAllTools(): void {
+  selectedTools.value = toolRows.value.map(row => row.id)
+}
+
 /** 清空表单：能力勾选回到默认基线，不残留上一次编辑的痕迹。 */
 function resetForm(): void {
   displayName.value = ''
@@ -155,11 +193,16 @@ function resetForm(): void {
   body.value = ''
   skillsMode.value = 'inherit'
   mcpMode.value = 'inherit'
+  toolsMode.value = 'inherit'
   hintSkillIds.value = []
   referencedSkillIds.value = []
   referencedMcpNames.value = []
+  referencedToolNames.value = []
   selectedSkills.value = [...baseIds(baselineSkills.value, allSkillIds.value)]
   selectedMcp.value = [...baseIds(baselineMcp.value, allMcpNames.value)]
+  selectedTools.value = [...new Set([
+    ...baseIds(baselineTools.value, allToolNames.value), ...requiredToolNames.value
+  ])]
   loadError.value = null
   saveError.value = null
 }
@@ -168,6 +211,7 @@ function resetForm(): void {
 function applyDefinition(definition: ExpertEditableDefinition | null): void {
   skillsMode.value = definition?.skillsMode ?? 'inherit'
   mcpMode.value = definition?.mcpMode ?? 'inherit'
+  toolsMode.value = definition?.toolsMode ?? 'inherit'
   hintSkillIds.value = definition?.skillIds ?? []
   referencedSkillIds.value = definition === null
     ? []
@@ -175,6 +219,9 @@ function applyDefinition(definition: ExpertEditableDefinition | null): void {
   referencedMcpNames.value = definition === null
     ? []
     : [...definition.mcpServerIds, ...definition.mcpAddIds, ...definition.mcpRemoveIds]
+  referencedToolNames.value = definition === null
+    ? []
+    : [...definition.toolIds, ...definition.toolAddIds, ...definition.toolRemoveIds]
   selectedSkills.value = restoreSelection({
     mode: skillsMode.value,
     onlyIds: definition?.skillIds ?? [],
@@ -191,6 +238,18 @@ function applyDefinition(definition: ExpertEditableDefinition | null): void {
     baseline: baselineMcp.value,
     all: allMcpNames.value
   })
+  // 受保护工具即使定义里没写也要勾上：保存时它们不被排除，界面不补回就会出现「没勾却生效」。
+  selectedTools.value = [...new Set([
+    ...restoreSelection({
+      mode: toolsMode.value,
+      onlyIds: definition?.toolIds ?? [],
+      addIds: definition?.toolAddIds ?? [],
+      removeIds: definition?.toolRemoveIds ?? [],
+      baseline: baselineTools.value,
+      all: allToolNames.value
+    }),
+    ...requiredToolNames.value
+  ])]
 }
 
 /**
@@ -256,6 +315,12 @@ function buildRequest(): ExpertSaveRequest {
     baseline: baselineMcp.value,
     all: allMcpNames.value
   })
+  const tools = toSelectionFields({
+    mode: toolsMode.value,
+    selected: selectedTools.value,
+    baseline: baselineTools.value,
+    all: allToolNames.value
+  })
   return {
     expertId: props.expertId,
     displayName: displayName.value.trim(),
@@ -268,7 +333,11 @@ function buildRequest(): ExpertSaveRequest {
     mcpMode: mcp.mode,
     mcpServerIds: [...mcp.onlyIds],
     mcpAddIds: [...mcp.addIds],
-    mcpRemoveIds: [...mcp.removeIds]
+    mcpRemoveIds: [...mcp.removeIds],
+    toolsMode: tools.mode,
+    toolIds: [...tools.onlyIds],
+    toolAddIds: [...tools.addIds],
+    toolRemoveIds: [...tools.removeIds]
   }
 }
 
@@ -412,6 +481,30 @@ function onKeydown(event: KeyboardEvent): void {
                     @update:selected="selectedMcp = $event"
                     @select-all="selectAllMcp"
                   />
+                  <ExpertCapabilityPicker
+                    title="工具范围"
+                    group-label="工具范围"
+                    :mode="toolsMode"
+                    :selected="selectedTools"
+                    :rows="toolRows"
+                    :count-text="selectionCount(toolRows, selectedTools)"
+                    inherit-label="继承默认"
+                    only-label="仅用选中"
+                    inherit-hint="勾选记录相对默认基线的增减；标「必需」的工具始终保留。"
+                    only-hint="只用勾选的工具；标「必需」的工具不受名单影响。"
+                    search-placeholder="按名称筛选工具"
+                    empty-text="没有匹配的工具。"
+                    no-rows-text="随包清单里还没有工具声明；先重建资源再回来勾选。"
+                    :ready="capabilityReady"
+                    :disabled="saving || loading"
+                    select-all-label="全选"
+                    @update:mode="toolsMode = $event"
+                    @update:selected="selectedTools = $event"
+                    @select-all="selectAllTools"
+                  />
+                  <p class="hint-text">
+                    工具范围只影响本专家会话里可调用的工具；技能门禁、待办清单与记忆工具属必需项，不会被排除。
+                  </p>
                 </div>
 
                 <label class="block space-y-1">

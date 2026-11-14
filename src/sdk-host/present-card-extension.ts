@@ -30,6 +30,9 @@ interface CardParams {
   /** MCP 范围：同上。 */
   readonly mcp_mode?: 'inherit' | 'only'
   readonly mcp_server_ids?: readonly string[]
+  /** 工具范围：同上；受保护工具不会被排除，名单里有没有都一样。 */
+  readonly tools_mode?: 'inherit' | 'only'
+  readonly tool_ids?: readonly string[]
   readonly primary_action_id: PresentCardActionId
   readonly primary_action_label: string
   readonly secondary_action_id?: PresentCardActionId
@@ -60,13 +63,15 @@ function buildCard(params: CardParams): PresentCardView | string {
     subtitle: subtitle ?? null,
     fields: params.fields ?? [],
     body: body ?? null,
-    capability: params.skills_mode === undefined && params.mcp_mode === undefined
+    capability: params.skills_mode === undefined && params.mcp_mode === undefined && params.tools_mode === undefined
       ? null
       : {
           skillsMode: params.skills_mode ?? 'inherit',
           skillIds: params.skill_ids ?? [],
           mcpMode: params.mcp_mode ?? 'inherit',
-          mcpServerIds: params.mcp_server_ids ?? []
+          mcpServerIds: params.mcp_server_ids ?? [],
+          toolsMode: params.tools_mode ?? 'inherit',
+          toolIds: params.tool_ids ?? []
         },
     primaryAction: { id: params.primary_action_id, label: params.primary_action_label },
     secondaryAction: params.secondary_action_id === undefined
@@ -103,8 +108,9 @@ export function createPresentCardExtension(): ExtensionFactory {
       promptGuidelines: [
         '只在成果需要用户点一下才落地时使用（典型是专家定义草案）：普通说明、进度汇报与追问继续用文本。',
         'card_type 目前只有 expert.draft（专家定义草案），且必须有 title、subtitle 与 body；fields 只放需要展示的说明行，不放正文。',
-        '技能与 MCP 范围由你给出建议：skills_mode／mcp_mode 省略即继承默认基线，skill_ids 与 mcp_server_ids 是建议启用的名单；卡片会列出全部候选让用户改，你还需说明为何这样收窄。',
+        '技能、MCP 与工具范围由你给出建议：skills_mode／mcp_mode／tools_mode 省略即继承默认基线，对应名单是建议启用的项；卡片会列出全部候选让用户改，你还需说明为何这样收窄。',
         '只能引用当前候选里存在的技能，不得引用 sub-agent- 开头的子代理专用技能；仅用选中时技能名单不能为空。',
+        '工具范围里技能门禁、待办清单与记忆工具属于必需项，不得建议排除；要授予委派能力就勾上 delegate_subagent。',
         '动作只能取白名单 ID：expert.save 保存为自定义专家，copy.text 复制正文到剪贴板；不要按文案自行发明动作，也不要声称按钮会执行未登记的操作。',
         'body 不进入工具结果文本，长正文不受上下文成本影响，但仍受长度上限约束；超过上限整张卡片会被拒绝而不是截断。',
         '不要用它提交代码、命令、凭据或链接：卡片只承载纯文本与已登记动作。',
@@ -131,6 +137,10 @@ export function createPresentCardExtension(): ExtensionFactory {
           { description: 'MCP 范围口径，同上；省略按继承处理' })),
         mcp_server_ids: Type.Optional(Type.Array(Type.String({ maxLength: 64 }),
           { maxItems: PRESENT_CARD_LIMITS.capabilityIds, description: '建议启用的 MCP 服务器名' })),
+        tools_mode: Type.Optional(Type.Union([Type.Literal('inherit'), Type.Literal('only')],
+          { description: '工具范围口径，同上；省略按继承处理' })),
+        tool_ids: Type.Optional(Type.Array(Type.String({ maxLength: 64 }),
+          { maxItems: PRESENT_CARD_LIMITS.capabilityIds, description: '建议启用的工具名；必需工具不因名单缺失而被排除' })),
         primary_action_id: Type.Union(PRESENT_CARD_ACTIONS.map(action => Type.Literal(action)),
           { description: '主按钮动作 ID' }),
         primary_action_label: Type.String({ minLength: 1, maxLength: PRESENT_CARD_LIMITS.actionLabel,
