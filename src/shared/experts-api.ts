@@ -10,6 +10,9 @@ import { isExpertId } from './session-api'
 import { isExpertCapabilityMode } from './expert-capability'
 import type { ExpertCapabilityDefaults, ExpertCapabilityFields } from './expert-capability'
 
+// 契约单一来源在 expert-capability；这里转出默认能力基线类型，供渲染层组件按本模块导入。
+export type { ExpertCapabilityDefaults }
+
 /** 把内置专家复制成自定义目录下的派生副本；副本立即出现在清单里。 */
 export const EXPERTS_DERIVE_CHANNEL = 'desktop:expert-derive'
 /** 删除一份自定义专家；内置专家只读，不能通过这条通道删除。 */
