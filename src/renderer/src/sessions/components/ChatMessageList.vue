@@ -824,9 +824,10 @@ onBeforeUnmount(() => {
 
 <template>
   <section v-show="!props.hidden || pendingPrompt !== null" class="relative flex min-h-0 flex-1 flex-col bg-desk-canvas-sunken" :inert="props.hidden && pendingPrompt === null" :aria-hidden="props.hidden && pendingPrompt === null">
+    <!-- 底部留白让出浮动「回到底部」条的高度，卡片与最后一行不被它盖住。 -->
     <div
       ref="scroller"
-      class="scroll-area min-h-0 flex-1 overflow-y-auto px-4 pt-5 pb-3 sm:px-6 [overflow-anchor:none]"
+      class="scroll-area min-h-0 flex-1 overflow-y-auto px-4 pt-5 pb-12 sm:px-6 [overflow-anchor:none]"
       @scroll.passive="onScroll"
       @wheel.passive="onWheel"
       @pointerdown="onScrollerPointerDown"

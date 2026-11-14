@@ -1,6 +1,7 @@
 <!-- 会话内卡片：present_card 工具交付的载荷，按随包枚举渲染固定外壳（标题、字段、正文、能力勾选、主次按钮）。
      卡片只是数据展示与动作转发：按钮按动作 ID 调既有业务通道（保存专家走 desktop:expert-save，复制走剪贴板），
      不在渲染层拼装写入规则、不写文件；动作是否成立仍由主进程判定，失败原因就地显示。
+     所在位置由 ChatMessageItem 定为独立展示行，宽度占满消息列：不做限宽居中，也不套进执行记录面板。
      能力段的候选与默认基线来自能力候选通道，勾选换算与设置页编辑对话框共用 capability-selection 里的同一套规则。 -->
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
@@ -249,63 +250,65 @@ function applyInitialSelection(): void {
       <p v-if="card.subtitle !== null" class="present-card-subtitle">{{ card.subtitle }}</p>
     </header>
 
-    <dl v-if="card.fields.length > 0" class="present-card-fields">
-      <div v-for="field in card.fields" :key="field.label" class="present-card-field">
-        <dt>{{ field.label }}</dt>
-        <dd>{{ field.value }}</dd>
+    <div class="present-card-content">
+      <dl v-if="card.fields.length > 0" class="present-card-fields">
+        <div v-for="field in card.fields" :key="field.label" class="present-card-field">
+          <dt>{{ field.label }}</dt>
+          <dd>{{ field.value }}</dd>
+        </div>
+      </dl>
+
+      <div v-if="card.cardType === 'expert.draft'" class="present-card-capability">
+        <ExpertCapabilityPicker
+          title="技能范围"
+          group-label="技能范围"
+          :mode="skillsMode"
+          :selected="selectedSkills"
+          :rows="skillRows"
+          :count-text="selectionCount(skillRows, selectedSkills)"
+          inherit-label="继承默认"
+          only-label="仅用选中"
+          inherit-hint="勾选记录相对默认基线的增减。"
+          only-hint="只装配勾选的技能；至少保留一个。"
+          search-placeholder="按名称筛选技能"
+          empty-text="没有匹配的技能。"
+          no-rows-text="随包、产品目录与共享目录里都没有技能。"
+          :ready="capabilityReady"
+          :disabled="busy || savedExpertId !== null"
+          select-all-label="全选"
+          @update:mode="skillsMode = $event"
+          @update:selected="selectedSkills = $event"
+          @select-all="selectAllSkills"
+        />
+        <ExpertCapabilityPicker
+          title="MCP 服务器范围"
+          group-label="MCP 服务器范围"
+          :mode="mcpMode"
+          :selected="selectedMcp"
+          :rows="mcpRows"
+          :count-text="selectionCount(mcpRows, selectedMcp)"
+          inherit-label="继承默认"
+          only-label="仅用选中"
+          inherit-hint=""
+          only-hint="只连接勾选的服务器。"
+          search-placeholder="按名称筛选服务器"
+          empty-text="没有匹配的服务器。"
+          no-rows-text="全局 mcp.json 里还没有服务器。"
+          :ready="capabilityReady"
+          :disabled="busy || savedExpertId !== null"
+          select-all-label="全选"
+          @update:mode="mcpMode = $event"
+          @update:selected="selectedMcp = $event"
+          @select-all="selectAllMcp"
+        />
       </div>
-    </dl>
-
-    <div v-if="card.cardType === 'expert.draft'" class="present-card-capability">
-      <ExpertCapabilityPicker
-        title="技能范围"
-        group-label="技能范围"
-        :mode="skillsMode"
-        :selected="selectedSkills"
-        :rows="skillRows"
-        :count-text="selectionCount(skillRows, selectedSkills)"
-        inherit-label="继承默认"
-        only-label="仅用选中"
-        inherit-hint="勾选记录相对默认基线的增减。"
-        only-hint="只装配勾选的技能；至少保留一个。"
-        search-placeholder="按名称筛选技能"
-        empty-text="没有匹配的技能。"
-        no-rows-text="随包、产品目录与共享目录里都没有技能。"
-        :ready="capabilityReady"
-        :disabled="busy || savedExpertId !== null"
-        select-all-label="全选"
-        @update:mode="skillsMode = $event"
-        @update:selected="selectedSkills = $event"
-        @select-all="selectAllSkills"
-      />
       <p v-if="skillsEmpty" class="present-card-error" role="alert">「仅用选中」时至少要保留一个技能。</p>
-      <ExpertCapabilityPicker
-        title="MCP 服务器范围"
-        group-label="MCP 服务器范围"
-        :mode="mcpMode"
-        :selected="selectedMcp"
-        :rows="mcpRows"
-        :count-text="selectionCount(mcpRows, selectedMcp)"
-        inherit-label="继承默认"
-        only-label="仅用选中"
-        inherit-hint=""
-        only-hint="只连接勾选的服务器。"
-        search-placeholder="按名称筛选服务器"
-        empty-text="没有匹配的服务器。"
-        no-rows-text="全局 mcp.json 里还没有服务器。"
-        :ready="capabilityReady"
-        :disabled="busy || savedExpertId !== null"
-        select-all-label="全选"
-        @update:mode="mcpMode = $event"
-        @update:selected="selectedMcp = $event"
-        @select-all="selectAllMcp"
-      />
-    </div>
 
-    <details v-if="hasBody" class="present-card-body" @toggle="onToggle">
-      <summary>查看正文</summary>
-      <pre class="present-card-body-text">{{ card.body }}</pre>
-    </details>
+      <details v-if="hasBody" class="present-card-body" @toggle="onToggle">
+        <summary>查看正文</summary>
+        <pre class="present-card-body-text">{{ card.body }}</pre>
+      </details>
+    </div>
 
     <div class="present-card-actions">
       <button
@@ -329,14 +332,13 @@ function applyInitialSelection(): void {
 </template>
 
 <style scoped>
-/* 外壳固定：场景只换标题、字段、正文、能力段与按钮文案，视觉与留白不随场景分叉。 */
+/* 外壳固定：场景只换标题、字段、正文、能力段与按钮文案，视觉与留白不随场景分叉。
+   位置与宽度由消息列决定：卡片是成果，占满整列，不靠限宽居中。 */
 .present-card {
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
   width: 100%;
-  max-width: 44rem;
-  padding: 0.75rem 0.875rem;
+  overflow: hidden;
   border: 1px solid var(--color-desk-line);
   border-radius: var(--radius-desk-md);
   background: var(--color-desk-surface);
@@ -344,45 +346,63 @@ function applyInitialSelection(): void {
 .present-card-head {
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
+  gap: 0.125rem;
+  padding: 0.625rem 0.875rem;
+  border-bottom: 1px solid var(--color-desk-line);
+  background: var(--color-desk-panel);
 }
 .present-card-title {
   margin: 0;
   font-size: 0.875rem;
   font-weight: 600;
+  line-height: 1.4;
   color: var(--color-desk-ink);
 }
 .present-card-subtitle {
   margin: 0;
   font-size: 0.75rem;
+  line-height: 1.5;
   color: var(--color-desk-muted);
 }
-.present-card-fields {
+.present-card-content {
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
+  gap: 0.75rem;
+  padding: 0.75rem 0.875rem;
+}
+.present-card-fields {
+  display: grid;
+  grid-template-columns: 5.5rem minmax(0, 1fr);
+  column-gap: 0.75rem;
+  row-gap: 0.375rem;
   margin: 0;
   font-size: 0.75rem;
 }
+/* 行包装盒不参与布局，让 dt / dd 直接对齐到两列网格。 */
 .present-card-field {
-  display: flex;
-  gap: 0.5rem;
+  display: contents;
 }
 .present-card-field dt {
-  flex: 0 0 auto;
-  min-width: 5rem;
   color: var(--color-desk-muted);
+  line-height: 1.6;
 }
 .present-card-field dd {
   margin: 0;
   color: var(--color-desk-ink);
+  line-height: 1.6;
   overflow-wrap: anywhere;
 }
 .present-card-capability {
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
-  padding-top: 0.25rem;
+  gap: 0.625rem;
+  padding: 0.625rem;
+  border-radius: var(--radius-desk-sm);
+  background: var(--color-desk-panel);
+}
+/* 技能与 MCP 两段之间只留一条分隔线，不叠外边距。 */
+.present-card-capability > * + * {
+  padding-top: 0.625rem;
   border-top: 1px solid var(--color-desk-line);
 }
 .present-card-body {
@@ -406,22 +426,27 @@ function applyInitialSelection(): void {
 }
 .present-card-body-text {
   margin: 0.375rem 0 0;
-  padding: 0.5rem;
-  max-height: 18rem;
+  padding: 0.5rem 0.625rem;
+  max-height: 20rem;
   overflow: auto;
   border-radius: var(--radius-desk-sm);
   background: var(--color-desk-panel);
   color: var(--color-desk-ink);
   font-family: var(--font-mono);
   font-size: 0.75rem;
+  line-height: 1.7;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 .present-card-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.5rem;
+  padding: 0.625rem 0.875rem;
+  border-top: 1px solid var(--color-desk-line);
 }
 .present-card-button {
+  min-height: 1.75rem;
   padding: 0.25rem 0.75rem;
   border: 1px solid var(--color-desk-line);
   border-radius: var(--radius-desk-sm);
@@ -429,6 +454,7 @@ function applyInitialSelection(): void {
   color: var(--color-desk-ink);
   font: inherit;
   font-size: 0.75rem;
+  line-height: 1.4;
   cursor: pointer;
   transition: background-color 120ms ease, border-color 120ms ease;
 }
@@ -447,13 +473,25 @@ function applyInitialSelection(): void {
 }
 .present-card-notice {
   margin: 0;
+  padding: 0 0.875rem 0.625rem;
   font-size: 0.75rem;
   color: var(--color-desk-muted);
 }
 .present-card-error {
   margin: 0;
+  padding: 0 0.875rem 0.625rem;
   font-size: 0.75rem;
   color: var(--color-desk-danger);
+}
+/* 窄容器下字段改为纵向堆叠，标签与值不抢固定列宽。 */
+@media (max-width: 640px) {
+  .present-card-fields {
+    grid-template-columns: minmax(0, 1fr);
+    row-gap: 0.125rem;
+  }
+  .present-card-field dd {
+    margin-bottom: 0.375rem;
+  }
 }
 @media (prefers-reduced-motion: reduce) {
   .present-card-button {

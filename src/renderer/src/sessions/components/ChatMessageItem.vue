@@ -3,6 +3,7 @@
      过程块逐项展示：每段 Thinking 折叠成带思维图标与状态胶囊的轻量抽屉（生成中展开微光流动并跟随最新思考，结束后收起），正文按原位置展示并支持流式呼吸打字光标。
      工具调用按块相邻关系归组：连续出现的工具调用合成一个「执行记录」面板，面板内每条仍是一张独立折叠的 ToolCard；
      单条工具不套面板，Thinking 与正文都是分组分界，不会被归进工具面板。
+     交付卡片的调用不归组、不进面板：卡片是成果，按消息列铺满展示在所属工具组之后，也不计入面板的调用统计。
      用户消息下方使用细线图标操作栏（回退、复制、修改），AI 回复底部只保留整条回复的复制入口；回退与修改后的重新发送由父级执行。
      早期轮次的整体收起由 ChatTurnItem 负责，这里只表达单条消息内部每项自己的开合；同一轮内的非首条 AI 消息用紧凑表头，不重复 π 标记与角色名。
      卡片的手动展开只上报 `userExpand`：消息列表据此停止粘底，展开的内容从摘要行下面长出来而不是把摘要行顶走；收起不上报。 -->
@@ -11,6 +12,7 @@ import { computed, onUnmounted, reactive, ref, useId, watch } from 'vue'
 import { copyText } from '../../ui/clipboard'
 import { userMessagePayload } from '../chat-view'
 import type { ChatBlock, ChatMessageView, ChatToolBlock } from '../chat-view'
+import type { PresentCardView } from '../../../../shared/present-card-view'
 import type { HistoryChunk } from '../../../../shared/runtime-api'
 import { historyChunkKey } from '../stores/runtime'
 import type { HistoryChunkLoadState } from '../stores/runtime'
@@ -140,13 +142,15 @@ const skillOverrides = reactive(new Map<string, boolean>())
 const isUser = computed(() => props.message.role === 'user')
 
 /**
- * 一条展示行：单个块，或一组相邻的工具调用。
+ * 一条展示行：单个块、一组相邻的工具调用，或一张交付卡片。
  * 归组只发生在连续的工具调用之间；Thinking 与正文都是分界，
  * 因此收起或展开一个工具不会连带收起任何其它内容。
+ * 交付卡片的工具调用单独成行：卡片是成果而不是执行记录，不能套进「执行记录」面板。
  */
 type DisplayRow =
   | { readonly kind: 'block'; readonly block: ChatBlock }
   | { readonly kind: 'tools'; readonly key: string; readonly blocks: readonly ChatToolBlock[] }
+  | { readonly kind: 'card'; readonly key: string; readonly block: ChatToolBlock; readonly card: PresentCardView }
 
 /**
  * 归组键：优先用组内各调用的 `toolCallId`，而不是首个块的 `key`。
@@ -163,10 +167,19 @@ const displayRows = computed<readonly DisplayRow[]>(() => {
   const rows: DisplayRow[] = []
   let group: ChatToolBlock[] = []
   const flush = (): void => {
-    const first = group[0]
+    // 交付卡片的调用先从组里摘出：它们不进面板，也不参与面板的调用计数。
+    const tools: ChatToolBlock[] = []
+    const cards: DisplayRow[] = []
+    for (const block of group) {
+      const card = block.execution?.card ?? null
+      if (card === null) tools.push(block)
+      else cards.push({ kind: 'card', key: block.key, block, card })
+    }
+    const first = tools[0]
     // 单条工具不套面板：面板只在真有多条相邻调用时才有归组价值。
-    if (first !== undefined && group.length === 1) rows.push({ kind: 'block', block: first })
-    else if (first !== undefined) rows.push({ kind: 'tools', key: groupKey(group), blocks: group })
+    if (first !== undefined && tools.length === 1) rows.push({ kind: 'block', block: first })
+    else if (first !== undefined) rows.push({ kind: 'tools', key: groupKey(tools), blocks: tools })
+    rows.push(...cards)
     group = []
   }
   for (const block of props.message.blocks) {
@@ -509,7 +522,7 @@ function onEditKeydown(event: KeyboardEvent): void {
 
     <!-- 响应过程逐项展示：每段思考各自折叠成一行，正文按原位置排在各块之间；
          连续的工具调用归入一个执行记录面板，单条工具仍是一张独立折叠卡。 -->
-    <template v-for="row in displayRows" :key="row.kind === 'tools' ? row.key : row.block.key">
+    <template v-for="row in displayRows" :key="row.kind === 'block' ? row.block.key : row.key">
       <!-- 工具组：面板只提供归组与统计，组内每条仍是一张独立折叠的 ToolCard。 -->
       <section v-if="row.kind === 'tools'" class="execution-panel" aria-label="工具执行记录">
         <div class="execution-panel-head">
@@ -517,11 +530,8 @@ function onEditKeydown(event: KeyboardEvent): void {
           <span class="execution-panel-stats">{{ groupStats(row.blocks) }}</span>
         </div>
         <template v-for="block in row.blocks" :key="block.key">
-          <template v-if="block.execution && block.execution.card">
-            <PresentCard :card="block.execution.card" @user-expand="emit('userExpand')" />
-          </template>
           <SubAgentCard
-            v-else-if="(block.execution?.subAgents.length ?? 0) > 0"
+            v-if="(block.execution?.subAgents.length ?? 0) > 0"
             :views="block.execution?.subAgents ?? []"
             @user-expand="emit('userExpand')"
           />
@@ -540,6 +550,12 @@ function onEditKeydown(event: KeyboardEvent): void {
           />
         </template>
       </section>
+      <!-- 交付卡片：成果按消息列铺满展示，不并入执行记录面板，也不参与其统计。 -->
+      <PresentCard
+        v-else-if="row.kind === 'card'"
+        :card="row.card"
+        @user-expand="emit('userExpand')"
+      />
       <template v-else>
         <details
           v-if="row.block.kind === 'thinking'"
@@ -583,13 +599,10 @@ function onEditKeydown(event: KeyboardEvent): void {
             <p v-if="row.block.truncated && chunksFor(row.block).length === 0" class="tool-note">此内容超出展示上限，已截断。</p>
           </div>
         </details>
-        <!-- 交付了卡片的工具调用直接渲染卡片；交付子任务的渲染子代理卡片；其余工具仍走通用 ToolCard。 -->
+        <!-- 交付了子任务的渲染子代理卡片；其余工具仍走通用 ToolCard（交付卡片的调用已单列为卡片行）。 -->
         <template v-else-if="row.block.kind === 'toolcall'">
-          <template v-if="row.block.execution && row.block.execution.card">
-            <PresentCard :card="row.block.execution.card" @user-expand="emit('userExpand')" />
-          </template>
           <SubAgentCard
-            v-else-if="(row.block.execution?.subAgents.length ?? 0) > 0"
+            v-if="(row.block.execution?.subAgents.length ?? 0) > 0"
             :views="row.block.execution?.subAgents ?? []"
             @user-expand="emit('userExpand')"
           />

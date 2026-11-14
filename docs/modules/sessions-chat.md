@@ -106,15 +106,15 @@
 | `src/renderer/src/sessions/components/PromptImageMaterials.vue` | 输入坞内图片附件行：导入、移除、缩略图与独立标注按钮双入口、标注数量展示 |
 | `src/renderer/src/sessions/components/ImageAnnotationPanel.vue` | 左图右说明的独立标注面板、编号双向定位、同步删除与键盘调整入口 |
 | `src/renderer/src/sessions/components/ImageAnnotationCanvas.vue` | 共用原图坐标系的编号与点框叠加层，支持编辑及桌面／手机只读展示，不修改图片像素 |
-| `src/renderer/src/sessions/components/ChatMessageList.vue` | 本地待发送／结果未确认状态及绑定图片标注展示、权威消息交接、历史加载、滚动与布局观察；发布对话跳转入口并消费顶部栏定位意图；承接工作树隔离任务横幅挂载 |
+| `src/renderer/src/sessions/components/ChatMessageList.vue` | 本地待发送／结果未确认状态及绑定图片标注展示、权威消息交接、历史加载、滚动与布局观察（底部留白让出浮动「回到底部」条）；发布对话跳转入口并消费顶部栏定位意图；承接工作树隔离任务横幅挂载 |
 | `src/renderer/src/sessions/components/TaskRunningBorder.vue` | 原版 Lancer SVG 流动运行边框的 Vue 挂载层：在会话处理当前请求、未等待扩展提问时提供非侵入视觉反馈，离屏与减少动态效果时停用 |
 | `src/renderer/src/sessions/components/ChatTurnItem.vue` | 按轮摘要、展开与原文内容、多分支切换，同轮连续的纯过程消息统一收纳为单行工作过程摘要，运行中接入 SVG 运行边框，结束后默认收起以突出最终回答正文 |
 | `src/renderer/src/sessions/components/TurnBranchSwitcher.vue` | 轮次多分支微型切换器（`‹ 1 / 2 ›`） |
 | `src/renderer/src/sessions/components/WorktreeTaskBanner.vue` | 任务工作区状态底栏、固定目标与审阅合并（支持 Squash 与自动清理）、运行终端关闭确认与放弃删除流程 |
-| `src/renderer/src/sessions/components/ChatMessageItem.vue` | 单消息、图片编号及说明、思考抽屉、纯过程紧凑步骤、流式打字光标与工具归组面板 |
+| `src/renderer/src/sessions/components/ChatMessageItem.vue` | 单消息、图片编号及说明、思考抽屉、纯过程紧凑步骤、流式打字光标与工具归组面板；交付卡片的调用单列为卡片行（不进面板、不计入面板统计） |
 | `src/renderer/src/sessions/components/HistoryLoadSentinel.vue` | 历史加载触发哨兵 |
 | `src/renderer/src/sessions/components/ToolCard.vue` | 单行紧凑展示操作分类徽章、真实工具名、语境化参数与状态耗时胶囊；展开区展示结构化结果卡片、Diff 与调试抽屉，原文按需展开 |
-| `src/renderer/src/sessions/components/PresentCard.vue` | 会话内卡片：按固定外壳展示标题、字段、能力勾选段、可折叠正文与主次按钮；技能与 MCP 用能力选择器列出候选（候选与基线取自能力候选通道），勾选按与编辑对话框同一套规则换算成保存字段；按钮按动作 ID 转发到既有通道（`expert.save` → 专家保存并刷新清单，`copy.text` → 剪贴板），终态与失败原因就地展示 |
+| `src/renderer/src/sessions/components/PresentCard.vue` | 会话内卡片：按固定外壳展示标题（头部带）、字段网格、能力勾选区（浅底面板）、可折叠正文与主次按钮带；占满消息列做独立展示行，不限宽居中、不套执行面板；技能与 MCP 用能力选择器列出候选（候选与基线取自能力候选通道），勾选按与编辑对话框同一套规则换算成保存字段；按钮按动作 ID 转发到既有通道（`expert.save` → 专家保存并刷新清单，`copy.text` → 剪贴板），终态与失败原因就地展示；窄容器下字段转纵向堆叠 |
 | `src/renderer/src/sessions/components/ToolResultPreview.vue` | 工具结果的计数口径、命中内容、来源、历史状态与省略提示；只展示投影，不发起额外查询 |
 | `src/renderer/src/sessions/components/UsageDetailDialog.vue` | 会话用量明细与独立的 Codex、OpenCode Go 账户额度展示、按需读取与手动刷新 |
 | `src/renderer/src/sessions/components/MemoryInjectionDialog.vue` | 记忆注入卡片：三个分段（适用偏好、常驻约定、当前项目近况）以 tab 切换，点击条目展开摘要，被截断时记录条目按 ID、画像条目按领域只读取全文 |
