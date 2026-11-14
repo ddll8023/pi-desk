@@ -114,7 +114,7 @@ DSH 生态中的 [dsh-superagent](dsh-superagent.md)（面向单个 GitHub 仓�
 
 ### 尚不能判定为“无对应”的项
 
-pi-desk 有[声明式生成式界面][p-genui]、桌面文件编辑和常驻终端；本次没有核实 DSH 是否存在与这些输入、输出及目标完全一致的产品入口，**不将未确认项判成“DSH 没有”**。尤其工具卡 presenter 不自动等于可调参数文档产品。
+pi-desk 有桌面文件编辑和常驻终端（声明式生成式界面已于 2026-11-13 整族移除，不计入差异项）；本次没有核实 DSH 是否存在与这些输入、输出及目标完全一致的产品入口，**不将未确认项判成“DSH 没有”**。尤其工具卡 presenter 不自动等于可调参数文档产品。
 
 **证据边界**：未逐项审读双方算法并做量化对比，因此不下“更快”“更安全”或输出质量更优的结论；权限机制的存在也不证明任何默认配置提供完整安全隔离。
 
@@ -127,7 +127,7 @@ pi-desk 有[声明式生成式界面][p-genui]、桌面文件编辑和常驻终�
 | 明确父子任务身份、活动归属与结果交付 | 低 | DSH 将执行、通知和子会话身份分开；pi-desk 有 SDK 宿主与投影基础，但仍需独立设计授权、取消、历史和 UI，不能以多开会话代替 |
 | 区分信任、工具审批与执行隔离 | 低 | 现有 `TrustManager` 不是沙箱；新增能力需独立策略设计及平台执行后端，影响进程启动和分发，不是多加一个确认框 |
 | 展示当前能力的来源与实际生效状态 | 高 | 现有资源页已区分预读、配置、探测和会话状态，可沿既有投影与 Vue 组件组织说明，无需引入 Cordis；不包含实现插件管理器 |
-| 将工具参数、模型结果和界面载荷分开建模 | 高 | DSH 的工具契约区分模型 Schema 与宿主展示元数据；pi-desk 的生成式界面已采用正文摘要与 `details.ui` 分流，可在现有契约上延续，不必引入新框架 |
+| 将工具参数、模型结果和界面载荷分开建模 | 高 | DSH 的工具契约区分模型 Schema 与宿主展示元数据；pi-desk 的工具结果已把模型可见摘要与结构化载荷分开承载（如委派卡片的「简短结论 + 结构化快照」），可在现有契约上延续，不必引入新框架 |
 
 后两项为**设计推断**：判断依据是双方已有契约，未量化开发耗时或运行收益。DSH 的整套插件组合与 pi-desk 的 SDK 客户端定位不同，不因可扩展就建议整体照搬。
 
@@ -148,7 +148,6 @@ pi-desk 有[声明式生成式界面][p-genui]、桌面文件编辑和常驻终�
 - [会话模块][p-session]、[`src/sdk-host/session-runtime.ts`](../../src/sdk-host/session-runtime.ts)：`SdkSessionRuntime`、`createAgentSessionServices`、`createAgentSessionRuntime` 及内置扩展工厂装配。
 - [资源模块][p-resources]、[终端模块][p-terminal]、[子代理][p-subdesign]。
 - [`src/main/trust/trust-manager.ts`](../../src/main/trust/trust-manager.ts)：`TrustManager` 的职责及沙箱排除边界。
-- [生成式界面模块][p-genui]、[`src/sdk-host/genui/tools.ts`](../../src/sdk-host/genui/tools.ts)：`GenuiToolDetails` 与模型摘要／界面载荷分离。
 - [`package.json`](../../package.json)：现有 Electron、Vue、Pi SDK 和终端依赖。
 
 [d-readme]: https://github.com/deepseek-ai/deepseek-harness/blob/master/README.md
@@ -166,5 +165,4 @@ pi-desk 有[声明式生成式界面][p-genui]、桌面文件编辑和常驻终�
 [p-session]: ../modules/sessions-chat.md
 [p-resources]: ../modules/resources-mcp.md
 [p-terminal]: ../modules/terminal-commands.md
-[p-genui]: ../modules/genui.md
 [p-subdesign]: ../modules/sub-agent.md

@@ -83,7 +83,7 @@
 | 本项目能力 | 对方对应 | 差异 |
 | --- | --- | --- |
 | **移动端远程控制** | 手机远程控制（Remote Connect / Relay） | **pi-desk** 采用轻量化局域网 HTTP 扫码直连，手机打开网页即可控制，无需公网服务器或中继服务；**OpenBitFun** 依赖中心化自部署 Relay Server + WebSocket 转发，支持跨广域网多设备接入，且移动端专门针对折叠屏单/双/三屏做了响应式适配与原生客户端。 |
-| **生成式界面 / 微应用** | Mini App 微应用生态 | **pi-desk** 的 `genui` 采用声明式 JSON 控件协议，在当前对话流中即时渲染卡片、表格、图表与参数控件，双向回填上下文；**OpenBitFun** 的 `MiniApp` 则是让 Agent 生成完整的前端应用代码（HTML/JS/CSS），在独立的 `miniapp-shell` 原生窗口进程中作为持久微应用运行，并支持分发到市场。 |
+| **生成式界面 / 微应用** | Mini App 微应用生态 | **pi-desk** 曾提供 `genui`（声明式 JSON 控件协议，在当前对话流中即时渲染卡片、表格、图表与参数控件，双向回填上下文），已于 2026-11-13 整族移除，当前无对应能力；**OpenBitFun** 的 `MiniApp` 则是让 Agent 生成完整的前端应用代码（HTML/JS/CSS），在独立的 `miniapp-shell` 原生窗口进程中作为持久微应用运行，并支持分发到市场。 |
 | **外部生态与运行时兼容** | 多生态适配器（`crates/adapters/*`） | **pi-desk** 专精于 Pi 官方 SDK 的深度集成与生命周期管理；**OpenBitFun** 在系统底层抽象了适配层，同时桥接 Pi、Claude Code、Codex、OpenCode 等外部工具规范。 |
 
 ### 无对应（本项目独有）
@@ -111,7 +111,7 @@
 | **前端技术栈** | Vue 3 + TypeScript + Pinia + Tailwind CSS v4 | React + TypeScript + Tailwind CSS |
 | **核心执行引擎** | Node.js utilityProcess 隔离的 Pi SDK 宿主 | 纯 Rust 编写的嵌入式/共享 Agent Runtime |
 | **移动端通信** | 局域网同源 HTTP / SSE 扫码直连（免部署中继） | WebSocket / HTTP 经自部署 Relay Server 中转（支持广域网） |
-| **交互式产物形态** | GenUI 声明式 JSON 控件流式渲染 | Mini App 独立 HTML/JS 应用 + 独立 Shell 窗口 |
+| **交互式产物形态** | 当前无对应形态（原 GenUI 声明式渲染已于 2026-11-13 移除） | Mini App 独立 HTML/JS 应用 + 独立 Shell 窗口 |
 
 ## 可借鉴方向
 
@@ -120,7 +120,7 @@
 | 方向 | 可行性 | 说明 |
 | --- | --- | --- |
 | **Agent Harness 协作模式分层** | **高** | 借鉴其 Minimal（即时协作）、Standard（日常规划推进）、Ultimate（复杂多 Agent 分工）的预设分层思路。pi-desk 现有 prompt 编排与会话机制完全可覆盖，有助于帮助用户在快速问答与复杂任务规划间按需切换。 |
-| **交互式产物沙箱（微应用形态）** | **中** | 在 pi-desk 现有 `genui` 声明式组件协议基础上，评估支持 Agent 交付包含独立 HTML/JS 的沙箱微应用视图（如通过受限 iframe 或 Webview 容器展示），增强轻量数据可视化与专用工具的可玩性。 |
+| **交互式产物沙箱（微应用形态）** | **中** | 原依据（pi-desk 的 `genui` 声明式组件协议）已于 2026-11-13 整族移除；若采纳，需先按新的交互产物方案重新设计（参考 `docs/present-card-design.md` 的范围），再评估支持 Agent 交付包含独立 HTML/JS 的沙箱微应用视图（如通过受限 iframe 或 Webview 容器展示），增强轻量数据可视化与专用工具的可玩性。 |
 | **跨网络多设备中继协议** | **中** | 当前 pi-desk 仅支持局域网直连。可参考 OpenBitFun 的 Relay 转发设计与端到端加密机制，未来若用户需要跨公网远程控制桌面端，可作为架构参考方案。 |
 
 ## 信息来源
@@ -131,7 +131,7 @@
 - [OpenBitFun 仓库根目录 LICENSE][obf-license] 与 [Cargo.toml][obf-cargo]
 - [OpenBitFun 仓库 API][obf-repo] 与 [Release 列表][obf-release]（核实于 2026-10-31）
 - 截图来源：[仓库截图素材目录 `png/`][obf-shots]（raw 直链，核实于 2026-11-06）
-- 本项目侧事实依据：`docs/项目结构文档.md`、`docs/modules/sessions-chat.md`、`docs/modules/workspace-tabs.md`、`docs/modules/genui.md`、`docs/modules/lan-remote.md`
+- 本项目侧事实依据：`docs/项目结构文档.md`、`docs/modules/sessions-chat.md`、`docs/modules/workspace-tabs.md`、`docs/modules/lan-remote.md`
 
 [obf-home]: https://openbitfun.com
 [obf-home-zh]: https://openbitfun.com/zh

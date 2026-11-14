@@ -86,7 +86,7 @@
 
 | 能力 | 重叠环节 | 不可视作替代的原因 |
 | --- | --- | --- |
-| 结构化交互与消除歧义 | 用户与 Agent 之间的结构化意图传递 | pi-desk 的生成式界面（GenUI）由 Agent 主动生成声明式文档让用户填写参数回填；EditHere 是由用户在已有界面截图上圈画、位移并生成结构化 JSON 反馈给 Agent。传递方向相反，不能互相替代。见[生成式界面模块][p-genui] |
+| 结构化交互与消除歧义 | 用户与 Agent 之间的结构化意图传递 | pi-desk 曾用声明式生成式界面（GenUI）由 Agent 生成文档让用户填参数回填，该能力已于 2026-11-13 整族移除；EditHere 是由用户在已有界面截图上圈画、位移并生成结构化 JSON 反馈给 Agent。传递方向相反，不能互相替代 |
 | 远程与移动访问 | 跨设备或轻量化访问 | pi-desk 内置局域网 HTTP 扫码服务，手机直接连接并访问完整会话；EditHere 网页版是单文件静态 Canvas 工具与 MCP 嵌入页，不具备会话宿主或局域网配对网络服务。见[手机访问模块][p-mobile] |
 | 视觉批注 | 点／框定位、编号意见及图片交给 AI | pi-desk 支持浏览器固定画面批注与通用图片点框标注。通用图片在独立资料区编辑编号说明，随提示词提交为 SDK 附属资料，不写入提示词；浏览器仍按原流程交付指定对话草稿。不提供图像分块、布局拖拽或 EditHere 反馈格式。见[会话图片资料][p-session]与[工作区批注][p-workspace] |
 
@@ -139,7 +139,6 @@
 - [资源与 MCP 模块][p-resources]、[`src/main/resources/ipc.ts`](../../src/main/resources/ipc.ts)：MCP 配置列举、探测与运行中会话的受限动作；连接与工具执行由实际 SDK／服务器承担。
 - [工作区批注][p-workspace]、[`src/main/browser/ipc.ts`](../../src/main/browser/ipc.ts)、[`BrowserAnnotationPanel.vue`](../../src/renderer/src/browser/components/BrowserAnnotationPanel.vue)：网页截图、元素采集、点框意见与草稿交付。
 - [会话图片资料][p-session]、[`PromptImageMaterials.vue`](../../src/renderer/src/sessions/components/PromptImageMaterials.vue)、[`src/shared/image-annotation.ts`](../../src/shared/image-annotation.ts)、[`src/sdk-host/image-annotations.ts`](../../src/sdk-host/image-annotations.ts)：通用图片导入、编号与说明绑定，以及本轮独立 SDK 资料消息。
-- [生成式界面模块][p-genui]、[`src/shared/genui-api.ts`](../../src/shared/genui-api.ts)：声明式 UI 协议与参数回填。
 - [会话模块][p-session]、[`src/main/sessions/session-manager.ts`](../../src/main/sessions/session-manager.ts)：Pi SDK 宿主与执行流。
 - [手机访问模块][p-mobile]、[`src/lan-mobile/`](../../src/lan-mobile/)：局域网 HTTP 扫码直连与受限会话。
 - [终端模块][p-terminal]、[`src/terminal-daemon/`](../../src/terminal-daemon/)：PTY 守护进程与流控。
@@ -160,7 +159,6 @@
 [eh-release]: https://api.github.com/repos/Inginnng/EditHere/releases/latest
 [eh-shots]: https://github.com/Inginnng/EditHere/tree/codex/native/assets/readme
 [p-resources]: ../modules/resources-mcp.md
-[p-genui]: ../modules/genui.md
 [p-session]: ../modules/sessions-chat.md
 [p-mobile]: ../modules/lan-remote.md
 [p-terminal]: ../modules/terminal-commands.md

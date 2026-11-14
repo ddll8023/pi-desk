@@ -77,7 +77,7 @@
 
 | 本项目能力 | Ekko Studio 对应 | 关键差异 |
 | --- | --- | --- |
-| 多会话 AI 聊天与流式渲染 | AI Chat（Socket.IO `/chat-run`） | pi-desk 深度集成 Pi SDK 宿主，主进程持有会话实例，内置声明式 GenUI 系统并支持双向参数回填；Ekko Studio 基于 Koa 服务分发至各运行时适配器，支持以卡片形态切换不同 Agent 运行时。见[会话模块][p-sessions]与[GenUI 模块][p-genui] |
+| 多会话 AI 聊天与流式渲染 | AI Chat（Socket.IO `/chat-run`） | pi-desk 深度集成 Pi SDK 宿主，主进程持有会话实例（声明式 GenUI 已于 2026-11-13 整族移除）；Ekko Studio 基于 Koa 服务分发至各运行时适配器，支持以卡片形态切换不同 Agent 运行时。见[会话模块][p-sessions] |
 | Web 终端与多会话管理 | Web Terminal（node-pty + @xterm/xterm） | pi-desk 采用独立 PTY 守护进程、会话快照与序号确认接回，且支持终端链接动作气泡（内置浏览器/系统浏览器/复制链接）；Ekko Studio 作为后台 Koa 服务内的 WebSocket 终端管道，支持远程后端（SSH/Docker/Singularity）执行。见[终端模块][p-terminal] |
 | 多模型 Provider 与凭据配置 | 模型管理（Provider & Models） | 双方均支持云端模型 Provider 凭据管理、模型列表发现与可见性配置；Ekko Studio 另外将语音（STT/TTS）Provider 并入同一管理体系。见[供应商模块][p-providers] |
 
@@ -94,7 +94,7 @@
 
 | 本项目能力 | 说明 |
 | --- | --- |
-| 声明式生成式界面（GenUI） | pi-desk 具备完整的声明式 UI 工具协议（`ui_render` / `ui_patch`，支持 11 种受限节点、可调参数控件、图表、机制图解与用户参数回填）；Ekko Studio 无等价的动态组件渲染与双向参数交互系统（仅有固定任务步骤卡片与静态文件预览）。见[GenUI 模块][p-genui] |
+| 声明式生成式界面（GenUI） | 历史差异项：pi-desk 曾提供声明式 UI 工具协议（`ui_render` / `ui_patch`，含可调参数与双向回填），已于 2026-11-13 整族移除；Ekko Studio 无等价能力（仅有固定任务步骤卡片与静态文件预览）。该行不再构成当前差异 |
 | 任务工作树物理隔离（Task Workspaces） | pi-desk 为会话、Git、终端和文件提供基于 Git worktree 的物理执行根隔离，合入与清理时联动终端安全收敛；Ekko Studio 仅按配置路径或会话目录执行，无内置 Git 工作树全生命周期编排。见[工作区标签][p-workspace] |
 
 ### 对方独有
@@ -131,7 +131,6 @@
 - 本项目侧事实依据：
   - [项目结构文档](../项目结构文档.md)
   - [会话模块](../modules/sessions-chat.md)
-  - [生成式界面模块](../modules/genui.md)
   - [终端与快捷命令模块](../modules/terminal-commands.md)
   - [工作区标签模块](../modules/workspace-tabs.md)
   - [文件与编辑器模块](../modules/files-editor.md)
@@ -143,7 +142,6 @@
 [e-arch]: https://github.com/EKKOLearnAI/ekko-studio/blob/main/ARCHITECTURE.md
 [e-readme-zh]: https://github.com/EKKOLearnAI/ekko-studio/blob/main/README_zh.md
 [p-sessions]: ../modules/sessions-chat.md
-[p-genui]: ../modules/genui.md
 [p-terminal]: ../modules/terminal-commands.md
 [p-workspace]: ../modules/workspace-tabs.md
 [p-files]: ../modules/files-editor.md
