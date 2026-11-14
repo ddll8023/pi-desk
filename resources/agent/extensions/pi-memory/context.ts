@@ -44,6 +44,8 @@ interface State {
   injection?: JsonObject | undefined
   /** 上一次写入审计的内容键：同一轮多次模型调用只留一条。 */
   lastAuditKey?: string | undefined
+  /** 本会话已读原文但尚未标注的记录 ID：读后提醒的数据源；标注提交或会话更换后清除对应项。 */
+  readUnreinforced?: string[] | undefined
 }
 /** 装配审计的段状态，与 `/memory status` 的 `background` 同源。 */
 interface InjectionSegments {
@@ -157,30 +159,30 @@ function residentRank(row: JsonObject): number {
   return text(row.type) === 'constraint' ? 0 : 1
 }
 
-/** 约定块保留条目换行；超出单条上限或没有全文时给出按 ID 读取的出口。 */
+/** 约定块块头带完整记录 ID，供模型在实际影响任务时标注；超出单条上限或没有全文时指向 memory_read。 */
 function residentBlock(row: JsonObject, full: string | undefined): string {
   const key = typeof row.rule_key === 'string' && row.rule_key ? `${row.rule_key} ` : ''
-  const head = `■ ${text(row.date)} ${text(row.type) === 'constraint' ? '约束' : '决定'} ${key}${text(row.topic)}`
+  const head = `■ ${text(row.id)} ${text(row.date)} ${text(row.type) === 'constraint' ? '约束' : '决定'} ${key}${text(row.topic)}`
   const body = (full ?? text(row.content)).replace(/\r/g, '').trim().slice(0, RESIDENT_MAX_RULE_CHARS)
   const cut = full === undefined || full.length > RESIDENT_MAX_RULE_CHARS
-  return `${head}\n${body}${cut ? `\n…（余下按 memory_read ${text(row.id)} 读）` : ''}`
+  return `${head}\n${body}${cut ? `\n…（余下按 memory_read 读全文）` : ''}`
 }
 
-/** 未展开正文的条目只留一行索引，让缺口可见而不是静默丢弃。 */
+/** 未展开正文的条目只留一行索引（同样带记录 ID），让缺口可见而不是静默丢弃。 */
 function residentIndex(row: JsonObject): string {
-  const key = typeof row.rule_key === 'string' ? row.rule_key : ''
-  return key ? `· ${key} ${text(row.topic)}` : `· ${text(row.topic)}`
+  const key = typeof row.rule_key === 'string' && row.rule_key ? `${row.rule_key} ` : ''
+  return `· ${text(row.id)} ${key}${text(row.topic)}`
 }
 
 /** 近况标签：先给类型，再给正文，避免把历史进展读成必须遵守的约定。 */
 const NOTE_LABELS: Record<string, string> = { progress: '进展', issue: '问题', fact: '事实', preference_evidence: '偏好证据' }
 
-/** 近况块只保留类型、日期、主题与有限正文；超出时给出按 ID 读取的出口。 */
+/** 近况块块头带完整记录 ID，只保留类型、日期、主题与有限正文；超出时指向 memory_read。 */
 function noteBlock(row: JsonObject): string {
   const label = NOTE_LABELS[text(row.type)] ?? '记录'
   const body = text(row.content).replace(/\r/g, '').trim()
   const cut = body.length > RESIDENT_NOTE_MAX_CHARS
-  return `■ ${text(row.date)} ${label} ${text(row.topic)}\n${body.slice(0, RESIDENT_NOTE_MAX_CHARS)}${cut ? `\n…（余下按 memory_read ${text(row.id)} 读）` : ''}`
+  return `■ ${text(row.id)} ${text(row.date)} ${label} ${text(row.topic)}\n${body.slice(0, RESIDENT_NOTE_MAX_CHARS)}${cut ? `\n…（余下按 memory_read 读全文）` : ''}`
 }
 
 /** 审计与状态用的条目身份：身份字段供核对，摘要供卡片展示，正文只留前若干字。 */
@@ -273,6 +275,28 @@ export class MemoryRuntime {
     return this.config.hostDisabledByMode
       ? '本次会话按执行模式关闭了记忆；切到标准模式后新建会话，或由用户在设置里开启'
       : '记忆已停用；先由用户明确恢复记忆'
+  }
+
+  /** 记录本会话已读原文但未标注的 ID：去重保序，供背景尾部的读后提醒使用。 */
+  markRead(state: State, ids: readonly string[]): void {
+    const known = new Set(state.readUnreinforced ?? [])
+    for (const id of ids) known.add(id)
+    state.readUnreinforced = [...known]
+  }
+
+  /** 标注事件真实提交后清除对应项；结果未确认时保留，宁可多提醒一次。 */
+  markReinforced(state: State, ids: readonly string[]): void {
+    const removed = new Set(ids)
+    state.readUnreinforced = (state.readUnreinforced ?? []).filter(id => !removed.has(id))
+  }
+
+  /** 读后提醒：读过且未标注时给一行提示；不占常驻共享预算。 */
+  private reinforceReminder(state: State): string | null {
+    const ids = state.readUnreinforced ?? []
+    if (!ids.length) return null
+    const shown = ids.slice(0, 8)
+    const suffix = ids.length > shown.length ? ` 等 ${ids.length} 条` : ''
+    return `本会话已读取但未标注的记忆：${shown.join('、')}${suffix}；其中实际影响任务结论的可按 ID 用 memory_reinforce 标注，读取本身不是标注理由。`
   }
 
   lease(ctx: ExtensionContext, signal?: AbortSignal, allowDisabled = false): Lease {
@@ -568,6 +592,7 @@ export class MemoryRuntime {
       const budgetLine = cutoff !== null
         ? `本次背景覆盖至 ${cutoff}${dropped > 0 ? `，另有 ${dropped} 条更早记录因预算未注入` : ''}。`
         : null
+      const reminder = this.reinforceReminder(lease.state)
       return [
         '以下是 pi-memory 为本次请求提供的用户级全局背景：其中用户已确认的约定用于约束本轮产出，历史条目仅供参考。',
         '不根据当前目录绑定项目、过滤记忆或读取项目本地知识。全局可检索不代表每条内容均通用。',
@@ -579,7 +604,8 @@ export class MemoryRuntime {
           ? ['【常驻约定：用户已确认，产出前核对】', pool.resident || residentNotice || ''] : []),
         ...(pool.notes || notesNotice
           ? ['【当前项目近况：历史状态，不是约定，不构成要求】', pool.notes || notesNotice || ''] : []),
-        ...(budgetLine ? [budgetLine] : [])
+        ...(budgetLine ? [budgetLine] : []),
+        ...(reminder ? [reminder] : [])
       ].filter(Boolean).join('\n')
     } catch (error) {
       lease.assert()

@@ -1,4 +1,4 @@
-/** 按需检索与受控保存工具；Memory Skill 决定何时用记忆，主动定向读取自动记独立统计，权威内容保存经写入闸门后直接提交。 */
+/** 按需检索与受控保存工具；Memory Skill 决定何时用记忆，有用性标注由模型在记忆实际影响任务时显式发起，权威内容保存经写入闸门后直接提交。 */
 import { createHash } from 'node:crypto'
 import { Type } from '@earendil-works/pi-ai'
 import type { JsonValue } from '@earendil-works/pi-ai'
@@ -15,7 +15,8 @@ const Offset = Type.Optional(Type.Integer({ minimum: 0 }))
 const Limit = Type.Optional(Type.Integer({ minimum: 1, maximum: 200 }))
 const Output = Type.Object({ ok: Type.Literal(true), data: Type.Unknown(), error: Type.Null() })
 const ReadHints = { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
-const ACCESS_NOTE = '自动技术统计仅表示主动定向读取结果已准备，不代表模型已接收、理解或采纳；不参与检索排序。'
+/** 读后提示：出现在模型刚看完记忆的时刻；读取本身不是标注理由。 */
+const REINFORCE_HINT = '以上记忆实际影响本次任务的判断或产出时，用 memory_reinforce 标注对应记录；读取或命中本身不是标注理由。'
 /** 检索范围：默认全库；非全库档在引擎侧总连同无归属的通用记录一起返回。 */
 const Scope = Type.Optional(Type.Union([Type.Literal('all'), Type.Literal('current-project'), Type.Literal('project')]))
 const ProjectArg = Type.Optional(Type.String({ minLength: 1, maxLength: 200 }))
@@ -188,6 +189,7 @@ export function registerMemoryTools(pi: ExtensionAPI, runtime: MemoryRuntime): v
         if (data.memory_scope !== 'global') throw new Error('规则返回的检索范围不一致，未展示')
         assertScoped(data, target)
         return { ...data, requested_scope: { memory_scope: 'global', scope: params.scope ?? 'all', project: target },
+          reinforce_hint: REINFORCE_HINT,
           rules: array(data.rules).map(value => {
           const row = object(value)
           if (row.status !== 'active') {
@@ -229,16 +231,17 @@ export function registerMemoryTools(pi: ExtensionAPI, runtime: MemoryRuntime): v
         return { ...data, matches,
           requested_scope: { memory_scope: 'global', mode, month: params.month ?? null, query: params.query,
             scope: params.scope ?? 'all', project: target },
+          reinforce_hint: REINFORCE_HINT,
           has_more_matches: data.has_more === true }
       })
     }
   })
   pi.registerTool({
     name: 'memory_read', label: '读取指定日记原文',
-    description: '按 1..50 个真实日记 ID 读取全局库原文，保留历史来源、状态和适用条件，不要求项目登记。成功准备结果后默认记录独立访问统计；统计失败仍返回原文及未确认状态，不代表模型实际采纳。',
+    description: '按 1..50 个真实日记 ID 读取全局库原文，保留历史来源、状态和适用条件，不要求项目登记。原文为纯读取；内容实际影响本次任务的判断或产出时，用 memory_reinforce 标注对应记录。',
     parameters: Type.Object({ ids: Type.Array(Type.String({ pattern: '^m_[0-9A-HJKMNP-TV-Z]{26}$' }), { minItems: 1, maxItems: 50 }) }, { additionalProperties: false }),
-    outputSchema: Output, annotations: { ...ReadHints, readOnlyHint: false, idempotentHint: false },
-    async execute(toolCallId, params, signal, _onUpdate, ctx) {
+    outputSchema: Output, annotations: ReadHints,
+    async execute(_id, params, signal, _onUpdate, ctx) {
       const lease = runtime.lease(ctx, signal)
       const data = await runtime.engine.read(params.ids, lease.signal)
       lease.assert()
@@ -253,52 +256,30 @@ export function registerMemoryTools(pi: ExtensionAPI, runtime: MemoryRuntime): v
         return { ...row, status: row.status ?? 'active',
           source: { store: runtime.engine.store, date: row.date, source_project: row.project_id ?? null, id: row.id } }
       })
-      const payload = { ...data, records }
-      // 先确认完整输出可返回，并预留最坏的统计错误文本；超限或旧租约不产生统计。
-      result({ ...payload, access_statistics: { status: 'unconfirmed', new_records: null,
-        duplicate_records: null, error: '\u0000'.repeat(1024), note: ACCESS_NOTE } })
-      let statistics: JsonObject
-      try {
-        const version = data.store_version
-        if (typeof version !== 'number' || !Number.isSafeInteger(version) || version < 0) throw new Error('原文来源版本无效')
-        const recorded = await runtime.engine.recordAccess(params.ids, lease.state.sessionId, toolCallId, String(version), lease.assert)
-        const added = recorded.new_records
-        const duplicate = recorded.duplicate_records
-        if (typeof added !== 'number' || !Number.isInteger(added) || added < 0
-          || typeof duplicate !== 'number' || !Number.isInteger(duplicate) || duplicate < 0
-          || added + duplicate !== new Set(params.ids).size
-          || recorded.status !== (added > 0 ? 'recorded' : 'duplicate')) throw new Error('统计返回的计数或状态不一致')
-        statistics = { status: recorded.status, new_records: added, duplicate_records: duplicate, note: ACCESS_NOTE }
-      } catch (error) {
-        // 写入后通信失败不能冒充“未写入”；不重试，也不使成功原文变成统计错误。
-        statistics = { status: 'unconfirmed', new_records: null, duplicate_records: null,
-          error: errorText(error).slice(0, 1024), note: ACCESS_NOTE }
-      }
-      lease.assert()
-      return result({ ...payload, access_statistics: statistics })
+      // 纯读取不再写统计；会话内留下「已读未标注」身份，供背景尾部的读后提醒使用。
+      runtime.markRead(lease.state, params.ids)
+      return result({ ...data, records, reinforce_hint: REINFORCE_HINT })
     }
   })
   pi.registerTool({
-    name: 'memory_access_stats', label: '查询记忆访问统计',
-    description: '按 1..50 个真实日记 ID 只读查询主动定向读取次数、去重会话数和最近读取时间，不产生访问计数。统计默认自动采集，无需配置；零次或尚未采集不表示历史上从未使用，统计不代表有用性或事实正确，也不参与排名。不初始化、修复或扫描历史。',
+    name: 'memory_reinforce', label: '标注有用记忆', exposure: 'model-only', executionMode: 'sequential',
+    description: '某条记忆的内容实际影响了本次任务的判断或产出时，用真实记录 ID 显式标注，提升后续同类任务的检索排名。每记录每会话只计一次，乘子受时间衰减与封顶约束。读取、检索命中或用户提及本身不是标注理由；不接受外部权重、时间或理由参数。只写去重事件，不改记忆正文；停用或取消时不写，提交开始后不撤销。',
     parameters: Type.Object({ ids: Type.Array(Type.String({ pattern: '^m_[0-9A-HJKMNP-TV-Z]{26}$' }), { minItems: 1, maxItems: 50 }) }, { additionalProperties: false }),
-    outputSchema: Output, annotations: ReadHints,
+    outputSchema: Output, annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
     async execute(_id, params, signal, _onUpdate, ctx) {
-      return globalRead(ctx, signal, async lease => {
-        const ids = [...new Set(params.ids)]
-        const data = await runtime.engine.accessStats(ids, lease.signal)
-        const rows = array(data.records)
-        if (data.coverage !== 'recorded_accesses_only' || data.automatic !== true || rows.length !== ids.length) {
-          throw new Error('访问统计返回的范围或数量不一致，未展示')
-        }
-        const records = rows.map((value, index) => {
-          const row = object(value)
-          if (row.id !== ids[index]) throw new Error('访问统计返回的记录身份不一致，未展示')
-          return { ...row, source: { store: runtime.engine.store, command: 'access-stats',
-            id: row.id, source_project: row.source_project ?? row.project_id ?? null, date: row.date } }
-        })
-        return { ...data, records }
-      })
+      const lease = runtime.lease(ctx, signal)
+      const recorded = await runtime.engine.reinforce(params.ids, lease.state.sessionId, lease.assert)
+      lease.assert()
+      const added = recorded.new_records
+      const duplicate = recorded.duplicate_records
+      if (typeof added !== 'number' || !Number.isInteger(added) || added < 0
+        || typeof duplicate !== 'number' || !Number.isInteger(duplicate) || duplicate < 0
+        || added + duplicate !== new Set(params.ids).size
+        || recorded.status !== (added > 0 ? 'recorded' : 'duplicate')) throw new Error('标注返回的计数或状态不一致')
+      // 事件真实提交后才清除提醒项；结果未确认时保留，宁可多提醒一次。
+      runtime.markReinforced(lease.state, params.ids)
+      return result({ status: recorded.status, new_records: added, duplicate_records: duplicate,
+        note: '标注只影响检索排名乘子，不代表事实正确；清空事件表可整体回滚' })
     }
   })
   const RecordStatus = Type.Optional(Type.Union([Type.Literal('active'), Type.Literal('resolved'), Type.Literal('archived')]))

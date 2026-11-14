@@ -31,7 +31,7 @@
         "memory_rules",
         "memory_search",
         "memory_read",
-        "memory_access_stats",
+        "memory_reinforce",
         "memory_save",
         "memory_profile_save"
       ]
@@ -87,10 +87,10 @@
   ],
   "experts": [
     {
-      "id": "news-research",
-      "entry": "experts/news-research/expert.md",
+      "id": "expert-author",
+      "entry": "experts/expert-author/expert.md",
       "files": [
-        "experts/news-research/expert.md"
+        "experts/expert-author/expert.md"
       ]
     }
   ],

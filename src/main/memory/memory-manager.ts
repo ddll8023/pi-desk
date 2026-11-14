@@ -318,7 +318,7 @@ export class MemoryManager {
 
   /**
    * 只读读取记录正文：ID 由调用方给出，只用引擎固定的 `read` 子命令。
-   * 不写库、不记录访问统计；库不存在时如实报告，不把它当成空结果。
+   * 不写库、不产生标注；库不存在时如实报告，不把它当成空结果。
    */
   async readRecords(ids: readonly string[]): Promise<MemoryReadResult> {
     let configuration: MemoryHostConfiguration
@@ -345,7 +345,7 @@ export class MemoryManager {
   }
 
   /**
-   * 按领域读取画像正文：领域是固定枚举，不提供按 ID、关键词或数量扫描的入口；不写库、不计访问统计。
+   * 按领域读取画像正文：领域是固定枚举，不提供按 ID、关键词或数量扫描的入口；不写库、不产生标注。
    * 引擎没有画像时返回空列表，不是失败——「没有画像」与「读不到」必须区分。
    */
   async readProfiles(domain: MemoryProfileDomain): Promise<MemoryProfileReadResult> {

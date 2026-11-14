@@ -276,7 +276,7 @@ export class MemoryEngine {
       let timer: ReturnType<typeof setTimeout> | undefined
       const stop = (message: string): void => {
         problem ??= new Error(message)
-        // 权威提交与单文件统计写入开始后不强杀、不重试；取消不等于撤销。
+        // 权威提交与标注事件写入开始后不强杀、不重试；取消不等于撤销。
         if (!committing) child.kill()
       }
       const abort = (): void => stop('记忆操作已取消，未提交')
@@ -303,7 +303,7 @@ export class MemoryEngine {
       child.stdin.on('error', error => { problem ??= new Error(`无法发送完整候选：${error.message}`) })
       child.on('close', code => {
         const unknown = committing === 'statistics'
-          ? '；统计提交结果未确认，未自动重试或改写权威记忆，可按记录查询统计'
+          ? '；标注提交结果未确认，未自动重试或改写权威记忆'
           : committing ? '；提交结果未确认，不得自动重试，需先读取实际记忆状态' : ''
         if (problem) { finish(new Error(problem.message + unknown)); return }
         try {
@@ -353,19 +353,15 @@ export class MemoryEngine {
     return this.run(['read', ...ids], undefined, signal)
   }
 
-  accessStats(ids: string[], signal?: AbortSignal): Promise<JsonObject> {
-    if (!ids.length || ids.length > 50 || ids.some(id => !RECORD_ID.test(id))) throw new Error('统计查询必须指定 1..50 个真实日记 ID')
-    return this.run(['access-stats', ...new Set(ids)], undefined, signal)
-  }
-
-  /** 调用身份来自宿主，不开放计数、时间或启停参数；底层 read 仍为纯读取。 */
-  recordAccess(ids: string[], sessionId: string, toolCallId: string, storeVersion: string,
-    beforeSpawn: () => void): Promise<JsonObject> {
+  /** 先取当前库版本再写标注；版本在写入前变化由引擎拒绝，不自动重试。 */
+  async reinforce(ids: string[], sessionId: string, beforeSpawn: () => void): Promise<JsonObject> {
     if (!ids.length || ids.length > 50 || ids.some(id => !RECORD_ID.test(id))
-      || !sessionId.trim() || sessionId.length > 512 || !toolCallId.trim() || toolCallId.length > 512
-      || !/^\d{1,19}$/.test(storeVersion)) throw new Error('访问统计的记录、宿主身份或来源版本无效')
-    return this.run(['access-record', '--input', '-'], {
-      ids: [...new Set(ids)], session_id: sessionId, tool_call_id: toolCallId, store_version: storeVersion
+      || !sessionId.trim() || sessionId.length > 512) throw new Error('标注的记录或会话身份无效')
+    const status = await this.status()
+    const version = status.store_version
+    if (typeof version !== 'number' || !Number.isSafeInteger(version) || version < 0) throw new Error('记忆库版本无效')
+    return this.run(['reinforce', '--input', '-'], {
+      ids: [...new Set(ids)], session_id: sessionId, store_version: String(version)
     }, undefined, 'statistics', beforeSpawn)
   }
 

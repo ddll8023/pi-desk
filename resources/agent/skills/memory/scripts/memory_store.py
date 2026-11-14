@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """用户级全局日记、画像与月度摘要的 SQLite 存储引擎，不依赖当前项目或项目登记。
 
-权威数据只有一份：`<store>/memory.db`（WAL）。记录、画像、月摘要、访问统计与待确认计划同库同事务，
+权威数据只有一份：`<store>/memory.db`（WAL）。记录、画像、月摘要、有用性标注事件与待确认计划同库同事务，
 词项作为派生数据与记录在同一事务内写入，读取不再核对原文指纹。检索保持词法（CJK 双字片段 + BM25）
-与既有打分口径，只把候选裁剪交给库内词项表。
+与既有打分口径，只把候选裁剪交给库内词项表，命中记录按标注会话数获得有界乘子。
 
 旧 Markdown 库只经 `migrate` 一次性导入；运行期不读也不写 Markdown，`export` 仅生成只读快照。
 检索默认覆盖全库，可按注册表项目收窄；时间上默认分层召回：近窗口查日记，更早月份优先用月摘要代表。
@@ -16,7 +16,7 @@ import zoneinfo
 
 DB_NAME = 'memory.db'
 # PRAGMA user_version 是唯一版本源；库内不再保留第二份可写版本号。
-STORE_VERSION = 1
+STORE_VERSION = 2
 READABLE_VERSION = STORE_VERSION
 PLAN_VERSION = 4
 TYPES = {'decision','constraint','progress','issue','fact','preference_evidence'}
@@ -43,7 +43,12 @@ SEARCH_STOPWORDS = {'的','了','是','在','和','与','我','你','如何','�
                     'the','a','an','and','or','is','are','to','of','for','in','how','what'}
 BUSY_TIMEOUT_SECONDS = 10.0
 BUSY_RETRIES = 4
-ACCESS_NOTE = '仅统计采集开始后的主动定向读取；不代表全部访问、模型接收、理解、采纳或事实正确，不参与检索排序。'
+REINFORCE_NOTE = '标注由模型在记忆实际影响当前任务后显式写入；每记录每会话计一次，只影响检索排名乘子，不代表事实正确，不影响常驻注入。'
+# 标注乘子三参数：每个独立会话标注叠加的增量、乘子封顶与衰减窗口（天）。
+# 有界乘子只调整同池排名，不压过词法相关性量级；久未复确认的标注按窗口线性回落到 1。
+REINFORCE_STEP = 0.15
+REINFORCE_MAX_BOOST = 2.0
+REINFORCE_DECAY_DAYS = 30.0
 
 # 旧 Markdown 库的标记只被 migrate 使用；运行期不再解析这些结构。
 LEGACY_SCHEMAS = ('0.2','0.3','0.4')
@@ -120,19 +125,12 @@ def db_path(root: Path) -> Path:
     return root/DB_NAME
 
 
-def access_time(value: object) -> dt.datetime:
-    if not isinstance(value,str): raise MemoryError('ACCESS_INVALID：统计时间无效')
-    parsed=dt.datetime.fromisoformat(value)
-    expect(parsed.utcoffset() is not None,'ACCESS_INVALID：统计时间缺少时区')
-    return parsed
-
-
-def access_ids(ids: object) -> list[str]:
-    """统计只接受真实日记 ID；一次调用中的重复 ID 只计一次。"""
+def reinforce_ids(ids: object) -> list[str]:
+    """标注只接受真实日记 ID；一次调用中的重复 ID 只写一次。"""
     if not isinstance(ids,list) or not 1<=len(ids)<=50:
-        raise MemoryError('访问统计须指定 1..50 个真实日记 ID')
+        raise MemoryError('标注须指定 1..50 个真实日记 ID')
     expect(all(isinstance(rid,str) and rid.startswith('m_') and ID_RE.fullmatch(rid) for rid in ids),
-           '访问统计须指定 1..50 个真实日记 ID')
+           '标注须指定 1..50 个真实日记 ID')
     return list(dict.fromkeys(ids))
 
 
@@ -169,9 +167,9 @@ CREATE TABLE summary_sources(month TEXT NOT NULL, position INTEGER NOT NULL, sou
 CREATE TABLE summary_terms(month TEXT NOT NULL, position INTEGER NOT NULL, term TEXT NOT NULL,
   tf INTEGER NOT NULL, PRIMARY KEY(month, position, term));
 CREATE INDEX summary_terms_term ON summary_terms(term);
-CREATE TABLE access_events(record_id TEXT NOT NULL, session_hash TEXT NOT NULL,
-  event_hash TEXT NOT NULL, at TEXT NOT NULL, PRIMARY KEY(record_id, session_hash, event_hash));
-CREATE INDEX access_events_record ON access_events(record_id);
+CREATE TABLE reinforce_events(record_id TEXT NOT NULL, session_hash TEXT NOT NULL,
+  at TEXT NOT NULL, PRIMARY KEY(record_id, session_hash));
+CREATE INDEX reinforce_events_record ON reinforce_events(record_id);
 CREATE TABLE plans(plan_id TEXT PRIMARY KEY, operation TEXT NOT NULL, plan_version INTEGER NOT NULL,
   created_at REAL NOT NULL, expected_change_seq INTEGER NOT NULL, payload TEXT NOT NULL);
 """
@@ -546,8 +544,32 @@ def summary_context(conn: sqlite3.Connection, tokens: set[str], month: str | Non
     return total,frequency,docs,average
 
 
-def rank_documents(total: int, frequency: dict, documents: dict, average: float, query: str) -> list[tuple[dict,float,list[str]]]:
-    """相关性先于时间与项目；不将其他项目的历史决定提升为当前规则。"""
+def reinforce_boosts(conn: sqlite3.Connection) -> dict:
+    """按记录聚合标注会话数与最近标注时间，换算有界乘子；无标注记录不在返回中，乘子视为 1。
+
+    月摘要文档没有记录身份，不乘乘子；会话数趋近封顶，超过衰减窗口后线性回落。
+    """
+    rows=conn.execute('SELECT record_id,COUNT(*) AS sessions,MAX(at) AS last_at '
+                      'FROM reinforce_events GROUP BY record_id').fetchall()
+    if not rows: return {}
+    now=dt.datetime.now(dt.timezone.utc)
+    boosts={}
+    for row in rows:
+        try: last=dt.datetime.fromisoformat(row['last_at'])
+        except (ValueError,TypeError): continue
+        days=(now-last).total_seconds()/86_400
+        decay=max(0.0,1.0-days/REINFORCE_DECAY_DAYS)
+        ceiling=min(1.0+REINFORCE_STEP*row['sessions'],REINFORCE_MAX_BOOST)
+        boosts[row['record_id']]=1.0+(ceiling-1.0)*decay
+    return boosts
+
+
+def rank_documents(total: int, frequency: dict, documents: dict, average: float, query: str,
+                   boosts: dict | None = None) -> list[tuple[dict,float,list[str]]]:
+    """相关性先于时间与项目；不将其他项目的历史决定提升为当前规则。
+
+    boosts 是记录 ID 到乘子的映射：只有 `record:` 前缀文档参与，月摘要不乘。
+    """
     tokens=set(lexical_terms(query))
     if not tokens or not documents: return []
     ranked=[]
@@ -559,7 +581,8 @@ def rank_documents(total: int, frequency: dict, documents: dict, average: float,
             count=doc['terms'][term];seen=frequency.get(term,0)
             weight=math.log1p((total-seen+0.5)/(seen+0.5))
             score+=weight*count*2.2/(count+1.2*(0.25+0.75*doc['length']/average))
-        ranked.append((doc,score*len(hits)/len(tokens),hits))
+        boost=boosts.get(doc['key'][7:],1.0) if boosts and doc['key'].startswith('record:') else 1.0
+        ranked.append((doc,score*boost*len(hits)/len(tokens),hits))
     ranked.sort(key=lambda item:(-item[1],item[0]['key']))
     return ranked
 
@@ -615,7 +638,7 @@ def indexed_recall(root: Path, query: str, mode: str = 'records',
                 where=(where+' AND ' if where else '')+'date>=? AND date<=?'
                 params=(*params,first,today.isoformat())
             total,frequency,docs,average=record_context(conn,tokens,where,params)
-            ranked=rank_documents(total,frequency,docs,average,query) if tokens else []
+            ranked=rank_documents(total,frequency,docs,average,query,reinforce_boosts(conn)) if tokens else []
             if not tokens:
                 fallback=record_rows(conn,where,params)
                 fallback.sort(key=lambda r:r['id'])
@@ -634,7 +657,8 @@ def indexed_recall(root: Path, query: str, mode: str = 'records',
             'mode':mode,'month':month,'query':query,'project':project,'store_version':version,'coverage':'store_records',
             'matches':matches,'total_matches':len(ranked),'offset':offset,'limit':limit,
             'has_more':offset+limit<len(ranked),'next_offset':offset+limit if offset+limit<len(ranked) else None,
-            'no_match':not ranked,'note':'仅词法相关性；历史来源与状态不代表当前适用或事实已核实；摘要需 memory_read 读取全文'}
+            'no_match':not ranked,'note':'仅词法相关性（命中记录带标注乘子）；历史来源与状态不代表当前适用或事实已核实；'
+            '摘要需 memory_read 读取全文；命中记忆实际影响当前任务时可用 memory_reinforce 标注'}
 
 
 def layered_recall(root: Path, query: str, offset: int = 0, limit: int = 50,
@@ -662,7 +686,7 @@ def layered_recall(root: Path, query: str, offset: int = 0, limit: int = 50,
         dates={row[0]:row[1] for row in conn.execute(
             'SELECT id,date FROM records'+(' WHERE '+project_where if project_where else ''),project_params)}
         summary_months={row[0] for row in conn.execute('SELECT DISTINCT month FROM summaries')}
-        ranked=rank_documents(record_total+summary_total,frequency,documents,average,query)
+        ranked=rank_documents(record_total+summary_total,frequency,documents,average,query,reinforce_boosts(conn))
         kept=[];fallback_counts=Counter();summary_counts=Counter()
         for document,score,hits in ranked:
             if document.get('summary'):
@@ -699,7 +723,8 @@ def layered_recall(root: Path, query: str, offset: int = 0, limit: int = 50,
             'has_more':offset+limit<len(kept),'next_offset':offset+limit if offset+limit<len(kept) else None,
             'no_match':not kept,'missing_summaries':missing,
             'layers':{'recent':layers['recent'],'summary':layers['summary'],'fallback':layers['fallback']},
-            'note':'近窗口内查日记，更早月份优先用月摘要；缺摘要的月份回退该月最多两条日记。仅词法相关性，历史来源不代表当前适用'}
+            'note':'近窗口内查日记，更早月份优先用月摘要；缺摘要的月份回退该月最多两条日记。'
+            '仅词法相关性（命中记录带标注乘子），历史来源不代表当前适用；命中记忆实际影响当前任务时可用 memory_reinforce 标注'}
 
 
 
@@ -733,7 +758,7 @@ def active_rules(root: Path, query: str = '', offset: int = 0, limit: int = 50,
         if query.strip():
             tokens=set(lexical_terms(query))
             _,frequency,docs,average=record_context(conn,tokens,where,params)
-            order=[item[0]['id'] for item in rank_documents(total,frequency,docs,average,query)]
+            order=[item[0]['id'] for item in rank_documents(total,frequency,docs,average,query,reinforce_boosts(conn))]
             index={row['id']:row for row in rows}
             ordered=[index[rid] for rid in order if rid in index]
         else:
@@ -749,7 +774,7 @@ def active_rules(root: Path, query: str = '', offset: int = 0, limit: int = 50,
         return {'memory_scope':'global','project':project,'total_rules':total,'offset':offset,'limit':limit,
                 'store_version':version,'coverage':'store_records',
                 'has_more':offset+limit<total,'next_offset':offset+len(page) if offset+limit<total else None,
-                'rules':rules,'note':'返回摘要，完整正文需调用 memory_read'}
+                'rules':rules,'note':'返回摘要，完整正文需调用 memory_read；约定实际影响当前任务时可用 memory_reinforce 标注'}
 
 
 def project_notes(root: Path, project: str, date_from: str, limit: int = 3) -> dict:
@@ -820,82 +845,59 @@ def monthly_source(root: Path, month: str, offset: int = 0, limit: int = 50, clo
 
 
 # ---------------------------------------------------------------------------
-# 访问统计
+# 有用性标注
 # ---------------------------------------------------------------------------
 
-def access_summary(conn: sqlite3.Connection) -> dict:
-    started=conn.execute("SELECT value FROM meta WHERE key='access_started_at'").fetchone()
-    rows=conn.execute('SELECT record_id,COUNT(*) AS reads,COUNT(DISTINCT session_hash) AS sessions,'
-                      'MAX(at) AS last_at FROM access_events GROUP BY record_id').fetchall()
-    return {'started_at':started[0] if started else None,
-            'records':{row['record_id']:{'read_count':row['reads'],'session_count':row['sessions'],
-                                         'last_read_at':row['last_at']} for row in rows}}
+def reinforce_summary(conn: sqlite3.Connection) -> dict:
+    rows=conn.execute('SELECT record_id,COUNT(*) AS sessions,MAX(at) AS last_at '
+                      'FROM reinforce_events GROUP BY record_id').fetchall()
+    return {'records':{row['record_id']:{'session_count':row['sessions'],'last_reinforced_at':row['last_at']}
+                       for row in rows}}
 
 
-def access_metrics(row: dict | None) -> dict:
-    return {'observed':row is not None,'read_count':row['read_count'] if row else 0,
-            'session_count':row['session_count'] if row else 0,
-            'last_read_at':row['last_read_at'] if row else None}
-
-
-def access_status(root: Path) -> dict:
-    """统计故障只在状态中报告，不使成功的权威记忆读取变成统计故障。"""
+def reinforce_status(root: Path) -> dict:
+    """标注汇总只进 status；汇总故障只在状态中报告，不影响其他读取。"""
     try:
         with connect(root) as conn:
             require_version(conn)
-            state=access_summary(conn)
-            return {'automatic':True,'status':'available' if state['started_at'] else 'not_collected',
-                    'storage':'database','started_at':state['started_at'],
-                    'tracked_records':len(state['records']),'note':ACCESS_NOTE}
+            state=reinforce_summary(conn)
+            return {'status':'available' if state['records'] else 'not_collected','storage':'database',
+                    'reinforced_records':len(state['records']),
+                    'last_reinforced_at':max((r['last_reinforced_at'] for r in state['records'].values()),default=None),
+                    'note':REINFORCE_NOTE}
     except (MemoryError,ValueError,KeyError,TypeError,UnicodeError,OSError,sqlite3.Error) as error:
-        return {'automatic':True,'status':'unavailable','storage':'database',
-                'error':str(error)[:1024],'note':ACCESS_NOTE}
+        return {'status':'unavailable','storage':'database',
+                'error':str(error)[:1024],'note':REINFORCE_NOTE}
 
 
-def indexed_access_stats(root: Path, ids: list[str]) -> dict:
-    ids=access_ids(ids)
-    with connect(root) as conn:
-        require_version(conn)
-        version=change_seq(conn)
-        by_id=record_by_ids(conn,ids)
-        expect(all(rid in by_id for rid in ids),'指定统计 ID 不存在，未扫描历史')
-        state=access_summary(conn)
-        return {'status':'available' if state['started_at'] else 'not_collected','automatic':True,
-                'started_at':state['started_at'],'store_version':version,
-                'coverage':'recorded_accesses_only','note':ACCESS_NOTE,'memory_scope':'global',
-                'records':[{'id':rid,'source_project':by_id[rid]['project_id'],'date':by_id[rid]['date'],
-                            'status':by_id[rid]['status'],**access_metrics(state['records'].get(rid))} for rid in ids]}
-
-
-def record_access(root: Path, data: dict) -> dict:
-    """调用方已准备完整结果；在写事务内去重并写入单份技术统计。"""
-    expect(isinstance(data,dict) and set(data)=={'ids','session_id','tool_call_id','store_version'},
-           '访问事件字段无效；不接受外部计数、时间或正文')
-    ids=access_ids(data['ids'])
-    for key in ('session_id','tool_call_id'):
-        expect(isinstance(data[key],str) and bool(data[key].strip()) and len(data[key])<=512,
-               '访问事件身份无效: '+key)
+def record_reinforce(root: Path, data: dict) -> dict:
+    """模型判定记忆实际影响当前任务后写入标注；每记录每会话只计一次，不接受外部计数、时间或理由。"""
+    expect(isinstance(data,dict) and set(data)=={'ids','session_id','store_version'},
+           '标注事件字段无效；不接受外部计数、时间、理由或正文')
+    ids=reinforce_ids(data['ids'])
+    expect(isinstance(data['session_id'],str) and bool(data['session_id'].strip()) and len(data['session_id'])<=512,
+           '标注会话身份无效')
     expect(isinstance(data['store_version'],str) and re.fullmatch(r'\d{1,19}',data['store_version']) is not None,
-           '访问来源版本无效')
+           '标注来源版本无效')
     with connect(root,write=True) as conn:
         require_version(conn)
         with transaction(conn):
             expect(str(change_seq(conn))==data['store_version'],
-                   'SOURCE_CHANGED：读取后来源版本已变化，未计入访问统计')
+                   'SOURCE_CHANGED：来源版本已变化，未写入标注')
             placeholders=_placeholders(ids)
             available={row[0] for row in conn.execute(f'SELECT id FROM records WHERE id IN ({placeholders})',ids)}
-            expect(set(ids).issubset(available),'访问记录已不存在，未写统计')
+            expect(set(ids).issubset(available),'标注目标已不存在，未写事件')
             now=dt.datetime.now(dt.timezone.utc).isoformat(timespec='milliseconds')
-            session=sha(('pi-memory.access.session\0'+data['session_id']).encode())
-            event=sha(('pi-memory.access.call\0'+data['session_id']+'\0'+data['tool_call_id']).encode())
+            session=sha(('pi-memory.reinforce.session\0'+data['session_id']).encode())
             added=0
-            if conn.execute("SELECT 1 FROM meta WHERE key='access_started_at'").fetchone() is None:
-                meta_patch(conn,{'access_started_at':now})
             for rid in ids:
-                before=conn.total_changes
-                conn.execute('INSERT OR IGNORE INTO access_events(record_id,session_hash,event_hash,at) VALUES(?,?,?,?)',
-                             (rid,session,event,now))
-                if conn.total_changes>before: added+=1
+                existing=conn.execute('SELECT 1 FROM reinforce_events WHERE record_id=? AND session_hash=?',
+                                      (rid,session)).fetchone()
+                if existing:
+                    conn.execute('UPDATE reinforce_events SET at=? WHERE record_id=? AND session_hash=?',(now,rid,session))
+                else:
+                    conn.execute('INSERT INTO reinforce_events(record_id,session_hash,at) VALUES(?,?,?)',(rid,session,now))
+                    added+=1
     return {'status':'recorded' if added else 'duplicate','new_records':added,
             'duplicate_records':len(ids)-added}
 
@@ -1026,13 +1028,13 @@ def prepare(root: Path, op: str, data: dict) -> dict:
             months={existing_ids[rid]['date'][:7] for rid in ids}
             withdrawn=[m for m in sorted(months)
                        if conn.execute('SELECT 1 FROM summaries WHERE month=?',(m,)).fetchone()]
-            state=access_summary(conn)
+            state=reinforce_summary(conn)
             payload={'records':[{k:existing_ids[rid].get(k) for k in ('id','date','project_id','type','topic','content')} for rid in ids],
                      'affected_record_references':affected,'affected_profiles':affected_profiles,
                      'withdrawn_months':withdrawn,
-                     'access_statistics':{'storage':'database','target_ids':ids,
-                         'observed':[{'id':rid,**access_metrics(state['records'].get(rid))} for rid in ids],
-                         'note':'删除目标在提交时的全部对应统计；计划生成到提交之间新增的目标访问同属此范围，不删除其他记录统计。'}}
+                     'reinforcement':{'storage':'database','target_ids':ids,
+                         'observed':[{'id':rid,'session_count':state['records'].get(rid,{}).get('session_count',0)} for rid in ids],
+                         'note':'删除目标在提交时的全部标注事件；计划生成到提交之间新增的目标标注同属此范围，不影响其他记录。'}}
         elif op=='profile':
             domain=data['domain'];expect(domain in DOMAINS,'非法画像领域')
             scope=data['scope'];expect(scope in ('global','domain:'+domain),'新增画像仅接受 global 或所选领域作用域')
@@ -1104,7 +1106,7 @@ def render_preview(plan: dict) -> dict:
     elif op=='delete':
         result.update({'delete_records':d['records'],'affected_record_references':d['affected_record_references'],
                        'affected_profiles':d['affected_profiles'],
-                       'affected_access_statistics':d['access_statistics']})
+                       'affected_reinforcement':d['reinforcement']})
     elif op=='profile':
         result.update({'new_profile':d['profile'],'replace_profile_ids':d['replace_ids'],
                        'replaced_profiles':d['replaced_profiles'],'source_diary_preserved':True})
@@ -1157,16 +1159,16 @@ def commit(root: Path, plan_id: str) -> dict:
                 for month in withdrawn: withdraw_month(conn,month)
             elif op=='delete':
                 deleted={r['id'] for r in data['records']}
-                access_plan=data.get('access_statistics')
-                expect(isinstance(access_plan,dict) and access_plan.get('storage')=='database'
-                       and isinstance(access_plan.get('target_ids'),list)
-                       and len(access_plan['target_ids'])==len(deleted)
-                       and set(access_plan['target_ids'])==deleted,
-                       'PLAN_VERSION：删除计划未完整展示访问统计范围，须重新生成并确认')
+                reinforce_plan=data.get('reinforcement')
+                expect(isinstance(reinforce_plan,dict) and reinforce_plan.get('storage')=='database'
+                       and isinstance(reinforce_plan.get('target_ids'),list)
+                       and len(reinforce_plan['target_ids'])==len(deleted)
+                       and set(reinforce_plan['target_ids'])==deleted,
+                       'PLAN_VERSION：删除计划未完整展示标注事件范围，须重新生成并确认')
                 placeholders=_placeholders(sorted(deleted));ids=sorted(deleted)
                 deleted_statistics=sorted({row[0] for row in conn.execute(
-                    f'SELECT record_id FROM access_events WHERE record_id IN ({placeholders})',ids)})
-                conn.execute(f'DELETE FROM access_events WHERE record_id IN ({placeholders})',ids)
+                    f'SELECT record_id FROM reinforce_events WHERE record_id IN ({placeholders})',ids)})
+                conn.execute(f'DELETE FROM reinforce_events WHERE record_id IN ({placeholders})',ids)
                 conn.execute(f'DELETE FROM record_sources WHERE source_id IN ({placeholders})',ids)
                 conn.execute(f'DELETE FROM record_supersedes WHERE target_id IN ({placeholders})',ids)
                 conn.execute(f'DELETE FROM profile_sources WHERE source_id IN ({placeholders})',ids)
@@ -1198,7 +1200,7 @@ def commit(root: Path, plan_id: str) -> dict:
             version=bump(conn)
     return {'memory_scope':'global','committed':plan_id,'operation':op,'store_version':version,
             'new_record_ids':new_ids,'withdrawn_months':withdrawn,
-            'deleted_access_statistics_ids':deleted_statistics,
+            'deleted_reinforcement_ids':deleted_statistics,
             'status_updated_ids':[u['id'] for u in data.get('status_updates',[])] if op=='save' else [],
             'superseded_record_ids':[r['id'] for r in data['supersede']] if op=='save' else []}
 
@@ -1217,7 +1219,7 @@ def status_view(root: Path) -> dict:
                 'records':conn.execute('SELECT COUNT(*) FROM records').fetchone()[0],
                 'profiles':conn.execute('SELECT COUNT(*) FROM profiles').fetchone()[0],
                 'summary_months':len({row[0] for row in conn.execute('SELECT DISTINCT month FROM summaries')}),
-                'access_statistics':access_status(root)}
+                'reinforcement':reinforce_status(root)}
 
 
 def integrity_view(root: Path) -> dict:
@@ -1303,7 +1305,6 @@ def migrate_store(target: Path, source: Path) -> dict:
     records=_legacy_records(source)
     profiles=_legacy_profiles(source)
     summaries=_legacy_summaries(source,{r['id'] for r in records})
-    access=_legacy_access(source)
     stamp=dt.datetime.now().strftime('%Y%m%dT%H%M%S')
     archive=source.parent/(source.name+'-archive-'+stamp)
     expect(not archive.exists(),f'归档目录已存在: {archive}')
@@ -1355,11 +1356,6 @@ def migrate_store(target: Path, source: Path) -> dict:
                     conn.executemany('INSERT INTO summary_sources(month,position,source_id) VALUES(?,?,?)',
                                      [(summary['month'],summary['position'],sid) for sid in summary['source_record_ids']])
                     write_summary_terms(conn,summary['month'],summary['position'],terms)
-                if access['started_at']:
-                    meta_patch(conn,{'access_started_at':access['started_at']})
-                    for rid,rows in access['events'].items():
-                        conn.executemany('INSERT INTO access_events(record_id,session_hash,event_hash,at) VALUES(?,?,?,?)',
-                                         [(rid,session,event,at) for session,event,at in rows])
                 version=bump(conn)
         imported=status_view(target)
         expect(imported['records']==len(records),'迁移校验失败：记录数量不一致')
@@ -1380,7 +1376,7 @@ def migrate_store(target: Path, source: Path) -> dict:
         raise
     return {'migrated':True,'database':str(db_path(target)),'archive':str(archive),
             'store_version':STORE_VERSION,'records':len(records),'profiles':len(profiles),
-            'summaries':len(summaries),'access_records':len(access['events']),'change_seq':version}
+            'summaries':len(summaries),'change_seq':version}
 
 
 def export_store(root: Path, out: Path) -> dict:
@@ -1568,23 +1564,24 @@ def _legacy_generated_at(path: Path) -> str:
     return dt.datetime.now(dt.timezone.utc).isoformat(timespec='seconds')
 
 
-def _legacy_access(root: Path) -> dict:
-    path=root/'.system'/'access.json'
-    empty={'started_at':None,'events':{}}
-    if not path.is_file(): return empty
-    state=json.loads(path.read_text(encoding='utf-8'))
-    expect(isinstance(state,dict) and isinstance(state.get('records'),dict),'ACCESS_INVALID：统计结构无效')
-    events={}
-    for rid,row in state['records'].items():
-        expect(isinstance(row,dict) and isinstance(row.get('sessions'),dict),'ACCESS_INVALID：记录统计结构无效')
-        at=row.get('last_read_at')
-        access_time(at)
-        rows=[]
-        for session,items in row['sessions'].items():
-            expect(isinstance(items,list),'ACCESS_INVALID：去重身份无效')
-            for event in items: rows.append((session,event,at))
-        if rows: events[rid]=rows
-    return {'started_at':state.get('started_at'),'events':events}
+def upgrade_store(root: Path) -> dict:
+    """SQLite v1 库就地升级到当前版本：删访问统计表、建标注事件表。
+
+    旧统计按设计丢弃不迁移；事务内完成，失败回滚保持 v1，不产出半成品库。
+    """
+    path=db_path(root)
+    expect(path.is_file(),'DB_MISSING：记忆库不存在；先执行 init')
+    with connect(root,write=True) as conn:
+        version=conn.execute('PRAGMA user_version').fetchone()[0]
+        expect(version==1,f'DB_VERSION：仅支持 v1 库就地升级（库 {version}，代码 {STORE_VERSION}）')
+        with transaction(conn):
+            conn.execute('DROP TABLE IF EXISTS access_events')
+            conn.execute('DROP INDEX IF EXISTS access_events_record')
+            conn.execute('CREATE TABLE reinforce_events(record_id TEXT NOT NULL, session_hash TEXT NOT NULL, '
+                         'at TEXT NOT NULL, PRIMARY KEY(record_id, session_hash))')
+            conn.execute('CREATE INDEX reinforce_events_record ON reinforce_events(record_id)')
+            conn.execute(f'PRAGMA user_version={STORE_VERSION}')
+    return {'upgraded':True,'database':str(path),'store_version':STORE_VERSION}
 
 
 # ---------------------------------------------------------------------------
@@ -1603,7 +1600,7 @@ def main() -> None:
     rs=sub.add_parser('reassign');rs.add_argument('--from',dest='source',required=True)
     rs.add_argument('--to',dest='target',required=True);rs.add_argument('--approved',action='store_true')
     migrate=sub.add_parser('migrate');migrate.add_argument('--from',dest='source',default=None,
-        help='legacy Markdown store directory (default: --store)')
+        help='legacy Markdown store directory, or SQLite v1 store directory for in-place upgrade (default: --store)')
     export=sub.add_parser('export');export.add_argument('--out',required=True)
     pp=sub.add_parser('plan');pp.add_argument('operation',choices=['save','delete','profile','month']);pp.add_argument('--input',required=True)
     ps=sub.add_parser('plan-show');ps.add_argument('--plan-id',required=True)
@@ -1614,8 +1611,7 @@ def main() -> None:
     notes=sub.add_parser('project-notes');notes.add_argument('--project',required=True);notes.add_argument('--date-from',required=True);notes.add_argument('--limit',type=int,default=3)
     ms=sub.add_parser('month-source');ms.add_argument('month');ms.add_argument('--offset',type=int,default=0);ms.add_argument('--limit',type=int,default=50);ms.add_argument('--closed-today-confirmed',action='store_true')
     rr=sub.add_parser('read');rr.add_argument('ids',nargs='+')
-    ac=sub.add_parser('access-record');ac.add_argument('--input',required=True,choices=['-'])
-    ast=sub.add_parser('access-stats');ast.add_argument('ids',nargs='+')
+    rc=sub.add_parser('reinforce');rc.add_argument('--input',required=True,choices=['-'])
     pr=sub.add_parser('profiles');pr.add_argument('--domain',choices=sorted(DOMAINS))
     args=parser.parse_args()
     if args.tzdata is not None:
@@ -1628,7 +1624,10 @@ def main() -> None:
     if args.cmd=='init':
         result=init_store(root,args.timezone)
     elif args.cmd=='migrate':
-        result=migrate_store(root,Path(args.source).expanduser().absolute() if args.source else root)
+        source=Path(args.source).expanduser().absolute() if args.source else root
+        # 含 memory.db 的目录是 SQLite 库，走就地升级；含 manifest.json 的旧 Markdown 目录走一次性导入。
+        result=(upgrade_store(source) if (source/db_path(source).name).is_file() and not (source/'manifest.json').is_file()
+                else migrate_store(root,source))
     else:
         if args.cmd=='export':
             result=export_store(root,Path(args.out).expanduser().absolute())
@@ -1675,11 +1674,9 @@ def main() -> None:
             result=monthly_source(root,args.month,args.offset,args.limit,args.closed_today_confirmed)
         elif args.cmd=='read':
             result=indexed_read(root,args.ids)
-        elif args.cmd=='access-record':
+        elif args.cmd=='reinforce':
             raw_input=json.loads(sys.stdin.buffer.read().decode('utf-8'))
-            result=record_access(root,raw_input)
-        elif args.cmd=='access-stats':
-            result=indexed_access_stats(root,args.ids)
+            result=record_reinforce(root,raw_input)
         elif args.cmd=='profiles':
             result=profiles_view(root,args.domain)
         else: raise MemoryError('未知操作')

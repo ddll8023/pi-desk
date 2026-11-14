@@ -2,9 +2,9 @@
 export const MEMORY_STATUS_CHANNEL = 'desktop:memory-status'
 export const MEMORY_ENABLED_CHANNEL = 'desktop:memory-enabled'
 export const MEMORY_INITIALIZE_CHANNEL = 'desktop:memory-initialize'
-/** 只读：按真实记录 ID 取回正文，供会话内的注入条目展开；不写库、不记录访问统计。 */
+/** 只读：按真实记录 ID 取回正文，供会话内的注入条目展开；不写库、不产生标注。 */
 export const MEMORY_READ_CHANNEL = 'desktop:memory-read'
-/** 只读：按领域取回画像正文，供注入卡片展开画像条目；不写库、不记录访问统计。 */
+/** 只读：按领域取回画像正文，供注入卡片展开画像条目；不写库、不产生标注。 */
 export const MEMORY_PROFILE_READ_CHANNEL = 'desktop:memory-profile-read'
 
 export interface MemoryPreference { readonly enabled: boolean }
