@@ -261,7 +261,7 @@ export class MemoryManager {
     try {
       const parsed: unknown = JSON.parse(result.text)
       if (isRecord(parsed) && parsed.ok === true && isRecord(parsed.data)) {
-        // 就绪以库内版本序号与时区为准；不再依赖已退出的文件清单。
+        // 就绪以库结构版本与时区为准；不再依赖已退出的文件清单。
         const version = parsed.data.store_version
         const timezone = parsed.data.timezone
         if (typeof version === 'number' && Number.isInteger(version) && version >= 0 && typeof timezone === 'string') {

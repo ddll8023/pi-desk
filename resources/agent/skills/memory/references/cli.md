@@ -22,7 +22,7 @@ months
 ```
 
 - `recall` 与 `rules` 接受 `--project <UUID>`：只收窄来源项目，无归属的通用记录仍返回；UUID 须来自桌面项目注册表，独立 CLI 没有注册表时不传。不接受项目登记计划或项目绑定参数，项目名称也不能当作范围参数（只作普通主题关键词）。
-- `status` 返回库路径、库版本（`store_version`）、变更序号、时区、记录／画像／摘要数量及标注汇总，不建库、不修复。
+- `status` 返回库路径、库结构版本（`store_version`，schema 版本）、变更序号（`change_seq`）、时区、记录／画像／摘要数量及标注汇总，不建库、不修复。
 - `recall` 默认 `--mode auto`：按时间分层——近 `recent_window_days` 天的日记直接参与排序，更早的月份优先用月摘要代表，缺摘要的月份回退该月最多两条日记；返回体带 `layer`、`cutoff`、`window_days`、`layers` 与 `missing_summaries`。`records` 才是全历史，recent 明确限近期，historical 仅查已有月摘要，month 必须明确月份且不接受与 auto 混用。旧 `search` 保留近期默认及 `--all-dates`，不与 recall 默认范围混淆。
 - `recall`、`rules` 返回摘要；需全文时按真实 ID 调用 `read`。历史来源和有效状态不证明事实正确或当前适用。
 - 分页使用 `offset`、`limit` 和返回的 `has_more`、`next_offset`，每批 1..200；跨页核对 `store_version`。
@@ -34,7 +34,7 @@ months
 
 ## 有用性标注
 
-`reinforce --input -` 供扩展在模型判定记忆实际影响当前任务后调用。输入为真实 `ids` 与宿主 `session_id`，不接受外部计数、时间、理由、正文或查询词。
+`reinforce --input -` 供扩展在模型判定记忆实际影响当前任务后调用。输入为真实 `ids`、宿主 `session_id` 与引擎并发标记（由扩展取 `status` 的 `change_seq` 填充，字段名沿用 `store_version`），不接受外部计数、时间、理由、正文或查询词。
 
 在写事务内核对记录存在后写入，每记录每会话只计一次（重复标注仅刷新时间）；库忙或来源版本变化即报告，不自动初始化或重试。标注不改正文、词项或库版本，只在检索排序中参与有界乘子；事件清空即整体回滚。
 

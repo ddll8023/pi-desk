@@ -874,6 +874,8 @@ def record_reinforce(root: Path, data: dict) -> dict:
     """模型判定记忆实际影响当前任务后写入标注；每记录每会话只计一次，不接受外部计数、时间或理由。"""
     expect(isinstance(data,dict) and set(data)=={'ids','session_id','store_version'},
            '标注事件字段无效；不接受外部计数、时间、理由或正文')
+    # 字段名沿用 `store_version`，实际承载的是库变更序号（status.change_seq），
+    # 与 `status.store_version`（schema 版本）不是同一个值；混用会让标注永远被拒。
     ids=reinforce_ids(data['ids'])
     expect(isinstance(data['session_id'],str) and bool(data['session_id'].strip()) and len(data['session_id'])<=512,
            '标注会话身份无效')
@@ -1210,6 +1212,8 @@ def commit(root: Path, plan_id: str) -> dict:
 # ---------------------------------------------------------------------------
 
 def status_view(root: Path) -> dict:
+    # 两个版本字段语义不同，不要混用：`store_version` 是库的 schema 版本（PRAGMA user_version，
+    # 建库后恒定），`change_seq` 才是随写入递增的变更序号。reinforce 的并发标记与跨页核对都用后者。
     with connect(root) as conn:
         version=require_version(conn)
         return {'memory_scope':'global','root':str(root),'database':str(db_path(root)),

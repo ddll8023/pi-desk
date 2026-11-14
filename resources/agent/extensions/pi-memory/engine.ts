@@ -244,12 +244,13 @@ export class MemoryEngine {
     }
   }
 
-  /** 画像缓存键用库版本：版本变化即失效，不再读取源文件；独立短片预算且可被会话取消。 */
+  /** 画像缓存键用库变更序号：库一变即失效，不再读源文件；独立短片预算且可被会话取消。 */
   async profileSignature(selected: Domain[], signal?: AbortSignal): Promise<string> {
     await this.requireStore()
     const status = await this.run(['status'], undefined, signal, false, undefined, STATUS_TIMEOUT)
-    const version = status.store_version
-    if (typeof version !== 'number' || !Number.isInteger(version) || version < 0) throw new Error('记忆库版本无效')
+    // `status` 的 `store_version` 是库的 schema 版本（常量），只有 `change_seq` 随写入递增。
+    const version = status.change_seq
+    if (typeof version !== 'number' || !Number.isInteger(version) || version < 0) throw new Error('记忆库变更序号无效')
     return fingerprint(JSON.stringify([version, [...selected].sort()]))
   }
 
@@ -353,13 +354,16 @@ export class MemoryEngine {
     return this.run(['read', ...ids], undefined, signal)
   }
 
-  /** 先取当前库版本再写标注；版本在写入前变化由引擎拒绝，不自动重试。 */
+  /**
+   * 先取当前库变更序号再写标注；引擎按同一序号校验，写入前变化则拒绝，不自动重试。
+   * 必须用 `change_seq`：`status` 的 `store_version` 是 schema 版本常量，拿它当并发标记会导致标注永远被拒。
+   */
   async reinforce(ids: string[], sessionId: string, beforeSpawn: () => void): Promise<JsonObject> {
     if (!ids.length || ids.length > 50 || ids.some(id => !RECORD_ID.test(id))
       || !sessionId.trim() || sessionId.length > 512) throw new Error('标注的记录或会话身份无效')
     const status = await this.status()
-    const version = status.store_version
-    if (typeof version !== 'number' || !Number.isSafeInteger(version) || version < 0) throw new Error('记忆库版本无效')
+    const version = status.change_seq
+    if (typeof version !== 'number' || !Number.isSafeInteger(version) || version < 0) throw new Error('记忆库变更序号无效')
     return this.run(['reinforce', '--input', '-'], {
       ids: [...new Set(ids)], session_id: sessionId, store_version: String(version)
     }, undefined, 'statistics', beforeSpawn)
