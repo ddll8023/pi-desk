@@ -59,7 +59,7 @@ const readoutValue = computed(() => {
   if (bar === null) return ''
   if (props.metric === 'cost') return bar.cost === null ? '无价格' : `$${formatCost(bar.cost)}`
   if (props.metric === 'messages') return String(bar.metricValue)
-  return formatTokens(bar.totalTokens)
+  return formatTokens(bar.metricValue)
 })
 
 function handleBarClick(bar: DailyBarItem): void {

@@ -458,7 +458,7 @@ export function buildWindowAggregate(
       cacheWrite: bucket?.cacheWrite ?? 0,
       totalTokens: bucket?.totalTokens ?? 0,
       messageCount: bucket?.messageCount ?? 0,
-      cost: bucket !== null && bucket.costDays > 0 ? bucket.cost : null
+      cost: bucket !== undefined && bucket.costDays > 0 ? bucket.cost : null
     }
   })
 
