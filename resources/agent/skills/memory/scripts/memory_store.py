@@ -86,17 +86,22 @@ def candidate_check(text, single_line=False):
 
 
 # 已完成流水的可判定痕迹：提交号、改动行数、括号内文件数。
-# 只用于校验 active 的 progress——正文主体是实施过程时，它不该占据近况名额。
+# 只用于校验 active 的 progress——正文有痕迹且全文无未决信号时才算流水主体；
+# 带未决语义的痕迹只是定位引用（如「本日落地的改动仍待验证」），不据此拒绝。
 IMPL_STAT=re.compile(r'[+＋]\d+\s*[／/]\s*[−-]\d+'
                      r'|\d+\s*[+＋]\s*[／/]\s*\d+\s*[−-]'
                      r'|[（(]\s*\d+\s*个?\s*文件\s*[）)]')
 HASH_LIKE=re.compile(r'(?<![0-9a-z])[0-9a-f]{7,40}(?![0-9a-z])')
+UNDECIDED_MARK=re.compile(r'待|未|下一步|卡在|剩余|暂|需')
 
 
 def impl_trace(text: str) -> bool:
-    """正文是否以实施过程为主体。纯数字串（日期、单据号）不算提交号，必须有 a-f 才算。"""
-    if IMPL_STAT.search(text): return True
-    return any(any(c in 'abcdef' for c in hit.group()) for hit in HASH_LIKE.finditer(text))
+    """正文是否以实施过程为主体：有实施痕迹且全文无未决信号才算。
+    纯数字串（日期、单据号）不算提交号，必须有 a-f 才算。"""
+    if not (IMPL_STAT.search(text)
+            or any(any(c in 'abcdef' for c in hit.group()) for hit in HASH_LIKE.finditer(text))):
+        return False
+    return UNDECIDED_MARK.search(text) is None
 
 
 def content_key(typ, rule_key, topic, content):
@@ -980,10 +985,10 @@ def prepare(root: Path, op: str, data: dict) -> dict:
                 else:
                     expect(not rule_key and not explicit_ids,'非规则日记不能带规则键或替代目标')
                 title=candidate_check(item['topic'],True);content=candidate_check(item['content'])
-                # 带实施痕迹的正文不可能是“仍待推进”的未决状态；要求归档或改写，而不是静默放行。
+                # 正文只有实施痕迹而无任何未决信号时才算流水；带未决语义的痕迹只是定位引用。
                 expect(not (typ=='progress' and status=='active' and impl_trace(title+' '+content)),
-                       'progress 正文含提交号、改动行数或文件数，属已完成流水，不能以 active 进入近况：'
-                       '改 status 为 archived，或改写为仍待推进的未决状态')
+                       'progress 正文含提交号、改动行数或文件数且全文没有未决信号，属已完成流水，'
+                       '不能以 active 进入近况：改 status 为 archived，或在正文写明仍待推进的事项')
                 digest=content_key(typ,rule_key,title,content)
                 if digest in seen_content:
                     duplicates.append(title);continue
