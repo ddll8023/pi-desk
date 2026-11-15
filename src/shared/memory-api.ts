@@ -67,6 +67,7 @@ export interface MemoryApi {
   readonly initializeMemory: (request: MemoryInitializeRequest) => Promise<MemoryResult>
   readonly readMemoryRecords: (request: MemoryReadRequest) => Promise<MemoryReadResult>
   readonly readMemoryProfiles: (request: MemoryProfileReadRequest) => Promise<MemoryProfileReadResult>
+  readonly saveMemoryCandidates: (request: MemorySaveCandidatesRequest) => Promise<MemorySaveResult>
 }
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -160,4 +161,98 @@ export function isMemoryProfileReadResult(value: unknown): value is MemoryProfil
   }
   return value.ok === false && record(value.error) && typeof value.error.message === 'string'
     && typeof value.error.code === 'string'
+}
+
+/** 会话内卡片候选的保存通道：用户在卡片上勾选并编辑后由主进程经引擎计划提交；页面不指定 plan、store 或批准标志。 */
+export const MEMORY_SAVE_CANDIDATES_CHANNEL = 'desktop:memory-save-candidates'
+
+/** 记录类型：与引擎及扩展侧 `memory_save` 同一枚举；decision／constraint 是规则类（需 rule_key，恒为 active）。 */
+export const MEMORY_RECORD_TYPES = ['decision', 'constraint', 'progress', 'issue', 'fact', 'preference_evidence'] as const
+export type MemoryRecordType = typeof MEMORY_RECORD_TYPES[number]
+
+/**
+ * 卡片候选是人工确认面：条数远小于工具侧的 50，单条长度与工具 schema 同值。
+ * 上限只约束请求体积，超限整份拒绝，不静默截断。
+ */
+export const MEMORY_CANDIDATE_MAX_ITEMS = 10
+export const MEMORY_TOPIC_MAX = 200
+export const MEMORY_CONTENT_MAX = 20_000
+export const MEMORY_RULE_KEY_MAX = 200
+export const MEMORY_REASON_MAX = 2_000
+/** 引用名单上限与扩展侧按 ID 批量读取一致。 */
+const MEMORY_REFS_MAX = 50
+
+/** 一条待保存候选：字段集合闭合于引擎 save 的 allowed 子集；类型与状态的业务组合由引擎判定，这里不复制。 */
+export interface MemorySaveCandidate {
+  readonly type: MemoryRecordType
+  readonly topic: string
+  readonly content: string
+  readonly rule_key?: string
+  readonly status?: 'active' | 'resolved' | 'archived'
+  readonly source_record_ids?: readonly string[]
+  readonly supersede_record_ids?: readonly string[]
+  readonly supersession_reason?: string
+}
+
+/** 保存请求：归属由主进程按项目注册表匹配 projectPath，拿不到或空串（未关联项目）留空为全局记忆，页面不直接给 project_id。 */
+export interface MemorySaveCandidatesRequest {
+  readonly projectPath: string
+  readonly candidates: readonly MemorySaveCandidate[]
+}
+
+/** 保存回执：与库内内容完全重复的候选由引擎跳过，不在回执里单独列出；全部重复时保存直接失败并带原因。 */
+export type MemorySaveResult =
+  | { readonly ok: true; readonly data: { readonly savedCount: number; readonly recordIds: readonly string[] } }
+  | { readonly ok: false; readonly error: { readonly code: MemoryErrorCode; readonly message: string } }
+
+function boundedText(value: unknown, maxLength: number): value is string {
+  return typeof value === 'string' && value.trim() !== '' && value.length <= maxLength
+}
+
+/** 引用名单：真实记录 ID、去重、非空数组。 */
+function isRecordRefList(value: unknown): boolean {
+  return Array.isArray(value) && value.length > 0 && value.length <= MEMORY_REFS_MAX
+    && value.every(item => typeof item === 'string' && RECORD_ID.test(item))
+    && new Set(value as readonly string[]).size === (value as readonly string[]).length
+}
+
+const CANDIDATE_FIELDS = ['type', 'topic', 'content', 'rule_key', 'status',
+  'source_record_ids', 'supersede_record_ids', 'supersession_reason'] as const
+const CANDIDATE_STATUS = ['active', 'resolved', 'archived'] as const
+
+/** 单条候选校验：卡片候选段与保存请求共用同一判定，保证「卡片上能出现的」与「能提交引擎的」同形。 */
+export function isMemorySaveCandidate(value: unknown): value is MemorySaveCandidate {
+  if (!record(value)) return false
+  const item = value as Record<string, unknown>
+  if (Object.keys(item).some(key => !(CANDIDATE_FIELDS as readonly string[]).includes(key))) return false
+  if (!(MEMORY_RECORD_TYPES as readonly string[]).includes(String(item.type))) return false
+  if (!boundedText(item.topic, MEMORY_TOPIC_MAX) || !boundedText(item.content, MEMORY_CONTENT_MAX)) return false
+  if (item.rule_key !== undefined && !boundedText(item.rule_key, MEMORY_RULE_KEY_MAX)) return false
+  if (item.status !== undefined && !(CANDIDATE_STATUS as readonly string[]).includes(String(item.status))) return false
+  if (item.source_record_ids !== undefined && !isRecordRefList(item.source_record_ids)) return false
+  if (item.supersede_record_ids !== undefined && !isRecordRefList(item.supersede_record_ids)) return false
+  if (item.supersession_reason !== undefined && !boundedText(item.supersession_reason, MEMORY_REASON_MAX)) return false
+  return true
+}
+
+export function isMemorySaveCandidatesRequest(value: unknown): value is MemorySaveCandidatesRequest {
+  if (!record(value) || Object.keys(value).length !== 2) return false
+  if (typeof value.projectPath !== 'string' || value.projectPath.length > 1024) return false
+  const { candidates } = value
+  if (!Array.isArray(candidates) || candidates.length === 0 || candidates.length > MEMORY_CANDIDATE_MAX_ITEMS) return false
+  return candidates.every(item => isMemorySaveCandidate(item))
+}
+
+export function isMemorySaveResult(value: unknown): value is MemorySaveResult {
+  if (!record(value)) return false
+  if (value.ok === true) {
+    return record(value.data) && typeof value.data.savedCount === 'number'
+      && Number.isInteger(value.data.savedCount) && value.data.savedCount >= 0
+      && Array.isArray(value.data.recordIds) && value.data.recordIds.length === value.data.savedCount
+      && value.data.recordIds.every(id => typeof id === 'string' && RECORD_ID.test(id))
+  }
+  return value.ok === false && record(value.error) && typeof value.error.message === 'string'
+    && typeof value.error.code === 'string'
+    && ['FORBIDDEN', 'INVALID_REQUEST', 'INTERNAL_ERROR', 'CANCELLED', 'RUNTIME_MISSING', 'STORE_UNAVAILABLE',
+      'INITIALIZATION_FAILED', 'BUSY', 'BRIDGE_UNAVAILABLE', 'INVALID_RESPONSE'].includes(String(value.error.code))
 }

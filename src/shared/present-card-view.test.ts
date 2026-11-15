@@ -85,7 +85,7 @@ function summary(overrides: Record<string, unknown> = {}): Record<string, unknow
     files: {
       changed: ['src/shared/present-card-view.ts'],
       deleted: ['src/legacy/old.ts'],
-      affected: ['docs/present-card-design.md']
+      affected: ['docs/会话内卡片设计.md']
     },
     primaryAction: { id: 'copy.text', label: '复制清单' },
     secondaryAction: null,
@@ -132,6 +132,67 @@ test('文件条数与单条长度超限判为不合规而不是静默截断', ()
 
 test('主次动作指向同一落点判为不合规', () => {
   assert.equal(parsePresentCardView(draft({ secondaryAction: { id: 'expert.save', label: '再保存' } })), null)
+})
+
+/** 一份合法的记忆候选卡片；各用例在它之上做单点改动。 */
+function memory(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    cardType: 'memory.candidates',
+    title: '本轮记忆候选',
+    subtitle: null,
+    fields: [],
+    body: null,
+    candidates: [
+      { type: 'constraint', topic: '卡片动作只转发既有通道', content: '卡片不自建写盘路径，动作绑定既有业务通道。', rule_key: 'chat.present-card-action-boundary' },
+      { type: 'progress', topic: '记忆候选卡片实现中', content: '契约与主进程通道已就绪，渲染层待实现。', status: 'active' }
+    ],
+    primaryAction: { id: 'memory.save', label: '保存勾选的记忆' },
+    secondaryAction: { id: 'copy.text', label: '复制候选' },
+    ...overrides
+  }
+}
+
+test('合法记忆候选通过且保留建议字段', () => {
+  const parsed = parsePresentCardView(memory())
+  assert.notEqual(parsed, null)
+  assert.equal(parsed?.cardType, 'memory.candidates')
+  assert.equal(parsed?.candidates?.length, 2)
+  assert.equal(parsed?.candidates?.[0]?.rule_key, 'chat.present-card-action-boundary')
+  assert.equal(parsed?.candidates?.[1]?.status, 'active')
+})
+
+test('记忆候选缺候选段时按 null 处理，由工具层决定类型专属要求', () => {
+  assert.equal(parsePresentCardView(memory({ candidates: undefined }))?.candidates, null)
+  assert.equal(parsePresentCardView(memory({ candidates: null }))?.candidates, null)
+})
+
+test('候选段为空数组、非数组或条目形状非法判为不合规', () => {
+  assert.equal(parsePresentCardView(memory({ candidates: [] })), null)
+  assert.equal(parsePresentCardView(memory({ candidates: 'decision' })), null)
+  assert.equal(parsePresentCardView(memory({ candidates: [{ type: 'decision', topic: 't', content: 'c', extra: 1 }] })), null)
+  assert.equal(parsePresentCardView(memory({ candidates: [{ type: 'decision', topic: '', content: 'c' }] })), null)
+})
+
+test('候选条数与单条长度超限判为不合规', () => {
+  const many = Array.from({ length: PRESENT_CARD_LIMITS.memoryCandidates + 1 }, (_, index) => ({
+    type: 'fact', topic: `事实 ${index}`, content: '内容'
+  }))
+  assert.equal(parsePresentCardView(memory({ candidates: many })), null)
+  const tooLong = { type: 'fact', topic: '标题', content: 'a'.repeat(20_001) }
+  assert.equal(parsePresentCardView(memory({ candidates: [tooLong] })), null)
+})
+
+test('候选引用非法记录 ID 或未知记录类型判为不合规', () => {
+  const badRef = { type: 'fact', topic: '标题', content: '内容', source_record_ids: ['not-an-id'] }
+  assert.equal(parsePresentCardView(memory({ candidates: [badRef] })), null)
+  const badType = { type: 'diary', topic: '标题', content: '内容' }
+  assert.equal(parsePresentCardView(memory({ candidates: [badType] })), null)
+})
+
+test('记忆候选的主按钮允许 memory.save，动作枚举内新增 ID 可解析', () => {
+  const parsed = parsePresentCardView(memory({ secondaryAction: null }))
+  assert.equal(parsed?.primaryAction.id, 'memory.save')
+  assert.equal(parsed?.secondaryAction, null)
 })
 
 test('超出上限的字段判为不合规而不是静默截断', () => {

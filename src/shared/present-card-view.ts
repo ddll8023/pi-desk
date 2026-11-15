@@ -3,18 +3,20 @@
  *
  * 模型只能在宿主枚举里选卡片类型与动作，字段一律是纯文本与有界列表；这里同时是宿主投影与
  * 渲染层校验的唯一形状来源——形状或枚举不符即返回 null，由界面降级成普通工具结果，
- * 不猜造缺失字段，也不允许模型描述布局、样式或可执行内容（边界见 docs/present-card-design.md）。
+ * 不猜造缺失字段，也不允许模型描述布局、样式或可执行内容（边界见 docs/会话内卡片设计.md）。
  */
 import { isExpertCapabilityMode } from './expert-capability'
 import type { ExpertCapabilityMode } from './expert-capability'
+import { isMemorySaveCandidate, MEMORY_CANDIDATE_MAX_ITEMS } from './memory-api'
+import type { MemorySaveCandidate } from './memory-api'
 
 /** 卡片类型：类型即场景契约，新增类型前必须确认它有唯一动作落点。 */
-export const PRESENT_CARD_TYPES = ['expert.draft', 'session.summary'] as const
+export const PRESENT_CARD_TYPES = ['expert.draft', 'session.summary', 'memory.candidates'] as const
 
 export type PresentCardType = typeof PRESENT_CARD_TYPES[number]
 
 /** 动作白名单：ID 绑定到既有业务通道，卡片只按 ID 转发，不自行判断能否写入。 */
-export const PRESENT_CARD_ACTIONS = ['expert.save', 'copy.text'] as const
+export const PRESENT_CARD_ACTIONS = ['expert.save', 'copy.text', 'memory.save'] as const
 
 export type PresentCardActionId = typeof PRESENT_CARD_ACTIONS[number]
 
@@ -32,7 +34,9 @@ export const PRESENT_CARD_LIMITS = {
   /** 交付汇总文件段三组的合计条数上限：清单是给用户点选的，不是完整改动流水。 */
   summaryFiles: 40,
   /** 交付汇总单条相对路径的长度上限：项目内路径远短于这个值，超长即明显不是相对路径。 */
-  summaryPath: 512
+  summaryPath: 512,
+  /** 记忆候选段条数上限：人工确认面的精选清单，与保存请求同一上限。 */
+  memoryCandidates: MEMORY_CANDIDATE_MAX_ITEMS
 } as const
 
 /** 一条字段行：label 与 value 都按纯文本渲染，不解析 Markdown，也不当作链接。 */
@@ -70,7 +74,7 @@ export interface PresentCardFiles {
   readonly affected: readonly string[]
 }
 
-/** 一份卡片载荷；`body` 与 `files` 只在界面展示，不进入模型可见的工具结果文本。 */
+/** 一份卡片载荷；`body`、`files` 与 `candidates` 只在界面展示，不进入模型可见的工具结果文本。 */
 export interface PresentCardView {
   readonly cardType: PresentCardType
   readonly title: string
@@ -79,6 +83,7 @@ export interface PresentCardView {
   readonly body: string | null
   readonly capability: PresentCardCapability | null
   readonly files: PresentCardFiles | null
+  readonly candidates: readonly MemorySaveCandidate[] | null
   readonly primaryAction: PresentCardAction
   readonly secondaryAction: PresentCardAction | null
 }
@@ -177,6 +182,23 @@ function parseCapability(value: unknown): PresentCardCapability | null | 'invali
   }
 }
 
+/**
+ * 记忆候选段：缺省为 null（不带候选的类型与旧卡片按没有该段处理）；给了就必须是合法候选数组。
+ * 条目与保存请求同一判定（memory-api 的单条校验）：卡片上能出现的与能提交引擎的同形；
+ * 类型与状态的业务组合（progress 显式 status、规则键冲突等）由引擎判定，这里只把住形状。
+ */
+function parseMemoryCandidates(value: unknown): readonly MemorySaveCandidate[] | null | 'invalid' {
+  if (value === null || value === undefined) return null
+  if (!Array.isArray(value)) return 'invalid'
+  if (value.length === 0 || value.length > PRESENT_CARD_LIMITS.memoryCandidates) return 'invalid'
+  const candidates: MemorySaveCandidate[] = []
+  for (const item of value) {
+    if (!isMemorySaveCandidate(item)) return 'invalid'
+    candidates.push(item)
+  }
+  return candidates
+}
+
 function parseAction(value: unknown): PresentCardAction | null {
   if (!isRecord(value)) return null
   const { id, label } = value
@@ -191,7 +213,7 @@ function parseAction(value: unknown): PresentCardAction | null {
  */
 export function parsePresentCardView(value: unknown): PresentCardView | null {
   if (!isRecord(value)) return null
-  const { cardType, title, subtitle, fields, body, capability, files, primaryAction, secondaryAction } = value
+  const { cardType, title, subtitle, fields, body, capability, files, candidates, primaryAction, secondaryAction } = value
   if (typeof cardType !== 'string' || !(PRESENT_CARD_TYPES as readonly string[]).includes(cardType)) return null
   if (!isText(title, PRESENT_CARD_LIMITS.title)) return null
   if (!isNullableText(subtitle, PRESENT_CARD_LIMITS.subtitle)) return null
@@ -207,6 +229,8 @@ export function parsePresentCardView(value: unknown): PresentCardView | null {
   if (parsedCapability === 'invalid') return null
   const parsedFiles = parseFiles(files)
   if (parsedFiles === 'invalid') return null
+  const parsedCandidates = parseMemoryCandidates(candidates)
+  if (parsedCandidates === 'invalid') return null
   const parsedPrimary = parseAction(primaryAction)
   if (parsedPrimary === null) return null
   const parsedSecondary = secondaryAction === null || secondaryAction === undefined ? null : parseAction(secondaryAction)
@@ -220,6 +244,7 @@ export function parsePresentCardView(value: unknown): PresentCardView | null {
     body: body === '' ? null : body,
     capability: parsedCapability,
     files: parsedFiles,
+    candidates: parsedCandidates,
     primaryAction: parsedPrimary,
     secondaryAction: parsedSecondary
   }

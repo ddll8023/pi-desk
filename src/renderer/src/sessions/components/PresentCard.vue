@@ -1,15 +1,20 @@
-<!-- 会话内卡片：present_card 工具交付的载荷，按随包枚举渲染固定外壳（标题、字段、正文、能力勾选、文件清单、主次按钮）。
-     卡片只是数据展示与动作转发：按钮按动作 ID 调既有业务通道（保存专家走 desktop:expert-save，复制走剪贴板），
-     不在渲染层拼装写入规则、不写文件；动作是否成立仍由主进程判定，失败原因就地显示。
+<!-- 会话内卡片：present_card 工具交付的载荷，按随包枚举渲染固定外壳（标题、字段、正文、能力勾选、文件清单、记忆候选、主次按钮）。
+     卡片只是数据展示与动作转发：按钮按动作 ID 调既有业务通道（保存专家走 desktop:expert-save，复制走剪贴板，
+     记忆候选保存走 desktop:memory-save-candidates），不在渲染层拼装写入规则、不写文件；
+     动作是否成立仍由主进程判定，失败原因就地显示。
      所在位置由 ChatMessageItem 定为独立展示行，宽度占满消息列：不做限宽居中，也不套进执行记录面板。
      能力段的候选与默认基线来自能力候选通道，勾选换算与设置页编辑对话框共用 capability-selection 里的同一套规则。
      能力段含技能、MCP 与工具三个维度；工具里的受保护项（技能门禁、待办清单与记忆组）始终保持勾选。
      交付汇总的文件段带行级「定位」：这是类型段的宿主固定行为、不进动作白名单，复用既有 desktop:project-entry-reveal
-     通道；工作区目标由当前项目与运行实例推导，日志视图等没有绑定工作区时禁用并说明原因。 -->
+     通道；工作区目标由当前项目与运行实例推导，日志视图等没有绑定工作区时禁用并说明原因。
+     记忆候选段同样是类型段的宿主固定行为：候选默认全选、可编辑（类型、标题、正文、规则键、状态）后再保存；
+     保存前的编辑是确认面的一部分，已入库记录的编辑不在这里。 -->
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
 import { computed, onMounted, ref } from 'vue'
 import type { ExpertSaveRequest } from '../../../../shared/experts-api'
+import { MEMORY_CONTENT_MAX, MEMORY_RECORD_TYPES, MEMORY_RULE_KEY_MAX, MEMORY_TOPIC_MAX } from '../../../../shared/memory-api'
+import type { MemoryRecordType, MemorySaveCandidate } from '../../../../shared/memory-api'
 import type { PresentCardView } from '../../../../shared/present-card-view'
 import type { WorkspaceTarget } from '../../../../shared/workspace-api'
 import { copyText } from '../../ui/clipboard'
@@ -20,6 +25,7 @@ import { baseIds, restoreSelection, selectionState, toSelectionFields } from '..
 import type { CapabilitySelectionMode } from '../../experts/capability-selection'
 import { skillSourceLabel } from '../../experts/skill-source-label'
 import ExpertCapabilityPicker from '../../experts/components/ExpertCapabilityPicker.vue'
+import { saveMemoryCandidates } from '../../memory/services/memory'
 import { useProjectStore } from '../../projects/stores/project'
 import { useSessionStore } from '../stores/session'
 import { useRuntimeStore } from '../stores/runtime'
@@ -57,6 +63,66 @@ const notice = ref('')
 const errorText = ref('')
 /** 保存成功后的专家标识；有值时说明这张卡片已经落过盘，重启后不保留。 */
 const savedExpertId = ref<string | null>(null)
+/** 候选保存成功条数；有值时说明这张卡片已经写库，勾选与编辑一并锁定。 */
+const savedMemoryCount = ref<number | null>(null)
+
+/**
+ * 记忆候选的可编辑副本：模型建议是初始值，用户改完勾选保存。
+ * 勾选默认全选；替代链引用（supersede／source ID）不开放编辑，保存时按原候选透传给引擎校验。
+ */
+interface CandidateEdit {
+  readonly index: number
+  checked: boolean
+  type: MemoryRecordType
+  topic: string
+  content: string
+  ruleKey: string
+  status: 'active' | 'resolved' | 'archived'
+}
+
+const candidateEdits = ref<readonly CandidateEdit[]>(
+  (props.card.candidates ?? []).map((candidate, index) => toCandidateEdit(candidate, index))
+)
+
+function toCandidateEdit(candidate: MemorySaveCandidate, index: number): CandidateEdit {
+  return {
+    index,
+    checked: true,
+    type: candidate.type,
+    topic: candidate.topic,
+    content: candidate.content,
+    ruleKey: candidate.rule_key ?? '',
+    status: candidate.status ?? 'active'
+  }
+}
+
+/** 规则类（decision／constraint）恒为 active 且需要规则键；其余类型在界面上显式选状态。 */
+function isRuleType(type: MemoryRecordType): boolean {
+  return type === 'decision' || type === 'constraint'
+}
+
+/** 单条是否可保存：只做形式校验（标题、正文、规则键非空），业务组合由引擎判定。 */
+function candidateComplete(edit: CandidateEdit): boolean {
+  if (edit.topic.trim() === '' || edit.content.trim() === '') return false
+  return !(isRuleType(edit.type) && edit.ruleKey.trim() === '')
+}
+
+/** 勾选且形式完整的候选才会进保存请求；一条都不满足时保存按钮禁用（不选即不写）。 */
+const savableCandidates = computed<readonly MemorySaveCandidate[]>(() => candidateEdits.value
+  .filter(edit => edit.checked && candidateComplete(edit))
+  .map(edit => {
+    const source = props.card.candidates?.[edit.index]
+    return {
+      type: edit.type,
+      topic: edit.topic.trim(),
+      content: edit.content.trim(),
+      ...(isRuleType(edit.type) ? { rule_key: edit.ruleKey.trim() } : {}),
+      ...(!isRuleType(edit.type) ? { status: edit.status } : {}),
+      ...(source?.source_record_ids === undefined ? {} : { source_record_ids: source.source_record_ids }),
+      ...(source?.supersede_record_ids === undefined ? {} : { supersede_record_ids: source.supersede_record_ids }),
+      ...(source?.supersession_reason === undefined ? {} : { supersession_reason: source.supersession_reason })
+    }
+  }))
 
 /** 能力候选是否已读；读到之前不渲染勾选格，避免空白框看着像「一项都没有」。 */
 const capabilityReady = computed(() => expertStore.capabilities !== null)
@@ -150,6 +216,8 @@ const toolRows = computed<readonly CapabilityRow[]>(() => {
 const hasBody = computed(() => props.card.body !== null && props.card.body !== '')
 const busy = computed(() => phase.value === 'busy')
 const saveDisabled = computed(() => busy.value || savedExpertId.value !== null || skillsEmpty.value)
+/** 记忆候选保存：写库后锁定全部编辑控件；可保存集合为空（全不勾或全不完整）时禁用。 */
+const memorySaveDisabled = computed(() => busy.value || savedMemoryCount.value !== null || savableCandidates.value.length === 0)
 
 const { view: runtimeView } = storeToRefs(runtimeStore)
 
@@ -279,20 +347,28 @@ async function saveExpertDefinition(): Promise<void> {
   await sessionStore.loadExperts()
 }
 
-/** 复制内容：带文件段的卡片给文本化清单（组名 + 路径，附正文），其余卡片维持只复制正文。 */
+/** 复制内容：带文件段的卡片给文本化清单（组名 + 路径，附正文），带候选段的给候选清单，其余卡片维持只复制正文。 */
 function copyContent(): string {
   const files = props.card.files
-  if (files === null) return props.card.body ?? ''
-  const blocks: string[] = []
-  const appendGroup = (label: string, paths: readonly string[]): void => {
-    if (paths.length === 0) return
-    blocks.push([`${label}：`, ...paths.map(path => `- ${path}`)].join('\n'))
+  if (files !== null) {
+    const blocks: string[] = []
+    const appendGroup = (label: string, paths: readonly string[]): void => {
+      if (paths.length === 0) return
+      blocks.push([`${label}：`, ...paths.map(path => `- ${path}`)].join('\n'))
+    }
+    appendGroup('改动', files.changed)
+    appendGroup('删除', files.deleted)
+    appendGroup('受影响', files.affected)
+    if (props.card.body !== null && props.card.body !== '') blocks.push(props.card.body)
+    return blocks.join('\n\n')
   }
-  appendGroup('改动', files.changed)
-  appendGroup('删除', files.deleted)
-  appendGroup('受影响', files.affected)
-  if (props.card.body !== null && props.card.body !== '') blocks.push(props.card.body)
-  return blocks.join('\n\n')
+  const candidates = props.card.candidates
+  if (candidates !== null) {
+    const blocks = candidates.map(candidate => `【${candidate.type}】${candidate.topic}\n${candidate.content}`)
+    if (props.card.body !== null && props.card.body !== '') blocks.push(props.card.body)
+    return blocks.join('\n\n')
+  }
+  return props.card.body ?? ''
 }
 
 async function copyBody(): Promise<void> {
@@ -306,7 +382,31 @@ async function copyBody(): Promise<void> {
     return
   }
   phase.value = 'copied'
-  notice.value = props.card.files === null ? '正文已复制到剪贴板。' : '清单已复制到剪贴板。'
+  notice.value = props.card.files !== null
+    ? '清单已复制到剪贴板。'
+    : props.card.candidates !== null ? '候选清单已复制到剪贴板。' : '正文已复制到剪贴板。'
+}
+
+/**
+ * 保存勾选的记忆候选：只转发项目路径与编辑后的候选，归属与计划由主进程处理。
+ * 未关联项目的会话传空路径，主进程按全局记忆落库并在回执里说明。
+ */
+async function saveCardCandidates(): Promise<void> {
+  if (memorySaveDisabled.value) return
+  phase.value = 'busy'
+  errorText.value = ''
+  notice.value = ''
+  const projectPath = projectStore.currentProject?.path ?? ''
+  const result = await saveMemoryCandidates({ projectPath, candidates: savableCandidates.value })
+  if (!result.ok) {
+    phase.value = 'failed'
+    errorText.value = result.error.message
+    return
+  }
+  savedMemoryCount.value = result.data.savedCount
+  phase.value = 'saved'
+  const globalNote = projectPath === '' ? '；未关联项目，已按全局记忆保存' : ''
+  notice.value = `已保存 ${result.data.savedCount} 条记忆${globalNote}。`
 }
 
 /** 定位一行文件：复用既有「在文件管理器中显示」通道；路径是否可达由主进程解析判定。 */
@@ -335,11 +435,17 @@ function runAction(id: PresentCardView['primaryAction']['id']): void {
     void saveExpertDefinition()
     return
   }
+  if (id === 'memory.save') {
+    void saveCardCandidates()
+    return
+  }
   void copyBody()
 }
 
 function actionDisabled(id: PresentCardView['primaryAction']['id']): boolean {
-  return id === 'expert.save' ? saveDisabled.value : busy.value
+  if (id === 'expert.save') return saveDisabled.value
+  if (id === 'memory.save') return memorySaveDisabled.value
+  return busy.value
 }
 
 /**
@@ -488,6 +594,83 @@ function applyInitialSelection(): void {
         />
       </div>
       <p v-if="skillsEmpty" class="present-card-error" role="alert">「仅用选中」时至少要保留一个技能。</p>
+
+      <!-- 记忆候选段：类型段的宿主固定行为——候选默认全选、可编辑后再保存；替代链引用不在此展示。
+           保存前的编辑属于确认面，写库后（savedMemoryCount 有值）勾选与编辑一并锁定。 -->
+      <div v-if="candidateEdits.length > 0" class="present-card-candidates">
+        <p class="present-card-candidates-title">记忆候选（{{ savableCandidates.length }} / {{ candidateEdits.length }} 条可保存）</p>
+        <div
+          v-for="edit in candidateEdits"
+          :key="edit.index"
+          class="present-card-candidate"
+          :class="{ 'is-incomplete': !candidateComplete(edit) }"
+        >
+          <div class="present-card-candidate-head">
+            <input
+              v-model="edit.checked"
+              type="checkbox"
+              class="present-card-candidate-check"
+              :disabled="busy || savedMemoryCount !== null"
+              :aria-label="`保存候选 ${edit.index + 1}`"
+            />
+            <select
+              v-model="edit.type"
+              class="present-card-candidate-type"
+              :disabled="busy || savedMemoryCount !== null"
+              :aria-label="`候选 ${edit.index + 1} 的记忆类型`"
+            >
+              <option v-for="type in MEMORY_RECORD_TYPES" :key="type" :value="type">{{ type }}</option>
+            </select>
+            <input
+              v-if="isRuleType(edit.type)"
+              v-model="edit.ruleKey"
+              type="text"
+              class="present-card-candidate-rulekey"
+              placeholder="规则键（如 chat.present-card-mechanism）"
+              :maxlength="MEMORY_RULE_KEY_MAX"
+              :disabled="busy || savedMemoryCount !== null"
+              :aria-label="`候选 ${edit.index + 1} 的规则键`"
+            />
+          </div>
+          <input
+            v-model="edit.topic"
+            type="text"
+            class="present-card-candidate-topic"
+            :maxlength="MEMORY_TOPIC_MAX"
+            :disabled="busy || savedMemoryCount !== null"
+            :aria-label="`候选 ${edit.index + 1} 的标题`"
+          />
+          <textarea
+            v-model="edit.content"
+            class="present-card-candidate-content"
+            :maxlength="MEMORY_CONTENT_MAX"
+            rows="3"
+            :disabled="busy || savedMemoryCount !== null"
+            :aria-label="`候选 ${edit.index + 1} 的正文`"
+          ></textarea>
+          <div v-if="!isRuleType(edit.type)" class="present-card-candidate-status">
+            <label class="present-card-candidate-status-label">
+              状态
+              <select
+                v-model="edit.status"
+                class="present-card-candidate-status-select"
+                :disabled="busy || savedMemoryCount !== null"
+                :aria-label="`候选 ${edit.index + 1} 的状态`"
+              >
+                <option value="active">active（生效中／未决）</option>
+                <option value="resolved">resolved（已解决）</option>
+                <option value="archived">archived（已归档）</option>
+              </select>
+            </label>
+            <span v-if="edit.type === 'progress' && edit.status === 'active'" class="present-card-candidate-hint">
+              active 的 progress 不能含提交号或改动行数，否则保存会被拒绝。
+            </span>
+          </div>
+          <p v-if="!candidateComplete(edit)" class="present-card-file-error" role="alert">
+            这条缺少{{ isRuleType(edit.type) && edit.ruleKey.trim() === '' ? '标题、正文或规则键' : '标题或正文' }}，不会包含在保存里。
+          </p>
+        </div>
+      </div>
 
       <details v-if="hasBody" class="present-card-body" @toggle="onToggle">
         <summary>查看正文</summary>
@@ -666,6 +849,133 @@ function applyInitialSelection(): void {
 .present-card-body {
   font-size: 0.75rem;
   color: var(--color-desk-muted);
+}
+/* 记忆候选段：与文件段同一面板基调；条目内是可编辑表单，勾选与编辑在写库后锁定。 */
+.present-card-candidates {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.625rem;
+  border-radius: var(--radius-desk-sm);
+  background: var(--color-desk-panel);
+}
+.present-card-candidates-title {
+  margin: 0;
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--color-desk-ink);
+}
+.present-card-candidate + .present-card-candidate {
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--color-desk-line);
+}
+.present-card-candidate {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+.present-card-candidate.is-incomplete {
+  border-left: 2px solid var(--color-desk-danger);
+  padding-left: 0.5rem;
+}
+.present-card-candidate-head {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+}
+.present-card-candidate-check {
+  flex: none;
+  margin: 0;
+  accent-color: var(--color-desk-accent);
+}
+.present-card-candidate-type,
+.present-card-candidate-status-select {
+  flex: none;
+  min-height: 1.5rem;
+  border: 1px solid var(--color-desk-line);
+  border-radius: var(--radius-desk-sm);
+  background: var(--color-desk-surface);
+  color: var(--color-desk-ink);
+  font: inherit;
+  font-size: 0.6875rem;
+  line-height: 1.4;
+}
+.present-card-candidate-rulekey {
+  flex: 1;
+  min-width: 0;
+  min-height: 1.5rem;
+  padding: 0.125rem 0.375rem;
+  border: 1px solid var(--color-desk-line);
+  border-radius: var(--radius-desk-sm);
+  background: var(--color-desk-surface);
+  color: var(--color-desk-ink);
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  line-height: 1.4;
+}
+.present-card-candidate-topic {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 1.5rem;
+  padding: 0.125rem 0.375rem;
+  border: 1px solid var(--color-desk-line);
+  border-radius: var(--radius-desk-sm);
+  background: var(--color-desk-surface);
+  color: var(--color-desk-ink);
+  font: inherit;
+  font-size: 0.75rem;
+  line-height: 1.5;
+}
+.present-card-candidate-content {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.25rem 0.375rem;
+  border: 1px solid var(--color-desk-line);
+  border-radius: var(--radius-desk-sm);
+  background: var(--color-desk-surface);
+  color: var(--color-desk-ink);
+  font: inherit;
+  font-size: 0.75rem;
+  line-height: 1.6;
+  resize: vertical;
+  min-height: 3.5rem;
+}
+.present-card-candidate-topic:focus-visible,
+.present-card-candidate-content:focus-visible,
+.present-card-candidate-rulekey:focus-visible,
+.present-card-candidate-type:focus-visible,
+.present-card-candidate-status-select:focus-visible,
+.present-card-candidate-check:focus-visible {
+  outline: 2px solid var(--color-desk-accent);
+  outline-offset: 1px;
+}
+.present-card-candidate-topic:disabled,
+.present-card-candidate-content:disabled,
+.present-card-candidate-rulekey:disabled,
+.present-card-candidate-type:disabled,
+.present-card-candidate-status-select:disabled,
+.present-card-candidate-check:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.present-card-candidate-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.6875rem;
+  color: var(--color-desk-muted);
+}
+.present-card-candidate-status-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+.present-card-candidate-hint {
+  font-size: 0.6875rem;
+  color: var(--color-desk-muted);
+  overflow-wrap: anywhere;
 }
 .present-card-body summary {
   cursor: pointer;

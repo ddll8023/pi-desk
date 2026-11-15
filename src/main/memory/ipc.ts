@@ -1,17 +1,19 @@
-/** 记忆设置 IPC：校验调用者与参数，转发给唯一所有者；不提供路径、命令或批准参数。 */
+/** 记忆域 IPC：校验调用者与参数，转发给唯一所有者（状态、开关、创建、读取与候选保存）；不提供路径、命令或批准参数。 */
 import type { IpcMainInvokeEvent } from 'electron'
 import {
   MEMORY_ENABLED_CHANNEL,
   MEMORY_INITIALIZE_CHANNEL,
   MEMORY_PROFILE_READ_CHANNEL,
   MEMORY_READ_CHANNEL,
+  MEMORY_SAVE_CANDIDATES_CHANNEL,
   MEMORY_STATUS_CHANNEL,
   isMemoryInitializeRequest,
   isMemoryPreference,
   isMemoryProfileReadRequest,
-  isMemoryReadRequest
+  isMemoryReadRequest,
+  isMemorySaveCandidatesRequest
 } from '../../shared/memory-api'
-import type { MemoryProfileReadResult, MemoryReadResult, MemoryResult } from '../../shared/memory-api'
+import type { MemoryProfileReadResult, MemoryReadResult, MemoryResult, MemorySaveResult } from '../../shared/memory-api'
 import { handle, isTrustedCaller } from '../ipc/dispatch'
 import { memoryManager } from '../services'
 
@@ -71,5 +73,17 @@ export function registerMemoryHandlers(pageUrl: string): void {
         return { ok: false, error: { code: 'INVALID_REQUEST', message: '画像读取只接受一个固定领域。' } }
       }
       return memoryManager.readProfiles(args[0].domain)
+    })
+
+  /** 候选保存只接受 1..10 条合法候选与项目路径；plan、store 与批准标志都不由页面指定。 */
+  handle(MEMORY_SAVE_CANDIDATES_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<MemorySaveResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return { ok: false, error: { code: 'FORBIDDEN', message: '不允许此页面调用桌面接口。' } }
+      }
+      if (args.length !== 1 || !isMemorySaveCandidatesRequest(args[0])) {
+        return { ok: false, error: { code: 'INVALID_REQUEST', message: '候选保存只接受项目路径与 1 至 10 条合法候选。' } }
+      }
+      return memoryManager.saveCandidates(args[0])
     })
 }

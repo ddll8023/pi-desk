@@ -1,9 +1,10 @@
 /**
- * 用户级全局记忆的桌面所有者：开关、受管运行时状态、库状态、首次初始化，以及按 ID 的正文与按领域的画像读取。
+ * 用户级全局记忆的桌面所有者：开关、受管运行时状态、库状态、首次初始化、按 ID 的正文与按领域的画像读取，以及会话卡片候选的保存。
  *
  * 只通过受管解释器与配套引擎执行固定动作；不读项目文件、不推断项目身份、不修改业务项目。
  * 库状态探测、正文读取与画像读取都是只读调用；创建只在用户明确确认且目标位置尚无可用库时执行，不覆盖既有数据。
- * 写入用户库的真值只有安装级配置里的开关；页面与宿主都只读这一份结果。
+ * 写入用户库的动作只有三处：安装级配置里的开关、经用户确认的首次创建，以及用户在卡片上点击保存的候选提交
+ * （plan→commit 走引擎既有校验）；页面与宿主都只读这一份结果。
  */
 import { spawn } from 'node:child_process'
 import { stat } from 'node:fs/promises'
@@ -12,10 +13,14 @@ import { join } from 'node:path'
 import type { DesktopConfigStore } from '../config/desktop-config-store'
 import type { MemoryHostConfiguration, MemoryConfigurationProvider } from '../../shared-process/memory-runtime'
 import { managedMemoryConfiguration } from '../../shared-process/memory-runtime'
-import type { MemoryErrorCode, MemoryInitializeRequest, MemoryPreference, MemoryProfileDomain, MemoryProfileReadRecord, MemoryProfileReadResult, MemoryReadRecord, MemoryReadResult, MemoryResult, MemorySnapshot } from '../../shared/memory-api'
+import type { MemoryErrorCode, MemoryInitializeRequest, MemoryPreference, MemoryProfileDomain, MemoryProfileReadRecord, MemoryProfileReadResult, MemoryReadRecord, MemoryReadResult, MemoryResult, MemorySaveCandidatesRequest, MemorySaveResult, MemorySnapshot } from '../../shared/memory-api'
 
 const ENGINE_TIMEOUT_MS = 30_000
 const ENGINE_MAX_OUTPUT = 4 * 1024 * 1024
+/** 候选输入上限：与扩展侧引擎适配器同一量级，超限整份拒绝，不截断。 */
+const SAVE_INPUT_MAX_BYTES = 262_144
+/** 引擎计划 ID：`s_` 前缀加 ULID 字母表，形态不符一律不提交。 */
+const ENGINE_PLAN_ID = /^s_[0-9A-HJKMNP-TV-Z]{26}$/
 /** 权威数据只有一份库文件；库目录由配置给出，文件名固定。 */
 const STORE_FILE = 'memory.db'
 const SUPPORTED_PLATFORMS = ['win32', 'darwin']
@@ -57,6 +62,8 @@ export class MemoryManager {
   /** 配置版本：任一开关或资源变化都递增，用于让扩展侧丢弃旧会话状态。 */
   private revision = 0
   private initializing = false
+  /** 候选保存互斥：plan→commit 期间不接受第二次保存，避免两份计划交叉提交。 */
+  private savingCandidates = false
   readonly provider: MemoryConfigurationProvider = {
     read: hostEntry => this.configuration(hostEntry)
   }
@@ -229,12 +236,15 @@ export class MemoryManager {
     } catch { return null }
   }
 
-  /** 固定参数启动受管解释器；超时或非零退出都只返回真实结论，不自动重试。 */
-  private runEngine(configuration: MemoryHostConfiguration, args: string[]): Promise<{ code: number; text: string }> {
+  /** 固定参数启动受管解释器；超时或非零退出都只返回真实结论，不自动重试。`input` 经 stdin 以 `--input -` 协议传入。 */
+  private runEngine(configuration: MemoryHostConfiguration, args: string[], input?: unknown): Promise<{ code: number; text: string }> {
     return new Promise(resolvePromise => {
       const pinned = configuration.tzdata === null ? [] : ['--tzdata', configuration.tzdata]
+      const body = input === undefined ? null : JSON.stringify(input)
       const child = spawn(configuration.python, ['-I', '-B', configuration.engine,
-        ...pinned, '--store', configuration.store, ...args], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
+        ...pinned, '--store', configuration.store, ...args], {
+        stdio: body === null ? ['ignore', 'pipe', 'pipe'] : ['pipe', 'pipe', 'pipe'], windowsHide: true
+      })
       const chunks: Buffer[] = []
       let size = 0
       let settled = false
@@ -248,6 +258,11 @@ export class MemoryManager {
       timer = setTimeout(() => { try { child.kill() } catch { /* 只以退出码判断结论。 */ } finish(-1) }, ENGINE_TIMEOUT_MS)
       child.stdout?.on('data', (chunk: Buffer) => { size += chunk.length; if (size <= ENGINE_MAX_OUTPUT) chunks.push(chunk) })
       child.stderr?.resume()
+      if (body !== null) {
+        // 引擎提前退出时写入会报 EPIPE：结论仍以退出码与输出为准，不把写入失败当成独立结论。
+        child.stdin?.on('error', () => { /* 由退出码与输出判定。 */ })
+        child.stdin?.end(body)
+      }
       child.on('error', () => finish(-1))
       child.on('close', code => finish(code ?? -1))
     })
@@ -367,6 +382,95 @@ export class MemoryManager {
       }
     } catch { /* 非 JSON 输出按引擎失败处理。 */ }
     return { ok: false, error: { code: 'INTERNAL_ERROR', message: this.describeFailure(result) } }
+  }
+
+  /**
+   * 保存会话内卡片候选：用户在卡片上勾选并编辑后经既有引擎计划提交。
+   * 归属按项目注册表匹配 projectPath，拿不到留空（全局记忆）；plan 与 commit 在同一次调用内连续执行——
+   * 用户确认已在卡片点击时完成，不复刻扩展侧面向模型的计划展示校验；提交结果与计划不一致时报错，不自动重试。
+   * 会话身份由引擎生成（不传 session_id）：卡片保存是用户动作，与模型侧日记会话不同源，也不引入第二份会话映射。
+   */
+  async saveCandidates(request: MemorySaveCandidatesRequest): Promise<MemorySaveResult> {
+    if (this.savingCandidates) {
+      return { ok: false, error: { code: 'BUSY', message: '已有候选保存正在进行，请等待其真实结果。' } }
+    }
+    let configuration: MemoryHostConfiguration
+    try { configuration = await this.configuration(this.options.hostEntry()) }
+    catch {
+      return { ok: false, error: { code: 'RUNTIME_MISSING', message: '受管记忆运行环境不可用。' } }
+    }
+    if (!configuration.available) {
+      return { ok: false, error: { code: 'RUNTIME_MISSING', message: configuration.error ?? '受管记忆运行环境不可用。' } }
+    }
+    const registry = await this.projects()
+    const project = request.projectPath === ''
+      ? null
+      : registry.projects.find(item => item.path === request.projectPath) ?? null
+    const input = {
+      agent: 'pi-desk',
+      records: request.candidates.map(candidate => ({
+        type: candidate.type, topic: candidate.topic, content: candidate.content,
+        ...(candidate.rule_key === undefined ? {} : { rule_key: candidate.rule_key }),
+        ...(candidate.status === undefined ? {} : { status: candidate.status }),
+        ...(candidate.source_record_ids === undefined ? {} : { source_record_ids: candidate.source_record_ids }),
+        ...(candidate.supersede_record_ids === undefined ? {} : { supersede_record_ids: candidate.supersede_record_ids }),
+        ...(candidate.supersession_reason === undefined ? {} : { supersession_reason: candidate.supersession_reason })
+      })),
+      ...(project === null ? {} : { project_id: project.id })
+    }
+    if (Buffer.byteLength(JSON.stringify(input)) > SAVE_INPUT_MAX_BYTES) {
+      return { ok: false, error: { code: 'INVALID_REQUEST', message: '候选超过输入上限，未截断或提交。' } }
+    }
+    this.savingCandidates = true
+    try {
+      const plan = await this.runEngine(configuration, ['plan', 'save', '--input', '-'], input)
+      const planData = this.engineData(plan)
+      if (planData === null) {
+        return { ok: false, error: this.engineFailure(plan, '候选计划未能生成。') }
+      }
+      const planId = planData.plan_id
+      if (typeof planId !== 'string' || !ENGINE_PLAN_ID.test(planId)) {
+        return { ok: false, error: { code: 'INVALID_RESPONSE', message: '记忆引擎返回了非法计划 ID；未提交。' } }
+      }
+      const commit = await this.runEngine(configuration, ['commit', '--plan-id', planId, '--approved'])
+      const commitData = this.engineData(commit)
+      if (commitData === null || commitData.committed !== planId || commitData.operation !== 'save') {
+        return { ok: false, error: { code: 'INTERNAL_ERROR',
+          message: '提交结果与计划不一致，结果未确认；不得自动重试，请先核对记忆库实际状态。' } }
+      }
+      const recordIds = commitData.new_record_ids
+      if (!Array.isArray(recordIds) || recordIds.some(id => typeof id !== 'string')) {
+        return { ok: false, error: { code: 'INVALID_RESPONSE', message: '记忆引擎提交回执缺少记录 ID。' } }
+      }
+      return { ok: true, data: { savedCount: recordIds.length, recordIds: recordIds as readonly string[] } }
+    } finally {
+      this.savingCandidates = false
+    }
+  }
+
+  /** 引擎 JSON 输出的 data 段；ok 不为真或退出码非零时按失败处理。 */
+  private engineData(result: { code: number; text: string }): Record<string, unknown> | null {
+    if (result.code !== 0) return null
+    try {
+      const parsed: unknown = JSON.parse(result.text)
+      if (isRecord(parsed) && parsed.ok === true && isRecord(parsed.data)) return parsed.data
+    } catch { /* 非 JSON 输出按引擎失败处理。 */ }
+    return null
+  }
+
+  /** 引擎失败→桌面错误码：缺库类消息映射 STORE_UNAVAILABLE（与读取通道同一判定），其余按候选内容被拒透传原文。 */
+  private engineFailure(result: { code: number; text: string }, fallback: string): { code: MemoryErrorCode; message: string } {
+    if (result.code === -1) return { code: 'INTERNAL_ERROR', message: '受管记忆引擎无响应或超时；未自动重试。' }
+    let message = ''
+    try {
+      const parsed: unknown = JSON.parse(result.text)
+      if (isRecord(parsed) && isRecord(parsed.error) && typeof parsed.error.message === 'string') {
+        message = parsed.error.message
+      }
+    } catch { /* 保留原始输出。 */ }
+    if (message === '') message = result.text.trim().slice(0, 400) || fallback
+    const missing = /记忆库不存在|记忆库文件缺失/.test(message)
+    return { code: missing ? 'STORE_UNAVAILABLE' : 'INVALID_REQUEST', message }
   }
 
   private describeFailure(result: { code: number; text: string }): string {

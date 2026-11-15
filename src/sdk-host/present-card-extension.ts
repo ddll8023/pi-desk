@@ -6,16 +6,21 @@
  * 不写盘也不改清单——按钮的落点由渲染层转发到既有业务通道（如 `desktop:expert-save`）。
  *
  * 交给模型的只有一句结论，正文与字段只放进 `details.card` 供界面展示，
- * 因此长正文不会在上下文里重复出现（边界见 docs/present-card-design.md）。
+ * 因此长正文不会在上下文里重复出现（边界见 docs/会话内卡片设计.md）。
  */
 import { Type } from '@earendil-works/pi-ai'
 import type { ExtensionFactory } from '@earendil-works/pi-coding-agent'
+import { MEMORY_RECORD_TYPES } from '../shared/memory-api'
 import {
   PRESENT_CARD_ACTIONS, PRESENT_CARD_LIMITS, parsePresentCardView
 } from '../shared/present-card-view'
 import type { PresentCardActionId, PresentCardType, PresentCardView } from '../shared/present-card-view'
+import type { MemorySaveCandidate } from '../shared/memory-api'
 
 const TOOL_NAME = 'present_card'
+
+/** 引擎引用名单的参数形状：真实记录 ID，一次最多 50 条。 */
+const CANDIDATE_IDS = Type.Array(Type.String({ pattern: '^m_[0-9A-HJKMNP-TV-Z]{26}$' }), { maxItems: 50 })
 
 /** 一次工具调用的参数形状；与注册时给模型的 schema 一一对应。 */
 interface CardParams {
@@ -37,6 +42,8 @@ interface CardParams {
   readonly changed_files?: readonly string[]
   readonly deleted_files?: readonly string[]
   readonly affected_files?: readonly string[]
+  /** 记忆候选段：待保存候选清单；只用于 memory.candidates，用户会勾选并编辑后再保存。 */
+  readonly candidates?: readonly MemorySaveCandidate[]
   readonly primary_action_id: PresentCardActionId
   readonly primary_action_label: string
   readonly secondary_action_id?: PresentCardActionId
@@ -47,6 +54,7 @@ interface CardParams {
  * 由参数组装卡片并复用共享解析器校验；返回字符串表示拒绝原因。
  * 草案类型额外要求简介与正文：缺任一项的「专家定义」在主进程保存时也会被拒，提前拦下更省一轮往返。
  * 交付汇总要求至少一个文件且按钮只允许复制：它是只读卡片，没有写入落点可绑定。
+ * 记忆候选要求至少一条候选且主按钮只能保存：写入记忆库是它的唯一落点，用户在卡片上勾选并编辑后才提交。
  */
 function buildCard(params: CardParams): PresentCardView | string {
   const subtitle = params.subtitle?.trim() === '' ? undefined : params.subtitle
@@ -70,6 +78,17 @@ function buildCard(params: CardParams): PresentCardView | string {
       || (params.secondary_action_id !== undefined && params.secondary_action_id !== 'copy.text')) {
       return '交付汇总卡片是只读的，主次按钮只能用 copy.text。'
     }
+  }
+  if (params.card_type === 'memory.candidates') {
+    if ((params.candidates ?? []).length === 0) {
+      return '记忆候选卡片至少要给一条候选；没有值得保存的内容时不要用卡片，直接用文本说明。'
+    }
+    if (params.primary_action_id !== 'memory.save'
+      || (params.secondary_action_id !== undefined && params.secondary_action_id !== 'copy.text')) {
+      return '记忆候选卡片的主按钮只能是保存（memory.save），次按钮只能是复制（copy.text）。'
+    }
+  } else if (params.candidates !== undefined) {
+    return '候选清单参数只用于 memory.candidates（记忆候选）卡片。'
   }
   if (params.secondary_action_id !== undefined && params.secondary_action_label === undefined) {
     return '给了次要动作 ID 时也要给次要动作文案。'
@@ -97,6 +116,7 @@ function buildCard(params: CardParams): PresentCardView | string {
           deleted: params.deleted_files ?? [],
           affected: params.affected_files ?? []
         },
+    candidates: params.candidates === undefined ? null : params.candidates,
     primaryAction: { id: params.primary_action_id, label: params.primary_action_label },
     secondaryAction: params.secondary_action_id === undefined
       ? null
@@ -107,7 +127,7 @@ function buildCard(params: CardParams): PresentCardView | string {
   }
   const parsed = parsePresentCardView(candidate)
   if (parsed === null) {
-    return '载荷不符合卡片契约：检查类型与动作 ID 是否在枚举内、主次动作是否重复、文件路径写法是否合规，以及各字段是否超长。'
+    return '载荷不符合卡片契约：检查类型与动作 ID 是否在枚举内、主次动作是否重复、文件路径写法与候选条目是否合规，以及各字段是否超长。'
   }
   return parsed
 }
@@ -127,17 +147,19 @@ export function createPresentCardExtension(): ExtensionFactory {
       name: TOOL_NAME,
       label: '会话内卡片',
       description: '把需要用户点一下才落地或需要一键操作的成果做成一张固定外壳卡片：只提交卡片类型、纯文本字段与动作 ID，界面按随包枚举渲染，不接受布局与样式描述。'
-        + '卡片上的按钮由产品已登记的动作执行：专家定义草案保存成自定义专家，交付汇总是只读文件清单（复制与逐行定位）。',
+        + '卡片上的按钮由产品已登记的动作执行：专家定义草案保存成自定义专家，交付汇总是只读文件清单（复制与逐行定位），记忆候选由用户勾选并编辑后写入记忆库。',
       promptSnippet: '把成果做成带按钮的卡片（保存、复制或定位）',
       promptGuidelines: [
-        '只在成果需要用户点一下才落地或需要一键操作时使用（专家定义草案、会话交付汇总）：普通说明、进度汇报与追问继续用文本。',
-        'card_type 目前有 expert.draft（专家定义草案）与 session.summary（会话交付汇总）。草案必须有 title、subtitle 与 body；fields 只放需要展示的说明行，不放正文。',
+        '只在成果需要用户点一下才落地或需要一键操作时使用（专家定义草案、会话交付汇总、记忆候选）：普通说明、进度汇报与追问继续用文本。',
+        'card_type 目前有 expert.draft（专家定义草案）、session.summary（会话交付汇总）与 memory.candidates（记忆候选）。草案必须有 title、subtitle 与 body；fields 只放需要展示的说明行，不放正文。',
         'session.summary 用在一轮有文件产出之后：changed_files／deleted_files／affected_files 只给项目内相对路径（用 / 分隔，不用绝对路径，不写目录），三组至少一个文件；删除的文件照实提交，定位时会提示已不存在。',
         '交付汇总卡片是只读的：主次按钮只能用 copy.text；文件三组合计上限 40 条，超限整张卡片会被拒绝而不是截断。',
+        'memory.candidates 用在本轮产出了值得长期保留的结论、约束或未决状态、且用户可能想挑选修改时：candidates 每条给 type、topic（单行标题）与 content，规则类（decision／constraint）必须带 rule_key，progress 必须显式 status（active 只表示仍待推进的未决状态）。用户会直接编辑候选再保存，按最终入库口径写，不要放过程流水。',
+        '不要先自行调用 memory_save 保存同一批内容再发候选卡片：与库内完全重复的候选会被引擎拒绝，部分重复会被跳过；二选一，需要用户确认就用卡片。',
         '技能、MCP 与工具范围由你给出建议：skills_mode／mcp_mode／tools_mode 省略即继承默认基线，对应名单是建议启用的项；卡片会列出全部候选让用户改，你还需说明为何这样收窄。',
         '只能引用当前候选里存在的技能，不得引用 sub-agent- 开头的子代理专用技能；仅用选中时技能名单不能为空。',
         '工具范围里技能门禁、待办清单与记忆工具属于必需项，不得建议排除；要授予委派能力就勾上 delegate_subagent。',
-        '动作只能取白名单 ID：expert.save 保存为自定义专家，copy.text 复制正文到剪贴板；不要按文案自行发明动作，也不要声称按钮会执行未登记的操作。',
+        '动作只能取白名单 ID：expert.save 保存为自定义专家，copy.text 复制正文到剪贴板，memory.save 写入勾选的记忆候选；不要按文案自行发明动作，也不要声称按钮会执行未登记的操作。',
         'body 不进入工具结果文本，长正文不受上下文成本影响，但仍受长度上限约束；超过上限整张卡片会被拒绝而不是截断。',
         '不要用它提交代码、命令、凭据或链接：卡片只承载纯文本与已登记动作。',
         '卡片放出去后等用户点击即可，不要再把同一份正文重复输出成对话文本。'
@@ -146,7 +168,8 @@ export function createPresentCardExtension(): ExtensionFactory {
       parameters: Type.Object({
         card_type: Type.Union([
           Type.Literal('expert.draft', { description: '专家定义草案：保存为自定义专家' }),
-          Type.Literal('session.summary', { description: '会话交付汇总：只读文件清单，按钮只能复制' })
+          Type.Literal('session.summary', { description: '会话交付汇总：只读文件清单，按钮只能复制' }),
+          Type.Literal('memory.candidates', { description: '记忆候选：用户勾选并编辑后写入记忆库' })
         ], { description: '卡片类型；类型即场景契约，按成果选择' }),
         title: Type.String({ minLength: 1, maxLength: PRESENT_CARD_LIMITS.title,
           description: '卡片标题；草案类型下即专家显示名称' }),
@@ -179,6 +202,21 @@ export function createPresentCardExtension(): ExtensionFactory {
         affected_files: Type.Optional(Type.Array(Type.String({ maxLength: PRESENT_CARD_LIMITS.summaryPath }),
           { maxItems: PRESENT_CARD_LIMITS.summaryFiles,
             description: '受本轮影响但未直接修改的文件相对路径；仅 session.summary 使用' })),
+        candidates: Type.Optional(Type.Array(Type.Object({
+          type: Type.Union(MEMORY_RECORD_TYPES.map(value => Type.Literal(value)),
+            { description: '记忆类型；decision／constraint 是规则类，须带 rule_key' }),
+          topic: Type.String({ minLength: 1, maxLength: 200, description: '候选标题，单行' }),
+          content: Type.String({ minLength: 1, maxLength: 20_000, description: '候选正文' }),
+          rule_key: Type.Optional(Type.String({ minLength: 1, maxLength: 200,
+            description: '规则键；规则类（decision／constraint）必填' })),
+          status: Type.Optional(Type.Union([Type.Literal('active'), Type.Literal('resolved'), Type.Literal('archived')],
+            { description: '非规则类状态；progress 必须显式给出' })),
+          source_record_ids: Type.Optional(CANDIDATE_IDS, { description: '引用的来源记录 ID' }),
+          supersede_record_ids: Type.Optional(CANDIDATE_IDS, { description: '本候选替代的有效规则记录 ID' }),
+          supersession_reason: Type.Optional(Type.String({ minLength: 1, maxLength: 2_000, description: '替代理由' }))
+        }, { additionalProperties: false }),
+          { maxItems: PRESENT_CARD_LIMITS.memoryCandidates,
+            description: '待保存候选清单；仅 memory.candidates 使用，用户会勾选并编辑后再保存' })),
         primary_action_id: Type.Union(PRESENT_CARD_ACTIONS.map(action => Type.Literal(action)),
           { description: '主按钮动作 ID' }),
         primary_action_label: Type.String({ minLength: 1, maxLength: PRESENT_CARD_LIMITS.actionLabel,

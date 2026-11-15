@@ -1,8 +1,8 @@
-/** 记忆域的受限桥接：设置页用开关、状态与首次创建，会话卡片用按记录 ID 与按领域的正文读取；不向页面开放路径或命令。 */
-import { isMemoryProfileReadResult, isMemoryReadResult, isMemoryResult } from '../../../../shared/memory-api'
+/** 记忆域的受限桥接：设置页用开关、状态与首次创建，会话卡片用按记录 ID 与按领域的正文读取和候选保存；不向页面开放路径或命令。 */
+import { isMemoryProfileReadResult, isMemoryReadResult, isMemoryResult, isMemorySaveResult } from '../../../../shared/memory-api'
 import type {
   MemoryInitializeRequest, MemoryPreference, MemoryProfileDomain, MemoryProfileReadResult,
-  MemoryReadRequest, MemoryReadResult, MemoryResult
+  MemoryReadRequest, MemoryReadResult, MemoryResult, MemorySaveCandidatesRequest, MemorySaveResult
 } from '../../../../shared/memory-api'
 
 interface MemoryBridge {
@@ -11,6 +11,7 @@ interface MemoryBridge {
   readonly initializeMemory: (request: MemoryInitializeRequest) => Promise<unknown>
   readonly readMemoryRecords?: (request: MemoryReadRequest) => Promise<unknown>
   readonly readMemoryProfiles?: (request: { readonly domain: MemoryProfileDomain }) => Promise<unknown>
+  readonly saveMemoryCandidates?: (request: MemorySaveCandidatesRequest) => Promise<unknown>
 }
 
 function bridge(): MemoryBridge | null {
@@ -87,6 +88,27 @@ export async function readMemoryProfiles(domain: MemoryProfileDomain): Promise<M
 
 export function setMemoryEnabled(enabled: boolean): Promise<MemoryResult> {
   return call(target => target.setMemoryEnabled({ enabled: enabled === true }))
+}
+
+/**
+ * 保存记忆候选卡片上勾选并编辑后的候选：只转发项目路径与候选，归属与计划由主进程处理。
+ * 与读取分开校验：保存回执的数据形状与失败语义不同，不把两种载荷混成一种。
+ */
+export async function saveMemoryCandidates(request: MemorySaveCandidatesRequest): Promise<MemorySaveResult> {
+  const target = bridge()
+  if (target === null || typeof target.saveMemoryCandidates !== 'function') {
+    return { ok: false, error: { code: 'BRIDGE_UNAVAILABLE', message: '当前环境没有桌面记忆接口。' } }
+  }
+  try {
+    const response = await target.saveMemoryCandidates(request)
+    if (!isMemorySaveResult(response)) {
+      return { ok: false, error: { code: 'INVALID_RESPONSE', message: '候选保存返回了不符合契约的结果。' } }
+    }
+    return response
+  } catch (error) {
+    return { ok: false, error: { code: 'INTERNAL_ERROR',
+      message: error instanceof Error ? error.message : '候选保存失败。' } }
+  }
 }
 
 export function initializeMemory(timezone: string): Promise<MemoryResult> {
