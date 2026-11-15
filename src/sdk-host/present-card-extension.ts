@@ -154,7 +154,7 @@ export function createPresentCardExtension(): ExtensionFactory {
         'card_type 目前有 expert.draft（专家定义草案）、session.summary（会话交付汇总）与 memory.candidates（记忆候选）。草案必须有 title、subtitle 与 body；fields 只放需要展示的说明行，不放正文。',
         'session.summary 用在一轮有文件产出之后：changed_files／deleted_files／affected_files 只给项目内相对路径（用 / 分隔，不用绝对路径，不写目录），三组至少一个文件；删除的文件照实提交，定位时会提示已不存在。',
         '交付汇总卡片是只读的：主次按钮只能用 copy.text；文件三组合计上限 40 条，超限整张卡片会被拒绝而不是截断。',
-        'memory.candidates 用在本轮产出了值得长期保留的结论、约束或未决状态、且用户可能想挑选修改时：candidates 每条给 type、topic（单行标题）与 content，规则类（decision／constraint）必须带 rule_key，progress 必须显式 status（active 只表示仍待推进的未决状态）。用户会直接编辑候选再保存，按最终入库口径写，不要放过程流水。',
+        'memory.candidates 用在本轮产出了值得长期保留的结论、约束或未决状态、且用户可能想挑选修改时——用户明确认可的非显然做法与取舍同样要给候选，只存纠正会让后续越来越保守，认可的理由写进 content：candidates 每条给 type、topic（单行标题）与 content，规则类（decision／constraint）必须带 rule_key，progress 必须显式 status（active 只表示仍待推进的未决状态）。用户会直接编辑候选再保存，按最终入库口径写，不要放过程流水。',
         '不要先自行调用 memory_save 保存同一批内容再发候选卡片：与库内完全重复的候选会被引擎拒绝，部分重复会被跳过；二选一，需要用户确认就用卡片。',
         '技能、MCP 与工具范围由你给出建议：skills_mode／mcp_mode／tools_mode 省略即继承默认基线，对应名单是建议启用的项；卡片会列出全部候选让用户改，你还需说明为何这样收窄。',
         '只能引用当前候选里存在的技能，不得引用 sub-agent- 开头的子代理专用技能；仅用选中时技能名单不能为空。',
