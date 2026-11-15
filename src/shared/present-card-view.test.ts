@@ -74,6 +74,62 @@ test('枚举外的动作 ID 判为不合规', () => {
   assert.equal(parsePresentCardView(draft({ primaryAction: { id: 'shell.run', label: '执行' } })), null)
 })
 
+/** 一份合法的会话交付汇总卡片；各用例在它之上做单点改动。 */
+function summary(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    cardType: 'session.summary',
+    title: '本轮交付汇总',
+    subtitle: null,
+    fields: [{ label: '涉及模块', value: '会话内卡片' }],
+    body: '以上文件已完成修改。',
+    files: {
+      changed: ['src/shared/present-card-view.ts'],
+      deleted: ['src/legacy/old.ts'],
+      affected: ['docs/present-card-design.md']
+    },
+    primaryAction: { id: 'copy.text', label: '复制清单' },
+    secondaryAction: null,
+    ...overrides
+  }
+}
+
+test('合法交付汇总通过且组内去重保序', () => {
+  const parsed = parsePresentCardView(summary({
+    files: { changed: ['b.ts', 'a.ts', 'b.ts'], deleted: [], affected: ['docs/x.md'] }
+  }))
+  assert.notEqual(parsed, null)
+  assert.equal(parsed?.cardType, 'session.summary')
+  assert.deepEqual(parsed?.files?.changed, ['b.ts', 'a.ts'])
+  assert.deepEqual(parsed?.files?.deleted, [])
+})
+
+test('交付汇总缺文件段时按 null 处理，由界面按无清单降级', () => {
+  assert.equal(parsePresentCardView(summary({ files: undefined }))?.files, null)
+})
+
+test('文件段缺组、非数组或不是对象判为不合规', () => {
+  assert.equal(parsePresentCardView(summary({ files: { changed: ['a.ts'] } })), null)
+  assert.equal(parsePresentCardView(summary({ files: { changed: 'a.ts', deleted: [], affected: [] } })), null)
+  assert.equal(parsePresentCardView(summary({ files: 'a.ts' })), null)
+})
+
+test('绝对路径、上跳段、反斜杠与空段判为不合规', () => {
+  const files = (changed: readonly string[]): Record<string, unknown> => ({ changed, deleted: [], affected: [] })
+  assert.equal(parsePresentCardView(summary({ files: files(['/etc/hosts']) })), null)
+  assert.equal(parsePresentCardView(summary({ files: files(['../outside.ts']) })), null)
+  assert.equal(parsePresentCardView(summary({ files: files(['src\\a.ts']) })), null)
+  assert.equal(parsePresentCardView(summary({ files: files(['src//a.ts']) })), null)
+  assert.equal(parsePresentCardView(summary({ files: files(['src/./a.ts']) })), null)
+  assert.equal(parsePresentCardView(summary({ files: files(['']) })), null)
+})
+
+test('文件条数与单条长度超限判为不合规而不是静默截断', () => {
+  const many = Array.from({ length: PRESENT_CARD_LIMITS.summaryFiles + 1 }, (_, index) => `f${index}.ts`)
+  assert.equal(parsePresentCardView(summary({ files: { changed: many, deleted: [], affected: [] } })), null)
+  const tooLong = `${'a'.repeat(PRESENT_CARD_LIMITS.summaryPath)}.ts`
+  assert.equal(parsePresentCardView(summary({ files: { changed: [tooLong], deleted: [], affected: [] } })), null)
+})
+
 test('主次动作指向同一落点判为不合规', () => {
   assert.equal(parsePresentCardView(draft({ secondaryAction: { id: 'expert.save', label: '再保存' } })), null)
 })

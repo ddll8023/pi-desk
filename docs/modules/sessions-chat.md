@@ -118,7 +118,7 @@
 | `src/renderer/src/sessions/components/ChatMessageItem.vue` | 单消息、图片编号及说明、思考抽屉、纯过程紧凑步骤、流式打字光标与工具归组面板；交付卡片的调用单列为卡片行（不进面板、不计入面板统计） |
 | `src/renderer/src/sessions/components/HistoryLoadSentinel.vue` | 历史加载触发哨兵 |
 | `src/renderer/src/sessions/components/ToolCard.vue` | 单行紧凑展示操作分类徽章、真实工具名、语境化参数与状态耗时胶囊；展开区展示结构化结果卡片、Diff 与调试抽屉，原文按需展开 |
-| `src/renderer/src/sessions/components/PresentCard.vue` | 会话内卡片：按固定外壳展示标题（头部带）、字段网格、能力勾选区（浅底面板）、可折叠正文与主次按钮带；占满消息列做独立展示行，不限宽居中、不套执行面板；技能、MCP 与工具用能力选择器列出候选（候选与基线取自能力候选通道），选受保护工具保持勾选且不可取消，勾选按与编辑对话框同一套规则换算成保存字段；按钮按动作 ID 转发到既有通道（`expert.save` → 专家保存并刷新清单，`copy.text` → 剪贴板），终态与失败原因就地展示；窄容器下字段转纵向堆叠 |
+| `src/renderer/src/sessions/components/PresentCard.vue` | 会话内卡片：按固定外壳展示标题（头部带）、字段网格、能力勾选区（浅底面板）、交付汇总的文件清单（三组相对路径，行内「定位」复用 `desktop:project-entry-reveal`，工作区目标由当前项目与运行实例推导，失败原因就地显示）、可折叠正文与主次按钮带；占满消息列做独立展示行，不限宽居中、不套执行面板；技能、MCP 与工具用能力选择器列出候选（候选与基线取自能力候选通道），选受保护工具保持勾选且不可取消，勾选按与编辑对话框同一套规则换算成保存字段；按钮按动作 ID 转发到既有通道（`expert.save` → 专家保存并刷新清单，`copy.text` → 剪贴板），终态与失败原因就地展示；窄容器下字段转纵向堆叠 |
 | `src/renderer/src/sessions/components/ToolResultPreview.vue` | 工具结果的计数口径、命中内容、来源、历史状态与省略提示；只展示投影，不发起额外查询 |
 | `src/renderer/src/sessions/components/UsageDetailDialog.vue` | 会话用量明细与独立的 Codex、OpenCode Go 账户额度展示、按需读取与手动刷新 |
 | `src/renderer/src/sessions/components/MemoryInjectionDialog.vue` | 记忆注入卡片：三个分段（适用偏好、常驻约定、当前项目近况）以 tab 切换，点击条目展开摘要，被截断时记录条目按 ID、画像条目按领域只读取全文 |

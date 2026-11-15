@@ -1,21 +1,29 @@
-<!-- 会话内卡片：present_card 工具交付的载荷，按随包枚举渲染固定外壳（标题、字段、正文、能力勾选、主次按钮）。
+<!-- 会话内卡片：present_card 工具交付的载荷，按随包枚举渲染固定外壳（标题、字段、正文、能力勾选、文件清单、主次按钮）。
      卡片只是数据展示与动作转发：按钮按动作 ID 调既有业务通道（保存专家走 desktop:expert-save，复制走剪贴板），
      不在渲染层拼装写入规则、不写文件；动作是否成立仍由主进程判定，失败原因就地显示。
      所在位置由 ChatMessageItem 定为独立展示行，宽度占满消息列：不做限宽居中，也不套进执行记录面板。
      能力段的候选与默认基线来自能力候选通道，勾选换算与设置页编辑对话框共用 capability-selection 里的同一套规则。
-     能力段含技能、MCP 与工具三个维度；工具里的受保护项（技能门禁、待办清单与记忆组）始终保持勾选。 -->
+     能力段含技能、MCP 与工具三个维度；工具里的受保护项（技能门禁、待办清单与记忆组）始终保持勾选。
+     交付汇总的文件段带行级「定位」：这是类型段的宿主固定行为、不进动作白名单，复用既有 desktop:project-entry-reveal
+     通道；工作区目标由当前项目与运行实例推导，日志视图等没有绑定工作区时禁用并说明原因。 -->
 <script setup lang="ts">
+import { storeToRefs } from 'pinia'
 import { computed, onMounted, ref } from 'vue'
 import type { ExpertSaveRequest } from '../../../../shared/experts-api'
 import type { PresentCardView } from '../../../../shared/present-card-view'
+import type { WorkspaceTarget } from '../../../../shared/workspace-api'
 import { copyText } from '../../ui/clipboard'
+import { revealProjectEntry } from '../../editor/services/project-file'
 import { saveExpert } from '../../experts/services/expert'
 import { useExpertStore } from '../../experts/stores/expert'
 import { baseIds, restoreSelection, selectionState, toSelectionFields } from '../../experts/capability-selection'
 import type { CapabilitySelectionMode } from '../../experts/capability-selection'
 import { skillSourceLabel } from '../../experts/skill-source-label'
 import ExpertCapabilityPicker from '../../experts/components/ExpertCapabilityPicker.vue'
+import { useProjectStore } from '../../projects/stores/project'
 import { useSessionStore } from '../stores/session'
+import { useRuntimeStore } from '../stores/runtime'
+import { useSessionRunsStore } from '../stores/session-runs'
 
 const props = defineProps<{
   /** 一份已通过跨进程契约校验的卡片；字段都是纯文本，界面不解析 Markdown。 */
@@ -27,6 +35,13 @@ const emit = defineEmits<{ userExpand: [] }>()
 
 const sessionStore = useSessionStore()
 const expertStore = useExpertStore()
+const runtimeStore = useRuntimeStore()
+const sessionRunsStore = useSessionRunsStore()
+const projectStore = useProjectStore()
+
+/** 行级定位错误：路径 → 可展示原因；删除组定位已不存在的文件是常见失败，就地显示不弹窗。 */
+const rowErrors = ref<Record<string, string>>({})
+const revealingPath = ref<string | null>(null)
 
 /** 能力候选行：来源或停用状态进 label，差异标记进 state，与设置页同一套呈现。 */
 interface CapabilityRow {
@@ -136,6 +151,36 @@ const hasBody = computed(() => props.card.body !== null && props.card.body !== '
 const busy = computed(() => phase.value === 'busy')
 const saveDisabled = computed(() => busy.value || savedExpertId.value !== null || skillsEmpty.value)
 
+const { view: runtimeView } = storeToRefs(runtimeStore)
+
+/** 当前会话标识：运行态未就绪或未绑定会话时为 null（只看日志的视图也在这一列）。 */
+const sessionId = computed(() => (
+  runtimeView.value.phase === 'ready' ? runtimeView.value.snapshot.info?.sessionId ?? null : null
+))
+
+/**
+ * 定位用的工作区目标：项目路径来自当前项目，工作区标识来自该会话绑定的运行实例。
+ * 推导不出（日志视图、会话尚未建立、运行实例未带工作区）时定位按钮禁用并说明原因。
+ */
+const revealTarget = computed<WorkspaceTarget | null>(() => {
+  const projectPath = projectStore.currentProject?.path ?? null
+  const id = sessionId.value
+  if (projectPath === null || id === null) return null
+  const run = sessionRunsStore.runOfSession(projectPath, id)
+  return run === null || run.workspaceId === null ? null : { projectPath, workspaceId: run.workspaceId }
+})
+
+/** 交付汇总的文件组：只渲染非空组，组序与交付语义一致（改动、删除、受影响）。 */
+const fileGroups = computed(() => {
+  const files = props.card.files
+  if (files === null) return []
+  return [
+    { label: '改动', paths: files.changed },
+    { label: '删除', paths: files.deleted },
+    { label: '受影响', paths: files.affected }
+  ].filter(group => group.paths.length > 0)
+})
+
 onMounted(async () => {
   if (props.card.cardType !== 'expert.draft') return
   // 候选与基线只在卡片需要时读一次；读失败时保持未就绪，保存仍以主进程校验为准。
@@ -234,18 +279,55 @@ async function saveExpertDefinition(): Promise<void> {
   await sessionStore.loadExperts()
 }
 
+/** 复制内容：带文件段的卡片给文本化清单（组名 + 路径，附正文），其余卡片维持只复制正文。 */
+function copyContent(): string {
+  const files = props.card.files
+  if (files === null) return props.card.body ?? ''
+  const blocks: string[] = []
+  const appendGroup = (label: string, paths: readonly string[]): void => {
+    if (paths.length === 0) return
+    blocks.push([`${label}：`, ...paths.map(path => `- ${path}`)].join('\n'))
+  }
+  appendGroup('改动', files.changed)
+  appendGroup('删除', files.deleted)
+  appendGroup('受影响', files.affected)
+  if (props.card.body !== null && props.card.body !== '') blocks.push(props.card.body)
+  return blocks.join('\n\n')
+}
+
 async function copyBody(): Promise<void> {
   if (busy.value) return
   phase.value = 'busy'
   errorText.value = ''
-  const copied = await copyText(props.card.body ?? '')
+  const copied = await copyText(copyContent())
   if (!copied) {
     phase.value = 'failed'
-    errorText.value = '复制失败，请手动选中正文复制。'
+    errorText.value = '复制失败，请手动选中内容复制。'
     return
   }
   phase.value = 'copied'
-  notice.value = '正文已复制到剪贴板。'
+  notice.value = props.card.files === null ? '正文已复制到剪贴板。' : '清单已复制到剪贴板。'
+}
+
+/** 定位一行文件：复用既有「在文件管理器中显示」通道；路径是否可达由主进程解析判定。 */
+async function revealFile(path: string): Promise<void> {
+  if (revealingPath.value !== null) return
+  const target = revealTarget.value
+  if (target === null) {
+    rowErrors.value = { ...rowErrors.value, [path]: '当前视图没有绑定工作区，无法定位。' }
+    return
+  }
+  revealingPath.value = path
+  const result = await revealProjectEntry(path, target)
+  revealingPath.value = null
+  if (!result.ok) {
+    rowErrors.value = { ...rowErrors.value, [path]: result.error.message }
+    return
+  }
+  // 成功后清掉该行的旧错误；其余行保留各自的状态。
+  const rest = { ...rowErrors.value }
+  delete rest[path]
+  rowErrors.value = rest
 }
 
 function runAction(id: PresentCardView['primaryAction']['id']): void {
@@ -317,6 +399,28 @@ function applyInitialSelection(): void {
           <dd>{{ field.value }}</dd>
         </div>
       </dl>
+
+      <div v-if="fileGroups.length > 0" class="present-card-files">
+        <section v-for="group in fileGroups" :key="group.label" class="present-card-file-group">
+          <h4 class="present-card-file-group-title">{{ group.label }}（{{ group.paths.length }}）</h4>
+          <ul class="present-card-file-list">
+            <li v-for="path in group.paths" :key="path" class="present-card-file-row">
+              <div class="present-card-file-line">
+                <code class="present-card-file-path" :title="path">{{ path }}</code>
+                <button
+                  type="button"
+                  class="present-card-file-reveal"
+                  :disabled="revealingPath !== null || revealTarget === null"
+                  :title="revealTarget === null ? '当前视图没有绑定工作区，无法定位。' : null"
+                  :aria-label="`在文件管理器中定位 ${path}`"
+                  @click="revealFile(path)"
+                >定位</button>
+              </div>
+              <p v-if="rowErrors[path]" class="present-card-file-error" role="alert">{{ rowErrors[path] }}</p>
+            </li>
+          </ul>
+        </section>
+      </div>
 
       <div v-if="card.cardType === 'expert.draft'" class="present-card-capability">
         <ExpertCapabilityPicker
@@ -486,6 +590,79 @@ function applyInitialSelection(): void {
   padding-top: 0.625rem;
   border-top: 1px solid var(--color-desk-line);
 }
+/* 文件段与能力段同一面板基调；组间一条分隔线，行内路径截断展示、全文进 title。 */
+.present-card-files {
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+  padding: 0.625rem;
+  border-radius: var(--radius-desk-sm);
+  background: var(--color-desk-panel);
+}
+.present-card-file-group + .present-card-file-group {
+  padding-top: 0.625rem;
+  border-top: 1px solid var(--color-desk-line);
+}
+.present-card-file-group-title {
+  margin: 0 0 0.25rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--color-desk-ink);
+}
+.present-card-file-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.present-card-file-row + .present-card-file-row {
+  margin-top: 0.25rem;
+}
+.present-card-file-line {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+}
+.present-card-file-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  line-height: 1.6;
+  color: var(--color-desk-ink);
+}
+.present-card-file-reveal {
+  flex: none;
+  min-height: 1.5rem;
+  padding: 0.125rem 0.5rem;
+  border: 1px solid var(--color-desk-line);
+  border-radius: var(--radius-desk-sm);
+  background: transparent;
+  color: var(--color-desk-ink);
+  font: inherit;
+  font-size: 0.6875rem;
+  line-height: 1.4;
+  cursor: pointer;
+  transition: background-color 120ms ease, border-color 120ms ease;
+}
+.present-card-file-reveal:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.present-card-file-reveal:focus-visible {
+  outline: 2px solid var(--color-desk-accent);
+  outline-offset: 2px;
+}
+.present-card-file-error {
+  margin: 0.125rem 0 0;
+  font-size: 0.6875rem;
+  line-height: 1.5;
+  color: var(--color-desk-danger);
+  overflow-wrap: anywhere;
+}
 .present-card-body {
   font-size: 0.75rem;
   color: var(--color-desk-muted);
@@ -575,7 +752,8 @@ function applyInitialSelection(): void {
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .present-card-button {
+  .present-card-button,
+  .present-card-file-reveal {
     transition: none;
   }
 }

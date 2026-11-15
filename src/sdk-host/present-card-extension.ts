@@ -33,6 +33,10 @@ interface CardParams {
   /** 工具范围：同上；受保护工具不会被排除，名单里有没有都一样。 */
   readonly tools_mode?: 'inherit' | 'only'
   readonly tool_ids?: readonly string[]
+  /** 交付汇总文件段：三组项目内相对路径；只用于 session.summary，其余类型带这些参数直接拒绝。 */
+  readonly changed_files?: readonly string[]
+  readonly deleted_files?: readonly string[]
+  readonly affected_files?: readonly string[]
   readonly primary_action_id: PresentCardActionId
   readonly primary_action_label: string
   readonly secondary_action_id?: PresentCardActionId
@@ -42,16 +46,29 @@ interface CardParams {
 /**
  * 由参数组装卡片并复用共享解析器校验；返回字符串表示拒绝原因。
  * 草案类型额外要求简介与正文：缺任一项的「专家定义」在主进程保存时也会被拒，提前拦下更省一轮往返。
+ * 交付汇总要求至少一个文件且按钮只允许复制：它是只读卡片，没有写入落点可绑定。
  */
 function buildCard(params: CardParams): PresentCardView | string {
   const subtitle = params.subtitle?.trim() === '' ? undefined : params.subtitle
   const body = params.body?.trim() === '' ? undefined : params.body
+  const fileParamsGiven = params.changed_files !== undefined || params.deleted_files !== undefined
+    || params.affected_files !== undefined
   if (params.card_type === 'expert.draft') {
+    if (fileParamsGiven) return '文件清单参数只用于 session.summary（交付汇总）卡片；专家草案不带文件段。'
     if (subtitle === undefined) return '草案卡片需要 subtitle（一句话简介）。'
     if (body === undefined) return '草案卡片需要 body（正文）。'
     // 仅用选中却一个技能都不留，等于把专家退化成只会说话的角色，主进程保存时也会拒。
     if (params.skills_mode === 'only' && (params.skill_ids ?? []).length === 0) {
       return '技能选择「仅用选中」时至少要留一个技能；要继承默认基线就去掉 skills_mode。'
+    }
+  }
+  if (params.card_type === 'session.summary') {
+    const fileCount = (params.changed_files ?? []).length + (params.deleted_files ?? []).length
+      + (params.affected_files ?? []).length
+    if (fileCount === 0) return '交付汇总卡片至少要给一个文件；没有文件产出时不要用卡片，直接用文本说明。'
+    if (params.primary_action_id !== 'copy.text'
+      || (params.secondary_action_id !== undefined && params.secondary_action_id !== 'copy.text')) {
+      return '交付汇总卡片是只读的，主次按钮只能用 copy.text。'
     }
   }
   if (params.secondary_action_id !== undefined && params.secondary_action_label === undefined) {
@@ -73,6 +90,13 @@ function buildCard(params: CardParams): PresentCardView | string {
           toolsMode: params.tools_mode ?? 'inherit',
           toolIds: params.tool_ids ?? []
         },
+    files: params.changed_files === undefined && params.deleted_files === undefined && params.affected_files === undefined
+      ? null
+      : {
+          changed: params.changed_files ?? [],
+          deleted: params.deleted_files ?? [],
+          affected: params.affected_files ?? []
+        },
     primaryAction: { id: params.primary_action_id, label: params.primary_action_label },
     secondaryAction: params.secondary_action_id === undefined
       ? null
@@ -83,7 +107,7 @@ function buildCard(params: CardParams): PresentCardView | string {
   }
   const parsed = parsePresentCardView(candidate)
   if (parsed === null) {
-    return '载荷不符合卡片契约：检查类型与动作 ID 是否在枚举内、主次动作是否重复，以及各字段是否超长。'
+    return '载荷不符合卡片契约：检查类型与动作 ID 是否在枚举内、主次动作是否重复、文件路径写法是否合规，以及各字段是否超长。'
   }
   return parsed
 }
@@ -102,12 +126,14 @@ export function createPresentCardExtension(): ExtensionFactory {
     pi.registerTool({
       name: TOOL_NAME,
       label: '会话内卡片',
-      description: '把需要用户点一下才落地的成果做成一张固定外壳卡片：只提交卡片类型、纯文本字段与动作 ID，界面按随包枚举渲染，不接受布局与样式描述。'
-        + '卡片上的按钮由产品已登记的动作执行，例如把专家定义草案保存成自定义专家。',
-      promptSnippet: '把可落盘的成果做成带按钮的卡片',
+      description: '把需要用户点一下才落地或需要一键操作的成果做成一张固定外壳卡片：只提交卡片类型、纯文本字段与动作 ID，界面按随包枚举渲染，不接受布局与样式描述。'
+        + '卡片上的按钮由产品已登记的动作执行：专家定义草案保存成自定义专家，交付汇总是只读文件清单（复制与逐行定位）。',
+      promptSnippet: '把成果做成带按钮的卡片（保存、复制或定位）',
       promptGuidelines: [
-        '只在成果需要用户点一下才落地时使用（典型是专家定义草案）：普通说明、进度汇报与追问继续用文本。',
-        'card_type 目前只有 expert.draft（专家定义草案），且必须有 title、subtitle 与 body；fields 只放需要展示的说明行，不放正文。',
+        '只在成果需要用户点一下才落地或需要一键操作时使用（专家定义草案、会话交付汇总）：普通说明、进度汇报与追问继续用文本。',
+        'card_type 目前有 expert.draft（专家定义草案）与 session.summary（会话交付汇总）。草案必须有 title、subtitle 与 body；fields 只放需要展示的说明行，不放正文。',
+        'session.summary 用在一轮有文件产出之后：changed_files／deleted_files／affected_files 只给项目内相对路径（用 / 分隔，不用绝对路径，不写目录），三组至少一个文件；删除的文件照实提交，定位时会提示已不存在。',
+        '交付汇总卡片是只读的：主次按钮只能用 copy.text；文件三组合计上限 40 条，超限整张卡片会被拒绝而不是截断。',
         '技能、MCP 与工具范围由你给出建议：skills_mode／mcp_mode／tools_mode 省略即继承默认基线，对应名单是建议启用的项；卡片会列出全部候选让用户改，你还需说明为何这样收窄。',
         '只能引用当前候选里存在的技能，不得引用 sub-agent- 开头的子代理专用技能；仅用选中时技能名单不能为空。',
         '工具范围里技能门禁、待办清单与记忆工具属于必需项，不得建议排除；要授予委派能力就勾上 delegate_subagent。',
@@ -118,7 +144,10 @@ export function createPresentCardExtension(): ExtensionFactory {
       ],
       exposure: 'model-only',
       parameters: Type.Object({
-        card_type: Type.Literal('expert.draft', { description: '卡片类型；目前只有 expert.draft（专家定义草案）' }),
+        card_type: Type.Union([
+          Type.Literal('expert.draft', { description: '专家定义草案：保存为自定义专家' }),
+          Type.Literal('session.summary', { description: '会话交付汇总：只读文件清单，按钮只能复制' })
+        ], { description: '卡片类型；类型即场景契约，按成果选择' }),
         title: Type.String({ minLength: 1, maxLength: PRESENT_CARD_LIMITS.title,
           description: '卡片标题；草案类型下即专家显示名称' }),
         subtitle: Type.Optional(Type.String({ maxLength: PRESENT_CARD_LIMITS.subtitle,
@@ -141,6 +170,15 @@ export function createPresentCardExtension(): ExtensionFactory {
           { description: '工具范围口径，同上；省略按继承处理' })),
         tool_ids: Type.Optional(Type.Array(Type.String({ maxLength: 64 }),
           { maxItems: PRESENT_CARD_LIMITS.capabilityIds, description: '建议启用的工具名；必需工具不因名单缺失而被排除' })),
+        changed_files: Type.Optional(Type.Array(Type.String({ maxLength: PRESENT_CARD_LIMITS.summaryPath }),
+          { maxItems: PRESENT_CARD_LIMITS.summaryFiles,
+            description: '本轮改动文件的相对路径；仅 session.summary 使用，`/` 分隔，不用绝对路径' })),
+        deleted_files: Type.Optional(Type.Array(Type.String({ maxLength: PRESENT_CARD_LIMITS.summaryPath }),
+          { maxItems: PRESENT_CARD_LIMITS.summaryFiles,
+            description: '本轮删除文件的相对路径；仅 session.summary 使用，照实提交，定位时会提示已不存在' })),
+        affected_files: Type.Optional(Type.Array(Type.String({ maxLength: PRESENT_CARD_LIMITS.summaryPath }),
+          { maxItems: PRESENT_CARD_LIMITS.summaryFiles,
+            description: '受本轮影响但未直接修改的文件相对路径；仅 session.summary 使用' })),
         primary_action_id: Type.Union(PRESENT_CARD_ACTIONS.map(action => Type.Literal(action)),
           { description: '主按钮动作 ID' }),
         primary_action_label: Type.String({ minLength: 1, maxLength: PRESENT_CARD_LIMITS.actionLabel,

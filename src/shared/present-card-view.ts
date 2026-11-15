@@ -9,7 +9,7 @@ import { isExpertCapabilityMode } from './expert-capability'
 import type { ExpertCapabilityMode } from './expert-capability'
 
 /** 卡片类型：类型即场景契约，新增类型前必须确认它有唯一动作落点。 */
-export const PRESENT_CARD_TYPES = ['expert.draft'] as const
+export const PRESENT_CARD_TYPES = ['expert.draft', 'session.summary'] as const
 
 export type PresentCardType = typeof PRESENT_CARD_TYPES[number]
 
@@ -28,7 +28,11 @@ export const PRESENT_CARD_LIMITS = {
   body: 8_000,
   actionLabel: 24,
   /** 能力段每个维度的名单长度：只防载荷无界，与专家引用数量不设上限无关。 */
-  capabilityIds: 64
+  capabilityIds: 64,
+  /** 交付汇总文件段三组的合计条数上限：清单是给用户点选的，不是完整改动流水。 */
+  summaryFiles: 40,
+  /** 交付汇总单条相对路径的长度上限：项目内路径远短于这个值，超长即明显不是相对路径。 */
+  summaryPath: 512
 } as const
 
 /** 一条字段行：label 与 value 都按纯文本渲染，不解析 Markdown，也不当作链接。 */
@@ -56,7 +60,17 @@ export interface PresentCardCapability {
   readonly toolIds: readonly string[]
 }
 
-/** 一份卡片载荷；`body` 只在界面展示，不进入模型可见的工具结果文本。 */
+/**
+ * 交付汇总的文件段：按交付角色分三组的条目相对路径；三组必需（可为空数组），组内去重保序。
+ * 路径只是数据，界面按纯文本渲染、不当链接；「定位」是类型段的宿主固定行为，不进动作白名单。
+ */
+export interface PresentCardFiles {
+  readonly changed: readonly string[]
+  readonly deleted: readonly string[]
+  readonly affected: readonly string[]
+}
+
+/** 一份卡片载荷；`body` 与 `files` 只在界面展示，不进入模型可见的工具结果文本。 */
 export interface PresentCardView {
   readonly cardType: PresentCardType
   readonly title: string
@@ -64,6 +78,7 @@ export interface PresentCardView {
   readonly fields: readonly PresentCardField[]
   readonly body: string | null
   readonly capability: PresentCardCapability | null
+  readonly files: PresentCardFiles | null
   readonly primaryAction: PresentCardAction
   readonly secondaryAction: PresentCardAction | null
 }
@@ -106,6 +121,42 @@ function parseIdList(value: unknown): readonly string[] | null {
 }
 
 /**
+ * 项目内相对路径：`/` 分隔，不含 `\`，分段后无空段与 `.`／`..` 段。
+ * 定位是否可达仍由主进程解析判定（realpath 与项目内包含性），这里只拒绝形状明显不对的值。
+ */
+function isRelativeProjectPath(value: unknown): value is string {
+  if (typeof value !== 'string' || value.length === 0 || value.length > PRESENT_CARD_LIMITS.summaryPath) return false
+  if (value.includes('\\') || value.startsWith('/')) return false
+  return value.split('/').every(segment => segment !== '' && segment !== '.' && segment !== '..')
+}
+
+/** 文件段的一组路径：组内去重保序；条数在 parseFiles 里按三组合计校验。 */
+function parsePathList(value: unknown): readonly string[] | null {
+  if (!Array.isArray(value)) return null
+  const paths: string[] = []
+  for (const item of value) {
+    if (!isRelativeProjectPath(item)) return null
+    if (!paths.includes(item)) paths.push(item)
+  }
+  return paths
+}
+
+/**
+ * 文件段：缺省为 null（不带文件段的类型与旧卡片按没有该段处理）；给了就必须三组齐全且都是路径数组。
+ * 三组合计超上限整份判不合规，不静默截断——清单少列由模型在文本里说明，界面不替它藏。
+ */
+function parseFiles(value: unknown): PresentCardFiles | null | 'invalid' {
+  if (value === null || value === undefined) return null
+  if (!isRecord(value)) return 'invalid'
+  const changed = parsePathList(value.changed)
+  const deleted = parsePathList(value.deleted)
+  const affected = parsePathList(value.affected)
+  if (changed === null || deleted === null || affected === null) return 'invalid'
+  if (changed.length + deleted.length + affected.length > PRESENT_CARD_LIMITS.summaryFiles) return 'invalid'
+  return { changed, deleted, affected }
+}
+
+/**
  * 能力段：缺省为 null（按继承基线处理）；给了就必须维度齐全且模式可识别。
  * 工具维度允许缺省：旧卡片没有这一段，按「继承默认」补齐，不因此把整张卡片判为不合规。
  */
@@ -140,7 +191,7 @@ function parseAction(value: unknown): PresentCardAction | null {
  */
 export function parsePresentCardView(value: unknown): PresentCardView | null {
   if (!isRecord(value)) return null
-  const { cardType, title, subtitle, fields, body, capability, primaryAction, secondaryAction } = value
+  const { cardType, title, subtitle, fields, body, capability, files, primaryAction, secondaryAction } = value
   if (typeof cardType !== 'string' || !(PRESENT_CARD_TYPES as readonly string[]).includes(cardType)) return null
   if (!isText(title, PRESENT_CARD_LIMITS.title)) return null
   if (!isNullableText(subtitle, PRESENT_CARD_LIMITS.subtitle)) return null
@@ -154,6 +205,8 @@ export function parsePresentCardView(value: unknown): PresentCardView | null {
   if (!isNullableText(body, PRESENT_CARD_LIMITS.body)) return null
   const parsedCapability = parseCapability(capability)
   if (parsedCapability === 'invalid') return null
+  const parsedFiles = parseFiles(files)
+  if (parsedFiles === 'invalid') return null
   const parsedPrimary = parseAction(primaryAction)
   if (parsedPrimary === null) return null
   const parsedSecondary = secondaryAction === null || secondaryAction === undefined ? null : parseAction(secondaryAction)
@@ -166,6 +219,7 @@ export function parsePresentCardView(value: unknown): PresentCardView | null {
     fields: parsedFields,
     body: body === '' ? null : body,
     capability: parsedCapability,
+    files: parsedFiles,
     primaryAction: parsedPrimary,
     secondaryAction: parsedSecondary
   }
