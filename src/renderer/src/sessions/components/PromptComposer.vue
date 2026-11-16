@@ -275,6 +275,17 @@ const expertGroups = computed<readonly ExpertGroup[]>(() => {
 function onExpertSelect(value: string): void {
   selectExpert(value === '' ? null : value)
 }
+/**
+ * 当前专家徽标的说明文字：正常时用简介，绑定失效时用后果与换专家的前提。
+ * 徽标只承担「现在是谁」，失效的后果仍由坞内说明行承担。
+ */
+const expertChipTitle = computed<string | undefined>(() => {
+  const expertId = sessionStore.selectedExpertId
+  if (expertId === null) return undefined
+  if (sessionStore.expertBindingInvalid) return '定义已不存在，本会话不再注入专家角色；换专家需新建会话。'
+  const expert = sessionStore.expertCatalog.experts.find(item => item.id === expertId)
+  return expert === undefined || expert.summary === '' ? undefined : expert.summary
+})
 /** 延续判定只展示结论与命中信号；用户可以直接在对话里纠正，界面不提供改判按钮。 */
 const continuationText = computed(() => {
   const judgement = runtimeStore.activity?.continuation ?? null
@@ -1838,6 +1849,17 @@ onMounted(() => {
         <!-- 专家失效：选中的定义已不在清单里。只如实说明，不自动清绑定——重建同名专家即可恢复。 -->
         <p v-if="sessionStore.expertBindingInvalid" class="prompt-expert-stale" role="status">
           专家「{{ sessionStore.selectedExpertId }}」的定义已不存在，本会话不再注入专家角色；换专家需新建会话。
+        </p>
+
+        <!-- 当前专家：本会话注入的角色常驻坞内，不再只能从 ＋ 菜单里反查；失效态只换颜色，后果由下方说明行承担。 -->
+        <p
+          v-if="sessionStore.selectedExpertName !== null"
+          class="prompt-expert-chip"
+          :class="{ 'is-stale': sessionStore.expertBindingInvalid }"
+          role="status"
+          :title="expertChipTitle"
+        >
+          专家 · {{ sessionStore.selectedExpertName }}
         </p>
 
         <!-- 输入行：左侧 ＋ 菜单、中间输入框、右侧发送/停止，三者在底边对齐，多行时按钮跟随下沿。 -->

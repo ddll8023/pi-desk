@@ -22,11 +22,6 @@ export const SESSION_DELETE_CHANNEL = 'desktop:session-delete'
  * 未接管时由日志解析作答；两条路径返回同一套消息身份，页面不必区分来源。
  */
 export const SESSION_HISTORY_CHANNEL = 'desktop:session-history'
-/**
- * 设置某会话使用的专家：只记录会话与专家的绑定，不重开会话，也不改已发出的系统提示；
- * `expertId` 为 null 表示清除。会话首轮后界面不再提供切换入口，本通道供新建会话落盘与恢复使用。
- */
-export const SESSION_SET_EXPERT_CHANNEL = 'desktop:session-set-expert'
 /** 读取可用专家清单与加载诊断：内置与自定义合并后给出，供选择器展示。 */
 export const SESSION_EXPERTS_CHANNEL = 'desktop:session-experts'
 
@@ -300,18 +295,6 @@ export interface SessionExpertCatalog {
   readonly issues: readonly SessionExpertIssue[]
 }
 
-/** 设置会话专家请求：会话必须已存在，专家必须能通过清除之外的校验。 */
-export interface SessionSetExpertRequest {
-  readonly projectPath: string
-  readonly sessionId: string
-  /** null 表示清除该会话的专家绑定。 */
-  readonly expertId: string | null
-}
-
-export type SessionSetExpertResult =
-  | { readonly ok: true; readonly data: { readonly expertId: string | null } }
-  | { readonly ok: false; readonly error: SessionError }
-
 export type SessionExpertsResult =
   | { readonly ok: true; readonly data: SessionExpertCatalog }
   | { readonly ok: false; readonly error: SessionError }
@@ -345,8 +328,6 @@ export interface SessionApi {
    * 成功时返回删除后的该会话所属项目的列表快照。
    */
   readonly deleteSession: (request: SessionDeleteRequest) => Promise<SessionDeleteResult>
-  /** 设置或清除某会话的专家绑定；只影响后续打开该会话时的角色段，不改已发出的对话。 */
-  readonly setSessionExpert: (request: SessionSetExpertRequest) => Promise<SessionSetExpertResult>
   /** 读取可用专家清单与加载诊断；不打开会话，也不启动宿主。 */
   readonly listSessionExperts: () => Promise<SessionExpertsResult>
 }
@@ -465,27 +446,10 @@ function isSessionExpertCatalog(value: unknown): value is SessionExpertCatalog {
     && typeof issue.path === 'string')
 }
 
-/** 设置专家请求只放行已登记项目、非空会话与已声明格式的专家标识。 */
-export function isSessionSetExpertRequest(value: unknown): value is SessionSetExpertRequest {
-  if (!isRecord(value)) return false
-  if (Object.keys(value).some((key) => key !== 'projectPath' && key !== 'sessionId' && key !== 'expertId')) return false
-  return typeof value.projectPath === 'string' && value.projectPath !== ''
-    && value.projectPath.length <= MAX_PROJECT_PATH_LENGTH
-    && typeof value.sessionId === 'string' && value.sessionId !== '' && value.sessionId.length <= 255
-    && (value.expertId === null || isExpertId(value.expertId))
-}
-
 export function isSessionExpertsResult(value: unknown): value is SessionExpertsResult {
   if (!isRecord(value)) return false
   if (value.ok === false) return isSessionFailure(value)
   return value.ok === true && isSessionExpertCatalog(value.data)
-}
-
-export function isSessionSetExpertResult(value: unknown): value is SessionSetExpertResult {
-  if (!isRecord(value)) return false
-  if (value.ok === false) return isSessionFailure(value)
-  if (value.ok !== true || !isRecord(value.data)) return false
-  return value.data.expertId === null || isExpertId(value.data.expertId)
 }
 
 // TypeScript 声明不能保证 invoke 的实际返回值；沙箱桥接只放行本契约。

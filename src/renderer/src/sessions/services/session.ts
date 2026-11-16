@@ -1,4 +1,4 @@
-/** 作为渲染端会话列表、打开、重新加载、删除、历史读取与会话专家绑定的调用入口，把桥接缺失与通信异常转换为安全的展示结果。 */
+/** 作为渲染端会话列表、打开、重新加载、删除、历史读取与专家清单的调用入口，把桥接缺失与通信异常转换为安全的展示结果。专家绑定由主进程打开链写入，页面不负责回写。 */
 import type { HistoryQuery } from '../../../../shared/runtime-api'
 import type {
   SessionDeleteRequest,
@@ -10,9 +10,7 @@ import type {
   SessionOpenResult,
   SessionHistoryRequest,
   SessionHistoryResult,
-  SessionExpertsResult,
-  SessionSetExpertRequest,
-  SessionSetExpertResult
+  SessionExpertsResult
 } from '../../../../shared/session-api'
 
 function unavailable(): { ok: false; error: SessionError } {
@@ -105,22 +103,6 @@ export async function openSession(
       ...(expertId ? { expertId } : {})
     }
     return await bridge.openSession(request)
-  } catch (error) {
-    return callFailed(error)
-  }
-}
-
-/** 设置或清除某会话的专家绑定；只写记录，下一次打开该会话才生效。 */
-export async function setSessionExpert(
-  request: SessionSetExpertRequest
-): Promise<SessionSetExpertResult> {
-  const bridge = window.desktop
-  if (!bridge || typeof bridge.setSessionExpert !== 'function') return unavailable()
-  try {
-    const payload: SessionSetExpertRequest = {
-      projectPath: request.projectPath, sessionId: request.sessionId, expertId: request.expertId
-    }
-    return await bridge.setSessionExpert(payload)
   } catch (error) {
     return callFailed(error)
   }

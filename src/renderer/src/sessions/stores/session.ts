@@ -1,5 +1,5 @@
 /**
- * 保存会话面板的展示状态：按项目保存会话列表窗口、打开、重新加载与删除动作，以及本会话的专家选择；列表摘要与打开、切换、删除编排在主进程，完整日志解析与执行在 SDK 宿主。
+ * 保存会话面板的展示状态：按项目保存会话列表窗口、打开、重新加载与删除动作，以及本会话的专家选择与回显；列表摘要与打开、切换、删除编排在主进程，完整日志解析与执行在 SDK 宿主。
  *
  * 侧栏按项目树展示会话，因此列表按项目分片保存（键是项目路径）：展开其他项目时懒读取，
  * 已读过的分片在应用内保留，切换项目不需要重新读取。分片只登记主进程回报的项目路径对应的结果，
@@ -18,7 +18,7 @@ import type { ProjectError } from '../../../../shared/project-api'
 import { useTrustStore } from '../../projects/stores/trust'
 import { useProjectStore } from '../../projects/stores/project'
 import { useRuntimeStore } from './runtime'
-import { listSessions, openSession, reloadSession, deleteSession, readSessionFirstPage, listSessionExperts, setSessionExpert } from '../services/session'
+import { listSessions, openSession, reloadSession, deleteSession, readSessionFirstPage, listSessionExperts } from '../services/session'
 import { useWorkspaceTabsStore } from '../../workspace/stores/workspace-tabs'
 import { useTaskWorkspacesStore } from '../../workspace/stores/task-workspaces'
 import type { ChatOpenIntent } from '../../workspace/stores/workspace-tabs'
@@ -94,8 +94,12 @@ export const useSessionStore = defineStore('session', () => {
   const expertBindingInvalid = computed(() => expertCatalogLoaded.value
     && selectedExpertId.value !== null
     && !expertCatalog.value.experts.some(item => item.id === selectedExpertId.value))
-  /** 已把专家写回主进程的会话键：会话身份落盘后只写一次，不重复提交。 */
-  let writtenExpertKey: string | null = null
+  /** 当前会话专家的显示名：清单里找不到该定义时回落标识，界面据此标「已失效」。 */
+  const selectedExpertName = computed<string | null>(() => {
+    const expertId = selectedExpertId.value
+    if (expertId === null) return null
+    return expertCatalog.value.experts.find(item => item.id === expertId)?.displayName ?? expertId
+  })
   const opening = ref(false)
   /** 最新打开意图固定项目与标签；已发出的请求收敛后才执行下一次，不并发改前台。 */
   const openingProjectPath = ref<string | null>(null)
@@ -356,29 +360,17 @@ export const useSessionStore = defineStore('session', () => {
   /** 选择本会话使用的专家；`null` 表示不使用。已开始对话的会话由界面禁用切换。 */
   function selectExpert(expertId: string | null): void {
     selectedExpertId.value = expertId
-    // 换了选择就要重新写回一次，否则回写会被当成已完成。
-    writtenExpertKey = null
-  }
-
-  /** 会话身份落盘后把专家写回主进程；同一会话只写一次，失败留待下次打开再试。 */
-  async function persistExpertFor(projectPath: string, sessionId: string): Promise<void> {
-    const expertId = selectedExpertId.value
-    const key = `${projectPath}\u0000${sessionId}`
-    if (expertId === null || writtenExpertKey === key) return
-    const result = await setSessionExpert({ projectPath, sessionId, expertId })
-    if (result.ok) writtenExpertKey = key
   }
 
   /**
    * 当前会话不在列表里时补读一次该项目的列表：Pi 新建会话只分配身份，会话文件到首次写入才创建，
    * 因此列表里可能根本没有它（打开也不再回传列表）；调用方应在确有消息落盘后触发。
+   * 专家绑定不在这里写：主进程在打开成功时已落盘，页面只读打开回包。
    */
   async function reconcileCurrentSession(sessionId: string | null): Promise<void> {
     if (sessionId === null || reconciledSessionId === sessionId) return
     const projectPath = currentProjectPath()
     if (projectPath === null) return
-    // 新建会话的身份到这时才确定：先把专家写回主进程，重启后才能带着同一个专家打开。
-    await persistExpertFor(projectPath, sessionId)
     if (sliceOf(projectPath).sessions.some((session) => session.sessionId === sessionId)) {
       reconciledSessionId = sessionId
       return
@@ -449,6 +441,8 @@ export const useSessionStore = defineStore('session', () => {
         useTaskWorkspacesStore().accept(result.data.workspace)
         // 回显以主进程回报为准：绑定失效时这里退回 null，界面不再假装专家仍在生效。
         selectedExpertId.value = result.data.expertId
+        // 徽标要显示专家名而不是标识：清单没读到过就补读一次，失败不影响会话本身。
+        if (result.data.expertId !== null && !expertCatalogLoaded.value) void loadExperts()
         const projectAlive = projectStore.projects.some(project => project.path === targetPath)
         tabs.bindWorkspace(targetPath, key, result.data.workspace.id)
         // 实例身份即使迟到也只能绑定原标签，不能按新的前台或空标签重新猜测。
@@ -704,6 +698,7 @@ export const useSessionStore = defineStore('session', () => {
     expertError,
     expertBindingInvalid,
     selectedExpertId,
+    selectedExpertName,
     loadExperts,
     selectExpert,
     invalidateOpenSelection,

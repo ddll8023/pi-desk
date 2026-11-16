@@ -14,8 +14,8 @@
 
 | 文件 | 用途 |
 | --- | --- |
-| `src/main/sessions/session-manager.ts` | 列表、前后台新建／打开、重载、删除与 SDK 目标授权编排；解析会话专家绑定并随目标下发 |
-| `src/main/sessions/session-experts.ts` | 会话专家绑定解析：已有会话以持久绑定为准，新会话才用打开请求里的值 |
+| `src/main/sessions/session-manager.ts` | 列表、前后台新建／打开、重载、删除与 SDK 目标授权编排；解析会话专家绑定并随目标下发，新会话在打开成功时落盘绑定，回显与落盘共用同一次解析 |
+| `src/main/sessions/session-experts.ts` | 会话专家绑定解析：已有会话以持久绑定为准，新会话才用打开请求里的值；持久绑定与打开请求各用一个键查找 |
 | `src/main/sessions/expert-catalog.ts` | 合并随包与自定义专家目录，产出选择器视图（含派生来源、是否超长截断与能力范围）与加载诊断（含 MCP 服务器引用）；另提供能力候选（随包、产品目录与共享目录三类技能，全局 MCP 服务器，随包清单声明的工具，默认基线）与主会话可见技能／子代理专用技能上下文（项目技能不进候选）；不启动宿主 |
 | `src/shared-process/skill-sources.ts` | 技能来源目录清单：全局来源（产品 agent 目录与共享目录）与项目来源（`<cwd>/.pi/skills`、逐级 `.agents/skills` 到仓库根）由这里统一计算，装配、预读与设置页候选共用同一口径 |
 | `src/main/sessions/expert-files.ts` | 专家定义的写操作：把内置专家派生为自定义副本（写 `derivedFrom`）、读取与保存自定义专家定义、删除自定义专家；保存改写身份、能力范围与正文，保留其余声明行，先写临时文件再改名；写入面只到 `<agentDir>/experts/` |
@@ -63,7 +63,7 @@
 | `src/sdk-host/projection/identity.ts` | 用户消息规范化摘要身份；不替代官方回退条目 ID |
 | `src/sdk-host/projection/output-rate.ts` | 模型输出速率计算 |
 | `src/sdk-host/projection/checkpoint.ts` | 首页与稳定活动的独立内存检查点：绑定时分别核对恢复条件，命中不替代 SDK 打开会话文件 |
-| `src/shared/session-api.ts` | 会话列表、打开、重载、删除、按会话读取历史，以及会话专家绑定与专家清单的页面契约 |
+| `src/shared/session-api.ts` | 会话列表、打开、重载、删除、按会话读取历史，以及专家清单的页面契约；专家绑定由主进程写入，不并页面通道 |
 | `src/shared/experts-api.ts` | 专家派生、读取与保存、删除、快速模式剔除清单、能力候选与默认基线保存七条通道及请求／结果契约校验；专家视图与诊断类型复用会话域，不重复定义 |
 | `src/shared/present-card-view.ts` | 会话内卡片载荷契约：卡片类型枚举、动作白名单、字段长度上限与共享解析器，宿主投影与渲染层共用同一份判定 |
 | `src/shared/session-run-api.ts` | 应用级运行清单、释放／结束与事件契约 |
@@ -77,7 +77,7 @@
 
 | 文件 | 用途 |
 | --- | --- |
-| `src/renderer/src/sessions/stores/session.ts` | 按项目的列表窗口与读取调度、串行打开／重载、按标签意图提交打开、删除与待确认目标；本会话专家选择、回显与写回 |
+| `src/renderer/src/sessions/stores/session.ts` | 按项目的列表窗口与读取调度、串行打开／重载、按标签意图提交打开、删除与待确认目标；本会话专家选择与回显（绑定由主进程打开链落盘，页面不写）、当前专家显示名与失效判定 |
 | `src/renderer/src/sessions/stores/session-runs.ts` | 运行清单、副本状态、释放与结束 |
 | `src/renderer/src/sessions/stores/session-view.ts` | 会话输入、阅读与展开状态，按标签保存待发送快照、核对同步并保留未确认输入，原位新草稿的独立留底、浏览器批注交付目标身份核对及图片与绑定标注的移交、还原与回收 |
 | `src/renderer/src/sessions/stores/session-branch.ts` | 会话多分支历史归档、按轮分支状态与索引切换 |
@@ -106,7 +106,7 @@
 | `src/renderer/src/sessions/components/UsageSessionList.vue` | 用量会话明细列表：范围内消耗 Top 与四种下钻共用，行点击打开对应会话 |
 | `src/renderer/src/sessions/components/UsageHeatmap.vue` | 近 53 周按日 Token 热力图：7 行日历格、月份与星期标签、四级强度配色、悬停读数与整图无障碍描述；有记录格子可点击下钻当日 |
 | `src/renderer/src/sessions/components/UsageCompositionBar.vue` | 用量构成条：四段堆叠、段间 1px 分隔与非零段 2px 保底，供概览与模型／项目分布行复用 |
-| `src/renderer/src/sessions/components/PromptComposer.vue` | 提示词与独立图片资料编排、视窗全局粘贴与剪贴板截图提取、对话期间草稿与标注编辑、文件树拖入引用、命令与补全；＋ 菜单为一级分类行 + 二级面板的双级结构（模型、执行模式、专家、技能、常用消息常驻面板内；技能取与斜杠补全同源的清单，点击只把 `/skill:<名称>` 写到草稿最前而不发送；专家绑定失效时给出提示）；浏览器批注草稿合并；固定提示词、图片及标注快照、后台提交与失败恢复；显式同步及确认结束原运行后的输入恢复 |
+| `src/renderer/src/sessions/components/PromptComposer.vue` | 提示词与独立图片资料编排、视窗全局粘贴与剪贴板截图提取、对话期间草稿与标注编辑、文件树拖入引用、命令与补全；＋ 菜单为一级分类行 + 二级面板的双级结构（模型、执行模式、专家、技能、常用消息常驻面板内；技能取与斜杠补全同源的清单，点击只把 `/skill:<名称>` 写到草稿最前而不发送；专家绑定失效时给出提示）；当前专家以坞内徽标常驻显示，失效时徽标转警示色）；浏览器批注草稿合并；固定提示词、图片及标注快照、后台提交与失败恢复；显式同步及确认结束原运行后的输入恢复 |
 | `src/renderer/src/sessions/components/PromptImageMaterials.vue` | 输入坞内图片附件行：导入、移除、缩略图与独立标注按钮双入口、标注数量展示 |
 | `src/renderer/src/sessions/components/ImageAnnotationPanel.vue` | 左图右说明的独立标注面板、编号双向定位、同步删除与键盘调整入口 |
 | `src/renderer/src/sessions/components/ImageAnnotationCanvas.vue` | 共用原图坐标系的编号与点框叠加层，支持编辑及桌面／手机只读展示，不修改图片像素 |

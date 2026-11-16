@@ -16,7 +16,8 @@
  * 会话文件删除后，按界面偏好清理该会话独占且无未提交改动的任务工作树；清理失败不回滚删除，也不影响列表返回。
  * 有活动操作而重载请求未确认时直接拒绝，不自动中断、不排队、不重放已提交的内容。
  * 执行模式在授权时读一次随目标下发，宿主据此裁剪 Skill 集合；读失败按标准模式处理。
- * 专家绑定只存标识：已存在的会话以持久绑定为准，新建时用打开请求里的值，宿主装载定义后才注入角色段。
+ * 专家绑定只存标识：已存在的会话以持久绑定为准，新建时用打开请求里的值并在打开成功时立即落盘
+ * （会话身份那一刻才确定，页面取不到），宿主装载定义后才注入角色段。
  * IPC 契约与校验在 shared/session-api.ts。
  */
 import type {
@@ -31,9 +32,7 @@ import type {
   SessionHistoryRequest,
   SessionHistoryResult,
   SessionExpertCatalog,
-  SessionExpertsResult,
-  SessionSetExpertRequest,
-  SessionSetExpertResult
+  SessionExpertsResult
 } from '../../shared/session-api'
 import { isExpertId, isSessionOpenRequest } from '../../shared/session-api'
 import type { RuntimeStatus } from '../../shared/runtime-api'
@@ -136,34 +135,6 @@ export class SessionManager {
   }
 
   /**
-   * 设置或清除会话的专家绑定：会话必须属于已登记项目且文件存在。
-   * 只写绑定，不改已发出的系统提示；下一次打开该会话时才生效。
-   */
-  async setExpert(request: SessionSetExpertRequest): Promise<SessionSetExpertResult> {
-    try {
-      const projectPath = await normalizeProjectPath(request.projectPath)
-      if (!await this.options.projects.hasProject(projectPath)) {
-        throw new SessionFailure('INVALID_PROJECT_PATH', '只能为已添加项目的会话设置专家。')
-      }
-      if (await resolveSessionFile(projectPath, request.sessionId) === null) {
-        throw new SessionFailure('SESSION_NOT_FOUND', '当前项目下找不到该会话；列表可能已过期。')
-      }
-      if (this.options.sessionExperts === undefined) {
-        throw new SessionFailure('INTERNAL_ERROR', '当前运行未启用会话专家。')
-      }
-      const saved = await this.options.sessionExperts.save({
-        projectPath, sessionId: request.sessionId, expertId: request.expertId
-      })
-      return { ok: true, data: { expertId: saved } }
-    } catch (error) {
-      return this.failure(error, {
-        code: 'INTERNAL_ERROR',
-        message: '设置会话专家时发生未预期的内部错误。'
-      })
-    }
-  }
-
-  /**
    * SDK 内部目标授权：归属项目由调用方按来源运行实例给定，不读前台选择。
    * 无受保护资源但没有显式信任时按未信任建立，避免新出现的资源被隐式加载；
    * 异步读取前后都以注册表登记为准，前台切换不会改变已登记运行实例的授权范围。
@@ -194,11 +165,14 @@ export class SessionManager {
 
   /**
    * 本次授权使用的专家：先看这次打开请求暂存的值，没有再看持久绑定。
+   * `sessionId` 是持久绑定的定位键，`pendingSessionId` 是本次请求带来的暂存键：新会话在切换之后才有 id，
+   * 请求值仍挂在 `new` 上，两者不能共用同一个键去查，否则会把「刚选好的专家」查成没有。
    * 未启用绑定时只接受请求值，行为与未引入专家前一致。
    */
-  private async expertOf(projectPath: string, sessionId: string | null, workspaceId: string): Promise<string | null> {
-    const key = this.expertKey(workspaceId, sessionId)
-    const pending = this.pendingExperts.get(key)
+  private async expertOf(
+    projectPath: string, sessionId: string | null, workspaceId: string, pendingSessionId: string | null = sessionId
+  ): Promise<string | null> {
+    const pending = this.pendingExperts.get(this.expertKey(workspaceId, pendingSessionId))
     if (this.options.sessionExperts === undefined) return isExpertId(pending) ? pending : null
     return resolveSessionExpert({
       bindings: this.options.sessionExperts, projectPath, sessionId, requested: pending
@@ -348,7 +322,8 @@ export class SessionManager {
       const bound = this.boundSessionOfForeground()
       if (request.sessionId !== null && status.state === 'ready' && status.runId !== null
         && bound?.projectPath === projectPath && status.info?.sessionId === request.sessionId) {
-        return this.openData(projectPath, status.runId, request.sessionId)
+        return this.openData(projectPath, status.runId, request.sessionId, true,
+          await this.expertOf(projectPath, request.sessionId, workspace.id))
       }
     } else {
       const trust = await this.options.projectsTrust.refreshStatusOf(projectPath)
@@ -401,23 +376,40 @@ export class SessionManager {
       // 目标一致性由宿主预检保证；这里只复核实际打开的会话，不删除任何文件。
       throw new SessionFailure('SESSION_NOT_FOUND', '实际打开的会话与请求不一致；未改动任何已有文件。')
     }
+    // 专家只解析一次：同一个值既用于新会话落盘，也用于打开回显，不再按新的会话 id 反查一遍。
+    const expertId = await this.expertOf(projectPath, openedSessionId, workspaceId, request.sessionId)
+    if (request.sessionId === null && expertId !== null && openedSessionId !== null) {
+      await this.rememberNewSessionExpert(projectPath, openedSessionId, expertId)
+    }
     // 后台结果不走桌面的前台归属收敛，不能因桌面正在显示其他项目而触发 focusProject。
-    return this.openData(projectPath, switched.runId, openedSessionId, selection !== null)
+    return this.openData(projectPath, switched.runId, openedSessionId, selection !== null, expertId)
+  }
+
+  /**
+   * 新会话的专家绑定：会话身份在打开成功时才有，页面要到首轮消息落盘后才知道 id，故由这里写入。
+   * 写失败不让打开失败——专家是增强，重新打开会话重新选即可；记录一次即可查。
+   */
+  private async rememberNewSessionExpert(projectPath: string, sessionId: string, expertId: string): Promise<void> {
+    try {
+      await this.options.sessionExperts?.save({ projectPath, sessionId, expertId })
+    } catch (error) {
+      console.error('[session-manager] 会话专家绑定写入失败', error)
+    }
   }
 
   /**
    * 桌面打开结果与前台归属收敛：实际归属项目、运行实例与实际会话身份。
    * 不再附带回传会话列表：列表由页面按自己的窗口节奏单独读取，打开链不等目录扫描。
    * 列表读取可能晚于前台切换，因此实际打开身份必须在读取前固定。
+   * 专家由打开链解析后传入：这里不再自行反查，回显与本次生效的必须是同一个值。
    */
   private async openData(
-    projectPath: string, runId: number, openedSessionId: string | null, focus = true
+    projectPath: string, runId: number, openedSessionId: string | null, focus: boolean, expertId: string | null
   ): Promise<SessionOpenData> {
     const workspaceId = this.options.ownership.workspaceOfRun(runId)
     if (workspaceId === null) throw new SessionFailure('RUNTIME_NOT_READY', '运行实例缺少已授权工作区，未使用项目目录代替。')
     const workspace = await this.options.workspaces.authorize(projectPath, workspaceId)
     await this.options.workspaces.bindSession(projectPath, openedSessionId, workspaceId)
-    const expertId = await this.expertOf(projectPath, openedSessionId, workspaceId)
     const currentProjectPath = this.options.projects.currentProjectPath()
     if (focus && currentProjectPath !== null && currentProjectPath !== projectPath) {
       // 等待宿主期间用户可能已经切项目；旧请求不能把前台留在原项目。
@@ -532,8 +524,9 @@ export class SessionManager {
     if (switched.cancelled) {
       throw new SessionFailure('RUNTIME_COMMAND_REJECTED', '重新加载资源被取消，当前会话保持不变。')
     }
-    return this.openData(bound.projectPath, switched.runId,
-      this.options.sdk.sessionStatusOfRun(switched.runId)?.sessionId ?? null)
+    const openedSessionId = this.options.sdk.sessionStatusOfRun(switched.runId)?.sessionId ?? null
+    return this.openData(bound.projectPath, switched.runId, openedSessionId, true,
+      openedSessionId === null ? null : await this.expertOf(bound.projectPath, openedSessionId, bound.workspaceId))
   }
 
   /**

@@ -66,6 +66,15 @@
     @apply mb-1.5 text-2xs;
     color: var(--color-desk-warning);
   }
+/* 当前专家徽标：坞内一行小字，说明这次会话注入的是哪个角色；失效态只换警示色，
+     后果与换专家的前提由上方说明行承担，颜色不是唯一通道。 */
+.prompt-expert-chip {
+    @apply mb-1 text-2xs;
+    color: var(--color-desk-muted);
+  }
+.prompt-expert-chip.is-stale {
+    color: var(--color-desk-warning);
+  }
 
 /* 待办清单面板：贴在坞上方的窄条，条目多时只在自己内部滚动，不抬高输入行。 */
 .prompt-todo {
