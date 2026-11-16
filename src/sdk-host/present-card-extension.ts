@@ -140,8 +140,13 @@ function result(text: string, card: PresentCardView | null): {
   return { content: [{ type: 'text', text }], details: { card } }
 }
 
-/** 卡片工具工厂：无外部依赖，装配时直接注册。 */
-export function createPresentCardExtension(): ExtensionFactory {
+/**
+ * 卡片工具工厂：无外部依赖，装配时直接注册。
+ *
+ * `capabilityCandidates` 由会话装配按与设置页同源的口径生成（见 `expert-capability.ts`）：
+ * 模型自己可见的技能已被专家许可集裁剪，不可见不等于不存在，候选全集必须随工具一起给它。
+ */
+export function createPresentCardExtension(capabilityCandidates: string): ExtensionFactory {
   return pi => {
     pi.registerTool({
       name: TOOL_NAME,
@@ -156,7 +161,8 @@ export function createPresentCardExtension(): ExtensionFactory {
         '交付汇总卡片是只读的：主次按钮只能用 copy.text；文件三组合计上限 40 条，超限整张卡片会被拒绝而不是截断。',
         'memory.candidates 用在本轮产出了值得长期保留的结论、约束或未决状态、且用户可能想挑选修改时——用户明确认可的非显然做法与取舍同样要给候选，只存纠正会让后续越来越保守，认可的理由写进 content：candidates 每条给 type、topic（单行标题）与 content，规则类（decision／constraint）必须带 rule_key，progress 必须显式 status（active 只表示仍待推进的未决状态）。用户会直接编辑候选再保存，按最终入库口径写，不要放过程流水。',
         '不要先自行调用 memory_save 保存同一批内容再发候选卡片：与库内完全重复的候选会被引擎拒绝，部分重复会被跳过；二选一，需要用户确认就用卡片。',
-        '技能、MCP 与工具范围由你给出建议：skills_mode／mcp_mode／tools_mode 省略即继承默认基线，对应名单是建议启用的项；卡片会列出全部候选让用户改，你还需说明为何这样收窄。',
+        '技能、MCP 与工具范围由你给出建议：skills_mode／mcp_mode／tools_mode 省略即继承默认基线，对应名单是建议启用的项；收窄时说明理由。',
+        capabilityCandidates,
         '只能引用当前候选里存在的技能，不得引用 sub-agent- 开头的子代理专用技能；仅用选中时技能名单不能为空。',
         '工具范围里技能门禁、待办清单与记忆工具属于必需项，不得建议排除；要授予委派能力就勾上 delegate_subagent。',
         '动作只能取白名单 ID：expert.save 保存为自定义专家，copy.text 复制正文到剪贴板，memory.save 写入勾选的记忆候选；不要按文案自行发明动作，也不要声称按钮会执行未登记的操作。',
@@ -184,15 +190,16 @@ export function createPresentCardExtension(): ExtensionFactory {
         skills_mode: Type.Optional(Type.Union([Type.Literal('inherit'), Type.Literal('only')],
           { description: '技能范围口径：inherit=继承默认基线后加减，only=名单即白名单；省略按继承处理' })),
         skill_ids: Type.Optional(Type.Array(Type.String({ maxLength: 64 }),
-          { maxItems: PRESENT_CARD_LIMITS.capabilityIds, description: '建议启用的技能标识；卡片会列出全部候选让你改' })),
+          { maxItems: PRESENT_CARD_LIMITS.capabilityIds, description: '建议启用的技能标识；只能取能力候选段里列出的技能' })),
         mcp_mode: Type.Optional(Type.Union([Type.Literal('inherit'), Type.Literal('only')],
           { description: 'MCP 范围口径，同上；省略按继承处理' })),
         mcp_server_ids: Type.Optional(Type.Array(Type.String({ maxLength: 64 }),
-          { maxItems: PRESENT_CARD_LIMITS.capabilityIds, description: '建议启用的 MCP 服务器名' })),
+          { maxItems: PRESENT_CARD_LIMITS.capabilityIds, description: '建议启用的 MCP 服务器名；只能取能力候选段里列出的服务器' })),
         tools_mode: Type.Optional(Type.Union([Type.Literal('inherit'), Type.Literal('only')],
           { description: '工具范围口径，同上；省略按继承处理' })),
         tool_ids: Type.Optional(Type.Array(Type.String({ maxLength: 64 }),
-          { maxItems: PRESENT_CARD_LIMITS.capabilityIds, description: '建议启用的工具名；必需工具不因名单缺失而被排除' })),
+          { maxItems: PRESENT_CARD_LIMITS.capabilityIds,
+            description: '建议启用的工具名；只能取能力候选段里列出的工具，带 * 的必需项不写也在范围内' })),
         changed_files: Type.Optional(Type.Array(Type.String({ maxLength: PRESENT_CARD_LIMITS.summaryPath }),
           { maxItems: PRESENT_CARD_LIMITS.summaryFiles,
             description: '本轮改动文件的相对路径；仅 session.summary 使用，`/` 分隔，不用绝对路径' })),

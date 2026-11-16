@@ -22,7 +22,7 @@
 | `src/main/sessions/expert-ipc.ts` | 派生、读取、保存、删除、快速模式剔除清单、能力候选与默认基线保存七条通道；清单与诊断仍走 `desktop:session-experts` |
 | `src/shared-process/expert-capability-defaults.ts` | 默认能力基线的读取与原子写：文件缺失或损坏按不限制回退，技能、MCP 与工具三个维度各自独立归一 |
 | `src/shared-process/mcp-session-config.ts` | 会话级 MCP 配置合并（全局 + 受信项目、覆盖语义）与按技能／服务器许可集标停用 |
-| `src/sdk-host/expert-capability.ts` | 由专家定义与默认基线算出本次会话的技能、MCP 与工具许可集；未召专家时不限制；受保护工具始终在可用集内 |
+| `src/sdk-host/expert-capability.ts` | 由专家定义与默认基线算出本次会话的技能、MCP 与工具许可集；未召专家时不限制；受保护工具始终在可用集内。同一口径另产出 `present_card` 的能力候选段（技能带描述、MCP 与工具名），不按许可集裁剪 |
 | `src/main/sessions/session-store.ts` | 项目会话目录、受限列表窗口与摘要缓存、文件定位与删除 |
 | `src/main/sessions/session-run-registry.ts` | 运行 ID、绑定代际、前台顺序及会话占用的唯一登记 |
 | `src/main/sessions/log-host-pool.ts` | 只读解析宿主池：按项目保活查看历史用的宿主进程，不登记运行实例、不占用会话，可被绑定接管 |
@@ -41,7 +41,7 @@
 | `src/sdk-host/protocol.ts` | 主进程和 SDK 宿主的版本化消息、请求与目标校验 |
 | `src/sdk-host/session-runtime.ts` | 官方 SDK 会话、运行请求、订阅、回退／压缩、产品资源装配与内置扩展装配（含按专家范围收窄 MCP）、资源装配诊断与绑定阶段分类 |
 | `src/sdk-host/expert-role.ts` | 按会话目标读取选中的专家定义，把正文按上限裁剪后装配成 `expert-role` 系统提示分段，并在段尾说明本次的技能／MCP 范围；未选中时不读资源清单；快速模式下专家引用的被剔除规范同样在段尾说明 |
-| `src/sdk-host/present-card-extension.ts` | 会话内卡片工具 `present_card`：只接受枚举内的卡片类型与动作 ID，载荷经共享契约校验后随工具结果 `details.card` 下发；只给模型一句结论，不写盘、不改清单 |
+| `src/sdk-host/present-card-extension.ts` | 会话内卡片工具 `present_card`：只接受枚举内的卡片类型与动作 ID，载荷经共享契约校验后随工具结果 `details.card` 下发；装配时把能力候选段随工具注册给模型；只给模型一句结论，不写盘、不改清单 |
 | `src/sdk-host/product-resources.ts` | 产品资源解析、用户级 `AGENTS.md` 与 skills 的只读挂载、技能覆盖与同名技能诊断（含按专家许可集过滤可见技能，项目技能不受该许可集裁剪）、扩展加载结果分级与必要组件及配置注入的核验 |
 | `src/sdk-host/conflicts.ts` | 扩展加载结果的冲突分级：按工具名与路径归属区分致命项与仅诊断项，不解析 SDK 错误文案 |
 | `src/sdk-host/memory-configuration.ts` | 宿主内记忆配置的唯一持有者；写进程环境并向已加载扩展推送变更 |

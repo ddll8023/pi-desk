@@ -41,7 +41,7 @@ import type {
 import { isMemoryInjectionSnapshot } from '../shared/runtime-api'
 import { parseSubAgentView } from '../shared/sub-agent-view'
 import { EXPERT_SECTION_KEY, expertRoleSection, readSelectedExpert } from './expert-role'
-import { resolveSessionCapabilityScope } from './expert-capability'
+import { readCapabilityCandidateSection, resolveSessionCapabilityScope } from './expert-capability'
 import { DELEGATION_TOOL_NAME } from './sub-agent/delegation-extension'
 import { PROTECTED_EXPERT_TOOLS } from '../shared/expert-capability'
 import { limitMcpServers, readMcpSessionConfig } from '../shared-process/mcp-session-config'
@@ -954,16 +954,25 @@ export class SdkSessionRuntime {
     const expert = this.selectedExpert(target)
     // 能力范围也在创建时算一次：技能、MCP 与工具都是装配期决定的，改完需要重开会话才生效。
     // 没召专家时两条都是不限制，行为与引入基线之前一致。
+    // 本会话可用的 MCP 服务器名只读一次：许可集与卡片候选段共用同一份配置结果。
+    const sessionMcpServerNames = readMcpSessionConfig({
+      agentDir: this.options.agentDir,
+      cwd: executionRoot,
+      projectTrusted: target.trusted
+    }).servers.map(server => server.name)
     const capability = resolveSessionCapabilityScope({
       expert,
       resourcesDirectory: this.options.productResourcesDir,
       agentDir: this.options.agentDir,
       sharedAgentDir: this.options.sharedAgentDir,
-      availableMcpServers: readMcpSessionConfig({
-        agentDir: this.options.agentDir,
-        cwd: executionRoot,
-        projectTrusted: target.trusted
-      }).servers.map(server => server.name)
+      availableMcpServers: sessionMcpServerNames
+    })
+    // 卡片候选段不按许可集裁剪：模型自己看不到的技能也要让它知道存在，否则收窄过的专家会漏选。
+    const capabilityCandidates = readCapabilityCandidateSection({
+      resourcesDirectory: this.options.productResourcesDir,
+      agentDir: this.options.agentDir,
+      sharedAgentDir: this.options.sharedAgentDir,
+      mcpServerNames: sessionMcpServerNames
     })
     // 只守住有效绑定与必要交互，不引入新的权限规则；工具调用仍由 SDK 管线处理。
     const bindingGuard: ExtensionFactory = pi => {
@@ -1029,7 +1038,8 @@ export class SdkSessionRuntime {
           { name: 'codemode', factory: this.sdk.createCodemodeExtension(), builtin: true, replaceable: true },
           { name: 'tool-search', factory: this.sdk.createToolSearchExtension(), builtin: true, replaceable: true },
           // 会话内卡片：模型只能提交枚举内的卡片类型与动作，按钮落点由渲染层转发到既有通道。
-          { name: 'present-card', builtin: true, replaceable: true, factory: createPresentCardExtension() },
+          { name: 'present-card', builtin: true, replaceable: true,
+            factory: createPresentCardExtension(capabilityCandidates) },
           // 委派工具由宿主注入子进程入口与取消控制端：页面只能按任务标识取消，不能指定路径或进程。
           { name: 'sub-agent-delegation', builtin: true, replaceable: true,
             factory: createSubAgentDelegationExtension({
