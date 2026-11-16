@@ -26,10 +26,8 @@
     border-color: var(--color-desk-accent);
     background: var(--color-desk-accent-soft);
   }
-/* 输入行高度优先由浏览器 field-sizing 原生按内容自适应，未到上限不出现滚动条，矮窗口下上限不超过 40vh。
-     高度与坞内两枚圆形键配合：单行时两者底边对齐，多行时随下沿下沉。 */
-.prompt-composer-input {
-    field-sizing: content;
+/* 输入行：富文本容器按内容生长，到上限后在内部滚动；行高与胶囊基线必须与正文一致，胶囊才不会把行撑夹。 */
+.prompt-composer-rich {
     flex: 1 1 auto;
     min-width: 0;
     min-height: 2.25rem;
@@ -39,10 +37,54 @@
     border-radius: var(--radius-desk-md);
     background: transparent;
     line-height: 1.6;
+    white-space: pre-wrap;
+    overflow-wrap: break-word;
     overflow-y: auto;
   }
-.prompt-composer-input:focus-visible {
+/* 坞整体已有 focus-within 高亮，输入区不再自己画框。 */
+.prompt-composer-rich:focus-visible {
     outline: none;
+  }
+/* 占位提示只在文档真正为空时出现，文案由 data-placeholder 带入，不额外占节点。 */
+.prompt-composer-rich:empty::before {
+    content: attr(data-placeholder);
+    color: var(--color-desk-muted);
+    pointer-events: none;
+  }
+/* 引用胶囊：文字一律用正文色，颜色只放在底、内描边与图标上。
+     文件走 ink 低浓度（6% 底 / 14% 内描边），命令走 accent 低浓度（12% / 26%）；
+     用 alpha 而不是固定色值，同一组百分号在浅色与深色主题下都成立，也不新增颜色。 */
+.prompt-token {
+    @apply inline-flex items-baseline gap-1 rounded-full px-1.5 font-mono whitespace-nowrap;
+    padding-block: 1px;
+    font-size: 12px;
+    line-height: 1.45;
+    vertical-align: baseline;
+    color: var(--color-desk-ink);
+    user-select: none;
+    cursor: default;
+  }
+.prompt-token-glyph {
+    font-size: 11px;
+    opacity: 0.9;
+  }
+.prompt-token-label {
+    @apply min-w-0 truncate;
+  }
+.prompt-token-file {
+    background: color-mix(in srgb, var(--color-desk-ink) 6%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-desk-ink) 14%, transparent);
+  }
+.prompt-token-file .prompt-token-glyph {
+    color: var(--color-desk-muted);
+  }
+.prompt-token-command {
+    background: color-mix(in srgb, var(--color-desk-accent) 12%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-desk-accent) 26%, transparent);
+  }
+.prompt-token-command .prompt-token-glyph {
+    color: var(--color-desk-accent);
+    font-weight: 600;
   }
 /* 输入行：＋ 菜单触发键、输入框与发送/停止键同在底边基线上，两侧键不因多行输入上浮。 */
 .prompt-composer-row {

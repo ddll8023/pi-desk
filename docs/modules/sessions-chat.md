@@ -106,7 +106,8 @@
 | `src/renderer/src/sessions/components/UsageSessionList.vue` | 用量会话明细列表：范围内消耗 Top 与四种下钻共用，行点击打开对应会话 |
 | `src/renderer/src/sessions/components/UsageHeatmap.vue` | 近 53 周按日 Token 热力图：7 行日历格、月份与星期标签、四级强度配色、悬停读数与整图无障碍描述；有记录格子可点击下钻当日 |
 | `src/renderer/src/sessions/components/UsageCompositionBar.vue` | 用量构成条：四段堆叠、段间 1px 分隔与非零段 2px 保底，供概览与模型／项目分布行复用 |
-| `src/renderer/src/sessions/components/PromptComposer.vue` | 提示词与独立图片资料编排、视窗全局粘贴与剪贴板截图提取、对话期间草稿与标注编辑、文件树拖入引用、命令与补全；＋ 菜单为一级分类行 + 二级面板的双级结构（模型、执行模式、专家、技能、常用消息常驻面板内；技能取与斜杠补全同源的清单，点击只把 `/skill:<名称>` 写到草稿最前而不发送；专家绑定失效时给出提示）；当前专家以坞内徽标常驻显示，失效时徽标转警示色）；浏览器批注草稿合并；固定提示词、图片及标注快照、后台提交与失败恢复；显式同步及确认结束原运行后的输入恢复 |
+| `src/renderer/src/sessions/components/PromptComposer.vue` | 提示词与独立图片资料编排、视窗全局粘贴与剪贴板截图提取、对话期间草稿与标注编辑、文件树拖入引用、命令与补全；＋ 菜单为一级分类行 + 二级面板的双级结构（模型、执行模式、专家、技能、常用消息常驻面板内；技能取与斜杠补全同源的清单，点击在光标处插入 `/skill:<名称>` 命令胶囊而不发送；同一消息可插多条，宿主只展开开头那条；输入行是富文本，`@` 文件引用与 `/` 命令以胶囊包裹，提交内容仍是纯文本；专家绑定失效时给出提示）；当前专家以坞内徽标常驻显示，失效时徽标转警示色）；浏览器批注草稿合并；固定提示词、图片及标注快照、后台提交与失败恢复；显式同步及确认结束原运行后的输入恢复 |
+| `src/renderer/src/sessions/components/PromptRichEditor.vue` | 输入坞的富文本输入：纯文本与引用胶囊混排、序列化与草稿恢复、`@` 与 `/` 的光标上下文、输入法组合态与纯文本粘贴 |
 | `src/renderer/src/sessions/components/PromptImageMaterials.vue` | 输入坞内图片附件行：导入、移除、缩略图与独立标注按钮双入口、标注数量展示 |
 | `src/renderer/src/sessions/components/ImageAnnotationPanel.vue` | 左图右说明的独立标注面板、编号双向定位、同步删除与键盘调整入口 |
 | `src/renderer/src/sessions/components/ImageAnnotationCanvas.vue` | 共用原图坐标系的编号与点框叠加层，支持编辑及桌面／手机只读展示，不修改图片像素 |

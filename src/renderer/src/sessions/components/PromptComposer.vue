@@ -1,11 +1,10 @@
 <!-- 图片与编号说明由坞内附件区独立管理；点击发送即固定提示词、图片及标注快照，说明由 SDK 独立资料消息承接。
      结果未确认时可补读同步，确认结束原运行后恢复输入，不自动重发。
      原位新建以独立草稿承接输入：旧实例结束期间可编辑但不发送，首次发送才建立新会话。
-     Prompt 输入坞：处理输入法组合态、Enter 发送与 Shift+Enter 换行、焦点回归与重复提交、响应侧栏「新建」的聚焦请求并给出一次性提示，并在 Agent 运行期间原位提供停止入口；在 Agent 运行与流式响应期间草稿文本、图片附件与标注编辑保持可用，点击发送时才校验会话空闲；同时承接 Extension 的 set_editor_text 填充文本、图片附件的选择/文本框与活动视窗全局快捷粘贴（兼容系统截图提取）/拖拽入口、输入行按内容自动增高、＋ 菜单内的常用消息（短语取自界面偏好，可在设置里增删改与排序，点击即发送）、Pi 命令的斜杠模糊补全（Runtime 就绪后用运行中的命令清单，未就绪时用主进程预读的技能清单，按类型分组并按匹配优先级排序；另含 Desktop 层自己拦截的界面命令）与 `@` 项目文件引用（只写入相对路径文本，不传文件内容）；右侧文件树的行拖入坞内也走同一条相对路径引用规则。输入坞是单行结构：左侧 ＋ 菜单是两列双级结构——左列分类行（添加图片、模型、执行模式、专家、技能、常用消息），右列是当前分类的二级面板（添加图片直接触发选择，其余五项常驻在面板里、仅列表区内部滚动，其中技能点击后只把 `/skill:<名称>` 写到草稿最前、不发送；执行模式两档互斥，专家一个会话只选一个，两者都只在新建会话时可选，已开始的会话只显示当前值不可改），中间是输入行，右侧是发送/停止键；坞上方是待办清单面板（仅标准模式提交清单后出现）、一行延续判定结论（宿主给出结论时才渲染）与一行专家失效提示（绑定的定义已不在清单里时才渲染）；坞下方一行是水平居中的信息行：异常与进行中的状态文本、被收起的 Extension 对话入口与会话用量指标（缓存命中率、上下文占用与平均速率，点击开明细；累计 token 与费用只在明细浮层展示）。Extension 的 setStatus 项不在输入区展示。 -->
+     Prompt 输入坞：处理输入法组合态、Enter 发送与 Shift+Enter 换行、焦点回归与重复提交、响应侧栏「新建」的聚焦请求并给出一次性提示，并在 Agent 运行期间原位提供停止入口；在 Agent 运行与流式响应期间草稿文本、图片附件与标注编辑保持可用，点击发送时才校验会话空闲；同时承接 Extension 的 set_editor_text 填充文本、图片附件的选择/文本框与活动视窗全局快捷粘贴（兼容系统截图提取）/拖拽入口、输入行按内容自动增高、＋ 菜单内的常用消息（短语取自界面偏好，可在设置里增删改与排序，点击即发送）、Pi 命令的斜杠模糊补全（Runtime 就绪后用运行中的命令清单，未就绪时用主进程预读的技能清单，按类型分组并按匹配优先级排序；另含 Desktop 层自己拦截的界面命令）与 `@` 项目文件引用（编辑器内以胶囊包裹，提交的仍是相对路径文本，不传文件内容）；右侧文件树的行拖入坞内也走同一条相对路径引用规则；输入行是富文本，纯文本与引用胶囊混排，草稿字符串仍是唯一文本真源。输入坞是单行结构：左侧 ＋ 菜单是两列双级结构——左列分类行（添加图片、模型、执行模式、专家、技能、常用消息），右列是当前分类的二级面板（添加图片直接触发选择，其余五项常驻在面板里、仅列表区内部滚动，其中技能点击在光标处插入 `/skill:<名称>` 命令胶囊、不发送（同一消息可插多条，宿主只展开开头那条）；执行模式两档互斥，专家一个会话只选一个，两者都只在新建会话时可选，已开始的会话只显示当前值不可改），中间是输入行，右侧是发送/停止键；坞上方是待办清单面板（仅标准模式提交清单后出现）、一行延续判定结论（宿主给出结论时才渲染）与一行专家失效提示（绑定的定义已不在清单里时才渲染）；坞下方一行是水平居中的信息行：异常与进行中的状态文本、被收起的 Extension 对话入口与会话用量指标（缓存命中率、上下文占用与平均速率，点击开明细；累计 token 与费用只在明细浮层展示）。Extension 的 setStatus 项不在输入区展示。 -->
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
-import { PROJECT_FILE_QUERY_MAX_CHARS } from '../../../../shared/project-file-api'
 import { cloneImageAnnotations, imageAnnotationError } from '../../../../shared/image-annotation'
 import type { ImageAnnotationDocument } from '../../../../shared/image-annotation'
 import { PROMPT_IMAGE_MAX_COUNT } from '../../../../shared/runtime-api'
@@ -33,6 +32,7 @@ import UsageDetailDialog from './UsageDetailDialog.vue'
 import MemoryInjectionDialog from './MemoryInjectionDialog.vue'
 import PromptImageMaterials from './PromptImageMaterials.vue'
 import TodoPanel from './TodoPanel.vue'
+import PromptRichEditor from './PromptRichEditor.vue'
 import { hasProjectEntryDragData, projectEntryReferenceText, readProjectEntryDragData } from '../../ui/project-entry-drag'
 
 const runtimeStore = useRuntimeStore()
@@ -77,9 +77,8 @@ const pendingSyncPrompt = computed(() => {
 // 确认只属于弹出时的项目、标签与消息；切走后不能用旧确认结束别的会话。
 watch(() => [workspaceTabsStore.activeTab, projectStore.currentProject?.path, props.active,
   sessionViewStore.pendingPrompt?.id] as const, () => { pendingRecoveryId.value = null })
-/** 输入法组合态：此期间的 Enter 只确认候选词，不能当发送。 */
-const composing = ref(false)
-const textarea = ref<HTMLTextAreaElement | null>(null)
+/** 输入法组合态：此期间的 Enter 只确认候选词，不能当发送（已下沉到 PromptRichEditor）。 */
+const editor = ref<InstanceType<typeof PromptRichEditor> | null>(null)
 /** 新建入口聚焦后的一次性提示：尚未绑定时，发送才准备执行会话。 */
 const newSessionHint = ref(false)
 let newSessionHintTimer: ReturnType<typeof setTimeout> | null = null
@@ -108,7 +107,7 @@ const NEW_CHAT_HINT_BUSY = '正在处理会话操作，稍后再新建。'
 /** 聚焦请求只作用于当前活动对话，不改变会话启动策略。 */
 watch(() => props.focusToken, () => {
   if (!props.active) return
-  textarea.value?.focus()
+  editor.value?.focus()
   newSessionHint.value = true
   if (newSessionHintTimer !== null) clearTimeout(newSessionHintTimer)
   newSessionHintTimer = setTimeout(() => {
@@ -183,7 +182,7 @@ function applyRequestedInput(): void {
   }
   draft.value = restored.draft
   pendingImages.value = restored.images
-  textarea.value?.focus()
+  editor.value?.focus()
 }
 
 watch(() => sessionViewStore.requestedInput, applyRequestedInput)
@@ -483,7 +482,7 @@ watch(() => workspaceTabsStore.newChatInputKey, (key, previous) => {
   usageOpen.value = false
   plusMenuOpen.value = false
   cancelFileSearch()
-  void nextTick(() => { if (props.active) textarea.value?.focus() })
+  void nextTick(() => { if (props.active) editor.value?.focus() })
 }, { flush: 'post' })
 
 /** 用量行的分项；`key` 稳定，供渲染复用，文案本身会随数值变化。 */
@@ -571,9 +570,6 @@ function mergeBrowserAnnotation(projectPath: string, tabKey: string, identity: s
 }
 defineExpose({ mergeBrowserAnnotation })
 
-/** 输入行自动增高的静态上限；实际上限再取窗口高度的 40%。与 .prompt-composer-input 的 max-height 保持一致。 */
-const MAX_INPUT_HEIGHT = 200
-
 /** 标注只更新所属图片资料；提示词草稿保持原样，迟到的弹层更新不能创建附件。 */
 function updateImageAnnotations(objectUrl: string, annotations: ImageAnnotationDocument): void {
   if (imageMaterialDisabled.value) return
@@ -581,7 +577,13 @@ function updateImageAnnotations(objectUrl: string, annotations: ImageAnnotationD
     ? { ...image, annotations: cloneImageAnnotations(annotations) } : image)
 }
 
-/** 粘贴与拖拽图片：只提取白名单内的图片文件，文本粘贴仍走浏览器默认行为。 */
+/** 粘贴图片：编辑器只负责拦下默认插入，白名单过滤与大小校验仍由这里处理。 */
+function onEditorPasteFiles(files: readonly File[]): void {
+  if (attachDisabled.value) return
+  addImageFiles(pickImageFiles(files))
+}
+
+/** 粘贴与拖拽图片：只提取白名单内的图片文件。 */
 function pickImageFiles(files: readonly File[]): readonly File[] {
   return files.filter((file) => IMAGE_MIME_TYPES.includes(file.type))
 }
@@ -639,22 +641,15 @@ function addImageFiles(files: readonly File[]): void {
   }
 }
 
-function onPaste(event: ClipboardEvent): void {
-  const files = extractClipboardImages(event.clipboardData)
-  if (files.length === 0 || attachDisabled.value) return
-  // 命中图片时必须拦下默认行为，否则剪贴板里的文件名会被当文本插进草稿。
-  event.preventDefault()
-  addImageFiles(files)
-}
-
 /**
- * 视窗全局快捷粘贴：当当前对话激活且焦点未在其他输入控件时，捕获粘贴的图片并自动聚焦输入坞。
+ * 视窗全局快捷粘贴：当前对话激活且焦点不在其他输入控件时，捕获粘贴的图片并自动聚焦输入坞。
  */
 function onGlobalPaste(event: ClipboardEvent): void {
   if (!props.active || attachDisabled.value) return
   const target = event.target
-  if (target === textarea.value) return
-  if (target instanceof HTMLInputElement || (target instanceof HTMLTextAreaElement && target !== textarea.value)
+  // 坞内输入区自己处理粘贴（图片附件与纯文本插入），这里只接管页面其他位置的截图粘贴。
+  if (editor.value?.element === target) return
+  if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement
     || (target instanceof HTMLElement && target.isContentEditable)) {
     return
   }
@@ -662,7 +657,7 @@ function onGlobalPaste(event: ClipboardEvent): void {
   if (files.length === 0) return
   event.preventDefault()
   addImageFiles(files)
-  textarea.value?.focus()
+  editor.value?.focus()
 }
 
 /** 数据里带文件才认作附件拖拽，普通文本拖拽仍交给浏览器处理。 */
@@ -742,20 +737,9 @@ function onDrop(event: DragEvent): void {
   addImageFiles(pickImageFiles([...(event.dataTransfer?.files ?? [])]))
 }
 
-/** 在光标处写入相对路径并补一个空格；选中了文字时替换选区，光标停在插入文本之后。 */
+/** 在光标处写入相对路径并补一个空格；光标停在插入的胶囊之后。 */
 function insertEntryReference(path: string): void {
-  const element = textarea.value
-  if (element === null) return
-  const inserted = projectEntryReferenceText(path)
-  const start = element.selectionStart ?? element.value.length
-  const end = element.selectionEnd ?? start
-  draft.value = `${draft.value.slice(0, start)}${inserted}${draft.value.slice(end)}`
-  element.focus()
-  void nextTick(() => {
-    const caret = start + inserted.length
-    element.setSelectionRange(caret, caret)
-    autoGrow()
-  })
+  editor.value?.insertText(projectEntryReferenceText(path))
 }
 
 function removeImage(objectUrl: string): void {
@@ -776,31 +760,6 @@ function readAsBase64(file: File): Promise<string> {
     reader.onerror = () => reject(new Error('读取图片失败'))
     reader.readAsDataURL(file)
   })
-}
-
-/** 检查运行环境是否原生支持 field-sizing（Chromium 123+ 原生支持，免除每次输入的脚本布局测量）。 */
-const supportsFieldSizing = typeof CSS !== 'undefined' && typeof CSS.supports === 'function'
-  && CSS.supports('field-sizing', 'content')
-
-/**
- * 输入行按内容自动增高：
- * 原生支持 field-sizing 时直接跳过脚本测量，彻底消除打字时的强制同步重排（Layout Thrashing）；
- * 降级环境仅在内容溢出或高度需缩小时测量，未到上限不出现滚动条。
- */
-function autoGrow(): void {
-  if (supportsFieldSizing) return
-  const element = textarea.value
-  if (element === null) return
-  const maxHeight = Math.min(MAX_INPUT_HEIGHT, window.innerHeight * 0.4)
-  if (element.scrollHeight > element.clientHeight) {
-    element.style.height = `${Math.min(element.scrollHeight, maxHeight)}px`
-    element.style.overflowY = element.scrollHeight > maxHeight ? 'auto' : 'hidden'
-    return
-  }
-  element.style.height = 'auto'
-  const wanted = element.scrollHeight
-  element.style.height = `${Math.min(wanted, maxHeight)}px`
-  element.style.overflowY = wanted > maxHeight ? 'auto' : 'hidden'
 }
 
 /** 切换只写界面偏好，不重建当前会话；锁定后菜单项置灰，不会走到这里。 */
@@ -971,7 +930,7 @@ function isCommandMessage(message: string): boolean {
 function sendQuickMessage(message: string): void {
   closePlusMenu()
   draft.value = message
-  textarea.value?.focus()
+  editor.value?.focus()
   void submit()
 }
 
@@ -994,14 +953,12 @@ const skillGroups = computed<readonly SelectGroup[]>(() => {
 })
 
 /**
- * 技能面板：命令只有位于消息开头才会被宿主当成技能调用，所以不写入光标处而是放到最前；
- * 已有草稿原样留在命令之后，草稿本身已是技能命令时只替换那一段，反复点选不会叠成多条。
+ * 技能面板：在光标处插入 `/命令`，与直接输入 `/` 走同一条路径；
+ * 草稿里已有内容时原样保留，反复点选就叠多条（宿主只展开开头那条）。
  */
 function insertSkillCommand(name: string): void {
   closePlusMenu()
-  const rest = draft.value.replace(/^\/skill:\S+\s*/, '')
-  draft.value = `/${name} ${rest}`
-  textarea.value?.focus()
+  editor.value?.insertCommand(`/${name}`)
 }
 
 /** 菜单里的图片入口与原先的 ＋ 键同一个行为：先收起菜单再打开选择器，说明仍由附件区独立标注。 */
@@ -1038,71 +995,39 @@ onUnmounted(() => {
   window.removeEventListener('paste', onGlobalPaste)
 })
 
-/** 草稿的每一次写入都重算高度与 `@` 引用：用户输入、Extension 填充、补全写入与命令清空都经这里。 */
+/** 草稿的每一次写入都收起菜单；视图与草稿的同步由 PromptRichEditor 自己完成（文本一致时不重建 DOM）。 */
 watch(draft, () => {
   plusMenuOpen.value = false
-  // 延到 DOM 更新之后：自动增高与 `@` 词元都要读更新后的文本与光标位置。
-  void nextTick(() => {
-    autoGrow()
-    refreshFileToken()
-  })
 })
 
-function onKeydown(event: KeyboardEvent): void {
-  // 输入法组合态下方向键与确认键属于候选词操作，不参与补全也不发送。
-  if (composing.value || event.isComposing || event.keyCode === 229) return
-
-  if (visibleSuggestions.value.length > 0) {
-    if (event.key === 'ArrowDown') {
-      event.preventDefault()
-      moveSuggestion(1)
-      return
-    }
-    if (event.key === 'ArrowUp') {
-      event.preventDefault()
-      moveSuggestion(-1)
-      return
-    }
-    if (event.key === 'Tab') {
-      event.preventDefault()
-      acceptSuggestion(visibleSuggestions.value[suggestionIndex.value])
-      return
-    }
-    if (event.key === 'Escape') {
-      suggestionsDismissed.value = true
-      return
-    }
-  }
-
-  // 文件引用补全：Enter 与 Tab 都接受候选；Esc 只收起弹层，之后 Enter 恢复发送。
-  if (fileToken.value !== null) {
-    if ((event.key === 'ArrowDown' || event.key === 'ArrowUp') && visibleFileEntries.value.length > 0) {
-      event.preventDefault()
-      moveFileSuggestion(event.key === 'ArrowDown' ? 1 : -1)
-      return
-    }
-    if (event.key === 'Tab') {
-      // 引用没写完时不让 Tab 把焦点带走；没有候选就只吞掉按键。
-      event.preventDefault()
-      acceptFileSuggestion(visibleFileEntries.value[fileActiveIndex.value])
-      return
-    }
-    if (event.key === 'Enter' && !event.shiftKey && fileCompletionActive.value) {
-      // 补全占着 Enter 期间宁可吞掉按键，也不把半截路径发出去。
-      event.preventDefault()
-      acceptFileSuggestion(visibleFileEntries.value[fileActiveIndex.value])
-      return
-    }
-    if (event.key === 'Escape') {
+/**
+ * 补全弹层的键盘导航：由编辑器在弹层展开时把方向键、Tab 与 Esc 派上来。
+ * 文件候选优先于命令候选（两者互斥出现），与原先直接从句柄文本判定时的顺序一致。
+ */
+function onEditorNav(direction: 'up' | 'down' | 'accept' | 'dismiss'): void {
+  if (direction === 'dismiss') {
+    if (visibleFileEntries.value.length > 0 || fileToken.value !== null) {
       filesDismissed.value = true
       return
     }
+    if (visibleSuggestions.value.length > 0) suggestionsDismissed.value = true
+    return
   }
 
-  if (event.key !== 'Enter' || event.shiftKey) return
-  // Enter 始终是发送：补全只用 Tab 或点击确认，避免改变既有发送手感。
-  event.preventDefault()
-  void submit()
+  if (direction === 'accept') {
+    if (fileToken.value !== null) {
+      acceptFileSuggestion(visibleFileEntries.value[fileActiveIndex.value])
+      return
+    }
+    if (visibleSuggestions.value.length > 0) acceptSuggestion(visibleSuggestions.value[suggestionIndex.value])
+    return
+  }
+
+  if (visibleFileEntries.value.length > 0) {
+    moveFileSuggestion(direction === 'down' ? 1 : -1)
+    return
+  }
+  moveSuggestion(direction === 'down' ? 1 : -1)
 }
 
 /**
@@ -1290,7 +1215,7 @@ async function dispatchPendingPrompt(id: number): Promise<void> {
       if (projected) sessionViewStore.finishPendingPrompt(id)
       else restorePendingPrompt(id)
     }
-    if (mounted && props.active && workspaceTabsStore.activeTab === pending.tabKey) textarea.value?.focus()
+    if (mounted && props.active && workspaceTabsStore.activeTab === pending.tabKey) editor.value?.focus()
   } catch (error) {
     if (projected) sessionViewStore.finishPendingPrompt(id)
     else restorePendingPrompt(id)
@@ -1457,7 +1382,7 @@ watch(editorTextVersion, () => {
   if (workspaceTabsStore.isChatNewDraft) return
   if (draft.value.trim() === '') {
     draft.value = text
-    textarea.value?.focus()
+    editor.value?.focus()
   }
 })
 
@@ -1490,12 +1415,12 @@ const SUGGESTION_GROUPS: readonly { readonly kind: ComposerSuggestionKind; reado
 ]
 /** 每组各自的条数上限；不用全局上限截断，否则排在后面的技能永远进不了候选。 */
 const MAX_SUGGESTIONS_PER_KIND = 8
-/** 斜杠补全只在输入以 `/` 开头且尚未输入空白字符（即仍在命令名内）时生效。 */
-const slashQuery = computed(() => {
-  const text = draft.value
-  if (!text.startsWith('/') || /\s/.test(text)) return null
-  return text.slice(1).toLowerCase()
-})
+/** 斜杠补全：查询串来自编辑器对光标的判定（`/` 在行首或空白之后且尚未输入空白），不再限整条草稿前缀。 */
+const commandQuery = ref<string | null>(null)
+
+function onCommandQuery(query: string | null): void {
+  commandQuery.value = query === null ? null : query.toLowerCase()
+}
 const suggestionsDismissed = ref(false)
 const suggestionIndex = ref(0)
 const commandList = ref<HTMLElement | null>(null)
@@ -1551,7 +1476,7 @@ const candidateEntries = computed<readonly ComposerSuggestion[]>(() => [
 
 /** 按类型分组后，各组先按匹配优先级排序再限量，同级保持资源清单的原始顺序。 */
 const matchedGroups = computed<readonly SuggestionGroup[]>(() => {
-  const query = slashQuery.value
+  const query = commandQuery.value
   if (query === null) return []
 
   const groups: SuggestionGroup[] = []
@@ -1583,7 +1508,7 @@ watch(matchedSuggestions, () => {
   suggestionIndex.value = 0
 })
 
-watch(slashQuery, () => {
+watch(commandQuery, () => {
   suggestionsDismissed.value = false
 })
 
@@ -1593,11 +1518,18 @@ function moveSuggestion(step: number): void {
   suggestionIndex.value = (suggestionIndex.value + step + count) % count
 }
 
-/** 接受候选：写入完整命令并保留一个尾随空格供追加参数，不自动发送。 */
+/**
+ * 接受候选：在光标处插入完整命令并补一个尾随空格供追加参数，不自动发送。
+ * 一条消息里可以插入多条命令（每处 `/` 都会弹候选）；只有开头那一条会被宿主展开成技能。
+ */
 function acceptSuggestion(entry: ComposerSuggestion | undefined): void {
   if (entry === undefined) return
-  draft.value = `/${entry.name} `
-  textarea.value?.focus()
+  editor.value?.insertCommand(`/${entry.name}`)
+  // 一条消息里出现第二条命令时才提醒：宿主只展开开头那条，其余只会作为文字发出。
+  const commandTokens = draft.value.match(/(^|\s)\/[A-Za-z][\w:.-]*/gu)?.length ?? 0
+  if (commandTokens > 1) {
+    showCommandHint('宿主只展开开头的一条技能命令，后面的会作为普通文字发出。')
+  }
 }
 
 /** `@` 文件引用：候选来自主进程按当前项目建的文件索引；插入的是相对路径文本，不传文件内容。 */
@@ -1605,12 +1537,8 @@ const MAX_FILE_SUGGESTIONS = 8
 const FILE_QUERY_DEBOUNCE_MS = 120
 const projectFileStore = useProjectFileStore()
 
-/** 光标处的 `@` 引用：`start` 是 `@` 在草稿里的下标，`text` 是 `@` 到光标之间的查询串。 */
-interface FileToken {
-  readonly start: number
-  readonly text: string
-}
-const fileToken = ref<FileToken | null>(null)
+/** 光标处的 `@` 查询串；光标不在引用里时为 null。定位由编辑器做，这里只用它决定候选与 Enter 归属。 */
+const fileToken = ref<string | null>(null)
 const fileActiveIndex = ref(0)
 const fileList = ref<HTMLElement | null>(null)
 
@@ -1622,41 +1550,23 @@ const filesDismissed = ref(false)
 const fileSearchScheduled = ref(false)
 let fileSearchTimer = 0
 
-/** 从光标前的文本取 `@` 引用：`@` 必须在行首或空白之后，查询串不含空白且不超长度上限。 */
-function readFileToken(): FileToken | null {
-  const element = textarea.value
-  if (element === null) return null
-
-  const before = element.value.slice(0, element.selectionStart ?? element.value.length)
-  const at = before.lastIndexOf('@')
-  if (at < 0) return null
-  if (at > 0 && !/\s/.test(before.charAt(at - 1))) return null
-
-  const text = before.slice(at + 1)
-  if (text.length > PROJECT_FILE_QUERY_MAX_CHARS) return null
-  if (/\s/.test(text)) return null
-  return { start: at, text }
-}
-
-/** 光标或草稿变化后重算引用；查询串没变时不动计时器，避免连续 keyup 把检索无限推迟。 */
-function refreshFileToken(): void {
-  const token = readFileToken()
-  if (token === null) {
+/** 编辑器上报光标前的查询串：查询没变时不动计时器，避免连续按键把检索无限推迟。 */
+function onFileQuery(query: string | null): void {
+  if (query === null) {
     cancelFileSearch()
     fileToken.value = null
     return
   }
 
-  const current = fileToken.value
-  if (current !== null && current.start === token.start && current.text === token.text) return
+  if (fileToken.value === query) return
 
-  fileToken.value = token
+  fileToken.value = query
   cancelFileSearch()
   fileSearchScheduled.value = true
   fileSearchTimer = window.setTimeout(() => {
     fileSearchTimer = 0
     fileSearchScheduled.value = false
-    void projectFileStore.search(token.text)
+    void projectFileStore.search(query)
   }, FILE_QUERY_DEBOUNCE_MS)
 }
 
@@ -1668,8 +1578,7 @@ function cancelFileSearch(): void {
 }
 
 /** 查询串一变就回到第一条候选，并撤销上一次的 Esc 收起。 */
-const fileQueryText = computed(() => fileToken.value?.text ?? null)
-watch(fileQueryText, () => {
+watch(fileToken, () => {
   fileActiveIndex.value = 0
   filesDismissed.value = false
 })
@@ -1686,6 +1595,9 @@ const fileCompletionActive = computed(() => (
   && !filesDismissed.value
   && (fileSearchScheduled.value || projectFileStore.pending || visibleFileEntries.value.length > 0)
 ))
+
+/** 补全弹层是否展开：展开期间方向键、Tab 与 Esc 归本组件处理，编辑器只负责上报。 */
+const completionOpen = computed(() => fileCompletionActive.value || visibleSuggestions.value.length > 0)
 
 /** 弹层归属：两个列表互斥出现，`aria-controls` 指向当前真正显示的那个；都没有打开时没有可指向的元素。 */
 const activeListId = computed(() => {
@@ -1713,26 +1625,16 @@ function fileDirectory(path: string): string {
   return slash >= 0 ? path.slice(0, slash) : ''
 }
 
-/** 接受候选：把 `@查询串` 换成项目相对路径并补一个空格，光标停在空格之后。 */
+/** 接受候选：把 `@查询串` 换成项目相对路径并补一个空格，光标停在插入内容之后。 */
 function acceptFileSuggestion(path: string | undefined): void {
-  const element = textarea.value
-  const token = fileToken.value
-  if (element === null || token === null || path === undefined) return
+  if (path === undefined || fileToken.value === null) return
 
   // 与文件树拖入共用同一条路径引用规则：含空白的路径加双引号，末尾补一个空格。
-  const inserted = projectEntryReferenceText(path)
-  const caret = element.selectionStart ?? element.value.length
-  draft.value = `${draft.value.slice(0, token.start)}${inserted}${draft.value.slice(caret)}`
+  editor.value?.acceptFileQuery(projectEntryReferenceText(path))
   fileToken.value = null
   filesDismissed.value = false
   cancelFileSearch()
-  element.focus()
-
-  void nextTick(() => {
-    const next = token.start + inserted.length
-    element.setSelectionRange(next, next)
-    autoGrow()
-  })
+  editor.value?.focus()
 }
 
 onMounted(() => {
@@ -1744,8 +1646,7 @@ onMounted(() => {
   }
   const pending = sessionViewStore.pendingPrompt
   if (pending?.phase === 'cancelled') restorePendingPrompt(pending.id)
-  if (props.active) textarea.value?.focus()
-  autoGrow()
+  if (props.active) editor.value?.focus()
   document.addEventListener('pointerdown', onDocumentPointerDown)
   window.addEventListener('paste', onGlobalPaste)
 })
@@ -1767,7 +1668,7 @@ onMounted(() => {
           结束原运行并恢复输入
         </AppButton>
       </div>
-      <label for="prompt-input" class="sr-only">输入要发送给 Pi 的提示词</label>
+      <!-- 可编辑区是 div[role=textbox]，label 的 for 不再生效；无障碍名称直接写在输入组件上。 -->
       <div
         class="prompt-composer-shell"
         :class="dragging || entryDragging ? 'is-dragging' : ''"
@@ -1991,25 +1892,25 @@ onMounted(() => {
             </Transition>
           </div>
 
-          <textarea
+          <!-- 输入行：纯文本与引用胶囊混排的富文本输入；草稿字符串仍由本组件持有，编辑器只负责视图与光标。 -->
+          <PromptRichEditor
             id="prompt-input"
-            ref="textarea"
-            v-model="draft"
-            rows="1"
-            class="text-control prompt-composer-input resize-none"
-            placeholder="输入要发送给 Pi 的内容（可粘贴或拖入图片）"
-            autocomplete="off"
-            spellcheck="false"
-            :aria-describedby="statusText !== null ? 'prompt-status' : undefined"
-            aria-autocomplete="list"
-            :aria-controls="activeListId"
-            :aria-expanded="activeListOpen"
-            @keydown="onKeydown"
-            @click="refreshFileToken"
-            @paste="onPaste"
-            @compositionstart="composing = true"
-            @compositionend="composing = false"
-          ></textarea>
+            ref="editor"
+            aria-label="输入要发送给 Pi 的提示词"
+            :model-value="draft"
+            placeholder="输入要发送给 Pi 的内容（可粘贴或拖入图片；@ 引用文件、/ 调用命令）"
+            :popup-open="completionOpen"
+            :enter-consumes="fileCompletionActive"
+            :controls="activeListId"
+            :expanded="activeListOpen"
+            :described-by="statusText !== null ? 'prompt-status' : undefined"
+            @update:model-value="draft = $event"
+            @submit="submit"
+            @nav="onEditorNav"
+            @file-query="onFileQuery"
+            @command-query="onCommandQuery"
+            @paste-files="onEditorPasteFiles"
+          />
 
           <!-- 发送与停止共用一个位置与一档强调色，运行中靠字符形状区分。 -->
           <AppButton
