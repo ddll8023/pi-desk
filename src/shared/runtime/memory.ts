@@ -1,9 +1,9 @@
 /**
- * 会话内记忆注入审计的跨进程契约：只读快照，含三段状态与条目身份、摘要。
+ * 会话内记忆注入审计的跨进程契约：只读快照，含四段状态与条目身份、摘要。
  *
  * 数据来源是会话分支里 `pi-memory.injection.v1` 自定义条目，由扩展在装配背景时写入；
  * 本契约只搬运它的形状，不读库、不写库，也不携带条目正文全文。
- * 段集合与版本绑定：只有 `version: 2` 判为有效，旧的多段快照一律按「没有审计」处理。
+ * 段集合与版本绑定：只有 `version: 3` 判为有效，旧的多段快照一律按「没有审计」处理。
  */
 import type { RuntimeError } from './status'
 
@@ -35,16 +35,30 @@ export interface MemoryInjectionProfileEntry {
   readonly truncated: boolean
 }
 
-/** 三段可点击的注入内容：画像、常驻约定、当前项目近况，缺任一段即不是有效快照。 */
+/**
+ * 风格条目：身份是 `t_` 前缀，摘要是要点前若干字，原句不进审计而是记条数。
+ * 全文（要点 + 全部原句）展开时按 ID 另取。
+ */
+export interface MemoryInjectionStyleEntry {
+  readonly id: string
+  readonly name: string
+  readonly scene: string
+  readonly sample_count: number
+  readonly excerpt: string
+  readonly truncated: boolean
+}
+
+/** 四段可点击的注入内容：画像、语气风格、常驻约定、当前项目近况，缺任一段即不是有效快照。 */
 export interface MemoryInjectionEntries {
   readonly profiles: readonly MemoryInjectionProfileEntry[]
+  readonly styles: readonly MemoryInjectionStyleEntry[]
   readonly resident: readonly MemoryInjectionEntry[]
   readonly notes: readonly MemoryInjectionEntry[]
 }
 
 /** 三段装配状态按原字段搬运，渲染端只读已知键，不据此推断额外含义。 */
 export interface MemoryInjectionSnapshot {
-  readonly version: 2
+  readonly version: 3
   readonly at: string
   readonly sessionId: string | null
   readonly cwd: string | null
@@ -61,6 +75,7 @@ export type MemoryInjectionResult =
 
 const RECORD_ID = /^m_[0-9A-HJKMNP-TV-Z]{26}$/
 const PROFILE_ID = /^p_[0-9A-HJKMNP-TV-Z]{26}$/
+const STYLE_ID = /^t_[0-9A-HJKMNP-TV-Z]{26}$/
 const DATE = /^\d{4}-\d{2}-\d{2}$/
 const ENTRY_TYPES = ['decision', 'constraint', 'fact', 'progress', 'issue', 'preference_evidence']
 const PROFILE_DOMAINS = ['communication', 'coding', 'learning', 'workflow']
@@ -111,10 +126,23 @@ function isSegments(value: unknown): value is Readonly<Record<string, Readonly<R
   return Object.values(value).every(segment => isRecord(segment) && Object.keys(segment).length <= MAX_SEGMENT_KEYS)
 }
 
+/** 风格条目同样按段限流；样本数只是计数，校验为非负整数。 */
+function isStyleEntry(value: unknown): value is MemoryInjectionStyleEntry {
+  if (!isRecord(value)) return false
+  return typeof value.id === 'string' && STYLE_ID.test(value.id)
+    && bounded(value.name, 300) && bounded(value.scene, 300)
+    && typeof value.sample_count === 'number' && Number.isSafeInteger(value.sample_count) && value.sample_count >= 0
+    && bounded(value.excerpt, 1_000) && typeof value.truncated === 'boolean'
+}
+
+function isStyleEntryList(value: unknown): value is readonly MemoryInjectionStyleEntry[] {
+  return Array.isArray(value) && value.length <= MAX_ENTRIES && value.every(isStyleEntry)
+}
+
 /** 会话里读到的自定义条目数据可能是旧版本或损坏内容，形状不符时按「没有审计」处理。 */
 export function isMemoryInjectionSnapshot(value: unknown): value is MemoryInjectionSnapshot {
   if (!isRecord(value)) return false
-  if (value.version !== 2 || !bounded(value.at, 64)) return false
+  if (value.version !== 3 || !bounded(value.at, 64)) return false
   if (!(value.sessionId === null || bounded(value.sessionId, 256))) return false
   if (!(value.cwd === null || bounded(value.cwd, 4_096))) return false
   if (typeof value.revision !== 'number' || !Number.isSafeInteger(value.revision) || value.revision < 0) return false
@@ -123,7 +151,8 @@ export function isMemoryInjectionSnapshot(value: unknown): value is MemoryInject
   if (!isSegments(value.segments)) return false
   const entries = value.entries
   if (!isRecord(entries)) return false
-  return isProfileEntryList(entries.profiles) && isEntryList(entries.resident) && isEntryList(entries.notes)
+  return isProfileEntryList(entries.profiles) && isStyleEntryList(entries.styles)
+    && isEntryList(entries.resident) && isEntryList(entries.notes)
 }
 
 export function isMemoryInjectionResult(value: unknown): value is MemoryInjectionResult {

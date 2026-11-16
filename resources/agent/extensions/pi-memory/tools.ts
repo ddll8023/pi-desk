@@ -3,14 +3,19 @@ import { createHash } from 'node:crypto'
 import { Type } from '@earendil-works/pi-ai'
 import type { JsonValue } from '@earendil-works/pi-ai'
 import type { ExtensionAPI, ExtensionToolContext } from '@earendil-works/pi-coding-agent'
-import { CONTROL_TYPE, applicableProfiles, resolveProjectTarget } from './context.ts'
+import { CONTROL_TYPE, applicableProfiles, resolveProjectId, resolveProjectTarget } from './context.ts'
 import type { Lease, MemoryRuntime } from './context.ts'
 import { DOMAINS, array, domain, errorText, object, text } from './engine.ts'
 import type { GeneratedPlan, JsonObject } from './engine.ts'
+import { collectStyleSamples, sampleKey } from './style-sampling.ts'
 import { assertWritableHost } from './write-gate.ts'
 
 const DomainSchema = Type.Union(DOMAINS.map(value => Type.Literal(value)))
 const Ids = Type.Array(Type.String({ pattern: '^m_[0-9A-HJKMNP-TV-Z]{26}$' }), { maxItems: 50 })
+/** 风格 ID 用独立前缀：与记录、画像 ID 不通用，也不能靠笔误读到日记。 */
+const StyleId = Type.String({ pattern: '^t_[0-9A-HJKMNP-TV-Z]{26}$' })
+/** 取样默认值：设计把具体数值交给实现取定，这里集中一处，工具描述不另写一份。 */
+const STYLE_DEFAULTS = { days: 30, sessionLimit: 20, maxChars: 12_000, minChars: 24 } as const
 const Offset = Type.Optional(Type.Integer({ minimum: 0 }))
 const Limit = Type.Optional(Type.Integer({ minimum: 1, maximum: 200 }))
 const Output = Type.Object({ ok: Type.Literal(true), data: Type.Unknown(), error: Type.Null() })
@@ -78,10 +83,24 @@ function diarySessionId(sessionId: string): string {
   return `s_${encoded}`
 }
 /** 回执只列本次提交的内容摘要；记录 ID 以提交返回的 new_record_ids 为准。 */
-function receipt(operation: 'save' | 'profile', plan: GeneratedPlan): JsonObject {
+function receipt(operation: 'save' | 'profile' | 'style', plan: GeneratedPlan): JsonObject {
   const preview = plan.preview
   if (operation === 'profile') {
     return { profile: preview.new_profile ?? null, replace_profile_ids: preview.replace_profile_ids ?? null }
+  }
+  if (operation === 'style') {
+    const styles = Array.isArray(preview.styles) ? preview.styles : []
+    const replaced = Array.isArray(preview.replaced_styles) ? preview.replaced_styles : []
+    const merged = Array.isArray(preview.merged_styles) ? preview.merged_styles : []
+    return { date: preview.date ?? null,
+      styles: styles.map(value => {
+        const row = object(value)
+        const samples = Array.isArray(row.samples) ? row.samples : []
+        return { id: row.id ?? null, name: row.name ?? null, scene: row.scene ?? null,
+          sample_count: samples.length, merged: row.merge === true }
+      }),
+      merged_style_ids: merged.map(value => object(value).id ?? null),
+      replaced_style_ids: replaced.map(value => object(value).id ?? null) }
   }
   const records = Array.isArray(preview.new_records) ? preview.new_records : []
   return { date: preview.date ?? null,
@@ -89,6 +108,30 @@ function receipt(operation: 'save' | 'profile', plan: GeneratedPlan): JsonObject
       const row = object(value)
       return { type: row.type ?? null, topic: row.topic ?? null, rule_key: row.rule_key ?? null }
     }) }
+}
+
+/**
+ * 已收录样本：读引擎风格列表，构造「会话 ID + 逐字原句」的键集合。
+ * 读失败不阻断取样：按无已收录样本继续，并在结果里说明来源不可用。
+ */
+async function usedStyleSamples(runtime: MemoryRuntime, signal: AbortSignal | undefined):
+Promise<{ usedKeys: Set<string>; usedSource: string }> {
+  const usedKeys = new Set<string>()
+  try {
+    const data = await runtime.engine.styles(signal)
+    for (const value of array(data.styles)) {
+      const row = object(value)
+      const samples = row.samples === undefined ? [] : array(row.samples)
+      for (const sample of samples) {
+        const item = object(sample)
+        if (typeof item.source_session !== 'string' || typeof item.quote !== 'string') continue
+        usedKeys.add(sampleKey(item.source_session, item.quote))
+      }
+    }
+    return { usedKeys, usedSource: usedKeys.size > 0 ? 'store' : 'empty' }
+  } catch (error) {
+    return { usedKeys, usedSource: `unavailable：${errorText(error)}` }
+  }
 }
 
 export function registerMemoryTools(pi: ExtensionAPI, runtime: MemoryRuntime): void {
@@ -108,7 +151,7 @@ export function registerMemoryTools(pi: ExtensionAPI, runtime: MemoryRuntime): v
     lease.assert()
     return result(data)
   }
-  const save = async (ctx: ExtensionToolContext, signal: AbortSignal | undefined, operation: 'save' | 'profile',
+  const save = async (ctx: ExtensionToolContext, signal: AbortSignal | undefined, operation: 'save' | 'profile' | 'style',
     prepare: (lease: Lease) => Promise<JsonObject>) => {
     // 无可用交互桥时，连计划技术缓存也不生成。
     assertWritableHost(ctx)
@@ -343,6 +386,115 @@ export function registerMemoryTools(pi: ExtensionAPI, runtime: MemoryRuntime): v
         const scope = text(candidate.scope)
         if (scope !== 'global' && scope !== `domain:${candidate.domain}`) throw new Error('画像作用域须为 global 或所选领域')
         return candidate
+      })
+    }
+  })
+
+  // ---- 风格库：要点与原句随每轮背景注入；本组提供按需复核、取样与保存；不参与词法检索 ----
+  pi.registerTool({
+    name: 'style_sample', label: '取样用户发言样本',
+    description: '用户要求提炼自己的表达风格时先取样。只读本产品会话记录中用户本人发的消息，已剔除确认句、系统与技能注入段、代码、日志与路径；路径由宿主提供，不能指定。返回样本与过滤计数，用于判断语料是否够用；超出预算或会话上限时给出 has_more 与 next_offset。宿主未提供会话目录时直接报错，不回退其他路径。',
+    parameters: Type.Object({
+      scope: Type.Optional(Type.Union([Type.Literal('current-project'), Type.Literal('all')])),
+      days: Type.Optional(Type.Integer({ minimum: 1, maximum: 365 })),
+      session_limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
+      max_chars: Type.Optional(Type.Integer({ minimum: 2_000, maximum: 40_000 })),
+      min_chars: Type.Optional(Type.Integer({ minimum: 1, maximum: 1_000 })),
+      include_used: Type.Optional(Type.Boolean()),
+      offset: Offset
+    }, { additionalProperties: false }),
+    outputSchema: Output, annotations: ReadHints,
+    async execute(_id, params, signal, _onUpdate, ctx) {
+      return globalRead(ctx, signal, async lease => {
+        const root = runtime.config.sessions
+        if (root === null) throw new Error('宿主未提供会话目录，无法取样；独立 CLI 不支持风格取样')
+        const scope = params.scope ?? 'current-project'
+        const projectId = scope === 'current-project' ? runtime.projectId(lease.state.cwd) : null
+        if (scope === 'current-project' && projectId === null) {
+          throw new Error('当前工作目录未登记为项目，无法按当前项目取样；可改用 scope=all')
+        }
+        const { usedKeys, usedSource } = await usedStyleSamples(runtime, lease.signal)
+        const collected = await collectStyleSamples({ sessionsRoot: root, scope, projectId,
+          projects: runtime.config.projects, days: params.days ?? STYLE_DEFAULTS.days,
+          sessionLimit: params.session_limit ?? STYLE_DEFAULTS.sessionLimit,
+          maxChars: params.max_chars ?? STYLE_DEFAULTS.maxChars,
+          minChars: params.min_chars ?? STYLE_DEFAULTS.minChars, offset: params.offset ?? 0,
+          usedKeys, includeUsed: params.include_used === true },
+        cwd => resolveProjectId(runtime.config.projects, cwd))
+        return { ...collected, used_source: usedSource }
+      })
+    }
+  })
+  pi.registerTool({
+    name: 'style_list', label: '列出风格库',
+    description: '列出风格资产（名称、场景、要点与原句数），支持分页。要点与全部原句已随每轮背景注入，因此只在背景被预算挡下或需要按 ID 复核时使用；风格不参与词法检索，也不代表当前适用的决定。',
+    parameters: Type.Object({ offset: Offset, limit: Limit }, { additionalProperties: false }),
+    outputSchema: Output, annotations: ReadHints,
+    async execute(_id, params, signal, _onUpdate, ctx) {
+      return globalRead(ctx, signal, async lease => {
+        const [offset, limit] = boundedPage(params.offset, params.limit)
+        const data = await runtime.engine.styles(lease.signal)
+        lease.assert()
+        if (data.memory_scope !== 'global') throw new Error('风格列表返回的范围不一致，未展示')
+        const styles = array(data.styles)
+        return { ...data, store: runtime.engine.store, total_styles: styles.length, offset,
+          styles: styles.slice(offset, offset + limit),
+          has_more: offset + limit < styles.length,
+          next_offset: offset + limit < styles.length ? offset + limit : null }
+      })
+    }
+  })
+  pi.registerTool({
+    name: 'style_read', label: '按 ID 读取风格',
+    description: '按 1..10 个真实风格 ID 读取完整条目（要点与全部原句样本），返回顺序与请求一致；身份不一致或 ID 不存在即报错，不扫描其他条目。',
+    parameters: Type.Object({ ids: Type.Array(StyleId, { minItems: 1, maxItems: 10 }) }, { additionalProperties: false }),
+    outputSchema: Output, annotations: ReadHints,
+    async execute(_id, params, signal, _onUpdate, ctx) {
+      return globalRead(ctx, signal, async lease => {
+        const data = await runtime.engine.styleRead(params.ids, lease.signal)
+        lease.assert()
+        if (data.memory_scope !== 'global') throw new Error('风格读取返回的范围不一致，未展示')
+        const values = array(data.styles)
+        if (values.length !== params.ids.length) throw new Error('风格返回的条目数量不一致，未展示')
+        const styles = values.map((value, index) => {
+          const row = object(value)
+          if (row.id !== params.ids[index]) throw new Error('风格身份不一致，未展示')
+          return row
+        })
+        return { ...data, store: runtime.engine.store, styles }
+      })
+    }
+  })
+  const StyleSchema = Type.Object({
+    name: Type.String({ minLength: 1, maxLength: 200 }),
+    scene: Type.String({ minLength: 1, maxLength: 2_000 }),
+    points: Type.String({ minLength: 1, maxLength: 4_000 }),
+    samples: Type.Array(Type.Object({
+      quote: Type.String({ minLength: 1, maxLength: 1_000 }),
+      source_session: Type.String({ minLength: 1, maxLength: 200 }),
+      source_date: Type.String({ pattern: '^\\d{4}-\\d{2}-\\d{2}$' })
+    }, { additionalProperties: false }), { minItems: 1, maxItems: 12 }),
+    replace_style_ids: Type.Optional(Type.Array(StyleId, { maxItems: 10 }))
+  }, { additionalProperties: false })
+  pi.registerTool({
+    name: 'style_save', label: '保存风格资产', exposure: 'model-only', executionMode: 'sequential',
+    description: '仅在用户明确要求提炼或更新自己的表达风格时使用，并先经 style_sample 取样、核实语料规模。只保存工作表达类风格（提要求、评审意见、决策与收尾）；不用于对外文案、私人消息或需要体裁模板的成文材料——会话语料里没有这类体裁。同名即自动合并（保留 ID 与创建日期，样本去重追加，合计不超过 12 条），改名换条目用 replace_style_ids。生成计划后直接提交并返回回执，不接受 approved 或外部 plan_id。',
+    parameters: Type.Object({ styles: Type.Array(StyleSchema, { minItems: 1, maxItems: 10 }) }, { additionalProperties: false }),
+    outputSchema: Output, annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
+    async execute(_id, params, signal, _onUpdate, ctx) {
+      keys(params, ['styles'])
+      // 固化候选：后续交互不复用可被另一处理器修改的参数引用。
+      const candidate = object(JSON.parse(JSON.stringify(params)))
+      return save(ctx, signal, 'style', async lease => {
+        const styles = array(candidate.styles).map(value => {
+          const row = object(value)
+          keys(row, ['name', 'scene', 'points', 'samples', 'replace_style_ids'])
+          for (const sample of array(row.samples)) keys(object(sample), ['quote', 'source_session', 'source_date'])
+          return row
+        })
+        // 会话身份与日记保存同源：同一会话重跑不会因 ID 变化绕过重复判断。
+        return { agent: ctx.mode === 'tui' ? 'pi' : 'pi-desk',
+          session_id: diarySessionId(ctx.sessionManager.getSessionId()), styles }
       })
     }
   })

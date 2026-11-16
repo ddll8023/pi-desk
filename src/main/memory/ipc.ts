@@ -1,19 +1,21 @@
-/** 记忆域 IPC：校验调用者与参数，转发给唯一所有者（状态、开关、创建、读取与候选保存）；不提供路径、命令或批准参数。 */
+/** 记忆域 IPC：校验调用者与参数，转发给唯一所有者（状态、开关、创建、记录／画像／风格的只读读取与候选保存）；不提供路径、命令或批准参数。 */
 import type { IpcMainInvokeEvent } from 'electron'
 import {
   MEMORY_ENABLED_CHANNEL,
   MEMORY_INITIALIZE_CHANNEL,
   MEMORY_PROFILE_READ_CHANNEL,
+  MEMORY_STYLE_READ_CHANNEL,
   MEMORY_READ_CHANNEL,
   MEMORY_SAVE_CANDIDATES_CHANNEL,
   MEMORY_STATUS_CHANNEL,
   isMemoryInitializeRequest,
   isMemoryPreference,
   isMemoryProfileReadRequest,
+  isMemoryStyleReadRequest,
   isMemoryReadRequest,
   isMemorySaveCandidatesRequest
 } from '../../shared/memory-api'
-import type { MemoryProfileReadResult, MemoryReadResult, MemoryResult, MemorySaveResult } from '../../shared/memory-api'
+import type { MemoryProfileReadResult, MemoryReadResult, MemoryResult, MemorySaveResult, MemoryStyleReadResult } from '../../shared/memory-api'
 import { handle, isTrustedCaller } from '../ipc/dispatch'
 import { memoryManager } from '../services'
 
@@ -73,6 +75,18 @@ export function registerMemoryHandlers(pageUrl: string): void {
         return { ok: false, error: { code: 'INVALID_REQUEST', message: '画像读取只接受一个固定领域。' } }
       }
       return memoryManager.readProfiles(args[0].domain)
+    })
+
+  /** 风格读取只接受 1..10 个真实风格 ID：不提供按名称、关键词或数量的扫描入口。 */
+  handle(MEMORY_STYLE_READ_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<MemoryStyleReadResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return { ok: false, error: { code: 'FORBIDDEN', message: '不允许此页面调用桌面接口。' } }
+      }
+      if (args.length !== 1 || !isMemoryStyleReadRequest(args[0])) {
+        return { ok: false, error: { code: 'INVALID_REQUEST', message: '风格读取只接受 1 至 10 个真实风格 ID。' } }
+      }
+      return memoryManager.readStyles(args[0].ids)
     })
 
   /** 候选保存只接受 1..10 条合法候选与项目路径；plan、store 与批准标志都不由页面指定。 */

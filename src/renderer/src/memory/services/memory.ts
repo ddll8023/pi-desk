@@ -1,8 +1,9 @@
-/** 记忆域的受限桥接：设置页用开关、状态与首次创建，会话卡片用按记录 ID 与按领域的正文读取和候选保存；不向页面开放路径或命令。 */
-import { isMemoryProfileReadResult, isMemoryReadResult, isMemoryResult, isMemorySaveResult } from '../../../../shared/memory-api'
+/** 记忆域的受限桥接：设置页用开关、状态与首次创建，会话卡片用按记录 ID、按领域与按风格 ID 的正文读取和候选保存；不向页面开放路径或命令。 */
+import { isMemoryProfileReadResult, isMemoryReadResult, isMemoryResult, isMemorySaveResult, isMemoryStyleReadResult } from '../../../../shared/memory-api'
 import type {
   MemoryInitializeRequest, MemoryPreference, MemoryProfileDomain, MemoryProfileReadResult,
-  MemoryReadRequest, MemoryReadResult, MemoryResult, MemorySaveCandidatesRequest, MemorySaveResult
+  MemoryReadRequest, MemoryReadResult, MemoryResult, MemorySaveCandidatesRequest, MemorySaveResult,
+  MemoryStyleReadRequest, MemoryStyleReadResult
 } from '../../../../shared/memory-api'
 
 interface MemoryBridge {
@@ -11,6 +12,7 @@ interface MemoryBridge {
   readonly initializeMemory: (request: MemoryInitializeRequest) => Promise<unknown>
   readonly readMemoryRecords?: (request: MemoryReadRequest) => Promise<unknown>
   readonly readMemoryProfiles?: (request: { readonly domain: MemoryProfileDomain }) => Promise<unknown>
+  readonly readMemoryStyles?: (request: MemoryStyleReadRequest) => Promise<unknown>
   readonly saveMemoryCandidates?: (request: MemorySaveCandidatesRequest) => Promise<unknown>
 }
 
@@ -83,6 +85,27 @@ export async function readMemoryProfiles(domain: MemoryProfileDomain): Promise<M
   } catch (error) {
     return { ok: false, error: { code: 'INTERNAL_ERROR',
       message: error instanceof Error ? error.message : '画像读取失败。' } }
+  }
+}
+
+/**
+ * 按真实风格 ID 读取要点与全部原句：只供注入卡片展开风格条目，不提供按名称或关键词的扫描。
+ * 与记录、画像读取分开校验：三者数据形状与失败语义不同。
+ */
+export async function readMemoryStyles(ids: readonly string[]): Promise<MemoryStyleReadResult> {
+  const target = bridge()
+  if (target === null || typeof target.readMemoryStyles !== 'function') {
+    return { ok: false, error: { code: 'BRIDGE_UNAVAILABLE', message: '当前环境没有桌面记忆接口。' } }
+  }
+  try {
+    const response = await target.readMemoryStyles({ ids })
+    if (!isMemoryStyleReadResult(response)) {
+      return { ok: false, error: { code: 'INVALID_RESPONSE', message: '风格读取返回了不符合契约的结果。' } }
+    }
+    return response
+  } catch (error) {
+    return { ok: false, error: { code: 'INTERNAL_ERROR',
+      message: error instanceof Error ? error.message : '风格读取失败。' } }
   }
 }
 

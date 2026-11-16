@@ -6,7 +6,7 @@ export const HOST_CHANGED = 'pi-desk:memory-configuration-changed:v1'
 /** 与主进程 shared-process/memory-runtime.ts 的 MEMORY_CONFIGURATION_ENV 一致。 */
 const HOST_ENV = 'PI_DESK_MEMORY_CONFIG'
 export interface MemoryHostConfiguration {
-  version: 1
+  version: 2
   revision: number
   enabled: boolean
   disabledByMode: boolean
@@ -21,6 +21,8 @@ export interface MemoryHostConfiguration {
   projects: readonly { id: string; name: string; path: string }[]
   /** 项目注册表读取失败：记忆仍可写入，但记录不带归属，也不能按项目收窄。 */
   projectsUnavailable: boolean
+  /** 本产品会话根；风格取样只读这里，缺值即不可用，不回退其他路径。 */
+  sessions: string
   error: string | null
 }
 export function parseHostConfiguration(value: unknown): MemoryHostConfiguration {
@@ -39,20 +41,21 @@ export function parseHostConfiguration(value: unknown): MemoryHostConfiguration 
       return { id: entry.id, name: entry.name, path: entry.path }
     })
   }
-  if (row.version !== 1 || typeof row.revision !== 'number' || !Number.isSafeInteger(row.revision) || row.revision < 0
+  if (row.version !== 2 || typeof row.revision !== 'number' || !Number.isSafeInteger(row.revision) || row.revision < 0
     || typeof row.enabled !== 'boolean' || typeof row.disabledByMode !== 'boolean'
     || typeof row.available !== 'boolean'
-    || !path('store') || !path('engine') || !path('python') || !(row.tzdata === null || path('tzdata'))
+    || !path('store') || !path('engine') || !path('python') || !path('sessions') || !(row.tzdata === null || path('tzdata'))
     || (row.available && row.tzdata === null) || !nullableText('error')
     || !nullableText('pythonVersion') || !nullableText('timezoneVersion')
     || typeof row.projectsUnavailable !== 'boolean'
     || Object.keys(row).some(key => !['version', 'revision', 'enabled', 'disabledByMode', 'available', 'store', 'engine', 'python', 'tzdata',
-      'pythonVersion', 'timezoneVersion', 'projects', 'projectsUnavailable', 'error'].includes(key))) throw new Error('桌面记忆配置字段无效')
+      'pythonVersion', 'timezoneVersion', 'projects', 'projectsUnavailable', 'sessions', 'error'].includes(key))) throw new Error('桌面记忆配置字段无效')
   const projectMap = projects()
-  return { version: 1, revision: row.revision, enabled: row.enabled, disabledByMode: row.disabledByMode,
+  return { version: 2, revision: row.revision, enabled: row.enabled, disabledByMode: row.disabledByMode,
     available: row.available,
     store: String(row.store), engine: String(row.engine), python: String(row.python),
-    tzdata: row.tzdata === null ? null : String(row.tzdata), error: row.error === null ? null : String(row.error),
+    tzdata: row.tzdata === null ? null : String(row.tzdata), sessions: String(row.sessions),
+    error: row.error === null ? null : String(row.error),
     pythonVersion: row.pythonVersion === null ? null : String(row.pythonVersion),
     timezoneVersion: row.timezoneVersion === null ? null : String(row.timezoneVersion), projects: projectMap,
     projectsUnavailable: row.projectsUnavailable }

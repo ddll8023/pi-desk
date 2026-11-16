@@ -30,6 +30,7 @@ import type { BrowserAutoAttachPayload } from '../../shared/browser-session-api'
 import { ExtensionUiManager } from './extension-ui-manager'
 import type { ExtensionDialogResponseInput, ExtensionUiSnapshot } from '../../shared/extension-ui-api'
 import { getPiAgentDir, getPiProcessEnvironment, getSharedPiAgentDir } from '../shared/pi-paths'
+import { getSessionRoot } from './session-store'
 import { agentResourcesDirectory } from '../../shared-process/agent-resources'
 import { managedMemoryConfiguration } from '../../shared-process/memory-runtime'
 import type { MemoryConfigurationProvider } from '../../shared-process/memory-runtime'
@@ -270,7 +271,7 @@ const READ_ONLY_RUNS: SdkHostRunRegistry = {
  * 它不代表用户关掉了记忆，只说明这个宿主没有拿到桌面侧的用户级配置。
  */
 const READ_ONLY_MEMORY: MemoryConfigurationProvider = {
-  read: async hostEntry => managedMemoryConfiguration(hostEntry, false, 0, [], false)
+  read: async hostEntry => managedMemoryConfiguration(hostEntry, false, 0, [], false, getSessionRoot())
 }
 
 /**

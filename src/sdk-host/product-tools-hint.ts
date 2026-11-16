@@ -18,6 +18,7 @@ const MEMORY_SECTION = `记忆工具（memory_search / memory_rules / memory_rea
 - 只有用户明确指向某个项目时才传 scope（current-project 或 project + 项目名），其余不传，默认全库；
 - 查到的摘要需要完整正文时按记录 ID 读原文。
 - 记忆实际影响了本次任务的判断或产出时，用 memory_reinforce 按记录 ID 标注；读取和命中本身不是标注理由。
+- 写作或表达类任务需要像用户本人那样提要求、写评审意见与决策记录时，风格的要点与全部原句已在本背景的「语气风格」段里，直接模仿即可；需要按 ID 复核或背景里被预算挡下时，用 style_list／style_read 读取。用户要求提炼自己的表达风格时，先 style_sample 取样看语料规模，再蒸馏并 style_save 保存——同场景复用同一名称即自动合并，不新建重复条目。风格只用于工作表达，不用于对外文案与私人消息。
 背景中已注入的约定优先于通用习惯与个人偏好：产出文档、清单、索引、规范前，先用 memory_rules 按 rule_key 核对该族最新约定。`
 
 const SUBAGENT_SECTION = `委派工具 delegate_subagent 用于结构化批量产出，不是 read/ffgrep 的替代：

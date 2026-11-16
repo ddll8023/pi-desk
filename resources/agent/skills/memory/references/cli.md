@@ -17,16 +17,19 @@ recall --mode month --month YYYY-MM --query "已有月摘要主题"
 rules --query "规则主题" --offset 0 --limit 50
 profiles --domain workflow
 read <真实记录ID> ...
+styles
+style-read <真实风格ID> ...
 month-source YYYY-MM --offset 0 --limit 50
 months
 ```
 
 - `recall` 与 `rules` 接受 `--project <UUID>`：只收窄来源项目，无归属的通用记录仍返回；UUID 须来自桌面项目注册表，独立 CLI 没有注册表时不传。不接受项目登记计划或项目绑定参数，项目名称也不能当作范围参数（只作普通主题关键词）。
-- `status` 返回库路径、库结构版本（`store_version`，schema 版本）、变更序号（`change_seq`）、时区、记录／画像／摘要数量及标注汇总，不建库、不修复。
+- `status` 返回库路径、库结构版本（`store_version`，schema 版本）、变更序号（`change_seq`）、时区、记录／画像／摘要／风格数量及标注汇总，不建库、不修复。
 - `recall` 默认 `--mode auto`：按时间分层——近 `recent_window_days` 天的日记直接参与排序，更早的月份优先用月摘要代表，缺摘要的月份回退该月最多两条日记；返回体带 `layer`、`cutoff`、`window_days`、`layers` 与 `missing_summaries`。`records` 才是全历史，recent 明确限近期，historical 仅查已有月摘要，month 必须明确月份且不接受与 auto 混用。旧 `search` 保留近期默认及 `--all-dates`，不与 recall 默认范围混淆。
 - `recall`、`rules` 返回摘要；需全文时按真实 ID 调用 `read`。历史来源和有效状态不证明事实正确或当前适用。
 - 分页使用 `offset`、`limit` 和返回的 `has_more`、`next_offset`，每批 1..200；跨页核对 `store_version`。
 - `read` 按 1..50 个真实日记 ID 定位原文并核对版本，不扫描未索引历史。CLI read 为纯读取，不产生标注。
+- `styles` 列出全部风格资产（名称、适用场景、要点与原句样本）与总数，不做词法筛选；`style-read` 按 1..10 个真实风格 ID 读取，返回顺序与请求一致，ID 不存在即拒绝。风格不参与词法检索、月摘要与常驻背景。
 - `profiles` 按领域返回原始条目，包括历史作用域；自动背景及扩展工具只采纳全局或适用领域画像，不升级旧项目画像。
 - `month-source` 返回指定月份的全部日记及真实来源，未完结月份拒绝；最后一天经用户确认结束可使用 `--closed-today-confirmed`。
 
@@ -107,6 +110,27 @@ scope 只能为 global 或所选 domain。basis 为 explicit 或 inferred_confir
 
 先完整取得月度来源再调用 plan month。主题来源必须属于该月，不要求同项目；展示 source_total、source_used、source_uncovered_ids。已有摘要仅经明确重建并展示覆盖内容后修改。
 
+### 风格候选
+
+```json
+{
+  "agent":"pi",
+  "styles":[
+    {
+      "name":"需求说明-短句直给",
+      "scene":"需求说明与任务交办",
+      "points":"先给结论与边界，再列约束；句子短，少用铺垫。",
+      "samples":[
+        {"quote":"逐字来自用户发言的原句","source_session":"会话身份","source_date":"YYYY-MM-DD"}
+      ],
+      "replace_style_ids":[]
+    }
+  ]
+}
+```
+
+`plan style` 单批 1..10 条风格，每条 1..12 条原句样本，单条原句不超过 1000 字符，`source_date` 须为合法日期。`name` 与既有条目相同时按合并处理：保留该条目 ID 与首次创建日期，场景与要点覆盖，样本按「来源会话 + 原句」去重追加，合并后超过 12 条即拒绝（须先裁剪或改名）；改名或换成别的条目才用 `replace_style_ids`（删除重建，不保留历史），同一条既有风格不能在本次计划中被重复处理。预览列出 `date`、`styles`、`merged_styles` 与 `replaced_styles`；提交返回 `new_style_ids`、`merged_style_ids` 与 `replaced_style_ids`。风格只建在 `style_samples` 级联删除的独立表里，不改写记录、画像与摘要。
+
 ### 明确删除
 
 `plan delete --input -` 接收 `{"ids":["m_真实记录ID"]}`。计划列出目标原文、来源、受影响引用、画像来源、标注事件及月摘要；独立 CLI 逐份核对后提交。
@@ -116,7 +140,7 @@ scope 只能为 global 或所选 domain。basis 为 explicit 或 inferred_confir
 ## 独立维护
 
 - `init --timezone <用户确认IANA时区>`：仅首次明确授权且目标目录为空时创建 `memory.db`，不创建项目表，不覆盖已有库。
-- `migrate [--from <旧库目录>]`：独立获批后把旧 Markdown 库一次性导入，旧目录改名为 `<原目录>-archive-<时间戳>`；导入失败回滚改名，不保留半成品库。
+- `migrate [--from <旧库目录>]`：独立获批后把旧 Markdown 库一次性导入，旧目录改名为 `<原目录>-archive-<时间戳>`；导入失败回滚改名，不保留半成品库。同一命令对 SQLite v1／v2 库就地升级到 v3（v1 换标注事件表，所有版本建风格两表与名称唯一索引），不改写既有记录、画像与摘要；对已是 v3 的库可重复执行，只补齐缺失的索引。
 - `validate`：检查记录、引用与摘要一致性，不是默认收尾。
 - `integrity`：完整性检查（`quick_check`、词项长度与库版本），不是默认收尾。
 - `reindex`：独立获批后从记录重算词项表，不改写正文，不在查询端自动运行。

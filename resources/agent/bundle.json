@@ -21,6 +21,7 @@
         "extensions/pi-memory/engine.ts",
         "extensions/pi-memory/files.ts",
         "extensions/pi-memory/host.ts",
+        "extensions/pi-memory/style-sampling.ts",
         "extensions/pi-memory/tools.ts",
         "extensions/pi-memory/write-gate.ts"
       ],
@@ -33,7 +34,11 @@
         "memory_read",
         "memory_reinforce",
         "memory_save",
-        "memory_profile_save"
+        "memory_profile_save",
+        "style_sample",
+        "style_list",
+        "style_read",
+        "style_save"
       ]
     }
   ],
@@ -72,7 +77,11 @@
     { "name": "memory_read", "summary": "读取记忆原文", "required": true },
     { "name": "memory_reinforce", "summary": "标注实际用到过的记忆", "required": true },
     { "name": "memory_save", "summary": "保存记忆记录", "required": true },
-    { "name": "memory_profile_save", "summary": "维护领域画像", "required": true }
+    { "name": "memory_profile_save", "summary": "维护领域画像", "required": true },
+    { "name": "style_sample", "summary": "只读取样本产品会话中用户本人发言的样本", "required": true },
+    { "name": "style_list", "summary": "列出风格库条目", "required": true },
+    { "name": "style_read", "summary": "按 ID 读取风格与原句样本", "required": true },
+    { "name": "style_save", "summary": "保存或覆盖风格资产", "required": true }
   ],
   "skills": [
     {
@@ -86,6 +95,7 @@
         "skills/memory/references/profile.md",
         "skills/memory/references/save.md",
         "skills/memory/references/search.md",
+        "skills/memory/references/style.md",
         "skills/memory/scripts/memory_store.py"
       ]
     },

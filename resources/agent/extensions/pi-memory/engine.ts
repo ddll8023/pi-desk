@@ -34,6 +34,8 @@ export interface MemoryConfig {
   projects: readonly { id: string; name: string; path: string }[]
   /** 桌面项目注册表本次读取失败；仅用于状态报告，不改变检索范围。 */
   projectsUnavailable: boolean
+  /** 宿主注入的会话根（本产品会话 JSONL 的父目录）；独立 CLI 没有该值，风格取样明确报错不回退。 */
+  sessions: string | null
 }
 /** 桌面显式配置；结构由 host.ts 校验，这里只声明引擎需要的最小字段。 */
 export interface ManagedHostConfig {
@@ -50,11 +52,13 @@ export interface ManagedHostConfig {
   timezoneVersion: string | null
   projects: readonly { id: string; path: string }[]
   projectsUnavailable: boolean
+  /** 会话根绝对路径；风格取样只读这一处，不探测宿主 cwd 或工作目录。 */
+  sessions: string
   error: string | null
 }
 export interface GeneratedPlan {
   readonly id: string
-  readonly operation: 'save' | 'profile'
+  readonly operation: 'save' | 'profile' | 'style'
   readonly raw: JsonObject
   readonly preview: JsonObject
   readonly engineSha256: string
@@ -63,6 +67,8 @@ const MAX_OUTPUT = 2_097_152
 const MAX_INPUT = 262_144
 const PLAN_ID = /^s_[0-9A-HJKMNP-TV-Z]{26}$/
 const RECORD_ID = /^m_[0-9A-HJKMNP-TV-Z]{26}$/
+/** 风格资产用独立前缀：`t_` 与记录、画像、计划 ID 不通用。 */
+const STYLE_ID = /^t_[0-9A-HJKMNP-TV-Z]{26}$/
 const READ_TIMEOUT = 30_000
 /** 画像缓存键查询与常驻段共用短片预算：库忙或卡住时按段降级，不拖住整次请求。 */
 const STATUS_TIMEOUT = 3_000
@@ -177,7 +183,7 @@ export async function loadConfig(host?: ManagedHostConfig): Promise<MemoryConfig
       available: host.available,
       unavailableReason: host.error, tzdata: host.tzdata, pythonVersion: host.pythonVersion,
       timezoneVersion: host.timezoneVersion, projects: host.projects,
-      projectsUnavailable: host.projectsUnavailable }
+      projectsUnavailable: host.projectsUnavailable, sessions: host.sessions }
   }
 
   const rawPython = typeof data.python === 'string' && data.python.trim() ? data.python.trim() : undefined
@@ -186,7 +192,8 @@ export async function loadConfig(host?: ManagedHostConfig): Promise<MemoryConfig
   const engine = await detectEngine(rawEngine)
   return { python, engine, store: join(homedir(), '.agents', 'memory-store'), profileDomains,
     revision: 0, managed: false, hostEnabled: true, hostDisabledByMode: false, available: true, unavailableReason: null,
-    tzdata: null, pythonVersion: null, timezoneVersion: null, projects: [], projectsUnavailable: false }
+    tzdata: null, pythonVersion: null, timezoneVersion: null, projects: [], projectsUnavailable: false,
+    sessions: null }
 }
 
 export class MemoryEngine {
@@ -353,6 +360,13 @@ export class MemoryEngine {
     if (!ids.length || ids.length > 50 || ids.some(id => !RECORD_ID.test(id))) throw new Error('原文读取必须指定 1..50 个真实日记 ID')
     return this.run(['read', ...ids], undefined, signal)
   }
+  /** 风格库列表：不进词法检索与月摘要；要点与原句由扩展注入背景，本方法只做分页读取。 */
+  styles(signal?: AbortSignal): Promise<JsonObject> { return this.run(['styles'], undefined, signal) }
+  styleRead(ids: string[], signal?: AbortSignal): Promise<JsonObject> {
+    if (!ids.length || ids.length > 10 || new Set(ids).size !== ids.length
+      || ids.some(id => !STYLE_ID.test(id))) throw new Error('风格读取必须指定 1..10 个真实风格 ID')
+    return this.run(['style-read', ...ids], undefined, signal)
+  }
 
   /**
    * 先取当前库变更序号再写标注；引擎按同一序号校验，写入前变化则拒绝，不自动重试。
@@ -369,7 +383,7 @@ export class MemoryEngine {
     }, undefined, 'statistics', beforeSpawn)
   }
 
-  async plan(operation: 'save' | 'profile', input: JsonObject, signal?: AbortSignal): Promise<GeneratedPlan> {
+  async plan(operation: 'save' | 'profile' | 'style', input: JsonObject, signal?: AbortSignal): Promise<GeneratedPlan> {
     const engineSha256 = fingerprint(await readText(await realpath(this.config.engine)))
     const preview = await this.run(['plan', operation, '--input', '-'], input, signal)
     const id = text(preview.plan_id, '实际计划 ID')
@@ -378,11 +392,13 @@ export class MemoryEngine {
     if (raw.plan_version !== PLAN_VERSION || raw.memory_scope !== 'global' || raw.plan_id !== id || raw.operation !== operation
       || preview.plan_version !== PLAN_VERSION || preview.memory_scope !== 'global' || preview.operation !== operation) throw new Error('计划协议或身份不一致，禁止提交')
     const payload = object(raw.payload, '计划正文')
-    const pairs = operation === 'save'
+    const pairs: [string, string][] = operation === 'save'
       ? [['date', 'date'], ['new_records', 'records'],
           ['superseded_records', 'supersede'], ['withdrawn_months', 'withdrawn_months']]
-      : [['new_profile', 'profile'], ['replace_profile_ids', 'replace_ids'], ['replaced_profiles', 'replaced_profiles']]
-    if (pairs.some(([key, source]) => JSON.stringify(preview[key!]) !== JSON.stringify(payload[source!]))) {
+      : operation === 'style'
+        ? [['date', 'date'], ['styles', 'styles'], ['replaced_styles', 'replaced_styles']]
+        : [['new_profile', 'profile'], ['replace_profile_ids', 'replace_ids'], ['replaced_profiles', 'replaced_profiles']]
+    if (pairs.some(([key, source]) => JSON.stringify(preview[key]) !== JSON.stringify(payload[source]))) {
       throw new Error('计划内容与引擎预览不一致，禁止提交')
     }
     if (engineSha256 !== fingerprint(await readText(await realpath(this.config.engine)))) throw new Error('生成计划期间引擎已变化')

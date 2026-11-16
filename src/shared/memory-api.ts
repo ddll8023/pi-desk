@@ -6,6 +6,10 @@ export const MEMORY_INITIALIZE_CHANNEL = 'desktop:memory-initialize'
 export const MEMORY_READ_CHANNEL = 'desktop:memory-read'
 /** 只读：按领域取回画像正文，供注入卡片展开画像条目；不写库、不产生标注。 */
 export const MEMORY_PROFILE_READ_CHANNEL = 'desktop:memory-profile-read'
+/** 只读：按真实风格 ID 取回要点与全部原句，供注入卡片展开风格条目；不写库。 */
+export const MEMORY_STYLE_READ_CHANNEL = 'desktop:memory-style-read'
+/** 单次风格读取上限：与引擎 `style-read` 的 1..10 一致。 */
+export const MEMORY_STYLE_MAX_IDS = 10
 
 export interface MemoryPreference { readonly enabled: boolean }
 export interface MemoryInitializeRequest { readonly timezone: string }
@@ -39,6 +43,25 @@ export interface MemoryProfileReadRecord {
 export type MemoryProfileReadResult =
   | { readonly ok: true; readonly data: { readonly profiles: readonly MemoryProfileReadRecord[] } }
   | { readonly ok: false; readonly error: { readonly code: MemoryErrorCode; readonly message: string } }
+
+/** 风格正文读取只接受真实风格 ID：页面不能按名称、关键词或数量扫描风格库。 */
+export interface MemoryStyleReadRequest { readonly ids: readonly string[] }
+export interface MemoryStyleSampleRecord {
+  readonly quote: string
+  readonly source_session: string
+  readonly source_date: string
+}
+export interface MemoryStyleReadRecord {
+  readonly id: string
+  readonly name: string
+  readonly scene: string
+  readonly points: string
+  readonly date: string
+  readonly samples: readonly MemoryStyleSampleRecord[]
+}
+export type MemoryStyleReadResult =
+  | { readonly ok: true; readonly data: { readonly styles: readonly MemoryStyleReadRecord[] } }
+  | { readonly ok: false; readonly error: { readonly code: MemoryErrorCode; readonly message: string } }
 export interface MemorySnapshot {
   readonly enabled: boolean
   readonly activation: 'applied' | 'unconfirmed'
@@ -67,6 +90,7 @@ export interface MemoryApi {
   readonly initializeMemory: (request: MemoryInitializeRequest) => Promise<MemoryResult>
   readonly readMemoryRecords: (request: MemoryReadRequest) => Promise<MemoryReadResult>
   readonly readMemoryProfiles: (request: MemoryProfileReadRequest) => Promise<MemoryProfileReadResult>
+  readonly readMemoryStyles: (request: MemoryStyleReadRequest) => Promise<MemoryStyleReadResult>
   readonly saveMemoryCandidates: (request: MemorySaveCandidatesRequest) => Promise<MemorySaveResult>
 }
 
@@ -158,6 +182,44 @@ export function isMemoryProfileReadResult(value: unknown): value is MemoryProfil
   if (value.ok === true) {
     return record(value.data) && Array.isArray(value.data.profiles)
       && value.data.profiles.length <= 64 && value.data.profiles.every(isMemoryProfileReadRecord)
+  }
+  return value.ok === false && record(value.error) && typeof value.error.message === 'string'
+    && typeof value.error.code === 'string'
+}
+
+const STYLE_ID = /^t_[0-9A-HJKMNP-TV-Z]{26}$/
+
+/** 风格读取请求：1..10 个真实风格 ID，不重复；不接受名称或关键词。 */
+export function isMemoryStyleReadRequest(value: unknown): value is MemoryStyleReadRequest {
+  if (!record(value) || Object.keys(value).length !== 1) return false
+  const ids = value.ids
+  return Array.isArray(ids) && ids.length > 0 && ids.length <= MEMORY_STYLE_MAX_IDS
+    && ids.every(id => typeof id === 'string' && STYLE_ID.test(id))
+    && new Set(ids).size === ids.length
+}
+
+function isMemoryStyleSampleRecord(value: unknown): value is MemoryStyleSampleRecord {
+  if (!record(value)) return false
+  return typeof value.quote === 'string' && value.quote.length > 0 && value.quote.length <= 1_000
+    && typeof value.source_session === 'string' && value.source_session.length > 0 && value.source_session.length <= 200
+    && typeof value.source_date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value.source_date)
+}
+
+function isMemoryStyleReadRecord(value: unknown): value is MemoryStyleReadRecord {
+  if (!record(value)) return false
+  return typeof value.id === 'string' && STYLE_ID.test(value.id)
+    && typeof value.name === 'string' && value.name.length > 0 && value.name.length <= 200
+    && typeof value.scene === 'string' && value.scene.length <= 2_000
+    && typeof value.points === 'string' && value.points.length <= 4_000
+    && typeof value.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value.date)
+    && Array.isArray(value.samples) && value.samples.length <= 12 && value.samples.every(isMemoryStyleSampleRecord)
+}
+
+export function isMemoryStyleReadResult(value: unknown): value is MemoryStyleReadResult {
+  if (!record(value)) return false
+  if (value.ok === true) {
+    return record(value.data) && Array.isArray(value.data.styles)
+      && value.data.styles.length <= MEMORY_STYLE_MAX_IDS && value.data.styles.every(isMemoryStyleReadRecord)
   }
   return value.ok === false && record(value.error) && typeof value.error.message === 'string'
     && typeof value.error.code === 'string'

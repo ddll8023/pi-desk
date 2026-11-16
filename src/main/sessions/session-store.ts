@@ -177,6 +177,9 @@ function getSessionRoot(): string {
   return join(getPiAgentDir(), 'sessions')
 }
 
+/** 会话根的对外取值：记忆宿主用它注入风格取样的只读目录，不再另写一份 `join(agentDir, 'sessions')`。 */
+export { getSessionRoot }
+
 /**
  * 单个项目的会话目录，也是 Pi 的 `--session-dir` 取值。
  *

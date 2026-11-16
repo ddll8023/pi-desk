@@ -11,9 +11,10 @@ import { stat } from 'node:fs/promises'
 import type { Stats } from 'node:fs'
 import { join } from 'node:path'
 import type { DesktopConfigStore } from '../config/desktop-config-store'
+import { getSessionRoot } from '../sessions/session-store'
 import type { MemoryHostConfiguration, MemoryConfigurationProvider } from '../../shared-process/memory-runtime'
 import { managedMemoryConfiguration } from '../../shared-process/memory-runtime'
-import type { MemoryErrorCode, MemoryInitializeRequest, MemoryPreference, MemoryProfileDomain, MemoryProfileReadRecord, MemoryProfileReadResult, MemoryReadRecord, MemoryReadResult, MemoryResult, MemorySaveCandidatesRequest, MemorySaveResult, MemorySnapshot } from '../../shared/memory-api'
+import type { MemoryErrorCode, MemoryInitializeRequest, MemoryPreference, MemoryProfileDomain, MemoryProfileReadRecord, MemoryProfileReadResult, MemoryReadRecord, MemoryReadResult, MemoryResult, MemorySaveCandidatesRequest, MemorySaveResult, MemorySnapshot, MemoryStyleReadRecord, MemoryStyleReadResult, MemoryStyleSampleRecord } from '../../shared/memory-api'
 
 const ENGINE_TIMEOUT_MS = 30_000
 const ENGINE_MAX_OUTPUT = 4 * 1024 * 1024
@@ -58,6 +59,28 @@ function toProfileRecord(value: unknown): MemoryProfileReadRecord | null {
     title: text(value.title), content: value.content }
 }
 
+/**
+ * 风格行只搬展示字段：要点与逐字原句是给卡片展开用的正文，
+ * 缺字段的样本整条丢弃，不用空字符串冒充原句。
+ */
+function toStyleRecord(value: unknown): MemoryStyleReadRecord | null {
+  if (!isRecord(value) || typeof value.id !== 'string' || typeof value.name !== 'string') return null
+  const text = (item: unknown): string => (typeof item === 'string' ? item : '')
+  const samples: MemoryStyleSampleRecord[] = []
+  if (Array.isArray(value.samples)) {
+    for (const item of value.samples) {
+      if (!isRecord(item)) continue
+      const quote = typeof item.quote === 'string' ? item.quote : ''
+      const sourceSession = typeof item.source_session === 'string' ? item.source_session : ''
+      const sourceDate = typeof item.source_date === 'string' ? item.source_date : ''
+      if (!quote || !sourceSession || !sourceDate) continue
+      samples.push({ quote, source_session: sourceSession, source_date: sourceDate })
+    }
+  }
+  return { id: value.id, name: value.name, scene: text(value.scene), points: text(value.points),
+    date: text(value.date), samples }
+}
+
 export class MemoryManager {
   /** 配置版本：任一开关或资源变化都递增，用于让扩展侧丢弃旧会话状态。 */
   private revision = 0
@@ -82,7 +105,8 @@ export class MemoryManager {
   private async configuration(hostEntry: string): Promise<MemoryHostConfiguration> {
     const state = await this.enabled()
     const registry = await this.projects()
-    return managedMemoryConfiguration(hostEntry, state.enabled, this.revision, registry.projects, registry.unavailable)
+    return managedMemoryConfiguration(hostEntry, state.enabled, this.revision, registry.projects, registry.unavailable,
+      getSessionRoot())
   }
 
   /**
@@ -147,7 +171,7 @@ export class MemoryManager {
     let configuration: MemoryHostConfiguration
     try {
       configuration = managedMemoryConfiguration(this.options.hostEntry(), state.enabled, this.revision,
-        registry.projects, registry.unavailable)
+        registry.projects, registry.unavailable, getSessionRoot())
     } catch {
       return failure('RUNTIME_MISSING', '受管记忆运行环境无法解析；未回退系统 Python。')
     }
@@ -374,6 +398,34 @@ export class MemoryManager {
         const profiles = parsed.data.profiles
           .map(toProfileRecord).filter((profile): profile is MemoryProfileReadRecord => profile !== null)
         return { ok: true, data: { profiles } }
+      }
+      if (isRecord(parsed) && isRecord(parsed.error) && typeof parsed.error.message === 'string') {
+        const message = parsed.error.message
+        const missing = /记忆库不存在|记忆库文件缺失/.test(message)
+        return { ok: false, error: { code: missing ? 'STORE_UNAVAILABLE' : 'INTERNAL_ERROR', message } }
+      }
+    } catch { /* 非 JSON 输出按引擎失败处理。 */ }
+    return { ok: false, error: { code: 'INTERNAL_ERROR', message: this.describeFailure(result) } }
+  }
+
+  /**
+   * 只读读取风格：ID 由调用方给出，只用引擎固定的 `style-read` 子命令。
+   * 样本按引擎顺序保留，缺字段的样本整条丢弃；返回条数与请求不一致时不冒充成功。
+   */
+  async readStyles(ids: readonly string[]): Promise<MemoryStyleReadResult> {
+    let configuration: MemoryHostConfiguration
+    try { configuration = await this.configuration(this.options.hostEntry()) }
+    catch { return { ok: false, error: { code: 'RUNTIME_MISSING', message: '受管记忆运行环境不可用' } } }
+    const result = await this.runEngine(configuration, ['style-read', ...ids])
+    try {
+      const parsed: unknown = JSON.parse(result.text)
+      if (isRecord(parsed) && parsed.ok === true && isRecord(parsed.data) && Array.isArray(parsed.data.styles)) {
+        const styles = parsed.data.styles
+          .map(toStyleRecord).filter((style): style is MemoryStyleReadRecord => style !== null)
+        if (styles.length !== ids.length) {
+          return { ok: false, error: { code: 'INVALID_RESPONSE', message: '记忆引擎返回的风格与请求不一致。' } }
+        }
+        return { ok: true, data: { styles } }
       }
       if (isRecord(parsed) && isRecord(parsed.error) && typeof parsed.error.message === 'string') {
         const message = parsed.error.message

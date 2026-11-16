@@ -1,14 +1,14 @@
-<!-- 会话内记忆注入卡片：按段列出最近一次请求注入了哪些记忆，点击条目展开正文。
+<!-- 会话内记忆注入卡片：按段（适用偏好、语气风格、常驻约定、当前项目近况）列出最近一次请求注入了哪些内容，点击条目展开正文。
      数据只来自会话里的注入审计条目，不执行命令、不扫描记忆库；被截断的条目按需读取全文
-     （记录按 ID、画像按领域），没有审计时明确说明而不是显示空白。 -->
+     （记录按 ID、画像按领域、风格按 ID 取要点与全部原句），没有审计时明确说明而不是显示空白。 -->
 <script setup lang="ts">
 import { computed, nextTick, onUnmounted, ref, useId, watch } from 'vue'
 import type {
-  MemoryInjectionEntry, MemoryInjectionProfileEntry, MemoryInjectionSnapshot, RuntimeTarget
+  MemoryInjectionEntry, MemoryInjectionProfileEntry, MemoryInjectionSnapshot, MemoryInjectionStyleEntry, RuntimeTarget
 } from '../../../../shared/runtime-api'
 import type { MemoryProfileDomain } from '../../../../shared/memory-api'
 import { readMemoryInjection } from '../services/runtime'
-import { readMemoryProfiles, readMemoryRecords } from '../../memory/services/memory'
+import { readMemoryProfiles, readMemoryRecords, readMemoryStyles } from '../../memory/services/memory'
 import AppButton from '../../ui/AppButton.vue'
 
 const props = defineProps<{
@@ -51,11 +51,11 @@ const STATUS_LABELS: Record<string, string> = {
 }
 
 type Tone = 'accent' | 'danger' | 'success' | 'warning' | 'muted'
-type SegmentKey = 'profiles' | 'resident' | 'notes'
+type SegmentKey = 'profiles' | 'styles' | 'resident' | 'notes'
 interface Row {
   readonly key: string
   readonly id: string
-  readonly kind: 'record' | 'profile'
+  readonly kind: 'record' | 'profile' | 'style'
   readonly domain: string | null
   readonly badge: string
   readonly tone: Tone
@@ -65,9 +65,10 @@ interface Row {
   readonly truncated: boolean
 }
 
-/** 分段顺序与背景注入顺序一致：画像、常驻、近况。 */
+/** 分段顺序与背景注入顺序一致：画像、语气风格、常驻、近况。 */
 const SEGMENTS: readonly { readonly key: SegmentKey; readonly label: string }[] = [
   { key: 'profiles', label: '适用偏好' },
+  { key: 'styles', label: '语气风格' },
   { key: 'resident', label: '常驻约定' },
   { key: 'notes', label: '当前项目近况' }
 ]
@@ -127,6 +128,23 @@ function profileRow(entry: MemoryInjectionProfileEntry): Row {
   }
 }
 
+/** 风格条目：标题是名称，元信息给场景与原句数；要点与全部原句展开时按 ID 取。 */
+function styleRow(entry: MemoryInjectionStyleEntry): Row {
+  const scene = entry.scene !== '' ? entry.scene : '未标注场景'
+  return {
+    key: `style:${entry.id}`,
+    id: entry.id,
+    kind: 'style',
+    domain: null,
+    badge: '风格',
+    tone: 'muted',
+    title: entry.name !== '' ? entry.name : entry.id,
+    meta: `${scene} · ${entry.sample_count} 句`,
+    excerpt: entry.excerpt,
+    truncated: entry.truncated
+  }
+}
+
 /** 画像领域只可能是四个固定值；不认识的值不发起读取，避免把字段当命令参数透传。 */
 function profileDomain(value: string | null): MemoryProfileDomain | null {
   const domains: readonly MemoryProfileDomain[] = ['communication', 'coding', 'learning', 'workflow']
@@ -145,6 +163,7 @@ const segments = computed(() => {
   const entries = value.entries
   const rows: Record<SegmentKey, readonly Row[]> = {
     profiles: entries.profiles.map(profileRow),
+    styles: entries.styles.map(styleRow),
     resident: entries.resident.map(recordRow),
     notes: entries.notes.map(recordRow)
   }
@@ -215,7 +234,7 @@ function toggle(row: Row): void {
     return
   }
   expandedKey.value = row.key
-  if (row.truncated && bodies.value[row.key] === undefined && bodyLoadingKey.value === null) void readBody(row)
+  if ((row.truncated || row.kind === 'style') && bodies.value[row.key] === undefined && bodyLoadingKey.value === null) void readBody(row)
 }
 
 async function readBody(row: Row): Promise<void> {
@@ -241,6 +260,28 @@ async function readBody(row: Row): Promise<void> {
       return
     }
     bodies.value = { ...bodies.value, [row.key]: profile.content }
+    return
+  }
+  if (row.kind === 'style') {
+    const result = await readMemoryStyles([row.id])
+    if (sequence !== bodySequence || !props.open) return
+    bodyLoadingKey.value = null
+    if (!result.ok) {
+      bodyError.value = result.error.message
+      return
+    }
+    const style = result.data.styles[0]
+    if (style === undefined) {
+      bodyError.value = '风格已变化，未取回正文。'
+      return
+    }
+    const lines = [`场景：${style.scene}`, '', '要点：', style.points, '']
+    if (style.samples.length === 0) lines.push('这条风格没有原句样本。')
+    else {
+      lines.push(`原句样本（${style.samples.length} 条）：`)
+      style.samples.forEach((sample, index) => lines.push(`${index + 1}. ${sample.quote}（${sample.source_date}）`))
+    }
+    bodies.value = { ...bodies.value, [row.key]: lines.join('\n') }
     return
   }
   const result = await readMemoryRecords([row.id])

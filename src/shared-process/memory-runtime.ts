@@ -10,7 +10,7 @@ export interface MemoryProject {
   readonly path: string
 }
 export interface MemoryHostConfiguration {
-  readonly version: 1
+  readonly version: 2
   readonly revision: number
   readonly enabled: boolean
   /** 是否由执行模式关闭：用户开关仍开着，但这个会话不注入记忆。 */
@@ -26,6 +26,8 @@ export interface MemoryHostConfiguration {
   readonly projects: readonly MemoryProject[]
   /** 项目注册表本次读取失败：记忆仍可写入，但记录不带归属，也不能按项目收窄。 */
   readonly projectsUnavailable: boolean
+  /** 本产品会话根（会话 JSONL 的分组目录父目录）；风格取样只读这一处，不根据工作目录推断。 */
+  readonly sessions: string
   readonly error: string | null
 }
 export interface MemoryConfigurationProvider {
@@ -47,13 +49,14 @@ function record(value: unknown): value is Record<string, unknown> {
 }
 function nullableText(value: unknown): boolean { return value === null || typeof value === 'string' }
 export function isMemoryHostConfiguration(value: unknown): value is MemoryHostConfiguration {
-  return record(value) && value.version === 1 && typeof value.revision === 'number'
+  return record(value) && value.version === 2 && typeof value.revision === 'number'
     && Number.isSafeInteger(value.revision) && value.revision >= 0
     && typeof value.enabled === 'boolean' && typeof value.disabledByMode === 'boolean'
     && typeof value.available === 'boolean'
     && typeof value.store === 'string' && isAbsolute(value.store)
     && typeof value.engine === 'string' && isAbsolute(value.engine)
     && typeof value.python === 'string' && isAbsolute(value.python)
+    && typeof value.sessions === 'string' && isAbsolute(value.sessions)
     && (value.tzdata === null || (typeof value.tzdata === 'string' && isAbsolute(value.tzdata)))
     && (!value.available || value.tzdata !== null)
     && nullableText(value.pythonVersion) && nullableText(value.timezoneVersion) && nullableText(value.error)
@@ -63,7 +66,7 @@ export function isMemoryHostConfiguration(value: unknown): value is MemoryHostCo
       && typeof project.path === 'string' && isAbsolute(project.path))
     && typeof value.projectsUnavailable === 'boolean'
     && Object.keys(value).every(key => ['version', 'revision', 'enabled', 'disabledByMode', 'available', 'store', 'engine', 'python',
-      'tzdata', 'pythonVersion', 'timezoneVersion', 'projects', 'projectsUnavailable', 'error'].includes(key))
+      'tzdata', 'pythonVersion', 'timezoneVersion', 'projects', 'projectsUnavailable', 'sessions', 'error'].includes(key))
 }
 function resource(root: string, name: unknown, directory = false): string {
   if (typeof name !== 'string' || !name || isAbsolute(name) || name.includes('\\') || name.includes(':')
@@ -79,13 +82,13 @@ export function globalMemoryDirectory(): string { return join(homedir(), '.agent
 
 /** 缺资源仍返回受管配置，使普通对话可用；记忆操作会明确失败，绝不回退系统解释器。 */
 export function managedMemoryConfiguration(hostEntry: string, enabled: boolean, revision: number,
-  projects: readonly MemoryProject[], projectsUnavailable: boolean): MemoryHostConfiguration {
+  projects: readonly MemoryProject[], projectsUnavailable: boolean, sessions: string): MemoryHostConfiguration {
   const hostRoot = dirname(hostEntry)
   const runtimeRoot = join(hostRoot, 'memory-runtime')
   const engine = join(hostRoot, 'agent-resources/skills/memory/scripts/memory_store.py')
-  const base: MemoryHostConfiguration = { version: 1, revision, enabled, disabledByMode: false, available: false,
+  const base: MemoryHostConfiguration = { version: 2, revision, enabled, disabledByMode: false, available: false,
     store: globalMemoryDirectory(), engine, python: join(runtimeRoot, 'unavailable'), tzdata: null,
-    pythonVersion: null, timezoneVersion: null, projects, projectsUnavailable, error: null }
+    pythonVersion: null, timezoneVersion: null, projects, projectsUnavailable, sessions, error: null }
   if (!['win32', 'darwin'].includes(process.platform) || !['x64', 'arm64'].includes(process.arch)) {
     return { ...base, error: '当前平台或架构没有受管记忆运行环境。' }
   }

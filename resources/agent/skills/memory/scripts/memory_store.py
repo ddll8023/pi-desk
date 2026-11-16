@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """用户级全局日记、画像与月度摘要的 SQLite 存储引擎，不依赖当前项目或项目登记。
 
-权威数据只有一份：`<store>/memory.db`（WAL）。记录、画像、月摘要、有用性标注事件与待确认计划同库同事务，
+权威数据只有一份：`<store>/memory.db`（WAL）。记录、画像、月摘要、风格资产、有用性标注事件与待确认计划同库同事务，
 词项作为派生数据与记录在同一事务内写入，读取不再核对原文指纹。检索保持词法（CJK 双字片段 + BM25）
 与既有打分口径，只把候选裁剪交给库内词项表，命中记录按标注会话数获得有界乘子。
 
 旧 Markdown 库只经 `migrate` 一次性导入；运行期不读也不写 Markdown，`export` 仅生成只读快照。
+风格资产存名称、适用场景、要点与 1..12 条原句样本，要点与原句随每轮背景注入（独立预算），不参与词项检索与月摘要。
 检索默认覆盖全库，可按注册表项目收窄；时间上默认分层召回：近窗口查日记，更早月份优先用月摘要代表。
 """
 import argparse, contextlib, datetime as dt, hashlib, json, math, re, secrets, sqlite3, sys, time, unicodedata, uuid
@@ -16,9 +17,14 @@ import zoneinfo
 
 DB_NAME = 'memory.db'
 # PRAGMA user_version 是唯一版本源；库内不再保留第二份可写版本号。
-STORE_VERSION = 2
+STORE_VERSION = 3
 READABLE_VERSION = STORE_VERSION
 PLAN_VERSION = 4
+# 风格资产的 ID 用独立前缀，不并入 ID_RE：那条正则同时校验记录、画像与计划身份。
+STYLE_ID_RE = re.compile(r'^t_[0-9A-HJKMNP-TV-Z]{26}$')
+STYLE_BATCH_MAX = 10
+STYLE_SAMPLE_MAX = 12
+STYLE_QUOTE_MAX = 1000
 TYPES = {'decision','constraint','progress','issue','fact','preference_evidence'}
 RULE_TYPES = {'decision','constraint'}
 # 非规则类记录只用于「项目近况」，不参与常驻约定的合并与替代。
@@ -178,6 +184,20 @@ CREATE INDEX reinforce_events_record ON reinforce_events(record_id);
 CREATE TABLE plans(plan_id TEXT PRIMARY KEY, operation TEXT NOT NULL, plan_version INTEGER NOT NULL,
   created_at REAL NOT NULL, expected_change_seq INTEGER NOT NULL, payload TEXT NOT NULL);
 """
+
+# 风格两表同时被建库与就地升级使用：单一事实源，避免两份 DDL 漂移。
+# 风格与记录、画像并列存储，但不参与词项检索、月度摘要与导出快照。
+STYLE_DDL = (
+    'CREATE TABLE IF NOT EXISTS styles(id TEXT PRIMARY KEY, date TEXT NOT NULL, session_id TEXT NOT NULL,'
+    ' agent TEXT NOT NULL, saved_at TEXT NOT NULL, name TEXT NOT NULL, scene TEXT NOT NULL, points TEXT NOT NULL)',
+    'CREATE INDEX IF NOT EXISTS styles_date ON styles(date)',
+    # 名称是用户视角的稳定标识：数据库层也挡住重名，否则合并时只能挑一条、其余重复注入背景。
+    'CREATE UNIQUE INDEX IF NOT EXISTS styles_name ON styles(name)',
+    'CREATE TABLE IF NOT EXISTS style_samples(style_id TEXT NOT NULL REFERENCES styles(id) ON DELETE CASCADE,'
+    ' position INTEGER NOT NULL, quote TEXT NOT NULL, source_session TEXT NOT NULL, source_date TEXT NOT NULL,'
+    ' PRIMARY KEY(style_id, position))',
+)
+SCHEMA_SQL += ''.join(statement + ';\n' for statement in STYLE_DDL)
 
 
 def _connect(path: Path, write: bool) -> sqlite3.Connection:
@@ -476,6 +496,16 @@ def validate_state(conn: sqlite3.Connection) -> tuple[list[dict],list[dict]]:
         expect(ids and set(ids).issubset(valid_ids),f'摘要来源已丢失: {s["month"]}')
         expect(all(refmap[rid]['date'][:7]==s['month'] for rid in ids),'摘要跨越指定月份')
         candidate_check(s['topic'],True);candidate_check(s['content'])
+    # 风格：名称在库内唯一（数据库已有唯一索引，这里给出可读的校验结果），样本数受 1..12 约束。
+    style_names=set()
+    for style in style_rows(conn):
+        expect(STYLE_ID_RE.fullmatch(style['id']) is not None,'非法风格 ID: '+style['id'])
+        expect(style['name'] not in style_names,f'风格名称重复: {style["name"]}')
+        style_names.add(style['name'])
+        expect(1<=len(style['samples'])<=STYLE_SAMPLE_MAX,
+               f'风格样本数必须在 1..{STYLE_SAMPLE_MAX}: {style["id"]}')
+        expect(re.fullmatch(r'\d{4}-\d{2}-\d{2}',style['date']) is not None and _valid_date(style['date']),
+               '风格日期无效: '+style['id'])
     return recs,profiles
 
 
@@ -820,6 +850,83 @@ def months_view(root: Path) -> dict:
         return {'months':month_status(conn)}
 
 
+def style_samples_payload(raw: object) -> list[dict]:
+    """校验并映射一条风格的原句样本：逐字引用，不改写、不截断。"""
+    expect(isinstance(raw,list) and 1<=len(raw)<=STYLE_SAMPLE_MAX,'每条风格须带 1..12 条原句样本')
+    out=[]
+    for sample in raw:
+        expect(isinstance(sample,dict) and not set(sample)-{'quote','source_session','source_date'},'样本字段无效')
+        quote=candidate_check(sample['quote'])
+        expect(len(quote)<=STYLE_QUOTE_MAX,'单条原句不能超过 1000 字符')
+        source_session=candidate_check(sample['source_session'],True)
+        expect(len(source_session)<=200,'样本来源会话标识过长')
+        source_date=sample['source_date']
+        expect(isinstance(source_date,str) and re.fullmatch(r'\d{4}-\d{2}-\d{2}',source_date) is not None
+               and _valid_date(source_date),'样本来源日期无效')
+        out.append({'quote':quote,'source_session':source_session,'source_date':source_date})
+    return out
+
+
+def merge_style_samples(existing: list[dict], incoming: list[dict]) -> list[dict]:
+    """合并样本：按「来源会话 + 逐字原句」去重，旧样本在前，保持既有阅读顺序。"""
+    merged=[];seen=set()
+    for sample in [*existing,*incoming]:
+        key=(sample['source_session'],sample['quote'])
+        if key in seen: continue
+        seen.add(key);merged.append(sample)
+    return merged
+
+
+PUBLIC_STYLE_FIELDS=('id','date','name','scene','points','samples')
+
+
+def style_rows(conn: sqlite3.Connection) -> list[dict]:
+    """读取全部风格与原句样本；样本按位置顺序一次性取齐，避免逐条查询。"""
+    rows=[dict(row) for row in conn.execute(
+        'SELECT id,date,session_id,agent,saved_at,name,scene,points FROM styles ORDER BY date,id')]
+    if not rows: return rows
+    ids=[row['id'] for row in rows]
+    grouped={}
+    for style_id,quote,source_session,source_date in conn.execute(
+            'SELECT style_id,quote,source_session,source_date FROM style_samples '
+            f'WHERE style_id IN ({_placeholders(ids)}) ORDER BY style_id,position',ids):
+        grouped.setdefault(style_id,[]).append({'quote':quote,'source_session':source_session,
+                                                'source_date':source_date})
+    for row in rows: row['samples']=grouped.get(row['id'],[])
+    return rows
+
+
+def public_style(row: dict) -> dict:
+    """对外只暴露风格语义字段与保存来源；词项、指纹等派生实现细节不进入工具输出。"""
+    out={key:row[key] for key in PUBLIC_STYLE_FIELDS if key in row}
+    out['session']={'id':row['session_id'],'agent':row['agent'],'saved_at':row['saved_at']}
+    return out
+
+
+def styles_view(root: Path) -> dict:
+    with connect(root) as conn:
+        require_version(conn)
+        version=change_seq(conn)
+        rows=style_rows(conn)
+    return {'memory_scope':'global','store_version':version,'total_styles':len(rows),
+            'styles':[public_style(row) for row in rows],
+            'note':'风格是用户表达的样本资产，要点与全部原句随每轮背景注入（独立预算），不参与词项检索与月摘要；原句只用于模仿，不代表当前适用的决定'}
+
+
+def style_read_view(root: Path, ids: list[str]) -> dict:
+    """按 1..10 个真实风格 ID 读取，返回顺序与请求一致，未经请求的条目不会附带返回。"""
+    expect(1<=len(ids)<=10 and all(isinstance(sid,str) and STYLE_ID_RE.fullmatch(sid) is not None for sid in ids),
+           '须指定 1..10 个真实风格 ID')
+    expect(len(ids)==len(set(ids)),'风格 ID 不能重复')
+    with connect(root) as conn:
+        require_version(conn)
+        version=change_seq(conn)
+        by_id={row['id']:row for row in style_rows(conn)}
+        expect(all(sid in by_id for sid in ids),'指定风格 ID 不存在，未扫描历史')
+    return {'memory_scope':'global','store_version':version,'coverage':'store_styles',
+            'styles':[public_style(by_id[sid]) for sid in ids]}
+
+
 def month_closed(month, zone, closed_today_confirmed=False):
     expect(re.fullmatch(r'\d{4}-(0[1-9]|1[0-2])',month),'非法月份')
     now=dt.datetime.now(zone)
@@ -917,7 +1024,8 @@ def prepare(root: Path, op: str, data: dict) -> dict:
     allowed={'save':{'agent','session_id','records','status_updates','project_id'},
              'delete':{'ids'},
              'profile':{'domain','scope','basis','title','content','source_record_ids','replace_profile_ids'},
-             'month':{'month','topics','closed_today_confirmed','rebuild_existing'}}
+             'month':{'month','topics','closed_today_confirmed','rebuild_existing'},
+             'style':{'agent','session_id','styles'}}
     expect(op in allowed and isinstance(data,dict) and not set(data)-allowed[op],
            '全局记忆候选包含不支持字段；不接受项目登记参数')
     with connect(root) as conn:
@@ -1071,6 +1179,56 @@ def prepare(root: Path, op: str, data: dict) -> dict:
                      'closed_today_confirmed':data.get('closed_today_confirmed',False),
                      'source_total':len(month_records),'source_used':len(covered),
                      'source_uncovered_ids':sorted(set(refmap)-covered)}
+        elif op=='style':
+            now=dt.datetime.now(zone);date=now.date().isoformat();saved_at=now.isoformat(timespec='seconds')
+            session_id=data.get('session_id') or ulid('s')
+            expect(isinstance(session_id,str) and ID_RE.fullmatch(session_id) is not None,'非法 session_id')
+            agent=candidate_check(data.get('agent','unknown'),True)
+            items=data.get('styles')
+            expect(isinstance(items,list) and 1<=len(items)<=STYLE_BATCH_MAX,'单次提交须为 1..10 条风格')
+            existing=style_rows(conn)
+            known={row['id']:row for row in existing}
+            by_name={}
+            for row in existing: by_name.setdefault(row['name'],row)
+            claimed=set();seen_names=set();styles=[];replaced_ids=[];merged_rows=[]
+            for item in items:
+                expect(isinstance(item,dict) and not set(item)-{'name','scene','points','samples','replace_style_ids'},
+                       '风格字段无效；不接受 approved、plan_id 或模型授权声明')
+                name=candidate_check(item['name'],True)
+                scene=candidate_check(item['scene'],True)
+                points=candidate_check(item['points'])
+                # 与工具 schema 及跨进程读取契约同一上限：否则 CLI 写入超长条目后，桌面展开会判非法。
+                expect(len(name)<=200,'风格名称不能超过 200 字符')
+                expect(len(scene)<=2000,'风格场景不能超过 2000 字符')
+                expect(len(points)<=4000,'风格要点不能超过 4000 字符')
+                expect(name not in seen_names,'本次候选风格名称重复: '+name);seen_names.add(name)
+                targets=record_refs(item,'replace_style_ids')
+                expect(all(STYLE_ID_RE.fullmatch(sid) is not None for sid in targets),'替换目标必须是真实风格 ID')
+                expect(all(sid in known for sid in targets),'替换目标不存在')
+                expect(all(sid not in claimed for sid in targets),'同一条既有风格不能在本次计划中被重复处理')
+                samples=style_samples_payload(item.get('samples'))
+                same=by_name.get(name)
+                if same is not None:
+                    # 同名即合并：保留既有 ID、首次创建日期与来源会话，只完善场景、要点与样本，
+                    # 使模型可以「同场景复用同一名称」而不让条数随蒸馏次数膨胀。
+                    expect(same['id'] not in targets,
+                           f'同名条目按合并处理，不要把它的 ID 放进 replace_style_ids: {name}')
+                    expect(same['id'] not in claimed,'同一条既有风格不能在本次计划中被重复处理')
+                    claimed.add(same['id']);claimed.update(targets)
+                    replaced_ids.extend(targets);merged_rows.append(same)
+                    merged=merge_style_samples(same['samples'],samples)
+                    expect(len(merged)<=STYLE_SAMPLE_MAX,
+                           f'合并后将超过 {STYLE_SAMPLE_MAX} 条原句，请先裁剪或改用新名称: {name}')
+                    styles.append({'id':same['id'],'merge':True,'name':name,'scene':scene,'points':points,
+                                   'samples':merged})
+                else:
+                    claimed.update(targets);replaced_ids.extend(targets)
+                    styles.append({'id':ulid('t'),'name':name,'scene':scene,'points':points,'samples':samples})
+            by_id={row['id']:row for row in existing}
+            payload={'date':date,'saved_at':saved_at,'session_id':session_id,'agent':agent,'styles':styles,
+                     'replaced_ids':list(dict.fromkeys(replaced_ids)),
+                     'replaced_styles':[public_style(by_id[sid]) for sid in dict.fromkeys(replaced_ids)],
+                     'merged_styles':[public_style(row) for row in merged_rows]}
         else: raise MemoryError('不支持的计划操作')
         expected=change_seq(conn)
     return plan_saved(root,op,payload,expected)
@@ -1120,6 +1278,10 @@ def render_preview(plan: dict) -> dict:
     elif op=='month':
         result.update({'month':d['month'],'summary':d['topics'],'source_total':d['source_total'],
                        'source_used':d['source_used'],'source_uncovered_ids':d['source_uncovered_ids']})
+    elif op=='style':
+        # 风格预览：日期、本次条目（新增与合并后的最终内容）、被替换与被合并前的旧条目。
+        result.update({'date':d['date'],'styles':d['styles'],'replaced_styles':d['replaced_styles'],
+                       'merged_styles':d.get('merged_styles',[])})
     if op in ('save','delete'): result['withdrawn_months']=d['withdrawn_months']
     if op=='month': result['preview_source_total']=d['source_total']
     return result
@@ -1128,6 +1290,9 @@ def render_preview(plan: dict) -> dict:
 def commit(root: Path, plan_id: str) -> dict:
     expect(isinstance(plan_id,str) and plan_id.startswith('s_') and ID_RE.fullmatch(plan_id) is not None,'非法计划 ID')
     new_ids: list[str] = []
+    new_style_ids: list[str] = []
+    merged_style_ids: list[str] = []
+    replaced_style_ids: list[str] = []
     with connect(root,write=True) as conn:
         require_version(conn)
         zone=timezone_of(conn)
@@ -1202,6 +1367,28 @@ def commit(root: Path, plan_id: str) -> dict:
                     conn.executemany('INSERT INTO summary_sources(month,position,source_id) VALUES(?,?,?)',
                                      [(month,position,sid) for sid in topic['source_record_ids']])
                     write_summary_terms(conn,month,position,terms)
+            elif op=='style':
+                # 覆盖是显式替换：先删旧条目（样本随外键级联删除），再写入本次候选。
+                for sid in data['replaced_ids']:
+                    conn.execute('DELETE FROM styles WHERE id=?',(sid,))
+                for style in data['styles']:
+                    if style.get('merge'):
+                        # 合并保留 ID、首次创建日期与来源会话；只更新场景、要点与保存时间。
+                        conn.execute('UPDATE styles SET scene=?,points=?,saved_at=? WHERE id=?',
+                                     (style['scene'],style['points'],data['saved_at'],style['id']))
+                        conn.execute('DELETE FROM style_samples WHERE style_id=?',(style['id'],))
+                    else:
+                        conn.execute('INSERT INTO styles(id,date,session_id,agent,saved_at,name,scene,points) '
+                                     'VALUES(?,?,?,?,?,?,?,?)',
+                                     (style['id'],data['date'],data['session_id'],data['agent'],data['saved_at'],
+                                      style['name'],style['scene'],style['points']))
+                    conn.executemany('INSERT INTO style_samples(style_id,position,quote,source_session,source_date) '
+                                     'VALUES(?,?,?,?,?)',
+                                     [(style['id'],position,sample['quote'],sample['source_session'],
+                                       sample['source_date']) for position,sample in enumerate(style['samples'])])
+                new_style_ids=[style['id'] for style in data['styles'] if not style.get('merge')]
+                merged_style_ids=[style['id'] for style in data['styles'] if style.get('merge')]
+                replaced_style_ids=list(data['replaced_ids'])
             else: raise MemoryError('不支持的全局记忆计划操作')
             conn.execute('DELETE FROM plans WHERE plan_id=?',(plan_id,))
             version=bump(conn)
@@ -1209,7 +1396,9 @@ def commit(root: Path, plan_id: str) -> dict:
             'new_record_ids':new_ids,'withdrawn_months':withdrawn,
             'deleted_reinforcement_ids':deleted_statistics,
             'status_updated_ids':[u['id'] for u in data.get('status_updates',[])] if op=='save' else [],
-            'superseded_record_ids':[r['id'] for r in data['supersede']] if op=='save' else []}
+            'superseded_record_ids':[r['id'] for r in data['supersede']] if op=='save' else [],
+            'new_style_ids':new_style_ids,'merged_style_ids':merged_style_ids,
+            'replaced_style_ids':replaced_style_ids}
 
 
 # ---------------------------------------------------------------------------
@@ -1227,6 +1416,7 @@ def status_view(root: Path) -> dict:
                 'search':meta_value(conn,'search'),
                 'records':conn.execute('SELECT COUNT(*) FROM records').fetchone()[0],
                 'profiles':conn.execute('SELECT COUNT(*) FROM profiles').fetchone()[0],
+                'styles':conn.execute('SELECT COUNT(*) FROM styles').fetchone()[0],
                 'summary_months':len({row[0] for row in conn.execute('SELECT DISTINCT month FROM summaries')}),
                 'reinforcement':reinforce_status(root)}
 
@@ -1574,23 +1764,27 @@ def _legacy_generated_at(path: Path) -> str:
 
 
 def upgrade_store(root: Path) -> dict:
-    """SQLite v1 库就地升级到当前版本：删访问统计表、建标注事件表。
+    """SQLite 旧库就地升级到当前版本：v1→v2 换标注事件表，v2→v3 建风格两表。
 
-    旧统计按设计丢弃不迁移；事务内完成，失败回滚保持 v1，不产出半成品库。
+    旧访问统计按设计丢弃不迁移；风格两表只建表，不改写既有记录、画像与摘要。
+    已是 v3 的库可重复执行，只补齐缺失的索引（如 `styles_name` 唯一索引），不改任何数据。
+    事务内逐条执行（不用 executescript，它会隐式提交），失败回滚保持原版本，不产出半成品库。
     """
     path=db_path(root)
     expect(path.is_file(),'DB_MISSING：记忆库不存在；先执行 init')
     with connect(root,write=True) as conn:
         version=conn.execute('PRAGMA user_version').fetchone()[0]
-        expect(version==1,f'DB_VERSION：仅支持 v1 库就地升级（库 {version}，代码 {STORE_VERSION}）')
+        expect(version in (1,2,3),f'DB_VERSION：仅支持 v1/v2/v3 库就地升级（库 {version}，代码 {STORE_VERSION}）')
         with transaction(conn):
-            conn.execute('DROP TABLE IF EXISTS access_events')
-            conn.execute('DROP INDEX IF EXISTS access_events_record')
-            conn.execute('CREATE TABLE reinforce_events(record_id TEXT NOT NULL, session_hash TEXT NOT NULL, '
-                         'at TEXT NOT NULL, PRIMARY KEY(record_id, session_hash))')
-            conn.execute('CREATE INDEX reinforce_events_record ON reinforce_events(record_id)')
+            if version==1:
+                conn.execute('DROP TABLE IF EXISTS access_events')
+                conn.execute('DROP INDEX IF EXISTS access_events_record')
+                conn.execute('CREATE TABLE reinforce_events(record_id TEXT NOT NULL, session_hash TEXT NOT NULL, '
+                             'at TEXT NOT NULL, PRIMARY KEY(record_id, session_hash))')
+                conn.execute('CREATE INDEX reinforce_events_record ON reinforce_events(record_id)')
+            for statement in STYLE_DDL: conn.execute(statement)
             conn.execute(f'PRAGMA user_version={STORE_VERSION}')
-    return {'upgraded':True,'database':str(path),'store_version':STORE_VERSION}
+    return {'upgraded':True,'database':str(path),'from_version':version,'store_version':STORE_VERSION}
 
 
 # ---------------------------------------------------------------------------
@@ -1609,9 +1803,9 @@ def main() -> None:
     rs=sub.add_parser('reassign');rs.add_argument('--from',dest='source',required=True)
     rs.add_argument('--to',dest='target',required=True);rs.add_argument('--approved',action='store_true')
     migrate=sub.add_parser('migrate');migrate.add_argument('--from',dest='source',default=None,
-        help='legacy Markdown store directory, or SQLite v1 store directory for in-place upgrade (default: --store)')
+        help='legacy Markdown store directory, or SQLite v1/v2 store directory for in-place upgrade (default: --store)')
     export=sub.add_parser('export');export.add_argument('--out',required=True)
-    pp=sub.add_parser('plan');pp.add_argument('operation',choices=['save','delete','profile','month']);pp.add_argument('--input',required=True)
+    pp=sub.add_parser('plan');pp.add_argument('operation',choices=['save','delete','profile','month','style']);pp.add_argument('--input',required=True)
     ps=sub.add_parser('plan-show');ps.add_argument('--plan-id',required=True)
     cm=sub.add_parser('commit');cm.add_argument('--plan-id',required=True);cm.add_argument('--approved',action='store_true')
     sr=sub.add_parser('search');sr.add_argument('--query',default='');sr.add_argument('--month');sr.add_argument('--all-dates',action='store_true');sr.add_argument('--historical',action='store_true');sr.add_argument('--limit',type=int,default=50)
@@ -1620,6 +1814,8 @@ def main() -> None:
     notes=sub.add_parser('project-notes');notes.add_argument('--project',required=True);notes.add_argument('--date-from',required=True);notes.add_argument('--limit',type=int,default=3)
     ms=sub.add_parser('month-source');ms.add_argument('month');ms.add_argument('--offset',type=int,default=0);ms.add_argument('--limit',type=int,default=50);ms.add_argument('--closed-today-confirmed',action='store_true')
     rr=sub.add_parser('read');rr.add_argument('ids',nargs='+')
+    sub.add_parser('styles')
+    sr2=sub.add_parser('style-read');sr2.add_argument('ids',nargs='+')
     rc=sub.add_parser('reinforce');rc.add_argument('--input',required=True,choices=['-'])
     pr=sub.add_parser('profiles');pr.add_argument('--domain',choices=sorted(DOMAINS))
     args=parser.parse_args()
@@ -1683,6 +1879,10 @@ def main() -> None:
             result=monthly_source(root,args.month,args.offset,args.limit,args.closed_today_confirmed)
         elif args.cmd=='read':
             result=indexed_read(root,args.ids)
+        elif args.cmd=='styles':
+            result=styles_view(root)
+        elif args.cmd=='style-read':
+            result=style_read_view(root,args.ids)
         elif args.cmd=='reinforce':
             raw_input=json.loads(sys.stdin.buffer.read().decode('utf-8'))
             result=record_reinforce(root,raw_input)

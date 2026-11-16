@@ -89,7 +89,8 @@ const STANDARD_MODE_SECTION = '标准模式：需求理解之后先给出方案�
  */
 const FAST_MODE_DROPPED_TOOLS: ReadonlySet<string> = new Set([
   'memory_status', 'memory_control', 'memory_profiles', 'memory_rules', 'memory_search',
-  'memory_read', 'memory_reinforce', 'memory_save', 'memory_profile_save'
+  'memory_read', 'memory_reinforce', 'memory_save', 'memory_profile_save',
+  'style_sample', 'style_list', 'style_read', 'style_save'
 ])
 interface RuntimeOptions {
   readonly hostId: number
