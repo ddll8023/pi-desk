@@ -31,7 +31,7 @@ const SELECTION_TOOL = 'skill_guard_select'
  * memory_reinforce 只写库内去重事件，不触达权威正文与文件系统，按同一口径放行。 */
 const RECOVERY_TOOLS = new Set(['read', 'grep', 'find', 'ls', 'ffgrep', 'fffind', 'tool_search',
   'memory_status', 'memory_search', 'memory_rules', 'memory_read', 'memory_reinforce', 'memory_profiles',
-  'style_sample', 'style_list', 'style_read'])
+  'style_sample', 'style_list', 'style_read', 'work_list', 'work_read'])
 
 interface PendingMutation {
   tool: string

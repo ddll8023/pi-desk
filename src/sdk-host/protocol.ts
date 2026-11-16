@@ -18,9 +18,14 @@ import type {
   AgentCapabilities, McpStatus, MemoryInjectionSnapshot, OutputRate, PiResources, ProjectionBatch, ProjectionSnapshot,
   ResourceIssue, RuntimeDiagnostics, SessionUsage, HistoryQuery, HistoryData
 } from '../shared/runtime-api'
+import { isPortfolioDetail, isPortfolioEntry, isPortfolioId } from '../shared/portfolio-api'
+import type { PortfolioDetail, PortfolioEntry, PortfolioSource } from '../shared/portfolio-api'
 
-/** 目标结构新增 `expertId`，旧宿主读到不带它的目标会拒收；`memory-injection` 请求同理，因此升版本而不做兼容。 */
-export const SDK_HOST_PROTOCOL_VERSION = 14
+/**
+ * 目标结构新增 `expertId`，旧宿主读到不带它的目标会拒收；`memory-injection` 请求同理，因此升版本而不做兼容。
+ * 版本 15 增加作品库的反向请求与结果帧（`portfolio-operation`／`portfolio-operation-result`）。
+ */
+export const SDK_HOST_PROTOCOL_VERSION = 15
 /** 桌面记忆配置推送通道：与扩展侧 host.ts 的常量一致，只传受限配置对象。 */
 export const MEMORY_CONFIGURATION_CHANGED = 'pi-desk:memory-configuration-changed:v1'
 
@@ -99,6 +104,19 @@ export type SdkBrowserOperation =
 export type SdkBrowserOperationResult =
   | { readonly ok: true; readonly data: unknown }
   | { readonly ok: false; readonly error: string; readonly notBound?: boolean; readonly paused?: boolean }
+
+/** 宿主向主进程申请执行的作品库操作判别联合；写入只登记新增作品。 */
+export type SdkPortfolioOperation =
+  | { readonly kind: 'list' }
+  | { readonly kind: 'read'; readonly id: string }
+  | { readonly kind: 'save'; readonly name: string; readonly scene: string; readonly points: string;
+      readonly sources: readonly PortfolioSource[]; readonly files: readonly string[] }
+
+/** 作品操作结果：列表、单件详情或失败原因，不携带图片二进制。 */
+export type SdkPortfolioResult =
+  | { readonly ok: true; readonly kind: 'list'; readonly entries: readonly PortfolioEntry[] }
+  | { readonly ok: true; readonly kind: 'detail'; readonly entry: PortfolioDetail }
+  | { readonly ok: false; readonly error: string }
 
 export type SdkHostFailureCode =
   | 'SDK_LOAD_FAILED' | 'AGENT_DIR_MISMATCH' | 'HOST_NOT_READY'
@@ -215,6 +233,8 @@ export type SdkHostRequest =
       readonly generation: number | null })
   | (RequestEnvelope & { readonly type: 'browser-operation-result'; readonly bindingId: number;
       readonly result: SdkBrowserOperationResult })
+  | (RequestEnvelope & { readonly type: 'portfolio-operation-result'; readonly bindingId: number;
+      readonly result: SdkPortfolioResult })
 
 export type SdkHostFrame =
   | (RequestEnvelope & { readonly type: 'ready'; readonly agentDir: string; readonly sdkVersion: string })
@@ -252,6 +272,8 @@ export type SdkHostEvent =
       readonly projectPath: string | null; readonly reference: SdkSessionReference })
   | (RequestEnvelope & { readonly type: 'browser-operation'; readonly seq: number; readonly bindingId: number;
       readonly operation: SdkBrowserOperation })
+  | (RequestEnvelope & { readonly type: 'portfolio-operation'; readonly seq: number; readonly bindingId: number;
+      readonly operation: SdkPortfolioOperation })
 
 const FAILURE_CODES: readonly SdkHostFailureCode[] = [
   'SDK_LOAD_FAILED', 'AGENT_DIR_MISMATCH', 'HOST_NOT_READY', 'INVALID_SESSION_TARGET',
@@ -426,6 +448,8 @@ export function isSdkHostRequest(value: unknown): value is SdkHostRequest {
       && requestKeys(value, ['bindingId', 'target', 'error', 'generation'])
     case 'browser-operation-result': return isIdentity(value.bindingId)
       && isSdkBrowserOperationResult(value.result) && requestKeys(value, ['bindingId', 'result'])
+    case 'portfolio-operation-result': return isIdentity(value.bindingId)
+      && isSdkPortfolioResult(value.result) && requestKeys(value, ['bindingId', 'result'])
     default: return false
   }
 }
@@ -478,6 +502,10 @@ export function isSdkHostEvent(value: unknown): value is SdkHostEvent {
     return isRequest(value) && isIdentity(value.seq) && isIdentity(value.bindingId)
       && isSdkBrowserOperation(value.operation) && requestKeys(value, ['seq', 'bindingId', 'operation'])
   }
+  if (value.type === 'portfolio-operation') {
+    return isRequest(value) && isIdentity(value.seq) && isIdentity(value.bindingId)
+      && isSdkPortfolioOperation(value.operation) && requestKeys(value, ['seq', 'bindingId', 'operation'])
+  }
   if (!isIdentity(value.seq)) return false
   if (value.type === 'session-state') return isSdkSessionStatus(value.status) && eventKeys(value, ['status'])
   if (value.type === 'entry-map') {
@@ -515,4 +543,40 @@ export function isSdkBrowserOperationResult(value: unknown): value is SdkBrowser
     && (value.notBound === undefined || typeof value.notBound === 'boolean')
     && (value.paused === undefined || typeof value.paused === 'boolean')
     && hasKeys(value, ['ok', 'error', 'notBound', 'paused'])
+}
+
+/** 作品来源只接受有界文本，会话标识允许为空；日期是登记时刻的 ISO 文本。 */
+function isPortfolioSourceValue(value: unknown): value is PortfolioSource {
+  if (!isRecord(value)) return false
+  return typeof value.project === 'string' && value.project.length <= 200
+    && typeof value.path === 'string' && value.path.length <= 32_768 && !value.path.includes('\0')
+    && (value.sessionId === null || (typeof value.sessionId === 'string' && value.sessionId.length <= 128))
+    && typeof value.date === 'string' && value.date.length <= 64
+    && hasKeys(value, ['project', 'path', 'sessionId', 'date'])
+}
+
+/** 作品操作载荷校验：写入只接受名称、场景、要点、来源与工作区内相对文件路径。 */
+export function isSdkPortfolioOperation(value: unknown): value is SdkPortfolioOperation {
+  if (!isRecord(value)) return false
+  if (value.kind === 'list') return hasKeys(value, ['kind'])
+  if (value.kind === 'read') return isPortfolioId(value.id) && hasKeys(value, ['kind', 'id'])
+  if (value.kind !== 'save') return false
+  return typeof value.name === 'string' && value.name.length <= 100
+    && typeof value.scene === 'string' && value.scene.length <= 200
+    && typeof value.points === 'string' && value.points.length <= 8_000
+    && Array.isArray(value.sources) && value.sources.every(isPortfolioSourceValue)
+    && Array.isArray(value.files) && value.files.every(entry => typeof entry === 'string' && entry.length <= 1_024)
+    && hasKeys(value, ['kind', 'name', 'scene', 'points', 'sources', 'files'])
+}
+
+/** 作品操作结果校验：列表与详情都不带图片数据。 */
+export function isSdkPortfolioResult(value: unknown): value is SdkPortfolioResult {
+  if (!isRecord(value)) return false
+  if (value.ok === true && value.kind === 'list') {
+    return Array.isArray(value.entries) && value.entries.every(isPortfolioEntry) && hasKeys(value, ['ok', 'kind', 'entries'])
+  }
+  if (value.ok === true && value.kind === 'detail') {
+    return isPortfolioDetail(value.entry) && hasKeys(value, ['ok', 'kind', 'entry'])
+  }
+  return value.ok === false && typeof value.error === 'string' && hasKeys(value, ['ok', 'error'])
 }

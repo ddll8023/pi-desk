@@ -1,5 +1,5 @@
 /**
- * 产品级工具使用分段：只在本应用内注入，说明记忆工具与子代理工具的主动使用时机。
+ * 产品级工具使用分段：只在本应用内注入，说明记忆工具、子代理工具与作品库工具的主动使用时机。
  *
  * 这些能力随应用打包，其他 Agent 环境没有对应工具；规则写进系统提示分段，
  * 不写进全局 AGENTS.md，避免在缺少工具的宿主里产生「有规范无工具」的偏置。
@@ -28,16 +28,23 @@ const SUBAGENT_SECTION = `委派工具 delegate_subagent 用于结构化批量�
 - document：需要创建或按小节更新 2 个以上文档时，用 document 并声明 write_scope。
 单点定位、单文件小改、需要边讨论边改的工作直接用 read / ffgrep / edit，不要委派；仓库内的符号定位仍用 query，不因要查词就派 research。`
 
+const PORTFOLIO_SECTION = `作品库（work_list / work_read / work_save）保存已确认的界面成品：要点、截图与可运行快照，供后续界面开发取用。
+- 界面或前端类任务开工前先用 work_list／work_read 看有没有可复用的成品，不要凭印象重做选型；
+- 只在用户明确要求「存进作品库」时用 work_save 登记，不主动采集、不扫描会话或仓库；
+- 作品库是全局资产，与记忆库、语气风格库各管一层，不混用。`
+
 /**
  * 快速模式整组下线记忆工具，注入记忆指引会让模型去找不存在的工具，因此只保留委派段。
  * 专家工具范围把委派移出激活集合时，`subAgent` 为 false，同样不再写委派时机：
- * 提示里不能出现本会话调不到的工具。两者都不可用时返回空串，由调用方决定不写分段。
+ * 提示里不能出现本会话调不到的工具。作品库工具不受执行模式影响，只在主进程未注入数据层
+ * 或专家工具范围排除了它时消失。两者都不可用时返回空串，由调用方决定不写分段。
  */
 export function productToolsSection(
   mode: ExecutionMode,
-  options: { readonly subAgent: boolean } = { subAgent: true }
+  options: { readonly subAgent: boolean; readonly portfolio: boolean } = { subAgent: true, portfolio: false }
 ): string {
   const memory = mode === 'fast' ? '' : MEMORY_SECTION
   const subAgent = options.subAgent ? SUBAGENT_SECTION : ''
-  return [memory, subAgent].filter(part => part !== '').join('\n\n')
+  const portfolio = options.portfolio ? PORTFOLIO_SECTION : ''
+  return [memory, subAgent, portfolio].filter(part => part !== '').join('\n\n')
 }

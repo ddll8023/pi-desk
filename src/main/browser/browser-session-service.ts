@@ -223,6 +223,18 @@ export class BrowserSessionService {
     return null
   }
 
+  /** 最近更新的可截取实例：排除已销毁与处于接管/挂起的页面，与既有浏览器动作门禁保持一致。 */
+  latestLiveInstance(): BrowserInstanceRecord | null {
+    let latest: BrowserInstanceRecord | null = null
+    for (const [instanceId, record] of this.instances) {
+      if (record.status === 'destroyed') continue
+      const control = this.controlStates.get(instanceId)
+      if (control && (control.phase === 'takeover' || control.phase === 'paused')) continue
+      if (latest === null || record.updatedAt > latest.updatedAt) latest = record
+    }
+    return latest
+  }
+
   /** 在当前绑定的浏览器实例中导航到指定 URL。 */
   async navigate(instanceId: string, rawUrl: string): Promise<BrowserActionResult> {
     const record = this.instances.get(instanceId)
