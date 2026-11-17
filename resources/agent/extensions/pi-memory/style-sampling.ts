@@ -98,12 +98,14 @@ function dayOffset(daysAgo: number): string {
 
 /**
  * 列出窗口内的会话文件：会话根下每个分组目录一层，文件名为 `<时间>_<会话 id>.jsonl`。
- * 只按目录项判定，不跟随符号链接；缺失的目录按空处理，不视为故障。
+ * 只按目录项判定，不跟随符号链接；分组目录缺失按空处理。
+ * 会话根本身缺失（含不是目录）时置 `rootMissing`，由调用方区分「路径不对」与「窗口内确实没有会话」。
  */
-async function listSessions(root: string, cutoff: string): Promise<SessionFile[]> {
+async function listSessions(root: string, cutoff: string): Promise<{ files: SessionFile[]; rootMissing: boolean }> {
   let groups: Dirent[]
   try { groups = await readdir(root, { withFileTypes: true }) } catch (error) {
-    if (missing(error)) return []
+    const code = (error as NodeJS.ErrnoException)?.code
+    if (missing(error) || code === 'ENOTDIR') return { files: [], rootMissing: true }
     throw error
   }
   const files: SessionFile[] = []
@@ -127,7 +129,7 @@ async function listSessions(root: string, cutoff: string): Promise<SessionFile[]
   files.sort((left, right) => (left.date === right.date
     ? (left.path < right.path ? 1 : left.path > right.path ? -1 : 0)
     : (left.date < right.date ? 1 : -1)))
-  return files
+  return { files, rootMissing: false }
 }
 
 /** 只读开头一段取会话头；不是 `type:"session"` 的条目不算本产品的会话文件。 */
@@ -210,12 +212,13 @@ function filterReason(text: string, minChars: number): FilterName | null {
  *
  * 分页按会话维度：`offset` 跳过前 N 个范围内的会话，`session_limit` 限定本批处理数。
  * 预算或单会话样本上限触顶即停止并置 `has_more`；`stopped_by` 说明停止原因，避免把「预算耗尽」误读为「已取完」。
+ * 会话根不存在时 `stopped_by` 为 `root_missing` 并回传 `sessions_root`：没有文件可读不等于窗口内没有发言。
  * `projectIdOf` 由调用方给出（注册表最长前缀匹配），本模块不自行推断项目身份。
  */
 export async function collectStyleSamples(request: StyleSamplingRequest,
   projectIdOf: (cwd: string) => string | null): Promise<JsonObject> {
   const cutoff = dayOffset(request.days - 1)
-  const all = await listSessions(request.sessionsRoot, cutoff)
+  const { files: all, rootMissing } = await listSessions(request.sessionsRoot, cutoff)
   // 先按归属筛选再分页：被范围排除的会话不占 session_limit，也不计为候选。
   const scoped: (SessionFile & { readonly head: SessionHead })[] = []
   let unreadable = 0
@@ -240,7 +243,7 @@ export async function collectStyleSamples(request: StyleSamplingRequest,
   let duplicateSessions = 0
   let overLimitSessions = 0
   let badLines = 0
-  let stoppedBy: 'budget' | 'session_limit' | 'end' = 'end'
+  let stoppedBy: 'budget' | 'session_limit' | 'root_missing' | 'end' = 'end'
 
   for (const [index, entry] of page.entries()) {
     if (seen.has(entry.head.id)) { duplicateSessions += 1; continue }
@@ -288,13 +291,16 @@ export async function collectStyleSamples(request: StyleSamplingRequest,
 
   // 预算中断时按已处理的会话数前进：否则 next_offset 会跳过本页尚未扫描的会话。
   const nextOffset = stoppedBy === 'budget' ? request.offset + processed : request.offset + page.length
-  const more = stoppedBy !== 'end' || nextOffset < scoped.length
+  if (rootMissing) stoppedBy = 'root_missing'
+  const more = stoppedBy === 'budget' || stoppedBy === 'session_limit' || nextOffset < scoped.length
   return {
     scope: request.scope,
     project: request.projectId === null ? null : { id: request.projectId,
       name: request.projects.find(project => project.id === request.projectId)?.name ?? null },
     window_days: request.days,
     cutoff,
+    sessions_root: request.sessionsRoot,
+    sessions_root_missing: rootMissing,
     session_offset: request.offset,
     session_limit: request.sessionLimit,
     sessions_matched: scoped.length,

@@ -405,7 +405,7 @@ export function registerMemoryTools(pi: ExtensionAPI, runtime: MemoryRuntime): v
   // ---- 风格库：要点与原句随每轮背景注入；本组提供按需复核、取样与保存；不参与词法检索 ----
   pi.registerTool({
     name: 'style_sample', label: '取样用户发言样本',
-    description: '用户要求提炼自己的表达风格时先取样。只读本产品会话记录中用户本人发的消息，已剔除确认句、系统与技能注入段、代码、日志与路径；已收录样本与用户删除过的原句一并剔除，路径由宿主提供，不能指定。返回样本与过滤计数，用于判断语料是否够用；超出预算或会话上限时给出 has_more 与 next_offset。宿主未提供会话目录时直接报错，不回退其他路径。',
+    description: '用户要求提炼自己的表达风格时先取样。只读本产品会话记录中用户本人发的消息，已剔除确认句、系统与技能注入段、代码、日志与路径；已收录样本与用户删除过的原句一并剔除，路径由宿主提供，不能指定。返回样本与过滤计数，用于判断语料是否够用；超出预算或会话上限时给出 has_more 与 next_offset。宿主未提供会话目录时直接报错；会话根不存在时返回 sessions_root 与 sessions_root_missing（stopped_by 为 root_missing），不当作无样本。',
     parameters: Type.Object({
       scope: Type.Optional(Type.Union([Type.Literal('current-project'), Type.Literal('all')])),
       days: Type.Optional(Type.Integer({ minimum: 1, maximum: 365 })),

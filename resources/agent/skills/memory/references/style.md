@@ -41,7 +41,7 @@
 
 已收录样本在硬过滤之后、预算之前剔除并计入 `stats.filtered.used`：判据是库里 `style_samples` 与用户删除记录（`style-exclusions`）的并集，两者都按「会话 ID + 逐字原句」比对。因此重跑蒸馏不会把上次用过的原句再取一遍；用户在设置页删掉或覆盖时丢弃的原句会进入排除集合，同样不会被再次取回，不需要额外维护进制表。`used_source` 会写明判据来源（`store`／`store+exclusions`／`empty`／`unavailable：…`）；读库不可用时不阻断取样，此时排除集合也一并失效，候选未去重。
 
-返回体的 `stats.filtered` 与 `sessions_matched`／`sessions_scanned`／`chars_used` 是判断语料规模的依据；`stopped_by` 与 `has_more`／`next_offset` 说明是预算触顶还是已取完。
+返回体的 `stats.filtered` 与 `sessions_matched`／`sessions_scanned`／`chars_used` 是判断语料规模的依据；`stopped_by` 与 `has_more`／`next_offset` 说明是预算触顶还是已取完。宿主注入的会话根不存在（或不是目录）时 `stopped_by` 为 `root_missing`、`sessions_root_missing` 为真并回传 `sessions_root`：没有文件可读不等于窗口内没有发言，如实报告后停止，不改用其他目录。
 
 ## 蒸馏
 
@@ -71,4 +71,4 @@
 
 ## 失败边界
 
-缺库、库版本不符（需 `migrate`）、库忙、宿主未提供会话目录、当前目录未登记为项目、风格 ID 不存在或数量越界，都如实报告并停止，不自动初始化、迁移、扩大范围或改用其他目录。
+缺库、库版本不符（需 `migrate`）、库忙、宿主未提供会话目录或注入的会话根不存在、当前目录未登记为项目、风格 ID 不存在或数量越界，都如实报告并停止，不自动初始化、迁移、扩大范围或改用其他目录。
