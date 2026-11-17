@@ -50,8 +50,6 @@
 | `src/sdk-host/extension-ui-bridge.ts` | SDK UI 回调到宿主消息的适配及取消 |
 | `src/sdk-host/browser/tools.ts` | 内置浏览器操控工具定义（快照、正文、导航、点击、输入、按键、滚动）与 A11y 树格式化 |
 | `src/sdk-host/browser/index.ts` | 内置浏览器扩展工厂接入 |
-| `src/sdk-host/portfolio/tools.ts` | 作品库工具定义：`work_list`／`work_read`／`work_save`；参数上限与非法标识在工具侧先拦截，不派发不合协议的事件 |
-| `src/sdk-host/portfolio/index.ts` | 作品库扩展工厂：只在主进程注入作品数据层时装配 |
 
 ### 会话投影与契约
 
@@ -148,7 +146,6 @@
 - [供应商](providers-auth.md)：`RuntimeModelSelect.vue` 提供模型选择，持久默认模型不等于当前会话模型；`UsageDetailDialog.vue` 经认证服务读取 Codex 与 OpenCode Go 账户额度，查询机制与凭据边界由供应商模块维护。
 - [文件](files-editor.md)：`project-file` Store 提供 `@` 文件候选；[资源](resources-mcp.md) 提供技能和命令补全；[偏好](preferences.md) 提供快捷输入。
 - [工作区标签](workspace-tabs.md)：宿主挂载内置浏览器扩展，通过 `browser-operation` 反向协议由主进程 `BrowserSessionService` 复核会话代际并派发动作；未绑定实例时主进程自动派发 `browser:auto-attach` 事件通知工作区开辟分屏并完成 1:1 静默绑定，驱动受管浏览器。
-- [作品库](app-shell.md)：宿主通过 `portfolio-operation` 反向协议请求主进程，会话代际复核后由 `src/main/portfolio/portfolio-store.ts` 读写作品目录（`meta.json` 为唯一真源），设置页的作品分节经 `src/main/portfolio/ipc.ts` 只调同一数据层。
 
 ## 关键调用链
 

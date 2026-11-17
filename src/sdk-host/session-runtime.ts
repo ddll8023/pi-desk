@@ -21,7 +21,6 @@ import { judgeContinuation } from './continuation-signal'
 import { createTodoListExtension } from './todo-list'
 import type { ImageAnnotationDocument } from '../shared/image-annotation'
 import { createBrowserExtension, BROWSER_EXTENSION_NAME } from './browser/index'
-import { createPortfolioExtension, PORTFOLIO_EXTENSION_NAME } from './portfolio/index'
 import { MessageProjection } from './projection/message-projection'
 import { ActivityProjection, matchesActivityPrefix } from './projection/activity-projection'
 import type { ActivityCheckpointState } from './projection/activity-projection'
@@ -32,7 +31,7 @@ import { OutputRateTracker } from './projection/output-rate'
 import { SDK_HOST_PROTOCOL_VERSION } from './protocol'
 import type {
   SdkBrowserOperation, SdkBrowserOperationResult,
-  SdkHostFailureCode, SdkMcpCommandAction, SdkPortfolioOperation, SdkPortfolioResult,
+  SdkHostFailureCode, SdkMcpCommandAction,
   SdkSessionAuthorization, SdkSessionReference, SdkSessionRequest,
   SdkSessionStatus, SdkSessionTarget
 } from './protocol'
@@ -113,8 +112,6 @@ interface RuntimeOptions {
   readonly checkpoints: ProjectionCheckpoints
   /** 浏览器操作派发函数。 */
   readonly browserOperator?: (bindingId: number, operation: SdkBrowserOperation) => Promise<SdkBrowserOperationResult>
-  /** 作品库操作派发函数；缺省时不装配作品工具。 */
-  readonly portfolioOperator?: (bindingId: number, operation: SdkPortfolioOperation) => Promise<SdkPortfolioResult>
 }
 const SETTLE_TIMEOUT_MS = 5_000
 /** 会话统计补读的最小间隔：状态推送频繁，不能每次取状态都遍历会话条目。 */
@@ -1019,9 +1016,7 @@ export class SdkSessionRuntime {
               // 记忆与委派工具随应用提供，其他宿主没有；使用时机写进分段，不写全局 AGENTS.md。
               // 委派被专家工具范围排除时不写它的时机段，避免模型对着不存在的工具做规划。
               const productSection = productToolsSection(target.mode, {
-                subAgent: capability.tools === null || capability.tools.includes(DELEGATION_TOOL_NAME),
-                portfolio: this.options.portfolioOperator !== undefined
-                  && (capability.tools === null || capability.tools.includes('work_save'))
+                subAgent: capability.tools === null || capability.tools.includes(DELEGATION_TOOL_NAME)
               })
               if (productSection !== '') {
                 event.systemPromptOptions.sections[PRODUCT_TOOLS_SECTION_KEY] = productSection
@@ -1074,20 +1069,6 @@ export class SdkSessionRuntime {
                     return Promise.resolve({ ok: false, error: '当前会话未建立有效绑定。' })
                   }
                   return this.options.browserOperator!(this.bindingId, op)
-                }),
-                builtin: true,
-                replaceable: true
-              }]
-            : []),
-          // 作品库工具只有主进程注入了数据层时才注册；快速模式不裁剪它。
-          ...(this.options.portfolioOperator
-            ? [{
-                name: PORTFOLIO_EXTENSION_NAME,
-                factory: createPortfolioExtension((op) => {
-                  if (!this.valid || this.bindingId === null) {
-                    return Promise.resolve({ ok: false, error: '当前会话未建立有效绑定。' })
-                  }
-                  return this.options.portfolioOperator!(this.bindingId, op)
                 }),
                 builtin: true,
                 replaceable: true

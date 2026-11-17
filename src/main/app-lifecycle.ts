@@ -64,7 +64,6 @@ import {
 import { registerUpdatesHandlers } from './updates/ipc'
 import { registerLanRemoteHandlers } from './lan-remote/ipc'
 import { registerMemoryHandlers } from './memory/ipc'
-import { registerPortfolioHandlers } from './portfolio/ipc'
 import { registerUsageStatsHandlers } from './usage/ipc'
 
 /** 应用退出时等待关闭链的总预算；覆盖各平台兜底阶段后强制退出。 */
@@ -220,7 +219,6 @@ export async function startApplication(): Promise<void> {
   registerUpdatesHandlers(pageUrl)
   registerLanRemoteHandlers(pageUrl)
   registerMemoryHandlers(pageUrl)
-  registerPortfolioHandlers(pageUrl)
   registerUsageStatsHandlers(pageUrl)
   registerAgentHomeHandlers(pageUrl)
 

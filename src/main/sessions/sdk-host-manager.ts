@@ -16,14 +16,13 @@ import {
 import type {
   SdkHostFrame, SdkHostRequest, SdkHostFailureCode, SdkHostEvent, SdkMcpCommandAction, SdkSessionStatus,
   SdkSessionReference, SdkSessionTarget, SdkSessionAction, SdkInterruptConfirmation, SdkSessionIdentity,
-  SdkLogTarget, SdkBrowserOperationResult, SdkPortfolioOperation, SdkPortfolioResult
+  SdkLogTarget, SdkBrowserOperationResult
 } from '../../sdk-host/protocol'
 import type {
   AgentCapabilities, McpStatus, MemoryInjectionSnapshot, PiResources, ProjectionBatch, ProjectionSnapshot, PromptImageInput,
   RuntimeDiagnostics, HistoryData, HistoryQuery
 } from '../../shared/runtime-api'
 import type { BrowserSessionService } from '../browser/browser-session-service'
-import type { PortfolioStore } from '../portfolio/portfolio-store'
 import { sendToRenderer } from '../window-channel'
 import { turnSnapshotService } from '../services'
 import { BROWSER_AUTO_ATTACH_EVENT } from '../../shared/browser-session-api'
@@ -95,8 +94,7 @@ const EXPECTED_REPLIES: Record<SdkHostRequest['type'], SdkHostFrame['type'] | nu
   'session-log': 'log-result',
   'ui-response': 'ui-result',
   'authorization-result': null,
-  'browser-operation-result': null,
-  'portfolio-operation-result': null
+  'browser-operation-result': null
 }
 
 /**
@@ -252,8 +250,6 @@ export interface SdkHostManagerOptions {
   runs: SdkHostRunRegistry
   /** 受管浏览器会话服务实例。 */
   browserSessionService?: BrowserSessionService
-  /** 作品库数据层；缺省时不装配作品工具，也不接受宿主发起的作品操作。 */
-  portfolio?: PortfolioStore
   /** 记忆配置来源；缺省时退到只读兜底配置（关闭且无可用运行环境），扩展仍按受管配置处理，不自行退回 CLI 探测。 */
   memory?: MemoryConfigurationProvider
 }
@@ -286,9 +282,8 @@ const READ_ONLY_MEMORY: MemoryConfigurationProvider = {
 export function createReadOnlyHost(options: {
   readonly hostId: number
   readonly memory: MemoryConfigurationProvider
-  readonly portfolio?: PortfolioStore
 }): SdkHostManager {
-  return new SdkHostManager({ runId: options.hostId, runs: READ_ONLY_RUNS, memory: options.memory, portfolio: options.portfolio })
+  return new SdkHostManager({ runId: options.hostId, runs: READ_ONLY_RUNS, memory: options.memory })
 }
 
 export class SdkHostManager {
@@ -1039,10 +1034,6 @@ export class SdkHostManager {
       void this.handleBrowserOperation(record, event)
       return
     }
-    if (event.type === 'portfolio-operation') {
-      void this.handlePortfolioOperation(record, event)
-      return
-    }
     if (event.seq <= record.eventSeq) return
     if (event.type === 'session-state') {
       this.applySessionState(record, event.status, event.seq)
@@ -1247,65 +1238,6 @@ export class SdkHostManager {
       } satisfies SdkHostRequest)
     } catch {
       this.failTransport(record, '无法向宿主发送浏览器操作结果')
-    }
-  }
-
-  /**
-   * 处理宿主反向发起的作品库操作。
-   * 来源路径边界与素材大小由数据层复核；这里只确认会话代际与执行根，不替模型猜目录。
-   */
-  private async handlePortfolioOperation(
-    record: HostRecord,
-    event: Extract<SdkHostEvent, { type: 'portfolio-operation' }>
-  ): Promise<void> {
-    let result: SdkPortfolioResult
-
-    try {
-      if (record.closing || event.bindingId !== this.sessionSnapshot.bindingId) {
-        throw new Error('会话代际不匹配或宿主正在关闭。')
-      }
-      const store = this.options.portfolio
-      if (!store) throw new Error('主进程作品库不可用。')
-      const operation: SdkPortfolioOperation = event.operation
-      if (operation.kind === 'list') {
-        result = { ok: true, kind: 'list', entries: await store.list() }
-      } else if (operation.kind === 'read') {
-        result = { ok: true, kind: 'detail', entry: await store.read(operation.id) }
-      } else {
-        const executionRoot = this.currentTarget?.worktreePath ?? this.currentTarget?.projectPath
-          ?? this.sessionSnapshot.projectPath
-        if (!executionRoot) throw new Error('当前会话没有可用的工作区根目录，不能复制快照。')
-        result = {
-          ok: true,
-          kind: 'detail',
-          entry: await store.create({
-            name: operation.name,
-            scene: operation.scene,
-            points: operation.points,
-            sources: operation.sources,
-            files: operation.files
-          }, executionRoot)
-        }
-      }
-    } catch (failure) {
-      result = { ok: false, error: failure instanceof Error ? failure.message : String(failure) }
-    }
-
-    if (this.active !== record || record.exited || record.closing || event.bindingId !== this.sessionSnapshot.bindingId) {
-      return
-    }
-
-    try {
-      record.child.postMessage({
-        version: SDK_HOST_PROTOCOL_VERSION,
-        hostId: record.hostId,
-        requestId: event.requestId,
-        type: 'portfolio-operation-result',
-        bindingId: event.bindingId,
-        result
-      } satisfies SdkHostRequest)
-    } catch {
-      this.failTransport(record, '无法向宿主发送作品库操作结果')
     }
   }
 

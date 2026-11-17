@@ -1,4 +1,4 @@
-/** 主进程业务实例的唯一装配处：配置、项目、信任、会话、只读解析宿主池、终端、供应商、资源、更新、记忆、作品库、Git 清理、用量统计与手机访问各一份，按依赖顺序建立并互相注入回调。本文件只做实例化，不注册 IPC、不写业务判断；其中系统目录选择与终端守护状态广播经 window-channel.ts 提供，是本文件对窗口投递层的唯一依赖。 */
+/** 主进程业务实例的唯一装配处：配置、项目、信任、会话、只读解析宿主池、终端、供应商、资源、更新、记忆、Git 清理、用量统计与手机访问各一份，按依赖顺序建立并互相注入回调。本文件只做实例化，不注册 IPC、不写业务判断；其中系统目录选择与终端守护状态广播经 window-channel.ts 提供，是本文件对窗口投递层的唯一依赖。 */
 
 import { app, dialog } from 'electron'
 import { join } from 'node:path'
@@ -36,7 +36,6 @@ import { PackageUpdater } from './updates/package-updater'
 import { PiAgentUpdater } from './updates/pi-agent-updater'
 import { getRuntimeRoot } from './updates/pi-runtime'
 import { MemoryManager } from './memory/memory-manager'
-import { PortfolioStore } from './portfolio/portfolio-store'
 import { WindowState } from './window-state'
 import { LanRemoteManager } from './lan-remote/manager'
 import { BrowserSessionService } from './browser/browser-session-service'
@@ -57,7 +56,7 @@ export const sessionRuns = new SessionRunRegistry<SdkHostManager>()
  * 因此这里传入同一份真实来源，不固定成关闭。
  */
 export const logHosts = new LogHostPool({
-  create: (hostId) => createReadOnlyHost({ hostId, memory: memoryManager.provider, portfolio: portfolioStore })
+  create: (hostId) => createReadOnlyHost({ hostId, memory: memoryManager.provider })
 })
 
 /** 页面会话主链后端：按注册表定位运行实例，宿主按需建立，失败分类在此映射回既有 Runtime 契约。 */
@@ -68,7 +67,7 @@ export const sdkRuntime: SdkRuntimeBridge = new SdkRuntimeBridge({
   prepareHost: (host) => {
     host.setSessionAuthority((reference, ownerProjectPath, workspaceId) => sessionManager.prepareSdkTarget(reference, ownerProjectPath, workspaceId))
   },
-  createHost: (runId) => new SdkHostManager({ runId, runs: sessionRuns, browserSessionService, memory: memoryManager.provider, portfolio: portfolioStore }),
+  createHost: (runId) => new SdkHostManager({ runId, runs: sessionRuns, browserSessionService, memory: memoryManager.provider }),
   get workspaces(): WorkspaceManager { return workspaceManager }
 })
 
@@ -170,9 +169,6 @@ export const memoryManager = new MemoryManager({
   confirmInitialize: confirmMemoryInitialization,
   notifyHosts: () => sdkRuntime.notifyMemoryConfiguration()
 })
-
-/** 用户级全局作品库：目录、meta.json 与素材的唯一写入方；不绑定当前项目，也不随会话回收。 */
-export const portfolioStore = new PortfolioStore()
 
 /** 文件索引按已授权工作区缓存，页面不能绕过身份指定执行目录。 */
 export const projectFileIndex = new ProjectFileIndex()

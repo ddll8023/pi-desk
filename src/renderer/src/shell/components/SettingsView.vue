@@ -17,7 +17,6 @@ import ExecutionModeSection from '../../preferences/components/ExecutionModeSect
 import TerminalSettingsSection from '../../workspace/components/TerminalSettingsSection.vue'
 import ResourceView from '../../resources/components/ResourceView.vue'
 import ExpertSettingsSection from '../../experts/components/ExpertSettingsSection.vue'
-import PortfolioSettingsSection from '../../portfolio/components/PortfolioSettingsSection.vue'
 import SettingsNavIcon from './SettingsNavIcon.vue'
 import FileSettingsSection from '../../editor/components/FileSettingsSection.vue'
 import GitSettingsSection from '../../git/components/GitSettingsSection.vue'
@@ -115,7 +114,6 @@ const markdownViewOptions = [
         <ModelSettingsView v-else-if="activeSection === 'model'" />
         <ResourceView v-else-if="activeSection === 'resources'" />
         <ExpertSettingsSection v-else-if="activeSection === 'experts'" />
-        <PortfolioSettingsSection v-else-if="activeSection === 'portfolio'" />
         <ExecutionModeSection v-else-if="activeSection === 'features'" />
         <MemorySettingsSection v-else-if="activeSection === 'memory'" />
         <UsageStatsSection v-else-if="activeSection === 'usage'" />

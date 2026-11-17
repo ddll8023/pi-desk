@@ -9,8 +9,6 @@ import type {
   SdkHostFailureCode,
   SdkHostFrame,
   SdkHostRequest,
-  SdkPortfolioOperation,
-  SdkPortfolioResult,
   SdkSessionAuthorization,
   SdkSessionReference
 } from './protocol'
@@ -25,8 +23,6 @@ const parentPort = process.parentPort
 const INITIALIZE_WAIT_MS = 30_000
 const AUTHORIZATION_WAIT_MS = 15_000
 const BROWSER_OPERATION_WAIT_MS = 30_000
-/** 作品库写入要在主进程复制素材，给比浏览器只读动作更长的等待窗口。 */
-const PORTFOLIO_OPERATION_WAIT_MS = 60_000
 let hostId: number | null = null
 let initializing = false
 let ready = false
@@ -53,11 +49,6 @@ const browserOperations = new Map<string, {
   readonly bindingId: number
   readonly timer: ReturnType<typeof setTimeout>
   readonly resolve: (result: SdkBrowserOperationResult) => void
-}>()
-const portfolioOperations = new Map<string, {
-  readonly bindingId: number
-  readonly timer: ReturnType<typeof setTimeout>
-  readonly resolve: (result: SdkPortfolioResult) => void
 }>()
 
 /** 通信只发送声明的投影，原始 SDK 异常与环境变量不进入通道。 */
@@ -106,12 +97,6 @@ function cancelAuthorizations(bindingId?: number | null): void {
     browserOperations.delete(id)
     pending.resolve({ ok: false, error: '会话已重置或换代，浏览器操作已取消。' })
   }
-  for (const [id, pending] of portfolioOperations) {
-    if (bindingId !== undefined && bindingId !== null && pending.bindingId !== bindingId) continue
-    clearTimeout(pending.timer)
-    portfolioOperations.delete(id)
-    pending.resolve({ ok: false, error: '会话已重置或换代，作品库操作已取消。' })
-  }
 }
 
 /** 向主进程派发浏览器操作并等待结果。 */
@@ -131,34 +116,6 @@ function dispatchBrowserOperation(bindingId: number, operation: SdkBrowserOperat
       version: SDK_HOST_PROTOCOL_VERSION,
       hostId: currentHostId,
       type: 'browser-operation',
-      seq: ++seq,
-      requestId,
-      bindingId,
-      operation
-    })
-  })
-}
-
-/** 向主进程派发作品库操作并等待结果；作品库写入仍由主进程校验与落盘。 */
-function dispatchPortfolioOperation(
-  bindingId: number,
-  operation: SdkPortfolioOperation
-): Promise<SdkPortfolioResult> {
-  const currentHostId = hostId
-  if (currentHostId === null || closing) {
-    return Promise.resolve({ ok: false, error: '宿主未就绪或正在关闭。' })
-  }
-  const requestId = randomUUID()
-  return new Promise((resolvePromise) => {
-    const timer = setTimeout(() => {
-      portfolioOperations.delete(requestId)
-      resolvePromise({ ok: false, error: `作品库操作等待超时 (${PORTFOLIO_OPERATION_WAIT_MS / 1000}s)。` })
-    }, PORTFOLIO_OPERATION_WAIT_MS)
-    portfolioOperations.set(requestId, { bindingId, timer, resolve: resolvePromise })
-    send({
-      version: SDK_HOST_PROTOCOL_VERSION,
-      hostId: currentHostId,
-      type: 'portfolio-operation',
       seq: ++seq,
       requestId,
       bindingId,
@@ -194,7 +151,6 @@ async function initialize(request: Extract<SdkHostRequest, { type: 'initialize' 
       sharedAgentDir: request.sharedAgentDir,
       memory: memoryConfiguration,
       authorize, checkpoints, browserOperator: dispatchBrowserOperation,
-      portfolioOperator: dispatchPortfolioOperation,
       onState: status => {
         if (status.phase === 'invalid') cancelAuthorizations(status.bindingId)
         send({ version: SDK_HOST_PROTOCOL_VERSION, hostId: request.hostId, type: 'session-state', seq: ++seq, status })
@@ -260,14 +216,6 @@ async function dispatch(request: SdkHostRequest): Promise<void> {
     const pending = browserOperations.get(request.requestId)
     if (pending === undefined || pending.bindingId !== request.bindingId) return
     browserOperations.delete(request.requestId)
-    clearTimeout(pending.timer)
-    pending.resolve(request.result)
-    return
-  }
-  if (request.type === 'portfolio-operation-result') {
-    const pending = portfolioOperations.get(request.requestId)
-    if (pending === undefined || pending.bindingId !== request.bindingId) return
-    portfolioOperations.delete(request.requestId)
     clearTimeout(pending.timer)
     pending.resolve(request.result)
     return
