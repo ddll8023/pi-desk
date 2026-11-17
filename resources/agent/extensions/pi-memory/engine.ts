@@ -367,6 +367,10 @@ export class MemoryEngine {
       || ids.some(id => !STYLE_ID.test(id))) throw new Error('风格读取必须指定 1..10 个真实风格 ID')
     return this.run(['style-read', ...ids], undefined, signal)
   }
+  /** 已被用户删除的原句：取样去重时与库内样本合并，不进入背景注入。 */
+  styleExclusions(signal?: AbortSignal): Promise<JsonObject> {
+    return this.run(['style-exclusions'], undefined, signal)
+  }
 
   /**
    * 先取当前库变更序号再写标注；引擎按同一序号校验，写入前变化则拒绝，不自动重试。

@@ -4,7 +4,7 @@
 
 ## 职责与入口
 
-负责用户级全局记忆的开关、随包受管运行环境状态、记忆库状态探测与首次创建、会话卡片上记忆候选的保存（plan→commit 走引擎既有校验），以及把这些状态推送给已就绪的 SDK 宿主。入口为设置页“记忆”分节。
+负责用户级全局记忆的开关、随包受管运行环境状态、记忆库状态探测与首次创建、会话卡片上记忆候选的保存（plan→commit 走引擎既有校验）、按库内全部条目读取画像与语气风格并编辑已有条目（保存同样走 plan→commit），以及把这些状态推送给已就绪的 SDK 宿主。入口为设置页“记忆”分节。
 
 记忆库是当前系统用户的 `~/.agents/memory-store/memory.db`（SQLite，WAL），所有项目共用同一库，不按目录或项目身份过滤，不写入项目目录；开关默认开启，用户可在设置页关闭。引擎由随包 CPython 与 IANA 时区数据执行，不使用系统 Python、不依赖项目虚拟环境；运行资源或配套引擎缺失时明确报告，不回退其他解释器。
 
@@ -16,13 +16,18 @@
 
 | 文件 | 用途 |
 | --- | --- |
-| `src/main/memory/memory-manager.ts` | 开关、配置版本、运行环境与库状态探测、经用户确认的首次创建、记忆候选保存（按注册表匹配归属→引擎 plan→commit）、向宿主推送配置 |
-| `src/main/memory/ipc.ts` | 状态、开关、创建、读取、画像读取与候选保存等固定通道的调用者与参数校验 |
-| `src/shared/memory-api.ts` | 通道名、快照与结果契约、读取与候选保存入参校验 |
+| `src/main/memory/memory-manager.ts` | 开关、配置版本、运行环境与库状态探测、经用户确认的首次创建、全量画像与风格读取、记忆候选与设置页画像/风格保存（按注册表匹配归属→引擎 plan→commit；画像保存提交前剔除失效来源）、向宿主推送配置 |
+| `src/main/memory/ipc.ts` | 状态、开关、创建、正文读取、画像/风格读取与列表、画像/风格保存、候选保存等固定通道的调用者与参数校验 |
+| `src/shared/memory-api.ts` | 通道名、快照与结果契约、读取与写入入参校验 |
 | `src/shared-process/memory-runtime.ts` | 受管运行环境布局与清单校验、全局库位置、宿主配置的受限校验与序列化 |
 | `src/preload/memory.ts` | 固定通道调用与结果契约校验 |
 | `src/renderer/src/memory/services/memory.ts` | 页面桥接定位与响应校验 |
-| `src/renderer/src/memory/components/MemorySettingsSection.vue` | 开关、运行环境、库状态与创建表单 |
+| `src/renderer/src/memory/labels.ts` | 画像领域、依据与依据选项的共享展示文案 |
+| `src/renderer/src/memory/components/MemorySettingsSection.vue` | 开关、运行环境、库状态与创建表单；库可用时挂载画像与风格小节 |
+| `src/renderer/src/memory/components/MemoryProfileSection.vue` | 按四个领域列出全部画像，打开编辑对话框，保存后重读 |
+| `src/renderer/src/memory/components/MemoryProfileEditorDialog.vue` | 画像编辑：作用域、依据、标题与正文；领域锁定，来源记录沿用 |
+| `src/renderer/src/memory/components/MemoryStyleSection.vue` | 列出全部语气风格与原句条数，打开编辑对话框 |
+| `src/renderer/src/memory/components/MemoryStyleEditorDialog.vue` | 风格编辑：名称、场景、要点与原句样本的删改与补录 |
 
 ### 宿主与产品资源
 
@@ -51,7 +56,7 @@
 
 每轮请求的背景由扩展在宿主侧装配：`context` 钩子调用 `MemoryRuntime.background`，把结果作为 `display: false` 的 request-only 自定义消息置于消息列表首位再交给模型。因此背景不经过模型调用工具、不在界面渲染，正文也不写入会话；每次装配另追加一条 `pi-memory.injection.v1` 自定义条目（各段状态、条目身份与 240 字摘要），可在会话 JSONL 中核对本次到底注入了什么，它不进入模型上下文。
 
-展示端分两种：桌面输入 `/memory status` 时由渲染层打开「记忆注入」卡片，数据经只读请求读取当前绑定会话分支里最近一条审计条目（不跑命令、不读库），三个分段（适用偏好、常驻约定、当前项目近况）以 tab 切换，点击条目展开摘要；被截断时记录条目按 ID 走只读 `desktop:memory-read`，画像条目走只读 `desktop:memory-profile-read` 按领域取全文（只接受四个固定领域）；CLI 与带 `json` 参数的形式仍输出文本，`/memory status` 是摘要，`/memory status json` 是完整字段。正文读取只接受会话审计里出现过的真实 ID（1..50 条），不写库、不产生标注，也不提供关键词或数量扫描。
+展示端分两种：桌面输入 `/memory status` 时由渲染层打开「记忆注入」卡片，数据经只读请求读取当前绑定会话分支里最近一条审计条目（不跑命令、不读库），四个分段（适用偏好、语气风格、常驻约定、当前项目近况）以 tab 切换，点击条目展开摘要；被截断时记录条目按 ID 走只读 `desktop:memory-read`，画像条目走只读 `desktop:memory-profile-read` 按领域取全文（只接受四个固定领域），风格条目走只读 `desktop:memory-style-read` 按 1..10 个真实风格 ID 取要点与全部原句；CLI 与带 `json` 参数的形式仍输出文本，`/memory status` 是摘要，`/memory status json` 是完整字段。正文读取只接受会话审计里出现过的真实 ID（1..50 条），不写库、不产生标注，也不提供关键词或数量扫描。
 
 | 内容 | 时间范围 | 选取规则 | 上限 |
 | --- | --- | --- | --- |
@@ -71,7 +76,9 @@
 2. 用户切换开关：主进程保存配置后递增配置版本，再把新配置推给所有已就绪宿主；未就绪宿主在下次初始化时读到最新值。
 3. 首次创建：仅当库根既不存在或缺少 `memory.db` 时可用；先展示目标位置与时区并取得真实用户确认，再由受管解释器执行 `init`，创建后重新探测，失败不留下半成品结论。
 4. 会话使用：宿主在建立会话前把配置写入进程环境，扩展据此决定可用性；配置版本变化使旧会话状态与缓存整体作废。
-5. 库内容本身（记录、画像、月摘要、词项、标注事件、待确认计划）由扩展与存储引擎维护，本模块不读写正文，也不把库状态当作内容质量结论。卡片候选保存是唯一例外：用户在会话卡片上勾选并编辑后的候选经 `desktop:memory-save-candidates` 由主进程写入——plan→commit 在同一次调用内连续执行（用户确认已在卡片点击时完成，不复刻面向模型的计划展示校验），会话身份由引擎生成，agent 固定 `pi-desk`；全部候选与库内完全重复时引擎拒绝并就地显示，部分重复被跳过，并发保存以 BUSY 互斥。
+5. 库内容本身（记录、画像、月摘要、词项、标注事件、待确认计划、风格资产与取样排除集合）由扩展与存储引擎维护，本模块不读写正文（画像与风格的列表/保存入口只做受控转发），也不把库状态当作内容质量结论。写入入口有两个：
+   - 会话卡片：用户在卡片上勾选并编辑后的候选经 `desktop:memory-save-candidates` 由主进程写入——plan→commit 在同一次调用内连续执行（用户确认已在卡片点击时完成，不复刻面向模型的计划展示校验），会话身份由引擎生成，agent 固定 `pi-desk`；全部候选与库内完全重复时引擎拒绝并就地显示，部分重复被跳过，并发保存以 BUSY 互斥。
+   - 设置页：`desktop:memory-profile-save` 把画像保存成「新增一条并替换旧 ID」，提交前剔除已不存在的来源记录并把条数随回执返回；`desktop:memory-style-save` 保存风格，名称不变时覆盖本条、改名时替换本条，被删掉的原句进入排除集合。两者与卡片候选共用同一条 plan→commit 与同一把写入互斥。
 6. 没有「应查未查」检测：模型是否调用记忆工具不受约束，也不因此阻断任何写操作。只读的记忆工具（`memory_status`、`memory_search`、`memory_rules`、`memory_read`、`memory_profiles`）与轻量标注工具 `memory_reinforce`（只写库内去重事件）已加入门禁放行集合，写记忆正文的工具经写入闸门后直接提交。
 7. 配置读取失败与用户主动关闭在会话内不可区分：两者都表现为 `disabled_by: "user"`，`/memory status` 不单独报告读取故障。
 8. 记录的项目归属由宿主按项目注册表解析后随保存写入，写入的是记录级字段而非新的段标记。项目 id 由项目名派生：固定命名空间加归一化名称（NFKC、去首尾空白、小写）取 UUIDv5，同一名称在任意机器与任意 userData 下一致；改名即换身份，应用启动时先把记忆库归属按「旧 ID → 派生 ID」全部 reassign 成功才写回配置，失败保留旧 ID 并在下次启动幂等重试。启动只遍历当前注册表里的旧 ID，不在本机注册表内的旧归属由 `scripts/align-project-identity.mjs` 按「旧 ID → 项目名」映射改判，映射只能由人维护，脚本不按目录名或内容猜项目。不同目录使用同一项目名会派生同一 ID，目前靠命名约定避让。无项目归属即通用记忆，承载跨项目的方法与写法约定，未登记项目与独立 CLI 同样留空，读取与召回仍覆盖全库。

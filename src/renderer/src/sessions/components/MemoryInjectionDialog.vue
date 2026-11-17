@@ -8,6 +8,7 @@ import type {
 } from '../../../../shared/runtime-api'
 import type { MemoryProfileDomain } from '../../../../shared/memory-api'
 import { readMemoryInjection } from '../services/runtime'
+import { MEMORY_DOMAIN_LABELS } from '../../memory/labels'
 import { readMemoryProfiles, readMemoryRecords, readMemoryStyles } from '../../memory/services/memory'
 import AppButton from '../../ui/AppButton.vue'
 
@@ -41,9 +42,6 @@ const TYPE_LABELS: Record<string, string> = {
 const TYPE_TONES: Record<string, Tone> = {
   decision: 'accent', constraint: 'accent', issue: 'danger',
   progress: 'success', preference_evidence: 'warning', fact: 'muted'
-}
-const DOMAIN_LABELS: Record<string, string> = {
-  communication: '沟通', coding: '编码', learning: '学习', workflow: '流程'
 }
 const STATUS_LABELS: Record<string, string> = {
   provided: '已注入', unavailable: '不可用', not_requested: '未请求',
@@ -119,7 +117,7 @@ function profileRow(entry: MemoryInjectionProfileEntry): Row {
     id: entry.id,
     kind: 'profile',
     domain: entry.domain,
-    badge: DOMAIN_LABELS[entry.domain] ?? entry.domain,
+    badge: MEMORY_DOMAIN_LABELS[entry.domain] ?? entry.domain,
     tone: 'muted',
     title: entry.title !== '' ? entry.title : entry.scope,
     meta: isDomainScope ? '领域' : '全局',

@@ -1,9 +1,13 @@
-/** 记忆域的受限桥接：设置页用开关、状态与首次创建，会话卡片用按记录 ID、按领域与按风格 ID 的正文读取和候选保存；不向页面开放路径或命令。 */
-import { isMemoryProfileReadResult, isMemoryReadResult, isMemoryResult, isMemorySaveResult, isMemoryStyleReadResult } from '../../../../shared/memory-api'
+/** 记忆域的受限桥接：设置页用开关、状态、首次创建、画像／风格列表与保存（画像保存回执带被剔除的失效来源条数），会话卡片用按记录 ID、按领域与按风格 ID 的正文读取和候选保存；不向页面开放路径或命令。 */
+import {
+  isMemoryProfileListResult, isMemoryProfileReadResult, isMemoryProfileSaveResult, isMemoryReadResult,
+  isMemoryResult, isMemorySaveResult, isMemoryStyleListResult, isMemoryStyleReadResult, isMemoryStyleSaveResult
+} from '../../../../shared/memory-api'
 import type {
-  MemoryInitializeRequest, MemoryPreference, MemoryProfileDomain, MemoryProfileReadResult,
-  MemoryReadRequest, MemoryReadResult, MemoryResult, MemorySaveCandidatesRequest, MemorySaveResult,
-  MemoryStyleReadRequest, MemoryStyleReadResult
+  MemoryInitializeRequest, MemoryPreference, MemoryProfileDomain, MemoryProfileListResult, MemoryProfileReadResult,
+  MemoryProfileSaveRequest, MemoryProfileSaveResult, MemoryReadRequest, MemoryReadResult, MemoryResult,
+  MemorySaveCandidatesRequest, MemorySaveResult, MemoryStyleListResult, MemoryStyleReadRequest, MemoryStyleReadResult,
+  MemoryStyleSaveRequest, MemoryStyleSaveResult
 } from '../../../../shared/memory-api'
 
 interface MemoryBridge {
@@ -13,6 +17,10 @@ interface MemoryBridge {
   readonly readMemoryRecords?: (request: MemoryReadRequest) => Promise<unknown>
   readonly readMemoryProfiles?: (request: { readonly domain: MemoryProfileDomain }) => Promise<unknown>
   readonly readMemoryStyles?: (request: MemoryStyleReadRequest) => Promise<unknown>
+  readonly readMemoryProfilesList?: () => Promise<unknown>
+  readonly readMemoryStylesList?: () => Promise<unknown>
+  readonly saveMemoryProfile?: (request: MemoryProfileSaveRequest) => Promise<unknown>
+  readonly saveMemoryStyle?: (request: MemoryStyleSaveRequest) => Promise<unknown>
   readonly saveMemoryCandidates?: (request: MemorySaveCandidatesRequest) => Promise<unknown>
 }
 
@@ -136,4 +144,78 @@ export async function saveMemoryCandidates(request: MemorySaveCandidatesRequest)
 
 export function initializeMemory(timezone: string): Promise<MemoryResult> {
   return call(target => target.initializeMemory({ timezone }))
+}
+
+/**
+ * 设置页画像列表：一次取全部画像，用于展示与编辑；不按关键词、ID 或数量扫描。
+ */
+export async function loadMemoryProfiles(): Promise<MemoryProfileListResult> {
+  const target = bridge()
+  if (target === null || typeof target.readMemoryProfilesList !== 'function') {
+    return { ok: false, error: { code: 'BRIDGE_UNAVAILABLE', message: '当前环境没有桌面记忆接口。' } }
+  }
+  try {
+    const response = await target.readMemoryProfilesList()
+    if (!isMemoryProfileListResult(response)) {
+      return { ok: false, error: { code: 'INVALID_RESPONSE', message: '画像列表返回了不符合契约的结果。' } }
+    }
+    return response
+  } catch (error) {
+    return { ok: false, error: { code: 'INTERNAL_ERROR',
+      message: error instanceof Error ? error.message : '画像列表读取失败。' } }
+  }
+}
+
+/** 设置页风格列表：一次取全部风格与原句样本。 */
+export async function loadMemoryStyles(): Promise<MemoryStyleListResult> {
+  const target = bridge()
+  if (target === null || typeof target.readMemoryStylesList !== 'function') {
+    return { ok: false, error: { code: 'BRIDGE_UNAVAILABLE', message: '当前环境没有桌面记忆接口。' } }
+  }
+  try {
+    const response = await target.readMemoryStylesList()
+    if (!isMemoryStyleListResult(response)) {
+      return { ok: false, error: { code: 'INVALID_RESPONSE', message: '风格列表返回了不符合契约的结果。' } }
+    }
+    return response
+  } catch (error) {
+    return { ok: false, error: { code: 'INTERNAL_ERROR',
+      message: error instanceof Error ? error.message : '风格列表读取失败。' } }
+  }
+}
+
+/** 画像保存：保存即「新版本替换旧条目」，领域与来源由调用方按原条目传入。 */
+export async function saveMemoryProfile(request: MemoryProfileSaveRequest): Promise<MemoryProfileSaveResult> {
+  const target = bridge()
+  if (target === null || typeof target.saveMemoryProfile !== 'function') {
+    return { ok: false, error: { code: 'BRIDGE_UNAVAILABLE', message: '当前环境没有桌面记忆接口。' } }
+  }
+  try {
+    const response = await target.saveMemoryProfile(request)
+    if (!isMemoryProfileSaveResult(response)) {
+      return { ok: false, error: { code: 'INVALID_RESPONSE', message: '画像保存返回了不符合契约的结果。' } }
+    }
+    return response
+  } catch (error) {
+    return { ok: false, error: { code: 'INTERNAL_ERROR',
+      message: error instanceof Error ? error.message : '画像保存失败。' } }
+  }
+}
+
+/** 风格保存：未指定替换时同名按合并，指定替换（含本条自身）时按覆盖。 */
+export async function saveMemoryStyle(request: MemoryStyleSaveRequest): Promise<MemoryStyleSaveResult> {
+  const target = bridge()
+  if (target === null || typeof target.saveMemoryStyle !== 'function') {
+    return { ok: false, error: { code: 'BRIDGE_UNAVAILABLE', message: '当前环境没有桌面记忆接口。' } }
+  }
+  try {
+    const response = await target.saveMemoryStyle(request)
+    if (!isMemoryStyleSaveResult(response)) {
+      return { ok: false, error: { code: 'INVALID_RESPONSE', message: '风格保存返回了不符合契约的结果。' } }
+    }
+    return response
+  } catch (error) {
+    return { ok: false, error: { code: 'INTERNAL_ERROR',
+      message: error instanceof Error ? error.message : '风格保存失败。' } }
+  }
 }

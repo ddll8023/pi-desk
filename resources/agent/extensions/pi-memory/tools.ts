@@ -111,8 +111,9 @@ function receipt(operation: 'save' | 'profile' | 'style', plan: GeneratedPlan): 
 }
 
 /**
- * 已收录样本：读引擎风格列表，构造「会话 ID + 逐字原句」的键集合。
- * 读失败不阻断取样：按无已收录样本继续，并在结果里说明来源不可用。
+ * 已收录样本：库内风格的样本与用户删除过的原句（排除集合）合并成「会话 ID + 逐字原句」键集合。
+ * 读库失败不阻断取样：按无已收录样本继续，并在结果里说明来源不可用；
+ * 排除集合单独失败时只少一道去重，不影响取样本身。
  */
 async function usedStyleSamples(runtime: MemoryRuntime, signal: AbortSignal | undefined):
 Promise<{ usedKeys: Set<string>; usedSource: string }> {
@@ -128,10 +129,21 @@ Promise<{ usedKeys: Set<string>; usedSource: string }> {
         usedKeys.add(sampleKey(item.source_session, item.quote))
       }
     }
-    return { usedKeys, usedSource: usedKeys.size > 0 ? 'store' : 'empty' }
   } catch (error) {
     return { usedKeys, usedSource: `unavailable：${errorText(error)}` }
   }
+  let usedSource = usedKeys.size > 0 ? 'store' : 'empty'
+  try {
+    const data = await runtime.engine.styleExclusions(signal)
+    for (const value of array(data.exclusions)) {
+      const item = object(value)
+      if (typeof item.source_session !== 'string' || typeof item.quote !== 'string') continue
+      usedKeys.add(sampleKey(item.source_session, item.quote))
+    }
+    // 用户删掉的原句不该在下次蒸馏时又被取回来，因此排除集合与库内样本同属「已收录」。
+    if (usedKeys.size > 0) usedSource = 'store+exclusions'
+  } catch { /* 排除集合不可用时仍按库内样本去重。 */ }
+  return { usedKeys, usedSource }
 }
 
 export function registerMemoryTools(pi: ExtensionAPI, runtime: MemoryRuntime): void {
@@ -393,7 +405,7 @@ export function registerMemoryTools(pi: ExtensionAPI, runtime: MemoryRuntime): v
   // ---- 风格库：要点与原句随每轮背景注入；本组提供按需复核、取样与保存；不参与词法检索 ----
   pi.registerTool({
     name: 'style_sample', label: '取样用户发言样本',
-    description: '用户要求提炼自己的表达风格时先取样。只读本产品会话记录中用户本人发的消息，已剔除确认句、系统与技能注入段、代码、日志与路径；路径由宿主提供，不能指定。返回样本与过滤计数，用于判断语料是否够用；超出预算或会话上限时给出 has_more 与 next_offset。宿主未提供会话目录时直接报错，不回退其他路径。',
+    description: '用户要求提炼自己的表达风格时先取样。只读本产品会话记录中用户本人发的消息，已剔除确认句、系统与技能注入段、代码、日志与路径；已收录样本与用户删除过的原句一并剔除，路径由宿主提供，不能指定。返回样本与过滤计数，用于判断语料是否够用；超出预算或会话上限时给出 has_more 与 next_offset。宿主未提供会话目录时直接报错，不回退其他路径。',
     parameters: Type.Object({
       scope: Type.Optional(Type.Union([Type.Literal('current-project'), Type.Literal('all')])),
       days: Type.Optional(Type.Integer({ minimum: 1, maximum: 365 })),
@@ -478,7 +490,7 @@ export function registerMemoryTools(pi: ExtensionAPI, runtime: MemoryRuntime): v
   }, { additionalProperties: false })
   pi.registerTool({
     name: 'style_save', label: '保存风格资产', exposure: 'model-only', executionMode: 'sequential',
-    description: '仅在用户明确要求提炼或更新自己的表达风格时使用，并先经 style_sample 取样、核实语料规模。只保存工作表达类风格（提要求、评审意见、决策与收尾）；不用于对外文案、私人消息或需要体裁模板的成文材料——会话语料里没有这类体裁。同名即自动合并（保留 ID 与创建日期，样本去重追加，合计不超过 12 条），改名换条目用 replace_style_ids。生成计划后直接提交并返回回执，不接受 approved 或外部 plan_id。',
+    description: '仅在用户明确要求提炼或更新自己的表达风格时使用，并先经 style_sample 取样、核实语料规模。只保存工作表达类风格（提要求、评审意见、决策与收尾）；不用于对外文案、私人消息或需要体裁模板的成文材料——会话语料里没有这类体裁。同名且未指定替换时自动合并（保留 ID 与创建日期，样本去重追加，合计不超过 12 条）；若本条 name 与某条既有风格同名，把该既有风格的 ID 放进 replace_style_ids 即整体覆盖该条（样本按本次列表写入，可删改原句，至少保留 1 条，仅当用户明确要求覆盖时使用）；改名换条目同样用 replace_style_ids。生成计划后直接提交并返回回执，不接受 approved 或外部 plan_id。',
     parameters: Type.Object({ styles: Type.Array(StyleSchema, { minItems: 1, maxItems: 10 }) }, { additionalProperties: false }),
     outputSchema: Output, annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
     async execute(_id, params, signal, _onUpdate, ctx) {

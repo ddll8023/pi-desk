@@ -881,3 +881,56 @@ details[open] > summary .disclosure {
       transition: none;
     }
   }
+
+/* 记忆资产列表：画像与语气风格两个设置小节共用同一套行、徽标与摘要口径。 */
+.memory-asset-list {
+  margin-top: 0.75rem;
+  border-top: 1px solid var(--color-desk-line);
+}
+.memory-asset-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 0.5rem 0;
+}
+.memory-asset-row + .memory-asset-row {
+  border-top: 1px solid var(--color-desk-line);
+}
+.memory-asset-group {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  color: var(--color-desk-muted);
+  font-size: var(--text-2xs);
+  font-weight: 600;
+}
+.memory-asset-count {
+  color: var(--color-desk-muted);
+  font-family: var(--font-mono);
+  font-weight: 400;
+}
+.memory-asset-empty {
+  margin-top: 0.375rem;
+  color: var(--color-desk-muted);
+  font-size: var(--text-2xs);
+}
+/* 徽标只承载属性文字，不加语义色：属性之间没有轻重之分。 */
+.memory-asset-badge {
+  flex: none;
+  padding: 0.0625rem 0.375rem;
+  border: 1px solid var(--color-desk-line);
+  border-radius: var(--radius-desk-sm);
+  color: var(--color-desk-muted);
+  font-size: var(--text-2xs);
+  line-height: 1.6;
+  white-space: nowrap;
+}
+.memory-asset-excerpt {
+  margin-top: 0.125rem;
+  overflow: hidden;
+  color: var(--color-desk-muted);
+  font-size: var(--text-2xs);
+  line-height: 1.6;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

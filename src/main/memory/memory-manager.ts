@@ -1,10 +1,11 @@
 /**
- * 用户级全局记忆的桌面所有者：开关、受管运行时状态、库状态、首次初始化、按 ID 的正文与按领域的画像读取，以及会话卡片候选的保存。
+ * 用户级全局记忆的桌面所有者：开关、受管运行时状态、库状态、首次初始化、按 ID 的正文、按领域的画像与全量画像／风格读取，
+ * 以及会话卡片候选与设置页画像／风格保存（画像保存会在提交前剔除已失效的来源记录）。
  *
  * 只通过受管解释器与配套引擎执行固定动作；不读项目文件、不推断项目身份、不修改业务项目。
- * 库状态探测、正文读取与画像读取都是只读调用；创建只在用户明确确认且目标位置尚无可用库时执行，不覆盖既有数据。
- * 写入用户库的动作只有三处：安装级配置里的开关、经用户确认的首次创建，以及用户在卡片上点击保存的候选提交
- * （plan→commit 走引擎既有校验）；页面与宿主都只读这一份结果。
+ * 库状态探测、正文、画像与风格读取都是只读调用；创建只在用户明确确认且目标位置尚无可用库时执行，不覆盖既有数据。
+ * 写入用户库的动作只有四处：安装级配置里的开关、经用户确认的首次创建、用户点击卡片保存的候选，
+ * 以及用户在设置页点击保存的画像与风格（三种写入共用同一条 plan→commit，不另建第二条写入路径）；页面与宿主都只读这一份结果。
  */
 import { spawn } from 'node:child_process'
 import { stat } from 'node:fs/promises'
@@ -14,14 +15,18 @@ import type { DesktopConfigStore } from '../config/desktop-config-store'
 import { getSessionRoot } from '../sessions/session-store'
 import type { MemoryHostConfiguration, MemoryConfigurationProvider } from '../../shared-process/memory-runtime'
 import { managedMemoryConfiguration } from '../../shared-process/memory-runtime'
-import type { MemoryErrorCode, MemoryInitializeRequest, MemoryPreference, MemoryProfileDomain, MemoryProfileReadRecord, MemoryProfileReadResult, MemoryReadRecord, MemoryReadResult, MemoryResult, MemorySaveCandidatesRequest, MemorySaveResult, MemorySnapshot, MemoryStyleReadRecord, MemoryStyleReadResult, MemoryStyleSampleRecord } from '../../shared/memory-api'
+import type { MemoryErrorCode, MemoryInitializeRequest, MemoryPreference, MemoryProfileDomain, MemoryProfileListResult, MemoryProfileReadRecord, MemoryProfileReadResult, MemoryProfileSaveRequest, MemoryProfileSaveResult, MemoryReadRecord, MemoryReadResult, MemoryResult, MemorySaveCandidatesRequest, MemorySaveResult, MemorySnapshot, MemoryStyleListResult, MemoryStyleReadRecord, MemoryStyleReadResult, MemoryStyleSampleRecord, MemoryStyleSaveRequest, MemoryStyleSaveResult } from '../../shared/memory-api'
 
 const ENGINE_TIMEOUT_MS = 30_000
 const ENGINE_MAX_OUTPUT = 4 * 1024 * 1024
 /** 候选输入上限：与扩展侧引擎适配器同一量级，超限整份拒绝，不截断。 */
 const SAVE_INPUT_MAX_BYTES = 262_144
+/** 来源探测的批量上限：与引擎 `read` 的 1..50 一致；超过则分批读，不放弃过滤。 */
+const MEMORY_READ_BATCH = 50
 /** 引擎计划 ID：`s_` 前缀加 ULID 字母表，形态不符一律不提交。 */
 const ENGINE_PLAN_ID = /^s_[0-9A-HJKMNP-TV-Z]{26}$/
+/** 画像 ID：`p_` 前缀加 ULID 字母表；提交回执里的新画像 ID 按此校验。 */
+const PROFILE_ID = /^p_[0-9A-HJKMNP-TV-Z]{26}$/
 /** 权威数据只有一份库文件；库目录由配置给出，文件名固定。 */
 const STORE_FILE = 'memory.db'
 const SUPPORTED_PLATFORMS = ['win32', 'darwin']
@@ -51,12 +56,15 @@ function toReadRecord(value: unknown): MemoryReadRecord | null {
     topic: text(value.topic), status: text(value.status), content: value.content }
 }
 
-/** 画像行同样只搬展示字段；领域与作用域缺省时留空，由契约校验决定是否接受。 */
+/** 画像行只搬展示字段：依据与来源记录随行返回，设置页编辑时按原值带出（失效来源在提交前剔除）。 */
 function toProfileRecord(value: unknown): MemoryProfileReadRecord | null {
   if (!isRecord(value) || typeof value.id !== 'string' || typeof value.content !== 'string') return null
   const text = (item: unknown): string => (typeof item === 'string' ? item : '')
-  return { id: value.id, domain: text(value.domain), scope: text(value.scope),
-    title: text(value.title), content: value.content }
+  const sources = Array.isArray(value.source_record_ids)
+    ? value.source_record_ids.filter((item): item is string => typeof item === 'string')
+    : []
+  return { id: value.id, domain: text(value.domain), scope: text(value.scope), basis: text(value.basis),
+    title: text(value.title), content: value.content, source_record_ids: sources }
 }
 
 /**
@@ -85,8 +93,8 @@ export class MemoryManager {
   /** 配置版本：任一开关或资源变化都递增，用于让扩展侧丢弃旧会话状态。 */
   private revision = 0
   private initializing = false
-  /** 候选保存互斥：plan→commit 期间不接受第二次保存，避免两份计划交叉提交。 */
-  private savingCandidates = false
+  /** 写入互斥：三种 plan→commit 共用一个标记，避免两份计划交叉提交。 */
+  private writing = false
   readonly provider: MemoryConfigurationProvider = {
     read: hostEntry => this.configuration(hostEntry)
   }
@@ -384,14 +392,17 @@ export class MemoryManager {
   }
 
   /**
-   * 按领域读取画像正文：领域是固定枚举，不提供按 ID、关键词或数量扫描的入口；不写库、不产生标注。
-   * 引擎没有画像时返回空列表，不是失败——「没有画像」与「读不到」必须区分。
+   * 画像读取的唯一实现：`domain` 为空时读全部（设置页列表），否则只读该领域（会话注入卡展开）。
+   * 不写库、不产生标注；引擎没有画像时返回空列表，不是失败——「没有画像」与「读不到」必须区分。
    */
-  async readProfiles(domain: MemoryProfileDomain): Promise<MemoryProfileReadResult> {
+  private async loadProfiles(domain: MemoryProfileDomain | null): Promise<MemoryProfileListResult> {
     let configuration: MemoryHostConfiguration
     try { configuration = await this.configuration(this.options.hostEntry()) }
     catch { return { ok: false, error: { code: 'RUNTIME_MISSING', message: '受管记忆运行环境不可用' } } }
-    const result = await this.runEngine(configuration, ['profiles', '--domain', domain])
+    if (!configuration.available) {
+      return { ok: false, error: { code: 'RUNTIME_MISSING', message: configuration.error ?? '受管记忆运行环境不可用' } }
+    }
+    const result = await this.runEngine(configuration, domain === null ? ['profiles'] : ['profiles', '--domain', domain])
     try {
       const parsed: unknown = JSON.parse(result.text)
       if (isRecord(parsed) && parsed.ok === true && isRecord(parsed.data) && Array.isArray(parsed.data.profiles)) {
@@ -408,21 +419,34 @@ export class MemoryManager {
     return { ok: false, error: { code: 'INTERNAL_ERROR', message: this.describeFailure(result) } }
   }
 
+  /** 按领域读取画像正文：领域是固定枚举，不提供按 ID、关键词或数量扫描的入口。 */
+  async readProfiles(domain: MemoryProfileDomain): Promise<MemoryProfileReadResult> {
+    return this.loadProfiles(domain)
+  }
+
+  /** 设置页画像列表：读全部画像，不按领域收窄。 */
+  async listProfiles(): Promise<MemoryProfileListResult> {
+    return this.loadProfiles(null)
+  }
+
   /**
-   * 只读读取风格：ID 由调用方给出，只用引擎固定的 `style-read` 子命令。
-   * 样本按引擎顺序保留，缺字段的样本整条丢弃；返回条数与请求不一致时不冒充成功。
+   * 风格读取的唯一实现：`ids` 为空时读全部（设置页列表），否则按 ID 读（会话注入卡与按需复核）。
+   * 样本按引擎顺序保留，缺字段的样本整条丢弃；按 ID 读时返回条数与请求不一致不冒充成功。
    */
-  async readStyles(ids: readonly string[]): Promise<MemoryStyleReadResult> {
+  private async loadStyles(ids: readonly string[] | null): Promise<MemoryStyleListResult> {
     let configuration: MemoryHostConfiguration
     try { configuration = await this.configuration(this.options.hostEntry()) }
     catch { return { ok: false, error: { code: 'RUNTIME_MISSING', message: '受管记忆运行环境不可用' } } }
-    const result = await this.runEngine(configuration, ['style-read', ...ids])
+    if (!configuration.available) {
+      return { ok: false, error: { code: 'RUNTIME_MISSING', message: configuration.error ?? '受管记忆运行环境不可用' } }
+    }
+    const result = await this.runEngine(configuration, ids === null ? ['styles'] : ['style-read', ...ids])
     try {
       const parsed: unknown = JSON.parse(result.text)
       if (isRecord(parsed) && parsed.ok === true && isRecord(parsed.data) && Array.isArray(parsed.data.styles)) {
         const styles = parsed.data.styles
           .map(toStyleRecord).filter((style): style is MemoryStyleReadRecord => style !== null)
-        if (styles.length !== ids.length) {
+        if (ids !== null && styles.length !== ids.length) {
           return { ok: false, error: { code: 'INVALID_RESPONSE', message: '记忆引擎返回的风格与请求不一致。' } }
         }
         return { ok: true, data: { styles } }
@@ -436,29 +460,27 @@ export class MemoryManager {
     return { ok: false, error: { code: 'INTERNAL_ERROR', message: this.describeFailure(result) } }
   }
 
+  /** 按真实风格 ID 读取要点与全部原句：只供会话内的注入条目展开。 */
+  async readStyles(ids: readonly string[]): Promise<MemoryStyleReadResult> {
+    return this.loadStyles(ids)
+  }
+
+  /** 设置页风格列表：读全部风格与原句样本。 */
+  async listStyles(): Promise<MemoryStyleListResult> {
+    return this.loadStyles(null)
+  }
+
   /**
-   * 保存会话内卡片候选：用户在卡片上勾选并编辑后经既有引擎计划提交。
-   * 归属按项目注册表匹配 projectPath，拿不到留空（全局记忆）；plan 与 commit 在同一次调用内连续执行——
-   * 用户确认已在卡片点击时完成，不复刻扩展侧面向模型的计划展示校验；提交结果与计划不一致时报错，不自动重试。
+   * 保存会话内卡片候选：用户在卡片上勾选并编辑后经引擎计划提交。
+   * 归属按项目注册表匹配 projectPath，拿不到留空（全局记忆）；写入链固定在 planCommit 一处。
    * 会话身份由引擎生成（不传 session_id）：卡片保存是用户动作，与模型侧日记会话不同源，也不引入第二份会话映射。
    */
   async saveCandidates(request: MemorySaveCandidatesRequest): Promise<MemorySaveResult> {
-    if (this.savingCandidates) {
-      return { ok: false, error: { code: 'BUSY', message: '已有候选保存正在进行，请等待其真实结果。' } }
-    }
-    let configuration: MemoryHostConfiguration
-    try { configuration = await this.configuration(this.options.hostEntry()) }
-    catch {
-      return { ok: false, error: { code: 'RUNTIME_MISSING', message: '受管记忆运行环境不可用。' } }
-    }
-    if (!configuration.available) {
-      return { ok: false, error: { code: 'RUNTIME_MISSING', message: configuration.error ?? '受管记忆运行环境不可用。' } }
-    }
     const registry = await this.projects()
     const project = request.projectPath === ''
       ? null
       : registry.projects.find(item => item.path === request.projectPath) ?? null
-    const input = {
+    const result = await this.planCommit('save', {
       agent: 'pi-desk',
       records: request.candidates.map(candidate => ({
         type: candidate.type, topic: candidate.topic, content: candidate.content,
@@ -469,34 +491,192 @@ export class MemoryManager {
         ...(candidate.supersession_reason === undefined ? {} : { supersession_reason: candidate.supersession_reason })
       })),
       ...(project === null ? {} : { project_id: project.id })
+    })
+    if (!result.ok) return { ok: false, error: result.error }
+    const recordIds = result.commit.new_record_ids
+    if (!Array.isArray(recordIds) || recordIds.some(id => typeof id !== 'string')) {
+      return { ok: false, error: { code: 'INVALID_RESPONSE', message: '记忆引擎提交回执缺少记录 ID。' } }
     }
-    if (Buffer.byteLength(JSON.stringify(input)) > SAVE_INPUT_MAX_BYTES) {
-      return { ok: false, error: { code: 'INVALID_REQUEST', message: '候选超过输入上限，未截断或提交。' } }
+    return { ok: true, data: { savedCount: recordIds.length, recordIds: recordIds as readonly string[] } }
+  }
+
+  /**
+   * 保存设置页画像：引擎语义是「新增一条并替换旧条目」，因此保存等于新版本替换旧 ID。
+   * 领域与作用域由契约限定；来源记录沿用原条目，已不存在的来源会在提交前剔除（引擎会整批拒绝未知来源），
+   * 剔除结果随回执返回，由页面如实告知。写入锁从探测开始持有，避免并发请求重复拉起受管解释器。
+   */
+  async saveProfile(request: MemoryProfileSaveRequest): Promise<MemoryProfileSaveResult> {
+    if (this.writing) {
+      return { ok: false, error: { code: 'BUSY', message: '已有记忆写入正在进行，请等待其真实结果。' } }
     }
-    this.savingCandidates = true
+    this.writing = true
     try {
-      const plan = await this.runEngine(configuration, ['plan', 'save', '--input', '-'], input)
-      const planData = this.engineData(plan)
-      if (planData === null) {
-        return { ok: false, error: this.engineFailure(plan, '候选计划未能生成。') }
+      let configuration: MemoryHostConfiguration
+      try { configuration = await this.configuration(this.options.hostEntry()) }
+      catch { return { ok: false, error: { code: 'RUNTIME_MISSING', message: '受管记忆运行环境不可用。' } } }
+      if (!configuration.available) {
+        return { ok: false, error: { code: 'RUNTIME_MISSING', message: configuration.error ?? '受管记忆运行环境不可用。' } }
       }
+      const sources = await this.existingSources(configuration, request.sourceRecordIds)
+      if (!sources.ok) return { ok: false, error: sources.error }
+      const kept = new Set(sources.ids)
+      const droppedSourceIds = request.sourceRecordIds.filter(id => !kept.has(id))
+      const result = await this.planCommit('profile', {
+        domain: request.domain,
+        scope: request.scope,
+        basis: request.basis,
+        title: request.title,
+        content: request.content,
+        source_record_ids: sources.ids,
+        replace_profile_ids: request.replaceProfileIds
+      }, configuration, true)
+      if (!result.ok) return { ok: false, error: result.error }
+      // 新画像 ID 与替换目标都只在计划预览里出现，提交回执不带；缺失时如实报告「已提交但结果未确认」。
+      const preview = result.plan.new_profile
+      const profileId = isRecord(preview) && typeof preview.id === 'string' ? preview.id : ''
+      if (!PROFILE_ID.test(profileId)) {
+        return { ok: false, error: { code: 'INVALID_RESPONSE',
+          message: '画像已按计划提交，但计划缺少新画像 ID；请重新读取画像列表确认结果。' } }
+      }
+      const replaced = result.plan.replace_profile_ids
+      if (!Array.isArray(replaced)) {
+        return { ok: false, error: { code: 'INVALID_RESPONSE',
+          message: '画像已按计划提交，但计划缺少替换目标；请重新读取画像列表确认结果。' } }
+      }
+      const replacedIds = replaced.filter((id): id is string => typeof id === 'string' && PROFILE_ID.test(id))
+      if (replacedIds.length !== replaced.length) {
+        return { ok: false, error: { code: 'INVALID_RESPONSE',
+          message: '画像已按计划提交，但替换目标形态异常；请重新读取画像列表确认结果。' } }
+      }
+      return { ok: true, data: {
+        profileId,
+        replacedProfileIds: [...new Set(replacedIds)],
+        droppedSourceIds
+      } }
+    } finally {
+      this.writing = false
+    }
+  }
+
+  /**
+   * 提交前过滤已失效的来源记录：引擎对任一不存在的来源 ID 都整批拒绝，
+   * 而保存入口没有编辑来源的入口，不剔除会让这类画像在页面上永远保存失败。
+   * 整批读成功即按记录逐条确认；引擎明确报「不存在」时逐条探测；
+   * 读取本身失败（超时、非 JSON、引擎异常）直接返回错误，不把读取故障当成「来源已失效」。
+   */
+  private async existingSources(
+    configuration: MemoryHostConfiguration,
+    ids: readonly string[]
+  ): Promise<{ ok: true; ids: string[] } | { ok: false; error: { code: MemoryErrorCode; message: string } }> {
+    const kept: string[] = []
+    for (let index = 0; index < ids.length; index += MEMORY_READ_BATCH) {
+      const batch = ids.slice(index, index + MEMORY_READ_BATCH)
+      const result = await this.runEngine(configuration, ['read', ...batch])
+      const data = this.engineData(result)
+      if (data !== null && Array.isArray(data.records)) {
+        const present = new Set(data.records
+          .filter((record): record is Record<string, unknown> => isRecord(record))
+          .map(record => (typeof record.id === 'string' ? record.id : '')))
+        for (const id of batch) if (present.has(id)) kept.push(id)
+        continue
+      }
+      if (!this.engineMessage(result).includes('不存在')) {
+        return { ok: false, error: this.engineFailure(result, '来源记录读取失败，未提交。') }
+      }
+      // 引擎明确报存在缺失：逐条探测，只保留真实存在的记录。
+      for (const id of batch) {
+        const single = this.engineData(await this.runEngine(configuration, ['read', id]))
+        const present = single !== null && Array.isArray(single.records)
+          && single.records.some(record => isRecord(record) && record.id === id)
+        if (present) kept.push(id)
+      }
+    }
+    return { ok: true, ids: kept }
+  }
+
+  /** 引擎 JSON 输出里的错误消息；解析不到时回落到原始输出，用于区分「读取失败」与「记录不存在」。 */
+  private engineMessage(result: { code: number; text: string }): string {
+    try {
+      const parsed: unknown = JSON.parse(result.text)
+      if (isRecord(parsed) && isRecord(parsed.error) && typeof parsed.error.message === 'string') {
+        return parsed.error.message
+      }
+    } catch { /* 保留原始输出。 */ }
+    return result.text.trim().slice(0, 400)
+  }
+
+  /**
+   * 保存设置页风格：未指定替换且同名时按合并（样本去重追加），
+   * 指定 replaceStyleIds（可含本条自身）时按覆盖处理，由引擎在计划阶段判定。
+   */
+  async saveStyle(request: MemoryStyleSaveRequest): Promise<MemoryStyleSaveResult> {
+    const styles = request.styles.map(item => ({
+      name: item.name, scene: item.scene, points: item.points,
+      samples: item.samples.map(sample => ({
+        quote: sample.quote, source_session: sample.sourceSession, source_date: sample.sourceDate
+      })),
+      ...(item.replaceStyleIds.length === 0 ? {} : { replace_style_ids: item.replaceStyleIds })
+    }))
+    const result = await this.planCommit('style', { agent: 'pi-desk', styles })
+    if (!result.ok) return { ok: false, error: result.error }
+    const idList = (value: unknown): readonly string[] | null => (Array.isArray(value)
+      && value.every(id => typeof id === 'string') ? value as readonly string[] : null)
+    const newIds = idList(result.commit.new_style_ids)
+    const mergedIds = idList(result.commit.merged_style_ids)
+    const replacedIds = idList(result.commit.replaced_style_ids)
+    if (newIds === null || mergedIds === null || replacedIds === null) {
+      return { ok: false, error: { code: 'INVALID_RESPONSE', message: '记忆引擎提交回执缺少风格 ID。' } }
+    }
+    return { ok: true, data: { newStyleIds: newIds, mergedStyleIds: mergedIds, replacedStyleIds: replacedIds } }
+  }
+
+  /**
+   * 写入用户库的唯一链：互斥 → 受管配置 → 体积上限 → 计划 → 提交，并核对提交与计划一致。
+   * 日记候选、画像与风格三种写入共用；结果不一致时报错且不自动重试。
+   * `lockHeld` 表示调用方已持有写入互斥（例如画像保存要先探测来源），此时不再重复加锁。
+   */
+  private async planCommit(
+    operation: 'save' | 'profile' | 'style',
+    input: unknown,
+    prepared?: MemoryHostConfiguration,
+    lockHeld = false
+  ): Promise<{ ok: true; plan: Record<string, unknown>; commit: Record<string, unknown> }
+    | { ok: false; error: { code: MemoryErrorCode; message: string } }> {
+    if (!lockHeld) {
+      if (this.writing) {
+        return { ok: false, error: { code: 'BUSY', message: '已有记忆写入正在进行，请等待其真实结果。' } }
+      }
+      this.writing = true
+    }
+    try {
+      let configuration: MemoryHostConfiguration
+      if (prepared !== undefined) configuration = prepared
+      else {
+        try { configuration = await this.configuration(this.options.hostEntry()) }
+        catch { return { ok: false, error: { code: 'RUNTIME_MISSING', message: '受管记忆运行环境不可用。' } } }
+      }
+      if (!configuration.available) {
+        return { ok: false, error: { code: 'RUNTIME_MISSING', message: configuration.error ?? '受管记忆运行环境不可用。' } }
+      }
+      if (Buffer.byteLength(JSON.stringify(input)) > SAVE_INPUT_MAX_BYTES) {
+        return { ok: false, error: { code: 'INVALID_REQUEST', message: '写入内容超过输入上限，未截断或提交。' } }
+      }
+      const plan = await this.runEngine(configuration, ['plan', operation, '--input', '-'], input)
+      const planData = this.engineData(plan)
+      if (planData === null) return { ok: false, error: this.engineFailure(plan, '保存计划未能生成。') }
       const planId = planData.plan_id
       if (typeof planId !== 'string' || !ENGINE_PLAN_ID.test(planId)) {
         return { ok: false, error: { code: 'INVALID_RESPONSE', message: '记忆引擎返回了非法计划 ID；未提交。' } }
       }
       const commit = await this.runEngine(configuration, ['commit', '--plan-id', planId, '--approved'])
       const commitData = this.engineData(commit)
-      if (commitData === null || commitData.committed !== planId || commitData.operation !== 'save') {
+      if (commitData === null || commitData.committed !== planId || commitData.operation !== operation) {
         return { ok: false, error: { code: 'INTERNAL_ERROR',
           message: '提交结果与计划不一致，结果未确认；不得自动重试，请先核对记忆库实际状态。' } }
       }
-      const recordIds = commitData.new_record_ids
-      if (!Array.isArray(recordIds) || recordIds.some(id => typeof id !== 'string')) {
-        return { ok: false, error: { code: 'INVALID_RESPONSE', message: '记忆引擎提交回执缺少记录 ID。' } }
-      }
-      return { ok: true, data: { savedCount: recordIds.length, recordIds: recordIds as readonly string[] } }
+      return { ok: true, plan: planData, commit: commitData }
     } finally {
-      this.savingCandidates = false
+      if (!lockHeld) this.writing = false
     }
   }
 

@@ -6,7 +6,8 @@
 与既有打分口径，只把候选裁剪交给库内词项表，命中记录按标注会话数获得有界乘子。
 
 旧 Markdown 库只经 `migrate` 一次性导入；运行期不读也不写 Markdown，`export` 仅生成只读快照。
-风格资产存名称、适用场景、要点与 1..12 条原句样本，要点与原句随每轮背景注入（独立预算），不参与词项检索与月摘要。
+风格资产存名称、适用场景、要点与 1..12 条原句样本，要点与原句随每轮背景注入（独立预算），不参与词项检索与月摘要；
+用户删掉或覆盖时丢弃的原句另存在 `meta` 的 `style_sample_exclusions` 里，只用于取样去重，不进入背景。
 检索默认覆盖全库，可按注册表项目收窄；时间上默认分层召回：近窗口查日记，更早月份优先用月摘要代表。
 """
 import argparse, contextlib, datetime as dt, hashlib, json, math, re, secrets, sqlite3, sys, time, unicodedata, uuid
@@ -25,6 +26,9 @@ STYLE_ID_RE = re.compile(r'^t_[0-9A-HJKMNP-TV-Z]{26}$')
 STYLE_BATCH_MAX = 10
 STYLE_SAMPLE_MAX = 12
 STYLE_QUOTE_MAX = 1000
+# 已被用户删除的原句按「来源会话 + 逐字原句」记在 meta 里：条目被覆盖删除后样本随之删除，
+# 排除记录必须继续有效，否则下次取样会把用户明确删掉的原句再取回来。
+STYLE_EXCLUSION_META_KEY = 'style_sample_exclusions'
 TYPES = {'decision','constraint','progress','issue','fact','preference_evidence'}
 RULE_TYPES = {'decision','constraint'}
 # 非规则类记录只用于「项目近况」，不参与常驻约定的合并与替代。
@@ -903,6 +907,36 @@ def public_style(row: dict) -> dict:
     return out
 
 
+def style_exclusions(conn: sqlite3.Connection) -> list[dict]:
+    """已被用户删除的原句：按「来源会话 + 逐字原句」排除；缺键视为空集合。
+
+    与 style_samples 分开存放：样本随条目删除，排除记录必须比条目活得长。
+    集合只在取样去重时使用，不关联风格条目，也不进入背景注入与词法检索。
+    """
+    row=conn.execute('SELECT value FROM meta WHERE key=?',(STYLE_EXCLUSION_META_KEY,)).fetchone()
+    if row is None or not row[0]: return []
+    try: data=json.loads(row[0])
+    except json.JSONDecodeError: expect(False,'DB_INVALID：风格排除集合不可解析')
+    expect(isinstance(data,list),'DB_INVALID：风格排除集合格式无效')
+    out=[]
+    for item in data:
+        expect(isinstance(item,dict) and isinstance(item.get('source_session'),str)
+               and isinstance(item.get('quote'),str),'DB_INVALID：风格排除条目无效')
+        out.append({'source_session':item['source_session'],'quote':item['quote']})
+    return out
+
+
+def style_exclusions_view(root: Path) -> dict:
+    """取样去重用的只读视图：只给键，不含条目归属，也不进入背景注入。"""
+    with connect(root) as conn:
+        require_version(conn)
+        version=change_seq(conn)
+        rows=style_exclusions(conn)
+    return {'memory_scope':'global','store_version':version,'total_exclusions':len(rows),
+            'exclusions':rows,
+            'note':'已被用户删除的原句：只在取样去重时排除，不关联风格条目，也不进入背景注入'}
+
+
 def styles_view(root: Path) -> dict:
     with connect(root) as conn:
         require_version(conn)
@@ -1208,11 +1242,21 @@ def prepare(root: Path, op: str, data: dict) -> dict:
                 expect(all(sid not in claimed for sid in targets),'同一条既有风格不能在本次计划中被重复处理')
                 samples=style_samples_payload(item.get('samples'))
                 same=by_name.get(name)
-                if same is not None:
+                if same is not None and same['id'] in targets:
+                    # 显式覆盖：把同名条目的 ID 放进 replace_style_ids 表示整体替换这一条，
+                    # 样本按本次列表写入，不再与旧样本合并（设置页删改原句走这条）。
+                    # 提交段先删 replaced_ids 再插入，唯一名称索引不会冲突；
+                    # 创建日期与来源会话沿用旧条目，避免一次编辑被读成一次新蒸馏。
+                    claimed.add(same['id']);claimed.update(targets)
+                    replaced_ids.extend(targets)
+                    styles.append({'id':ulid('t'),'name':name,'scene':scene,'points':points,'samples':samples,
+                                   'date':same['date'],'session_id':same['session_id'],'agent':same['agent']})
+                elif same is not None:
                     # 同名即合并：保留既有 ID、首次创建日期与来源会话，只完善场景、要点与样本，
                     # 使模型可以「同场景复用同一名称」而不让条数随蒸馏次数膨胀。
-                    expect(same['id'] not in targets,
-                           f'同名条目按合并处理，不要把它的 ID 放进 replace_style_ids: {name}')
+                    # 同时带 replace_style_ids 会把被替换条目的内容合并进这一条，语义混杂，直接拒绝。
+                    expect(not targets,
+                           f'名称 {name} 属于另一条已有风格；改名请换唯一名称，覆盖同名条目请把它的 ID 放进 replace_style_ids: {name}')
                     expect(same['id'] not in claimed,'同一条既有风格不能在本次计划中被重复处理')
                     claimed.add(same['id']);claimed.update(targets)
                     replaced_ids.extend(targets);merged_rows.append(same)
@@ -1369,6 +1413,23 @@ def commit(root: Path, plan_id: str) -> dict:
                     write_summary_terms(conn,month,position,terms)
             elif op=='style':
                 # 覆盖是显式替换：先删旧条目（样本随外键级联删除），再写入本次候选。
+                # 删除前先算出「旧样本没出现在最终列表里」的原句，写入排除集合：
+                # 用户明确删掉的样本不该在下次蒸馏时又被取样回来。
+                final={(sample['source_session'],sample['quote'])
+                       for style in data['styles'] for sample in style['samples']}
+                stale_ids=list(data['replaced_ids'])+[style['id'] for style in data['styles'] if style.get('merge')]
+                removed=[]
+                for style_id in stale_ids:
+                    # 显式转元组：不依赖 sqlite3.Row 的哈希与解包语义去重。
+                    removed.extend(tuple(row) for row in conn.execute(
+                        'SELECT source_session,quote FROM style_samples WHERE style_id=?',(style_id,)).fetchall())
+                fresh=[{'source_session':session,'quote':quote} for session,quote in dict.fromkeys(removed)
+                       if (session,quote) not in final]
+                if fresh:
+                    dropped={(item['source_session'],item['quote']) for item in fresh}
+                    kept=[item for item in style_exclusions(conn)
+                          if (item['source_session'],item['quote']) not in dropped]
+                    meta_patch(conn,{STYLE_EXCLUSION_META_KEY:compact(kept+fresh)})
                 for sid in data['replaced_ids']:
                     conn.execute('DELETE FROM styles WHERE id=?',(sid,))
                 for style in data['styles']:
@@ -1378,10 +1439,12 @@ def commit(root: Path, plan_id: str) -> dict:
                                      (style['scene'],style['points'],data['saved_at'],style['id']))
                         conn.execute('DELETE FROM style_samples WHERE style_id=?',(style['id'],))
                     else:
+                        # 覆盖条目自带原条的日期与来源会话；新增条目才用本次提交的顶层值。
                         conn.execute('INSERT INTO styles(id,date,session_id,agent,saved_at,name,scene,points) '
                                      'VALUES(?,?,?,?,?,?,?,?)',
-                                     (style['id'],data['date'],data['session_id'],data['agent'],data['saved_at'],
-                                      style['name'],style['scene'],style['points']))
+                                     (style['id'],style.get('date',data['date']),
+                                      style.get('session_id',data['session_id']),style.get('agent',data['agent']),
+                                      data['saved_at'],style['name'],style['scene'],style['points']))
                     conn.executemany('INSERT INTO style_samples(style_id,position,quote,source_session,source_date) '
                                      'VALUES(?,?,?,?,?)',
                                      [(style['id'],position,sample['quote'],sample['source_session'],
@@ -1815,6 +1878,7 @@ def main() -> None:
     ms=sub.add_parser('month-source');ms.add_argument('month');ms.add_argument('--offset',type=int,default=0);ms.add_argument('--limit',type=int,default=50);ms.add_argument('--closed-today-confirmed',action='store_true')
     rr=sub.add_parser('read');rr.add_argument('ids',nargs='+')
     sub.add_parser('styles')
+    sub.add_parser('style-exclusions')
     sr2=sub.add_parser('style-read');sr2.add_argument('ids',nargs='+')
     rc=sub.add_parser('reinforce');rc.add_argument('--input',required=True,choices=['-'])
     pr=sub.add_parser('profiles');pr.add_argument('--domain',choices=sorted(DOMAINS))
@@ -1881,6 +1945,8 @@ def main() -> None:
             result=indexed_read(root,args.ids)
         elif args.cmd=='styles':
             result=styles_view(root)
+        elif args.cmd=='style-exclusions':
+            result=style_exclusions_view(root)
         elif args.cmd=='style-read':
             result=style_read_view(root,args.ids)
         elif args.cmd=='reinforce':

@@ -1,7 +1,9 @@
-<!-- 用户级全局记忆设置页：开关、受管运行时、库状态与首次创建；不覆盖既有库、不推断项目身份。 -->
+<!-- 用户级全局记忆设置页：开关、受管运行时、库状态与首次创建，以及库可用时的画像与语气风格展示与编辑；不覆盖既有库、不推断项目身份。 -->
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import AppButton from '../../ui/AppButton.vue'
+import MemoryProfileSection from './MemoryProfileSection.vue'
+import MemoryStyleSection from './MemoryStyleSection.vue'
 import { initializeMemory, loadMemoryStatus, setMemoryEnabled } from '../services/memory'
 import type { MemorySnapshot } from '../../../../shared/memory-api'
 
@@ -9,7 +11,9 @@ const snapshot = ref<MemorySnapshot | null>(null)
 const loading = ref(true)
 const busy = ref(false)
 const error = ref<string | null>(null)
-const feedback = ref<string | null>(null)
+/** 开关结果与建库结果分开：两种反馈分别留在自己的小节里。 */
+const toggleFeedback = ref<string | null>(null)
+const libraryFeedback = ref<string | null>(null)
 const timezone = ref<string>('UTC')
 
 /** 默认给系统时区：用户仍可改成任意合法 IANA 名称后重新创建。 */
@@ -29,30 +33,30 @@ async function refresh(): Promise<void> {
 async function toggle(enabled: boolean): Promise<void> {
   if (busy.value || snapshot.value === null || snapshot.value.enabled === enabled) return
   busy.value = true
-  feedback.value = null
+  toggleFeedback.value = null
   const result = await setMemoryEnabled(enabled)
   busy.value = false
   if (!result.ok) { error.value = result.error.message; return }
   error.value = null
   snapshot.value = result.data
-  feedback.value = enabled ? '已开启全局记忆。' : '已停用全局记忆；既有记录仍然保留。'
+  toggleFeedback.value = enabled ? '已开启全局记忆。' : '已停用全局记忆；既有记录仍然保留。'
 }
 
 async function create(): Promise<void> {
   if (busy.value) return
   busy.value = true
-  feedback.value = null
+  libraryFeedback.value = null
   const result = await initializeMemory(timezone.value.trim() || 'UTC')
   busy.value = false
   if (!result.ok) {
     // 用户取消不是故障：只提示未创建，不当作错误条。
-    if (result.error.code === 'CANCELLED') { feedback.value = '已取消，未创建记忆库。'; return }
+    if (result.error.code === 'CANCELLED') { libraryFeedback.value = '已取消，未创建记忆库。'; return }
     error.value = result.error.message
     return
   }
   error.value = null
   snapshot.value = result.data
-  feedback.value = '记忆库已创建，可以开始记录。'
+  libraryFeedback.value = '记忆库已创建，可以开始记录。'
 }
 
 const libraryLabels: Record<MemorySnapshot['library']['state'], string> = {
@@ -119,7 +123,7 @@ onMounted(() => {
         <p v-if="snapshot.notice !== null" role="status" class="status-notice status-notice-warn mt-3">
           {{ snapshot.notice }}
         </p>
-        <p v-if="feedback !== null" role="status" class="mt-3 text-2xs text-desk-muted">{{ feedback }}</p>
+        <p v-if="toggleFeedback !== null" role="status" class="mt-3 text-2xs text-desk-muted">{{ toggleFeedback }}</p>
       </section>
 
       <section class="settings-section" aria-labelledby="settings-memory-runtime">
@@ -208,7 +212,15 @@ onMounted(() => {
             </p>
           </div>
         </template>
+
+        <p v-if="libraryFeedback !== null" role="status" class="mt-3 text-2xs text-desk-muted">
+          {{ libraryFeedback }}
+        </p>
       </section>
+
+      <!-- 画像与风格只在库可用时出现：缺库或库不可用时没有可展示的资产。 -->
+      <MemoryProfileSection v-if="snapshot.library.state === 'ready'" />
+      <MemoryStyleSection v-if="snapshot.library.state === 'ready'" />
     </template>
   </div>
 </template>

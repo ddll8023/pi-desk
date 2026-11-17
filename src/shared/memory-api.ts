@@ -37,8 +37,12 @@ export interface MemoryProfileReadRecord {
   readonly id: string
   readonly domain: string
   readonly scope: string
+  /** 依据来源：用户明确表达或已展示依据并确认的推测；编辑保存时原样回传。 */
+  readonly basis: string
   readonly title: string
   readonly content: string
+  /** 提炼依据的日记记录 ID；编辑保存时原样回传，避免一次编辑把来源洗掉。 */
+  readonly source_record_ids: readonly string[]
 }
 export type MemoryProfileReadResult =
   | { readonly ok: true; readonly data: { readonly profiles: readonly MemoryProfileReadRecord[] } }
@@ -91,6 +95,10 @@ export interface MemoryApi {
   readonly readMemoryRecords: (request: MemoryReadRequest) => Promise<MemoryReadResult>
   readonly readMemoryProfiles: (request: MemoryProfileReadRequest) => Promise<MemoryProfileReadResult>
   readonly readMemoryStyles: (request: MemoryStyleReadRequest) => Promise<MemoryStyleReadResult>
+  readonly readMemoryProfilesList: () => Promise<MemoryProfileListResult>
+  readonly readMemoryStylesList: () => Promise<MemoryStyleListResult>
+  readonly saveMemoryProfile: (request: MemoryProfileSaveRequest) => Promise<MemoryProfileSaveResult>
+  readonly saveMemoryStyle: (request: MemoryStyleSaveRequest) => Promise<MemoryStyleSaveResult>
   readonly saveMemoryCandidates: (request: MemorySaveCandidatesRequest) => Promise<MemorySaveResult>
 }
 
@@ -173,8 +181,12 @@ function isMemoryProfileReadRecord(value: unknown): value is MemoryProfileReadRe
   return typeof value.id === 'string' && PROFILE_ID.test(value.id)
     && typeof value.domain === 'string' && (MEMORY_PROFILE_DOMAINS as readonly string[]).includes(value.domain)
     && typeof value.scope === 'string' && /^(global|domain:[a-z0-9-]{1,64})$/.test(value.scope)
-    && typeof value.title === 'string' && value.title.length <= 300
+    && typeof value.basis === 'string' && value.basis.length <= 64
+    && typeof value.title === 'string' && value.title.length <= MEMORY_PROFILE_TITLE_MAX
     && typeof value.content === 'string' && value.content.length <= 20_000
+    && Array.isArray(value.source_record_ids)
+    && value.source_record_ids.length <= MEMORY_LIST_MAX_ITEMS
+    && value.source_record_ids.every(id => typeof id === 'string' && RECORD_ID.test(id))
 }
 
 export function isMemoryProfileReadResult(value: unknown): value is MemoryProfileReadResult {
@@ -317,4 +329,181 @@ export function isMemorySaveResult(value: unknown): value is MemorySaveResult {
     && typeof value.error.code === 'string'
     && ['FORBIDDEN', 'INVALID_REQUEST', 'INTERNAL_ERROR', 'CANCELLED', 'RUNTIME_MISSING', 'STORE_UNAVAILABLE',
       'INITIALIZATION_FAILED', 'BUSY', 'BRIDGE_UNAVAILABLE', 'INVALID_RESPONSE'].includes(String(value.error.code))
+}
+
+/**
+ * 设置页查看与编辑画像、语气风格：列表通道无参数，保存通道走引擎 `plan` → `commit`。
+ * 页面不指定计划 ID、库位置或批准标志，也不提供新建与删除——引擎没有对应的计划操作。
+ */
+export const MEMORY_PROFILES_CHANNEL = 'desktop:memory-profiles'
+export const MEMORY_STYLES_CHANNEL = 'desktop:memory-styles'
+export const MEMORY_PROFILE_SAVE_CHANNEL = 'desktop:memory-profile-save'
+export const MEMORY_STYLE_SAVE_CHANNEL = 'desktop:memory-style-save'
+
+/** 列表通道的条数上限：只约束请求体积，超限整份拒绝，不静默截断。 */
+export const MEMORY_LIST_MAX_ITEMS = 200
+/** 画像标题上限：读、写校验器与设置页输入框共用同一数值。 */
+export const MEMORY_PROFILE_TITLE_MAX = 300
+/** 单次保存的风格条数与单条样本上限：与引擎写入语义一致。 */
+export const MEMORY_STYLE_SAVE_MAX_ITEMS = 10
+export const MEMORY_STYLE_SAMPLE_MAX = 12
+export const MEMORY_STYLE_QUOTE_MAX = 1_000
+export const MEMORY_STYLE_NAME_MAX = 200
+export const MEMORY_STYLE_SCENE_MAX = 2_000
+export const MEMORY_STYLE_POINTS_MAX = 4_000
+
+export type MemoryProfileListResult =
+  | { readonly ok: true; readonly data: { readonly profiles: readonly MemoryProfileReadRecord[] } }
+  | { readonly ok: false; readonly error: { readonly code: MemoryErrorCode; readonly message: string } }
+
+export type MemoryStyleListResult =
+  | { readonly ok: true; readonly data: { readonly styles: readonly MemoryStyleReadRecord[] } }
+  | { readonly ok: false; readonly error: { readonly code: MemoryErrorCode; readonly message: string } }
+
+/** 画像依据：与引擎枚举同值，页面只能二选一。 */
+export const MEMORY_PROFILE_BASES = ['explicit', 'inferred_confirmed'] as const
+export type MemoryProfileBasis = typeof MEMORY_PROFILE_BASES[number]
+
+/**
+ * 画像保存请求：领域锁定（引擎要求替换目标同领域），作用域只能是全库或本领域。
+ * 保存即「新增一条并替换旧 ID」，来源记录 ID 沿用原条目（失效项在提交前剔除），页面不编辑来源。
+ */
+export interface MemoryProfileSaveRequest {
+  readonly domain: MemoryProfileDomain
+  readonly scope: string
+  readonly basis: MemoryProfileBasis
+  readonly title: string
+  readonly content: string
+  readonly sourceRecordIds: readonly string[]
+  readonly replaceProfileIds: readonly string[]
+}
+export type MemoryProfileSaveResult =
+  | { readonly ok: true; readonly data: {
+    readonly profileId: string
+    readonly replacedProfileIds: readonly string[]
+    /** 提交前被剔除的失效来源记录 ID：页面据此如实提示，不静默丢来源。 */
+    readonly droppedSourceIds: readonly string[]
+  } }
+  | { readonly ok: false; readonly error: { readonly code: MemoryErrorCode; readonly message: string } }
+
+/** 风格样本：原句逐字保留；设置页手工补录的样本来源会话记为 `manual`。 */
+export interface MemoryStyleSaveSample {
+  readonly quote: string
+  readonly sourceSession: string
+  readonly sourceDate: string
+}
+export interface MemoryStyleSaveItem {
+  readonly name: string
+  readonly scene: string
+  readonly points: string
+  readonly samples: readonly MemoryStyleSaveSample[]
+  /** 被这条保存取代的旧风格 ID：含同名条目时按覆盖处理，不含且同名时按合并处理。 */
+  readonly replaceStyleIds: readonly string[]
+}
+export interface MemoryStyleSaveRequest { readonly styles: readonly MemoryStyleSaveItem[] }
+export type MemoryStyleSaveResult =
+  | { readonly ok: true; readonly data: {
+    readonly newStyleIds: readonly string[]
+    readonly mergedStyleIds: readonly string[]
+    readonly replacedStyleIds: readonly string[]
+  } }
+  | { readonly ok: false; readonly error: { readonly code: MemoryErrorCode; readonly message: string } }
+
+/** 保存类结果共用同一失败形状；错误码由主进程给出，这里只校验形态。 */
+function isFailureResult(value: Record<string, unknown>): boolean {
+  return value.ok === false && record(value.error) && typeof value.error.message === 'string'
+    && typeof value.error.code === 'string'
+}
+
+/** ID 名单：形态匹配、不重复、不超过上限；空数组合法（表示不引用、不替换）。 */
+function isIdList(value: unknown, pattern: RegExp, maxItems: number): boolean {
+  return Array.isArray(value) && value.length <= maxItems
+    && value.every(item => typeof item === 'string' && pattern.test(item))
+    && new Set(value as readonly string[]).size === value.length
+}
+
+export function isMemoryProfileListResult(value: unknown): value is MemoryProfileListResult {
+  if (!record(value)) return false
+  if (value.ok === true) {
+    return record(value.data) && Array.isArray(value.data.profiles)
+      && value.data.profiles.length <= MEMORY_LIST_MAX_ITEMS && value.data.profiles.every(isMemoryProfileReadRecord)
+  }
+  return isFailureResult(value)
+}
+
+export function isMemoryStyleListResult(value: unknown): value is MemoryStyleListResult {
+  if (!record(value)) return false
+  if (value.ok === true) {
+    return record(value.data) && Array.isArray(value.data.styles)
+      && value.data.styles.length <= MEMORY_LIST_MAX_ITEMS && value.data.styles.every(isMemoryStyleReadRecord)
+  }
+  return isFailureResult(value)
+}
+
+const PROFILE_SCOPE = /^(global|domain:[a-z0-9-]{1,64})$/
+const PROFILE_SAVE_FIELDS = ['domain', 'scope', 'basis', 'title', 'content', 'sourceRecordIds', 'replaceProfileIds'] as const
+
+function hasExactFields(value: Record<string, unknown>, fields: readonly string[]): boolean {
+  return Object.keys(value).length === fields.length && Object.keys(value).every(key => fields.includes(key))
+}
+
+export function isMemoryProfileSaveRequest(value: unknown): value is MemoryProfileSaveRequest {
+  if (!record(value) || !hasExactFields(value, PROFILE_SAVE_FIELDS)) return false
+  const domain = value.domain
+  if (typeof domain !== 'string' || !(MEMORY_PROFILE_DOMAINS as readonly string[]).includes(domain)) return false
+  if (typeof value.scope !== 'string' || !PROFILE_SCOPE.test(value.scope)) return false
+  // 作用域只有「全库」与「本领域」两种：跨领域作用域会让画像落在错误领域生效，直接拒绝。
+  if (value.scope.startsWith('domain:') && value.scope !== `domain:${domain}`) return false
+  if (typeof value.basis !== 'string' || !(MEMORY_PROFILE_BASES as readonly string[]).includes(value.basis)) return false
+  if (!boundedText(value.title, MEMORY_PROFILE_TITLE_MAX) || !boundedText(value.content, MEMORY_CONTENT_MAX)) return false
+  // 来源上限与读侧同一数值：读得到就必须存得下，否则 51..200 条来源的画像在页面上可读却永远存不了。
+  return isIdList(value.sourceRecordIds, RECORD_ID, MEMORY_LIST_MAX_ITEMS)
+    && isIdList(value.replaceProfileIds, PROFILE_ID, MEMORY_REFS_MAX)
+}
+
+export function isMemoryProfileSaveResult(value: unknown): value is MemoryProfileSaveResult {
+  if (!record(value)) return false
+  if (value.ok === true) {
+    return record(value.data) && typeof value.data.profileId === 'string' && PROFILE_ID.test(value.data.profileId)
+      && isIdList(value.data.replacedProfileIds, PROFILE_ID, MEMORY_REFS_MAX)
+      && isIdList(value.data.droppedSourceIds, RECORD_ID, MEMORY_REFS_MAX)
+  }
+  return isFailureResult(value)
+}
+
+const SAMPLE_FIELDS = ['quote', 'sourceSession', 'sourceDate'] as const
+const STYLE_ITEM_FIELDS = ['name', 'scene', 'points', 'samples', 'replaceStyleIds'] as const
+
+function isMemoryStyleSaveSample(value: unknown): value is MemoryStyleSaveSample {
+  if (!record(value) || !hasExactFields(value, SAMPLE_FIELDS)) return false
+  return boundedText(value.quote, MEMORY_STYLE_QUOTE_MAX) && boundedText(value.sourceSession, 200)
+    && typeof value.sourceDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value.sourceDate)
+}
+
+export function isMemoryStyleSaveItem(value: unknown): value is MemoryStyleSaveItem {
+  if (!record(value) || !hasExactFields(value, STYLE_ITEM_FIELDS)) return false
+  if (!boundedText(value.name, MEMORY_STYLE_NAME_MAX) || !boundedText(value.scene, MEMORY_STYLE_SCENE_MAX)) return false
+  if (!boundedText(value.points, MEMORY_STYLE_POINTS_MAX)) return false
+  const { samples } = value
+  if (!Array.isArray(samples) || samples.length < 1 || samples.length > MEMORY_STYLE_SAMPLE_MAX) return false
+  if (!samples.every(item => isMemoryStyleSaveSample(item))) return false
+  return isIdList(value.replaceStyleIds, STYLE_ID, MEMORY_STYLE_SAVE_MAX_ITEMS)
+}
+
+export function isMemoryStyleSaveRequest(value: unknown): value is MemoryStyleSaveRequest {
+  if (!record(value) || Object.keys(value).length !== 1) return false
+  const { styles } = value
+  return Array.isArray(styles) && styles.length >= 1 && styles.length <= MEMORY_STYLE_SAVE_MAX_ITEMS
+    && styles.every(item => isMemoryStyleSaveItem(item))
+}
+
+export function isMemoryStyleSaveResult(value: unknown): value is MemoryStyleSaveResult {
+  if (!record(value)) return false
+  if (value.ok === true) {
+    return record(value.data)
+      && isIdList(value.data.newStyleIds, STYLE_ID, MEMORY_STYLE_SAVE_MAX_ITEMS)
+      && isIdList(value.data.mergedStyleIds, STYLE_ID, MEMORY_STYLE_SAVE_MAX_ITEMS)
+      && isIdList(value.data.replacedStyleIds, STYLE_ID, MEMORY_STYLE_SAVE_MAX_ITEMS)
+  }
+  return isFailureResult(value)
 }
