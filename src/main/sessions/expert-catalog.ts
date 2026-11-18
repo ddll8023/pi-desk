@@ -44,7 +44,8 @@ function toView(definition: ExpertDefinition): SessionExpertView {
     toolsMode: definition.toolsMode,
     toolIds: definition.toolIds,
     toolAddIds: definition.toolAddIds,
-    toolRemoveIds: definition.toolRemoveIds
+    toolRemoveIds: definition.toolRemoveIds,
+    writeScope: definition.writeScope
   }
 }
 

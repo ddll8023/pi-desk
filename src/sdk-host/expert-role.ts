@@ -3,6 +3,7 @@
  *
  * 只写身份、方法与输出规范，不增删工具本身、不改预算与权限——技能、MCP 与工具范围的收窄由装配层（`expert-capability`）完成，
  * 这里只把结果如实写成一句范围说明，避免模型把未加载的能力当成可用。
+ * 写入范围同样只写一句说明：真正拦截越界写入的是 `expert-write-guard`，提示文字不构成约束。
  * 引用了不可用技能、或快速模式剔掉了它引用的规范时，在段尾说明，避免模型把没加载的技能当成已加载。
  */
 import { join } from 'node:path'
@@ -20,6 +21,8 @@ export interface ExpertRoleOptions {
   readonly mode?: ExecutionMode
   /** 本次会话的能力范围；缺省或不限制时不写额外说明。 */
   readonly scope?: ExpertCapabilityScope
+  /** 本次会话的写入范围；`null` 或缺省表示不限制，空数组表示只读。 */
+  readonly writeScope?: readonly string[] | null
 }
 
 /** 角色段文本：专家正文按统一上限裁剪后进入，不摘缩也不改写定义文件；改定义文件即改变下一轮的角色。 */
@@ -41,7 +44,17 @@ export function expertRoleSection(definition: ExpertDefinition, options: ExpertR
   // 收窄是装配层做的，模型看不到范围外的技能与服务器；不说清会反复尝试调用不存在的能力。
   const scopeNote = describeScope(options.scope)
   if (scopeNote !== null) lines.push('', scopeNote)
+  // 写入范围由宿主守卫执行：不告知会出现“试了才知道被拦”，告知后模型会直接写出拒绝原因。
+  const writeNote = describeWriteScope(options.writeScope)
+  if (writeNote !== null) lines.push('', writeNote)
   return lines.join('\n')
+}
+
+/** 写入范围的一句话说明；不限制时返回 null，为没有声明的专家少写一段。 */
+function describeWriteScope(scope: readonly string[] | null | undefined): string | null {
+  if (scope === undefined || scope === null) return null
+  if (scope.length === 0) return '写入范围：本会话为只读，write 与 edit 会被拒绝。'
+  return `写入范围：只允许写 ${scope.join('、')}；越界写入会被拒绝。`
 }
 
 /** 能力范围的一句话说明；三个维度都不限制时返回 null，不为普通会话多写一段。 */

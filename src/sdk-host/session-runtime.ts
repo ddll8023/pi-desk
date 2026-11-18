@@ -42,6 +42,7 @@ import type {
 import { isMemoryInjectionSnapshot } from '../shared/runtime-api'
 import { parseSubAgentView } from '../shared/sub-agent-view'
 import { EXPERT_SECTION_KEY, expertRoleSection, readSelectedExpert } from './expert-role'
+import { createExpertWriteGuardExtension, EXPERT_WRITE_GUARD_EXTENSION_NAME } from './expert-write-guard'
 import { readCapabilityCandidateSection, resolveSessionCapabilityScope } from './expert-capability'
 import { DELEGATION_TOOL_NAME } from './sub-agent/delegation-extension'
 import { PROTECTED_EXPERT_TOOLS } from '../shared/expert-capability'
@@ -1010,7 +1011,7 @@ export class SdkSessionRuntime {
               // 专家正文每轮重写：改定义文件在下一轮生效，历史对话不因此被改写。
               if (expert !== null) {
                 event.systemPromptOptions.sections[EXPERT_SECTION_KEY] = expertRoleSection(expert, {
-                  mode: target.mode, scope: capability
+                  mode: target.mode, scope: capability, writeScope: expert.writeScope
                 })
               }
               // 记忆与委派工具随应用提供，其他宿主没有；使用时机写进分段，不写全局 AGENTS.md。
@@ -1081,6 +1082,17 @@ export class SdkSessionRuntime {
           // 待办清单只在标准模式存在：快速模式既没有清单要求，也不应看到这个工具。
           ...(target.mode === 'standard'
             ? [{ name: TODO_LIST_EXTENSION_NAME, factory: createTodoListExtension(), builtin: true, replaceable: true }]
+            : []),
+          // 写入范围只在专家声明了范围时生效：未声明的会话不装任何拦截，行为与引入该能力之前一致。
+          ...(expert !== null && expert.writeScope !== null
+            ? [{
+                name: EXPERT_WRITE_GUARD_EXTENSION_NAME,
+                factory: createExpertWriteGuardExtension({
+                  expertName: expert.displayName, cwd: executionRoot, scope: expert.writeScope
+                }),
+                builtin: true,
+                replaceable: true
+              }]
             : []),
           bindingGuard
       ]

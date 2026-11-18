@@ -1,5 +1,6 @@
 <!-- 设置页「专家」分节：列出内置与自定义专家、加载诊断，并提供新建、编辑、派生副本与删除四个操作。
      顶部另有「默认能力」卡片：专家继承的技能、MCP 与工具范围在那一处统一调整，专家定义只在它之上做增减。
+     列表行除了能力范围还会给出写入范围摘要：不限制、只读与白名单三种形态必须一眼能分辨。
      新建与编辑走同一个对话框（ExpertEditorDialog）；派生只复制正文到产品 agent 目录并写入 derivedFrom，
      此后副本自行演进、不跟随内置升级，因此列表要给派生来源与「新建会话才生效」的说明；诊断只读展示，
      界面上不提供自动修复。 -->
@@ -27,7 +28,8 @@ const ISSUE_LABELS = {
   'id-conflict': '标识冲突',
   'skill-reference-missing': '引用的技能不存在',
   'skill-reference-sub-agent': '引用了子代理专用技能',
-  'mcp-reference-missing': '引用的 MCP 服务器不存在'
+  'mcp-reference-missing': '引用的 MCP 服务器不存在',
+  'write-scope-invalid': '写入范围里有写法不合法的项'
 } as const satisfies Record<SessionExpertIssue['kind'], string>
 
 const deleteOpen = computed(() => pendingDelete.value !== null)
@@ -78,10 +80,17 @@ function capabilitySummary(expert: SessionExpertView): string {
   return [skills, mcp, tools].filter((part): part is string => part !== null).join(' · ')
 }
 
+/** 写入范围摘要：不限制、只读与白名单三种形态各一句话，名单同样只取前三个。 */
+function writeScopeSummary(expert: SessionExpertView): string {
+  const scope = expert.writeScope
+  if (scope === null) return '不限制'
+  if (scope.length === 0) return '只读（write 与 edit 会被拒绝）'
+  return nameList(scope)
+}
+
 function isBusy(expert: SessionExpertView): boolean {
   return busyId.value === expert.id
 }
-
 async function refresh(): Promise<void> {
   store.clearNotice()
   await store.load()
@@ -163,6 +172,7 @@ onMounted(() => { void store.load() })
               </div>
               <p class="mt-1 text-xs text-desk-muted">{{ expert.summary }}</p>
               <p class="mt-1 text-2xs text-desk-muted">能力范围：{{ capabilitySummary(expert) }}</p>
+              <p class="mt-1 text-2xs text-desk-muted">写入范围：{{ writeScopeSummary(expert) }}</p>
               <p v-if="expert.unavailableSkillIds.length > 0" class="mt-1 text-2xs text-desk-warning">
                 不可用：{{ expert.unavailableSkillIds.join('、') }}
               </p>

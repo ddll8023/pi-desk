@@ -7,6 +7,7 @@
 import { isHistoryData, isHistoryQuery } from './runtime-api'
 import type { HistoryData, HistoryQuery, RuntimeErrorCode } from './runtime-api'
 import type { ExpertCapabilityFields } from './expert-capability'
+import { isExpertWriteScope } from './experts-api'
 import { isWorkspaceContext, isWorkspaceId } from './workspace-api'
 import type { WorkspaceContext } from './workspace-api'
 
@@ -277,12 +278,14 @@ export interface SessionExpertView extends ExpertCapabilityFields {
   readonly skillIds: readonly string[]
   /** 引用但不可用的技能：定义本身仍可用，这些引用不生效。 */
   readonly unavailableSkillIds: readonly string[]
+  /** 写入范围：`null` 不限制、空数组只读、其余为允许写入的相对路径。 */
+  readonly writeScope: readonly string[] | null
 }
 
 /** 一条加载诊断；只带标识与路径，不复制定义正文。 */
 export interface SessionExpertIssue {
   readonly kind: 'definition-invalid' | 'id-conflict' | 'skill-reference-missing' | 'skill-reference-sub-agent'
-    | 'mcp-reference-missing'
+    | 'mcp-reference-missing' | 'write-scope-invalid'
   readonly expertId: string | null
   readonly skillId: string | null
   /** MCP 相关诊断的服务器名；其余诊断固定为 null。 */
@@ -418,6 +421,7 @@ function isSessionExpertView(value: unknown): value is SessionExpertView {
     && referencesOk(value.unavailableSkillIds)
     && referencesOk(value.skillAddIds)
     && referencesOk(value.skillRemoveIds)
+    && isExpertWriteScope(value.writeScope)
     && referencesOk(value.mcpServerIds)
     && referencesOk(value.mcpAddIds)
     && referencesOk(value.mcpRemoveIds)
@@ -431,7 +435,7 @@ function isSessionExpertView(value: unknown): value is SessionExpertView {
 
 const EXPERT_ISSUE_KINDS: readonly string[] = [
   'definition-invalid', 'id-conflict', 'skill-reference-missing', 'skill-reference-sub-agent',
-  'mcp-reference-missing'
+  'mcp-reference-missing', 'write-scope-invalid'
 ]
 
 function isSessionExpertCatalog(value: unknown): value is SessionExpertCatalog {

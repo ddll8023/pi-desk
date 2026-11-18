@@ -17,6 +17,7 @@ import { Type } from '@earendil-works/pi-ai'
 import type { ExtensionAPI, ExtensionFactory } from '@earendil-works/pi-coding-agent'
 import { SUB_AGENT_WRITE_POLICY } from '../../shared/sub-agent-types'
 import { SUB_AGENT_VIEW_LIMITS } from '../../shared/sub-agent-view'
+import { toAbsoluteWriteScope } from '../write-scope'
 import type { SubAgentControl } from './control'
 
 /** 子进程入口与规范目录：由宿主在装配时注入，不靠模块相对路径猜测产物位置。 */
@@ -660,10 +661,7 @@ function targetsConflict(left: string, right: string): boolean {
 
 /** 守卫按绝对路径比对，目录补分隔符，与守卫侧的前缀判断保持一致。 */
 function toAbsoluteScope(cwd: string, entries: readonly string[]): string[] {
-  return entries.map(entry => {
-    const absolute = resolve(cwd, entry.replace(/\/$/, ''))
-    return entry.endsWith('/') ? `${absolute}/` : absolute
-  })
+  return toAbsoluteWriteScope(cwd, entries)
 }
 
 /** 读取一条任务说明；缺必填项或类型未知时返回拒绝原因，不擅自改名或降级。 */

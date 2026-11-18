@@ -116,6 +116,8 @@ export interface ExpertEditableDefinition extends ExpertCapabilityFields {
   readonly displayName: string
   readonly summary: string
   readonly skillIds: readonly string[]
+  /** 写入范围：`null` 表示不限制，空数组表示只读，否则是允许写入的目录或文件。 */
+  readonly writeScope: readonly string[] | null
   readonly body: string
   readonly derivedFrom: string | null
 }
@@ -137,6 +139,8 @@ export interface ExpertSaveRequest extends ExpertCapabilityFields {
   readonly displayName: string
   readonly summary: string
   readonly skillIds: readonly string[]
+  /** 写入范围：与读取同一口径，`null` 不限制、空数组只读。 */
+  readonly writeScope: readonly string[] | null
   readonly body: string
 }
 
@@ -263,6 +267,39 @@ function isReferenceList(
   return max === undefined || value.length <= max
 }
 
+/** 写入范围的项数上限与单条长度上限：一份声明会进记录与提示，条数过多反而难以读懂。 */
+export const MAX_EXPERT_WRITE_SCOPE_ITEMS = 8
+export const MAX_EXPERT_WRITE_SCOPE_ENTRY = 240
+
+/**
+ * 写入范围项归一化：项目内相对路径，目录以 `/` 结尾。
+ * 绝对路径、盘符与上一级跳转一律不合法，避免一条手写声明把范围指到项目之外。
+ * 返回 `null` 表示写法不合法，标量时的调用方据此拒绝或忽略该项。
+ */
+export function normalizeExpertWriteScopeEntry(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  const raw = value.trim().replace(/\\/g, '/')
+  if (raw === '' || raw.length > MAX_EXPERT_WRITE_SCOPE_ENTRY) return null
+  const directory = raw.endsWith('/')
+  const body = directory ? raw.replace(/\/+$/, '') : raw
+  if (body === '' || body.startsWith('/') || /^[A-Za-z]:/.test(body)) return null
+  const segments = body.split('/')
+  if (segments.some(segment => segment === '' || segment === '.' || segment === '..')) return null
+  return directory ? `${body}/` : body
+}
+
+/** 单条写入范围判定；渲染层与主进程共用这一份，不在两边各写一套路径规则。 */
+export function isExpertWriteScopeEntry(value: unknown): value is string {
+  return normalizeExpertWriteScopeEntry(value) !== null
+}
+
+/** 整份写入范围：`null` 表示不限制，空数组表示只读；两种空语义不能合并。 */
+export function isExpertWriteScope(value: unknown): value is readonly string[] | null {
+  if (value === null) return true
+  if (!Array.isArray(value) || value.length > MAX_EXPERT_WRITE_SCOPE_ITEMS) return false
+  return value.every(item => isExpertWriteScopeEntry(item))
+}
+
 /** 显示名称与简介都会写进声明段，换行与首尾空白会破坏 `key: value` 结构，这里一并拒绝。 */
 function isSingleLineText(value: unknown, maxLength: number): value is string {
   if (typeof value !== 'string') return false
@@ -282,7 +319,7 @@ export function isExpertSaveRequest(value: unknown): value is ExpertSaveRequest 
   const allowed = [
     'expertId', 'displayName', 'summary', 'skillIds', 'skillsMode', 'skillAddIds', 'skillRemoveIds',
     'mcpMode', 'mcpServerIds', 'mcpAddIds', 'mcpRemoveIds',
-    'toolsMode', 'toolIds', 'toolAddIds', 'toolRemoveIds', 'body'
+    'toolsMode', 'toolIds', 'toolAddIds', 'toolRemoveIds', 'writeScope', 'body'
   ]
   if (Object.keys(value).some(key => !allowed.includes(key))) return false
   if (value.expertId !== null && !isExpertId(value.expertId)) return false
@@ -301,6 +338,7 @@ export function isExpertSaveRequest(value: unknown): value is ExpertSaveRequest 
     && isReferenceList(value.toolIds, isToolReference)
     && isReferenceList(value.toolAddIds, isToolReference)
     && isReferenceList(value.toolRemoveIds, isToolReference)
+    && isExpertWriteScope(value.writeScope)
 }
 
 export function isExpertEditableDefinitionResult(value: unknown): value is ExpertReadResult {
@@ -325,6 +363,7 @@ export function isExpertEditableDefinitionResult(value: unknown): value is Exper
     && isReferenceList(data.toolIds, isToolReference)
     && isReferenceList(data.toolAddIds, isToolReference)
     && isReferenceList(data.toolRemoveIds, isToolReference)
+    && isExpertWriteScope(data.writeScope)
 }
 
 export function isExpertSaveResult(value: unknown): value is ExpertSaveResult {

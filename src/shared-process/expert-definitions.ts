@@ -5,13 +5,15 @@
  * 单个定义损坏、身份冲突或引用了不可用技能时只影响对应条目，不中断整份清单。
  * 本模块不装配会话、不注入系统提示，也不产生任何子代理调用；清单条目到内置入口的映射、技能目录标识列举，以及写回所需的声明解析、标识校验与上限常量都由这里提供，主进程不复制第二份规则。
  * 能力范围（技能、MCP 与工具）的解析与合并也在这里：专家只继承默认基线并做增减，
- * 三类来源的语义差异只体现在调用方给出的可用集上。
+ * 三类来源的语义差异只体现在调用方给出的可用集上。写入范围（`writeScope`）同样在这里解析：
+ * 它不参与许可集，只描述宿主该拦截掉哪些写入位置。
  */
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import { agentResourcePath } from './agent-resources.ts'
 import type { AgentResourceBundle } from './agent-resources.ts'
 import { isExpertCapabilityMode } from '../shared/expert-capability'
+import { MAX_EXPERT_WRITE_SCOPE_ITEMS, normalizeExpertWriteScopeEntry } from '../shared/experts-api'
 import type { ExpertCapabilityDefaults, ExpertCapabilityFields, ExpertCapabilityMode } from '../shared/expert-capability'
 
 /** 单个定义文件的读取上限：正文会整段进入系统提示，超过这个体积通常意味着塞了整份文档。 */
@@ -58,6 +60,8 @@ export interface ExpertDefinition extends ExpertCapabilityFields {
   readonly derivedFrom: string | null
   /** 引用但不可用的技能：定义本身仍可用，这些引用不生效。 */
   readonly unavailableSkillIds: readonly string[]
+  /** 写入范围：`null` 表示不限制，空数组表示只读，否则是允许写入的目录或文件（相对项目根）。 */
+  readonly writeScope: readonly string[] | null
 }
 
 export type ExpertIssueKind =
@@ -71,6 +75,8 @@ export type ExpertIssueKind =
   | 'skill-reference-sub-agent'
   /** 白名单里引用的 MCP 服务器在当前配置中不存在。 */
   | 'mcp-reference-missing'
+  /** 写入范围里有写法不合法的项：这些项被忽略，其余项照常生效。 */
+  | 'write-scope-invalid'
 
 /** 一条结构化诊断；只带标识与路径，不携带用户正文。 */
 export interface ExpertIssue {
@@ -199,6 +205,32 @@ export function parseExpertToolNames(value: string | undefined): string[] | null
   return parseSkillIds(value)
 }
 
+/**
+ * 解析写入范围。三种情况必须区分：不写声明（不限制）、写了空值（只读）、写了列表（白名单）。
+ * 写法不合法的项不进入范围、单独返回，由调用方记诊断；宁可少放行一项，也不把写错的范围当成不限制。
+ */
+export function parseExpertWriteScope(value: string | undefined): {
+  readonly scope: readonly string[] | null
+  readonly invalid: readonly string[]
+} {
+  if (value === undefined) return { scope: null, invalid: [] }
+  if (value === '') return { scope: [], invalid: [] }
+  const items = value.replace(/^\[/, '').replace(/\]$/, '').split(',')
+    .map(item => item.trim().replace(/^['"]|['"]$/g, ''))
+    .filter(item => item !== '')
+  const scope: string[] = []
+  const invalid: string[] = []
+  for (const item of items) {
+    const normalized = normalizeExpertWriteScopeEntry(item)
+    if (normalized === null) {
+      invalid.push(item)
+      continue
+    }
+    if (!scope.includes(normalized)) scope.push(normalized)
+  }
+  return { scope: scope.slice(0, MAX_EXPERT_WRITE_SCOPE_ITEMS), invalid }
+}
+
 function invalid(expertId: string | null, path: string): ReadResult {
   return { ok: false, issue: { kind: 'definition-invalid', expertId, skillId: null, serverName: null, path } }
 }
@@ -214,6 +246,7 @@ function readDefinition(input: {
   readonly id: string
   readonly filePath: string
   readonly source: 'builtin' | 'user'
+  readonly issues: ExpertIssue[]
 }): ReadResult {
   const { id, filePath, source } = input
   // 目录名即标识：内置入口与自定义目录都按目录名命名，声明与目录不一致说明文件被搬动或复制错位。
@@ -242,6 +275,11 @@ function readDefinition(input: {
   const toolIds = parseSkillIds(document.fields.tools)
   const toolAddIds = parseSkillIds(document.fields.toolsAdd)
   const toolRemoveIds = parseSkillIds(document.fields.toolsRemove)
+  const writeScope = parseExpertWriteScope(document.fields.writeScope)
+  // 不合法项只让那几项失效：已写对的路径照常生效，但要留一条诊断让人知道声明没全部用上。
+  if (writeScope.invalid.length > 0) {
+    input.issues.push({ kind: 'write-scope-invalid', expertId: id, skillId: null, serverName: null, path: filePath })
+  }
   // 派生来源是可选的追溯字段；写了就必须指回一个合法的专家标识，写成任意文本按定义无效处理。
   const derivedFrom = document.fields.derivedFrom === undefined || document.fields.derivedFrom === ''
     ? null
@@ -259,7 +297,7 @@ function readDefinition(input: {
     ok: true,
     definition: {
       id, displayName, summary, skillIds, body: document.body, truncated: document.body.length > MAX_ROLE_CHARS,
-      source, filePath, derivedFrom, unavailableSkillIds: [],
+      source, filePath, derivedFrom, unavailableSkillIds: [], writeScope: writeScope.scope,
       skillsMode, skillAddIds, skillRemoveIds,
       mcpMode, mcpServerIds, mcpAddIds, mcpRemoveIds,
       toolsMode, toolIds, toolAddIds, toolRemoveIds
@@ -415,7 +453,7 @@ export function loadExpertCatalog(input: LoadExpertCatalogInput): ExpertCatalog 
       continue
     }
     claimed.add(item.id)
-    const result = readDefinition({ id: item.id, filePath: item.filePath, source: 'builtin' })
+    const result = readDefinition({ id: item.id, filePath: item.filePath, source: 'builtin', issues })
     if (!result.ok) { issues.push(result.issue); continue }
     experts.push(judgeMcpServers(judgeSkills(result.definition, input, issues), input.availableMcpServers, issues))
   }
@@ -428,7 +466,7 @@ export function loadExpertCatalog(input: LoadExpertCatalogInput): ExpertCatalog 
       continue
     }
     claimed.add(id)
-    const result = readDefinition({ id, filePath, source: 'user' })
+    const result = readDefinition({ id, filePath, source: 'user', issues })
     if (!result.ok) { issues.push(result.issue); continue }
     experts.push(judgeMcpServers(judgeSkills(result.definition, input, issues), input.availableMcpServers, issues))
   }

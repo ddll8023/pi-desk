@@ -51,13 +51,15 @@ function definition(input: {
   readonly skillsRemove?: string
   readonly mcpMode?: string
   readonly mcpServers?: string
+  readonly writeScope?: string
 }): string {
   const capabilityLines = [
     input.skillsMode === undefined ? null : `skillsMode: ${input.skillsMode}`,
     input.skillsAdd === undefined ? null : `skillsAdd: ${input.skillsAdd}`,
     input.skillsRemove === undefined ? null : `skillsRemove: ${input.skillsRemove}`,
     input.mcpMode === undefined ? null : `mcpMode: ${input.mcpMode}`,
-    input.mcpServers === undefined ? null : `mcpServers: ${input.mcpServers}`
+    input.mcpServers === undefined ? null : `mcpServers: ${input.mcpServers}`,
+    input.writeScope === undefined ? null : `writeScope: ${input.writeScope}`
   ].filter((line): line is string => line !== null)
   return [
     '---',
@@ -201,6 +203,7 @@ function capabilityDefinition(overrides: Partial<ExpertDefinition> = {}): Expert
     toolIds: [],
     toolAddIds: [],
     toolRemoveIds: [],
+    writeScope: null,
     body: '# 正文',
     truncated: false,
     source: 'user',
@@ -268,8 +271,38 @@ test('仅用选中的 MCP 白名单引用了不存在的服务器时只报诊断
   }
 })
 
-test('能力字段写法不合法时整份定义判为无效', () => {
+test('写入范围三态：不写声明不限制、写空值只读、写列表为白名单', () => {
   const temp = createTempRoot('pi-desk-expert-')
+  try {
+    const catalog = createCatalog(temp, {
+      'no-scope/expert.md': definition({ id: 'no-scope' }),
+      'read-only/expert.md': definition({ id: 'read-only', writeScope: '[]' }),
+      'docs-only/expert.md': definition({ id: 'docs-only', writeScope: '[docs/, README.md]' })
+    })
+    assert.deepEqual(catalog.experts.find(item => item.id === 'no-scope')?.writeScope, null)
+    assert.deepEqual(catalog.experts.find(item => item.id === 'read-only')?.writeScope, [])
+    assert.deepEqual(catalog.experts.find(item => item.id === 'docs-only')?.writeScope, ['docs/', 'README.md'])
+    assert.deepEqual(catalog.issues, [])
+  } finally {
+    temp.cleanup()
+  }
+})
+
+test('写入范围里的非法项被忽略并报诊断，合法项照常生效', () => {
+  const temp = createTempRoot('pi-desk-expert-')
+  try {
+    const catalog = createCatalog(temp, {
+      'my-expert/expert.md': definition({ id: 'my-expert', writeScope: '[docs/, ../etc, /abs, C:/tmp]' })
+    })
+    // 宁可少放行一项，也不把写错的范围当成不限制：只剩合法项生效。
+    assert.deepEqual(catalog.experts.find(item => item.id === 'my-expert')?.writeScope, ['docs/'])
+    assert.deepEqual(catalog.issues.map(item => [item.kind, item.expertId]), [['write-scope-invalid', 'my-expert']])
+  } finally {
+    temp.cleanup()
+  }
+})
+
+test('能力字段写法不合法时整份定义判为无效', () => {  const temp = createTempRoot('pi-desk-expert-')
   try {
     const catalog = createCatalog(temp, {
       'bad-mode/expert.md': definition({ id: 'bad-mode', skillsMode: 'somtimes' })

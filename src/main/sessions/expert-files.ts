@@ -20,9 +20,11 @@ import {
   parseExpertDocument,
   parseExpertServerNames,
   parseExpertSkillIds,
-  parseExpertToolNames
+  parseExpertToolNames,
+  parseExpertWriteScope
 } from '../../shared-process/expert-definitions'
 import { PROTECTED_EXPERT_TOOLS, isProtectedExpertTool } from '../../shared/expert-capability'
+import { isExpertWriteScopeEntry } from '../../shared/experts-api'
 import type { ExpertCapabilityFields } from '../../shared/expert-capability'
 import type { ExpertDeleteResult, ExpertDeriveResult, ExpertReadResult, ExpertSaveResult } from '../../shared/experts-api'
 
@@ -182,6 +184,8 @@ export function readUserExpertDefinition(input: {
   if (capabilities === null) {
     return failure('INVALID_DEFINITION', '声明段的能力字段（模式、技能、服务器或工具列表）写法不合法，先手工修正再回来编辑。')
   }
+  // 与清单解析同一口径：写法不合法的写入范围项被忽略，界面里看不见它们，而不是把范围悄悄放大。
+  const writeScope = parseExpertWriteScope(document.fields.writeScope).scope
   const derivedFrom = document.fields.derivedFrom
   return {
     ok: true,
@@ -191,6 +195,7 @@ export function readUserExpertDefinition(input: {
       summary: document.fields.summary ?? '',
       skillIds,
       ...capabilities,
+      writeScope,
       body: document.body,
       derivedFrom: derivedFrom !== undefined && isExpertDefinitionId(derivedFrom) ? derivedFrom : null
     }
@@ -240,8 +245,9 @@ function rebuildHeader(input: ExpertCapabilityFields & {
   readonly displayName: string
   readonly summary: string
   readonly skillIds: readonly string[]
+  readonly writeScope: readonly string[] | null
 }): string[] {
-  const managed = /^(name|displayName|summary|skills|skillsMode|skillsAdd|skillsRemove|mcpMode|mcpServers|mcpAdd|mcpRemove|tools|toolsMode|toolsAdd|toolsRemove)\s*:/
+  const managed = /^(name|displayName|summary|skills|skillsMode|skillsAdd|skillsRemove|mcpMode|mcpServers|mcpAdd|mcpRemove|tools|toolsMode|toolsAdd|toolsRemove|writeScope)\s*:/
   const kept = input.headerLines.filter(line => !managed.test(line))
   const lines = [
     `name: ${input.id}`,
@@ -261,6 +267,8 @@ function rebuildHeader(input: ExpertCapabilityFields & {
   if (input.toolIds.length > 0) lines.push(`tools: ${formatList(input.toolIds)}`)
   if (input.toolAddIds.length > 0) lines.push(`toolsAdd: ${formatList(input.toolAddIds)}`)
   if (input.toolRemoveIds.length > 0) lines.push(`toolsRemove: ${formatList(input.toolRemoveIds)}`)
+  // 写入范围不写行是「不限制」、写 `[]` 是「只读」：两者必须分开写，不能把空列表省成不写行。
+  if (input.writeScope !== null) lines.push(`writeScope: ${formatList(input.writeScope)}`)
   return [...lines, ...kept]
 }
 
@@ -286,6 +294,7 @@ export function saveUserExpertDefinition(input: ExpertCapabilityFields & {
   readonly displayName: string
   readonly summary: string
   readonly skillIds: readonly string[]
+  readonly writeScope: readonly string[] | null
   readonly body: string
   readonly availableSkillIds: readonly string[]
   readonly subAgentOnlySkillIds: readonly string[]
@@ -304,6 +313,11 @@ export function saveUserExpertDefinition(input: ExpertCapabilityFields & {
   const toolIds = dedupe(input.toolIds)
   const toolAddIds = dedupe(input.toolAddIds)
   const toolRemoveIds = dedupe(input.toolRemoveIds)
+  // 写入范围是路径而不是标识：按路径规则二次校验，不把一条写错的项落盘成「限到别处」。
+  const writeScope = input.writeScope === null ? null : dedupe(input.writeScope)
+  if (writeScope !== null && !writeScope.every(isExpertWriteScopeEntry)) {
+    return failure('INVALID_DEFINITION', '写入范围里有写法不合法的路径：只接受项目内相对路径，目录以 / 结尾。')
+  }
   const allSkillIds = [...skillIds, ...skillAddIds, ...skillRemoveIds]
   if (!allSkillIds.every(isSkillReferenceId)) {
     return failure('INVALID_DEFINITION', '技能引用里有写法不合法的标识。')
@@ -360,6 +374,7 @@ export function saveUserExpertDefinition(input: ExpertCapabilityFields & {
     displayName: input.displayName.trim(),
     summary: input.summary.trim(),
     skillIds,
+    writeScope,
     skillsMode: input.skillsMode,
     skillAddIds,
     skillRemoveIds,

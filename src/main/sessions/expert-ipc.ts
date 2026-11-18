@@ -103,7 +103,7 @@ export function registerExpertHandlers(pageUrl: string): void {
       if (args.length !== 1 || !isExpertSaveRequest(args[0])) {
         return Promise.resolve({
           ok: false,
-          error: { code: 'INVALID_REQUEST', message: '保存请求需要显示名称、简介、技能引用与正文。' }
+          error: { code: 'INVALID_REQUEST', message: '保存请求需要显示名称、简介、技能引用、写入范围与正文。' }
         })
       }
       const request = args[0]
@@ -133,6 +133,7 @@ export function registerExpertHandlers(pageUrl: string): void {
         toolIds: request.toolIds,
         toolAddIds: request.toolAddIds,
         toolRemoveIds: request.toolRemoveIds,
+        writeScope: request.writeScope,
         body: request.body,
         availableSkillIds: skillContext.availableSkillIds,
         subAgentOnlySkillIds: skillContext.subAgentOnlySkillIds,

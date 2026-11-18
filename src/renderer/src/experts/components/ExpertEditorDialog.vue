@@ -6,6 +6,8 @@
   不用每次从零勾选，也随默认基线统一调整。三个维度都按 3 列勾选格呈现，格内右槽标出状态（基线默认／已排除／必需等），
   title 里同时带标识与来源；引用数量不设上限。
   工具维度里技能门禁、待办清单与记忆工具属受保护项：勾选格锁定，保存时也不会被排除。
+  写入范围是路径边界而不是能力：它不决定有没有写工具，只决定 write 与 edit 能写到哪里；三态分别对应不限制、只读与指定目录，
+  留空不能同时表示两种含义。bash 的重定向不经过工具参数，界面如实说明这一点。
   技能候选来自随包、产品目录与共享目录，MCP 只列全局配置；
   项目自带技能属于工作区，不受专家范围限制，因此在候选列表外单独说明。
   定义里引用但当前不可用的项仍列出来，避免一次编辑把它们静默丢掉。
@@ -13,7 +15,7 @@
 -->
 <script setup lang="ts">
 import { computed, nextTick, onUnmounted, ref, useId, watch } from 'vue'
-import { MAX_EXPERT_DISPLAY_NAME_LENGTH, MAX_EXPERT_SUMMARY_LENGTH } from '../../../../shared/experts-api'
+import { MAX_EXPERT_DISPLAY_NAME_LENGTH, MAX_EXPERT_SUMMARY_LENGTH, normalizeExpertWriteScopeEntry } from '../../../../shared/experts-api'
 import type { ExpertEditableDefinition, ExpertSaveRequest } from '../../../../shared/experts-api'
 import { useExpertStore } from '../stores/expert'
 import { baseIds, restoreSelection, selectionState, toSelectionFields } from '../capability-selection'
@@ -45,12 +47,18 @@ interface CapabilityRow {
 const store = useExpertStore()
 const panel = ref<HTMLElement | null>(null)
 const titleId = useId()
+/** 写入范围三态的单选组名，同一组只能选一项。 */
+const writeScopeGroupId = useId()
 /** 打开前的焦点元素；关闭后把焦点还给它。 */
 let opener: HTMLElement | null = null
 
 const displayName = ref('')
 const summary = ref('')
 const body = ref('')
+/** 写入范围三态：不限制、只读、指定路径。三者靠单选区分，不靠“留空”推断。 */
+const writeScopeMode = ref<'unrestricted' | 'readonly' | 'paths'>('unrestricted')
+/** 指定路径时的文本输入；逗号或换行分隔，保存时按路径规则归一化。 */
+const writeScopePaths = ref('')
 /** 技能、MCP 与工具的范围口径；默认继承基线，只记录相对基线的增减。 */
 const skillsMode = ref<'inherit' | 'only'>('inherit')
 const mcpMode = ref<'inherit' | 'only'>('inherit')
@@ -155,8 +163,23 @@ const canSave = computed(() => !saving.value
   && displayName.value.trim() !== ''
   && summary.value.trim() !== ''
   && body.value.trim() !== ''
+  // 指定路径却一项都不合法时不保存：写入范围会变成只读或空，与界面显示不一致。
+  && (writeScopeMode.value !== 'paths' || parsedWriteScope.value.valid.length > 0)
   // 技能白名单为空等于禁用全部技能，主进程也会拒；在按钮上先拦住并给理由。
   && !(skillsMode.value === 'only' && selectedSkills.value.length === 0))
+
+/** 写入范围输入拆成合法项与非法项：非法项就地报出，保存时不带走。 */
+const parsedWriteScope = computed(() => {
+  const items = writeScopePaths.value.split(/[,\n]/).map(item => item.trim()).filter(item => item !== '')
+  const valid: string[] = []
+  const invalid: string[] = []
+  for (const item of items) {
+    const normalized = normalizeExpertWriteScopeEntry(item)
+    if (normalized === null) invalid.push(item)
+    else if (!valid.includes(normalized)) valid.push(normalized)
+  }
+  return { valid, invalid }
+})
 
 /** 基线展开后的集合：用于判断某一行是「基线默认」还是被手动改动过。 */
 function baselineOf(dimension: 'skills' | 'mcp' | 'tools'): readonly string[] {
@@ -194,6 +217,8 @@ function resetForm(): void {
   skillsMode.value = 'inherit'
   mcpMode.value = 'inherit'
   toolsMode.value = 'inherit'
+  writeScopeMode.value = 'unrestricted'
+  writeScopePaths.value = ''
   hintSkillIds.value = []
   referencedSkillIds.value = []
   referencedMcpNames.value = []
@@ -212,6 +237,10 @@ function applyDefinition(definition: ExpertEditableDefinition | null): void {
   skillsMode.value = definition?.skillsMode ?? 'inherit'
   mcpMode.value = definition?.mcpMode ?? 'inherit'
   toolsMode.value = definition?.toolsMode ?? 'inherit'
+  // 三态回填：null 不限制、空数组只读、其余按路径展示。
+  const scope = definition?.writeScope ?? null
+  writeScopeMode.value = scope === null ? 'unrestricted' : scope.length === 0 ? 'readonly' : 'paths'
+  writeScopePaths.value = scope === null ? '' : scope.join('、')
   hintSkillIds.value = definition?.skillIds ?? []
   referencedSkillIds.value = definition === null
     ? []
@@ -337,7 +366,12 @@ function buildRequest(): ExpertSaveRequest {
     toolsMode: tools.mode,
     toolIds: [...tools.onlyIds],
     toolAddIds: [...tools.addIds],
-    toolRemoveIds: [...tools.removeIds]
+    toolRemoveIds: [...tools.removeIds],
+    writeScope: writeScopeMode.value === 'unrestricted'
+      ? null
+      : writeScopeMode.value === 'readonly'
+        ? []
+        : parsedWriteScope.value.valid
   }
 }
 
@@ -506,6 +540,66 @@ function onKeydown(event: KeyboardEvent): void {
                     工具范围只影响本专家会话里可调用的工具；技能门禁、待办清单与记忆工具属必需项，不会被排除。
                   </p>
                 </div>
+
+                <fieldset class="space-y-2 border-t border-desk-line pt-4">
+                  <legend class="field-label">写入范围</legend>
+                  <p class="hint-text">
+                    决定这个专家的会话里 write 与 edit 能写到哪里；bash 的重定向不经过这道检查。
+                  </p>
+                  <label class="flex items-start gap-2 text-xs">
+                    <input
+                      v-model="writeScopeMode"
+                      type="radio"
+                      :name="writeScopeGroupId"
+                      value="unrestricted"
+                      :disabled="saving || loading"
+                    >
+                    <span>
+                      不限制
+                      <span class="block text-2xs text-desk-muted">沿用工具范围的结果，可写项目内任意文件。</span>
+                    </span>
+                  </label>
+                  <label class="flex items-start gap-2 text-xs">
+                    <input
+                      v-model="writeScopeMode"
+                      type="radio"
+                      :name="writeScopeGroupId"
+                      value="readonly"
+                      :disabled="saving || loading"
+                    >
+                    <span>
+                      只读
+                      <span class="block text-2xs text-desk-muted">write 与 edit 一律被拒，适合审查与调研专家。</span>
+                    </span>
+                  </label>
+                  <label class="flex items-start gap-2 text-xs">
+                    <input
+                      v-model="writeScopeMode"
+                      type="radio"
+                      :name="writeScopeGroupId"
+                      value="paths"
+                      :disabled="saving || loading"
+                    >
+                    <span>
+                      指定路径
+                      <span class="block text-2xs text-desk-muted">只能写列出的目录或文件，越界写入被拒。</span>
+                    </span>
+                  </label>
+                  <label v-if="writeScopeMode === 'paths'" class="block space-y-1">
+                    <span class="field-label">允许写入的目录或文件</span>
+                    <input
+                      v-model="writeScopePaths"
+                      class="text-control font-mono"
+                      type="text"
+                      placeholder="docs/、README.md"
+                      :disabled="saving || loading"
+                    >
+                    <span class="hint-text">相对项目根；目录以 / 结尾，多个用逗号分隔。</span>
+                    <span v-if="parsedWriteScope.invalid.length > 0" role="alert" class="text-xs text-desk-danger">
+                      这些路径写法不合法：{{ parsedWriteScope.invalid.join('、') }}
+                    </span>
+                  </label>
+                </fieldset>
 
                 <label class="block space-y-1">
                   <span class="field-label">正文</span>
