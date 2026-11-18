@@ -11,6 +11,11 @@ export const MEMORY_BASIS_LABELS: Record<string, string> = {
   explicit: '用户明确表达', inferred_confirmed: '已确认的推测'
 }
 
+/** 画像作用范围的中文说法：`global` 是全库生效，`domain:<领域>` 只在对应领域生效。 */
+export function memoryScopeLabel(scope: string): string {
+  return scope.startsWith('domain:') ? '仅本领域' : '全库'
+}
+
 /** 编辑对话框的依据选项：顺序固定，值为引擎枚举。 */
 export const MEMORY_BASIS_OPTIONS = [
   { value: 'explicit', label: MEMORY_BASIS_LABELS.explicit ?? '用户明确表达' },

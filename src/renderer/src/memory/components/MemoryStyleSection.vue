@@ -1,98 +1,81 @@
-<!-- 记忆设置页的语气风格小节：列出全部风格与原句条数，点「编辑」打开对话框；保存后重读列表。
-     本页只展示与编辑已有风格，不取样、不新建、不删除条目。 -->
+<!-- 记忆设置页的语气风格块：列出名称、场景、句数与日期，点行打开只读查看弹窗，「编辑」再进编辑对话框。
+     数据由页面统一读取后经 records 传入；保存后由页面重读并回报一行反馈，本块只负责列表与两个弹窗。 -->
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref } from 'vue'
+import { computed, nextTick, ref } from 'vue'
 import type { MemoryStyleReadRecord } from '../../../../shared/memory-api'
-import AppButton from '../../ui/AppButton.vue'
-import { loadMemoryStyles } from '../services/memory'
+import MemoryAssetDetailDialog from './MemoryAssetDetailDialog.vue'
 import MemoryStyleEditorDialog from './MemoryStyleEditorDialog.vue'
 
-const styles = ref<readonly MemoryStyleReadRecord[]>([])
-const loading = ref(true)
-const error = ref<string | null>(null)
-const feedback = ref<string | null>(null)
+const props = defineProps<{ readonly records: readonly MemoryStyleReadRecord[] }>()
+const emit = defineEmits<{ saved: [message: string] }>()
+
+const viewing = ref<MemoryStyleReadRecord | null>(null)
 const editing = ref<MemoryStyleReadRecord | null>(null)
 const editorOpen = ref(false)
 const listRef = ref<HTMLElement | null>(null)
-/** 换代计数：连续刷新时，迟到的响应不能覆盖更新的列表。 */
-let loadSequence = 0
 
-/** 列表读取：失败保留真实原因，不用空列表冒充「没有风格」。 */
-async function refresh(): Promise<void> {
-  const sequence = ++loadSequence
-  loading.value = true
-  const result = await loadMemoryStyles()
-  if (sequence !== loadSequence) return
-  loading.value = false
-  if (!result.ok) {
-    error.value = result.error.message
-    return
-  }
-  error.value = null
-  styles.value = result.data.styles
-}
+/** 原句总数：与画像的条数口径分开统计，避免把「句」和「条」混成一个数。 */
+const sampleCount = computed(() => props.records.reduce((sum, record) => sum + record.samples.length, 0))
 
 /** 已有名称用于改名校验：换成另一条已有名称会把两条合并，因此先在前端挡下来。 */
-const takenNames = computed(() => styles.value.map(style => style.name))
+const takenNames = computed(() => props.records.map(record => record.name))
 
 function excerpt(text: string): string {
   return text.replace(/\s+/g, ' ').trim()
 }
 
-function openEditor(style: MemoryStyleReadRecord): void {
-  editing.value = style
-  editorOpen.value = true
+/** 行内元信息：场景、原句数、日期；空字段不占分隔符。 */
+function metaText(record: MemoryStyleReadRecord): string {
+  return [record.scene, `${record.samples.length} 句`, record.date]
+    .filter(part => part !== '')
+    .join(' · ')
 }
 
-/** 保存后重读列表再把焦点交给列表：改名或覆盖后原行的「编辑」按钮已不在文档里。 */
+function startEditing(): void {
+  editing.value = viewing.value
+  viewing.value = null
+  editorOpen.value = editing.value !== null
+}
+
+/** 保存后由页面重读列表再把焦点交给它：改名或覆盖后原来的行不再存在于文档里。 */
 async function onSaved(): Promise<void> {
   editorOpen.value = false
-  feedback.value = '风格已保存。'
-  await refresh()
+  emit('saved', '风格已保存。')
   await nextTick()
   listRef.value?.focus()
 }
-
-onMounted(() => {
-  void refresh()
-})
 </script>
 
 <template>
-  <section class="settings-section" aria-labelledby="settings-memory-styles">
-    <div class="settings-section-heading">
-      <div>
-        <h2 id="settings-memory-styles" class="settings-section-title">语气风格</h2>
-        <p class="mt-1 max-w-prose text-xs leading-5 text-desk-muted">
-          风格资产记录你通常怎么表达，要点与全部原句随每轮背景注入；改名保存会替换本条，保持名称则覆盖原内容。
-        </p>
-      </div>
-      <AppButton variant="compact" :disabled="loading" @click="refresh">重新读取</AppButton>
+  <div class="memory-asset-block">
+    <div class="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+      <h3 class="text-sm font-semibold">语气风格</h3>
+      <span class="text-2xs tabular-nums text-desk-muted">{{ records.length }} 条 · {{ sampleCount }} 句</span>
     </div>
 
-    <p v-if="loading" role="status" class="mt-3 text-xs text-desk-muted">读取风格…</p>
-    <p v-else-if="error !== null" role="alert" class="status-notice status-notice-error mt-3">{{ error }}</p>
-    <template v-else>
-      <p v-if="styles.length === 0" class="mt-3 text-xs text-desk-muted">
-        还没有风格；在会话里由你明确要求提炼表达风格时才会生成。
-      </p>
-      <ul v-else ref="listRef" tabindex="-1" class="memory-asset-list outline-none">
-        <li v-for="style in styles" :key="style.id" class="memory-asset-row">
-          <div class="min-w-0 flex-1">
-            <div class="flex flex-wrap items-center gap-2">
-              <span class="text-sm font-medium">{{ style.name }}</span>
-              <span v-if="style.scene !== ''" class="memory-asset-badge">{{ style.scene }}</span>
-              <span class="memory-asset-badge">{{ style.samples.length }} 句</span>
-              <span v-if="style.date !== ''" class="memory-asset-badge">{{ style.date }}</span>
-            </div>
-            <p class="memory-asset-excerpt">{{ excerpt(style.points) }}</p>
-          </div>
-          <AppButton variant="compact" @click="openEditor(style)">编辑</AppButton>
-        </li>
-      </ul>
-    </template>
+    <p v-if="records.length === 0" class="memory-asset-empty">
+      还没有风格；在会话里由你明确要求提炼表达风格时才会生成。
+    </p>
+    <ul v-else ref="listRef" tabindex="-1" class="memory-asset-rows outline-none">
+      <li v-for="record in records" :key="record.id">
+        <button type="button" class="memory-asset-row" aria-haspopup="dialog" @click="viewing = record">
+          <span class="memory-asset-row-head">
+            <span class="memory-asset-row-title">{{ record.name }}</span>
+            <span class="memory-asset-row-meta">{{ metaText(record) }}</span>
+          </span>
+          <span class="memory-asset-row-hint">{{ excerpt(record.points) }}</span>
+        </button>
+      </li>
+    </ul>
 
-    <p v-if="feedback !== null" role="status" class="mt-3 text-2xs text-desk-muted">{{ feedback }}</p>
+    <MemoryAssetDetailDialog
+      :open="viewing !== null"
+      kind="style"
+      :profile="null"
+      :style-record="viewing"
+      @cancel="viewing = null"
+      @edit="startEditing"
+    />
 
     <MemoryStyleEditorDialog
       :open="editorOpen"
@@ -101,5 +84,5 @@ onMounted(() => {
       @cancel="editorOpen = false"
       @saved="onSaved"
     />
-  </section>
+  </div>
 </template>

@@ -882,55 +882,147 @@ details[open] > summary .disclosure {
     }
   }
 
-/* 记忆资产列表：画像与语气风格两个设置小节共用同一套行、徽标与摘要口径。 */
-.memory-asset-list {
-  margin-top: 0.75rem;
+/* 记忆分节：概览带是页面的状态行（开关与读数同属一处页面级状态），所以它是沉陷面而不是卡片；
+   页面里只有「记忆资产」与「运行与存储」两块是卡片。 */
+.memory-overview {
+  padding: 0.75rem 1rem 0.25rem;
+  border: 1px solid var(--color-desk-line);
+  border-radius: var(--radius-desk-md);
+  background: var(--color-desk-surface-subtle);
+}
+.memory-overview-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.625rem 1rem;
+}
+/* 读数三格：分隔线只出现在格间，首末两格不留多余竖线。 */
+.memory-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 0.75rem 0 0;
+}
+.memory-metric { padding: 0.625rem 0 0.75rem; }
+.memory-metric + .memory-metric {
+  padding-left: 1rem;
+  border-left: 1px solid var(--color-desk-line);
+}
+@media (max-width: 639px) {
+  .memory-metrics { grid-template-columns: minmax(0, 1fr); }
+
+  .memory-metric + .memory-metric {
+    padding-left: 0;
+    border-left: 0;
+    border-top: 1px solid var(--color-desk-line);
+  }
+}
+/* 资产块：画像与风格同在一张卡内分层，不再各占一张卡；分隔线是两块之间唯一的层级信号。 */
+.memory-asset-block + .memory-asset-block {
+  margin-top: 1.25rem;
+  padding-top: 1.125rem;
+  border-top: 1px solid var(--color-desk-line);
+}
+/* 领域筛选 chip：带计数的可点标签，与 .segment 的分工是这里加了一个「不过滤」的全集项。 */
+.memory-asset-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+  margin-top: 0.5rem;
+}
+.memory-asset-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.125rem 0.5rem;
+  border: 1px solid var(--color-desk-line);
+  border-radius: 999px;
+  color: var(--color-desk-muted);
+  font-size: var(--text-2xs);
+  cursor: pointer;
+  transition: background-color var(--default-transition-duration) ease,
+    border-color var(--default-transition-duration) ease,
+    color var(--default-transition-duration) ease;
+}
+.memory-asset-chip:not(:disabled):hover { background-color: var(--color-desk-surface-subtle); }
+.memory-asset-chip.is-selected,
+.memory-asset-chip.is-selected:not(:disabled):hover {
+  border-color: var(--color-desk-accent);
+  background-color: var(--color-desk-accent-soft);
+  color: var(--color-desk-ink);
+  font-weight: 600;
+}
+.memory-asset-chip-count {
+  font-variant-numeric: tabular-nums;
+  opacity: 0.75;
+}
+/* 资产行：整行是一个按钮（点开只读查看弹窗）。行内只放标题、元信息与一行摘要，
+   正文长度不可控，放到弹窗里读；下方边线让行与行之间不靠留白硬撑。 */
+.memory-asset-rows {
+  margin-top: 0.625rem;
   border-top: 1px solid var(--color-desk-line);
 }
 .memory-asset-row {
-  display: flex;
-  align-items: flex-start;
-  gap: 0.75rem;
-  padding: 0.5rem 0;
-}
-.memory-asset-row + .memory-asset-row {
-  border-top: 1px solid var(--color-desk-line);
-}
-.memory-asset-group {
-  display: flex;
-  align-items: center;
-  gap: 0.375rem;
-  color: var(--color-desk-muted);
-  font-size: var(--text-2xs);
-  font-weight: 600;
-}
-.memory-asset-count {
-  color: var(--color-desk-muted);
-  font-family: var(--font-mono);
-  font-weight: 400;
-}
-.memory-asset-empty {
-  margin-top: 0.375rem;
-  color: var(--color-desk-muted);
-  font-size: var(--text-2xs);
-}
-/* 徽标只承载属性文字，不加语义色：属性之间没有轻重之分。 */
-.memory-asset-badge {
-  flex: none;
-  padding: 0.0625rem 0.375rem;
-  border: 1px solid var(--color-desk-line);
+  display: block;
+  width: 100%;
+  padding: 0.5625rem 0.375rem 0.5625rem 0;
+  border: 0;
+  border-bottom: 1px solid var(--color-desk-line);
   border-radius: var(--radius-desk-sm);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--default-transition-duration) ease;
+}
+.memory-asset-row:hover { background-color: var(--color-desk-surface-subtle); }
+.memory-asset-row-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.125rem 0.75rem;
+}
+.memory-asset-row-title {
+  font-size: 0.875rem;
+  font-weight: 600;
+  line-height: 1.45;
+}
+.memory-asset-row-meta {
   color: var(--color-desk-muted);
   font-size: var(--text-2xs);
-  line-height: 1.6;
-  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
-.memory-asset-excerpt {
+.memory-asset-row-hint {
+  display: block;
   margin-top: 0.125rem;
   overflow: hidden;
   color: var(--color-desk-muted);
-  font-size: var(--text-2xs);
-  line-height: 1.6;
+  font-size: 0.75rem;
+  line-height: 1.55;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.memory-asset-empty {
+  margin-top: 0.5rem;
+  color: var(--color-desk-muted);
+  font-size: 0.75rem;
+  line-height: 1.6;
+}
+/* 查看弹窗正文：正文按原样保留换行；原句逐条按左竖线分层，日期只做来源标注。 */
+.memory-detail-text {
+  color: var(--color-desk-ink);
+  font-size: 0.8125rem;
+  line-height: 1.75;
+  white-space: pre-wrap;
+}
+.memory-detail-quotes {
+  padding-left: 0.75rem;
+  border-left: 2px solid var(--color-desk-accent-soft);
+}
+.memory-detail-quote + .memory-detail-quote { margin-top: 0.625rem; }
+/* 降低动态效果时不做行与 chip 的底色过渡，状态仍由选中底色与描边表达。 */
+@media (prefers-reduced-motion: reduce) {
+  .memory-asset-row,
+  .memory-asset-chip {
+    transition: none;
+  }
 }

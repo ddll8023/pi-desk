@@ -22,11 +22,13 @@
 | `src/shared-process/memory-runtime.ts` | 受管运行环境布局与清单校验、全局库位置、宿主配置的受限校验与序列化 |
 | `src/preload/memory.ts` | 固定通道调用与结果契约校验 |
 | `src/renderer/src/memory/services/memory.ts` | 页面桥接定位与响应校验 |
-| `src/renderer/src/memory/labels.ts` | 画像领域、依据与依据选项的共享展示文案 |
-| `src/renderer/src/memory/components/MemorySettingsSection.vue` | 开关、运行环境、库状态与创建表单；库可用时挂载画像与风格小节 |
-| `src/renderer/src/memory/components/MemoryProfileSection.vue` | 按四个领域列出全部画像，打开编辑对话框，保存后重读 |
+| `src/renderer/src/memory/labels.ts` | 画像领域、依据、依据选项与作用范围的中文展示文案 |
+| `src/renderer/src/memory/use-memory-assets.ts` | 画像与风格列表的读取、失败原因与刷新序列，以及概览读数需要的派生计数 |
+| `src/renderer/src/memory/components/MemorySettingsSection.vue` | 概览带（开关与读数）、记忆资产卡（唯一的刷新入口与错误出口）、运行与存储折叠块；库可用时才挂载资产列表 |
+| `src/renderer/src/memory/components/MemoryProfileSection.vue` | 按领域筛选后列出画像，整行打开只读查看弹窗，编辑转交编辑对话框 |
+| `src/renderer/src/memory/components/MemoryAssetDetailDialog.vue` | 记忆资产只读查看弹窗：画像正文、风格要点与全部原句，不提供保存 |
 | `src/renderer/src/memory/components/MemoryProfileEditorDialog.vue` | 画像编辑：作用域、依据、标题与正文；领域锁定，来源记录沿用 |
-| `src/renderer/src/memory/components/MemoryStyleSection.vue` | 列出全部语气风格与原句条数，打开编辑对话框 |
+| `src/renderer/src/memory/components/MemoryStyleSection.vue` | 列出语气风格与原句总数，整行打开只读查看弹窗，编辑转交编辑对话框 |
 | `src/renderer/src/memory/components/MemoryStyleEditorDialog.vue` | 风格编辑：名称、场景、要点与原句样本的删改与补录 |
 
 ### 宿主与产品资源
