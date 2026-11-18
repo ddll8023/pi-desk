@@ -44,3 +44,4 @@
 横向机制对照不按项目拆分，也不为索引表增行；各产品的完整能力仍以对应项目文件为准。
 
 - [sub-agent-delegation.md](sub-agent-delegation.md)：主代理如何决定把任务交给子代理，覆盖十个产品的派发入口、主动性来源、路由与策略层、并行与续派。
+- [expert-role-mechanisms.md](expert-role-mechanisms.md)：会话角色与多角色协作如何定义，覆盖九个产品与 harness 的角色载体、绑定粒度、能力范围由谁声明、团队协作形态与已知限制。
