@@ -1,6 +1,6 @@
 <!--
   默认能力卡片：设置页里唯一改动「专家继承什么」的地方。
-  它只作用于专家：专家团不声明能力范围，团长与成员的能力来自各自的专家定义，因此卡片在筛选到专家团时不出现。
+  它只作用于专家：专家团不声明能力范围，团长与成员的能力来自各自的专家定义。
 
   只有一份集合：勾选即当前可用的技能、MCP 服务器与工具；勾满等于「不限制」。
   因此界面没有「继承全部／只保留选中」的模式切换，也没有第二份状态。
@@ -8,6 +8,9 @@
   技能至少保留一个（清空会让继承型专家连随包技能都拿不到），MCP 允许清空。
   工具里技能门禁、待办清单与记忆工具属受保护项：勾选保持且不可取消，与主进程保存校验同一套标准。
   保存后由主进程写进 agent 目录，新建会话按新范围生效。
+
+  整张卡收成一个折叠分组：summary 只报三个维度的已选/总数，展开后才出现选择器与保存条，
+  因为它是页面级配置，不该常驻占掉角色资产列表的首屏高度。
 -->
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
@@ -40,7 +43,7 @@ const requiredToolNames = computed(() => tools.value.filter(item => item.require
 const selectedSkills = ref<readonly string[]>([])
 const selectedMcp = ref<readonly string[]>([])
 const selectedTools = ref<readonly string[]>([])
-/** 三个区块默认展开：收起会把候选重新藏起来，不应成为默认。 */
+/** 展开后三个区块默认全开：收起会把候选重新藏起来，不应成为默认。 */
 const skillsExpanded = ref(true)
 const mcpExpanded = ref(true)
 const toolsExpanded = ref(true)
@@ -82,6 +85,18 @@ const toolRows = computed(() => tools.value.map(tool => ({
   state: tool.required ? '必需' : '',
   locked: tool.required
 })))
+
+/** 已选/总数：summary 只给比例，具体名单展开后才看。 */
+function ratio(selected: readonly string[], all: readonly string[]): string {
+  return `${selected.length}/${all.length}`
+}
+
+/** 折叠时的摘要：读取前只说「读取中」，不把尚未读到的集合显示成 0/0。 */
+const summaryText = computed(() => {
+  if (props.capabilities === null) return '读取中…'
+  return `技能 ${ratio(selectedSkills.value, allSkillIds.value)} · MCP ${
+    ratio(selectedMcp.value, allMcpNames.value)} · 工具 ${ratio(selectedTools.value, allToolNames.value)}`
+})
 
 /** 勾满时只说结论，部分选中才给数量。 */
 const skillCount = computed(() => {
@@ -140,92 +155,91 @@ function submit(): void {
 </script>
 
 <template>
-  <section class="settings-section" aria-labelledby="settings-experts-defaults-title">
-    <div class="settings-section-heading">
-      <div>
-        <h2 id="settings-experts-defaults-title" class="settings-section-title">默认能力</h2>
-        <p class="mt-1 text-xs text-desk-muted">
-          只影响专家；专家团不声明能力范围，成员的能力取自各自的专家定义。
-        </p>
+  <details class="fold-group">
+    <summary>
+      <span class="disclosure" aria-hidden="true"></span>
+      <span>默认能力</span>
+      <span class="ml-auto text-2xs font-normal tabular-nums text-desk-muted">{{ summaryText }}</span>
+      <span v-if="dirty" class="text-2xs font-normal text-desk-warning">有未保存的改动</span>
+    </summary>
+    <div class="fold-group-body">
+      <p v-if="error !== null" role="alert" class="status-notice status-notice-error">
+        读取能力候选失败：{{ error }}
+      </p>
+
+      <div class="border-t border-desk-line pt-4 first:border-t-0 first:pt-0">
+        <ExpertCapabilityPicker
+          title="技能范围"
+          :selected="selectedSkills"
+          :rows="skillRows"
+          :count-text="skillCount"
+          select-all-label="全选"
+          search-placeholder="按名称筛选技能"
+          empty-text="没有匹配的技能。"
+          no-rows-text="随包、产品目录与共享目录里都没有技能。"
+          :ready="ready"
+          :disabled="saving"
+          collapsible
+          :collapsed="!skillsExpanded"
+          @toggle-collapse="skillsExpanded = !skillsExpanded"
+          @select-all="selectedSkills = [...allSkillIds]"
+          @update:selected="selectedSkills = $event"
+        />
+        <p v-if="skillsExpanded" class="hint-text">项目自带技能始终可用，不受此处限制。</p>
+      </div>
+
+      <div class="border-t border-desk-line pt-4">
+        <ExpertCapabilityPicker
+          title="MCP 服务器"
+          :selected="selectedMcp"
+          :rows="mcpRows"
+          :count-text="mcpCount"
+          select-all-label="全选"
+          search-placeholder="按名称筛选服务器"
+          empty-text="没有匹配的服务器。"
+          no-rows-text="全局 mcp.json 里还没有服务器；先到资源页添加，再回来勾选。"
+          :ready="ready"
+          :disabled="saving"
+          collapsible
+          :collapsed="!mcpExpanded"
+          @toggle-collapse="mcpExpanded = !mcpExpanded"
+          @select-all="selectedMcp = [...allMcpNames]"
+          @update:selected="selectedMcp = $event"
+        />
+      </div>
+
+      <div class="border-t border-desk-line pt-4">
+        <ExpertCapabilityPicker
+          title="工具"
+          :selected="selectedTools"
+          :rows="toolRows"
+          :count-text="toolCount"
+          select-all-label="全选"
+          search-placeholder="按名称筛选工具"
+          empty-text="没有匹配的工具。"
+          no-rows-text="随包清单里还没有工具声明；先重建资源再回来勾选。"
+          :ready="ready"
+          :disabled="saving"
+          collapsible
+          :collapsed="!toolsExpanded"
+          @toggle-collapse="toolsExpanded = !toolsExpanded"
+          @select-all="selectedTools = [...allToolNames]"
+          @update:selected="selectedTools = $event"
+        />
+        <p v-if="toolsExpanded" class="hint-text">标「必需」的工具始终保留，取消不会生效。</p>
+      </div>
+
+      <div class="flex flex-wrap items-center gap-3 border-t border-desk-line pt-4">
+        <AppButton
+          variant="primary"
+          :disabled="saving || !ready || !dirty || skillsEmpty"
+          @click="submit"
+        >
+          {{ saving ? '保存中…' : '保存默认能力' }}
+        </AppButton>
+        <span v-if="skillsEmpty" class="hint-text text-desk-warning">至少保留一个技能。</span>
+        <span v-else-if="dirty" class="hint-text">保存后对新建会话生效。</span>
       </div>
     </div>
-
-    <p v-if="error !== null" role="alert" class="status-notice status-notice-error mt-3">
-      读取能力候选失败：{{ error }}
-    </p>
-
-    <div class="mt-5 border-t border-desk-line pt-5">
-      <ExpertCapabilityPicker
-        title="技能范围"
-        :selected="selectedSkills"
-        :rows="skillRows"
-        :count-text="skillCount"
-        select-all-label="全选"
-        search-placeholder="按名称筛选技能"
-        empty-text="没有匹配的技能。"
-        no-rows-text="随包、产品目录与共享目录里都没有技能。"
-        :ready="ready"
-        :disabled="saving"
-        collapsible
-        :collapsed="!skillsExpanded"
-        @toggle-collapse="skillsExpanded = !skillsExpanded"
-        @select-all="selectedSkills = [...allSkillIds]"
-        @update:selected="selectedSkills = $event"
-      />
-      <p v-if="skillsExpanded" class="hint-text">项目自带技能始终可用，不受此处限制。</p>
-    </div>
-
-    <div class="mt-5 border-t border-desk-line pt-5">
-      <ExpertCapabilityPicker
-        title="MCP 服务器"
-        :selected="selectedMcp"
-        :rows="mcpRows"
-        :count-text="mcpCount"
-        select-all-label="全选"
-        search-placeholder="按名称筛选服务器"
-        empty-text="没有匹配的服务器。"
-        no-rows-text="全局 mcp.json 里还没有服务器；先到资源页添加，再回来勾选。"
-        :ready="ready"
-        :disabled="saving"
-        collapsible
-        :collapsed="!mcpExpanded"
-        @toggle-collapse="mcpExpanded = !mcpExpanded"
-        @select-all="selectedMcp = [...allMcpNames]"
-        @update:selected="selectedMcp = $event"
-      />
-    </div>
-
-    <div class="mt-5 border-t border-desk-line pt-5">
-      <ExpertCapabilityPicker
-        title="工具"
-        :selected="selectedTools"
-        :rows="toolRows"
-        :count-text="toolCount"
-        select-all-label="全选"
-        search-placeholder="按名称筛选工具"
-        empty-text="没有匹配的工具。"
-        no-rows-text="随包清单里还没有工具声明；先重建资源再回来勾选。"
-        :ready="ready"
-        :disabled="saving"
-        collapsible
-        :collapsed="!toolsExpanded"
-        @toggle-collapse="toolsExpanded = !toolsExpanded"
-        @select-all="selectedTools = [...allToolNames]"
-        @update:selected="selectedTools = $event"
-      />
-      <p v-if="toolsExpanded" class="hint-text">标「必需」的工具始终保留，取消不会生效。</p>
-    </div>
-
-    <div class="mt-5 flex flex-wrap items-center gap-3 border-t border-desk-line pt-5">
-      <AppButton
-        variant="primary"
-        :disabled="saving || !ready || !dirty || skillsEmpty"
-        @click="submit"
-      >
-        {{ saving ? '保存中…' : '保存默认能力' }}
-      </AppButton>
-      <span v-if="skillsEmpty" class="hint-text text-desk-warning">至少保留一个技能。</span>
-      <span v-else-if="dirty" class="hint-text">有未保存的改动；保存后对新建会话生效。</span>
-    </div>
-  </section>
+  </details>
 </template>

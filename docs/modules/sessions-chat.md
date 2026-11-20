@@ -146,12 +146,12 @@
 | `src/renderer/src/sessions/components/SessionActivityBar.vue` | 会话活动摘要和明细 |
 | `src/renderer/src/sessions/components/ExtensionDialog.vue` | SDK 扩展交互队列的当前对话 |
 | `src/renderer/src/sessions/components/ExtensionNotificationBar.vue` | 扩展通知展示 |
-| `src/renderer/src/experts/components/ExpertSettingsSection.vue` | 设置页「专家与专家团」分节：类型分段筛选与计数、默认能力卡片入口（只作用于专家）、内置与自定义专家列表（含能力范围与写入范围摘要）、内置与自定义团队列表（团长与成员显示名、可开团状态）、合并的加载诊断（带来源标签）、派生副本、新建专家／新建专家团、删除确认（删专家时列出引用它的团队） |
+| `src/renderer/src/experts/components/ExpertSettingsSection.vue` | 设置页「专家与专家团」分节：类型分段筛选与计数（只裁剪列表，不改变页面骨架）、专家与专家团共用一份行模板（类型与内置／自定义来源由行内徽标表达；专家带能力范围与写入范围摘要、不可用技能与截断警示；专家团带可开团状态、团长与成员显示名）、创建动作跟随筛选（「全部」时并列、「专家」或「专家团」时只留主创建动作）、空态带主按钮、按来源合并的提示条（错误优先于提示）、加载诊断收在展开的折叠分组里且不随筛选裁剪、派生副本、新建与编辑入口、页尾折叠的默认能力分组、删除确认（删专家时列出引用它的团队） |
 | `src/renderer/src/experts/components/TeamEditorDialog.vue` | 团队编辑对话框：显示名称、一句话简介（进团长段）、团长单选与成员多选（都从专家清单勾选，团长在成员里禁用并自动移除）、协作约定正文（标注不进系统提示）；保存中禁用重复提交，失败就地展示原因，关闭归还焦点 |
 | `src/renderer/src/experts/components/ExpertEditorDialog.vue` | 专家编辑对话框：显示名称、一句话简介、技能、MCP 与工具三个能力段（复用能力选择器，均为 3 列勾选格；技能右槽在无状态时标出来源，状态优先；工具段的受保护项锁定为「必需」不可取消）+ 已选计数与全选；引用数量不设上限；写入范围三态单选（不限制／只读／指定路径）与路径输入，非法项就地报错、不阻断合法项；正文；新建与编辑两态；保存中禁用重复提交，失败就地展示原因，关闭归还焦点 |
 | `src/renderer/src/experts/components/ExpertCapabilityPicker.vue` | 能力选择器：3 列勾选格（格内右槽优先显示状态，状态为空时退回来源标签，标识与来源全文进 `title`）+ 已选计数 + 可选筛选 + 可选全选 + 可选折叠（收起时保留标题与计数）；传 `mode` 时才出现口径分段；行可传 `locked`，已勾选后不再响应取消；自绘勾选控件（`role="checkbox"` 的按钮、方块与内联对勾、键盘焦点环）；供默认能力卡片、编辑对话框与会话内卡片复用 |
 | `src/renderer/src/experts/capability-selection.ts` | 能力勾选换算的单一实现：基线展开、按定义还原勾选、勾选 → `skillIds`/`Add`/`Remove` 换算（技能、MCP 与工具三个维度同一套）、行尾状态文案（含受保护项的「必需」）；纯函数，不读配置也不写盘，编辑对话框与会话内卡片共用 |
-| `src/renderer/src/experts/components/ExpertCapabilityDefaultsCard.vue` | 默认能力卡片：技能、MCP 与工具各一份勾选集合（3 列网格、可折叠，勾满等于不限制），勾选即改；技能至少保留一个；工具的受保护项始终保留且不可取消；保存后统一影响继承型专家，仅在有未保存改动时启用保存 |
+| `src/renderer/src/experts/components/ExpertCapabilityDefaultsCard.vue` | 默认能力分组（折叠，只作用于专家）：summary 报技能、MCP 与工具三项的已选／总数，有未保存改动时另作提示；展开后三个维度各一份勾选集合（3 列网格、可折叠，勾满等于不限制），勾选即改；技能至少保留一个；工具的受保护项始终保留且不可取消；保存后统一影响继承型专家，仅在有未保存改动时启用保存 |
 
 核心打开链、Store、宿主入口及投影职责已由源码读取；投影辅助实现与界面文件结合导入、模板和接口调用映射，不将本表视作逐函数质量结论。
 
