@@ -5,10 +5,12 @@
  * 单个定义损坏或标识冲突只影响对应条目，不中断整份清单。
  * 团长与成员的专家引用只做诊断：引用失效不让团队消失，但会让它不可开团（`ready` 为假）。
  * 本模块不装配会话、不创建成员会话，也不读写任务账本；文档解析与标识规则复用专家层那一份，
- * 主进程不复制第二条解析路径。
+ * 主进程不复制第二条解析路径。设置页保存时另用这里的声明段生成与草稿校验，
+ * 让写入与解析共享同一套字段口径（尤其是「团长不得同时是成员」）。
  */
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
+import { MAX_TEAM_DISPLAY_NAME_LENGTH, MAX_TEAM_MEMBERS, MAX_TEAM_SUMMARY_LENGTH } from '../shared/teams-api'
 import { agentResourcePath } from './agent-resources.ts'
 import type { AgentResourceBundle } from './agent-resources.ts'
 import { EXPERT_LIMITS, isExpertDefinitionId, parseExpertDocument } from './expert-definitions.ts'
@@ -46,6 +48,8 @@ export type TeamIssueKind =
   | 'member-reference-missing'
   /** 团长之外没有任何可用成员：团队保留在清单里，但不可开团。 */
   | 'no-usable-member'
+  /** 团长被同时写进成员名单：装配期会剔除，避免团长被当作成员派活。 */
+  | 'lead-in-members'
 
 /** 一条结构化诊断；只带标识与路径，不携带用户正文。 */
 export interface TeamIssue {
@@ -134,8 +138,13 @@ function readDefinition(input: {
   if (!leadAvailable) {
     input.issues.push({ kind: 'lead-reference-missing', teamId: id, expertId: leadExpertId, path: filePath })
   }
+  // 团长同时出现在成员里只保留团长身份：否则派活会给团长开一个成员会话，绕过「团长不生产」。
+  const members = normalizeTeamMembers(leadExpertId, memberExpertIds)
+  if (members.length !== memberExpertIds.length) {
+    input.issues.push({ kind: 'lead-in-members', teamId: id, expertId: leadExpertId, path: filePath })
+  }
   let membersAvailable = 0
-  for (const memberId of memberExpertIds) {
+  for (const memberId of members) {
     if (available.has(memberId)) { membersAvailable += 1; continue }
     input.issues.push({ kind: 'member-reference-missing', teamId: id, expertId: memberId, path: filePath })
   }
@@ -145,15 +154,14 @@ function readDefinition(input: {
   return {
     ok: true,
     definition: {
-      id, displayName, summary, leadExpertId, memberExpertIds,
+      id, displayName, summary, leadExpertId, memberExpertIds: members,
       body: document.body, source, filePath,
       ready: leadAvailable && membersAvailable > 0
     }
   }
 }
 
-/** 把随包清单的团队条目映射为内置入口；路径拼接只在这里做一次。 */
-export function builtinTeams(bundle: AgentResourceBundle): BuiltinTeam[] {
+/** 把随包清单的团队条目映射为内置入口；路径拼接只在这里做一次。 */export function builtinTeams(bundle: AgentResourceBundle): BuiltinTeam[] {
   return bundle.teams.map(item => ({ id: item.id, filePath: agentResourcePath(bundle.root, item.entry) }))
 }
 
@@ -205,4 +213,81 @@ export function loadTeamCatalog(input: LoadTeamCatalogInput): TeamCatalog {
   }
 
   return { teams, issues }
+}
+
+/** 团队引用列表解析的对外入口：写回前用它确认声明段能读回来，与清单一侧的解析同一份。 */
+export function parseTeamMemberRefs(value: string): string[] | null {
+  return parseTeamRefs(value)
+}
+
+/**
+ * 成员名单规范化：去重并剔除团长标识。
+ * 解析与保存共用这一份，避免出现「文件里写了团长、清单里已剔除、保存又写回去」的回落。
+ */
+export function normalizeTeamMembers(leadExpertId: string, memberExpertIds: readonly string[]): string[] {
+  return [...new Set(memberExpertIds)].filter(memberId => memberId !== leadExpertId)
+}
+
+/** 保存前的团队草稿：只含声明段字段与正文，标识由主进程分配。 */
+export interface TeamDraft {
+  readonly displayName: string
+  readonly summary: string
+  readonly leadExpertId: string
+  readonly memberExpertIds: readonly string[]
+  readonly body: string
+}
+
+/** 名称与简介会写进声明段：换行与首尾空白会破坏 `key: value` 结构。 */
+function isSingleLineText(value: string, maxLength: number): boolean {
+  const trimmed = value.trim()
+  return trimmed !== '' && trimmed.length <= maxLength && !/[\r\n]/.test(trimmed)
+}
+
+/**
+ * 草稿校验：返回中文原因或 `null`。引用不存在的专家一律拦下——
+ * 存一份一开团就不可用的团队没有意义，而专家侧的「引用失效只报诊断」是为了不销毁历史定义。
+ */
+export function validateTeamDraft(draft: TeamDraft, availableExpertIds: readonly string[]): string | null {
+  if (!isSingleLineText(draft.displayName, MAX_TEAM_DISPLAY_NAME_LENGTH)) {
+    return `显示名称不能为空、不能换行，且不超过 ${MAX_TEAM_DISPLAY_NAME_LENGTH} 个字符。`
+  }
+  if (!isSingleLineText(draft.summary, MAX_TEAM_SUMMARY_LENGTH)) {
+    return `一句话简介不能为空、不能换行，且不超过 ${MAX_TEAM_SUMMARY_LENGTH} 个字符。`
+  }
+  if (!isExpertDefinitionId(draft.leadExpertId)) return '团长必须是合法专家标识：在专家清单里选中一位团长。'
+  if (!draft.memberExpertIds.every(isExpertDefinitionId)) return '成员列表里有写法不合法的专家标识。'
+  const members = normalizeTeamMembers(draft.leadExpertId, draft.memberExpertIds)
+  if (members.length === 0) return '至少要有一名成员；只有团长的团队没有可执行单元。'
+  if (members.length > MAX_TEAM_MEMBERS) return `成员最多 ${MAX_TEAM_MEMBERS} 名。`
+  const available = new Set(availableExpertIds)
+  const missing = [...new Set([draft.leadExpertId, ...members])].filter(id => !available.has(id))
+  if (missing.length > 0) return `这些专家不在当前清单里：${missing.join('、')}。`
+  return null
+}
+
+/**
+ * 生成团队定义文本：字段顺序固定，避免每次保存产生无意义的 diff；
+ * 本设计不认识的声明行原样保留，用户手写的说明不会被一次保存洗掉。
+ */
+export function buildTeamDocument(input: {
+  readonly headerLines: readonly string[]
+  readonly id: string
+  readonly displayName: string
+  readonly summary: string
+  readonly leadExpertId: string
+  readonly memberExpertIds: readonly string[]
+  readonly body: string
+}): string {
+  const managed = /^(name|displayName|summary|lead|members)\s*:/
+  const kept = input.headerLines.filter(line => !managed.test(line))
+  const members = normalizeTeamMembers(input.leadExpertId, input.memberExpertIds)
+  const header = [
+    `name: ${input.id}`,
+    `displayName: ${input.displayName.trim()}`,
+    `summary: ${input.summary.trim()}`,
+    `lead: ${input.leadExpertId}`,
+    `members: ${members.length === 0 ? '[]' : `[${members.join(', ')}]`}`
+  ]
+  const body = input.body.replace(/\r\n?/g, '\n').trim()
+  return ['---', ...header, ...kept, '---', '', body, ''].join('\n')
 }

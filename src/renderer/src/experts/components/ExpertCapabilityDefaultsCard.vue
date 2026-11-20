@@ -1,5 +1,6 @@
 <!--
   默认能力卡片：设置页里唯一改动「专家继承什么」的地方。
+  它只作用于专家：专家团不声明能力范围，团长与成员的能力来自各自的专家定义，因此卡片在筛选到专家团时不出现。
 
   只有一份集合：勾选即当前可用的技能、MCP 服务器与工具；勾满等于「不限制」。
   因此界面没有「继承全部／只保留选中」的模式切换，也没有第二份状态。
@@ -143,6 +144,9 @@ function submit(): void {
     <div class="settings-section-heading">
       <div>
         <h2 id="settings-experts-defaults-title" class="settings-section-title">默认能力</h2>
+        <p class="mt-1 text-xs text-desk-muted">
+          只影响专家；专家团不声明能力范围，成员的能力取自各自的专家定义。
+        </p>
       </div>
     </div>
 

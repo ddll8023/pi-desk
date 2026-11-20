@@ -1,13 +1,21 @@
 /**
- * 团队资源与成员会话的 IPC：只读团队清单、加载诊断、成员会话清单与成员会话内容。
+ * 团队资源与成员会话的 IPC：读团队清单与加载诊断，读写删自定义团队，以及成员会话清单与内容。
  *
- * 本通道不写盘、不启动成员会话、不改任何状态；派活与停止由宿主内的团队工具完成，不经本通道。
+ * 写通道只到 `<agentDir>/teams/` 下的自定义团队；内置团队只读。派活与停止由宿主内的团队工具完成，不经本通道。
  * 成员会话按「项目路径 + 根会话标识 + 成员登记标识」定位，不接受文件路径，
  * 因此读不到登记之外的会话文件，也读不到未添加项目的目录。
  */
 import type { IpcMainInvokeEvent } from 'electron'
-import { TEAMS_LIST_CHANNEL } from '../../shared/teams-api'
-import type { TeamsListResult } from '../../shared/teams-api'
+import {
+  TEAMS_DELETE_CHANNEL,
+  TEAMS_LIST_CHANNEL,
+  TEAMS_READ_CHANNEL,
+  TEAMS_SAVE_CHANNEL,
+  isTeamDeleteRequest,
+  isTeamReadRequest,
+  isTeamSaveRequest
+} from '../../shared/teams-api'
+import type { TeamDeleteResult, TeamReadResult, TeamSaveResult, TeamsListResult } from '../../shared/teams-api'
 import {
   TEAM_SESSIONS_LIST_CHANNEL,
   TEAM_SESSION_HISTORY_CHANNEL,
@@ -18,7 +26,10 @@ import {
 } from '../../shared/team-session-api'
 import type { TeamSessionHistoryResult, TeamSessionReadResult, TeamSessionsListResult } from '../../shared/team-session-api'
 import { handle, isTrustedCaller } from '../ipc/dispatch'
+import { getPiAgentDir } from '../shared/pi-paths'
 import { readTeamCatalog } from './team-catalog'
+import { deleteUserTeam, readUserTeamDefinition, saveUserTeamDefinition } from './team-files'
+import { readExpertCatalog } from './expert-catalog'
 import { listTeamSessions, readTeamSession, readTeamSessionHistory } from './team-sessions'
 import type { TeamSessionBindings } from './team-sessions'
 
@@ -135,6 +146,67 @@ export function registerTeamHandlers(pageUrl: string, options: TeamHandlerOption
         return { ok: true, data: history }
       } catch {
         return { ok: false, error: { code: 'INTERNAL_ERROR', message: '读取成员会话正文失败。' } }
+      }
+    }
+  )
+
+  /** 读取一份自定义团队的声明与正文，供设置页编辑。 */
+  handle(
+    TEAMS_READ_CHANNEL,
+    (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<TeamReadResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return Promise.resolve({ ok: false, error: { code: 'FORBIDDEN', message: '不允许此页面调用桌面接口。' } })
+      }
+      if (args.length !== 1 || !isTeamReadRequest(args[0])) {
+        return Promise.resolve({ ok: false, error: { code: 'INVALID_REQUEST', message: '团队读取请求只接受一个团队标识。' } })
+      }
+      try {
+        return Promise.resolve(readUserTeamDefinition({ agentDir: getPiAgentDir(), teamId: args[0].teamId }))
+      } catch {
+        return Promise.resolve({
+          ok: false, error: { code: 'INTERNAL_ERROR', message: '读取团队定义失败，检查应用数据目录。' }
+        })
+      }
+    }
+  )
+
+  /** 新建或保存一份自定义团队；团长与成员必须是当前专家清单里的标识。 */
+  handle(
+    TEAMS_SAVE_CHANNEL,
+    (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<TeamSaveResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return Promise.resolve({ ok: false, error: { code: 'FORBIDDEN', message: '不允许此页面调用桌面接口。' } })
+      }
+      if (args.length !== 1 || !isTeamSaveRequest(args[0])) {
+        return Promise.resolve({ ok: false, error: { code: 'INVALID_REQUEST', message: '团队保存请求不合法。' } })
+      }
+      try {
+        const availableExpertIds = readExpertCatalog().experts.map(item => item.id)
+        return Promise.resolve(saveUserTeamDefinition({ ...args[0], agentDir: getPiAgentDir(), availableExpertIds }))
+      } catch {
+        return Promise.resolve({
+          ok: false, error: { code: 'INTERNAL_ERROR', message: '保存团队定义失败，检查应用数据目录是否可写。' }
+        })
+      }
+    }
+  )
+
+  /** 删除一份自定义团队；只删定义文件，目录里还有别的文件时整体拒绝。 */
+  handle(
+    TEAMS_DELETE_CHANNEL,
+    (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<TeamDeleteResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return Promise.resolve({ ok: false, error: { code: 'FORBIDDEN', message: '不允许此页面调用桌面接口。' } })
+      }
+      if (args.length !== 1 || !isTeamDeleteRequest(args[0])) {
+        return Promise.resolve({ ok: false, error: { code: 'INVALID_REQUEST', message: '团队删除请求只接受一个团队标识。' } })
+      }
+      try {
+        return Promise.resolve(deleteUserTeam({ agentDir: getPiAgentDir(), teamId: args[0].teamId }))
+      } catch {
+        return Promise.resolve({
+          ok: false, error: { code: 'INTERNAL_ERROR', message: '删除团队定义失败，检查应用数据目录。' }
+        })
       }
     }
   )

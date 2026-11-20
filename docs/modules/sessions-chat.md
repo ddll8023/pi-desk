@@ -27,7 +27,8 @@
 | `src/main/sessions/team-catalog.ts` | 团队清单读取：随包与用户目录双来源合并、团长与成员可用性诊断；会话打开时按团队标识取定义 |
 | `src/main/sessions/session-teams.ts` | 会话团队绑定的解析：已持久化绑定优先于请求值，只对新会话生效 |
 | `src/main/sessions/team-sessions.ts` | 成员会话的登记、只读读取与目录清理：开团物化登记、头部与近期正文读取、删除根会话时目录移废纸篦、启动后核清孤儿目录 |
-| `src/main/sessions/team-ipc.ts` | 团队清单与成员会话三条只读通道注册；均校验已添加项目，不提供派活与停止入口 |
+| `src/main/sessions/team-files.ts` | 自定义团队的写操作：读取与保存团队定义、删除自定义团队；标识 `team-<序号>` 自动分配，字段口径复用 `team-definitions` 的生成与草稿校验（含剔除成员里的团长），写入面只到 `<agentDir>/teams/`，先写临时文件再改名 |
+| `src/main/sessions/team-ipc.ts` | 团队清单三条只读通道与团队读取／保存／删除三条写通道注册；写通道只到自定义团队，均校验已添加项目，不提供派活与停止入口 |
 | `src/main/sessions/session-run-registry.ts` | 运行 ID、绑定代际、前台顺序及会话占用的唯一登记 |
 | `src/main/sessions/log-host-pool.ts` | 只读解析宿主池：按项目保活查看历史用的宿主进程，不登记运行实例、不占用会话，可被绑定接管 |
 | `src/main/sessions/sdk-runtime-bridge.ts` | 多实例运行选择、请求分发、状态与宿主生命周期适配；按实例查询与订阅完整状态 |
@@ -78,7 +79,7 @@
 | `src/shared/present-card-view.ts` | 会话内卡片载荷契约：卡片类型枚举、动作白名单、字段长度上限与共享解析器，宿主投影与渲染层共用同一份判定 |
 | `src/shared/session-run-api.ts` | 应用级运行清单、释放／结束与事件契约 |
 | `src/shared/usage-stats-api.ts` | 会话用量明细（按日、模型×日、子代理×日）的 IPC 契约与类型校验 |
-| `src/shared/teams-api.ts` | 团队清单通道与视图／诊断类型；成员数量与诊断码的边界在同一定义处 |
+| `src/shared/teams-api.ts` | 团队清单、团队读取／保存／删除四条通道与视图、可编辑定义、诊断类型；成员数量、名称长度与诊断码的边界在同一定义处 |
 | `src/shared/team-session-api.ts` | 成员会话的清单、头部与近期正文三条只读通道契约与响应校验；成员会话 id 与会话目录的唯一拼法在 `team-session-path` |
 | `src/shared/team-session-path.ts` | 成员会话目录与「根会话 + 成员」确定性会话 id 的唯一定义，主进程与 SDK 宿主共用 |
 | `src/shared/team-board-api.ts` | 任务账本结构、条目状态机、依赖与验收项的上限与解析器 |
@@ -125,7 +126,7 @@
 | `src/renderer/src/sessions/components/UsageCompositionBar.vue` | 用量构成条：四段堆叠、段间 1px 分隔与非零段 2px 保底，供概览与模型／项目／团队分布行复用 |
 | `src/renderer/src/sessions/components/TeamPanel.vue` | 输入坞上方的团队面板：账本条目与状态、成员会话状态与最近一轮、写区重叠提示、成员数与累计用量；只读，不派活、不改账本 |
 | `src/renderer/src/sessions/components/TeamMemberDialog.vue` | 成员只读弹窗：最近一轮结论、写入文件、待决项、用量与近期对话；无输入入口 |
-| `src/renderer/src/sessions/components/PromptComposer.vue` | 提示词与独立图片资料编排、视窗全局粘贴与剪贴板截图提取、对话期间草稿与标注编辑、文件树拖入引用、命令与补全；＋ 菜单为一级分类行 + 二级面板的双级结构（模型、执行模式、专家、技能、常用消息常驻面板内；技能取与斜杠补全同源的清单，点击在光标处插入 `/skill:<名称>` 命令胶囊而不发送；同一消息可插多条，宿主只展开开头那条；输入行是富文本，`@` 文件引用与 `/` 命令以胶囊包裹，提交内容仍是纯文本；专家绑定失效时给出提示）；当前专家以坞内徽标常驻显示，失效时徽标转警示色）；浏览器批注草稿合并；固定提示词、图片及标注快照、后台提交与失败恢复；显式同步及确认结束原运行后的输入恢复；团队会话下在输入坞上方额外挂团队面板与成员只读弹窗 |
+| `src/renderer/src/sessions/components/PromptComposer.vue` | 提示词与独立图片资料编排、视窗全局粘贴与剪贴板截图提取、对话期间草稿与标注编辑、文件树拖入引用、命令与补全；＋ 菜单为一级分类行 + 二级面板的双级结构（模型、执行模式、专家 / 团队、技能、常用消息常驻面板内，专家与团队共用一个面板、选中团队即把专家改成团长；技能取与斜杠补全同源的清单，点击在光标处插入 `/skill:<名称>` 命令胶囊而不发送；同一消息可插多条，宿主只展开开头那条；输入行是富文本，`@` 文件引用与 `/` 命令以胶囊包裹，提交内容仍是纯文本；专家绑定失效时给出提示）；坞内身份徽标只渲染一个，团队优先、否则显示当前专家，失效时转警示色）；浏览器批注草稿合并；固定提示词、图片及标注快照、后台提交与失败恢复；显式同步及确认结束原运行后的输入恢复；团队会话下在输入坞上方额外挂团队面板与成员只读弹窗 |
 | `src/renderer/src/sessions/components/PromptRichEditor.vue` | 输入坞的富文本输入：纯文本与引用胶囊混排、序列化与草稿恢复、`@` 与 `/` 的光标上下文、输入法组合态与纯文本粘贴 |
 | `src/renderer/src/sessions/components/PromptImageMaterials.vue` | 输入坞内图片附件行：导入、移除、缩略图与独立标注按钮双入口、标注数量展示 |
 | `src/renderer/src/sessions/components/ImageAnnotationPanel.vue` | 左图右说明的独立标注面板、编号双向定位、同步删除与键盘调整入口 |
@@ -145,7 +146,8 @@
 | `src/renderer/src/sessions/components/SessionActivityBar.vue` | 会话活动摘要和明细 |
 | `src/renderer/src/sessions/components/ExtensionDialog.vue` | SDK 扩展交互队列的当前对话 |
 | `src/renderer/src/sessions/components/ExtensionNotificationBar.vue` | 扩展通知展示 |
-| `src/renderer/src/experts/components/ExpertSettingsSection.vue` | 设置页「专家」分节：默认能力卡片入口、内置与自定义专家列表（含一行能力范围摘要：口径、增减与仅用选中的名单，以及一行写入范围摘要：不限制／只读／白名单）、加载诊断、派生副本、新建与编辑入口、删除确认 |
+| `src/renderer/src/experts/components/ExpertSettingsSection.vue` | 设置页「专家与专家团」分节：类型分段筛选与计数、默认能力卡片入口（只作用于专家）、内置与自定义专家列表（含能力范围与写入范围摘要）、内置与自定义团队列表（团长与成员显示名、可开团状态）、合并的加载诊断（带来源标签）、派生副本、新建专家／新建专家团、删除确认（删专家时列出引用它的团队） |
+| `src/renderer/src/experts/components/TeamEditorDialog.vue` | 团队编辑对话框：显示名称、一句话简介（进团长段）、团长单选与成员多选（都从专家清单勾选，团长在成员里禁用并自动移除）、协作约定正文（标注不进系统提示）；保存中禁用重复提交，失败就地展示原因，关闭归还焦点 |
 | `src/renderer/src/experts/components/ExpertEditorDialog.vue` | 专家编辑对话框：显示名称、一句话简介、技能、MCP 与工具三个能力段（复用能力选择器，均为 3 列勾选格；技能右槽在无状态时标出来源，状态优先；工具段的受保护项锁定为「必需」不可取消）+ 已选计数与全选；引用数量不设上限；写入范围三态单选（不限制／只读／指定路径）与路径输入，非法项就地报错、不阻断合法项；正文；新建与编辑两态；保存中禁用重复提交，失败就地展示原因，关闭归还焦点 |
 | `src/renderer/src/experts/components/ExpertCapabilityPicker.vue` | 能力选择器：3 列勾选格（格内右槽优先显示状态，状态为空时退回来源标签，标识与来源全文进 `title`）+ 已选计数 + 可选筛选 + 可选全选 + 可选折叠（收起时保留标题与计数）；传 `mode` 时才出现口径分段；行可传 `locked`，已勾选后不再响应取消；自绘勾选控件（`role="checkbox"` 的按钮、方块与内联对勾、键盘焦点环）；供默认能力卡片、编辑对话框与会话内卡片复用 |
 | `src/renderer/src/experts/capability-selection.ts` | 能力勾选换算的单一实现：基线展开、按定义还原勾选、勾选 → `skillIds`/`Add`/`Remove` 换算（技能、MCP 与工具三个维度同一套）、行尾状态文案（含受保护项的「必需」）；纯函数，不读配置也不写盘，编辑对话框与会话内卡片共用 |

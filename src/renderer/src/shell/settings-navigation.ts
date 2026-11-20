@@ -7,7 +7,7 @@
  */
 
 /** 设置页的分节标识；也是内容分发与深链跳转的唯一键。 */
-export type SettingsSectionId = 'appearance' | 'files' | 'quick-send' | 'quick-commands' | 'terminal' | 'git' | 'lan-remote' | 'model' | 'resources' | 'experts' | 'teams' | 'features' | 'memory' | 'usage' | 'version'
+export type SettingsSectionId = 'appearance' | 'files' | 'quick-send' | 'quick-commands' | 'terminal' | 'git' | 'lan-remote' | 'model' | 'resources' | 'experts' | 'features' | 'memory' | 'usage' | 'version'
 
 /** 导航条目可用的图标名；每个名字对应 SettingsNavIcon 里的一段内联 Lucide 路径。 */
 export type SettingsIconName = 'palette' | 'files' | 'zap' | 'terminal' | 'bot' | 'blocks' | 'user-round' | 'users' | 'toggle-left' | 'refresh-cw' | 'smartphone' | 'git-branch' | 'brain' | 'chart'
@@ -48,8 +48,7 @@ export const SETTINGS_NAV_GROUPS: readonly SettingsNavGroup[] = [
     items: [
       { id: 'model', label: '模型', icon: 'bot', keywords: ['供应商', '凭据', 'models.json', 'provider'] },
       { id: 'resources', label: '资源', icon: 'blocks', keywords: ['技能', '提示词模板', '扩展', 'MCP', 'skills'] },
-      { id: 'experts', label: '专家', icon: 'user-round', keywords: ['专家', 'expert', '角色', '派生', '自定义专家', '行业专家'] },
-      { id: 'teams', label: '专家团', icon: 'users', keywords: ['团队', '专家团', '团长', '成员', '协作', 'team'] },
+      { id: 'experts', label: '专家与专家团', icon: 'user-round', keywords: ['专家', '专家团', '团队', 'expert', 'team', '角色', '团长', '成员', '协作', '派生', '自定义专家', '行业专家'] },
       { id: 'features', label: '功能', icon: 'toggle-left', keywords: ['开关', 'feature', '执行模式', '快速模式', '标准模式'] },
       { id: 'memory', label: '记忆', icon: 'brain', keywords: ['记忆', '日记', '偏好', '画像', 'memory', '全局'] },
       { id: 'usage', label: '用量', icon: 'chart', keywords: ['用量', 'token', 'tokens', '统计', '消耗', '费用', 'usage', 'cost', '额度'] }

@@ -36,7 +36,8 @@ function teamDocument(overrides: Readonly<Record<string, string>> = {}): string 
     displayName: '交付小组',
     summary: '团长拆解、成员分工执行',
     lead: 'expert-author',
-    members: '[expert-author, reviewer]',
+    // 团长不进成员：写了也会被剔除并记诊断，夹具按合法形态给。
+    members: '[reviewer]',
     ...overrides
   }
   const head = Object.entries(fields)
@@ -82,7 +83,7 @@ test('自定义团队按目录名合并，可开团判定为真', () => {
     assert.equal(catalog.teams.length, 1)
     assert.equal(catalog.teams[0]?.source, 'user')
     assert.equal(catalog.teams[0]?.ready, true)
-    assert.deepEqual(catalog.teams[0]?.memberExpertIds, ['expert-author', 'reviewer'])
+    assert.deepEqual(catalog.teams[0]?.memberExpertIds, ['reviewer'])
     assert.deepEqual(catalog.issues, [])
   } finally {
     temp.cleanup()
@@ -125,6 +126,24 @@ test('团长引用失效时团队保留但不可开团，成员部分失效仍�
     assert.deepEqual(partial?.memberExpertIds, ['reviewer', 'ghost'])
     const kinds = catalog.issues.map(issue => `${issue.kind}:${issue.teamId}:${issue.expertId}`).sort()
     assert.deepEqual(kinds, ['lead-reference-missing:lost-lead:ghost', 'member-reference-missing:partial:ghost'])
+  } finally {
+    temp.cleanup()
+  }
+})
+
+test('团长被写进成员时按团长处理，并记一条诊断', () => {
+  const temp = createTempRoot('pi-desk-team-')
+  try {
+    writeFile(temp.dir, 'custom/delivery/team.md', teamDocument({ members: '[expert-author, reviewer]' }))
+    const catalog = loadTeamCatalog({
+      builtin: [], userDirectory: join(temp.dir, 'custom'),
+      availableExpertIds: ['expert-author', 'reviewer']
+    })
+    const team = catalog.teams[0]
+    assert.deepEqual(team?.memberExpertIds, ['reviewer'])
+    assert.equal(team?.ready, true)
+    assert.deepEqual(catalog.issues.map(issue => `${issue.kind}:${issue.teamId}:${issue.expertId}`),
+      ['lead-in-members:delivery:expert-author'])
   } finally {
     temp.cleanup()
   }

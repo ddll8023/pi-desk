@@ -1,7 +1,7 @@
 <!-- 图片与编号说明由坞内附件区独立管理；点击发送即固定提示词、图片及标注快照，说明由 SDK 独立资料消息承接。
      结果未确认时可补读同步，确认结束原运行后恢复输入，不自动重发。
      原位新建以独立草稿承接输入：旧实例结束期间可编辑但不发送，首次发送才建立新会话。
-     Prompt 输入坞：处理输入法组合态、Enter 发送与 Shift+Enter 换行、焦点回归与重复提交、响应侧栏「新建」的聚焦请求并给出一次性提示，并在 Agent 运行期间原位提供停止入口；在 Agent 运行与流式响应期间草稿文本、图片附件与标注编辑保持可用，点击发送时才校验会话空闲；同时承接 Extension 的 set_editor_text 填充文本、图片附件的选择/文本框与活动视窗全局快捷粘贴（兼容系统截图提取）/拖拽入口、输入行按内容自动增高、＋ 菜单内的常用消息（短语取自界面偏好，可在设置里增删改与排序，点击即发送）、Pi 命令的斜杠模糊补全（Runtime 就绪后用运行中的命令清单，未就绪时用主进程预读的技能清单，按类型分组并按匹配优先级排序；另含 Desktop 层自己拦截的界面命令）与 `@` 项目文件引用（编辑器内以胶囊包裹，提交的仍是相对路径文本，不传文件内容）；右侧文件树的行拖入坞内也走同一条相对路径引用规则；输入行是富文本，纯文本与引用胶囊混排，草稿字符串仍是唯一文本真源。输入坞是单行结构：左侧 ＋ 菜单是两列双级结构——左列分类行（添加图片、模型、执行模式、专家、团队、技能、常用消息），右列是当前分类的二级面板（添加图片直接触发选择，其余六项常驻在面板里、仅列表区内部滚动，其中技能点击在光标处插入 `/skill:<名称>` 命令胶囊、不发送（同一消息可插多条，宿主只展开开头那条）；执行模式两档互斥，专家一个会话只选一个、选中团队时专家即为团长，三者都只在新建会话时可选，已开始的会话只显示当前值不可改），中间是输入行，右侧是发送/停止键；坞上方是待办清单面板（仅标准模式提交清单后出现）、一行延续判定结论（宿主给出结论时才渲染）与一行专家失效提示（绑定的定义已不在清单里时才渲染）；坞下方一行是水平居中的信息行：异常与进行中的状态文本、被收起的 Extension 对话入口与会话用量指标（缓存命中率、上下文占用与平均速率，点击开明细；累计 token 与费用只在明细浮层展示）。Extension 的 setStatus 项不在输入区展示。 -->
+     Prompt 输入坞：处理输入法组合态、Enter 发送与 Shift+Enter 换行、焦点回归与重复提交、响应侧栏「新建」的聚焦请求并给出一次性提示，并在 Agent 运行期间原位提供停止入口；在 Agent 运行与流式响应期间草稿文本、图片附件与标注编辑保持可用，点击发送时才校验会话空闲；同时承接 Extension 的 set_editor_text 填充文本、图片附件的选择/文本框与活动视窗全局快捷粘贴（兼容系统截图提取）/拖拽入口、输入行按内容自动增高、＋ 菜单内的常用消息（短语取自界面偏好，可在设置里增删改与排序，点击即发送）、Pi 命令的斜杠模糊补全（Runtime 就绪后用运行中的命令清单，未就绪时用主进程预读的技能清单，按类型分组并按匹配优先级排序；另含 Desktop 层自己拦截的界面命令）与 `@` 项目文件引用（编辑器内以胶囊包裹，提交的仍是相对路径文本，不传文件内容）；右侧文件树的行拖入坞内也走同一条相对路径引用规则；输入行是富文本，纯文本与引用胶囊混排，草稿字符串仍是唯一文本真源。输入坞是单行结构：左侧 ＋ 菜单是两列双级结构——左列分类行（添加图片、模型、执行模式、专家 / 团队、技能、常用消息），右列是当前分类的二级面板（添加图片直接触发选择，其余五项常驻在面板里、仅列表区内部滚动，其中技能点击在光标处插入 `/skill:<名称>` 命令胶囊、不发送（同一消息可插多条，宿主只展开开头那条）；执行模式两档互斥；专家与团队共用一个面板、专家一个会话只选一个、选中团队时专家即为团长，三者都只在新建会话时可选，已开始的会话只显示当前值不可改），中间是输入行，右侧是发送/停止键；坞上方是待办清单面板（仅标准模式提交清单后出现）、一行延续判定结论（宿主给出结论时才渲染）与一行专家失效提示（绑定的定义已不在清单里时才渲染，坞内身份徽标团队优先、同一身份只显示一次）；坞下方一行是水平居中的信息行：异常与进行中的状态文本、被收起的 Extension 对话入口与会话用量指标（缓存命中率、上下文占用与平均速率，点击开明细；累计 token 与费用只在明细浮层展示）。Extension 的 setStatus 项不在输入区展示。 -->
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
@@ -200,14 +200,13 @@ const plusMenuOpen = ref(false)
 /** 菜单外层引用：判断一次点击是否落在触发键或菜单之内。 */
 const plusRoot = ref<HTMLElement | null>(null)
 const plusMenu = ref<HTMLElement | null>(null)
-/** 二级面板的分类：除图片是直接执行的动作外，其余六项各占一块面板。 */
-type PlusPanel = 'model' | 'mode' | 'expert' | 'team' | 'skill' | 'quick'
-/** 一级列的分类与面板映射；图片是直接动作，不在其中。 */
+/** 二级面板的分类：除图片是直接执行的动作外，其余五项各占一块面板。 */
+type PlusPanel = 'model' | 'mode' | 'expert' | 'skill' | 'quick'
+/** 一级列的分类与面板映射；图片是直接动作，不在其中。专家与专家团同属一个面板。 */
 const plusPanelRows: readonly { readonly value: PlusPanel; readonly label: string }[] = [
   { value: 'model', label: '模型' },
   { value: 'mode', label: '执行模式' },
-  { value: 'expert', label: '专家' },
-  { value: 'team', label: '团队' },
+  { value: 'expert', label: '专家 / 团队' },
   { value: 'skill', label: '技能' },
   { value: 'quick', label: '常用消息' }
 ]
@@ -277,6 +276,10 @@ const expertGroups = computed<readonly ExpertGroup[]>(() => {
   }
   return groups
 })
+/** 专家显示名：团队说明里写团长与成员的显示名，标识只在找不到定义时兜底。 */
+function expertLabel(expertId: string): string {
+  return sessionStore.expertCatalog.experts.find(item => item.id === expertId)?.displayName ?? expertId
+}
 /** 二级列表回传：空串表示不使用专家，其余按标识选中。 */
 function onExpertSelect(value: string): void {
   selectExpert(value === '' ? null : value)
@@ -297,7 +300,7 @@ const teamGroups = computed<readonly ExpertGroup[]>(() => {
         value: team.id,
         label: team.displayName,
         // 团长随团队确定：说明里直接写出开团后会话由谁主持。
-        description: `团长 ${team.leadExpertId}，成员 ${team.memberExpertIds.length} 个`,
+        description: `团长 ${expertLabel(team.leadExpertId)}，成员 ${team.memberExpertIds.length} 个`,
         tag: team.source === 'builtin' ? '内置' : '自定义'
       }))
     })
@@ -395,9 +398,22 @@ const teamChipTitle = computed<string | undefined>(() => {
   if (sessionStore.selectedTeamId === null) return undefined
   const team = selectedTeam.value
   if (team === null) return '团队定义已不存在，本会话按普通专家会话运行。'
-  if (!team.ready) return '团长或成员不可用，本会话未启用团队装配；原因见设置页的专家团分节。'
+  if (!team.ready) return '团长或成员不可用，本会话未启用团队装配；原因见设置页的「专家与专家团」分节。'
   return team.summary === '' ? undefined : team.summary
 })
+
+/**
+ * 坑内身份徽标：团队模式下专家就是团长，两个徽标会把这一个身份展示两次，
+ * 因此只渲染一个——有团队时显示团队，否则显示专家。
+ */
+const identityChipText = computed<string | null>(() => teamChipText.value
+  ?? (sessionStore.selectedExpertName === null ? null : `专家 · ${sessionStore.selectedExpertName}`))
+const identityChipInvalid = computed(() => teamChipText.value !== null
+  ? teamChipInvalid.value
+  : sessionStore.expertBindingInvalid)
+const identityChipTitle = computed<string | undefined>(() => teamChipText.value !== null
+  ? teamChipTitle.value
+  : expertChipTitle.value)
 
 /** 徽标要显示团队名而不是标识：清单没读过就补读一次，失败时徽标回落为不可开团提示。 */
 watch(() => sessionStore.selectedTeamId, teamId => {
@@ -1891,27 +1907,16 @@ onMounted(() => {
           专家「{{ sessionStore.selectedExpertId }}」的定义已不存在，本会话不再注入专家角色；换专家需新建会话。
         </p>
 
-        <!-- 当前专家：本会话注入的角色常驻坞内，不再只能从 ＋ 菜单里反查；失效态只换颜色，后果由下方说明行承担。 -->
+        <!-- 当前身份：本会话注入的专家或团队常驻坞内，不再只能从 ＋ 菜单里反查；
+             团队模式下专家就是团长，因此只渲染一个徽标；失效态只换颜色，后果由下方说明行承担。 -->
         <p
-          v-if="sessionStore.selectedExpertName !== null"
+          v-if="identityChipText !== null"
           class="prompt-expert-chip"
-          :class="{ 'is-stale': sessionStore.expertBindingInvalid }"
+          :class="{ 'is-stale': identityChipInvalid }"
           role="status"
-          :title="expertChipTitle"
+          :title="identityChipTitle"
         >
-          专家 · {{ sessionStore.selectedExpertName }}
-        </p>
-
-        <!-- 当前团队：团长在团队模式下只能调度与验收，徽标让「为什么没有写文件」在坞内一眼可见；
-             失效态同样只换颜色，不把颜色当唯一通道。 -->
-        <p
-          v-if="teamChipText !== null"
-          class="prompt-expert-chip"
-          :class="{ 'is-stale': teamChipInvalid }"
-          role="status"
-          :title="teamChipTitle"
-        >
-          {{ teamChipText }}
+          {{ identityChipText }}
         </p>
 
         <!-- 输入行：左侧 ＋ 菜单、中间输入框、右侧发送/停止，三者在底边对齐，多行时按钮跟随下沿。 -->
@@ -1991,8 +1996,8 @@ onMounted(() => {
                       <span>{{ option.label }}</span>
                     </AppButton>
                   </template>
-                  <template v-else-if="plusPanel === 'team'">
-                    <!-- 团队与专家同一步锁定：开团后专家就是团长，已开始的会话两项都不可改。 -->
+                  <template v-else-if="plusPanel === 'expert'">
+                    <!-- 团队与专家在同一个面板：选中团队即把专家改成团长；两者都只在新建会话时可选。 -->
                     <AppSelect
                       id="prompt-team"
                       inline
@@ -2006,10 +2011,8 @@ onMounted(() => {
                       {{ teamStore.loadError }}
                     </p>
                     <p v-else class="prompt-composer-plus-panel-note">
-                      不可开团的团队不在此列出，原因见设置页的专家团分节。
+                      不可开团的团队不在此列出，原因见设置页的「专家与专家团」。
                     </p>
-                  </template>
-                  <template v-else-if="plusPanel === 'expert'">
                     <!-- 一个会话只用一个专家：开始对话后锁定，换专家需要新会话；候选项常驻面板，不再套一层浮层。 -->
                     <AppSelect
                       id="prompt-expert"
