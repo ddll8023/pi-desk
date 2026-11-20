@@ -21,8 +21,9 @@ import { judgeContinuation } from './continuation-signal'
 import { createTodoListExtension } from './todo-list'
 import { createTeamBoardExtension } from './team-board'
 import { TEAM_BOARD_EXTENSION_NAME } from './team-board'
-import { createTeamDispatch } from './team-dispatch'
+import { createTeamDispatch, TEAM_ASSIGN_TOOL_NAME, TEAM_STOP_TOOL_NAME } from './team-dispatch'
 import { TEAM_DISPATCH_EXTENSION_NAME } from './team-dispatch'
+import { TEAM_BOARD_TOOL_NAME } from '../shared/team-board-api'
 import type { TeamDispatch } from './team-dispatch'
 import type { ImageAnnotationDocument } from '../shared/image-annotation'
 import { createBrowserExtension, BROWSER_EXTENSION_NAME } from './browser/index'
@@ -100,6 +101,14 @@ const FAST_MODE_DROPPED_TOOLS: ReadonlySet<string> = new Set([
   'memory_status', 'memory_control', 'memory_profiles', 'memory_rules', 'memory_search',
   'memory_read', 'memory_reinforce', 'memory_save', 'memory_profile_save',
   'style_sample', 'style_list', 'style_read', 'style_save'
+])
+/**
+ * 团队根会话注入的工具：只由宿主的团队扩展注册，不是专家的能力选择。
+ * 它们已进随包清单（清单是设置页候选与可裁剪集合的唯一口径），因此在装配期要单独兜住：
+ * 团长专家把工具范围设成「仅用选中」而未勾它们时，账本与派活会被当成范围外移出激活集合。
+ */
+const TEAM_TOOL_NAMES: ReadonlySet<string> = new Set([
+  TEAM_BOARD_TOOL_NAME, TEAM_ASSIGN_TOOL_NAME, TEAM_STOP_TOOL_NAME
 ])
 interface RuntimeOptions {
   readonly hostId: number
@@ -1055,7 +1064,8 @@ export class SdkSessionRuntime {
               const leadBlocked = team === null ? null : new Set(LEAD_BLOCKED_TOOLS)
               const remaining = pi.getActiveTools().filter(name => !dropped.has(name)
                 && (leadBlocked === null || !leadBlocked.has(name))
-                && (permitted === null || permitted.has(name) || !manageableTools.has(name)))
+                && (permitted === null || permitted.has(name) || !manageableTools.has(name)
+                  || TEAM_TOOL_NAMES.has(name)))
               pi.setActiveTools(remaining)
             })
             pi.on('before_agent_start', event => {

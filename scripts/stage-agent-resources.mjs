@@ -60,7 +60,7 @@ async function collectToolSources(directory, files = []) {
 }
 
 /**
- * 从一个源码文件里取 `registerTool({ name: … })` 的工具名。
+ * 从一个源码文件里取 `registerTool({ name: … })` 的工具名，带泛型参数的 `registerTool<…>({` 同样算。
  * 只认字面量与单文件常量（含 `const A = B` 别名）；动态拼接的名字直接忽略，
  * 漏抓只会少核对，不会误报。每个 `registerTool({` 之后只看首个 `name:`：声明字段顺序固定。
  */
@@ -85,7 +85,7 @@ function registeredToolNamesOf(text) {
     return undefined
   }
   const names = new Set()
-  for (const segment of text.split(/registerTool\s*\(\s*\{/).slice(1)) {
+  for (const segment of text.split(/registerTool\s*(?:<[^<>]*>\s*)?\(\s*\{/).slice(1)) {
     const match = /^[\s\S]{0,2000}?name:\s*(?:'([^']+)'|"([^"]+)"|([A-Za-z_$][\w$.]*))/.exec(segment)
     if (match === null) continue
     const [, single, double, identifier] = match
