@@ -767,6 +767,13 @@ export function isSessionActivity(value: unknown): value is SessionActivity {
       && value.todos.items.length <= 50 && value.todos.items.every(item => isRecord(item)
         && typeof item.text === 'string' && item.text !== ''
         && ['pending', 'in_progress', 'completed'].includes(String(item.status)))))
+    && (value.teamBoard === null || (isRecord(value.teamBoard)
+      && typeof value.teamBoard.goal === 'string' && Array.isArray(value.teamBoard.items)
+      && value.teamBoard.items.every(item => isRecord(item))))
+    && Array.isArray(value.teamRuns) && value.teamRuns.length <= 64
+    && value.teamRuns.every(run => isRecord(run) && typeof run.itemId === 'string'
+      && typeof run.memberExpertId === 'string'
+      && ['running', 'completed', 'failed', 'cancelled'].includes(String(run.status)))
 
     && (value.continuation === null || (isRecord(value.continuation)
       && ['continuation', 'new_task'].includes(String(value.continuation.verdict))

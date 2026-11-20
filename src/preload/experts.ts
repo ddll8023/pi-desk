@@ -78,6 +78,7 @@ export const expertsApi: ExpertApi = {
       toolIds: [...request.toolIds],
       toolAddIds: [...request.toolAddIds],
       toolRemoveIds: [...request.toolRemoveIds],
+      writeScope: request.writeScope === null ? null : [...request.writeScope],
       body: request.body
     }
     const response: unknown = await ipcRenderer.invoke(EXPERTS_SAVE_CHANNEL, payload)

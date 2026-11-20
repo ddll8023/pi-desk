@@ -4,6 +4,8 @@ import type { RuntimeError } from './status'
 import type { SubAgentView } from '../sub-agent-view'
 import type { PresentCardView } from '../present-card-view'
 import type { ImageAnnotationAttachment } from '../image-annotation'
+import type { TeamBoard } from '../team-board-api'
+import type { TeamMemberRun } from '../team-run-api'
 
 
 /**
@@ -411,6 +413,16 @@ export interface SessionActivity {
   readonly turns: readonly SessionTurnFiles[]
   /** 本轮待办清单：只取当前轮 `todo_write` 的结果，新一轮开始或提交空清单后为 null。 */
   readonly todos: SessionTodoList | null
+  /**
+   * 团队任务账本：团队模式根会话里最近一次 `team_board` 的结果；普通会话与非团长成员会话为 null。
+   * 账本跨轮有效，不随新一轮开始清空。
+   */
+  readonly teamBoard: TeamBoard | null
+  /**
+   * 团队成员的轮次记录：宿主在成员一轮结束时写入的观测事实，团长自述不参与。
+   * 按时间先后排列，超过上限时丢最早的；非团队会话为空数组。
+   */
+  readonly teamRuns: readonly TeamMemberRun[]
   /** 最近一次延续判定；坞上一行提示用它，按轮的同一结论也挂在 `turns[].judgement` 上。 */
   readonly continuation: SessionContinuation | null
   readonly empty: boolean

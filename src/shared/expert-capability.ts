@@ -51,13 +51,18 @@ export interface ExpertCapabilityDefaults {
  *
  * - `skill_guard_select`：技能门禁靠它登记本轮规范，移除后所有工具调用都会被拒；
  * - `todo_write`：标准模式的模式分段要求先提交待办清单，移除后提示与工具对不上；
- * - 记忆组：整组由记忆配置与快速模式决定，单独移除会留下「背景注入仍生效、工具不可用」的半残状态。
+ * - 记忆组与语气风格组：同属记忆组件，整组由记忆配置与快速模式决定；单独移除会留下
+ *   「背景注入仍生效、工具不可用」的半残状态（风格段每轮随背景注入，工具却调不到）。
+ *
+ * 这里只收随包工具清单里登记过的工具：清单外的内建与扩展工具在界面上勾不到，写进这里会让
+ * 「仅用选中」与默认基线的保存校验要求一份勾不出来的白名单。
  */
 export const PROTECTED_EXPERT_TOOLS: readonly string[] = [
   'skill_guard_select',
   'todo_write',
   'memory_status', 'memory_control', 'memory_profiles', 'memory_rules', 'memory_search',
-  'memory_read', 'memory_reinforce', 'memory_save', 'memory_profile_save'
+  'memory_read', 'memory_reinforce', 'memory_save', 'memory_profile_save',
+  'style_sample', 'style_list', 'style_read', 'style_save'
 ]
 
 /** 受保护判定：设置页据此把候选标成「必需」并禁止取消，保存期仍以它为唯一口径。 */

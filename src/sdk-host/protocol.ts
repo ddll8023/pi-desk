@@ -67,6 +67,11 @@ export interface SdkSessionTarget {
    * 主进程已按持久绑定或打开请求解析完毕，宿主不再自行查找。
    */
   readonly expertId: string | null
+  /**
+   * 本次会话所属团队；未开团或团队不可开团时为 null。
+   * 团队就绪时 `expertId` 已是它的团长，宿主不再自行推导。
+   */
+  readonly teamId: string | null
   /** 主进程解析的任务执行根；仅为宿主内部启动参数，不接受页面直传。 */
   readonly worktreePath?: string | null
 }
@@ -325,8 +330,9 @@ export function isSdkSessionTarget(value: unknown): value is SdkSessionTarget {
     : isPath(value.sessionFile) && isIdentifier(value.sessionId) && isIdentifier(value.fileStamp)
   const worktreeValid = value.worktreePath === undefined || value.worktreePath === null || isPath(value.worktreePath)
   const expertValid = value.expertId === null || isExpertId(value.expertId)
-  return targetValid && worktreeValid && expertValid && isWorkspaceId(value.workspaceId)
-    && hasKeys(value, ['workspaceId', 'projectPath', 'sessionDir', 'sessionId', 'sessionFile', 'fileStamp', 'trusted', 'mode', 'expertId', 'worktreePath'])
+  const teamValid = value.teamId === null || isExpertId(value.teamId)
+  return targetValid && worktreeValid && expertValid && teamValid && isWorkspaceId(value.workspaceId)
+    && hasKeys(value, ['workspaceId', 'projectPath', 'sessionDir', 'sessionId', 'sessionFile', 'fileStamp', 'trusted', 'mode', 'expertId', 'teamId', 'worktreePath'])
 }
 /** 日志目标只接受绝对路径、会话身份、文件戳与已声明的历史查询；不带信任状态，避免被当成绑定目标。 */
 export function isSdkLogTarget(value: unknown): value is SdkLogTarget {

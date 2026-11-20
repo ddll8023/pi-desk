@@ -24,6 +24,10 @@
 | `src/shared-process/mcp-session-config.ts` | 会话级 MCP 配置合并（全局 + 受信项目、覆盖语义）与按技能／服务器许可集标停用 |
 | `src/sdk-host/expert-capability.ts` | 由专家定义与默认基线算出本次会话的技能、MCP 与工具许可集；未召专家时不限制；受保护工具始终在可用集内。同一口径另产出 `present_card` 的能力候选段（技能带描述、MCP 与工具名），不按许可集裁剪 |
 | `src/main/sessions/session-store.ts` | 项目会话目录、受限列表窗口与摘要缓存、文件定位与删除 |
+| `src/main/sessions/team-catalog.ts` | 团队清单读取：随包与用户目录双来源合并、团长与成员可用性诊断；会话打开时按团队标识取定义 |
+| `src/main/sessions/session-teams.ts` | 会话团队绑定的解析：已持久化绑定优先于请求值，只对新会话生效 |
+| `src/main/sessions/team-sessions.ts` | 成员会话的登记、只读读取与目录清理：开团物化登记、头部与近期正文读取、删除根会话时目录移废纸篦、启动后核清孤儿目录 |
+| `src/main/sessions/team-ipc.ts` | 团队清单与成员会话三条只读通道注册；均校验已添加项目，不提供派活与停止入口 |
 | `src/main/sessions/session-run-registry.ts` | 运行 ID、绑定代际、前台顺序及会话占用的唯一登记 |
 | `src/main/sessions/log-host-pool.ts` | 只读解析宿主池：按项目保活查看历史用的宿主进程，不登记运行实例、不占用会话，可被绑定接管 |
 | `src/main/sessions/sdk-runtime-bridge.ts` | 多实例运行选择、请求分发、状态与宿主生命周期适配；按实例查询与订阅完整状态 |
@@ -33,7 +37,7 @@
 | `src/main/sessions/ipc.ts` | 会话列表、打开、重载、删除、按会话读取历史，以及运行清单查询、释放与结束的通道注册 |
 | `src/main/sessions/runtime-ipc.ts` | 执行主链通道注册：状态、中止、回退、模型、压缩、Prompt、投影快照与确认 |
 | `src/main/sessions/extension-ui-ipc.ts` | 扩展交互通道注册：对话、通知与 widget 快照读取及应答提交 |
-| `src/main/usage/usage-stats-service.ts` | 跨项目遍历会话目录、按文件 stamp 增量扫描后完成项目名映射，输出「会话明细数组 + 扫描时间」的单一数据源，自身不做视图聚合 |
+| `src/main/usage/usage-stats-service.ts` | 跨项目遍历会话目录，并另扫 `<agentDir>/team-sessions/` 下成员会话目录；按文件 stamp 增量扫描后完成项目名映射与团队归属标记，输出「会话明细数组 + 扫描时间」的单一数据源，自身不做视图聚合 |
 | `src/main/usage/usage-stats-index.ts` | 会话用量索引缓存与原子落盘，按文件 stamp 增量复用 |
 | `src/main/usage/usage-stats-scan.ts` | 单个会话 JSONL 文件流式解析器：提取助手消息用量、计价消息与费用、模型变更与首条消息标题，按「按日 / 模型×日 / 子代理×日」就地累加 |
 | `src/main/usage/ipc.ts` | 会话用量统计查询 IPC 通道注册与校验 |
@@ -42,6 +46,10 @@
 | `src/sdk-host/session-runtime.ts` | 官方 SDK 会话、运行请求、订阅、回退／压缩、产品资源装配与内置扩展装配（含按专家范围收窄 MCP，与仅在专家声明写入范围时装载的写入守卫）、资源装配诊断与绑定阶段分类 |
 | `src/sdk-host/expert-role.ts` | 按会话目标读取选中的专家定义，把正文按上限裁剪后装配成 `expert-role` 系统提示分段，并在段尾说明本次的技能／MCP 范围与写入范围；未选中时不读资源清单；快速模式下专家引用的被剔除规范同样在段尾说明 |
 | `src/sdk-host/expert-write-guard.ts` | 专家写入守卫：仅在专家声明写入范围时装配，拦 `write` 与 `edit` 的目标路径，按真实路径与目录边界判定，越界拒绝并说明专家名与允许范围；`bash` 的重定向不经过这层 |
+| `src/sdk-host/team-role.ts` | 读取选中团队并产出 `team-role` 系统提示分段（身份、团长职责与边界、成员名册、派活与验收规则）；同时给出团长在装配期移出的工具清单 |
+| `src/sdk-host/team-board.ts` | 团队任务账本：`team_board` 状态型工具、从分支重建账本、系统提示摘要分段与按工具结果节流的回述；提交时剔除非本团队成员与悬空依赖 |
+| `src/sdk-host/team-dispatch.ts` | 派活与停止工具：派活前校验条目、验收项、依赖、成员与打回上限，中途可停；终态由宿主观测后写入根会话自定义条目 |
+| `src/sdk-host/team-runner.ts` | 成员轮的子进程载体：精确会话 id 新建或复用、专家角色段与写入守卫参数、JSONL 事件收敛成轮次记录、超时与取消收尾 |
 | `src/sdk-host/write-scope.ts` | 写入路径判定的共享实现：真实路径解析（取最近存在祖先）、目录前缀边界比较与绝对范围解析；子代理写入守卫与专家写入守卫共用，不各写一份 |
 | `src/sdk-host/present-card-extension.ts` | 会话内卡片工具 `present_card`：只接受枚举内的卡片类型与动作 ID，载荷经共享契约校验后随工具结果 `details.card` 下发；装配时把能力候选段随工具注册给模型；只给模型一句结论，不写盘、不改清单 |
 | `src/sdk-host/product-resources.ts` | 产品资源解析、用户级 `AGENTS.md` 与 skills 的只读挂载、技能覆盖与同名技能诊断（含按专家许可集过滤可见技能，项目技能不受该许可集裁剪）、扩展加载结果分级与必要组件及配置注入的核验 |
@@ -70,6 +78,11 @@
 | `src/shared/present-card-view.ts` | 会话内卡片载荷契约：卡片类型枚举、动作白名单、字段长度上限与共享解析器，宿主投影与渲染层共用同一份判定 |
 | `src/shared/session-run-api.ts` | 应用级运行清单、释放／结束与事件契约 |
 | `src/shared/usage-stats-api.ts` | 会话用量明细（按日、模型×日、子代理×日）的 IPC 契约与类型校验 |
+| `src/shared/teams-api.ts` | 团队清单通道与视图／诊断类型；成员数量与诊断码的边界在同一定义处 |
+| `src/shared/team-session-api.ts` | 成员会话的清单、头部与近期正文三条只读通道契约与响应校验；成员会话 id 与会话目录的唯一拼法在 `team-session-path` |
+| `src/shared/team-session-path.ts` | 成员会话目录与「根会话 + 成员」确定性会话 id 的唯一定义，主进程与 SDK 宿主共用 |
+| `src/shared/team-board-api.ts` | 任务账本结构、条目状态机、依赖与验收项的上限与解析器 |
+| `src/shared/team-run-api.ts` | 成员轮次记录契约：状态、结论、写入文件、待决项、用量与打回计数口径 |
 | `src/shared/extension-ui-api.ts` | 扩展对话、通知、widget 与回应形态 |
 | `src/shared/tool-operation.ts` | 宿主与页面共用的工具身份、操作分类及分组顺序；未知工具保留真实名称 |
 | `src/shared/user-message-text.ts` | 用户消息里的技能块与图片标记处理，供摘要和展示共用 |
@@ -92,8 +105,10 @@
 | `src/renderer/src/sessions/chat-view.ts` | 将消息与工具投影组织为聊天展示模型，保留图片与标注关系并还原可重发输入 |
 | `src/renderer/src/sessions/clock.ts` | 聊天生成／工具计时与显示时钟 |
 | `src/renderer/src/sessions/usage-format.ts` | token、费用及用量展示格式 |
-| `src/renderer/src/sessions/usage-stats-view.ts` | 用量报表的窗口派生库：自然日窗口与窗口内聚合、趋势柱与轴线刻度、按日明细行、模型/项目/子代理分布行、会话列表与下钻过滤、日度热力图格子与分位分级、构成段与占比计算 |
+| `src/renderer/src/sessions/usage-stats-view.ts` | 用量报表的窗口派生库：自然日窗口与窗口内聚合、趋势柱与轴线刻度、按日明细行、模型/项目/团队/子代理分布行、会话列表与下钻过滤、日度热力图格子与分位分级、构成段与占比计算；团队分布只收成员会话并按根会话归组 |
 | `src/renderer/src/sessions/services/usage-stats.ts` | 用量统计桌面桥接服务 |
+| `src/renderer/src/sessions/services/team-sessions.ts` | 成员会话三条只读通道的桥接；桥接缺失、抛错与响应不合契约统一收敛为固定失败结果 |
+| `src/renderer/src/sessions/stores/team-panel.ts` | 团队面板状态：成员登记清单与单个成员的头部、近期正文；按「项目 + 根会话」定位，切换会话后丢弃过期响应 |
 | `src/renderer/src/sessions/tool-summary.ts` | 参数降级、宿主语义摘要文案、操作与状态汇总、路径相对化、Diff 片段计数及原文预览 |
 | `src/renderer/src/sessions/extension-dialog-presentation.ts` | 扩展提示、选择及对话展示转换 |
 
@@ -101,14 +116,16 @@
 
 | 文件 | 用途 |
 | --- | --- |
-| `src/renderer/src/sessions/components/UsageStatsSection.vue` | 设置页「用量」分节编排：页面级时间范围统一结算概览、趋势、按日明细、模型/项目分布与会话明细（Top 与下钻共用），全年活跃度热力图固定近一年窗口；分节可见时静默轮询刷新 |
+| `src/renderer/src/sessions/components/UsageStatsSection.vue` | 设置页「用量」分节编排：页面级时间范围统一结算概览、趋势、按日明细、模型/项目/团队分布与会话明细（Top 与下钻共用），全年活跃度热力图固定近一年窗口；分节可见时静默轮询刷新；团队分布无成员会话时整块不出现 |
 | `src/renderer/src/sessions/components/UsageTrendChart.vue` | 用量趋势图：自然日补零堆叠柱、固定顶部读数行、三档刻度与网格线；有值柱点击下钻当日会话明细 |
 | `src/renderer/src/sessions/components/UsageDailyTable.vue` | 按日用量明细表：窗口内自然日精确读数、最新在前；有记录日期为按钮，键盘可进入当日会话明细 |
-| `src/renderer/src/sessions/components/UsageDistributionList.vue` | 模型／项目／子代理分布行列表：读数与构成条，整行按钮下钻到该维度会话明细 |
-| `src/renderer/src/sessions/components/UsageSessionList.vue` | 用量会话明细列表：范围内消耗 Top 与四种下钻共用，行点击打开对应会话 |
+| `src/renderer/src/sessions/components/UsageDistributionList.vue` | 模型／项目／团队／子代理分布行列表：读数与构成条，整行按钮下钻到该维度会话明细 |
+| `src/renderer/src/sessions/components/UsageSessionList.vue` | 用量会话明细列表：范围内消耗 Top 与五种下钻共用，普通会话行点击打开对应会话；成员会话行带「团队」标记，保留可读可聚焦但不跳转 |
 | `src/renderer/src/sessions/components/UsageHeatmap.vue` | 近 53 周按日 Token 热力图：7 行日历格、月份与星期标签、四级强度配色、悬停读数与整图无障碍描述；有记录格子可点击下钻当日 |
-| `src/renderer/src/sessions/components/UsageCompositionBar.vue` | 用量构成条：四段堆叠、段间 1px 分隔与非零段 2px 保底，供概览与模型／项目分布行复用 |
-| `src/renderer/src/sessions/components/PromptComposer.vue` | 提示词与独立图片资料编排、视窗全局粘贴与剪贴板截图提取、对话期间草稿与标注编辑、文件树拖入引用、命令与补全；＋ 菜单为一级分类行 + 二级面板的双级结构（模型、执行模式、专家、技能、常用消息常驻面板内；技能取与斜杠补全同源的清单，点击在光标处插入 `/skill:<名称>` 命令胶囊而不发送；同一消息可插多条，宿主只展开开头那条；输入行是富文本，`@` 文件引用与 `/` 命令以胶囊包裹，提交内容仍是纯文本；专家绑定失效时给出提示）；当前专家以坞内徽标常驻显示，失效时徽标转警示色）；浏览器批注草稿合并；固定提示词、图片及标注快照、后台提交与失败恢复；显式同步及确认结束原运行后的输入恢复 |
+| `src/renderer/src/sessions/components/UsageCompositionBar.vue` | 用量构成条：四段堆叠、段间 1px 分隔与非零段 2px 保底，供概览与模型／项目／团队分布行复用 |
+| `src/renderer/src/sessions/components/TeamPanel.vue` | 输入坞上方的团队面板：账本条目与状态、成员会话状态与最近一轮、写区重叠提示、成员数与累计用量；只读，不派活、不改账本 |
+| `src/renderer/src/sessions/components/TeamMemberDialog.vue` | 成员只读弹窗：最近一轮结论、写入文件、待决项、用量与近期对话；无输入入口 |
+| `src/renderer/src/sessions/components/PromptComposer.vue` | 提示词与独立图片资料编排、视窗全局粘贴与剪贴板截图提取、对话期间草稿与标注编辑、文件树拖入引用、命令与补全；＋ 菜单为一级分类行 + 二级面板的双级结构（模型、执行模式、专家、技能、常用消息常驻面板内；技能取与斜杠补全同源的清单，点击在光标处插入 `/skill:<名称>` 命令胶囊而不发送；同一消息可插多条，宿主只展开开头那条；输入行是富文本，`@` 文件引用与 `/` 命令以胶囊包裹，提交内容仍是纯文本；专家绑定失效时给出提示）；当前专家以坞内徽标常驻显示，失效时徽标转警示色）；浏览器批注草稿合并；固定提示词、图片及标注快照、后台提交与失败恢复；显式同步及确认结束原运行后的输入恢复；团队会话下在输入坞上方额外挂团队面板与成员只读弹窗 |
 | `src/renderer/src/sessions/components/PromptRichEditor.vue` | 输入坞的富文本输入：纯文本与引用胶囊混排、序列化与草稿恢复、`@` 与 `/` 的光标上下文、输入法组合态与纯文本粘贴 |
 | `src/renderer/src/sessions/components/PromptImageMaterials.vue` | 输入坞内图片附件行：导入、移除、缩略图与独立标注按钮双入口、标注数量展示 |
 | `src/renderer/src/sessions/components/ImageAnnotationPanel.vue` | 左图右说明的独立标注面板、编号双向定位、同步删除与键盘调整入口 |

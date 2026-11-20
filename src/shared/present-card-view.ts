@@ -31,6 +31,8 @@ export const PRESENT_CARD_LIMITS = {
   actionLabel: 24,
   /** 能力段每个维度的名单长度：只防载荷无界，与专家引用数量不设上限无关。 */
   capabilityIds: 64,
+  /** 草案写入范围的条数上限：写入声明本就不多，超出按不合规处理。 */
+  writeScopeEntries: 20,
   /** 交付汇总文件段三组的合计条数上限：清单是给用户点选的，不是完整改动流水。 */
   summaryFiles: 40,
   /** 交付汇总单条相对路径的长度上限：项目内路径远短于这个值，超长即明显不是相对路径。 */
@@ -62,6 +64,11 @@ export interface PresentCardCapability {
   readonly mcpServerIds: readonly string[]
   readonly toolsMode: ExpertCapabilityMode
   readonly toolIds: readonly string[]
+  /**
+   * 写入范围：项目内相对路径，目录以 `/` 结尾；空数组表示只读。
+   * 模型不声明时按只读处理——不能因为卡片没写就放开任意目录。
+   */
+  readonly writeScope: readonly string[]
 }
 
 /**
@@ -161,6 +168,26 @@ function parseFiles(value: unknown): PresentCardFiles | null | 'invalid' {
   return { changed, deleted, affected }
 }
 
+/** 写入范围的一项：相对项目路径，允许目录形式（以 `/` 结尾）；绝对路径与 `..` 一律拒绝。 */
+function isWriteScopeEntry(value: unknown): value is string {
+  if (typeof value !== 'string' || value.length === 0 || value.length > PRESENT_CARD_LIMITS.summaryPath) return false
+  if (value.includes('\\') || value.startsWith('/')) return false
+  const trimmed = value.endsWith('/') ? value.slice(0, -1) : value
+  return trimmed.split('/').every(segment => segment !== '' && segment !== '.' && segment !== '..')
+}
+
+/** 写入范围：缺省为只读（`[]`）；给了就必须是合法相对路径且不超过条数上限。 */
+function parseWriteScope(value: unknown): readonly string[] | null {
+  if (value === null || value === undefined) return []
+  if (!Array.isArray(value) || value.length > PRESENT_CARD_LIMITS.writeScopeEntries) return null
+  const scopes: string[] = []
+  for (const item of value) {
+    if (!isWriteScopeEntry(item)) return null
+    if (!scopes.includes(item)) scopes.push(item)
+  }
+  return scopes
+}
+
 /**
  * 能力段：缺省为 null（按继承基线处理）；给了就必须维度齐全且模式可识别。
  * 工具维度允许缺省：旧卡片没有这一段，按「继承默认」补齐，不因此把整张卡片判为不合规。
@@ -176,9 +203,11 @@ function parseCapability(value: unknown): PresentCardCapability | null | 'invali
   const parsedMcp = parseIdList(mcpServerIds)
   const parsedTools = parseIdList(value.toolIds ?? [])
   if (parsedSkills === null || parsedMcp === null || parsedTools === null) return 'invalid'
+  const parsedScope = parseWriteScope(value.writeScope)
+  if (parsedScope === null) return 'invalid'
   return {
     skillsMode, skillIds: parsedSkills, mcpMode, mcpServerIds: parsedMcp,
-    toolsMode, toolIds: parsedTools
+    toolsMode, toolIds: parsedTools, writeScope: parsedScope
   }
 }
 

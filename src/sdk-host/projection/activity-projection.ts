@@ -29,6 +29,10 @@ import type { ToolArgSummaryEntry, ToolExecution, SkillActivitySource, SessionAc
   SessionFileActivity, SessionSkillActivity, SessionMcpActivity, SessionPluginActivity,
   SessionTurnFiles, SessionTodoList, SessionContinuation } from '../../shared/runtime-api'
 import { TODO_TOOL_NAME, parseTodoListDetails } from '../todo-list'
+import { TEAM_BOARD_TOOL_NAME, parseTeamBoardDetails } from '../../shared/team-board-api'
+import type { TeamBoard } from '../../shared/team-board-api'
+import { TEAM_MEMBER_RUN_CUSTOM_TYPE, limitTeamMemberRuns, parseTeamMemberRun } from '../../shared/team-run-api'
+import type { TeamMemberRun } from '../../shared/team-run-api'
 import { parseSkillBlock } from '../../shared/user-message-text'
 
 /** 只读取文件内容的工具；其他工具即使读到文件（如 bash）也不猜测它碰了哪个路径。 */
@@ -99,6 +103,10 @@ export interface ActivityCheckpointState {
   readonly currentTurn: string | null
   /** 待办清单：当前轮的 `todo_write` 结果，随检查点保存，恢复后不依赖重放。 */
   readonly todos: SessionTodoList | null
+  /** 团队任务账本：最近一次 `team_board` 结果；账本跨轮有效，不随新一轮开始清空。 */
+  readonly teamBoard: TeamBoard | null
+  /** 成员轮次记录：宿主写入的观测事实，跨轮有效且只保留最近若干轮。 */
+  readonly teamRuns: readonly TeamMemberRun[]
 }
 
 export interface SessionActivityCache {
@@ -403,8 +411,10 @@ export function createSessionActivityCache(): SessionActivityCache {
         mcp: mcpRows,
         plugins: pluginRows,
         turns: turnRows,
-        // 待办清单来自工具结果载荷，不进入工具条目。
+        // 待办清单与团队账本来自工具结果载荷，不进入工具条目。
         todos: null,
+        teamBoard: null,
+        teamRuns: [],
         continuation: null,
         fileCount: fileRows.length,
         skillCount: skillRows.length,
@@ -472,6 +482,8 @@ export class ActivityProjection {
   private commands: ActivityCommandState[] = []
   private skills = new Map<string, SessionSkillActivity>()
   private todos: SessionTodoList | null = null
+  private teamBoard: TeamBoard | null = null
+  private teamRuns: TeamMemberRun[] = []
   /**
    * 待绑定的延续判定：宿主在用户轮次开始前算出，此时该轮用户消息尚未进入分支，
    * 等到它出现时再按条目 ID 归档；因此暂存一份，不直接对外展示。
@@ -501,6 +513,8 @@ export class ActivityProjection {
       this.commands = state.commands.map(command => ({ ...command }))
       this.skills = new Map(state.skills.map(skill => [`${skill.source}:${skill.name}:${skill.location}`, { ...skill }]))
       this.todos = state.todos ?? null
+      this.teamBoard = state.teamBoard ?? null
+      this.teamRuns = [...(state.teamRuns ?? [])]
       this.evidence = new Set(state.evidence)
       this.incomplete = state.incomplete
       this.savedState = state
@@ -518,6 +532,7 @@ export class ActivityProjection {
     if (event.type === 'tool_execution_end' && event.isError !== true && event.parentToolCallId === undefined) {
       const details = isRecord(event.result) ? event.result.details : undefined
       this.recordTodos(event.toolName, details, event.toolCallId)
+      this.recordTeamBoard(event.toolName, details)
     }
     this.call(this.liveTools, event.toolCallId, event.toolName, event.args,
       event.type === 'tool_execution_start' ? 'running' : event.isError === true ? 'failed' : 'succeeded')
@@ -555,6 +570,8 @@ export class ActivityProjection {
     for (const entry of branch.slice(this.prefixLength)) {
       if (entry.type === 'message') this.message(entry.id, entry.message)
       if (entry.type === 'custom' && entry.customType === 'skill-guard') this.audit(entry.data)
+      // 成员轮次是宿主观测事实：与工具结果同源同重建，不足以重建时丢弃而不是猜测。
+      if (entry.type === 'custom' && entry.customType === TEAM_MEMBER_RUN_CUSTOM_TYPE) this.memberRun(entry.data)
       this.prefixHash = advanceActivityPrefix(this.prefixHash, entry)
       this.prefixLength += 1
       this.savedState = null
@@ -574,6 +591,8 @@ export class ActivityProjection {
     const skills = [...derived.skills, ...this.skills.values()].sort(byCountThenName(item => item.name))
     this.view = { ...derived, skills, skillCount: skills.length,
       todos: this.todos,
+      teamBoard: this.teamBoard,
+      teamRuns: this.teamRuns,
       continuation: this.continuation,
       incomplete: this.incomplete,
       empty: derived.files.length === 0 && skills.length === 0 && derived.mcp.length === 0
@@ -596,7 +615,9 @@ export class ActivityProjection {
       skills: [...this.skills.values()].map(skill => ({ ...skill })),
       evidence: [...this.evidence], incomplete: this.incomplete,
       currentTurn: this.currentTurn,
-      todos: this.todos
+      todos: this.todos,
+      teamBoard: this.teamBoard,
+      teamRuns: this.teamRuns
     }
     return this.savedState
   }
@@ -610,6 +631,8 @@ export class ActivityProjection {
     this.turnByTool.clear(); this.currentTurn = null
     this.evidence.clear()
     this.todos = null
+    this.teamBoard = null
+    this.teamRuns = []
     this.pendingContinuation = null
     this.judgementByTurn.clear()
     this.continuation = null
@@ -637,6 +660,7 @@ export class ActivityProjection {
       } else if (message.isError === true && this.liveTools.delete(message.toolCallId)) this.dirty = true
       if (message.isError !== true && typeof message.toolName === 'string') {
         this.recordTodos(message.toolName, message.details, message.toolCallId)
+        this.recordTeamBoard(message.toolName, message.details)
       }
     }
     if (message.role === 'toolResult' && isRecord(message.nestedCalls)) {
@@ -689,6 +713,23 @@ export class ActivityProjection {
     const turn = this.turnByTool.get(toolCallId)
     if (turn !== undefined && this.currentTurn !== null && turn !== this.currentTurn) return
     this.todos = { items: parsed.items }
+    this.dirty = true
+  }
+
+  /** 团队账本只认本工具的结果，不按轮截断：账本跨轮有效，迟到的旧轮结果也照常采纳。 */
+  private recordTeamBoard(toolName: string, details: unknown): void {
+    if (toolName !== TEAM_BOARD_TOOL_NAME) return
+    const parsed = parseTeamBoardDetails(details)
+    if (parsed === null) return
+    this.teamBoard = { goal: parsed.goal, facts: parsed.facts, items: parsed.items }
+    this.dirty = true
+  }
+
+  /** 成员轮次：只收宿主观测条目，按上限只保留最近的，重建与实时追加走同一入口。 */
+  private memberRun(data: unknown): void {
+    const run = parseTeamMemberRun(data)
+    if (run === null) return
+    this.teamRuns = limitTeamMemberRuns([...this.teamRuns, run])
     this.dirty = true
   }
 

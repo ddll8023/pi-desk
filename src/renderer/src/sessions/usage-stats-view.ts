@@ -1,7 +1,8 @@
 /**
  * 用量统计视图的纯函数与展示格式化：
  * 从「会话明细数组」这一份单一数据源按统一时间范围派生全部报表视图——
- * 自然日窗口、概览读数与构成、趋势柱与按日明细、模型/项目分布（含子代理行）、会话列表与下钻过滤、日度热力图。
+ * 自然日窗口、概览读数与构成、趋势柱与按日明细、模型/项目/团队分布（含子代理行）、会话列表与下钻过滤、日度热力图。
+ * 团队分布只收成员会话（按根会话归组），普通会话仍归在项目分布里，两者不互相覆盖。
  * 范围按自然日窗口结算（缺失日为零），「全部」从最早记录日到今天；热力图固定近 53 周、按自然日补齐。
  * 日期无法解析的条目（date 为 `unknown`）无法落在自然日轴上，派生时统一跳过。
  * 费用缺失时保持 null，不推算金额。
@@ -260,6 +261,21 @@ interface MutableProjectBucket {
   costDays: number
 }
 
+interface MutableTeamBucket {
+  rootSessionId: string
+  projectPath: string
+  projectName: string
+  input: number
+  output: number
+  cacheRead: number
+  cacheWrite: number
+  totalTokens: number
+  messageCount: number
+  sessionCount: number
+  cost: number
+  costDays: number
+}
+
 /** 窗口内单个模型的聚合读数 */
 export interface UsageModelAggregate {
   readonly provider: string
@@ -286,6 +302,22 @@ export interface UsageProjectAggregate {
   readonly cost: number | null
 }
 
+/** 窗口内单个团队的聚合读数：同一根会话下的全部成员会话合为一行 */
+export interface UsageTeamAggregate {
+  readonly rootSessionId: string
+  readonly projectPath: string
+  readonly projectName: string
+  readonly input: number
+  readonly output: number
+  readonly cacheRead: number
+  readonly cacheWrite: number
+  readonly totalTokens: number
+  readonly messageCount: number
+  /** 该根会话下窗口内有消耗的成员会话数 */
+  readonly sessionCount: number
+  readonly cost: number | null
+}
+
 /** 全部视图共用的窗口内聚合结果 */
 export interface WindowAggregate {
   readonly window: UsageWindow
@@ -305,6 +337,8 @@ export interface WindowAggregate {
   readonly subAgent: { readonly input: number; readonly output: number; readonly totalTokens: number }
   /** 窗口内项目分布（按总 token 降序） */
   readonly projects: readonly UsageProjectAggregate[]
+  /** 窗口内团队分布：成员会话按根会话归组，用于看清团队的真实成本（按总 token 降序） */
+  readonly teams: readonly UsageTeamAggregate[]
 }
 
 /**
@@ -327,11 +361,13 @@ export function buildWindowAggregate(
   const dailyMap = new Map<string, MutableDailyBucket>()
   const modelMap = new Map<string, MutableModelBucket>()
   const projectMap = new Map<string, MutableProjectBucket>()
+  const teamMap = new Map<string, MutableTeamBucket>()
   let activeSessions = 0
 
   for (const session of sessions) {
     let sessionActive = false
     let projectBucket: MutableProjectBucket | null = null
+    let teamBucket: MutableTeamBucket | null = null
 
     for (const item of session.daily) {
       if (!isDateInWindow(item.date, window)) continue
@@ -354,6 +390,26 @@ export function buildWindowAggregate(
         }
         projectBucket.sessionCount += 1
         projectMap.set(session.projectPath, projectBucket)
+        // 团队桶只接成员会话：普通会话不计入团队分组，否则「团队成本」就不是团队的开销。
+        if (session.team !== null) {
+          const key = session.team.rootSessionId
+          teamBucket = teamMap.get(key) ?? {
+            rootSessionId: key,
+            projectPath: session.projectPath,
+            projectName: session.projectName,
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            messageCount: 0,
+            sessionCount: 0,
+            cost: 0,
+            costDays: 0
+          }
+          teamBucket.sessionCount += 1
+          teamMap.set(key, teamBucket)
+        }
       }
 
       totals.input += item.input
@@ -405,6 +461,19 @@ export function buildWindowAggregate(
         if (item.cost !== null) {
           bucket.cost += item.cost
           bucket.costDays += 1
+        }
+      }
+      const teamRow = teamBucket
+      if (teamRow !== null) {
+        teamRow.input += item.input
+        teamRow.output += item.output
+        teamRow.cacheRead += item.cacheRead
+        teamRow.cacheWrite += item.cacheWrite
+        teamRow.totalTokens += item.totalTokens
+        teamRow.messageCount += item.messageCount
+        if (item.cost !== null) {
+          teamRow.cost += item.cost
+          teamRow.costDays += 1
         }
       }
     }
@@ -490,6 +559,22 @@ export function buildWindowAggregate(
     }))
     .sort((a, b) => b.totalTokens - a.totalTokens)
 
+  const teams: readonly UsageTeamAggregate[] = Array.from(teamMap.values())
+    .map(bucket => ({
+      rootSessionId: bucket.rootSessionId,
+      projectPath: bucket.projectPath,
+      projectName: bucket.projectName,
+      input: bucket.input,
+      output: bucket.output,
+      cacheRead: bucket.cacheRead,
+      cacheWrite: bucket.cacheWrite,
+      totalTokens: bucket.totalTokens,
+      messageCount: bucket.messageCount,
+      sessionCount: bucket.sessionCount,
+      cost: bucket.costDays > 0 ? bucket.cost : null
+    }))
+    .sort((a, b) => b.totalTokens - a.totalTokens)
+
   return {
     window,
     totals,
@@ -499,7 +584,8 @@ export function buildWindowAggregate(
     daily,
     models,
     subAgent,
-    projects
+    projects,
+    teams
   }
 }
 
@@ -643,6 +729,7 @@ export function buildDailyDetailRows(aggregate: WindowAggregate): readonly Daily
 export type SessionDrill =
   | { readonly kind: 'model'; readonly provider: string; readonly modelId: string; readonly label: string }
   | { readonly kind: 'project'; readonly projectPath: string; readonly label: string }
+  | { readonly kind: 'team'; readonly rootSessionId: string; readonly label: string }
   | { readonly kind: 'day'; readonly date: string; readonly label: string }
   | { readonly kind: 'subagent'; readonly label: string }
 
@@ -728,11 +815,36 @@ export function buildProjectDistributionRows(aggregate: WindowAggregate): readon
   }))
 }
 
+/**
+ * 窗口内团队分布行：一行一个根会话，列出该团队全部成员会话的合计。
+ * 没有成员会话时返回空数组，由调用方整块隐藏——团队成本为空与团队成本为 0 不是一回事。
+ */
+export function buildTeamDistributionRows(aggregate: WindowAggregate): readonly UsageDistributionRow[] {
+  const total = aggregate.totals.totalTokens
+  return aggregate.teams.map(team => ({
+    key: `team:${team.rootSessionId}`,
+    name: `${team.projectName} · 团队`,
+    badge: null,
+    detail: `根会话 ${team.rootSessionId.slice(0, 8)}`,
+    detailTitle: team.rootSessionId,
+    totalTokens: formatTokens(team.totalTokens),
+    share: calculateSharePercent(team.totalTokens, total),
+    meta: team.cost === null
+      ? `${team.sessionCount} 个成员会话`
+      : `$${formatCost(team.cost)} · ${team.sessionCount} 个成员会话`,
+    segments: buildCompositionSegments(team),
+    drill: { kind: 'team', rootSessionId: team.rootSessionId, label: `${team.projectName} · 团队` }
+  }))
+}
+
 /** 会话明细列表的一行：数值随视图口径（Top 或下钻）按范围结算 */
 export interface UsageSessionRow {
   readonly sessionId: string
   readonly projectPath: string
   readonly projectName: string
+  /** 普通会话或团队成员会话；列表据此标出团队归属。 */
+  readonly scope: UsageSessionStat['scope']
+  readonly team: UsageSessionStat['team']
   readonly title: string
   readonly updatedAt: number
   readonly messageCount: number
@@ -788,8 +900,10 @@ export function buildSessionRows(
   for (const session of sessions) {
     let sum: MutableSessionSum | null = null
 
-    if (drill === null || drill.kind === 'project') {
-      if (drill !== null && drill.projectPath !== session.projectPath) continue
+    if (drill === null || drill.kind === 'project' || drill.kind === 'team') {
+      if (drill !== null && drill.kind === 'project' && drill.projectPath !== session.projectPath) continue
+      // 团队下钻只看成员会话：普通会话属于项目口径，不混进团队成本。
+      if (drill !== null && drill.kind === 'team' && session.team?.rootSessionId !== drill.rootSessionId) continue
       sum = sumSessionWindow(session, aggregate.window)
     } else if (drill.kind === 'day') {
       const entry = session.daily.find(item => item.date === drill.date)
@@ -836,6 +950,8 @@ export function buildSessionRows(
       sessionId: session.sessionId,
       projectPath: session.projectPath,
       projectName: session.projectName,
+      scope: session.scope,
+      team: session.team,
       title: session.title,
       updatedAt: session.updatedAt,
       messageCount: sum.messageCount,

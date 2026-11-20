@@ -1,7 +1,7 @@
 <!-- 图片与编号说明由坞内附件区独立管理；点击发送即固定提示词、图片及标注快照，说明由 SDK 独立资料消息承接。
      结果未确认时可补读同步，确认结束原运行后恢复输入，不自动重发。
      原位新建以独立草稿承接输入：旧实例结束期间可编辑但不发送，首次发送才建立新会话。
-     Prompt 输入坞：处理输入法组合态、Enter 发送与 Shift+Enter 换行、焦点回归与重复提交、响应侧栏「新建」的聚焦请求并给出一次性提示，并在 Agent 运行期间原位提供停止入口；在 Agent 运行与流式响应期间草稿文本、图片附件与标注编辑保持可用，点击发送时才校验会话空闲；同时承接 Extension 的 set_editor_text 填充文本、图片附件的选择/文本框与活动视窗全局快捷粘贴（兼容系统截图提取）/拖拽入口、输入行按内容自动增高、＋ 菜单内的常用消息（短语取自界面偏好，可在设置里增删改与排序，点击即发送）、Pi 命令的斜杠模糊补全（Runtime 就绪后用运行中的命令清单，未就绪时用主进程预读的技能清单，按类型分组并按匹配优先级排序；另含 Desktop 层自己拦截的界面命令）与 `@` 项目文件引用（编辑器内以胶囊包裹，提交的仍是相对路径文本，不传文件内容）；右侧文件树的行拖入坞内也走同一条相对路径引用规则；输入行是富文本，纯文本与引用胶囊混排，草稿字符串仍是唯一文本真源。输入坞是单行结构：左侧 ＋ 菜单是两列双级结构——左列分类行（添加图片、模型、执行模式、专家、技能、常用消息），右列是当前分类的二级面板（添加图片直接触发选择，其余五项常驻在面板里、仅列表区内部滚动，其中技能点击在光标处插入 `/skill:<名称>` 命令胶囊、不发送（同一消息可插多条，宿主只展开开头那条）；执行模式两档互斥，专家一个会话只选一个，两者都只在新建会话时可选，已开始的会话只显示当前值不可改），中间是输入行，右侧是发送/停止键；坞上方是待办清单面板（仅标准模式提交清单后出现）、一行延续判定结论（宿主给出结论时才渲染）与一行专家失效提示（绑定的定义已不在清单里时才渲染）；坞下方一行是水平居中的信息行：异常与进行中的状态文本、被收起的 Extension 对话入口与会话用量指标（缓存命中率、上下文占用与平均速率，点击开明细；累计 token 与费用只在明细浮层展示）。Extension 的 setStatus 项不在输入区展示。 -->
+     Prompt 输入坞：处理输入法组合态、Enter 发送与 Shift+Enter 换行、焦点回归与重复提交、响应侧栏「新建」的聚焦请求并给出一次性提示，并在 Agent 运行期间原位提供停止入口；在 Agent 运行与流式响应期间草稿文本、图片附件与标注编辑保持可用，点击发送时才校验会话空闲；同时承接 Extension 的 set_editor_text 填充文本、图片附件的选择/文本框与活动视窗全局快捷粘贴（兼容系统截图提取）/拖拽入口、输入行按内容自动增高、＋ 菜单内的常用消息（短语取自界面偏好，可在设置里增删改与排序，点击即发送）、Pi 命令的斜杠模糊补全（Runtime 就绪后用运行中的命令清单，未就绪时用主进程预读的技能清单，按类型分组并按匹配优先级排序；另含 Desktop 层自己拦截的界面命令）与 `@` 项目文件引用（编辑器内以胶囊包裹，提交的仍是相对路径文本，不传文件内容）；右侧文件树的行拖入坞内也走同一条相对路径引用规则；输入行是富文本，纯文本与引用胶囊混排，草稿字符串仍是唯一文本真源。输入坞是单行结构：左侧 ＋ 菜单是两列双级结构——左列分类行（添加图片、模型、执行模式、专家、团队、技能、常用消息），右列是当前分类的二级面板（添加图片直接触发选择，其余六项常驻在面板里、仅列表区内部滚动，其中技能点击在光标处插入 `/skill:<名称>` 命令胶囊、不发送（同一消息可插多条，宿主只展开开头那条）；执行模式两档互斥，专家一个会话只选一个、选中团队时专家即为团长，三者都只在新建会话时可选，已开始的会话只显示当前值不可改），中间是输入行，右侧是发送/停止键；坞上方是待办清单面板（仅标准模式提交清单后出现）、一行延续判定结论（宿主给出结论时才渲染）与一行专家失效提示（绑定的定义已不在清单里时才渲染）；坞下方一行是水平居中的信息行：异常与进行中的状态文本、被收起的 Extension 对话入口与会话用量指标（缓存命中率、上下文占用与平均速率，点击开明细；累计 token 与费用只在明细浮层展示）。Extension 的 setStatus 项不在输入区展示。 -->
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
@@ -18,6 +18,7 @@ import { useResourceStore } from '../../resources/stores/resource'
 import { useProjectStore } from '../../projects/stores/project'
 import { useRuntimeStore } from '../stores/runtime'
 import { useSessionStore } from '../stores/session'
+import { useTeamStore } from '../../experts/stores/team'
 import { isSavedInputKey, useSessionViewStore } from '../stores/session-view'
 import type { PendingImage, SessionInput } from '../stores/session-view'
 import { useWorkspaceTabsStore } from '../../workspace/stores/workspace-tabs'
@@ -32,6 +33,10 @@ import UsageDetailDialog from './UsageDetailDialog.vue'
 import MemoryInjectionDialog from './MemoryInjectionDialog.vue'
 import PromptImageMaterials from './PromptImageMaterials.vue'
 import TodoPanel from './TodoPanel.vue'
+import TeamPanel from './TeamPanel.vue'
+import TeamMemberDialog from './TeamMemberDialog.vue'
+import { useTeamPanelStore } from '../stores/team-panel'
+import type { TeamMemberRun } from '../../../../shared/team-run-api'
 import PromptRichEditor from './PromptRichEditor.vue'
 import { hasProjectEntryDragData, projectEntryReferenceText, readProjectEntryDragData } from '../../ui/project-entry-drag'
 
@@ -40,6 +45,7 @@ const extensionStore = useExtensionUiStore()
 const projectStore = useProjectStore()
 const resourceStore = useResourceStore()
 const sessionStore = useSessionStore()
+const teamStore = useTeamStore()
 const preferencesStore = usePreferencesStore()
 const sessionViewStore = useSessionViewStore()
 const workspaceTabsStore = useWorkspaceTabsStore()
@@ -194,13 +200,14 @@ const plusMenuOpen = ref(false)
 /** 菜单外层引用：判断一次点击是否落在触发键或菜单之内。 */
 const plusRoot = ref<HTMLElement | null>(null)
 const plusMenu = ref<HTMLElement | null>(null)
-/** 二级面板的分类：除图片是直接执行的动作外，其余五项各占一块面板。 */
-type PlusPanel = 'model' | 'mode' | 'expert' | 'skill' | 'quick'
+/** 二级面板的分类：除图片是直接执行的动作外，其余六项各占一块面板。 */
+type PlusPanel = 'model' | 'mode' | 'expert' | 'team' | 'skill' | 'quick'
 /** 一级列的分类与面板映射；图片是直接动作，不在其中。 */
 const plusPanelRows: readonly { readonly value: PlusPanel; readonly label: string }[] = [
   { value: 'model', label: '模型' },
   { value: 'mode', label: '执行模式' },
   { value: 'expert', label: '专家' },
+  { value: 'team', label: '团队' },
   { value: 'skill', label: '技能' },
   { value: 'quick', label: '常用消息' }
 ]
@@ -275,6 +282,46 @@ function onExpertSelect(value: string): void {
   selectExpert(value === '' ? null : value)
 }
 /**
+ * 团队二级列表：第一项固定为「不组队」，其后只列可开团（团长与成员都可用）的团队。
+ * 不可开团的团队不在此列出：选中它只会得到一个静默失效的绑定，原因留给设置页的诊断。
+ */
+const teamGroups = computed<readonly ExpertGroup[]>(() => {
+  const groups: ExpertGroup[] = [{
+    options: [{ value: '', label: '不组队', description: '按单个专家或通用助手回答' }]
+  }]
+  const ready = teamStore.teams.filter(team => team.ready)
+  if (ready.length > 0) {
+    groups.push({
+      label: '可开团',
+      options: ready.map(team => ({
+        value: team.id,
+        label: team.displayName,
+        // 团长随团队确定：说明里直接写出开团后会话由谁主持。
+        description: `团长 ${team.leadExpertId}，成员 ${team.memberExpertIds.length} 个`,
+        tag: team.source === 'builtin' ? '内置' : '自定义'
+      }))
+    })
+  }
+  // 已选中的团队在清单里消失或变得不可开团时补一项，否则触发器会显示成未选。
+  const selected = sessionStore.selectedTeamId
+  if (selected !== null && !ready.some(team => team.id === selected)) {
+    groups.push({
+      label: '已失效',
+      options: [{ value: selected, label: `不可开团：${selected}`, description: '团队不存在或团长、成员不可用，原因见设置页' }]
+    })
+  }
+  return groups
+})
+/**
+ * 选中团队时把专家一并改成团长：两个选择器各指一个会出现「团队一个团长、会话另一个专家」。
+ * 回到「不组队」时保留当前专家，用户刚选过的身份不被清除。
+ */
+function onTeamSelect(value: string): void {
+  const team = teamStore.teams.find(item => item.id === value) ?? null
+  sessionStore.selectTeam(team === null ? null : team.id, team?.leadExpertId ?? null)
+  closePlusMenu()
+}
+/**
  * 当前专家徽标的说明文字：正常时用简介，绑定失效时用后果与换专家的前提。
  * 徽标只承担「现在是谁」，失效的后果仍由坞内说明行承担。
  */
@@ -285,6 +332,78 @@ const expertChipTitle = computed<string | undefined>(() => {
   const expert = sessionStore.expertCatalog.experts.find(item => item.id === expertId)
   return expert === undefined || expert.summary === '' ? undefined : expert.summary
 })
+/** 当前团队：清单里找不到定义时退回标识，界面据此标「不可开团」。 */
+const selectedTeam = computed(() => sessionStore.selectedTeamId === null
+  ? null
+  : teamStore.teams.find(team => team.id === sessionStore.selectedTeamId) ?? null)
+
+const teamPanelStore = useTeamPanelStore()
+
+/** 团队成员的展示信息：显示名与写入范围都取自专家清单，面板不自己解析专家定义。 */
+const teamPanelMemberInfo = computed<Record<string, { name: string; scope: readonly string[] | null }>>(() => {
+  const info: Record<string, { name: string; scope: readonly string[] | null }> = {}
+  for (const id of selectedTeam.value?.memberExpertIds ?? []) {
+    const expert = sessionStore.expertCatalog.experts.find(item => item.id === id)
+    info[id] = { name: expert?.displayName ?? id, scope: expert?.writeScope ?? null }
+  }
+  return info
+})
+
+const teamMemberDialogOpen = computed(() => teamPanelStore.selectedId !== null)
+
+/** 打开成员时取该成员最近的一轮；记录倒序查，不按条目当前指派重建。 */
+const teamMemberRun = computed<TeamMemberRun | null>(() => {
+  const memberId = teamPanelStore.selectedId
+  if (memberId === null) return null
+  const runs = runtimeStore.activity?.teamRuns ?? []
+  for (let index = runs.length - 1; index >= 0; index -= 1) {
+    const run = runs[index]
+    if (run !== undefined && run.memberExpertId === memberId) return run
+  }
+  return null
+})
+
+const teamMemberName = computed(() => {
+  const memberId = teamPanelStore.selectedId
+  if (memberId === null) return ''
+  return teamPanelMemberInfo.value[memberId]?.name ?? memberId
+})
+
+/** 详情读取失败时按同一成员重试：面板不清空，重读只影响弹窗内容。 */
+function retryTeamMember(): void {
+  const memberId = teamPanelStore.selectedId
+  const projectPath = projectStore.currentProject?.path ?? null
+  const rootSessionId = workspaceTabsStore.activeSessionId
+  if (memberId === null || projectPath === null || rootSessionId === null) return
+  void teamPanelStore.open(projectPath, rootSessionId, memberId)
+}
+/** 团队已选但不再可用：与专家失效同理，只如实反映，不自动清绑定。 */
+const teamChipInvalid = computed(() => sessionStore.selectedTeamId !== null
+  && (selectedTeam.value === null || !selectedTeam.value.ready))
+/** 团队徽标文案：成员数写在里面，让「团长只调度、成员干活」在坞内可见。 */
+const teamChipText = computed<string | null>(() => {
+  const teamId = sessionStore.selectedTeamId
+  if (teamId === null) return null
+  const team = selectedTeam.value
+  if (team === null) return `团队 · ${teamId}（不可开团）`
+  return team.ready
+    ? `团队 · ${team.displayName}（成员 ${team.memberExpertIds.length} 个）`
+    : `团队 · ${team.displayName}（不可开团）`
+})
+/** 徽标的悬停说明：可用时给团队简介，不可用时直接说后果。 */
+const teamChipTitle = computed<string | undefined>(() => {
+  if (sessionStore.selectedTeamId === null) return undefined
+  const team = selectedTeam.value
+  if (team === null) return '团队定义已不存在，本会话按普通专家会话运行。'
+  if (!team.ready) return '团长或成员不可用，本会话未启用团队装配；原因见设置页的专家团分节。'
+  return team.summary === '' ? undefined : team.summary
+})
+
+/** 徽标要显示团队名而不是标识：清单没读过就补读一次，失败时徽标回落为不可开团提示。 */
+watch(() => sessionStore.selectedTeamId, teamId => {
+  if (teamId !== null && !teamStore.loaded) void teamStore.load()
+}, { immediate: true })
+
 /** 延续判定只展示结论与命中信号；用户可以直接在对话里纠正，界面不提供改判按钮。 */
 const continuationText = computed(() => {
   const judgement = runtimeStore.activity?.continuation ?? null
@@ -777,6 +896,8 @@ function togglePlusMenu(): void {
     plusPanel.value = 'quick'
     // 专家目录可能刚被改过：每次打开都重读一次，不在应用启动时就缓存住。
     void sessionStore.loadExperts()
+    // 团队清单同理：刚在设置页改过定义，这里应立刻看到能否开团。
+    void teamStore.load()
   }
 }
 
@@ -1744,6 +1865,24 @@ onMounted(() => {
         <!-- 待办清单：标准模式提交后贴在输入坞上方；快速模式没有这个工具，永远不会出现。 -->
         <TodoPanel :todos="runtimeStore.activity?.todos ?? null" />
 
+        <!-- 团队面板：只在团队会话里读取成员清单与账本；普通会话整块不渲染。 -->
+        <TeamPanel
+          :team-id="sessionStore.selectedTeamId"
+          :project-path="projectStore.currentProject?.path ?? null"
+          :root-session-id="workspaceTabsStore.activeSessionId"
+          :board="runtimeStore.activity?.teamBoard ?? null"
+          :runs="runtimeStore.activity?.teamRuns ?? []"
+          :member-info="teamPanelMemberInfo"
+        />
+
+        <TeamMemberDialog
+          :open="teamMemberDialogOpen"
+          :member-name="teamMemberName"
+          :run="teamMemberRun"
+          @close="teamPanelStore.close()"
+          @retry="retryTeamMember"
+        />
+
         <!-- 延续判定：宿主本轮算出的结论，只用于让用户发现误判；没有结论时不占位。 -->
         <p v-if="continuationText !== null" class="prompt-continuation" role="status">{{ continuationText }}</p>
 
@@ -1761,6 +1900,18 @@ onMounted(() => {
           :title="expertChipTitle"
         >
           专家 · {{ sessionStore.selectedExpertName }}
+        </p>
+
+        <!-- 当前团队：团长在团队模式下只能调度与验收，徽标让「为什么没有写文件」在坞内一眼可见；
+             失效态同样只换颜色，不把颜色当唯一通道。 -->
+        <p
+          v-if="teamChipText !== null"
+          class="prompt-expert-chip"
+          :class="{ 'is-stale': teamChipInvalid }"
+          role="status"
+          :title="teamChipTitle"
+        >
+          {{ teamChipText }}
         </p>
 
         <!-- 输入行：左侧 ＋ 菜单、中间输入框、右侧发送/停止，三者在底边对齐，多行时按钮跟随下沿。 -->
@@ -1839,6 +1990,24 @@ onMounted(() => {
                     >
                       <span>{{ option.label }}</span>
                     </AppButton>
+                  </template>
+                  <template v-else-if="plusPanel === 'team'">
+                    <!-- 团队与专家同一步锁定：开团后专家就是团长，已开始的会话两项都不可改。 -->
+                    <AppSelect
+                      id="prompt-team"
+                      inline
+                      label="团队"
+                      :groups="teamGroups"
+                      :model-value="sessionStore.selectedTeamId ?? ''"
+                      :disabled="modeLocked"
+                      @update:model-value="onTeamSelect"
+                    />
+                    <p v-if="teamStore.loadError !== null" class="prompt-composer-plus-panel-note">
+                      {{ teamStore.loadError }}
+                    </p>
+                    <p v-else class="prompt-composer-plus-panel-note">
+                      不可开团的团队不在此列出，原因见设置页的专家团分节。
+                    </p>
                   </template>
                   <template v-else-if="plusPanel === 'expert'">
                     <!-- 一个会话只用一个专家：开始对话后锁定，换专家需要新会话；候选项常驻面板，不再套一层浮层。 -->

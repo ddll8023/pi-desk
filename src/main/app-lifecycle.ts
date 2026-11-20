@@ -23,6 +23,7 @@ import {
   piAgentUpdater,
   preferencesManager,
   projectDirectoryWatcher,
+  projectManager,
   sdkRuntime,
   terminals,
   updateChecker,
@@ -50,6 +51,8 @@ import { registerWorktreeHandlers } from './git/worktree-ipc'
 import { registerGitCleanupHandlers } from './git/git-cleanup-ipc'
 import { registerSessionHandlers, registerSessionRunHandlers } from './sessions/ipc'
 import { registerExpertHandlers } from './sessions/expert-ipc'
+import { registerTeamHandlers } from './sessions/team-ipc'
+import { pruneOrphanTeamSessions } from './sessions/team-sessions'
 import { registerExtensionUiHandlers } from './sessions/extension-ui-ipc'
 import { registerRuntimeHandlers } from './sessions/runtime-ipc'
 import { registerResourceHandlers } from './resources/ipc'
@@ -209,6 +212,16 @@ export async function startApplication(): Promise<void> {
   registerGitCleanupHandlers(pageUrl)
   registerSessionHandlers(pageUrl)
   registerExpertHandlers(pageUrl)
+  registerTeamHandlers(pageUrl, {
+    // 成员登记与会话绑定同源：开团物化的登记在这里被只读通道读回。
+    teamSessions: {
+      list: (projectPath, rootSessionId) => configStore.listTeamSessions(projectPath, rootSessionId),
+      save: entries => configStore.saveTeamSessions(entries),
+      forget: (projectPath, rootSessionId) => configStore.forgetTeamSessions(projectPath, rootSessionId)
+    },
+    // 只允许读取已添加项目：页面不能借成员通道探测任意目录。
+    hasProject: projectPath => projectManager.hasProject(projectPath)
+  })
   registerSessionRunHandlers(pageUrl)
   registerTerminalHandlers(pageUrl)
   registerTrustHandlers(pageUrl)
@@ -241,6 +254,20 @@ export async function startApplication(): Promise<void> {
   // 失败只保留旧 ID 并在下次启动重试，不阻断启动。
   await alignProjectIdentities(configStore, memoryManager)
   await createWindow(pageUrl)
+  // 孤儿成员会话核对：根会话已不在的成员目录无法从界面进入，启动后低频跑一次清掉。
+  // 延迟执行避开首屏；失败只记日志，不影响启动。
+  setTimeout(() => {
+    void pruneOrphanTeamSessions({
+      forgetSessions: rootSessionId => configStore.forgetTeamSessionsByRoot(rootSessionId),
+      forgetTeam: rootSessionId => configStore.forgetSessionTeamById(rootSessionId)
+    }).then(result => {
+      if (result.removed > 0 || result.failed > 0) {
+        console.warn(`[team-sessions] 孤儿成员会话清理：移除 ${result.removed}，失败 ${result.failed}`)
+      }
+    }).catch(error => {
+      console.warn('[team-sessions] 孤儿成员会话清理失败：', error)
+    })
+  }, 15_000)
   // 窗口已创建后再开始检查：它只影响页面上的提示，不参与启动编排。
   // 首次检查结束后按开关决定要不要自动更新一次扩展；这一次不阻塞窗口显示。
   const initialCheck = updateChecker.startInitialCheck()

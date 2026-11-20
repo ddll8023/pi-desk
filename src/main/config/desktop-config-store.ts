@@ -64,6 +64,11 @@ const CONFIG_VERSION = 1
  */
 const SESSION_EXPERT_ID = /^[a-z][a-z0-9-]*$/
 const MAX_SESSION_EXPERT_BINDINGS = 2000
+/** 团队与专家同属引用类标识：字符规则与条数上限共用，不维护第二份取值。 */
+const SESSION_TEAM_ID = SESSION_EXPERT_ID
+const MAX_SESSION_TEAM_BINDINGS = MAX_SESSION_EXPERT_BINDINGS
+/** 成员会话登记：每个根会话×成员一条；总量与会话绑定同量级，超出丢最早写入的记录。 */
+const MAX_TEAM_SESSION_BINDINGS = 2000
 /** 最近项目上限；超出按 `lastOpenedAt` 最旧淘汰，避免配置文件无界增长。 */
 const MAX_PROJECTS = 50
 /** 窗口尺寸的存储边界；只拒绝明显异常的值，实际尺寸下限与显示器上限由 window-state.ts 处理。 */
@@ -139,6 +144,10 @@ interface StoredConfig {
   readonly lanDevices: readonly LanStoredDevice[]
   /** 会话级专家绑定；缺失或非法条目逐条丢弃，缺失字段按无绑定处理。 */
   readonly sessionExperts: readonly SessionExpertBinding[]
+  /** 会话级团队绑定；与专家绑定同规矩，缺失字段按未开团处理。 */
+  readonly sessionTeams: readonly SessionTeamBinding[]
+  /** 成员会话登记；开团时物化，随根会话删除清理。 */
+  readonly teamSessions: readonly TeamSessionBinding[]
 }
 
 /**
@@ -149,6 +158,29 @@ export interface SessionExpertBinding {
   readonly projectPath: string
   readonly sessionId: string
   readonly expertId: string
+}
+
+/**
+ * 会话所属团队：同样只存标识，团队定义与团长、成员始终从磁盘读取。
+ * 绑定存在只说明“开团时选过它”，团队是否还就绪由宿主装配时诊断。
+ */
+export interface SessionTeamBinding {
+  readonly projectPath: string
+  readonly sessionId: string
+  readonly teamId: string
+}
+
+/**
+ * 成员会话登记：根会话开团时按团队成员物化，只存标识。
+ * `sessionId` 在派活之前为 null（会话文件还不存在），派活后固定下来供续派与只读查看定位。
+ */
+export interface TeamSessionBinding {
+  readonly projectPath: string
+  readonly rootSessionId: string
+  readonly teamId: string
+  readonly memberExpertId: string
+  readonly sessionId: string | null
+  readonly createdAt: string
 }
 
 /** 落盘载荷；未显式更新的可选字段保留当前值，避免其他配置写入将它们清除。 */
@@ -174,6 +206,10 @@ interface PersistPayload {
   readonly lanDevices?: readonly LanStoredDevice[]
   /** 未显式更新时保留当前值，避免其他配置写入将会话专家绑定清除。 */
   readonly sessionExperts?: readonly SessionExpertBinding[]
+  /** 未显式更新时保留当前值，避免其他配置写入将会话团队绑定清除。 */
+  readonly sessionTeams?: readonly SessionTeamBinding[]
+  /** 未显式更新时保留当前值，避免其他配置写入将成员会话登记清除。 */
+  readonly teamSessions?: readonly TeamSessionBinding[]
 }
 
 /** 配置写入失败；由调用方映射为 `PROJECT_STORAGE_FAILED` 或通用内部错误。 */
@@ -216,6 +252,48 @@ function sanitizeSessionExperts(value: unknown): SessionExpertBinding[] {
     seen.add(key)
     bindings.push({ projectPath, sessionId, expertId })
     if (bindings.length >= MAX_SESSION_EXPERT_BINDINGS) break
+  }
+  return bindings
+}
+
+function sanitizeSessionTeams(value: unknown): SessionTeamBinding[] {
+  if (!Array.isArray(value)) return []
+  const seen = new Set<string>()
+  const bindings: SessionTeamBinding[] = []
+  for (const entry of value) {
+    if (!isRecord(entry)) continue
+    const { projectPath, sessionId, teamId } = entry
+    if (typeof projectPath !== 'string' || !isAbsolute(projectPath)) continue
+    if (typeof sessionId !== 'string' || sessionId === '' || sessionId.length > 255) continue
+    if (typeof teamId !== 'string' || !SESSION_TEAM_ID.test(teamId)) continue
+    const key = `${projectPath}\u0000${sessionId}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    bindings.push({ projectPath, sessionId, teamId })
+    if (bindings.length >= MAX_SESSION_TEAM_BINDINGS) break
+  }
+  return bindings
+}
+
+/** 成员会话登记：路径与会话 id 必须合法，成员标识与团队标识同形；同键只保留先出现的一条。 */
+function sanitizeTeamSessions(value: unknown): TeamSessionBinding[] {
+  if (!Array.isArray(value)) return []
+  const seen = new Set<string>()
+  const bindings: TeamSessionBinding[] = []
+  for (const entry of value) {
+    if (!isRecord(entry)) continue
+    const { projectPath, rootSessionId, teamId, memberExpertId, sessionId, createdAt } = entry
+    if (typeof projectPath !== 'string' || !isAbsolute(projectPath)) continue
+    if (typeof rootSessionId !== 'string' || rootSessionId === '' || rootSessionId.length > 255) continue
+    if (typeof teamId !== 'string' || !SESSION_TEAM_ID.test(teamId)) continue
+    if (typeof memberExpertId !== 'string' || !SESSION_EXPERT_ID.test(memberExpertId)) continue
+    if (sessionId !== null && (typeof sessionId !== 'string' || sessionId === '' || sessionId.length > 255)) continue
+    if (typeof createdAt !== 'string' || createdAt === '') continue
+    const key = `${projectPath}\u0000${rootSessionId}\u0000${memberExpertId}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    bindings.push({ projectPath, rootSessionId, teamId, memberExpertId, sessionId, createdAt })
+    if (bindings.length >= MAX_TEAM_SESSION_BINDINGS) break
   }
   return bindings
 }
@@ -473,6 +551,8 @@ export class DesktopConfigStore {
   private executionMode: ExecutionMode = 'standard'
   private lanDevices: LanStoredDevice[] = []
   private sessionExperts: SessionExpertBinding[] = []
+  private sessionTeams: SessionTeamBinding[] = []
+  private teamSessions: TeamSessionBinding[] = []
   private windowState: WindowState = DEFAULT_WINDOW_STATE
   private projectTrust: Record<string, TrustDecision> = {}
   /** 磁盘上的安装级 UUID；只在配置里保存过一次后才有值。 */
@@ -843,6 +923,163 @@ export class DesktopConfigStore {
     return this.saveSessionExpert({ projectPath, sessionId, expertId: null }).then(() => undefined)
   }
 
+  /** 读取某个会话的团队绑定；没有记录时返回 null，由调用方决定是否用请求里的值。 */
+  readSessionTeam(projectPath: string, sessionId: string): Promise<string | null> {
+    return this.enqueue(async () => {
+      await this.loadFromDisk()
+      return this.sessionTeams
+        .find(item => item.projectPath === projectPath && item.sessionId === sessionId)?.teamId ?? null
+    })
+  }
+
+  /**
+   * 写入或清除会话团队绑定；`teamId` 为 null 时删除该会话的记录。
+   * 与专家绑定一致：保存成功后才提交内存值，只读降级不能假称已保存。
+   */
+  saveSessionTeam(binding: {
+    readonly projectPath: string
+    readonly sessionId: string
+    readonly teamId: string | null
+  }): Promise<string | null> {
+    return this.enqueue(async () => {
+      await this.loadFromDisk()
+      if (this.readOnly) {
+        throw new DesktopConfigStorageError('本地配置处于只读状态，会话团队未保存。')
+      }
+      const rest = this.sessionTeams.filter(item => !(item.projectPath === binding.projectPath
+        && item.sessionId === binding.sessionId))
+      const next = binding.teamId === null
+        ? rest
+        : [...rest, { projectPath: binding.projectPath, sessionId: binding.sessionId, teamId: binding.teamId }]
+      const capped = next.length > MAX_SESSION_TEAM_BINDINGS
+        ? next.slice(next.length - MAX_SESSION_TEAM_BINDINGS)
+        : next
+      await this.persist({
+        projects: this.projects,
+        currentProjectId: this.currentProjectId,
+        ui: this.ui,
+        windowState: this.windowState,
+        projectTrust: this.projectTrust,
+        authDeviceId: this.deviceIdForPersist(),
+        sessionTeams: capped
+      })
+      this.sessionTeams = capped
+      return binding.teamId
+    })
+  }
+
+  /** 删除会话时清理它的团队绑定；其余记录原样保留。 */
+  forgetSessionTeam(projectPath: string, sessionId: string): Promise<void> {
+    return this.saveSessionTeam({ projectPath, sessionId, teamId: null }).then(() => undefined)
+  }
+
+  /** 列出某个根会话的成员登记；没有登记时返回空数组。 */
+  listTeamSessions(projectPath: string, rootSessionId: string): Promise<TeamSessionBinding[]> {
+    return this.enqueue(async () => {
+      await this.loadFromDisk()
+      return this.teamSessions
+        .filter(item => item.projectPath === projectPath && item.rootSessionId === rootSessionId)
+        .map(item => ({ ...item }))
+    })
+  }
+
+  /**
+   * 物化成员登记：同键（项目 + 根会话 + 成员）以本次为准，其余保留。
+   * 已存在的登记不带 sessionId 覆盖——已经派过活的成员会话不能被重新开团抹掉。
+   */
+  saveTeamSessions(entries: readonly TeamSessionBinding[]): Promise<void> {
+    return this.enqueue(async () => {
+      await this.loadFromDisk()
+      if (this.readOnly) {
+        throw new DesktopConfigStorageError('本地配置处于只读状态，成员会话登记未保存。')
+      }
+      const keyOf = (item: TeamSessionBinding): string =>
+        `${item.projectPath}\u0000${item.rootSessionId}\u0000${item.memberExpertId}`
+      const incoming = new Map<string, TeamSessionBinding>()
+      for (const entry of entries) {
+        const existing = this.teamSessions.find(item => keyOf(item) === keyOf(entry))
+        // 已有会话的 sessionId 只增不减：重新开团不应把成员上下文丢掉。
+        incoming.set(keyOf(entry), existing?.sessionId == null ? entry : { ...entry, sessionId: existing.sessionId })
+      }
+      const rest = this.teamSessions.filter(item => !incoming.has(keyOf(item)))
+      const next = [...rest, ...incoming.values()]
+      const capped = next.length > MAX_TEAM_SESSION_BINDINGS
+        ? next.slice(next.length - MAX_TEAM_SESSION_BINDINGS)
+        : next
+      await this.persist({
+        projects: this.projects,
+        currentProjectId: this.currentProjectId,
+        ui: this.ui,
+        windowState: this.windowState,
+        projectTrust: this.projectTrust,
+        authDeviceId: this.deviceIdForPersist(),
+        teamSessions: capped
+      })
+      this.teamSessions = capped
+    })
+  }
+
+  /** 根会话被删除时一并清理它的成员登记；其他根会话的不受影响。 */
+  forgetTeamSessions(projectPath: string, rootSessionId: string): Promise<void> {
+    return this.enqueue(async () => {
+      await this.loadFromDisk()
+      if (this.readOnly) return
+      const remaining = this.teamSessions.filter(item => !(item.projectPath === projectPath
+        && item.rootSessionId === rootSessionId))
+      if (remaining.length === this.teamSessions.length) return
+      await this.persist({
+        projects: this.projects,
+        currentProjectId: this.currentProjectId,
+        ui: this.ui,
+        windowState: this.windowState,
+        projectTrust: this.projectTrust,
+        authDeviceId: this.deviceIdForPersist(),
+        teamSessions: remaining
+      })
+      this.teamSessions = remaining
+    })
+  }
+
+  /** 按根会话清理全部成员登记，不看项目：项目已从清单移除时，旧登记仍要能清掉。 */
+  forgetTeamSessionsByRoot(rootSessionId: string): Promise<void> {
+    return this.enqueue(async () => {
+      await this.loadFromDisk()
+      if (this.readOnly) return
+      const remaining = this.teamSessions.filter(item => item.rootSessionId !== rootSessionId)
+      if (remaining.length === this.teamSessions.length) return
+      await this.persist({
+        projects: this.projects,
+        currentProjectId: this.currentProjectId,
+        ui: this.ui,
+        windowState: this.windowState,
+        projectTrust: this.projectTrust,
+        authDeviceId: this.deviceIdForPersist(),
+        teamSessions: remaining
+      })
+      this.teamSessions = remaining
+    })
+  }
+
+  /** 按会话 id 清理团队绑定，不看项目：孤立成员的绑定不能因为项目已移除而残留。 */
+  forgetSessionTeamById(sessionId: string): Promise<void> {
+    return this.enqueue(async () => {
+      await this.loadFromDisk()
+      if (this.readOnly) return
+      const remaining = this.sessionTeams.filter(item => item.sessionId !== sessionId)
+      if (remaining.length === this.sessionTeams.length) return
+      await this.persist({
+        projects: this.projects,
+        currentProjectId: this.currentProjectId,
+        ui: this.ui,
+        windowState: this.windowState,
+        projectTrust: this.projectTrust,
+        authDeviceId: this.deviceIdForPersist(),
+        sessionTeams: remaining
+      })
+      this.sessionTeams = remaining
+    })
+  }
+
   /** 读取记忆开关；缺失或非法时为开启。 */
   readMemoryEnabled(): Promise<MemoryPreference> {    return this.enqueue(async () => {
       await this.loadFromDisk()
@@ -1064,6 +1301,8 @@ export class DesktopConfigStore {
       this.executionMode = parsed.executionMode
       this.lanDevices = [...parsed.lanDevices]
       this.sessionExperts = parsed.sessionExperts.map(item => ({ ...item }))
+      this.sessionTeams = parsed.sessionTeams.map(item => ({ ...item }))
+      this.teamSessions = parsed.teamSessions.map(item => ({ ...item }))
       this.windowState = parsed.window
       this.projectTrust = parsed.projectTrust
       this.storedAuthDeviceId = parsed.authDeviceId
@@ -1079,8 +1318,9 @@ export class DesktopConfigStore {
     this.extensionAutoUpdate = parsed.extensionAutoUpdate
     this.memoryEnabled = parsed.memoryEnabled
     this.executionMode = parsed.executionMode
-    this.lanDevices = [...parsed.lanDevices]
     this.sessionExperts = parsed.sessionExperts.map(item => ({ ...item }))
+    this.sessionTeams = parsed.sessionTeams.map(item => ({ ...item }))
+    this.teamSessions = parsed.teamSessions.map(item => ({ ...item }))
     this.windowState = parsed.window
     this.projectTrust = parsed.projectTrust
     this.storedAuthDeviceId = parsed.authDeviceId
@@ -1115,6 +1355,8 @@ export class DesktopConfigStore {
       executionMode: isExecutionMode(value.executionMode) ? value.executionMode : 'standard',
       lanDevices: sanitizeLanDevices(value.lanDevices),
       sessionExperts: sanitizeSessionExperts(value.sessionExperts),
+      sessionTeams: sanitizeSessionTeams(value.sessionTeams),
+      teamSessions: sanitizeTeamSessions(value.teamSessions),
       window: sanitizeWindowState(value.window),
       projectTrust: sanitizeProjectTrust(value.projectTrust),
       authDeviceId: sanitizeAuthDeviceId(value.authDeviceId)
@@ -1183,7 +1425,9 @@ export class DesktopConfigStore {
       memoryEnabled: next.memoryEnabled === undefined ? this.memoryEnabled : next.memoryEnabled,
       executionMode: next.executionMode === undefined ? this.executionMode : next.executionMode,
       lanDevices: (next.lanDevices ?? this.lanDevices).map(device => ({ ...device })),
-      sessionExperts: (next.sessionExperts ?? this.sessionExperts).map(item => ({ ...item }))
+      sessionExperts: (next.sessionExperts ?? this.sessionExperts).map(item => ({ ...item })),
+      sessionTeams: (next.sessionTeams ?? this.sessionTeams).map(item => ({ ...item })),
+      teamSessions: (next.teamSessions ?? this.teamSessions).map(item => ({ ...item }))
     }
     // 这份配置是整文件写入：磁盘在加载后被别的写入者改过时，宁可放弃本次保存，也不用过期内容覆盖。
     if (await this.stampOf(file) !== this.loadedStamp) {

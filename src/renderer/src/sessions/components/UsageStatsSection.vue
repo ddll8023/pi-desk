@@ -1,9 +1,10 @@
 <!-- 设置页的用量统计分节：
      以「会话明细」为唯一数据源，按页面顶部统一时间范围派生全部报表视图（概览、趋势、按日明细、
-     模型/项目分布、会话明细），支持从趋势柱、热力图格、分布行与按日明细下钻到该维度的会话列表。
+     模型/项目/团队分布、会话明细），支持从趋势柱、热力图格、分布行与按日明细下钻到该维度的会话列表。
      费用只在供应商上报价格时计入，缺失时按「未提供」占位，不推算金额。
      支持手动重新扫描；分节可见时每 60 秒静默刷新一次（走文件戳缓存，不切断当前视图），页面隐藏后停止。
-     点击会话行跳转至对应项目的该会话并关闭设置页；热力图固定近一年窗口，不随范围筛选变化。 -->
+     点击会话行跳转至对应项目的该会话并关闭设置页；成员会话行不可跳转（它们不在项目会话列表里），只在会话内的团队面板查看。
+     热力图固定近一年窗口，不随范围筛选变化。 -->
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
 import type { UsageStatsSummary } from '../../../../shared/usage-stats-api'
@@ -17,6 +18,7 @@ import {
   buildHeatmap,
   buildModelDistributionRows,
   buildProjectDistributionRows,
+  buildTeamDistributionRows,
   buildSessionRows,
   buildTrendBars,
   buildWindowAggregate,
@@ -192,6 +194,12 @@ const projectRows = computed<readonly UsageDistributionRow[]>(() => {
   return buildProjectDistributionRows(aggregate.value)
 })
 
+/** 团队成员会话的合计：没有成员会话时为空，整块不渲染。 */
+const teamRows = computed<readonly UsageDistributionRow[]>(() => {
+  if (aggregate.value === null) return []
+  return buildTeamDistributionRows(aggregate.value)
+})
+
 const sessionRows = computed<readonly UsageSessionRow[]>(() => {
   if (summary.value === null || aggregate.value === null) return []
   return buildSessionRows(summary.value.sessions, aggregate.value, drill.value)
@@ -290,6 +298,8 @@ function clearDrill(): void {
 }
 
 async function handleOpenSession(row: UsageSessionRow): Promise<void> {
+  // 成员会话不在项目会话列表里：跳转只会关掉设置页而打不开任何会话。
+  if (row.scope === 'team-member') return
   settingsStore.closeSettings()
   await sessionStore.open(row.sessionId, false, row.projectPath)
 }
@@ -524,6 +534,21 @@ onUnmounted(() => {
             <UsageDistributionList
               :rows="projectRows"
               empty-text="所选范围内无项目用量记录。"
+              @select="handleDrill"
+            />
+          </section>
+
+          <!-- 团队用量分布：只含团队成员会话，按根会话归组；没有团队记录时整块不出现 -->
+          <section v-if="teamRows.length > 0" class="settings-section" aria-labelledby="usage-teams-title">
+            <div class="settings-section-heading">
+              <h2 id="usage-teams-title" class="settings-section-title">团队用量分布</h2>
+            </div>
+            <p class="mt-1 text-2xs text-desk-muted">
+              团队成员是完整会话，开销独立计时；这里按团队（根会话）归组，团长自己的请求仍计在“项目用量分布”里。
+            </p>
+            <UsageDistributionList
+              :rows="teamRows"
+              empty-text="所选范围内无团队成员会话记录。"
               @select="handleDrill"
             />
           </section>

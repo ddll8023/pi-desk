@@ -88,6 +88,11 @@ export const useSessionStore = defineStore('session', () => {
   /** 当前会话的专家：新建时是用户的选择，打开已有会话时以主进程回报为准。 */
   const selectedExpertId = ref<string | null>(null)
   /**
+   * 当前会话的团队：同样只管新建时的选择，打开已有会话以主进程回报为准。
+   * 团队非空时专家固定为它的团长，因此这里是“组队”这一件事的唯一状态。
+   */
+  const selectedTeamId = ref<string | null>(null)
+  /**
    * 选中的专家不在清单里：定义被删除或改名后，会话仍持有旧的绑定标识。
    * 绑定不去自动清理——重建同名专家即可恢复，界面只如实反映当前状态。
    */
@@ -363,6 +368,15 @@ export const useSessionStore = defineStore('session', () => {
   }
 
   /**
+   * 选择本会话使用的团队；`null` 表示不组队。
+   * 组长（团长）是团队模式下唯一的专家来源：选中团队时同时改专家，避免两个选择器各指一个。
+   */
+  function selectTeam(teamId: string | null, leadExpertId: string | null = null): void {
+    selectedTeamId.value = teamId
+    if (teamId !== null && leadExpertId !== null) selectedExpertId.value = leadExpertId
+  }
+
+  /**
    * 当前会话不在列表里时补读一次该项目的列表：Pi 新建会话只分配身份，会话文件到首次写入才创建，
    * 因此列表里可能根本没有它（打开也不再回传列表）；调用方应在确有消息落盘后触发。
    * 专家绑定不在这里写：主进程在打开成功时已落盘，页面只读打开回包。
@@ -428,7 +442,8 @@ export const useSessionStore = defineStore('session', () => {
       const requestedSessionId = sessionId ?? tabs.sessionIdForTab(targetPath, key)
       // 新建会话带上当前选择；已有会话由主进程按持久绑定解析，页面不拿本地状态覆盖它。
       const requestExpertId = requestedSessionId === null ? selectedExpertId.value : null
-      const result = await openSession(targetPath, requestedSessionId, allowInterrupt, workspaceId, requestExpertId)
+      const requestTeamId = requestedSessionId === null ? selectedTeamId.value : null
+      const result = await openSession(targetPath, requestedSessionId, allowInterrupt, workspaceId, requestExpertId, requestTeamId)
       if (result.ok) {
         if (result.data.projectPath !== targetPath) {
           if (sequence === openSequence) actionError.value = {
@@ -441,6 +456,8 @@ export const useSessionStore = defineStore('session', () => {
         useTaskWorkspacesStore().accept(result.data.workspace)
         // 回显以主进程回报为准：绑定失效时这里退回 null，界面不再假装专家仍在生效。
         selectedExpertId.value = result.data.expertId
+        // 团队同理：不可开团的团队在主进程就被退回 null，这里不能保留旧选择。
+        selectedTeamId.value = result.data.teamId
         // 徽标要显示专家名而不是标识：清单没读到过就补读一次，失败不影响会话本身。
         if (result.data.expertId !== null && !expertCatalogLoaded.value) void loadExperts()
         const projectAlive = projectStore.projects.some(project => project.path === targetPath)
@@ -571,6 +588,10 @@ export const useSessionStore = defineStore('session', () => {
         pendingReload.value = false
         awaitingInterrupt.value = false
         useTaskWorkspacesStore().accept(result.data.workspace)
+        // 重载会按持久绑定重新解析：团队可能已不可开团、专家也可能失效，回显一律以回包为准。
+        selectedExpertId.value = result.data.expertId
+        selectedTeamId.value = result.data.teamId
+        if (result.data.expertId !== null && !expertCatalogLoaded.value) void loadExperts()
         reloaded = true
         return
       }
@@ -698,9 +719,11 @@ export const useSessionStore = defineStore('session', () => {
     expertError,
     expertBindingInvalid,
     selectedExpertId,
+    selectedTeamId,
     selectedExpertName,
     loadExperts,
     selectExpert,
+    selectTeam,
     invalidateOpenSelection,
     waitForOpenActions,
     deleting,

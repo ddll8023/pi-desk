@@ -49,6 +49,11 @@ import { ProjectPathError, normalizeProjectPath } from '../shared/project-path'
 import type { SessionRunSummary } from './session-run-registry'
 import { resolveSessionExpert } from './session-experts'
 import type { SessionExpertBindings } from './session-experts'
+import { resolveSessionTeam } from './session-teams'
+import type { SessionTeamBindings } from './session-teams'
+import { materializeTeamSessions, removeTeamSessionDirectory } from './team-sessions'
+import type { TeamSessionBindings } from './team-sessions'
+import type { TeamCatalogView, TeamView } from '../../shared/teams-api'
 import { isSdkSessionReference } from '../../sdk-host/protocol'
 import type { SdkHostFailureCode, SdkSessionReference, SdkSessionStatus, SdkSessionTarget } from '../../sdk-host/protocol'
 
@@ -104,8 +109,14 @@ export interface SessionManagerOptions {
   readonly cleanupSessionWorkspace?: (projectPath: string, sessionId: string) => Promise<boolean>
   /** 会话专家绑定的读写口；缺省时按没有专家处理，打开照常进行。 */
   readonly sessionExperts?: SessionExpertBindings
+  /** 会话团队绑定的读写口；缺省时按未开团处理，打开照常进行。 */
+  readonly sessionTeams?: SessionTeamBindings
   /** 读取专家清单与加载诊断；缺省时清单为空，不阻止其他会话能力。 */
   readonly readExpertCatalog?: () => SessionExpertCatalog
+  /** 读取团队清单与诊断；开团判定与团长来源取自它，缺省时任何团队都不算就绪。 */
+  readonly readTeamCatalog?: () => TeamCatalogView
+  /** 成员会话登记读写口；缺省时不物化成员，开团仍可用（团长单独工作）。 */
+  readonly teamSessions?: TeamSessionBindings
 }
 
 export class SessionManager {
@@ -114,6 +125,8 @@ export class SessionManager {
    * 宿主授权只拿得到引用与工作区，拿不到页面请求；新会话还没有会话 id，不能靠持久绑定传递。
    */
   private readonly pendingExperts = new Map<string, string | null>()
+  /** 本次打开请求里的团队，与专家共用同一套暂存键；两边互不影响。 */
+  private readonly pendingTeams = new Map<string, string | null>()
 
   constructor(private readonly options: SessionManagerOptions) {}
 
@@ -150,9 +163,11 @@ export class SessionManager {
       if (!this.options.ownership.isProjectActive(projectPath)) throw new SdkTargetFailure('STALE_SESSION')
       const workspace = await this.options.workspaces.authorize(projectPath, workspaceId)
       await this.options.workspaces.bindSession(projectPath, identity?.sessionId ?? null, workspaceId)
+      const bindings = await this.sessionBindings(projectPath, identity?.sessionId ?? null, workspaceId)
       return { projectPath, workspaceId, sessionDir: getProjectSessionDir(projectPath), trusted: trust.decision === 'trusted',
         mode: await this.executionMode(),
-        expertId: await this.expertOf(projectPath, identity?.sessionId ?? null, workspaceId),
+        expertId: bindings.expertId,
+        teamId: bindings.teamId,
         worktreePath: workspace.kind === 'task' ? workspace.rootPath : null,
         sessionId: identity?.sessionId ?? null, sessionFile: identity?.sessionFile ?? null,
         fileStamp: identity?.fileStamp ?? null }
@@ -180,10 +195,50 @@ export class SessionManager {
   }
 
   /**
+   * 本会话绑定的团队标识（含本次请求的暂存值）；绑定存在不代表团队可开团，
+   * 是否生效由 `openableTeam` 再判一次。
+   */
+  private async boundTeamId(
+    projectPath: string, sessionId: string | null, workspaceId: string, pendingSessionId: string | null = sessionId
+  ): Promise<string | null> {
+    const pending = this.pendingTeams.get(this.expertKey(workspaceId, pendingSessionId))
+    if (this.options.sessionTeams === undefined) return isExpertId(pending) ? pending : null
+    return resolveSessionTeam({
+      bindings: this.options.sessionTeams, projectPath, sessionId, requested: pending
+    })
+  }
+
+  /**
+   * 可开团判定：只有团长与至少一名成员都在专家清单里才成立。
+   * 团队未就绪、已删除或清单读不出来都按未开团处理——只开一半的团队比不开更糟。
+   */
+  private openableTeam(teamId: string | null): TeamView | null {
+    if (teamId === null) return null
+    try {
+      const team = this.options.readTeamCatalog?.().teams.find(item => item.id === teamId) ?? null
+      return team !== null && team.ready ? team : null
+    } catch (error) {
+      console.error('[session-manager] 团队清单读取失败，按未开团处理', error)
+      return null
+    }
+  }
+
+  /**
+   * 本次生效的专家与团队：团队就绪时团长是唯一的专家来源，
+   * 否则会出现「团队一个团长、会话另一个专家」两份权威。
+   */
+  private async sessionBindings(
+    projectPath: string, sessionId: string | null, workspaceId: string, pendingSessionId: string | null = sessionId
+  ): Promise<{ readonly expertId: string | null; readonly teamId: string | null }> {
+    const team = this.openableTeam(await this.boundTeamId(projectPath, sessionId, workspaceId, pendingSessionId))
+    if (team !== null) return { expertId: team.leadExpertId, teamId: team.id }
+    return { expertId: await this.expertOf(projectPath, sessionId, workspaceId, pendingSessionId), teamId: null }
+  }
+
+  /**
    * 读执行模式；读失败按标准模式处理。偏好读不到时不能默默收紧 Agent 的能力集，
    * 也不应因此让用户建不了会话。
-   */
-  private async executionMode(): Promise<ExecutionMode> {
+   */  private async executionMode(): Promise<ExecutionMode> {
     try {
       return await this.options.readExecutionMode()
     } catch {
@@ -323,7 +378,7 @@ export class SessionManager {
       if (request.sessionId !== null && status.state === 'ready' && status.runId !== null
         && bound?.projectPath === projectPath && status.info?.sessionId === request.sessionId) {
         return this.openData(projectPath, status.runId, request.sessionId, true,
-          await this.expertOf(projectPath, request.sessionId, workspace.id))
+          await this.sessionBindings(projectPath, request.sessionId, workspace.id))
       }
     } else {
       const trust = await this.options.projectsTrust.refreshStatusOf(projectPath)
@@ -337,15 +392,19 @@ export class SessionManager {
       throw new SessionFailure('SESSION_NOT_FOUND', '当前项目下找不到该会话；列表可能已过期。')
     }
 
-    // 专家随本次打开请求暂存：宿主授权时只拿得到引用与工作区，取不到页面请求本身。
+    // 专家与团队随本次打开请求暂存：宿主授权时只拿得到引用与工作区，取不到页面请求本身。
     const expertKey = this.expertKey(workspace.id, request.sessionId)
     if (request.expertId !== undefined) {
       this.pendingExperts.set(expertKey, isExpertId(request.expertId) ? request.expertId : null)
+    }
+    if (request.teamId !== undefined) {
+      this.pendingTeams.set(expertKey, isExpertId(request.teamId) ? request.teamId : null)
     }
     try {
       return await this.openWithSdk(projectPath, request, selection, workspace.id)
     } finally {
       this.pendingExperts.delete(expertKey)
+      this.pendingTeams.delete(expertKey)
     }
   }
 
@@ -376,13 +435,16 @@ export class SessionManager {
       // 目标一致性由宿主预检保证；这里只复核实际打开的会话，不删除任何文件。
       throw new SessionFailure('SESSION_NOT_FOUND', '实际打开的会话与请求不一致；未改动任何已有文件。')
     }
-    // 专家只解析一次：同一个值既用于新会话落盘，也用于打开回显，不再按新的会话 id 反查一遍。
-    const expertId = await this.expertOf(projectPath, openedSessionId, workspaceId, request.sessionId)
-    if (request.sessionId === null && expertId !== null && openedSessionId !== null) {
-      await this.rememberNewSessionExpert(projectPath, openedSessionId, expertId)
+    // 专家与团队只解析一次：同一个值既用于新会话落盘，也用于打开回显，不再按新的会话 id 反查一遍。
+    const bindings = await this.sessionBindings(projectPath, openedSessionId, workspaceId, request.sessionId)
+    if (request.sessionId === null && openedSessionId !== null) {
+      if (bindings.expertId !== null) await this.rememberNewSessionExpert(projectPath, openedSessionId, bindings.expertId)
+      if (bindings.teamId !== null) await this.rememberNewSessionTeam(projectPath, openedSessionId, bindings.teamId)
+      // 成员会话随开团物化：只有登记，不启动进程。
+      if (bindings.teamId !== null) await this.rememberTeamMembers(projectPath, openedSessionId, bindings.teamId)
     }
     // 后台结果不走桌面的前台归属收敛，不能因桌面正在显示其他项目而触发 focusProject。
-    return this.openData(projectPath, switched.runId, openedSessionId, selection !== null, expertId)
+    return this.openData(projectPath, switched.runId, openedSessionId, selection !== null, bindings)
   }
 
   /**
@@ -397,6 +459,37 @@ export class SessionManager {
     }
   }
 
+  /** 新会话的团队绑定：与专家绑定同一步写入，写失败不影响打开——重开会话重新选即可。 */
+  private async rememberNewSessionTeam(projectPath: string, sessionId: string, teamId: string): Promise<void> {
+    try {
+      await this.options.sessionTeams?.save({ projectPath, sessionId, teamId })
+    } catch (error) {
+      console.error('[session-manager] 会话团队绑定写入失败', error)
+    }
+  }
+
+  /**
+   * 物化成员登记：按团队定义的成员逐个建一条，已存在的保留其会话 id。
+   * 写失败不影响打开——团队仍能工作，只是成员清单缺项，重新开团会再补。
+   */
+  private async rememberTeamMembers(projectPath: string, rootSessionId: string, teamId: string): Promise<void> {
+    const bindings = this.options.teamSessions
+    if (bindings === undefined) return
+    const team = this.openableTeam(teamId)
+    if (team === null) return
+    try {
+      await materializeTeamSessions({
+        bindings,
+        projectPath,
+        rootSessionId,
+        teamId: team.id,
+        memberExpertIds: team.memberExpertIds
+      })
+    } catch (error) {
+      console.error('[session-manager] 成员会话登记写入失败', error)
+    }
+  }
+
   /**
    * 桌面打开结果与前台归属收敛：实际归属项目、运行实例与实际会话身份。
    * 不再附带回传会话列表：列表由页面按自己的窗口节奏单独读取，打开链不等目录扫描。
@@ -404,7 +497,8 @@ export class SessionManager {
    * 专家由打开链解析后传入：这里不再自行反查，回显与本次生效的必须是同一个值。
    */
   private async openData(
-    projectPath: string, runId: number, openedSessionId: string | null, focus: boolean, expertId: string | null
+    projectPath: string, runId: number, openedSessionId: string | null, focus: boolean,
+    bindings: { readonly expertId: string | null; readonly teamId: string | null }
   ): Promise<SessionOpenData> {
     const workspaceId = this.options.ownership.workspaceOfRun(runId)
     if (workspaceId === null) throw new SessionFailure('RUNTIME_NOT_READY', '运行实例缺少已授权工作区，未使用项目目录代替。')
@@ -415,7 +509,7 @@ export class SessionManager {
       // 等待宿主期间用户可能已经切项目；旧请求不能把前台留在原项目。
       this.options.sdk.focusProject(currentProjectPath)
     }
-    return { projectPath, runId, openedSessionId, workspace, expertId }
+    return { projectPath, runId, openedSessionId, workspace, expertId: bindings.expertId, teamId: bindings.teamId }
   }
 
   /**
@@ -450,6 +544,10 @@ export class SessionManager {
       await deleteSessionFile(projectPath, request.sessionId)
       // 绑定只是标识记录：清理失败不影响已完成的删除，也不阻断后续工作区清理。
       await this.options.sessionExperts?.forget(projectPath, request.sessionId).catch(() => undefined)
+      await this.options.sessionTeams?.forget(projectPath, request.sessionId).catch(() => undefined)
+      // 成员登记随根会话清理；成员会话文件一并移入系统废纸篓，不让它们脱离根会话留在磁盘上。
+      await this.options.teamSessions?.forget(projectPath, request.sessionId).catch(() => undefined)
+      await removeTeamSessionDirectory(request.sessionId).catch(() => undefined)
       // 会话已删：按偏好清理它独占且无改动的任务工作树。清理失败不回滚删除，也不影响列表返回。
       await this.cleanupWorkspaceAfterDelete(projectPath, request.sessionId)
       return { ok: true, data: await listSessions(projectPath, request.listLimit) }
@@ -525,8 +623,11 @@ export class SessionManager {
       throw new SessionFailure('RUNTIME_COMMAND_REJECTED', '重新加载资源被取消，当前会话保持不变。')
     }
     const openedSessionId = this.options.sdk.sessionStatusOfRun(switched.runId)?.sessionId ?? null
-    return this.openData(bound.projectPath, switched.runId, openedSessionId, true,
-      openedSessionId === null ? null : await this.expertOf(bound.projectPath, openedSessionId, bound.workspaceId))
+    // reload 不带请求值：专家与团队都以持久绑定为准，绑定不存在的会话两项都为 null。
+    const bindings = openedSessionId === null
+      ? { expertId: null, teamId: null }
+      : await this.sessionBindings(bound.projectPath, openedSessionId, bound.workspaceId)
+    return this.openData(bound.projectPath, switched.runId, openedSessionId, true, bindings)
   }
 
   /**

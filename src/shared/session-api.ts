@@ -43,7 +43,7 @@ export interface SessionListRequest {
 }
 
 /** 路径长度上限；与界面偏好中的路径字段同口径，只拒绝明显异常的值。 */
-const MAX_PROJECT_PATH_LENGTH = 4096
+export const MAX_PROJECT_PATH_LENGTH = 4096
 
 /** 列表窗口校验：只接受 1..MAX_SESSION_WINDOW 的整数，避免页面要求无界读取；主进程与契约校验共用同一口径。 */
 export function isSessionListWindow(value: unknown): value is number {
@@ -135,20 +135,27 @@ export interface SessionOpenRequest {
    * 未传时主进程只看持久绑定，不会从界面当前偏好里猜一个专家。
    */
   readonly expertId?: string | null
+  /**
+   * 新建会话时可指定团队；已持久化的会话绑定优先于本字段。
+   * 团队就绪时根会话的专家固定为它的团长，`expertId` 不再生效；团队不可开团时忽略本字段。
+   */
+  readonly teamId?: string | null
 }
 
 /** 打开请求固定项目归属，不允许在异步信任检查后重新解释当前项目。 */
 export function isSessionOpenRequest(value: unknown): value is SessionOpenRequest {
   if (!isRecord(value)) return false
-  if (Object.keys(value).some(key => !['projectPath', 'sessionId', 'allowInterrupt', 'workspaceId', 'expertId'].includes(key))) return false
+  if (Object.keys(value).some(key => !['projectPath', 'sessionId', 'allowInterrupt', 'workspaceId', 'expertId', 'teamId'].includes(key))) return false
   const workspaceIdOk = value.workspaceId === undefined || value.workspaceId === null || isWorkspaceId(value.workspaceId)
   const expertIdOk = value.expertId === undefined || value.expertId === null || isExpertId(value.expertId)
+  // 团队与专家同属引用类标识，字符规则相同：目录名即标识。
+  const teamIdOk = value.teamId === undefined || value.teamId === null || isExpertId(value.teamId)
   return typeof value.projectPath === 'string' && value.projectPath.trim() !== ''
     && value.projectPath.length <= MAX_PROJECT_PATH_LENGTH
     && (value.sessionId === null || (typeof value.sessionId === 'string'
       && value.sessionId.trim() !== '' && value.sessionId.length <= 255))
     && typeof value.allowInterrupt === 'boolean'
-    && workspaceIdOk && expertIdOk
+    && workspaceIdOk && expertIdOk && teamIdOk
 }
 
 /**
@@ -251,6 +258,11 @@ export interface SessionOpenData {
    * 只回传标识，显示名与诊断由专家清单接口提供，打开链不因此多读一遍资源目录。
    */
   readonly expertId: string | null
+  /**
+   * 本次实际生效的团队标识；未开团、团队已失效或不可开团时为 null。
+   * 与 `expertId` 一样只回传标识，显示名与诊断由团队清单接口提供。
+   */
+  readonly teamId: string | null
 }
 
 export type SessionOpenResult =
@@ -406,6 +418,7 @@ export function isSessionOpenResult(value: unknown): value is SessionOpenResult 
     && (data.openedSessionId === null || typeof data.openedSessionId === 'string')
     && isWorkspaceContext(data.workspace) && data.workspace.projectPath === data.projectPath
     && (data.expertId === null || isExpertId(data.expertId))
+    && (data.teamId === null || isExpertId(data.teamId))
 }
 
 function isSessionExpertView(value: unknown): value is SessionExpertView {

@@ -90,7 +90,8 @@ export async function openSession(
   sessionId: string | null,
   allowInterrupt: boolean,
   workspaceId?: string | null,
-  expertId?: string | null
+  expertId?: string | null,
+  teamId?: string | null
 ): Promise<SessionOpenResult> {
   const bridge = window.desktop
   if (!bridge || typeof bridge.openSession !== 'function') return unavailable()
@@ -100,7 +101,8 @@ export async function openSession(
       sessionId,
       allowInterrupt,
       ...(workspaceId ? { workspaceId } : {}),
-      ...(expertId ? { expertId } : {})
+      ...(expertId ? { expertId } : {}),
+      ...(teamId ? { teamId } : {})
     }
     return await bridge.openSession(request)
   } catch (error) {

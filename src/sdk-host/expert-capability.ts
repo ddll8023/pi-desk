@@ -55,6 +55,16 @@ export function resolveSessionCapabilityScope(input: {
   })
 }
 
+/**
+ * 可被专家工具范围裁剪的工具名：只有随包清单声明过的工具。
+ *
+ * 内建控制工具（如 `ask_user_question`）与扩展注册的工具不在清单里，专家范围既表达不了、
+ * 界面上也勾不到，装配时一律保留；把清单外的工具一起裁掉会让模型失去澄清与 MCP 管理能力。
+ */
+export function expertManageableToolNames(resourcesDirectory: string): ReadonlySet<string> {
+  return new Set(readAgentResourceBundle(resourcesDirectory).tools.map(item => item.name))
+}
+
 /** 候选段只做提示，单个技能描述截断后拼接；文件上限防止意外读入大文件。 */
 const MAX_SKILL_BYTES = 262_144
 const MAX_SKILL_DESCRIPTION = 80

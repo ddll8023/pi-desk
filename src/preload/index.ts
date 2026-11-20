@@ -38,6 +38,8 @@ import type { MemoryApi } from '../shared/memory-api'
 import type { UsageStatsApi } from '../shared/usage-stats-api'
 import type { AgentHomeApi } from '../shared/agent-home-api'
 import type { ExpertApi } from '../shared/experts-api'
+import type { TeamApi } from '../shared/teams-api'
+import type { TeamSessionApi } from '../shared/team-session-api'
 import { desktopApi } from './desktop'
 import { extensionUiApi } from './extension-ui'
 import { gitApi } from './git'
@@ -56,9 +58,10 @@ import { memoryApi } from './memory'
 import { usageStatsApi } from './usage-stats'
 import { agentHomeApi } from './agent-home'
 import { expertsApi } from './experts'
+import { teamsApi } from './teams'
 
 /** 合并后的桥接对象：各域键互不重叠，平铺后仍是页面看到的同一份 `DesktopApi` 契约。 */
-const desktop: BrowserCaptureApi & BrowserSessionApi & DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionApi & SessionRunApi & TerminalApi & PreferencesApi & QuickCommandsApi & PiSettingsApi & TrustApi & ExtensionUiApi & AuthApi & ModelsConfigApi & UpdatesApi & GitApi & WorktreeApi & GitCleanupApi & LanRemoteApi & MemoryApi & UsageStatsApi & AgentHomeApi & ExpertApi = {
+const desktop: BrowserCaptureApi & BrowserSessionApi & DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionApi & SessionRunApi & TerminalApi & PreferencesApi & QuickCommandsApi & PiSettingsApi & TrustApi & ExtensionUiApi & AuthApi & ModelsConfigApi & UpdatesApi & GitApi & WorktreeApi & GitCleanupApi & LanRemoteApi & MemoryApi & UsageStatsApi & AgentHomeApi & ExpertApi & TeamApi & TeamSessionApi = {
   ...desktopApi,
   ...browserApi,
   ...projectsApi,
@@ -77,7 +80,8 @@ const desktop: BrowserCaptureApi & BrowserSessionApi & DesktopApi & RuntimeApi &
   ...memoryApi,
   ...usageStatsApi,
   ...agentHomeApi,
-  ...expertsApi
+  ...expertsApi,
+  ...teamsApi
 }
 
 contextBridge.exposeInMainWorld('desktop', desktop)

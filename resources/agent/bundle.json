@@ -141,5 +141,6 @@
       ]
     }
   ],
+  "teams": [],
   "memoryEngine": "skills/memory/scripts/memory_store.py"
 }

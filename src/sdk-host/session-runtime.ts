@@ -19,6 +19,11 @@ import { createPresentCardExtension } from './present-card-extension'
 import { judgeContinuation } from './continuation-signal'
 // 标准模式的待办清单与写操作门禁；快速会话不注册。
 import { createTodoListExtension } from './todo-list'
+import { createTeamBoardExtension } from './team-board'
+import { TEAM_BOARD_EXTENSION_NAME } from './team-board'
+import { createTeamDispatch } from './team-dispatch'
+import { TEAM_DISPATCH_EXTENSION_NAME } from './team-dispatch'
+import type { TeamDispatch } from './team-dispatch'
 import type { ImageAnnotationDocument } from '../shared/image-annotation'
 import { createBrowserExtension, BROWSER_EXTENSION_NAME } from './browser/index'
 import { MessageProjection } from './projection/message-projection'
@@ -42,13 +47,15 @@ import type {
 import { isMemoryInjectionSnapshot } from '../shared/runtime-api'
 import { parseSubAgentView } from '../shared/sub-agent-view'
 import { EXPERT_SECTION_KEY, expertRoleSection, readSelectedExpert } from './expert-role'
+import { LEAD_BLOCKED_TOOLS, TEAM_SECTION_KEY, readSelectedTeam, teamRoleSection } from './team-role'
 import { createExpertWriteGuardExtension, EXPERT_WRITE_GUARD_EXTENSION_NAME } from './expert-write-guard'
-import { readCapabilityCandidateSection, resolveSessionCapabilityScope } from './expert-capability'
+import { expertManageableToolNames, readCapabilityCandidateSection, resolveSessionCapabilityScope } from './expert-capability'
 import { DELEGATION_TOOL_NAME } from './sub-agent/delegation-extension'
 import { PROTECTED_EXPERT_TOOLS } from '../shared/expert-capability'
 import { limitMcpServers, readMcpSessionConfig } from '../shared-process/mcp-session-config'
 import type { McpSessionConfig } from '../shared-process/mcp-session-config'
 import type { ExpertDefinition } from '../shared-process/expert-definitions'
+import type { TeamDefinition } from '../shared-process/team-definitions'
 import type { ExtensionDialogResponseInput } from '../shared/extension-ui-api'
 import type { McpExtensionOptions } from '@earendil-works/pi-coding-agent'
 
@@ -333,6 +340,8 @@ export class SdkSessionRuntime {
   }) | null = null
   private historyTail: string | null = null
   private historyRevision = 0
+  /** 团队派活控制器：只在团队根会话存在，失效或关闭时终止全部在途成员轮。 */
+  private teamDispatch: TeamDispatch | null = null
   private unsubscribe: (() => void) | null = null
   private target: SdkSessionTarget | null = null
   /** 准备目标与实际活动项目分开，前置钩子取消时不能把旧对象改称新目标。 */
@@ -944,6 +953,27 @@ export class SdkSessionRuntime {
     }
   }
 
+  /**
+   * 读取本次会话的团队：未开团、标识失效或团队不可开团都退回 null，不阻断会话创建。
+   * 与专家一样只在创建期读一次，不在每轮重新解析。
+   */
+  private selectedTeam(target: SdkSessionTarget): TeamDefinition | null {
+    if (target.teamId === null) return null
+    try {
+      const team = readSelectedTeam({
+        resourcesDirectory: this.options.productResourcesDir,
+        agentDir: this.options.agentDir,
+        sharedAgentDir: this.options.sharedAgentDir,
+        teamId: target.teamId
+      })
+      if (team === null) console.error(`[session-runtime] 团队不可开团：${target.teamId}`)
+      return team
+    } catch (error) {
+      console.error(`[session-runtime] 团队清单读取失败：${target.teamId}`, error)
+      return null
+    }
+  }
+
   /** services 每次重建；项目 provider 不注册进全局查询容器。 */
   private readonly createRuntime: RuntimeFactory = async ({ cwd, agentDir, sessionManager, sessionStartEvent }) => {
     const target = this.factoryTarget
@@ -955,6 +985,10 @@ export class SdkSessionRuntime {
     const creation = ++this.creationSeed
     // 专家定义在会话创建时读一次：会话内不换专家，正文不需要每轮重新解析。
     const expert = this.selectedExpert(target)
+    // 团队同样只读一次：它决定团长的工具收窄与写范围，改定义需重开会话才生效。
+    const team = this.selectedTeam(target)
+    // 团长为只读：团队模式下写入一律交给成员，声明了写入范围的专家也必须让位。
+    const writeScope = team !== null ? [] : expert?.writeScope ?? null
     // 能力范围也在创建时算一次：技能、MCP 与工具都是装配期决定的，改完需要重开会话才生效。
     // 没召专家时两条都是不限制，行为与引入基线之前一致。
     // 本会话可用的 MCP 服务器名只读一次：许可集与卡片候选段共用同一份配置结果。
@@ -977,6 +1011,11 @@ export class SdkSessionRuntime {
       sharedAgentDir: this.options.sharedAgentDir,
       mcpServerNames: sessionMcpServerNames
     })
+    // 可裁剪工具的口径在创建时算一次：只有随包清单声明过的工具能进专家范围，
+    // 内建控制工具与扩展工具（如提问、MCP 管理）不受限制。
+    const manageableTools = expertManageableToolNames(this.options.productResourcesDir)
+    // 专家工具范围只裁掉随包清单内的工具；清单外的工具（提问、MCP 管理等）一律保留。
+    const permitted = capability.tools === null ? null : new Set(capability.tools)
     // 只守住有效绑定与必要交互，不引入新的权限规则；工具调用仍由 SDK 管线处理。
     const bindingGuard: ExtensionFactory = pi => {
       pi.on('tool_call', () => {
@@ -989,18 +1028,34 @@ export class SdkSessionRuntime {
     }
     try {
       const settingsManager = this.sdk.SettingsManager.create(cwd, agentDir, { projectTrusted: target.trusted })
+      // 派活只在团队根会话装配；重建前先停掉上一批在途成员轮，不让旧成员进程活在后台。
+      const teamDispatch = team === null ? null : (() => {
+        this.teamDispatch?.stopAll()
+        const created = createTeamDispatch({
+          team,
+          projectPath: executionRoot,
+          entryPath: resolve(this.options.productResourcesDir, '../pi-cli.mjs'),
+          guardPath: resolve(this.options.productResourcesDir, '../sub-agent-write-guard.mjs'),
+          resourcesDirectory: this.options.productResourcesDir,
+          agentDir: this.options.agentDir,
+          sharedAgentDir: this.options.sharedAgentDir
+        })
+        this.teamDispatch = created
+        return created
+      })()
       const extensionFactories: InlineExtension[] = [
           // 需求理解、模式产出形态与延续判定各写一段；能力集差异由记忆配置、记忆工具裁剪与 Skill 集合承担。
           { name: MODE_HINT_EXTENSION_NAME, builtin: true, replaceable: true, factory: pi => {
             // 快速会话整组去掉记忆工具；专家工具范围再把范围外的工具移出激活集合，受保护工具始终补回。
+            // 清单外的工具（内建提问、MCP 管理及以后新增的内建工具）不在专家范围里，一律保留。
             // 两处裁剪合并为一次 setActiveTools：各自调用会互相覆盖，最终激活集合就取决于执行顺序。
             pi.on('session_start', () => {
               const dropped = new Set<string>(target.mode === 'fast' ? FAST_MODE_DROPPED_TOOLS : [])
-              const permitted = capability.tools === null
-                ? null
-                : new Set([...capability.tools, ...PROTECTED_EXPERT_TOOLS])
-              const remaining = pi.getActiveTools()
-                .filter(name => !dropped.has(name) && (permitted === null || permitted.has(name)))
+              // 团长额外移出写入与委派：这两类工具在团队里由成员执行。
+              const leadBlocked = team === null ? null : new Set(LEAD_BLOCKED_TOOLS)
+              const remaining = pi.getActiveTools().filter(name => !dropped.has(name)
+                && (leadBlocked === null || !leadBlocked.has(name))
+                && (permitted === null || permitted.has(name) || !manageableTools.has(name)))
               pi.setActiveTools(remaining)
             })
             pi.on('before_agent_start', event => {
@@ -1011,8 +1066,12 @@ export class SdkSessionRuntime {
               // 专家正文每轮重写：改定义文件在下一轮生效，历史对话不因此被改写。
               if (expert !== null) {
                 event.systemPromptOptions.sections[EXPERT_SECTION_KEY] = expertRoleSection(expert, {
-                  mode: target.mode, scope: capability, writeScope: expert.writeScope
+                  mode: target.mode, scope: capability, writeScope
                 })
+              }
+              // 团队段每轮重写：团队定义改了在下一轮生效，历史对话不因此被改写。
+              if (team !== null) {
+                event.systemPromptOptions.sections[TEAM_SECTION_KEY] = teamRoleSection(team)
               }
               // 记忆与委派工具随应用提供，其他宿主没有；使用时机写进分段，不写全局 AGENTS.md。
               // 委派被专家工具范围排除时不写它的时机段，避免模型对着不存在的工具做规划。
@@ -1083,12 +1142,22 @@ export class SdkSessionRuntime {
           ...(target.mode === 'standard'
             ? [{ name: TODO_LIST_EXTENSION_NAME, factory: createTodoListExtension(), builtin: true, replaceable: true }]
             : []),
-          // 写入范围只在专家声明了范围时生效：未声明的会话不装任何拦截，行为与引入该能力之前一致。
-          ...(expert !== null && expert.writeScope !== null
+          // 团队账本只在根会话存在：成员会话不注册，任务状态因此只有一个写入方。
+          ...(team !== null
+            ? [{ name: TEAM_BOARD_EXTENSION_NAME, factory: createTeamBoardExtension({
+              memberExpertIds: team.memberExpertIds
+            }), builtin: true, replaceable: true }]
+            : []),
+          // 派活与停止：只在团队根会话注册，成员会话既不能派活也不能停别人。
+          ...(teamDispatch !== null
+            ? [{ name: TEAM_DISPATCH_EXTENSION_NAME, factory: teamDispatch.extension, builtin: true, replaceable: true }]
+            : []),
+          // 写入范围：未声明的普通会话不装拦截；团长即使未声明也按只读拦。
+          ...(expert !== null && writeScope !== null
             ? [{
                 name: EXPERT_WRITE_GUARD_EXTENSION_NAME,
                 factory: createExpertWriteGuardExtension({
-                  expertName: expert.displayName, cwd: executionRoot, scope: expert.writeScope
+                  expertName: expert.displayName, cwd: executionRoot, scope: writeScope
                 }),
                 builtin: true,
                 replaceable: true
@@ -1492,6 +1561,9 @@ export class SdkSessionRuntime {
   /** 官方失效钩子同步解绑，不让旧 SDK 事件或 UI 引用覆盖下一绑定。 */
   private invalidateCurrent(): void {
     this.valid = false
+    // 会话失效先停成员：在途轮没有别的收敛入口，停在后台就没有人再收它们。
+    this.teamDispatch?.stopAll()
+    this.teamDispatch = null
     this.unsubscribe?.()
     this.unsubscribe = null
     this.bridge?.invalidate()

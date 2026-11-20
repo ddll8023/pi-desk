@@ -54,6 +54,13 @@ defineProps<{ readonly name: SettingsIconName }>()
       <path d="M20 21a8 8 0 0 0-16 0" />
     </template>
 
+    <template v-else-if="name === 'users'">
+      <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+      <circle cx="9" cy="7" r="4" />
+      <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
+      <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+    </template>
+
     <template v-else-if="name === 'toggle-left'">
       <rect width="20" height="12" x="2" y="6" rx="6" ry="6" />
       <circle cx="8" cy="12" r="2" />

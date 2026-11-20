@@ -318,6 +318,26 @@ async function readHead(filePath: string, expectedStamp?: string): Promise<HeadC
 }
 
 /**
+ * 读取任意会话文件的头部与首条预览。
+ *
+ * 团队会话存在项目会话目录之外，按项目定位的入口找不到它；这里只读头部，
+ * 归属校验（`cwd` 与项目是否一致）交给调用方，避免把两个项目的会话串起来。
+ */
+export async function readSessionHead(filePath: string): Promise<{
+  readonly sessionId: string | null
+  readonly createdAt: string | null
+  readonly cwd: string | null
+  readonly preview: string | null
+} | null> {
+  const { header, preview } = await readHead(filePath)
+  if (header === null || header.type !== 'session') return null
+  const sessionId = typeof header.id === 'string' && SESSION_ID_PATTERN.test(header.id) ? header.id : null
+  const createdAt = typeof header.timestamp === 'string' ? header.timestamp : null
+  const cwd = typeof header.cwd === 'string' ? header.cwd : null
+  return { sessionId, createdAt, cwd, preview }
+}
+
+/**
  * 回退（Pi 的 fork）产生的来源会话 id：头部 `parentSession` 是来源会话文件的绝对路径，
  * 这里只取文件名里的会话 id；文件不存在、路径不含合法 id 或与自身相同时返回 null。
  */

@@ -53,11 +53,24 @@ export interface UsageSubAgentDailyStat {
   readonly totalTokens: number
 }
 
+/** 会话所属范畴：普通会话，或团队成员的会话（后者的用量单独归组）。 */
+export type UsageSessionScope = 'session' | 'team-member'
+
+/** 成员会话的归属：根会话与成员标识，用于把成员用量按团队归组。 */
+export interface UsageTeamRef {
+  readonly rootSessionId: string
+  readonly memberExpertId: string
+}
+
 /** 单个会话的用量明细：渲染层所有报表视图的唯一数据来源 */
 export interface UsageSessionStat {
   readonly sessionId: string
   readonly projectPath: string
   readonly projectName: string
+  /** 普通会话为 `session`；团队成员会话为 `team-member`，后者同时带 `team`。 */
+  readonly scope: UsageSessionScope
+  /** 团队成员会话的根会话与成员标识；普通会话为 null。 */
+  readonly team: UsageTeamRef | null
   readonly title: string
   readonly updatedAt: number
   /** 助手回复条数（子代理调用不计入） */
@@ -158,6 +171,10 @@ function isSessionStat(value: unknown): value is UsageSessionStat {
     && typeof value.sessionId === 'string'
     && typeof value.projectPath === 'string'
     && typeof value.projectName === 'string'
+    && (value.scope === 'session' || value.scope === 'team-member')
+    && (value.team === null || (isRecord(value.team)
+      && typeof value.team.rootSessionId === 'string'
+      && typeof value.team.memberExpertId === 'string'))
     && typeof value.title === 'string'
     && isFiniteNumber(value.updatedAt)
     && isNonNegativeInteger(value.messageCount)

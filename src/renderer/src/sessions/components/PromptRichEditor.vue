@@ -15,9 +15,9 @@ interface Props {
   readonly popupOpen: boolean
   /** Enter 是否被补全占用（文件候选未定），占用时 Enter 接受候选而不是发送。 */
   readonly enterConsumes: boolean
-  readonly controls?: string
+  readonly controls?: string | undefined
   readonly expanded?: boolean
-  readonly describedBy?: string
+  readonly describedBy?: string | undefined
 }
 
 const props = defineProps<Props>()
@@ -92,7 +92,8 @@ function render(text: string): void {
   for (const match of text.matchAll(TOKEN_PATTERN)) {
     // 两个分支各带一个前置空白分组，未参与匹配的一侧为 undefined，不能直接取长度。
     const lead = match[1] ?? match[3] ?? ''
-    const token = match[2] ?? match[4]
+    const token = match[2] ?? match[4] ?? ''
+    if (token === '') continue
     const start = match.index + lead.length
     if (start > cursor) appendText(fragment, text.slice(cursor, start))
     fragment.appendChild(createToken(match[2] !== undefined ? 'command' : 'file', token))

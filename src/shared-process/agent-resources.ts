@@ -41,6 +41,8 @@ export interface AgentResourceBundle {
   readonly tools: readonly AgentToolDeclaration[]
   /** 专家定义：只作为可召唤的角色资源，不参与技能装配，也不进入子代理进程。 */
   readonly experts: readonly AgentResource[]
+  /** 团队定义：只作为多角色协作的结构声明，不参与技能装配，也不进入任何会话的提示。 */
+  readonly teams: readonly AgentResource[]
   readonly memoryEngine: string
   readonly fingerprints: Readonly<Record<string, string>>
   /** 每个组件的组成文件聚合摘要；读取时按 fingerprints 重算复核，不能由清单自证。 */
@@ -138,15 +140,17 @@ export function readAgentResourceBundle(directory: string): AgentResourceBundle 
   const raw: unknown = JSON.parse(readFileSync(manifestPath, 'utf8'))
   if (!record(raw) || raw.version !== 1 || !Array.isArray(raw.extensions) || !Array.isArray(raw.skills)
     || (raw.experts !== undefined && !Array.isArray(raw.experts))
+    || (raw.teams !== undefined && !Array.isArray(raw.teams))
     || !resourceName(raw.memoryEngine) || !record(raw.fingerprints)) throw new Error('产品资源清单缺失或版本无效')
   const extensions = raw.extensions.map(parseResource)
   const skills = raw.skills.map(parseResource)
-  // 专家段是可选组成：旧产物没有这一项时按空列表处理，不要求为新增能力重建全部清单。
+  // 专家段与团队段是可选组成：旧产物没有这一项时按空列表处理，不要求为新增能力重建全部清单。
   const experts = Array.isArray(raw.experts) ? raw.experts.map(parseResource) : []
+  const teams = Array.isArray(raw.teams) ? raw.teams.map(parseResource) : []
   // 工具段同理可选；声明了就不能与扩展的必需工具冲突，否则界面的「必需」与加载校验会成为两套口径。
   const tools = Array.isArray(raw.tools) ? raw.tools.map(parseTool) : []
   if (new Set(tools.map(item => item.name)).size !== tools.length) throw new Error('产品工具声明重复')
-  const components = [...extensions, ...skills, ...experts]
+  const components = [...extensions, ...skills, ...experts, ...teams]
   const ids = components.map(item => item.id)
   if (Array.isArray(raw.tools)) {
     const extensionTools = new Set(extensions.flatMap(item => item.requiredTools))
@@ -185,7 +189,7 @@ export function readAgentResourceBundle(directory: string): AgentResourceBundle 
     componentDigests[item.id] = digest
   }
   return {
-    root, extensions, tools, skills, experts,
+    root, extensions, tools, skills, experts, teams,
     memoryEngine: raw.memoryEngine, fingerprints, componentDigests
   }
 }

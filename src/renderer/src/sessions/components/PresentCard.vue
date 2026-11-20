@@ -63,6 +63,28 @@ const notice = ref('')
 const errorText = ref('')
 /** 保存成功后的专家标识；有值时说明这张卡片已经落过盘，重启后不保留。 */
 const savedExpertId = ref<string | null>(null)
+
+/** 写入范围的编辑值：一行一个（或用逗号分隔）的项目内相对路径；留空即只读。 */
+const scopeInput = ref((props.card.capability?.writeScope ?? []).join('\n'))
+const scopeError = ref('')
+
+/**
+ * 解析写入范围文本：拒绝绝对路径、盘符、`\\` 与 `..`；空行与重复项忽略。
+ * 目录以 `/` 结尾保留，与专家声明的形状一致。
+ */
+function parseScopeText(text: string): { scope: string[]; error: string | null } {
+  const scope: string[] = []
+  for (const raw of text.split(/[\n,]/)) {
+    const value = raw.trim().replace(/^\.\//, '')
+    if (value === '') continue
+    if (value.startsWith('/') || value.includes('\\') || /^[A-Za-z]:/.test(value)
+      || value.split('/').some(segment => segment === '..' || segment === '.')) {
+      return { scope: [], error: `「${value}」不是项目内相对路径：不要用绝对路径、盘符或 ..` }
+    }
+    if (!scope.includes(value)) scope.push(value)
+  }
+  return { scope, error: null }
+}
 /** 候选保存成功条数；有值时说明这张卡片已经写库，勾选与编辑一并锁定。 */
 const savedMemoryCount = ref<number | null>(null)
 
@@ -319,12 +341,21 @@ function toSaveRequest(): ExpertSaveRequest {
     toolsMode: tools.mode,
     toolIds: [...tools.onlyIds],
     toolAddIds: [...tools.addIds],
-    toolRemoveIds: [...tools.removeIds]
+    toolRemoveIds: [...tools.removeIds],
+    // 写入范围来自能力段的编辑框；空文本等于只读，与卡片未声明时的口径一致。
+    writeScope: parseScopeText(scopeInput.value).scope
   }
 }
 
 async function saveExpertDefinition(): Promise<void> {
   if (saveDisabled.value) return
+  // 写入范围不合法时停在卡片上：不能带一份错的范围去保存。
+  const parsedScope = parseScopeText(scopeInput.value)
+  if (parsedScope.error !== null) {
+    scopeError.value = parsedScope.error
+    return
+  }
+  scopeError.value = ''
   phase.value = 'busy'
   errorText.value = ''
   notice.value = ''
@@ -517,7 +548,7 @@ function applyInitialSelection(): void {
                   type="button"
                   class="present-card-file-reveal"
                   :disabled="revealingPath !== null || revealTarget === null"
-                  :title="revealTarget === null ? '当前视图没有绑定工作区，无法定位。' : null"
+                  :title="revealTarget === null ? '当前视图没有绑定工作区，无法定位。' : undefined"
                   :aria-label="`在文件管理器中定位 ${path}`"
                   @click="revealFile(path)"
                 >定位</button>
@@ -592,6 +623,20 @@ function applyInitialSelection(): void {
           @update:selected="selectedTools = $event"
           @select-all="selectAllTools"
         />
+        <!-- 写入范围可编辑：留空即只读，相对路径一行一个，目录以 / 结尾。 -->
+        <p class="present-card-scope">
+          <label class="present-card-scope-label" for="present-card-scope-input">写入范围</label>
+          <textarea
+            id="present-card-scope-input"
+            v-model="scopeInput"
+            class="present-card-scope-input"
+            rows="2"
+            spellcheck="false"
+            :disabled="busy || savedExpertId !== null"
+            placeholder="留空 = 只读；例：docs/（目录以 / 结尾）、README.md"
+          ></textarea>
+        </p>
+        <p v-if="scopeError !== ''" class="present-card-error" role="alert">{{ scopeError }}</p>
       </div>
       <p v-if="skillsEmpty" class="present-card-error" role="alert">「仅用选中」时至少要保留一个技能。</p>
 
@@ -772,6 +817,36 @@ function applyInitialSelection(): void {
 .present-card-capability > * + * {
   padding-top: 0.625rem;
   border-top: 1px solid var(--color-desk-line);
+}
+/* 写入范围一行：标签与多行输入并排，输入框吃满剩余宽度。 */
+.present-card-scope {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin: 0;
+}
+.present-card-scope-label {
+  flex: none;
+  padding-top: 0.25rem;
+  font-size: var(--text-2xs);
+  color: var(--color-desk-muted);
+}
+.present-card-scope-input {
+  min-width: 0;
+  flex: 1 1 auto;
+  resize: vertical;
+  padding: 0.25rem 0.375rem;
+  border: 1px solid var(--color-desk-line);
+  border-radius: var(--radius-desk-sm);
+  background: var(--color-desk-surface);
+  color: var(--color-desk-ink);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  line-height: 1.5;
+}
+.present-card-scope-input:disabled {
+  color: var(--color-desk-muted);
+  background: var(--color-desk-surface-subtle);
 }
 /* 文件段与能力段同一面板基调；组间一条分隔线，行内路径截断展示、全文进 title。 */
 .present-card-files {

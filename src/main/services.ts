@@ -29,6 +29,7 @@ import { SdkRuntimeBridge } from './sessions/sdk-runtime-bridge'
 import { SessionManager } from './sessions/session-manager'
 import { SessionRunRegistry } from './sessions/session-run-registry'
 import { readExpertCatalog } from './sessions/expert-catalog'
+import { readTeamCatalog } from './sessions/team-catalog'
 import { TerminalManager } from './terminal/terminal-manager'
 import { TrustManager } from './trust/trust-manager'
 import { UpdateChecker } from './updates/update-checker'
@@ -119,7 +120,20 @@ export const sessionManager = new SessionManager({
     forget: (projectPath, sessionId) => configStore.forgetSessionExpert(projectPath, sessionId)
   },
   // 清单每次现读：目录很小，而缓存会让新写的自定义专家必须重启才出现。
-  readExpertCatalog: () => readExpertCatalog()
+  readExpertCatalog: () => readExpertCatalog(),
+  // 成员会话登记：开团物化、根会话删除时清理；只读读取走团队 IPC。
+  teamSessions: {
+    list: (projectPath, rootSessionId) => configStore.listTeamSessions(projectPath, rootSessionId),
+    save: entries => configStore.saveTeamSessions(entries),
+    forget: (projectPath, rootSessionId) => configStore.forgetTeamSessions(projectPath, rootSessionId)
+  },
+  // 团队绑定同规矩：只存标识，团队是否还可开团在每次开团时重新判定。
+  sessionTeams: {
+    read: (projectPath, sessionId) => configStore.readSessionTeam(projectPath, sessionId),
+    save: binding => configStore.saveSessionTeam(binding),
+    forget: (projectPath, sessionId) => configStore.forgetSessionTeam(projectPath, sessionId)
+  },
+  readTeamCatalog: () => readTeamCatalog()
 })
 
 /** 手机访问管理器只装配依赖；局域网入口须显式开启，地址与端口自动确定，无需外部代理。 */

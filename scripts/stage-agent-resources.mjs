@@ -200,12 +200,14 @@ async function stage() {
   }
   const bundle = JSON.parse(await readFile(join(source, 'bundle.json'), 'utf8'))
   if (bundle.version !== 1 || !Array.isArray(bundle.extensions) || !Array.isArray(bundle.skills)
-    || (bundle.experts !== undefined && !Array.isArray(bundle.experts))) {
+    || (bundle.experts !== undefined && !Array.isArray(bundle.experts))
+    || (bundle.teams !== undefined && !Array.isArray(bundle.teams))) {
     throw new Error('产品资源清单格式无效')
   }
-  // 专家段与扩展、技能同构，但可以由旧清单直接缺省；缺省时产物里也不写这一项。
+  // 专家段与团队段同构，但都可以由旧清单直接缺省；缺省时产物里也不写这一项。
   const components = [...bundle.extensions, ...bundle.skills,
-    ...(Array.isArray(bundle.experts) ? bundle.experts : [])]
+    ...(Array.isArray(bundle.experts) ? bundle.experts : []),
+    ...(Array.isArray(bundle.teams) ? bundle.teams : [])]
   const ids = new Set()
   for (const item of components) {
     if (typeof item.id !== 'string' || !item.id || ids.has(item.id) || !Array.isArray(item.files)

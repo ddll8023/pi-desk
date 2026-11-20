@@ -20,7 +20,14 @@ import type { MemorySaveCandidate } from '../shared/memory-api'
 const TOOL_NAME = 'present_card'
 
 /** 引擎引用名单的参数形状：真实记录 ID，一次最多 50 条。 */
-const CANDIDATE_IDS = Type.Array(Type.String({ pattern: '^m_[0-9A-HJKMNP-TV-Z]{26}$' }), { maxItems: 50 })
+/** 记录标识的形状；候选来源与替代目标共用同一份，避免两处正则漂移。 */
+const RECORD_ID_PATTERN = '^m_[0-9A-HJKMNP-TV-Z]{26}$'
+const CANDIDATE_IDS = Type.Array(Type.String({ pattern: RECORD_ID_PATTERN }), { maxItems: 50 })
+
+/** 可选记录 ID 列表：`Type.Optional` 只接受一个参数，描述必须写在数组 schema 上。 */
+function optionalCandidateIds(description: string) {
+  return Type.Optional(Type.Array(Type.String({ pattern: RECORD_ID_PATTERN }), { maxItems: 50, description }))
+}
 
 /** 一次工具调用的参数形状；与注册时给模型的 schema 一一对应。 */
 interface CardParams {
@@ -38,6 +45,8 @@ interface CardParams {
   /** 工具范围：同上；受保护工具不会被排除，名单里有没有都一样。 */
   readonly tools_mode?: 'inherit' | 'only'
   readonly tool_ids?: readonly string[]
+  /** 写入范围：项目内相对路径，目录以 `/` 结尾；省略时保存为只读。 */
+  readonly write_scope?: readonly string[]
   /** 交付汇总文件段：三组项目内相对路径；只用于 session.summary，其余类型带这些参数直接拒绝。 */
   readonly changed_files?: readonly string[]
   readonly deleted_files?: readonly string[]
@@ -100,6 +109,7 @@ function buildCard(params: CardParams): PresentCardView | string {
     fields: params.fields ?? [],
     body: body ?? null,
     capability: params.skills_mode === undefined && params.mcp_mode === undefined && params.tools_mode === undefined
+      && params.write_scope === undefined
       ? null
       : {
           skillsMode: params.skills_mode ?? 'inherit',
@@ -107,7 +117,8 @@ function buildCard(params: CardParams): PresentCardView | string {
           mcpMode: params.mcp_mode ?? 'inherit',
           mcpServerIds: params.mcp_server_ids ?? [],
           toolsMode: params.tools_mode ?? 'inherit',
-          toolIds: params.tool_ids ?? []
+          toolIds: params.tool_ids ?? [],
+          writeScope: params.write_scope ?? []
         },
     files: params.changed_files === undefined && params.deleted_files === undefined && params.affected_files === undefined
       ? null
@@ -200,6 +211,9 @@ export function createPresentCardExtension(capabilityCandidates: string): Extens
         tool_ids: Type.Optional(Type.Array(Type.String({ maxLength: 64 }),
           { maxItems: PRESENT_CARD_LIMITS.capabilityIds,
             description: '建议启用的工具名；只能取能力候选段里列出的工具，带 * 的必需项不写也在范围内' })),
+        write_scope: Type.Optional(Type.Array(Type.String({ maxLength: PRESENT_CARD_LIMITS.summaryPath }),
+          { maxItems: PRESENT_CARD_LIMITS.writeScopeEntries,
+            description: '项目内相对路径，目录以 / 结尾；省略时保存为只读（不许写入）。不要写绝对路径或 ..' })),
         changed_files: Type.Optional(Type.Array(Type.String({ maxLength: PRESENT_CARD_LIMITS.summaryPath }),
           { maxItems: PRESENT_CARD_LIMITS.summaryFiles,
             description: '本轮改动文件的相对路径；仅 session.summary 使用，`/` 分隔，不用绝对路径' })),
@@ -218,8 +232,8 @@ export function createPresentCardExtension(capabilityCandidates: string): Extens
             description: '规则键；规则类（decision／constraint）必填' })),
           status: Type.Optional(Type.Union([Type.Literal('active'), Type.Literal('resolved'), Type.Literal('archived')],
             { description: '非规则类状态；progress 必须显式给出' })),
-          source_record_ids: Type.Optional(CANDIDATE_IDS, { description: '引用的来源记录 ID' }),
-          supersede_record_ids: Type.Optional(CANDIDATE_IDS, { description: '本候选替代的有效规则记录 ID' }),
+          source_record_ids: optionalCandidateIds('引用的来源记录 ID'),
+          supersede_record_ids: optionalCandidateIds('本候选替代的有效规则记录 ID'),
           supersession_reason: Type.Optional(Type.String({ minLength: 1, maxLength: 2_000, description: '替代理由' }))
         }, { additionalProperties: false }),
           { maxItems: PRESENT_CARD_LIMITS.memoryCandidates,

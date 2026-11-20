@@ -122,6 +122,7 @@ test('专家段缺省时按空列表处理，旧产物不因新增组成而失�
   try {
     writeProductBundle(temp.dir)
     assert.deepEqual(readAgentResourceBundle(temp.dir).experts, [])
+    assert.deepEqual(readAgentResourceBundle(temp.dir).teams, [])
   } finally {
     temp.cleanup()
   }
@@ -146,6 +147,25 @@ test('专家与技能标识重复时清单无效', () => {
   try {
     writeProductBundle(temp.dir, manifest => {
       manifest.experts = [{ id: 'memory', entry: 'skills/memory/SKILL.md', files: ['skills/memory/SKILL.md'] }]
+    })
+    assert.throws(() => readAgentResourceBundle(temp.dir), /身份重复/u)
+  } finally {
+    temp.cleanup()
+  }
+})
+
+test('团队段与专家段同构：缺指纹或与专家标识重复均使清单无效', () => {
+  const temp = createTempRoot('pi-desk-bundle-')
+  try {
+    writeProductBundle(temp.dir, manifest => {
+      manifest.teams = [{ id: 'delivery', entry: 'teams/delivery/team.md', files: ['teams/delivery/team.md'] }]
+    })
+    assert.throws(() => readAgentResourceBundle(temp.dir), /缺少内容指纹/u)
+
+    // 团队与专家不仅在各自段内唯一，也在全组件空间内唯一：同名会让按 id 的查找出现两种含义。
+    writeProductBundle(temp.dir, manifest => {
+      manifest.experts = [{ id: 'delivery', entry: 'skills/memory/SKILL.md', files: ['skills/memory/SKILL.md'] }]
+      manifest.teams = [{ id: 'delivery', entry: 'skills/memory/SKILL.md', files: ['skills/memory/SKILL.md'] }]
     })
     assert.throws(() => readAgentResourceBundle(temp.dir), /身份重复/u)
   } finally {
