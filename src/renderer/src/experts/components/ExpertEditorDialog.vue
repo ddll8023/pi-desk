@@ -15,7 +15,10 @@
 -->
 <script setup lang="ts">
 import { computed, nextTick, onUnmounted, ref, useId, watch } from 'vue'
-import { MAX_EXPERT_DISPLAY_NAME_LENGTH, MAX_EXPERT_SUMMARY_LENGTH, normalizeExpertWriteScopeEntry } from '../../../../shared/experts-api'
+import {
+  MAX_EXPERT_DISPLAY_NAME_LENGTH, MAX_EXPERT_SUMMARY_LENGTH,
+  MAX_EXPERT_WRITE_SCOPE_ITEMS, normalizeExpertWriteScopeEntry
+} from '../../../../shared/experts-api'
 import type { ExpertEditableDefinition, ExpertSaveRequest } from '../../../../shared/experts-api'
 import { useExpertStore } from '../stores/expert'
 import { baseIds, restoreSelection, selectionState, toSelectionFields } from '../capability-selection'
@@ -165,20 +168,28 @@ const canSave = computed(() => !saving.value
   && body.value.trim() !== ''
   // 指定路径却一项都不合法时不保存：写入范围会变成只读或空，与界面显示不一致。
   && (writeScopeMode.value !== 'paths' || parsedWriteScope.value.valid.length > 0)
+  // 有超限项时也不保存：超出上限的项没有落点，带上去只会在主进程被整批拒掉。
+  && parsedWriteScope.value.overflow.length === 0
   // 技能白名单为空等于禁用全部技能，主进程也会拒；在按钮上先拦住并给理由。
   && !(skillsMode.value === 'only' && selectedSkills.value.length === 0))
 
-/** 写入范围输入拆成合法项与非法项：非法项就地报出，保存时不带走。 */
+/**
+ * 写入范围输入拆成合法项与非法项：非法项就地报出，保存时不带走；
+ * 超出条数上限的合法项计入 overflow 单独提示并阻止保存，不静默截断成半份范围。
+ */
 const parsedWriteScope = computed(() => {
   const items = writeScopePaths.value.split(/[,\n]/).map(item => item.trim()).filter(item => item !== '')
   const valid: string[] = []
   const invalid: string[] = []
+  const overflow: string[] = []
   for (const item of items) {
     const normalized = normalizeExpertWriteScopeEntry(item)
-    if (normalized === null) invalid.push(item)
-    else if (!valid.includes(normalized)) valid.push(normalized)
+    if (normalized === null) { invalid.push(item); continue }
+    if (valid.includes(normalized)) continue
+    if (valid.length >= MAX_EXPERT_WRITE_SCOPE_ITEMS) { overflow.push(normalized); continue }
+    valid.push(normalized)
   }
-  return { valid, invalid }
+  return { valid, invalid, overflow }
 })
 
 /** 基线展开后的集合：用于判断某一行是「基线默认」还是被手动改动过。 */
@@ -594,9 +605,12 @@ function onKeydown(event: KeyboardEvent): void {
                       placeholder="docs/、README.md"
                       :disabled="saving || loading"
                     >
-                    <span class="hint-text">相对项目根；目录以 / 结尾，多个用逗号分隔。</span>
+                    <span class="hint-text">相对项目根；目录以 / 结尾，多个用逗号分隔，最多 {{ MAX_EXPERT_WRITE_SCOPE_ITEMS }} 项。</span>
                     <span v-if="parsedWriteScope.invalid.length > 0" role="alert" class="text-xs text-desk-danger">
                       这些路径写法不合法：{{ parsedWriteScope.invalid.join('、') }}
+                    </span>
+                    <span v-if="parsedWriteScope.overflow.length > 0" role="alert" class="text-xs text-desk-danger">
+                      写入范围最多 {{ MAX_EXPERT_WRITE_SCOPE_ITEMS }} 项，超出未计入：{{ parsedWriteScope.overflow.join('、') }}
                     </span>
                   </label>
                 </fieldset>

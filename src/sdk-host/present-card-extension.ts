@@ -6,10 +6,11 @@
  * 不写盘也不改清单——按钮的落点由渲染层转发到既有业务通道（如 `desktop:expert-save`）。
  *
  * 交给模型的只有一句结论，正文与字段只放进 `details.card` 供界面展示，
- * 因此长正文不会在上下文里重复出现（边界见 docs/会话内卡片设计.md）。
+ * 因此长正文不会在上下文里重复出现（边界见 docs/modules/sessions-chat.md）。
  */
 import { Type } from '@earendil-works/pi-ai'
 import type { ExtensionFactory } from '@earendil-works/pi-coding-agent'
+import { MAX_EXPERT_WRITE_SCOPE_ENTRY, MAX_EXPERT_WRITE_SCOPE_ITEMS } from '../shared/experts-api'
 import { MEMORY_RECORD_TYPES } from '../shared/memory-api'
 import {
   PRESENT_CARD_ACTIONS, PRESENT_CARD_LIMITS, parsePresentCardView
@@ -211,9 +212,10 @@ export function createPresentCardExtension(capabilityCandidates: string): Extens
         tool_ids: Type.Optional(Type.Array(Type.String({ maxLength: 64 }),
           { maxItems: PRESENT_CARD_LIMITS.capabilityIds,
             description: '建议启用的工具名；只能取能力候选段里列出的工具，带 * 的必需项不写也在范围内' })),
-        write_scope: Type.Optional(Type.Array(Type.String({ maxLength: PRESENT_CARD_LIMITS.summaryPath }),
+        write_scope: Type.Optional(Type.Array(Type.String({ maxLength: MAX_EXPERT_WRITE_SCOPE_ENTRY }),
           { maxItems: PRESENT_CARD_LIMITS.writeScopeEntries,
-            description: '项目内相对路径，目录以 / 结尾；省略时保存为只读（不许写入）。不要写绝对路径或 ..' })),
+            description: `项目内相对路径，目录以 / 结尾，最多 ${MAX_EXPERT_WRITE_SCOPE_ITEMS} 项；`
+              + '省略时保存为只读（不许写入）。不要写绝对路径、盘符或 ..' })),
         changed_files: Type.Optional(Type.Array(Type.String({ maxLength: PRESENT_CARD_LIMITS.summaryPath }),
           { maxItems: PRESENT_CARD_LIMITS.summaryFiles,
             description: '本轮改动文件的相对路径；仅 session.summary 使用，`/` 分隔，不用绝对路径' })),

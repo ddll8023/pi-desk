@@ -3,10 +3,11 @@
  *
  * 模型只能在宿主枚举里选卡片类型与动作，字段一律是纯文本与有界列表；这里同时是宿主投影与
  * 渲染层校验的唯一形状来源——形状或枚举不符即返回 null，由界面降级成普通工具结果，
- * 不猜造缺失字段，也不允许模型描述布局、样式或可执行内容（边界见 docs/会话内卡片设计.md）。
+ * 不猜造缺失字段，也不允许模型描述布局、样式或可执行内容（边界见 docs/modules/sessions-chat.md）。
  */
 import { isExpertCapabilityMode } from './expert-capability'
 import type { ExpertCapabilityMode } from './expert-capability'
+import { isExpertWriteScopeEntry, MAX_EXPERT_WRITE_SCOPE_ITEMS } from './experts-api'
 import { isMemorySaveCandidate, MEMORY_CANDIDATE_MAX_ITEMS } from './memory-api'
 import type { MemorySaveCandidate } from './memory-api'
 
@@ -31,8 +32,8 @@ export const PRESENT_CARD_LIMITS = {
   actionLabel: 24,
   /** 能力段每个维度的名单长度：只防载荷无界，与专家引用数量不设上限无关。 */
   capabilityIds: 64,
-  /** 草案写入范围的条数上限：写入声明本就不多，超出按不合规处理。 */
-  writeScopeEntries: 20,
+  /** 草案写入范围的条数上限：与专家定义的保存契约同一份常量，卡片放行的一定能过保存校验。 */
+  writeScopeEntries: MAX_EXPERT_WRITE_SCOPE_ITEMS,
   /** 交付汇总文件段三组的合计条数上限：清单是给用户点选的，不是完整改动流水。 */
   summaryFiles: 40,
   /** 交付汇总单条相对路径的长度上限：项目内路径远短于这个值，超长即明显不是相对路径。 */
@@ -168,21 +169,13 @@ function parseFiles(value: unknown): PresentCardFiles | null | 'invalid' {
   return { changed, deleted, affected }
 }
 
-/** 写入范围的一项：相对项目路径，允许目录形式（以 `/` 结尾）；绝对路径与 `..` 一律拒绝。 */
-function isWriteScopeEntry(value: unknown): value is string {
-  if (typeof value !== 'string' || value.length === 0 || value.length > PRESENT_CARD_LIMITS.summaryPath) return false
-  if (value.includes('\\') || value.startsWith('/')) return false
-  const trimmed = value.endsWith('/') ? value.slice(0, -1) : value
-  return trimmed.split('/').every(segment => segment !== '' && segment !== '.' && segment !== '..')
-}
-
-/** 写入范围：缺省为只读（`[]`）；给了就必须是合法相对路径且不超过条数上限。 */
+/** 写入范围：缺省为只读（`[]`）；单条判定与条数上限都用专家保存契约那一套，卡片放行的保存必然放行。 */
 function parseWriteScope(value: unknown): readonly string[] | null {
   if (value === null || value === undefined) return []
   if (!Array.isArray(value) || value.length > PRESENT_CARD_LIMITS.writeScopeEntries) return null
   const scopes: string[] = []
   for (const item of value) {
-    if (!isWriteScopeEntry(item)) return null
+    if (!isExpertWriteScopeEntry(item)) return null
     if (!scopes.includes(item)) scopes.push(item)
   }
   return scopes

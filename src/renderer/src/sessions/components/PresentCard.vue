@@ -12,6 +12,7 @@
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
 import { computed, onMounted, ref } from 'vue'
+import { MAX_EXPERT_WRITE_SCOPE_ITEMS, normalizeExpertWriteScopeEntry } from '../../../../shared/experts-api'
 import type { ExpertSaveRequest } from '../../../../shared/experts-api'
 import { MEMORY_CONTENT_MAX, MEMORY_RECORD_TYPES, MEMORY_RULE_KEY_MAX, MEMORY_TOPIC_MAX } from '../../../../shared/memory-api'
 import type { MemoryRecordType, MemorySaveCandidate } from '../../../../shared/memory-api'
@@ -69,19 +70,22 @@ const scopeInput = ref((props.card.capability?.writeScope ?? []).join('\n'))
 const scopeError = ref('')
 
 /**
- * 解析写入范围文本：拒绝绝对路径、盘符、`\\` 与 `..`；空行与重复项忽略。
- * 目录以 `/` 结尾保留，与专家声明的形状一致。
+ * 解析写入范围文本：与专家定义同一份归一规则（项目内相对路径，目录以 `/` 结尾），
+ * 超出条数上限时整批报错；上限与保存契约同源，就地报错而不是等保存通道给一句不相关的原因。
  */
 function parseScopeText(text: string): { scope: string[]; error: string | null } {
   const scope: string[] = []
   for (const raw of text.split(/[\n,]/)) {
     const value = raw.trim().replace(/^\.\//, '')
     if (value === '') continue
-    if (value.startsWith('/') || value.includes('\\') || /^[A-Za-z]:/.test(value)
-      || value.split('/').some(segment => segment === '..' || segment === '.')) {
-      return { scope: [], error: `「${value}」不是项目内相对路径：不要用绝对路径、盘符或 ..` }
+    const normalized = normalizeExpertWriteScopeEntry(value)
+    if (normalized === null) {
+      return { scope: [], error: `「${value}」不是合法的写入范围项：必须是项目内相对路径，目录以 / 结尾，不含 .. 或盘符` }
     }
-    if (!scope.includes(value)) scope.push(value)
+    if (!scope.includes(normalized)) scope.push(normalized)
+  }
+  if (scope.length > MAX_EXPERT_WRITE_SCOPE_ITEMS) {
+    return { scope: [], error: `写入范围最多 ${MAX_EXPERT_WRITE_SCOPE_ITEMS} 项：请精简后再保存` }
   }
   return { scope, error: null }
 }
