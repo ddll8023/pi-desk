@@ -36,7 +36,7 @@
 | OpenBitFun | [GCWing/OpenBitFun](https://github.com/GCWing/OpenBitFun) | 基于 Rust Agent Runtime 与 Tauri 的开源多模式 Agent 工作台 | 会话、终端、Git 与 MCP 实质重合；Mini App、多模式 Harness、跨网多设备切换与 Computer Use 超出当前内置能力；内置受管浏览器与局域网免配置直连为本项目独有 | [openbitfun.md](openbitfun.md) |
 | Ekko Studio | [EKKOLearnAI/ekko-studio](https://github.com/EKKOLearnAI/ekko-studio) | 本地优先的多 Agent AI 工作区与工作流工作台；主体为 BSL 1.1 源码可见许可 | 聊天、终端、受管浏览器与移动端部分重合；Vue Flow 可视化工作流、10 大平台网关、群聊房间与 Office 预览超出当前内置能力；声明式 GenUI 曾为本项目独有，已于 2026-11-13 移除 | [ekko-studio.md](ekko-studio.md) |
 | TencentDB Agent Memory | [TencentCloud/TencentDB-Agent-Memory](https://github.com/TencentCloud/TencentDB-Agent-Memory) | 面向 AI Agent 团队的统一记忆中枢，提供分层记忆、Skill、Wiki 与 CodeGraph 四大资产 | 语义分层与白盒持久化实质重合；会话注入、混合检索与 Skill 部分重合；符号化短期记忆与多租户资产管理超出当前内置能力；写入闸门与有用性标注为本项目独有 | [tencentdb-agent-memory.md](tencentdb-agent-memory.md) |
-| WorkBuddy | 闭源 / 无公开仓库（[workbuddy.cn](https://www.workbuddy.cn/work/)） | 腾讯出品的 AI 办公工作台，以专家与专家团组织角色化与多智能体协作，CLI 侧提供脚本化工作流 | 技能实质重合，委派与多智能体协作部分重合；专家市场分发、成员互通与共享任务列表、脚本化编排超出当前内置能力 | [workbuddy.md](workbuddy.md) |
+| WorkBuddy | 闭源 / 无公开仓库（[workbuddy.cn](https://www.workbuddy.cn/work/)） | 腾讯出品的 AI 办公工作台，以专家与专家团组织角色化与多智能体协作，CLI 侧提供脚本化工作流 | 技能实质重合；子代理委派、专家团与过程观察部分重合；成员互通与自主认领、脚本化编排、运行干预复用、市场分发与依赖授权引导超出当前内置能力 | [workbuddy.md](workbuddy.md) |
 | ZCode | [zai-org/ZCode](https://github.com/zai-org/ZCode) | Z.ai 官方开源 coding agent harness（Apache-2.0），桌面/Web/CLI/TUI 四形态，GLM-5.3 官方宿主 | 会话、子代理、受管浏览器、记忆、技能、MCP、用量、手机远程与模型接入实质重合；文件树、Git、执行模式、编辑历史与 AGENTS.md 注入部分重合；专家体系、技能门禁、任务工作区隔离为本项目独有；Goal、Wiki、定时与空闲任务、Bot、插件市场、Hooks、远程开发、编辑历史与多形态分列为对方独有 | [zcode.md](zcode.md) |
 
 ## 专题对照
