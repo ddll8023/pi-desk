@@ -59,13 +59,14 @@ test('内置与自定义团队合并，可开团判定按专家清单求值', ()
       availableExpertIds: ['expert-author', 'reviewer']
     })
     // 内置与自定义同 id 时自定义不覆盖，内置那一份按引用失效标为不可开团。
+    // 成员全部失效除逐条 member-reference-missing 外还记一条 no-usable-member：它与 ready=false 同源。
     assert.equal(catalog.teams.length, 1)
     const team = catalog.teams[0]
     assert.equal(team?.id, 'delivery')
     assert.equal(team?.source, 'builtin')
     assert.equal(team?.ready, false)
     assert.deepEqual(catalog.issues.map(issue => issue.kind).sort(),
-      ['id-conflict', 'lead-reference-missing', 'member-reference-missing'])
+      ['id-conflict', 'lead-reference-missing', 'member-reference-missing', 'no-usable-member'])
   } finally {
     temp.cleanup()
   }

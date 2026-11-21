@@ -57,7 +57,7 @@
     { "name": "get_search_content", "summary": "读取已抓取内容的指定段落", "required": false },
     { "name": "source_check", "summary": "为待核实的说法收集带出处的段落", "required": false },
     { "name": "delegate_subagent", "summary": "把批量查询、调研、审查或文档整理交给子代理", "required": false },
-    { "name": "present_card", "summary": "提交会话内卡片（专家草案、交付汇总、记忆候选）", "required": false },
+    { "name": "present_card", "summary": "提交会话内卡片（专家草案、团队草案、交付汇总、记忆候选）", "required": false },
     { "name": "todo_write", "summary": "提交本轮执行待办清单", "required": false },
     { "name": "team_board", "summary": "提交或更新团队任务账本", "required": false },
     { "name": "team_assign", "summary": "把账本条目派给成员并等一轮结果", "required": false },

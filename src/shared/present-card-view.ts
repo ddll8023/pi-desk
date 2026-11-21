@@ -1,7 +1,9 @@
 /**
  * 会话内卡片视图：`present_card` 工具在 `details.card` 里交付的结构化载荷。
  *
- * 模型只能在宿主枚举里选卡片类型与动作，字段一律是纯文本与有界列表；这里同时是宿主投影与
+ * 模型只能在宿主枚举里选卡片类型与动作，字段一律是纯文本与有界列表；更新模式与团队引用
+ * 只携带主进程分配的标识（`targetExpertId`／`targetTeamId`／`team` 段），定义本体由页面按
+ * 既有读通道回填，模型不直接提交要覆盖的目标内容以外的隐藏状态。这里同时是宿主投影与
  * 渲染层校验的唯一形状来源——形状或枚举不符即返回 null，由界面降级成普通工具结果，
  * 不猜造缺失字段，也不允许模型描述布局、样式或可执行内容（边界见 docs/modules/sessions-chat.md）。
  */
@@ -10,14 +12,16 @@ import type { ExpertCapabilityMode } from './expert-capability'
 import { isExpertWriteScopeEntry, MAX_EXPERT_WRITE_SCOPE_ITEMS } from './experts-api'
 import { isMemorySaveCandidate, MEMORY_CANDIDATE_MAX_ITEMS } from './memory-api'
 import type { MemorySaveCandidate } from './memory-api'
+import { isExpertId } from './session-api'
+import { MAX_TEAM_MEMBERS } from './teams-api'
 
 /** 卡片类型：类型即场景契约，新增类型前必须确认它有唯一动作落点。 */
-export const PRESENT_CARD_TYPES = ['expert.draft', 'session.summary', 'memory.candidates'] as const
+export const PRESENT_CARD_TYPES = ['expert.draft', 'team.draft', 'session.summary', 'memory.candidates'] as const
 
 export type PresentCardType = typeof PRESENT_CARD_TYPES[number]
 
 /** 动作白名单：ID 绑定到既有业务通道，卡片只按 ID 转发，不自行判断能否写入。 */
-export const PRESENT_CARD_ACTIONS = ['expert.save', 'copy.text', 'memory.save'] as const
+export const PRESENT_CARD_ACTIONS = ['expert.save', 'team.save', 'copy.text', 'memory.save'] as const
 
 export type PresentCardActionId = typeof PRESENT_CARD_ACTIONS[number]
 
@@ -32,14 +36,28 @@ export const PRESENT_CARD_LIMITS = {
   actionLabel: 24,
   /** 能力段每个维度的名单长度：只防载荷无界，与专家引用数量不设上限无关。 */
   capabilityIds: 64,
-  /** 草案写入范围的条数上限：与专家定义的保存契约同一份常量，卡片放行的一定能过保存校验。 */
-  writeScopeEntries: MAX_EXPERT_WRITE_SCOPE_ITEMS,
+  /**
+   * 草案写入范围的条数上限：与专家定义的保存契约同一份常量，卡片放行的一定能过保存校验。
+   * 用 getter 延迟取值，理由同 teamMembers：本文件处在 experts-api 的循环导入链上，
+   * 顶层读取会在加载期触发 TDZ。
+   */
+  get writeScopeEntries() {
+    return MAX_EXPERT_WRITE_SCOPE_ITEMS
+  },
   /** 交付汇总文件段三组的合计条数上限：清单是给用户点选的，不是完整改动流水。 */
   summaryFiles: 40,
   /** 交付汇总单条相对路径的长度上限：项目内路径远短于这个值，超长即明显不是相对路径。 */
   summaryPath: 512,
   /** 记忆候选段条数上限：人工确认面的精选清单，与保存请求同一上限。 */
-  memoryCandidates: MEMORY_CANDIDATE_MAX_ITEMS
+  memoryCandidates: MEMORY_CANDIDATE_MAX_ITEMS,
+  /**
+   * 团队草案的成员名单条数上限：与团队保存契约同一份常量，卡片放行的保存必然放行。
+   * 用 getter 延迟取值：本文件经 runtime 资源链处在 teams-api 的循环导入中，
+   * 顶层读取会在加载期触发 TDZ（既有 writeScopeEntries 同款问题另行处置）。
+   */
+  get teamMembers() {
+    return MAX_TEAM_MEMBERS
+  }
 } as const
 
 /** 一条字段行：label 与 value 都按纯文本渲染，不解析 Markdown，也不当作链接。 */
@@ -82,6 +100,16 @@ export interface PresentCardFiles {
   readonly affected: readonly string[]
 }
 
+/**
+ * 团队草案的引用段：团长与成员都是当前专家清单里的专家标识，只给标识不带定义，
+ * 清单快照由装配期随工具注入。名单是模型建议的组合，页面在此基础上让用户改；
+ * 团长不得出现在成员名单里（与团队保存契约同一口径）。
+ */
+export interface PresentCardTeam {
+  readonly leadExpertId: string
+  readonly memberExpertIds: readonly string[]
+}
+
 /** 一份卡片载荷；`body`、`files` 与 `candidates` 只在界面展示，不进入模型可见的工具结果文本。 */
 export interface PresentCardView {
   readonly cardType: PresentCardType
@@ -92,6 +120,12 @@ export interface PresentCardView {
   readonly capability: PresentCardCapability | null
   readonly files: PresentCardFiles | null
   readonly candidates: readonly MemorySaveCandidate[] | null
+  /** 团队草案的引用段：仅 team.draft 携带，其余类型按 null 处理。 */
+  readonly team: PresentCardTeam | null
+  /** 更新模式的目标专家：null 表示新建；非 null 时卡片按该专家的当前定义回填，保存带该标识。 */
+  readonly targetExpertId: string | null
+  /** 更新模式的目标团队：语义同 `targetExpertId`；两者不得同时给出，一张卡片只落一个通道。 */
+  readonly targetTeamId: string | null
   readonly primaryAction: PresentCardAction
   readonly secondaryAction: PresentCardAction | null
 }
@@ -229,13 +263,44 @@ function parseAction(value: unknown): PresentCardAction | null {
   return { id: id as PresentCardActionId, label }
 }
 
+/** 更新模式的目标标识：缺省为 null（新建）；给了必须是合法的专家/团队标识形状。 */
+function parseTargetId(value: unknown): string | null | 'invalid' {
+  if (value === null || value === undefined) return null
+  if (typeof value !== 'string' || !isExpertId(value)) return 'invalid'
+  return value
+}
+
+/**
+ * 团队引用段：缺省为 null；给了就必须团长与成员齐全、成员至少一名且不含团长。
+ * 成员去重保序；团长混进成员名单整份判不合规——与「主次动作重复」同一口径，
+ * 让模型改而不是替它剔除，避免卡片上的名单和它自称的不一致。
+ */
+function parseTeam(value: unknown): PresentCardTeam | null | 'invalid' {
+  if (value === null || value === undefined) return null
+  if (!isRecord(value)) return 'invalid'
+  const { leadExpertId, memberExpertIds } = value
+  if (typeof leadExpertId !== 'string' || !isExpertId(leadExpertId)) return 'invalid'
+  if (!Array.isArray(memberExpertIds) || memberExpertIds.length === 0
+    || memberExpertIds.length > PRESENT_CARD_LIMITS.teamMembers) return 'invalid'
+  const members: string[] = []
+  for (const item of memberExpertIds) {
+    if (!isExpertId(item)) return 'invalid'
+    if (!members.includes(item)) members.push(item)
+  }
+  if (members.includes(leadExpertId)) return 'invalid'
+  return { leadExpertId, memberExpertIds: members }
+}
+
 /**
  * 校验并归一化一张卡片。
  * 动作重复（主次按钮指向同一落点）判为不合规：同一个按钮没必要出现两次，也让界面状态不至于分叉。
  */
 export function parsePresentCardView(value: unknown): PresentCardView | null {
   if (!isRecord(value)) return null
-  const { cardType, title, subtitle, fields, body, capability, files, candidates, primaryAction, secondaryAction } = value
+  const {
+    cardType, title, subtitle, fields, body, capability, files, candidates,
+    team, targetExpertId, targetTeamId, primaryAction, secondaryAction
+  } = value
   if (typeof cardType !== 'string' || !(PRESENT_CARD_TYPES as readonly string[]).includes(cardType)) return null
   if (!isText(title, PRESENT_CARD_LIMITS.title)) return null
   if (!isNullableText(subtitle, PRESENT_CARD_LIMITS.subtitle)) return null
@@ -253,6 +318,14 @@ export function parsePresentCardView(value: unknown): PresentCardView | null {
   if (parsedFiles === 'invalid') return null
   const parsedCandidates = parseMemoryCandidates(candidates)
   if (parsedCandidates === 'invalid') return null
+  const parsedTeam = parseTeam(team)
+  if (parsedTeam === 'invalid') return null
+  const parsedTargetExpertId = parseTargetId(targetExpertId)
+  if (parsedTargetExpertId === 'invalid') return null
+  const parsedTargetTeamId = parseTargetId(targetTeamId)
+  if (parsedTargetTeamId === 'invalid') return null
+  // 两个更新目标不得同时给出：一张卡片只落一个业务通道，落点分叉会让保存语义不明。
+  if (parsedTargetExpertId !== null && parsedTargetTeamId !== null) return null
   const parsedPrimary = parseAction(primaryAction)
   if (parsedPrimary === null) return null
   const parsedSecondary = secondaryAction === null || secondaryAction === undefined ? null : parseAction(secondaryAction)
@@ -267,6 +340,9 @@ export function parsePresentCardView(value: unknown): PresentCardView | null {
     capability: parsedCapability,
     files: parsedFiles,
     candidates: parsedCandidates,
+    team: parsedTeam,
+    targetExpertId: parsedTargetExpertId,
+    targetTeamId: parsedTargetTeamId,
     primaryAction: parsedPrimary,
     secondaryAction: parsedSecondary
   }

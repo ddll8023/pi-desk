@@ -50,7 +50,10 @@ import { parseSubAgentView } from '../shared/sub-agent-view'
 import { EXPERT_SECTION_KEY, expertRoleSection, readSelectedExpert } from './expert-role'
 import { LEAD_BLOCKED_TOOLS, TEAM_SECTION_KEY, readSelectedTeam, teamRoleSection } from './team-role'
 import { createExpertWriteGuardExtension, EXPERT_WRITE_GUARD_EXTENSION_NAME } from './expert-write-guard'
-import { expertManageableToolNames, readCapabilityCandidateSection, resolveSessionCapabilityScope } from './expert-capability'
+import {
+  expertManageableToolNames, readCapabilityCandidateSection, readExpertCandidateSection,
+  resolveSessionCapabilityScope
+} from './expert-capability'
 import { DELEGATION_TOOL_NAME } from './sub-agent/delegation-extension'
 import { PROTECTED_EXPERT_TOOLS } from '../shared/expert-capability'
 import { limitMcpServers, readMcpSessionConfig } from '../shared-process/mcp-session-config'
@@ -1020,6 +1023,12 @@ export class SdkSessionRuntime {
       sharedAgentDir: this.options.sharedAgentDir,
       mcpServerNames: sessionMcpServerNames
     })
+    // 专家候选段与能力候选同源生成：团队引用与更新定位都要主进程分配的标识，模型无从得知。
+    const expertCandidates = readExpertCandidateSection({
+      resourcesDirectory: this.options.productResourcesDir,
+      agentDir: this.options.agentDir,
+      sharedAgentDir: this.options.sharedAgentDir
+    })
     // 可裁剪工具的口径在创建时算一次：只有随包清单声明过的工具能进专家范围，
     // 内建控制工具与扩展工具（如提问、MCP 管理）不受限制。
     const manageableTools = expertManageableToolNames(this.options.productResourcesDir)
@@ -1111,7 +1120,7 @@ export class SdkSessionRuntime {
           { name: 'tool-search', factory: this.sdk.createToolSearchExtension(), builtin: true, replaceable: true },
           // 会话内卡片：模型只能提交枚举内的卡片类型与动作，按钮落点由渲染层转发到既有通道。
           { name: 'present-card', builtin: true, replaceable: true,
-            factory: createPresentCardExtension(capabilityCandidates) },
+            factory: createPresentCardExtension(capabilityCandidates, expertCandidates) },
           // 委派工具由宿主注入子进程入口与取消控制端：页面只能按任务标识取消，不能指定路径或进程。
           { name: 'sub-agent-delegation', builtin: true, replaceable: true,
             factory: createSubAgentDelegationExtension({

@@ -22,7 +22,7 @@
 | `src/main/sessions/expert-ipc.ts` | 派生、读取、保存、删除、快速模式剔除清单、能力候选与默认基线保存七条通道；清单与诊断仍走 `desktop:session-experts` |
 | `src/shared-process/expert-capability-defaults.ts` | 默认能力基线的读取与原子写：文件缺失或损坏按不限制回退，技能、MCP 与工具三个维度各自独立归一 |
 | `src/shared-process/mcp-session-config.ts` | 会话级 MCP 配置合并（全局 + 受信项目、覆盖语义）与按技能／服务器许可集标停用 |
-| `src/sdk-host/expert-capability.ts` | 由专家定义与默认基线算出本次会话的技能、MCP 与工具许可集；未召专家时不限制；受保护工具始终在可用集内。同一口径另产出 `present_card` 的能力候选段（技能带描述、MCP 与工具名），不按许可集裁剪 |
+| `src/sdk-host/expert-capability.ts` | 由专家定义与默认基线算出本次会话的技能、MCP 与工具许可集；未召专家时不限制；受保护工具始终在可用集内。同一口径另产出 `present_card` 的能力候选段（技能带描述、MCP 与工具名）与专家候选段（标识、显示名、简介、内置或自定义标记，供团队引用与更新定位），不按许可集裁剪 |
 | `src/main/sessions/session-store.ts` | 项目会话目录、受限列表窗口与摘要缓存、文件定位与删除 |
 | `src/main/sessions/team-catalog.ts` | 团队清单读取：随包与用户目录双来源合并、团长与成员可用性诊断；会话打开时按团队标识取定义 |
 | `src/main/sessions/session-teams.ts` | 会话团队绑定的解析：已持久化绑定优先于请求值，只对新会话生效 |
@@ -52,7 +52,7 @@
 | `src/sdk-host/team-dispatch.ts` | 派活与停止工具：派活前校验条目、验收项、依赖、成员与打回上限，中途可停；终态由宿主观测后写入根会话自定义条目 |
 | `src/sdk-host/team-runner.ts` | 成员轮的子进程载体：精确会话 id 新建或复用、专家角色段与写入守卫参数、JSONL 事件收敛成轮次记录、超时与取消收尾 |
 | `src/sdk-host/write-scope.ts` | 写入路径判定的共享实现：真实路径解析（取最近存在祖先）、目录前缀边界比较与绝对范围解析；子代理写入守卫与专家写入守卫共用，不各写一份 |
-| `src/sdk-host/present-card-extension.ts` | 会话内卡片工具 `present_card`：只接受枚举内的卡片类型与动作 ID，载荷经共享契约校验后随工具结果 `details.card` 下发；装配时把能力候选段随工具注册给模型；只给模型一句结论，不写盘、不改清单 |
+| `src/sdk-host/present-card-extension.ts` | 会话内卡片工具 `present_card`：只接受枚举内的卡片类型与动作 ID，载荷经共享契约校验后随工具结果 `details.card` 下发；装配时把能力候选段与专家候选段随工具注册给模型；更新模式只带目标标识（`expert_id`／`team_id`），缺省的简介与正文由页面回填；只给模型一句结论，不写盘、不改清单 |
 | `src/sdk-host/product-resources.ts` | 产品资源解析、用户级 `AGENTS.md` 与 skills 的只读挂载、技能覆盖与同名技能诊断（含按专家许可集过滤可见技能，项目技能不受该许可集裁剪）、扩展加载结果分级与必要组件及配置注入的核验 |
 | `src/sdk-host/conflicts.ts` | 扩展加载结果的冲突分级：按工具名与路径归属区分致命项与仅诊断项，不解析 SDK 错误文案 |
 | `src/sdk-host/memory-configuration.ts` | 宿主内记忆配置的唯一持有者；写进程环境并向已加载扩展推送变更 |
@@ -76,7 +76,7 @@
 | `src/sdk-host/projection/checkpoint.ts` | 首页与稳定活动的独立内存检查点：绑定时分别核对恢复条件，命中不替代 SDK 打开会话文件 |
 | `src/shared/session-api.ts` | 会话列表、打开、重载、删除、按会话读取历史，以及专家清单的页面契约；专家绑定由主进程写入，不并页面通道 |
 | `src/shared/experts-api.ts` | 专家派生、读取与保存、删除、快速模式剔除清单、能力候选与默认基线保存七条通道及请求／结果契约校验；专家视图与诊断类型复用会话域，不重复定义 |
-| `src/shared/present-card-view.ts` | 会话内卡片载荷契约：卡片类型枚举、动作白名单、字段长度上限与共享解析器，宿主投影与渲染层共用同一份判定 |
+| `src/shared/present-card-view.ts` | 会话内卡片载荷契约：卡片类型枚举（含 team.draft）、动作白名单（含 team.save）、更新目标与团队引用段、字段长度上限与共享解析器，宿主投影与渲染层共用同一份判定 |
 | `src/shared/session-run-api.ts` | 应用级运行清单、释放／结束与事件契约 |
 | `src/shared/usage-stats-api.ts` | 会话用量明细（按日、模型×日、子代理×日）的 IPC 契约与类型校验 |
 | `src/shared/teams-api.ts` | 团队清单、团队读取／保存／删除四条通道与视图、可编辑定义、诊断类型；成员数量、名称长度与诊断码的边界在同一定义处 |
@@ -139,7 +139,7 @@
 | `src/renderer/src/sessions/components/ChatMessageItem.vue` | 单消息、图片编号及说明、思考抽屉、纯过程紧凑步骤、流式打字光标与工具归组面板；交付卡片的调用单列为卡片行（不进面板、不计入面板统计） |
 | `src/renderer/src/sessions/components/HistoryLoadSentinel.vue` | 历史加载触发哨兵 |
 | `src/renderer/src/sessions/components/ToolCard.vue` | 单行紧凑展示操作分类徽章、真实工具名、语境化参数与状态耗时胶囊；展开区展示结构化结果卡片、Diff 与调试抽屉，原文按需展开 |
-| `src/renderer/src/sessions/components/PresentCard.vue` | 会话内卡片：按固定外壳展示标题（头部带）、字段网格、能力勾选区（浅底面板）与写入范围编辑框（与专家保存契约同一上限，非法项与超限就地报错，留空即只读）、交付汇总的文件清单（三组相对路径，行内「定位」复用 `desktop:project-entry-reveal`，工作区目标由当前项目与运行实例推导，失败原因就地显示）、记忆候选（类型段的宿主固定行为：候选默认全选、可编辑类型／标题／正文／规则键与非规则状态后再保存，替代链引用不展示，形式不完整就地标错且不计入可保存集合，写库后锁定编辑）、可折叠正文与主次按钮带；占满消息列做独立展示行，不限宽居中、不套执行面板；技能、MCP 与工具用能力选择器列出候选（候选与基线取自能力候选通道），选受保护工具保持勾选且不可取消，勾选按与编辑对话框同一套规则换算成保存字段；按钮按动作 ID 转发到既有通道（`expert.save` → 专家保存并刷新清单，`memory.save` → 候选保存通道 `desktop:memory-save-candidates`，未关联项目按全局记忆落库并就地提示，`copy.text` → 剪贴板），终态与失败原因就地展示；窄容器下字段转纵向堆叠 |
+| `src/renderer/src/sessions/components/PresentCard.vue` | 会话内卡片：按固定外壳展示标题（头部带）、字段网格、能力勾选区（浅底面板）与写入范围编辑框（与专家保存契约同一上限，非法项与超限就地报错，留空即只读；更新模式按定义三态回填，靠单选区分不限制／只读／指定路径）、团队草案段（团长单选与成员多选，候选与设置页同一份专家清单，清单外的模型引用按「当前不可用」列出，换团长自动移出成员，引用失效阻止保存）、更新模式编辑面（带目标标识时先读定义回填名称、简介、正文与勾选，字段可直接修改，定义读不到锁定保存）、交付汇总的文件清单（三组相对路径，行内「定位」复用 `desktop:project-entry-reveal`，工作区目标由当前项目与运行实例推导，失败原因就地显示）、记忆候选（类型段的宿主固定行为：候选默认全选、可编辑类型／标题／正文／规则键与非规则状态后再保存，替代链引用不展示，形式不完整就地标错且不计入可保存集合，写库后锁定编辑）、可折叠正文与主次按钮带；占满消息列做独立展示行，不限宽居中、不套执行面板；技能、MCP 与工具用能力选择器列出候选（候选与基线取自能力候选通道），选受保护工具保持勾选且不可取消，勾选按与编辑对话框同一套规则换算成保存字段；按钮按动作 ID 转发到既有通道（`expert.save` → 专家保存或更新并刷新清单，`team.save` → 团队保存通道并刷新团队面板同源清单，`memory.save` → 候选保存通道 `desktop:memory-save-candidates`，未关联项目按全局记忆落库并就地提示，`copy.text` → 剪贴板），终态与失败原因就地展示；窄容器下字段转纵向堆叠 |
 | `src/renderer/src/sessions/components/ToolResultPreview.vue` | 工具结果的计数口径、命中内容、来源、历史状态与省略提示；只展示投影，不发起额外查询 |
 | `src/renderer/src/sessions/components/UsageDetailDialog.vue` | 会话用量明细与独立的 Codex、OpenCode Go 账户额度展示、按需读取与手动刷新 |
 | `src/renderer/src/sessions/components/MemoryInjectionDialog.vue` | 记忆注入卡片：四个分段（适用偏好、语气风格、常驻约定、当前项目近况）以 tab 切换，点击条目展开摘要，被截断时记录条目按 ID、画像条目按领域、风格条目按 ID 只读取全文 |

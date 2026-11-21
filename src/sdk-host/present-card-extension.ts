@@ -4,6 +4,8 @@
  * 模型只能选卡片类型与动作白名单里的 ID，不能描述布局、样式或可执行内容；载荷在这里先过
  * 一遍共享契约的解析器，形状或枚举不符就直接拒绝，不产出半成品卡片。工具只负责递交，
  * 不写盘也不改清单——按钮的落点由渲染层转发到既有业务通道（如 `desktop:expert-save`）。
+ * 更新模式只带目标标识：定义本体由页面按既有读通道回填，模型给的是建议修改后的内容，
+ * 所以更新模式下简介与正文可缺省，缺省字段由页面按当前定义补齐。
  *
  * 交给模型的只有一句结论，正文与字段只放进 `details.card` 供界面展示，
  * 因此长正文不会在上下文里重复出现（边界见 docs/modules/sessions-chat.md）。
@@ -46,8 +48,16 @@ interface CardParams {
   /** 工具范围：同上；受保护工具不会被排除，名单里有没有都一样。 */
   readonly tools_mode?: 'inherit' | 'only'
   readonly tool_ids?: readonly string[]
-  /** 写入范围：项目内相对路径，目录以 `/` 结尾；省略时保存为只读。 */
+  /** 写入范围：项目内相对路径，目录以 `/` 结尾；省略时保存为只读。更新模式下页面按当前定义回填，此项不参与更新。 */
   readonly write_scope?: readonly string[]
+  /** 更新模式的目标专家：给了即更新该自定义专家而不是新建；内置专家只读，页面会拒绝。 */
+  readonly expert_id?: string
+  /** 团队草案的团长：专家候选段里的标识；更新团队时由 team_id 携带目标，团长仍必填。 */
+  readonly lead_expert_id?: string
+  /** 团队草案的成员：专家候选段里的标识，至少一名，不得包含团长。 */
+  readonly member_expert_ids?: readonly string[]
+  /** 更新模式的目标团队：给了即更新该自定义团队而不是新建；内置团队只读，页面会拒绝。 */
+  readonly team_id?: string
   /** 交付汇总文件段：三组项目内相对路径；只用于 session.summary，其余类型带这些参数直接拒绝。 */
   readonly changed_files?: readonly string[]
   readonly deleted_files?: readonly string[]
@@ -62,22 +72,59 @@ interface CardParams {
 
 /**
  * 由参数组装卡片并复用共享解析器校验；返回字符串表示拒绝原因。
- * 草案类型额外要求简介与正文：缺任一项的「专家定义」在主进程保存时也会被拒，提前拦下更省一轮往返。
+ * 草案类型额外要求简介与正文：新建的「专家定义」缺任一项在主进程保存时也会被拒，提前拦下更省一轮往返；
+ * 更新模式（带 `expert_id`）缺省的字段由页面按当前定义回填，因此放行缺省。
  * 交付汇总要求至少一个文件且按钮只允许复制：它是只读卡片，没有写入落点可绑定。
  * 记忆候选要求至少一条候选且主按钮只能保存：写入记忆库是它的唯一落点，用户在卡片上勾选并编辑后才提交。
+ * 团队草案要求团长与成员齐全：成员为空或包含团长的团队开不了团，主进程保存时同样会拒。
  */
 function buildCard(params: CardParams): PresentCardView | string {
   const subtitle = params.subtitle?.trim() === '' ? undefined : params.subtitle
   const body = params.body?.trim() === '' ? undefined : params.body
   const fileParamsGiven = params.changed_files !== undefined || params.deleted_files !== undefined
     || params.affected_files !== undefined
+  // 更新目标互斥且必须挂在对应类型上：一张卡片只落一个业务通道，挂错类型等于让页面猜落点。
+  if (params.expert_id !== undefined && params.team_id !== undefined) {
+    return 'expert_id 与 team_id 不能同时给：一张卡片要么更新专家，要么更新团队。'
+  }
+  if (params.expert_id !== undefined && params.card_type !== 'expert.draft') {
+    return 'expert_id 只用于 expert.draft（专家草案）卡片；其他类型没有专家更新落点。'
+  }
+  if (params.team_id !== undefined && params.card_type !== 'team.draft') {
+    return 'team_id 只用于 team.draft（团队草案）卡片；其他类型没有团队更新落点。'
+  }
+  const teamParamsGiven = params.lead_expert_id !== undefined || params.member_expert_ids !== undefined
+  if (teamParamsGiven && params.card_type !== 'team.draft') {
+    return '团长与成员名单只用于 team.draft（团队草案）卡片；其他类型不引用专家标识。'
+  }
   if (params.card_type === 'expert.draft') {
     if (fileParamsGiven) return '文件清单参数只用于 session.summary（交付汇总）卡片；专家草案不带文件段。'
-    if (subtitle === undefined) return '草案卡片需要 subtitle（一句话简介）。'
-    if (body === undefined) return '草案卡片需要 body（正文）。'
+    // 更新模式缺省简介或正文时由页面按当前定义回填；新建仍要求两样齐全。
+    const updating = params.expert_id !== undefined
+    if (subtitle === undefined && !updating) return '草案卡片需要 subtitle（一句话简介）。'
+    if (body === undefined && !updating) return '草案卡片需要 body（正文）。'
     // 仅用选中却一个技能都不留，等于把专家退化成只会说话的角色，主进程保存时也会拒。
     if (params.skills_mode === 'only' && (params.skill_ids ?? []).length === 0) {
       return '技能选择「仅用选中」时至少要留一个技能；要继承默认基线就去掉 skills_mode。'
+    }
+  }
+  if (params.card_type === 'team.draft') {
+    if (fileParamsGiven) return '文件清单参数只用于 session.summary（交付汇总）卡片；团队草案不带文件段。'
+    // 团队不声明能力范围：能力取自成员各自的专家定义，这些参数带上也不会生效，拒绝比静默忽略更早指因。
+    if (params.skills_mode !== undefined || params.mcp_mode !== undefined || params.tools_mode !== undefined
+      || params.skill_ids !== undefined || params.mcp_server_ids !== undefined || params.tool_ids !== undefined
+      || params.write_scope !== undefined) {
+      return '团队草案不声明能力范围（能力取自成员各自的专家定义）；能力范围参数只用于 expert.draft（专家草案）。'
+    }
+    if (subtitle === undefined) return '团队草案需要 subtitle（一句话简介）。'
+    if (params.lead_expert_id === undefined) return '团队草案需要 lead_expert_id（团长，取专家候选段里的标识）。'
+    if ((params.member_expert_ids ?? []).length === 0) return '团队草案需要 member_expert_ids（成员，至少一名）。'
+    if ((params.member_expert_ids ?? []).includes(params.lead_expert_id)) {
+      return '团长不能同时出现在成员名单：团长不生产，开团后它只验收与派活；从成员里去掉它。'
+    }
+    if (params.primary_action_id !== 'team.save'
+      || (params.secondary_action_id !== undefined && params.secondary_action_id !== 'copy.text')) {
+      return '团队草案卡片的主按钮只能是保存（team.save），次按钮只能是复制（copy.text）。'
     }
   }
   if (params.card_type === 'session.summary') {
@@ -129,6 +176,14 @@ function buildCard(params: CardParams): PresentCardView | string {
           affected: params.affected_files ?? []
         },
     candidates: params.candidates === undefined ? null : params.candidates,
+    team: params.lead_expert_id === undefined
+      ? null
+      : {
+          leadExpertId: params.lead_expert_id,
+          memberExpertIds: params.member_expert_ids ?? []
+        },
+    targetExpertId: params.expert_id ?? null,
+    targetTeamId: params.team_id ?? null,
     primaryAction: { id: params.primary_action_id, label: params.primary_action_label },
     secondaryAction: params.secondary_action_id === undefined
       ? null
@@ -155,20 +210,24 @@ function result(text: string, card: PresentCardView | null): {
 /**
  * 卡片工具工厂：无外部依赖，装配时直接注册。
  *
- * `capabilityCandidates` 由会话装配按与设置页同源的口径生成（见 `expert-capability.ts`）：
- * 模型自己可见的技能已被专家许可集裁剪，不可见不等于不存在，候选全集必须随工具一起给它。
+ * `capabilityCandidates` 与 `expertCandidates` 由会话装配按与设置页同源的口径生成
+ * （见 `expert-capability.ts`）：模型自己可见的技能已被专家许可集裁剪，不可见不等于不存在，
+ * 候选全集必须随工具一起给它；专家标识是主进程分配的，团队引用与更新定位同样靠注入的候选段。
  */
-export function createPresentCardExtension(capabilityCandidates: string): ExtensionFactory {
+export function createPresentCardExtension(capabilityCandidates: string, expertCandidates: string): ExtensionFactory {
   return pi => {
     pi.registerTool({
       name: TOOL_NAME,
       label: '会话内卡片',
       description: '把需要用户点一下才落地或需要一键操作的成果做成一张固定外壳卡片：只提交卡片类型、纯文本字段与动作 ID，界面按随包枚举渲染，不接受布局与样式描述。'
-        + '卡片上的按钮由产品已登记的动作执行：专家定义草案保存成自定义专家，交付汇总是只读文件清单（复制与逐行定位），记忆候选由用户勾选并编辑后写入记忆库。',
+        + '卡片上的按钮由产品已登记的动作执行：专家定义草案保存或更新自定义专家，团队草案保存或更新自定义团队，交付汇总是只读文件清单（复制与逐行定位），记忆候选由用户勾选并编辑后写入记忆库。',
       promptSnippet: '把成果做成带按钮的卡片（保存、复制或定位）',
       promptGuidelines: [
-        '只在成果需要用户点一下才落地或需要一键操作时使用（专家定义草案、会话交付汇总、记忆候选）：普通说明、进度汇报与追问继续用文本。',
-        'card_type 目前有 expert.draft（专家定义草案）、session.summary（会话交付汇总）与 memory.candidates（记忆候选）。草案必须有 title、subtitle 与 body；fields 只放需要展示的说明行，不放正文。',
+        '只在成果需要用户点一下才落地或需要一键操作时使用（专家定义草案、团队草案、会话交付汇总、记忆候选）：普通说明、进度汇报与追问继续用文本。',
+        'card_type 目前有 expert.draft（专家定义草案）、team.draft（团队草案）、session.summary（会话交付汇总）与 memory.candidates（记忆候选）。专家草案必须有 title、subtitle 与 body；fields 只放需要展示的说明行，不放正文。',
+        '更新已有专家时仍在 expert.draft 里带 expert_id（取专家候选段里的自定义专家标识）：卡片会回填当前定义，你只给要改的字段，缺省的 subtitle／body 由回填补齐；内置专家只读，不能作为更新目标。新建时不要带 expert_id。',
+        'team.draft 用在用户要把几位专家组成一个团时：title 为团队显示名称、subtitle 为一句话简介、body 为协作约定正文（不进入系统提示，只供查看与编辑）；lead_expert_id 与 member_expert_ids 只能引用专家候选段里的标识，成员至少一名且不得包含团长——团长不生产，开团后只验收与派活；更新团队带 team_id，主按钮只能 team.save。',
+        expertCandidates,
         'session.summary 用在一轮有文件产出之后：changed_files／deleted_files／affected_files 只给项目内相对路径（用 / 分隔，不用绝对路径，不写目录），三组至少一个文件；删除的文件照实提交，定位时会提示已不存在。',
         '交付汇总卡片是只读的：主次按钮只能用 copy.text；文件三组合计上限 40 条，超限整张卡片会被拒绝而不是截断。',
         'memory.candidates 用在本轮产出了值得长期保留的结论、约束或未决状态、且用户可能想挑选修改时——用户明确认可的非显然做法与取舍同样要给候选，只存纠正会让后续越来越保守，认可的理由写进 content：candidates 每条给 type、topic（单行标题）与 content，规则类（decision／constraint）必须带 rule_key，progress 必须显式 status（active 只表示仍待推进的未决状态）。用户会直接编辑候选再保存，按最终入库口径写，不要放过程流水。',
@@ -177,7 +236,7 @@ export function createPresentCardExtension(capabilityCandidates: string): Extens
         capabilityCandidates,
         '只能引用当前候选里存在的技能，不得引用 sub-agent- 开头的子代理专用技能；仅用选中时技能名单不能为空。',
         '工具范围里技能门禁、待办清单与记忆工具属于必需项，不得建议排除；要授予委派能力就勾上 delegate_subagent。',
-        '动作只能取白名单 ID：expert.save 保存为自定义专家，copy.text 复制正文到剪贴板，memory.save 写入勾选的记忆候选；不要按文案自行发明动作，也不要声称按钮会执行未登记的操作。',
+        '动作只能取白名单 ID：expert.save 保存或更新自定义专家，team.save 保存或更新自定义团队，copy.text 复制正文到剪贴板，memory.save 写入勾选的记忆候选；不要按文案自行发明动作，也不要声称按钮会执行未登记的操作。',
         'body 不进入工具结果文本，长正文不受上下文成本影响，但仍受长度上限约束；超过上限整张卡片会被拒绝而不是截断。',
         '不要用它提交代码、命令、凭据或链接：卡片只承载纯文本与已登记动作。',
         '卡片放出去后等用户点击即可，不要再把同一份正文重复输出成对话文本。'
@@ -185,20 +244,21 @@ export function createPresentCardExtension(capabilityCandidates: string): Extens
       exposure: 'model-only',
       parameters: Type.Object({
         card_type: Type.Union([
-          Type.Literal('expert.draft', { description: '专家定义草案：保存为自定义专家' }),
+          Type.Literal('expert.draft', { description: '专家定义草案：保存为自定义专家；带 expert_id 即更新' }),
+          Type.Literal('team.draft', { description: '团队草案：保存为自定义团队；带 team_id 即更新' }),
           Type.Literal('session.summary', { description: '会话交付汇总：只读文件清单，按钮只能复制' }),
           Type.Literal('memory.candidates', { description: '记忆候选：用户勾选并编辑后写入记忆库' })
         ], { description: '卡片类型；类型即场景契约，按成果选择' }),
         title: Type.String({ minLength: 1, maxLength: PRESENT_CARD_LIMITS.title,
-          description: '卡片标题；草案类型下即专家显示名称' }),
+          description: '卡片标题；expert.draft 下即专家显示名称，team.draft 下即团队显示名称' }),
         subtitle: Type.Optional(Type.String({ maxLength: PRESENT_CARD_LIMITS.subtitle,
-          description: '一句话说明；草案类型下即专家简介，必填' })),
+          description: '一句话说明；专家草案下即专家简介（必填），团队草案下即团队简介（必填），更新模式下缺省由页面回填' })),
         fields: Type.Optional(Type.Array(Type.Object({
           label: Type.String({ minLength: 1, maxLength: PRESENT_CARD_LIMITS.fieldLabel }),
           value: Type.String({ maxLength: PRESENT_CARD_LIMITS.fieldValue })
         }), { maxItems: PRESENT_CARD_LIMITS.fields, description: '字段行，只放说明，不放正文' })),
         body: Type.Optional(Type.String({ maxLength: PRESENT_CARD_LIMITS.body,
-          description: '卡片正文；草案类型下即专家定义正文，必填' })),
+          description: '卡片正文；expert.draft 下即专家定义正文，team.draft 下即协作约定正文（不进系统提示）；新建的专家草案必填，更新模式与团队草案缺省时由页面回填或留空' })),
         skills_mode: Type.Optional(Type.Union([Type.Literal('inherit'), Type.Literal('only')],
           { description: '技能范围口径：inherit=继承默认基线后加减，only=名单即白名单；省略按继承处理' })),
         skill_ids: Type.Optional(Type.Array(Type.String({ maxLength: 64 }),
@@ -215,7 +275,16 @@ export function createPresentCardExtension(capabilityCandidates: string): Extens
         write_scope: Type.Optional(Type.Array(Type.String({ maxLength: MAX_EXPERT_WRITE_SCOPE_ENTRY }),
           { maxItems: PRESENT_CARD_LIMITS.writeScopeEntries,
             description: `项目内相对路径，目录以 / 结尾，最多 ${MAX_EXPERT_WRITE_SCOPE_ITEMS} 项；`
-              + '省略时保存为只读（不许写入）。不要写绝对路径、盘符或 ..' })),
+              + '省略时保存为只读（不许写入）；更新模式下页面按当前定义回填，此项不参与更新。不要写绝对路径、盘符或 ..' })),
+        expert_id: Type.Optional(Type.String({ minLength: 1, maxLength: 64,
+          description: '更新模式的目标专家标识（取专家候选段）：给了即更新该自定义专家而不是新建，缺省的 subtitle／body 由页面回填；仅 expert.draft 使用' })),
+        lead_expert_id: Type.Optional(Type.String({ minLength: 1, maxLength: 64,
+          description: '团队草案的团长标识（取专家候选段）；仅 team.draft 使用' })),
+        member_expert_ids: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 64 }),
+          { maxItems: PRESENT_CARD_LIMITS.teamMembers,
+            description: '团队草案的成员标识清单（取专家候选段），至少一名且不得包含团长；仅 team.draft 使用' })),
+        team_id: Type.Optional(Type.String({ minLength: 1, maxLength: 64,
+          description: '更新模式的目标团队标识：给了即更新该自定义团队而不是新建；仅 team.draft 使用' })),
         changed_files: Type.Optional(Type.Array(Type.String({ maxLength: PRESENT_CARD_LIMITS.summaryPath }),
           { maxItems: PRESENT_CARD_LIMITS.summaryFiles,
             description: '本轮改动文件的相对路径；仅 session.summary 使用，`/` 分隔，不用绝对路径' })),

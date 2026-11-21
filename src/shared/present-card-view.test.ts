@@ -49,7 +49,8 @@ test('能力段的模式未知或名单写法非法时整份判不合规', () =>
   assert.equal(parsePresentCardView(draft({ capability: { ...capability, skillsMode: 'partial' } })), null)
   assert.equal(parsePresentCardView(draft({ capability: { ...capability, skillIds: ['bad id'] } })), null)
   assert.equal(parsePresentCardView(draft({ capability: { ...capability, mcpServerIds: 'memory' } })), null)
-  assert.equal(parsePresentCardView(draft({ capability: { skillsMode: 'only', skillIds: [] } }))?.capability?.skillsMode, 'only')
+  // 能力段缺维度同样不合规：契约要求「给了就必须维度齐全」，半份能力段不按缺省补齐。
+  assert.equal(parsePresentCardView(draft({ capability: { skillsMode: 'only', skillIds: [] } })), null)
 })
 
 test('能力名单去重且保持顺序', () => {
@@ -132,6 +133,74 @@ test('文件条数与单条长度超限判为不合规而不是静默截断', ()
 
 test('主次动作指向同一落点判为不合规', () => {
   assert.equal(parsePresentCardView(draft({ secondaryAction: { id: 'expert.save', label: '再保存' } })), null)
+})
+
+/** 一份合法的团队草案卡片；各用例在它之上做单点改动。 */
+function team(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    cardType: 'team.draft',
+    title: '实现与审查小组',
+    subtitle: '一人实现一人审查，团长只验收',
+    fields: [{ label: '分工', value: '团长：拆解与验收；成员：实现、审查' }],
+    body: '团长派活后成员各自认领，验收以证据为准。',
+    team: { leadExpertId: 'expert-1', memberExpertIds: ['expert-2', 'expert-3'] },
+    primaryAction: { id: 'team.save', label: '保存团队' },
+    secondaryAction: { id: 'copy.text', label: '复制约定' },
+    ...overrides
+  }
+}
+
+test('合法团队草案通过并保留引用段', () => {
+  const parsed = parsePresentCardView(team())
+  assert.notEqual(parsed, null)
+  assert.equal(parsed?.cardType, 'team.draft')
+  assert.deepEqual(parsed?.team?.memberExpertIds, ['expert-2', 'expert-3'])
+  assert.equal(parsed?.targetExpertId, null)
+  assert.equal(parsed?.targetTeamId, null)
+})
+
+test('团队草案缺团长、成员为空或团长混进成员名单判为不合规', () => {
+  assert.equal(parsePresentCardView(team({ team: { leadExpertId: 'expert-1', memberExpertIds: [] } })), null)
+  assert.equal(parsePresentCardView(team({ team: { leadExpertId: 'expert-1', memberExpertIds: ['expert-1'] } })), null)
+  assert.equal(parsePresentCardView(team({ team: { memberExpertIds: ['expert-2'] } })), null)
+})
+
+test('团队引用的标识形状非法或成员数超限判为不合规', () => {
+  assert.equal(parsePresentCardView(team({ team: { leadExpertId: 'Expert-1', memberExpertIds: ['expert-2'] } })), null)
+  assert.equal(parsePresentCardView(team({ team: { leadExpertId: '', memberExpertIds: ['expert-2'] } })), null)
+  const many = Array.from({ length: PRESENT_CARD_LIMITS.teamMembers + 1 }, (_, index) => `expert-${index}`)
+  assert.equal(parsePresentCardView(team({ team: { leadExpertId: 'expert-1', memberExpertIds: many } })), null)
+})
+
+test('成员名单去重保序', () => {
+  const parsed = parsePresentCardView(team({
+    team: { leadExpertId: 'expert-1', memberExpertIds: ['expert-3', 'expert-2', 'expert-3'] }
+  }))
+  assert.deepEqual(parsed?.team?.memberExpertIds, ['expert-3', 'expert-2'])
+})
+
+test('更新目标按标识解析，两个目标同时给出判为不合规', () => {
+  const updated = parsePresentCardView(draft({ targetExpertId: 'expert-4', subtitle: null, body: null }))
+  assert.notEqual(updated, null)
+  assert.equal(updated?.targetExpertId, 'expert-4')
+  assert.equal(parsePresentCardView(team({ targetTeamId: 'team-2' }))?.targetTeamId, 'team-2')
+  assert.equal(parsePresentCardView(draft({ targetExpertId: 'expert-4', targetTeamId: 'team-2' })), null)
+})
+
+test('更新目标的标识形状非法判为不合规', () => {
+  assert.equal(parsePresentCardView(draft({ targetExpertId: 'Expert 4' })), null)
+  assert.equal(parsePresentCardView(team({ targetTeamId: '../outside' })), null)
+})
+
+test('缺省的更新目标与团队段按 null 处理，旧卡片不受新字段影响', () => {
+  const parsed = parsePresentCardView(draft())
+  assert.equal(parsed?.targetExpertId, null)
+  assert.equal(parsed?.targetTeamId, null)
+  assert.equal(parsed?.team, null)
+})
+
+test('team.save 在动作白名单内可解析', () => {
+  assert.equal(parsePresentCardView(team({ secondaryAction: null }))?.primaryAction.id, 'team.save')
 })
 
 /** 一份合法的记忆候选卡片；各用例在它之上做单点改动。 */

@@ -122,7 +122,7 @@
 | 专家体系 | 会话级角色绑定 + 三维能力范围（技能/MCP/工具各 inherit/only，全局基线 `capability-defaults.json`，受保护工具始终保留）+ 设置页编辑与会话内草案卡片创建。对方会话无角色化机制；最接近的是子代理定义文件的 tools/mcpServers 裁剪，但那是委派维度不是会话角色 |
 | 技能加载门禁 skill-guard | 登记执行技能 + 必读引用全文核对 + 修改类工具阻断 + 沿用作废规则（版本/技术栈族/分支切换）。对方技能无加载证据核对机制 |
 | 记忆 reinforce 有用性标注 | 模型按真实记录 ID 写标注事件，BM25 排序乘子（封顶 + 时间衰减），清空即回滚。对方记忆无检索排名机制（索引全量载入） |
-| present_card 会话内卡片 | 宿主枚举类型（expert.draft/session.summary）+ 动作白名单（expert.save/copy.text），卡片列候选由用户勾改后经既有通道落地。对方 README 提及 UI Plugin 体系（插件自建页面，仓库 UI_PLUGIN.md 未读），文档站未见等价的「宿主枚举 + 动作白名单」交付卡片 |
+| present_card 会话内卡片 | 宿主枚举类型（expert.draft/team.draft/session.summary/memory.candidates）+ 动作白名单（expert.save/team.save/copy.text/memory.save），卡片列候选由用户勾改后经既有通道落地。对方 README 提及 UI Plugin 体系（插件自建页面，仓库 UI_PLUGIN.md 未读），文档站未见等价的「宿主枚举 + 动作白名单」交付卡片 |
 | 任务工作区隔离与审阅合入 | 独立物理工作树（`.pi/worktrees/<uuid>` + 临时分支）+ 依赖软链接 + 审阅合并（Squash）+ 清理 + 仓库盘点。对方任务绑定 workspace 与分支选择器，无独立 worktree 隔离合入流 |
 | 多格式文档编辑 | DOCX 结构提取与纸张排版预览、Markdown Tiptap 富文本编辑（目录/查找替换/公式/折叠块/图解）、表格排序筛选。对方 PDF 只读、表格仅复制 Markdown/下载 CSV |
 

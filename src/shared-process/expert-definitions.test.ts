@@ -74,15 +74,20 @@ function definition(input: {
   ].join('\n')
 }
 
-/** 内置与自定义两来源各放一份合法专家，技能上下文默认只有 memory 可见。 */
-function createCatalog(temp: TempRoot, userFiles: Readonly<Record<string, string>> = {}): ExpertCatalog {
+/** 内置与自定义两来源各放一份合法专家，技能上下文默认只有 memory 可见；MCP 可用清单缺省不给（按「不知道」跳过判定）。 */
+function createCatalog(
+  temp: TempRoot,
+  userFiles: Readonly<Record<string, string>> = {},
+  availableMcpServers?: readonly string[]
+): ExpertCatalog {
   const builtinPath = writeFile(temp.dir, 'builtin/experts/news-research/expert.md', definition({ id: 'news-research' }))
   for (const [name, text] of Object.entries(userFiles)) writeFile(temp.dir, `user/experts/${name}`, text)
   return loadExpertCatalog({
     builtin: [{ id: 'news-research', filePath: builtinPath }],
     userDirectory: join(temp.dir, 'user', 'experts'),
     availableSkillIds: ['memory'],
-    subAgentOnlySkillIds: ['sub-agent-review']
+    subAgentOnlySkillIds: ['sub-agent-review'],
+    ...(availableMcpServers === undefined ? {} : { availableMcpServers })
   })
 }
 
@@ -260,9 +265,10 @@ test('仅用选中时白名单与外层基线无关，可用集之外的名字�
 test('仅用选中的 MCP 白名单引用了不存在的服务器时只报诊断', () => {
   const temp = createTempRoot('pi-desk-expert-')
   try {
+    // 诊断只在给出可用清单时才判定：夹具必须带上清单，否则实现按「不知道」整段跳过。
     const catalog = createCatalog(temp, {
       'my-expert/expert.md': definition({ id: 'my-expert', mcpMode: 'only', mcpServers: '[filesystem, ghost]' })
-    })
+    }, ['filesystem', 'docs'])
     assert.deepEqual(catalog.experts.map(item => item.id), ['news-research', 'my-expert'])
     assert.deepEqual(catalog.issues.map(item => [item.kind, item.serverName]),
       [['mcp-reference-missing', 'ghost']])

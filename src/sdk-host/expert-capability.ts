@@ -6,13 +6,15 @@
  *
  * 同一份可用集口径还产出「能力候选段」：专家草案卡片要模型给出建议名单，而模型自己可见的技能已按
  * 许可集裁剪，因此候选全集必须单独注入，不能让它把「我看不到」当成「不存在」。
+ * 专家候选段（`readExpertCandidateSection`）同理：团队草案与专家更新按标识引用，
+ * 而标识是主进程分配的，模型无从得知。
  */
 import { readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { agentResourcePath, readAgentResourceBundle } from '../shared-process/agent-resources'
 import { readExpertCapabilityDefaults } from '../shared-process/expert-capability-defaults'
 import {
-  parseExpertDocument, resolveExpertCapabilityScope, skillDirectoryIds
+  builtinExperts, loadExpertCatalog, parseExpertDocument, resolveExpertCapabilityScope, skillDirectoryIds
 } from '../shared-process/expert-definitions'
 import { globalSkillDirectories } from '../shared-process/skill-sources'
 import { PROTECTED_EXPERT_TOOLS } from '../shared/expert-capability'
@@ -129,5 +131,47 @@ export function readCapabilityCandidateSection(input: {
       : input.mcpServerNames.join('、')}`,
     `工具（${bundle.tools.length}，带 * 的为必需）：${bundle.tools
       .map(item => (item.required ? `*${item.name}` : item.name)).join('、')}`
+  ].join('\n')
+}
+
+/** 专家候选段的条数上限：候选只给模型定位引用用，超出按序截断并注明未列全。 */
+const MAX_EXPERT_CANDIDATES = 64
+/** 候选段里单条简介的截断长度：与技能描述同一量级，防止长简介把工具注册段撑爆。 */
+const MAX_EXPERT_CANDIDATE_SUMMARY = 80
+
+/**
+ * 拼出随 `present_card` 注册的专家候选段：团队草案按标识引用团长与成员，
+ * 专家更新按标识定位目标，而标识是主进程分配的序号，模型自己无从得知，必须随工具注入。
+ * 清单与设置页同源（内置 + 产品 agent 目录自定义）；只给标识、名称、简介与来源标记，不带正文。
+ */
+export function readExpertCandidateSection(input: {
+  readonly resourcesDirectory: string
+  readonly agentDir: string
+  readonly sharedAgentDir: string
+}): string {
+  const bundle = readAgentResourceBundle(input.resourcesDirectory)
+  const catalog = loadExpertCatalog({
+    builtin: builtinExperts(bundle),
+    userDirectory: join(input.agentDir, 'experts'),
+    availableSkillIds: [
+      ...bundle.skills.filter(item => !item.subAgentOnly).map(item => item.id),
+      ...globalSkillDirectories({ agentDir: input.agentDir, sharedAgentDir: input.sharedAgentDir })
+        .flatMap(directory => skillDirectoryIds(directory))
+    ],
+    subAgentOnlySkillIds: bundle.skills.filter(item => item.subAgentOnly).map(item => item.id)
+  })
+  const truncated = catalog.experts.length > MAX_EXPERT_CANDIDATES
+  const experts = truncated ? catalog.experts.slice(0, MAX_EXPERT_CANDIDATES) : catalog.experts
+  return [
+    `专家候选（团队草案按这些标识引用团长与成员，更新专家按这些标识定位目标；${experts.length} 项`
+      + `${truncated ? '，清单未列全' : ''}）：`,
+    ...experts.map(item => {
+      const summary = item.summary.replace(/\s+/g, ' ').trim()
+      const clipped = summary.length > MAX_EXPERT_CANDIDATE_SUMMARY
+        ? `${summary.slice(0, MAX_EXPERT_CANDIDATE_SUMMARY)}…`
+        : summary
+      const source = item.source === 'builtin' ? '内置' : '自定义'
+      return clipped === '' ? `- ${item.id}（${source}）${item.displayName}` : `- ${item.id}（${source}）${item.displayName}：${clipped}`
+    })
   ].join('\n')
 }

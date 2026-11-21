@@ -89,12 +89,13 @@ test('与共享用户级目录同路径的 .agents/skills 被排除', () => {
   try {
     const home = join(root.dir, 'home')
     const cwd = join(home, 'project')
-    createSkill(join(home, '.agents', 'skills'), 'user-skill')
+    const sharedAgentDir = join(home, '.agents')
+    createSkill(join(sharedAgentDir, 'skills'), 'user-skill')
     createSkill(join(cwd, '.agents', 'skills'), 'project-skill')
     mkdirSync(join(home, '.git'), { recursive: true })
 
-    // 共享目录就指在 home，home/.agents/skills 已在全局来源里，项目侧不再重复。
-    assert.deepEqual(projectSkillDirectories({ cwd, sharedAgentDir: home }), [
+    // 共享 agent 目录在 home/.agents，它的 skills 就是全局用户级来源；祖先扫描撞到同一路径时排除，不再重复装配。
+    assert.deepEqual(projectSkillDirectories({ cwd, sharedAgentDir }), [
       join(cwd, '.agents', 'skills')
     ])
   } finally {
