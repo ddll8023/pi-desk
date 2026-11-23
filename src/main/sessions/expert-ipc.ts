@@ -1,6 +1,7 @@
 /**
- * 专家资源管理的 IPC：派生内置专家、读取与保存自定义专家、删除自定义专家、读取快速模式剔除清单，
- * 以及能力候选读取与默认能力基线保存。只写 <agentDir> 下的 experts/ 与基线文件，不碰随包目录。
+ * 专家资源管理的 IPC：派生内置专家、读取与保存专家定义（含以覆盖方式修改内置专家）、
+ * 删除自定义专家与覆盖定义、读取快速模式剔除清单，以及能力候选读取与默认能力基线保存。
+ * 只写 <agentDir> 下的 experts/ 与基线文件，不碰随包目录。
  */
 
 import type { IpcMainInvokeEvent } from 'electron'
@@ -62,7 +63,7 @@ export function registerExpertHandlers(pageUrl: string): void {
     }
   )
 
-  /** 删除：只对自定义专家生效；目录里还有别的文件时拒绝，不替用户清素材。 */
+  /** 删除：只删自定义目录里的定义（删掉覆盖项即恢复内置默认）；目录里还有别的文件时拒绝，不替用户清素材。 */
   handle(
     EXPERTS_DELETE_CHANNEL,
     (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<ExpertDeleteResult> => {
@@ -76,7 +77,7 @@ export function registerExpertHandlers(pageUrl: string): void {
     }
   )
 
-  /** 读取：只返回自定义专家的声明与正文；内置专家请走派生，不在这里开放编辑。 */
+  /** 读取：自定义定义优先，没有时回落到同标识的内置定义，供设置页直接编辑内置专家。 */
   handle(
     EXPERTS_READ_CHANNEL,
     (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<ExpertReadResult> => {
@@ -86,7 +87,11 @@ export function registerExpertHandlers(pageUrl: string): void {
       if (args.length !== 1 || !isExpertReadRequest(args[0])) {
         return Promise.resolve({ ok: false, error: { code: 'INVALID_REQUEST', message: '读取请求只接受一个专家标识。' } })
       }
-      return Promise.resolve(readUserExpertDefinition({ agentDir: getPiAgentDir(), expertId: args[0].expertId }))
+      return Promise.resolve(readUserExpertDefinition({
+        resourcesDirectory: productResourcesDirectory(),
+        agentDir: getPiAgentDir(),
+        expertId: args[0].expertId
+      }))
     }
   )
 
@@ -117,6 +122,7 @@ export function registerExpertHandlers(pageUrl: string): void {
         })
       }
       return Promise.resolve(saveUserExpertDefinition({
+        resourcesDirectory: productResourcesDirectory(),
         agentDir: getPiAgentDir(),
         expertId: request.expertId,
         displayName: request.displayName,

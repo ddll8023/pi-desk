@@ -50,7 +50,7 @@ interface CardParams {
   readonly tool_ids?: readonly string[]
   /** 写入范围：项目内相对路径，目录以 `/` 结尾；省略时保存为只读。更新模式下页面按当前定义回填，此项不参与更新。 */
   readonly write_scope?: readonly string[]
-  /** 更新模式的目标专家：给了即更新该自定义专家而不是新建；内置专家只读，页面会拒绝。 */
+  /** 更新模式的目标专家：给了即更新该专家的定义而不是新建；内置专家写成同标识的覆盖定义。 */
   readonly expert_id?: string
   /** 团队草案的团长：专家候选段里的标识；更新团队时由 team_id 携带目标，团长仍必填。 */
   readonly lead_expert_id?: string
@@ -220,12 +220,12 @@ export function createPresentCardExtension(capabilityCandidates: string, expertC
       name: TOOL_NAME,
       label: '会话内卡片',
       description: '把需要用户点一下才落地或需要一键操作的成果做成一张固定外壳卡片：只提交卡片类型、纯文本字段与动作 ID，界面按随包枚举渲染，不接受布局与样式描述。'
-        + '卡片上的按钮由产品已登记的动作执行：专家定义草案保存或更新自定义专家，团队草案保存或更新自定义团队，交付汇总是只读文件清单（复制与逐行定位），记忆候选由用户勾选并编辑后写入记忆库。',
+        + '卡片上的按钮由产品已登记的动作执行：专家定义草案保存或更新专家定义（内置专家保存为覆盖定义），团队草案保存或更新自定义团队，交付汇总是只读文件清单（复制与逐行定位），记忆候选由用户勾选并编辑后写入记忆库。',
       promptSnippet: '把成果做成带按钮的卡片（保存、复制或定位）',
       promptGuidelines: [
         '只在成果需要用户点一下才落地或需要一键操作时使用（专家定义草案、团队草案、会话交付汇总、记忆候选）：普通说明、进度汇报与追问继续用文本。',
         'card_type 目前有 expert.draft（专家定义草案）、team.draft（团队草案）、session.summary（会话交付汇总）与 memory.candidates（记忆候选）。专家草案必须有 title、subtitle 与 body；fields 只放需要展示的说明行，不放正文。',
-        '更新已有专家时仍在 expert.draft 里带 expert_id（取专家候选段里的自定义专家标识）：卡片会回填当前定义，你只给要改的字段，缺省的 subtitle／body 由回填补齐；内置专家只读，不能作为更新目标。新建时不要带 expert_id。',
+        '更新已有专家时仍在 expert.draft 里带 expert_id（取专家候选段里的标识）：卡片会回填当前定义，你只给要改的字段，缺省的 subtitle／body 由回填补齐；内置专家也可以作为更新目标——保存会生成一份同标识的覆盖定义，随包文件不变，用户要退回内置版本时提示他在设置页点「恢复默认」。新建时不要带 expert_id。',
         'team.draft 用在用户要把几位专家组成一个团时：title 为团队显示名称、subtitle 为一句话简介、body 为协作约定正文（不进入系统提示，只供查看与编辑）；lead_expert_id 与 member_expert_ids 只能引用专家候选段里的标识，成员至少一名且不得包含团长——团长不生产，开团后只验收与派活；更新团队带 team_id，主按钮只能 team.save。',
         expertCandidates,
         'session.summary 用在一轮有文件产出之后：changed_files／deleted_files／affected_files 只给项目内相对路径（用 / 分隔，不用绝对路径，不写目录），三组至少一个文件；删除的文件照实提交，定位时会提示已不存在。',
@@ -236,7 +236,7 @@ export function createPresentCardExtension(capabilityCandidates: string, expertC
         capabilityCandidates,
         '只能引用当前候选里存在的技能，不得引用 sub-agent- 开头的子代理专用技能；仅用选中时技能名单不能为空。',
         '工具范围里技能门禁、待办清单与记忆工具属于必需项，不得建议排除；要授予委派能力就勾上 delegate_subagent。',
-        '动作只能取白名单 ID：expert.save 保存或更新自定义专家，team.save 保存或更新自定义团队，copy.text 复制正文到剪贴板，memory.save 写入勾选的记忆候选；不要按文案自行发明动作，也不要声称按钮会执行未登记的操作。',
+        '动作只能取白名单 ID：expert.save 保存或更新专家定义（内置专家保存为覆盖定义），team.save 保存或更新自定义团队，copy.text 复制正文到剪贴板，memory.save 写入勾选的记忆候选；不要按文案自行发明动作，也不要声称按钮会执行未登记的操作。',
         'body 不进入工具结果文本，长正文不受上下文成本影响，但仍受长度上限约束；超过上限整张卡片会被拒绝而不是截断。',
         '不要用它提交代码、命令、凭据或链接：卡片只承载纯文本与已登记动作。',
         '卡片放出去后等用户点击即可，不要再把同一份正文重复输出成对话文本。'
@@ -277,7 +277,7 @@ export function createPresentCardExtension(capabilityCandidates: string, expertC
             description: `项目内相对路径，目录以 / 结尾，最多 ${MAX_EXPERT_WRITE_SCOPE_ITEMS} 项；`
               + '省略时保存为只读（不许写入）；更新模式下页面按当前定义回填，此项不参与更新。不要写绝对路径、盘符或 ..' })),
         expert_id: Type.Optional(Type.String({ minLength: 1, maxLength: 64,
-          description: '更新模式的目标专家标识（取专家候选段）：给了即更新该自定义专家而不是新建，缺省的 subtitle／body 由页面回填；仅 expert.draft 使用' })),
+          description: '更新模式的目标专家标识（取专家候选段）：给了即更新该专家的定义而不是新建，内置专家写成同标识的覆盖定义，缺省的 subtitle／body 由页面回填；仅 expert.draft 使用' })),
         lead_expert_id: Type.Optional(Type.String({ minLength: 1, maxLength: 64,
           description: '团队草案的团长标识（取专家候选段）；仅 team.draft 使用' })),
         member_expert_ids: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 64 }),

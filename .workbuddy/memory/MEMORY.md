@@ -31,3 +31,13 @@
 - 契约层已无 `ToolExecution.ui`/`latestRevision`、`SessionActivity.genui`/`genuiCount`、`SessionTarget.genui`、`desktop-config.json` 的 `genuiEnabled`。旧会话里的界面工具结果仍在 JSONL 中，只按普通工具卡片展示。
 - **检索教训**：本机 BSD grep 不支持 `\|` 交替与 `\b`，带这些的模式会静默返回空、被误判成“已清理干净”。本仓检索一律用 `grep -F` 或 `grep -E`。
 
+## 专家：内置可覆盖，不再只读（现状基线，2026-11-23）
+
+**结论：内置专家可改，改动落在 `<agentDir>/experts/<同标识>/expert.md` 的覆盖定义上；随包目录始终只读。** 不要再按「内置只读、只能派生副本」回答或实现。
+
+- 判定口径：自定义定义 id 与内置相同 = 覆盖（`overridesBuiltin: true`，原位替换、不报 `id-conflict`）；`id-conflict` 只剩「随包清单内两个条目同标识」。
+- 覆盖定义损坏（缺声明段、正文为空、标识与目录不一致）时保留内置条目并报 `definition-invalid`，不接管。
+- 「恢复默认」= 删除覆盖文件，没有单独的恢复通道；派生副本（`<id>-copy`）仍是另一条独立起点，两者并存。
+- 只读的是随包目录，不是内置专家这个概念。打包后 `resources/` 不可写，所以覆盖是唯一可行路径——不要改成原地写内置文件。
+
+

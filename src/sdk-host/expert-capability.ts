@@ -170,7 +170,8 @@ export function readExpertCandidateSection(input: {
       const clipped = summary.length > MAX_EXPERT_CANDIDATE_SUMMARY
         ? `${summary.slice(0, MAX_EXPERT_CANDIDATE_SUMMARY)}…`
         : summary
-      const source = item.source === 'builtin' ? '内置' : '自定义'
+      // 覆盖项单独标一手：它确实是自定义定义，但改动的是内置那一份，模型据此知道该不该再新建。
+      const source = item.source === 'builtin' ? '内置' : item.overridesBuiltin ? '覆盖内置' : '自定义'
       return clipped === '' ? `- ${item.id}（${source}）${item.displayName}` : `- ${item.id}（${source}）${item.displayName}：${clipped}`
     })
   ].join('\n')

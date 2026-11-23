@@ -1,8 +1,10 @@
 /**
- * 专家定义的写操作：把内置专家复制成本地可编辑的派生副本，读取与保存自定义专家定义，删除自定义专家。
+ * 专家定义的写操作：派生内置专家副本、读取与保存专家定义（含覆盖内置的写盘）、删除自定义专家与覆盖定义。
  *
  * 写入面只到 `<agentDir>/experts/<id>/expert.md`：标识先过格式校验（不含分隔符，拼接无法逃逸），
- * 目标再复核必须落在 experts 根下的一级目录。内置专家在随包目录里只读，这里既不覆盖也不删除。
+ * 目标再复核必须落在 experts 根下的一级目录。内置专家在随包目录里只读，这里既不覆盖也不删除；
+ * 要让内置专家生效改动，只能以同标识写一份自定义定义去覆盖它——读取时以随包定义为底回填，
+ * 保存时以内置的声明段起稿，只补本模块认识的字段，随包文件全程不动。
  * 派生只复制正文并补 `derivedFrom`，此后副本自行演进，不跟随内置升级；
  * 保存保留声明段里本模块不认识的字段，避免把用户手写的说明洗掉。
  * 能力范围字段只在非默认值时写入：继承模式与空加减项不落行，文件保持可读，也不把当时清单固化成白名单。
@@ -67,7 +69,20 @@ function userExpertDirectory(agentDir: string, expertId: string): string {
   return join(agentDir, 'experts', expertId)
 }
 
-/** 挑一个没被占用的副本标识：内置与已有自定义目录都算占用，避免派生后立刻变成 id-conflict。 */
+/**
+ * 内置专家定义路径：清单缺失或条目不存在时返回 null，由调用方按「没有这份内置」处理。
+ * 覆盖编辑的第一步就是找它——没有内置定义可继承时，同标识的自定义目录不构成覆盖。
+ */
+function builtinDefinitionPath(resourcesDirectory: string, expertId: string): string | null {
+  try {
+    const bundle = readAgentResourceBundle(resourcesDirectory)
+    return builtinExperts(bundle).find(item => item.id === expertId)?.filePath ?? null
+  } catch {
+    return null
+  }
+}
+
+/** 挑一个没被占用的副本标识：已有自定义目录都算占用，否则派生会覆盖掉别人的定义（同标识即覆盖）。 */
 function nextDerivedId(input: { readonly agentDir: string; readonly takenIds: ReadonlySet<string>; readonly builtinId: string }): string {
   const base = `${input.builtinId}${DERIVE_SUFFIX}`
   let candidate = base
@@ -152,25 +167,44 @@ export function deleteUserExpert(input: { readonly agentDir: string; readonly ex
 }
 
 /**
- * 读取一份自定义专家的声明与正文，供设置页编辑。
+ * 读取一份专家的声明与正文，供设置页编辑。
+ * 自定义目录里没有时回落到同标识的内置定义：设置页打开内置专家时看到的就是随包版本，
+ * 保存后再按覆盖处理，用户不必先派生一份副本才知道要改什么。
  * 读不到按不存在处理；正文为空仍返回，让用户能在界面里补上而不是只能手工改文件。
  */
 export function readUserExpertDefinition(input: {
+  readonly resourcesDirectory: string
   readonly agentDir: string
   readonly expertId: string
 }): ExpertReadResult {
   if (!isExpertDefinitionId(input.expertId)) return failure('INVALID_REQUEST', '专家标识写法不合法。')
-  const filePath = join(userExpertDirectory(input.agentDir, input.expertId), EXPERT_DEFINITION_FILE)
-  let text: string
+  const userPath = join(userExpertDirectory(input.agentDir, input.expertId), EXPERT_DEFINITION_FILE)
+  let text: string | null = null
   try {
-    const info = statSync(filePath)
-    if (!info.isFile()) return failure('NOT_FOUND', '没有找到这份自定义专家；内置专家不能在这里编辑。')
-    if (info.size > EXPERT_LIMITS.definitionBytes) {
-      return failure('INVALID_DEFINITION', '定义文件超出体积上限，请先手工精简再回来编辑。')
+    const info = statSync(userPath)
+    if (info.isFile()) {
+      // 存在但超限是被写坏的文件，不能静默退回内置：那会让用户以为改动生效了。
+      if (info.size > EXPERT_LIMITS.definitionBytes) {
+        return failure('INVALID_DEFINITION', '定义文件超出体积上限，请先手工精简再回来编辑。')
+      }
+      text = readFileSync(userPath, 'utf8')
     }
-    text = readFileSync(filePath, 'utf8')
   } catch {
-    return failure('NOT_FOUND', '没有找到这份自定义专家；内置专家不能在这里编辑。')
+    text = null
+  }
+  // 自定义定义不存在（或不可读）时才看内置：覆盖定义始终优先，与清单合并同一优先级。
+  if (text === null) {
+    const builtinPath = builtinDefinitionPath(input.resourcesDirectory, input.expertId)
+    if (builtinPath === null) return failure('NOT_FOUND', '没有找到这份专家定义；内置与自定义目录里都没有它。')
+    try {
+      const info = statSync(builtinPath)
+      if (!info.isFile() || info.size > EXPERT_LIMITS.definitionBytes) {
+        return failure('INVALID_DEFINITION', '内置定义文件超出体积上限，请先精简随包定义。')
+      }
+      text = readFileSync(builtinPath, 'utf8')
+    } catch {
+      return failure('NOT_FOUND', '内置定义读取失败，检查随包资源是否完整。')
+    }
   }
   const document = parseExpertDocument(text)
   if (document === null) {
@@ -284,11 +318,14 @@ function dedupe(ids: readonly string[]): string[] {
 
 /**
  * 新建或保存一份自定义专家：新建由主进程分配标识，保存只改声明字段与正文。
+ * 保存内置专家标识时不报错：同标识没有自定义定义时以随包定义为底创建覆盖项，
+ * 随包文件仍是只读的，界面上这一项从「内置」变成「覆盖内置」。
  * 拒绝落盘的条件都是写入前就能判定的（字段为空、写法不合法、引用子代理专用技能、超出体积、
  * 技能白名单为空）；引用了当前不可见的技能与服务器、正文超长只回报，不拦——
  * 用户可能先写引用、后补技能，拦下来会让编辑无法保存。
  */
 export function saveUserExpertDefinition(input: ExpertCapabilityFields & {
+  readonly resourcesDirectory: string
   readonly agentDir: string
   readonly expertId: string | null
   readonly displayName: string
@@ -353,7 +390,7 @@ export function saveUserExpertDefinition(input: ExpertCapabilityFields & {
   const filePath = join(directory, EXPERT_DEFINITION_FILE)
   let headerLines: readonly string[] = []
   if (input.expertId !== null) {
-    let existingText: string
+    let existingText: string | null = null
     try {
       // 与删除同一口径：符号链接与非常规目录不当作自定义专家，避免写盘顺着链接逸出 experts 根。
       const info = statSync(directory)
@@ -362,7 +399,19 @@ export function saveUserExpertDefinition(input: ExpertCapabilityFields & {
       }
       existingText = readFileSync(filePath, 'utf8')
     } catch {
-      return failure('NOT_FOUND', '没有找到这份自定义专家；内置专家不能在这里编辑。')
+      existingText = null
+    }
+    if (existingText === null) {
+      // 同标识还没有自定义定义：以内置定义为底写一份覆盖项，随包文件不动。
+      const builtinPath = builtinDefinitionPath(input.resourcesDirectory, expertId)
+      if (builtinPath === null) {
+        return failure('NOT_FOUND', '没有找到这份专家定义；内置与自定义目录里都没有它。')
+      }
+      try {
+        existingText = readFileSync(builtinPath, 'utf8')
+      } catch {
+        return failure('INTERNAL_ERROR', '内置定义读取失败，无法以它为底创建覆盖定义。')
+      }
     }
     // 声明段损坏时按空头部重建：用户正是来修定义的，拦下来只会让文件永远改不动。
     headerLines = splitDocument(existingText)?.headerLines ?? []

@@ -1,8 +1,9 @@
 /**
  * 专家资源管理（设置页）的固定通道、请求与结果类型及跨进程响应校验。
  *
- * 管六件事：「把内置专家派生成本地可编辑副本」「读取与保存自定义专家定义」「删除自定义专家」
- * 「快速模式会剔除哪些用户级技能」「能力候选（技能、全局 MCP 服务器、工具）」「默认能力基线」；
+ * 管六件事：「把内置专家派生成本地可编辑副本」「读取与保存专家定义（含覆盖内置）」
+ * 「删除自定义专家或覆盖定义」「快速模式会剔除哪些用户级技能」
+ * 「能力候选（技能、全局 MCP 服务器、工具）」「默认能力基线」；
  * 专家清单与加载诊断复用会话域的 `desktop:session-experts`，不在这里复制第二份读取。
  * 错误码独立成族：写盘失败、定义不合法与清单读取失败是不同故障，页面据此分开提示。
  */
@@ -15,11 +16,11 @@ export type { ExpertCapabilityDefaults }
 
 /** 把内置专家复制成自定义目录下的派生副本；副本立即出现在清单里。 */
 export const EXPERTS_DERIVE_CHANNEL = 'desktop:expert-derive'
-/** 删除一份自定义专家；内置专家只读，不能通过这条通道删除。 */
+/** 删除一份自定义专家定义；删掉覆盖内置的那一份即恢复默认，随包文件不受影响。 */
 export const EXPERTS_DELETE_CHANNEL = 'desktop:expert-delete'
-/** 读取一份自定义专家的声明与正文，供设置页编辑；内置专家不走这条通道。 */
+/** 读取一份专家的声明与正文，供设置页编辑；自定义定义优先，没有时回落到同标识的内置定义。 */
 export const EXPERTS_READ_CHANNEL = 'desktop:expert-read'
-/** 新建或保存一份自定义专家定义；`expertId` 为空表示新建，由主进程分配标识。 */
+/** 新建或保存一份专家定义；`expertId` 为空表示新建，与内置同标识时写一份覆盖定义。 */
 export const EXPERTS_SAVE_CHANNEL = 'desktop:expert-save'
 /** 快速模式下会被剔除的用户级技能标识；名单与宿主实际过滤同源。 */
 export const EXPERTS_FAST_MODE_CHANNEL = 'desktop:expert-fast-mode'
@@ -110,7 +111,7 @@ export type FastModeExclusionsResult =
   | { readonly ok: true; readonly data: { readonly skillIds: readonly string[] } }
   | { readonly ok: false; readonly error: ExpertError }
 
-/** 编辑对话框需要的一份自定义专家：声明字段与正文一起返回，只在设置页使用。 */
+/** 编辑对话框需要的一份专家定义：声明字段与正文一起返回，只在设置页使用；自定义定义优先，回落到内置时形状相同。 */
 export interface ExpertEditableDefinition extends ExpertCapabilityFields {
   readonly id: string
   readonly displayName: string
@@ -131,8 +132,8 @@ export type ExpertReadResult =
   | { readonly ok: false; readonly error: ExpertError }
 
 /**
- * 保存请求：`expertId` 为 `null` 表示新建（标识由主进程分配），否则更新该自定义专家。
- * 能力字段语义见 `ExpertCapabilityFields`；不可用引用由主进程在结果里回报，不拦保存。
+ * 保存请求：`expertId` 为 `null` 表示新建（标识由主进程分配），否则更新该标识的专家定义，
+ * 与内置同标识时写成一份覆盖定义。能力字段语义见 `ExpertCapabilityFields`；不可用引用由主进程在结果里回报，不拦保存。
  */
 export interface ExpertSaveRequest extends ExpertCapabilityFields {
   readonly expertId: string | null
@@ -175,11 +176,11 @@ export type ExpertSaveDefaultsResult =
 export interface ExpertApi {
   /** 派生一份内置专家；返回新副本的标识，同名占用时由主进程顺延编号。 */
   readonly deriveExpert: (request: ExpertDeriveRequest) => Promise<ExpertDeriveResult>
-  /** 删除一份自定义专家；内置专家与仍带其他文件的目录会被拒绝。 */
+  /** 删除一份自定义专家；覆盖项删除即恢复内置默认，随包定义与仍带其他文件的目录会被拒绝。 */
   readonly deleteExpert: (request: ExpertDeleteRequest) => Promise<ExpertDeleteResult>
-  /** 读取一份自定义专家的声明与正文，供编辑对话框回填。 */
+  /** 读取一份专家定义的声明与正文，供编辑对话框回填；自定义定义优先，没有时回落到同标识的内置定义。 */
   readonly readExpertDefinition: (request: ExpertReadRequest) => Promise<ExpertReadResult>
-  /** 新建或保存自定义专家；保存成功后定义立即出现在清单里。 */
+  /** 新建或保存专家定义（内置标识写成覆盖定义）；保存成功后清单立即反映结果。 */
   readonly saveExpert: (request: ExpertSaveRequest) => Promise<ExpertSaveResult>
   /** 读取快速模式会剔除的用户级技能；只反映目录里实际存在的那些，可以为空。 */
   readonly listFastModeExclusions: () => Promise<FastModeExclusionsResult>

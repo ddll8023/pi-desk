@@ -285,6 +285,8 @@ export interface SessionExpertView extends ExpertCapabilityFields {
   readonly source: 'builtin' | 'user'
   /** 派生副本的来源内置标识；手写自定义专家为 null，设置页据此标「派生自 X」。 */
   readonly derivedFrom: string | null
+  /** 该自定义定义覆盖了同标识的内置专家：随包文件仍只读，生效的是自定义目录里这一份。 */
+  readonly overridesBuiltin: boolean
   /** 正文超过注入上限时会被截断；页面据此提示用户定义没完整生效。 */
   readonly truncated: boolean
   readonly skillIds: readonly string[]
@@ -429,6 +431,7 @@ function isSessionExpertView(value: unknown): value is SessionExpertView {
     && typeof value.summary === 'string'
     && (value.source === 'builtin' || value.source === 'user')
     && (value.derivedFrom === null || isExpertId(value.derivedFrom))
+    && typeof value.overridesBuiltin === 'boolean'
     && typeof value.truncated === 'boolean'
     && referencesOk(value.skillIds)
     && referencesOk(value.unavailableSkillIds)

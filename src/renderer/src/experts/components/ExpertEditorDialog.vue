@@ -1,5 +1,8 @@
 <!--
-  专家编辑对话框：新建或修改一份自定义专家（身份、能力范围、正文）。
+  专家编辑对话框：新建或修改一份专家定义（身份、能力范围、正文）。
+
+  内置专家也能在这里改：保存不会写随包目录，而是在自定义目录生成一份同标识的覆盖定义，
+  页面在标题下说清这一点，避免用户以为改动进了产品资源。
 
   表单由本对话框持有，保存交给专家 store：成功后由 store 关闭并重读清单，失败时保留已填内容并就地展示原因。
   能力范围分技能、MCP 与工具三个维度，各有「继承默认」与「仅用选中」两种口径；继承时只记录相对默认基线的增减，
@@ -81,6 +84,11 @@ const saveError = ref<string | null>(null)
 
 const editing = computed(() => props.expertId !== null)
 const title = computed(() => (editing.value ? '编辑专家' : '新建专家'))
+/** 编辑目标在内置来源下的两种状态：未覆盖过（保存将新建覆盖）与已覆盖（保存改现有覆盖）。 */
+const editingBuiltin = computed(() => props.expertId !== null
+  && store.experts.find(item => item.id === props.expertId)?.source === 'builtin')
+const editingOverride = computed(() => props.expertId !== null
+  && store.experts.find(item => item.id === props.expertId)?.overridesBuiltin === true)
 const saving = computed(() => store.saving)
 const capabilityError = computed(() => store.capabilitiesError)
 const capabilityReady = computed(() => store.capabilities !== null)
@@ -444,6 +452,12 @@ function onKeydown(event: KeyboardEvent): void {
                 <h2 :id="titleId" class="dialog-title">{{ title }}</h2>
                 <p class="dialog-subtitle">
                   名称、能力范围与正文可以改；标识创建后不可修改。
+                </p>
+                <p v-if="editingBuiltin" class="mt-1 text-2xs text-desk-warning">
+                  这是内置专家：保存会生成一份覆盖定义，随包内置文件保持只读；要退回内置版本，在列表里点「恢复默认」。
+                </p>
+                <p v-else-if="editingOverride" class="mt-1 text-2xs text-desk-muted">
+                  这份定义覆盖了内置专家；在列表里点「恢复默认」可回到随包版本。
                 </p>
               </div>
             </div>

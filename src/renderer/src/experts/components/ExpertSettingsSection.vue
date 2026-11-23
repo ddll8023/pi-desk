@@ -6,6 +6,8 @@
   列表按类型分段筛选（全部 / 专家 / 专家团），筛选只裁剪列表，不改变页面骨架：
   分段、创建动作、默认能力与加载诊断始终在位，切换时不会像换了一个页面。
   行模板只有一份：专家与专家团的差异全部收敛到行内徽标与动作集合，来源（内置 / 自定义）不再靠分组标题表达。
+  内置专家可直接编辑：保存写入自定义目录的同标识覆盖定义，随包文件仍只读，行内标「覆盖内置」，
+  「恢复默认」即删掉覆盖、回到内置版本；派生副本仍然是另一条独立起点（新标识、独立演进）。
   顶部「角色资产」卡片承载列表与创建入口，创建动作跟随当前筛选，只出现该类型的主创建动作。
   默认能力与加载诊断是页面级配置，收在页尾的折叠分组里：前者只作用于专家，后者只在有条目时出现。
   团队编辑在对话框里从专家清单勾选团长与成员，不接受手写标识；正文与简介的作用范围在对话框里标注。
@@ -77,6 +79,8 @@ interface AssetRow {
   readonly summary: string
   readonly source: 'builtin' | 'user'
   readonly derivedFrom: string | null
+  /** 覆盖内置的自定义定义：行内标出来，删除动作按「恢复默认」呈现。 */
+  readonly overridesBuiltin: boolean
   readonly chips: readonly AssetChip[]
   /** 需要警示的第二行：不可用技能引用与正文截断。 */
   readonly warning: string | null
@@ -182,6 +186,12 @@ function expertWarning(expert: SessionExpertView): string | null {
 }
 
 function expertRow(expert: SessionExpertView): AssetRow {
+  const chips: AssetChip[] = [
+    { text: capabilitySummary(expert), tone: 'plain' },
+    { text: writeScopeSummary(expert), tone: 'plain' }
+  ]
+  // 覆盖项先说来源：同样是「自定义」，它与手写新专家的区别正是「改的是内置那一份」。
+  if (expert.overridesBuiltin) chips.unshift({ text: '覆盖内置', tone: 'plain' })
   return {
     key: `expert-${expert.id}`,
     kind: 'expert',
@@ -190,10 +200,8 @@ function expertRow(expert: SessionExpertView): AssetRow {
     summary: expert.summary,
     source: expert.source,
     derivedFrom: expert.derivedFrom,
-    chips: [
-      { text: capabilitySummary(expert), tone: 'plain' },
-      { text: writeScopeSummary(expert), tone: 'plain' }
-    ],
+    overridesBuiltin: expert.overridesBuiltin,
+    chips,
     warning: expertWarning(expert)
   }
 }
@@ -207,6 +215,7 @@ function teamRow(team: TeamView): AssetRow {
     summary: team.summary,
     source: team.source,
     derivedFrom: null,
+    overridesBuiltin: false,
     chips: [
       { text: team.ready ? '可开团' : '不可开团', tone: team.ready ? 'plain' : 'warning' },
       { text: `团长 ${expertNameOf(team.leadExpertId)}`, tone: 'plain' },
@@ -333,6 +342,30 @@ const teamsReferencingPending = computed<readonly TeamView[]>(() => {
     || team.memberExpertIds.includes(target.id))
 })
 
+/**
+ * 删除确认文案：覆盖项删掉是「恢复默认」，随包文件本来就没被改过，
+ * 与真删除一份自定义专家的后果不同，两者不能共用一个标题。
+ */
+const deleteConfirm = computed<{ readonly title: string; readonly description: string; readonly detail: string }>(() => {
+  const target = pendingDelete.value
+  if (target === null) return { title: '', description: '', detail: '' }
+  if (target.overridesBuiltin) {
+    return {
+      title: '恢复内置定义',
+      description: `将删除 ${target.displayName} 的覆盖定义，恢复为随包内置版本；已绑定该专家的会话下次打开时按内置正文注入。`,
+      detail: '只删除自定义目录里的 expert.md；随包内置文件从未被修改。'
+    }
+  }
+  const references = teamsReferencingPending.value
+  return {
+    title: '删除自定义专家',
+    description: `将删除 ${target.displayName} 的定义文件，已绑定该专家的会话下次打开时不再注入角色段。`,
+    detail: references.length === 0
+      ? '只会删除该专家目录下的 expert.md；目录里还有别的文件时不会执行删除。'
+      : `有 ${references.length} 个团队引用它（${references.map(team => team.displayName).join('、')}），删掉后这些团队会变成不可开团。只会删除 expert.md；目录里还有别的文件时不会执行删除。`
+  }
+})
+
 /** 行只带标识，删除前回查完整对象：确认框要显示名称与引用它的团队。 */
 function openDeleteExpert(expertId: string): void {
   pendingDelete.value = experts.value.find(item => item.id === expertId) ?? null
@@ -377,6 +410,9 @@ onMounted(() => {
       <h1 class="text-xl font-semibold tracking-tight">专家与专家团</h1>
       <p class="mt-1 text-sm text-desk-muted">
         专家给会话注入一段角色说明与能力范围；专家团把若干专家组成「团长 + 成员」。
+      </p>
+      <p class="mt-1 text-2xs text-desk-muted">
+        内置专家可直接编辑：保存会生成一份覆盖定义，随包文件保持只读；「恢复默认」即回到内置版本。
       </p>
     </header>
 
@@ -497,6 +533,13 @@ onMounted(() => {
               <div class="flex shrink-0 items-center gap-2">
                 <template v-if="row.kind === 'expert'">
                   <AppButton
+                    variant="ghost"
+                    :disabled="busyId !== null"
+                    @click="store.openEdit(row.id)"
+                  >
+                    编辑
+                  </AppButton>
+                  <AppButton
                     v-if="row.source === 'builtin'"
                     variant="ghost"
                     :disabled="busyId !== null"
@@ -504,22 +547,14 @@ onMounted(() => {
                   >
                     {{ busyId === row.id ? '派生中…' : '派生副本' }}
                   </AppButton>
-                  <template v-else>
-                    <AppButton
-                      variant="ghost"
-                      :disabled="busyId !== null"
-                      @click="store.openEdit(row.id)"
-                    >
-                      编辑
-                    </AppButton>
-                    <AppButton
-                      variant="ghost"
-                      :disabled="busyId !== null"
-                      @click="openDeleteExpert(row.id)"
-                    >
-                      {{ busyId === row.id ? '删除中…' : '删除' }}
-                    </AppButton>
-                  </template>
+                  <AppButton
+                    v-if="row.source === 'user'"
+                    variant="ghost"
+                    :disabled="busyId !== null"
+                    @click="openDeleteExpert(row.id)"
+                  >
+                    {{ busyId === row.id ? '处理中…' : row.overridesBuiltin ? '恢复默认' : '删除' }}
+                  </AppButton>
                 </template>
                 <template v-else-if="row.source === 'user'">
                   <AppButton
@@ -589,12 +624,10 @@ onMounted(() => {
 
     <ConfirmDialog
       :open="deleteOpen"
-      title="删除自定义专家"
-      :description="`将删除 ${pendingDelete?.displayName ?? ''} 的定义文件，已绑定该专家的会话下次打开时不再注入角色段。`"
-      :detail="teamsReferencingPending.length === 0
-        ? '只会删除该专家目录下的 expert.md；目录里还有别的文件时不会执行删除。'
-        : `有 ${teamsReferencingPending.length} 个团队引用它（${teamsReferencingPending.map(team => team.displayName).join('、')}），删掉后这些团队会变成不可开团。只会删除 expert.md；目录里还有别的文件时不会执行删除。`"
-      confirm-label="删除"
+      :title="deleteConfirm.title"
+      :description="deleteConfirm.description"
+      :detail="deleteConfirm.detail"
+      :confirm-label="pendingDelete?.overridesBuiltin === true ? '恢复默认' : '删除'"
       :confirm-disabled="busyId !== null"
       @confirm="confirmDelete"
       @cancel="pendingDelete = null"

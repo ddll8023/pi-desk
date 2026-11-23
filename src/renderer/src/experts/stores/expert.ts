@@ -114,9 +114,11 @@ export const useExpertStore = defineStore('experts', () => {
     await load()
   }
 
-  /** 删除：只对自定义专家开放；确认由界面负责，这里只执行。 */
+  /** 删除：对自定义专家即删除定义，对覆盖内置的那一份即恢复默认；确认由界面负责，这里只执行。 */
   async function remove(expertId: string): Promise<void> {
     if (busyId.value !== null) return
+    // 删前先记下它是不是覆盖项：删完清单里就没有这一行了，提示文案只能提前取。
+    const overridden = experts.value.find(item => item.id === expertId)?.overridesBuiltin === true
     busyId.value = expertId
     actionError.value = null
     notice.value = null
@@ -126,7 +128,9 @@ export const useExpertStore = defineStore('experts', () => {
       actionError.value = result.error.message
       return
     }
-    notice.value = `已删除专家 ${expertId}。`
+    notice.value = overridden
+      ? `已删除 ${expertId} 的覆盖定义，恢复为随包内置版本。`
+      : `已删除专家 ${expertId}。`
     await load()
   }
 
@@ -180,12 +184,16 @@ export const useExpertStore = defineStore('experts', () => {
       result.data.unavailableSkillIds.length > 0 ? `技能 ${result.data.unavailableSkillIds.join('、')}` : null,
       result.data.unavailableMcpServers.length > 0 ? `MCP 服务器 ${result.data.unavailableMcpServers.join('、')}` : null
     ].filter((item): item is string => item !== null)
-    notice.value = unavailable.length > 0
-      ? `已保存 ${result.data.expertId}；当前不可用的引用：${unavailable.join('；')}。`
-      : `已保存 ${result.data.expertId}，改完在新建会话生效。`
     editorOpen.value = false
     editingId.value = null
     await load()
+    // 覆盖标记只能从重读后的清单里取：保存前那一行可能还不存在（首次编辑内置专家）。
+    const overrideNote = experts.value.find(item => item.id === result.data.expertId)?.overridesBuiltin === true
+      ? '（覆盖内置定义，随包文件未改动）'
+      : ''
+    notice.value = unavailable.length > 0
+      ? `已保存 ${result.data.expertId}${overrideNote}；当前不可用的引用：${unavailable.join('；')}。`
+      : `已保存 ${result.data.expertId}${overrideNote}，改完在新建会话生效。`
     return result
   }
 

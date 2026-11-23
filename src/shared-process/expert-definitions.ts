@@ -2,6 +2,8 @@
  * 专家定义的解析、双来源合并与结构化诊断。
  *
  * 只读取随包清单给出的内置专家定义，以及产品 agent 目录下的自定义专家，合并成一份可召唤清单；
+ * 自定义定义与内置同标识时按「覆盖内置」处理：随包文件保持只读，改动只落在自定义目录，
+ * 覆盖项损坏时保留内置并报诊断，不让一次写坏把整条能力弄丢。
  * 单个定义损坏、身份冲突或引用了不可用技能时只影响对应条目，不中断整份清单。
  * 本模块不装配会话、不注入系统提示，也不产生任何子代理调用；清单条目到内置入口的映射、技能目录标识列举，以及写回所需的声明解析、标识校验与上限常量都由这里提供，主进程不复制第二份规则。
  * 能力范围（技能、MCP 与工具）的解析与合并也在这里：专家只继承默认基线并做增减，
@@ -58,6 +60,11 @@ export interface ExpertDefinition extends ExpertCapabilityFields {
   readonly filePath: string
   /** 派生副本的来源内置标识；手写自定义专家为 null。只用于追溯与展示，不参与加载判定。 */
   readonly derivedFrom: string | null
+  /**
+   * 该自定义定义覆盖了同标识的内置专家：随包文件仍只读，生效的是自定义目录里这一份。
+   * 界面据此标「覆盖内置」，删除它就等于恢复默认；不参与加载判定（标识相同即覆盖）。
+   */
+  readonly overridesBuiltin: boolean
   /** 引用但不可用的技能：定义本身仍可用，这些引用不生效。 */
   readonly unavailableSkillIds: readonly string[]
   /** 写入范围：`null` 表示不限制，空数组表示只读，否则是允许写入的目录或文件（相对项目根）。 */
@@ -67,7 +74,7 @@ export interface ExpertDefinition extends ExpertCapabilityFields {
 export type ExpertIssueKind =
   /** 定义文件缺失、超限、缺少声明段、正文为空、或声明的标识与目录名不一致。 */
   | 'definition-invalid'
-  /** 自定义专家与内置专家或另一份自定义专家的标识重复；冲突项不进入清单。 */
+  /** 同一来源内标识重复（随包清单里两个条目同标识）；同标识的自定义定义覆盖内置不算冲突。 */
   | 'id-conflict'
   /** 引用的技能在主会话不可见：不存在或未被加载。 */
   | 'skill-reference-missing'
@@ -246,9 +253,11 @@ function readDefinition(input: {
   readonly id: string
   readonly filePath: string
   readonly source: 'builtin' | 'user'
+  /** 同标识的自定义定义覆盖内置时为真；内置条目自身恒为假。 */
+  readonly overridesBuiltin: boolean
   readonly issues: ExpertIssue[]
 }): ReadResult {
-  const { id, filePath, source } = input
+  const { id, filePath, source, overridesBuiltin } = input
   // 目录名即标识：内置入口与自定义目录都按目录名命名，声明与目录不一致说明文件被搬动或复制错位。
   if (!EXPERT_ID.test(id) || basename(dirname(filePath)) !== id) return invalid(id, filePath)
   let text: string
@@ -297,7 +306,7 @@ function readDefinition(input: {
     ok: true,
     definition: {
       id, displayName, summary, skillIds, body: document.body, truncated: document.body.length > MAX_ROLE_CHARS,
-      source, filePath, derivedFrom, unavailableSkillIds: [], writeScope: writeScope.scope,
+      source, filePath, derivedFrom, overridesBuiltin, unavailableSkillIds: [], writeScope: writeScope.scope,
       skillsMode, skillAddIds, skillRemoveIds,
       mcpMode, mcpServerIds, mcpAddIds, mcpRemoveIds,
       toolsMode, toolIds, toolAddIds, toolRemoveIds
@@ -441,11 +450,19 @@ function listUserExpertIds(directory: string): string[] {
   }
 }
 
-/** 合并内置与自定义专家；内置在前，自定义按目录名排序。 */
+/**
+ * 合并内置与自定义专家：内置条目排在前面，覆盖项留在被覆盖的内置原位置，其余自定义定义按目录名追加在后。
+ *
+ * 同标识的自定义定义不报冲突，而是覆盖同名内置条目并原位替换，
+ * 因为随包目录通常不可写，改动只能落在自定义目录，覆盖是唯一可行的「改内置」路径。
+ * 覆盖项损坏时保留内置条目并照常报诊断：坏掉的只是这次改动，不该连带把内置也弄没。
+ */
 export function loadExpertCatalog(input: LoadExpertCatalogInput): ExpertCatalog {
   const issues: ExpertIssue[] = []
   const experts: ExpertDefinition[] = []
   const claimed = new Set<string>()
+  /** 内置标识到清单下标的映射：覆盖项按它原位替换，保持列表顺序稳定。 */
+  const builtinIndex = new Map<string, number>()
 
   for (const item of input.builtin) {
     if (claimed.has(item.id)) {
@@ -453,22 +470,29 @@ export function loadExpertCatalog(input: LoadExpertCatalogInput): ExpertCatalog 
       continue
     }
     claimed.add(item.id)
-    const result = readDefinition({ id: item.id, filePath: item.filePath, source: 'builtin', issues })
+    const result = readDefinition({
+      id: item.id, filePath: item.filePath, source: 'builtin', overridesBuiltin: false, issues
+    })
     if (!result.ok) { issues.push(result.issue); continue }
+    builtinIndex.set(item.id, experts.length)
     experts.push(judgeMcpServers(judgeSkills(result.definition, input, issues), input.availableMcpServers, issues))
   }
 
   for (const id of listUserExpertIds(input.userDirectory)) {
     const filePath = join(input.userDirectory, id, DEFINITION_FILE)
-    // 内置专家只读不可覆盖：同名自定义不进入清单，避免同一标识出现两种行为。
-    if (claimed.has(id)) {
-      issues.push({ kind: 'id-conflict', expertId: id, skillId: null, serverName: null, path: filePath })
+    // 只有内置条目真的进了清单才算覆盖：内置定义本身无效时没有可覆盖的对象，
+    // 这份自定义定义就按普通自定义专家存在，界面不该给它「恢复默认」这种动作。
+    const overridesBuiltin = builtinIndex.has(id)
+    const result = readDefinition({ id, filePath, source: 'user', overridesBuiltin, issues })
+    if (!result.ok) {
+      // 覆盖项无效时内置条目已经就位，这里只补诊断，不再插入一份坏定义。
+      issues.push(result.issue)
       continue
     }
-    claimed.add(id)
-    const result = readDefinition({ id, filePath, source: 'user', issues })
-    if (!result.ok) { issues.push(result.issue); continue }
-    experts.push(judgeMcpServers(judgeSkills(result.definition, input, issues), input.availableMcpServers, issues))
+    const judged = judgeMcpServers(judgeSkills(result.definition, input, issues), input.availableMcpServers, issues)
+    const index = builtinIndex.get(id)
+    if (index === undefined) experts.push(judged)
+    else experts[index] = judged
   }
 
   return { experts, issues }

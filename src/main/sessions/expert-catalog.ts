@@ -1,6 +1,6 @@
 /**
- * 专家清单与设置页辅助读取：合并随包清单的内置专家与产品 agent 目录下的自定义专家，
- * 产出选择器可用的视图与加载诊断，并回答「快速模式会剔除哪些用户级技能」。
+ * 专家清单与设置页辅助读取：合并随包清单的内置专家与产品 agent 目录下的自定义专家
+ * （同标识时自定义定义覆盖内置），产出选择器可用的视图与加载诊断，并回答「快速模式会剔除哪些用户级技能」。
  *
  * 只读：不启动 SDK 宿主、不打开会话、不写任何文件；技能可见集取「随包非子代理专用技能 +
  * 全局技能目录（产品 agent 目录与共享目录）」，缺失的技能引用只体现在诊断里，不让整份清单失败。
@@ -31,6 +31,7 @@ function toView(definition: ExpertDefinition): SessionExpertView {
     summary: definition.summary,
     source: definition.source,
     derivedFrom: definition.derivedFrom,
+    overridesBuiltin: definition.overridesBuiltin,
     truncated: definition.truncated,
     skillIds: definition.skillIds,
     unavailableSkillIds: definition.unavailableSkillIds,

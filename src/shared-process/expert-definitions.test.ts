@@ -124,14 +124,35 @@ test('声明标识与目录名不一致、正文为空都按无效定义处理',
   }
 })
 
-test('自定义与内置同标识时冲突，内置不被覆盖', () => {
+test('自定义与内置同标识时覆盖内置，原位替换并标记来源', () => {
   const temp = createTempRoot('pi-desk-expert-')
   try {
     const catalog = createCatalog(temp, {
-      'news-research/expert.md': definition({ id: 'news-research', displayName: '同名自定义' })
+      'news-research/expert.md': definition({
+        id: 'news-research', displayName: '同名自定义', body: '# 覆盖\n\n## 工作流程\n\n1. 改过。'
+      })
     })
-    assert.deepEqual(catalog.experts.map(item => [item.id, item.source]), [['news-research', 'builtin']])
-    assert.deepEqual(catalog.issues.map(item => item.kind), ['id-conflict'])
+    // 覆盖保持内置的位置与顺序，来源变自定义并带覆盖标记；同标识不再算冲突。
+    assert.deepEqual(catalog.experts.map(item => [item.id, item.source, item.overridesBuiltin]),
+      [['news-research', 'user', true]])
+    assert.equal(catalog.experts[0]?.displayName, '同名自定义')
+    assert.deepEqual(catalog.issues, [])
+  } finally {
+    temp.cleanup()
+  }
+})
+
+test('覆盖定义损坏时保留内置并报诊断', () => {
+  const temp = createTempRoot('pi-desk-expert-')
+  try {
+    // 声明标识与目录名不一致：这次改动无效，但内置条目不能跟着消失。
+    const catalog = createCatalog(temp, {
+      'news-research/expert.md': definition({ id: 'news-research', name: 'renamed' })
+    })
+    assert.deepEqual(catalog.experts.map(item => [item.id, item.source, item.overridesBuiltin]),
+      [['news-research', 'builtin', false]])
+    assert.deepEqual(catalog.issues.map(item => [item.kind, item.expertId]),
+      [['definition-invalid', 'news-research']])
   } finally {
     temp.cleanup()
   }
@@ -214,6 +235,7 @@ function capabilityDefinition(overrides: Partial<ExpertDefinition> = {}): Expert
     source: 'user',
     filePath: '/tmp/my-expert/expert.md',
     derivedFrom: null,
+    overridesBuiltin: false,
     unavailableSkillIds: [],
     ...overrides
   }
