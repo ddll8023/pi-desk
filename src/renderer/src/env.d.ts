@@ -23,6 +23,7 @@ import type { LanRemoteApi } from '../../shared/lan-remote-api'
 import type { MemoryApi } from '../../shared/memory-api'
 import type { UsageStatsApi } from '../../shared/usage-stats-api'
 import type { AgentHomeApi } from '../../shared/agent-home-api'
+import type { PluginApi } from '../../shared/plugin-api'
 import type { ExpertApi } from '../../shared/experts-api'
 import type { TeamApi } from '../../shared/teams-api'
 import type { TeamSessionApi } from '../../shared/team-session-api'
@@ -31,7 +32,7 @@ import type { BrowserSessionApi } from '../../shared/browser-session-api'
 
 declare global {
   interface Window {
-    readonly desktop?: BrowserCaptureApi & BrowserSessionApi & DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionApi & SessionRunApi & TerminalApi & PreferencesApi & QuickCommandsApi & PiSettingsApi & TrustApi & ExtensionUiApi & AuthApi & ModelsConfigApi & UpdatesApi & GitApi & WorktreeApi & GitCleanupApi & LanRemoteApi & MemoryApi & UsageStatsApi & AgentHomeApi & ExpertApi & TeamApi & TeamSessionApi
+    readonly desktop?: BrowserCaptureApi & BrowserSessionApi & DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionApi & SessionRunApi & TerminalApi & PreferencesApi & QuickCommandsApi & PiSettingsApi & TrustApi & ExtensionUiApi & AuthApi & ModelsConfigApi & UpdatesApi & GitApi & WorktreeApi & GitCleanupApi & LanRemoteApi & MemoryApi & UsageStatsApi & AgentHomeApi & PluginApi & ExpertApi & TeamApi & TeamSessionApi
   }
 }
 

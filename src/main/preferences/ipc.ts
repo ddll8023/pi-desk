@@ -43,7 +43,8 @@ export function preferencesFailure(code: PreferencesErrorCode, message: string):
   return { ok: false, error: { code, message } }
 }
 
-/** 界面偏好、对话页模型展示偏好、快捷发送短语、快捷命令与扩展自动更新开关分开读写；未知字段、任意启动参数一律拒绝。 */
+/** 界面偏好、对话页模型展示偏好、快捷发送短语与扩展自动更新开关分开读写；未知字段、任意启动参数一律拒绝。
+ * 快捷命令是一个可停用的能力插件，它的通道在 `registerQuickCommandHandlers` 里单独注册。 */
 export function registerPreferencesHandlers(pageUrl: string): void {
   handle(
     PREFERENCES_GET_QUICK_SEND_CHANNEL,
@@ -67,36 +68,6 @@ export function registerPreferencesHandlers(pageUrl: string): void {
         return { ok: false, error: { code: 'INVALID_REQUEST', message: '快捷发送短语必须是不超过上限的文本列表。' } }
       }
       return preferencesManager.setQuickSend(args[0])
-    }
-  )
-  handle(
-    QUICK_COMMANDS_GET_CHANNEL,
-    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<QuickCommandsResult> => {
-      if (!isTrustedCaller(event, pageUrl)) {
-        return { ok: false, error: { code: 'FORBIDDEN', message: '不允许此页面调用桌面接口。' } }
-      }
-      if (args.length !== 0) {
-        return { ok: false, error: { code: 'INVALID_REQUEST', message: '快捷命令读取接口不接受参数。' } }
-      }
-      return preferencesManager.getQuickCommands()
-    }
-  )
-  handle(
-    QUICK_COMMANDS_SET_CHANNEL,
-    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<QuickCommandsResult> => {
-      if (!isTrustedCaller(event, pageUrl)) {
-        return { ok: false, error: { code: 'FORBIDDEN', message: '不允许此页面调用桌面接口。' } }
-      }
-      if (args.length !== 1 || !isQuickCommandsPreference(args[0])) {
-        return {
-          ok: false,
-          error: {
-            code: 'INVALID_REQUEST',
-            message: '快捷命令必须是不超过上限的清单，每条含标签、命令文本与合法的范围。'
-          }
-        }
-      }
-      return preferencesManager.setQuickCommands(args[0])
     }
   )
   handle(
@@ -202,6 +173,43 @@ export function registerPreferencesHandlers(pageUrl: string): void {
       applyNativeTheme(theme)
       // 整份载荷交给存储：逐字段搬运会在新增偏好字段时静默丢值。
       return preferencesManager.setUi(request)
+    }
+  )
+}
+
+/**
+ * 快捷命令的两个通道：命令本身由偏好存储持有，运行靠终端，因此它作为可停用的能力插件单独注册。
+ * 停用该插件时这两个通道不会注册，页面拿到的是「没有桌面接口」而不是静默失败。
+ */
+export function registerQuickCommandHandlers(pageUrl: string): void {
+  handle(
+    QUICK_COMMANDS_GET_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<QuickCommandsResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return { ok: false, error: { code: 'FORBIDDEN', message: '不允许此页面调用桌面接口。' } }
+      }
+      if (args.length !== 0) {
+        return { ok: false, error: { code: 'INVALID_REQUEST', message: '快捷命令读取接口不接受参数。' } }
+      }
+      return preferencesManager.getQuickCommands()
+    }
+  )
+  handle(
+    QUICK_COMMANDS_SET_CHANNEL,
+    async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<QuickCommandsResult> => {
+      if (!isTrustedCaller(event, pageUrl)) {
+        return { ok: false, error: { code: 'FORBIDDEN', message: '不允许此页面调用桌面接口。' } }
+      }
+      if (args.length !== 1 || !isQuickCommandsPreference(args[0])) {
+        return {
+          ok: false,
+          error: {
+            code: 'INVALID_REQUEST',
+            message: '快捷命令必须是不超过上限的清单，每条含标签、命令文本与合法的范围。'
+          }
+        }
+      }
+      return preferencesManager.setQuickCommands(args[0])
     }
   )
 }

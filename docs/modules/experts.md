@@ -8,7 +8,7 @@
 
 入口按使用者分三类：
 
-- 用户入口：设置页「专家与专家团」分节（列表、筛选、创建、编辑、派生、覆盖内置后的「恢复默认」、删除，团队编辑对话框）；新建会话时输入坞 ＋ 菜单的「专家 / 团队」二级面板；团队会话里输入坞上方的团队面板与成员只读弹窗。
+- 用户入口：设置页的「插件」分节里「专家与专家团」插件详情（列表、筛选、创建、编辑、派生、覆盖内置后的「恢复默认」、删除，团队编辑对话框；旧 `experts` 分节标识仍可深链到该详情）；新建会话时输入坞 ＋ 菜单的「专家 / 团队」二级面板；团队会话里输入坞上方的团队面板与成员只读弹窗。
 - 会话内入口：`present_card` 的 `expert.draft`（新建与更新专家定义草案，支持更新内置专家的覆盖定义）与 `team.draft`（创建与更新自定义团队）；团队模式下由团长使用的 `team_board`、`team_assign`、`team_stop`。
 - 进程入口：`desktop:session-experts`（清单与诊断）、`desktop:expert-*`（派生、读取、保存、删除、能力候选、默认基线）、`desktop:teams-list`／`team-read`／`team-save`／`team-delete`、`desktop:team-sessions-list`／`team-session-read`。
 
@@ -40,7 +40,7 @@
 | `src/sdk-host/team-dispatch.ts` | 派活与停止：派活前置校验（条目、验收项、依赖、负责成员、打回次数），成员一轮的终态由宿主按执行快照追加到根会话并回报团长 |
 | `src/sdk-host/team-runner.ts` | 成员轮的进程载体：`--session-dir` 指向成员会话目录、续派复用同一会话，只带专家角色段与写入守卫参数 |
 | `src/renderer/src/experts/stores/expert.ts`、`src/renderer/src/experts/stores/team.ts` | 设置页的专家与团队清单、诊断、草稿与保存状态 |
-| `src/renderer/src/experts/components/ExpertSettingsSection.vue` | 设置页「专家与专家团」分节：类型筛选与计数只裁剪列表、专家与团队共用行模板、创建动作跟随筛选、诊断折叠、派生、覆盖内置的编辑与「恢复默认」、删除确认（删专家时列出引用它的团队）、页尾折叠的默认能力分组 |
+| `src/renderer/src/experts/components/ExpertSettingsSection.vue` | 「专家与专家团」插件详情：类型筛选与计数只裁剪列表、专家与团队共用行模板、创建动作跟随筛选、诊断折叠、派生、覆盖内置的编辑与「恢复默认」、删除确认（删专家时列出引用它的团队）、页尾折叠的默认能力分组 |
 | `src/renderer/src/experts/components/ExpertEditorDialog.vue`、`src/renderer/src/experts/components/TeamEditorDialog.vue` | 专家与团队的编辑对话框：身份、能力三段勾选（工具段受保护项锁定为「必需」）、写入范围三态单选、正文；团队侧为团长单选与成员多选、不进系统提示的协作约定正文 |
 | `src/renderer/src/experts/components/ExpertCapabilityPicker.vue`、`src/renderer/src/experts/capability-selection.ts`、`src/renderer/src/experts/skill-source-label.ts` | 能力选择器与勾选换算的单一实现：基线展开、按定义还原勾选、勾选换算成 `skillIds`／`Add`／`Remove`、行尾状态文案；编辑对话框与会话内卡片共用 |
 | `src/renderer/src/sessions/components/TeamPanel.vue`、`src/renderer/src/sessions/stores/team-panel.ts`、`src/renderer/src/sessions/components/TeamMemberDialog.vue` | 根会话输入坞上方的只读团队面板（账本、成员状态、写区重叠、成员数与累计用量）与成员只读弹窗；数据来自宿主投影与成员会话通道，面板本身不派活、不停止、不改账本 |

@@ -117,7 +117,7 @@
 
 | 文件 | 用途 |
 | --- | --- |
-| `src/renderer/src/sessions/components/UsageStatsSection.vue` | 设置页「用量」分节编排：页面级时间范围统一结算概览、趋势、按日明细、模型/项目/团队分布与会话明细（Top 与下钻共用），全年活跃度热力图固定近一年窗口；分节可见时静默轮询刷新；团队分布无成员会话时整块不出现 |
+| `src/renderer/src/sessions/components/UsageStatsSection.vue` | 「用量」插件详情编排：页面级时间范围统一结算概览、趋势、按日明细、模型/项目/团队分布与会话明细（Top 与下钻共用），全年活跃度热力图固定近一年窗口；分节可见时静默轮询刷新；团队分布无成员会话时整块不出现 |
 | `src/renderer/src/sessions/components/UsageTrendChart.vue` | 用量趋势图：自然日补零堆叠柱、固定顶部读数行、三档刻度与网格线；有值柱点击下钻当日会话明细 |
 | `src/renderer/src/sessions/components/UsageDailyTable.vue` | 按日用量明细表：窗口内自然日精确读数、最新在前；有记录日期为按钮，键盘可进入当日会话明细 |
 | `src/renderer/src/sessions/components/UsageDistributionList.vue` | 模型／项目／团队／子代理分布行列表：读数与构成条，整行按钮下钻到该维度会话明细 |
@@ -146,7 +146,7 @@
 | `src/renderer/src/sessions/components/SessionActivityBar.vue` | 会话活动摘要和明细 |
 | `src/renderer/src/sessions/components/ExtensionDialog.vue` | SDK 扩展交互队列的当前对话 |
 | `src/renderer/src/sessions/components/ExtensionNotificationBar.vue` | 扩展通知展示 |
-| `src/renderer/src/experts/components/ExpertSettingsSection.vue` | 设置页「专家与专家团」分节：类型分段筛选与计数（只裁剪列表，不改变页面骨架）、专家与专家团共用一份行模板（类型与内置／自定义／覆盖内置来源由行内徽标表达；专家带能力范围与写入范围摘要、不可用技能与截断警示；专家团带可开团状态、团长与成员显示名）、创建动作跟随筛选（「全部」时并列、「专家」或「专家团」时只留主创建动作）、空态带主按钮、按来源合并的提示条（错误优先于提示）、加载诊断收在展开的折叠分组里且不随筛选裁剪、派生副本、内置专家的编辑（保存为覆盖定义）与「恢复默认」、新建与编辑入口、页尾折叠的默认能力分组、删除确认（删专家时列出引用它的团队） |
+| `src/renderer/src/experts/components/ExpertSettingsSection.vue` | 「专家与专家团」插件详情：类型分段筛选与计数（只裁剪列表，不改变页面骨架）、专家与专家团共用一份行模板（类型与内置／自定义／覆盖内置来源由行内徽标表达；专家带能力范围与写入范围摘要、不可用技能与截断警示；专家团带可开团状态、团长与成员显示名）、创建动作跟随筛选（「全部」时并列、「专家」或「专家团」时只留主创建动作）、空态带主按钮、按来源合并的提示条（错误优先于提示）、加载诊断收在展开的折叠分组里且不随筛选裁剪、派生副本、内置专家的编辑（保存为覆盖定义）与「恢复默认」、新建与编辑入口、页尾折叠的默认能力分组、删除确认（删专家时列出引用它的团队） |
 | `src/renderer/src/experts/components/TeamEditorDialog.vue` | 团队编辑对话框：显示名称、一句话简介（进团长段）、团长单选与成员多选（都从专家清单勾选，团长在成员里禁用并自动移除）、协作约定正文（标注不进系统提示）；保存中禁用重复提交，失败就地展示原因，关闭归还焦点 |
 | `src/renderer/src/experts/components/ExpertEditorDialog.vue` | 专家编辑对话框：显示名称、一句话简介、技能、MCP 与工具三个能力段（复用能力选择器，均为 3 列勾选格；技能右槽在无状态时标出来源，状态优先；工具段的受保护项锁定为「必需」不可取消）+ 已选计数与全选；引用数量不设上限；写入范围三态单选（不限制／只读／指定路径）与路径输入，非法项就地报错、不阻断合法项，超出上限的合法项单独提示并阻止保存、不静默截断；正文；新建与编辑两态；保存中禁用重复提交，失败就地展示原因，关闭归还焦点 |
 | `src/renderer/src/experts/components/ExpertCapabilityPicker.vue` | 能力选择器：3 列勾选格（格内右槽优先显示状态，状态为空时退回来源标签，标识与来源全文进 `title`）+ 已选计数 + 可选筛选 + 可选全选 + 可选折叠（收起时保留标题与计数）；传 `mode` 时才出现口径分段；行可传 `locked`，已勾选后不再响应取消；自绘勾选控件（`role="checkbox"` 的按钮、方块与内联对勾、键盘焦点环）；供默认能力卡片、编辑对话框与会话内卡片复用 |

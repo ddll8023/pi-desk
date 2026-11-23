@@ -1,34 +1,31 @@
 <!-- 设置页：左栏是按分组排列的分节导航，右栏是当前分节的内容；两栏各自滚动，页面本身不滚动。
-     分节清单来自 settings-navigation，这里只做「渲染导航 + 按 id 分发内容」，新增设置项不必改模板结构；
-     外观分节聚焦颜色主题，文件树排除规则与文件打开视图集中由文件分节（FileSettingsSection）管理；
-     Git 分节（GitSettingsSection）管理任务工作树与临时分支的残留清理；
+     分节清单来自 settings-navigation，这里只做「渲染导航 + 按 id 分发内容」，新增内核设置项不必改模板结构；
+     能力自己的设置项不占分节：它们收在「插件」分节，列表与详情由本页统一加载清单后分发给两个组件，
+     因此设置页是插件清单的唯一持有者，列表与详情不会各读一份而出现状态分叉。
      页面标题在左栏顶部，内容区每个分节自带一层页头（h1 加一句描述），其后按分节需要组织内容。
      内容区沿用统一的水平内边距，模型页的粘性认证摘要与正文在同一内容列对齐。 -->
 <script setup lang="ts">
+import { computed, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
+import { isPluginListResult } from '../../../../shared/plugin-api'
+import type { PluginEntryView } from '../../../../shared/plugin-api'
 import { usePreferencesStore } from '../../preferences/stores/preferences'
 import { useSettingsStore } from '../stores/settings'
 import { SETTINGS_NAV_GROUPS } from '../settings-navigation'
 import AppButton from '../../ui/AppButton.vue'
 import ModelSettingsView from '../../providers/components/ModelSettingsView.vue'
 import QuickSendSection from '../../preferences/components/QuickSendSection.vue'
-import QuickCommandsSection from '../../preferences/components/QuickCommandsSection.vue'
 import ExecutionModeSection from '../../preferences/components/ExecutionModeSection.vue'
-import TerminalSettingsSection from '../../workspace/components/TerminalSettingsSection.vue'
 import ResourceView from '../../resources/components/ResourceView.vue'
-import ExpertSettingsSection from '../../experts/components/ExpertSettingsSection.vue'
 import SettingsNavIcon from './SettingsNavIcon.vue'
-import FileSettingsSection from '../../editor/components/FileSettingsSection.vue'
-import GitSettingsSection from '../../git/components/GitSettingsSection.vue'
+import PluginSettingsSection from './PluginSettingsSection.vue'
+import PluginDetailSection from './PluginDetailSection.vue'
 import VersionUpdateSection from '../../updates/components/VersionUpdateSection.vue'
-import LanRemoteSettingsSection from '../../lan-remote/components/LanRemoteSettingsSection.vue'
-import MemorySettingsSection from '../../memory/components/MemorySettingsSection.vue'
-import UsageStatsSection from '../../sessions/components/UsageStatsSection.vue'
 
 const preferencesStore = usePreferencesStore()
 const settingsStore = useSettingsStore()
-const { theme, markdownDefaultView } = storeToRefs(preferencesStore)
-const { activeSection } = storeToRefs(settingsStore)
+const { theme } = storeToRefs(preferencesStore)
+const { activeSection, activePluginId } = storeToRefs(settingsStore)
 
 const themeOptions = [
   { value: 'system', label: '跟随系统' },
@@ -36,11 +33,111 @@ const themeOptions = [
   { value: 'dark', label: '深色' }
 ] as const
 
-/** Markdown 默认视图的两档；只影响新打开的标签，已打开的保持各自当前视图。 */
-const markdownViewOptions = [
-  { value: 'preview', label: '预览' },
-  { value: 'code', label: '源码' }
-] as const
+/** 插件域桥接直接按 `PluginApi` 调用，不再本地声明一份弱化类型：契约改名时这里能看到编译报错。 */
+const pluginEntries = ref<readonly PluginEntryView[]>([])
+const pluginPhase = ref<'idle' | 'loading' | 'ready' | 'error'>('idle')
+const pluginError = ref<string | null>(null)
+/** 正在切换的插件标识：过程中整表禁用开关，避免并发请求被静默丢弃。 */
+const togglingPluginId = ref<string | null>(null)
+
+/** 详情页的插件标识；列表态为空串，模板据 `activePluginId` 判断显示哪一个。 */
+const detailPluginId = computed(() => activePluginId.value ?? '')
+
+/** 当前详情的清单条目；清单未读到或标识已失效时为 null，由详情组件按状态给出原因。 */
+const activePlugin = computed<PluginEntryView | null>(() => {
+  if (activePluginId.value === null) return null
+  return pluginEntries.value.find(plugin => plugin.id === activePluginId.value) ?? null
+})
+
+/** 请求序号：响应回来时只采用最后一次请求的结果，避免先发后至的响应覆盖新状态。 */
+let requestSeq = 0
+/** 清单是否已经读过：只在进入插件分节时读一次，不为其它分节付跨进程开销。 */
+const pluginLoaded = ref(false)
+
+function pluginBridge(): NonNullable<typeof window.desktop> | null {
+  return window.desktop ?? null
+}
+
+function invalidPluginResponse(): string {
+  return '插件接口返回了不符合契约的结果。'
+}
+
+/** 读取清单；失败保留错误文本，不把旧清单当成功结果继续展示。 */
+async function loadPlugins(): Promise<void> {
+  const target = pluginBridge()
+  if (target === null) {
+    pluginPhase.value = 'error'
+    pluginError.value = '当前环境没有桌面插件接口。'
+    return
+  }
+  const seq = ++requestSeq
+  pluginLoaded.value = true
+  pluginPhase.value = 'loading'
+  try {
+    const response: unknown = await target.listPlugins()
+    if (seq !== requestSeq) return
+    if (!isPluginListResult(response)) {
+      pluginPhase.value = 'error'
+      pluginError.value = invalidPluginResponse()
+      return
+    }
+    if (!response.ok) {
+      pluginPhase.value = 'error'
+      pluginError.value = response.error.message
+      return
+    }
+    applyPluginList(response)
+  } catch (error) {
+    if (seq !== requestSeq) return
+    pluginPhase.value = 'error'
+    pluginError.value = error instanceof Error ? error.message : '插件清单读取失败。'
+  }
+}
+
+/** 切换启停：响应带回整份清单，状态与依赖缺席原因因此始终同源。 */
+async function togglePlugin(id: string, enabled: boolean): Promise<void> {
+  const target = pluginBridge()
+  if (target === null) return
+  const seq = ++requestSeq
+  togglingPluginId.value = id
+  try {
+    const response: unknown = await target.setPluginEnabled(id, enabled)
+    if (seq !== requestSeq) return
+    if (!isPluginListResult(response)) {
+      pluginPhase.value = 'error'
+      pluginError.value = invalidPluginResponse()
+      return
+    }
+    if (!response.ok) {
+      pluginPhase.value = 'error'
+      pluginError.value = response.error.message
+      return
+    }
+    applyPluginList(response)
+  } catch (error) {
+    if (seq !== requestSeq) return
+    pluginPhase.value = 'error'
+    pluginError.value = error instanceof Error ? error.message : '插件启停状态保存失败。'
+  } finally {
+    if (seq === requestSeq) togglingPluginId.value = null
+  }
+}
+
+function applyPluginList(result: { readonly ok: true; readonly data: { readonly plugins: readonly PluginEntryView[] } }): void {
+  pluginEntries.value = result.data.plugins
+  pluginError.value = null
+  pluginPhase.value = 'ready'
+}
+
+/** 进入插件分节或深链落到某个插件时才读清单；读过就不再重复请求。 */
+watch(
+  () => [activeSection.value, activePluginId.value] as const,
+  () => {
+    if (activeSection.value !== 'plugins' || pluginLoaded.value) return
+    void loadPlugins()
+  },
+  { immediate: true }
+)
 </script>
 
 <template>
@@ -104,19 +201,31 @@ const markdownViewOptions = [
           </section>
         </template>
 
-        <FileSettingsSection v-else-if="activeSection === 'files'" />
-
         <QuickSendSection v-else-if="activeSection === 'quick-send'" />
-        <QuickCommandsSection v-else-if="activeSection === 'quick-commands'" />
-        <TerminalSettingsSection v-else-if="activeSection === 'terminal'" />
-        <GitSettingsSection v-else-if="activeSection === 'git'" />
-        <LanRemoteSettingsSection v-else-if="activeSection === 'lan-remote'" />
+        <ExecutionModeSection v-else-if="activeSection === 'features'" />
         <ModelSettingsView v-else-if="activeSection === 'model'" />
         <ResourceView v-else-if="activeSection === 'resources'" />
-        <ExpertSettingsSection v-else-if="activeSection === 'experts'" />
-        <ExecutionModeSection v-else-if="activeSection === 'features'" />
-        <MemorySettingsSection v-else-if="activeSection === 'memory'" />
-        <UsageStatsSection v-else-if="activeSection === 'usage'" />
+
+        <PluginSettingsSection
+          v-else-if="activeSection === 'plugins' && activePluginId === null"
+          :plugins="pluginEntries"
+          :phase="pluginPhase"
+          :error="pluginError"
+          :toggling-id="togglingPluginId"
+          @toggle="togglePlugin"
+          @open="settingsStore.openPlugin"
+          @reload="loadPlugins"
+        />
+        <PluginDetailSection
+          v-else-if="activeSection === 'plugins'"
+          :plugin-id="detailPluginId"
+          :entry="activePlugin"
+          :phase="pluginPhase"
+          :error="pluginError"
+          @back="settingsStore.backToPlugins"
+          @reload="loadPlugins"
+        />
+
         <VersionUpdateSection v-else />
       </div>
     </div>

@@ -1,5 +1,6 @@
 <!-- 设置导航的图标：按名字渲染一段内联 Lucide 路径。
-     只读装饰，尺寸与描边沿用应用内其他内联 SVG 的画法；图标名来自 settings-navigation 的 SettingsIconName。 -->
+     只读装饰，尺寸与描边沿用应用内其他内联 SVG 的画法；图标名来自 settings-navigation 的 SettingsIconName。
+     名字集合与导航实际使用的图标一一对应，不留已迁入插件的旧模块图标。 -->
 <script setup lang="ts">
 import type { SettingsIconName } from '../settings-navigation'
 
@@ -19,20 +20,14 @@ defineProps<{ readonly name: SettingsIconName }>()
       <circle cx="8.5" cy="7.5" r=".5" fill="currentColor" />
     </template>
 
-    <template v-else-if="name === 'files'">
-      <path d="M20 7h-3a2 2 0 0 1-2-2V2" />
-      <path d="M9 18a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h7l4 4v10a2 2 0 0 1-2 2Z" />
-      <path d="M3 7.6v12.8A1.6 1.6 0 0 0 4.6 22h11" />
-    </template>
-
     <path
       v-else-if="name === 'zap'"
       d="M15.914 4a1.5 1.5 0 0 0-2.474-1.561l-9 9A1.5 1.5 0 0 0 5.5 14h4.002a.5.5 0 0 1 .471.666L8.086 20a1.5 1.5 0 0 0 2.475 1.56l9-9A1.5 1.5 0 0 0 18.5 10h-3.997a.5.5 0 0 1-.472-.667z"
     />
 
-    <template v-else-if="name === 'terminal'">
-      <path d="m4 17 6-6-6-6" />
-      <path d="M12 19h8" />
+    <template v-else-if="name === 'toggle-left'">
+      <rect width="20" height="12" x="2" y="6" rx="6" ry="6" />
+      <circle cx="8" cy="12" r="2" />
     </template>
 
     <template v-else-if="name === 'bot'">
@@ -49,52 +44,22 @@ defineProps<{ readonly name: SettingsIconName }>()
       <rect x="14" y="2" width="8" height="8" rx="1" />
     </template>
 
-    <template v-else-if="name === 'user-round'">
-      <circle cx="12" cy="8" r="5" />
-      <path d="M20 21a8 8 0 0 0-16 0" />
+    <!-- 插件：插头造型，与「资源」的积木块区分开，避免两个分节共用同一个图标。 -->
+    <template v-else-if="name === 'plugin'">
+      <path d="M12 22v-5" />
+      <path d="M9 8V2" />
+      <path d="M15 8V2" />
+      <path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z" />
     </template>
 
-    <template v-else-if="name === 'users'">
-      <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
-      <circle cx="9" cy="7" r="4" />
-      <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
-      <path d="M16 3.13a4 4 0 0 1 0 7.75" />
-    </template>
-
-    <template v-else-if="name === 'toggle-left'">
-      <rect width="20" height="12" x="2" y="6" rx="6" ry="6" />
-      <circle cx="8" cy="12" r="2" />
-    </template>
-
-    <template v-else-if="name === 'git-branch'">
-      <path d="M6 3v12" />
-      <circle cx="18" cy="6" r="3" />
-      <circle cx="6" cy="18" r="3" />
-      <path d="M18 9a9 9 0 0 1-9 9" />
-    </template>
-
-    <template v-else-if="name === 'smartphone'">
-      <rect x="6" y="2" width="12" height="20" rx="2" />
-      <path d="M11 18h2" />
-    </template>
-
-    <template v-else-if="name === 'brain'">
-      <path d="M12 5a3 3 0 0 0-3 3v.5A3 3 0 0 0 6.5 11a3 3 0 0 0 .5 5.5 3 3 0 0 0 5 2.5" />
-      <path d="M12 5a3 3 0 0 1 3 3v.5A3 3 0 0 1 17.5 11a3 3 0 0 1-.5 5.5 3 3 0 0 1-5 2.5" />
-      <path d="M12 5v14" />
-    </template>
-
-    <template v-else-if="name === 'chart'">
-      <path d="M18 20V10" />
-      <path d="M12 20V4" />
-      <path d="M6 20v-6" />
-    </template>
-
-    <template v-else>
+    <template v-else-if="name === 'refresh-cw'">
       <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
       <path d="M21 3v5h-5" />
       <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
       <path d="M8 16H3v5" />
     </template>
+
+    <!-- 名字集合由 SettingsIconName 约束：漏加分支时不留兜底，让缺失而不显示，避免静默画错图标。 -->
+    <template v-else />
   </svg>
 </template>

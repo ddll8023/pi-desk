@@ -2,15 +2,19 @@
  * 设置页左侧导航的数据定义：分组、分节、图标名与搜索关键词。
  *
  * 这里只描述「有哪些分节、怎么分组、按什么词能被搜到」，不承载分节内容，也不判断分节是否可用；
- * 内容由 SettingsView 按 id 分发，因此新增一个设置分节要在两处落下：这里加一条数据，再在 SettingsView 里接上对应的内容组件。
- * 关键词为后续的设置项搜索预留：当前分节数还没到需要搜索框的规模，先落数据不渲染输入框。
+ * 内容由 SettingsView 按 id 分发，因此新增一个内核分节要在两处落下：这里加一条数据，再在 SettingsView 里接上内容组件。
+ *
+ * 能力自己的设置项不占主导航：它们收在「插件」分节里，由插件清单逐条列出，点条目进入该插件的详情页。
+ * 原「文件、快捷命令、终端、Git、手机访问、专家与专家团、记忆、用量」八个分节因此降为插件详情别名，
+ * 旧 id 仍可深链（`resolveSettingsSection`），落到对应插件详情而不是消失。
  */
 
 /** 设置页的分节标识；也是内容分发与深链跳转的唯一键。 */
-export type SettingsSectionId = 'appearance' | 'files' | 'quick-send' | 'quick-commands' | 'terminal' | 'git' | 'lan-remote' | 'model' | 'resources' | 'experts' | 'features' | 'memory' | 'usage' | 'version'
+export type SettingsSectionId = 'appearance' | 'quick-send' | 'features' | 'model' | 'resources' | 'plugins' | 'version'
 
-/** 导航条目可用的图标名；每个名字对应 SettingsNavIcon 里的一段内联 Lucide 路径。 */
-export type SettingsIconName = 'palette' | 'files' | 'zap' | 'terminal' | 'bot' | 'blocks' | 'user-round' | 'users' | 'toggle-left' | 'refresh-cw' | 'smartphone' | 'git-branch' | 'brain' | 'chart'
+/** 导航条目可用的图标名；每个名字对应 SettingsNavIcon 里的一段内联 Lucide 路径。
+ * 只保留导航实际使用的名字：模块分节迁入插件后不再需要各自的图标，残留名字只会让图标表越来越乱。 */
+export type SettingsIconName = 'palette' | 'zap' | 'toggle-left' | 'bot' | 'blocks' | 'plugin' | 'refresh-cw'
 
 /** 一个分节条目：标签是导航上显示的名字，关键词除标签本身外补上用户可能输入的别名。 */
 export interface SettingsNavItem {
@@ -34,24 +38,22 @@ export const SETTINGS_NAV_GROUPS: readonly SettingsNavGroup[] = [
     label: '常规',
     items: [
       { id: 'appearance', label: '外观', icon: 'palette', keywords: ['主题', '浅色', '深色', 'theme'] },
-      { id: 'files', label: '文件', icon: 'files', keywords: ['文件', '目录', '隐藏', '排除', 'node_modules', 'file', 'exclude', 'hidden', '预览', '源码', 'markdown', '默认视图'] },
       { id: 'quick-send', label: '快捷输入', icon: 'zap', keywords: ['短语', '发送', 'quick send'] },
-      { id: 'quick-commands', label: '快捷命令', icon: 'terminal', keywords: ['命令', '终端', '快捷命令', 'command'] },
-      { id: 'terminal', label: '终端', icon: 'terminal', keywords: ['终端', '常驻', '守护进程', 'terminal', 'daemon', '滚动历史'] },
-      { id: 'git', label: 'Git', icon: 'git-branch', keywords: ['git', '工作树', 'worktree', '分支', 'branch', '清理', '回收', 'gc', '垃圾', '临时分支'] },
-      { id: 'lan-remote', label: '手机访问', icon: 'smartphone', keywords: ['手机', '移动端', '局域网', '配对', '证书', '远程', 'mobile', 'LAN'] }
+      { id: 'features', label: '功能', icon: 'toggle-left', keywords: ['开关', 'feature', '执行模式', '快速模式', '标准模式'] },
+      { id: 'model', label: '模型', icon: 'bot', keywords: ['供应商', '凭据', 'models.json', 'provider'] },
+      { id: 'resources', label: '资源', icon: 'blocks', keywords: ['技能', '提示词模板', '扩展', 'MCP', 'skills'] }
     ]
   },
   {
-    id: 'pi',
-    label: 'Pi',
+    id: 'capabilities',
+    label: '能力',
     items: [
-      { id: 'model', label: '模型', icon: 'bot', keywords: ['供应商', '凭据', 'models.json', 'provider'] },
-      { id: 'resources', label: '资源', icon: 'blocks', keywords: ['技能', '提示词模板', '扩展', 'MCP', 'skills'] },
-      { id: 'experts', label: '专家与专家团', icon: 'user-round', keywords: ['专家', '专家团', '团队', 'expert', 'team', '角色', '团长', '成员', '协作', '派生', '自定义专家', '行业专家'] },
-      { id: 'features', label: '功能', icon: 'toggle-left', keywords: ['开关', 'feature', '执行模式', '快速模式', '标准模式'] },
-      { id: 'memory', label: '记忆', icon: 'brain', keywords: ['记忆', '日记', '偏好', '画像', 'memory', '全局'] },
-      { id: 'usage', label: '用量', icon: 'chart', keywords: ['用量', 'token', 'tokens', '统计', '消耗', '费用', 'usage', 'cost', '额度'] }
+      {
+        id: 'plugins',
+        label: '插件',
+        icon: 'plugin',
+        keywords: ['插件', '能力', '启用', '停用', 'plugin', '文件', '快捷命令', '终端', 'git', '手机访问', '专家', '专家团', '记忆', '用量']
+      }
     ]
   },
   {
@@ -66,7 +68,37 @@ export const SETTINGS_NAV_GROUPS: readonly SettingsNavGroup[] = [
 /** 打开设置页且未指定分节时的落点。 */
 export const DEFAULT_SETTINGS_SECTION: SettingsSectionId = 'appearance'
 
-/** 校验任意字符串是不是合法分节 id；用于接收来自其他入口（如更新提示）的跳转目标。 */
-export function isSettingsSectionId(value: string): value is SettingsSectionId {
-  return SETTINGS_NAV_GROUPS.some((group) => group.items.some((item) => item.id === value))
+/**
+ * 旧分节 id 到插件标识的映射：这些分节的内容已迁入插件详情，标识与插件 id 同名。
+ * 保留映射是为了旧的深链入口（例如快捷命令按钮）继续落到正确位置。
+ * 查表一律用 `Object.hasOwn`：防止 `constructor`、`toString` 这类原型键被当成插件标识。
+ */
+export const PLUGIN_SECTION_ALIASES: Readonly<Record<string, string>> = {
+  files: 'files',
+  'quick-commands': 'quick-commands',
+  terminal: 'terminal',
+  git: 'git',
+  'lan-remote': 'lan-remote',
+  experts: 'experts',
+  memory: 'memory',
+  usage: 'usage'
+}
+
+/** 解析后的落点：`plugins` 分节可能停在列表（`pluginId` 为 null），也可能直接进某个插件详情。 */
+export interface SettingsSectionTarget {
+  readonly section: SettingsSectionId
+  readonly pluginId: string | null
+}
+
+/**
+ * 把任意字符串解析成落点：合法分节原样返回，旧分节 id 转成对应的插件详情，其余返回 null。
+ * 深链与导航点击共用这一处规则，避免两套判断。
+ */
+export function resolveSettingsSection(value: string): SettingsSectionTarget | null {
+  if (Object.hasOwn(PLUGIN_SECTION_ALIASES, value)) {
+    return { section: 'plugins', pluginId: PLUGIN_SECTION_ALIASES[value] }
+  }
+  if (value === 'plugins') return { section: 'plugins', pluginId: null }
+  const known = SETTINGS_NAV_GROUPS.some(group => group.items.some(item => item.id === value))
+  return known ? { section: value as SettingsSectionId, pluginId: null } : null
 }

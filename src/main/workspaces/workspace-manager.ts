@@ -1,14 +1,15 @@
-/** 主进程任务工作区所有者：持久身份、会话绑定、托管路径授权及生命周期，包括删除会话后的可选工作树清理；不从前台项目或临时标签推断执行目录。 */
+/** 主进程任务工作区所有者：持久身份、会话绑定、托管路径授权及生命周期，包括删除会话后的可选工作树清理；不从前台项目或临时标签推断执行目录。
+ * 这里的 `WorktreeOperationError` 是工作区类操作的通用错误类型：错误码取 `DesktopErrorCode`，
+ * 由 `workspaceError` 统一映射，工作区、会话与终端三处都靠它区分可展示的拒绝原因；
+ * 因此类型归内核而不归 Git 适配层——停用 Git 插件不应让会话侧的映射失去依据。 */
 import { randomUUID } from 'node:crypto'
 import { relative, isAbsolute } from 'node:path'
-import type { DesktopError } from '../../shared/desktop-api'
+import type { DesktopError, DesktopErrorCode } from '../../shared/desktop-api'
 import { isWorkspaceTarget } from '../../shared/workspace-api'
 import type { WorkspaceContext, WorkspacePhase, WorkspaceResolveRequest, WorkspaceTarget } from '../../shared/workspace-api'
 import type { CreateWorktreeRequest, CreateWorktreeResult, MergeWorktreeRequest, MergeWorktreeResult,
   RemoveWorktreeRequest, RemoveWorktreeResult, WorktreeListRequest, WorktreeListResult,
   WorktreeStatusRequest, WorktreeStatusResult } from '../../shared/worktree-api'
-import { GitCommandError } from '../git/git-command'
-import { WorktreeOperationError } from '../git/worktree-service'
 import type { WorktreeService } from '../git/worktree-service'
 import type { ProjectManager } from '../projects/project-manager'
 import type { TrustManager } from '../trust/trust-manager'
@@ -27,11 +28,32 @@ interface WorkspaceManagerOptions {
   readonly settleTerminals: (workspaceId: string, consent: boolean) => Promise<void>
   readonly releaseViews: (workspaceId: string) => void
 }
+export class WorktreeOperationError extends Error {
+  readonly code: DesktopErrorCode
+
+  // 不写成构造器参数属性：Node 的 TypeScript 仅擦除类型，参数属性不属于可擦除语法。
+  constructor(code: DesktopErrorCode, message: string) {
+    super(message)
+    this.code = code
+  }
+}
+
 export function workspaceError(error: unknown): DesktopError {
   if (error instanceof WorktreeOperationError) return { code: error.code, message: error.message }
-  if (error instanceof GitCommandError) return { code: error.kind === 'unavailable' ? 'GIT_UNAVAILABLE' : 'GIT_FAILED', message: error.message }
+  // git 失败按错误形状识别，不导入 git 插件实现：内核在停用 Git 后仍要能解释工作区拒绝。
+  const gitFailure = asGitFailure(error)
+  if (gitFailure !== null) {
+    return { code: gitFailure.kind === 'unavailable' ? 'GIT_UNAVAILABLE' : 'GIT_FAILED', message: gitFailure.message }
+  }
   return { code: 'INTERNAL_ERROR', message: error instanceof WorkspaceStorageError || error instanceof Error
     ? error.message : '工作区操作失败，未选择替代执行目录。' }
+}
+
+/** git 适配层公开的错误形状：名字与 kind 由 `git/git-command` 设定，这里只读字段、不引用类型。 */
+function asGitFailure(error: unknown): { readonly kind: string; readonly message: string } | null {
+  if (!(error instanceof Error) || error.name !== 'GitCommandError') return null
+  const kind = (error as { kind?: unknown }).kind
+  return typeof kind === 'string' ? { kind, message: error.message } : null
 }
 function under(root: string, path: string): boolean {
   const part = relative(root, path)

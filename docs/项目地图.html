@@ -238,7 +238,7 @@
         "features": [
           "唯一窗口创建、标题栏配色与导航／权限限制",
           "Vue 页面挂载与展示 Store 初始化／释放顺序",
-          "设置页导航分节与文件／源代码管理右侧页签宿主",
+          "设置页导航分节与「插件」分节宿主、文件／源代码管理右侧页签宿主",
           "应用启动、退出链与窗口状态落盘"
         ],
         "tags": ["Electron 主进程", "Vue 组合根", "生命周期"],
@@ -253,7 +253,7 @@
           {"name": "窗口位置与尺寸", "owner": "DesktopConfigStore", "lifecycle": "窗口状态变化防抖保存，退出时落盘"}
         ],
         "constraints": [
-          "设置页只是业务模块的导航容器，不持有全部设置值",
+          "设置页是业务模块的导航容器与「插件」分节宿主，不持有全部设置值",
           "右侧面板承载文件与 Git 状态页",
           "单窗口、单实例，事件只投递给可信主 frame"
         ],
@@ -275,7 +275,7 @@
           "工具结果交付卡片时按固定外壳渲染，按钮只转发已登记动作",
           "运行中在会话处理当前请求时接入同色 SVG 流动边框",
           "用量弹窗展示会话统计与独立的 Codex、OpenCode Go 账户额度，支持刷新",
-          "设置页用量：页面级时间范围统一结算的概览读数、Token 构成、堆叠趋势、按日明细与模型/项目/子代理分布；会话明细支持 Top 与维度下钻；全年热力图格子可点下钻；可见时静默刷新",
+          "插件详情用量：页面级时间范围统一结算的概览读数、Token 构成、堆叠趋势、按日明细与模型/项目/子代理分布；会话明细支持 Top 与维度下钻；全年热力图格子可点下钻；可见时静默刷新",
           "点击立即展示本地待发送消息，后台就绪后提交固定输入",
           "输入坞内图片附件区提供点框编号与绑定说明，随提示词提交但不拼入提示词",
           "受理后有限同步核对，支持重新同步及确认结束原运行后的输入恢复",
@@ -296,7 +296,7 @@
           {"kind": "界面入口", "label": "图片标注面板", "path": "src/renderer/src/sessions/components/ImageAnnotationPanel.vue"},
           {"kind": "关键实现", "label": "图片独立资料消息", "path": "src/sdk-host/image-annotations.ts"},
           {"kind": "界面入口", "label": "用量与额度弹窗", "path": "src/renderer/src/sessions/components/UsageDetailDialog.vue"},
-          {"kind": "界面入口", "label": "设置页用量分节", "path": "src/renderer/src/sessions/components/UsageStatsSection.vue"},
+          {"kind": "界面入口", "label": "设置页插件详情用量", "path": "src/renderer/src/sessions/components/UsageStatsSection.vue"},
           {"kind": "关键实现", "label": "Runtime 展示状态", "path": "src/renderer/src/sessions/stores/runtime-core.ts"},
           {"kind": "界面入口", "label": "原版流动运行边框", "path": "src/renderer/src/sessions/components/TaskRunningBorder.vue"}
         ],
@@ -362,7 +362,7 @@
         "summary": "给会话一个固定身份、方法论与能力范围的专家层，以及在其上叠加「团长调度 + 成员独立会话 + 共享任务账本」的团队层；两层共用同一套定义解析、标识规则、能力范围与写入范围。",
         "features": [
           "专家定义的双来源合并：内置随包只读，自定义目录可写，同标识的自定义定义覆盖内置并可删除恢复默认",
-          "设置页同一分节管理专家与团队：类型筛选、派生副本、编辑内置（写覆盖定义）、删除确认列出引用它的团队",
+          "同一插件详情管理专家与团队：类型筛选、派生副本、编辑内置（写覆盖定义）、删除确认列出引用它的团队",
           "会话级专家绑定：新建时选择、打开成功落盘、首轮后锁定，定义失效只标警示不自动清除",
           "能力范围三层收窄：技能在装配入口过滤、MCP 在配置钩子标停用、工具从激活集合移除（受保护项保留）",
           "写入范围三态（不限制／只读／白名单）由宿主守卫拦 write 与 edit 的真实路径",
@@ -393,7 +393,7 @@
           {"kind": "协议入口", "label": "团队资源通道契约", "path": "src/shared/teams-api.ts"},
           {"kind": "协议入口", "label": "成员会话只读通道契约", "path": "src/shared/team-session-api.ts"},
           {"kind": "协议入口", "label": "任务账本契约", "path": "src/shared/team-board-api.ts"},
-          {"kind": "界面入口", "label": "设置页专家与专家团分节", "path": "src/renderer/src/experts/components/ExpertSettingsSection.vue"},
+          {"kind": "界面入口", "label": "设置页插件详情专家与专家团", "path": "src/renderer/src/experts/components/ExpertSettingsSection.vue"},
           {"kind": "界面入口", "label": "专家编辑对话框", "path": "src/renderer/src/experts/components/ExpertEditorDialog.vue"},
           {"kind": "界面入口", "label": "团队编辑对话框", "path": "src/renderer/src/experts/components/TeamEditorDialog.vue"},
           {"kind": "关键实现", "label": "能力勾选换算", "path": "src/renderer/src/experts/capability-selection.ts"},
@@ -598,7 +598,7 @@
           {"kind": "关键实现", "label": "清理与维护服务", "path": "src/main/git/git-cleanup-service.ts"},
           {"kind": "关键实现", "label": "状态跟踪与写动作", "path": "src/renderer/src/git/stores/git-status.ts"},
           {"kind": "界面入口", "label": "源代码管理面板", "path": "src/renderer/src/git/components/GitPanel.vue"},
-          {"kind": "界面入口", "label": "设置页 Git 分节", "path": "src/renderer/src/git/components/GitSettingsSection.vue"}
+          {"kind": "界面入口", "label": "设置页插件详情源代码管理", "path": "src/renderer/src/git/components/GitSettingsSection.vue"}
         ],
         "resources": [
           {"name": "仓库状态与差异模型", "owner": "git Store", "lifecycle": "内存缓存；真源是项目所在仓库"}
@@ -805,7 +805,7 @@
           {"kind": "共享契约", "label": "记忆接口与校验", "path": "src/shared/memory-api.ts"},
           {"kind": "关键实现", "label": "受管运行环境布局与配置校验", "path": "src/shared-process/memory-runtime.ts"},
           {"kind": "关键实现", "label": "宿主内配置持有与推送", "path": "src/sdk-host/memory-configuration.ts"},
-          {"kind": "界面入口", "label": "设置页记忆分节", "path": "src/renderer/src/memory/components/MemorySettingsSection.vue"},
+          {"kind": "界面入口", "label": "设置页插件详情记忆", "path": "src/renderer/src/memory/components/MemorySettingsSection.vue"},
           {"kind": "界面入口", "label": "画像与风格小节（含编辑对话框）", "path": "src/renderer/src/memory/components/MemoryProfileSection.vue"},
           {"kind": "共享展示", "label": "画像领域与依据标签", "path": "src/renderer/src/memory/labels.ts"}
         ],

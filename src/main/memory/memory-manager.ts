@@ -12,6 +12,7 @@ import { stat } from 'node:fs/promises'
 import type { Stats } from 'node:fs'
 import { join } from 'node:path'
 import type { DesktopConfigStore } from '../config/desktop-config-store'
+import { isPluginDisabledAtStartup } from '../plugins/plugin-gate'
 import { getSessionRoot } from '../sessions/session-store'
 import type { MemoryHostConfiguration, MemoryConfigurationProvider } from '../../shared-process/memory-runtime'
 import { managedMemoryConfiguration } from '../../shared-process/memory-runtime'
@@ -113,7 +114,9 @@ export class MemoryManager {
   private async configuration(hostEntry: string): Promise<MemoryHostConfiguration> {
     const state = await this.enabled()
     const registry = await this.projects()
-    return managedMemoryConfiguration(hostEntry, state.enabled, this.revision, registry.projects, registry.unavailable,
+    // 插件停用与用户开关是两层：任一层关闭都不向会话注入；插件层看启动期快照，重启后才变。
+    const enabled = state.enabled && !isPluginDisabledAtStartup('memory')
+    return managedMemoryConfiguration(hostEntry, enabled, this.revision, registry.projects, registry.unavailable,
       getSessionRoot())
   }
 

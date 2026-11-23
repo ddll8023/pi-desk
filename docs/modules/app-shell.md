@@ -4,11 +4,11 @@
 
 ## 职责与入口
 
-负责 Electron 窗口与原生标题栏集成、应用信息、Vue 挂载、设置页导航、右侧面板宿主，以及应用级启动与退出组装。主进程侧由 `src/main/window.ts` 承担窗口与标题栏实现、`src/main/window-channel.ts` 承担事件投递与广播、`src/main/app-lifecycle.ts` 承担启动与退出编排，`src/main/index.ts` 只按固定顺序转交 `app-lifecycle.ts` 装配；页面侧入口为 `src/renderer/src/main.ts`，页面根组件 `src/renderer/src/App.vue` 只装配 `shell/` 下的骨架、工作区宿主、弹层宿主与启动编排。
+负责 Electron 窗口与原生标题栏集成、应用信息、Vue 挂载、设置页导航与「插件」分节宿主、右侧面板宿主，以及应用级启动与退出组装。主进程侧由 `src/main/window.ts` 承担窗口与标题栏实现、`src/main/window-channel.ts` 承担事件投递与广播、`src/main/app-lifecycle.ts` 承担启动与退出编排，`src/main/index.ts` 只按固定顺序转交 `app-lifecycle.ts` 装配；页面侧入口为 `src/renderer/src/main.ts`，页面根组件 `src/renderer/src/App.vue` 只装配 `shell/` 下的骨架、工作区宿主、弹层宿主与启动编排。
 
 顶部栏居中胶囊是对话导航入口：单行呈现项目名与当前会话，入口是模态弹窗（遮罩、居中轻量面板、Escape 或点遮罩收起，收起后焦点回到触发键），按新的在前列出每轮用户输入（序号、摘要、发送时间），列表内部自己滚动，键盘 ↑↓／Home／End 移动、Enter 跳转；触发键带「当前轮／总轮数」位置小标。入口列表与当前轮由消息区发布，顶部栏只渲染弹窗并发出跳转意图，滚动与折叠仍由消息区执行（见[会话与聊天](sessions-chat.md)）。
 
-不负责具体会话执行、文件读写、Git 命令或设置值的持久化。设置页只是各业务模块的导航容器，右侧面板是“文件”与“源代码管理”页签的共同宿主。
+不负责具体会话执行、文件读写、Git 命令或设置值的持久化。设置页是各业务模块的导航容器，「插件」分节是能力清单的宿主（列表、启停与插件详情渲染）；右侧面板是“文件”与“源代码管理”页签的共同宿主。
 
 ## 专属文件
 
@@ -28,7 +28,7 @@
 | `src/renderer/src/shell/components/RightPanel.vue` | 面板宽度与两类页签、文件目录和 Git 跟踪生命周期；按当前页签转交只读刷新 |
 | `src/renderer/src/shell/components/RightPanelTabs.vue` | 文件／源代码管理页签与 Git 改动角标 |
 | `src/renderer/src/shell/stores/desktop.ts` | 应用信息展示状态 |
-| `src/renderer/src/shell/stores/settings.ts` | 设置页开关与当前分节，不保存设置值 |
+| `src/renderer/src/shell/stores/settings.ts` | 设置页开关、当前分节与当前插件详情目标，不保存设置值 |
 | `src/renderer/src/shell/services/desktop.ts` | 应用信息桥接与通信失败转换 |
 | `src/renderer/src/shell/settings-navigation.ts` | 分组、分节 ID、图标及关键词定义 |
 

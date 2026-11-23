@@ -1,22 +1,13 @@
-/** 工作树物理适配：显式仓库上下文、本地排除配置与仓库级写队列；托管身份和会话生命周期由工作区管理器负责。 */
+/** 工作树物理适配：显式仓库上下文、本地排除配置与仓库级写队列；托管身份和会话生命周期由工作区管理器负责。
+ * 工作区类操作错误类型由内核的 `workspaces/workspace-manager` 定义，这里只抛出，不另建一份。 */
 import { access, appendFile, lstat, mkdir, readFile, realpath, symlink } from 'node:fs/promises'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
-import type { DesktopErrorCode } from '../../shared/desktop-api'
 import type { WorktreeEntry, WorktreeStatus } from '../../shared/worktree-api'
 import type { WorkspaceContext } from '../../shared/workspace-api'
 import { GIT_READ_TIMEOUT_MS, GitCommandError, runGit } from './git-command'
 import { canonicalProjectRoot, resolveGitRepository } from './git-repository'
 import type { GitRepository } from './git-repository'
-
-export class WorktreeOperationError extends Error {
-  readonly code: DesktopErrorCode
-
-  // 不写成构造器参数属性：Node 的 TypeScript 仅擦除类型，参数属性不属于可擦除语法。
-  constructor(code: DesktopErrorCode, message: string) {
-    super(message)
-    this.code = code
-  }
-}
+import { WorktreeOperationError } from '../workspaces/workspace-manager'
 function samePath(left: string, right: string): boolean {
   const a = resolve(left), b = resolve(right)
   return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b

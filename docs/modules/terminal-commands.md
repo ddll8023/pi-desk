@@ -4,7 +4,7 @@
 
 ## 职责与入口
 
-负责项目与任务工作区内终端创建、输入、尺寸、命名、关闭、常驻与恢复、画面和背压，以及全局／项目快捷命令的保存与运行。入口为标签条、新建菜单、终端菜单及设置页“终端”“快捷命令”。
+负责项目与任务工作区内终端创建、输入、尺寸、命名、关闭、常驻与恢复、画面和背压，以及全局／项目快捷命令的保存与运行。入口为标签条、新建菜单、终端菜单及设置页「插件」分节下的「终端」「快捷命令」两个插件详情（旧 `terminal`、`quick-commands` 分节标识仍可深链；快捷命令依赖终端，终端停用时一并缺席）。
 
 不承载内置 Agent 会话，不将终端标签关闭解释为仅隐藏，也不把应用退出解释为结束 PTY。快捷命令是用户配置的 shell 输入，不是 Agent 工具权限。
 
@@ -32,7 +32,7 @@
 | `src/renderer/src/workspace/components/TerminalSettingsSection.vue` | 守护进程状态与停止／清理入口 |
 | `src/renderer/src/preferences/components/QuickCommandDialog.vue` | 命令新增、编辑、范围和执行选项 |
 | `src/renderer/src/preferences/components/QuickCommandMenu.vue` | 当前项目可用命令菜单 |
-| `src/renderer/src/preferences/components/QuickCommandsSection.vue` | 设置页命令管理 |
+| `src/renderer/src/preferences/components/QuickCommandsSection.vue` | 「快捷命令」插件详情内的命令管理 |
 
 主进程适配、守护路径、会话与历史职责已读，视图和状态调用结合源码引用映射。真实 shell、原生 PTY 和操作系统进程是运行依赖，不由目录映射证明其跨平台行为。
 

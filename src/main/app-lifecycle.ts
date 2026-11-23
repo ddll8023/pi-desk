@@ -23,7 +23,6 @@ import {
   piAgentUpdater,
   preferencesManager,
   projectDirectoryWatcher,
-  projectManager,
   sdkRuntime,
   terminals,
   updateChecker,
@@ -45,19 +44,13 @@ import {
 import { getPageUrl, registerAssetProtocol, registerAssetScheme } from './asset-protocol'
 import { registerAppInfoHandler, registerOpenExternalUrlHandler } from './shell/ipc'
 import { registerBrowserHandlers } from './browser/ipc'
-import { registerProjectHandlers, registerProjectFileHandlers } from './projects/ipc'
-import { registerGitHandlers } from './git/ipc'
-import { registerWorktreeHandlers } from './git/worktree-ipc'
-import { registerGitCleanupHandlers } from './git/git-cleanup-ipc'
+import { registerProjectHandlers } from './projects/ipc'
 import { registerSessionHandlers, registerSessionRunHandlers } from './sessions/ipc'
-import { registerExpertHandlers } from './sessions/expert-ipc'
-import { registerTeamHandlers } from './sessions/team-ipc'
 import { pruneOrphanTeamSessions } from './sessions/team-sessions'
 import { registerExtensionUiHandlers } from './sessions/extension-ui-ipc'
 import { registerRuntimeHandlers } from './sessions/runtime-ipc'
 import { registerResourceHandlers } from './resources/ipc'
 import { registerTrustHandlers } from './trust/ipc'
-import { registerTerminalHandlers } from './terminal/ipc'
 import { registerPreferencesHandlers } from './preferences/ipc'
 import {
   registerAuthHandlers,
@@ -65,9 +58,8 @@ import {
   registerPiSettingsHandlers,
 } from './providers/ipc'
 import { registerUpdatesHandlers } from './updates/ipc'
-import { registerLanRemoteHandlers } from './lan-remote/ipc'
-import { registerMemoryHandlers } from './memory/ipc'
-import { registerUsageStatsHandlers } from './usage/ipc'
+import { registerPluginHandlers } from './plugins/ipc'
+import { registerBuiltinPlugins } from './plugins/catalog'
 
 /** 应用退出时等待关闭链的总预算；覆盖各平台兜底阶段后强制退出。 */
 const QUIT_DEADLINE_MS = 10_000
@@ -193,7 +185,8 @@ export function registerLifecycle(): void {
   })
 }
 
-/** 窗口就绪后的注册顺序：权限与协议 → 各能力 IPC → 事件订阅 → 建窗 → 启动检查。 */
+/** 窗口就绪后的注册顺序：权限与协议 → 内核 IPC → 能力插件 IPC → 事件订阅 → 建窗 → 启动检查。
+ * 能力插件按清单装配（`plugins/catalog.ts`），被停用的整段跳过；内核通道始终注册。 */
 export async function startApplication(): Promise<void> {
   const pageUrl = getPageUrl()
   restrictSession()
@@ -206,34 +199,19 @@ export async function startApplication(): Promise<void> {
   registerResourceHandlers(pageUrl)
   registerExtensionUiHandlers(pageUrl)
   registerProjectHandlers(pageUrl)
-  registerProjectFileHandlers(pageUrl)
-  registerGitHandlers(pageUrl)
-  registerWorktreeHandlers(pageUrl)
-  registerGitCleanupHandlers(pageUrl)
   registerSessionHandlers(pageUrl)
-  registerExpertHandlers(pageUrl)
-  registerTeamHandlers(pageUrl, {
-    // 成员登记与会话绑定同源：开团物化的登记在这里被只读通道读回。
-    teamSessions: {
-      list: (projectPath, rootSessionId) => configStore.listTeamSessions(projectPath, rootSessionId),
-      save: entries => configStore.saveTeamSessions(entries),
-      forget: (projectPath, rootSessionId) => configStore.forgetTeamSessions(projectPath, rootSessionId)
-    },
-    // 只允许读取已添加项目：页面不能借成员通道探测任意目录。
-    hasProject: projectPath => projectManager.hasProject(projectPath)
-  })
   registerSessionRunHandlers(pageUrl)
-  registerTerminalHandlers(pageUrl)
   registerTrustHandlers(pageUrl)
   registerPreferencesHandlers(pageUrl)
   registerPiSettingsHandlers(pageUrl)
   registerModelsConfigHandlers(pageUrl)
   registerAuthHandlers(pageUrl)
   registerUpdatesHandlers(pageUrl)
-  registerLanRemoteHandlers(pageUrl)
-  registerMemoryHandlers(pageUrl)
-  registerUsageStatsHandlers(pageUrl)
   registerAgentHomeHandlers(pageUrl)
+  registerPluginHandlers(pageUrl)
+
+  // 停用集合只在启动期读取一次：主进程无法注销已注册通道，启停需重启才完全生效。
+  registerBuiltinPlugins(pageUrl, new Set(await configStore.readDisabledPlugins()))
 
   // 事件订阅：全部只投递给当前唯一可信窗口。
   sdkRuntime.onStatusChanged(broadcastRuntimeStatus)
