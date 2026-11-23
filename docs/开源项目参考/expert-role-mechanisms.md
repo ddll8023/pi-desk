@@ -51,7 +51,7 @@
 
 ## 与 pi-desk 专家体系的对照
 
-基准为 [专家设计](../专家设计.md) 的现行设计与其列出的实现出处；外部事实见上表。
+基准为 [专家与专家团设计](../专家与专家团设计.md) 的现行设计与其列出的实现出处；外部事实见上表。
 
 | 维度 | pi-desk 当前实现 | 与外部的关系 |
 | --- | --- | --- |
@@ -59,7 +59,7 @@
 | 绑定粒度 | 会话级，首轮后锁定，绑定由打开链落盘；标识不可改，编辑不影响既有绑定 | 实质重合：与 WorkBuddy 专家同粒度；外部无「标识不可改」的同等约束（对方是名称不可改、改需重建） |
 | 能力范围声明 | 三维（技能／MCP／工具），基线 `inherit`／`only` + 专家 `Add`／`Remove`，受保护工具不可排除（`src/sdk-host/expert-capability.ts`） | 部分重合：比 WorkBuddy「系统统一分配」更细，比 Cline／Cursor 式子代理白名单多一层全局基线与「仅用选中」口径 |
 | 写入范围 | `writeScope` 三态（不写＝不限制、`[]`＝只读、列表＝白名单），宿主守卫只拦 `write`／`edit`（`src/sdk-host/expert-write-guard.ts`） | 无对应：外部同层产品里未见角色自带写入白名单；DSH 的 `fs-sandbox` 是平台级策略，Team 的 `writeScopes` 只是提示性前缀 |
-| 多角色协作 | 无，一次会话一个专家；团队方向已定但未实现，见[专家团设计](../专家团设计.md) | 对方独有：群聊房间（Ekko）、任务板 + 邮箱（WorkBuddy CLI、Cline）、工单编排（dsh-superagent）、共享任务 DAG（DSH）；本项目的团长中心形态取前两者之外的一支：只经团长汇聚 |
+| 多角色协作 | 有：团队为团长（只读 + 调度）+ 成员独立会话 + 双账本，见[专家与专家团设计](../专家与专家团设计.md) | 对方独有：群聊房间（Ekko）、任务板 + 邮箱（WorkBuddy CLI、Cline）、工单编排（dsh-superagent）、共享任务 DAG（DSH）；本项目的团长中心形态取前两者之外的一支：只经团长汇聚 |
 | 提示段治理 | 正文可编辑、未知字段保留、派生副本不自动合并、超限截断 | 部分重合：dsh-superagent 有不可变版本与上游默认升级差异；本项目无版本与差异视图 |
 | 创建方式 | 设置页表单人工编写 + 会话内草案卡片 | 对方独有：WorkBuddy 对话式创建（本项目按「人工配置」明确不做） |
 | 分发 | 搬数据目录，无导出导入、无市场 | 对方独有：专家包分享链接、15 行业分类市场与推荐位 |
@@ -68,7 +68,7 @@
 
 | 方向 | 可行性 | 依据与依赖代价 |
 | --- | --- | --- |
-| 阶段六已定：团队 = 团长（只读 + 调度）+ 成员独立会话 + 双账本（[专家团设计](../专家团设计.md)） | 已采纳 | DSH 的 `TeamTaskSnapshot`（`blockedBy` 无环、`revision` CAS、`writeScopes` 提示性前缀）与 WorkBuddy CLI 的三态任务列表同构，被采纳为任务账本；领导不生产的做法取自 Anthropic 与 RUG orchestrator，但保留只读验收以避免「无法核实的打回降低质量」 |
+| 阶段六已落地：团队 = 团长（只读 + 调度）+ 成员独立会话 + 双账本（[专家与专家团设计](../专家与专家团设计.md)） | 已采纳 | DSH 的 `TeamTaskSnapshot`（`blockedBy` 无环、`revision` CAS、`writeScopes` 提示性前缀）与 WorkBuddy CLI 的三态任务列表同构，被采纳为任务账本；领导不生产的做法取自 Anthropic 与 RUG orchestrator，但保留只读验收以避免「无法核实的打回降低质量」 |
 | 团队模式按根会话开启、默认关闭、只有根可改 | 已采纳 | 纯装配期开关加一个随会话持久化的字段，与现有「专家绑定随会话落盘」同链路；DSH 的 `agentTeam.enabled`（新会话默认 false、后代共享）可直接对照 |
 | 成员写冲突用提示性 `writeScopes` 展示而非加锁 | 已采纳 | 本项目已有子代理 `write_scope` 守卫，由账本派生同一字段做告警；DSH 明确该字段是规范化提示性前缀，不是锁 |
 | 专家正文的版本与上游差异视图（只展示、不合并） | 中偏低 | 与已定的「派生副本不自动合并」相容，但需要版本化写回与差异 UI，改动面大于当前定义文件形态 |
@@ -96,6 +96,6 @@
 - Cline：[subagents](https://docs.cline.bot/features/subagents)、[agent teams](https://docs.cline.bot/cli/agent-teams)（核实于 2026-11）
 - Ekko Studio、OpenBitFun、TencentDB Agent Memory、ZCode：官方仓库与官方文档，见各自项目文件的「信息来源」节（核实于 2026-11-06 至 2026-11-12）
 
-本项目侧事实出处：[专家设计](../专家设计.md)、`src/shared-process/expert-definitions.ts`、`src/sdk-host/expert-role.ts`、`src/sdk-host/expert-capability.ts`、`src/sdk-host/expert-write-guard.ts`、`src/main/sessions/expert-files.ts`。
+本项目侧事实出处：[专家与专家团设计](../专家与专家团设计.md)、`src/shared-process/expert-definitions.ts`、`src/sdk-host/expert-role.ts`、`src/sdk-host/expert-capability.ts`、`src/sdk-host/expert-write-guard.ts`、`src/main/sessions/expert-files.ts`。
 
 二手（本次未把媒体与第三方实测作为结论依据）：WorkBuddy 专家团成本口径来自官方文档自述，第三方实测仅在本项目记录中标注为二手测量，未用于本文件的判断。

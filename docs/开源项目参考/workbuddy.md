@@ -171,5 +171,5 @@ WorkBuddy 为闭源商业产品，没有可读源码、也没有可复用的许�
 - 技能登记门禁（登记沿用、必读引用加载核对、修改类工具阻断）：`docs/modules/skill-guard.md`；实现见 `resources/agent/extensions/skill-guard/`
 - MCP 与资源包：`docs/modules/resources-mcp.md`、`resources/agent/bundle.json`
 - 过程可见性（待办清单）：`src/renderer/src/sessions/components/TodoPanel.vue`
-- 专家团（团队定义、团长收窄、成员会话、任务账本与派活验收）：`docs/专家团设计.md`；实现见 `src/sdk-host/team-role.ts`、`src/sdk-host/team-board.ts`、`src/sdk-host/team-dispatch.ts`、`src/sdk-host/team-runner.ts`、`src/shared/team-board-api.ts`
+- 专家团（团队定义、团长收窄、成员会话、任务账本与派活验收）：`docs/专家与专家团设计.md`；实现见 `src/sdk-host/team-role.ts`、`src/sdk-host/team-board.ts`、`src/sdk-host/team-dispatch.ts`、`src/sdk-host/team-runner.ts`、`src/shared/team-board-api.ts`
 - 团队面板与成员只读查看：`docs/modules/sessions-chat.md`；实现见 `src/renderer/src/sessions/components/TeamPanel.vue`、`src/renderer/src/sessions/components/TeamMemberDialog.vue`

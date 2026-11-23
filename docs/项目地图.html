@@ -356,6 +356,71 @@
         ]
       },
       {
+        "id": "experts",
+        "name": "专家与专家团",
+        "groupId": "chat",
+        "summary": "给会话一个固定身份、方法论与能力范围的专家层，以及在其上叠加「团长调度 + 成员独立会话 + 共享任务账本」的团队层；两层共用同一套定义解析、标识规则、能力范围与写入范围。",
+        "features": [
+          "专家定义的双来源合并：内置随包只读，自定义目录可写，同标识的自定义定义覆盖内置并可删除恢复默认",
+          "设置页同一分节管理专家与团队：类型筛选、派生副本、编辑内置（写覆盖定义）、删除确认列出引用它的团队",
+          "会话级专家绑定：新建时选择、打开成功落盘、首轮后锁定，定义失效只标警示不自动清除",
+          "能力范围三层收窄：技能在装配入口过滤、MCP 在配置钩子标停用、工具从激活集合移除（受保护项保留）",
+          "写入范围三态（不限制／只读／白名单）由宿主守卫拦 write 与 edit 的真实路径",
+          "开团时团长覆盖请求专家并追加收窄：移出写、执行与委派工具，写入范围置只读",
+          "任务账本随根会话分支落盘，团长提交条目状态、宿主回写成员轮次终态，两个写入方互不代写",
+          "成员轮由独立子进程跑完一轮，续派复用同一成员会话；成员会话只读可见、不进项目列表与标签",
+          "会话内卡片可创建与更新专家与团队定义，保存走与设置页同一条通道"
+        ],
+        "tags": ["Electron 主进程", "SDK 宿主", "Pi 扩展", "Vue 页面", "文件化定义"],
+        "entries": [
+          {"kind": "关键实现", "label": "专家与团队定义解析、合并与诊断", "path": "src/shared-process/expert-definitions.ts"},
+          {"kind": "关键实现", "label": "团队定义解析、合并与声明段生成", "path": "src/shared-process/team-definitions.ts"},
+          {"kind": "关键实现", "label": "默认能力基线读取与原子写", "path": "src/shared-process/expert-capability-defaults.ts"},
+          {"kind": "关键实现", "label": "专家清单、能力候选与默认基线", "path": "src/main/sessions/expert-catalog.ts"},
+          {"kind": "关键实现", "label": "专家定义派生、读取、保存与删除", "path": "src/main/sessions/expert-files.ts"},
+          {"kind": "关键实现", "label": "团队清单与可开团判定", "path": "src/main/sessions/team-catalog.ts"},
+          {"kind": "关键实现", "label": "自定义团队读写删", "path": "src/main/sessions/team-files.ts"},
+          {"kind": "关键实现", "label": "成员会话登记与只读读取", "path": "src/main/sessions/team-sessions.ts"},
+          {"kind": "关键实现", "label": "会话专家与团队绑定解析", "path": "src/main/sessions/session-experts.ts"},
+          {"kind": "关键实现", "label": "许可集计算与卡片候选段", "path": "src/sdk-host/expert-capability.ts"},
+          {"kind": "关键实现", "label": "专家角色段装配", "path": "src/sdk-host/expert-role.ts"},
+          {"kind": "关键实现", "label": "写入范围守卫", "path": "src/sdk-host/expert-write-guard.ts"},
+          {"kind": "关键实现", "label": "团队段与团长收窄", "path": "src/sdk-host/team-role.ts"},
+          {"kind": "关键实现", "label": "任务账本与摘要段", "path": "src/sdk-host/team-board.ts"},
+          {"kind": "关键实现", "label": "派活、停止与终态回写", "path": "src/sdk-host/team-dispatch.ts"},
+          {"kind": "关键实现", "label": "成员轮的进程载体", "path": "src/sdk-host/team-runner.ts"},
+          {"kind": "协议入口", "label": "专家通道契约", "path": "src/shared/experts-api.ts"},
+          {"kind": "协议入口", "label": "团队资源通道契约", "path": "src/shared/teams-api.ts"},
+          {"kind": "协议入口", "label": "成员会话只读通道契约", "path": "src/shared/team-session-api.ts"},
+          {"kind": "协议入口", "label": "任务账本契约", "path": "src/shared/team-board-api.ts"},
+          {"kind": "界面入口", "label": "设置页专家与专家团分节", "path": "src/renderer/src/experts/components/ExpertSettingsSection.vue"},
+          {"kind": "界面入口", "label": "专家编辑对话框", "path": "src/renderer/src/experts/components/ExpertEditorDialog.vue"},
+          {"kind": "界面入口", "label": "团队编辑对话框", "path": "src/renderer/src/experts/components/TeamEditorDialog.vue"},
+          {"kind": "关键实现", "label": "能力勾选换算", "path": "src/renderer/src/experts/capability-selection.ts"},
+          {"kind": "界面入口", "label": "会话内团队面板", "path": "src/renderer/src/sessions/components/TeamPanel.vue"},
+          {"kind": "界面入口", "label": "成员只读弹窗", "path": "src/renderer/src/sessions/components/TeamMemberDialog.vue"}
+        ],
+        "resources": [
+          {"name": "内置与自定义专家、团队定义", "owner": "随包 resources/agent/ 与产品 agent 目录", "lifecycle": "随包只读、随版本升级；自定义目录写入口只有主进程那一组函数，编辑内置专家写同标识覆盖定义"},
+          {"name": "默认能力基线", "owner": "capability-defaults.json", "lifecycle": "全局一份，null 表示不限制；缺失或损坏按不限制回退，只在召唤专家时参与计算"},
+          {"name": "会话专家与团队绑定", "owner": "DesktopConfigStore", "lifecycle": "打开成功时由主进程写入、首轮后锁定；改定义不影响既有会话，下次新建会话生效"},
+          {"name": "成员会话与任务账本", "owner": "宿主团队扩展与主进程成员登记", "lifecycle": "会话文件在 agentDir/team-sessions/\u003c根会话 id\u003e/，账本随根会话记录分支落盘；只按根会话是否还在做孤儿清理"}
+        ],
+        "constraints": [
+          "一次会话只用一个专家；团队模式下专家即团长，身份徽标只渲染一个",
+          "团队语义优先于专家工具范围：团长固定移出 write、edit、bash 与委派工具，写入范围置只读",
+          "工具范围只裁剪随包清单登记过的工具，门禁、待办清单、记忆组与团队工具始终保留",
+          "写入范围与工具范围正交：守卫只拦 write 与 edit 的目标路径，bash 重定向不受约束",
+          "成员会话不进项目列表与标签，也不按时间过期；只有根会话不在时清理",
+          "定义损坏或标识冲突只影响对应条目，不让整份清单消失；内置清单缺项按失败上抛"
+        ],
+        "links": [
+          {"label": "模块文档：专家与专家团", "href": "modules/experts.md"},
+          {"label": "设计文档：专家与专家团设计", "href": "专家与专家团设计.md"},
+          {"label": "公共记录 F-config", "href": "modules/shared.md#f-configdesktop-配置混合"}
+        ]
+      },
+      {
         "id": "lan-remote",
         "name": "手机访问",
         "groupId": "setting",
@@ -828,7 +893,10 @@
       {"id": "r-lr-shell-settings", "from": "lan-remote", "to": "app-shell", "label": "设置页承载启停与设备管理", "kind": "compose"},
       {"id": "r-lr-config-grant", "from": "lan-remote", "to": "projects-trust", "label": "读取全部已登记项目并复核目标", "kind": "call"},
       {"id": "r-lr-session-access", "from": "lan-remote", "to": "sessions-chat", "label": "授权后后台新建／接入、读取绑定资源与压缩", "kind": "call"},
-      {"id": "r-lr-resource-completion", "from": "lan-remote", "to": "resources-mcp", "label": "复用按项目信任决定的技能预读", "kind": "read"}
+      {"id": "r-lr-resource-completion", "from": "lan-remote", "to": "resources-mcp", "label": "复用按项目信任决定的技能预读", "kind": "read"},
+      {"id": "r-sc-ex-assemble", "from": "sessions-chat", "to": "experts", "label": "下发专家与团队绑定、装配角色段与范围收窄", "kind": "call"},
+      {"id": "r-ex-sc-manifest", "from": "experts", "to": "sessions-chat", "label": "回传专家清单、成员会话只读视图与成员轮次投影", "kind": "compose"},
+      {"id": "r-ex-subagent-guard", "from": "experts", "to": "sub-agent", "label": "成员轮复用写入守卫与进程收尾", "kind": "reference"}
     ],
     "runtime": {
       "nodes": [
@@ -837,7 +905,7 @@
           "name": "Electron 主进程",
           "kind": "常驻进程",
           "summary": "应用级配置、IPC、安全边界与退出编排的所有者；启动时按固定顺序注册各能力通道。",
-          "contains": ["app-shell", "projects-trust", "workspace-tabs", "sessions-chat", "files-editor", "git", "terminal-commands", "providers-auth", "resources-mcp", "updates-runtime", "preferences", "memory", "lan-remote"],
+          "contains": ["app-shell", "projects-trust", "workspace-tabs", "sessions-chat", "files-editor", "git", "terminal-commands", "providers-auth", "resources-mcp", "updates-runtime", "preferences", "memory", "lan-remote", "experts"],
           "entries": [
             {"kind": "进程入口", "label": "组合根", "path": "src/main/index.ts"},
             {"kind": "关键实现", "label": "业务实例唯一装配处", "path": "src/main/services.ts"},
@@ -879,7 +947,7 @@
           "name": "Vue 页面",
           "kind": "常驻进程",
           "summary": "保存展示副本、局部编辑与阅读状态；不直接持有系统进程，也不直接调用 Electron。",
-          "contains": ["app-shell", "workspace-tabs", "sessions-chat", "files-editor", "git", "terminal-commands", "providers-auth", "resources-mcp", "updates-runtime", "preferences", "memory", "lan-remote"],
+          "contains": ["app-shell", "workspace-tabs", "sessions-chat", "files-editor", "git", "terminal-commands", "providers-auth", "resources-mcp", "updates-runtime", "preferences", "memory", "lan-remote", "experts"],
           "entries": [
             {"kind": "页面入口", "label": "Vue 挂载", "path": "src/renderer/src/main.ts"},
             {"kind": "页面入口", "label": "组合根", "path": "src/renderer/src/App.vue"}
@@ -900,7 +968,7 @@
           "name": "SDK 宿主",
           "kind": "受管进程",
           "summary": "utilityProcess 承载官方 SDK 会话，SDK 事件与历史记录通过有界投影送达页面。",
-          "contains": ["sessions-chat", "sub-agent", "memory", "skill-guard"],
+          "contains": ["sessions-chat", "sub-agent", "memory", "skill-guard", "experts"],
           "entries": [
             {"kind": "进程入口", "label": "宿主入口", "path": "src/sdk-host/index.ts"},
             {"kind": "关键实现", "label": "会话运行", "path": "src/sdk-host/session-runtime.ts"},
