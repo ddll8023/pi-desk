@@ -68,6 +68,8 @@ const createTarget = computed<'expert' | 'team' | 'both'>(() => {
 interface AssetChip {
   readonly text: string
   readonly tone: 'plain' | 'warning'
+  /** 悬停提示：承载被行内省略的完整名单，避免徽标为了放全名单折成两行。 */
+  readonly title?: string
 }
 
 /** 列表行：专家与专家团共用一份形状，差异都收敛到徽标与动作集合里。 */
@@ -148,33 +150,79 @@ function delta(add: readonly string[], remove: readonly string[]): string {
   return `（${parts.join(' ')}）`
 }
 
-/** 能力摘要：只描述范围口径与数量，不把整个名单塞进行内徽标。 */
-function capabilitySummary(expert: SessionExpertView): string {
-  const skills = expert.skillsMode === 'only'
-    ? (expert.skillIds.length === 0
-      ? '技能 0 个（仅用选中）'
-      : `技能 ${expert.skillIds.length} 个（仅用选中：${nameList(expert.skillIds)}）`)
-    // 继承模式下的 `skills` 只作提示，不参与装配，所以标出来避免被当成实际范围。
-    : `技能继承默认${delta(expert.skillAddIds, expert.skillRemoveIds)}${
-      expert.skillIds.length > 0 ? `；声明 ${nameList(expert.skillIds)} 仅提示` : ''}`
-  const mcp = expert.mcpMode === 'only'
-    ? `MCP ${expert.mcpServerIds.length} 个（仅用选中）`
-    : `MCP 继承默认${delta(expert.mcpAddIds, expert.mcpRemoveIds)}`
-  // 工具维度只在偏离默认时提一句：大多数专家不动工具，行内徽标不应被它撑长。
-  const tools = expert.toolsMode === 'only'
-    ? `工具 ${expert.toolIds.length} 个（仅用选中）`
-    : expert.toolAddIds.length === 0 && expert.toolRemoveIds.length === 0
-      ? null
-      : `工具继承默认${delta(expert.toolAddIds, expert.toolRemoveIds)}`
-  return [skills, mcp, tools].filter((part): part is string => part !== null).join(' · ')
+/** 完整名单：只进徽标的悬停提示，行内不展开，以免把胶囊撑成两行。 */
+function fullNameList(ids: readonly string[]): string {
+  return ids.join('、')
 }
 
-/** 写入范围摘要：不限制、只读与白名单三种形态各一句短语，名单同样只取前三个。 */
-function writeScopeSummary(expert: SessionExpertView): string {
+/**
+ * 能力徽标：技能、MCP 与工具各一枚短胶囊，只写口径与数量。
+ * 名单放进 title 而不是行内——同一列表里胶囊一旦折行，行高就不再齐平。
+ */
+function capabilityChips(expert: SessionExpertView): AssetChip[] {
+  const chips: AssetChip[] = []
+  if (expert.skillsMode === 'only') {
+    chips.push({
+      text: `技能 · 仅用选中 ${expert.skillIds.length} 个`,
+      tone: 'plain',
+      title: expert.skillIds.length === 0
+        ? '技能范围：仅用选中，没有勾选任何技能'
+        : `技能范围：仅用选中；${fullNameList(expert.skillIds)}`
+    })
+  } else {
+    chips.push({
+      text: `技能 · 继承默认${delta(expert.skillAddIds, expert.skillRemoveIds)}`,
+      tone: 'plain',
+      // 继承模式下的 `skillIds` 只作提示、不参与装配，所以在提示里写明，免得被当成实际范围。
+      title: expert.skillIds.length > 0
+        ? `技能范围：继承默认基线；声明 ${fullNameList(expert.skillIds)} 仅作提示，不参与装配`
+        : '技能范围：继承默认基线'
+    })
+  }
+  if (expert.mcpMode === 'only') {
+    chips.push({
+      text: `MCP · 仅用选中 ${expert.mcpServerIds.length} 个`,
+      tone: 'plain',
+      title: expert.mcpServerIds.length === 0
+        ? 'MCP 范围：仅用选中，没有勾选任何服务器'
+        : `MCP 范围：仅用选中；${fullNameList(expert.mcpServerIds)}`
+    })
+  } else {
+    chips.push({
+      text: `MCP · 继承默认${delta(expert.mcpAddIds, expert.mcpRemoveIds)}`,
+      tone: 'plain',
+      title: 'MCP 范围：继承默认基线'
+    })
+  }
+  // 工具维度只在偏离默认时提一句：大多数专家不动工具，行内徽标不应被它撑长。
+  if (expert.toolsMode === 'only') {
+    chips.push({
+      text: `工具 · 仅用选中 ${expert.toolIds.length} 个`,
+      tone: 'plain',
+      title: expert.toolIds.length === 0
+        ? '工具范围：仅用选中，没有勾选任何工具'
+        : `工具范围：仅用选中；${fullNameList(expert.toolIds)}`
+    })
+  } else if (expert.toolAddIds.length > 0 || expert.toolRemoveIds.length > 0) {
+    chips.push({
+      text: `工具 · 继承默认${delta(expert.toolAddIds, expert.toolRemoveIds)}`,
+      tone: 'plain',
+      title: '工具范围：继承默认基线'
+    })
+  }
+  return chips
+}
+
+/** 写入范围徽标：不限制、只读与白名单三种形态各一句短语，路径名单只取前三个并补全到提示里。 */
+function writeScopeChip(expert: SessionExpertView): AssetChip {
   const scope = expert.writeScope
-  if (scope === null) return '写入 不限制'
-  if (scope.length === 0) return '写入 只读'
-  return `写入 ${nameList(scope)}`
+  if (scope === null) return { text: '写入 不限制', tone: 'plain' }
+  if (scope.length === 0) return { text: '写入 只读', tone: 'plain' }
+  return {
+    text: `写入 ${nameList(scope)}`,
+    tone: 'plain',
+    title: `写入范围：${fullNameList(scope)}`
+  }
 }
 
 /** 专家的警示行：技能引用失效与正文截断都只影响召唤后的效果，所以并成一行。 */
@@ -186,12 +234,10 @@ function expertWarning(expert: SessionExpertView): string | null {
 }
 
 function expertRow(expert: SessionExpertView): AssetRow {
-  const chips: AssetChip[] = [
-    { text: capabilitySummary(expert), tone: 'plain' },
-    { text: writeScopeSummary(expert), tone: 'plain' }
-  ]
+  const chips: AssetChip[] = []
   // 覆盖项先说来源：同样是「自定义」，它与手写新专家的区别正是「改的是内置那一份」。
-  if (expert.overridesBuiltin) chips.unshift({ text: '覆盖内置', tone: 'plain' })
+  if (expert.overridesBuiltin) chips.push({ text: '覆盖内置', tone: 'plain' })
+  chips.push(...capabilityChips(expert), writeScopeChip(expert))
   return {
     key: `expert-${expert.id}`,
     kind: 'expert',
@@ -522,8 +568,9 @@ onMounted(() => {
                   <span
                     v-for="chip in row.chips"
                     :key="chip.text"
-                    class="chip"
+                    class="chip whitespace-nowrap"
                     :class="chip.tone === 'warning' ? 'text-desk-warning' : ''"
+                    :title="chip.title"
                   >
                     {{ chip.text }}
                   </span>
