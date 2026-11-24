@@ -4,6 +4,10 @@
  * 清单只覆盖「可独立启停的产品能力」，内核（窗口外壳、IPC 基座、会话运行时、模型认证、信任与写入守卫）
  * 不在此列，也不存在可关闭项。装配期按依赖顺序调用 `registerBuiltinPlugins`，被停用的插件整段跳过；
  * 主进程无法注销已注册通道，因此启停只在启动期决定装配，运行期切换需重启才完全生效。
+ *
+ * 另有一类「偏好类插件」（快捷输入、执行模式）：它们的通道由内核的偏好服务代理注册，没有自己的注册函数，
+ * 停用不改通道，而是由各消费点读取启动快照门控行为——`session-manager` 读执行模式时固定标准档，
+ * 会话页按快照隐藏 ＋ 菜单的对应分类。因此它们的停用同样只在重启后生效，但效果是消费点消失而非通道缺席。
  */
 import type { PluginEntryView } from '../../shared/plugin-api'
 import { registerProjectFileHandlers } from '../projects/ipc'
@@ -20,7 +24,10 @@ import { registerUsageStatsHandlers } from '../usage/ipc'
 import { configStore, projectManager } from '../services'
 import { markPluginAssembly, startupDisabledPlugins } from './plugin-gate'
 
-/** 一条内置插件的装配声明；`register` 为 null 表示该能力的通道由其他插件或内核代理。 */
+/**
+ * 一条内置插件的装配声明；`register` 为 null 表示该能力的通道由其他插件或内核代理。
+ * 代理型条目（快捷输入、执行模式）的停用不改变通道，由消费点读启动快照决定行为是否提供。
+ */
 export interface BuiltinPlugin {
   readonly id: string
   readonly name: string
@@ -102,6 +109,20 @@ export const BUILTIN_PLUGINS: readonly BuiltinPlugin[] = [
     summary: '会话用量明细与跨会话 Token 统计。',
     dependencies: [],
     register: pageUrl => registerUsageStatsHandlers(pageUrl)
+  },
+  {
+    id: 'quick-send',
+    name: '快捷输入',
+    summary: '输入坞 ＋ 菜单「常用消息」里的短语，点一下用该短语直接发送；短语随界面偏好保存。',
+    dependencies: [],
+    register: null
+  },
+  {
+    id: 'execution-mode',
+    name: '执行模式',
+    summary: '新建会话的执行模式：快速或标准，决定加载哪些规范 Skill、是否要求先讨论方案。',
+    dependencies: [],
+    register: null
   }
 ]
 

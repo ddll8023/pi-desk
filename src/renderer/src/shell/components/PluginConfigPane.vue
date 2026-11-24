@@ -13,6 +13,8 @@ import AppButton from '../../ui/AppButton.vue'
 import type { PluginEntryView } from '../../../../shared/plugin-api'
 import FileSettingsSection from '../../editor/components/FileSettingsSection.vue'
 import QuickCommandsSection from '../../preferences/components/QuickCommandsSection.vue'
+import QuickSendSection from '../../preferences/components/QuickSendSection.vue'
+import ExecutionModeSection from '../../preferences/components/ExecutionModeSection.vue'
 import TerminalSettingsSection from '../../workspace/components/TerminalSettingsSection.vue'
 import GitSettingsSection from '../../git/components/GitSettingsSection.vue'
 import LanRemoteSettingsSection from '../../lan-remote/components/LanRemoteSettingsSection.vue'
@@ -45,7 +47,9 @@ const PLUGIN_SETTINGS_VIEWS: Readonly<Record<string, Component>> = {
   'lan-remote': LanRemoteSettingsSection,
   experts: ExpertSettingsSection,
   memory: MemorySettingsSection,
-  usage: UsageStatsSection
+  usage: UsageStatsSection,
+  'quick-send': QuickSendSection,
+  'execution-mode': ExecutionModeSection
 }
 
 const settingsView = computed<Component | null>(() => (

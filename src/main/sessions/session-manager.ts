@@ -15,7 +15,8 @@
  * 需显式中断确认），释放成功后才删文件；任一步失败都会保留会话原样，不产生半删状态。
  * 会话文件删除后，按界面偏好清理该会话独占且无未提交改动的任务工作树；清理失败不回滚删除，也不影响列表返回。
  * 有活动操作而重载请求未确认时直接拒绝，不自动中断、不排队、不重放已提交的内容。
- * 执行模式在授权时读一次随目标下发，宿主据此裁剪 Skill 集合；读失败按标准模式处理。
+ * 执行模式在授权时读一次随目标下发，宿主据此裁剪 Skill 集合；读失败按标准模式处理，
+ * 执行模式插件在本次启动被停用时同样固定标准模式（偏好值保留，重新启用并重启后生效）。
  * 专家绑定只存标识：已存在的会话以持久绑定为准，新建时用打开请求里的值并在打开成功时立即落盘
  * （会话身份那一刻才确定，页面取不到），宿主装载定义后才注入角色段。
  * IPC 契约与校验在 shared/session-api.ts。
@@ -51,6 +52,7 @@ import { resolveSessionExpert } from './session-experts'
 import type { SessionExpertBindings } from './session-experts'
 import { resolveSessionTeam } from './session-teams'
 import type { SessionTeamBindings } from './session-teams'
+import { isPluginDisabledAtStartup } from '../plugins/plugin-gate'
 import { materializeTeamSessions, removeTeamSessionDirectory } from './team-sessions'
 import type { TeamSessionBindings } from './team-sessions'
 import type { TeamCatalogView, TeamView } from '../../shared/teams-api'
@@ -237,8 +239,10 @@ export class SessionManager {
 
   /**
    * 读执行模式；读失败按标准模式处理。偏好读不到时不能默默收紧 Agent 的能力集，
-   * 也不应因此让用户建不了会话。
+   * 也不应因此让用户建不了会话。执行模式插件停用时直接给标准档：它不收紧任何能力，
+   * 也不会让停用状态下还偷偷以快速档裁剪 Skill。
    */  private async executionMode(): Promise<ExecutionMode> {
+    if (isPluginDisabledAtStartup('execution-mode')) return 'standard'
     try {
       return await this.options.readExecutionMode()
     } catch {

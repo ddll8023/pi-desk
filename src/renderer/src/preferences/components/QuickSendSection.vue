@@ -1,15 +1,22 @@
-<!-- 设置页的快捷输入区块：编辑输入坞 ＋ 菜单「常用消息」段里的候选短语。
+<!-- 设置页的快捷输入区块（在插件分节的「快捷输入」条目下）：编辑输入坞 ＋ 菜单「常用消息」段里的候选短语。
      编辑只改本地草稿，点保存才写入界面偏好；主进程保存成功后才提交，失败保留草稿并就地提示。
-     规范化规则与主进程存储层保持一致，用户看到的就是实际会被保存的内容。 -->
+     规范化规则与主进程存储层保持一致，用户看到的就是实际会被保存的内容。
+     本插件在本次启动被停用时不隐藏编辑入口：短语仍可改可存，但输入坞这次不展示常用消息，
+     因此页头下要说明原因，不让人以为改了没生效是缺陷。 -->
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { MAX_QUICK_SEND_MESSAGES, MAX_QUICK_SEND_MESSAGE_LENGTH } from '../../../../shared/preferences-api'
 import { usePreferencesStore } from '../stores/preferences'
+import { usePluginsStore } from '../../shell/stores/plugins'
 import AppButton from '../../ui/AppButton.vue'
 
 const preferencesStore = usePreferencesStore()
+const pluginsStore = usePluginsStore()
 const { quickSendMessages, quickSendView, ready } = storeToRefs(preferencesStore)
+
+/** 快捷输入插件在本次启动是否被停用；停用时输入坞不展示常用消息，编辑入口照旧可用。 */
+const pluginDisabled = computed(() => pluginsStore.isDisabled('quick-send'))
 
 /** 编辑中的短语；顺序即下拉展示顺序。 */
 const draft = ref<string[]>([...quickSendMessages.value])
@@ -81,6 +88,10 @@ async function save(): Promise<void> {
       <h1 class="text-xl font-semibold tracking-tight">快捷输入</h1>
       <p class="mt-1 text-sm text-desk-muted">输入坞 ＋ 菜单「常用消息」里的短语，点一下就用该短语直接发送。</p>
     </header>
+
+    <p v-if="pluginDisabled" role="status" class="status-notice status-notice-warn">
+      本插件已停用：本次启动输入坞不再显示常用消息，短语仍可在这里编辑，重新启用并重启后恢复。
+    </p>
 
     <section class="settings-section" aria-labelledby="settings-quick-send-title">
       <div class="settings-section-heading">

@@ -15,8 +15,6 @@ import { useSettingsStore } from '../stores/settings'
 import { SETTINGS_NAV_GROUPS } from '../settings-navigation'
 import AppButton from '../../ui/AppButton.vue'
 import ModelSettingsView from '../../providers/components/ModelSettingsView.vue'
-import QuickSendSection from '../../preferences/components/QuickSendSection.vue'
-import ExecutionModeSection from '../../preferences/components/ExecutionModeSection.vue'
 import ResourceView from '../../resources/components/ResourceView.vue'
 import SettingsNavIcon from './SettingsNavIcon.vue'
 import PluginListPane from './PluginListPane.vue'
@@ -240,8 +238,6 @@ watch(
           </section>
         </template>
 
-        <QuickSendSection v-else-if="activeSection === 'quick-send'" />
-        <ExecutionModeSection v-else-if="activeSection === 'features'" />
         <ModelSettingsView v-else-if="activeSection === 'model'" />
         <ResourceView v-else-if="activeSection === 'resources'" />
 

@@ -1,7 +1,7 @@
 <!-- 图片与编号说明由坞内附件区独立管理；点击发送即固定提示词、图片及标注快照，说明由 SDK 独立资料消息承接。
      结果未确认时可补读同步，确认结束原运行后恢复输入，不自动重发。
      原位新建以独立草稿承接输入：旧实例结束期间可编辑但不发送，首次发送才建立新会话。
-     Prompt 输入坞：处理输入法组合态、Enter 发送与 Shift+Enter 换行、焦点回归与重复提交、响应侧栏「新建」的聚焦请求并给出一次性提示，并在 Agent 运行期间原位提供停止入口；在 Agent 运行与流式响应期间草稿文本、图片附件与标注编辑保持可用，点击发送时才校验会话空闲；同时承接 Extension 的 set_editor_text 填充文本、图片附件的选择/文本框与活动视窗全局快捷粘贴（兼容系统截图提取）/拖拽入口、输入行按内容自动增高、＋ 菜单内的常用消息（短语取自界面偏好，可在设置里增删改与排序，点击即发送）、Pi 命令的斜杠模糊补全（Runtime 就绪后用运行中的命令清单，未就绪时用主进程预读的技能清单，按类型分组并按匹配优先级排序；另含 Desktop 层自己拦截的界面命令）与 `@` 项目文件引用（编辑器内以胶囊包裹，提交的仍是相对路径文本，不传文件内容）；右侧文件树的行拖入坞内也走同一条相对路径引用规则；输入行是富文本，纯文本与引用胶囊混排，草稿字符串仍是唯一文本真源。输入坞是单行结构：左侧 ＋ 菜单是两列双级结构——左列分类行（添加图片、模型、执行模式、专家 / 团队、技能、常用消息），右列是当前分类的二级面板（添加图片直接触发选择，其余五项常驻在面板里、仅列表区内部滚动，其中技能点击在光标处插入 `/skill:<名称>` 命令胶囊、不发送（同一消息可插多条，宿主只展开开头那条）；执行模式两档互斥；专家与团队共用一个面板、专家一个会话只选一个、选中团队时专家即为团长，三者都只在新建会话时可选，已开始的会话只显示当前值不可改），中间是输入行，右侧是发送/停止键；坞上方是待办清单面板（仅标准模式提交清单后出现）、一行延续判定结论（宿主给出结论时才渲染）与一行专家失效提示（绑定的定义已不在清单里时才渲染，坞内身份徽标团队优先、同一身份只显示一次）；坞下方一行是水平居中的信息行：异常与进行中的状态文本、被收起的 Extension 对话入口与会话用量指标（缓存命中率、上下文占用与平均速率，点击开明细；累计 token 与费用只在明细浮层展示）。Extension 的 setStatus 项不在输入区展示。 -->
+     Prompt 输入坞：处理输入法组合态、Enter 发送与 Shift+Enter 换行、焦点回归与重复提交、响应侧栏「新建」的聚焦请求并给出一次性提示，并在 Agent 运行期间原位提供停止入口；在 Agent 运行与流式响应期间草稿文本、图片附件与标注编辑保持可用，点击发送时才校验会话空闲；同时承接 Extension 的 set_editor_text 填充文本、图片附件的选择/文本框与活动视窗全局快捷粘贴（兼容系统截图提取）/拖拽入口、输入行按内容自动增高、＋ 菜单内的常用消息（短语取自界面偏好，可在设置里增删改与排序，点击即发送）、Pi 命令的斜杠模糊补全（Runtime 就绪后用运行中的命令清单，未就绪时用主进程预读的技能清单，按类型分组并按匹配优先级排序；另含 Desktop 层自己拦截的界面命令）与 `@` 项目文件引用（编辑器内以胶囊包裹，提交的仍是相对路径文本，不传文件内容）；右侧文件树的行拖入坞内也走同一条相对路径引用规则；输入行是富文本，纯文本与引用胶囊混排，草稿字符串仍是唯一文本真源。输入坞是单行结构：左侧 ＋ 菜单是两列双级结构——左列分类行（添加图片、模型、执行模式、专家 / 团队、技能、常用消息；执行模式与常用消息两行受对应插件启停控制，本次启动被停用时整行不出现），右列是当前分类的二级面板（添加图片直接触发选择，其余五项常驻在面板里、仅列表区内部滚动，其中技能点击在光标处插入 `/skill:<名称>` 命令胶囊、不发送（同一消息可插多条，宿主只展开开头那条）；执行模式两档互斥；专家与团队共用一个面板、专家一个会话只选一个、选中团队时专家即为团长，三者都只在新建会话时可选，已开始的会话只显示当前值不可改），中间是输入行，右侧是发送/停止键；坞上方是待办清单面板（仅标准模式提交清单后出现）、一行延续判定结论（宿主给出结论时才渲染）与一行专家失效提示（绑定的定义已不在清单里时才渲染，坞内身份徽标团队优先、同一身份只显示一次）；坞下方一行是水平居中的信息行：异常与进行中的状态文本、被收起的 Extension 对话入口与会话用量指标（缓存命中率、上下文占用与平均速率，点击开明细；累计 token 与费用只在明细浮层展示）。Extension 的 setStatus 项不在输入区展示。 -->
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
@@ -13,6 +13,7 @@ import type { ExecutionMode } from '../../../../shared/preferences-api'
 import type { SessionExpertView } from '../../../../shared/session-api'
 import { useExtensionUiStore } from '../stores/extension-ui'
 import { usePreferencesStore } from '../../preferences/stores/preferences'
+import { usePluginsStore } from '../../shell/stores/plugins'
 import { useProjectFileStore } from '../../editor/stores/project-file'
 import { useResourceStore } from '../../resources/stores/resource'
 import { useProjectStore } from '../../projects/stores/project'
@@ -47,6 +48,7 @@ const resourceStore = useResourceStore()
 const sessionStore = useSessionStore()
 const teamStore = useTeamStore()
 const preferencesStore = usePreferencesStore()
+const pluginsStore = usePluginsStore()
 const sessionViewStore = useSessionViewStore()
 const workspaceTabsStore = useWorkspaceTabsStore()
 const { view: runtimeView, promptView, abortView, compactView, projectionSync, capabilitiesView, modelSwitchView,
@@ -200,18 +202,34 @@ const plusMenuOpen = ref(false)
 /** 菜单外层引用：判断一次点击是否落在触发键或菜单之内。 */
 const plusRoot = ref<HTMLElement | null>(null)
 const plusMenu = ref<HTMLElement | null>(null)
-/** 二级面板的分类：除图片是直接执行的动作外，其余五项各占一块面板。 */
+/** 二级面板的分类：除图片是直接执行的动作外，其余项各占一块面板。 */
 type PlusPanel = 'model' | 'mode' | 'expert' | 'skill' | 'quick'
-/** 一级列的分类与面板映射；图片是直接动作，不在其中。专家与专家团同属一个面板。 */
-const plusPanelRows: readonly { readonly value: PlusPanel; readonly label: string }[] = [
-  { value: 'model', label: '模型' },
-  { value: 'mode', label: '执行模式' },
-  { value: 'expert', label: '专家 / 团队' },
-  { value: 'skill', label: '技能' },
-  { value: 'quick', label: '常用消息' }
-]
+/** 一级行的一条：标识与显示名。 */
+interface PlusPanelRow {
+  readonly value: PlusPanel
+  readonly label: string
+}
+/**
+ * 一级列的分类与面板映射；图片是直接动作，不在其中。专家与专家团同属一个面板。
+ * 执行模式与常用消息各受对应插件的启停控制：本次启动被停用时整行不出现，也不留空面板。
+ */
+const plusPanelRows = computed<readonly PlusPanelRow[]>(() => {
+  const rows: PlusPanelRow[] = [{ value: 'model', label: '模型' }]
+  if (!pluginsStore.isDisabled('execution-mode')) rows.push({ value: 'mode', label: '执行模式' })
+  rows.push({ value: 'expert', label: '专家 / 团队' }, { value: 'skill', label: '技能' })
+  if (!pluginsStore.isDisabled('quick-send')) rows.push({ value: 'quick', label: '常用消息' })
+  return rows
+})
+/** 打开菜单时的默认落点：常用消息被停用时落到首个分类，否则会停在一行不存在的分类上。 */
+function defaultPlusPanel(): PlusPanel {
+  return pluginsStore.isDisabled('quick-send') ? 'model' : 'quick'
+}
 /** 当前展开的二级面板；面板始终展开，点一级行只换面板，不收菜单。 */
-const plusPanel = ref<PlusPanel>('quick')
+const plusPanel = ref<PlusPanel>(defaultPlusPanel())
+/** 清单读到较晚时兜一次：当前面板对应的行已被隐藏就回到默认落点，不留空面板。 */
+watch(plusPanelRows, (rows) => {
+  if (!rows.some(row => row.value === plusPanel.value)) plusPanel.value = defaultPlusPanel()
+})
 /** 二级面板容器引用：键盘从一级行进面板、Esc 退回一级行都按它判断焦点位置。 */
 const plusPanelRoot = ref<HTMLElement | null>(null)
 /**
@@ -908,8 +926,8 @@ function togglePlusMenu(): void {
   if (plusMenuOpen.value) closePlusMenu()
   else {
     plusMenuOpen.value = true
-    // 每次打开都回到常用消息，保留上一次停在哪一分类只会在重开时让人意外。
-    plusPanel.value = 'quick'
+    // 每次打开都回到默认分类，保留上一次停在哪一分类只会在重开时让人意外。
+    plusPanel.value = defaultPlusPanel()
     // 专家目录可能刚被改过：每次打开都重读一次，不在应用启动时就缓存住。
     void sessionStore.loadExperts()
     // 团队清单同理：刚在设置页改过定义，这里应立刻看到能否开团。
@@ -1011,7 +1029,7 @@ function onPlusTriggerKeydown(event: KeyboardEvent): void {
   if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
   event.preventDefault()
   plusMenuOpen.value = true
-  plusPanel.value = 'quick'
+  plusPanel.value = defaultPlusPanel()
   // 向下键从首行进入，向上键从末行进入；-1 按 focusPlusNavRow 的收边规则落到最后一行。
   void nextTick(() => { focusPlusNavRow(event.key === 'ArrowDown' ? 0 : -1) })
 }

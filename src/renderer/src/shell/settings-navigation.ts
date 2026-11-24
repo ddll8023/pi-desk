@@ -5,16 +5,16 @@
  * 内容由 SettingsView 按 id 分发，因此新增一个内核分节要在两处落下：这里加一条数据，再在 SettingsView 里接上内容组件。
  *
  * 能力自己的设置项不占主导航：它们收在「插件」分节里，由插件清单逐条列出，选中条目即在右侧渲染该插件的设置。
- * 原「文件、快捷命令、终端、Git、手机访问、专家与专家团、记忆、用量」八个分节因此降为插件选中项别名，
- * 旧 id 仍可深链（`resolveSettingsSection`），落到对应插件选中项而不是消失。
+ * 原「文件、快捷命令、终端、Git、手机访问、专家与专家团、记忆、用量」八个分节以及「快捷输入」「功能」
+ * 因此降为插件选中项别名，旧 id 仍可深链（`resolveSettingsSection`），落到对应插件选中项而不是消失。
  */
 
 /** 设置页的分节标识；也是内容分发与深链跳转的唯一键。 */
-export type SettingsSectionId = 'appearance' | 'quick-send' | 'features' | 'model' | 'resources' | 'plugins' | 'version'
+export type SettingsSectionId = 'appearance' | 'model' | 'resources' | 'plugins' | 'version'
 
 /** 导航条目可用的图标名；每个名字对应 SettingsNavIcon 里的一段内联 Lucide 路径。
  * 只保留导航实际使用的名字：模块分节迁入插件后不再需要各自的图标，残留名字只会让图标表越来越乱。 */
-export type SettingsIconName = 'palette' | 'zap' | 'toggle-left' | 'bot' | 'blocks' | 'plugin' | 'refresh-cw'
+export type SettingsIconName = 'palette' | 'bot' | 'blocks' | 'plugin' | 'refresh-cw'
 
 /** 一个分节条目：标签是导航上显示的名字，关键词除标签本身外补上用户可能输入的别名。 */
 export interface SettingsNavItem {
@@ -38,8 +38,6 @@ export const SETTINGS_NAV_GROUPS: readonly SettingsNavGroup[] = [
     label: '常规',
     items: [
       { id: 'appearance', label: '外观', icon: 'palette', keywords: ['主题', '浅色', '深色', 'theme'] },
-      { id: 'quick-send', label: '快捷输入', icon: 'zap', keywords: ['短语', '发送', 'quick send'] },
-      { id: 'features', label: '功能', icon: 'toggle-left', keywords: ['开关', 'feature', '执行模式', '快速模式', '标准模式'] },
       { id: 'model', label: '模型', icon: 'bot', keywords: ['供应商', '凭据', 'models.json', 'provider'] },
       { id: 'resources', label: '资源', icon: 'blocks', keywords: ['技能', '提示词模板', '扩展', 'MCP', 'skills'] }
     ]
@@ -52,7 +50,7 @@ export const SETTINGS_NAV_GROUPS: readonly SettingsNavGroup[] = [
         id: 'plugins',
         label: '插件',
         icon: 'plugin',
-        keywords: ['插件', '能力', '启用', '停用', 'plugin', '文件', '快捷命令', '终端', 'git', '手机访问', '专家', '专家团', '记忆', '用量']
+        keywords: ['插件', '能力', '启用', '停用', 'plugin', '文件', '快捷命令', '终端', 'git', '手机访问', '专家', '专家团', '记忆', '用量', '快捷输入', '短语', '常用消息', '执行模式', '快速模式', '标准模式']
       }
     ]
   },
@@ -81,7 +79,10 @@ export const PLUGIN_SECTION_ALIASES: Readonly<Record<string, string>> = {
   'lan-remote': 'lan-remote',
   experts: 'experts',
   memory: 'memory',
-  usage: 'usage'
+  usage: 'usage',
+  'quick-send': 'quick-send',
+  // 原「功能」分节只包含执行模式一项，别名指向插件标识，深链仍落到同一块设置。
+  features: 'execution-mode'
 }
 
 /** 解析后的落点：`plugins` 分节可能为空（清单读成后自动补首个启用项），也可能直接选中某个插件。 */

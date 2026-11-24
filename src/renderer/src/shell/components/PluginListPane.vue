@@ -116,7 +116,7 @@ function statusClass(plugin: PluginEntryView): string {
     </ul>
 
     <p v-if="phase === 'ready' && plugins.length > 0" class="plugin-list-note">
-      启停需要重启应用才完全生效；依赖缺席时该插件不装配。
+      启停需要重启应用才完全生效；被停用的插件不再装配，其中没有独立通道的偏好项（快捷输入、执行模式）隐藏对应入口。
     </p>
   </div>
 </template>

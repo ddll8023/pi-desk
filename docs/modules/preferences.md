@@ -4,7 +4,7 @@
 
 ## 职责与入口
 
-负责界面主题、侧栏与右侧面板、Markdown 默认视图、文件排除规则与显隐模式、终端链接打开模式、Git 清理策略、快捷输入短语，以及统一偏好服务对模型展示、快捷命令和功能开关的适配。入口为设置页常规分组下的“外观”“快捷输入”与相应布局、终端控件；文件、终端、快捷命令与 Git 清理策略的设置项已随各自能力移入设置页「插件」分节的插件详情。
+负责界面主题、侧栏与右侧面板、Markdown 默认视图、文件排除规则与显隐模式、终端链接打开模式、Git 清理策略、快捷输入短语，以及统一偏好服务对模型展示、快捷命令和功能开关的适配。入口为设置页常规分组下的「外观」与相应布局、终端控件；文件、终端、快捷命令、Git 清理策略、快捷输入与执行模式的设置项已随各自能力移入设置页「插件」分节。
 
 设置页导航不是设置值存储；窗口位置、项目列表、认证秘密和 Pi 自己的默认模型不归此模块独立写入。业务开关由本模块提供配置入口，实际运行行为由对应模块持有。
 
@@ -17,7 +17,7 @@
 | `src/renderer/src/preferences/stores/preferences.ts` | 偏好展示与动作状态、布局修改及执行模式的保存状态 |
 | `src/renderer/src/preferences/services/preferences.ts` | 固定偏好桥接与普通载荷重建 |
 | `src/renderer/src/preferences/components/QuickSendSection.vue` | 快捷发送短语管理 |
-| `src/renderer/src/preferences/components/ExecutionModeSection.vue` | 执行模式（标准／快速）选择分节，经偏好服务读写 |
+| `src/renderer/src/preferences/components/ExecutionModeSection.vue` | 执行模式（标准／快速）选择区块，经偏好服务读写；插件停用时提示本次启动固定标准档 |
 
 偏好入口、共享配置字段及 Store 消费关系来自源码读取与静态调用；各偏好的视觉样式在公共样式记录。
 
@@ -30,7 +30,7 @@
 - [终端](terminal-commands.md)：快捷命令有独立业务契约与 Store，配置适配复用 PreferencesManager；终端链接打开模式随 UI 偏好保存，由终端设置节与终端视图消费。
 - [更新](updates-runtime.md)：启动扩展自动更新消费自动更新开关。
 - [Git](git.md)：两个清理策略随 UI 偏好保存，分别作为合入弹窗与删除会话时的默认勾选；实际清理仍由 Git 模块与工作区管理器执行，偏好不代替确认。
-- 执行模式：契约与校验在 `src/shared/preferences-api.ts`（`isExecutionMode`、`ExecutionModePreference`），持久化由 `src/main/config/desktop-config-store.ts` 的 `readExecutionMode`／`saveExecutionMode` 承担；会话创建时 `src/main/sessions/session-manager.ts` 读取后交给 SDK 宿主，`product-resources.ts` 依模式裁剪用户级 Skill 与记忆工具，`session-runtime.ts` 注入模式分段。裁剪名单只维护在 `src/shared/execution-mode-skills.ts`：宿主据此过滤，设置页同源读取后逐条列出，不在文案里另写一份技能名。
+- 执行模式：契约与校验在 `src/shared/preferences-api.ts`（`isExecutionMode`、`ExecutionModePreference`），持久化由 `src/main/config/desktop-config-store.ts` 的 `readExecutionMode`／`saveExecutionMode` 承担；会话创建时 `src/main/sessions/session-manager.ts` 读取后交给 SDK 宿主（执行模式插件在本次启动被停用时不读偏好，直接下发标准档），`product-resources.ts` 依模式裁剪用户级 Skill 与记忆工具，`session-runtime.ts` 注入模式分段。裁剪名单只维护在 `src/shared/execution-mode-skills.ts`：宿主据此过滤，设置页同源读取后逐条列出，不在文案里另写一份技能名。
 - [F-style](shared.md#f-style全局主题与业务样式混合)：CSS 同名主题令牌，主进程通过 `nativeTheme` 驱动亮暗色。
 
 ## 调用链与数据

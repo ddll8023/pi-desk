@@ -12,6 +12,7 @@ import { onMounted, onUnmounted, watch } from 'vue'
 import { useDesktopStore } from './stores/desktop'
 import { useExtensionUiStore } from '../sessions/stores/extension-ui'
 import { usePreferencesStore } from '../preferences/stores/preferences'
+import { usePluginsStore } from './stores/plugins'
 import { useProjectStore } from '../projects/stores/project'
 import { useQuickCommandsStore } from '../preferences/stores/quick-commands'
 import { useResourceStore } from '../resources/stores/resource'
@@ -49,6 +50,7 @@ export function useAppStartup(): void {
   const desktopStore = useDesktopStore()
   const extensionStore = useExtensionUiStore()
   const preferencesStore = usePreferencesStore()
+  const pluginsStore = usePluginsStore()
   const projectStore = useProjectStore()
   const quickCommandsStore = useQuickCommandsStore()
   const resourceStore = useResourceStore()
@@ -90,6 +92,8 @@ export function useAppStartup(): void {
     void desktopStore.initialize()
     void extensionStore.initialize()
     void preferencesStore.initialize()
+    // 插件装配结论只用于隐藏被停用的展示入口，与会话可用性无关：读失败按全部可用处理。
+    void pluginsStore.initialize()
     void projectStore.initialize()
     void quickCommandsStore.initialize()
     void resourceStore.initialize()

@@ -20,16 +20,6 @@ defineProps<{ readonly name: SettingsIconName }>()
       <circle cx="8.5" cy="7.5" r=".5" fill="currentColor" />
     </template>
 
-    <path
-      v-else-if="name === 'zap'"
-      d="M15.914 4a1.5 1.5 0 0 0-2.474-1.561l-9 9A1.5 1.5 0 0 0 5.5 14h4.002a.5.5 0 0 1 .471.666L8.086 20a1.5 1.5 0 0 0 2.475 1.56l9-9A1.5 1.5 0 0 0 18.5 10h-3.997a.5.5 0 0 1-.472-.667z"
-    />
-
-    <template v-else-if="name === 'toggle-left'">
-      <rect width="20" height="12" x="2" y="6" rx="6" ry="6" />
-      <circle cx="8" cy="12" r="2" />
-    </template>
-
     <template v-else-if="name === 'bot'">
       <path d="M12 8V4H8" />
       <rect width="16" height="12" x="4" y="8" rx="2" />
