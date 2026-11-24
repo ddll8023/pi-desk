@@ -8,7 +8,7 @@
 
 顶部栏居中胶囊是对话导航入口：单行呈现项目名与当前会话，入口是模态弹窗（遮罩、居中轻量面板、Escape 或点遮罩收起，收起后焦点回到触发键），按新的在前列出每轮用户输入（序号、摘要、发送时间），列表内部自己滚动，键盘 ↑↓／Home／End 移动、Enter 跳转；触发键带「当前轮／总轮数」位置小标。入口列表与当前轮由消息区发布，顶部栏只渲染弹窗并发出跳转意图，滚动与折叠仍由消息区执行（见[会话与聊天](sessions-chat.md)）。
 
-不负责具体会话执行、文件读写、Git 命令或设置值的持久化。设置页是各业务模块的导航容器，「插件」分节是能力清单的宿主（列表、启停与插件详情渲染）；右侧面板是“文件”与“源代码管理”页签的共同宿主。
+不负责具体会话执行、文件读写、Git 命令或设置值的持久化。设置页是各业务模块的导航容器，「插件」分节是能力清单的宿主（列表、启停与选中项的配置面板渲染）；右侧面板是“文件”与“源代码管理”页签的共同宿主。
 
 ## 专属文件
 
@@ -23,12 +23,14 @@
 | `src/renderer/src/shell/components/AppDialogHost.vue` | 应用级弹层宿主：把各 Store 的待确认目标渲染成对话框，并按来源分派确认结果 |
 | `src/renderer/src/shell/use-app-startup.ts` | 展示 Store 的初始化与释放顺序、项目切换与会话落盘后的补读 |
 | `src/renderer/src/shell/components/AppTitleBar.vue` | 自绘标题栏、项目与会话信息、对话导航弹窗与布局切换入口 |
-| `src/renderer/src/shell/components/SettingsView.vue` | 设置导航与分节内容分发；外观设置入口 |
+| `src/renderer/src/shell/components/SettingsView.vue` | 设置导航与分节内容分发；外观设置入口；插件分节的列表与配置面板宿主 |
+| `src/renderer/src/shell/components/PluginListPane.vue` | 插件分节左栏：搜索、条目选中与启停开关，只派发意图，不直接调用桌面桥接 |
+| `src/renderer/src/shell/components/PluginConfigPane.vue` | 插件分节右栏：按 `PLUGIN_SETTINGS_VIEWS` 渲染选中插件的设置组件，处理读取中、读取失败与清单里无此项 |
 | `src/renderer/src/shell/components/SettingsNavIcon.vue` | 设置导航图标映射 |
 | `src/renderer/src/shell/components/RightPanel.vue` | 面板宽度与两类页签、文件目录和 Git 跟踪生命周期；按当前页签转交只读刷新 |
 | `src/renderer/src/shell/components/RightPanelTabs.vue` | 文件／源代码管理页签与 Git 改动角标 |
 | `src/renderer/src/shell/stores/desktop.ts` | 应用信息展示状态 |
-| `src/renderer/src/shell/stores/settings.ts` | 设置页开关、当前分节与当前插件详情目标，不保存设置值 |
+| `src/renderer/src/shell/stores/settings.ts` | 设置页开关、当前分节与当前选中的插件目标，不保存设置值 |
 | `src/renderer/src/shell/services/desktop.ts` | 应用信息桥接与通信失败转换 |
 | `src/renderer/src/shell/settings-navigation.ts` | 分组、分节 ID、图标及关键词定义 |
 

@@ -1,10 +1,10 @@
 /**
- * 设置页的界面状态：设置页是否占据工作区、当前停在哪个分节、是否停在某个插件详情。
+ * 设置页的界面状态：设置页是否占据工作区、当前停在哪个分节、是否选中某个插件。
  *
  * 只保存「看哪一页」，不保存任何设置项的值——那些由各自的 store 负责，也不做持久化，
  * 下次启动仍从默认分节进入。分节可以带参打开，供其他入口直接落到目标分节
- * （例如版本更新提示跳到「版本与更新」，快捷命令按钮落到终端的插件详情）。
- * 旧分节 id 经 `resolveSettingsSection` 解析成插件详情，页面侧不需要为历史入口另写分支。
+ * （例如版本更新提示跳到「版本与更新」，快捷命令按钮落到终端的插件选中项）。
+ * 旧分节 id 经 `resolveSettingsSection` 解析成插件选中项，页面侧不需要为历史入口另写分支。
  */
 import { ref } from 'vue'
 import { defineStore } from 'pinia'
@@ -30,21 +30,15 @@ export const useSettingsStore = defineStore('settings', () => {
     open.value = false
   }
 
-  /** 切换分节；旧分节 id 落到对应插件详情，无法解析的 id 忽略并保持当前页。 */
+  /** 切换分节；旧分节 id 落到对应的插件选中项，无法解析的 id 忽略并保持当前页。 */
   function setActiveSection(id: string): void {
     applySection(id)
   }
 
-  /** 进入某个插件的详情页：从插件列表点「配置」或深链落到同一个入口。 */
+  /** 选中某个插件：从左侧列表点条目或深链落到同一个入口，右侧面板随之切换。 */
   function openPlugin(id: string): void {
     activeSection.value = 'plugins'
     activePluginId.value = id
-  }
-
-  /** 从插件详情回到插件列表：保留分节，只清掉详情目标。 */
-  function backToPlugins(): void {
-    activeSection.value = 'plugins'
-    activePluginId.value = null
   }
 
   /** 解析并落位；解析不到时什么都不做，不把当前页清空。 */
@@ -55,5 +49,5 @@ export const useSettingsStore = defineStore('settings', () => {
     activePluginId.value = target.pluginId
   }
 
-  return { open, activeSection, activePluginId, openSettings, closeSettings, setActiveSection, openPlugin, backToPlugins }
+  return { open, activeSection, activePluginId, openSettings, closeSettings, setActiveSection, openPlugin }
 })

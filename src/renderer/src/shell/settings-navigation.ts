@@ -4,9 +4,9 @@
  * 这里只描述「有哪些分节、怎么分组、按什么词能被搜到」，不承载分节内容，也不判断分节是否可用；
  * 内容由 SettingsView 按 id 分发，因此新增一个内核分节要在两处落下：这里加一条数据，再在 SettingsView 里接上内容组件。
  *
- * 能力自己的设置项不占主导航：它们收在「插件」分节里，由插件清单逐条列出，点条目进入该插件的详情页。
- * 原「文件、快捷命令、终端、Git、手机访问、专家与专家团、记忆、用量」八个分节因此降为插件详情别名，
- * 旧 id 仍可深链（`resolveSettingsSection`），落到对应插件详情而不是消失。
+ * 能力自己的设置项不占主导航：它们收在「插件」分节里，由插件清单逐条列出，选中条目即在右侧渲染该插件的设置。
+ * 原「文件、快捷命令、终端、Git、手机访问、专家与专家团、记忆、用量」八个分节因此降为插件选中项别名，
+ * 旧 id 仍可深链（`resolveSettingsSection`），落到对应插件选中项而不是消失。
  */
 
 /** 设置页的分节标识；也是内容分发与深链跳转的唯一键。 */
@@ -69,7 +69,7 @@ export const SETTINGS_NAV_GROUPS: readonly SettingsNavGroup[] = [
 export const DEFAULT_SETTINGS_SECTION: SettingsSectionId = 'appearance'
 
 /**
- * 旧分节 id 到插件标识的映射：这些分节的内容已迁入插件详情，标识与插件 id 同名。
+ * 旧分节 id 到插件标识的映射：这些分节的内容已迁入插件分节，标识与插件 id 同名。
  * 保留映射是为了旧的深链入口（例如快捷命令按钮）继续落到正确位置。
  * 查表一律用 `Object.hasOwn`：防止 `constructor`、`toString` 这类原型键被当成插件标识。
  */
@@ -84,14 +84,14 @@ export const PLUGIN_SECTION_ALIASES: Readonly<Record<string, string>> = {
   usage: 'usage'
 }
 
-/** 解析后的落点：`plugins` 分节可能停在列表（`pluginId` 为 null），也可能直接进某个插件详情。 */
+/** 解析后的落点：`plugins` 分节可能为空（清单读成后自动补首个启用项），也可能直接选中某个插件。 */
 export interface SettingsSectionTarget {
   readonly section: SettingsSectionId
   readonly pluginId: string | null
 }
 
 /**
- * 把任意字符串解析成落点：合法分节原样返回，旧分节 id 转成对应的插件详情，其余返回 null。
+ * 把任意字符串解析成落点：合法分节原样返回，旧分节 id 转成对应的插件选中项，其余返回 null。
  * 深链与导航点击共用这一处规则，避免两套判断。
  */
 export function resolveSettingsSection(value: string): SettingsSectionTarget | null {

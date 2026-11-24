@@ -1,9 +1,10 @@
 <!--
-  单个插件的设置详情：面包屑回到插件列表，正文是该插件自己的设置组件。
+  设置页插件分节的配置面板：渲染左侧选中的那个插件自己的设置组件。
 
-  「哪个插件用哪个组件」只在这里声明一次，设置页不再按分节堆 v-if 分支；
-  内容组件各自带页头与错误提示，本组件不重复它们的状态处理。
-  清单条目缺席时按读取阶段区分：还在读、读失败（可重试）、确实不在清单里，三种情况不混为一个结论。
+  「哪个插件用哪个组件」只在这里声明一次，设置页不再按插件堆 v-if 分支；
+  内容组件各自带页头与错误提示，本组件不重复它们的状态处理，也不加面包屑——
+  当前选中项由左侧列表表达，面板只需要区分读到了、还在读、读失败与清单里没有这一项。
+  依赖缺席时补一行原因：窄栏列表放不下这句话，而它决定用户改完设置会不会生效。
 -->
 <script setup lang="ts">
 import { computed } from 'vue'
@@ -32,7 +33,6 @@ interface Props {
 const props = defineProps<Props>()
 
 const emit = defineEmits<{
-  back: []
   reload: []
 }>()
 
@@ -54,32 +54,26 @@ const settingsView = computed<Component | null>(() => (
 </script>
 
 <template>
-  <div class="settings-section-stack">
-    <nav aria-label="插件导航" class="flex flex-wrap items-center gap-2 text-xs text-desk-muted">
-      <AppButton variant="compact" @click="emit('back')">插件</AppButton>
-      <span aria-hidden="true">/</span>
-      <span class="font-medium text-desk-ink">{{ entry?.name ?? pluginId }}</span>
-    </nav>
+  <div class="plugin-pane">
+    <div v-if="phase === 'error'" class="plugin-pane-notice">
+      <p role="alert" class="text-xs text-desk-danger">{{ error ?? '插件清单读取失败。' }}</p>
+      <AppButton variant="compact" class="mt-2" @click="emit('reload')">重试</AppButton>
+    </div>
 
-    <p v-if="phase === 'error'" role="alert" class="text-xs text-desk-danger">
-      {{ error ?? '插件清单读取失败。' }}
-      <AppButton variant="compact" @click="emit('reload')">重试</AppButton>
-    </p>
-
-    <p v-else-if="entry === null && (phase === 'idle' || phase === 'loading')" role="status" class="text-xs text-desk-muted">
+    <p v-else-if="entry === null && (phase === 'idle' || phase === 'loading')" role="status" class="plugin-pane-notice">
       正在读取插件清单…
     </p>
 
-    <p v-else-if="entry === null" role="status" class="text-xs text-desk-muted">
+    <p v-else-if="entry === null" role="status" class="plugin-pane-notice">
       当前清单里没有「{{ pluginId }}」这项插件，可能已被移除或来自更早的版本。
     </p>
 
     <template v-else>
-      <p v-if="!entry.enabled" class="text-xs text-desk-warning">
-        该插件已停用：设置仍可查看与修改，但重启后不会装配它的界面入口与通道。
+      <p v-if="entry.unavailableReason" role="status" class="plugin-pane-warning">
+        {{ entry.unavailableReason }}
       </p>
       <component :is="settingsView" v-if="settingsView !== null" />
-      <p v-else class="text-xs text-desk-muted">这项插件没有可配置的设置项。</p>
+      <p v-else class="plugin-pane-notice">这项插件没有可配置的设置项。</p>
     </template>
   </div>
 </template>

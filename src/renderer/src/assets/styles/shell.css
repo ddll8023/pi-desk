@@ -116,6 +116,116 @@
 .settings-section {
     @apply rounded-desk-lg border border-desk-line bg-desk-surface p-5 shadow-desk-raise sm:p-6;
   }
+/* 插件分节：左栏是能力清单，右栏直接渲染选中插件自己的设置组件。
+     选中即切换面板，所以没有「配置」入口与返回路径；窄窗口改为上下排列，列表限高后自己滚动。 */
+.plugin-split {
+    display: grid;
+    min-width: 0;
+    max-width: 73rem;
+    margin-inline: auto;
+    grid-template-columns: 260px minmax(0, 1fr);
+    gap: 1rem;
+    align-items: start;
+    padding: 1.5rem;
+  }
+.plugin-pane {
+    min-width: 0;
+  }
+.plugin-list-pane {
+    @apply rounded-desk-lg border border-desk-line bg-desk-surface p-3 shadow-desk-raise;
+  }
+.plugin-list-head {
+    @apply flex items-center justify-between gap-2 px-1;
+  }
+.plugin-list-title {
+    @apply text-sm font-semibold;
+  }
+.plugin-list-note {
+    @apply mt-2 px-1 text-xs text-desk-muted;
+  }
+.plugin-list-error {
+    @apply rounded-desk-sm border border-desk-line bg-desk-surface-subtle px-2 py-2;
+  }
+/* 行：整行是选中目标，开关在行尾独立可点；选中态沿用设置导航的「浅强调底 + 2px 竖条」。 */
+.plugin-list-row {
+    @apply flex items-center gap-1 rounded-desk-sm pr-1 transition-colors;
+  }
+.plugin-list-row:hover {
+    @apply bg-desk-surface-subtle;
+  }
+.plugin-list-row.is-selected,
+  .plugin-list-row.is-selected:hover {
+    @apply bg-desk-accent-soft;
+    box-shadow: inset 2px 0 0 0 var(--color-desk-accent);
+  }
+.plugin-list-main {
+    @apply flex min-w-0 flex-1 flex-col items-start gap-0.5 px-2 py-2 text-left;
+  }
+.plugin-list-name {
+    @apply truncate text-xs font-medium;
+  }
+.plugin-list-row.is-selected .plugin-list-name {
+    @apply font-semibold;
+  }
+.plugin-list-row.is-off .plugin-list-name {
+    @apply text-desk-muted;
+  }
+.plugin-chip {
+    @apply rounded-full px-1.5 py-px text-2xs;
+  }
+.plugin-chip.is-on {
+    @apply bg-desk-success-soft text-desk-success;
+  }
+.plugin-chip.is-warn {
+    @apply bg-desk-warning-soft text-desk-warning;
+  }
+.plugin-chip.is-off {
+    @apply bg-desk-surface-subtle text-desk-muted;
+  }
+/* 启停开关：外形与原有开关同尺寸；::before 把命中区扩到约 40px，不靠悬停也能点中。 */
+.plugin-switch {
+    position: relative;
+    @apply inline-flex h-5 w-9 shrink-0 items-center rounded-full border transition-colors duration-150 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-desk-accent disabled:opacity-60 motion-reduce:transition-none;
+    border-color: var(--color-desk-line-strong);
+    background-color: var(--color-desk-surface-subtle);
+  }
+.plugin-switch::before {
+    content: "";
+    position: absolute;
+    inset: -0.6rem -0.5rem;
+  }
+.plugin-switch > span {
+    @apply block size-3.5 rounded-full transition-transform duration-150 motion-reduce:transition-none;
+    background-color: var(--color-desk-surface);
+    transform: translateX(2px);
+  }
+.plugin-switch[aria-checked="true"] {
+    border-color: var(--color-desk-accent);
+    background-color: var(--color-desk-accent);
+  }
+.plugin-switch[aria-checked="true"] > span {
+    background-color: var(--color-desk-on-accent);
+    transform: translateX(1rem);
+  }
+.plugin-pane-notice {
+    @apply rounded-desk-sm border border-desk-line bg-desk-surface-subtle px-3 py-2 text-xs text-desk-muted;
+  }
+.plugin-pane-warning {
+    @apply mb-3 rounded-desk-sm border border-desk-line px-3 py-2 text-xs;
+    background-color: var(--color-desk-warning-soft);
+    color: var(--color-desk-warning);
+  }
+@media (max-width: 799px) {
+    .plugin-split {
+      grid-template-columns: minmax(0, 1fr);
+      padding: 1rem;
+    }
+
+    .plugin-list-pane {
+      max-height: 40vh;
+      overflow-y: auto;
+    }
+  }
 .settings-section-heading {
     @apply flex flex-wrap items-center justify-between gap-4;
   }

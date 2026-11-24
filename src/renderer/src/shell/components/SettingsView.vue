@@ -1,7 +1,8 @@
 <!-- 设置页：左栏是按分组排列的分节导航，右栏是当前分节的内容；两栏各自滚动，页面本身不滚动。
      分节清单来自 settings-navigation，这里只做「渲染导航 + 按 id 分发内容」，新增内核设置项不必改模板结构；
-     能力自己的设置项不占分节：它们收在「插件」分节，列表与详情由本页统一加载清单后分发给两个组件，
-     因此设置页是插件清单的唯一持有者，列表与详情不会各读一份而出现状态分叉。
+     能力自己的设置项不占分节：它们收在「插件」分节，分节内部再分两栏——左边是插件列表，右边直接渲染选中项
+     自己的设置组件，选中即切换，没有独立的详情页与返回路径。本页仍是插件清单的唯一持有者，两栏不会各读一份
+     而出现状态分叉；进入分节时若还没有选中项，清单读成后自动选中第一项，右侧始终有内容。
      页面标题在左栏顶部，内容区每个分节自带一层页头（h1 加一句描述），其后按分节需要组织内容。
      内容区沿用统一的水平内边距，模型页的粘性认证摘要与正文在同一内容列对齐。 -->
 <script setup lang="ts">
@@ -18,8 +19,8 @@ import QuickSendSection from '../../preferences/components/QuickSendSection.vue'
 import ExecutionModeSection from '../../preferences/components/ExecutionModeSection.vue'
 import ResourceView from '../../resources/components/ResourceView.vue'
 import SettingsNavIcon from './SettingsNavIcon.vue'
-import PluginSettingsSection from './PluginSettingsSection.vue'
-import PluginDetailSection from './PluginDetailSection.vue'
+import PluginListPane from './PluginListPane.vue'
+import PluginConfigPane from './PluginConfigPane.vue'
 import VersionUpdateSection from '../../updates/components/VersionUpdateSection.vue'
 
 const preferencesStore = usePreferencesStore()
@@ -40,7 +41,7 @@ const pluginError = ref<string | null>(null)
 /** 正在切换的插件标识：过程中整表禁用开关，避免并发请求被静默丢弃。 */
 const togglingPluginId = ref<string | null>(null)
 
-/** 详情页的插件标识；列表态为空串，模板据 `activePluginId` 判断显示哪一个。 */
+/** 详情面板的插件标识；清单未读成时为空串，由面板组件按读取阶段给出原因。 */
 const detailPluginId = computed(() => activePluginId.value ?? '')
 
 /** 当前详情的清单条目；清单未读到或标识已失效时为 null，由详情组件按状态给出原因。 */
@@ -123,18 +124,36 @@ async function togglePlugin(id: string, enabled: boolean): Promise<void> {
   }
 }
 
+/**
+ * 插件分节里没有选中项时补一个默认值：右侧面板始终有内容，用户不必先点一下。
+ * 深链已经给出标识时不覆盖；清单读成后由 `applyPluginList` 调用。
+ */
+function selectDefaultPlugin(plugins: readonly PluginEntryView[]): void {
+  if (activeSection.value !== 'plugins' || activePluginId.value !== null) return
+  const first = plugins.find(plugin => plugin.enabled) ?? plugins[0]
+  if (first !== undefined) settingsStore.openPlugin(first.id)
+}
+
 function applyPluginList(result: { readonly ok: true; readonly data: { readonly plugins: readonly PluginEntryView[] } }): void {
   pluginEntries.value = result.data.plugins
   pluginError.value = null
   pluginPhase.value = 'ready'
+  selectDefaultPlugin(result.data.plugins)
 }
 
-/** 进入插件分节或深链落到某个插件时才读清单；读过就不再重复请求。 */
+/**
+ * 进入插件分节或深链落到某个插件时才读清单；读过就不再重复请求。
+ * 已经读过清单再回到本分节时没有选中项（点侧栏「插件」会清掉选中），这时直接补默认项，不等下一次请求。
+ */
 watch(
   () => [activeSection.value, activePluginId.value] as const,
   () => {
-    if (activeSection.value !== 'plugins' || pluginLoaded.value) return
-    void loadPlugins()
+    if (activeSection.value !== 'plugins') return
+    if (activePluginId.value === null && pluginPhase.value === 'ready') {
+      selectDefaultPlugin(pluginEntries.value)
+      return
+    }
+    if (!pluginLoaded.value) void loadPlugins()
   },
   { immediate: true }
 )
@@ -164,7 +183,27 @@ watch(
     </nav>
 
     <div class="settings-content scroll-area">
-      <div class="settings-page-content">
+      <div v-if="activeSection === 'plugins'" class="plugin-split">
+        <PluginListPane
+          :plugins="pluginEntries"
+          :selected-id="activePluginId"
+          :phase="pluginPhase"
+          :error="pluginError"
+          :toggling-id="togglingPluginId"
+          @select="settingsStore.openPlugin"
+          @toggle="togglePlugin"
+          @reload="loadPlugins"
+        />
+        <PluginConfigPane
+          :plugin-id="detailPluginId"
+          :entry="activePlugin"
+          :phase="pluginPhase"
+          :error="pluginError"
+          @reload="loadPlugins"
+        />
+      </div>
+
+      <div v-else class="settings-page-content">
         <template v-if="activeSection === 'appearance'">
           <header>
             <h1 class="text-xl font-semibold tracking-tight">外观</h1>
@@ -205,26 +244,6 @@ watch(
         <ExecutionModeSection v-else-if="activeSection === 'features'" />
         <ModelSettingsView v-else-if="activeSection === 'model'" />
         <ResourceView v-else-if="activeSection === 'resources'" />
-
-        <PluginSettingsSection
-          v-else-if="activeSection === 'plugins' && activePluginId === null"
-          :plugins="pluginEntries"
-          :phase="pluginPhase"
-          :error="pluginError"
-          :toggling-id="togglingPluginId"
-          @toggle="togglePlugin"
-          @open="settingsStore.openPlugin"
-          @reload="loadPlugins"
-        />
-        <PluginDetailSection
-          v-else-if="activeSection === 'plugins'"
-          :plugin-id="detailPluginId"
-          :entry="activePlugin"
-          :phase="pluginPhase"
-          :error="pluginError"
-          @back="settingsStore.backToPlugins"
-          @reload="loadPlugins"
-        />
 
         <VersionUpdateSection v-else />
       </div>
