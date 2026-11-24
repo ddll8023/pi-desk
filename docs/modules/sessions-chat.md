@@ -52,7 +52,7 @@
 | `src/sdk-host/team-dispatch.ts` | 派活与停止工具：派活前校验条目、验收项、依赖、成员与打回上限，中途可停；终态由宿主观测后写入根会话自定义条目 |
 | `src/sdk-host/team-runner.ts` | 成员轮的子进程载体：精确会话 id 新建或复用、专家角色段与写入守卫参数、JSONL 事件收敛成轮次记录、超时与取消收尾 |
 | `src/sdk-host/write-scope.ts` | 写入路径判定的共享实现：真实路径解析（取最近存在祖先）、目录前缀边界比较与绝对范围解析；子代理写入守卫与专家写入守卫共用，不各写一份 |
-| `src/sdk-host/present-card-extension.ts` | 会话内卡片工具 `present_card`：只接受枚举内的卡片类型与动作 ID，载荷经共享契约校验后随工具结果 `details.card` 下发；装配时把能力候选段与专家候选段随工具注册给模型；更新模式只带目标标识（`expert_id`／`team_id`），缺省的简介与正文由页面回填；只给模型一句结论，不写盘、不改清单 |
+| `src/sdk-host/present-card-extension.ts` | 会话内卡片工具 `present_card`：只接受枚举内的卡片类型与动作 ID，载荷经共享契约校验后随工具结果 `details.card` 下发；装配时把能力候选段与专家候选段随工具注册给模型；更新模式只带目标标识（`expert_id`／`team_id`），缺省的简介与正文由页面回填；只给模型一句结论，不写盘、不改清单；记忆候选是用户要求保存记忆时的默认落点，快速模式下该类型被拒绝（其余三类卡片不受影响） |
 | `src/sdk-host/product-resources.ts` | 产品资源解析、用户级 `AGENTS.md` 与 skills 的只读挂载、技能覆盖与同名技能诊断（含按专家许可集过滤可见技能，项目技能不受该许可集裁剪）、扩展加载结果分级与必要组件及配置注入的核验 |
 | `src/sdk-host/conflicts.ts` | 扩展加载结果的冲突分级：按工具名与路径归属区分致命项与仅诊断项，不解析 SDK 错误文案 |
 | `src/sdk-host/memory-configuration.ts` | 宿主内记忆配置的唯一持有者；写进程环境并向已加载扩展推送变更 |

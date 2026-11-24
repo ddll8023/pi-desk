@@ -9,6 +9,9 @@
  *
  * 交给模型的只有一句结论，正文与字段只放进 `details.card` 供界面展示，
  * 因此长正文不会在上下文里重复出现（边界见 docs/modules/sessions-chat.md）。
+ *
+ * 快速模式整组下线记忆工具，本工具也随之拒绝 memory.candidates：卡片按钮写记忆走的是
+ * 主进程通道，放开它等于给模式裁剪留出第二条写入路径。
  */
 import { Type } from '@earendil-works/pi-ai'
 import type { ExtensionFactory } from '@earendil-works/pi-coding-agent'
@@ -19,6 +22,7 @@ import {
 } from '../shared/present-card-view'
 import type { PresentCardActionId, PresentCardType, PresentCardView } from '../shared/present-card-view'
 import type { MemorySaveCandidate } from '../shared/memory-api'
+import type { ExecutionMode } from '../shared/preferences-api'
 
 const TOOL_NAME = 'present_card'
 
@@ -78,11 +82,15 @@ interface CardParams {
  * 记忆候选要求至少一条候选且主按钮只能保存：写入记忆库是它的唯一落点，用户在卡片上勾选并编辑后才提交。
  * 团队草案要求团长与成员齐全：成员为空或包含团长的团队开不了团，主进程保存时同样会拒。
  */
-function buildCard(params: CardParams): PresentCardView | string {
+function buildCard(params: CardParams, mode: ExecutionMode): PresentCardView | string {
   const subtitle = params.subtitle?.trim() === '' ? undefined : params.subtitle
   const body = params.body?.trim() === '' ? undefined : params.body
   const fileParamsGiven = params.changed_files !== undefined || params.deleted_files !== undefined
     || params.affected_files !== undefined
+  // 快速模式不写记忆：记忆工具已整组下线，卡片按钮不能再当成绕过裁剪的写入路径。
+  if (params.card_type === 'memory.candidates' && mode === 'fast') {
+    return '快速模式不写记忆：记忆工具整组下线，候选卡片同样被拒。需要保存时先切到标准模式，或直接用文本说明。'
+  }
   // 更新目标互斥且必须挂在对应类型上：一张卡片只落一个业务通道，挂错类型等于让页面猜落点。
   if (params.expert_id !== undefined && params.team_id !== undefined) {
     return 'expert_id 与 team_id 不能同时给：一张卡片要么更新专家，要么更新团队。'
@@ -213,8 +221,11 @@ function result(text: string, card: PresentCardView | null): {
  * `capabilityCandidates` 与 `expertCandidates` 由会话装配按与设置页同源的口径生成
  * （见 `expert-capability.ts`）：模型自己可见的技能已被专家许可集裁剪，不可见不等于不存在，
  * 候选全集必须随工具一起给它；专家标识是主进程分配的，团队引用与更新定位同样靠注入的候选段。
+ * `mode` 只用于记忆候选的类型级门控，其余三类卡片与执行模式无关。
  */
-export function createPresentCardExtension(capabilityCandidates: string, expertCandidates: string): ExtensionFactory {
+export function createPresentCardExtension(
+  capabilityCandidates: string, expertCandidates: string, mode: ExecutionMode
+): ExtensionFactory {
   return pi => {
     pi.registerTool({
       name: TOOL_NAME,
@@ -230,8 +241,11 @@ export function createPresentCardExtension(capabilityCandidates: string, expertC
         expertCandidates,
         'session.summary 用在一轮有文件产出之后：changed_files／deleted_files／affected_files 只给项目内相对路径（用 / 分隔，不用绝对路径，不写目录），三组至少一个文件；删除的文件照实提交，定位时会提示已不存在。',
         '交付汇总卡片是只读的：主次按钮只能用 copy.text；文件三组合计上限 40 条，超限整张卡片会被拒绝而不是截断。',
-        'memory.candidates 用在本轮产出了值得长期保留的结论、约束或未决状态、且用户可能想挑选修改时——用户明确认可的非显然做法与取舍同样要给候选，只存纠正会让后续越来越保守，认可的理由写进 content：candidates 每条给 type、topic（单行标题）与 content，规则类（decision／constraint）必须带 rule_key，progress 必须显式 status（active 只表示仍待推进的未决状态）。用户会直接编辑候选再保存，按最终入库口径写，不要放过程流水。',
-        '不要先自行调用 memory_save 保存同一批内容再发候选卡片：与库内完全重复的候选会被引擎拒绝，部分重复会被跳过；二选一，需要用户确认就用卡片。',
+        'memory.candidates 用在本轮产出了值得长期保留的结论、约束或未决状态时——用户要求保存记忆时它就是默认落点：先给候选卡片让用户在卡片上勾选与编辑，只有用户已在本轮逐条给定要存的内容、没有挑选空间时才直接用 memory_save。用户明确认可的非显然做法与取舍同样要给候选，只存纠正会让后续越来越保守，认可的理由写进 content：candidates 每条给 type、topic（单行标题）与 content，规则类（decision／constraint）必须带 rule_key，progress 必须显式 status（active 只表示仍待推进的未决状态）。用户会直接编辑候选再保存，按最终入库口径写，不要放过程流水。',
+        '不要先用 memory_save 保存同一批内容再发候选卡片：与库内完全重复的候选会被引擎拒绝，部分重复会被跳过；需要用户确认或可能想改时用卡片，用户已在指令里逐条给定内容的才直接保存。',
+        ...(mode === 'fast'
+          ? ['本轮是快速模式：记忆工具整组下线，memory.candidates 卡片会被拒绝；需要保存记忆时说明要先切到标准模式。']
+          : []),
         '技能、MCP 与工具范围由你给出建议：skills_mode／mcp_mode／tools_mode 省略即继承默认基线，对应名单是建议启用的项；收窄时说明理由。',
         capabilityCandidates,
         '只能引用当前候选里存在的技能，不得引用 sub-agent- 开头的子代理专用技能；仅用选中时技能名单不能为空。',
@@ -319,7 +333,7 @@ export function createPresentCardExtension(capabilityCandidates: string, expertC
           description: '次按钮文案；给了次按钮动作 ID 时必填' }))
       }, { additionalProperties: false }),
       async execute(_toolCallId, params) {
-        const card = buildCard(params)
+        const card = buildCard(params, mode)
         if (typeof card === 'string') return result(`卡片未生成：${card}`, null)
         return result(`已在对话中放置卡片「${card.title}」；等用户点击卡片上的按钮，不要重复输出卡片正文。`, card)
       }

@@ -1120,7 +1120,7 @@ export class SdkSessionRuntime {
           { name: 'tool-search', factory: this.sdk.createToolSearchExtension(), builtin: true, replaceable: true },
           // 会话内卡片：模型只能提交枚举内的卡片类型与动作，按钮落点由渲染层转发到既有通道。
           { name: 'present-card', builtin: true, replaceable: true,
-            factory: createPresentCardExtension(capabilityCandidates, expertCandidates) },
+            factory: createPresentCardExtension(capabilityCandidates, expertCandidates, target.mode) },
           // 委派工具由宿主注入子进程入口与取消控制端：页面只能按任务标识取消，不能指定路径或进程。
           { name: 'sub-agent-delegation', builtin: true, replaceable: true,
             factory: createSubAgentDelegationExtension({
