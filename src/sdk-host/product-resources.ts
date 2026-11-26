@@ -7,6 +7,9 @@
  * 技能来源全部显式给出（`noSkills` 关掉 SDK 自身的目录发现）：全局来源受专家许可集约束，项目来源属于工作区、
  * 专家无法表达，因此始终装配。
  * 只有产品件自身损坏或非产品扩展争用产品工具名才拒绝建立会话，其余问题作为结构化诊断交给页面。
+ *
+ * 装配在每次创建／重载会话时都会重跑，因此清单指纹复核、包解析与产品技能读取按文件戳（`mtimeMs:size`）
+ * 缓存在宿主进程内：内容或设置一改，文件戳随之变化，下一次装配自动失效重读；缓存不改变装配口径。
  */
 import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
@@ -21,7 +24,7 @@ import { collectSkillSources, isUnderSkillDirectory } from '../shared-process/sk
 import {
   agentResourcePath, readAgentResourceBundle
 } from '../shared-process/agent-resources'
-import type { AgentResource } from '../shared-process/agent-resources'
+import type { AgentResource, AgentResourceBundle } from '../shared-process/agent-resources'
 import { judgeLoadedExtensions } from './conflicts'
 import {
   MEMORY_CONFIGURATION_ENV, serializeMemoryConfiguration
@@ -65,6 +68,56 @@ interface ProductResourceAssembly {
   assertLoaded(loader: ResourceLoader): void
 }
 
+/** 文件戳：文件消失、改写或替换都会改变取值，用作装配缓存的失效键。 */
+function stampOf(path: string): string {
+  try {
+    const info = statSync(path)
+    return `${info.mtimeMs}:${info.size}`
+  } catch { return 'missing' }
+}
+
+/** 随包清单缓存：清单未变时不再逐个资源文件重算指纹。 */
+let bundleCache: { readonly key: string; readonly value: AgentResourceBundle } | null = null
+
+function cachedBundle(directory: string): AgentResourceBundle {
+  const manifest = join(directory, 'bundle.json')
+  const key = `${manifest}|${stampOf(manifest)}`
+  if (bundleCache !== null && bundleCache.key === key) return bundleCache.value
+  const value = readAgentResourceBundle(directory)
+  bundleCache = { key, value }
+  return value
+}
+
+/**
+ * 产品技能缓存：按入口文件与所在目录的文件戳复用。
+ * 目录戳一并参与，是为了让「同一技能目录里新增文件」也能失效，而不只看 `SKILL.md`。
+ */
+const productSkillCache = new Map<string, { readonly key: string; readonly value: Skill[] }>()
+
+function loadProductSkill(sdk: Sdk, path: string, id: string): Skill[] {
+  const key = `${stampOf(path)}|${stampOf(dirname(path))}`
+  const cached = productSkillCache.get(path)
+  if (cached !== undefined && cached.key === key) return cached.value
+  const loaded = sdk.loadSkillsFromDir({ dir: dirname(path), source: 'pi-desk-product' })
+  if (loaded.skills.length !== 1 || loaded.skills[0]?.name !== id
+    || loaded.diagnostics.some(entry => entry.type === 'error')) throw new Error(`产品 Skill 不可用：${id}`)
+  productSkillCache.set(path, { key, value: loaded.skills })
+  return loaded.skills
+}
+
+type PackageResolver = InstanceType<Sdk['DefaultPackageManager']>
+type ResolvedResources = Awaited<ReturnType<PackageResolver['resolve']>>
+
+/** 包解析缓存：包声明可能触达 npm 与包目录，设置未变时复用上次结果。 */
+let packageResolveCache: { readonly key: string; readonly value: ResolvedResources } | null = null
+
+async function resolvePackages(resolver: PackageResolver, key: string): Promise<ResolvedResources> {
+  if (packageResolveCache !== null && packageResolveCache.key === key) return packageResolveCache.value
+  const value = await resolver.resolve(async () => 'error')
+  packageResolveCache = { key, value }
+  return value
+}
+
 /**
  * 产品资源核验失败：致命项同时已记入 `issues`，调用方据此保留完整诊断。
  * 消息只拼产品组件标识、工具名与路径，不掺杂任何扩展正文。
@@ -74,16 +127,23 @@ function describeFatal(issues: readonly ResourceIssue[]): string {
   return `资源装配存在必须处理的冲突：${detail}`
 }
 
-/** 每次创建／重载会话重新解析，不能把上个项目的显式加载清单带到新工作区。 */
+/**
+ * 每次创建／重载会话都会重跑装配，不能把上个项目的显式加载清单带到新工作区；
+ * 因此缓存键里同时带 cwd 与信任状态，并靠文件戳保证设置一改就重新解析。
+ */
 export async function prepareProductResources(sdk: Sdk, input: ProductResourceInput): Promise<ProductResourceAssembly> {
-  const bundle = readAgentResourceBundle(input.directory)
+  const bundle = cachedBundle(input.directory)
   const builtinExtensions = input.extensionFactories.flatMap(item =>
     typeof item !== 'function' && item.builtin ? [item.name] : [])
   const resolver = new sdk.DefaultPackageManager({
     cwd: input.cwd, agentDir: input.agentDir, settingsManager: input.settingsManager, builtinExtensions
   })
   // 发现来源本身不启动扩展。沿用同一信任设置，未信任项目的资源不会被提升为显式加载项。
-  const resolved = await resolver.resolve(async () => 'error')
+  // 缓存键覆盖设置文件与两个清单目录：新增或删除声明文件同样会刷新解析结果。
+  const resolveKey = [input.agentDir, input.cwd, input.settingsManager.isProjectTrusted(),
+    stampOf(input.agentDir), stampOf(join(input.agentDir, 'settings.json')),
+    stampOf(join(input.cwd, '.pi')), stampOf(join(input.cwd, '.pi', 'settings.json'))].join('|')
+  const resolved = await resolvePackages(resolver, resolveKey)
   const diagnostics: string[] = []
   // 快速模式的记忆开关由宿主派生，不是用户改动了开关；没有这条诊断会看成记忆配置丢失。
   if (input.mode === 'fast' && input.memory !== null && !input.memory.enabled) {
@@ -102,13 +162,8 @@ export async function prepareProductResources(sdk: Sdk, input: ProductResourceIn
     externalExtensions.push(resource.path)
   }
 
-  const productSkills = bundle.skills.flatMap(item => {
-    const path = agentResourcePath(bundle.root, item.entry)
-    const loaded = sdk.loadSkillsFromDir({ dir: dirname(path), source: 'pi-desk-product' })
-    if (loaded.skills.length !== 1 || loaded.skills[0]?.name !== item.id
-      || loaded.diagnostics.some(entry => entry.type === 'error')) throw new Error(`产品 Skill 不可用：${item.id}`)
-    return loaded.skills
-  })
+  const productSkills = bundle.skills.flatMap(item =>
+    loadProductSkill(sdk, agentResourcePath(bundle.root, item.entry), item.id))
   // 子代理身份规范只由子进程按目录读取：主会话技能列表去掉它们，避免模型把「派子代理」当成「加载技能」。
   const sessionSkills = productSkills.filter(skill =>
     !bundle.skills.some(item => item.subAgentOnly && item.id === skill.name))

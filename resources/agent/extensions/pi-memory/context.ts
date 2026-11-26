@@ -24,7 +24,7 @@ const STYLE_POINTS_MAX = 2_000
 const STYLE_NOTE_RESERVE = 96
 /** 审计条目里每条注入记录的摘要长度：只够辨认，全文按需读取。 */
 const AUDIT_EXCERPT_CHARS = 240
-/** 规则列表、约定全文与近况是三次串行读取，共用一份会话内超时预算，超时后不再重试。 */
+/** 规则列表与近况互不依赖，两者并行读取后共用一份会话内超时预算，约定全文随后按 ID 补读。 */
 const RESIDENT_TIMEOUT = 3_000
 interface State {
   cwd: string
@@ -57,6 +57,11 @@ interface State {
   lastAuditKey?: string | undefined
   /** 本会话已读原文但尚未标注的记录 ID：读后提醒的数据源；标注提交或会话更换后清除对应项。 */
   readUnreinforced?: string[] | undefined
+  /**
+   * 本次装配共用的库变更序号：画像与风格两段并发读取同一 Promise，只付一次引擎调用的代价。
+   * 只活在一次请求内，每轮背景装配开始时重置，失败也不保留。
+   */
+  signature?: Promise<string> | undefined
 }
 /** 装配审计的段状态，与 `/memory status` 的 `background` 同源。 */
 interface InjectionSegments {
@@ -77,6 +82,7 @@ function clearBackground(state: State): void {
   state.poolEntries = undefined
   state.injection = undefined
   state.lastAuditKey = undefined
+  state.signature = undefined
 }
 export interface Lease {
   signal: AbortSignal
@@ -404,7 +410,10 @@ export class MemoryRuntime {
     const signal = AbortSignal.any([lease.signal, controller.signal])
     const timer = setTimeout(() => controller.abort(), RESIDENT_TIMEOUT)
     try {
-      const rules = await this.engine.rules('', 0, 200, null, signal)
+      const [rules, notesData] = await Promise.all([
+        this.engine.rules('', 0, 200, null, signal),
+        projectId === null ? null : this.engine.recentNotes(projectId, window, RESIDENT_NOTES_LIMIT, signal)
+      ])
       lease.assert()
       // 空 rule_key 的约定不进常驻：键是共同身份，缺失时只能主动检索。
       const rows = array(rules.rules).map(value => object(value))
@@ -419,9 +428,6 @@ export class MemoryRuntime {
       // 按被排除的键统计行数：同键旧版本不算被项目排除，否则 omitted 会偏小。
       const excludedRecords = rows.filter(row => excludedKeys.has(familyKey(row))).length
       const bodies = await this.residentBodies(families.map(item => text(item.row.id)), signal)
-      lease.assert()
-      const notesData = projectId === null ? null
-        : await this.engine.recentNotes(projectId, window, RESIDENT_NOTES_LIMIT, signal)
       lease.assert()
       // 近况名额是段内约束：先裁到最多 3 条，再进合并序列参与日期排序。
       const noteRows = notesData === null ? []
@@ -518,19 +524,30 @@ export class MemoryRuntime {
   }
 
   /**
+   * 本次装配的库变更序号。画像与风格两段并发取用同一份 Promise，省下一次引擎调用；
+   * 任一段失败只降级本段，Promise 在背景装配开始时已重置，下一请求重新取。
+   */
+  private signatureOf(lease: Lease): Promise<string> {
+    const state = lease.state
+    return state.signature ??= this.engine.profileSignature(this.config.profileDomains, lease.signal)
+  }
+
+  /**
    * 适用画像段：库版本变化即重取，失败或超时只降级本段并写明原因。
    * 租约失效（会话切换、取消、配置更新）不属于段故障，继续上抛。
    */
   private async profileSection(lease: Lease): Promise<{ value: string; available: boolean; entries: JsonObject[] }> {
     const state = lease.state
     try {
-      const signature = await this.engine.profileSignature(this.config.profileDomains, lease.signal)
+      const signature = await this.signatureOf(lease)
       const cached = state.profiles?.signature === signature ? state.profiles : undefined
       if (cached !== undefined) return { value: cached.value, available: true, entries: cached.entries }
+      // 领域之间互不依赖：并行读取后仍按领域顺序拼接，段文本与逐次读取时一致。
+      const domains = await Promise.all(this.config.profileDomains.map(async selected =>
+        applicableProfiles(await this.engine.profiles(selected, lease.signal), selected, this.config.profileDomains)))
       const sections: string[] = []
       const entries: JsonObject[] = []
-      for (const selected of this.config.profileDomains) {
-        const data = applicableProfiles(await this.engine.profiles(selected, lease.signal), selected, this.config.profileDomains)
+      for (const data of domains) {
         lease.assert()
         if (array(data.profiles).length) sections.push(JSON.stringify(data))
         for (const row of array(data.profiles).map(value => object(value))) entries.push(profileEntry(row))
@@ -564,7 +581,7 @@ export class MemoryRuntime {
       return { value: fallback, available: false, entries: state.styles?.entries ?? [] }
     }
     try {
-      const signature = await this.engine.profileSignature(this.config.profileDomains, lease.signal)
+      const signature = await this.signatureOf(lease)
       const cached = state.styles?.signature === signature ? state.styles : undefined
       if (cached !== undefined) {
         state.styleStats = state.styleStats ?? { status: 'provided', budget: STYLE_BUDGET,
@@ -662,6 +679,8 @@ export class MemoryRuntime {
   async background(ctx: ExtensionContext): Promise<string | null> {
     const lease = this.lease(ctx, undefined, true)
     lease.state.injection = undefined
+    // 库变更序号只在本轮装配内共用；每轮重置，保存或刷新后的旧序号不会带进下一轮。
+    lease.state.signature = undefined
     if (!this.config.available) {
       this.recordSkip(lease.state, 'unavailable', this.config.unavailableReason ?? '资源缺失')
       return `受管记忆运行环境不可用：${this.config.unavailableReason ?? '资源缺失'}。未回退系统 Python。`
@@ -676,9 +695,13 @@ export class MemoryRuntime {
         this.recordSkip(lease.state, 'unavailable', '用户级全局记忆库尚未初始化')
         return `用户级全局记忆库尚未初始化：${this.engine.store}；请在设置中确认创建。`
       }
-      const profiles = await this.profileSection(lease)
-      const styleBlock = await this.styleSection(lease)
-      const pool = await this.residentPool(lease)
+      // 三段互不依赖：并发装配，总耗时降到最长一段，而不是三段之和；
+      // 每段内部已自行捕获失败并降级，Promise.all 只会在租约失效时上抛。
+      const [profiles, styleBlock, pool] = await Promise.all([
+        this.profileSection(lease),
+        this.styleSection(lease),
+        this.residentPool(lease)
+      ])
       lease.assert()
       const stats = lease.state.poolStats ?? {}
       const residentStats = record(stats.resident)
