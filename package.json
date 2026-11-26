@@ -26,7 +26,7 @@
     "package:mac": "npm run build && node scripts/package-portable.mjs --mac",
     "terminal-daemon:build": "vite build --config vite.terminal-daemon.config.ts",
     "lan-mobile:build": "vite build --config vite.lan-mobile.config.ts",
-  "skill-setup:sync": "node scripts/sync-skill-setup.mjs"
+    "skill-setup:sync": "node scripts/sync-skill-setup.mjs"
   },
   "dependencies": {
     "@codemirror/commands": "6.11.1",
@@ -62,6 +62,7 @@
     "@xterm/addon-webgl": "^0.19.0",
     "@xterm/headless": "^6.0.0",
     "@xterm/xterm": "^6.0.0",
+    "@xyflow/vue": "^2.0.3",
     "codemirror": "6.0.2",
     "cross-spawn": "7.0.6",
     "diff": "8.0.4",
