@@ -383,6 +383,10 @@ export function isRuntimeStatus(value: unknown): value is RuntimeStatus {
   if (value.sessionId !== null && typeof value.sessionId !== 'string') return false
   if (value.sdkVersion !== null && typeof value.sdkVersion !== 'string') return false
   if (value.lastError !== null && typeof value.lastError !== 'string') return false
+  // 同上：旧主进程不带启动阶段时按「无阶段」处理，不让整帧失效。
+  if (value.startupStage !== undefined && value.startupStage !== null
+    && value.startupStage !== 'spawn' && value.startupStage !== 'initialize'
+    && value.startupStage !== 'binding') return false
   // 混合构建时旧宿主/旧主进程不带该字段：缺字段只降级为「无诊断」，不让整帧失效。
   if (value.resourceIssues !== undefined
     && (!Array.isArray(value.resourceIssues) || value.resourceIssues.length > RESOURCE_ISSUE_LIMIT

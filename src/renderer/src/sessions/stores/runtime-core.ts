@@ -12,6 +12,7 @@ import type {
   HistoryChunk,
   HistoryData,
   HistoryQuery,
+  HostStartupStage,
   ProjectionBatch,
   ProjectionMessage,
   PromptDisposition,
@@ -46,7 +47,8 @@ import type { HistoryCache, HistoryState } from './runtime-history'
 /** Runtime 的展示阶段；宿主已回收时用 `closed` 表示挂起而不是失败。 */
 export type RuntimeViewState =
   | { phase: 'idle' }
-  | { phase: 'starting' }
+  /** 启动中携带宿主上报的阶段，用于把「正在启动」细化到加载运行时或装配会话。 */
+  | { phase: 'starting'; startupStage: HostStartupStage | null }
   | { phase: 'ready'; snapshot: RuntimeStatus }
   | { phase: 'stopping' }
   | { phase: 'closed' }
@@ -897,7 +899,7 @@ export function createRuntimeCore(deps: RuntimeCoreDeps): RuntimeCore {
       return { targetChanged, sessionChanged, previousStreaming, sessionAbsent: status.sessionId === null }
     }
     if (status.state === 'starting') {
-      view.value = { phase: 'starting' }
+      view.value = { phase: 'starting', startupStage: status.startupStage ?? null }
       return { targetChanged, sessionChanged, previousStreaming, sessionAbsent: status.sessionId === null }
     }
     // idle 且带会话身份表示宿主已回收（挂起），带 runtimeId 表示上一次 Runtime 已正常关闭。

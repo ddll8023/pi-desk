@@ -218,6 +218,8 @@ function mapStatus(host: SdkHostStatus, session: SdkSessionStatus, runId: number
     sessionId: session.sessionId,
     info: state === 'ready' ? mapInfo(session) : null,
     sdkVersion: host.sdkVersion,
+  // 启动阶段只用于把等待文案细化；非启动中恒为 null，旧主进程也不带该字段。
+  startupStage: host.startupStage ?? null,
     // 资源装配诊断与会话绑定无关：建立失败时页面也必须能列出冲突来源与工具名。
     // 旧宿主可能不带该字段，归一为空数组，避免下游拿到 undefined。
     resourceIssues: session.resourceIssues ?? [],
@@ -311,7 +313,7 @@ interface SessionOwner {
 /** 无前台运行实例时的页面状态：与宿主已建立但会话为空时一致。 */
 const IDLE_STATUS: RuntimeStatus = {
   state: 'idle', runId: null, runtimeId: null, sessionId: null, info: null, sdkVersion: null, lastError: null,
-  resourceIssues: []
+  startupStage: null, resourceIssues: []
 }
 
 /**

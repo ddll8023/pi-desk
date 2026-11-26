@@ -5,6 +5,7 @@ import { computed, onUnmounted, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useProjectStore } from '../../projects/stores/project'
 import { useRuntimeStore } from '../../sessions/stores/runtime'
+import { runtimeStageText } from '../../sessions/runtime-stage-text'
 import { useSessionStore } from '../../sessions/stores/session'
 import { useSessionViewStore } from '../../sessions/stores/session-view'
 import AppButton from '../../ui/AppButton.vue'
@@ -84,7 +85,10 @@ const currentModel = computed(() => models.value.find(model => (
   model.provider === identity.value?.provider && model.id === identity.value?.modelId
 )) ?? null)
 const currentLabel = computed(() => {
-  if (!props.newConversation && view.value.phase === 'starting') return 'Pi 启动中'
+  if (!props.newConversation && view.value.phase === 'starting') {
+    // 与状态胶囊、空态、输入坞同一份阶段映射。
+    return runtimeStageText(view.value.startupStage).title
+  }
   if (!props.newConversation && view.value.phase === 'stopping') return 'Pi 关闭中'
   if (error.value !== null) {
     // 已保存选择只是不可用时不改写触发键文案，仍展示当前选择，错误由 title 与读屏提示传达。

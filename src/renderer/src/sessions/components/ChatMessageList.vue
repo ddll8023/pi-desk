@@ -9,6 +9,7 @@
 import { storeToRefs } from 'pinia'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { createChatViewCache, userMessagePayload } from '../chat-view'
+import { runtimeStageText } from '../runtime-stage-text'
 import type { ChatMessageView, ChatTurnView, UserMessagePayload } from '../chat-view'
 import type { ResourceIssue, RuntimeRewindRequest } from '../../../../shared/runtime-api'
 import { useProjectStore } from '../../projects/stores/project'
@@ -286,7 +287,9 @@ const emptyState = computed(() => {
   }
   const current = runtimeView.value
   if (current.phase === 'starting') {
-    return { title: '正在启动 Pi', description: '正在以当前项目启动 Runtime 并准备会话。', action: null }
+    // 与标题栏、输入坞共用同一份阶段映射，同屏不再出现两种精度。
+    const text = runtimeStageText(current.startupStage)
+    return { title: text.title, description: text.hint, action: null }
   }
   if (current.phase === 'stopping') {
     return { title: '正在关闭 Runtime', description: '关闭完成后可以打开或新建会话。', action: null }

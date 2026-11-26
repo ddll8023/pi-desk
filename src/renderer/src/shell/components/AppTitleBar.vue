@@ -12,6 +12,7 @@ import { useProjectStore } from '../../projects/stores/project'
 import { useChatNavigationStore } from '../../sessions/stores/chat-navigation'
 import type { ChatNavEntry } from '../../sessions/stores/chat-navigation'
 import { useRuntimeStore } from '../../sessions/stores/runtime'
+import { runtimeStageText } from '../../sessions/runtime-stage-text'
 import { useSessionStore } from '../../sessions/stores/session'
 import { useSessionViewStore } from '../../sessions/stores/session-view'
 import AppButton from '../../ui/AppButton.vue'
@@ -64,7 +65,10 @@ const sessionTitle = computed(() => {
 })
 const runtimeStatus = computed(() => {
   const runtime = runtimeView.value
-  if (runtime.phase === 'starting') return { label: 'Pi 启动中', kind: 'pending' }
+  if (runtime.phase === 'starting') {
+    // 阶段文案与空态、输入坞共用一份映射，避免同屏出现两种精度。
+    return { label: runtimeStageText(runtime.startupStage).title, kind: 'pending' }
+  }
   if (runtime.phase === 'stopping') return { label: 'Pi 关闭中', kind: 'pending' }
   if (runtime.phase === 'failed') return { label: 'Pi 异常', kind: 'error' }
   if (runtime.phase === 'ready' && runtime.snapshot.info?.isStreaming === true) {

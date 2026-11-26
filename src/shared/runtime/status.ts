@@ -74,6 +74,13 @@ export interface RuntimeSetModelRequest {
  */
 export type RuntimeState = 'idle' | 'starting' | 'ready' | 'stopping' | 'failed'
 
+/**
+ * 宿主启动阶段：只在 `starting` 时有值，用于把「正在启动」细分到具体步骤。
+ * `spawn` 已建立进程；`initialize` 正在加载官方 Agent 运行时（首次启动最慢的一步）；
+ * `binding` 运行时已就绪，正在装配会话。
+ */
+export type HostStartupStage = 'spawn' | 'initialize' | 'binding'
+
 /** 只投影页面需要的会话信息，不搬运 Pi 的完整状态或消息。 */
 export interface RuntimeInfo {
   /** 当前模型的 provider 与 id；图片附件能力按模型目录精确匹配。 */
@@ -131,6 +138,11 @@ export interface RuntimeStatus {
    * 口径与版本检查快照里的版本不同：这里是「正在跑的那个」，快照里的版本是「下次启动会加载的」。
    */
   readonly sdkVersion: string | null
+  /**
+   * 当前启动阶段；非启动中为 null。旧主进程不带该字段，页面一律按 null 处理。
+   * 只用于把等待文案细化，不构成新的可提交条件。
+   */
+  readonly startupStage: HostStartupStage | null
   readonly lastError: string | null
   /**
    * 本代际的资源装配诊断；非空时页面在失败提示旁列出具体原因。

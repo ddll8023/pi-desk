@@ -18,6 +18,7 @@ import { useProjectFileStore } from '../../editor/stores/project-file'
 import { useResourceStore } from '../../resources/stores/resource'
 import { useProjectStore } from '../../projects/stores/project'
 import { useRuntimeStore } from '../stores/runtime'
+import { runtimeStageText } from '../runtime-stage-text'
 import { useSessionStore } from '../stores/session'
 import { useTeamStore } from '../../experts/stores/team'
 import { isSavedInputKey, useSessionViewStore } from '../stores/session-view'
@@ -584,10 +585,12 @@ const status = computed<{ readonly kind: 'info' | 'error'; readonly text: string
       return { kind: 'info', text: commandHint.value }
     }
     if (runtimeView.value.phase === 'failed') {
-      return { kind: 'error', text: `${runtimeView.value.error.message}；可再次点击发送重试启动。` }
+      return { kind: 'error', text: `${runtimeView.value.error.message}；可再次点击发送重试启动。启动日志：应用数据目录下 logs/sdk-host.log（便携版为程序目录下的 data/logs/sdk-host.log）。` }
     }
     if (runtimeView.value.phase === 'starting') {
-      return { kind: 'info', text: '正在启动 Pi；待发送消息已固定，可以继续编辑下一条。' }
+      // 阶段文案与标题栏、空态共用一份映射。
+      const text = runtimeStageText(runtimeView.value.startupStage)
+      return { kind: 'info', text: `${text.title}；待发送消息已固定，可以继续编辑下一条。` }
     }
     // 侧栏「新建」只聚焦输入框：用一次性提示说明要发送才会开始会话。
     if (newSessionHint.value && canStartRuntime.value) return { kind: 'info', text: '发送后开始新会话。' }

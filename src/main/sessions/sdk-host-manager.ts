@@ -1,7 +1,7 @@
 /** 监督单个 SDK 宿主与内部会话请求，持有安全状态和交互镜像；不重放操作，页面契约映射在 sdk-runtime-bridge。 */
 import { randomUUID } from 'node:crypto'
-import { existsSync } from 'node:fs'
-import { dirname, isAbsolute, resolve } from 'node:path'
+import { appendFileSync, existsSync, mkdirSync } from 'node:fs'
+import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { app, utilityProcess } from 'electron'
 import type { UtilityProcess } from 'electron'
 import {
@@ -20,7 +20,7 @@ import type {
 } from '../../sdk-host/protocol'
 import type {
   AgentCapabilities, McpStatus, MemoryInjectionSnapshot, PiResources, ProjectionBatch, ProjectionSnapshot, PromptImageInput,
-  RuntimeDiagnostics, HistoryData, HistoryQuery
+  RuntimeDiagnostics, HistoryData, HistoryQuery, HostStartupStage
 } from '../../shared/runtime-api'
 import type { BrowserSessionService } from '../browser/browser-session-service'
 import { sendToRenderer } from '../window-channel'
@@ -52,9 +52,10 @@ const KILL_WAIT_MS = 3_000
 const RECOVERY_DELAY_MS = 750
 /**
  * 宿主进程的空闲回收时限：执行实例与只读解析实例共用同一口径。
- * 内部常量，不做成用户可见设置；这是待实测的取值，不当作性能结论。
+ * 改回短时限会让机械盘上的冷启动代价反复重付（每次都要重新加载官方运行时），
+ * 因此取 30 分钟；代价是空闲宿主在内存里多留一会儿，不占 CPU。
  */
-export const HOST_IDLE_RECLAIM_MS = 5 * 60 * 1000
+export const HOST_IDLE_RECLAIM_MS = 30 * 60 * 1000
 /** MCP 状态读取等待上限：`/mcp` 会等所有已启用服务器连接完成，比普通命令长。 */
 const MCP_STATUS_TIMEOUT_MS = 60_000
 /** MCP 登录需在浏览器完成授权；退出与重连不涉及浏览器交互。 */
@@ -170,11 +171,30 @@ export class SdkHostError extends Error {
   }
 }
 
+/**
+ * 宿主故障与超时写入应用数据目录下的可控日志：便携包没有控制台，
+ * 启动到底卡在加载运行时还是装配会话，只能靠这份文件判定。写入失败不影响宿主生命周期。
+ */
+function appendHostLog(message: string): void {
+  try {
+    const directory = join(app.getPath('userData'), 'logs')
+    mkdirSync(directory, { recursive: true })
+    appendFileSync(join(directory, 'sdk-host.log'), `${new Date().toISOString()} ${message}\n`, 'utf8')
+  } catch { /* 日志不可写不改变宿主状态。 */ }
+}
+
 export interface SdkHostStatus {
   readonly state: 'idle' | 'starting' | 'ready' | 'recovering' | 'stopping' | 'failed'
   readonly hostId: number | null
   readonly sdkVersion: string | null
   readonly lastError: SdkHostErrorCode | null
+  /** 启动阶段；只在 `starting` 时有值，非启动中为 null。 */
+  readonly startupStage: HostStartupStage | null
+}
+
+/** 广播入参：调用方不必每次都写 `startupStage`，未给即按无阶段处理。 */
+type SdkHostStatusInput = Omit<SdkHostStatus, 'startupStage'> & {
+  readonly startupStage?: HostStartupStage | null
 }
 
 export type SdkSessionAuthority = (
@@ -318,7 +338,7 @@ export class SdkHostManager {
     onDialogResponse: () => {}
   })
   private snapshot: SdkHostStatus = {
-    state: 'idle', hostId: null, sdkVersion: null, lastError: null
+    state: 'idle', hostId: null, sdkVersion: null, lastError: null, startupStage: null
   }
 
   constructor(private readonly options: SdkHostManagerOptions) {}
@@ -907,9 +927,13 @@ export class SdkHostManager {
         this.publish({ state: 'failed', hostId: current.hostId, sdkVersion: null,
           lastError: 'HOST_EXITED' })
       })
-      this.publish({ state: 'starting', hostId: current.hostId, sdkVersion: null, lastError: null })
+      this.publish({ state: 'starting', hostId: current.hostId, sdkVersion: null, lastError: null,
+        startupStage: 'spawn' })
       // 记忆配置必须在建立会话前给出：扩展工厂在资源加载阶段就要同步读到它。
       const memoryConfiguration = await (this.options.memory ?? READ_ONLY_MEMORY).read(entryPath)
+      // 初始化响应要等宿主动态加载官方 Agent 运行时，这是启动中最长的一段，单独标出来。
+      this.publish({ state: 'starting', hostId: current.hostId, sdkVersion: null, lastError: null,
+        startupStage: 'initialize' })
       const frame = await this.request(current, {
         version: SDK_HOST_PROTOCOL_VERSION, hostId: current.hostId,
         requestId: randomUUID(), type: 'initialize', agentDir,
@@ -930,7 +954,7 @@ export class SdkHostManager {
       current.established = true
       current.ready = true
       this.publish({ state: 'ready', hostId: current.hostId,
-        sdkVersion: frame.sdkVersion, lastError: null })
+        sdkVersion: frame.sdkVersion, lastError: null, startupStage: 'binding' })
       if (this.shuttingDown || current.closing || this.active !== current || !current.ready) {
         throw new SdkHostError('HOST_CLOSED', 'SDK 宿主在就绪交接期间已失效。')
       }
@@ -1408,11 +1432,16 @@ export class SdkHostManager {
   private logHostOutput(record: HostRecord, code: SdkHostErrorCode, detail: string): void {
     const output = record.output.unreported().trimEnd()
     const tail = output === '' ? '（宿主没有输出）' : `\n${output}`
-    console.error(`[sdk-host] hostId=${record.hostId} agentDir=${record.agentDir} ${code}：${detail}${tail}`)
+    const message = `[sdk-host] hostId=${record.hostId} agentDir=${record.agentDir} ${code}：${detail}${tail}`
+    console.error(message)
+    // 便携包没有控制台：不落盘时「启动很慢」与「启动失败」在页面上是同一种表现。
+    appendHostLog(message)
     // 资源装配的结构化诊断同时进主进程日志：页面不会展示第三方错误正文，日志是它们的唯一出口。
     for (const issue of this.sessionSnapshot.resourceIssues) {
-      console.error(`[sdk-host] 资源诊断 ${issue.kind}：${issue.componentId ?? '-'} ${issue.tool ?? '-'} `
-        + `${issue.productPath ?? '-'} / ${issue.otherPath ?? '-'}`)
+      const line = `[sdk-host] 资源诊断 ${issue.kind}：${issue.componentId ?? '-'} ${issue.tool ?? '-'} `
+        + `${issue.productPath ?? '-'} / ${issue.otherPath ?? '-'}`
+      console.error(line)
+      appendHostLog(line)
     }
   }
 
@@ -1425,11 +1454,12 @@ export class SdkHostManager {
     record.pending.clear()
   }
 
-  /** 广播副本，订阅者异常不能改变宿主生命周期。 */
-  private publish(status: SdkHostStatus): void {
-    this.snapshot = status
+  /** 广播副本，订阅者异常不能改变宿主生命周期。未给启动阶段时按无阶段处理。 */
+  private publish(status: SdkHostStatusInput): void {
+    const next: SdkHostStatus = { ...status, startupStage: status.startupStage ?? null }
+    this.snapshot = next
     for (const listener of [...this.listeners]) {
-      try { listener({ ...status }) } catch { /* 消费者故障不影响监督。 */ }
+      try { listener({ ...next }) } catch { /* 消费者故障不影响监督。 */ }
     }
   }
 }
