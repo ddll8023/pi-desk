@@ -838,7 +838,7 @@ export function parseParameterValues(value: unknown): Record<string, string> {
 }
 
 /**
- * 五段 cron 的字段解析：支持 `*`、`*/n`、`a`、`a-b`、`a-b/n` 与逗号列表。
+ * 五段 cron 的字段解析：支持 `*`、数字、区间、逗号列表，以及用星号加斜杠加数字表示的步长。
  * 返回 null 表示写法不合法，由校验层报错。
  */
 function parseCronField(field: string, min: number, max: number): ((value: number) => boolean) | null {
