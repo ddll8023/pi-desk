@@ -63,6 +63,8 @@ export const useWorkflowStore = defineStore('workflows', () => {
   /** 标签键 → 提示。 */
   const messages = ref<Readonly<Record<string, WorkflowMessages>>>({})
   const saving = ref(false)
+  /** 清单读取序号：并发或连续读取时，只有最后一次读到的结果能写回清单。 */
+  let listSeq = 0
 
   const loaded = computed(() => phase.value === 'ready')
 
@@ -118,9 +120,11 @@ export const useWorkflowStore = defineStore('workflows', () => {
   }
 
   async function load(): Promise<void> {
+    const seq = ++listSeq
     phase.value = 'loading'
     loadError.value = null
     const result = await service.listWorkflows()
+    if (seq !== listSeq) return
     if (!result.ok) {
       definitions.value = []
       phase.value = 'error'

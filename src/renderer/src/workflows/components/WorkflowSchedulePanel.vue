@@ -2,8 +2,9 @@
   定时任务面板：为一个工作流配置按 cron 触发的运行。
 
   定时任务自带项目与参数值——到点时没人可问，值必须提前定下来。
-  触发只在应用运行期间发生，这一点写在面板顶部，不让用户以为关掉应用也会跑。
+  触发只在应用运行期间发生，这一点写在面板标题下，不让用户以为关掉应用也会跑。
   常用节奏给预设按钮，用户不必记 cron 语法；写错时本地先用同一份解析函数拦住。
+  弹层外壳交给 AppDialog：焦点、Escape 与遮罩关闭由它统一处理。
 -->
 <script setup lang="ts">
 import { ref, watch } from 'vue'
@@ -11,6 +12,7 @@ import { isWorkflowCron, missingWorkflowParameters } from '../../../../shared/wo
 import type { WorkflowParameter, WorkflowSchedule } from '../../../../shared/workflow-api'
 import { useWorkflowScheduleStore } from '../stores/workflow-schedule'
 import AppButton from '../../ui/AppButton.vue'
+import AppDialog from '../../ui/AppDialog.vue'
 
 const props = defineProps<{
   readonly open: boolean
@@ -35,6 +37,13 @@ const CRON_PRESETS: readonly { label: string; cron: string }[] = [
   { label: '每周一 09:00', cron: '0 9 * * 1' },
   { label: '每小时', cron: '0 * * * *' }
 ]
+
+/** 表单取值：只接受真正带值的元素，避免把事件目标当成已知类型断言。 */
+function inputValue(event: Event): string {
+  const target = event.target
+  if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) return target.value
+  return ''
+}
 
 watch(() => props.open, open => {
   if (!open || props.workflowId === null) return
@@ -101,33 +110,37 @@ function describe(schedule: WorkflowSchedule): string {
 </script>
 
 <template>
-  <div v-if="props.open" class="workflow-overlay" role="dialog" aria-label="定时任务">
-    <section class="workflow-dialog">
-      <header class="workflow-dialog-head">
-        <h2 class="text-sm font-semibold">定时任务</h2>
-        <AppButton variant="compact" @click="emit('close')">关闭</AppButton>
-      </header>
-      <p class="workflow-hint">按 cron 触发运行；只在应用运行期间生效，应用退出后不再触发。</p>
+  <AppDialog
+    :open="props.open"
+    title="定时任务"
+    subtitle="按 cron 触发运行；只在应用运行期间生效，应用退出后不再触发。"
+    panel-class="max-w-2xl"
+    @close="emit('close')"
+  >
+    <ul v-if="store.schedules.length > 0" class="space-y-2">
+      <li
+        v-for="item in store.schedules"
+        :key="item.id"
+        class="flex flex-wrap items-center justify-between gap-2 rounded-desk-sm border border-desk-line px-3 py-2"
+      >
+        <span class="text-xs break-all text-desk-muted">{{ describe(item) }}</span>
+        <div class="flex gap-1">
+          <AppButton variant="compact" :disabled="store.running" @click="store.runNow(item.id)">立即运行</AppButton>
+          <AppButton variant="compact" @click="edit(item)">编辑</AppButton>
+          <AppButton variant="quiet-danger" :disabled="store.removing" @click="store.remove(item.id)">删除</AppButton>
+        </div>
+      </li>
+    </ul>
+    <p v-else class="text-xs text-desk-muted">还没有定时任务。</p>
 
-      <ul v-if="store.schedules.length > 0" class="workflow-schedule-list">
-        <li v-for="item in store.schedules" :key="item.id" class="workflow-schedule-item">
-          <span class="workflow-schedule-text">{{ describe(item) }}</span>
-          <div class="flex gap-1">
-            <AppButton variant="compact" :disabled="store.busy" @click="store.runNow(item.id)">立即运行</AppButton>
-            <AppButton variant="compact" @click="edit(item)">编辑</AppButton>
-            <AppButton variant="quiet-danger" :disabled="store.busy" @click="store.remove(item.id)">删除</AppButton>
-          </div>
-        </li>
-      </ul>
-      <p v-else class="workflow-hint">还没有定时任务。</p>
+    <hr class="border-t border-desk-line">
 
-      <hr class="workflow-divider">
+    <h3 class="text-xs font-semibold">{{ editingId === '' ? '新增定时任务' : '编辑定时任务' }}</h3>
 
-      <h3 class="text-xs font-semibold">{{ editingId === '' ? '新增定时任务' : '编辑定时任务' }}</h3>
-
-      <label class="workflow-field">
-        <span>cron</span>
-        <input v-model="cron" class="workflow-input" placeholder="0 9 * * 1-5">
+    <div class="space-y-4">
+      <label class="block space-y-1">
+        <span class="field-label">cron</span>
+        <input v-model="cron" class="text-control" placeholder="0 9 * * 1-5">
       </label>
       <div class="flex flex-wrap gap-1">
         <AppButton v-for="preset in CRON_PRESETS" :key="preset.cron" variant="compact" @click="cron = preset.cron">
@@ -135,138 +148,34 @@ function describe(schedule: WorkflowSchedule): string {
         </AppButton>
       </div>
 
-      <label v-for="parameter in parameters" :key="parameter.name" class="workflow-field">
-        <span>{{ parameter.label }} <code class="workflow-parameter-name">&#123;&#123;{{ parameter.name }}&#125;&#125;</code></span>
-        <select v-if="parameter.type === 'select'" v-model="values[parameter.name]" class="workflow-input">
+      <label v-for="parameter in parameters" :key="parameter.name" class="block space-y-1">
+        <span class="field-label">
+          {{ parameter.label }}
+          <code class="ml-1.5 font-mono text-2xs text-desk-muted">&#123;&#123;{{ parameter.name }}&#125;&#125;</code>
+        </span>
+        <select v-if="parameter.type === 'select'" v-model="values[parameter.name]" class="text-control">
           <option value="">（用默认值）</option>
           <option v-for="option in parameter.options" :key="option" :value="option">{{ option }}</option>
         </select>
-        <input v-else v-model="values[parameter.name]" class="workflow-input" maxlength="400">
+        <input v-else v-model="values[parameter.name]" class="text-control" maxlength="400">
       </label>
 
-      <label class="workflow-inline">
+      <label class="flex items-center gap-1.5 text-xs">
         <input v-model="enabled" type="checkbox">
         <span>启用</span>
       </label>
+    </div>
 
-      <p v-if="localError !== null" class="workflow-error">{{ localError }}</p>
-      <p v-if="store.error !== null" class="workflow-error">{{ store.error }}</p>
-      <p v-if="store.notice !== null" class="workflow-hint">{{ store.notice }}</p>
+    <p v-if="localError !== null" class="text-xs text-desk-danger">{{ localError }}</p>
+    <p v-if="store.error !== null" class="text-xs text-desk-danger">{{ store.error }}</p>
+    <p v-if="store.notice !== null" class="text-xs text-desk-muted">{{ store.notice }}</p>
 
-      <div class="workflow-dialog-actions">
-        <AppButton v-if="editingId !== ''" variant="compact" @click="resetDraft">取消编辑</AppButton>
-        <AppButton variant="primary" :disabled="store.busy" @click="submit">
-          {{ editingId === '' ? '新增' : '保存' }}
-        </AppButton>
-      </div>
-    </section>
-  </div>
+    <template #footer>
+      <AppButton v-if="editingId !== ''" variant="compact" @click="resetDraft">取消编辑</AppButton>
+      <AppButton @click="emit('close')">关闭</AppButton>
+      <AppButton variant="primary" :disabled="store.saving" @click="submit">
+        {{ editingId === '' ? '新增' : '保存' }}
+      </AppButton>
+    </template>
+  </AppDialog>
 </template>
-
-<style scoped>
-.workflow-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 40;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--color-desk-overlay);
-}
-
-.workflow-dialog {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  width: min(560px, calc(100vw - 48px));
-  max-height: calc(100vh - 96px);
-  padding: 16px;
-  overflow-y: auto;
-  border-radius: 10px;
-  background: var(--color-desk-surface);
-  border: 1px solid var(--color-desk-border);
-}
-
-.workflow-dialog-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.workflow-dialog-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-}
-
-.workflow-hint {
-  margin: 0;
-  font-size: 11px;
-  color: var(--color-desk-muted);
-}
-
-.workflow-divider {
-  width: 100%;
-  border: none;
-  border-top: 1px solid var(--color-desk-border);
-}
-
-.workflow-schedule-list {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.workflow-schedule-item {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 6px;
-  padding: 6px 8px;
-  border: 1px solid var(--color-desk-border);
-  border-radius: 6px;
-}
-
-.workflow-schedule-text {
-  font-size: 11px;
-  color: var(--color-desk-muted);
-  word-break: break-all;
-}
-
-.workflow-field {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  font-size: 12px;
-}
-
-.workflow-parameter-name {
-  margin-left: 6px;
-  font-size: 11px;
-  color: var(--color-desk-muted);
-}
-
-.workflow-input {
-  padding: 5px 8px;
-  border: 1px solid var(--color-desk-border);
-  border-radius: 6px;
-  background: transparent;
-  font-size: 12px;
-}
-
-.workflow-inline {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-}
-
-.workflow-error {
-  font-size: 12px;
-  color: var(--color-desk-danger);
-}
-</style>

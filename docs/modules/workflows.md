@@ -31,13 +31,14 @@
 | `src/renderer/src/workflows/stores/workflow.ts` | 定义清单与草稿、选中节点、图形问题、保存与删除；草稿与已保存定义分开，未保存时置 `dirty` |
 | `src/renderer/src/workflows/stores/workflow-run.ts` | 当前运行快照、启动（带参数）与取消、审批决定、历史运行与回放选择、接管定时任务发起的运行、按 `runId` 过滤的订阅；启动失败不清掉上一次结果 |
 | `src/renderer/src/workflows/stores/workflow-schedule.ts` | 定时任务清单、保存与删除、立即运行；按工作流现读，不做缓存 |
-| `src/renderer/src/workflows/components/WorkflowCanvasView.vue` | 标签页主体：定义清单、画布工具条（名称、新连线路由、添加节点、保存、运行）、画布、检查器、运行面板 |
-| `src/renderer/src/workflows/components/WorkflowNodeCard.vue`、`WorkflowNodeInspector.vue` | 画布节点（类型、标题、配置摘要、运行状态、连线锚点）与节点配置（标题、专家、提示词、写入范围三态；审批门只有标题与一段给人看的说明） |
+| `src/renderer/src/workflows/components/WorkflowCanvasView.vue` | 标签页主体：定义清单、画布工具条（名称、说明、新连线路由、添加节点、保存、运行）、画布、检查器、运行面板 |
+| `src/renderer/src/workflows/components/WorkflowNodeCard.vue`、`WorkflowNodeInspector.vue` | 画布节点（类型、标题、配置摘要、运行状态、连线锚点）与节点配置（标题、专家、提示词、写入范围三态；「连到节点」下拉与建边按钮提供键盘可用的建边入口；审批门只有标题与一段给人看的说明） |
 | `src/renderer/src/workflows/components/WorkflowEdgeInspector.vue` | 连线配置：路由选择与条件（判定方式 + 条件值，正则就地预编译）；条件边只对没有状态边可走的分支生效 |
 | `src/renderer/src/workflows/components/WorkflowParameterEditor.vue`、`WorkflowRunDialog.vue` | 参数定义编辑（名称自动生成、类型、必填、默认值、选项）与启动前填参（必填校验与默认值预填） |
 | `src/renderer/src/workflows/components/WorkflowSchedulePanel.vue` | 定时任务列表与编辑（cron、项目、参数值、启停、删除、立即运行），并说明触发只在应用运行期间发生 |
 | `src/renderer/src/workflows/components/WorkflowRunPanel.vue` | 运行状态、节点进度、事件流、等待审批时的通过／拒绝、历史运行选择与只读回放；不参与调度 |
 | `src/renderer/src/workflows/components/WorkflowSettingsSection.vue` | 插件设置项：存储位置、保留口径、清空已结束的运行记录 |
+| `src/renderer/src/ui/AppDialog.vue` | 通用对话框外壳：遮罩、面板、焦点移入与归还、Escape；参数定义、启动填参、定时任务三个对话框共用，外观沿用 `ui.css` 的 `dialog-*` 类 |
 
 ### 与其他模块的交界
 

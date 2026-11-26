@@ -6,6 +6,7 @@
   画布只管形态与配置，运行在主进程推进；切到另一份定义时若有未保存改动，先要求保存，
   不静默丢弃——画布上的改动没有撤销栈可回退。
   新建节点与连线都走工具条：节点点击选中后在右侧配置，拖拽连线按当前选中的路由建边。
+  「新连线路由」也决定检查器里「建立连线」按钮用的路由，两条路径写同一份草稿。
 -->
 <script setup lang="ts">
 import { computed, markRaw, onMounted, ref, watch } from 'vue'
@@ -13,7 +14,11 @@ import { storeToRefs } from 'pinia'
 import { Background, Controls, MiniMap, VueFlow } from '@xyflow/vue'
 import type { Connection } from '@xyflow/vue'
 import '@xyflow/vue/style.css'
-import { WORKFLOW_EDGE_ROUTE_LABELS, WORKFLOW_EDGE_ROUTES } from '../../../../shared/workflow-api'
+import {
+  MAX_WORKFLOW_SUMMARY_LENGTH,
+  WORKFLOW_EDGE_ROUTE_LABELS,
+  WORKFLOW_EDGE_ROUTES
+} from '../../../../shared/workflow-api'
 import type {
   WorkflowConditionKind,
   WorkflowEdgeRoute,
@@ -51,7 +56,16 @@ const runStore = useWorkflowRunStore()
 const expertStore = useExpertStore()
 const projectStore = useProjectStore()
 const { definitions, saving, loadError, loaded } = storeToRefs(store)
-const { run, runs, busy: runBusy, error: runError, waitingNodeId } = storeToRefs(runStore)
+const {
+  run,
+  runs,
+  starting: runStarting,
+  cancelling: runCancelling,
+  approving: runApproving,
+  active: runActive,
+  error: runError,
+  waitingNodeId
+} = storeToRefs(runStore)
 const { experts } = storeToRefs(expertStore)
 
 /** 连线后使用的路由：工具条上选择，拖拽出来的边按它落库。 */
@@ -83,6 +97,8 @@ interface FlowNode {
     readonly node: WorkflowNode
     readonly expertName: string | null
     readonly runStatus: WorkflowNodeStatus | null
+    /** 选中节点：节点卡片只报标识，选中状态归本页的 store。 */
+    readonly onSelect: (nodeId: string) => void
   }
 }
 
@@ -96,6 +112,13 @@ interface FlowEdge {
 
 const nodes = ref<FlowNode[]>([])
 
+/** 表单取值：只接受真正带值的元素，不把事件目标当成已知类型断言。 */
+function inputValue(event: Event): string {
+  const target = event.target
+  if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) return target.value
+  return ''
+}
+
 /** 按草稿与运行状态重建画布节点：位置以草稿为准，状态从运行快照取。 */
 function rebuildNodes(): void {
   const statuses = new Map((run.value?.nodes ?? []).map(item => [item.nodeId, item.status]))
@@ -106,7 +129,8 @@ function rebuildNodes(): void {
     data: {
       node,
       expertName: node.expertId === null ? null : expertNames.value.get(node.expertId) ?? null,
-      runStatus: statuses.get(node.id) ?? null
+      runStatus: statuses.get(node.id) ?? null,
+      onSelect: selectNodeById
     }
   }))
 }
@@ -186,6 +210,11 @@ function onNodeClick(payload: { node?: { id?: string } }): void {
   store.selectNode(props.tabKey, nodeId)
 }
 
+/** 节点卡片用键盘选中时走同一入口：Tab 到节点、按 Enter／空格即可配置它。 */
+function selectNodeById(nodeId: string): void {
+  store.selectNode(props.tabKey, nodeId)
+}
+
 /** 节点检查器的改动落到当前选中节点：同理不让模板处理可能为空的值。 */
 function onNodeUpdate(patch: Partial<Omit<WorkflowNode, 'id' | 'type'>>): void {
   const node = currentNode.value
@@ -197,6 +226,13 @@ function onNodeRemove(): void {
   const node = currentNode.value
   if (node === null) return
   store.removeNode(props.tabKey, node.id)
+}
+
+/** 从检查器建边：源点是当前选中节点，路由沿用工具栏的「新连线路由」。 */
+function onNodeConnect(targetId: string): void {
+  const source = currentNode.value
+  if (source === null) return
+  store.connect(props.tabKey, source.id, targetId, connectRoute.value)
 }
 
 function onPaneClick(): void {
@@ -307,7 +343,7 @@ async function deleteDefinition(workflowId: string): Promise<void> {
         <h1 class="text-sm font-semibold">工作流</h1>
         <AppButton variant="compact" @click="createDefinition">新建</AppButton>
       </header>
-      <p v-if="loadError !== null" class="workflow-error">{{ loadError }}</p>
+      <p v-if="loadError !== null" class="text-xs text-desk-danger">{{ loadError }}</p>
       <p v-else-if="definitions.length === 0" class="text-xs text-desk-muted">还没有保存过工作流。</p>
       <ul v-else class="workflow-list-items">
         <li v-for="item in definitions" :key="item.id">
@@ -320,24 +356,46 @@ async function deleteDefinition(workflowId: string): Promise<void> {
             <span class="workflow-list-item-name">{{ item.name }}</span>
             <span class="text-2xs text-desk-muted">{{ item.nodeCount }} 个节点</span>
           </button>
-          <button type="button" class="workflow-list-remove" title="移入废纸篓" @click="deleteDefinition(item.id)">×</button>
+          <button
+            type="button"
+            class="workflow-list-remove"
+            aria-label="移入废纸篓"
+            title="移入废纸篓"
+            @click="deleteDefinition(item.id)"
+          >
+            <span aria-hidden="true">×</span>
+          </button>
         </li>
       </ul>
     </aside>
 
     <div class="workflow-main">
       <header class="workflow-toolbar">
-        <input
-          class="workflow-input workflow-name"
-          :value="draft?.name ?? ''"
-          maxlength="64"
-          placeholder="工作流名称"
-          :disabled="draft === null"
-          @input="store.setName(tabKey, ($event.target as HTMLInputElement).value)"
-        >
-        <label class="workflow-route-picker">
-          <span class="text-2xs text-desk-muted">新连线路由</span>
-          <select v-model="connectRoute" class="workflow-input">
+        <label class="flex items-center gap-1.5">
+          <span class="field-label">名称</span>
+          <input
+            class="text-control w-40"
+            :value="draft?.name ?? ''"
+            maxlength="64"
+            placeholder="工作流名称"
+            :disabled="draft === null"
+            @input="store.setName(tabKey, inputValue($event))"
+          >
+        </label>
+        <label class="flex items-center gap-1.5">
+          <span class="field-label">说明</span>
+          <input
+            class="text-control w-44"
+            :value="draft?.summary ?? ''"
+            :maxlength="MAX_WORKFLOW_SUMMARY_LENGTH"
+            placeholder="一句话说明"
+            :disabled="draft === null"
+            @input="store.setSummary(tabKey, inputValue($event))"
+          >
+        </label>
+        <label class="flex items-center gap-1.5">
+          <span class="field-label">新连线路由</span>
+          <select v-model="connectRoute" class="text-control w-28">
             <option v-for="route in WORKFLOW_EDGE_ROUTES" :key="route" :value="route">
               {{ WORKFLOW_EDGE_ROUTE_LABELS[route] }}
             </option>
@@ -359,7 +417,11 @@ async function deleteDefinition(workflowId: string): Promise<void> {
           <AppButton variant="compact" :disabled="!loaded || saving" @click="saveDefinition">
             {{ saving ? '保存中…' : dirty ? '保存 *' : '保存' }}
           </AppButton>
-          <AppButton variant="primary" :disabled="draft === null || draft.id === '' || runBusy" @click="startRun">
+          <AppButton
+            variant="primary"
+            :disabled="draft === null || draft.id === '' || runStarting || runActive"
+            @click="startRun"
+          >
             运行
           </AppButton>
         </div>
@@ -391,10 +453,10 @@ async function deleteDefinition(workflowId: string): Promise<void> {
         v-if="messages.error !== null || messages.notice !== null || messages.issues.length > 0 || runError !== null"
         class="workflow-messages"
       >
-        <p v-if="messages.error !== null" class="workflow-error">{{ messages.error }}</p>
-        <p v-if="runError !== null" class="workflow-error">{{ runError }}</p>
-        <p v-if="messages.notice !== null" class="workflow-notice">{{ messages.notice }}</p>
-        <ul v-if="messages.issues.length > 0" class="workflow-error">
+        <p v-if="messages.error !== null" class="text-xs text-desk-danger">{{ messages.error }}</p>
+        <p v-if="runError !== null" class="text-xs text-desk-danger">{{ runError }}</p>
+        <p v-if="messages.notice !== null" class="text-xs text-desk-muted">{{ messages.notice }}</p>
+        <ul v-if="messages.issues.length > 0" class="text-xs text-desk-danger">
           <li v-for="issue in messages.issues" :key="`${issue.kind}-${issue.nodeId ?? ''}-${issue.message}`">{{ issue.message }}</li>
         </ul>
       </div>
@@ -404,7 +466,8 @@ async function deleteDefinition(workflowId: string): Promise<void> {
         :runs="runs"
         :nodes="draft?.nodes ?? []"
         :waiting-node-id="waitingNodeId"
-        :busy="runBusy"
+        :cancelling="runCancelling"
+        :approving="runApproving"
         @cancel="runStore.cancel()"
         @approve="approved => runStore.approve(approved)"
         @select-run="runId => runStore.selectRun(runId)"
@@ -423,8 +486,10 @@ async function deleteDefinition(workflowId: string): Promise<void> {
         v-else-if="currentNode !== null"
         :node="currentNode"
         :experts="experts"
+        :nodes="draft?.nodes ?? []"
         @update="onNodeUpdate"
         @remove="onNodeRemove"
+        @connect="onNodeConnect"
       />
       <p v-else class="text-xs text-desk-muted">点选一个节点或一条连线来配置它。</p>
     </aside>
@@ -441,7 +506,7 @@ async function deleteDefinition(workflowId: string): Promise<void> {
     <WorkflowRunDialog
       :open="runOpen"
       :parameters="draft?.parameters ?? []"
-      :busy="runBusy"
+      :busy="runStarting"
       :error="runError"
       @close="runOpen = false"
       @submit="submitRun"
@@ -460,7 +525,8 @@ async function deleteDefinition(workflowId: string): Promise<void> {
 <style scoped>
 .workflow-view {
   display: grid;
-  grid-template-columns: 220px minmax(0, 1fr) 280px;
+  /* 三列宽度跟随窗口收缩：720px 下限时画布仍有约 340px，不再被固定 220+280 挤掉。 */
+  grid-template-columns: clamp(160px, 18vw, 220px) minmax(0, 1fr) clamp(220px, 22vw, 280px);
   min-height: 0;
   height: 100%;
 }
@@ -533,38 +599,18 @@ async function deleteDefinition(workflowId: string): Promise<void> {
 
 .workflow-toolbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   padding: 8px 12px;
   border-bottom: 1px solid var(--color-desk-border);
 }
 
-.workflow-name {
-  width: 200px;
-  border: 1px solid var(--color-desk-border);
-  border-radius: 6px;
-  background: transparent;
-  font-size: 12px;
-}
-
-.workflow-input {
-  padding: 5px 8px;
-  border: 1px solid var(--color-desk-border);
-  border-radius: 6px;
-  background: transparent;
-  font-size: 12px;
-}
-
-.workflow-route-picker {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
 .workflow-canvas {
   position: relative;
   flex: 1;
-  min-height: 320px;
+  /* 小窗口下画布不再占满 320px，给运行面板留出可视高度。 */
+  min-height: min(320px, 45vh);
 }
 
 .workflow-canvas-empty {
@@ -579,40 +625,6 @@ async function deleteDefinition(workflowId: string): Promise<void> {
   gap: 4px;
   padding: 8px 12px;
 }
-
-.workflow-error {
-  font-size: 12px;
-  color: var(--color-desk-danger);
-}
-
-.workflow-notice {
-  font-size: 12px;
-  color: var(--color-desk-muted);
-}
-
-.workflow-run-panel {
-  padding: 10px 12px;
-  border-top: 1px solid var(--color-desk-border);
-  max-height: 40%;
-  overflow-y: auto;
-}
-
-.workflow-run-events {
-  margin-top: 10px;
-  font-size: 11px;
-}
-
-.workflow-run-events ul {
-  margin: 6px 0 0;
-  padding: 0;
-  list-style: none;
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-}
-
-.workflow-run-events .is-warn { color: #b45309; }
-.workflow-run-events .is-error { color: var(--color-desk-danger); }
 
 .workflow-side {
   padding: 12px;

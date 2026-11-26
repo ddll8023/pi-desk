@@ -5,6 +5,8 @@
  * 收到别的运行的快照（同时开两个标签）时按 `runId` 过滤，不互相覆盖。
  * 启动失败只写一条提示，不清掉上一次运行的结果——对比两次运行是这里的正常用法。
  * 回放走同一份快照形状：历史运行读出来就是只读展示，不需要另一套渲染。
+ * 启动、取消、审批各有自己的进行中标记，启动、停止、回放与清单读取各自带着请求序号：
+ * 回包时序号已过期就丢弃，否则连点两条历史运行或边取消边等审批时，旧回包会把面板拉回上一个状态。
  */
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
@@ -14,14 +16,21 @@ import * as service from '../services/desktop'
 export const useWorkflowRunStore = defineStore('workflow-runs', () => {
   const run = ref<WorkflowRun | null>(null)
   const runs = ref<readonly WorkflowRunSummary[]>([])
-  const busy = ref(false)
+  /** 按动作分开的进行中标记：一个动作在飞时只禁用它自己的入口。 */
+  const starting = ref(false)
+  const cancelling = ref(false)
+  const approving = ref(false)
   const error = ref<string | null>(null)
   /** 当前标签看的是哪份工作流：推送回来的快照只在它自己的标签里生效。 */
   const contextWorkflowId = ref<string | null>(null)
   let unsubscribe: (() => void) | null = null
+  /** 各动作的请求序号；回包时比对，只接受最后一次发出的结果。 */
+  let startSeq = 0
+  let stopSeq = 0
+  let selectSeq = 0
+  let listSeq = 0
 
   const active = computed(() => run.value !== null && run.value.status === 'running')
-  const canCancel = computed(() => active.value && !busy.value)
   /** 等待审批的节点；运行面板据此给出通过／拒绝。 */
   const waitingNodeId = computed<string | null>(() => {
     const current = run.value
@@ -56,12 +65,15 @@ export const useWorkflowRunStore = defineStore('workflow-runs', () => {
       error.value = '请先打开一个项目：工作流只能在项目目录里运行。'
       return false
     }
+    if (starting.value) return false
+    const seq = ++startSeq
     error.value = null
-    busy.value = true
+    starting.value = true
     ensureSubscription()
     setContext(workflowId)
     const result = await service.startWorkflowRun(workflowId, projectPath, parameters)
-    busy.value = false
+    if (seq !== startSeq) return false
+    starting.value = false
     if (!result.ok) {
       error.value = result.error.message
       return false
@@ -81,37 +93,44 @@ export const useWorkflowRunStore = defineStore('workflow-runs', () => {
 
   async function cancel(): Promise<void> {
     const current = run.value
-    if (current === null || current.status !== 'running') return
+    if (current === null || current.status !== 'running' || cancelling.value) return
+    const seq = ++stopSeq
     error.value = null
-    busy.value = true
+    cancelling.value = true
     const result = await service.cancelWorkflowRun(current.runId)
-    busy.value = false
+    if (seq !== stopSeq) return
+    cancelling.value = false
     if (!result.ok) {
       error.value = result.error.message
       return
     }
-    run.value = result.data
+    // 面板可能已被切到另一份运行：只在仍是同一次运行时覆盖。
+    if (run.value?.runId === result.data.runId) run.value = result.data
   }
 
   /** 审批门的决定：通过与拒绝分别走 success 与 failure 边。 */
   async function approve(approved: boolean): Promise<void> {
     const current = run.value
     const nodeId = waitingNodeId.value
-    if (current === null || nodeId === null) return
+    if (current === null || nodeId === null || approving.value) return
+    const seq = ++stopSeq
     error.value = null
-    busy.value = true
+    approving.value = true
     const result = await service.approveWorkflowRun(current.runId, nodeId, approved)
-    busy.value = false
+    if (seq !== stopSeq) return
+    approving.value = false
     if (!result.ok) {
       error.value = result.error.message
       return
     }
-    run.value = result.data
+    if (run.value?.runId === result.data.runId) run.value = result.data
   }
 
   /** 读取某个工作流的历史运行列表；运行时与结束后都可刷新。 */
   async function loadRuns(workflowId: string): Promise<void> {
+    const seq = ++listSeq
     const result = await service.listWorkflowRuns(workflowId)
+    if (seq !== listSeq) return
     if (!result.ok) {
       runs.value = []
       error.value = result.error.message
@@ -122,11 +141,12 @@ export const useWorkflowRunStore = defineStore('workflow-runs', () => {
 
   /** 回放：读一次已完成运行的记录，替换当前面板内容（只读展示）。 */
   async function selectRun(runId: string): Promise<void> {
+    const seq = ++selectSeq
     error.value = null
-    busy.value = true
     ensureSubscription()
     const result = await service.readWorkflowRun(runId)
-    busy.value = false
+    // 连点两条历史运行：先发出的回包晚到时直接丢弃，面板停在最后点的那一条。
+    if (seq !== selectSeq) return
     if (!result.ok) {
       error.value = result.error.message
       return
@@ -147,10 +167,11 @@ export const useWorkflowRunStore = defineStore('workflow-runs', () => {
   return {
     run,
     runs,
-    busy,
+    starting,
+    cancelling,
+    approving,
     error,
     active,
-    canCancel,
     waitingNodeId,
     start,
     adopt,

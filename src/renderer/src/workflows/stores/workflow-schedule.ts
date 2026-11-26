@@ -3,6 +3,7 @@
  *
  * 调度由主进程按分钟推进，页面只负责编辑与手动触发；清单按工作流读取，缓存没有意义
  * （刚改过的调度要立刻看到）。「应用退出后不再触发」是这条能力的事实，由界面负责说明。
+ * 保存、删除、立即运行各有自己的进行中标记：点删除时不该把「立即运行」一起禁掉。
  */
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
@@ -18,18 +19,24 @@ export const useWorkflowScheduleStore = defineStore('workflow-schedules', () => 
   const runStore = useWorkflowRunStore()
   const schedules = ref<readonly WorkflowSchedule[]>([])
   const workflowId = ref<string | null>(null)
-  const busy = ref(false)
+  const saving = ref(false)
+  const removing = ref(false)
+  const running = ref(false)
   const error = ref<string | null>(null)
   const notice = ref<string | null>(null)
+  /** 清单读取序号：切了工作流之后，上一份清单的回包不再写进来。 */
+  let listSeq = 0
 
   const loaded = computed(() => workflowId.value !== null)
 
   async function load(id: string): Promise<void> {
+    const seq = ++listSeq
     workflowId.value = id
     // 先清空：否则加载完成前列表里还是上一个工作流的任务，而且能被直接操作。
     schedules.value = []
     error.value = null
     const result = await service.listWorkflowSchedules(id)
+    if (seq !== listSeq) return
     if (!result.ok) {
       schedules.value = []
       error.value = result.error.message
@@ -42,9 +49,9 @@ export const useWorkflowScheduleStore = defineStore('workflow-schedules', () => 
   async function save(request: WorkflowScheduleSaveRequest): Promise<boolean> {
     error.value = null
     notice.value = null
-    busy.value = true
+    saving.value = true
     const result = await service.saveWorkflowSchedule(request)
-    busy.value = false
+    saving.value = false
     if (!result.ok) {
       error.value = result.error.message
       return false
@@ -68,9 +75,9 @@ export const useWorkflowScheduleStore = defineStore('workflow-schedules', () => 
     if (!ownedBy(scheduleId, id)) return
     error.value = null
     notice.value = null
-    busy.value = true
+    removing.value = true
     const result = await service.deleteWorkflowSchedule(scheduleId)
-    busy.value = false
+    removing.value = false
     if (!result.ok) {
       error.value = result.error.message
       return
@@ -86,9 +93,9 @@ export const useWorkflowScheduleStore = defineStore('workflow-schedules', () => 
     if (!ownedBy(scheduleId, id)) return
     error.value = null
     notice.value = null
-    busy.value = true
+    running.value = true
     const result = await service.runWorkflowSchedule(scheduleId)
-    busy.value = false
+    running.value = false
     if (!result.ok) {
       error.value = result.error.message
       return
@@ -110,7 +117,9 @@ export const useWorkflowScheduleStore = defineStore('workflow-schedules', () => 
   return {
     schedules,
     workflowId,
-    busy,
+    saving,
+    removing,
+    running,
     error,
     notice,
     loaded,

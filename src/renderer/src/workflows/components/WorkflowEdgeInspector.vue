@@ -4,6 +4,7 @@
   状态边（成功、失败、总是）按节点终态走；条件边按源节点的结论文本求值。
   切到条件路由时必须填条件，否则保存会因「缺少条件」被拒——这里先把话说明白，
   不靠保存失败来提示。条件只作用于「没有状态边可走」的分支，规则写在面板里。
+  路由下拉的取值按枚举核对后才上报：手改 DOM 或旧稿里的非法值不会写进草稿。
 -->
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
@@ -45,7 +46,19 @@ watch(() => props.edge, edge => {
   conditionError.value = null
 }, { immediate: true })
 
-function changeRoute(route: WorkflowEdgeRoute): void {
+/** 下拉只认枚举里的路由：非法取值直接忽略，并说明为什么没生效。 */
+function toEdgeRoute(candidate: string): WorkflowEdgeRoute | null {
+  return WORKFLOW_EDGE_ROUTES.find(route => route === candidate) ?? null
+}
+
+function changeRoute(event: Event): void {
+  const target = event.target
+  if (!(target instanceof HTMLSelectElement)) return
+  const route = toEdgeRoute(target.value)
+  if (route === null) {
+    conditionError.value = '无法识别的路由，按原值保留。'
+    return
+  }
   if (route === 'condition') {
     const current = value.value.trim()
     emit('update', {
@@ -88,9 +101,9 @@ function applyCondition(): void {
       <span class="text-2xs text-desk-muted">{{ sourceTitle }} → {{ targetTitle }}</span>
     </header>
 
-    <label class="workflow-field">
-      <span>路由</span>
-      <select class="workflow-input" :value="edge.route" @change="changeRoute(($event.target as HTMLSelectElement).value as WorkflowEdgeRoute)">
+    <label class="block space-y-1">
+      <span class="field-label">路由</span>
+      <select class="text-control" :value="edge.route" @change="changeRoute($event)">
         <option v-for="route in WORKFLOW_EDGE_ROUTES" :key="route" :value="route">
           {{ WORKFLOW_EDGE_ROUTE_LABELS[route] }}
         </option>
@@ -98,27 +111,27 @@ function applyCondition(): void {
     </label>
 
     <template v-if="edge.route === 'condition'">
-      <label class="workflow-field">
-        <span>判定方式</span>
-        <select v-model="kind" class="workflow-input" @change="applyCondition">
+      <label class="block space-y-1">
+        <span class="field-label">判定方式</span>
+        <select v-model="kind" class="text-control" @change="applyCondition">
           <option v-for="item in WORKFLOW_CONDITION_KINDS" :key="item" :value="item">
             {{ WORKFLOW_CONDITION_LABELS[item] }}
           </option>
         </select>
       </label>
 
-      <label class="workflow-field">
-        <span>条件</span>
+      <label class="block space-y-1">
+        <span class="field-label">条件</span>
         <input
           v-model="value"
-          class="workflow-input"
+          class="text-control"
           :maxlength="MAX_WORKFLOW_CONDITION_LENGTH"
           placeholder="对源节点的结论文本求值"
           @change="applyCondition"
         >
       </label>
-      <p v-if="conditionError !== null" class="workflow-error">{{ conditionError }}</p>
-      <p class="workflow-hint">状态边优先：只有当源节点没有可走的成功／失败／总是边时，条件边才参与判定。</p>
+      <p v-if="conditionError !== null" class="text-xs text-desk-danger">{{ conditionError }}</p>
+      <p class="text-xs text-desk-muted">状态边优先：只有当源节点没有可走的成功／失败／总是边时，条件边才参与判定。</p>
     </template>
 
     <AppButton variant="danger" class="mt-2 w-full" @click="emit('remove')">
@@ -138,30 +151,5 @@ function applyCondition(): void {
   display: flex;
   flex-direction: column;
   gap: 2px;
-}
-
-.workflow-field {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  font-size: 12px;
-}
-
-.workflow-input {
-  padding: 5px 8px;
-  border: 1px solid var(--color-desk-border);
-  border-radius: 6px;
-  background: transparent;
-  font-size: 12px;
-}
-
-.workflow-error {
-  font-size: 12px;
-  color: var(--color-desk-danger);
-}
-
-.workflow-hint {
-  font-size: 11px;
-  color: var(--color-desk-muted);
 }
 </style>

@@ -4,6 +4,8 @@
   只读展示加两个入口：取消运行，以及等待审批时的通过与拒绝——调度在主进程，
   页面不参与推进，也不自己拼装节点状态。审批门的说明取自节点配置，解释这一步在确认什么。
   历史运行按开始时间倒序列出，选中后展示该次运行的节点与事件（只读回放）。
+  状态胶囊与审批块带 live region：运行推进和「等人给决定」都是要立刻被感知的变化。
+  两个入口各有自己的进行中标记，取消在飞时不禁用通过与拒绝。
 -->
 <script setup lang="ts">
 import { computed } from 'vue'
@@ -19,7 +21,10 @@ const props = defineProps<{
   readonly runs: readonly WorkflowRunSummary[]
   readonly nodes: readonly WorkflowNode[]
   readonly waitingNodeId: string | null
-  readonly busy: boolean
+  /** 取消请求进行中：只禁用取消按钮。 */
+  readonly cancelling: boolean
+  /** 审批请求进行中：只禁用通过与拒绝。 */
+  readonly approving: boolean
 }>()
 
 const emit = defineEmits<{
@@ -60,6 +65,9 @@ const finishedAt = computed(() => {
   if (run === null || run.finishedAt === null) return null
   return new Date(run.finishedAt).toLocaleTimeString()
 })
+
+/** 事件行键：同一条事件在快照里可能出现多次（文本相同、时刻不同），时刻 + 节点 + 序号才稳定。 */
+const eventKey = (at: number, nodeId: string | null, index: number): string => `${at}-${nodeId ?? ''}-${index}`
 </script>
 
 <template>
@@ -67,23 +75,23 @@ const finishedAt = computed(() => {
     <header class="flex flex-wrap items-center justify-between gap-2">
       <div class="flex items-center gap-2">
         <h2 class="text-sm font-semibold">运行</h2>
-        <span v-if="run !== null" class="workflow-run-status" :class="`is-${run.status}`">
+        <span v-if="run !== null" class="workflow-run-status" :class="`is-${run.status}`" role="status">
           {{ WORKFLOW_RUN_STATUS_LABELS[run.status] }}
         </span>
         <span v-if="finishedAt !== null" class="text-2xs text-desk-muted">结束于 {{ finishedAt }}</span>
       </div>
-      <AppButton v-if="run !== null && run.status === 'running'" :disabled="busy" @click="emit('cancel')">
-        取消运行
+      <AppButton v-if="run !== null && run.status === 'running'" :disabled="cancelling" @click="emit('cancel')">
+        {{ cancelling ? '取消中…' : '取消运行' }}
       </AppButton>
     </header>
 
-    <!-- 审批门：等人给决定，说明文字来自节点配置。 -->
-    <div v-if="waitingNode !== null" class="workflow-approval">
+    <!-- 审批门：等人给决定，说明文字来自节点配置。阻塞性提示，用 alert 播报。 -->
+    <div v-if="waitingNode !== null" class="workflow-approval" role="alert">
       <p class="workflow-approval-title">等待审批：{{ waitingNode.title }}</p>
       <p v-if="waitingNode.prompt.trim() !== ''" class="workflow-approval-note">{{ waitingNode.prompt }}</p>
       <div class="flex gap-2">
-        <AppButton variant="primary" :disabled="busy" @click="emit('approve', true)">通过</AppButton>
-        <AppButton variant="quiet-danger" :disabled="busy" @click="emit('approve', false)">拒绝</AppButton>
+        <AppButton variant="primary" :disabled="approving" @click="emit('approve', true)">通过</AppButton>
+        <AppButton variant="quiet-danger" :disabled="approving" @click="emit('approve', false)">拒绝</AppButton>
       </div>
     </div>
 
@@ -103,7 +111,11 @@ const finishedAt = computed(() => {
       <details class="workflow-run-events">
         <summary>事件（{{ run.events.length }}）</summary>
         <ul>
-          <li v-for="(event, index) in run.events" :key="index" :class="`is-${event.level}`">
+          <li
+            v-for="(event, index) in run.events"
+            :key="eventKey(event.at, event.nodeId, index)"
+            :class="`is-${event.level}`"
+          >
             <span class="text-2xs text-desk-muted">{{ new Date(event.at).toLocaleTimeString() }}</span>
             <span v-if="event.nodeId !== null"> · {{ titleOf(event.nodeId) }}</span>
             · {{ event.message }}
@@ -132,9 +144,14 @@ const finishedAt = computed(() => {
 </template>
 
 <style scoped>
+/* 容器约束归本组件：面板在任何宿主里都是「下方可滚动的运行区」。 */
 .workflow-run-panel {
   display: flex;
   flex-direction: column;
+  max-height: 40%;
+  padding: 10px 12px;
+  border-top: 1px solid var(--color-desk-border);
+  overflow-y: auto;
 }
 
 .workflow-run-status {
