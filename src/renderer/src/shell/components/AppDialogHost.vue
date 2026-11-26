@@ -58,10 +58,22 @@ const sessionConfirmDescription = computed(() => (
 ))
 const sessionConfirmLabel = computed(() => (pendingReload.value ? '停止并重新加载' : '停止并切换'))
 
-/** 待确认关闭的文件或浏览器标签标题；标签消失时退化为空串。 */
+/** 待确认关闭的文件、浏览器或工作流标签标题；标签消失时退化为空串。 */
 const pendingFileCloseTitle = computed(() => (
   workspaceTabsStore.tabs.find(tab => tab.id === workspaceTabsStore.pendingCloseKey)?.title ?? ''
 ))
+
+/** 待确认关闭时丢弃的内容：文件未保存修改、浏览器未交付批注、工作流未保存的草稿，三者文案与确认后果不同。 */
+const pendingCloseCopy = computed(() => {
+  const key = workspaceTabsStore.pendingCloseKey ?? ''
+  if (workspaceTabsStore.isBrowserKey(key)) {
+    return { title: '关闭浏览器会丢弃未交付的批注', description: '关闭标签后截图和批注不可恢复。' }
+  }
+  if (workspaceTabsStore.isWorkflowKey(key)) {
+    return { title: '关闭工作流会丢弃未保存的图', description: '该工作流有未保存的改动，关闭标签后不可恢复。需要保留时先取消并保存。' }
+  }
+  return { title: '关闭文件会丢弃未保存的修改', description: '该文件有未保存的修改，关闭标签后不可恢复。需要保留时先取消并保存。' }
+})
 
 /** 删除确认弹层的会话名：与侧栏同一口径，优先首条用户消息预览。 */
 const sessionToRemoveTitle = computed(() => {
@@ -156,11 +168,11 @@ function onUpdateDetails(): void {
       @cancel="sessionStore.cancelRemoval()"
     />
 
-    <!-- 文件或浏览器关闭前确认：丢弃未保存修改或未交付批注后关闭，不可恢复。 -->
+    <!-- 文件、浏览器或工作流关闭前确认：丢弃未保存修改、未交付批注或未保存的图后关闭，不可恢复。 -->
     <ConfirmDialog
       :open="workspaceTabsStore.pendingCloseKey !== null"
-      :title="workspaceTabsStore.isBrowserKey(workspaceTabsStore.pendingCloseKey ?? '') ? '关闭浏览器会丢弃未交付的批注' : '关闭文件会丢弃未保存的修改'"
-      :description="workspaceTabsStore.isBrowserKey(workspaceTabsStore.pendingCloseKey ?? '') ? '关闭标签后截图和批注不可恢复。' : '该文件有未保存的修改，关闭标签后不可恢复。需要保留时先取消并保存。'"
+      :title="pendingCloseCopy.title"
+      :description="pendingCloseCopy.description"
       :detail="pendingFileCloseTitle"
       confirm-label="丢弃并关闭"
       @confirm="onConfirmFileClose"

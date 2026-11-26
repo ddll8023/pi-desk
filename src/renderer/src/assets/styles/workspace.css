@@ -190,7 +190,13 @@
     flex-direction: column;
     overflow: hidden;
   }
+/*
+   * 隐藏要同时压透明度：visibility 可被后代显式声明覆盖，画布节点与边标签带内联
+   * visibility: visible，只设 visibility 时此类内容会继续画在别的面板之上（工作流面板曾因此浮在对话页上）。
+   * opacity 不受这层影响，也不改布局尺寸。
+   */
 .workspace-pane.is-hidden {
+    opacity: 0;
     visibility: hidden;
     pointer-events: none;
   }
