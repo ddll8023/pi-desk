@@ -6,6 +6,7 @@ import { dirname, isAbsolute, resolve } from 'node:path'
 import type { AgentSession, AgentSessionEvent, AgentSessionRuntime, ExtensionCommandContextActions, ExtensionFactory, InlineExtension, SessionStats } from '@earendil-works/pi-coding-agent'
 import { ExtensionUiBridge } from './extension-ui-bridge'
 import { prepareProductResources } from './product-resources'
+import { logHostTiming } from './host-timing'
 import type { MemoryConfigurationHolder } from './memory-configuration'
 import { ImageAnnotationContext } from './image-annotations'
 // 上一轮改动面按系统提示分段注入，与图片资料同用 before_agent_start，但不改输入与 transcript。
@@ -995,6 +996,8 @@ export class SdkSessionRuntime {
       throw new SdkSessionFailure('INVALID_SESSION_TARGET')
     }
     const creation = ++this.creationSeed
+    // 分段计时只用于定位首次会话的等待；各段立即取值，不影响装配顺序。
+    const assemblyStartedAt = Date.now()
     // 专家定义在会话创建时读一次：会话内不换专家，正文不需要每轮重新解析。
     const expert = this.selectedExpert(target)
     // 团队同样只读一次：它决定团长的工具收窄与写范围，改定义需重开会话才生效。
@@ -1184,6 +1187,7 @@ export class SdkSessionRuntime {
             : []),
           bindingGuard
       ]
+      const definitionsAt = Date.now()
       const product = await prepareProductResources(this.sdk, {
         directory: this.options.productResourcesDir, cwd, agentDir,
         sharedAgentDir: this.options.sharedAgentDir,
@@ -1191,8 +1195,10 @@ export class SdkSessionRuntime {
         eventBus: this.options.memory.bus, memory: this.options.memory.forMode(target.mode), mode: target.mode,
         skillPermit: capability.skills
       })
+      const resourcesAt = Date.now()
       const services = await this.sdk.createAgentSessionServices({ cwd, agentDir, settingsManager,
         resourceLoaderOptions: product.options })
+      const servicesAt = Date.now()
       if (this.closing) throw new SdkSessionFailure('HOST_NOT_READY')
       // 来源筛选在扩展求值之前完成；只有产品件损坏或争用产品工具名才拒绝绑定，其余问题进诊断。
       try {
@@ -1210,8 +1216,13 @@ export class SdkSessionRuntime {
       this.resourceIssues = product.issues.map(issue => ({ ...issue }))
       services.diagnostics.push(...product.diagnostics.map(message => ({ type: 'info' as const, message })))
       const scope = await this.sdk.resolveModelScopeWithDiagnostics(settingsManager.getEnabledModels() ?? [], services.modelRuntime)
+      const scopeAt = Date.now()
       const result = await this.sdk.createAgentSessionFromServices({ services, sessionManager,
         scopedModels: scope.scopedModels, ...(sessionStartEvent === undefined ? {} : { sessionStartEvent }) })
+      logHostTiming('session-create', {
+        definitions: definitionsAt - assemblyStartedAt, resources: resourcesAt - definitionsAt,
+        services: servicesAt - resourcesAt, modelScope: scopeAt - servicesAt, session: Date.now() - scopeAt
+      })
       if (this.closing) {
         result.session.dispose()
         throw new SdkSessionFailure('HOST_NOT_READY')
@@ -1248,6 +1259,7 @@ export class SdkSessionRuntime {
   /** 订阅先于 bindExtensions，启动钩子触发的事件和弹窗不能丢失。 */
   private async bind(session: AgentSession): Promise<void> {
     this.valid = false
+    const bindStartedAt = Date.now()
     this.session = session
     this.target = this.factoryTarget
     this.currentCreation = this.creations.get(session) ?? null
@@ -1394,6 +1406,8 @@ export class SdkSessionRuntime {
       if (this.closing || this.session !== session || this.needsHostRebuild) throw new SdkSessionFailure('STALE_SESSION')
       this.valid = true
       this.phase = 'bound'
+      // 绑定包含主题、投影、历史、活动与扩展求值：页面到 bound 才可提交，这段与首条消息的等待直接相关。
+      logHostTiming('session-bind', { total: Date.now() - bindStartedAt })
       this.publish()
       // 绑定完成即补读一次会话统计：恢复历史时页面同样需要已有用量，不能等下一次输出。
       this.scheduleUsageRefresh()

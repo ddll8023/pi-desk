@@ -844,8 +844,10 @@ def project_notes(root: Path, project: str, date_from: str, limit: int = 3) -> d
 def profiles_view(root: Path, domain: str | None = None) -> dict:
     with connect(root) as conn:
         require_version(conn)
+        version=change_seq(conn)
         rows=[row for row in profile_rows(conn) if not domain or row['domain']==domain]
-    return {'memory_scope':'global','profiles':rows}
+    # store_version 是本次读取看到的变化序号：调用方用它复核「读到的是不是缓存键所属的那一版」。
+    return {'memory_scope':'global','store_version':version,'profiles':rows}
 
 
 def months_view(root: Path) -> dict:

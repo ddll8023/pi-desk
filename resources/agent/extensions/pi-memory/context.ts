@@ -1,9 +1,10 @@
 /** 用户级全局记忆的请求背景与分支控制；提供适用偏好、用户本人的表达风格、常驻约定与当前项目近况；约定与近况合并为一份按日期统一结算的共享预算，风格段另有独立 20,000 字符预算；按工作目录匹配项目归属、按名称解析检索范围，不把背景正文写入会话；装配只留下不含正文的审计元数据。 */
+import { appendFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import type { AgentMessage } from '@earendil-works/pi-agent-core'
 import type { ExtensionContext } from '@earendil-works/pi-coding-agent'
 import { array, domain, errorText, object, text } from './engine.ts'
-import type { Domain, JsonObject, MemoryConfig, MemoryEngine } from './engine.ts'
+import type { Domain, JsonObject, MemoryConfig, MemoryEngine, ProfileSignature } from './engine.ts'
 
 export const CONTEXT_TYPE = 'pi-memory.background.v1'
 export const CONTROL_TYPE = 'pi-memory.control.v1'
@@ -58,10 +59,10 @@ interface State {
   /** 本会话已读原文但尚未标注的记录 ID：读后提醒的数据源；标注提交或会话更换后清除对应项。 */
   readUnreinforced?: string[] | undefined
   /**
-   * 本次装配共用的库变更序号：画像与风格两段并发读取同一 Promise，只付一次引擎调用的代价。
+   * 本次装配共用的库变更序号与画像缓存键：画像与风格两段并发读取同一 Promise，只付一次引擎调用的代价。
    * 只活在一次请求内，每轮背景装配开始时重置，失败也不保留。
    */
-  signature?: Promise<string> | undefined
+  signature?: Promise<ProfileSignature> | undefined
 }
 /** 装配审计的段状态，与 `/memory status` 的 `background` 同源。 */
 interface InjectionSegments {
@@ -524,10 +525,11 @@ export class MemoryRuntime {
   }
 
   /**
-   * 本次装配的库变更序号。画像与风格两段并发取用同一份 Promise，省下一次引擎调用；
+   * 本次装配的库变更序号与缓存键。画像与风格两段并发取用同一份 Promise，省下一次引擎调用；
    * 任一段失败只降级本段，Promise 在背景装配开始时已重置，下一请求重新取。
+   * 版本号随缓存键一起返回，各段用它校验自己刚读到的内容，无需再额外读一次库。
    */
-  private signatureOf(lease: Lease): Promise<string> {
+  private signatureOf(lease: Lease): Promise<ProfileSignature> {
     const state = lease.state
     return state.signature ??= this.engine.profileSignature(this.config.profileDomains, lease.signal)
   }
@@ -540,11 +542,15 @@ export class MemoryRuntime {
     const state = lease.state
     try {
       const signature = await this.signatureOf(lease)
-      const cached = state.profiles?.signature === signature ? state.profiles : undefined
+      const cached = state.profiles?.signature === signature.signature ? state.profiles : undefined
       if (cached !== undefined) return { value: cached.value, available: true, entries: cached.entries }
       // 领域之间互不依赖：并行读取后仍按领域顺序拼接，段文本与逐次读取时一致。
-      const domains = await Promise.all(this.config.profileDomains.map(async selected =>
-        applicableProfiles(await this.engine.profiles(selected, lease.signal), selected, this.config.profileDomains)))
+      // 每个响应自带库变更序号，与本轮序号不一致就说明读取期间有写入，不把旧内容挂在新序号下缓存。
+      const domains = await Promise.all(this.config.profileDomains.map(async selected => {
+        const data = await this.engine.profiles(selected, lease.signal)
+        if (data.store_version !== signature.version) throw new Error('画像读取期间发生变化')
+        return applicableProfiles(data, selected, this.config.profileDomains)
+      }))
       const sections: string[] = []
       const entries: JsonObject[] = []
       for (const data of domains) {
@@ -552,12 +558,9 @@ export class MemoryRuntime {
         if (array(data.profiles).length) sections.push(JSON.stringify(data))
         for (const row of array(data.profiles).map(value => object(value))) entries.push(profileEntry(row))
       }
-      if (signature !== await this.engine.profileSignature(this.config.profileDomains, lease.signal)) {
-        throw new Error('画像读取期间发生变化')
-      }
       let value = sections.join('\n') || '当前没有适用画像。'
       if (value.length > 20_000) value = '画像超过自动背景预算，未截断正文；可用 memory_profiles 按领域读取。'
-      state.profiles = { signature, value, entries }
+      state.profiles = { signature: signature.signature, value, entries }
       return { value, available: true, entries }
     } catch (error) {
       lease.assert()
@@ -568,7 +571,7 @@ export class MemoryRuntime {
 
   /**
    * 语气风格段：全量注入名称、场景、要点与全部原句，按保存时间倒序。
-   * 与画像共用库变更序号做缓存键，读完再复核一次以防把旧内容挂在新序号下；
+   * 与画像共用库变更序号做缓存键，并用响应自带的序号复核，不把旧内容挂在新序号下；
    * 装不下的条目整条跳过并报未注入条数，原句不截断；连续两次失败后本会话不再重试。
    */
   private async styleSection(lease: Lease): Promise<{ value: string; available: boolean; entries: JsonObject[] }> {
@@ -582,7 +585,7 @@ export class MemoryRuntime {
     }
     try {
       const signature = await this.signatureOf(lease)
-      const cached = state.styles?.signature === signature ? state.styles : undefined
+      const cached = state.styles?.signature === signature.signature ? state.styles : undefined
       if (cached !== undefined) {
         state.styleStats = state.styleStats ?? { status: 'provided', budget: STYLE_BUDGET,
           used: cached.value.length, injected: cached.entries.length, dropped: 0 }
@@ -590,10 +593,8 @@ export class MemoryRuntime {
       }
       const data = await this.engine.styles(lease.signal)
       lease.assert()
-      // 读完再比对一次：两者之间若发生保存，旧内容不能挂在新变更序号下缓存整个会话。
-      if (signature !== await this.engine.profileSignature(this.config.profileDomains, lease.signal)) {
-        throw new Error('风格读取期间发生变化')
-      }
+      // 风格响应自带库变更序号：与本轮序号不一致说明读取期间有写入，旧内容不能挂在新序号下缓存整个会话。
+      if (data.store_version !== signature.version) throw new Error('风格读取期间发生变化')
       const rows = array(data.styles).map(value => object(value)).sort((left, right) => {
         // 合并会更新 saved_at 而保留 date；按保存时间倒序才能让刚完善的条目优先入背景。
         const leftAt = String(object(left.session ?? {}).saved_at ?? left.date ?? '')
@@ -626,7 +627,7 @@ export class MemoryRuntime {
       }
       let value = blocks.length ? blocks.join('\n') : '当前没有保存过表达风格。'
       if (dropped > 0) value += `\n另有 ${dropped} 条风格因背景预算未注入；需要时用 style_list／style_read 读取。`
-      state.styles = { signature, value, entries }
+      state.styles = { signature: signature.signature, value, entries }
       state.styleStats = { status: 'provided', budget: STYLE_BUDGET, used: value.length,
         injected: blocks.length, dropped }
       return { value, available: true, entries }
@@ -697,11 +698,17 @@ export class MemoryRuntime {
       }
       // 三段互不依赖：并发装配，总耗时降到最长一段，而不是三段之和；
       // 每段内部已自行捕获失败并降级，Promise.all 只会在租约失效时上抛。
+      // 各段记的是并发完成时刻（相对装配开始），不可相加，用于看出哪一段是最后一段。
+      const assemblyStartedAt = Date.now()
+      const finished: Record<string, number> = {}
+      const markDone = (name: string): void => { finished[name] = Date.now() - assemblyStartedAt }
       const [profiles, styleBlock, pool] = await Promise.all([
-        this.profileSection(lease),
-        this.styleSection(lease),
-        this.residentPool(lease)
+        this.profileSection(lease).then(result => { markDone('profiles'); return result }),
+        this.styleSection(lease).then(result => { markDone('styles'); return result }),
+        this.residentPool(lease).then(result => { markDone('resident'); return result })
       ])
+      markDone('total')
+      logBackgroundTiming(finished)
       lease.assert()
       const stats = lease.state.poolStats ?? {}
       const residentStats = record(stats.resident)
@@ -756,6 +763,21 @@ const STATUS_LABELS: Record<string, string> = {
 function record(value: unknown): JsonObject | null {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as JsonObject : null
 }
+
+/**
+ * 背景装配耗时：只在宿主给出日志路径（`PI_DESK_HOST_LOG`，与 sdk-host 的 `HOST_TIMING_LOG_ENV` 同名）时
+ * 写一行，终端 CLI 直接运行（无该变量）时不记录。与宿主装配耗时写在同一份文件，
+ * 便于把「首个 token 之前的记忆开销」与模型侧延迟分开看。
+ */
+function logBackgroundTiming(segments: Record<string, number>): void {
+  const path = process.env.PI_DESK_HOST_LOG
+  if (path === undefined || path === '') return
+  const parts = Object.entries(segments).map(([name, ms]) => `${name}=${Math.round(ms)}`).join(' ')
+  try {
+    appendFileSync(path, `${new Date().toISOString()} [timing] source=memory stage=background ${parts}\n`, 'utf8')
+  } catch { /* 日志不可写不影响背景装配。 */ }
+}
+
 function count(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0
 }

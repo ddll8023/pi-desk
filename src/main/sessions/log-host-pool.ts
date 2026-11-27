@@ -2,8 +2,9 @@
  * 只读宿主池：按项目保活用于解析会话文件的宿主进程，让「查看历史」不必等执行宿主建立。
  *
  * 边界：池里的宿主没有会话授权回路，不承载会话、不登记运行实例、不参与前台选择与占用判定，
- * 只做日志解析。会话真正绑定时，绑定层可以把池中宿主接管过去（`claim`），接管后它才成为运行实例，
- * 因此「查看」与「执行」共用一套进程与同一份投影检查点，而不会被同一个进程的两种身份混在一起。
+ * 只做日志解析。打开已有会话时按原对象接管（`claim`），新建会话没有会话标识、按项目接管（`take`），
+ * 接管后它才成为运行实例，因此「查看」与「执行」共用一套进程与同一份投影检查点，
+ * 而不会被同一个进程的两种身份混在一起。
  * 读取持有租约，最后一份租约释放后才开始空闲计时；回收确认后移出池，应用退出时统一关闭。
  */
 import { HOST_IDLE_RECLAIM_MS, SdkHostError } from './sdk-host-manager'
@@ -82,8 +83,16 @@ export class LogHostPool {
 
   /** 按宿主对象与项目接管；已有读取仍在同一进程完成，不再受原池的回收安排影响。 */
   claim(projectPath: string, host: SdkHostManager): SdkHostManager | null {
+    return this.take(projectPath, host)
+  }
+
+  /**
+   * 接管该项目的池宿主：只在本池已有可用条目时返回，不新建进程。
+   * `preferred` 只允许接管指定对象；新建会话没有会话标识，按项目取启动预热的那一个进程。
+   */
+  take(projectPath: string, preferred?: SdkHostManager): SdkHostManager | null {
     if (this.shuttingDown) return null
-    const entry = this.findUsable(projectPath, host)
+    const entry = this.findUsable(projectPath, preferred)
     if (entry === null) return null
     if (entry.timer !== null) clearTimeout(entry.timer)
     entry.timer = null

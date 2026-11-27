@@ -18,7 +18,8 @@
  * 直接解除占用——这类会话没有文件、无法从列表重开，保留只会留下「未命名会话」占位行。
  *
  * 查看历史不新增执行占用：优先复用原服务宿主，再借同项目执行宿主或只读池，不改变前台选择；
- * 池中宿主不登记运行实例，真正绑定时才被接管，进程内缓存与检查点因此可以继续复用。
+ * 池中宿主不登记运行实例，打开已有会话时按会话接管、新建会话时按项目接管，
+ * 进程内缓存与检查点因此可以继续复用。
  */
 import { HOST_IDLE_RECLAIM_MS, SdkHostError, SDK_HOST_FAILURE_MESSAGES } from './sdk-host-manager'
 import type { SdkHostErrorCode, SdkHostManager, SdkHostStatus } from './sdk-host-manager'
@@ -773,6 +774,15 @@ export class SdkRuntimeBridge {
     }
     const host = this.options.logHosts.claim(owner.projectPath, origin)
     if (host === null) { this.logHosts.delete(key); return null }
+    return this.adoptHost(host)
+  }
+
+  /**
+   * 把只读池里已启动的宿主登记成运行实例：进程与进程内缓存都不搬，只换上运行身份、
+   * 授权回路与执行侧依赖，因此接管后的会话与新建宿主行为一致。宿主仍在启动时照样接管，
+   * 由打开动作等它就绪。
+   */
+  private adoptHost(host: SdkHostManager): SessionRunRecord<SdkHostManager> {
     const runId = this.options.runs.allocateRunId()
     host.adoptRun(runId, this.options.runs)
     this.options.prepareHost(host)
@@ -854,6 +864,12 @@ export class SdkRuntimeBridge {
     const reusable = this.options.runs.allRuns().find(run =>
       run.runId !== reservedRunId && this.canReuse(run, owner.projectPath))
     if (reusable !== undefined) return reusable
+    // 新建会话没有会话标识，按会话寻址的池宿主根本命中不到；直接接住该项目在启动预热/列表读取时
+    // 已建立的进程，首个新对话才不必再付一次完整冷启动。
+    if (owner.sessionId === null) {
+      const warm = this.options.logHosts.take(owner.projectPath)
+      if (warm !== null) return this.adoptHost(warm)
+    }
     const runId = this.options.runs.allocateRunId()
     const host = this.options.createHost(runId)
     this.options.prepareHost(host)

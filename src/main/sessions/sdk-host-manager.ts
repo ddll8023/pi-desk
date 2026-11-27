@@ -32,6 +32,7 @@ import type { ExtensionDialogResponseInput, ExtensionUiSnapshot } from '../../sh
 import { getPiAgentDir, getPiProcessEnvironment, getSharedPiAgentDir } from '../shared/pi-paths'
 import { getSessionRoot } from './session-store'
 import { agentResourcesDirectory } from '../../shared-process/agent-resources'
+import { HOST_TIMING_LOG_ENV } from '../../sdk-host/host-timing'
 import { managedMemoryConfiguration } from '../../shared-process/memory-runtime'
 import type { MemoryConfigurationProvider } from '../../shared-process/memory-runtime'
 import { validatePromptInput } from './prompt-input'
@@ -174,12 +175,16 @@ export class SdkHostError extends Error {
 /**
  * 宿主故障与超时写入应用数据目录下的可控日志：便携包没有控制台，
  * 启动到底卡在加载运行时还是装配会话，只能靠这份文件判定。写入失败不影响宿主生命周期。
+ * 宿主进程通过环境变量拿到同一路径，两边的耗时行因此可以直接按时间线对照。
  */
+function hostLogPath(): string {
+  return join(app.getPath('userData'), 'logs', 'sdk-host.log')
+}
+
 function appendHostLog(message: string): void {
   try {
-    const directory = join(app.getPath('userData'), 'logs')
-    mkdirSync(directory, { recursive: true })
-    appendFileSync(join(directory, 'sdk-host.log'), `${new Date().toISOString()} ${message}\n`, 'utf8')
+    mkdirSync(dirname(hostLogPath()), { recursive: true })
+    appendFileSync(hostLogPath(), `${new Date().toISOString()} ${message}\n`, 'utf8')
   } catch { /* 日志不可写不改变宿主状态。 */ }
 }
 
@@ -268,7 +273,7 @@ export interface SdkHostManagerOptions {
   runId: number
   /** 运行实例登记与绑定代际分配；归属项目只以登记结果为准。只读宿主使用拒绝式实现。 */
   runs: SdkHostRunRegistry
-  /** 受管浏览器会话服务实例。 */
+  /** 受管浏览器会话服务实例；只读宿主不传，接管成运行实例时由 `attachBrowserService` 补齐。 */
   browserSessionService?: BrowserSessionService
   /** 记忆配置来源；缺省时退到只读兜底配置（关闭且无可用运行环境），扩展仍按受管配置处理，不自行退回 CLI 探测。 */
   memory?: MemoryConfigurationProvider
@@ -295,7 +300,7 @@ const READ_ONLY_MEMORY: MemoryConfigurationProvider = {
 }
 
 /**
- * 只读宿主：用于查看会话历史，不承载会话；绑定前由执行链接管，接管后才接上授权回路。
+ * 只读宿主：用于查看会话历史，不承载会话；绑定前由执行链接管，接管后才接上授权回路与浏览器服务。
  * 记忆开关必须由调用方传入真实来源：这个宿主会在绑定时被原地接管成运行实例，
  * 若在此固定成关闭，接管后的会话会把用户的全局开关读成“用户停用”并拒绝保存。
  */
@@ -315,8 +320,13 @@ export class SdkHostManager {
   private recoveryTimer: ReturnType<typeof setTimeout> | null = null
   private readonly listeners = new Set<(status: SdkHostStatus) => void>()
   private authority: SdkSessionAuthority | null = null
+  /**
+   * 主进程浏览器服务：只读宿主建立时没有执行侧依赖，接管成运行实例后由 `attachBrowserService` 补挂。
+   * 直接读构造参数会让接管后的会话在浏览器工具上行为与新建宿主不一致。
+   */
+  private browserService: BrowserSessionService | null
   private currentTarget: SdkSessionTarget | null = null
-  /** 当前会话最新用户消息 ID；用于在会话轮次收敛（busy 变为 ready）时为隔离工作树记录快照。 */
+  /** 当前会话最新用户消息 ID；用于在会话轮次收敛（busy 变为 ready）时为主隔离工作树记录快照。 */
   private lastUserMessageId: string | null = null
   private sessionSnapshot = emptySdkSessionStatus()
   private sessionSubmission: string | null = null
@@ -341,7 +351,14 @@ export class SdkHostManager {
     state: 'idle', hostId: null, sdkVersion: null, lastError: null, startupStage: null
   }
 
-  constructor(private readonly options: SdkHostManagerOptions) {}
+  constructor(private readonly options: SdkHostManagerOptions) {
+    this.browserService = options.browserSessionService ?? null
+  }
+
+  /** 接管成运行实例时补挂执行侧依赖；新建的宿主在构造时已经拿到同一份服务。 */
+  attachBrowserService(service: BrowserSessionService): void {
+    this.browserService = service
+  }
 
   /**
    * 只读宿主被接管成运行实例：换上真实运行身份与登记端口。
@@ -682,8 +699,11 @@ export class SdkHostManager {
         throw new SdkHostError('STALE_SESSION', FAILURE_MESSAGES.STALE_SESSION)
       }
       submitted = true
+      const submittedAt = Date.now()
       const frame = await this.request(record, { version: SDK_HOST_PROTOCOL_VERSION, hostId: record.hostId,
         requestId, type: 'session', action, expectedBindingId: expected.bindingId, interrupt, target }, SESSION_TIMEOUT_MS, WRITE_SETTLE_TIMEOUT_MS)
+      // 首个新对话的等待主要落在这一段：会话装配、模型作用域与会话文件建立都在宿主侧同步完成。
+      appendHostLog(`[timing] source=main hostId=${record.hostId} stage=session-${action} wait=${Date.now() - submittedAt}`)
       if (frame.type !== 'session-result') throw new SdkHostError('HOST_PROTOCOL_ERROR', 'SDK 会话结果不符合契约。')
       if (frame.cancelled) this.currentTarget = previousTarget
       return { status: this.getSessionStatus(), cancelled: frame.cancelled }
@@ -878,6 +898,8 @@ export class SdkHostManager {
   /** 创建进程并完成应用级握手；spawn 不代表 SDK 已加载。 */
   private async startHost(): Promise<SdkHostStatus> {
     let record: HostRecord | null = null
+    // 启动分段耗时只用于定位，不影响任何判断。
+    const startedAt = Date.now()
     try {
       if (this.shuttingDown || !this.wanted) {
         throw new SdkHostError('HOST_CLOSED', 'SDK 宿主建立请求已取消。')
@@ -893,6 +915,8 @@ export class SdkHostManager {
       const env = getPiProcessEnvironment()
       // utilityProcess 不是认证 helper 的 ELECTRON_RUN_AS_NODE 子进程。
       delete env.ELECTRON_RUN_AS_NODE
+      // 宿主侧装配耗时写入主进程同一份日志；变量缺席时宿主不记录。
+      env[HOST_TIMING_LOG_ENV] = hostLogPath()
       const child = utilityProcess.fork(entryPath, [], {
         env,
         cwd: app.isPackaged ? process.resourcesPath : dirname(entryPath),
@@ -929,8 +953,10 @@ export class SdkHostManager {
       })
       this.publish({ state: 'starting', hostId: current.hostId, sdkVersion: null, lastError: null,
         startupStage: 'spawn' })
+      const spawnedAt = Date.now()
       // 记忆配置必须在建立会话前给出：扩展工厂在资源加载阶段就要同步读到它。
       const memoryConfiguration = await (this.options.memory ?? READ_ONLY_MEMORY).read(entryPath)
+      const configuredAt = Date.now()
       // 初始化响应要等宿主动态加载官方 Agent 运行时，这是启动中最长的一段，单独标出来。
       this.publish({ state: 'starting', hostId: current.hostId, sdkVersion: null, lastError: null,
         startupStage: 'initialize' })
@@ -942,6 +968,7 @@ export class SdkHostManager {
         productResourcesDir: agentResourcesDirectory(entryPath),
         memoryConfiguration
       }, READY_TIMEOUT_MS)
+      const initializedAt = Date.now()
       if (frame.type !== 'ready') {
         throw new SdkHostError('HOST_PROTOCOL_ERROR', 'SDK 宿主初始化响应不符合契约。')
       }
@@ -953,6 +980,9 @@ export class SdkHostManager {
       }
       current.established = true
       current.ready = true
+      appendHostLog(`[timing] source=main hostId=${current.hostId} stage=host-start`
+        + ` spawn=${spawnedAt - startedAt} memory-config=${configuredAt - spawnedAt}`
+        + ` initialize=${initializedAt - configuredAt} handshake=${Date.now() - initializedAt}`)
       this.publish({ state: 'ready', hostId: current.hostId,
         sdkVersion: frame.sdkVersion, lastError: null, startupStage: 'binding' })
       if (this.shuttingDown || current.closing || this.active !== current || !current.ready) {
@@ -1151,7 +1181,7 @@ export class SdkHostManager {
     record: HostRecord,
     event: Extract<SdkHostEvent, { type: 'browser-operation' }>
   ): Promise<void> {
-    const service = this.options.browserSessionService
+    const service = this.browserService
     let result: SdkBrowserOperationResult
 
     try {

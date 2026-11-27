@@ -63,6 +63,11 @@ export interface GeneratedPlan {
   readonly preview: JsonObject
   readonly engineSha256: string
 }
+/** 库变更序号与由它派生的画像缓存键；两者必须成对使用，否则复核到的不是同一份库状态。 */
+export interface ProfileSignature {
+  readonly version: number
+  readonly signature: string
+}
 const MAX_OUTPUT = 2_097_152
 const MAX_INPUT = 262_144
 const PLAN_ID = /^s_[0-9A-HJKMNP-TV-Z]{26}$/
@@ -251,14 +256,22 @@ export class MemoryEngine {
     }
   }
 
-  /** 画像缓存键用库变更序号：库一变即失效，不再读源文件；独立短片预算且可被会话取消。 */
-  async profileSignature(selected: Domain[], signal?: AbortSignal): Promise<string> {
+  /** 库变更序号：`status.change_seq` 随写入递增，`store_version` 是 schema 版本（常量），不能用来判断变化。 */
+  async storeVersion(signal?: AbortSignal): Promise<number> {
     await this.requireStore()
     const status = await this.run(['status'], undefined, signal, false, undefined, STATUS_TIMEOUT)
-    // `status` 的 `store_version` 是库的 schema 版本（常量），只有 `change_seq` 随写入递增。
     const version = status.change_seq
     if (typeof version !== 'number' || !Number.isInteger(version) || version < 0) throw new Error('记忆库变更序号无效')
-    return fingerprint(JSON.stringify([version, [...selected].sort()]))
+    return version
+  }
+
+  /**
+   * 画像与风格共用的缓存键：库变更序号 + 领域集合指纹。
+   * 版本号一并返回，供调用方拿本次读取响应的 `store_version` 直接复核，不再为复核多起一次引擎。
+   */
+  async profileSignature(selected: Domain[], signal?: AbortSignal): Promise<ProfileSignature> {
+    const version = await this.storeVersion(signal)
+    return { version, signature: fingerprint(JSON.stringify([version, [...selected].sort()])) }
   }
 
   /** 固定参数数组启动现有脚本；-I/-B 避免项目 Python 路径和字节码缓存。 */

@@ -67,6 +67,8 @@ export const sdkRuntime: SdkRuntimeBridge = new SdkRuntimeBridge({
   // 授权回路接主进程会话编排：宿主不能自行授权项目或任意会话路径。
   prepareHost: (host) => {
     host.setSessionAuthority((reference, ownerProjectPath, workspaceId) => sessionManager.prepareSdkTarget(reference, ownerProjectPath, workspaceId))
+    // 只读宿主建立时没有执行侧依赖：接管成运行实例后在此补齐，接管后的会话才与新建宿主行为一致。
+    host.attachBrowserService(browserSessionService)
   },
   createHost: (runId) => new SdkHostManager({ runId, runs: sessionRuns, browserSessionService, memory: memoryManager.provider }),
   get workspaces(): WorkspaceManager { return workspaceManager }
