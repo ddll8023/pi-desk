@@ -23,7 +23,6 @@ import { useSessionViewStore } from '../sessions/stores/session-view'
 import { useTerminalStore } from '../workspace/stores/terminal'
 import { useUpdatesStore } from '../updates/stores/updates'
 import { useWorkspaceTabsStore } from '../workspace/stores/workspace-tabs'
-import { useWorkflowRunStore } from '../workflows/stores/workflow-run'
 import { registerSessionTabState } from '../workspace/stores/session-tab-bridge'
 
 export function useAppStartup(): void {
@@ -122,7 +121,6 @@ export function useAppStartup(): void {
   })
 
   onUnmounted(() => {
-    useWorkflowRunStore().dispose()
     extensionStore.dispose()
     resourceStore.dispose()
     runtimeStore.dispose()

@@ -105,7 +105,6 @@
 | 文件 | 职责与已知使用者 |
 | --- | --- |
 | `src/renderer/src/ui/AppButton.vue` | 原生按钮及统一视觉变体；业务组件共用 |
-| `src/renderer/src/ui/AppDialog.vue` | 通用对话对话框外壳：`dialog-*` 外观、遮罩点击关闭、`open` 驱动 Escape 与焦点移入／归还；工作流的参数定义、启动填参、定时任务三个对话框消费 |
 | `src/renderer/src/ui/AppSelect.vue` | 自定义选择器入口与候选浮层（`inline` 时只渲染列表、不渲染触发键）；业务表单共用 |
 | `src/renderer/src/ui/AppSelectList.vue` | 候选列表本体：搜索行、分组选项、选中高亮与键盘移动；选择器浮层与输入坞二级面板共用 |
 | `src/renderer/src/ui/ConfirmDialog.vue` | 通用确认弹层（支持 body 扩展插槽与确认禁用控制）；应用外壳、任务工作区横幅、聊天列表、聊天输入坞、文件编辑、Git、供应商、资源、终端设置与快捷命令消费 |

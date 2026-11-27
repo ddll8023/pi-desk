@@ -21,7 +21,6 @@ import LanRemoteSettingsSection from '../../lan-remote/components/LanRemoteSetti
 import ExpertSettingsSection from '../../experts/components/ExpertSettingsSection.vue'
 import MemorySettingsSection from '../../memory/components/MemorySettingsSection.vue'
 import UsageStatsSection from '../../sessions/components/UsageStatsSection.vue'
-import WorkflowSettingsSection from '../../workflows/components/WorkflowSettingsSection.vue'
 
 interface Props {
   /** 目标插件标识；由设置状态给出，可能来自旧分节 id 的别名解析。 */
@@ -50,8 +49,7 @@ const PLUGIN_SETTINGS_VIEWS: Readonly<Record<string, Component>> = {
   memory: MemorySettingsSection,
   usage: UsageStatsSection,
   'quick-send': QuickSendSection,
-  'execution-mode': ExecutionModeSection,
-  workflows: WorkflowSettingsSection
+  'execution-mode': ExecutionModeSection
 }
 
 const settingsView = computed<Component | null>(() => (

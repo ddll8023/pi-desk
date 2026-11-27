@@ -263,7 +263,6 @@ function onTablistKeydown(event: KeyboardEvent): void {
 function kindLabel(kind: WorkspaceTabView['kind']): string {
   if (kind === 'chat') return '对话'
   if (kind === 'browser') return '浏览器'
-  if (kind === 'workflow') return '工作流'
   return kind === 'terminal' ? '终端' : '文件'
 }
 
@@ -342,16 +341,6 @@ function onMenuKeydown(event: KeyboardEvent, close: () => void, popup: HTMLEleme
               class="workspace-tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"
               stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"
             ><path d="M14 3v5h5" /><path d="M6 3h8l5 5v13H6z" /></svg>
-            <svg
-              v-else-if="tab.kind === 'workflow'"
-              class="workspace-tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-              stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"
-            >
-              <rect x="3" y="9" width="6" height="6" rx="1" />
-              <rect x="15" y="3" width="6" height="6" rx="1" />
-              <rect x="15" y="15" width="6" height="6" rx="1" />
-              <path d="M9 12h3M12 12V6h3M12 12v6h3" />
-            </svg>
             <svg
               v-else-if="tab.kind === 'browser'"
               class="workspace-tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -449,9 +438,6 @@ function onMenuKeydown(event: KeyboardEvent, close: () => void, popup: HTMLEleme
         </AppButton>
         <AppButton variant="unstyled" class="project-sidebar-menu-item" role="menuitem" @click="createTab('browser')">
           新建浏览器
-        </AppButton>
-        <AppButton variant="unstyled" class="project-sidebar-menu-item" role="menuitem" @click="createTab('workflow')">
-          新建工作流
         </AppButton>
         <AppButton
           variant="unstyled" class="project-sidebar-menu-item" role="menuitem"

@@ -21,8 +21,6 @@ import { registerExpertHandlers } from '../sessions/expert-ipc'
 import { registerTeamHandlers } from '../sessions/team-ipc'
 import { registerMemoryHandlers } from '../memory/ipc'
 import { registerUsageStatsHandlers } from '../usage/ipc'
-import { registerWorkflowHandlers } from '../workflows/ipc'
-import { startWorkflowScheduler } from '../workflows/scheduler'
 import { configStore, projectManager } from '../services'
 import { markPluginAssembly, startupDisabledPlugins } from './plugin-gate'
 
@@ -125,20 +123,6 @@ export const BUILTIN_PLUGINS: readonly BuiltinPlugin[] = [
     summary: '新建会话的执行模式：快速或标准，决定加载哪些规范 Skill、是否要求先讨论方案。',
     dependencies: [],
     register: null
-  },
-  {
-    id: 'workflows',
-    name: '工作流',
-    summary: '节点图编排：多个 Agent 节点按图推进，运行可观察、可取消。',
-    dependencies: [],
-    register: pageUrl => {
-      registerWorkflowHandlers(pageUrl, {
-        // 运行只接受已添加的项目：节点子进程的工作目录就是它。
-        hasProject: projectPath => projectManager.hasProject(projectPath)
-      })
-      // 定时任务随插件装配启停：停用后不再触发，与「重启后生效」同口径。
-      startWorkflowScheduler(projectPath => projectManager.hasProject(projectPath))
-    }
   }
 ]
 

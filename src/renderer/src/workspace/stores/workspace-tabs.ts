@@ -12,8 +12,8 @@
  *
  * 标签键是页面内编号，只在渲染端有效：对话标签记会话身份与它承载的运行实例，终端标签记终端标识，
  * 文件标签记一个编号（路径与编辑状态由 `project-editor` 持有），浏览器标签记一个唯一键（页面与导航状态由 `browserStore` 持有）。
- * 终端清单是主进程的真相，因此终端标签按清单派生（已消失的不再展示、新出现的追加到末尾）；对话、文件、浏览器与工作流标签需要在这里登记。
- * 文件标签只能由打开文件产生，不进入「新建」菜单；脏文件、有未保存草稿的工作流或含未交付批注的浏览器关闭前先确认，确认后才丢弃对应内容。
+ * 终端清单是主进程的真相，因此终端标签按清单派生（已消失的不再展示、新出现的追加到末尾）；对话、文件与浏览器标签需要在这里登记。
+ * 文件标签只能由打开文件产生，不进入「新建」菜单；脏文件或含未交付批注的浏览器关闭前先确认，确认后才丢弃对应内容。
  * 后台实例回复结束时给它的对话标签打「有新回复」标记，切到该标签即清除。
  * 新建对话的入口分两类：标签条与侧栏新建一个对话标签，`/new` 则在当前标签内就地替换
  * （结束原实例、清空会话身份与重命名，标签位置与顺序不变）。
@@ -34,7 +34,6 @@ import { useProjectEditorStore } from '../../editor/stores/project-editor'
 import type { FileEditorMode, FileEditorRecord } from '../../editor/stores/project-editor'
 import { useRuntimeStore } from '../../sessions/stores/runtime'
 import { useSessionRunsStore } from '../../sessions/stores/session-runs'
-import { useWorkflowStore } from '../../workflows/stores/workflow'
 import { sessionTabState } from './session-tab-bridge'
 import { useTerminalStore } from './terminal'
 import { useTaskWorkspacesStore } from './task-workspaces'
@@ -42,22 +41,15 @@ import { bindBrowserSession, onBrowserAutoAttach } from '../../browser/services/
 import { createParallelWorkspace } from '../services/task-workspaces'
 import type { WorkspaceTarget } from '../../../../shared/workspace-api'
 
-/** 对话标签键前缀；终端标签键是 `term:<终端标识>`，文件标签键是 `file:<编号>`，浏览器标签键是 `browser:<随机标识>`，工作流标签键是 `workflow:<工作流标识>`（未保存的新图为空标识）。 */
+/** 对话标签键前缀；终端标签键是 `term:<终端标识>`，文件标签键是 `file:<编号>`，浏览器标签键是 `browser:<随机标识>`。 */
 const CHAT_KEY_PREFIX = 'chat:'
 const TERMINAL_KEY_PREFIX = 'term:'
 const FILE_KEY_PREFIX = 'file:'
-const WORKFLOW_KEY_PREFIX = 'workflow:'
 /** 原位新建的输入身份；与 SDK 会话身份分开，避免旧实例收尾清掉新草稿。 */
 export const NEW_CHAT_INPUT_PREFIX = 'new-chat:'
 
 /** 可通过「新建」菜单主动创建的类型；文件标签只能由打开文件产生，不在新建入口里。 */
-export type WorkspaceTabKind = 'chat' | 'terminal' | 'browser' | 'workflow'
-
-/** 当前项目打开的工作流标签模型。 */
-export interface OpenWorkflowTab {
-  readonly key: string
-  readonly projectPath: string
-}
+export type WorkspaceTabKind = 'chat' | 'terminal' | 'browser'
 
 /** 当前项目打开的内置浏览器标签模型。 */
 export interface OpenBrowserTab {
@@ -117,7 +109,7 @@ export interface WorkspaceTabView {
   readonly terminalStatus: 'running' | 'exited' | null
   /** 该对话标签的实例已结束本轮回复，而用户还没切到过它；其余标签始终为假。 */
   readonly unseenCompletion: boolean
-  /** 文件标签有未保存修改、工作流标签有未保存的草稿；关闭前需要确认。 */
+  /** 文件标签有未保存修改；关闭前需要确认。 */
   readonly dirty: boolean
 }
 
@@ -130,8 +122,6 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
   const taskWorkspaces = useTaskWorkspacesStore()
   const editorStore = useProjectEditorStore()
   const browserStore = useBrowserStore()
-  // 工作流标签的未保存状态由草稿持有，标签层只读它的脏标记与关闭时的丢弃语义。
-  const workflowStore = useWorkflowStore()
   const browserAnnotations = useBrowserAnnotationsStore()
 
   /** 按项目保存的标签键顺序；数组顺序即标签顺序。 */
@@ -492,15 +482,6 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
    * `anchor` 指定 Markdown 标题：请求留在目标文件记录内，等待正文呈现后消费。
    * 读取由编辑记录异步完成，标签先出现并展示读取中状态。
    */
-  /** 当前项目已打开的工作流标签；面板按它挂载，非活动标签只隐藏不卸载。 */
-  const openWorkflows = computed<readonly OpenWorkflowTab[]>(() => {
-    const projectPath = currentProjectPath.value
-    if (projectPath === null) return []
-    return projectKeys.value
-      .filter(isWorkflowKey)
-      .map(key => ({ key, projectPath }))
-  })
-
   function openFileTab(path: string, mode?: FileEditorMode, anchor?: string | null, target?: WorkspaceTarget): void {
     const current = activeWorkspace.value
     const origin = target ?? (current ? { projectPath: current.projectPath, workspaceId: current.id } : null)
@@ -705,9 +686,6 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
         await newChatRequests.get(key)
         const runId = resolveRunId(projectPath, key)
         if (runId !== null && !await closeChatRun(runId)) return null
-      } else if (isWorkflowKey(key)) {
-        // 工作流标签没有外部资源：草稿只在这里，关闭即丢弃，未保存时已由 `requestClose` 先确认。
-        void key
       } else {
         const terminalId = terminalIdOf(key)
         if (terminalId === null) return null
@@ -726,7 +704,7 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
   }
 
   /**
-   * 关闭入口：有未保存修改的文件或工作流草稿、或未交付批注的浏览器先置待确认状态，其余直接走关闭链；
+   * 关闭入口：有未保存修改的文件或未交付批注的浏览器先置待确认状态，其余直接走关闭链；
    * 关闭后需要补打开的相邻对话标签由返回值交给调用方提交。
    */
   async function requestClose(key: string): Promise<ChatOpenIntent | null> {
@@ -928,9 +906,6 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
         if (editorStore.recordOf(key) === null) continue
       } else if (isBrowserKey(key)) {
         if (browserStore.tabs[key] === undefined) continue
-      } else if (isWorkflowKey(key)) {
-        // 工作流标签没有外部真相：定义可能在别处被删，标签仍留着，由画布提示。
-        void key
       } else if (!alive.has(key)) {
         continue
       }
@@ -955,11 +930,6 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
         ? '尚未落盘的新会话' : `会话 ${record.sessionId}`
       return { id: key, kind: 'chat', title, tooltip: `${title}\n${detail}`, terminalStatus: null,
         unseenCompletion: unseenCompletions.value.has(key), dirty: false }
-    }
-    if (isWorkflowKey(key)) {
-      const title = renames.value[key] ?? '工作流'
-      return { id: key, kind: 'workflow', title, tooltip: title, terminalStatus: null,
-        unseenCompletion: false, dirty: workflowStore.isDirty(key) }
     }
     if (isFileKey(key)) {
       const record = editorStore.recordOf(key)
@@ -1327,50 +1297,6 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     return key.startsWith(BROWSER_KEY_PREFIX)
   }
 
-  function isWorkflowKey(key: string): boolean {
-    return key.startsWith(WORKFLOW_KEY_PREFIX)
-  }
-
-  /** 工作流标签键里的定义标识；空串表示还没保存的新图。 */
-  function workflowIdOf(key: string): string {
-    return key.startsWith(WORKFLOW_KEY_PREFIX) ? key.slice(WORKFLOW_KEY_PREFIX.length) : ''
-  }
-
-  /**
-   * 打开一个工作流标签：已有同标识的标签就切过去，否则新建一个。
-   * `workflowId` 为空串时开一张还没保存的新图，同一项目只保留一个这样的标签。
-   */
-  function openWorkflowTab(workflowId: string): void {
-    const projectPath = currentProjectPath.value
-    if (projectPath === null) return
-    const key = `${WORKFLOW_KEY_PREFIX}${workflowId}`
-    const existing = projectKeys.value.find(item => item === key)
-    if (existing !== undefined) {
-      selectLocal(projectPath, existing)
-      return
-    }
-    appendKey(projectPath, key)
-    selectLocal(projectPath, key)
-  }
-
-  /**
-   * 保存后把「未保存新图」标签改绑到真实标识：标签代表一份定义，
-   * 不改键会让同一份图同时存在两个标签，之后再打开它又新建一个。
-   */
-  function rebindWorkflowTab(fromKey: string, workflowId: string): void {
-    const projectPath = locate(fromKey)?.projectPath ?? null
-    if (projectPath === null || !isWorkflowKey(fromKey)) return
-    const target = `${WORKFLOW_KEY_PREFIX}${workflowId}`
-    if (target === fromKey) return
-    orders.value = {
-      ...orders.value,
-      [projectPath]: (orders.value[projectPath] ?? []).map(item => item === fromKey ? target : item)
-    }
-    if (activeTabs.value[projectPath] === fromKey) {
-      activeTabs.value = { ...activeTabs.value, [projectPath]: target }
-    }
-  }
-
   function terminalIdOf(key: string): string | null {
     return key.startsWith(TERMINAL_KEY_PREFIX) ? key.slice(TERMINAL_KEY_PREFIX.length) : null
   }
@@ -1399,12 +1325,7 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     newChatError,
     openFiles,
     openBrowsers,
-    openWorkflows,
     openBrowserTab,
-    openWorkflowTab,
-    rebindWorkflowTab,
-    workflowIdOf,
-    isWorkflowKey,
     splitBrowserKey,
     closeSplitBrowser,
     expandSplitToFull,

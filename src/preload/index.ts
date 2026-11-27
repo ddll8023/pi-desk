@@ -8,8 +8,7 @@
  * `updates`（版本检查与更新）、`trust`（Project Trust）、`extension-ui`（扩展交互状态与弹窗响应）、
  * `lan-remote`（局域网访问控制与设备授权）、`browser`（受限网页截图、元素选择与取消）、
  * `plugins`（能力插件清单与启停）、
- * `agent-home`（桌面自有 Pi agent 目录与首启导入）、`experts`（内置专家的派生与覆盖读写、自定义专家的读取与保存、删除与恢复默认、快速模式剔除清单）、
- * `workflows`（工作流定义读写、运行启动与取消、运行快照订阅）。
+ * `agent-home`（桌面自有 Pi agent 目录与首启导入）、`experts`（内置专家的派生与覆盖读写、自定义专家的读取与保存、删除与恢复默认、快速模式剔除清单）。
  *
  * 不暴露 Electron、任意 channel 或系统能力；沙箱不能 require 拆分模块，构建侧保持单产物。
  */
@@ -41,7 +40,6 @@ import type { UsageStatsApi } from '../shared/usage-stats-api'
 import type { AgentHomeApi } from '../shared/agent-home-api'
 import type { PluginApi } from '../shared/plugin-api'
 import type { ExpertApi } from '../shared/experts-api'
-import type { WorkflowApi } from '../shared/workflow-api'
 import type { TeamApi } from '../shared/teams-api'
 import type { TeamSessionApi } from '../shared/team-session-api'
 import { desktopApi } from './desktop'
@@ -63,11 +61,10 @@ import { usageStatsApi } from './usage-stats'
 import { agentHomeApi } from './agent-home'
 import { pluginsApi } from './plugins'
 import { expertsApi } from './experts'
-import { workflowsApi } from './workflows'
 import { teamsApi } from './teams'
 
 /** 合并后的桥接对象：各域键互不重叠，平铺后仍是页面看到的同一份 `DesktopApi` 契约。 */
-const desktop: BrowserCaptureApi & BrowserSessionApi & DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionApi & SessionRunApi & TerminalApi & PreferencesApi & QuickCommandsApi & PiSettingsApi & TrustApi & ExtensionUiApi & AuthApi & ModelsConfigApi & UpdatesApi & GitApi & WorktreeApi & GitCleanupApi & LanRemoteApi & MemoryApi & UsageStatsApi & AgentHomeApi & PluginApi & ExpertApi & TeamApi & TeamSessionApi & WorkflowApi = {
+const desktop: BrowserCaptureApi & BrowserSessionApi & DesktopApi & RuntimeApi & ProjectApi & ProjectFileApi & SessionApi & SessionRunApi & TerminalApi & PreferencesApi & QuickCommandsApi & PiSettingsApi & TrustApi & ExtensionUiApi & AuthApi & ModelsConfigApi & UpdatesApi & GitApi & WorktreeApi & GitCleanupApi & LanRemoteApi & MemoryApi & UsageStatsApi & AgentHomeApi & PluginApi & ExpertApi & TeamApi & TeamSessionApi = {
   ...desktopApi,
   ...browserApi,
   ...projectsApi,
@@ -88,8 +85,7 @@ const desktop: BrowserCaptureApi & BrowserSessionApi & DesktopApi & RuntimeApi &
   ...agentHomeApi,
   ...pluginsApi,
   ...expertsApi,
-  ...teamsApi,
-  ...workflowsApi
+  ...teamsApi
 }
 
 contextBridge.exposeInMainWorld('desktop', desktop)

@@ -19,7 +19,6 @@ import { useBrowserAnnotationsStore } from '../../browser/stores/browser-annotat
 import PromptComposer from '../../sessions/components/PromptComposer.vue'
 import SessionActivityBar from '../../sessions/components/SessionActivityBar.vue'
 import TerminalView from '../../workspace/components/TerminalView.vue'
-import WorkflowCanvasView from '../../workflows/components/WorkflowCanvasView.vue'
 import WorkspaceTabBar from '../../workspace/components/WorkspaceTabBar.vue'
 import { useExtensionUiStore } from '../../sessions/stores/extension-ui'
 import { useProjectStore } from '../../projects/stores/project'
@@ -162,16 +161,7 @@ async function onCreateTab(kind: WorkspaceTabKind): Promise<void> {
     await workspaceTabsStore.openBrowserTab()
     return
   }
-  if (kind === 'workflow') {
-    workspaceTabsStore.openWorkflowTab('')
-    return
-  }
   await workspaceTabsStore.createTerminalTab()
-}
-
-/** 新图首次保存：把标签改绑到真实标识，同一份图不再占着两个标签。 */
-function onWorkflowSaved(key: string, workflowId: string): void {
-  workspaceTabsStore.rebindWorkflowTab(key, workflowId)
 }
 
 async function onParallelTask(sourceKey: string): Promise<void> {
@@ -348,22 +338,6 @@ function openCommandSettings(): void {
       :aria-hidden="isSplit ? splitBrowserKey !== browser.key : workspaceTabsStore.activeTab !== browser.key"
     >
       <BrowserView :tab-key="browser.key" :active="!settingsOpen && (isSplit ? splitBrowserKey === browser.key : workspaceTabsStore.activeTab === browser.key)" :targets="annotationTargets" :delivery-error="annotationDeliveryError" @deliver="onDeliverAnnotation" />
-    </div>
-
-    <!-- 工作流面板：每份定义一个标签，非活动标签只隐藏，切回来仍保留画布与运行面板。 -->
-    <div
-      v-for="workflow in workspaceTabsStore.openWorkflows"
-      :key="workflow.key"
-      class="workspace-pane"
-      :class="{ 'is-hidden': workspaceTabsStore.activeTab !== workflow.key }"
-      :inert="workspaceTabsStore.activeTab !== workflow.key"
-      :aria-hidden="workspaceTabsStore.activeTab !== workflow.key"
-    >
-      <WorkflowCanvasView
-        :tab-key="workflow.key"
-        :workflow-id="workspaceTabsStore.workflowIdOf(workflow.key)"
-        @saved="workflowId => onWorkflowSaved(workflow.key, workflowId)"
-      />
     </div>
 
     <!-- 非新草稿、身份不匹配且无日志历史与本地待发送消息时才占位；待发送内容可独立保持面板可见。 -->
